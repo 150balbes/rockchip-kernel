@@ -51,8 +51,10 @@
 
 struct isp_match_data {
 	const char * const *clks;
-	int size;
+	int num_clks;
 	enum rkisp1_isp_ver isp_ver;
+	const unsigned int *clk_rate_tbl;
+	int num_clk_rate_tbl;
 };
 
 int rkisp1_debug;
@@ -140,6 +142,54 @@ err_power_off:
 	return ret;
 }
 
+static int __isp_pipeline_s_isp_clk(struct rkisp1_pipeline *p)
+{
+	struct rkisp1_device *dev = container_of(p, struct rkisp1_device, pipe);
+	struct v4l2_subdev *sd;
+	struct v4l2_ctrl *ctrl;
+	u64 data_rate;
+	int i;
+
+	/* find the subdev of active sensor */
+	sd = p->subdevs[0];
+	for (i = 0; i < p->num_subdevs; i++) {
+		sd = p->subdevs[i];
+		if (sd->entity.type == MEDIA_ENT_T_V4L2_SUBDEV_SENSOR)
+			break;
+	}
+
+	if (i == p->num_subdevs) {
+		v4l2_warn(sd, "No active sensor\n");
+		return -EPIPE;
+	}
+
+	ctrl = v4l2_ctrl_find(sd->ctrl_handler, V4L2_CID_PIXEL_RATE);
+	if (!ctrl) {
+		v4l2_warn(sd, "No pixel rate control in subdev\n");
+		return -EPIPE;
+	}
+
+	/* calculate data rate */
+	data_rate = v4l2_ctrl_g_ctrl_int64(ctrl) *
+		    dev->isp_sdev.in_fmt.bus_width;
+	data_rate >>= 3;
+	do_div(data_rate, 1000 * 1000);
+
+	/* compare with isp clock adjustment table */
+	for (i = 0; i < dev->num_clk_rate_tbl; i++)
+		if (data_rate <= dev->clk_rate_tbl[i])
+			break;
+	if (i == dev->num_clk_rate_tbl)
+		i--;
+
+	/* set isp clock rate */
+	clk_set_rate(dev->clks[0], dev->clk_rate_tbl[i] * 1000000UL);
+	v4l2_dbg(1, rkisp1_debug, sd, "set isp clk = %luHz\n",
+		 clk_get_rate(dev->clks[0]));
+
+	return 0;
+}
+
 static int rkisp1_pipeline_open(struct rkisp1_pipeline *p,
 				struct media_entity *me,
 				bool prepare)
@@ -157,6 +207,10 @@ static int rkisp1_pipeline_open(struct rkisp1_pipeline *p,
 
 	if (!p->num_subdevs)
 		return -EINVAL;
+
+	ret = __isp_pipeline_s_isp_clk(p);
+	if (ret < 0)
+		return ret;
 
 	ret = __isp_pipeline_s_power(p, 1);
 	if (ret < 0)
@@ -245,7 +299,7 @@ static int rkisp1_create_links(struct rkisp1_device *dev)
 		ret = media_entity_create_link(
 				&sensor->sd->entity, pad,
 				&dev->isp_sdev.sd.entity,
-				RKISP1_ISP_PAD_SINK + s,
+				RKISP1_ISP_PAD_SINK,
 				s ? 0 : MEDIA_LNK_FL_ENABLED);
 		if (ret) {
 			dev_err(dev->dev,
@@ -454,22 +508,43 @@ static const char * const rk3399_isp_clks[] = {
 	"pclk_isp_wrap"
 };
 
+/* isp clock adjustment table (MHz) */
+static const unsigned int rk3288_isp_clk_rate[] = {
+	384, 500, 594
+};
+
+/* isp clock adjustment table (MHz) */
+static const unsigned int rk3326_isp_clk_rate[] = {
+	300, 347, 400, 520, 600
+};
+
+/* isp clock adjustment table (MHz) */
+static const unsigned int rk3399_isp_clk_rate[] = {
+	300, 400, 600
+};
+
 static const struct isp_match_data rk3288_isp_match_data = {
 	.clks = rk3288_isp_clks,
-	.size = ARRAY_SIZE(rk3288_isp_clks),
+	.num_clks = ARRAY_SIZE(rk3288_isp_clks),
 	.isp_ver = ISP_V10,
+	.clk_rate_tbl = rk3288_isp_clk_rate,
+	.num_clk_rate_tbl = ARRAY_SIZE(rk3288_isp_clk_rate),
 };
 
 static const struct isp_match_data rk3326_isp_match_data = {
 	.clks = rk3326_isp_clks,
-	.size = ARRAY_SIZE(rk3326_isp_clks),
+	.num_clks = ARRAY_SIZE(rk3326_isp_clks),
 	.isp_ver = ISP_V12,
+	.clk_rate_tbl = rk3326_isp_clk_rate,
+	.num_clk_rate_tbl = ARRAY_SIZE(rk3326_isp_clk_rate),
 };
 
 static const struct isp_match_data rk3399_isp_match_data = {
 	.clks = rk3399_isp_clks,
-	.size = ARRAY_SIZE(rk3399_isp_clks),
+	.num_clks = ARRAY_SIZE(rk3399_isp_clks),
 	.isp_ver = ISP_V10,
+	.clk_rate_tbl = rk3399_isp_clk_rate,
+	.num_clk_rate_tbl = ARRAY_SIZE(rk3399_isp_clk_rate),
 };
 
 static const struct of_device_id rkisp1_plat_of_match[] = {
@@ -511,7 +586,7 @@ static void rkisp1_disable_sys_clk(struct rkisp1_device *rkisp1_dev)
 {
 	int i;
 
-	for (i = rkisp1_dev->clk_size - 1; i >= 0; i--)
+	for (i = rkisp1_dev->num_clks - 1; i >= 0; i--)
 		if (!IS_ERR(rkisp1_dev->clks[i]))
 			clk_disable_unprepare(rkisp1_dev->clks[i]);
 }
@@ -520,7 +595,7 @@ static int rkisp1_enable_sys_clk(struct rkisp1_device *rkisp1_dev)
 {
 	int i, ret = -EINVAL;
 
-	for (i = 0; i < rkisp1_dev->clk_size; i++) {
+	for (i = 0; i < rkisp1_dev->num_clks; i++) {
 		if (!IS_ERR(rkisp1_dev->clks[i])) {
 			ret = clk_prepare_enable(rkisp1_dev->clks[i]);
 			if (ret < 0)
@@ -561,16 +636,6 @@ static int rkisp1_iommu_init(struct rkisp1_device *rkisp1_dev)
 			goto err;
 	}
 
-	ret = iommu_attach_device(rkisp1_dev->domain, rkisp1_dev->dev);
-	if (ret)
-		goto err;
-	if (!common_iommu_setup_dma_ops(rkisp1_dev->dev, 0x10000000,
-					SZ_2G, rkisp1_dev->domain->ops)) {
-		iommu_detach_device(rkisp1_dev->domain, rkisp1_dev->dev);
-		ret = -ENODEV;
-		goto err;
-	}
-
 	return 0;
 
 err:
@@ -581,7 +646,6 @@ err:
 
 static void rkisp1_iommu_cleanup(struct rkisp1_device *rkisp1_dev)
 {
-	iommu_detach_device(rkisp1_dev->domain, rkisp1_dev->dev);
 	iommu_domain_free(rkisp1_dev->domain);
 }
 
@@ -623,18 +687,21 @@ static int rkisp1_plat_probe(struct platform_device *pdev)
 
 	isp_dev->irq = irq;
 	match_data = match->data;
-	for (i = 0; i < match_data->size; i++) {
+	for (i = 0; i < match_data->num_clks; i++) {
 		struct clk *clk = devm_clk_get(dev, match_data->clks[i]);
 
 		if (IS_ERR(clk))
 			dev_dbg(dev, "failed to get %s\n", match_data->clks[i]);
 		isp_dev->clks[i] = clk;
 	}
-	isp_dev->clk_size = match_data->size;
+	isp_dev->num_clks = match_data->num_clks;
 	isp_dev->isp_ver = match_data->isp_ver;
+	isp_dev->clk_rate_tbl = match_data->clk_rate_tbl;
+	isp_dev->num_clk_rate_tbl = match_data->num_clk_rate_tbl;
 
 	atomic_set(&isp_dev->pipe.power_cnt, 0);
 	atomic_set(&isp_dev->pipe.stream_cnt, 0);
+	atomic_set(&isp_dev->open_cnt, 0);
 	isp_dev->pipe.open = rkisp1_pipeline_open;
 	isp_dev->pipe.close = rkisp1_pipeline_close;
 	isp_dev->pipe.set_stream = rkisp1_pipeline_set_stream;
@@ -697,27 +764,6 @@ static int rkisp1_plat_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused rkisp1_suspend(struct device *dev)
-{
-	struct rkisp1_device *isp_dev = dev_get_drvdata(dev);
-
-	if (isp_dev->domain)
-		iommu_detach_device(isp_dev->domain, isp_dev->dev);
-
-	return 0;
-}
-
-static int __maybe_unused rkisp1_resume(struct device *dev)
-{
-	struct rkisp1_device *isp_dev = dev_get_drvdata(dev);
-	int ret = 0;
-
-	if (isp_dev->domain)
-		ret = iommu_attach_device(isp_dev->domain, isp_dev->dev);
-
-	return ret;
-}
-
 static int __maybe_unused rkisp1_runtime_suspend(struct device *dev)
 {
 	struct rkisp1_device *isp_dev = dev_get_drvdata(dev);
@@ -740,7 +786,8 @@ static int __maybe_unused rkisp1_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rkisp1_plat_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(rkisp1_suspend, rkisp1_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(rkisp1_runtime_suspend, rkisp1_runtime_resume, NULL)
 };
 

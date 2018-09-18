@@ -54,7 +54,7 @@
 #define SCLK_GMAC		53
 #define SCLK_GMAC_REF		54
 #define SCLK_GMAC_REFOUT	55
-#define SCLK_GMAC_RGMI_SPEED	56
+#define SCLK_GMAC_RGMII_SPEED	56
 #define SCLK_GMAC_RMII_SPEED	57
 #define SCLK_GMAC_RX_TX		58
 #define SCLK_CRYPTO		59
@@ -139,6 +139,7 @@
 #define ACLK_DCF		173
 
 /* hclk gates */
+#define HCLK_NPU		199
 #define HCLK_VPU		200
 #define LSCLK_VIO		201
 #define HCLK_VOPRAW		202
@@ -162,6 +163,7 @@
 #define HCLK_I2S1_8CH		219
 #define MSCLK_CORE_NIU		220
 #define HSCLK_IMEM		221
+#define HCLK_HOST_ARB		222
 
 /* pclk gates */
 #define PCLK_DDR		250
@@ -208,7 +210,8 @@
 #define PCLK_GPIO0_PMU		292
 #define PCLK_UART0_PMU		293
 #define PCLK_I2C0_PMU		294
-#define PCLK_PMU_PRE		295
+#define PCLK_USB3PHY_PIPE	295
+#define PCLK_PMU_PRE		296
 
 #define CLK_NR_CLKS		(PCLK_PMU_PRE + 1)
 
@@ -351,8 +354,9 @@
 #define SRST_SFC_H		136
 #define SRST_SFC		137
 #define SRST_GMAC_NIU_A		140
-#define SRST_GMAC_NIU_P		141
-#define SRST_GAMC_A		142
+#define SRST_GMAC_NIU_H		141
+#define SRST_GMAC_NIU_P		142
+#define SRST_GAMC_A		143
 
 /* cru_softrst_con9 */
 #define SRST_PMU_NIU_P		144

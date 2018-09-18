@@ -33,6 +33,15 @@
 
 #include "../soc/rockchip/flash_vendor_storage.h"
 
+void __printf(1, 2) sftl_printk(char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintk(fmt, ap);
+	va_end(ap);
+}
+
 static struct flash_boot_ops nandc_nand_ops = {
 #ifdef	CONFIG_RK_NANDC_NAND
 	FLASH_TYPE_NANDC_NAND,
@@ -179,10 +188,17 @@ static unsigned int rk_partition_init(struct flash_part *part)
 
 static int rkflash_proc_show(struct seq_file *m, void *v)
 {
+	int real_size = 0;
+	char *ftl_buf = kzalloc(4096, GFP_KERNEL);
+
+	real_size = rknand_proc_ftlread(4096, ftl_buf);
+	if (real_size > 0)
+		seq_printf(m, "%s", ftl_buf);
 	seq_printf(m, "Totle Read %ld KB\n", totle_read_data >> 1);
 	seq_printf(m, "Totle Write %ld KB\n", totle_write_data >> 1);
 	seq_printf(m, "totle_write_count %ld\n", totle_write_count);
 	seq_printf(m, "totle_read_count %ld\n", totle_read_count);
+	kfree(ftl_buf);
 	return 0;
 }
 
@@ -690,7 +706,8 @@ int rkflash_dev_init(void __iomem *reg_addr, enum flash_con_type con_type)
 						rkflash_vendor_write);
 		ret = rk_sftl_vendor_storage_init();
 		if (!ret) {
-			rk_vendor_register(sftl_vendor_read, sftl_vendor_write);
+			rk_vendor_register(rk_sftl_vendor_read,
+					   rk_sftl_vendor_write);
 			rk_sftl_vendor_register();
 			pr_info("rkflashd vendor storage init ok !\n");
 		} else {

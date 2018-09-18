@@ -45,12 +45,25 @@ struct clk;
 #define BOOST_SWITCH_THRESHOLD		0x0024
 #define BOOST_FSM_STATUS		0x0028
 #define BOOST_PLL_L_CON(x)		((x) * 0x4 + 0x2c)
+#define BOOST_PLL_CON_MASK		0xffff
+#define BOOST_CORE_DIV_MASK		0x1f
+#define BOOST_CORE_DIV_SHIFT		0
+#define BOOST_BACKUP_PLL_MASK		0x3
+#define BOOST_BACKUP_PLL_SHIFT		8
+#define BOOST_BACKUP_PLL_USAGE_MASK	0x1
+#define BOOST_BACKUP_PLL_USAGE_SHIFT	12
+#define BOOST_BACKUP_PLL_USAGE_BORROW	0
+#define BOOST_BACKUP_PLL_USAGE_TARGET	1
+#define BOOST_ENABLE_MASK		0x1
+#define BOOST_ENABLE_SHIFT		0
 #define BOOST_RECOVERY_MASK		0x1
 #define BOOST_RECOVERY_SHIFT		1
 #define BOOST_SW_CTRL_MASK		0x1
 #define BOOST_SW_CTRL_SHIFT		2
 #define BOOST_LOW_FREQ_EN_MASK		0x1
 #define BOOST_LOW_FREQ_EN_SHIFT		3
+#define BOOST_STATIS_ENABLE_MASK	0x1
+#define BOOST_STATIS_ENABLE_SHIFT	4
 #define BOOST_BUSY_STATE		BIT(8)
 
 #define PX30_PLL_CON(x)			((x) * 0x4)
@@ -73,7 +86,32 @@ struct clk;
 #define PX30_PMU_CLKGATE_CON(x)		((x) * 0x4 + 0x80)
 #define PX30_PMU_MODE			0x0020
 
-/* register positions shared by RK2928, RK3036, RK3066, RK3188 and RK3228 */
+/*
+ * register positions shared by RK1808 RK2928, RK3036,
+ * RK3066, RK3188 and RK3228
+ */
+
+#define RK1808_PLL_CON(x)		((x) * 0x4)
+#define RK1808_MODE_CON			0xa0
+#define RK1808_MISC_CON			0xa4
+#define RK1808_MISC1_CON		0xa8
+#define RK1808_GLB_SRST_FST		0xb8
+#define RK1808_GLB_SRST_SND		0xbc
+#define RK1808_CLKSEL_CON(x)		((x) * 0x4 + 0x100)
+#define RK1808_CLKGATE_CON(x)		((x) * 0x4 + 0x230)
+#define RK1808_SOFTRST_CON(x)		((x) * 0x4 + 0x300)
+#define RK1808_SDMMC_CON0		0x380
+#define RK1808_SDMMC_CON1		0x384
+#define RK1808_SDIO_CON0		0x388
+#define RK1808_SDIO_CON1		0x38c
+#define RK1808_EMMC_CON0		0x390
+#define RK1808_EMMC_CON1		0x394
+
+#define RK1808_PMU_PLL_CON(x)		((x) * 0x4 + 0x4000)
+#define RK1808_PMU_MODE_CON		0x4020
+#define RK1808_PMU_CLKSEL_CON(x)	((x) * 0x4 + 0x4040)
+#define RK1808_PMU_CLKGATE_CON(x)	((x) * 0x4 + 0x4080)
+
 #define RK2928_PLL_CON(x)		((x) * 0x4)
 #define RK2928_MODE_CON		0x40
 #define RK2928_CLKSEL_CON(x)	((x) * 0x4 + 0x44)
@@ -236,7 +274,6 @@ struct rockchip_clk_provider {
 	struct clk_onecell_data clk_data;
 	struct device_node *cru_node;
 	struct regmap *grf;
-	struct regmap *boost;
 	spinlock_t lock;
 };
 
@@ -269,7 +306,6 @@ struct rockchip_pll_rate_table {
  * @type: Type of PLL to be registered.
  * @pll_flags: hardware-specific flags
  * @rate_table: Table of usable pll rates
- * @boost_enabled: whether pll supports boost
  *
  * Flags:
  * ROCKCHIP_PLL_SYNC_RATE - check rate parameters to match against the
@@ -288,7 +324,6 @@ struct rockchip_pll_clock {
 	enum rockchip_pll_type	type;
 	u8			pll_flags;
 	struct rockchip_pll_rate_table *rate_table;
-	bool			boost_enabled;
 };
 
 #define ROCKCHIP_PLL_SYNC_RATE		BIT(0)
@@ -310,36 +345,21 @@ struct rockchip_pll_clock {
 		.rate_table	= _rtable,				\
 	}
 
-#define PLL_BOOST(_type, _id, _name, _pnames, _flags, _con, _mode,	\
-		_mshift, _lshift, _pflags, _rtable)			\
-	{								\
-		.id		= _id,					\
-		.type		= _type,				\
-		.name		= _name,				\
-		.parent_names	= _pnames,				\
-		.num_parents	= ARRAY_SIZE(_pnames),			\
-		.flags		= CLK_GET_RATE_NOCACHE | _flags,	\
-		.con_offset	= _con,					\
-		.mode_offset	= _mode,				\
-		.mode_shift	= _mshift,				\
-		.lock_shift	= _lshift,				\
-		.pll_flags	= _pflags,				\
-		.rate_table	= _rtable,				\
-		.boost_enabled  = true,					\
-	}
-
 struct clk *rockchip_clk_register_pll(struct rockchip_clk_provider *ctx,
 		enum rockchip_pll_type pll_type,
 		const char *name, const char *const *parent_names,
 		u8 num_parents, int con_offset, int grf_lock_offset,
 		int lock_shift, int mode_offset, int mode_shift,
 		struct rockchip_pll_rate_table *rate_table,
-		unsigned long flags, u8 clk_pll_flags,
-		bool boost_enabled);
+		unsigned long flags, u8 clk_pll_flags);
+
+void rockchip_boost_init(struct clk_hw *hw);
 
 void rockchip_boost_enable_recovery_sw_low(struct clk_hw *hw);
 
 void rockchip_boost_disable_recovery_sw(struct clk_hw *hw);
+
+void rockchip_boost_add_core_div(struct clk_hw *hw, unsigned long prate);
 
 struct rockchip_cpuclk_clksel {
 	int reg;

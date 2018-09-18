@@ -379,6 +379,7 @@ struct vpu_service_info {
 	unsigned long vcodec_rate;
 	unsigned long core_rate;
 	unsigned long cabac_rate;
+	unsigned int thermal_div;
 
 	struct thermal_cooling_device *devfreq_cooling;
 	u32 static_coefficient;
@@ -461,14 +462,12 @@ struct compat_vpu_request {
 };
 #endif
 
-#define VDPU_SOFT_RESET_REG	101
 #define VDPU_CLEAN_CACHE_REG	516
 #define VEPU_CLEAN_CACHE_REG	772
 #define HEVC_CLEAN_CACHE_REG	260
 
 #define VPU_REG_ENABLE(base, reg)	writel_relaxed(1, base + reg)
 
-#define VDPU_SOFT_RESET(base)	VPU_REG_ENABLE(base, VDPU_SOFT_RESET_REG)
 #define VDPU_CLEAN_CACHE(base)	VPU_REG_ENABLE(base, VDPU_CLEAN_CACHE_REG)
 #define VEPU_CLEAN_CACHE(base)	VPU_REG_ENABLE(base, VEPU_CLEAN_CACHE_REG)
 #define HEVC_CLEAN_CACHE(base)	VPU_REG_ENABLE(base, HEVC_CLEAN_CACHE_REG)
@@ -755,6 +754,27 @@ static void vpu_reset(struct vpu_subdev_data *data)
 	dev_info(pservice->dev, "reset done\n");
 }
 
+static void vpu_soft_reset(struct vpu_subdev_data *data)
+{
+	struct vpu_device *dev = &data->dec_dev;
+	struct vpu_service_info *pservice = data->pservice;
+	struct vpu_task_info *task = &data->task_info[TASK_DEC];
+
+	if (task->reg_reset < 0)
+		return;
+
+	writel(task->reset_mask, dev->regs + task->reg_reset);
+	if (data->mmu_dev && test_bit(MMU_ACTIVATED, &data->state)) {
+		clear_bit(MMU_ACTIVATED, &data->state);
+		clear_bit(MMU_PAGEFAULT, &data->state);
+		if (atomic_read(&pservice->enabled))
+			/* Need to reset iommu */
+			vcodec_iommu_detach(data->iommu_info);
+		else
+			WARN_ON(!atomic_read(&pservice->enabled));
+	}
+}
+
 static void reg_deinit(struct vpu_subdev_data *data, struct vpu_reg *reg);
 static void vpu_service_session_clear(struct vpu_subdev_data *data,
 				      struct vpu_session *session)
@@ -779,6 +799,14 @@ static unsigned long get_div_rate(struct clk *clock, int divide)
 	unsigned long rate = clk_get_rate(parent);
 
 	return (rate / divide) + 1;
+}
+
+static void set_div_clk(struct clk *clock, int divide)
+{
+	struct clk *parent = clk_get_parent(clock);
+	unsigned long rate = clk_get_rate(parent);
+
+	clk_set_rate(clock, (rate / divide) + 1);
 }
 #endif
 
@@ -1010,7 +1038,7 @@ static int fill_scaling_list_pps(struct vpu_subdev_data *data,
 static int vcodec_bufid_to_iova(struct vpu_subdev_data *data,
 				struct vpu_session *session,
 				const u8 *tbl,
-				int size, struct vpu_reg *reg,
+				size_t size, struct vpu_reg *reg,
 				struct extra_info_for_iommu *ext_inf)
 {
 	struct vpu_service_info *pservice = data->pservice;
@@ -1018,7 +1046,7 @@ static int vcodec_bufid_to_iova(struct vpu_subdev_data *data,
 	enum FORMAT_TYPE type;
 	int offset = 0;
 	int ret = 0;
-	int i;
+	u32 i;
 
 	if (!tbl || size <= 0) {
 		dev_err(pservice->dev, "input arguments invalidate\n");
@@ -1156,7 +1184,7 @@ static int vcodec_reg_address_translate(struct vpu_subdev_data *data,
 	if (type < FMT_TYPE_BUTT) {
 		const struct vpu_trans_info *info = &reg->trans[type];
 		const u8 *tbl = info->table;
-		int size = info->count;
+		size_t size = info->count;
 
 		return vcodec_bufid_to_iova(data, session, tbl, size, reg,
 					    ext_inf);
@@ -1944,9 +1972,9 @@ static long compat_vpu_service_ioctl(struct file *file, unsigned int cmd,
 
 static int vpu_service_check_hw(struct vpu_subdev_data *data)
 {
-	int ret = -EINVAL;
-	u32 i = 0;
 	u32 hw_id = readl_relaxed(data->regs);
+	u32 i = 0;
+	int ret = -EINVAL;
 
 	hw_id = (hw_id >> 16) & 0xFFFF;
 	dev_dbg(data->dev, "checking hw id %x\n", hw_id);
@@ -2296,8 +2324,6 @@ static void rkvdec_set_clk(struct vpu_service_info *pservice,
 			   unsigned long cabac_rate,
 			   unsigned int event)
 {
-	static unsigned int div;
-
 	mutex_lock(&pservice->set_clk_lock);
 
 	switch (event) {
@@ -2305,39 +2331,45 @@ static void rkvdec_set_clk(struct vpu_service_info *pservice,
 		clk_set_rate(pservice->aclk_vcodec, pservice->vcodec_rate);
 		clk_set_rate(pservice->clk_core, pservice->core_rate);
 		clk_set_rate(pservice->clk_cabac, pservice->cabac_rate);
-		div = 0;
+		pservice->thermal_div = 0;
 		break;
 	case EVENT_POWER_OFF:
 		clk_set_rate(pservice->aclk_vcodec, vcodec_rate);
 		clk_set_rate(pservice->clk_core, core_rate);
 		clk_set_rate(pservice->clk_cabac, cabac_rate);
-		div = 0;
+		pservice->thermal_div = 0;
 		break;
 	case EVENT_ADJUST:
-		if (!div) {
+		if (!pservice->thermal_div) {
 			clk_set_rate(pservice->aclk_vcodec, vcodec_rate);
 			clk_set_rate(pservice->clk_core, core_rate);
 			clk_set_rate(pservice->clk_cabac, cabac_rate);
 		} else {
-			clk_set_rate(pservice->aclk_vcodec, vcodec_rate / div);
-			clk_set_rate(pservice->clk_core, vcodec_rate / div);
-			clk_set_rate(pservice->clk_cabac, vcodec_rate / div);
+			clk_set_rate(pservice->aclk_vcodec,
+				     vcodec_rate / pservice->thermal_div);
+			clk_set_rate(pservice->clk_core,
+				     core_rate / pservice->thermal_div);
+			clk_set_rate(pservice->clk_cabac,
+				     cabac_rate / pservice->thermal_div);
 		}
 		pservice->vcodec_rate = vcodec_rate;
 		pservice->core_rate = core_rate;
 		pservice->cabac_rate = cabac_rate;
 		break;
 	case EVENT_THERMAL:
-		div = pservice->vcodec_rate / vcodec_rate;
-		if (div > 4)
-			div = 4;
-		if (div) {
+		pservice->thermal_div = pservice->vcodec_rate / vcodec_rate;
+		if (pservice->thermal_div > 4)
+			pservice->thermal_div = 4;
+		if (pservice->thermal_div) {
 			clk_set_rate(pservice->aclk_vcodec,
-				     pservice->vcodec_rate / div);
+				     pservice->vcodec_rate /
+				     pservice->thermal_div);
 			clk_set_rate(pservice->clk_core,
-				     pservice->core_rate / div);
+				     pservice->core_rate /
+				     pservice->thermal_div);
 			clk_set_rate(pservice->clk_cabac,
-				     pservice->cabac_rate / div);
+				     pservice->cabac_rate /
+				     pservice->thermal_div);
 		}
 		break;
 	}
@@ -2386,17 +2418,16 @@ static void vcodec_set_freq_rk322x(struct vpu_service_info *pservice,
 	 * vpu/vpu2 still only need to set aclk
 	 */
 	if (pservice->dev_id == VCODEC_DEVICE_ID_RKVDEC) {
-		rkvdec_set_clk(pservice,
-			       500 * MHZ,
-			       300 * MHZ,
-			       300 * MHZ,
-			       EVENT_ADJUST);
+		if (pservice->devfreq) {
+			rkvdec_set_clk(pservice,  500 * MHZ, 300 * MHZ,
+				       300 * MHZ, EVENT_ADJUST);
+		} else {
+			clk_set_rate(pservice->clk_core,  300 * MHZ);
+			clk_set_rate(pservice->clk_cabac, 300 * MHZ);
+			clk_set_rate(pservice->aclk_vcodec, 500 * MHZ);
+		}
 	} else {
-		rkvdec_set_clk(pservice,
-			       300 * MHZ,
-			       300 * MHZ,
-			       300 * MHZ,
-			       EVENT_ADJUST);
+		clk_set_rate(pservice->aclk_vcodec, 300 * MHZ);
 	}
 }
 
@@ -2542,11 +2573,21 @@ static void vcodec_reduce_freq_rk322x(struct vpu_service_info *pservice)
 	if (list_empty(&pservice->running)) {
 		unsigned long rate = clk_get_rate(pservice->aclk_vcodec);
 
-		rkvdec_set_clk(pservice,
-			       get_div_rate(pservice->aclk_vcodec, 32),
-			       get_div_rate(pservice->clk_core, 32),
-			       get_div_rate(pservice->clk_cabac, 32),
-			       EVENT_ADJUST);
+		if (pservice->devfreq) {
+			rkvdec_set_clk(pservice,
+				get_div_rate(pservice->aclk_vcodec, 32),
+				get_div_rate(pservice->clk_core, 32),
+				get_div_rate(pservice->clk_cabac, 32),
+				EVENT_ADJUST);
+		} else {
+			if (pservice->aclk_vcodec)
+				set_div_clk(pservice->aclk_vcodec, 32);
+			if (pservice->clk_core)
+				set_div_clk(pservice->clk_core, 32);
+			if (pservice->clk_cabac)
+				set_div_clk(pservice->clk_cabac, 32);
+		}
+
 		atomic_set(&pservice->freq_status, rate / 32);
 	}
 }
@@ -3187,9 +3228,16 @@ static int devfreq_vcodec_get_cur_freq(struct device *dev,
 	return 0;
 }
 
+static int devfreq_vcodec_get_dev_status(struct device *dev,
+					 struct devfreq_dev_status *stat)
+{
+	return 0;
+}
+
 static struct devfreq_dev_profile devfreq_vcodec_profile = {
 	.target		= devfreq_vcodec_target,
 	.get_cur_freq	= devfreq_vcodec_get_cur_freq,
+	.get_dev_status	= devfreq_vcodec_get_dev_status,
 };
 
 static unsigned long model_static_power(struct devfreq *devfreq,
@@ -3791,8 +3839,7 @@ static irqreturn_t vdpu_isr(int irq, void *dev_id)
 			}
 			reg_from_run_to_done(data, pservice->reg_codec);
 			/* avoid vpu timeout and can't recover problem */
-			if (data->mode == VCODEC_RUNNING_MODE_VPU)
-				VDPU_SOFT_RESET(data->regs);
+			vpu_soft_reset(data);
 		}
 	}
 

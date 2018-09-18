@@ -95,6 +95,11 @@
 #define DRM_MODE_DPMS_SUSPEND	2
 #define DRM_MODE_DPMS_OFF	3
 
+/* Content Protection Flags */
+#define DRM_MODE_CONTENT_PROTECTION_UNDESIRED   0
+#define DRM_MODE_CONTENT_PROTECTION_DESIRED     1
+#define DRM_MODE_CONTENT_PROTECTION_ENABLED     2
+
 /* Scaling mode options */
 #define DRM_MODE_SCALE_NONE		0 /* Unmodified timing (display or
 					     software can still scale) */
@@ -111,6 +116,11 @@
 #define DRM_MODE_DIRTY_OFF      0
 #define DRM_MODE_DIRTY_ON       1
 #define DRM_MODE_DIRTY_ANNOTATE 2
+
+/* Content Protection Flags */
+#define DRM_MODE_CONTENT_PROTECTION_UNDESIRED	0
+#define DRM_MODE_CONTENT_PROTECTION_DESIRED     1
+#define DRM_MODE_CONTENT_PROTECTION_ENABLED     2
 
 struct drm_mode_modeinfo {
 	__u32 clock;

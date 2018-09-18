@@ -524,6 +524,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3126-evb.dtb \
 	rk3128-fireprime.dtb \
 	rk3128h-box.dtb \
+	rk3128h-box-avb.dtb \
 	rk3188-radxarock.dtb \
 	rk3228-evb.dtb \
 	rk3229-at-3nod.dtb \
@@ -566,6 +567,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3288-veyron-speedy.dtb \
 	rk3288-x7811-rk818-dual-dsi.dtb \
 	rk3308-dot-v10-aarch32.dtb \
+	rk3308-dot-rk816-v10-aarch32.dtb \
 	rk3308-evb-dmic-i2s-v10-aarch32.dtb \
 	rk3308-voice-module-board-v10-aarch32.dtb \
 	rk3308-voice-module-amic-mainboard-v10-aarch32.dtb \

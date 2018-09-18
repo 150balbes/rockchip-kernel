@@ -12,7 +12,7 @@
 	compatible = "rockchip,rk3308-evb", "rockchip,rk3308";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait";
+		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7";
 	};
 
 	adc-keys0 {
@@ -120,8 +120,6 @@
 		rockchip,codec = <&dummy_codec>;
 		rockchip,format = "dsp_b";
 		rockchip,bitclock-inversion = <0>;
-		rockchip,bitclock-master = <&dummy_codec>;
-		rockchip,frame-master = <&dummy_codec>;
 		rockchip,wait-card-locked = <0>;
 	};
 
@@ -156,6 +154,7 @@
 		regulator-min-microvolt = <827000>;
 		regulator-max-microvolt = <1340000>;
 		regulator-init-microvolt = <1015000>;
+		regulator-early-min-microvolt = <1015000>;
 		regulator-always-on;
 		regulator-boot-on;
 		regulator-settling-time-up-us = <250>;
@@ -265,6 +264,7 @@
 &acodec {
 	status = "okay";
 
+	rockchip,no-deep-low-power;
 	rockchip,loopback-grp = <3>;
 	hp-ctl-gpios = <&gpio0 RK_PA1 GPIO_ACTIVE_HIGH>;
 	spk-ctl-gpios = <&gpio0 RK_PA5 GPIO_ACTIVE_HIGH>;
@@ -671,6 +671,10 @@
 		)
 	>;
 
+	status = "okay";
+};
+
+&rng {
 	status = "okay";
 };
 

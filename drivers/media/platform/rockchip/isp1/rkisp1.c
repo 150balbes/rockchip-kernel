@@ -421,9 +421,7 @@ static int rkisp1_isp_stop(struct rkisp1_device *dev)
 		 readl(base + CIF_ISP_CTRL),
 		 readl(base + CIF_MIPI_CTRL));
 
-	writel(CIF_IRCL_MIPI_SW_RST | CIF_IRCL_ISP_SW_RST | CIF_IRCL_MI_SW_RST,
-	       base + CIF_IRCL);
-	writel(0x0, base + CIF_IRCL);
+	writel(CIF_IRCL_CIF_SW_RST, base + CIF_IRCL);
 
 	return 0;
 }
@@ -476,6 +474,14 @@ static void rkisp1_config_clk(struct rkisp1_device *dev)
 		CIF_ICCL_IE_CLK | CIF_ICCL_MIPI_CLK | CIF_ICCL_DCROP_CLK;
 
 	writel(val, dev->base_addr + CIF_ICCL);
+
+	if (dev->isp_ver == ISP_V12) {
+		val = CIF_CLK_CTRL_MI_Y12 | CIF_CLK_CTRL_MI_SP |
+		      CIF_CLK_CTRL_MI_RAW0 | CIF_CLK_CTRL_MI_RAW1 |
+		      CIF_CLK_CTRL_MI_READ | CIF_CLK_CTRL_MI_RAWRD |
+		      CIF_CLK_CTRL_CP | CIF_CLK_CTRL_IE;
+		writel(val, dev->base_addr + CIF_VI_ISP_CLK_CTRL_V12);
+	}
 }
 
 /***************************** isp sub-devs *******************************/
@@ -554,30 +560,78 @@ static const struct ispsd_in_fmt rkisp1_isp_input_formats[] = {
 		.bayer_pat	= RAW_GRBG,
 		.bus_width	= 8,
 	}, {
-		.mbus_code	= MEDIA_BUS_FMT_YUYV8_1X16,
+		.mbus_code	= MEDIA_BUS_FMT_YUYV8_2X8,
 		.fmt_type	= FMT_YUV,
 		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
 		.yuv_seq	= CIF_ISP_ACQ_PROP_YCBYCR,
-		.bus_width	= 16,
+		.bus_width	= 8,
 	}, {
-		.mbus_code	= MEDIA_BUS_FMT_YVYU8_1X16,
+		.mbus_code	= MEDIA_BUS_FMT_YVYU8_2X8,
 		.fmt_type	= FMT_YUV,
 		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
 		.yuv_seq	= CIF_ISP_ACQ_PROP_YCRYCB,
-		.bus_width	= 16,
+		.bus_width	= 8,
 	}, {
-		.mbus_code	= MEDIA_BUS_FMT_UYVY8_1X16,
+		.mbus_code	= MEDIA_BUS_FMT_UYVY8_2X8,
 		.fmt_type	= FMT_YUV,
 		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
 		.yuv_seq	= CIF_ISP_ACQ_PROP_CBYCRY,
-		.bus_width	= 16,
+		.bus_width	= 8,
 	}, {
-		.mbus_code	= MEDIA_BUS_FMT_VYUY8_1X16,
+		.mbus_code	= MEDIA_BUS_FMT_VYUY8_2X8,
 		.fmt_type	= FMT_YUV,
 		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
 		.yuv_seq	= CIF_ISP_ACQ_PROP_CRYCBY,
-		.bus_width	= 16,
-	},
+		.bus_width	= 8,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_YUYV10_2X10,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_YCBYCR,
+		.bus_width	= 10,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_YVYU10_2X10,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_YCRYCB,
+		.bus_width	= 10,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_UYVY10_2X10,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_CBYCRY,
+		.bus_width	= 10,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_VYUY10_2X10,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_CRYCBY,
+		.bus_width	= 10,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_YUYV12_2X12,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_YCBYCR,
+		.bus_width	= 12,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_YVYU12_2X12,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_YCRYCB,
+		.bus_width	= 12,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_UYVY12_2X12,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_CBYCRY,
+		.bus_width	= 12,
+	}, {
+		.mbus_code	= MEDIA_BUS_FMT_VYUY12_2X12,
+		.fmt_type	= FMT_YUV,
+		.mipi_dt	= CIF_CSI2_DT_YUV422_8b,
+		.yuv_seq	= CIF_ISP_ACQ_PROP_CRYCBY,
+		.bus_width	= 12,
+	}
 };
 
 static const struct ispsd_out_fmt rkisp1_isp_output_formats[] = {

@@ -87,6 +87,44 @@
 		pwms = <&pwm0 0 1000000 PWM_POLARITY_INVERTED>;
 	};
 
+	adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 1>;
+		io-channel-names = "buttons";
+		poll-interval = <100>;
+		keyup-threshold-microvolt = <1800000>;
+
+		button-up {
+			label = "Volume Up";
+			linux,code = <KEY_VOLUMEUP>;
+			press-threshold-microvolt = <18000>;
+		};
+
+		button-down {
+			label = "Volume Down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			press-threshold-microvolt = <300000>;
+		};
+
+		menu {
+			label = "Menu";
+			linux,code = <KEY_MENU>;
+			press-threshold-microvolt = <640000>;
+		};
+
+		esc {
+			label = "Esc";
+			linux,code = <KEY_ESC>;
+			press-threshold-microvolt = <1000000>;
+		};
+
+		home  {
+			label = "Home";
+			linux,code = <KEY_HOME>;
+			press-threshold-microvolt = <1300000>;
+		};
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 		#address-cells = <1>;
@@ -128,6 +166,17 @@
 	};
 
 	/delete-node/ sdmmc-regulator;
+
+	vcc18_dvp: vcc18-dvp {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc18_dvp";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&gpio0 RK_PC1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		vin-supply = <&vcc_io>;
+	};
 
 	vdd_log: vdd-logic {
 		compatible = "pwm-regulator";
@@ -428,7 +477,7 @@
 	status = "okay";
 	audio-supply = <&vcc_io>;
 	bb-supply = <&vcc_io>;
-	dvp-supply = <&vcc_io>;
+	dvp-supply = <&vcc18_dvp>;
 	flash0-supply = <&vcc_18>;
 	flash1-supply = <&vcc_io>;
 	gpio30-supply = <&vcc_io>;

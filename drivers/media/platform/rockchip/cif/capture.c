@@ -139,6 +139,7 @@ cif_input_fmt *get_input_fmt(struct v4l2_subdev *sd, struct v4l2_rect *rect)
 	int ret;
 	u32 i;
 
+	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(sd, pad, get_fmt, NULL, &fmt);
 	if (ret < 0) {
 		v4l2_warn(sd->v4l2_dev,
@@ -361,8 +362,10 @@ static void rkcif_stop_streaming(struct vb2_queue *queue)
 	ret = wait_event_timeout(stream->wq_stopped,
 				 stream->state != RKCIF_STATE_STREAMING,
 				 msecs_to_jiffies(1000));
-	if (!ret)
+	if (!ret) {
 		rkcif_stream_stop(stream);
+		stream->stopping = false;
+	}
 	pm_runtime_put(dev->dev);
 
 	/* stop the sub device*/
