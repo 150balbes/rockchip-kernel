@@ -8,7 +8,7 @@
  * Copyright 2007, Michael Wu <flamingice@sourmilk.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright (C) 2015 - 2017 Intel Deutschland GmbH
- * Copyright (C) 2018 - 2019 Intel Corporation
+ * Copyright (C) 2018 - 2020 Intel Corporation
  */
 
 #include <linux/delay.h>
@@ -158,10 +158,10 @@ ieee80211_determine_chantype(struct ieee80211_sub_if_data *sdata,
 	memcpy(&sta_ht_cap, &sband->ht_cap, sizeof(sta_ht_cap));
 	ieee80211_apply_htcap_overrides(sdata, &sta_ht_cap);
 
+	memset(chandef, 0, sizeof(struct cfg80211_chan_def));
 	chandef->chan = channel;
 	chandef->width = NL80211_CHAN_WIDTH_20_NOHT;
 	chandef->center_freq1 = channel->center_freq;
-	chandef->center_freq2 = 0;
 
 	if (!ht_oper || !sta_ht_cap.ht_supported) {
 		ret = IEEE80211_STA_DISABLE_HT | IEEE80211_STA_DISABLE_VHT;
@@ -1311,7 +1311,7 @@ ieee80211_sta_process_chanswitch(struct ieee80211_sub_if_data *sdata,
 	if (!res) {
 		ch_switch.timestamp = timestamp;
 		ch_switch.device_timestamp = device_timestamp;
-		ch_switch.block_tx =  beacon ? csa_ie.mode : 0;
+		ch_switch.block_tx = csa_ie.mode;
 		ch_switch.chandef = csa_ie.chandef;
 		ch_switch.count = csa_ie.count;
 		ch_switch.delay = csa_ie.max_switch_time;
@@ -1404,7 +1404,7 @@ ieee80211_sta_process_chanswitch(struct ieee80211_sub_if_data *sdata,
 
 	sdata->vif.csa_active = true;
 	sdata->csa_chandef = csa_ie.chandef;
-	sdata->csa_block_tx = ch_switch.block_tx;
+	sdata->csa_block_tx = csa_ie.mode;
 	ifmgd->csa_ignored_same_chan = false;
 
 	if (sdata->csa_block_tx)
@@ -1438,7 +1438,7 @@ ieee80211_sta_process_chanswitch(struct ieee80211_sub_if_data *sdata,
 	 * reset when the disconnection worker runs.
 	 */
 	sdata->vif.csa_active = true;
-	sdata->csa_block_tx = ch_switch.block_tx;
+	sdata->csa_block_tx = csa_ie.mode;
 
 	ieee80211_queue_work(&local->hw, &ifmgd->csa_connection_drop_work);
 	mutex_unlock(&local->chanctx_mtx);
@@ -2278,8 +2278,9 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 		    !ifmgd->have_beacon)
 			drv_mgd_prepare_tx(sdata->local, sdata, 0);
 
-		ieee80211_send_deauth_disassoc(sdata, ifmgd->bssid, stype,
-					       reason, tx, frame_buf);
+		ieee80211_send_deauth_disassoc(sdata, ifmgd->bssid,
+					       ifmgd->bssid, stype, reason,
+					       tx, frame_buf);
 	}
 
 	/* flush out frame - make sure the deauth was actually sent */
@@ -2459,7 +2460,7 @@ void ieee80211_sta_tx_notify(struct ieee80211_sub_if_data *sdata,
 	if (!ieee80211_is_data(hdr->frame_control))
 	    return;
 
-	if (ieee80211_is_nullfunc(hdr->frame_control) &&
+	if (ieee80211_is_any_nullfunc(hdr->frame_control) &&
 	    sdata->u.mgd.probe_send_count > 0) {
 		if (ack)
 			ieee80211_sta_reset_conn_monitor(sdata);
@@ -2522,7 +2523,10 @@ static void ieee80211_mgd_probe_ap_send(struct ieee80211_sub_if_data *sdata)
 
 	if (ieee80211_hw_check(&sdata->local->hw, REPORTS_TX_ACK_STATUS)) {
 		ifmgd->nullfunc_failed = false;
-		ieee80211_send_nullfunc(sdata->local, sdata, false);
+		if (!(ifmgd->flags & IEEE80211_STA_DISABLE_HE))
+			ifmgd->probe_send_count--;
+		else
+			ieee80211_send_nullfunc(sdata->local, sdata, false);
 	} else {
 		int ssid_len;
 
@@ -2629,7 +2633,8 @@ struct sk_buff *ieee80211_ap_probereq_get(struct ieee80211_hw *hw,
 
 	rcu_read_lock();
 	ssid = ieee80211_bss_get_ie(cbss, WLAN_EID_SSID);
-	if (WARN_ON_ONCE(ssid == NULL))
+	if (WARN_ONCE(!ssid || ssid[1] > IEEE80211_MAX_SSID_LEN,
+		      "invalid SSID element (len=%d)", ssid ? ssid[1] : -1))
 		ssid_len = 0;
 	else
 		ssid_len = ssid[1];
@@ -2954,7 +2959,7 @@ static void ieee80211_rx_mgmt_auth(struct ieee80211_sub_if_data *sdata,
 	    (auth_transaction == 2 &&
 	     ifmgd->auth_data->expected_transaction == 2)) {
 		if (!ieee80211_mark_sta_auth(sdata, bssid))
-			goto out_err;
+			return; /* ignore frame -- wait for timeout */
 	} else if (ifmgd->auth_data->algorithm == WLAN_AUTH_SAE &&
 		   auth_transaction == 2) {
 		sdata_info(sdata, "SAE peer confirmed\n");
@@ -2962,10 +2967,6 @@ static void ieee80211_rx_mgmt_auth(struct ieee80211_sub_if_data *sdata,
 	}
 
 	cfg80211_rx_mlme_mgmt(sdata->dev, (u8 *)mgmt, len);
-	return;
- out_err:
-	mutex_unlock(&sdata->local->sta_mtx);
-	/* ignore frame -- wait for timeout */
 }
 
 #define case_WLAN(type) \
@@ -3391,6 +3392,8 @@ static bool ieee80211_assoc_success(struct ieee80211_sub_if_data *sdata,
 		if (elems.uora_element)
 			bss_conf->uora_ocw_range = elems.uora_element[0];
 
+		ieee80211_he_op_ie_to_bss_conf(&sdata->vif, elems.he_operation);
+		ieee80211_he_spr_ie_to_bss_conf(&sdata->vif, elems.he_spr);
 		/* TODO: OPEN: what happens if BSS color disable is set? */
 	}
 
@@ -4504,7 +4507,7 @@ void ieee80211_mgd_quiesce(struct ieee80211_sub_if_data *sdata)
 		 * cfg80211 won't know and won't actually abort those attempts,
 		 * thus we need to do that ourselves.
 		 */
-		ieee80211_send_deauth_disassoc(sdata, bssid,
+		ieee80211_send_deauth_disassoc(sdata, bssid, bssid,
 					       IEEE80211_STYPE_DEAUTH,
 					       WLAN_REASON_DEAUTH_LEAVING,
 					       false, frame_buf);
@@ -5227,7 +5230,7 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 
 	rcu_read_lock();
 	ssidie = ieee80211_bss_get_ie(req->bss, WLAN_EID_SSID);
-	if (!ssidie) {
+	if (!ssidie || ssidie[1] > sizeof(assoc_data->ssid)) {
 		rcu_read_unlock();
 		kfree(assoc_data);
 		return -EINVAL;
@@ -5291,7 +5294,7 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 			ifmgd->flags |= IEEE80211_STA_DISABLE_VHT;
 			ifmgd->flags |= IEEE80211_STA_DISABLE_HE;
 			netdev_info(sdata->dev,
-				    "disabling HE/HT/VHT due to WEP/TKIP use\n");
+				    "disabling HT/VHT/HE due to WEP/TKIP use\n");
 		}
 	}
 
@@ -5545,7 +5548,7 @@ int ieee80211_mgd_deauth(struct ieee80211_sub_if_data *sdata,
 			   ieee80211_get_reason_code_string(req->reason_code));
 
 		drv_mgd_prepare_tx(sdata->local, sdata, 0);
-		ieee80211_send_deauth_disassoc(sdata, req->bssid,
+		ieee80211_send_deauth_disassoc(sdata, req->bssid, req->bssid,
 					       IEEE80211_STYPE_DEAUTH,
 					       req->reason_code, tx,
 					       frame_buf);
@@ -5565,7 +5568,7 @@ int ieee80211_mgd_deauth(struct ieee80211_sub_if_data *sdata,
 			   ieee80211_get_reason_code_string(req->reason_code));
 
 		drv_mgd_prepare_tx(sdata->local, sdata, 0);
-		ieee80211_send_deauth_disassoc(sdata, req->bssid,
+		ieee80211_send_deauth_disassoc(sdata, req->bssid, req->bssid,
 					       IEEE80211_STYPE_DEAUTH,
 					       req->reason_code, tx,
 					       frame_buf);

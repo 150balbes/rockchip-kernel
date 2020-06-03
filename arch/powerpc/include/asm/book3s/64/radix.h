@@ -254,8 +254,19 @@ extern void radix__pgtable_trans_huge_deposit(struct mm_struct *mm, pmd_t *pmdp,
 extern pgtable_t radix__pgtable_trans_huge_withdraw(struct mm_struct *mm, pmd_t *pmdp);
 extern pmd_t radix__pmdp_huge_get_and_clear(struct mm_struct *mm,
 				      unsigned long addr, pmd_t *pmdp);
-extern int radix__has_transparent_hugepage(void);
+static inline int radix__has_transparent_hugepage(void)
+{
+	/* For radix 2M at PMD level means thp */
+	if (mmu_psize_defs[MMU_PAGE_2M].shift == PMD_SHIFT)
+		return 1;
+	return 0;
+}
 #endif
+
+static inline pmd_t radix__pmd_mkdevmap(pmd_t pmd)
+{
+	return __pmd(pmd_val(pmd) | (_PAGE_PTE | _PAGE_DEVMAP));
+}
 
 extern int __meminit radix__vmemmap_create_mapping(unsigned long start,
 					     unsigned long page_size,
@@ -265,9 +276,6 @@ extern void radix__vmemmap_remove_mapping(unsigned long start,
 
 extern int radix__map_kernel_page(unsigned long ea, unsigned long pa,
 				 pgprot_t flags, unsigned int psz);
-
-extern int radix__ioremap_range(unsigned long ea, phys_addr_t pa,
-				unsigned long size, pgprot_t prot, int nid);
 
 static inline unsigned long radix__get_tree_size(void)
 {

@@ -111,7 +111,7 @@
 /* Currently unsupported */
 #define SCA3000_MD_CTRL_AND_Y				BIT(3)
 #define SCA3000_MD_CTRL_AND_X				BIT(4)
-#define SAC3000_MD_CTRL_AND_Z				BIT(5)
+#define SCA3000_MD_CTRL_AND_Z				BIT(5)
 
 /*
  * Some control registers of complex access methods requiring this register to
@@ -980,7 +980,7 @@ static int sca3000_read_data(struct sca3000_state *st,
 	st->tx[0] = SCA3000_READ_REG(reg_address_high);
 	ret = spi_sync_transfer(st->us, xfer, ARRAY_SIZE(xfer));
 	if (ret) {
-		dev_err(get_device(&st->us->dev), "problem reading register");
+		dev_err(&st->us->dev, "problem reading register\n");
 		return ret;
 	}
 

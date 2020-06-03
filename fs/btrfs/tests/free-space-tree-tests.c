@@ -9,6 +9,7 @@
 #include "../disk-io.h"
 #include "../free-space-tree.h"
 #include "../transaction.h"
+#include "../block-group.h"
 
 struct free_space_extent {
 	u64 start;
@@ -462,9 +463,9 @@ static int run_test(test_func_t test_func, int bitmaps, u32 sectorsize,
 	root->fs_info->tree_root = root;
 
 	root->node = alloc_test_extent_buffer(root->fs_info, nodesize);
-	if (!root->node) {
+	if (IS_ERR(root->node)) {
 		test_std_err(TEST_ALLOC_EXTENT_BUFFER);
-		ret = -ENOMEM;
+		ret = PTR_ERR(root->node);
 		goto out;
 	}
 	btrfs_set_header_level(root->node, 0);

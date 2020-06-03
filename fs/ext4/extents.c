@@ -498,6 +498,30 @@ int ext4_ext_check_inode(struct inode *inode)
 	return ext4_ext_check(inode, ext_inode_hdr(inode), ext_depth(inode), 0);
 }
 
+static void ext4_cache_extents(struct inode *inode,
+			       struct ext4_extent_header *eh)
+{
+	struct ext4_extent *ex = EXT_FIRST_EXTENT(eh);
+	ext4_lblk_t prev = 0;
+	int i;
+
+	for (i = le16_to_cpu(eh->eh_entries); i > 0; i--, ex++) {
+		unsigned int status = EXTENT_STATUS_WRITTEN;
+		ext4_lblk_t lblk = le32_to_cpu(ex->ee_block);
+		int len = ext4_ext_get_actual_len(ex);
+
+		if (prev && (prev != lblk))
+			ext4_es_cache_extent(inode, prev, lblk - prev, ~0,
+					     EXTENT_STATUS_HOLE);
+
+		if (ext4_ext_is_unwritten(ex))
+			status = EXTENT_STATUS_UNWRITTEN;
+		ext4_es_cache_extent(inode, lblk, len,
+				     ext4_ext_pblock(ex), status);
+		prev = lblk + len;
+	}
+}
+
 static struct buffer_head *
 __read_extent_tree_block(const char *function, unsigned int line,
 			 struct inode *inode, ext4_fsblk_t pblk, int depth,
@@ -532,26 +556,7 @@ __read_extent_tree_block(const char *function, unsigned int line,
 	 */
 	if (!(flags & EXT4_EX_NOCACHE) && depth == 0) {
 		struct ext4_extent_header *eh = ext_block_hdr(bh);
-		struct ext4_extent *ex = EXT_FIRST_EXTENT(eh);
-		ext4_lblk_t prev = 0;
-		int i;
-
-		for (i = le16_to_cpu(eh->eh_entries); i > 0; i--, ex++) {
-			unsigned int status = EXTENT_STATUS_WRITTEN;
-			ext4_lblk_t lblk = le32_to_cpu(ex->ee_block);
-			int len = ext4_ext_get_actual_len(ex);
-
-			if (prev && (prev != lblk))
-				ext4_es_cache_extent(inode, prev,
-						     lblk - prev, ~0,
-						     EXTENT_STATUS_HOLE);
-
-			if (ext4_ext_is_unwritten(ex))
-				status = EXTENT_STATUS_UNWRITTEN;
-			ext4_es_cache_extent(inode, lblk, len,
-					     ext4_ext_pblock(ex), status);
-			prev = lblk + len;
-		}
+		ext4_cache_extents(inode, eh);
 	}
 	return bh;
 errout:
@@ -899,6 +904,8 @@ ext4_find_extent(struct inode *inode, ext4_lblk_t block,
 	path[0].p_bh = NULL;
 
 	i = depth;
+	if (!(flags & EXT4_EX_NOCACHE) && depth == 0)
+		ext4_cache_extents(inode, eh);
 	/* walk through the tree */
 	while (i) {
 		ext_debug("depth %d: num %d, max %d\n",
@@ -2315,6 +2322,52 @@ static int ext4_fill_fiemap_extents(struct inode *inode,
 	return err;
 }
 
+static int ext4_fill_es_cache_info(struct inode *inode,
+				   ext4_lblk_t block, ext4_lblk_t num,
+				   struct fiemap_extent_info *fieinfo)
+{
+	ext4_lblk_t next, end = block + num - 1;
+	struct extent_status es;
+	unsigned char blksize_bits = inode->i_sb->s_blocksize_bits;
+	unsigned int flags;
+	int err;
+
+	while (block <= end) {
+		next = 0;
+		flags = 0;
+		if (!ext4_es_lookup_extent(inode, block, &next, &es))
+			break;
+		if (ext4_es_is_unwritten(&es))
+			flags |= FIEMAP_EXTENT_UNWRITTEN;
+		if (ext4_es_is_delayed(&es))
+			flags |= (FIEMAP_EXTENT_DELALLOC |
+				  FIEMAP_EXTENT_UNKNOWN);
+		if (ext4_es_is_hole(&es))
+			flags |= EXT4_FIEMAP_EXTENT_HOLE;
+		if (next == 0)
+			flags |= FIEMAP_EXTENT_LAST;
+		if (flags & (FIEMAP_EXTENT_DELALLOC|
+			     EXT4_FIEMAP_EXTENT_HOLE))
+			es.es_pblk = 0;
+		else
+			es.es_pblk = ext4_es_pblock(&es);
+		err = fiemap_fill_next_extent(fieinfo,
+				(__u64)es.es_lblk << blksize_bits,
+				(__u64)es.es_pblk << blksize_bits,
+				(__u64)es.es_len << blksize_bits,
+				flags);
+		if (next == 0)
+			break;
+		block = next;
+		if (err < 0)
+			return err;
+		if (err == 1)
+			return 0;
+	}
+	return 0;
+}
+
+
 /*
  * ext4_ext_determine_hole - determine hole around given block
  * @inode:	inode we lookup in
@@ -3503,8 +3556,8 @@ static int ext4_ext_convert_to_initialized(handle_t *handle,
 		(unsigned long long)map->m_lblk, map_len);
 
 	sbi = EXT4_SB(inode->i_sb);
-	eof_block = (inode->i_size + inode->i_sb->s_blocksize - 1) >>
-		inode->i_sb->s_blocksize_bits;
+	eof_block = (EXT4_I(inode)->i_disksize + inode->i_sb->s_blocksize - 1)
+			>> inode->i_sb->s_blocksize_bits;
 	if (eof_block < map->m_lblk + map_len)
 		eof_block = map->m_lblk + map_len;
 
@@ -3759,8 +3812,8 @@ static int ext4_split_convert_extents(handle_t *handle,
 		  __func__, inode->i_ino,
 		  (unsigned long long)map->m_lblk, map->m_len);
 
-	eof_block = (inode->i_size + inode->i_sb->s_blocksize - 1) >>
-		inode->i_sb->s_blocksize_bits;
+	eof_block = (EXT4_I(inode)->i_disksize + inode->i_sb->s_blocksize - 1)
+			>> inode->i_sb->s_blocksize_bits;
 	if (eof_block < map->m_lblk + map->m_len)
 		eof_block = map->m_lblk + map->m_len;
 	/*
@@ -3813,8 +3866,8 @@ static int ext4_convert_unwritten_extents_endio(handle_t *handle,
 	 * illegal.
 	 */
 	if (ee_block != map->m_lblk || ee_len > map->m_len) {
-#ifdef EXT4_DEBUG
-		ext4_warning("Inode (%ld) finished: extent logical block %llu,"
+#ifdef CONFIG_EXT4_DEBUG
+		ext4_warning(inode->i_sb, "Inode (%ld) finished: extent logical block %llu,"
 			     " len %u; IO logical block %llu, len %u",
 			     inode->i_ino, (unsigned long long)ee_block, ee_len,
 			     (unsigned long long)map->m_lblk, map->m_len);
@@ -5017,8 +5070,6 @@ static int ext4_find_delayed_extent(struct inode *inode,
 
 	return next_del;
 }
-/* fiemap flags we can handle specified here */
-#define EXT4_FIEMAP_FLAGS	(FIEMAP_FLAG_SYNC|FIEMAP_FLAG_XATTR)
 
 static int ext4_xattr_fiemap(struct inode *inode,
 				struct fiemap_extent_info *fieinfo)
@@ -5055,10 +5106,16 @@ static int ext4_xattr_fiemap(struct inode *inode,
 	return (error < 0 ? error : 0);
 }
 
-int ext4_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
-		__u64 start, __u64 len)
+static int _ext4_fiemap(struct inode *inode,
+			struct fiemap_extent_info *fieinfo,
+			__u64 start, __u64 len,
+			int (*fill)(struct inode *, ext4_lblk_t,
+				    ext4_lblk_t,
+				    struct fiemap_extent_info *))
 {
 	ext4_lblk_t start_blk;
+	u32 ext4_fiemap_flags = FIEMAP_FLAG_SYNC|FIEMAP_FLAG_XATTR;
+
 	int error = 0;
 
 	if (ext4_has_inline_data(inode)) {
@@ -5075,14 +5132,18 @@ int ext4_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		error = ext4_ext_precache(inode);
 		if (error)
 			return error;
+		fieinfo->fi_flags &= ~FIEMAP_FLAG_CACHE;
 	}
 
 	/* fallback to generic here if not in extents fmt */
-	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)))
+	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)) &&
+	    fill == ext4_fill_fiemap_extents)
 		return generic_block_fiemap(inode, fieinfo, start, len,
 			ext4_get_block);
 
-	if (fiemap_check_flags(fieinfo, EXT4_FIEMAP_FLAGS))
+	if (fill == ext4_fill_es_cache_info)
+		ext4_fiemap_flags &= FIEMAP_FLAG_XATTR;
+	if (fiemap_check_flags(fieinfo, ext4_fiemap_flags))
 		return -EBADR;
 
 	if (fieinfo->fi_flags & FIEMAP_FLAG_XATTR) {
@@ -5101,11 +5162,35 @@ int ext4_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		 * Walk the extent tree gathering extent information
 		 * and pushing extents back to the user.
 		 */
-		error = ext4_fill_fiemap_extents(inode, start_blk,
-						 len_blks, fieinfo);
+		error = fill(inode, start_blk, len_blks, fieinfo);
 	}
 	return error;
 }
+
+int ext4_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
+		__u64 start, __u64 len)
+{
+	return _ext4_fiemap(inode, fieinfo, start, len,
+			    ext4_fill_fiemap_extents);
+}
+
+int ext4_get_es_cache(struct inode *inode, struct fiemap_extent_info *fieinfo,
+		      __u64 start, __u64 len)
+{
+	if (ext4_has_inline_data(inode)) {
+		int has_inline;
+
+		down_read(&EXT4_I(inode)->xattr_sem);
+		has_inline = ext4_has_inline_data(inode);
+		up_read(&EXT4_I(inode)->xattr_sem);
+		if (has_inline)
+			return 0;
+	}
+
+	return _ext4_fiemap(inode, fieinfo, start, len,
+			    ext4_fill_es_cache_info);
+}
+
 
 /*
  * ext4_access_path:

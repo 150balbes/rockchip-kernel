@@ -1078,7 +1078,8 @@ RmDirRetry:
 }
 
 int
-CIFSSMBMkDir(const unsigned int xid, struct cifs_tcon *tcon, const char *name,
+CIFSSMBMkDir(const unsigned int xid, struct inode *inode, umode_t mode,
+	     struct cifs_tcon *tcon, const char *name,
 	     struct cifs_sb_info *cifs_sb)
 {
 	int rc = 0;
@@ -1393,7 +1394,7 @@ int
 CIFS_open(const unsigned int xid, struct cifs_open_parms *oparms, int *oplock,
 	  FILE_ALL_INFO *buf)
 {
-	int rc = -EACCES;
+	int rc;
 	OPEN_REQ *req = NULL;
 	OPEN_RSP *rsp = NULL;
 	int bytes_returned;
@@ -1488,6 +1489,7 @@ openRetry:
 	*oplock = rsp->OplockLevel;
 	/* cifs fid stays in le */
 	oparms->fid->netfid = rsp->Fid;
+	oparms->fid->access = desired_access;
 
 	/* Let caller know file was created so we can set the mode. */
 	/* Do we care about the CreateAction in any other cases? */
@@ -2111,7 +2113,7 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 		wdata2->tailsz = tailsz;
 		wdata2->bytes = cur_len;
 
-		rc = cifs_get_writable_file(CIFS_I(inode), false,
+		rc = cifs_get_writable_file(CIFS_I(inode), FIND_WR_ANY,
 					    &wdata2->cfile);
 		if (!wdata2->cfile) {
 			cifs_dbg(VFS, "No writable handle to retry writepages rc=%d\n",
@@ -2133,8 +2135,8 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 			}
 		}
 
+		kref_put(&wdata2->refcount, cifs_writedata_release);
 		if (rc) {
-			kref_put(&wdata2->refcount, cifs_writedata_release);
 			if (is_retryable_error(rc))
 				continue;
 			i += nr_pages;

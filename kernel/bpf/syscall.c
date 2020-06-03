@@ -126,7 +126,7 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	return map;
 }
 
-void *bpf_map_area_alloc(size_t size, int numa_node)
+void *bpf_map_area_alloc(u64 size, int numa_node)
 {
 	/* We really just want to fail instead of triggering OOM killer
 	 * under memory pressure, therefore we set __GFP_NORETRY to kmalloc,
@@ -140,6 +140,9 @@ void *bpf_map_area_alloc(size_t size, int numa_node)
 
 	const gfp_t flags = __GFP_NOWARN | __GFP_ZERO;
 	void *area;
+
+	if (size >= SIZE_MAX)
+		return NULL;
 
 	if (size <= (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)) {
 		area = kmalloc_node(size, GFP_USER | __GFP_NORETRY | flags,
@@ -197,7 +200,7 @@ static void bpf_uncharge_memlock(struct user_struct *user, u32 pages)
 		atomic_long_sub(pages, &user->locked_vm);
 }
 
-int bpf_map_charge_init(struct bpf_map_memory *mem, size_t size)
+int bpf_map_charge_init(struct bpf_map_memory *mem, u64 size)
 {
 	u32 pages = round_up(size, PAGE_SIZE) >> PAGE_SHIFT;
 	struct user_struct *user;
@@ -683,8 +686,8 @@ struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 }
 
 /* map_idr_lock should have been held */
-static struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map,
-					    bool uref)
+static struct bpf_map *__bpf_map_inc_not_zero(struct bpf_map *map,
+					      bool uref)
 {
 	int refold;
 
@@ -703,6 +706,16 @@ static struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map,
 
 	return map;
 }
+
+struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map, bool uref)
+{
+	spin_lock_bh(&map_idr_lock);
+	map = __bpf_map_inc_not_zero(map, uref);
+	spin_unlock_bh(&map_idr_lock);
+
+	return map;
+}
+EXPORT_SYMBOL_GPL(bpf_map_inc_not_zero);
 
 int __weak bpf_stackmap_copy(struct bpf_map *map, void *key, void *value)
 {
@@ -1133,8 +1146,10 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	if (err)
 		goto free_value;
 
-	if (copy_to_user(uvalue, value, value_size) != 0)
+	if (copy_to_user(uvalue, value, value_size) != 0) {
+		err = -EFAULT;
 		goto free_value;
+	}
 
 	err = 0;
 
@@ -1316,10 +1331,23 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 {
 	struct bpf_prog_aux *aux = container_of(rcu, struct bpf_prog_aux, rcu);
 
+	kvfree(aux->func_info);
 	free_used_maps(aux);
 	bpf_prog_uncharge_memlock(aux->prog);
 	security_bpf_prog_free(aux);
 	bpf_prog_free(aux->prog);
+}
+
+static void __bpf_prog_put_noref(struct bpf_prog *prog, bool deferred)
+{
+	bpf_prog_kallsyms_del_all(prog);
+	btf_put(prog->aux->btf);
+	bpf_prog_free_linfo(prog);
+
+	if (deferred)
+		call_rcu(&prog->aux->rcu, __bpf_prog_put_rcu);
+	else
+		__bpf_prog_put_rcu(&prog->aux->rcu);
 }
 
 static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
@@ -1328,12 +1356,7 @@ static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
 		perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_UNLOAD, 0);
 		/* bpf_prog_free_id() must be called first */
 		bpf_prog_free_id(prog, do_idr_lock);
-		bpf_prog_kallsyms_del_all(prog);
-		btf_put(prog->aux->btf);
-		kvfree(prog->aux->func_info);
-		bpf_prog_free_linfo(prog);
-
-		call_rcu(&prog->aux->rcu, __bpf_prog_put_rcu);
+		__bpf_prog_put_noref(prog, true);
 	}
 }
 
@@ -1619,6 +1642,7 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 
 	if (attr->prog_flags & ~(BPF_F_STRICT_ALIGNMENT |
 				 BPF_F_ANY_ALIGNMENT |
+				 BPF_F_TEST_STATE_FREQ |
 				 BPF_F_TEST_RND_HI32))
 		return -EINVAL;
 
@@ -1730,11 +1754,12 @@ static int bpf_prog_load(union bpf_attr *attr, union bpf_attr __user *uattr)
 	return err;
 
 free_used_maps:
-	bpf_prog_free_linfo(prog);
-	kvfree(prog->aux->func_info);
-	btf_put(prog->aux->btf);
-	bpf_prog_kallsyms_del_subprogs(prog);
-	free_used_maps(prog->aux);
+	/* In case we have subprogs, we need to wait for a grace
+	 * period before we can tear down JIT memory since symbols
+	 * are already exposed under kallsyms.
+	 */
+	__bpf_prog_put_noref(prog, prog->aux->func_cnt);
+	return err;
 free_prog:
 	bpf_prog_uncharge_memlock(prog);
 free_prog_sec:
@@ -2183,7 +2208,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	spin_lock_bh(&map_idr_lock);
 	map = idr_find(&map_idr, id);
 	if (map)
-		map = bpf_map_inc_not_zero(map, true);
+		map = __bpf_map_inc_not_zero(map, true);
 	else
 		map = ERR_PTR(-ENOENT);
 	spin_unlock_bh(&map_idr_lock);
@@ -2302,7 +2327,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 				   union bpf_attr __user *uattr)
 {
 	struct bpf_prog_info __user *uinfo = u64_to_user_ptr(attr->info.info);
-	struct bpf_prog_info info = {};
+	struct bpf_prog_info info;
 	u32 info_len = attr->info.info_len;
 	struct bpf_prog_stats stats;
 	char __user *uinsns;
@@ -2314,6 +2339,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 		return err;
 	info_len = min_t(u32, sizeof(info), info_len);
 
+	memset(&info, 0, sizeof(info));
 	if (copy_from_user(&info, uinfo, info_len))
 		return -EFAULT;
 
@@ -2577,7 +2603,7 @@ static int bpf_map_get_info_by_fd(struct bpf_map *map,
 				  union bpf_attr __user *uattr)
 {
 	struct bpf_map_info __user *uinfo = u64_to_user_ptr(attr->info.info);
-	struct bpf_map_info info = {};
+	struct bpf_map_info info;
 	u32 info_len = attr->info.info_len;
 	int err;
 
@@ -2586,6 +2612,7 @@ static int bpf_map_get_info_by_fd(struct bpf_map *map,
 		return err;
 	info_len = min_t(u32, sizeof(info), info_len);
 
+	memset(&info, 0, sizeof(info));
 	info.type = map->map_type;
 	info.id = map->id;
 	info.key_size = map->key_size;
@@ -2813,7 +2840,7 @@ out:
 
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
 {
-	union bpf_attr attr = {};
+	union bpf_attr attr;
 	int err;
 
 	if (sysctl_unprivileged_bpf_disabled && !capable(CAP_SYS_ADMIN))
@@ -2825,6 +2852,7 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	size = min_t(u32, size, sizeof(attr));
 
 	/* copy attributes from user space, may be less than sizeof(bpf_attr) */
+	memset(&attr, 0, sizeof(attr));
 	if (copy_from_user(&attr, uattr, size) != 0)
 		return -EFAULT;
 
@@ -2879,6 +2907,10 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	case BPF_MAP_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr,
 					  &map_idr, &map_idr_lock);
+		break;
+	case BPF_BTF_GET_NEXT_ID:
+		err = bpf_obj_get_next_id(&attr, uattr,
+					  &btf_idr, &btf_idr_lock);
 		break;
 	case BPF_PROG_GET_FD_BY_ID:
 		err = bpf_prog_get_fd_by_id(&attr);

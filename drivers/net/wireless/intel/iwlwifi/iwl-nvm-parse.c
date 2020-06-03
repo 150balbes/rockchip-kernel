@@ -225,6 +225,34 @@ enum iwl_nvm_channel_flags {
 	NVM_CHANNEL_DC_HIGH		= BIT(12),
 };
 
+/**
+ * enum iwl_reg_capa_flags - global flags applied for the whole regulatory
+ * domain.
+ * @REG_CAPA_BF_CCD_LOW_BAND: Beam-forming or Cyclic Delay Diversity in the
+ *	2.4Ghz band is allowed.
+ * @REG_CAPA_BF_CCD_HIGH_BAND: Beam-forming or Cyclic Delay Diversity in the
+ *	5Ghz band is allowed.
+ * @REG_CAPA_160MHZ_ALLOWED: 11ac channel with a width of 160Mhz is allowed
+ *	for this regulatory domain (valid only in 5Ghz).
+ * @REG_CAPA_80MHZ_ALLOWED: 11ac channel with a width of 80Mhz is allowed
+ *	for this regulatory domain (valid only in 5Ghz).
+ * @REG_CAPA_MCS_8_ALLOWED: 11ac with MCS 8 is allowed.
+ * @REG_CAPA_MCS_9_ALLOWED: 11ac with MCS 9 is allowed.
+ * @REG_CAPA_40MHZ_FORBIDDEN: 11n channel with a width of 40Mhz is forbidden
+ *	for this regulatory domain (valid only in 5Ghz).
+ * @REG_CAPA_DC_HIGH_ENABLED: DC HIGH allowed.
+ */
+enum iwl_reg_capa_flags {
+	REG_CAPA_BF_CCD_LOW_BAND	= BIT(0),
+	REG_CAPA_BF_CCD_HIGH_BAND	= BIT(1),
+	REG_CAPA_160MHZ_ALLOWED		= BIT(2),
+	REG_CAPA_80MHZ_ALLOWED		= BIT(3),
+	REG_CAPA_MCS_8_ALLOWED		= BIT(4),
+	REG_CAPA_MCS_9_ALLOWED		= BIT(5),
+	REG_CAPA_40MHZ_FORBIDDEN	= BIT(7),
+	REG_CAPA_DC_HIGH_ENABLED	= BIT(9),
+};
+
 static inline void iwl_nvm_print_channel_flags(struct device *dev, u32 level,
 					       int chan, u32 flags)
 {
@@ -393,11 +421,12 @@ static int iwl_init_channel_map(struct device *dev, const struct iwl_cfg *cfg,
 	return n_channels;
 }
 
-static void iwl_init_vht_hw_capab(const struct iwl_cfg *cfg,
+static void iwl_init_vht_hw_capab(struct iwl_trans *trans,
 				  struct iwl_nvm_data *data,
 				  struct ieee80211_sta_vht_cap *vht_cap,
 				  u8 tx_chains, u8 rx_chains)
 {
+	const struct iwl_cfg *cfg = trans->cfg;
 	int num_rx_ants = num_of_ant(rx_chains);
 	int num_tx_ants = num_of_ant(tx_chains);
 	unsigned int max_ampdu_exponent = (cfg->max_vht_ampdu_exponent ?:
@@ -434,14 +463,14 @@ static void iwl_init_vht_hw_capab(const struct iwl_cfg *cfg,
 
 	switch (iwlwifi_mod_params.amsdu_size) {
 	case IWL_AMSDU_DEF:
-		if (cfg->mq_rx_supported)
+		if (trans->trans_cfg->mq_rx_supported)
 			vht_cap->cap |=
 				IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454;
 		else
 			vht_cap->cap |= IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_3895;
 		break;
 	case IWL_AMSDU_2K:
-		if (cfg->mq_rx_supported)
+		if (trans->trans_cfg->mq_rx_supported)
 			vht_cap->cap |=
 				IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454;
 		else
@@ -496,8 +525,7 @@ static struct ieee80211_sband_iftype_data iwl_he_capa[] = {
 					IEEE80211_HE_MAC_CAP1_TF_MAC_PAD_DUR_16US |
 					IEEE80211_HE_MAC_CAP1_MULTI_TID_AGG_RX_QOS_8,
 				.mac_cap_info[2] =
-					IEEE80211_HE_MAC_CAP2_32BIT_BA_BITMAP |
-					IEEE80211_HE_MAC_CAP2_ACK_EN,
+					IEEE80211_HE_MAC_CAP2_32BIT_BA_BITMAP,
 				.mac_cap_info[3] =
 					IEEE80211_HE_MAC_CAP3_OMI_CONTROL |
 					IEEE80211_HE_MAC_CAP3_MAX_AMPDU_LEN_EXP_VHT_2,
@@ -581,8 +609,7 @@ static struct ieee80211_sband_iftype_data iwl_he_capa[] = {
 					IEEE80211_HE_MAC_CAP1_TF_MAC_PAD_DUR_16US |
 					IEEE80211_HE_MAC_CAP1_MULTI_TID_AGG_RX_QOS_8,
 				.mac_cap_info[2] =
-					IEEE80211_HE_MAC_CAP2_BSR |
-					IEEE80211_HE_MAC_CAP2_ACK_EN,
+					IEEE80211_HE_MAC_CAP2_BSR,
 				.mac_cap_info[3] =
 					IEEE80211_HE_MAC_CAP3_OMI_CONTROL |
 					IEEE80211_HE_MAC_CAP3_MAX_AMPDU_LEN_EXP_VHT_2,
@@ -669,11 +696,13 @@ static void iwl_init_he_hw_capab(struct ieee80211_supported_band *sband,
 	}
 }
 
-static void iwl_init_sbands(struct device *dev, const struct iwl_cfg *cfg,
+static void iwl_init_sbands(struct iwl_trans *trans,
 			    struct iwl_nvm_data *data,
 			    const void *nvm_ch_flags, u8 tx_chains,
 			    u8 rx_chains, u32 sbands_flags, bool v4)
 {
+	struct device *dev = trans->dev;
+	const struct iwl_cfg *cfg = trans->cfg;
 	int n_channels;
 	int n_used = 0;
 	struct ieee80211_supported_band *sband;
@@ -686,7 +715,7 @@ static void iwl_init_sbands(struct device *dev, const struct iwl_cfg *cfg,
 	sband->n_bitrates = N_RATES_24;
 	n_used += iwl_init_sband_channels(data, sband, n_channels,
 					  NL80211_BAND_2GHZ);
-	iwl_init_ht_hw_capab(cfg, data, &sband->ht_cap, NL80211_BAND_2GHZ,
+	iwl_init_ht_hw_capab(trans, data, &sband->ht_cap, NL80211_BAND_2GHZ,
 			     tx_chains, rx_chains);
 
 	if (data->sku_cap_11ax_enable && !iwlwifi_mod_params.disable_11ax)
@@ -698,10 +727,10 @@ static void iwl_init_sbands(struct device *dev, const struct iwl_cfg *cfg,
 	sband->n_bitrates = N_RATES_52;
 	n_used += iwl_init_sband_channels(data, sband, n_channels,
 					  NL80211_BAND_5GHZ);
-	iwl_init_ht_hw_capab(cfg, data, &sband->ht_cap, NL80211_BAND_5GHZ,
+	iwl_init_ht_hw_capab(trans, data, &sband->ht_cap, NL80211_BAND_5GHZ,
 			     tx_chains, rx_chains);
 	if (data->sku_cap_11ac_enable && !iwlwifi_mod_params.disable_11ac)
-		iwl_init_vht_hw_capab(cfg, data, &sband->vht_cap,
+		iwl_init_vht_hw_capab(trans, data, &sband->vht_cap,
 				      tx_chains, rx_chains);
 
 	if (data->sku_cap_11ax_enable && !iwlwifi_mod_params.disable_11ax)
@@ -793,10 +822,10 @@ static void iwl_set_hw_address_from_csr(struct iwl_trans *trans,
 {
 	__le32 mac_addr0 =
 		cpu_to_le32(iwl_read32(trans,
-				       trans->cfg->csr->mac_addr0_strap));
+				       trans->trans_cfg->csr->mac_addr0_strap));
 	__le32 mac_addr1 =
 		cpu_to_le32(iwl_read32(trans,
-				       trans->cfg->csr->mac_addr1_strap));
+				       trans->trans_cfg->csr->mac_addr1_strap));
 
 	iwl_flip_hw_address(mac_addr0, mac_addr1, data->hw_addr);
 	/*
@@ -807,9 +836,9 @@ static void iwl_set_hw_address_from_csr(struct iwl_trans *trans,
 		return;
 
 	mac_addr0 = cpu_to_le32(iwl_read32(trans,
-					   trans->cfg->csr->mac_addr0_otp));
+					trans->trans_cfg->csr->mac_addr0_otp));
 	mac_addr1 = cpu_to_le32(iwl_read32(trans,
-					   trans->cfg->csr->mac_addr1_otp));
+					trans->trans_cfg->csr->mac_addr1_otp));
 
 	iwl_flip_hw_address(mac_addr0, mac_addr1, data->hw_addr);
 }
@@ -896,7 +925,7 @@ static int iwl_set_hw_address(struct iwl_trans *trans,
 }
 
 static bool
-iwl_nvm_no_wide_in_5ghz(struct device *dev, const struct iwl_cfg *cfg,
+iwl_nvm_no_wide_in_5ghz(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 			const __be16 *nvm_hw)
 {
 	/*
@@ -908,7 +937,7 @@ iwl_nvm_no_wide_in_5ghz(struct device *dev, const struct iwl_cfg *cfg,
 	 * in 5GHz otherwise the FW will throw a sysassert when we try
 	 * to use them.
 	 */
-	if (cfg->device_family == IWL_DEVICE_FAMILY_7000) {
+	if (trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_7000) {
 		/*
 		 * Unlike the other sections in the NVM, the hw
 		 * section uses big-endian.
@@ -917,7 +946,7 @@ iwl_nvm_no_wide_in_5ghz(struct device *dev, const struct iwl_cfg *cfg,
 		u8 sku = (subsystem_id & 0x1e) >> 1;
 
 		if (sku == 5 || sku == 9) {
-			IWL_DEBUG_EEPROM(dev,
+			IWL_DEBUG_EEPROM(trans->dev,
 					 "disabling wide channels in 5GHz (0x%0x %d)\n",
 					 subsystem_id, sku);
 			return true;
@@ -934,7 +963,6 @@ iwl_parse_nvm_data(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 		   const __le16 *mac_override, const __le16 *phy_sku,
 		   u8 tx_chains, u8 rx_chains, bool lar_fw_supported)
 {
-	struct device *dev = trans->dev;
 	struct iwl_nvm_data *data;
 	bool lar_enabled;
 	u32 sku, radio_cfg;
@@ -942,7 +970,11 @@ iwl_parse_nvm_data(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 	u16 lar_config;
 	const __le16 *ch_section;
 
-	if (cfg->nvm_type != IWL_NVM_EXT)
+	if (cfg->uhb_supported)
+		data = kzalloc(struct_size(data, channels,
+					   IWL_NVM_NUM_CHANNELS_UHB),
+					   GFP_KERNEL);
+	else if (cfg->nvm_type != IWL_NVM_EXT)
 		data = kzalloc(struct_size(data, channels,
 					   IWL_NVM_NUM_CHANNELS),
 					   GFP_KERNEL);
@@ -1012,10 +1044,10 @@ iwl_parse_nvm_data(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 	if (lar_fw_supported && lar_enabled)
 		sbands_flags |= IWL_NVM_SBANDS_FLAGS_LAR;
 
-	if (iwl_nvm_no_wide_in_5ghz(dev, cfg, nvm_hw))
+	if (iwl_nvm_no_wide_in_5ghz(trans, cfg, nvm_hw))
 		sbands_flags |= IWL_NVM_SBANDS_FLAGS_NO_WIDE_IN_5GHZ;
 
-	iwl_init_sbands(dev, cfg, data, ch_section, tx_chains, rx_chains,
+	iwl_init_sbands(trans, data, ch_section, tx_chains, rx_chains,
 			sbands_flags, false);
 	data->calib_version = 255;
 
@@ -1025,6 +1057,7 @@ IWL_EXPORT_SYMBOL(iwl_parse_nvm_data);
 
 static u32 iwl_nvm_get_regdom_bw_flags(const u16 *nvm_chan,
 				       int ch_idx, u16 nvm_flags,
+				       u16 cap_flags,
 				       const struct iwl_cfg *cfg)
 {
 	u32 flags = NL80211_RRF_NO_HT40;
@@ -1063,18 +1096,27 @@ static u32 iwl_nvm_get_regdom_bw_flags(const u16 *nvm_chan,
 	    (flags & NL80211_RRF_NO_IR))
 		flags |= NL80211_RRF_GO_CONCURRENT;
 
+	/*
+	 * cap_flags is per regulatory domain so apply it for every channel
+	 */
+	if (ch_idx >= NUM_2GHZ_CHANNELS) {
+		if (cap_flags & REG_CAPA_40MHZ_FORBIDDEN)
+			flags |= NL80211_RRF_NO_HT40;
+
+		if (!(cap_flags & REG_CAPA_80MHZ_ALLOWED))
+			flags |= NL80211_RRF_NO_80MHZ;
+
+		if (!(cap_flags & REG_CAPA_160MHZ_ALLOWED))
+			flags |= NL80211_RRF_NO_160MHZ;
+	}
+
 	return flags;
 }
-
-struct regdb_ptrs {
-	struct ieee80211_wmm_rule *rule;
-	u32 token;
-};
 
 struct ieee80211_regdomain *
 iwl_parse_nvm_mcc_info(struct device *dev, const struct iwl_cfg *cfg,
 		       int num_of_ch, __le32 *channels, u16 fw_mcc,
-		       u16 geo_info)
+		       u16 geo_info, u16 cap)
 {
 	int ch_idx;
 	u16 ch_flags;
@@ -1082,7 +1124,6 @@ iwl_parse_nvm_mcc_info(struct device *dev, const struct iwl_cfg *cfg,
 	const u16 *nvm_chan;
 	struct ieee80211_regdomain *regd, *copy_rd;
 	struct ieee80211_reg_rule *rule;
-	struct regdb_ptrs *regdb_ptrs;
 	enum nl80211_band band;
 	int center_freq, prev_center_freq = 0;
 	int valid_rules = 0;
@@ -1114,12 +1155,6 @@ iwl_parse_nvm_mcc_info(struct device *dev, const struct iwl_cfg *cfg,
 	if (!regd)
 		return ERR_PTR(-ENOMEM);
 
-	regdb_ptrs = kcalloc(num_of_ch, sizeof(*regdb_ptrs), GFP_KERNEL);
-	if (!regdb_ptrs) {
-		copy_rd = ERR_PTR(-ENOMEM);
-		goto out;
-	}
-
 	/* set alpha2 from FW. */
 	regd->alpha2[0] = fw_mcc >> 8;
 	regd->alpha2[1] = fw_mcc & 0xff;
@@ -1139,7 +1174,8 @@ iwl_parse_nvm_mcc_info(struct device *dev, const struct iwl_cfg *cfg,
 		}
 
 		reg_rule_flags = iwl_nvm_get_regdom_bw_flags(nvm_chan, ch_idx,
-							     ch_flags, cfg);
+							     ch_flags, cap,
+							     cfg);
 
 		/* we can't continue the same rule */
 		if (ch_idx == 0 || prev_reg_rule_flags != reg_rule_flags ||
@@ -1191,8 +1227,6 @@ iwl_parse_nvm_mcc_info(struct device *dev, const struct iwl_cfg *cfg,
 	if (!copy_rd)
 		copy_rd = ERR_PTR(-ENOMEM);
 
-out:
-	kfree(regdb_ptrs);
 	kfree(regd);
 	return copy_rd;
 }
@@ -1311,7 +1345,7 @@ int iwl_read_external_nvm(struct iwl_trans *trans,
 			 le32_to_cpu(dword_buff[3]));
 
 		/* nvm file validation, dword_buff[2] holds the file version */
-		if (trans->cfg->device_family == IWL_DEVICE_FAMILY_8000 &&
+		if (trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_8000 &&
 		    CSR_HW_REV_STEP(trans->hw_rev) == SILICON_C_STEP &&
 		    le32_to_cpu(dword_buff[2]) < 0xE4A) {
 			ret = -EFAULT;
@@ -1495,7 +1529,7 @@ struct iwl_nvm_data *iwl_get_nvm(struct iwl_trans *trans,
 	channel_profile = v4 ? (void *)rsp->regulatory.channel_profile :
 			  (void *)rsp_v3->regulatory.channel_profile;
 
-	iwl_init_sbands(trans->dev, trans->cfg, nvm,
+	iwl_init_sbands(trans, nvm,
 			channel_profile,
 			nvm->valid_tx_ant & fw->valid_tx_ant,
 			nvm->valid_rx_ant & fw->valid_rx_ant,

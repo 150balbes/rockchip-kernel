@@ -329,7 +329,7 @@ static void pipe_ctx_to_e2e_pipe_params (
 			dcc_support_pixel_format(pipe->plane_state->format, &bpe) ? 1 : 0;
 	}
 	input->src.dcc_rate            = 1;
-	input->src.meta_pitch          = pipe->plane_state->dcc.grph.meta_pitch;
+	input->src.meta_pitch          = pipe->plane_state->dcc.meta_pitch;
 	input->src.source_scan         = dm_horz;
 	input->src.sw_mode             = pipe->plane_state->tiling_info.gfx9.swizzle;
 
@@ -705,6 +705,17 @@ static void hack_bounding_box(struct dcn_bw_internal_vars *v,
 		hack_force_pipe_split(v, context->streams[0]->timing.pix_clk_100hz);
 }
 
+
+unsigned int get_highest_allowed_voltage_level(uint32_t hw_internal_rev)
+{
+	/* for dali, the highest voltage level we want is 0 */
+	if (ASICREV_IS_DALI(hw_internal_rev))
+		return 0;
+
+	/* we are ok with all levels */
+	return 4;
+}
+
 bool dcn_validate_bandwidth(
 		struct dc *dc,
 		struct dc_state *context,
@@ -732,6 +743,7 @@ bool dcn_validate_bandwidth(
 
 	memset(v, 0, sizeof(*v));
 	kernel_fpu_begin();
+
 	v->sr_exit_time = dc->dcn_soc->sr_exit_time;
 	v->sr_enter_plus_exit_time = dc->dcn_soc->sr_enter_plus_exit_time;
 	v->urgent_latency = dc->dcn_soc->urgent_latency;
@@ -1268,7 +1280,7 @@ bool dcn_validate_bandwidth(
 	PERFORMANCE_TRACE_END();
 	BW_VAL_TRACE_FINISH();
 
-	if (bw_limit_pass && v->voltage_level != 5)
+	if (bw_limit_pass && v->voltage_level <= get_highest_allowed_voltage_level(dc->ctx->asic_id.hw_internal_rev))
 		return true;
 	else
 		return false;
@@ -1426,6 +1438,7 @@ void dcn_bw_update_from_pplib(struct dc *dc)
 	struct dc_context *ctx = dc->ctx;
 	struct dm_pp_clock_levels_with_voltage fclks = {0}, dcfclks = {0};
 	bool res;
+	unsigned vmin0p65_idx, vmid0p72_idx, vnom0p8_idx, vmax0p9_idx;
 
 	/* TODO: This is not the proper way to obtain fabric_and_dram_bandwidth, should be min(fclk, memclk) */
 	res = dm_pp_get_clock_levels_by_type_with_voltage(
@@ -1437,17 +1450,28 @@ void dcn_bw_update_from_pplib(struct dc *dc)
 		res = verify_clock_values(&fclks);
 
 	if (res) {
-		ASSERT(fclks.num_levels >= 3);
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmin0p65 = 32 * (fclks.data[0].clocks_in_khz / 1000.0) / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmid0p72 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - (fclks.num_levels > 2 ? 3 : 2)].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vnom0p8 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - 2].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmax0p9 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - 1].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
+		ASSERT(fclks.num_levels);
+
+		vmin0p65_idx = 0;
+		vmid0p72_idx = fclks.num_levels -
+			(fclks.num_levels > 2 ? 3 : (fclks.num_levels > 1 ? 2 : 1));
+		vnom0p8_idx = fclks.num_levels - (fclks.num_levels > 1 ? 2 : 1);
+		vmax0p9_idx = fclks.num_levels - 1;
+
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmin0p65 =
+			32 * (fclks.data[vmin0p65_idx].clocks_in_khz / 1000.0) / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmid0p72 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vmid0p72_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vnom0p8 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vnom0p8_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmax0p9 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vmax0p9_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
 	} else
 		BREAK_TO_DEBUGGER();
 

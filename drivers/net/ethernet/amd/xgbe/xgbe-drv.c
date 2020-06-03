@@ -514,7 +514,7 @@ static void xgbe_isr_task(unsigned long data)
 				xgbe_disable_rx_tx_ints(pdata);
 
 				/* Turn on polling */
-				__napi_schedule_irqoff(&pdata->napi);
+				__napi_schedule(&pdata->napi);
 			}
 		} else {
 			/* Don't clear Rx/Tx status if doing per channel DMA
@@ -1833,7 +1833,7 @@ static void xgbe_packet_info(struct xgbe_prv_data *pdata,
 			     struct xgbe_ring *ring, struct sk_buff *skb,
 			     struct xgbe_packet_data *packet)
 {
-	struct skb_frag_struct *frag;
+	skb_frag_t *frag;
 	unsigned int context_desc;
 	unsigned int len;
 	unsigned int i;

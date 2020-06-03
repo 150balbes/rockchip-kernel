@@ -512,11 +512,9 @@ static int nfs4_xdr_dec_cb_recall(struct rpc_rqst *rqstp,
 	if (unlikely(status))
 		return status;
 
-	if (cb != NULL) {
-		status = decode_cb_sequence4res(xdr, cb);
-		if (unlikely(status || cb->cb_seq_status))
-			return status;
-	}
+	status = decode_cb_sequence4res(xdr, cb);
+	if (unlikely(status || cb->cb_seq_status))
+		return status;
 
 	return decode_cb_op_status(xdr, OP_CB_RECALL, &cb->cb_status);
 }
@@ -604,11 +602,10 @@ static int nfs4_xdr_dec_cb_layout(struct rpc_rqst *rqstp,
 	if (unlikely(status))
 		return status;
 
-	if (cb) {
-		status = decode_cb_sequence4res(xdr, cb);
-		if (unlikely(status || cb->cb_seq_status))
-			return status;
-	}
+	status = decode_cb_sequence4res(xdr, cb);
+	if (unlikely(status || cb->cb_seq_status))
+		return status;
+
 	return decode_cb_op_status(xdr, OP_CB_LAYOUTRECALL, &cb->cb_status);
 }
 #endif /* CONFIG_NFSD_PNFS */
@@ -663,11 +660,10 @@ static int nfs4_xdr_dec_cb_notify_lock(struct rpc_rqst *rqstp,
 	if (unlikely(status))
 		return status;
 
-	if (cb) {
-		status = decode_cb_sequence4res(xdr, cb);
-		if (unlikely(status || cb->cb_seq_status))
-			return status;
-	}
+	status = decode_cb_sequence4res(xdr, cb);
+	if (unlikely(status || cb->cb_seq_status))
+		return status;
+
 	return decode_cb_op_status(xdr, OP_CB_NOTIFY_LOCK, &cb->cb_status);
 }
 
@@ -759,11 +755,10 @@ static int nfs4_xdr_dec_cb_offload(struct rpc_rqst *rqstp,
 	if (unlikely(status))
 		return status;
 
-	if (cb) {
-		status = decode_cb_sequence4res(xdr, cb);
-		if (unlikely(status || cb->cb_seq_status))
-			return status;
-	}
+	status = decode_cb_sequence4res(xdr, cb);
+	if (unlikely(status || cb->cb_seq_status))
+		return status;
+
 	return decode_cb_op_status(xdr, OP_CB_OFFLOAD, &cb->cb_status);
 }
 /*
@@ -1246,6 +1241,7 @@ nfsd4_run_cb_work(struct work_struct *work)
 		container_of(work, struct nfsd4_callback, cb_work);
 	struct nfs4_client *clp = cb->cb_clp;
 	struct rpc_clnt *clnt;
+	int flags;
 
 	if (cb->cb_need_restart) {
 		cb->cb_need_restart = false;
@@ -1274,7 +1270,8 @@ nfsd4_run_cb_work(struct work_struct *work)
 	}
 
 	cb->cb_msg.rpc_cred = clp->cl_cb_cred;
-	rpc_call_async(clnt, &cb->cb_msg, RPC_TASK_SOFT | RPC_TASK_SOFTCONN,
+	flags = clp->cl_minorversion ? RPC_TASK_NOCONNECT : RPC_TASK_SOFTCONN;
+	rpc_call_async(clnt, &cb->cb_msg, RPC_TASK_SOFT | flags,
 			cb->cb_ops ? &nfsd4_cb_ops : &nfsd4_cb_probe_ops, cb);
 }
 

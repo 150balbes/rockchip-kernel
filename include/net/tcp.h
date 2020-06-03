@@ -50,7 +50,7 @@ extern struct inet_hashinfo tcp_hashinfo;
 extern struct percpu_counter tcp_orphan_count;
 void tcp_time_wait(struct sock *sk, int state, int timeo);
 
-#define MAX_TCP_HEADER	(128 + MAX_HEADER)
+#define MAX_TCP_HEADER	L1_CACHE_ALIGN(128 + MAX_HEADER)
 #define MAX_TCP_OPTION_SPACE 40
 #define TCP_MIN_SND_MSS		48
 #define TCP_MIN_GSO_SIZE	(TCP_MIN_SND_MSS - MAX_TCP_OPTION_SPACE)
@@ -64,7 +64,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 /* Minimal accepted MSS. It is (60+60+8) - (20+20). */
 #define TCP_MIN_MSS		88U
 
-/* The least MTU to use for probing */
+/* The initial MTU to use for probing */
 #define TCP_BASE_MSS		1024
 
 /* probing interval, default to 10 minutes as per RFC4821 */
@@ -258,7 +258,7 @@ static inline bool tcp_under_memory_pressure(const struct sock *sk)
 	    mem_cgroup_under_socket_pressure(sk->sk_memcg))
 		return true;
 
-	return tcp_memory_pressure;
+	return READ_ONCE(tcp_memory_pressure);
 }
 /*
  * The next routines deal with comparing 32 bit unsigned ints
@@ -415,6 +415,16 @@ void tcp_parse_options(const struct net *net, const struct sk_buff *skb,
 const u8 *tcp_parse_md5sig_option(const struct tcphdr *th);
 
 /*
+ *	BPF SKB-less helpers
+ */
+u16 tcp_v4_get_syncookie(struct sock *sk, struct iphdr *iph,
+			 struct tcphdr *th, u32 *cookie);
+u16 tcp_v6_get_syncookie(struct sock *sk, struct ipv6hdr *iph,
+			 struct tcphdr *th, u32 *cookie);
+u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
+			  const struct tcp_request_sock_ops *af_ops,
+			  struct sock *sk, struct tcphdr *th);
+/*
  *	TCP v4 functions exported for the inet6 API
  */
 
@@ -484,15 +494,16 @@ static inline void tcp_synq_overflow(const struct sock *sk)
 		reuse = rcu_dereference(sk->sk_reuseport_cb);
 		if (likely(reuse)) {
 			last_overflow = READ_ONCE(reuse->synq_overflow_ts);
-			if (time_after32(now, last_overflow + HZ))
+			if (!time_between32(now, last_overflow,
+					    last_overflow + HZ))
 				WRITE_ONCE(reuse->synq_overflow_ts, now);
 			return;
 		}
 	}
 
-	last_overflow = tcp_sk(sk)->rx_opt.ts_recent_stamp;
-	if (time_after32(now, last_overflow + HZ))
-		tcp_sk(sk)->rx_opt.ts_recent_stamp = now;
+	last_overflow = READ_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp);
+	if (!time_between32(now, last_overflow, last_overflow + HZ))
+		WRITE_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp, now);
 }
 
 /* syncookies: no recent synqueue overflow on this listening socket? */
@@ -507,13 +518,23 @@ static inline bool tcp_synq_no_recent_overflow(const struct sock *sk)
 		reuse = rcu_dereference(sk->sk_reuseport_cb);
 		if (likely(reuse)) {
 			last_overflow = READ_ONCE(reuse->synq_overflow_ts);
-			return time_after32(now, last_overflow +
-					    TCP_SYNCOOKIE_VALID);
+			return !time_between32(now, last_overflow - HZ,
+					       last_overflow +
+					       TCP_SYNCOOKIE_VALID);
 		}
 	}
 
-	last_overflow = tcp_sk(sk)->rx_opt.ts_recent_stamp;
-	return time_after32(now, last_overflow + TCP_SYNCOOKIE_VALID);
+	last_overflow = READ_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp);
+
+	/* If last_overflow <= jiffies <= last_overflow + TCP_SYNCOOKIE_VALID,
+	 * then we're under synflood. However, we have to use
+	 * 'last_overflow - HZ' as lower bound. That's because a concurrent
+	 * tcp_synq_overflow() could update .ts_recent_stamp after we read
+	 * jiffies but before we store .ts_recent_stamp into last_overflow,
+	 * which could lead to rejecting a valid syncookie.
+	 */
+	return !time_between32(now, last_overflow - HZ,
+			       last_overflow + TCP_SYNCOOKIE_VALID);
 }
 
 static inline u32 tcp_cookie_time(void)
@@ -1370,13 +1391,27 @@ static inline int tcp_win_from_space(const struct sock *sk, int space)
 /* Note: caller must be prepared to deal with negative returns */
 static inline int tcp_space(const struct sock *sk)
 {
-	return tcp_win_from_space(sk, sk->sk_rcvbuf - sk->sk_backlog.len -
+	return tcp_win_from_space(sk, READ_ONCE(sk->sk_rcvbuf) -
+				  READ_ONCE(sk->sk_backlog.len) -
 				  atomic_read(&sk->sk_rmem_alloc));
 }
 
 static inline int tcp_full_space(const struct sock *sk)
 {
-	return tcp_win_from_space(sk, sk->sk_rcvbuf);
+	return tcp_win_from_space(sk, READ_ONCE(sk->sk_rcvbuf));
+}
+
+/* We provision sk_rcvbuf around 200% of sk_rcvlowat.
+ * If 87.5 % (7/8) of the space has been consumed, we want to override
+ * SO_RCVLOWAT constraint, since we are receiving skbs with too small
+ * len/truesize ratio.
+ */
+static inline bool tcp_rmem_pressure(const struct sock *sk)
+{
+	int rcvbuf = READ_ONCE(sk->sk_rcvbuf);
+	int threshold = rcvbuf - (rcvbuf >> 3);
+
+	return atomic_read(&sk->sk_rmem_alloc) > threshold;
 }
 
 extern void tcp_openreq_init_rwin(struct request_sock *req,
@@ -1906,7 +1941,8 @@ static inline u32 tcp_notsent_lowat(const struct tcp_sock *tp)
 static inline bool tcp_stream_memory_free(const struct sock *sk, int wake)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
-	u32 notsent_bytes = tp->write_seq - tp->snd_nxt;
+	u32 notsent_bytes = READ_ONCE(tp->write_seq) -
+			    READ_ONCE(tp->snd_nxt);
 
 	return (notsent_bytes << wake) < tcp_notsent_lowat(tp);
 }
@@ -2109,9 +2145,13 @@ struct tcp_ulp_ops {
 	/* initialize ulp */
 	int (*init)(struct sock *sk);
 	/* update ulp */
-	void (*update)(struct sock *sk, struct proto *p);
+	void (*update)(struct sock *sk, struct proto *p,
+		       void (*write_space)(struct sock *sk));
 	/* cleanup ulp */
 	void (*release)(struct sock *sk);
+	/* diagnostic */
+	int (*get_info)(const struct sock *sk, struct sk_buff *skb);
+	size_t (*get_info_size)(const struct sock *sk);
 
 	char		name[TCP_ULP_NAME_MAX];
 	struct module	*owner;
@@ -2121,7 +2161,8 @@ void tcp_unregister_ulp(struct tcp_ulp_ops *type);
 int tcp_set_ulp(struct sock *sk, const char *name);
 void tcp_get_available_ulp(char *buf, size_t len);
 void tcp_cleanup_ulp(struct sock *sk);
-void tcp_update_ulp(struct sock *sk, struct proto *p);
+void tcp_update_ulp(struct sock *sk, struct proto *p,
+		    void (*write_space)(struct sock *sk));
 
 #define MODULE_ALIAS_TCP_ULP(name)				\
 	__MODULE_INFO(alias, alias_userspace, name);		\

@@ -2847,8 +2847,7 @@ out_err:
 	return NULL;
 }
 
-static int smiapp_probe(struct i2c_client *client,
-			const struct i2c_device_id *devid)
+static int smiapp_probe(struct i2c_client *client)
 {
 	struct smiapp_sensor *sensor;
 	struct smiapp_hwconfig *hwcfg = smiapp_get_hwconfig(&client->dev);
@@ -3102,18 +3101,22 @@ static int smiapp_probe(struct i2c_client *client,
 	if (rval < 0)
 		goto out_media_entity_cleanup;
 
-	rval = v4l2_async_register_subdev_sensor_common(&sensor->src->sd);
-	if (rval < 0)
-		goto out_media_entity_cleanup;
-
 	pm_runtime_set_active(&client->dev);
 	pm_runtime_get_noresume(&client->dev);
 	pm_runtime_enable(&client->dev);
+
+	rval = v4l2_async_register_subdev_sensor_common(&sensor->src->sd);
+	if (rval < 0)
+		goto out_disable_runtime_pm;
+
 	pm_runtime_set_autosuspend_delay(&client->dev, 1000);
 	pm_runtime_use_autosuspend(&client->dev);
 	pm_runtime_put_autosuspend(&client->dev);
 
 	return 0;
+
+out_disable_runtime_pm:
+	pm_runtime_disable(&client->dev);
 
 out_media_entity_cleanup:
 	media_entity_cleanup(&sensor->src->sd.entity);
@@ -3172,7 +3175,7 @@ static struct i2c_driver smiapp_i2c_driver = {
 		.name = SMIAPP_NAME,
 		.pm = &smiapp_pm_ops,
 	},
-	.probe	= smiapp_probe,
+	.probe_new = smiapp_probe,
 	.remove	= smiapp_remove,
 	.id_table = smiapp_id_table,
 };

@@ -778,7 +778,7 @@ static int fill_res_counter_entry(struct sk_buff *msg, bool has_cap_net_admin,
 		container_of(res, struct rdma_counter, res);
 
 	if (port && port != counter->port)
-		return 0;
+		return -EAGAIN;
 
 	/* Dump it even query failed */
 	rdma_counter_query_stats(counter);
@@ -831,7 +831,7 @@ static int nldev_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 	nlmsg_end(msg, nlh);
 
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_free:
 	nlmsg_free(msg);
@@ -863,6 +863,10 @@ static int nldev_set_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 		nla_strlcpy(name, tb[RDMA_NLDEV_ATTR_DEV_NAME],
 			    IB_DEVICE_NAME_MAX);
+		if (strlen(name) == 0) {
+			err = -EINVAL;
+			goto done;
+		}
 		err = ib_device_rename(device, name);
 		goto done;
 	}
@@ -971,7 +975,7 @@ static int nldev_port_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
 
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_free:
 	nlmsg_free(msg);
@@ -1073,7 +1077,7 @@ static int nldev_res_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_free:
 	nlmsg_free(msg);
@@ -1230,7 +1234,7 @@ static int res_get_common_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg) {
 		ret = -ENOMEM;
-		goto err;
+		goto err_get;
 	}
 
 	nlh = nlmsg_put(msg, NETLINK_CB(skb).portid, nlh->nlmsg_seq,
@@ -1244,13 +1248,13 @@ static int res_get_common_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	has_cap_net_admin = netlink_capable(skb, CAP_NET_ADMIN);
 	ret = fe->fill_res_func(msg, has_cap_net_admin, res, port);
-	rdma_restrack_put(res);
 	if (ret)
 		goto err_free;
 
+	rdma_restrack_put(res);
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_free:
 	nlmsg_free(msg);
@@ -1468,7 +1472,7 @@ static int nldev_newlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	nla_strlcpy(ibdev_name, tb[RDMA_NLDEV_ATTR_DEV_NAME],
 		    sizeof(ibdev_name));
-	if (strchr(ibdev_name, '%'))
+	if (strchr(ibdev_name, '%') || strlen(ibdev_name) == 0)
 		return -EINVAL;
 
 	nla_strlcpy(type, tb[RDMA_NLDEV_ATTR_LINK_TYPE], sizeof(type));
@@ -1595,7 +1599,7 @@ static int nldev_get_chardev(struct sk_buff *skb, struct nlmsghdr *nlh,
 	put_device(data.cdev);
 	if (ibdev)
 		ib_device_put(ibdev);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 out_data:
 	put_device(data.cdev);
@@ -1635,7 +1639,7 @@ static int nldev_sys_get_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 		return err;
 	}
 	nlmsg_end(msg, nlh);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 }
 
 static int nldev_set_sys_set_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
@@ -1711,6 +1715,8 @@ static int nldev_stat_set_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 		if (ret)
 			goto err_msg;
 	} else {
+		if (!tb[RDMA_NLDEV_ATTR_RES_LQPN])
+			goto err_msg;
 		qpn = nla_get_u32(tb[RDMA_NLDEV_ATTR_RES_LQPN]);
 		if (tb[RDMA_NLDEV_ATTR_STAT_COUNTER_ID]) {
 			cntn = nla_get_u32(tb[RDMA_NLDEV_ATTR_STAT_COUNTER_ID]);
@@ -1733,7 +1739,7 @@ static int nldev_stat_set_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_fill:
 	rdma_counter_unbind_qpn(device, port, qpn, cntn);
@@ -1787,10 +1793,6 @@ static int nldev_stat_del_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	cntn = nla_get_u32(tb[RDMA_NLDEV_ATTR_STAT_COUNTER_ID]);
 	qpn = nla_get_u32(tb[RDMA_NLDEV_ATTR_RES_LQPN]);
-	ret = rdma_counter_unbind_qpn(device, port, qpn, cntn);
-	if (ret)
-		goto err_unbind;
-
 	if (fill_nldev_handle(msg, device) ||
 	    nla_put_u32(msg, RDMA_NLDEV_ATTR_PORT_INDEX, port) ||
 	    nla_put_u32(msg, RDMA_NLDEV_ATTR_STAT_COUNTER_ID, cntn) ||
@@ -1799,13 +1801,15 @@ static int nldev_stat_del_doit(struct sk_buff *skb, struct nlmsghdr *nlh,
 		goto err_fill;
 	}
 
+	ret = rdma_counter_unbind_qpn(device, port, qpn, cntn);
+	if (ret)
+		goto err_fill;
+
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_fill:
-	rdma_counter_bind_qpn(device, port, qpn, cntn);
-err_unbind:
 	nlmsg_free(msg);
 err:
 	ib_device_put(device);
@@ -1892,7 +1896,7 @@ static int stat_get_doit_default_counter(struct sk_buff *skb,
 	mutex_unlock(&stats->lock);
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_table:
 	nla_nest_cancel(msg, table_attr);
@@ -1964,7 +1968,7 @@ static int stat_get_doit_qp(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	nlmsg_end(msg, nlh);
 	ib_device_put(device);
-	return rdma_nl_unicast(msg, NETLINK_CB(skb).portid);
+	return rdma_nl_unicast(sock_net(skb->sk), msg, NETLINK_CB(skb).portid);
 
 err_msg:
 	nlmsg_free(msg);

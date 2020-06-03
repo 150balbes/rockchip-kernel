@@ -1426,36 +1426,29 @@ static void qeth_l3_stop_card(struct qeth_card *card)
 		card->state = CARD_STATE_HARDSETUP;
 	}
 	if (card->state == CARD_STATE_HARDSETUP) {
-		qeth_qdio_clear_card(card, 0);
 		qeth_drain_output_queues(card);
 		qeth_clear_working_pool_list(card);
 		card->state = CARD_STATE_DOWN;
 	}
 
+	qeth_qdio_clear_card(card, 0);
 	flush_workqueue(card->event_wq);
+	card->info.promisc_mode = 0;
 }
 
-/*
- * test for and Switch promiscuous mode (on or off)
- *  either for guestlan or HiperSocket Sniffer
- */
-static void
-qeth_l3_handle_promisc_mode(struct qeth_card *card)
+static void qeth_l3_set_promisc_mode(struct qeth_card *card)
 {
-	struct net_device *dev = card->dev;
+	bool enable = card->dev->flags & IFF_PROMISC;
 
-	if (((dev->flags & IFF_PROMISC) &&
-	     (card->info.promisc_mode == SET_PROMISC_MODE_ON)) ||
-	    (!(dev->flags & IFF_PROMISC) &&
-	     (card->info.promisc_mode == SET_PROMISC_MODE_OFF)))
+	if (card->info.promisc_mode == enable)
 		return;
 
 	if (IS_VM_NIC(card)) {		/* Guestlan trace */
 		if (qeth_adp_supported(card, IPA_SETADP_SET_PROMISC_MODE))
-			qeth_setadp_promisc_mode(card);
+			qeth_setadp_promisc_mode(card, enable);
 	} else if (card->options.sniffer &&	/* HiperSockets trace */
 		   qeth_adp_supported(card, IPA_SETADP_SET_DIAG_ASSIST)) {
-		if (dev->flags & IFF_PROMISC) {
+		if (enable) {
 			QETH_CARD_TEXT(card, 3, "+promisc");
 			qeth_diags_trace(card, QETH_DIAGS_CMD_TRACE_ENABLE);
 		} else {
@@ -1502,11 +1495,9 @@ static void qeth_l3_rx_mode_work(struct work_struct *work)
 				addr->disp_flag = QETH_DISP_ADDR_DELETE;
 			}
 		}
-
-		if (!qeth_adp_supported(card, IPA_SETADP_SET_PROMISC_MODE))
-			return;
 	}
-	qeth_l3_handle_promisc_mode(card);
+
+	qeth_l3_set_promisc_mode(card);
 }
 
 static int qeth_l3_arp_makerc(u16 rc)
@@ -1967,7 +1958,6 @@ static void qeth_l3_fill_header(struct qeth_qdio_out_q *queue,
 			/* some HW requires combined L3+L4 csum offload: */
 			if (ipv == 4)
 				hdr->hdr.l3.ext_flags |= QETH_HDR_EXT_CSUM_HDR_REQ;
-			QETH_TXQ_STAT_INC(queue, skbs_csum);
 		}
 	}
 
@@ -2054,9 +2044,10 @@ static netdev_tx_t qeth_l3_hard_start_xmit(struct sk_buff *skb,
 	u16 txq = skb_get_queue_mapping(skb);
 	int ipv = qeth_get_ip_version(skb);
 	struct qeth_qdio_out_q *queue;
-	int tx_bytes = skb->len;
 	int rc;
 
+	if (!skb_is_gso(skb))
+		qdisc_skb_cb(skb)->pkt_len = skb->len;
 	if (IS_IQD(card)) {
 		queue = card->qdio.out_qs[qeth_iqd_translate_txq(dev, txq)];
 
@@ -2079,11 +2070,8 @@ static netdev_tx_t qeth_l3_hard_start_xmit(struct sk_buff *skb,
 	else
 		rc = qeth_xmit(card, skb, queue, ipv, qeth_l3_fill_header);
 
-	if (!rc) {
-		QETH_TXQ_STAT_INC(queue, tx_packets);
-		QETH_TXQ_STAT_ADD(queue, tx_bytes, tx_bytes);
+	if (!rc)
 		return NETDEV_TX_OK;
-	}
 
 tx_drop:
 	QETH_TXQ_STAT_INC(queue, tx_dropped);
@@ -2395,9 +2383,9 @@ static int qeth_l3_set_online(struct ccwgroup_device *gdev)
 	return 0;
 out_remove:
 	qeth_l3_stop_card(card);
-	ccw_device_set_offline(CARD_DDEV(card));
-	ccw_device_set_offline(CARD_WDEV(card));
-	ccw_device_set_offline(CARD_RDEV(card));
+	qeth_stop_channel(&card->data);
+	qeth_stop_channel(&card->write);
+	qeth_stop_channel(&card->read);
 	qdio_free(CARD_DDEV(card));
 
 	mutex_unlock(&card->conf_mutex);
@@ -2433,9 +2421,10 @@ static int __qeth_l3_set_offline(struct ccwgroup_device *cgdev,
 		call_netdevice_notifiers(NETDEV_REBOOT, card->dev);
 		rtnl_unlock();
 	}
-	rc  = ccw_device_set_offline(CARD_DDEV(card));
-	rc2 = ccw_device_set_offline(CARD_WDEV(card));
-	rc3 = ccw_device_set_offline(CARD_RDEV(card));
+
+	rc  = qeth_stop_channel(&card->data);
+	rc2 = qeth_stop_channel(&card->write);
+	rc3 = qeth_stop_channel(&card->read);
 	if (!rc)
 		rc = (rc2) ? rc2 : rc3;
 	if (rc)

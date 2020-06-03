@@ -186,10 +186,11 @@ int i2c_generic_scl_recovery(struct i2c_adapter *adap)
 	 * If we can set SDA, we will always create a STOP to ensure additional
 	 * pulses will do no harm. This is achieved by letting SDA follow SCL
 	 * half a cycle later. Check the 'incomplete_write_byte' fault injector
-	 * for details.
+	 * for details. Note that we must honour tsu:sto, 4us, but lets use 5us
+	 * here for simplicity.
 	 */
 	bri->set_scl(adap, scl);
-	ndelay(RECOVERY_NDELAY / 2);
+	ndelay(RECOVERY_NDELAY);
 	if (bri->set_sda)
 		bri->set_sda(adap, scl);
 	ndelay(RECOVERY_NDELAY / 2);
@@ -211,7 +212,13 @@ int i2c_generic_scl_recovery(struct i2c_adapter *adap)
 		scl = !scl;
 		bri->set_scl(adap, scl);
 		/* Creating STOP again, see above */
-		ndelay(RECOVERY_NDELAY / 2);
+		if (scl)  {
+			/* Honour minimum tsu:sto */
+			ndelay(RECOVERY_NDELAY);
+		} else {
+			/* Honour minimum tf and thd:dat */
+			ndelay(RECOVERY_NDELAY / 2);
+		}
 		if (bri->set_sda)
 			bri->set_sda(adap, scl);
 		ndelay(RECOVERY_NDELAY / 2);
@@ -331,8 +338,10 @@ static int i2c_device_probe(struct device *dev)
 		} else if (ACPI_COMPANION(dev)) {
 			irq = i2c_acpi_get_irq(client);
 		}
-		if (irq == -EPROBE_DEFER)
-			return irq;
+		if (irq == -EPROBE_DEFER) {
+			status = irq;
+			goto put_sync_adapter;
+		}
 
 		if (irq < 0)
 			irq = 0;
@@ -346,16 +355,18 @@ static int i2c_device_probe(struct device *dev)
 	 */
 	if (!driver->id_table &&
 	    !i2c_acpi_match_device(dev->driver->acpi_match_table, client) &&
-	    !i2c_of_match_device(dev->driver->of_match_table, client))
-		return -ENODEV;
+	    !i2c_of_match_device(dev->driver->of_match_table, client)) {
+		status = -ENODEV;
+		goto put_sync_adapter;
+	}
 
 	if (client->flags & I2C_CLIENT_WAKE) {
-		int wakeirq = -ENOENT;
+		int wakeirq;
 
-		if (dev->of_node) {
-			wakeirq = of_irq_get_byname(dev->of_node, "wakeup");
-			if (wakeirq == -EPROBE_DEFER)
-				return wakeirq;
+		wakeirq = of_irq_get_byname(dev->of_node, "wakeup");
+		if (wakeirq == -EPROBE_DEFER) {
+			status = wakeirq;
+			goto put_sync_adapter;
 		}
 
 		device_init_wakeup(&client->dev, true);
@@ -403,6 +414,10 @@ err_detach_pm_domain:
 err_clear_wakeup_irq:
 	dev_pm_clear_wake_irq(&client->dev);
 	device_init_wakeup(&client->dev, false);
+put_sync_adapter:
+	if (client->flags & I2C_CLIENT_HOST_NOTIFY)
+		pm_runtime_put_sync(&client->adapter->dev);
+
 	return status;
 }
 
@@ -966,7 +981,7 @@ struct i2c_client *devm_i2c_new_dummy_device(struct device *dev,
 EXPORT_SYMBOL_GPL(devm_i2c_new_dummy_device);
 
 /**
- * i2c_new_secondary_device - Helper to get the instantiated secondary address
+ * i2c_new_ancillary_device - Helper to get the instantiated secondary address
  * and create the associated device
  * @client: Handle to the primary client
  * @name: Handle to specify which secondary address to get
@@ -985,9 +1000,9 @@ EXPORT_SYMBOL_GPL(devm_i2c_new_dummy_device);
  * cell whose "reg-names" value matches the slave name.
  *
  * This returns the new i2c client, which should be saved for later use with
- * i2c_unregister_device(); or NULL to indicate an error.
+ * i2c_unregister_device(); or an ERR_PTR to describe the error.
  */
-struct i2c_client *i2c_new_secondary_device(struct i2c_client *client,
+struct i2c_client *i2c_new_ancillary_device(struct i2c_client *client,
 						const char *name,
 						u16 default_addr)
 {
@@ -1002,9 +1017,9 @@ struct i2c_client *i2c_new_secondary_device(struct i2c_client *client,
 	}
 
 	dev_dbg(&client->adapter->dev, "Address for %s : 0x%x\n", name, addr);
-	return i2c_new_dummy(client->adapter, addr);
+	return i2c_new_dummy_device(client->adapter, addr);
 }
-EXPORT_SYMBOL_GPL(i2c_new_secondary_device);
+EXPORT_SYMBOL_GPL(i2c_new_ancillary_device);
 
 /* ------------------------------------------------------------------------- */
 
@@ -2206,7 +2221,7 @@ static int i2c_detect_address(struct i2c_client *temp_client,
 			dev_warn(&adapter->dev,
 				"This adapter will soon drop class based instantiation of devices. "
 				"Please make sure client 0x%02x gets instantiated by other means. "
-				"Check 'Documentation/i2c/instantiating-devices' for details.\n",
+				"Check 'Documentation/i2c/instantiating-devices.rst' for details.\n",
 				info.addr);
 
 		dev_dbg(&adapter->dev, "Creating %s at 0x%02x\n",
@@ -2236,7 +2251,7 @@ static int i2c_detect(struct i2c_adapter *adapter, struct i2c_driver *driver)
 	if (adapter->class == I2C_CLASS_DEPRECATED) {
 		dev_dbg(&adapter->dev,
 			"This adapter dropped support for I2C classes and won't auto-detect %s devices anymore. "
-			"If you need it, check 'Documentation/i2c/instantiating-devices' for alternatives.\n",
+			"If you need it, check 'Documentation/i2c/instantiating-devices.rst' for alternatives.\n",
 			driver->driver.name);
 		return 0;
 	}

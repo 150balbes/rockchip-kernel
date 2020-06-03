@@ -117,6 +117,14 @@ static void __init xen_banner(void)
 	printk(KERN_INFO "Xen version: %d.%d%s%s\n",
 	       version >> 16, version & 0xffff, extra.extraversion,
 	       xen_feature(XENFEAT_mmu_pt_update_preserve_ad) ? " (preserve-AD)" : "");
+
+#ifdef CONFIG_X86_32
+	pr_warn("WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!\n"
+		"Support for running as 32-bit PV-guest under Xen will soon be removed\n"
+		"from the Linux kernel!\n"
+		"Please use either a 64-bit kernel or switch to HVM or PVH mode!\n"
+		"WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!\n");
+#endif
 }
 
 static void __init xen_pv_init_platform(void)
@@ -877,16 +885,6 @@ static void xen_write_cr4(unsigned long cr4)
 
 	native_write_cr4(cr4);
 }
-#ifdef CONFIG_X86_64
-static inline unsigned long xen_read_cr8(void)
-{
-	return 0;
-}
-static inline void xen_write_cr8(unsigned long val)
-{
-	BUG_ON(val);
-}
-#endif
 
 static u64 xen_read_msr_safe(unsigned int msr, int *err)
 {
@@ -907,14 +905,15 @@ static u64 xen_read_msr_safe(unsigned int msr, int *err)
 static int xen_write_msr_safe(unsigned int msr, unsigned low, unsigned high)
 {
 	int ret;
+#ifdef CONFIG_X86_64
+	unsigned int which;
+	u64 base;
+#endif
 
 	ret = 0;
 
 	switch (msr) {
 #ifdef CONFIG_X86_64
-		unsigned which;
-		u64 base;
-
 	case MSR_FS_BASE:		which = SEGBASE_FS; goto set;
 	case MSR_KERNEL_GS_BASE:	which = SEGBASE_GS_USER; goto set;
 	case MSR_GS_BASE:		which = SEGBASE_GS_KERNEL; goto set;
@@ -1022,11 +1021,6 @@ static const struct pv_cpu_ops xen_cpu_ops __initconst = {
 	.write_cr0 = xen_write_cr0,
 
 	.write_cr4 = xen_write_cr4,
-
-#ifdef CONFIG_X86_64
-	.read_cr8 = xen_read_cr8,
-	.write_cr8 = xen_write_cr8,
-#endif
 
 	.wbinvd = native_wbinvd,
 
@@ -1222,6 +1216,7 @@ asmlinkage __visible void __init xen_start_kernel(void)
 	x86_platform.get_nmi_reason = xen_get_nmi_reason;
 
 	x86_init.resources.memory_setup = xen_memory_setup;
+	x86_init.irqs.intr_mode_select	= x86_init_noop;
 	x86_init.irqs.intr_mode_init	= x86_init_noop;
 	x86_init.oem.arch_setup = xen_arch_setup;
 	x86_init.oem.banner = xen_banner;

@@ -607,7 +607,7 @@ catmap_getnode_alloc:
  */
 int netlbl_catmap_walk(struct netlbl_lsm_catmap *catmap, u32 offset)
 {
-	struct netlbl_lsm_catmap *iter = catmap;
+	struct netlbl_lsm_catmap *iter;
 	u32 idx;
 	u32 bit;
 	NETLBL_CATMAP_MAPTYPE bitmap;
@@ -733,6 +733,12 @@ int netlbl_catmap_getlong(struct netlbl_lsm_catmap *catmap,
 	/* only allow aligned offsets */
 	if ((off & (BITS_PER_LONG - 1)) != 0)
 		return -EINVAL;
+
+	/* a null catmap is equivalent to an empty one */
+	if (!catmap) {
+		*offset = (u32)-1;
+		return 0;
+	}
 
 	if (off < catmap->startbit) {
 		off = catmap->startbit;

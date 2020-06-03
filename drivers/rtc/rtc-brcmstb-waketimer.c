@@ -255,10 +255,8 @@ static int brcmstb_waketmr_probe(struct platform_device *pdev)
 	timer->rtc->range_max = U32_MAX;
 
 	ret = rtc_register_device(timer->rtc);
-	if (ret) {
-		dev_err(dev, "unable to register device\n");
+	if (ret)
 		goto err_notifier;
-	}
 
 	dev_info(dev, "registered, with irq %d\n", timer->irq);
 
@@ -279,6 +277,7 @@ static int brcmstb_waketmr_remove(struct platform_device *pdev)
 	struct brcmstb_waketmr *timer = dev_get_drvdata(&pdev->dev);
 
 	unregister_reboot_notifier(&timer->reboot_notifier);
+	clk_disable_unprepare(timer->clk);
 
 	return 0;
 }

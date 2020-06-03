@@ -1422,7 +1422,7 @@ short rtl8192_tx(struct net_device *dev, struct sk_buff *skb)
 		(struct tx_fwinfo_819x_usb *)(skb->data + USB_HWDESC_HEADER_LEN);
 	struct usb_device *udev = priv->udev;
 	int pend;
-	int status;
+	int status, rt = -1;
 	struct urb *tx_urb = NULL, *tx_urb_zero = NULL;
 	unsigned int idx_pipe;
 
@@ -1566,8 +1566,10 @@ short rtl8192_tx(struct net_device *dev, struct sk_buff *skb)
 		}
 		if (bSend0Byte) {
 			tx_urb_zero = usb_alloc_urb(0, GFP_ATOMIC);
-			if (!tx_urb_zero)
-				return -ENOMEM;
+			if (!tx_urb_zero) {
+				rt = -ENOMEM;
+				goto error;
+			}
 			usb_fill_bulk_urb(tx_urb_zero, udev,
 					  usb_sndbulkpipe(udev, idx_pipe),
 					  &zero, 0, tx_zero_isr, dev);
@@ -1577,7 +1579,7 @@ short rtl8192_tx(struct net_device *dev, struct sk_buff *skb)
 					 "Error TX URB for zero byte %d, error %d",
 					 atomic_read(&priv->tx_pending[tcb_desc->queue_index]),
 					 status);
-				return -1;
+				goto error;
 			}
 		}
 		netif_trans_update(dev);
@@ -1588,7 +1590,12 @@ short rtl8192_tx(struct net_device *dev, struct sk_buff *skb)
 	RT_TRACE(COMP_ERR, "Error TX URB %d, error %d",
 		 atomic_read(&priv->tx_pending[tcb_desc->queue_index]),
 		 status);
-	return -1;
+
+error:
+	dev_kfree_skb_any(skb);
+	usb_free_urb(tx_urb);
+	usb_free_urb(tx_urb_zero);
+	return rt;
 }
 
 static short rtl8192_usb_initendpoints(struct net_device *dev)
@@ -2076,14 +2083,6 @@ static void rtl8192_SetWirelessMode(struct net_device *dev, u8 wireless_mode)
 			wireless_mode = WIRELESS_MODE_B;
 		}
 	}
-#ifdef TO_DO_LIST
-	/* TODO: this function doesn't work well at this time,
-	 * we should wait for FPGA
-	 */
-	ActUpdateChannelAccessSetting(
-			pAdapter, pHalData->CurrentWirelessMode,
-			&pAdapter->MgntInfo.Info8185.ChannelAccessSetting);
-#endif
 	priv->ieee80211->mode = wireless_mode;
 
 	if (wireless_mode == WIRELESS_MODE_N_24G ||
@@ -2096,7 +2095,7 @@ static void rtl8192_SetWirelessMode(struct net_device *dev, u8 wireless_mode)
 }
 
 /* init priv variables here. only non_zero value should be initialized here. */
-static void rtl8192_init_priv_variable(struct net_device *dev)
+static int rtl8192_init_priv_variable(struct net_device *dev)
 {
 	struct r8192_priv *priv = ieee80211_priv(dev);
 	u8 i;
@@ -2159,12 +2158,6 @@ static void rtl8192_init_priv_variable(struct net_device *dev)
 
 	priv->ieee80211->InitialGainHandler = InitialGain819xUsb;
 	priv->card_type = USB;
-#ifdef TO_DO_LIST
-	if (Adapter->bInHctTest) {
-		pHalData->ShortRetryLimit = 7;
-		pHalData->LongRetryLimit = 7;
-	}
-#endif
 	priv->ShortRetryLimit = 0x30;
 	priv->LongRetryLimit = 0x30;
 	priv->EarlyRxThreshold = 7;
@@ -2180,34 +2173,6 @@ static void rtl8192_init_priv_variable(struct net_device *dev)
 		 * TRUE: SW provides them
 		 */
 		(false ? TCR_SAT : 0);
-#ifdef TO_DO_LIST
-	if (Adapter->bInHctTest)
-		pHalData->ReceiveConfig =
-			pHalData->CSMethod |
-			/* accept management/data */
-			RCR_AMF | RCR_ADF |
-			/* accept control frame for SW
-			 * AP needs PS-poll
-			 */
-			RCR_ACF |
-			/* accept BC/MC/UC */
-			RCR_AB | RCR_AM | RCR_APM |
-			/* accept ICV/CRC error
-			 * packet
-			 */
-			RCR_AICV | RCR_ACRC32 |
-			/* Max DMA Burst Size per Tx
-			 * DMA Burst, 7: unlimited.
-			 */
-			((u32)7 << RCR_MXDMA_OFFSET) |
-			/* Rx FIFO Threshold,
-			 * 7: No Rx threshold.
-			 */
-			(pHalData->EarlyRxThreshold << RCR_FIFO_OFFSET) |
-			(pHalData->EarlyRxThreshold == 7 ? RCR_OnlyErlPkt : 0);
-	else
-
-#endif
 	priv->ReceiveConfig	=
 		/* accept management/data */
 		RCR_AMF | RCR_ADF |
@@ -2223,6 +2188,8 @@ static void rtl8192_init_priv_variable(struct net_device *dev)
 
 	priv->AcmControl = 0;
 	priv->pFirmware = kzalloc(sizeof(rt_firmware), GFP_KERNEL);
+	if (!priv->pFirmware)
+		return -ENOMEM;
 
 	/* rx related queue */
 	skb_queue_head_init(&priv->rx_queue);
@@ -2236,6 +2203,8 @@ static void rtl8192_init_priv_variable(struct net_device *dev)
 	for (i = 0; i < MAX_QUEUE_SIZE; i++)
 		skb_queue_head_init(&priv->ieee80211->skb_drv_aggQ[i]);
 	priv->rf_set_chan = rtl8192_phy_SwChnl;
+
+	return 0;
 }
 
 /* init lock here */
@@ -2605,7 +2574,10 @@ static short rtl8192_init(struct net_device *dev)
 		memcpy(priv->txqueue_to_outpipemap, queuetopipe, 9);
 	}
 #endif
-	rtl8192_init_priv_variable(dev);
+	err = rtl8192_init_priv_variable(dev);
+	if (err)
+		return err;
+
 	rtl8192_init_priv_lock(priv);
 	rtl8192_init_priv_task(dev);
 	rtl8192_get_eeprom_size(dev);
@@ -2658,19 +2630,10 @@ static void rtl8192_hwconfig(struct net_device *dev)
 		regRRSR = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
 		break;
 	case WIRELESS_MODE_AUTO:
-#ifdef TO_DO_LIST
-		if (Adapter->bInHctTest) {
-			regBwOpMode = BW_OPMODE_20MHZ;
-			regRATR = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
-			regRRSR = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
-		} else
-#endif
-		{
-			regBwOpMode = BW_OPMODE_20MHZ;
-			regRATR = RATE_ALL_CCK | RATE_ALL_OFDM_AG |
-				  RATE_ALL_OFDM_1SS | RATE_ALL_OFDM_2SS;
-			regRRSR = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
-		}
+		regBwOpMode = BW_OPMODE_20MHZ;
+		regRATR = RATE_ALL_CCK | RATE_ALL_OFDM_AG |
+			  RATE_ALL_OFDM_1SS | RATE_ALL_OFDM_2SS;
+		regRRSR = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
 		break;
 	case WIRELESS_MODE_N_24G:
 		/* It support CCK rate by default. CCK rate will be filtered
@@ -2841,48 +2804,6 @@ static bool rtl8192_adapter_start(struct net_device *dev)
 	}
 	RT_TRACE(COMP_INIT, "%s():after firmware download\n", __func__);
 
-#ifdef TO_DO_LIST
-	if (Adapter->ResetProgress == RESET_TYPE_NORESET) {
-		if (pMgntInfo->RegRfOff) { /* User disable RF via registry. */
-			RT_TRACE((COMP_INIT | COMP_RF), DBG_LOUD,
-				 ("InitializeAdapter819xUsb(): Turn off RF for RegRfOff ----------\n"));
-			MgntActSet_RF_State(Adapter, eRfOff, RF_CHANGE_BY_SW);
-			/* Those actions will be discard in MgntActSet_RF_State
-			 * because of the same state
-			 */
-			for (eRFPath = 0; eRFPath < pHalData->NumTotalRFPath; eRFPath++)
-				PHY_SetRFReg(Adapter,
-					     (enum rf90_radio_path_e)eRFPath,
-					     0x4, 0xC00, 0x0);
-		} else if (pMgntInfo->RfOffReason > RF_CHANGE_BY_PS) {
-			/* H/W or S/W RF OFF before sleep. */
-			RT_TRACE((COMP_INIT | COMP_RF), DBG_LOUD,
-				 ("InitializeAdapter819xUsb(): Turn off RF for RfOffReason(%d) ----------\n",
-				  pMgntInfo->RfOffReason));
-			MgntActSet_RF_State(Adapter,
-					    eRfOff,
-					    pMgntInfo->RfOffReason);
-		} else {
-			pHalData->eRFPowerState = eRfOn;
-			pMgntInfo->RfOffReason = 0;
-			RT_TRACE((COMP_INIT | COMP_RF), DBG_LOUD,
-				 ("InitializeAdapter819xUsb(): RF is on ----------\n"));
-		}
-	} else {
-		if (pHalData->eRFPowerState == eRfOff) {
-			MgntActSet_RF_State(Adapter,
-					    eRfOff,
-					    pMgntInfo->RfOffReason);
-			/* Those actions will be discard in MgntActSet_RF_State
-			 * because of the same state
-			 */
-			for (eRFPath = 0; eRFPath < pHalData->NumTotalRFPath; eRFPath++)
-				PHY_SetRFReg(Adapter,
-					     (enum rf90_radio_path_e)eRFPath,
-					     0x4, 0xC00, 0x0);
-		}
-	}
-#endif
 	/* config RF. */
 	if (priv->ResetProgress == RESET_TYPE_NORESET) {
 		rtl8192_phy_RFConfig(dev);

@@ -44,6 +44,7 @@ static int cl_stream_prepare(struct snd_sof_dev *sdev, unsigned int format,
 		return -ENODEV;
 	}
 	hstream = &dsp_stream->hstream;
+	hstream->substream = NULL;
 
 	/* allocate DMA buffer */
 	ret = snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV_SG, &pci->dev, size, dmab);
@@ -277,7 +278,6 @@ int hda_dsp_cl_boot_firmware(struct snd_sof_dev *sdev)
 
 	/* init for booting wait */
 	init_waitqueue_head(&sdev->boot_wait);
-	sdev->boot_complete = false;
 
 	/* prepare DMA for code loader stream */
 	tag = cl_stream_prepare(sdev, 0x40, stripped_firmware.size,

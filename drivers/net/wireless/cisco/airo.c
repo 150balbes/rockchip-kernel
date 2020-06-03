@@ -5441,11 +5441,18 @@ static int proc_BSSList_open( struct inode *inode, struct file *file ) {
 			Cmd cmd;
 			Resp rsp;
 
-			if (ai->flags & FLAG_RADIO_MASK) return -ENETDOWN;
+			if (ai->flags & FLAG_RADIO_MASK) {
+				kfree(data->rbuffer);
+				kfree(file->private_data);
+				return -ENETDOWN;
+			}
 			memset(&cmd, 0, sizeof(cmd));
 			cmd.cmd=CMD_LISTBSS;
-			if (down_interruptible(&ai->sem))
+			if (down_interruptible(&ai->sem)) {
+				kfree(data->rbuffer);
+				kfree(file->private_data);
 				return -ERESTARTSYS;
+			}
 			issuecommand(ai, &cmd, &rsp);
 			up(&ai->sem);
 			data->readlen = 0;
@@ -7783,16 +7790,8 @@ static int readrids(struct net_device *dev, aironet_ioctl *comp) {
 	case AIROGVLIST:    ridcode = RID_APLIST;       break;
 	case AIROGDRVNAM:   ridcode = RID_DRVNAME;      break;
 	case AIROGEHTENC:   ridcode = RID_ETHERENCAP;   break;
-	case AIROGWEPKTMP:  ridcode = RID_WEP_TEMP;
-		/* Only super-user can read WEP keys */
-		if (!capable(CAP_NET_ADMIN))
-			return -EPERM;
-		break;
-	case AIROGWEPKNV:   ridcode = RID_WEP_PERM;
-		/* Only super-user can read WEP keys */
-		if (!capable(CAP_NET_ADMIN))
-			return -EPERM;
-		break;
+	case AIROGWEPKTMP:  ridcode = RID_WEP_TEMP;	break;
+	case AIROGWEPKNV:   ridcode = RID_WEP_PERM;	break;
 	case AIROGSTAT:     ridcode = RID_STATUS;       break;
 	case AIROGSTATSD32: ridcode = RID_STATSDELTA;   break;
 	case AIROGSTATSC32: ridcode = RID_STATS;        break;
@@ -7806,7 +7805,13 @@ static int readrids(struct net_device *dev, aironet_ioctl *comp) {
 		return -EINVAL;
 	}
 
-	if ((iobuf = kmalloc(RIDSIZE, GFP_KERNEL)) == NULL)
+	if (ridcode == RID_WEP_TEMP || ridcode == RID_WEP_PERM) {
+		/* Only super-user can read WEP keys */
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+	}
+
+	if ((iobuf = kzalloc(RIDSIZE, GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 
 	PC4500_readrid(ai,ridcode,iobuf,RIDSIZE, 1);

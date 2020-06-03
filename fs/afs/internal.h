@@ -154,7 +154,7 @@ struct afs_call {
 	};
 	unsigned char		unmarshall;	/* unmarshalling phase */
 	unsigned char		addr_ix;	/* Address in ->alist */
-	bool			incoming;	/* T if incoming call */
+	bool			drop_ref;	/* T if need to drop ref for incoming call */
 	bool			send_pages;	/* T if data from mapping should be sent */
 	bool			need_attention;	/* T if RxRPC poked us */
 	bool			async;		/* T if asynchronous */
@@ -910,7 +910,6 @@ extern int afs_silly_iput(struct dentry *, struct inode *);
 /*
  * dynroot.c
  */
-extern const struct file_operations afs_dynroot_file_operations;
 extern const struct inode_operations afs_dynroot_inode_operations;
 extern const struct dentry_operations afs_dynroot_dentry_operations;
 
@@ -1204,8 +1203,16 @@ static inline void afs_set_call_complete(struct afs_call *call,
 		ok = true;
 	}
 	spin_unlock_bh(&call->state_lock);
-	if (ok)
+	if (ok) {
 		trace_afs_call_done(call);
+
+		/* Asynchronous calls have two refs to release - one from the alloc and
+		 * one queued with the work item - and we can't just deallocate the
+		 * call because the work item may be queued again.
+		 */
+		if (call->drop_ref)
+			afs_put_call(call);
+	}
 }
 
 /*
@@ -1217,6 +1224,7 @@ extern void afs_cache_permit(struct afs_vnode *, struct key *, unsigned int,
 			     struct afs_status_cb *);
 extern void afs_zap_permits(struct rcu_head *);
 extern struct key *afs_request_key(struct afs_cell *);
+extern struct key *afs_request_key_rcu(struct afs_cell *);
 extern int afs_check_permit(struct afs_vnode *, struct key *, afs_access_t *);
 extern int afs_permission(struct inode *, int);
 extern void __exit afs_clean_up_permit_cache(void);
@@ -1321,7 +1329,7 @@ extern struct afs_volume *afs_create_volume(struct afs_fs_context *);
 extern void afs_activate_volume(struct afs_volume *);
 extern void afs_deactivate_volume(struct afs_volume *);
 extern void afs_put_volume(struct afs_cell *, struct afs_volume *);
-extern int afs_check_volume_status(struct afs_volume *, struct key *);
+extern int afs_check_volume_status(struct afs_volume *, struct afs_fs_cursor *);
 
 /*
  * write.c

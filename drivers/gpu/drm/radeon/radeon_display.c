@@ -127,6 +127,8 @@ static void dce5_crtc_load_lut(struct drm_crtc *crtc)
 
 	DRM_DEBUG_KMS("%d\n", radeon_crtc->crtc_id);
 
+	msleep(10);
+
 	WREG32(NI_INPUT_CSC_CONTROL + radeon_crtc->crtc_offset,
 	       (NI_INPUT_CSC_GRPH_MODE(NI_INPUT_CSC_BYPASS) |
 		NI_INPUT_CSC_OVL_MODE(NI_INPUT_CSC_BYPASS)));
@@ -275,7 +277,7 @@ static void radeon_unpin_work_func(struct work_struct *__work)
 	} else
 		DRM_ERROR("failed to reserve buffer after flip\n");
 
-	drm_gem_object_put_unlocked(&work->old_rbo->gem_base);
+	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
 	kfree(work);
 }
 
@@ -533,7 +535,7 @@ static int radeon_crtc_page_flip_target(struct drm_crtc *crtc,
 		DRM_ERROR("failed to pin new rbo buffer before flip\n");
 		goto cleanup;
 	}
-	work->fence = dma_fence_get(reservation_object_get_excl(new_rbo->tbo.resv));
+	work->fence = dma_fence_get(dma_resv_get_excl(new_rbo->tbo.base.resv));
 	radeon_bo_get_tiling_flags(new_rbo, &tiling_flags, NULL);
 	radeon_bo_unreserve(new_rbo);
 
@@ -607,7 +609,7 @@ pflip_cleanup:
 	radeon_bo_unreserve(new_rbo);
 
 cleanup:
-	drm_gem_object_put_unlocked(&work->old_rbo->gem_base);
+	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
 	dma_fence_put(work->fence);
 	kfree(work);
 	return r;

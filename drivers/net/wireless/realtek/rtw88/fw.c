@@ -3,6 +3,7 @@
  */
 
 #include "main.h"
+#include "coex.h"
 #include "fw.h"
 #include "tx.h"
 #include "reg.h"
@@ -36,17 +37,51 @@ void rtw_fw_c2h_cmd_handle(struct rtw_dev *rtwdev, struct sk_buff *skb)
 	c2h = (struct rtw_c2h_cmd *)(skb->data + pkt_offset);
 	len = skb->len - pkt_offset - 2;
 
-	rtw_dbg(rtwdev, RTW_DBG_FW, "recv C2H, id=0x%02x, seq=0x%02x, len=%d\n",
-		c2h->id, c2h->seq, len);
+	mutex_lock(&rtwdev->mutex);
 
 	switch (c2h->id) {
+	case C2H_BT_INFO:
+		rtw_coex_bt_info_notify(rtwdev, c2h->payload, len);
+		break;
+	case C2H_WLAN_INFO:
+		rtw_coex_wl_fwdbginfo_notify(rtwdev, c2h->payload, len);
+		break;
 	case C2H_HALMAC:
 		rtw_fw_c2h_cmd_handle_ext(rtwdev, skb);
 		break;
 	default:
 		break;
 	}
+
+	mutex_unlock(&rtwdev->mutex);
 }
+
+void rtw_fw_c2h_cmd_rx_irqsafe(struct rtw_dev *rtwdev, u32 pkt_offset,
+			       struct sk_buff *skb)
+{
+	struct rtw_c2h_cmd *c2h;
+	u8 len;
+
+	c2h = (struct rtw_c2h_cmd *)(skb->data + pkt_offset);
+	len = skb->len - pkt_offset - 2;
+	*((u32 *)skb->cb) = pkt_offset;
+
+	rtw_dbg(rtwdev, RTW_DBG_FW, "recv C2H, id=0x%02x, seq=0x%02x, len=%d\n",
+		c2h->id, c2h->seq, len);
+
+	switch (c2h->id) {
+	case C2H_BT_MP_INFO:
+		rtw_coex_info_response(rtwdev, skb);
+		break;
+	default:
+		/* pass offset for further operation */
+		*((u32 *)skb->cb) = pkt_offset;
+		skb_queue_tail(&rtwdev->c2h_queue, skb);
+		ieee80211_queue_work(rtwdev->hw, &rtwdev->c2h_work);
+		break;
+	}
+}
+EXPORT_SYMBOL(rtw_fw_c2h_cmd_rx_irqsafe);
 
 static void rtw_fw_send_h2c_command(struct rtw_dev *rtwdev,
 				    u8 *h2c)
@@ -179,6 +214,102 @@ void rtw_fw_do_iqk(struct rtw_dev *rtwdev, struct rtw_iqk_para *para)
 	IQK_SET_SEGMENT_IQK(h2c_pkt, para->segment_iqk);
 
 	rtw_fw_send_h2c_packet(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_query_bt_info(struct rtw_dev *rtwdev)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_QUERY_BT_INFO);
+
+	SET_QUERY_BT_INFO(h2c_pkt, true);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_wl_ch_info(struct rtw_dev *rtwdev, u8 link, u8 ch, u8 bw)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_WL_CH_INFO);
+
+	SET_WL_CH_INFO_LINK(h2c_pkt, link);
+	SET_WL_CH_INFO_CHNL(h2c_pkt, ch);
+	SET_WL_CH_INFO_BW(h2c_pkt, bw);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_query_bt_mp_info(struct rtw_dev *rtwdev,
+			     struct rtw_coex_info_req *req)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_QUERY_BT_MP_INFO);
+
+	SET_BT_MP_INFO_SEQ(h2c_pkt, req->seq);
+	SET_BT_MP_INFO_OP_CODE(h2c_pkt, req->op_code);
+	SET_BT_MP_INFO_PARA1(h2c_pkt, req->para1);
+	SET_BT_MP_INFO_PARA2(h2c_pkt, req->para2);
+	SET_BT_MP_INFO_PARA3(h2c_pkt, req->para3);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_force_bt_tx_power(struct rtw_dev *rtwdev, u8 bt_pwr_dec_lvl)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+	u8 index = 0 - bt_pwr_dec_lvl;
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_FORCE_BT_TX_POWER);
+
+	SET_BT_TX_POWER_INDEX(h2c_pkt, index);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_bt_ignore_wlan_action(struct rtw_dev *rtwdev, bool enable)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_IGNORE_WLAN_ACTION);
+
+	SET_IGNORE_WLAN_ACTION_EN(h2c_pkt, enable);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_coex_tdma_type(struct rtw_dev *rtwdev,
+			   u8 para1, u8 para2, u8 para3, u8 para4, u8 para5)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_COEX_TDMA_TYPE);
+
+	SET_COEX_TDMA_TYPE_PARA1(h2c_pkt, para1);
+	SET_COEX_TDMA_TYPE_PARA2(h2c_pkt, para2);
+	SET_COEX_TDMA_TYPE_PARA3(h2c_pkt, para3);
+	SET_COEX_TDMA_TYPE_PARA4(h2c_pkt, para4);
+	SET_COEX_TDMA_TYPE_PARA5(h2c_pkt, para5);
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
+}
+
+void rtw_fw_bt_wifi_control(struct rtw_dev *rtwdev, u8 op_code, u8 *data)
+{
+	u8 h2c_pkt[H2C_PKT_SIZE] = {0};
+
+	SET_H2C_CMD_ID_CLASS(h2c_pkt, H2C_CMD_BT_WIFI_CONTROL);
+
+	SET_BT_WIFI_CONTROL_OP_CODE(h2c_pkt, op_code);
+
+	SET_BT_WIFI_CONTROL_DATA1(h2c_pkt, *data);
+	SET_BT_WIFI_CONTROL_DATA2(h2c_pkt, *(data + 1));
+	SET_BT_WIFI_CONTROL_DATA3(h2c_pkt, *(data + 2));
+	SET_BT_WIFI_CONTROL_DATA4(h2c_pkt, *(data + 3));
+	SET_BT_WIFI_CONTROL_DATA5(h2c_pkt, *(data + 4));
+
+	rtw_fw_send_h2c_command(rtwdev, h2c_pkt);
 }
 
 void rtw_fw_send_rssi_info(struct rtw_dev *rtwdev, struct rtw_sta_info *si)
@@ -367,9 +498,6 @@ static void rtw_rsvd_page_list_to_buf(struct rtw_dev *rtwdev, u8 page_size,
 {
 	struct sk_buff *skb = rsvd_pkt->skb;
 
-	if (rsvd_pkt->add_txdesc)
-		rtw_fill_rsvd_page_desc(rtwdev, skb);
-
 	if (page >= 1)
 		memcpy(buf + page_margin + page_size * (page - 1),
 		       skb->data, skb->len);
@@ -494,16 +622,37 @@ static u8 *rtw_build_rsvd_page(struct rtw_dev *rtwdev,
 	list_for_each_entry(rsvd_pkt, &rtwdev->rsvd_page_list, list) {
 		iter = rtw_get_rsvd_page_skb(hw, vif, rsvd_pkt->type);
 		if (!iter) {
-			rtw_err(rtwdev, "fail to build rsvd packet\n");
+			rtw_err(rtwdev, "failed to build rsvd packet\n");
 			goto release_skb;
 		}
+
+		/* Fill the tx_desc for the rsvd pkt that requires one.
+		 * And iter->len will be added with size of tx_desc_sz.
+		 */
+		if (rsvd_pkt->add_txdesc)
+			rtw_fill_rsvd_page_desc(rtwdev, iter);
+
 		rsvd_pkt->skb = iter;
 		rsvd_pkt->page = total_page;
-		if (rsvd_pkt->add_txdesc)
+
+		/* Reserved page is downloaded via TX path, and TX path will
+		 * generate a tx_desc at the header to describe length of
+		 * the buffer. If we are not counting page numbers with the
+		 * size of tx_desc added at the first rsvd_pkt (usually a
+		 * beacon, firmware default refer to the first page as the
+		 * content of beacon), we could generate a buffer which size
+		 * is smaller than the actual size of the whole rsvd_page
+		 */
+		if (total_page == 0) {
+			if (rsvd_pkt->type != RSVD_BEACON) {
+				rtw_err(rtwdev, "first page should be a beacon\n");
+				goto release_skb;
+			}
 			total_page += rtw_len_to_page(iter->len + tx_desc_sz,
 						      page_size);
-		else
+		} else {
 			total_page += rtw_len_to_page(iter->len, page_size);
+		}
 	}
 
 	if (total_page > rtwdev->fifo.rsvd_drv_pg_num) {
@@ -516,13 +665,24 @@ static u8 *rtw_build_rsvd_page(struct rtw_dev *rtwdev,
 	if (!buf)
 		goto release_skb;
 
+	/* Copy the content of each rsvd_pkt to the buf, and they should
+	 * be aligned to the pages.
+	 *
+	 * Note that the first rsvd_pkt is a beacon no matter what vif->type.
+	 * And that rsvd_pkt does not require tx_desc because when it goes
+	 * through TX path, the TX path will generate one for it.
+	 */
 	list_for_each_entry(rsvd_pkt, &rtwdev->rsvd_page_list, list) {
 		rtw_rsvd_page_list_to_buf(rtwdev, page_size, page_margin,
 					  page, buf, rsvd_pkt);
-		page += rtw_len_to_page(rsvd_pkt->skb->len, page_size);
-	}
-	list_for_each_entry(rsvd_pkt, &rtwdev->rsvd_page_list, list)
+		if (page == 0)
+			page += rtw_len_to_page(rsvd_pkt->skb->len +
+						tx_desc_sz, page_size);
+		else
+			page += rtw_len_to_page(rsvd_pkt->skb->len, page_size);
+
 		kfree_skb(rsvd_pkt->skb);
+	}
 
 	return buf;
 
@@ -575,6 +735,11 @@ int rtw_fw_download_rsvd_page(struct rtw_dev *rtwdev, struct ieee80211_vif *vif)
 		goto free;
 	}
 
+	/* The last thing is to download the *ONLY* beacon again, because
+	 * the previous tx_desc is to describe the total rsvd page. Download
+	 * the beacon again to replace the TX desc header, and we will get
+	 * a correct tx_desc for the beacon in the rsvd page.
+	 */
 	ret = rtw_download_beacon(rtwdev, vif);
 	if (ret) {
 		rtw_err(rtwdev, "failed to download beacon\n");

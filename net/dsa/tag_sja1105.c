@@ -89,7 +89,8 @@ static struct sk_buff *sja1105_xmit(struct sk_buff *skb,
 	struct dsa_port *dp = dsa_slave_to_port(netdev);
 	struct dsa_switch *ds = dp->ds;
 	u16 tx_vid = dsa_8021q_tx_vid(ds, dp->index);
-	u8 pcp = skb->priority;
+	u16 queue_mapping = skb_get_queue_mapping(skb);
+	u8 pcp = netdev_txq_to_tc(netdev, queue_mapping);
 
 	/* Transmitting management traffic does not rely upon switch tagging,
 	 * but instead SPI-installed management routes. Part 2 of this
@@ -155,7 +156,11 @@ static struct sk_buff
 	/* Step 1: A timestampable frame was received.
 	 * Buffer it until we get its meta frame.
 	 */
-	if (is_link_local && sp->data->hwts_rx_en) {
+	if (is_link_local) {
+		if (!test_bit(SJA1105_HWTS_RX_EN, &sp->data->state))
+			/* Do normal processing. */
+			return skb;
+
 		spin_lock(&sp->data->meta_lock);
 		/* Was this a link-local frame instead of the meta
 		 * that we were expecting?
@@ -185,6 +190,12 @@ static struct sk_buff
 	 */
 	} else if (is_meta) {
 		struct sk_buff *stampable_skb;
+
+		/* Drop the meta frame if we're not in the right state
+		 * to process it.
+		 */
+		if (!test_bit(SJA1105_HWTS_RX_EN, &sp->data->state))
+			return NULL;
 
 		spin_lock(&sp->data->meta_lock);
 
@@ -227,14 +238,14 @@ static struct sk_buff *sja1105_rcv(struct sk_buff *skb,
 {
 	struct sja1105_meta meta = {0};
 	int source_port, switch_id;
-	struct vlan_ethhdr *hdr;
+	struct ethhdr *hdr;
 	u16 tpid, vid, tci;
 	bool is_link_local;
 	bool is_tagged;
 	bool is_meta;
 
-	hdr = vlan_eth_hdr(skb);
-	tpid = ntohs(hdr->h_vlan_proto);
+	hdr = eth_hdr(skb);
+	tpid = ntohs(hdr->h_proto);
 	is_tagged = (tpid == ETH_P_SJA1105);
 	is_link_local = sja1105_is_link_local(skb);
 	is_meta = sja1105_is_meta_frame(skb);
@@ -243,7 +254,12 @@ static struct sk_buff *sja1105_rcv(struct sk_buff *skb,
 
 	if (is_tagged) {
 		/* Normal traffic path. */
-		tci = ntohs(hdr->h_vlan_TCI);
+		skb_push_rcsum(skb, ETH_HLEN);
+		__skb_vlan_pop(skb, &tci);
+		skb_pull_rcsum(skb, ETH_HLEN);
+		skb_reset_network_header(skb);
+		skb_reset_transport_header(skb);
+
 		vid = tci & VLAN_VID_MASK;
 		source_port = dsa_8021q_rx_source_port(vid);
 		switch_id = dsa_8021q_rx_switch_id(vid);
@@ -271,12 +287,6 @@ static struct sk_buff *sja1105_rcv(struct sk_buff *skb,
 		netdev_warn(netdev, "Couldn't decode source port\n");
 		return NULL;
 	}
-
-	/* Delete/overwrite fake VLAN header, DSA expects to not find
-	 * it there, see dsa_switch_rcv: skb_push(skb, ETH_HLEN).
-	 */
-	if (is_tagged)
-		skb = dsa_8021q_remove_header(skb);
 
 	return sja1105_rcv_meta_state_machine(skb, &meta, is_link_local,
 					      is_meta);

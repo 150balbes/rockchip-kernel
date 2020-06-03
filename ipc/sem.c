@@ -1852,7 +1852,8 @@ static struct sem_undo *__lookup_undo(struct sem_undo_list *ulp, int semid)
 {
 	struct sem_undo *un;
 
-	list_for_each_entry_rcu(un, &ulp->list_proc, list_proc) {
+	list_for_each_entry_rcu(un, &ulp->list_proc, list_proc,
+				spin_is_locked(&ulp->lock)) {
 		if (un->semid == semid)
 			return un;
 	}
@@ -2367,11 +2368,9 @@ void exit_sem(struct task_struct *tsk)
 		ipc_assert_locked_object(&sma->sem_perm);
 		list_del(&un->list_id);
 
-		/* we are the last process using this ulp, acquiring ulp->lock
-		 * isn't required. Besides that, we are also protected against
-		 * IPC_RMID as we hold sma->sem_perm lock now
-		 */
+		spin_lock(&ulp->lock);
 		list_del_rcu(&un->list_proc);
+		spin_unlock(&ulp->lock);
 
 		/* perform adjustments registered in un */
 		for (i = 0; i < sma->sem_nsems; i++) {

@@ -553,13 +553,13 @@ static int hantro_attach_func(struct hantro_dev *vpu,
 		goto err_rel_entity1;
 
 	/* Connect the three entities */
-	ret = media_create_pad_link(&func->vdev.entity, 0, &func->proc, 1,
+	ret = media_create_pad_link(&func->vdev.entity, 0, &func->proc, 0,
 				    MEDIA_LNK_FL_IMMUTABLE |
 				    MEDIA_LNK_FL_ENABLED);
 	if (ret)
 		goto err_rel_entity2;
 
-	ret = media_create_pad_link(&func->proc, 0, &func->sink, 0,
+	ret = media_create_pad_link(&func->proc, 1, &func->sink, 0,
 				    MEDIA_LNK_FL_IMMUTABLE |
 				    MEDIA_LNK_FL_ENABLED);
 	if (ret)
@@ -797,10 +797,8 @@ static int hantro_probe(struct platform_device *pdev)
 			continue;
 
 		irq = platform_get_irq_byname(vpu->pdev, irq_name);
-		if (irq <= 0) {
-			dev_err(vpu->dev, "Could not get %s IRQ.\n", irq_name);
+		if (irq <= 0)
 			return -ENXIO;
-		}
 
 		ret = devm_request_irq(vpu->dev, irq,
 				       vpu->variant->irqs[i].handler, 0,

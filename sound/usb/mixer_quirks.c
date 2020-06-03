@@ -32,6 +32,7 @@
 #include "mixer.h"
 #include "mixer_quirks.h"
 #include "mixer_scarlett.h"
+#include "mixer_scarlett_gen2.h"
 #include "mixer_us16x08.h"
 #include "helper.h"
 
@@ -1507,11 +1508,15 @@ static int snd_microii_spdif_default_get(struct snd_kcontrol *kcontrol,
 
 	/* use known values for that card: interface#1 altsetting#1 */
 	iface = usb_ifnum_to_if(chip->dev, 1);
-	if (!iface || iface->num_altsetting < 2)
-		return -EINVAL;
+	if (!iface || iface->num_altsetting < 2) {
+		err = -EINVAL;
+		goto end;
+	}
 	alts = &iface->altsetting[1];
-	if (get_iface_desc(alts)->bNumEndpoints < 1)
-		return -EINVAL;
+	if (get_iface_desc(alts)->bNumEndpoints < 1) {
+		err = -EINVAL;
+		goto end;
+	}
 	ep = get_endpoint(alts, 0)->bEndpointAddress;
 
 	err = snd_usb_ctl_msg(chip->dev,
@@ -2256,6 +2261,12 @@ int snd_usb_mixer_apply_create_quirk(struct usb_mixer_interface *mixer)
 	case USB_ID(0x1235, 0x8014): /* Focusrite Scarlett 18i8 */
 	case USB_ID(0x1235, 0x800c): /* Focusrite Scarlett 18i20 */
 		err = snd_scarlett_controls_create(mixer);
+		break;
+
+	case USB_ID(0x1235, 0x8203): /* Focusrite Scarlett 6i6 2nd Gen */
+	case USB_ID(0x1235, 0x8204): /* Focusrite Scarlett 18i8 2nd Gen */
+	case USB_ID(0x1235, 0x8201): /* Focusrite Scarlett 18i20 2nd Gen */
+		err = snd_scarlett_gen2_controls_create(mixer);
 		break;
 
 	case USB_ID(0x041e, 0x323b): /* Creative Sound Blaster E1 */

@@ -430,6 +430,7 @@ fail:
 			usb_free_urb(req->urb);
 		list_del(q->next);
 	}
+	kfree(reqs);
 	return NULL;
 
 }
@@ -1178,8 +1179,12 @@ static void brcmf_usb_probe_phase2(struct device *dev, int ret,
 	if (ret)
 		goto error;
 
+	ret = brcmf_alloc(devinfo->dev, devinfo->settings);
+	if (ret)
+		goto error;
+
 	/* Attach to the common driver interface */
-	ret = brcmf_attach(devinfo->dev, devinfo->settings);
+	ret = brcmf_attach(devinfo->dev);
 	if (ret)
 		goto error;
 
@@ -1251,7 +1256,10 @@ static int brcmf_usb_probe_cb(struct brcmf_usbdev_info *devinfo)
 	}
 
 	if (!brcmf_usb_dlneeded(devinfo)) {
-		ret = brcmf_attach(devinfo->dev, devinfo->settings);
+		ret = brcmf_alloc(devinfo->dev, devinfo->settings);
+		if (ret)
+			goto fail;
+		ret = brcmf_attach(devinfo->dev);
 		if (ret)
 			goto fail;
 		/* we are done */
@@ -1279,6 +1287,7 @@ static int brcmf_usb_probe_cb(struct brcmf_usbdev_info *devinfo)
 
 fail:
 	/* Release resources in reverse order */
+	brcmf_free(devinfo->dev);
 	kfree(bus);
 	brcmf_usb_detach(devinfo);
 	return ret;
@@ -1292,6 +1301,7 @@ brcmf_usb_disconnect_cb(struct brcmf_usbdev_info *devinfo)
 	brcmf_dbg(USB, "Enter, bus_pub %p\n", devinfo);
 
 	brcmf_detach(devinfo->dev);
+	brcmf_free(devinfo->dev);
 	kfree(devinfo->bus_pub.bus);
 	brcmf_usb_detach(devinfo);
 }
@@ -1339,7 +1349,7 @@ brcmf_usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		goto fail;
 	}
 
-	desc = &intf->altsetting[0].desc;
+	desc = &intf->cur_altsetting->desc;
 	if ((desc->bInterfaceClass != USB_CLASS_VENDOR_SPEC) ||
 	    (desc->bInterfaceSubClass != 2) ||
 	    (desc->bInterfaceProtocol != 0xff)) {
@@ -1352,7 +1362,7 @@ brcmf_usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	num_of_eps = desc->bNumEndpoints;
 	for (ep = 0; ep < num_of_eps; ep++) {
-		endpoint = &intf->altsetting[0].endpoint[ep].desc;
+		endpoint = &intf->cur_altsetting->endpoint[ep].desc;
 		endpoint_num = usb_endpoint_num(endpoint);
 		if (!usb_endpoint_xfer_bulk(endpoint))
 			continue;
@@ -1435,10 +1445,12 @@ static int brcmf_usb_suspend(struct usb_interface *intf, pm_message_t state)
 
 	brcmf_dbg(USB, "Enter\n");
 	devinfo->bus_pub.state = BRCMFMAC_USB_STATE_SLEEP;
-	if (devinfo->wowl_enabled)
+	if (devinfo->wowl_enabled) {
 		brcmf_cancel_all_urbs(devinfo);
-	else
+	} else {
 		brcmf_detach(&usb->dev);
+		brcmf_free(&usb->dev);
+	}
 	return 0;
 }
 
@@ -1451,8 +1463,19 @@ static int brcmf_usb_resume(struct usb_interface *intf)
 	struct brcmf_usbdev_info *devinfo = brcmf_usb_get_businfo(&usb->dev);
 
 	brcmf_dbg(USB, "Enter\n");
-	if (!devinfo->wowl_enabled)
-		return brcmf_attach(devinfo->dev, devinfo->settings);
+	if (!devinfo->wowl_enabled) {
+		int err;
+
+		err = brcmf_alloc(&usb->dev, devinfo->settings);
+		if (err)
+			return err;
+
+		err = brcmf_attach(devinfo->dev);
+		if (err) {
+			brcmf_free(devinfo->dev);
+			return err;
+		}
+	}
 
 	devinfo->bus_pub.state = BRCMFMAC_USB_STATE_UP;
 	brcmf_usb_rx_fill_all(devinfo);

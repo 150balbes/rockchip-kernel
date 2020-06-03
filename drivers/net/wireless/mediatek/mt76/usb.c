@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: ISC
 /*
  * Copyright (C) 2018 Lorenzo Bianconi <lorenzo.bianconi83@gmail.com>
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #include <linux/module.h>
@@ -31,7 +20,8 @@ static int __mt76u_vendor_request(struct mt76_dev *dev, u8 req,
 				  u8 req_type, u16 val, u16 offset,
 				  void *buf, size_t len)
 {
-	struct usb_device *udev = to_usb_device(dev->dev);
+	struct usb_interface *uintf = to_usb_interface(dev->dev);
+	struct usb_device *udev = interface_to_usbdev(uintf);
 	unsigned int pipe;
 	int i, ret;
 
@@ -95,9 +85,9 @@ static u32 __mt76u_rr(struct mt76_dev *dev, u32 addr)
 
 	ret = __mt76u_vendor_request(dev, req,
 				     USB_DIR_IN | USB_TYPE_VENDOR,
-				     0, offset, usb->data, sizeof(__le32));
+				     0, offset, &usb->reg_val, sizeof(__le32));
 	if (ret == sizeof(__le32))
-		data = get_unaligned_le32(usb->data);
+		data = le32_to_cpu(usb->reg_val);
 	trace_usb_reg_rr(dev, addr, data);
 
 	return data;
@@ -131,10 +121,10 @@ static void __mt76u_wr(struct mt76_dev *dev, u32 addr, u32 val)
 	}
 	offset = addr & ~MT_VEND_TYPE_MASK;
 
-	put_unaligned_le32(val, usb->data);
+	usb->reg_val = cpu_to_le32(val);
 	__mt76u_vendor_request(dev, req,
 			       USB_DIR_OUT | USB_TYPE_VENDOR, 0,
-			       offset, usb->data, sizeof(__le32));
+			       offset, &usb->reg_val, sizeof(__le32));
 	trace_usb_reg_wr(dev, addr, val);
 }
 
@@ -164,12 +154,12 @@ static void mt76u_copy(struct mt76_dev *dev, u32 offset,
 	int i, ret;
 
 	mutex_lock(&usb->usb_ctrl_mtx);
-	for (i = 0; i < (len / 4); i++) {
-		put_unaligned_le32(val[i], usb->data);
+	for (i = 0; i < DIV_ROUND_UP(len, 4); i++) {
+		put_unaligned(val[i], (u32 *)usb->data);
 		ret = __mt76u_vendor_request(dev, MT_VEND_MULTI_WRITE,
 					     USB_DIR_OUT | USB_TYPE_VENDOR,
 					     0, offset + i * 4, usb->data,
-					     sizeof(__le32));
+					     sizeof(u32));
 		if (ret < 0)
 			break;
 	}
@@ -246,7 +236,8 @@ mt76u_rd_rp(struct mt76_dev *dev, u32 base,
 
 static bool mt76u_check_sg(struct mt76_dev *dev)
 {
-	struct usb_device *udev = to_usb_device(dev->dev);
+	struct usb_interface *uintf = to_usb_interface(dev->dev);
+	struct usb_device *udev = interface_to_usbdev(uintf);
 
 	return (!disable_usb_sg && udev->bus->sg_tablesize > 0 &&
 		(udev->bus->no_sg_constraint ||
@@ -309,7 +300,7 @@ mt76u_fill_rx_sg(struct mt76_dev *dev, struct mt76_queue *q, struct urb *urb,
 	}
 
 	urb->num_sgs = max_t(int, i, urb->num_sgs);
-	urb->transfer_buffer_length = urb->num_sgs * q->buf_size,
+	urb->transfer_buffer_length = urb->num_sgs * q->buf_size;
 	sg_init_marker(urb->sg, urb->num_sgs);
 
 	return i ? : -ENOMEM;
@@ -320,14 +311,13 @@ mt76u_refill_rx(struct mt76_dev *dev, struct urb *urb, int nsgs, gfp_t gfp)
 {
 	struct mt76_queue *q = &dev->q_rx[MT_RXQ_MAIN];
 
-	if (dev->usb.sg_en) {
+	if (dev->usb.sg_en)
 		return mt76u_fill_rx_sg(dev, q, urb, nsgs, gfp);
-	} else {
-		urb->transfer_buffer_length = q->buf_size;
-		urb->transfer_buffer = page_frag_alloc(&q->rx_page,
-						       q->buf_size, gfp);
-		return urb->transfer_buffer ? 0 : -ENOMEM;
-	}
+
+	urb->transfer_buffer_length = q->buf_size;
+	urb->transfer_buffer = page_frag_alloc(&q->rx_page, q->buf_size, gfp);
+
+	return urb->transfer_buffer ? 0 : -ENOMEM;
 }
 
 static int
@@ -382,7 +372,8 @@ mt76u_fill_bulk_urb(struct mt76_dev *dev, int dir, int index,
 		    struct urb *urb, usb_complete_t complete_fn,
 		    void *context)
 {
-	struct usb_device *udev = to_usb_device(dev->dev);
+	struct usb_interface *uintf = to_usb_interface(dev->dev);
+	struct usb_device *udev = interface_to_usbdev(uintf);
 	unsigned int pipe;
 
 	if (dir == USB_DIR_IN)
@@ -763,13 +754,14 @@ mt76u_tx_setup_buffers(struct mt76_dev *dev, struct sk_buff *skb,
 	if (!dev->usb.sg_en) {
 		urb->transfer_buffer = skb->data;
 		return 0;
-	} else {
-		sg_init_table(urb->sg, MT_TX_SG_MAX_SIZE);
-		urb->num_sgs = skb_to_sgvec(skb, urb->sg, 0, skb->len);
-		if (urb->num_sgs == 0)
-			return -ENOMEM;
-		return urb->num_sgs;
 	}
+
+	sg_init_table(urb->sg, MT_TX_SG_MAX_SIZE);
+	urb->num_sgs = skb_to_sgvec(skb, urb->sg, 0, skb->len);
+	if (!urb->num_sgs)
+		return -ENOMEM;
+
+	return urb->num_sgs;
 }
 
 static int
@@ -885,7 +877,8 @@ void mt76u_stop_tx(struct mt76_dev *dev)
 	struct mt76_queue *q;
 	int i, j, ret;
 
-	ret = wait_event_timeout(dev->tx_wait, !mt76_has_tx_pending(dev), HZ/5);
+	ret = wait_event_timeout(dev->tx_wait, !mt76_has_tx_pending(dev),
+				 HZ / 5);
 	if (!ret) {
 		dev_err(dev->dev, "timed out waiting for pending tx\n");
 
@@ -957,11 +950,12 @@ int mt76u_init(struct mt76_dev *dev,
 		.rr = mt76u_rr,
 		.wr = mt76u_wr,
 		.rmw = mt76u_rmw,
-		.copy = mt76u_copy,
+		.write_copy = mt76u_copy,
 		.wr_rp = mt76u_wr_rp,
 		.rd_rp = mt76u_rd_rp,
 		.type = MT76_BUS_USB,
 	};
+	struct usb_device *udev = interface_to_usbdev(intf);
 	struct mt76_usb *usb = &dev->usb;
 
 	tasklet_init(&usb->rx_tasklet, mt76u_rx_tasklet, (unsigned long)dev);
@@ -974,6 +968,8 @@ int mt76u_init(struct mt76_dev *dev,
 	mutex_init(&usb->usb_ctrl_mtx);
 	dev->bus = &mt76u_ops;
 	dev->queue_ops = &usb_queue_ops;
+
+	dev_set_drvdata(&udev->dev, dev);
 
 	usb->sg_en = mt76u_check_sg(dev);
 

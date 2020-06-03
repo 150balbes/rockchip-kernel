@@ -125,6 +125,7 @@ static int handle_rx_console(struct uart_port *uport, u32 bytes, bool drop);
 static int handle_rx_uart(struct uart_port *uport, u32 bytes, bool drop);
 static unsigned int qcom_geni_serial_tx_empty(struct uart_port *port);
 static void qcom_geni_serial_stop_rx(struct uart_port *uport);
+static void qcom_geni_serial_handle_rx(struct uart_port *uport, bool drop);
 
 static const unsigned long root_freq[] = {7372800, 14745600, 19200000, 29491200,
 					32000000, 48000000, 64000000, 80000000,
@@ -198,10 +199,8 @@ static int qcom_geni_serial_request_port(struct uart_port *uport)
 {
 	struct platform_device *pdev = to_platform_device(uport->dev);
 	struct qcom_geni_serial_port *port = to_dev_port(uport, uport);
-	struct resource *res;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	uport->membase = devm_ioremap_resource(&pdev->dev, res);
+	uport->membase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(uport->membase))
 		return PTR_ERR(uport->membase);
 	port->se.base = uport->membase;
@@ -617,7 +616,7 @@ static void qcom_geni_serial_stop_rx(struct uart_port *uport)
 	u32 irq_en;
 	u32 status;
 	struct qcom_geni_serial_port *port = to_dev_port(uport, uport);
-	u32 irq_clear = S_CMD_DONE_EN;
+	u32 s_irq_status;
 
 	irq_en = readl(uport->membase + SE_GENI_S_IRQ_EN);
 	irq_en &= ~(S_RX_FIFO_WATERMARK_EN | S_RX_FIFO_LAST_EN);
@@ -633,10 +632,19 @@ static void qcom_geni_serial_stop_rx(struct uart_port *uport)
 		return;
 
 	geni_se_cancel_s_cmd(&port->se);
-	qcom_geni_serial_poll_bit(uport, SE_GENI_S_CMD_CTRL_REG,
-					S_GENI_CMD_CANCEL, false);
+	qcom_geni_serial_poll_bit(uport, SE_GENI_S_IRQ_STATUS,
+					S_CMD_CANCEL_EN, true);
+	/*
+	 * If timeout occurs secondary engine remains active
+	 * and Abort sequence is executed.
+	 */
+	s_irq_status = readl(uport->membase + SE_GENI_S_IRQ_STATUS);
+	/* Flush the Rx buffer */
+	if (s_irq_status & S_RX_FIFO_LAST_EN)
+		qcom_geni_serial_handle_rx(uport, true);
+	writel(s_irq_status, uport->membase + SE_GENI_S_IRQ_CLEAR);
+
 	status = readl(uport->membase + SE_GENI_STATUS);
-	writel(irq_clear, uport->membase + SE_GENI_S_IRQ_CLEAR);
 	if (status & S_GENI_CMD_ACTIVE)
 		qcom_geni_serial_abort_rx(uport);
 }
@@ -920,12 +928,13 @@ static unsigned long get_clk_cfg(unsigned long clk_freq)
 	return 0;
 }
 
-static unsigned long get_clk_div_rate(unsigned int baud, unsigned int *clk_div)
+static unsigned long get_clk_div_rate(unsigned int baud,
+			unsigned int sampling_rate, unsigned int *clk_div)
 {
 	unsigned long ser_clk;
 	unsigned long desired_clk;
 
-	desired_clk = baud * UART_OVERSAMPLING;
+	desired_clk = baud * sampling_rate;
 	ser_clk = get_clk_cfg(desired_clk);
 	if (!ser_clk) {
 		pr_err("%s: Can't find matching DFS entry for baud %d\n",
@@ -951,12 +960,20 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 	u32 ser_clk_cfg;
 	struct qcom_geni_serial_port *port = to_dev_port(uport, uport);
 	unsigned long clk_rate;
+	u32 ver, sampling_rate;
 
 	qcom_geni_serial_stop_rx(uport);
 	/* baud rate */
 	baud = uart_get_baud_rate(uport, termios, old, 300, 4000000);
 	port->baud = baud;
-	clk_rate = get_clk_div_rate(baud, &clk_div);
+
+	sampling_rate = UART_OVERSAMPLING;
+	/* Sampling rate is halved for IP versions >= 2.5 */
+	ver = geni_se_get_qup_hw_version(&port->se);
+	if (GENI_SE_VERSION_MAJOR(ver) >= 2 && GENI_SE_VERSION_MINOR(ver) >= 5)
+		sampling_rate /= 2;
+
+	clk_rate = get_clk_div_rate(baud, sampling_rate, &clk_div);
 	if (!clk_rate)
 		goto out_restart_rx;
 
@@ -1291,10 +1308,8 @@ static int qcom_geni_serial_probe(struct platform_device *pdev)
 	port->tx_fifo_width = DEF_FIFO_WIDTH_BITS;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "Failed to get IRQ %d\n", irq);
+	if (irq < 0)
 		return irq;
-	}
 	uport->irq = irq;
 
 	uport->private_data = drv;

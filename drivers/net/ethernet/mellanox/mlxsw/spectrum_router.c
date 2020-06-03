@@ -994,7 +994,7 @@ u32 mlxsw_sp_ipip_dev_ul_tb_id(const struct net_device *ol_dev)
 	if (d)
 		return l3mdev_fib_table(d) ? : RT_TABLE_MAIN;
 	else
-		return l3mdev_fib_table(ol_dev) ? : RT_TABLE_MAIN;
+		return RT_TABLE_MAIN;
 }
 
 static struct mlxsw_sp_rif *
@@ -1598,26 +1598,9 @@ static int mlxsw_sp_netdevice_ipip_ol_vrf_event(struct mlxsw_sp *mlxsw_sp,
 {
 	struct mlxsw_sp_ipip_entry *ipip_entry =
 		mlxsw_sp_ipip_entry_find_by_ol_dev(mlxsw_sp, ol_dev);
-	enum mlxsw_sp_l3proto ul_proto;
-	union mlxsw_sp_l3addr saddr;
-	u32 ul_tb_id;
 
 	if (!ipip_entry)
 		return 0;
-
-	/* For flat configuration cases, moving overlay to a different VRF might
-	 * cause local address conflict, and the conflicting tunnels need to be
-	 * demoted.
-	 */
-	ul_tb_id = mlxsw_sp_ipip_dev_ul_tb_id(ol_dev);
-	ul_proto = mlxsw_sp->router->ipip_ops_arr[ipip_entry->ipipt]->ul_proto;
-	saddr = mlxsw_sp_ipip_netdev_saddr(ul_proto, ol_dev);
-	if (mlxsw_sp_ipip_demote_tunnel_by_saddr(mlxsw_sp, ul_proto,
-						 saddr, ul_tb_id,
-						 ipip_entry)) {
-		mlxsw_sp_ipip_entry_demote_tunnel(mlxsw_sp, ipip_entry);
-		return 0;
-	}
 
 	return __mlxsw_sp_ipip_entry_update_tunnel(mlxsw_sp, ipip_entry,
 						   true, false, false, extack);
@@ -2943,7 +2926,7 @@ static u32 mlxsw_sp_nexthop_group_hash_obj(const void *data, u32 len, u32 seed)
 		val = nh_grp->count;
 		for (i = 0; i < nh_grp->count; i++) {
 			nh = &nh_grp->nexthops[i];
-			val ^= nh->ifindex;
+			val ^= jhash(&nh->ifindex, sizeof(nh->ifindex), seed);
 		}
 		return jhash(&val, sizeof(val), seed);
 	default:
@@ -2961,7 +2944,7 @@ mlxsw_sp_nexthop6_group_hash(struct mlxsw_sp_fib6_entry *fib6_entry, u32 seed)
 
 	list_for_each_entry(mlxsw_sp_rt6, &fib6_entry->rt6_list, list) {
 		dev = mlxsw_sp_rt6->rt->fib6_nh->fib_nh_dev;
-		val ^= dev->ifindex;
+		val ^= jhash(&dev->ifindex, sizeof(dev->ifindex), seed);
 	}
 
 	return jhash(&val, sizeof(val), seed);
@@ -5654,8 +5637,13 @@ static void mlxsw_sp_router_fib6_del(struct mlxsw_sp *mlxsw_sp,
 	if (mlxsw_sp_fib6_rt_should_ignore(rt))
 		return;
 
+	/* Multipath routes are first added to the FIB trie and only then
+	 * notified. If we vetoed the addition, we will get a delete
+	 * notification for a route we do not have. Therefore, do not warn if
+	 * route was not found.
+	 */
 	fib6_entry = mlxsw_sp_fib6_entry_lookup(mlxsw_sp, rt);
-	if (WARN_ON(!fib6_entry))
+	if (!fib6_entry)
 		return;
 
 	/* If not all the nexthops are deleted, then only reduce the nexthop
@@ -6997,6 +6985,9 @@ static int mlxsw_sp_router_port_check_rif_addr(struct mlxsw_sp *mlxsw_sp,
 
 	for (i = 0; i < MLXSW_CORE_RES_GET(mlxsw_sp->core, MAX_RIFS); i++) {
 		rif = mlxsw_sp->router->rifs[i];
+		if (rif && rif->ops &&
+		    rif->ops->type == MLXSW_SP_RIF_TYPE_IPIP_LB)
+			continue;
 		if (rif && rif->dev && rif->dev != dev &&
 		    !ether_addr_equal_masked(rif->dev->dev_addr, dev_addr,
 					     mlxsw_sp->mac_mask)) {

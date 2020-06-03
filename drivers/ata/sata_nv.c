@@ -984,7 +984,7 @@ static irqreturn_t nv_adma_interrupt(int irq, void *dev_instance)
 					check_commands = 0;
 				check_commands &= ~(1 << pos);
 			}
-			ata_qc_complete_multiple(ap, ap->qc_active ^ done_mask);
+			ata_qc_complete_multiple(ap, ata_qc_get_active(ap) ^ done_mask);
 		}
 	}
 
@@ -1122,14 +1122,10 @@ static int nv_adma_port_start(struct ata_port *ap)
 
 	/*
 	 * Now that the legacy PRD and padding buffer are allocated we can
-	 * try to raise the DMA mask to allocate the CPB/APRD table.
+	 * raise the DMA mask to allocate the CPB/APRD table.
 	 */
-	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (rc) {
-		rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (rc)
-			return rc;
-	}
+	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+
 	pp->adma_dma_mask = *dev->dma_mask;
 
 	mem = dmam_alloc_coherent(dev, NV_ADMA_PORT_PRIV_DMA_SZ,

@@ -70,8 +70,7 @@ static void *seq_tab_start(struct seq_file *seq, loff_t *pos)
 static void *seq_tab_next(struct seq_file *seq, void *v, loff_t *pos)
 {
 	v = seq_tab_get_idx(seq->private, *pos + 1);
-	if (v)
-		++*pos;
+	++(*pos);
 	return v;
 }
 
@@ -2996,6 +2995,9 @@ static int sge_queue_entries(const struct adapter *adap)
 	int tot_uld_entries = 0;
 	int i;
 
+	if (!is_uld(adap))
+		goto lld_only;
+
 	mutex_lock(&uld_mutex);
 	for (i = 0; i < CXGB4_TX_MAX; i++)
 		tot_uld_entries += sge_qinfo_uld_txq_entries(adap, i);
@@ -3006,6 +3008,7 @@ static int sge_queue_entries(const struct adapter *adap)
 	}
 	mutex_unlock(&uld_mutex);
 
+lld_only:
 	return DIV_ROUND_UP(adap->sge.ethqsets, 4) +
 	       tot_uld_entries +
 	       DIV_ROUND_UP(MAX_CTRL_QUEUES, 4) + 1;
@@ -3531,7 +3534,6 @@ int t4_setup_debugfs(struct adapter *adap)
 {
 	int i;
 	u32 size = 0;
-	struct dentry *de;
 
 	static struct t4_debugfs_entry t4_debugfs_files[] = {
 		{ "cim_la", &cim_la_fops, 0400, 0 },
@@ -3642,8 +3644,8 @@ int t4_setup_debugfs(struct adapter *adap)
 		}
 	}
 
-	de = debugfs_create_file_size("flash", 0400, adap->debugfs_root, adap,
-				      &flash_debugfs_fops, adap->params.sf_size);
+	debugfs_create_file_size("flash", 0400, adap->debugfs_root, adap,
+				 &flash_debugfs_fops, adap->params.sf_size);
 	debugfs_create_bool("use_backdoor", 0600,
 			    adap->debugfs_root, &adap->use_bd);
 	debugfs_create_bool("trace_rss", 0600,

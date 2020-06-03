@@ -184,10 +184,6 @@
 	status = "okay";
 };
 
-&hdmi_sound {
-	status = "okay";
-};
-
 &i2c0 {
 	clock-frequency = <400000>;
 	i2c-scl-rising-time-ns = <160>;
@@ -463,10 +459,6 @@
 	status = "okay";
 };
 
-&i2s2 {
-        status = "okay";
-};
-
 &io_domains {
 	bt656-supply = <&vcc_1v8>;
 	audio-supply = <&vcca1v8_codec>;
@@ -722,5 +714,13 @@
 };
 
 &vopb_mmu {
+	status = "okay";
+};
+
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
 	status = "okay";
 };

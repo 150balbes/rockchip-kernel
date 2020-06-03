@@ -840,6 +840,7 @@ console_initcall(sifive_console_init);
 
 static void __ssp_add_console_port(struct sifive_serial_port *ssp)
 {
+	spin_lock_init(&ssp->port.lock);
 	sifive_serial_console_ports[ssp->port.line] = ssp;
 }
 
@@ -896,10 +897,8 @@ static int sifive_serial_probe(struct platform_device *pdev)
 	int irq, id, r;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "could not acquire interrupt\n");
+	if (irq < 0)
 		return -EPROBE_DEFER;
-	}
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	base = devm_ioremap_resource(&pdev->dev, mem);

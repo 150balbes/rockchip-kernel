@@ -746,6 +746,13 @@ static char *ptr_to_id(char *buf, char *end, const void *ptr,
 	const char *str = sizeof(ptr) == 8 ? "(____ptrval____)" : "(ptrval)";
 	unsigned long hashval;
 
+	/*
+	 * Print the real pointer value for NULL and error pointers,
+	 * as they are not actual addresses.
+	 */
+	if (IS_ERR_OR_NULL(ptr))
+		return pointer_string(buf, end, ptr, spec);
+
 	/* When debugging early boot use non-cryptographically secure hash. */
 	if (unlikely(debug_boot_weak_hash)) {
 		hashval = hash_long((unsigned long)ptr, 32);
@@ -869,6 +876,15 @@ char *dentry_name(char *buf, char *end, const struct dentry *d, struct printf_sp
 	return widen_string(buf, n, end, spec);
 }
 
+static noinline_for_stack
+char *file_dentry_name(char *buf, char *end, const struct file *f,
+			struct printf_spec spec, const char *fmt)
+{
+	if (check_pointer(&buf, end, f, spec))
+		return buf;
+
+	return dentry_name(buf, end, f->f_path.dentry, spec, fmt);
+}
 #ifdef CONFIG_BLOCK
 static noinline_for_stack
 char *bdev_name(char *buf, char *end, struct block_device *bdev,
@@ -2166,9 +2182,7 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
 	case 'C':
 		return clock(buf, end, ptr, spec, fmt);
 	case 'D':
-		return dentry_name(buf, end,
-				   ((const struct file *)ptr)->f_path.dentry,
-				   spec, fmt);
+		return file_dentry_name(buf, end, ptr, spec, fmt);
 #ifdef CONFIG_BLOCK
 	case 'g':
 		return bdev_name(buf, end, ptr, spec, fmt);

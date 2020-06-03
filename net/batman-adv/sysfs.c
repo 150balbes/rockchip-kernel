@@ -1070,7 +1070,7 @@ static ssize_t batadv_store_mesh_iface(struct kobject *kobj,
 	dev_hold(net_dev);
 	INIT_WORK(&store_work->work, batadv_store_mesh_iface_work);
 	store_work->net_dev = net_dev;
-	strlcpy(store_work->soft_iface_name, buff,
+	strscpy(store_work->soft_iface_name, buff,
 		sizeof(store_work->soft_iface_name));
 
 	queue_work(batadv_event_workqueue, &store_work->work);
@@ -1150,7 +1150,7 @@ static ssize_t batadv_store_throughput_override(struct kobject *kobj,
 	ret = batadv_parse_throughput(net_dev, buff, "throughput_override",
 				      &tp_override);
 	if (!ret)
-		return count;
+		goto out;
 
 	old_tp_override = atomic_read(&hard_iface->bat_v.throughput_override);
 	if (old_tp_override == tp_override)
@@ -1190,6 +1190,7 @@ static ssize_t batadv_show_throughput_override(struct kobject *kobj,
 
 	tp_override = atomic_read(&hard_iface->bat_v.throughput_override);
 
+	batadv_hardif_put(hard_iface);
 	return sprintf(buff, "%u.%u MBit\n", tp_override / 10,
 		       tp_override % 10);
 }

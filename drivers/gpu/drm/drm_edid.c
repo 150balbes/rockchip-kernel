@@ -159,6 +159,9 @@ static const struct edid_quirk {
 	/* Medion MD 30217 PG */
 	{ "MED", 0x7b8, EDID_QUIRK_PREFER_LARGE_75 },
 
+	/* Lenovo G50 */
+	{ "SDC", 18514, EDID_QUIRK_FORCE_6BPC },
+
 	/* Panel in Samsung NP700G7A-S01PL notebook reports 6bpc */
 	{ "SEC", 0xd033, EDID_QUIRK_FORCE_8BPC },
 
@@ -3719,7 +3722,7 @@ cea_db_offsets(const u8 *cea, int *start, int *end)
 		if (*end < 4 || *end > 127)
 			return -ERANGE;
 	} else {
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	return 0;
@@ -4069,7 +4072,7 @@ static void clear_eld(struct drm_connector *connector)
 	connector->audio_latency[1] = 0;
 }
 
-/**
+/*
  * drm_edid_to_eld - build ELD from EDID
  * @connector: connector corresponding to the HDMI/DP sink
  * @edid: EDID to parse
@@ -4077,7 +4080,7 @@ static void clear_eld(struct drm_connector *connector)
  * Fill the ELD (EDID-Like Data) buffer for passing to the audio driver. The
  * HDCP and Port_ID ELD fields are left for the graphics driver to fill in.
  */
-void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
+static void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
 {
 	uint8_t *eld = connector->eld;
 	u8 *cea;
@@ -4162,7 +4165,6 @@ void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid)
 	DRM_DEBUG_KMS("ELD size %d, SAD count %d\n",
 		      drm_eld_size(eld), total_sad_count);
 }
-EXPORT_SYMBOL(drm_edid_to_eld);
 
 /**
  * drm_edid_to_sad - extracts SADs from EDID
@@ -4189,7 +4191,7 @@ int drm_edid_to_sad(struct edid *edid, struct cea_sad **sads)
 
 	if (cea_revision(cea) < 3) {
 		DRM_DEBUG_KMS("SAD: wrong CEA revision\n");
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	if (cea_db_offsets(cea, &start, &end)) {
@@ -4250,7 +4252,7 @@ int drm_edid_to_speaker_allocation(struct edid *edid, u8 **sadb)
 
 	if (cea_revision(cea) < 3) {
 		DRM_DEBUG_KMS("SAD: wrong CEA revision\n");
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	if (cea_db_offsets(cea, &start, &end)) {
@@ -4741,7 +4743,7 @@ static struct drm_display_mode *drm_mode_displayid_detailed(struct drm_device *d
 	struct drm_display_mode *mode;
 	unsigned pixel_clock = (timings->pixel_clock[0] |
 				(timings->pixel_clock[1] << 8) |
-				(timings->pixel_clock[2] << 16));
+				(timings->pixel_clock[2] << 16)) + 1;
 	unsigned hactive = (timings->hactive[0] | timings->hactive[1] << 8) + 1;
 	unsigned hblank = (timings->hblank[0] | timings->hblank[1] << 8) + 1;
 	unsigned hsync = (timings->hsync[0] | (timings->hsync[1] & 0x7f) << 8) + 1;

@@ -9,6 +9,7 @@
 #include "include/hw_ip/mmu/mmu_general.h"
 #include "include/hw_ip/mmu/mmu_v1_0.h"
 #include "include/goya/asic_reg/goya_masks.h"
+#include "include/goya/goya_reg_map.h"
 
 #include <linux/pci.h>
 #include <linux/genalloc.h>
@@ -41,8 +42,8 @@
  * PQ, CQ and CP are not secured.
  * PQ, CB and the data are on the SRAM/DRAM.
  *
- * Since QMAN DMA is secured, KMD is parsing the DMA CB:
- *     - KMD checks DMA pointer
+ * Since QMAN DMA is secured, the driver is parsing the DMA CB:
+ *     - checks DMA pointer
  *     - WREG, MSG_PROT are not allowed.
  *     - MSG_LONG/SHORT are allowed.
  *
@@ -55,15 +56,15 @@
  * QMAN DMA: PQ, CQ and CP are secured.
  * MMU is set to bypass on the Secure props register of the QMAN.
  * The reasons we don't enable MMU for PQ, CQ and CP are:
- *     - PQ entry is in kernel address space and KMD doesn't map it.
+ *     - PQ entry is in kernel address space and the driver doesn't map it.
  *     - CP writes to MSIX register and to kernel address space (completion
  *       queue).
  *
- * DMA is not secured but because CP is secured, KMD still needs to parse the
- * CB, but doesn't need to check the DMA addresses.
+ * DMA is not secured but because CP is secured, the driver still needs to parse
+ * the CB, but doesn't need to check the DMA addresses.
  *
- * For QMAN DMA 0, DMA is also secured because only KMD uses this DMA and KMD
- * doesn't map memory in MMU.
+ * For QMAN DMA 0, DMA is also secured because only the driver uses this DMA and
+ * the driver doesn't map memory in MMU.
  *
  * QMAN TPC/MME: PQ, CQ and CP aren't secured (no change from MMU disabled mode)
  *
@@ -335,18 +336,18 @@ void goya_get_fixed_properties(struct hl_device *hdev)
 
 	for (i = 0 ; i < NUMBER_OF_EXT_HW_QUEUES ; i++) {
 		prop->hw_queues_props[i].type = QUEUE_TYPE_EXT;
-		prop->hw_queues_props[i].kmd_only = 0;
+		prop->hw_queues_props[i].driver_only = 0;
 	}
 
 	for (; i < NUMBER_OF_EXT_HW_QUEUES + NUMBER_OF_CPU_HW_QUEUES ; i++) {
 		prop->hw_queues_props[i].type = QUEUE_TYPE_CPU;
-		prop->hw_queues_props[i].kmd_only = 1;
+		prop->hw_queues_props[i].driver_only = 1;
 	}
 
 	for (; i < NUMBER_OF_EXT_HW_QUEUES + NUMBER_OF_CPU_HW_QUEUES +
 			NUMBER_OF_INT_HW_QUEUES; i++) {
 		prop->hw_queues_props[i].type = QUEUE_TYPE_INT;
-		prop->hw_queues_props[i].kmd_only = 0;
+		prop->hw_queues_props[i].driver_only = 0;
 	}
 
 	for (; i < HL_MAX_QUEUES; i++)
@@ -868,6 +869,11 @@ void goya_init_dma_qmans(struct hl_device *hdev)
  */
 static void goya_disable_external_queues(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_DMA))
+		return;
+
 	WREG32(mmDMA_QM_0_GLBL_CFG0, 0);
 	WREG32(mmDMA_QM_1_GLBL_CFG0, 0);
 	WREG32(mmDMA_QM_2_GLBL_CFG0, 0);
@@ -928,6 +934,11 @@ static int goya_stop_queue(struct hl_device *hdev, u32 cfg_reg,
 static int goya_stop_external_queues(struct hl_device *hdev)
 {
 	int rc, retval = 0;
+
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_DMA))
+		return retval;
 
 	rc = goya_stop_queue(hdev,
 			mmDMA_QM_0_GLBL_CFG1,
@@ -1006,36 +1017,34 @@ int goya_init_cpu_queues(struct hl_device *hdev)
 
 	eq = &hdev->event_queue;
 
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_0,
-			lower_32_bits(cpu_pq->bus_address));
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_1,
-			upper_32_bits(cpu_pq->bus_address));
+	WREG32(mmCPU_PQ_BASE_ADDR_LOW, lower_32_bits(cpu_pq->bus_address));
+	WREG32(mmCPU_PQ_BASE_ADDR_HIGH, upper_32_bits(cpu_pq->bus_address));
 
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_2, lower_32_bits(eq->bus_address));
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_3, upper_32_bits(eq->bus_address));
+	WREG32(mmCPU_EQ_BASE_ADDR_LOW, lower_32_bits(eq->bus_address));
+	WREG32(mmCPU_EQ_BASE_ADDR_HIGH, upper_32_bits(eq->bus_address));
 
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_8,
+	WREG32(mmCPU_CQ_BASE_ADDR_LOW,
 			lower_32_bits(VA_CPU_ACCESSIBLE_MEM_ADDR));
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_9,
+	WREG32(mmCPU_CQ_BASE_ADDR_HIGH,
 			upper_32_bits(VA_CPU_ACCESSIBLE_MEM_ADDR));
 
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_5, HL_QUEUE_SIZE_IN_BYTES);
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_4, HL_EQ_SIZE_IN_BYTES);
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_10, HL_CPU_ACCESSIBLE_MEM_SIZE);
+	WREG32(mmCPU_PQ_LENGTH, HL_QUEUE_SIZE_IN_BYTES);
+	WREG32(mmCPU_EQ_LENGTH, HL_EQ_SIZE_IN_BYTES);
+	WREG32(mmCPU_CQ_LENGTH, HL_CPU_ACCESSIBLE_MEM_SIZE);
 
 	/* Used for EQ CI */
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_6, 0);
+	WREG32(mmCPU_EQ_CI, 0);
 
 	WREG32(mmCPU_IF_PF_PQ_PI, 0);
 
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_7, PQ_INIT_STATUS_READY_FOR_CP);
+	WREG32(mmCPU_PQ_INIT_STATUS, PQ_INIT_STATUS_READY_FOR_CP);
 
 	WREG32(mmGIC_DISTRIBUTOR__5_GICD_SETSPI_NSR,
 			GOYA_ASYNC_EVENT_ID_PI_UPDATE);
 
 	err = hl_poll_timeout(
 		hdev,
-		mmPSOC_GLOBAL_CONF_SCRATCHPAD_7,
+		mmCPU_PQ_INIT_STATUS,
 		status,
 		(status == PQ_INIT_STATUS_READY_FOR_HOST),
 		1000,
@@ -1720,8 +1729,17 @@ void goya_init_tpc_qmans(struct hl_device *hdev)
  */
 static void goya_disable_internal_queues(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_MME))
+		goto disable_tpc;
+
 	WREG32(mmMME_QM_GLBL_CFG0, 0);
 	WREG32(mmMME_CMDQ_GLBL_CFG0, 0);
+
+disable_tpc:
+	if (!(goya->hw_cap_initialized & HW_CAP_TPC))
+		return;
 
 	WREG32(mmTPC0_QM_GLBL_CFG0, 0);
 	WREG32(mmTPC0_CMDQ_GLBL_CFG0, 0);
@@ -1758,7 +1776,11 @@ static void goya_disable_internal_queues(struct hl_device *hdev)
  */
 static int goya_stop_internal_queues(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
 	int rc, retval = 0;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_MME))
+		goto stop_tpc;
 
 	/*
 	 * Each queue (QMAN) is a separate H/W logic. That means that each
@@ -1785,6 +1807,10 @@ static int goya_stop_internal_queues(struct hl_device *hdev)
 		dev_err(hdev->dev, "failed to stop MME CMDQ\n");
 		retval = -EIO;
 	}
+
+stop_tpc:
+	if (!(goya->hw_cap_initialized & HW_CAP_TPC))
+		return retval;
 
 	rc = goya_stop_queue(hdev,
 			mmTPC0_QM_GLBL_CFG1,
@@ -1951,6 +1977,11 @@ static int goya_stop_internal_queues(struct hl_device *hdev)
 
 static void goya_dma_stall(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_DMA))
+		return;
+
 	WREG32(mmDMA_QM_0_GLBL_CFG1, 1 << DMA_QM_0_GLBL_CFG1_DMA_STOP_SHIFT);
 	WREG32(mmDMA_QM_1_GLBL_CFG1, 1 << DMA_QM_1_GLBL_CFG1_DMA_STOP_SHIFT);
 	WREG32(mmDMA_QM_2_GLBL_CFG1, 1 << DMA_QM_2_GLBL_CFG1_DMA_STOP_SHIFT);
@@ -1960,6 +1991,11 @@ static void goya_dma_stall(struct hl_device *hdev)
 
 static void goya_tpc_stall(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_TPC))
+		return;
+
 	WREG32(mmTPC0_CFG_TPC_STALL, 1 << TPC0_CFG_TPC_STALL_V_SHIFT);
 	WREG32(mmTPC1_CFG_TPC_STALL, 1 << TPC1_CFG_TPC_STALL_V_SHIFT);
 	WREG32(mmTPC2_CFG_TPC_STALL, 1 << TPC2_CFG_TPC_STALL_V_SHIFT);
@@ -1972,6 +2008,11 @@ static void goya_tpc_stall(struct hl_device *hdev)
 
 static void goya_mme_stall(struct hl_device *hdev)
 {
+	struct goya_device *goya = hdev->asic_specific;
+
+	if (!(goya->hw_cap_initialized & HW_CAP_MME))
+		return;
+
 	WREG32(mmMME_STALL, 0xFFFFFFFF);
 }
 
@@ -2063,6 +2104,25 @@ static void goya_disable_msix(struct hl_device *hdev)
 	goya->hw_cap_initialized &= ~HW_CAP_MSIX;
 }
 
+static void goya_enable_timestamp(struct hl_device *hdev)
+{
+	/* Disable the timestamp counter */
+	WREG32(mmPSOC_TIMESTAMP_BASE - CFG_BASE, 0);
+
+	/* Zero the lower/upper parts of the 64-bit counter */
+	WREG32(mmPSOC_TIMESTAMP_BASE - CFG_BASE + 0xC, 0);
+	WREG32(mmPSOC_TIMESTAMP_BASE - CFG_BASE + 0x8, 0);
+
+	/* Enable the counter */
+	WREG32(mmPSOC_TIMESTAMP_BASE - CFG_BASE, 1);
+}
+
+static void goya_disable_timestamp(struct hl_device *hdev)
+{
+	/* Disable the timestamp counter */
+	WREG32(mmPSOC_TIMESTAMP_BASE - CFG_BASE, 0);
+}
+
 static void goya_halt_engines(struct hl_device *hdev, bool hard_reset)
 {
 	u32 wait_timeout_ms, cpu_timeout_ms;
@@ -2102,6 +2162,8 @@ static void goya_halt_engines(struct hl_device *hdev, bool hard_reset)
 
 	goya_disable_external_queues(hdev);
 	goya_disable_internal_queues(hdev);
+
+	goya_disable_timestamp(hdev);
 
 	if (hard_reset) {
 		goya_disable_msix(hdev);
@@ -2151,7 +2213,7 @@ static int goya_push_linux_to_device(struct hl_device *hdev)
 
 static int goya_pldm_init_cpu(struct hl_device *hdev)
 {
-	u32 val, unit_rst_val;
+	u32 unit_rst_val;
 	int rc;
 
 	/* Must initialize SRAM scrambler before pushing u-boot to SRAM */
@@ -2159,14 +2221,14 @@ static int goya_pldm_init_cpu(struct hl_device *hdev)
 
 	/* Put ARM cores into reset */
 	WREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL, CPU_RESET_ASSERT);
-	val = RREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL);
+	RREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL);
 
 	/* Reset the CA53 MACRO */
 	unit_rst_val = RREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N);
 	WREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N, CA53_RESET);
-	val = RREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N);
+	RREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N);
 	WREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N, unit_rst_val);
-	val = RREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N);
+	RREG32(mmPSOC_GLOBAL_CONF_UNIT_RST_N);
 
 	rc = goya_push_uboot_to_device(hdev);
 	if (rc)
@@ -2187,7 +2249,7 @@ static int goya_pldm_init_cpu(struct hl_device *hdev)
 	/* Release ARM core 0 from reset */
 	WREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL,
 					CPU_RESET_CORE0_DEASSERT);
-	val = RREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL);
+	RREG32(mmCPU_CA53_CFG_ARM_RST_CONTROL);
 
 	return 0;
 }
@@ -2205,12 +2267,12 @@ static void goya_read_device_fw_version(struct hl_device *hdev,
 
 	switch (fwc) {
 	case FW_COMP_UBOOT:
-		ver_off = RREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_29);
+		ver_off = RREG32(mmUBOOT_VER_OFFSET);
 		dest = hdev->asic_prop.uboot_ver;
 		name = "U-Boot";
 		break;
 	case FW_COMP_PREBOOT:
-		ver_off = RREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_28);
+		ver_off = RREG32(mmPREBOOT_VER_OFFSET);
 		dest = hdev->asic_prop.preboot_ver;
 		name = "Preboot";
 		break;
@@ -2455,13 +2517,12 @@ err:
 static int goya_hw_init(struct hl_device *hdev)
 {
 	struct asic_fixed_properties *prop = &hdev->asic_prop;
-	u32 val;
 	int rc;
 
 	dev_info(hdev->dev, "Starting initialization of H/W\n");
 
 	/* Perform read from the device to make sure device is up */
-	val = RREG32(mmPCIE_DBI_DEVICE_ID_VENDOR_ID_REG);
+	RREG32(mmPCIE_DBI_DEVICE_ID_VENDOR_ID_REG);
 
 	/*
 	 * Let's mark in the H/W that we have reached this point. We check
@@ -2469,7 +2530,7 @@ static int goya_hw_init(struct hl_device *hdev)
 	 * we need to reset the chip before doing H/W init. This register is
 	 * cleared by the H/W upon H/W reset
 	 */
-	WREG32(mmPSOC_GLOBAL_CONF_APP_STATUS, HL_DEVICE_HW_STATE_DIRTY);
+	WREG32(mmHW_STATE, HL_DEVICE_HW_STATE_DIRTY);
 
 	rc = goya_init_cpu(hdev, GOYA_CPU_TIMEOUT_USEC);
 	if (rc) {
@@ -2505,13 +2566,15 @@ static int goya_hw_init(struct hl_device *hdev)
 
 	goya_init_tpc_qmans(hdev);
 
+	goya_enable_timestamp(hdev);
+
 	/* MSI-X must be enabled before CPU queues are initialized */
 	rc = goya_enable_msix(hdev);
 	if (rc)
 		goto disable_queues;
 
 	/* Perform read from the device to flush all MSI-X configuration */
-	val = RREG32(mmPCIE_DBI_DEVICE_ID_VENDOR_ID_REG);
+	RREG32(mmPCIE_DBI_DEVICE_ID_VENDOR_ID_REG);
 
 	return 0;
 
@@ -2831,7 +2894,7 @@ static int goya_send_job_on_qman0(struct hl_device *hdev, struct hl_cs_job *job)
 
 	if (!hdev->asic_funcs->is_device_idle(hdev, NULL, NULL)) {
 		dev_err_ratelimited(hdev->dev,
-			"Can't send KMD job on QMAN0 because the device is not idle\n");
+			"Can't send driver job on QMAN0 because the device is not idle\n");
 		return -EBUSY;
 	}
 
@@ -3949,7 +4012,7 @@ void goya_add_end_of_cb_packets(struct hl_device *hdev, u64 kernel_address,
 
 void goya_update_eq_ci(struct hl_device *hdev, u32 val)
 {
-	WREG32(mmPSOC_GLOBAL_CONF_SCRATCHPAD_6, val);
+	WREG32(mmCPU_EQ_CI, val);
 }
 
 void goya_restore_phase_topology(struct hl_device *hdev)
@@ -4447,6 +4510,7 @@ void goya_handle_eqe(struct hl_device *hdev, struct hl_eq_entry *eq_entry)
 	struct goya_device *goya = hdev->asic_specific;
 
 	goya->events_stat[event_type]++;
+	goya->events_stat_aggregate[event_type]++;
 
 	switch (event_type) {
 	case GOYA_ASYNC_EVENT_ID_PCIE_IF:
@@ -4528,12 +4592,16 @@ void goya_handle_eqe(struct hl_device *hdev, struct hl_eq_entry *eq_entry)
 	}
 }
 
-void *goya_get_events_stat(struct hl_device *hdev, u32 *size)
+void *goya_get_events_stat(struct hl_device *hdev, bool aggregate, u32 *size)
 {
 	struct goya_device *goya = hdev->asic_specific;
 
-	*size = (u32) sizeof(goya->events_stat);
+	if (aggregate) {
+		*size = (u32) sizeof(goya->events_stat_aggregate);
+		return goya->events_stat_aggregate;
+	}
 
+	*size = (u32) sizeof(goya->events_stat);
 	return goya->events_stat;
 }
 
@@ -4597,8 +4665,6 @@ static int goya_memset_device_memory(struct hl_device *hdev, u64 addr, u64 size,
 	hl_debugfs_add_job(hdev, job);
 
 	rc = goya_send_job_on_qman0(hdev, job);
-
-	hl_cb_put(job->patched_cb);
 
 	hl_debugfs_remove_job(hdev, job);
 	kfree(job);
@@ -4934,6 +5000,10 @@ int goya_armcp_info_get(struct hl_device *hdev)
 		prop->dram_end_address = prop->dram_base_address + dram_size;
 	}
 
+	if (!strlen(prop->armcp_info.card_name))
+		strncpy(prop->armcp_info.card_name, GOYA_DEFAULT_CARD_NAME,
+				CARD_NAME_MAX_LEN);
+
 	return 0;
 }
 
@@ -5047,7 +5117,7 @@ static int goya_get_eeprom_data(struct hl_device *hdev, void *data,
 
 static enum hl_device_hw_state goya_get_hw_state(struct hl_device *hdev)
 {
-	return RREG32(mmPSOC_GLOBAL_CONF_APP_STATUS);
+	return RREG32(mmHW_STATE);
 }
 
 static const struct hl_asic_funcs goya_funcs = {

@@ -270,10 +270,6 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			pd_gpu@RK3328_PD_GPU {
-				reg = <RK3328_PD_GPU>;
-				clocks = <&cru ACLK_GPU>;
-			};
 			pd_hevc@RK3328_PD_HEVC {
 				reg = <RK3328_PD_HEVC>;
 			};
@@ -576,7 +572,6 @@
 				  "ppmmu1";
 		clocks = <&cru ACLK_GPU>, <&cru ACLK_GPU>;
 		clock-names = "bus", "core";
-		power-domains = <&power RK3328_PD_GPU>;
 		resets = <&cru SRST_GPU_A>;
 	};
 
@@ -749,7 +744,6 @@
 			<&cru ACLK_BUS_PRE>, <&cru HCLK_BUS_PRE>,
 			<&cru PCLK_BUS_PRE>, <&cru ACLK_PERI_PRE>,
 			<&cru HCLK_PERI>, <&cru PCLK_PERI>,
-			<&cru ACLK_GPU>,
 			<&cru SCLK_RTC32K>;
 		assigned-clock-parents =
 			<&cru HDMIPHY>, <&cru PLL_APLL>,
@@ -771,7 +765,6 @@
 			<150000000>, <75000000>,
 			<75000000>, <150000000>,
 			<75000000>, <75000000>,
-			<500000000>,
 			<32768>;
 	};
 
@@ -941,33 +934,6 @@
 		phys = <&u2phy_host>;
 		phy-names = "usb";
 		status = "disabled";
-	};
-
-	usbdrd3: usb@ff600000 {
-		compatible = "rockchip,rk3328-dwc3", "rockchip,rk3399-dwc3";
-		clocks = <&cru SCLK_USB3OTG_REF>, <&cru SCLK_USB3OTG_SUSPEND>,
-			 <&cru ACLK_USB3OTG>;
-		clock-names = "ref_clk", "suspend_clk",
-			      "bus_clk";
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-		status = "disabled";
-
-		usbdrd_dwc3: dwc3@ff600000 {
-			compatible = "snps,dwc3";
-			reg = <0x0 0xff600000 0x0 0x100000>;
-			interrupts = <GIC_SPI 67 IRQ_TYPE_LEVEL_HIGH>;
-			dr_mode = "otg";
-			phy_type = "utmi_wide";
-			snps,dis_enblslpm_quirk;
-			snps,dis-u2-freeclk-exists-quirk;
-			snps,dis_u2_susphy_quirk;
-			snps,dis_u3_susphy_quirk;
-			snps,dis-del-phy-power-chg-quirk;
-			snps,dis-tx-ipgap-linecheck-quirk;
-			status = "disabled";
-		};
 	};
 
 	gic: interrupt-controller@ff811000 {

@@ -91,17 +91,15 @@ static int nfs4_setup_state_renewal(struct nfs_client *clp)
 {
 	int status;
 	struct nfs_fsinfo fsinfo;
-	unsigned long now;
 
 	if (!test_bit(NFS_CS_CHECK_LEASE_TIME, &clp->cl_res_state)) {
 		nfs4_schedule_state_renewal(clp);
 		return 0;
 	}
 
-	now = jiffies;
 	status = nfs4_proc_get_lease_time(clp, &fsinfo);
 	if (status == 0) {
-		nfs4_set_lease_period(clp, fsinfo.lease_time * HZ, now);
+		nfs4_set_lease_period(clp, fsinfo.lease_time * HZ);
 		nfs4_schedule_state_renewal(clp);
 	}
 
@@ -735,9 +733,9 @@ nfs4_get_open_state(struct inode *inode, struct nfs4_state_owner *owner)
 		state = new;
 		state->owner = owner;
 		atomic_inc(&owner->so_count);
-		list_add_rcu(&state->inode_states, &nfsi->open_states);
 		ihold(inode);
 		state->inode = inode;
+		list_add_rcu(&state->inode_states, &nfsi->open_states);
 		spin_unlock(&inode->i_lock);
 		/* Note: The reclaim code dictates that we add stateless
 		 * and read-only stateids to the end of the list */
@@ -1012,22 +1010,6 @@ static int nfs4_copy_lock_stateid(nfs4_stateid *dst,
 	spin_unlock(&state->state_lock);
 	nfs4_put_lock_state(lsp);
 out:
-	return ret;
-}
-
-bool nfs4_refresh_open_stateid(nfs4_stateid *dst, struct nfs4_state *state)
-{
-	bool ret;
-	int seq;
-
-	do {
-		ret = false;
-		seq = read_seqbegin(&state->seqlock);
-		if (nfs4_state_match_open_stateid_other(state, dst)) {
-			dst->seqid = state->open_stateid.seqid;
-			ret = true;
-		}
-	} while (read_seqretry(&state->seqlock, seq));
 	return ret;
 }
 
@@ -2095,8 +2077,10 @@ static int nfs4_try_migration(struct nfs_server *server, const struct cred *cred
 	}
 
 	status = nfs4_begin_drain_session(clp);
-	if (status != 0)
-		return status;
+	if (status != 0) {
+		result = status;
+		goto out;
+	}
 
 	status = nfs4_replace_transport(server, locations);
 	if (status != 0) {

@@ -244,9 +244,22 @@ void remove_dev_pci_data(struct pci_dev *pdev)
 				continue;
 
 #ifdef CONFIG_EEH
-			/* Release EEH device for the VF */
+			/*
+			 * Release EEH state for this VF. The PCI core
+			 * has already torn down the pci_dev for this VF, but
+			 * we're responsible to removing the eeh_dev since it
+			 * has the same lifetime as the pci_dn that spawned it.
+			 */
 			edev = pdn_to_eeh_dev(pdn);
 			if (edev) {
+				/*
+				 * We allocate pci_dn's for the totalvfs count,
+				 * but only only the vfs that were activated
+				 * have a configured PE.
+				 */
+				if (edev->pe)
+					eeh_rmv_from_parent_pe(edev);
+
 				pdn->edev = NULL;
 				kfree(edev);
 			}
@@ -323,6 +336,7 @@ void pci_remove_device_node_info(struct device_node *dn)
 {
 	struct pci_dn *pdn = dn ? PCI_DN(dn) : NULL;
 	struct device_node *parent;
+	struct pci_dev *pdev;
 #ifdef CONFIG_EEH
 	struct eeh_dev *edev = pdn_to_eeh_dev(pdn);
 
@@ -336,12 +350,28 @@ void pci_remove_device_node_info(struct device_node *dn)
 	WARN_ON(!list_empty(&pdn->child_list));
 	list_del(&pdn->list);
 
+	/* Drop the parent pci_dn's ref to our backing dt node */
 	parent = of_get_parent(dn);
 	if (parent)
 		of_node_put(parent);
 
-	dn->data = NULL;
-	kfree(pdn);
+	/*
+	 * At this point we *might* still have a pci_dev that was
+	 * instantiated from this pci_dn. So defer free()ing it until
+	 * the pci_dev's release function is called.
+	 */
+	pdev = pci_get_domain_bus_and_slot(pdn->phb->global_number,
+			pdn->busno, pdn->devfn);
+	if (pdev) {
+		/* NB: pdev has a ref to dn */
+		pci_dbg(pdev, "marked pdn (from %pOF) as dead\n", dn);
+		pdn->flags |= PCI_DN_FLAG_DEAD;
+	} else {
+		dn->data = NULL;
+		kfree(pdn);
+	}
+
+	pci_dev_put(pdev);
 }
 EXPORT_SYMBOL_GPL(pci_remove_device_node_info);
 

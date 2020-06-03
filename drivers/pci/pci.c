@@ -890,8 +890,8 @@ static int pci_raw_set_power_state(struct pci_dev *dev, pci_power_t state)
 
 	pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &pmcsr);
 	dev->current_state = (pmcsr & PCI_PM_CTRL_STATE_MASK);
-	if (dev->current_state != state && printk_ratelimit())
-		pci_info(dev, "Refused to change power state, currently in D%d\n",
+	if (dev->current_state != state)
+		pci_info_ratelimited(dev, "Refused to change power state, currently in D%d\n",
 			 dev->current_state);
 
 	/*
@@ -959,19 +959,6 @@ void pci_refresh_power_state(struct pci_dev *dev)
 }
 
 /**
- * pci_power_up - Put the given device into D0 forcibly
- * @dev: PCI device to power up
- */
-void pci_power_up(struct pci_dev *dev)
-{
-	if (platform_pci_power_manageable(dev))
-		platform_pci_set_power_state(dev, PCI_D0);
-
-	pci_raw_set_power_state(dev, PCI_D0);
-	pci_update_current_state(dev, PCI_D0);
-}
-
-/**
  * pci_platform_power_transition - Use platform to change device power state
  * @dev: PCI device to handle.
  * @state: State to put the device into.
@@ -1032,8 +1019,6 @@ static void __pci_start_power_transition(struct pci_dev *dev, pci_power_t state)
 		 * because have already delayed for the bridge.
 		 */
 		if (dev->runtime_d3cold) {
-			if (dev->d3cold_delay && !dev->imm_ready)
-				msleep(dev->d3cold_delay);
 			/*
 			 * When powering on a bridge from D3cold, the
 			 * whole hierarchy may be powered on into
@@ -1152,6 +1137,17 @@ int pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 	return error;
 }
 EXPORT_SYMBOL(pci_set_power_state);
+
+/**
+ * pci_power_up - Put the given device into D0 forcibly
+ * @dev: PCI device to power up
+ */
+void pci_power_up(struct pci_dev *dev)
+{
+	__pci_start_power_transition(dev, PCI_D0);
+	pci_raw_set_power_state(dev, PCI_D0);
+	pci_update_current_state(dev, PCI_D0);
+}
 
 /**
  * pci_choose_state - Choose the power state of a PCI device
@@ -1443,7 +1439,7 @@ static void pci_restore_rebar_state(struct pci_dev *pdev)
 		pci_read_config_dword(pdev, pos + PCI_REBAR_CTRL, &ctrl);
 		bar_idx = ctrl & PCI_REBAR_CTRL_BAR_IDX;
 		res = pdev->resource + bar_idx;
-		size = order_base_2((resource_size(res) >> 20) | 1) - 1;
+		size = ilog2(resource_size(res)) - 20;
 		ctrl &= ~PCI_REBAR_CTRL_BAR_SIZE;
 		ctrl |= size << PCI_REBAR_CTRL_BAR_SHIFT;
 		pci_write_config_dword(pdev, pos + PCI_REBAR_CTRL, ctrl);
@@ -3581,7 +3577,7 @@ int pci_enable_atomic_ops_to_root(struct pci_dev *dev, u32 cap_mask)
 		}
 
 		/* Ensure upstream ports don't block AtomicOps on egress */
-		if (!bridge->has_secondary_link) {
+		if (pci_pcie_type(bridge) == PCI_EXP_TYPE_UPSTREAM) {
 			pcie_capability_read_dword(bridge, PCI_EXP_DEVCTL2,
 						   &ctl2);
 			if (ctl2 & PCI_EXP_DEVCTL2_ATOMIC_EGRESS_BLOCK)
@@ -4607,14 +4603,17 @@ static int pci_pm_reset(struct pci_dev *dev, int probe)
 
 	return pci_dev_wait(dev, "PM D3->D0", PCIE_RESET_READY_POLL_MS);
 }
+
 /**
- * pcie_wait_for_link - Wait until link is active or inactive
+ * pcie_wait_for_link_delay - Wait until link is active or inactive
  * @pdev: Bridge device
  * @active: waiting for active or inactive?
+ * @delay: Delay to wait after link has become active (in ms)
  *
  * Use this to wait till link becomes active or inactive.
  */
-bool pcie_wait_for_link(struct pci_dev *pdev, bool active)
+static bool pcie_wait_for_link_delay(struct pci_dev *pdev, bool active,
+				     int delay)
 {
 	int timeout = 1000;
 	bool ret;
@@ -4651,11 +4650,142 @@ bool pcie_wait_for_link(struct pci_dev *pdev, bool active)
 		timeout -= 10;
 	}
 	if (active && ret)
-		msleep(100);
+		msleep(delay);
 	else if (ret != active)
 		pci_info(pdev, "Data Link Layer Link Active not %s in 1000 msec\n",
 			active ? "set" : "cleared");
 	return ret == active;
+}
+
+/**
+ * pcie_wait_for_link - Wait until link is active or inactive
+ * @pdev: Bridge device
+ * @active: waiting for active or inactive?
+ *
+ * Use this to wait till link becomes active or inactive.
+ */
+bool pcie_wait_for_link(struct pci_dev *pdev, bool active)
+{
+	return pcie_wait_for_link_delay(pdev, active, 100);
+}
+
+/*
+ * Find maximum D3cold delay required by all the devices on the bus.  The
+ * spec says 100 ms, but firmware can lower it and we allow drivers to
+ * increase it as well.
+ *
+ * Called with @pci_bus_sem locked for reading.
+ */
+static int pci_bus_max_d3cold_delay(const struct pci_bus *bus)
+{
+	const struct pci_dev *pdev;
+	int min_delay = 100;
+	int max_delay = 0;
+
+	list_for_each_entry(pdev, &bus->devices, bus_list) {
+		if (pdev->d3cold_delay < min_delay)
+			min_delay = pdev->d3cold_delay;
+		if (pdev->d3cold_delay > max_delay)
+			max_delay = pdev->d3cold_delay;
+	}
+
+	return max(min_delay, max_delay);
+}
+
+/**
+ * pci_bridge_wait_for_secondary_bus - Wait for secondary bus to be accessible
+ * @dev: PCI bridge
+ *
+ * Handle necessary delays before access to the devices on the secondary
+ * side of the bridge are permitted after D3cold to D0 transition.
+ *
+ * For PCIe this means the delays in PCIe 5.0 section 6.6.1. For
+ * conventional PCI it means Tpvrh + Trhfa specified in PCI 3.0 section
+ * 4.3.2.
+ */
+void pci_bridge_wait_for_secondary_bus(struct pci_dev *dev)
+{
+	struct pci_dev *child;
+	int delay;
+
+	if (pci_dev_is_disconnected(dev))
+		return;
+
+	if (!pci_is_bridge(dev) || !dev->bridge_d3)
+		return;
+
+	down_read(&pci_bus_sem);
+
+	/*
+	 * We only deal with devices that are present currently on the bus.
+	 * For any hot-added devices the access delay is handled in pciehp
+	 * board_added(). In case of ACPI hotplug the firmware is expected
+	 * to configure the devices before OS is notified.
+	 */
+	if (!dev->subordinate || list_empty(&dev->subordinate->devices)) {
+		up_read(&pci_bus_sem);
+		return;
+	}
+
+	/* Take d3cold_delay requirements into account */
+	delay = pci_bus_max_d3cold_delay(dev->subordinate);
+	if (!delay) {
+		up_read(&pci_bus_sem);
+		return;
+	}
+
+	child = list_first_entry(&dev->subordinate->devices, struct pci_dev,
+				 bus_list);
+	up_read(&pci_bus_sem);
+
+	/*
+	 * Conventional PCI and PCI-X we need to wait Tpvrh + Trhfa before
+	 * accessing the device after reset (that is 1000 ms + 100 ms). In
+	 * practice this should not be needed because we don't do power
+	 * management for them (see pci_bridge_d3_possible()).
+	 */
+	if (!pci_is_pcie(dev)) {
+		pci_dbg(dev, "waiting %d ms for secondary bus\n", 1000 + delay);
+		msleep(1000 + delay);
+		return;
+	}
+
+	/*
+	 * For PCIe downstream and root ports that do not support speeds
+	 * greater than 5 GT/s need to wait minimum 100 ms. For higher
+	 * speeds (gen3) we need to wait first for the data link layer to
+	 * become active.
+	 *
+	 * However, 100 ms is the minimum and the PCIe spec says the
+	 * software must allow at least 1s before it can determine that the
+	 * device that did not respond is a broken device. There is
+	 * evidence that 100 ms is not always enough, for example certain
+	 * Titan Ridge xHCI controller does not always respond to
+	 * configuration requests if we only wait for 100 ms (see
+	 * https://bugzilla.kernel.org/show_bug.cgi?id=203885).
+	 *
+	 * Therefore we wait for 100 ms and check for the device presence.
+	 * If it is still not present give it an additional 100 ms.
+	 */
+	if (!pcie_downstream_port(dev))
+		return;
+
+	if (pcie_get_speed_cap(dev) <= PCIE_SPEED_5_0GT) {
+		pci_dbg(dev, "waiting %d ms for downstream link\n", delay);
+		msleep(delay);
+	} else {
+		pci_dbg(dev, "waiting %d ms for downstream link, after activation\n",
+			delay);
+		if (!pcie_wait_for_link_delay(dev, true, delay)) {
+			/* Did not train, no need to wait any further */
+			return;
+		}
+	}
+
+	if (!pci_device_is_present(child)) {
+		pci_dbg(child, "waiting additional %d ms to become accessible\n", delay);
+		msleep(delay);
+	}
 }
 
 void pci_reset_secondary_bus(struct pci_dev *dev)
@@ -5856,10 +5986,29 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 	return 0;
 }
 
+#ifdef CONFIG_ACPI
+bool pci_pr3_present(struct pci_dev *pdev)
+{
+	struct acpi_device *adev;
+
+	if (acpi_disabled)
+		return false;
+
+	adev = ACPI_COMPANION(&pdev->dev);
+	if (!adev)
+		return false;
+
+	return adev->power.flags.power_resources &&
+		acpi_has_method(adev->handle, "_PR3");
+}
+EXPORT_SYMBOL_GPL(pci_pr3_present);
+#endif
+
 /**
  * pci_add_dma_alias - Add a DMA devfn alias for a device
  * @dev: the PCI device for which alias is added
- * @devfn: alias slot and function
+ * @devfn_from: alias slot and function
+ * @nr_devfns: number of subsequent devfns to alias
  *
  * This helper encodes an 8-bit devfn as a bit number in dma_alias_mask
  * which is used to program permissible bus-devfn source addresses for DMA
@@ -5875,18 +6024,29 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
  * cannot be left as a userspace activity).  DMA aliases should therefore
  * be configured via quirks, such as the PCI fixup header quirk.
  */
-void pci_add_dma_alias(struct pci_dev *dev, u8 devfn)
+void pci_add_dma_alias(struct pci_dev *dev, u8 devfn_from, unsigned nr_devfns)
 {
+	int devfn_to;
+
+	nr_devfns = min(nr_devfns, (unsigned) MAX_NR_DEVFNS - devfn_from);
+	devfn_to = devfn_from + nr_devfns - 1;
+
 	if (!dev->dma_alias_mask)
-		dev->dma_alias_mask = bitmap_zalloc(U8_MAX, GFP_KERNEL);
+		dev->dma_alias_mask = bitmap_zalloc(MAX_NR_DEVFNS, GFP_KERNEL);
 	if (!dev->dma_alias_mask) {
 		pci_warn(dev, "Unable to allocate DMA alias mask\n");
 		return;
 	}
 
-	set_bit(devfn, dev->dma_alias_mask);
-	pci_info(dev, "Enabling fixed DMA alias to %02x.%d\n",
-		 PCI_SLOT(devfn), PCI_FUNC(devfn));
+	bitmap_set(dev->dma_alias_mask, devfn_from, nr_devfns);
+
+	if (nr_devfns == 1)
+		pci_info(dev, "Enabling fixed DMA alias to %02x.%d\n",
+				PCI_SLOT(devfn_from), PCI_FUNC(devfn_from));
+	else if (nr_devfns > 1)
+		pci_info(dev, "Enabling fixed DMA alias for devfn range from %02x.%d to %02x.%d\n",
+				PCI_SLOT(devfn_from), PCI_FUNC(devfn_from),
+				PCI_SLOT(devfn_to), PCI_FUNC(devfn_to));
 }
 
 bool pci_devs_are_dma_aliases(struct pci_dev *dev1, struct pci_dev *dev2)
@@ -5923,8 +6083,19 @@ resource_size_t __weak pcibios_default_alignment(void)
 	return 0;
 }
 
-#define RESOURCE_ALIGNMENT_PARAM_SIZE COMMAND_LINE_SIZE
-static char resource_alignment_param[RESOURCE_ALIGNMENT_PARAM_SIZE] = {0};
+/*
+ * Arches that don't want to expose struct resource to userland as-is in
+ * sysfs and /proc can implement their own pci_resource_to_user().
+ */
+void __weak pci_resource_to_user(const struct pci_dev *dev, int bar,
+				 const struct resource *rsrc,
+				 resource_size_t *start, resource_size_t *end)
+{
+	*start = rsrc->start;
+	*end = rsrc->end;
+}
+
+static char *resource_alignment_param;
 static DEFINE_SPINLOCK(resource_alignment_lock);
 
 /**
@@ -5945,7 +6116,7 @@ static resource_size_t pci_specified_resource_alignment(struct pci_dev *dev,
 
 	spin_lock(&resource_alignment_lock);
 	p = resource_alignment_param;
-	if (!*p && !align)
+	if (!p || !*p)
 		goto out;
 	if (pci_has_flag(PCI_PROBE_ONLY)) {
 		align = 0;
@@ -6109,35 +6280,41 @@ void pci_reassigndev_resource_alignment(struct pci_dev *dev)
 	}
 }
 
-static ssize_t pci_set_resource_alignment_param(const char *buf, size_t count)
-{
-	if (count > RESOURCE_ALIGNMENT_PARAM_SIZE - 1)
-		count = RESOURCE_ALIGNMENT_PARAM_SIZE - 1;
-	spin_lock(&resource_alignment_lock);
-	strncpy(resource_alignment_param, buf, count);
-	resource_alignment_param[count] = '\0';
-	spin_unlock(&resource_alignment_lock);
-	return count;
-}
-
-static ssize_t pci_get_resource_alignment_param(char *buf, size_t size)
-{
-	size_t count;
-	spin_lock(&resource_alignment_lock);
-	count = snprintf(buf, size, "%s", resource_alignment_param);
-	spin_unlock(&resource_alignment_lock);
-	return count;
-}
-
 static ssize_t resource_alignment_show(struct bus_type *bus, char *buf)
 {
-	return pci_get_resource_alignment_param(buf, PAGE_SIZE);
+	size_t count = 0;
+
+	spin_lock(&resource_alignment_lock);
+	if (resource_alignment_param)
+		count = snprintf(buf, PAGE_SIZE, "%s", resource_alignment_param);
+	spin_unlock(&resource_alignment_lock);
+
+	/*
+	 * When set by the command line, resource_alignment_param will not
+	 * have a trailing line feed, which is ugly. So conditionally add
+	 * it here.
+	 */
+	if (count >= 2 && buf[count - 2] != '\n' && count < PAGE_SIZE - 1) {
+		buf[count - 1] = '\n';
+		buf[count++] = 0;
+	}
+
+	return count;
 }
 
 static ssize_t resource_alignment_store(struct bus_type *bus,
 					const char *buf, size_t count)
 {
-	return pci_set_resource_alignment_param(buf, count);
+	char *param = kstrndup(buf, count, GFP_KERNEL);
+
+	if (!param)
+		return -ENOMEM;
+
+	spin_lock(&resource_alignment_lock);
+	kfree(resource_alignment_param);
+	resource_alignment_param = param;
+	spin_unlock(&resource_alignment_lock);
+	return count;
 }
 
 static BUS_ATTR_RW(resource_alignment);
@@ -6266,8 +6443,7 @@ static int __init pci_setup(char *str)
 			} else if (!strncmp(str, "cbmemsize=", 10)) {
 				pci_cardbus_mem_size = memparse(str + 10, &str);
 			} else if (!strncmp(str, "resource_alignment=", 19)) {
-				pci_set_resource_alignment_param(str + 19,
-							strlen(str + 19));
+				resource_alignment_param = str + 19;
 			} else if (!strncmp(str, "ecrc=", 5)) {
 				pcie_ecrc_get_policy(str + 5);
 			} else if (!strncmp(str, "hpiosize=", 9)) {
@@ -6302,15 +6478,18 @@ static int __init pci_setup(char *str)
 early_param("pci", pci_setup);
 
 /*
- * 'disable_acs_redir_param' is initialized in pci_setup(), above, to point
- * to data in the __initdata section which will be freed after the init
- * sequence is complete. We can't allocate memory in pci_setup() because some
- * architectures do not have any memory allocation service available during
- * an early_param() call. So we allocate memory and copy the variable here
- * before the init section is freed.
+ * 'resource_alignment_param' and 'disable_acs_redir_param' are initialized
+ * in pci_setup(), above, to point to data in the __initdata section which
+ * will be freed after the init sequence is complete. We can't allocate memory
+ * in pci_setup() because some architectures do not have any memory allocation
+ * service available during an early_param() call. So we allocate memory and
+ * copy the variable here before the init section is freed.
+ *
  */
 static int __init pci_realloc_setup_params(void)
 {
+	resource_alignment_param = kstrdup(resource_alignment_param,
+					   GFP_KERNEL);
 	disable_acs_redir_param = kstrdup(disable_acs_redir_param, GFP_KERNEL);
 
 	return 0;

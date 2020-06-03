@@ -1333,6 +1333,7 @@ void nfsd_client_rmdir(struct dentry *dentry)
 	dget(dentry);
 	ret = simple_rmdir(dir, dentry);
 	WARN_ON_ONCE(ret);
+	fsnotify_rmdir(dir, dentry);
 	d_delete(dentry);
 	inode_unlock(dir);
 }
@@ -1385,8 +1386,7 @@ static int nfsd_fill_super(struct super_block *sb, struct fs_context *fc)
 
 static int nfsd_fs_get_tree(struct fs_context *fc)
 {
-	fc->s_fs_info = get_net(fc->net_ns);
-	return vfs_get_super(fc, vfs_get_keyed_super, nfsd_fill_super);
+	return get_tree_keyed(fc, nfsd_fill_super, get_net(fc->net_ns));
 }
 
 static void nfsd_fs_free_fc(struct fs_context *fc)
@@ -1477,6 +1477,7 @@ static __net_init int nfsd_init_net(struct net *net)
 
 	atomic_set(&nn->ntf_refcnt, 0);
 	init_waitqueue_head(&nn->ntf_wq);
+	seqlock_init(&nn->boot_lock);
 
 	mnt =  vfs_kern_mount(&nfsd_fs_type, SB_KERNMOUNT, "nfsd", NULL);
 	if (IS_ERR(mnt)) {

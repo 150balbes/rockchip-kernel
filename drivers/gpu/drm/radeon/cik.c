@@ -3659,7 +3659,7 @@ bool cik_semaphore_ring_emit(struct radeon_device *rdev,
 struct radeon_fence *cik_copy_cpdma(struct radeon_device *rdev,
 				    uint64_t src_offset, uint64_t dst_offset,
 				    unsigned num_gpu_pages,
-				    struct reservation_object *resv)
+				    struct dma_resv *resv)
 {
 	struct radeon_fence *fence;
 	struct radeon_sync sync;
@@ -6969,8 +6969,8 @@ static int cik_irq_init(struct radeon_device *rdev)
 	}
 
 	/* setup interrupt control */
-	/* XXX this should actually be a bus address, not an MC address. same on older asics */
-	WREG32(INTERRUPT_CNTL2, rdev->ih.gpu_addr >> 8);
+	/* set dummy read address to dummy page address */
+	WREG32(INTERRUPT_CNTL2, rdev->dummy_page.addr >> 8);
 	interrupt_cntl = RREG32(INTERRUPT_CNTL);
 	/* IH_DUMMY_RD_OVERRIDE=0 - dummy read disabled with msi, enabled without msi
 	 * IH_DUMMY_RD_OVERRIDE=1 - dummy read controlled by IH_DUMMY_RD_EN

@@ -162,6 +162,7 @@ typedef struct thread_struct thread_struct;
 #define INIT_THREAD {							\
 	.ksp = sizeof(init_stack) + (unsigned long) &init_stack,	\
 	.fpu.regs = (void *) init_task.thread.fpu.fprs,			\
+	.last_break = 1,						\
 }
 
 /*
@@ -324,11 +325,9 @@ static inline void __noreturn disabled_wait(void)
  * Basic Machine Check/Program Check Handler.
  */
 
-extern void s390_base_mcck_handler(void);
 extern void s390_base_pgm_handler(void);
 extern void s390_base_ext_handler(void);
 
-extern void (*s390_base_mcck_handler_fn)(void);
 extern void (*s390_base_pgm_handler_fn)(void);
 extern void (*s390_base_ext_handler_fn)(void);
 

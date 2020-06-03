@@ -219,8 +219,10 @@ static int tcf_mirred_act(struct sk_buff *skb, const struct tc_action *a,
 	bool use_reinsert;
 	bool want_ingress;
 	bool is_redirect;
+	bool expects_nh;
 	int m_eaction;
 	int mac_len;
+	bool at_nh;
 
 	rec_level = __this_cpu_inc_return(mirred_rec_level);
 	if (unlikely(rec_level > MIRRED_RECURSION_LIMIT)) {
@@ -261,19 +263,19 @@ static int tcf_mirred_act(struct sk_buff *skb, const struct tc_action *a,
 			goto out;
 	}
 
-	/* If action's target direction differs than filter's direction,
-	 * and devices expect a mac header on xmit, then mac push/pull is
-	 * needed.
-	 */
 	want_ingress = tcf_mirred_act_wants_ingress(m_eaction);
-	if (skb_at_tc_ingress(skb) != want_ingress && m_mac_header_xmit) {
-		if (!skb_at_tc_ingress(skb)) {
-			/* caught at egress, act ingress: pull mac */
-			mac_len = skb_network_header(skb) - skb_mac_header(skb);
+
+	expects_nh = want_ingress || !m_mac_header_xmit;
+	at_nh = skb->data == skb_network_header(skb);
+	if (at_nh != expects_nh) {
+		mac_len = skb_at_tc_ingress(skb) ? skb->mac_len :
+			  skb_network_header(skb) - skb_mac_header(skb);
+		if (expects_nh) {
+			/* target device/action expect data at nh */
 			skb_pull_rcsum(skb2, mac_len);
 		} else {
-			/* caught at ingress, act egress: push mac */
-			skb_push_rcsum(skb2, skb->mac_len);
+			/* target device/action expect data at mac */
+			skb_push_rcsum(skb2, mac_len);
 		}
 	}
 
@@ -282,10 +284,8 @@ static int tcf_mirred_act(struct sk_buff *skb, const struct tc_action *a,
 
 	/* mirror is always swallowed */
 	if (is_redirect) {
-		skb2->tc_redirected = 1;
-		skb2->tc_from_ingress = skb2->tc_at_ingress;
-		if (skb2->tc_from_ingress)
-			skb2->tstamp = 0;
+		skb_set_redirected(skb2, skb2->tc_at_ingress);
+
 		/* let's the caller reinsert the packet, if possible */
 		if (use_reinsert) {
 			res->ingress = want_ingress;
@@ -408,23 +408,29 @@ static struct notifier_block mirred_device_notifier = {
 	.notifier_call = mirred_device_event,
 };
 
-static struct net_device *tcf_mirred_get_dev(const struct tc_action *a)
+static void tcf_mirred_dev_put(void *priv)
+{
+	struct net_device *dev = priv;
+
+	dev_put(dev);
+}
+
+static struct net_device *
+tcf_mirred_get_dev(const struct tc_action *a,
+		   tc_action_priv_destructor *destructor)
 {
 	struct tcf_mirred *m = to_mirred(a);
 	struct net_device *dev;
 
 	rcu_read_lock();
 	dev = rcu_dereference(m->tcfm_dev);
-	if (dev)
+	if (dev) {
 		dev_hold(dev);
+		*destructor = tcf_mirred_dev_put;
+	}
 	rcu_read_unlock();
 
 	return dev;
-}
-
-static void tcf_mirred_put_dev(struct net_device *dev)
-{
-	dev_put(dev);
 }
 
 static size_t tcf_mirred_get_fill_size(const struct tc_action *act)
@@ -446,7 +452,6 @@ static struct tc_action_ops act_mirred_ops = {
 	.get_fill_size	=	tcf_mirred_get_fill_size,
 	.size		=	sizeof(struct tcf_mirred),
 	.get_dev	=	tcf_mirred_get_dev,
-	.put_dev	=	tcf_mirred_put_dev,
 };
 
 static __net_init int mirred_init_net(struct net *net)
@@ -479,7 +484,11 @@ static int __init mirred_init_module(void)
 		return err;
 
 	pr_info("Mirror/redirect action on\n");
-	return tcf_register_action(&act_mirred_ops, &mirred_net_ops);
+	err = tcf_register_action(&act_mirred_ops, &mirred_net_ops);
+	if (err)
+		unregister_netdevice_notifier(&mirred_device_notifier);
+
+	return err;
 }
 
 static void __exit mirred_cleanup_module(void)

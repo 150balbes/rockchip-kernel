@@ -21,7 +21,7 @@
 #include "backref.h"
 #include "extent_io.h"
 #include "qgroup.h"
-
+#include "block-group.h"
 
 /* TODO XXX FIXME
  *  - subvol delete -> delete when ref goes to 0? delete limits also?
@@ -1030,6 +1030,7 @@ out_add_root:
 	ret = qgroup_rescan_init(fs_info, 0, 1);
 	if (!ret) {
 	        qgroup_rescan_zero_tracking(fs_info);
+		fs_info->qgroup_rescan_running = true;
 	        btrfs_queue_work(fs_info->qgroup_rescan_workers,
 	                         &fs_info->qgroup_rescan_work);
 	}
@@ -1312,8 +1313,9 @@ static int __del_qgroup_relation(struct btrfs_trans_handle *trans, u64 src,
 	struct btrfs_qgroup *member;
 	struct btrfs_qgroup_list *list;
 	struct ulist *tmp;
+	bool found = false;
 	int ret = 0;
-	int err;
+	int ret2;
 
 	tmp = ulist_alloc(GFP_KERNEL);
 	if (!tmp)
@@ -1327,28 +1329,39 @@ static int __del_qgroup_relation(struct btrfs_trans_handle *trans, u64 src,
 
 	member = find_qgroup_rb(fs_info, src);
 	parent = find_qgroup_rb(fs_info, dst);
-	if (!member || !parent) {
-		ret = -EINVAL;
-		goto out;
-	}
+	/*
+	 * The parent/member pair doesn't exist, then try to delete the dead
+	 * relation items only.
+	 */
+	if (!member || !parent)
+		goto delete_item;
 
 	/* check if such qgroup relation exist firstly */
 	list_for_each_entry(list, &member->groups, next_group) {
-		if (list->group == parent)
-			goto exist;
+		if (list->group == parent) {
+			found = true;
+			break;
+		}
 	}
-	ret = -ENOENT;
-	goto out;
-exist:
-	ret = del_qgroup_relation_item(trans, src, dst);
-	err = del_qgroup_relation_item(trans, dst, src);
-	if (err && !ret)
-		ret = err;
 
-	spin_lock(&fs_info->qgroup_lock);
-	del_relation_rb(fs_info, src, dst);
-	ret = quick_update_accounting(fs_info, tmp, src, dst, -1);
-	spin_unlock(&fs_info->qgroup_lock);
+delete_item:
+	ret = del_qgroup_relation_item(trans, src, dst);
+	if (ret < 0 && ret != -ENOENT)
+		goto out;
+	ret2 = del_qgroup_relation_item(trans, dst, src);
+	if (ret2 < 0 && ret2 != -ENOENT)
+		goto out;
+
+	/* At least one deletion succeeded, return 0 */
+	if (!ret || !ret2)
+		ret = 0;
+
+	if (found) {
+		spin_lock(&fs_info->qgroup_lock);
+		del_relation_rb(fs_info, src, dst);
+		ret = quick_update_accounting(fs_info, tmp, src, dst, -1);
+		spin_unlock(&fs_info->qgroup_lock);
+	}
 out:
 	ulist_free(tmp);
 	return ret;
@@ -2411,8 +2424,12 @@ int btrfs_qgroup_account_extent(struct btrfs_trans_handle *trans, u64 bytenr,
 	u64 nr_old_roots = 0;
 	int ret = 0;
 
+	/*
+	 * If quotas get disabled meanwhile, the resouces need to be freed and
+	 * we can't just exit here.
+	 */
 	if (!test_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags))
-		return 0;
+		goto out_free;
 
 	if (new_roots) {
 		if (!maybe_fs_roots(new_roots))
@@ -3154,9 +3171,6 @@ out:
 	btrfs_free_path(path);
 
 	mutex_lock(&fs_info->qgroup_rescan_lock);
-	if (!btrfs_fs_closing(fs_info))
-		fs_info->qgroup_flags &= ~BTRFS_QGROUP_STATUS_FLAG_RESCAN;
-
 	if (err > 0 &&
 	    fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT) {
 		fs_info->qgroup_flags &= ~BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
@@ -3172,16 +3186,30 @@ out:
 	trans = btrfs_start_transaction(fs_info->quota_root, 1);
 	if (IS_ERR(trans)) {
 		err = PTR_ERR(trans);
+		trans = NULL;
 		btrfs_err(fs_info,
 			  "fail to start transaction for status update: %d",
 			  err);
-		goto done;
 	}
-	ret = update_qgroup_status_item(trans);
-	if (ret < 0) {
-		err = ret;
-		btrfs_err(fs_info, "fail to update qgroup status: %d", err);
+
+	mutex_lock(&fs_info->qgroup_rescan_lock);
+	if (!btrfs_fs_closing(fs_info))
+		fs_info->qgroup_flags &= ~BTRFS_QGROUP_STATUS_FLAG_RESCAN;
+	if (trans) {
+		ret = update_qgroup_status_item(trans);
+		if (ret < 0) {
+			err = ret;
+			btrfs_err(fs_info, "fail to update qgroup status: %d",
+				  err);
+		}
 	}
+	fs_info->qgroup_rescan_running = false;
+	complete_all(&fs_info->qgroup_rescan_completion);
+	mutex_unlock(&fs_info->qgroup_rescan_lock);
+
+	if (!trans)
+		return;
+
 	btrfs_end_transaction(trans);
 
 	if (btrfs_fs_closing(fs_info)) {
@@ -3192,12 +3220,6 @@ out:
 	} else {
 		btrfs_err(fs_info, "qgroup scan failed with %d", err);
 	}
-
-done:
-	mutex_lock(&fs_info->qgroup_rescan_lock);
-	fs_info->qgroup_rescan_running = false;
-	mutex_unlock(&fs_info->qgroup_rescan_lock);
-	complete_all(&fs_info->qgroup_rescan_completion);
 }
 
 /*
@@ -3215,12 +3237,12 @@ qgroup_rescan_init(struct btrfs_fs_info *fs_info, u64 progress_objectid,
 		if (!(fs_info->qgroup_flags &
 		      BTRFS_QGROUP_STATUS_FLAG_RESCAN)) {
 			btrfs_warn(fs_info,
-			"qgroup rescan init failed, qgroup is not enabled");
+			"qgroup rescan init failed, qgroup rescan is not queued");
 			ret = -EINVAL;
 		} else if (!(fs_info->qgroup_flags &
 			     BTRFS_QGROUP_STATUS_FLAG_ON)) {
 			btrfs_warn(fs_info,
-			"qgroup rescan init failed, qgroup rescan is not queued");
+			"qgroup rescan init failed, qgroup is not enabled");
 			ret = -EINVAL;
 		}
 
@@ -3255,7 +3277,6 @@ qgroup_rescan_init(struct btrfs_fs_info *fs_info, u64 progress_objectid,
 		sizeof(fs_info->qgroup_rescan_progress));
 	fs_info->qgroup_rescan_progress.objectid = progress_objectid;
 	init_completion(&fs_info->qgroup_rescan_completion);
-	fs_info->qgroup_rescan_running = true;
 
 	spin_unlock(&fs_info->qgroup_lock);
 	mutex_unlock(&fs_info->qgroup_rescan_lock);
@@ -3263,7 +3284,6 @@ qgroup_rescan_init(struct btrfs_fs_info *fs_info, u64 progress_objectid,
 	memset(&fs_info->qgroup_rescan_work, 0,
 	       sizeof(fs_info->qgroup_rescan_work));
 	btrfs_init_work(&fs_info->qgroup_rescan_work,
-			btrfs_qgroup_rescan_helper,
 			btrfs_qgroup_rescan_worker, NULL, NULL);
 	return 0;
 }
@@ -3321,8 +3341,11 @@ btrfs_qgroup_rescan(struct btrfs_fs_info *fs_info)
 
 	qgroup_rescan_zero_tracking(fs_info);
 
+	mutex_lock(&fs_info->qgroup_rescan_lock);
+	fs_info->qgroup_rescan_running = true;
 	btrfs_queue_work(fs_info->qgroup_rescan_workers,
 			 &fs_info->qgroup_rescan_work);
+	mutex_unlock(&fs_info->qgroup_rescan_lock);
 
 	return 0;
 }
@@ -3358,9 +3381,13 @@ int btrfs_qgroup_wait_for_completion(struct btrfs_fs_info *fs_info,
 void
 btrfs_qgroup_rescan_resume(struct btrfs_fs_info *fs_info)
 {
-	if (fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_RESCAN)
+	if (fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_RESCAN) {
+		mutex_lock(&fs_info->qgroup_rescan_lock);
+		fs_info->qgroup_rescan_running = true;
 		btrfs_queue_work(fs_info->qgroup_rescan_workers,
 				 &fs_info->qgroup_rescan_work);
+		mutex_unlock(&fs_info->qgroup_rescan_lock);
+	}
 }
 
 /*
@@ -3425,6 +3452,9 @@ cleanup:
 	while ((unode = ulist_next(&reserved->range_changed, &uiter)))
 		clear_extent_bit(&BTRFS_I(inode)->io_tree, unode->val,
 				 unode->aux, EXTENT_QGROUP_RESERVED, 0, 0, NULL);
+	/* Also free data bytes of already reserved one */
+	btrfs_qgroup_free_refroot(root->fs_info, root->root_key.objectid,
+				  orig_reserved, BTRFS_QGROUP_RSV_DATA);
 	extent_changeset_release(reserved);
 	return ret;
 }
@@ -3469,7 +3499,7 @@ static int qgroup_free_reserved_data(struct inode *inode,
 		 * EXTENT_QGROUP_RESERVED, we won't double free.
 		 * So not need to rush.
 		 */
-		ret = clear_record_extent_bits(&BTRFS_I(inode)->io_failure_tree,
+		ret = clear_record_extent_bits(&BTRFS_I(inode)->io_tree,
 				free_start, free_start + free_len - 1,
 				EXTENT_QGROUP_RESERVED, &changeset);
 		if (ret < 0)
@@ -3609,7 +3639,7 @@ int __btrfs_qgroup_reserve_meta(struct btrfs_root *root, int num_bytes,
 		return 0;
 
 	BUG_ON(num_bytes != round_down(num_bytes, fs_info->nodesize));
-	trace_qgroup_meta_reserve(root, type, (s64)num_bytes);
+	trace_qgroup_meta_reserve(root, (s64)num_bytes, type);
 	ret = qgroup_reserve(root, num_bytes, enforce, type);
 	if (ret < 0)
 		return ret;
@@ -3656,7 +3686,7 @@ void __btrfs_qgroup_free_meta(struct btrfs_root *root, int num_bytes,
 	 */
 	num_bytes = sub_root_meta_rsv(root, num_bytes, type);
 	BUG_ON(num_bytes != round_down(num_bytes, fs_info->nodesize));
-	trace_qgroup_meta_reserve(root, type, -(s64)num_bytes);
+	trace_qgroup_meta_reserve(root, -(s64)num_bytes, type);
 	btrfs_qgroup_free_refroot(fs_info, root->root_key.objectid,
 				  num_bytes, type);
 }
@@ -3994,4 +4024,17 @@ out:
 		fs_info->qgroup_flags |= BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
 	}
 	return ret;
+}
+
+void btrfs_qgroup_destroy_extent_records(struct btrfs_transaction *trans)
+{
+	struct btrfs_qgroup_extent_record *entry;
+	struct btrfs_qgroup_extent_record *next;
+	struct rb_root *root;
+
+	root = &trans->delayed_refs.dirty_extent_root;
+	rbtree_postorder_for_each_entry_safe(entry, next, root, node) {
+		ulist_free(entry->old_roots);
+		kfree(entry);
+	}
 }

@@ -46,7 +46,6 @@ struct socfpga_dwmac_ops {
 };
 
 struct socfpga_dwmac {
-	int	interface;
 	u32	reg_offset;
 	u32	reg_shift;
 	struct	device *dev;
@@ -109,8 +108,6 @@ static int socfpga_dwmac_parse_data(struct socfpga_dwmac *dwmac, struct device *
 	struct resource res_splitter;
 	struct resource res_tse_pcs;
 	struct resource res_sgmii_adapter;
-
-	dwmac->interface = of_get_phy_mode(np);
 
 	sys_mgr_base_addr =
 		altr_sysmgr_regmap_lookup_by_phandle(np, "altr,sysmgr-syscon");
@@ -231,11 +228,21 @@ err_node_put:
 	return ret;
 }
 
+static int socfpga_get_plat_phymode(struct socfpga_dwmac *dwmac)
+{
+	struct net_device *ndev = dev_get_drvdata(dwmac->dev);
+	struct stmmac_priv *priv = netdev_priv(ndev);
+
+	return priv->plat->interface;
+}
+
 static int socfpga_set_phy_mode_common(int phymode, u32 *val)
 {
 	switch (phymode) {
 	case PHY_INTERFACE_MODE_RGMII:
 	case PHY_INTERFACE_MODE_RGMII_ID:
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+	case PHY_INTERFACE_MODE_RGMII_TXID:
 		*val = SYSMGR_EMACGRP_CTRL_PHYSEL_ENUM_RGMII;
 		break;
 	case PHY_INTERFACE_MODE_MII:
@@ -255,7 +262,7 @@ static int socfpga_set_phy_mode_common(int phymode, u32 *val)
 static int socfpga_gen5_set_phy_mode(struct socfpga_dwmac *dwmac)
 {
 	struct regmap *sys_mgr_base_addr = dwmac->sys_mgr_base_addr;
-	int phymode = dwmac->interface;
+	int phymode = socfpga_get_plat_phymode(dwmac);
 	u32 reg_offset = dwmac->reg_offset;
 	u32 reg_shift = dwmac->reg_shift;
 	u32 ctrl, val, module;
@@ -284,15 +291,18 @@ static int socfpga_gen5_set_phy_mode(struct socfpga_dwmac *dwmac)
 	    phymode == PHY_INTERFACE_MODE_MII ||
 	    phymode == PHY_INTERFACE_MODE_GMII ||
 	    phymode == PHY_INTERFACE_MODE_SGMII) {
-		ctrl |= SYSMGR_EMACGRP_CTRL_PTP_REF_CLK_MASK << (reg_shift / 2);
 		regmap_read(sys_mgr_base_addr, SYSMGR_FPGAGRP_MODULE_REG,
 			    &module);
 		module |= (SYSMGR_FPGAGRP_MODULE_EMAC << (reg_shift / 2));
 		regmap_write(sys_mgr_base_addr, SYSMGR_FPGAGRP_MODULE_REG,
 			     module);
-	} else {
-		ctrl &= ~(SYSMGR_EMACGRP_CTRL_PTP_REF_CLK_MASK << (reg_shift / 2));
 	}
+
+	if (dwmac->f2h_ptp_ref_clk)
+		ctrl |= SYSMGR_EMACGRP_CTRL_PTP_REF_CLK_MASK << (reg_shift / 2);
+	else
+		ctrl &= ~(SYSMGR_EMACGRP_CTRL_PTP_REF_CLK_MASK <<
+			  (reg_shift / 2));
 
 	regmap_write(sys_mgr_base_addr, reg_offset, ctrl);
 
@@ -314,7 +324,7 @@ static int socfpga_gen5_set_phy_mode(struct socfpga_dwmac *dwmac)
 static int socfpga_gen10_set_phy_mode(struct socfpga_dwmac *dwmac)
 {
 	struct regmap *sys_mgr_base_addr = dwmac->sys_mgr_base_addr;
-	int phymode = dwmac->interface;
+	int phymode = socfpga_get_plat_phymode(dwmac);
 	u32 reg_offset = dwmac->reg_offset;
 	u32 reg_shift = dwmac->reg_shift;
 	u32 ctrl, val, module;

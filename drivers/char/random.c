@@ -1687,8 +1687,9 @@ static void _warn_unseeded_randomness(const char *func_name, void *caller,
 	print_once = true;
 #endif
 	if (__ratelimit(&unseeded_warning))
-		pr_notice("random: %s called from %pS with crng_init=%d\n",
-			  func_name, caller, crng_init);
+		printk_deferred(KERN_NOTICE "random: %s called from %pS "
+				"with crng_init=%d\n", func_name, caller,
+				crng_init);
 }
 
 /*
@@ -1731,6 +1732,56 @@ void get_random_bytes(void *buf, int nbytes)
 }
 EXPORT_SYMBOL(get_random_bytes);
 
+
+/*
+ * Each time the timer fires, we expect that we got an unpredictable
+ * jump in the cycle counter. Even if the timer is running on another
+ * CPU, the timer activity will be touching the stack of the CPU that is
+ * generating entropy..
+ *
+ * Note that we don't re-arm the timer in the timer itself - we are
+ * happy to be scheduled away, since that just makes the load more
+ * complex, but we do not want the timer to keep ticking unless the
+ * entropy loop is running.
+ *
+ * So the re-arming always happens in the entropy loop itself.
+ */
+static void entropy_timer(struct timer_list *t)
+{
+	credit_entropy_bits(&input_pool, 1);
+}
+
+/*
+ * If we have an actual cycle counter, see if we can
+ * generate enough entropy with timing noise
+ */
+static void try_to_generate_entropy(void)
+{
+	struct {
+		unsigned long now;
+		struct timer_list timer;
+	} stack;
+
+	stack.now = random_get_entropy();
+
+	/* Slow counter - or none. Don't even bother */
+	if (stack.now == random_get_entropy())
+		return;
+
+	timer_setup_on_stack(&stack.timer, entropy_timer, 0);
+	while (!crng_ready()) {
+		if (!timer_pending(&stack.timer))
+			mod_timer(&stack.timer, jiffies+1);
+		mix_pool_bytes(&input_pool, &stack.now, sizeof(stack.now));
+		schedule();
+		stack.now = random_get_entropy();
+	}
+
+	del_timer_sync(&stack.timer);
+	destroy_timer_on_stack(&stack.timer);
+	mix_pool_bytes(&input_pool, &stack.now, sizeof(stack.now));
+}
+
 /*
  * Wait for the urandom pool to be seeded and thus guaranteed to supply
  * cryptographically secure random numbers. This applies to: the /dev/urandom
@@ -1745,7 +1796,17 @@ int wait_for_random_bytes(void)
 {
 	if (likely(crng_ready()))
 		return 0;
-	return wait_event_interruptible(crng_init_wait, crng_ready());
+
+	do {
+		int ret;
+		ret = wait_event_interruptible_timeout(crng_init_wait, crng_ready(), HZ);
+		if (ret)
+			return ret > 0 ? 0 : ret;
+
+		try_to_generate_entropy();
+	} while (!crng_ready());
+
+	return 0;
 }
 EXPORT_SYMBOL(wait_for_random_bytes);
 
@@ -2297,11 +2358,11 @@ struct batched_entropy {
 
 /*
  * Get a random word for internal kernel use only. The quality of the random
- * number is either as good as RDRAND or as good as /dev/urandom, with the
- * goal of being quite fast and not depleting entropy. In order to ensure
+ * number is good as /dev/urandom, but there is no backtrack protection, with
+ * the goal of being quite fast and not depleting entropy. In order to ensure
  * that the randomness provided by this function is okay, the function
- * wait_for_random_bytes() should be called and return 0 at least once
- * at any point prior.
+ * wait_for_random_bytes() should be called and return 0 at least once at any
+ * point prior.
  */
 static DEFINE_PER_CPU(struct batched_entropy, batched_entropy_u64) = {
 	.batch_lock	= __SPIN_LOCK_UNLOCKED(batched_entropy_u64.lock),
@@ -2313,15 +2374,6 @@ u64 get_random_u64(void)
 	unsigned long flags;
 	struct batched_entropy *batch;
 	static void *previous;
-
-#if BITS_PER_LONG == 64
-	if (arch_get_random_long((unsigned long *)&ret))
-		return ret;
-#else
-	if (arch_get_random_long((unsigned long *)&ret) &&
-	    arch_get_random_long((unsigned long *)&ret + 1))
-	    return ret;
-#endif
 
 	warn_unseeded_randomness(&previous);
 
@@ -2346,9 +2398,6 @@ u32 get_random_u32(void)
 	unsigned long flags;
 	struct batched_entropy *batch;
 	static void *previous;
-
-	if (arch_get_random_int(&ret))
-		return ret;
 
 	warn_unseeded_randomness(&previous);
 
@@ -2445,3 +2494,17 @@ void add_hwgenerator_randomness(const char *buffer, size_t count,
 	credit_entropy_bits(poolp, entropy);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
+
+/* Handle random seed passed by bootloader.
+ * If the seed is trustworthy, it would be regarded as hardware RNGs. Otherwise
+ * it would be regarded as device data.
+ * The decision is controlled by CONFIG_RANDOM_TRUST_BOOTLOADER.
+ */
+void add_bootloader_randomness(const void *buf, unsigned int size)
+{
+	if (IS_ENABLED(CONFIG_RANDOM_TRUST_BOOTLOADER))
+		add_hwgenerator_randomness(buf, size, size * 8);
+	else
+		add_device_randomness(buf, size);
+}
+EXPORT_SYMBOL_GPL(add_bootloader_randomness);

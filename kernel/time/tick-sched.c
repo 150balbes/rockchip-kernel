@@ -58,8 +58,9 @@ static void tick_do_update_jiffies64(ktime_t now)
 
 	/*
 	 * Do a quick check without holding jiffies_lock:
+	 * The READ_ONCE() pairs with two updates done later in this function.
 	 */
-	delta = ktime_sub(now, last_jiffies_update);
+	delta = ktime_sub(now, READ_ONCE(last_jiffies_update));
 	if (delta < tick_period)
 		return;
 
@@ -70,8 +71,9 @@ static void tick_do_update_jiffies64(ktime_t now)
 	if (delta >= tick_period) {
 
 		delta = ktime_sub(delta, tick_period);
-		last_jiffies_update = ktime_add(last_jiffies_update,
-						tick_period);
+		/* Pairs with the lockless read in this function. */
+		WRITE_ONCE(last_jiffies_update,
+			   ktime_add(last_jiffies_update, tick_period));
 
 		/* Slow path for long timeouts */
 		if (unlikely(delta >= tick_period)) {
@@ -79,8 +81,10 @@ static void tick_do_update_jiffies64(ktime_t now)
 
 			ticks = ktime_divns(delta, incr);
 
-			last_jiffies_update = ktime_add_ns(last_jiffies_update,
-							   incr * ticks);
+			/* Pairs with the lockless read in this function. */
+			WRITE_ONCE(last_jiffies_update,
+				   ktime_add_ns(last_jiffies_update,
+						incr * ticks));
 		}
 		do_timer(++ticks);
 
@@ -634,10 +638,12 @@ static void tick_nohz_restart(struct tick_sched *ts, ktime_t now)
 	/* Forward the time to expire in the future */
 	hrtimer_forward(&ts->sched_timer, now, tick_period);
 
-	if (ts->nohz_mode == NOHZ_MODE_HIGHRES)
-		hrtimer_start_expires(&ts->sched_timer, HRTIMER_MODE_ABS_PINNED);
-	else
+	if (ts->nohz_mode == NOHZ_MODE_HIGHRES) {
+		hrtimer_start_expires(&ts->sched_timer,
+				      HRTIMER_MODE_ABS_PINNED_HARD);
+	} else {
 		tick_program_event(hrtimer_get_expires(&ts->sched_timer), 1);
+	}
 
 	/*
 	 * Reset to make sure next tick stop doesn't get fooled by past
@@ -802,7 +808,8 @@ static void tick_nohz_stop_tick(struct tick_sched *ts, int cpu)
 	}
 
 	if (ts->nohz_mode == NOHZ_MODE_HIGHRES) {
-		hrtimer_start(&ts->sched_timer, tick, HRTIMER_MODE_ABS_PINNED);
+		hrtimer_start(&ts->sched_timer, tick,
+			      HRTIMER_MODE_ABS_PINNED_HARD);
 	} else {
 		hrtimer_set_expires(&ts->sched_timer, tick);
 		tick_program_event(tick, 1);
@@ -1230,7 +1237,7 @@ static void tick_nohz_switch_to_nohz(void)
 	 * Recycle the hrtimer in ts, so we can share the
 	 * hrtimer_forward with the highres code.
 	 */
-	hrtimer_init(&ts->sched_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	hrtimer_init(&ts->sched_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
 	/* Get the next period */
 	next = tick_init_jiffy_update();
 
@@ -1327,7 +1334,7 @@ void tick_setup_sched_timer(void)
 	/*
 	 * Emulate tick processing via per-CPU hrtimers:
 	 */
-	hrtimer_init(&ts->sched_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	hrtimer_init(&ts->sched_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
 	ts->sched_timer.function = tick_sched_timer;
 
 	/* Get the next period (per-CPU) */
@@ -1342,7 +1349,7 @@ void tick_setup_sched_timer(void)
 	}
 
 	hrtimer_forward(&ts->sched_timer, now, tick_period);
-	hrtimer_start_expires(&ts->sched_timer, HRTIMER_MODE_ABS_PINNED);
+	hrtimer_start_expires(&ts->sched_timer, HRTIMER_MODE_ABS_PINNED_HARD);
 	tick_nohz_activate(ts, NOHZ_MODE_HIGHRES);
 }
 #endif /* HIGH_RES_TIMERS */

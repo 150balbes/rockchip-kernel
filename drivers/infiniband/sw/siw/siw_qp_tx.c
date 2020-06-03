@@ -76,16 +76,15 @@ static int siw_try_1seg(struct siw_iwarp_tx *c_tx, void *paddr)
 			if (unlikely(!p))
 				return -EFAULT;
 
-			buffer = kmap_atomic(p);
+			buffer = kmap(p);
 
 			if (likely(PAGE_SIZE - off >= bytes)) {
 				memcpy(paddr, buffer + off, bytes);
-				kunmap_atomic(buffer);
 			} else {
 				unsigned long part = bytes - (PAGE_SIZE - off);
 
 				memcpy(paddr, buffer + off, part);
-				kunmap_atomic(buffer);
+				kunmap(p);
 
 				if (!mem->is_pbl)
 					p = siw_get_upage(mem->umem,
@@ -97,11 +96,10 @@ static int siw_try_1seg(struct siw_iwarp_tx *c_tx, void *paddr)
 				if (unlikely(!p))
 					return -EFAULT;
 
-				buffer = kmap_atomic(p);
-				memcpy(paddr + part, buffer,
-				       bytes - part);
-				kunmap_atomic(buffer);
+				buffer = kmap(p);
+				memcpy(paddr + part, buffer, bytes - part);
 			}
+			kunmap(p);
 		}
 	}
 	return (int)bytes;
@@ -518,11 +516,12 @@ static int siw_tx_hdt(struct siw_iwarp_tx *c_tx, struct socket *s)
 							c_tx->mpa_crc_hd,
 							iov[seg].iov_base,
 							plen);
-				} else if (do_crc)
-					crypto_shash_update(
-						c_tx->mpa_crc_hd,
-						page_address(p) + fp_off,
-						plen);
+				} else if (do_crc) {
+					crypto_shash_update(c_tx->mpa_crc_hd,
+							    kmap(p) + fp_off,
+							    plen);
+					kunmap(p);
+				}
 			} else {
 				u64 va = sge->laddr + sge_off;
 
@@ -921,20 +920,27 @@ static int siw_fastreg_mr(struct ib_pd *pd, struct siw_sqe *sqe)
 {
 	struct ib_mr *base_mr = (struct ib_mr *)(uintptr_t)sqe->base_mr;
 	struct siw_device *sdev = to_siw_dev(pd->device);
-	struct siw_mem *mem = siw_mem_id2obj(sdev, sqe->rkey  >> 8);
+	struct siw_mem *mem;
 	int rv = 0;
 
 	siw_dbg_pd(pd, "STag 0x%08x\n", sqe->rkey);
 
-	if (unlikely(!mem || !base_mr)) {
+	if (unlikely(!base_mr)) {
 		pr_warn("siw: fastreg: STag 0x%08x unknown\n", sqe->rkey);
 		return -EINVAL;
 	}
+
 	if (unlikely(base_mr->rkey >> 8 != sqe->rkey  >> 8)) {
 		pr_warn("siw: fastreg: STag 0x%08x: bad MR\n", sqe->rkey);
-		rv = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
+
+	mem = siw_mem_id2obj(sdev, sqe->rkey  >> 8);
+	if (unlikely(!mem)) {
+		pr_warn("siw: fastreg: STag 0x%08x unknown\n", sqe->rkey);
+		return -EINVAL;
+	}
+
 	if (unlikely(mem->pd != pd)) {
 		pr_warn("siw: fastreg: PD mismatch\n");
 		rv = -EINVAL;

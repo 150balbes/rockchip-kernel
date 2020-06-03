@@ -19,6 +19,7 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/usb.h>
 #include <linux/usb/pd.h>
 #include <linux/usb/pd_ado.h>
 #include <linux/usb/pd_bdo.h>
@@ -571,17 +572,13 @@ static int tcpm_debug_show(struct seq_file *s, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(tcpm_debug);
 
-static struct dentry *rootdir;
-
 static void tcpm_debugfs_init(struct tcpm_port *port)
 {
-	mutex_init(&port->logbuffer_lock);
-	/* /sys/kernel/debug/tcpm/usbcX */
-	if (!rootdir)
-		rootdir = debugfs_create_dir("tcpm", NULL);
+	char name[NAME_MAX];
 
-	port->dentry = debugfs_create_file(dev_name(port->dev),
-					   S_IFREG | 0444, rootdir,
+	mutex_init(&port->logbuffer_lock);
+	snprintf(name, NAME_MAX, "tcpm-%s", dev_name(port->dev));
+	port->dentry = debugfs_create_file(name, S_IFREG | 0444, usb_debug_root,
 					   port, &tcpm_debug_fops);
 }
 
@@ -597,10 +594,6 @@ static void tcpm_debugfs_exit(struct tcpm_port *port)
 	mutex_unlock(&port->logbuffer_lock);
 
 	debugfs_remove(port->dentry);
-	if (list_empty(&rootdir->d_subdirs)) {
-		debugfs_remove(rootdir);
-		rootdir = NULL;
-	}
 }
 
 #else
@@ -3775,6 +3768,14 @@ static void _tcpm_cc_change(struct tcpm_port *port, enum typec_cc_status cc1,
 		 */
 		break;
 
+	case PORT_RESET:
+	case PORT_RESET_WAIT_OFF:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore CC changes here.
+		 */
+		break;
+
 	default:
 		if (tcpm_port_is_disconnected(port))
 			tcpm_set_state(port, unattached_state(port), 0);
@@ -3836,6 +3837,15 @@ static void _tcpm_pd_vbus_on(struct tcpm_port *port)
 	case SRC_TRY_DEBOUNCE:
 		/* Do nothing, waiting for sink detection */
 		break;
+
+	case PORT_RESET:
+	case PORT_RESET_WAIT_OFF:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore vbus changes here.
+		 */
+		break;
+
 	default:
 		break;
 	}
@@ -3889,10 +3899,19 @@ static void _tcpm_pd_vbus_off(struct tcpm_port *port)
 	case PORT_RESET_WAIT_OFF:
 		tcpm_set_state(port, tcpm_default_state(port), 0);
 		break;
+
 	case SRC_TRY_WAIT:
 	case SRC_TRY_DEBOUNCE:
 		/* Do nothing, waiting for sink detection */
 		break;
+
+	case PORT_RESET:
+		/*
+		 * State set back to default mode once the timer completes.
+		 * Ignore vbus changes here.
+		 */
+		break;
+
 	default:
 		if (port->pwr_role == TYPEC_SINK &&
 		    port->attached)
@@ -4416,26 +4435,27 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
 	/* USB data support is optional */
 	ret = fwnode_property_read_string(fwnode, "data-role", &cap_str);
 	if (ret == 0) {
-		port->typec_caps.data = typec_find_port_data_role(cap_str);
-		if (port->typec_caps.data < 0)
-			return -EINVAL;
+		ret = typec_find_port_data_role(cap_str);
+		if (ret < 0)
+			return ret;
+		port->typec_caps.data = ret;
 	}
 
 	ret = fwnode_property_read_string(fwnode, "power-role", &cap_str);
 	if (ret < 0)
 		return ret;
 
-	port->typec_caps.type = typec_find_port_power_role(cap_str);
-	if (port->typec_caps.type < 0)
-		return -EINVAL;
+	ret = typec_find_port_power_role(cap_str);
+	if (ret < 0)
+		return ret;
+	port->typec_caps.type = ret;
 	port->port_type = port->typec_caps.type;
 
 	if (port->port_type == TYPEC_PORT_SNK)
 		goto sink;
 
 	/* Get source pdos */
-	ret = fwnode_property_read_u32_array(fwnode, "source-pdos",
-					     NULL, 0);
+	ret = fwnode_property_count_u32(fwnode, "source-pdos");
 	if (ret <= 0)
 		return -EINVAL;
 
@@ -4459,8 +4479,7 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
 		return -EINVAL;
 sink:
 	/* Get sink pdos */
-	ret = fwnode_property_read_u32_array(fwnode, "sink-pdos",
-					     NULL, 0);
+	ret = fwnode_property_count_u32(fwnode, "sink-pdos");
 	if (ret <= 0)
 		return -EINVAL;
 

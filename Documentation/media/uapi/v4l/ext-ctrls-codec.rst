@@ -1713,14 +1713,10 @@ enum v4l2_mpeg_video_h264_hierarchical_coding_type -
 
     * - __u8
       - ``scaling_list_4x4[6][16]``
-      - Scaling matrix after applying the inverse scanning process.
-        Expected list order is Intra Y, Intra Cb, Intra Cr, Inter Y,
-        Inter Cb, Inter Cr.
+      -
     * - __u8
       - ``scaling_list_8x8[6][64]``
-      - Scaling matrix after applying the inverse scanning process.
-        Expected list order is Intra Y, Inter Y, Intra Cb, Inter Cb,
-        Intra Cr, Inter Cr.
+      -
 
 ``V4L2_CID_MPEG_VIDEO_H264_SLICE_PARAMS (struct)``
     Specifies the slice parameters (as extracted from the bitstream)
@@ -2026,18 +2022,6 @@ enum v4l2_mpeg_video_h264_hierarchical_coding_type -
     * - ``V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM``
       - 0x00000004
       - The DPB entry is a long term reference frame
-    * - ``V4L2_H264_DPB_ENTRY_FLAG_FIELD_PICTURE``
-      - 0x00000008
-      - The DPB entry is a field picture
-    * - ``V4L2_H264_DPB_ENTRY_FLAG_REF_TOP``
-      - 0x00000010
-      - The DPB entry is a top field reference
-    * - ``V4L2_H264_DPB_ENTRY_FLAG_REF_BOTTOM``
-      - 0x00000020
-      - The DPB entry is a bottom field reference
-    * - ``V4L2_H264_DPB_ENTRY_FLAG_REF_FRAME``
-      - 0x00000030
-      - The DPB entry is a reference frame
 
 ``V4L2_CID_MPEG_VIDEO_H264_DECODE_MODE (enum)``
     Specifies the decoding mode to use. Currently exposes slice-based and

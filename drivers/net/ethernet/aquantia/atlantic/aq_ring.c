@@ -243,9 +243,12 @@ bool aq_ring_tx_clean(struct aq_ring_s *self)
 			}
 		}
 
-		if (unlikely(buff->is_eop))
-			dev_kfree_skb_any(buff->skb);
+		if (unlikely(buff->is_eop)) {
+			++self->stats.rx.packets;
+			self->stats.tx.bytes += buff->skb->len;
 
+			dev_kfree_skb_any(buff->skb);
+		}
 		buff->pa = 0U;
 		buff->eop_index = 0xffffU;
 		self->sw_head = aq_ring_next_dx(self, self->sw_head);
@@ -313,6 +316,7 @@ int aq_ring_rx_clean(struct aq_ring_s *self,
 					break;
 
 				buff->is_error |= buff_->is_error;
+				buff->is_cso_err |= buff_->is_cso_err;
 
 			} while (!buff_->is_eop);
 
@@ -320,7 +324,7 @@ int aq_ring_rx_clean(struct aq_ring_s *self,
 				err = 0;
 				goto err_exit;
 			}
-			if (buff->is_error) {
+			if (buff->is_error || buff->is_cso_err) {
 				buff_ = buff;
 				do {
 					next_ = buff_->next,

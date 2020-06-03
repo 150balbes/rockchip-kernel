@@ -431,7 +431,9 @@ EXPORT_SYMBOL(xfrm_policy_destroy);
 
 static void xfrm_policy_kill(struct xfrm_policy *policy)
 {
+	write_lock_bh(&policy->lock);
 	policy->walk.dead = 1;
+	write_unlock_bh(&policy->lock);
 
 	atomic_inc(&policy->genid);
 
@@ -2808,7 +2810,7 @@ static void xfrm_policy_queue_process(struct timer_list *t)
 			continue;
 		}
 
-		nf_reset(skb);
+		nf_reset_ct(skb);
 		skb_dst_drop(skb);
 		skb_dst_set(skb, dst);
 

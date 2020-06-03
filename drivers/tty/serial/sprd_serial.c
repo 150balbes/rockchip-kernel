@@ -79,6 +79,7 @@
 /* control register 1 */
 #define SPRD_CTL1		0x001C
 #define SPRD_DMA_EN		BIT(15)
+#define SPRD_LOOPBACK_EN	BIT(14)
 #define RX_HW_FLOW_CTL_THLD	BIT(6)
 #define RX_HW_FLOW_CTL_EN	BIT(7)
 #define TX_HW_FLOW_CTL_EN	BIT(8)
@@ -164,7 +165,14 @@ static unsigned int sprd_get_mctrl(struct uart_port *port)
 
 static void sprd_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
-	/* nothing to do */
+	u32 val = serial_in(port, SPRD_CTL1);
+
+	if (mctrl & TIOCM_LOOP)
+		val |= SPRD_LOOPBACK_EN;
+	else
+		val &= ~SPRD_LOOPBACK_EN;
+
+	serial_out(port, SPRD_CTL1, val);
 }
 
 static void sprd_stop_rx(struct uart_port *port)
@@ -609,7 +617,7 @@ static inline void sprd_rx(struct uart_port *port)
 
 		if (lsr & (SPRD_LSR_BI | SPRD_LSR_PE |
 			   SPRD_LSR_FE | SPRD_LSR_OE))
-			if (handle_lsr_errors(port, &lsr, &flag))
+			if (handle_lsr_errors(port, &flag, &lsr))
 				continue;
 		if (uart_handle_sysrq_char(port, ch))
 			continue;
@@ -670,6 +678,9 @@ static irqreturn_t sprd_handle_irq(int irq, void *dev_id)
 
 	if (ims & SPRD_IMSR_TIMEOUT)
 		serial_out(port, SPRD_ICLR, SPRD_ICLR_TIMEOUT);
+
+	if (ims & SPRD_IMSR_BREAK_DETECT)
+		serial_out(port, SPRD_ICLR, SPRD_IMSR_BREAK_DETECT);
 
 	if (ims & (SPRD_IMSR_RX_FIFO_FULL | SPRD_IMSR_BREAK_DETECT |
 		   SPRD_IMSR_TIMEOUT))
@@ -975,7 +986,7 @@ static void sprd_console_write(struct console *co, const char *s,
 
 static int __init sprd_console_setup(struct console *co, char *options)
 {
-	struct uart_port *port;
+	struct sprd_uart_port *sprd_uart_port;
 	int baud = 115200;
 	int bits = 8;
 	int parity = 'n';
@@ -984,15 +995,17 @@ static int __init sprd_console_setup(struct console *co, char *options)
 	if (co->index >= UART_NR_MAX || co->index < 0)
 		co->index = 0;
 
-	port = &sprd_port[co->index]->port;
-	if (port == NULL) {
+	sprd_uart_port = sprd_port[co->index];
+	if (!sprd_uart_port || !sprd_uart_port->port.membase) {
 		pr_info("serial port %d not yet initialized\n", co->index);
 		return -ENODEV;
 	}
+
 	if (options)
 		uart_parse_options(options, &baud, &parity, &bits, &flow);
 
-	return uart_set_options(port, co, baud, parity, bits, flow);
+	return uart_set_options(&sprd_uart_port->port, co, baud,
+				parity, bits, flow);
 }
 
 static struct uart_driver sprd_uart_driver;
@@ -1005,6 +1018,13 @@ static struct console sprd_console = {
 	.index = -1,
 	.data = &sprd_uart_driver,
 };
+
+static int __init sprd_serial_console_init(void)
+{
+	register_console(&sprd_console);
+	return 0;
+}
+console_initcall(sprd_serial_console_init);
 
 #define SPRD_CONSOLE	(&sprd_console)
 
@@ -1083,15 +1103,24 @@ static int sprd_remove(struct platform_device *dev)
 	if (sup) {
 		uart_remove_one_port(&sprd_uart_driver, &sup->port);
 		sprd_port[sup->port.line] = NULL;
+		sprd_rx_free_buf(sup);
 		sprd_ports_num--;
 	}
 
 	if (!sprd_ports_num)
 		uart_unregister_driver(&sprd_uart_driver);
 
-	sprd_rx_free_buf(sup);
-
 	return 0;
+}
+
+static bool sprd_uart_is_console(struct uart_port *uport)
+{
+	struct console *cons = sprd_uart_driver.cons;
+
+	if (cons && cons->index >= 0 && cons->index == uport->line)
+		return true;
+
+	return false;
 }
 
 static int sprd_clk_init(struct uart_port *uport)
@@ -1120,10 +1149,17 @@ static int sprd_clk_init(struct uart_port *uport)
 
 	u->clk = devm_clk_get(uport->dev, "enable");
 	if (IS_ERR(u->clk)) {
-		if (PTR_ERR(u->clk) != -EPROBE_DEFER)
-			dev_err(uport->dev, "uart%d can't get enable clock\n",
-				uport->line);
-		return PTR_ERR(u->clk);
+		if (PTR_ERR(u->clk) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
+		dev_warn(uport->dev, "uart%d can't get enable clock\n",
+			uport->line);
+
+		/* To keep console alive even if the error occurred */
+		if (!sprd_uart_is_console(uport))
+			return PTR_ERR(u->clk);
+
+		u->clk = NULL;
 	}
 
 	return 0;
@@ -1173,10 +1209,8 @@ static int sprd_probe(struct platform_device *pdev)
 	up->mapbase = res->start;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "not provide irq resource: %d\n", irq);
+	if (irq < 0)
 		return irq;
-	}
 	up->irq = irq;
 
 	/*

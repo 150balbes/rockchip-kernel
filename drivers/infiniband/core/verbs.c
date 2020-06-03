@@ -662,16 +662,17 @@ static bool find_gid_index(const union ib_gid *gid,
 			   void *context)
 {
 	struct find_gid_index_context *ctx = context;
+	u16 vlan_id = 0xffff;
+	int ret;
 
 	if (ctx->gid_type != gid_attr->gid_type)
 		return false;
 
-	if ((!!(ctx->vlan_id != 0xffff) == !is_vlan_dev(gid_attr->ndev)) ||
-	    (is_vlan_dev(gid_attr->ndev) &&
-	     vlan_dev_vlan_id(gid_attr->ndev) != ctx->vlan_id))
+	ret = rdma_read_gid_l2_fields(gid_attr, &vlan_id, NULL);
+	if (ret)
 		return false;
 
-	return true;
+	return ctx->vlan_id == vlan_id;
 }
 
 static const struct ib_gid_attr *
@@ -1178,16 +1179,6 @@ struct ib_qp *ib_create_qp_user(struct ib_pd *pd,
 	ret = ib_create_qp_security(qp, device);
 	if (ret)
 		goto err;
-
-	qp->qp_type    = qp_init_attr->qp_type;
-	qp->rwq_ind_tbl = qp_init_attr->rwq_ind_tbl;
-
-	atomic_set(&qp->usecnt, 0);
-	qp->mrs_used = 0;
-	spin_lock_init(&qp->mr_lock);
-	INIT_LIST_HEAD(&qp->rdma_mrs);
-	INIT_LIST_HEAD(&qp->sig_mrs);
-	qp->port = 0;
 
 	if (qp_init_attr->qp_type == IB_QPT_XRC_TGT) {
 		struct ib_qp *xrc_qp =
@@ -2259,6 +2250,7 @@ int ib_dealloc_xrcd(struct ib_xrcd *xrcd, struct ib_udata *udata)
 		if (ret)
 			return ret;
 	}
+	mutex_destroy(&xrcd->tgt_qp_mutex);
 
 	return xrcd->device->ops.dealloc_xrcd(xrcd, udata);
 }

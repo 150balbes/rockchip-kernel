@@ -19,6 +19,7 @@
 #include <linux/mm.h>
 #include <linux/hyperv.h>
 #include <linux/slab.h>
+#include <linux/kernel.h>
 #include <linux/cpuhotplug.h>
 #include <clocksource/hyperv_timer.h>
 
@@ -36,6 +37,20 @@ EXPORT_SYMBOL_GPL(hyperv_pcpu_input_arg);
 
 u32 hv_max_vp_index;
 EXPORT_SYMBOL_GPL(hv_max_vp_index);
+
+void *hv_alloc_hyperv_page(void)
+{
+	BUILD_BUG_ON(PAGE_SIZE != HV_HYP_PAGE_SIZE);
+
+	return (void *)__get_free_page(GFP_KERNEL);
+}
+EXPORT_SYMBOL_GPL(hv_alloc_hyperv_page);
+
+void hv_free_hyperv_page(unsigned long addr)
+{
+	free_page(addr);
+}
+EXPORT_SYMBOL_GPL(hv_free_hyperv_page);
 
 static int hv_cpu_init(unsigned int cpu)
 {
@@ -301,8 +316,6 @@ void __init hyperv_init(void)
 
 	x86_init.pci.arch_init = hv_pci_init;
 
-	/* Register Hyper-V specific clocksource */
-	hv_init_clocksource();
 	return;
 
 remove_cpuhp_state:
@@ -342,10 +355,13 @@ void hyperv_cleanup(void)
 }
 EXPORT_SYMBOL_GPL(hyperv_cleanup);
 
-void hyperv_report_panic(struct pt_regs *regs, long err)
+void hyperv_report_panic(struct pt_regs *regs, long err, bool in_die)
 {
 	static bool panic_reported;
 	u64 guest_id;
+
+	if (in_die && !panic_on_oops)
+		return;
 
 	/*
 	 * We prefer to report panic on 'die' chain as we have proper

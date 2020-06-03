@@ -31,7 +31,6 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_print.h>
-#include <drm/drm_os_linux.h>
 #include <drm/drm_vblank.h>
 
 #include "drm_internal.h"
@@ -1582,7 +1581,7 @@ int drm_wait_vblank_ioctl(struct drm_device *dev, void *data,
 	unsigned int flags, pipe, high_pipe;
 
 	if (!dev->irq_enabled)
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	if (vblwait->request.type & _DRM_VBLANK_SIGNAL)
 		return -EINVAL;
@@ -1670,12 +1669,28 @@ int drm_wait_vblank_ioctl(struct drm_device *dev, void *data,
 	}
 
 	if (req_seq != seq) {
+		int wait;
+
 		DRM_DEBUG("waiting on vblank count %llu, crtc %u\n",
 			  req_seq, pipe);
-		DRM_WAIT_ON(ret, vblank->queue, 3 * HZ,
-			    vblank_passed(drm_vblank_count(dev, pipe),
-					  req_seq) ||
-			    !READ_ONCE(vblank->enabled));
+		wait = wait_event_interruptible_timeout(vblank->queue,
+			vblank_passed(drm_vblank_count(dev, pipe), req_seq) ||
+				      !READ_ONCE(vblank->enabled),
+			msecs_to_jiffies(3000));
+
+		switch (wait) {
+		case 0:
+			/* timeout */
+			ret = -EBUSY;
+			break;
+		case -ERESTARTSYS:
+			/* interrupted by signal */
+			ret = -EINTR;
+			break;
+		default:
+			ret = 0;
+			break;
+		}
 	}
 
 	if (ret != -EINTR) {
@@ -1823,7 +1838,7 @@ int drm_crtc_get_sequence_ioctl(struct drm_device *dev, void *data,
 		return -EOPNOTSUPP;
 
 	if (!dev->irq_enabled)
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	crtc = drm_crtc_find(dev, file_priv, get_seq->crtc_id);
 	if (!crtc)
@@ -1881,7 +1896,7 @@ int drm_crtc_queue_sequence_ioctl(struct drm_device *dev, void *data,
 		return -EOPNOTSUPP;
 
 	if (!dev->irq_enabled)
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	crtc = drm_crtc_find(dev, file_priv, queue_seq->crtc_id);
 	if (!crtc)

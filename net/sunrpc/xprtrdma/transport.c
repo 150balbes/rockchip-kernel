@@ -423,17 +423,19 @@ void xprt_rdma_close(struct rpc_xprt *xprt)
 
 	if (ep->rep_connected == -ENODEV)
 		return;
-	if (ep->rep_connected > 0)
-		xprt->reestablish_timeout = 0;
 	rpcrdma_ep_disconnect(ep, ia);
 
 	/* Prepare @xprt for the next connection by reinitializing
 	 * its credit grant to one (see RFC 8166, Section 3.3.3).
 	 */
+	spin_lock(&xprt->transport_lock);
 	r_xprt->rx_buf.rb_credits = 1;
+	xprt->cong = 0;
 	xprt->cwnd = RPC_CWNDSHIFT;
+	spin_unlock(&xprt->transport_lock);
 
 out:
+	xprt->reestablish_timeout = 0;
 	++xprt->connect_cookie;
 	xprt_disconnect_done(xprt);
 }
@@ -494,9 +496,9 @@ xprt_rdma_timer(struct rpc_xprt *xprt, struct rpc_task *task)
  * @reconnect_timeout: reconnect timeout after server disconnects
  *
  */
-static void xprt_rdma_tcp_set_connect_timeout(struct rpc_xprt *xprt,
-					      unsigned long connect_timeout,
-					      unsigned long reconnect_timeout)
+static void xprt_rdma_set_connect_timeout(struct rpc_xprt *xprt,
+					  unsigned long connect_timeout,
+					  unsigned long reconnect_timeout)
 {
 	struct rpcrdma_xprt *r_xprt = rpcx_to_rdmax(xprt);
 
@@ -571,6 +573,7 @@ xprt_rdma_alloc_slot(struct rpc_xprt *xprt, struct rpc_task *task)
 	return;
 
 out_sleep:
+	set_bit(XPRT_CONGESTED, &xprt->state);
 	rpc_sleep_on(&xprt->backlog, task, NULL);
 	task->tk_status = -EAGAIN;
 }
@@ -589,7 +592,8 @@ xprt_rdma_free_slot(struct rpc_xprt *xprt, struct rpc_rqst *rqst)
 
 	memset(rqst, 0, sizeof(*rqst));
 	rpcrdma_buffer_put(&r_xprt->rx_buf, rpcr_to_rdmar(rqst));
-	rpc_wake_up_next(&xprt->backlog);
+	if (unlikely(!rpc_wake_up_next(&xprt->backlog)))
+		clear_bit(XPRT_CONGESTED, &xprt->state);
 }
 
 static bool rpcrdma_check_regbuf(struct rpcrdma_xprt *r_xprt,
@@ -803,7 +807,7 @@ static const struct rpc_xprt_ops xprt_rdma_procs = {
 	.send_request		= xprt_rdma_send_request,
 	.close			= xprt_rdma_close,
 	.destroy		= xprt_rdma_destroy,
-	.set_connect_timeout	= xprt_rdma_tcp_set_connect_timeout,
+	.set_connect_timeout	= xprt_rdma_set_connect_timeout,
 	.print_stats		= xprt_rdma_print_stats,
 	.enable_swap		= xprt_rdma_enable_swap,
 	.disable_swap		= xprt_rdma_disable_swap,

@@ -70,8 +70,20 @@ static void __crst_table_upgrade(void *arg)
 {
 	struct mm_struct *mm = arg;
 
-	if (current->active_mm == mm)
-		set_user_asce(mm);
+	/* we must change all active ASCEs to avoid the creation of new TLBs */
+	if (current->active_mm == mm) {
+		S390_lowcore.user_asce = mm->context.asce;
+		if (current->thread.mm_segment == USER_DS) {
+			__ctl_load(S390_lowcore.user_asce, 1, 1);
+			/* Mark user-ASCE present in CR1 */
+			clear_cpu_flag(CIF_ASCE_PRIMARY);
+		}
+		if (current->thread.mm_segment == USER_DS_SACF) {
+			__ctl_load(S390_lowcore.user_asce, 7, 7);
+			/* enable_sacf_uaccess does all or nothing */
+			WARN_ON(!test_cpu_flag(CIF_ASCE_SECONDARY));
+		}
+	}
 	__tlb_flush_local();
 }
 
@@ -210,7 +222,7 @@ unsigned long *page_table_alloc(struct mm_struct *mm)
 	page = alloc_page(GFP_KERNEL);
 	if (!page)
 		return NULL;
-	if (!pgtable_page_ctor(page)) {
+	if (!pgtable_pte_page_ctor(page)) {
 		__free_page(page);
 		return NULL;
 	}
@@ -256,7 +268,7 @@ void page_table_free(struct mm_struct *mm, unsigned long *table)
 		atomic_xor_bits(&page->_refcount, 3U << 24);
 	}
 
-	pgtable_page_dtor(page);
+	pgtable_pte_page_dtor(page);
 	__free_page(page);
 }
 
@@ -308,7 +320,7 @@ void __tlb_remove_table(void *_table)
 	case 3:		/* 4K page table with pgstes */
 		if (mask & 3)
 			atomic_xor_bits(&page->_refcount, 3 << 24);
-		pgtable_page_dtor(page);
+		pgtable_pte_page_dtor(page);
 		__free_page(page);
 		break;
 	}

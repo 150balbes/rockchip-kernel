@@ -171,10 +171,9 @@ struct snd_sof_dsp_ops {
 	int (*post_fw_run)(struct snd_sof_dev *sof_dev); /* optional */
 
 	/* DSP PM */
-	int (*suspend)(struct snd_sof_dev *sof_dev, int state); /* optional */
+	int (*suspend)(struct snd_sof_dev *sof_dev); /* optional */
 	int (*resume)(struct snd_sof_dev *sof_dev); /* optional */
-	int (*runtime_suspend)(struct snd_sof_dev *sof_dev,
-			       int state); /* optional */
+	int (*runtime_suspend)(struct snd_sof_dev *sof_dev); /* optional */
 	int (*runtime_resume)(struct snd_sof_dev *sof_dev); /* optional */
 	int (*runtime_idle)(struct snd_sof_dev *sof_dev); /* optional */
 	int (*set_hw_params_upon_resume)(struct snd_sof_dev *sdev); /* optional */
@@ -195,6 +194,13 @@ struct snd_sof_dsp_ops {
 	int (*trace_release)(struct snd_sof_dev *sdev); /* optional */
 	int (*trace_trigger)(struct snd_sof_dev *sdev,
 			     int cmd); /* optional */
+
+	/* misc */
+	int (*get_bar_index)(struct snd_sof_dev *sdev,
+			     u32 type); /* optional */
+	int (*get_mailbox_offset)(struct snd_sof_dev *sdev);/* mandatory for common loader code */
+	int (*get_window_offset)(struct snd_sof_dev *sdev,
+				 u32 id);/* mandatory for common loader code */
 
 	/* DAI ops */
 	struct snd_soc_dai_driver *drv;
@@ -228,7 +234,6 @@ enum sof_debugfs_access_type {
 
 /* FS entry for debug files that can expose DSP memories, registers */
 struct snd_sof_dfsentry {
-	struct dentry *dfsentry;
 	size_t size;
 	enum sof_dfsentry_type type;
 	/*
@@ -297,7 +302,7 @@ struct snd_sof_pcm {
 	struct snd_sof_pcm_stream stream[2];
 	struct list_head list;	/* list in sdev pcm list */
 	struct snd_pcm_hw_params params[2];
-	int hw_params_upon_resume[2]; /* set up hw_params upon resume */
+	bool prepared[2]; /* PCM_PARAMS set successfully */
 };
 
 /* ALSA SOF Kcontrol device */
@@ -351,6 +356,15 @@ struct snd_sof_dai {
 	struct list_head list;	/* list in sdev dai list */
 };
 
+enum snd_sof_fw_state {
+	SOF_FW_BOOT_NOT_STARTED = 0,
+	SOF_FW_BOOT_PREPARE,
+	SOF_FW_BOOT_IN_PROGRESS,
+	SOF_FW_BOOT_FAILED,
+	SOF_FW_BOOT_READY_FAILED, /* firmware booted but fw_ready op failed */
+	SOF_FW_BOOT_COMPLETE,
+};
+
 /*
  * SOF Device Level.
  */
@@ -367,7 +381,7 @@ struct snd_sof_dev {
 
 	/* DSP firmware boot */
 	wait_queue_head_t boot_wait;
-	u32 boot_complete;
+	enum snd_sof_fw_state fw_state;
 	u32 first_boot;
 
 	/* work queue in case the probe is implemented in two steps */
@@ -433,7 +447,7 @@ struct snd_sof_dev {
 	u32 dtrace_error;
 	u32 dtrace_draining;
 
-	u32 msi_enabled;
+	bool msi_enabled;
 
 	void *private;			/* core does not touch this */
 };
@@ -636,6 +650,8 @@ void sof_block_write(struct snd_sof_dev *sdev, u32 bar, u32 offset, void *src,
 		     size_t size);
 void sof_block_read(struct snd_sof_dev *sdev, u32 bar, u32 offset, void *dest,
 		    size_t size);
+
+int sof_fw_ready(struct snd_sof_dev *sdev, u32 msg_id);
 
 void intel_ipc_msg_data(struct snd_sof_dev *sdev,
 			struct snd_pcm_substream *substream,

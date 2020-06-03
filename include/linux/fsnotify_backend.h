@@ -133,8 +133,7 @@ struct fsnotify_ops {
  */
 struct fsnotify_event {
 	struct list_head list;
-	/* inode may ONLY be dereferenced during handle_event(). */
-	struct inode *inode;	/* either the inode the event happened to or its parent */
+	unsigned long objectid;	/* identifier for queue merges */
 };
 
 /*
@@ -475,6 +474,8 @@ extern void fsnotify_destroy_mark(struct fsnotify_mark *mark,
 extern void fsnotify_detach_mark(struct fsnotify_mark *mark);
 /* free mark */
 extern void fsnotify_free_mark(struct fsnotify_mark *mark);
+/* Wait until all marks queued for destruction are destroyed */
+extern void fsnotify_wait_marks_destroyed(void);
 /* run all the marks in a group, and clear all of the marks attached to given object type */
 extern void fsnotify_clear_marks_by_group(struct fsnotify_group *group, unsigned int type);
 /* run all the marks in a group, and clear all of the vfsmount marks */
@@ -498,10 +499,10 @@ extern void fsnotify_finish_user_wait(struct fsnotify_iter_info *iter_info);
 extern bool fsnotify_prepare_user_wait(struct fsnotify_iter_info *iter_info);
 
 static inline void fsnotify_init_event(struct fsnotify_event *event,
-				       struct inode *inode)
+				       unsigned long objectid)
 {
 	INIT_LIST_HEAD(&event->list);
-	event->inode = inode;
+	event->objectid = objectid;
 }
 
 #else

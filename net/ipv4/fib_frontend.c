@@ -124,7 +124,8 @@ struct fib_table *fib_get_table(struct net *net, u32 id)
 	h = id & (FIB_TABLE_HASHSZ - 1);
 
 	head = &net->ipv4.fib_table_hash[h];
-	hlist_for_each_entry_rcu(tb, head, tb_hlist) {
+	hlist_for_each_entry_rcu(tb, head, tb_hlist,
+				 lockdep_rtnl_is_held()) {
 		if (tb->tb_id == id)
 			return tb;
 	}
@@ -1006,7 +1007,9 @@ static int inet_dump_fib(struct sk_buff *skb, struct netlink_callback *cb)
 			return -ENOENT;
 		}
 
+		rcu_read_lock();
 		err = fib_table_dump(tb, skb, cb, &filter);
+		rcu_read_unlock();
 		return skb->len ? : err;
 	}
 
@@ -1147,7 +1150,7 @@ void fib_modify_prefix_metric(struct in_ifaddr *ifa, u32 new_metric)
 	if (!(dev->flags & IFF_UP) ||
 	    ifa->ifa_flags & (IFA_F_SECONDARY | IFA_F_NOPREFIXROUTE) ||
 	    ipv4_is_zeronet(prefix) ||
-	    prefix == ifa->ifa_local || ifa->ifa_prefixlen == 32)
+	    (prefix == ifa->ifa_local && ifa->ifa_prefixlen == 32))
 		return;
 
 	/* add the new */

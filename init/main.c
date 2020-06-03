@@ -433,7 +433,7 @@ noinline void __ref rest_init(void)
 
 	/*
 	 * Enable might_sleep() and smp_processor_id() checks.
-	 * They cannot be enabled earlier because with CONFIG_PREEMPT=y
+	 * They cannot be enabled earlier because with CONFIG_PREEMPTION=y
 	 * kernel_thread() would trigger might_sleep() splats. With
 	 * CONFIG_PREEMPT_VOLUNTARY=y the init task might have scheduled
 	 * already, but it's stuck on the kthreadd_done completion.
@@ -507,7 +507,7 @@ void __init __weak mem_encrypt_init(void) { }
 
 void __init __weak poking_init(void) { }
 
-void __init __weak pgd_cache_init(void) { }
+void __init __weak pgtable_cache_init(void) { }
 
 bool initcall_debug;
 core_param(initcall_debug, initcall_debug, bool, 0644);
@@ -553,9 +553,11 @@ static void __init mm_init(void)
 	 * bigger than MAX_ORDER unless SPARSEMEM.
 	 */
 	page_ext_init_flatmem();
+	init_debug_pagealloc();
 	report_meminit();
 	mem_init();
 	kmem_cache_init();
+	kmemleak_init();
 	pgtable_init();
 	debug_objects_mem_init();
 	vmalloc_init();
@@ -564,7 +566,6 @@ static void __init mm_init(void)
 	init_espfix_bsp();
 	/* Should be run after espfix64 is set up. */
 	pti_init();
-	pgd_cache_init();
 }
 
 void __init __weak arch_call_rest_init(void)
@@ -593,8 +594,8 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_cpu_init();
 	page_address_init();
 	pr_notice("%s", linux_banner);
+	early_security_init();
 	setup_arch(&command_line);
-	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
@@ -693,7 +694,6 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_init_stack_canary();
 
 	time_init();
-	printk_safe_init();
 	perf_event_init();
 	profile_init();
 	call_function_init();
@@ -740,7 +740,6 @@ asmlinkage __visible void __init start_kernel(void)
 		initrd_start = 0;
 	}
 #endif
-	kmemleak_init();
 	setup_per_cpu_pageset();
 	numa_policy_init();
 	acpi_early_init();
@@ -783,6 +782,8 @@ asmlinkage __visible void __init start_kernel(void)
 
 	/* Do the rest non-__init'ed, we're now alive */
 	arch_call_rest_init();
+
+	prevent_tail_call_optimization();
 }
 
 /* Call all constructor functions linked into the kernel. */

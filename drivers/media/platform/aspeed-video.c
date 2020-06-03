@@ -606,6 +606,16 @@ static irqreturn_t aspeed_video_irq(int irq, void *arg)
 			aspeed_video_start_frame(video);
 	}
 
+	/*
+	 * CAPTURE_COMPLETE and FRAME_COMPLETE interrupts come even when these
+	 * are disabled in the VE_INTERRUPT_CTRL register so clear them to
+	 * prevent unnecessary interrupt calls.
+	 */
+	if (sts & VE_INTERRUPT_CAPTURE_COMPLETE)
+		sts &= ~VE_INTERRUPT_CAPTURE_COMPLETE;
+	if (sts & VE_INTERRUPT_FRAME_COMPLETE)
+		sts &= ~VE_INTERRUPT_FRAME_COMPLETE;
+
 	return sts ? IRQ_NONE : IRQ_HANDLED;
 }
 
@@ -630,7 +640,7 @@ static void aspeed_video_check_and_set_polarity(struct aspeed_video *video)
 	}
 
 	if (hsync_counter < 0 || vsync_counter < 0) {
-		u32 ctrl;
+		u32 ctrl = 0;
 
 		if (hsync_counter < 0) {
 			ctrl = VE_CTRL_HSYNC_POL;
@@ -650,7 +660,8 @@ static void aspeed_video_check_and_set_polarity(struct aspeed_video *video)
 				V4L2_DV_VSYNC_POS_POL;
 		}
 
-		aspeed_video_update(video, VE_CTRL, 0, ctrl);
+		if (ctrl)
+			aspeed_video_update(video, VE_CTRL, 0, ctrl);
 	}
 }
 
@@ -740,6 +751,8 @@ static void aspeed_video_get_resolution(struct aspeed_video *video)
 		}
 
 		set_bit(VIDEO_RES_DETECT, &video->flags);
+		aspeed_video_update(video, VE_CTRL,
+				    VE_CTRL_VSYNC_POL | VE_CTRL_HSYNC_POL, 0);
 		aspeed_video_enable_mode_detect(video);
 
 		rc = wait_event_interruptible_timeout(video->wait,
@@ -1624,6 +1637,7 @@ static int aspeed_video_init(struct aspeed_video *video)
 	if (!aspeed_video_alloc_buf(video, &video->jpeg,
 				    VE_JPEG_HEADER_SIZE)) {
 		dev_err(dev, "Failed to allocate DMA for JPEG header\n");
+		rc = -ENOMEM;
 		goto err_release_reserved_mem;
 	}
 
@@ -1644,7 +1658,8 @@ static int aspeed_video_probe(struct platform_device *pdev)
 {
 	int rc;
 	struct resource *res;
-	struct aspeed_video *video = kzalloc(sizeof(*video), GFP_KERNEL);
+	struct aspeed_video *video =
+		devm_kzalloc(&pdev->dev, sizeof(*video), GFP_KERNEL);
 
 	if (!video)
 		return -ENOMEM;

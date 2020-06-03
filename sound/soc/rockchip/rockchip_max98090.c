@@ -66,10 +66,13 @@ static int rk_jack_event(struct notifier_block *nb, unsigned long event,
 	struct snd_soc_jack *jack = (struct snd_soc_jack *)data;
 	struct snd_soc_dapm_context *dapm = &jack->card->dapm;
 
-	if (event & SND_JACK_MICROPHONE)
+	if (event & SND_JACK_MICROPHONE) {
 		snd_soc_dapm_force_enable_pin(dapm, "MICBIAS");
-	else
+		snd_soc_dapm_force_enable_pin(dapm, "SHDN");
+	} else {
 		snd_soc_dapm_disable_pin(dapm, "MICBIAS");
+		snd_soc_dapm_disable_pin(dapm, "SHDN");
+	}
 
 	snd_soc_dapm_sync(dapm);
 
@@ -171,7 +174,7 @@ static struct snd_soc_dai_link rk_dailink = {
 static int rk_98090_headset_init(struct snd_soc_component *component);
 
 static struct snd_soc_aux_dev rk_98090_headset_dev = {
-	.name = "Headset Chip",
+	.dlc = COMP_EMPTY(),
 	.init = rk_98090_headset_init,
 };
 
@@ -237,9 +240,9 @@ static int snd_rk_mc_probe(struct platform_device *pdev)
 
 	rk_dailink.platforms->of_node = rk_dailink.cpus->of_node;
 
-	rk_98090_headset_dev.codec_of_node = of_parse_phandle(np,
+	rk_98090_headset_dev.dlc.of_node = of_parse_phandle(np,
 			"rockchip,headset-codec", 0);
-	if (!rk_98090_headset_dev.codec_of_node) {
+	if (!rk_98090_headset_dev.dlc.of_node) {
 		dev_err(&pdev->dev,
 			"Property 'rockchip,headset-codec' missing/invalid\n");
 		return -EINVAL;

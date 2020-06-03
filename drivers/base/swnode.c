@@ -51,7 +51,7 @@ EXPORT_SYMBOL_GPL(is_software_node);
 static struct swnode *
 software_node_to_swnode(const struct software_node *node)
 {
-	struct swnode *swnode;
+	struct swnode *swnode = NULL;
 	struct kobject *k;
 
 	if (!node)
@@ -520,7 +520,10 @@ software_node_get_parent(const struct fwnode_handle *fwnode)
 {
 	struct swnode *swnode = to_swnode(fwnode);
 
-	return swnode ? (swnode->parent ? &swnode->parent->fwnode : NULL) : NULL;
+	if (!swnode || !swnode->parent)
+		return NULL;
+
+	return fwnode_handle_get(&swnode->parent->fwnode);
 }
 
 static struct fwnode_handle *
@@ -620,6 +623,43 @@ static const struct fwnode_operations software_node_ops = {
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * software_node_find_by_name - Find software node by name
+ * @parent: Parent of the software node
+ * @name: Name of the software node
+ *
+ * The function will find a node that is child of @parent and that is named
+ * @name. If no node is found, the function returns NULL.
+ *
+ * NOTE: you will need to drop the reference with fwnode_handle_put() after use.
+ */
+const struct software_node *
+software_node_find_by_name(const struct software_node *parent, const char *name)
+{
+	struct swnode *swnode = NULL;
+	struct kobject *k;
+
+	if (!name)
+		return NULL;
+
+	spin_lock(&swnode_kset->list_lock);
+
+	list_for_each_entry(k, &swnode_kset->list, entry) {
+		swnode = kobj_to_swnode(k);
+		if (parent == swnode->node->parent && swnode->node->name &&
+		    !strcmp(name, swnode->node->name)) {
+			kobject_get(&swnode->kobj);
+			break;
+		}
+		swnode = NULL;
+	}
+
+	spin_unlock(&swnode_kset->list_lock);
+
+	return swnode ? swnode->node : NULL;
+}
+EXPORT_SYMBOL_GPL(software_node_find_by_name);
+
 static int
 software_node_register_properties(struct software_node *node,
 				  const struct property_entry *properties)
@@ -638,6 +678,13 @@ software_node_register_properties(struct software_node *node,
 static void software_node_release(struct kobject *kobj)
 {
 	struct swnode *swnode = kobj_to_swnode(kobj);
+
+	if (swnode->parent) {
+		ida_simple_remove(&swnode->parent->child_ids, swnode->id);
+		list_del(&swnode->entry);
+	} else {
+		ida_simple_remove(&swnode_root_ids, swnode->id);
+	}
 
 	if (swnode->allocated) {
 		property_entries_free(swnode->node->properties);
@@ -803,13 +850,6 @@ void fwnode_remove_software_node(struct fwnode_handle *fwnode)
 
 	if (!swnode)
 		return;
-
-	if (swnode->parent) {
-		ida_simple_remove(&swnode->parent->child_ids, swnode->id);
-		list_del(&swnode->entry);
-	} else {
-		ida_simple_remove(&swnode_root_ids, swnode->id);
-	}
 
 	kobject_put(&swnode->kobj);
 }

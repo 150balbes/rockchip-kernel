@@ -81,8 +81,10 @@ static int st1232_ts_read_data(struct st1232_ts_data *ts)
 	for (i = 0, y = 0; i < ts->chip_info->max_fingers; i++, y += 3) {
 		finger[i].is_valid = buf[i + y] >> 7;
 		if (finger[i].is_valid) {
-			finger[i].x = ((buf[i + y] & 0x0070) << 4) | buf[i + 1];
-			finger[i].y = ((buf[i + y] & 0x0007) << 8) | buf[i + 2];
+			finger[i].x = ((buf[i + y] & 0x0070) << 4) |
+					buf[i + y + 1];
+			finger[i].y = ((buf[i + y] & 0x0007) << 8) |
+					buf[i + y + 2];
 
 			/* st1232 includes a z-axis / touch strength */
 			if (ts->chip_info->have_z)
@@ -145,6 +147,11 @@ static void st1232_ts_power(struct st1232_ts_data *ts, bool poweron)
 {
 	if (ts->reset_gpio)
 		gpiod_set_value_cansleep(ts->reset_gpio, !poweron);
+}
+
+static void st1232_ts_power_off(void *data)
+{
+	st1232_ts_power(data, false);
 }
 
 static const struct st_chip_info st1232_chip_info = {
@@ -227,6 +234,13 @@ static int st1232_ts_probe(struct i2c_client *client,
 
 	st1232_ts_power(ts, true);
 
+	error = devm_add_action_or_reset(&client->dev, st1232_ts_power_off, ts);
+	if (error) {
+		dev_err(&client->dev,
+			"Failed to install power off action: %d\n", error);
+		return error;
+	}
+
 	input_dev->name = "st1232-touchscreen";
 	input_dev->id.bustype = BUS_I2C;
 	input_dev->dev.parent = &client->dev;
@@ -265,15 +279,6 @@ static int st1232_ts_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, ts);
 	device_init_wakeup(&client->dev, 1);
-
-	return 0;
-}
-
-static int st1232_ts_remove(struct i2c_client *client)
-{
-	struct st1232_ts_data *ts = i2c_get_clientdata(client);
-
-	st1232_ts_power(ts, false);
 
 	return 0;
 }
@@ -327,7 +332,6 @@ MODULE_DEVICE_TABLE(of, st1232_ts_dt_ids);
 
 static struct i2c_driver st1232_ts_driver = {
 	.probe		= st1232_ts_probe,
-	.remove		= st1232_ts_remove,
 	.id_table	= st1232_ts_id,
 	.driver = {
 		.name	= ST1232_TS_NAME,

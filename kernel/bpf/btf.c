@@ -195,8 +195,8 @@
 	     i < btf_type_vlen(struct_type);					\
 	     i++, member++)
 
-static DEFINE_IDR(btf_idr);
-static DEFINE_SPINLOCK(btf_idr_lock);
+DEFINE_IDR(btf_idr);
+DEFINE_SPINLOCK(btf_idr_lock);
 
 struct btf {
 	void *data;
@@ -2309,7 +2309,7 @@ static int btf_enum_check_member(struct btf_verifier_env *env,
 
 	struct_size = struct_type->size;
 	bytes_offset = BITS_ROUNDDOWN_BYTES(struct_bits_off);
-	if (struct_size - bytes_offset < sizeof(int)) {
+	if (struct_size - bytes_offset < member_type->size) {
 		btf_verifier_log_member(env, struct_type, member,
 					"Member exceeds struct_size");
 		return -EINVAL;
@@ -2332,7 +2332,7 @@ static int btf_enum_check_kflag_member(struct btf_verifier_env *env,
 		if (BITS_PER_BYTE_MASKED(struct_bits_off)) {
 			btf_verifier_log_member(env, struct_type, member,
 						"Member is not byte aligned");
-				return -EINVAL;
+			return -EINVAL;
 		}
 
 		nr_bits = int_bitsize;
@@ -2377,9 +2377,8 @@ static s32 btf_enum_check_meta(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	if (t->size != sizeof(int)) {
-		btf_verifier_log_type(env, t, "Expected size:%zu",
-				      sizeof(int));
+	if (t->size > 8 || !is_power_of_2(t->size)) {
+		btf_verifier_log_type(env, t, "Unexpected size");
 		return -EINVAL;
 	}
 
@@ -3376,6 +3375,15 @@ void btf_type_seq_show(const struct btf *btf, u32 type_id, void *obj,
 	btf_type_ops(t)->seq_show(btf, t, type_id, obj, 0, m);
 }
 
+#ifdef CONFIG_PROC_FS
+static void bpf_btf_show_fdinfo(struct seq_file *m, struct file *filp)
+{
+	const struct btf *btf = filp->private_data;
+
+	seq_printf(m, "btf_id:\t%u\n", btf->id);
+}
+#endif
+
 static int btf_release(struct inode *inode, struct file *filp)
 {
 	btf_put(filp->private_data);
@@ -3383,6 +3391,9 @@ static int btf_release(struct inode *inode, struct file *filp)
 }
 
 const struct file_operations btf_fops = {
+#ifdef CONFIG_PROC_FS
+	.show_fdinfo	= bpf_btf_show_fdinfo,
+#endif
 	.release	= btf_release,
 };
 
@@ -3449,7 +3460,7 @@ int btf_get_info_by_fd(const struct btf *btf,
 		       union bpf_attr __user *uattr)
 {
 	struct bpf_btf_info __user *uinfo;
-	struct bpf_btf_info info = {};
+	struct bpf_btf_info info;
 	u32 info_copy, btf_copy;
 	void __user *ubtf;
 	u32 uinfo_len;
@@ -3458,6 +3469,7 @@ int btf_get_info_by_fd(const struct btf *btf,
 	uinfo_len = attr->info.info_len;
 
 	info_copy = min_t(u32, uinfo_len, sizeof(info));
+	memset(&info, 0, sizeof(info));
 	if (copy_from_user(&info, uinfo, info_copy))
 		return -EFAULT;
 

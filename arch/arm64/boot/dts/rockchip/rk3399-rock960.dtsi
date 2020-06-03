@@ -643,3 +643,11 @@
 &vopb_mmu {
 	status = "okay";
 };
+
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
+	status = "okay";
+};

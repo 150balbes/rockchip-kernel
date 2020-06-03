@@ -43,7 +43,9 @@
 #include "free-space-cache.h"
 #include "backref.h"
 #include "space-info.h"
+#include "sysfs.h"
 #include "tests/btrfs-tests.h"
+#include "block-group.h"
 
 #include "qgroup.h"
 #define CREATE_TRACE_POINTS
@@ -1802,6 +1804,8 @@ static int btrfs_remount(struct super_block *sb, int *flags, char *data)
 		}
 
 		if (btrfs_super_log_root(fs_info->super_copy) != 0) {
+			btrfs_warn(fs_info,
+		"mount required to replay tree-log, cannot remount read-write");
 			ret = -EINVAL;
 			goto restore;
 		}
@@ -1899,11 +1903,10 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 	struct btrfs_device_info *devices_info;
 	struct btrfs_fs_devices *fs_devices = fs_info->fs_devices;
 	struct btrfs_device *device;
-	u64 skip_space;
 	u64 type;
 	u64 avail_space;
 	u64 min_stripe_size;
-	int min_stripes, num_stripes = 1;
+	int num_stripes = 1;
 	int i = 0, nr_devices;
 	const struct btrfs_raid_attr *rattr;
 
@@ -1930,7 +1933,6 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 	/* calc min stripe number for data space allocation */
 	type = btrfs_data_alloc_profile(fs_info);
 	rattr = &btrfs_raid_array[btrfs_bg_flags_to_raid_index(type)];
-	min_stripes = rattr->devs_min;
 
 	if (type & BTRFS_BLOCK_GROUP_RAID0)
 		num_stripes = nr_devices;
@@ -1956,27 +1958,20 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 		avail_space = device->total_bytes - device->bytes_used;
 
 		/* align with stripe_len */
-		avail_space = div_u64(avail_space, BTRFS_STRIPE_LEN);
-		avail_space *= BTRFS_STRIPE_LEN;
+		avail_space = rounddown(avail_space, BTRFS_STRIPE_LEN);
 
 		/*
 		 * In order to avoid overwriting the superblock on the drive,
 		 * btrfs starts at an offset of at least 1MB when doing chunk
 		 * allocation.
+		 *
+		 * This ensures we have at least min_stripe_size free space
+		 * after excluding 1MB.
 		 */
-		skip_space = SZ_1M;
-
-		/*
-		 * we can use the free space in [0, skip_space - 1], subtract
-		 * it from the total.
-		 */
-		if (avail_space && avail_space >= skip_space)
-			avail_space -= skip_space;
-		else
-			avail_space = 0;
-
-		if (avail_space < min_stripe_size)
+		if (avail_space <= SZ_1M + min_stripe_size)
 			continue;
+
+		avail_space -= SZ_1M;
 
 		devices_info[i].dev = device;
 		devices_info[i].max_avail = avail_space;
@@ -1991,9 +1986,8 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 
 	i = nr_devices - 1;
 	avail_space = 0;
-	while (nr_devices >= min_stripes) {
-		if (num_stripes > nr_devices)
-			num_stripes = nr_devices;
+	while (nr_devices >= rattr->devs_min) {
+		num_stripes = min(num_stripes, nr_devices);
 
 		if (devices_info[i].max_avail >= min_stripe_size) {
 			int j;
@@ -2110,7 +2104,15 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	 */
 	thresh = SZ_4M;
 
-	if (!mixed && total_free_meta - thresh < block_rsv->size)
+	/*
+	 * We only want to claim there's no available space if we can no longer
+	 * allocate chunks for our metadata profile and our global reserve will
+	 * not fit in the free metadata space.  If we aren't ->full then we
+	 * still can allocate chunks and thus are fine using the currently
+	 * calculated f_bavail.
+	 */
+	if (!mixed && block_rsv->space_info->full &&
+	    total_free_meta - thresh < block_rsv->size)
 		buf->f_bavail = 0;
 
 	buf->f_type = BTRFS_SUPER_MAGIC;

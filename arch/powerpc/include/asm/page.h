@@ -215,9 +215,19 @@ static inline bool pfn_valid(unsigned long pfn)
 /*
  * gcc miscompiles (unsigned long)(&static_var) - PAGE_OFFSET
  * with -mcmodel=medium, so we use & and | instead of - and + on 64-bit.
+ * This also results in better code generation.
  */
-#define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) | PAGE_OFFSET))
-#define __pa(x) ((unsigned long)(x) & 0x0fffffffffffffffUL)
+#define __va(x)								\
+({									\
+	VIRTUAL_BUG_ON((unsigned long)(x) >= PAGE_OFFSET);		\
+	(void *)(unsigned long)((phys_addr_t)(x) | PAGE_OFFSET);	\
+})
+
+#define __pa(x)								\
+({									\
+	VIRTUAL_BUG_ON((unsigned long)(x) < PAGE_OFFSET);		\
+	(unsigned long)(x) & 0x0fffffffffffffffUL;			\
+})
 
 #else /* 32-bit, non book E */
 #define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) + PAGE_OFFSET - MEMORY_START))
@@ -285,8 +295,13 @@ static inline bool pfn_valid(unsigned long pfn)
 /*
  * Some number of bits at the level of the page table that points to
  * a hugepte are used to encode the size.  This masks those bits.
+ * On 8xx, HW assistance requires 4k alignment for the hugepte.
  */
+#ifdef CONFIG_PPC_8xx
+#define HUGEPD_SHIFT_MASK     0xfff
+#else
 #define HUGEPD_SHIFT_MASK     0x3f
+#endif
 
 #ifndef __ASSEMBLY__
 

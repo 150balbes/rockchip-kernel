@@ -73,7 +73,11 @@ struct sifive_fu540_macb_mgmt {
 /* Max length of transmit frame must be a multiple of 8 bytes */
 #define MACB_TX_LEN_ALIGN	8
 #define MACB_MAX_TX_LEN		((unsigned int)((1 << MACB_TX_FRMLEN_SIZE) - 1) & ~((unsigned int)(MACB_TX_LEN_ALIGN - 1)))
-#define GEM_MAX_TX_LEN		((unsigned int)((1 << GEM_TX_FRMLEN_SIZE) - 1) & ~((unsigned int)(MACB_TX_LEN_ALIGN - 1)))
+/* Limit maximum TX length as per Cadence TSO errata. This is to avoid a
+ * false amba_error in TX path from the DMA assuming there is not enough
+ * space in the SRAM (16KB) even when there is.
+ */
+#define GEM_MAX_TX_LEN		(unsigned int)(0x3FC0)
 
 #define GEM_MTU_MIN_SIZE	ETH_MIN_MTU
 #define MACB_NETIF_LSO		NETIF_F_TSO
@@ -165,9 +169,8 @@ static unsigned int macb_adj_dma_desc_idx(struct macb *bp, unsigned int desc_idx
 #ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
 static struct macb_dma_desc_64 *macb_64b_desc(struct macb *bp, struct macb_dma_desc *desc)
 {
-	if (bp->hw_dma_cap & HW_DMA_CAP_64B)
-		return (struct macb_dma_desc_64 *)((void *)desc + sizeof(struct macb_dma_desc));
-	return NULL;
+	return (struct macb_dma_desc_64 *)((void *)desc
+		+ sizeof(struct macb_dma_desc));
 }
 #endif
 
@@ -331,8 +334,10 @@ static int macb_mdio_read(struct mii_bus *bus, int mii_id, int regnum)
 	int status;
 
 	status = pm_runtime_get_sync(&bp->pdev->dev);
-	if (status < 0)
+	if (status < 0) {
+		pm_runtime_put_noidle(&bp->pdev->dev);
 		goto mdio_pm_exit;
+	}
 
 	status = macb_mdio_wait_for_idle(bp);
 	if (status < 0)
@@ -364,8 +369,10 @@ static int macb_mdio_write(struct mii_bus *bus, int mii_id, int regnum,
 	int status;
 
 	status = pm_runtime_get_sync(&bp->pdev->dev);
-	if (status < 0)
+	if (status < 0) {
+		pm_runtime_put_noidle(&bp->pdev->dev);
 		goto mdio_pm_exit;
+	}
 
 	status = macb_mdio_wait_for_idle(bp);
 	if (status < 0)
@@ -1665,16 +1672,14 @@ static netdev_features_t macb_features_check(struct sk_buff *skb,
 
 	/* Validate LSO compatibility */
 
-	/* there is only one buffer */
-	if (!skb_is_nonlinear(skb))
+	/* there is only one buffer or protocol is not UDP */
+	if (!skb_is_nonlinear(skb) || (ip_hdr(skb)->protocol != IPPROTO_UDP))
 		return features;
 
 	/* length of header */
 	hdrlen = skb_transport_offset(skb);
-	if (ip_hdr(skb)->protocol == IPPROTO_TCP)
-		hdrlen += tcp_hdrlen(skb);
 
-	/* For LSO:
+	/* For UFO only:
 	 * When software supplies two or more payload buffers all payload buffers
 	 * apart from the last must be a multiple of 8 bytes in size.
 	 */
@@ -3406,17 +3411,17 @@ static int macb_clk_init(struct platform_device *pdev, struct clk **pclk,
 		return err;
 	}
 
-	*tx_clk = devm_clk_get(&pdev->dev, "tx_clk");
+	*tx_clk = devm_clk_get_optional(&pdev->dev, "tx_clk");
 	if (IS_ERR(*tx_clk))
-		*tx_clk = NULL;
+		return PTR_ERR(*tx_clk);
 
-	*rx_clk = devm_clk_get(&pdev->dev, "rx_clk");
+	*rx_clk = devm_clk_get_optional(&pdev->dev, "rx_clk");
 	if (IS_ERR(*rx_clk))
-		*rx_clk = NULL;
+		return PTR_ERR(*rx_clk);
 
-	*tsu_clk = devm_clk_get(&pdev->dev, "tsu_clk");
+	*tsu_clk = devm_clk_get_optional(&pdev->dev, "tsu_clk");
 	if (IS_ERR(*tsu_clk))
-		*tsu_clk = NULL;
+		return PTR_ERR(*tsu_clk);
 
 	err = clk_prepare_enable(*pclk);
 	if (err) {
@@ -3689,6 +3694,12 @@ static int at91ether_open(struct net_device *dev)
 	u32 ctl;
 	int ret;
 
+	ret = pm_runtime_get_sync(&lp->pdev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(&lp->pdev->dev);
+		return ret;
+	}
+
 	/* Clear internal statistics */
 	ctl = macb_readl(lp, NCR);
 	macb_writel(lp, NCR, ctl | MACB_BIT(CLRSTAT));
@@ -3749,7 +3760,7 @@ static int at91ether_close(struct net_device *dev)
 			  q->rx_buffers, q->rx_buffers_dma);
 	q->rx_buffers = NULL;
 
-	return 0;
+	return pm_runtime_put(&lp->pdev->dev);
 }
 
 /* Transmit packet */
@@ -4028,7 +4039,7 @@ static int fu540_c000_clk_init(struct platform_device *pdev, struct clk **pclk,
 	mgmt->rate = 0;
 	mgmt->hw.init = &init;
 
-	*tx_clk = clk_register(NULL, &mgmt->hw);
+	*tx_clk = devm_clk_register(&pdev->dev, &mgmt->hw);
 	if (IS_ERR(*tx_clk))
 		return PTR_ERR(*tx_clk);
 
@@ -4043,15 +4054,9 @@ static int fu540_c000_clk_init(struct platform_device *pdev, struct clk **pclk,
 
 static int fu540_c000_init(struct platform_device *pdev)
 {
-	struct resource *res;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	if (!res)
-		return -ENODEV;
-
-	mgmt->reg = ioremap(res->start, resource_size(res));
-	if (!mgmt->reg)
-		return -ENOMEM;
+	mgmt->reg = devm_platform_ioremap_resource(pdev, 1);
+	if (IS_ERR(mgmt->reg))
+		return PTR_ERR(mgmt->reg);
 
 	return macb_init(pdev);
 }
@@ -4362,7 +4367,6 @@ err_out_free_netdev:
 
 err_disable_clocks:
 	clk_disable_unprepare(tx_clk);
-	clk_unregister(tx_clk);
 	clk_disable_unprepare(hclk);
 	clk_disable_unprepare(pclk);
 	clk_disable_unprepare(rx_clk);
@@ -4393,11 +4397,11 @@ static int macb_remove(struct platform_device *pdev)
 		mdiobus_free(bp->mii_bus);
 
 		unregister_netdev(dev);
+		tasklet_kill(&bp->hresp_err_tasklet);
 		pm_runtime_disable(&pdev->dev);
 		pm_runtime_dont_use_autosuspend(&pdev->dev);
 		if (!pm_runtime_suspended(&pdev->dev)) {
 			clk_disable_unprepare(bp->tx_clk);
-			clk_unregister(bp->tx_clk);
 			clk_disable_unprepare(bp->hclk);
 			clk_disable_unprepare(bp->pclk);
 			clk_disable_unprepare(bp->rx_clk);

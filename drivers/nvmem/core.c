@@ -76,11 +76,6 @@ static struct bus_type nvmem_bus_type = {
 	.name		= "nvmem",
 };
 
-static int of_nvmem_match(struct device *dev, const void *nvmem_np)
-{
-	return dev->of_node == nvmem_np;
-}
-
 static struct nvmem_device *of_nvmem_find(struct device_node *nvmem_np)
 {
 	struct device *d;
@@ -88,7 +83,7 @@ static struct nvmem_device *of_nvmem_find(struct device_node *nvmem_np)
 	if (!nvmem_np)
 		return NULL;
 
-	d = bus_find_device(&nvmem_bus_type, NULL, nvmem_np, of_nvmem_match);
+	d = bus_find_device_by_of_node(&nvmem_bus_type, nvmem_np);
 
 	if (!d)
 		return NULL;
@@ -115,7 +110,7 @@ static void nvmem_cell_drop(struct nvmem_cell *cell)
 	list_del(&cell->node);
 	mutex_unlock(&nvmem_mutex);
 	of_node_put(cell->np);
-	kfree(cell->name);
+	kfree_const(cell->name);
 	kfree(cell);
 }
 
@@ -142,7 +137,9 @@ static int nvmem_cell_info_to_nvmem_cell(struct nvmem_device *nvmem,
 	cell->nvmem = nvmem;
 	cell->offset = info->offset;
 	cell->bytes = info->bytes;
-	cell->name = info->name;
+	cell->name = kstrdup_const(info->name, GFP_KERNEL);
+	if (!cell->name)
+		return -ENOMEM;
 
 	cell->bit_offset = info->bit_offset;
 	cell->nbits = info->nbits;
@@ -332,7 +329,7 @@ static int nvmem_add_cells_from_of(struct nvmem_device *nvmem)
 			dev_err(dev, "cell %s unaligned to nvmem stride %d\n",
 				cell->name, nvmem->stride);
 			/* Cells already added will be freed later. */
-			kfree(cell->name);
+			kfree_const(cell->name);
 			kfree(cell);
 			return -EINVAL;
 		}

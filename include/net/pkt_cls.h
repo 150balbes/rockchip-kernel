@@ -70,15 +70,6 @@ static inline struct Qdisc *tcf_block_q(struct tcf_block *block)
 	return block->q;
 }
 
-int __tc_indr_block_cb_register(struct net_device *dev, void *cb_priv,
-				tc_indr_block_bind_cb_t *cb, void *cb_ident);
-int tc_indr_block_cb_register(struct net_device *dev, void *cb_priv,
-			      tc_indr_block_bind_cb_t *cb, void *cb_ident);
-void __tc_indr_block_cb_unregister(struct net_device *dev,
-				   tc_indr_block_bind_cb_t *cb, void *cb_ident);
-void tc_indr_block_cb_unregister(struct net_device *dev,
-				 tc_indr_block_bind_cb_t *cb, void *cb_ident);
-
 int tcf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 		 struct tcf_result *res, bool compat_mode);
 
@@ -137,32 +128,6 @@ void tc_setup_cb_block_unregister(struct tcf_block *block, flow_setup_cb_t *cb,
 {
 }
 
-static inline
-int __tc_indr_block_cb_register(struct net_device *dev, void *cb_priv,
-				tc_indr_block_bind_cb_t *cb, void *cb_ident)
-{
-	return 0;
-}
-
-static inline
-int tc_indr_block_cb_register(struct net_device *dev, void *cb_priv,
-			      tc_indr_block_bind_cb_t *cb, void *cb_ident)
-{
-	return 0;
-}
-
-static inline
-void __tc_indr_block_cb_unregister(struct net_device *dev,
-				   tc_indr_block_bind_cb_t *cb, void *cb_ident)
-{
-}
-
-static inline
-void tc_indr_block_cb_unregister(struct net_device *dev,
-				 tc_indr_block_bind_cb_t *cb, void *cb_ident)
-{
-}
-
 static inline int tcf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 			       struct tcf_result *res, bool compat_mode)
 {
@@ -176,31 +141,38 @@ __cls_set_class(unsigned long *clp, unsigned long cl)
 	return xchg(clp, cl);
 }
 
-static inline unsigned long
-cls_set_class(struct Qdisc *q, unsigned long *clp, unsigned long cl)
+static inline void
+__tcf_bind_filter(struct Qdisc *q, struct tcf_result *r, unsigned long base)
 {
-	unsigned long old_cl;
+	unsigned long cl;
 
-	sch_tree_lock(q);
-	old_cl = __cls_set_class(clp, cl);
-	sch_tree_unlock(q);
-	return old_cl;
+	cl = q->ops->cl_ops->bind_tcf(q, base, r->classid);
+	cl = __cls_set_class(&r->class, cl);
+	if (cl)
+		q->ops->cl_ops->unbind_tcf(q, cl);
 }
 
 static inline void
 tcf_bind_filter(struct tcf_proto *tp, struct tcf_result *r, unsigned long base)
 {
 	struct Qdisc *q = tp->chain->block->q;
-	unsigned long cl;
 
 	/* Check q as it is not set for shared blocks. In that case,
 	 * setting class is not supported.
 	 */
 	if (!q)
 		return;
-	cl = q->ops->cl_ops->bind_tcf(q, base, r->classid);
-	cl = cls_set_class(q, &r->class, cl);
-	if (cl)
+	sch_tree_lock(q);
+	__tcf_bind_filter(q, r, base);
+	sch_tree_unlock(q);
+}
+
+static inline void
+__tcf_unbind_filter(struct Qdisc *q, struct tcf_result *r)
+{
+	unsigned long cl;
+
+	if ((cl = __cls_set_class(&r->class, 0)) != 0)
 		q->ops->cl_ops->unbind_tcf(q, cl);
 }
 
@@ -208,12 +180,10 @@ static inline void
 tcf_unbind_filter(struct tcf_proto *tp, struct tcf_result *r)
 {
 	struct Qdisc *q = tp->chain->block->q;
-	unsigned long cl;
 
 	if (!q)
 		return;
-	if ((cl = __cls_set_class(&r->class, 0)) != 0)
-		q->ops->cl_ops->unbind_tcf(q, cl);
+	__tcf_unbind_filter(q, r);
 }
 
 struct tcf_exts {
@@ -539,9 +509,26 @@ tcf_match_indev(struct sk_buff *skb, int ifindex)
 }
 
 int tc_setup_flow_action(struct flow_action *flow_action,
-			 const struct tcf_exts *exts);
+			 const struct tcf_exts *exts, bool rtnl_held);
+void tc_cleanup_flow_action(struct flow_action *flow_action);
+
 int tc_setup_cb_call(struct tcf_block *block, enum tc_setup_type type,
-		     void *type_data, bool err_stop);
+		     void *type_data, bool err_stop, bool rtnl_held);
+int tc_setup_cb_add(struct tcf_block *block, struct tcf_proto *tp,
+		    enum tc_setup_type type, void *type_data, bool err_stop,
+		    u32 *flags, unsigned int *in_hw_count, bool rtnl_held);
+int tc_setup_cb_replace(struct tcf_block *block, struct tcf_proto *tp,
+			enum tc_setup_type type, void *type_data, bool err_stop,
+			u32 *old_flags, unsigned int *old_in_hw_count,
+			u32 *new_flags, unsigned int *new_in_hw_count,
+			bool rtnl_held);
+int tc_setup_cb_destroy(struct tcf_block *block, struct tcf_proto *tp,
+			enum tc_setup_type type, void *type_data, bool err_stop,
+			u32 *flags, unsigned int *in_hw_count, bool rtnl_held);
+int tc_setup_cb_reoffload(struct tcf_block *block, struct tcf_proto *tp,
+			  bool add, flow_setup_cb_t *cb,
+			  enum tc_setup_type type, void *type_data,
+			  void *cb_priv, u32 *flags, unsigned int *in_hw_count);
 unsigned int tcf_exts_num_actions(struct tcf_exts *exts);
 
 struct tc_cls_u32_knode {

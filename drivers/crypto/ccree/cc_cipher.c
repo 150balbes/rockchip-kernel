@@ -5,7 +5,7 @@
 #include <linux/module.h>
 #include <crypto/algapi.h>
 #include <crypto/internal/skcipher.h>
-#include <crypto/des.h>
+#include <crypto/internal/des.h>
 #include <crypto/xts.h>
 #include <crypto/sm4.h>
 #include <crypto/scatterwalk.h>
@@ -116,10 +116,6 @@ static int validate_data_size(struct cc_cipher_ctx *ctx_p,
 	case S_DIN_to_AES:
 		switch (ctx_p->cipher_mode) {
 		case DRV_CIPHER_XTS:
-			if (size >= AES_BLOCK_SIZE &&
-			    IS_ALIGNED(size, AES_BLOCK_SIZE))
-				return 0;
-			break;
 		case DRV_CIPHER_CBC_CTS:
 			if (size >= AES_BLOCK_SIZE)
 				return 0;
@@ -411,16 +407,9 @@ static int cc_cipher_setkey(struct crypto_skcipher *sktfm, const u8 *key,
 	 * HW does the expansion on its own.
 	 */
 	if (ctx_p->flow_mode == S_DIN_to_DES) {
-		u32 tmp[DES3_EDE_EXPKEY_WORDS];
-		if (keylen == DES3_EDE_KEY_SIZE &&
-		    __des3_ede_setkey(tmp, &tfm->crt_flags, key,
-				      DES3_EDE_KEY_SIZE)) {
-			dev_dbg(dev, "weak 3DES key");
-			return -EINVAL;
-		} else if (!des_ekey(tmp, key) &&
-			   (crypto_tfm_get_flags(tfm) &
-			    CRYPTO_TFM_REQ_FORBID_WEAK_KEYS)) {
-			tfm->crt_flags |= CRYPTO_TFM_RES_WEAK_KEY;
+		if ((keylen == DES3_EDE_KEY_SIZE &&
+		     verify_skcipher_des3_key(sktfm, key)) ||
+		    verify_skcipher_des_key(sktfm, key)) {
 			dev_dbg(dev, "weak DES key");
 			return -EINVAL;
 		}
@@ -534,6 +523,7 @@ static void cc_setup_readiv_desc(struct crypto_tfm *tfm,
 	}
 }
 
+
 static void cc_setup_state_desc(struct crypto_tfm *tfm,
 				 struct cipher_req_ctx *req_ctx,
 				 unsigned int ivsize, unsigned int nbytes,
@@ -545,8 +535,6 @@ static void cc_setup_state_desc(struct crypto_tfm *tfm,
 	int cipher_mode = ctx_p->cipher_mode;
 	int flow_mode = ctx_p->flow_mode;
 	int direction = req_ctx->gen_ctx.op_type;
-	dma_addr_t key_dma_addr = ctx_p->user.key_dma_addr;
-	unsigned int key_len = ctx_p->keylen;
 	dma_addr_t iv_dma_addr = req_ctx->gen_ctx.iv_dma_addr;
 	unsigned int du_size = nbytes;
 
@@ -578,6 +566,47 @@ static void cc_setup_state_desc(struct crypto_tfm *tfm,
 			set_setup_mode(&desc[*seq_size], SETUP_LOAD_STATE0);
 		}
 		(*seq_size)++;
+		break;
+	case DRV_CIPHER_XTS:
+	case DRV_CIPHER_ESSIV:
+	case DRV_CIPHER_BITLOCKER:
+		break;
+	default:
+		dev_err(dev, "Unsupported cipher mode (%d)\n", cipher_mode);
+	}
+}
+
+
+static void cc_setup_xex_state_desc(struct crypto_tfm *tfm,
+				 struct cipher_req_ctx *req_ctx,
+				 unsigned int ivsize, unsigned int nbytes,
+				 struct cc_hw_desc desc[],
+				 unsigned int *seq_size)
+{
+	struct cc_cipher_ctx *ctx_p = crypto_tfm_ctx(tfm);
+	struct device *dev = drvdata_to_dev(ctx_p->drvdata);
+	int cipher_mode = ctx_p->cipher_mode;
+	int flow_mode = ctx_p->flow_mode;
+	int direction = req_ctx->gen_ctx.op_type;
+	dma_addr_t key_dma_addr = ctx_p->user.key_dma_addr;
+	unsigned int key_len = ctx_p->keylen;
+	dma_addr_t iv_dma_addr = req_ctx->gen_ctx.iv_dma_addr;
+	unsigned int du_size = nbytes;
+
+	struct cc_crypto_alg *cc_alg =
+		container_of(tfm->__crt_alg, struct cc_crypto_alg,
+			     skcipher_alg.base);
+
+	if (cc_alg->data_unit)
+		du_size = cc_alg->data_unit;
+
+	switch (cipher_mode) {
+	case DRV_CIPHER_ECB:
+		break;
+	case DRV_CIPHER_CBC:
+	case DRV_CIPHER_CBC_CTS:
+	case DRV_CIPHER_CTR:
+	case DRV_CIPHER_OFB:
 		break;
 	case DRV_CIPHER_XTS:
 	case DRV_CIPHER_ESSIV:
@@ -892,12 +921,14 @@ static int cc_cipher_process(struct skcipher_request *req,
 
 	/* STAT_PHASE_2: Create sequence */
 
-	/* Setup IV and XEX key used */
+	/* Setup state (IV)  */
 	cc_setup_state_desc(tfm, req_ctx, ivsize, nbytes, desc, &seq_len);
 	/* Setup MLLI line, if needed */
 	cc_setup_mlli_desc(tfm, req_ctx, dst, src, nbytes, req, desc, &seq_len);
 	/* Setup key */
 	cc_setup_key_desc(tfm, req_ctx, nbytes, desc, &seq_len);
+	/* Setup state (IV and XEX key)  */
+	cc_setup_xex_state_desc(tfm, req_ctx, ivsize, nbytes, desc, &seq_len);
 	/* Data processing */
 	cc_setup_flow_desc(tfm, req_ctx, dst, src, nbytes, desc, &seq_len);
 	/* Read next IV */
@@ -945,7 +976,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts(paes)",
 		.driver_name = "xts-paes-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_sethkey,
 			.encrypt = cc_cipher_encrypt,
@@ -963,7 +994,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts512(paes)",
 		.driver_name = "xts-paes-du512-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_sethkey,
 			.encrypt = cc_cipher_encrypt,
@@ -982,7 +1013,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts4096(paes)",
 		.driver_name = "xts-paes-du4096-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_sethkey,
 			.encrypt = cc_cipher_encrypt,
@@ -1203,7 +1234,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts(aes)",
 		.driver_name = "xts-aes-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_setkey,
 			.encrypt = cc_cipher_encrypt,
@@ -1220,7 +1251,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts512(aes)",
 		.driver_name = "xts-aes-du512-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_setkey,
 			.encrypt = cc_cipher_encrypt,
@@ -1238,7 +1269,7 @@ static const struct cc_alg_template skcipher_algs[] = {
 	{
 		.name = "xts4096(aes)",
 		.driver_name = "xts-aes-du4096-ccree",
-		.blocksize = AES_BLOCK_SIZE,
+		.blocksize = 1,
 		.template_skcipher = {
 			.setkey = cc_cipher_setkey,
 			.encrypt = cc_cipher_encrypt,

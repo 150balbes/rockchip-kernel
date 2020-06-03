@@ -322,7 +322,9 @@ static size_t nh_nlmsg_size_single(struct nexthop *nh)
 
 static size_t nh_nlmsg_size(struct nexthop *nh)
 {
-	size_t sz = nla_total_size(4);    /* NHA_ID */
+	size_t sz = NLMSG_ALIGN(sizeof(struct nhmsg));
+
+	sz += nla_total_size(4); /* NHA_ID */
 
 	if (nh->is_group)
 		sz += nh_nlmsg_size_grp(nh);
@@ -1151,7 +1153,7 @@ static int nh_create_ipv4(struct net *net, struct nexthop *nh,
 		.fc_encap_type = cfg->nh_encap_type,
 	};
 	u32 tb_id = l3mdev_fib_table(cfg->dev);
-	int err = -EINVAL;
+	int err;
 
 	err = fib_nh_init(net, fib_nh, &fib_cfg, 1, extack);
 	if (err) {

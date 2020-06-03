@@ -123,7 +123,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 		 * time out.
 		 */
 		wait_for_completion_timeout(&cpu_running,
-					    msecs_to_jiffies(1000));
+					    msecs_to_jiffies(5000));
 
 		if (!cpu_online(cpu)) {
 			pr_crit("CPU%u: failed to come online\n", cpu);
@@ -136,6 +136,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 
 	secondary_data.task = NULL;
 	secondary_data.stack = NULL;
+	__flush_dcache_area(&secondary_data, sizeof(secondary_data));
 	status = READ_ONCE(secondary_data.status);
 	if (ret && status) {
 
@@ -146,6 +147,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 		default:
 			pr_err("CPU%u: failed in unknown state : 0x%lx\n",
 					cpu, status);
+			cpus_stuck_in_kernel++;
 			break;
 		case CPU_KILL_ME:
 			if (!op_cpu_kill(cpu)) {
@@ -953,11 +955,22 @@ void tick_broadcast(const struct cpumask *mask)
 }
 #endif
 
+/*
+ * The number of CPUs online, not counting this CPU (which may not be
+ * fully online and so not counted in num_online_cpus()).
+ */
+static inline unsigned int num_other_online_cpus(void)
+{
+	unsigned int this_cpu_online = cpu_online(smp_processor_id());
+
+	return num_online_cpus() - this_cpu_online;
+}
+
 void smp_send_stop(void)
 {
 	unsigned long timeout;
 
-	if (num_online_cpus() > 1) {
+	if (num_other_online_cpus()) {
 		cpumask_t mask;
 
 		cpumask_copy(&mask, cpu_online_mask);
@@ -970,10 +983,10 @@ void smp_send_stop(void)
 
 	/* Wait up to one second for other CPUs to stop */
 	timeout = USEC_PER_SEC;
-	while (num_online_cpus() > 1 && timeout--)
+	while (num_other_online_cpus() && timeout--)
 		udelay(1);
 
-	if (num_online_cpus() > 1)
+	if (num_other_online_cpus())
 		pr_warning("SMP: failed to stop secondary CPUs %*pbl\n",
 			   cpumask_pr_args(cpu_online_mask));
 
@@ -996,7 +1009,11 @@ void crash_smp_send_stop(void)
 
 	cpus_stopped = 1;
 
-	if (num_online_cpus() == 1) {
+	/*
+	 * If this cpu is the only one alive at this point in time, online or
+	 * not, there are no stop messages to be sent around, so just back out.
+	 */
+	if (num_other_online_cpus() == 0) {
 		sdei_mask_local_cpu();
 		return;
 	}
@@ -1004,7 +1021,7 @@ void crash_smp_send_stop(void)
 	cpumask_copy(&mask, cpu_online_mask);
 	cpumask_clear_cpu(smp_processor_id(), &mask);
 
-	atomic_set(&waiting_for_crash_ipi, num_online_cpus() - 1);
+	atomic_set(&waiting_for_crash_ipi, num_other_online_cpus());
 
 	pr_crit("SMP: stopping secondary CPUs\n");
 	smp_cross_call(&mask, IPI_CPU_CRASH_STOP);

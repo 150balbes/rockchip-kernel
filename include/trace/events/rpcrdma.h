@@ -451,20 +451,81 @@ TRACE_EVENT(xprtrdma_createmrs,
 
 	TP_STRUCT__entry(
 		__field(const void *, r_xprt)
+		__string(addr, rpcrdma_addrstr(r_xprt))
+		__string(port, rpcrdma_portstr(r_xprt))
 		__field(unsigned int, count)
 	),
 
 	TP_fast_assign(
 		__entry->r_xprt = r_xprt;
 		__entry->count = count;
+		__assign_str(addr, rpcrdma_addrstr(r_xprt));
+		__assign_str(port, rpcrdma_portstr(r_xprt));
 	),
 
-	TP_printk("r_xprt=%p: created %u MRs",
-		__entry->r_xprt, __entry->count
+	TP_printk("peer=[%s]:%s r_xprt=%p: created %u MRs",
+		__get_str(addr), __get_str(port), __entry->r_xprt,
+		__entry->count
 	)
 );
 
-DEFINE_RXPRT_EVENT(xprtrdma_nomrs);
+TRACE_EVENT(xprtrdma_mr_get,
+	TP_PROTO(
+		const struct rpcrdma_req *req
+	),
+
+	TP_ARGS(req),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(unsigned int, task_id)
+		__field(unsigned int, client_id)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		const struct rpc_rqst *rqst = &req->rl_slot;
+
+		__entry->req = req;
+		__entry->task_id = rqst->rq_task->tk_pid;
+		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->xid = be32_to_cpu(rqst->rq_xid);
+	),
+
+	TP_printk("task:%u@%u xid=0x%08x req=%p",
+		__entry->task_id, __entry->client_id, __entry->xid,
+		__entry->req
+	)
+);
+
+TRACE_EVENT(xprtrdma_nomrs,
+	TP_PROTO(
+		const struct rpcrdma_req *req
+	),
+
+	TP_ARGS(req),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(unsigned int, task_id)
+		__field(unsigned int, client_id)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		const struct rpc_rqst *rqst = &req->rl_slot;
+
+		__entry->req = req;
+		__entry->task_id = rqst->rq_task->tk_pid;
+		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->xid = be32_to_cpu(rqst->rq_xid);
+	),
+
+	TP_printk("task:%u@%u xid=0x%08x req=%p",
+		__entry->task_id, __entry->client_id, __entry->xid,
+		__entry->req
+	)
+);
 
 DEFINE_RDCH_EVENT(read);
 DEFINE_WRCH_EVENT(write);
@@ -623,21 +684,21 @@ TRACE_EVENT(xprtrdma_post_send,
 
 TRACE_EVENT(xprtrdma_post_recv,
 	TP_PROTO(
-		const struct ib_cqe *cqe
+		const struct rpcrdma_rep *rep
 	),
 
-	TP_ARGS(cqe),
+	TP_ARGS(rep),
 
 	TP_STRUCT__entry(
-		__field(const void *, cqe)
+		__field(const void *, rep)
 	),
 
 	TP_fast_assign(
-		__entry->cqe = cqe;
+		__entry->rep = rep;
 	),
 
-	TP_printk("cqe=%p",
-		__entry->cqe
+	TP_printk("rep=%p",
+		__entry->rep
 	)
 );
 
@@ -671,6 +732,31 @@ TRACE_EVENT(xprtrdma_post_recvs,
 	TP_printk("peer=[%s]:%s r_xprt=%p: %u new recvs, %d active (rc %d)",
 		__get_str(addr), __get_str(port), __entry->r_xprt,
 		__entry->count, __entry->posted, __entry->status
+	)
+);
+
+TRACE_EVENT(xprtrdma_post_linv,
+	TP_PROTO(
+		const struct rpcrdma_req *req,
+		int status
+	),
+
+	TP_ARGS(req, status),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(int, status)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		__entry->req = req;
+		__entry->status = status;
+		__entry->xid = be32_to_cpu(req->rl_slot.rq_xid);
+	),
+
+	TP_printk("req=%p xid=0x%08x status=%d",
+		__entry->req, __entry->xid, __entry->status
 	)
 );
 
@@ -715,14 +801,15 @@ TRACE_EVENT(xprtrdma_wc_receive,
 	TP_ARGS(wc),
 
 	TP_STRUCT__entry(
-		__field(const void *, cqe)
+		__field(const void *, rep)
 		__field(u32, byte_len)
 		__field(unsigned int, status)
 		__field(u32, vendor_err)
 	),
 
 	TP_fast_assign(
-		__entry->cqe = wc->wr_cqe;
+		__entry->rep = container_of(wc->wr_cqe, struct rpcrdma_rep,
+					    rr_cqe);
 		__entry->status = wc->status;
 		if (wc->status) {
 			__entry->byte_len = 0;
@@ -733,8 +820,8 @@ TRACE_EVENT(xprtrdma_wc_receive,
 		}
 	),
 
-	TP_printk("cqe=%p %u bytes: %s (%u/0x%x)",
-		__entry->cqe, __entry->byte_len,
+	TP_printk("rep=%p %u bytes: %s (%u/0x%x)",
+		__entry->rep, __entry->byte_len,
 		rdma_show_wc_status(__entry->status),
 		__entry->status, __entry->vendor_err
 	)
@@ -1551,17 +1638,15 @@ DECLARE_EVENT_CLASS(svcrdma_sendcomp_event,
 
 TRACE_EVENT(svcrdma_post_send,
 	TP_PROTO(
-		const struct ib_send_wr *wr,
-		int status
+		const struct ib_send_wr *wr
 	),
 
-	TP_ARGS(wr, status),
+	TP_ARGS(wr),
 
 	TP_STRUCT__entry(
 		__field(const void *, cqe)
 		__field(unsigned int, num_sge)
 		__field(u32, inv_rkey)
-		__field(int, status)
 	),
 
 	TP_fast_assign(
@@ -1569,12 +1654,11 @@ TRACE_EVENT(svcrdma_post_send,
 		__entry->num_sge = wr->num_sge;
 		__entry->inv_rkey = (wr->opcode == IB_WR_SEND_WITH_INV) ?
 					wr->ex.invalidate_rkey : 0;
-		__entry->status = status;
 	),
 
-	TP_printk("cqe=%p num_sge=%u inv_rkey=0x%08x status=%d",
+	TP_printk("cqe=%p num_sge=%u inv_rkey=0x%08x",
 		__entry->cqe, __entry->num_sge,
-		__entry->inv_rkey, __entry->status
+		__entry->inv_rkey
 	)
 );
 
@@ -1639,26 +1723,23 @@ TRACE_EVENT(svcrdma_wc_receive,
 TRACE_EVENT(svcrdma_post_rw,
 	TP_PROTO(
 		const void *cqe,
-		int sqecount,
-		int status
+		int sqecount
 	),
 
-	TP_ARGS(cqe, sqecount, status),
+	TP_ARGS(cqe, sqecount),
 
 	TP_STRUCT__entry(
 		__field(const void *, cqe)
 		__field(int, sqecount)
-		__field(int, status)
 	),
 
 	TP_fast_assign(
 		__entry->cqe = cqe;
 		__entry->sqecount = sqecount;
-		__entry->status = status;
 	),
 
-	TP_printk("cqe=%p sqecount=%d status=%d",
-		__entry->cqe, __entry->sqecount, __entry->status
+	TP_printk("cqe=%p sqecount=%d",
+		__entry->cqe, __entry->sqecount
 	)
 );
 
@@ -1753,6 +1834,34 @@ DECLARE_EVENT_CLASS(svcrdma_sendqueue_event,
 
 DEFINE_SQ_EVENT(full);
 DEFINE_SQ_EVENT(retry);
+
+TRACE_EVENT(svcrdma_sq_post_err,
+	TP_PROTO(
+		const struct svcxprt_rdma *rdma,
+		int status
+	),
+
+	TP_ARGS(rdma, status),
+
+	TP_STRUCT__entry(
+		__field(int, avail)
+		__field(int, depth)
+		__field(int, status)
+		__string(addr, rdma->sc_xprt.xpt_remotebuf)
+	),
+
+	TP_fast_assign(
+		__entry->avail = atomic_read(&rdma->sc_sq_avail);
+		__entry->depth = rdma->sc_sq_depth;
+		__entry->status = status;
+		__assign_str(addr, rdma->sc_xprt.xpt_remotebuf);
+	),
+
+	TP_printk("addr=%s sc_sq_avail=%d/%d status=%d",
+		__get_str(addr), __entry->avail, __entry->depth,
+		__entry->status
+	)
+);
 
 #endif /* _TRACE_RPCRDMA_H */
 

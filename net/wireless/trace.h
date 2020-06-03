@@ -646,6 +646,11 @@ DEFINE_EVENT(wiphy_netdev_evt, rdev_flush_pmksa,
 	TP_ARGS(wiphy, netdev)
 );
 
+DEFINE_EVENT(wiphy_netdev_evt, rdev_end_cac,
+	     TP_PROTO(struct wiphy *wiphy, struct net_device *netdev),
+	     TP_ARGS(wiphy, netdev)
+);
+
 DECLARE_EVENT_CLASS(station_add_change,
 	TP_PROTO(struct wiphy *wiphy, struct net_device *netdev, u8 *mac,
 		 struct station_parameters *params),
@@ -2446,10 +2451,11 @@ TRACE_EVENT(rdev_set_mcast_rate,
 		       sizeof(int) * NUM_NL80211_BANDS);
 	),
 	TP_printk(WIPHY_PR_FMT ", " NETDEV_PR_FMT ", "
-		  "mcast_rates [2.4GHz=0x%x, 5.2GHz=0x%x, 60GHz=0x%x]",
+		  "mcast_rates [2.4GHz=0x%x, 5.2GHz=0x%x, 6GHz=0x%x, 60GHz=0x%x]",
 		  WIPHY_PR_ARG, NETDEV_PR_ARG,
 		  __entry->mcast_rate[NL80211_BAND_2GHZ],
 		  __entry->mcast_rate[NL80211_BAND_5GHZ],
+		  __entry->mcast_rate[NL80211_BAND_6GHZ],
 		  __entry->mcast_rate[NL80211_BAND_60GHZ])
 );
 

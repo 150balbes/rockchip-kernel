@@ -67,7 +67,6 @@ MODULE_PARM_DESC(vid_limit, "capture memory limit in megabytes");
 #define FORMAT_FLAGS_PACKED       0x01
 static struct cx23885_fmt formats[] = {
 	{
-		.name     = "4:2:2, packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
@@ -258,7 +257,8 @@ static int cx23885_video_mux(struct cx23885_dev *dev, unsigned int input)
 		(dev->board == CX23885_BOARD_MYGICA_X8507) ||
 		(dev->board == CX23885_BOARD_AVERMEDIA_HC81R) ||
 		(dev->board == CX23885_BOARD_VIEWCAST_260E) ||
-		(dev->board == CX23885_BOARD_VIEWCAST_460E)) {
+		(dev->board == CX23885_BOARD_VIEWCAST_460E) ||
+		(dev->board == CX23885_BOARD_AVERMEDIA_CE310B)) {
 		/* Configure audio routing */
 		v4l2_subdev_call(dev->sd_cx25840, audio, s_routing,
 			INPUT(input)->amux, 0, 0);
@@ -411,9 +411,9 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	default:
 		BUG();
 	}
-	dprintk(2, "[%p/%d] buffer_init - %dx%d %dbpp \"%s\" - dma=0x%08lx\n",
+	dprintk(2, "[%p/%d] buffer_init - %dx%d %dbpp 0x%08x - dma=0x%08lx\n",
 		buf, buf->vb.vb2_buf.index,
-		dev->width, dev->height, dev->fmt->depth, dev->fmt->name,
+		dev->width, dev->height, dev->fmt->depth, dev->fmt->fourcc,
 		(unsigned long)buf->risc.dma);
 	return 0;
 }
@@ -647,8 +647,6 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void  *priv,
 	if (unlikely(f->index >= ARRAY_SIZE(formats)))
 		return -EINVAL;
 
-	strscpy(f->description, formats[f->index].name,
-		sizeof(f->description));
 	f->pixelformat = formats[f->index].fourcc;
 
 	return 0;

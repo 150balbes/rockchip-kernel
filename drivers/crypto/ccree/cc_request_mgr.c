@@ -6,7 +6,6 @@
 #include "cc_driver.h"
 #include "cc_buffer_mgr.h"
 #include "cc_request_mgr.h"
-#include "cc_ivgen.h"
 #include "cc_pm.h"
 
 #define CC_MAX_POLL_ITER	10
@@ -42,7 +41,6 @@ struct cc_req_mgr_handle {
 #else
 	struct tasklet_struct comptask;
 #endif
-	bool is_runtime_suspended;
 };
 
 struct cc_bl_item {
@@ -281,36 +279,12 @@ static int cc_queues_status(struct cc_drvdata *drvdata,
 static int cc_do_send_request(struct cc_drvdata *drvdata,
 			      struct cc_crypto_req *cc_req,
 			      struct cc_hw_desc *desc, unsigned int len,
-				bool add_comp, bool ivgen)
+				bool add_comp)
 {
 	struct cc_req_mgr_handle *req_mgr_h = drvdata->request_mgr_handle;
 	unsigned int used_sw_slots;
-	unsigned int iv_seq_len = 0;
 	unsigned int total_seq_len = len; /*initial sequence length*/
-	struct cc_hw_desc iv_seq[CC_IVPOOL_SEQ_LEN];
 	struct device *dev = drvdata_to_dev(drvdata);
-	int rc;
-
-	if (ivgen) {
-		dev_dbg(dev, "Acquire IV from pool into %d DMA addresses %pad, %pad, %pad, IV-size=%u\n",
-			cc_req->ivgen_dma_addr_len,
-			&cc_req->ivgen_dma_addr[0],
-			&cc_req->ivgen_dma_addr[1],
-			&cc_req->ivgen_dma_addr[2],
-			cc_req->ivgen_size);
-
-		/* Acquire IV from pool */
-		rc = cc_get_iv(drvdata, cc_req->ivgen_dma_addr,
-			       cc_req->ivgen_dma_addr_len,
-			       cc_req->ivgen_size, iv_seq, &iv_seq_len);
-
-		if (rc) {
-			dev_err(dev, "Failed to generate IV (rc=%d)\n", rc);
-			return rc;
-		}
-
-		total_seq_len += iv_seq_len;
-	}
 
 	used_sw_slots = ((req_mgr_h->req_queue_head -
 			  req_mgr_h->req_queue_tail) &
@@ -334,8 +308,6 @@ static int cc_do_send_request(struct cc_drvdata *drvdata,
 	wmb();
 
 	/* STAT_PHASE_4: Push sequence */
-	if (ivgen)
-		enqueue_seq(drvdata, iv_seq, iv_seq_len);
 
 	enqueue_seq(drvdata, desc, len);
 
@@ -380,8 +352,6 @@ static void cc_proc_backlog(struct cc_drvdata *drvdata)
 	struct cc_bl_item *bli;
 	struct cc_crypto_req *creq;
 	void *req;
-	bool ivgen;
-	unsigned int total_len;
 	struct device *dev = drvdata_to_dev(drvdata);
 	int rc;
 
@@ -406,12 +376,9 @@ static void cc_proc_backlog(struct cc_drvdata *drvdata)
 			bli->notif = true;
 		}
 
-		ivgen = !!creq->ivgen_dma_addr_len;
-		total_len = bli->len + (ivgen ? CC_IVPOOL_SEQ_LEN : 0);
-
 		spin_lock(&mgr->hw_lock);
 
-		rc = cc_queues_status(drvdata, mgr, total_len);
+		rc = cc_queues_status(drvdata, mgr, bli->len);
 		if (rc) {
 			/*
 			 * There is still not room in the FIFO for
@@ -423,7 +390,7 @@ static void cc_proc_backlog(struct cc_drvdata *drvdata)
 		}
 
 		rc = cc_do_send_request(drvdata, &bli->creq, bli->desc,
-					bli->len, false, ivgen);
+					bli->len, false);
 
 		spin_unlock(&mgr->hw_lock);
 
@@ -436,6 +403,7 @@ static void cc_proc_backlog(struct cc_drvdata *drvdata)
 		spin_lock(&mgr->bl_lock);
 		list_del(&bli->list);
 		--mgr->bl_len;
+		kfree(bli);
 	}
 
 	spin_unlock(&mgr->bl_lock);
@@ -447,8 +415,6 @@ int cc_send_request(struct cc_drvdata *drvdata, struct cc_crypto_req *cc_req,
 {
 	int rc;
 	struct cc_req_mgr_handle *mgr = drvdata->request_mgr_handle;
-	bool ivgen = !!cc_req->ivgen_dma_addr_len;
-	unsigned int total_len = len + (ivgen ? CC_IVPOOL_SEQ_LEN : 0);
 	struct device *dev = drvdata_to_dev(drvdata);
 	bool backlog_ok = req->flags & CRYPTO_TFM_REQ_MAY_BACKLOG;
 	gfp_t flags = cc_gfp_flags(req);
@@ -461,7 +427,7 @@ int cc_send_request(struct cc_drvdata *drvdata, struct cc_crypto_req *cc_req,
 	}
 
 	spin_lock_bh(&mgr->hw_lock);
-	rc = cc_queues_status(drvdata, mgr, total_len);
+	rc = cc_queues_status(drvdata, mgr, len);
 
 #ifdef CC_DEBUG_FORCE_BACKLOG
 	if (backlog_ok)
@@ -486,8 +452,7 @@ int cc_send_request(struct cc_drvdata *drvdata, struct cc_crypto_req *cc_req,
 	}
 
 	if (!rc)
-		rc = cc_do_send_request(drvdata, cc_req, desc, len, false,
-					ivgen);
+		rc = cc_do_send_request(drvdata, cc_req, desc, len, false);
 
 	spin_unlock_bh(&mgr->hw_lock);
 	return rc;
@@ -527,7 +492,7 @@ int cc_send_sync_request(struct cc_drvdata *drvdata,
 		reinit_completion(&drvdata->hw_queue_avail);
 	}
 
-	rc = cc_do_send_request(drvdata, cc_req, desc, len, true, false);
+	rc = cc_do_send_request(drvdata, cc_req, desc, len, true);
 	spin_unlock_bh(&mgr->hw_lock);
 
 	if (rc != -EINPROGRESS) {
@@ -712,52 +677,3 @@ static void comp_handler(unsigned long devarg)
 	cc_proc_backlog(drvdata);
 	dev_dbg(dev, "Comp. handler done.\n");
 }
-
-/*
- * resume the queue configuration - no need to take the lock as this happens
- * inside the spin lock protection
- */
-#if defined(CONFIG_PM)
-int cc_resume_req_queue(struct cc_drvdata *drvdata)
-{
-	struct cc_req_mgr_handle *request_mgr_handle =
-		drvdata->request_mgr_handle;
-
-	spin_lock_bh(&request_mgr_handle->hw_lock);
-	request_mgr_handle->is_runtime_suspended = false;
-	spin_unlock_bh(&request_mgr_handle->hw_lock);
-
-	return 0;
-}
-
-/*
- * suspend the queue configuration. Since it is used for the runtime suspend
- * only verify that the queue can be suspended.
- */
-int cc_suspend_req_queue(struct cc_drvdata *drvdata)
-{
-	struct cc_req_mgr_handle *request_mgr_handle =
-						drvdata->request_mgr_handle;
-
-	/* lock the send_request */
-	spin_lock_bh(&request_mgr_handle->hw_lock);
-	if (request_mgr_handle->req_queue_head !=
-	    request_mgr_handle->req_queue_tail) {
-		spin_unlock_bh(&request_mgr_handle->hw_lock);
-		return -EBUSY;
-	}
-	request_mgr_handle->is_runtime_suspended = true;
-	spin_unlock_bh(&request_mgr_handle->hw_lock);
-
-	return 0;
-}
-
-bool cc_req_queue_suspended(struct cc_drvdata *drvdata)
-{
-	struct cc_req_mgr_handle *request_mgr_handle =
-						drvdata->request_mgr_handle;
-
-	return	request_mgr_handle->is_runtime_suspended;
-}
-
-#endif

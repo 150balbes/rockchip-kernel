@@ -114,7 +114,7 @@ MODULE_DEVICE_TABLE(of, st_accel_of_match);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id st_accel_acpi_match[] = {
-	{"SMO8840", (kernel_ulong_t)LNG2DM_ACCEL_DEV_NAME},
+	{"SMO8840", (kernel_ulong_t)LIS2DH12_ACCEL_DEV_NAME},
 	{"SMO8A90", (kernel_ulong_t)LNG2DM_ACCEL_DEV_NAME},
 	{ },
 };
@@ -150,22 +150,33 @@ MODULE_DEVICE_TABLE(i2c, st_accel_id_table);
 
 static int st_accel_i2c_probe(struct i2c_client *client)
 {
-	struct iio_dev *indio_dev;
+	const struct st_sensor_settings *settings;
 	struct st_sensor_data *adata;
+	struct iio_dev *indio_dev;
 	const char *match;
 	int ret;
+
+	match = device_get_match_data(&client->dev);
+	if (match)
+		strlcpy(client->name, match, sizeof(client->name));
+
+	settings = st_accel_get_settings(client->name);
+	if (!settings) {
+		dev_err(&client->dev, "device name %s not recognized.\n",
+			client->name);
+		return -ENODEV;
+	}
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*adata));
 	if (!indio_dev)
 		return -ENOMEM;
 
 	adata = iio_priv(indio_dev);
+	adata->sensor_settings = (struct st_sensor_settings *)settings;
 
-	match = device_get_match_data(&client->dev);
-	if (match)
-		strlcpy(client->name, match, sizeof(client->name));
-
-	st_sensors_i2c_configure(indio_dev, client, adata);
+	ret = st_sensors_i2c_configure(indio_dev, client);
+	if (ret < 0)
+		return ret;
 
 	ret = st_accel_common_probe(indio_dev);
 	if (ret < 0)

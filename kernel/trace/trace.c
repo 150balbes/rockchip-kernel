@@ -17,6 +17,7 @@
 #include <linux/stacktrace.h>
 #include <linux/writeback.h>
 #include <linux/kallsyms.h>
+#include <linux/security.h>
 #include <linux/seq_file.h>
 #include <linux/notifier.h>
 #include <linux/irqflags.h>
@@ -302,6 +303,23 @@ void trace_array_put(struct trace_array *this_tr)
 	mutex_lock(&trace_types_lock);
 	__trace_array_put(this_tr);
 	mutex_unlock(&trace_types_lock);
+}
+
+int tracing_check_open_get_tr(struct trace_array *tr)
+{
+	int ret;
+
+	ret = security_locked_down(LOCKDOWN_TRACEFS);
+	if (ret)
+		return ret;
+
+	if (tracing_disabled)
+		return -ENODEV;
+
+	if (tr && trace_array_get(tr) < 0)
+		return -ENODEV;
+
+	return 0;
 }
 
 int call_filter_check_discard(struct trace_event_call *call, void *rec,
@@ -1725,6 +1743,7 @@ static __init int init_trace_selftests(void)
 
 	pr_info("Running postponed tracer tests:\n");
 
+	tracing_selftest_running = true;
 	list_for_each_entry_safe(p, n, &postponed_selftests, list) {
 		/* This loop can take minutes when sanitizers are enabled, so
 		 * lets make sure we allow RCU processing.
@@ -1747,6 +1766,7 @@ static __init int init_trace_selftests(void)
 		list_del(&p->list);
 		kfree(p);
 	}
+	tracing_selftest_running = false;
 
  out:
 	mutex_unlock(&trace_types_lock);
@@ -1784,6 +1804,12 @@ int __init register_tracer(struct tracer *type)
 	if (strlen(type->name) >= MAX_TRACER_SIZE) {
 		pr_info("Tracer has a name longer than %d\n", MAX_TRACER_SIZE);
 		return -1;
+	}
+
+	if (security_locked_down(LOCKDOWN_TRACEFS)) {
+		pr_warning("Can not register tracer %s due to lockdown\n",
+			   type->name);
+		return -EPERM;
 	}
 
 	mutex_lock(&trace_types_lock);
@@ -1854,7 +1880,7 @@ int __init register_tracer(struct tracer *type)
 	return ret;
 }
 
-void tracing_reset(struct trace_buffer *buf, int cpu)
+static void tracing_reset_cpu(struct trace_buffer *buf, int cpu)
 {
 	struct ring_buffer *buffer = buf->buffer;
 
@@ -2642,10 +2668,10 @@ static void ftrace_exports(struct ring_buffer_event *event)
 
 	preempt_disable_notrace();
 
-	export = rcu_dereference_raw_notrace(ftrace_exports_list);
+	export = rcu_dereference_raw_check(ftrace_exports_list);
 	while (export) {
 		trace_process_export(export, event);
-		export = rcu_dereference_raw_notrace(export->next);
+		export = rcu_dereference_raw_check(export->next);
 	}
 
 	preempt_enable_notrace();
@@ -4140,8 +4166,11 @@ release:
 
 int tracing_open_generic(struct inode *inode, struct file *filp)
 {
-	if (tracing_disabled)
-		return -ENODEV;
+	int ret;
+
+	ret = tracing_check_open_get_tr(NULL);
+	if (ret)
+		return ret;
 
 	filp->private_data = inode->i_private;
 	return 0;
@@ -4156,15 +4185,14 @@ bool tracing_is_disabled(void)
  * Open and update trace_array ref count.
  * Must have the current trace_array passed to it.
  */
-static int tracing_open_generic_tr(struct inode *inode, struct file *filp)
+int tracing_open_generic_tr(struct inode *inode, struct file *filp)
 {
 	struct trace_array *tr = inode->i_private;
+	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	filp->private_data = inode->i_private;
 
@@ -4233,10 +4261,11 @@ static int tracing_open(struct inode *inode, struct file *file)
 {
 	struct trace_array *tr = inode->i_private;
 	struct trace_iterator *iter;
-	int ret = 0;
+	int ret;
 
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	/* If this file was open for write, then erase contents */
 	if ((file->f_mode & FMODE_WRITE) && (file->f_flags & O_TRUNC)) {
@@ -4251,7 +4280,7 @@ static int tracing_open(struct inode *inode, struct file *file)
 		if (cpu == RING_BUFFER_ALL_CPUS)
 			tracing_reset_online_cpus(trace_buf);
 		else
-			tracing_reset(trace_buf, cpu);
+			tracing_reset_cpu(trace_buf, cpu);
 	}
 
 	if (file->f_mode & FMODE_READ) {
@@ -4352,17 +4381,28 @@ static int show_traces_open(struct inode *inode, struct file *file)
 	struct seq_file *m;
 	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	ret = seq_open(file, &show_traces_seq_ops);
+	ret = tracing_check_open_get_tr(tr);
 	if (ret)
 		return ret;
+
+	ret = seq_open(file, &show_traces_seq_ops);
+	if (ret) {
+		trace_array_put(tr);
+		return ret;
+	}
 
 	m = file->private_data;
 	m->private = tr;
 
 	return 0;
+}
+
+static int show_traces_release(struct inode *inode, struct file *file)
+{
+	struct trace_array *tr = inode->i_private;
+
+	trace_array_put(tr);
+	return seq_release(inode, file);
 }
 
 static ssize_t
@@ -4395,8 +4435,8 @@ static const struct file_operations tracing_fops = {
 static const struct file_operations show_traces_fops = {
 	.open		= show_traces_open,
 	.read		= seq_read,
-	.release	= seq_release,
 	.llseek		= seq_lseek,
+	.release	= show_traces_release,
 };
 
 static ssize_t
@@ -4558,6 +4598,10 @@ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set)
 
 int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
 {
+	if ((mask == TRACE_ITER_RECORD_TGID) ||
+	    (mask == TRACE_ITER_RECORD_CMD))
+		lockdep_assert_held(&event_mutex);
+
 	/* do nothing if flag is already set */
 	if (!!(tr->trace_flags & mask) == !!enabled)
 		return 0;
@@ -4577,7 +4621,7 @@ int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
 
 	if (mask == TRACE_ITER_RECORD_TGID) {
 		if (!tgid_map)
-			tgid_map = kcalloc(PID_MAX_DEFAULT + 1,
+			tgid_map = kvcalloc(PID_MAX_DEFAULT + 1,
 					   sizeof(*tgid_map),
 					   GFP_KERNEL);
 		if (!tgid_map) {
@@ -4625,6 +4669,7 @@ static int trace_set_options(struct trace_array *tr, char *option)
 
 	cmp += len;
 
+	mutex_lock(&event_mutex);
 	mutex_lock(&trace_types_lock);
 
 	ret = match_string(trace_options, -1, cmp);
@@ -4635,6 +4680,7 @@ static int trace_set_options(struct trace_array *tr, char *option)
 		ret = set_tracer_flag(tr, 1 << ret, !neg);
 
 	mutex_unlock(&trace_types_lock);
+	mutex_unlock(&event_mutex);
 
 	/*
 	 * If the first trailing whitespace is replaced with '\0' by strstrip,
@@ -4697,11 +4743,9 @@ static int tracing_trace_options_open(struct inode *inode, struct file *file)
 	struct trace_array *tr = inode->i_private;
 	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	ret = single_open(file, tracing_trace_options_show, inode->i_private);
 	if (ret < 0)
@@ -4815,15 +4859,15 @@ static const char readme_msg[] =
 #endif
 #endif /* CONFIG_STACK_TRACER */
 #ifdef CONFIG_DYNAMIC_EVENTS
-	"  dynamic_events\t\t- Add/remove/show the generic dynamic events\n"
+	"  dynamic_events\t\t- Create/append/remove/show the generic dynamic events\n"
 	"\t\t\t  Write into this file to define/undefine new trace events.\n"
 #endif
 #ifdef CONFIG_KPROBE_EVENTS
-	"  kprobe_events\t\t- Add/remove/show the kernel dynamic events\n"
+	"  kprobe_events\t\t- Create/append/remove/show the kernel dynamic events\n"
 	"\t\t\t  Write into this file to define/undefine new trace events.\n"
 #endif
 #ifdef CONFIG_UPROBE_EVENTS
-	"  uprobe_events\t\t- Add/remove/show the userspace dynamic events\n"
+	"  uprobe_events\t\t- Create/append/remove/show the userspace dynamic events\n"
 	"\t\t\t  Write into this file to define/undefine new trace events.\n"
 #endif
 #if defined(CONFIG_KPROBE_EVENTS) || defined(CONFIG_UPROBE_EVENTS)
@@ -4848,7 +4892,7 @@ static const char readme_msg[] =
 #else
 	"\t           $stack<index>, $stack, $retval, $comm,\n"
 #endif
-	"\t           +|-[u]<offset>(<fetcharg>)\n"
+	"\t           +|-[u]<offset>(<fetcharg>), \\imm-value, \\\"imm-string\"\n"
 	"\t     type: s8/16/32/64, u8/16/32/64, x8/16/32/64, string, symbol,\n"
 	"\t           b<bit-width>@<bit-offset>/<container-size>, ustring,\n"
 	"\t           <type>\\[<array-size>\\]\n"
@@ -5038,8 +5082,11 @@ static const struct seq_operations tracing_saved_tgids_seq_ops = {
 
 static int tracing_saved_tgids_open(struct inode *inode, struct file *filp)
 {
-	if (tracing_disabled)
-		return -ENODEV;
+	int ret;
+
+	ret = tracing_check_open_get_tr(NULL);
+	if (ret)
+		return ret;
 
 	return seq_open(filp, &tracing_saved_tgids_seq_ops);
 }
@@ -5115,8 +5162,11 @@ static const struct seq_operations tracing_saved_cmdlines_seq_ops = {
 
 static int tracing_saved_cmdlines_open(struct inode *inode, struct file *filp)
 {
-	if (tracing_disabled)
-		return -ENODEV;
+	int ret;
+
+	ret = tracing_check_open_get_tr(NULL);
+	if (ret)
+		return ret;
 
 	return seq_open(filp, &tracing_saved_cmdlines_seq_ops);
 }
@@ -5280,8 +5330,11 @@ static const struct seq_operations tracing_eval_map_seq_ops = {
 
 static int tracing_eval_map_open(struct inode *inode, struct file *filp)
 {
-	if (tracing_disabled)
-		return -ENODEV;
+	int ret;
+
+	ret = tracing_check_open_get_tr(NULL);
+	if (ret)
+		return ret;
 
 	return seq_open(filp, &tracing_eval_map_seq_ops);
 }
@@ -5804,13 +5857,11 @@ static int tracing_open_pipe(struct inode *inode, struct file *filp)
 {
 	struct trace_array *tr = inode->i_private;
 	struct trace_iterator *iter;
-	int ret = 0;
+	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	mutex_lock(&trace_types_lock);
 
@@ -5999,6 +6050,7 @@ waitagain:
 	       sizeof(struct trace_iterator) -
 	       offsetof(struct trace_iterator, seq));
 	cpumask_clear(iter->started);
+	trace_seq_init(&iter->seq);
 	iter->pos = -1;
 
 	trace_event_read_lock();
@@ -6547,11 +6599,9 @@ static int tracing_clock_open(struct inode *inode, struct file *file)
 	struct trace_array *tr = inode->i_private;
 	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr))
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	ret = single_open(file, tracing_clock_show, inode->i_private);
 	if (ret < 0)
@@ -6581,11 +6631,9 @@ static int tracing_time_stamp_mode_open(struct inode *inode, struct file *file)
 	struct trace_array *tr = inode->i_private;
 	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr))
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	ret = single_open(file, tracing_time_stamp_mode_show, inode->i_private);
 	if (ret < 0)
@@ -6638,10 +6686,11 @@ static int tracing_snapshot_open(struct inode *inode, struct file *file)
 	struct trace_array *tr = inode->i_private;
 	struct trace_iterator *iter;
 	struct seq_file *m;
-	int ret = 0;
+	int ret;
 
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	if (file->f_mode & FMODE_READ) {
 		iter = __tracing_open(inode, file, true);
@@ -6742,7 +6791,7 @@ tracing_snapshot_write(struct file *filp, const char __user *ubuf, size_t cnt,
 			if (iter->cpu_file == RING_BUFFER_ALL_CPUS)
 				tracing_reset_online_cpus(&tr->max_buffer);
 			else
-				tracing_reset(&tr->max_buffer, iter->cpu_file);
+				tracing_reset_cpu(&tr->max_buffer, iter->cpu_file);
 		}
 		break;
 	}
@@ -6786,6 +6835,7 @@ static int snapshot_raw_open(struct inode *inode, struct file *filp)
 	struct ftrace_buffer_info *info;
 	int ret;
 
+	/* The following checks for tracefs lockdown */
 	ret = tracing_buffers_open(inode, filp);
 	if (ret < 0)
 		return ret;
@@ -7105,8 +7155,9 @@ static int tracing_err_log_open(struct inode *inode, struct file *file)
 	struct trace_array *tr = inode->i_private;
 	int ret = 0;
 
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	/* If this file was opened for write, then erase contents */
 	if ((file->f_mode & FMODE_WRITE) && (file->f_flags & O_TRUNC))
@@ -7157,11 +7208,9 @@ static int tracing_buffers_open(struct inode *inode, struct file *filp)
 	struct ftrace_buffer_info *info;
 	int ret;
 
-	if (tracing_disabled)
-		return -ENODEV;
-
-	if (trace_array_get(tr) < 0)
-		return -ENODEV;
+	ret = tracing_check_open_get_tr(tr);
+	if (ret)
+		return ret;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info) {
@@ -7937,9 +7986,11 @@ trace_options_core_write(struct file *filp, const char __user *ubuf, size_t cnt,
 	if (val != 0 && val != 1)
 		return -EINVAL;
 
+	mutex_lock(&event_mutex);
 	mutex_lock(&trace_types_lock);
 	ret = set_tracer_flag(tr, 1 << index, val);
 	mutex_unlock(&trace_types_lock);
+	mutex_unlock(&event_mutex);
 
 	if (ret < 0)
 		return ret;
@@ -8267,6 +8318,19 @@ static int allocate_trace_buffers(struct trace_array *tr, int size)
 	 */
 	allocate_snapshot = false;
 #endif
+
+	/*
+	 * Because of some magic with the way alloc_percpu() works on
+	 * x86_64, we need to synchronize the pgd of all the tables,
+	 * otherwise the trace events that happen in x86_64 page fault
+	 * handlers can't cope with accessing the chance that a
+	 * alloc_percpu()'d memory might be touched in the page fault trace
+	 * event. Oh, and we need to audit all other alloc_percpu() and vmalloc()
+	 * calls in tracing, because something might get triggered within a
+	 * page fault trace event!
+	 */
+	vmalloc_sync_mappings();
+
 	return 0;
 }
 
@@ -8603,6 +8667,11 @@ static struct vfsmount *trace_automount(struct dentry *mntpt, void *ingore)
 struct dentry *tracing_init_dentry(void)
 {
 	struct trace_array *tr = &global_trace;
+
+	if (security_locked_down(LOCKDOWN_TRACEFS)) {
+		pr_warning("Tracing disabled due to lockdown\n");
+		return ERR_PTR(-EPERM);
+	}
 
 	/* The top level trace array uses  NULL as parent */
 	if (tr->dir)
@@ -9046,6 +9115,12 @@ __init static int tracer_alloc_buffers(void)
 	int ring_buf_size;
 	int ret = -ENOMEM;
 
+
+	if (security_locked_down(LOCKDOWN_TRACEFS)) {
+		pr_warning("Tracing disabled due to lockdown\n");
+		return -EPERM;
+	}
+
 	/*
 	 * Make sure we don't accidently add more trace options
 	 * than we have bits for.
@@ -9210,6 +9285,11 @@ __init static int tracing_set_default_clock(void)
 {
 	/* sched_clock_stable() is determined in late_initcall */
 	if (!trace_boot_clock && !sched_clock_stable()) {
+		if (security_locked_down(LOCKDOWN_TRACEFS)) {
+			pr_warn("Can not set tracing clock due to lockdown\n");
+			return -EPERM;
+		}
+
 		printk(KERN_WARNING
 		       "Unstable clock detected, switching default tracing clock to \"global\"\n"
 		       "If you want to keep using the local clock, then add:\n"

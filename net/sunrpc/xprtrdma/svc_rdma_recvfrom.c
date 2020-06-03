@@ -172,9 +172,10 @@ static void svc_rdma_recv_ctxt_destroy(struct svcxprt_rdma *rdma,
 void svc_rdma_recv_ctxts_destroy(struct svcxprt_rdma *rdma)
 {
 	struct svc_rdma_recv_ctxt *ctxt;
+	struct llist_node *node;
 
-	while ((ctxt = svc_rdma_next_recv_ctxt(&rdma->sc_recv_ctxts))) {
-		list_del(&ctxt->rc_list);
+	while ((node = llist_del_first(&rdma->sc_recv_ctxts))) {
+		ctxt = llist_entry(node, struct svc_rdma_recv_ctxt, rc_node);
 		svc_rdma_recv_ctxt_destroy(rdma, ctxt);
 	}
 }
@@ -183,21 +184,18 @@ static struct svc_rdma_recv_ctxt *
 svc_rdma_recv_ctxt_get(struct svcxprt_rdma *rdma)
 {
 	struct svc_rdma_recv_ctxt *ctxt;
+	struct llist_node *node;
 
-	spin_lock(&rdma->sc_recv_lock);
-	ctxt = svc_rdma_next_recv_ctxt(&rdma->sc_recv_ctxts);
-	if (!ctxt)
+	node = llist_del_first(&rdma->sc_recv_ctxts);
+	if (!node)
 		goto out_empty;
-	list_del(&ctxt->rc_list);
-	spin_unlock(&rdma->sc_recv_lock);
+	ctxt = llist_entry(node, struct svc_rdma_recv_ctxt, rc_node);
 
 out:
 	ctxt->rc_page_count = 0;
 	return ctxt;
 
 out_empty:
-	spin_unlock(&rdma->sc_recv_lock);
-
 	ctxt = svc_rdma_recv_ctxt_alloc(rdma);
 	if (!ctxt)
 		return NULL;
@@ -218,12 +216,30 @@ void svc_rdma_recv_ctxt_put(struct svcxprt_rdma *rdma,
 	for (i = 0; i < ctxt->rc_page_count; i++)
 		put_page(ctxt->rc_pages[i]);
 
-	if (!ctxt->rc_temp) {
-		spin_lock(&rdma->sc_recv_lock);
-		list_add(&ctxt->rc_list, &rdma->sc_recv_ctxts);
-		spin_unlock(&rdma->sc_recv_lock);
-	} else
+	if (!ctxt->rc_temp)
+		llist_add(&ctxt->rc_node, &rdma->sc_recv_ctxts);
+	else
 		svc_rdma_recv_ctxt_destroy(rdma, ctxt);
+}
+
+/**
+ * svc_rdma_release_rqst - Release transport-specific per-rqst resources
+ * @rqstp: svc_rqst being released
+ *
+ * Ensure that the recv_ctxt is released whether or not a Reply
+ * was sent. For example, the client could close the connection,
+ * or svc_process could drop an RPC, before the Reply is sent.
+ */
+void svc_rdma_release_rqst(struct svc_rqst *rqstp)
+{
+	struct svc_rdma_recv_ctxt *ctxt = rqstp->rq_xprt_ctxt;
+	struct svc_xprt *xprt = rqstp->rq_xprt;
+	struct svcxprt_rdma *rdma =
+		container_of(xprt, struct svcxprt_rdma, sc_xprt);
+
+	rqstp->rq_xprt_ctxt = NULL;
+	if (ctxt)
+		svc_rdma_recv_ctxt_put(rdma, ctxt);
 }
 
 static int __svc_rdma_post_recv(struct svcxprt_rdma *rdma,
@@ -759,6 +775,8 @@ int svc_rdma_recvfrom(struct svc_rqst *rqstp)
 	struct svc_rdma_recv_ctxt *ctxt;
 	__be32 *p;
 	int ret;
+
+	rqstp->rq_xprt_ctxt = NULL;
 
 	spin_lock(&rdma_xprt->sc_rq_dto_lock);
 	ctxt = svc_rdma_next_recv_ctxt(&rdma_xprt->sc_read_complete_q);

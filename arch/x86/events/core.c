@@ -375,7 +375,7 @@ int x86_add_exclusive(unsigned int what)
 	 * LBR and BTS are still mutually exclusive.
 	 */
 	if (x86_pmu.lbr_pt_coexist && what == x86_lbr_exclusive_pt)
-		return 0;
+		goto out;
 
 	if (!atomic_inc_not_zero(&x86_pmu.lbr_exclusive[what])) {
 		mutex_lock(&pmc_reserve_mutex);
@@ -387,6 +387,7 @@ int x86_add_exclusive(unsigned int what)
 		mutex_unlock(&pmc_reserve_mutex);
 	}
 
+out:
 	atomic_inc(&active_events);
 	return 0;
 
@@ -397,11 +398,15 @@ fail_unlock:
 
 void x86_del_exclusive(unsigned int what)
 {
+	atomic_dec(&active_events);
+
+	/*
+	 * See the comment in x86_add_exclusive().
+	 */
 	if (x86_pmu.lbr_pt_coexist && what == x86_lbr_exclusive_pt)
 		return;
 
 	atomic_dec(&x86_pmu.lbr_exclusive[what]);
-	atomic_dec(&active_events);
 }
 
 int x86_setup_perfctr(struct perf_event *event)
@@ -1005,6 +1010,27 @@ static int collect_events(struct cpu_hw_events *cpuc, struct perf_event *leader,
 
 	/* current number of events already accepted */
 	n = cpuc->n_events;
+	if (!cpuc->n_events)
+		cpuc->pebs_output = 0;
+
+	if (!cpuc->is_fake && leader->attr.precise_ip) {
+		/*
+		 * For PEBS->PT, if !aux_event, the group leader (PT) went
+		 * away, the group was broken down and this singleton event
+		 * can't schedule any more.
+		 */
+		if (is_pebs_pt(leader) && !leader->aux_event)
+			return -EINVAL;
+
+		/*
+		 * pebs_output: 0: no PEBS so far, 1: PT, 2: DS
+		 */
+		if (cpuc->pebs_output &&
+		    cpuc->pebs_output != is_pebs_pt(leader) + 1)
+			return -EINVAL;
+
+		cpuc->pebs_output = is_pebs_pt(leader) + 1;
+	}
 
 	if (is_x86_event(leader)) {
 		if (n >= max_count)
@@ -1620,9 +1646,12 @@ static struct attribute_group x86_pmu_format_group __ro_after_init = {
 
 ssize_t events_sysfs_show(struct device *dev, struct device_attribute *attr, char *page)
 {
-	struct perf_pmu_events_attr *pmu_attr = \
+	struct perf_pmu_events_attr *pmu_attr =
 		container_of(attr, struct perf_pmu_events_attr, attr);
-	u64 config = x86_pmu.event_map(pmu_attr->id);
+	u64 config = 0;
+
+	if (pmu_attr->id < x86_pmu.max_events)
+		config = x86_pmu.event_map(pmu_attr->id);
 
 	/* string trumps id */
 	if (pmu_attr->event_str)
@@ -1690,6 +1719,9 @@ static umode_t
 is_visible(struct kobject *kobj, struct attribute *attr, int idx)
 {
 	struct perf_pmu_events_attr *pmu_attr;
+
+	if (idx >= x86_pmu.max_events)
+		return 0;
 
 	pmu_attr = container_of(attr, struct perf_pmu_events_attr, attr.attr);
 	/* str trumps id */
@@ -2087,7 +2119,7 @@ static int x86_pmu_event_init(struct perf_event *event)
 
 static void refresh_pce(void *ignored)
 {
-	load_mm_cr4(this_cpu_read(cpu_tlbstate.loaded_mm));
+	load_mm_cr4_irqsoff(this_cpu_read(cpu_tlbstate.loaded_mm));
 }
 
 static void x86_pmu_event_mapped(struct perf_event *event, struct mm_struct *mm)
@@ -2241,6 +2273,17 @@ static int x86_pmu_check_period(struct perf_event *event, u64 value)
 	return 0;
 }
 
+static int x86_pmu_aux_output_match(struct perf_event *event)
+{
+	if (!(pmu.capabilities & PERF_PMU_CAP_AUX_OUTPUT))
+		return 0;
+
+	if (x86_pmu.aux_output_match)
+		return x86_pmu.aux_output_match(event);
+
+	return 0;
+}
+
 static struct pmu pmu = {
 	.pmu_enable		= x86_pmu_enable,
 	.pmu_disable		= x86_pmu_disable,
@@ -2266,6 +2309,8 @@ static struct pmu pmu = {
 	.sched_task		= x86_pmu_sched_task,
 	.task_ctx_size          = sizeof(struct x86_perf_task_context),
 	.check_period		= x86_pmu_check_period,
+
+	.aux_output_match	= x86_pmu_aux_output_match,
 };
 
 void arch_perf_update_userpage(struct perf_event *event,

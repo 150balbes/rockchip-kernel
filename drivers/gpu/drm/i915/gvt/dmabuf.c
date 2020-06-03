@@ -96,12 +96,12 @@ static void dmabuf_gem_object_free(struct kref *kref)
 			dmabuf_obj = container_of(pos,
 					struct intel_vgpu_dmabuf_obj, list);
 			if (dmabuf_obj == obj) {
+				list_del(pos);
 				intel_gvt_hypervisor_put_vfio_device(vgpu);
 				idr_remove(&vgpu->object_idr,
 					   dmabuf_obj->dmabuf_id);
 				kfree(dmabuf_obj->info);
 				kfree(dmabuf_obj);
-				list_del(pos);
 				break;
 			}
 		}
@@ -491,14 +491,12 @@ int intel_vgpu_get_dmabuf(struct intel_vgpu *vgpu, unsigned int dmabuf_id)
 
 	obj->gvt_info = dmabuf_obj->info;
 
-	dmabuf = i915_gem_prime_export(dev, &obj->base, DRM_CLOEXEC | DRM_RDWR);
+	dmabuf = i915_gem_prime_export(&obj->base, DRM_CLOEXEC | DRM_RDWR);
 	if (IS_ERR(dmabuf)) {
 		gvt_vgpu_err("export dma-buf failed\n");
 		ret = PTR_ERR(dmabuf);
 		goto out_free_gem;
 	}
-
-	i915_gem_object_put(obj);
 
 	ret = dma_buf_fd(dmabuf, DRM_CLOEXEC | DRM_RDWR);
 	if (ret < 0) {
@@ -523,6 +521,8 @@ int intel_vgpu_get_dmabuf(struct intel_vgpu *vgpu, unsigned int dmabuf_id)
 		    dmabuf_fd,
 		    file_count(dmabuf->file),
 		    kref_read(&obj->base.refcount));
+
+	i915_gem_object_put(obj);
 
 	return dmabuf_fd;
 

@@ -45,7 +45,7 @@
 
 #define HW_CONS_IDX(sq)                 be16_to_cpu(*(u16 *)((sq)->hw_ci_addr))
 
-#define MIN_SKB_LEN                     17
+#define MIN_SKB_LEN			32
 
 #define	MAX_PAYLOAD_OFFSET	        221
 #define TRANSPORT_OFFSET(l4_hdr, skb)	((u32)((l4_hdr) - (skb)->data))
@@ -136,7 +136,7 @@ static int tx_map_skb(struct hinic_dev *nic_dev, struct sk_buff *skb,
 	struct hinic_hwdev *hwdev = nic_dev->hwdev;
 	struct hinic_hwif *hwif = hwdev->hwif;
 	struct pci_dev *pdev = hwif->pdev;
-	struct skb_frag_struct *frag;
+	skb_frag_t *frag;
 	dma_addr_t dma_addr;
 	int i, j;
 
@@ -621,6 +621,8 @@ static int free_tx_poll(struct napi_struct *napi, int budget)
 
 	do {
 		hw_ci = HW_CONS_IDX(sq) & wq->mask;
+
+		dma_rmb();
 
 		/* Reading a WQEBB to get real WQE size and consumer index. */
 		sq_wqe = hinic_sq_read_wqebb(sq, &skb, &wqe_size, &sw_ci);

@@ -3031,6 +3031,12 @@ static void con_fault(struct ceph_connection *con)
 }
 
 
+void ceph_messenger_reset_nonce(struct ceph_messenger *msgr)
+{
+	u32 nonce = le32_to_cpu(msgr->inst.addr.nonce) + 1000000;
+	msgr->inst.addr.nonce = cpu_to_le32(nonce);
+	encode_my_addr(msgr);
+}
 
 /*
  * initialize a new messenger instance
@@ -3244,12 +3250,16 @@ static struct ceph_msg_data *ceph_msg_data_add(struct ceph_msg *msg)
 
 static void ceph_msg_data_destroy(struct ceph_msg_data *data)
 {
-	if (data->type == CEPH_MSG_DATA_PAGELIST)
+	if (data->type == CEPH_MSG_DATA_PAGES && data->own_pages) {
+		int num_pages = calc_pages_for(data->alignment, data->length);
+		ceph_release_page_vector(data->pages, num_pages);
+	} else if (data->type == CEPH_MSG_DATA_PAGELIST) {
 		ceph_pagelist_release(data->pagelist);
+	}
 }
 
 void ceph_msg_data_add_pages(struct ceph_msg *msg, struct page **pages,
-		size_t length, size_t alignment)
+			     size_t length, size_t alignment, bool own_pages)
 {
 	struct ceph_msg_data *data;
 
@@ -3261,6 +3271,7 @@ void ceph_msg_data_add_pages(struct ceph_msg *msg, struct page **pages,
 	data->pages = pages;
 	data->length = length;
 	data->alignment = alignment & ~PAGE_MASK;
+	data->own_pages = own_pages;
 
 	msg->data_length += length;
 }

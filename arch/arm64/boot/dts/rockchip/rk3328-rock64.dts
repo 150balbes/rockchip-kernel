@@ -23,7 +23,7 @@
 
 	vcc_sd: sdmmc-regulator {
 		compatible = "regulator-fixed";
-		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
+		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdmmc0m1_gpio>;
 		regulator-name = "vcc_sd";
@@ -84,22 +84,11 @@
 		};
 	};
 
-	hdmi-sound {
-		compatible = "audio-graph-card";
-		label = "HDMI";
-		dais = <&i2s0_p0>;
-	};
-
 	sound {
 		compatible = "audio-graph-card";
-		label = "I2S";
-		dais = <&i2s1_p0>;
-	};
-
-	spdif-sound {
-		compatible = "audio-graph-card";
-		label = "SPDIF";
-		dais = <&spdif_p0>;
+		label = "rockchip,rk3328";
+		dais = <&i2s1_p0
+			&spdif_p0>;
 	};
 
 	spdif-dit {
@@ -171,12 +160,6 @@
 
 &hdmi {
 	status = "okay";
-
-	port@0 {
-		hdmi_p0_0: endpoint {
-			remote-endpoint = <&i2s0_p0_0>;
-		};
-	};
 };
 
 &hdmiphy {
@@ -186,7 +169,7 @@
 &i2c1 {
 	status = "okay";
 
-	rk805: rk805@18 {
+	rk805: pmic@18 {
 		compatible = "rockchip,rk805";
 		reg = <0x18>;
 		interrupt-parent = <&gpio2>;
@@ -210,8 +193,8 @@
 		regulators {
 			vdd_logic: DCDC_REG1 {
 				regulator-name = "vdd_logic";
-				regulator-min-microvolt = <900000>;
-				regulator-max-microvolt = <1150000>;
+				regulator-min-microvolt = <712500>;
+				regulator-max-microvolt = <1450000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 				regulator-boot-on;
@@ -223,8 +206,8 @@
 
 			vdd_arm: DCDC_REG2 {
 				regulator-name = "vdd_arm";
-				regulator-min-microvolt = <950000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = <712500>;
+				regulator-max-microvolt = <1450000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 				regulator-boot-on;
@@ -294,18 +277,6 @@
 	};
 };
 
-&i2s0 {
-	status = "okay";
-
-	i2s0_p0: port {
-		i2s0_p0_0: endpoint {
-			dai-format = "i2s";
-			mclk-fs = <256>;
-			remote-endpoint = <&hdmi_p0_0>;
-		};
-	};
-};
-
 &i2s1 {
 	status = "okay";
 
@@ -324,7 +295,7 @@
 	vccio1-supply = <&vcc_io>;
 	vccio2-supply = <&vcc18_emmc>;
 	vccio3-supply = <&vcc_io>;
-	vccio4-supply = <&vcc_io>;
+	vccio4-supply = <&vcc_18>;
 	vccio5-supply = <&vcc_io>;
 	vccio6-supply = <&vcc_io>;
 	pmuio-supply = <&vcc_io>;
@@ -417,15 +388,6 @@
 };
 
 &usb_host0_ohci {
-	status = "okay";
-};
-
-&usbdrd3 {
-	status = "okay";
-};
-
-&usbdrd_dwc3 {
-	dr_mode = "host";
 	status = "okay";
 };
 

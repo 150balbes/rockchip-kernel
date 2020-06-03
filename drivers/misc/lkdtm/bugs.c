@@ -75,7 +75,12 @@ static int warn_counter;
 
 void lkdtm_WARNING(void)
 {
-	WARN(1, "Warning message trigger count: %d\n", warn_counter++);
+	WARN_ON(++warn_counter);
+}
+
+void lkdtm_WARNING_MESSAGE(void)
+{
+	WARN(1, "Warning message trigger count: %d\n", ++warn_counter);
 }
 
 void lkdtm_EXCEPTION(void)
@@ -269,7 +274,7 @@ void lkdtm_STACK_GUARD_PAGE_TRAILING(void)
 
 void lkdtm_UNSET_SMEP(void)
 {
-#ifdef CONFIG_X86_64
+#if IS_ENABLED(CONFIG_X86_64) && !IS_ENABLED(CONFIG_UML)
 #define MOV_CR4_DEPTH	64
 	void (*direct_write_cr4)(unsigned long val);
 	unsigned char *insn;

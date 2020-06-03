@@ -860,7 +860,7 @@ static int ib_nl_send_msg(struct ib_sa_query *query, gfp_t gfp_mask)
 	/* Repair the nlmsg header length */
 	nlmsg_end(skb, nlh);
 
-	return rdma_nl_multicast(skb, RDMA_NL_GROUP_LS, gfp_mask);
+	return rdma_nl_multicast(&init_net, skb, RDMA_NL_GROUP_LS, gfp_mask);
 }
 
 static int ib_nl_make_request(struct ib_sa_query *query, gfp_t gfp_mask)
@@ -1068,7 +1068,7 @@ int ib_nl_handle_set_timeout(struct sk_buff *skb,
 	}
 
 settimeout_out:
-	return skb->len;
+	return 0;
 }
 
 static inline int ib_nl_is_good_resolve_resp(const struct nlmsghdr *nlh)
@@ -1139,7 +1139,7 @@ int ib_nl_handle_resolve_resp(struct sk_buff *skb,
 	}
 
 resp_out:
-	return skb->len;
+	return 0;
 }
 
 static void free_sm_ah(struct kref *kref)

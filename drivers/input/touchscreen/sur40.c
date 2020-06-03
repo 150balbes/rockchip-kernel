@@ -186,7 +186,7 @@ static const struct v4l2_pix_format sur40_pix_format[] = {
 		.width  = SENSOR_RES_X / 2,
 		.height = SENSOR_RES_Y / 2,
 		.field = V4L2_FIELD_NONE,
-		.colorspace = V4L2_COLORSPACE_SRGB,
+		.colorspace = V4L2_COLORSPACE_RAW,
 		.bytesperline = SENSOR_RES_X / 2,
 		.sizeimage = (SENSOR_RES_X/2) * (SENSOR_RES_Y/2),
 	},
@@ -195,7 +195,7 @@ static const struct v4l2_pix_format sur40_pix_format[] = {
 		.width  = SENSOR_RES_X / 2,
 		.height = SENSOR_RES_Y / 2,
 		.field = V4L2_FIELD_NONE,
-		.colorspace = V4L2_COLORSPACE_SRGB,
+		.colorspace = V4L2_COLORSPACE_RAW,
 		.bytesperline = SENSOR_RES_X / 2,
 		.sizeimage = (SENSOR_RES_X/2) * (SENSOR_RES_Y/2),
 	}
@@ -653,7 +653,7 @@ static int sur40_probe(struct usb_interface *interface,
 	int error;
 
 	/* Check if we really have the right interface. */
-	iface_desc = &interface->altsetting[0];
+	iface_desc = interface->cur_altsetting;
 	if (iface_desc->desc.bInterfaceClass != 0xFF)
 		return -ENODEV;
 

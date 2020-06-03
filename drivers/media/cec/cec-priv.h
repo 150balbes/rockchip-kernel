@@ -27,7 +27,6 @@ static inline bool msg_is_raw(const struct cec_msg *msg)
 
 /* cec-core.c */
 extern int cec_debug;
-extern int cec_debounce;
 int cec_get_device(struct cec_devnode *devnode);
 void cec_put_device(struct cec_devnode *devnode);
 

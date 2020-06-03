@@ -1945,8 +1945,9 @@ static void notify_wx_assoc_event(struct ipw_priv *priv)
 	wireless_send_event(priv->net_dev, SIOCGIWAP, &wrqu, NULL);
 }
 
-static void ipw_irq_tasklet(struct ipw_priv *priv)
+static void ipw_irq_tasklet(unsigned long data)
 {
+	struct ipw_priv *priv = (struct ipw_priv *)data;
 	u32 inta, inta_mask, handled = 0;
 	unsigned long flags;
 	int rc = 0;
@@ -2721,7 +2722,7 @@ static void ipw_eeprom_init_sram(struct ipw_priv *priv)
 		/* Do not load eeprom data on fatal error or suspend */
 		ipw_write32(priv, IPW_EEPROM_LOAD_DISABLE, 0);
 	} else {
-		IPW_DEBUG_INFO("Enabling FW initializationg of SRAM\n");
+		IPW_DEBUG_INFO("Enabling FW initialization of SRAM\n");
 
 		/* Load eeprom data on fatal error or suspend */
 		ipw_write32(priv, IPW_EEPROM_LOAD_DISABLE, 1);
@@ -10680,7 +10681,7 @@ static int ipw_setup_deferred_work(struct ipw_priv *priv)
 	INIT_WORK(&priv->qos_activate, ipw_bg_qos_activate);
 #endif				/* CONFIG_IPW2200_QOS */
 
-	tasklet_init(&priv->irq_tasklet, (void (*)(unsigned long))
+	tasklet_init(&priv->irq_tasklet,
 		     ipw_irq_tasklet, (unsigned long)priv);
 
 	return ret;

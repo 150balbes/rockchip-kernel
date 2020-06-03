@@ -357,6 +357,7 @@ static const struct hda_fixup ad1986a_fixups[] = {
 
 static const struct snd_pci_quirk ad1986a_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x103c, 0x30af, "HP B2800", AD1986A_FIXUP_LAPTOP_IMIC),
+	SND_PCI_QUIRK(0x1043, 0x1153, "ASUS M9V", AD1986A_FIXUP_LAPTOP_IMIC),
 	SND_PCI_QUIRK(0x1043, 0x1443, "ASUS Z99He", AD1986A_FIXUP_EAPD),
 	SND_PCI_QUIRK(0x1043, 0x1447, "ASUS A8JN", AD1986A_FIXUP_EAPD),
 	SND_PCI_QUIRK_MASK(0x1043, 0xff00, 0x8100, "ASUS P5", AD1986A_FIXUP_3STACK),
@@ -388,7 +389,7 @@ static int patch_ad1986a(struct hda_codec *codec)
 {
 	int err;
 	struct ad198x_spec *spec;
-	static hda_nid_t preferred_pairs[] = {
+	static const hda_nid_t preferred_pairs[] = {
 		0x1a, 0x03,
 		0x1b, 0x03,
 		0x1c, 0x04,
@@ -518,9 +519,9 @@ static int ad1983_add_spdif_mux_ctl(struct hda_codec *codec)
 
 static int patch_ad1983(struct hda_codec *codec)
 {
+	static const hda_nid_t conn_0c[] = { 0x08 };
+	static const hda_nid_t conn_0d[] = { 0x09 };
 	struct ad198x_spec *spec;
-	static hda_nid_t conn_0c[] = { 0x08 };
-	static hda_nid_t conn_0d[] = { 0x09 };
 	int err;
 
 	err = alloc_ad_spec(codec);

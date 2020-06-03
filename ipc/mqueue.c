@@ -82,6 +82,7 @@ struct mqueue_inode_info {
 
 	struct sigevent notify;
 	struct pid *notify_owner;
+	u32 notify_self_exec_id;
 	struct user_namespace *notify_user_ns;
 	struct user_struct *user;	/* user who created, for accounting */
 	struct sock *notify_sock;
@@ -364,8 +365,7 @@ static int mqueue_get_tree(struct fs_context *fc)
 {
 	struct mqueue_fs_context *ctx = fc->fs_private;
 
-	fc->s_fs_info = ctx->ipc_ns;
-	return vfs_get_super(fc, vfs_get_keyed_super, mqueue_fill_super);
+	return get_tree_keyed(fc, mqueue_fill_super, ctx->ipc_ns);
 }
 
 static void mqueue_fs_context_free(struct fs_context *fc)
@@ -710,28 +710,44 @@ static void __do_notify(struct mqueue_inode_info *info)
 	 * synchronously. */
 	if (info->notify_owner &&
 	    info->attr.mq_curmsgs == 1) {
-		struct kernel_siginfo sig_i;
 		switch (info->notify.sigev_notify) {
 		case SIGEV_NONE:
 			break;
-		case SIGEV_SIGNAL:
-			/* sends signal */
+		case SIGEV_SIGNAL: {
+			struct kernel_siginfo sig_i;
+			struct task_struct *task;
+
+			/* do_mq_notify() accepts sigev_signo == 0, why?? */
+			if (!info->notify.sigev_signo)
+				break;
 
 			clear_siginfo(&sig_i);
 			sig_i.si_signo = info->notify.sigev_signo;
 			sig_i.si_errno = 0;
 			sig_i.si_code = SI_MESGQ;
 			sig_i.si_value = info->notify.sigev_value;
-			/* map current pid/uid into info->owner's namespaces */
 			rcu_read_lock();
+			/* map current pid/uid into info->owner's namespaces */
 			sig_i.si_pid = task_tgid_nr_ns(current,
 						ns_of_pid(info->notify_owner));
-			sig_i.si_uid = from_kuid_munged(info->notify_user_ns, current_uid());
+			sig_i.si_uid = from_kuid_munged(info->notify_user_ns,
+						current_uid());
+			/*
+			 * We can't use kill_pid_info(), this signal should
+			 * bypass check_kill_permission(). It is from kernel
+			 * but si_fromuser() can't know this.
+			 * We do check the self_exec_id, to avoid sending
+			 * signals to programs that don't expect them.
+			 */
+			task = pid_task(info->notify_owner, PIDTYPE_TGID);
+			if (task && task->self_exec_id ==
+						info->notify_self_exec_id) {
+				do_send_sig_info(info->notify.sigev_signo,
+						&sig_i, task, PIDTYPE_TGID);
+			}
 			rcu_read_unlock();
-
-			kill_pid_info(info->notify.sigev_signo,
-				      &sig_i, info->notify_owner);
 			break;
+		}
 		case SIGEV_THREAD:
 			set_cookie(info->notify_cookie, NOTIFY_WOKENUP);
 			netlink_sendskb(info->notify_sock, info->notify_cookie);
@@ -1241,15 +1257,14 @@ static int do_mq_notify(mqd_t mqdes, const struct sigevent *notification)
 
 			/* create the notify skb */
 			nc = alloc_skb(NOTIFY_COOKIE_LEN, GFP_KERNEL);
-			if (!nc) {
-				ret = -ENOMEM;
-				goto out;
-			}
+			if (!nc)
+				return -ENOMEM;
+
 			if (copy_from_user(nc->data,
 					notification->sigev_value.sival_ptr,
 					NOTIFY_COOKIE_LEN)) {
 				ret = -EFAULT;
-				goto out;
+				goto free_skb;
 			}
 
 			/* TODO: add a header? */
@@ -1265,8 +1280,7 @@ retry:
 			fdput(f);
 			if (IS_ERR(sock)) {
 				ret = PTR_ERR(sock);
-				sock = NULL;
-				goto out;
+				goto free_skb;
 			}
 
 			timeo = MAX_SCHEDULE_TIMEOUT;
@@ -1275,11 +1289,8 @@ retry:
 				sock = NULL;
 				goto retry;
 			}
-			if (ret) {
-				sock = NULL;
-				nc = NULL;
-				goto out;
-			}
+			if (ret)
+				return ret;
 		}
 	}
 
@@ -1321,6 +1332,7 @@ retry:
 			info->notify.sigev_signo = notification->sigev_signo;
 			info->notify.sigev_value = notification->sigev_value;
 			info->notify.sigev_notify = SIGEV_SIGNAL;
+			info->notify_self_exec_id = current->self_exec_id;
 			break;
 		}
 
@@ -1334,7 +1346,8 @@ out_fput:
 out:
 	if (sock)
 		netlink_detachskb(sock, nc);
-	else if (nc)
+	else
+free_skb:
 		dev_kfree_skb(nc);
 
 	return ret;

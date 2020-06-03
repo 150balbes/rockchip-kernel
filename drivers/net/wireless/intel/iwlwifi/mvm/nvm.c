@@ -249,7 +249,7 @@ static int iwl_nvm_read_section(struct iwl_mvm *mvm, u16 section,
 	while (ret == length) {
 		/* Check no memory assumptions fail and cause an overflow */
 		if ((size_read + offset + length) >
-		    mvm->cfg->base_params->eeprom_size) {
+		    mvm->trans->trans_cfg->base_params->eeprom_size) {
 			IWL_ERR(mvm, "EEPROM size is too small for NVM\n");
 			return -ENOBUFS;
 		}
@@ -309,7 +309,8 @@ iwl_parse_nvm_sections(struct iwl_mvm *mvm)
 		}
 
 		/* PHY_SKU section is mandatory in B0 */
-		if (!mvm->nvm_sections[NVM_SECTION_TYPE_PHY_SKU].data) {
+		if (mvm->trans->cfg->nvm_type == IWL_NVM_EXT &&
+		    !mvm->nvm_sections[NVM_SECTION_TYPE_PHY_SKU].data) {
 			IWL_ERR(mvm,
 				"Can't parse phy_sku in B0, empty sections\n");
 			return NULL;
@@ -372,7 +373,7 @@ int iwl_nvm_init(struct iwl_mvm *mvm)
 	/* Read From FW NVM */
 	IWL_DEBUG_EEPROM(mvm->trans->dev, "Read from NVM\n");
 
-	nvm_buffer = kmalloc(mvm->cfg->base_params->eeprom_size,
+	nvm_buffer = kmalloc(mvm->trans->trans_cfg->base_params->eeprom_size,
 			     GFP_KERNEL);
 	if (!nvm_buffer)
 		return -ENOMEM;

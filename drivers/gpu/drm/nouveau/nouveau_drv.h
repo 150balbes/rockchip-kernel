@@ -46,7 +46,10 @@
 #include <nvif/mmu.h>
 #include <nvif/vmm.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
 
 #include <drm/ttm/ttm_bo_api.h>
 #include <drm/ttm/ttm_bo_driver.h>
@@ -127,7 +130,6 @@ nouveau_cli(struct drm_file *fpriv)
 }
 
 #include <nvif/object.h>
-#include <nvif/device.h>
 
 struct nouveau_drm {
 	struct nouveau_cli master;
@@ -135,6 +137,8 @@ struct nouveau_drm {
 	struct drm_device *dev;
 
 	struct list_head clients;
+
+	u8 old_pm_cap;
 
 	struct {
 		struct agp_bridge_data *bridge;
@@ -203,9 +207,6 @@ struct nouveau_drm {
 
 	/* led management */
 	struct nouveau_led *led;
-
-	/* display power reference */
-	bool have_disp_power_ref;
 
 	struct dev_pm_domain vga_pm_domain;
 

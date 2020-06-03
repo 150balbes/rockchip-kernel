@@ -822,6 +822,7 @@ union pqi_reset_register {
 #define PQI_HBA_BUS			2
 #define PQI_EXTERNAL_RAID_VOLUME_BUS	3
 #define PQI_MAX_BUS			PQI_EXTERNAL_RAID_VOLUME_BUS
+#define PQI_VSEP_CISS_BTL		379
 
 struct report_lun_header {
 	__be32	list_length;
@@ -906,7 +907,6 @@ struct pqi_scsi_dev {
 	u8	scsi3addr[8];
 	__be64	wwid;
 	u8	volume_id[16];
-	u8	unique_id[16];
 	u8	is_physical_device : 1;
 	u8	is_external_raid_device : 1;
 	u8	is_expander_smp_device : 1;
@@ -930,6 +930,9 @@ struct pqi_scsi_dev {
 	u8	active_path_index;
 	u8	path_map;
 	u8	bay;
+	u8	box_index;
+	u8	phys_box_on_bus;
+	u8	phy_connected_dev_type;
 	u8	box[8];
 	u16	phys_connector[8];
 	bool	raid_bypass_configured;	/* RAID bypass configured */
@@ -1073,6 +1076,9 @@ struct pqi_ctrl_info {
 	unsigned int	ctrl_id;
 	struct pci_dev	*pci_dev;
 	char		firmware_version[11];
+	char		serial_number[17];
+	char		model[17];
+	char		vendor[9];
 	void __iomem	*iomem_base;
 	struct pqi_ctrl_registers __iomem *registers;
 	struct pqi_device_registers __iomem *pqi_registers;
@@ -1123,8 +1129,9 @@ struct pqi_ctrl_info {
 	struct mutex	ofa_mutex; /* serialize ofa */
 	bool		controller_online;
 	bool		block_requests;
-	bool		in_shutdown;
+	bool		block_device_reset;
 	bool		in_ofa;
+	bool		in_shutdown;
 	u8		inbound_spanning_supported : 1;
 	u8		outbound_spanning_supported : 1;
 	u8		pqi_mode_enabled : 1;
@@ -1166,6 +1173,7 @@ struct pqi_ctrl_info {
 	struct          pqi_ofa_memory *pqi_ofa_mem_virt_addr;
 	dma_addr_t      pqi_ofa_mem_dma_handle;
 	void            **pqi_ofa_chunk_virt_addr;
+	atomic_t	sync_cmds_outstanding;
 };
 
 enum pqi_ctrl_mode {
@@ -1224,12 +1232,21 @@ struct bmic_identify_controller {
 	__le16	extended_logical_unit_count;
 	u8	reserved1[34];
 	__le16	firmware_build_number;
-	u8	reserved2[100];
+	u8	reserved2[8];
+	u8	vendor_id[8];
+	u8	product_id[16];
+	u8	reserved3[68];
 	u8	controller_mode;
-	u8	reserved3[32];
+	u8	reserved4[32];
+};
+
+struct bmic_sense_subsystem_info {
+	u8	reserved[44];
+	u8	ctrl_serial_number[16];
 };
 
 #define SA_EXPANDER_SMP_DEVICE		0x05
+#define SA_CONTROLLER_DEVICE		0x07
 /*SCSI Invalid Device Type for SAS devices*/
 #define PQI_SAS_SCSI_INVALID_DEVTYPE	0xff
 
@@ -1405,6 +1422,11 @@ static inline void pqi_ctrl_unbusy(struct pqi_ctrl_info *ctrl_info)
 static inline bool pqi_ctrl_blocked(struct pqi_ctrl_info *ctrl_info)
 {
 	return ctrl_info->block_requests;
+}
+
+static inline bool pqi_device_reset_blocked(struct pqi_ctrl_info *ctrl_info)
+{
+	return ctrl_info->block_device_reset;
 }
 
 void pqi_sas_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,

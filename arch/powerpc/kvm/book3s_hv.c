@@ -401,8 +401,11 @@ static int kvmppc_set_arch_compat(struct kvm_vcpu *vcpu, u32 arch_compat)
 
 	spin_lock(&vc->lock);
 	vc->arch_compat = arch_compat;
-	/* Set all PCR bits for which guest_pcr_bit <= bit < host_pcr_bit */
-	vc->pcr = host_pcr_bit - guest_pcr_bit;
+	/*
+	 * Set all PCR bits for which guest_pcr_bit <= bit < host_pcr_bit
+	 * Also set all reserved PCR bits
+	 */
+	vc->pcr = (host_pcr_bit - guest_pcr_bit) | PCR_MASK;
 	spin_unlock(&vc->lock);
 
 	return 0;
@@ -1678,7 +1681,14 @@ static int kvmppc_get_one_reg_hv(struct kvm_vcpu *vcpu, u64 id,
 		*val = get_reg_val(id, vcpu->arch.pspb);
 		break;
 	case KVM_REG_PPC_DPDES:
-		*val = get_reg_val(id, vcpu->arch.vcore->dpdes);
+		/*
+		 * On POWER9, where we are emulating msgsndp etc.,
+		 * we return 1 bit for each vcpu, which can come from
+		 * either vcore->dpdes or doorbell_request.
+		 * On POWER8, doorbell_request is 0.
+		 */
+		*val = get_reg_val(id, vcpu->arch.vcore->dpdes |
+				   vcpu->arch.doorbell_request);
 		break;
 	case KVM_REG_PPC_VTB:
 		*val = get_reg_val(id, vcpu->arch.vcore->vtb);
@@ -2344,7 +2354,7 @@ static struct kvm_vcpu *kvmppc_core_vcpu_create_hv(struct kvm *kvm,
 	mutex_unlock(&kvm->lock);
 
 	if (!vcore)
-		goto free_vcpu;
+		goto uninit_vcpu;
 
 	spin_lock(&vcore->lock);
 	++vcore->num_threads;
@@ -2361,6 +2371,8 @@ static struct kvm_vcpu *kvmppc_core_vcpu_create_hv(struct kvm *kvm,
 
 	return vcpu;
 
+uninit_vcpu:
+	kvm_vcpu_uninit(vcpu);
 free_vcpu:
 	kmem_cache_free(kvm_vcpu_cache, vcpu);
 out:
@@ -2860,7 +2872,7 @@ static void collect_piggybacks(struct core_info *cip, int target_threads)
 		if (!spin_trylock(&pvc->lock))
 			continue;
 		prepare_threads(pvc);
-		if (!pvc->n_runnable) {
+		if (!pvc->n_runnable || !pvc->kvm->arch.mmu_ready) {
 			list_del_init(&pvc->preempt_list);
 			if (pvc->runner == NULL) {
 				pvc->vcore_state = VCORE_INACTIVE;
@@ -2881,15 +2893,20 @@ static void collect_piggybacks(struct core_info *cip, int target_threads)
 	spin_unlock(&lp->lock);
 }
 
-static bool recheck_signals(struct core_info *cip)
+static bool recheck_signals_and_mmu(struct core_info *cip)
 {
 	int sub, i;
 	struct kvm_vcpu *vcpu;
+	struct kvmppc_vcore *vc;
 
-	for (sub = 0; sub < cip->n_subcores; ++sub)
-		for_each_runnable_thread(i, vcpu, cip->vc[sub])
+	for (sub = 0; sub < cip->n_subcores; ++sub) {
+		vc = cip->vc[sub];
+		if (!vc->kvm->arch.mmu_ready)
+			return true;
+		for_each_runnable_thread(i, vcpu, vc)
 			if (signal_pending(vcpu->arch.run_task))
 				return true;
+	}
 	return false;
 }
 
@@ -3119,7 +3136,7 @@ static noinline void kvmppc_run_core(struct kvmppc_vcore *vc)
 	local_irq_disable();
 	hard_irq_disable();
 	if (lazy_irq_pending() || need_resched() ||
-	    recheck_signals(&core_info) || !vc->kvm->arch.mmu_ready) {
+	    recheck_signals_and_mmu(&core_info)) {
 		local_irq_enable();
 		vc->vcore_state = VCORE_INACTIVE;
 		/* Unlock all except the primary vcore */
@@ -3398,7 +3415,7 @@ static int kvmhv_load_hv_regs_and_go(struct kvm_vcpu *vcpu, u64 time_limit,
 	}
 
 	if (vc->pcr)
-		mtspr(SPRN_PCR, vc->pcr);
+		mtspr(SPRN_PCR, vc->pcr | PCR_MASK);
 	mtspr(SPRN_DPDES, vc->dpdes);
 	mtspr(SPRN_VTB, vc->vtb);
 
@@ -3478,7 +3495,7 @@ static int kvmhv_load_hv_regs_and_go(struct kvm_vcpu *vcpu, u64 time_limit,
 	vc->vtb = mfspr(SPRN_VTB);
 	mtspr(SPRN_DPDES, 0);
 	if (vc->pcr)
-		mtspr(SPRN_PCR, 0);
+		mtspr(SPRN_PCR, PCR_MASK);
 
 	if (vc->tb_offset_applied) {
 		u64 new_tb = mftb() - vc->tb_offset_applied;
@@ -3606,6 +3623,7 @@ int kvmhv_p9_guest_entry(struct kvm_vcpu *vcpu, u64 time_limit,
 		if (trap == BOOK3S_INTERRUPT_SYSCALL && !vcpu->arch.nested &&
 		    kvmppc_get_gpr(vcpu, 3) == H_CEDE) {
 			kvmppc_nested_cede(vcpu);
+			kvmppc_set_gpr(vcpu, 3, 0);
 			trap = 0;
 		}
 	} else {
@@ -5462,6 +5480,12 @@ static int kvmppc_radix_possible(void)
 static int kvmppc_book3s_init_hv(void)
 {
 	int r;
+
+	if (!tlbie_capable) {
+		pr_err("KVM-HV: Host does not support TLBIE\n");
+		return -ENODEV;
+	}
+
 	/*
 	 * FIXME!! Do we need to check on all cpus ?
 	 */

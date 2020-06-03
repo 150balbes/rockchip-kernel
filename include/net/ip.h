@@ -88,6 +88,7 @@ static inline void ipcm_init_sk(struct ipcm_cookie *ipcm,
 {
 	ipcm_init(ipcm);
 
+	ipcm->sockc.mark = inet->sk.sk_mark;
 	ipcm->sockc.tsflags = inet->sk.sk_tsflags;
 	ipcm->oif = inet->sk.sk_bound_dev_if;
 	ipcm->addr = inet->inet_saddr;
@@ -184,7 +185,7 @@ static inline struct sk_buff *ip_fraglist_next(struct ip_fraglist_iter *iter)
 }
 
 struct ip_frag_state {
-	struct iphdr	*iph;
+	bool		DF;
 	unsigned int	hlen;
 	unsigned int	ll_rs;
 	unsigned int	mtu;
@@ -195,7 +196,7 @@ struct ip_frag_state {
 };
 
 void ip_frag_init(struct sk_buff *skb, unsigned int hlen, unsigned int ll_rs,
-		  unsigned int mtu, struct ip_frag_state *state);
+		  unsigned int mtu, bool DF, struct ip_frag_state *state);
 struct sk_buff *ip_frag_next(struct sk_buff *skb,
 			     struct ip_frag_state *state);
 
@@ -758,5 +759,10 @@ int ip_misc_proc_init(void);
 
 int rtm_getroute_parse_ip_proto(struct nlattr *attr, u8 *ip_proto, u8 family,
 				struct netlink_ext_ack *extack);
+
+static inline bool inetdev_valid_mtu(unsigned int mtu)
+{
+	return likely(mtu >= IPV4_MIN_MTU);
+}
 
 #endif	/* _IP_H */

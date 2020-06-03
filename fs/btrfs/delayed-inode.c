@@ -6,6 +6,8 @@
 
 #include <linux/slab.h>
 #include <linux/iversion.h>
+#include <linux/sched/mm.h>
+#include "misc.h"
 #include "delayed-inode.h"
 #include "disk-io.h"
 #include "transaction.h"
@@ -474,6 +476,9 @@ static void __btrfs_remove_delayed_item(struct btrfs_delayed_item *delayed_item)
 	struct rb_root_cached *root;
 	struct btrfs_delayed_root *delayed_root;
 
+	/* Not associated with any delayed_node */
+	if (!delayed_item->delayed_node)
+		return;
 	delayed_root = delayed_item->delayed_node->root->fs_info->delayed_root;
 
 	BUG_ON(!delayed_root);
@@ -555,7 +560,7 @@ static int btrfs_delayed_item_reserve_metadata(struct btrfs_trans_handle *trans,
 	src_rsv = trans->block_rsv;
 	dst_rsv = &fs_info->delayed_block_rsv;
 
-	num_bytes = btrfs_calc_trans_metadata_size(fs_info, 1);
+	num_bytes = btrfs_calc_insert_metadata_size(fs_info, 1);
 
 	/*
 	 * Here we migrate space rsv from transaction rsv, since have already
@@ -609,7 +614,7 @@ static int btrfs_delayed_inode_reserve_metadata(
 	src_rsv = trans->block_rsv;
 	dst_rsv = &fs_info->delayed_block_rsv;
 
-	num_bytes = btrfs_calc_trans_metadata_size(fs_info, 1);
+	num_bytes = btrfs_calc_metadata_size(fs_info, 1);
 
 	/*
 	 * btrfs_dirty_inode will update the inode under btrfs_join_transaction
@@ -800,11 +805,14 @@ static int btrfs_insert_delayed_item(struct btrfs_trans_handle *trans,
 				     struct btrfs_delayed_item *delayed_item)
 {
 	struct extent_buffer *leaf;
+	unsigned int nofs_flag;
 	char *ptr;
 	int ret;
 
+	nofs_flag = memalloc_nofs_save();
 	ret = btrfs_insert_empty_item(trans, root, path, &delayed_item->key,
 				      delayed_item->data_len);
+	memalloc_nofs_restore(nofs_flag);
 	if (ret < 0 && ret != -EEXIST)
 		return ret;
 
@@ -932,6 +940,7 @@ static int btrfs_delete_delayed_items(struct btrfs_trans_handle *trans,
 				      struct btrfs_delayed_node *node)
 {
 	struct btrfs_delayed_item *curr, *prev;
+	unsigned int nofs_flag;
 	int ret = 0;
 
 do_again:
@@ -940,7 +949,9 @@ do_again:
 	if (!curr)
 		goto delete_fail;
 
+	nofs_flag = memalloc_nofs_save();
 	ret = btrfs_search_slot(trans, root, &curr->key, path, -1, 1);
+	memalloc_nofs_restore(nofs_flag);
 	if (ret < 0)
 		goto delete_fail;
 	else if (ret > 0) {
@@ -1007,6 +1018,7 @@ static int __btrfs_update_delayed_inode(struct btrfs_trans_handle *trans,
 	struct btrfs_key key;
 	struct btrfs_inode_item *inode_item;
 	struct extent_buffer *leaf;
+	unsigned int nofs_flag;
 	int mod;
 	int ret;
 
@@ -1019,7 +1031,9 @@ static int __btrfs_update_delayed_inode(struct btrfs_trans_handle *trans,
 	else
 		mod = 1;
 
+	nofs_flag = memalloc_nofs_save();
 	ret = btrfs_lookup_inode(trans, root, path, &key, mod);
+	memalloc_nofs_restore(nofs_flag);
 	if (ret > 0) {
 		btrfs_release_path(path);
 		return -ENOENT;
@@ -1070,7 +1084,10 @@ search:
 
 	key.type = BTRFS_INODE_EXTREF_KEY;
 	key.offset = -1;
+
+	nofs_flag = memalloc_nofs_save();
 	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
+	memalloc_nofs_restore(nofs_flag);
 	if (ret < 0)
 		goto err_out;
 	ASSERT(ret);
@@ -1363,8 +1380,8 @@ static int btrfs_wq_run_delayed_node(struct btrfs_delayed_root *delayed_root,
 		return -ENOMEM;
 
 	async_work->delayed_root = delayed_root;
-	btrfs_init_work(&async_work->work, btrfs_delayed_meta_helper,
-			btrfs_async_run_delayed_root, NULL, NULL);
+	btrfs_init_work(&async_work->work, btrfs_async_run_delayed_root, NULL,
+			NULL);
 	async_work->nr = nr;
 
 	btrfs_queue_work(fs_info->delayed_workers, &async_work->work);
@@ -1525,7 +1542,12 @@ int btrfs_delete_delayed_dir_index(struct btrfs_trans_handle *trans,
 	 * we have reserved enough space when we start a new transaction,
 	 * so reserving metadata failure is impossible.
 	 */
-	BUG_ON(ret);
+	if (ret < 0) {
+		btrfs_err(trans->fs_info,
+"metadata reservation failed for delayed dir item deltiona, should have been reserved");
+		btrfs_release_delayed_item(item);
+		goto end;
+	}
 
 	mutex_lock(&node->mutex);
 	ret = __btrfs_add_delayed_deletion_item(node, item);
@@ -1534,7 +1556,8 @@ int btrfs_delete_delayed_dir_index(struct btrfs_trans_handle *trans,
 			  "err add delayed dir index item(index: %llu) into the deletion tree of the delayed node(root id: %llu, inode id: %llu, errno: %d)",
 			  index, node->root->root_key.objectid,
 			  node->inode_id, ret);
-		BUG();
+		btrfs_delayed_item_release_metadata(dir->root, item);
+		btrfs_release_delayed_item(item);
 	}
 	mutex_unlock(&node->mutex);
 end:
@@ -1939,12 +1962,19 @@ void btrfs_kill_all_delayed_nodes(struct btrfs_root *root)
 		}
 
 		inode_id = delayed_nodes[n - 1]->inode_id + 1;
-
-		for (i = 0; i < n; i++)
-			refcount_inc(&delayed_nodes[i]->refs);
+		for (i = 0; i < n; i++) {
+			/*
+			 * Don't increase refs in case the node is dead and
+			 * about to be removed from the tree in the loop below
+			 */
+			if (!refcount_inc_not_zero(&delayed_nodes[i]->refs))
+				delayed_nodes[i] = NULL;
+		}
 		spin_unlock(&root->inode_lock);
 
 		for (i = 0; i < n; i++) {
+			if (!delayed_nodes[i])
+				continue;
 			__btrfs_kill_delayed_node(delayed_nodes[i]);
 			btrfs_release_delayed_node(delayed_nodes[i]);
 		}

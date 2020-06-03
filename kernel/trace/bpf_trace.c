@@ -142,8 +142,13 @@ BPF_CALL_3(bpf_probe_read, void *, dst, u32, size, const void *, unsafe_ptr)
 {
 	int ret;
 
+	ret = security_locked_down(LOCKDOWN_BPF_READ);
+	if (ret < 0)
+		goto out;
+
 	ret = probe_kernel_read(dst, unsafe_ptr, size);
 	if (unlikely(ret < 0))
+out:
 		memset(dst, 0, size);
 
 	return ret;
@@ -158,7 +163,7 @@ static const struct bpf_func_proto bpf_probe_read_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_3(bpf_probe_write_user, void *, unsafe_ptr, const void *, src,
+BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
 	   u32, size)
 {
 	/*
@@ -181,10 +186,8 @@ BPF_CALL_3(bpf_probe_write_user, void *, unsafe_ptr, const void *, src,
 		return -EPERM;
 	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
-	if (!access_ok(unsafe_ptr, size))
-		return -EPERM;
 
-	return probe_kernel_write(unsafe_ptr, src, size);
+	return probe_user_write(unsafe_ptr, src, size);
 }
 
 static const struct bpf_func_proto bpf_probe_write_user_proto = {
@@ -500,14 +503,17 @@ static const struct bpf_func_proto bpf_perf_event_output_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
-static DEFINE_PER_CPU(struct pt_regs, bpf_pt_regs);
-static DEFINE_PER_CPU(struct perf_sample_data, bpf_misc_sd);
+static DEFINE_PER_CPU(int, bpf_event_output_nest_level);
+struct bpf_nested_pt_regs {
+	struct pt_regs regs[3];
+};
+static DEFINE_PER_CPU(struct bpf_nested_pt_regs, bpf_pt_regs);
+static DEFINE_PER_CPU(struct bpf_trace_sample_data, bpf_misc_sds);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy)
 {
-	struct perf_sample_data *sd = this_cpu_ptr(&bpf_misc_sd);
-	struct pt_regs *regs = this_cpu_ptr(&bpf_pt_regs);
+	int nest_level = this_cpu_inc_return(bpf_event_output_nest_level);
 	struct perf_raw_frag frag = {
 		.copy		= ctx_copy,
 		.size		= ctx_size,
@@ -522,12 +528,25 @@ u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 			.data	= meta,
 		},
 	};
+	struct perf_sample_data *sd;
+	struct pt_regs *regs;
+	u64 ret;
+
+	if (WARN_ON_ONCE(nest_level > ARRAY_SIZE(bpf_misc_sds.sds))) {
+		ret = -EBUSY;
+		goto out;
+	}
+	sd = this_cpu_ptr(&bpf_misc_sds.sds[nest_level - 1]);
+	regs = this_cpu_ptr(&bpf_pt_regs.regs[nest_level - 1]);
 
 	perf_fetch_caller_regs(regs);
 	perf_sample_data_init(sd, 0, 0);
 	sd->raw = &raw;
 
-	return __bpf_perf_event_output(regs, map, flags, sd);
+	ret = __bpf_perf_event_output(regs, map, flags, sd);
+out:
+	this_cpu_dec(bpf_event_output_nest_level);
+	return ret;
 }
 
 BPF_CALL_0(bpf_get_current_task)
@@ -569,6 +588,10 @@ BPF_CALL_3(bpf_probe_read_str, void *, dst, u32, size,
 {
 	int ret;
 
+	ret = security_locked_down(LOCKDOWN_BPF_READ);
+	if (ret < 0)
+		goto out;
+
 	/*
 	 * The strncpy_from_unsafe() call will likely not fill the entire
 	 * buffer, but that's okay in this circumstance as we're probing
@@ -580,6 +603,7 @@ BPF_CALL_3(bpf_probe_read_str, void *, dst, u32, size,
 	 */
 	ret = strncpy_from_unsafe(dst, unsafe_ptr, size);
 	if (unlikely(ret < 0))
+out:
 		memset(dst, 0, size);
 
 	return ret;
@@ -626,7 +650,7 @@ BPF_CALL_1(bpf_send_signal, u32, sig)
 	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
 
-	if (in_nmi()) {
+	if (irqs_disabled()) {
 		/* Do an early check on signal validity. Otherwise,
 		 * the error is lost in deferred irq_work.
 		 */

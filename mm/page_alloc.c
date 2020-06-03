@@ -670,6 +670,7 @@ out:
 
 void free_compound_page(struct page *page)
 {
+	mem_cgroup_uncharge(page);
 	__free_pages_ok(page, compound_order(page));
 }
 
@@ -693,33 +694,26 @@ void prep_compound_page(struct page *page, unsigned int order)
 #ifdef CONFIG_DEBUG_PAGEALLOC
 unsigned int _debug_guardpage_minorder;
 
-#ifdef CONFIG_DEBUG_PAGEALLOC_ENABLE_DEFAULT
-DEFINE_STATIC_KEY_TRUE(_debug_pagealloc_enabled);
-#else
+bool _debug_pagealloc_enabled_early __read_mostly
+			= IS_ENABLED(CONFIG_DEBUG_PAGEALLOC_ENABLE_DEFAULT);
+EXPORT_SYMBOL(_debug_pagealloc_enabled_early);
 DEFINE_STATIC_KEY_FALSE(_debug_pagealloc_enabled);
-#endif
 EXPORT_SYMBOL(_debug_pagealloc_enabled);
 
 DEFINE_STATIC_KEY_FALSE(_debug_guardpage_enabled);
 
 static int __init early_debug_pagealloc(char *buf)
 {
-	bool enable = false;
-
-	if (kstrtobool(buf, &enable))
-		return -EINVAL;
-
-	if (enable)
-		static_branch_enable(&_debug_pagealloc_enabled);
-
-	return 0;
+	return kstrtobool(buf, &_debug_pagealloc_enabled_early);
 }
 early_param("debug_pagealloc", early_debug_pagealloc);
 
-static void init_debug_guardpage(void)
+void init_debug_pagealloc(void)
 {
 	if (!debug_pagealloc_enabled())
 		return;
+
+	static_branch_enable(&_debug_pagealloc_enabled);
 
 	if (!debug_guardpage_minorder())
 		return;
@@ -1174,12 +1168,18 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		debug_check_no_obj_freed(page_address(page),
 					   PAGE_SIZE << order);
 	}
-	arch_free_page(page, order);
 	if (want_init_on_free())
 		kernel_init_free_pages(page, 1 << order);
 
 	kernel_poison_pages(page, 1 << order, 0);
-	if (debug_pagealloc_enabled())
+	/*
+	 * arch_free_page() can make the page's contents inaccessible.  s390
+	 * does this.  So nothing which can access the page's contents should
+	 * happen after this.
+	 */
+	arch_free_page(page, order);
+
+	if (debug_pagealloc_enabled_static())
 		kernel_map_pages(page, 1 << order, 0);
 
 	kasan_free_nondeferred_pages(page, order);
@@ -1200,7 +1200,7 @@ static bool free_pcp_prepare(struct page *page)
 
 static bool bulkfree_pcp_prepare(struct page *page)
 {
-	if (debug_pagealloc_enabled())
+	if (debug_pagealloc_enabled_static())
 		return free_pages_check(page);
 	else
 		return false;
@@ -1214,7 +1214,7 @@ static bool bulkfree_pcp_prepare(struct page *page)
  */
 static bool free_pcp_prepare(struct page *page)
 {
-	if (debug_pagealloc_enabled())
+	if (debug_pagealloc_enabled_static())
 		return free_pages_prepare(page, 0, true);
 	else
 		return free_pages_prepare(page, 0, false);
@@ -1555,6 +1555,7 @@ void set_zone_contiguous(struct zone *zone)
 		if (!__pageblock_pfn_to_page(block_start_pfn,
 					     block_end_pfn, zone))
 			return;
+		cond_resched();
 	}
 
 	/* We confirm that there is no hole */
@@ -1941,6 +1942,14 @@ void __init page_alloc_init_late(void)
 	wait_for_completion(&pgdat_init_all_done_comp);
 
 	/*
+	 * The number of managed pages has changed due to the initialisation
+	 * so the pcpu batch and high limits needs to be updated or the limits
+	 * will be artificially small.
+	 */
+	for_each_populated_zone(zone)
+		zone_pcp_update(zone);
+
+	/*
 	 * We initialized the rest of the deferred pages.  Permanently disable
 	 * on-demand struct page initialization.
 	 */
@@ -1958,10 +1967,6 @@ void __init page_alloc_init_late(void)
 
 	for_each_populated_zone(zone)
 		set_zone_contiguous(zone);
-
-#ifdef CONFIG_DEBUG_PAGEALLOC
-	init_debug_guardpage();
-#endif
 }
 
 #ifdef CONFIG_CMA
@@ -2091,7 +2096,7 @@ static inline bool free_pages_prezeroed(void)
  */
 static inline bool check_pcp_refill(struct page *page)
 {
-	if (debug_pagealloc_enabled())
+	if (debug_pagealloc_enabled_static())
 		return check_new_page(page);
 	else
 		return false;
@@ -2113,7 +2118,7 @@ static inline bool check_pcp_refill(struct page *page)
 }
 static inline bool check_new_pcp(struct page *page)
 {
-	if (debug_pagealloc_enabled())
+	if (debug_pagealloc_enabled_static())
 		return check_new_page(page);
 	else
 		return false;
@@ -2140,7 +2145,7 @@ inline void post_alloc_hook(struct page *page, unsigned int order,
 	set_page_refcounted(page);
 
 	arch_alloc_page(page, order);
-	if (debug_pagealloc_enabled())
+	if (debug_pagealloc_enabled_static())
 		kernel_map_pages(page, 1 << order, 1);
 	kasan_alloc_pages(page, order);
 	kernel_poison_pages(page, 1 << order, 1);
@@ -2345,6 +2350,14 @@ static inline void boost_watermark(struct zone *zone)
 	unsigned long max_boost;
 
 	if (!watermark_boost_factor)
+		return;
+	/*
+	 * Don't bother in zones that are unlikely to produce results.
+	 * On small machines, including kdump capture kernels running
+	 * in a small area, boosting the watermark can cause an out of
+	 * memory situation immediately.
+	 */
+	if ((pageblock_nr_pages * 4) > zone_managed_pages(zone))
 		return;
 
 	max_boost = mult_frac(zone->_watermark[WMARK_HIGH],
@@ -3511,7 +3524,7 @@ bool zone_watermark_ok_safe(struct zone *z, unsigned int order,
 static bool zone_allows_reclaim(struct zone *local_zone, struct zone *zone)
 {
 	return node_distance(zone_to_nid(local_zone), zone_to_nid(zone)) <=
-				RECLAIM_DISTANCE;
+				node_reclaim_distance;
 }
 #else	/* CONFIG_NUMA */
 static bool zone_allows_reclaim(struct zone *local_zone, struct zone *zone)
@@ -3713,10 +3726,6 @@ try_this_zone:
 static void warn_alloc_show_mem(gfp_t gfp_mask, nodemask_t *nodemask)
 {
 	unsigned int filter = SHOW_MEM_FILTER_NODES;
-	static DEFINE_RATELIMIT_STATE(show_mem_rs, HZ, 1);
-
-	if (!__ratelimit(&show_mem_rs))
-		return;
 
 	/*
 	 * This documents exceptions given to allocations in certain
@@ -3737,8 +3746,7 @@ void warn_alloc(gfp_t gfp_mask, nodemask_t *nodemask, const char *fmt, ...)
 {
 	struct va_format vaf;
 	va_list args;
-	static DEFINE_RATELIMIT_STATE(nopage_rs, DEFAULT_RATELIMIT_INTERVAL,
-				      DEFAULT_RATELIMIT_BURST);
+	static DEFINE_RATELIMIT_STATE(nopage_rs, 10*HZ, 1);
 
 	if ((gfp_mask & __GFP_NOWARN) || !__ratelimit(&nopage_rs))
 		return;
@@ -3955,14 +3963,22 @@ should_compact_retry(struct alloc_context *ac, int order, int alloc_flags,
 		goto check_priority;
 
 	/*
-	 * make sure the compaction wasn't deferred or didn't bail out early
-	 * due to locks contention before we declare that we should give up.
-	 * But do not retry if the given zonelist is not suitable for
-	 * compaction.
+	 * compaction was skipped because there are not enough order-0 pages
+	 * to work with, so we retry only if it looks like reclaim can help.
 	 */
-	if (compaction_withdrawn(compact_result)) {
+	if (compaction_needs_reclaim(compact_result)) {
 		ret = compaction_zonelist_suitable(ac, order, alloc_flags);
 		goto out;
+	}
+
+	/*
+	 * make sure the compaction wasn't deferred or didn't bail out early
+	 * due to locks contention before we declare that we should give up.
+	 * But the next retry should use a higher priority if allowed, so
+	 * we don't just keep bailing out endlessly.
+	 */
+	if (compaction_withdrawn(compact_result)) {
+		goto check_priority;
 	}
 
 	/*
@@ -4457,6 +4473,30 @@ retry_cpuset:
 						&compact_result);
 		if (page)
 			goto got_pg;
+
+		 if (order >= pageblock_order && (gfp_mask & __GFP_IO) &&
+		     !(gfp_mask & __GFP_RETRY_MAYFAIL)) {
+			/*
+			 * If allocating entire pageblock(s) and compaction
+			 * failed because all zones are below low watermarks
+			 * or is prohibited because it recently failed at this
+			 * order, fail immediately unless the allocator has
+			 * requested compaction and reclaim retry.
+			 *
+			 * Reclaim is
+			 *  - potentially very expensive because zones are far
+			 *    below their low watermarks or this is part of very
+			 *    bursty high order allocations,
+			 *  - not guaranteed to help because isolate_freepages()
+			 *    may not iterate over freed pages as part of its
+			 *    linear scan, and
+			 *  - unlikely to make entire pageblocks free on its
+			 *    own.
+			 */
+			if (compact_result == COMPACT_SKIPPED ||
+			    compact_result == COMPACT_DEFERRED)
+				goto nopage;
+		}
 
 		/*
 		 * Checks for costly allocations with __GFP_NORETRY, which
@@ -5971,7 +6011,7 @@ void __ref memmap_init_zone_device(struct zone *zone,
 		}
 	}
 
-	pr_info("%s initialised, %lu pages in %ums\n", dev_name(pgmap->dev),
+	pr_info("%s initialised %lu pages in %ums\n", __func__,
 		size, jiffies_to_msecs(jiffies - start));
 }
 
@@ -6638,9 +6678,11 @@ static unsigned long __init calc_memmap_size(unsigned long spanned_pages,
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static void pgdat_init_split_queue(struct pglist_data *pgdat)
 {
-	spin_lock_init(&pgdat->split_queue_lock);
-	INIT_LIST_HEAD(&pgdat->split_queue);
-	pgdat->split_queue_len = 0;
+	struct deferred_split *ds_queue = &pgdat->deferred_split_queue;
+
+	spin_lock_init(&ds_queue->split_queue_lock);
+	INIT_LIST_HEAD(&ds_queue->split_queue);
+	ds_queue->split_queue_len = 0;
 }
 #else
 static void pgdat_init_split_queue(struct pglist_data *pgdat) {}
@@ -6900,7 +6942,8 @@ static u64 zero_pfn_range(unsigned long spfn, unsigned long epfn)
  * This function also addresses a similar issue where struct pages are left
  * uninitialized because the physical address range is not covered by
  * memblock.memory or memblock.reserved. That could happen when memblock
- * layout is manually configured via memmap=.
+ * layout is manually configured via memmap=, or when the highest physical
+ * address (max_pfn) does not end on a section boundary.
  */
 void __init zero_resv_unavail(void)
 {
@@ -6918,7 +6961,16 @@ void __init zero_resv_unavail(void)
 			pgcnt += zero_pfn_range(PFN_DOWN(next), PFN_UP(start));
 		next = end;
 	}
-	pgcnt += zero_pfn_range(PFN_DOWN(next), max_pfn);
+
+	/*
+	 * Early sections always have a fully populated memmap for the whole
+	 * section - see pfn_valid(). If the last section has holes at the
+	 * end and that section is marked "online", the memmap will be
+	 * considered initialized. Make sure that memmap has a well defined
+	 * state.
+	 */
+	pgcnt += zero_pfn_range(PFN_DOWN(next),
+				round_up(max_pfn, PAGES_PER_SECTION));
 
 	/*
 	 * Struct pages that do not have backing memory. This could be because
@@ -8196,7 +8248,7 @@ bool has_unmovable_pages(struct zone *zone, struct page *page, int count,
 			if (!hugepage_migration_supported(page_hstate(head)))
 				goto unmovable;
 
-			skip_pages = (1 << compound_order(head)) - (page - head);
+			skip_pages = compound_nr(head) - (page - head);
 			iter += skip_pages - 1;
 			continue;
 		}
@@ -8473,7 +8525,6 @@ void free_contig_range(unsigned long pfn, unsigned int nr_pages)
 	WARN(count != 0, "%d pages are still in use!\n", count);
 }
 
-#ifdef CONFIG_MEMORY_HOTPLUG
 /*
  * The zone indicated has a new number of managed_pages; batch sizes and percpu
  * page high values need to be recalulated.
@@ -8487,7 +8538,6 @@ void __meminit zone_pcp_update(struct zone *zone)
 				per_cpu_ptr(zone->pageset, cpu));
 	mutex_unlock(&pcp_batch_high_lock);
 }
-#endif
 
 void zone_pcp_reset(struct zone *zone)
 {

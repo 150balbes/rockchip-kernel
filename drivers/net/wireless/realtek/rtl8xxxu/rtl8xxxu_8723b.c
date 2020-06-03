@@ -1525,7 +1525,7 @@ static void rtl8723b_enable_rf(struct rtl8xxxu_priv *priv)
 	/*
 	 * WLAN action by PTA
 	 */
-	rtl8xxxu_write8(priv, REG_WLAN_ACT_CONTROL_8723B, 0x04);
+	rtl8xxxu_write8(priv, REG_WLAN_ACT_CONTROL_8723B, 0x0c);
 
 	/*
 	 * BT select S0/S1 controlled by WiFi
@@ -1568,9 +1568,14 @@ static void rtl8723b_enable_rf(struct rtl8xxxu_priv *priv)
 	rtl8xxxu_gen2_h2c_cmd(priv, &h2c, sizeof(h2c.ant_sel_rsv));
 
 	/*
-	 * 0x280, 0x00, 0x200, 0x80 - not clear
+	 * Different settings per different antenna position.
+	 *      Antenna Position:   | Normal   Inverse
+	 * --------------------------------------------------
+	 * Antenna switch to BT:    |  0x280,   0x00
+	 * Antenna switch to WiFi:  |  0x0,     0x280
+	 * Antenna switch to PTA:   |  0x200,   0x80
 	 */
-	rtl8xxxu_write32(priv, REG_S0S1_PATH_SWITCH, 0x00);
+	rtl8xxxu_write32(priv, REG_S0S1_PATH_SWITCH, 0x80);
 
 	/*
 	 * Software control, antenna at WiFi side
@@ -1665,6 +1670,7 @@ struct rtl8xxxu_fileops rtl8723bu_fops = {
 	.has_s0s1 = 1,
 	.has_tx_report = 1,
 	.gen2_thermal_meter = 1,
+	.needs_full_init = 1,
 	.adda_1t_init = 0x01c00014,
 	.adda_1t_path_on = 0x01c00014,
 	.adda_2t_path_on_a = 0x01c00014,

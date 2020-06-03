@@ -381,7 +381,7 @@ xfs_compat_attrlist_by_handle(
 		return PTR_ERR(dentry);
 
 	error = -ENOMEM;
-	kbuf = kmem_zalloc_large(al_hreq.buflen, KM_SLEEP);
+	kbuf = kmem_zalloc_large(al_hreq.buflen, 0);
 	if (!kbuf)
 		goto out_dput;
 
@@ -450,6 +450,8 @@ xfs_compat_attrmulti_by_handle(
 
 	error = 0;
 	for (i = 0; i < am_hreq.opcount; i++) {
+		ops[i].am_flags &= ~ATTR_KERNEL_FLAGS;
+
 		ops[i].am_error = strncpy_from_user((char *)attr_name,
 				compat_ptr(ops[i].am_attrname),
 				MAXNAMELEN);

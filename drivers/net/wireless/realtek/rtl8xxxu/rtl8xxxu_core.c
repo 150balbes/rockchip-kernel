@@ -3891,15 +3891,19 @@ static int rtl8xxxu_init_device(struct ieee80211_hw *hw)
 
 	/* Check if MAC is already powered on */
 	val8 = rtl8xxxu_read8(priv, REG_CR);
+	val16 = rtl8xxxu_read16(priv, REG_SYS_CLKR);
 
 	/*
 	 * Fix 92DU-VC S3 hang with the reason is that secondary mac is not
 	 * initialized. First MAC returns 0xea, second MAC returns 0x00
 	 */
-	if (val8 == 0xea)
+	if (val8 == 0xea || !(val16 & SYS_CLK_MAC_CLK_ENABLE))
 		macpower = false;
 	else
 		macpower = true;
+
+	if (fops->needs_full_init)
+		macpower = false;
 
 	ret = fops->power_on(priv);
 	if (ret < 0) {
@@ -5443,6 +5447,7 @@ static int rtl8xxxu_submit_int_urb(struct ieee80211_hw *hw)
 	ret = usb_submit_urb(urb, GFP_KERNEL);
 	if (ret) {
 		usb_unanchor_urb(urb);
+		usb_free_urb(urb);
 		goto error;
 	}
 
@@ -5910,7 +5915,7 @@ static int rtl8xxxu_parse_usb(struct rtl8xxxu_priv *priv,
 	u8 dir, xtype, num;
 	int ret = 0;
 
-	host_interface = &interface->altsetting[0];
+	host_interface = interface->cur_altsetting;
 	interface_desc = &host_interface->desc;
 	endpoints = interface_desc->bNumEndpoints;
 

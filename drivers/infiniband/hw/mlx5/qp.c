@@ -3249,10 +3249,12 @@ static int modify_raw_packet_qp_sq(
 	}
 
 	/* Only remove the old rate after new rate was set */
-	if ((old_rl.rate &&
-	     !mlx5_rl_are_equal(&old_rl, &new_rl)) ||
-	    (new_state != MLX5_SQC_STATE_RDY))
+	if ((old_rl.rate && !mlx5_rl_are_equal(&old_rl, &new_rl)) ||
+	    (new_state != MLX5_SQC_STATE_RDY)) {
 		mlx5_rl_remove_rate(dev, &old_rl);
+		if (new_state != MLX5_SQC_STATE_RDY)
+			memset(&new_rl, 0, sizeof(new_rl));
+	}
 
 	ibqp->rl = new_rl;
 	sq->state = new_state;
@@ -3386,19 +3388,13 @@ static int __mlx5_ib_qp_set_counter(struct ib_qp *qp,
 	struct mlx5_ib_dev *dev = to_mdev(qp->device);
 	struct mlx5_ib_qp *mqp = to_mqp(qp);
 	struct mlx5_qp_context context = {};
-	struct mlx5_ib_port *mibport = NULL;
 	struct mlx5_ib_qp_base *base;
 	u32 set_id;
 
-	if (!MLX5_CAP_GEN(dev->mdev, rts2rts_qp_counters_set_id))
-		return 0;
-
-	if (counter) {
+	if (counter)
 		set_id = counter->id;
-	} else {
-		mibport = &dev->port[mqp->port - 1];
-		set_id = mibport->cnts.set_id;
-	}
+	else
+		set_id = mlx5_ib_get_counters_id(dev, mqp->port - 1);
 
 	base = &mqp->trans_qp.base;
 	context.qp_counter_set_usr_page &= cpu_to_be32(0xffffff);
@@ -3459,7 +3455,6 @@ static int __mlx5_ib_modify_qp(struct ib_qp *ibqp,
 	struct mlx5_ib_cq *send_cq, *recv_cq;
 	struct mlx5_qp_context *context;
 	struct mlx5_ib_pd *pd;
-	struct mlx5_ib_port *mibport = NULL;
 	enum mlx5_qp_state mlx5_cur, mlx5_new;
 	enum mlx5_qp_optpar optpar;
 	u32 set_id = 0;
@@ -3624,11 +3619,10 @@ static int __mlx5_ib_modify_qp(struct ib_qp *ibqp,
 		if (qp->flags & MLX5_IB_QP_UNDERLAY)
 			port_num = 0;
 
-		mibport = &dev->port[port_num];
 		if (ibqp->counter)
 			set_id = ibqp->counter->id;
 		else
-			set_id = mibport->cnts.set_id;
+			set_id = mlx5_ib_get_counters_id(dev, port_num);
 		context->qp_counter_set_usr_page |=
 			cpu_to_be32(set_id << 24);
 	}
@@ -3731,6 +3725,7 @@ static int __mlx5_ib_modify_qp(struct ib_qp *ibqp,
 		qp->sq.cur_post = 0;
 		if (qp->sq.wqe_cnt)
 			qp->sq.cur_edge = get_sq_edge(&qp->sq, 0);
+		qp->sq.last_poll = 0;
 		qp->db.db[MLX5_RCV_DBR] = 0;
 		qp->db.db[MLX5_SND_DBR] = 0;
 	}
@@ -3817,6 +3812,8 @@ static int mlx5_ib_modify_dct(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 
 	dctc = MLX5_ADDR_OF(create_dct_in, qp->dct.in, dct_context_entry);
 	if (cur_state == IB_QPS_RESET && new_state == IB_QPS_INIT) {
+		u16 set_id;
+
 		required |= IB_QP_ACCESS_FLAGS | IB_QP_PKEY_INDEX | IB_QP_PORT;
 		if (!is_valid_mask(attr_mask, required, 0))
 			return -EINVAL;
@@ -3843,7 +3840,9 @@ static int mlx5_ib_modify_dct(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 		}
 		MLX5_SET(dctc, dctc, pkey_index, attr->pkey_index);
 		MLX5_SET(dctc, dctc, port, attr->port_num);
-		MLX5_SET(dctc, dctc, counter_set_id, dev->port[attr->port_num - 1].cnts.set_id);
+
+		set_id = mlx5_ib_get_counters_id(dev, attr->port_num - 1);
+		MLX5_SET(dctc, dctc, counter_set_id, set_id);
 
 	} else if (cur_state == IB_QPS_INIT && new_state == IB_QPS_RTR) {
 		struct mlx5_ib_modify_qp_resp resp = {};
@@ -5497,7 +5496,9 @@ static void to_rdma_ah_attr(struct mlx5_ib_dev *ibdev,
 	rdma_ah_set_path_bits(ah_attr, path->grh_mlid & 0x7f);
 	rdma_ah_set_static_rate(ah_attr,
 				path->static_rate ? path->static_rate - 5 : 0);
-	if (path->grh_mlid & (1 << 7)) {
+
+	if (path->grh_mlid & (1 << 7) ||
+	    ah_attr->type == RDMA_AH_ATTR_TYPE_ROCE) {
 		u32 tc_fl = be32_to_cpu(path->tclass_flowlabel);
 
 		rdma_ah_set_grh(ah_attr, NULL,
@@ -6133,6 +6134,10 @@ struct ib_wq *mlx5_ib_create_wq(struct ib_pd *pd,
 	if (udata->outlen && udata->outlen < min_resp_len)
 		return ERR_PTR(-EINVAL);
 
+	if (!capable(CAP_SYS_RAWIO) &&
+	    init_attr->create_flags & IB_WQ_FLAGS_DELAY_DROP)
+		return ERR_PTR(-EPERM);
+
 	dev = to_mdev(pd->device);
 	switch (init_attr->wq_type) {
 	case IB_WQT_RQ:
@@ -6345,11 +6350,13 @@ int mlx5_ib_modify_wq(struct ib_wq *wq, struct ib_wq_attr *wq_attr,
 	}
 
 	if (curr_wq_state == IB_WQS_RESET && wq_state == IB_WQS_RDY) {
+		u16 set_id;
+
+		set_id = mlx5_ib_get_counters_id(dev, 0);
 		if (MLX5_CAP_GEN(dev->mdev, modify_rq_counter_set_id)) {
 			MLX5_SET64(modify_rq_in, in, modify_bitmask,
 				   MLX5_MODIFY_RQ_IN_MODIFY_BITMASK_RQ_COUNTER_SET_ID);
-			MLX5_SET(rqc, rqc, counter_set_id,
-				 dev->port->cnts.set_id);
+			MLX5_SET(rqc, rqc, counter_set_id, set_id);
 		} else
 			dev_info_once(
 				&dev->ib_dev.dev,
@@ -6500,12 +6507,18 @@ void mlx5_ib_drain_rq(struct ib_qp *qp)
  */
 int mlx5_ib_qp_set_counter(struct ib_qp *qp, struct rdma_counter *counter)
 {
+	struct mlx5_ib_dev *dev = to_mdev(qp->device);
 	struct mlx5_ib_qp *mqp = to_mqp(qp);
 	int err = 0;
 
 	mutex_lock(&mqp->mutex);
 	if (mqp->state == IB_QPS_RESET) {
 		qp->counter = counter;
+		goto out;
+	}
+
+	if (!MLX5_CAP_GEN(dev->mdev, rts2rts_qp_counters_set_id)) {
+		err = -EOPNOTSUPP;
 		goto out;
 	}
 

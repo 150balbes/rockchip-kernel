@@ -95,7 +95,8 @@ static int		ip6_pkt_prohibit(struct sk_buff *skb);
 static int		ip6_pkt_prohibit_out(struct net *net, struct sock *sk, struct sk_buff *skb);
 static void		ip6_link_failure(struct sk_buff *skb);
 static void		ip6_rt_update_pmtu(struct dst_entry *dst, struct sock *sk,
-					   struct sk_buff *skb, u32 mtu);
+					   struct sk_buff *skb, u32 mtu,
+					   bool confirm_neigh);
 static void		rt6_do_redirect(struct dst_entry *dst, struct sock *sk,
 					struct sk_buff *skb);
 static int rt6_score_route(const struct fib6_nh *nh, u32 fib6_flags, int oif,
@@ -227,7 +228,7 @@ static void ip6_confirm_neigh(const struct dst_entry *dst, const void *daddr)
 	struct net_device *dev = dst->dev;
 	struct rt6_info *rt = (struct rt6_info *)dst;
 
-	daddr = choose_neigh_daddr(&rt->rt6i_gateway, NULL, daddr);
+	daddr = choose_neigh_daddr(rt6_nexthop(rt, &in6addr_any), NULL, daddr);
 	if (!daddr)
 		return;
 	if (dev->flags & (IFF_NOARP | IFF_LOOPBACK))
@@ -264,7 +265,8 @@ static unsigned int ip6_blackhole_mtu(const struct dst_entry *dst)
 }
 
 static void ip6_rt_blackhole_update_pmtu(struct dst_entry *dst, struct sock *sk,
-					 struct sk_buff *skb, u32 mtu)
+					 struct sk_buff *skb, u32 mtu,
+					 bool confirm_neigh)
 {
 }
 
@@ -621,6 +623,7 @@ static void rt6_probe(struct fib6_nh *fib6_nh)
 {
 	struct __rt6_probe_work *work = NULL;
 	const struct in6_addr *nh_gw;
+	unsigned long last_probe;
 	struct neighbour *neigh;
 	struct net_device *dev;
 	struct inet6_dev *idev;
@@ -633,12 +636,13 @@ static void rt6_probe(struct fib6_nh *fib6_nh)
 	 * Router Reachability Probe MUST be rate-limited
 	 * to no more than one per minute.
 	 */
-	if (fib6_nh->fib_nh_gw_family)
+	if (!fib6_nh->fib_nh_gw_family)
 		return;
 
 	nh_gw = &fib6_nh->fib_nh_gw6;
 	dev = fib6_nh->fib_nh_dev;
 	rcu_read_lock_bh();
+	last_probe = READ_ONCE(fib6_nh->last_probe);
 	idev = __in6_dev_get(dev);
 	neigh = __ipv6_neigh_lookup_noref(dev, nh_gw);
 	if (neigh) {
@@ -654,13 +658,15 @@ static void rt6_probe(struct fib6_nh *fib6_nh)
 				__neigh_set_probe_once(neigh);
 		}
 		write_unlock(&neigh->lock);
-	} else if (time_after(jiffies, fib6_nh->last_probe +
+	} else if (time_after(jiffies, last_probe +
 				       idev->cnf.rtr_probe_interval)) {
 		work = kmalloc(sizeof(*work), GFP_ATOMIC);
 	}
 
-	if (work) {
-		fib6_nh->last_probe = jiffies;
+	if (!work || cmpxchg(&fib6_nh->last_probe,
+			     last_probe, jiffies) != last_probe) {
+		kfree(work);
+	} else {
 		INIT_WORK(&work->work, rt6_probe_deferred);
 		work->target = *nh_gw;
 		dev_hold(dev);
@@ -1382,7 +1388,16 @@ static struct rt6_info *ip6_rt_pcpu_alloc(const struct fib6_result *res)
 	}
 	ip6_rt_copy_init(pcpu_rt, res);
 	pcpu_rt->rt6i_flags |= RTF_PCPU;
+
+	if (f6i->nh)
+		pcpu_rt->sernum = rt_genid_ipv6(dev_net(dev));
+
 	return pcpu_rt;
+}
+
+static bool rt6_is_valid(const struct rt6_info *rt6)
+{
+	return rt6->sernum == rt_genid_ipv6(dev_net(rt6->dst.dev));
 }
 
 /* It should be called with rcu_read_lock() acquired */
@@ -1391,6 +1406,19 @@ static struct rt6_info *rt6_get_pcpu_route(const struct fib6_result *res)
 	struct rt6_info *pcpu_rt;
 
 	pcpu_rt = this_cpu_read(*res->nh->rt6i_pcpu);
+
+	if (pcpu_rt && pcpu_rt->sernum && !rt6_is_valid(pcpu_rt)) {
+		struct rt6_info *prev, **p;
+
+		p = this_cpu_ptr(res->nh->rt6i_pcpu);
+		prev = xchg(p, NULL);
+		if (prev) {
+			dst_dev_put(&prev->dst);
+			dst_release(&prev->dst);
+		}
+
+		pcpu_rt = NULL;
+	}
 
 	return pcpu_rt;
 }
@@ -2593,6 +2621,9 @@ static struct dst_entry *ip6_dst_check(struct dst_entry *dst, u32 cookie)
 
 	rt = container_of(dst, struct rt6_info, dst);
 
+	if (rt->sernum)
+		return rt6_is_valid(rt) ? dst : NULL;
+
 	rcu_read_lock();
 
 	/* All IPV6 dsts are created with ->obsolete set to the value
@@ -2691,13 +2722,16 @@ static bool rt6_cache_allowed_for_pmtu(const struct rt6_info *rt)
 }
 
 static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
-				 const struct ipv6hdr *iph, u32 mtu)
+				 const struct ipv6hdr *iph, u32 mtu,
+				 bool confirm_neigh)
 {
 	const struct in6_addr *daddr, *saddr;
 	struct rt6_info *rt6 = (struct rt6_info *)dst;
 
-	if (dst_metric_locked(dst, RTAX_MTU))
-		return;
+	/* Note: do *NOT* check dst_metric_locked(dst, RTAX_MTU)
+	 * IPv6 pmtu discovery isn't optional, so 'mtu lock' cannot disable it.
+	 * [see also comment in rt6_mtu_change_route()]
+	 */
 
 	if (iph) {
 		daddr = &iph->daddr;
@@ -2709,7 +2743,10 @@ static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 		daddr = NULL;
 		saddr = NULL;
 	}
-	dst_confirm_neigh(dst, daddr);
+
+	if (confirm_neigh)
+		dst_confirm_neigh(dst, daddr);
+
 	mtu = max_t(u32, mtu, IPV6_MIN_MTU);
 	if (mtu >= dst_mtu(dst))
 		return;
@@ -2725,10 +2762,9 @@ static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 
 		rcu_read_lock();
 		res.f6i = rcu_dereference(rt6->from);
-		if (!res.f6i) {
-			rcu_read_unlock();
-			return;
-		}
+		if (!res.f6i)
+			goto out_unlock;
+
 		res.fib6_flags = res.f6i->fib6_flags;
 		res.fib6_type = res.f6i->fib6_type;
 
@@ -2744,10 +2780,8 @@ static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 			/* fib6_info uses a nexthop that does not have fib6_nh
 			 * using the dst->dev + gw. Should be impossible.
 			 */
-			if (!arg.match) {
-				rcu_read_unlock();
-				return;
-			}
+			if (!arg.match)
+				goto out_unlock;
 
 			res.nh = arg.match;
 		} else {
@@ -2760,14 +2794,17 @@ static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 			if (rt6_insert_exception(nrt6, &res))
 				dst_release_immediate(&nrt6->dst);
 		}
+out_unlock:
 		rcu_read_unlock();
 	}
 }
 
 static void ip6_rt_update_pmtu(struct dst_entry *dst, struct sock *sk,
-			       struct sk_buff *skb, u32 mtu)
+			       struct sk_buff *skb, u32 mtu,
+			       bool confirm_neigh)
 {
-	__ip6_rt_update_pmtu(dst, sk, skb ? ipv6_hdr(skb) : NULL, mtu);
+	__ip6_rt_update_pmtu(dst, sk, skb ? ipv6_hdr(skb) : NULL, mtu,
+			     confirm_neigh);
 }
 
 void ip6_update_pmtu(struct sk_buff *skb, struct net *net, __be32 mtu,
@@ -2786,7 +2823,7 @@ void ip6_update_pmtu(struct sk_buff *skb, struct net *net, __be32 mtu,
 
 	dst = ip6_route_output(net, NULL, &fl6);
 	if (!dst->error)
-		__ip6_rt_update_pmtu(dst, NULL, iph, ntohl(mtu));
+		__ip6_rt_update_pmtu(dst, NULL, iph, ntohl(mtu), true);
 	dst_release(dst);
 }
 EXPORT_SYMBOL_GPL(ip6_update_pmtu);
@@ -3385,6 +3422,9 @@ int fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
 	int err;
 
 	fib6_nh->fib_nh_family = AF_INET6;
+#ifdef CONFIG_IPV6_ROUTER_PREF
+	fib6_nh->last_probe = jiffies;
+#endif
 
 	err = -ENODEV;
 	if (cfg->fc_ifindex) {
@@ -5142,6 +5182,7 @@ static int ip6_route_multipath_add(struct fib6_config *cfg,
 		 */
 		cfg->fc_nlinfo.nlh->nlmsg_flags &= ~(NLM_F_EXCL |
 						     NLM_F_REPLACE);
+		cfg->fc_nlinfo.nlh->nlmsg_flags |= NLM_F_CREATE;
 		nhn++;
 	}
 

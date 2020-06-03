@@ -73,8 +73,7 @@ struct conntrack_gc_work {
 };
 
 static __read_mostly struct kmem_cache *nf_conntrack_cachep;
-static __read_mostly spinlock_t nf_conntrack_locks_all_lock;
-static __read_mostly DEFINE_SPINLOCK(nf_conntrack_locks_all_lock);
+static DEFINE_SPINLOCK(nf_conntrack_locks_all_lock);
 static __read_mostly bool nf_conntrack_locks_all;
 
 /* every gc cycle scans at most 1/GC_MAX_BUCKETS_DIV part of table */
@@ -1382,9 +1381,9 @@ __nf_conntrack_alloc(struct net *net,
 	ct->status = 0;
 	ct->timeout = 0;
 	write_pnet(&ct->ct_net, net);
-	memset(&ct->__nfct_init_offset[0], 0,
+	memset(&ct->__nfct_init_offset, 0,
 	       offsetof(struct nf_conn, proto) -
-	       offsetof(struct nf_conn, __nfct_init_offset[0]));
+	       offsetof(struct nf_conn, __nfct_init_offset));
 
 	nf_ct_zone_add(ct, zone);
 
@@ -1793,8 +1792,8 @@ void __nf_ct_refresh_acct(struct nf_conn *ct,
 	if (nf_ct_is_confirmed(ct))
 		extra_jiffies += nfct_time_stamp;
 
-	if (ct->timeout != extra_jiffies)
-		ct->timeout = extra_jiffies;
+	if (READ_ONCE(ct->timeout) != extra_jiffies)
+		WRITE_ONCE(ct->timeout, extra_jiffies);
 acct:
 	if (do_acct)
 		nf_ct_acct_update(ct, ctinfo, skb->len);

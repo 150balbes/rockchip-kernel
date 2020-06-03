@@ -57,6 +57,7 @@ int snd_hdac_device_init(struct hdac_device *codec, struct hdac_bus *bus,
 	codec->addr = addr;
 	codec->type = HDA_DEV_CORE;
 	mutex_init(&codec->widget_lock);
+	mutex_init(&codec->regmap_lock);
 	pm_runtime_set_active(&codec->dev);
 	pm_runtime_get_noresume(&codec->dev);
 	atomic_set(&codec->in_pm, 0);
@@ -218,8 +219,8 @@ EXPORT_SYMBOL_GPL(snd_hdac_codec_modalias);
  *
  * Return an encoded command verb or -1 for error.
  */
-unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
-			       unsigned int verb, unsigned int parm)
+static unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
+				      unsigned int verb, unsigned int parm)
 {
 	u32 val, addr;
 
@@ -237,7 +238,6 @@ unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
 	val |= parm;
 	return val;
 }
-EXPORT_SYMBOL_GPL(snd_hdac_make_cmd);
 
 /**
  * snd_hdac_exec_verb - execute an encoded verb
@@ -258,7 +258,6 @@ int snd_hdac_exec_verb(struct hdac_device *codec, unsigned int cmd,
 		return codec->exec_verb(codec, cmd, flags, res);
 	return snd_hdac_bus_exec_verb(codec->bus, codec->addr, cmd, res);
 }
-EXPORT_SYMBOL_GPL(snd_hdac_exec_verb);
 
 
 /**

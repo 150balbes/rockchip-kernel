@@ -629,7 +629,6 @@ static struct btrfsic_dev_state *btrfsic_dev_state_hashtable_lookup(dev_t dev,
 static int btrfsic_process_superblock(struct btrfsic_state *state,
 				      struct btrfs_fs_devices *fs_devices)
 {
-	struct btrfs_fs_info *fs_info = state->fs_info;
 	struct btrfs_super_block *selected_super;
 	struct list_head *dev_head = &fs_devices->devices;
 	struct btrfs_device *device;
@@ -700,7 +699,7 @@ static int btrfsic_process_superblock(struct btrfsic_state *state,
 			break;
 		}
 
-		num_copies = btrfs_num_copies(fs_info, next_bytenr,
+		num_copies = btrfs_num_copies(state->fs_info, next_bytenr,
 					      state->metablock_size);
 		if (state->print_mask & BTRFSIC_PRINT_MASK_NUM_COPIES)
 			pr_info("num_copies(log_bytenr=%llu) = %d\n",
@@ -940,7 +939,7 @@ static void btrfsic_stack_frame_free(struct btrfsic_stack_frame *sf)
 	kfree(sf);
 }
 
-static int btrfsic_process_metablock(
+static noinline_for_stack int btrfsic_process_metablock(
 		struct btrfsic_state *state,
 		struct btrfsic_block *const first_block,
 		struct btrfsic_block_data_ctx *const first_block_ctx,
@@ -1706,8 +1705,9 @@ static void btrfsic_dump_database(struct btrfsic_state *state)
  * Test whether the disk block contains a tree block (leaf or node)
  * (note that this test fails for the super block)
  */
-static int btrfsic_test_for_metadata(struct btrfsic_state *state,
-				     char **datav, unsigned int num_pages)
+static noinline_for_stack int btrfsic_test_for_metadata(
+		struct btrfsic_state *state,
+		char **datav, unsigned int num_pages)
 {
 	struct btrfs_fs_info *fs_info = state->fs_info;
 	SHASH_DESC_ON_STACK(shash, fs_info->csum_shash);

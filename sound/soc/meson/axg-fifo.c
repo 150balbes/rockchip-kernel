@@ -108,9 +108,11 @@ static int axg_fifo_pcm_hw_params(struct snd_pcm_substream *ss,
 {
 	struct snd_pcm_runtime *runtime = ss->runtime;
 	struct axg_fifo *fifo = axg_fifo_data(ss);
+	unsigned int burst_num, period, threshold;
 	dma_addr_t end_ptr;
-	unsigned int burst_num;
 	int ret;
+
+	period = params_period_bytes(params);
 
 	ret = snd_pcm_lib_malloc_pages(ss, params_buffer_bytes(params));
 	if (ret < 0)
@@ -122,8 +124,24 @@ static int axg_fifo_pcm_hw_params(struct snd_pcm_substream *ss,
 	regmap_write(fifo->map, FIFO_FINISH_ADDR, end_ptr);
 
 	/* Setup interrupt periodicity */
-	burst_num = params_period_bytes(params) / AXG_FIFO_BURST;
+	burst_num = period / AXG_FIFO_BURST;
 	regmap_write(fifo->map, FIFO_INT_ADDR, burst_num);
+
+	/*
+	 * Start the fifo request on the smallest of the following:
+	 * - Half the fifo size
+	 * - Half the period size
+	 */
+	threshold = min(period / 2,
+			(unsigned int)AXG_FIFO_MIN_DEPTH / 2);
+
+	/*
+	 * With the threshold in bytes, register value is:
+	 * V = (threshold / burst) - 1
+	 */
+	threshold /= AXG_FIFO_BURST;
+	regmap_field_write(fifo->field_threshold,
+			   threshold ? threshold - 1 : 0);
 
 	/* Enable block count irq */
 	regmap_update_bits(fifo->map, FIFO_CTRL0,
@@ -306,7 +324,7 @@ static const struct regmap_config axg_fifo_regmap_cfg = {
 	.reg_bits	= 32,
 	.val_bits	= 32,
 	.reg_stride	= 4,
-	.max_register	= FIFO_INIT_ADDR,
+	.max_register	= FIFO_CTRL2,
 };
 
 int axg_fifo_probe(struct platform_device *pdev)
@@ -314,7 +332,6 @@ int axg_fifo_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	const struct axg_fifo_match_data *data;
 	struct axg_fifo *fifo;
-	struct resource *res;
 	void __iomem *regs;
 
 	data = of_device_get_match_data(dev);
@@ -328,8 +345,7 @@ int axg_fifo_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, fifo);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(dev, res);
+	regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
@@ -361,6 +377,11 @@ int axg_fifo_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to get irq: %d\n", fifo->irq);
 		return fifo->irq;
 	}
+
+	fifo->field_threshold =
+		devm_regmap_field_alloc(dev, fifo->map, data->field_threshold);
+	if (IS_ERR(fifo->field_threshold))
+		return PTR_ERR(fifo->field_threshold);
 
 	return devm_snd_soc_register_component(dev, data->component_drv,
 					       data->dai_drv, 1);

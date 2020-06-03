@@ -118,19 +118,29 @@ static unsigned int __read_mostly devkmsg_log = DEVKMSG_LOG_MASK_DEFAULT;
 
 static int __control_devkmsg(char *str)
 {
+	size_t len;
+
 	if (!str)
 		return -EINVAL;
 
-	if (!strncmp(str, "on", 2)) {
+	len = str_has_prefix(str, "on");
+	if (len) {
 		devkmsg_log = DEVKMSG_LOG_MASK_ON;
-		return 2;
-	} else if (!strncmp(str, "off", 3)) {
-		devkmsg_log = DEVKMSG_LOG_MASK_OFF;
-		return 3;
-	} else if (!strncmp(str, "ratelimit", 9)) {
-		devkmsg_log = DEVKMSG_LOG_MASK_DEFAULT;
-		return 9;
+		return len;
 	}
+
+	len = str_has_prefix(str, "off");
+	if (len) {
+		devkmsg_log = DEVKMSG_LOG_MASK_OFF;
+		return len;
+	}
+
+	len = str_has_prefix(str, "ratelimit");
+	if (len) {
+		devkmsg_log = DEVKMSG_LOG_MASK_DEFAULT;
+		return len;
+	}
+
 	return -EINVAL;
 }
 
@@ -449,6 +459,18 @@ static u32 clear_idx;
 static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
 static u32 log_buf_len = __LOG_BUF_LEN;
+
+/*
+ * We cannot access per-CPU data (e.g. per-CPU flush irq_work) before
+ * per_cpu_areas are initialised. This variable is set to true when
+ * it's safe to access per-CPU data.
+ */
+static bool __printk_percpu_data_ready __read_mostly;
+
+bool printk_percpu_data_ready(void)
+{
+	return __printk_percpu_data_ready;
+}
 
 /* Return log buffer address */
 char *log_buf_addr_get(void)
@@ -1136,11 +1158,27 @@ static void __init log_buf_add_cpu(void)
 static inline void log_buf_add_cpu(void) {}
 #endif /* CONFIG_SMP */
 
+static void __init set_percpu_data_ready(void)
+{
+	printk_safe_init();
+	/* Make sure we set this flag only after printk_safe() init is done */
+	barrier();
+	__printk_percpu_data_ready = true;
+}
+
 void __init setup_log_buf(int early)
 {
 	unsigned long flags;
 	char *new_log_buf;
 	unsigned int free;
+
+	/*
+	 * Some archs call setup_log_buf() multiple times - first is very
+	 * early, e.g. from setup_arch(), and second - when percpu_areas
+	 * are initialised.
+	 */
+	if (!early)
+		set_percpu_data_ready();
 
 	if (log_buf != __log_buf)
 		return;
@@ -2760,8 +2798,6 @@ void register_console(struct console *newcon)
 		 * for us.
 		 */
 		logbuf_lock_irqsave(flags);
-		console_seq = syslog_seq;
-		console_idx = syslog_idx;
 		/*
 		 * We're about to replay the log buffer.  Only do this to the
 		 * just-registered console to avoid excessive message spam to
@@ -2773,6 +2809,8 @@ void register_console(struct console *newcon)
 		 */
 		exclusive_console = newcon;
 		exclusive_console_stop_seq = console_seq;
+		console_seq = syslog_seq;
+		console_idx = syslog_idx;
 		logbuf_unlock_irqrestore(flags);
 	}
 	console_unlock();
@@ -2956,6 +2994,9 @@ static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
 
 void wake_up_klogd(void)
 {
+	if (!printk_percpu_data_ready())
+		return;
+
 	preempt_disable();
 	if (waitqueue_active(&log_wait)) {
 		this_cpu_or(printk_pending, PRINTK_PENDING_WAKEUP);
@@ -2966,6 +3007,9 @@ void wake_up_klogd(void)
 
 void defer_console_output(void)
 {
+	if (!printk_percpu_data_ready())
+		return;
+
 	preempt_disable();
 	__this_cpu_or(printk_pending, PRINTK_PENDING_OUTPUT);
 	irq_work_queue(this_cpu_ptr(&wake_up_klogd_work));
@@ -3274,7 +3318,7 @@ bool kmsg_dump_get_buffer(struct kmsg_dumper *dumper, bool syslog,
 	/* move first record forward until length fits into the buffer */
 	seq = dumper->cur_seq;
 	idx = dumper->cur_idx;
-	while (l > size && seq < dumper->next_seq) {
+	while (l >= size && seq < dumper->next_seq) {
 		struct printk_log *msg = log_from_idx(idx);
 
 		l -= msg_print_text(msg, true, time, NULL, 0);

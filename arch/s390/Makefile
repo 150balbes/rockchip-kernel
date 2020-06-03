@@ -45,6 +45,7 @@ mflags-$(CONFIG_MARCH_Z196)   := -march=z196
 mflags-$(CONFIG_MARCH_ZEC12)  := -march=zEC12
 mflags-$(CONFIG_MARCH_Z13)    := -march=z13
 mflags-$(CONFIG_MARCH_Z14)    := -march=z14
+mflags-$(CONFIG_MARCH_Z15)    := -march=z15
 
 export CC_FLAGS_MARCH := $(mflags-y)
 
@@ -59,6 +60,7 @@ cflags-$(CONFIG_MARCH_Z196_TUNE)	+= -mtune=z196
 cflags-$(CONFIG_MARCH_ZEC12_TUNE)	+= -mtune=zEC12
 cflags-$(CONFIG_MARCH_Z13_TUNE)		+= -mtune=z13
 cflags-$(CONFIG_MARCH_Z14_TUNE)		+= -mtune=z14
+cflags-$(CONFIG_MARCH_Z15_TUNE)		+= -mtune=z15
 
 cflags-y += -Wa,-I$(srctree)/arch/$(ARCH)/include
 
@@ -67,7 +69,7 @@ cflags-y += -Wa,-I$(srctree)/arch/$(ARCH)/include
 #
 cflags-$(CONFIG_FRAME_POINTER) += -fno-optimize-sibling-calls
 
-ifeq ($(call cc-option-yn,-mpacked-stack),y)
+ifeq ($(call cc-option-yn,-mpacked-stack -mbackchain -msoft-float),y)
 cflags-$(CONFIG_PACK_STACK)  += -mpacked-stack -D__PACK_STACK
 aflags-$(CONFIG_PACK_STACK)  += -D__PACK_STACK
 endif
@@ -144,7 +146,7 @@ all: bzImage
 #KBUILD_IMAGE is necessary for packaging targets like rpm-pkg, deb-pkg...
 KBUILD_IMAGE	:= $(boot)/bzImage
 
-install: vmlinux
+install:
 	$(Q)$(MAKE) $(build)=$(boot) $@
 
 bzImage: vmlinux

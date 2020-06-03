@@ -45,6 +45,15 @@ void rtw_phy_set_tx_power_level(struct rtw_dev *rtwdev, u8 channel);
 void rtw_phy_tx_power_by_rate_config(struct rtw_hal *hal);
 void rtw_phy_tx_power_limit_config(struct rtw_hal *hal);
 
+struct rtw_txpwr_lmt_cfg_pair {
+	u8 regd;
+	u8 band;
+	u8 bw;
+	u8 rs;
+	u8 ch;
+	s8 txpwr_lmt;
+};
+
 #define RTW_DECL_TABLE_PHY_COND_CORE(name, cfg, path)	\
 const struct rtw_table name ## _tbl = {			\
 	.data = name,					\
@@ -116,6 +125,15 @@ rtw_get_tx_power_params(struct rtw_dev *rtwdev, u8 path,
 			u8 rate, u8 bw, u8 ch, u8 regd,
 			struct rtw_power_params *pwr_param);
 
+enum rtw_phy_cck_pd_lv {
+	CCK_PD_LV0,
+	CCK_PD_LV1,
+	CCK_PD_LV2,
+	CCK_PD_LV3,
+	CCK_PD_LV4,
+	CCK_PD_LV_MAX,
+};
+
 #define	MASKBYTE0		0xff
 #define	MASKBYTE1		0xff00
 #define	MASKBYTE2		0xff0000
@@ -136,5 +154,7 @@ rtw_get_tx_power_params(struct rtw_dev *rtwdev, u8 path,
 #define MASKBYTE2HIGHNIBBLE	0x00f00000
 #define MASKBYTE3LOWNIBBLE	0x0f000000
 #define	MASKL3BYTES		0x00ffffff
+
+#define CCK_FA_AVG_RESET 0xffffffff
 
 #endif

@@ -299,22 +299,17 @@ static netdev_tx_t mlxsw_sx_port_xmit(struct sk_buff *skb,
 	u64 len;
 	int err;
 
+	if (skb_cow_head(skb, MLXSW_TXHDR_LEN)) {
+		this_cpu_inc(mlxsw_sx_port->pcpu_stats->tx_dropped);
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
 	memset(skb->cb, 0, sizeof(struct mlxsw_skb_cb));
 
 	if (mlxsw_core_skb_transmit_busy(mlxsw_sx->core, &tx_info))
 		return NETDEV_TX_BUSY;
 
-	if (unlikely(skb_headroom(skb) < MLXSW_TXHDR_LEN)) {
-		struct sk_buff *skb_orig = skb;
-
-		skb = skb_realloc_headroom(skb, MLXSW_TXHDR_LEN);
-		if (!skb) {
-			this_cpu_inc(mlxsw_sx_port->pcpu_stats->tx_dropped);
-			dev_kfree_skb_any(skb_orig);
-			return NETDEV_TX_OK;
-		}
-		dev_consume_skb_any(skb_orig);
-	}
 	mlxsw_sx_txhdr_construct(skb, &tx_info);
 	/* TX header is consumed by HW on the way so we shouldn't count its
 	 * bytes as being sent.
@@ -635,12 +630,6 @@ static const struct mlxsw_sx_port_link_mode mlxsw_sx_port_link_mode[] = {
 				  MLXSW_REG_PTYS_ETH_SPEED_50GBASE_CR2 |
 				  MLXSW_REG_PTYS_ETH_SPEED_50GBASE_KR2,
 		.speed		= 50000,
-	},
-	{
-		.mask		= MLXSW_REG_PTYS_ETH_SPEED_56GBASE_R4,
-		.supported	= SUPPORTED_56000baseKR4_Full,
-		.advertised	= ADVERTISED_56000baseKR4_Full,
-		.speed		= 56000,
 	},
 	{
 		.mask		= MLXSW_REG_PTYS_ETH_SPEED_100GBASE_CR4 |

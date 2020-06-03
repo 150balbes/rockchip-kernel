@@ -26,10 +26,6 @@
 
 #include "ptdump.h"
 
-#ifdef CONFIG_PPC32
-#define KERN_VIRT_START	PAGE_OFFSET
-#endif
-
 /*
  * To visualise what is happening,
  *
@@ -88,10 +84,6 @@ static struct addr_marker address_markers[] = {
 #else
 	{ 0,	"Early I/O remap start" },
 	{ 0,	"Early I/O remap end" },
-#ifdef CONFIG_NOT_COHERENT_CACHE
-	{ 0,	"Consistent mem start" },
-	{ 0,	"Consistent mem end" },
-#endif
 #ifdef CONFIG_HIGHMEM
 	{ 0,	"Highmem PTEs start" },
 	{ 0,	"Highmem PTEs end" },
@@ -181,10 +173,12 @@ static void dump_addr(struct pg_state *st, unsigned long addr)
 
 static void note_prot_wx(struct pg_state *st, unsigned long addr)
 {
-	if (!st->check_wx)
+	pte_t pte = __pte(st->current_flags);
+
+	if (!IS_ENABLED(CONFIG_PPC_DEBUG_WX) || !st->check_wx)
 		return;
 
-	if (!((st->current_flags & pgprot_val(PAGE_KERNEL_X)) == pgprot_val(PAGE_KERNEL_X)))
+	if (!pte_write(pte) || !pte_exec(pte))
 		return;
 
 	WARN_ONCE(1, "powerpc/mm: Found insecure W+X mapping at address %p/%pS\n",
@@ -299,17 +293,15 @@ static void walk_pud(struct pg_state *st, pgd_t *pgd, unsigned long start)
 
 static void walk_pagetables(struct pg_state *st)
 {
-	pgd_t *pgd = pgd_offset_k(0UL);
 	unsigned int i;
-	unsigned long addr;
-
-	addr = st->start_address;
+	unsigned long addr = st->start_address & PGDIR_MASK;
+	pgd_t *pgd = pgd_offset_k(addr);
 
 	/*
 	 * Traverse the linux pagetable structure and dump pages that are in
 	 * the hash pagetable.
 	 */
-	for (i = 0; i < PTRS_PER_PGD; i++, pgd++, addr += PGDIR_SIZE) {
+	for (i = pgd_index(addr); i < PTRS_PER_PGD; i++, pgd++, addr += PGDIR_SIZE) {
 		if (!pgd_none(*pgd) && !pgd_is_leaf(*pgd))
 			/* pgd exists */
 			walk_pud(st, pgd, addr);
@@ -341,11 +333,6 @@ static void populate_markers(void)
 #else /* !CONFIG_PPC64 */
 	address_markers[i++].start_address = ioremap_bot;
 	address_markers[i++].start_address = IOREMAP_TOP;
-#ifdef CONFIG_NOT_COHERENT_CACHE
-	address_markers[i++].start_address = IOREMAP_TOP;
-	address_markers[i++].start_address = IOREMAP_TOP +
-					     CONFIG_CONSISTENT_SIZE;
-#endif
 #ifdef CONFIG_HIGHMEM
 	address_markers[i++].start_address = PKMAP_BASE;
 	address_markers[i++].start_address = PKMAP_ADDR(LAST_PKMAP);
@@ -364,12 +351,13 @@ static int ptdump_show(struct seq_file *m, void *v)
 	struct pg_state st = {
 		.seq = m,
 		.marker = address_markers,
+		.start_address = PAGE_OFFSET,
 	};
 
-	if (radix_enabled())
-		st.start_address = PAGE_OFFSET;
-	else
+#ifdef CONFIG_PPC64
+	if (!radix_enabled())
 		st.start_address = KERN_VIRT_START;
+#endif
 
 	/* Traverse kernel page tables */
 	walk_pagetables(&st);
@@ -407,12 +395,13 @@ void ptdump_check_wx(void)
 		.seq = NULL,
 		.marker = address_markers,
 		.check_wx = true,
+		.start_address = PAGE_OFFSET,
 	};
 
-	if (radix_enabled())
-		st.start_address = PAGE_OFFSET;
-	else
+#ifdef CONFIG_PPC64
+	if (!radix_enabled())
 		st.start_address = KERN_VIRT_START;
+#endif
 
 	walk_pagetables(&st);
 

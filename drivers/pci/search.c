@@ -15,7 +15,6 @@
 #include "pci.h"
 
 DECLARE_RWSEM(pci_bus_sem);
-EXPORT_SYMBOL_GPL(pci_bus_sem);
 
 /*
  * pci_for_each_dma_alias - Iterate over DMA aliases for a device
@@ -42,9 +41,9 @@ int pci_for_each_dma_alias(struct pci_dev *pdev,
 	 * DMA, iterate over that too.
 	 */
 	if (unlikely(pdev->dma_alias_mask)) {
-		u8 devfn;
+		unsigned int devfn;
 
-		for_each_set_bit(devfn, pdev->dma_alias_mask, U8_MAX) {
+		for_each_set_bit(devfn, pdev->dma_alias_mask, MAX_NR_DEVFNS) {
 			ret = fn(pdev, PCI_DEVID(pdev->bus->number, devfn),
 				 data);
 			if (ret)
