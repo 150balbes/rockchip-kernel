@@ -29,7 +29,7 @@
  * MPA_V2_RDMA_NO_RTR, MPA_V2_RDMA_READ_RTR, MPA_V2_RDMA_WRITE_RTR
  */
 static __be16 rtr_type = MPA_V2_RDMA_READ_RTR | MPA_V2_RDMA_WRITE_RTR;
-static const bool relaxed_ird_negotiation = 1;
+static const bool relaxed_ird_negotiation = true;
 
 static void siw_cm_llp_state_change(struct sock *s);
 static void siw_cm_llp_data_ready(struct sock *s);
@@ -1372,22 +1372,8 @@ int siw_connect(struct iw_cm_id *id, struct iw_cm_conn_param *params)
 		rv = -EINVAL;
 		goto error;
 	}
-	if (v4)
-		siw_dbg_qp(qp,
-			   "pd_len %d, laddr %pI4 %d, raddr %pI4 %d\n",
-			   pd_len,
-			   &((struct sockaddr_in *)(laddr))->sin_addr,
-			   ntohs(((struct sockaddr_in *)(laddr))->sin_port),
-			   &((struct sockaddr_in *)(raddr))->sin_addr,
-			   ntohs(((struct sockaddr_in *)(raddr))->sin_port));
-	else
-		siw_dbg_qp(qp,
-			   "pd_len %d, laddr %pI6 %d, raddr %pI6 %d\n",
-			   pd_len,
-			   &((struct sockaddr_in6 *)(laddr))->sin6_addr,
-			   ntohs(((struct sockaddr_in6 *)(laddr))->sin6_port),
-			   &((struct sockaddr_in6 *)(raddr))->sin6_addr,
-			   ntohs(((struct sockaddr_in6 *)(raddr))->sin6_port));
+	siw_dbg_qp(qp, "pd_len %d, laddr %pISp, raddr %pISp\n", pd_len, laddr,
+		   raddr);
 
 	rv = sock_create(v4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, &s);
 	if (rv < 0)

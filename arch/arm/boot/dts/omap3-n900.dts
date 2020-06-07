@@ -482,6 +482,11 @@
 	regulator-always-on;
 };
 
+/* First two dma channels are reserved on secure omap3 */
+&sdma {
+	dma-channel-mask = <0xfffffffc>;
+};
+
 &twl {
 	twl_audio: audio {
 		compatible = "ti,twl4030-audio";
@@ -1029,6 +1034,11 @@
 
 		clocks = <&vctcxo>;
 	};
+};
+
+/* RNG not directly accessible on n900, see omap3-rom-rng instead */
+&rng_target {
+	status = "disabled";
 };
 
 &usb_otg_hs {

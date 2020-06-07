@@ -1046,6 +1046,11 @@ static int ena_com_get_feature(struct ena_com_dev *ena_dev,
 				      feature_ver);
 }
 
+int ena_com_get_current_hash_function(struct ena_com_dev *ena_dev)
+{
+	return ena_dev->rss.hash_func;
+}
+
 static void ena_com_hash_key_fill_default_key(struct ena_com_dev *ena_dev)
 {
 	struct ena_admin_feature_rss_flow_hash_control *hash_key =
@@ -1059,26 +1064,17 @@ static void ena_com_hash_key_fill_default_key(struct ena_com_dev *ena_dev)
 	hash_key->keys_num = sizeof(hash_key->key) / sizeof(u32);
 }
 
-int ena_com_get_current_hash_function(struct ena_com_dev *ena_dev)
-{
-	return ena_dev->rss.hash_func;
-}
-
 static int ena_com_hash_key_allocate(struct ena_com_dev *ena_dev)
 {
 	struct ena_rss *rss = &ena_dev->rss;
-	struct ena_admin_feature_rss_flow_hash_control *hash_key;
 	struct ena_admin_get_feat_resp get_resp;
 	int rc;
-
-	hash_key = (ena_dev->rss).hash_key;
 
 	rc = ena_com_get_feature_ex(ena_dev, &get_resp,
 				    ENA_ADMIN_RSS_HASH_FUNCTION,
 				    ena_dev->rss.hash_key_dma_addr,
 				    sizeof(ena_dev->rss.hash_key), 0);
 	if (unlikely(rc)) {
-		hash_key = NULL;
 		return -EOPNOTSUPP;
 	}
 

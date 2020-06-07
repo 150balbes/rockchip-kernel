@@ -128,7 +128,10 @@ tlbop_end 1
 ENTRY(csky_systemcall)
 	SAVE_ALL TRAP0_SIZE
 	zero_fp
-
+#ifdef CONFIG_RSEQ_DEBUG
+	mov	a0, sp
+	jbsr	rseq_syscall
+#endif
 	psrset  ee, ie
 
 	lrw     r11, __NR_syscalls
@@ -218,10 +221,17 @@ ret_from_exception:
 	andn	r9, r10
 
 	ldw	r12, (r9, TINFO_FLAGS)
-	andi	r12, (_TIF_SIGPENDING | _TIF_NOTIFY_RESUME | _TIF_NEED_RESCHED)
+	andi	r12, (_TIF_SIGPENDING | _TIF_NOTIFY_RESUME | _TIF_NEED_RESCHED | _TIF_UPROBE)
 	cmpnei	r12, 0
 	bt	exit_work
 1:
+#ifdef CONFIG_TRACE_IRQFLAGS
+	ld	r10, (sp, LSAVE_PSR)
+	btsti	r10, 6
+	bf	2f
+	jbsr	trace_hardirqs_on
+2:
+#endif
 	RESTORE_ALL
 
 exit_work:
@@ -277,7 +287,11 @@ ENTRY(csky_irq)
 	zero_fp
 	psrset	ee
 
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_TRACE_IRQFLAGS
+	jbsr	trace_hardirqs_off
+#endif
+
+#ifdef CONFIG_PREEMPTION
 	mov	r9, sp			/* Get current stack  pointer */
 	bmaski	r10, THREAD_SHIFT
 	andn	r9, r10			/* Get thread_info */
@@ -294,7 +308,7 @@ ENTRY(csky_irq)
 	mov	a0, sp
 	jbsr	csky_do_IRQ
 
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_PREEMPTION
 	subi	r12, 1
 	stw	r12, (r9, TINFO_PREEMPT)
 	cmpnei	r12, 0
@@ -316,11 +330,6 @@ ENTRY(__switch_to)
 	lrw	a3, TASK_THREAD
 	addu	a3, a0
 
-	mfcr	a2, psr			/* Save PSR value */
-	stw	a2, (a3, THREAD_SR)	/* Save PSR in task struct */
-	bclri	a2, 6			/* Disable interrupts */
-	mtcr	a2, psr
-
 	SAVE_SWITCH_STACK
 
 	stw	sp, (a3, THREAD_KSP)
@@ -331,12 +340,9 @@ ENTRY(__switch_to)
 
 	ldw	sp, (a3, THREAD_KSP)	/* Set next kernel sp */
 
-	ldw	a2, (a3, THREAD_SR)	/* Set next PSR */
-	mtcr	a2, psr
-
 #if  defined(__CSKYABIV2__)
-	addi	r7, a1, TASK_THREAD_INFO
-	ldw	tls, (r7, TINFO_TP_VALUE)
+	addi	a3, a1, TASK_THREAD_INFO
+	ldw	tls, (a3, TINFO_TP_VALUE)
 #endif
 
 	RESTORE_SWITCH_STACK

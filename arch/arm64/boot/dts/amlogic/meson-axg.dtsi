@@ -117,6 +117,7 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		read-only;
+		secure-monitor = <&sm>;
 	};
 
 	psci {
@@ -1168,6 +1169,7 @@
 				interrupts = <GIC_SPI 84 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_TODDR_A>;
 				resets = <&arb AXG_ARB_TODDR_A>;
+				amlogic,fifo-depth = <512>;
 				status = "disabled";
 			};
 
@@ -1179,6 +1181,7 @@
 				interrupts = <GIC_SPI 85 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_TODDR_B>;
 				resets = <&arb AXG_ARB_TODDR_B>;
+				amlogic,fifo-depth = <256>;
 				status = "disabled";
 			};
 
@@ -1190,6 +1193,7 @@
 				interrupts = <GIC_SPI 86 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_TODDR_C>;
 				resets = <&arb AXG_ARB_TODDR_C>;
+				amlogic,fifo-depth = <256>;
 				status = "disabled";
 			};
 
@@ -1201,6 +1205,7 @@
 				interrupts = <GIC_SPI 88 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_FRDDR_A>;
 				resets = <&arb AXG_ARB_FRDDR_A>;
+				amlogic,fifo-depth = <512>;
 				status = "disabled";
 			};
 
@@ -1212,6 +1217,7 @@
 				interrupts = <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_FRDDR_B>;
 				resets = <&arb AXG_ARB_FRDDR_B>;
+				amlogic,fifo-depth = <256>;
 				status = "disabled";
 			};
 
@@ -1223,6 +1229,7 @@
 				interrupts = <GIC_SPI 90 IRQ_TYPE_EDGE_RISING>;
 				clocks = <&clkc_audio AUD_CLKID_FRDDR_C>;
 				resets = <&arb AXG_ARB_FRDDR_C>;
+				amlogic,fifo-depth = <256>;
 				status = "disabled";
 			};
 

@@ -83,6 +83,7 @@ enum irq_domain_bus_token {
 	DOMAIN_BUS_IPI,
 	DOMAIN_BUS_FSL_MC_MSI,
 	DOMAIN_BUS_TI_SCI_INTA_MSI,
+	DOMAIN_BUS_WAKEUP,
 };
 
 /**
@@ -429,6 +430,11 @@ int irq_domain_xlate_onetwocell(struct irq_domain *d, struct device_node *ctrlr,
 			irq_hw_number_t *out_hwirq, unsigned int *out_type);
 
 int irq_domain_translate_twocell(struct irq_domain *d,
+				 struct irq_fwspec *fwspec,
+				 unsigned long *out_hwirq,
+				 unsigned int *out_type);
+
+int irq_domain_translate_onecell(struct irq_domain *d,
 				 struct irq_fwspec *fwspec,
 				 unsigned long *out_hwirq,
 				 unsigned int *out_type);

@@ -1920,67 +1920,65 @@ static void set_mode(struct vc_data *vc, int on_off)
 /* console_lock is held */
 static void setterm_command(struct vc_data *vc)
 {
-	switch(vc->vc_par[0]) {
-		case 1:	/* set color for underline mode */
-			if (vc->vc_can_do_color &&
-					vc->vc_par[1] < 16) {
-				vc->vc_ulcolor = color_table[vc->vc_par[1]];
-				if (vc->vc_underline)
-					update_attr(vc);
-			}
-			break;
-		case 2:	/* set color for half intensity mode */
-			if (vc->vc_can_do_color &&
-					vc->vc_par[1] < 16) {
-				vc->vc_halfcolor = color_table[vc->vc_par[1]];
-				if (vc->vc_intensity == 0)
-					update_attr(vc);
-			}
-			break;
-		case 8:	/* store colors as defaults */
-			vc->vc_def_color = vc->vc_attr;
-			if (vc->vc_hi_font_mask == 0x100)
-				vc->vc_def_color >>= 1;
-			default_attr(vc);
-			update_attr(vc);
-			break;
-		case 9:	/* set blanking interval */
-			blankinterval = ((vc->vc_par[1] < 60) ? vc->vc_par[1] : 60) * 60;
-			poke_blanked_console();
-			break;
-		case 10: /* set bell frequency in Hz */
-			if (vc->vc_npar >= 1)
-				vc->vc_bell_pitch = vc->vc_par[1];
-			else
-				vc->vc_bell_pitch = DEFAULT_BELL_PITCH;
-			break;
-		case 11: /* set bell duration in msec */
-			if (vc->vc_npar >= 1)
-				vc->vc_bell_duration = (vc->vc_par[1] < 2000) ?
-					msecs_to_jiffies(vc->vc_par[1]) : 0;
-			else
-				vc->vc_bell_duration = DEFAULT_BELL_DURATION;
-			break;
-		case 12: /* bring specified console to the front */
-			if (vc->vc_par[1] >= 1 && vc_cons_allocated(vc->vc_par[1] - 1))
-				set_console(vc->vc_par[1] - 1);
-			break;
-		case 13: /* unblank the screen */
-			poke_blanked_console();
-			break;
-		case 14: /* set vesa powerdown interval */
-			vesa_off_interval = ((vc->vc_par[1] < 60) ? vc->vc_par[1] : 60) * 60 * HZ;
-			break;
-		case 15: /* activate the previous console */
-			set_console(last_console);
-			break;
-		case 16: /* set cursor blink duration in msec */
-			if (vc->vc_npar >= 1 && vc->vc_par[1] >= 50 &&
-					vc->vc_par[1] <= USHRT_MAX)
-				vc->vc_cur_blink_ms = vc->vc_par[1];
-			else
-				vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
-			break;
+	switch (vc->vc_par[0]) {
+	case 1:	/* set color for underline mode */
+		if (vc->vc_can_do_color && vc->vc_par[1] < 16) {
+			vc->vc_ulcolor = color_table[vc->vc_par[1]];
+			if (vc->vc_underline)
+				update_attr(vc);
+		}
+		break;
+	case 2:	/* set color for half intensity mode */
+		if (vc->vc_can_do_color && vc->vc_par[1] < 16) {
+			vc->vc_halfcolor = color_table[vc->vc_par[1]];
+			if (vc->vc_intensity == 0)
+				update_attr(vc);
+		}
+		break;
+	case 8:	/* store colors as defaults */
+		vc->vc_def_color = vc->vc_attr;
+		if (vc->vc_hi_font_mask == 0x100)
+			vc->vc_def_color >>= 1;
+		default_attr(vc);
+		update_attr(vc);
+		break;
+	case 9:	/* set blanking interval */
+		blankinterval = min(vc->vc_par[1], 60U) * 60;
+		poke_blanked_console();
+		break;
+	case 10: /* set bell frequency in Hz */
+		if (vc->vc_npar >= 1)
+			vc->vc_bell_pitch = vc->vc_par[1];
+		else
+			vc->vc_bell_pitch = DEFAULT_BELL_PITCH;
+		break;
+	case 11: /* set bell duration in msec */
+		if (vc->vc_npar >= 1)
+			vc->vc_bell_duration = (vc->vc_par[1] < 2000) ?
+				msecs_to_jiffies(vc->vc_par[1]) : 0;
+		else
+			vc->vc_bell_duration = DEFAULT_BELL_DURATION;
+		break;
+	case 12: /* bring specified console to the front */
+		if (vc->vc_par[1] >= 1 && vc_cons_allocated(vc->vc_par[1] - 1))
+			set_console(vc->vc_par[1] - 1);
+		break;
+	case 13: /* unblank the screen */
+		poke_blanked_console();
+		break;
+	case 14: /* set vesa powerdown interval */
+		vesa_off_interval = min(vc->vc_par[1], 60U) * 60 * HZ;
+		break;
+	case 15: /* activate the previous console */
+		set_console(last_console);
+		break;
+	case 16: /* set cursor blink duration in msec */
+		if (vc->vc_npar >= 1 && vc->vc_par[1] >= 50 &&
+				vc->vc_par[1] <= USHRT_MAX)
+			vc->vc_cur_blink_ms = vc->vc_par[1];
+		else
+			vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
+		break;
 	}
 }
 
@@ -2594,8 +2592,6 @@ static int do_con_write(struct tty_struct *tty, const unsigned char *buf, int co
 
 	if (in_interrupt())
 		return count;
-
-	might_sleep();
 
 	console_lock();
 	vc = tty->driver_data;
@@ -3362,8 +3358,9 @@ static int __init con_init(void)
 
 	console_lock();
 
-	if (conswitchp)
-		display_desc = conswitchp->con_startup();
+	if (!conswitchp)
+		conswitchp = &dummy_con;
+	display_desc = conswitchp->con_startup();
 	if (!display_desc) {
 		fg_console = 0;
 		console_unlock();
@@ -3604,7 +3601,6 @@ err:
 
 
 #ifdef CONFIG_VT_HW_CONSOLE_BINDING
-/* unlocked version of unbind_con_driver() */
 int do_unbind_con_driver(const struct consw *csw, int first, int last, int deflt)
 {
 	struct module *owner = csw->owner;
@@ -4132,7 +4128,7 @@ static void con_driver_unregister_callback(struct work_struct *ignored)
  *	when a driver wants to take over some existing consoles
  *	and become default driver for newly opened ones.
  *
- *	do_take_over_console is basically a register followed by unbind
+ *	do_take_over_console is basically a register followed by bind
  */
 int do_take_over_console(const struct consw *csw, int first, int last, int deflt)
 {

@@ -50,7 +50,7 @@
 #include <linux/irq.h>
 #include <linux/delay.h>
 #include <linux/irq_work.h>
-#include <linux/clk-provider.h>
+#include <linux/of_clk.h>
 #include <linux/suspend.h>
 #include <linux/sched/cputime.h>
 #include <linux/processor.h>
@@ -338,7 +338,7 @@ static unsigned long vtime_delta(struct task_struct *tsk,
 	return stime;
 }
 
-void vtime_account_system(struct task_struct *tsk)
+void vtime_account_kernel(struct task_struct *tsk)
 {
 	unsigned long stime, stime_scaled, steal_time;
 	struct cpu_accounting_data *acct = get_accounting(tsk);
@@ -366,7 +366,7 @@ void vtime_account_system(struct task_struct *tsk)
 #endif
 	}
 }
-EXPORT_SYMBOL_GPL(vtime_account_system);
+EXPORT_SYMBOL_GPL(vtime_account_kernel);
 
 void vtime_account_idle(struct task_struct *tsk)
 {
@@ -395,7 +395,7 @@ static void vtime_flush_scaled(struct task_struct *tsk,
 /*
  * Account the whole cputime accumulated in the paca
  * Must be called with interrupts disabled.
- * Assumes that vtime_account_system/idle() has been called
+ * Assumes that vtime_account_kernel/idle() has been called
  * recently (i.e. since the last entry from usermode) so that
  * get_paca()->user_time_scaled is up to date.
  */
@@ -645,15 +645,6 @@ void timer_broadcast_interrupt(void)
 }
 #endif
 
-/*
- * Hypervisor decrementer interrupts shouldn't occur but are sometimes
- * left pending on exit from a KVM guest.  We don't need to do anything
- * to clear them, as they are edge-triggered.
- */
-void hdec_interrupt(struct pt_regs *regs)
-{
-}
-
 #ifdef CONFIG_SUSPEND
 static void generic_suspend_disable_irqs(void)
 {
@@ -867,7 +858,7 @@ static notrace u64 timebase_read(struct clocksource *cs)
 
 void update_vsyscall(struct timekeeper *tk)
 {
-	struct timespec xt;
+	struct timespec64 xt;
 	struct clocksource *clock = tk->tkr_mono.clock;
 	u32 mult = tk->tkr_mono.mult;
 	u32 shift = tk->tkr_mono.shift;
@@ -939,7 +930,8 @@ void update_vsyscall(struct timekeeper *tk)
 	vdso_data->tb_to_xs = new_tb_to_xs;
 	vdso_data->wtom_clock_sec = tk->wall_to_monotonic.tv_sec;
 	vdso_data->wtom_clock_nsec = tk->wall_to_monotonic.tv_nsec;
-	vdso_data->stamp_xtime = xt;
+	vdso_data->stamp_xtime_sec = xt.tv_sec;
+	vdso_data->stamp_xtime_nsec = xt.tv_nsec;
 	vdso_data->stamp_sec_fraction = frac_sec;
 	vdso_data->hrtimer_res = hrtimer_resolution;
 	smp_wmb();
@@ -1139,9 +1131,7 @@ void __init time_init(void)
 	init_decrementer_clockevent();
 	tick_setup_hrtimer_broadcast();
 
-#ifdef CONFIG_COMMON_CLK
 	of_clk_init(NULL);
-#endif
 }
 
 /*

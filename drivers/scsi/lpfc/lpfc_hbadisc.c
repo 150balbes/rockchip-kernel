@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2017-2019 Broadcom. All Rights Reserved. The term *
+ * Copyright (C) 2017-2020 Broadcom. All Rights Reserved. The term *
  * “Broadcom” refers to Broadcom Inc. and/or its subsidiaries.     *
  * Copyright (C) 2004-2016 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
@@ -3476,8 +3476,8 @@ lpfc_mbx_cmpl_read_topology(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 				phba->pport->port_state, vport->fc_flag);
 		else if (attn_type == LPFC_ATT_UNEXP_WWPN)
 			lpfc_printf_log(phba, KERN_ERR, LOG_LINK_EVENT,
-				"1313 Link Down UNEXP WWPN Event x%x received "
-				"Data: x%x x%x x%x x%x x%x\n",
+				"1313 Link Down Unexpected FA WWPN Event x%x "
+				"received Data: x%x x%x x%x x%x x%x\n",
 				la->eventTag, phba->fc_eventTag,
 				phba->pport->port_state, vport->fc_flag,
 				bf_get(lpfc_mbx_read_top_mm, la),
@@ -4066,7 +4066,7 @@ out:
 	ndlp->nlp_flag |= NLP_RPI_REGISTERED;
 	ndlp->nlp_type |= NLP_FABRIC;
 	lpfc_nlp_set_state(vport, ndlp, NLP_STE_UNMAPPED_NODE);
-	lpfc_printf_vlog(vport, KERN_INFO, LOG_SLI,
+	lpfc_printf_vlog(vport, KERN_INFO, LOG_NODE | LOG_DISCOVERY,
 			 "0003 rpi:%x DID:%x flg:%x %d map%x x%px\n",
 			 ndlp->nlp_rpi, ndlp->nlp_DID, ndlp->nlp_flag,
 			 kref_read(&ndlp->kref),
@@ -4089,7 +4089,9 @@ out:
 				    FC_TYPE_NVME);
 
 		/* Issue SCR just before NameServer GID_FT Query */
-		lpfc_issue_els_scr(vport, SCR_DID, 0);
+		lpfc_issue_els_scr(vport, 0);
+
+		lpfc_issue_els_rdf(vport, 0);
 	}
 
 	vport->fc_ns_retry = 0;
@@ -4595,8 +4597,10 @@ lpfc_enable_node(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 	return ndlp;
 
 free_rpi:
-	if (phba->sli_rev == LPFC_SLI_REV4)
+	if (phba->sli_rev == LPFC_SLI_REV4) {
 		lpfc_sli4_free_rpi(vport->phba, rpi);
+		ndlp->nlp_rpi = LPFC_RPI_ALLOC_ERROR;
+	}
 	return NULL;
 }
 
@@ -4855,6 +4859,7 @@ lpfc_nlp_logo_unreg(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 		if (ndlp->nlp_flag & NLP_RELEASE_RPI) {
 			lpfc_sli4_free_rpi(vport->phba, ndlp->nlp_rpi);
 			ndlp->nlp_flag &= ~NLP_RELEASE_RPI;
+			ndlp->nlp_rpi = LPFC_RPI_ALLOC_ERROR;
 		}
 		ndlp->nlp_flag &= ~NLP_UNREG_INP;
 	}
@@ -4918,7 +4923,8 @@ lpfc_unreg_rpi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
 	if (ndlp->nlp_flag & NLP_RPI_REGISTERED ||
 	    ndlp->nlp_flag & NLP_REG_LOGIN_SEND) {
 		if (ndlp->nlp_flag & NLP_REG_LOGIN_SEND)
-			lpfc_printf_vlog(vport, KERN_INFO, LOG_SLI,
+			lpfc_printf_vlog(vport, KERN_INFO,
+					 LOG_NODE | LOG_DISCOVERY,
 					 "3366 RPI x%x needs to be "
 					 "unregistered nlp_flag x%x "
 					 "did x%x\n",
@@ -4929,7 +4935,8 @@ lpfc_unreg_rpi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
 		 * no need to queue up another one.
 		 */
 		if (ndlp->nlp_flag & NLP_UNREG_INP) {
-			lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+			lpfc_printf_vlog(vport, KERN_INFO,
+					 LOG_NODE | LOG_DISCOVERY,
 					 "1436 unreg_rpi SKIP UNREG x%x on "
 					 "NPort x%x deferred x%x  flg x%x "
 					 "Data: x%px\n",
@@ -4959,7 +4966,8 @@ lpfc_unreg_rpi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
 			    (!(vport->fc_flag & FC_OFFLINE_MODE)))
 				ndlp->nlp_flag |= NLP_UNREG_INP;
 
-			lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+			lpfc_printf_vlog(vport, KERN_INFO,
+					 LOG_NODE | LOG_DISCOVERY,
 					 "1433 unreg_rpi UNREG x%x on "
 					 "NPort x%x deferred flg x%x "
 					 "Data:x%px\n",
@@ -5215,8 +5223,10 @@ lpfc_nlp_remove(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
 		/* For this case we need to cleanup the default rpi
 		 * allocated by the firmware.
 		 */
-		lpfc_printf_vlog(vport, KERN_INFO, LOG_NODE,
-				 "0005 rpi:%x DID:%x flg:%x %d map:%x x%px\n",
+		lpfc_printf_vlog(vport, KERN_INFO,
+				 LOG_NODE | LOG_DISCOVERY,
+				 "0005 Cleanup Default rpi:x%x DID:x%x flg:x%x "
+				 "ref %d map:x%x ndlp x%px\n",
 				 ndlp->nlp_rpi, ndlp->nlp_DID, ndlp->nlp_flag,
 				 kref_read(&ndlp->kref),
 				 ndlp->nlp_usg_map, ndlp);
@@ -5253,8 +5263,9 @@ lpfc_nlp_remove(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
 		 */
 		lpfc_printf_vlog(vport, KERN_WARNING, LOG_NODE,
 				"0940 removed node x%px DID x%x "
-				" rport not null x%px\n",
-				ndlp, ndlp->nlp_DID, ndlp->rport);
+				"rpi %d rport not null x%px\n",
+				 ndlp, ndlp->nlp_DID, ndlp->nlp_rpi,
+				 ndlp->rport);
 		rport = ndlp->rport;
 		rdata = rport->dd_data;
 		rdata->pnode = NULL;
@@ -5412,6 +5423,13 @@ lpfc_setup_disc_node(struct lpfc_vport *vport, uint32_t did)
 		if (!ndlp)
 			return NULL;
 		lpfc_nlp_set_state(vport, ndlp, NLP_STE_NPR_NODE);
+
+		lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+				 "6453 Setup New Node 2B_DISC x%x "
+				 "Data:x%x x%x x%x\n",
+				 ndlp->nlp_DID, ndlp->nlp_flag,
+				 ndlp->nlp_state, vport->fc_flag);
+
 		spin_lock_irq(shost->host_lock);
 		ndlp->nlp_flag |= NLP_NPR_2B_DISC;
 		spin_unlock_irq(shost->host_lock);
@@ -5425,6 +5443,12 @@ lpfc_setup_disc_node(struct lpfc_vport *vport, uint32_t did)
 					 "0014 Could not enable ndlp\n");
 			return NULL;
 		}
+		lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+				 "6454 Setup Enabled Node 2B_DISC x%x "
+				 "Data:x%x x%x x%x\n",
+				 ndlp->nlp_DID, ndlp->nlp_flag,
+				 ndlp->nlp_state, vport->fc_flag);
+
 		spin_lock_irq(shost->host_lock);
 		ndlp->nlp_flag |= NLP_NPR_2B_DISC;
 		spin_unlock_irq(shost->host_lock);
@@ -5443,6 +5467,12 @@ lpfc_setup_disc_node(struct lpfc_vport *vport, uint32_t did)
 			 * delay timeout is not needed.
 			 */
 			lpfc_cancel_retry_delay_tmo(vport, ndlp);
+
+			lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+					 "6455 Setup RSCN Node 2B_DISC x%x "
+					 "Data:x%x x%x x%x\n",
+					 ndlp->nlp_DID, ndlp->nlp_flag,
+					 ndlp->nlp_state, vport->fc_flag);
 
 			/* NVME Target mode waits until rport is known to be
 			 * impacted by the RSCN before it transitions.  No
@@ -5466,9 +5496,21 @@ lpfc_setup_disc_node(struct lpfc_vport *vport, uint32_t did)
 			spin_lock_irq(shost->host_lock);
 			ndlp->nlp_flag |= NLP_NPR_2B_DISC;
 			spin_unlock_irq(shost->host_lock);
-		} else
+		} else {
+			lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+					 "6456 Skip Setup RSCN Node x%x "
+					 "Data:x%x x%x x%x\n",
+					 ndlp->nlp_DID, ndlp->nlp_flag,
+					 ndlp->nlp_state, vport->fc_flag);
 			ndlp = NULL;
+		}
 	} else {
+		lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+				 "6457 Setup Active Node 2B_DISC x%x "
+				 "Data:x%x x%x x%x\n",
+				 ndlp->nlp_DID, ndlp->nlp_flag,
+				 ndlp->nlp_state, vport->fc_flag);
+
 		/* If the initiator received a PLOGI from this NPort or if the
 		 * initiator is already in the process of discovery on it,
 		 * there's no need to try to discover it again.
@@ -5620,10 +5662,10 @@ lpfc_disc_start(struct lpfc_vport *vport)
 
 	/* Start Discovery state <hba_state> */
 	lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
-			 "0202 Start Discovery hba state x%x "
-			 "Data: x%x x%x x%x\n",
+			 "0202 Start Discovery port state x%x "
+			 "flg x%x Data: x%x x%x x%x\n",
 			 vport->port_state, vport->fc_flag, vport->fc_plogi_cnt,
-			 vport->fc_adisc_cnt);
+			 vport->fc_adisc_cnt, vport->fc_npr_cnt);
 
 	/* First do ADISCs - if any */
 	num_sent = lpfc_els_disc_adisc(vport);
@@ -6051,7 +6093,7 @@ lpfc_mbx_cmpl_fdmi_reg_login(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 	ndlp->nlp_flag |= NLP_RPI_REGISTERED;
 	ndlp->nlp_type |= NLP_FABRIC;
 	lpfc_nlp_set_state(vport, ndlp, NLP_STE_UNMAPPED_NODE);
-	lpfc_printf_vlog(vport, KERN_INFO, LOG_SLI,
+	lpfc_printf_vlog(vport, KERN_INFO, LOG_NODE | LOG_DISCOVERY,
 			 "0004 rpi:%x DID:%x flg:%x %d map:%x x%px\n",
 			 ndlp->nlp_rpi, ndlp->nlp_DID, ndlp->nlp_flag,
 			 kref_read(&ndlp->kref),
@@ -6240,12 +6282,12 @@ lpfc_nlp_init(struct lpfc_vport *vport, uint32_t did)
 	INIT_LIST_HEAD(&ndlp->nlp_listp);
 	if (vport->phba->sli_rev == LPFC_SLI_REV4) {
 		ndlp->nlp_rpi = rpi;
-		lpfc_printf_vlog(vport, KERN_INFO, LOG_NODE,
-				 "0007 rpi:%x DID:%x flg:%x refcnt:%d "
-				 "map:%x x%px\n", ndlp->nlp_rpi, ndlp->nlp_DID,
-				 ndlp->nlp_flag,
-				 kref_read(&ndlp->kref),
-				 ndlp->nlp_usg_map, ndlp);
+		lpfc_printf_vlog(vport, KERN_INFO, LOG_NODE | LOG_DISCOVERY,
+				 "0007 Init New ndlp x%px, rpi:x%x DID:%x "
+				 "flg:x%x refcnt:%d map:x%x\n",
+				 ndlp, ndlp->nlp_rpi, ndlp->nlp_DID,
+				 ndlp->nlp_flag, kref_read(&ndlp->kref),
+				 ndlp->nlp_usg_map);
 
 		ndlp->active_rrqs_xri_bitmap =
 				mempool_alloc(vport->phba->active_rrq_pool,
@@ -6474,7 +6516,8 @@ lpfc_fcf_inuse(struct lpfc_hba *phba)
 				goto out;
 			} else if (ndlp->nlp_flag & NLP_RPI_REGISTERED) {
 				ret = 1;
-				lpfc_printf_log(phba, KERN_INFO, LOG_ELS,
+				lpfc_printf_log(phba, KERN_INFO,
+						LOG_NODE | LOG_DISCOVERY,
 						"2624 RPI %x DID %x flag %x "
 						"still logged in\n",
 						ndlp->nlp_rpi, ndlp->nlp_DID,

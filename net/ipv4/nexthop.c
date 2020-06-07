@@ -23,7 +23,6 @@ static void remove_nexthop(struct net *net, struct nexthop *nh,
 #define NH_DEV_HASHSIZE (1U << NH_DEV_HASHBITS)
 
 static const struct nla_policy rtm_nh_policy[NHA_MAX + 1] = {
-	[NHA_UNSPEC]		= { .strict_start_type = NHA_UNSPEC + 1 },
 	[NHA_ID]		= { .type = NLA_U32 },
 	[NHA_GROUP]		= { .type = NLA_BINARY },
 	[NHA_GROUP_TYPE]	= { .type = NLA_U16 },
@@ -277,6 +276,7 @@ out:
 	return 0;
 
 nla_put_failure:
+	nlmsg_cancel(skb, nlh);
 	return -EMSGSIZE;
 }
 
@@ -434,7 +434,7 @@ static int nh_check_attr_group(struct net *net, struct nlattr *tb[],
 		if (!valid_group_nh(nh, len, extack))
 			return -EINVAL;
 	}
-	for (i = NHA_GROUP + 1; i < __NHA_MAX; ++i) {
+	for (i = NHA_GROUP_TYPE + 1; i < __NHA_MAX; ++i) {
 		if (!tb[i])
 			continue;
 
@@ -1328,7 +1328,7 @@ static int rtm_to_nh_config(struct net *net, struct sk_buff *skb,
 	case AF_UNSPEC:
 		if (tb[NHA_GROUP])
 			break;
-		/* fallthrough */
+		fallthrough;
 	default:
 		NL_SET_ERR_MSG(extack, "Invalid address family");
 		goto out;

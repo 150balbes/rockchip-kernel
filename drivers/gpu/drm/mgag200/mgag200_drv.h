@@ -19,7 +19,6 @@
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_vram_helper.h>
-#include <drm/drm_vram_mm_helper.h>
 
 #include "mgag200_reg.h"
 
@@ -96,7 +95,6 @@
 #define MATROX_DPMS_CLEARED (-1)
 
 #define to_mga_crtc(x) container_of(x, struct mga_crtc, base)
-#define to_mga_encoder(x) container_of(x, struct mga_encoder, base)
 #define to_mga_connector(x) container_of(x, struct mga_connector, base)
 
 struct mga_crtc {
@@ -111,12 +109,6 @@ struct mga_mode_info {
 	struct mga_crtc *crtc;
 };
 
-struct mga_encoder {
-	struct drm_encoder base;
-	int last_dpms;
-};
-
-
 struct mga_i2c_chan {
 	struct i2c_adapter adapter;
 	struct drm_device *dev;
@@ -130,16 +122,8 @@ struct mga_connector {
 };
 
 struct mga_cursor {
-	/*
-	   We have to have 2 buffers for the cursor to avoid occasional
-	   corruption while switching cursor icons.
-	   If either of these is NULL, then don't do hardware cursors, and
-	   fall back to software.
-	*/
-	struct drm_gem_vram_object *pixels_1;
-	struct drm_gem_vram_object *pixels_2;
-	/* The currently displayed icon, this points to one of pixels_1, or pixels_2 */
-	struct drm_gem_vram_object *pixels_current;
+	struct drm_gem_vram_object *gbo[2];
+	unsigned int next_index;
 };
 
 struct mga_mc {
@@ -180,6 +164,8 @@ struct mga_device {
 
 	struct mga_cursor cursor;
 
+	size_t vram_fb_available;
+
 	bool				suspended;
 	int				num_crtc;
 	enum mga_type			type;
@@ -192,6 +178,8 @@ struct mga_device {
 
 	/* SE model number stored in reg 0x1e24 */
 	u32 unique_rev_id;
+
+	struct drm_encoder encoder;
 };
 
 static inline enum mga_type
@@ -222,8 +210,10 @@ int mgag200_mm_init(struct mga_device *mdev);
 void mgag200_mm_fini(struct mga_device *mdev);
 int mgag200_mmap(struct file *filp, struct vm_area_struct *vma);
 
-int mga_crtc_cursor_set(struct drm_crtc *crtc, struct drm_file *file_priv,
-						uint32_t handle, uint32_t width, uint32_t height);
-int mga_crtc_cursor_move(struct drm_crtc *crtc, int x, int y);
+int mgag200_cursor_init(struct mga_device *mdev);
+void mgag200_cursor_fini(struct mga_device *mdev);
+int mgag200_crtc_cursor_set(struct drm_crtc *crtc, struct drm_file *file_priv,
+			    uint32_t handle, uint32_t width, uint32_t height);
+int mgag200_crtc_cursor_move(struct drm_crtc *crtc, int x, int y);
 
 #endif				/* __MGAG200_DRV_H__ */
