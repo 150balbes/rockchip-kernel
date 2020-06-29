@@ -16,6 +16,11 @@
 		reg = <0x60000000 0x80000000>;
 	};
 
+	display-subsystem {
+                compatible = "rockchip,display-subsystem";
+                ports = <&vop1_out>;
+        };
+
 	gpio-keys {
 		compatible = "gpio-keys";
 		autorepeat;
@@ -154,6 +159,9 @@
 };
 
 &gpu {
+	assigned-clocks = <&cru ACLK_GPU>;
+	assigned-clock-rates = <300000000>;
+	mali-supply = <&vdd_log>;
 	status = "okay";
 };
 
@@ -276,6 +284,37 @@
 	};
 };
 
+&i2c2 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+	it66121-hdmitx@4c {
+		compatible = "ite,it66121fn";
+		pinctrl-names = "default";
+		pinctrl-0 = <&hdmi_rst &hdmi_int>;
+		vcn33-supply = <&vcca_33>;
+		vcn18-supply = <&vcc_18>;
+		vrf12-supply = <&vdd_hdmi>;
+		reset-gpios = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <RK_PD6 IRQ_TYPE_EDGE_FALLING>;
+		reg = <0x4c>;
+
+		ports {
+			hdmi_in: port {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				hdmi_in_vop: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&vop1_out_hdmi>;
+				};
+			};
+		};
+	};
+};
+
 &mmc0 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -320,6 +359,16 @@
 	lan8720a  {
 		phy_int: phy-int {
 			rockchip,pins = <3 RK_PD2 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	hdmi {
+		hdmi_int: hdmi-int {
+			rockchip,pins = <2 RK_PD6 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+
+		hdmi_rst: hdmi-rst {
+			rockchip,pins = <3 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
@@ -375,6 +424,23 @@
 
 &usb_otg {
 	status = "okay";
+};
+
+&vop1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&lcdc1_dclk &lcdc1_den &lcdc1_hsync
+		     &lcdc1_vsync &lcdc1_rgb24>;
+	status = "okay";
+
+	vop1_out: port {
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+		vop1_out_hdmi: endpoint@0 {
+			reg = <0>;
+			remote-endpoint = <&hdmi_in_vop>;
+		};
+	};
 };
 
 &wdt {
