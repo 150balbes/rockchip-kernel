@@ -938,6 +938,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3188-cs968.dtb \
 	rk3188-px3-evb.dtb \
 	rk3188-radxarock.dtb \
+	rk3188-ugoos-ut2.dtb \
 	rk3228-evb.dtb \
 	rk3228a-box.dtb \
 	rk3228a-box-h96mini.dtb \
