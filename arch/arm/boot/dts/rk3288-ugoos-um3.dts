@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2020 Oleg Ivanov <balbes150@yandex.ru>
+ */
+
+/dts-v1/;
+#include "rk3288-ugoos.dtsi"
+
+/ {
+
+	model = "Ugoos UM3";
+	compatible = "ugoos,um3", "rockchip,rk3288";
+
+};
+
+&gmac {
+	status = "disable";
+};
+
