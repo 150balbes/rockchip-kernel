@@ -1414,7 +1414,7 @@ int rk_get_temperature(void)
 //			pr_debug("rk_get_temp failed!\n");
 //			return ret;
 //		}
-	temp = 100000;
+	temp = 75000;
 	return temp / 1000;
 }
 EXPORT_SYMBOL(rk_get_temperature);
