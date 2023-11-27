@@ -404,13 +404,15 @@ static int rkvdec2_isr(struct mpp_dev *mpp)
 	u32 err_mask;
 	struct rkvdec2_task *task = NULL;
 	struct mpp_task *mpp_task = mpp->cur_task;
+	struct rkvdec2_dev *dec = to_rkvdec2_dev(mpp);
 
 	/* FIXME use a spin lock here */
 	if (!mpp_task) {
 		dev_err(mpp->dev, "no current task\n");
 		return IRQ_HANDLED;
 	}
-	mpp_time_diff(mpp_task);
+	mpp_task->hw_cycles = mpp_read(mpp, RKVDEC_PERF_WORKING_CNT);
+	mpp_time_diff_with_hw_time(mpp_task, dec->core_clk_info.real_rate_hz);
 	mpp->cur_task = NULL;
 	task = to_rkvdec2_task(mpp_task);
 	task->irq_status = mpp->irq_status;
@@ -420,8 +422,10 @@ static int rkvdec2_isr(struct mpp_dev *mpp)
 		   RKVDEC_TIMEOUT_STA | RKVDEC_ERROR_STA;
 	if (err_mask & task->irq_status) {
 		atomic_inc(&mpp->reset_request);
-		mpp_debug(DEBUG_DUMP_ERR_REG, "irq_status: %08x\n", task->irq_status);
-		mpp_task_dump_hw_reg(mpp);
+		if (mpp_debug_unlikely(DEBUG_DUMP_ERR_REG)) {
+			mpp_debug(DEBUG_DUMP_ERR_REG, "irq_status: %08x\n", task->irq_status);
+			mpp_task_dump_hw_reg(mpp);
+		}
 	}
 
 	mpp_task_finish(mpp_task->session, mpp_task);
@@ -1442,7 +1446,7 @@ static int rkvdec2_core_probe(struct platform_device *pdev)
 	mpp->dev_ops->task_worker = rkvdec2_soft_ccu_worker;
 	kthread_init_work(&mpp->work, rkvdec2_soft_ccu_worker);
 
-	mpp->iommu_info->hdl = rkvdec2_ccu_iommu_fault_handle;
+	mpp->fault_handler = rkvdec2_ccu_iommu_fault_handle;
 	/* get irq request */
 	ret = devm_request_threaded_irq(dev, mpp->irq, rkvdec2_soft_ccu_irq, NULL,
 					IRQF_SHARED, dev_name(dev), mpp);
@@ -1511,10 +1515,6 @@ static int rkvdec2_probe_default(struct platform_device *pdev)
 		dev_err(dev, "register interrupter runtime failed\n");
 		return -EINVAL;
 	}
-
-	/* power domain autosuspend delay 2s */
-	pm_runtime_set_autosuspend_delay(dev, 2000);
-	pm_runtime_use_autosuspend(dev);
 
 	mpp->session_max_buffers = RKVDEC_SESSION_MAX_BUFFERS;
 	rkvdec2_procfs_init(mpp);

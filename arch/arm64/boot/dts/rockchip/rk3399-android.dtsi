@@ -12,9 +12,9 @@
 / {
 	compatible = "rockchip,android", "rockchip,rk3399";
 
-//	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xff1a0000 coherent_pool=1m";
-//	};
+	chosen: chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xff1a0000 coherent_pool=1m";
+	};
 
 	cpuinfo {
 		compatible = "rockchip,cpuinfo";

@@ -499,7 +499,7 @@
 			rockchip,pins = <1 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 		spk_con: spk-con {
-			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 

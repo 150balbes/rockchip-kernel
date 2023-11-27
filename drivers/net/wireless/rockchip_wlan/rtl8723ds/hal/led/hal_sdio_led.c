@@ -1,6 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2012 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,15 +12,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 
 #include <drv_types.h>
 #include <hal_data.h>
+#ifdef CONFIG_RTW_SW_LED
 
 /*
  *	Description:
@@ -52,9 +49,9 @@ SwLedBlink(
 		break;
 
 	case LED_BLINK_StartToBlink:
-		if (check_fwstate(pmlmepriv, _FW_LINKED) && check_fwstate(pmlmepriv, WIFI_STATION_STATE))
+		if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) && check_fwstate(pmlmepriv, WIFI_STATION_STATE))
 			bStopBlinking = _TRUE;
-		if (check_fwstate(pmlmepriv, _FW_LINKED) &&
+		if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) &&
 		    (check_fwstate(pmlmepriv, WIFI_ADHOC_STATE) || check_fwstate(pmlmepriv, WIFI_ADHOC_MASTER_STATE)))
 			bStopBlinking = _TRUE;
 		else if (pLed->BlinkTimes == 0)
@@ -76,9 +73,9 @@ SwLedBlink(
 	if (bStopBlinking) {
 		if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 			SwLedOff(padapter, pLed);
-		else if ((check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) && (pLed->bLedOn == _FALSE))
+		else if ((check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) && (pLed->bLedOn == _FALSE))
 			SwLedOn(padapter, pLed);
-		else if ((check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) &&  pLed->bLedOn == _TRUE)
+		else if ((check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) &&  pLed->bLedOn == _TRUE)
 			SwLedOff(padapter, pLed);
 
 		pLed->BlinkTimes = 0;
@@ -101,13 +98,9 @@ SwLedBlink(
 			_set_timer(&(pLed->BlinkTimer), LED_BLINK_SLOWLY_INTERVAL);
 			break;
 
-		case LED_BLINK_WPS: {
-			if (pLed->BlinkingLedState == RTW_LED_ON)
-				_set_timer(&(pLed->BlinkTimer), LED_BLINK_LONG_INTERVAL);
-			else
-				_set_timer(&(pLed->BlinkTimer), LED_BLINK_LONG_INTERVAL);
-		}
-		break;
+		case LED_BLINK_WPS:
+			_set_timer(&(pLed->BlinkTimer), LED_BLINK_LONG_INTERVAL);
+		        break;
 
 		default:
 			_set_timer(&(pLed->BlinkTimer), LED_BLINK_SLOWLY_INTERVAL);
@@ -123,7 +116,7 @@ SwLedBlink1(
 {
 	_adapter				*padapter = pLed->padapter;
 	PHAL_DATA_TYPE		pHalData = GET_HAL_DATA(padapter);
-	struct led_priv		*ledpriv = &(padapter->ledpriv);
+	struct led_priv		*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv		*pmlmepriv = &(padapter->mlmepriv);
 	PLED_SDIO			pLed1 = &(ledpriv->SwLed1);
 	u8					bStopBlinking = _FALSE;
@@ -140,7 +133,7 @@ SwLedBlink1(
 
 
 	if (pHalData->CustomerID == RT_CID_DEFAULT) {
-		if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+		if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 			if (!pLed1->bSWLedCtrl) {
 				SwLedOn(padapter, pLed1);
 				pLed1->bSWLedCtrl = _TRUE;
@@ -180,7 +173,7 @@ SwLedBlink1(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->bLedLinkBlinkInProgress = _TRUE;
 				pLed->CurrLedState = LED_BLINK_NORMAL;
 				if (pLed->bLedOn)
@@ -189,7 +182,7 @@ SwLedBlink1(
 					pLed->BlinkingLedState = RTW_LED_ON;
 				_set_timer(&(pLed->BlinkTimer), LED_BLINK_LINK_INTERVAL_ALPHA);
 
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->bLedNoLinkBlinkInProgress = _TRUE;
 				pLed->CurrLedState = LED_BLINK_SLOWLY;
 				if (pLed->bLedOn)
@@ -219,7 +212,7 @@ SwLedBlink1(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->bLedLinkBlinkInProgress = _TRUE;
 				pLed->CurrLedState = LED_BLINK_NORMAL;
 				if (pLed->bLedOn)
@@ -227,7 +220,7 @@ SwLedBlink1(
 				else
 					pLed->BlinkingLedState = RTW_LED_ON;
 				_set_timer(&(pLed->BlinkTimer), LED_BLINK_LINK_INTERVAL_ALPHA);
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->bLedNoLinkBlinkInProgress = _TRUE;
 				pLed->CurrLedState = LED_BLINK_SLOWLY;
 				if (pLed->bLedOn)
@@ -314,12 +307,12 @@ SwLedBlink2(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->CurrLedState = RTW_LED_ON;
 				pLed->BlinkingLedState = RTW_LED_ON;
 				SwLedOn(padapter, pLed);
 
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->CurrLedState = RTW_LED_OFF;
 				pLed->BlinkingLedState = RTW_LED_OFF;
 				SwLedOff(padapter, pLed);
@@ -345,12 +338,12 @@ SwLedBlink2(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->CurrLedState = RTW_LED_ON;
 				pLed->BlinkingLedState = RTW_LED_ON;
 				SwLedOn(padapter, pLed);
 
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->CurrLedState = RTW_LED_OFF;
 				pLed->BlinkingLedState = RTW_LED_OFF;
 				SwLedOff(padapter, pLed);
@@ -401,13 +394,13 @@ SwLedBlink3(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->CurrLedState = RTW_LED_ON;
 				pLed->BlinkingLedState = RTW_LED_ON;
 				if (!pLed->bLedOn)
 					SwLedOn(padapter, pLed);
 
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->CurrLedState = RTW_LED_OFF;
 				pLed->BlinkingLedState = RTW_LED_OFF;
 				if (pLed->bLedOn)
@@ -435,14 +428,14 @@ SwLedBlink3(
 		if (bStopBlinking) {
 			if (adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on)
 				SwLedOff(padapter, pLed);
-			else if (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE) {
+			else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE) {
 				pLed->CurrLedState = RTW_LED_ON;
 				pLed->BlinkingLedState = RTW_LED_ON;
 
 				if (!pLed->bLedOn)
 					SwLedOn(padapter, pLed);
 
-			} else if (check_fwstate(pmlmepriv, _FW_LINKED) == _FALSE) {
+			} else if (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _FALSE) {
 				pLed->CurrLedState = RTW_LED_OFF;
 				pLed->BlinkingLedState = RTW_LED_OFF;
 
@@ -507,7 +500,7 @@ SwLedBlink4(
 )
 {
 	_adapter			*padapter = pLed->padapter;
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &(padapter->mlmepriv);
 	PLED_SDIO		pLed1 = &(ledpriv->SwLed1);
 	u8				bStopBlinking = _FALSE;
@@ -771,7 +764,7 @@ SwLedBlink6(
 void BlinkHandler(PLED_SDIO	pLed)
 {
 	_adapter		*padapter = pLed->padapter;
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 
 	/* RTW_INFO("%s (%s:%d)\n",__FUNCTION__, current->comm, current->pid); */
 	if (RTW_CANNOT_RUN(padapter) || (!rtw_is_hw_init_completed(padapter))) {
@@ -784,6 +777,12 @@ void BlinkHandler(PLED_SDIO	pLed)
 	}
 
 	switch (ledpriv->LedStrategy) {
+	#if CONFIG_RTW_SW_LED_TRX_DA_CLASSIFY
+	case SW_LED_MODE_UC_TRX_ONLY:
+		rtw_sw_led_blink_uc_trx_only(pLed);
+		break;
+	#endif
+
 	case SW_LED_MODE0:
 		SwLedBlink(pLed);
 		break;
@@ -823,17 +822,9 @@ void BlinkHandler(PLED_SDIO	pLed)
  *		Callback function of LED BlinkTimer,
  *		it just schedules to corresponding BlinkWorkItem/led_blink_hdl
  *   */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-void BlinkTimerCallback(struct timer_list *t)
-#else
 void BlinkTimerCallback(void *data)
-#endif
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-	PLED_SDIO        pLed = from_timer(pLed, t, BlinkTimer);
-#else
 	PLED_SDIO	 pLed = (PLED_SDIO)data;
-#endif
 	_adapter		*padapter = pLed->padapter;
 
 	/* RTW_INFO("%s\n", __FUNCTION__); */
@@ -846,7 +837,7 @@ void BlinkTimerCallback(void *data)
 		return;
 	}
 
-#ifdef CONFIG_LED_HANDLED_BY_CMD_THREAD
+#ifdef CONFIG_RTW_LED_HANDLED_BY_CMD_THREAD
 	rtw_led_blink_cmd(padapter, pLed);
 #else
 	_set_workitem(&(pLed->BlinkWorkItem));
@@ -870,7 +861,7 @@ SwLedControlMode0(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	PLED_SDIO	pLed = &(ledpriv->SwLed1);
 
 	/* Decide led state */
@@ -972,7 +963,7 @@ SwLedControlMode1(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv		*ledpriv = &(padapter->ledpriv);
+	struct led_priv		*ledpriv = adapter_to_led(padapter);
 	PLED_SDIO			pLed = &(ledpriv->SwLed0);
 	struct mlme_priv		*pmlmepriv = &(padapter->mlmepriv);
 	PHAL_DATA_TYPE		pHalData = GET_HAL_DATA(padapter);
@@ -1029,7 +1020,7 @@ SwLedControlMode1(
 		break;
 
 	case LED_CTL_SITE_SURVEY:
-		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE))
+		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE))
 			;
 		else if (pLed->bLedScanBlinkInProgress == _FALSE) {
 			if (IS_LED_WPS_BLINKING(pLed))
@@ -1201,7 +1192,7 @@ SwLedControlMode2(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;
 	PLED_SDIO		pLed = &(ledpriv->SwLed0);
 
@@ -1230,7 +1221,7 @@ SwLedControlMode2(
 
 	case LED_CTL_TX:
 	case LED_CTL_RX:
-		if ((pLed->bLedBlinkInProgress == _FALSE) && (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE)) {
+		if ((pLed->bLedBlinkInProgress == _FALSE) && (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE)) {
 			if (pLed->CurrLedState == LED_BLINK_SCAN || IS_LED_WPS_BLINKING(pLed))
 				return;
 
@@ -1340,7 +1331,7 @@ SwLedControlMode3(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;
 	PLED_SDIO		pLed = &(ledpriv->SwLed0);
 
@@ -1369,7 +1360,7 @@ SwLedControlMode3(
 
 	case LED_CTL_TX:
 	case LED_CTL_RX:
-		if ((pLed->bLedBlinkInProgress == _FALSE) && (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE)) {
+		if ((pLed->bLedBlinkInProgress == _FALSE) && (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE)) {
 			if (pLed->CurrLedState == LED_BLINK_SCAN || IS_LED_WPS_BLINKING(pLed))
 				return;
 
@@ -1495,7 +1486,7 @@ SwLedControlMode4(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;
 	PLED_SDIO		pLed = &(ledpriv->SwLed0);
 	PLED_SDIO		pLed1 = &(ledpriv->SwLed1);
@@ -1572,7 +1563,7 @@ SwLedControlMode4(
 		break;
 
 	case LED_CTL_SITE_SURVEY:
-		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE))
+		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE))
 			;
 		else if (pLed->bLedScanBlinkInProgress == _FALSE) {
 			if (IS_LED_WPS_BLINKING(pLed))
@@ -1785,7 +1776,7 @@ SwLedControlMode5(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(padapter);
 	PLED_SDIO		pLed = &(ledpriv->SwLed0);
@@ -1804,7 +1795,7 @@ SwLedControlMode5(
 		break;
 
 	case LED_CTL_SITE_SURVEY:
-		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, _FW_LINKED) == _TRUE))
+		if ((pmlmepriv->LinkDetectInfo.bBusyTraffic) && (check_fwstate(pmlmepriv, WIFI_ASOC_STATE) == _TRUE))
 			;
 		else if (pLed->bLedScanBlinkInProgress == _FALSE) {
 			if (pLed->bLedBlinkInProgress == _TRUE) {
@@ -1864,7 +1855,7 @@ SwLedControlMode6(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;
 	PLED_SDIO pLed0 = &(ledpriv->SwLed0);
 
@@ -1894,7 +1885,7 @@ LedControlSDIO(
 	LED_CTL_MODE		LedAction
 )
 {
-	struct led_priv	*ledpriv = &(padapter->ledpriv);
+	struct led_priv	*ledpriv = adapter_to_led(padapter);
 
 #if (MP_DRIVER == 1)
 	if (padapter->registrypriv.mp_mode == 1)
@@ -1915,12 +1906,6 @@ LedControlSDIO(
 	/* if(priv->bInHctTest) */
 	/*	return; */
 
-#ifdef CONFIG_CONCURRENT_MODE
-	/* Only do led action for PRIMARY_ADAPTER */
-	if (padapter->adapter_type != PRIMARY_ADAPTER)
-		return;
-#endif
-
 	if ((adapter_to_pwrctl(padapter)->rf_pwrstate != rf_on &&
 	     adapter_to_pwrctl(padapter)->rfoff_reason > RF_CHANGE_BY_PS) &&
 	    (LedAction == LED_CTL_TX || LedAction == LED_CTL_RX ||
@@ -1931,6 +1916,12 @@ LedControlSDIO(
 		return;
 
 	switch (ledpriv->LedStrategy) {
+	#if CONFIG_RTW_SW_LED_TRX_DA_CLASSIFY
+	case SW_LED_MODE_UC_TRX_ONLY:
+		rtw_sw_led_ctl_mode_uc_trx_only(padapter, LedAction);
+		break;
+	#endif
+
 	case SW_LED_MODE0:
 		SwLedControlMode0(padapter, LedAction);
 		break;
@@ -2002,11 +1993,8 @@ InitLed(
 
 	ResetLedStatus(pLed);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-	timer_setup(&pLed->BlinkTimer, BlinkTimerCallback, 0);
-#else
-	_init_timer(&pLed->BlinkTimer, padapter->pnetdev, BlinkTimerCallback, pLed);
-#endif
+	rtw_init_timer(&(pLed->BlinkTimer), padapter, BlinkTimerCallback, pLed);
+
 	_init_workitem(&(pLed->BlinkWorkItem), BlinkWorkItemCallback, pLed);
 }
 
@@ -2024,3 +2012,4 @@ DeInitLed(
 	_cancel_timer_ex(&(pLed->BlinkTimer));
 	ResetLedStatus(pLed);
 }
+#endif

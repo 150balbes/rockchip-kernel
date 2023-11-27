@@ -1119,7 +1119,7 @@ static int rockchip_get_mux(struct rockchip_pin_bank *bank, int pin)
 				if (ret)
 					return ret;
 
-				if (!(val & BIT(8)))
+				if (((val >> bit) & mask) != 8)
 					return ((val >> bit) & mask);
 
 				reg = reg + 0x8000; /* BUS_IOC_BASE */
@@ -3213,22 +3213,11 @@ static int rockchip_pmx_set(struct pinctrl_dev *pctldev, unsigned selector,
 	return 0;
 }
 
-static int rockchip_pmx_gpio_set_direction(struct pinctrl_dev *pctldev,
-					   struct pinctrl_gpio_range *range,
-					   unsigned offset, bool input)
-{
-	struct rockchip_pinctrl *info = pinctrl_dev_get_drvdata(pctldev);
-	struct rockchip_pin_bank *bank = pin_to_bank(info, offset);
-
-	return rockchip_set_mux(bank, offset - range->gc->base, RK_FUNC_GPIO);
-}
-
 static const struct pinmux_ops rockchip_pmx_ops = {
 	.get_functions_count	= rockchip_pmx_get_funcs_count,
 	.get_function_name	= rockchip_pmx_get_func_name,
 	.get_function_groups	= rockchip_pmx_get_groups,
 	.set_mux		= rockchip_pmx_set,
-	.gpio_set_direction	= rockchip_pmx_gpio_set_direction,
 };
 
 /*

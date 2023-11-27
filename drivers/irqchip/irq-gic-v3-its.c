@@ -3404,9 +3404,13 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	sz = nr_ites * (FIELD_GET(GITS_TYPER_ITT_ENTRY_SIZE, its->typer) + 1);
 	sz = max(sz, ITS_ITT_ALIGN) + ITS_ITT_ALIGN - 1;
 	gfp_flags = GFP_KERNEL;
-	if (of_machine_is_compatible("rockchip,rk3568") || of_machine_is_compatible("rockchip,rk3566"))
+	if (of_machine_is_compatible("rockchip,rk3568") || of_machine_is_compatible("rockchip,rk3566")) {
 		gfp_flags |= GFP_DMA32;
-	itt = (void *)__get_free_pages(gfp_flags, get_order(sz));
+		itt = (void *)__get_free_pages(gfp_flags, get_order(sz));
+	} else {
+		itt = kzalloc_node(sz, gfp_flags, its->numa_node);
+	}
+
 	if (alloc_lpis) {
 		lpi_map = its_lpi_alloc(nvecs, &lpi_base, &nr_lpis);
 		if (lpi_map)
@@ -3420,7 +3424,13 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 
 	if (!dev || !itt ||  !col_map || (!lpi_map && alloc_lpis)) {
 		kfree(dev);
-		free_pages((unsigned long)itt, get_order(sz));
+
+		if (of_machine_is_compatible("rockchip,rk3568") ||
+		    of_machine_is_compatible("rockchip,rk3566"))
+			free_pages((unsigned long)itt, get_order(sz));
+		else
+			kfree(itt);
+
 		kfree(lpi_map);
 		kfree(col_map);
 		return NULL;
@@ -3458,7 +3468,13 @@ static void its_free_device(struct its_device *its_dev)
 	list_del(&its_dev->entry);
 	raw_spin_unlock_irqrestore(&its_dev->its->lock, flags);
 	kfree(its_dev->event_map.col_map);
-	free_pages((unsigned long)its_dev->itt, get_order(its_dev->itt_sz));
+
+	if (of_machine_is_compatible("rockchip,rk3568") ||
+	    of_machine_is_compatible("rockchip,rk3566"))
+		free_pages((unsigned long)its_dev->itt, get_order(its_dev->itt_sz));
+	else
+		kfree(its_dev->itt);
+
 	kfree(its_dev);
 }
 

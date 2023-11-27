@@ -7,6 +7,7 @@
 #define __DW_HDMI__
 
 #include <drm/drm_property.h>
+#include <drm/drm_crtc.h>
 #include <sound/hdmi-codec.h>
 #include <media/cec.h>
 
@@ -248,8 +249,9 @@ struct dw_hdmi_plat_data {
 	u64 (*get_grf_color_fmt)(void *data);
 	void (*convert_to_split_mode)(struct drm_display_mode *mode);
 	void (*convert_to_origin_mode)(struct drm_display_mode *mode);
-	int (*dclk_set)(void *data, bool enable);
+	int (*dclk_set)(void *data, bool enable, int vp_id);
 	int (*link_clk_set)(void *data, bool enable);
+	int (*get_vp_id)(struct drm_crtc_state *crtc_state);
 
 	/* Vendor Property support */
 	const struct dw_hdmi_property_ops *property_ops;
@@ -315,11 +317,17 @@ void dw_hdmi_qp_set_channel_count(struct dw_hdmi_qp *hdmi, unsigned int cnt);
 void dw_hdmi_qp_set_channel_status(struct dw_hdmi_qp *hdmi, u8 *channel_status,
 				   bool ref2stream);
 void dw_hdmi_qp_set_channel_allocation(struct dw_hdmi_qp *hdmi, unsigned int ca);
+void dw_hdmi_qp_set_audio_interface(struct dw_hdmi_qp *hdmi,
+				    struct hdmi_codec_daifmt *fmt,
+				    struct hdmi_codec_params *hparms);
 void dw_hdmi_qp_set_audio_infoframe(struct dw_hdmi_qp *hdmi,
 				    struct hdmi_codec_params *hparms);
 void dw_hdmi_qp_audio_enable(struct dw_hdmi_qp *hdmi);
 void dw_hdmi_qp_audio_disable(struct dw_hdmi_qp *hdmi);
 int dw_hdmi_qp_set_plugged_cb(struct dw_hdmi_qp *hdmi, hdmi_codec_plugged_cb fn,
 			      struct device *codec_dev);
+void dw_hdmi_qp_set_output_type(struct dw_hdmi_qp *hdmi, u64 val);
+bool dw_hdmi_qp_get_output_whether_hdmi(struct dw_hdmi_qp *hdmi);
+int dw_hdmi_qp_get_output_type_cap(struct dw_hdmi_qp *hdmi);
 
 #endif /* __IMX_HDMI_H__ */

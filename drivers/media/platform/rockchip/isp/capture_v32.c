@@ -193,17 +193,6 @@ static const struct capture_fmt sp_fmts[] = {
 		.write_format = MI_CTRL_SP_WRITE_PLA,
 		.output_format = MI_CTRL_SP_OUTPUT_RGB565,
 	},
-	/* fbcg */
-	{
-		.fourcc = V4L2_PIX_FMT_FBCG,
-		.fmt_type = FMT_FBCGAIN,
-		.bpp = { 8, 16 },
-		.cplanes = 2,
-		.mplanes = 2,
-		.uv_swap = 0,
-		.write_format = MI_CTRL_SP_WRITE_SPLA,
-		.output_format = MI_CTRL_SP_OUTPUT_YUV420,
-	}
 };
 
 static const struct capture_fmt bp_fmts[] = {
@@ -1253,6 +1242,7 @@ static int mi_frame_start(struct rkisp_stream *stream, u32 mis)
  */
 static int mi_frame_end(struct rkisp_stream *stream)
 {
+	struct rkisp_device *dev = stream->ispdev;
 	struct capture_fmt *isp_fmt = &stream->out_isp_fmt;
 	unsigned long lock_flags = 0;
 	u32 i;
@@ -1261,6 +1251,13 @@ static int mi_frame_end(struct rkisp_stream *stream)
 
 	if (stream->curr_buf) {
 		struct vb2_buffer *vb2_buf = &stream->curr_buf->vb.vb2_buf;
+
+		if (dev->skip_frame) {
+			spin_lock_irqsave(&stream->vbq_lock, lock_flags);
+			list_add_tail(&stream->curr_buf->queue, &stream->buf_queue);
+			spin_unlock_irqrestore(&stream->vbq_lock, lock_flags);
+			goto next;
+		}
 
 		for (i = 0; i < isp_fmt->mplanes; i++) {
 			u32 payload_size = stream->out_fmt.plane_fmt[i].sizeimage;
@@ -1273,7 +1270,7 @@ static int mi_frame_end(struct rkisp_stream *stream)
 		else
 			rkisp_rockit_buf_done(stream, ROCKIT_DVBM_END);
 	}
-
+next:
 	spin_lock_irqsave(&stream->vbq_lock, lock_flags);
 	stream->curr_buf = stream->next_buf;
 	stream->next_buf = NULL;
@@ -1299,16 +1296,20 @@ static void rkisp_stream_stop(struct rkisp_stream *stream)
 	struct v4l2_device *v4l2_dev = &dev->v4l2_dev;
 	unsigned long lock_flags = 0;
 	int ret = 0;
-	bool is_wait = true;
+	bool is_wait = dev->hw_dev->is_shutdown ? false : true;
 
 	stream->stopping = true;
 	stream->is_pause = false;
-	if (dev->hw_dev->is_single && stream->ops->disable_mi)
+	if (stream->ops->disable_mi)
 		stream->ops->disable_mi(stream);
 	if (IS_HDR_RDBK(dev->rd_mode)) {
 		spin_lock_irqsave(&dev->hw_dev->rdbk_lock, lock_flags);
-		if (dev->hw_dev->cur_dev_id != dev->dev_id || dev->hw_dev->is_idle)
+		if (dev->hw_dev->cur_dev_id != dev->dev_id || dev->hw_dev->is_idle) {
 			is_wait = false;
+			/* force update to close */
+			if (dev->hw_dev->is_single)
+				stream_self_update(stream);
+		}
 		if (atomic_read(&dev->cap_dev.refcnt) == 1 && !is_wait)
 			dev->isp_state = ISP_STOP;
 		spin_unlock_irqrestore(&dev->hw_dev->rdbk_lock, lock_flags);
@@ -1360,7 +1361,8 @@ static int rkisp_start(struct rkisp_stream *stream)
 		if (ret)
 			return ret;
 	}
-	stream_self_update(stream);
+	if (dev->hw_dev->is_single)
+		stream_self_update(stream);
 	if (stream->ops->enable_mi)
 		stream->ops->enable_mi(stream);
 
@@ -1554,9 +1556,10 @@ static void rkisp_stop_streaming(struct vb2_queue *queue)
 
 	if (stream->id == RKISP_STREAM_LUMA) {
 		stream->stopping = true;
-		wait_event_timeout(stream->done,
-				   stream->frame_end,
-				   msecs_to_jiffies(500));
+		if (!dev->hw_dev->is_shutdown)
+			wait_event_timeout(stream->done,
+					   stream->frame_end,
+					   msecs_to_jiffies(500));
 		stream->streaming = false;
 		stream->stopping = false;
 		destroy_buf_queue(stream, VB2_BUF_STATE_ERROR);
@@ -1636,6 +1639,11 @@ rkisp_start_streaming(struct vb2_queue *queue, unsigned int count)
 	int ret = -EINVAL;
 
 	mutex_lock(&dev->hw_dev->dev_lock);
+	if (dev->is_pre_on &&
+	    !dev->hw_dev->is_single &&
+	    !atomic_read(&dev->hw_dev->refcnt) &&
+	    !atomic_read(&dev->cap_dev.refcnt))
+		rkisp_hw_enum_isp_size(dev->hw_dev);
 
 	v4l2_dbg(1, rkisp_debug, v4l2_dev, "%s %s id:%d\n",
 		 __func__, node->vdev.name, stream->id);

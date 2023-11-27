@@ -41,7 +41,9 @@
 #include <soc/rockchip/rockchip_opp_select.h>
 #include <soc/rockchip/rockchip_system_monitor.h>
 #include <soc/rockchip/rockchip_ipa.h>
+#ifdef CONFIG_PM_DEVFREQ
 #include <../drivers/devfreq/governor.h>
+#endif
 #endif
 
 #include "rknpu_ioctl.h"
@@ -1062,6 +1064,7 @@ static struct devfreq_dev_profile npu_devfreq_profile = {
 	.get_cur_freq = npu_devfreq_get_cur_freq,
 };
 
+#ifdef CONFIG_PM_DEVFREQ
 static int devfreq_rknpu_ondemand_func(struct devfreq *df, unsigned long *freq)
 {
 	struct rknpu_device *rknpu_dev = df->data;
@@ -1085,6 +1088,7 @@ static struct devfreq_governor devfreq_rknpu_ondemand = {
 	.get_target_freq = devfreq_rknpu_ondemand_func,
 	.event_handler = devfreq_rknpu_ondemand_handler,
 };
+#endif
 
 static unsigned long npu_get_static_power(struct devfreq *devfreq,
 					  unsigned long voltage)
@@ -1103,6 +1107,66 @@ static struct devfreq_cooling_power npu_cooling_power = {
 };
 
 #if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE
+static int rk3588_npu_get_soc_info(struct device *dev, struct device_node *np,
+			       int *bin, int *process)
+{
+	int ret = 0;
+	u8 value = 0;
+
+	if (!bin)
+		return 0;
+
+	if (of_property_match_string(np, "nvmem-cell-names",
+				     "specification_serial_number") >= 0) {
+		ret = rockchip_nvmem_cell_read_u8(np,
+						  "specification_serial_number",
+						  &value);
+		if (ret) {
+			dev_err(dev,
+				"Failed to get specification_serial_number\n");
+			return ret;
+		}
+		/* RK3588M */
+		if (value == 0xd)
+			*bin = 1;
+		/* RK3588J */
+		else if (value == 0xa)
+			*bin = 2;
+	}
+	if (*bin < 0)
+		*bin = 0;
+	dev_info(dev, "bin=%d\n", *bin);
+
+	return ret;
+}
+
+static int rk3588_npu_set_soc_info(struct device *dev, struct device_node *np,
+			       int bin, int process, int volt_sel)
+{
+	struct opp_table *opp_table;
+	u32 supported_hw[2];
+
+	if (volt_sel < 0)
+		return 0;
+	if (bin < 0)
+		bin = 0;
+
+	if (!of_property_read_bool(np, "rockchip,supported-hw"))
+		return 0;
+
+	/* SoC Version */
+	supported_hw[0] = BIT(bin);
+	/* Speed Grade */
+	supported_hw[1] = BIT(volt_sel);
+	opp_table = dev_pm_opp_set_supported_hw(dev, supported_hw, 2);
+	if (IS_ERR(opp_table)) {
+		dev_err(dev, "failed to set supported opp\n");
+		return PTR_ERR(opp_table);
+	}
+
+	return 0;
+}
+
 static int rk3588_npu_set_read_margin(struct device *dev,
 				      struct rockchip_opp_info *opp_info,
 				      u32 rm)
@@ -1135,6 +1199,8 @@ static int rk3588_npu_set_read_margin(struct device *dev,
 }
 
 static const struct rockchip_opp_data rk3588_npu_opp_data = {
+	.get_soc_info = rk3588_npu_get_soc_info,
+	.set_soc_info = rk3588_npu_set_soc_info,
 	.set_read_margin = rk3588_npu_set_read_margin,
 };
 
@@ -1191,11 +1257,13 @@ static int rknpu_devfreq_init(struct rknpu_device *rknpu_dev)
 	dev_pm_opp_put(opp);
 	dp->initial_freq = rknpu_dev->current_freq;
 
+#ifdef CONFIG_PM_DEVFREQ
 	ret = devfreq_add_governor(&devfreq_rknpu_ondemand);
 	if (ret) {
 		LOG_DEV_ERROR(dev, "failed to add rknpu_ondemand governor\n");
 		goto err_remove_table;
 	}
+#endif
 
 	rknpu_dev->devfreq = devm_devfreq_add_device(dev, dp, "rknpu_ondemand",
 						     (void *)rknpu_dev);
@@ -1247,7 +1315,9 @@ out:
 	return 0;
 
 err_remove_governor:
+#ifdef CONFIG_PM_DEVFREQ
 	devfreq_remove_governor(&devfreq_rknpu_ondemand);
+#endif
 err_remove_table:
 	dev_pm_opp_of_remove_table(dev);
 
@@ -1325,11 +1395,13 @@ static int rknpu_devfreq_init(struct rknpu_device *rknpu_dev)
 	}
 	dp->initial_freq = rknpu_dev->current_freq;
 
+#ifdef CONFIG_PM_DEVFREQ
 	ret = devfreq_add_governor(&devfreq_rknpu_ondemand);
 	if (ret) {
 		LOG_DEV_ERROR(dev, "failed to add rknpu_ondemand governor\n");
 		goto err_remove_table;
 	}
+#endif
 
 	rknpu_dev->devfreq = devm_devfreq_add_device(dev, dp, "rknpu_ondemand",
 						     (void *)rknpu_dev);
@@ -1380,7 +1452,9 @@ out:
 	return 0;
 
 err_remove_governor:
+#ifdef CONFIG_PM_DEVFREQ
 	devfreq_remove_governor(&devfreq_rknpu_ondemand);
+#endif
 err_remove_table:
 	dev_pm_opp_of_remove_table(dev);
 
@@ -1396,7 +1470,9 @@ static int rknpu_devfreq_remove(struct rknpu_device *rknpu_dev)
 		devfreq_unregister_opp_notifier(rknpu_dev->dev,
 						rknpu_dev->devfreq);
 		dev_pm_opp_of_remove_table(rknpu_dev->dev);
+#ifdef CONFIG_PM_DEVFREQ
 		devfreq_remove_governor(&devfreq_rknpu_ondemand);
+#endif
 	}
 
 	return 0;

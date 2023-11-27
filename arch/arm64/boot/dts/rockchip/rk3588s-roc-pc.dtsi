@@ -6,13 +6,7 @@
 
 #include "rk3588-firefly-port.dtsi"
 
-//#define M2_SATA_OR_PCIE 1 /*1 = SATA , 0 = PCIe */
-
 / {
-//	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTLABEL=rootfs rootfstype=ext4 ro rootwait overlayroot=device:dev=PARTLABEL=userdata,fstype=ext4,mkfs=1 coherent_pool=1m systemd.gpt_auto=0 cgroup_enable=memory swapaccount=1";
-//	};
-
 	firefly_leds: leds {
 		power_led: power {
 			gpios = <&gpio1 RK_PD5 GPIO_ACTIVE_HIGH>;//blue led
@@ -182,20 +176,6 @@
 &combphy0_ps {
 	status = "okay";
 };
-
-//#if M2_SATA_OR_PCIE
-//&sata0 {
-//    pinctrl-names = "default";
-//    pinctrl-0 = <&sata_reset>;
-//	status = "okay";
-//};
-//#else
-//&pcie2x1l2 {
-//	reset-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;
-//	vpcie3v3-supply = <&vcc3v3_pcie20>;
-//	status = "okay";
-//};
-//#endif
 
 /* usb3.0 */
 &combphy2_psu {
@@ -433,11 +413,4 @@
 			rockchip,pins = <1 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
-//#if M2_SATA_OR_PCIE
-//	sata {
-//		sata_reset:sata-reset{
-//			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_up>;
-//		};
-//	};
-//#endif
 };

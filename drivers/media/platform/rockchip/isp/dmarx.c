@@ -387,9 +387,7 @@ static void update_rawrd(struct rkisp_stream *stream)
 			rkisp_next_write(dev, stream->config->mi.y_base_ad_init, val, false);
 		}
 		stream->frame_end = false;
-		if (stream->id == RKISP_STREAM_RAWRD2 &&
-		    (stream->out_isp_fmt.fmt_type == FMT_YUV ||
-		     dev->dmarx_dev.trigger == T_AUTO)) {
+		if (stream->id == RKISP_STREAM_RAWRD2 && stream->out_isp_fmt.fmt_type == FMT_YUV) {
 			struct vb2_v4l2_buffer *vbuf = &stream->curr_buf->vb;
 			struct isp2x_csi_trigger trigger = {
 				.frame_timestamp = vbuf->vb2_buf.timestamp,
@@ -505,7 +503,8 @@ static void dmarx_stop(struct rkisp_stream *stream)
 	int ret = 0;
 
 	stream->stopping = true;
-	if ((dev->isp_state & ISP_START) && !stream->frame_end) {
+	if ((dev->isp_state & ISP_START) && !stream->frame_end &&
+	    !dev->hw_dev->is_shutdown) {
 		ret = wait_event_timeout(stream->done,
 					 !stream->streaming,
 					 msecs_to_jiffies(100));

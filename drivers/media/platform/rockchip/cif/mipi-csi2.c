@@ -979,14 +979,16 @@ static int csi2_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, &csi2->sd);
 
 	csi2->clks_num = devm_clk_bulk_get_all(dev, &csi2->clks_bulk);
-	if (csi2->clks_num < 0)
+	if (csi2->clks_num < 0) {
+		csi2->clks_num = 0;
 		dev_err(dev, "failed to get csi2 clks\n");
+	}
 
 	csi2->rsts_bulk = devm_reset_control_array_get_optional_exclusive(dev);
 	if (IS_ERR(csi2->rsts_bulk)) {
 		if (PTR_ERR(csi2->rsts_bulk) != -EPROBE_DEFER)
 			dev_err(dev, "failed to get csi2 reset\n");
-		return PTR_ERR(csi2->rsts_bulk);
+		csi2->rsts_bulk = NULL;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -1072,7 +1074,7 @@ static struct platform_driver csi2_driver = {
 	.remove = csi2_remove,
 };
 
-int __init rkcif_csi2_plat_drv_init(void)
+int rkcif_csi2_plat_drv_init(void)
 {
 	return platform_driver_register(&csi2_driver);
 }

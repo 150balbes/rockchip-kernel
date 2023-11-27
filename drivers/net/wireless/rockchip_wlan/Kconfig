@@ -41,7 +41,5 @@ source "drivers/net/wireless/rockchip_wlan/infineon/Kconfig"
 source "drivers/net/wireless/rockchip_wlan/rtl8852be/Kconfig"
 source "drivers/net/wireless/rockchip_wlan/rtl8852bu/Kconfig"
 source "drivers/net/wireless/rockchip_wlan/rtl8821cu/Kconfig"
-source "drivers/net/wireless/rockchip_wlan/rtl8723ds/Kconfig"
-source "drivers/net/wireless/rockchip_wlan/rtl8723du/Kconfig"
 
 endif # WL_ROCKCHIP

@@ -5,9 +5,7 @@
  */
 
 #include <dt-bindings/display/drm_mipi_dsi.h>
-#include <dt-bindings/display/media-bus-format.h>
 #include "rk3399-vop-clk-set.dtsi"
-#include <dt-bindings/input/input.h>
 
 / {
 	compatible = "rockchip,linux", "rockchip,rk3399";
@@ -16,6 +14,10 @@
 		mmc0 = &sdhci;
 		mmc1 = &sdmmc;
 		mmc2 = &sdio0;
+	};
+
+	chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xff1a0000 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootfstype=ext4 rootwait coherent_pool=1m";
 	};
 
 	reserved-memory {
@@ -118,45 +120,10 @@
 		power-domains = <&power RK3399_PD_RGA>;
 		status = "okay";
 	};
-
-	hdmi_dp_sound: hdmi-dp-sound {
-		status = "disabled";
-		compatible = "rockchip,rk3399-hdmi-dp";
-		rockchip,cpu = <&i2s2>;
-		rockchip,codec = <&hdmi>, <&cdn_dp>;
-	};
-};
-
-
-&vopb {
-	support-multi-area;
-	status = "okay";
-};
-
-&vopb_mmu {
-	status = "okay";
-};
-
-&vopl {
-	support-multi-area;
-	status = "okay";
-};
-
-&vopl_mmu {
-	status = "okay";
-};
-
-&hdmi {
-	#address-cells = <1>;
-	#size-cells = <0>;
-	#sound-dai-cells = <0>;
-	ddc-i2c-scl-high-time-ns = <9625>;
-	ddc-i2c-scl-low-time-ns = <10000>;
-	status = "okay";
 };
 
 &display_subsystem {
-	status = "okay";
+	status = "disabled";
 
 	ports = <&vopb_out>, <&vopl_out>;
 	logo-memory-region = <&drm_logo>;

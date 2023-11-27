@@ -27,7 +27,6 @@
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
 #include <soc/rockchip/rockchip_iommu.h>
-#include "dev.h"
 #include "common.h"
 
 static const struct cif_reg px30_cif_regs[] = {
@@ -1234,10 +1233,11 @@ static int rkcif_plat_hw_probe(struct platform_device *pdev)
 		if (data->rsts[i])
 			rst = devm_reset_control_get(dev, data->rsts[i]);
 		if (IS_ERR(rst)) {
+			cif_hw->cif_rst[i] = NULL;
 			dev_err(dev, "failed to get %s\n", data->rsts[i]);
-			return PTR_ERR(rst);
+		} else {
+			cif_hw->cif_rst[i] = rst;
 		}
-		cif_hw->cif_rst[i] = rst;
 	}
 
 	cif_hw->cif_regs = data->cif_regs;
@@ -1368,8 +1368,6 @@ static int __maybe_unused rkcif_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rkcif_plat_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(rkcif_runtime_suspend, rkcif_runtime_resume, NULL)
 };
 
@@ -1384,7 +1382,7 @@ static struct platform_driver rkcif_hw_plat_drv = {
 	.shutdown = rkcif_hw_shutdown,
 };
 
-static int __init rk_cif_plat_drv_init(void)
+int rk_cif_plat_drv_init(void)
 {
 	int ret;
 
@@ -1403,7 +1401,9 @@ static void __exit rk_cif_plat_drv_exit(void)
 #if defined(CONFIG_VIDEO_ROCKCHIP_THUNDER_BOOT_ISP) && !defined(CONFIG_INITCALL_ASYNC)
 subsys_initcall(rk_cif_plat_drv_init);
 #else
+#if !defined(CONFIG_VIDEO_REVERSE_IMAGE)
 module_init(rk_cif_plat_drv_init);
+#endif
 #endif
 module_exit(rk_cif_plat_drv_exit);
 

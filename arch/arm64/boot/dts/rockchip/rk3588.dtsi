@@ -23,6 +23,7 @@
 		hdptxhdmi1 = &hdptxphy_hdmi1;
 		hdmi0 = &hdmi0;
 		hdmi1 = &hdmi1;
+		hdmirx0 = &hdmirx_ctrler;
 		rkcif_mipi_lvds4= &rkcif_mipi_lvds4;
 		rkcif_mipi_lvds5= &rkcif_mipi_lvds5;
 		usbdp0 = &usbdp_phy0;
@@ -137,6 +138,7 @@
 			snps,dis-u2-freeclk-exists-quirk;
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
+			snps,parkmode-disable-ss-quirk;
 			status = "disabled";
 		};
 	};
@@ -271,7 +273,7 @@
 		clocks = <&cru MCLK_I2S6_8CH_TX>, <&cru MCLK_I2S6_8CH_TX>, <&cru HCLK_I2S6_8CH>;
 		clock-names = "mclk_tx", "mclk_rx", "hclk";
 		assigned-clocks = <&cru CLK_I2S6_8CH_TX_SRC>;
-		assigned-clock-parents = <&cru PLL_AUPLL>;
+		assigned-clock-parents = <&cru PLL_GPLL>;
 		dmas = <&dmac2 4>;
 		dma-names = "tx";
 		power-domains = <&power RK3588_PD_VO1>;

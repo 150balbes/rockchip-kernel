@@ -37,6 +37,11 @@
 
 static const bool verify_fast_training;
 
+#ifdef CONFIG_NO_GKI
+#undef EXTCON_DISP_DP
+#define EXTCON_DISP_DP	EXTCON_DISP_EDP
+#endif
+
 static const unsigned int analogix_dp_cable[] = {
 	EXTCON_DISP_DP,
 	EXTCON_NONE,
@@ -51,7 +56,15 @@ static bool analogix_dp_bandwidth_ok(struct analogix_dp_device *dp,
 				     const struct drm_display_mode *mode,
 				     unsigned int rate, unsigned int lanes)
 {
+	const struct drm_display_info *info;
 	u32 max_bw, req_bw, bpp = 24;
+
+	if (dp->plat_data->skip_connector)
+		return true;
+
+	info = &dp->connector.display_info;
+	if (info->bpc)
+		bpp = 3 * info->bpc;
 
 	req_bw = mode->clock * bpp / 8;
 	max_bw = lanes * rate;
@@ -87,7 +100,7 @@ static int analogix_dp_init_dp(struct analogix_dp_device *dp)
 
 static int analogix_dp_panel_prepare(struct analogix_dp_device *dp)
 {
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&dp->panel_lock);
 
@@ -102,7 +115,7 @@ static int analogix_dp_panel_prepare(struct analogix_dp_device *dp)
 
 out:
 	mutex_unlock(&dp->panel_lock);
-	return ret;
+	return 0;
 }
 
 static int analogix_dp_panel_unprepare(struct analogix_dp_device *dp)
@@ -127,39 +140,13 @@ out:
 
 static int analogix_dp_detect_hpd(struct analogix_dp_device *dp)
 {
-	int timeout_loop = 0;
-
-	while (timeout_loop < DP_TIMEOUT_LOOP_COUNT) {
-		if (analogix_dp_get_plug_in_status(dp) == 0)
-			return 0;
-
-		timeout_loop++;
-		usleep_range(1000, 1100);
-	}
-
-	/*
-	 * Some edp screen do not have hpd signal, so we can't just
-	 * return failed when hpd plug in detect failed, DT property
-	 * "force-hpd" would indicate whether driver need this.
-	 */
-	if (!dp->force_hpd)
-		return -ETIMEDOUT;
-
-	/*
-	 * The eDP TRM indicate that if HPD_STATUS(RO) is 0, AUX CH
-	 * will not work, so we need to give a force hpd action to
-	 * set HPD_STATUS manually.
-	 */
-	dev_dbg(dp->dev, "failed to get hpd plug status, try to force hpd\n");
-
-	analogix_dp_force_hpd(dp);
+	if (dp->force_hpd)
+		analogix_dp_force_hpd(dp);
 
 	if (analogix_dp_get_plug_in_status(dp) != 0) {
 		dev_err(dp->dev, "failed to get hpd plug in status\n");
 		return -EINVAL;
 	}
-
-	dev_dbg(dp->dev, "success to get plug in status after force hpd\n");
 
 	return 0;
 }
@@ -1394,16 +1381,11 @@ analogix_dp_detect(struct analogix_dp_device *dp)
 	ret = analogix_dp_phy_power_on(dp);
 	if (ret) {
 		extcon_set_state_sync(dp->extcon, EXTCON_DISP_DP, false);
-		return status;
+		return connector_status_disconnected;
 	}
 
-	if (dp->plat_data->panel) {
-		ret = analogix_dp_panel_prepare(dp);
-		if (ret < 0) {
-			dev_dbg(dp->dev, "failed to prepare panel (%d)\n", ret);
-			return status;
-		}
-	}
+	if (dp->plat_data->panel)
+		analogix_dp_panel_prepare(dp);
 
 	if (!analogix_dp_detect_hpd(dp)) {
 		ret = analogix_dp_get_max_rx_bandwidth(dp, &dp->link_train.link_rate);
@@ -1719,6 +1701,12 @@ static void analogix_dp_bridge_disable(struct drm_bridge *bridge)
 	dp->dpms_mode = DRM_MODE_DPMS_OFF;
 }
 
+void analogix_dp_disable(struct analogix_dp_device *dp)
+{
+	analogix_dp_bridge_disable(&dp->bridge);
+}
+EXPORT_SYMBOL_GPL(analogix_dp_disable);
+
 static void
 analogix_dp_bridge_atomic_disable(struct drm_bridge *bridge,
 				  struct drm_bridge_state *old_bridge_state)
@@ -1784,8 +1772,13 @@ static void analogix_dp_bridge_mode_set(struct drm_bridge *bridge,
 
 	/* Input video interlaces & hsync pol & vsync pol */
 	video->interlaced = !!(mode->flags & DRM_MODE_FLAG_INTERLACE);
-	video->v_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NVSYNC);
-	video->h_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NHSYNC);
+	if (dp->plat_data->dev_type == RK3588_EDP) {
+		video->v_sync_polarity = true;
+		video->h_sync_polarity = true;
+	} else {
+		video->v_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NVSYNC);
+		video->h_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NHSYNC);
+	}
 
 	/* Input video dynamic_range & colorimetry */
 	vic = drm_match_cea_mode(mode);
@@ -1997,6 +1990,8 @@ static int analogix_dp_dt_parse_pdata(struct analogix_dp_device *dp)
 
 	video_info->video_bist_enable =
 		of_property_read_bool(dp_node, "analogix,video-bist-enable");
+	video_info->force_stream_valid =
+		of_property_read_bool(dp_node, "analogix,force-stream-valid");
 
 	prop = of_find_property(dp_node, "data-lanes", &len);
 	if (!prop) {
@@ -2098,6 +2093,7 @@ static void analogix_dp_link_train_restore(struct analogix_dp_device *dp)
 
 int analogix_dp_loader_protect(struct analogix_dp_device *dp)
 {
+	u8 link_status[DP_LINK_STATUS_SIZE];
 	int ret;
 
 	ret = analogix_dp_phy_power_on(dp);
@@ -2110,15 +2106,31 @@ int analogix_dp_loader_protect(struct analogix_dp_device *dp)
 
 	ret = analogix_dp_fast_link_train_detection(dp);
 	if (ret)
-		return ret;
+		goto err_disable;
 
 	if (analogix_dp_detect_sink_psr(dp)) {
 		ret = analogix_dp_enable_sink_psr(dp);
 		if (ret)
-			return ret;
+			goto err_disable;
+	}
+
+	ret = drm_dp_dpcd_read_link_status(&dp->aux, link_status);
+	if (ret < 0) {
+		dev_err(dp->dev, "Failed to read link status\n");
+		goto err_disable;
+	}
+
+	if (!drm_dp_channel_eq_ok(link_status, dp->link_train.lane_count)) {
+		dev_err(dp->dev, "Channel EQ or CR not ok\n");
+		ret = -EINVAL;
+		goto err_disable;
 	}
 
 	return 0;
+
+err_disable:
+	analogix_dp_disable(dp);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(analogix_dp_loader_protect);
 

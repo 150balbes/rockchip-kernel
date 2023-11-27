@@ -684,7 +684,7 @@ static int tcpm_set_cc(struct tcpc_dev *dev, enum typec_cc_status cc)
 					     FUSB_REG_MASK_COMP_CHNG,
 					     FUSB_REG_MASK_COMP_CHNG);
 		if (ret < 0) {
-			fusb302_log(chip, "cannot set SNK interrupt, ret=%d",
+			fusb302_log(chip, "cannot set SRC interrupt, ret=%d",
 				    ret);
 			goto done;
 		}
@@ -1341,6 +1341,8 @@ static int fusb302_handle_togdone_src(struct fusb302_chip *chip,
 		cc_polarity = TYPEC_POLARITY_CC1;
 	} else if (cc2 == TYPEC_CC_RD &&
 		    (cc1 == TYPEC_CC_OPEN || cc1 == TYPEC_CC_RA)) {
+		cc_polarity = TYPEC_POLARITY_CC2;
+	} else if (cc1 == TYPEC_CC_RA && cc2 == TYPEC_CC_RA) {
 		cc_polarity = TYPEC_POLARITY_CC2;
 	} else {
 		fusb302_log(chip, "unexpected CC status cc1=%s, cc2=%s, restarting toggling",

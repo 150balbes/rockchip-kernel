@@ -148,16 +148,18 @@ static int rockchip_drm_reserve_vm(struct drm_device *drm, struct drm_mm *mm,
 }
 
 static unsigned long
-rockchip_drm_free_reserved_area(void *start, void *end, int poison, const char *s)
+rockchip_drm_free_reserved_area(phys_addr_t start, phys_addr_t end, int poison, const char *s)
 {
-	void *pos;
 	unsigned long pages = 0;
 
-	start = (void *)PAGE_ALIGN((unsigned long)start);
-	end = (void *)((unsigned long)end & PAGE_MASK);
-	for (pos = start; pos < end; pos += PAGE_SIZE, pages++) {
-		struct page *page = virt_to_page(pos);
+	start = ALIGN_DOWN(start, PAGE_SIZE);
+	end = PAGE_ALIGN(end);
+	for (; start < end; start += PAGE_SIZE) {
+		struct page *page = phys_to_page(start);
 		void *direct_map_addr;
+
+		if (!pfn_valid(__phys_to_pfn(start)))
+			continue;
 
 		/*
 		 * 'direct_map_addr' might be different from 'pos'
@@ -176,6 +178,7 @@ rockchip_drm_free_reserved_area(void *start, void *end, int poison, const char *
 			memset(direct_map_addr, poison, PAGE_SIZE);
 
 		free_reserved_page(page);
+		pages++;
 	}
 
 	if (pages && s)
@@ -188,14 +191,11 @@ void rockchip_free_loader_memory(struct drm_device *drm)
 {
 	struct rockchip_drm_private *private = drm->dev_private;
 	struct rockchip_logo *logo;
-	void *start, *end;
 
 	if (!private || !private->logo || --private->logo->count)
 		return;
 
 	logo = private->logo;
-	start = phys_to_virt(logo->dma_addr);
-	end = phys_to_virt(logo->dma_addr + logo->size);
 
 	if (private->domain) {
 		u32 pg_size = 1UL << __ffs(private->domain->pgsize_bitmap);
@@ -205,7 +205,8 @@ void rockchip_free_loader_memory(struct drm_device *drm)
 	}
 
 	memblock_free(logo->start, logo->size);
-	rockchip_drm_free_reserved_area(start, end, -1, "drm_logo");
+	rockchip_drm_free_reserved_area(logo->dma_addr, logo->dma_addr + logo->size,
+					-1, "drm_logo");
 	kfree(logo);
 	private->logo = NULL;
 	private->loader_protect = false;
@@ -634,7 +635,6 @@ static int setup_initial_state(struct drm_device *drm_dev,
 	const struct drm_connector_helper_funcs *funcs;
 	int pipe = drm_crtc_index(crtc);
 	bool is_crtc_enabled = true;
-	bool is_clock_match;
 	int hdisplay, vdisplay;
 	int fb_width, fb_height;
 	int found = 0, match = 0;
@@ -658,8 +658,16 @@ static int setup_initial_state(struct drm_device *drm_dev,
 	else
 		conn_state->best_encoder = rockchip_drm_connector_get_single_encoder(connector);
 
-	if (set->sub_dev->loader_protect)
-		set->sub_dev->loader_protect(conn_state->best_encoder, true);
+	if (set->sub_dev->loader_protect) {
+		ret = set->sub_dev->loader_protect(conn_state->best_encoder, true);
+		if (ret) {
+			dev_err(drm_dev->dev,
+				"connector[%s] loader protect failed\n",
+				connector->name);
+			return ret;
+		}
+	}
+
 	num_modes = rockchip_drm_fill_connector_modes(connector, 7680, 7680, set->force_output);
 	if (!num_modes) {
 		dev_err(drm_dev->dev, "connector[%s] can't found any modes\n",
@@ -669,11 +677,7 @@ static int setup_initial_state(struct drm_device *drm_dev,
 	}
 
 	list_for_each_entry(mode, &connector->modes, head) {
-		/* allow different clock for eDP */
-		is_clock_match = (mode->clock == set->clock) ||
-			(connector->connector_type == DRM_MODE_CONNECTOR_eDP);
-
-		if (is_clock_match &&
+		if (mode->clock == set->clock &&
 		    mode->hdisplay == set->hdisplay &&
 		    mode->vdisplay == set->vdisplay &&
 		    mode->crtc_hsync_end == set->crtc_hsync_end &&
@@ -695,9 +699,9 @@ static int setup_initial_state(struct drm_device *drm_dev,
 		connector->status = connector_status_disconnected;
 		dev_err(drm_dev->dev, "connector[%s] can't found any match mode\n",
 			connector->name);
-		DRM_DEBUG("%s support modes:\n", connector->name);
+		DRM_INFO("%s support modes:\n\n", connector->name);
 		list_for_each_entry(mode, &connector->modes, head) {
-			DRM_DEBUG(DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
+			DRM_INFO(DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
 		}
 		DRM_INFO("uboot set mode: h/v display[%d,%d] h/v sync_end[%d,%d] vfresh[%d], flags[0x%x], aspect_ratio[%d]\n",
 			 set->hdisplay, set->vdisplay, set->crtc_hsync_end, set->crtc_vsync_end,
@@ -833,6 +837,7 @@ static int update_state(struct drm_device *drm_dev,
 		const struct drm_encoder_helper_funcs *encoder_helper_funcs;
 		const struct drm_connector_helper_funcs *connector_helper_funcs;
 		struct drm_encoder *encoder;
+		struct drm_bridge *bridge;
 
 		connector_helper_funcs = connector->helper_private;
 		if (!connector_helper_funcs)
@@ -857,6 +862,9 @@ static int update_state(struct drm_device *drm_dev,
 							      conn_state);
 		else if (encoder_helper_funcs->mode_set)
 			encoder_helper_funcs->mode_set(encoder, mode, mode);
+
+		bridge = drm_bridge_chain_get_first_bridge(encoder);
+		drm_bridge_chain_mode_set(bridge, mode, mode);
 	}
 
 	primary_state = drm_atomic_get_plane_state(state, crtc->primary);

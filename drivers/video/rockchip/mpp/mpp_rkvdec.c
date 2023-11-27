@@ -891,6 +891,7 @@ static int rkvdec_run(struct mpp_dev *mpp,
 	int i;
 	u32 reg_en;
 	struct rkvdec_task *task = NULL;
+	u32 timing_en = mpp->srv->timing_en;
 
 	mpp_debug_enter();
 
@@ -922,10 +923,13 @@ static int rkvdec_run(struct mpp_dev *mpp,
 		}
 		/* init current task */
 		mpp->cur_task = mpp_task;
+		mpp_task_run_begin(mpp_task, timing_en, MPP_WORK_TIMEOUT_DELAY);
 		/* Flush the register before the start the device */
 		wmb();
 		mpp_write(mpp, RKVDEC_REG_INT_EN,
 			  task->reg[reg_en] | RKVDEC_DEC_START);
+
+		mpp_task_run_end(mpp_task, timing_en);
 	} break;
 	default:
 		break;
@@ -973,6 +977,13 @@ static int rkvdec_1126_run(struct mpp_dev *mpp, struct mpp_task *mpp_task)
 	if (task->link_mode == RKVDEC_MODE_ONEFRAME)
 		mpp_iommu_flush_tlb(mpp->iommu_info);
 
+	return rkvdec_run(mpp, mpp_task);
+}
+
+static int rkvdec_px30_run(struct mpp_dev *mpp,
+		    struct mpp_task *mpp_task)
+{
+	mpp_iommu_flush_tlb(mpp->iommu_info);
 	return rkvdec_run(mpp, mpp_task);
 }
 
@@ -1662,18 +1673,18 @@ static int rkvdec_reset(struct mpp_dev *mpp)
 
 static int rkvdec_sip_reset(struct mpp_dev *mpp)
 {
-	struct rkvdec_dev *dec = to_rkvdec_dev(mpp);
+	if (IS_REACHABLE(CONFIG_ROCKCHIP_SIP)) {
+		/* The reset flow in arm trustzone firmware */
+		struct rkvdec_dev *dec = to_rkvdec_dev(mpp);
 
-/* The reset flow in arm trustzone firmware */
-#if IS_ENABLED(CONFIG_ROCKCHIP_SIP)
-	mutex_lock(&dec->sip_reset_lock);
-	sip_smc_vpu_reset(0, 0, 0);
-	mutex_unlock(&dec->sip_reset_lock);
+		mutex_lock(&dec->sip_reset_lock);
+		sip_smc_vpu_reset(0, 0, 0);
+		mutex_unlock(&dec->sip_reset_lock);
 
-	return 0;
-#else
-	return rkvdec_reset(mpp);
-#endif
+		return 0;
+	} else {
+		return rkvdec_reset(mpp);
+	}
 }
 
 static struct mpp_hw_ops rkvdec_v1_hw_ops = {
@@ -1721,6 +1732,16 @@ static struct mpp_hw_ops rkvdec_3368_hw_ops = {
 static struct mpp_dev_ops rkvdec_v1_dev_ops = {
 	.alloc_task = rkvdec_alloc_task,
 	.run = rkvdec_run,
+	.irq = rkvdec_irq,
+	.isr = rkvdec_isr,
+	.finish = rkvdec_finish,
+	.result = rkvdec_result,
+	.free_task = rkvdec_free_task,
+};
+
+static struct mpp_dev_ops rkvdec_px30_dev_ops = {
+	.alloc_task = rkvdec_alloc_task,
+	.run = rkvdec_px30_run,
 	.irq = rkvdec_irq,
 	.isr = rkvdec_isr,
 	.finish = rkvdec_finish,
@@ -1790,7 +1811,7 @@ static const struct mpp_dev_var rk_hevcdec_px30_data = {
 	.hw_info = &rk_hevcdec_hw_info,
 	.trans_info = rk_hevcdec_trans,
 	.hw_ops = &rkvdec_px30_hw_ops,
-	.dev_ops = &rkvdec_v1_dev_ops,
+	.dev_ops = &rkvdec_px30_dev_ops,
 };
 
 static const struct mpp_dev_var rkvdec_v1_data = {

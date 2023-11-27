@@ -993,7 +993,9 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rv1106g-evb1-v10-spi-nand.dtb \
 	rv1106g-evb1-v10-spi-nor.dtb \
 	rv1106g-evb2-v10.dtb \
+	rv1106g-evb2-v11-emmc.dtb \
 	rv1106g-smart-door-lock-rmsl-v10.dtb \
+	rv1106g-smart-door-lock-rmsl-v12.dtb \
 	rv1106g-uvc-demo-v10.dtb \
 	rv1106g-uvc-demo-v10-spi-nor.dtb \
 	rv1108-elgin-r1.dtb \
@@ -1009,6 +1011,9 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3066a-marsboard.dtb \
 	rk3066a-mk808.dtb \
 	rk3066a-rayeager.dtb \
+	rk3126c-evb-ddr3-v10-linux.dtb \
+	rk3126c-evb-ddr3-v10-linux-slc.dtb \
+	rk3128-evb-ddr3-v10-linux.dtb \
 	rk3188-bqedison2qc.dtb \
 	rk3188-px3-evb.dtb \
 	rk3188-radxarock.dtb \

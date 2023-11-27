@@ -1,6 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +12,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef _RTW_MP_H_
 #define _RTW_MP_H_
 
@@ -24,6 +20,7 @@
 
 #define MAX_MP_XMITBUF_SZ	2048
 #define NR_MP_XMITFRAME		8
+#define MP_READ_REG_MAX_OFFSET 0x4FFF
 
 struct mp_xmit_frame {
 	_list	list;
@@ -40,11 +37,8 @@ struct mp_xmit_frame {
 
 	/* insert urb, irp, and irpcnt info below... */
 	/* max frag_cnt = 8 */
-
 	u8 *mem_addr;
 	u32 sz[8];
-
-	PURB pxmit_urb[8];
 	u8 bpending[8];
 	sint ac_tag[8];
 	sint last[8];
@@ -80,46 +74,14 @@ struct mp_tx {
 
 #define MP_MAX_LINES		1000
 #define MP_MAX_LINES_BYTES	256
-#define u1Byte u8
-#define s1Byte s8
-#define u4Byte u32
-#define s4Byte s32
-#define u1Byte		u8
-#define pu1Byte		u8*
 
-#define u2Byte		u16
-#define pu2Byte		u16*
-
-#define u4Byte		u32
-#define pu4Byte		u32*
-
-#define u8Byte		u64
-#define pu8Byte		u64*
-
-#define s1Byte		s8
-#define ps1Byte		s8*
-
-#define s2Byte		s16
-#define ps2Byte		s16*
-
-#define s4Byte		s32
-#define ps4Byte		s32*
-
-#define s8Byte		s64
-#define ps8Byte		s64*
-
-#define UCHAR u8
-#define USHORT u16
-#define UINT u32
-#define ULONG u32
-#define PULONG u32*
 
 typedef struct _RT_PMAC_PKT_INFO {
-	UCHAR			MCS;
-	UCHAR			Nss;
-	UCHAR			Nsts;
-	UINT			N_sym;
-	UCHAR			SIGA2B3;
+	u8			MCS;
+	u8			Nss;
+	u8			Nsts;
+	u32			N_sym;
+	u8			SIGA2B3;
 } RT_PMAC_PKT_INFO, *PRT_PMAC_PKT_INFO;
 
 typedef struct _RT_PMAC_TX_INFO {
@@ -136,14 +98,14 @@ typedef struct _RT_PMAC_TX_INFO {
 	u8			NDP_sound:1;
 	u8			BandWidth:3;		/* 0: 20 1:40 2:80Mhz */
 	u8			m_STBC;			/* bSTBC + 1 */
-	USHORT			PacketPeriod;
-	UINT		PacketCount;
-	UINT		PacketLength;
+	u16			PacketPeriod;
+	u32		PacketCount;
+	u32		PacketLength;
 	u8			PacketPattern;
-	USHORT			SFD;
+	u16			SFD;
 	u8			SignalField;
 	u8			ServiceField;
-	USHORT			LENGTH;
+	u16			LENGTH;
 	u8			CRC16[2];
 	u8			LSIG[3];
 	u8			HT_SIG[6];
@@ -155,7 +117,7 @@ typedef struct _RT_PMAC_TX_INFO {
 } RT_PMAC_TX_INFO, *PRT_PMAC_TX_INFO;
 
 
-typedef VOID (*MPT_WORK_ITEM_HANDLER)(IN PVOID Adapter);
+typedef void (*MPT_WORK_ITEM_HANDLER)(void *Adapter);
 typedef struct _MPT_CONTEXT {
 	/* Indicate if we have started Mass Production Test. */
 	BOOLEAN			bMassProdTest;
@@ -185,24 +147,28 @@ typedef struct _MPT_CONTEXT {
 	MPT_WORK_ITEM_HANDLER	CurrMptAct;
 
 	/* 1=Start, 0=Stop from UI. */
-	ULONG			MptTestStart;
+	u32			MptTestStart;
 	/* _TEST_MODE, defined in MPT_Req2.h */
-	ULONG			MptTestItem;
+	u32			MptTestItem;
 	/* Variable needed in each implementation of CurrMptAct. */
-	ULONG			MptActType;	/* Type of action performed in CurrMptAct. */
+	u32			MptActType;	/* Type of action performed in CurrMptAct. */
 	/* The Offset of IO operation is depend of MptActType. */
-	ULONG			MptIoOffset;
+	u32			MptIoOffset;
 	/* The Value of IO operation is depend of MptActType. */
-	ULONG			MptIoValue;
+	u32			MptIoValue;
 	/* The RfPath of IO operation is depend of MptActType. */
-	ULONG			MptRfPath;
+
+	u32			mpt_rf_path;
+
 
 	WIRELESS_MODE		MptWirelessModeToSw;	/* Wireless mode to switch. */
 	u8			MptChannelToSw;	/* Channel to switch. */
 	u8			MptInitGainToSet;	/* Initial gain to set. */
-	/* ULONG			bMptAntennaA;		 */ /* TRUE if we want to use antenna A. */
-	ULONG			MptBandWidth;		/* bandwidth to switch. */
-	ULONG			MptRateIndex;		/* rate index. */
+	/* u32			bMptAntennaA;		 */ /* TRUE if we want to use antenna A. */
+	u32			MptBandWidth;		/* bandwidth to switch. */
+
+	u32			mpt_rate_index;/* rate index. */
+
 	/* Register value kept for Single Carrier Tx test. */
 	u8			btMpCckTxPower;
 	/* Register value kept for Single Carrier Tx test. */
@@ -211,32 +177,38 @@ typedef struct _MPT_CONTEXT {
 	u8			TxPwrLevel[4];	/* rf-A, rf-B*/
 	u32			RegTxPwrLimit;
 	/* Content of RCR Regsiter for Mass Production Test. */
-	ULONG			MptRCR;
+	u32			MptRCR;
 	/* TRUE if we only receive packets with specific pattern. */
 	BOOLEAN			bMptFilterPattern;
 	/* Rx OK count, statistics used in Mass Production Test. */
-	ULONG			MptRxOkCnt;
+	u32			MptRxOkCnt;
 	/* Rx CRC32 error count, statistics used in Mass Production Test. */
-	ULONG			MptRxCrcErrCnt;
+	u32			MptRxCrcErrCnt;
 
 	BOOLEAN			bCckContTx;	/* TRUE if we are in CCK Continuous Tx test. */
 	BOOLEAN			bOfdmContTx;	/* TRUE if we are in OFDM Continuous Tx test. */
-	BOOLEAN			bStartContTx;	/* TRUE if we have start Continuous Tx test. */
+		/* TRUE if we have start Continuous Tx test. */
+	BOOLEAN			is_start_cont_tx;
+
 	/* TRUE if we are in Single Carrier Tx test. */
 	BOOLEAN			bSingleCarrier;
 	/* TRUE if we are in Carrier Suppression Tx Test. */
-	BOOLEAN			bCarrierSuppression;
+
+	BOOLEAN			is_carrier_suppression;
+
 	/* TRUE if we are in Single Tone Tx test. */
-	BOOLEAN			bSingleTone;
+
+	BOOLEAN			is_single_tone;
+
 
 	/* ACK counter asked by K.Y.. */
 	BOOLEAN			bMptEnableAckCounter;
-	ULONG			MptAckCounter;
+	u32			MptAckCounter;
 
 	/* SD3 Willis For 8192S to save 1T/2T RF table for ACUT	Only fro ACUT delete later ~~~! */
-	/* s1Byte		BufOfLines[2][MAX_LINES_HWCONFIG_TXT][MAX_BYTES_LINE_HWCONFIG_TXT]; */
-	/* s1Byte			BufOfLines[2][MP_MAX_LINES][MP_MAX_LINES_BYTES]; */
-	/* s4Byte			RfReadLine[2]; */
+	/* s8		BufOfLines[2][MAX_LINES_HWCONFIG_TXT][MAX_BYTES_LINE_HWCONFIG_TXT]; */
+	/* s8			BufOfLines[2][MP_MAX_LINES][MP_MAX_LINES_BYTES]; */
+	/* s32			RfReadLine[2]; */
 
 	u8		APK_bound[2];	/* for APK	path A/path B */
 	BOOLEAN		bMptIndexEven;
@@ -247,15 +219,15 @@ typedef struct _MPT_CONTEXT {
 	u8		backup0x52_RF_A;
 	u8		backup0x52_RF_B;
 
-	u4Byte			backup0x58_RF_A;
-	u4Byte			backup0x58_RF_B;
+	u32			backup0x58_RF_A;
+	u32			backup0x58_RF_B;
 
-	u1Byte			h2cReqNum;
-	u1Byte			c2hBuf[32];
+	u8			h2cReqNum;
+	u8			c2hBuf[32];
 
-	u1Byte          btInBuf[100];
-	ULONG			mptOutLen;
-	u1Byte          mptOutBuf[100];
+	u8          btInBuf[100];
+	u32			mptOutLen;
+	u8          mptOutBuf[100];
 	RT_PMAC_TX_INFO	PMacTxInfo;
 	RT_PMAC_PKT_INFO	PMacPktInfo;
 	u8 HWTxmode;
@@ -276,6 +248,7 @@ enum {
 	MP_STOP,
 	MP_RATE,
 	MP_CHANNEL,
+	MP_CHL_OFFSET,
 	MP_BANDWIDTH,
 	MP_TXPOWER,
 	MP_ANT_TX,
@@ -299,8 +272,10 @@ enum {
 	MP_PwrCtlDM,
 	MP_GETVER,
 	MP_MON,
+	EFUSE_BT_MASK,
 	EFUSE_MASK,
 	EFUSE_FILE,
+	EFUSE_FILE_STORE,
 	MP_TX,
 	MP_RX,
 	MP_IQK,
@@ -308,8 +283,17 @@ enum {
 	MP_HW_TX_MODE,
 	MP_GET_TXPOWER_INX,
 	MP_CUSTOMER_STR,
-	MP_NULL,
+	MP_PWRLMT,
+	MP_PWRBYRATE,
+	BT_EFUSE_FILE,
 	MP_SetBT,
+	MP_SWRFPath,
+	MP_LINK,
+	MP_DPK_TRK,
+	MP_DPK,
+	MP_GET_TSSIDE,
+	MP_SET_TSSIDE,
+	MP_NULL,
 #ifdef CONFIG_APPEND_VENDOR_IE_ENABLE
 	VENDOR_IE_SET ,
 	VENDOR_IE_GET ,
@@ -352,6 +336,7 @@ struct mp_priv {
 	u32 rx_pktloss;
 	BOOLEAN  rx_bindicatePkt;
 	struct recv_stat rxstat;
+	BOOLEAN brx_filter_beacon;
 
 	/* RF/BB relative */
 	u8 channel;
@@ -376,6 +361,9 @@ struct mp_priv {
 	u8 mac_filter[ETH_ALEN];
 	u8 bmac_filter;
 
+	/* RF PATH Setting for WLG WLA BTG BT */
+	u8 rf_path_cfg;
+
 	struct wlan_network mp_network;
 	NDIS_802_11_MAC_ADDRESS network_macaddr;
 
@@ -387,10 +375,20 @@ struct mp_priv {
 	BOOLEAN bTxBufCkFail;
 	BOOLEAN bRTWSmbCfg;
 	BOOLEAN bloopback;
-	MPT_CONTEXT MptCtx;
 	BOOLEAN bloadefusemap;
+	BOOLEAN bloadBTefusemap;
+	BOOLEAN bprocess_mp_mode;
+
+	MPT_CONTEXT	mpt_ctx;
 
 	u8		*TXradomBuffer;
+	u8		CureFuseBTCoex;
+    u8		mplink_buf[2048];
+    u32		mplink_rx_len;
+	BOOLEAN mplink_brx;
+	BOOLEAN mplink_btx;
+
+	bool tssitrk_on;
 };
 
 typedef struct _IOCMD_STRUCT_ {
@@ -651,6 +649,16 @@ typedef enum	_MPT_TXPWR_DEF {
 #define IS_MPT_VHT_RATE(_rate)			(_rate >= MPT_RATE_VHT1SS_MCS0 && _rate <= MPT_RATE_VHT4SS_MCS9)
 #define IS_MPT_CCK_RATE(_rate)			(_rate >= MPT_RATE_1M && _rate <= MPT_RATE_11M)
 #define IS_MPT_OFDM_RATE(_rate)			(_rate >= MPT_RATE_6M && _rate <= MPT_RATE_54M)
+
+typedef enum _mp_tx_pkt_payload{
+	MP_TX_Payload_00 = 0,
+	MP_TX_Payload_a5,
+	MP_TX_Payload_5a,
+	MP_TX_Payload_ff,
+	MP_TX_Payload_prbs9,
+	MP_TX_Payload_default_random
+} mp_tx_pkt_payload;
+
 /*************************************************************************/
 #if 0
 extern struct mp_xmit_frame *alloc_mp_xmitframe(struct mp_priv *pmp_priv);
@@ -673,7 +681,9 @@ extern u32 read_bbreg(_adapter *padapter, u32 addr, u32 bitmask);
 extern void write_bbreg(_adapter *padapter, u32 addr, u32 bitmask, u32 val);
 extern u32 read_rfreg(PADAPTER padapter, u8 rfpath, u32 addr);
 extern void write_rfreg(PADAPTER padapter, u8 rfpath, u32 addr, u32 val);
-
+#ifdef CONFIG_ANTENNA_DIVERSITY
+u8 rtw_mp_set_antdiv(PADAPTER padapter, BOOLEAN bMain);
+#endif
 void	SetChannel(PADAPTER pAdapter);
 void	SetBandwidth(PADAPTER pAdapter);
 int	SetTxPower(PADAPTER pAdapter);
@@ -681,7 +691,7 @@ void	SetAntenna(PADAPTER pAdapter);
 void	SetDataRate(PADAPTER pAdapter);
 void	SetAntenna(PADAPTER pAdapter);
 s32	SetThermalMeter(PADAPTER pAdapter, u8 target_ther);
-void	GetThermalMeter(PADAPTER pAdapter, u8 *value);
+void	GetThermalMeter(PADAPTER pAdapter, u8 rfpath ,u8 *value);
 void	SetContinuousTx(PADAPTER pAdapter, u8 bStart);
 void	SetSingleCarrierTx(PADAPTER pAdapter, u8 bStart);
 void	SetSingleToneTx(PADAPTER pAdapter, u8 bStart);
@@ -698,8 +708,9 @@ void	GetPowerTracking(PADAPTER padapter, u8 *enable);
 u32	mp_query_psd(PADAPTER pAdapter, u8 *data);
 void	rtw_mp_trigger_iqk(PADAPTER padapter);
 void	rtw_mp_trigger_lck(PADAPTER padapter);
-
-
+void	rtw_mp_trigger_dpk(PADAPTER padapter);
+u8 rtw_mp_mode_check(PADAPTER padapter);
+bool rtw_is_mp_tssitrk_on(_adapter *adapter);
 
 void hal_mpt_SwitchRfSetting(PADAPTER pAdapter);
 s32 hal_mpt_SetPowerTracking(PADAPTER padapter, u8 enable);
@@ -712,23 +723,25 @@ void hal_mpt_SetDataRate(PADAPTER pAdapter);
 void hal_mpt_SetAntenna(PADAPTER pAdapter);
 s32 hal_mpt_SetThermalMeter(PADAPTER pAdapter, u8 target_ther);
 void hal_mpt_TriggerRFThermalMeter(PADAPTER pAdapter);
-u8 hal_mpt_ReadRFThermalMeter(PADAPTER pAdapter);
-void hal_mpt_GetThermalMeter(PADAPTER pAdapter, u8 *value);
+u8 hal_mpt_ReadRFThermalMeter(PADAPTER pAdapter, u8 rf_path);
+void hal_mpt_GetThermalMeter(PADAPTER pAdapter, u8 rfpath, u8 *value);
 void hal_mpt_SetContinuousTx(PADAPTER pAdapter, u8 bStart);
 void hal_mpt_SetSingleCarrierTx(PADAPTER pAdapter, u8 bStart);
 void hal_mpt_SetSingleToneTx(PADAPTER pAdapter, u8 bStart);
 void hal_mpt_SetCarrierSuppressionTx(PADAPTER pAdapter, u8 bStart);
-void hal_mpt_SetCCKContinuousTx(PADAPTER pAdapter, u8 bStart);
-void hal_mpt_SetOFDMContinuousTx(PADAPTER pAdapter, u8 bStart);
-void mpt_ProSetPMacTx(PADAPTER	Adapter);
-
+u8 mpt_ProSetPMacTx(PADAPTER	Adapter);
 void MP_PHY_SetRFPathSwitch(PADAPTER pAdapter , BOOLEAN bMain);
-ULONG mpt_ProQueryCalTxPower(PADAPTER	pAdapter, u8 RfPath);
-void MPT_PwrCtlDM(PADAPTER padapter, u32 bstart);
-u8 MptToMgntRate(u32	MptRateIdx);
+void mp_phy_switch_rf_path_set(PADAPTER pAdapter , u8 *pstate);
+u8 MP_PHY_QueryRFPathSwitch(PADAPTER pAdapter);
+u32 mpt_ProQueryCalTxPower(PADAPTER	pAdapter, u8 RfPath);
+void MPT_PwrCtlDM(PADAPTER padapter, u32 trk_type);
+u8 mpt_to_mgnt_rate(u32	MptRateIdx);
 u8 rtw_mpRateParseFunc(PADAPTER pAdapter, u8 *targetStr);
 u32 mp_join(PADAPTER padapter, u8 mode);
 u32 hal_mpt_query_phytxok(PADAPTER	pAdapter);
+u32 mpt_get_tx_power_finalabs_val(PADAPTER	padapter, u8 rf_path);
+void mpt_trigger_tssi_tracking(PADAPTER pAdapter, u8 rf_path);
+
 
 void
 PMAC_Get_Pkt_Param(
@@ -747,7 +760,7 @@ PMAC_Nsym_generator(
 );
 void
 L_SIG_generator(
-	UINT	N_SYM,		/* Max: 750*/
+	u32	N_SYM,		/* Max: 750*/
 	PRT_PMAC_TX_INFO	pPMacTxInfo,
 	PRT_PMAC_PKT_INFO	pPMacPktInfo
 );
@@ -789,6 +802,9 @@ int rtw_mp_rate(struct net_device *dev,
 		struct iw_request_info *info,
 		struct iw_point *wrqu, char *extra);
 int rtw_mp_channel(struct net_device *dev,
+		struct iw_request_info *info,
+		struct iw_point *wrqu, char *extra);
+int rtw_mp_ch_offset(struct net_device *dev,
 		struct iw_request_info *info,
 		struct iw_point *wrqu, char *extra);
 int rtw_mp_bandwidth(struct net_device *dev,
@@ -848,6 +864,12 @@ int rtw_mp_phypara(struct net_device *dev,
 int rtw_mp_SetRFPath(struct net_device *dev,
 		struct iw_request_info *info,
 		struct iw_point *wrqu, char *extra);
+int rtw_mp_switch_rf_path(struct net_device *dev,
+			struct iw_request_info *info,
+			struct iw_point *wrqu, char *extra);
+int rtw_mp_link(struct net_device *dev,
+		struct iw_request_info *info,
+		struct iw_point *wrqu, char *extra);
 int rtw_mp_QueryDrv(struct net_device *dev,
 		struct iw_request_info *info,
 		union iwreq_data *wrqu, char *extra);
@@ -860,10 +882,31 @@ int rtw_mp_getver(struct net_device *dev,
 int rtw_mp_mon(struct net_device *dev,
 		struct iw_request_info *info,
 		union iwreq_data *wrqu, char *extra);
+int rtw_mp_pwrlmt(struct net_device *dev,
+		struct iw_request_info *info,
+		union iwreq_data *wrqu, char *extra);
+int rtw_mp_pwrbyrate(struct net_device *dev,
+		struct iw_request_info *info,
+		union iwreq_data *wrqu, char *extra);
+int rtw_mp_dpk_track(struct net_device *dev,
+			struct iw_request_info *info,
+			union iwreq_data *wrqu, char *extra);
+int rtw_mp_dpk(struct net_device *dev,
+			struct iw_request_info *info,
+			union iwreq_data *wrqu, char *extra);
 int rtw_efuse_mask_file(struct net_device *dev,
 		struct iw_request_info *info,
 		union iwreq_data *wrqu, char *extra);
+int rtw_bt_efuse_mask_file(struct net_device *dev,
+		struct iw_request_info *info,
+		union iwreq_data *wrqu, char *extra);
 int rtw_efuse_file_map(struct net_device *dev,
+		struct iw_request_info *info,
+		union iwreq_data *wrqu, char *extra);
+int rtw_efuse_file_map_store(struct net_device *dev,
+		struct iw_request_info *info,
+		union iwreq_data *wrqu, char *extra);
+int rtw_bt_efuse_file_map(struct net_device *dev,
 		struct iw_request_info *info,
 		union iwreq_data *wrqu, char *extra);
 int rtw_mp_SetBT(struct net_device *dev,
@@ -883,7 +926,13 @@ u8 HwRateToMPTRate(u8 rate);
 int rtw_mp_iqk(struct net_device *dev,
 		 struct iw_request_info *info,
 		 struct iw_point *wrqu, char *extra);
-int rtw_mp_lck(struct net_device *dev, 
-		struct iw_request_info *info, 
+int rtw_mp_lck(struct net_device *dev,
+		struct iw_request_info *info,
+		struct iw_point *wrqu, char *extra);
+int rtw_mp_get_tsside(struct net_device *dev,
+		struct iw_request_info *info,
+		struct iw_point *wrqu, char *extra);
+int rtw_mp_set_tsside(struct net_device *dev,
+		struct iw_request_info *info,
 		struct iw_point *wrqu, char *extra);
 #endif /* _RTW_MP_H_ */

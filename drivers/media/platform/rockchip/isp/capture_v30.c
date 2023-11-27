@@ -16,6 +16,7 @@
 #define CIF_ISP_REQ_BUFS_MIN 0
 
 static int mi_frame_end(struct rkisp_stream *stream);
+static int mi_frame_start(struct rkisp_stream *stream, u32 mis);
 
 static const struct capture_fmt mp_fmts[] = {
 	/* yuv422 */
@@ -168,13 +169,6 @@ static const struct capture_fmt sp_fmts[] = {
 	},
 	/* rgb */
 	{
-		.fourcc = V4L2_PIX_FMT_XBGR32,
-		.fmt_type = FMT_RGB,
-		.bpp = { 32 },
-		.mplanes = 1,
-		.write_format = MI_CTRL_SP_WRITE_PLA,
-		.output_format = MI_CTRL_SP_OUTPUT_RGB888,
-	}, {
 		.fourcc = V4L2_PIX_FMT_RGB565,
 		.fmt_type = FMT_RGB,
 		.bpp = { 16 },
@@ -856,6 +850,7 @@ static struct streams_ops rkisp_mp_streams_ops = {
 	.is_stream_stopped = mp_is_stream_stopped,
 	.update_mi = update_mi,
 	.frame_end = mi_frame_end,
+	.frame_start = mi_frame_start,
 };
 
 static struct streams_ops rkisp_sp_streams_ops = {
@@ -866,6 +861,7 @@ static struct streams_ops rkisp_sp_streams_ops = {
 	.is_stream_stopped = sp_is_stream_stopped,
 	.update_mi = update_mi,
 	.frame_end = mi_frame_end,
+	.frame_start = mi_frame_start,
 };
 
 static struct streams_ops rkisp_fbc_streams_ops = {
@@ -875,6 +871,7 @@ static struct streams_ops rkisp_fbc_streams_ops = {
 	.is_stream_stopped = fbc_is_stream_stopped,
 	.update_mi = update_mi,
 	.frame_end = mi_frame_end,
+	.frame_start = mi_frame_start,
 };
 
 static struct streams_ops rkisp_bp_streams_ops = {
@@ -884,7 +881,62 @@ static struct streams_ops rkisp_bp_streams_ops = {
 	.is_stream_stopped = bp_is_stream_stopped,
 	.update_mi = update_mi,
 	.frame_end = mi_frame_end,
+	.frame_start = mi_frame_start,
 };
+
+static void stream_self_update(struct rkisp_stream *stream)
+{
+	struct rkisp_device *dev = stream->ispdev;
+	u32 val, mask = ISP3X_MPSELF_UPD | ISP3X_SPSELF_UPD | ISP3X_BPSELF_UPD;
+	bool is_unite = dev->hw_dev->is_unite;
+
+	if (stream->id == RKISP_STREAM_FBC) {
+		val = ISP3X_MPFBC_FORCE_UPD;
+		rkisp_unite_set_bits(dev, ISP3X_MPFBC_CTRL, 0, val, false, is_unite);
+		return;
+	}
+
+	switch (stream->id) {
+	case RKISP_STREAM_MP:
+		val = ISP3X_MPSELF_UPD;
+		break;
+	case RKISP_STREAM_SP:
+		val = ISP3X_SPSELF_UPD;
+		break;
+	case RKISP_STREAM_BP:
+		val = ISP3X_BPSELF_UPD;
+		break;
+	default:
+		return;
+	}
+
+	rkisp_unite_set_bits(dev, ISP3X_MI_WR_CTRL2, mask, val, false, is_unite);
+}
+
+static int mi_frame_start(struct rkisp_stream *stream, u32 mis)
+{
+	struct rkisp_device *dev = stream->ispdev;
+	unsigned long lock_flags = 0;
+
+	/* readback start to update stream buf if null */
+	spin_lock_irqsave(&stream->vbq_lock, lock_flags);
+	if (stream->streaming && !mis && !stream->curr_buf) {
+		if (!stream->next_buf && !list_empty(&stream->buf_queue)) {
+			stream->next_buf = list_first_entry(&stream->buf_queue,
+							    struct rkisp_buffer, queue);
+			list_del(&stream->next_buf->queue);
+			stream->ops->update_mi(stream);
+		}
+		if (dev->hw_dev->is_single && stream->next_buf) {
+			stream->curr_buf = stream->next_buf;
+			stream->next_buf = NULL;
+			stream_self_update(stream);
+		}
+	}
+	spin_unlock_irqrestore(&stream->vbq_lock, lock_flags);
+
+	return 0;
+}
 
 /*
  * This function is called when a frame end come. The next frame
@@ -966,15 +1018,18 @@ static void rkisp_stream_stop(struct rkisp_stream *stream)
 	struct v4l2_device *v4l2_dev = &dev->v4l2_dev;
 	unsigned long lock_flags = 0;
 	int ret = 0;
-	bool is_wait = true;
+	bool is_wait = dev->hw_dev->is_shutdown ? false : true;
 
 	stream->stopping = true;
-	if (dev->hw_dev->is_single)
-		stream->ops->disable_mi(stream);
+	stream->ops->disable_mi(stream);
 	if (IS_HDR_RDBK(dev->rd_mode)) {
 		spin_lock_irqsave(&dev->hw_dev->rdbk_lock, lock_flags);
-		if (dev->hw_dev->cur_dev_id != dev->dev_id || dev->hw_dev->is_idle)
+		if (dev->hw_dev->cur_dev_id != dev->dev_id || dev->hw_dev->is_idle) {
 			is_wait = false;
+			/* force update to close */
+			if (dev->hw_dev->is_single)
+				stream_self_update(stream);
+		}
 		if (atomic_read(&dev->cap_dev.refcnt) == 1 && !is_wait)
 			dev->isp_state = ISP_STOP;
 		spin_unlock_irqrestore(&dev->hw_dev->rdbk_lock, lock_flags);

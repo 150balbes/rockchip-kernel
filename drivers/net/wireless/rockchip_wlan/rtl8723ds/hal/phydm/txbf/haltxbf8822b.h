@@ -1,87 +1,79 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/******************************************************************************
+ *
+ * Copyright(c) 2007 - 2017  Realtek Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+ * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
+ * Hsinchu 300, Taiwan.
+ *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ *****************************************************************************/
 #ifndef __HAL_TXBF_8822B_H__
 #define __HAL_TXBF_8822B_H__
 
 #if (RTL8822B_SUPPORT == 1)
-#if (BEAMFORMING_SUPPORT == 1)
+#ifdef PHYDM_BEAMFORMING_SUPPORT
 
-VOID
-HalTxbf8822B_Init(
-	IN PVOID			pDM_VOID
-	);
+void hal_txbf_8822b_enter(
+	void *dm_void,
+	u8 idx);
 
-VOID
-HalTxbf8822B_Enter(
-	IN PVOID			pDM_VOID,
-	IN u1Byte				Idx
-	);
+void hal_txbf_8822b_leave(
+	void *dm_void,
+	u8 idx);
 
+void hal_txbf_8822b_status(
+	void *dm_void,
+	u8 beamform_idx);
 
-VOID
-HalTxbf8822B_Leave(
-	IN PVOID			pDM_VOID,
-	IN u1Byte				Idx
-	);
+void hal_txbf_8822b_config_gtab(
+	void *dm_void);
 
-
-VOID
-HalTxbf8822B_Status(
-	IN PVOID			pDM_VOID,
-	IN u1Byte				Idx
-	);
-
-VOID
-HalTxbf8822B_ConfigGtab(
-	IN PVOID			pDM_VOID
-	);
-
-VOID
-HalTxbf8822B_FwTxBF(
-	IN PVOID			pDM_VOID,
-	IN	u1Byte				Idx
-	);
+void hal_txbf_8822b_fw_txbf(
+	void *dm_void,
+	u8 idx);
 #else
-#define HalTxbf8822B_Init(pDM_VOID)		
-#define HalTxbf8822B_Enter(pDM_VOID, Idx)
-#define HalTxbf8822B_Leave(pDM_VOID, Idx)
-#define HalTxbf8822B_Status(pDM_VOID, Idx)
-#define HalTxbf8822B_FwTxBF(pDM_VOID, Idx)
-#define HalTxbf8822B_ConfigGtab(pDM_VOID)
+#define hal_txbf_8822b_enter(dm_void, idx)
+#define hal_txbf_8822b_leave(dm_void, idx)
+#define hal_txbf_8822b_status(dm_void, idx)
+#define hal_txbf_8822b_fw_txbf(dm_void, idx)
+#define hal_txbf_8822b_config_gtab(dm_void)
 
 #endif
 
 #if (defined(CONFIG_BB_TXBF_API))
-VOID
-phydm_8822btxbf_rfmode(
-	IN PVOID		pDM_VOID,
-	IN u1Byte	SUBFeeCnt,
-	IN u1Byte	MUBFeeCnt
-	);
+void phydm_8822btxbf_rfmode(void *dm_void, u8 su_bfee_cnt, u8 mu_bfee_cnt);
 
-VOID
-phydm_8822b_sutxbfer_workaroud(
-	IN PVOID		pDM_VOID,
-	IN BOOLEAN	EnableSUBfer,
-	IN u1Byte	Nc,
-	IN u1Byte	Nr,
-	IN u1Byte	Ng,
-	IN u1Byte	CB,
-	IN u1Byte	BW,
-	IN BOOLEAN	isVHT
-	);
+void phydm_8822b_sutxbfer_workaroud(void *dm_void, boolean enable_su_bfer,
+				    u8 nc, u8 nr, u8 ng, u8 CB, u8 BW,
+				    boolean is_vht);
 
 #else
-#define phydm_8822btxbf_rfmode(pDM_VOID, SUBFeeCnt, MUBFeeCnt)
-#define phydm_8822b_sutxbfer_workaroud(pDM_VOID, EnableSUBfer, Nc, Nr, Ng, CB, BW, isVHT)
+#define phydm_8822btxbf_rfmode(dm_void, su_bfee_cnt, mu_bfee_cnt)
+#define phydm_8822b_sutxbfer_workaroud(dm_void, enable_su_bfer, nc, nr, ng, CB, BW, is_vht)
 #endif
 
 #else
-#define HalTxbf8822B_Init(pDM_VOID)		
-#define HalTxbf8822B_Enter(pDM_VOID, Idx)
-#define HalTxbf8822B_Leave(pDM_VOID, Idx)
-#define HalTxbf8822B_Status(pDM_VOID, Idx)
-#define HalTxbf8822B_FwTxBF(pDM_VOID, Idx)
-#define HalTxbf8822B_ConfigGtab(pDM_VOID)
+#define hal_txbf_8822b_enter(dm_void, idx)
+#define hal_txbf_8822b_leave(dm_void, idx)
+#define hal_txbf_8822b_status(dm_void, idx)
+#define hal_txbf_8822b_fw_txbf(dm_void, idx)
+#define hal_txbf_8822b_config_gtab(dm_void)
 
 #endif
 #endif
-

@@ -845,14 +845,10 @@ static int rk_pcie_init_dma_trx(struct rk_pcie *rk_pcie)
 
 	rk_pcie->dma_obj = rk_pcie_dma_obj_probe(rk_pcie->pci->dev);
 	if (IS_ERR(rk_pcie->dma_obj)) {
-		if (rk_pcie->mode == RK_PCIE_RC_TYPE) {
-			/* dma_obj is optional for RC mode */
-			rk_pcie->dma_obj = NULL;
-			return 0;
-		}
-
 		dev_err(rk_pcie->pci->dev, "failed to prepare dma object\n");
 		return -EINVAL;
+	} else if (rk_pcie->dma_obj) {
+		goto out;
 	}
 
 	rk_pcie->dma_obj = pcie_dw_dmatest_register(rk_pcie->pci, true);
@@ -860,7 +856,7 @@ static int rk_pcie_init_dma_trx(struct rk_pcie *rk_pcie)
 		dev_err(rk_pcie->pci->dev, "failed to prepare dmatest\n");
 		return -EINVAL;
 	}
-
+out:
 	/* Enable client write and read interrupt */
 	rk_pcie_writel_apb(rk_pcie, PCIE_CLIENT_INTR_MASK, 0xc000000);
 
@@ -1198,12 +1194,6 @@ static int rk_pcie_add_ep(struct rk_pcie *rk_pcie)
 	if (!rk_pcie_udma_enabled(rk_pcie))
 		return 0;
 
-	rk_pcie->dma_obj = rk_pcie_dma_obj_probe(dev);
-	if (IS_ERR(rk_pcie->dma_obj)) {
-		dev_err(dev, "failed to prepare dma object\n");
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -1285,7 +1275,7 @@ static int rk_pcie_phy_init(struct rk_pcie *rk_pcie)
 	int ret;
 	struct device *dev = rk_pcie->pci->dev;
 
-	rk_pcie->phy = devm_phy_get(dev, "pcie-phy");
+	rk_pcie->phy = devm_phy_optional_get(dev, "pcie-phy");
 	if (IS_ERR(rk_pcie->phy)) {
 		if (PTR_ERR(rk_pcie->phy) != -EPROBE_DEFER)
 			dev_info(dev, "missing phy\n");
@@ -1961,11 +1951,6 @@ static int rk_pcie_really_probe(void *p)
 	if (ret) {
 		dev_err(dev, "resource init failed\n");
 		goto release_driver;
-	}
-
-	/* To ensure the ordering of pci device */
-	if (!device_property_read_u32(dev, "rockchip,init-delay-ms", &val)) {
-		msleep(val);
 	}
 
 	if (!IS_ERR_OR_NULL(rk_pcie->prsnt_gpio)) {

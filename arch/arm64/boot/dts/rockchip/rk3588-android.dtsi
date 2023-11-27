@@ -5,10 +5,6 @@
  */
 
 / {
-//	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0";
-//	};
-
 	cspmu: cspmu@fd10c000 {
 		compatible = "rockchip,cspmu";
 		reg = <0x0 0xfd10c000 0x0 0x1000>,

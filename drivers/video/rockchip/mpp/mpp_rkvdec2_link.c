@@ -71,6 +71,7 @@ struct rkvdec_link_info rkvdec_link_v2_hw_info = {
 		.reg_num = 28,
 	},
 	.tb_reg_int = 180,
+	.tb_reg_cycle = 195,
 	.hack_setup = 0,
 };
 
@@ -124,6 +125,7 @@ struct rkvdec_link_info rkvdec_link_rk356x_hw_info = {
 		.reg_num = 28,
 	},
 	.tb_reg_int = 164,
+	.tb_reg_cycle = 179,
 	.hack_setup = 1,
 };
 
@@ -538,6 +540,7 @@ static int rkvdec_link_isr_recv_task(struct mpp_dev *mpp,
 	struct rkvdec_link_info *info = link_dec->info;
 	u32 *table_base = (u32 *)link_dec->table->vaddr;
 	int i;
+	struct rkvdec2_dev *dec = to_rkvdec2_dev(mpp);
 
 	for (i = 0; i < count; i++) {
 		int idx = rkvdec_link_get_task_read(link_dec);
@@ -558,10 +561,9 @@ static int rkvdec_link_isr_recv_task(struct mpp_dev *mpp,
 				link_dec->stuff_cnt++;
 				if (link_dec->stuff_cnt >=
 				    link_dec->statistic_count) {
-					dev_info(
-						link_dec->dev, "hw cycle %u\n",
-						(u32)(link_dec->stuff_cycle_sum /
-						      link_dec->statistic_count));
+					dev_info(link_dec->dev, "hw cycle %u\n",
+						(u32)(div_u64(link_dec->task_cycle_sum,
+								link_dec->statistic_count)));
 					link_dec->stuff_cycle_sum = 0;
 					link_dec->stuff_cnt = 0;
 				}
@@ -598,6 +600,8 @@ static int rkvdec_link_isr_recv_task(struct mpp_dev *mpp,
 		task = to_rkvdec2_task(mpp_task);
 		regs = table_base + idx * link_dec->link_reg_count;
 		irq_status = regs[info->tb_reg_int];
+		mpp_task->hw_cycles = regs[info->tb_reg_cycle];
+		mpp_time_diff_with_hw_time(mpp_task, dec->core_clk_info.real_rate_hz);
 		mpp_dbg_link_flow("slot %d rd task %d\n", idx,
 				  mpp_task->task_id);
 
@@ -613,8 +617,8 @@ static int rkvdec_link_isr_recv_task(struct mpp_dev *mpp,
 			link_dec->task_cnt++;
 			if (link_dec->task_cnt >= link_dec->statistic_count) {
 				dev_info(link_dec->dev, "hw cycle %u\n",
-					 (u32)(link_dec->task_cycle_sum /
-					       link_dec->statistic_count));
+					 (u32)(div_u64(link_dec->task_cycle_sum,
+							link_dec->statistic_count)));
 				link_dec->task_cycle_sum = 0;
 				link_dec->task_cnt = 0;
 			}
@@ -1054,6 +1058,9 @@ static int rkvdec2_link_power_on(struct mpp_dev *mpp)
 		pm_runtime_get_sync(mpp->dev);
 		pm_stay_awake(mpp->dev);
 
+		if (mpp->hw_ops->clk_on)
+			mpp->hw_ops->clk_on(mpp);
+
 		if (!link_dec->irq_enabled) {
 			enable_irq(mpp->irq);
 			link_dec->irq_enabled = 1;
@@ -1063,6 +1070,7 @@ static int rkvdec2_link_power_on(struct mpp_dev *mpp)
 		mpp_clk_set_rate(&dec->cabac_clk_info, CLK_MODE_ADVANCED);
 		mpp_clk_set_rate(&dec->hevc_cabac_clk_info, CLK_MODE_ADVANCED);
 		mpp_devfreq_set_core_rate(mpp, CLK_MODE_ADVANCED);
+		mpp_iommu_dev_activate(mpp->iommu_info, mpp);
 	}
 	return 0;
 }
@@ -1076,8 +1084,11 @@ static void rkvdec2_link_power_off(struct mpp_dev *mpp)
 		disable_irq(mpp->irq);
 		link_dec->irq_enabled = 0;
 
-		pm_runtime_mark_last_busy(mpp->dev);
-		pm_runtime_put_autosuspend(mpp->dev);
+		if (mpp->hw_ops->clk_off)
+			mpp->hw_ops->clk_off(mpp);
+
+		pm_relax(mpp->dev);
+		pm_runtime_put_sync_suspend(mpp->dev);
 
 		link_dec->task_decoded = 0;
 		link_dec->task_total = 0;
@@ -1086,6 +1097,7 @@ static void rkvdec2_link_power_off(struct mpp_dev *mpp)
 		mpp_clk_set_rate(&dec->cabac_clk_info, CLK_MODE_NORMAL);
 		mpp_clk_set_rate(&dec->hevc_cabac_clk_info, CLK_MODE_NORMAL);
 		mpp_devfreq_set_core_rate(mpp, CLK_MODE_NORMAL);
+		mpp_iommu_dev_deactivate(mpp->iommu_info, mpp);
 	}
 }
 
@@ -1199,7 +1211,6 @@ static int mpp_task_queue(struct mpp_dev *mpp, struct mpp_task *task)
 	mpp_debug_enter();
 
 	rkvdec2_link_power_on(mpp);
-	mpp_time_record(task);
 	mpp_debug(DEBUG_TASK_INFO, "pid %d, start hw %s\n",
 		  task->session->pid, dev_name(mpp->dev));
 
@@ -1608,6 +1619,8 @@ static int rkvdec2_ccu_power_on(struct mpp_taskqueue *queue,
 			pm_stay_awake(mpp->dev);
 			if (mpp->hw_ops->clk_on)
 				mpp->hw_ops->clk_on(mpp);
+
+			mpp_iommu_dev_activate(mpp->iommu_info, mpp);
 		}
 		mpp_debug(DEBUG_CCU, "power on\n");
 	}
@@ -1636,6 +1649,7 @@ static int rkvdec2_ccu_power_off(struct mpp_taskqueue *queue,
 			pm_relax(mpp->dev);
 			pm_runtime_mark_last_busy(mpp->dev);
 			pm_runtime_put_autosuspend(mpp->dev);
+			mpp_iommu_dev_deactivate(mpp->iommu_info, mpp);
 		}
 		mpp_debug(DEBUG_CCU, "power off\n");
 	}
@@ -1653,6 +1667,7 @@ static int rkvdec2_soft_ccu_dequeue(struct mpp_taskqueue *queue)
 				 &queue->running_list,
 				 queue_link) {
 		struct mpp_dev *mpp = mpp_get_task_used_device(mpp_task, mpp_task->session);
+		struct rkvdec2_dev *dec = to_rkvdec2_dev(mpp);
 		u32 irq_status = mpp->irq_status;
 		u32 timeout_flag = test_bit(TASK_STATE_TIMEOUT, &mpp_task->state);
 		u32 abort_flag = test_bit(TASK_STATE_ABORT, &mpp_task->state);
@@ -1674,7 +1689,8 @@ static int rkvdec2_soft_ccu_dequeue(struct mpp_taskqueue *queue)
 
 			set_bit(TASK_STATE_HANDLE, &mpp_task->state);
 			cancel_delayed_work(&mpp_task->timeout_work);
-			mpp_time_diff(mpp_task);
+			mpp_task->hw_cycles = mpp_read(mpp, RKVDEC_PERF_WORKING_CNT);
+			mpp_time_diff_with_hw_time(mpp_task, dec->core_clk_info.real_rate_hz);
 			task->irq_status = irq_status;
 			mpp_debug(DEBUG_IRQ_CHECK, "irq_status=%08x, timeout=%u, abort=%u\n",
 				  irq_status, timeout_flag, abort_flag);
@@ -1736,14 +1752,14 @@ static int rkvdec2_soft_ccu_reset(struct mpp_taskqueue *queue,
 		if (!(val & RKVDEC_BIT_BUS_IDLE))
 			mpp_err("bus busy\n");
 
-#if IS_ENABLED(CONFIG_ROCKCHIP_SIP)
-		/* sip reset */
-		rockchip_dmcfreq_lock();
-		sip_smc_vpu_reset(i, 0, 0);
-		rockchip_dmcfreq_unlock();
-#else
-		rkvdec2_reset(mpp);
-#endif
+		if (IS_REACHABLE(CONFIG_ROCKCHIP_SIP)) {
+			/* sip reset */
+			rockchip_dmcfreq_lock();
+			sip_smc_vpu_reset(i, 0, 0);
+			rockchip_dmcfreq_unlock();
+		} else {
+			rkvdec2_reset(mpp);
+		}
 		/* clear error mask */
 		writel(dec->core_mask & RKVDEC_CCU_CORE_RW_MASK,
 		       ccu->reg_base + RKVDEC_CCU_CORE_ERR_BASE);
@@ -1791,7 +1807,7 @@ int rkvdec2_ccu_iommu_fault_handle(struct iommu_domain *iommu,
 
 	atomic_inc(&mpp->queue->reset_request);
 	for (i = 0; i < mpp->queue->core_count; i++)
-		rk_iommu_mask_irq(mpp->queue->cores[i]->dev);
+		rockchip_iommu_mask_irq(mpp->queue->cores[i]->dev);
 
 	kthread_queue_work(&mpp->queue->worker, &mpp->work);
 

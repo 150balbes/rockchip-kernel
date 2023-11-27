@@ -1,6 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2013 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +12,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef __RTL8821A_XMIT_H__
 #define __RTL8821A_XMIT_H__
 
@@ -164,6 +160,15 @@ void rtl8821au_xmit_tasklet(void *priv);
 s32 rtl8821au_xmitframe_complete(PADAPTER padapter, struct xmit_priv *pxmitpriv, struct xmit_buf *pxmitbuf);
 #endif /* CONFIG_USB_HCI */
 
+#ifdef CONFIG_PCI_HCI
+s32 rtl8821e_init_xmit_priv(PADAPTER padapter);
+void rtl8821e_free_xmit_priv(PADAPTER padapter);
+struct xmit_buf *rtl8821e_dequeue_xmitbuf(struct rtw_tx_ring *ring);
+void rtl8821e_xmitframe_resume(PADAPTER padapter);
+s32 rtl8821e_hal_xmit(PADAPTER padapter, struct xmit_frame *pxmitframe);
+s32 rtl8821e_mgnt_xmit(PADAPTER padapter, struct xmit_frame *pmgntframe);
+void rtl8821e_xmit_tasklet(void *priv);
+#endif /* CONFIG_PCI_HCI */
 #endif
 
 #endif /* __RTL8821_XMIT_H__ */

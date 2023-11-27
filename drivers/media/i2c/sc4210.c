@@ -2325,8 +2325,8 @@ static void sc4210_modify_fps_info(struct sc4210 *sc4210)
 {
 	const struct sc4210_mode *mode = sc4210->cur_mode;
 
-	sc4210->cur_fps.denominator = mode->max_fps.denominator * sc4210->cur_vts /
-				       mode->vts_def;
+	sc4210->cur_fps.denominator = mode->max_fps.denominator * mode->vts_def /
+				      sc4210->cur_vts;
 }
 
 static int sc4210_set_ctrl(struct v4l2_ctrl *ctrl)
@@ -2357,7 +2357,7 @@ static int sc4210_set_ctrl(struct v4l2_ctrl *ctrl)
 	switch (ctrl->id) {
 	case V4L2_CID_EXPOSURE:
 		if (sc4210->cur_mode->hdr_mode != NO_HDR)
-			return ret;
+			goto ctrl_end;
 		val = ctrl->val << 1;
 		ret = sc4210_write_reg(sc4210->client,
 					SC4210_REG_EXPOSURE_H,
@@ -2376,7 +2376,7 @@ static int sc4210_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
 		if (sc4210->cur_mode->hdr_mode != NO_HDR)
-			return ret;
+			goto ctrl_end;
 
 		sc4210_get_gain_reg(ctrl->val, &again, &again_fine, &dgain, &dgain_fine);
 		ret = sc4210_write_reg(sc4210->client,
@@ -2448,6 +2448,7 @@ static int sc4210_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
+ctrl_end:
 	pm_runtime_put(&client->dev);
 
 	return ret;

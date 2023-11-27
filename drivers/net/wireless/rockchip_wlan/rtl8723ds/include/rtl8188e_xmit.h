@@ -1,6 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +12,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef __RTL8188E_XMIT_H__
 #define __RTL8188E_XMIT_H__
 
@@ -243,9 +239,7 @@ struct txrpt_ccx_88e {
 void rtl8188e_fill_fake_txdesc(PADAPTER	padapter, u8 *pDesc, u32 BufferLen,
 			       u8 IsPsPoll, u8	IsBTQosNull, u8 bDataFrame);
 void rtl8188e_cal_txdesc_chksum(struct tx_desc	*ptxdesc);
-#if defined(CONFIG_CONCURRENT_MODE)
-	void fill_txdesc_force_bmc_camid(struct pkt_attrib *pattrib, struct tx_desc *ptxdesc);
-#endif
+void fill_txdesc_force_bmc_camid(struct pkt_attrib *pattrib, struct tx_desc *ptxdesc);
 
 #if defined(CONFIG_SDIO_HCI) || defined(CONFIG_GSPI_HCI)
 	s32 rtl8188es_init_xmit_priv(PADAPTER padapter);
