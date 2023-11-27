@@ -192,6 +192,36 @@
 		rockchip,jack-det;
 	};
 
+	es8388_sound: es8388-sound {
+		status = "okay";
+		compatible = "firefly,multicodecs-card";
+		rockchip,card-name = "rockchip-es8388";
+		hp-det-gpio = <&gpio1 RK_PC4 GPIO_ACTIVE_LOW>;
+//		io-channels = <&saradc 3>;
+		io-channel-names = "adc-detect";
+		spk-con-gpio = <&gpio3 RK_PB2 GPIO_ACTIVE_HIGH>;
+		hp-con-gpio = <&gpio4 RK_PB0 GPIO_ACTIVE_HIGH>;
+		linein-type = <0>;
+		rockchip,format = "i2s";
+		rockchip,mclk-fs = <256>;
+		rockchip,cpu = <&i2s0_8ch>;
+		rockchip,codec = <&es8388>;
+		rockchip,audio-routing =
+			"Headphone", "LOUT1",
+			"Headphone", "ROUT1",
+			"Speaker", "LOUT2",
+			"Speaker", "ROUT2",
+			"Headphone", "Headphone Power",
+			"Headphone", "Headphone Power",
+			"Speaker", "Speaker Power",
+			"Speaker", "Speaker Power",
+			"LINPUT1", "Main Mic",
+			"LINPUT2", "Main Mic",
+			"RINPUT1", "Headset Mic",
+			"RINPUT2", "Headset Mic";
+		pinctrl-names = "default";
+		pinctrl-0 = <&hp_det>;
+	};
 
 };
 
@@ -269,6 +299,64 @@
 			regulator-off-in-suspend;
 		};
 	};
+};
+
+&i2c3 {
+	status = "disabled";
+	es8388: es8388@11 {
+		status = "disabled";
+		#sound-dai-cells = <0>;
+		compatible = "everest,es8388", "everest,es8323";
+		reg = <0x11>;
+		clocks = <&cru I2S0_8CH_MCLKOUT>;
+		clock-names = "mclk";
+		assigned-clocks = <&cru I2S0_8CH_MCLKOUT>;
+		assigned-clock-rates = <12288000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s0_mclk>;
+	};
+};
+
+/* es8323 audio codec */
+&es8388_sound {
+	status = "okay";
+	hp-det-gpio = <&gpio1 RK_PA6 GPIO_ACTIVE_LOW>;
+	hp-con-gpio = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
+
+	/delete-property/ spk-con-gpio;
+	
+//	io-channels = <&saradc 5>;
+	io-channel-names = "hw-ver";
+	rockchip,audio-routing =
+			"Headphone", "LOUT2",
+			"Headphone", "ROUT2",
+			"Speaker", "LOUT1",
+			"Speaker", "ROUT1",
+			"Headphone", "Headphone Power",
+			"Headphone", "Headphone Power",
+			"LINPUT1", "Main Mic",
+			"LINPUT2", "Main Mic",
+			"RINPUT1", "Headset Mic",
+			"RINPUT2", "Headset Mic";
+	linein-type = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&hp_det>;
+};
+
+&es8388{
+	status = "okay";
+};
+
+&i2s0_8ch {
+	status = "okay";
+	pinctrl-0 = <&i2s0_lrck
+				&i2s0_sclk
+				&i2s0_sdi0
+				&i2s0_sdo0>;
+};
+
+&i2s5_8ch {
+	status = "okay";
 };
 
 &gmac1 {
@@ -594,6 +682,12 @@
 	rtl8211f {
 		rtl8211f_rst: rtl8211f-rst {
 			rockchip,pins = <3 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	headphone {
+		hp_det: hp-det {
+			rockchip,pins = <1 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 

@@ -1404,6 +1404,21 @@ static int rockchip_thermal_get_temp(struct thermal_zone_device *tz, int *out_te
 	return retval;
 }
 
+int rk_get_temperature(void)
+{
+	int temp;
+//	int ret;
+
+//	ret = rockchip_thermal_get_temp(g_tsensor_data_ptr, &temp);
+//		if (ret) {
+//			pr_debug("rk_get_temp failed!\n");
+//			return ret;
+//		}
+	temp = 75000;
+	return temp / 1000;
+}
+EXPORT_SYMBOL(rk_get_temperature);
+
 static const struct thermal_zone_device_ops rockchip_of_thermal_ops = {
 	.get_temp = rockchip_thermal_get_temp,
 	.set_trips = rockchip_thermal_set_trips,
