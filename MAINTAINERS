@@ -7860,6 +7860,12 @@ F:	Documentation/filesystems/ext4/
 F:	fs/ext4/
 F:	include/trace/events/ext4.h
 
+EXTCON DRIVER FOR TYPE-C VIRTUAL PD
+M:	Jagan Teki <jagan@amarulasolutions.com>
+S:	Maintained
+F:	Documentation/devicetree/bindings/extcon/extcon-usbc-virtual-pd.yaml
+F:	drivers/extcon/extcon-usbc-virtual-pd.c
+
 Extended Verification Module (EVM)
 M:	Mimi Zohar <zohar@linux.ibm.com>
 L:	linux-integrity@vger.kernel.org

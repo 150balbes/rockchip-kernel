@@ -133,6 +133,10 @@
 		<3 RK_PD7 1 &pcfg_pull_none>;
 };
 
+&i2s0 {
+	pinctrl-names = "default";
+};
+
 &i2s1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2s_8ch_mclk_pin>, <&i2s1_2ch_bus>;

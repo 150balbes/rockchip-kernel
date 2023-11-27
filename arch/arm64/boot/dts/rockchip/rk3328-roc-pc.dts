@@ -28,7 +28,7 @@
 	ir-receiver {
 		compatible = "gpio-ir-receiver";
 		gpios = <&gpio2 RK_PA2 GPIO_ACTIVE_LOW>;
-		linux,rc-map-name = "rc-khadas";
+		linux,rc-map-name = "rc-station";
 		pinctrl-names = "default";
 		pinctrl-0 = <&ir_int>;
 	};
@@ -81,6 +81,20 @@
 	};
 };
 
+&sdmmc_ext {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	non-removable;
+	num-slots = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc0ext_bus4 &sdmmc0ext_cmd &sdmmc0ext_clk>;
+	sd-uhs-sdr104;
+	status = "okay";
+};
+
 &pmic_int_l {
 	rockchip,pins = <0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>;
 };
@@ -94,6 +108,21 @@
 	vref-supply = <&vcc_18>;
 	status = "okay";
 };
+
+&uart1 {
+  status = "disabled";
+};
+
+&uart2 {
+    status = "okay";
+
+    bluetooth {
+        compatible = "realtek,rtl8723ds-bt";
+        enable-gpios = <&gpio1 RK_PD0 GPIO_ACTIVE_HIGH>;
+        host-wake-gpios = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
+    };
+};
+
 
 &usb20_host_drv {
 	rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>;
