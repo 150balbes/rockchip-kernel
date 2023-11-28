@@ -7,4 +7,4 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-orangepi-5.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-roc-pc.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-roc-pc-nvme.dtb
 
-subdir-y := $(dts-dirs) overlay
+#subdir-y := $(dts-dirs) overlay
