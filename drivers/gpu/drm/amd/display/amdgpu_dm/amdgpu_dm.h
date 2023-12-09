@@ -31,6 +31,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_plane.h>
+#include "link_service_types.h"
 
 /*
  * This file contains the definition for amdgpu_display_manager
@@ -50,6 +51,9 @@
 
 #define AMDGPU_DMUB_NOTIFICATION_MAX 5
 
+#define HDMI_AMD_VENDOR_SPECIFIC_DATA_BLOCK_IEEE_REGISTRATION_ID 0x00001A
+#define AMD_VSDB_VERSION_3_FEATURECAP_REPLAYMODE 0x40
+#define HDMI_AMD_VENDOR_SPECIFIC_DATA_BLOCK_VERSION_3 0x3
 /*
 #include "include/amdgpu_dal_power_if.h"
 #include "amdgpu_dm_irq.h"
@@ -58,6 +62,7 @@
 #include "irq_types.h"
 #include "signal_types.h"
 #include "amdgpu_dm_crc.h"
+#include "mod_info_packet.h"
 struct aux_payload;
 struct set_config_cmd_payload;
 enum aux_return_code_type;
@@ -72,6 +77,12 @@ struct amdgpu_bo;
 struct dmub_srv;
 struct dc_plane_state;
 struct dmub_notification;
+
+struct amd_vsdb_block {
+	unsigned char ieee_id[3];
+	unsigned char version;
+	unsigned char feature_caps;
+};
 
 struct common_irq_params {
 	struct amdgpu_device *adev;
@@ -192,6 +203,11 @@ struct hpd_rx_irq_offload_work_queue {
 	 * we're handling link loss
 	 */
 	bool is_handling_link_loss;
+	/**
+	 * @is_handling_mst_msg_rdy_event: Used to prevent inserting mst message
+	 * ready event when we're already handling mst message ready event
+	 */
+	bool is_handling_mst_msg_rdy_event;
 	/**
 	 * @aconnector: The aconnector that this work queue is attached to
 	 */
@@ -459,9 +475,7 @@ struct amdgpu_display_manager {
 	struct amdgpu_dm_backlight_caps backlight_caps[AMDGPU_DM_MAX_NUM_EDP];
 
 	struct mod_freesync *freesync_module;
-#ifdef CONFIG_DRM_AMD_DC_HDCP
 	struct hdcp_workqueue *hdcp_workqueue;
-#endif
 
 	/**
 	 * @vblank_control_workqueue:
@@ -494,11 +508,12 @@ struct amdgpu_display_manager {
 
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
 	/**
-	 * @crc_rd_wrk:
+	 * @secure_display_ctxs:
 	 *
-	 * Work to be executed in a separate thread to communicate with PSP.
+	 * Store the ROI information and the work_struct to command dmub and psp for
+	 * all crtcs.
 	 */
-	struct crc_rd_work *crc_rd_wrk;
+	struct secure_display_context *secure_display_ctxs;
 #endif
 	/**
 	 * @hpd_rx_offload_wq:
@@ -575,10 +590,46 @@ enum mst_progress_status {
 	MST_CLEAR_ALLOCATED_PAYLOAD = BIT(3),
 };
 
+/**
+ * struct amdgpu_hdmi_vsdb_info - Keep track of the VSDB info
+ *
+ * AMDGPU supports FreeSync over HDMI by using the VSDB section, and this
+ * struct is useful to keep track of the display-specific information about
+ * FreeSync.
+ */
+struct amdgpu_hdmi_vsdb_info {
+	/**
+	 * @amd_vsdb_version: Vendor Specific Data Block Version, should be
+	 * used to determine which Vendor Specific InfoFrame (VSIF) to send.
+	 */
+	unsigned int amd_vsdb_version;
+
+	/**
+	 * @freesync_supported: FreeSync Supported.
+	 */
+	bool freesync_supported;
+
+	/**
+	 * @min_refresh_rate_hz: FreeSync Minimum Refresh Rate in Hz.
+	 */
+	unsigned int min_refresh_rate_hz;
+
+	/**
+	 * @max_refresh_rate_hz: FreeSync Maximum Refresh Rate in Hz
+	 */
+	unsigned int max_refresh_rate_hz;
+
+	/**
+	 * @replay_mode: Replay supported
+	 */
+	bool replay_mode;
+};
+
 struct amdgpu_dm_connector {
 
 	struct drm_connector base;
 	uint32_t connector_id;
+	int bl_idx;
 
 	/* we need to mind the EDID between detect
 	   and get modes due to analog/digital/tvencoder */
@@ -603,9 +654,11 @@ struct amdgpu_dm_connector {
 	/* DM only */
 	struct drm_dp_mst_topology_mgr mst_mgr;
 	struct amdgpu_dm_dp_aux dm_dp_aux;
-	struct drm_dp_mst_port *port;
-	struct amdgpu_dm_connector *mst_port;
+	struct drm_dp_mst_port *mst_output_port;
+	struct amdgpu_dm_connector *mst_root;
 	struct drm_dp_aux *dsc_aux;
+	struct mutex handle_mst_msg_ready;
+
 	/* TODO see if we can merge with ddc_bus or make a dm_connector */
 	struct amdgpu_i2c_adapter *i2c;
 
@@ -629,10 +682,6 @@ struct amdgpu_dm_connector {
 	struct mutex hpd_lock;
 
 	bool fake_enable;
-#ifdef CONFIG_DEBUG_FS
-	uint32_t debugfs_dpcd_address;
-	uint32_t debugfs_dpcd_size;
-#endif
 	bool force_yuv420_output;
 	struct dsc_preferred_settings dsc_settings;
 	union dp_downstream_port_present mst_downstream_port_present;
@@ -643,6 +692,15 @@ struct amdgpu_dm_connector {
 
 	/* Record progress status of mst*/
 	uint8_t mst_status;
+
+	/* Automated testing */
+	bool timing_changed;
+	struct dc_crtc_timing *timing_requested;
+
+	/* Adaptive Sync */
+	bool pack_sdp_v1_3;
+	enum adaptive_sync_type as_type;
+	struct amdgpu_hdmi_vsdb_info vsdb_info;
 };
 
 static inline void amdgpu_dm_set_mst_status(uint8_t *status,
@@ -705,44 +763,11 @@ struct dm_connector_state {
 	uint8_t underscan_hborder;
 	bool underscan_enable;
 	bool freesync_capable;
-#ifdef CONFIG_DRM_AMD_DC_HDCP
 	bool update_hdcp;
-#endif
 	uint8_t abm_level;
 	int vcpi_slots;
 	uint64_t pbn;
 };
-
-/**
- * struct amdgpu_hdmi_vsdb_info - Keep track of the VSDB info
- *
- * AMDGPU supports FreeSync over HDMI by using the VSDB section, and this
- * struct is useful to keep track of the display-specific information about
- * FreeSync.
- */
-struct amdgpu_hdmi_vsdb_info {
-	/**
-	 * @amd_vsdb_version: Vendor Specific Data Block Version, should be
-	 * used to determine which Vendor Specific InfoFrame (VSIF) to send.
-	 */
-	unsigned int amd_vsdb_version;
-
-	/**
-	 * @freesync_supported: FreeSync Supported.
-	 */
-	bool freesync_supported;
-
-	/**
-	 * @min_refresh_rate_hz: FreeSync Minimum Refresh Rate in Hz.
-	 */
-	unsigned int min_refresh_rate_hz;
-
-	/**
-	 * @max_refresh_rate_hz: FreeSync Maximum Refresh Rate in Hz
-	 */
-	unsigned int max_refresh_rate_hz;
-};
-
 
 #define to_dm_connector_state(x)\
 	container_of((x), struct dm_connector_state, base)
@@ -799,8 +824,6 @@ int amdgpu_dm_process_dmub_aux_transfer_sync(struct dc_context *ctx, unsigned in
 
 int amdgpu_dm_process_dmub_set_config_sync(struct dc_context *ctx, unsigned int link_index,
 					struct set_config_cmd_payload *payload, enum set_config_status *operation_result);
-
-bool check_seamless_boot_capability(struct amdgpu_device *adev);
 
 struct dc_stream_state *
 	create_validate_stream_for_sink(struct amdgpu_dm_connector *aconnector,

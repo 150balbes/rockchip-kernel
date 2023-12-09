@@ -85,7 +85,7 @@
 			interrupts = <GIC_PPI 9 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
 		};
 
-		apb4: apb4@fe000000 {
+		apb4: bus@fe000000 {
 			compatible = "simple-bus";
 			reg = <0x0 0xfe000000 0x0 0x480000>;
 			#address-cells = <2>;
@@ -105,6 +105,14 @@
 					gpio-controller;
 					#gpio-cells = <2>;
 					gpio-ranges = <&periphs_pinctrl 0 0 82>;
+				};
+
+				remote_pins: remote-pin {
+					mux {
+						groups = "remote_in";
+						function = "remote_in";
+						bias-disable;
+					};
 				};
 			};
 
@@ -132,6 +140,18 @@
 				compatible = "amlogic,meson-s4-reset";
 				reg = <0x0 0x2000 0x0 0x98>;
 				#reset-cells = <1>;
+			};
+
+			ir: ir@84040 {
+				compatible = "amlogic,meson-s4-ir";
+				reg = <0x0 0x84040 0x0 0x30>;
+				interrupts = <GIC_SPI 22 IRQ_TYPE_EDGE_RISING>;
+				status = "disabled";
+			};
+
+			hwrng: rng@440788 {
+				compatible = "amlogic,meson-s4-rng";
+				reg = <0x0 0x440788 0x0 0x0c>;
 			};
 		};
 	};

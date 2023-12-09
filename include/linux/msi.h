@@ -48,6 +48,10 @@ typedef struct arch_msi_msg_data {
 } __attribute__ ((packed)) arch_msi_msg_data_t;
 #endif
 
+#ifndef arch_is_isolated_msi
+#define arch_is_isolated_msi() false
+#endif
+
 /**
  * msi_msg - Representation of a MSI message
  * @address_lo:		Low 32 bits of msi message address
@@ -379,6 +383,13 @@ int arch_setup_msi_irq(struct pci_dev *dev, struct msi_desc *desc);
 void arch_teardown_msi_irq(unsigned int irq);
 int arch_setup_msi_irqs(struct pci_dev *dev, int nvec, int type);
 void arch_teardown_msi_irqs(struct pci_dev *dev);
+#endif /* CONFIG_PCI_MSI_ARCH_FALLBACKS */
+
+/*
+ * Xen uses non-default msi_domain_ops and hence needs a way to populate sysfs
+ * entries of MSI IRQs.
+ */
+#if defined(CONFIG_PCI_XEN) || defined(CONFIG_PCI_MSI_ARCH_FALLBACKS)
 #ifdef CONFIG_SYSFS
 int msi_device_populate_sysfs(struct device *dev);
 void msi_device_destroy_sysfs(struct device *dev);
@@ -386,7 +397,7 @@ void msi_device_destroy_sysfs(struct device *dev);
 static inline int msi_device_populate_sysfs(struct device *dev) { return 0; }
 static inline void msi_device_destroy_sysfs(struct device *dev) { }
 #endif /* !CONFIG_SYSFS */
-#endif /* CONFIG_PCI_MSI_ARCH_FALLBACKS */
+#endif /* CONFIG_PCI_XEN || CONFIG_PCI_MSI_ARCH_FALLBACKS */
 
 /*
  * The restore hook is still available even for fully irq domain based
@@ -536,12 +547,6 @@ enum {
 	MSI_FLAG_ALLOC_SIMPLE_MSI_DESCS	= (1 << 5),
 	/* Free MSI descriptors */
 	MSI_FLAG_FREE_MSI_DESCS		= (1 << 6),
-	/*
-	 * Quirk to handle MSI implementations which do not provide
-	 * masking. Currently known to affect x86, but has to be partially
-	 * handled in the core MSI code.
-	 */
-	MSI_FLAG_NOMASK_QUIRK		= (1 << 7),
 
 	/* Mask for the generic functionality */
 	MSI_GENERIC_FLAGS_MASK		= GENMASK(15, 0),
@@ -631,6 +636,8 @@ int msi_domain_prepare_irqs(struct irq_domain *domain, struct device *dev,
 			    int nvec, msi_alloc_info_t *args);
 int msi_domain_populate_irqs(struct irq_domain *domain, struct device *dev,
 			     int virq, int nvec, msi_alloc_info_t *args);
+void msi_domain_depopulate_descs(struct device *dev, int virq, int nvec);
+
 struct irq_domain *
 __platform_msi_create_device_domain(struct device *dev,
 				    unsigned int nvec,
@@ -649,6 +656,19 @@ int platform_msi_device_domain_alloc(struct irq_domain *domain, unsigned int vir
 void platform_msi_device_domain_free(struct irq_domain *domain, unsigned int virq,
 				     unsigned int nvec);
 void *platform_msi_get_host_data(struct irq_domain *domain);
+
+bool msi_device_has_isolated_msi(struct device *dev);
+#else /* CONFIG_GENERIC_MSI_IRQ */
+static inline bool msi_device_has_isolated_msi(struct device *dev)
+{
+	/*
+	 * Arguably if the platform does not enable MSI support then it has
+	 * "isolated MSI", as an interrupt controller that cannot receive MSIs
+	 * is inherently isolated by our definition. The default definition for
+	 * arch_is_isolated_msi() is conservative and returns false anyhow.
+	 */
+	return arch_is_isolated_msi();
+}
 #endif /* CONFIG_GENERIC_MSI_IRQ */
 
 /* PCI specific interfaces */

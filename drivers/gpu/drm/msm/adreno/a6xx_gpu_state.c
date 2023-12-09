@@ -147,7 +147,7 @@ static int a6xx_crashdumper_run(struct msm_gpu *gpu,
 	/* Make sure all pending memory writes are posted */
 	wmb();
 
-	gpu_write64(gpu, REG_A6XX_CP_CRASH_SCRIPT_BASE_LO, dumper->iova);
+	gpu_write64(gpu, REG_A6XX_CP_CRASH_SCRIPT_BASE, dumper->iova);
 
 	gpu_write(gpu, REG_A6XX_CP_CRASH_DUMP_CNTL, 1);
 
@@ -385,6 +385,9 @@ static void a6xx_get_debugbus(struct msm_gpu *gpu,
 	nr_debugbus_blocks = ARRAY_SIZE(a6xx_debugbus_blocks) +
 		(a6xx_has_gbif(to_adreno_gpu(gpu)) ? 1 : 0);
 
+	if (adreno_is_a650_family(to_adreno_gpu(gpu)))
+		nr_debugbus_blocks += ARRAY_SIZE(a650_debugbus_blocks);
+
 	a6xx_state->debugbus = state_kcalloc(a6xx_state, nr_debugbus_blocks,
 			sizeof(*a6xx_state->debugbus));
 
@@ -410,6 +413,15 @@ static void a6xx_get_debugbus(struct msm_gpu *gpu,
 				&a6xx_state->debugbus[i]);
 
 			a6xx_state->nr_debugbus += 1;
+		}
+
+
+		if (adreno_is_a650_family(to_adreno_gpu(gpu))) {
+			for (i = 0; i < ARRAY_SIZE(a650_debugbus_blocks); i++)
+				a6xx_get_debugbus_block(gpu,
+					a6xx_state,
+					&a650_debugbus_blocks[i],
+					&a6xx_state->debugbus[i]);
 		}
 	}
 
@@ -524,10 +536,21 @@ static void a6xx_get_cluster(struct msm_gpu *gpu,
 		struct a6xx_gpu_state_obj *obj,
 		struct a6xx_crashdumper *dumper)
 {
+	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
 	u64 *in = dumper->ptr;
 	u64 out = dumper->iova + A6XX_CD_DATA_OFFSET;
 	size_t datasize;
 	int i, regcount = 0;
+	u32 id = cluster->id;
+
+	/* Skip registers that are not present on older generation */
+	if (!adreno_is_a660_family(adreno_gpu) &&
+			cluster->registers == a660_fe_cluster)
+		return;
+
+	if (adreno_is_a650_family(adreno_gpu) &&
+			cluster->registers == a6xx_ps_cluster)
+		id = CLUSTER_VPC_PS;
 
 	/* Some clusters need a selector register to be programmed too */
 	if (cluster->sel_reg)
@@ -537,7 +560,7 @@ static void a6xx_get_cluster(struct msm_gpu *gpu,
 		int j;
 
 		in += CRASHDUMP_WRITE(in, REG_A6XX_CP_APERTURE_CNTL_CD,
-			(cluster->id << 8) | (i << 4) | i);
+			(id << 8) | (i << 4) | i);
 
 		for (j = 0; j < cluster->count; j += 2) {
 			int count = RANGE(cluster->registers, j);
@@ -687,6 +710,11 @@ static void a6xx_get_crashdumper_registers(struct msm_gpu *gpu,
 	u64 out = dumper->iova + A6XX_CD_DATA_OFFSET;
 	int i, regcount = 0;
 
+	/* Skip unsupported registers on older generations */
+	if (!adreno_is_a660_family(to_adreno_gpu(gpu)) &&
+			(regs->registers == a660_registers))
+		return;
+
 	/* Some blocks might need to program a selector register first */
 	if (regs->val0)
 		in += CRASHDUMP_WRITE(in, regs->val0, regs->val1);
@@ -720,6 +748,11 @@ static void a6xx_get_ahb_gpu_registers(struct msm_gpu *gpu,
 		struct a6xx_gpu_state_obj *obj)
 {
 	int i, regcount = 0, index = 0;
+
+	/* Skip unsupported registers on older generations */
+	if (!adreno_is_a660_family(to_adreno_gpu(gpu)) &&
+			(regs->registers == a660_registers))
+		return;
 
 	for (i = 0; i < regs->count; i += 2)
 		regcount += RANGE(regs->registers, i);
@@ -849,12 +882,13 @@ static void a6xx_snapshot_gmu_hfi_history(struct msm_gpu *gpu,
 	}
 }
 
+#define A6XX_REGLIST_SIZE        1
 #define A6XX_GBIF_REGLIST_SIZE   1
 static void a6xx_get_registers(struct msm_gpu *gpu,
 		struct a6xx_gpu_state *a6xx_state,
 		struct a6xx_crashdumper *dumper)
 {
-	int i, count = ARRAY_SIZE(a6xx_ahb_reglist) +
+	int i, count = A6XX_REGLIST_SIZE +
 		ARRAY_SIZE(a6xx_reglist) +
 		ARRAY_SIZE(a6xx_hlsq_reglist) + A6XX_GBIF_REGLIST_SIZE;
 	int index = 0;
@@ -868,12 +902,20 @@ static void a6xx_get_registers(struct msm_gpu *gpu,
 
 	a6xx_state->nr_registers = count;
 
-	for (i = 0; i < ARRAY_SIZE(a6xx_ahb_reglist); i++)
+	if (adreno_is_a7xx(adreno_gpu))
 		a6xx_get_ahb_gpu_registers(gpu,
-			a6xx_state, &a6xx_ahb_reglist[i],
+			a6xx_state, &a7xx_ahb_reglist,
+			&a6xx_state->registers[index++]);
+	else
+		a6xx_get_ahb_gpu_registers(gpu,
+			a6xx_state, &a6xx_ahb_reglist,
 			&a6xx_state->registers[index++]);
 
-	if (a6xx_has_gbif(adreno_gpu))
+	if (adreno_is_a7xx(adreno_gpu))
+		a6xx_get_ahb_gpu_registers(gpu,
+				a6xx_state, &a7xx_gbif_reglist,
+				&a6xx_state->registers[index++]);
+	else if (a6xx_has_gbif(adreno_gpu))
 		a6xx_get_ahb_gpu_registers(gpu,
 				a6xx_state, &a6xx_gbif_reglist,
 				&a6xx_state->registers[index++]);
@@ -909,15 +951,36 @@ static void a6xx_get_registers(struct msm_gpu *gpu,
 			dumper);
 }
 
+static u32 a6xx_get_cp_roq_size(struct msm_gpu *gpu)
+{
+	/* The value at [16:31] is in 4dword units. Convert it to dwords */
+	return gpu_read(gpu, REG_A6XX_CP_ROQ_THRESHOLDS_2) >> 14;
+}
+
+static u32 a7xx_get_cp_roq_size(struct msm_gpu *gpu)
+{
+	/*
+	 * The value at CP_ROQ_THRESHOLDS_2[20:31] is in 4dword units.
+	 * That register however is not directly accessible from APSS on A7xx.
+	 * Program the SQE_UCODE_DBG_ADDR with offset=0x70d3 and read the value.
+	 */
+	gpu_write(gpu, REG_A6XX_CP_SQE_UCODE_DBG_ADDR, 0x70d3);
+
+	return 4 * (gpu_read(gpu, REG_A6XX_CP_SQE_UCODE_DBG_DATA) >> 20);
+}
+
 /* Read a block of data from an indexed register pair */
 static void a6xx_get_indexed_regs(struct msm_gpu *gpu,
 		struct a6xx_gpu_state *a6xx_state,
-		const struct a6xx_indexed_registers *indexed,
+		struct a6xx_indexed_registers *indexed,
 		struct a6xx_gpu_state_obj *obj)
 {
 	int i;
 
 	obj->handle = (const void *) indexed;
+	if (indexed->count_fn)
+		indexed->count = indexed->count_fn(gpu);
+
 	obj->data = state_kcalloc(a6xx_state, indexed->count, sizeof(u32));
 	if (!obj->data)
 		return;
@@ -946,6 +1009,21 @@ static void a6xx_get_indexed_registers(struct msm_gpu *gpu,
 		a6xx_get_indexed_regs(gpu, a6xx_state, &a6xx_indexed_reglist[i],
 			&a6xx_state->indexed_regs[i]);
 
+	if (adreno_is_a650_family(to_adreno_gpu(gpu))) {
+		u32 val;
+
+		val = gpu_read(gpu, REG_A6XX_CP_CHICKEN_DBG);
+		gpu_write(gpu, REG_A6XX_CP_CHICKEN_DBG, val | 4);
+
+		/* Get the contents of the CP mempool */
+		a6xx_get_indexed_regs(gpu, a6xx_state, &a6xx_cp_mempool_indexed,
+			&a6xx_state->indexed_regs[i]);
+
+		gpu_write(gpu, REG_A6XX_CP_CHICKEN_DBG, val);
+		a6xx_state->nr_indexed_regs = count;
+		return;
+	}
+
 	/* Set the CP mempool size to 0 to stabilize it while dumping */
 	mempool_size = gpu_read(gpu, REG_A6XX_CP_MEM_POOL_SIZE);
 	gpu_write(gpu, REG_A6XX_CP_MEM_POOL_SIZE, 0);
@@ -962,8 +1040,40 @@ static void a6xx_get_indexed_registers(struct msm_gpu *gpu,
 
 	/* Restore the size in the hardware */
 	gpu_write(gpu, REG_A6XX_CP_MEM_POOL_SIZE, mempool_size);
+}
 
-	a6xx_state->nr_indexed_regs = count;
+static void a7xx_get_indexed_registers(struct msm_gpu *gpu,
+		struct a6xx_gpu_state *a6xx_state)
+{
+	int i, indexed_count, mempool_count;
+
+	indexed_count = ARRAY_SIZE(a7xx_indexed_reglist);
+	mempool_count = ARRAY_SIZE(a7xx_cp_bv_mempool_indexed);
+
+	a6xx_state->indexed_regs = state_kcalloc(a6xx_state,
+					indexed_count + mempool_count,
+					sizeof(*a6xx_state->indexed_regs));
+	if (!a6xx_state->indexed_regs)
+		return;
+
+	a6xx_state->nr_indexed_regs = indexed_count + mempool_count;
+
+	/* First read the common regs */
+	for (i = 0; i < indexed_count; i++)
+		a6xx_get_indexed_regs(gpu, a6xx_state, &a7xx_indexed_reglist[i],
+			&a6xx_state->indexed_regs[i]);
+
+	gpu_rmw(gpu, REG_A6XX_CP_CHICKEN_DBG, 0, BIT(2));
+	gpu_rmw(gpu, REG_A7XX_CP_BV_CHICKEN_DBG, 0, BIT(2));
+
+	/* Get the contents of the CP_BV mempool */
+	for (i = 0; i < mempool_count; i++)
+		a6xx_get_indexed_regs(gpu, a6xx_state, a7xx_cp_bv_mempool_indexed,
+			&a6xx_state->indexed_regs[indexed_count - 1 + i]);
+
+	gpu_rmw(gpu, REG_A6XX_CP_CHICKEN_DBG, BIT(2), 0);
+	gpu_rmw(gpu, REG_A7XX_CP_BV_CHICKEN_DBG, BIT(2), 0);
+	return;
 }
 
 struct msm_gpu_state *a6xx_gpu_state_get(struct msm_gpu *gpu)
@@ -984,19 +1094,27 @@ struct msm_gpu_state *a6xx_gpu_state_get(struct msm_gpu *gpu)
 	/* Get the generic state from the adreno core */
 	adreno_gpu_state_get(gpu, &a6xx_state->base);
 
-	a6xx_get_gmu_registers(gpu, a6xx_state);
+	if (!adreno_has_gmu_wrapper(adreno_gpu)) {
+		a6xx_get_gmu_registers(gpu, a6xx_state);
 
-	a6xx_state->gmu_log = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.log);
-	a6xx_state->gmu_hfi = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.hfi);
-	a6xx_state->gmu_debug = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.debug);
+		a6xx_state->gmu_log = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.log);
+		a6xx_state->gmu_hfi = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.hfi);
+		a6xx_state->gmu_debug = a6xx_snapshot_gmu_bo(a6xx_state, &a6xx_gpu->gmu.debug);
 
-	a6xx_snapshot_gmu_hfi_history(gpu, a6xx_state);
+		a6xx_snapshot_gmu_hfi_history(gpu, a6xx_state);
+	}
 
 	/* If GX isn't on the rest of the data isn't going to be accessible */
-	if (!a6xx_gmu_gx_is_on(&a6xx_gpu->gmu))
+	if (!adreno_has_gmu_wrapper(adreno_gpu) && !a6xx_gmu_gx_is_on(&a6xx_gpu->gmu))
 		return &a6xx_state->base;
 
 	/* Get the banks of indexed registers */
+	if (adreno_is_a7xx(adreno_gpu)) {
+		a7xx_get_indexed_registers(gpu, a6xx_state);
+		/* Further codeflow is untested on A7xx. */
+		return &a6xx_state->base;
+	}
+
 	a6xx_get_indexed_registers(gpu, a6xx_state);
 
 	/*

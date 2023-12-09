@@ -18,7 +18,6 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/tty.h>
-#include <linux/8250_pci.h>
 #include <linux/delay.h>
 
 #include <asm/byteorder.h>
@@ -40,8 +39,12 @@
 #define PCI_DEVICE_ID_COMMTECH_4224PCIE		0x0020
 #define PCI_DEVICE_ID_COMMTECH_4228PCIE		0x0021
 #define PCI_DEVICE_ID_COMMTECH_4222PCIE		0x0022
+
 #define PCI_DEVICE_ID_EXAR_XR17V4358		0x4358
 #define PCI_DEVICE_ID_EXAR_XR17V8358		0x8358
+
+#define PCI_SUBDEVICE_ID_USR_2980		0x0128
+#define PCI_SUBDEVICE_ID_USR_2981		0x0129
 
 #define UART_EXAR_INT0		0x80
 #define UART_EXAR_8XMODE	0x88	/* 8X sampling rate select */
@@ -73,6 +76,9 @@
 #define UART_EXAR_MPIOOD_15_8	0x9a	/* MPIOOD[15:8] */
 
 #define UART_EXAR_RS485_DLY(x)	((x) << 4)
+
+#define UART_EXAR_DLD			0x02 /* Divisor Fractional */
+#define UART_EXAR_DLD_485_POLARITY	0x80 /* RS-485 Enable Signal Polarity */
 
 /*
  * IOT2040 MPIO wiring semantics:
@@ -188,8 +194,12 @@ static int xr17v35x_startup(struct uart_port *port)
 	/*
 	 * Make sure all interrups are masked until initialization is
 	 * complete and the FIFOs are cleared
+	 *
+	 * Synchronize UART_IER access against the console.
 	 */
+	uart_port_lock_irq(port);
 	serial_port_out(port, UART_IER, 0);
+	uart_port_unlock_irq(port);
 
 	return serial8250_do_startup(port);
 }
@@ -431,6 +441,44 @@ static int generic_rs485_config(struct uart_port *port, struct ktermios *termios
 	return 0;
 }
 
+static int sealevel_rs485_config(struct uart_port *port, struct ktermios *termios,
+				  struct serial_rs485 *rs485)
+{
+	u8 __iomem *p = port->membase;
+	u8 old_lcr;
+	u8 efr;
+	u8 dld;
+	int ret;
+
+	ret = generic_rs485_config(port, termios, rs485);
+	if (ret)
+		return ret;
+
+	if (rs485->flags & SER_RS485_ENABLED) {
+		old_lcr = readb(p + UART_LCR);
+
+		/* Set EFR[4]=1 to enable enhanced feature registers */
+		efr = readb(p + UART_XR_EFR);
+		efr |= UART_EFR_ECB;
+		writeb(efr, p + UART_XR_EFR);
+
+		/* Set MCR to use DTR as Auto-RS485 Enable signal */
+		writeb(UART_MCR_OUT1, p + UART_MCR);
+
+		/* Set LCR[7]=1 to enable access to DLD register */
+		writeb(old_lcr | UART_LCR_DLAB, p + UART_LCR);
+
+		/* Set DLD[7]=1 for inverted RS485 Enable logic */
+		dld = readb(p + UART_EXAR_DLD);
+		dld |= UART_EXAR_DLD_485_POLARITY;
+		writeb(dld, p + UART_EXAR_DLD);
+
+		writeb(old_lcr, p + UART_LCR);
+	}
+
+	return 0;
+}
+
 static const struct serial_rs485 generic_rs485_supported = {
 	.flags = SER_RS485_ENABLED,
 };
@@ -551,6 +599,9 @@ pci_xr17v35x_setup(struct exar8250 *priv, struct pci_dev *pcidev,
 	port->port.uartclk = baud * 16;
 	port->port.rs485_config = platform->rs485_config;
 	port->port.rs485_supported = *(platform->rs485_supported);
+
+	if (pcidev->subsystem_vendor == PCI_VENDOR_ID_SEALEVEL)
+		port->port.rs485_config = sealevel_rs485_config;
 
 	/*
 	 * Setup the UART clock for the devices on expansion slot to
@@ -821,6 +872,15 @@ static const struct exar8250_board pbn_exar_XR17V8358 = {
 		(kernel_ulong_t)&bd			\
 	}
 
+#define USR_DEVICE(devid, sdevid, bd) {			\
+	PCI_DEVICE_SUB(					\
+		PCI_VENDOR_ID_USR,			\
+		PCI_DEVICE_ID_EXAR_##devid,		\
+		PCI_VENDOR_ID_EXAR,			\
+		PCI_SUBDEVICE_ID_USR_##sdevid), 0, 0,	\
+		(kernel_ulong_t)&bd			\
+	}
+
 static const struct pci_device_id exar_pci_tbl[] = {
 	EXAR_DEVICE(ACCESSIO, COM_2S, pbn_exar_XR17C15x),
 	EXAR_DEVICE(ACCESSIO, COM_4S, pbn_exar_XR17C15x),
@@ -844,6 +904,10 @@ static const struct pci_device_id exar_pci_tbl[] = {
 	CONNECT_DEVICE(XR17C158, UART_8_485, pbn_connect),
 
 	IBM_DEVICE(XR17C152, SATURN_SERIAL_ONE_PORT, pbn_exar_ibm_saturn),
+
+	/* USRobotics USR298x-OEM PCI Modems */
+	USR_DEVICE(XR17C152, 2980, pbn_exar_XR17C15x),
+	USR_DEVICE(XR17C152, 2981, pbn_exar_XR17C15x),
 
 	/* Exar Corp. XR17C15[248] Dual/Quad/Octal UART */
 	EXAR_DEVICE(EXAR, XR17C152, pbn_exar_XR17C15x),

@@ -31,6 +31,8 @@ extern unsigned long efi_mixed_mode_stack_pa;
 
 #define ARCH_EFI_IRQ_FLAGS_MASK	X86_EFLAGS_IF
 
+#define EFI_UNACCEPTED_UNIT_SIZE PMD_SIZE
+
 /*
  * The EFI services are called through variadic functions in many cases. These
  * functions are implemented in assembler and support only a fixed number of
@@ -88,50 +90,25 @@ static inline void efi_fpu_end(void)
 }
 
 #ifdef CONFIG_X86_32
-#define arch_efi_call_virt_setup()					\
-({									\
-	efi_fpu_begin();						\
-	firmware_restrict_branch_speculation_start();			\
-})
-
-#define arch_efi_call_virt_teardown()					\
-({									\
-	firmware_restrict_branch_speculation_end();			\
-	efi_fpu_end();							\
-})
-
+#define EFI_X86_KERNEL_ALLOC_LIMIT		(SZ_512M - 1)
 #else /* !CONFIG_X86_32 */
-
-#define EFI_LOADER_SIGNATURE	"EL64"
+#define EFI_X86_KERNEL_ALLOC_LIMIT		EFI_ALLOC_LIMIT
 
 extern asmlinkage u64 __efi_call(void *fp, ...);
+
+extern bool efi_disable_ibt_for_runtime;
 
 #define efi_call(...) ({						\
 	__efi_nargs_check(efi_call, 7, __VA_ARGS__);			\
 	__efi_call(__VA_ARGS__);					\
 })
 
-#define arch_efi_call_virt_setup()					\
-({									\
-	efi_sync_low_kernel_mappings();					\
-	efi_fpu_begin();						\
-	firmware_restrict_branch_speculation_start();			\
-	efi_enter_mm();							\
-})
-
 #undef arch_efi_call_virt
 #define arch_efi_call_virt(p, f, args...) ({				\
-	u64 ret, ibt = ibt_save();					\
+	u64 ret, ibt = ibt_save(efi_disable_ibt_for_runtime);		\
 	ret = efi_call((void *)p->f, args);				\
 	ibt_restore(ibt);						\
 	ret;								\
-})
-
-#define arch_efi_call_virt_teardown()					\
-({									\
-	efi_leave_mm();							\
-	firmware_restrict_branch_speculation_end();			\
-	efi_fpu_end();							\
 })
 
 #ifdef CONFIG_KASAN
@@ -163,8 +140,8 @@ extern void efi_delete_dummy_variable(void);
 extern void efi_crash_gracefully_on_page_fault(unsigned long phys_addr);
 extern void efi_free_boot_services(void);
 
-void efi_enter_mm(void);
-void efi_leave_mm(void);
+void arch_efi_call_virt_setup(void);
+void arch_efi_call_virt_teardown(void);
 
 /* kexec external ABI */
 struct efi_setup_data {
@@ -213,6 +190,8 @@ efi_status_t efi_set_virtual_address_map(unsigned long memory_map_size,
 /* arch specific definitions used by the stub code */
 
 #ifdef CONFIG_EFI_MIXED
+
+#define EFI_ALLOC_LIMIT		(efi_is_64bit() ? ULONG_MAX : U32_MAX)
 
 #define ARCH_HAS_EFISTUB_WRAPPERS
 
@@ -334,6 +313,16 @@ static inline u32 efi64_convert_status(efi_status_t status)
 /* file system protocol */
 #define __efi64_argmap_open_volume(prot, file) \
 	((prot), efi64_zero_upper(file))
+
+/* Memory Attribute Protocol */
+#define __efi64_argmap_get_memory_attributes(protocol, phys, size, flags) \
+	((protocol), __efi64_split(phys), __efi64_split(size), (flags))
+
+#define __efi64_argmap_set_memory_attributes(protocol, phys, size, flags) \
+	((protocol), __efi64_split(phys), __efi64_split(size), __efi64_split(flags))
+
+#define __efi64_argmap_clear_memory_attributes(protocol, phys, size, flags) \
+	((protocol), __efi64_split(phys), __efi64_split(size), __efi64_split(flags))
 
 /*
  * The macros below handle the plumbing for the argument mapping. To add a

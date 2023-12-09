@@ -22,13 +22,13 @@
 #include <linux/kvm_host.h>
 #include <linux/export.h>
 #include <asm/lowcore.h>
+#include <asm/ctlreg.h>
 #include <asm/smp.h>
 #include <asm/stp.h>
 #include <asm/cputime.h>
 #include <asm/nmi.h>
 #include <asm/crw.h>
 #include <asm/switch_to.h>
-#include <asm/ctl_reg.h>
 #include <asm/asm-offsets.h>
 #include <asm/pai.h>
 #include <asm/vx-insn.h>
@@ -131,10 +131,10 @@ static notrace void s390_handle_damage(void)
 	 * Disable low address protection and make machine check new PSW a
 	 * disabled wait PSW. Any additional machine check cannot be handled.
 	 */
-	__ctl_store(cr0.val, 0, 0);
+	local_ctl_store(0, &cr0.reg);
 	cr0_new = cr0;
 	cr0_new.lap = 0;
-	__ctl_load(cr0_new.val, 0, 0);
+	local_ctl_load(0, &cr0_new.reg);
 	psw_save = S390_lowcore.mcck_new_psw;
 	psw_bits(S390_lowcore.mcck_new_psw).io = 0;
 	psw_bits(S390_lowcore.mcck_new_psw).ext = 0;
@@ -146,7 +146,7 @@ static notrace void s390_handle_damage(void)
 	 * values. This makes possible system dump analysis easier.
 	 */
 	S390_lowcore.mcck_new_psw = psw_save;
-	__ctl_load(cr0.val, 0, 0);
+	local_ctl_load(0, &cr0.reg);
 	disabled_wait();
 	while (1);
 }
@@ -156,7 +156,7 @@ NOKPROBE_SYMBOL(s390_handle_damage);
  * Main machine check handler function. Will be called with interrupts disabled
  * and machine checks enabled.
  */
-void __s390_handle_mcck(void)
+void s390_handle_mcck(void)
 {
 	struct mcck_struct mcck;
 
@@ -185,30 +185,23 @@ void __s390_handle_mcck(void)
 		static int mchchk_wng_posted = 0;
 
 		/* Use single cpu clear, as we cannot handle smp here. */
-		__ctl_clear_bit(14, 24);	/* Disable WARNING MCH */
+		local_ctl_clear_bit(14, CR14_WARNING_SUBMASK_BIT);
 		if (xchg(&mchchk_wng_posted, 1) == 0)
 			kill_cad_pid(SIGPWR, 1);
 	}
 	if (mcck.stp_queue)
 		stp_queue_work();
 	if (mcck.kill_task) {
-		local_irq_enable();
 		printk(KERN_EMERG "mcck: Terminating task because of machine "
 		       "malfunction (code 0x%016lx).\n", mcck.mcck_code);
 		printk(KERN_EMERG "mcck: task: %s, pid: %d.\n",
 		       current->comm, current->pid);
-		make_task_dead(SIGSEGV);
+		if (is_global_init(current))
+			panic("mcck: Attempting to kill init!\n");
+		do_send_sig_info(SIGKILL, SEND_SIG_PRIV, current, PIDTYPE_PID);
 	}
 }
 
-void noinstr s390_handle_mcck(struct pt_regs *regs)
-{
-	trace_hardirqs_off();
-	pai_kernel_enter(regs);
-	__s390_handle_mcck();
-	pai_kernel_exit(regs);
-	trace_hardirqs_on();
-}
 /*
  * returns 0 if register contents could be validated
  * returns 1 otherwise
@@ -276,9 +269,9 @@ static int notrace s390_validate_registers(union mci mci)
 		 */
 		if (!mci.vr && !test_cpu_flag(CIF_MCCK_GUEST))
 			kill_task = 1;
-		cr0.val = S390_lowcore.cregs_save_area[0];
+		cr0.reg = S390_lowcore.cregs_save_area[0];
 		cr0.afp = cr0.vx = 1;
-		__ctl_load(cr0.val, 0, 0);
+		local_ctl_load(0, &cr0.reg);
 		asm volatile(
 			"	la	1,%0\n"
 			"	VLM	0,15,0,1\n"
@@ -286,7 +279,7 @@ static int notrace s390_validate_registers(union mci mci)
 			:
 			: "Q" (*(struct vx_array *)mcesa->vector_save_area)
 			: "1");
-		__ctl_load(S390_lowcore.cregs_save_area[0], 0, 0);
+		local_ctl_load(0, &S390_lowcore.cregs_save_area[0]);
 	}
 	/* Validate access registers */
 	asm volatile(
@@ -297,7 +290,7 @@ static int notrace s390_validate_registers(union mci mci)
 	if (!mci.ar)
 		kill_task = 1;
 	/* Validate guarded storage registers */
-	cr2.val = S390_lowcore.cregs_save_area[2];
+	cr2.reg = S390_lowcore.cregs_save_area[2];
 	if (cr2.gse) {
 		if (!mci.gs) {
 			/*
@@ -346,8 +339,7 @@ static void notrace s390_backup_mcck_info(struct pt_regs *regs)
 	struct sie_page *sie_page;
 
 	/* r14 contains the sie block, which was set in sie64a */
-	struct kvm_s390_sie_block *sie_block =
-			(struct kvm_s390_sie_block *) regs->gprs[14];
+	struct kvm_s390_sie_block *sie_block = phys_to_virt(regs->gprs[14]);
 
 	if (sie_block == NULL)
 		/* Something's seriously wrong, stop system. */
@@ -374,7 +366,7 @@ NOKPROBE_SYMBOL(s390_backup_mcck_info);
 /*
  * machine check handler.
  */
-int notrace s390_do_machine_check(struct pt_regs *regs)
+void notrace s390_do_machine_check(struct pt_regs *regs)
 {
 	static int ipd_count;
 	static DEFINE_SPINLOCK(ipd_lock);
@@ -504,24 +496,18 @@ int notrace s390_do_machine_check(struct pt_regs *regs)
 	}
 	clear_cpu_flag(CIF_MCCK_GUEST);
 
-	if (user_mode(regs) && mcck_pending) {
-		irqentry_nmi_exit(regs, irq_state);
-		return 1;
-	}
-
 	if (mcck_pending)
 		schedule_mcck_handler();
 
 	irqentry_nmi_exit(regs, irq_state);
-	return 0;
 }
 NOKPROBE_SYMBOL(s390_do_machine_check);
 
 static int __init machine_check_init(void)
 {
-	ctl_set_bit(14, 25);	/* enable external damage MCH */
-	ctl_set_bit(14, 27);	/* enable system recovery MCH */
-	ctl_set_bit(14, 24);	/* enable warning MCH */
+	system_ctl_set_bit(14, CR14_EXTERNAL_DAMAGE_SUBMASK_BIT);
+	system_ctl_set_bit(14, CR14_RECOVERY_SUBMASK_BIT);
+	system_ctl_set_bit(14, CR14_WARNING_SUBMASK_BIT);
 	return 0;
 }
 early_initcall(machine_check_init);

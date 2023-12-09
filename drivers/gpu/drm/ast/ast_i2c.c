@@ -29,14 +29,14 @@
 static void ast_i2c_setsda(void *i2c_priv, int data)
 {
 	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
+	struct ast_device *ast = to_ast_device(i2c->dev);
 	int i;
 	u8 ujcrb7, jtemp;
 
 	for (i = 0; i < 0x10000; i++) {
 		ujcrb7 = ((data & 0x01) ? 0 : 1) << 2;
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf1, ujcrb7);
-		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x04);
+		ast_set_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0xf1, ujcrb7);
+		jtemp = ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x04);
 		if (ujcrb7 == jtemp)
 			break;
 	}
@@ -45,14 +45,14 @@ static void ast_i2c_setsda(void *i2c_priv, int data)
 static void ast_i2c_setscl(void *i2c_priv, int clock)
 {
 	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
+	struct ast_device *ast = to_ast_device(i2c->dev);
 	int i;
 	u8 ujcrb7, jtemp;
 
 	for (i = 0; i < 0x10000; i++) {
 		ujcrb7 = ((clock & 0x01) ? 0 : 1);
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf4, ujcrb7);
-		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x01);
+		ast_set_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0xf4, ujcrb7);
+		jtemp = ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x01);
 		if (ujcrb7 == jtemp)
 			break;
 	}
@@ -61,19 +61,19 @@ static void ast_i2c_setscl(void *i2c_priv, int clock)
 static int ast_i2c_getsda(void *i2c_priv)
 {
 	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
+	struct ast_device *ast = to_ast_device(i2c->dev);
 	uint32_t val, val2, count, pass;
 
 	count = 0;
 	pass = 0;
-	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+	val = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x20) >> 5) & 0x01;
 	do {
-		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+		val2 = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x20) >> 5) & 0x01;
 		if (val == val2) {
 			pass++;
 		} else {
 			pass = 0;
-			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+			val = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x20) >> 5) & 0x01;
 		}
 	} while ((pass < 5) && (count++ < 0x10000));
 
@@ -83,19 +83,19 @@ static int ast_i2c_getsda(void *i2c_priv)
 static int ast_i2c_getscl(void *i2c_priv)
 {
 	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
+	struct ast_device *ast = to_ast_device(i2c->dev);
 	uint32_t val, val2, count, pass;
 
 	count = 0;
 	pass = 0;
-	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+	val = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x10) >> 4) & 0x01;
 	do {
-		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+		val2 = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x10) >> 4) & 0x01;
 		if (val == val2) {
 			pass++;
 		} else {
 			pass = 0;
-			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+			val = (ast_get_index_reg_mask(ast, AST_IO_VGACRI, 0xb7, 0x10) >> 4) & 0x01;
 		}
 	} while ((pass < 5) && (count++ < 0x10000));
 

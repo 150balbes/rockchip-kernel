@@ -128,7 +128,6 @@ static void sctp_v6_err_handle(struct sctp_transport *t, struct sk_buff *skb,
 {
 	struct sctp_association *asoc = t->asoc;
 	struct sock *sk = asoc->base.sk;
-	struct ipv6_pinfo *np;
 	int err = 0;
 
 	switch (type) {
@@ -149,13 +148,12 @@ static void sctp_v6_err_handle(struct sctp_transport *t, struct sk_buff *skb,
 		break;
 	}
 
-	np = inet6_sk(sk);
 	icmpv6_err_convert(type, code, &err);
-	if (!sock_owned_by_user(sk) && np->recverr) {
+	if (!sock_owned_by_user(sk) && inet6_test_bit(RECVERR6, sk)) {
 		sk->sk_err = err;
 		sk_error_report(sk);
 	} else {
-		sk->sk_err_soft = err;
+		WRITE_ONCE(sk->sk_err_soft, err);
 	}
 }
 
@@ -249,7 +247,7 @@ static int sctp_v6_xmit(struct sk_buff *skb, struct sctp_transport *t)
 		rcu_read_lock();
 		res = ip6_xmit(sk, skb, fl6, sk->sk_mark,
 			       rcu_dereference(np->opt),
-			       tclass, sk->sk_priority);
+			       tclass, READ_ONCE(sk->sk_priority));
 		rcu_read_unlock();
 		return res;
 	}
@@ -298,7 +296,8 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 	if (t->flowlabel & SCTP_FLOWLABEL_SET_MASK)
 		fl6->flowlabel = htonl(t->flowlabel & SCTP_FLOWLABEL_VAL_MASK);
 
-	if (np->sndflow && (fl6->flowlabel & IPV6_FLOWLABEL_MASK)) {
+	if (inet6_test_bit(SNDFLOW, sk) &&
+	    (fl6->flowlabel & IPV6_FLOWLABEL_MASK)) {
 		struct ip6_flowlabel *flowlabel;
 
 		flowlabel = fl6_sock_lookup(sk, fl6->flowlabel);
@@ -806,8 +805,6 @@ static struct sock *sctp_v6_create_accept_sk(struct sock *sk,
 	sctp_v6_to_sk_daddr(&asoc->peer.primary_addr, newsk);
 
 	newsk->sk_v6_rcv_saddr = sk->sk_v6_rcv_saddr;
-
-	sk_refcnt_debug_inc(newsk);
 
 	if (newsk->sk_prot->init(newsk)) {
 		sk_common_release(newsk);

@@ -4,13 +4,17 @@
  *
  * Copyright (c) 2014, Fuzhou Rockchip Electronics Co., Ltd
  * Copyright (C) 2016 PHYTEC Messtechnik GmbH
+ *
+ * Author: Chris Zhong <zyw@rock-chips.com>
+ * Author: Zhang Qing <zhangqing@rock-chips.com>
+ * Author: Wadim Egorov <w.egorov@phytec.de>
  */
 
 #include <linux/interrupt.h>
 #include <linux/mfd/rk808.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reboot.h>
 
@@ -66,12 +70,13 @@ static const struct mfd_cell rk805s[] = {
 };
 
 static const struct mfd_cell rk806s[] = {
-	{ .name = "rk805-pinctrl", },
-	{ .name = "rk808-regulator", },
+	{ .name = "rk805-pinctrl", .id = PLATFORM_DEVID_AUTO, },
+	{ .name = "rk808-regulator", .id = PLATFORM_DEVID_AUTO, },
 	{
 		.name = "rk805-pwrkey",
+		.resources = rk806_pwrkey_resources,
 		.num_resources = ARRAY_SIZE(rk806_pwrkey_resources),
-		.resources = &rk806_pwrkey_resources[0],
+		.id = PLATFORM_DEVID_AUTO,
 	},
 };
 
@@ -111,6 +116,7 @@ static const struct mfd_cell rk817s[] = {
 };
 
 static const struct mfd_cell rk818s[] = {
+	{ .name = "rk808-clkout", .id = PLATFORM_DEVID_NONE, },
 	{ .name = "rk808-regulator", .id = PLATFORM_DEVID_NONE, },
 	{
 		.name = "rk808-rtc",
@@ -519,6 +525,10 @@ static int rk808_power_off(struct sys_off_data *data)
 		reg = RK805_DEV_CTRL_REG;
 		bit = DEV_OFF;
 		break;
+	case RK806_ID:
+		reg = RK806_SYS_CFG3;
+		bit = DEV_OFF;
+		break;
 	case RK808_ID:
 		reg = RK808_DEVCTRL_REG,
 		bit = DEV_OFF_RST;
@@ -598,7 +608,7 @@ int rk8xx_probe(struct device *dev, int variant, unsigned int irq, struct regmap
 	struct rk808 *rk808;
 	const struct rk808_reg_data *pre_init_reg;
 	const struct mfd_cell *cells;
-	bool dual_support = false;
+	int dual_support = 0;
 	int nr_pre_init_regs;
 	int nr_cells;
 	int ret;
@@ -626,7 +636,7 @@ int rk8xx_probe(struct device *dev, int variant, unsigned int irq, struct regmap
 		nr_pre_init_regs = ARRAY_SIZE(rk806_pre_init_reg);
 		cells = rk806s;
 		nr_cells = ARRAY_SIZE(rk806s);
-		dual_support = true;
+		dual_support = IRQF_SHARED;
 		break;
 	case RK808_ID:
 		rk808->regmap_irq_chip = &rk808_irq_chip;
@@ -655,13 +665,11 @@ int rk8xx_probe(struct device *dev, int variant, unsigned int irq, struct regmap
 		return -EINVAL;
 	}
 
-	dev_info(dev, "chip id: 0x%x\n", (unsigned int)rk808->variant);
-
 	if (!irq)
 		return dev_err_probe(dev, -EINVAL, "No interrupt support, no core IRQ\n");
 
 	ret = devm_regmap_add_irq_chip(dev, rk808->regmap, irq,
-				       IRQF_ONESHOT | (dual_support ? IRQF_SHARED : 0), -1,
+				       IRQF_ONESHOT | dual_support, -1,
 				       rk808->regmap_irq_chip, &rk808->irq_data);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to add irq_chip\n");
@@ -676,13 +684,13 @@ int rk8xx_probe(struct device *dev, int variant, unsigned int irq, struct regmap
 					     pre_init_reg[i].addr);
 	}
 
-	ret = devm_mfd_add_devices(dev, dual_support ? PLATFORM_DEVID_AUTO : PLATFORM_DEVID_NONE,
-			      cells, nr_cells, NULL, 0,
+	ret = devm_mfd_add_devices(dev, 0, cells, nr_cells, NULL, 0,
 			      regmap_irq_get_domain(rk808->irq_data));
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to add MFD devices\n");
 
-	if (device_property_read_bool(dev, "rockchip,system-power-controller")) {
+	if (device_property_read_bool(dev, "rockchip,system-power-controller") ||
+	    device_property_read_bool(dev, "system-power-controller")) {
 		ret = devm_register_sys_off_handler(dev,
 				    SYS_OFF_MODE_POWER_OFF_PREPARE, SYS_OFF_PRIO_HIGH,
 				    &rk808_power_off, rk808);

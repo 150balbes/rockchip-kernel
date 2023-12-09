@@ -53,6 +53,7 @@ detailed description):
 	- Lap mode sensor
 	- Setting keyboard language
 	- WWAN Antenna type
+	- Auxmac
 
 A compatibility table by model and feature is maintained on the web
 site, http://ibm-acpi.sf.net/. I appreciate any success or failure
@@ -1488,7 +1489,7 @@ Example of command to set keyboard language is mentioned below::
 Text corresponding to keyboard layout to be set in sysfs are: be(Belgian),
 cz(Czech), da(Danish), de(German), en(English), es(Spain), et(Estonian),
 fr(French), fr-ch(French(Switzerland)), hu(Hungarian), it(Italy), jp (Japan),
-nl(Dutch), nn(Norway), pl(Polish), pt(portugese), sl(Slovenian), sv(Sweden),
+nl(Dutch), nn(Norway), pl(Polish), pt(portuguese), sl(Slovenian), sv(Sweden),
 tr(Turkey)
 
 WWAN Antenna type
@@ -1510,6 +1511,25 @@ Currently 2 antenna types are supported as mentioned below:
 
 The property is read-only. If the platform doesn't have support the sysfs
 class is not created.
+
+Auxmac
+------
+
+sysfs: auxmac
+
+Some newer Thinkpads have a feature called MAC Address Pass-through. This
+feature is implemented by the system firmware to provide a system unique MAC,
+that can override a dock or USB ethernet dongle MAC, when connected to a
+network. This property enables user-space to easily determine the MAC address
+if the feature is enabled.
+
+The values of this auxiliary MAC are:
+
+        cat /sys/devices/platform/thinkpad_acpi/auxmac
+
+If the feature is disabled, the value will be 'disabled'.
+
+This property is read-only.
 
 Adaptive keyboard
 -----------------

@@ -153,6 +153,32 @@ struct mt7996_mcu_mib {
 	__le64 data;
 } __packed;
 
+struct mt7996_mcu_all_sta_info_event {
+	u8 rsv[4];
+	__le16 tag;
+	__le16 len;
+	u8 more;
+	u8 rsv2;
+	__le16 sta_num;
+	u8 rsv3[2];
+
+	union {
+		struct {
+			__le16 wlan_idx;
+			u8 rsv[2];
+			__le32 tx_bytes[IEEE80211_NUM_ACS];
+			__le32 rx_bytes[IEEE80211_NUM_ACS];
+		} adm_stat[0];
+
+		struct {
+			__le16 wlan_idx;
+			u8 rsv[2];
+			__le32 tx_msdu_cnt;
+			__le32 rx_msdu_cnt;
+		} msdu_cnt[0];
+	};
+} __packed;
+
 enum mt7996_chan_mib_offs {
 	UNI_MIB_OBSS_AIRTIME = 26,
 	UNI_MIB_NON_WIFI_TIME = 27,
@@ -270,8 +296,6 @@ struct bss_inband_discovery_tlv {
 	u8 enable;
 	__le16 wcid;
 	__le16 prob_rsp_len;
-#define MAX_INBAND_FRAME_SIZE 512
-	u8 pkt[MAX_INBAND_FRAME_SIZE];
 } __packed;
 
 struct bss_bcn_content_tlv {
@@ -283,8 +307,6 @@ struct bss_bcn_content_tlv {
 	u8 enable;
 	u8 type;
 	__le16 pkt_len;
-#define MAX_BEACON_SIZE 512
-	u8 pkt[MAX_BEACON_SIZE];
 } __packed;
 
 struct bss_bcn_cntdwn_tlv {
@@ -317,6 +339,22 @@ struct bss_sec_tlv {
 	u8 __rsv2[1];
 } __packed;
 
+struct bss_ifs_time_tlv {
+	__le16 tag;
+	__le16 len;
+	u8 slot_valid;
+	u8 sifs_valid;
+	u8 rifs_valid;
+	u8 eifs_valid;
+	__le16 slot_time;
+	__le16 sifs_time;
+	__le16 rifs_time;
+	__le16 eifs_time;
+	u8 eifs_cck_valid;
+	u8 rsv;
+	__le16 eifs_cck_time;
+} __packed;
+
 struct bss_power_save {
 	__le16 tag;
 	__le16 len;
@@ -345,6 +383,21 @@ struct sta_rec_ba_uni {
 	__le16 winsize;
 	u8 ba_rdd_rro;
 	u8 __rsv[3];
+} __packed;
+
+struct sta_rec_eht {
+	__le16 tag;
+	__le16 len;
+	u8 tid_bitmap;
+	u8 _rsv;
+	__le16 mac_cap;
+	__le64 phy_cap;
+	__le64 phy_cap_ext;
+	u8 mcs_map_bw20[4];
+	u8 mcs_map_bw80[3];
+	u8 mcs_map_bw160[3];
+	u8 mcs_map_bw320[3];
+	u8 _rsv2[3];
 } __packed;
 
 struct sec_key_uni {
@@ -381,7 +434,7 @@ struct sta_rec_hdr_trans {
 	u8 from_ds;
 	u8 to_ds;
 	u8 dis_rx_hdr_tran;
-	u8 rsv;
+	u8 mesh;
 } __packed;
 
 struct hdr_trans_en {
@@ -537,6 +590,7 @@ enum {
 					 sizeof(struct bss_txcmd_tlv) +		\
 					 sizeof(struct bss_power_save) +	\
 					 sizeof(struct bss_sec_tlv) +		\
+					 sizeof(struct bss_ifs_time_tlv) +	\
 					 sizeof(struct bss_mld_tlv))
 
 #define MT7996_STA_UPDATE_MAX_SIZE	(sizeof(struct sta_req_hdr) +		\
@@ -554,17 +608,19 @@ enum {
 					 sizeof(struct sta_rec_sec) +		\
 					 sizeof(struct sta_rec_ra_fixed) +	\
 					 sizeof(struct sta_rec_he_6g_capa) +	\
+					 sizeof(struct sta_rec_eht) +		\
 					 sizeof(struct sta_rec_hdrt) +		\
 					 sizeof(struct sta_rec_hdr_trans) +	\
 					 sizeof(struct tlv))
 
+#define MT7996_MAX_BEACON_SIZE		1342
 #define MT7996_BEACON_UPDATE_SIZE	(sizeof(struct bss_req_hdr) +		\
 					 sizeof(struct bss_bcn_content_tlv) +	\
+					 MT_TXD_SIZE +				\
 					 sizeof(struct bss_bcn_cntdwn_tlv) +	\
 					 sizeof(struct bss_bcn_mbss_tlv))
-
-#define MT7996_INBAND_FRAME_SIZE	(sizeof(struct bss_req_hdr) +		\
-					 sizeof(struct bss_inband_discovery_tlv))
+#define MT7996_MAX_BSS_OFFLOAD_SIZE	(MT7996_MAX_BEACON_SIZE +		\
+					 MT7996_BEACON_UPDATE_SIZE)
 
 enum {
 	UNI_BAND_CONFIG_RADIO_ENABLE,
@@ -632,23 +688,21 @@ enum {
 };
 
 enum {
-	UNI_CMD_SER_QUERY = 0x0,
-	UNI_CMD_SER_SET = 0x2,
-	UNI_CMD_SER_TRIGGER = 0x3,
-};
-
-enum {
-	SER_QUERY,
+	UNI_CMD_SER_QUERY,
 	/* recovery */
-	SER_SET_RECOVER_L1,
-	SER_SET_RECOVER_L2,
-	SER_SET_RECOVER_L3_RX_ABORT,
-	SER_SET_RECOVER_L3_TX_ABORT,
-	SER_SET_RECOVER_L3_TX_DISABLE,
-	SER_SET_RECOVER_L3_BF,
+	UNI_CMD_SER_SET_RECOVER_L1,
+	UNI_CMD_SER_SET_RECOVER_L2,
+	UNI_CMD_SER_SET_RECOVER_L3_RX_ABORT,
+	UNI_CMD_SER_SET_RECOVER_L3_TX_ABORT,
+	UNI_CMD_SER_SET_RECOVER_L3_TX_DISABLE,
+	UNI_CMD_SER_SET_RECOVER_L3_BF,
+	UNI_CMD_SER_SET_RECOVER_L4_MDP,
+	UNI_CMD_SER_SET_RECOVER_FULL,
+	UNI_CMD_SER_SET_SYSTEM_ASSERT,
 	/* action */
-	SER_ENABLE = 2,
-	SER_RECOVER
+	UNI_CMD_SER_ENABLE = 1,
+	UNI_CMD_SER_SET,
+	UNI_CMD_SER_TRIGGER
 };
 
 enum {

@@ -14,7 +14,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/qcom-geni-se.h>
+#include <linux/soc/qcom/geni-se.h>
 #include <linux/spinlock.h>
 
 #define SE_I2C_TX_TRANS_LEN		0x26c
@@ -722,6 +722,7 @@ static const struct i2c_algorithm geni_i2c_algo = {
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id geni_i2c_acpi_match[] = {
 	{ "QCOM0220"},
+	{ "QCOM0411" },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, geni_i2c_acpi_match);
@@ -767,7 +768,6 @@ err_tx:
 static int geni_i2c_probe(struct platform_device *pdev)
 {
 	struct geni_i2c_dev *gi2c;
-	struct resource *res;
 	u32 proto, tx_depth, fifo_disable;
 	int ret;
 	struct device *dev = &pdev->dev;
@@ -779,8 +779,7 @@ static int geni_i2c_probe(struct platform_device *pdev)
 
 	gi2c->se.dev = dev;
 	gi2c->se.wrapper = dev_get_drvdata(dev->parent);
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	gi2c->se.base = devm_ioremap_resource(dev, res);
+	gi2c->se.base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(gi2c->se.base))
 		return PTR_ERR(gi2c->se.base);
 
@@ -936,14 +935,13 @@ err_dma:
 	return ret;
 }
 
-static int geni_i2c_remove(struct platform_device *pdev)
+static void geni_i2c_remove(struct platform_device *pdev)
 {
 	struct geni_i2c_dev *gi2c = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&gi2c->adap);
 	release_gpi_dma(gi2c);
 	pm_runtime_disable(gi2c->se.dev);
-	return 0;
 }
 
 static void geni_i2c_shutdown(struct platform_device *pdev)
@@ -1025,7 +1023,7 @@ static const struct dev_pm_ops geni_i2c_pm_ops = {
 									NULL)
 };
 
-const struct geni_i2c_desc i2c_master_hub = {
+static const struct geni_i2c_desc i2c_master_hub = {
 	.has_core_clk = true,
 	.icc_ddr = NULL,
 	.no_dma_support = true,
@@ -1041,7 +1039,7 @@ MODULE_DEVICE_TABLE(of, geni_i2c_dt_match);
 
 static struct platform_driver geni_i2c_driver = {
 	.probe  = geni_i2c_probe,
-	.remove = geni_i2c_remove,
+	.remove_new = geni_i2c_remove,
 	.shutdown = geni_i2c_shutdown,
 	.driver = {
 		.name = "geni_i2c",

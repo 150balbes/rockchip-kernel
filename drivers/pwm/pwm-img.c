@@ -208,7 +208,6 @@ static int img_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static const struct pwm_ops img_pwm_ops = {
 	.apply = img_pwm_apply,
-	.owner = THIS_MODULE,
 };
 
 static const struct img_pwm_soc_data pistachio_pwm = {
@@ -343,7 +342,7 @@ err_pm_disable:
 	return ret;
 }
 
-static int img_pwm_remove(struct platform_device *pdev)
+static void img_pwm_remove(struct platform_device *pdev)
 {
 	struct img_pwm_chip *imgchip = platform_get_drvdata(pdev);
 
@@ -352,8 +351,6 @@ static int img_pwm_remove(struct platform_device *pdev)
 		img_pwm_runtime_suspend(&pdev->dev);
 
 	pwmchip_remove(&imgchip->chip);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -423,7 +420,7 @@ static struct platform_driver img_pwm_driver = {
 		.of_match_table = img_pwm_of_match,
 	},
 	.probe = img_pwm_probe,
-	.remove = img_pwm_remove,
+	.remove_new = img_pwm_remove,
 };
 module_platform_driver(img_pwm_driver);
 

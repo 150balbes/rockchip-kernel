@@ -15,7 +15,6 @@ static DEFINE_IDA(pd_ida);
 
 static struct class pd_class = {
 	.name = "usb_power_delivery",
-	.owner = THIS_MODULE,
 };
 
 #define to_pdo(o) container_of(o, struct pdo, dev)
@@ -49,6 +48,13 @@ usb_suspend_supported_show(struct device *dev, struct device_attribute *attr, ch
 static DEVICE_ATTR_RO(usb_suspend_supported);
 
 static ssize_t
+higher_capability_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", !!(to_pdo(dev)->pdo & PDO_FIXED_HIGHER_CAP));
+}
+static DEVICE_ATTR_RO(higher_capability);
+
+static ssize_t
 unconstrained_power_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", !!(to_pdo(dev)->pdo & PDO_FIXED_EXTPOWER));
@@ -77,19 +83,17 @@ unchunked_extended_messages_supported_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(unchunked_extended_messages_supported);
 
-/*
- * REVISIT: Peak Current requires access also to the RDO.
 static ssize_t
 peak_current_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	...
+	return sysfs_emit(buf, "%u\n", (to_pdo(dev)->pdo >> PDO_FIXED_PEAK_CURR_SHIFT) & 3);
 }
-*/
+static DEVICE_ATTR_RO(peak_current);
 
 static ssize_t
 fast_role_swap_current_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%u\n", to_pdo(dev)->pdo >> PDO_FIXED_FRS_CURR_SHIFT) & 3;
+	return sysfs_emit(buf, "%u\n", (to_pdo(dev)->pdo >> PDO_FIXED_FRS_CURR_SHIFT) & 3);
 }
 static DEVICE_ATTR_RO(fast_role_swap_current);
 
@@ -129,7 +133,7 @@ static struct attribute *source_fixed_supply_attrs[] = {
 	&dev_attr_usb_communication_capable.attr,
 	&dev_attr_dual_role_data.attr,
 	&dev_attr_unchunked_extended_messages_supported.attr,
-	/*&dev_attr_peak_current.attr,*/
+	&dev_attr_peak_current.attr,
 	&dev_attr_voltage.attr,
 	&maximum_current_attr.attr,
 	NULL
@@ -138,7 +142,7 @@ static struct attribute *source_fixed_supply_attrs[] = {
 static umode_t fixed_attr_is_visible(struct kobject *kobj, struct attribute *attr, int n)
 {
 	if (to_pdo(kobj_to_dev(kobj))->object_position &&
-	    /*attr != &dev_attr_peak_current.attr &&*/
+	    attr != &dev_attr_peak_current.attr &&
 	    attr != &dev_attr_voltage.attr &&
 	    attr != &maximum_current_attr.attr &&
 	    attr != &operational_current_attr.attr)
@@ -161,7 +165,7 @@ static struct device_type source_fixed_supply_type = {
 
 static struct attribute *sink_fixed_supply_attrs[] = {
 	&dev_attr_dual_role_power.attr,
-	&dev_attr_usb_suspend_supported.attr,
+	&dev_attr_higher_capability.attr,
 	&dev_attr_unconstrained_power.attr,
 	&dev_attr_usb_communication_capable.attr,
 	&dev_attr_dual_role_data.attr,

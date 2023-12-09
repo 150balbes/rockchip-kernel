@@ -3,7 +3,7 @@
  * Copyright 2002-2005, Devicescape Software, Inc.
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright(c) 2015-2017 Intel Deutschland GmbH
- * Copyright(c) 2020-2022 Intel Corporation
+ * Copyright(c) 2020-2023 Intel Corporation
  */
 
 #ifndef STA_INFO_H
@@ -259,9 +259,6 @@ struct tid_ampdu_rx {
 /**
  * struct sta_ampdu_mlme - STA aggregation information.
  *
- * @mtx: mutex to protect all TX data (except non-NULL assignments
- *	to tid_tx[idx], which are protected by the sta spinlock)
- *	tid_start_tx is also protected by sta->lock.
  * @tid_rx: aggregation info for Rx per TID -- RCU protected
  * @tid_rx_token: dialog tokens for valid aggregation sessions
  * @tid_rx_timer_expired: bitmap indicating on which TIDs the
@@ -275,13 +272,13 @@ struct tid_ampdu_rx {
  *	unexpected aggregation related frames outside a session
  * @work: work struct for starting/stopping aggregation
  * @tid_tx: aggregation info for Tx per TID
- * @tid_start_tx: sessions where start was requested
+ * @tid_start_tx: sessions where start was requested, not just protected
+ *	by wiphy mutex but also sta->lock
  * @last_addba_req_time: timestamp of the last addBA request.
  * @addba_req_num: number of times addBA request has been sent.
  * @dialog_token_allocator: dialog token enumerator for each new session;
  */
 struct sta_ampdu_mlme {
-	struct mutex mtx;
 	/* rx */
 	struct tid_ampdu_rx __rcu *tid_rx[IEEE80211_NUM_TIDS];
 	u8 tid_rx_token[IEEE80211_NUM_TIDS];
@@ -291,7 +288,7 @@ struct sta_ampdu_mlme {
 	unsigned long agg_session_valid[BITS_TO_LONGS(IEEE80211_NUM_TIDS)];
 	unsigned long unexpected_agg[BITS_TO_LONGS(IEEE80211_NUM_TIDS)];
 	/* tx */
-	struct work_struct work;
+	struct wiphy_work work;
 	struct tid_ampdu_tx __rcu *tid_tx[IEEE80211_NUM_TIDS];
 	struct tid_ampdu_tx *tid_start_tx[IEEE80211_NUM_TIDS];
 	unsigned long last_addba_req_time[IEEE80211_NUM_TIDS];
@@ -618,10 +615,15 @@ struct link_sta_info {
  * @sta: station information we share with the driver
  * @sta_state: duplicates information about station state (for debug)
  * @rcu_head: RCU head used for freeing this station struct
- * @cur_max_bandwidth: maximum bandwidth to use for TX to the station,
- *	taken from HT/VHT capabilities or VHT operating mode notification
  * @cparams: CoDel parameters for this station.
  * @reserved_tid: reserved TID (if any, otherwise IEEE80211_TID_UNRESERVED)
+ * @amsdu_mesh_control: track the mesh A-MSDU format used by the peer:
+ *
+ *	  * -1: not yet known
+ *	  * 0: non-mesh A-MSDU length field
+ *	  * 1: big-endian mesh A-MSDU length field
+ *	  * 2: little-endian mesh A-MSDU length field
+ *
  * @fast_tx: TX fastpath information
  * @fast_rx: RX fastpath information
  * @tdls_chandef: a TDLS peer can have a wider chandef that is compatible to
@@ -707,6 +709,7 @@ struct sta_info {
 	struct codel_params cparams;
 
 	u8 reserved_tid;
+	s8 amsdu_mesh_control;
 
 	struct cfg80211_chan_def tdls_chandef;
 
@@ -788,13 +791,10 @@ static inline void sta_info_pre_move_state(struct sta_info *sta,
 void ieee80211_assign_tid_tx(struct sta_info *sta, int tid,
 			     struct tid_ampdu_tx *tid_tx);
 
-static inline struct tid_ampdu_tx *
-rcu_dereference_protected_tid_tx(struct sta_info *sta, int tid)
-{
-	return rcu_dereference_protected(sta->ampdu_mlme.tid_tx[tid],
-					 lockdep_is_held(&sta->lock) ||
-					 lockdep_is_held(&sta->ampdu_mlme.mtx));
-}
+#define rcu_dereference_protected_tid_tx(sta, tid)			\
+	rcu_dereference_protected((sta)->ampdu_mlme.tid_tx[tid],	\
+				  lockdep_is_held(&(sta)->lock) ||	\
+				  lockdep_is_held(&(sta)->local->hw.wiphy->mtx));
 
 /* Maximum number of frames to buffer per power saving station per AC */
 #define STA_MAX_TX_BUFFER	64
@@ -819,7 +819,7 @@ struct sta_info *sta_info_get(struct ieee80211_sub_if_data *sdata,
 struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 				  const u8 *addr);
 
-/* user must hold sta_mtx or be in RCU critical section */
+/* user must hold wiphy mutex or be in RCU critical section */
 struct sta_info *sta_info_get_by_addrs(struct ieee80211_local *local,
 				       const u8 *sta_addr, const u8 *vif_addr);
 
@@ -936,6 +936,7 @@ enum sta_stats_type {
 	STA_STATS_RATE_TYPE_VHT,
 	STA_STATS_RATE_TYPE_HE,
 	STA_STATS_RATE_TYPE_S1G,
+	STA_STATS_RATE_TYPE_EHT,
 };
 
 #define STA_STATS_FIELD_HT_MCS		GENMASK( 7,  0)
@@ -945,12 +946,16 @@ enum sta_stats_type {
 #define STA_STATS_FIELD_VHT_NSS		GENMASK( 7,  4)
 #define STA_STATS_FIELD_HE_MCS		GENMASK( 3,  0)
 #define STA_STATS_FIELD_HE_NSS		GENMASK( 7,  4)
-#define STA_STATS_FIELD_BW		GENMASK(11,  8)
-#define STA_STATS_FIELD_SGI		GENMASK(12, 12)
-#define STA_STATS_FIELD_TYPE		GENMASK(15, 13)
-#define STA_STATS_FIELD_HE_RU		GENMASK(18, 16)
-#define STA_STATS_FIELD_HE_GI		GENMASK(20, 19)
-#define STA_STATS_FIELD_HE_DCM		GENMASK(21, 21)
+#define STA_STATS_FIELD_EHT_MCS		GENMASK( 3,  0)
+#define STA_STATS_FIELD_EHT_NSS		GENMASK( 7,  4)
+#define STA_STATS_FIELD_BW		GENMASK(12,  8)
+#define STA_STATS_FIELD_SGI		GENMASK(13, 13)
+#define STA_STATS_FIELD_TYPE		GENMASK(16, 14)
+#define STA_STATS_FIELD_HE_RU		GENMASK(19, 17)
+#define STA_STATS_FIELD_HE_GI		GENMASK(21, 20)
+#define STA_STATS_FIELD_HE_DCM		GENMASK(22, 22)
+#define STA_STATS_FIELD_EHT_RU		GENMASK(20, 17)
+#define STA_STATS_FIELD_EHT_GI		GENMASK(22, 21)
 
 #define STA_STATS_FIELD(_n, _v)		FIELD_PREP(STA_STATS_FIELD_ ## _n, _v)
 #define STA_STATS_GET(_n, _v)		FIELD_GET(STA_STATS_FIELD_ ## _n, _v)
@@ -988,6 +993,13 @@ static inline u32 sta_stats_encode_rate(struct ieee80211_rx_status *s)
 		r |= STA_STATS_FIELD(HE_GI, s->he_gi);
 		r |= STA_STATS_FIELD(HE_RU, s->he_ru);
 		r |= STA_STATS_FIELD(HE_DCM, s->he_dcm);
+		break;
+	case RX_ENC_EHT:
+		r |= STA_STATS_FIELD(TYPE, STA_STATS_RATE_TYPE_EHT);
+		r |= STA_STATS_FIELD(EHT_NSS, s->nss);
+		r |= STA_STATS_FIELD(EHT_MCS, s->rate_idx);
+		r |= STA_STATS_FIELD(EHT_GI, s->eht.gi);
+		r |= STA_STATS_FIELD(EHT_RU, s->eht.ru);
 		break;
 	default:
 		WARN_ON(1);

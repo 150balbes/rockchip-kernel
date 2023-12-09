@@ -148,7 +148,6 @@ struct ov9282_mode {
 /**
  * struct ov9282 - ov9282 sensor device structure
  * @dev: Pointer to generic device
- * @client: Pointer to i2c client
  * @sd: V4L2 sub-device
  * @pad: Media pad. Only one pad supported
  * @reset_gpio: Sensor reset gpio
@@ -166,11 +165,9 @@ struct ov9282_mode {
  * @cur_mode: Pointer to current selected sensor mode
  * @code: Mbus code currently selected
  * @mutex: Mutex for serializing sensor controls
- * @streaming: Flag indicating streaming state
  */
 struct ov9282 {
 	struct device *dev;
-	struct i2c_client *client;
 	struct v4l2_subdev sd;
 	struct media_pad pad;
 	struct gpio_desc *reset_gpio;
@@ -190,7 +187,6 @@ struct ov9282 {
 	const struct ov9282_mode *cur_mode;
 	u32 code;
 	struct mutex mutex;
-	bool streaming;
 };
 
 static const s64 link_freq[] = {
@@ -1039,11 +1035,6 @@ static int ov9282_set_stream(struct v4l2_subdev *sd, int enable)
 
 	mutex_lock(&ov9282->mutex);
 
-	if (ov9282->streaming == enable) {
-		mutex_unlock(&ov9282->mutex);
-		return 0;
-	}
-
 	if (enable) {
 		ret = pm_runtime_resume_and_get(ov9282->dev);
 		if (ret)
@@ -1056,8 +1047,6 @@ static int ov9282_set_stream(struct v4l2_subdev *sd, int enable)
 		ov9282_stop_streaming(ov9282);
 		pm_runtime_put(ov9282->dev);
 	}
-
-	ov9282->streaming = enable;
 
 	mutex_unlock(&ov9282->mutex);
 
@@ -1144,10 +1133,9 @@ static int ov9282_parse_hw_config(struct ov9282 *ov9282)
 	}
 
 	ret = ov9282_configure_regulators(ov9282);
-	if (ret) {
-		dev_err(ov9282->dev, "Failed to get power regulators\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(ov9282->dev, ret,
+				     "Failed to get power regulators\n");
 
 	rate = clk_get_rate(ov9282->inclk);
 	if (rate != OV9282_INCLK_RATE) {
@@ -1515,7 +1503,7 @@ static const struct of_device_id ov9282_of_match[] = {
 MODULE_DEVICE_TABLE(of, ov9282_of_match);
 
 static struct i2c_driver ov9282_driver = {
-	.probe_new = ov9282_probe,
+	.probe = ov9282_probe,
 	.remove = ov9282_remove,
 	.driver = {
 		.name = "ov9282",

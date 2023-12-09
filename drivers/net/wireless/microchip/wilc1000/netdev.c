@@ -148,8 +148,8 @@ static int wilc_txq_task(void *vp)
 
 	complete(&wl->txq_thread_started);
 	while (1) {
-		wait_for_completion(&wl->txq_event);
-
+		if (wait_for_completion_interruptible(&wl->txq_event))
+			continue;
 		if (wl->close) {
 			complete(&wl->txq_thread_started);
 
@@ -166,12 +166,24 @@ static int wilc_txq_task(void *vp)
 				srcu_idx = srcu_read_lock(&wl->srcu);
 				list_for_each_entry_rcu(ifc, &wl->vif_list,
 							list) {
-					if (ifc->mac_opened && ifc->ndev)
+					if (ifc->mac_opened &&
+					    netif_queue_stopped(ifc->ndev))
 						netif_wake_queue(ifc->ndev);
 				}
 				srcu_read_unlock(&wl->srcu, srcu_idx);
 			}
-		} while (ret == WILC_VMM_ENTRY_FULL_RETRY && !wl->close);
+			if (ret != WILC_VMM_ENTRY_FULL_RETRY)
+				break;
+			/* Back off TX task from sending packets for some time.
+			 * msleep_interruptible will allow RX task to run and
+			 * free buffers. TX task will be in TASK_INTERRUPTIBLE
+			 * state which will put the thread back to CPU running
+			 * queue when it's signaled even if the timeout isn't
+			 * elapsed. This gives faster chance for reserved SK
+			 * buffers to be free.
+			 */
+			msleep_interruptible(TX_BACKOFF_WEIGHT_MS);
+		} while (!wl->close);
 	}
 	return 0;
 }
@@ -730,6 +742,7 @@ netdev_tx_t wilc_mac_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	if (skb->dev != ndev) {
 		netdev_err(ndev, "Packet not destined to this device\n");
+		dev_kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}
 
@@ -980,7 +993,7 @@ struct wilc_vif *wilc_netdev_ifc_init(struct wilc *wl, const char *name,
 						    ndev->name);
 	if (!wl->hif_workqueue) {
 		ret = -ENOMEM;
-		goto error;
+		goto unregister_netdev;
 	}
 
 	ndev->needs_free_netdev = true;
@@ -995,6 +1008,11 @@ struct wilc_vif *wilc_netdev_ifc_init(struct wilc *wl, const char *name,
 
 	return vif;
 
+unregister_netdev:
+	if (rtnl_locked)
+		cfg80211_unregister_netdevice(ndev);
+	else
+		unregister_netdev(ndev);
   error:
 	free_netdev(ndev);
 	return ERR_PTR(ret);

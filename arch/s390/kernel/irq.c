@@ -136,7 +136,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 {
 	irqentry_state_t state = irqentry_enter(regs);
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	int from_idle;
+	bool from_idle;
 
 	irq_enter_rcu();
 
@@ -146,7 +146,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			current->thread.last_break = regs->last_break;
 	}
 
-	from_idle = !user_mode(regs) && regs->psw.addr == (unsigned long)psw_idle_exit;
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
@@ -171,7 +171,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 {
 	irqentry_state_t state = irqentry_enter(regs);
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	int from_idle;
+	bool from_idle;
 
 	irq_enter_rcu();
 
@@ -185,7 +185,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 	regs->int_parm = S390_lowcore.ext_params;
 	regs->int_parm_long = S390_lowcore.ext_params2;
 
-	from_idle = !user_mode(regs) && regs->psw.addr == (unsigned long)psw_idle_exit;
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
@@ -385,7 +385,7 @@ void irq_subclass_register(enum irq_subclass subclass)
 {
 	spin_lock(&irq_subclass_lock);
 	if (!irq_subclass_refcount[subclass])
-		ctl_set_bit(0, subclass);
+		system_ctl_set_bit(0, subclass);
 	irq_subclass_refcount[subclass]++;
 	spin_unlock(&irq_subclass_lock);
 }
@@ -396,7 +396,7 @@ void irq_subclass_unregister(enum irq_subclass subclass)
 	spin_lock(&irq_subclass_lock);
 	irq_subclass_refcount[subclass]--;
 	if (!irq_subclass_refcount[subclass])
-		ctl_clear_bit(0, subclass);
+		system_ctl_clear_bit(0, subclass);
 	spin_unlock(&irq_subclass_lock);
 }
 EXPORT_SYMBOL(irq_subclass_unregister);

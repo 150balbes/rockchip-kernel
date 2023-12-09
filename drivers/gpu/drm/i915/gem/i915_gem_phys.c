@@ -13,6 +13,7 @@
 #include "gt/intel_gt.h"
 #include "i915_drv.h"
 #include "i915_gem_object.h"
+#include "i915_gem_object_frontbuffer.h"
 #include "i915_gem_region.h"
 #include "i915_gem_tiling.h"
 #include "i915_scatterlist.h"
@@ -27,6 +28,10 @@ static int i915_gem_object_get_pages_phys(struct drm_i915_gem_object *obj)
 	void *vaddr;
 	void *dst;
 	int i;
+
+	/* Contiguous chunk, with a single scatterlist element */
+	if (overflows_type(obj->base.size, sg->length))
+		return -E2BIG;
 
 	if (GEM_WARN_ON(i915_gem_object_needs_bit17_swizzle(obj)))
 		return -EINVAL;

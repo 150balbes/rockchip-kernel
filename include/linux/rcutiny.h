@@ -98,25 +98,25 @@ static inline void synchronize_rcu_expedited(void)
  */
 extern void kvfree(const void *addr);
 
-static inline void __kvfree_call_rcu(struct rcu_head *head, rcu_callback_t func)
+static inline void __kvfree_call_rcu(struct rcu_head *head, void *ptr)
 {
 	if (head) {
-		call_rcu(head, func);
+		call_rcu(head, (rcu_callback_t) ((void *) head - ptr));
 		return;
 	}
 
 	// kvfree_rcu(one_arg) call.
 	might_sleep();
 	synchronize_rcu();
-	kvfree((void *) func);
+	kvfree(ptr);
 }
 
 #ifdef CONFIG_KASAN_GENERIC
-void kvfree_call_rcu(struct rcu_head *head, rcu_callback_t func);
+void kvfree_call_rcu(struct rcu_head *head, void *ptr);
 #else
-static inline void kvfree_call_rcu(struct rcu_head *head, rcu_callback_t func)
+static inline void kvfree_call_rcu(struct rcu_head *head, void *ptr)
 {
-	__kvfree_call_rcu(head, func);
+	__kvfree_call_rcu(head, ptr);
 }
 #endif
 
@@ -137,6 +137,8 @@ static inline int rcu_needs_cpu(void)
 {
 	return 0;
 }
+
+static inline void rcu_request_urgent_qs_task(struct task_struct *t) { }
 
 /*
  * Take advantage of the fact that there is only one CPU, which
@@ -169,6 +171,6 @@ static inline void rcu_all_qs(void) { barrier(); }
 #define rcutree_offline_cpu      NULL
 #define rcutree_dead_cpu         NULL
 #define rcutree_dying_cpu        NULL
-static inline void rcu_cpu_starting(unsigned int cpu) { }
+static inline void rcutree_report_cpu_starting(unsigned int cpu) { }
 
 #endif /* __LINUX_RCUTINY_H */

@@ -4779,8 +4779,8 @@ set_frequency(struct drx_demod_instance *demod,
 	bool image_to_select;
 	s32 fm_frequency_shift = 0;
 
-	rf_mirror = (ext_attr->mirror == DRX_MIRROR_YES) ? true : false;
-	tuner_mirror = demod->my_common_attr->mirror_freq_spect ? false : true;
+	rf_mirror = ext_attr->mirror == DRX_MIRROR_YES;
+	tuner_mirror = !demod->my_common_attr->mirror_freq_spect;
 	/*
 	   Program frequency shifter
 	   No need to account for mirroring on RF
@@ -8765,7 +8765,7 @@ static int qam_flip_spec(struct drx_demod_instance *demod, struct drx_channel *c
 		goto rw_error;
 	}
 	ext_attr->iqm_fs_rate_ofs = iqm_fs_rate_ofs;
-	ext_attr->pos_image = (ext_attr->pos_image) ? false : true;
+	ext_attr->pos_image = !ext_attr->pos_image;
 
 	/* freeze dq/fq updating */
 	rc = drxj_dap_read_reg16(dev_addr, QAM_DQ_MODE__A, &data, 0);
@@ -9539,7 +9539,8 @@ ctrl_get_qam_sig_quality(struct drx_demod_instance *demod)
 		qam_sl_sig_power = DRXJ_QAM_SL_SIG_POWER_QAM256 << 2;
 		break;
 	default:
-		return -EIO;
+		rc = -EIO;
+		goto rw_error;
 	}
 
 	/* ------------------------------ */
@@ -10916,7 +10917,8 @@ ctrl_set_standard(struct drx_demod_instance *demod, enum drx_standard *standard)
 		break;
 	case DRX_STANDARD_AUTO:
 	default:
-		return -EINVAL;
+		rc = -EINVAL;
+		goto rw_error;
 	}
 
 	/*
@@ -11068,7 +11070,7 @@ ctrl_power_mode(struct drx_demod_instance *demod, enum drx_power_mode *mode)
 		sio_cc_pwd_mode = SIO_CC_PWD_MODE_LEVEL_OSC;
 		break;
 	default:
-		/* Unknow sleep mode */
+		/* Unknown sleep mode */
 		return -EINVAL;
 	}
 
@@ -11463,7 +11465,8 @@ static int drxj_open(struct drx_demod_instance *demod)
 
 		if (DRX_ISPOWERDOWNMODE(demod->my_common_attr->current_power_mode)) {
 			pr_err("Should powerup before loading the firmware.");
-			return -EINVAL;
+			rc = -EINVAL;
+			goto rw_error;
 		}
 
 		rc = drx_ctrl_u_code(demod, &ucode_info, UCODE_UPLOAD);
@@ -12369,7 +12372,7 @@ error:
 
 	return NULL;
 }
-EXPORT_SYMBOL(drx39xxj_attach);
+EXPORT_SYMBOL_GPL(drx39xxj_attach);
 
 static const struct dvb_frontend_ops drx39xxj_ops = {
 	.delsys = { SYS_ATSC, SYS_DVBC_ANNEX_B },

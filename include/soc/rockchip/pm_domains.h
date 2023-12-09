@@ -10,7 +10,6 @@
 
 int rockchip_pmu_block(void);
 void rockchip_pmu_unblock(void);
-int rockchip_pmu_idle_request(struct device *dev, bool idle);
 
 #else /* CONFIG_ROCKCHIP_PM_DOMAINS */
 
@@ -20,11 +19,6 @@ static inline int rockchip_pmu_block(void)
 }
 
 static inline void rockchip_pmu_unblock(void) { }
-
-static inline int rockchip_pmu_idle_request(struct device *dev, bool idle)
-{
-	return -ENOTSUPP;
-}
 
 #endif /* CONFIG_ROCKCHIP_PM_DOMAINS */
 

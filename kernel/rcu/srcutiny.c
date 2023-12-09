@@ -138,6 +138,7 @@ void srcu_drive_gp(struct work_struct *wp)
 	while (lh) {
 		rhp = lh;
 		lh = lh->next;
+		debug_rcu_head_callback(rhp);
 		local_bh_disable();
 		rhp->func(rhp);
 		local_bh_enable();
@@ -196,6 +197,8 @@ EXPORT_SYMBOL_GPL(call_srcu);
 void synchronize_srcu(struct srcu_struct *ssp)
 {
 	struct rcu_synchronize rs;
+
+	srcu_lock_sync(&ssp->dep_map);
 
 	RCU_LOCKDEP_WARN(lockdep_is_held(ssp) ||
 			lock_is_held(&rcu_bh_lock_map) ||

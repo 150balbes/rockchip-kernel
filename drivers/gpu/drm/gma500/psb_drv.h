@@ -161,14 +161,6 @@
 
 #define PSB_NUM_VBLANKS 2
 
-
-#define PSB_2D_SIZE (256*1024*1024)
-#define PSB_MAX_RELOC_PAGES 1024
-
-#define PSB_LOW_REG_OFFS 0x0204
-#define PSB_HIGH_REG_OFFS 0x0600
-
-#define PSB_NUM_VBLANKS 2
 #define PSB_WATCHDOG_DELAY (HZ * 2)
 #define PSB_LID_DELAY (HZ / 10)
 
@@ -192,8 +184,6 @@
 #define KSEL_BYPASS_19 5
 #define KSEL_BYPASS_25 6
 #define KSEL_BYPASS_83_100 7
-
-struct drm_fb_helper;
 
 struct opregion_header;
 struct opregion_acpi;
@@ -426,6 +416,7 @@ struct drm_psb_private {
 	uint32_t pipestat[PSB_NUM_PIPE];
 
 	spinlock_t irqmask_lock;
+	bool irq_enabled;
 
 	/* Power */
 	bool pm_initialized;
@@ -522,9 +513,6 @@ struct drm_psb_private {
 	uint32_t blc_adj1;
 	uint32_t blc_adj2;
 
-	struct drm_fb_helper *fb_helper;
-	resource_size_t fb_base;
-
 	bool dsr_enable;
 	u32 dsr_fb_update;
 	bool dpi_panel_on[3];
@@ -610,7 +598,19 @@ extern void psb_lid_timer_takedown(struct drm_psb_private *dev_priv);
 /* modesetting */
 extern void psb_modeset_init(struct drm_device *dev);
 extern void psb_modeset_cleanup(struct drm_device *dev);
-extern int psb_fbdev_init(struct drm_device *dev);
+
+/* framebuffer */
+struct drm_framebuffer *psb_framebuffer_create(struct drm_device *dev,
+					       const struct drm_mode_fb_cmd2 *mode_cmd,
+					       struct drm_gem_object *obj);
+
+/* fbdev */
+#if defined(CONFIG_DRM_FBDEV_EMULATION)
+void psb_fbdev_setup(struct drm_psb_private *dev_priv);
+#else
+static inline void psb_fbdev_setup(struct drm_psb_private *dev_priv)
+{ }
+#endif
 
 /* backlight.c */
 int gma_backlight_init(struct drm_device *dev);

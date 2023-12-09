@@ -96,7 +96,6 @@
 			linux,default-trigger = "heartbeat";
 			gpios = <&rk805 1 GPIO_ACTIVE_LOW>;
 			default-state = "on";
-			mode = <0x23>;
 		};
 
 		user_led: led-1 {
@@ -104,7 +103,6 @@
 			linux,default-trigger = "mmc1";
 			gpios = <&rk805 0 GPIO_ACTIVE_LOW>;
 			default-state = "off";
-			mode = <0x05>;
 		};
 	};
 };
@@ -354,18 +352,6 @@
 	status = "okay";
 };
 
-&u3phy {
-	status = "okay";
-};
-
-&u3phy_utmi {
-	status = "okay";
-};
-
-&u3phy_pipe {
-	status = "okay";
-};
-
 &uart2 {
 	status = "okay";
 };
@@ -385,11 +371,6 @@
 };
 
 &usb_host0_ohci {
-	status = "okay";
-};
-
-&usbdrd3 {
-	dr_mode = "host";
 	status = "okay";
 };
 

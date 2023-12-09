@@ -24,11 +24,13 @@ struct vgic_global kvm_vgic_global_state __ro_after_init = {
 /*
  * Locking order is always:
  * kvm->lock (mutex)
- *   its->cmd_lock (mutex)
- *     its->its_lock (mutex)
- *       vgic_cpu->ap_list_lock		must be taken with IRQs disabled
- *         kvm->lpi_list_lock		must be taken with IRQs disabled
- *           vgic_irq->irq_lock		must be taken with IRQs disabled
+ *   vcpu->mutex (mutex)
+ *     kvm->arch.config_lock (mutex)
+ *       its->cmd_lock (mutex)
+ *         its->its_lock (mutex)
+ *           vgic_cpu->ap_list_lock		must be taken with IRQs disabled
+ *             kvm->lpi_list_lock		must be taken with IRQs disabled
+ *               vgic_irq->irq_lock		must be taken with IRQs disabled
  *
  * As the ap_list_lock might be taken from the timer interrupt handler,
  * we have to disable IRQs before taking this lock and everything lower
@@ -420,7 +422,7 @@ retry:
 /**
  * kvm_vgic_inject_irq - Inject an IRQ from a device to the vgic
  * @kvm:     The VM structure pointer
- * @cpuid:   The CPU for PPIs
+ * @vcpu:    The CPU for PPIs or NULL for global interrupts
  * @intid:   The INTID to inject a new state to.
  * @level:   Edge-triggered:  true:  to trigger the interrupt
  *			      false: to ignore the call
@@ -434,23 +436,21 @@ retry:
  * level-sensitive interrupts.  You can think of the level parameter as 1
  * being HIGH and 0 being LOW and all devices being active-HIGH.
  */
-int kvm_vgic_inject_irq(struct kvm *kvm, int cpuid, unsigned int intid,
-			bool level, void *owner)
+int kvm_vgic_inject_irq(struct kvm *kvm, struct kvm_vcpu *vcpu,
+			unsigned int intid, bool level, void *owner)
 {
-	struct kvm_vcpu *vcpu;
 	struct vgic_irq *irq;
 	unsigned long flags;
 	int ret;
-
-	trace_vgic_update_irq_pending(cpuid, intid, level);
 
 	ret = vgic_lazy_init(kvm);
 	if (ret)
 		return ret;
 
-	vcpu = kvm_get_vcpu(kvm, cpuid);
 	if (!vcpu && intid < VGIC_NR_PRIVATE_IRQS)
 		return -EINVAL;
+
+	trace_vgic_update_irq_pending(vcpu ? vcpu->vcpu_idx : 0, intid, level);
 
 	irq = vgic_get_irq(kvm, vcpu, intid);
 	if (!irq)
@@ -571,6 +571,21 @@ int kvm_vgic_unmap_phys_irq(struct kvm_vcpu *vcpu, unsigned int vintid)
 	vgic_put_irq(vcpu->kvm, irq);
 
 	return 0;
+}
+
+int kvm_vgic_get_map(struct kvm_vcpu *vcpu, unsigned int vintid)
+{
+	struct vgic_irq *irq = vgic_get_irq(vcpu->kvm, vcpu, vintid);
+	unsigned long flags;
+	int ret = -1;
+
+	raw_spin_lock_irqsave(&irq->irq_lock, flags);
+	if (irq->hw)
+		ret = irq->hwintid;
+	raw_spin_unlock_irqrestore(&irq->irq_lock, flags);
+
+	vgic_put_irq(vcpu->kvm, irq);
+	return ret;
 }
 
 /**

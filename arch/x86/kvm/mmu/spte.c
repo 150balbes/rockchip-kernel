@@ -7,7 +7,7 @@
  * Copyright (C) 2006 Qumranet, Inc.
  * Copyright 2020 Red Hat, Inc. and/or its affiliates.
  */
-
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kvm_host.h>
 #include "mmu.h"
@@ -61,7 +61,7 @@ static u64 generation_mmio_spte_mask(u64 gen)
 {
 	u64 mask;
 
-	WARN_ON(gen & ~MMIO_SPTE_GEN_MASK);
+	WARN_ON_ONCE(gen & ~MMIO_SPTE_GEN_MASK);
 
 	mask = (gen << MMIO_SPTE_GEN_LOW_SHIFT) & MMIO_SPTE_GEN_LOW_MASK;
 	mask |= (gen << MMIO_SPTE_GEN_HIGH_SHIFT) & MMIO_SPTE_GEN_HIGH_MASK;
@@ -147,9 +147,9 @@ bool make_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	WARN_ON_ONCE(!pte_access && !shadow_present_mask);
 
 	if (sp->role.ad_disabled)
-		spte |= SPTE_TDP_AD_DISABLED_MASK;
+		spte |= SPTE_TDP_AD_DISABLED;
 	else if (kvm_mmu_page_ad_need_write_protect(sp))
-		spte |= SPTE_TDP_AD_WRPROT_ONLY_MASK;
+		spte |= SPTE_TDP_AD_WRPROT_ONLY;
 
 	/*
 	 * For the EPT case, shadow_present_mask is 0 if hardware
@@ -164,7 +164,7 @@ bool make_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	/*
 	 * For simplicity, enforce the NX huge page mitigation even if not
 	 * strictly necessary.  KVM could ignore the mitigation if paging is
-	 * disabled in the guest, as the guest doesn't have an page tables to
+	 * disabled in the guest, as the guest doesn't have any page tables to
 	 * abuse.  But to safely ignore the mitigation, KVM would have to
 	 * ensure a new MMU is loaded (or all shadow pages zapped) when CR0.PG
 	 * is toggled on, and that's a net negative for performance when TDP is
@@ -221,8 +221,6 @@ bool make_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 		 * shadow pages and unsync'ing pages is not allowed.
 		 */
 		if (mmu_try_to_unsync_pages(vcpu->kvm, slot, gfn, can_unsync, prefetch)) {
-			pgprintk("%s: found shadow page for %llx, marking ro\n",
-				 __func__, gfn);
 			wrprot = true;
 			pte_access &= ~ACC_WRITE_MASK;
 			spte &= ~(PT_WRITABLE_MASK | shadow_mmu_writable_mask);
@@ -242,7 +240,7 @@ out:
 
 	if ((spte & PT_WRITABLE_MASK) && kvm_slot_dirty_track_enabled(slot)) {
 		/* Enforced by kvm_mmu_hugepage_adjust. */
-		WARN_ON(level > PG_LEVEL_4K);
+		WARN_ON_ONCE(level > PG_LEVEL_4K);
 		mark_page_dirty_in_slot(vcpu->kvm, slot, gfn);
 	}
 
@@ -317,7 +315,7 @@ u64 make_nonleaf_spte(u64 *child_pt, bool ad_disabled)
 		shadow_user_mask | shadow_x_mask | shadow_me_value;
 
 	if (ad_disabled)
-		spte |= SPTE_TDP_AD_DISABLED_MASK;
+		spte |= SPTE_TDP_AD_DISABLED;
 	else
 		spte |= shadow_accessed_mask;
 
@@ -352,7 +350,7 @@ u64 mark_spte_for_access_track(u64 spte)
 
 	WARN_ONCE(spte & (SHADOW_ACC_TRACK_SAVED_BITS_MASK <<
 			  SHADOW_ACC_TRACK_SAVED_BITS_SHIFT),
-		  "kvm: Access Tracking saved bit locations are not zero\n");
+		  "Access Tracking saved bit locations are not zero\n");
 
 	spte |= (spte & SHADOW_ACC_TRACK_SAVED_BITS_MASK) <<
 		SHADOW_ACC_TRACK_SAVED_BITS_SHIFT;

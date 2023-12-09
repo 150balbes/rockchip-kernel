@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/objtool.h>
 #include <linux/percpu.h>
@@ -203,7 +204,7 @@ static void nested_vmx_abort(struct kvm_vcpu *vcpu, u32 indicator)
 {
 	/* TODO: not to reset guest simply here. */
 	kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
-	pr_debug_ratelimited("kvm: nested vmx abort, indicator %d\n", indicator);
+	pr_debug_ratelimited("nested vmx abort, indicator %d\n", indicator);
 }
 
 static inline bool vmx_control_verify(u32 control, u32 low, u32 high)
@@ -357,6 +358,7 @@ static bool nested_ept_root_matches(hpa_t root_hpa, u64 root_eptp, u64 eptp)
 static void nested_ept_invalidate_addr(struct kvm_vcpu *vcpu, gpa_t eptp,
 				       gpa_t addr)
 {
+	unsigned long roots = 0;
 	uint i;
 	struct kvm_mmu_root_info *cached_root;
 
@@ -367,8 +369,10 @@ static void nested_ept_invalidate_addr(struct kvm_vcpu *vcpu, gpa_t eptp,
 
 		if (nested_ept_root_matches(cached_root->hpa, cached_root->pgd,
 					    eptp))
-			vcpu->arch.mmu->invlpg(vcpu, addr, cached_root->hpa);
+			roots |= KVM_MMU_ROOT_PREVIOUS(i);
 	}
+	if (roots)
+		kvm_mmu_invalidate_addr(vcpu, vcpu->arch.mmu, addr, roots);
 }
 
 static void nested_ept_inject_page_fault(struct kvm_vcpu *vcpu,
@@ -652,6 +656,9 @@ static inline bool nested_vmx_prepare_msr_bitmap(struct kvm_vcpu *vcpu,
 
 	nested_vmx_set_intercept_for_msr(vmx, msr_bitmap_l1, msr_bitmap_l0,
 					 MSR_IA32_PRED_CMD, MSR_TYPE_W);
+
+	nested_vmx_set_intercept_for_msr(vmx, msr_bitmap_l1, msr_bitmap_l0,
+					 MSR_IA32_FLUSH_CMD, MSR_TYPE_W);
 
 	kvm_vcpu_unmap(vcpu, &vmx->nested.msr_bitmap_map, false);
 
@@ -2300,7 +2307,7 @@ static void prepare_vmcs02_early(struct vcpu_vmx *vmx, struct loaded_vmcs *vmcs0
 				  SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE |
 				  SECONDARY_EXEC_ENABLE_INVPCID |
 				  SECONDARY_EXEC_ENABLE_RDTSCP |
-				  SECONDARY_EXEC_XSAVES |
+				  SECONDARY_EXEC_ENABLE_XSAVES |
 				  SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE |
 				  SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY |
 				  SECONDARY_EXEC_APIC_REGISTER_VIRT |
@@ -2321,8 +2328,7 @@ static void prepare_vmcs02_early(struct vcpu_vmx *vmx, struct loaded_vmcs *vmcs0
 		 * Preset *DT exiting when emulating UMIP, so that vmx_set_cr4()
 		 * will not have to rewrite the controls just for this bit.
 		 */
-		if (!boot_cpu_has(X86_FEATURE_UMIP) && vmx_umip_emulated() &&
-		    (vmcs12->guest_cr4 & X86_CR4_UMIP))
+		if (vmx_umip_emulated() && (vmcs12->guest_cr4 & X86_CR4_UMIP))
 			exec_control |= SECONDARY_EXEC_DESC;
 
 		if (exec_control & SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY)
@@ -2642,7 +2648,7 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 	}
 
 	if ((vmcs12->vm_entry_controls & VM_ENTRY_LOAD_IA32_PERF_GLOBAL_CTRL) &&
-	    intel_pmu_has_perf_global_ctrl(vcpu_to_pmu(vcpu)) &&
+	    kvm_pmu_has_perf_global_ctrl(vcpu_to_pmu(vcpu)) &&
 	    WARN_ON_ONCE(kvm_set_msr(vcpu, MSR_CORE_PERF_GLOBAL_CTRL,
 				     vmcs12->guest_ia32_perf_global_ctrl))) {
 		*entry_failure_code = ENTRY_FAIL_DEFAULT;
@@ -2902,7 +2908,7 @@ static int nested_vmx_check_address_space_size(struct kvm_vcpu *vcpu,
 static int nested_vmx_check_host_state(struct kvm_vcpu *vcpu,
 				       struct vmcs12 *vmcs12)
 {
-	bool ia32e;
+	bool ia32e = !!(vmcs12->vm_exit_controls & VM_EXIT_HOST_ADDR_SPACE_SIZE);
 
 	if (CC(!nested_host_cr0_valid(vcpu, vmcs12->host_cr0)) ||
 	    CC(!nested_host_cr4_valid(vcpu, vmcs12->host_cr4)) ||
@@ -2921,12 +2927,6 @@ static int nested_vmx_check_host_state(struct kvm_vcpu *vcpu,
 	    CC(!kvm_valid_perf_global_ctrl(vcpu_to_pmu(vcpu),
 					   vmcs12->host_ia32_perf_global_ctrl)))
 		return -EINVAL;
-
-#ifdef CONFIG_X86_64
-	ia32e = !!(vmcs12->vm_exit_controls & VM_EXIT_HOST_ADDR_SPACE_SIZE);
-#else
-	ia32e = false;
-#endif
 
 	if (ia32e) {
 		if (CC(!(vmcs12->host_cr4 & X86_CR4_PAE)))
@@ -3021,7 +3021,7 @@ static int nested_vmx_check_guest_state(struct kvm_vcpu *vcpu,
 					struct vmcs12 *vmcs12,
 					enum vm_entry_failure_code *entry_failure_code)
 {
-	bool ia32e;
+	bool ia32e = !!(vmcs12->vm_entry_controls & VM_ENTRY_IA32E_MODE);
 
 	*entry_failure_code = ENTRY_FAIL_DEFAULT;
 
@@ -3047,6 +3047,13 @@ static int nested_vmx_check_guest_state(struct kvm_vcpu *vcpu,
 					   vmcs12->guest_ia32_perf_global_ctrl)))
 		return -EINVAL;
 
+	if (CC((vmcs12->guest_cr0 & (X86_CR0_PG | X86_CR0_PE)) == X86_CR0_PG))
+		return -EINVAL;
+
+	if (CC(ia32e && !(vmcs12->guest_cr4 & X86_CR4_PAE)) ||
+	    CC(ia32e && !(vmcs12->guest_cr0 & X86_CR0_PG)))
+		return -EINVAL;
+
 	/*
 	 * If the load IA32_EFER VM-entry control is 1, the following checks
 	 * are performed on the field for the IA32_EFER MSR:
@@ -3058,7 +3065,6 @@ static int nested_vmx_check_guest_state(struct kvm_vcpu *vcpu,
 	 */
 	if (to_vmx(vcpu)->nested.nested_run_pending &&
 	    (vmcs12->vm_entry_controls & VM_ENTRY_LOAD_IA32_EFER)) {
-		ia32e = (vmcs12->vm_entry_controls & VM_ENTRY_IA32E_MODE) != 0;
 		if (CC(!kvm_valid_efer(vcpu, vmcs12->guest_ia32_efer)) ||
 		    CC(ia32e != !!(vmcs12->guest_ia32_efer & EFER_LMA)) ||
 		    CC(((vmcs12->guest_cr0 & X86_CR0_PG) &&
@@ -3867,7 +3873,12 @@ static void nested_vmx_inject_exception_vmexit(struct kvm_vcpu *vcpu)
 		exit_qual = 0;
 	}
 
-	if (ex->has_error_code) {
+	/*
+	 * Unlike AMD's Paged Real Mode, which reports an error code on #PF
+	 * VM-Exits even if the CPU is in Real Mode, Intel VMX never sets the
+	 * "has error code" flags on VM-Exit if the CPU is in Real Mode.
+	 */
+	if (ex->has_error_code && is_protmode(vcpu)) {
 		/*
 		 * Intel CPUs do not generate error codes with bits 31:16 set,
 		 * and more importantly VMX disallows setting bits 31:16 in the
@@ -4477,7 +4488,7 @@ static void load_vmcs12_host_state(struct kvm_vcpu *vcpu,
 	 * CR0_GUEST_HOST_MASK is already set in the original vmcs01
 	 * (KVM doesn't change it);
 	 */
-	vcpu->arch.cr0_guest_owned_bits = KVM_POSSIBLE_CR0_GUEST_BITS;
+	vcpu->arch.cr0_guest_owned_bits = vmx_l1_guest_owned_cr0_bits();
 	vmx_set_cr0(vcpu, vmcs12->host_cr0);
 
 	/* Same as above - no reason to call set_cr4_guest_host_mask().  */
@@ -4512,7 +4523,7 @@ static void load_vmcs12_host_state(struct kvm_vcpu *vcpu,
 		vcpu->arch.pat = vmcs12->host_ia32_pat;
 	}
 	if ((vmcs12->vm_exit_controls & VM_EXIT_LOAD_IA32_PERF_GLOBAL_CTRL) &&
-	    intel_pmu_has_perf_global_ctrl(vcpu_to_pmu(vcpu)))
+	    kvm_pmu_has_perf_global_ctrl(vcpu_to_pmu(vcpu)))
 		WARN_ON_ONCE(kvm_set_msr(vcpu, MSR_CORE_PERF_GLOBAL_CTRL,
 					 vmcs12->host_ia32_perf_global_ctrl));
 
@@ -4628,7 +4639,7 @@ static void nested_vmx_restore_host_state(struct kvm_vcpu *vcpu)
 	 */
 	vmx_set_efer(vcpu, nested_vmx_get_vmcs01_guest_efer(vmx));
 
-	vcpu->arch.cr0_guest_owned_bits = KVM_POSSIBLE_CR0_GUEST_BITS;
+	vcpu->arch.cr0_guest_owned_bits = vmx_l1_guest_owned_cr0_bits();
 	vmx_set_cr0(vcpu, vmcs_readl(CR0_READ_SHADOW));
 
 	vcpu->arch.cr4_guest_owned_bits = ~vmcs_readl(CR4_GUEST_HOST_MASK);
@@ -5150,7 +5161,7 @@ static int handle_vmxon(struct kvm_vcpu *vcpu)
 	 * does force CR0.PE=1, but only to also force VM86 in order to emulate
 	 * Real Mode, and so there's no need to check CR0.PE manually.
 	 */
-	if (!kvm_read_cr4_bits(vcpu, X86_CR4_VMXE)) {
+	if (!kvm_is_cr4_bit_set(vcpu, X86_CR4_VMXE)) {
 		kvm_queue_exception(vcpu, UD_VECTOR);
 		return 1;
 	}
@@ -5296,10 +5307,19 @@ static int handle_vmclear(struct kvm_vcpu *vcpu)
 		if (vmptr == vmx->nested.current_vmptr)
 			nested_release_vmcs12(vcpu);
 
-		kvm_vcpu_write_guest(vcpu,
-				     vmptr + offsetof(struct vmcs12,
-						      launch_state),
-				     &zero, sizeof(zero));
+		/*
+		 * Silently ignore memory errors on VMCLEAR, Intel's pseudocode
+		 * for VMCLEAR includes a "ensure that data for VMCS referenced
+		 * by the operand is in memory" clause that guards writes to
+		 * memory, i.e. doing nothing for I/O is architecturally valid.
+		 *
+		 * FIXME: Suppress failures if and only if no memslot is found,
+		 * i.e. exit to userspace if __copy_to_user() fails.
+		 */
+		(void)kvm_vcpu_write_guest(vcpu,
+					   vmptr + offsetof(struct vmcs12,
+							    launch_state),
+					   &zero, sizeof(zero));
 	} else if (vmx->nested.hv_evmcs && vmptr == vmx->nested.hv_evmcs_vmptr) {
 		nested_release_evmcs(vcpu);
 	}
@@ -5854,11 +5874,10 @@ static int handle_vmfunc(struct kvm_vcpu *vcpu)
 	u32 function = kvm_rax_read(vcpu);
 
 	/*
-	 * VMFUNC is only supported for nested guests, but we always enable the
-	 * secondary control for simplicity; for non-nested mode, fake that we
-	 * didn't by injecting #UD.
+	 * VMFUNC should never execute cleanly while L1 is active; KVM supports
+	 * VMFUNC for nested VMs, but not for L1.
 	 */
-	if (!is_guest_mode(vcpu)) {
+	if (WARN_ON_ONCE(!is_guest_mode(vcpu))) {
 		kvm_queue_exception(vcpu, UD_VECTOR);
 		return 1;
 	}
@@ -6312,7 +6331,7 @@ static bool nested_vmx_l1_wants_exit(struct kvm_vcpu *vcpu,
 		 * If if it were, XSS would have to be checked against
 		 * the XSS exit bitmap in vmcs12.
 		 */
-		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_XSAVES);
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_ENABLE_XSAVES);
 	case EXIT_REASON_UMWAIT:
 	case EXIT_REASON_TPAUSE:
 		return nested_cpu_has2(vmcs12,
@@ -6407,7 +6426,7 @@ static int vmx_get_nested_state(struct kvm_vcpu *vcpu,
 	vmx = to_vmx(vcpu);
 	vmcs12 = get_vmcs12(vcpu);
 
-	if (nested_vmx_allowed(vcpu) &&
+	if (guest_can_use(vcpu, X86_FEATURE_VMX) &&
 	    (vmx->nested.vmxon || vmx->nested.smm.vmxon)) {
 		kvm_state.hdr.vmx.vmxon_pa = vmx->nested.vmxon_ptr;
 		kvm_state.hdr.vmx.vmcs12_pa = vmx->nested.current_vmptr;
@@ -6548,7 +6567,7 @@ static int vmx_set_nested_state(struct kvm_vcpu *vcpu,
 		if (kvm_state->flags & ~KVM_STATE_NESTED_EVMCS)
 			return -EINVAL;
 	} else {
-		if (!nested_vmx_allowed(vcpu))
+		if (!guest_can_use(vcpu, X86_FEATURE_VMX))
 			return -EINVAL;
 
 		if (!page_address_valid(vcpu, kvm_state->hdr.vmx.vmxon_pa))
@@ -6582,7 +6601,8 @@ static int vmx_set_nested_state(struct kvm_vcpu *vcpu,
 		return -EINVAL;
 
 	if ((kvm_state->flags & KVM_STATE_NESTED_EVMCS) &&
-		(!nested_vmx_allowed(vcpu) || !vmx->nested.enlightened_vmcs_enabled))
+	    (!guest_can_use(vcpu, X86_FEATURE_VMX) ||
+	     !vmx->nested.enlightened_vmcs_enabled))
 			return -EINVAL;
 
 	vmx_leave_nested(vcpu);
@@ -6741,36 +6761,9 @@ static u64 nested_vmx_calc_vmcs_enum_msr(void)
 	return (u64)max_idx << VMCS_FIELD_INDEX_SHIFT;
 }
 
-/*
- * nested_vmx_setup_ctls_msrs() sets up variables containing the values to be
- * returned for the various VMX controls MSRs when nested VMX is enabled.
- * The same values should also be used to verify that vmcs12 control fields are
- * valid during nested entry from L1 to L2.
- * Each of these control msrs has a low and high 32-bit half: A low bit is on
- * if the corresponding bit in the (32-bit) control field *must* be on, and a
- * bit in the high half is on if the corresponding bit in the control field
- * may be on. See also vmx_control_verify().
- */
-void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
+static void nested_vmx_setup_pinbased_ctls(struct vmcs_config *vmcs_conf,
+					   struct nested_vmx_msrs *msrs)
 {
-	struct nested_vmx_msrs *msrs = &vmcs_conf->nested;
-
-	/*
-	 * Note that as a general rule, the high half of the MSRs (bits in
-	 * the control fields which may be 1) should be initialized by the
-	 * intersection of the underlying hardware's MSR (i.e., features which
-	 * can be supported) and the list of features we want to expose -
-	 * because they are known to be properly supported in our code.
-	 * Also, usually, the low half of the MSRs (bits which must be 1) can
-	 * be set to 0, meaning that L1 may turn off any of these bits. The
-	 * reason is that if one of these bits is necessary, it will appear
-	 * in vmcs01 and prepare_vmcs02, when it bitwise-or's the control
-	 * fields of vmcs01 and vmcs02, will turn these bits off - and
-	 * nested_vmx_l1_wants_exit() will not pass related exits to L1.
-	 * These rules have exceptions below.
-	 */
-
-	/* pin-based controls */
 	msrs->pinbased_ctls_low =
 		PIN_BASED_ALWAYSON_WITHOUT_TRUE_MSR;
 
@@ -6783,8 +6776,11 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 	msrs->pinbased_ctls_high |=
 		PIN_BASED_ALWAYSON_WITHOUT_TRUE_MSR |
 		PIN_BASED_VMX_PREEMPTION_TIMER;
+}
 
-	/* exit controls */
+static void nested_vmx_setup_exit_ctls(struct vmcs_config *vmcs_conf,
+				       struct nested_vmx_msrs *msrs)
+{
 	msrs->exit_ctls_low =
 		VM_EXIT_ALWAYSON_WITHOUT_TRUE_MSR;
 
@@ -6803,8 +6799,11 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 
 	/* We support free control of debug control saving. */
 	msrs->exit_ctls_low &= ~VM_EXIT_SAVE_DEBUG_CONTROLS;
+}
 
-	/* entry controls */
+static void nested_vmx_setup_entry_ctls(struct vmcs_config *vmcs_conf,
+					struct nested_vmx_msrs *msrs)
+{
 	msrs->entry_ctls_low =
 		VM_ENTRY_ALWAYSON_WITHOUT_TRUE_MSR;
 
@@ -6820,8 +6819,11 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 
 	/* We support free control of debug control loading. */
 	msrs->entry_ctls_low &= ~VM_ENTRY_LOAD_DEBUG_CONTROLS;
+}
 
-	/* cpu-based controls */
+static void nested_vmx_setup_cpubased_ctls(struct vmcs_config *vmcs_conf,
+					   struct nested_vmx_msrs *msrs)
+{
 	msrs->procbased_ctls_low =
 		CPU_BASED_ALWAYSON_WITHOUT_TRUE_MSR;
 
@@ -6853,12 +6855,12 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 	/* We support free control of CR3 access interception. */
 	msrs->procbased_ctls_low &=
 		~(CPU_BASED_CR3_LOAD_EXITING | CPU_BASED_CR3_STORE_EXITING);
+}
 
-	/*
-	 * secondary cpu-based controls.  Do not include those that
-	 * depend on CPUID bits, they are added later by
-	 * vmx_vcpu_after_set_cpuid.
-	 */
+static void nested_vmx_setup_secondary_ctls(u32 ept_caps,
+					    struct vmcs_config *vmcs_conf,
+					    struct nested_vmx_msrs *msrs)
+{
 	msrs->secondary_ctls_low = 0;
 
 	msrs->secondary_ctls_high = vmcs_conf->cpu_based_2nd_exec_ctrl;
@@ -6871,9 +6873,11 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 		SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY |
 		SECONDARY_EXEC_RDRAND_EXITING |
 		SECONDARY_EXEC_ENABLE_INVPCID |
+		SECONDARY_EXEC_ENABLE_VMFUNC |
 		SECONDARY_EXEC_RDSEED_EXITING |
-		SECONDARY_EXEC_XSAVES |
-		SECONDARY_EXEC_TSC_SCALING;
+		SECONDARY_EXEC_ENABLE_XSAVES |
+		SECONDARY_EXEC_TSC_SCALING |
+		SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE;
 
 	/*
 	 * We can emulate "VMCS shadowing," even if the hardware
@@ -6902,18 +6906,13 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 				SECONDARY_EXEC_ENABLE_PML;
 			msrs->ept_caps |= VMX_EPT_AD_BIT;
 		}
-	}
 
-	if (cpu_has_vmx_vmfunc()) {
-		msrs->secondary_ctls_high |=
-			SECONDARY_EXEC_ENABLE_VMFUNC;
 		/*
-		 * Advertise EPTP switching unconditionally
-		 * since we emulate it
+		 * Advertise EPTP switching irrespective of hardware support,
+		 * KVM emulates it in software so long as VMFUNC is supported.
 		 */
-		if (enable_ept)
-			msrs->vmfunc_controls =
-				VMX_VMFUNC_EPTP_SWITCHING;
+		if (cpu_has_vmx_vmfunc())
+			msrs->vmfunc_controls = VMX_VMFUNC_EPTP_SWITCHING;
 	}
 
 	/*
@@ -6939,8 +6938,11 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 
 	if (enable_sgx)
 		msrs->secondary_ctls_high |= SECONDARY_EXEC_ENCLS_EXITING;
+}
 
-	/* miscellaneous data */
+static void nested_vmx_setup_misc_data(struct vmcs_config *vmcs_conf,
+				       struct nested_vmx_msrs *msrs)
+{
 	msrs->misc_low = (u32)vmcs_conf->misc & VMX_MISC_SAVE_EFER_LMA;
 	msrs->misc_low |=
 		MSR_IA32_VMX_MISC_VMWRITE_SHADOW_RO_FIELDS |
@@ -6948,7 +6950,10 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 		VMX_MISC_ACTIVITY_HLT |
 		VMX_MISC_ACTIVITY_WAIT_SIPI;
 	msrs->misc_high = 0;
+}
 
+static void nested_vmx_setup_basic(struct nested_vmx_msrs *msrs)
+{
 	/*
 	 * This MSR reports some information about VMX support. We
 	 * should return information about the VMX we emulate for the
@@ -6963,7 +6968,10 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 
 	if (cpu_has_vmx_basic_inout())
 		msrs->basic |= VMX_BASIC_INOUT;
+}
 
+static void nested_vmx_setup_cr_fixed(struct nested_vmx_msrs *msrs)
+{
 	/*
 	 * These MSRs specify bits which the guest must keep fixed on
 	 * while L1 is in VMXON mode (in L1's root mode, or running an L2).
@@ -6980,6 +6988,51 @@ void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
 
 	if (vmx_umip_emulated())
 		msrs->cr4_fixed1 |= X86_CR4_UMIP;
+}
+
+/*
+ * nested_vmx_setup_ctls_msrs() sets up variables containing the values to be
+ * returned for the various VMX controls MSRs when nested VMX is enabled.
+ * The same values should also be used to verify that vmcs12 control fields are
+ * valid during nested entry from L1 to L2.
+ * Each of these control msrs has a low and high 32-bit half: A low bit is on
+ * if the corresponding bit in the (32-bit) control field *must* be on, and a
+ * bit in the high half is on if the corresponding bit in the control field
+ * may be on. See also vmx_control_verify().
+ */
+void nested_vmx_setup_ctls_msrs(struct vmcs_config *vmcs_conf, u32 ept_caps)
+{
+	struct nested_vmx_msrs *msrs = &vmcs_conf->nested;
+
+	/*
+	 * Note that as a general rule, the high half of the MSRs (bits in
+	 * the control fields which may be 1) should be initialized by the
+	 * intersection of the underlying hardware's MSR (i.e., features which
+	 * can be supported) and the list of features we want to expose -
+	 * because they are known to be properly supported in our code.
+	 * Also, usually, the low half of the MSRs (bits which must be 1) can
+	 * be set to 0, meaning that L1 may turn off any of these bits. The
+	 * reason is that if one of these bits is necessary, it will appear
+	 * in vmcs01 and prepare_vmcs02, when it bitwise-or's the control
+	 * fields of vmcs01 and vmcs02, will turn these bits off - and
+	 * nested_vmx_l1_wants_exit() will not pass related exits to L1.
+	 * These rules have exceptions below.
+	 */
+	nested_vmx_setup_pinbased_ctls(vmcs_conf, msrs);
+
+	nested_vmx_setup_exit_ctls(vmcs_conf, msrs);
+
+	nested_vmx_setup_entry_ctls(vmcs_conf, msrs);
+
+	nested_vmx_setup_cpubased_ctls(vmcs_conf, msrs);
+
+	nested_vmx_setup_secondary_ctls(ept_caps, vmcs_conf, msrs);
+
+	nested_vmx_setup_misc_data(vmcs_conf, msrs);
+
+	nested_vmx_setup_basic(msrs);
+
+	nested_vmx_setup_cr_fixed(msrs);
 
 	msrs->vmcs_enum = nested_vmx_calc_vmcs_enum_msr();
 }

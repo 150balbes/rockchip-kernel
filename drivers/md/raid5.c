@@ -70,6 +70,8 @@ MODULE_PARM_DESC(devices_handle_discard_safely,
 		 "Set to Y if all devices in each array reliably return zeroes on reads from discarded regions");
 static struct workqueue_struct *raid5_wq;
 
+static void raid5_quiesce(struct mddev *mddev, int quiesce);
+
 static inline struct hlist_head *stripe_hash(struct r5conf *conf, sector_t sect)
 {
 	int hash = (sect >> RAID5_STRIPE_SHIFT(conf)) & HASH_MASK;
@@ -854,6 +856,13 @@ struct stripe_head *raid5_get_active_stripe(struct r5conf *conf,
 
 		set_bit(R5_INACTIVE_BLOCKED, &conf->cache_state);
 		r5l_wake_reclaim(conf->log, 0);
+
+		/* release batch_last before wait to avoid risk of deadlock */
+		if (ctx && ctx->batch_last) {
+			raid5_release_stripe(ctx->batch_last);
+			ctx->batch_last = NULL;
+		}
+
 		wait_event_lock_irq(conf->wait_for_stripe,
 				    is_inactive_blocked(conf, hash),
 				    *(conf->hash_locks + hash));
@@ -2433,7 +2442,7 @@ static int grow_stripes(struct r5conf *conf, int num)
 
 	conf->active_name = 0;
 	sc = kmem_cache_create(conf->cache_name[conf->active_name],
-			       sizeof(struct stripe_head)+(devs-1)*sizeof(struct r5dev),
+			       struct_size_t(struct stripe_head, dev, devs),
 			       0, 0, NULL);
 	if (!sc)
 		return 1;
@@ -2492,15 +2501,12 @@ static int resize_chunks(struct r5conf *conf, int new_disks, int new_sectors)
 	unsigned long cpu;
 	int err = 0;
 
-	/*
-	 * Never shrink. And mddev_suspend() could deadlock if this is called
-	 * from raid5d. In that case, scribble_disks and scribble_sectors
-	 * should equal to new_disks and new_sectors
-	 */
+	/* Never shrink. */
 	if (conf->scribble_disks >= new_disks &&
 	    conf->scribble_sectors >= new_sectors)
 		return 0;
-	mddev_suspend(conf->mddev);
+
+	raid5_quiesce(conf->mddev, true);
 	cpus_read_lock();
 
 	for_each_present_cpu(cpu) {
@@ -2514,7 +2520,8 @@ static int resize_chunks(struct r5conf *conf, int new_disks, int new_sectors)
 	}
 
 	cpus_read_unlock();
-	mddev_resume(conf->mddev);
+	raid5_quiesce(conf->mddev, false);
+
 	if (!err) {
 		conf->scribble_disks = new_disks;
 		conf->scribble_sectors = new_sectors;
@@ -2559,7 +2566,7 @@ static int resize_stripes(struct r5conf *conf, int newsize)
 
 	/* Step 1 */
 	sc = kmem_cache_create(conf->cache_name[1-conf->active_name],
-			       sizeof(struct stripe_head)+(newsize-1)*sizeof(struct r5dev),
+			       struct_size_t(struct stripe_head, dev, newsize),
 			       0, 0, NULL);
 	if (!sc)
 		return -ENOMEM;
@@ -5468,26 +5475,17 @@ static struct bio *remove_bio_from_retry(struct r5conf *conf,
  */
 static void raid5_align_endio(struct bio *bi)
 {
-	struct md_io_acct *md_io_acct = bi->bi_private;
-	struct bio *raid_bi = md_io_acct->orig_bio;
-	struct mddev *mddev;
-	struct r5conf *conf;
-	struct md_rdev *rdev;
+	struct bio *raid_bi = bi->bi_private;
+	struct md_rdev *rdev = (void *)raid_bi->bi_next;
+	struct mddev *mddev = rdev->mddev;
+	struct r5conf *conf = mddev->private;
 	blk_status_t error = bi->bi_status;
-	unsigned long start_time = md_io_acct->start_time;
 
 	bio_put(bi);
-
-	rdev = (void*)raid_bi->bi_next;
 	raid_bi->bi_next = NULL;
-	mddev = rdev->mddev;
-	conf = mddev->private;
-
 	rdev_dec_pending(rdev, conf->mddev);
 
 	if (!error) {
-		if (blk_queue_io_stat(raid_bi->bi_bdev->bd_disk->queue))
-			bio_end_io_acct(raid_bi, start_time);
 		bio_endio(raid_bi);
 		if (atomic_dec_and_test(&conf->active_aligned_reads))
 			wake_up(&conf->wait_for_quiescent);
@@ -5506,7 +5504,6 @@ static int raid5_read_one_chunk(struct mddev *mddev, struct bio *raid_bio)
 	struct md_rdev *rdev;
 	sector_t sector, end_sector, first_bad;
 	int bad_sectors, dd_idx;
-	struct md_io_acct *md_io_acct;
 	bool did_inc;
 
 	if (!in_chunk_boundary(mddev, raid_bio)) {
@@ -5516,7 +5513,7 @@ static int raid5_read_one_chunk(struct mddev *mddev, struct bio *raid_bio)
 
 	sector = raid5_compute_sector(conf, raid_bio->bi_iter.bi_sector, 0,
 				      &dd_idx, NULL);
-	end_sector = bio_end_sector(raid_bio);
+	end_sector = sector + bio_sectors(raid_bio);
 
 	rcu_read_lock();
 	if (r5c_big_stripe_cached(conf, sector))
@@ -5543,16 +5540,13 @@ static int raid5_read_one_chunk(struct mddev *mddev, struct bio *raid_bio)
 		return 0;
 	}
 
-	align_bio = bio_alloc_clone(rdev->bdev, raid_bio, GFP_NOIO,
-				    &mddev->io_acct_set);
-	md_io_acct = container_of(align_bio, struct md_io_acct, bio_clone);
+	md_account_bio(mddev, &raid_bio);
 	raid_bio->bi_next = (void *)rdev;
-	if (blk_queue_io_stat(raid_bio->bi_bdev->bd_disk->queue))
-		md_io_acct->start_time = bio_start_io_acct(raid_bio);
-	md_io_acct->orig_bio = raid_bio;
 
+	align_bio = bio_alloc_clone(rdev->bdev, raid_bio, GFP_NOIO,
+				    &mddev->bio_set);
 	align_bio->bi_end_io = raid5_align_endio;
-	align_bio->bi_private = md_io_acct;
+	align_bio->bi_private = raid_bio;
 	align_bio->bi_iter.bi_sector = sector;
 
 	/* No reshape active, so we can trust rdev->data_offset */
@@ -6079,6 +6073,38 @@ out_release:
 	return ret;
 }
 
+/*
+ * If the bio covers multiple data disks, find sector within the bio that has
+ * the lowest chunk offset in the first chunk.
+ */
+static sector_t raid5_bio_lowest_chunk_sector(struct r5conf *conf,
+					      struct bio *bi)
+{
+	int sectors_per_chunk = conf->chunk_sectors;
+	int raid_disks = conf->raid_disks;
+	int dd_idx;
+	struct stripe_head sh;
+	unsigned int chunk_offset;
+	sector_t r_sector = bi->bi_iter.bi_sector & ~((sector_t)RAID5_STRIPE_SECTORS(conf)-1);
+	sector_t sector;
+
+	/* We pass in fake stripe_head to get back parity disk numbers */
+	sector = raid5_compute_sector(conf, r_sector, 0, &dd_idx, &sh);
+	chunk_offset = sector_div(sector, sectors_per_chunk);
+	if (sectors_per_chunk - chunk_offset >= bio_sectors(bi))
+		return r_sector;
+	/*
+	 * Bio crosses to the next data disk. Check whether it's in the same
+	 * chunk.
+	 */
+	dd_idx++;
+	while (dd_idx == sh.pd_idx || dd_idx == sh.qd_idx)
+		dd_idx++;
+	if (dd_idx >= raid_disks)
+		return r_sector;
+	return r_sector + sectors_per_chunk - chunk_offset;
+}
+
 static bool raid5_make_request(struct mddev *mddev, struct bio * bi)
 {
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
@@ -6150,6 +6176,17 @@ static bool raid5_make_request(struct mddev *mddev, struct bio * bi)
 	}
 	md_account_bio(mddev, &bi);
 
+	/*
+	 * Lets start with the stripe with the lowest chunk offset in the first
+	 * chunk. That has the best chances of creating IOs adjacent to
+	 * previous IOs in case of sequential IO and thus creates the most
+	 * sequential IO pattern. We don't bother with the optimization when
+	 * reshaping as the performance benefit is not worth the complexity.
+	 */
+	if (likely(conf->reshape_progress == MaxSector))
+		logical_sector = raid5_bio_lowest_chunk_sector(conf, bi);
+	s = (logical_sector - ctx.first_sector) >> RAID5_STRIPE_SHIFT(conf);
+
 	add_wait_queue(&conf->wait_for_overlap, &wait);
 	while (1) {
 		res = make_stripe_request(mddev, conf, &ctx, logical_sector,
@@ -6178,7 +6215,7 @@ static bool raid5_make_request(struct mddev *mddev, struct bio * bi)
 			continue;
 		}
 
-		s = find_first_bit(ctx.sectors_to_do, stripe_cnt);
+		s = find_next_bit_wrap(ctx.sectors_to_do, stripe_cnt, s);
 		if (s == stripe_cnt)
 			break;
 
@@ -6972,7 +7009,7 @@ raid5_store_stripe_size(struct mddev  *mddev, const char *page, size_t len)
 			new != roundup_pow_of_two(new))
 		return -EINVAL;
 
-	err = mddev_lock(mddev);
+	err = mddev_suspend_and_lock(mddev);
 	if (err)
 		return err;
 
@@ -6996,7 +7033,6 @@ raid5_store_stripe_size(struct mddev  *mddev, const char *page, size_t len)
 		goto out_unlock;
 	}
 
-	mddev_suspend(mddev);
 	mutex_lock(&conf->cache_size_mutex);
 	size = conf->max_nr_stripes;
 
@@ -7011,10 +7047,9 @@ raid5_store_stripe_size(struct mddev  *mddev, const char *page, size_t len)
 		err = -ENOMEM;
 	}
 	mutex_unlock(&conf->cache_size_mutex);
-	mddev_resume(mddev);
 
 out_unlock:
-	mddev_unlock(mddev);
+	mddev_unlock_and_resume(mddev);
 	return err ?: len;
 }
 
@@ -7100,7 +7135,7 @@ raid5_store_skip_copy(struct mddev *mddev, const char *page, size_t len)
 		return -EINVAL;
 	new = !!new;
 
-	err = mddev_lock(mddev);
+	err = mddev_suspend_and_lock(mddev);
 	if (err)
 		return err;
 	conf = mddev->private;
@@ -7109,15 +7144,13 @@ raid5_store_skip_copy(struct mddev *mddev, const char *page, size_t len)
 	else if (new != conf->skip_copy) {
 		struct request_queue *q = mddev->queue;
 
-		mddev_suspend(mddev);
 		conf->skip_copy = new;
 		if (new)
 			blk_queue_flag_set(QUEUE_FLAG_STABLE_WRITES, q);
 		else
 			blk_queue_flag_clear(QUEUE_FLAG_STABLE_WRITES, q);
-		mddev_resume(mddev);
 	}
-	mddev_unlock(mddev);
+	mddev_unlock_and_resume(mddev);
 	return err ?: len;
 }
 
@@ -7172,15 +7205,13 @@ raid5_store_group_thread_cnt(struct mddev *mddev, const char *page, size_t len)
 	if (new > 8192)
 		return -EINVAL;
 
-	err = mddev_lock(mddev);
+	err = mddev_suspend_and_lock(mddev);
 	if (err)
 		return err;
 	conf = mddev->private;
 	if (!conf)
 		err = -ENODEV;
 	else if (new != conf->worker_cnt_per_group) {
-		mddev_suspend(mddev);
-
 		old_groups = conf->worker_groups;
 		if (old_groups)
 			flush_workqueue(raid5_wq);
@@ -7197,9 +7228,8 @@ raid5_store_group_thread_cnt(struct mddev *mddev, const char *page, size_t len)
 				kfree(old_groups[0].workers);
 			kfree(old_groups);
 		}
-		mddev_resume(mddev);
 	}
-	mddev_unlock(mddev);
+	mddev_unlock_and_resume(mddev);
 
 	return err ?: len;
 }
@@ -7348,7 +7378,7 @@ static void free_conf(struct r5conf *conf)
 
 	log_exit(conf);
 
-	unregister_shrinker(&conf->shrinker);
+	shrinker_free(conf->shrinker);
 	free_thread_groups(conf);
 	shrink_stripes(conf);
 	raid5_free_percpu(conf);
@@ -7396,7 +7426,7 @@ static int raid5_alloc_percpu(struct r5conf *conf)
 static unsigned long raid5_cache_scan(struct shrinker *shrink,
 				      struct shrink_control *sc)
 {
-	struct r5conf *conf = container_of(shrink, struct r5conf, shrinker);
+	struct r5conf *conf = shrink->private_data;
 	unsigned long ret = SHRINK_STOP;
 
 	if (mutex_trylock(&conf->cache_size_mutex)) {
@@ -7417,7 +7447,7 @@ static unsigned long raid5_cache_scan(struct shrinker *shrink,
 static unsigned long raid5_cache_count(struct shrinker *shrink,
 				       struct shrink_control *sc)
 {
-	struct r5conf *conf = container_of(shrink, struct r5conf, shrinker);
+	struct r5conf *conf = shrink->private_data;
 
 	if (conf->max_nr_stripes < conf->min_nr_stripes)
 		/* unlikely, but not impossible */
@@ -7652,20 +7682,25 @@ static struct r5conf *setup_conf(struct mddev *mddev)
 	 * it reduces the queue depth and so can hurt throughput.
 	 * So set it rather large, scaled by number of devices.
 	 */
-	conf->shrinker.seeks = DEFAULT_SEEKS * conf->raid_disks * 4;
-	conf->shrinker.scan_objects = raid5_cache_scan;
-	conf->shrinker.count_objects = raid5_cache_count;
-	conf->shrinker.batch = 128;
-	conf->shrinker.flags = 0;
-	ret = register_shrinker(&conf->shrinker, "md-raid5:%s", mdname(mddev));
-	if (ret) {
-		pr_warn("md/raid:%s: couldn't register shrinker.\n",
+	conf->shrinker = shrinker_alloc(0, "md-raid5:%s", mdname(mddev));
+	if (!conf->shrinker) {
+		ret = -ENOMEM;
+		pr_warn("md/raid:%s: couldn't allocate shrinker.\n",
 			mdname(mddev));
 		goto abort;
 	}
 
+	conf->shrinker->seeks = DEFAULT_SEEKS * conf->raid_disks * 4;
+	conf->shrinker->scan_objects = raid5_cache_scan;
+	conf->shrinker->count_objects = raid5_cache_count;
+	conf->shrinker->batch = 128;
+	conf->shrinker->private_data = conf;
+
+	shrinker_register(conf->shrinker);
+
 	sprintf(pers_name, "raid%d", mddev->new_level);
-	conf->thread = md_register_thread(raid5d, mddev, pers_name);
+	rcu_assign_pointer(conf->thread,
+			   md_register_thread(raid5d, mddev, pers_name));
 	if (!conf->thread) {
 		pr_warn("md/raid:%s: couldn't allocate thread.\n",
 			mdname(mddev));
@@ -7716,24 +7751,13 @@ static void raid5_set_io_opt(struct r5conf *conf)
 static int raid5_run(struct mddev *mddev)
 {
 	struct r5conf *conf;
-	int working_disks = 0;
 	int dirty_parity_disks = 0;
 	struct md_rdev *rdev;
 	struct md_rdev *journal_dev = NULL;
 	sector_t reshape_offset = 0;
-	int i, ret = 0;
+	int i;
 	long long min_offset_diff = 0;
 	int first = 1;
-
-	if (acct_bioset_init(mddev)) {
-		pr_err("md/raid456:%s: alloc acct bioset failed.\n", mdname(mddev));
-		return -ENOMEM;
-	}
-
-	if (mddev_init_writes_pending(mddev) < 0) {
-		ret = -ENOMEM;
-		goto exit_acct_set;
-	}
 
 	if (mddev->recovery_cp != MaxSector)
 		pr_notice("md/raid:%s: not clean -- starting background reconstruction\n",
@@ -7764,8 +7788,7 @@ static int raid5_run(struct mddev *mddev)
 	    (mddev->bitmap_info.offset || mddev->bitmap_info.file)) {
 		pr_notice("md/raid:%s: array cannot have both journal and bitmap\n",
 			  mdname(mddev));
-		ret = -EINVAL;
-		goto exit_acct_set;
+		return -EINVAL;
 	}
 
 	if (mddev->reshape_position != MaxSector) {
@@ -7790,15 +7813,13 @@ static int raid5_run(struct mddev *mddev)
 		if (journal_dev) {
 			pr_warn("md/raid:%s: don't support reshape with journal - aborting.\n",
 				mdname(mddev));
-			ret = -EINVAL;
-			goto exit_acct_set;
+			return -EINVAL;
 		}
 
 		if (mddev->new_level != mddev->level) {
 			pr_warn("md/raid:%s: unsupported reshape required - aborting.\n",
 				mdname(mddev));
-			ret = -EINVAL;
-			goto exit_acct_set;
+			return -EINVAL;
 		}
 		old_disks = mddev->raid_disks - mddev->delta_disks;
 		/* reshape_position must be on a new-stripe boundary, and one
@@ -7814,8 +7835,7 @@ static int raid5_run(struct mddev *mddev)
 		if (sector_div(here_new, chunk_sectors * new_data_disks)) {
 			pr_warn("md/raid:%s: reshape_position not on a stripe boundary\n",
 				mdname(mddev));
-			ret = -EINVAL;
-			goto exit_acct_set;
+			return -EINVAL;
 		}
 		reshape_offset = here_new * chunk_sectors;
 		/* here_new is the stripe we will write to */
@@ -7837,8 +7857,7 @@ static int raid5_run(struct mddev *mddev)
 			else if (mddev->ro == 0) {
 				pr_warn("md/raid:%s: in-place reshape must be started in read-only mode - aborting\n",
 					mdname(mddev));
-				ret = -EINVAL;
-				goto exit_acct_set;
+				return -EINVAL;
 			}
 		} else if (mddev->reshape_backwards
 		    ? (here_new * chunk_sectors + min_offset_diff <=
@@ -7848,8 +7867,7 @@ static int raid5_run(struct mddev *mddev)
 			/* Reading from the same stripe as writing to - bad */
 			pr_warn("md/raid:%s: reshape_position too early for auto-recovery - aborting.\n",
 				mdname(mddev));
-			ret = -EINVAL;
-			goto exit_acct_set;
+			return -EINVAL;
 		}
 		pr_debug("md/raid:%s: reshape will continue\n", mdname(mddev));
 		/* OK, we should be able to continue; */
@@ -7873,10 +7891,8 @@ static int raid5_run(struct mddev *mddev)
 	else
 		conf = mddev->private;
 
-	if (IS_ERR(conf)) {
-		ret = PTR_ERR(conf);
-		goto exit_acct_set;
-	}
+	if (IS_ERR(conf))
+		return PTR_ERR(conf);
 
 	if (test_bit(MD_HAS_JOURNAL, &mddev->flags)) {
 		if (!journal_dev) {
@@ -7889,8 +7905,8 @@ static int raid5_run(struct mddev *mddev)
 	}
 
 	conf->min_offset_diff = min_offset_diff;
-	mddev->thread = conf->thread;
-	conf->thread = NULL;
+	rcu_assign_pointer(mddev->thread, conf->thread);
+	rcu_assign_pointer(conf->thread, NULL);
 	mddev->private = conf;
 
 	for (i = 0; i < conf->raid_disks && conf->previous_raid_disks;
@@ -7912,10 +7928,8 @@ static int raid5_run(struct mddev *mddev)
 			pr_warn("md: cannot handle concurrent replacement and reshape.\n");
 			goto abort;
 		}
-		if (test_bit(In_sync, &rdev->flags)) {
-			working_disks++;
+		if (test_bit(In_sync, &rdev->flags))
 			continue;
-		}
 		/* This disc is not fully in-sync.  However if it
 		 * just stored parity (beyond the recovery_offset),
 		 * when we don't need to be concerned about the
@@ -7989,8 +8003,8 @@ static int raid5_run(struct mddev *mddev)
 		clear_bit(MD_RECOVERY_CHECK, &mddev->recovery);
 		set_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
 		set_bit(MD_RECOVERY_RUNNING, &mddev->recovery);
-		mddev->sync_thread = md_register_thread(md_do_sync, mddev,
-							"reshape");
+		rcu_assign_pointer(mddev->sync_thread,
+			md_register_thread(md_do_sync, mddev, "reshape"));
 		if (!mddev->sync_thread)
 			goto abort;
 	}
@@ -8071,15 +8085,12 @@ static int raid5_run(struct mddev *mddev)
 
 	return 0;
 abort:
-	md_unregister_thread(&mddev->thread);
+	md_unregister_thread(mddev, &mddev->thread);
 	print_raid5_conf(conf);
 	free_conf(conf);
 	mddev->private = NULL;
 	pr_warn("md/raid:%s: failed to run raid set.\n", mdname(mddev));
-	ret = -EIO;
-exit_acct_set:
-	acct_bioset_exit(mddev);
-	return ret;
+	return -EIO;
 }
 
 static void raid5_free(struct mddev *mddev, void *priv)
@@ -8087,7 +8098,6 @@ static void raid5_free(struct mddev *mddev, void *priv)
 	struct r5conf *conf = priv;
 
 	free_conf(conf);
-	acct_bioset_exit(mddev);
 	mddev->to_remove = &raid5_attrs_group;
 }
 
@@ -8337,6 +8347,7 @@ static int raid5_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 		p = conf->disks + disk;
 		tmp = rdev_mdlock_deref(mddev, p->rdev);
 		if (test_bit(WantReplacement, &tmp->flags) &&
+		    mddev->reshape_position == MaxSector &&
 		    p->replacement == NULL) {
 			clear_bit(In_sync, &rdev->flags);
 			set_bit(Replacement, &rdev->flags);
@@ -8460,6 +8471,7 @@ static int raid5_start_reshape(struct mddev *mddev)
 	struct r5conf *conf = mddev->private;
 	struct md_rdev *rdev;
 	int spares = 0;
+	int i;
 	unsigned long flags;
 
 	if (test_bit(MD_RECOVERY_RUNNING, &mddev->recovery))
@@ -8470,6 +8482,13 @@ static int raid5_start_reshape(struct mddev *mddev)
 
 	if (has_failed(conf))
 		return -EINVAL;
+
+	/* raid5 can't handle concurrent reshape and recovery */
+	if (mddev->recovery_cp < MaxSector)
+		return -EBUSY;
+	for (i = 0; i < conf->raid_disks; i++)
+		if (rdev_mdlock_deref(mddev, conf->disks[i].replacement))
+			return -EBUSY;
 
 	rdev_for_each(rdev, mddev) {
 		if (!test_bit(In_sync, &rdev->flags)
@@ -8520,8 +8539,8 @@ static int raid5_start_reshape(struct mddev *mddev)
 	 * the reshape wasn't running - like Discard or Read - have
 	 * completed.
 	 */
-	mddev_suspend(mddev);
-	mddev_resume(mddev);
+	raid5_quiesce(mddev, true);
+	raid5_quiesce(mddev, false);
 
 	/* Add some new drives, as many as will fit.
 	 * We know there are enough to make the newly sized array work.
@@ -8567,8 +8586,8 @@ static int raid5_start_reshape(struct mddev *mddev)
 	clear_bit(MD_RECOVERY_DONE, &mddev->recovery);
 	set_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
 	set_bit(MD_RECOVERY_RUNNING, &mddev->recovery);
-	mddev->sync_thread = md_register_thread(md_do_sync, mddev,
-						"reshape");
+	rcu_assign_pointer(mddev->sync_thread,
+			   md_register_thread(md_do_sync, mddev, "reshape"));
 	if (!mddev->sync_thread) {
 		mddev->recovery = 0;
 		spin_lock_irq(&conf->device_lock);
@@ -8936,12 +8955,12 @@ static int raid5_change_consistency_policy(struct mddev *mddev, const char *buf)
 	struct r5conf *conf;
 	int err;
 
-	err = mddev_lock(mddev);
+	err = mddev_suspend_and_lock(mddev);
 	if (err)
 		return err;
 	conf = mddev->private;
 	if (!conf) {
-		mddev_unlock(mddev);
+		mddev_unlock_and_resume(mddev);
 		return -ENODEV;
 	}
 
@@ -8951,19 +8970,14 @@ static int raid5_change_consistency_policy(struct mddev *mddev, const char *buf)
 			err = log_init(conf, NULL, true);
 			if (!err) {
 				err = resize_stripes(conf, conf->pool_size);
-				if (err) {
-					mddev_suspend(mddev);
+				if (err)
 					log_exit(conf);
-					mddev_resume(mddev);
-				}
 			}
 		} else
 			err = -EINVAL;
 	} else if (strncmp(buf, "resync", 6) == 0) {
 		if (raid5_has_ppl(conf)) {
-			mddev_suspend(mddev);
 			log_exit(conf);
-			mddev_resume(mddev);
 			err = resize_stripes(conf, conf->pool_size);
 		} else if (test_bit(MD_HAS_JOURNAL, &conf->mddev->flags) &&
 			   r5l_log_disk_error(conf)) {
@@ -8976,11 +8990,9 @@ static int raid5_change_consistency_policy(struct mddev *mddev, const char *buf)
 					break;
 				}
 
-			if (!journal_dev_exists) {
-				mddev_suspend(mddev);
+			if (!journal_dev_exists)
 				clear_bit(MD_HAS_JOURNAL, &mddev->flags);
-				mddev_resume(mddev);
-			} else  /* need remove journal device first */
+			else  /* need remove journal device first */
 				err = -EBUSY;
 		} else
 			err = -EINVAL;
@@ -8991,7 +9003,7 @@ static int raid5_change_consistency_policy(struct mddev *mddev, const char *buf)
 	if (!err)
 		md_update_sb(mddev, 1);
 
-	mddev_unlock(mddev);
+	mddev_unlock_and_resume(mddev);
 
 	return err;
 }

@@ -413,11 +413,11 @@ static int dcp_chan_thread_aes(void *data)
 		set_current_state(TASK_RUNNING);
 
 		if (backlog)
-			backlog->complete(backlog, -EINPROGRESS);
+			crypto_request_complete(backlog, -EINPROGRESS);
 
 		if (arq) {
 			ret = mxs_dcp_aes_block_crypt(arq);
-			arq->complete(arq, ret);
+			crypto_request_complete(arq, ret);
 		}
 	}
 
@@ -709,11 +709,11 @@ static int dcp_chan_thread_sha(void *data)
 		set_current_state(TASK_RUNNING);
 
 		if (backlog)
-			backlog->complete(backlog, -EINPROGRESS);
+			crypto_request_complete(backlog, -EINPROGRESS);
 
 		if (arq) {
 			ret = dcp_sha_req_to_buf(arq);
-			arq->complete(arq, ret);
+			crypto_request_complete(arq, ret);
 		}
 	}
 
@@ -908,7 +908,6 @@ static struct ahash_alg dcp_sha1_alg = {
 			.cra_name		= "sha1",
 			.cra_driver_name	= "sha1-dcp",
 			.cra_priority		= 400,
-			.cra_alignmask		= 63,
 			.cra_flags		= CRYPTO_ALG_ASYNC,
 			.cra_blocksize		= SHA1_BLOCK_SIZE,
 			.cra_ctxsize		= sizeof(struct dcp_async_ctx),
@@ -935,7 +934,6 @@ static struct ahash_alg dcp_sha256_alg = {
 			.cra_name		= "sha256",
 			.cra_driver_name	= "sha256-dcp",
 			.cra_priority		= 400,
-			.cra_alignmask		= 63,
 			.cra_flags		= CRYPTO_ALG_ASYNC,
 			.cra_blocksize		= SHA256_BLOCK_SIZE,
 			.cra_ctxsize		= sizeof(struct dcp_async_ctx),
@@ -1022,21 +1020,15 @@ static int mxs_dcp_probe(struct platform_device *pdev)
 	sdcp->coh = PTR_ALIGN(sdcp->coh, DCP_ALIGNMENT);
 
 	/* DCP clock is optional, only used on some SOCs */
-	sdcp->dcp_clk = devm_clk_get(dev, "dcp");
-	if (IS_ERR(sdcp->dcp_clk)) {
-		if (sdcp->dcp_clk != ERR_PTR(-ENOENT))
-			return PTR_ERR(sdcp->dcp_clk);
-		sdcp->dcp_clk = NULL;
-	}
-	ret = clk_prepare_enable(sdcp->dcp_clk);
-	if (ret)
-		return ret;
+	sdcp->dcp_clk = devm_clk_get_optional_enabled(dev, "dcp");
+	if (IS_ERR(sdcp->dcp_clk))
+		return PTR_ERR(sdcp->dcp_clk);
 
 	/* Restart the DCP block. */
 	ret = stmp_reset_block(sdcp->base);
 	if (ret) {
 		dev_err(dev, "Failed reset\n");
-		goto err_disable_unprepare_clk;
+		return ret;
 	}
 
 	/* Initialize control register. */
@@ -1076,7 +1068,7 @@ static int mxs_dcp_probe(struct platform_device *pdev)
 	if (IS_ERR(sdcp->thread[DCP_CHAN_HASH_SHA])) {
 		dev_err(dev, "Error starting SHA thread!\n");
 		ret = PTR_ERR(sdcp->thread[DCP_CHAN_HASH_SHA]);
-		goto err_disable_unprepare_clk;
+		return ret;
 	}
 
 	sdcp->thread[DCP_CHAN_CRYPTO] = kthread_run(dcp_chan_thread_aes,
@@ -1134,13 +1126,10 @@ err_destroy_aes_thread:
 err_destroy_sha_thread:
 	kthread_stop(sdcp->thread[DCP_CHAN_HASH_SHA]);
 
-err_disable_unprepare_clk:
-	clk_disable_unprepare(sdcp->dcp_clk);
-
 	return ret;
 }
 
-static int mxs_dcp_remove(struct platform_device *pdev)
+static void mxs_dcp_remove(struct platform_device *pdev)
 {
 	struct dcp *sdcp = platform_get_drvdata(pdev);
 
@@ -1156,13 +1145,9 @@ static int mxs_dcp_remove(struct platform_device *pdev)
 	kthread_stop(sdcp->thread[DCP_CHAN_HASH_SHA]);
 	kthread_stop(sdcp->thread[DCP_CHAN_CRYPTO]);
 
-	clk_disable_unprepare(sdcp->dcp_clk);
-
 	platform_set_drvdata(pdev, NULL);
 
 	global_sdcp = NULL;
-
-	return 0;
 }
 
 static const struct of_device_id mxs_dcp_dt_ids[] = {
@@ -1175,7 +1160,7 @@ MODULE_DEVICE_TABLE(of, mxs_dcp_dt_ids);
 
 static struct platform_driver mxs_dcp_driver = {
 	.probe	= mxs_dcp_probe,
-	.remove	= mxs_dcp_remove,
+	.remove_new = mxs_dcp_remove,
 	.driver	= {
 		.name		= "mxs-dcp",
 		.of_match_table	= mxs_dcp_dt_ids,

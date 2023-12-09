@@ -38,17 +38,29 @@ static inline void sof_ops_free(struct snd_sof_dev *sdev)
 /* Mandatory operations are verified during probing */
 
 /* init */
+static inline int snd_sof_probe_early(struct snd_sof_dev *sdev)
+{
+	if (sof_ops(sdev)->probe_early)
+		return sof_ops(sdev)->probe_early(sdev);
+
+	return 0;
+}
+
 static inline int snd_sof_probe(struct snd_sof_dev *sdev)
 {
 	return sof_ops(sdev)->probe(sdev);
 }
 
-static inline int snd_sof_remove(struct snd_sof_dev *sdev)
+static inline void snd_sof_remove(struct snd_sof_dev *sdev)
 {
 	if (sof_ops(sdev)->remove)
-		return sof_ops(sdev)->remove(sdev);
+		sof_ops(sdev)->remove(sdev);
+}
 
-	return 0;
+static inline void snd_sof_remove_late(struct snd_sof_dev *sdev)
+{
+	if (sof_ops(sdev)->remove_late)
+		sof_ops(sdev)->remove_late(sdev);
 }
 
 static inline int snd_sof_shutdown(struct snd_sof_dev *sdev)
@@ -202,7 +214,7 @@ static inline int snd_sof_dsp_get_mailbox_offset(struct snd_sof_dev *sdev)
 		return sof_ops(sdev)->get_mailbox_offset(sdev);
 
 	dev_err(sdev->dev, "error: %s not defined\n", __func__);
-	return -ENOTSUPP;
+	return -EOPNOTSUPP;
 }
 
 static inline int snd_sof_dsp_get_window_offset(struct snd_sof_dev *sdev,
@@ -212,7 +224,7 @@ static inline int snd_sof_dsp_get_window_offset(struct snd_sof_dev *sdev,
 		return sof_ops(sdev)->get_window_offset(sdev, id);
 
 	dev_err(sdev->dev, "error: %s not defined\n", __func__);
-	return -ENOTSUPP;
+	return -EOPNOTSUPP;
 }
 /* power management */
 static inline int snd_sof_dsp_resume(struct snd_sof_dev *sdev)
@@ -357,7 +369,7 @@ static inline u64 snd_sof_dsp_read64(struct snd_sof_dev *sdev, u32 bar,
 }
 
 static inline void snd_sof_dsp_update8(struct snd_sof_dev *sdev, u32 bar,
-				       u32 offset, u8 value, u8 mask)
+				       u32 offset, u8 mask, u8 value)
 {
 	u8 reg;
 
@@ -472,19 +484,19 @@ static inline int snd_sof_load_firmware(struct snd_sof_dev *sdev)
 
 /* host DSP message data */
 static inline int snd_sof_ipc_msg_data(struct snd_sof_dev *sdev,
-				       struct snd_pcm_substream *substream,
+				       struct snd_sof_pcm_stream *sps,
 				       void *p, size_t sz)
 {
-	return sof_ops(sdev)->ipc_msg_data(sdev, substream, p, sz);
+	return sof_ops(sdev)->ipc_msg_data(sdev, sps, p, sz);
 }
 /* host side configuration of the stream's data offset in stream mailbox area */
 static inline int
 snd_sof_set_stream_data_offset(struct snd_sof_dev *sdev,
-			       struct snd_pcm_substream *substream,
+			       struct snd_sof_pcm_stream *sps,
 			       size_t posn_offset)
 {
 	if (sof_ops(sdev) && sof_ops(sdev)->set_stream_data_offset)
-		return sof_ops(sdev)->set_stream_data_offset(sdev, substream,
+		return sof_ops(sdev)->set_stream_data_offset(sdev, sps,
 							     posn_offset);
 
 	return 0;
@@ -507,6 +519,16 @@ static inline int snd_sof_pcm_platform_ack(struct snd_sof_dev *sdev,
 {
 	if (sof_ops(sdev) && sof_ops(sdev)->pcm_ack)
 		return sof_ops(sdev)->pcm_ack(sdev, substream);
+
+	return 0;
+}
+
+static inline u64 snd_sof_pcm_get_stream_position(struct snd_sof_dev *sdev,
+						  struct snd_soc_component *component,
+						  struct snd_pcm_substream *substream)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->get_stream_position)
+		return sof_ops(sdev)->get_stream_position(sdev, component, substream);
 
 	return 0;
 }

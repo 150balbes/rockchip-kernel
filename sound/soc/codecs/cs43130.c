@@ -16,7 +16,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <sound/core.h>
@@ -29,7 +29,6 @@
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/pm_runtime.h>
-#include <linux/of_irq.h>
 #include <linux/completion.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
@@ -2357,7 +2356,7 @@ static const struct regmap_config cs43130_regmap = {
 	.readable_reg		= cs43130_readable_register,
 	.precious_reg		= cs43130_precious_register,
 	.volatile_reg		= cs43130_volatile_register,
-	.cache_type		= REGCACHE_RBTREE,
+	.cache_type		= REGCACHE_MAPLE,
 	/* needed for regcache_sync */
 	.use_single_read	= true,
 	.use_single_write	= true,
@@ -2697,7 +2696,7 @@ static struct i2c_driver cs43130_i2c_driver = {
 		.pm             = &cs43130_runtime_pm,
 	},
 	.id_table	= cs43130_i2c_id,
-	.probe_new	= cs43130_i2c_probe,
+	.probe		= cs43130_i2c_probe,
 	.remove		= cs43130_i2c_remove,
 };
 

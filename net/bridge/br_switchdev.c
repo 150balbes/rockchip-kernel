@@ -104,9 +104,8 @@ int br_switchdev_set_port_flag(struct net_bridge_port *p,
 		return 0;
 
 	if (err) {
-		if (extack && !extack->_msg)
-			NL_SET_ERR_MSG_MOD(extack,
-					   "bridge flag offload is not supported");
+		NL_SET_ERR_MSG_WEAK_MOD(extack,
+					"bridge flag offload is not supported");
 		return -EOPNOTSUPP;
 	}
 
@@ -115,9 +114,8 @@ int br_switchdev_set_port_flag(struct net_bridge_port *p,
 
 	err = switchdev_port_attr_set(p->dev, &attr, extack);
 	if (err) {
-		if (extack && !extack->_msg)
-			NL_SET_ERR_MSG_MOD(extack,
-					   "error setting offload flag on port");
+		NL_SET_ERR_MSG_WEAK_MOD(extack,
+					"error setting offload flag on port");
 		return err;
 	}
 
@@ -148,6 +146,17 @@ br_switchdev_fdb_notify(struct net_bridge *br,
 	struct switchdev_notifier_fdb_info item;
 
 	if (test_bit(BR_FDB_LOCKED, &fdb->flags))
+		return;
+
+	/* Entries with these flags were created using ndm_state == NUD_REACHABLE,
+	 * ndm_flags == NTF_MASTER( | NTF_STICKY), ext_flags == 0 by something
+	 * equivalent to 'bridge fdb add ... master dynamic (sticky)'.
+	 * Drivers don't know how to deal with these, so don't notify them to
+	 * avoid confusing them.
+	 */
+	if (test_bit(BR_FDB_ADDED_BY_USER, &fdb->flags) &&
+	    !test_bit(BR_FDB_STATIC, &fdb->flags) &&
+	    !test_bit(BR_FDB_ADDED_BY_EXT_LEARN, &fdb->flags))
 		return;
 
 	br_switchdev_fdb_populate(br, &item, fdb, NULL);
@@ -718,6 +727,8 @@ br_switchdev_mdb_replay(struct net_device *br_dev, struct net_device *dev,
 		err = br_switchdev_mdb_replay_one(nb, dev,
 						  SWITCHDEV_OBJ_PORT_MDB(obj),
 						  action, ctx, extack);
+		if (err == -EOPNOTSUPP)
+			err = 0;
 		if (err)
 			goto out_free_mdb;
 	}
@@ -750,8 +761,10 @@ static int nbp_switchdev_sync_objs(struct net_bridge_port *p, const void *ctx,
 
 	err = br_switchdev_mdb_replay(br_dev, dev, ctx, true, blocking_nb,
 				      extack);
-	if (err && err != -EOPNOTSUPP)
+	if (err) {
+		/* -EOPNOTSUPP not propagated from MDB replay. */
 		return err;
+	}
 
 	err = br_switchdev_fdb_replay(br_dev, ctx, true, atomic_nb);
 	if (err && err != -EOPNOTSUPP)
@@ -815,4 +828,13 @@ void br_switchdev_port_unoffload(struct net_bridge_port *p, const void *ctx,
 	nbp_switchdev_unsync_objs(p, ctx, atomic_nb, blocking_nb);
 
 	nbp_switchdev_del(p);
+}
+
+int br_switchdev_port_replay(struct net_bridge_port *p,
+			     struct net_device *dev, const void *ctx,
+			     struct notifier_block *atomic_nb,
+			     struct notifier_block *blocking_nb,
+			     struct netlink_ext_ack *extack)
+{
+	return nbp_switchdev_sync_objs(p, ctx, atomic_nb, blocking_nb, extack);
 }

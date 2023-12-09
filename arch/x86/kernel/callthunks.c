@@ -48,11 +48,6 @@ EXPORT_SYMBOL_GPL(__x86_call_count);
 
 extern s32 __call_sites[], __call_sites_end[];
 
-struct thunk_desc {
-	void		*template;
-	unsigned int	template_size;
-};
-
 struct core_text {
 	unsigned long	base;
 	unsigned long	end;
@@ -119,7 +114,7 @@ static bool is_coretext(const struct core_text *ct, void *addr)
 	return within_module_coretext(addr);
 }
 
-static __init_or_module bool skip_addr(void *dest)
+static bool skip_addr(void *dest)
 {
 	if (dest == error_entry)
 		return true;
@@ -133,8 +128,8 @@ static __init_or_module bool skip_addr(void *dest)
 	/* Accounts directly */
 	if (dest == ret_from_fork)
 		return true;
-#ifdef CONFIG_HOTPLUG_CPU
-	if (dest == start_cpu0)
+#if defined(CONFIG_HOTPLUG_CPU) && defined(CONFIG_AMD_MEM_ENCRYPT)
+	if (dest == soft_restart_cpu)
 		return true;
 #endif
 #ifdef CONFIG_FUNCTION_TRACER
@@ -181,7 +176,7 @@ static const u8 nops[] = {
 	0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
 };
 
-static __init_or_module void *patch_dest(void *dest, bool direct)
+static void *patch_dest(void *dest, bool direct)
 {
 	unsigned int tsize = SKL_TMPL_SIZE;
 	u8 *pad = dest - tsize;
@@ -272,7 +267,6 @@ void __init callthunks_patch_builtin_calls(void)
 	pr_info("Setting up call depth tracking\n");
 	mutex_lock(&text_mutex);
 	callthunks_setup(&cs, &builtin_coretext);
-	static_call_force_reinit();
 	thunks_initialized = true;
 	mutex_unlock(&text_mutex);
 }
@@ -293,7 +287,8 @@ void *callthunks_translate_call_dest(void *dest)
 	return target ? : dest;
 }
 
-bool is_callthunk(void *addr)
+#ifdef CONFIG_BPF_JIT
+static bool is_callthunk(void *addr)
 {
 	unsigned int tmpl_size = SKL_TMPL_SIZE;
 	void *tmpl = skl_call_thunk_template;
@@ -306,7 +301,6 @@ bool is_callthunk(void *addr)
 	return !bcmp((void *)(dest - tmpl_size), tmpl, tmpl_size);
 }
 
-#ifdef CONFIG_BPF_JIT
 int x86_call_depth_emit_accounting(u8 **pprog, void *func)
 {
 	unsigned int tmpl_size = SKL_TMPL_SIZE;
@@ -330,8 +324,8 @@ void noinline callthunks_patch_module_calls(struct callthunk_sites *cs,
 					    struct module *mod)
 {
 	struct core_text ct = {
-		.base = (unsigned long)mod->core_layout.base,
-		.end  = (unsigned long)mod->core_layout.base + mod->core_layout.size,
+		.base = (unsigned long)mod->mem[MOD_TEXT].base,
+		.end  = (unsigned long)mod->mem[MOD_TEXT].base + mod->mem[MOD_TEXT].size,
 		.name = mod->name,
 	};
 

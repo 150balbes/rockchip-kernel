@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2014-2021 Xilinx
  *
- *  Michal Simek <michal.simek@xilinx.com>
+ *  Michal Simek <michal.simek@amd.com>
  *  Davorin Mista <davorin.mista@aggios.com>
  *  Jolly Shah <jollys@xilinx.com>
  *  Rajan Vaja <rajanv@xilinx.com>
@@ -33,6 +33,19 @@
 
 /* PM API versions */
 #define PM_API_VERSION_2	2
+
+#define PM_PINCTRL_PARAM_SET_VERSION	2
+
+#define ZYNQMP_FAMILY_CODE 0x23
+#define VERSAL_FAMILY_CODE 0x26
+
+/* When all subfamily of platform need to support */
+#define ALL_SUB_FAMILY_CODE		0x00
+#define VERSAL_SUB_FAMILY_CODE		0x01
+#define VERSALNET_SUB_FAMILY_CODE	0x03
+
+#define FAMILY_CODE_MASK	GENMASK(27, 21)
+#define SUB_FAMILY_CODE_MASK	GENMASK(20, 19)
 
 /* ATF only commands */
 #define TF_A_PM_REGISTER_SGI		0xa04
@@ -71,6 +84,10 @@
 #define XILINX_ZYNQMP_PM_FPGA_FULL	0x0U
 #define XILINX_ZYNQMP_PM_FPGA_PARTIAL	BIT(0)
 
+/* FPGA Status Reg */
+#define XILINX_ZYNQMP_PM_FPGA_CONFIG_STAT_OFFSET	7U
+#define XILINX_ZYNQMP_PM_FPGA_READ_CONFIG_REG		0U
+
 /*
  * Node IDs for the Error Events.
  */
@@ -78,6 +95,22 @@
 #define EVENT_ERROR_PMC_ERR2	(0x28104000U)
 #define EVENT_ERROR_PSM_ERR1	(0x28108000U)
 #define EVENT_ERROR_PSM_ERR2	(0x2810C000U)
+
+/* ZynqMP SD tap delay tuning */
+#define SD_ITAPDLY	0xFF180314
+#define SD_OTAPDLYSEL	0xFF180318
+
+/**
+ * XPM_EVENT_ERROR_MASK_DDRMC_CR: Error event mask for DDRMC MC Correctable ECC Error.
+ */
+#define XPM_EVENT_ERROR_MASK_DDRMC_CR		BIT(18)
+
+/**
+ * XPM_EVENT_ERROR_MASK_DDRMC_NCR: Error event mask for DDRMC MC Non-Correctable ECC Error.
+ */
+#define XPM_EVENT_ERROR_MASK_DDRMC_NCR		BIT(19)
+#define XPM_EVENT_ERROR_MASK_NOC_NCR		BIT(13)
+#define XPM_EVENT_ERROR_MASK_NOC_CR		BIT(12)
 
 enum pm_api_cb_id {
 	PM_INIT_SUSPEND_CB = 30,
@@ -120,6 +153,7 @@ enum pm_api_id {
 	PM_CLOCK_GETRATE = 42,
 	PM_CLOCK_SETPARENT = 43,
 	PM_CLOCK_GETPARENT = 44,
+	PM_FPGA_READ = 46,
 	PM_SECURE_AES = 47,
 	PM_FEATURE_CHECK = 63,
 };
@@ -515,6 +549,7 @@ int zynqmp_pm_aes_engine(const u64 address, u32 *out);
 int zynqmp_pm_sha_hash(const u64 address, const u32 size, const u32 flags);
 int zynqmp_pm_fpga_load(const u64 address, const u32 size, const u32 flags);
 int zynqmp_pm_fpga_get_status(u32 *value);
+int zynqmp_pm_fpga_get_config_status(u32 *value);
 int zynqmp_pm_write_ggs(u32 index, u32 value);
 int zynqmp_pm_read_ggs(u32 index, u32 *value);
 int zynqmp_pm_write_pggs(u32 index, u32 value);
@@ -545,8 +580,8 @@ int zynqmp_pm_request_wake(const u32 node,
 			   const u64 address,
 			   const enum zynqmp_pm_request_ack ack);
 int zynqmp_pm_get_rpu_mode(u32 node_id, enum rpu_oper_mode *rpu_mode);
-int zynqmp_pm_set_rpu_mode(u32 node_id, u32 arg1);
-int zynqmp_pm_set_tcm_config(u32 node_id, u32 arg1);
+int zynqmp_pm_set_rpu_mode(u32 node_id, enum rpu_oper_mode rpu_mode);
+int zynqmp_pm_set_tcm_config(u32 node_id, enum rpu_tcm_comb tcm_mode);
 int zynqmp_pm_set_sd_config(u32 node, enum pm_sd_config_type config, u32 value);
 int zynqmp_pm_set_gem_config(u32 node, enum pm_gem_config_type config,
 			     u32 value);
@@ -721,6 +756,11 @@ static inline int zynqmp_pm_fpga_get_status(u32 *value)
 	return -ENODEV;
 }
 
+static inline int zynqmp_pm_fpga_get_config_status(u32 *value)
+{
+	return -ENODEV;
+}
+
 static inline int zynqmp_pm_write_ggs(u32 index, u32 value)
 {
 	return -ENODEV;
@@ -845,12 +885,12 @@ static inline int zynqmp_pm_get_rpu_mode(u32 node_id, enum rpu_oper_mode *rpu_mo
 	return -ENODEV;
 }
 
-static inline int zynqmp_pm_set_rpu_mode(u32 node_id, u32 arg1)
+static inline int zynqmp_pm_set_rpu_mode(u32 node_id, enum rpu_oper_mode rpu_mode)
 {
 	return -ENODEV;
 }
 
-static inline int zynqmp_pm_set_tcm_config(u32 node_id, u32 arg1)
+static inline int zynqmp_pm_set_tcm_config(u32 node_id, enum rpu_tcm_comb tcm_mode)
 {
 	return -ENODEV;
 }

@@ -86,9 +86,7 @@ config LEDS_TRIGGER_GPIO
 	help
 	  This allows LEDs to be controlled by gpio events. It's good
 	  when using gpios as switches and triggering the needed LEDs
-	  from there. One use case is n810's keypad LEDs that could
-	  be triggered by this trigger when user slides up to show
-	  keypad.
+	  from there. Triggers are defined as device properties.
 
 	  If unsure, say N.
 

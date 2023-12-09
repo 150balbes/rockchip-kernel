@@ -9,6 +9,7 @@
 #include <linux/udp.h>
 #include <linux/sctp.h>
 #include <linux/static_key.h>
+#include <linux/string_helpers.h>
 #include <net/ip.h>
 #include <net/genetlink.h>
 #include <net/netfilter/nf_conntrack_core.h>
@@ -28,6 +29,7 @@
 #include <net/netfilter/nf_conntrack_act_ct.h>
 
 #include "datapath.h"
+#include "drop.h"
 #include "conntrack.h"
 #include "flow.h"
 #include "flow_netlink.h"
@@ -434,94 +436,24 @@ static int ovs_ct_set_labels(struct nf_conn *ct, struct sw_flow_key *key,
 	return 0;
 }
 
-/* Returns 0 on success, -EINPROGRESS if 'skb' is stolen, or other nonzero
- * value if 'skb' is freed.
- */
-static int handle_fragments(struct net *net, struct sw_flow_key *key,
-			    u16 zone, struct sk_buff *skb)
+static int ovs_ct_handle_fragments(struct net *net, struct sw_flow_key *key,
+				   u16 zone, int family, struct sk_buff *skb)
 {
 	struct ovs_skb_cb ovs_cb = *OVS_CB(skb);
 	int err;
 
-	if (key->eth.type == htons(ETH_P_IP)) {
-		enum ip_defrag_users user = IP_DEFRAG_CONNTRACK_IN + zone;
-
-		memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
-		err = ip_defrag(net, skb, user);
-		if (err)
-			return err;
-
-		ovs_cb.mru = IPCB(skb)->frag_max_size;
-#if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)
-	} else if (key->eth.type == htons(ETH_P_IPV6)) {
-		enum ip6_defrag_users user = IP6_DEFRAG_CONNTRACK_IN + zone;
-
-		memset(IP6CB(skb), 0, sizeof(struct inet6_skb_parm));
-		err = nf_ct_frag6_gather(net, skb, user);
-		if (err) {
-			if (err != -EINPROGRESS)
-				kfree_skb(skb);
-			return err;
-		}
-
-		key->ip.proto = ipv6_hdr(skb)->nexthdr;
-		ovs_cb.mru = IP6CB(skb)->frag_max_size;
-#endif
-	} else {
-		kfree_skb(skb);
-		return -EPFNOSUPPORT;
-	}
+	err = nf_ct_handle_fragments(net, skb, zone, family, &key->ip.proto, &ovs_cb.mru);
+	if (err)
+		return err;
 
 	/* The key extracted from the fragment that completed this datagram
 	 * likely didn't have an L4 header, so regenerate it.
 	 */
 	ovs_flow_key_update_l3l4(skb, key);
-
 	key->ip.frag = OVS_FRAG_TYPE_NONE;
-	skb_clear_hash(skb);
-	skb->ignore_df = 1;
 	*OVS_CB(skb) = ovs_cb;
 
 	return 0;
-}
-
-static struct nf_conntrack_expect *
-ovs_ct_expect_find(struct net *net, const struct nf_conntrack_zone *zone,
-		   u16 proto, const struct sk_buff *skb)
-{
-	struct nf_conntrack_tuple tuple;
-	struct nf_conntrack_expect *exp;
-
-	if (!nf_ct_get_tuplepr(skb, skb_network_offset(skb), proto, net, &tuple))
-		return NULL;
-
-	exp = __nf_ct_expect_find(net, zone, &tuple);
-	if (exp) {
-		struct nf_conntrack_tuple_hash *h;
-
-		/* Delete existing conntrack entry, if it clashes with the
-		 * expectation.  This can happen since conntrack ALGs do not
-		 * check for clashes between (new) expectations and existing
-		 * conntrack entries.  nf_conntrack_in() will check the
-		 * expectations only if a conntrack entry can not be found,
-		 * which can lead to OVS finding the expectation (here) in the
-		 * init direction, but which will not be removed by the
-		 * nf_conntrack_in() call, if a matching conntrack entry is
-		 * found instead.  In this case all init direction packets
-		 * would be reported as new related packets, while reply
-		 * direction packets would be reported as un-related
-		 * established packets.
-		 */
-		h = nf_conntrack_find_get(net, zone, &tuple);
-		if (h) {
-			struct nf_conn *ct = nf_ct_tuplehash_to_ctrack(h);
-
-			nf_ct_delete(ct, 0, 0);
-			nf_ct_put(ct);
-		}
-	}
-
-	return exp;
 }
 
 /* This replicates logic from nf_conntrack_core.c that is not exported. */
@@ -882,36 +814,16 @@ static int ovs_ct_lookup(struct net *net, struct sw_flow_key *key,
 			 const struct ovs_conntrack_info *info,
 			 struct sk_buff *skb)
 {
-	struct nf_conntrack_expect *exp;
+	struct nf_conn *ct;
+	int err;
 
-	/* If we pass an expected packet through nf_conntrack_in() the
-	 * expectation is typically removed, but the packet could still be
-	 * lost in upcall processing.  To prevent this from happening we
-	 * perform an explicit expectation lookup.  Expected connections are
-	 * always new, and will be passed through conntrack only when they are
-	 * committed, as it is OK to remove the expectation at that time.
-	 */
-	exp = ovs_ct_expect_find(net, &info->zone, info->family, skb);
-	if (exp) {
-		u8 state;
+	err = __ovs_ct_lookup(net, key, info, skb);
+	if (err)
+		return err;
 
-		/* NOTE: New connections are NATted and Helped only when
-		 * committed, so we are not calling into NAT here.
-		 */
-		state = OVS_CS_F_TRACKED | OVS_CS_F_NEW | OVS_CS_F_RELATED;
-		__ovs_ct_update_key(key, state, &info->zone, exp->master);
-	} else {
-		struct nf_conn *ct;
-		int err;
-
-		err = __ovs_ct_lookup(net, key, info, skb);
-		if (err)
-			return err;
-
-		ct = (struct nf_conn *)skb_nfct(skb);
-		if (ct)
-			nf_ct_deliver_cached_events(ct);
-	}
+	ct = (struct nf_conn *)skb_nfct(skb);
+	if (ct)
+		nf_ct_deliver_cached_events(ct);
 
 	return 0;
 }
@@ -1073,7 +985,7 @@ static int ovs_ct_commit(struct net *net, struct sw_flow_key *key,
 		if (err)
 			return err;
 
-		nf_conn_act_ct_ext_add(ct);
+		nf_conn_act_ct_ext_add(skb, ct, ctinfo);
 	} else if (IS_ENABLED(CONFIG_NF_CONNTRACK_LABELS) &&
 		   labels_nonzero(&info->labels.mask)) {
 		err = ovs_ct_set_labels(ct, key, &info->labels.value,
@@ -1090,36 +1002,6 @@ static int ovs_ct_commit(struct net *net, struct sw_flow_key *key,
 	return 0;
 }
 
-/* Trim the skb to the length specified by the IP/IPv6 header,
- * removing any trailing lower-layer padding. This prepares the skb
- * for higher-layer processing that assumes skb->len excludes padding
- * (such as nf_ip_checksum). The caller needs to pull the skb to the
- * network header, and ensure ip_hdr/ipv6_hdr points to valid data.
- */
-static int ovs_skb_network_trim(struct sk_buff *skb)
-{
-	unsigned int len;
-	int err;
-
-	switch (skb->protocol) {
-	case htons(ETH_P_IP):
-		len = ntohs(ip_hdr(skb)->tot_len);
-		break;
-	case htons(ETH_P_IPV6):
-		len = sizeof(struct ipv6hdr)
-			+ ntohs(ipv6_hdr(skb)->payload_len);
-		break;
-	default:
-		len = skb->len;
-	}
-
-	err = pskb_trim_rcsum(skb, len);
-	if (err)
-		kfree_skb(skb);
-
-	return err;
-}
-
 /* Returns 0 on success, -EINPROGRESS if 'skb' is stolen, or other nonzero
  * value if 'skb' is freed.
  */
@@ -1134,12 +1016,15 @@ int ovs_ct_execute(struct net *net, struct sk_buff *skb,
 	nh_ofs = skb_network_offset(skb);
 	skb_pull_rcsum(skb, nh_ofs);
 
-	err = ovs_skb_network_trim(skb);
-	if (err)
+	err = nf_ct_skb_network_trim(skb, info->family);
+	if (err) {
+		kfree_skb(skb);
 		return err;
+	}
 
 	if (key->ip.frag != OVS_FRAG_TYPE_NONE) {
-		err = handle_fragments(net, key, info->zone.id, skb);
+		err = ovs_ct_handle_fragments(net, key, info->zone.id,
+					      info->family, skb);
 		if (err)
 			return err;
 	}
@@ -1151,7 +1036,7 @@ int ovs_ct_execute(struct net *net, struct sk_buff *skb,
 
 	skb_push_rcsum(skb, nh_ofs);
 	if (err)
-		kfree_skb(skb);
+		ovs_kfree_skb_reason(skb, OVS_DROP_CONNTRACK);
 	return err;
 }
 
@@ -1383,7 +1268,7 @@ static int parse_ct(const struct nlattr *attr, struct ovs_conntrack_info *info,
 #endif
 		case OVS_CT_ATTR_HELPER:
 			*helper = nla_data(a);
-			if (!memchr(*helper, '\0', nla_len(a))) {
+			if (!string_is_terminated(*helper, nla_len(a))) {
 				OVS_NLERR(log, "Invalid conntrack helper");
 				return -EINVAL;
 			}
@@ -1404,7 +1289,7 @@ static int parse_ct(const struct nlattr *attr, struct ovs_conntrack_info *info,
 #ifdef CONFIG_NF_CONNTRACK_TIMEOUT
 		case OVS_CT_ATTR_TIMEOUT:
 			memcpy(info->timeout, nla_data(a), nla_len(a));
-			if (!memchr(info->timeout, '\0', nla_len(a))) {
+			if (!string_is_terminated(info->timeout, nla_len(a))) {
 				OVS_NLERR(log, "Invalid conntrack timeout");
 				return -EINVAL;
 			}
@@ -1517,7 +1402,8 @@ int ovs_ct_copy_action(struct net *net, const struct nlattr *attr,
 	if (err)
 		goto err_free_ct;
 
-	__set_bit(IPS_CONFIRMED_BIT, &ct_info.ct->status);
+	if (ct_info.commit)
+		__set_bit(IPS_CONFIRMED_BIT, &ct_info.ct->status);
 	return 0;
 err_free_ct:
 	__ovs_ct_free_action(&ct_info);
@@ -1719,7 +1605,7 @@ static struct sk_buff *
 ovs_ct_limit_cmd_reply_start(struct genl_info *info, u8 cmd,
 			     struct ovs_header **ovs_reply_header)
 {
-	struct ovs_header *ovs_header = info->userhdr;
+	struct ovs_header *ovs_header = genl_info_userhdr(info);
 	struct sk_buff *skb;
 
 	skb = genlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);

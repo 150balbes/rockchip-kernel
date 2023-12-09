@@ -26,6 +26,7 @@
 #include <linux/ratelimit.h>
 #include <linux/crc32c.h>
 #include <linux/btrfs.h>
+#include <linux/security.h>
 #include "messages.h"
 #include "delayed-inode.h"
 #include "ctree.h"
@@ -58,6 +59,7 @@
 #include "scrub.h"
 #include "verity.h"
 #include "super.h"
+#include "extent-tree.h"
 #define CREATE_TRACE_POINTS
 #include <trace/events/btrfs.h>
 
@@ -128,9 +130,6 @@ enum {
 	Opt_inode_cache, Opt_noinode_cache,
 
 	/* Debugging options */
-	Opt_check_integrity,
-	Opt_check_integrity_including_extent_data,
-	Opt_check_integrity_print_mask,
 	Opt_enospc_debug, Opt_noenospc_debug,
 #ifdef CONFIG_BTRFS_DEBUG
 	Opt_fragment_data, Opt_fragment_metadata, Opt_fragment_all,
@@ -199,9 +198,6 @@ static const match_table_t tokens = {
 	{Opt_recovery, "recovery"},
 
 	/* Debugging options */
-	{Opt_check_integrity, "check_int"},
-	{Opt_check_integrity_including_extent_data, "check_int_data"},
-	{Opt_check_integrity_print_mask, "check_int_print_mask=%u"},
 	{Opt_enospc_debug, "enospc_debug"},
 	{Opt_noenospc_debug, "noenospc_debug"},
 #ifdef CONFIG_BTRFS_DEBUG
@@ -706,38 +702,6 @@ int btrfs_parse_options(struct btrfs_fs_info *info, char *options,
 		case Opt_skip_balance:
 			btrfs_set_opt(info->mount_opt, SKIP_BALANCE);
 			break;
-#ifdef CONFIG_BTRFS_FS_CHECK_INTEGRITY
-		case Opt_check_integrity_including_extent_data:
-			btrfs_info(info,
-				   "enabling check integrity including extent data");
-			btrfs_set_opt(info->mount_opt, CHECK_INTEGRITY_DATA);
-			btrfs_set_opt(info->mount_opt, CHECK_INTEGRITY);
-			break;
-		case Opt_check_integrity:
-			btrfs_info(info, "enabling check integrity");
-			btrfs_set_opt(info->mount_opt, CHECK_INTEGRITY);
-			break;
-		case Opt_check_integrity_print_mask:
-			ret = match_int(&args[0], &intarg);
-			if (ret) {
-				btrfs_err(info,
-				"unrecognized check_integrity_print_mask value %s",
-					args[0].from);
-				goto out;
-			}
-			info->check_integrity_print_mask = intarg;
-			btrfs_info(info, "check_integrity_print_mask 0x%x",
-				   info->check_integrity_print_mask);
-			break;
-#else
-		case Opt_check_integrity_including_extent_data:
-		case Opt_check_integrity:
-		case Opt_check_integrity_print_mask:
-			btrfs_err(info,
-				  "support for check_integrity* not compiled in!");
-			ret = -EINVAL;
-			goto out;
-#endif
 		case Opt_fatal_errors:
 			if (strcmp(args[0].from, "panic") == 0) {
 				btrfs_set_opt(info->mount_opt,
@@ -825,7 +789,11 @@ out:
 	    !btrfs_test_opt(info, CLEAR_CACHE)) {
 		btrfs_err(info, "cannot disable free space tree");
 		ret = -EINVAL;
-
+	}
+	if (btrfs_fs_compat_ro(info, BLOCK_GROUP_TREE) &&
+	     !btrfs_test_opt(info, FREE_SPACE_TREE)) {
+		btrfs_err(info, "cannot disable free space tree with block-group-tree feature");
+		ret = -EINVAL;
 	}
 	if (!ret)
 		ret = btrfs_check_mountopts_zoned(info);
@@ -844,8 +812,7 @@ out:
  * All other options will be parsed on much later in the mount process and
  * only when we need to allocate a new super block.
  */
-static int btrfs_parse_device_options(const char *options, fmode_t flags,
-				      void *holder)
+static int btrfs_parse_device_options(const char *options, blk_mode_t flags)
 {
 	substring_t args[MAX_OPT_ARGS];
 	char *device_name, *opts, *orig, *p;
@@ -879,8 +846,7 @@ static int btrfs_parse_device_options(const char *options, fmode_t flags,
 				error = -ENOMEM;
 				goto out;
 			}
-			device = btrfs_scan_one_device(device_name, flags,
-					holder);
+			device = btrfs_scan_one_device(device_name, flags, false);
 			kfree(device_name);
 			if (IS_ERR(device)) {
 				error = PTR_ERR(device);
@@ -1157,6 +1123,7 @@ static int btrfs_fill_super(struct super_block *sb,
 	inode = btrfs_iget(sb, BTRFS_FIRST_FREE_OBJECTID, fs_info->fs_root);
 	if (IS_ERR(inode)) {
 		err = PTR_ERR(inode);
+		btrfs_handle_fs_error(fs_info, err, NULL);
 		goto fail_close;
 	}
 
@@ -1295,15 +1262,6 @@ static int btrfs_show_options(struct seq_file *seq, struct dentry *dentry)
 		seq_puts(seq, ",autodefrag");
 	if (btrfs_test_opt(info, SKIP_BALANCE))
 		seq_puts(seq, ",skip_balance");
-#ifdef CONFIG_BTRFS_FS_CHECK_INTEGRITY
-	if (btrfs_test_opt(info, CHECK_INTEGRITY_DATA))
-		seq_puts(seq, ",check_int_data");
-	else if (btrfs_test_opt(info, CHECK_INTEGRITY))
-		seq_puts(seq, ",check_int");
-	if (info->check_integrity_print_mask)
-		seq_printf(seq, ",check_int_print_mask=%d",
-				info->check_integrity_print_mask);
-#endif
 	if (info->metadata_ratio)
 		seq_printf(seq, ",metadata_ratio=%u", info->metadata_ratio);
 	if (btrfs_test_opt(info, PANIC_ON_FATAL_ERROR))
@@ -1436,11 +1394,8 @@ static struct dentry *btrfs_mount_root(struct file_system_type *fs_type,
 	struct btrfs_fs_devices *fs_devices = NULL;
 	struct btrfs_fs_info *fs_info = NULL;
 	void *new_sec_opts = NULL;
-	fmode_t mode = FMODE_READ;
+	blk_mode_t mode = sb_open_mode(flags);
 	int error = 0;
-
-	if (!(flags & SB_RDONLY))
-		mode |= FMODE_WRITE;
 
 	if (data) {
 		error = security_sb_eat_lsm_opts(data, &new_sec_opts);
@@ -1471,13 +1426,18 @@ static struct dentry *btrfs_mount_root(struct file_system_type *fs_type,
 	}
 
 	mutex_lock(&uuid_mutex);
-	error = btrfs_parse_device_options(data, mode, fs_type);
+	error = btrfs_parse_device_options(data, mode);
 	if (error) {
 		mutex_unlock(&uuid_mutex);
 		goto error_fs_info;
 	}
 
-	device = btrfs_scan_one_device(device_name, mode, fs_type);
+	/*
+	 * With 'true' passed to btrfs_scan_one_device() (mount time) we expect
+	 * either a valid device or an error.
+	 */
+	device = btrfs_scan_one_device(device_name, mode, true);
+	ASSERT(device != NULL);
 	if (IS_ERR(device)) {
 		mutex_unlock(&uuid_mutex);
 		error = PTR_ERR(device);
@@ -1512,11 +1472,9 @@ static struct dentry *btrfs_mount_root(struct file_system_type *fs_type,
 			error = -EBUSY;
 	} else {
 		snprintf(s->s_id, sizeof(s->s_id), "%pg", bdev);
-		shrinker_debugfs_rename(&s->s_shrink, "sb-%s:%s", fs_type->name,
+		shrinker_debugfs_rename(s->s_shrink, "sb-%s:%s", fs_type->name,
 					s->s_id);
 		btrfs_sb(s)->bdev_holder = fs_type;
-		if (!strstr(crc32c_impl(), "generic"))
-			set_bit(BTRFS_FS_CSUM_IMPL_FAST, &fs_info->flags);
 		error = btrfs_fill_super(s, fs_devices, data);
 	}
 	if (!error)
@@ -1627,9 +1585,10 @@ static void btrfs_resize_thread_pool(struct btrfs_fs_info *fs_info,
 	       old_pool_size, new_pool_size);
 
 	btrfs_workqueue_set_max(fs_info->workers, new_pool_size);
-	btrfs_workqueue_set_max(fs_info->hipri_workers, new_pool_size);
 	btrfs_workqueue_set_max(fs_info->delalloc_workers, new_pool_size);
 	btrfs_workqueue_set_max(fs_info->caching_workers, new_pool_size);
+	workqueue_set_max_active(fs_info->endio_workers, new_pool_size);
+	workqueue_set_max_active(fs_info->endio_meta_workers, new_pool_size);
 	btrfs_workqueue_set_max(fs_info->endio_write_workers, new_pool_size);
 	btrfs_workqueue_set_max(fs_info->endio_freespace_worker, new_pool_size);
 	btrfs_workqueue_set_max(fs_info->delayed_workers, new_pool_size);
@@ -1705,7 +1664,7 @@ static int btrfs_remount(struct super_block *sb, int *flags, char *data)
 	if (ret)
 		goto restore;
 
-	ret = btrfs_check_features(fs_info, sb);
+	ret = btrfs_check_features(fs_info, !(*flags & SB_RDONLY));
 	if (ret < 0)
 		goto restore;
 
@@ -1835,6 +1794,12 @@ static int btrfs_remount(struct super_block *sb, int *flags, char *data)
 		btrfs_clear_sb_rdonly(sb);
 
 		set_bit(BTRFS_FS_OPEN, &fs_info->flags);
+
+		/*
+		 * If we've gone from readonly -> read/write, we need to get
+		 * our sync/async discard lists in the right state.
+		 */
+		btrfs_discard_resume(fs_info);
 	}
 out:
 	/*
@@ -2049,7 +2014,7 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		}
 
 		/*
-		 * Metadata in mixed block goup profiles are accounted in data
+		 * Metadata in mixed block group profiles are accounted in data
 		 */
 		if (!mixed && found->flags & BTRFS_BLOCK_GROUP_METADATA) {
 			if (found->flags & BTRFS_BLOCK_GROUP_DATA)
@@ -2105,7 +2070,7 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	 * calculated f_bavail.
 	 */
 	if (!mixed && block_rsv->space_info->full &&
-	    total_free_meta - thresh < block_rsv->size)
+	    (total_free_meta < thresh || total_free_meta - thresh < block_rsv->size))
 		buf->f_bavail = 0;
 
 	buf->f_type = BTRFS_SUPER_MAGIC;
@@ -2184,8 +2149,11 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case BTRFS_IOC_SCAN_DEV:
 		mutex_lock(&uuid_mutex);
-		device = btrfs_scan_one_device(vol->name, FMODE_READ,
-					       &btrfs_root_fs_type);
+		/*
+		 * Scanning outside of mount can return NULL which would turn
+		 * into 0 error code.
+		 */
+		device = btrfs_scan_one_device(vol->name, BLK_OPEN_READ, false);
 		ret = PTR_ERR_OR_ZERO(device);
 		mutex_unlock(&uuid_mutex);
 		break;
@@ -2199,9 +2167,12 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		break;
 	case BTRFS_IOC_DEVICES_READY:
 		mutex_lock(&uuid_mutex);
-		device = btrfs_scan_one_device(vol->name, FMODE_READ,
-					       &btrfs_root_fs_type);
-		if (IS_ERR(device)) {
+		/*
+		 * Scanning outside of mount can return NULL which would turn
+		 * into 0 error code.
+		 */
+		device = btrfs_scan_one_device(vol->name, BLK_OPEN_READ, false);
+		if (IS_ERR_OR_NULL(device)) {
 			mutex_unlock(&uuid_mutex);
 			ret = PTR_ERR(device);
 			break;
@@ -2246,6 +2217,7 @@ static int check_dev_super(struct btrfs_device *dev)
 {
 	struct btrfs_fs_info *fs_info = dev->fs_info;
 	struct btrfs_super_block *sb;
+	u64 last_trans;
 	u16 csum_type;
 	int ret = 0;
 
@@ -2281,10 +2253,10 @@ static int check_dev_super(struct btrfs_device *dev)
 	if (ret < 0)
 		goto out;
 
-	if (btrfs_super_generation(sb) != fs_info->last_trans_committed) {
+	last_trans = btrfs_get_last_trans_committed(fs_info);
+	if (btrfs_super_generation(sb) != last_trans) {
 		btrfs_err(fs_info, "transid mismatch, has %llu expect %llu",
-			btrfs_super_generation(sb),
-			fs_info->last_trans_committed);
+			  btrfs_super_generation(sb), last_trans);
 		ret = -EUCLEAN;
 		goto out;
 	}
@@ -2394,9 +2366,6 @@ static int __init btrfs_print_mod_info(void)
 #ifdef CONFIG_BTRFS_ASSERT
 			", assert=on"
 #endif
-#ifdef CONFIG_BTRFS_FS_CHECK_INTEGRITY
-			", integrity-checker=on"
-#endif
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 			", ref-verify=on"
 #endif
@@ -2411,7 +2380,7 @@ static int __init btrfs_print_mod_info(void)
 			", fsverity=no"
 #endif
 			;
-	pr_info("Btrfs loaded, crc32c=%s%s\n", crc32c_impl(), options);
+	pr_info("Btrfs loaded%s\n", options);
 	return 0;
 }
 
@@ -2514,6 +2483,7 @@ static __always_inline void btrfs_exit_btrfs_fs(void)
 static void __exit exit_btrfs_fs(void)
 {
 	btrfs_exit_btrfs_fs();
+	btrfs_cleanup_fs_uuids();
 }
 
 static int __init init_btrfs_fs(void)

@@ -9,6 +9,7 @@
 #include <linux/spinlock.h>
 #include <linux/completion.h>
 #include <linux/bug.h>
+#include <linux/list.h>
 #include <crypto/hash.h>
 #include "messages.h"
 #include "ctree.h"
@@ -290,12 +291,15 @@ BTRFS_FEAT_ATTR_INCOMPAT(metadata_uuid, METADATA_UUID);
 BTRFS_FEAT_ATTR_COMPAT_RO(free_space_tree, FREE_SPACE_TREE);
 BTRFS_FEAT_ATTR_COMPAT_RO(block_group_tree, BLOCK_GROUP_TREE);
 BTRFS_FEAT_ATTR_INCOMPAT(raid1c34, RAID1C34);
+BTRFS_FEAT_ATTR_INCOMPAT(simple_quota, SIMPLE_QUOTA);
 #ifdef CONFIG_BLK_DEV_ZONED
 BTRFS_FEAT_ATTR_INCOMPAT(zoned, ZONED);
 #endif
 #ifdef CONFIG_BTRFS_DEBUG
 /* Remove once support for extent tree v2 is feature complete */
 BTRFS_FEAT_ATTR_INCOMPAT(extent_tree_v2, EXTENT_TREE_V2);
+/* Remove once support for raid stripe tree is feature complete. */
+BTRFS_FEAT_ATTR_INCOMPAT(raid_stripe_tree, RAID_STRIPE_TREE);
 #endif
 #ifdef CONFIG_FS_VERITY
 BTRFS_FEAT_ATTR_COMPAT_RO(verity, VERITY);
@@ -321,11 +325,13 @@ static struct attribute *btrfs_supported_feature_attrs[] = {
 	BTRFS_FEAT_ATTR_PTR(free_space_tree),
 	BTRFS_FEAT_ATTR_PTR(raid1c34),
 	BTRFS_FEAT_ATTR_PTR(block_group_tree),
+	BTRFS_FEAT_ATTR_PTR(simple_quota),
 #ifdef CONFIG_BLK_DEV_ZONED
 	BTRFS_FEAT_ATTR_PTR(zoned),
 #endif
 #ifdef CONFIG_BTRFS_DEBUG
 	BTRFS_FEAT_ATTR_PTR(extent_tree_v2),
+	BTRFS_FEAT_ATTR_PTR(raid_stripe_tree),
 #endif
 #ifdef CONFIG_FS_VERITY
 	BTRFS_FEAT_ATTR_PTR(verity),
@@ -413,6 +419,19 @@ static ssize_t supported_sectorsizes_show(struct kobject *kobj,
 BTRFS_ATTR(static_feature, supported_sectorsizes,
 	   supported_sectorsizes_show);
 
+static ssize_t acl_show(struct kobject *kobj, struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", !!IS_ENABLED(CONFIG_BTRFS_FS_POSIX_ACL));
+}
+BTRFS_ATTR(static_feature, acl, acl_show);
+
+static ssize_t temp_fsid_supported_show(struct kobject *kobj,
+					struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "0\n");
+}
+BTRFS_ATTR(static_feature, temp_fsid, temp_fsid_supported_show);
+
 /*
  * Features which only depend on kernel version.
  *
@@ -420,11 +439,13 @@ BTRFS_ATTR(static_feature, supported_sectorsizes,
  * btrfs_supported_feature_attrs.
  */
 static struct attribute *btrfs_supported_static_feature_attrs[] = {
+	BTRFS_ATTR_PTR(static_feature, acl),
 	BTRFS_ATTR_PTR(static_feature, rmdir_subvol),
 	BTRFS_ATTR_PTR(static_feature, supported_checksums),
 	BTRFS_ATTR_PTR(static_feature, send_stream_version),
 	BTRFS_ATTR_PTR(static_feature, supported_rescue_options),
 	BTRFS_ATTR_PTR(static_feature, supported_sectorsizes),
+	BTRFS_ATTR_PTR(static_feature, temp_fsid),
 	NULL
 };
 
@@ -702,7 +723,7 @@ static void release_raid_kobj(struct kobject *kobj)
 	kfree(to_raid_kobj(kobj));
 }
 
-static struct kobj_type btrfs_raid_ktype = {
+static const struct kobj_type btrfs_raid_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 	.release = release_raid_kobj,
 	.default_groups = raid_groups,
@@ -778,6 +799,45 @@ static ssize_t btrfs_chunk_size_store(struct kobject *kobj,
 	return len;
 }
 
+static ssize_t btrfs_size_classes_show(struct kobject *kobj,
+				       struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_space_info *sinfo = to_space_info(kobj);
+	struct btrfs_block_group *bg;
+	u32 none = 0;
+	u32 small = 0;
+	u32 medium = 0;
+	u32 large = 0;
+
+	for (int i = 0; i < BTRFS_NR_RAID_TYPES; ++i) {
+		down_read(&sinfo->groups_sem);
+		list_for_each_entry(bg, &sinfo->block_groups[i], list) {
+			if (!btrfs_block_group_should_use_size_class(bg))
+				continue;
+			switch (bg->size_class) {
+			case BTRFS_BG_SZ_NONE:
+				none++;
+				break;
+			case BTRFS_BG_SZ_SMALL:
+				small++;
+				break;
+			case BTRFS_BG_SZ_MEDIUM:
+				medium++;
+				break;
+			case BTRFS_BG_SZ_LARGE:
+				large++;
+				break;
+			}
+		}
+		up_read(&sinfo->groups_sem);
+	}
+	return sysfs_emit(buf, "none %u\n"
+			       "small %u\n"
+			       "medium %u\n"
+			       "large %u\n",
+			       none, small, medium, large);
+}
+
 #ifdef CONFIG_BTRFS_DEBUG
 /*
  * Request chunk allocation with current chunk size.
@@ -835,6 +895,7 @@ SPACE_INFO_ATTR(bytes_zone_unusable);
 SPACE_INFO_ATTR(disk_used);
 SPACE_INFO_ATTR(disk_total);
 BTRFS_ATTR_RW(space_info, chunk_size, btrfs_chunk_size_show, btrfs_chunk_size_store);
+BTRFS_ATTR(space_info, size_classes, btrfs_size_classes_show);
 
 static ssize_t btrfs_sinfo_bg_reclaim_threshold_show(struct kobject *kobj,
 						     struct kobj_attribute *a,
@@ -887,6 +948,7 @@ static struct attribute *space_info_attrs[] = {
 	BTRFS_ATTR_PTR(space_info, disk_total),
 	BTRFS_ATTR_PTR(space_info, bg_reclaim_threshold),
 	BTRFS_ATTR_PTR(space_info, chunk_size),
+	BTRFS_ATTR_PTR(space_info, size_classes),
 #ifdef CONFIG_BTRFS_DEBUG
 	BTRFS_ATTR_PTR(space_info, force_chunk_alloc),
 #endif
@@ -900,7 +962,7 @@ static void space_info_release(struct kobject *kobj)
 	kfree(sinfo);
 }
 
-static struct kobj_type space_info_ktype = {
+static const struct kobj_type space_info_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 	.release = space_info_release,
 	.default_groups = space_info_groups,
@@ -1147,9 +1209,18 @@ static ssize_t btrfs_generation_show(struct kobject *kobj,
 {
 	struct btrfs_fs_info *fs_info = to_fs_info(kobj);
 
-	return sysfs_emit(buf, "%llu\n", fs_info->generation);
+	return sysfs_emit(buf, "%llu\n", btrfs_get_fs_generation(fs_info));
 }
 BTRFS_ATTR(, generation, btrfs_generation_show);
+
+static ssize_t btrfs_temp_fsid_show(struct kobject *kobj,
+				    struct kobj_attribute *a, char *buf)
+{
+	struct btrfs_fs_info *fs_info = to_fs_info(kobj);
+
+	return sysfs_emit(buf, "%d\n", fs_info->fs_devices->temp_fsid);
+}
+BTRFS_ATTR(, temp_fsid, btrfs_temp_fsid_show);
 
 static const char * const btrfs_read_policy_name[] = { "pid" };
 
@@ -1220,8 +1291,13 @@ static ssize_t btrfs_bg_reclaim_threshold_store(struct kobject *kobj,
 	if (ret)
 		return ret;
 
+#ifdef CONFIG_BTRFS_DEBUG
+	if (thresh != 0 && (thresh > 100))
+		return -EINVAL;
+#else
 	if (thresh != 0 && (thresh <= 50 || thresh > 100))
 		return -EINVAL;
+#endif
 
 	WRITE_ONCE(fs_info->bg_reclaim_threshold, thresh);
 
@@ -1248,6 +1324,7 @@ static const struct attribute *btrfs_attrs[] = {
 	BTRFS_ATTR_PTR(, read_policy),
 	BTRFS_ATTR_PTR(, bg_reclaim_threshold),
 	BTRFS_ATTR_PTR(, commit_stats),
+	BTRFS_ATTR_PTR(, temp_fsid),
 	NULL,
 };
 
@@ -1259,7 +1336,7 @@ static void btrfs_release_fsid_kobj(struct kobject *kobj)
 	complete(&fs_devs->kobj_unregister);
 }
 
-static struct kobj_type btrfs_ktype = {
+static const struct kobj_type btrfs_ktype = {
 	.sysfs_ops	= &kobj_sysfs_ops,
 	.release	= btrfs_release_fsid_kobj,
 };
@@ -1789,7 +1866,7 @@ static void btrfs_release_devid_kobj(struct kobject *kobj)
 	complete(&device->kobj_unregister);
 }
 
-static struct kobj_type devid_ktype = {
+static const struct kobj_type devid_ktype = {
 	.sysfs_ops	= &kobj_sysfs_ops,
 	.default_groups = devid_groups,
 	.release	= btrfs_release_devid_kobj,
@@ -2032,6 +2109,33 @@ static ssize_t qgroup_enabled_show(struct kobject *qgroups_kobj,
 }
 BTRFS_ATTR(qgroups, enabled, qgroup_enabled_show);
 
+static ssize_t qgroup_mode_show(struct kobject *qgroups_kobj,
+				struct kobj_attribute *a,
+				char *buf)
+{
+	struct btrfs_fs_info *fs_info = to_fs_info(qgroups_kobj->parent);
+	ssize_t ret = 0;
+
+	spin_lock(&fs_info->qgroup_lock);
+	ASSERT(btrfs_qgroup_enabled(fs_info));
+	switch (btrfs_qgroup_mode(fs_info)) {
+	case BTRFS_QGROUP_MODE_FULL:
+		ret = sysfs_emit(buf, "qgroup\n");
+		break;
+	case BTRFS_QGROUP_MODE_SIMPLE:
+		ret = sysfs_emit(buf, "squota\n");
+		break;
+	default:
+		btrfs_warn(fs_info, "unexpected qgroup mode %d\n",
+			   btrfs_qgroup_mode(fs_info));
+		break;
+	}
+	spin_unlock(&fs_info->qgroup_lock);
+
+	return ret;
+}
+BTRFS_ATTR(qgroups, mode, qgroup_mode_show);
+
 static ssize_t qgroup_inconsistent_show(struct kobject *qgroups_kobj,
 					struct kobj_attribute *a,
 					char *buf)
@@ -2094,6 +2198,7 @@ static struct attribute *qgroups_attrs[] = {
 	BTRFS_ATTR_PTR(qgroups, enabled),
 	BTRFS_ATTR_PTR(qgroups, inconsistent),
 	BTRFS_ATTR_PTR(qgroups, drop_subtree_threshold),
+	BTRFS_ATTR_PTR(qgroups, mode),
 	NULL
 };
 ATTRIBUTE_GROUPS(qgroups);
@@ -2103,7 +2208,7 @@ static void qgroups_release(struct kobject *kobj)
 	kfree(kobj);
 }
 
-static struct kobj_type qgroups_ktype = {
+static const struct kobj_type qgroups_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 	.default_groups = qgroups_groups,
 	.release = qgroups_release,
@@ -2173,7 +2278,7 @@ static void qgroup_release(struct kobject *kobj)
 	memset(&qgroup->kobj, 0, sizeof(*kobj));
 }
 
-static struct kobj_type qgroup_ktype = {
+static const struct kobj_type qgroup_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 	.release = qgroup_release,
 	.default_groups = qgroup_groups,
@@ -2272,36 +2377,23 @@ void btrfs_sysfs_del_one_qgroup(struct btrfs_fs_info *fs_info,
  * Change per-fs features in /sys/fs/btrfs/UUID/features to match current
  * values in superblock. Call after any changes to incompat/compat_ro flags
  */
-void btrfs_sysfs_feature_update(struct btrfs_fs_info *fs_info,
-		u64 bit, enum btrfs_feature_set set)
+void btrfs_sysfs_feature_update(struct btrfs_fs_info *fs_info)
 {
-	struct btrfs_fs_devices *fs_devs;
 	struct kobject *fsid_kobj;
-	u64 __maybe_unused features;
-	int __maybe_unused ret;
+	int ret;
 
 	if (!fs_info)
 		return;
 
-	/*
-	 * See 14e46e04958df74 and e410e34fad913dd, feature bit updates are not
-	 * safe when called from some contexts (eg. balance)
-	 */
-	features = get_features(fs_info, set);
-	ASSERT(bit & supported_feature_masks[set]);
-
-	fs_devs = fs_info->fs_devices;
-	fsid_kobj = &fs_devs->fsid_kobj;
-
+	fsid_kobj = &fs_info->fs_devices->fsid_kobj;
 	if (!fsid_kobj->state_initialized)
 		return;
 
-	/*
-	 * FIXME: this is too heavy to update just one value, ideally we'd like
-	 * to use sysfs_update_group but some refactoring is needed first.
-	 */
-	sysfs_remove_group(fsid_kobj, &btrfs_feature_attr_group);
-	ret = sysfs_create_group(fsid_kobj, &btrfs_feature_attr_group);
+	ret = sysfs_update_group(fsid_kobj, &btrfs_feature_attr_group);
+	if (ret < 0)
+		btrfs_warn(fs_info,
+			   "failed to update /sys/fs/btrfs/%pU/features: %d",
+			   fs_info->fs_devices->fsid, ret);
 }
 
 int __init btrfs_init_sysfs(void)

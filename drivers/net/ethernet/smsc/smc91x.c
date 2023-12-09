@@ -57,6 +57,7 @@ static const char version[] =
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/errno.h>
@@ -69,7 +70,6 @@ static const char version[] =
 #include <linux/workqueue.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/of_gpio.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -2411,7 +2411,7 @@ static int smc_drv_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int smc_drv_remove(struct platform_device *pdev)
+static void smc_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct smc_local *lp = netdev_priv(ndev);
@@ -2436,8 +2436,6 @@ static int smc_drv_remove(struct platform_device *pdev)
 	release_mem_region(res->start, SMC_IO_EXTENT);
 
 	free_netdev(ndev);
-
-	return 0;
 }
 
 static int smc_drv_suspend(struct device *dev)
@@ -2480,7 +2478,7 @@ static const struct dev_pm_ops smc_drv_pm_ops = {
 
 static struct platform_driver smc_driver = {
 	.probe		= smc_drv_probe,
-	.remove		= smc_drv_remove,
+	.remove_new	= smc_drv_remove,
 	.driver		= {
 		.name	= CARDNAME,
 		.pm	= &smc_drv_pm_ops,

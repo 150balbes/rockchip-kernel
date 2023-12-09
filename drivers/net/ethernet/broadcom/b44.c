@@ -196,28 +196,6 @@ static int b44_wait_bit(struct b44 *bp, unsigned long reg,
 	return 0;
 }
 
-static inline void __b44_cam_read(struct b44 *bp, unsigned char *data, int index)
-{
-	u32 val;
-
-	bw32(bp, B44_CAM_CTRL, (CAM_CTRL_READ |
-			    (index << CAM_CTRL_INDEX_SHIFT)));
-
-	b44_wait_bit(bp, B44_CAM_CTRL, CAM_CTRL_BUSY, 100, 1);
-
-	val = br32(bp, B44_CAM_DATA_LO);
-
-	data[2] = (val >> 24) & 0xFF;
-	data[3] = (val >> 16) & 0xFF;
-	data[4] = (val >> 8) & 0xFF;
-	data[5] = (val >> 0) & 0xFF;
-
-	val = br32(bp, B44_CAM_DATA_HI);
-
-	data[0] = (val >> 8) & 0xFF;
-	data[1] = (val >> 0) & 0xFF;
-}
-
 static inline void __b44_cam_write(struct b44 *bp,
 				   const unsigned char *data, int index)
 {
@@ -1815,11 +1793,9 @@ static int b44_nway_reset(struct net_device *dev)
 	b44_readphy(bp, MII_BMCR, &bmcr);
 	b44_readphy(bp, MII_BMCR, &bmcr);
 	r = -EINVAL;
-	if (bmcr & BMCR_ANENABLE) {
-		b44_writephy(bp, MII_BMCR,
-			     bmcr | BMCR_ANRESTART);
-		r = 0;
-	}
+	if (bmcr & BMCR_ANENABLE)
+		r = b44_writephy(bp, MII_BMCR,
+				 bmcr | BMCR_ANRESTART);
 	spin_unlock_irq(&bp->lock);
 
 	return r;

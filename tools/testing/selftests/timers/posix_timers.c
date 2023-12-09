@@ -76,22 +76,21 @@ static int check_diff(struct timeval start, struct timeval end)
 
 static int check_itimer(int which)
 {
+	const char *name;
 	int err;
 	struct timeval start, end;
 	struct itimerval val = {
 		.it_value.tv_sec = DELAY,
 	};
 
-	printf("Check itimer ");
-
 	if (which == ITIMER_VIRTUAL)
-		printf("virtual... ");
+		name = "ITIMER_VIRTUAL";
 	else if (which == ITIMER_PROF)
-		printf("prof... ");
+		name = "ITIMER_PROF";
 	else if (which == ITIMER_REAL)
-		printf("real... ");
-
-	fflush(stdout);
+		name = "ITIMER_REAL";
+	else
+		return -1;
 
 	done = 0;
 
@@ -104,13 +103,13 @@ static int check_itimer(int which)
 
 	err = gettimeofday(&start, NULL);
 	if (err < 0) {
-		perror("Can't call gettimeofday()\n");
+		ksft_perror("Can't call gettimeofday()");
 		return -1;
 	}
 
 	err = setitimer(which, &val, NULL);
 	if (err < 0) {
-		perror("Can't set timer\n");
+		ksft_perror("Can't set timer");
 		return -1;
 	}
 
@@ -123,20 +122,18 @@ static int check_itimer(int which)
 
 	err = gettimeofday(&end, NULL);
 	if (err < 0) {
-		perror("Can't call gettimeofday()\n");
+		ksft_perror("Can't call gettimeofday()");
 		return -1;
 	}
 
-	if (!check_diff(start, end))
-		printf("[OK]\n");
-	else
-		printf("[FAIL]\n");
+	ksft_test_result(check_diff(start, end) == 0, "%s\n", name);
 
 	return 0;
 }
 
 static int check_timer_create(int which)
 {
+	const char *type;
 	int err;
 	timer_t id;
 	struct timeval start, end;
@@ -144,31 +141,32 @@ static int check_timer_create(int which)
 		.it_value.tv_sec = DELAY,
 	};
 
-	printf("Check timer_create() ");
 	if (which == CLOCK_THREAD_CPUTIME_ID) {
-		printf("per thread... ");
+		type = "thread";
 	} else if (which == CLOCK_PROCESS_CPUTIME_ID) {
-		printf("per process... ");
+		type = "process";
+	} else {
+		ksft_print_msg("Unknown timer_create() type %d\n", which);
+		return -1;
 	}
-	fflush(stdout);
 
 	done = 0;
 	err = timer_create(which, NULL, &id);
 	if (err < 0) {
-		perror("Can't create timer\n");
+		ksft_perror("Can't create timer");
 		return -1;
 	}
 	signal(SIGALRM, sig_handler);
 
 	err = gettimeofday(&start, NULL);
 	if (err < 0) {
-		perror("Can't call gettimeofday()\n");
+		ksft_perror("Can't call gettimeofday()");
 		return -1;
 	}
 
 	err = timer_settime(id, 0, &val, NULL);
 	if (err < 0) {
-		perror("Can't set timer\n");
+		ksft_perror("Can't set timer");
 		return -1;
 	}
 
@@ -176,22 +174,99 @@ static int check_timer_create(int which)
 
 	err = gettimeofday(&end, NULL);
 	if (err < 0) {
-		perror("Can't call gettimeofday()\n");
+		ksft_perror("Can't call gettimeofday()");
 		return -1;
 	}
 
-	if (!check_diff(start, end))
-		printf("[OK]\n");
-	else
-		printf("[FAIL]\n");
+	ksft_test_result(check_diff(start, end) == 0,
+			 "timer_create() per %s\n", type);
 
+	return 0;
+}
+
+int remain;
+__thread int got_signal;
+
+static void *distribution_thread(void *arg)
+{
+	while (__atomic_load_n(&remain, __ATOMIC_RELAXED));
+	return NULL;
+}
+
+static void distribution_handler(int nr)
+{
+	if (!__atomic_exchange_n(&got_signal, 1, __ATOMIC_RELAXED))
+		__atomic_fetch_sub(&remain, 1, __ATOMIC_RELAXED);
+}
+
+/*
+ * Test that all running threads _eventually_ receive CLOCK_PROCESS_CPUTIME_ID
+ * timer signals. This primarily tests that the kernel does not favour any one.
+ */
+static int check_timer_distribution(void)
+{
+	int err, i;
+	timer_t id;
+	const int nthreads = 10;
+	pthread_t threads[nthreads];
+	struct itimerspec val = {
+		.it_value.tv_sec = 0,
+		.it_value.tv_nsec = 1000 * 1000,
+		.it_interval.tv_sec = 0,
+		.it_interval.tv_nsec = 1000 * 1000,
+	};
+
+	remain = nthreads + 1;  /* worker threads + this thread */
+	signal(SIGALRM, distribution_handler);
+	err = timer_create(CLOCK_PROCESS_CPUTIME_ID, NULL, &id);
+	if (err < 0) {
+		ksft_perror("Can't create timer");
+		return -1;
+	}
+	err = timer_settime(id, 0, &val, NULL);
+	if (err < 0) {
+		ksft_perror("Can't set timer");
+		return -1;
+	}
+
+	for (i = 0; i < nthreads; i++) {
+		err = pthread_create(&threads[i], NULL, distribution_thread,
+				     NULL);
+		if (err) {
+			ksft_print_msg("Can't create thread: %s (%d)\n",
+				       strerror(errno), errno);
+			return -1;
+		}
+	}
+
+	/* Wait for all threads to receive the signal. */
+	while (__atomic_load_n(&remain, __ATOMIC_RELAXED));
+
+	for (i = 0; i < nthreads; i++) {
+		err = pthread_join(threads[i], NULL);
+		if (err) {
+			ksft_print_msg("Can't join thread: %s (%d)\n",
+				       strerror(errno), errno);
+			return -1;
+		}
+	}
+
+	if (timer_delete(id)) {
+		ksft_perror("Can't delete timer");
+		return -1;
+	}
+
+	ksft_test_result_pass("check_timer_distribution\n");
 	return 0;
 }
 
 int main(int argc, char **argv)
 {
-	printf("Testing posix timers. False negative may happen on CPU execution \n");
-	printf("based timers if other threads run on the CPU...\n");
+	ksft_print_header();
+	ksft_set_plan(6);
+
+	ksft_print_msg("Testing posix timers. False negative may happen on CPU execution \n");
+	ksft_print_msg("based timers if other threads run on the CPU...\n");
 
 	if (check_itimer(ITIMER_VIRTUAL) < 0)
 		return ksft_exit_fail();
@@ -217,5 +292,8 @@ int main(int argc, char **argv)
 	if (check_timer_create(CLOCK_PROCESS_CPUTIME_ID) < 0)
 		return ksft_exit_fail();
 
-	return ksft_exit_pass();
+	if (check_timer_distribution() < 0)
+		return ksft_exit_fail();
+
+	ksft_finished();
 }

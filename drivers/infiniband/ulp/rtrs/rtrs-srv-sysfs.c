@@ -164,7 +164,7 @@ static int rtrs_srv_create_once_sysfs_root_folders(struct rtrs_srv_path *srv_pat
 		 */
 		goto unlock;
 	}
-	srv->dev.class = rtrs_dev_class;
+	srv->dev.class = &rtrs_dev_class;
 	err = dev_set_name(&srv->dev, "%s", srv_path->s.sessname);
 	if (err)
 		goto unlock;
@@ -312,9 +312,8 @@ void rtrs_srv_destroy_path_files(struct rtrs_srv_path *srv_path)
 
 	if (srv_path->kobj.state_in_sysfs) {
 		sysfs_remove_group(&srv_path->kobj, &rtrs_srv_path_attr_group);
-		kobject_del(&srv_path->kobj);
 		kobject_put(&srv_path->kobj);
+		rtrs_srv_destroy_once_sysfs_root_folders(srv_path);
 	}
 
-	rtrs_srv_destroy_once_sysfs_root_folders(srv_path);
 }

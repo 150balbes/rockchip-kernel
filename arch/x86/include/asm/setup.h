@@ -125,11 +125,12 @@ void clear_bss(void);
 
 #ifdef __i386__
 
-asmlinkage void __init i386_start_kernel(void);
+asmlinkage void __init __noreturn i386_start_kernel(void);
+void __init mk_early_pgtbl_32(void);
 
 #else
-asmlinkage void __init x86_64_start_kernel(char *real_mode);
-asmlinkage void __init x86_64_start_reservations(char *real_mode_data);
+asmlinkage void __init __noreturn x86_64_start_kernel(char *real_mode);
+asmlinkage void __init __noreturn x86_64_start_reservations(char *real_mode_data);
 
 #endif /* __i386__ */
 #endif /* _SETUP */

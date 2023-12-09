@@ -296,7 +296,7 @@ static ssize_t fast_charge_timer_show(struct device *dev,
 		break;
 	}
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", val);
+	return sysfs_emit(buf, "%u\n", val);
 }
 
 static int max77693_set_fast_charge_timer(struct max77693_charger *chg,
@@ -357,7 +357,7 @@ static ssize_t top_off_threshold_current_show(struct device *dev,
 	else
 		val = data * 50000;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", val);
+	return sysfs_emit(buf, "%u\n", val);
 }
 
 static int max77693_set_top_off_threshold_current(struct max77693_charger *chg,
@@ -405,7 +405,7 @@ static ssize_t top_off_timer_show(struct device *dev,
 
 	val = data * 10;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", val);
+	return sysfs_emit(buf, "%u\n", val);
 }
 
 static int max77693_set_top_off_timer(struct max77693_charger *chg,
@@ -728,7 +728,7 @@ err:
 	return ret;
 }
 
-static int max77693_charger_remove(struct platform_device *pdev)
+static void max77693_charger_remove(struct platform_device *pdev)
 {
 	struct max77693_charger *chg = platform_get_drvdata(pdev);
 
@@ -737,8 +737,6 @@ static int max77693_charger_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_fast_charge_timer);
 
 	power_supply_unregister(chg->charger);
-
-	return 0;
 }
 
 static const struct platform_device_id max77693_charger_id[] = {
@@ -752,7 +750,7 @@ static struct platform_driver max77693_charger_driver = {
 		.name	= "max77693-charger",
 	},
 	.probe		= max77693_charger_probe,
-	.remove		= max77693_charger_remove,
+	.remove_new	= max77693_charger_remove,
 	.id_table	= max77693_charger_id,
 };
 module_platform_driver(max77693_charger_driver);

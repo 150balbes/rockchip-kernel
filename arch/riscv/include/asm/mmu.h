@@ -19,8 +19,10 @@ typedef struct {
 #ifdef CONFIG_SMP
 	/* A local icache flush is needed before user execution can resume. */
 	cpumask_t icache_stale_mask;
-	/* A local tlb flush is needed before user execution can resume. */
-	cpumask_t tlb_stale_mask;
+#endif
+#ifdef CONFIG_BINFMT_ELF_FDPIC
+	unsigned long exec_fdpic_loadmap;
+	unsigned long interp_fdpic_loadmap;
 #endif
 } mm_context_t;
 

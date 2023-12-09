@@ -9,7 +9,6 @@
 #include <linux/sched/mm.h>
 #include <linux/errno.h>
 #include <linux/freezer.h>
-#include <linux/kthread.h>
 #include <linux/slab.h>
 #include <net/sock.h>
 #include <linux/sunrpc/addr.h>
@@ -17,6 +16,7 @@
 #include <linux/sunrpc/svc_xprt.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/xprt.h>
+#include <linux/sunrpc/bc_xprt.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <trace/events/sunrpc.h>
@@ -74,12 +74,17 @@ static LIST_HEAD(svc_xprt_class_list);
  *		  that no other thread will be using the transport or will
  *		  try to set XPT_DEAD.
  */
+
+/**
+ * svc_reg_xprt_class - Register a server-side RPC transport class
+ * @xcl: New transport class to be registered
+ *
+ * Returns zero on success; otherwise a negative errno is returned.
+ */
 int svc_reg_xprt_class(struct svc_xprt_class *xcl)
 {
 	struct svc_xprt_class *cl;
 	int res = -EEXIST;
-
-	dprintk("svc: Adding svc transport class '%s'\n", xcl->xcl_name);
 
 	INIT_LIST_HEAD(&xcl->xcl_list);
 	spin_lock(&svc_xprt_class_lock);
@@ -96,9 +101,13 @@ out:
 }
 EXPORT_SYMBOL_GPL(svc_reg_xprt_class);
 
+/**
+ * svc_unreg_xprt_class - Unregister a server-side RPC transport class
+ * @xcl: Transport class to be unregistered
+ *
+ */
 void svc_unreg_xprt_class(struct svc_xprt_class *xcl)
 {
-	dprintk("svc: Removing svc transport class '%s'\n", xcl->xcl_name);
 	spin_lock(&svc_xprt_class_lock);
 	list_del_init(&xcl->xcl_list);
 	spin_unlock(&svc_xprt_class_lock);
@@ -192,7 +201,6 @@ void svc_xprt_init(struct net *net, struct svc_xprt_class *xcl,
 	kref_init(&xprt->xpt_ref);
 	xprt->xpt_server = serv;
 	INIT_LIST_HEAD(&xprt->xpt_list);
-	INIT_LIST_HEAD(&xprt->xpt_ready);
 	INIT_LIST_HEAD(&xprt->xpt_deferred);
 	INIT_LIST_HEAD(&xprt->xpt_users);
 	mutex_init(&xprt->xpt_mutex);
@@ -425,9 +433,10 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
 	smp_rmb();
 	xpt_flags = READ_ONCE(xprt->xpt_flags);
 
+	trace_svc_xprt_enqueue(xprt, xpt_flags);
 	if (xpt_flags & BIT(XPT_BUSY))
 		return false;
-	if (xpt_flags & (BIT(XPT_CONN) | BIT(XPT_CLOSE)))
+	if (xpt_flags & (BIT(XPT_CONN) | BIT(XPT_CLOSE) | BIT(XPT_HANDSHAKE)))
 		return true;
 	if (xpt_flags & (BIT(XPT_DATA) | BIT(XPT_DEFERRED))) {
 		if (xprt->xpt_ops->xpo_has_wspace(xprt) &&
@@ -447,7 +456,6 @@ static bool svc_xprt_ready(struct svc_xprt *xprt)
 void svc_xprt_enqueue(struct svc_xprt *xprt)
 {
 	struct svc_pool *pool;
-	struct svc_rqst	*rqstp = NULL;
 
 	if (!svc_xprt_ready(xprt))
 		return;
@@ -462,28 +470,10 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 
 	pool = svc_pool_for_cpu(xprt->xpt_server);
 
-	atomic_long_inc(&pool->sp_stats.packets);
+	percpu_counter_inc(&pool->sp_sockets_queued);
+	lwq_enqueue(&xprt->xpt_ready, &pool->sp_xprts);
 
-	spin_lock_bh(&pool->sp_lock);
-	list_add_tail(&xprt->xpt_ready, &pool->sp_sockets);
-	pool->sp_stats.sockets_queued++;
-	spin_unlock_bh(&pool->sp_lock);
-
-	/* find a thread for this xprt */
-	rcu_read_lock();
-	list_for_each_entry_rcu(rqstp, &pool->sp_all_threads, rq_all) {
-		if (test_and_set_bit(RQ_BUSY, &rqstp->rq_flags))
-			continue;
-		atomic_long_inc(&pool->sp_stats.threads_woken);
-		rqstp->rq_qtime = ktime_get();
-		wake_up_process(rqstp->rq_task);
-		goto out_unlock;
-	}
-	set_bit(SP_CONGESTED, &pool->sp_flags);
-	rqstp = NULL;
-out_unlock:
-	rcu_read_unlock();
-	trace_svc_xprt_enqueue(xprt, rqstp);
+	svc_pool_wake_idle_thread(pool);
 }
 EXPORT_SYMBOL_GPL(svc_xprt_enqueue);
 
@@ -494,18 +484,9 @@ static struct svc_xprt *svc_xprt_dequeue(struct svc_pool *pool)
 {
 	struct svc_xprt	*xprt = NULL;
 
-	if (list_empty(&pool->sp_sockets))
-		goto out;
-
-	spin_lock_bh(&pool->sp_lock);
-	if (likely(!list_empty(&pool->sp_sockets))) {
-		xprt = list_first_entry(&pool->sp_sockets,
-					struct svc_xprt, xpt_ready);
-		list_del_init(&xprt->xpt_ready);
+	xprt = lwq_dequeue(&pool->sp_xprts, struct svc_xprt, xpt_ready);
+	if (xprt)
 		svc_xprt_get(xprt);
-	}
-	spin_unlock_bh(&pool->sp_lock);
-out:
 	return xprt;
 }
 
@@ -534,17 +515,26 @@ void svc_reserve(struct svc_rqst *rqstp, int space)
 }
 EXPORT_SYMBOL_GPL(svc_reserve);
 
+static void free_deferred(struct svc_xprt *xprt, struct svc_deferred_req *dr)
+{
+	if (!dr)
+		return;
+
+	xprt->xpt_ops->xpo_release_ctxt(xprt, dr->xprt_ctxt);
+	kfree(dr);
+}
+
 static void svc_xprt_release(struct svc_rqst *rqstp)
 {
 	struct svc_xprt	*xprt = rqstp->rq_xprt;
 
-	xprt->xpt_ops->xpo_release_rqst(rqstp);
+	xprt->xpt_ops->xpo_release_ctxt(xprt, rqstp->rq_xprt_ctxt);
+	rqstp->rq_xprt_ctxt = NULL;
 
-	kfree(rqstp->rq_deferred);
+	free_deferred(xprt, rqstp->rq_deferred);
 	rqstp->rq_deferred = NULL;
 
-	pagevec_release(&rqstp->rq_pvec);
-	svc_free_res_pages(rqstp);
+	svc_rqst_release_pages(rqstp);
 	rqstp->rq_res.page_len = 0;
 	rqstp->rq_res.page_base = 0;
 
@@ -565,7 +555,10 @@ static void svc_xprt_release(struct svc_rqst *rqstp)
 	svc_xprt_put(xprt);
 }
 
-/*
+/**
+ * svc_wake_up - Wake up a service thread for non-transport work
+ * @serv: RPC service
+ *
  * Some svc_serv's will have occasional work to do, even when a xprt is not
  * waiting to be serviced. This function is there to "kick" a task in one of
  * those services so that it can wake up and do that work. Note that we only
@@ -574,27 +567,10 @@ static void svc_xprt_release(struct svc_rqst *rqstp)
  */
 void svc_wake_up(struct svc_serv *serv)
 {
-	struct svc_rqst	*rqstp;
-	struct svc_pool *pool;
+	struct svc_pool *pool = &serv->sv_pools[0];
 
-	pool = &serv->sv_pools[0];
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(rqstp, &pool->sp_all_threads, rq_all) {
-		/* skip any that aren't queued */
-		if (test_bit(RQ_BUSY, &rqstp->rq_flags))
-			continue;
-		rcu_read_unlock();
-		wake_up_process(rqstp->rq_task);
-		trace_svc_wake_up(rqstp->rq_task->pid);
-		return;
-	}
-	rcu_read_unlock();
-
-	/* No free entries available */
 	set_bit(SP_TASK_PENDING, &pool->sp_flags);
-	smp_wmb();
-	trace_svc_wake_up(0);
+	svc_pool_wake_idle_thread(pool);
 }
 EXPORT_SYMBOL_GPL(svc_wake_up);
 
@@ -663,13 +639,11 @@ static void svc_check_conn_limits(struct svc_serv *serv)
 	}
 }
 
-static int svc_alloc_arg(struct svc_rqst *rqstp)
+static bool svc_alloc_arg(struct svc_rqst *rqstp)
 {
 	struct svc_serv *serv = rqstp->rq_server;
 	struct xdr_buf *arg = &rqstp->rq_arg;
 	unsigned long pages, filled, ret;
-
-	pagevec_init(&rqstp->rq_pvec);
 
 	pages = (serv->sv_max_mesg + 2 * PAGE_SIZE) >> PAGE_SHIFT;
 	if (pages > RPCSVC_MAXPAGES) {
@@ -680,16 +654,17 @@ static int svc_alloc_arg(struct svc_rqst *rqstp)
 	}
 
 	for (filled = 0; filled < pages; filled = ret) {
-		ret = alloc_pages_bulk_array(GFP_KERNEL, pages,
-					     rqstp->rq_pages);
+		ret = alloc_pages_bulk_array_node(GFP_KERNEL,
+						  rqstp->rq_pool->sp_id,
+						  pages, rqstp->rq_pages);
 		if (ret > filled)
 			/* Made progress, don't sleep yet */
 			continue;
 
-		set_current_state(TASK_INTERRUPTIBLE);
-		if (signalled() || kthread_should_stop()) {
+		set_current_state(TASK_IDLE);
+		if (svc_thread_should_stop(rqstp)) {
 			set_current_state(TASK_RUNNING);
-			return -EINTR;
+			return false;
 		}
 		trace_svc_alloc_arg_err(pages, ret);
 		memalloc_retry_wait(GFP_KERNEL);
@@ -706,84 +681,66 @@ static int svc_alloc_arg(struct svc_rqst *rqstp)
 	arg->page_len = (pages-2)*PAGE_SIZE;
 	arg->len = (pages-1)*PAGE_SIZE;
 	arg->tail[0].iov_len = 0;
-	return 0;
+
+	rqstp->rq_xid = xdr_zero;
+	return true;
 }
 
 static bool
-rqst_should_sleep(struct svc_rqst *rqstp)
+svc_thread_should_sleep(struct svc_rqst *rqstp)
 {
 	struct svc_pool		*pool = rqstp->rq_pool;
 
 	/* did someone call svc_wake_up? */
-	if (test_and_clear_bit(SP_TASK_PENDING, &pool->sp_flags))
+	if (test_bit(SP_TASK_PENDING, &pool->sp_flags))
 		return false;
 
 	/* was a socket queued? */
-	if (!list_empty(&pool->sp_sockets))
+	if (!lwq_empty(&pool->sp_xprts))
 		return false;
 
 	/* are we shutting down? */
-	if (signalled() || kthread_should_stop())
+	if (svc_thread_should_stop(rqstp))
 		return false;
 
-	/* are we freezing? */
-	if (freezing(current))
-		return false;
+#if defined(CONFIG_SUNRPC_BACKCHANNEL)
+	if (svc_is_backchannel(rqstp)) {
+		if (!lwq_empty(&rqstp->rq_server->sv_cb_list))
+			return false;
+	}
+#endif
 
 	return true;
 }
 
-static struct svc_xprt *svc_get_next_xprt(struct svc_rqst *rqstp, long timeout)
+static void svc_thread_wait_for_work(struct svc_rqst *rqstp)
 {
-	struct svc_pool		*pool = rqstp->rq_pool;
-	long			time_left = 0;
+	struct svc_pool *pool = rqstp->rq_pool;
 
-	/* rq_xprt should be clear on entry */
-	WARN_ON_ONCE(rqstp->rq_xprt);
+	if (svc_thread_should_sleep(rqstp)) {
+		set_current_state(TASK_IDLE | TASK_FREEZABLE);
+		llist_add(&rqstp->rq_idle, &pool->sp_idle_threads);
+		if (likely(svc_thread_should_sleep(rqstp)))
+			schedule();
 
-	rqstp->rq_xprt = svc_xprt_dequeue(pool);
-	if (rqstp->rq_xprt)
-		goto out_found;
-
-	/*
-	 * We have to be able to interrupt this wait
-	 * to bring down the daemons ...
-	 */
-	set_current_state(TASK_INTERRUPTIBLE);
-	smp_mb__before_atomic();
-	clear_bit(SP_CONGESTED, &pool->sp_flags);
-	clear_bit(RQ_BUSY, &rqstp->rq_flags);
-	smp_mb__after_atomic();
-
-	if (likely(rqst_should_sleep(rqstp)))
-		time_left = schedule_timeout(timeout);
-	else
+		while (!llist_del_first_this(&pool->sp_idle_threads,
+					     &rqstp->rq_idle)) {
+			/* Work just became available.  This thread can only
+			 * handle it after removing rqstp from the idle
+			 * list. If that attempt failed, some other thread
+			 * must have queued itself after finding no
+			 * work to do, so that thread has taken responsibly
+			 * for this new work.  This thread can safely sleep
+			 * until woken again.
+			 */
+			schedule();
+			set_current_state(TASK_IDLE | TASK_FREEZABLE);
+		}
 		__set_current_state(TASK_RUNNING);
-
+	} else {
+		cond_resched();
+	}
 	try_to_freeze();
-
-	set_bit(RQ_BUSY, &rqstp->rq_flags);
-	smp_mb__after_atomic();
-	rqstp->rq_xprt = svc_xprt_dequeue(pool);
-	if (rqstp->rq_xprt)
-		goto out_found;
-
-	if (!time_left)
-		atomic_long_inc(&pool->sp_stats.threads_timedout);
-
-	if (signalled() || kthread_should_stop())
-		return ERR_PTR(-EINTR);
-	return ERR_PTR(-EAGAIN);
-out_found:
-	/* Normally we will wait up to 5 seconds for any required
-	 * cache information to be provided.
-	 */
-	if (!test_bit(SP_CONGESTED, &pool->sp_flags))
-		rqstp->rq_chandle.thread_wait = 5*HZ;
-	else
-		rqstp->rq_chandle.thread_wait = 1*HZ;
-	trace_svc_xprt_dequeue(rqstp);
-	return rqstp->rq_xprt;
 }
 
 static void svc_add_new_temp_xprt(struct svc_serv *serv, struct svc_xprt *newxpt)
@@ -802,7 +759,7 @@ static void svc_add_new_temp_xprt(struct svc_serv *serv, struct svc_xprt *newxpt
 	svc_xprt_received(newxpt);
 }
 
-static int svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
+static void svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 {
 	struct svc_serv *serv = rqstp->rq_server;
 	int len = 0;
@@ -831,75 +788,104 @@ static int svc_handle_xprt(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 			module_put(xprt->xpt_class->xcl_owner);
 		}
 		svc_xprt_received(xprt);
+	} else if (test_bit(XPT_HANDSHAKE, &xprt->xpt_flags)) {
+		xprt->xpt_ops->xpo_handshake(xprt);
+		svc_xprt_received(xprt);
 	} else if (svc_xprt_reserve_slot(rqstp, xprt)) {
 		/* XPT_DATA|XPT_DEFERRED case: */
-		dprintk("svc: server %p, pool %u, transport %p, inuse=%d\n",
-			rqstp, rqstp->rq_pool->sp_id, xprt,
-			kref_read(&xprt->xpt_ref));
 		rqstp->rq_deferred = svc_deferred_dequeue(xprt);
 		if (rqstp->rq_deferred)
 			len = svc_deferred_recv(rqstp);
 		else
 			len = xprt->xpt_ops->xpo_recvfrom(rqstp);
-		rqstp->rq_stime = ktime_get();
 		rqstp->rq_reserved = serv->sv_max_mesg;
 		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
+		if (len <= 0)
+			goto out;
+
+		trace_svc_xdr_recvfrom(&rqstp->rq_arg);
+
+		clear_bit(XPT_OLD, &xprt->xpt_flags);
+
+		rqstp->rq_chandle.defer = svc_defer;
+
+		if (serv->sv_stats)
+			serv->sv_stats->netcnt++;
+		percpu_counter_inc(&rqstp->rq_pool->sp_messages_arrived);
+		rqstp->rq_stime = ktime_get();
+		svc_process(rqstp);
 	} else
 		svc_xprt_received(xprt);
 
 out:
-	return len;
-}
-
-/*
- * Receive the next request on any transport.  This code is carefully
- * organised not to touch any cachelines in the shared svc_serv
- * structure, only cachelines in the local svc_pool.
- */
-int svc_recv(struct svc_rqst *rqstp, long timeout)
-{
-	struct svc_xprt		*xprt = NULL;
-	struct svc_serv		*serv = rqstp->rq_server;
-	int			len, err;
-
-	err = svc_alloc_arg(rqstp);
-	if (err)
-		goto out;
-
-	try_to_freeze();
-	cond_resched();
-	err = -EINTR;
-	if (signalled() || kthread_should_stop())
-		goto out;
-
-	xprt = svc_get_next_xprt(rqstp, timeout);
-	if (IS_ERR(xprt)) {
-		err = PTR_ERR(xprt);
-		goto out;
-	}
-
-	len = svc_handle_xprt(rqstp, xprt);
-
-	/* No data, incomplete (TCP) read, or accept() */
-	err = -EAGAIN;
-	if (len <= 0)
-		goto out_release;
-	trace_svc_xdr_recvfrom(&rqstp->rq_arg);
-
-	clear_bit(XPT_OLD, &xprt->xpt_flags);
-
-	xprt->xpt_ops->xpo_secure_port(rqstp);
-	rqstp->rq_chandle.defer = svc_defer;
-	rqstp->rq_xid = svc_getu32(&rqstp->rq_arg.head[0]);
-
-	if (serv->sv_stats)
-		serv->sv_stats->netcnt++;
-	return len;
-out_release:
 	rqstp->rq_res.len = 0;
 	svc_xprt_release(rqstp);
-out:
-	return err;
+}
+
+static void svc_thread_wake_next(struct svc_rqst *rqstp)
+{
+	if (!svc_thread_should_sleep(rqstp))
+		/* More work pending after I dequeued some,
+		 * wake another worker
+		 */
+		svc_pool_wake_idle_thread(rqstp->rq_pool);
+}
+
+/**
+ * svc_recv - Receive and process the next request on any transport
+ * @rqstp: an idle RPC service thread
+ *
+ * This code is carefully organised not to touch any cachelines in
+ * the shared svc_serv structure, only cachelines in the local
+ * svc_pool.
+ */
+void svc_recv(struct svc_rqst *rqstp)
+{
+	struct svc_pool *pool = rqstp->rq_pool;
+
+	if (!svc_alloc_arg(rqstp))
+		return;
+
+	svc_thread_wait_for_work(rqstp);
+
+	clear_bit(SP_TASK_PENDING, &pool->sp_flags);
+
+	if (svc_thread_should_stop(rqstp)) {
+		svc_thread_wake_next(rqstp);
+		return;
+	}
+
+	rqstp->rq_xprt = svc_xprt_dequeue(pool);
+	if (rqstp->rq_xprt) {
+		struct svc_xprt *xprt = rqstp->rq_xprt;
+
+		svc_thread_wake_next(rqstp);
+		/* Normally we will wait up to 5 seconds for any required
+		 * cache information to be provided.  When there are no
+		 * idle threads, we reduce the wait time.
+		 */
+		if (pool->sp_idle_threads.first)
+			rqstp->rq_chandle.thread_wait = 5 * HZ;
+		else
+			rqstp->rq_chandle.thread_wait = 1 * HZ;
+
+		trace_svc_xprt_dequeue(rqstp);
+		svc_handle_xprt(rqstp, xprt);
+	}
+
+#if defined(CONFIG_SUNRPC_BACKCHANNEL)
+	if (svc_is_backchannel(rqstp)) {
+		struct svc_serv *serv = rqstp->rq_server;
+		struct rpc_rqst *req;
+
+		req = lwq_dequeue(&serv->sv_cb_list,
+				  struct rpc_rqst, rq_bc_list);
+		if (req) {
+			svc_thread_wake_next(rqstp);
+			svc_process_bc(req, rqstp);
+		}
+	}
+#endif
 }
 EXPORT_SYMBOL_GPL(svc_recv);
 
@@ -909,22 +895,21 @@ EXPORT_SYMBOL_GPL(svc_recv);
 void svc_drop(struct svc_rqst *rqstp)
 {
 	trace_svc_drop(rqstp);
-	svc_xprt_release(rqstp);
 }
 EXPORT_SYMBOL_GPL(svc_drop);
 
-/*
- * Return reply to client.
+/**
+ * svc_send - Return reply to client
+ * @rqstp: RPC transaction context
+ *
  */
-int svc_send(struct svc_rqst *rqstp)
+void svc_send(struct svc_rqst *rqstp)
 {
 	struct svc_xprt	*xprt;
-	int		len = -EFAULT;
 	struct xdr_buf	*xb;
+	int status;
 
 	xprt = rqstp->rq_xprt;
-	if (!xprt)
-		goto out;
 
 	/* calculate over-all length */
 	xb = &rqstp->rq_res;
@@ -934,15 +919,9 @@ int svc_send(struct svc_rqst *rqstp)
 	trace_svc_xdr_sendto(rqstp->rq_xid, xb);
 	trace_svc_stats_latency(rqstp);
 
-	len = xprt->xpt_ops->xpo_sendto(rqstp);
+	status = xprt->xpt_ops->xpo_sendto(rqstp);
 
-	trace_svc_send(rqstp, len);
-	svc_xprt_release(rqstp);
-
-	if (len == -ECONNREFUSED || len == -ENOTCONN || len == -EAGAIN)
-		len = 0;
-out:
-	return len;
+	trace_svc_send(rqstp, status);
 }
 
 /*
@@ -1053,13 +1032,12 @@ static void svc_delete_xprt(struct svc_xprt *xprt)
 
 	spin_lock_bh(&serv->sv_lock);
 	list_del_init(&xprt->xpt_list);
-	WARN_ON_ONCE(!list_empty(&xprt->xpt_ready));
 	if (test_bit(XPT_TEMP, &xprt->xpt_flags))
 		serv->sv_tmpcnt--;
 	spin_unlock_bh(&serv->sv_lock);
 
 	while ((dr = svc_deferred_dequeue(xprt)) != NULL)
-		kfree(dr);
+		free_deferred(xprt, dr);
 
 	call_xpt_users(xprt);
 	svc_xprt_put(xprt);
@@ -1104,36 +1082,26 @@ static int svc_close_list(struct svc_serv *serv, struct list_head *xprt_list, st
 	return ret;
 }
 
-static struct svc_xprt *svc_dequeue_net(struct svc_serv *serv, struct net *net)
-{
-	struct svc_pool *pool;
-	struct svc_xprt *xprt;
-	struct svc_xprt *tmp;
-	int i;
-
-	for (i = 0; i < serv->sv_nrpools; i++) {
-		pool = &serv->sv_pools[i];
-
-		spin_lock_bh(&pool->sp_lock);
-		list_for_each_entry_safe(xprt, tmp, &pool->sp_sockets, xpt_ready) {
-			if (xprt->xpt_net != net)
-				continue;
-			list_del_init(&xprt->xpt_ready);
-			spin_unlock_bh(&pool->sp_lock);
-			return xprt;
-		}
-		spin_unlock_bh(&pool->sp_lock);
-	}
-	return NULL;
-}
-
 static void svc_clean_up_xprts(struct svc_serv *serv, struct net *net)
 {
 	struct svc_xprt *xprt;
+	int i;
 
-	while ((xprt = svc_dequeue_net(serv, net))) {
-		set_bit(XPT_CLOSE, &xprt->xpt_flags);
-		svc_delete_xprt(xprt);
+	for (i = 0; i < serv->sv_nrpools; i++) {
+		struct svc_pool *pool = &serv->sv_pools[i];
+		struct llist_node *q, **t1, *t2;
+
+		q = lwq_dequeue_all(&pool->sp_xprts);
+		lwq_for_each_safe(xprt, t1, t2, &q, xpt_ready) {
+			if (xprt->xpt_net == net) {
+				set_bit(XPT_CLOSE, &xprt->xpt_flags);
+				svc_delete_xprt(xprt);
+				xprt = NULL;
+			}
+		}
+
+		if (q)
+			lwq_enqueue_batch(q, &pool->sp_xprts);
 	}
 }
 
@@ -1181,8 +1149,8 @@ static void svc_revisit(struct cache_deferred_req *dreq, int too_many)
 	if (too_many || test_bit(XPT_DEAD, &xprt->xpt_flags)) {
 		spin_unlock(&xprt->xpt_lock);
 		trace_svc_defer_drop(dr);
+		free_deferred(xprt, dr);
 		svc_xprt_put(xprt);
-		kfree(dr);
 		return;
 	}
 	dr->xprt = NULL;
@@ -1227,18 +1195,18 @@ static struct cache_deferred_req *svc_defer(struct cache_req *req)
 		dr->addrlen = rqstp->rq_addrlen;
 		dr->daddr = rqstp->rq_daddr;
 		dr->argslen = rqstp->rq_arg.len >> 2;
-		dr->xprt_ctxt = rqstp->rq_xprt_ctxt;
-		rqstp->rq_xprt_ctxt = NULL;
 
 		/* back up head to the start of the buffer and copy */
 		skip = rqstp->rq_arg.len - rqstp->rq_arg.head[0].iov_len;
 		memcpy(dr->args, rqstp->rq_arg.head[0].iov_base - skip,
 		       dr->argslen << 2);
 	}
+	dr->xprt_ctxt = rqstp->rq_xprt_ctxt;
+	rqstp->rq_xprt_ctxt = NULL;
 	trace_svc_defer(rqstp);
 	svc_xprt_get(rqstp->rq_xprt);
 	dr->xprt = rqstp->rq_xprt;
-	__set_bit(RQ_DROPME, &rqstp->rq_flags);
+	set_bit(RQ_DROPME, &rqstp->rq_flags);
 
 	dr->handle.revisit = svc_revisit;
 	return &dr->handle;
@@ -1267,6 +1235,8 @@ static noinline int svc_deferred_recv(struct svc_rqst *rqstp)
 	rqstp->rq_daddr       = dr->daddr;
 	rqstp->rq_respages    = rqstp->rq_pages;
 	rqstp->rq_xprt_ctxt   = dr->xprt_ctxt;
+
+	dr->xprt_ctxt = NULL;
 	svc_xprt_received(rqstp->rq_xprt);
 	return dr->argslen << 2;
 }
@@ -1441,12 +1411,11 @@ static int svc_pool_stats_show(struct seq_file *m, void *p)
 		return 0;
 	}
 
-	seq_printf(m, "%u %lu %lu %lu %lu\n",
-		pool->sp_id,
-		(unsigned long)atomic_long_read(&pool->sp_stats.packets),
-		pool->sp_stats.sockets_queued,
-		(unsigned long)atomic_long_read(&pool->sp_stats.threads_woken),
-		(unsigned long)atomic_long_read(&pool->sp_stats.threads_timedout));
+	seq_printf(m, "%u %llu %llu %llu 0\n",
+		   pool->sp_id,
+		   percpu_counter_sum_positive(&pool->sp_messages_arrived),
+		   percpu_counter_sum_positive(&pool->sp_sockets_queued),
+		   percpu_counter_sum_positive(&pool->sp_threads_woken));
 
 	return 0;
 }

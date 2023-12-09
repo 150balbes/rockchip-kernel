@@ -350,7 +350,8 @@ static void spmi_drv_remove(struct device *dev)
 	const struct spmi_driver *sdrv = to_spmi_driver(dev->driver);
 
 	pm_runtime_get_sync(dev);
-	sdrv->remove(to_spmi_device(dev));
+	if (sdrv->remove)
+		sdrv->remove(to_spmi_device(dev));
 	pm_runtime_put_noidle(dev);
 
 	pm_runtime_disable(dev);
@@ -366,7 +367,7 @@ static void spmi_drv_shutdown(struct device *dev)
 		sdrv->shutdown(to_spmi_device(dev));
 }
 
-static int spmi_drv_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int spmi_drv_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
 	int ret;
 
@@ -387,13 +388,16 @@ static struct bus_type spmi_bus_type = {
 };
 
 /**
- * spmi_device_from_of() - get the associated SPMI device from a device node
+ * spmi_find_device_by_of_node() - look up an SPMI device from a device node
  *
  * @np:		device node
  *
+ * Takes a reference to the embedded struct device which needs to be dropped
+ * after use.
+ *
  * Returns the struct spmi_device associated with a device node or NULL.
  */
-struct spmi_device *spmi_device_from_of(struct device_node *np)
+struct spmi_device *spmi_find_device_by_of_node(struct device_node *np)
 {
 	struct device *dev = bus_find_device_by_of_node(&spmi_bus_type, np);
 
@@ -401,10 +405,10 @@ struct spmi_device *spmi_device_from_of(struct device_node *np)
 		return to_spmi_device(dev);
 	return NULL;
 }
-EXPORT_SYMBOL_GPL(spmi_device_from_of);
+EXPORT_SYMBOL_GPL(spmi_find_device_by_of_node);
 
 /**
- * spmi_controller_alloc() - Allocate a new SPMI device
+ * spmi_device_alloc() - Allocate a new SPMI device
  * @ctrl:	associated controller
  *
  * Caller is responsible for either calling spmi_device_add() to add the
@@ -582,8 +586,9 @@ void spmi_controller_remove(struct spmi_controller *ctrl)
 EXPORT_SYMBOL_GPL(spmi_controller_remove);
 
 /**
- * spmi_driver_register() - Register client driver with SPMI core
+ * __spmi_driver_register() - Register client driver with SPMI core
  * @sdrv:	client driver to be associated with client-device.
+ * @owner:	module owner
  *
  * This API will register the client driver with the SPMI framework.
  * It is typically called from the driver's module-init function.

@@ -966,16 +966,13 @@ static void this_cpu_set_vectors(enum arm64_bp_harden_el1_vectors slot)
 {
 	const char *v = arm64_get_bp_hardening_vector(slot);
 
-	if (slot < 0)
-		return;
-
 	__this_cpu_write(this_cpu_vector, v);
 
 	/*
 	 * When KPTI is in use, the vectors are switched when exiting to
 	 * user-space.
 	 */
-	if (arm64_kernel_unmapped_at_el0())
+	if (cpus_have_cap(ARM64_UNMAP_KERNEL_AT_EL0))
 		return;
 
 	write_sysreg(v, vbar_el1);

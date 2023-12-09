@@ -448,6 +448,165 @@ static int btf_parse_type_sec(struct btf *btf)
 	return 0;
 }
 
+static int btf_validate_str(const struct btf *btf, __u32 str_off, const char *what, __u32 type_id)
+{
+	const char *s;
+
+	s = btf__str_by_offset(btf, str_off);
+	if (!s) {
+		pr_warn("btf: type [%u]: invalid %s (string offset %u)\n", type_id, what, str_off);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int btf_validate_id(const struct btf *btf, __u32 id, __u32 ctx_id)
+{
+	const struct btf_type *t;
+
+	t = btf__type_by_id(btf, id);
+	if (!t) {
+		pr_warn("btf: type [%u]: invalid referenced type ID %u\n", ctx_id, id);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int btf_validate_type(const struct btf *btf, const struct btf_type *t, __u32 id)
+{
+	__u32 kind = btf_kind(t);
+	int err, i, n;
+
+	err = btf_validate_str(btf, t->name_off, "type name", id);
+	if (err)
+		return err;
+
+	switch (kind) {
+	case BTF_KIND_UNKN:
+	case BTF_KIND_INT:
+	case BTF_KIND_FWD:
+	case BTF_KIND_FLOAT:
+		break;
+	case BTF_KIND_PTR:
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_CONST:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_VAR:
+	case BTF_KIND_DECL_TAG:
+	case BTF_KIND_TYPE_TAG:
+		err = btf_validate_id(btf, t->type, id);
+		if (err)
+			return err;
+		break;
+	case BTF_KIND_ARRAY: {
+		const struct btf_array *a = btf_array(t);
+
+		err = btf_validate_id(btf, a->type, id);
+		err = err ?: btf_validate_id(btf, a->index_type, id);
+		if (err)
+			return err;
+		break;
+	}
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION: {
+		const struct btf_member *m = btf_members(t);
+
+		n = btf_vlen(t);
+		for (i = 0; i < n; i++, m++) {
+			err = btf_validate_str(btf, m->name_off, "field name", id);
+			err = err ?: btf_validate_id(btf, m->type, id);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	case BTF_KIND_ENUM: {
+		const struct btf_enum *m = btf_enum(t);
+
+		n = btf_vlen(t);
+		for (i = 0; i < n; i++, m++) {
+			err = btf_validate_str(btf, m->name_off, "enum name", id);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	case BTF_KIND_ENUM64: {
+		const struct btf_enum64 *m = btf_enum64(t);
+
+		n = btf_vlen(t);
+		for (i = 0; i < n; i++, m++) {
+			err = btf_validate_str(btf, m->name_off, "enum name", id);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	case BTF_KIND_FUNC: {
+		const struct btf_type *ft;
+
+		err = btf_validate_id(btf, t->type, id);
+		if (err)
+			return err;
+		ft = btf__type_by_id(btf, t->type);
+		if (btf_kind(ft) != BTF_KIND_FUNC_PROTO) {
+			pr_warn("btf: type [%u]: referenced type [%u] is not FUNC_PROTO\n", id, t->type);
+			return -EINVAL;
+		}
+		break;
+	}
+	case BTF_KIND_FUNC_PROTO: {
+		const struct btf_param *m = btf_params(t);
+
+		n = btf_vlen(t);
+		for (i = 0; i < n; i++, m++) {
+			err = btf_validate_str(btf, m->name_off, "param name", id);
+			err = err ?: btf_validate_id(btf, m->type, id);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	case BTF_KIND_DATASEC: {
+		const struct btf_var_secinfo *m = btf_var_secinfos(t);
+
+		n = btf_vlen(t);
+		for (i = 0; i < n; i++, m++) {
+			err = btf_validate_id(btf, m->type, id);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	default:
+		pr_warn("btf: type [%u]: unrecognized kind %u\n", id, kind);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/* Validate basic sanity of BTF. It's intentionally less thorough than
+ * kernel's validation and validates only properties of BTF that libbpf relies
+ * on to be correct (e.g., valid type IDs, valid string offsets, etc)
+ */
+static int btf_sanity_check(const struct btf *btf)
+{
+	const struct btf_type *t;
+	__u32 i, n = btf__type_cnt(btf);
+	int err;
+
+	for (i = 1; i < n; i++) {
+		t = btf_type_by_id(btf, i);
+		err = btf_validate_type(btf, t, i);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
 __u32 btf__type_cnt(const struct btf *btf)
 {
 	return btf->start_id + btf->nr_types;
@@ -688,7 +847,20 @@ int btf__align_of(const struct btf *btf, __u32 id)
 			if (align <= 0)
 				return libbpf_err(align);
 			max_align = max(max_align, align);
+
+			/* if field offset isn't aligned according to field
+			 * type's alignment, then struct must be packed
+			 */
+			if (btf_member_bitfield_size(t, i) == 0 &&
+			    (m->offset % (8 * align)) != 0)
+				return 1;
 		}
+
+		/* if struct/union size isn't a multiple of its alignment,
+		 * then struct must be packed
+		 */
+		if ((t->size % max_align) != 0)
+			return 1;
 
 		return max_align;
 	}
@@ -889,6 +1061,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 
 	err = btf_parse_str_sec(btf);
 	err = err ?: btf_parse_type_sec(btf);
+	err = err ?: btf_sanity_check(btf);
 	if (err)
 		goto done;
 
@@ -987,10 +1160,9 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 		}
 	}
 
-	err = 0;
-
 	if (!btf_data) {
-		err = -ENOENT;
+		pr_warn("failed to find '%s' ELF section in %s\n", BTF_ELF_SEC, path);
+		err = -ENODATA;
 		goto done;
 	}
 	btf = btf_new(btf_data->d_buf, btf_data->d_size, base_btf);
@@ -1052,7 +1224,7 @@ static struct btf *btf_parse_raw(const char *path, struct btf *base_btf)
 	int err = 0;
 	long sz;
 
-	f = fopen(path, "rb");
+	f = fopen(path, "rbe");
 	if (!f) {
 		err = -errno;
 		goto err_out;
@@ -1336,9 +1508,9 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	void *ptr;
 	int err;
 
-	/* we won't know btf_size until we call bpf_obj_get_info_by_fd(). so
+	/* we won't know btf_size until we call bpf_btf_get_info_by_fd(). so
 	 * let's start with a sane default - 4KiB here - and resize it only if
-	 * bpf_obj_get_info_by_fd() needs a bigger buffer.
+	 * bpf_btf_get_info_by_fd() needs a bigger buffer.
 	 */
 	last_size = 4096;
 	ptr = malloc(last_size);
@@ -1348,7 +1520,7 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	memset(&btf_info, 0, sizeof(btf_info));
 	btf_info.btf = ptr_to_u64(ptr);
 	btf_info.btf_size = last_size;
-	err = bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len);
+	err = bpf_btf_get_info_by_fd(btf_fd, &btf_info, &len);
 
 	if (!err && btf_info.btf_size > last_size) {
 		void *temp_ptr;
@@ -1366,7 +1538,7 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 		btf_info.btf = ptr_to_u64(ptr);
 		btf_info.btf_size = last_size;
 
-		err = bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len);
+		err = bpf_btf_get_info_by_fd(btf_fd, &btf_info, &len);
 	}
 
 	if (err || btf_info.btf_size > last_size) {

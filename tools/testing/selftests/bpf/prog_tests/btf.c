@@ -879,6 +879,34 @@ static struct btf_raw_test raw_tests[] = {
 	.btf_load_err = true,
 	.err_str = "Invalid elem",
 },
+{
+	.descr = "var after datasec, ptr followed by modifier",
+	.raw_types = {
+		/* .bss section */				/* [1] */
+		BTF_TYPE_ENC(NAME_TBD, BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 2),
+			sizeof(void*)+4),
+		BTF_VAR_SECINFO_ENC(4, 0, sizeof(void*)),
+		BTF_VAR_SECINFO_ENC(6, sizeof(void*), 4),
+		/* int */					/* [2] */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),
+		/* int* */					/* [3] */
+		BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_PTR, 0, 0), 2),
+		BTF_VAR_ENC(NAME_TBD, 3, 0),			/* [4] */
+		/* const int */					/* [5] */
+		BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_CONST, 0, 0), 2),
+		BTF_VAR_ENC(NAME_TBD, 5, 0),			/* [6] */
+		BTF_END_RAW,
+	},
+	.str_sec = "\0a\0b\0c\0",
+	.str_sec_size = sizeof("\0a\0b\0c\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = ".bss",
+	.key_size = sizeof(int),
+	.value_size = sizeof(void*)+4,
+	.key_type_id = 0,
+	.value_type_id = 1,
+	.max_entries = 1,
+},
 /* Test member exceeds the size of struct.
  *
  * struct A {
@@ -3963,6 +3991,46 @@ static struct btf_raw_test raw_tests[] = {
 	.err_str = "Invalid arg#1",
 },
 {
+	.descr = "decl_tag test #18, decl_tag as the map key type",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_STRUCT_ENC(0, 2, 8),			/* [2] */
+		BTF_MEMBER_ENC(NAME_TBD, 1, 0),
+		BTF_MEMBER_ENC(NAME_TBD, 1, 32),
+		BTF_DECL_TAG_ENC(NAME_TBD, 2, -1),		/* [3] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0m1\0m2\0tag"),
+	.map_type = BPF_MAP_TYPE_HASH,
+	.map_name = "tag_type_check_btf",
+	.key_size = 8,
+	.value_size = 4,
+	.key_type_id = 3,
+	.value_type_id = 1,
+	.max_entries = 1,
+	.map_create_err = true,
+},
+{
+	.descr = "decl_tag test #19, decl_tag as the map value type",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_STRUCT_ENC(0, 2, 8),			/* [2] */
+		BTF_MEMBER_ENC(NAME_TBD, 1, 0),
+		BTF_MEMBER_ENC(NAME_TBD, 1, 32),
+		BTF_DECL_TAG_ENC(NAME_TBD, 2, -1),		/* [3] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0m1\0m2\0tag"),
+	.map_type = BPF_MAP_TYPE_HASH,
+	.map_name = "tag_type_check_btf",
+	.key_size = 4,
+	.value_size = 8,
+	.key_type_id = 1,
+	.value_type_id = 3,
+	.max_entries = 1,
+	.map_create_err = true,
+},
+{
 	.descr = "type_tag test #1",
 	.raw_types = {
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
@@ -4422,7 +4490,7 @@ static int test_big_btf_info(unsigned int test_num)
 	info->btf = ptr_to_u64(user_btf);
 	info->btf_size = raw_btf_size;
 
-	err = bpf_obj_get_info_by_fd(btf_fd, info, &info_len);
+	err = bpf_btf_get_info_by_fd(btf_fd, info, &info_len);
 	if (CHECK(!err, "!err")) {
 		err = -1;
 		goto done;
@@ -4435,7 +4503,7 @@ static int test_big_btf_info(unsigned int test_num)
 	 * to userspace.
 	 */
 	info_garbage.garbage = 0;
-	err = bpf_obj_get_info_by_fd(btf_fd, info, &info_len);
+	err = bpf_btf_get_info_by_fd(btf_fd, info, &info_len);
 	if (CHECK(err || info_len != sizeof(*info),
 		  "err:%d errno:%d info_len:%u sizeof(*info):%zu",
 		  err, errno, info_len, sizeof(*info))) {
@@ -4499,7 +4567,7 @@ static int test_btf_id(unsigned int test_num)
 
 	/* Test BPF_OBJ_GET_INFO_BY_ID on btf_id */
 	info_len = sizeof(info[0]);
-	err = bpf_obj_get_info_by_fd(btf_fd[0], &info[0], &info_len);
+	err = bpf_btf_get_info_by_fd(btf_fd[0], &info[0], &info_len);
 	if (CHECK(err, "errno:%d", errno)) {
 		err = -1;
 		goto done;
@@ -4512,7 +4580,7 @@ static int test_btf_id(unsigned int test_num)
 	}
 
 	ret = 0;
-	err = bpf_obj_get_info_by_fd(btf_fd[1], &info[1], &info_len);
+	err = bpf_btf_get_info_by_fd(btf_fd[1], &info[1], &info_len);
 	if (CHECK(err || info[0].id != info[1].id ||
 		  info[0].btf_size != info[1].btf_size ||
 		  (ret = memcmp(user_btf[0], user_btf[1], info[0].btf_size)),
@@ -4535,7 +4603,7 @@ static int test_btf_id(unsigned int test_num)
 	}
 
 	info_len = sizeof(map_info);
-	err = bpf_obj_get_info_by_fd(map_fd, &map_info, &info_len);
+	err = bpf_map_get_info_by_fd(map_fd, &map_info, &info_len);
 	if (CHECK(err || map_info.btf_id != info[0].id ||
 		  map_info.btf_key_type_id != 1 || map_info.btf_value_type_id != 2,
 		  "err:%d errno:%d info.id:%u btf_id:%u btf_key_type_id:%u btf_value_type_id:%u",
@@ -4638,7 +4706,7 @@ static void do_test_get_info(unsigned int test_num)
 	info.btf_size = user_btf_size;
 
 	ret = 0;
-	err = bpf_obj_get_info_by_fd(btf_fd, &info, &info_len);
+	err = bpf_btf_get_info_by_fd(btf_fd, &info, &info_len);
 	if (CHECK(err || !info.id || info_len != sizeof(info) ||
 		  info.btf_size != raw_btf_size ||
 		  (ret = memcmp(raw_btf, user_btf, expected_nbytes)),
@@ -4755,7 +4823,7 @@ static void do_test_file(unsigned int test_num)
 
 	/* get necessary program info */
 	info_len = sizeof(struct bpf_prog_info);
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 
 	if (CHECK(err < 0, "invalid get info (1st) errno:%d", errno)) {
 		fprintf(stderr, "%s\n", btf_log_buf);
@@ -4787,7 +4855,7 @@ static void do_test_file(unsigned int test_num)
 	info.func_info_rec_size = rec_size;
 	info.func_info = ptr_to_u64(func_info);
 
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 
 	if (CHECK(err < 0, "invalid get info (2nd) errno:%d", errno)) {
 		fprintf(stderr, "%s\n", btf_log_buf);
@@ -6405,7 +6473,7 @@ static int test_get_finfo(const struct prog_info_raw_test *test,
 
 	/* get necessary lens */
 	info_len = sizeof(struct bpf_prog_info);
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 	if (CHECK(err < 0, "invalid get info (1st) errno:%d", errno)) {
 		fprintf(stderr, "%s\n", btf_log_buf);
 		return -1;
@@ -6435,7 +6503,7 @@ static int test_get_finfo(const struct prog_info_raw_test *test,
 	info.nr_func_info = nr_func_info;
 	info.func_info_rec_size = rec_size;
 	info.func_info = ptr_to_u64(func_info);
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 	if (CHECK(err < 0, "invalid get info (2nd) errno:%d", errno)) {
 		fprintf(stderr, "%s\n", btf_log_buf);
 		err = -1;
@@ -6499,7 +6567,7 @@ static int test_get_linfo(const struct prog_info_raw_test *test,
 	nr_jited_func_lens = nr_jited_ksyms;
 
 	info_len = sizeof(struct bpf_prog_info);
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 	if (CHECK(err < 0, "err:%d errno:%d", err, errno)) {
 		err = -1;
 		goto done;
@@ -6573,7 +6641,7 @@ static int test_get_linfo(const struct prog_info_raw_test *test,
 		info.jited_func_lens = ptr_to_u64(jited_func_lens);
 	}
 
-	err = bpf_obj_get_info_by_fd(prog_fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 
 	/*
 	 * Only recheck the info.*line_info* fields.
@@ -7228,7 +7296,7 @@ static struct btf_dedup_test dedup_tests[] = {
 			BTF_FUNC_PROTO_ENC(0, 2),			/* [3] */
 				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
 				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(3), 1),
-			BTF_FUNC_ENC(NAME_NTH(4), 2),			/* [4] */
+			BTF_FUNC_ENC(NAME_NTH(4), 3),			/* [4] */
 			/* tag -> t */
 			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [5] */
 			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [6] */
@@ -7249,7 +7317,7 @@ static struct btf_dedup_test dedup_tests[] = {
 			BTF_FUNC_PROTO_ENC(0, 2),			/* [3] */
 				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
 				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(3), 1),
-			BTF_FUNC_ENC(NAME_NTH(4), 2),			/* [4] */
+			BTF_FUNC_ENC(NAME_NTH(4), 3),			/* [4] */
 			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [5] */
 			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, -1),		/* [6] */
 			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, 1),		/* [7] */

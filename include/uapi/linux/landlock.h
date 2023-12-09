@@ -31,6 +31,12 @@ struct landlock_ruleset_attr {
 	 * this access right.
 	 */
 	__u64 handled_access_fs;
+	/**
+	 * @handled_access_net: Bitmask of actions (cf. `Network flags`_)
+	 * that is handled by this ruleset and should then be forbidden if no
+	 * rule explicitly allow them.
+	 */
+	__u64 handled_access_net;
 };
 
 /*
@@ -54,6 +60,11 @@ enum landlock_rule_type {
 	 * landlock_path_beneath_attr .
 	 */
 	LANDLOCK_RULE_PATH_BENEATH = 1,
+	/**
+	 * @LANDLOCK_RULE_NET_PORT: Type of a &struct
+	 * landlock_net_port_attr .
+	 */
+	LANDLOCK_RULE_NET_PORT,
 };
 
 /**
@@ -78,6 +89,31 @@ struct landlock_path_beneath_attr {
 	 * Cf. security/landlock/syscalls.c:build_check_abi()
 	 */
 } __attribute__((packed));
+
+/**
+ * struct landlock_net_port_attr - Network port definition
+ *
+ * Argument of sys_landlock_add_rule().
+ */
+struct landlock_net_port_attr {
+	/**
+	 * @allowed_access: Bitmask of allowed access network for a port
+	 * (cf. `Network flags`_).
+	 */
+	__u64 allowed_access;
+	/**
+	 * @port: Network port in host endianness.
+	 *
+	 * It should be noted that port 0 passed to :manpage:`bind(2)` will
+	 * bind to an available port from a specific port range. This can be
+	 * configured thanks to the ``/proc/sys/net/ipv4/ip_local_port_range``
+	 * sysctl (also used for IPv6). A Landlock rule with port 0 and the
+	 * ``LANDLOCK_ACCESS_NET_BIND_TCP`` right means that requesting to bind
+	 * on port 0 is allowed and it will automatically translate to binding
+	 * on the related port range.
+	 */
+	__u64 port;
+};
 
 /**
  * DOC: fs_access
@@ -130,21 +166,37 @@ struct landlock_path_beneath_attr {
  * - %LANDLOCK_ACCESS_FS_MAKE_BLOCK: Create (or rename or link) a block device.
  * - %LANDLOCK_ACCESS_FS_MAKE_SYM: Create (or rename or link) a symbolic link.
  * - %LANDLOCK_ACCESS_FS_REFER: Link or rename a file from or to a different
- *   directory (i.e. reparent a file hierarchy).  This access right is
- *   available since the second version of the Landlock ABI.  This is also the
- *   only access right which is always considered handled by any ruleset in
- *   such a way that reparenting a file hierarchy is always denied by default.
- *   To avoid privilege escalation, it is not enough to add a rule with this
- *   access right.  When linking or renaming a file, the destination directory
- *   hierarchy must also always have the same or a superset of restrictions of
- *   the source hierarchy.  If it is not the case, or if the domain doesn't
- *   handle this access right, such actions are denied by default with errno
- *   set to ``EXDEV``.  Linking also requires a ``LANDLOCK_ACCESS_FS_MAKE_*``
- *   access right on the destination directory, and renaming also requires a
- *   ``LANDLOCK_ACCESS_FS_REMOVE_*`` access right on the source's (file or
- *   directory) parent.  Otherwise, such actions are denied with errno set to
- *   ``EACCES``.  The ``EACCES`` errno prevails over ``EXDEV`` to let user space
- *   efficiently deal with an unrecoverable error.
+ *   directory (i.e. reparent a file hierarchy).
+ *
+ *   This access right is available since the second version of the Landlock
+ *   ABI.
+ *
+ *   This is the only access right which is denied by default by any ruleset,
+ *   even if the right is not specified as handled at ruleset creation time.
+ *   The only way to make a ruleset grant this right is to explicitly allow it
+ *   for a specific directory by adding a matching rule to the ruleset.
+ *
+ *   In particular, when using the first Landlock ABI version, Landlock will
+ *   always deny attempts to reparent files between different directories.
+ *
+ *   In addition to the source and destination directories having the
+ *   %LANDLOCK_ACCESS_FS_REFER access right, the attempted link or rename
+ *   operation must meet the following constraints:
+ *
+ *   * The reparented file may not gain more access rights in the destination
+ *     directory than it previously had in the source directory.  If this is
+ *     attempted, the operation results in an ``EXDEV`` error.
+ *
+ *   * When linking or renaming, the ``LANDLOCK_ACCESS_FS_MAKE_*`` right for the
+ *     respective file type must be granted for the destination directory.
+ *     Otherwise, the operation results in an ``EACCES`` error.
+ *
+ *   * When renaming, the ``LANDLOCK_ACCESS_FS_REMOVE_*`` right for the
+ *     respective file type must be granted for the source directory.  Otherwise,
+ *     the operation results in an ``EACCES`` error.
+ *
+ *   If multiple requirements are not met, the ``EACCES`` error code takes
+ *   precedence over ``EXDEV``.
  *
  * .. warning::
  *
@@ -173,4 +225,23 @@ struct landlock_path_beneath_attr {
 #define LANDLOCK_ACCESS_FS_TRUNCATE			(1ULL << 14)
 /* clang-format on */
 
+/**
+ * DOC: net_access
+ *
+ * Network flags
+ * ~~~~~~~~~~~~~~~~
+ *
+ * These flags enable to restrict a sandboxed process to a set of network
+ * actions. This is supported since the Landlock ABI version 4.
+ *
+ * TCP sockets with allowed actions:
+ *
+ * - %LANDLOCK_ACCESS_NET_BIND_TCP: Bind a TCP socket to a local port.
+ * - %LANDLOCK_ACCESS_NET_CONNECT_TCP: Connect an active TCP socket to
+ *   a remote port.
+ */
+/* clang-format off */
+#define LANDLOCK_ACCESS_NET_BIND_TCP			(1ULL << 0)
+#define LANDLOCK_ACCESS_NET_CONNECT_TCP			(1ULL << 1)
+/* clang-format on */
 #endif /* _UAPI_LINUX_LANDLOCK_H */

@@ -1044,9 +1044,6 @@ struct ov13858 {
 
 	/* Mutex for serialized access */
 	struct mutex mutex;
-
-	/* Streaming on/off */
-	bool streaming;
 };
 
 #define to_ov13858(_sd)	container_of(_sd, struct ov13858, sd)
@@ -1467,10 +1464,6 @@ static int ov13858_set_stream(struct v4l2_subdev *sd, int enable)
 	int ret = 0;
 
 	mutex_lock(&ov13858->mutex);
-	if (ov13858->streaming == enable) {
-		mutex_unlock(&ov13858->mutex);
-		return 0;
-	}
 
 	if (enable) {
 		ret = pm_runtime_resume_and_get(&client->dev);
@@ -1489,7 +1482,6 @@ static int ov13858_set_stream(struct v4l2_subdev *sd, int enable)
 		pm_runtime_put(&client->dev);
 	}
 
-	ov13858->streaming = enable;
 	mutex_unlock(&ov13858->mutex);
 
 	return ret;
@@ -1499,37 +1491,6 @@ err_rpm_put:
 err_unlock:
 	mutex_unlock(&ov13858->mutex);
 
-	return ret;
-}
-
-static int __maybe_unused ov13858_suspend(struct device *dev)
-{
-	struct v4l2_subdev *sd = dev_get_drvdata(dev);
-	struct ov13858 *ov13858 = to_ov13858(sd);
-
-	if (ov13858->streaming)
-		ov13858_stop_streaming(ov13858);
-
-	return 0;
-}
-
-static int __maybe_unused ov13858_resume(struct device *dev)
-{
-	struct v4l2_subdev *sd = dev_get_drvdata(dev);
-	struct ov13858 *ov13858 = to_ov13858(sd);
-	int ret;
-
-	if (ov13858->streaming) {
-		ret = ov13858_start_streaming(ov13858);
-		if (ret)
-			goto error;
-	}
-
-	return 0;
-
-error:
-	ov13858_stop_streaming(ov13858);
-	ov13858->streaming = false;
 	return ret;
 }
 
@@ -1787,10 +1748,6 @@ static const struct i2c_device_id ov13858_id_table[] = {
 
 MODULE_DEVICE_TABLE(i2c, ov13858_id_table);
 
-static const struct dev_pm_ops ov13858_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(ov13858_suspend, ov13858_resume)
-};
-
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id ov13858_acpi_ids[] = {
 	{"OVTID858"},
@@ -1803,10 +1760,9 @@ MODULE_DEVICE_TABLE(acpi, ov13858_acpi_ids);
 static struct i2c_driver ov13858_i2c_driver = {
 	.driver = {
 		.name = "ov13858",
-		.pm = &ov13858_pm_ops,
 		.acpi_match_table = ACPI_PTR(ov13858_acpi_ids),
 	},
-	.probe_new = ov13858_probe,
+	.probe = ov13858_probe,
 	.remove = ov13858_remove,
 	.id_table = ov13858_id_table,
 };
@@ -1814,7 +1770,7 @@ static struct i2c_driver ov13858_i2c_driver = {
 module_i2c_driver(ov13858_i2c_driver);
 
 MODULE_AUTHOR("Kan, Chris <chris.kan@intel.com>");
-MODULE_AUTHOR("Rapolu, Chiranjeevi <chiranjeevi.rapolu@intel.com>");
+MODULE_AUTHOR("Rapolu, Chiranjeevi");
 MODULE_AUTHOR("Yang, Hyungwoo");
 MODULE_DESCRIPTION("Omnivision ov13858 sensor driver");
 MODULE_LICENSE("GPL v2");

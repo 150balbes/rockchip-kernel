@@ -31,7 +31,7 @@
 #include <linux/slab.h>
 
 #include <linux/io.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 
 #include "niu.h"
 
@@ -4522,7 +4522,7 @@ static int niu_alloc_channels(struct niu *np)
 
 		err = niu_rbr_fill(np, rp, GFP_KERNEL);
 		if (err)
-			return err;
+			goto out_err;
 	}
 
 	tx_rings = kcalloc(num_tx_rings, sizeof(struct tx_ring_info),
@@ -9271,7 +9271,7 @@ static int niu_get_of_props(struct niu *np)
 	if (model)
 		strcpy(np->vpd.model, model);
 
-	if (of_find_property(dp, "hot-swappable-phy", NULL)) {
+	if (of_property_read_bool(dp, "hot-swappable-phy")) {
 		np->flags |= (NIU_FLAGS_10G | NIU_FLAGS_FIBER |
 			NIU_FLAGS_HOTPLUG_PHY);
 	}
@@ -10132,7 +10132,7 @@ err_out:
 	return err;
 }
 
-static int niu_of_remove(struct platform_device *op)
+static void niu_of_remove(struct platform_device *op)
 {
 	struct net_device *dev = platform_get_drvdata(op);
 
@@ -10165,7 +10165,6 @@ static int niu_of_remove(struct platform_device *op)
 
 		free_netdev(dev);
 	}
-	return 0;
 }
 
 static const struct of_device_id niu_match[] = {
@@ -10183,7 +10182,7 @@ static struct platform_driver niu_of_driver = {
 		.of_match_table = niu_match,
 	},
 	.probe		= niu_of_probe,
-	.remove		= niu_of_remove,
+	.remove_new	= niu_of_remove,
 };
 
 #endif /* CONFIG_SPARC64 */

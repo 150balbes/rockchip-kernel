@@ -33,6 +33,7 @@ enum gdma_request_type {
 	GDMA_DESTROY_PD			= 30,
 	GDMA_CREATE_MR			= 31,
 	GDMA_DESTROY_MR			= 32,
+	GDMA_QUERY_HWC_TIMEOUT		= 84, /* 0x54 */
 };
 
 #define GDMA_RESOURCE_DOORBELL_PAGE	27
@@ -57,6 +58,8 @@ enum gdma_eqe_type {
 	GDMA_EQE_HWC_INIT_EQ_ID_DB	= 129,
 	GDMA_EQE_HWC_INIT_DATA		= 130,
 	GDMA_EQE_HWC_INIT_DONE		= 131,
+	GDMA_EQE_HWC_SOC_RECONFIG	= 132,
+	GDMA_EQE_HWC_SOC_RECONFIG_DATA	= 133,
 };
 
 enum {
@@ -145,6 +148,7 @@ struct gdma_general_req {
 }; /* HW DATA */
 
 #define GDMA_MESSAGE_V1 1
+#define GDMA_MESSAGE_V2 2
 
 struct gdma_general_resp {
 	struct gdma_resp_hdr hdr;
@@ -336,9 +340,12 @@ struct gdma_queue_spec {
 	};
 };
 
+#define MANA_IRQ_NAME_SZ 32
+
 struct gdma_irq_context {
 	void (*handler)(void *arg);
 	void *arg;
+	char name[MANA_IRQ_NAME_SZ];
 };
 
 struct gdma_context {
@@ -350,6 +357,9 @@ struct gdma_context {
 	unsigned int		num_msix_usable;
 	struct gdma_resource	msix_resource;
 	struct gdma_irq_context	*irq_contexts;
+
+	/* L2 MTU */
+	u16 adapter_mtu;
 
 	/* This maps a CQ index to the queue structure. */
 	unsigned int		max_num_cqs;
@@ -524,10 +534,12 @@ enum {
  * so the driver is able to reliably support features like busy_poll.
  */
 #define GDMA_DRV_CAP_FLAG_1_NAPI_WKDONE_FIX BIT(2)
+#define GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG BIT(3)
 
 #define GDMA_DRV_CAP_FLAGS1 \
 	(GDMA_DRV_CAP_FLAG_1_EQ_SHARING_MULTI_VPORT | \
-	 GDMA_DRV_CAP_FLAG_1_NAPI_WKDONE_FIX)
+	 GDMA_DRV_CAP_FLAG_1_NAPI_WKDONE_FIX | \
+	 GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG)
 
 #define GDMA_DRV_CAP_FLAGS2 0
 
@@ -656,6 +668,19 @@ struct gdma_disable_queue_req {
 	u32 queue_index;
 	u32 alloc_res_id_on_creation;
 }; /* HW DATA */
+
+/* GDMA_QUERY_HWC_TIMEOUT */
+struct gdma_query_hwc_timeout_req {
+	struct gdma_req_hdr hdr;
+	u32 timeout_ms;
+	u32 reserved;
+};
+
+struct gdma_query_hwc_timeout_resp {
+	struct gdma_resp_hdr hdr;
+	u32 timeout_ms;
+	u32 reserved;
+};
 
 enum atb_page_size {
 	ATB_PAGE_SIZE_4K,

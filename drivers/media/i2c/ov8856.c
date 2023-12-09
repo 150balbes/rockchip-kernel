@@ -1438,9 +1438,6 @@ struct ov8856 {
 	/* To serialize asynchronus callbacks */
 	struct mutex mutex;
 
-	/* Streaming on/off */
-	bool streaming;
-
 	/* lanes index */
 	u8 nlanes;
 
@@ -1707,46 +1704,6 @@ static int ov8856_identify_module(struct ov8856 *ov8856)
 		dev_err(&client->dev, "chip id mismatch: %x!=%x",
 			OV8856_CHIP_ID, val);
 		return -ENXIO;
-	}
-
-	ret = ov8856_write_reg(ov8856, OV8856_REG_MODE_SELECT,
-			       OV8856_REG_VALUE_08BIT, OV8856_MODE_STREAMING);
-	if (ret)
-		return ret;
-
-	ret = ov8856_write_reg(ov8856, OV8856_OTP_MODE_CTRL,
-			       OV8856_REG_VALUE_08BIT, OV8856_OTP_MODE_AUTO);
-	if (ret) {
-		dev_err(&client->dev, "failed to set otp mode");
-		return ret;
-	}
-
-	ret = ov8856_write_reg(ov8856, OV8856_OTP_LOAD_CTRL,
-			       OV8856_REG_VALUE_08BIT,
-			       OV8856_OTP_LOAD_CTRL_ENABLE);
-	if (ret) {
-		dev_err(&client->dev, "failed to enable load control");
-		return ret;
-	}
-
-	ret = ov8856_read_reg(ov8856, OV8856_MODULE_REVISION,
-			      OV8856_REG_VALUE_08BIT, &val);
-	if (ret) {
-		dev_err(&client->dev, "failed to read module revision");
-		return ret;
-	}
-
-	dev_info(&client->dev, "OV8856 revision %x (%s) at address 0x%02x\n",
-		 val,
-		 val == OV8856_2A_MODULE ? "2A" :
-		 val == OV8856_1B_MODULE ? "1B" : "unknown revision",
-		 client->addr);
-
-	ret = ov8856_write_reg(ov8856, OV8856_REG_MODE_SELECT,
-			       OV8856_REG_VALUE_08BIT, OV8856_MODE_STANDBY);
-	if (ret) {
-		dev_err(&client->dev, "failed to exit streaming mode");
-		return ret;
 	}
 
 	ov8856->identified = true;
@@ -2082,9 +2039,6 @@ static int ov8856_set_stream(struct v4l2_subdev *sd, int enable)
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
 
-	if (ov8856->streaming == enable)
-		return 0;
-
 	mutex_lock(&ov8856->mutex);
 	if (enable) {
 		ret = pm_runtime_resume_and_get(&client->dev);
@@ -2104,7 +2058,6 @@ static int ov8856_set_stream(struct v4l2_subdev *sd, int enable)
 		pm_runtime_put(&client->dev);
 	}
 
-	ov8856->streaming = enable;
 	mutex_unlock(&ov8856->mutex);
 
 	return ret;
@@ -2161,45 +2114,6 @@ static int ov8856_power_off(struct device *dev)
 	regulator_bulk_disable(ARRAY_SIZE(ov8856_supply_names),
 			       ov8856->supplies);
 	clk_disable_unprepare(ov8856->xvclk);
-
-	return 0;
-}
-
-static int __maybe_unused ov8856_suspend(struct device *dev)
-{
-	struct v4l2_subdev *sd = dev_get_drvdata(dev);
-	struct ov8856 *ov8856 = to_ov8856(sd);
-
-	mutex_lock(&ov8856->mutex);
-	if (ov8856->streaming)
-		ov8856_stop_streaming(ov8856);
-
-	ov8856_power_off(dev);
-	mutex_unlock(&ov8856->mutex);
-
-	return 0;
-}
-
-static int __maybe_unused ov8856_resume(struct device *dev)
-{
-	struct v4l2_subdev *sd = dev_get_drvdata(dev);
-	struct ov8856 *ov8856 = to_ov8856(sd);
-	int ret;
-
-	mutex_lock(&ov8856->mutex);
-
-	ov8856_power_on(dev);
-	if (ov8856->streaming) {
-		ret = ov8856_start_streaming(ov8856);
-		if (ret) {
-			ov8856->streaming = false;
-			ov8856_stop_streaming(ov8856);
-			mutex_unlock(&ov8856->mutex);
-			return ret;
-		}
-	}
-
-	mutex_unlock(&ov8856->mutex);
 
 	return 0;
 }
@@ -2541,7 +2455,6 @@ probe_power_off:
 }
 
 static const struct dev_pm_ops ov8856_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(ov8856_suspend, ov8856_resume)
 	SET_RUNTIME_PM_OPS(ov8856_power_off, ov8856_power_on, NULL)
 };
 
@@ -2567,7 +2480,7 @@ static struct i2c_driver ov8856_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(ov8856_acpi_ids),
 		.of_match_table = ov8856_of_match,
 	},
-	.probe_new = ov8856_probe,
+	.probe = ov8856_probe,
 	.remove = ov8856_remove,
 	.flags = I2C_DRV_ACPI_WAIVE_D0_PROBE,
 };

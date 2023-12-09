@@ -14,6 +14,7 @@
 #include "sof-priv.h"
 
 /* The DSP window indices are fixed */
+#define SOF_IPC4_INBOX_WINDOW_IDX	0
 #define SOF_IPC4_OUTBOX_WINDOW_IDX	1
 #define SOF_IPC4_DEBUG_WINDOW_IDX	2
 
@@ -27,14 +28,14 @@ enum sof_ipc4_mtrace_type {
 /**
  * struct sof_ipc4_fw_module - IPC4 module info
  * @sof_man4_module: Module info
+ * @fw_mod_cfg: Pointer to the module config start of the module
  * @m_ida: Module instance identifier
- * @bss_size: Module object size
  * @private: Module private data
  */
 struct sof_ipc4_fw_module {
 	struct sof_man4_module man4_module_entry;
+	const struct sof_man4_module_config *fw_mod_cfg;
 	struct ida m_ida;
-	u32 bss_size;
 	void *private;
 };
 
@@ -70,6 +71,7 @@ struct sof_ipc4_fw_library {
  *		    base firmware
  *
  * @load_library: Callback function for platform dependent library loading
+ * @pipeline_state_mutex: Mutex to protect pipeline triggers, ref counts, states and deletion
  */
 struct sof_ipc4_fw_data {
 	u32 manifest_fw_hdr_offset;
@@ -82,6 +84,21 @@ struct sof_ipc4_fw_data {
 
 	int (*load_library)(struct snd_sof_dev *sdev,
 			    struct sof_ipc4_fw_library *fw_lib, bool reload);
+	struct mutex pipeline_state_mutex; /* protect pipeline triggers, ref counts and states */
+};
+
+/**
+ * struct sof_ipc4_timestamp_info - IPC4 timestamp info
+ * @host_copier: the host copier of the pcm stream
+ * @dai_copier: the dai copier of the pcm stream
+ * @stream_start_offset: reported by fw in memory window
+ * @llp_offset: llp offset in memory window
+ */
+struct sof_ipc4_timestamp_info {
+	struct sof_ipc4_copier *host_copier;
+	struct sof_ipc4_copier *dai_copier;
+	u64 stream_start_offset;
+	u32 llp_offset;
 };
 
 extern const struct sof_ipc_fw_loader_ops ipc4_loader_ops;
@@ -97,4 +114,13 @@ int sof_ipc4_query_fw_configuration(struct snd_sof_dev *sdev);
 int sof_ipc4_reload_fw_libraries(struct snd_sof_dev *sdev);
 struct sof_ipc4_fw_module *sof_ipc4_find_module_by_uuid(struct snd_sof_dev *sdev,
 							const guid_t *uuid);
+
+struct sof_ipc4_base_module_cfg;
+void sof_ipc4_update_cpc_from_manifest(struct snd_sof_dev *sdev,
+				       struct sof_ipc4_fw_module *fw_module,
+				       struct sof_ipc4_base_module_cfg *basecfg);
+
+size_t sof_ipc4_find_debug_slot_offset_by_type(struct snd_sof_dev *sdev,
+					       u32 slot_type);
+
 #endif

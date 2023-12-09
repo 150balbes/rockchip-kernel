@@ -284,7 +284,7 @@ static long cros_ec_chardev_ioctl_xcmd(struct cros_ec_dev *ec, void __user *arg)
 	    u_cmd.insize > EC_MAX_MSG_BYTES)
 		return -EINVAL;
 
-	s_cmd = kmalloc(sizeof(*s_cmd) + max(u_cmd.outsize, u_cmd.insize),
+	s_cmd = kzalloc(sizeof(*s_cmd) + max(u_cmd.outsize, u_cmd.insize),
 			GFP_KERNEL);
 	if (!s_cmd)
 		return -ENOMEM;
@@ -396,13 +396,11 @@ static int cros_ec_chardev_probe(struct platform_device *pdev)
 	return misc_register(&data->misc);
 }
 
-static int cros_ec_chardev_remove(struct platform_device *pdev)
+static void cros_ec_chardev_remove(struct platform_device *pdev)
 {
 	struct chardev_data *data = dev_get_drvdata(&pdev->dev);
 
 	misc_deregister(&data->misc);
-
-	return 0;
 }
 
 static struct platform_driver cros_ec_chardev_driver = {
@@ -410,7 +408,7 @@ static struct platform_driver cros_ec_chardev_driver = {
 		.name = DRV_NAME,
 	},
 	.probe = cros_ec_chardev_probe,
-	.remove = cros_ec_chardev_remove,
+	.remove_new = cros_ec_chardev_remove,
 };
 
 module_platform_driver(cros_ec_chardev_driver);

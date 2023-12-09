@@ -30,7 +30,6 @@
 #include "intel_rps_types.h"
 #include "intel_migrate_types.h"
 #include "intel_wakeref.h"
-#include "pxp/intel_pxp_types.h"
 #include "intel_wopcm.h"
 
 struct drm_i915_private;
@@ -84,6 +83,9 @@ enum intel_submission_method {
 struct gt_defaults {
 	u32 min_freq;
 	u32 max_freq;
+
+	u8 rps_up_threshold;
+	u8 rps_down_threshold;
 };
 
 enum intel_gt_type {
@@ -233,6 +235,14 @@ struct intel_gt {
 		u8 instanceid;
 	} default_steering;
 
+	/**
+	 * @mcr_lock: Protects the MCR steering register
+	 *
+	 * Protects the MCR steering register (e.g., GEN8_MCR_SELECTOR).
+	 * Should be taken before uncore->lock in cases where both are desired.
+	 */
+	spinlock_t mcr_lock;
+
 	/*
 	 * Base of per-tile GTTMMADR where we can derive the MMIO and the GGTT.
 	 */
@@ -267,8 +277,6 @@ struct intel_gt {
 		u8 wb_index; /* Only used on HAS_L3_CCS_READ() platforms */
 	} mocs;
 
-	struct intel_pxp pxp;
-
 	/* gt/gtN sysfs */
 	struct kobject sysfs_gt;
 
@@ -277,6 +285,9 @@ struct intel_gt {
 	struct kobject *sysfs_defaults;
 
 	struct i915_perf_gt perf;
+
+	/** link: &ggtt.gt_list */
+	struct list_head ggtt_link;
 };
 
 struct intel_gt_definition {
@@ -296,12 +307,8 @@ enum intel_gt_scratch_field {
 
 	/* 8 bytes */
 	INTEL_GT_SCRATCH_FIELD_COHERENTL3_WA = 256,
-
-	/* 6 * 8 bytes */
-	INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR = 2048,
-
-	/* 4 bytes */
-	INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1 = 2096,
 };
+
+#define intel_gt_support_legacy_fencing(gt) ((gt)->ggtt->num_fences > 0)
 
 #endif /* __INTEL_GT_TYPES_H__ */

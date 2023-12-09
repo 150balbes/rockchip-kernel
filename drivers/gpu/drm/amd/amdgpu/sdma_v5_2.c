@@ -89,59 +89,6 @@ static u32 sdma_v5_2_get_reg_offset(struct amdgpu_device *adev, u32 instance, u3
 	return base + internal_offset;
 }
 
-/**
- * sdma_v5_2_init_microcode - load ucode images from disk
- *
- * @adev: amdgpu_device pointer
- *
- * Use the firmware interface to load the ucode images into
- * the driver (not loaded into hw).
- * Returns 0 on success, error on failure.
- */
-
-// emulation only, won't work on real chip
-// navi10 real chip need to use PSP to load firmware
-static int sdma_v5_2_init_microcode(struct amdgpu_device *adev)
-{
-	const char *chip_name;
-	char fw_name[40];
-
-	DRM_DEBUG("\n");
-
-	switch (adev->ip_versions[SDMA0_HWIP][0]) {
-	case IP_VERSION(5, 2, 0):
-		chip_name = "sienna_cichlid_sdma";
-		break;
-	case IP_VERSION(5, 2, 2):
-		chip_name = "navy_flounder_sdma";
-		break;
-	case IP_VERSION(5, 2, 1):
-		chip_name = "vangogh_sdma";
-		break;
-	case IP_VERSION(5, 2, 4):
-		chip_name = "dimgrey_cavefish_sdma";
-		break;
-	case IP_VERSION(5, 2, 5):
-		chip_name = "beige_goby_sdma";
-		break;
-	case IP_VERSION(5, 2, 3):
-		chip_name = "yellow_carp_sdma";
-		break;
-	case IP_VERSION(5, 2, 6):
-		chip_name = "sdma_5_2_6";
-		break;
-	case IP_VERSION(5, 2, 7):
-		chip_name = "sdma_5_2_7";
-		break;
-	default:
-		BUG();
-	}
-
-	snprintf(fw_name, sizeof(fw_name), "amdgpu/%s.bin", chip_name);
-
-	return amdgpu_sdma_init_microcode(adev, fw_name, 0, true);
-}
-
 static unsigned sdma_v5_2_ring_init_cond_exec(struct amdgpu_ring *ring)
 {
 	unsigned ret;
@@ -417,8 +364,6 @@ static void sdma_v5_2_gfx_stop(struct amdgpu_device *adev)
 	u32 rb_cntl, ib_cntl;
 	int i;
 
-	amdgpu_sdma_unset_buffer_funcs_helper(adev);
-
 	for (i = 0; i < adev->sdma.num_instances; i++) {
 		rb_cntl = RREG32_SOC15_IP(GC, sdma_v5_2_get_reg_offset(adev, i, mmSDMA0_GFX_RB_CNTL));
 		rb_cntl = REG_SET_FIELD(rb_cntl, SDMA0_GFX_RB_CNTL, RB_ENABLE, 0);
@@ -670,21 +615,14 @@ static int sdma_v5_2_gfx_resume(struct amdgpu_device *adev)
 		/* enable DMA IBs */
 		WREG32_SOC15_IP(GC, sdma_v5_2_get_reg_offset(adev, i, mmSDMA0_GFX_IB_CNTL), ib_cntl);
 
-		ring->sched.ready = true;
-
 		if (amdgpu_sriov_vf(adev)) { /* bare-metal sequence doesn't need below to lines */
 			sdma_v5_2_ctx_switch_enable(adev, true);
 			sdma_v5_2_enable(adev, true);
 		}
 
-		r = amdgpu_ring_test_ring(ring);
-		if (r) {
-			ring->sched.ready = false;
+		r = amdgpu_ring_test_helper(ring);
+		if (r)
 			return r;
-		}
-
-		if (adev->mman.buffer_funcs_ring == ring)
-			amdgpu_ttm_set_buffer_funcs_status(adev, true);
 	}
 
 	return 0;
@@ -809,12 +747,6 @@ static int sdma_v5_2_start(struct amdgpu_device *adev)
 			msleep(1000);
 	}
 
-	/* TODO: check whether can submit a doorbell request to raise
-	 * a doorbell fence to exit gfxoff.
-	 */
-	if (adev->in_s0ix)
-		amdgpu_gfx_off_ctrl(adev, false);
-
 	sdma_v5_2_soft_reset(adev);
 	/* unhalt the MEs */
 	sdma_v5_2_enable(adev, true);
@@ -823,8 +755,6 @@ static int sdma_v5_2_start(struct amdgpu_device *adev)
 
 	/* start the gfx rings and rlc compute queues */
 	r = sdma_v5_2_gfx_resume(adev);
-	if (adev->in_s0ix)
-		amdgpu_gfx_off_ctrl(adev, true);
 	if (r)
 		return r;
 	r = sdma_v5_2_rlc_resume(adev);
@@ -1237,6 +1167,11 @@ static void sdma_v5_2_ring_emit_reg_write_reg_wait(struct amdgpu_ring *ring,
 static int sdma_v5_2_early_init(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	int r;
+
+	r = amdgpu_sdma_init_microcode(adev, 0, true);
+	if (r)
+		return r;
 
 	sdma_v5_2_set_ring_funcs(adev);
 	sdma_v5_2_set_buffer_funcs(adev);
@@ -1296,12 +1231,6 @@ static int sdma_v5_2_sw_init(void *handle)
 			return r;
 	}
 
-	r = sdma_v5_2_init_microcode(adev);
-	if (r) {
-		DRM_ERROR("Failed to load sdma firmware!\n");
-		return r;
-	}
-
 	for (i = 0; i < adev->sdma.num_instances; i++) {
 		ring = &adev->sdma.instance[i].ring;
 		ring->ring_obj = NULL;
@@ -1314,6 +1243,7 @@ static int sdma_v5_2_sw_init(void *handle)
 		ring->doorbell_index =
 			(adev->doorbell_index.sdma_engine[i] << 1); //get DWORD offset
 
+		ring->vm_hub = AMDGPU_GFXHUB(0);
 		sprintf(ring->name, "sdma%d", i);
 		r = amdgpu_ring_init(adev, ring, 1024, &adev->sdma.trap_irq,
 				     AMDGPU_SDMA_IRQ_INSTANCE0 + i,
@@ -1349,11 +1279,8 @@ static int sdma_v5_2_hw_fini(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
-	if (amdgpu_sriov_vf(adev)) {
-		/* disable the scheduler for SDMA */
-		amdgpu_sdma_unset_buffer_funcs_helper(adev);
+	if (amdgpu_sriov_vf(adev))
 		return 0;
-	}
 
 	sdma_v5_2_ctx_switch_enable(adev, false);
 	sdma_v5_2_enable(adev, false);
@@ -1571,6 +1498,30 @@ static int sdma_v5_2_process_illegal_inst_irq(struct amdgpu_device *adev,
 	return 0;
 }
 
+static bool sdma_v5_2_firmware_mgcg_support(struct amdgpu_device *adev,
+						     int i)
+{
+	switch (amdgpu_ip_version(adev, SDMA0_HWIP, 0)) {
+	case IP_VERSION(5, 2, 1):
+		if (adev->sdma.instance[i].fw_version < 70)
+			return false;
+		break;
+	case IP_VERSION(5, 2, 3):
+		if (adev->sdma.instance[i].fw_version < 47)
+			return false;
+		break;
+	case IP_VERSION(5, 2, 7):
+		if (adev->sdma.instance[i].fw_version < 9)
+			return false;
+		break;
+	default:
+		return true;
+	}
+
+	return true;
+
+}
+
 static void sdma_v5_2_update_medium_grain_clock_gating(struct amdgpu_device *adev,
 						       bool enable)
 {
@@ -1579,7 +1530,7 @@ static void sdma_v5_2_update_medium_grain_clock_gating(struct amdgpu_device *ade
 
 	for (i = 0; i < adev->sdma.num_instances; i++) {
 
-		if (adev->sdma.instance[i].fw_version < 70 && adev->ip_versions[SDMA0_HWIP][0] == IP_VERSION(5, 2, 1))
+		if (!sdma_v5_2_firmware_mgcg_support(adev, i))
 			adev->cg_flags &= ~AMD_CG_SUPPORT_SDMA_MGCG;
 
 		if (enable && (adev->cg_flags & AMD_CG_SUPPORT_SDMA_MGCG)) {
@@ -1615,8 +1566,9 @@ static void sdma_v5_2_update_medium_grain_light_sleep(struct amdgpu_device *adev
 	int i;
 
 	for (i = 0; i < adev->sdma.num_instances; i++) {
-
-		if (adev->sdma.instance[i].fw_version < 70 && adev->ip_versions[SDMA0_HWIP][0] == IP_VERSION(5, 2, 1))
+		if (adev->sdma.instance[i].fw_version < 70 &&
+		    amdgpu_ip_version(adev, SDMA0_HWIP, 0) ==
+			    IP_VERSION(5, 2, 1))
 			adev->cg_flags &= ~AMD_CG_SUPPORT_SDMA_LS;
 
 		if (enable && (adev->cg_flags & AMD_CG_SUPPORT_SDMA_LS)) {
@@ -1645,7 +1597,7 @@ static int sdma_v5_2_set_clockgating_state(void *handle,
 	if (amdgpu_sriov_vf(adev))
 		return 0;
 
-	switch (adev->ip_versions[SDMA0_HWIP][0]) {
+	switch (amdgpu_ip_version(adev, SDMA0_HWIP, 0)) {
 	case IP_VERSION(5, 2, 0):
 	case IP_VERSION(5, 2, 2):
 	case IP_VERSION(5, 2, 1):
@@ -1653,6 +1605,7 @@ static int sdma_v5_2_set_clockgating_state(void *handle,
 	case IP_VERSION(5, 2, 5):
 	case IP_VERSION(5, 2, 6):
 	case IP_VERSION(5, 2, 3):
+	case IP_VERSION(5, 2, 7):
 		sdma_v5_2_update_medium_grain_clock_gating(adev,
 				state == AMD_CG_STATE_GATE);
 		sdma_v5_2_update_medium_grain_light_sleep(adev,
@@ -1714,7 +1667,6 @@ static const struct amdgpu_ring_funcs sdma_v5_2_ring_funcs = {
 	.nop = SDMA_PKT_NOP_HEADER_OP(SDMA_OP_NOP),
 	.support_64bit_ptrs = true,
 	.secure_submission_supported = true,
-	.vmhub = AMDGPU_GFXHUB_0,
 	.get_rptr = sdma_v5_2_ring_get_rptr,
 	.get_wptr = sdma_v5_2_ring_get_wptr,
 	.set_wptr = sdma_v5_2_ring_set_wptr,

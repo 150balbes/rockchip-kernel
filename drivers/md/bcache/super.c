@@ -732,9 +732,9 @@ out:
 
 /* Bcache device */
 
-static int open_dev(struct block_device *b, fmode_t mode)
+static int open_dev(struct gendisk *disk, blk_mode_t mode)
 {
-	struct bcache_device *d = b->bd_disk->private_data;
+	struct bcache_device *d = disk->private_data;
 
 	if (test_bit(BCACHE_DEV_CLOSING, &d->flags))
 		return -ENXIO;
@@ -743,14 +743,14 @@ static int open_dev(struct block_device *b, fmode_t mode)
 	return 0;
 }
 
-static void release_dev(struct gendisk *b, fmode_t mode)
+static void release_dev(struct gendisk *b)
 {
 	struct bcache_device *d = b->private_data;
 
 	closure_put(&d->cl);
 }
 
-static int ioctl_dev(struct block_device *b, fmode_t mode,
+static int ioctl_dev(struct block_device *b, blk_mode_t mode,
 		     unsigned int cmd, unsigned long arg)
 {
 	struct bcache_device *d = b->bd_disk->private_data;
@@ -905,6 +905,8 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 
 	if (!d->stripe_size)
 		d->stripe_size = 1 << 31;
+	else if (d->stripe_size < BCH_MIN_STRIPE_SZ)
+		d->stripe_size = roundup(BCH_MIN_STRIPE_SZ, d->stripe_size);
 
 	n = DIV_ROUND_UP_ULL(sectors, d->stripe_size);
 	if (!n || n > max_stripes) {
@@ -971,7 +973,6 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 	}
 
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, d->disk->queue);
-	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, d->disk->queue);
 
 	blk_queue_write_cache(q, true, true);
 
@@ -1369,8 +1370,8 @@ static void cached_dev_free(struct closure *cl)
 	if (dc->sb_disk)
 		put_page(virt_to_page(dc->sb_disk));
 
-	if (!IS_ERR_OR_NULL(dc->bdev))
-		blkdev_put(dc->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
+	if (dc->bdev_handle)
+		bdev_release(dc->bdev_handle);
 
 	wake_up(&unregister_wait);
 
@@ -1445,7 +1446,7 @@ static int cached_dev_init(struct cached_dev *dc, unsigned int block_size)
 /* Cached device - bcache superblock */
 
 static int register_bdev(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
-				 struct block_device *bdev,
+				 struct bdev_handle *bdev_handle,
 				 struct cached_dev *dc)
 {
 	const char *err = "cannot allocate memory";
@@ -1453,15 +1454,15 @@ static int register_bdev(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 	int ret = -ENOMEM;
 
 	memcpy(&dc->sb, sb, sizeof(struct cache_sb));
-	dc->bdev = bdev;
-	dc->bdev->bd_holder = dc;
+	dc->bdev_handle = bdev_handle;
+	dc->bdev = bdev_handle->bdev;
 	dc->sb_disk = sb_disk;
 
 	if (cached_dev_init(dc, sb->block_size << 9))
 		goto err;
 
 	err = "error creating kobject";
-	if (kobject_add(&dc->disk.kobj, bdev_kobj(bdev), "bcache"))
+	if (kobject_add(&dc->disk.kobj, bdev_kobj(dc->bdev), "bcache"))
 		goto err;
 	if (bch_cache_accounting_add_kobjs(&dc->accounting, &dc->disk.kobj))
 		goto err;
@@ -1724,7 +1725,7 @@ static void cache_set_flush(struct closure *cl)
 	if (!IS_ERR_OR_NULL(c->gc_thread))
 		kthread_stop(c->gc_thread);
 
-	if (!IS_ERR_OR_NULL(c->root))
+	if (!IS_ERR(c->root))
 		list_add(&c->root->list, &c->btree_cache);
 
 	/*
@@ -2017,7 +2018,7 @@ static int run_cache_set(struct cache_set *c)
 		c->root = bch_btree_node_get(c, NULL, k,
 					     j->btree_level,
 					     true, NULL);
-		if (IS_ERR_OR_NULL(c->root))
+		if (IS_ERR(c->root))
 			goto err;
 
 		list_del_init(&c->root->list);
@@ -2088,7 +2089,7 @@ static int run_cache_set(struct cache_set *c)
 
 		err = "cannot allocate new btree root";
 		c->root = __bch_btree_node_alloc(c, NULL, 0, true, NULL);
-		if (IS_ERR_OR_NULL(c->root))
+		if (IS_ERR(c->root))
 			goto err;
 
 		mutex_lock(&c->root->write_lock);
@@ -2218,8 +2219,8 @@ void bch_cache_release(struct kobject *kobj)
 	if (ca->sb_disk)
 		put_page(virt_to_page(ca->sb_disk));
 
-	if (!IS_ERR_OR_NULL(ca->bdev))
-		blkdev_put(ca->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
+	if (ca->bdev_handle)
+		bdev_release(ca->bdev_handle);
 
 	kfree(ca);
 	module_put(THIS_MODULE);
@@ -2339,39 +2340,42 @@ err_free:
 }
 
 static int register_cache(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
-				struct block_device *bdev, struct cache *ca)
+				struct bdev_handle *bdev_handle,
+				struct cache *ca)
 {
 	const char *err = NULL; /* must be set for any error case */
 	int ret = 0;
 
 	memcpy(&ca->sb, sb, sizeof(struct cache_sb));
-	ca->bdev = bdev;
-	ca->bdev->bd_holder = ca;
+	ca->bdev_handle = bdev_handle;
+	ca->bdev = bdev_handle->bdev;
 	ca->sb_disk = sb_disk;
 
-	if (bdev_max_discard_sectors((bdev)))
+	if (bdev_max_discard_sectors((bdev_handle->bdev)))
 		ca->discard = CACHE_DISCARD(&ca->sb);
 
 	ret = cache_alloc(ca);
 	if (ret != 0) {
-		/*
-		 * If we failed here, it means ca->kobj is not initialized yet,
-		 * kobject_put() won't be called and there is no chance to
-		 * call blkdev_put() to bdev in bch_cache_release(). So we
-		 * explicitly call blkdev_put() here.
-		 */
-		blkdev_put(bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 		if (ret == -ENOMEM)
 			err = "cache_alloc(): -ENOMEM";
 		else if (ret == -EPERM)
 			err = "cache_alloc(): cache device is too small";
 		else
 			err = "cache_alloc(): unknown error";
-		goto err;
+		pr_notice("error %pg: %s\n", bdev_handle->bdev, err);
+		/*
+		 * If we failed here, it means ca->kobj is not initialized yet,
+		 * kobject_put() won't be called and there is no chance to
+		 * call bdev_release() to bdev in bch_cache_release(). So
+		 * we explicitly call bdev_release() here.
+		 */
+		bdev_release(bdev_handle);
+		return ret;
 	}
 
-	if (kobject_add(&ca->kobj, bdev_kobj(bdev), "bcache")) {
-		err = "error calling kobject_add";
+	if (kobject_add(&ca->kobj, bdev_kobj(bdev_handle->bdev), "bcache")) {
+		pr_notice("error %pg: error calling kobject_add\n",
+			  bdev_handle->bdev);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -2385,15 +2389,10 @@ static int register_cache(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 		goto out;
 	}
 
-	pr_info("registered cache device %pg\n", ca->bdev);
+	pr_info("registered cache device %pg\n", ca->bdev_handle->bdev);
 
 out:
 	kobject_put(&ca->kobj);
-
-err:
-	if (err)
-		pr_notice("error %pg: %s\n", ca->bdev, err);
-
 	return ret;
 }
 
@@ -2448,7 +2447,8 @@ struct async_reg_args {
 	char *path;
 	struct cache_sb *sb;
 	struct cache_sb_disk *sb_disk;
-	struct block_device *bdev;
+	struct bdev_handle *bdev_handle;
+	void *holder;
 };
 
 static void register_bdev_worker(struct work_struct *work)
@@ -2456,22 +2456,13 @@ static void register_bdev_worker(struct work_struct *work)
 	int fail = false;
 	struct async_reg_args *args =
 		container_of(work, struct async_reg_args, reg_work.work);
-	struct cached_dev *dc;
-
-	dc = kzalloc(sizeof(*dc), GFP_KERNEL);
-	if (!dc) {
-		fail = true;
-		put_page(virt_to_page(args->sb_disk));
-		blkdev_put(args->bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
-		goto out;
-	}
 
 	mutex_lock(&bch_register_lock);
-	if (register_bdev(args->sb, args->sb_disk, args->bdev, dc) < 0)
+	if (register_bdev(args->sb, args->sb_disk, args->bdev_handle,
+			  args->holder) < 0)
 		fail = true;
 	mutex_unlock(&bch_register_lock);
 
-out:
 	if (fail)
 		pr_info("error %s: fail to register backing device\n",
 			args->path);
@@ -2486,21 +2477,12 @@ static void register_cache_worker(struct work_struct *work)
 	int fail = false;
 	struct async_reg_args *args =
 		container_of(work, struct async_reg_args, reg_work.work);
-	struct cache *ca;
-
-	ca = kzalloc(sizeof(*ca), GFP_KERNEL);
-	if (!ca) {
-		fail = true;
-		put_page(virt_to_page(args->sb_disk));
-		blkdev_put(args->bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
-		goto out;
-	}
 
 	/* blkdev_put() will be called in bch_cache_release() */
-	if (register_cache(args->sb, args->sb_disk, args->bdev, ca) != 0)
+	if (register_cache(args->sb, args->sb_disk, args->bdev_handle,
+			   args->holder))
 		fail = true;
 
-out:
 	if (fail)
 		pr_info("error %s: fail to register cache device\n",
 			args->path);
@@ -2521,6 +2503,13 @@ static void register_device_async(struct async_reg_args *args)
 	queue_delayed_work(system_wq, &args->reg_work, 10);
 }
 
+static void *alloc_holder_object(struct cache_sb *sb)
+{
+	if (SB_IS_BDEV(sb))
+		return kzalloc(sizeof(struct cached_dev), GFP_KERNEL);
+	return kzalloc(sizeof(struct cache), GFP_KERNEL);
+}
+
 static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 			       const char *buffer, size_t size)
 {
@@ -2528,9 +2517,11 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	char *path = NULL;
 	struct cache_sb *sb;
 	struct cache_sb_disk *sb_disk;
-	struct block_device *bdev;
+	struct bdev_handle *bdev_handle, *bdev_handle2;
+	void *holder = NULL;
 	ssize_t ret;
 	bool async_registration = false;
+	bool quiet = false;
 
 #ifdef CONFIG_BCACHE_ASYNC_REGISTRATION
 	async_registration = true;
@@ -2559,11 +2550,34 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 
 	ret = -EINVAL;
 	err = "failed to open device";
-	bdev = blkdev_get_by_path(strim(path),
-				  FMODE_READ|FMODE_WRITE|FMODE_EXCL,
-				  sb);
-	if (IS_ERR(bdev)) {
-		if (bdev == ERR_PTR(-EBUSY)) {
+	bdev_handle = bdev_open_by_path(strim(path), BLK_OPEN_READ, NULL, NULL);
+	if (IS_ERR(bdev_handle))
+		goto out_free_sb;
+
+	err = "failed to set blocksize";
+	if (set_blocksize(bdev_handle->bdev, 4096))
+		goto out_blkdev_put;
+
+	err = read_super(sb, bdev_handle->bdev, &sb_disk);
+	if (err)
+		goto out_blkdev_put;
+
+	holder = alloc_holder_object(sb);
+	if (!holder) {
+		ret = -ENOMEM;
+		err = "cannot allocate memory";
+		goto out_put_sb_page;
+	}
+
+	/* Now reopen in exclusive mode with proper holder */
+	bdev_handle2 = bdev_open_by_dev(bdev_handle->bdev->bd_dev,
+			BLK_OPEN_READ | BLK_OPEN_WRITE, holder, NULL);
+	bdev_release(bdev_handle);
+	bdev_handle = bdev_handle2;
+	if (IS_ERR(bdev_handle)) {
+		ret = PTR_ERR(bdev_handle);
+		bdev_handle = NULL;
+		if (ret == -EBUSY) {
 			dev_t dev;
 
 			mutex_lock(&bch_register_lock);
@@ -2573,19 +2587,13 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 			else
 				err = "device busy";
 			mutex_unlock(&bch_register_lock);
-			if (attr == &ksysfs_register_quiet)
-				goto done;
+			if (attr == &ksysfs_register_quiet) {
+				quiet = true;
+				ret = size;
+			}
 		}
-		goto out_free_sb;
+		goto out_free_holder;
 	}
-
-	err = "failed to set blocksize";
-	if (set_blocksize(bdev, 4096))
-		goto out_blkdev_put;
-
-	err = read_super(sb, bdev, &sb_disk);
-	if (err)
-		goto out_blkdev_put;
 
 	err = "failed to register device";
 
@@ -2597,59 +2605,46 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 		if (!args) {
 			ret = -ENOMEM;
 			err = "cannot allocate memory";
-			goto out_put_sb_page;
+			goto out_free_holder;
 		}
 
 		args->path	= path;
 		args->sb	= sb;
 		args->sb_disk	= sb_disk;
-		args->bdev	= bdev;
+		args->bdev_handle	= bdev_handle;
+		args->holder	= holder;
 		register_device_async(args);
 		/* No wait and returns to user space */
 		goto async_done;
 	}
 
 	if (SB_IS_BDEV(sb)) {
-		struct cached_dev *dc = kzalloc(sizeof(*dc), GFP_KERNEL);
-
-		if (!dc) {
-			ret = -ENOMEM;
-			err = "cannot allocate memory";
-			goto out_put_sb_page;
-		}
-
 		mutex_lock(&bch_register_lock);
-		ret = register_bdev(sb, sb_disk, bdev, dc);
+		ret = register_bdev(sb, sb_disk, bdev_handle, holder);
 		mutex_unlock(&bch_register_lock);
 		/* blkdev_put() will be called in cached_dev_free() */
 		if (ret < 0)
 			goto out_free_sb;
 	} else {
-		struct cache *ca = kzalloc(sizeof(*ca), GFP_KERNEL);
-
-		if (!ca) {
-			ret = -ENOMEM;
-			err = "cannot allocate memory";
-			goto out_put_sb_page;
-		}
-
 		/* blkdev_put() will be called in bch_cache_release() */
-		ret = register_cache(sb, sb_disk, bdev, ca);
+		ret = register_cache(sb, sb_disk, bdev_handle, holder);
 		if (ret)
 			goto out_free_sb;
 	}
 
-done:
 	kfree(sb);
 	kfree(path);
 	module_put(THIS_MODULE);
 async_done:
 	return size;
 
+out_free_holder:
+	kfree(holder);
 out_put_sb_page:
 	put_page(virt_to_page(sb_disk));
 out_blkdev_put:
-	blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
+	if (bdev_handle)
+		bdev_release(bdev_handle);
 out_free_sb:
 	kfree(sb);
 out_free_path:
@@ -2658,7 +2653,8 @@ out_free_path:
 out_module_put:
 	module_put(THIS_MODULE);
 out:
-	pr_info("error %s: %s\n", path?path:"", err);
+	if (!quiet)
+		pr_info("error %s: %s\n", path?path:"", err);
 	return ret;
 }
 
@@ -2912,7 +2908,6 @@ static int __init bcache_init(void)
 		goto err;
 
 	bch_debug_init();
-	closure_debug_init();
 
 	bcache_is_reboot = false;
 

@@ -84,7 +84,7 @@ DEFINE_STATIC_SRCU(drm_unplug_srcu);
  */
 
 static struct drm_minor **drm_minor_get_slot(struct drm_device *dev,
-					     unsigned int type)
+					     enum drm_minor_type type)
 {
 	switch (type) {
 	case DRM_MINOR_PRIMARY:
@@ -116,7 +116,7 @@ static void drm_minor_alloc_release(struct drm_device *dev, void *data)
 	}
 }
 
-static int drm_minor_alloc(struct drm_device *dev, unsigned int type)
+static int drm_minor_alloc(struct drm_device *dev, enum drm_minor_type type)
 {
 	struct drm_minor *minor;
 	unsigned long flags;
@@ -160,7 +160,7 @@ static int drm_minor_alloc(struct drm_device *dev, unsigned int type)
 	return 0;
 }
 
-static int drm_minor_register(struct drm_device *dev, unsigned int type)
+static int drm_minor_register(struct drm_device *dev, enum drm_minor_type type)
 {
 	struct drm_minor *minor;
 	unsigned long flags;
@@ -172,10 +172,9 @@ static int drm_minor_register(struct drm_device *dev, unsigned int type)
 	if (!minor)
 		return 0;
 
-	if (minor->type == DRM_MINOR_ACCEL) {
-		accel_debugfs_init(minor, minor->index);
-	} else {
-		ret = drm_debugfs_init(minor, minor->index, drm_debugfs_root);
+	if (minor->type != DRM_MINOR_ACCEL) {
+		ret = drm_debugfs_register(minor, minor->index,
+					   drm_debugfs_root);
 		if (ret) {
 			DRM_ERROR("DRM: Failed to initialize /sys/kernel/debug/dri.\n");
 			goto err_debugfs;
@@ -199,11 +198,11 @@ static int drm_minor_register(struct drm_device *dev, unsigned int type)
 	return 0;
 
 err_debugfs:
-	drm_debugfs_cleanup(minor);
+	drm_debugfs_unregister(minor);
 	return ret;
 }
 
-static void drm_minor_unregister(struct drm_device *dev, unsigned int type)
+static void drm_minor_unregister(struct drm_device *dev, enum drm_minor_type type)
 {
 	struct drm_minor *minor;
 	unsigned long flags;
@@ -223,7 +222,7 @@ static void drm_minor_unregister(struct drm_device *dev, unsigned int type)
 
 	device_del(minor->kdev);
 	dev_set_drvdata(minor->kdev, NULL); /* safety belt */
-	drm_debugfs_cleanup(minor);
+	drm_debugfs_unregister(minor);
 }
 
 /*
@@ -688,9 +687,16 @@ static int drm_dev_init(struct drm_device *dev,
 		}
 	}
 
-	ret = drm_dev_set_unique(dev, dev_name(parent));
-	if (ret)
+	dev->unique = drmm_kstrdup(dev, dev_name(parent), GFP_KERNEL);
+	if (!dev->unique) {
+		ret = -ENOMEM;
 		goto err;
+	}
+
+	if (drm_core_check_feature(dev, DRIVER_COMPUTE_ACCEL))
+		accel_debugfs_init(dev);
+	else
+		drm_debugfs_dev_init(dev, drm_debugfs_root);
 
 	return 0;
 
@@ -780,6 +786,9 @@ EXPORT_SYMBOL(drm_dev_alloc);
 static void drm_dev_release(struct kref *ref)
 {
 	struct drm_device *dev = container_of(ref, struct drm_device, ref);
+
+	/* Just in case register/unregister was never called */
+	drm_debugfs_dev_fini(dev);
 
 	if (dev->driver->release)
 		dev->driver->release(dev);
@@ -911,6 +920,11 @@ int drm_dev_register(struct drm_device *dev, unsigned long flags)
 	if (drm_dev_needs_global_mutex(dev))
 		mutex_lock(&drm_global_mutex);
 
+	if (drm_core_check_feature(dev, DRIVER_COMPUTE_ACCEL))
+		accel_debugfs_register(dev);
+	else
+		drm_debugfs_dev_register(dev);
+
 	ret = drm_minor_register(dev, DRM_MINOR_RENDER);
 	if (ret)
 		goto err_minors;
@@ -929,14 +943,17 @@ int drm_dev_register(struct drm_device *dev, unsigned long flags)
 
 	dev->registered = true;
 
-	if (dev->driver->load) {
-		ret = dev->driver->load(dev, flags);
+	if (driver->load) {
+		ret = driver->load(dev, flags);
 		if (ret)
 			goto err_minors;
 	}
 
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		drm_modeset_register_all(dev);
+	if (drm_core_check_feature(dev, DRIVER_MODESET)) {
+		ret = drm_modeset_register_all(dev);
+		if (ret)
+			goto err_unload;
+	}
 
 	DRM_INFO("Initialized %s %d.%d.%d %s for %s on minor %d\n",
 		 driver->name, driver->major, driver->minor,
@@ -946,6 +963,9 @@ int drm_dev_register(struct drm_device *dev, unsigned long flags)
 
 	goto out_unlock;
 
+err_unload:
+	if (dev->driver->unload)
+		dev->driver->unload(dev);
 err_minors:
 	remove_compat_control_link(dev);
 	drm_minor_unregister(dev, DRM_MINOR_ACCEL);
@@ -964,7 +984,9 @@ EXPORT_SYMBOL(drm_dev_register);
  *
  * Unregister the DRM device from the system. This does the reverse of
  * drm_dev_register() but does not deallocate the device. The caller must call
- * drm_dev_put() to drop their final reference.
+ * drm_dev_put() to drop their final reference, unless it is managed with devres
+ * (as devices allocated with devm_drm_dev_alloc() are), in which case there is
+ * already an unwind action registered.
  *
  * A special form of unregistering for hotpluggable devices is drm_dev_unplug(),
  * which can be called while there are still open users of @dev.
@@ -994,28 +1016,9 @@ void drm_dev_unregister(struct drm_device *dev)
 	drm_minor_unregister(dev, DRM_MINOR_ACCEL);
 	drm_minor_unregister(dev, DRM_MINOR_PRIMARY);
 	drm_minor_unregister(dev, DRM_MINOR_RENDER);
+	drm_debugfs_dev_fini(dev);
 }
 EXPORT_SYMBOL(drm_dev_unregister);
-
-/**
- * drm_dev_set_unique - Set the unique name of a DRM device
- * @dev: device of which to set the unique name
- * @name: unique name
- *
- * Sets the unique name of a DRM device using the specified string. This is
- * already done by drm_dev_init(), drivers should only override the default
- * unique name for backwards compatibility reasons.
- *
- * Return: 0 on success or a negative error code on failure.
- */
-int drm_dev_set_unique(struct drm_device *dev, const char *name)
-{
-	drmm_kfree(dev, dev->unique);
-	dev->unique = drmm_kstrdup(dev, name, GFP_KERNEL);
-
-	return dev->unique ? 0 : -ENOMEM;
-}
-EXPORT_SYMBOL(drm_dev_set_unique);
 
 /*
  * DRM Core

@@ -96,6 +96,9 @@ static const unsigned long * const efi_tables[] = {
 #ifdef CONFIG_EFI_COCO_SECRET
 	&efi.coco_secret,
 #endif
+#ifdef CONFIG_UNACCEPTED_MEMORY
+	&efi.unaccepted,
+#endif
 };
 
 u64 efi_setup;		/* efi setup_data physical address */
@@ -380,7 +383,7 @@ static int __init efi_systab_init(unsigned long phys)
 		return -ENOMEM;
 	}
 
-	ret = efi_systab_check_header(hdr, 1);
+	ret = efi_systab_check_header(hdr);
 	if (ret) {
 		early_memunmap(p, size);
 		return ret;

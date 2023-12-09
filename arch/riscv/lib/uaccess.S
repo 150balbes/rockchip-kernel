@@ -10,15 +10,17 @@
 	_asm_extable	100b, \lbl
 	.endm
 
-ENTRY(__asm_copy_to_user)
-ENTRY(__asm_copy_from_user)
+SYM_FUNC_START(__asm_copy_to_user)
 
 	/* Enable access to user memory */
 	li t6, SR_SUM
 	csrs CSR_STATUS, t6
 
-	/* Save for return value */
-	mv	t5, a2
+	/*
+	 * Save the terminal address which will be used to compute the number
+	 * of bytes copied in case of a fixup exception.
+	 */
+	add	t5, a0, a2
 
 	/*
 	 * Register allocation for code below:
@@ -176,15 +178,15 @@ ENTRY(__asm_copy_from_user)
 10:
 	/* Disable access to user memory */
 	csrc CSR_STATUS, t6
-	mv a0, t5
+	sub a0, t5, a0
 	ret
-ENDPROC(__asm_copy_to_user)
-ENDPROC(__asm_copy_from_user)
+SYM_FUNC_END(__asm_copy_to_user)
 EXPORT_SYMBOL(__asm_copy_to_user)
+SYM_FUNC_ALIAS(__asm_copy_from_user, __asm_copy_to_user)
 EXPORT_SYMBOL(__asm_copy_from_user)
 
 
-ENTRY(__clear_user)
+SYM_FUNC_START(__clear_user)
 
 	/* Enable access to user memory */
 	li t6, SR_SUM
@@ -228,7 +230,7 @@ ENTRY(__clear_user)
 11:
 	/* Disable access to user memory */
 	csrc CSR_STATUS, t6
-	mv a0, a1
+	sub a0, a3, a0
 	ret
-ENDPROC(__clear_user)
+SYM_FUNC_END(__clear_user)
 EXPORT_SYMBOL(__clear_user)

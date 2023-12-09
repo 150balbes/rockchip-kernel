@@ -35,15 +35,17 @@
  * per-core reg tables.
  */
 enum extra_reg_type {
-	EXTRA_REG_NONE  = -1,	/* not used */
+	EXTRA_REG_NONE		= -1, /* not used */
 
-	EXTRA_REG_RSP_0 = 0,	/* offcore_response_0 */
-	EXTRA_REG_RSP_1 = 1,	/* offcore_response_1 */
-	EXTRA_REG_LBR   = 2,	/* lbr_select */
-	EXTRA_REG_LDLAT = 3,	/* ld_lat_threshold */
-	EXTRA_REG_FE    = 4,    /* fe_* */
+	EXTRA_REG_RSP_0		= 0,  /* offcore_response_0 */
+	EXTRA_REG_RSP_1		= 1,  /* offcore_response_1 */
+	EXTRA_REG_LBR		= 2,  /* lbr_select */
+	EXTRA_REG_LDLAT		= 3,  /* ld_lat_threshold */
+	EXTRA_REG_FE		= 4,  /* fe_* */
+	EXTRA_REG_SNOOP_0	= 5,  /* snoop response 0 */
+	EXTRA_REG_SNOOP_1	= 6,  /* snoop response 1 */
 
-	EXTRA_REG_MAX		/* number of entries needed */
+	EXTRA_REG_MAX		      /* number of entries needed */
 };
 
 struct event_constraint {
@@ -606,6 +608,7 @@ union perf_capabilities {
 		u64     pebs_baseline:1;
 		u64	perf_metrics:1;
 		u64	pebs_output_pt_available:1;
+		u64	pebs_timing_info:1;
 		u64	anythread_deprecated:1;
 	};
 	u64	capabilities;
@@ -647,11 +650,31 @@ enum {
 };
 
 #define PERF_PEBS_DATA_SOURCE_MAX	0x10
+#define PERF_PEBS_DATA_SOURCE_MASK	(PERF_PEBS_DATA_SOURCE_MAX - 1)
+
+enum hybrid_cpu_type {
+	HYBRID_INTEL_NONE,
+	HYBRID_INTEL_ATOM	= 0x20,
+	HYBRID_INTEL_CORE	= 0x40,
+};
+
+enum hybrid_pmu_type {
+	not_hybrid,
+	hybrid_small		= BIT(0),
+	hybrid_big		= BIT(1),
+
+	hybrid_big_small	= hybrid_big | hybrid_small, /* only used for matching */
+};
+
+#define X86_HYBRID_PMU_ATOM_IDX		0
+#define X86_HYBRID_PMU_CORE_IDX		1
+
+#define X86_HYBRID_NUM_PMUS		2
 
 struct x86_hybrid_pmu {
 	struct pmu			pmu;
 	const char			*name;
-	u8				cpu_type;
+	enum hybrid_pmu_type		pmu_type;
 	cpumask_t			supported_cpus;
 	union perf_capabilities		intel_cap;
 	u64				intel_ctrl;
@@ -716,18 +739,6 @@ extern struct static_key_false perf_is_hybrid;
 							\
 	__Fp;						\
 })
-
-enum hybrid_pmu_type {
-	hybrid_big		= 0x40,
-	hybrid_small		= 0x20,
-
-	hybrid_big_small	= hybrid_big | hybrid_small,
-};
-
-#define X86_HYBRID_PMU_ATOM_IDX		0
-#define X86_HYBRID_PMU_CORE_IDX		1
-
-#define X86_HYBRID_NUM_PMUS		2
 
 /*
  * struct x86_pmu - generic x86 pmu
@@ -936,7 +947,7 @@ struct x86_pmu {
 	 */
 	int				num_hybrid_pmus;
 	struct x86_hybrid_pmu		*hybrid_pmu;
-	u8 (*get_hybrid_cpu_type)	(void);
+	enum hybrid_cpu_type (*get_hybrid_cpu_type)	(void);
 };
 
 struct x86_perf_task_context_opt {
@@ -1000,6 +1011,7 @@ do {									\
 #define PMU_FL_PAIR		0x40 /* merge counters for large incr. events */
 #define PMU_FL_INSTR_LATENCY	0x80 /* Support Instruction Latency in PEBS Memory Info Record */
 #define PMU_FL_MEM_LOADS_AUX	0x100 /* Require an auxiliary event for the complete memory info */
+#define PMU_FL_RETIRE_LATENCY	0x200 /* Support Retire Latency in PEBS */
 
 #define EVENT_VAR(_id)  event_attr_##_id
 #define EVENT_PTR(_id) &event_attr_##_id.attr.attr
@@ -1486,6 +1498,8 @@ int intel_pmu_drain_bts_buffer(void);
 
 u64 adl_latency_data_small(struct perf_event *event, u64 status);
 
+u64 mtl_latency_data_small(struct perf_event *event, u64 status);
+
 extern struct event_constraint intel_core2_pebs_event_constraints[];
 
 extern struct event_constraint intel_atom_pebs_event_constraints[];
@@ -1514,7 +1528,7 @@ extern struct event_constraint intel_skl_pebs_event_constraints[];
 
 extern struct event_constraint intel_icl_pebs_event_constraints[];
 
-extern struct event_constraint intel_spr_pebs_event_constraints[];
+extern struct event_constraint intel_glc_pebs_event_constraints[];
 
 struct event_constraint *intel_pebs_constraints(struct perf_event *event);
 
@@ -1596,6 +1610,10 @@ void intel_pmu_pebs_data_source_skl(bool pmem);
 void intel_pmu_pebs_data_source_adl(void);
 
 void intel_pmu_pebs_data_source_grt(void);
+
+void intel_pmu_pebs_data_source_mtl(void);
+
+void intel_pmu_pebs_data_source_cmt(void);
 
 int intel_pmu_setup_lbr_filter(struct perf_event *event);
 

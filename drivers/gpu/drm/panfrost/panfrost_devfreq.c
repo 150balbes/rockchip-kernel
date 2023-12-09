@@ -4,6 +4,7 @@
 #include <linux/clk.h>
 #include <linux/devfreq.h>
 #include <linux/devfreq_cooling.h>
+#include <linux/nvmem-consumer.h>
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
 
@@ -57,6 +58,7 @@ static int panfrost_devfreq_get_dev_status(struct device *dev,
 	spin_lock_irqsave(&pfdevfreq->lock, irqflags);
 
 	panfrost_devfreq_update_utilization(pfdevfreq);
+	pfdevfreq->current_frequency = status->current_frequency;
 
 	status->total_time = ktime_to_ns(ktime_add(pfdevfreq->busy_time,
 						   pfdevfreq->idle_time));
@@ -82,6 +84,31 @@ static struct devfreq_dev_profile panfrost_devfreq_profile = {
 	.get_dev_status = panfrost_devfreq_get_dev_status,
 };
 
+static int panfrost_read_speedbin(struct device *dev)
+{
+	u32 val;
+	int ret;
+
+	ret = nvmem_cell_read_variable_le_u32(dev, "speed-bin", &val);
+	if (ret) {
+		/*
+		 * -ENOENT means that this platform doesn't support speedbins
+		 * as it didn't declare any speed-bin nvmem: in this case, we
+		 * keep going without it; any other error means that we are
+		 * supposed to read the bin value, but we failed doing so.
+		 */
+		if (ret != -ENOENT && ret != -EOPNOTSUPP) {
+			DRM_DEV_ERROR(dev, "Cannot read speed-bin (%d).", ret);
+			return ret;
+		}
+
+		return 0;
+	}
+	DRM_DEV_DEBUG(dev, "Using speed-bin = 0x%x\n", val);
+
+	return devm_pm_opp_set_supported_hw(dev, &val, 1);
+}
+
 int panfrost_devfreq_init(struct panfrost_device *pfdev)
 {
 	int ret;
@@ -91,6 +118,7 @@ int panfrost_devfreq_init(struct panfrost_device *pfdev)
 	struct devfreq *devfreq;
 	struct thermal_cooling_device *cooling;
 	struct panfrost_devfreq *pfdevfreq = &pfdev->pfdevfreq;
+	unsigned long freq = ULONG_MAX;
 
 	if (pfdev->comp->num_supplies > 1) {
 		/*
@@ -100,6 +128,10 @@ int panfrost_devfreq_init(struct panfrost_device *pfdev)
 		DRM_DEV_INFO(dev, "More than 1 supply is not supported yet\n");
 		return 0;
 	}
+
+	ret = panfrost_read_speedbin(dev);
+	if (ret)
+		return ret;
 
 	ret = devm_pm_opp_set_regulators(dev, pfdev->comp->supply_names);
 	if (ret) {
@@ -141,6 +173,12 @@ int panfrost_devfreq_init(struct panfrost_device *pfdev)
 		DRM_DEV_ERROR(dev, "Couldn't set recommended OPP\n");
 		return ret;
 	}
+
+	/* Find the fastest defined rate  */
+	opp = dev_pm_opp_find_freq_floor(dev, &freq);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp);
+	pfdevfreq->fast_rate = freq;
 
 	dev_pm_opp_put(opp);
 

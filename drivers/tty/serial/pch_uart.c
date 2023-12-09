@@ -749,7 +749,7 @@ static void pch_dma_tx_complete(void *arg)
 		uart_xmit_advance(port, sg_dma_len(sg));
 
 	async_tx_ack(priv->desc_tx);
-	dma_unmap_sg(port->dev, sg, priv->orig_nent, DMA_TO_DEVICE);
+	dma_unmap_sg(port->dev, priv->sg_tx_p, priv->orig_nent, DMA_TO_DEVICE);
 	priv->tx_dma_use = 0;
 	priv->nent = 0;
 	priv->orig_nent = 0;
@@ -1347,7 +1347,7 @@ static void pch_uart_set_termios(struct uart_port *port,
 	baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);
 
 	spin_lock_irqsave(&priv->lock, flags);
-	spin_lock(&port->lock);
+	uart_port_lock(port);
 
 	uart_update_timeout(port, termios->c_cflag, baud);
 	rtn = pch_uart_hal_set_line(priv, baud, parity, bits, stb);
@@ -1360,7 +1360,7 @@ static void pch_uart_set_termios(struct uart_port *port,
 		tty_termios_encode_baud_rate(termios, baud, baud);
 
 out:
-	spin_unlock(&port->lock);
+	uart_port_unlock(port);
 	spin_unlock_irqrestore(&priv->lock, flags);
 }
 
@@ -1581,10 +1581,10 @@ pch_console_write(struct console *co, const char *s, unsigned int count)
 		port_locked = 0;
 	} else if (oops_in_progress) {
 		priv_locked = spin_trylock(&priv->lock);
-		port_locked = spin_trylock(&priv->port.lock);
+		port_locked = uart_port_trylock(&priv->port);
 	} else {
 		spin_lock(&priv->lock);
-		spin_lock(&priv->port.lock);
+		uart_port_lock(&priv->port);
 	}
 
 	/*
@@ -1604,7 +1604,7 @@ pch_console_write(struct console *co, const char *s, unsigned int count)
 	iowrite8(ier, priv->membase + UART_IER);
 
 	if (port_locked)
-		spin_unlock(&priv->port.lock);
+		uart_port_unlock(&priv->port);
 	if (priv_locked)
 		spin_unlock(&priv->lock);
 	local_irq_restore(flags);
@@ -1775,7 +1775,7 @@ static void pch_uart_exit_port(struct eg20t_port *priv)
 	char name[32];
 
 	snprintf(name, sizeof(name), "uart%d_regs", priv->port.line);
-	debugfs_remove(debugfs_lookup(name, NULL));
+	debugfs_lookup_and_remove(name, NULL);
 	uart_remove_one_port(&pch_uart_driver, &priv->port);
 	free_page((unsigned long)priv->rxbuf.buf);
 }

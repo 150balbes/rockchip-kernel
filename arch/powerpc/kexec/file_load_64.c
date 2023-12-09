@@ -17,7 +17,7 @@
 #include <linux/kexec.h>
 #include <linux/of_fdt.h>
 #include <linux/libfdt.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/memblock.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -26,10 +26,13 @@
 #include <asm/firmware.h>
 #include <asm/kexec_ranges.h>
 #include <asm/crashdump-ppc64.h>
+#include <asm/mmzone.h>
+#include <asm/iommu.h>
 #include <asm/prom.h>
+#include <asm/plpks.h>
 
 struct umem_info {
-	u64 *buf;		/* data buffer for usable-memory property */
+	__be64 *buf;		/* data buffer for usable-memory property */
 	u32 size;		/* size allocated for the data buffer */
 	u32 max_entries;	/* maximum no. of entries */
 	u32 idx;		/* index of current entry */
@@ -440,10 +443,10 @@ static int locate_mem_hole_bottom_up_ppc64(struct kexec_buf *kbuf,
  *
  * Returns buffer on success, NULL on error.
  */
-static u64 *check_realloc_usable_mem(struct umem_info *um_info, int cnt)
+static __be64 *check_realloc_usable_mem(struct umem_info *um_info, int cnt)
 {
 	u32 new_size;
-	u64 *tbuf;
+	__be64 *tbuf;
 
 	if ((um_info->idx + cnt) <= um_info->max_entries)
 		return um_info->buf;
@@ -688,7 +691,8 @@ static int update_usable_mem_fdt(void *fdt, struct crash_mem *usable_mem)
 		ret = fdt_setprop(fdt, node, "linux,drconf-usable-memory",
 				  um_info.buf, (um_info.idx * sizeof(u64)));
 		if (ret) {
-			pr_err("Failed to update fdt with linux,drconf-usable-memory property");
+			pr_err("Failed to update fdt with linux,drconf-usable-memory property: %s",
+			       fdt_strerror(ret));
 			goto out;
 		}
 	}
@@ -930,9 +934,9 @@ out:
 }
 
 /**
- * get_cpu_node_size - Compute the size of a CPU node in the FDT.
- *                     This should be done only once and the value is stored in
- *                     a static variable.
+ * cpu_node_size - Compute the size of a CPU node in the FDT.
+ *                 This should be done only once and the value is stored in
+ *                 a static variable.
  * Returns the max size of a CPU node in the FDT.
  */
 static unsigned int cpu_node_size(void)
@@ -977,22 +981,28 @@ static unsigned int cpu_node_size(void)
  */
 unsigned int kexec_extra_fdt_size_ppc64(struct kimage *image)
 {
-	unsigned int cpu_nodes, extra_size;
+	unsigned int cpu_nodes, extra_size = 0;
 	struct device_node *dn;
 	u64 usm_entries;
 
+	// Budget some space for the password blob. There's already extra space
+	// for the key name
+	if (plpks_is_available())
+		extra_size += (unsigned int)plpks_get_passwordlen();
+
 	if (image->type != KEXEC_TYPE_CRASH)
-		return 0;
+		return extra_size;
 
 	/*
 	 * For kdump kernel, account for linux,usable-memory and
 	 * linux,drconf-usable-memory properties. Get an approximate on the
 	 * number of usable memory entries and use for FDT size estimation.
 	 */
-	usm_entries = ((memblock_end_of_DRAM() / drmem_lmb_size()) +
-		       (2 * (resource_size(&crashk_res) / drmem_lmb_size())));
-
-	extra_size = (unsigned int)(usm_entries * sizeof(u64));
+	if (drmem_lmb_size()) {
+		usm_entries = ((memory_hotplug_max() / drmem_lmb_size()) +
+			       (2 * (resource_size(&crashk_res) / drmem_lmb_size())));
+		extra_size += (unsigned int)(usm_entries * sizeof(u64));
+	}
 
 	/*
 	 * Get the number of CPU nodes in the current DT. This allows to
@@ -1128,11 +1138,15 @@ static int update_pci_dma_nodes(void *fdt, const char *dmapropname)
 			continue;
 
 		ret = copy_property(fdt, pci_offset, dn, "ibm,dma-window");
-		if (ret < 0)
+		if (ret < 0) {
+			of_node_put(dn);
 			break;
+		}
 		ret = copy_property(fdt, pci_offset, dn, dmapropname);
-		if (ret < 0)
+		if (ret < 0) {
+			of_node_put(dn);
 			break;
+		}
 	}
 
 	return ret;
@@ -1199,8 +1213,6 @@ int setup_new_fdt_ppc64(const struct kimage *image, void *fdt,
 	if (ret < 0)
 		goto out;
 
-#define DIRECT64_PROPNAME "linux,direct64-ddr-window-info"
-#define DMA64_PROPNAME "linux,dma64-ddr-window-info"
 	ret = update_pci_dma_nodes(fdt, DIRECT64_PROPNAME);
 	if (ret < 0)
 		goto out;
@@ -1208,8 +1220,6 @@ int setup_new_fdt_ppc64(const struct kimage *image, void *fdt,
 	ret = update_pci_dma_nodes(fdt, DMA64_PROPNAME);
 	if (ret < 0)
 		goto out;
-#undef DMA64_PROPNAME
-#undef DIRECT64_PROPNAME
 
 	/* Update memory reserve map */
 	ret = get_reserved_memory_ranges(&rmem);
@@ -1229,6 +1239,10 @@ int setup_new_fdt_ppc64(const struct kimage *image, void *fdt,
 			goto out;
 		}
 	}
+
+	// If we have PLPKS active, we need to provide the password to the new kernel
+	if (plpks_is_available())
+		ret = plpks_populate_fdt(fdt);
 
 out:
 	kfree(rmem);

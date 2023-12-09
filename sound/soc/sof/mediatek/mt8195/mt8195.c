@@ -49,47 +49,13 @@ static int mt8195_send_msg(struct snd_sof_dev *sdev,
 	return mtk_adsp_ipc_send(priv->dsp_ipc, MTK_ADSP_IPC_REQ, MTK_ADSP_IPC_OP_REQ);
 }
 
-static void mt8195_get_reply(struct snd_sof_dev *sdev)
-{
-	struct snd_sof_ipc_msg *msg = sdev->msg;
-	struct sof_ipc_reply reply;
-	int ret = 0;
-
-	if (!msg) {
-		dev_warn(sdev->dev, "unexpected ipc interrupt\n");
-		return;
-	}
-
-	/* get reply */
-	sof_mailbox_read(sdev, sdev->host_box.offset, &reply, sizeof(reply));
-	if (reply.error < 0) {
-		memcpy(msg->reply_data, &reply, sizeof(reply));
-		ret = reply.error;
-	} else {
-		/* reply has correct size? */
-		if (reply.hdr.size != msg->reply_size) {
-			dev_err(sdev->dev, "error: reply expected %zu got %u bytes\n",
-				msg->reply_size, reply.hdr.size);
-			ret = -EINVAL;
-		}
-
-		/* read the message */
-		if (msg->reply_size > 0)
-			sof_mailbox_read(sdev, sdev->host_box.offset,
-					 msg->reply_data, msg->reply_size);
-	}
-
-	msg->reply_error = ret;
-}
-
 static void mt8195_dsp_handle_reply(struct mtk_adsp_ipc *ipc)
 {
 	struct adsp_priv *priv = mtk_adsp_ipc_get_data(ipc);
 	unsigned long flags;
 
 	spin_lock_irqsave(&priv->sdev->ipc_lock, flags);
-	mt8195_get_reply(priv->sdev);
-	snd_sof_ipc_reply(priv->sdev, 0);
+	snd_sof_ipc_process_reply(priv->sdev, 0);
 	spin_unlock_irqrestore(&priv->sdev->ipc_lock, flags);
 }
 
@@ -215,11 +181,6 @@ static int platform_parse_resource(struct platform_device *pdev, void *data)
 
 	adsp->pa_sram = (phys_addr_t)mmio->start;
 	adsp->sramsize = resource_size(mmio);
-	if (adsp->sramsize < TOTAL_SIZE_SHARED_SRAM_FROM_TAIL) {
-		dev_err(dev, "adsp SRAM(%#x) is not enough for share\n",
-			adsp->sramsize);
-		return -EINVAL;
-	}
 
 	dev_dbg(dev, "sram pbase=%pa,%#x\n", &adsp->pa_sram, adsp->sramsize);
 
@@ -427,7 +388,7 @@ static int mt8195_dsp_shutdown(struct snd_sof_dev *sdev)
 	return snd_sof_suspend(sdev->dev);
 }
 
-static int mt8195_dsp_remove(struct snd_sof_dev *sdev)
+static void mt8195_dsp_remove(struct snd_sof_dev *sdev)
 {
 	struct platform_device *pdev = container_of(sdev->dev, struct platform_device, dev);
 	struct adsp_priv *priv = sdev->pdata->hw_pdata;
@@ -435,8 +396,6 @@ static int mt8195_dsp_remove(struct snd_sof_dev *sdev)
 	platform_device_unregister(priv->ipc_dev);
 	adsp_sram_power_on(&pdev->dev, false);
 	adsp_clock_off(sdev);
-
-	return 0;
 }
 
 static int mt8195_dsp_suspend(struct snd_sof_dev *sdev, u32 target_state)
@@ -515,7 +474,7 @@ static snd_pcm_uframes_t mt8195_pcm_pointer(struct snd_sof_dev *sdev,
 	struct sof_ipc_stream_posn posn;
 	struct snd_sof_pcm_stream *stream;
 	struct snd_soc_component *scomp = sdev->component;
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 
 	spcm = snd_sof_find_spcm_dai(scomp, rtd);
 	if (!spcm) {
@@ -525,7 +484,7 @@ static snd_pcm_uframes_t mt8195_pcm_pointer(struct snd_sof_dev *sdev,
 	}
 
 	stream = &spcm->stream[substream->stream];
-	ret = snd_sof_ipc_msg_data(sdev, stream->substream, &posn, sizeof(posn));
+	ret = snd_sof_ipc_msg_data(sdev, stream, &posn, sizeof(posn));
 	if (ret < 0) {
 		dev_warn(sdev->dev, "failed to read stream position: %d\n", ret);
 		return 0;
@@ -642,6 +601,7 @@ static struct snd_sof_dsp_ops sof_mt8195_ops = {
 
 	/* Debug information */
 	.dbg_dump = mt8195_adsp_dump,
+	.debugfs_add_region_item = snd_sof_debugfs_add_region_item_iomem,
 
 	/* DAI drivers */
 	.drv = mt8195_dai,
@@ -673,16 +633,16 @@ static struct snd_sof_of_mach sof_mt8195_machs[] = {
 
 static const struct sof_dev_desc sof_of_mt8195_desc = {
 	.of_machines = sof_mt8195_machs,
-	.ipc_supported_mask	= BIT(SOF_IPC),
-	.ipc_default		= SOF_IPC,
+	.ipc_supported_mask	= BIT(SOF_IPC_TYPE_3),
+	.ipc_default		= SOF_IPC_TYPE_3,
 	.default_fw_path = {
-		[SOF_IPC] = "mediatek/sof",
+		[SOF_IPC_TYPE_3] = "mediatek/sof",
 	},
 	.default_tplg_path = {
-		[SOF_IPC] = "mediatek/sof-tplg",
+		[SOF_IPC_TYPE_3] = "mediatek/sof-tplg",
 	},
 	.default_fw_filename = {
-		[SOF_IPC] = "sof-mt8195.ri",
+		[SOF_IPC_TYPE_3] = "sof-mt8195.ri",
 	},
 	.nocodec_tplg_filename = "sof-mt8195-nocodec.tplg",
 	.ops = &sof_mt8195_ops,
@@ -698,7 +658,7 @@ MODULE_DEVICE_TABLE(of, sof_of_mt8195_ids);
 /* DT driver definition */
 static struct platform_driver snd_sof_of_mt8195_driver = {
 	.probe = sof_of_probe,
-	.remove = sof_of_remove,
+	.remove_new = sof_of_remove,
 	.shutdown = sof_of_shutdown,
 	.driver = {
 	.name = "sof-audio-of-mt8195",

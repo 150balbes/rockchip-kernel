@@ -39,6 +39,39 @@ static void vp_transport_features(struct virtio_device *vdev, u64 features)
 		__virtio_set_bit(vdev, VIRTIO_F_RING_RESET);
 }
 
+static int __vp_check_common_size_one_feature(struct virtio_device *vdev, u32 fbit,
+					    u32 offset, const char *fname)
+{
+	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
+
+	if (!__virtio_test_bit(vdev, fbit))
+		return 0;
+
+	if (likely(vp_dev->mdev.common_len >= offset))
+		return 0;
+
+	dev_err(&vdev->dev,
+		"virtio: common cfg size(%zu) does not match the feature %s\n",
+		vp_dev->mdev.common_len, fname);
+
+	return -EINVAL;
+}
+
+#define vp_check_common_size_one_feature(vdev, fbit, field) \
+	__vp_check_common_size_one_feature(vdev, fbit, \
+		offsetofend(struct virtio_pci_modern_common_cfg, field), #fbit)
+
+static int vp_check_common_size(struct virtio_device *vdev)
+{
+	if (vp_check_common_size_one_feature(vdev, VIRTIO_F_NOTIF_CONFIG_DATA, queue_notify_data))
+		return -EINVAL;
+
+	if (vp_check_common_size_one_feature(vdev, VIRTIO_F_RING_RESET, queue_reset))
+		return -EINVAL;
+
+	return 0;
+}
+
 /* virtio config->finalize_features() implementation */
 static int vp_finalize_features(struct virtio_device *vdev)
 {
@@ -56,6 +89,9 @@ static int vp_finalize_features(struct virtio_device *vdev)
 			"but does not have VIRTIO_F_VERSION_1\n");
 		return -EINVAL;
 	}
+
+	if (vp_check_common_size(vdev))
+		return -EINVAL;
 
 	vp_modern_set_features(&vp_dev->mdev, vdev->features);
 
@@ -288,6 +324,15 @@ static u16 vp_config_vector(struct virtio_pci_device *vp_dev, u16 vector)
 	return vp_modern_config_vector(&vp_dev->mdev, vector);
 }
 
+static bool vp_notify_with_data(struct virtqueue *vq)
+{
+	u32 data = vring_notification_data(vq);
+
+	iowrite32(data, (void __iomem *)vq->priv);
+
+	return true;
+}
+
 static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 				  struct virtio_pci_vq_info *info,
 				  unsigned int index,
@@ -298,22 +343,23 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 {
 
 	struct virtio_pci_modern_device *mdev = &vp_dev->mdev;
+	bool (*notify)(struct virtqueue *vq);
 	struct virtqueue *vq;
 	u16 num;
 	int err;
 
+	if (__virtio_test_bit(&vp_dev->vdev, VIRTIO_F_NOTIFICATION_DATA))
+		notify = vp_notify_with_data;
+	else
+		notify = vp_notify;
+
 	if (index >= vp_modern_get_num_queues(mdev))
-		return ERR_PTR(-ENOENT);
+		return ERR_PTR(-EINVAL);
 
 	/* Check if queue is either not available or already active. */
 	num = vp_modern_get_queue_size(mdev, index);
 	if (!num || vp_modern_get_queue_enable(mdev, index))
 		return ERR_PTR(-ENOENT);
-
-	if (num & (num - 1)) {
-		dev_warn(&vp_dev->pci_dev->dev, "bad queue size %u", num);
-		return ERR_PTR(-EINVAL);
-	}
 
 	info->msix_vector = msix_vec;
 
@@ -321,7 +367,7 @@ static struct virtqueue *setup_vq(struct virtio_pci_device *vp_dev,
 	vq = vring_create_virtqueue(index, num,
 				    SMP_CACHE_BYTES, &vp_dev->vdev,
 				    true, true, ctx,
-				    vp_notify, callback, name);
+				    notify, callback, name);
 	if (!vq)
 		return ERR_PTR(-ENOMEM);
 

@@ -7,12 +7,15 @@
 #define ocelot_to_felix(o)		container_of((o), struct felix, ocelot)
 #define FELIX_MAC_QUIRKS		OCELOT_QUIRK_PCS_PERFORMS_RATE_ADAPTATION
 
+#define OCELOT_PORT_MODE_NONE		0
 #define OCELOT_PORT_MODE_INTERNAL	BIT(0)
 #define OCELOT_PORT_MODE_SGMII		BIT(1)
 #define OCELOT_PORT_MODE_QSGMII		BIT(2)
 #define OCELOT_PORT_MODE_2500BASEX	BIT(3)
 #define OCELOT_PORT_MODE_USXGMII	BIT(4)
 #define OCELOT_PORT_MODE_1000BASEX	BIT(5)
+
+struct device_node;
 
 /* Platform-specific information */
 struct felix_info {
@@ -36,6 +39,7 @@ struct felix_info {
 	u16				vcap_pol_base2;
 	u16				vcap_pol_max2;
 	const struct ptp_clock_info	*ptp_caps;
+	unsigned long			quirks;
 
 	/* Some Ocelot switches are integrated into the SoC without the
 	 * extraction IRQ line connected to the ARM GIC. By enabling this
@@ -53,9 +57,13 @@ struct felix_info {
 	void	(*mdio_bus_free)(struct ocelot *ocelot);
 	int	(*port_setup_tc)(struct dsa_switch *ds, int port,
 				 enum tc_setup_type type, void *type_data);
-	void	(*tas_guard_bands_update)(struct ocelot *ocelot, int port);
 	void	(*port_sched_speed_set)(struct ocelot *ocelot, int port,
 					u32 speed);
+	void	(*phylink_mac_config)(struct ocelot *ocelot, int port,
+				      unsigned int mode,
+				      const struct phylink_link_state *state);
+	int	(*configure_serdes)(struct ocelot *ocelot, int port,
+				    struct device_node *portnp);
 };
 
 /* Methods for initializing the hardware resources specific to a tagging
@@ -69,9 +77,9 @@ struct felix_tag_proto_ops {
 	int (*setup)(struct dsa_switch *ds);
 	void (*teardown)(struct dsa_switch *ds);
 	unsigned long (*get_host_fwd_mask)(struct dsa_switch *ds);
-	int (*change_master)(struct dsa_switch *ds, int port,
-			     struct net_device *master,
-			     struct netlink_ext_ack *extack);
+	int (*change_conduit)(struct dsa_switch *ds, int port,
+			      struct net_device *conduit,
+			      struct netlink_ext_ack *extack);
 };
 
 extern const struct dsa_switch_ops felix_switch_ops;

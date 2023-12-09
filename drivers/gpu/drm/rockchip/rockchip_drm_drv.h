@@ -10,27 +10,19 @@
 #define _ROCKCHIP_DRM_DRV_H
 
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_dsc.h>
+#include <drm/display/drm_dsc.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
 #include <drm/rockchip_drm.h>
-
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/component.h>
-
-//#include <soc/rockchip/rockchip_dmc.h>
-
-//#include "../panel/panel-simple.h"
-
-#include "rockchip_drm_debugfs.h"
 
 #define ROCKCHIP_MAX_FB_BUFFER	3
 #define ROCKCHIP_MAX_CONNECTOR	2
 #define ROCKCHIP_MAX_CRTC	4
 #define ROCKCHIP_MAX_LAYER	16
-
 
 struct drm_device;
 struct drm_connector;
@@ -171,6 +163,8 @@ struct rockchip_crtc_state {
 	int output_bpc;
 	int output_flags;
 	bool enable_afbc;
+
+	//[CC:] vop2 related change
 	/**
 	 * @splice_mode: enabled when display a hdisplay > 4096 on rk3588
 	 */
@@ -214,7 +208,10 @@ struct rockchip_crtc_state {
 	u32 line_flag;
 	u8 mode_update;
 	u8 dsc_id;
+
+	//[CC:] vop2 related changes
 	u8 dsc_enable;
+	unsigned long dsc_clk;
 
 	u8 dsc_slice_num;
 	u8 dsc_pixel_num;
@@ -340,9 +337,8 @@ struct next_hdr_sink_data {
 	struct ver_12_v2 ver_12_v2;
 } __packed;
 
+//[CC:] drop struct dmcfreq_vop_info
 struct dmcfreq_vop_info;
-
-extern const struct dma_buf_ops rockchip_drm_gem_prime_dmabuf_ops;
 
 /*
  * Rockchip drm private crtc funcs.
@@ -400,6 +396,7 @@ struct rockchip_drm_private {
 	struct drm_gem_object *fbdev_bo;
 	struct iommu_domain *domain;
 	struct gen_pool *secure_buffer_pool;
+	struct device *iommu_dev;
 	struct mutex mm_lock;
 	struct drm_mm mm;
 	struct list_head psr_list;
@@ -446,11 +443,21 @@ struct rockchip_drm_private {
 	struct loader_cubic_lut cubic_lut[ROCKCHIP_MAX_CRTC];
 };
 
+struct rockchip_encoder {
+	int crtc_endpoint_id;
+	struct drm_encoder encoder;
+};
+
 int rockchip_drm_dma_attach_device(struct drm_device *drm_dev,
 				   struct device *dev);
 void rockchip_drm_dma_detach_device(struct drm_device *drm_dev,
 				    struct device *dev);
+void rockchip_drm_dma_init_device(struct drm_device *drm_dev,
+				  struct device *dev);
 int rockchip_drm_wait_vact_end(struct drm_crtc *crtc, unsigned int mstimeout);
+int rockchip_drm_encoder_set_crtc_endpoint_id(struct rockchip_encoder *rencoder,
+					      struct device_node *np, int port, int reg);
+
 int rockchip_register_crtc_funcs(struct drm_crtc *crtc,
 				 const struct rockchip_crtc_funcs *crtc_funcs);
 void rockchip_unregister_crtc_funcs(struct drm_crtc *crtc);
@@ -473,8 +480,6 @@ static inline int rockchip_drm_get_sub_dev_type(void)
 #endif
 
 int rockchip_drm_endpoint_is_subdriver(struct device_node *ep);
-uint32_t rockchip_drm_of_find_possible_crtcs(struct drm_device *dev,
-					     struct device_node *port);
 uint32_t rockchip_drm_get_bpp(const struct drm_format_info *info);
 int rockchip_drm_get_yuv422_format(struct drm_connector *connector,
 				   struct edid *edid);
@@ -498,4 +503,10 @@ extern struct platform_driver rockchip_rgb_driver;
 extern struct platform_driver dw_dp_driver;
 extern struct platform_driver vconn_platform_driver;
 extern struct platform_driver vvop_platform_driver;
+
+static inline struct rockchip_encoder *to_rockchip_encoder(struct drm_encoder *encoder)
+{
+	return container_of(encoder, struct rockchip_encoder, encoder);
+}
+
 #endif /* _ROCKCHIP_DRM_DRV_H_ */

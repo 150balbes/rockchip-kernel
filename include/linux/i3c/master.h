@@ -22,9 +22,16 @@
 #define I3C_BROADCAST_ADDR		0x7e
 #define I3C_MAX_ADDR			GENMASK(6, 0)
 
+struct i2c_client;
+
+/* notifier actions. notifier call data is the struct i3c_bus */
+enum {
+	I3C_NOTIFY_BUS_ADD,
+	I3C_NOTIFY_BUS_REMOVE,
+};
+
 struct i3c_master_controller;
 struct i3c_bus;
-struct i2c_device;
 struct i3c_device;
 
 /**
@@ -128,6 +135,7 @@ struct i3c_ibi_slot {
  *		     rejected by the master
  * @num_slots: number of IBI slots reserved for this device
  * @enabled: reflect the IBI status
+ * @wq: workqueue used to execute IBI handlers.
  * @handler: IBI handler specified at i3c_device_request_ibi() call time. This
  *	     handler will be called from the controller workqueue, and as such
  *	     is allowed to sleep (though it is recommended to process the IBI
@@ -150,6 +158,7 @@ struct i3c_device_ibi_info {
 	unsigned int max_payload_len;
 	unsigned int num_slots;
 	unsigned int enabled;
+	struct workqueue_struct *wq;
 	void (*handler)(struct i3c_device *dev,
 			const struct i3c_ibi_payload *payload);
 };
@@ -165,7 +174,7 @@ struct i3c_device_ibi_info {
  *		 assigned a dynamic address by the master. Will be used during
  *		 bus initialization to assign it a specific dynamic address
  *		 before starting DAA (Dynamic Address Assignment)
- * @pid: I3C Provisional ID exposed by the device. This is a unique identifier
+ * @pid: I3C Provisioned ID exposed by the device. This is a unique identifier
  *	 that may be used to attach boardinfo to i3c_dev_desc when the device
  *	 does not have a static address
  * @of_node: optional DT node in case the device has been described in the DT
@@ -468,7 +477,7 @@ struct i3c_master_controller_ops {
  * @boardinfo.i2c: list of I2C boardinfo objects
  * @boardinfo: board-level information attached to devices connected on the bus
  * @bus: I3C bus exposed by this master
- * @wq: workqueue used to execute IBI handlers. Can also be used by master
+ * @wq: workqueue which can be used by master
  *	drivers if they need to postpone operations that need to take place
  *	in a thread context. Typical examples are Hot Join processing which
  *	requires taking the bus lock in maintenance, which in turn, can only
@@ -541,7 +550,7 @@ int i3c_master_register(struct i3c_master_controller *master,
 			struct device *parent,
 			const struct i3c_master_controller_ops *ops,
 			bool secondary);
-int i3c_master_unregister(struct i3c_master_controller *master);
+void i3c_master_unregister(struct i3c_master_controller *master);
 
 /**
  * i3c_dev_get_master_data() - get master private data attached to an I3C
@@ -650,5 +659,10 @@ void i3c_generic_ibi_recycle_slot(struct i3c_generic_ibi_pool *pool,
 void i3c_master_queue_ibi(struct i3c_dev_desc *dev, struct i3c_ibi_slot *slot);
 
 struct i3c_ibi_slot *i3c_master_get_free_ibi_slot(struct i3c_dev_desc *dev);
+
+void i3c_for_each_bus_locked(int (*fn)(struct i3c_bus *bus, void *data),
+			     void *data);
+int i3c_register_notifier(struct notifier_block *nb);
+int i3c_unregister_notifier(struct notifier_block *nb);
 
 #endif /* I3C_MASTER_H */

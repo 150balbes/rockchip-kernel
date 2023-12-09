@@ -12,6 +12,7 @@
 #include <linux/file.h>
 #include <linux/seq_file.h>
 #include <linux/fs.h>
+#include <linux/filelock.h>
 
 #include <linux/proc_fs.h>
 
@@ -112,10 +113,12 @@ static bool tid_fd_mode(struct task_struct *task, unsigned fd, fmode_t *mode)
 	struct file *file;
 
 	rcu_read_lock();
-	file = task_lookup_fd_rcu(task, fd);
-	if (file)
-		*mode = file->f_mode;
+	file = task_lookup_fdget_rcu(task, fd);
 	rcu_read_unlock();
+	if (file) {
+		*mode = file->f_mode;
+		fput(file);
+	}
 	return !!file;
 }
 
@@ -258,12 +261,13 @@ static int proc_readfd_common(struct file *file, struct dir_context *ctx,
 		char name[10 + 1];
 		unsigned int len;
 
-		f = task_lookup_next_fd_rcu(p, &fd);
+		f = task_lookup_next_fdget_rcu(p, &fd);
 		ctx->pos = fd + 2LL;
 		if (!f)
 			break;
 		data.mode = f->f_mode;
 		rcu_read_unlock();
+		fput(f);
 		data.fd = fd;
 
 		len = snprintf(name, sizeof(name), "%u", fd);
@@ -325,13 +329,13 @@ static struct dentry *proc_lookupfd(struct inode *dir, struct dentry *dentry,
  * /proc/pid/fd needs a special permission handler so that a process can still
  * access /proc/self/fd after it has executed a setuid().
  */
-int proc_fd_permission(struct user_namespace *mnt_userns,
+int proc_fd_permission(struct mnt_idmap *idmap,
 		       struct inode *inode, int mask)
 {
 	struct task_struct *p;
 	int rv;
 
-	rv = generic_permission(&init_user_ns, inode, mask);
+	rv = generic_permission(&nop_mnt_idmap, inode, mask);
 	if (rv == 0)
 		return rv;
 
@@ -344,14 +348,14 @@ int proc_fd_permission(struct user_namespace *mnt_userns,
 	return rv;
 }
 
-static int proc_fd_getattr(struct user_namespace *mnt_userns,
+static int proc_fd_getattr(struct mnt_idmap *idmap,
 			const struct path *path, struct kstat *stat,
 			u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_inode(path->dentry);
 	int rv = 0;
 
-	generic_fillattr(&init_user_ns, inode, stat);
+	generic_fillattr(&nop_mnt_idmap, request_mask, inode, stat);
 
 	/* If it's a directory, put the number of open fds there */
 	if (S_ISDIR(inode->i_mode)) {

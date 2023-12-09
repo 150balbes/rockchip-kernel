@@ -1454,7 +1454,6 @@ static int m66592_udc_start(struct usb_gadget *g,
 	struct m66592 *m66592 = to_m66592(g);
 
 	/* hook up the driver */
-	driver->driver.bus = NULL;
 	m66592->driver = driver;
 
 	m66592_bset(m66592, M66592_VBSE | M66592_URST, M66592_INTENB0);
@@ -1513,7 +1512,7 @@ static const struct usb_gadget_ops m66592_gadget_ops = {
 	.pullup			= m66592_pullup,
 };
 
-static int m66592_remove(struct platform_device *pdev)
+static void m66592_remove(struct platform_device *pdev)
 {
 	struct m66592		*m66592 = platform_get_drvdata(pdev);
 
@@ -1528,7 +1527,6 @@ static int m66592_remove(struct platform_device *pdev)
 		clk_put(m66592->clk);
 	}
 	kfree(m66592);
-	return 0;
 }
 
 static void nop_completion(struct usb_ep *ep, struct usb_request *r)
@@ -1689,10 +1687,11 @@ clean_up:
 
 /*-------------------------------------------------------------------------*/
 static struct platform_driver m66592_driver = {
-	.remove =	m66592_remove,
+	.probe =	m66592_probe,
+	.remove_new =	m66592_remove,
 	.driver		= {
 		.name =	udc_name,
 	},
 };
 
-module_platform_driver_probe(m66592_driver, m66592_probe);
+module_platform_driver(m66592_driver);

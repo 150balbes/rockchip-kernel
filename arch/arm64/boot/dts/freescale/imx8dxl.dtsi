@@ -60,6 +60,7 @@
 		A35_L2: l2-cache0 {
 			compatible = "cache";
 			cache-level = <2>;
+			cache-unified;
 		};
 	};
 
@@ -121,17 +122,13 @@
 			  &lsio_mu1 3 3>;
 
 		pd: power-controller {
-			compatible = "fsl,scu-pd";
+			compatible = "fsl,imx8dl-scu-pd", "fsl,scu-pd";
 			#power-domain-cells = <1>;
-			wakeup-irq = <160 163 235 236 237 228 229 230 231 238
-				     239 240 166 169>;
 		};
 
 		clk: clock-controller {
 			compatible = "fsl,imx8dxl-clk", "fsl,scu-clk";
 			#clock-cells = <2>;
-			clocks = <&xtal32k &xtal24m>;
-			clock-names = "xtal_32KHz", "xtal_24Mhz";
 		};
 
 		scu_gpio: gpio {
@@ -164,17 +161,17 @@
 
 		sc_pwrkey: keys {
 			compatible = "fsl,imx8qxp-sc-key", "fsl,imx-sc-key";
-			linux,keycode = <KEY_POWER>;
+			linux,keycodes = <KEY_POWER>;
 			wakeup-source;
 		};
 
 		watchdog {
-			compatible = "fsl,imx-sc-wdt";
+			compatible = "fsl,imx8dxl-sc-wdt", "fsl,imx-sc-wdt";
 			timeout-sec = <60>;
 		};
 
 		tsens: thermal-sensor {
-			compatible = "fsl,imx-sc-thermal";
+			compatible = "fsl,imx8dxl-sc-thermal", "fsl,imx-sc-thermal";
 			#thermal-sensor-cells = <1>;
 		};
 	};
@@ -188,7 +185,7 @@
 	};
 
 	thermal_zones: thermal-zones {
-		cpu-thermal0 {
+		cpu-thermal {
 			polling-delay-passive = <250>;
 			polling-delay = <2000>;
 			thermal-sensors = <&tsens IMX_SC_R_SYSTEM>;

@@ -259,6 +259,10 @@ struct dasd_uid {
 	char vduit[33];
 };
 
+#define DASD_UID_STRLEN ( /* vendor */ 3 + 1 + /* serial    */ 14 + 1 +	\
+			  /* SSID   */ 4 + 1 + /* unit addr */ 2 + 1 +	\
+			  /* vduit */ 32 + 1)
+
 /*
  * PPRC Status data
  */
@@ -279,7 +283,7 @@ struct dasd_pprc_dev_info {
 	__u8 secondary;		/* 7       Secondary device address */
 	__u16 pprc_id;		/* 8-9     Peer-to-Peer Remote Copy ID */
 	__u8 reserved2[12];	/* 10-21   reserved */
-	__u16 prim_cu_ssid;	/* 22-23   Pimary Control Unit SSID */
+	__u16 prim_cu_ssid;	/* 22-23   Primary Control Unit SSID */
 	__u8 reserved3[12];	/* 24-35   reserved */
 	__u16 sec_cu_ssid;	/* 36-37   Secondary Control Unit SSID */
 	__u8 reserved4[90];	/* 38-127  reserved */
@@ -444,22 +448,22 @@ struct dasd_discipline {
 
 extern struct dasd_discipline *dasd_diag_discipline_pointer;
 
-/*
- * Notification numbers for extended error reporting notifications:
- * The DASD_EER_DISABLE notification is sent before a dasd_device (and it's
- * eer pointer) is freed. The error reporting module needs to do all necessary
- * cleanup steps.
- * The DASD_EER_TRIGGER notification sends the actual error reports (triggers).
- */
-#define DASD_EER_DISABLE 0
-#define DASD_EER_TRIGGER 1
+/* Trigger IDs for extended error reporting DASD EER and autoquiesce */
+enum eer_trigger {
+	DASD_EER_FATALERROR = 1,
+	DASD_EER_NOPATH,
+	DASD_EER_STATECHANGE,
+	DASD_EER_PPRCSUSPEND,
+	DASD_EER_NOSPC,
+	DASD_EER_TIMEOUTS,
+	DASD_EER_STARTIO,
 
-/* Trigger IDs for extended error reporting DASD_EER_TRIGGER notification */
-#define DASD_EER_FATALERROR  1
-#define DASD_EER_NOPATH      2
-#define DASD_EER_STATECHANGE 3
-#define DASD_EER_PPRCSUSPEND 4
-#define DASD_EER_NOSPC	     5
+	/* enum end marker, only add new trigger above */
+	DASD_EER_MAX,
+	DASD_EER_AUTOQUIESCE = 31, /* internal only */
+};
+
+#define DASD_EER_VALID ((1U << DASD_EER_MAX) - 1)
 
 /* DASD path handling */
 
@@ -637,6 +641,8 @@ struct dasd_device {
 	struct dasd_format_entry format_entry;
 	struct kset *paths_info;
 	struct dasd_copy_relation *copy;
+	unsigned long aq_mask;
+	unsigned int aq_timeouts;
 };
 
 struct dasd_block {
@@ -644,7 +650,7 @@ struct dasd_block {
 	struct gendisk *gdp;
 	spinlock_t request_queue_lock;
 	struct blk_mq_tag_set tag_set;
-	struct block_device *bdev;
+	struct bdev_handle *bdev_handle;
 	atomic_t open_count;
 
 	unsigned long blocks;	   /* size of volume in blocks */
@@ -963,7 +969,8 @@ int dasd_scan_partitions(struct dasd_block *);
 void dasd_destroy_partitions(struct dasd_block *);
 
 /* externals in dasd_ioctl.c */
-int dasd_ioctl(struct block_device *, fmode_t, unsigned int, unsigned long);
+int dasd_ioctl(struct block_device *bdev, blk_mode_t mode, unsigned int cmd,
+		unsigned long arg);
 int dasd_set_read_only(struct block_device *bdev, bool ro);
 
 /* externals in dasd_proc.c */

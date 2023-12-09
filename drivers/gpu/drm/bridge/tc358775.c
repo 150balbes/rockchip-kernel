@@ -23,7 +23,6 @@
 #include <drm/display/drm_dp_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
@@ -637,7 +636,7 @@ static int tc_attach_host(struct tc_data *tc)
 	return 0;
 }
 
-static int tc_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int tc_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct tc_data *tc;

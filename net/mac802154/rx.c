@@ -29,12 +29,87 @@ static int ieee802154_deliver_skb(struct sk_buff *skb)
 	return netif_receive_skb(skb);
 }
 
+void mac802154_rx_beacon_worker(struct work_struct *work)
+{
+	struct ieee802154_local *local =
+		container_of(work, struct ieee802154_local, rx_beacon_work);
+	struct cfg802154_mac_pkt *mac_pkt;
+
+	mac_pkt = list_first_entry_or_null(&local->rx_beacon_list,
+					   struct cfg802154_mac_pkt, node);
+	if (!mac_pkt)
+		return;
+
+	mac802154_process_beacon(local, mac_pkt->skb, mac_pkt->page, mac_pkt->channel);
+
+	list_del(&mac_pkt->node);
+	kfree_skb(mac_pkt->skb);
+	kfree(mac_pkt);
+}
+
+static bool mac802154_should_answer_beacon_req(struct ieee802154_local *local)
+{
+	struct cfg802154_beacon_request *beacon_req;
+	unsigned int interval;
+
+	rcu_read_lock();
+	beacon_req = rcu_dereference(local->beacon_req);
+	if (!beacon_req) {
+		rcu_read_unlock();
+		return false;
+	}
+
+	interval = beacon_req->interval;
+	rcu_read_unlock();
+
+	if (!mac802154_is_beaconing(local))
+		return false;
+
+	return interval == IEEE802154_ACTIVE_SCAN_DURATION;
+}
+
+void mac802154_rx_mac_cmd_worker(struct work_struct *work)
+{
+	struct ieee802154_local *local =
+		container_of(work, struct ieee802154_local, rx_mac_cmd_work);
+	struct cfg802154_mac_pkt *mac_pkt;
+	u8 mac_cmd;
+	int rc;
+
+	mac_pkt = list_first_entry_or_null(&local->rx_mac_cmd_list,
+					   struct cfg802154_mac_pkt, node);
+	if (!mac_pkt)
+		return;
+
+	rc = ieee802154_get_mac_cmd(mac_pkt->skb, &mac_cmd);
+	if (rc)
+		goto out;
+
+	switch (mac_cmd) {
+	case IEEE802154_CMD_BEACON_REQ:
+		dev_dbg(&mac_pkt->sdata->dev->dev, "processing BEACON REQ\n");
+		if (!mac802154_should_answer_beacon_req(local))
+			break;
+
+		queue_delayed_work(local->mac_wq, &local->beacon_work, 0);
+		break;
+	default:
+		break;
+	}
+
+out:
+	list_del(&mac_pkt->node);
+	kfree_skb(mac_pkt->skb);
+	kfree(mac_pkt);
+}
+
 static int
 ieee802154_subif_frame(struct ieee802154_sub_if_data *sdata,
 		       struct sk_buff *skb, const struct ieee802154_hdr *hdr)
 {
-	struct wpan_dev *wpan_dev = &sdata->wpan_dev;
 	struct wpan_phy *wpan_phy = sdata->local->hw.phy;
+	struct wpan_dev *wpan_dev = &sdata->wpan_dev;
+	struct cfg802154_mac_pkt *mac_pkt;
 	__le16 span, sshort;
 	int rc;
 
@@ -106,8 +181,35 @@ ieee802154_subif_frame(struct ieee802154_sub_if_data *sdata,
 
 	switch (mac_cb(skb)->type) {
 	case IEEE802154_FC_TYPE_BEACON:
-	case IEEE802154_FC_TYPE_ACK:
+		dev_dbg(&sdata->dev->dev, "BEACON received\n");
+		if (!mac802154_is_scanning(sdata->local))
+			goto fail;
+
+		mac_pkt = kzalloc(sizeof(*mac_pkt), GFP_ATOMIC);
+		if (!mac_pkt)
+			goto fail;
+
+		mac_pkt->skb = skb_get(skb);
+		mac_pkt->sdata = sdata;
+		mac_pkt->page = sdata->local->scan_page;
+		mac_pkt->channel = sdata->local->scan_channel;
+		list_add_tail(&mac_pkt->node, &sdata->local->rx_beacon_list);
+		queue_work(sdata->local->mac_wq, &sdata->local->rx_beacon_work);
+		return NET_RX_SUCCESS;
+
 	case IEEE802154_FC_TYPE_MAC_CMD:
+		dev_dbg(&sdata->dev->dev, "MAC COMMAND received\n");
+		mac_pkt = kzalloc(sizeof(*mac_pkt), GFP_ATOMIC);
+		if (!mac_pkt)
+			goto fail;
+
+		mac_pkt->skb = skb_get(skb);
+		mac_pkt->sdata = sdata;
+		list_add_tail(&mac_pkt->node, &sdata->local->rx_mac_cmd_list);
+		queue_work(sdata->local->mac_wq, &sdata->local->rx_mac_cmd_work);
+		return NET_RX_SUCCESS;
+
+	case IEEE802154_FC_TYPE_ACK:
 		goto fail;
 
 	case IEEE802154_FC_TYPE_DATA:
@@ -213,7 +315,6 @@ __ieee802154_rx_handle_packet(struct ieee802154_local *local,
 	ret = ieee802154_parse_frame_start(skb, &hdr);
 	if (ret) {
 		pr_debug("got invalid frame\n");
-		kfree_skb(skb);
 		return;
 	}
 

@@ -19,6 +19,7 @@
 
 /* ld/ldx fields */
 #define BPF_DW		0x18	/* double word (64-bit) */
+#define BPF_MEMSX	0x80	/* load with sign extension */
 #define BPF_ATOMIC	0xc0	/* atomic memory ops - op type in immediate */
 #define BPF_XADD	0xc0	/* exclusive add - legacy name */
 
@@ -931,7 +932,14 @@ enum bpf_map_type {
 	 */
 	BPF_MAP_TYPE_CGROUP_STORAGE = BPF_MAP_TYPE_CGROUP_STORAGE_DEPRECATED,
 	BPF_MAP_TYPE_REUSEPORT_SOCKARRAY,
-	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE,
+	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE_DEPRECATED,
+	/* BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE is available to bpf programs
+	 * attaching to a cgroup. The new mechanism (BPF_MAP_TYPE_CGRP_STORAGE +
+	 * local percpu kptr) supports all BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE
+	 * functionality and more. So mark * BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE
+	 * deprecated.
+	 */
+	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE = BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE_DEPRECATED,
 	BPF_MAP_TYPE_QUEUE,
 	BPF_MAP_TYPE_STACK,
 	BPF_MAP_TYPE_SK_STORAGE,
@@ -986,6 +994,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
+	BPF_PROG_TYPE_NETFILTER,
 };
 
 enum bpf_attach_type {
@@ -1033,6 +1042,18 @@ enum bpf_attach_type {
 	BPF_PERF_EVENT,
 	BPF_TRACE_KPROBE_MULTI,
 	BPF_LSM_CGROUP,
+	BPF_STRUCT_OPS,
+	BPF_NETFILTER,
+	BPF_TCX_INGRESS,
+	BPF_TCX_EGRESS,
+	BPF_TRACE_UPROBE_MULTI,
+	BPF_CGROUP_UNIX_CONNECT,
+	BPF_CGROUP_UNIX_SENDMSG,
+	BPF_CGROUP_UNIX_RECVMSG,
+	BPF_CGROUP_UNIX_GETPEERNAME,
+	BPF_CGROUP_UNIX_GETSOCKNAME,
+	BPF_NETKIT_PRIMARY,
+	BPF_NETKIT_PEER,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1049,8 +1070,21 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_PERF_EVENT = 7,
 	BPF_LINK_TYPE_KPROBE_MULTI = 8,
 	BPF_LINK_TYPE_STRUCT_OPS = 9,
-
+	BPF_LINK_TYPE_NETFILTER = 10,
+	BPF_LINK_TYPE_TCX = 11,
+	BPF_LINK_TYPE_UPROBE_MULTI = 12,
+	BPF_LINK_TYPE_NETKIT = 13,
 	MAX_BPF_LINK_TYPE,
+};
+
+enum bpf_perf_event_type {
+	BPF_PERF_EVENT_UNSPEC = 0,
+	BPF_PERF_EVENT_UPROBE = 1,
+	BPF_PERF_EVENT_URETPROBE = 2,
+	BPF_PERF_EVENT_KPROBE = 3,
+	BPF_PERF_EVENT_KRETPROBE = 4,
+	BPF_PERF_EVENT_TRACEPOINT = 5,
+	BPF_PERF_EVENT_EVENT = 6,
 };
 
 /* cgroup-bpf attach flags used in BPF_PROG_ATTACH command
@@ -1099,7 +1133,12 @@ enum bpf_link_type {
  */
 #define BPF_F_ALLOW_OVERRIDE	(1U << 0)
 #define BPF_F_ALLOW_MULTI	(1U << 1)
+/* Generic attachment flags. */
 #define BPF_F_REPLACE		(1U << 2)
+#define BPF_F_BEFORE		(1U << 3)
+#define BPF_F_AFTER		(1U << 4)
+#define BPF_F_ID		(1U << 5)
+#define BPF_F_LINK		BPF_F_LINK /* 1 << 13 */
 
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will perform strict alignment checking as if the kernel
@@ -1108,7 +1147,7 @@ enum bpf_link_type {
  */
 #define BPF_F_STRICT_ALIGNMENT	(1U << 0)
 
-/* If BPF_F_ANY_ALIGNMENT is used in BPF_PROF_LOAD command, the
+/* If BPF_F_ANY_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will allow any alignment whatsoever.  On platforms
  * with strict alignment requirements for loads ands stores (such
  * as sparc and mips) the verifier validates that all loads and
@@ -1156,10 +1195,29 @@ enum bpf_link_type {
  */
 #define BPF_F_XDP_HAS_FRAGS	(1U << 5)
 
+/* If BPF_F_XDP_DEV_BOUND_ONLY is used in BPF_PROG_LOAD command, the loaded
+ * program becomes device-bound but can access XDP metadata.
+ */
+#define BPF_F_XDP_DEV_BOUND_ONLY	(1U << 6)
+
 /* link_create.kprobe_multi.flags used in LINK_CREATE command for
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
  */
-#define BPF_F_KPROBE_MULTI_RETURN	(1U << 0)
+enum {
+	BPF_F_KPROBE_MULTI_RETURN = (1U << 0)
+};
+
+/* link_create.uprobe_multi.flags used in LINK_CREATE command for
+ * BPF_TRACE_UPROBE_MULTI attach type to create return probe.
+ */
+enum {
+	BPF_F_UPROBE_MULTI_RETURN = (1U << 0)
+};
+
+/* link_create.netfilter.flags used in LINK_CREATE command for
+ * BPF_PROG_TYPE_NETFILTER to enable IP packet defragmentation.
+ */
+#define BPF_F_NETFILTER_IP_DEFRAG (1U << 0)
 
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
@@ -1261,6 +1319,12 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Create a map that will be registered/unregesitered by the backed bpf_link */
+	BPF_F_LINK		= (1U << 13),
+
+/* Get path from provided FD in BPF_OBJ_PIN/BPF_OBJ_GET commands */
+	BPF_F_PATH_FD		= (1U << 14),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -1398,23 +1462,40 @@ union bpf_attr {
 		__aligned_u64	fd_array;	/* array of FDs */
 		__aligned_u64	core_relos;
 		__u32		core_relo_rec_size; /* sizeof(struct bpf_core_relo) */
+		/* output: actual total log contents size (including termintaing zero).
+		 * It could be both larger than original log_size (if log was
+		 * truncated), or smaller (if log buffer wasn't filled completely).
+		 */
+		__u32		log_true_size;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
 		__aligned_u64	pathname;
 		__u32		bpf_fd;
 		__u32		file_flags;
+		/* Same as dirfd in openat() syscall; see openat(2)
+		 * manpage for details of path FD and pathname semantics;
+		 * path_fd should accompanied by BPF_F_PATH_FD flag set in
+		 * file_flags field, otherwise it should be set to zero;
+		 * if BPF_F_PATH_FD flag is not set, AT_FDCWD is assumed.
+		 */
+		__s32		path_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
-		__u32		target_fd;	/* container object to attach to */
-		__u32		attach_bpf_fd;	/* eBPF program to attach */
+		union {
+			__u32	target_fd;	/* target object to attach to or ... */
+			__u32	target_ifindex;	/* target ifindex */
+		};
+		__u32		attach_bpf_fd;
 		__u32		attach_type;
 		__u32		attach_flags;
-		__u32		replace_bpf_fd;	/* previously attached eBPF
-						 * program to replace if
-						 * BPF_F_REPLACE is used
-						 */
+		__u32		replace_bpf_fd;
+		union {
+			__u32	relative_fd;
+			__u32	relative_id;
+		};
+		__u64		expected_revision;
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
@@ -1460,16 +1541,26 @@ union bpf_attr {
 	} info;
 
 	struct { /* anonymous struct used by BPF_PROG_QUERY command */
-		__u32		target_fd;	/* container object to query */
+		union {
+			__u32	target_fd;	/* target object to query or ... */
+			__u32	target_ifindex;	/* target ifindex */
+		};
 		__u32		attach_type;
 		__u32		query_flags;
 		__u32		attach_flags;
 		__aligned_u64	prog_ids;
-		__u32		prog_cnt;
+		union {
+			__u32	prog_cnt;
+			__u32	count;
+		};
+		__u32		:32;
 		/* output: per-program attach_flags.
 		 * not allowed to be set during effective query.
 		 */
 		__aligned_u64	prog_attach_flags;
+		__aligned_u64	link_ids;
+		__aligned_u64	link_attach_flags;
+		__u64		revision;
 	} query;
 
 	struct { /* anonymous struct used by BPF_RAW_TRACEPOINT_OPEN command */
@@ -1483,6 +1574,11 @@ union bpf_attr {
 		__u32		btf_size;
 		__u32		btf_log_size;
 		__u32		btf_log_level;
+		/* output: actual total log contents size (including termintaing zero).
+		 * It could be both larger than original log_size (if log was
+		 * truncated), or smaller (if log buffer wasn't filled completely).
+		 */
+		__u32		btf_log_true_size;
 	};
 
 	struct {
@@ -1502,15 +1598,18 @@ union bpf_attr {
 	} task_fd_query;
 
 	struct { /* struct used by BPF_LINK_CREATE command */
-		__u32		prog_fd;	/* eBPF program to attach */
 		union {
-			__u32		target_fd;	/* object to attach to */
-			__u32		target_ifindex; /* target ifindex */
+			__u32		prog_fd;	/* eBPF program to attach */
+			__u32		map_fd;		/* struct_ops to attach */
+		};
+		union {
+			__u32	target_fd;	/* target object to attach to or ... */
+			__u32	target_ifindex; /* target ifindex */
 		};
 		__u32		attach_type;	/* attach type */
 		__u32		flags;		/* extra flags */
 		union {
-			__u32		target_btf_id;	/* btf_id of target to attach to */
+			__u32	target_btf_id;	/* btf_id of target to attach to */
 			struct {
 				__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 				__u32		iter_info_len;	/* iter_info length */
@@ -1538,17 +1637,57 @@ union bpf_attr {
 				 */
 				__u64		cookie;
 			} tracing;
+			struct {
+				__u32		pf;
+				__u32		hooknum;
+				__s32		priority;
+				__u32		flags;
+			} netfilter;
+			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u64		expected_revision;
+			} tcx;
+			struct {
+				__aligned_u64	path;
+				__aligned_u64	offsets;
+				__aligned_u64	ref_ctr_offsets;
+				__aligned_u64	cookies;
+				__u32		cnt;
+				__u32		flags;
+				__u32		pid;
+			} uprobe_multi;
+			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u64		expected_revision;
+			} netkit;
 		};
 	} link_create;
 
 	struct { /* struct used by BPF_LINK_UPDATE command */
 		__u32		link_fd;	/* link fd */
-		/* new program fd to update link with */
-		__u32		new_prog_fd;
+		union {
+			/* new program fd to update link with */
+			__u32		new_prog_fd;
+			/* new struct_ops map fd to update link with */
+			__u32           new_map_fd;
+		};
 		__u32		flags;		/* extra flags */
-		/* expected link's program fd; is specified only if
-		 * BPF_F_REPLACE flag is set in flags */
-		__u32		old_prog_fd;
+		union {
+			/* expected link's program fd; is specified only if
+			 * BPF_F_REPLACE flag is set in flags.
+			 */
+			__u32		old_prog_fd;
+			/* expected link's map fd; is specified only
+			 * if BPF_F_REPLACE flag is set.
+			 */
+			__u32           old_map_fd;
+		};
 	} link_update;
 
 	struct {
@@ -1642,17 +1781,17 @@ union bpf_attr {
  * 	Description
  * 		This helper is a "printk()-like" facility for debugging. It
  * 		prints a message defined by format *fmt* (of size *fmt_size*)
- * 		to file *\/sys/kernel/debug/tracing/trace* from DebugFS, if
+ * 		to file *\/sys/kernel/tracing/trace* from TraceFS, if
  * 		available. It can take up to three additional **u64**
  * 		arguments (as an eBPF helpers, the total number of arguments is
  * 		limited to five).
  *
  * 		Each time the helper is called, it appends a line to the trace.
- * 		Lines are discarded while *\/sys/kernel/debug/tracing/trace* is
- * 		open, use *\/sys/kernel/debug/tracing/trace_pipe* to avoid this.
+ * 		Lines are discarded while *\/sys/kernel/tracing/trace* is
+ * 		open, use *\/sys/kernel/tracing/trace_pipe* to avoid this.
  * 		The format of the trace is customizable, and the exact output
  * 		one will get depends on the options set in
- * 		*\/sys/kernel/debug/tracing/trace_options* (see also the
+ * 		*\/sys/kernel/tracing/trace_options* (see also the
  * 		*README* file under the same directory). However, it usually
  * 		defaults to something like:
  *
@@ -1845,7 +1984,9 @@ union bpf_attr {
  * 		performed again, if the helper is used in combination with
  * 		direct packet access.
  * 	Return
- * 		0 on success, or a negative error in case of failure.
+ * 		0 on success, or a negative error in case of failure. Positive
+ * 		error indicates a potential drop or congestion in the target
+ * 		device. The particular positive error codes are not defined.
  *
  * u64 bpf_get_current_pid_tgid(void)
  * 	Description
@@ -2001,6 +2142,9 @@ union bpf_attr {
  * 			sending the packet. This flag was added for GRE
  * 			encapsulation, but might be used with other protocols
  * 			as well in the future.
+ * 		**BPF_F_NO_TUNNEL_KEY**
+ * 			Add a flag to tunnel metadata indicating that no tunnel
+ * 			key should be set in the resulting tunnel header.
  *
  * 		Here is a typical usage on the transmit path:
  *
@@ -2575,8 +2719,8 @@ union bpf_attr {
  * 		*bpf_socket* should be one of the following:
  *
  * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
- * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
- * 		  and **BPF_CGROUP_INET6_CONNECT**.
+ *		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**,
+ *		  **BPF_CGROUP_INET6_CONNECT** and **BPF_CGROUP_UNIX_CONNECT**.
  *
  * 		This helper actually implements a subset of **setsockopt()**.
  * 		It supports the following *level*\ s:
@@ -2643,6 +2787,11 @@ union bpf_attr {
  *		* **BPF_F_ADJ_ROOM_ENCAP_L2_ETH**:
  *		  Use with BPF_F_ADJ_ROOM_ENCAP_L2 flag to further specify the
  *		  L2 type as Ethernet.
+ *
+ *		* **BPF_F_ADJ_ROOM_DECAP_L3_IPV4**,
+ *		  **BPF_F_ADJ_ROOM_DECAP_L3_IPV6**:
+ *		  Indicate the new IP header version after decapsulating the outer
+ *		  IP header. Used when the inner and outer IP versions are different.
  *
  * 		A call to this helper is susceptible to change the underlying
  * 		packet buffer. Therefore, at load time, all checks on pointers
@@ -2788,7 +2937,7 @@ union bpf_attr {
  *
  * long bpf_perf_prog_read_value(struct bpf_perf_event_data *ctx, struct bpf_perf_event_value *buf, u32 buf_size)
  * 	Description
- * 		For en eBPF program attached to a perf event, retrieve the
+ * 		For an eBPF program attached to a perf event, retrieve the
  * 		value of the event counter associated to *ctx* and store it in
  * 		the structure pointed by *buf* and of size *buf_size*. Enabled
  * 		and running times are also stored in the structure (see
@@ -2809,8 +2958,8 @@ union bpf_attr {
  * 		*bpf_socket* should be one of the following:
  *
  * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
- * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
- * 		  and **BPF_CGROUP_INET6_CONNECT**.
+ *		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**,
+ *		  **BPF_CGROUP_INET6_CONNECT** and **BPF_CGROUP_UNIX_CONNECT**.
  *
  * 		This helper actually implements a subset of **getsockopt()**.
  * 		It supports the same set of *optname*\ s that is supported by
@@ -3118,9 +3267,23 @@ union bpf_attr {
  *		**BPF_FIB_LOOKUP_DIRECT**
  *			Do a direct table lookup vs full lookup using FIB
  *			rules.
+ *		**BPF_FIB_LOOKUP_TBID**
+ *			Used with BPF_FIB_LOOKUP_DIRECT.
+ *			Use the routing table ID present in *params*->tbid
+ *			for the fib lookup.
  *		**BPF_FIB_LOOKUP_OUTPUT**
  *			Perform lookup from an egress perspective (default is
  *			ingress).
+ *		**BPF_FIB_LOOKUP_SKIP_NEIGH**
+ *			Skip the neighbour table lookup. *params*->dmac
+ *			and *params*->smac will not be set as output. A common
+ *			use case is to call **bpf_redirect_neigh**\ () after
+ *			doing **bpf_fib_lookup**\ ().
+ *		**BPF_FIB_LOOKUP_SRC**
+ *			Derive and set source IP addr in *params*->ipv{4,6}_src
+ *			for the nexthop. If the src addr cannot be derived,
+ *			**BPF_FIB_LKUP_RET_NO_SRC_ADDR** is returned. In this
+ *			case, *params*->dmac and *params*->smac are not set either.
  *
  *		*ctx* is either **struct xdp_md** for XDP programs or
  *		**struct sk_buff** tc cls_act programs.
@@ -4090,9 +4253,6 @@ union bpf_attr {
  *		**-EOPNOTSUPP** if the operation is not supported, for example
  *		a call from outside of TC ingress.
  *
- *		**-ESOCKTNOSUPPORT** if the socket type is not supported
- *		(reuseport).
- *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description
  *		Helper is overloaded depending on BPF program type. This
@@ -4951,6 +5111,14 @@ union bpf_attr {
  *		different maps if key/value layout matches across maps.
  *		Every bpf_timer_set_callback() can have different callback_fn.
  *
+ *		*flags* can be one of:
+ *
+ *		**BPF_F_TIMER_ABS**
+ *			Start the timer in absolute expire value instead of the
+ *			default relative one.
+ *		**BPF_F_TIMER_CPU_PIN**
+ *			Timer will be pinned to the CPU of the caller.
+ *
  *	Return
  *		0 on success.
  *		**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier
@@ -4969,9 +5137,14 @@ union bpf_attr {
  * u64 bpf_get_func_ip(void *ctx)
  * 	Description
  * 		Get address of the traced function (for tracing and kprobe programs).
+ *
+ * 		When called for kprobe program attached as uprobe it returns
+ * 		probe address for both entry and return uprobe.
+ *
  * 	Return
- * 		Address of the traced function.
+ * 		Address of the traced function for kprobe.
  * 		0 for kprobes placed within the function (not at the entry).
+ * 		Address of the probe for uprobe and return uprobe.
  *
  * u64 bpf_get_attach_cookie(void *ctx)
  * 	Description
@@ -5307,11 +5480,22 @@ union bpf_attr {
  *	Description
  *		Write *len* bytes from *src* into *dst*, starting from *offset*
  *		into *dst*.
- *		*flags* is currently unused.
+ *
+ *		*flags* must be 0 except for skb-type dynptrs.
+ *
+ *		For skb-type dynptrs:
+ *		    *  All data slices of the dynptr are automatically
+ *		       invalidated after **bpf_dynptr_write**\ (). This is
+ *		       because writing may pull the skb and change the
+ *		       underlying packet buffer.
+ *
+ *		    *  For *flags*, please see the flags accepted by
+ *		       **bpf_skb_store_bytes**\ ().
  *	Return
  *		0 on success, -E2BIG if *offset* + *len* exceeds the length
  *		of *dst*'s data, -EINVAL if *dst* is an invalid dynptr or if *dst*
- *		is a read-only dynptr or if *flags* is not 0.
+ *		is a read-only dynptr or if *flags* is not correct. For skb-type dynptrs,
+ *		other errors correspond to errors returned by **bpf_skb_store_bytes**\ ().
  *
  * void *bpf_dynptr_data(const struct bpf_dynptr *ptr, u32 offset, u32 len)
  *	Description
@@ -5319,6 +5503,9 @@ union bpf_attr {
  *
  *		*len* must be a statically known value. The returned data slice
  *		is invalidated whenever the dynptr is invalidated.
+ *
+ *		skb and xdp type dynptrs may not use bpf_dynptr_data. They should
+ *		instead use bpf_dynptr_slice and bpf_dynptr_slice_rdwr.
  *	Return
  *		Pointer to the underlying dynptr data, NULL if the dynptr is
  *		read-only, if the dynptr is invalid, or if the offset and length
@@ -5764,6 +5951,7 @@ enum {
 	BPF_F_ZERO_CSUM_TX		= (1ULL << 1),
 	BPF_F_DONT_FRAGMENT		= (1ULL << 2),
 	BPF_F_SEQ_NUMBER		= (1ULL << 3),
+	BPF_F_NO_TUNNEL_KEY		= (1ULL << 4),
 };
 
 /* BPF_FUNC_skb_get_tunnel_key flags. */
@@ -5803,6 +5991,8 @@ enum {
 	BPF_F_ADJ_ROOM_ENCAP_L4_UDP	= (1ULL << 4),
 	BPF_F_ADJ_ROOM_NO_CSUM_RESET	= (1ULL << 5),
 	BPF_F_ADJ_ROOM_ENCAP_L2_ETH	= (1ULL << 6),
+	BPF_F_ADJ_ROOM_DECAP_L3_IPV4	= (1ULL << 7),
+	BPF_F_ADJ_ROOM_DECAP_L3_IPV6	= (1ULL << 8),
 };
 
 enum {
@@ -6095,6 +6285,19 @@ struct bpf_sock_tuple {
 	};
 };
 
+/* (Simplified) user return codes for tcx prog type.
+ * A valid tcx program must return one of these defined values. All other
+ * return codes are reserved for future use. Must remain compatible with
+ * their TC_ACT_* counter-parts. For compatibility in behavior, unknown
+ * return codes are mapped to TCX_NEXT.
+ */
+enum tcx_action_base {
+	TCX_NEXT	= -1,
+	TCX_PASS	= 0,
+	TCX_DROP	= 2,
+	TCX_REDIRECT	= 7,
+};
+
 struct bpf_xdp_sock {
 	__u32 queue_id;
 };
@@ -6338,6 +6541,55 @@ struct bpf_link_info {
 		struct {
 			__u32 ifindex;
 		} xdp;
+		struct {
+			__u32 map_id;
+		} struct_ops;
+		struct {
+			__u32 pf;
+			__u32 hooknum;
+			__s32 priority;
+			__u32 flags;
+		} netfilter;
+		struct {
+			__aligned_u64 addrs;
+			__u32 count; /* in/out: kprobe_multi function count */
+			__u32 flags;
+			__u64 missed;
+		} kprobe_multi;
+		struct {
+			__u32 type; /* enum bpf_perf_event_type */
+			__u32 :32;
+			union {
+				struct {
+					__aligned_u64 file_name; /* in/out */
+					__u32 name_len;
+					__u32 offset; /* offset from file_name */
+				} uprobe; /* BPF_PERF_EVENT_UPROBE, BPF_PERF_EVENT_URETPROBE */
+				struct {
+					__aligned_u64 func_name; /* in/out */
+					__u32 name_len;
+					__u32 offset; /* offset from func_name */
+					__u64 addr;
+					__u64 missed;
+				} kprobe; /* BPF_PERF_EVENT_KPROBE, BPF_PERF_EVENT_KRETPROBE */
+				struct {
+					__aligned_u64 tp_name;   /* in/out */
+					__u32 name_len;
+				} tracepoint; /* BPF_PERF_EVENT_TRACEPOINT */
+				struct {
+					__u64 config;
+					__u32 type;
+				} event; /* BPF_PERF_EVENT_EVENT */
+			};
+		} perf_event;
+		struct {
+			__u32 ifindex;
+			__u32 attach_type;
+		} tcx;
+		struct {
+			__u32 ifindex;
+			__u32 attach_type;
+		} netkit;
 	};
 } __attribute__((aligned(8)));
 
@@ -6734,6 +6986,9 @@ struct bpf_raw_tracepoint_args {
 enum {
 	BPF_FIB_LOOKUP_DIRECT  = (1U << 0),
 	BPF_FIB_LOOKUP_OUTPUT  = (1U << 1),
+	BPF_FIB_LOOKUP_SKIP_NEIGH = (1U << 2),
+	BPF_FIB_LOOKUP_TBID    = (1U << 3),
+	BPF_FIB_LOOKUP_SRC     = (1U << 4),
 };
 
 enum {
@@ -6746,6 +7001,7 @@ enum {
 	BPF_FIB_LKUP_RET_UNSUPP_LWT,   /* fwd requires encapsulation */
 	BPF_FIB_LKUP_RET_NO_NEIGH,     /* no neighbor entry for nh */
 	BPF_FIB_LKUP_RET_FRAG_NEEDED,  /* fragmentation required to fwd */
+	BPF_FIB_LKUP_RET_NO_SRC_ADDR,  /* failed to derive IP src addr */
 };
 
 struct bpf_fib_lookup {
@@ -6780,6 +7036,9 @@ struct bpf_fib_lookup {
 		__u32	rt_metric;
 	};
 
+	/* input: source address to consider for lookup
+	 * output: source address result from lookup
+	 */
 	union {
 		__be32		ipv4_src;
 		__u32		ipv6_src[4];  /* in6_addr; network order */
@@ -6794,9 +7053,19 @@ struct bpf_fib_lookup {
 		__u32		ipv6_dst[4];  /* in6_addr; network order */
 	};
 
-	/* output */
-	__be16	h_vlan_proto;
-	__be16	h_vlan_TCI;
+	union {
+		struct {
+			/* output */
+			__be16	h_vlan_proto;
+			__be16	h_vlan_TCI;
+		};
+		/* input: when accompanied with the
+		 * 'BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_TBID` flags, a
+		 * specific routing table to use for the fib lookup.
+		 */
+		__u32	tbid;
+	};
+
 	__u8	smac[6];     /* ETH_ALEN */
 	__u8	dmac[6];     /* ETH_ALEN */
 };
@@ -6899,7 +7168,24 @@ struct bpf_list_head {
 struct bpf_list_node {
 	__u64 :64;
 	__u64 :64;
+	__u64 :64;
 } __attribute__((aligned(8)));
+
+struct bpf_rb_root {
+	__u64 :64;
+	__u64 :64;
+} __attribute__((aligned(8)));
+
+struct bpf_rb_node {
+	__u64 :64;
+	__u64 :64;
+	__u64 :64;
+	__u64 :64;
+} __attribute__((aligned(8)));
+
+struct bpf_refcount {
+	__u32 :32;
+} __attribute__((aligned(4)));
 
 struct bpf_sysctl {
 	__u32	write;		/* Sysctl is being read (= 0) or written (= 1).
@@ -7049,5 +7335,24 @@ struct bpf_core_relo {
 	__u32 access_str_off;
 	enum bpf_core_relo_kind kind;
 };
+
+/*
+ * Flags to control bpf_timer_start() behaviour.
+ *     - BPF_F_TIMER_ABS: Timeout passed is absolute time, by default it is
+ *       relative to current time.
+ *     - BPF_F_TIMER_CPU_PIN: Timer will be pinned to the CPU of the caller.
+ */
+enum {
+	BPF_F_TIMER_ABS = (1ULL << 0),
+	BPF_F_TIMER_CPU_PIN = (1ULL << 1),
+};
+
+/* BPF numbers iterator state */
+struct bpf_iter_num {
+	/* opaque iterator state; having __u64 here allows to preserve correct
+	 * alignment requirements in vmlinux.h, generated from BTF
+	 */
+	__u64 __opaque[1];
+} __attribute__((aligned(8)));
 
 #endif /* _UAPI__LINUX_BPF_H__ */

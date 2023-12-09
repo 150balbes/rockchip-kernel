@@ -34,6 +34,7 @@ typedef __u32			xfs_nlink_t;
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/file.h>
+#include <linux/filelock.h>
 #include <linux/swap.h>
 #include <linux/errno.h>
 #include <linux/sched/signal.h>
@@ -62,6 +63,7 @@ typedef __u32			xfs_nlink_t;
 #include <linux/rhashtable.h>
 #include <linux/xattr.h>
 #include <linux/mnt_idmapping.h>
+#include <linux/debugfs.h>
 
 #include <asm/page.h>
 #include <asm/div64.h>
@@ -79,6 +81,7 @@ typedef __u32			xfs_nlink_t;
 #include "xfs_cksum.h"
 #include "xfs_buf.h"
 #include "xfs_message.h"
+#include "xfs_drain.h"
 
 #ifdef __BIG_ENDIAN
 #define XFS_NATIVE_HOST 1
@@ -193,6 +196,18 @@ static inline uint64_t howmany_64(uint64_t x, uint32_t y)
 	x += y - 1;
 	do_div(x, y);
 	return x;
+}
+
+/* If @b is a power of 2, return log2(b).  Else return -1. */
+static inline int8_t log2_if_power2(unsigned long b)
+{
+	return is_power_of_2(b) ? ilog2(b) : -1;
+}
+
+/* If @b is a power of 2, return a mask of the lower bits, else return zero. */
+static inline unsigned long long mask64_if_power2(unsigned long b)
+{
+	return is_power_of_2(b) ? b - 1 : 0;
 }
 
 int xfs_rw_bdev(struct block_device *bdev, sector_t sector, unsigned int count,

@@ -280,6 +280,8 @@
 		interrupts = <26 IRQ_TYPE_EDGE_FALLING>;
 		interrupt-controller;
 		#interrupt-cells = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
 
 		adc {
 			compatible = "gw,gsc-adc";
@@ -293,7 +295,7 @@
 			};
 
 			channel@8 {
-				gw,mode = <1>;
+				gw,mode = <3>;
 				reg = <0x08>;
 				label = "vdd_bat";
 			};
@@ -416,7 +418,7 @@
 		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
 		rohm,reset-snvs-powered;
 		#clock-cells = <0>;
-		clocks = <&osc_32k 0>;
+		clocks = <&osc_32k>;
 		clock-output-names = "clk-32k-out";
 
 		regulators {
@@ -541,7 +543,6 @@
 		st,drdy-int-pin = <1>;
 		interrupt-parent = <&gpio1>;
 		interrupts = <15 IRQ_TYPE_LEVEL_LOW>;
-		interrupt-names = "INT1";
 	};
 };
 
@@ -557,15 +558,18 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pcie0>;
 	reset-gpio = <&gpio5 11 GPIO_ACTIVE_LOW>;
-	clocks = <&clk IMX8MM_CLK_PCIE1_ROOT>, <&clk IMX8MM_CLK_PCIE1_AUX>,
-		 <&pcie0_refclk>;
-	clock-names = "pcie", "pcie_aux", "pcie_bus";
+	clocks = <&clk IMX8MM_CLK_PCIE1_ROOT>, <&pcie0_refclk>,
+		 <&clk IMX8MM_CLK_PCIE1_AUX>;
 	assigned-clocks = <&clk IMX8MM_CLK_PCIE1_AUX>,
 			  <&clk IMX8MM_CLK_PCIE1_CTRL>;
 	assigned-clock-rates = <10000000>, <250000000>;
 	assigned-clock-parents = <&clk IMX8MM_SYS_PLL2_50M>,
 				 <&clk IMX8MM_SYS_PLL2_250M>;
 	status = "okay";
+};
+
+&disp_blk_ctrl {
+	status = "disabled";
 };
 
 &pgc_mipi {
@@ -581,7 +585,6 @@
 	dtr-gpios = <&gpio1 0 GPIO_ACTIVE_LOW>;
 	dsr-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;
 	dcd-gpios = <&gpio3 24 GPIO_ACTIVE_LOW>;
-	uart-has-rtscts;
 	status = "okay";
 };
 

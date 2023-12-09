@@ -13,6 +13,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/filelock.h>
 #include <linux/security.h>
 #include <linux/cred.h>
 #include <linux/eventpoll.h>
@@ -39,24 +40,51 @@ static struct files_stat_struct files_stat = {
 };
 
 /* SLAB cache for file structures */
-static struct kmem_cache *filp_cachep __read_mostly;
+static struct kmem_cache *filp_cachep __ro_after_init;
 
 static struct percpu_counter nr_files __cacheline_aligned_in_smp;
 
-static void file_free_rcu(struct rcu_head *head)
-{
-	struct file *f = container_of(head, struct file, f_rcuhead);
+/* Container for backing file with optional user path */
+struct backing_file {
+	struct file file;
+	struct path user_path;
+};
 
-	put_cred(f->f_cred);
-	kmem_cache_free(filp_cachep, f);
+static inline struct backing_file *backing_file(struct file *f)
+{
+	return container_of(f, struct backing_file, file);
 }
+
+struct path *backing_file_user_path(struct file *f)
+{
+	return &backing_file(f)->user_path;
+}
+EXPORT_SYMBOL_GPL(backing_file_user_path);
 
 static inline void file_free(struct file *f)
 {
 	security_file_free(f);
-	if (!(f->f_mode & FMODE_NOACCOUNT))
+	if (likely(!(f->f_mode & FMODE_NOACCOUNT)))
 		percpu_counter_dec(&nr_files);
-	call_rcu(&f->f_rcuhead, file_free_rcu);
+	put_cred(f->f_cred);
+	if (unlikely(f->f_mode & FMODE_BACKING)) {
+		path_put(backing_file_user_path(f));
+		kfree(backing_file(f));
+	} else {
+		kmem_cache_free(filp_cachep, f);
+	}
+}
+
+void release_empty_file(struct file *f)
+{
+	WARN_ON_ONCE(f->f_mode & (FMODE_BACKING | FMODE_OPENED));
+	if (atomic_long_dec_and_test(&f->f_count)) {
+		security_file_free(f);
+		put_cred(f->f_cred);
+		if (likely(!(f->f_mode & FMODE_NOACCOUNT)))
+			percpu_counter_dec(&nr_files);
+		kmem_cache_free(filp_cachep, f);
+	}
 }
 
 /*
@@ -130,23 +158,17 @@ static int __init init_fs_stat_sysctls(void)
 fs_initcall(init_fs_stat_sysctls);
 #endif
 
-static struct file *__alloc_file(int flags, const struct cred *cred)
+static int init_file(struct file *f, int flags, const struct cred *cred)
 {
-	struct file *f;
 	int error;
-
-	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
-	if (unlikely(!f))
-		return ERR_PTR(-ENOMEM);
 
 	f->f_cred = get_cred(cred);
 	error = security_file_alloc(f);
 	if (unlikely(error)) {
-		file_free_rcu(&f->f_rcuhead);
-		return ERR_PTR(error);
+		put_cred(f->f_cred);
+		return error;
 	}
 
-	atomic_long_set(&f->f_count, 1);
 	rwlock_init(&f->f_owner.lock);
 	spin_lock_init(&f->f_lock);
 	mutex_init(&f->f_pos_lock);
@@ -154,7 +176,13 @@ static struct file *__alloc_file(int flags, const struct cred *cred)
 	f->f_mode = OPEN_FMODE(flags);
 	/* f->f_version: 0 */
 
-	return f;
+	/*
+	 * We're SLAB_TYPESAFE_BY_RCU so initialize f_count last. While
+	 * fget-rcu pattern users need to be able to handle spurious
+	 * refcount bumps we should reinitialize the reused file first.
+	 */
+	atomic_long_set(&f->f_count, 1);
+	return 0;
 }
 
 /* Find an unused file structure and return a pointer to it.
@@ -171,6 +199,7 @@ struct file *alloc_empty_file(int flags, const struct cred *cred)
 {
 	static long old_max;
 	struct file *f;
+	int error;
 
 	/*
 	 * Privileged users can go above max_files
@@ -184,9 +213,17 @@ struct file *alloc_empty_file(int flags, const struct cred *cred)
 			goto over;
 	}
 
-	f = __alloc_file(flags, cred);
-	if (!IS_ERR(f))
-		percpu_counter_inc(&nr_files);
+	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
+	if (unlikely(!f))
+		return ERR_PTR(-ENOMEM);
+
+	error = init_file(f, flags, cred);
+	if (unlikely(error)) {
+		kmem_cache_free(filp_cachep, f);
+		return ERR_PTR(error);
+	}
+
+	percpu_counter_inc(&nr_files);
 
 	return f;
 
@@ -202,16 +239,53 @@ over:
 /*
  * Variant of alloc_empty_file() that doesn't check and modify nr_files.
  *
- * Should not be used unless there's a very good reason to do so.
+ * This is only for kernel internal use, and the allocate file must not be
+ * installed into file tables or such.
  */
 struct file *alloc_empty_file_noaccount(int flags, const struct cred *cred)
 {
-	struct file *f = __alloc_file(flags, cred);
+	struct file *f;
+	int error;
 
-	if (!IS_ERR(f))
-		f->f_mode |= FMODE_NOACCOUNT;
+	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
+	if (unlikely(!f))
+		return ERR_PTR(-ENOMEM);
+
+	error = init_file(f, flags, cred);
+	if (unlikely(error)) {
+		kmem_cache_free(filp_cachep, f);
+		return ERR_PTR(error);
+	}
+
+	f->f_mode |= FMODE_NOACCOUNT;
 
 	return f;
+}
+
+/*
+ * Variant of alloc_empty_file() that allocates a backing_file container
+ * and doesn't check and modify nr_files.
+ *
+ * This is only for kernel internal use, and the allocate file must not be
+ * installed into file tables or such.
+ */
+struct file *alloc_empty_backing_file(int flags, const struct cred *cred)
+{
+	struct backing_file *ff;
+	int error;
+
+	ff = kzalloc(sizeof(struct backing_file), GFP_KERNEL);
+	if (unlikely(!ff))
+		return ERR_PTR(-ENOMEM);
+
+	error = init_file(&ff->file, flags, cred);
+	if (unlikely(error)) {
+		kfree(ff);
+		return ERR_PTR(error);
+	}
+
+	ff->file.f_mode |= FMODE_BACKING | FMODE_NOACCOUNT;
+	return &ff->file;
 }
 
 /**
@@ -397,11 +471,8 @@ void fput(struct file *file)
  */
 void __fput_sync(struct file *file)
 {
-	if (atomic_long_dec_and_test(&file->f_count)) {
-		struct task_struct *task = current;
-		BUG_ON(!(task->flags & PF_KTHREAD));
+	if (atomic_long_dec_and_test(&file->f_count))
 		__fput(file);
-	}
 }
 
 EXPORT_SYMBOL(fput);
@@ -410,7 +481,8 @@ EXPORT_SYMBOL(__fput_sync);
 void __init files_init(void)
 {
 	filp_cachep = kmem_cache_create("filp", sizeof(struct file), 0,
-			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT, NULL);
+				SLAB_TYPESAFE_BY_RCU | SLAB_HWCACHE_ALIGN |
+				SLAB_PANIC | SLAB_ACCOUNT, NULL);
 	percpu_counter_init(&nr_files, 0, GFP_KERNEL);
 }
 

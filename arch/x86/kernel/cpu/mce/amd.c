@@ -235,10 +235,10 @@ static DEFINE_PER_CPU(struct threshold_bank **, threshold_banks);
  * A list of the banks enabled on each logical CPU. Controls which respective
  * descriptors to initialize later in mce_threshold_create_device().
  */
-static DEFINE_PER_CPU(unsigned int, bank_map);
+static DEFINE_PER_CPU(u64, bank_map);
 
 /* Map of banks that have more than MCA_MISC0 available. */
-static DEFINE_PER_CPU(u32, smca_misc_banks_map);
+static DEFINE_PER_CPU(u64, smca_misc_banks_map);
 
 static void amd_threshold_interrupt(void);
 static void amd_deferred_error_interrupt(void);
@@ -267,7 +267,7 @@ static void smca_set_misc_banks_map(unsigned int bank, unsigned int cpu)
 		return;
 
 	if (low & MASK_BLKPTR_LO)
-		per_cpu(smca_misc_banks_map, cpu) |= BIT(bank);
+		per_cpu(smca_misc_banks_map, cpu) |= BIT_ULL(bank);
 
 }
 
@@ -305,6 +305,8 @@ static void smca_configure(unsigned int bank, unsigned int cpu)
 		 */
 		if ((low & BIT(5)) && !((high >> 5) & 0x3))
 			high |= BIT(5);
+
+		this_cpu_ptr(mce_banks_array)[bank].lsb_in_status = !!(low & BIT(8));
 
 		wrmsr(smca_config, low, high);
 	}
@@ -528,7 +530,7 @@ static u32 smca_get_block_address(unsigned int bank, unsigned int block,
 	if (!block)
 		return MSR_AMD64_SMCA_MCx_MISC(bank);
 
-	if (!(per_cpu(smca_misc_banks_map, cpu) & BIT(bank)))
+	if (!(per_cpu(smca_misc_banks_map, cpu) & BIT_ULL(bank)))
 		return 0;
 
 	return MSR_AMD64_SMCA_MCx_MISCy(bank, block - 1);
@@ -572,7 +574,7 @@ prepare_threshold_block(unsigned int bank, unsigned int block, u32 addr,
 	int new;
 
 	if (!block)
-		per_cpu(bank_map, cpu) |= (1 << bank);
+		per_cpu(bank_map, cpu) |= BIT_ULL(bank);
 
 	memset(&b, 0, sizeof(b));
 	b.cpu			= cpu;
@@ -711,15 +713,75 @@ void mce_amd_feature_init(struct cpuinfo_x86 *c)
 		deferred_error_interrupt_enable(c);
 }
 
+/*
+ * DRAM ECC errors are reported in the Northbridge (bank 4) with
+ * Extended Error Code 8.
+ */
+static bool legacy_mce_is_memory_error(struct mce *m)
+{
+	return m->bank == 4 && XEC(m->status, 0x1f) == 8;
+}
+
+/*
+ * DRAM ECC errors are reported in Unified Memory Controllers with
+ * Extended Error Code 0.
+ */
+static bool smca_mce_is_memory_error(struct mce *m)
+{
+	enum smca_bank_types bank_type;
+
+	if (XEC(m->status, 0x3f))
+		return false;
+
+	bank_type = smca_get_bank_type(m->extcpu, m->bank);
+
+	return bank_type == SMCA_UMC || bank_type == SMCA_UMC_V2;
+}
+
 bool amd_mce_is_memory_error(struct mce *m)
 {
-	/* ErrCodeExt[20:16] */
-	u8 xec = (m->status >> 16) & 0x1f;
-
 	if (mce_flags.smca)
-		return smca_get_bank_type(m->extcpu, m->bank) == SMCA_UMC && xec == 0x0;
+		return smca_mce_is_memory_error(m);
+	else
+		return legacy_mce_is_memory_error(m);
+}
 
-	return m->bank == 4 && xec == 0x8;
+/*
+ * AMD systems do not have an explicit indicator that the value in MCA_ADDR is
+ * a system physical address. Therefore, individual cases need to be detected.
+ * Future cases and checks will be added as needed.
+ *
+ * 1) General case
+ *	a) Assume address is not usable.
+ * 2) Poison errors
+ *	a) Indicated by MCA_STATUS[43]: poison. Defined for all banks except legacy
+ *	   northbridge (bank 4).
+ *	b) Refers to poison consumption in the core. Does not include "no action",
+ *	   "action optional", or "deferred" error severities.
+ *	c) Will include a usable address so that immediate action can be taken.
+ * 3) Northbridge DRAM ECC errors
+ *	a) Reported in legacy bank 4 with extended error code (XEC) 8.
+ *	b) MCA_STATUS[43] is *not* defined as poison in legacy bank 4. Therefore,
+ *	   this bit should not be checked.
+ *
+ * NOTE: SMCA UMC memory errors fall into case #1.
+ */
+bool amd_mce_usable_address(struct mce *m)
+{
+	/* Check special northbridge case 3) first. */
+	if (!mce_flags.smca) {
+		if (legacy_mce_is_memory_error(m))
+			return true;
+		else if (m->bank == 4)
+			return false;
+	}
+
+	/* Check poison bit for all other bank types. */
+	if (m->status & MCI_STATUS_POISON)
+		return true;
+
+	/* Assume address is not usable for all others. */
+	return false;
 }
 
 static void __log_error(unsigned int bank, u64 status, u64 addr, u64 misc)
@@ -736,15 +798,7 @@ static void __log_error(unsigned int bank, u64 status, u64 addr, u64 misc)
 	if (m.status & MCI_STATUS_ADDRV) {
 		m.addr = addr;
 
-		/*
-		 * Extract [55:<lsb>] where lsb is the least significant
-		 * *valid* bit of the address bits.
-		 */
-		if (mce_flags.smca) {
-			u8 lsb = (m.addr >> 56) & 0x3f;
-
-			m.addr &= GENMASK_ULL(55, lsb);
-		}
+		smca_extract_err_addr(&m);
 	}
 
 	if (mce_flags.smca) {
@@ -763,7 +817,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_deferred_error)
 	inc_irq_stat(irq_deferred_error_count);
 	deferred_error_int_vector();
 	trace_deferred_error_apic_exit(DEFERRED_ERROR_VECTOR);
-	ack_APIC_irq();
+	apic_eoi();
 }
 
 /*
@@ -884,7 +938,7 @@ static void amd_threshold_interrupt(void)
 		return;
 
 	for (bank = 0; bank < this_cpu_read(mce_num_banks); ++bank) {
-		if (!(per_cpu(bank_map, cpu) & (1 << bank)))
+		if (!(per_cpu(bank_map, cpu) & BIT_ULL(bank)))
 			continue;
 
 		first_block = bp[bank]->blocks;
@@ -1035,7 +1089,7 @@ static const struct sysfs_ops threshold_ops = {
 
 static void threshold_block_release(struct kobject *kobj);
 
-static struct kobj_type threshold_ktype = {
+static const struct kobj_type threshold_ktype = {
 	.sysfs_ops		= &threshold_ops,
 	.default_groups		= default_groups,
 	.release		= threshold_block_release,
@@ -1056,7 +1110,7 @@ static const char *get_name(unsigned int cpu, unsigned int bank, struct threshol
 	if (bank_type >= N_SMCA_BANK_TYPES)
 		return NULL;
 
-	if (b && bank_type == SMCA_UMC) {
+	if (b && (bank_type == SMCA_UMC || bank_type == SMCA_UMC_V2)) {
 		if (b->block < ARRAY_SIZE(smca_umc_block_names))
 			return smca_umc_block_names[b->block];
 		return NULL;
@@ -1265,10 +1319,10 @@ static void __threshold_remove_blocks(struct threshold_bank *b)
 	struct threshold_block *pos = NULL;
 	struct threshold_block *tmp = NULL;
 
-	kobject_del(b->kobj);
+	kobject_put(b->kobj);
 
 	list_for_each_entry_safe(pos, tmp, &b->blocks->miscj, miscj)
-		kobject_del(&pos->kobj);
+		kobject_put(b->kobj);
 }
 
 static void threshold_remove_bank(struct threshold_bank *bank)
@@ -1362,7 +1416,7 @@ int mce_threshold_create_device(unsigned int cpu)
 		return -ENOMEM;
 
 	for (bank = 0; bank < numbanks; ++bank) {
-		if (!(this_cpu_read(bank_map) & (1 << bank)))
+		if (!(this_cpu_read(bank_map) & BIT_ULL(bank)))
 			continue;
 		err = threshold_create_bank(bp, cpu, bank);
 		if (err) {

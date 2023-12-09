@@ -1223,7 +1223,7 @@ static DEVICE_ATTR(baseline, S_IRUGO, cyapa_show_baseline, NULL);
 static DEVICE_ATTR(calibrate, S_IWUSR, NULL, cyapa_calibrate_store);
 static DEVICE_ATTR(mode, S_IRUGO, cyapa_show_mode, NULL);
 
-static struct attribute *cyapa_sysfs_entries[] = {
+static struct attribute *cyapa_attrs[] = {
 	&dev_attr_firmware_version.attr,
 	&dev_attr_product_id.attr,
 	&dev_attr_update_fw.attr,
@@ -1232,10 +1232,7 @@ static struct attribute *cyapa_sysfs_entries[] = {
 	&dev_attr_mode.attr,
 	NULL,
 };
-
-static const struct attribute_group cyapa_sysfs_group = {
-	.attrs = cyapa_sysfs_entries,
-};
+ATTRIBUTE_GROUPS(cyapa);
 
 static void cyapa_disable_regulator(void *data)
 {
@@ -1302,12 +1299,6 @@ static int cyapa_probe(struct i2c_client *client)
 		return error;
 	}
 
-	error = devm_device_add_group(dev, &cyapa_sysfs_group);
-	if (error) {
-		dev_err(dev, "failed to create sysfs entries: %d\n", error);
-		return error;
-	}
-
 	error = cyapa_prepare_wakeup_controls(cyapa);
 	if (error) {
 		dev_err(dev, "failed to prepare wakeup controls: %d\n", error);
@@ -1349,7 +1340,7 @@ static int cyapa_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int __maybe_unused cyapa_suspend(struct device *dev)
+static int cyapa_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cyapa *cyapa = i2c_get_clientdata(client);
@@ -1397,7 +1388,7 @@ static int __maybe_unused cyapa_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused cyapa_resume(struct device *dev)
+static int cyapa_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cyapa *cyapa = i2c_get_clientdata(client);
@@ -1424,7 +1415,7 @@ static int __maybe_unused cyapa_resume(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused cyapa_runtime_suspend(struct device *dev)
+static int cyapa_runtime_suspend(struct device *dev)
 {
 	struct cyapa *cyapa = dev_get_drvdata(dev);
 	int error;
@@ -1439,7 +1430,7 @@ static int __maybe_unused cyapa_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused cyapa_runtime_resume(struct device *dev)
+static int cyapa_runtime_resume(struct device *dev)
 {
 	struct cyapa *cyapa = dev_get_drvdata(dev);
 	int error;
@@ -1453,8 +1444,8 @@ static int __maybe_unused cyapa_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops cyapa_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(cyapa_suspend, cyapa_resume)
-	SET_RUNTIME_PM_OPS(cyapa_runtime_suspend, cyapa_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(cyapa_suspend, cyapa_resume)
+	RUNTIME_PM_OPS(cyapa_runtime_suspend, cyapa_runtime_resume, NULL)
 };
 
 static const struct i2c_device_id cyapa_id_table[] = {
@@ -1484,12 +1475,13 @@ MODULE_DEVICE_TABLE(of, cyapa_of_match);
 static struct i2c_driver cyapa_driver = {
 	.driver = {
 		.name = "cyapa",
-		.pm = &cyapa_pm_ops,
+		.dev_groups = cyapa_groups,
+		.pm = pm_ptr(&cyapa_pm_ops),
 		.acpi_match_table = ACPI_PTR(cyapa_acpi_id),
 		.of_match_table = of_match_ptr(cyapa_of_match),
 	},
 
-	.probe_new = cyapa_probe,
+	.probe = cyapa_probe,
 	.id_table = cyapa_id_table,
 };
 

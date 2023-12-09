@@ -126,7 +126,7 @@ static struct elevator_type *elevator_find_get(struct request_queue *q,
 	return e;
 }
 
-static struct kobj_type elv_ktype;
+static const struct kobj_type elv_ktype;
 
 struct elevator_queue *elevator_alloc(struct request_queue *q,
 				  struct elevator_type *e)
@@ -455,7 +455,7 @@ static const struct sysfs_ops elv_sysfs_ops = {
 	.store	= elv_attr_store,
 };
 
-static struct kobj_type elv_ktype = {
+static const struct kobj_type elv_ktype = {
 	.sysfs_ops	= &elv_sysfs_ops,
 	.release	= elevator_release,
 };
@@ -499,6 +499,9 @@ void elv_unregister_queue(struct request_queue *q)
 
 int elv_register(struct elevator_type *e)
 {
+	/* finish request is mandatory */
+	if (WARN_ON_ONCE(!e->ops.finish_request))
+		return -EINVAL;
 	/* insert_requests and dispatch_request are mandatory */
 	if (WARN_ON_ONCE(!e->ops.insert_requests || !e->ops.dispatch_request))
 		return -EINVAL;
@@ -751,7 +754,7 @@ ssize_t elv_iosched_store(struct request_queue *q, const char *buf,
 	if (!elv_support_iosched(q))
 		return count;
 
-	strlcpy(elevator_name, buf, sizeof(elevator_name));
+	strscpy(elevator_name, buf, sizeof(elevator_name));
 	ret = elevator_change(q, strstrip(elevator_name));
 	if (!ret)
 		return count;

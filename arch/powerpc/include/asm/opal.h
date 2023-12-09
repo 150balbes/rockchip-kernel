@@ -112,9 +112,6 @@ int64_t opal_pci_set_pe(uint64_t phb_id, uint64_t pe_number, uint64_t bus_dev_fu
 			uint8_t pe_action);
 int64_t opal_pci_set_peltv(uint64_t phb_id, uint32_t parent_pe, uint32_t child_pe,
 			   uint8_t state);
-int64_t opal_pci_set_mve(uint64_t phb_id, uint32_t mve_number, uint32_t pe_number);
-int64_t opal_pci_set_mve_enable(uint64_t phb_id, uint32_t mve_number,
-				uint32_t state);
 int64_t opal_pci_get_xive_reissue(uint64_t phb_id, uint32_t xive_number,
 				  uint8_t *p_bit, uint8_t *q_bit);
 int64_t opal_pci_set_xive_reissue(uint64_t phb_id, uint32_t xive_number,
@@ -230,7 +227,7 @@ int64_t opal_pci_set_power_state(uint64_t async_token, uint64_t id,
 				 uint64_t data);
 int64_t opal_pci_poll2(uint64_t id, uint64_t data);
 
-int64_t opal_int_get_xirr(uint32_t *out_xirr, bool just_poll);
+int64_t opal_int_get_xirr(__be32 *out_xirr, bool just_poll);
 int64_t opal_int_set_cppr(uint8_t cppr);
 int64_t opal_int_eoi(uint32_t xirr);
 int64_t opal_int_set_mfrr(uint32_t cpu, uint8_t mfrr);

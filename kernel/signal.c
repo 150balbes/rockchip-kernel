@@ -22,6 +22,7 @@
 #include <linux/sched/cputime.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <linux/proc_fs.h>
 #include <linux/tty.h>
 #include <linux/binfmts.h>
@@ -45,6 +46,7 @@
 #include <linux/posix-timers.h>
 #include <linux/cgroup.h>
 #include <linux/audit.h>
+#include <linux/sysctl.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/signal.h>
@@ -413,7 +415,7 @@ __sigqueue_alloc(int sig, struct task_struct *t, gfp_t gfp_flags,
 		 int override_rlimit, const unsigned int sigqueue_flags)
 {
 	struct sigqueue *q = NULL;
-	struct ucounts *ucounts = NULL;
+	struct ucounts *ucounts;
 	long sigpending;
 
 	/*
@@ -559,6 +561,10 @@ bool unhandled_signal(struct task_struct *tsk, int sig)
 		return true;
 
 	if (handler != SIG_IGN && handler != SIG_DFL)
+		return false;
+
+	/* If dying, we handle all new signals by ignoring them */
+	if (fatal_signal_pending(tsk))
 		return false;
 
 	/* if ptraced, let the tracer determine */
@@ -1003,8 +1009,7 @@ static void complete_signal(int sig, struct task_struct *p, enum pid_type type)
 	/*
 	 * Now find a thread we can wake up to take the signal off the queue.
 	 *
-	 * If the main thread wants the signal, it gets first crack.
-	 * Probably the least surprising to the average bear.
+	 * Try the suggested task first (may or may not be the main thread).
 	 */
 	if (wants_signal(sig, p))
 		t = p;
@@ -1053,12 +1058,11 @@ static void complete_signal(int sig, struct task_struct *p, enum pid_type type)
 			signal->flags = SIGNAL_GROUP_EXIT;
 			signal->group_exit_code = sig;
 			signal->group_stop_count = 0;
-			t = p;
-			do {
+			__for_each_thread(signal, t) {
 				task_clear_jobctl_pending(t, JOBCTL_PENDING_MASK);
 				sigaddset(&t->pending.signal, SIGKILL);
 				signal_wake_up(t, 1);
-			} while_each_thread(p, t);
+			}
 			return;
 		}
 	}
@@ -1256,7 +1260,17 @@ int send_signal_locked(int sig, struct kernel_siginfo *info,
 static void print_fatal_signal(int signr)
 {
 	struct pt_regs *regs = task_pt_regs(current);
-	pr_info("potentially unexpected fatal signal %d.\n", signr);
+	struct file *exe_file;
+
+	exe_file = get_task_exe_file(current);
+	if (exe_file) {
+		pr_info("%pD: %s: potentially unexpected fatal signal %d.\n",
+			exe_file, current->comm, signr);
+		fput(exe_file);
+	} else {
+		pr_info("%s: potentially unexpected fatal signal %d.\n",
+			current->comm, signr);
+	}
 
 #if defined(__i386__) && !defined(__arch_um__)
 	pr_info("code at %08lx: ", regs->ip);
@@ -1369,7 +1383,9 @@ int zap_other_threads(struct task_struct *p)
 
 	while_each_thread(p, t) {
 		task_clear_jobctl_pending(t, JOBCTL_PENDING_MASK);
-		count++;
+		/* Don't require de_thread to wait for the vhost_worker */
+		if ((t->flags & (PF_IO_WORKER | PF_USER_WORKER)) != PF_USER_WORKER)
+			count++;
 
 		/* Don't bother with already dead threads */
 		if (t->exit_state)
@@ -1454,16 +1470,21 @@ int group_send_sig_info(int sig, struct kernel_siginfo *info,
 int __kill_pgrp_info(int sig, struct kernel_siginfo *info, struct pid *pgrp)
 {
 	struct task_struct *p = NULL;
-	int retval, success;
+	int ret = -ESRCH;
 
-	success = 0;
-	retval = -ESRCH;
 	do_each_pid_task(pgrp, PIDTYPE_PGID, p) {
 		int err = group_send_sig_info(sig, info, p, PIDTYPE_PGID);
-		success |= !err;
-		retval = err;
+		/*
+		 * If group_send_sig_info() succeeds at least once ret
+		 * becomes 0 and after that the code below has no effect.
+		 * Otherwise we return the last err or -ESRCH if this
+		 * process group is empty.
+		 */
+		if (ret)
+			ret = err;
 	} while_each_pid_task(pgrp, PIDTYPE_PGID, p);
-	return success ? 0 : retval;
+
+	return ret;
 }
 
 int kill_pid_info(int sig, struct kernel_siginfo *info, struct pid *pid)
@@ -1701,9 +1722,8 @@ void force_sigsegv(int sig)
 		force_sig(SIGSEGV);
 }
 
-int force_sig_fault_to_task(int sig, int code, void __user *addr
-	___ARCH_SI_IA64(int imm, unsigned int flags, unsigned long isr)
-	, struct task_struct *t)
+int force_sig_fault_to_task(int sig, int code, void __user *addr,
+			    struct task_struct *t)
 {
 	struct kernel_siginfo info;
 
@@ -1712,24 +1732,15 @@ int force_sig_fault_to_task(int sig, int code, void __user *addr
 	info.si_errno = 0;
 	info.si_code  = code;
 	info.si_addr  = addr;
-#ifdef __ia64__
-	info.si_imm = imm;
-	info.si_flags = flags;
-	info.si_isr = isr;
-#endif
 	return force_sig_info_to_task(&info, t, HANDLER_CURRENT);
 }
 
-int force_sig_fault(int sig, int code, void __user *addr
-	___ARCH_SI_IA64(int imm, unsigned int flags, unsigned long isr))
+int force_sig_fault(int sig, int code, void __user *addr)
 {
-	return force_sig_fault_to_task(sig, code, addr
-				       ___ARCH_SI_IA64(imm, flags, isr), current);
+	return force_sig_fault_to_task(sig, code, addr, current);
 }
 
-int send_sig_fault(int sig, int code, void __user *addr
-	___ARCH_SI_IA64(int imm, unsigned int flags, unsigned long isr)
-	, struct task_struct *t)
+int send_sig_fault(int sig, int code, void __user *addr, struct task_struct *t)
 {
 	struct kernel_siginfo info;
 
@@ -1738,11 +1749,6 @@ int send_sig_fault(int sig, int code, void __user *addr
 	info.si_errno = 0;
 	info.si_code  = code;
 	info.si_addr  = addr;
-#ifdef __ia64__
-	info.si_imm = imm;
-	info.si_flags = flags;
-	info.si_isr = isr;
-#endif
 	return send_sig_info(info.si_signo, &info, t);
 }
 
@@ -1970,8 +1976,24 @@ int send_sigqueue(struct sigqueue *q, struct pid *pid, enum pid_type type)
 
 	ret = -1;
 	rcu_read_lock();
+
+	/*
+	 * This function is used by POSIX timers to deliver a timer signal.
+	 * Where type is PIDTYPE_PID (such as for timers with SIGEV_THREAD_ID
+	 * set), the signal must be delivered to the specific thread (queues
+	 * into t->pending).
+	 *
+	 * Where type is not PIDTYPE_PID, signals must be delivered to the
+	 * process. In this case, prefer to deliver to current if it is in
+	 * the same thread group as the target process, which avoids
+	 * unnecessarily waking up a potentially idle task.
+	 */
 	t = pid_task(pid, type);
-	if (!t || !likely(lock_task_sighand(t, &flags)))
+	if (!t)
+		goto ret;
+	if (type != PIDTYPE_PID && same_thread_group(t, current))
+		t = current;
+	if (!likely(lock_task_sighand(t, &flags)))
 		goto ret;
 
 	ret = 1; /* the signal is ignored */
@@ -2296,15 +2318,38 @@ static int ptrace_stop(int exit_code, int why, unsigned long message,
 		do_notify_parent_cldstop(current, false, why);
 
 	/*
-	 * Don't want to allow preemption here, because
-	 * sys_ptrace() needs this task to be inactive.
+	 * The previous do_notify_parent_cldstop() invocation woke ptracer.
+	 * One a PREEMPTION kernel this can result in preemption requirement
+	 * which will be fulfilled after read_unlock() and the ptracer will be
+	 * put on the CPU.
+	 * The ptracer is in wait_task_inactive(, __TASK_TRACED) waiting for
+	 * this task wait in schedule(). If this task gets preempted then it
+	 * remains enqueued on the runqueue. The ptracer will observe this and
+	 * then sleep for a delay of one HZ tick. In the meantime this task
+	 * gets scheduled, enters schedule() and will wait for the ptracer.
 	 *
-	 * XXX: implement read_unlock_no_resched().
+	 * This preemption point is not bad from a correctness point of
+	 * view but extends the runtime by one HZ tick time due to the
+	 * ptracer's sleep.  The preempt-disable section ensures that there
+	 * will be no preemption between unlock and schedule() and so
+	 * improving the performance since the ptracer will observe that
+	 * the tracee is scheduled out once it gets on the CPU.
+	 *
+	 * On PREEMPT_RT locking tasklist_lock does not disable preemption.
+	 * Therefore the task can be preempted after do_notify_parent_cldstop()
+	 * before unlocking tasklist_lock so there is no benefit in doing this.
+	 *
+	 * In fact disabling preemption is harmful on PREEMPT_RT because
+	 * the spinlock_t in cgroup_enter_frozen() must not be acquired
+	 * with preemption disabled due to the 'sleeping' spinlock
+	 * substitution of RT.
 	 */
-	preempt_disable();
+	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
+		preempt_disable();
 	read_unlock(&tasklist_lock);
 	cgroup_enter_frozen();
-	preempt_enable_no_resched();
+	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
+		preempt_enable_no_resched();
 	schedule();
 	cgroup_leave_frozen(true);
 
@@ -2846,11 +2891,11 @@ relock:
 		}
 
 		/*
-		 * PF_IO_WORKER threads will catch and exit on fatal signals
+		 * PF_USER_WORKER threads will catch and exit on fatal signals
 		 * themselves. They have cleanup that must be performed, so
 		 * we cannot call do_exit() on their behalf.
 		 */
-		if (current->flags & PF_IO_WORKER)
+		if (current->flags & PF_USER_WORKER)
 			goto out;
 
 		/*
@@ -2951,6 +2996,7 @@ void exit_signals(struct task_struct *tsk)
 	cgroup_threadgroup_change_begin(tsk);
 
 	if (thread_group_empty(tsk) || (tsk->signal->flags & SIGNAL_GROUP_EXIT)) {
+		sched_mm_cid_exit_signals(tsk);
 		tsk->flags |= PF_EXITING;
 		cgroup_threadgroup_change_end(tsk);
 		return;
@@ -2961,6 +3007,7 @@ void exit_signals(struct task_struct *tsk)
 	 * From now this task is not visible for group-wide signals,
 	 * see wants_signal(), do_signal_stop().
 	 */
+	sched_mm_cid_exit_signals(tsk);
 	tsk->flags |= PF_EXITING;
 
 	cgroup_threadgroup_change_end(tsk);
@@ -4753,6 +4800,28 @@ static inline void siginfo_buildtime_checks(void)
 		     sizeof_field(struct siginfo, si_pid));
 #endif
 }
+
+#if defined(CONFIG_SYSCTL)
+static struct ctl_table signal_debug_table[] = {
+#ifdef CONFIG_SYSCTL_EXCEPTION_TRACE
+	{
+		.procname	= "exception-trace",
+		.data		= &show_unhandled_signals,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+#endif
+	{ }
+};
+
+static int __init init_signal_sysctls(void)
+{
+	register_sysctl_init("debug", signal_debug_table);
+	return 0;
+}
+early_initcall(init_signal_sysctls);
+#endif /* CONFIG_SYSCTL */
 
 void __init signals_init(void)
 {

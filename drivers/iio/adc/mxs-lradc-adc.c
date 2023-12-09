@@ -757,13 +757,13 @@ static int mxs_lradc_adc_probe(struct platform_device *pdev)
 
 	ret = mxs_lradc_adc_trigger_init(iio);
 	if (ret)
-		goto err_trig;
+		return ret;
 
 	ret = iio_triggered_buffer_setup(iio, &iio_pollfunc_store_time,
 					 &mxs_lradc_adc_trigger_handler,
 					 &mxs_lradc_adc_buffer_ops);
 	if (ret)
-		return ret;
+		goto err_trig;
 
 	adc->vref_mv = mxs_lradc_adc_vref_mv[lradc->soc];
 
@@ -801,23 +801,21 @@ static int mxs_lradc_adc_probe(struct platform_device *pdev)
 
 err_dev:
 	mxs_lradc_adc_hw_stop(adc);
-	mxs_lradc_adc_trigger_remove(iio);
-err_trig:
 	iio_triggered_buffer_cleanup(iio);
+err_trig:
+	mxs_lradc_adc_trigger_remove(iio);
 	return ret;
 }
 
-static int mxs_lradc_adc_remove(struct platform_device *pdev)
+static void mxs_lradc_adc_remove(struct platform_device *pdev)
 {
 	struct iio_dev *iio = platform_get_drvdata(pdev);
 	struct mxs_lradc_adc *adc = iio_priv(iio);
 
 	iio_device_unregister(iio);
 	mxs_lradc_adc_hw_stop(adc);
-	mxs_lradc_adc_trigger_remove(iio);
 	iio_triggered_buffer_cleanup(iio);
-
-	return 0;
+	mxs_lradc_adc_trigger_remove(iio);
 }
 
 static struct platform_driver mxs_lradc_adc_driver = {
@@ -825,7 +823,7 @@ static struct platform_driver mxs_lradc_adc_driver = {
 		.name	= "mxs-lradc-adc",
 	},
 	.probe	= mxs_lradc_adc_probe,
-	.remove = mxs_lradc_adc_remove,
+	.remove_new = mxs_lradc_adc_remove,
 };
 module_platform_driver(mxs_lradc_adc_driver);
 

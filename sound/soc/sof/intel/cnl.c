@@ -280,6 +280,8 @@ int cnl_ipc4_send_msg(struct snd_sof_dev *sdev, struct snd_sof_ipc_msg *msg)
 	snd_sof_dsp_write(sdev, HDA_DSP_BAR, CNL_DSP_REG_HIPCIDR,
 			  msg_data->primary | CNL_DSP_REG_HIPCIDR_BUSY);
 
+	hda_dsp_ipc4_schedule_d0i3_work(hdev, msg);
+
 	return 0;
 }
 
@@ -384,7 +386,7 @@ int sof_cnl_ops_init(struct snd_sof_dev *sdev)
 	sof_cnl_ops.shutdown	= hda_dsp_shutdown;
 
 	/* ipc */
-	if (sdev->pdata->ipc_type == SOF_IPC) {
+	if (sdev->pdata->ipc_type == SOF_IPC_TYPE_3) {
 		/* doorbell */
 		sof_cnl_ops.irq_thread	= cnl_ipc_irq_thread;
 
@@ -393,9 +395,11 @@ int sof_cnl_ops_init(struct snd_sof_dev *sdev)
 
 		/* debug */
 		sof_cnl_ops.ipc_dump	= cnl_ipc_dump;
+
+		sof_cnl_ops.set_power_state = hda_dsp_set_power_state_ipc3;
 	}
 
-	if (sdev->pdata->ipc_type == SOF_INTEL_IPC4) {
+	if (sdev->pdata->ipc_type == SOF_IPC_TYPE_4) {
 		struct sof_ipc4_fw_data *ipc4_data;
 
 		sdev->private = devm_kzalloc(sdev->dev, sizeof(*ipc4_data), GFP_KERNEL);
@@ -418,6 +422,8 @@ int sof_cnl_ops_init(struct snd_sof_dev *sdev)
 
 		/* debug */
 		sof_cnl_ops.ipc_dump	= cnl_ipc4_dump;
+
+		sof_cnl_ops.set_power_state = hda_dsp_set_power_state_ipc4;
 	}
 
 	/* set DAI driver ops */
@@ -460,6 +466,7 @@ const struct sof_intel_dsp_desc cnl_chip_info = {
 	.read_sdw_lcount =  hda_sdw_check_lcount_common,
 	.enable_sdw_irq	= hda_common_enable_sdw_irq,
 	.check_sdw_irq	= hda_common_check_sdw_irq,
+	.check_sdw_wakeen_irq = hda_sdw_check_wakeen_irq_common,
 	.check_ipc_irq	= hda_dsp_check_ipc_irq,
 	.cl_init = cl_dsp_init,
 	.power_down_dsp = hda_power_down_dsp,
@@ -495,6 +502,7 @@ const struct sof_intel_dsp_desc jsl_chip_info = {
 	.read_sdw_lcount =  hda_sdw_check_lcount_common,
 	.enable_sdw_irq	= hda_common_enable_sdw_irq,
 	.check_sdw_irq	= hda_common_check_sdw_irq,
+	.check_sdw_wakeen_irq = hda_sdw_check_wakeen_irq_common,
 	.check_ipc_irq	= hda_dsp_check_ipc_irq,
 	.cl_init = cl_dsp_init,
 	.power_down_dsp = hda_power_down_dsp,

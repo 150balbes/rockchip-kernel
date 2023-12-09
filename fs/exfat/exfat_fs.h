@@ -50,7 +50,7 @@ enum {
 #define ES_IDX_LAST_FILENAME(name_len)	\
 	(ES_IDX_FIRST_FILENAME + EXFAT_FILENAME_ENTRY_NUM(name_len) - 1)
 
-#define DIR_DELETED		0xFFFF0321
+#define DIR_DELETED		0xFFFFFFF7
 
 /* type values */
 #define TYPE_UNUSED		0x0000
@@ -71,6 +71,8 @@ enum {
 #define TYPE_PADDING		0x0402
 #define TYPE_ACLTAB		0x0403
 #define TYPE_BENIGN_SEC		0x0800
+#define TYPE_VENDOR_EXT		0x0801
+#define TYPE_VENDOR_ALLOC	0x0802
 
 #define MAX_CHARSET_SIZE	6 /* max size of multi-byte character */
 #define MAX_NAME_LENGTH		255 /* max len of file name excluding NULL */
@@ -232,6 +234,8 @@ struct exfat_mount_options {
 		 discard:1, /* Issue discard requests on deletions */
 		 keep_last_dots:1; /* Keep trailing periods in paths */
 	int time_offset; /* Offset of timestamps from UTC (in minutes) */
+	/* Support creating zero-size directory, default: false */
+	bool zero_size_dir;
 };
 
 /*
@@ -271,8 +275,6 @@ struct exfat_sb_info {
 
 	spinlock_t inode_hash_lock;
 	struct hlist_head inode_hashtable[EXFAT_HASH_SIZE];
-
-	struct rcu_head rcu;
 };
 
 #define EXFAT_CACHE_VALID	0
@@ -357,10 +359,10 @@ static inline int exfat_mode_can_hold_ro(struct inode *inode)
 static inline mode_t exfat_make_mode(struct exfat_sb_info *sbi,
 		unsigned short attr, mode_t mode)
 {
-	if ((attr & ATTR_READONLY) && !(attr & ATTR_SUBDIR))
+	if ((attr & EXFAT_ATTR_READONLY) && !(attr & EXFAT_ATTR_SUBDIR))
 		mode &= ~0222;
 
-	if (attr & ATTR_SUBDIR)
+	if (attr & EXFAT_ATTR_SUBDIR)
 		return (mode & ~sbi->options.fs_dmask) | S_IFDIR;
 
 	return (mode & ~sbi->options.fs_fmask) | S_IFREG;
@@ -372,18 +374,18 @@ static inline unsigned short exfat_make_attr(struct inode *inode)
 	unsigned short attr = EXFAT_I(inode)->attr;
 
 	if (S_ISDIR(inode->i_mode))
-		attr |= ATTR_SUBDIR;
+		attr |= EXFAT_ATTR_SUBDIR;
 	if (exfat_mode_can_hold_ro(inode) && !(inode->i_mode & 0222))
-		attr |= ATTR_READONLY;
+		attr |= EXFAT_ATTR_READONLY;
 	return attr;
 }
 
 static inline void exfat_save_attr(struct inode *inode, unsigned short attr)
 {
 	if (exfat_mode_can_hold_ro(inode))
-		EXFAT_I(inode)->attr = attr & (ATTR_RWMASK | ATTR_READONLY);
+		EXFAT_I(inode)->attr = attr & (EXFAT_ATTR_RWMASK | EXFAT_ATTR_READONLY);
 	else
-		EXFAT_I(inode)->attr = attr & ATTR_RWMASK;
+		EXFAT_I(inode)->attr = attr & EXFAT_ATTR_RWMASK;
 }
 
 static inline bool exfat_is_last_sector_in_cluster(struct exfat_sb_info *sbi,
@@ -450,9 +452,9 @@ int exfat_trim_fs(struct inode *inode, struct fstrim_range *range);
 extern const struct file_operations exfat_file_operations;
 int __exfat_truncate(struct inode *inode);
 void exfat_truncate(struct inode *inode);
-int exfat_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
+int exfat_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 		  struct iattr *attr);
-int exfat_getattr(struct user_namespace *mnt_userns, const struct path *path,
+int exfat_getattr(struct mnt_idmap *idmap, const struct path *path,
 		  struct kstat *stat, unsigned int request_mask,
 		  unsigned int query_flags);
 int exfat_file_fsync(struct file *file, loff_t start, loff_t end, int datasync);
@@ -549,6 +551,7 @@ void __exfat_fs_error(struct super_block *sb, int report, const char *fmt, ...)
 void exfat_get_entry_time(struct exfat_sb_info *sbi, struct timespec64 *ts,
 		u8 tz, __le16 time, __le16 date, u8 time_cs);
 void exfat_truncate_atime(struct timespec64 *ts);
+void exfat_truncate_inode_atime(struct inode *inode);
 void exfat_set_entry_time(struct exfat_sb_info *sbi, struct timespec64 *ts,
 		u8 *tz, __le16 *time, __le16 *date, u8 *time_cs);
 u16 exfat_calc_chksum16(void *data, int len, u16 chksum, int type);

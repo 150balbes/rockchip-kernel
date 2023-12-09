@@ -111,6 +111,16 @@ static const struct rkisp1_capture_fmt_cfg rkisp1_mp_fmts[] = {
 		.write_format = RKISP1_MI_CTRL_MP_WRITE_YUV_SPLA,
 		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
 	}, {
+		.fourcc = V4L2_PIX_FMT_NV16M,
+		.uv_swap = 0,
+		.write_format = RKISP1_MI_CTRL_MP_WRITE_YUV_SPLA,
+		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
+	}, {
+		.fourcc = V4L2_PIX_FMT_NV61M,
+		.uv_swap = 1,
+		.write_format = RKISP1_MI_CTRL_MP_WRITE_YUV_SPLA,
+		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
+	}, {
 		.fourcc = V4L2_PIX_FMT_YVU422M,
 		.uv_swap = 1,
 		.write_format = RKISP1_MI_CTRL_MP_WRITE_YUV_PLA_OR_RAW8,
@@ -233,6 +243,18 @@ static const struct rkisp1_capture_fmt_cfg rkisp1_sp_fmts[] = {
 		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
 	}, {
 		.fourcc = V4L2_PIX_FMT_NV61,
+		.uv_swap = 1,
+		.write_format = RKISP1_MI_CTRL_SP_WRITE_SPLA,
+		.output_format = RKISP1_MI_CTRL_SP_OUTPUT_YUV422,
+		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
+	}, {
+		.fourcc = V4L2_PIX_FMT_NV16M,
+		.uv_swap = 0,
+		.write_format = RKISP1_MI_CTRL_SP_WRITE_SPLA,
+		.output_format = RKISP1_MI_CTRL_SP_OUTPUT_YUV422,
+		.mbus = MEDIA_BUS_FMT_YUYV8_2X8,
+	}, {
+		.fourcc = V4L2_PIX_FMT_NV61M,
 		.uv_swap = 1,
 		.write_format = RKISP1_MI_CTRL_SP_WRITE_SPLA,
 		.output_format = RKISP1_MI_CTRL_SP_OUTPUT_YUV422,
@@ -457,9 +479,11 @@ static void rkisp1_sp_config(struct rkisp1_capture *cap)
 	rkisp1_write(rkisp1, cap->config->mi.cr_size_init,
 		     rkisp1_pixfmt_comp_size(pixm, RKISP1_PLANE_CR));
 
+	rkisp1_write(rkisp1, RKISP1_CIF_MI_SP_Y_LLENGTH, cap->sp_y_stride);
 	rkisp1_write(rkisp1, RKISP1_CIF_MI_SP_Y_PIC_WIDTH, pixm->width);
 	rkisp1_write(rkisp1, RKISP1_CIF_MI_SP_Y_PIC_HEIGHT, pixm->height);
-	rkisp1_write(rkisp1, RKISP1_CIF_MI_SP_Y_LLENGTH, cap->sp_y_stride);
+	rkisp1_write(rkisp1, RKISP1_CIF_MI_SP_Y_PIC_SIZE,
+		     cap->sp_y_stride * pixm->height);
 
 	rkisp1_irq_frame_end_enable(cap);
 
@@ -1079,14 +1103,20 @@ rkisp1_fill_pixfmt(struct v4l2_pix_format_mplane *pixm,
 	memset(pixm->plane_fmt, 0, sizeof(pixm->plane_fmt));
 	info = v4l2_format_info(pixm->pixelformat);
 	pixm->num_planes = info->mem_planes;
-	stride = info->bpp[0] * pixm->width;
-	/* Self path supports custom stride but Main path doesn't */
-	if (id == RKISP1_MAINPATH || plane_y->bytesperline < stride)
-		plane_y->bytesperline = stride;
-	plane_y->sizeimage = plane_y->bytesperline * pixm->height;
 
-	/* normalize stride to pixels per line */
-	stride = DIV_ROUND_UP(plane_y->bytesperline, info->bpp[0]);
+	/*
+	 * The SP supports custom strides, expressed as a number of pixels for
+	 * the Y plane. Clamp the stride to a reasonable value to avoid integer
+	 * overflows when calculating the bytesperline and sizeimage values.
+	 */
+	if (id == RKISP1_SELFPATH)
+		stride = clamp(DIV_ROUND_UP(plane_y->bytesperline, info->bpp[0]),
+			       pixm->width, 65536U);
+	else
+		stride = pixm->width;
+
+	plane_y->bytesperline = stride * info->bpp[0];
+	plane_y->sizeimage = plane_y->bytesperline * pixm->height;
 
 	for (i = 1; i < info->comp_planes; i++) {
 		struct v4l2_plane_pix_format *plane = &pixm->plane_fmt[i];
@@ -1131,10 +1161,12 @@ static void rkisp1_try_fmt(const struct rkisp1_capture *cap,
 	const struct rkisp1_capture_config *config = cap->config;
 	const struct rkisp1_capture_fmt_cfg *fmt;
 	const struct v4l2_format_info *info;
-	const unsigned int max_widths[] = { RKISP1_RSZ_MP_SRC_MAX_WIDTH,
-					    RKISP1_RSZ_SP_SRC_MAX_WIDTH };
-	const unsigned int max_heights[] = { RKISP1_RSZ_MP_SRC_MAX_HEIGHT,
-					     RKISP1_RSZ_SP_SRC_MAX_HEIGHT};
+	static const unsigned int max_widths[] = {
+		RKISP1_RSZ_MP_SRC_MAX_WIDTH, RKISP1_RSZ_SP_SRC_MAX_WIDTH
+	};
+	static const unsigned int max_heights[] = {
+		RKISP1_RSZ_MP_SRC_MAX_HEIGHT, RKISP1_RSZ_SP_SRC_MAX_HEIGHT
+	};
 
 	fmt = rkisp1_find_fmt_cfg(cap, pixm->pixelformat);
 	if (!fmt) {
@@ -1210,6 +1242,35 @@ static int rkisp1_enum_fmt_vid_cap_mplane(struct file *file, void *priv,
 	return -EINVAL;
 }
 
+static int rkisp1_enum_framesizes(struct file *file, void *fh,
+				  struct v4l2_frmsizeenum *fsize)
+{
+	static const unsigned int max_widths[] = {
+		RKISP1_RSZ_MP_SRC_MAX_WIDTH,
+		RKISP1_RSZ_SP_SRC_MAX_WIDTH,
+	};
+	static const unsigned int max_heights[] = {
+		RKISP1_RSZ_MP_SRC_MAX_HEIGHT,
+		RKISP1_RSZ_SP_SRC_MAX_HEIGHT,
+	};
+	struct rkisp1_capture *cap = video_drvdata(file);
+
+	if (fsize->index != 0)
+		return -EINVAL;
+
+	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+
+	fsize->stepwise.min_width = RKISP1_RSZ_SRC_MIN_WIDTH;
+	fsize->stepwise.max_width = max_widths[cap->id];
+	fsize->stepwise.step_width = 2;
+
+	fsize->stepwise.min_height = RKISP1_RSZ_SRC_MIN_HEIGHT;
+	fsize->stepwise.max_height = max_heights[cap->id];
+	fsize->stepwise.step_height = 2;
+
+	return 0;
+}
+
 static int rkisp1_s_fmt_vid_cap_mplane(struct file *file,
 				       void *priv, struct v4l2_format *f)
 {
@@ -1259,6 +1320,7 @@ static const struct v4l2_ioctl_ops rkisp1_v4l2_ioctl_ops = {
 	.vidioc_s_fmt_vid_cap_mplane = rkisp1_s_fmt_vid_cap_mplane,
 	.vidioc_g_fmt_vid_cap_mplane = rkisp1_g_fmt_vid_cap_mplane,
 	.vidioc_enum_fmt_vid_cap = rkisp1_enum_fmt_vid_cap_mplane,
+	.vidioc_enum_framesizes = rkisp1_enum_framesizes,
 	.vidioc_querycap = rkisp1_querycap,
 	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
@@ -1336,8 +1398,9 @@ void rkisp1_capture_devs_unregister(struct rkisp1_device *rkisp1)
 
 static int rkisp1_register_capture(struct rkisp1_capture *cap)
 {
-	const char * const dev_names[] = {RKISP1_MP_DEV_NAME,
-					  RKISP1_SP_DEV_NAME};
+	static const char * const dev_names[] = {
+		RKISP1_MP_DEV_NAME, RKISP1_SP_DEV_NAME
+	};
 	struct v4l2_device *v4l2_dev = &cap->rkisp1->v4l2_dev;
 	struct video_device *vdev = &cap->vnode.vdev;
 	struct rkisp1_vdev_node *node;

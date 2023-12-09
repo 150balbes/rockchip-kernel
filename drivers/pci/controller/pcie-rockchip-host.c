@@ -24,11 +24,8 @@
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_pci.h>
-#include <linux/of_platform.h>
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/phy/phy.h>
@@ -38,9 +35,6 @@
 
 #include "../pci.h"
 #include "pcie-rockchip.h"
-
-static int bus_scan_delay = -1;
-module_param_named(bus_scan_delay, bus_scan_delay, int, S_IRUGO);
 
 static void rockchip_pcie_enable_bw_int(struct rockchip_pcie *rockchip)
 {
@@ -936,7 +930,6 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct pci_host_bridge *bridge;
 	int err;
-	u32 delay = 0;
 
 	if (!dev->of_node)
 		return -ENODEV;
@@ -986,26 +979,6 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 	bridge->sysdata = rockchip;
 	bridge->ops = &rockchip_pcie_ops;
 
-	/* Checking if bus scan delay was given from command line and prefer
-	 * that over the value in device tree (which defaults to 0 if not set).
-	 */
-	if (bus_scan_delay >= 0) {
-		delay = bus_scan_delay;
-		dev_info(dev, "wait %u ms (from command-line) before bus scan\n", delay);
-	} else {
-		delay = rockchip->bus_scan_delay;
-		dev_info(dev, "wait %u ms (from device tree) before bus scan\n", delay);
-	}
-	/* Workaround for some devices crashing on pci_host_probe / pci_scan_root_bus_bridge
-	 * calls: sleep a bit before bus scan. Call trace gets to rockchip_pcie_rd_conf when
-	 * trying to read vendor id (pci_bus_generic_read_dev_vendor_id is in call stack)
-	 * before panicing. I have no idea why this works or what causes the panic. I just
-	 * found this hack by luck when trying to "make it break differently if possible".
-	 */
-	if (delay > 0) {
-		msleep(delay);
-	}
-
 	err = rockchip_pcie_setup_irq(rockchip);
 	if (err)
 		goto err_remove_irq_domain;
@@ -1034,7 +1007,7 @@ err_set_vpcie:
 	return err;
 }
 
-static int rockchip_pcie_remove(struct platform_device *pdev)
+static void rockchip_pcie_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct rockchip_pcie *rockchip = dev_get_drvdata(dev);
@@ -1054,8 +1027,6 @@ static int rockchip_pcie_remove(struct platform_device *pdev)
 		regulator_disable(rockchip->vpcie3v3);
 	regulator_disable(rockchip->vpcie1v8);
 	regulator_disable(rockchip->vpcie0v9);
-
-	return 0;
 }
 
 static const struct dev_pm_ops rockchip_pcie_pm_ops = {
@@ -1076,7 +1047,7 @@ static struct platform_driver rockchip_pcie_driver = {
 		.pm = &rockchip_pcie_pm_ops,
 	},
 	.probe = rockchip_pcie_probe,
-	.remove = rockchip_pcie_remove,
+	.remove_new = rockchip_pcie_remove,
 };
 module_platform_driver(rockchip_pcie_driver);
 

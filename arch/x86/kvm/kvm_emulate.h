@@ -213,14 +213,14 @@ struct x86_emulate_ops {
 
 	bool (*get_cpuid)(struct x86_emulate_ctxt *ctxt, u32 *eax, u32 *ebx,
 			  u32 *ecx, u32 *edx, bool exact_only);
-	bool (*guest_has_long_mode)(struct x86_emulate_ctxt *ctxt);
 	bool (*guest_has_movbe)(struct x86_emulate_ctxt *ctxt);
 	bool (*guest_has_fxsr)(struct x86_emulate_ctxt *ctxt);
 	bool (*guest_has_rdpid)(struct x86_emulate_ctxt *ctxt);
 
 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
 
-	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+	bool (*is_smm)(struct x86_emulate_ctxt *ctxt);
+	bool (*is_guest_mode)(struct x86_emulate_ctxt *ctxt);
 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
 	void (*triple_fault)(struct x86_emulate_ctxt *ctxt);
 	int (*set_xcr)(struct x86_emulate_ctxt *ctxt, u32 index, u64 xcr);
@@ -274,10 +274,6 @@ enum x86emul_mode {
 	X86EMUL_MODE_PROT32,	/* 32-bit protected mode. */
 	X86EMUL_MODE_PROT64,	/* 64-bit (long) mode.    */
 };
-
-/* These match some of the HF_* flags defined in kvm_host.h  */
-#define X86EMUL_GUEST_MASK           (1 << 5) /* VCPU is in guest-mode */
-#define X86EMUL_SMM_MASK             (1 << 6)
 
 /*
  * fastop functions are declared as taking a never-defined fastop parameter,

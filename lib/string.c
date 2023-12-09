@@ -110,7 +110,7 @@ size_t strlcpy(char *dest, const char *src, size_t size)
 
 	if (size) {
 		size_t len = (ret >= size) ? size - 1 : ret;
-		memcpy(dest, src, len);
+		__builtin_memcpy(dest, src, len);
 		dest[len] = '\0';
 	}
 	return ret;
@@ -260,7 +260,7 @@ size_t strlcat(char *dest, const char *src, size_t count)
 	count -= dsize;
 	if (len >= count)
 		len = count-1;
-	memcpy(dest, src, len);
+	__builtin_memcpy(dest, src, len);
 	dest[len] = 0;
 	return res;
 }
@@ -480,13 +480,11 @@ EXPORT_SYMBOL(strcspn);
  */
 char *strpbrk(const char *cs, const char *ct)
 {
-	const char *sc1, *sc2;
+	const char *sc;
 
-	for (sc1 = cs; *sc1 != '\0'; ++sc1) {
-		for (sc2 = ct; *sc2 != '\0'; ++sc2) {
-			if (*sc1 == *sc2)
-				return (char *)sc1;
-		}
+	for (sc = cs; *sc != '\0'; ++sc) {
+		if (strchr(ct, *sc))
+			return (char *)sc;
 	}
 	return NULL;
 }

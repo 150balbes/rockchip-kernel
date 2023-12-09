@@ -41,11 +41,14 @@ include $(srctree)/scripts/Kbuild.include
 MODPOST = scripts/mod/modpost
 
 modpost-args =										\
+	$(if $(CONFIG_MODULES),-M)							\
 	$(if $(CONFIG_MODVERSIONS),-m)							\
 	$(if $(CONFIG_MODULE_SRCVERSION_ALL),-a)					\
 	$(if $(CONFIG_SECTION_MISMATCH_WARN_ONLY),,-E)					\
+	$(if $(KBUILD_MODPOST_WARN),-w)							\
 	$(if $(KBUILD_NSDEPS),-d $(MODULES_NSDEPS))					\
 	$(if $(CONFIG_MODULE_ALLOW_MISSING_NAMESPACE_IMPORTS)$(KBUILD_NSDEPS),-N)	\
+	$(if $(findstring 1, $(KBUILD_EXTRA_WARN)),-W)					\
 	-o $@
 
 modpost-deps := $(MODPOST)
@@ -53,6 +56,13 @@ modpost-deps := $(MODPOST)
 # 'make -i -k' ignores compile errors, and builds as many modules as possible.
 ifneq ($(findstring i,$(filter-out --%,$(MAKEFLAGS))),)
 modpost-args += -n
+endif
+
+# Read out modules.order to pass in modpost.
+# Otherwise, allmodconfig would fail with "Argument list too long".
+ifdef KBUILD_MODULES
+modpost-args += -T $(MODORDER)
+modpost-deps += $(MODORDER)
 endif
 
 ifeq ($(KBUILD_EXTMOD),)
@@ -81,6 +91,13 @@ quiet_cmd_vmlinux_objs = GEN     $@
 targets += .vmlinux.objs
 .vmlinux.objs: vmlinux.a $(KBUILD_VMLINUX_LIBS) FORCE
 	$(call if_changed,vmlinux_objs)
+
+ifdef CONFIG_TRIM_UNUSED_KSYMS
+ksym-wl := $(CONFIG_UNUSED_KSYMS_WHITELIST)
+ksym-wl := $(if $(filter-out /%, $(ksym-wl)),$(srctree)/)$(ksym-wl)
+modpost-args += -t $(addprefix -u , $(ksym-wl))
+modpost-deps += $(ksym-wl)
+endif
 
 ifeq ($(wildcard vmlinux.o),)
 missing-input := vmlinux.o
@@ -113,23 +130,14 @@ modpost-args += -e $(addprefix -i , $(KBUILD_EXTRA_SYMBOLS))
 
 endif # ($(KBUILD_EXTMOD),)
 
-ifneq ($(KBUILD_MODPOST_WARN)$(missing-input),)
-modpost-args += -w
-endif
-
-ifdef KBUILD_MODULES
-modpost-args += -T $(MODORDER)
-modpost-deps += $(MODORDER)
-endif
-
-# Read out modules.order to pass in modpost.
-# Otherwise, allmodconfig would fail with "Argument list too long".
 quiet_cmd_modpost = MODPOST $@
       cmd_modpost = \
 	$(if $(missing-input), \
 		echo >&2 "WARNING: $(missing-input) is missing."; \
 		echo >&2 "         Modules may not have dependencies or modversions."; \
-		echo >&2 "         You may get many unresolved symbol warnings.";) \
+		echo >&2 "         You may get many unresolved symbol errors."; \
+		echo >&2 "         You can set KBUILD_MODPOST_WARN=1 to turn errors into warning"; \
+		echo >&2 "         if you want to proceed at your own risk.";) \
 	$(MODPOST) $(modpost-args)
 
 targets += $(output-symdump)

@@ -11,6 +11,8 @@
 #include "ulist.h"
 #include "misc.h"
 
+struct btrfs_trans_handle;
+
 enum {
 	EXTENT_BUFFER_UPTODATE,
 	EXTENT_BUFFER_DIRTY,
@@ -27,6 +29,8 @@ enum {
 	/* write IO error */
 	EXTENT_BUFFER_WRITE_ERR,
 	EXTENT_BUFFER_NO_CHECK,
+	/* Indicate that extent buffer pages a being read */
+	EXTENT_BUFFER_READING,
 };
 
 /* these are flags for __process_pages_contig */
@@ -36,8 +40,6 @@ enum {
 	ENUM_BIT(PAGE_START_WRITEBACK),
 	ENUM_BIT(PAGE_END_WRITEBACK),
 	ENUM_BIT(PAGE_SET_ORDERED),
-	ENUM_BIT(PAGE_SET_ERROR),
-	ENUM_BIT(PAGE_LOCK),
 };
 
 /*
@@ -60,11 +62,9 @@ enum {
 #define BITMAP_LAST_BYTE_MASK(nbits) \
 	(BYTE_MASK >> (-(nbits) & (BITS_PER_BYTE - 1)))
 
-struct btrfs_bio;
 struct btrfs_root;
 struct btrfs_inode;
 struct btrfs_fs_info;
-struct io_failure_record;
 struct extent_io_tree;
 struct btrfs_tree_parent_check;
 
@@ -79,20 +79,25 @@ struct extent_buffer {
 	struct btrfs_fs_info *fs_info;
 	spinlock_t refs_lock;
 	atomic_t refs;
-	atomic_t io_pages;
 	int read_mirror;
-	struct rcu_head rcu_head;
-	pid_t lock_owner;
 	/* >= 0 if eb belongs to a log tree, -1 otherwise */
 	s8 log_index;
+	struct rcu_head rcu_head;
 
 	struct rw_semaphore lock;
 
 	struct page *pages[INLINE_EXTENT_BUFFER_PAGES];
-	struct list_head release_list;
 #ifdef CONFIG_BTRFS_DEBUG
 	struct list_head leak_list;
+	pid_t lock_owner;
 #endif
+};
+
+struct btrfs_eb_write_context {
+	struct writeback_control *wbc;
+	struct extent_buffer *eb;
+	/* Block group @eb resides in. Only used for zoned mode. */
+	struct btrfs_block_group *zoned_bg;
 };
 
 /*
@@ -179,7 +184,9 @@ int try_release_extent_mapping(struct page *page, gfp_t mask);
 int try_release_extent_buffer(struct page *page);
 
 int btrfs_read_folio(struct file *file, struct folio *folio);
-int extent_write_locked_range(struct inode *inode, u64 start, u64 end);
+void extent_write_locked_range(struct inode *inode, struct page *locked_page,
+			       u64 start, u64 end, struct writeback_control *wbc,
+			       bool pages_dirty);
 int extent_writepages(struct address_space *mapping,
 		      struct writeback_control *wbc);
 int btree_write_cache_pages(struct address_space *mapping,
@@ -236,11 +243,24 @@ void read_extent_buffer(const struct extent_buffer *eb, void *dst,
 int read_extent_buffer_to_user_nofault(const struct extent_buffer *eb,
 				       void __user *dst, unsigned long start,
 				       unsigned long len);
-void write_extent_buffer_fsid(const struct extent_buffer *eb, const void *src);
-void write_extent_buffer_chunk_tree_uuid(const struct extent_buffer *eb,
-		const void *src);
 void write_extent_buffer(const struct extent_buffer *eb, const void *src,
 			 unsigned long start, unsigned long len);
+
+static inline void write_extent_buffer_chunk_tree_uuid(
+		const struct extent_buffer *eb, const void *chunk_tree_uuid)
+{
+	write_extent_buffer(eb, chunk_tree_uuid,
+			    offsetof(struct btrfs_header, chunk_tree_uuid),
+			    BTRFS_FSID_SIZE);
+}
+
+static inline void write_extent_buffer_fsid(const struct extent_buffer *eb,
+					    const void *fsid)
+{
+	write_extent_buffer(eb, fsid, offsetof(struct btrfs_header, fsid),
+			    BTRFS_FSID_SIZE);
+}
+
 void copy_extent_buffer_full(const struct extent_buffer *dst,
 			     const struct extent_buffer *src);
 void copy_extent_buffer(const struct extent_buffer *dst,
@@ -262,51 +282,19 @@ void extent_buffer_bitmap_set(const struct extent_buffer *eb, unsigned long star
 void extent_buffer_bitmap_clear(const struct extent_buffer *eb,
 				unsigned long start, unsigned long pos,
 				unsigned long len);
-void clear_extent_buffer_dirty(const struct extent_buffer *eb);
-bool set_extent_buffer_dirty(struct extent_buffer *eb);
+void set_extent_buffer_dirty(struct extent_buffer *eb);
 void set_extent_buffer_uptodate(struct extent_buffer *eb);
 void clear_extent_buffer_uptodate(struct extent_buffer *eb);
-int extent_buffer_under_io(const struct extent_buffer *eb);
 void extent_range_clear_dirty_for_io(struct inode *inode, u64 start, u64 end);
-void extent_range_redirty_for_io(struct inode *inode, u64 start, u64 end);
 void extent_clear_unlock_delalloc(struct btrfs_inode *inode, u64 start, u64 end,
 				  struct page *locked_page,
 				  u32 bits_to_clear, unsigned long page_ops);
 int extent_invalidate_folio(struct extent_io_tree *tree,
 			    struct folio *folio, size_t offset);
+void btrfs_clear_buffer_dirty(struct btrfs_trans_handle *trans,
+			      struct extent_buffer *buf);
 
 int btrfs_alloc_page_array(unsigned int nr_pages, struct page **page_array);
-
-void end_extent_writepage(struct page *page, int err, u64 start, u64 end);
-
-/*
- * When IO fails, either with EIO or csum verification fails, we
- * try other mirrors that might have a good copy of the data.  This
- * io_failure_record is used to record state as we go through all the
- * mirrors.  If another mirror has good data, the sector is set up to date
- * and things continue.  If a good mirror can't be found, the original
- * bio end_io callback is called to indicate things have failed.
- */
-struct io_failure_record {
-	/* Use rb_simple_node for search/insert */
-	struct {
-		struct rb_node rb_node;
-		u64 bytenr;
-	};
-	struct page *page;
-	u64 len;
-	u64 logical;
-	int this_mirror;
-	int failed_mirror;
-	int num_copies;
-};
-
-int btrfs_repair_one_sector(struct btrfs_inode *inode, struct btrfs_bio *failed_bbio,
-			    u32 bio_offset, struct page *page, unsigned int pgoff,
-			    bool submit_buffered);
-void btrfs_free_io_failure_record(struct btrfs_inode *inode, u64 start, u64 end);
-int btrfs_clean_io_failure(struct btrfs_inode *inode, u64 start,
-			   struct page *page, unsigned int pg_offset);
 
 #ifdef CONFIG_BTRFS_FS_RUN_SANITY_TESTS
 bool find_lock_delalloc_range(struct inode *inode,

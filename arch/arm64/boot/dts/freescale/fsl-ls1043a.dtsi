@@ -85,6 +85,7 @@
 		l2: l2-cache {
 			compatible = "cache";
 			cache-level = <2>;
+			cache-unified;
 		};
 	};
 
@@ -517,20 +518,6 @@
 			#size-cells = <0>;
 			reg = <0x0 0x2100000 0x0 0x10000>;
 			interrupts = <0 64 0x4>;
-			clock-names = "dspi";
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(1)>;
-			spi-num-chipselects = <5>;
-			big-endian;
-			status = "disabled";
-		};
-
-		dspi1: spi@2110000 {
-			compatible = "fsl,ls1043a-dspi", "fsl,ls1021a-v1.0-dspi";
-			#address-cells = <1>;
-			#size-cells = <0>;
-			reg = <0x0 0x2110000 0x0 0x10000>;
-			interrupts = <0 65 0x4>;
 			clock-names = "dspi";
 			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
 					    QORIQ_CLK_PLL_DIV(1)>;

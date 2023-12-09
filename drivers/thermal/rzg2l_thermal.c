@@ -9,8 +9,8 @@
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/math.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
@@ -75,7 +75,7 @@ static inline void rzg2l_thermal_write(struct rzg2l_thermal_priv *priv, u32 reg,
 
 static int rzg2l_thermal_get_temp(struct thermal_zone_device *tz, int *temp)
 {
-	struct rzg2l_thermal_priv *priv = tz->devdata;
+	struct rzg2l_thermal_priv *priv = thermal_zone_device_priv(tz);
 	u32 result = 0, dsensor, ts_code_ave;
 	int val, i;
 
@@ -150,14 +150,12 @@ static void rzg2l_thermal_reset_assert_pm_disable_put(struct platform_device *pd
 	reset_control_assert(priv->rstc);
 }
 
-static int rzg2l_thermal_remove(struct platform_device *pdev)
+static void rzg2l_thermal_remove(struct platform_device *pdev)
 {
 	struct rzg2l_thermal_priv *priv = dev_get_drvdata(&pdev->dev);
 
 	thermal_remove_hwmon_sysfs(priv->zone);
 	rzg2l_thermal_reset_assert_pm_disable_put(pdev);
-
-	return 0;
 }
 
 static int rzg2l_thermal_probe(struct platform_device *pdev)
@@ -216,7 +214,6 @@ static int rzg2l_thermal_probe(struct platform_device *pdev)
 	}
 
 	priv->zone = zone;
-	priv->zone->tzp->no_hwmon = false;
 	ret = thermal_add_hwmon_sysfs(priv->zone);
 	if (ret)
 		goto err;
@@ -243,7 +240,7 @@ static struct platform_driver rzg2l_thermal_driver = {
 		.of_match_table = rzg2l_thermal_dt_ids,
 	},
 	.probe = rzg2l_thermal_probe,
-	.remove = rzg2l_thermal_remove,
+	.remove_new = rzg2l_thermal_remove,
 };
 module_platform_driver(rzg2l_thermal_driver);
 

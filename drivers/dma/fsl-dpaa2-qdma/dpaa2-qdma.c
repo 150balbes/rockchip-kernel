@@ -765,7 +765,7 @@ err_mcportal:
 	return err;
 }
 
-static int dpaa2_qdma_remove(struct fsl_mc_device *ls_dev)
+static void dpaa2_qdma_remove(struct fsl_mc_device *ls_dev)
 {
 	struct dpaa2_qdma_engine *dpaa2_qdma;
 	struct dpaa2_qdma_priv *priv;
@@ -787,8 +787,6 @@ static int dpaa2_qdma_remove(struct fsl_mc_device *ls_dev)
 	dma_async_device_unregister(&dpaa2_qdma->dma_dev);
 	kfree(priv);
 	kfree(dpaa2_qdma);
-
-	return 0;
 }
 
 static void dpaa2_qdma_shutdown(struct fsl_mc_device *ls_dev)
@@ -816,7 +814,6 @@ static const struct fsl_mc_device_id dpaa2_qdma_id_table[] = {
 static struct fsl_mc_driver dpaa2_qdma_driver = {
 	.driver		= {
 		.name	= "dpaa2-qdma",
-		.owner  = THIS_MODULE,
 	},
 	.probe          = dpaa2_qdma_probe,
 	.remove		= dpaa2_qdma_remove,

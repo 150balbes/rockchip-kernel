@@ -58,6 +58,7 @@
 
 struct nvmet_ns {
 	struct percpu_ref	ref;
+	struct bdev_handle	*bdev_handle;
 	struct block_device	*bdev;
 	struct file		*file;
 	bool			readonly;
@@ -79,8 +80,8 @@ struct nvmet_ns {
 	struct completion	disable_done;
 	mempool_t		*bvec_pool;
 
-	int			use_p2pmem;
 	struct pci_dev		*p2p_dev;
+	int			use_p2pmem;
 	int			pi_type;
 	int			metadata_size;
 	u8			csi;
@@ -109,8 +110,8 @@ struct nvmet_sq {
 	u32			sqhd;
 	bool			sqhd_disabled;
 #ifdef CONFIG_NVME_TARGET_AUTH
-	struct delayed_work	auth_expired_work;
 	bool			authenticated;
+	struct delayed_work	auth_expired_work;
 	u16			dhchap_tid;
 	u16			dhchap_status;
 	int			dhchap_step;
@@ -158,6 +159,7 @@ struct nvmet_port {
 	struct config_group		ana_groups_group;
 	struct nvmet_ana_group		ana_default_group;
 	enum nvme_ana_state		*ana_state;
+	struct key			*keyring;
 	void				*priv;
 	bool				enabled;
 	int				inline_data_size;
@@ -176,6 +178,16 @@ static inline struct nvmet_port *ana_groups_to_port(
 {
 	return container_of(to_config_group(item), struct nvmet_port,
 			ana_groups_group);
+}
+
+static inline u8 nvmet_port_disc_addr_treq_secure_channel(struct nvmet_port *port)
+{
+	return (port->disc_addr.treq & NVME_TREQ_SECURE_CHANNEL_MASK);
+}
+
+static inline bool nvmet_port_secure_channel_required(struct nvmet_port *port)
+{
+    return nvmet_port_disc_addr_treq_secure_channel(port) == NVMF_TREQ_REQUIRED;
 }
 
 struct nvmet_ctrl {
@@ -581,8 +593,8 @@ bool nvmet_ns_revalidate(struct nvmet_ns *ns);
 u16 blk_to_nvme_status(struct nvmet_req *req, blk_status_t blk_sts);
 
 bool nvmet_bdev_zns_enable(struct nvmet_ns *ns);
-void nvmet_execute_identify_cns_cs_ctrl(struct nvmet_req *req);
-void nvmet_execute_identify_cns_cs_ns(struct nvmet_req *req);
+void nvmet_execute_identify_ctrl_zns(struct nvmet_req *req);
+void nvmet_execute_identify_ns_zns(struct nvmet_req *req);
 void nvmet_bdev_execute_zone_mgmt_recv(struct nvmet_req *req);
 void nvmet_bdev_execute_zone_mgmt_send(struct nvmet_req *req);
 void nvmet_bdev_execute_zone_append(struct nvmet_req *req);
@@ -685,14 +697,6 @@ static inline bool nvmet_use_inline_bvec(struct nvmet_req *req)
 {
 	return req->transfer_len <= NVMET_MAX_INLINE_DATA_LEN &&
 	       req->sg_cnt <= NVMET_MAX_INLINE_BIOVEC;
-}
-
-static inline void nvmet_req_cns_error_complete(struct nvmet_req *req)
-{
-	pr_debug("unhandled identify cns %d on qid %d\n",
-	       req->cmd->identify.cns, req->sq->qid);
-	req->error_loc = offsetof(struct nvme_identify, cns);
-	nvmet_req_complete(req, NVME_SC_INVALID_FIELD | NVME_SC_DNR);
 }
 
 static inline void nvmet_req_bio_put(struct nvmet_req *req, struct bio *bio)

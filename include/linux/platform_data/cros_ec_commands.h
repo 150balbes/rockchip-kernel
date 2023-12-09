@@ -1082,7 +1082,7 @@ struct ec_params_get_cmd_versions_v1 {
 } __ec_align2;
 
 /**
- * struct ec_response_get_cmd_version - Response to the get command versions.
+ * struct ec_response_get_cmd_versions - Response to the get command versions.
  * @version_mask: Mask of supported versions; use EC_VER_MASK() to compare with
  *                a desired version.
  */
@@ -1300,8 +1300,18 @@ enum ec_feature_code {
 	 * mux.
 	 */
 	EC_FEATURE_TYPEC_MUX_REQUIRE_AP_ACK = 43,
-	/* The MCU is a System Companion Processor (SCP) 2nd Core. */
-	EC_FEATURE_SCP_C1 = 45,
+	/*
+	 * The EC supports entering and residing in S4.
+	 */
+	EC_FEATURE_S4_RESIDENCY = 44,
+	/*
+	 * The EC supports the AP directing mux sets for the board.
+	 */
+	EC_FEATURE_TYPEC_AP_MUX_SET = 45,
+	/*
+	 * The EC supports the AP composing VDMs for us to send.
+	 */
+	EC_FEATURE_TYPEC_AP_VDM_SEND = 46,
 };
 
 #define EC_FEATURE_MASK_0(event_code) BIT(event_code % 32)
@@ -2691,7 +2701,7 @@ struct ec_response_motion_sense {
 			 * Sensor data is truncated if response_max is too small
 			 * for holding all the data.
 			 */
-			struct ec_response_motion_sensor_data sensor[0];
+			DECLARE_FLEX_ARRAY(struct ec_response_motion_sensor_data, sensor);
 		} dump;
 
 		/* Used for MOTIONSENSE_CMD_INFO. */
@@ -3471,6 +3481,9 @@ struct ec_response_get_next_event_v1 {
 #define EC_MKBP_VOL_UP		1
 #define EC_MKBP_VOL_DOWN	2
 #define EC_MKBP_RECOVERY	3
+#define EC_MKBP_BRI_UP		4
+#define EC_MKBP_BRI_DOWN	5
+#define EC_MKBP_SCREEN_LOCK	6
 
 /* Switches */
 #define EC_MKBP_LID_OPEN	0
@@ -4423,7 +4436,19 @@ struct ec_response_i2c_passthru_protect {
  * These commands are for sending and receiving message via HDMI CEC
  */
 
+#define EC_CEC_MAX_PORTS 16
+
 #define MAX_CEC_MSG_LEN 16
+
+/*
+ * Helper macros for packing/unpacking cec_events.
+ * bits[27:0] : bitmask of events from enum mkbp_cec_event
+ * bits[31:28]: port number
+ */
+#define EC_MKBP_EVENT_CEC_PACK(events, port) \
+		(((events) & GENMASK(27, 0)) | (((port) & 0xf) << 28))
+#define EC_MKBP_EVENT_CEC_GET_EVENTS(event) ((event) & GENMASK(27, 0))
+#define EC_MKBP_EVENT_CEC_GET_PORT(event) (((event) >> 28) & 0xf)
 
 /* CEC message from the AP to be written on the CEC bus */
 #define EC_CMD_CEC_WRITE_MSG 0x00B8
@@ -4436,19 +4461,54 @@ struct ec_params_cec_write {
 	uint8_t msg[MAX_CEC_MSG_LEN];
 } __ec_align1;
 
+/**
+ * struct ec_params_cec_write_v1 - Message to write to the CEC bus
+ * @port: CEC port to write the message on
+ * @msg_len: length of msg in bytes
+ * @msg: message content to write to the CEC bus
+ */
+struct ec_params_cec_write_v1 {
+	uint8_t port;
+	uint8_t msg_len;
+	uint8_t msg[MAX_CEC_MSG_LEN];
+} __ec_align1;
+
+/* CEC message read from a CEC bus reported back to the AP */
+#define EC_CMD_CEC_READ_MSG 0x00B9
+
+/**
+ * struct ec_params_cec_read - Read a message from the CEC bus
+ * @port: CEC port to read a message on
+ */
+struct ec_params_cec_read {
+	uint8_t port;
+} __ec_align1;
+
+/**
+ * struct ec_response_cec_read - Message read from the CEC bus
+ * @msg_len: length of msg in bytes
+ * @msg: message content read from the CEC bus
+ */
+struct ec_response_cec_read {
+	uint8_t msg_len;
+	uint8_t msg[MAX_CEC_MSG_LEN];
+} __ec_align1;
+
 /* Set various CEC parameters */
 #define EC_CMD_CEC_SET 0x00BA
 
 /**
  * struct ec_params_cec_set - CEC parameters set
  * @cmd: parameter type, can be CEC_CMD_ENABLE or CEC_CMD_LOGICAL_ADDRESS
+ * @port: CEC port to set the parameter on
  * @val: in case cmd is CEC_CMD_ENABLE, this field can be 0 to disable CEC
  *	or 1 to enable CEC functionality, in case cmd is
  *	CEC_CMD_LOGICAL_ADDRESS, this field encodes the requested logical
  *	address between 0 and 15 or 0xff to unregister
  */
 struct ec_params_cec_set {
-	uint8_t cmd; /* enum cec_command */
+	uint8_t cmd : 4; /* enum cec_command */
+	uint8_t port : 4;
 	uint8_t val;
 } __ec_align1;
 
@@ -4458,9 +4518,11 @@ struct ec_params_cec_set {
 /**
  * struct ec_params_cec_get - CEC parameters get
  * @cmd: parameter type, can be CEC_CMD_ENABLE or CEC_CMD_LOGICAL_ADDRESS
+ * @port: CEC port to get the parameter on
  */
 struct ec_params_cec_get {
-	uint8_t cmd; /* enum cec_command */
+	uint8_t cmd : 4; /* enum cec_command */
+	uint8_t port : 4;
 } __ec_align1;
 
 /**
@@ -4472,6 +4534,17 @@ struct ec_params_cec_get {
  */
 struct ec_response_cec_get {
 	uint8_t val;
+} __ec_align1;
+
+/* Get the number of CEC ports */
+#define EC_CMD_CEC_PORT_COUNT 0x00C1
+
+/**
+ * struct ec_response_cec_port_count - CEC port count response
+ * @port_count: number of CEC ports
+ */
+struct ec_response_cec_port_count {
+	uint8_t port_count;
 } __ec_align1;
 
 /* CEC parameters command */
@@ -4488,6 +4561,8 @@ enum mkbp_cec_event {
 	EC_MKBP_CEC_SEND_OK			= BIT(0),
 	/* Outgoing message was not acknowledged */
 	EC_MKBP_CEC_SEND_FAILED			= BIT(1),
+	/* Incoming message can be read out by AP */
+	EC_MKBP_CEC_HAVE_DATA			= BIT(2),
 };
 
 /*****************************************************************************/
@@ -5470,7 +5545,7 @@ struct ec_response_rollback_info {
 /* Issue AP reset */
 #define EC_CMD_AP_RESET 0x0125
 
-/**
+/*
  * Get the number of peripheral charge ports
  */
 #define EC_CMD_PCHG_COUNT 0x0134
@@ -5481,7 +5556,7 @@ struct ec_response_pchg_count {
 	uint8_t port_count;
 } __ec_align1;
 
-/**
+/*
  * Get the status of a peripheral charge port
  */
 #define EC_CMD_PCHG 0x0135
@@ -5726,6 +5801,8 @@ enum typec_control_command {
 	TYPEC_CONTROL_COMMAND_ENTER_MODE,
 	TYPEC_CONTROL_COMMAND_TBT_UFP_REPLY,
 	TYPEC_CONTROL_COMMAND_USB_MUX_SET,
+	TYPEC_CONTROL_COMMAND_BIST_SHARE_MODE,
+	TYPEC_CONTROL_COMMAND_SEND_VDM_REQ,
 };
 
 /* Replies the AP may specify to the TBT EnterMode command as a UFP */
@@ -5737,6 +5814,17 @@ enum typec_tbt_ufp_reply {
 struct typec_usb_mux_set {
 	uint8_t mux_index;	/* Index of the mux to set in the chain */
 	uint8_t mux_flags;	/* USB_PD_MUX_*-encoded USB mux state to set */
+} __ec_align1;
+
+#define VDO_MAX_SIZE 7
+
+struct typec_vdm_req {
+	/* VDM data, including VDM header */
+	uint32_t vdm_data[VDO_MAX_SIZE];
+	/* Number of 32-bit fields filled in */
+	uint8_t vdm_data_objects;
+	/* Partner to address - see enum typec_partner_type */
+	uint8_t partner_type;
 } __ec_align1;
 
 struct ec_params_typec_control {
@@ -5754,6 +5842,8 @@ struct ec_params_typec_control {
 		uint8_t mode_to_enter;      /* enum typec_mode */
 		uint8_t tbt_ufp_reply;      /* enum typec_tbt_ufp_reply */
 		struct typec_usb_mux_set mux_params;
+		/* Used for VMD_REQ */
+		struct typec_vdm_req vdm_req_params;
 		uint8_t placeholder[128];
 	};
 } __ec_align1;
@@ -5835,6 +5925,9 @@ enum tcpc_cc_polarity {
 #define PD_STATUS_EVENT_DISCONNECTED		BIT(3)
 #define PD_STATUS_EVENT_MUX_0_SET_DONE		BIT(4)
 #define PD_STATUS_EVENT_MUX_1_SET_DONE		BIT(5)
+#define PD_STATUS_EVENT_VDM_REQ_REPLY		BIT(6)
+#define PD_STATUS_EVENT_VDM_REQ_FAILED		BIT(7)
+#define PD_STATUS_EVENT_VDM_ATTENTION		BIT(8)
 
 struct ec_params_typec_status {
 	uint8_t port;
@@ -5877,6 +5970,37 @@ struct ec_response_typec_status {
 
 	uint32_t sink_cap_pdos[7];	/* Max 7 PDOs can be present */
 } __ec_align1;
+
+/*
+ * Gather the response to the most recent VDM REQ from the AP, as well
+ * as popping the oldest VDM:Attention from the DPM queue
+ */
+#define EC_CMD_TYPEC_VDM_RESPONSE 0x013C
+
+struct ec_params_typec_vdm_response {
+	uint8_t port;
+} __ec_align1;
+
+struct ec_response_typec_vdm_response {
+	/* Number of 32-bit fields filled in */
+	uint8_t vdm_data_objects;
+	/* Partner to address - see enum typec_partner_type */
+	uint8_t partner_type;
+	/* enum ec_status describing VDM response */
+	uint16_t vdm_response_err;
+	/* VDM data, including VDM header */
+	uint32_t vdm_response[VDO_MAX_SIZE];
+	/* Number of 32-bit Attention fields filled in */
+	uint8_t vdm_attention_objects;
+	/* Number of remaining messages to consume */
+	uint8_t vdm_attention_left;
+	/* Reserved */
+	uint16_t reserved1;
+	/* VDM:Attention contents */
+	uint32_t vdm_attention[2];
+} __ec_align1;
+
+#undef VDO_MAX_SIZE
 
 /*****************************************************************************/
 /* The command range 0x200-0x2FF is reserved for Rotor. */

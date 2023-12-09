@@ -46,7 +46,7 @@ static const struct software_node ssam_node_hub_kip = {
 
 /* Base device hub (devices attached to Surface Book 3 base). */
 static const struct software_node ssam_node_hub_base = {
-	.name = "ssam:00:00:02:11:00",
+	.name = "ssam:00:00:01:11:00",
 	.parent = &ssam_node_root,
 };
 
@@ -305,7 +305,7 @@ static const struct software_node *ssam_node_group_sp9[] = {
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
 	&ssam_node_tmp_pprof,
-	/* TODO: Tablet mode switch (via POS subsystem) */
+	&ssam_node_pos_tablet_switch,
 	&ssam_node_hid_kip_keyboard,
 	&ssam_node_hid_kip_penstash,
 	&ssam_node_hid_kip_touchpad,
@@ -418,19 +418,18 @@ static int ssam_platform_hub_probe(struct platform_device *pdev)
 	return status;
 }
 
-static int ssam_platform_hub_remove(struct platform_device *pdev)
+static void ssam_platform_hub_remove(struct platform_device *pdev)
 {
 	const struct software_node **nodes = platform_get_drvdata(pdev);
 
 	ssam_remove_clients(&pdev->dev);
 	set_secondary_fwnode(&pdev->dev, NULL);
 	software_node_unregister_node_group(nodes);
-	return 0;
 }
 
 static struct platform_driver ssam_platform_hub_driver = {
 	.probe = ssam_platform_hub_probe,
-	.remove = ssam_platform_hub_remove,
+	.remove_new = ssam_platform_hub_remove,
 	.driver = {
 		.name = "surface_aggregator_platform_hub",
 		.acpi_match_table = ssam_platform_hub_match,

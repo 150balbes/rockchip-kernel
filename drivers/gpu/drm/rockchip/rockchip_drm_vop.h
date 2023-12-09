@@ -7,8 +7,6 @@
 #ifndef _ROCKCHIP_DRM_VOP_H
 #define _ROCKCHIP_DRM_VOP_H
 
-#include <drm/drm_plane.h>
-
 /*
  * major: IP major version, used for IP structure
  * minor: big feature change under same structure
@@ -16,6 +14,16 @@
 #define VOP_VERSION(major, minor)	((major) << 8 | (minor))
 #define VOP_MAJOR(version)		((version) >> 8)
 #define VOP_MINOR(version)		((version) & 0xff)
+
+//[CC:] vop2 related changes
+#define VOP_VERSION_RK3568      VOP_VERSION(0x40, 0x15)
+#define VOP_VERSION_RK3588      VOP_VERSION(0x40, 0x17)
+
+#define ROCKCHIP_OUTPUT_DUAL_CHANNEL_LEFT_RIGHT_MODE    BIT(0)
+#define ROCKCHIP_OUTPUT_DUAL_CHANNEL_ODD_EVEN_MODE      BIT(1)
+#define ROCKCHIP_OUTPUT_DATA_SWAP                       BIT(2)
+/* MIPI DSI DataStream(cmd) mode on rk3588 */
+#define ROCKCHIP_OUTPUT_MIPI_DS_MODE                    BIT(3)
 
 #define NUM_YUV2YUV_COEFFICIENTS 12
 
@@ -38,22 +46,22 @@
 enum vop_data_format {
 	VOP_FMT_ARGB8888 = 0,
 	VOP_FMT_RGB888,
-	VOP_FMT_RGB565 = 2,
-	VOP_FMT_YUYV = 2,
+	VOP_FMT_RGB565,
 	VOP_FMT_YUV420SP = 4,
 	VOP_FMT_YUV422SP,
 	VOP_FMT_YUV444SP,
 };
 
+struct vop_rect {
+	int width;
+	int height;
+};
+
 struct vop_reg {
 	uint32_t mask;
-	uint32_t offset:17;
-	uint32_t shift:5;
-	uint32_t begin_minor:4;
-	uint32_t end_minor:4;
-	uint32_t reserved:2;
-	uint32_t major:3;
-	uint32_t write_mask:1;
+	uint16_t offset;
+	uint8_t shift;
+	bool write_mask;
 	bool relaxed;
 };
 
@@ -140,70 +148,6 @@ struct vop_intr {
 	struct vop_reg enable;
 	struct vop_reg clear;
 	struct vop_reg status;
-};
-
-struct vop_hdr_table {
-	const uint32_t hdr2sdr_eetf_oetf_y0_offset;
-	const uint32_t hdr2sdr_eetf_oetf_y1_offset;
-	const uint32_t *hdr2sdr_eetf_yn;
-	const uint32_t *hdr2sdr_bt1886oetf_yn;
-	const uint32_t hdr2sdr_sat_y0_offset;
-	const uint32_t hdr2sdr_sat_y1_offset;
-	const uint32_t *hdr2sdr_sat_yn;
-
-	const uint32_t hdr2sdr_src_range_min;
-	const uint32_t hdr2sdr_src_range_max;
-	const uint32_t hdr2sdr_normfaceetf;
-	const uint32_t hdr2sdr_dst_range_min;
-	const uint32_t hdr2sdr_dst_range_max;
-	const uint32_t hdr2sdr_normfacgamma;
-
-	const uint32_t sdr2hdr_eotf_oetf_y0_offset;
-	const uint32_t sdr2hdr_eotf_oetf_y1_offset;
-	const uint32_t *sdr2hdr_bt1886eotf_yn_for_hlg_hdr;
-	const uint32_t *sdr2hdr_bt1886eotf_yn_for_bt2020;
-	const uint32_t *sdr2hdr_bt1886eotf_yn_for_hdr;
-	const uint32_t *sdr2hdr_st2084oetf_yn_for_hlg_hdr;
-	const uint32_t *sdr2hdr_st2084oetf_yn_for_bt2020;
-	const uint32_t *sdr2hdr_st2084oetf_yn_for_hdr;
-	const uint32_t sdr2hdr_oetf_dx_dxpow1_offset;
-	const uint32_t *sdr2hdr_st2084oetf_dxn_pow2;
-	const uint32_t *sdr2hdr_st2084oetf_dxn;
-	const uint32_t sdr2hdr_oetf_xn1_offset;
-	const uint32_t *sdr2hdr_st2084oetf_xn;
-};
-
-enum {
-	VOP_CSC_Y2R_BT601,
-	VOP_CSC_Y2R_BT709,
-	VOP_CSC_Y2R_BT2020,
-	VOP_CSC_R2Y_BT601,
-	VOP_CSC_R2Y_BT709,
-	VOP_CSC_R2Y_BT2020,
-	VOP_CSC_R2R_BT2020_TO_BT709,
-	VOP_CSC_R2R_BT709_TO_2020,
-};
-
-enum _vop_overlay_mode {
-	VOP_RGB_DOMAIN,
-	VOP_YUV_DOMAIN
-};
-
-enum _vop_sdr2hdr_func {
-	SDR2HDR_FOR_BT2020,
-	SDR2HDR_FOR_HDR,
-	SDR2HDR_FOR_HLG_HDR,
-};
-
-enum _vop_rgb2rgb_conv_mode {
-	BT709_TO_BT2020,
-	BT2020_TO_BT709,
-};
-
-enum _MCU_IOCTL {
-	MCU_WRCMD = 0,
-	MCU_WRDATA,
-	MCU_SETBYPASS,
 };
 
 struct vop_scl_extension {
@@ -297,6 +241,7 @@ struct vop_data {
 	const struct vop_win_data *win;
 	unsigned int win_size;
 	unsigned int lut_size;
+	struct vop_rect max_output;
 
 #define VOP_FEATURE_OUTPUT_RGB10	BIT(0)
 #define VOP_FEATURE_INTERNAL_RGB	BIT(1)
@@ -304,36 +249,13 @@ struct vop_data {
 };
 
 /* interrupt define */
-#define DSP_HOLD_VALID_INTR		BIT(0)
-#define FS_INTR				BIT(1)
-#define LINE_FLAG_INTR			BIT(2)
-#define BUS_ERROR_INTR			BIT(3)
-#define FS_NEW_INTR			BIT(4)
-#define ADDR_SAME_INTR			BIT(5)
-#define LINE_FLAG1_INTR			BIT(6)
-#define WIN0_EMPTY_INTR			BIT(7)
-#define WIN1_EMPTY_INTR			BIT(8)
-#define WIN2_EMPTY_INTR			BIT(9)
-#define WIN3_EMPTY_INTR			BIT(10)
-#define HWC_EMPTY_INTR			BIT(11)
-#define POST_BUF_EMPTY_INTR		BIT(12)
-#define PWM_GEN_INTR			BIT(13)
-#define DMA_FINISH_INTR			BIT(14)
-#define FS_FIELD_INTR			BIT(15)
-#define FE_INTR				BIT(16)
-#define WB_UV_FIFO_FULL_INTR		BIT(17)
-#define WB_YRGB_FIFO_FULL_INTR		BIT(18)
-#define WB_COMPLETE_INTR		BIT(19)
+#define DSP_HOLD_VALID_INTR		(1 << 0)
+#define FS_INTR				(1 << 1)
+#define LINE_FLAG_INTR			(1 << 2)
+#define BUS_ERROR_INTR			(1 << 3)
 
 #define INTR_MASK			(DSP_HOLD_VALID_INTR | FS_INTR | \
-					 LINE_FLAG_INTR | BUS_ERROR_INTR | \
-					 FS_NEW_INTR | LINE_FLAG1_INTR | \
-					 WIN0_EMPTY_INTR | WIN1_EMPTY_INTR | \
-					 WIN2_EMPTY_INTR | WIN3_EMPTY_INTR | \
-					 HWC_EMPTY_INTR | \
-					 POST_BUF_EMPTY_INTR | \
-					 DMA_FINISH_INTR | FS_FIELD_INTR | \
-					 FE_INTR)
+					 LINE_FLAG_INTR | BUS_ERROR_INTR)
 
 #define DSP_HOLD_VALID_INTR_EN(x)	((x) << 4)
 #define FS_INTR_EN(x)			((x) << 5)
@@ -368,16 +290,16 @@ struct vop_data {
 /*
  * display output interface supported by rockchip lcdc
  */
-#define ROCKCHIP_OUT_MODE_P888		0
-#define ROCKCHIP_OUT_MODE_BT1120	0
-#define ROCKCHIP_OUT_MODE_P666		1
-#define ROCKCHIP_OUT_MODE_P565		2
-#define ROCKCHIP_OUT_MODE_BT656		5
-#define ROCKCHIP_OUT_MODE_S888		8
-#define ROCKCHIP_OUT_MODE_S888_DUMMY	12
-#define ROCKCHIP_OUT_MODE_YUV420	14
+#define ROCKCHIP_OUT_MODE_P888          0
+#define ROCKCHIP_OUT_MODE_BT1120        0
+#define ROCKCHIP_OUT_MODE_P666          1
+#define ROCKCHIP_OUT_MODE_P565          2
+#define ROCKCHIP_OUT_MODE_BT656         5
+#define ROCKCHIP_OUT_MODE_S888          8
+#define ROCKCHIP_OUT_MODE_S888_DUMMY    12
+#define ROCKCHIP_OUT_MODE_YUV420        14
 /* for use special outface */
-#define ROCKCHIP_OUT_MODE_AAAA		15
+#define ROCKCHIP_OUT_MODE_AAAA          15
 
 /* output flags */
 #define ROCKCHIP_OUTPUT_DSI_DUAL	BIT(0)
@@ -524,11 +446,6 @@ static inline int scl_vop_cal_lb_mode(int width, bool is_yuv)
 	}
 
 	return lb_mode;
-}
-
-static inline int interpolate(int x1, int y1, int x2, int y2, int x)
-{
-	return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
 }
 
 extern const struct component_ops vop_component_ops;

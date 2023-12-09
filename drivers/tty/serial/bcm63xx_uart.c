@@ -201,7 +201,7 @@ static void bcm_uart_break_ctl(struct uart_port *port, int ctl)
 	unsigned long flags;
 	unsigned int val;
 
-	spin_lock_irqsave(&port->lock, flags);
+	uart_port_lock_irqsave(port, &flags);
 
 	val = bcm_uart_readl(port, UART_CTL_REG);
 	if (ctl)
@@ -210,7 +210,7 @@ static void bcm_uart_break_ctl(struct uart_port *port, int ctl)
 		val &= ~UART_CTL_XMITBRK_MASK;
 	bcm_uart_writel(port, val, UART_CTL_REG);
 
-	spin_unlock_irqrestore(&port->lock, flags);
+	uart_port_unlock_irqrestore(port, flags);
 }
 
 /*
@@ -332,7 +332,7 @@ static irqreturn_t bcm_uart_interrupt(int irq, void *dev_id)
 	unsigned int irqstat;
 
 	port = dev_id;
-	spin_lock(&port->lock);
+	uart_port_lock(port);
 
 	irqstat = bcm_uart_readl(port, UART_IR_REG);
 	if (irqstat & UART_RX_INT_STAT)
@@ -353,7 +353,7 @@ static irqreturn_t bcm_uart_interrupt(int irq, void *dev_id)
 					       estat & UART_EXTINP_DCD_MASK);
 	}
 
-	spin_unlock(&port->lock);
+	uart_port_unlock(port);
 	return IRQ_HANDLED;
 }
 
@@ -451,9 +451,9 @@ static void bcm_uart_shutdown(struct uart_port *port)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&port->lock, flags);
+	uart_port_lock_irqsave(port, &flags);
 	bcm_uart_writel(port, 0, UART_IR_REG);
-	spin_unlock_irqrestore(&port->lock, flags);
+	uart_port_unlock_irqrestore(port, flags);
 
 	bcm_uart_disable(port);
 	bcm_uart_flush(port);
@@ -470,7 +470,7 @@ static void bcm_uart_set_termios(struct uart_port *port, struct ktermios *new,
 	unsigned long flags;
 	int tries;
 
-	spin_lock_irqsave(&port->lock, flags);
+	uart_port_lock_irqsave(port, &flags);
 
 	/* Drain the hot tub fully before we power it off for the winter. */
 	for (tries = 3; !bcm_uart_tx_empty(port) && tries; tries--)
@@ -546,7 +546,7 @@ static void bcm_uart_set_termios(struct uart_port *port, struct ktermios *new,
 
 	uart_update_timeout(port, new->c_cflag, baud);
 	bcm_uart_enable(port);
-	spin_unlock_irqrestore(&port->lock, flags);
+	uart_port_unlock_irqrestore(port, flags);
 }
 
 /*
@@ -596,6 +596,40 @@ static int bcm_uart_verify_port(struct uart_port *port,
 	return 0;
 }
 
+#ifdef CONFIG_CONSOLE_POLL
+/*
+ * return true when outstanding tx equals fifo size
+ */
+static bool bcm_uart_tx_full(struct uart_port *port)
+{
+	unsigned int val;
+
+	val = bcm_uart_readl(port, UART_MCTL_REG);
+	val = (val & UART_MCTL_TXFIFOFILL_MASK) >> UART_MCTL_TXFIFOFILL_SHIFT;
+	return !(port->fifosize - val);
+}
+
+static int bcm_uart_poll_get_char(struct uart_port *port)
+{
+	unsigned int iestat;
+
+	iestat = bcm_uart_readl(port, UART_IR_REG);
+	if (!(iestat & UART_IR_STAT(UART_IR_RXNOTEMPTY)))
+		return NO_POLL_CHAR;
+
+	return bcm_uart_readl(port, UART_FIFO_REG);
+}
+
+static void bcm_uart_poll_put_char(struct uart_port *port, unsigned char c)
+{
+	while (bcm_uart_tx_full(port)) {
+		cpu_relax();
+	}
+
+	bcm_uart_writel(port, c, UART_FIFO_REG);
+}
+#endif
+
 /* serial core callbacks */
 static const struct uart_ops bcm_uart_ops = {
 	.tx_empty	= bcm_uart_tx_empty,
@@ -614,6 +648,10 @@ static const struct uart_ops bcm_uart_ops = {
 	.request_port	= bcm_uart_request_port,
 	.config_port	= bcm_uart_config_port,
 	.verify_port	= bcm_uart_verify_port,
+#ifdef CONFIG_CONSOLE_POLL
+	.poll_get_char  = bcm_uart_poll_get_char,
+	.poll_put_char  = bcm_uart_poll_put_char,
+#endif
 };
 
 
@@ -674,9 +712,9 @@ static void bcm_console_write(struct console *co, const char *s,
 		/* bcm_uart_interrupt() already took the lock */
 		locked = 0;
 	} else if (oops_in_progress) {
-		locked = spin_trylock(&port->lock);
+		locked = uart_port_trylock(port);
 	} else {
-		spin_lock(&port->lock);
+		uart_port_lock(port);
 		locked = 1;
 	}
 
@@ -687,7 +725,7 @@ static void bcm_console_write(struct console *co, const char *s,
 	wait_for_xmitr(port);
 
 	if (locked)
-		spin_unlock(&port->lock);
+		uart_port_unlock(port);
 	local_irq_restore(flags);
 }
 
@@ -794,14 +832,10 @@ static int bcm_uart_probe(struct platform_device *pdev)
 		return -EBUSY;
 	memset(port, 0, sizeof(*port));
 
-	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res_mem)
-		return -ENODEV;
-
-	port->mapbase = res_mem->start;
-	port->membase = devm_ioremap_resource(&pdev->dev, res_mem);
+	port->membase = devm_platform_get_and_ioremap_resource(pdev, 0, &res_mem);
 	if (IS_ERR(port->membase))
 		return PTR_ERR(port->membase);
+	port->mapbase = res_mem->start;
 
 	ret = platform_get_irq(pdev, 0);
 	if (ret < 0)

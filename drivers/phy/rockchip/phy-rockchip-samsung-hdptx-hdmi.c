@@ -22,7 +22,6 @@
 #include <linux/platform_device.h>
 #include <linux/rational.h>
 #include <linux/regmap.h>
-#include <linux/soc/rockchip/cpu.h>
 #include <linux/slab.h>
 
 #define UPDATE(x, h, l)		(((x) << (l)) & GENMASK((h), (l)))

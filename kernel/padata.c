@@ -202,7 +202,7 @@ int padata_do_parallel(struct padata_shell *ps,
 		*cb_cpu = cpu;
 	}
 
-	err =  -EBUSY;
+	err = -EBUSY;
 	if ((pinst->flags & PADATA_RESET))
 		goto out;
 
@@ -491,7 +491,7 @@ void __init padata_do_multithreaded(struct padata_mt_job *job)
 		return;
 
 	/* Ensure at least one thread when size < min_chunk. */
-	nworks = max(job->size / job->min_chunk, 1ul);
+	nworks = max(job->size / max(job->min_chunk, job->align), 1ul);
 	nworks = min(nworks, job->max_threads);
 
 	if (nworks == 1) {
@@ -967,7 +967,7 @@ static const struct sysfs_ops padata_sysfs_ops = {
 	.store = padata_sysfs_store,
 };
 
-static struct kobj_type padata_attr_type = {
+static const struct kobj_type padata_attr_type = {
 	.sysfs_ops = &padata_sysfs_ops,
 	.default_groups = padata_default_groups,
 	.release = padata_sysfs_release,
@@ -1102,12 +1102,16 @@ EXPORT_SYMBOL(padata_alloc_shell);
  */
 void padata_free_shell(struct padata_shell *ps)
 {
+	struct parallel_data *pd;
+
 	if (!ps)
 		return;
 
 	mutex_lock(&ps->pinst->lock);
 	list_del(&ps->list);
-	padata_free_pd(rcu_dereference_protected(ps->pd, 1));
+	pd = rcu_dereference_protected(ps->pd, 1);
+	if (refcount_dec_and_test(&pd->refcnt))
+		padata_free_pd(pd);
 	mutex_unlock(&ps->pinst->lock);
 
 	kfree(ps);

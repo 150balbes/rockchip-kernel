@@ -24,7 +24,6 @@
 #include <sound/initval.h>
 #include <sound/tlv.h>
 #include <sound/jack.h>
-#include <linux/clk.h>
 
 #include "rl6231.h"
 #include "rt5651.h"
@@ -1512,20 +1511,12 @@ static int rt5651_set_dai_pll(struct snd_soc_dai *dai, int pll_id, int source,
 static int rt5651_set_bias_level(struct snd_soc_component *component,
 			enum snd_soc_bias_level level)
 {
-	struct rt5651_priv *rt5651 = snd_soc_component_get_drvdata(component);
 	switch (level) {
 	case SND_SOC_BIAS_PREPARE:
 		if (SND_SOC_BIAS_STANDBY == snd_soc_component_get_bias_level(component)) {
 			if (snd_soc_component_read(component, RT5651_PLL_MODE_1) & 0x9200)
 				snd_soc_component_update_bits(component, RT5651_D_MISC,
 						    0xc00, 0xc00);
-		}
-		if (!IS_ERR(rt5651->mclk)){
-			if (snd_soc_component_get_bias_level(component) == SND_SOC_BIAS_ON) {
-				clk_disable_unprepare(rt5651->mclk);
-			} else {
-				clk_prepare_enable(rt5651->mclk);
-			}
 		}
 		break;
 	case SND_SOC_BIAS_STANDBY:
@@ -2068,13 +2059,6 @@ static int rt5651_probe(struct snd_soc_component *component)
 {
 	struct rt5651_priv *rt5651 = snd_soc_component_get_drvdata(component);
 
-	/* Check if MCLK provided */
-	rt5651->mclk = devm_clk_get(component->dev, "mclk");
-	if (PTR_ERR(rt5651->mclk) == -EPROBE_DEFER){
-		dev_err(component->dev, "unable to get mclk\n");
-		return -EPROBE_DEFER;
-	}
-
 	rt5651->component = component;
 
 	snd_soc_component_update_bits(component, RT5651_PWR_ANLG1,
@@ -2188,7 +2172,7 @@ static const struct regmap_config rt5651_regmap = {
 	.volatile_reg = rt5651_volatile_register,
 	.readable_reg = rt5651_readable_register,
 
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.reg_defaults = rt5651_reg,
 	.num_reg_defaults = ARRAY_SIZE(rt5651_reg),
 	.ranges = rt5651_ranges,
@@ -2295,7 +2279,7 @@ static struct i2c_driver rt5651_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(rt5651_acpi_match),
 		.of_match_table = of_match_ptr(rt5651_of_match),
 	},
-	.probe_new = rt5651_i2c_probe,
+	.probe = rt5651_i2c_probe,
 	.id_table = rt5651_i2c_id,
 };
 module_i2c_driver(rt5651_i2c_driver);

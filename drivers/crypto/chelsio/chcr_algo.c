@@ -220,7 +220,7 @@ static inline int chcr_handle_aead_resp(struct aead_request *req,
 		reqctx->verify = VERIFY_HW;
 	}
 	chcr_dec_wrcount(dev);
-	req->base.complete(&req->base, err);
+	aead_request_complete(req, err);
 
 	return err;
 }
@@ -1235,7 +1235,7 @@ complete:
 		complete(&ctx->cbc_aes_aio_done);
 	}
 	chcr_dec_wrcount(dev);
-	req->base.complete(&req->base, err);
+	skcipher_request_complete(req, err);
 	return err;
 }
 
@@ -1920,6 +1920,9 @@ err:
 	return error;
 }
 
+static int chcr_hmac_init(struct ahash_request *areq);
+static int chcr_sha_init(struct ahash_request *areq);
+
 static int chcr_ahash_digest(struct ahash_request *req)
 {
 	struct chcr_ahash_req_ctx *req_ctx = ahash_request_ctx(req);
@@ -1938,7 +1941,11 @@ static int chcr_ahash_digest(struct ahash_request *req)
 	req_ctx->rxqidx = cpu % ctx->nrxq;
 	put_cpu();
 
-	rtfm->init(req);
+	if (is_hmac(crypto_ahash_tfm(rtfm)))
+		chcr_hmac_init(req);
+	else
+		chcr_sha_init(req);
+
 	bs = crypto_tfm_alg_blocksize(crypto_ahash_tfm(rtfm));
 	error = chcr_inc_wrcount(dev);
 	if (error)
@@ -2132,7 +2139,7 @@ unmap:
 
 out:
 	chcr_dec_wrcount(dev);
-	req->base.complete(&req->base, err);
+	ahash_request_complete(req, err);
 }
 
 /*
@@ -2216,7 +2223,8 @@ static int chcr_ahash_setkey(struct crypto_ahash *tfm, const u8 *key,
 		memcpy(hmacctx->ipad, key, keylen);
 	}
 	memset(hmacctx->ipad + keylen, 0, bs - keylen);
-	memcpy(hmacctx->opad, hmacctx->ipad, bs);
+	unsafe_memcpy(hmacctx->opad, hmacctx->ipad, bs,
+		      "fortified memcpy causes -Wrestrict warning");
 
 	for (i = 0; i < bs / sizeof(int); i++) {
 		*((unsigned int *)(&hmacctx->ipad) + i) ^= IPAD_DATA;

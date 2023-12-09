@@ -17,7 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <sound/core.h>
@@ -29,7 +29,6 @@
 #include <sound/initval.h>
 #include <sound/tlv.h>
 #include <sound/cs35l35.h>
-#include <linux/of_irq.h>
 #include <linux/completion.h>
 
 #include "cs35l35.h"
@@ -1099,7 +1098,7 @@ static struct regmap_config cs35l35_regmap = {
 	.volatile_reg = cs35l35_volatile_register,
 	.readable_reg = cs35l35_readable_register,
 	.precious_reg = cs35l35_precious_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.use_single_read = true,
 	.use_single_write = true,
 };
@@ -1654,7 +1653,7 @@ static struct i2c_driver cs35l35_i2c_driver = {
 		.of_match_table = cs35l35_of_match,
 	},
 	.id_table = cs35l35_id,
-	.probe_new = cs35l35_i2c_probe,
+	.probe = cs35l35_i2c_probe,
 	.remove = cs35l35_i2c_remove,
 };
 

@@ -12,7 +12,7 @@
 #include <linux/clk.h>
 #include <linux/pm_runtime.h>
 #include <linux/pwm.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 
 /* ECAP registers and bits definitions */
 #define CAP1			0x08
@@ -205,7 +205,6 @@ static int ecap_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static const struct pwm_ops ecap_pwm_ops = {
 	.apply = ecap_pwm_apply,
-	.owner = THIS_MODULE,
 };
 
 static const struct of_device_id ecap_of_match[] = {
@@ -265,11 +264,9 @@ static int ecap_pwm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ecap_pwm_remove(struct platform_device *pdev)
+static void ecap_pwm_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -326,7 +323,7 @@ static struct platform_driver ecap_pwm_driver = {
 		.pm = &ecap_pwm_pm_ops,
 	},
 	.probe = ecap_pwm_probe,
-	.remove = ecap_pwm_remove,
+	.remove_new = ecap_pwm_remove,
 };
 module_platform_driver(ecap_pwm_driver);
 

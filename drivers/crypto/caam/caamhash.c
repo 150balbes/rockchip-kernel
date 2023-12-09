@@ -3,7 +3,7 @@
  * caam - Freescale FSL CAAM support for ahash functions of crypto API
  *
  * Copyright 2011 Freescale Semiconductor, Inc.
- * Copyright 2018-2019 NXP
+ * Copyright 2018-2019, 2023 NXP
  *
  * Based on caamalg.c crypto API driver.
  *
@@ -65,7 +65,13 @@
 #include "sg_sw_sec4.h"
 #include "key_gen.h"
 #include "caamhash_desc.h"
-#include <crypto/engine.h>
+#include <crypto/internal/engine.h>
+#include <crypto/internal/hash.h>
+#include <linux/dma-mapping.h>
+#include <linux/err.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 
 #define CAAM_CRA_PRIORITY		3000
 
@@ -87,7 +93,6 @@ static struct list_head hash_list;
 
 /* ahash per-session context */
 struct caam_hash_ctx {
-	struct crypto_engine_ctx enginectx;
 	u32 sh_desc_update[DESC_HASH_MAX_USED_LEN] ____cacheline_aligned;
 	u32 sh_desc_update_first[DESC_HASH_MAX_USED_LEN] ____cacheline_aligned;
 	u32 sh_desc_fin[DESC_HASH_MAX_USED_LEN] ____cacheline_aligned;
@@ -365,11 +370,9 @@ static int hash_digest_key(struct caam_hash_ctx *ctx, u32 *keylen, u8 *key,
 	dma_addr_t key_dma;
 	int ret;
 
-	desc = kmalloc(CAAM_CMD_SZ * 8 + CAAM_PTR_SZ * 2, GFP_KERNEL | GFP_DMA);
-	if (!desc) {
-		dev_err(jrdev, "unable to allocate key input memory\n");
+	desc = kmalloc(CAAM_CMD_SZ * 8 + CAAM_PTR_SZ * 2, GFP_KERNEL);
+	if (!desc)
 		return -ENOMEM;
-	}
 
 	init_job_desc(desc, 0);
 
@@ -432,7 +435,13 @@ static int ahash_setkey(struct crypto_ahash *ahash,
 	dev_dbg(jrdev, "keylen %d\n", keylen);
 
 	if (keylen > blocksize) {
-		hashed_key = kmemdup(key, keylen, GFP_KERNEL | GFP_DMA);
+		unsigned int aligned_len =
+			ALIGN(keylen, dma_get_cache_alignment());
+
+		if (aligned_len < keylen)
+			return -EOVERFLOW;
+
+		hashed_key = kmemdup(key, keylen, GFP_KERNEL);
 		if (!hashed_key)
 			return -ENOMEM;
 		ret = hash_digest_key(ctx, &keylen, hashed_key, digestsize);
@@ -606,7 +615,7 @@ static inline void ahash_done_cpy(struct device *jrdev, u32 *desc, u32 err,
 	 * by CAAM, not crypto engine.
 	 */
 	if (!has_bklog)
-		req->base.complete(&req->base, ecode);
+		ahash_request_complete(req, ecode);
 	else
 		crypto_finalize_hash_request(jrp->engine, req, ecode);
 }
@@ -668,7 +677,7 @@ static inline void ahash_done_switch(struct device *jrdev, u32 *desc, u32 err,
 	 * by CAAM, not crypto engine.
 	 */
 	if (!has_bklog)
-		req->base.complete(&req->base, ecode);
+		ahash_request_complete(req, ecode);
 	else
 		crypto_finalize_hash_request(jrp->engine, req, ecode);
 
@@ -694,19 +703,14 @@ static struct ahash_edesc *ahash_edesc_alloc(struct ahash_request *req,
 					     int sg_num, u32 *sh_desc,
 					     dma_addr_t sh_desc_dma)
 {
-	struct crypto_ahash *ahash = crypto_ahash_reqtfm(req);
-	struct caam_hash_ctx *ctx = crypto_ahash_ctx_dma(ahash);
 	struct caam_hash_state *state = ahash_request_ctx_dma(req);
 	gfp_t flags = (req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP) ?
 		       GFP_KERNEL : GFP_ATOMIC;
 	struct ahash_edesc *edesc;
-	unsigned int sg_size = sg_num * sizeof(struct sec4_sg_entry);
 
-	edesc = kzalloc(sizeof(*edesc) + sg_size, GFP_DMA | flags);
-	if (!edesc) {
-		dev_err(ctx->jrdev, "could not allocate extended descriptor\n");
+	edesc = kzalloc(struct_size(edesc, sec4_sg, sg_num), flags);
+	if (!edesc)
 		return NULL;
-	}
 
 	state->edesc = edesc;
 
@@ -1749,7 +1753,7 @@ static struct caam_hash_template driver_hash[] = {
 struct caam_hash_alg {
 	struct list_head entry;
 	int alg_type;
-	struct ahash_alg ahash_alg;
+	struct ahash_engine_alg ahash_alg;
 };
 
 static int caam_hash_cra_init(struct crypto_tfm *tfm)
@@ -1761,7 +1765,7 @@ static int caam_hash_cra_init(struct crypto_tfm *tfm)
 	struct ahash_alg *alg =
 		 container_of(halg, struct ahash_alg, halg);
 	struct caam_hash_alg *caam_hash =
-		 container_of(alg, struct caam_hash_alg, ahash_alg);
+		 container_of(alg, struct caam_hash_alg, ahash_alg.base);
 	struct caam_hash_ctx *ctx = crypto_ahash_ctx_dma(ahash);
 	/* Sizes for MDHA running digests: MD5, SHA1, 224, 256, 384, 512 */
 	static const u8 runninglen[] = { HASH_MSG_LEN + MD5_DIGEST_SIZE,
@@ -1852,8 +1856,6 @@ static int caam_hash_cra_init(struct crypto_tfm *tfm)
 						      sh_desc_digest) -
 					sh_desc_update_offset;
 
-	ctx->enginectx.op.do_one_request = ahash_do_one_req;
-
 	crypto_ahash_set_reqsize_dma(ahash, sizeof(struct caam_hash_state));
 
 	/*
@@ -1886,7 +1888,7 @@ void caam_algapi_hash_exit(void)
 		return;
 
 	list_for_each_entry_safe(t_alg, n, &hash_list, entry) {
-		crypto_unregister_ahash(&t_alg->ahash_alg);
+		crypto_engine_unregister_ahash(&t_alg->ahash_alg);
 		list_del(&t_alg->entry);
 		kfree(t_alg);
 	}
@@ -1901,13 +1903,11 @@ caam_hash_alloc(struct caam_hash_template *template,
 	struct crypto_alg *alg;
 
 	t_alg = kzalloc(sizeof(*t_alg), GFP_KERNEL);
-	if (!t_alg) {
-		pr_err("failed to allocate t_alg\n");
+	if (!t_alg)
 		return ERR_PTR(-ENOMEM);
-	}
 
-	t_alg->ahash_alg = template->template_ahash;
-	halg = &t_alg->ahash_alg;
+	t_alg->ahash_alg.base = template->template_ahash;
+	halg = &t_alg->ahash_alg.base;
 	alg = &halg->halg.base;
 
 	if (keyed) {
@@ -1920,7 +1920,7 @@ caam_hash_alloc(struct caam_hash_template *template,
 			 template->name);
 		snprintf(alg->cra_driver_name, CRYPTO_MAX_ALG_NAME, "%s",
 			 template->driver_name);
-		t_alg->ahash_alg.setkey = NULL;
+		halg->setkey = NULL;
 	}
 	alg->cra_module = THIS_MODULE;
 	alg->cra_init = caam_hash_cra_init;
@@ -1932,6 +1932,7 @@ caam_hash_alloc(struct caam_hash_template *template,
 	alg->cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_ALLOCATES_MEMORY;
 
 	t_alg->alg_type = template->alg_type;
+	t_alg->ahash_alg.op.do_one_request = ahash_do_one_req;
 
 	return t_alg;
 }
@@ -1948,12 +1949,14 @@ int caam_algapi_hash_init(struct device *ctrldev)
 	 * presence and attributes of MD block.
 	 */
 	if (priv->era < 10) {
-		md_vid = (rd_reg32(&priv->ctrl->perfmon.cha_id_ls) &
+		struct caam_perfmon __iomem *perfmon = &priv->jr[0]->perfmon;
+
+		md_vid = (rd_reg32(&perfmon->cha_id_ls) &
 			  CHA_ID_LS_MD_MASK) >> CHA_ID_LS_MD_SHIFT;
-		md_inst = (rd_reg32(&priv->ctrl->perfmon.cha_num_ls) &
+		md_inst = (rd_reg32(&perfmon->cha_num_ls) &
 			   CHA_ID_LS_MD_MASK) >> CHA_ID_LS_MD_SHIFT;
 	} else {
-		u32 mdha = rd_reg32(&priv->ctrl->vreg.mdha);
+		u32 mdha = rd_reg32(&priv->jr[0]->vreg.mdha);
 
 		md_vid = (mdha & CHA_VER_VID_MASK) >> CHA_VER_VID_SHIFT;
 		md_inst = mdha & CHA_VER_NUM_MASK;
@@ -1991,10 +1994,10 @@ int caam_algapi_hash_init(struct device *ctrldev)
 			continue;
 		}
 
-		err = crypto_register_ahash(&t_alg->ahash_alg);
+		err = crypto_engine_register_ahash(&t_alg->ahash_alg);
 		if (err) {
 			pr_warn("%s alg registration failed: %d\n",
-				t_alg->ahash_alg.halg.base.cra_driver_name,
+				t_alg->ahash_alg.base.halg.base.cra_driver_name,
 				err);
 			kfree(t_alg);
 		} else
@@ -2011,10 +2014,10 @@ int caam_algapi_hash_init(struct device *ctrldev)
 			continue;
 		}
 
-		err = crypto_register_ahash(&t_alg->ahash_alg);
+		err = crypto_engine_register_ahash(&t_alg->ahash_alg);
 		if (err) {
 			pr_warn("%s alg registration failed: %d\n",
-				t_alg->ahash_alg.halg.base.cra_driver_name,
+				t_alg->ahash_alg.base.halg.base.cra_driver_name,
 				err);
 			kfree(t_alg);
 		} else

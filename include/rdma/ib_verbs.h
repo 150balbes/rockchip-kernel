@@ -561,6 +561,7 @@ enum ib_port_speed {
 	IB_SPEED_EDR	= 32,
 	IB_SPEED_HDR	= 64,
 	IB_SPEED_NDR	= 128,
+	IB_SPEED_XDR	= 256,
 };
 
 enum ib_stat_flag {
@@ -607,7 +608,7 @@ struct rdma_hw_stats {
 	const struct rdma_stat_desc *descs;
 	unsigned long	*is_disabled;
 	int		num_counters;
-	u64		value[];
+	u64		value[] __counted_by(num_counters);
 };
 
 #define RDMA_HW_STATS_DEFAULT_LIFESPAN 10
@@ -840,6 +841,7 @@ enum ib_rate {
 	IB_RATE_50_GBPS  = 20,
 	IB_RATE_400_GBPS = 21,
 	IB_RATE_600_GBPS = 22,
+	IB_RATE_800_GBPS = 23,
 };
 
 /**
@@ -1094,7 +1096,7 @@ struct ib_qp_cap {
 
 	/*
 	 * Maximum number of rdma_rw_ctx structures in flight at a time.
-	 * ib_create_qp() will calculate the right amount of neededed WRs
+	 * ib_create_qp() will calculate the right amount of needed WRs
 	 * and MRs based on this.
 	 */
 	u32	max_rdma_ctxs;
@@ -1168,7 +1170,7 @@ enum ib_qp_create_flags {
  */
 
 struct ib_qp_init_attr {
-	/* Consumer's event_handler callback must not block */
+	/* This callback occurs in workqueue context */
 	void                  (*event_handler)(struct ib_event *, void *);
 
 	void		       *qp_context;
@@ -2608,6 +2610,8 @@ struct ib_device_ops {
 	int (*fill_res_qp_entry)(struct sk_buff *msg, struct ib_qp *ibqp);
 	int (*fill_res_qp_entry_raw)(struct sk_buff *msg, struct ib_qp *ibqp);
 	int (*fill_res_cm_id_entry)(struct sk_buff *msg, struct rdma_cm_id *id);
+	int (*fill_res_srq_entry)(struct sk_buff *msg, struct ib_srq *ib_srq);
+	int (*fill_res_srq_entry_raw)(struct sk_buff *msg, struct ib_srq *ib_srq);
 
 	/* Device lifecycle callbacks */
 	/*
@@ -4036,6 +4040,31 @@ static inline bool ib_dma_pci_p2p_dma_supported(struct ib_device *dev)
 }
 
 /**
+ * ib_virt_dma_to_ptr - Convert a dma_addr to a kernel pointer
+ * @dma_addr: The DMA address
+ *
+ * Used by ib_uses_virt_dma() devices to get back to the kernel pointer after
+ * going through the dma_addr marshalling.
+ */
+static inline void *ib_virt_dma_to_ptr(u64 dma_addr)
+{
+	/* virt_dma mode maps the kvs's directly into the dma addr */
+	return (void *)(uintptr_t)dma_addr;
+}
+
+/**
+ * ib_virt_dma_to_page - Convert a dma_addr to a struct page
+ * @dma_addr: The DMA address
+ *
+ * Used by ib_uses_virt_dma() device to get back to the struct page after going
+ * through the dma_addr marshalling.
+ */
+static inline struct page *ib_virt_dma_to_page(u64 dma_addr)
+{
+	return virt_to_page(ib_virt_dma_to_ptr(dma_addr));
+}
+
+/**
  * ib_dma_mapping_error - check a DMA addr for error
  * @dev: The device for which the dma_addr was created
  * @dma_addr: The DMA address to check
@@ -4415,8 +4444,6 @@ struct net_device *ib_get_net_dev_by_params(struct ib_device *dev, u32 port,
 					    const struct sockaddr *addr);
 int ib_device_set_netdev(struct ib_device *ib_dev, struct net_device *ndev,
 			 unsigned int port);
-struct net_device *ib_device_netdev(struct ib_device *dev, u32 port);
-
 struct ib_wq *ib_create_wq(struct ib_pd *pd,
 			   struct ib_wq_init_attr *init_attr);
 int ib_destroy_wq_user(struct ib_wq *wq, struct ib_udata *udata);

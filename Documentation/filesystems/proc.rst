@@ -85,7 +85,7 @@ contact Bodo  Bauer  at  bb@ricochet.net.  We'll  be happy to add them to this
 document.
 
 The   latest   version    of   this   document   is    available   online   at
-http://tldp.org/LDP/Linux-Filesystem-Hierarchy/html/proc.html
+https://www.kernel.org/doc/html/latest/filesystems/proc.html
 
 If  the above  direction does  not works  for you,  you could  try the  kernel
 mailing  list  at  linux-kernel@vger.kernel.org  and/or try  to  reach  me  at
@@ -179,6 +179,7 @@ read the file /proc/PID/status::
   Gid:    100     100     100     100
   FDSize: 256
   Groups: 100 14 16
+  Kthread:    0
   VmPeak:     5004 kB
   VmSize:     5004 kB
   VmLck:         0 kB
@@ -232,7 +233,7 @@ asynchronous manner and the value may not be very precise. To see a precise
 snapshot of a moment, you can see /proc/<pid>/smaps file and scan page table.
 It's slow but very precise.
 
-.. table:: Table 1-2: Contents of the status files (as of 4.19)
+.. table:: Table 1-2: Contents of the status fields (as of 4.19)
 
  ==========================  ===================================================
  Field                       Content
@@ -256,6 +257,7 @@ It's slow but very precise.
  NSpid                       descendant namespace process ID hierarchy
  NSpgid                      descendant namespace process group ID hierarchy
  NSsid                       descendant namespace session ID hierarchy
+ Kthread                     kernel thread flag, 1 is yes, 0 is no
  VmPeak                      peak virtual memory size
  VmSize                      total program size
  VmLck                       locked memory size
@@ -305,7 +307,7 @@ It's slow but very precise.
  ==========================  ===================================================
 
 
-.. table:: Table 1-3: Contents of the statm files (as of 2.6.8-rc3)
+.. table:: Table 1-3: Contents of the statm fields (as of 2.6.8-rc3)
 
  ======== ===============================	==============================
  Field    Content
@@ -323,7 +325,7 @@ It's slow but very precise.
  ======== ===============================	==============================
 
 
-.. table:: Table 1-4: Contents of the stat files (as of 2.6.30-rc7)
+.. table:: Table 1-4: Contents of the stat fields (as of 2.6.30-rc7)
 
   ============= ===============================================================
   Field         Content
@@ -459,6 +461,7 @@ Memory Area, or VMA) there is a series of lines such as the following::
     Private_Dirty:         0 kB
     Referenced:          892 kB
     Anonymous:             0 kB
+    KSM:                   0 kB
     LazyFree:              0 kB
     AnonHugePages:         0 kB
     ShmemPmdMapped:        0 kB
@@ -499,18 +502,21 @@ accessed.
 a mapping associated with a file may contain anonymous pages: when MAP_PRIVATE
 and a page is modified, the file page is replaced by a private anonymous copy.
 
+"KSM" reports how many of the pages are KSM pages. Note that KSM-placed zeropages
+are not included, only actual KSM pages.
+
 "LazyFree" shows the amount of memory which is marked by madvise(MADV_FREE).
 The memory isn't freed immediately with madvise(). It's freed in memory
 pressure if the memory is clean. Please note that the printed value might
 be lower than the real value due to optimizations used in the current
 implementation. If this is not desirable please file a bug report.
 
-"AnonHugePages" shows the ammount of memory backed by transparent hugepage.
+"AnonHugePages" shows the amount of memory backed by transparent hugepage.
 
-"ShmemPmdMapped" shows the ammount of shared (shmem/tmpfs) memory backed by
+"ShmemPmdMapped" shows the amount of shared (shmem/tmpfs) memory backed by
 huge pages.
 
-"Shared_Hugetlb" and "Private_Hugetlb" show the ammounts of memory backed by
+"Shared_Hugetlb" and "Private_Hugetlb" show the amounts of memory backed by
 hugetlbfs page which is *not* counted in "RSS" or "PSS" field for historical
 reasons. And these are not included in {Shared,Private}_{Clean,Dirty} field.
 
@@ -559,11 +565,12 @@ encoded manner. The codes are the following:
     mm    mixed map area
     hg    huge page advise flag
     nh    no huge page advise flag
-    mg    mergable advise flag
+    mg    mergeable advise flag
     bt    arm64 BTI guarded page
     mt    arm64 MTE allocation tags are enabled
     um    userfaultfd missing tracking
     uw    userfaultfd wr-protect tracking
+    ss    shadow stack page
     ==    =======================================
 
 Note that there is no guarantee that every flag and associated mnemonic will
@@ -682,9 +689,15 @@ files are there, and which are missing.
  File         Content
  ============ ===============================================================
  apm          Advanced power management info
+ bootconfig   Kernel command line obtained from boot config,
+ 	      and, if there were kernel parameters from the
+	      boot loader, a "# Parameters from bootloader:"
+	      line followed by a line containing those
+	      parameters prefixed by "# ".			(5.5)
  buddyinfo    Kernel memory allocator information (see text)	(2.5)
  bus          Directory containing bus specific information
- cmdline      Kernel command line
+ cmdline      Kernel command line, both from bootloader and embedded
+              in the kernel image
  cpuinfo      Info about the CPU
  devices      Available devices (block and character)
  dma          Used DMS channels
@@ -996,6 +1009,7 @@ Example output. You may not have all of these fields.
     VmallocUsed:       40444 kB
     VmallocChunk:          0 kB
     Percpu:            29312 kB
+    EarlyMemtestBad:       0 kB
     HardwareCorrupted:     0 kB
     AnonHugePages:   4149248 kB
     ShmemHugePages:        0 kB
@@ -1078,7 +1092,7 @@ Writeback
 AnonPages
               Non-file backed pages mapped into userspace page tables
 Mapped
-              files which have been mmaped, such as libraries
+              files which have been mmapped, such as libraries
 Shmem
               Total memory used by shared memory (shmem) and tmpfs
 KReclaimable
@@ -1146,6 +1160,13 @@ VmallocChunk
 Percpu
               Memory allocated to the percpu allocator used to back percpu
               allocations. This stat excludes the cost of metadata.
+EarlyMemtestBad
+              The amount of RAM/memory in kB, that was identified as corrupted
+              by early memtest. If memtest was not run, this field will not
+              be displayed at all. Size is never rounded down to 0 kB.
+              That means if 0 kB is reported, you can safely assume
+              there was at least one pass of memtest and none of the passes
+              found a single faulty byte of RAM.
 HardwareCorrupted
               The amount of RAM/memory in KB, the kernel identifies as
               corrupted.
@@ -1284,6 +1305,7 @@ support this. Table 1-9 lists the files and their meaning.
  rt_cache      Routing cache
  snmp          SNMP data
  sockstat      Socket statistics
+ softnet_stat  Per-CPU incoming packets queues statistics of online CPUs
  tcp           TCP  sockets
  udp           UDP sockets
  unix          UNIX domain sockets
@@ -1320,9 +1342,9 @@ many times the slaves link has failed.
 1.4 SCSI info
 -------------
 
-If you  have  a  SCSI  host adapter in your system, you'll find a subdirectory
-named after  the driver for this adapter in /proc/scsi. You'll also see a list
-of all recognized SCSI devices in /proc/scsi::
+If you have a SCSI or ATA host adapter in your system, you'll find a
+subdirectory named after the driver for this adapter in /proc/scsi.
+You'll also see a list of all recognized SCSI devices in /proc/scsi::
 
   >cat /proc/scsi/scsi
   Attached devices:
@@ -1448,16 +1470,18 @@ Various pieces   of  information about  kernel activity  are  available in the
 since the system first booted.  For a quick look, simply cat the file::
 
   > cat /proc/stat
-  cpu  2255 34 2290 22625563 6290 127 456 0 0 0
-  cpu0 1132 34 1441 11311718 3675 127 438 0 0 0
-  cpu1 1123 0 849 11313845 2614 0 18 0 0 0
-  intr 114930548 113199788 3 0 5 263 0 4 [... lots more numbers ...]
-  ctxt 1990473
-  btime 1062191376
-  processes 2915
-  procs_running 1
+  cpu  237902850 368826709 106375398 1873517540 1135548 0 14507935 0 0 0
+  cpu0 60045249 91891769 26331539 468411416 495718 0 5739640 0 0 0
+  cpu1 59746288 91759249 26609887 468860630 312281 0 4384817 0 0 0
+  cpu2 59489247 92985423 26904446 467808813 171668 0 2268998 0 0 0
+  cpu3 58622065 92190267 26529524 468436680 155879 0 2114478 0 0 0
+  intr 8688370575 8 3373 0 0 0 0 0 0 1 40791 0 0 353317 0 0 0 0 224789828 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 190974333 41958554 123983334 43 0 224593 0 0 0 <more 0's deleted>
+  ctxt 22848221062
+  btime 1605316999
+  processes 746787147
+  procs_running 2
   procs_blocked 0
-  softirq 183433 0 21755 12 39 1137 231 21459 2263
+  softirq 12121874454 100099120 3938138295 127375644 2795979 187870761 0 173808342 3072582055 52608 224184354
 
 The very first  "cpu" line aggregates the  numbers in all  of the other "cpuN"
 lines.  These numbers identify the amount of time the CPU has spent performing
@@ -1519,8 +1543,8 @@ softirq.
 Information about mounted ext4 file systems can be found in
 /proc/fs/ext4.  Each mounted filesystem will have a directory in
 /proc/fs/ext4 based on its device name (i.e., /proc/fs/ext4/hdc or
-/proc/fs/ext4/dm-0).   The files in each per-device directory are shown
-in Table 1-12, below.
+/proc/fs/ext4/sda9 or /proc/fs/ext4/dm-0).   The files in each per-device
+directory are shown in Table 1-12, below.
 
 .. table:: Table 1-12: Files in /proc/fs/ext4/<devname>
 
@@ -1600,12 +1624,12 @@ can inadvertently  disrupt  your  system,  it  is  advisable  to  read  both
 documentation and  source  before actually making adjustments. In any case, be
 very careful  when  writing  to  any  of these files. The entries in /proc may
 change slightly between the 2.1.* and the 2.2 kernel, so if there is any doubt
-review the kernel documentation in the directory /usr/src/linux/Documentation.
+review the kernel documentation in the directory linux/Documentation.
 This chapter  is  heavily  based  on the documentation included in the pre 2.2
 kernels, and became part of it in version 2.2.1 of the Linux kernel.
 
-Please see: Documentation/admin-guide/sysctl/ directory for descriptions of these
-entries.
+Please see: Documentation/admin-guide/sysctl/ directory for descriptions of
+these entries.
 
 Summary
 -------
@@ -2216,7 +2240,7 @@ are not related to tasks.
 Chapter 5: Filesystem behavior
 ==============================
 
-Originally, before the advent of pid namepsace, procfs was a global file
+Originally, before the advent of pid namespace, procfs was a global file
 system. It means that there was only one procfs instance in the system.
 
 When pid namespace was added, a separate procfs instance was mounted in

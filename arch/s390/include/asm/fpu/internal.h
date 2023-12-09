@@ -10,7 +10,6 @@
 #define _ASM_S390_FPU_INTERNAL_H
 
 #include <linux/string.h>
-#include <asm/ctl_reg.h>
 #include <asm/fpu/types.h>
 
 static inline void save_vx_regs(__vector128 *vxrs)
@@ -27,7 +26,7 @@ static inline void convert_vx_to_fp(freg_t *fprs, __vector128 *vxrs)
 	int i;
 
 	for (i = 0; i < __NUM_FPRS; i++)
-		fprs[i] = *(freg_t *)(vxrs + i);
+		fprs[i].ui = vxrs[i].high;
 }
 
 static inline void convert_fp_to_vx(__vector128 *vxrs, freg_t *fprs)
@@ -35,7 +34,7 @@ static inline void convert_fp_to_vx(__vector128 *vxrs, freg_t *fprs)
 	int i;
 
 	for (i = 0; i < __NUM_FPRS; i++)
-		*(freg_t *)(vxrs + i) = fprs[i];
+		vxrs[i].high = fprs[i].ui;
 }
 
 static inline void fpregs_store(_s390_fp_regs *fpregs, struct fpu *fpu)

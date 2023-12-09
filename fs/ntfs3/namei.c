@@ -88,19 +88,29 @@ static struct dentry *ntfs_lookup(struct inode *dir, struct dentry *dentry,
 		__putname(uni);
 	}
 
+	/*
+	 * Check for a null pointer
+	 * If the MFT record of ntfs inode is not a base record, inode->i_op can be NULL.
+	 * This causes null pointer dereference in d_splice_alias().
+	 */
+	if (!IS_ERR_OR_NULL(inode) && !inode->i_op) {
+		iput(inode);
+		inode = ERR_PTR(-EINVAL);
+	}
+
 	return d_splice_alias(inode, dentry);
 }
 
 /*
  * ntfs_create - inode_operations::create
  */
-static int ntfs_create(struct user_namespace *mnt_userns, struct inode *dir,
+static int ntfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode, bool excl)
 {
 	struct inode *inode;
 
-	inode = ntfs_create_inode(mnt_userns, dir, dentry, NULL, S_IFREG | mode,
-				  0, NULL, 0, NULL);
+	inode = ntfs_create_inode(idmap, dir, dentry, NULL, S_IFREG | mode, 0,
+				  NULL, 0, NULL);
 
 	return IS_ERR(inode) ? PTR_ERR(inode) : 0;
 }
@@ -110,13 +120,13 @@ static int ntfs_create(struct user_namespace *mnt_userns, struct inode *dir,
  *
  * inode_operations::mknod
  */
-static int ntfs_mknod(struct user_namespace *mnt_userns, struct inode *dir,
+static int ntfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 		      struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	struct inode *inode;
 
-	inode = ntfs_create_inode(mnt_userns, dir, dentry, NULL, mode, rdev,
-				  NULL, 0, NULL);
+	inode = ntfs_create_inode(idmap, dir, dentry, NULL, mode, rdev, NULL, 0,
+				  NULL);
 
 	return IS_ERR(inode) ? PTR_ERR(inode) : 0;
 }
@@ -146,8 +156,8 @@ static int ntfs_link(struct dentry *ode, struct inode *dir, struct dentry *de)
 	err = ntfs_link_inode(inode, de);
 
 	if (!err) {
-		dir->i_ctime = dir->i_mtime = inode->i_ctime =
-			current_time(dir);
+		inode_set_ctime_current(inode);
+		inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
 		mark_inode_dirty(inode);
 		mark_inode_dirty(dir);
 		d_instantiate(de, inode);
@@ -183,14 +193,14 @@ static int ntfs_unlink(struct inode *dir, struct dentry *dentry)
 /*
  * ntfs_symlink - inode_operations::symlink
  */
-static int ntfs_symlink(struct user_namespace *mnt_userns, struct inode *dir,
+static int ntfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 			struct dentry *dentry, const char *symname)
 {
 	u32 size = strlen(symname);
 	struct inode *inode;
 
-	inode = ntfs_create_inode(mnt_userns, dir, dentry, NULL, S_IFLNK | 0777,
-				  0, symname, size, NULL);
+	inode = ntfs_create_inode(idmap, dir, dentry, NULL, S_IFLNK | 0777, 0,
+				  symname, size, NULL);
 
 	return IS_ERR(inode) ? PTR_ERR(inode) : 0;
 }
@@ -198,13 +208,13 @@ static int ntfs_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 /*
  * ntfs_mkdir- inode_operations::mkdir
  */
-static int ntfs_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
+static int ntfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 		      struct dentry *dentry, umode_t mode)
 {
 	struct inode *inode;
 
-	inode = ntfs_create_inode(mnt_userns, dir, dentry, NULL, S_IFDIR | mode,
-				  0, NULL, 0, NULL);
+	inode = ntfs_create_inode(idmap, dir, dentry, NULL, S_IFDIR | mode, 0,
+				  NULL, 0, NULL);
 
 	return IS_ERR(inode) ? PTR_ERR(inode) : 0;
 }
@@ -229,7 +239,7 @@ static int ntfs_rmdir(struct inode *dir, struct dentry *dentry)
 /*
  * ntfs_rename - inode_operations::rename
  */
-static int ntfs_rename(struct user_namespace *mnt_userns, struct inode *dir,
+static int ntfs_rename(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, struct inode *new_dir,
 		       struct dentry *new_dentry, u32 flags)
 {
@@ -314,14 +324,11 @@ static int ntfs_rename(struct user_namespace *mnt_userns, struct inode *dir,
 		/* Restore after failed rename failed too. */
 		_ntfs_bad_inode(inode);
 	} else if (!err) {
-		inode->i_ctime = dir->i_ctime = dir->i_mtime =
-			current_time(dir);
+		simple_rename_timestamp(dir, dentry, new_dir, new_dentry);
 		mark_inode_dirty(inode);
 		mark_inode_dirty(dir);
-		if (dir != new_dir) {
-			new_dir->i_mtime = new_dir->i_ctime = dir->i_ctime;
+		if (dir != new_dir)
 			mark_inode_dirty(new_dir);
-		}
 
 		if (IS_DIRSYNC(dir))
 			ntfs_sync_inode(dir);
@@ -366,7 +373,7 @@ static int ntfs_atomic_open(struct inode *dir, struct dentry *dentry,
 
 #ifdef CONFIG_NTFS3_FS_POSIX_ACL
 	if (IS_POSIXACL(dir)) {
-		/* 
+		/*
 		 * Load in cache current acl to avoid ni_lock(dir):
 		 * ntfs_create_inode -> ntfs_init_acl -> posix_acl_create ->
 		 * ntfs_get_acl -> ntfs_get_acl_ex -> ni_lock
@@ -412,19 +419,10 @@ static int ntfs_atomic_open(struct inode *dir, struct dentry *dentry,
 	 * fnd contains tree's path to insert to.
 	 * If fnd is not NULL then dir is locked.
 	 */
-
-	/*
-	 * Unfortunately I don't know how to get here correct 'struct nameidata *nd'
-	 * or 'struct user_namespace *mnt_userns'.
-	 * See atomic_open in fs/namei.c.
-	 * This is why xfstest/633 failed.
-	 * Looks like ntfs_atomic_open must accept 'struct user_namespace *mnt_userns' as argument.
-	 */
-
-	inode = ntfs_create_inode(&init_user_ns, dir, dentry, uni, mode, 0,
-				  NULL, 0, fnd);
-	err = IS_ERR(inode) ? PTR_ERR(inode)
-			    : finish_open(file, dentry, ntfs_file_open);
+	inode = ntfs_create_inode(mnt_idmap(file->f_path.mnt), dir, dentry, uni,
+				  mode, 0, NULL, 0, fnd);
+	err = IS_ERR(inode) ? PTR_ERR(inode) :
+			      finish_open(file, dentry, ntfs_file_open);
 	dput(d);
 
 out2:
@@ -597,8 +595,7 @@ const struct inode_operations ntfs_dir_inode_operations = {
 	.rmdir		= ntfs_rmdir,
 	.mknod		= ntfs_mknod,
 	.rename		= ntfs_rename,
-	.permission	= ntfs_permission,
-	.get_inode_acl	= ntfs_get_acl,
+	.get_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 	.setattr	= ntfs3_setattr,
 	.getattr	= ntfs_getattr,
@@ -611,7 +608,7 @@ const struct inode_operations ntfs_special_inode_operations = {
 	.setattr	= ntfs3_setattr,
 	.getattr	= ntfs_getattr,
 	.listxattr	= ntfs_listxattr,
-	.get_inode_acl	= ntfs_get_acl,
+	.get_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 };
 

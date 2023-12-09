@@ -55,9 +55,9 @@ static struct attribute *mmc_dev_attrs[] = {
 ATTRIBUTE_GROUPS(mmc_dev);
 
 static int
-mmc_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
+mmc_bus_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
-	struct mmc_card *card = mmc_dev_to_card(dev);
+	const struct mmc_card *card = mmc_dev_to_card(dev);
 	const char *type;
 	unsigned int i;
 	int retval = 0;
@@ -310,6 +310,9 @@ int mmc_add_card(struct mmc_card *card)
 
 
 	dev_set_name(&card->dev, "%s:%04x", mmc_hostname(card->host), card->rca);
+	dev_set_removable(&card->dev,
+			  mmc_card_is_removable(card->host) ?
+			  DEVICE_REMOVABLE : DEVICE_FIXED);
 
 	switch (card->type) {
 	case MMC_TYPE_MMC:

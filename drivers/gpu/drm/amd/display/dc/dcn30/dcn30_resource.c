@@ -44,7 +44,7 @@
 #include "dcn30/dcn30_optc.h"
 #include "dcn20/dcn20_hwseq.h"
 #include "dcn30/dcn30_hwseq.h"
-#include "dce110/dce110_hw_sequencer.h"
+#include "dce110/dce110_hwseq.h"
 #include "dcn30/dcn30_opp.h"
 #include "dcn20/dcn20_dsc.h"
 #include "dcn30/dcn30_vpg.h"
@@ -60,7 +60,7 @@
 #include "dml/display_mode_vba.h"
 #include "dcn30/dcn30_dccg.h"
 #include "dcn10/dcn10_resource.h"
-#include "dc_link_ddc.h"
+#include "link.h"
 #include "dce/dce_panel_cntl.h"
 
 #include "dcn30/dcn30_dwb.h"
@@ -91,6 +91,8 @@
 #include "amdgpu_socbb.h"
 #include "dc_dmub_srv.h"
 
+#define DC_LOGGER \
+	dc->ctx->logger
 #define DC_LOGGER_INIT(logger)
 
 enum dcn30_clk_src_array_id {
@@ -680,8 +682,6 @@ static const struct resource_caps res_cap_dcn3 = {
 
 static const struct dc_plane_cap plane_cap = {
 	.type = DC_PLANE_TYPE_DCN_UNIVERSAL,
-	.blends_with_above = true,
-	.blends_with_below = true,
 	.per_pixel_alpha = true,
 
 	.pixel_format_support = {
@@ -703,7 +703,9 @@ static const struct dc_plane_cap plane_cap = {
 			.argb8888 = 167,
 			.nv12 = 167,
 			.fp16 = 167
-	}
+	},
+	16,
+	16
 };
 
 static const struct dc_debug_options debug_defaults_drv = {
@@ -725,31 +727,16 @@ static const struct dc_debug_options debug_defaults_drv = {
 	.dwb_fi_phase = -1, // -1 = disable,
 	.dmub_command_table = true,
 	.use_max_lb = true,
-	.exit_idle_opt_for_cursor_updates = true
-};
-
-static const struct dc_debug_options debug_defaults_diags = {
-	.disable_dmcu = true, //No dmcu on DCN30
-	.force_abm_enable = false,
-	.timing_trace = true,
-	.clock_trace = true,
-	.disable_dpp_power_gate = true,
-	.disable_hubp_power_gate = true,
-	.disable_clock_gate = true,
-	.disable_pplib_clock_request = true,
-	.disable_pplib_wm_range = true,
-	.disable_stutter = false,
-	.scl_reset_length10 = true,
-	.dwb_fi_phase = -1, // -1 = disable
-	.dmub_command_table = true,
-	.enable_tri_buf = true,
-	.use_max_lb = true
+	.exit_idle_opt_for_cursor_updates = true,
+	.enable_legacy_fast_update = false,
+	.using_dml2 = false,
 };
 
 static const struct dc_panel_config panel_config_defaults = {
 	.psr = {
 		.disable_psr = false,
 		.disallow_psrsu = false,
+		.disallow_replay = false,
 	},
 };
 
@@ -1076,13 +1063,6 @@ static const struct resource_create_funcs res_create_funcs = {
 	.create_hwseq = dcn30_hwseq_create,
 };
 
-static const struct resource_create_funcs res_create_maximus_funcs = {
-	.read_dce_straps = NULL,
-	.create_audio = NULL,
-	.create_stream_encoder = NULL,
-	.create_hwseq = dcn30_hwseq_create,
-};
-
 static void dcn30_resource_destruct(struct dcn30_resource_pool *pool)
 {
 	unsigned int i;
@@ -1207,8 +1187,11 @@ static void dcn30_resource_destruct(struct dcn30_resource_pool *pool)
 	if (pool->base.dccg != NULL)
 		dcn_dccg_destroy(&pool->base.dccg);
 
-	if (pool->base.oem_device != NULL)
-		dal_ddc_service_destroy(&pool->base.oem_device);
+	if (pool->base.oem_device != NULL) {
+		struct dc *dc = pool->base.oem_device->ctx->dc;
+
+		dc->link_srv->destroy_ddc_service(&pool->base.oem_device);
+	}
 }
 
 static struct hubp *dcn30_hubp_create(
@@ -1477,8 +1460,8 @@ bool dcn30_acquire_post_bldn_3dlut(
 				state->bits.mpc_rmu2_mux = mpcc_id;
 			ret = true;
 			break;
-			}
 		}
+	}
 	return ret;
 }
 
@@ -1648,7 +1631,8 @@ noinline bool dcn30_internal_validate_bw(
 		display_e2e_pipe_params_st *pipes,
 		int *pipe_cnt_out,
 		int *vlevel_out,
-		bool fast_validate)
+		bool fast_validate,
+		bool allow_self_refresh_only)
 {
 	bool out = false;
 	bool repopulate_pipes = false;
@@ -1675,7 +1659,7 @@ noinline bool dcn30_internal_validate_bw(
 
 	dml_log_pipe_params(&context->bw_ctx.dml, pipes, pipe_cnt);
 
-	if (!fast_validate) {
+	if (!fast_validate || !allow_self_refresh_only) {
 		/*
 		 * DML favors voltage over p-state, but we're more interested in
 		 * supporting p-state over voltage. We can't support p-state in
@@ -1688,11 +1672,12 @@ noinline bool dcn30_internal_validate_bw(
 		if (vlevel < context->bw_ctx.dml.soc.num_states)
 			vlevel = dcn20_validate_apply_pipe_split_flags(dc, context, vlevel, split, merge);
 	}
-	if (fast_validate || vlevel == context->bw_ctx.dml.soc.num_states ||
-			vba->DRAMClockChangeSupport[vlevel][vba->maxMpcComb] == dm_dram_clock_change_unsupported) {
+	if (allow_self_refresh_only &&
+	    (fast_validate || vlevel == context->bw_ctx.dml.soc.num_states ||
+			vba->DRAMClockChangeSupport[vlevel][vba->maxMpcComb] == dm_dram_clock_change_unsupported)) {
 		/*
-		 * If mode is unsupported or there's still no p-state support then
-		 * fall back to favoring voltage.
+		 * If mode is unsupported or there's still no p-state support
+		 * then fall back to favoring voltage.
 		 *
 		 * We don't actually support prefetch mode 2, so require that we
 		 * at least support prefetch mode 1.
@@ -1724,8 +1709,8 @@ noinline bool dcn30_internal_validate_bw(
 			/* We only support full screen mpo with ODM */
 			if (vba->ODMCombineEnabled[vba->pipe_plane[pipe_idx]] != dm_odm_combine_mode_disabled
 					&& pipe->plane_state && mpo_pipe
-					&& memcmp(&mpo_pipe->plane_res.scl_data.recout,
-							&pipe->plane_res.scl_data.recout,
+					&& memcmp(&mpo_pipe->plane_state->clip_rect,
+							&pipe->stream->src,
 							sizeof(struct rect)) != 0) {
 				ASSERT(mpo_pipe->plane_state != pipe->plane_state);
 				goto validate_fail;
@@ -2006,12 +1991,13 @@ bool dcn30_can_support_mclk_switch_using_fw_based_vblank_stretch(struct dc *dc, 
 	if (!is_refresh_rate_support_mclk_switch_using_fw_based_vblank_stretch(context))
 		return false;
 
-	// check if freesync enabled
 	if (!context->streams[0]->allow_freesync)
 		return false;
 
-	if (context->streams[0]->vrr_active_variable)
+	if (context->streams[0]->vrr_active_variable && dc->debug.disable_fams_gaming)
 		return false;
+
+	context->streams[0]->fpo_in_use = true;
 
 	return true;
 }
@@ -2063,7 +2049,7 @@ bool dcn30_validate_bandwidth(struct dc *dc,
 	BW_VAL_TRACE_COUNT();
 
 	DC_FP_START();
-	out = dcn30_internal_validate_bw(dc, context, pipes, &pipe_cnt, &vlevel, fast_validate);
+	out = dcn30_internal_validate_bw(dc, context, pipes, &pipe_cnt, &vlevel, fast_validate, true);
 	DC_FP_END();
 
 	if (pipe_cnt == 0)
@@ -2080,7 +2066,8 @@ bool dcn30_validate_bandwidth(struct dc *dc,
 	}
 
 	DC_FP_START();
-	dc->res_pool->funcs->calculate_wm_and_dlg(dc, context, pipes, pipe_cnt, vlevel);
+	if (dc->res_pool->funcs->calculate_wm_and_dlg)
+		dc->res_pool->funcs->calculate_wm_and_dlg(dc, context, pipes, pipe_cnt, vlevel);
 	DC_FP_END();
 
 	BW_VAL_TRACE_END_WATERMARKS();
@@ -2232,7 +2219,8 @@ static const struct resource_funcs dcn30_res_pool_funcs = {
 	.calculate_wm_and_dlg = dcn30_calculate_wm_and_dlg,
 	.update_soc_for_wm_a = dcn30_update_soc_for_wm_a,
 	.populate_dml_pipes = dcn30_populate_dml_pipes_from_context,
-	.acquire_idle_pipe_for_layer = dcn20_acquire_idle_pipe_for_layer,
+	.acquire_free_pipe_as_secondary_dpp_pipe = dcn20_acquire_free_pipe_for_layer,
+	.release_pipe = dcn20_release_pipe,
 	.add_stream_to_ctx = dcn30_add_stream_to_ctx,
 	.add_dsc_to_stream_resource = dcn20_add_dsc_to_stream_resource,
 	.remove_stream_from_ctx = dcn20_remove_stream_from_ctx,
@@ -2346,6 +2334,7 @@ static bool dcn30_resource_construct(
 	dc->caps.color.mpc.ocsc = 1;
 
 	dc->caps.dp_hdmi21_pcon_support = true;
+	dc->caps.max_v_total = (1 << 15) - 1;
 
 	/* read VBIOS LTTPR caps */
 	{
@@ -2369,10 +2358,7 @@ static bool dcn30_resource_construct(
 
 	if (dc->ctx->dce_environment == DCE_ENV_PRODUCTION_DRV)
 		dc->debug = debug_defaults_drv;
-	else if (dc->ctx->dce_environment == DCE_ENV_FPGA_MAXIMUS) {
-		dc->debug = debug_defaults_diags;
-	} else
-		dc->debug = debug_defaults_diags;
+
 	// Init the vm_helper
 	if (dc->vm_helper)
 		vm_helper_init(dc->vm_helper, 16);
@@ -2570,8 +2556,7 @@ static bool dcn30_resource_construct(
 
 	/* Audio, Stream Encoders including DIG and virtual, MPC 3D LUTs */
 	if (!resource_construct(num_virtual_links, dc, &pool->base,
-			(!IS_FPGA_MAXIMUS_DC(dc->ctx->dce_environment) ?
-			&res_create_funcs : &res_create_maximus_funcs)))
+			&res_create_funcs))
 		goto create_fail;
 
 	/* HW Sequencer and Plane caps */
@@ -2590,7 +2575,7 @@ static bool dcn30_resource_construct(
 		ddc_init_data.id.id = dc->ctx->dc_bios->fw_info.oem_i2c_obj_id;
 		ddc_init_data.id.enum_id = 0;
 		ddc_init_data.id.type = OBJECT_TYPE_GENERIC;
-		pool->base.oem_device = dal_ddc_service_create(&ddc_init_data);
+		pool->base.oem_device = dc->link_srv->create_ddc_service(&ddc_init_data);
 	} else {
 		pool->base.oem_device = NULL;
 	}

@@ -1993,9 +1993,14 @@ static int dpaa2_eth_poll(struct napi_struct *napi, int budget)
 		if (rx_cleaned >= budget ||
 		    txconf_cleaned >= DPAA2_ETH_TXCONF_PER_NAPI) {
 			work_done = budget;
+			if (ch->xdp.res & XDP_REDIRECT)
+				xdp_do_flush();
 			goto out;
 		}
 	} while (store_cleaned);
+
+	if (ch->xdp.res & XDP_REDIRECT)
+		xdp_do_flush();
 
 	/* Update NET DIM with the values for this CDAN */
 	dpaa2_io_update_net_dim(ch->dpio, ch->stats.frames_per_cdan,
@@ -2032,9 +2037,7 @@ out:
 		txc_fq->dq_bytes = 0;
 	}
 
-	if (ch->xdp.res & XDP_REDIRECT)
-		xdp_do_flush_map();
-	else if (rx_cleaned && ch->xdp.res & XDP_TX)
+	if (rx_cleaned && ch->xdp.res & XDP_TX)
 		dpaa2_eth_xdp_tx_flush(priv, ch, &priv->fq[flowid]);
 
 	return work_done;
@@ -4593,6 +4596,12 @@ static int dpaa2_eth_netdev_init(struct net_device *net_dev)
 			    NETIF_F_LLTX | NETIF_F_HW_TC | NETIF_F_TSO;
 	net_dev->gso_max_segs = DPAA2_ETH_ENQUEUE_MAX_FDS;
 	net_dev->hw_features = net_dev->features;
+	net_dev->xdp_features = NETDEV_XDP_ACT_BASIC |
+				NETDEV_XDP_ACT_REDIRECT |
+				NETDEV_XDP_ACT_NDO_XMIT;
+	if (priv->dpni_attrs.wriop_version >= DPAA2_WRIOP_VERSION(3, 0, 0) &&
+	    priv->dpni_attrs.num_queues <= 8)
+		net_dev->xdp_features |= NETDEV_XDP_ACT_XSK_ZEROCOPY;
 
 	if (priv->dpni_attrs.vlan_filter_entries)
 		net_dev->hw_features |= NETIF_F_HW_VLAN_CTAG_FILTER;
@@ -5016,7 +5025,7 @@ err_wq_alloc:
 	return err;
 }
 
-static int dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
+static void dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 {
 	struct device *dev;
 	struct net_device *net_dev;
@@ -5064,8 +5073,6 @@ static int dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 	dev_dbg(net_dev->dev.parent, "Removed interface %s\n", net_dev->name);
 
 	free_netdev(net_dev);
-
-	return 0;
 }
 
 static const struct fsl_mc_device_id dpaa2_eth_match_id_table[] = {
@@ -5080,7 +5087,6 @@ MODULE_DEVICE_TABLE(fslmc, dpaa2_eth_match_id_table);
 static struct fsl_mc_driver dpaa2_eth_driver = {
 	.driver = {
 		.name = KBUILD_MODNAME,
-		.owner = THIS_MODULE,
 	},
 	.probe = dpaa2_eth_probe,
 	.remove = dpaa2_eth_remove,

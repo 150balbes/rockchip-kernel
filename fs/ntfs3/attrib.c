@@ -405,8 +405,8 @@ int attr_set_size(struct ntfs_inode *ni, enum ATTR_TYPE type,
 	int err = 0;
 	struct ntfs_sb_info *sbi = ni->mi.sbi;
 	u8 cluster_bits = sbi->cluster_bits;
-	bool is_mft =
-		ni->mi.rno == MFT_REC_MFT && type == ATTR_DATA && !name_len;
+	bool is_mft = ni->mi.rno == MFT_REC_MFT && type == ATTR_DATA &&
+		      !name_len;
 	u64 old_valid, old_size, old_alloc, new_alloc, new_alloc_tmp;
 	struct ATTRIB *attr = NULL, *attr_b;
 	struct ATTR_LIST_ENTRY *le, *le_b;
@@ -531,11 +531,10 @@ add_alloc_in_same_attr_seg:
 			pre_alloc = 0;
 			if (type == ATTR_DATA && !name_len &&
 			    sbi->options->prealloc) {
-				pre_alloc =
-					bytes_to_cluster(
-						sbi,
-						get_pre_allocated(new_size)) -
-					new_alen;
+				pre_alloc = bytes_to_cluster(
+						    sbi, get_pre_allocated(
+								 new_size)) -
+					    new_alen;
 			}
 
 			/* Get the last LCN to allocate from. */
@@ -573,8 +572,8 @@ add_alloc_in_same_attr_seg:
 			err = attr_allocate_clusters(
 				sbi, run, vcn, lcn, to_allocate, &pre_alloc,
 				is_mft ? ALLOCATE_MFT : ALLOCATE_DEF, &alen,
-				is_mft ? 0
-				       : (sbi->record_size -
+				is_mft ? 0 :
+					 (sbi->record_size -
 					  le32_to_cpu(rec->used) + 8) /
 							 3 +
 						 1,
@@ -1107,10 +1106,10 @@ repack:
 		}
 	}
 
-	/* 
+	/*
 	 * The code below may require additional cluster (to extend attribute list)
-	 * and / or one MFT record 
-	 * It is too complex to undo operations if -ENOSPC occurs deep inside 
+	 * and / or one MFT record
+	 * It is too complex to undo operations if -ENOSPC occurs deep inside
 	 * in 'ni_insert_nonresident'.
 	 * Return in advance -ENOSPC here if there are no free cluster and no free MFT.
 	 */
@@ -1737,10 +1736,8 @@ repack:
 			le_b = NULL;
 			attr_b = ni_find_attr(ni, NULL, &le_b, ATTR_DATA, NULL,
 					      0, NULL, &mi_b);
-			if (!attr_b) {
-				err = -ENOENT;
-				goto out;
-			}
+			if (!attr_b)
+				return -ENOENT;
 
 			attr = attr_b;
 			le = le_b;

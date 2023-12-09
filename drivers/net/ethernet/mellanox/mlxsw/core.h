@@ -36,6 +36,8 @@ struct mlxsw_fw_rev;
 unsigned int mlxsw_core_max_ports(const struct mlxsw_core *mlxsw_core);
 
 int mlxsw_core_max_lag(struct mlxsw_core *mlxsw_core, u16 *p_max_lag);
+enum mlxsw_cmd_mbox_config_profile_lag_mode
+mlxsw_core_lag_mode(struct mlxsw_core *mlxsw_core);
 
 void *mlxsw_core_driver_priv(struct mlxsw_core *mlxsw_core);
 
@@ -335,6 +337,7 @@ struct mlxsw_config_profile {
 	u8	kvd_hash_single_parts;
 	u8	kvd_hash_double_parts;
 	u8	cqe_time_stamp_type;
+	bool	lag_mode_prefer_sw;
 	struct mlxsw_swid_config swid_config[MLXSW_CONFIG_PROFILE_SWID_COUNT];
 };
 
@@ -421,8 +424,6 @@ struct mlxsw_driver {
 			     const struct mlxsw_config_profile *profile,
 			     u64 *p_single_size, u64 *p_double_size,
 			     u64 *p_linear_size);
-	int (*params_register)(struct mlxsw_core *mlxsw_core);
-	void (*params_unregister)(struct mlxsw_core *mlxsw_core);
 
 	/* Notify a driver that a timestamped packet was transmitted. Driver
 	 * is responsible for freeing the passed-in SKB.
@@ -447,8 +448,6 @@ u32 mlxsw_core_read_utc_sec(struct mlxsw_core *mlxsw_core);
 u32 mlxsw_core_read_utc_nsec(struct mlxsw_core *mlxsw_core);
 
 bool mlxsw_core_sdq_supports_cqe_v2(struct mlxsw_core *mlxsw_core);
-
-void mlxsw_core_emad_string_tlv_enable(struct mlxsw_core *mlxsw_core);
 
 bool mlxsw_core_res_valid(struct mlxsw_core *mlxsw_core,
 			  enum mlxsw_res_id res_id);
@@ -489,6 +488,7 @@ struct mlxsw_bus {
 	u32 (*read_frc_l)(void *bus_priv);
 	u32 (*read_utc_sec)(void *bus_priv);
 	u32 (*read_utc_nsec)(void *bus_priv);
+	enum mlxsw_cmd_mbox_config_profile_lag_mode (*lag_mode)(void *bus_priv);
 	u8 features;
 };
 
@@ -628,7 +628,7 @@ struct mlxsw_linecards {
 	struct mlxsw_linecard_types_info *types_info;
 	struct list_head event_ops_list;
 	struct mutex event_ops_list_lock; /* Locks accesses to event ops list */
-	struct mlxsw_linecard linecards[];
+	struct mlxsw_linecard linecards[] __counted_by(count);
 };
 
 static inline struct mlxsw_linecard *

@@ -164,8 +164,13 @@ __perf_main ()
 		$prev_skip_opts == @(record|stat|top) ]]; then
 
 		local cur1=${COMP_WORDS[COMP_CWORD]}
-		local raw_evts=$($cmd list --raw-dump)
-		local arr s tmp result
+		local raw_evts=$($cmd list --raw-dump hw sw cache tracepoint pmu sdt)
+		local arr s tmp result cpu_evts
+
+		# aarch64 doesn't have /sys/bus/event_source/devices/cpu/events
+		if [[ `uname -m` != aarch64 ]]; then
+			cpu_evts=$(ls /sys/bus/event_source/devices/cpu/events)
+		fi
 
 		if [[ "$cur1" == */* && ${cur1#*/} =~ ^[A-Z] ]]; then
 			OLD_IFS="$IFS"
@@ -183,9 +188,9 @@ __perf_main ()
 				fi
 			done
 
-			evts=${result}" "$(ls /sys/bus/event_source/devices/cpu/events)
+			evts=${result}" "${cpu_evts}
 		else
-			evts=${raw_evts}" "$(ls /sys/bus/event_source/devices/cpu/events)
+			evts=${raw_evts}" "${cpu_evts}
 		fi
 
 		if [[ "$cur1" == , ]]; then
@@ -193,6 +198,14 @@ __perf_main ()
 		else
 			__perfcomp_colon "$evts" "$cur1"
 		fi
+	elif [[ $prev == @("--pfm-events") &&
+		$prev_skip_opts == @(record|stat|top) ]]; then
+	        local evts=$($cmd list --raw-dump pfm)
+		__perfcomp "$evts" "$cur"
+	elif [[ $prev == @("-M"|"--metrics") &&
+		$prev_skip_opts == @(stat) ]]; then
+	        local metrics=$($cmd list --raw-dump metric metricgroup)
+		__perfcomp "$metrics" "$cur"
 	else
 		# List subcommands for perf commands
 		if [[ $prev_skip_opts == @(kvm|kmem|mem|lock|sched|

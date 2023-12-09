@@ -84,8 +84,8 @@ static int atomic_pool_expand(struct gen_pool *pool, size_t pool_size,
 	void *addr;
 	int ret = -ENOMEM;
 
-	/* Cannot allocate larger than MAX_ORDER-1 */
-	order = min(get_order(pool_size), MAX_ORDER-1);
+	/* Cannot allocate larger than MAX_ORDER */
+	order = min(get_order(pool_size), MAX_ORDER);
 
 	do {
 		pool_size = 1 << (PAGE_SHIFT + order);
@@ -135,9 +135,9 @@ encrypt_mapping:
 remove_mapping:
 #ifdef CONFIG_DMA_DIRECT_REMAP
 	dma_common_free_remap(addr, pool_size);
-#endif
-free_page: __maybe_unused
+free_page:
 	__free_pages(page, order);
+#endif
 out:
 	return ret;
 }
@@ -189,11 +189,13 @@ static int __init dma_atomic_pool_init(void)
 	int ret = 0;
 
 	/*
-	 * Always use 2MiB as default pool size.
-	 * See: https://forum.armbian.com/topic/4811-uas-mainline-kernel-coherent-pool-memory-size/
+	 * If coherent_pool was not used on the command line, default the pool
+	 * sizes to 128KB per 1GB of memory, min 128KB, max MAX_ORDER.
 	 */
 	if (!atomic_pool_size) {
-		atomic_pool_size = SZ_2M;
+		unsigned long pages = totalram_pages() / (SZ_1G / SZ_128K);
+		pages = min_t(unsigned long, pages, MAX_ORDER_NR_PAGES);
+		atomic_pool_size = max_t(size_t, pages << PAGE_SHIFT, SZ_128K);
 	}
 	INIT_WORK(&atomic_pool_work, atomic_pool_work_fn);
 

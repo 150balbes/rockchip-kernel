@@ -104,6 +104,9 @@
 #define IV_CTR_INIT		0x1
 #define IV_BYTE_OFFSET		0x8
 
+static DEFINE_MUTEX(sec_algs_lock);
+static unsigned int sec_available_devs;
+
 struct sec_skcipher {
 	u64 alg_msk;
 	struct skcipher_alg alg;
@@ -1011,6 +1014,7 @@ static int sec_cipher_map(struct sec_ctx *ctx, struct sec_req *req,
 		ret = sec_aead_mac_init(a_req);
 		if (unlikely(ret)) {
 			dev_err(dev, "fail to init mac data for ICV!\n");
+			hisi_acc_sg_buf_unmap(dev, src, req->in);
 			return ret;
 		}
 	}
@@ -1459,12 +1463,11 @@ static void sec_skcipher_callback(struct sec_ctx *ctx, struct sec_req *req,
 			break;
 
 		backlog_sk_req = backlog_req->c_req.sk_req;
-		backlog_sk_req->base.complete(&backlog_sk_req->base,
-						-EINPROGRESS);
+		skcipher_request_complete(backlog_sk_req, -EINPROGRESS);
 		atomic64_inc(&ctx->sec->debug.dfx.recv_busy_cnt);
 	}
 
-	sk_req->base.complete(&sk_req->base, err);
+	skcipher_request_complete(sk_req, err);
 }
 
 static void set_aead_auth_iv(struct sec_ctx *ctx, struct sec_req *req)
@@ -1736,12 +1739,11 @@ static void sec_aead_callback(struct sec_ctx *c, struct sec_req *req, int err)
 			break;
 
 		backlog_aead_req = backlog_req->aead_req.aead_req;
-		backlog_aead_req->base.complete(&backlog_aead_req->base,
-						-EINPROGRESS);
+		aead_request_complete(backlog_aead_req, -EINPROGRESS);
 		atomic64_inc(&c->sec->debug.dfx.recv_busy_cnt);
 	}
 
-	a_req->base.complete(&a_req->base, err);
+	aead_request_complete(a_req, err);
 }
 
 static void sec_request_uninit(struct sec_ctx *ctx, struct sec_req *req)
@@ -2546,16 +2548,31 @@ err:
 int sec_register_to_crypto(struct hisi_qm *qm)
 {
 	u64 alg_mask = sec_get_alg_bitmap(qm, SEC_DRV_ALG_BITMAP_HIGH, SEC_DRV_ALG_BITMAP_LOW);
-	int ret;
+	int ret = 0;
+
+	mutex_lock(&sec_algs_lock);
+	if (sec_available_devs) {
+		sec_available_devs++;
+		goto unlock;
+	}
 
 	ret = sec_register_skcipher(alg_mask);
 	if (ret)
-		return ret;
+		goto unlock;
 
 	ret = sec_register_aead(alg_mask);
 	if (ret)
-		sec_unregister_skcipher(alg_mask, ARRAY_SIZE(sec_skciphers));
+		goto unreg_skcipher;
 
+	sec_available_devs++;
+	mutex_unlock(&sec_algs_lock);
+
+	return 0;
+
+unreg_skcipher:
+	sec_unregister_skcipher(alg_mask, ARRAY_SIZE(sec_skciphers));
+unlock:
+	mutex_unlock(&sec_algs_lock);
 	return ret;
 }
 
@@ -2563,6 +2580,13 @@ void sec_unregister_from_crypto(struct hisi_qm *qm)
 {
 	u64 alg_mask = sec_get_alg_bitmap(qm, SEC_DRV_ALG_BITMAP_HIGH, SEC_DRV_ALG_BITMAP_LOW);
 
+	mutex_lock(&sec_algs_lock);
+	if (--sec_available_devs)
+		goto unlock;
+
 	sec_unregister_aead(alg_mask, ARRAY_SIZE(sec_aeads));
 	sec_unregister_skcipher(alg_mask, ARRAY_SIZE(sec_skciphers));
+
+unlock:
+	mutex_unlock(&sec_algs_lock);
 }

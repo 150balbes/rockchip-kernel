@@ -220,7 +220,6 @@ static inline void fixup_objfreelist_debug(struct kmem_cache *cachep,
 static inline void fixup_slab_list(struct kmem_cache *cachep,
 				struct kmem_cache_node *n, struct slab *slab,
 				void **list);
-static int slab_early_init = 1;
 
 #define INDEX_NODE kmalloc_index(sizeof(struct kmem_cache_node))
 
@@ -466,7 +465,7 @@ static int __init slab_max_order_setup(char *str)
 {
 	get_option(&str, &slab_max_order);
 	slab_max_order = slab_max_order < 0 ? 0 :
-				min(slab_max_order, MAX_ORDER - 1);
+				min(slab_max_order, MAX_ORDER);
 	slab_max_order_set = true;
 
 	return 1;
@@ -840,7 +839,7 @@ static int init_cache_node(struct kmem_cache *cachep, int node, gfp_t gfp)
 	return 0;
 }
 
-#if (defined(CONFIG_NUMA) && defined(CONFIG_MEMORY_HOTPLUG)) || defined(CONFIG_SMP)
+#if defined(CONFIG_NUMA) || defined(CONFIG_SMP)
 /*
  * Allocates and initializes node for a node on each slab cache, used for
  * either memory or cpu hotplug.  If memory is being hot-added, the kmem_cache_node
@@ -1241,15 +1240,9 @@ void __init kmem_cache_init(void)
 	 * Initialize the caches that provide memory for the  kmem_cache_node
 	 * structures first.  Without this, further allocations will bug.
 	 */
-	kmalloc_caches[KMALLOC_NORMAL][INDEX_NODE] = create_kmalloc_cache(
-				kmalloc_info[INDEX_NODE].name[KMALLOC_NORMAL],
-				kmalloc_info[INDEX_NODE].size,
-				ARCH_KMALLOC_FLAGS, 0,
-				kmalloc_info[INDEX_NODE].size);
+	new_kmalloc_cache(INDEX_NODE, KMALLOC_NORMAL, ARCH_KMALLOC_FLAGS);
 	slab_state = PARTIAL_NODE;
 	setup_kmalloc_cache_index_table();
-
-	slab_early_init = 0;
 
 	/* 5) Replace the bootstrap kmem_cache_node */
 	{
@@ -1373,7 +1366,7 @@ static struct slab *kmem_getpages(struct kmem_cache *cachep, gfp_t flags,
 	/* Make the flag visible before any changes to folio->mapping */
 	smp_wmb();
 	/* Record if ALLOC_NO_WATERMARKS was set when allocating the slab */
-	if (sk_memalloc_socks() && page_is_pfmemalloc(folio_page(folio, 0)))
+	if (sk_memalloc_socks() && folio_is_pfmemalloc(folio))
 		slab_set_pfmemalloc(slab);
 
 	return slab;
@@ -1389,16 +1382,15 @@ static void kmem_freepages(struct kmem_cache *cachep, struct slab *slab)
 
 	BUG_ON(!folio_test_slab(folio));
 	__slab_clear_pfmemalloc(slab);
-	page_mapcount_reset(folio_page(folio, 0));
+	page_mapcount_reset(&folio->page);
 	folio->mapping = NULL;
 	/* Make the mapping reset visible before clearing the flag */
 	smp_wmb();
 	__folio_clear_slab(folio);
 
-	if (current->reclaim_state)
-		current->reclaim_state->reclaimed_slab += 1 << order;
+	mm_account_reclaimed_pages(1 << order);
 	unaccount_slab(slab, order, cachep);
-	__free_pages(folio_page(folio, 0), order);
+	__free_pages(&folio->page, order);
 }
 
 static void kmem_rcu_free(struct rcu_head *head)
@@ -1413,13 +1405,10 @@ static void kmem_rcu_free(struct rcu_head *head)
 }
 
 #if DEBUG
-static bool is_debug_pagealloc_cache(struct kmem_cache *cachep)
+static inline bool is_debug_pagealloc_cache(struct kmem_cache *cachep)
 {
-	if (debug_pagealloc_enabled_static() && OFF_SLAB(cachep) &&
-		(cachep->size % PAGE_SIZE) == 0)
-		return true;
-
-	return false;
+	return debug_pagealloc_enabled_static() && OFF_SLAB(cachep) &&
+			((cachep->size % PAGE_SIZE) == 0);
 }
 
 #ifdef CONFIG_DEBUG_PAGEALLOC
@@ -1681,7 +1670,7 @@ static size_t calculate_slab_order(struct kmem_cache *cachep,
 			if (freelist_size > KMALLOC_MAX_CACHE_SIZE) {
 				freelist_cache_size = PAGE_SIZE << get_order(freelist_size);
 			} else {
-				freelist_cache = kmalloc_slab(freelist_size, 0u);
+				freelist_cache = kmalloc_slab(freelist_size, 0u, _RET_IP_);
 				if (!freelist_cache)
 					continue;
 				freelist_cache_size = freelist_cache->size;
@@ -1894,14 +1883,12 @@ static bool set_on_slab_cache(struct kmem_cache *cachep,
 	return true;
 }
 
-/**
+/*
  * __kmem_cache_create - Create a cache.
  * @cachep: cache management descriptor
  * @flags: SLAB flags
  *
- * Returns a ptr to the cache on success, NULL on failure.
- * Cannot be called within an int, but can be interrupted.
- * The @ctor is run when new pages are allocated by the cache.
+ * Returns zero on success, nonzero on failure.
  *
  * The flags are
  *
@@ -1914,8 +1901,6 @@ static bool set_on_slab_cache(struct kmem_cache *cachep,
  * %SLAB_HWCACHE_ALIGN - Align the objects in this cache to a hardware
  * cacheline.  This can be beneficial if you're counting cycles as closely
  * as davem.
- *
- * Return: a pointer to the created cache or %NULL in case of error
  */
 int __kmem_cache_create(struct kmem_cache *cachep, slab_flags_t flags)
 {
@@ -2211,6 +2196,8 @@ static int drain_freelist(struct kmem_cache *cache,
 		raw_spin_unlock_irq(&n->list_lock);
 		slab_destroy(cache, slab);
 		nr_freed++;
+
+		cond_resched();
 	}
 out:
 	return nr_freed;
@@ -2364,44 +2351,34 @@ static void cache_init_objs_debug(struct kmem_cache *cachep, struct slab *slab)
 
 #ifdef CONFIG_SLAB_FREELIST_RANDOM
 /* Hold information during a freelist initialization */
-union freelist_init_state {
-	struct {
-		unsigned int pos;
-		unsigned int *list;
-		unsigned int count;
-	};
-	struct rnd_state rnd_state;
+struct freelist_init_state {
+	unsigned int pos;
+	unsigned int *list;
+	unsigned int count;
 };
 
 /*
  * Initialize the state based on the randomization method available.
  * return true if the pre-computed list is available, false otherwise.
  */
-static bool freelist_state_initialize(union freelist_init_state *state,
+static bool freelist_state_initialize(struct freelist_init_state *state,
 				struct kmem_cache *cachep,
 				unsigned int count)
 {
 	bool ret;
-	unsigned int rand;
-
-	/* Use best entropy available to define a random shift */
-	rand = get_random_u32();
-
-	/* Use a random state if the pre-computed list is not available */
 	if (!cachep->random_seq) {
-		prandom_seed_state(&state->rnd_state, rand);
 		ret = false;
 	} else {
 		state->list = cachep->random_seq;
 		state->count = count;
-		state->pos = rand % count;
+		state->pos = get_random_u32_below(count);
 		ret = true;
 	}
 	return ret;
 }
 
 /* Get the next entry on the list and randomize it using a random shift */
-static freelist_idx_t next_random_slot(union freelist_init_state *state)
+static freelist_idx_t next_random_slot(struct freelist_init_state *state)
 {
 	if (state->pos >= state->count)
 		state->pos = 0;
@@ -2422,7 +2399,7 @@ static void swap_free_obj(struct slab *slab, unsigned int a, unsigned int b)
 static bool shuffle_freelist(struct kmem_cache *cachep, struct slab *slab)
 {
 	unsigned int objfreelist = 0, i, rand, count = cachep->num;
-	union freelist_init_state state;
+	struct freelist_init_state state;
 	bool precomputed;
 
 	if (count < 2)
@@ -2451,8 +2428,7 @@ static bool shuffle_freelist(struct kmem_cache *cachep, struct slab *slab)
 
 		/* Fisher-Yates shuffle */
 		for (i = count - 1; i > 0; i--) {
-			rand = prandom_u32_state(&state.rnd_state);
-			rand %= (i + 1);
+			rand = get_random_u32_below(i + 1);
 			swap_free_obj(slab, i, rand);
 		}
 	} else {
@@ -3477,14 +3453,15 @@ cache_alloc_debugcheck_after_bulk(struct kmem_cache *s, gfp_t flags,
 int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 			  void **p)
 {
-	size_t i;
 	struct obj_cgroup *objcg = NULL;
+	unsigned long irqflags;
+	size_t i;
 
 	s = slab_pre_alloc_hook(s, NULL, &objcg, size, flags);
 	if (!s)
 		return 0;
 
-	local_irq_disable();
+	local_irq_save(irqflags);
 	for (i = 0; i < size; i++) {
 		void *objp = kfence_alloc(s, s->object_size, flags) ?:
 			     __do_cache_alloc(s, flags, NUMA_NO_NODE);
@@ -3493,7 +3470,7 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 			goto error;
 		p[i] = objp;
 	}
-	local_irq_enable();
+	local_irq_restore(irqflags);
 
 	cache_alloc_debugcheck_after_bulk(s, flags, size, p, _RET_IP_);
 
@@ -3506,7 +3483,7 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 	/* FIXME: Trace call missing. Christoph would like a bulk variant */
 	return size;
 error:
-	local_irq_enable();
+	local_irq_restore(irqflags);
 	cache_alloc_debugcheck_after_bulk(s, flags, i, p, _RET_IP_);
 	slab_post_alloc_hook(s, objcg, flags, i, p, false, s->object_size);
 	kmem_cache_free_bulk(s, i, p);
@@ -3608,8 +3585,9 @@ EXPORT_SYMBOL(kmem_cache_free);
 
 void kmem_cache_free_bulk(struct kmem_cache *orig_s, size_t size, void **p)
 {
+	unsigned long flags;
 
-	local_irq_disable();
+	local_irq_save(flags);
 	for (int i = 0; i < size; i++) {
 		void *objp = p[i];
 		struct kmem_cache *s;
@@ -3619,9 +3597,9 @@ void kmem_cache_free_bulk(struct kmem_cache *orig_s, size_t size, void **p)
 
 			/* called via kfree_bulk */
 			if (!folio_test_slab(folio)) {
-				local_irq_enable();
+				local_irq_restore(flags);
 				free_large_kmalloc(folio, objp);
-				local_irq_disable();
+				local_irq_save(flags);
 				continue;
 			}
 			s = folio_slab(folio)->slab_cache;
@@ -3638,7 +3616,7 @@ void kmem_cache_free_bulk(struct kmem_cache *orig_s, size_t size, void **p)
 
 		__cache_free(s, objp, _RET_IP_);
 	}
-	local_irq_enable();
+	local_irq_restore(flags);
 
 	/* FIXME: add tracing */
 }

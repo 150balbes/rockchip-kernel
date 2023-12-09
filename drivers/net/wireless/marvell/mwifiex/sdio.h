@@ -25,6 +25,7 @@
 #define SD8887_DEFAULT_FW_NAME "mrvl/sd8887_uapsta.bin"
 #define SD8801_DEFAULT_FW_NAME "mrvl/sd8801_uapsta.bin"
 #define SD8977_DEFAULT_FW_NAME "mrvl/sdsd8977_combo_v2.bin"
+#define SD8978_SDIOUART_FW_NAME "mrvl/sdiouartiw416_combo_v0.bin"
 #define SD8987_DEFAULT_FW_NAME "mrvl/sd8987_uapsta.bin"
 #define SD8997_DEFAULT_FW_NAME "mrvl/sdsd8997_combo_v4.bin"
 #define SD8997_SDIOUART_FW_NAME "mrvl/sdiouart8997_combo_v4.bin"
@@ -163,10 +164,7 @@ struct mwifiex_sdio_mpa_rx {
 	u32 pkt_cnt;
 	u32 ports;
 	u16 start_port;
-
-	struct sk_buff **skb_arr;
 	u32 *len_arr;
-
 	u8 enabled;
 	u32 buf_size;
 	u32 pkt_aggr_limit;
@@ -371,7 +369,6 @@ static inline void mp_rx_aggr_setup(struct sdio_mmc_card *card,
 		else
 			card->mpa_rx.ports |= 1 << (card->mpa_rx.pkt_cnt + 1);
 	}
-	card->mpa_rx.skb_arr[card->mpa_rx.pkt_cnt] = NULL;
 	card->mpa_rx.len_arr[card->mpa_rx.pkt_cnt] = rx_len;
 	card->mpa_rx.pkt_cnt++;
 }

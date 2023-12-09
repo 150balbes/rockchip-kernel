@@ -109,6 +109,8 @@ static inline u64 arm_pmu_event_max_period(struct perf_event *event)
 {
 	if (event->hw.flags & ARMPMU_EVT_64BIT)
 		return GENMASK_ULL(63, 0);
+	else if (event->hw.flags & ARMPMU_EVT_63BIT)
+		return GENMASK_ULL(62, 0);
 	else if (event->hw.flags & ARMPMU_EVT_47BIT)
 		return GENMASK_ULL(46, 0);
 	else
@@ -550,13 +552,7 @@ static void armpmu_disable(struct pmu *pmu)
 static bool armpmu_filter(struct pmu *pmu, int cpu)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(pmu);
-	bool ret;
-
-	ret = cpumask_test_cpu(cpu, &armpmu->supported_cpus);
-	if (ret && armpmu->filter)
-		return armpmu->filter(pmu, cpu);
-
-	return ret;
+	return !cpumask_test_cpu(cpu, &armpmu->supported_cpus);
 }
 
 static ssize_t cpus_show(struct device *dev,
@@ -693,6 +689,11 @@ static int armpmu_get_cpu_irq(struct arm_pmu *pmu, int cpu)
 	return per_cpu(hw_events->irq, cpu);
 }
 
+bool arm_pmu_irq_is_nmi(void)
+{
+	return has_nmi;
+}
+
 /*
  * PMU hardware loses all context when a CPU goes offline.
  * When a CPU is hotplugged back in, since some hardware registers are
@@ -758,17 +759,8 @@ static void cpu_pm_pmu_setup(struct arm_pmu *armpmu, unsigned long cmd)
 		case CPU_PM_ENTER_FAILED:
 			 /*
 			  * Restore and enable the counter.
-			  * armpmu_start() indirectly calls
-			  *
-			  * perf_event_update_userpage()
-			  *
-			  * that requires RCU read locking to be functional,
-			  * wrap the call within RCU_NONIDLE to make the
-			  * RCU subsystem aware this cpu is not idle from
-			  * an RCU perspective for the armpmu_start() call
-			  * duration.
 			  */
-			RCU_NONIDLE(armpmu_start(event, PERF_EF_RELOAD));
+			armpmu_start(event, PERF_EF_RELOAD);
 			break;
 		default:
 			break;
@@ -885,11 +877,13 @@ struct arm_pmu *armpmu_alloc(void)
 		.attr_groups	= pmu->attr_groups,
 		/*
 		 * This is a CPU PMU potentially in a heterogeneous
-		 * configuration (e.g. big.LITTLE). This is not an uncore PMU,
-		 * and we have taken ctx sharing into account (e.g. with our
-		 * pmu::filter callback and pmu::event_init group validation).
+		 * configuration (e.g. big.LITTLE) so
+		 * PERF_PMU_CAP_EXTENDED_HW_TYPE is required to open
+		 * PERF_TYPE_HARDWARE and PERF_TYPE_HW_CACHE events on a
+		 * specific PMU.
 		 */
-		.capabilities	= PERF_PMU_CAP_HETEROGENEOUS_CPUS | PERF_PMU_CAP_EXTENDED_REGS,
+		.capabilities	= PERF_PMU_CAP_EXTENDED_REGS |
+				  PERF_PMU_CAP_EXTENDED_HW_TYPE,
 	};
 
 	pmu->attr_groups[ARMPMU_ATTR_GROUP_COMMON] =

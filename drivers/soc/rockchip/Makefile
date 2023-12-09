@@ -4,6 +4,5 @@
 #
 obj-$(CONFIG_ROCKCHIP_GRF) += grf.o
 obj-$(CONFIG_ROCKCHIP_IODOMAIN) += io-domain.o
-obj-$(CONFIG_ROCKCHIP_OPP) += rockchip_opp_select.o
-obj-$(CONFIG_ROCKCHIP_PM_DOMAINS) += pm_domains.o
+obj-$(CONFIG_ROCKCHIP_REGULATOR_COUPLER) += rockchip-regulator-coupler.o
 obj-$(CONFIG_ROCKCHIP_DTPM) += dtpm.o

@@ -110,7 +110,7 @@ static unsigned int adda_dl_rate_transform(struct mtk_base_afe *afe,
 	case 192000:
 		return MTK_AFE_ADDA_DL_RATE_192K;
 	default:
-		dev_info(afe->dev, "%s(), rate %d invalid, use 48kHz!!!\n",
+		dev_dbg(afe->dev, "%s(), rate %d invalid, use 48kHz!!!\n",
 			 __func__, rate);
 	}
 
@@ -134,7 +134,7 @@ static unsigned int adda_ul_rate_transform(struct mtk_base_afe *afe,
 	case 192000:
 		return MTK_AFE_ADDA_UL_RATE_192K;
 	default:
-		dev_info(afe->dev, "%s(), rate %d invalid, use 48kHz!!!\n",
+		dev_dbg(afe->dev, "%s(), rate %d invalid, use 48kHz!!!\n",
 			 __func__, rate);
 	}
 
@@ -321,7 +321,7 @@ static int mtk_adda_mtkaif_cfg_event(struct snd_soc_dapm_widget *w,
 					   MTKAIF_RXIF_CLKINV_ADC_MASK_SFT,
 					   BIT(MTKAIF_RXIF_CLKINV_ADC_SFT));
 
-			if (strcmp(w->name, "ADDA_MTKAIF_CFG") == 0) {
+			if (snd_soc_dapm_widget_name_cmp(w, "ADDA_MTKAIF_CFG") == 0) {
 				if (afe_priv->mtkaif_chosen_phase[0] < 0 &&
 				    afe_priv->mtkaif_chosen_phase[1] < 0) {
 					dev_err(afe->dev,

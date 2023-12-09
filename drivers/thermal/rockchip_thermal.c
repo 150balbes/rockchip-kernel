@@ -154,7 +154,7 @@ struct rockchip_thermal_data {
 	enum tshut_polarity tshut_polarity;
 };
 
-/**
+/*
  * TSADC Sensor Register description:
  *
  * TSADCV2_* are used for RK3288 SoCs, the other chips can reuse it.
@@ -1378,7 +1378,7 @@ static irqreturn_t rockchip_thermal_alarm_irq_thread(int irq, void *dev)
 
 static int rockchip_thermal_set_trips(struct thermal_zone_device *tz, int low, int high)
 {
-	struct rockchip_thermal_sensor *sensor = tz->devdata;
+	struct rockchip_thermal_sensor *sensor = thermal_zone_device_priv(tz);
 	struct rockchip_thermal_data *thermal = sensor->thermal;
 	const struct rockchip_tsadc_chip *tsadc = thermal->chip;
 
@@ -1391,33 +1391,15 @@ static int rockchip_thermal_set_trips(struct thermal_zone_device *tz, int low, i
 
 static int rockchip_thermal_get_temp(struct thermal_zone_device *tz, int *out_temp)
 {
-	struct rockchip_thermal_sensor *sensor = tz->devdata;
+	struct rockchip_thermal_sensor *sensor = thermal_zone_device_priv(tz);
 	struct rockchip_thermal_data *thermal = sensor->thermal;
 	const struct rockchip_tsadc_chip *tsadc = sensor->thermal->chip;
 	int retval;
 
 	retval = tsadc->get_temp(&tsadc->table,
 				 sensor->id, thermal->regs, out_temp);
-	dev_dbg(&thermal->pdev->dev, "sensor %d - temp: %d, retval: %d\n",
-		sensor->id, *out_temp, retval);
-
 	return retval;
 }
-
-int rk_get_temperature(void)
-{
-	int temp;
-//	int ret;
-
-//	ret = rockchip_thermal_get_temp(g_tsensor_data_ptr, &temp);
-//		if (ret) {
-//			pr_debug("rk_get_temp failed!\n");
-//			return ret;
-//		}
-	temp = 75000;
-	return temp / 1000;
-}
-EXPORT_SYMBOL(rk_get_temperature);
 
 static const struct thermal_zone_device_ops rockchip_of_thermal_ops = {
 	.get_temp = rockchip_thermal_get_temp,
@@ -1519,7 +1501,7 @@ rockchip_thermal_register_sensor(struct platform_device *pdev,
 }
 
 /**
- * Reset TSADC Controller, reset all tsadc registers.
+ * rockchip_thermal_reset_controller - Reset TSADC Controller, reset all tsadc registers.
  * @reset: the reset controller of tsadc
  */
 static void rockchip_thermal_reset_controller(struct reset_control *reset)
@@ -1533,7 +1515,6 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct rockchip_thermal_data *thermal;
-	struct resource *res;
 	int irq;
 	int i;
 	int error;
@@ -1558,12 +1539,11 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 	if (!thermal->sensors)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	thermal->regs = devm_ioremap_resource(&pdev->dev, res);
+	thermal->regs = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
 	if (IS_ERR(thermal->regs))
 		return PTR_ERR(thermal->regs);
 
-	thermal->reset = devm_reset_control_array_get(&pdev->dev, false, false);
+	thermal->reset = devm_reset_control_array_get_exclusive(&pdev->dev);
 	if (IS_ERR(thermal->reset))
 		return dev_err_probe(&pdev->dev, PTR_ERR(thermal->reset),
 				     "failed to get tsadc reset.\n");
@@ -1609,7 +1589,6 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 
 	for (i = 0; i < thermal->chip->chn_num; i++) {
 		rockchip_thermal_toggle_sensor(&thermal->sensors[i], true);
-		thermal->sensors[i].tzd->tzp->no_hwmon = false;
 		error = thermal_add_hwmon_sysfs(thermal->sensors[i].tzd);
 		if (error)
 			dev_warn(&pdev->dev,
@@ -1622,7 +1601,7 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int rockchip_thermal_remove(struct platform_device *pdev)
+static void rockchip_thermal_remove(struct platform_device *pdev)
 {
 	struct rockchip_thermal_data *thermal = platform_get_drvdata(pdev);
 	int i;
@@ -1635,8 +1614,6 @@ static int rockchip_thermal_remove(struct platform_device *pdev)
 	}
 
 	thermal->chip->control(thermal->regs, false);
-
-	return 0;
 }
 
 static int __maybe_unused rockchip_thermal_suspend(struct device *dev)
@@ -1712,8 +1689,23 @@ static struct platform_driver rockchip_thermal_driver = {
 		.of_match_table = of_rockchip_thermal_match,
 	},
 	.probe = rockchip_thermal_probe,
-	.remove = rockchip_thermal_remove,
+	.remove_new = rockchip_thermal_remove,
 };
+
+int rk_get_temperature(void)
+{
+	int temp;
+//	int ret;
+
+//	ret = rockchip_thermal_get_temp(g_tsensor_data_ptr, &temp);
+//		if (ret) {
+//			pr_debug("rk_get_temp failed!\n");
+//			return ret;
+//		}
+	temp = 100000;
+	return temp / 1000;
+}
+EXPORT_SYMBOL(rk_get_temperature);
 
 module_platform_driver(rockchip_thermal_driver);
 

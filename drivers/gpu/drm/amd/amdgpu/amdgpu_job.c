@@ -65,6 +65,8 @@ static enum drm_gpu_sched_stat amdgpu_job_timedout(struct drm_sched_job *s_job)
 	DRM_ERROR("Process information: process %s pid %d thread %s pid %d\n",
 		  ti.process_name, ti.tgid, ti.task_name, ti.pid);
 
+	dma_fence_set_error(&s_job->s_fence->finished, -ETIME);
+
 	if (amdgpu_device_should_recover_gpu(ring->adev)) {
 		struct amdgpu_reset_context reset_context;
 		memset(&reset_context, 0, sizeof(reset_context));
@@ -107,13 +109,13 @@ int amdgpu_job_alloc(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 	(*job)->vm = vm;
 
 	amdgpu_sync_create(&(*job)->explicit_sync);
-	(*job)->vram_lost_counter = atomic_read(&adev->vram_lost_counter);
+	(*job)->generation = amdgpu_vm_generation(adev, vm);
 	(*job)->vm_pd_addr = AMDGPU_BO_INVALID_OFFSET;
 
 	if (!entity)
 		return 0;
 
-	return drm_sched_job_init(&(*job)->base, entity, owner);
+	return drm_sched_job_init(&(*job)->base, entity, 1, owner);
 }
 
 int amdgpu_job_alloc_with_ib(struct amdgpu_device *adev,
@@ -161,8 +163,14 @@ void amdgpu_job_free_resources(struct amdgpu_job *job)
 	struct dma_fence *f;
 	unsigned i;
 
-	/* use sched fence if available */
-	f = job->base.s_fence ? &job->base.s_fence->finished :  &job->hw_fence;
+	/* Check if any fences where initialized */
+	if (job->base.s_fence && job->base.s_fence->finished.ops)
+		f = &job->base.s_fence->finished;
+	else if (job->hw_fence.ops)
+		f = &job->hw_fence;
+	else
+		f = NULL;
+
 	for (i = 0; i < job->num_ibs; ++i)
 		amdgpu_ib_free(ring->adev, &job->ibs[i], f);
 }
@@ -250,16 +258,27 @@ amdgpu_job_prepare_job(struct drm_sched_job *sched_job,
 	struct dma_fence *fence = NULL;
 	int r;
 
+	/* Ignore soft recovered fences here */
+	r = drm_sched_entity_error(s_entity);
+	if (r && r != -ENODATA)
+		goto error;
+
 	if (!fence && job->gang_submit)
 		fence = amdgpu_device_switch_gang(ring->adev, job->gang_submit);
 
 	while (!fence && job->vm && !job->vmid) {
 		r = amdgpu_vmid_grab(job->vm, ring, job, &fence);
-		if (r)
+		if (r) {
 			DRM_ERROR("Error getting VM ID (%d)\n", r);
+			goto error;
+		}
 	}
 
 	return fence;
+
+error:
+	dma_fence_set_error(&job->base.s_fence->finished, r);
+	return NULL;
 }
 
 static struct dma_fence *amdgpu_job_run(struct drm_sched_job *sched_job)
@@ -276,7 +295,7 @@ static struct dma_fence *amdgpu_job_run(struct drm_sched_job *sched_job)
 	trace_amdgpu_sched_run_job(job);
 
 	/* Skip job if VRAM is lost and never resubmit gangs */
-	if (job->vram_lost_counter != atomic_read(&adev->vram_lost_counter) ||
+	if (job->generation != amdgpu_vm_generation(adev, job->vm) ||
 	    (job->job_run_counter && job->gang_submit))
 		dma_fence_set_error(finished, -ECANCELED);
 
@@ -306,8 +325,8 @@ void amdgpu_job_stop_all_jobs_on_sched(struct drm_gpu_scheduler *sched)
 	int i;
 
 	/* Signal all jobs not yet scheduled */
-	for (i = DRM_SCHED_PRIORITY_COUNT - 1; i >= DRM_SCHED_PRIORITY_MIN; i--) {
-		struct drm_sched_rq *rq = &sched->sched_rq[i];
+	for (i = DRM_SCHED_PRIORITY_KERNEL; i < sched->num_rqs; i++) {
+		struct drm_sched_rq *rq = sched->sched_rq[i];
 		spin_lock(&rq->lock);
 		list_for_each_entry(s_entity, &rq->entities, list) {
 			while ((s_job = to_drm_sched_job(spsc_queue_pop(&s_entity->job_queue)))) {

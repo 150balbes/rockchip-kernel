@@ -22,6 +22,7 @@
  */
 
 #include <linux/kthread.h>
+#include <linux/types.h>
 
 #include <drm/drm_ioctl.h>
 #include <drm/drm_vblank.h>
@@ -31,6 +32,7 @@
 
 #define DRM_IF_VERSION(maj, min) (maj << 16 | min)
 
+struct cea_sad;
 struct dentry;
 struct dma_buf;
 struct iosys_map;
@@ -153,6 +155,8 @@ int drm_sysfs_init(void);
 void drm_sysfs_destroy(void);
 struct device *drm_sysfs_minor_alloc(struct drm_minor *minor);
 int drm_sysfs_connector_add(struct drm_connector *connector);
+int drm_sysfs_connector_add_late(struct drm_connector *connector);
+void drm_sysfs_connector_remove_early(struct drm_connector *connector);
 void drm_sysfs_connector_remove(struct drm_connector *connector);
 
 void drm_sysfs_lease_event(struct drm_device *dev);
@@ -178,27 +182,34 @@ void drm_gem_unpin(struct drm_gem_object *obj);
 int drm_gem_vmap(struct drm_gem_object *obj, struct iosys_map *map);
 void drm_gem_vunmap(struct drm_gem_object *obj, struct iosys_map *map);
 
-int drm_gem_dumb_destroy(struct drm_file *file, struct drm_device *dev,
-			 u32 handle);
-
 /* drm_debugfs.c drm_debugfs_crc.c */
 #if defined(CONFIG_DEBUG_FS)
-int drm_debugfs_init(struct drm_minor *minor, int minor_id,
-		     struct dentry *root);
-void drm_debugfs_cleanup(struct drm_minor *minor);
+void drm_debugfs_dev_fini(struct drm_device *dev);
+void drm_debugfs_dev_register(struct drm_device *dev);
+int drm_debugfs_register(struct drm_minor *minor, int minor_id,
+			 struct dentry *root);
+void drm_debugfs_unregister(struct drm_minor *minor);
 void drm_debugfs_connector_add(struct drm_connector *connector);
 void drm_debugfs_connector_remove(struct drm_connector *connector);
 void drm_debugfs_crtc_add(struct drm_crtc *crtc);
 void drm_debugfs_crtc_remove(struct drm_crtc *crtc);
 void drm_debugfs_crtc_crc_add(struct drm_crtc *crtc);
 #else
-static inline int drm_debugfs_init(struct drm_minor *minor, int minor_id,
-				   struct dentry *root)
+static inline void drm_debugfs_dev_fini(struct drm_device *dev)
+{
+}
+
+static inline void drm_debugfs_dev_register(struct drm_device *dev)
+{
+}
+
+static inline int drm_debugfs_register(struct drm_minor *minor, int minor_id,
+				       struct dentry *root)
 {
 	return 0;
 }
 
-static inline void drm_debugfs_cleanup(struct drm_minor *minor)
+static inline void drm_debugfs_unregister(struct drm_minor *minor)
 {
 }
 
@@ -243,6 +254,8 @@ int drm_syncobj_wait_ioctl(struct drm_device *dev, void *data,
 			   struct drm_file *file_private);
 int drm_syncobj_timeline_wait_ioctl(struct drm_device *dev, void *data,
 				    struct drm_file *file_private);
+int drm_syncobj_eventfd_ioctl(struct drm_device *dev, void *data,
+			      struct drm_file *file_private);
 int drm_syncobj_reset_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file_private);
 int drm_syncobj_signal_ioctl(struct drm_device *dev, void *data,
@@ -255,4 +268,8 @@ int drm_syncobj_query_ioctl(struct drm_device *dev, void *data,
 /* drm_framebuffer.c */
 void drm_framebuffer_print_info(struct drm_printer *p, unsigned int indent,
 				const struct drm_framebuffer *fb);
-void drm_framebuffer_debugfs_init(struct drm_minor *minor);
+void drm_framebuffer_debugfs_init(struct drm_device *dev);
+
+/* drm_edid.c */
+void drm_edid_cta_sad_get(const struct cea_sad *cta_sad, u8 *sad);
+void drm_edid_cta_sad_set(struct cea_sad *cta_sad, const u8 *sad);

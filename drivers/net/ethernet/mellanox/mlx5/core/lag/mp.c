@@ -7,13 +7,14 @@
 #include "lag/mp.h"
 #include "mlx5_core.h"
 #include "eswitch.h"
-#include "lib/mlx5.h"
+#include "lib/events.h"
 
 static bool __mlx5_lag_is_multipath(struct mlx5_lag *ldev)
 {
 	return ldev->mode == MLX5_LAG_MODE_MULTIPATH;
 }
 
+#define MLX5_LAG_MULTIPATH_OFFLOADS_SUPPORTED_PORTS 2
 static bool mlx5_lag_multipath_check_prereq(struct mlx5_lag *ldev)
 {
 	if (!mlx5_lag_is_ready(ldev))
@@ -22,19 +23,18 @@ static bool mlx5_lag_multipath_check_prereq(struct mlx5_lag *ldev)
 	if (__mlx5_lag_is_active(ldev) && !__mlx5_lag_is_multipath(ldev))
 		return false;
 
+	if (ldev->ports > MLX5_LAG_MULTIPATH_OFFLOADS_SUPPORTED_PORTS)
+		return false;
+
 	return mlx5_esw_multipath_prereq(ldev->pf[MLX5_LAG_P1].dev,
 					 ldev->pf[MLX5_LAG_P2].dev);
 }
 
 bool mlx5_lag_is_multipath(struct mlx5_core_dev *dev)
 {
-	struct mlx5_lag *ldev;
-	bool res;
+	struct mlx5_lag *ldev = mlx5_lag_dev(dev);
 
-	ldev = mlx5_lag_dev(dev);
-	res  = ldev && __mlx5_lag_is_multipath(ldev);
-
-	return res;
+	return ldev && __mlx5_lag_is_multipath(ldev);
 }
 
 /**

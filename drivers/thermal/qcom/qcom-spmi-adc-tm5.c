@@ -14,11 +14,11 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/thermal.h>
-#include <asm-generic/unaligned.h>
+
+#include <asm/unaligned.h>
 
 #include "../thermal_hwmon.h"
 
@@ -359,7 +359,7 @@ static irqreturn_t adc_tm5_gen2_isr(int irq, void *data)
 
 static int adc_tm5_get_temp(struct thermal_zone_device *tz, int *temp)
 {
-	struct adc_tm5_channel *channel = tz->devdata;
+	struct adc_tm5_channel *channel = thermal_zone_device_priv(tz);
 	int ret;
 
 	if (!channel || !channel->iio)
@@ -641,7 +641,7 @@ config_fail:
 
 static int adc_tm5_set_trips(struct thermal_zone_device *tz, int low, int high)
 {
-	struct adc_tm5_channel *channel = tz->devdata;
+	struct adc_tm5_channel *channel = thermal_zone_device_priv(tz);
 	struct adc_tm5_chip *chip;
 	int ret;
 
@@ -688,9 +688,7 @@ static int adc_tm5_register_tzd(struct adc_tm5_chip *adc_tm)
 			return PTR_ERR(tzd);
 		}
 		adc_tm->channels[i].tzd = tzd;
-		if (devm_thermal_add_hwmon_sysfs(tzd))
-			dev_warn(adc_tm->dev,
-				 "Failed to add hwmon sysfs attributes\n");
+		devm_thermal_add_hwmon_sysfs(adc_tm->dev, tzd);
 	}
 
 	return 0;

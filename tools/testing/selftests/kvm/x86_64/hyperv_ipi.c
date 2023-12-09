@@ -193,8 +193,9 @@ static void sender_guest_code(void *hcall_page, vm_vaddr_t pgs_gpa)
 	GUEST_SYNC(stage++);
 	/*
 	 * 'XMM Fast' HvCallSendSyntheticClusterIpiEx to HV_GENERIC_SET_ALL.
-	 * Nothing to write anything to XMM regs.
 	 */
+	ipi_ex->vp_set.valid_bank_mask = 0;
+	hyperv_write_xmm_input(&ipi_ex->vp_set.valid_bank_mask, 2);
 	hyperv_hypercall(HVCALL_SEND_IPI_EX | HV_HYPERCALL_FAST_BIT,
 			 IPI_VECTOR, HV_GENERIC_SET_ALL);
 	nop_loop();
@@ -242,7 +243,6 @@ int main(int argc, char *argv[])
 {
 	struct kvm_vm *vm;
 	struct kvm_vcpu *vcpu[3];
-	unsigned int exit_reason;
 	vm_vaddr_t hcall_page;
 	pthread_t threads[2];
 	int stage = 1, r;
@@ -282,10 +282,7 @@ int main(int argc, char *argv[])
 	while (true) {
 		vcpu_run(vcpu[0]);
 
-		exit_reason = vcpu[0]->run->exit_reason;
-		TEST_ASSERT(exit_reason == KVM_EXIT_IO,
-			    "unexpected exit reason: %u (%s)",
-			    exit_reason, exit_reason_str(exit_reason));
+		TEST_ASSERT_KVM_EXIT_REASON(vcpu[0], KVM_EXIT_IO);
 
 		switch (get_ucall(vcpu[0], &uc)) {
 		case UCALL_SYNC:

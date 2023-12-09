@@ -59,7 +59,7 @@ static int lan966x_ptp_add_trap(struct lan966x_port *port,
 	int err;
 
 	vrule = vcap_get_rule(lan966x->vcap_ctrl, rule_id);
-	if (vrule) {
+	if (!IS_ERR(vrule)) {
 		u32 value, mask;
 
 		/* Just modify the ingress port mask and exit */
@@ -83,8 +83,7 @@ static int lan966x_ptp_add_trap(struct lan966x_port *port,
 	if (err)
 		goto free_rule;
 
-	err = vcap_set_rule_set_actionset(vrule, VCAP_AFS_BASE_TYPE);
-	err |= vcap_rule_add_action_bit(vrule, VCAP_AF_CPU_COPY_ENA, VCAP_BIT_1);
+	err = vcap_rule_add_action_bit(vrule, VCAP_AF_CPU_COPY_ENA, VCAP_BIT_1);
 	err |= vcap_rule_add_action_u32(vrule, VCAP_AF_MASK_MODE, LAN966X_PMM_REPLACE);
 	err |= vcap_val_rule(vrule, proto);
 	if (err)
@@ -107,7 +106,7 @@ static int lan966x_ptp_del_trap(struct lan966x_port *port,
 	int err;
 
 	vrule = vcap_get_rule(lan966x->vcap_ctrl, rule_id);
-	if (!vrule)
+	if (IS_ERR(vrule))
 		return -EEXIST;
 
 	vcap_rule_get_key_u32(vrule, VCAP_KF_IF_IGR_PORT_MASK, &value, &mask);
@@ -249,44 +248,39 @@ int lan966x_ptp_del_traps(struct lan966x_port *port)
 	return err;
 }
 
-int lan966x_ptp_setup_traps(struct lan966x_port *port, struct ifreq *ifr)
+int lan966x_ptp_setup_traps(struct lan966x_port *port,
+			    struct kernel_hwtstamp_config *cfg)
 {
-	struct hwtstamp_config cfg;
-
-	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
-		return -EFAULT;
-
-	if (cfg.rx_filter == HWTSTAMP_FILTER_NONE)
+	if (cfg->rx_filter == HWTSTAMP_FILTER_NONE)
 		return lan966x_ptp_del_traps(port);
 	else
 		return lan966x_ptp_add_traps(port);
 }
 
-int lan966x_ptp_hwtstamp_set(struct lan966x_port *port, struct ifreq *ifr)
+int lan966x_ptp_hwtstamp_set(struct lan966x_port *port,
+			     struct kernel_hwtstamp_config *cfg,
+			     struct netlink_ext_ack *extack)
 {
 	struct lan966x *lan966x = port->lan966x;
-	struct hwtstamp_config cfg;
 	struct lan966x_phc *phc;
 
-	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
-		return -EFAULT;
-
-	switch (cfg.tx_type) {
+	switch (cfg->tx_type) {
 	case HWTSTAMP_TX_ON:
-		port->ptp_cmd = IFH_REW_OP_TWO_STEP_PTP;
+		port->ptp_tx_cmd = IFH_REW_OP_TWO_STEP_PTP;
 		break;
 	case HWTSTAMP_TX_ONESTEP_SYNC:
-		port->ptp_cmd = IFH_REW_OP_ONE_STEP_PTP;
+		port->ptp_tx_cmd = IFH_REW_OP_ONE_STEP_PTP;
 		break;
 	case HWTSTAMP_TX_OFF:
-		port->ptp_cmd = IFH_REW_OP_NOOP;
+		port->ptp_tx_cmd = IFH_REW_OP_NOOP;
 		break;
 	default:
 		return -ERANGE;
 	}
 
-	switch (cfg.rx_filter) {
+	switch (cfg->rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
+		port->ptp_rx_cmd = false;
 		break;
 	case HWTSTAMP_FILTER_ALL:
 	case HWTSTAMP_FILTER_PTP_V1_L4_EVENT:
@@ -302,7 +296,8 @@ int lan966x_ptp_hwtstamp_set(struct lan966x_port *port, struct ifreq *ifr)
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
 	case HWTSTAMP_FILTER_NTP_ALL:
-		cfg.rx_filter = HWTSTAMP_FILTER_ALL;
+		port->ptp_rx_cmd = true;
+		cfg->rx_filter = HWTSTAMP_FILTER_ALL;
 		break;
 	default:
 		return -ERANGE;
@@ -311,20 +306,20 @@ int lan966x_ptp_hwtstamp_set(struct lan966x_port *port, struct ifreq *ifr)
 	/* Commit back the result & save it */
 	mutex_lock(&lan966x->ptp_lock);
 	phc = &lan966x->phc[LAN966X_PHC_PORT];
-	memcpy(&phc->hwtstamp_config, &cfg, sizeof(cfg));
+	phc->hwtstamp_config = *cfg;
 	mutex_unlock(&lan966x->ptp_lock);
 
-	return copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg)) ? -EFAULT : 0;
+	return 0;
 }
 
-int lan966x_ptp_hwtstamp_get(struct lan966x_port *port, struct ifreq *ifr)
+void lan966x_ptp_hwtstamp_get(struct lan966x_port *port,
+			      struct kernel_hwtstamp_config *cfg)
 {
 	struct lan966x *lan966x = port->lan966x;
 	struct lan966x_phc *phc;
 
 	phc = &lan966x->phc[LAN966X_PHC_PORT];
-	return copy_to_user(ifr->ifr_data, &phc->hwtstamp_config,
-			    sizeof(phc->hwtstamp_config)) ? -EFAULT : 0;
+	*cfg = phc->hwtstamp_config;
 }
 
 static int lan966x_ptp_classify(struct lan966x_port *port, struct sk_buff *skb)
@@ -333,7 +328,7 @@ static int lan966x_ptp_classify(struct lan966x_port *port, struct sk_buff *skb)
 	u8 msgtype;
 	int type;
 
-	if (port->ptp_cmd == IFH_REW_OP_NOOP)
+	if (port->ptp_tx_cmd == IFH_REW_OP_NOOP)
 		return IFH_REW_OP_NOOP;
 
 	type = ptp_classify_raw(skb);
@@ -344,7 +339,7 @@ static int lan966x_ptp_classify(struct lan966x_port *port, struct sk_buff *skb)
 	if (!header)
 		return IFH_REW_OP_NOOP;
 
-	if (port->ptp_cmd == IFH_REW_OP_TWO_STEP_PTP)
+	if (port->ptp_tx_cmd == IFH_REW_OP_TWO_STEP_PTP)
 		return IFH_REW_OP_TWO_STEP_PTP;
 
 	/* If it is sync and run 1 step then set the correct operation,
@@ -524,9 +519,9 @@ irqreturn_t lan966x_ptp_irq_handler(int irq, void *args)
 		if (WARN_ON(!skb_match))
 			continue;
 
-		spin_lock(&lan966x->ptp_ts_id_lock);
+		spin_lock_irqsave(&lan966x->ptp_ts_id_lock, flags);
 		lan966x->ptp_skbs--;
-		spin_unlock(&lan966x->ptp_ts_id_lock);
+		spin_unlock_irqrestore(&lan966x->ptp_ts_id_lock, flags);
 
 		/* Get the h/w timestamp */
 		lan966x_get_hwtimestamp(lan966x, &ts, delay);
@@ -1010,9 +1005,6 @@ static int lan966x_ptp_phc_init(struct lan966x *lan966x,
 	phc->index = index;
 	phc->lan966x = lan966x;
 
-	/* PTP Rx stamping is always enabled.  */
-	phc->hwtstamp_config.rx_filter = HWTSTAMP_FILTER_PTP_V2_EVENT;
-
 	return 0;
 }
 
@@ -1073,6 +1065,9 @@ void lan966x_ptp_deinit(struct lan966x *lan966x)
 	struct lan966x_port *port;
 	int i;
 
+	if (!lan966x->ptp)
+		return;
+
 	for (i = 0; i < lan966x->num_phys_ports; i++) {
 		port = lan966x->ports[i];
 		if (!port)
@@ -1086,14 +1081,15 @@ void lan966x_ptp_deinit(struct lan966x *lan966x)
 }
 
 void lan966x_ptp_rxtstamp(struct lan966x *lan966x, struct sk_buff *skb,
-			  u64 timestamp)
+			  u64 src_port, u64 timestamp)
 {
 	struct skb_shared_hwtstamps *shhwtstamps;
 	struct lan966x_phc *phc;
 	struct timespec64 ts;
 	u64 full_ts_in_ns;
 
-	if (!lan966x->ptp)
+	if (!lan966x->ptp ||
+	    !lan966x->ports[src_port]->ptp_rx_cmd)
 		return;
 
 	phc = &lan966x->phc[LAN966X_PHC_PORT];

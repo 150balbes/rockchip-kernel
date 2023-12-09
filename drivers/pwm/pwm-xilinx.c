@@ -198,7 +198,6 @@ static int xilinx_pwm_get_state(struct pwm_chip *chip,
 static const struct pwm_ops xilinx_pwm_ops = {
 	.apply = xilinx_pwm_apply,
 	.get_state = xilinx_pwm_get_state,
-	.owner = THIS_MODULE,
 };
 
 static const struct regmap_config xilinx_pwm_regmap_config = {
@@ -292,14 +291,13 @@ static int xilinx_pwm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int xilinx_pwm_remove(struct platform_device *pdev)
+static void xilinx_pwm_remove(struct platform_device *pdev)
 {
 	struct xilinx_pwm_device *xilinx_pwm = platform_get_drvdata(pdev);
 
 	pwmchip_remove(&xilinx_pwm->chip);
 	clk_rate_exclusive_put(xilinx_pwm->priv.clk);
 	clk_disable_unprepare(xilinx_pwm->priv.clk);
-	return 0;
 }
 
 static const struct of_device_id xilinx_pwm_of_match[] = {
@@ -310,7 +308,7 @@ MODULE_DEVICE_TABLE(of, xilinx_pwm_of_match);
 
 static struct platform_driver xilinx_pwm_driver = {
 	.probe = xilinx_pwm_probe,
-	.remove = xilinx_pwm_remove,
+	.remove_new = xilinx_pwm_remove,
 	.driver = {
 		.name = "xilinx-pwm",
 		.of_match_table = of_match_ptr(xilinx_pwm_of_match),

@@ -83,7 +83,7 @@ static struct dentry *ovl_whiteout(struct ovl_fs *ofs)
 		ofs->whiteout = whiteout;
 	}
 
-	if (ofs->share_whiteout) {
+	if (!ofs->no_shared_whiteout) {
 		whiteout = ovl_lookup_temp(ofs, workdir);
 		if (IS_ERR(whiteout))
 			goto out;
@@ -95,7 +95,7 @@ static struct dentry *ovl_whiteout(struct ovl_fs *ofs)
 		if (err != -EMLINK) {
 			pr_warn("Failed to link whiteout - disabling whiteout inode sharing(nlink=%u, err=%i)\n",
 				ofs->whiteout->d_inode->i_nlink, err);
-			ofs->share_whiteout = false;
+			ofs->no_shared_whiteout = true;
 		}
 		dput(whiteout);
 	}
@@ -269,8 +269,7 @@ static int ovl_instantiate(struct dentry *dentry, struct inode *inode,
 
 	ovl_dir_modified(dentry->d_parent, false);
 	ovl_dentry_set_upper_alias(dentry);
-	ovl_dentry_update_reval(dentry, newdentry,
-			DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE);
+	ovl_dentry_init_reval(dentry, newdentry, NULL);
 
 	if (!hardlink) {
 		/*
@@ -478,7 +477,7 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 		goto out_unlock;
 
 	err = -ESTALE;
-	if (d_is_negative(upper) || !IS_WHITEOUT(d_inode(upper)))
+	if (d_is_negative(upper) || !ovl_upper_is_whiteout(ofs, upper))
 		goto out_dput;
 
 	newdentry = ovl_create_temp(ofs, workdir, cattr);
@@ -560,10 +559,6 @@ static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
 	struct cred *override_cred;
 	struct dentry *parent = dentry->d_parent;
 
-	err = ovl_copy_up(parent);
-	if (err)
-		return err;
-
 	old_cred = ovl_override_creds(dentry->d_sb);
 
 	/*
@@ -627,6 +622,10 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
 		.link = link,
 	};
 
+	err = ovl_copy_up(dentry->d_parent);
+	if (err)
+		return err;
+
 	err = ovl_want_write(dentry);
 	if (err)
 		goto out;
@@ -641,7 +640,7 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
 	inode->i_state |= I_CREATING;
 	spin_unlock(&inode->i_lock);
 
-	inode_init_owner(&init_user_ns, inode, dentry->d_parent->d_inode, mode);
+	inode_init_owner(&nop_mnt_idmap, inode, dentry->d_parent->d_inode, mode);
 	attr.mode = inode->i_mode;
 
 	err = ovl_create_or_link(dentry, inode, &attr, false);
@@ -655,19 +654,19 @@ out:
 	return err;
 }
 
-static int ovl_create(struct user_namespace *mnt_userns, struct inode *dir,
+static int ovl_create(struct mnt_idmap *idmap, struct inode *dir,
 		      struct dentry *dentry, umode_t mode, bool excl)
 {
 	return ovl_create_object(dentry, (mode & 07777) | S_IFREG, 0, NULL);
 }
 
-static int ovl_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
+static int ovl_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 		     struct dentry *dentry, umode_t mode)
 {
 	return ovl_create_object(dentry, (mode & 07777) | S_IFDIR, 0, NULL);
 }
 
-static int ovl_mknod(struct user_namespace *mnt_userns, struct inode *dir,
+static int ovl_mknod(struct mnt_idmap *idmap, struct inode *dir,
 		     struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	/* Don't allow creation of "whiteout" on overlay */
@@ -677,7 +676,7 @@ static int ovl_mknod(struct user_namespace *mnt_userns, struct inode *dir,
 	return ovl_create_object(dentry, mode, rdev, NULL);
 }
 
-static int ovl_symlink(struct user_namespace *mnt_userns, struct inode *dir,
+static int ovl_symlink(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, const char *link)
 {
 	return ovl_create_object(dentry, S_IFLNK, 0, link);
@@ -701,27 +700,23 @@ static int ovl_link(struct dentry *old, struct inode *newdir,
 	int err;
 	struct inode *inode;
 
-	err = ovl_want_write(old);
+	err = ovl_copy_up(old);
 	if (err)
 		goto out;
 
-	err = ovl_copy_up(old);
-	if (err)
-		goto out_drop_write;
-
 	err = ovl_copy_up(new->d_parent);
 	if (err)
-		goto out_drop_write;
+		goto out;
+
+	err = ovl_nlink_start(old);
+	if (err)
+		goto out;
 
 	if (ovl_is_metacopy_dentry(old)) {
 		err = ovl_set_link_redirect(old);
 		if (err)
-			goto out_drop_write;
+			goto out_nlink_end;
 	}
-
-	err = ovl_nlink_start(old);
-	if (err)
-		goto out_drop_write;
 
 	inode = d_inode(old);
 	ihold(inode);
@@ -732,9 +727,8 @@ static int ovl_link(struct dentry *old, struct inode *newdir,
 	if (err)
 		iput(inode);
 
+out_nlink_end:
 	ovl_nlink_end(old);
-out_drop_write:
-	ovl_drop_write(old);
 out:
 	return err;
 }
@@ -892,17 +886,13 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 			goto out;
 	}
 
-	err = ovl_want_write(dentry);
+	err = ovl_copy_up(dentry->d_parent);
 	if (err)
 		goto out;
 
-	err = ovl_copy_up(dentry->d_parent);
-	if (err)
-		goto out_drop_write;
-
 	err = ovl_nlink_start(dentry);
 	if (err)
-		goto out_drop_write;
+		goto out;
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	if (!lower_positive)
@@ -927,8 +917,6 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 	if (ovl_dentry_upper(dentry))
 		ovl_copyattr(d_inode(dentry));
 
-out_drop_write:
-	ovl_drop_write(dentry);
 out:
 	ovl_cache_free(&list);
 	return err;
@@ -953,7 +941,7 @@ static bool ovl_type_merge_or_lower(struct dentry *dentry)
 
 static bool ovl_can_move(struct dentry *dentry)
 {
-	return ovl_redirect_dir(dentry->d_sb) ||
+	return ovl_redirect_dir(OVL_FS(dentry->d_sb)) ||
 		!d_is_dir(dentry) || !ovl_type_merge_or_lower(dentry);
 }
 
@@ -1075,7 +1063,7 @@ static int ovl_set_redirect(struct dentry *dentry, bool samedir)
 	return err;
 }
 
-static int ovl_rename(struct user_namespace *mnt_userns, struct inode *olddir,
+static int ovl_rename(struct mnt_idmap *idmap, struct inode *olddir,
 		      struct dentry *old, struct inode *newdir,
 		      struct dentry *new, unsigned int flags)
 {
@@ -1132,27 +1120,30 @@ static int ovl_rename(struct user_namespace *mnt_userns, struct inode *olddir,
 		}
 	}
 
-	err = ovl_want_write(old);
+	err = ovl_copy_up(old);
 	if (err)
 		goto out;
 
-	err = ovl_copy_up(old);
-	if (err)
-		goto out_drop_write;
-
 	err = ovl_copy_up(new->d_parent);
 	if (err)
-		goto out_drop_write;
+		goto out;
 	if (!overwrite) {
 		err = ovl_copy_up(new);
 		if (err)
-			goto out_drop_write;
+			goto out;
 	} else if (d_inode(new)) {
 		err = ovl_nlink_start(new);
 		if (err)
-			goto out_drop_write;
+			goto out;
 
 		update_nlink = true;
+	}
+
+	if (!update_nlink) {
+		/* ovl_nlink_start() took ovl_want_write() */
+		err = ovl_want_write(old);
+		if (err)
+			goto out;
 	}
 
 	old_cred = ovl_override_creds(old->d_sb);
@@ -1220,7 +1211,7 @@ static int ovl_rename(struct user_namespace *mnt_userns, struct inode *olddir,
 		}
 	} else {
 		if (!d_is_negative(newdentry)) {
-			if (!new_opaque || !ovl_is_whiteout(newdentry))
+			if (!new_opaque || !ovl_upper_is_whiteout(ofs, newdentry))
 				goto out_dput;
 		} else {
 			if (flags & RENAME_EXCHANGE)
@@ -1287,8 +1278,8 @@ out_revert_creds:
 	revert_creds(old_cred);
 	if (update_nlink)
 		ovl_nlink_end(new);
-out_drop_write:
-	ovl_drop_write(old);
+	else
+		ovl_drop_write(old);
 out:
 	dput(opaquedir);
 	ovl_cache_free(&list);

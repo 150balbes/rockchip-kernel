@@ -4,14 +4,22 @@
 #define BTRFS_MESSAGES_H
 
 #include <linux/types.h>
+#include <linux/printk.h>
+#include <linux/bug.h>
 
 struct btrfs_fs_info;
-struct btrfs_trans_handle;
+
+/*
+ * We want to be able to override this in btrfs-progs.
+ */
+#ifdef __KERNEL__
 
 static inline __printf(2, 3) __cold
 void btrfs_no_printk(const struct btrfs_fs_info *fs_info, const char *fmt, ...)
 {
 }
+
+#endif
 
 #ifdef CONFIG_PRINTK
 
@@ -161,7 +169,11 @@ do {								\
 } while (0)
 
 #ifdef CONFIG_BTRFS_ASSERT
-void __cold btrfs_assertfail(const char *expr, const char *file, int line);
+
+#define btrfs_assertfail(expr, file, line)	({				\
+	pr_err("assertion failed: %s, in %s:%d\n", (expr), (file), (line));	\
+	BUG();								\
+})
 
 #define ASSERT(expr)						\
 	(likely(expr) ? (void)0 : btrfs_assertfail(#expr, __FILE__, __LINE__))
@@ -169,63 +181,28 @@ void __cold btrfs_assertfail(const char *expr, const char *file, int line);
 #define ASSERT(expr)	(void)(expr)
 #endif
 
-void __cold btrfs_print_v0_err(struct btrfs_fs_info *fs_info);
-
 __printf(5, 6)
 __cold
 void __btrfs_handle_fs_error(struct btrfs_fs_info *fs_info, const char *function,
-		     unsigned int line, int errno, const char *fmt, ...);
+		     unsigned int line, int error, const char *fmt, ...);
 
-const char * __attribute_const__ btrfs_decode_error(int errno);
+const char * __attribute_const__ btrfs_decode_error(int error);
 
-__cold
-void __btrfs_abort_transaction(struct btrfs_trans_handle *trans,
-			       const char *function,
-			       unsigned int line, int errno, bool first_hit);
-
-bool __cold abort_should_print_stack(int errno);
-
-/*
- * Call btrfs_abort_transaction as early as possible when an error condition is
- * detected, that way the exact stack trace is reported for some errors.
- */
-#define btrfs_abort_transaction(trans, errno)			\
-do {								\
-	bool first = false;					\
-	/* Report first abort since mount */			\
-	if (!test_and_set_bit(BTRFS_FS_STATE_TRANS_ABORTED,	\
-			      &((trans)->fs_info->fs_state))) {	\
-		first = true;					\
-		if (WARN(abort_should_print_stack(errno),       \
-			KERN_ERR				\
-			"BTRFS: Transaction aborted (error %d)\n",	\
-			(errno))) {					\
-			/* Stack trace printed. */			\
-		} else {						\
-			btrfs_err((trans)->fs_info,			\
-				  "Transaction aborted (error %d)",     \
-				  (errno));			\
-		}						\
-	}							\
-	__btrfs_abort_transaction((trans), __func__,		\
-				  __LINE__, (errno), first);	\
-} while (0)
-
-#define btrfs_handle_fs_error(fs_info, errno, fmt, args...)		\
+#define btrfs_handle_fs_error(fs_info, error, fmt, args...)		\
 	__btrfs_handle_fs_error((fs_info), __func__, __LINE__,		\
-				(errno), fmt, ##args)
+				(error), fmt, ##args)
 
 __printf(5, 6)
 __cold
 void __btrfs_panic(struct btrfs_fs_info *fs_info, const char *function,
-		   unsigned int line, int errno, const char *fmt, ...);
+		   unsigned int line, int error, const char *fmt, ...);
 /*
  * If BTRFS_MOUNT_PANIC_ON_FATAL_ERROR is in mount_opt, __btrfs_panic
  * will panic().  Otherwise we BUG() here.
  */
-#define btrfs_panic(fs_info, errno, fmt, args...)			\
+#define btrfs_panic(fs_info, error, fmt, args...)			\
 do {									\
-	__btrfs_panic(fs_info, __func__, __LINE__, errno, fmt, ##args);	\
+	__btrfs_panic(fs_info, __func__, __LINE__, error, fmt, ##args);	\
 	BUG();								\
 } while (0)
 

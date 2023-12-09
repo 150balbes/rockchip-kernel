@@ -10,7 +10,7 @@ maintainers:
   - UNGLinuxDriver@microchip.com
 
 allOf:
-  - $ref: dsa.yaml#
+  - $ref: dsa.yaml#/$defs/ethernet-ports
 
 properties:
   compatible:
@@ -37,8 +37,9 @@ properties:
 
 patternProperties:
   "^(ethernet-)?ports$":
+    additionalProperties: true
     patternProperties:
-      "^(ethernet-)?port@[0-9]+$":
+      "^(ethernet-)?port@[0-7]$":
         allOf:
           - if:
               properties:

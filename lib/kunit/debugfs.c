@@ -10,6 +10,7 @@
 #include <kunit/test.h>
 
 #include "string-stream.h"
+#include "debugfs.h"
 
 #define KUNIT_DEBUGFS_ROOT             "kunit"
 #define KUNIT_DEBUGFS_RESULTS          "results"
@@ -36,14 +37,21 @@ void kunit_debugfs_init(void)
 		debugfs_rootdir = debugfs_create_dir(KUNIT_DEBUGFS_ROOT, NULL);
 }
 
-static void debugfs_print_result(struct seq_file *seq,
-				 struct kunit_suite *suite,
-				 struct kunit_case *test_case)
+static void debugfs_print_result(struct seq_file *seq, struct string_stream *log)
 {
-	if (!test_case || !test_case->log)
+	struct string_stream_fragment *frag_container;
+
+	if (!log)
 		return;
 
-	seq_printf(seq, "%s", test_case->log);
+	/*
+	 * Walk the fragments so we don't need to allocate a temporary
+	 * buffer to hold the entire string.
+	 */
+	spin_lock(&log->lock);
+	list_for_each_entry(frag_container, &log->fragments, node)
+		seq_printf(seq, "%s", frag_container->fragment);
+	spin_unlock(&log->lock);
 }
 
 /*
@@ -55,13 +63,22 @@ static int debugfs_print_results(struct seq_file *seq, void *v)
 	enum kunit_status success = kunit_suite_has_succeeded(suite);
 	struct kunit_case *test_case;
 
-	if (!suite || !suite->log)
+	if (!suite)
 		return 0;
 
-	seq_printf(seq, "%s", suite->log);
+	/* Print KTAP header so the debugfs log can be parsed as valid KTAP. */
+	seq_puts(seq, "KTAP version 1\n");
+	seq_puts(seq, "1..1\n");
+
+	/* Print suite header because it is not stored in the test logs. */
+	seq_puts(seq, KUNIT_SUBTEST_INDENT "KTAP version 1\n");
+	seq_printf(seq, KUNIT_SUBTEST_INDENT "# Subtest: %s\n", suite->name);
+	seq_printf(seq, KUNIT_SUBTEST_INDENT "1..%zd\n", kunit_suite_num_test_cases(suite));
 
 	kunit_suite_for_each_test_case(suite, test_case)
-		debugfs_print_result(seq, suite, test_case);
+		debugfs_print_result(seq, test_case->log);
+
+	debugfs_print_result(seq, suite->log);
 
 	seq_printf(seq, "%s %d %s\n",
 		   kunit_status_to_ok_not_ok(success), 1, suite->name);
@@ -94,9 +111,13 @@ void kunit_debugfs_create_suite(struct kunit_suite *suite)
 	struct kunit_case *test_case;
 
 	/* Allocate logs before creating debugfs representation. */
-	suite->log = kzalloc(KUNIT_LOG_SIZE, GFP_KERNEL);
-	kunit_suite_for_each_test_case(suite, test_case)
-		test_case->log = kzalloc(KUNIT_LOG_SIZE, GFP_KERNEL);
+	suite->log = alloc_string_stream(GFP_KERNEL);
+	string_stream_set_append_newlines(suite->log, true);
+
+	kunit_suite_for_each_test_case(suite, test_case) {
+		test_case->log = alloc_string_stream(GFP_KERNEL);
+		string_stream_set_append_newlines(test_case->log, true);
+	}
 
 	suite->debugfs = debugfs_create_dir(suite->name, debugfs_rootdir);
 
@@ -110,7 +131,7 @@ void kunit_debugfs_destroy_suite(struct kunit_suite *suite)
 	struct kunit_case *test_case;
 
 	debugfs_remove_recursive(suite->debugfs);
-	kfree(suite->log);
+	string_stream_destroy(suite->log);
 	kunit_suite_for_each_test_case(suite, test_case)
-		kfree(test_case->log);
+		string_stream_destroy(test_case->log);
 }

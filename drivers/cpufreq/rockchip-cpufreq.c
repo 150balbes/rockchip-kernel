@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Rockchip CPUFreq Driver
+ * Rockchip CPUFreq Driver. This is similar to the generic DT
+ * cpufreq driver, but handles the following platform specific
+ * quirks:
+ *
+ *  * support for two regulators - one for the CPU core and one
+ *    for the memory interface
+ *  * reboot handler to setup the reboot frequency
+ *  * handling of read margin registers
  *
  * Copyright (C) 2017 Fuzhou Rockchip Electronics Co., Ltd
- * Copyright (C) 2022 Collabora Ltd.
+ * Copyright (C) 2023 Collabora Ltd.
  */
 
 #include <linux/cpu.h>
@@ -30,7 +37,9 @@
 #define RK3588_CPU_CTRL			0x30
 
 #define VOLT_RM_TABLE_END		~1
-#define MAX_PROP_NAME_LEN		6
+
+static struct platform_device *cpufreq_pdev;
+static LIST_HEAD(priv_list);
 
 struct volt_rm_table {
 	uint32_t volt;
@@ -41,9 +50,16 @@ struct rockchip_opp_info {
 	const struct rockchip_opp_data *data;
 	struct volt_rm_table *volt_rm_tbl;
 	struct regmap *grf;
-	struct regmap *dsu_grf;
 	u32 current_rm;
 	u32 reboot_freq;
+};
+
+struct private_data {
+	struct list_head node;
+
+	cpumask_var_t cpus;
+	struct device *cpu_dev;
+	struct cpufreq_frequency_table *freq_table;
 };
 
 struct rockchip_opp_data {
@@ -80,26 +96,16 @@ static int rk3588_cpu_set_read_margin(struct device *dev, struct rockchip_opp_in
 		return 0;
 	if (rm == opp_info->current_rm)
 		return 0;
+	if (!opp_info->grf)
+		return 0;
 
 	dev_dbg(dev, "set rm to %d\n", rm);
-	if (opp_info->grf) {
-		regmap_write(opp_info->grf, RK3588_MEMCFG_HSSPRF_LOW, 0x001c0000 | (rm << 2));
-		regmap_write(opp_info->grf, RK3588_MEMCFG_HSDPRF_LOW, 0x003c0000 | (rm << 2));
-		regmap_write(opp_info->grf, RK3588_MEMCFG_HSDPRF_HIGH, 0x003c0000 | (rm << 2));
-		regmap_write(opp_info->grf, RK3588_CPU_CTRL, 0x00200020);
-		udelay(1);
-		regmap_write(opp_info->grf, RK3588_CPU_CTRL, 0x00200000);
-	}
-	if (opp_info->dsu_grf) {
-		regmap_write(opp_info->dsu_grf, RK3588_MEMCFG_HSSPRF_LOW, 0x001c0000 | (rm << 2));
-		regmap_write(opp_info->dsu_grf, RK3588_MEMCFG_HSDPRF_LOW, 0x003c0000 | (rm << 2));
-		regmap_write(opp_info->dsu_grf, RK3588_MEMCFG_HSDPRF_HIGH, 0x003c0000 | (rm << 2));
-		regmap_write(opp_info->dsu_grf, RK3588_CPU_CTRL, 0x001c0000 | (rm << 2));
-		regmap_write(opp_info->dsu_grf, 0x38, 0x001c0000 | (rm << 2));
-		regmap_write(opp_info->dsu_grf, 0x18, 0x40004000);
-		udelay(1);
-		regmap_write(opp_info->dsu_grf, 0x18, 0x40000000);
-	}
+	regmap_write(opp_info->grf, RK3588_MEMCFG_HSSPRF_LOW, 0x001c0000 | (rm << 2));
+	regmap_write(opp_info->grf, RK3588_MEMCFG_HSDPRF_LOW, 0x003c0000 | (rm << 2));
+	regmap_write(opp_info->grf, RK3588_MEMCFG_HSDPRF_HIGH, 0x003c0000 | (rm << 2));
+	regmap_write(opp_info->grf, RK3588_CPU_CTRL, 0x00200020);
+	udelay(1);
+	regmap_write(opp_info->grf, RK3588_CPU_CTRL, 0x00200000);
 
 	opp_info->current_rm = rm;
 
@@ -323,9 +329,16 @@ static int rockchip_cpufreq_cluster_init(int cpu, struct cluster_info *cluster)
 		return -ENOENT;
 	}
 
+	reg_table_token = dev_pm_opp_set_regulators(dev, reg_names);
+	if (reg_table_token < 0) {
+		ret = reg_table_token;
+		dev_err_probe(dev, ret, "Failed to set opp regulators\n");
+		goto np_err;
+	}
+
 	ret = dev_pm_opp_of_get_sharing_cpus(dev, &cluster->cpus);
 	if (ret) {
-		dev_err(dev, "Failed to get sharing cpus\n");
+		dev_err_probe(dev, ret, "Failed to get sharing cpus\n");
 		goto np_err;
 	}
 
@@ -335,28 +348,16 @@ static int rockchip_cpufreq_cluster_init(int cpu, struct cluster_info *cluster)
 		opp_info->grf = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
 		if (IS_ERR(opp_info->grf))
 			opp_info->grf = NULL;
-		opp_info->dsu_grf = syscon_regmap_lookup_by_phandle(np, "rockchip,dsu-grf");
-		if (IS_ERR(opp_info->dsu_grf))
-			opp_info->dsu_grf = NULL;
 		rockchip_get_volt_rm_table(dev, np, "rockchip,volt-mem-read-margin", &opp_info->volt_rm_tbl);
 
 		of_property_read_u32(np, "rockchip,reboot-freq", &opp_info->reboot_freq);
 	}
 
-	if (of_find_property(dev->of_node, "cpu-supply", NULL) &&
-	    of_find_property(dev->of_node, "mem-supply", NULL)) {
-		reg_table_token = dev_pm_opp_set_regulators(dev, reg_names);
-		if (reg_table_token < 0) {
-			ret = reg_table_token;
-			dev_err(dev, "Failed to set opp regulators\n");
-			goto np_err;
-		}
-		opp_table_token = dev_pm_opp_set_config_regulators(dev, rk_opp_config_regulators);
-		if (opp_table_token < 0) {
-			ret = opp_table_token;
-			dev_err(dev, "Failed to set opp config regulators\n");
-			goto reg_opp_table;
-		}
+	opp_table_token = dev_pm_opp_set_config_regulators(dev, rk_opp_config_regulators);
+	if (opp_table_token < 0) {
+		ret = opp_table_token;
+		dev_err(dev, "Failed to set opp config regulators\n");
+		goto reg_opp_table;
 	}
 
 	of_node_put(np);
@@ -377,10 +378,159 @@ static struct notifier_block rockchip_cpufreq_reboot_notifier = {
 	.priority = 0,
 };
 
-static int __init rockchip_cpufreq_driver_init(void)
+static struct freq_attr *cpufreq_rockchip_attr[] = {
+	&cpufreq_freq_attr_scaling_available_freqs,
+	NULL,
+};
+
+static int cpufreq_online(struct cpufreq_policy *policy)
+{
+	/* We did light-weight tear down earlier, nothing to do here */
+	return 0;
+}
+
+static int cpufreq_offline(struct cpufreq_policy *policy)
+{
+	/*
+	 * Preserve policy->driver_data and don't free resources on light-weight
+	 * tear down.
+	 */
+	return 0;
+}
+
+static struct private_data *rockchip_cpufreq_find_data(int cpu)
+{
+	struct private_data *priv;
+
+	list_for_each_entry(priv, &priv_list, node) {
+		if (cpumask_test_cpu(cpu, priv->cpus))
+			return priv;
+	}
+
+	return NULL;
+}
+
+static int cpufreq_init(struct cpufreq_policy *policy)
+{
+	struct private_data *priv;
+	struct device *cpu_dev;
+	struct clk *cpu_clk;
+	unsigned int transition_latency;
+	int ret;
+
+	priv = rockchip_cpufreq_find_data(policy->cpu);
+	if (!priv) {
+		pr_err("failed to find data for cpu%d\n", policy->cpu);
+		return -ENODEV;
+	}
+	cpu_dev = priv->cpu_dev;
+
+	cpu_clk = clk_get(cpu_dev, NULL);
+	if (IS_ERR(cpu_clk)) {
+		ret = PTR_ERR(cpu_clk);
+		dev_err(cpu_dev, "%s: failed to get clk: %d\n", __func__, ret);
+		return ret;
+	}
+
+	transition_latency = dev_pm_opp_get_max_transition_latency(cpu_dev);
+	if (!transition_latency)
+		transition_latency = CPUFREQ_ETERNAL;
+
+	cpumask_copy(policy->cpus, priv->cpus);
+	policy->driver_data = priv;
+	policy->clk = cpu_clk;
+	policy->freq_table = priv->freq_table;
+	policy->suspend_freq = dev_pm_opp_get_suspend_opp_freq(cpu_dev) / 1000;
+	policy->cpuinfo.transition_latency = transition_latency;
+	policy->dvfs_possible_from_any_cpu = true;
+
+	return 0;
+}
+
+static int cpufreq_exit(struct cpufreq_policy *policy)
+{
+	clk_put(policy->clk);
+	return 0;
+}
+
+static int set_target(struct cpufreq_policy *policy, unsigned int index)
+{
+	struct private_data *priv = policy->driver_data;
+	unsigned long freq = policy->freq_table[index].frequency;
+
+	return dev_pm_opp_set_rate(priv->cpu_dev, freq * 1000);
+}
+
+static struct cpufreq_driver rockchip_cpufreq_driver = {
+	.flags = CPUFREQ_NEED_INITIAL_FREQ_CHECK |
+		 CPUFREQ_IS_COOLING_DEV |
+		 CPUFREQ_HAVE_GOVERNOR_PER_POLICY,
+	.verify = cpufreq_generic_frequency_table_verify,
+	.target_index = set_target,
+	.get = cpufreq_generic_get,
+	.init = cpufreq_init,
+	.exit = cpufreq_exit,
+	.online = cpufreq_online,
+	.offline = cpufreq_offline,
+	.register_em = cpufreq_register_em_with_opp,
+	.name = "rockchip-cpufreq",
+	.attr = cpufreq_rockchip_attr,
+	.suspend = cpufreq_generic_suspend,
+};
+
+static int rockchip_cpufreq_init(struct device *dev, int cpu)
+{
+	struct private_data *priv;
+	struct device *cpu_dev;
+	int ret;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	if (!alloc_cpumask_var(&priv->cpus, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_set_cpu(cpu, priv->cpus);
+
+	cpu_dev = get_cpu_device(cpu);
+	if (!cpu_dev)
+		return -EPROBE_DEFER;
+	priv->cpu_dev = cpu_dev;
+
+	ret = dev_pm_opp_of_get_sharing_cpus(cpu_dev, priv->cpus);
+	if (ret)
+		return ret;
+
+	ret = dev_pm_opp_of_cpumask_add_table(priv->cpus);
+	if (ret)
+		return ret;
+
+	ret = dev_pm_opp_get_opp_count(cpu_dev);
+	if (ret <= 0)
+		return dev_err_probe(cpu_dev, -ENODEV, "OPP table can't be empty\n");
+
+	ret = dev_pm_opp_init_cpufreq_table(cpu_dev, &priv->freq_table);
+	if (ret)
+		return dev_err_probe(cpu_dev, ret, "failed to init cpufreq table\n");
+
+	list_add(&priv->node, &priv_list);
+
+	return 0;
+}
+
+static void rockchip_cpufreq_free_list(void *data)
 {
 	struct cluster_info *cluster, *pos;
-	struct cpufreq_dt_platform_data pdata = {0};
+
+	list_for_each_entry_safe(cluster, pos, &cluster_info_list, list_head) {
+		list_del(&cluster->list_head);
+	}
+}
+
+static int rockchip_cpufreq_init_list(struct device *dev)
+{
+	struct cluster_info *cluster;
 	int cpu, ret;
 
 	for_each_possible_cpu(cpu) {
@@ -388,7 +538,7 @@ static int __init rockchip_cpufreq_driver_init(void)
 		if (cluster)
 			continue;
 
-		cluster = kzalloc(sizeof(*cluster), GFP_KERNEL);
+		cluster = devm_kzalloc(dev, sizeof(*cluster), GFP_KERNEL);
 		if (!cluster) {
 			ret = -ENOMEM;
 			goto release_cluster_info;
@@ -396,33 +546,99 @@ static int __init rockchip_cpufreq_driver_init(void)
 
 		ret = rockchip_cpufreq_cluster_init(cpu, cluster);
 		if (ret) {
-			pr_err("Failed to initialize dvfs info cpu%d\n", cpu);
+			dev_err_probe(dev, ret, "Failed to initialize dvfs info cpu%d\n", cpu);
 			goto release_cluster_info;
 		}
 		list_add(&cluster->list_head, &cluster_info_list);
 	}
 
-	ret = register_reboot_notifier(&rockchip_cpufreq_reboot_notifier);
-	if (ret) {
-		pr_err("Failed to register reboot handler\n");
-		goto release_cluster_info;
-	}
-
-	pdata.have_governor_per_policy = true;
-	pdata.suspend = cpufreq_generic_suspend;
-
-	return PTR_ERR_OR_ZERO(platform_device_register_data(NULL, "cpufreq-dt",
-			       -1, (void *)&pdata,
-			       sizeof(struct cpufreq_dt_platform_data)));
+	return 0;
 
 release_cluster_info:
-	list_for_each_entry_safe(cluster, pos, &cluster_info_list, list_head) {
-		list_del(&cluster->list_head);
-		kfree(cluster);
+	rockchip_cpufreq_free_list(NULL);
+	return ret;
+}
+
+static void rockchip_cpufreq_unregister(void *data)
+{
+	cpufreq_unregister_driver(&rockchip_cpufreq_driver);
+}
+
+static int rockchip_cpufreq_probe(struct platform_device *pdev)
+{
+	int ret, cpu;
+
+	ret = rockchip_cpufreq_init_list(&pdev->dev);
+	if (ret)
+		return ret;
+
+	ret = devm_add_action_or_reset(&pdev->dev, rockchip_cpufreq_free_list, NULL);
+	if (ret)
+		return ret;
+
+	ret = devm_register_reboot_notifier(&pdev->dev, &rockchip_cpufreq_reboot_notifier);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "Failed to register reboot handler\n");
+
+	for_each_possible_cpu(cpu) {
+		ret = rockchip_cpufreq_init(&pdev->dev, cpu);
+		if (ret)
+			return ret;
 	}
+
+	ret = cpufreq_register_driver(&rockchip_cpufreq_driver);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "failed register driver\n");
+
+	ret = devm_add_action_or_reset(&pdev->dev, rockchip_cpufreq_unregister, NULL);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static struct platform_driver rockchip_cpufreq_platdrv = {
+	.driver = {
+		.name	= "rockchip-cpufreq",
+	},
+	.probe		= rockchip_cpufreq_probe,
+};
+
+static int __init rockchip_cpufreq_driver_init(void)
+{
+	int ret;
+
+	if (!of_machine_is_compatible("rockchip,rk3588") &&
+	    !of_machine_is_compatible("rockchip,rk3588s")) {
+		return -ENODEV;
+	}
+
+	ret = platform_driver_register(&rockchip_cpufreq_platdrv);
+	if (ret)
+		return ret;
+
+	cpufreq_pdev = platform_device_register_data(NULL, "rockchip-cpufreq", -1,
+						     NULL, 0);
+	if (IS_ERR(cpufreq_pdev)) {
+		pr_err("failed to register rockchip-cpufreq platform device\n");
+		ret = PTR_ERR(cpufreq_pdev);
+		goto unregister_platform_driver;
+	}
+
+	return 0;
+
+unregister_platform_driver:
+	platform_driver_unregister(&rockchip_cpufreq_platdrv);
 	return ret;
 }
 module_init(rockchip_cpufreq_driver_init);
+
+static void __exit rockchip_cpufreq_driver_exit(void)
+{
+	platform_device_unregister(cpufreq_pdev);
+	platform_driver_unregister(&rockchip_cpufreq_platdrv);
+}
+module_exit(rockchip_cpufreq_driver_exit)
 
 MODULE_AUTHOR("Finley Xiao <finley.xiao@rock-chips.com>");
 MODULE_DESCRIPTION("Rockchip cpufreq driver");

@@ -106,12 +106,19 @@ enum sof_ipc4_global_msg {
 	SOF_IPC4_GLB_SAVE_PIPELINE,
 	SOF_IPC4_GLB_RESTORE_PIPELINE,
 
-	/* Loads library (using Code Load or HD/A Host Output DMA) */
+	/*
+	 * library loading
+	 *
+	 * Loads library (using Code Load or HD/A Host Output DMA)
+	 */
 	SOF_IPC4_GLB_LOAD_LIBRARY,
+	/*
+	 * Prepare the host DMA channel for library loading, must be followed by
+	 * a SOF_IPC4_GLB_LOAD_LIBRARY message as the library loading step
+	 */
+	SOF_IPC4_GLB_LOAD_LIBRARY_PREPARE,
 
-	/* 25: RESERVED - do not use */
-
-	SOF_IPC4_GLB_INTERNAL_MESSAGE = 26,
+	SOF_IPC4_GLB_INTERNAL_MESSAGE,
 
 	/* Notification (FW to SW driver) */
 	SOF_IPC4_GLB_NOTIFICATION,
@@ -176,6 +183,10 @@ enum sof_ipc4_pipeline_state {
 #define SOF_IPC4_GLB_PIPE_EXT_LP_MASK		BIT(0)
 #define SOF_IPC4_GLB_PIPE_EXT_LP(x)		((x) << SOF_IPC4_GLB_PIPE_EXT_LP_SHIFT)
 
+#define SOF_IPC4_GLB_PIPE_EXT_CORE_ID_SHIFT	20
+#define SOF_IPC4_GLB_PIPE_EXT_CORE_ID_MASK	GENMASK(23, 20)
+#define SOF_IPC4_GLB_PIPE_EXT_CORE_ID(x)	((x) << SOF_IPC4_GLB_PIPE_EXT_CORE_ID_SHIFT)
+
 /* pipeline set state ipc msg */
 #define SOF_IPC4_GLB_PIPE_STATE_ID_SHIFT		16
 #define SOF_IPC4_GLB_PIPE_STATE_ID_MASK		GENMASK(23, 16)
@@ -185,9 +196,41 @@ enum sof_ipc4_pipeline_state {
 #define SOF_IPC4_GLB_PIPE_STATE_MASK		GENMASK(15, 0)
 #define SOF_IPC4_GLB_PIPE_STATE(x)		((x) << SOF_IPC4_GLB_PIPE_STATE_SHIFT)
 
+/* pipeline set state IPC msg extension */
+#define SOF_IPC4_GLB_PIPE_STATE_EXT_MULTI	BIT(0)
+
 /* load library ipc msg */
 #define SOF_IPC4_GLB_LOAD_LIBRARY_LIB_ID_SHIFT	16
 #define SOF_IPC4_GLB_LOAD_LIBRARY_LIB_ID(x)	((x) << SOF_IPC4_GLB_LOAD_LIBRARY_LIB_ID_SHIFT)
+
+/* chain dma ipc message */
+#define SOF_IPC4_GLB_CHAIN_DMA_HOST_ID_SHIFT	0
+#define SOF_IPC4_GLB_CHAIN_DMA_HOST_ID_MASK	GENMASK(4, 0)
+#define SOF_IPC4_GLB_CHAIN_DMA_HOST_ID(x)	(((x) << SOF_IPC4_GLB_CHAIN_DMA_HOST_ID_SHIFT) & \
+						 SOF_IPC4_GLB_CHAIN_DMA_HOST_ID_MASK)
+
+#define SOF_IPC4_GLB_CHAIN_DMA_LINK_ID_SHIFT	8
+#define SOF_IPC4_GLB_CHAIN_DMA_LINK_ID_MASK	GENMASK(12, 8)
+#define SOF_IPC4_GLB_CHAIN_DMA_LINK_ID(x)	(((x) << SOF_IPC4_GLB_CHAIN_DMA_LINK_ID_SHIFT) & \
+						 SOF_IPC4_GLB_CHAIN_DMA_LINK_ID_MASK)
+
+#define SOF_IPC4_GLB_CHAIN_DMA_ALLOCATE_SHIFT	16
+#define SOF_IPC4_GLB_CHAIN_DMA_ALLOCATE_MASK	BIT(16)
+#define SOF_IPC4_GLB_CHAIN_DMA_ALLOCATE(x)	(((x) & 1) << SOF_IPC4_GLB_CHAIN_DMA_ALLOCATE_SHIFT)
+
+#define SOF_IPC4_GLB_CHAIN_DMA_ENABLE_SHIFT	17
+#define SOF_IPC4_GLB_CHAIN_DMA_ENABLE_MASK	BIT(17)
+#define SOF_IPC4_GLB_CHAIN_DMA_ENABLE(x)	(((x) & 1) << SOF_IPC4_GLB_CHAIN_DMA_ENABLE_SHIFT)
+
+#define SOF_IPC4_GLB_CHAIN_DMA_SCS_SHIFT	18
+#define SOF_IPC4_GLB_CHAIN_DMA_SCS_MASK		BIT(18)
+#define SOF_IPC4_GLB_CHAIN_DMA_SCS(x)		(((x) & 1) << SOF_IPC4_GLB_CHAIN_DMA_SCS_SHIFT)
+
+#define SOF_IPC4_GLB_EXT_CHAIN_DMA_FIFO_SIZE_SHIFT 0
+#define SOF_IPC4_GLB_EXT_CHAIN_DMA_FIFO_SIZE_MASK  GENMASK(24, 0)
+#define SOF_IPC4_GLB_EXT_CHAIN_DMA_FIFO_SIZE(x)	   (((x) << \
+						     SOF_IPC4_GLB_EXT_CHAIN_DMA_FIFO_SIZE_SHIFT) & \
+						    SOF_IPC4_GLB_EXT_CHAIN_DMA_FIFO_SIZE_MASK)
 
 enum sof_ipc4_channel_config {
 	/* one channel only. */
@@ -471,6 +514,23 @@ struct sof_ipc4_notify_resource_data {
 	uint32_t reserved;
 	uint32_t data[6];
 } __packed __aligned(4);
+
+#define SOF_IPC4_DEBUG_DESCRIPTOR_SIZE		12 /* 3 x u32 */
+
+/*
+ * The debug memory window is divided into 16 slots, and the
+ * first slot is used as a recorder for the other 15 slots.
+ */
+#define SOF_IPC4_MAX_DEBUG_SLOTS		15
+#define SOF_IPC4_DEBUG_SLOT_SIZE		0x1000
+
+/* debug log slot types */
+#define SOF_IPC4_DEBUG_SLOT_UNUSED		0x00000000
+#define SOF_IPC4_DEBUG_SLOT_CRITICAL_LOG	0x54524300 /* byte 0: core ID */
+#define SOF_IPC4_DEBUG_SLOT_DEBUG_LOG		0x474f4c00 /* byte 0: core ID */
+#define SOF_IPC4_DEBUG_SLOT_GDB_STUB		0x42444700
+#define SOF_IPC4_DEBUG_SLOT_TELEMETRY		0x4c455400
+#define SOF_IPC4_DEBUG_SLOT_BROKEN		0x44414544
 
 /** @}*/
 

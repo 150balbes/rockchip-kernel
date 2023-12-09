@@ -21,6 +21,11 @@
 
 #include "llsec.h"
 
+enum ieee802154_ongoing {
+	IEEE802154_IS_SCANNING = BIT(0),
+	IEEE802154_IS_BEACONING = BIT(1),
+};
+
 /* mac802154 device private data */
 struct ieee802154_local {
 	struct ieee802154_hw hw;
@@ -43,15 +48,35 @@ struct ieee802154_local {
 	struct list_head	interfaces;
 	struct mutex		iflist_mtx;
 
-	/* This one is used for scanning and other jobs not to be interfered
-	 * with serial driver.
-	 */
+	/* Data related workqueue */
 	struct workqueue_struct	*workqueue;
+	/* MAC commands related workqueue */
+	struct workqueue_struct	*mac_wq;
 
 	struct hrtimer ifs_timer;
 
+	/* Scanning */
+	u8 scan_page;
+	u8 scan_channel;
+	struct ieee802154_beacon_req_frame scan_beacon_req;
+	struct cfg802154_scan_request __rcu *scan_req;
+	struct delayed_work scan_work;
+
+	/* Beaconing */
+	unsigned int beacon_interval;
+	struct ieee802154_beacon_frame beacon;
+	struct cfg802154_beacon_request __rcu *beacon_req;
+	struct delayed_work beacon_work;
+
+	/* Asynchronous tasks */
+	struct list_head rx_beacon_list;
+	struct work_struct rx_beacon_work;
+	struct list_head rx_mac_cmd_list;
+	struct work_struct rx_mac_cmd_work;
+
 	bool started;
 	bool suspended;
+	unsigned long ongoing;
 
 	struct tasklet_struct tasklet;
 	struct sk_buff_head skb_queue;
@@ -132,6 +157,22 @@ ieee802154_sdata_running(struct ieee802154_sub_if_data *sdata)
 	return test_bit(SDATA_STATE_RUNNING, &sdata->state);
 }
 
+static inline int ieee802154_get_mac_cmd(struct sk_buff *skb, u8 *mac_cmd)
+{
+	struct ieee802154_mac_cmd_pl mac_pl;
+	int ret;
+
+	if (mac_cb(skb)->type != IEEE802154_FC_TYPE_MAC_CMD)
+		return -EINVAL;
+
+	ret = ieee802154_mac_cmd_pl_pull(skb, &mac_pl);
+	if (ret)
+		return ret;
+
+	*mac_cmd = mac_pl.cmd_id;
+	return 0;
+}
+
 extern struct ieee802154_mlme_ops mac802154_mlme_wpan;
 
 void ieee802154_rx(struct ieee802154_local *local, struct sk_buff *skb);
@@ -141,10 +182,16 @@ int ieee802154_mlme_op_pre(struct ieee802154_local *local);
 int ieee802154_mlme_tx(struct ieee802154_local *local,
 		       struct ieee802154_sub_if_data *sdata,
 		       struct sk_buff *skb);
+int ieee802154_mlme_tx_locked(struct ieee802154_local *local,
+			      struct ieee802154_sub_if_data *sdata,
+			      struct sk_buff *skb);
 void ieee802154_mlme_op_post(struct ieee802154_local *local);
 int ieee802154_mlme_tx_one(struct ieee802154_local *local,
 			   struct ieee802154_sub_if_data *sdata,
 			   struct sk_buff *skb);
+int ieee802154_mlme_tx_one_locked(struct ieee802154_local *local,
+				  struct ieee802154_sub_if_data *sdata,
+				  struct sk_buff *skb);
 netdev_tx_t
 ieee802154_monitor_start_xmit(struct sk_buff *skb, struct net_device *dev);
 netdev_tx_t
@@ -219,6 +266,35 @@ void mac802154_get_table(struct net_device *dev,
 void mac802154_unlock_table(struct net_device *dev);
 
 int mac802154_wpan_update_llsec(struct net_device *dev);
+
+/* PAN management handling */
+void mac802154_scan_worker(struct work_struct *work);
+int mac802154_trigger_scan_locked(struct ieee802154_sub_if_data *sdata,
+				  struct cfg802154_scan_request *request);
+int mac802154_abort_scan_locked(struct ieee802154_local *local,
+				struct ieee802154_sub_if_data *sdata);
+int mac802154_process_beacon(struct ieee802154_local *local,
+			     struct sk_buff *skb,
+			     u8 page, u8 channel);
+void mac802154_rx_beacon_worker(struct work_struct *work);
+
+static inline bool mac802154_is_scanning(struct ieee802154_local *local)
+{
+	return test_bit(IEEE802154_IS_SCANNING, &local->ongoing);
+}
+
+void mac802154_beacon_worker(struct work_struct *work);
+int mac802154_send_beacons_locked(struct ieee802154_sub_if_data *sdata,
+				  struct cfg802154_beacon_request *request);
+int mac802154_stop_beacons_locked(struct ieee802154_local *local,
+				  struct ieee802154_sub_if_data *sdata);
+
+static inline bool mac802154_is_beaconing(struct ieee802154_local *local)
+{
+	return test_bit(IEEE802154_IS_BEACONING, &local->ongoing);
+}
+
+void mac802154_rx_mac_cmd_worker(struct work_struct *work);
 
 /* interface handling */
 int ieee802154_iface_init(void);

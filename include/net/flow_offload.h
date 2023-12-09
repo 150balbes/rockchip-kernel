@@ -64,6 +64,10 @@ struct flow_match_tcp {
 	struct flow_dissector_key_tcp *key, *mask;
 };
 
+struct flow_match_ipsec {
+	struct flow_dissector_key_ipsec *key, *mask;
+};
+
 struct flow_match_mpls {
 	struct flow_dissector_key_mpls *key, *mask;
 };
@@ -116,6 +120,8 @@ void flow_rule_match_ports_range(const struct flow_rule *rule,
 				 struct flow_match_ports_range *out);
 void flow_rule_match_tcp(const struct flow_rule *rule,
 			 struct flow_match_tcp *out);
+void flow_rule_match_ipsec(const struct flow_rule *rule,
+			   struct flow_match_ipsec *out);
 void flow_rule_match_icmp(const struct flow_rule *rule,
 			  struct flow_match_icmp *out);
 void flow_rule_match_mpls(const struct flow_rule *rule,
@@ -228,6 +234,8 @@ void flow_action_cookie_destroy(struct flow_action_cookie *cookie);
 struct flow_action_entry {
 	enum flow_action_id		id;
 	u32				hw_index;
+	unsigned long			cookie;
+	u64				miss_cookie;
 	enum flow_action_hw_stats	hw_stats;
 	action_destr			destructor;
 	void				*destructor_priv;
@@ -320,12 +328,12 @@ struct flow_action_entry {
 			u16		sid;
 		} pppoe;
 	};
-	struct flow_action_cookie *cookie; /* user defined action cookie */
+	struct flow_action_cookie *user_cookie; /* user defined action cookie */
 };
 
 struct flow_action {
 	unsigned int			num_entries;
-	struct flow_action_entry	entries[];
+	struct flow_action_entry	entries[] __counted_by(num_entries);
 };
 
 static inline bool flow_action_has_entries(const struct flow_action *action)
@@ -593,6 +601,7 @@ struct flow_cls_common_offload {
 struct flow_cls_offload {
 	struct flow_cls_common_offload common;
 	enum flow_cls_command command;
+	bool use_act_stats;
 	unsigned long cookie;
 	struct flow_rule *rule;
 	struct flow_stats stats;
@@ -610,6 +619,7 @@ struct flow_offload_action {
 	enum offload_act_command  command;
 	enum flow_action_id id;
 	u32 index;
+	unsigned long cookie;
 	struct flow_stats stats;
 	struct flow_action action;
 };

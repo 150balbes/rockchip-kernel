@@ -15,11 +15,10 @@
  */
 
 #include <linux/delay.h>
-#include <linux/gpio.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
-#include <linux/of_gpio.h>
+#include <linux/of.h>
 #include <linux/mfd/rk808.h>
+#include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/gpio/consumer.h>
@@ -203,7 +202,6 @@ struct rk8xx_register_bit {
 
 struct rk808_regulator_data {
 	struct gpio_desc *dvs_gpio[2];
-	unsigned max_buck_steps_per_change;
 };
 
 static const struct linear_range rk808_ldo3_voltage_ranges[] = {
@@ -416,8 +414,7 @@ static int rk808_buck1_2_get_voltage_sel_regmap(struct regulator_dev *rdev)
 }
 
 static int rk808_buck1_2_i2c_set_voltage_sel(struct regulator_dev *rdev,
-					     unsigned sel,
-					     int max_steps)
+					     unsigned sel)
 {
 	int ret, delta_sel;
 	unsigned int old_sel, tmp, val, mask = rdev->desc->vsel_mask;
@@ -436,8 +433,8 @@ static int rk808_buck1_2_i2c_set_voltage_sel(struct regulator_dev *rdev,
 	 * the risk of overshoot. Put it into a multi-step, can effectively
 	 * avoid this problem, a step is 100mv here.
 	 */
-	while (delta_sel > max_steps) {
-		old_sel += max_steps;
+	while (delta_sel > MAX_STEPS_ONE_TIME) {
+		old_sel += MAX_STEPS_ONE_TIME;
 		val = old_sel << (ffs(mask) - 1);
 		val |= tmp;
 
@@ -471,13 +468,12 @@ static int rk808_buck1_2_set_voltage_sel(struct regulator_dev *rdev,
 	struct rk808_regulator_data *pdata = rdev_get_drvdata(rdev);
 	int id = rdev_get_id(rdev);
 	struct gpio_desc *gpio = pdata->dvs_gpio[id];
-	int max_steps = pdata->max_buck_steps_per_change;
 	unsigned int reg = rdev->desc->vsel_reg;
 	unsigned old_sel;
 	int ret, gpio_level;
 
 	if (!gpio)
-		return rk808_buck1_2_i2c_set_voltage_sel(rdev, sel, max_steps);
+		return rk808_buck1_2_i2c_set_voltage_sel(rdev, sel);
 
 	gpio_level = gpiod_get_value(gpio);
 	if (gpio_level == 0) {
@@ -598,6 +594,7 @@ static const struct rk8xx_register_bit rk806_suspend_bits[] = {
 static int rk806_set_suspend_enable(struct regulator_dev *rdev)
 {
 	int rid = rdev_get_id(rdev);
+
 	return regmap_update_bits(rdev->regmap, rk806_suspend_bits[rid].reg,
 				  rk806_suspend_bits[rid].bit,
 				  rk806_suspend_bits[rid].bit);
@@ -606,6 +603,7 @@ static int rk806_set_suspend_enable(struct regulator_dev *rdev)
 static int rk806_set_suspend_disable(struct regulator_dev *rdev)
 {
 	int rid = rdev_get_id(rdev);
+
 	return regmap_update_bits(rdev->regmap, rk806_suspend_bits[rid].reg,
 				  rk806_suspend_bits[rid].bit, 0);
 }
@@ -1626,20 +1624,19 @@ static const struct regulator_desc rk818_reg[] = {
 };
 
 static int rk808_regulator_dt_parse_pdata(struct device *dev,
-				   struct device *client_dev,
 				   struct regmap *map,
 				   struct rk808_regulator_data *pdata)
 {
 	struct device_node *np;
 	int tmp, ret = 0, i;
 
-	np = of_get_child_by_name(client_dev->of_node, "regulators");
+	np = of_get_child_by_name(dev->of_node, "regulators");
 	if (!np)
 		return -ENXIO;
 
 	for (i = 0; i < ARRAY_SIZE(pdata->dvs_gpio); i++) {
 		pdata->dvs_gpio[i] =
-			devm_gpiod_get_index_optional(client_dev, "dvs", i,
+			devm_gpiod_get_index_optional(dev, "dvs", i,
 						      GPIOD_OUT_LOW);
 		if (IS_ERR(pdata->dvs_gpio[i])) {
 			ret = PTR_ERR(pdata->dvs_gpio[i]);
@@ -1658,12 +1655,6 @@ static int rk808_regulator_dt_parse_pdata(struct device *dev,
 				0 : tmp);
 	}
 
-	tmp = of_property_read_u32(client_dev->of_node, "max-buck-steps-per-change", &pdata->max_buck_steps_per_change);
-	if (tmp) {
-		pdata->max_buck_steps_per_change = MAX_STEPS_ONE_TIME;
-	}
-	dev_info(dev, "max buck steps per change: %d\n", pdata->max_buck_steps_per_change);
-
 dt_parse_end:
 	of_node_put(np);
 	return ret;
@@ -1679,6 +1670,9 @@ static int rk808_regulator_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	int ret, i, nregulators;
 
+	pdev->dev.of_node = pdev->dev.parent->of_node;
+	pdev->dev.of_node_reused = true;
+
 	regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!regmap)
 		return -ENODEV;
@@ -1687,8 +1681,7 @@ static int rk808_regulator_probe(struct platform_device *pdev)
 	if (!pdata)
 		return -ENOMEM;
 
-	ret = rk808_regulator_dt_parse_pdata(&pdev->dev, pdev->dev.parent,
-					     regmap, pdata);
+	ret = rk808_regulator_dt_parse_pdata(&pdev->dev, regmap, pdata);
 	if (ret < 0)
 		return ret;
 
@@ -1726,7 +1719,6 @@ static int rk808_regulator_probe(struct platform_device *pdev)
 	}
 
 	config.dev = &pdev->dev;
-	config.dev->of_node = pdev->dev.parent->of_node;
 	config.driver_data = pdata;
 	config.regmap = regmap;
 
@@ -1745,7 +1737,8 @@ static int rk808_regulator_probe(struct platform_device *pdev)
 static struct platform_driver rk808_regulator_driver = {
 	.probe = rk808_regulator_probe,
 	.driver = {
-		.name = "rk808-regulator"
+		.name = "rk808-regulator",
+		.probe_type = PROBE_FORCE_SYNCHRONOUS,
 	},
 };
 

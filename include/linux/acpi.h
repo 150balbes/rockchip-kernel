@@ -10,21 +10,34 @@
 
 #include <linux/errno.h>
 #include <linux/ioport.h>	/* for struct resource */
-#include <linux/irqdomain.h>
 #include <linux/resource_ext.h>
 #include <linux/device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/property.h>
 #include <linux/uuid.h>
+#include <linux/fw_table.h>
+
+struct irq_domain;
+struct irq_domain_ops;
 
 #ifndef _LINUX
 #define _LINUX
 #endif
 #include <acpi/acpi.h>
 
+#ifdef CONFIG_ACPI_TABLE_LIB
+#define EXPORT_SYMBOL_ACPI_LIB(x) EXPORT_SYMBOL_NS_GPL(x, ACPI)
+#define __init_or_acpilib
+#define __initdata_or_acpilib
+#else
+#define EXPORT_SYMBOL_ACPI_LIB(x)
+#define __init_or_acpilib __init
+#define __initdata_or_acpilib __initdata
+#endif
+
 #ifdef	CONFIG_ACPI
 
 #include <linux/list.h>
-#include <linux/mod_devicetable.h>
 #include <linux/dynamic_debug.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -67,19 +80,6 @@ static inline void acpi_free_fwnode_static(struct fwnode_handle *fwnode)
 
 	kfree(fwnode);
 }
-
-/**
- * ACPI_DEVICE_CLASS - macro used to describe an ACPI device with
- * the PCI-defined class-code information
- *
- * @_cls : the class, subclass, prog-if triple for this device
- * @_msk : the class mask for this device
- *
- * This macro is used to create a struct acpi_device_id that matches a
- * specific PCI class. The .id and .driver_data fields will be left
- * initialized with the default value.
- */
-#define ACPI_DEVICE_CLASS(_cls, _msk)	.cls = (_cls), .cls_msk = (_msk),
 
 static inline bool has_acpi_companion(struct device *dev)
 {
@@ -130,20 +130,7 @@ enum acpi_address_range_id {
 
 
 /* Table Handlers */
-union acpi_subtable_headers {
-	struct acpi_subtable_header common;
-	struct acpi_hmat_structure hmat;
-	struct acpi_prmt_module_header prmt;
-	struct acpi_cedt_header cedt;
-};
-
 typedef int (*acpi_tbl_table_handler)(struct acpi_table_header *table);
-
-typedef int (*acpi_tbl_entry_handler)(union acpi_subtable_headers *header,
-				      const unsigned long end);
-
-typedef int (*acpi_tbl_entry_handler_arg)(union acpi_subtable_headers *header,
-					  void *arg, const unsigned long end);
 
 /* Debugger support */
 
@@ -218,14 +205,6 @@ static inline int acpi_debugger_notify_command_complete(void)
 		(!entry) || (unsigned long)entry + sizeof(*entry) > end ||  \
 		((struct acpi_subtable_header *)entry)->length < sizeof(*entry))
 
-struct acpi_subtable_proc {
-	int id;
-	acpi_tbl_entry_handler handler;
-	acpi_tbl_entry_handler_arg handler_arg;
-	void *arg;
-	int count;
-};
-
 void __iomem *__acpi_map_table(unsigned long phys, unsigned long size);
 void __acpi_unmap_table(void __iomem *map, unsigned long size);
 int early_acpi_boot_init(void);
@@ -239,16 +218,6 @@ int acpi_locate_initial_tables (void);
 void acpi_reserve_initial_tables (void);
 void acpi_table_init_complete (void);
 int acpi_table_init (void);
-
-#ifdef CONFIG_ACPI_TABLE_LIB
-#define EXPORT_SYMBOL_ACPI_LIB(x) EXPORT_SYMBOL_NS_GPL(x, ACPI)
-#define __init_or_acpilib
-#define __initdata_or_acpilib
-#else
-#define EXPORT_SYMBOL_ACPI_LIB(x)
-#define __init_or_acpilib __init
-#define __initdata_or_acpilib __initdata
-#endif
 
 int acpi_table_parse(char *id, acpi_tbl_table_handler handler);
 int __init_or_acpilib acpi_table_parse_entries(char *id,
@@ -267,10 +236,15 @@ acpi_table_parse_cedt(enum acpi_cedt_type id,
 int acpi_parse_mcfg (struct acpi_table_header *header);
 void acpi_table_print_madt_entry (struct acpi_subtable_header *madt);
 
+static inline bool acpi_gicc_is_usable(struct acpi_madt_generic_interrupt *gicc)
+{
+	return gicc->flags & ACPI_MADT_ENABLED;
+}
+
 /* the following numa functions are architecture-dependent */
 void acpi_numa_slit_init (struct acpi_table_slit *slit);
 
-#if defined(CONFIG_X86) || defined(CONFIG_IA64) || defined(CONFIG_LOONGARCH)
+#if defined(CONFIG_X86) || defined(CONFIG_LOONGARCH)
 void acpi_numa_processor_affinity_init (struct acpi_srat_cpu_affinity *pa);
 #else
 static inline void
@@ -412,6 +386,8 @@ extern bool acpi_is_pnp_device(struct acpi_device *);
 
 typedef void (*wmi_notify_handler) (u32 value, void *context);
 
+int wmi_instance_count(const char *guid);
+
 extern acpi_status wmi_evaluate_method(const char *guid, u8 instance,
 					u32 method_id,
 					const struct acpi_buffer *in,
@@ -486,8 +462,6 @@ static inline int acpi_get_node(acpi_handle handle)
 	return 0;
 }
 #endif
-extern int acpi_paddr_to_node(u64 start_addr, u64 size);
-
 extern int pnpacpi_disabled;
 
 #define PXM_INVAL	(-1)
@@ -710,12 +684,14 @@ int acpi_match_platform_list(const struct acpi_platform_list *plat);
 
 extern void acpi_early_init(void);
 extern void acpi_subsystem_init(void);
-extern void arch_post_acpi_subsys_init(void);
 
 extern int acpi_nvs_register(__u64 start, __u64 size);
 
 extern int acpi_nvs_for_each_region(int (*func)(__u64, __u64, void *),
 				    void *data);
+
+const struct acpi_device_id *acpi_match_acpi_device(const struct acpi_device_id *ids,
+						    const struct acpi_device *adev);
 
 const struct acpi_device_id *acpi_match_device(const struct acpi_device_id *ids,
 					       const struct device *dev);
@@ -723,7 +699,7 @@ const struct acpi_device_id *acpi_match_device(const struct acpi_device_id *ids,
 const void *acpi_device_get_match_data(const struct device *dev);
 extern bool acpi_driver_match_device(struct device *dev,
 				     const struct device_driver *drv);
-int acpi_device_uevent_modalias(struct device *, struct kobj_uevent_env *);
+int acpi_device_uevent_modalias(const struct device *, struct kobj_uevent_env *);
 int acpi_device_modalias(struct device *, char *, int);
 
 struct platform_device *acpi_create_platform_device(struct acpi_device *,
@@ -779,7 +755,6 @@ const char *acpi_get_subsystem_id(acpi_handle handle);
 #define ACPI_COMPANION_SET(dev, adev)	do { } while (0)
 #define ACPI_HANDLE(dev)		(NULL)
 #define ACPI_HANDLE_FWNODE(fwnode)	(NULL)
-#define ACPI_DEVICE_CLASS(_cls, _msk)	.cls = (0), .cls_msk = (0),
 
 #include <acpi/acpi_numa.h>
 
@@ -796,6 +771,11 @@ static inline bool acpi_dev_present(const char *hid, const char *uid, s64 hrv)
 }
 
 struct acpi_device;
+
+static inline bool acpi_dev_uid_match(struct acpi_device *adev, const char *uid2)
+{
+	return false;
+}
 
 static inline bool
 acpi_dev_hid_uid_match(struct acpi_device *adev, const char *hid2, const char *uid2)
@@ -933,6 +913,12 @@ static inline int acpi_nvs_for_each_region(int (*func)(__u64, __u64, void *),
 
 struct acpi_device_id;
 
+static inline const struct acpi_device_id *acpi_match_acpi_device(
+	const struct acpi_device_id *ids, const struct acpi_device *adev)
+{
+	return NULL;
+}
+
 static inline const struct acpi_device_id *acpi_match_device(
 	const struct acpi_device_id *ids, const struct device *dev)
 {
@@ -950,6 +936,12 @@ static inline bool acpi_driver_match_device(struct device *dev,
 	return false;
 }
 
+static inline bool acpi_check_dsm(acpi_handle handle, const guid_t *guid,
+				  u64 rev, u64 funcs)
+{
+	return false;
+}
+
 static inline union acpi_object *acpi_evaluate_dsm(acpi_handle handle,
 						   const guid_t *guid,
 						   u64 rev, u64 func,
@@ -958,7 +950,16 @@ static inline union acpi_object *acpi_evaluate_dsm(acpi_handle handle,
 	return NULL;
 }
 
-static inline int acpi_device_uevent_modalias(struct device *dev,
+static inline union acpi_object *acpi_evaluate_dsm_typed(acpi_handle handle,
+							 const guid_t *guid,
+							 u64 rev, u64 func,
+							 union acpi_object *argv4,
+							 acpi_object_type type)
+{
+	return NULL;
+}
+
+static inline int acpi_device_uevent_modalias(const struct device *dev,
 				struct kobj_uevent_env *env)
 {
 	return -ENODEV;
@@ -1060,7 +1061,14 @@ static inline u32 acpi_osc_ctx_get_cxl_control(struct acpi_osc_context *context)
 	return 0;
 }
 
+static inline bool acpi_sleep_state_supported(u8 sleep_state)
+{
+	return false;
+}
+
 #endif	/* !CONFIG_ACPI */
+
+extern void arch_post_acpi_subsys_init(void);
 
 #ifdef CONFIG_ACPI_HOTPLUG_IOAPIC
 int acpi_ioapic_add(acpi_handle root);
@@ -1080,7 +1088,7 @@ void acpi_os_set_prepare_extended_sleep(int (*func)(u8 sleep_state,
 
 acpi_status acpi_os_prepare_extended_sleep(u8 sleep_state,
 					   u32 val_a, u32 val_b);
-#ifdef CONFIG_X86
+#if defined(CONFIG_SUSPEND) && defined(CONFIG_X86)
 struct acpi_s2idle_dev_ops {
 	struct list_head list_node;
 	void (*prepare)(void);
@@ -1089,15 +1097,14 @@ struct acpi_s2idle_dev_ops {
 };
 int acpi_register_lps0_dev(struct acpi_s2idle_dev_ops *arg);
 void acpi_unregister_lps0_dev(struct acpi_s2idle_dev_ops *arg);
-#endif /* CONFIG_X86 */
-#ifndef CONFIG_IA64
-void arch_reserve_mem_area(acpi_physical_address addr, size_t size);
-#else
-static inline void arch_reserve_mem_area(acpi_physical_address addr,
-					  size_t size)
+int acpi_get_lps0_constraint(struct acpi_device *adev);
+#else /* CONFIG_SUSPEND && CONFIG_X86 */
+static inline int acpi_get_lps0_constraint(struct device *dev)
 {
+	return ACPI_STATE_UNKNOWN;
 }
-#endif /* CONFIG_X86 */
+#endif /* CONFIG_SUSPEND && CONFIG_X86 */
+void arch_reserve_mem_area(acpi_physical_address addr, size_t size);
 #else
 #define acpi_os_set_prepare_sleep(func, pm1a_ctrl, pm1b_ctrl) do { } while (0)
 #endif
@@ -1456,6 +1463,15 @@ static inline int lpit_read_residency_count_address(u64 *address)
 }
 #endif
 
+#ifdef CONFIG_ACPI_PROCESSOR_IDLE
+#ifndef arch_get_idle_state_flags
+static inline unsigned int arch_get_idle_state_flags(u32 arch_flags)
+{
+	return 0;
+}
+#endif
+#endif /* CONFIG_ACPI_PROCESSOR_IDLE */
+
 #ifdef CONFIG_ACPI_PPTT
 int acpi_pptt_cpu_is_thread(unsigned int cpu);
 int find_acpi_cpu_topology(unsigned int cpu, int level);
@@ -1485,6 +1501,12 @@ static inline int find_acpi_cpu_topology_hetero_id(unsigned int cpu)
 }
 #endif
 
+#ifdef CONFIG_ARM64
+void acpi_arm_init(void);
+#else
+static inline void acpi_arm_init(void) { }
+#endif
+
 #ifdef CONFIG_ACPI_PCC
 void acpi_init_pcc(void);
 #else
@@ -1508,5 +1530,10 @@ extern void acpi_device_notify_remove(struct device *dev);
 static inline void acpi_device_notify(struct device *dev) { }
 static inline void acpi_device_notify_remove(struct device *dev) { }
 #endif
+
+static inline void acpi_use_parent_companion(struct device *dev)
+{
+	ACPI_COMPANION_SET(dev, ACPI_COMPANION(dev->parent));
+}
 
 #endif	/*_LINUX_ACPI_H*/

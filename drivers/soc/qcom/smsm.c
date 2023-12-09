@@ -452,11 +452,10 @@ static int smsm_get_size_info(struct qcom_smsm *smsm)
 	} *info;
 
 	info = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_SMSM_SIZE_INFO, &size);
-	if (IS_ERR(info) && PTR_ERR(info) != -ENOENT) {
-		if (PTR_ERR(info) != -EPROBE_DEFER)
-			dev_err(smsm->dev, "unable to retrieve smsm size info\n");
-		return PTR_ERR(info);
-	} else if (IS_ERR(info) || size != sizeof(*info)) {
+	if (IS_ERR(info) && PTR_ERR(info) != -ENOENT)
+		return dev_err_probe(smsm->dev, PTR_ERR(info),
+				     "unable to retrieve smsm size info\n");
+	else if (IS_ERR(info) || size != sizeof(*info)) {
 		dev_warn(smsm->dev, "no smsm size info, using defaults\n");
 		smsm->num_entries = SMSM_DEFAULT_NUM_ENTRIES;
 		smsm->num_hosts = SMSM_DEFAULT_NUM_HOSTS;
@@ -510,7 +509,7 @@ static int qcom_smsm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	for_each_child_of_node(pdev->dev.of_node, local_node) {
-		if (of_find_property(local_node, "#qcom,smem-state-cells", NULL))
+		if (of_property_present(local_node, "#qcom,smem-state-cells"))
 			break;
 	}
 	if (!local_node) {
@@ -614,7 +613,7 @@ out_put:
 	return ret;
 }
 
-static int qcom_smsm_remove(struct platform_device *pdev)
+static void qcom_smsm_remove(struct platform_device *pdev)
 {
 	struct qcom_smsm *smsm = platform_get_drvdata(pdev);
 	unsigned id;
@@ -624,8 +623,6 @@ static int qcom_smsm_remove(struct platform_device *pdev)
 			irq_domain_remove(smsm->entries[id].domain);
 
 	qcom_smem_state_unregister(smsm->state);
-
-	return 0;
 }
 
 static const struct of_device_id qcom_smsm_of_match[] = {
@@ -636,7 +633,7 @@ MODULE_DEVICE_TABLE(of, qcom_smsm_of_match);
 
 static struct platform_driver qcom_smsm_driver = {
 	.probe = qcom_smsm_probe,
-	.remove = qcom_smsm_remove,
+	.remove_new = qcom_smsm_remove,
 	.driver  = {
 		.name  = "qcom-smsm",
 		.of_match_table = qcom_smsm_of_match,

@@ -275,9 +275,9 @@ static inline void fanotify_init_event(struct fanotify_event *event,
 
 #define FANOTIFY_INLINE_FH(name, size)					\
 struct {								\
-	struct fanotify_fh (name);					\
+	struct fanotify_fh name;					\
 	/* Space for object_fh.buf[] - access with fanotify_fh_buf() */	\
-	unsigned char _inline_fh_buf[(size)];				\
+	unsigned char _inline_fh_buf[size];				\
 }
 
 struct fanotify_fid_event {
@@ -425,9 +425,13 @@ FANOTIFY_PE(struct fanotify_event *event)
 struct fanotify_perm_event {
 	struct fanotify_event fae;
 	struct path path;
-	unsigned short response;	/* userspace answer to the event */
+	u32 response;			/* userspace answer to the event */
 	unsigned short state;		/* state of the event */
 	int fd;		/* fd we passed to userspace for this event */
+	union {
+		struct fanotify_response_info_header hdr;
+		struct fanotify_response_info_audit_rule audit_rule;
+	};
 };
 
 static inline struct fanotify_perm_event *

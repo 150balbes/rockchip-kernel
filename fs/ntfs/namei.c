@@ -259,7 +259,7 @@ err_out:
    }
 }
 
-/**
+/*
  * Inode operations for directories.
  */
 const struct inode_operations ntfs_dir_inode_ops = {
@@ -364,7 +364,7 @@ static struct dentry *ntfs_fh_to_parent(struct super_block *sb, struct fid *fid,
 				    ntfs_nfs_get_inode);
 }
 
-/**
+/*
  * Export operations allowing NFS exporting of mounted NTFS partitions.
  *
  * We use the default ->encode_fh() for now.  Note that they
@@ -384,6 +384,7 @@ static struct dentry *ntfs_fh_to_parent(struct super_block *sb, struct fid *fid,
  * and due to using iget() whereas NTFS needs ntfs_iget().
  */
 const struct export_operations ntfs_export_ops = {
+	.encode_fh	= generic_encode_ino32_fh,
 	.get_parent	= ntfs_get_parent,	/* Find the parent of a given
 						   directory. */
 	.fh_to_dentry	= ntfs_fh_to_dentry,

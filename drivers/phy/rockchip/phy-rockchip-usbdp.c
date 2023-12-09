@@ -6,6 +6,7 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/delay.h>
@@ -27,7 +28,63 @@
 #include <linux/usb/typec_dp.h>
 #include <linux/usb/typec_mux.h>
 
-#include <linux/phy/phy-rockchip-usbdp.h>
+/* RK3588 USBDP PHY Register Definitions */
+
+#define UDPHY_PCS				0x4000
+#define UDPHY_PMA				0x8000
+
+/* VO0 GRF Registers */
+#define RK3588_GRF_VO0_CON0			0x0000
+#define RK3588_GRF_VO0_CON2			0x0008
+#define DP_SINK_HPD_CFG				BIT(11)
+#define DP_SINK_HPD_SEL				BIT(10)
+#define DP_AUX_DIN_SEL				BIT(9)
+#define DP_AUX_DOUT_SEL				BIT(8)
+#define DP_LANE_SEL_N(n)			GENMASK(2 * (n) + 1, 2 * (n))
+#define DP_LANE_SEL_ALL				GENMASK(7, 0)
+#define PHY_AUX_DP_DATA_POL_NORMAL		0
+#define PHY_AUX_DP_DATA_POL_INVERT		1
+
+/* PMA CMN Registers */
+#define CMN_LANE_MUX_AND_EN_OFFSET		0x0288	/* cmn_reg00A2 */
+#define CMN_DP_LANE_MUX_N(n)			BIT((n) + 4)
+#define CMN_DP_LANE_EN_N(n)			BIT(n)
+#define CMN_DP_LANE_MUX_ALL			GENMASK(7, 4)
+#define CMN_DP_LANE_EN_ALL			GENMASK(3, 0)
+#define PHY_LANE_MUX_USB			0
+#define PHY_LANE_MUX_DP				1
+
+#define CMN_DP_LINK_OFFSET			0x28c	/*cmn_reg00A3 */
+#define CMN_DP_TX_LINK_BW			GENMASK(6, 5)
+#define CMN_DP_TX_LANE_SWAP_EN			BIT(2)
+
+#define CMN_SSC_EN_OFFSET			0x2d0	/* cmn_reg00B4 */
+#define CMN_ROPLL_SSC_EN			BIT(1)
+#define CMN_LCPLL_SSC_EN			BIT(0)
+
+#define CMN_ANA_LCPLL_DONE_OFFSET		0x0350	/* cmn_reg00D4 */
+#define CMN_ANA_LCPLL_LOCK_DONE			BIT(7)
+#define CMN_ANA_LCPLL_AFC_DONE			BIT(6)
+
+#define CMN_ANA_ROPLL_DONE_OFFSET		0x0354	/* cmn_reg00D5 */
+#define CMN_ANA_ROPLL_LOCK_DONE			BIT(1)
+#define CMN_ANA_ROPLL_AFC_DONE			BIT(0)
+
+#define CMN_DP_RSTN_OFFSET			0x038c	/* cmn_reg00E3 */
+#define CMN_DP_INIT_RSTN			BIT(3)
+#define CMN_DP_CMN_RSTN				BIT(2)
+#define CMN_CDR_WTCHDG_EN			BIT(1)
+#define CMN_CDR_WTCHDG_MSK_CDR_EN		BIT(0)
+
+#define TRSV_ANA_TX_CLK_OFFSET_N(n)		(0x854 + (n) * 0x800)	/* trsv_reg0215 */
+#define LN_ANA_TX_SER_TXCLK_INV			BIT(1)
+
+#define TRSV_LN0_MON_RX_CDR_DONE_OFFSET		0x0b84	/* trsv_reg02E1 */
+#define TRSV_LN0_MON_RX_CDR_LOCK_DONE		BIT(0)
+
+#define TRSV_LN2_MON_RX_CDR_DONE_OFFSET		0x1b84	/* trsv_reg06E1 */
+#define TRSV_LN2_MON_RX_CDR_LOCK_DONE		BIT(0)
+
 
 #define BIT_WRITEABLE_SHIFT	16
 
@@ -579,7 +636,6 @@ static int upphy_set_typec_default_mapping(struct rockchip_udphy *udphy)
 	}
 
 	udphy->mode = UDPHY_MODE_DP_USB;
-	udphy->mode_change = true;
 
 	return 0;
 }
@@ -669,15 +725,14 @@ static int udphy_disable(struct rockchip_udphy *udphy)
 	return 0;
 }
 
-static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device *dev)
+static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device_node *np)
 {
-	struct device_node *np = dev->of_node;
 	struct property *prop;
 	int ret, i, len, num_lanes;
 
 	prop = of_find_property(np, "rockchip,dp-lane-mux", &len);
 	if (!prop) {
-		dev_dbg(dev, "failed to find dp lane mux, following dp alt mode\n");
+		dev_dbg(udphy->dev, "failed to find dp lane mux, following dp alt mode\n");
 		udphy->mode = UDPHY_MODE_USB;
 		return 0;
 	}
@@ -685,13 +740,13 @@ static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device
 	num_lanes = len / sizeof(u32);
 
 	if (num_lanes != 2 && num_lanes != 4) {
-		dev_err(dev, "invalid number of lane mux\n");
+		dev_err(udphy->dev, "invalid number of lane mux\n");
 		return -EINVAL;
 	}
 
 	ret = of_property_read_u32_array(np, "rockchip,dp-lane-mux", udphy->dp_lane_sel, num_lanes);
 	if (ret) {
-		dev_err(dev, "get dp lane mux failed\n");
+		dev_err(udphy->dev, "get dp lane mux failed\n");
 		return -EINVAL;
 	}
 
@@ -699,7 +754,7 @@ static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device
 		int j;
 
 		if (udphy->dp_lane_sel[i] > 3) {
-			dev_err(dev, "lane mux between 0 and 3, exceeding the range\n");
+			dev_err(udphy->dev, "lane mux between 0 and 3, exceeding the range\n");
 			return -EINVAL;
 		}
 
@@ -707,17 +762,15 @@ static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device
 
 		for (j = i + 1; j < num_lanes; j++) {
 			if (udphy->dp_lane_sel[i] == udphy->dp_lane_sel[j]) {
-				dev_err(dev, "set repeat lane mux value\n");
+				dev_err(udphy->dev, "set repeat lane mux value\n");
 				return -EINVAL;
 			}
 		}
 	}
 
 	udphy->mode = UDPHY_MODE_DP;
-	if (num_lanes == 2) {
+	if (num_lanes == 2)
 		udphy->mode |= UDPHY_MODE_USB;
-		udphy->flip = udphy->lane_mux_sel[0] == PHY_LANE_MUX_DP ? true : false;
-	}
 
 	return 0;
 }
@@ -792,7 +845,7 @@ static int udphy_parse_dt(struct rockchip_udphy *udphy, struct device *dev)
 		}
 	}
 
-	ret = udphy_parse_lane_mux_data(udphy, dev);
+	ret = udphy_parse_lane_mux_data(udphy, np);
 	if (ret)
 		return ret;
 
@@ -825,7 +878,7 @@ static int udphy_power_on(struct rockchip_udphy *udphy, u8 mode)
 	int ret;
 
 	if (!(udphy->mode & mode)) {
-		dev_info(udphy->dev, "mode 0x%02x is not supported\n", mode);
+		dev_info(udphy->dev, "mode 0x%02x is not support\n", mode);
 		return 0;
 	}
 
@@ -839,7 +892,8 @@ static int udphy_power_on(struct rockchip_udphy *udphy, u8 mode)
 			udphy_u3_port_disable(udphy, false);
 	} else if (udphy->mode_change) {
 		udphy->mode_change = false;
-		if (!(udphy->mode & UDPHY_MODE_USB))
+		udphy->status = UDPHY_MODE_NONE;
+		if (udphy->mode == UDPHY_MODE_DP)
 			udphy_u3_port_disable(udphy, true);
 
 		ret = udphy_disable(udphy);
@@ -860,7 +914,7 @@ static int udphy_power_off(struct rockchip_udphy *udphy, u8 mode)
 	int ret;
 
 	if (!(udphy->mode & mode)) {
-		dev_info(udphy->dev, "mode 0x%02x is not supported\n", mode);
+		dev_info(udphy->dev, "mode 0x%02x is not support\n", mode);
 		return 0;
 	}
 
@@ -1203,7 +1257,7 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 		id = 0;
 	udphy->id = id;
 
-	phy_cfgs = of_device_get_match_data(dev);
+	phy_cfgs = device_get_match_data(dev);
 	if (!phy_cfgs) {
 		dev_err(dev, "no OF data can be matched with %p node\n", np);
 		return -EINVAL;
@@ -1211,8 +1265,7 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 
 	udphy->cfgs = phy_cfgs;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(dev, res);
+	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -1243,7 +1296,7 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 			return ret;
 	}
 
-	if (device_property_present(dev, "svid")) {
+	if (device_property_present(dev, "mode-switch")) {
 		ret = udphy_setup_typec_mux(udphy);
 		if (ret)
 			return ret;
@@ -1265,7 +1318,7 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 
 			phy_set_bus_width(phy, udphy_dplane_get(udphy));
 			phy->attrs.max_link_rate = udphy_dp_get_max_link_rate(udphy, child_np);
-		} else if (of_node_name_eq(child_np, "u3-port")) {
+		} else if (of_node_name_eq(child_np, "usb3-port")) {
 			phy = devm_phy_create(dev, child_np, &rockchip_u3phy_ops);
 			if (IS_ERR(phy)) {
 				dev_err(dev, "failed to create usb phy: %pOFn\n", child_np);
@@ -1344,14 +1397,14 @@ static int rk3588_udphy_status_check(struct rockchip_udphy *udphy)
 						       val & TRSV_LN0_MON_RX_CDR_LOCK_DONE,
 						       200, 100000);
 			if (ret)
-				dev_notice(udphy->dev, "trsv ln0 mon rx cdr lock timeout\n");
+				dev_err(udphy->dev, "trsv ln0 mon rx cdr lock timeout\n");
 		} else {
 			ret = regmap_read_poll_timeout(udphy->pma_regmap,
 						       TRSV_LN2_MON_RX_CDR_DONE_OFFSET, val,
 						       val & TRSV_LN2_MON_RX_CDR_LOCK_DONE,
 						       200, 100000);
 			if (ret)
-				dev_notice(udphy->dev, "trsv ln2 mon rx cdr lock timeout\n");
+				dev_err(udphy->dev, "trsv ln2 mon rx cdr lock timeout\n");
 		}
 	}
 
@@ -1439,8 +1492,7 @@ static int rk3588_udphy_hpd_event_trigger(struct rockchip_udphy *udphy, bool hpd
 	udphy->dp_sink_hpd_sel = true;
 	udphy->dp_sink_hpd_cfg = hpd;
 
-	if (udphy->vogrf != NULL)
-		grfreg_write(udphy->vogrf, &cfg->vogrfcfg[udphy->id].hpd_trigger, hpd);
+	grfreg_write(udphy->vogrf, &cfg->vogrfcfg[udphy->id].hpd_trigger, hpd);
 
 	return 0;
 }
@@ -1482,8 +1534,7 @@ static int rk3588_udphy_dplane_select(struct rockchip_udphy *udphy)
 		break;
 	}
 
-	if (udphy->vogrf != NULL)
-		regmap_write(udphy->vogrf, udphy->id ? RK3588_GRF_VO0_CON2 : RK3588_GRF_VO0_CON0,
+	regmap_write(udphy->vogrf, udphy->id ? RK3588_GRF_VO0_CON2 : RK3588_GRF_VO0_CON0,
 		     ((DP_AUX_DIN_SEL | DP_AUX_DOUT_SEL | DP_LANE_SEL_ALL) << 16) |
 		     FIELD_PREP(DP_AUX_DIN_SEL, udphy->dp_aux_din_sel) |
 		     FIELD_PREP(DP_AUX_DOUT_SEL, udphy->dp_aux_dout_sel) | value);
@@ -1674,4 +1725,4 @@ module_platform_driver(rockchip_udphy_driver);
 MODULE_AUTHOR("Frank Wang <frank.wang@rock-chips.com>");
 MODULE_AUTHOR("Zhang Yubing <yubing.zhang@rock-chips.com>");
 MODULE_DESCRIPTION("Rockchip USBDP Combo PHY driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

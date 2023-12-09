@@ -280,6 +280,7 @@ void nf_send_reset(struct net *net, struct sock *sk, struct sk_buff *oldskb,
 		goto free_nskb;
 
 	nf_ct_attach(nskb, oldskb);
+	nf_ct_set_closing(skb_nfct(oldskb));
 
 #if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	/* If we use ip_local_out for bridged traffic, the MAC source on
@@ -335,3 +336,4 @@ void nf_send_unreach(struct sk_buff *skb_in, int code, int hook)
 EXPORT_SYMBOL_GPL(nf_send_unreach);
 
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("IPv4 packet rejection core");

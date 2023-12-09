@@ -51,6 +51,7 @@ enum mlx5_flow_destination_type {
 	MLX5_FLOW_DESTINATION_TYPE_COUNTER,
 	MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE_NUM,
 	MLX5_FLOW_DESTINATION_TYPE_RANGE,
+	MLX5_FLOW_DESTINATION_TYPE_TABLE_TYPE,
 };
 
 enum {
@@ -66,6 +67,7 @@ enum {
 	MLX5_FLOW_TABLE_TERMINATION = BIT(2),
 	MLX5_FLOW_TABLE_UNMANAGED = BIT(3),
 	MLX5_FLOW_TABLE_OTHER_VPORT = BIT(4),
+	MLX5_FLOW_TABLE_UPLINK_VPORT = BIT(5),
 };
 
 #define LEFTOVERS_RULE_NUM	 2
@@ -102,15 +104,21 @@ enum mlx5_flow_namespace_type {
 	MLX5_FLOW_NAMESPACE_PORT_SEL,
 	MLX5_FLOW_NAMESPACE_RDMA_RX_COUNTERS,
 	MLX5_FLOW_NAMESPACE_RDMA_TX_COUNTERS,
+	MLX5_FLOW_NAMESPACE_RDMA_RX_IPSEC,
+	MLX5_FLOW_NAMESPACE_RDMA_TX_IPSEC,
+	MLX5_FLOW_NAMESPACE_RDMA_RX_MACSEC,
+	MLX5_FLOW_NAMESPACE_RDMA_TX_MACSEC,
 };
 
 enum {
 	FDB_BYPASS_PATH,
+	FDB_CRYPTO_INGRESS,
 	FDB_TC_OFFLOAD,
 	FDB_FT_OFFLOAD,
 	FDB_TC_MISS,
 	FDB_BR_OFFLOAD,
 	FDB_SLOW_PATH,
+	FDB_CRYPTO_EGRESS,
 	FDB_PER_VPORT,
 };
 
@@ -296,6 +304,8 @@ void mlx5_fc_destroy(struct mlx5_core_dev *dev, struct mlx5_fc *counter);
 u64 mlx5_fc_query_lastuse(struct mlx5_fc *counter);
 void mlx5_fc_query_cached(struct mlx5_fc *counter,
 			  u64 *bytes, u64 *packets, u64 *lastuse);
+void mlx5_fc_query_cached_raw(struct mlx5_fc *counter,
+			      u64 *bytes, u64 *packets, u64 *lastuse);
 int mlx5_fc_query(struct mlx5_core_dev *dev, struct mlx5_fc *counter,
 		  u64 *packets, u64 *bytes);
 u32 mlx5_fc_id(struct mlx5_fc *counter);

@@ -35,12 +35,9 @@ consumers to providers, as given in the following example::
 Using PWMs
 ----------
 
-Legacy users can request a PWM device using pwm_request() and free it
-after usage with pwm_free().
-
-New users should use the pwm_get() function and pass to it the consumer
-device or a consumer name. pwm_put() is used to free the PWM device. Managed
-variants of the getter, devm_pwm_get() and devm_fwnode_pwm_get(), also exist.
+Consumers use the pwm_get() function and pass to it the consumer device or a
+consumer name. pwm_put() is used to free the PWM device. Managed variants of
+the getter, devm_pwm_get() and devm_fwnode_pwm_get(), also exist.
 
 After being requested, a PWM has to be configured using::
 
@@ -114,13 +111,13 @@ channel that was exported. The following properties will then be available:
 
   duty_cycle
     The active time of the PWM signal (read/write).
-    Value is in nanoseconds and must be less than the period.
+    Value is in nanoseconds and must be less than or equal to the period.
 
   polarity
     Changes the polarity of the PWM signal (read/write).
     Writes to this property only work if the PWM chip supports changing
-    the polarity. The polarity can only be changed if the PWM is not
-    enabled. Value is the string "normal" or "inversed".
+    the polarity.
+    Value is the string "normal" or "inversed".
 
   enable
     Enable/disable the PWM signal (read/write).
@@ -165,8 +162,8 @@ consumers should implement it as described in the "Using PWMs" section.
 Locking
 -------
 
-The PWM core list manipulations are protected by a mutex, so pwm_request()
-and pwm_free() may not be called from an atomic context. Currently the
+The PWM core list manipulations are protected by a mutex, so pwm_get()
+and pwm_put() may not be called from an atomic context. Currently the
 PWM core does not enforce any locking to pwm_enable(), pwm_disable() and
 pwm_config(), so the calling context is currently driver specific. This
 is an issue derived from the former barebone API and should be fixed soon.

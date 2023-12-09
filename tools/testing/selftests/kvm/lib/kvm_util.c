@@ -80,6 +80,11 @@ static bool get_module_param_bool(const char *module_name, const char *param)
 	TEST_FAIL("Unrecognized value '%c' for boolean module param", value);
 }
 
+bool get_kvm_param_bool(const char *param)
+{
+	return get_module_param_bool("kvm", param);
+}
+
 bool get_kvm_intel_param_bool(const char *param)
 {
 	return get_module_param_bool("kvm_intel", param);
@@ -186,6 +191,15 @@ const struct vm_guest_mode_params vm_guest_mode_params[] = {
 _Static_assert(sizeof(vm_guest_mode_params)/sizeof(struct vm_guest_mode_params) == NUM_VM_MODES,
 	       "Missing new mode params?");
 
+/*
+ * Initializes vm->vpages_valid to match the canonical VA space of the
+ * architecture.
+ *
+ * The default implementation is valid for architectures which split the
+ * range addressed by a single page table into a low and high region
+ * based on the MSB of the VA. On architectures with this behavior
+ * the VA region spans [0, 2^(va_bits - 1)), [-(2^(va_bits - 1), -1].
+ */
 __weak void vm_vaddr_populate_bitmap(struct kvm_vm *vm)
 {
 	sparsebit_set_num(vm->vpages_valid,
@@ -298,6 +312,7 @@ static uint64_t vm_nr_pages_required(enum vm_guest_mode mode,
 				     uint32_t nr_runnable_vcpus,
 				     uint64_t extra_mem_pages)
 {
+	uint64_t page_size = vm_guest_mode_params[mode].page_size;
 	uint64_t nr_pages;
 
 	TEST_ASSERT(nr_runnable_vcpus,
@@ -325,6 +340,9 @@ static uint64_t vm_nr_pages_required(enum vm_guest_mode mode,
 	 * than N/x*2.
 	 */
 	nr_pages += (nr_pages + extra_mem_pages) / PTES_PER_MIN_PAGE * 2;
+
+	/* Account for the number of pages needed by ucall. */
+	nr_pages += ucall_nr_pages_required(page_size);
 
 	return vm_adjust_num_guest_pages(mode, nr_pages);
 }
@@ -478,6 +496,23 @@ static uint32_t parse_pcpu(const char *cpu_str, const cpu_set_t *allowed_mask)
 	TEST_ASSERT(CPU_ISSET(pcpu, allowed_mask),
 		    "Not allowed to run on pCPU '%d', check cgroups?\n", pcpu);
 	return pcpu;
+}
+
+void kvm_print_vcpu_pinning_help(void)
+{
+	const char *name = program_invocation_name;
+
+	printf(" -c: Pin tasks to physical CPUs.  Takes a list of comma separated\n"
+	       "     values (target pCPU), one for each vCPU, plus an optional\n"
+	       "     entry for the main application task (specified via entry\n"
+	       "     <nr_vcpus + 1>).  If used, entries must be provided for all\n"
+	       "     vCPUs, i.e. pinning vCPUs is all or nothing.\n\n"
+	       "     E.g. to create 3 vCPUs, pin vCPU0=>pCPU22, vCPU1=>pCPU23,\n"
+	       "     vCPU2=>pCPU24, and pin the application task to pCPU50:\n\n"
+	       "         %s -v 3 -c 22,23,24,50\n\n"
+	       "     To leave the application task unpinned, drop the final entry:\n\n"
+	       "         %s -v 3 -c 22,23,24\n\n"
+	       "     (default: no pinning)\n", name, name);
 }
 
 void kvm_parse_vcpu_pinning(const char *pcpus_string, uint32_t vcpu_to_pcpu[],
@@ -963,7 +998,7 @@ void vm_userspace_mem_region_add(struct kvm_vm *vm,
 	if (src_type == VM_MEM_SRC_ANONYMOUS_THP)
 		alignment = max(backing_src_pagesz, alignment);
 
-	ASSERT_EQ(guest_paddr, align_up(guest_paddr, backing_src_pagesz));
+	TEST_ASSERT_EQ(guest_paddr, align_up(guest_paddr, backing_src_pagesz));
 
 	/* Add enough memory to align up if necessary */
 	if (alignment > 1)
@@ -1416,10 +1451,10 @@ void virt_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
 
 	while (npages--) {
 		virt_pg_map(vm, vaddr, paddr);
+		sparsebit_set(vm->vpages_mapped, vaddr >> vm->page_shift);
+
 		vaddr += page_size;
 		paddr += page_size;
-
-		sparsebit_set(vm->vpages_mapped, vaddr >> vm->page_shift);
 	}
 }
 
@@ -1806,37 +1841,53 @@ void vm_dump(FILE *stream, struct kvm_vm *vm, uint8_t indent)
 		vcpu_dump(stream, vcpu, indent + 2);
 }
 
+#define KVM_EXIT_STRING(x) {KVM_EXIT_##x, #x}
+
 /* Known KVM exit reasons */
 static struct exit_reason {
 	unsigned int reason;
 	const char *name;
 } exit_reasons_known[] = {
-	{KVM_EXIT_UNKNOWN, "UNKNOWN"},
-	{KVM_EXIT_EXCEPTION, "EXCEPTION"},
-	{KVM_EXIT_IO, "IO"},
-	{KVM_EXIT_HYPERCALL, "HYPERCALL"},
-	{KVM_EXIT_DEBUG, "DEBUG"},
-	{KVM_EXIT_HLT, "HLT"},
-	{KVM_EXIT_MMIO, "MMIO"},
-	{KVM_EXIT_IRQ_WINDOW_OPEN, "IRQ_WINDOW_OPEN"},
-	{KVM_EXIT_SHUTDOWN, "SHUTDOWN"},
-	{KVM_EXIT_FAIL_ENTRY, "FAIL_ENTRY"},
-	{KVM_EXIT_INTR, "INTR"},
-	{KVM_EXIT_SET_TPR, "SET_TPR"},
-	{KVM_EXIT_TPR_ACCESS, "TPR_ACCESS"},
-	{KVM_EXIT_S390_SIEIC, "S390_SIEIC"},
-	{KVM_EXIT_S390_RESET, "S390_RESET"},
-	{KVM_EXIT_DCR, "DCR"},
-	{KVM_EXIT_NMI, "NMI"},
-	{KVM_EXIT_INTERNAL_ERROR, "INTERNAL_ERROR"},
-	{KVM_EXIT_OSI, "OSI"},
-	{KVM_EXIT_PAPR_HCALL, "PAPR_HCALL"},
-	{KVM_EXIT_DIRTY_RING_FULL, "DIRTY_RING_FULL"},
-	{KVM_EXIT_X86_RDMSR, "RDMSR"},
-	{KVM_EXIT_X86_WRMSR, "WRMSR"},
-	{KVM_EXIT_XEN, "XEN"},
+	KVM_EXIT_STRING(UNKNOWN),
+	KVM_EXIT_STRING(EXCEPTION),
+	KVM_EXIT_STRING(IO),
+	KVM_EXIT_STRING(HYPERCALL),
+	KVM_EXIT_STRING(DEBUG),
+	KVM_EXIT_STRING(HLT),
+	KVM_EXIT_STRING(MMIO),
+	KVM_EXIT_STRING(IRQ_WINDOW_OPEN),
+	KVM_EXIT_STRING(SHUTDOWN),
+	KVM_EXIT_STRING(FAIL_ENTRY),
+	KVM_EXIT_STRING(INTR),
+	KVM_EXIT_STRING(SET_TPR),
+	KVM_EXIT_STRING(TPR_ACCESS),
+	KVM_EXIT_STRING(S390_SIEIC),
+	KVM_EXIT_STRING(S390_RESET),
+	KVM_EXIT_STRING(DCR),
+	KVM_EXIT_STRING(NMI),
+	KVM_EXIT_STRING(INTERNAL_ERROR),
+	KVM_EXIT_STRING(OSI),
+	KVM_EXIT_STRING(PAPR_HCALL),
+	KVM_EXIT_STRING(S390_UCONTROL),
+	KVM_EXIT_STRING(WATCHDOG),
+	KVM_EXIT_STRING(S390_TSCH),
+	KVM_EXIT_STRING(EPR),
+	KVM_EXIT_STRING(SYSTEM_EVENT),
+	KVM_EXIT_STRING(S390_STSI),
+	KVM_EXIT_STRING(IOAPIC_EOI),
+	KVM_EXIT_STRING(HYPERV),
+	KVM_EXIT_STRING(ARM_NISV),
+	KVM_EXIT_STRING(X86_RDMSR),
+	KVM_EXIT_STRING(X86_WRMSR),
+	KVM_EXIT_STRING(DIRTY_RING_FULL),
+	KVM_EXIT_STRING(AP_RESET_HOLD),
+	KVM_EXIT_STRING(X86_BUS_LOCK),
+	KVM_EXIT_STRING(XEN),
+	KVM_EXIT_STRING(RISCV_SBI),
+	KVM_EXIT_STRING(RISCV_CSR),
+	KVM_EXIT_STRING(NOTIFY),
 #ifdef KVM_EXIT_MEMORY_NOT_PRESENT
-	{KVM_EXIT_MEMORY_NOT_PRESENT, "MEMORY_NOT_PRESENT"},
+	KVM_EXIT_STRING(MEMORY_NOT_PRESENT),
 #endif
 };
 
@@ -1931,9 +1982,6 @@ vm_paddr_t vm_phy_page_alloc(struct kvm_vm *vm, vm_paddr_t paddr_min,
 {
 	return vm_phy_pages_alloc(vm, 1, paddr_min, memslot);
 }
-
-/* Arbitrary minimum physical address used for virtual translation tables. */
-#define KVM_GUEST_PAGE_TABLE_MIN_PADDR 0x180000
 
 vm_paddr_t vm_alloc_page_table(struct kvm_vm *vm)
 {

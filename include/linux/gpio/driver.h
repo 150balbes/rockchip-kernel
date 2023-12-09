@@ -2,28 +2,37 @@
 #ifndef __LINUX_GPIO_DRIVER_H
 #define __LINUX_GPIO_DRIVER_H
 
-#include <linux/device.h>
-#include <linux/irq.h>
+#include <linux/bits.h>
+#include <linux/cleanup.h>
+#include <linux/err.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
+#include <linux/irqhandler.h>
 #include <linux/lockdep.h>
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/property.h>
+#include <linux/spinlock_types.h>
 #include <linux/types.h>
 
+#ifdef CONFIG_GENERIC_MSI_IRQ
 #include <asm/msi.h>
+#endif
 
-struct gpio_desc;
-struct of_phandle_args;
-struct device_node;
-struct seq_file;
-struct gpio_device;
+struct device;
+struct irq_chip;
+struct irq_data;
 struct module;
-enum gpiod_flags;
-enum gpio_lookup_flags;
+struct of_phandle_args;
+struct pinctrl_dev;
+struct seq_file;
 
 struct gpio_chip;
+struct gpio_desc;
+struct gpio_device;
+
+enum gpio_lookup_flags;
+enum gpiod_flags;
 
 union gpio_irq_fwspec {
 	struct irq_fwspec	fwspec;
@@ -53,13 +62,6 @@ struct gpio_irq_chip {
 	 * hwirq number and Linux IRQ number.
 	 */
 	struct irq_domain *domain;
-
-	/**
-	 * @domain_ops:
-	 *
-	 * Table of interrupt domain operations for this IRQ chip.
-	 */
-	const struct irq_domain_ops *domain_ops;
 
 #ifdef CONFIG_IRQ_DOMAIN_HIERARCHY
 	/**
@@ -245,6 +247,14 @@ struct gpio_irq_chip {
 	bool initialized;
 
 	/**
+	 * @domain_is_allocated_externally:
+	 *
+	 * True it the irq_domain was allocated outside of gpiolib, in which
+	 * case gpiolib won't free the irq_domain itself.
+	 */
+	bool domain_is_allocated_externally;
+
+	/**
 	 * @init_hw: optional routine to initialize hardware before
 	 * an IRQ chip will be added. This is quite useful when
 	 * a particular driver wants to clear IRQ related registers
@@ -336,7 +346,7 @@ struct gpio_irq_chip {
  * @set_multiple: assigns output values for multiple signals defined by "mask"
  * @set_config: optional hook for all kinds of settings. Uses the same
  *	packed config format as generic pinconf.
- * @to_irq: optional hook supporting non-static gpio_to_irq() mappings;
+ * @to_irq: optional hook supporting non-static gpiod_to_irq() mappings;
  *	implementation may not sleep
  * @dbg_show: optional routine to show contents in debugfs; default code
  *	will be used when this is omitted, but custom code can show extra
@@ -504,13 +514,6 @@ struct gpio_chip {
 	 */
 
 	/**
-	 * @of_node:
-	 *
-	 * Pointer to a device tree node representing this GPIO controller.
-	 */
-	struct device_node *of_node;
-
-	/**
 	 * @of_gpio_n_cells:
 	 *
 	 * Number of cells used to form the GPIO specifier.
@@ -525,23 +528,10 @@ struct gpio_chip {
 	 */
 	int (*of_xlate)(struct gpio_chip *gc,
 			const struct of_phandle_args *gpiospec, u32 *flags);
-
-	/**
-	 * @of_gpio_ranges_fallback:
-	 *
-	 * Optional hook for the case that no gpio-ranges property is defined
-	 * within the device tree node "np" (usually DT before introduction
-	 * of gpio-ranges). So this callback is helpful to provide the
-	 * necessary backward compatibility for the pin ranges.
-	 */
-	int (*of_gpio_ranges_fallback)(struct gpio_chip *gc,
-				       struct device_node *np);
-
 #endif /* CONFIG_OF_GPIO */
 };
 
-extern const char *gpiochip_is_requested(struct gpio_chip *gc,
-			unsigned int offset);
+const char *gpiochip_is_requested(struct gpio_chip *gc, unsigned int offset);
 
 /**
  * for_each_requested_gpio_in_range - iterates over requested GPIOs in a given range
@@ -560,9 +550,9 @@ extern const char *gpiochip_is_requested(struct gpio_chip *gc,
 	for_each_requested_gpio_in_range(chip, i, 0, chip->ngpio, label)
 
 /* add/remove chips */
-extern int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
-				      struct lock_class_key *lock_key,
-				      struct lock_class_key *request_key);
+int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
+			       struct lock_class_key *lock_key,
+			       struct lock_class_key *request_key);
 
 /**
  * gpiochip_add_data() - register a gpio_chip
@@ -610,13 +600,23 @@ static inline int gpiochip_add(struct gpio_chip *gc)
 {
 	return gpiochip_add_data(gc, NULL);
 }
-extern void gpiochip_remove(struct gpio_chip *gc);
-extern int devm_gpiochip_add_data_with_key(struct device *dev, struct gpio_chip *gc, void *data,
-					   struct lock_class_key *lock_key,
-					   struct lock_class_key *request_key);
+void gpiochip_remove(struct gpio_chip *gc);
+int devm_gpiochip_add_data_with_key(struct device *dev, struct gpio_chip *gc,
+				    void *data, struct lock_class_key *lock_key,
+				    struct lock_class_key *request_key);
 
-extern struct gpio_chip *gpiochip_find(void *data,
-			      int (*match)(struct gpio_chip *gc, void *data));
+struct gpio_device *gpio_device_find(void *data,
+				int (*match)(struct gpio_chip *gc, void *data));
+struct gpio_device *gpio_device_find_by_label(const char *label);
+struct gpio_device *gpio_device_find_by_fwnode(const struct fwnode_handle *fwnode);
+
+struct gpio_device *gpio_device_get(struct gpio_device *gdev);
+void gpio_device_put(struct gpio_device *gdev);
+
+DEFINE_FREE(gpio_device_put, struct gpio_device *,
+	    if (IS_ERR_OR_NULL(_T)) gpio_device_put(_T));
+
+struct device *gpio_device_to_device(struct gpio_device *gdev);
 
 bool gpiochip_line_is_irq(struct gpio_chip *gc, unsigned int offset);
 int gpiochip_reqres_irq(struct gpio_chip *gc, unsigned int offset);
@@ -699,6 +699,10 @@ bool gpiochip_irqchip_irq_valid(const struct gpio_chip *gc,
 int gpiochip_irqchip_add_domain(struct gpio_chip *gc,
 				struct irq_domain *domain);
 #else
+
+#include <asm/bug.h>
+#include <asm/errno.h>
+
 static inline int gpiochip_irqchip_add_domain(struct gpio_chip *gc,
 					      struct irq_domain *domain)
 {
@@ -765,16 +769,29 @@ struct gpio_desc *gpiochip_request_own_desc(struct gpio_chip *gc,
 					    enum gpiod_flags dflags);
 void gpiochip_free_own_desc(struct gpio_desc *desc);
 
+struct gpio_desc *gpiochip_get_desc(struct gpio_chip *gc, unsigned int hwnum);
+struct gpio_desc *
+gpio_device_get_desc(struct gpio_device *gdev, unsigned int hwnum);
+
+struct gpio_chip *gpio_device_get_chip(struct gpio_device *gdev);
+
 #ifdef CONFIG_GPIOLIB
 
 /* lock/unlock as IRQ */
 int gpiochip_lock_as_irq(struct gpio_chip *gc, unsigned int offset);
 void gpiochip_unlock_as_irq(struct gpio_chip *gc, unsigned int offset);
 
-
 struct gpio_chip *gpiod_to_chip(const struct gpio_desc *desc);
+struct gpio_device *gpiod_to_gpio_device(struct gpio_desc *desc);
+
+/* struct gpio_device getters */
+int gpio_device_get_base(struct gpio_device *gdev);
 
 #else /* CONFIG_GPIOLIB */
+
+#include <linux/err.h>
+
+#include <asm/bug.h>
 
 static inline struct gpio_chip *gpiod_to_chip(const struct gpio_desc *desc)
 {

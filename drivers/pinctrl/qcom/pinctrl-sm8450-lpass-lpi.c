@@ -105,7 +105,7 @@ static const struct pinctrl_pin_desc sm8450_lpi_pins[] = {
 static const char * const swr_tx_clk_groups[] = { "gpio0" };
 static const char * const swr_tx_data_groups[] = { "gpio1", "gpio2", "gpio14" };
 static const char * const swr_rx_clk_groups[] = { "gpio3" };
-static const char * const swr_rx_data_groups[] = { "gpio4", "gpio5", "gpio15" };
+static const char * const swr_rx_data_groups[] = { "gpio4", "gpio5" };
 static const char * const dmic1_clk_groups[] = { "gpio6" };
 static const char * const dmic1_data_groups[] = { "gpio7" };
 static const char * const dmic2_clk_groups[] = { "gpio8" };
@@ -232,7 +232,7 @@ static struct platform_driver lpi_pinctrl_driver = {
 		   .of_match_table = lpi_pinctrl_of_match,
 	},
 	.probe = lpi_pinctrl_probe,
-	.remove = lpi_pinctrl_remove,
+	.remove_new = lpi_pinctrl_remove,
 };
 
 module_platform_driver(lpi_pinctrl_driver);

@@ -31,8 +31,7 @@ int ufshcd_get_pwr_dev_param(const struct ufs_dev_params *dev_param,
 void ufshcd_init_pwr_dev_param(struct ufs_dev_params *dev_param);
 int ufshcd_pltfrm_init(struct platform_device *pdev,
 		       const struct ufs_hba_variant_ops *vops);
-void ufshcd_pltfrm_shutdown(struct platform_device *pdev);
 int ufshcd_populate_vreg(struct device *dev, const char *name,
-			 struct ufs_vreg **out_vreg);
+			 struct ufs_vreg **out_vreg, bool skip_current);
 
 #endif /* UFSHCD_PLTFRM_H_ */

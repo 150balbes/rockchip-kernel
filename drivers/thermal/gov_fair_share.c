@@ -11,39 +11,31 @@
  */
 
 #include <linux/thermal.h>
-#include <trace/events/thermal.h>
+#include "thermal_trace.h"
 
 #include "thermal_core.h"
 
-/**
- * get_trip_level: - obtains the current trip level for a zone
- * @tz:		thermal zone device
- */
 static int get_trip_level(struct thermal_zone_device *tz)
 {
-	int count = 0;
-	int trip_temp;
-	enum thermal_trip_type trip_type;
+	const struct thermal_trip *trip, *level_trip = NULL;
+	int trip_level;
 
-	if (tz->num_trips == 0 || !tz->ops->get_trip_temp)
+	for_each_trip(tz, trip) {
+		if (trip->temperature >= tz->temperature)
+			break;
+
+		level_trip = trip;
+	}
+
+	/*  Bail out if the temperature is not greater than any trips. */
+	if (!level_trip)
 		return 0;
 
-	for (count = 0; count < tz->num_trips; count++) {
-		tz->ops->get_trip_temp(tz, count, &trip_temp);
-		if (tz->temperature < trip_temp)
-			break;
-	}
+	trip_level = thermal_zone_trip_id(tz, level_trip);
 
-	/*
-	 * count > 0 only if temperature is greater than first trip
-	 * point, in which case, trip_point = count - 1
-	 */
-	if (count > 0) {
-		tz->ops->get_trip_type(tz, count - 1, &trip_type);
-		trace_thermal_zone_trip(tz, count - 1, trip_type);
-	}
+	trace_thermal_zone_trip(tz, trip_level, level_trip->type);
 
-	return count;
+	return trip_level;
 }
 
 static long get_target_state(struct thermal_zone_device *tz,
@@ -55,7 +47,7 @@ static long get_target_state(struct thermal_zone_device *tz,
 /**
  * fair_share_throttle - throttles devices associated with the given zone
  * @tz: thermal_zone_device
- * @trip: trip point index
+ * @trip: trip point
  *
  * Throttling Logic: This uses three parameters to calculate the new
  * throttle state of the cooling devices associated with the given zone.
@@ -71,7 +63,8 @@ static long get_target_state(struct thermal_zone_device *tz,
  *	(Heavily assumes the trip points are in ascending order)
  * new_state of cooling device = P3 * P2 * P1
  */
-static int fair_share_throttle(struct thermal_zone_device *tz, int trip)
+static int fair_share_throttle(struct thermal_zone_device *tz,
+			       const struct thermal_trip *trip)
 {
 	struct thermal_instance *instance;
 	int total_weight = 0;

@@ -9,6 +9,7 @@
 
 / {
 	model = "MediaTek MT7986b RFB";
+	chassis-type = "embedded";
 	compatible = "mediatek,mt7986b-rfb", "mediatek,mt7986b";
 
 	aliases {
@@ -167,7 +168,15 @@
 	status = "okay";
 };
 
+&ssusb {
+	status = "okay";
+};
+
 &uart0 {
+	status = "okay";
+};
+
+&usb_phy {
 	status = "okay";
 };
 

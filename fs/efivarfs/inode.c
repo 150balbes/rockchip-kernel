@@ -21,11 +21,15 @@ struct inode *efivarfs_get_inode(struct super_block *sb,
 				dev_t dev, bool is_removable)
 {
 	struct inode *inode = new_inode(sb);
+	struct efivarfs_fs_info *fsi = sb->s_fs_info;
+	struct efivarfs_mount_opts *opts = &fsi->mount_opts;
 
 	if (inode) {
+		inode->i_uid = opts->uid;
+		inode->i_gid = opts->gid;
 		inode->i_ino = get_next_ino();
 		inode->i_mode = mode;
-		inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+		simple_inode_init_ts(inode);
 		inode->i_flags = is_removable ? 0 : S_IMMUTABLE;
 		switch (mode & S_IFMT) {
 		case S_IFREG:
@@ -70,7 +74,7 @@ bool efivarfs_valid_name(const char *str, int len)
 	return uuid_is_valid(s);
 }
 
-static int efivarfs_create(struct user_namespace *mnt_userns, struct inode *dir,
+static int efivarfs_create(struct mnt_idmap *idmap, struct inode *dir,
 			   struct dentry *dentry, umode_t mode, bool excl)
 {
 	struct inode *inode = NULL;
@@ -163,7 +167,7 @@ efivarfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 }
 
 static int
-efivarfs_fileattr_set(struct user_namespace *mnt_userns,
+efivarfs_fileattr_set(struct mnt_idmap *idmap,
 		      struct dentry *dentry, struct fileattr *fa)
 {
 	unsigned int i_flags = 0;

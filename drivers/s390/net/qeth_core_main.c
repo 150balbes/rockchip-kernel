@@ -2801,9 +2801,11 @@ static void qeth_print_status_message(struct qeth_card *card)
 		 * of the level OSA sets the first character to zero
 		 * */
 		if (!card->info.mcl_level[0]) {
-			sprintf(card->info.mcl_level, "%02x%02x",
-				card->info.mcl_level[2],
-				card->info.mcl_level[3]);
+			scnprintf(card->info.mcl_level,
+				  sizeof(card->info.mcl_level),
+				  "%02x%02x",
+				  card->info.mcl_level[2],
+				  card->info.mcl_level[3]);
 			break;
 		}
 		fallthrough;
@@ -3673,7 +3675,7 @@ static void qeth_flush_queue(struct qeth_qdio_out_q *queue)
 static void qeth_check_outbound_queue(struct qeth_qdio_out_q *queue)
 {
 	/*
-	 * check if weed have to switch to non-packing mode or if
+	 * check if we have to switch to non-packing mode or if
 	 * we have to get a pci flag out on the queue
 	 */
 	if ((atomic_read(&queue->used_buffers) <= QETH_LOW_WATERMARK_PACK) ||
@@ -5371,8 +5373,6 @@ int qeth_set_offline(struct qeth_card *card, const struct qeth_discipline *disc,
 	qeth_clear_ipacmd_list(card);
 
 	rtnl_lock();
-	card->info.open_when_online = card->dev->flags & IFF_UP;
-	dev_close(card->dev);
 	netif_device_detach(card->dev);
 	netif_carrier_off(card->dev);
 	rtnl_unlock();
@@ -6090,7 +6090,7 @@ void qeth_dbf_longtext(debug_info_t *id, int level, char *fmt, ...)
 	if (!debug_level_enabled(id, level))
 		return;
 	va_start(args, fmt);
-	vsnprintf(dbf_txt_buf, sizeof(dbf_txt_buf), fmt, args);
+	vscnprintf(dbf_txt_buf, sizeof(dbf_txt_buf), fmt, args);
 	va_end(args);
 	debug_text_event(id, level, dbf_txt_buf);
 }
@@ -6226,7 +6226,7 @@ static int qeth_add_dbf_entry(struct qeth_card *card, char *name)
 	new_entry = kzalloc(sizeof(struct qeth_dbf_entry), GFP_KERNEL);
 	if (!new_entry)
 		goto err_dbg;
-	strncpy(new_entry->dbf_name, name, DBF_NAME_LEN);
+	strscpy(new_entry->dbf_name, name, sizeof(new_entry->dbf_name));
 	new_entry->dbf_info = card->debug;
 	mutex_lock(&qeth_dbf_list_mutex);
 	list_add(&new_entry->dbf_list, &qeth_dbf_list);
@@ -6330,8 +6330,8 @@ static int qeth_core_probe_device(struct ccwgroup_device *gdev)
 		goto err_dev;
 	}
 
-	snprintf(dbf_name, sizeof(dbf_name), "qeth_card_%s",
-		dev_name(&gdev->dev));
+	scnprintf(dbf_name, sizeof(dbf_name), "qeth_card_%s",
+		  dev_name(&gdev->dev));
 	card->debug = qeth_get_dbf_entry(dbf_name);
 	if (!card->debug) {
 		rc = qeth_add_dbf_entry(card, dbf_name);

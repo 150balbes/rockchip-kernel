@@ -15,9 +15,11 @@
 #include <linux/of_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/sched.h>
 #include <linux/serdev.h>
 #include <linux/slab.h>
+
 #include <linux/platform_data/x86/apple.h>
 
 static bool is_registered;
@@ -42,7 +44,7 @@ static struct attribute *serdev_device_attrs[] = {
 };
 ATTRIBUTE_GROUPS(serdev_device);
 
-static int serdev_device_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int serdev_device_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
 	int rc;
 
@@ -185,30 +187,20 @@ void serdev_device_close(struct serdev_device *serdev)
 }
 EXPORT_SYMBOL_GPL(serdev_device_close);
 
-static void devm_serdev_device_release(struct device *dev, void *dr)
+static void devm_serdev_device_close(void *serdev)
 {
-	serdev_device_close(*(struct serdev_device **)dr);
+	serdev_device_close(serdev);
 }
 
 int devm_serdev_device_open(struct device *dev, struct serdev_device *serdev)
 {
-	struct serdev_device **dr;
 	int ret;
 
-	dr = devres_alloc(devm_serdev_device_release, sizeof(*dr), GFP_KERNEL);
-	if (!dr)
-		return -ENOMEM;
-
 	ret = serdev_device_open(serdev);
-	if (ret) {
-		devres_free(dr);
+	if (ret)
 		return ret;
-	}
 
-	*dr = serdev;
-	devres_add(dev, dr);
-
-	return 0;
+	return devm_add_action_or_reset(dev, devm_serdev_device_close, serdev);
 }
 EXPORT_SYMBOL_GPL(devm_serdev_device_open);
 
@@ -366,7 +358,7 @@ int serdev_device_set_parity(struct serdev_device *serdev,
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->set_parity)
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	return ctrl->ops->set_parity(ctrl, parity);
 }
@@ -388,7 +380,7 @@ int serdev_device_get_tiocm(struct serdev_device *serdev)
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->get_tiocm)
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	return ctrl->ops->get_tiocm(ctrl);
 }
@@ -399,11 +391,22 @@ int serdev_device_set_tiocm(struct serdev_device *serdev, int set, int clear)
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->set_tiocm)
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	return ctrl->ops->set_tiocm(ctrl, set, clear);
 }
 EXPORT_SYMBOL_GPL(serdev_device_set_tiocm);
+
+int serdev_device_break_ctl(struct serdev_device *serdev, int break_state)
+{
+	struct serdev_controller *ctrl = serdev->ctrl;
+
+	if (!ctrl || !ctrl->ops->break_ctl)
+		return -EOPNOTSUPP;
+
+	return ctrl->ops->break_ctl(ctrl, break_state);
+}
+EXPORT_SYMBOL_GPL(serdev_device_break_ctl);
 
 static int serdev_drv_probe(struct device *dev)
 {
@@ -499,7 +502,7 @@ struct serdev_controller *serdev_controller_alloc(struct device *parent,
 	ctrl->dev.type = &serdev_ctrl_type;
 	ctrl->dev.bus = &serdev_bus_type;
 	ctrl->dev.parent = parent;
-	ctrl->dev.of_node = parent->of_node;
+	device_set_node(&ctrl->dev, dev_fwnode(parent));
 	serdev_controller_set_drvdata(ctrl, &ctrl[1]);
 
 	dev_set_name(&ctrl->dev, "serial%d", id);
@@ -534,7 +537,7 @@ static int of_serdev_register_devices(struct serdev_controller *ctrl)
 		if (!serdev)
 			continue;
 
-		serdev->dev.of_node = node;
+		device_set_node(&serdev->dev, of_fwnode_handle(node));
 
 		err = serdev_device_add(serdev);
 		if (err) {
@@ -662,7 +665,7 @@ static int acpi_serdev_check_resources(struct serdev_controller *ctrl,
 		acpi_get_parent(adev->handle, &lookup.controller_handle);
 
 	/* Make sure controller and ResourceSource handle match */
-	if (ACPI_HANDLE(ctrl->dev.parent) != lookup.controller_handle)
+	if (!device_match_acpi_handle(ctrl->dev.parent, lookup.controller_handle))
 		return -ENODEV;
 
 	return 0;

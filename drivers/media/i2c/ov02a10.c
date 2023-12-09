@@ -570,8 +570,6 @@ unlock_and_return:
 }
 
 static const struct dev_pm_ops ov02a10_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(ov02a10_power_off, ov02a10_power_on, NULL)
 };
 
@@ -1002,8 +1000,8 @@ static struct i2c_driver ov02a10_i2c_driver = {
 		.pm = &ov02a10_pm_ops,
 		.of_match_table = ov02a10_of_match,
 	},
-	.probe_new	= &ov02a10_probe,
-	.remove		= &ov02a10_remove,
+	.probe		= ov02a10_probe,
+	.remove		= ov02a10_remove,
 };
 module_i2c_driver(ov02a10_i2c_driver);
 

@@ -18,7 +18,7 @@ static int avs_dsp_init_probe(struct avs_dev *adev, union avs_connector_node_id 
 {
 	struct avs_probe_cfg cfg = {{0}};
 	struct avs_module_entry mentry;
-	u16 dummy;
+	u8 dummy;
 
 	avs_get_module_entry(adev, &AVS_PROBE_MOD_UUID, &mentry);
 
@@ -145,7 +145,7 @@ static int avs_probe_compr_set_params(struct snd_compr_stream *cstream,
 	ret = snd_hdac_stream_set_params(hdac_stream(host_stream), format_val);
 	if (ret < 0)
 		return ret;
-	ret = snd_hdac_stream_setup(hdac_stream(host_stream));
+	ret = snd_hdac_stream_setup(hdac_stream(host_stream), false);
 	if (ret < 0)
 		return ret;
 
@@ -190,7 +190,7 @@ static int avs_probe_compr_trigger(struct snd_compr_stream *cstream, int cmd,
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		spin_lock_irqsave(&bus->reg_lock, cookie);
-		snd_hdac_stream_start(hdac_stream(host_stream), true);
+		snd_hdac_stream_start(hdac_stream(host_stream));
 		spin_unlock_irqrestore(&bus->reg_lock, cookie);
 		break;
 
@@ -249,12 +249,16 @@ static int avs_probe_compr_copy(struct snd_soc_component *comp, struct snd_compr
 	return count;
 }
 
-static const struct snd_soc_cdai_ops avs_probe_dai_ops = {
+static const struct snd_soc_cdai_ops avs_probe_cdai_ops = {
 	.startup = avs_probe_compr_open,
 	.shutdown = avs_probe_compr_free,
 	.set_params = avs_probe_compr_set_params,
 	.trigger = avs_probe_compr_trigger,
 	.pointer = avs_probe_compr_pointer,
+};
+
+static const struct snd_soc_dai_ops avs_probe_dai_ops = {
+	.compress_new = snd_soc_new_compress,
 };
 
 static const struct snd_compress_ops avs_probe_compress_ops = {
@@ -264,8 +268,8 @@ static const struct snd_compress_ops avs_probe_compress_ops = {
 static struct snd_soc_dai_driver probe_cpu_dais[] = {
 {
 	.name = "Probe Extraction CPU DAI",
-	.compress_new = snd_soc_new_compress,
-	.cops = &avs_probe_dai_ops,
+	.cops = &avs_probe_cdai_ops,
+	.ops  = &avs_probe_dai_ops,
 	.capture = {
 		.stream_name = "Probe Extraction",
 		.channels_min = 1,
@@ -277,31 +281,8 @@ static struct snd_soc_dai_driver probe_cpu_dais[] = {
 },
 };
 
-static int avs_probe_component_probe(struct snd_soc_component *component)
-{
-	struct avs_soc_component *acomp = to_avs_soc_component(component);
-	struct avs_dev *adev = to_avs_dev(component->dev);
-
-	mutex_lock(&adev->comp_list_mutex);
-	list_add_tail(&acomp->node, &adev->comp_list);
-	mutex_unlock(&adev->comp_list_mutex);
-	return 0;
-}
-
-static void avs_probe_component_remove(struct snd_soc_component *component)
-{
-	struct avs_soc_component *acomp = to_avs_soc_component(component);
-	struct avs_dev *adev = to_avs_dev(component->dev);
-
-	mutex_lock(&adev->comp_list_mutex);
-	list_del(&acomp->node);
-	mutex_unlock(&adev->comp_list_mutex);
-}
-
 static const struct snd_soc_component_driver avs_probe_component_driver = {
 	.name			= "avs-probe-compr",
-	.probe			= avs_probe_component_probe,
-	.remove			= avs_probe_component_remove,
 	.compress_ops		= &avs_probe_compress_ops,
 	.module_get_upon_open	= 1, /* increment refcount when a stream is opened */
 };

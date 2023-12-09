@@ -39,7 +39,7 @@ static int cp210x_tiocmget(struct tty_struct *);
 static int cp210x_tiocmset(struct tty_struct *, unsigned int, unsigned int);
 static int cp210x_tiocmset_port(struct usb_serial_port *port,
 		unsigned int, unsigned int);
-static void cp210x_break_ctl(struct tty_struct *, int);
+static int cp210x_break_ctl(struct tty_struct *, int);
 static int cp210x_attach(struct usb_serial *);
 static void cp210x_disconnect(struct usb_serial *);
 static void cp210x_release(struct usb_serial *);
@@ -60,6 +60,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x0846, 0x1100) }, /* NetGear Managed Switch M4100 series, M5300 series, M7100 series */
 	{ USB_DEVICE(0x08e6, 0x5501) }, /* Gemalto Prox-PU/CU contactless smartcard reader */
 	{ USB_DEVICE(0x08FD, 0x000A) }, /* Digianswer A/S , ZigBee/802.15.4 MAC Device */
+	{ USB_DEVICE(0x0908, 0x0070) }, /* Siemens SCALANCE LPE-9000 USB Serial Console */
 	{ USB_DEVICE(0x0908, 0x01FF) }, /* Siemens RUGGEDCOM USB Serial Console */
 	{ USB_DEVICE(0x0988, 0x0578) }, /* Teraoka AD2000 */
 	{ USB_DEVICE(0x0B00, 0x3070) }, /* Ingenico 3070 */
@@ -119,6 +120,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x826B) }, /* Cygnal Integrated Products, Inc., Fasttrax GPS demonstration module */
 	{ USB_DEVICE(0x10C4, 0x8281) }, /* Nanotec Plug & Drive */
 	{ USB_DEVICE(0x10C4, 0x8293) }, /* Telegesis ETRX2USB */
+	{ USB_DEVICE(0x10C4, 0x82AA) }, /* Silicon Labs IFS-USB-DATACABLE used with Quint UPS */
 	{ USB_DEVICE(0x10C4, 0x82EF) }, /* CESINEL FALCO 6105 AC Power Supply */
 	{ USB_DEVICE(0x10C4, 0x82F1) }, /* CESINEL MEDCAL EFD Earth Fault Detector */
 	{ USB_DEVICE(0x10C4, 0x82F2) }, /* CESINEL MEDCAL ST Network Analyzer */
@@ -1432,18 +1434,26 @@ static int cp210x_tiocmget(struct tty_struct *tty)
 	return result;
 }
 
-static void cp210x_break_ctl(struct tty_struct *tty, int break_state)
+static int cp210x_break_ctl(struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
+	struct cp210x_serial_private *priv = usb_get_serial_data(port->serial);
 	u16 state;
+
+	if (priv->partnum == CP210X_PARTNUM_CP2105) {
+		if (cp210x_interface_num(port->serial) == 1)
+			return -ENOTTY;
+	}
 
 	if (break_state == 0)
 		state = BREAK_OFF;
 	else
 		state = BREAK_ON;
+
 	dev_dbg(&port->dev, "%s - turning break %s\n", __func__,
 		state == BREAK_OFF ? "off" : "on");
-	cp210x_write_u16_reg(port, CP210X_SET_BREAK, state);
+
+	return cp210x_write_u16_reg(port, CP210X_SET_BREAK, state);
 }
 
 #ifdef CONFIG_GPIOLIB

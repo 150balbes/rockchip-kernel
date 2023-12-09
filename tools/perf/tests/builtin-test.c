@@ -31,10 +31,20 @@
 #include "builtin-test-list.h"
 
 static bool dont_fork;
+const char *dso_to_test;
 
-struct test_suite *__weak arch_tests[] = {
+/*
+ * List of architecture specific tests. Not a weak symbol as the array length is
+ * dependent on the initialization, as such GCC with LTO complains of
+ * conflicting definitions with a weak symbol.
+ */
+#if defined(__i386__) || defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__)
+extern struct test_suite *arch_tests[];
+#else
+static struct test_suite *arch_tests[] = {
 	NULL,
 };
+#endif
 
 static struct test_suite *generic_tests[] = {
 	&suite__vmlinux_matches_kallsyms,
@@ -82,25 +92,20 @@ static struct test_suite *generic_tests[] = {
 	&suite__fdarray__add,
 	&suite__kmod_path__parse,
 	&suite__thread_map,
-	&suite__llvm,
 	&suite__session_topology,
-	&suite__bpf,
 	&suite__thread_map_synthesize,
 	&suite__thread_map_remove,
-	&suite__cpu_map_synthesize,
+	&suite__cpu_map,
 	&suite__synthesize_stat_config,
 	&suite__synthesize_stat,
 	&suite__synthesize_stat_round,
 	&suite__event_update,
 	&suite__event_times,
 	&suite__backward_ring_buffer,
-	&suite__cpu_map_print,
-	&suite__cpu_map_merge,
 	&suite__sdt_event,
 	&suite__is_printable_array,
 	&suite__bitmap_print,
 	&suite__perf_hooks,
-	&suite__clang,
 	&suite__unit_number__scnprint,
 	&suite__mem2node,
 	&suite__time_utils,
@@ -117,6 +122,8 @@ static struct test_suite *generic_tests[] = {
 	&suite__dlfilter,
 	&suite__sigtrap,
 	&suite__event_groups,
+	&suite__symbols,
+	&suite__util,
 	NULL,
 };
 
@@ -254,8 +261,8 @@ static int run_test(struct test_suite *test, int subtest)
 }
 
 #define for_each_test(j, k, t)			\
-	for (j = 0; j < ARRAY_SIZE(tests); j++)	\
-		for (k = 0, t = tests[j][k]; tests[j][k]; k++, t = tests[j][k])
+	for (j = 0, k = 0; j < ARRAY_SIZE(tests); j++, k = 0)	\
+		while ((t = tests[j][k++]) != NULL)
 
 static int test_and_print(struct test_suite *t, int subtest)
 {
@@ -521,6 +528,7 @@ int cmd_test(int argc, const char **argv)
 	OPT_BOOLEAN('F', "dont-fork", &dont_fork,
 		    "Do not fork for testcase"),
 	OPT_STRING('w', "workload", &workload, "work", "workload to run for testing"),
+	OPT_STRING(0, "dso", &dso_to_test, "dso", "dso to test"),
 	OPT_END()
 	};
 	const char * const test_subcommands[] = { "list", NULL };
@@ -541,7 +549,6 @@ int cmd_test(int argc, const char **argv)
 		return run_workload(workload, argc, argv);
 
 	symbol_conf.priv_size = sizeof(int);
-	symbol_conf.sort_by_name = true;
 	symbol_conf.try_vmlinux_path = true;
 
 	if (symbol__init(NULL) < 0)

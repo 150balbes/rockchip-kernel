@@ -11,9 +11,10 @@
  * Copyright (C) 2000, 2001, 2002, 2007	 Maciej W. Rozycki
  */
 #include <linux/init.h>
+#include <linux/cpu.h>
+#include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/export.h>
-#include <linux/screen_info.h>
 #include <linux/memblock.h>
 #include <linux/initrd.h>
 #include <linux/root_dev.h>
@@ -51,10 +52,6 @@ char __section(".appended_dtb") __appended_dtb[0x100000];
 struct cpuinfo_mips cpu_data[NR_CPUS] __read_mostly;
 
 EXPORT_SYMBOL(cpu_data);
-
-#ifdef CONFIG_VT
-struct screen_info screen_info;
-#endif
 
 /*
  * Setup information
@@ -158,10 +155,6 @@ static unsigned long __init init_initrd(void)
 		pr_err("initrd start must be page aligned\n");
 		goto disable;
 	}
-	if (initrd_start < PAGE_OFFSET) {
-		pr_err("initrd start < PAGE_OFFSET\n");
-		goto disable;
-	}
 
 	/*
 	 * Sanitize initrd addresses. For example firmware
@@ -173,6 +166,11 @@ static unsigned long __init init_initrd(void)
 	end = __pa(initrd_end);
 	initrd_end = (unsigned long)__va(end);
 	initrd_start = (unsigned long)__va(__pa(initrd_start));
+
+	if (initrd_start < PAGE_OFFSET) {
+		pr_err("initrd start < PAGE_OFFSET\n");
+		goto disable;
+	}
 
 	ROOT_DEV = Root_RAM0;
 	return PFN_UP(end);
@@ -457,7 +455,8 @@ static void __init mips_parse_crashkernel(void)
 
 	total_mem = memblock_phys_mem_size();
 	ret = parse_crashkernel(boot_command_line, total_mem,
-				&crash_size, &crash_base);
+				&crash_size, &crash_base,
+				NULL, NULL);
 	if (ret != 0 || crash_size <= 0)
 		return;
 
@@ -786,13 +785,8 @@ void __init setup_arch(char **cmdline_p)
 	setup_early_printk();
 #endif
 	cpu_report();
-	check_bugs_early();
-
-#if defined(CONFIG_VT)
-#if defined(CONFIG_VGA_CONSOLE)
-	conswitchp = &vga_con;
-#endif
-#endif
+	if (IS_ENABLED(CONFIG_CPU_R4X00_BUGS64))
+		check_bugs64_early();
 
 	arch_mem_init(cmdline_p);
 	dmi_setup();
@@ -839,3 +833,14 @@ static int __init setnocoherentio(char *str)
 }
 early_param("nocoherentio", setnocoherentio);
 #endif
+
+void __init arch_cpu_finalize_init(void)
+{
+	unsigned int cpu = smp_processor_id();
+
+	cpu_data[cpu].udelay_val = loops_per_jiffy;
+	check_bugs32();
+
+	if (IS_ENABLED(CONFIG_CPU_R4X00_BUGS64))
+		check_bugs64();
+}

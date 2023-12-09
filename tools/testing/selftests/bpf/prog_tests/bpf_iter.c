@@ -7,10 +7,10 @@
 #include "bpf_iter_ipv6_route.skel.h"
 #include "bpf_iter_netlink.skel.h"
 #include "bpf_iter_bpf_map.skel.h"
-#include "bpf_iter_task.skel.h"
+#include "bpf_iter_tasks.skel.h"
 #include "bpf_iter_task_stack.skel.h"
 #include "bpf_iter_task_file.skel.h"
-#include "bpf_iter_task_vma.skel.h"
+#include "bpf_iter_task_vmas.skel.h"
 #include "bpf_iter_task_btf.skel.h"
 #include "bpf_iter_tcp4.skel.h"
 #include "bpf_iter_tcp6.skel.h"
@@ -195,8 +195,8 @@ static void check_bpf_link_info(const struct bpf_program *prog)
 		return;
 
 	info_len = sizeof(info);
-	err = bpf_obj_get_info_by_fd(bpf_link__fd(link), &info, &info_len);
-	ASSERT_OK(err, "bpf_obj_get_info_by_fd");
+	err = bpf_link_get_info_by_fd(bpf_link__fd(link), &info, &info_len);
+	ASSERT_OK(err, "bpf_link_get_info_by_fd");
 	ASSERT_EQ(info.iter.task.tid, getpid(), "check_task_tid");
 
 	bpf_link__destroy(link);
@@ -215,12 +215,12 @@ static void *do_nothing_wait(void *arg)
 static void test_task_common_nocheck(struct bpf_iter_attach_opts *opts,
 				     int *num_unknown, int *num_known)
 {
-	struct bpf_iter_task *skel;
+	struct bpf_iter_tasks *skel;
 	pthread_t thread_id;
 	void *ret;
 
-	skel = bpf_iter_task__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "bpf_iter_task__open_and_load"))
+	skel = bpf_iter_tasks__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_tasks__open_and_load"))
 		return;
 
 	ASSERT_OK(pthread_mutex_lock(&do_nothing_mutex), "pthread_mutex_lock");
@@ -239,7 +239,7 @@ static void test_task_common_nocheck(struct bpf_iter_attach_opts *opts,
 	ASSERT_FALSE(pthread_join(thread_id, &ret) || ret != NULL,
 		     "pthread_join");
 
-	bpf_iter_task__destroy(skel);
+	bpf_iter_tasks__destroy(skel);
 }
 
 static void test_task_common(struct bpf_iter_attach_opts *opts, int num_unknown, int num_known)
@@ -307,10 +307,10 @@ static void test_task_pidfd(void)
 
 static void test_task_sleepable(void)
 {
-	struct bpf_iter_task *skel;
+	struct bpf_iter_tasks *skel;
 
-	skel = bpf_iter_task__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "bpf_iter_task__open_and_load"))
+	skel = bpf_iter_tasks__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_tasks__open_and_load"))
 		return;
 
 	do_dummy_read(skel->progs.dump_task_sleepable);
@@ -320,7 +320,7 @@ static void test_task_sleepable(void)
 	ASSERT_GT(skel->bss->num_success_copy_from_user_task, 0,
 		  "num_success_copy_from_user_task");
 
-	bpf_iter_task__destroy(skel);
+	bpf_iter_tasks__destroy(skel);
 }
 
 static void test_task_stack(void)
@@ -684,13 +684,13 @@ static void test_overflow(bool test_e2big_overflow, bool ret1)
 
 	/* setup filtering map_id in bpf program */
 	map_info_len = sizeof(map_info);
-	err = bpf_obj_get_info_by_fd(map1_fd, &map_info, &map_info_len);
+	err = bpf_map_get_info_by_fd(map1_fd, &map_info, &map_info_len);
 	if (CHECK(err, "get_map_info", "get map info failed: %s\n",
 		  strerror(errno)))
 		goto free_map2;
 	skel->bss->map1_id = map_info.id;
 
-	err = bpf_obj_get_info_by_fd(map2_fd, &map_info, &map_info_len);
+	err = bpf_map_get_info_by_fd(map2_fd, &map_info, &map_info_len);
 	if (CHECK(err, "get_map_info", "get map info failed: %s\n",
 		  strerror(errno)))
 		goto free_map2;
@@ -1399,19 +1399,19 @@ static void str_strip_first_line(char *str)
 static void test_task_vma_common(struct bpf_iter_attach_opts *opts)
 {
 	int err, iter_fd = -1, proc_maps_fd = -1;
-	struct bpf_iter_task_vma *skel;
+	struct bpf_iter_task_vmas *skel;
 	int len, read_size = 4;
 	char maps_path[64];
 
-	skel = bpf_iter_task_vma__open();
-	if (!ASSERT_OK_PTR(skel, "bpf_iter_task_vma__open"))
+	skel = bpf_iter_task_vmas__open();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_task_vmas__open"))
 		return;
 
 	skel->bss->pid = getpid();
 	skel->bss->one_task = opts ? 1 : 0;
 
-	err = bpf_iter_task_vma__load(skel);
-	if (!ASSERT_OK(err, "bpf_iter_task_vma__load"))
+	err = bpf_iter_task_vmas__load(skel);
+	if (!ASSERT_OK(err, "bpf_iter_task_vmas__load"))
 		goto out;
 
 	skel->links.proc_maps = bpf_program__attach_iter(
@@ -1462,7 +1462,78 @@ static void test_task_vma_common(struct bpf_iter_attach_opts *opts)
 out:
 	close(proc_maps_fd);
 	close(iter_fd);
-	bpf_iter_task_vma__destroy(skel);
+	bpf_iter_task_vmas__destroy(skel);
+}
+
+static void test_task_vma_dead_task(void)
+{
+	struct bpf_iter_task_vmas *skel;
+	int wstatus, child_pid = -1;
+	time_t start_tm, cur_tm;
+	int err, iter_fd = -1;
+	int wait_sec = 3;
+
+	skel = bpf_iter_task_vmas__open();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_task_vmas__open"))
+		return;
+
+	skel->bss->pid = getpid();
+
+	err = bpf_iter_task_vmas__load(skel);
+	if (!ASSERT_OK(err, "bpf_iter_task_vmas__load"))
+		goto out;
+
+	skel->links.proc_maps = bpf_program__attach_iter(
+		skel->progs.proc_maps, NULL);
+
+	if (!ASSERT_OK_PTR(skel->links.proc_maps, "bpf_program__attach_iter")) {
+		skel->links.proc_maps = NULL;
+		goto out;
+	}
+
+	start_tm = time(NULL);
+	cur_tm = start_tm;
+
+	child_pid = fork();
+	if (child_pid == 0) {
+		/* Fork short-lived processes in the background. */
+		while (cur_tm < start_tm + wait_sec) {
+			system("echo > /dev/null");
+			cur_tm = time(NULL);
+		}
+		exit(0);
+	}
+
+	if (!ASSERT_GE(child_pid, 0, "fork_child"))
+		goto out;
+
+	while (cur_tm < start_tm + wait_sec) {
+		iter_fd = bpf_iter_create(bpf_link__fd(skel->links.proc_maps));
+		if (!ASSERT_GE(iter_fd, 0, "create_iter"))
+			goto out;
+
+		/* Drain all data from iter_fd. */
+		while (cur_tm < start_tm + wait_sec) {
+			err = read_fd_into_buffer(iter_fd, task_vma_output, CMP_BUFFER_SIZE);
+			if (!ASSERT_GE(err, 0, "read_iter_fd"))
+				goto out;
+
+			cur_tm = time(NULL);
+
+			if (err == 0)
+				break;
+		}
+
+		close(iter_fd);
+		iter_fd = -1;
+	}
+
+	check_bpf_link_info(skel->progs.proc_maps);
+
+out:
+	waitpid(child_pid, &wstatus, 0);
+	close(iter_fd);
+	bpf_iter_task_vmas__destroy(skel);
 }
 
 void test_bpf_sockmap_map_iter_fd(void)
@@ -1586,6 +1657,8 @@ void test_bpf_iter(void)
 		test_task_file();
 	if (test__start_subtest("task_vma"))
 		test_task_vma();
+	if (test__start_subtest("task_vma_dead_task"))
+		test_task_vma_dead_task();
 	if (test__start_subtest("task_btf"))
 		test_task_btf();
 	if (test__start_subtest("tcp4"))

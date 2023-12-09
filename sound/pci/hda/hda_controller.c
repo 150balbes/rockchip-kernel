@@ -182,7 +182,7 @@ static int azx_pcm_prepare(struct snd_pcm_substream *substream)
 	if (err < 0)
 		goto unlock;
 
-	snd_hdac_stream_setup(azx_stream(azx_dev));
+	snd_hdac_stream_setup(azx_stream(azx_dev), false);
 
 	stream_tag = azx_dev->core.stream_tag;
 	/* CA-IBG chips need the playback stream starting from 1 */
@@ -257,7 +257,7 @@ static int azx_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		azx_dev = get_azx_dev(s);
 		if (start) {
 			azx_dev->insufficient = 1;
-			snd_hdac_stream_start(azx_stream(azx_dev), true);
+			snd_hdac_stream_start(azx_stream(azx_dev));
 		} else {
 			snd_hdac_stream_stop(azx_stream(azx_dev));
 		}
@@ -1231,6 +1231,7 @@ int azx_probe_codecs(struct azx *chip, unsigned int max_slots)
 				continue;
 			codec->jackpoll_interval = chip->jackpoll_interval;
 			codec->beep_mode = chip->beep_mode;
+			codec->ctl_dev_id = chip->ctl_dev_id;
 			codecs++;
 		}
 	}

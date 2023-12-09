@@ -157,7 +157,7 @@ static void *vcpu_worker(void *__data)
 				goto done;
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT_1(uc, "val = %lu");
+			REPORT_GUEST_ASSERT(uc);
 			break;
 		case UCALL_DONE:
 			goto done;
@@ -265,6 +265,9 @@ static uint64_t get_max_slots(struct vm_data *data, uint32_t host_page_size)
 	slots = data->nslots;
 	while (--slots > 1) {
 		pages_per_slot = mempages / slots;
+		if (!pages_per_slot)
+			continue;
+
 		rempages = mempages % pages_per_slot;
 		if (check_slot_pages(host_page_size, guest_page_size,
 				     pages_per_slot, rempages))
@@ -305,8 +308,6 @@ static bool prepare_vm(struct vm_data *data, int nslots, uint64_t *maxslots,
 	data->hva_slots = malloc(sizeof(*data->hva_slots) * data->nslots);
 	TEST_ASSERT(data->hva_slots, "malloc() fail");
 
-	data->vm = __vm_create_with_one_vcpu(&data->vcpu, mempages, guest_code);
-
 	pr_info_v("Adding slots 1..%i, each slot with %"PRIu64" pages + %"PRIu64" extra pages last\n",
 		data->nslots, data->pages_per_slot, rempages);
 
@@ -346,6 +347,7 @@ static bool prepare_vm(struct vm_data *data, int nslots, uint64_t *maxslots,
 	virt_map(data->vm, MEM_GPA, MEM_GPA, data->npages);
 
 	sync = (typeof(sync))vm_gpa2hva(data, MEM_SYNC_GPA, NULL);
+	sync->guest_page_size = data->vm->page_size;
 	atomic_init(&sync->start_flag, false);
 	atomic_init(&sync->exit_flag, false);
 	atomic_init(&sync->sync_flag, false);
@@ -558,7 +560,7 @@ static void guest_code_test_memslot_rw(void)
 		     ptr < MEM_TEST_GPA + MEM_TEST_SIZE; ptr += page_size) {
 			uint64_t val = *(uint64_t *)ptr;
 
-			GUEST_ASSERT_1(val == MEM_TEST_VAL_2, val);
+			GUEST_ASSERT_EQ(val, MEM_TEST_VAL_2);
 			*(uint64_t *)ptr = 0;
 		}
 
@@ -807,8 +809,6 @@ static bool test_execute(int nslots, uint64_t *maxslots,
 	}
 
 	sync = (typeof(sync))vm_gpa2hva(data, MEM_SYNC_GPA, NULL);
-
-	sync->guest_page_size = data->vm->page_size;
 	if (tdata->prepare &&
 	    !tdata->prepare(data, sync, maxslots)) {
 		ret = false;
@@ -1033,9 +1033,8 @@ static bool test_loop(const struct test_data *data,
 		      struct test_result *rbestruntime)
 {
 	uint64_t maxslots;
-	struct test_result result;
+	struct test_result result = {};
 
-	result.nloops = 0;
 	if (!test_execute(targs->nslots, &maxslots, targs->seconds, data,
 			  &result.nloops,
 			  &result.slot_runtime, &result.guest_runtime)) {
@@ -1089,7 +1088,7 @@ int main(int argc, char *argv[])
 		.seconds = 5,
 		.runs = 1,
 	};
-	struct test_result rbestslottime;
+	struct test_result rbestslottime = {};
 	int tctr;
 
 	if (!check_memory_sizes())
@@ -1098,11 +1097,10 @@ int main(int argc, char *argv[])
 	if (!parse_args(argc, argv, &targs))
 		return -1;
 
-	rbestslottime.slottimens = 0;
 	for (tctr = targs.tfirst; tctr <= targs.tlast; tctr++) {
 		const struct test_data *data = &tests[tctr];
 		unsigned int runctr;
-		struct test_result rbestruntime;
+		struct test_result rbestruntime = {};
 
 		if (tctr > targs.tfirst)
 			pr_info("\n");
@@ -1110,7 +1108,6 @@ int main(int argc, char *argv[])
 		pr_info("Testing %s performance with %i runs, %d seconds each\n",
 			data->name, targs.runs, targs.seconds);
 
-		rbestruntime.runtimens = 0;
 		for (runctr = 0; runctr < targs.runs; runctr++)
 			if (!test_loop(data, &targs,
 				       &rbestslottime, &rbestruntime))

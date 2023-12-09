@@ -14,9 +14,9 @@
 #include <linux/tracepoint.h>
 
 #include "i915_drv.h"
-#include "i915_irq.h"
 #include "intel_crtc.h"
 #include "intel_display_types.h"
+#include "intel_vblank.h"
 
 #define __dev_name_i915(i915) dev_name((i915)->drm.dev)
 #define __dev_name_kms(obj) dev_name((obj)->base.dev->dev)

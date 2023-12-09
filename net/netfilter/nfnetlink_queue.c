@@ -29,6 +29,8 @@
 #include <linux/netfilter/nfnetlink_queue.h>
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/list.h>
+#include <linux/cgroup-defs.h>
+#include <net/gso.h>
 #include <net/sock.h>
 #include <net/tcp_states.h>
 #include <net/netfilter/nf_queue.h>
@@ -226,19 +228,22 @@ find_dequeue_entry(struct nfqnl_instance *queue, unsigned int id)
 static void nfqnl_reinject(struct nf_queue_entry *entry, unsigned int verdict)
 {
 	const struct nf_ct_hook *ct_hook;
-	int err;
 
 	if (verdict == NF_ACCEPT ||
 	    verdict == NF_REPEAT ||
 	    verdict == NF_STOP) {
 		rcu_read_lock();
 		ct_hook = rcu_dereference(nf_ct_hook);
-		if (ct_hook) {
-			err = ct_hook->update(entry->state.net, entry->skb);
-			if (err < 0)
-				verdict = NF_DROP;
-		}
+		if (ct_hook)
+			verdict = ct_hook->update(entry->state.net, entry->skb);
 		rcu_read_unlock();
+
+		switch (verdict & NF_VERDICT_MASK) {
+		case NF_STOLEN:
+			nf_queue_entry_free(entry);
+			return;
+		}
+
 	}
 	nf_reinject(entry, verdict);
 }
@@ -299,6 +304,19 @@ static int nfqnl_put_sk_uidgid(struct sk_buff *skb, struct sock *sk)
 nla_put_failure:
 	read_unlock_bh(&sk->sk_callback_lock);
 	return -1;
+}
+
+static int nfqnl_put_sk_classid(struct sk_buff *skb, struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_CGROUP_NET_CLASSID)
+	if (sk && sk_fullsock(sk)) {
+		u32 classid = sock_cgroup_classid(&sk->sk_cgrp_data);
+
+		if (classid && nla_put_be32(skb, NFQA_CGROUP_CLASSID, htonl(classid)))
+			return -1;
+	}
+#endif
+	return 0;
 }
 
 static u32 nfqnl_get_sk_secctx(struct sk_buff *skb, char **secdata)
@@ -406,6 +424,9 @@ nfqnl_build_packet_message(struct net *net, struct nfqnl_instance *queue,
 		+ nla_total_size(sizeof(u_int32_t))	/* priority */
 		+ nla_total_size(sizeof(struct nfqnl_msg_packet_hw))
 		+ nla_total_size(sizeof(u_int32_t))	/* skbinfo */
+#if IS_ENABLED(CONFIG_CGROUP_NET_CLASSID)
+		+ nla_total_size(sizeof(u_int32_t))	/* classid */
+#endif
 		+ nla_total_size(sizeof(u_int32_t));	/* cap_len */
 
 	tstamp = skb_tstamp_cond(entskb, false);
@@ -597,6 +618,9 @@ nfqnl_build_packet_message(struct net *net, struct nfqnl_instance *queue,
 
 	if ((queue->flags & NFQA_CFG_F_UID_GID) && entskb->sk &&
 	    nfqnl_put_sk_uidgid(skb, entskb->sk) < 0)
+		goto nla_put_failure;
+
+	if (nfqnl_put_sk_classid(skb, entskb->sk) < 0)
 		goto nla_put_failure;
 
 	if (seclen && nla_put(skb, NFQA_SECCTX, seclen, secdata))

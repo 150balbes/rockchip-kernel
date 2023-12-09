@@ -1300,6 +1300,14 @@ static int exynos_ufs_hce_enable_notify(struct ufs_hba *hba,
 
 	switch (status) {
 	case PRE_CHANGE:
+		/*
+		 * The maximum segment size must be set after scsi_host_alloc()
+		 * has been called and before LUN scanning starts
+		 * (ufshcd_async_scan()). Note: this callback may also be called
+		 * from other functions than ufshcd_init().
+		 */
+		hba->host->max_segment_size = SZ_4K;
+
 		if (ufs->drv_data->pre_hce_enable) {
 			ret = ufs->drv_data->pre_hce_enable(ufs);
 			if (ret)
@@ -1503,6 +1511,11 @@ static int fsd_ufs_pre_link(struct exynos_ufs *ufs)
 	return 0;
 }
 
+static void exynos_ufs_config_scsi_dev(struct scsi_device *sdev)
+{
+	blk_queue_update_dma_alignment(sdev->request_queue, SZ_4K - 1);
+}
+
 static int fsd_ufs_post_link(struct exynos_ufs *ufs)
 {
 	int i;
@@ -1571,6 +1584,7 @@ static const struct ufs_hba_variant_ops ufs_hba_exynos_ops = {
 	.hibern8_notify			= exynos_ufs_hibern8_notify,
 	.suspend			= exynos_ufs_suspend,
 	.resume				= exynos_ufs_resume,
+	.config_scsi_dev		= exynos_ufs_config_scsi_dev,
 };
 
 static struct ufs_hba_variant_ops ufs_hba_exynosauto_vh_ops = {
@@ -1597,7 +1611,7 @@ static int exynos_ufs_probe(struct platform_device *pdev)
 	return err;
 }
 
-static int exynos_ufs_remove(struct platform_device *pdev)
+static void exynos_ufs_remove(struct platform_device *pdev)
 {
 	struct ufs_hba *hba =  platform_get_drvdata(pdev);
 	struct exynos_ufs *ufs = ufshcd_get_variant(hba);
@@ -1607,8 +1621,6 @@ static int exynos_ufs_remove(struct platform_device *pdev)
 
 	phy_power_off(ufs->phy);
 	phy_exit(ufs->phy);
-
-	return 0;
 }
 
 static struct exynos_ufs_uic_attr exynos7_uic_attr = {
@@ -1672,8 +1684,7 @@ static const struct exynos_ufs_drv_data exynos_ufs_drvs = {
 				  UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR |
 				  UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR |
 				  UFSHCI_QUIRK_SKIP_MANUAL_WB_FLUSH_CTRL |
-				  UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING |
-				  UFSHCD_QUIRK_ALIGN_SG_WITH_PAGE_SIZE,
+				  UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING,
 	.opts			= EXYNOS_UFS_OPT_HAS_APB_CLK_CTRL |
 				  EXYNOS_UFS_OPT_BROKEN_AUTO_CLK_CTRL |
 				  EXYNOS_UFS_OPT_BROKEN_RX_SEL_IDX |
@@ -1748,12 +1759,11 @@ static const struct dev_pm_ops exynos_ufs_pm_ops = {
 
 static struct platform_driver exynos_ufs_pltform = {
 	.probe	= exynos_ufs_probe,
-	.remove	= exynos_ufs_remove,
-	.shutdown = ufshcd_pltfrm_shutdown,
+	.remove_new = exynos_ufs_remove,
 	.driver	= {
 		.name	= "exynos-ufshc",
 		.pm	= &exynos_ufs_pm_ops,
-		.of_match_table = of_match_ptr(exynos_ufs_of_match),
+		.of_match_table = exynos_ufs_of_match,
 	},
 };
 module_platform_driver(exynos_ufs_pltform);

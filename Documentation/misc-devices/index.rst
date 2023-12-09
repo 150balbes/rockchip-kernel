@@ -17,7 +17,6 @@ fit into other categories.
    ad525x_dpot
    apds990x
    bh1770glc
-   eeprom
    c2port
    dw-xdata-pcie
    ibmvmc
@@ -28,5 +27,6 @@ fit into other categories.
    oxsemi-tornado
    pci-endpoint-test
    spear-pcie-gadget
+   tps6594-pfsm
    uacce
    xilinx_sdfec

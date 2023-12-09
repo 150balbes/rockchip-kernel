@@ -1546,7 +1546,7 @@ static int drbg_prepare_hrng(struct drbg_state *drbg)
 		const int err = PTR_ERR(drbg->jent);
 
 		drbg->jent = NULL;
-		if (fips_enabled || err != -ENOENT)
+		if (fips_enabled)
 			return err;
 		pr_info("DRBG: Continuing without Jitter RNG\n");
 	}
@@ -1698,7 +1698,7 @@ static int drbg_init_hash_kernel(struct drbg_state *drbg)
 	sdesc->shash.tfm = tfm;
 	drbg->priv_data = sdesc;
 
-	return crypto_shash_alignmask(tfm);
+	return 0;
 }
 
 static int drbg_fini_hash_kernel(struct drbg_state *drbg)

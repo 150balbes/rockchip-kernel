@@ -7,7 +7,9 @@
 #include <linux/fs.h>
 #include <linux/fdtable.h>
 #include <linux/filter.h>
+#include <linux/bpf_mem_alloc.h>
 #include <linux/btf_ids.h>
+#include <linux/mm_types.h>
 #include "mmap_unlock_work.h"
 
 static const char * const iter_task_type_names[] = {
@@ -35,16 +37,13 @@ static struct task_struct *task_group_seq_get_next(struct bpf_iter_seq_task_comm
 						   u32 *tid,
 						   bool skip_if_dup_files)
 {
-	struct task_struct *task, *next_task;
+	struct task_struct *task;
 	struct pid *pid;
-	u32 saved_tid;
+	u32 next_tid;
 
 	if (!*tid) {
 		/* The first time, the iterator calls this function. */
 		pid = find_pid_ns(common->pid, common->ns);
-		if (!pid)
-			return NULL;
-
 		task = get_pid_task(pid, PIDTYPE_TGID);
 		if (!task)
 			return NULL;
@@ -66,44 +65,27 @@ static struct task_struct *task_group_seq_get_next(struct bpf_iter_seq_task_comm
 		return task;
 	}
 
-	pid = find_pid_ns(common->pid_visiting, common->ns);
-	if (!pid)
-		return NULL;
-
-	task = get_pid_task(pid, PIDTYPE_PID);
+	task = find_task_by_pid_ns(common->pid_visiting, common->ns);
 	if (!task)
 		return NULL;
 
 retry:
-	if (!pid_alive(task)) {
-		put_task_struct(task);
-		return NULL;
-	}
+	task = next_thread(task);
 
-	next_task = next_thread(task);
-	put_task_struct(task);
-	if (!next_task)
-		return NULL;
-
-	saved_tid = *tid;
-	*tid = __task_pid_nr_ns(next_task, PIDTYPE_PID, common->ns);
-	if (!*tid || *tid == common->pid) {
+	next_tid = __task_pid_nr_ns(task, PIDTYPE_PID, common->ns);
+	if (!next_tid || next_tid == common->pid) {
 		/* Run out of tasks of a process.  The tasks of a
 		 * thread_group are linked as circular linked list.
 		 */
-		*tid = saved_tid;
 		return NULL;
 	}
 
-	get_task_struct(next_task);
-	common->pid_visiting = *tid;
-
-	if (skip_if_dup_files && task->files == task->group_leader->files) {
-		task = next_task;
+	if (skip_if_dup_files && task->files == task->group_leader->files)
 		goto retry;
-	}
 
-	return next_task;
+	*tid = common->pid_visiting = next_tid;
+	get_task_struct(task);
+	return task;
 }
 
 static struct task_struct *task_seq_get_next(struct bpf_iter_seq_task_common *common,
@@ -308,11 +290,9 @@ again:
 	rcu_read_lock();
 	for (;; curr_fd++) {
 		struct file *f;
-		f = task_lookup_next_fd_rcu(curr_task, &curr_fd);
+		f = task_lookup_next_fdget_rcu(curr_task, &curr_fd);
 		if (!f)
 			break;
-		if (!get_file_rcu(f))
-			continue;
 
 		/* set info->fd */
 		info->fd = curr_fd;
@@ -438,6 +418,7 @@ struct bpf_iter_seq_task_vma_info {
 	 */
 	struct bpf_iter_seq_task_common common;
 	struct task_struct *task;
+	struct mm_struct *mm;
 	struct vm_area_struct *vma;
 	u32 tid;
 	unsigned long prev_vm_start;
@@ -456,16 +437,19 @@ task_vma_seq_get_next(struct bpf_iter_seq_task_vma_info *info)
 	enum bpf_task_vma_iter_find_op op;
 	struct vm_area_struct *curr_vma;
 	struct task_struct *curr_task;
+	struct mm_struct *curr_mm;
 	u32 saved_tid = info->tid;
 
 	/* If this function returns a non-NULL vma, it holds a reference to
-	 * the task_struct, and holds read lock on vma->mm->mmap_lock.
+	 * the task_struct, holds a refcount on mm->mm_users, and holds
+	 * read lock on vma->mm->mmap_lock.
 	 * If this function returns NULL, it does not hold any reference or
 	 * lock.
 	 */
 	if (info->task) {
 		curr_task = info->task;
 		curr_vma = info->vma;
+		curr_mm = info->mm;
 		/* In case of lock contention, drop mmap_lock to unblock
 		 * the writer.
 		 *
@@ -504,13 +488,15 @@ task_vma_seq_get_next(struct bpf_iter_seq_task_vma_info *info)
 		 *    4.2) VMA2 and VMA2' covers different ranges, process
 		 *         VMA2'.
 		 */
-		if (mmap_lock_is_contended(curr_task->mm)) {
+		if (mmap_lock_is_contended(curr_mm)) {
 			info->prev_vm_start = curr_vma->vm_start;
 			info->prev_vm_end = curr_vma->vm_end;
 			op = task_vma_iter_find_vma;
-			mmap_read_unlock(curr_task->mm);
-			if (mmap_read_lock_killable(curr_task->mm))
+			mmap_read_unlock(curr_mm);
+			if (mmap_read_lock_killable(curr_mm)) {
+				mmput(curr_mm);
 				goto finish;
+			}
 		} else {
 			op = task_vma_iter_next_vma;
 		}
@@ -535,42 +521,47 @@ again:
 			op = task_vma_iter_find_vma;
 		}
 
-		if (!curr_task->mm)
+		curr_mm = get_task_mm(curr_task);
+		if (!curr_mm)
 			goto next_task;
 
-		if (mmap_read_lock_killable(curr_task->mm))
+		if (mmap_read_lock_killable(curr_mm)) {
+			mmput(curr_mm);
 			goto finish;
+		}
 	}
 
 	switch (op) {
 	case task_vma_iter_first_vma:
-		curr_vma = find_vma(curr_task->mm, 0);
+		curr_vma = find_vma(curr_mm, 0);
 		break;
 	case task_vma_iter_next_vma:
-		curr_vma = find_vma(curr_task->mm, curr_vma->vm_end);
+		curr_vma = find_vma(curr_mm, curr_vma->vm_end);
 		break;
 	case task_vma_iter_find_vma:
 		/* We dropped mmap_lock so it is necessary to use find_vma
 		 * to find the next vma. This is similar to the  mechanism
 		 * in show_smaps_rollup().
 		 */
-		curr_vma = find_vma(curr_task->mm, info->prev_vm_end - 1);
+		curr_vma = find_vma(curr_mm, info->prev_vm_end - 1);
 		/* case 1) and 4.2) above just use curr_vma */
 
 		/* check for case 2) or case 4.1) above */
 		if (curr_vma &&
 		    curr_vma->vm_start == info->prev_vm_start &&
 		    curr_vma->vm_end == info->prev_vm_end)
-			curr_vma = find_vma(curr_task->mm, curr_vma->vm_end);
+			curr_vma = find_vma(curr_mm, curr_vma->vm_end);
 		break;
 	}
 	if (!curr_vma) {
 		/* case 3) above, or case 2) 4.1) with vma->next == NULL */
-		mmap_read_unlock(curr_task->mm);
+		mmap_read_unlock(curr_mm);
+		mmput(curr_mm);
 		goto next_task;
 	}
 	info->task = curr_task;
 	info->vma = curr_vma;
+	info->mm = curr_mm;
 	return curr_vma;
 
 next_task:
@@ -579,6 +570,7 @@ next_task:
 
 	put_task_struct(curr_task);
 	info->task = NULL;
+	info->mm = NULL;
 	info->tid++;
 	goto again;
 
@@ -587,6 +579,7 @@ finish:
 		put_task_struct(curr_task);
 	info->task = NULL;
 	info->vma = NULL;
+	info->mm = NULL;
 	return NULL;
 }
 
@@ -658,7 +651,9 @@ static void task_vma_seq_stop(struct seq_file *seq, void *v)
 		 */
 		info->prev_vm_start = ~0UL;
 		info->prev_vm_end = info->vma->vm_end;
-		mmap_read_unlock(info->task->mm);
+		mmap_read_unlock(info->mm);
+		mmput(info->mm);
+		info->mm = NULL;
 		put_task_struct(info->task);
 		info->task = NULL;
 	}
@@ -709,7 +704,7 @@ static struct bpf_iter_reg task_reg_info = {
 	.ctx_arg_info_size	= 1,
 	.ctx_arg_info		= {
 		{ offsetof(struct bpf_iter__task, task),
-		  PTR_TO_BTF_ID_OR_NULL },
+		  PTR_TO_BTF_ID_OR_NULL | PTR_TRUSTED },
 	},
 	.seq_info		= &task_seq_info,
 	.fill_link_info		= bpf_iter_fill_link_info,
@@ -807,6 +802,244 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg5_type	= ARG_ANYTHING,
 };
+
+struct bpf_iter_task_vma_kern_data {
+	struct task_struct *task;
+	struct mm_struct *mm;
+	struct mmap_unlock_irq_work *work;
+	struct vma_iterator vmi;
+};
+
+struct bpf_iter_task_vma {
+	/* opaque iterator state; having __u64 here allows to preserve correct
+	 * alignment requirements in vmlinux.h, generated from BTF
+	 */
+	__u64 __opaque[1];
+} __attribute__((aligned(8)));
+
+/* Non-opaque version of bpf_iter_task_vma */
+struct bpf_iter_task_vma_kern {
+	struct bpf_iter_task_vma_kern_data *data;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
+				      struct task_struct *task, u64 addr)
+{
+	struct bpf_iter_task_vma_kern *kit = (void *)it;
+	bool irq_work_busy = false;
+	int err;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_task_vma_kern) != sizeof(struct bpf_iter_task_vma));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_vma_kern) != __alignof__(struct bpf_iter_task_vma));
+
+	/* is_iter_reg_valid_uninit guarantees that kit hasn't been initialized
+	 * before, so non-NULL kit->data doesn't point to previously
+	 * bpf_mem_alloc'd bpf_iter_task_vma_kern_data
+	 */
+	kit->data = bpf_mem_alloc(&bpf_global_ma, sizeof(struct bpf_iter_task_vma_kern_data));
+	if (!kit->data)
+		return -ENOMEM;
+
+	kit->data->task = get_task_struct(task);
+	kit->data->mm = task->mm;
+	if (!kit->data->mm) {
+		err = -ENOENT;
+		goto err_cleanup_iter;
+	}
+
+	/* kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work */
+	irq_work_busy = bpf_mmap_unlock_get_irq_work(&kit->data->work);
+	if (irq_work_busy || !mmap_read_trylock(kit->data->mm)) {
+		err = -EBUSY;
+		goto err_cleanup_iter;
+	}
+
+	vma_iter_init(&kit->data->vmi, kit->data->mm, addr);
+	return 0;
+
+err_cleanup_iter:
+	if (kit->data->task)
+		put_task_struct(kit->data->task);
+	bpf_mem_free(&bpf_global_ma, kit->data);
+	/* NULL kit->data signals failed bpf_iter_task_vma initialization */
+	kit->data = NULL;
+	return err;
+}
+
+__bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_vma *it)
+{
+	struct bpf_iter_task_vma_kern *kit = (void *)it;
+
+	if (!kit->data) /* bpf_iter_task_vma_new failed */
+		return NULL;
+	return vma_next(&kit->data->vmi);
+}
+
+__bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
+{
+	struct bpf_iter_task_vma_kern *kit = (void *)it;
+
+	if (kit->data) {
+		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
+		put_task_struct(kit->data->task);
+		bpf_mem_free(&bpf_global_ma, kit->data);
+	}
+}
+
+__bpf_kfunc_end_defs();
+
+#ifdef CONFIG_CGROUPS
+
+struct bpf_iter_css_task {
+	__u64 __opaque[1];
+} __attribute__((aligned(8)));
+
+struct bpf_iter_css_task_kern {
+	struct css_task_iter *css_it;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_css_task_new(struct bpf_iter_css_task *it,
+		struct cgroup_subsys_state *css, unsigned int flags)
+{
+	struct bpf_iter_css_task_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_css_task_kern) != sizeof(struct bpf_iter_css_task));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_task_kern) !=
+					__alignof__(struct bpf_iter_css_task));
+	kit->css_it = NULL;
+	switch (flags) {
+	case CSS_TASK_ITER_PROCS | CSS_TASK_ITER_THREADED:
+	case CSS_TASK_ITER_PROCS:
+	case 0:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	kit->css_it = bpf_mem_alloc(&bpf_global_ma, sizeof(struct css_task_iter));
+	if (!kit->css_it)
+		return -ENOMEM;
+	css_task_iter_start(css, flags, kit->css_it);
+	return 0;
+}
+
+__bpf_kfunc struct task_struct *bpf_iter_css_task_next(struct bpf_iter_css_task *it)
+{
+	struct bpf_iter_css_task_kern *kit = (void *)it;
+
+	if (!kit->css_it)
+		return NULL;
+	return css_task_iter_next(kit->css_it);
+}
+
+__bpf_kfunc void bpf_iter_css_task_destroy(struct bpf_iter_css_task *it)
+{
+	struct bpf_iter_css_task_kern *kit = (void *)it;
+
+	if (!kit->css_it)
+		return;
+	css_task_iter_end(kit->css_it);
+	bpf_mem_free(&bpf_global_ma, kit->css_it);
+}
+
+__bpf_kfunc_end_defs();
+
+#endif /* CONFIG_CGROUPS */
+
+struct bpf_iter_task {
+	__u64 __opaque[3];
+} __attribute__((aligned(8)));
+
+struct bpf_iter_task_kern {
+	struct task_struct *task;
+	struct task_struct *pos;
+	unsigned int flags;
+} __attribute__((aligned(8)));
+
+enum {
+	/* all process in the system */
+	BPF_TASK_ITER_ALL_PROCS,
+	/* all threads in the system */
+	BPF_TASK_ITER_ALL_THREADS,
+	/* all threads of a specific process */
+	BPF_TASK_ITER_PROC_THREADS
+};
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_task_new(struct bpf_iter_task *it,
+		struct task_struct *task__nullable, unsigned int flags)
+{
+	struct bpf_iter_task_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_task_kern) > sizeof(struct bpf_iter_task));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_kern) !=
+					__alignof__(struct bpf_iter_task));
+
+	kit->task = kit->pos = NULL;
+	switch (flags) {
+	case BPF_TASK_ITER_ALL_THREADS:
+	case BPF_TASK_ITER_ALL_PROCS:
+		break;
+	case BPF_TASK_ITER_PROC_THREADS:
+		if (!task__nullable)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (flags == BPF_TASK_ITER_PROC_THREADS)
+		kit->task = task__nullable;
+	else
+		kit->task = &init_task;
+	kit->pos = kit->task;
+	kit->flags = flags;
+	return 0;
+}
+
+__bpf_kfunc struct task_struct *bpf_iter_task_next(struct bpf_iter_task *it)
+{
+	struct bpf_iter_task_kern *kit = (void *)it;
+	struct task_struct *pos;
+	unsigned int flags;
+
+	flags = kit->flags;
+	pos = kit->pos;
+
+	if (!pos)
+		return pos;
+
+	if (flags == BPF_TASK_ITER_ALL_PROCS)
+		goto get_next_task;
+
+	kit->pos = next_thread(kit->pos);
+	if (kit->pos == kit->task) {
+		if (flags == BPF_TASK_ITER_PROC_THREADS) {
+			kit->pos = NULL;
+			return pos;
+		}
+	} else
+		return pos;
+
+get_next_task:
+	kit->pos = next_task(kit->pos);
+	kit->task = kit->pos;
+	if (kit->pos == &init_task)
+		kit->pos = NULL;
+
+	return pos;
+}
+
+__bpf_kfunc void bpf_iter_task_destroy(struct bpf_iter_task *it)
+{
+}
+
+__bpf_kfunc_end_defs();
 
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
 

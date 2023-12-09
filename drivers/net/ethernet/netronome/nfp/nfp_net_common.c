@@ -38,6 +38,7 @@
 #include <net/tls.h>
 #include <net/vxlan.h>
 #include <net/xdp_sock_drv.h>
+#include <net/xfrm.h>
 
 #include "nfpcore/nfp_dev.h"
 #include "nfpcore/nfp_nsp.h"
@@ -51,6 +52,8 @@
 #include "nfp_port.h"
 #include "crypto/crypto.h"
 #include "crypto/fw.h"
+
+static int nfp_net_mc_unsync(struct net_device *netdev, const unsigned char *addr);
 
 /**
  * nfp_net_get_fw_version() - Read and parse the FW version
@@ -597,7 +600,7 @@ nfp_net_tls_tx(struct nfp_net_dp *dp, struct nfp_net_r_vector *r_vec,
 
 	if (likely(!dp->ktls_tx))
 		return skb;
-	if (!skb->sk || !tls_is_sk_tx_device_offloaded(skb->sk))
+	if (!tls_is_skb_tx_device_offloaded(skb))
 		return skb;
 
 	datalen = skb->len - skb_tcp_all_headers(skb);
@@ -665,7 +668,7 @@ void nfp_net_tls_tx_undo(struct sk_buff *skb, u64 tls_handle)
 
 	if (!tls_handle)
 		return;
-	if (WARN_ON_ONCE(!skb->sk || !tls_is_sk_tx_device_offloaded(skb->sk)))
+	if (WARN_ON_ONCE(!tls_is_skb_tx_device_offloaded(skb)))
 		return;
 
 	datalen = skb->len - skb_tcp_all_headers(skb);
@@ -921,7 +924,7 @@ static void nfp_net_write_mac_addr(struct nfp_net *nn, const u8 *addr)
  */
 static void nfp_net_clear_config_and_disable(struct nfp_net *nn)
 {
-	u32 new_ctrl, update;
+	u32 new_ctrl, new_ctrl_w1, update;
 	unsigned int r;
 	int err;
 
@@ -934,13 +937,28 @@ static void nfp_net_clear_config_and_disable(struct nfp_net *nn)
 	if (nn->cap & NFP_NET_CFG_CTRL_RINGCFG)
 		new_ctrl &= ~NFP_NET_CFG_CTRL_RINGCFG;
 
-	nn_writeq(nn, NFP_NET_CFG_TXRS_ENABLE, 0);
-	nn_writeq(nn, NFP_NET_CFG_RXRS_ENABLE, 0);
+	if (!(nn->cap_w1 & NFP_NET_CFG_CTRL_FREELIST_EN)) {
+		nn_writeq(nn, NFP_NET_CFG_TXRS_ENABLE, 0);
+		nn_writeq(nn, NFP_NET_CFG_RXRS_ENABLE, 0);
+	}
 
 	nn_writel(nn, NFP_NET_CFG_CTRL, new_ctrl);
 	err = nfp_net_reconfig(nn, update);
 	if (err)
 		nn_err(nn, "Could not disable device: %d\n", err);
+
+	if (nn->cap_w1 & NFP_NET_CFG_CTRL_FREELIST_EN) {
+		new_ctrl_w1 = nn->dp.ctrl_w1;
+		new_ctrl_w1 &= ~NFP_NET_CFG_CTRL_FREELIST_EN;
+		nn_writeq(nn, NFP_NET_CFG_TXRS_ENABLE, 0);
+		nn_writeq(nn, NFP_NET_CFG_RXRS_ENABLE, 0);
+
+		nn_writel(nn, NFP_NET_CFG_CTRL_WORD1, new_ctrl_w1);
+		err = nfp_net_reconfig(nn, update);
+		if (err)
+			nn_err(nn, "Could not disable FREELIST_EN: %d\n", err);
+		nn->dp.ctrl_w1 = new_ctrl_w1;
+	}
 
 	for (r = 0; r < nn->dp.num_rx_rings; r++) {
 		nfp_net_rx_ring_reset(&nn->dp.rx_rings[r]);
@@ -961,11 +979,12 @@ static void nfp_net_clear_config_and_disable(struct nfp_net *nn)
  */
 static int nfp_net_set_config_and_enable(struct nfp_net *nn)
 {
-	u32 bufsz, new_ctrl, update = 0;
+	u32 bufsz, new_ctrl, new_ctrl_w1, update = 0;
 	unsigned int r;
 	int err;
 
 	new_ctrl = nn->dp.ctrl;
+	new_ctrl_w1 = nn->dp.ctrl_w1;
 
 	if (nn->dp.ctrl & NFP_NET_CFG_CTRL_RSS_ANY) {
 		nfp_net_rss_write_key(nn);
@@ -998,16 +1017,25 @@ static int nfp_net_set_config_and_enable(struct nfp_net *nn)
 	bufsz = nn->dp.fl_bufsz - nn->dp.rx_dma_off - NFP_NET_RX_BUF_NON_DATA;
 	nn_writel(nn, NFP_NET_CFG_FLBUFSZ, bufsz);
 
-	/* Enable device */
-	new_ctrl |= NFP_NET_CFG_CTRL_ENABLE;
+	/* Enable device
+	 * Step 1: Replace the CTRL_ENABLE by NFP_NET_CFG_CTRL_FREELIST_EN if
+	 * FREELIST_EN exits.
+	 */
+	if (nn->cap_w1 & NFP_NET_CFG_CTRL_FREELIST_EN)
+		new_ctrl_w1 |= NFP_NET_CFG_CTRL_FREELIST_EN;
+	else
+		new_ctrl |= NFP_NET_CFG_CTRL_ENABLE;
 	update |= NFP_NET_CFG_UPDATE_GEN;
 	update |= NFP_NET_CFG_UPDATE_MSIX;
 	update |= NFP_NET_CFG_UPDATE_RING;
 	if (nn->cap & NFP_NET_CFG_CTRL_RINGCFG)
 		new_ctrl |= NFP_NET_CFG_CTRL_RINGCFG;
 
+	/* Step 2: Send the configuration and write the freelist.
+	 * - The freelist only need to be written once.
+	 */
 	nn_writel(nn, NFP_NET_CFG_CTRL, new_ctrl);
-	nn_writel(nn, NFP_NET_CFG_CTRL_WORD1, nn->dp.ctrl_w1);
+	nn_writel(nn, NFP_NET_CFG_CTRL_WORD1, new_ctrl_w1);
 	err = nfp_net_reconfig(nn, update);
 	if (err) {
 		nfp_net_clear_config_and_disable(nn);
@@ -1015,9 +1043,24 @@ static int nfp_net_set_config_and_enable(struct nfp_net *nn)
 	}
 
 	nn->dp.ctrl = new_ctrl;
+	nn->dp.ctrl_w1 = new_ctrl_w1;
 
 	for (r = 0; r < nn->dp.num_rx_rings; r++)
 		nfp_net_rx_ring_fill_freelist(&nn->dp, &nn->dp.rx_rings[r]);
+
+	/* Step 3: Do the NFP_NET_CFG_CTRL_ENABLE. Send the configuration.
+	 */
+	if (nn->cap_w1 & NFP_NET_CFG_CTRL_FREELIST_EN) {
+		new_ctrl |= NFP_NET_CFG_CTRL_ENABLE;
+		nn_writel(nn, NFP_NET_CFG_CTRL, new_ctrl);
+
+		err = nfp_net_reconfig(nn, update);
+		if (err) {
+			nfp_net_clear_config_and_disable(nn);
+			return err;
+		}
+		nn->dp.ctrl = new_ctrl;
+	}
 
 	return 0;
 }
@@ -1083,6 +1126,9 @@ static int nfp_net_netdev_close(struct net_device *netdev)
 
 	/* Step 2: Tell NFP
 	 */
+	if (nn->cap_w1 & NFP_NET_CFG_CTRL_MCAST_FILTER)
+		__dev_mc_unsync(netdev, nfp_net_mc_unsync);
+
 	nfp_net_clear_config_and_disable(nn);
 	nfp_port_configure(netdev, false);
 
@@ -1334,9 +1380,54 @@ err_unlock:
 	return err;
 }
 
-static int nfp_net_mc_cfg(struct net_device *netdev, const unsigned char *addr, const u32 cmd)
+int nfp_net_sched_mbox_amsg_work(struct nfp_net *nn, u32 cmd, const void *data, size_t len,
+				 int (*cb)(struct nfp_net *, struct nfp_mbox_amsg_entry *))
 {
-	struct nfp_net *nn = netdev_priv(netdev);
+	struct nfp_mbox_amsg_entry *entry;
+
+	entry = kmalloc(sizeof(*entry) + len, GFP_ATOMIC);
+	if (!entry)
+		return -ENOMEM;
+
+	memcpy(entry->msg, data, len);
+	entry->cmd = cmd;
+	entry->cfg = cb;
+
+	spin_lock_bh(&nn->mbox_amsg.lock);
+	list_add_tail(&entry->list, &nn->mbox_amsg.list);
+	spin_unlock_bh(&nn->mbox_amsg.lock);
+
+	schedule_work(&nn->mbox_amsg.work);
+
+	return 0;
+}
+
+static void nfp_net_mbox_amsg_work(struct work_struct *work)
+{
+	struct nfp_net *nn = container_of(work, struct nfp_net, mbox_amsg.work);
+	struct nfp_mbox_amsg_entry *entry, *tmp;
+	struct list_head tmp_list;
+
+	INIT_LIST_HEAD(&tmp_list);
+
+	spin_lock_bh(&nn->mbox_amsg.lock);
+	list_splice_init(&nn->mbox_amsg.list, &tmp_list);
+	spin_unlock_bh(&nn->mbox_amsg.lock);
+
+	list_for_each_entry_safe(entry, tmp, &tmp_list, list) {
+		int err = entry->cfg(nn, entry);
+
+		if (err)
+			nn_err(nn, "Config cmd %d to HW failed %d.\n", entry->cmd, err);
+
+		list_del(&entry->list);
+		kfree(entry);
+	}
+}
+
+static int nfp_net_mc_cfg(struct nfp_net *nn, struct nfp_mbox_amsg_entry *entry)
+{
+	unsigned char *addr = entry->msg;
 	int ret;
 
 	ret = nfp_net_mbox_lock(nn, NFP_NET_CFG_MULTICAST_SZ);
@@ -1348,7 +1439,7 @@ static int nfp_net_mc_cfg(struct net_device *netdev, const unsigned char *addr, 
 	nn_writew(nn, nn->tlv_caps.mbox_off + NFP_NET_CFG_MULTICAST_MAC_LO,
 		  get_unaligned_be16(addr + 4));
 
-	return nfp_net_mbox_reconfig_and_unlock(nn, cmd);
+	return nfp_net_mbox_reconfig_and_unlock(nn, entry->cmd);
 }
 
 static int nfp_net_mc_sync(struct net_device *netdev, const unsigned char *addr)
@@ -1361,12 +1452,16 @@ static int nfp_net_mc_sync(struct net_device *netdev, const unsigned char *addr)
 		return -EINVAL;
 	}
 
-	return nfp_net_mc_cfg(netdev, addr, NFP_NET_CFG_MBOX_CMD_MULTICAST_ADD);
+	return nfp_net_sched_mbox_amsg_work(nn, NFP_NET_CFG_MBOX_CMD_MULTICAST_ADD, addr,
+					    NFP_NET_CFG_MULTICAST_SZ, nfp_net_mc_cfg);
 }
 
 static int nfp_net_mc_unsync(struct net_device *netdev, const unsigned char *addr)
 {
-	return nfp_net_mc_cfg(netdev, addr, NFP_NET_CFG_MBOX_CMD_MULTICAST_DEL);
+	struct nfp_net *nn = netdev_priv(netdev);
+
+	return nfp_net_sched_mbox_amsg_work(nn, NFP_NET_CFG_MBOX_CMD_MULTICAST_DEL, addr,
+					    NFP_NET_CFG_MULTICAST_SZ, nfp_net_mc_cfg);
 }
 
 static void nfp_net_set_rx_mode(struct net_device *netdev)
@@ -1848,6 +1943,9 @@ nfp_net_features_check(struct sk_buff *skb, struct net_device *dev,
 			features &= ~NETIF_F_GSO_MASK;
 	}
 
+	if (xfrm_offload(skb))
+		return features;
+
 	/* VXLAN/GRE check */
 	switch (vlan_get_protocol(skb)) {
 	case htons(ETH_P_IP):
@@ -2009,9 +2107,6 @@ static int nfp_net_bridge_setlink(struct net_device *dev, struct nlmsghdr *nlh,
 	nla_for_each_nested(attr, br_spec, rem) {
 		if (nla_type(attr) != IFLA_BRIDGE_MODE)
 			continue;
-
-		if (nla_len(attr) < sizeof(mode))
-			return -EINVAL;
 
 		new_ctrl = nn->dp.ctrl;
 		mode = nla_get_u16(attr);
@@ -2365,6 +2460,8 @@ static void nfp_net_rss_init(struct nfp_net *nn)
 	/* Enable IPv4/IPv6 TCP by default */
 	nn->rss_cfg = NFP_NET_CFG_RSS_IPV4_TCP |
 		      NFP_NET_CFG_RSS_IPV6_TCP |
+		      NFP_NET_CFG_RSS_IPV4_UDP |
+		      NFP_NET_CFG_RSS_IPV6_UDP |
 		      FIELD_PREP(NFP_NET_CFG_RSS_HFUNC, nn->rss_hfunc) |
 		      NFP_NET_CFG_RSS_MASK;
 }
@@ -2482,10 +2579,15 @@ static void nfp_net_netdev_init(struct nfp_net *nn)
 	netdev->features &= ~NETIF_F_HW_VLAN_STAG_RX;
 	nn->dp.ctrl &= ~NFP_NET_CFG_CTRL_RXQINQ;
 
+	netdev->xdp_features = NETDEV_XDP_ACT_BASIC;
+	if (nn->app && nn->app->type->id == NFP_APP_BPF_NIC)
+		netdev->xdp_features |= NETDEV_XDP_ACT_HW_OFFLOAD;
+
 	/* Finalise the netdev setup */
 	switch (nn->dp.ops->version) {
 	case NFP_NFD_VER_NFD3:
 		netdev->netdev_ops = &nfp_nfd3_netdev_ops;
+		netdev->xdp_features |= NETDEV_XDP_ACT_XSK_ZEROCOPY;
 		break;
 	case NFP_NFD_VER_NFDK:
 		netdev->netdev_ops = &nfp_nfdk_netdev_ops;
@@ -2633,6 +2735,11 @@ int nfp_net_init(struct nfp_net *nn)
 
 	if (!nn->dp.netdev)
 		return 0;
+
+	spin_lock_init(&nn->mbox_amsg.lock);
+	INIT_LIST_HEAD(&nn->mbox_amsg.list);
+	INIT_WORK(&nn->mbox_amsg.work, nfp_net_mbox_amsg_work);
+
 	return register_netdev(nn->dp.netdev);
 
 err_clean_mbox:
@@ -2652,5 +2759,6 @@ void nfp_net_clean(struct nfp_net *nn)
 	unregister_netdev(nn->dp.netdev);
 	nfp_net_ipsec_clean(nn);
 	nfp_ccm_mbox_clean(nn);
+	flush_work(&nn->mbox_amsg.work);
 	nfp_net_reconfig_wait_posted(nn);
 }

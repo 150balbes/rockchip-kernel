@@ -51,6 +51,7 @@ properties:
               - fsl,imx8mm-fec
               - fsl,imx8mn-fec
               - fsl,imx8mp-fec
+              - fsl,imx93-fec
           - const: fsl,imx8mq-fec
           - const: fsl,imx6sx-fec
       - items:
@@ -58,6 +59,7 @@ properties:
           - const: fsl,imx6sx-fec
       - items:
           - enum:
+              - fsl,imx8dxl-fec
               - fsl,imx8qxp-fec
           - const: fsl,imx8qm-fec
           - const: fsl,imx6sx-fec
@@ -142,6 +144,9 @@ properties:
   phy-supply:
     description:
       Regulator that powers the Ethernet PHY.
+
+  power-domains:
+    maxItems: 1
 
   fsl,num-tx-queues:
     $ref: /schemas/types.yaml#/definitions/uint32

@@ -107,11 +107,9 @@ static void chain_all_buffers(struct cobalt_stream *s)
 {
 	struct sg_dma_desc_info *desc[NR_BUFS];
 	struct cobalt_buffer *cb;
-	struct list_head *p;
 	int i = 0;
 
-	list_for_each(p, &s->bufs) {
-		cb = list_entry(p, struct cobalt_buffer, list);
+	list_for_each_entry(cb, &s->bufs, list) {
 		desc[i] = &s->dma_desc_info[cb->vb.vb2_buf.index];
 		if (i > 0)
 			descriptor_list_chain(desc[i-1], desc[i]);
@@ -348,7 +346,6 @@ static void cobalt_dma_stop_streaming(struct cobalt_stream *s)
 	struct cobalt *cobalt = s->cobalt;
 	struct sg_dma_desc_info *desc;
 	struct cobalt_buffer *cb;
-	struct list_head *p;
 	unsigned long flags;
 	int timeout_msec = 100;
 	int rx = s->video_channel;
@@ -367,8 +364,7 @@ static void cobalt_dma_stop_streaming(struct cobalt_stream *s)
 
 	/* Try to stop the DMA engine gracefully */
 	spin_lock_irqsave(&s->irqlock, flags);
-	list_for_each(p, &s->bufs) {
-		cb = list_entry(p, struct cobalt_buffer, list);
+	list_for_each_entry(cb, &s->bufs, list) {
 		desc = &s->dma_desc_info[cb->vb.vb2_buf.index];
 		/* Stop DMA after this descriptor chain */
 		descriptor_list_end_of_chain(desc);
@@ -708,7 +704,6 @@ static int cobalt_g_fmt_vid_cap(struct file *file, void *priv_fh,
 {
 	struct cobalt_stream *s = video_drvdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
-	struct v4l2_subdev_format sd_fmt;
 
 	pix->width = s->width;
 	pix->height = s->height;
@@ -718,8 +713,11 @@ static int cobalt_g_fmt_vid_cap(struct file *file, void *priv_fh,
 	if (s->input == 1) {
 		pix->colorspace = V4L2_COLORSPACE_SRGB;
 	} else {
-		sd_fmt.pad = s->pad_source;
-		sd_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+		struct v4l2_subdev_format sd_fmt = {
+			.pad = s->pad_source,
+			.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+		};
+
 		v4l2_subdev_call(s->sd, pad, get_fmt, NULL, &sd_fmt);
 		v4l2_fill_pix_format(pix, &sd_fmt.format);
 	}
@@ -735,7 +733,6 @@ static int cobalt_try_fmt_vid_cap(struct file *file, void *priv_fh,
 {
 	struct cobalt_stream *s = video_drvdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
-	struct v4l2_subdev_format sd_fmt;
 
 	/* Check for min (QCIF) and max (Full HD) size */
 	if ((pix->width < 176) || (pix->height < 144)) {
@@ -760,8 +757,11 @@ static int cobalt_try_fmt_vid_cap(struct file *file, void *priv_fh,
 		pix->height = 1080;
 		pix->colorspace = V4L2_COLORSPACE_SRGB;
 	} else {
-		sd_fmt.pad = s->pad_source;
-		sd_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+		struct v4l2_subdev_format sd_fmt = {
+			.pad = s->pad_source,
+			.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+		};
+
 		v4l2_subdev_call(s->sd, pad, get_fmt, NULL, &sd_fmt);
 		v4l2_fill_pix_format(pix, &sd_fmt.format);
 	}
@@ -906,7 +906,9 @@ static int cobalt_s_fmt_vid_out(struct file *file, void *priv_fh,
 {
 	struct cobalt_stream *s = video_drvdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
-	struct v4l2_subdev_format sd_fmt = { 0 };
+	struct v4l2_subdev_format sd_fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	u32 code;
 
 	if (cobalt_try_fmt_vid_out(file, priv_fh, f))
@@ -937,7 +939,6 @@ static int cobalt_s_fmt_vid_out(struct file *file, void *priv_fh,
 	s->xfer_func = pix->xfer_func;
 	s->ycbcr_enc = pix->ycbcr_enc;
 	s->quantization = pix->quantization;
-	sd_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	v4l2_fill_mbus_format(&sd_fmt.format, pix, code);
 	v4l2_subdev_call(s->sd, pad, set_fmt, NULL, &sd_fmt);
 	return 0;

@@ -11,6 +11,7 @@
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gsc.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_print.h"
 
 #define GSC_BAR_LENGTH  0x00000FFC
 
@@ -49,13 +50,13 @@ gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size
 					  I915_BO_ALLOC_CONTIGUOUS |
 					  I915_BO_ALLOC_CPU_CLEAR);
 	if (IS_ERR(obj)) {
-		drm_err(&gt->i915->drm, "Failed to allocate gsc memory\n");
+		gt_err(gt, "Failed to allocate gsc memory\n");
 		return PTR_ERR(obj);
 	}
 
 	err = i915_gem_object_pin_pages_unlocked(obj);
 	if (err) {
-		drm_err(&gt->i915->drm, "Failed to pin pages for gsc memory\n");
+		gt_err(gt, "Failed to pin pages for gsc memory\n");
 		goto out_put;
 	}
 
@@ -174,6 +175,14 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 	intf->irq = -1;
 	intf->id = intf_id;
 
+	/*
+	 * On the multi-tile setups the GSC is functional on the first tile only
+	 */
+	if (gsc_to_gt(gsc)->info.id != 0) {
+		drm_dbg(&i915->drm, "Not initializing gsc for remote tiles\n");
+		return;
+	}
+
 	if (intf_id == 0 && !HAS_HECI_PXP(i915))
 		return;
 
@@ -278,12 +287,12 @@ static void gsc_irq_handler(struct intel_gt *gt, unsigned int intf_id)
 	int ret;
 
 	if (intf_id >= INTEL_GSC_NUM_INTERFACES) {
-		drm_warn_once(&gt->i915->drm, "GSC irq: intf_id %d is out of range", intf_id);
+		gt_warn_once(gt, "GSC irq: intf_id %d is out of range", intf_id);
 		return;
 	}
 
 	if (!HAS_HECI_GSC(gt->i915)) {
-		drm_warn_once(&gt->i915->drm, "GSC irq: not supported");
+		gt_warn_once(gt, "GSC irq: not supported");
 		return;
 	}
 
@@ -292,7 +301,7 @@ static void gsc_irq_handler(struct intel_gt *gt, unsigned int intf_id)
 
 	ret = generic_handle_irq(gt->gsc.intf[intf_id].irq);
 	if (ret)
-		drm_err_ratelimited(&gt->i915->drm, "error handling GSC irq: %d\n", ret);
+		gt_err_ratelimited(gt, "error handling GSC irq: %d\n", ret);
 }
 
 void intel_gsc_irq_handler(struct intel_gt *gt, u32 iir)

@@ -1401,6 +1401,11 @@ static void tun_net_initialize(struct net_device *dev)
 
 		eth_hw_addr_random(dev);
 
+		/* Currently tun does not support XDP, only tap does. */
+		dev->xdp_features = NETDEV_XDP_ACT_BASIC |
+				    NETDEV_XDP_ACT_REDIRECT |
+				    NETDEV_XDP_ACT_NDO_XMIT;
+
 		break;
 	}
 
@@ -1481,7 +1486,8 @@ static struct sk_buff *tun_napi_alloc_frags(struct tun_file *tfile,
 	skb->truesize += skb->data_len;
 
 	for (i = 1; i < it->nr_segs; i++) {
-		size_t fragsz = it->iov[i].iov_len;
+		const struct iovec *iov = iter_iov(it);
+		size_t fragsz = iov->iov_len;
 		struct page *page;
 		void *frag;
 
@@ -1517,11 +1523,13 @@ static struct sk_buff *tun_alloc_skb(struct tun_file *tfile,
 	int err;
 
 	/* Under a page?  Don't bother with paged skb. */
-	if (prepad + len < PAGE_SIZE || !linear)
+	if (prepad + len < PAGE_SIZE)
 		linear = len;
 
+	if (len - linear > MAX_SKB_FRAGS * (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER))
+		linear = len - MAX_SKB_FRAGS * (PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER);
 	skb = sock_alloc_send_pskb(sk, prepad + linear, len - linear, noblock,
-				   &err, 0);
+				   &err, PAGE_ALLOC_COSTLY_ORDER);
 	if (!skb)
 		return ERR_PTR(err);
 
@@ -1588,7 +1596,7 @@ static bool tun_can_build_skb(struct tun_struct *tun, struct tun_file *tfile,
 	if (zerocopy)
 		return false;
 
-	if (SKB_DATA_ALIGN(len + TUN_RX_PAD) +
+	if (SKB_DATA_ALIGN(len + TUN_RX_PAD + XDP_PACKET_HEADROOM) +
 	    SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) > PAGE_SIZE)
 		return false;
 
@@ -1832,6 +1840,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			 */
 			zerocopy = false;
 		} else {
+			if (!linear)
+				linear = min_t(size_t, good_linear, copylen);
+
 			skb = tun_alloc_skb(tfile, align, copylen, linear,
 					    noblock);
 		}
@@ -1971,6 +1982,14 @@ napi_busy:
 		int queue_len;
 
 		spin_lock_bh(&queue->lock);
+
+		if (unlikely(tfile->detached)) {
+			spin_unlock_bh(&queue->lock);
+			rcu_read_unlock();
+			err = -EBUSY;
+			goto free_skb;
+		}
+
 		__skb_queue_tail(queue, skb);
 		queue_len = skb_queue_len(queue);
 		spin_unlock(&queue->lock);
@@ -2506,6 +2525,13 @@ build:
 	if (tfile->napi_enabled) {
 		queue = &tfile->sk.sk_write_queue;
 		spin_lock(&queue->lock);
+
+		if (unlikely(tfile->detached)) {
+			spin_unlock(&queue->lock);
+			kfree_skb(skb);
+			return -EBUSY;
+		}
+
 		__skb_queue_tail(queue, skb);
 		spin_unlock(&queue->lock);
 		ret = 1;
@@ -3047,10 +3073,11 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	struct net *net = sock_net(&tfile->sk);
 	struct tun_struct *tun;
 	void __user* argp = (void __user*)arg;
-	unsigned int ifindex, carrier;
+	unsigned int carrier;
 	struct ifreq ifr;
 	kuid_t owner;
 	kgid_t group;
+	int ifindex;
 	int sndbuf;
 	int vnet_hdr_sz;
 	int le;
@@ -3106,7 +3133,9 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 		ret = -EFAULT;
 		if (copy_from_user(&ifindex, argp, sizeof(ifindex)))
 			goto unlock;
-
+		ret = -EINVAL;
+		if (ifindex < 0)
+			goto unlock;
 		ret = 0;
 		tfile->ifindex = ifindex;
 		goto unlock;
@@ -3448,7 +3477,7 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 	tfile->socket.file = file;
 	tfile->socket.ops = &tun_socket_ops;
 
-	sock_init_data(&tfile->socket, &tfile->sk);
+	sock_init_data_uid(&tfile->socket, &tfile->sk, current_fsuid());
 
 	tfile->sk.sk_write_space = tun_sock_write_space;
 	tfile->sk.sk_sndbuf = INT_MAX;
@@ -3458,6 +3487,8 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 
 	sock_set_flag(&tfile->sk, SOCK_ZEROCOPY);
 
+	/* tun groks IOCB_NOWAIT just fine, mark it as such */
+	file->f_mode |= FMODE_NOWAIT;
 	return 0;
 }
 
@@ -3715,7 +3746,7 @@ err_linkops:
 	return ret;
 }
 
-static void tun_cleanup(void)
+static void __exit tun_cleanup(void)
 {
 	misc_deregister(&tun_miscdev);
 	rtnl_link_unregister(&tun_link_ops);

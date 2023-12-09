@@ -12,9 +12,10 @@
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/phy/pcie.h>
 #include <linux/phy/phy.h>
+#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
@@ -38,7 +39,7 @@
 
 #define RK3588_BIFURCATION_LANE_0_1		BIT(0)
 #define RK3588_BIFURCATION_LANE_2_3		BIT(1)
-#define RK3588_LANE_AGGREGATION			BIT(2)
+#define RK3588_LANE_AGGREGATION		BIT(2)
 
 struct rockchip_p3phy_ops;
 

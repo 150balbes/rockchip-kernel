@@ -110,7 +110,7 @@ void __init save_area_add_vxrs(struct save_area *sa, __vector128 *vxrs)
 
 	/* Copy lower halves of vector registers 0-15 */
 	for (i = 0; i < 16; i++)
-		memcpy(&sa->vxrs_low[i], &vxrs[i].u[2], 8);
+		sa->vxrs_low[i] = vxrs[i].low;
 	/* Copy vector registers 16-31 */
 	memcpy(sa->vxrs_high, vxrs + 16, 16 * sizeof(__vector128));
 }
@@ -498,7 +498,7 @@ static int get_mem_chunk_cnt(void)
 /*
  * Initialize ELF loads (new kernel)
  */
-static void loads_init(Elf64_Phdr *phdr, u64 loads_offset)
+static void loads_init(Elf64_Phdr *phdr)
 {
 	phys_addr_t start, end;
 	u64 idx;
@@ -507,7 +507,7 @@ static void loads_init(Elf64_Phdr *phdr, u64 loads_offset)
 		phdr->p_filesz = end - start;
 		phdr->p_type = PT_LOAD;
 		phdr->p_offset = start;
-		phdr->p_vaddr = start;
+		phdr->p_vaddr = (unsigned long)__va(start);
 		phdr->p_paddr = start;
 		phdr->p_memsz = end - start;
 		phdr->p_flags = PF_R | PF_W | PF_X;
@@ -568,9 +568,9 @@ static size_t get_elfcorehdr_size(int mem_chunk_cnt)
 int elfcorehdr_alloc(unsigned long long *addr, unsigned long long *size)
 {
 	Elf64_Phdr *phdr_notes, *phdr_loads;
+	size_t alloc_size;
 	int mem_chunk_cnt;
 	void *ptr, *hdr;
-	u32 alloc_size;
 	u64 hdr_off;
 
 	/* If we are not in kdump or zfcp/nvme dump mode return */
@@ -612,7 +612,7 @@ int elfcorehdr_alloc(unsigned long long *addr, unsigned long long *size)
 	ptr = notes_init(phdr_notes, ptr, ((unsigned long) hdr) + hdr_off);
 	/* Init loads */
 	hdr_off = PTR_DIFF(ptr, hdr);
-	loads_init(phdr_loads, hdr_off);
+	loads_init(phdr_loads);
 	*addr = (unsigned long long) hdr;
 	*size = (unsigned long long) hdr_off;
 	BUG_ON(elfcorehdr_size > alloc_size);

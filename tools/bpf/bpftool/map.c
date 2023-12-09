@@ -139,6 +139,9 @@ static void print_entry_json(struct bpf_map_info *info, unsigned char *key,
 		print_hex_data_json(key, info->key_size);
 		jsonw_name(json_wtr, "value");
 		print_hex_data_json(value, info->value_size);
+		if (map_is_map_of_maps(info->type))
+			jsonw_uint_field(json_wtr, "inner_map_id",
+					 *(unsigned int *)value);
 		if (btf) {
 			struct btf_dumper d = {
 				.btf = btf,
@@ -259,8 +262,13 @@ static void print_entry_plain(struct bpf_map_info *info, unsigned char *key,
 		}
 
 		if (info->value_size) {
-			printf("value:%c", break_names ? '\n' : ' ');
-			fprint_hex(stdout, value, info->value_size, " ");
+			if (map_is_map_of_maps(info->type)) {
+				printf("inner_map_id:%c", break_names ? '\n' : ' ');
+				printf("%u ", *(unsigned int *)value);
+			} else {
+				printf("value:%c", break_names ? '\n' : ' ');
+				fprint_hex(stdout, value, info->value_size, " ");
+			}
 		}
 
 		printf("\n");
@@ -638,7 +646,7 @@ static int do_show_subset(int argc, char **argv)
 	if (json_output && nb_fds > 1)
 		jsonw_start_array(json_wtr);	/* root array */
 	for (i = 0; i < nb_fds; i++) {
-		err = bpf_obj_get_info_by_fd(fds[i], &info, &len);
+		err = bpf_map_get_info_by_fd(fds[i], &info, &len);
 		if (err) {
 			p_err("can't get map info: %s",
 			      strerror(errno));
@@ -708,7 +716,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		err = bpf_obj_get_info_by_fd(fd, &info, &len);
+		err = bpf_map_get_info_by_fd(fd, &info, &len);
 		if (err) {
 			p_err("can't get map info: %s", strerror(errno));
 			close(fd);
@@ -764,7 +772,7 @@ static int maps_have_btf(int *fds, int nb_fds)
 	int err, i;
 
 	for (i = 0; i < nb_fds; i++) {
-		err = bpf_obj_get_info_by_fd(fds[i], &info, &len);
+		err = bpf_map_get_info_by_fd(fds[i], &info, &len);
 		if (err) {
 			p_err("can't get map info: %s", strerror(errno));
 			return -1;
@@ -925,7 +933,7 @@ static int do_dump(int argc, char **argv)
 	if (wtr && nb_fds > 1)
 		jsonw_start_array(wtr);	/* root array */
 	for (i = 0; i < nb_fds; i++) {
-		if (bpf_obj_get_info_by_fd(fds[i], &info, &len)) {
+		if (bpf_map_get_info_by_fd(fds[i], &info, &len)) {
 			p_err("can't get map info: %s", strerror(errno));
 			break;
 		}
@@ -1279,6 +1287,11 @@ static int do_create(int argc, char **argv)
 					  "flags"))
 				goto exit;
 		} else if (is_prefix(*argv, "dev")) {
+			p_info("Warning: 'bpftool map create [...] dev <ifname>' syntax is deprecated.\n"
+			       "Going further, please use 'offload_dev <ifname>' to request hardware offload for the map.");
+			goto offload_dev;
+		} else if (is_prefix(*argv, "offload_dev")) {
+offload_dev:
 			NEXT_ARG();
 
 			if (attr.map_ifindex) {
@@ -1423,7 +1436,7 @@ static int do_help(int argc, char **argv)
 		"Usage: %1$s %2$s { show | list }   [MAP]\n"
 		"       %1$s %2$s create     FILE type TYPE key KEY_SIZE value VALUE_SIZE \\\n"
 		"                                  entries MAX_ENTRIES name NAME [flags FLAGS] \\\n"
-		"                                  [inner_map MAP] [dev NAME]\n"
+		"                                  [inner_map MAP] [offload_dev NAME]\n"
 		"       %1$s %2$s dump       MAP\n"
 		"       %1$s %2$s update     MAP [key DATA] [value VALUE] [UPDATE_FLAGS]\n"
 		"       %1$s %2$s lookup     MAP [key DATA]\n"

@@ -39,7 +39,7 @@ static int eeh_result_priority(enum pci_ers_result result)
 	case PCI_ERS_RESULT_NEED_RESET:
 		return 6;
 	default:
-		WARN_ONCE(1, "Unknown pci_ers_result value: %d\n", (int)result);
+		WARN_ONCE(1, "Unknown pci_ers_result value: %d\n", result);
 		return 0;
 	}
 };
@@ -60,7 +60,7 @@ static const char *pci_ers_result_name(enum pci_ers_result result)
 	case PCI_ERS_RESULT_NO_AER_DRIVER:
 		return "no AER driver";
 	default:
-		WARN_ONCE(1, "Unknown result type: %d\n", (int)result);
+		WARN_ONCE(1, "Unknown result type: %d\n", result);
 		return "unknown";
 	}
 };
@@ -1065,10 +1065,10 @@ recover_failed:
 	eeh_slot_error_detail(pe, EEH_LOG_PERM);
 
 	/* Notify all devices that they're about to go down. */
-	eeh_set_channel_state(pe, pci_channel_io_perm_failure);
 	eeh_set_irq_state(pe, false);
 	eeh_pe_report("error_detected(permanent failure)", pe,
 		      eeh_report_failure, NULL);
+	eeh_set_channel_state(pe, pci_channel_io_perm_failure);
 
 	/* Mark the PE to be removed permanently */
 	eeh_pe_state_mark(pe, EEH_PE_REMOVED);
@@ -1185,10 +1185,10 @@ void eeh_handle_special_event(void)
 
 			/* Notify all devices to be down */
 			eeh_pe_state_clear(pe, EEH_PE_PRI_BUS, true);
-			eeh_set_channel_state(pe, pci_channel_io_perm_failure);
 			eeh_pe_report(
 				"error_detected(permanent failure)", pe,
 				eeh_report_failure, NULL);
+			eeh_set_channel_state(pe, pci_channel_io_perm_failure);
 
 			pci_lock_rescan_remove();
 			list_for_each_entry(hose, &hose_list, list_node) {

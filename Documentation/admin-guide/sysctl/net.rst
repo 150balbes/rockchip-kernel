@@ -71,6 +71,7 @@ two flavors of JITs, the newer eBPF JIT currently supported on:
   - s390x
   - riscv64
   - riscv32
+  - loongarch64
 
 And the older cBPF JIT supported on the following archs:
 
@@ -214,6 +215,12 @@ rmem_max
 --------
 
 The maximum receive socket buffer size in bytes.
+
+rps_default_mask
+----------------
+
+The default RPS CPU mask used on newly created network devices. An empty
+mask means RPS disabled by default.
 
 tstamp_allow_data
 -----------------
@@ -380,8 +387,8 @@ Default : 0  (for compatibility reasons)
 txrehash
 --------
 
-Controls default hash rethink behaviour on listening socket when SO_TXREHASH
-option is set to SOCK_TXREHASH_DEFAULT (i. e. not overridden by setsockopt).
+Controls default hash rethink behaviour on socket when SO_TXREHASH option is set
+to SOCK_TXREHASH_DEFAULT (i. e. not overridden by setsockopt).
 
 If set to 1 (default), hash rethink is performed on listening socket.
 If set to 0, hash rethink is not performed.

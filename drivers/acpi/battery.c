@@ -42,6 +42,8 @@
 #define ACPI_BATTERY_STATE_CHARGING	0x2
 #define ACPI_BATTERY_STATE_CRITICAL	0x4
 
+#define MAX_STRING_LENGTH	64
+
 MODULE_AUTHOR("Paul Diefenbaugh");
 MODULE_AUTHOR("Alexey Starikovskiy <astarikovskiy@suse.de>");
 MODULE_DESCRIPTION("ACPI Battery Driver");
@@ -118,10 +120,10 @@ struct acpi_battery {
 	int capacity_granularity_1;
 	int capacity_granularity_2;
 	int alarm;
-	char model_number[32];
-	char serial_number[32];
-	char type[32];
-	char oem_info[32];
+	char model_number[MAX_STRING_LENGTH];
+	char serial_number[MAX_STRING_LENGTH];
+	char type[MAX_STRING_LENGTH];
+	char oem_info[MAX_STRING_LENGTH];
 	int state;
 	int power_unit;
 	unsigned long flags;
@@ -437,16 +439,25 @@ static int extract_package(struct acpi_battery *battery,
 		element = &package->package.elements[i];
 		if (offsets[i].mode) {
 			u8 *ptr = (u8 *)battery + offsets[i].offset;
+			u32 len = MAX_STRING_LENGTH;
 
-			if (element->type == ACPI_TYPE_STRING ||
-			    element->type == ACPI_TYPE_BUFFER)
-				strncpy(ptr, element->string.pointer, 32);
-			else if (element->type == ACPI_TYPE_INTEGER) {
-				strncpy(ptr, (u8 *)&element->integer.value,
-					sizeof(u64));
-				ptr[sizeof(u64)] = 0;
-			} else
+			switch (element->type) {
+			case ACPI_TYPE_BUFFER:
+				if (len > element->buffer.length + 1)
+					len = element->buffer.length + 1;
+
+				fallthrough;
+			case ACPI_TYPE_STRING:
+				strscpy(ptr, element->string.pointer, len);
+
+				break;
+			case ACPI_TYPE_INTEGER:
+				strscpy(ptr, (u8 *)&element->integer.value, sizeof(u64) + 1);
+
+				break;
+			default:
 				*ptr = 0; /* don't have value */
+			}
 		} else {
 			int *x = (int *)((u8 *)battery + offsets[i].offset);
 			*x = (element->type == ACPI_TYPE_INTEGER) ?
@@ -1023,8 +1034,9 @@ static void acpi_battery_refresh(struct acpi_battery *battery)
 }
 
 /* Driver Interface */
-static void acpi_battery_notify(struct acpi_device *device, u32 event)
+static void acpi_battery_notify(acpi_handle handle, u32 event, void *data)
 {
+	struct acpi_device *device = data;
 	struct acpi_battery *battery = acpi_driver_data(device);
 	struct power_supply *old;
 
@@ -1201,13 +1213,22 @@ static int acpi_battery_add(struct acpi_device *device)
 
 	device_init_wakeup(&device->dev, 1);
 
-	return result;
+	result = acpi_dev_install_notify_handler(device, ACPI_ALL_NOTIFY,
+						 acpi_battery_notify, device);
+	if (result)
+		goto fail_pm;
 
+	return 0;
+
+fail_pm:
+	device_init_wakeup(&device->dev, 0);
+	unregister_pm_notifier(&battery->pm_nb);
 fail:
 	sysfs_remove_battery(battery);
 	mutex_destroy(&battery->lock);
 	mutex_destroy(&battery->sysfs_lock);
 	kfree(battery);
+
 	return result;
 }
 
@@ -1217,10 +1238,16 @@ static void acpi_battery_remove(struct acpi_device *device)
 
 	if (!device || !acpi_driver_data(device))
 		return;
-	device_init_wakeup(&device->dev, 0);
+
 	battery = acpi_driver_data(device);
+
+	acpi_dev_remove_notify_handler(device, ACPI_ALL_NOTIFY,
+				       acpi_battery_notify);
+
+	device_init_wakeup(&device->dev, 0);
 	unregister_pm_notifier(&battery->pm_nb);
 	sysfs_remove_battery(battery);
+
 	mutex_destroy(&battery->lock);
 	mutex_destroy(&battery->sysfs_lock);
 	kfree(battery);
@@ -1253,11 +1280,9 @@ static struct acpi_driver acpi_battery_driver = {
 	.name = "battery",
 	.class = ACPI_BATTERY_CLASS,
 	.ids = battery_device_ids,
-	.flags = ACPI_DRIVER_ALL_NOTIFY_EVENTS,
 	.ops = {
 		.add = acpi_battery_add,
 		.remove = acpi_battery_remove,
-		.notify = acpi_battery_notify,
 		},
 	.drv.pm = &acpi_battery_pm,
 };

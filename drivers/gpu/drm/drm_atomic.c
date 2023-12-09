@@ -140,6 +140,12 @@ drm_atomic_state_init(struct drm_device *dev, struct drm_atomic_state *state)
 	if (!state->planes)
 		goto fail;
 
+	/*
+	 * Because drm_atomic_state can be committed asynchronously we need our
+	 * own reference and cannot rely on the on implied by drm_file in the
+	 * ioctl call.
+	 */
+	drm_dev_get(dev);
 	state->dev = dev;
 
 	drm_dbg_atomic(dev, "Allocated atomic state %p\n", state);
@@ -299,7 +305,8 @@ EXPORT_SYMBOL(drm_atomic_state_clear);
 void __drm_atomic_state_free(struct kref *ref)
 {
 	struct drm_atomic_state *state = container_of(ref, typeof(*state), ref);
-	struct drm_mode_config *config = &state->dev->mode_config;
+	struct drm_device *dev = state->dev;
+	struct drm_mode_config *config = &dev->mode_config;
 
 	drm_atomic_state_clear(state);
 
@@ -311,6 +318,8 @@ void __drm_atomic_state_free(struct kref *ref)
 		drm_atomic_state_default_release(state);
 		kfree(state);
 	}
+
+	drm_dev_put(dev);
 }
 EXPORT_SYMBOL(__drm_atomic_state_free);
 
@@ -580,54 +589,20 @@ plane_switching_crtc(const struct drm_plane_state *old_plane_state,
 	return true;
 }
 
-/**
- * drm_atomic_plane_check - check plane state
- * @old_plane_state: old plane state to check
- * @new_plane_state: new plane state to check
- *
- * Provides core sanity checks for plane state.
- *
- * RETURNS:
- * Zero on success, error code on failure
- */
-static int drm_atomic_plane_check(const struct drm_plane_state *old_plane_state,
-				  const struct drm_plane_state *new_plane_state)
+static int drm_atomic_plane_check_fb(const struct drm_plane_state *state)
 {
-	struct drm_plane *plane = new_plane_state->plane;
-	struct drm_crtc *crtc = new_plane_state->crtc;
-	const struct drm_framebuffer *fb = new_plane_state->fb;
-	unsigned int fb_width, fb_height;
+	struct drm_plane *plane = state->plane;
+	const struct drm_framebuffer *fb = state->fb;
 	struct drm_mode_rect *clips;
+
 	uint32_t num_clips;
+	unsigned int fb_width, fb_height;
 	int ret;
-
-	/* either *both* CRTC and FB must be set, or neither */
-	if (crtc && !fb) {
-		drm_dbg_atomic(plane->dev, "[PLANE:%d:%s] CRTC set but no FB\n",
-			       plane->base.id, plane->name);
-		return -EINVAL;
-	} else if (fb && !crtc) {
-		drm_dbg_atomic(plane->dev, "[PLANE:%d:%s] FB set but no CRTC\n",
-			       plane->base.id, plane->name);
-		return -EINVAL;
-	}
-
-	/* if disabled, we don't care about the rest of the state: */
-	if (!crtc)
-		return 0;
-
-	/* Check whether this plane is usable on this CRTC */
-	if (!(plane->possible_crtcs & drm_crtc_mask(crtc))) {
-		drm_dbg_atomic(plane->dev,
-			       "Invalid [CRTC:%d:%s] for [PLANE:%d:%s]\n",
-			       crtc->base.id, crtc->name,
-			       plane->base.id, plane->name);
-		return -EINVAL;
-	}
 
 	/* Check whether this plane supports the fb pixel format. */
 	ret = drm_plane_check_pixel_format(plane, fb->format->format,
 					   fb->modifier);
+
 	if (ret) {
 		drm_dbg_atomic(plane->dev,
 			       "[PLANE:%d:%s] invalid pixel format %p4cc, modifier 0x%llx\n",
@@ -636,45 +611,32 @@ static int drm_atomic_plane_check(const struct drm_plane_state *old_plane_state,
 		return ret;
 	}
 
-	/* Give drivers some help against integer overflows */
-	if (new_plane_state->crtc_w > INT_MAX ||
-	    new_plane_state->crtc_x > INT_MAX - (int32_t) new_plane_state->crtc_w ||
-	    new_plane_state->crtc_h > INT_MAX ||
-	    new_plane_state->crtc_y > INT_MAX - (int32_t) new_plane_state->crtc_h) {
-		drm_dbg_atomic(plane->dev,
-			       "[PLANE:%d:%s] invalid CRTC coordinates %ux%u+%d+%d\n",
-			       plane->base.id, plane->name,
-			       new_plane_state->crtc_w, new_plane_state->crtc_h,
-			       new_plane_state->crtc_x, new_plane_state->crtc_y);
-		return -ERANGE;
-	}
-
 	fb_width = fb->width << 16;
 	fb_height = fb->height << 16;
 
 	/* Make sure source coordinates are inside the fb. */
-	if (new_plane_state->src_w > fb_width ||
-	    new_plane_state->src_x > fb_width - new_plane_state->src_w ||
-	    new_plane_state->src_h > fb_height ||
-	    new_plane_state->src_y > fb_height - new_plane_state->src_h) {
+	if (state->src_w > fb_width ||
+	    state->src_x > fb_width - state->src_w ||
+	    state->src_h > fb_height ||
+	    state->src_y > fb_height - state->src_h) {
 		drm_dbg_atomic(plane->dev,
 			       "[PLANE:%d:%s] invalid source coordinates "
 			       "%u.%06ux%u.%06u+%u.%06u+%u.%06u (fb %ux%u)\n",
 			       plane->base.id, plane->name,
-			       new_plane_state->src_w >> 16,
-			       ((new_plane_state->src_w & 0xffff) * 15625) >> 10,
-			       new_plane_state->src_h >> 16,
-			       ((new_plane_state->src_h & 0xffff) * 15625) >> 10,
-			       new_plane_state->src_x >> 16,
-			       ((new_plane_state->src_x & 0xffff) * 15625) >> 10,
-			       new_plane_state->src_y >> 16,
-			       ((new_plane_state->src_y & 0xffff) * 15625) >> 10,
+			       state->src_w >> 16,
+			       ((state->src_w & 0xffff) * 15625) >> 10,
+			       state->src_h >> 16,
+			       ((state->src_h & 0xffff) * 15625) >> 10,
+			       state->src_x >> 16,
+			       ((state->src_x & 0xffff) * 15625) >> 10,
+			       state->src_y >> 16,
+			       ((state->src_y & 0xffff) * 15625) >> 10,
 			       fb->width, fb->height);
 		return -ENOSPC;
 	}
 
-	clips = __drm_plane_get_damage_clips(new_plane_state);
-	num_clips = drm_plane_get_damage_clips_count(new_plane_state);
+	clips = __drm_plane_get_damage_clips(state);
+	num_clips = drm_plane_get_damage_clips_count(state);
 
 	/* Make sure damage clips are valid and inside the fb. */
 	while (num_clips > 0) {
@@ -692,6 +654,70 @@ static int drm_atomic_plane_check(const struct drm_plane_state *old_plane_state,
 		}
 		clips++;
 		num_clips--;
+	}
+
+	return 0;
+}
+
+/**
+ * drm_atomic_plane_check - check plane state
+ * @old_plane_state: old plane state to check
+ * @new_plane_state: new plane state to check
+ *
+ * Provides core sanity checks for plane state.
+ *
+ * RETURNS:
+ * Zero on success, error code on failure
+ */
+static int drm_atomic_plane_check(const struct drm_plane_state *old_plane_state,
+				  const struct drm_plane_state *new_plane_state)
+{
+	struct drm_plane *plane = new_plane_state->plane;
+	struct drm_crtc *crtc = new_plane_state->crtc;
+	int ret;
+
+	/* either *both* CRTC and pixel source must be set, or neither */
+	if (crtc && !drm_plane_has_visible_data(new_plane_state)) {
+		drm_dbg_atomic(plane->dev, "[PLANE:%d:%s] CRTC set but no visible data\n",
+			       plane->base.id, plane->name);
+		return -EINVAL;
+	} else if (drm_plane_has_visible_data(new_plane_state) && !crtc) {
+		drm_dbg_atomic(plane->dev, "[PLANE:%d:%s] Source %d has visible data but no CRTC\n",
+			       plane->base.id, plane->name, new_plane_state->pixel_source);
+		return -EINVAL;
+	}
+
+	/* if disabled, we don't care about the rest of the state: */
+	if (!crtc)
+		return 0;
+
+	/* Check whether this plane is usable on this CRTC */
+	if (!(plane->possible_crtcs & drm_crtc_mask(crtc))) {
+		drm_dbg_atomic(plane->dev,
+			       "Invalid [CRTC:%d:%s] for [PLANE:%d:%s]\n",
+			       crtc->base.id, crtc->name,
+			       plane->base.id, plane->name);
+		return -EINVAL;
+	}
+
+	/* Give drivers some help against integer overflows */
+	if (new_plane_state->crtc_w > INT_MAX ||
+	    new_plane_state->crtc_x > INT_MAX - (int32_t) new_plane_state->crtc_w ||
+	    new_plane_state->crtc_h > INT_MAX ||
+	    new_plane_state->crtc_y > INT_MAX - (int32_t) new_plane_state->crtc_h) {
+		drm_dbg_atomic(plane->dev,
+			       "[PLANE:%d:%s] invalid CRTC coordinates %ux%u+%d+%d\n",
+			       plane->base.id, plane->name,
+			       new_plane_state->crtc_w, new_plane_state->crtc_h,
+			       new_plane_state->crtc_x, new_plane_state->crtc_y);
+		return -ERANGE;
+	}
+
+
+	if (new_plane_state->pixel_source == DRM_PLANE_PIXEL_SOURCE_FB && new_plane_state->fb) {
+		ret = drm_atomic_plane_check_fb(new_plane_state);
+		if (ret)
+			return ret;
 	}
 
 	if (plane_switching_crtc(old_plane_state, new_plane_state)) {
@@ -713,9 +739,14 @@ static void drm_atomic_plane_print_state(struct drm_printer *p,
 
 	drm_printf(p, "plane[%u]: %s\n", plane->base.id, plane->name);
 	drm_printf(p, "\tcrtc=%s\n", state->crtc ? state->crtc->name : "(null)");
+	drm_printf(p, "\tpixel-source=%s\n", drm_get_pixel_source_name(state->pixel_source));
 	drm_printf(p, "\tfb=%u\n", state->fb ? state->fb->base.id : 0);
 	if (state->fb)
 		drm_framebuffer_print_info(p, 2, state->fb);
+	drm_printf(p, "\tsolid_fill=%u\n",
+			state->solid_fill_blob ? state->solid_fill_blob->base.id : 0);
+	if (state->solid_fill_blob)
+		drm_plane_solid_fill_print_info(p, 2, state);
 	drm_printf(p, "\tcrtc-pos=" DRM_RECT_FMT "\n", DRM_RECT_ARG(&dest));
 	drm_printf(p, "\tsrc-pos=" DRM_RECT_FP_FMT "\n", DRM_RECT_FP_ARG(&src));
 	drm_printf(p, "\trotation=%x\n", state->rotation);
@@ -880,7 +911,7 @@ EXPORT_SYMBOL(drm_atomic_get_private_obj_state);
  * or NULL if the private_obj is not part of the global atomic state.
  */
 struct drm_private_state *
-drm_atomic_get_old_private_obj_state(struct drm_atomic_state *state,
+drm_atomic_get_old_private_obj_state(const struct drm_atomic_state *state,
 				     struct drm_private_obj *obj)
 {
 	int i;
@@ -902,7 +933,7 @@ EXPORT_SYMBOL(drm_atomic_get_old_private_obj_state);
  * or NULL if the private_obj is not part of the global atomic state.
  */
 struct drm_private_state *
-drm_atomic_get_new_private_obj_state(struct drm_atomic_state *state,
+drm_atomic_get_new_private_obj_state(const struct drm_atomic_state *state,
 				     struct drm_private_obj *obj)
 {
 	int i;
@@ -934,7 +965,7 @@ EXPORT_SYMBOL(drm_atomic_get_new_private_obj_state);
  * not connected.
  */
 struct drm_connector *
-drm_atomic_get_old_connector_for_encoder(struct drm_atomic_state *state,
+drm_atomic_get_old_connector_for_encoder(const struct drm_atomic_state *state,
 					 struct drm_encoder *encoder)
 {
 	struct drm_connector_state *conn_state;
@@ -968,7 +999,7 @@ EXPORT_SYMBOL(drm_atomic_get_old_connector_for_encoder);
  * not connected.
  */
 struct drm_connector *
-drm_atomic_get_new_connector_for_encoder(struct drm_atomic_state *state,
+drm_atomic_get_new_connector_for_encoder(const struct drm_atomic_state *state,
 					 struct drm_encoder *encoder)
 {
 	struct drm_connector_state *conn_state;
@@ -983,6 +1014,66 @@ drm_atomic_get_new_connector_for_encoder(struct drm_atomic_state *state,
 	return NULL;
 }
 EXPORT_SYMBOL(drm_atomic_get_new_connector_for_encoder);
+
+/**
+ * drm_atomic_get_old_crtc_for_encoder - Get old crtc for an encoder
+ * @state: Atomic state
+ * @encoder: The encoder to fetch the crtc state for
+ *
+ * This function finds and returns the crtc that was connected to @encoder
+ * as specified by the @state.
+ *
+ * Returns: The old crtc connected to @encoder, or NULL if the encoder is
+ * not connected.
+ */
+struct drm_crtc *
+drm_atomic_get_old_crtc_for_encoder(struct drm_atomic_state *state,
+				    struct drm_encoder *encoder)
+{
+	struct drm_connector *connector;
+	struct drm_connector_state *conn_state;
+
+	connector = drm_atomic_get_old_connector_for_encoder(state, encoder);
+	if (!connector)
+		return NULL;
+
+	conn_state = drm_atomic_get_old_connector_state(state, connector);
+	if (!conn_state)
+		return NULL;
+
+	return conn_state->crtc;
+}
+EXPORT_SYMBOL(drm_atomic_get_old_crtc_for_encoder);
+
+/**
+ * drm_atomic_get_new_crtc_for_encoder - Get new crtc for an encoder
+ * @state: Atomic state
+ * @encoder: The encoder to fetch the crtc state for
+ *
+ * This function finds and returns the crtc that will be connected to @encoder
+ * as specified by the @state.
+ *
+ * Returns: The new crtc connected to @encoder, or NULL if the encoder is
+ * not connected.
+ */
+struct drm_crtc *
+drm_atomic_get_new_crtc_for_encoder(struct drm_atomic_state *state,
+				    struct drm_encoder *encoder)
+{
+	struct drm_connector *connector;
+	struct drm_connector_state *conn_state;
+
+	connector = drm_atomic_get_new_connector_for_encoder(state, encoder);
+	if (!connector)
+		return NULL;
+
+	conn_state = drm_atomic_get_new_connector_state(state, connector);
+	if (!conn_state)
+		return NULL;
+
+	return conn_state->crtc;
+}
+EXPORT_SYMBOL(drm_atomic_get_new_crtc_for_encoder);
 
 /**
  * drm_atomic_get_connector_state - get connector state
@@ -1070,6 +1161,8 @@ static void drm_atomic_connector_print_state(struct drm_printer *p,
 	drm_printf(p, "connector[%u]: %s\n", connector->base.id, connector->name);
 	drm_printf(p, "\tcrtc=%s\n", state->crtc ? state->crtc->name : "(null)");
 	drm_printf(p, "\tself_refresh_aware=%d\n", state->self_refresh_aware);
+	drm_printf(p, "\tmax_requested_bpc=%d\n", state->max_requested_bpc);
+	drm_printf(p, "\tcolorspace=%s\n", drm_get_colorspace_name(state->colorspace));
 
 	if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
 		if (state->writeback_job && state->writeback_job->fb)
@@ -1117,7 +1210,7 @@ EXPORT_SYMBOL(drm_atomic_get_bridge_state);
  * the bridge is not part of the global atomic state.
  */
 struct drm_bridge_state *
-drm_atomic_get_old_bridge_state(struct drm_atomic_state *state,
+drm_atomic_get_old_bridge_state(const struct drm_atomic_state *state,
 				struct drm_bridge *bridge)
 {
 	struct drm_private_state *obj_state;
@@ -1139,7 +1232,7 @@ EXPORT_SYMBOL(drm_atomic_get_old_bridge_state);
  * the bridge is not part of the global atomic state.
  */
 struct drm_bridge_state *
-drm_atomic_get_new_bridge_state(struct drm_atomic_state *state,
+drm_atomic_get_new_bridge_state(const struct drm_atomic_state *state,
 				struct drm_bridge *bridge)
 {
 	struct drm_private_state *obj_state;
@@ -1756,8 +1849,8 @@ EXPORT_SYMBOL(drm_state_dump);
 #ifdef CONFIG_DEBUG_FS
 static int drm_state_info(struct seq_file *m, void *data)
 {
-	struct drm_info_node *node = (struct drm_info_node *) m->private;
-	struct drm_device *dev = node->minor->dev;
+	struct drm_debugfs_entry *entry = m->private;
+	struct drm_device *dev = entry->dev;
 	struct drm_printer p = drm_seq_file_printer(m);
 
 	__drm_state_dump(dev, &p, true);
@@ -1766,14 +1859,13 @@ static int drm_state_info(struct seq_file *m, void *data)
 }
 
 /* any use in debugfs files to dump individual planes/crtc/etc? */
-static const struct drm_info_list drm_atomic_debugfs_list[] = {
+static const struct drm_debugfs_info drm_atomic_debugfs_list[] = {
 	{"state", drm_state_info, 0},
 };
 
-void drm_atomic_debugfs_init(struct drm_minor *minor)
+void drm_atomic_debugfs_init(struct drm_device *dev)
 {
-	drm_debugfs_create_files(drm_atomic_debugfs_list,
-				 ARRAY_SIZE(drm_atomic_debugfs_list),
-				 minor->debugfs_root, minor);
+	drm_debugfs_add_files(dev, drm_atomic_debugfs_list,
+			      ARRAY_SIZE(drm_atomic_debugfs_list));
 }
 #endif

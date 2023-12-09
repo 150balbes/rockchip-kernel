@@ -10,15 +10,16 @@
 #ifdef CONFIG_SHADOW_CALL_STACK
 	scs_sp	.req	x18
 
-	.macro scs_load tsk
-	ldr	scs_sp, [\tsk, #TSK_TI_SCS_SP]
+	.macro scs_load_current
+	get_current_task scs_sp
+	ldr	scs_sp, [scs_sp, #TSK_TI_SCS_SP]
 	.endm
 
 	.macro scs_save tsk
 	str	scs_sp, [\tsk, #TSK_TI_SCS_SP]
 	.endm
 #else
-	.macro scs_load tsk
+	.macro scs_load_current
 	.endm
 
 	.macro scs_save tsk
@@ -72,6 +73,7 @@ static inline void dynamic_scs_init(void) {}
 #endif
 
 int scs_patch(const u8 eh_frame[], int size);
+asmlinkage void scs_patch_vmlinux(void);
 
 #endif /* __ASSEMBLY __ */
 

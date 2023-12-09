@@ -8,10 +8,14 @@ TEST_PROGS := \
 	dev_addr_lists.sh \
 	mode-1-recovery-updelay.sh \
 	mode-2-recovery-updelay.sh \
-	option_prio.sh
+	bond_options.sh \
+	bond-eth-type-change.sh \
+	bond_macvlan.sh
 
 TEST_FILES := \
 	lag_lib.sh \
+	bond_topo_2d1c.sh \
+	bond_topo_3d1c.sh \
 	net_forwarding_lib.sh
 
 include ../../../lib.mk

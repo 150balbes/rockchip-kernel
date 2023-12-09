@@ -7,9 +7,7 @@
 #define __DW_HDMI__
 
 #include <drm/drm_property.h>
-#include <drm/drm_edid.h>
 #include <sound/hdmi-codec.h>
-#include <media/cec.h>
 
 struct drm_display_info;
 struct drm_display_mode;
@@ -88,7 +86,7 @@ enum {
 
 enum dw_hdmi_phy_type {
 	DW_HDMI_PHY_DWC_HDMI_TX_PHY = 0x00,
-DW_HDMI_PHY_DWC_MHL_PHY_HEAC = 0xb2,
+	DW_HDMI_PHY_DWC_MHL_PHY_HEAC = 0xb2,
 	DW_HDMI_PHY_DWC_MHL_PHY = 0xc2,
 	DW_HDMI_PHY_DWC_HDMI_3D_TX_PHY_HEAC = 0xe2,
 	DW_HDMI_PHY_DWC_HDMI_3D_TX_PHY = 0xf2,
@@ -177,8 +175,9 @@ struct dw_hdmi_property_ops {
 struct dw_hdmi_plat_data {
 	struct regmap *regm;
 
+	//[CC:] not in dowstream
 	unsigned int output_port;
-	unsigned int disable_cec;
+
 	unsigned long input_bus_format;
 	unsigned long input_bus_encoding;
 	unsigned int max_tmdsclk;
@@ -196,10 +195,15 @@ struct dw_hdmi_plat_data {
 	void *priv_data;
 
 	/* Platform-specific mode validation (optional). */
-	enum drm_mode_status (*mode_valid)(struct dw_hdmi *hdmi,
-					   void *data,
+	//[CC:] downstream changed "struct dw_hdmi *hdmi" to "struct drm_connector *connector"
+	enum drm_mode_status (*mode_valid)(struct dw_hdmi *hdmi, void *data,
 					   const struct drm_display_info *info,
 					   const struct drm_display_mode *mode);
+
+	/* Platform-specific audio enable/disable (optional) */
+	void (*enable_audio)(struct dw_hdmi *hdmi, int channel,
+			     int width, int rate, int non_pcm);
+	void (*disable_audio)(struct dw_hdmi *hdmi);
 
 	/* Vendor PHY support */
 	const struct dw_hdmi_phy_ops *phy_ops;
@@ -207,7 +211,6 @@ struct dw_hdmi_plat_data {
 	const char *phy_name;
 	void *phy_data;
 	unsigned int phy_force_vendor;
-	const struct dw_hdmi_audio_tmds_n *tmds_n_table;
 
 	/* split mode */
 	bool split_mode;
@@ -223,10 +226,14 @@ struct dw_hdmi_plat_data {
 	int (*configure_phy)(struct dw_hdmi *hdmi, void *data,
 			     unsigned long mpixelclock);
 
+	unsigned int disable_cec : 1;
+
+	//[CC:] 7b29b5f29585 ("drm/rockchip: dw_hdmi: Support HDMI 2.0 YCbCr 4:2:0")
 	unsigned long (*get_input_bus_format)(void *data);
 	unsigned long (*get_output_bus_format)(void *data);
 	unsigned long (*get_enc_in_encoding)(void *data);
 	unsigned long (*get_enc_out_encoding)(void *data);
+
 	unsigned long (*get_quant_range)(void *data);
 	struct drm_property *(*get_hdr_property)(void *data);
 	struct drm_property_blob *(*get_hdr_blob)(void *data);
@@ -253,7 +260,7 @@ void dw_hdmi_remove(struct dw_hdmi *hdmi);
 void dw_hdmi_unbind(struct dw_hdmi *hdmi);
 struct dw_hdmi *dw_hdmi_bind(struct platform_device *pdev,
 			     struct drm_encoder *encoder,
-			     struct dw_hdmi_plat_data *plat_data);
+			     const struct dw_hdmi_plat_data *plat_data);
 
 void dw_hdmi_suspend(struct dw_hdmi *hdmi);
 void dw_hdmi_resume(struct dw_hdmi *hdmi);
@@ -262,6 +269,8 @@ void dw_hdmi_setup_rx_sense(struct dw_hdmi *hdmi, bool hpd, bool rx_sense);
 
 int dw_hdmi_set_plugged_cb(struct dw_hdmi *hdmi, hdmi_codec_plugged_cb fn,
 			   struct device *codec_dev);
+void dw_hdmi_set_sample_non_pcm(struct dw_hdmi *hdmi, unsigned int non_pcm);
+void dw_hdmi_set_sample_width(struct dw_hdmi *hdmi, unsigned int width);
 void dw_hdmi_set_sample_rate(struct dw_hdmi *hdmi, unsigned int rate);
 void dw_hdmi_set_channel_count(struct dw_hdmi *hdmi, unsigned int cnt);
 void dw_hdmi_set_channel_status(struct dw_hdmi *hdmi, u8 *channel_status);
@@ -291,8 +300,7 @@ void dw_hdmi_set_quant_range(struct dw_hdmi *hdmi);
 void dw_hdmi_set_output_type(struct dw_hdmi *hdmi, u64 val);
 bool dw_hdmi_get_output_whether_hdmi(struct dw_hdmi *hdmi);
 int dw_hdmi_get_output_type_cap(struct dw_hdmi *hdmi);
-void dw_hdmi_set_cec_adap(struct dw_hdmi *hdmi, struct cec_adapter *adap);
-
+//void dw_hdmi_set_cec_adap(struct dw_hdmi *hdmi, struct cec_adapter *adap);
 
 void dw_hdmi_qp_unbind(struct dw_hdmi_qp *hdmi);
 struct dw_hdmi_qp *dw_hdmi_qp_bind(struct platform_device *pdev,
@@ -300,19 +308,21 @@ struct dw_hdmi_qp *dw_hdmi_qp_bind(struct platform_device *pdev,
 				struct dw_hdmi_plat_data *plat_data);
 void dw_hdmi_qp_suspend(struct device *dev, struct dw_hdmi_qp *hdmi);
 void dw_hdmi_qp_resume(struct device *dev, struct dw_hdmi_qp *hdmi);
-void dw_hdmi_qp_cec_set_hpd(struct dw_hdmi_qp *hdmi, bool plug_in, bool change);
-void dw_hdmi_qp_set_cec_adap(struct dw_hdmi_qp *hdmi, struct cec_adapter *adap);
+//void dw_hdmi_qp_cec_set_hpd(struct dw_hdmi_qp *hdmi, bool plug_in, bool change);
+//void dw_hdmi_qp_set_cec_adap(struct dw_hdmi_qp *hdmi, struct cec_adapter *adap);
 int dw_hdmi_qp_set_earc(struct dw_hdmi_qp *hdmi);
 void dw_hdmi_qp_set_sample_rate(struct dw_hdmi_qp *hdmi, unsigned int rate);
 void dw_hdmi_qp_set_channel_count(struct dw_hdmi_qp *hdmi, unsigned int cnt);
 void dw_hdmi_qp_set_channel_status(struct dw_hdmi_qp *hdmi, u8 *channel_status,
 				   bool ref2stream);
 void dw_hdmi_qp_set_channel_allocation(struct dw_hdmi_qp *hdmi, unsigned int ca);
-void dw_hdmi_qp_set_audio_infoframe(struct dw_hdmi_qp *hdmi,
-				    struct hdmi_codec_params *hparms);
-void dw_hdmi_qp_audio_enable(struct dw_hdmi_qp *hdmi);
-void dw_hdmi_qp_audio_disable(struct dw_hdmi_qp *hdmi);
+//void dw_hdmi_qp_set_audio_infoframe(struct dw_hdmi_qp *hdmi,
+//				    struct hdmi_codec_params *hparms);
+//void dw_hdmi_qp_audio_enable(struct dw_hdmi_qp *hdmi);
+//void dw_hdmi_qp_audio_disable(struct dw_hdmi_qp *hdmi);
 int dw_hdmi_qp_set_plugged_cb(struct dw_hdmi_qp *hdmi, hdmi_codec_plugged_cb fn,
 			      struct device *codec_dev);
+
+bool dw_hdmi_bus_fmt_is_420(struct dw_hdmi *hdmi);
 
 #endif /* __IMX_HDMI_H__ */

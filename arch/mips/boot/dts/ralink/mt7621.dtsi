@@ -70,9 +70,10 @@
 					     "250m", "270m";
 		};
 
-		wdt: wdt@100 {
+		wdt: watchdog@100 {
 			compatible = "mediatek,mt7621-wdt";
 			reg = <0x100 0x100>;
+			mediatek,sysctl = <&sysc>;
 		};
 
 		gpio: gpio@600 {
@@ -299,14 +300,13 @@
 		compatible = "mediatek,mt7621-eth";
 		reg = <0x1e100000 0x10000>;
 
-		clocks = <&sysc MT7621_CLK_FE>,
-			 <&sysc MT7621_CLK_ETH>;
+		clocks = <&sysc MT7621_CLK_FE>, <&sysc MT7621_CLK_ETH>;
 		clock-names = "fe", "ethif";
 
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		resets = <&sysc MT7621_RST_FE &sysc MT7621_RST_ETH>;
+		resets = <&sysc MT7621_RST_FE>, <&sysc MT7621_RST_ETH>;
 		reset-names = "fe", "eth";
 
 		interrupt-parent = <&gic>;
@@ -332,8 +332,13 @@
 		gmac1: mac@1 {
 			compatible = "mediatek,eth-mac";
 			reg = <1>;
-			status = "disabled";
 			phy-mode = "rgmii";
+
+			fixed-link {
+				speed = <1000>;
+				full-duplex;
+				pause;
+			};
 		};
 
 		mdio: mdio-bus {
@@ -382,6 +387,18 @@
 						status = "disabled";
 						reg = <4>;
 						label = "swp4";
+					};
+
+					port@5 {
+						reg = <5>;
+						ethernet = <&gmac1>;
+						phy-mode = "rgmii";
+
+						fixed-link {
+							speed = <1000>;
+							full-duplex;
+							pause;
+						};
 					};
 
 					port@6 {

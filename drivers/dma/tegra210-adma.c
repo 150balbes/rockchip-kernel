@@ -8,9 +8,10 @@
 #include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_dma.h>
 #include <linux/of_irq.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
@@ -161,7 +162,7 @@ struct tegra_adma {
 	const struct tegra_adma_chip_data *cdata;
 
 	/* Last member of the structure */
-	struct tegra_adma_chan		channels[];
+	struct tegra_adma_chan		channels[] __counted_by(nr_channels);
 };
 
 static inline void tdma_write(struct tegra_adma *tdma, u32 reg, u32 val)
@@ -221,7 +222,7 @@ static int tegra_adma_init(struct tegra_adma *tdma)
 	int ret;
 
 	/* Clear any interrupts */
-	tdma_write(tdma, tdma->cdata->global_int_clear, 0x1);
+	tdma_write(tdma, tdma->cdata->ch_base_offset + tdma->cdata->global_int_clear, 0x1);
 
 	/* Assert soft reset */
 	tdma_write(tdma, ADMA_GLOBAL_SOFT_RESET, 0x1);
@@ -837,7 +838,6 @@ static int tegra_adma_probe(struct platform_device *pdev)
 {
 	const struct tegra_adma_chip_data *cdata;
 	struct tegra_adma *tdma;
-	struct resource	*res;
 	int ret, i;
 
 	cdata = of_device_get_match_data(&pdev->dev);
@@ -857,8 +857,7 @@ static int tegra_adma_probe(struct platform_device *pdev)
 	tdma->nr_channels = cdata->nr_channels;
 	platform_set_drvdata(pdev, tdma);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	tdma->base_addr = devm_ioremap_resource(&pdev->dev, res);
+	tdma->base_addr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(tdma->base_addr))
 		return PTR_ERR(tdma->base_addr);
 
@@ -950,7 +949,7 @@ irq_dispose:
 	return ret;
 }
 
-static int tegra_adma_remove(struct platform_device *pdev)
+static void tegra_adma_remove(struct platform_device *pdev)
 {
 	struct tegra_adma *tdma = platform_get_drvdata(pdev);
 	int i;
@@ -962,8 +961,6 @@ static int tegra_adma_remove(struct platform_device *pdev)
 		irq_dispose_mapping(tdma->channels[i].irq);
 
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 static const struct dev_pm_ops tegra_adma_dev_pm_ops = {
@@ -980,7 +977,7 @@ static struct platform_driver tegra_admac_driver = {
 		.of_match_table = tegra_adma_of_match,
 	},
 	.probe		= tegra_adma_probe,
-	.remove		= tegra_adma_remove,
+	.remove_new	= tegra_adma_remove,
 };
 
 module_platform_driver(tegra_admac_driver);

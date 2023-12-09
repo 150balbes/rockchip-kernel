@@ -533,7 +533,7 @@ void rt2x00lib_txdone(struct queue_entry *entry,
 	 */
 	if (!(skbdesc_flags & SKBDESC_NOT_MAC80211)) {
 		if (rt2x00_has_cap_flag(rt2x00dev, REQUIRE_TASKLET_CONTEXT))
-			ieee80211_tx_status(rt2x00dev->hw, entry->skb);
+			ieee80211_tx_status_skb(rt2x00dev->hw, entry->skb);
 		else
 			ieee80211_tx_status_ni(rt2x00dev->hw, entry->skb);
 	} else {
@@ -1091,6 +1091,7 @@ static void rt2x00lib_remove_hw(struct rt2x00_dev *rt2x00dev)
 	}
 
 	kfree(rt2x00dev->spec.channels_info);
+	kfree(rt2x00dev->chan_survey);
 }
 
 static const struct ieee80211_tpt_blink rt2x00_tpt_blink[] = {

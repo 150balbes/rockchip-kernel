@@ -561,7 +561,7 @@ static int msp_log_status(struct v4l2_subdev *sd)
 	struct msp_state *state = to_state(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	const char *p;
-	char prefix[V4L2_SUBDEV_NAME_SIZE + 20];
+	char prefix[sizeof(sd->name) + 20];
 
 	if (state->opmode == OPMODE_AUTOSELECT)
 		msp_detect_stereo(client);
@@ -663,8 +663,9 @@ static const char * const opmode_str[] = {
 	[OPMODE_AUTOSELECT] = "autodetect and autoselect",
 };
 
-static int msp_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int msp_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct msp_state *state;
 	struct v4l2_subdev *sd;
 	struct v4l2_ctrl_handler *hdl;

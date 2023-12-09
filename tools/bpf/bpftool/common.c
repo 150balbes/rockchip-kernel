@@ -68,7 +68,7 @@ void p_info(const char *fmt, ...)
 	va_end(ap);
 }
 
-static bool is_bpffs(char *path)
+static bool is_bpffs(const char *path)
 {
 	struct statfs st_fs;
 
@@ -244,12 +244,15 @@ int open_obj_pinned_any(const char *path, enum bpf_obj_type exp_type)
 	return fd;
 }
 
-int mount_bpffs_for_pin(const char *name)
+int mount_bpffs_for_pin(const char *name, bool is_dir)
 {
 	char err_str[ERR_MAX_LEN];
 	char *file;
 	char *dir;
 	int err = 0;
+
+	if (is_dir && is_bpffs(name))
+		return err;
 
 	file = malloc(strlen(name) + 1);
 	if (!file) {
@@ -286,7 +289,7 @@ int do_pin_fd(int fd, const char *name)
 {
 	int err;
 
-	err = mount_bpffs_for_pin(name);
+	err = mount_bpffs_for_pin(name, false);
 	if (err)
 		return err;
 
@@ -353,7 +356,7 @@ void get_prog_full_name(const struct bpf_prog_info *prog_info, int prog_fd,
 		info.func_info_rec_size = sizeof(finfo);
 	info.func_info = ptr_to_u64(&finfo);
 
-	if (bpf_obj_get_info_by_fd(prog_fd, &info, &info_len))
+	if (bpf_prog_get_info_by_fd(prog_fd, &info, &info_len))
 		goto copy_name;
 
 	prog_btf = btf__load_from_kernel_by_id(info.btf_id);
@@ -488,7 +491,7 @@ static int do_build_table_cb(const char *fpath, const struct stat *sb,
 		goto out_close;
 
 	memset(&pinned_info, 0, sizeof(pinned_info));
-	if (bpf_obj_get_info_by_fd(fd, &pinned_info, &len))
+	if (bpf_prog_get_info_by_fd(fd, &pinned_info, &len))
 		goto out_close;
 
 	path = strdup(fpath);
@@ -756,7 +759,7 @@ static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 			goto err_close_fds;
 		}
 
-		err = bpf_obj_get_info_by_fd(fd, &info, &len);
+		err = bpf_prog_get_info_by_fd(fd, &info, &len);
 		if (err) {
 			p_err("can't get prog info (%u): %s",
 			      id, strerror(errno));
@@ -916,7 +919,7 @@ static int map_fd_by_name(char *name, int **fds)
 			goto err_close_fds;
 		}
 
-		err = bpf_obj_get_info_by_fd(fd, &info, &len);
+		err = bpf_map_get_info_by_fd(fd, &info, &len);
 		if (err) {
 			p_err("can't get map info (%u): %s",
 			      id, strerror(errno));
@@ -1026,7 +1029,8 @@ exit_free:
 	return fd;
 }
 
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len)
+int map_parse_fd_and_info(int *argc, char ***argv, struct bpf_map_info *info,
+			  __u32 *info_len)
 {
 	int err;
 	int fd;
@@ -1035,7 +1039,7 @@ int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len)
 	if (fd < 0)
 		return -1;
 
-	err = bpf_obj_get_info_by_fd(fd, info, info_len);
+	err = bpf_map_get_info_by_fd(fd, info, info_len);
 	if (err) {
 		p_err("can't get map info: %s", strerror(errno));
 		close(fd);
@@ -1089,4 +1093,18 @@ const char *bpf_attach_type_input_str(enum bpf_attach_type t)
 	case BPF_SK_REUSEPORT_SELECT_OR_MIGRATE:	return "sk_skb_reuseport_select_or_migrate";
 	default:	return libbpf_bpf_attach_type_str(t);
 	}
+}
+
+int pathname_concat(char *buf, int buf_sz, const char *path,
+		    const char *name)
+{
+	int len;
+
+	len = snprintf(buf, buf_sz, "%s/%s", path, name);
+	if (len < 0)
+		return -EINVAL;
+	if (len >= buf_sz)
+		return -ENAMETOOLONG;
+
+	return 0;
 }

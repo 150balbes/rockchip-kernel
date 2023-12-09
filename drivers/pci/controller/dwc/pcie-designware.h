@@ -15,6 +15,7 @@
 #include <linux/bitops.h>
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma/edma.h>
 #include <linux/gpio/consumer.h>
 #include <linux/irq.h>
 #include <linux/msi.h>
@@ -31,6 +32,7 @@
 #define DW_PCIE_VER_480A		0x3438302a
 #define DW_PCIE_VER_490A		0x3439302a
 #define DW_PCIE_VER_520A		0x3532302a
+#define DW_PCIE_VER_540A		0x3534302a
 
 #define __dw_pcie_ver_cmp(_pci, _ver, _op) \
 	((_pci)->version _op DW_PCIE_VER_ ## _ver)
@@ -49,8 +51,9 @@
 
 /* DWC PCIe controller capabilities */
 #define DW_PCIE_CAP_REQ_RES		0
-#define DW_PCIE_CAP_IATU_UNROLL		1
-#define DW_PCIE_CAP_CDM_CHECK		2
+#define DW_PCIE_CAP_EDMA_UNROLL		1
+#define DW_PCIE_CAP_IATU_UNROLL		2
+#define DW_PCIE_CAP_CDM_CHECK		3
 
 #define dw_pcie_cap_is(_pci, _cap) \
 	test_bit(DW_PCIE_CAP_ ## _cap, &(_pci)->caps)
@@ -167,6 +170,18 @@
 #define PCIE_MSIX_DOORBELL		0x948
 #define PCIE_MSIX_DOORBELL_PF_SHIFT	24
 
+/*
+ * eDMA CSRs. DW PCIe IP-core v4.70a and older had the eDMA registers accessible
+ * over the Port Logic registers space. Afterwards the unrolled mapping was
+ * introduced so eDMA and iATU could be accessed via a dedicated registers
+ * space.
+ */
+#define PCIE_DMA_VIEWPORT_BASE		0x970
+#define PCIE_DMA_UNROLL_BASE		0x80000
+#define PCIE_DMA_CTRL			0x008
+#define PCIE_DMA_NUM_WR_CHAN		GENMASK(3, 0)
+#define PCIE_DMA_NUM_RD_CHAN		GENMASK(19, 16)
+
 #define PCIE_PL_CHK_REG_CONTROL_STATUS			0xB20
 #define PCIE_PL_CHK_REG_CHK_REG_START			BIT(0)
 #define PCIE_PL_CHK_REG_CHK_REG_CONTINUOUS		BIT(1)
@@ -215,6 +230,7 @@
  * this offset, if atu_base not set.
  */
 #define DEFAULT_DBI_ATU_OFFSET (0x3 << 20)
+#define DEFAULT_DBI_DMA_OFFSET PCIE_DMA_UNROLL_BASE
 
 #define MAX_MSI_IRQS			256
 #define MAX_MSI_IRQS_PER_CTRL		32
@@ -225,6 +241,9 @@
 /* Maximum number of inbound/outbound iATUs */
 #define MAX_IATU_IN			256
 #define MAX_IATU_OUT			256
+
+/* Default eDMA LLP memory size */
+#define DMA_LLP_MEM_SIZE		PAGE_SIZE
 
 struct dw_pcie;
 struct dw_pcie_rp;
@@ -270,10 +289,22 @@ enum dw_pcie_core_rst {
 	DW_PCIE_NUM_CORE_RSTS
 };
 
+enum dw_pcie_ltssm {
+	/* Need to align with PCIE_PORT_DEBUG0 bits 0:5 */
+	DW_PCIE_LTSSM_DETECT_QUIET = 0x0,
+	DW_PCIE_LTSSM_DETECT_ACT = 0x1,
+	DW_PCIE_LTSSM_L0 = 0x11,
+	DW_PCIE_LTSSM_L2_IDLE = 0x15,
+
+	DW_PCIE_LTSSM_UNKNOWN = 0xFFFFFFFF,
+};
+
 struct dw_pcie_host_ops {
 	int (*host_init)(struct dw_pcie_rp *pp);
 	void (*host_deinit)(struct dw_pcie_rp *pp);
+	void (*host_post_init)(struct dw_pcie_rp *pp);
 	int (*msi_host_init)(struct dw_pcie_rp *pp);
+	void (*pme_turn_off)(struct dw_pcie_rp *pp);
 };
 
 struct dw_pcie_rp {
@@ -300,7 +331,9 @@ struct dw_pcie_rp {
 };
 
 struct dw_pcie_ep_ops {
+	void	(*pre_init)(struct dw_pcie_ep *ep);
 	void	(*ep_init)(struct dw_pcie_ep *ep);
+	void	(*deinit)(struct dw_pcie_ep *ep);
 	int	(*raise_irq)(struct dw_pcie_ep *ep, u8 func_no,
 			     enum pci_epc_irq_type type, u16 interrupt_num);
 	const struct pci_epc_features* (*get_features)(struct dw_pcie_ep *ep);
@@ -312,6 +345,7 @@ struct dw_pcie_ep_ops {
 	 * driver.
 	 */
 	unsigned int (*func_conf_select)(struct dw_pcie_ep *ep, u8 func_no);
+	unsigned int (*get_dbi2_offset)(struct dw_pcie_ep *ep, u8 func_no);
 };
 
 struct dw_pcie_ep_func {
@@ -346,6 +380,7 @@ struct dw_pcie_ops {
 	void    (*write_dbi2)(struct dw_pcie *pcie, void __iomem *base, u32 reg,
 			      size_t size, u32 val);
 	int	(*link_up)(struct dw_pcie *pcie);
+	enum dw_pcie_ltssm (*get_ltssm)(struct dw_pcie *pcie);
 	int	(*start_link)(struct dw_pcie *pcie);
 	void	(*stop_link)(struct dw_pcie *pcie);
 };
@@ -369,11 +404,13 @@ struct dw_pcie {
 	int			num_lanes;
 	int			link_gen;
 	u8			n_fts[2];
+	struct dw_edma_chip	edma;
 	struct clk_bulk_data	app_clks[DW_PCIE_NUM_APP_CLKS];
 	struct clk_bulk_data	core_clks[DW_PCIE_NUM_CORE_CLKS];
 	struct reset_control_bulk_data	app_rsts[DW_PCIE_NUM_APP_RSTS];
 	struct reset_control_bulk_data	core_rsts[DW_PCIE_NUM_CORE_RSTS];
 	struct gpio_desc		*pe_rst;
+	bool			suspended;
 };
 
 #define to_dw_pcie_from_pp(port) container_of((port), struct dw_pcie, pp)
@@ -408,6 +445,11 @@ int dw_pcie_prog_ep_inbound_atu(struct dw_pcie *pci, u8 func_no, int index,
 void dw_pcie_disable_atu(struct dw_pcie *pci, u32 dir, int index);
 void dw_pcie_setup(struct dw_pcie *pci);
 void dw_pcie_iatu_detect(struct dw_pcie *pci);
+int dw_pcie_edma_detect(struct dw_pcie *pci);
+void dw_pcie_edma_remove(struct dw_pcie *pci);
+
+int dw_pcie_suspend_noirq(struct dw_pcie *pci);
+int dw_pcie_resume_noirq(struct dw_pcie *pci);
 
 static inline void dw_pcie_writel_dbi(struct dw_pcie *pci, u32 reg, u32 val)
 {
@@ -478,6 +520,18 @@ static inline void dw_pcie_stop_link(struct dw_pcie *pci)
 {
 	if (pci->ops && pci->ops->stop_link)
 		pci->ops->stop_link(pci);
+}
+
+static inline enum dw_pcie_ltssm dw_pcie_get_ltssm(struct dw_pcie *pci)
+{
+	u32 val;
+
+	if (pci->ops && pci->ops->get_ltssm)
+		return pci->ops->get_ltssm(pci);
+
+	val = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG0);
+
+	return (enum dw_pcie_ltssm)FIELD_GET(PORT_LOGIC_LTSSM_STATE_MASK, val);
 }
 
 #ifdef CONFIG_PCIE_DW_HOST

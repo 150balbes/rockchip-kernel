@@ -82,7 +82,7 @@ static atomic_t notify_genl_seq = ATOMIC_INIT(2); /* two. */
 
 DEFINE_MUTEX(notification_mutex);
 
-/* used blkdev_get_by_path, to claim our meta data device(s) */
+/* used bdev_open_by_path, to claim our meta data device(s) */
 static char *drbd_m_holder = "Hands off! this is DRBD's meta data device.";
 
 static void drbd_adm_send_reply(struct sk_buff *skb, struct genl_info *info)
@@ -159,7 +159,7 @@ static int drbd_msg_sprintf_info(struct sk_buff *skb, const char *fmt, ...)
 static int drbd_adm_prepare(struct drbd_config_context *adm_ctx,
 	struct sk_buff *skb, struct genl_info *info, unsigned flags)
 {
-	struct drbd_genlmsghdr *d_in = info->userhdr;
+	struct drbd_genlmsghdr *d_in = genl_info_userhdr(info);
 	const u8 cmd = info->genlhdr->cmd;
 	int err;
 
@@ -1053,7 +1053,7 @@ drbd_determine_dev_size(struct drbd_device *device, enum dds_flags flags, struct
 			 la_size_changed ? "size changed" : "md moved");
 		/* next line implicitly does drbd_suspend_io()+drbd_resume_io() */
 		drbd_bitmap_io(device, md_moved ? &drbd_bm_write_all : &drbd_bm_write,
-			       "size changed", BM_LOCKED_MASK);
+			       "size changed", BM_LOCKED_MASK, NULL);
 
 		/* on-disk bitmap and activity log is authoritative again
 		 * (unless there was an IO error meanwhile...) */
@@ -1396,8 +1396,9 @@ static void drbd_suspend_al(struct drbd_device *device)
 
 static bool should_set_defaults(struct genl_info *info)
 {
-	unsigned flags = ((struct drbd_genlmsghdr*)info->userhdr)->flags;
-	return 0 != (flags & DRBD_GENL_F_SET_DEFAULTS);
+	struct drbd_genlmsghdr *dh = genl_info_userhdr(info);
+
+	return 0 != (dh->flags & DRBD_GENL_F_SET_DEFAULTS);
 }
 
 static unsigned int drbd_al_extents_max(struct drbd_backing_dev *bdev)
@@ -1615,7 +1616,7 @@ int drbd_adm_disk_opts(struct sk_buff *skb, struct genl_info *info)
 			drbd_send_sync_param(peer_device);
 	}
 
-	kvfree_rcu(old_disk_conf);
+	kvfree_rcu_mightsleep(old_disk_conf);
 	kfree(old_plan);
 	mod_timer(&device->request_timer, jiffies + HZ);
 	goto success;
@@ -1634,43 +1635,45 @@ success:
 	return 0;
 }
 
-static struct block_device *open_backing_dev(struct drbd_device *device,
+static struct bdev_handle *open_backing_dev(struct drbd_device *device,
 		const char *bdev_path, void *claim_ptr, bool do_bd_link)
 {
-	struct block_device *bdev;
+	struct bdev_handle *handle;
 	int err = 0;
 
-	bdev = blkdev_get_by_path(bdev_path,
-				  FMODE_READ | FMODE_WRITE | FMODE_EXCL, claim_ptr);
-	if (IS_ERR(bdev)) {
+	handle = bdev_open_by_path(bdev_path, BLK_OPEN_READ | BLK_OPEN_WRITE,
+				   claim_ptr, NULL);
+	if (IS_ERR(handle)) {
 		drbd_err(device, "open(\"%s\") failed with %ld\n",
-				bdev_path, PTR_ERR(bdev));
-		return bdev;
+				bdev_path, PTR_ERR(handle));
+		return handle;
 	}
 
 	if (!do_bd_link)
-		return bdev;
+		return handle;
 
-	err = bd_link_disk_holder(bdev, device->vdisk);
+	err = bd_link_disk_holder(handle->bdev, device->vdisk);
 	if (err) {
-		blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
+		bdev_release(handle);
 		drbd_err(device, "bd_link_disk_holder(\"%s\", ...) failed with %d\n",
 				bdev_path, err);
-		bdev = ERR_PTR(err);
+		handle = ERR_PTR(err);
 	}
-	return bdev;
+	return handle;
 }
 
 static int open_backing_devices(struct drbd_device *device,
 		struct disk_conf *new_disk_conf,
 		struct drbd_backing_dev *nbc)
 {
-	struct block_device *bdev;
+	struct bdev_handle *handle;
 
-	bdev = open_backing_dev(device, new_disk_conf->backing_dev, device, true);
-	if (IS_ERR(bdev))
+	handle = open_backing_dev(device, new_disk_conf->backing_dev, device,
+				  true);
+	if (IS_ERR(handle))
 		return ERR_OPEN_DISK;
-	nbc->backing_bdev = bdev;
+	nbc->backing_bdev = handle->bdev;
+	nbc->backing_bdev_handle = handle;
 
 	/*
 	 * meta_dev_idx >= 0: external fixed size, possibly multiple
@@ -1680,7 +1683,7 @@ static int open_backing_devices(struct drbd_device *device,
 	 * should check it for you already; but if you don't, or
 	 * someone fooled it, we need to double check here)
 	 */
-	bdev = open_backing_dev(device, new_disk_conf->meta_dev,
+	handle = open_backing_dev(device, new_disk_conf->meta_dev,
 		/* claim ptr: device, if claimed exclusively; shared drbd_m_holder,
 		 * if potentially shared with other drbd minors */
 			(new_disk_conf->meta_dev_idx < 0) ? (void*)device : (void*)drbd_m_holder,
@@ -1688,20 +1691,21 @@ static int open_backing_devices(struct drbd_device *device,
 		 * as would happen with internal metadata. */
 			(new_disk_conf->meta_dev_idx != DRBD_MD_INDEX_FLEX_INT &&
 			 new_disk_conf->meta_dev_idx != DRBD_MD_INDEX_INTERNAL));
-	if (IS_ERR(bdev))
+	if (IS_ERR(handle))
 		return ERR_OPEN_MD_DISK;
-	nbc->md_bdev = bdev;
+	nbc->md_bdev = handle->bdev;
+	nbc->md_bdev_handle = handle;
 	return NO_ERROR;
 }
 
-static void close_backing_dev(struct drbd_device *device, struct block_device *bdev,
-	bool do_bd_unlink)
+static void close_backing_dev(struct drbd_device *device,
+		struct bdev_handle *handle, bool do_bd_unlink)
 {
-	if (!bdev)
+	if (!handle)
 		return;
 	if (do_bd_unlink)
-		bd_unlink_disk_holder(bdev, device->vdisk);
-	blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
+		bd_unlink_disk_holder(handle->bdev, device->vdisk);
+	bdev_release(handle);
 }
 
 void drbd_backing_dev_free(struct drbd_device *device, struct drbd_backing_dev *ldev)
@@ -1709,8 +1713,9 @@ void drbd_backing_dev_free(struct drbd_device *device, struct drbd_backing_dev *
 	if (ldev == NULL)
 		return;
 
-	close_backing_dev(device, ldev->md_bdev, ldev->md_bdev != ldev->backing_bdev);
-	close_backing_dev(device, ldev->backing_bdev, true);
+	close_backing_dev(device, ldev->md_bdev_handle,
+			  ldev->md_bdev != ldev->backing_bdev);
+	close_backing_dev(device, ldev->backing_bdev_handle, true);
 
 	kfree(ldev->disk_conf);
 	kfree(ldev);
@@ -2027,13 +2032,15 @@ int drbd_adm_attach(struct sk_buff *skb, struct genl_info *info)
 		drbd_info(device, "Assuming that all blocks are out of sync "
 		     "(aka FullSync)\n");
 		if (drbd_bitmap_io(device, &drbd_bmio_set_n_write,
-			"set_n_write from attaching", BM_LOCKED_MASK)) {
+			"set_n_write from attaching", BM_LOCKED_MASK,
+			NULL)) {
 			retcode = ERR_IO_MD_DISK;
 			goto force_diskless_dec;
 		}
 	} else {
 		if (drbd_bitmap_io(device, &drbd_bm_read,
-			"read from attaching", BM_LOCKED_MASK)) {
+			"read from attaching", BM_LOCKED_MASK,
+			NULL)) {
 			retcode = ERR_IO_MD_DISK;
 			goto force_diskless_dec;
 		}
@@ -2124,8 +2131,9 @@ int drbd_adm_attach(struct sk_buff *skb, struct genl_info *info)
  fail:
 	conn_reconfig_done(connection);
 	if (nbc) {
-		close_backing_dev(device, nbc->md_bdev, nbc->md_bdev != nbc->backing_bdev);
-		close_backing_dev(device, nbc->backing_bdev, true);
+		close_backing_dev(device, nbc->md_bdev_handle,
+			  nbc->md_bdev != nbc->backing_bdev);
+		close_backing_dev(device, nbc->backing_bdev_handle, true);
 		kfree(nbc);
 	}
 	kfree(new_disk_conf);
@@ -2446,7 +2454,7 @@ int drbd_adm_net_opts(struct sk_buff *skb, struct genl_info *info)
 
 	mutex_unlock(&connection->resource->conf_update);
 	mutex_unlock(&connection->data.mutex);
-	kvfree_rcu(old_net_conf);
+	kvfree_rcu_mightsleep(old_net_conf);
 
 	if (connection->cstate >= C_WF_REPORT_PARAMS) {
 		struct drbd_peer_device *peer_device;
@@ -2860,7 +2868,7 @@ int drbd_adm_resize(struct sk_buff *skb, struct genl_info *info)
 		new_disk_conf->disk_size = (sector_t)rs.resize_size;
 		rcu_assign_pointer(device->ldev->disk_conf, new_disk_conf);
 		mutex_unlock(&device->resource->conf_update);
-		kvfree_rcu(old_disk_conf);
+		kvfree_rcu_mightsleep(old_disk_conf);
 		new_disk_conf = NULL;
 	}
 
@@ -2972,7 +2980,7 @@ int drbd_adm_invalidate(struct sk_buff *skb, struct genl_info *info)
 		retcode = drbd_request_state(device, NS(disk, D_INCONSISTENT));
 		if (retcode >= SS_SUCCESS) {
 			if (drbd_bitmap_io(device, &drbd_bmio_set_n_write,
-				"set_n_write from invalidate", BM_LOCKED_MASK))
+				"set_n_write from invalidate", BM_LOCKED_MASK, NULL))
 				retcode = ERR_IO_MD_DISK;
 		}
 	} else
@@ -3005,11 +3013,12 @@ out:
 	return 0;
 }
 
-static int drbd_bmio_set_susp_al(struct drbd_device *device) __must_hold(local)
+static int drbd_bmio_set_susp_al(struct drbd_device *device,
+		struct drbd_peer_device *peer_device) __must_hold(local)
 {
 	int rv;
 
-	rv = drbd_bmio_set_n_write(device);
+	rv = drbd_bmio_set_n_write(device, peer_device);
 	drbd_suspend_al(device);
 	return rv;
 }
@@ -3052,7 +3061,7 @@ int drbd_adm_invalidate_peer(struct sk_buff *skb, struct genl_info *info)
 		if (retcode >= SS_SUCCESS) {
 			if (drbd_bitmap_io(device, &drbd_bmio_set_susp_al,
 				"set_n_write from invalidate_peer",
-				BM_LOCKED_SET_ALLOWED))
+				BM_LOCKED_SET_ALLOWED, NULL))
 				retcode = ERR_IO_MD_DISK;
 		}
 	} else
@@ -4148,7 +4157,7 @@ int drbd_adm_new_c_uuid(struct sk_buff *skb, struct genl_info *info)
 
 	if (args.clear_bm) {
 		err = drbd_bitmap_io(device, &drbd_bmio_clear_n_write,
-			"clear_n_write from new_c_uuid", BM_LOCKED_MASK);
+			"clear_n_write from new_c_uuid", BM_LOCKED_MASK, NULL);
 		if (err) {
 			drbd_err(device, "Writing bitmap failed with %d\n", err);
 			retcode = ERR_IO_MD_DISK;
@@ -4267,7 +4276,7 @@ static void device_to_info(struct device_info *info,
 int drbd_adm_new_minor(struct sk_buff *skb, struct genl_info *info)
 {
 	struct drbd_config_context adm_ctx;
-	struct drbd_genlmsghdr *dh = info->userhdr;
+	struct drbd_genlmsghdr *dh = genl_info_userhdr(info);
 	enum drbd_ret_code retcode;
 
 	retcode = drbd_adm_prepare(&adm_ctx, skb, info, DRBD_ADM_NEED_RESOURCE);

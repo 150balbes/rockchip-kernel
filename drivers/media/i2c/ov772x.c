@@ -433,9 +433,7 @@ struct ov772x_priv {
 	struct mutex			  lock;
 	int				  power_count;
 	int				  streaming;
-#ifdef CONFIG_MEDIA_CONTROLLER
 	struct media_pad pad;
-#endif
 	enum v4l2_mbus_type		  bus_type;
 };
 
@@ -1462,7 +1460,7 @@ static int ov772x_probe(struct i2c_client *client)
 	priv->subdev.ctrl_handler = &priv->hdl;
 	if (priv->hdl.error) {
 		ret = priv->hdl.error;
-		goto error_mutex_destroy;
+		goto error_ctrl_free;
 	}
 
 	priv->clk = clk_get(&client->dev, NULL);
@@ -1488,13 +1486,11 @@ static int ov772x_probe(struct i2c_client *client)
 	if (ret < 0)
 		goto error_gpio_put;
 
-#ifdef CONFIG_MEDIA_CONTROLLER
 	priv->pad.flags = MEDIA_PAD_FL_SOURCE;
 	priv->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 	ret = media_entity_pads_init(&priv->subdev.entity, 1, &priv->pad);
 	if (ret < 0)
 		goto error_gpio_put;
-#endif
 
 	priv->cfmt = &ov772x_cfmts[0];
 	priv->win = &ov772x_win_sizes[0];
@@ -1515,7 +1511,6 @@ error_clk_put:
 	clk_put(priv->clk);
 error_ctrl_free:
 	v4l2_ctrl_handler_free(&priv->hdl);
-error_mutex_destroy:
 	mutex_destroy(&priv->lock);
 
 	return ret;
@@ -1552,7 +1547,7 @@ static struct i2c_driver ov772x_i2c_driver = {
 		.name = "ov772x",
 		.of_match_table = ov772x_of_match,
 	},
-	.probe_new = ov772x_probe,
+	.probe    = ov772x_probe,
 	.remove   = ov772x_remove,
 	.id_table = ov772x_id,
 };

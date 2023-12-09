@@ -31,6 +31,7 @@
 #define TIM_BDTR	0x44	/* Break and Dead-Time Reg */
 #define TIM_DCR		0x48	/* DMA control register    */
 #define TIM_DMAR	0x4C	/* DMA register for transfer */
+#define TIM_TISEL	0x68	/* Input Selection         */
 
 #define TIM_CR1_CEN	BIT(0)	/* Counter Enable	   */
 #define TIM_CR1_DIR	BIT(4)  /* Counter Direction	   */
@@ -101,6 +102,15 @@ enum stm32_timers_dmas {
 	STM32_TIMERS_MAX_DMAS,
 };
 
+/* STM32 Timer may have either a unique global interrupt or 4 interrupt lines */
+enum stm32_timers_irqs {
+	STM32_TIMERS_IRQ_GLOBAL_BRK, /* global or brk IRQ */
+	STM32_TIMERS_IRQ_UP,
+	STM32_TIMERS_IRQ_TRG_COM,
+	STM32_TIMERS_IRQ_CC,
+	STM32_TIMERS_MAX_IRQS,
+};
+
 /**
  * struct stm32_timers_dma - STM32 timer DMA handling.
  * @completion:		end of DMA transfer completion
@@ -122,6 +132,8 @@ struct stm32_timers {
 	struct regmap *regmap;
 	u32 max_arr;
 	struct stm32_timers_dma dma; /* Only to be used by the parent */
+	unsigned int nr_irqs;
+	int irq[STM32_TIMERS_MAX_IRQS];
 };
 
 #if IS_REACHABLE(CONFIG_MFD_STM32_TIMERS)

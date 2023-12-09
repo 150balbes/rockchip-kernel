@@ -42,11 +42,11 @@ static const struct snd_pcm_hardware mt8192_afe_hardware = {
 static int mt8192_memif_fs(struct snd_pcm_substream *substream,
 			   unsigned int rate)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_component *component =
 		snd_soc_rtdcom_lookup(rtd, AFE_PCM_NAME);
 	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(component);
-	int id = asoc_rtd_to_cpu(rtd, 0)->id;
+	int id = snd_soc_rtd_to_cpu(rtd, 0)->id;
 
 	return mt8192_rate_transform(afe->dev, rate, id);
 }
@@ -59,7 +59,7 @@ static int mt8192_get_dai_fs(struct mtk_base_afe *afe,
 
 static int mt8192_irq_fs(struct snd_pcm_substream *substream, unsigned int rate)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_component *component =
 		snd_soc_rtdcom_lookup(rtd, AFE_PCM_NAME);
 	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(component);
@@ -369,7 +369,7 @@ static int ul_tinyconn_event(struct snd_soc_dapm_widget *w,
 	unsigned int reg_shift;
 	unsigned int reg_mask_shift;
 
-	dev_info(afe->dev, "%s(), event 0x%x\n", __func__, event);
+	dev_dbg(afe->dev, "%s(), event 0x%x\n", __func__, event);
 
 	if (strstr(w->name, "UL1")) {
 		reg_shift = VUL1_USE_TINY_SFT;
@@ -2055,8 +2055,6 @@ static int mt8192_afe_runtime_suspend(struct device *dev)
 	unsigned int value;
 	int ret;
 
-	dev_info(afe->dev, "%s()\n", __func__);
-
 	if (!afe->regmap || afe_priv->pm_runtime_bypass_reg_ctl)
 		goto skip_regmap;
 
@@ -2096,8 +2094,6 @@ static int mt8192_afe_runtime_resume(struct device *dev)
 	struct mtk_base_afe *afe = dev_get_drvdata(dev);
 	struct mt8192_afe_private *afe_priv = afe->platform_priv;
 	int ret;
-
-	dev_info(afe->dev, "%s()\n", __func__);
 
 	ret = mt8192_afe_enable_clock(afe);
 	if (ret)
@@ -2353,7 +2349,7 @@ err_pm_disable:
 	return ret;
 }
 
-static int mt8192_afe_pcm_dev_remove(struct platform_device *pdev)
+static void mt8192_afe_pcm_dev_remove(struct platform_device *pdev)
 {
 	struct mtk_base_afe *afe = platform_get_drvdata(pdev);
 
@@ -2363,7 +2359,6 @@ static int mt8192_afe_pcm_dev_remove(struct platform_device *pdev)
 
 	/* disable afe clock */
 	mt8192_afe_disable_clock(afe);
-	return 0;
 }
 
 static const struct of_device_id mt8192_afe_pcm_dt_match[] = {
@@ -2384,7 +2379,7 @@ static struct platform_driver mt8192_afe_pcm_driver = {
 		   .pm = &mt8192_afe_pm_ops,
 	},
 	.probe = mt8192_afe_pcm_dev_probe,
-	.remove = mt8192_afe_pcm_dev_remove,
+	.remove_new = mt8192_afe_pcm_dev_remove,
 };
 
 module_platform_driver(mt8192_afe_pcm_driver);

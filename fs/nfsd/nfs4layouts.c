@@ -323,11 +323,11 @@ nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
 	if (ls->ls_recalled)
 		goto out_unlock;
 
-	ls->ls_recalled = true;
-	atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
 	if (list_empty(&ls->ls_layouts))
 		goto out_unlock;
 
+	ls->ls_recalled = true;
+	atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
 	trace_nfsd_layout_recall(&ls->ls_stid.sc_stateid);
 
 	refcount_inc(&ls->ls_stid.sc_count);
@@ -515,11 +515,11 @@ nfsd4_return_file_layouts(struct svc_rqst *rqstp,
 	if (!list_empty(&ls->ls_layouts)) {
 		if (found)
 			nfs4_inc_and_copy_stateid(&lrp->lr_sid, &ls->ls_stid);
-		lrp->lrs_present = 1;
+		lrp->lrs_present = true;
 	} else {
 		trace_nfsd_layoutstate_unhash(&ls->ls_stid.sc_stateid);
 		nfs4_unhash_stid(&ls->ls_stid);
-		lrp->lrs_present = 0;
+		lrp->lrs_present = false;
 	}
 	spin_unlock(&ls->ls_lock);
 
@@ -539,7 +539,7 @@ nfsd4_return_client_layouts(struct svc_rqst *rqstp,
 	struct nfs4_layout *lp, *t;
 	LIST_HEAD(reaplist);
 
-	lrp->lrs_present = 0;
+	lrp->lrs_present = false;
 
 	spin_lock(&clp->cl_lock);
 	list_for_each_entry_safe(ls, n, &clp->cl_lo_states, ls_perclnt) {

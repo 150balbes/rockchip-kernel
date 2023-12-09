@@ -198,12 +198,15 @@ static const struct sparx5_main_io_resource sparx5_main_iomap[] =  {
 	{ TARGET_QSYS,               0x110a0000, 2 }, /* 0x6110a0000 */
 	{ TARGET_QFWD,               0x110b0000, 2 }, /* 0x6110b0000 */
 	{ TARGET_XQS,                0x110c0000, 2 }, /* 0x6110c0000 */
+	{ TARGET_VCAP_ES2,           0x110d0000, 2 }, /* 0x6110d0000 */
+	{ TARGET_VCAP_ES0,           0x110e0000, 2 }, /* 0x6110e0000 */
 	{ TARGET_CLKGEN,             0x11100000, 2 }, /* 0x611100000 */
 	{ TARGET_ANA_AC_POL,         0x11200000, 2 }, /* 0x611200000 */
 	{ TARGET_QRES,               0x11280000, 2 }, /* 0x611280000 */
 	{ TARGET_EACL,               0x112c0000, 2 }, /* 0x6112c0000 */
 	{ TARGET_ANA_CL,             0x11400000, 2 }, /* 0x611400000 */
 	{ TARGET_ANA_L3,             0x11480000, 2 }, /* 0x611480000 */
+	{ TARGET_ANA_AC_SDLB,        0x11500000, 2 }, /* 0x611500000 */
 	{ TARGET_HSCH,               0x11580000, 2 }, /* 0x611580000 */
 	{ TARGET_REW,                0x11600000, 2 }, /* 0x611600000 */
 	{ TARGET_ANA_L2,             0x11800000, 2 }, /* 0x611800000 */
@@ -278,7 +281,9 @@ static int sparx5_create_port(struct sparx5 *sparx5,
 	spx5_port->custom_etype = 0x8880; /* Vitesse */
 	spx5_port->phylink_pcs.poll = true;
 	spx5_port->phylink_pcs.ops = &sparx5_phylink_pcs_ops;
+	spx5_port->phylink_pcs.neg_mode = true;
 	spx5_port->is_mrouter = false;
+	INIT_LIST_HEAD(&spx5_port->tc_templates);
 	sparx5->ports[config->portno] = spx5_port;
 
 	err = sparx5_port_init(sparx5, spx5_port, &config->conf);
@@ -500,8 +505,8 @@ static int sparx5_init_coreclock(struct sparx5 *sparx5)
 
 	clk_period = sparx5_clk_period(freq);
 
-	spx5_rmw(HSCH_SYS_CLK_PER_SYS_CLK_PER_100PS_SET(clk_period / 100),
-		 HSCH_SYS_CLK_PER_SYS_CLK_PER_100PS,
+	spx5_rmw(HSCH_SYS_CLK_PER_100PS_SET(clk_period / 100),
+		 HSCH_SYS_CLK_PER_100PS,
 		 sparx5,
 		 HSCH_SYS_CLK_PER);
 
@@ -834,7 +839,7 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 	if (err)
 		goto cleanup_config;
 
-	if (!of_get_mac_address(np, sparx5->base_mac)) {
+	if (of_get_mac_address(np, sparx5->base_mac)) {
 		dev_info(sparx5->dev, "MAC addr was not set, use random MAC\n");
 		eth_random_addr(sparx5->base_mac);
 		sparx5->base_mac[5] = 0;
@@ -906,7 +911,7 @@ cleanup_pnode:
 	return err;
 }
 
-static int mchp_sparx5_remove(struct platform_device *pdev)
+static void mchp_sparx5_remove(struct platform_device *pdev)
 {
 	struct sparx5 *sparx5 = platform_get_drvdata(pdev);
 
@@ -926,8 +931,6 @@ static int mchp_sparx5_remove(struct platform_device *pdev)
 	/* Unregister netdevs */
 	sparx5_unregister_notifier_blocks(sparx5);
 	destroy_workqueue(sparx5->mact_queue);
-
-	return 0;
 }
 
 static const struct of_device_id mchp_sparx5_match[] = {
@@ -938,7 +941,7 @@ MODULE_DEVICE_TABLE(of, mchp_sparx5_match);
 
 static struct platform_driver mchp_sparx5_driver = {
 	.probe = mchp_sparx5_probe,
-	.remove = mchp_sparx5_remove,
+	.remove_new = mchp_sparx5_remove,
 	.driver = {
 		.name = "sparx5-switch",
 		.of_match_table = mchp_sparx5_match,

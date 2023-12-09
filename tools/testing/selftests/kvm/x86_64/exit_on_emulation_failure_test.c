@@ -26,9 +26,6 @@ int main(int argc, char *argv[])
 	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
 
-	/* Tell stdout not to buffer its content */
-	setbuf(stdout, NULL);
-
 	TEST_REQUIRE(kvm_has_cap(KVM_CAP_EXIT_ON_EMULATION_FAILURE));
 
 	vm = vm_create_with_one_vcpu(&vcpu, guest_code);
@@ -38,7 +35,7 @@ int main(int argc, char *argv[])
 	vcpu_run(vcpu);
 	handle_flds_emulation_failure_exit(vcpu);
 	vcpu_run(vcpu);
-	ASSERT_EQ(get_ucall(vcpu, NULL), UCALL_DONE);
+	TEST_ASSERT_EQ(get_ucall(vcpu, NULL), UCALL_DONE);
 
 	kvm_vm_free(vm);
 	return 0;

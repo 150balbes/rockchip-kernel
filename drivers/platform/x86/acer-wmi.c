@@ -1922,7 +1922,6 @@ static void acer_rfkill_exit(void)
 		rfkill_unregister(threeg_rfkill);
 		rfkill_destroy(threeg_rfkill);
 	}
-	return;
 }
 
 static void acer_wmi_notify(u32 value, void *context)
@@ -2258,7 +2257,7 @@ error_mailled:
 	return err;
 }
 
-static int acer_platform_remove(struct platform_device *device)
+static void acer_platform_remove(struct platform_device *device)
 {
 	if (has_cap(ACER_CAP_MAILLED))
 		acer_led_exit();
@@ -2266,7 +2265,6 @@ static int acer_platform_remove(struct platform_device *device)
 		acer_backlight_exit();
 
 	acer_rfkill_exit();
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -2334,7 +2332,7 @@ static struct platform_driver acer_platform_driver = {
 		.pm = &acer_pm,
 	},
 	.probe = acer_platform_probe,
-	.remove = acer_platform_remove,
+	.remove_new = acer_platform_remove,
 	.shutdown = acer_platform_shutdown,
 };
 
@@ -2518,7 +2516,6 @@ static void __exit acer_wmi_exit(void)
 	platform_driver_unregister(&acer_platform_driver);
 
 	pr_info("Acer Laptop WMI Extras unloaded\n");
-	return;
 }
 
 module_init(acer_wmi_init);

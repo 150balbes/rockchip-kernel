@@ -12,10 +12,10 @@
  */
 #include <linux/init.h>
 #include <linux/acpi.h>
+#include <linux/cpu.h>
 #include <linux/dmi.h>
 #include <linux/efi.h>
 #include <linux/export.h>
-#include <linux/screen_info.h>
 #include <linux/memblock.h>
 #include <linux/initrd.h>
 #include <linux/ioport.h>
@@ -37,7 +37,6 @@
 #include <asm/addrspace.h>
 #include <asm/alternative.h>
 #include <asm/bootinfo.h>
-#include <asm/bugs.h>
 #include <asm/cache.h>
 #include <asm/cpu.h>
 #include <asm/dma.h>
@@ -56,8 +55,6 @@
 #define SMBIOS_FREQLOW_MASK		0xFF
 #define SMBIOS_CORE_PACKAGE_OFFSET	0x23
 #define LOONGSON_EFI_ENABLE		(1 << 3)
-
-struct screen_info screen_info __section(".data");
 
 unsigned long fw_arg0, fw_arg1, fw_arg2;
 DEFINE_PER_CPU(unsigned long, kernelsp);
@@ -87,7 +84,7 @@ const char *get_system_type(void)
 	return "generic-loongson-machine";
 }
 
-void __init check_bugs(void)
+void __init arch_cpu_finalize_init(void)
 {
 	alternative_instructions();
 }
@@ -159,6 +156,27 @@ static void __init smbios_parse(void)
 	b_info.board_name = (void *)dmi_get_system_info(DMI_BOARD_NAME);
 	dmi_walk(find_tokens, NULL);
 }
+
+#ifdef CONFIG_ARCH_WRITECOMBINE
+bool wc_enabled = true;
+#else
+bool wc_enabled = false;
+#endif
+
+EXPORT_SYMBOL(wc_enabled);
+
+static int __init setup_writecombine(char *p)
+{
+	if (!strcmp(p, "on"))
+		wc_enabled = true;
+	else if (!strcmp(p, "off"))
+		wc_enabled = false;
+	else
+		pr_warn("Unknown writecombine setting \"%s\".\n", p);
+
+	return 0;
+}
+early_param("writecombine", setup_writecombine);
 
 static int usermem __initdata;
 
@@ -234,21 +252,31 @@ static void __init arch_reserve_vmcore(void)
 #endif
 }
 
+/* 2MB alignment for crash kernel regions */
+#define CRASH_ALIGN	SZ_2M
+#define CRASH_ADDR_MAX	SZ_4G
+
 static void __init arch_parse_crashkernel(void)
 {
 #ifdef CONFIG_KEXEC
 	int ret;
-	unsigned long long start;
 	unsigned long long total_mem;
 	unsigned long long crash_base, crash_size;
 
 	total_mem = memblock_phys_mem_size();
-	ret = parse_crashkernel(boot_command_line, total_mem, &crash_size, &crash_base);
+	ret = parse_crashkernel(boot_command_line, total_mem,
+				&crash_size, &crash_base,
+				NULL, NULL);
 	if (ret < 0 || crash_size <= 0)
 		return;
 
-	start = memblock_phys_alloc_range(crash_size, 1, crash_base, crash_base + crash_size);
-	if (start != crash_base) {
+	if (crash_base <= 0) {
+		crash_base = memblock_phys_alloc_range(crash_size, CRASH_ALIGN, CRASH_ALIGN, CRASH_ADDR_MAX);
+		if (!crash_base) {
+			pr_warn("crashkernel reservation failed - No suitable area found.\n");
+			return;
+		}
+	} else if (!memblock_phys_alloc_range(crash_size, CRASH_ALIGN, crash_base, crash_base + crash_size)) {
 		pr_warn("Invalid memory region reserved for crash kernel\n");
 		return;
 	}
@@ -303,8 +331,24 @@ static void __init bootcmdline_init(char **cmdline_p)
 			strlcat(boot_command_line, " ", COMMAND_LINE_SIZE);
 
 		strlcat(boot_command_line, init_command_line, COMMAND_LINE_SIZE);
+		goto out;
 	}
 #endif
+
+	/*
+	 * Append built-in command line to the bootloader command line if
+	 * CONFIG_CMDLINE_EXTEND is enabled.
+	 */
+	if (IS_ENABLED(CONFIG_CMDLINE_EXTEND) && CONFIG_CMDLINE[0]) {
+		strlcat(boot_command_line, " ", COMMAND_LINE_SIZE);
+		strlcat(boot_command_line, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
+	}
+
+	/*
+	 * Use built-in command line if the bootloader command line is empty.
+	 */
+	if (IS_ENABLED(CONFIG_CMDLINE_BOOTLOADER) && !boot_command_line[0])
+		strscpy(boot_command_line, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
 
 out:
 	*cmdline_p = boot_command_line;
@@ -360,8 +404,8 @@ static void __init arch_mem_init(char **cmdline_p)
 	/*
 	 * In order to reduce the possibility of kernel panic when failed to
 	 * get IO TLB memory under CONFIG_SWIOTLB, it is better to allocate
-	 * low memory as small as possible before plat_swiotlb_setup(), so
-	 * make sparse_init() using top-down allocation.
+	 * low memory as small as possible before swiotlb_init(), so make
+	 * sparse_init() using top-down allocation.
 	 */
 	memblock_set_bottom_up(false);
 	sparse_init();
@@ -581,4 +625,8 @@ void __init setup_arch(char **cmdline_p)
 #endif
 
 	paging_init();
+
+#ifdef CONFIG_KASAN
+	kasan_init();
+#endif
 }

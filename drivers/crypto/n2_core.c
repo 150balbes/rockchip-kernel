@@ -9,7 +9,8 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
+#include <linux/of_address.h>
+#include <linux/platform_device.h>
 #include <linux/cpumask.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
@@ -1795,11 +1796,9 @@ static int grab_mdesc_irq_props(struct mdesc_handle *mdesc,
 				struct spu_mdesc_info *ip,
 				const char *node_name)
 {
-	const unsigned int *reg;
-	u64 node;
+	u64 node, reg;
 
-	reg = of_get_property(dev->dev.of_node, "reg", NULL);
-	if (!reg)
+	if (of_property_read_reg(dev->dev.of_node, 0, &reg, NULL) < 0)
 		return -ENODEV;
 
 	mdesc_for_each_node_by_name(mdesc, node, "virtual-device") {
@@ -1810,7 +1809,7 @@ static int grab_mdesc_irq_props(struct mdesc_handle *mdesc,
 		if (!name || strcmp(name, node_name))
 			continue;
 		chdl = mdesc_get_property(mdesc, node, "cfg-handle", NULL);
-		if (!chdl || (*chdl != *reg))
+		if (!chdl || (*chdl != reg))
 			continue;
 		ip->cfg_handle = *chdl;
 		return get_irq_props(mdesc, node, ip);
@@ -2012,7 +2011,7 @@ out_free_n2cp:
 	return err;
 }
 
-static int n2_crypto_remove(struct platform_device *dev)
+static void n2_crypto_remove(struct platform_device *dev)
 {
 	struct n2_crypto *np = dev_get_drvdata(&dev->dev);
 
@@ -2023,8 +2022,6 @@ static int n2_crypto_remove(struct platform_device *dev)
 	release_global_resources();
 
 	free_n2cp(np);
-
-	return 0;
 }
 
 static struct n2_mau *alloc_ncp(void)
@@ -2110,7 +2107,7 @@ out_free_ncp:
 	return err;
 }
 
-static int n2_mau_remove(struct platform_device *dev)
+static void n2_mau_remove(struct platform_device *dev)
 {
 	struct n2_mau *mp = dev_get_drvdata(&dev->dev);
 
@@ -2119,8 +2116,6 @@ static int n2_mau_remove(struct platform_device *dev)
 	release_global_resources();
 
 	free_ncp(mp);
-
-	return 0;
 }
 
 static const struct of_device_id n2_crypto_match[] = {
@@ -2147,7 +2142,7 @@ static struct platform_driver n2_crypto_driver = {
 		.of_match_table	=	n2_crypto_match,
 	},
 	.probe		=	n2_crypto_probe,
-	.remove		=	n2_crypto_remove,
+	.remove_new	=	n2_crypto_remove,
 };
 
 static const struct of_device_id n2_mau_match[] = {
@@ -2174,7 +2169,7 @@ static struct platform_driver n2_mau_driver = {
 		.of_match_table	=	n2_mau_match,
 	},
 	.probe		=	n2_mau_probe,
-	.remove		=	n2_mau_remove,
+	.remove_new	=	n2_mau_remove,
 };
 
 static struct platform_driver * const drivers[] = {

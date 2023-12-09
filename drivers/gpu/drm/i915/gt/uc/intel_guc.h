@@ -42,6 +42,9 @@ struct intel_guc {
 	/** @capture: the error-state-capture module's data and objects */
 	struct intel_guc_state_capture *capture;
 
+	/** @dbgfs_node: debugfs node */
+	struct dentry *dbgfs_node;
+
 	/** @sched_engine: Global engine used to submit requests to GuC */
 	struct i915_sched_engine *sched_engine;
 	/**
@@ -75,6 +78,18 @@ struct intel_guc {
 	 * idle
 	 */
 	atomic_t outstanding_submission_g2h;
+
+	/** @tlb_lookup: xarray to store all pending TLB invalidation requests */
+	struct xarray tlb_lookup;
+
+	/**
+	 * @serial_slot: id to the initial waiter created in tlb_lookup,
+	 * which is used only when failed to allocate new waiter.
+	 */
+	u32 serial_slot;
+
+	/** @next_seqno: the next id (sequence number) to allocate. */
+	u32 next_seqno;
 
 	/** @interrupts: pointers to GuC interrupt-managing functions. */
 	struct {
@@ -158,6 +173,9 @@ struct intel_guc {
 	bool submission_selected;
 	/** @submission_initialized: tracks whether GuC submission has been initialised */
 	bool submission_initialized;
+	/** @submission_version: Submission API version of the currently loaded firmware */
+	struct intel_uc_fw_ver submission_version;
+
 	/**
 	 * @rc_supported: tracks whether we support GuC rc on the current platform
 	 */
@@ -260,6 +278,20 @@ struct intel_guc {
 		unsigned long last_stat_jiffies;
 	} timestamp;
 
+	/**
+	 * @dead_guc_worker: Asynchronous worker thread for forcing a GuC reset.
+	 * Specifically used when the G2H handler wants to issue a reset. Resets
+	 * require flushing the G2H queue. So, the G2H processing itself must not
+	 * trigger a reset directly. Instead, go via this worker.
+	 */
+	struct work_struct dead_guc_worker;
+	/**
+	 * @last_dead_guc_jiffies: timestamp of previous 'dead guc' occurrance
+	 * used to prevent a fundamentally broken system from continuously
+	 * reloading the GuC.
+	 */
+	unsigned long last_dead_guc_jiffies;
+
 #ifdef CONFIG_DRM_I915_SELFTEST
 	/**
 	 * @number_guc_id_stolen: The number of guc_ids that have been stolen
@@ -267,6 +299,20 @@ struct intel_guc {
 	int number_guc_id_stolen;
 #endif
 };
+
+struct intel_guc_tlb_wait {
+	struct wait_queue_head wq;
+	bool busy;
+};
+
+/*
+ * GuC version number components are only 8-bit, so converting to a 32bit 8.8.8
+ * integer works.
+ */
+#define MAKE_GUC_VER(maj, min, pat)	(((maj) << 16) | ((min) << 8) | (pat))
+#define MAKE_GUC_VER_STRUCT(ver)	MAKE_GUC_VER((ver).major, (ver).minor, (ver).patch)
+#define GUC_SUBMIT_VER(guc)		MAKE_GUC_VER_STRUCT((guc)->submission_version)
+#define GUC_FIRMWARE_VER(guc)		MAKE_GUC_VER_STRUCT((guc)->fw.file_selected.ver)
 
 static inline struct intel_guc *log_to_guc(struct intel_guc_log *log)
 {
@@ -462,6 +508,7 @@ int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 					 const u32 *msg, u32 len);
 int intel_guc_error_capture_process_msg(struct intel_guc *guc,
 					const u32 *msg, u32 len);
+int intel_guc_crash_process_msg(struct intel_guc *guc, u32 action);
 
 struct intel_engine_cs *
 intel_guc_lookup_engine(struct intel_guc *guc, u8 guc_class, u8 instance);
@@ -485,4 +532,10 @@ void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 
 int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc);
 
+bool intel_guc_tlb_invalidation_is_available(struct intel_guc *guc);
+int intel_guc_invalidate_tlb_engines(struct intel_guc *guc);
+int intel_guc_invalidate_tlb_guc(struct intel_guc *guc);
+int intel_guc_tlb_invalidation_done(struct intel_guc *guc,
+				    const u32 *payload, u32 len);
+void wake_up_all_tlb_invalidate(struct intel_guc *guc);
 #endif

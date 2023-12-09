@@ -19,7 +19,9 @@
 #include <time.h>
 #include <sys/mman.h>
 #include <poll.h>
+#include <signal.h>
 
+#include "vsock_test_zerocopy.h"
 #include "timeout.h"
 #include "control.h"
 #include "util.h"
@@ -255,39 +257,110 @@ static void test_stream_multiconn_server(const struct test_opts *opts)
 		close(fds[i]);
 }
 
-static void test_stream_msg_peek_client(const struct test_opts *opts)
-{
-	int fd;
+#define MSG_PEEK_BUF_LEN 64
 
-	fd = vsock_stream_connect(opts->peer_cid, 1234);
+static void test_msg_peek_client(const struct test_opts *opts,
+				 bool seqpacket)
+{
+	unsigned char buf[MSG_PEEK_BUF_LEN];
+	int fd;
+	int i;
+
+	if (seqpacket)
+		fd = vsock_seqpacket_connect(opts->peer_cid, 1234);
+	else
+		fd = vsock_stream_connect(opts->peer_cid, 1234);
+
 	if (fd < 0) {
 		perror("connect");
 		exit(EXIT_FAILURE);
 	}
 
-	send_byte(fd, 1, 0);
+	for (i = 0; i < sizeof(buf); i++)
+		buf[i] = rand() & 0xFF;
+
+	control_expectln("SRVREADY");
+
+	send_buf(fd, buf, sizeof(buf), 0, sizeof(buf));
+
 	close(fd);
 }
 
-static void test_stream_msg_peek_server(const struct test_opts *opts)
+static void test_msg_peek_server(const struct test_opts *opts,
+				 bool seqpacket)
 {
+	unsigned char buf_half[MSG_PEEK_BUF_LEN / 2];
+	unsigned char buf_normal[MSG_PEEK_BUF_LEN];
+	unsigned char buf_peek[MSG_PEEK_BUF_LEN];
 	int fd;
 
-	fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+	if (seqpacket)
+		fd = vsock_seqpacket_accept(VMADDR_CID_ANY, 1234, NULL);
+	else
+		fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+
 	if (fd < 0) {
 		perror("accept");
 		exit(EXIT_FAILURE);
 	}
 
-	recv_byte(fd, 1, MSG_PEEK);
-	recv_byte(fd, 1, 0);
+	/* Peek from empty socket. */
+	recv_buf(fd, buf_peek, sizeof(buf_peek), MSG_PEEK | MSG_DONTWAIT,
+		 -EAGAIN);
+
+	control_writeln("SRVREADY");
+
+	/* Peek part of data. */
+	recv_buf(fd, buf_half, sizeof(buf_half), MSG_PEEK, sizeof(buf_half));
+
+	/* Peek whole data. */
+	recv_buf(fd, buf_peek, sizeof(buf_peek), MSG_PEEK, sizeof(buf_peek));
+
+	/* Compare partial and full peek. */
+	if (memcmp(buf_half, buf_peek, sizeof(buf_half))) {
+		fprintf(stderr, "Partial peek data mismatch\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (seqpacket) {
+		/* This type of socket supports MSG_TRUNC flag,
+		 * so check it with MSG_PEEK. We must get length
+		 * of the message.
+		 */
+		recv_buf(fd, buf_half, sizeof(buf_half), MSG_PEEK | MSG_TRUNC,
+			 sizeof(buf_peek));
+	}
+
+	recv_buf(fd, buf_normal, sizeof(buf_normal), 0, sizeof(buf_normal));
+
+	/* Compare full peek and normal read. */
+	if (memcmp(buf_peek, buf_normal, sizeof(buf_peek))) {
+		fprintf(stderr, "Full peek data mismatch\n");
+		exit(EXIT_FAILURE);
+	}
+
 	close(fd);
 }
 
-#define MESSAGES_CNT 7
-#define MSG_EOR_IDX (MESSAGES_CNT / 2)
+static void test_stream_msg_peek_client(const struct test_opts *opts)
+{
+	return test_msg_peek_client(opts, false);
+}
+
+static void test_stream_msg_peek_server(const struct test_opts *opts)
+{
+	return test_msg_peek_server(opts, false);
+}
+
+#define SOCK_BUF_SIZE (2 * 1024 * 1024)
+#define MAX_MSG_PAGES 4
+
 static void test_seqpacket_msg_bounds_client(const struct test_opts *opts)
 {
+	unsigned long curr_hash;
+	size_t max_msg_size;
+	int page_size;
+	int msg_count;
 	int fd;
 
 	fd = vsock_seqpacket_connect(opts->peer_cid, 1234);
@@ -296,18 +369,68 @@ static void test_seqpacket_msg_bounds_client(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
-	/* Send several messages, one with MSG_EOR flag */
-	for (int i = 0; i < MESSAGES_CNT; i++)
-		send_byte(fd, 1, (i == MSG_EOR_IDX) ? MSG_EOR : 0);
+	/* Wait, until receiver sets buffer size. */
+	control_expectln("SRVREADY");
+
+	curr_hash = 0;
+	page_size = getpagesize();
+	max_msg_size = MAX_MSG_PAGES * page_size;
+	msg_count = SOCK_BUF_SIZE / max_msg_size;
+
+	for (int i = 0; i < msg_count; i++) {
+		size_t buf_size;
+		int flags;
+		void *buf;
+
+		/* Use "small" buffers and "big" buffers. */
+		if (i & 1)
+			buf_size = page_size +
+					(rand() % (max_msg_size - page_size));
+		else
+			buf_size = 1 + (rand() % page_size);
+
+		buf = malloc(buf_size);
+
+		if (!buf) {
+			perror("malloc");
+			exit(EXIT_FAILURE);
+		}
+
+		memset(buf, rand() & 0xff, buf_size);
+		/* Set at least one MSG_EOR + some random. */
+		if (i == (msg_count / 2) || (rand() & 1)) {
+			flags = MSG_EOR;
+			curr_hash++;
+		} else {
+			flags = 0;
+		}
+
+		send_buf(fd, buf, buf_size, flags, buf_size);
+
+		/*
+		 * Hash sum is computed at both client and server in
+		 * the same way:
+		 * H += hash('message data')
+		 * Such hash "controls" both data integrity and message
+		 * bounds. After data exchange, both sums are compared
+		 * using control socket, and if message bounds wasn't
+		 * broken - two values must be equal.
+		 */
+		curr_hash += hash_djb2(buf, buf_size);
+		free(buf);
+	}
 
 	control_writeln("SENDDONE");
+	control_writeulong(curr_hash);
 	close(fd);
 }
 
 static void test_seqpacket_msg_bounds_server(const struct test_opts *opts)
 {
+	unsigned long sock_buf_size;
+	unsigned long remote_hash;
+	unsigned long curr_hash;
 	int fd;
-	char buf[16];
 	struct msghdr msg = {0};
 	struct iovec iov = {0};
 
@@ -317,25 +440,63 @@ static void test_seqpacket_msg_bounds_server(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
+	sock_buf_size = SOCK_BUF_SIZE;
+
+	if (setsockopt(fd, AF_VSOCK, SO_VM_SOCKETS_BUFFER_MAX_SIZE,
+		       &sock_buf_size, sizeof(sock_buf_size))) {
+		perror("setsockopt(SO_VM_SOCKETS_BUFFER_MAX_SIZE)");
+		exit(EXIT_FAILURE);
+	}
+
+	if (setsockopt(fd, AF_VSOCK, SO_VM_SOCKETS_BUFFER_SIZE,
+		       &sock_buf_size, sizeof(sock_buf_size))) {
+		perror("setsockopt(SO_VM_SOCKETS_BUFFER_SIZE)");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Ready to receive data. */
+	control_writeln("SRVREADY");
+	/* Wait, until peer sends whole data. */
 	control_expectln("SENDDONE");
-	iov.iov_base = buf;
-	iov.iov_len = sizeof(buf);
+	iov.iov_len = MAX_MSG_PAGES * getpagesize();
+	iov.iov_base = malloc(iov.iov_len);
+	if (!iov.iov_base) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
 
-	for (int i = 0; i < MESSAGES_CNT; i++) {
-		if (recvmsg(fd, &msg, 0) != 1) {
-			perror("message bound violated");
+	curr_hash = 0;
+
+	while (1) {
+		ssize_t recv_size;
+
+		recv_size = recvmsg(fd, &msg, 0);
+
+		if (!recv_size)
+			break;
+
+		if (recv_size < 0) {
+			perror("recvmsg");
 			exit(EXIT_FAILURE);
 		}
 
-		if ((i == MSG_EOR_IDX) ^ !!(msg.msg_flags & MSG_EOR)) {
-			perror("MSG_EOR");
-			exit(EXIT_FAILURE);
-		}
+		if (msg.msg_flags & MSG_EOR)
+			curr_hash++;
+
+		curr_hash += hash_djb2(msg.msg_iov[0].iov_base, recv_size);
 	}
 
+	free(iov.iov_base);
 	close(fd);
+	remote_hash = control_readulong();
+
+	if (curr_hash != remote_hash) {
+		fprintf(stderr, "Message bounds broken\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
 #define MESSAGE_TRUNC_SZ 32
@@ -350,10 +511,7 @@ static void test_seqpacket_msg_trunc_client(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
-	if (send(fd, buf, sizeof(buf), 0) != sizeof(buf)) {
-		perror("send failed");
-		exit(EXIT_FAILURE);
-	}
+	send_buf(fd, buf, sizeof(buf), 0, sizeof(buf));
 
 	control_writeln("SENDDONE");
 	close(fd);
@@ -427,7 +585,7 @@ static void test_seqpacket_timeout_client(const struct test_opts *opts)
 	tv.tv_usec = 0;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (void *)&tv, sizeof(tv)) == -1) {
-		perror("setsockopt 'SO_RCVTIMEO'");
+		perror("setsockopt(SO_RCVTIMEO)");
 		exit(EXIT_FAILURE);
 	}
 
@@ -472,6 +630,58 @@ static void test_seqpacket_timeout_server(const struct test_opts *opts)
 	close(fd);
 }
 
+static void test_seqpacket_bigmsg_client(const struct test_opts *opts)
+{
+	unsigned long sock_buf_size;
+	socklen_t len;
+	void *data;
+	int fd;
+
+	len = sizeof(sock_buf_size);
+
+	fd = vsock_seqpacket_connect(opts->peer_cid, 1234);
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	if (getsockopt(fd, AF_VSOCK, SO_VM_SOCKETS_BUFFER_SIZE,
+		       &sock_buf_size, &len)) {
+		perror("getsockopt");
+		exit(EXIT_FAILURE);
+	}
+
+	sock_buf_size++;
+
+	data = malloc(sock_buf_size);
+	if (!data) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	send_buf(fd, data, sock_buf_size, 0, -EMSGSIZE);
+
+	control_writeln("CLISENT");
+
+	free(data);
+	close(fd);
+}
+
+static void test_seqpacket_bigmsg_server(const struct test_opts *opts)
+{
+	int fd;
+
+	fd = vsock_seqpacket_accept(VMADDR_CID_ANY, 1234, NULL);
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("CLISENT");
+
+	close(fd);
+}
+
 #define BUF_PATTERN_1 'a'
 #define BUF_PATTERN_2 'b'
 
@@ -503,15 +713,9 @@ static void test_seqpacket_invalid_rec_buffer_client(const struct test_opts *opt
 	memset(buf1, BUF_PATTERN_1, buf_size);
 	memset(buf2, BUF_PATTERN_2, buf_size);
 
-	if (send(fd, buf1, buf_size, 0) != buf_size) {
-		perror("send failed");
-		exit(EXIT_FAILURE);
-	}
+	send_buf(fd, buf1, buf_size, 0, buf_size);
 
-	if (send(fd, buf2, buf_size, 0) != buf_size) {
-		perror("send failed");
-		exit(EXIT_FAILURE);
-	}
+	send_buf(fd, buf2, buf_size, 0, buf_size);
 
 	close(fd);
 }
@@ -562,7 +766,7 @@ static void test_seqpacket_invalid_rec_buffer_server(const struct test_opts *opt
 		exit(EXIT_FAILURE);
 	}
 
-	if (errno != ENOMEM) {
+	if (errno != EFAULT) {
 		perror("unexpected errno of 'broken_buf'");
 		exit(EXIT_FAILURE);
 	}
@@ -632,7 +836,6 @@ static void test_stream_poll_rcvlowat_client(const struct test_opts *opts)
 	unsigned long lowat_val = RCVLOWAT_BUF_SIZE;
 	char buf[RCVLOWAT_BUF_SIZE];
 	struct pollfd fds;
-	ssize_t read_res;
 	short poll_flags;
 	int fd;
 
@@ -644,7 +847,7 @@ static void test_stream_poll_rcvlowat_client(const struct test_opts *opts)
 
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVLOWAT,
 		       &lowat_val, sizeof(lowat_val))) {
-		perror("setsockopt");
+		perror("setsockopt(SO_RCVLOWAT)");
 		exit(EXIT_FAILURE);
 	}
 
@@ -687,16 +890,346 @@ static void test_stream_poll_rcvlowat_client(const struct test_opts *opts)
 	/* Use MSG_DONTWAIT, if call is going to wait, EAGAIN
 	 * will be returned.
 	 */
-	read_res = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
-	if (read_res != RCVLOWAT_BUF_SIZE) {
-		fprintf(stderr, "Unexpected recv result %zi\n",
-			read_res);
-		exit(EXIT_FAILURE);
-	}
+	recv_buf(fd, buf, sizeof(buf), MSG_DONTWAIT, RCVLOWAT_BUF_SIZE);
 
 	control_writeln("POLLDONE");
 
 	close(fd);
+}
+
+#define INV_BUF_TEST_DATA_LEN 512
+
+static void test_inv_buf_client(const struct test_opts *opts, bool stream)
+{
+	unsigned char data[INV_BUF_TEST_DATA_LEN] = {0};
+	ssize_t expected_ret;
+	int fd;
+
+	if (stream)
+		fd = vsock_stream_connect(opts->peer_cid, 1234);
+	else
+		fd = vsock_seqpacket_connect(opts->peer_cid, 1234);
+
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("SENDDONE");
+
+	/* Use invalid buffer here. */
+	recv_buf(fd, NULL, sizeof(data), 0, -EFAULT);
+
+	if (stream) {
+		/* For SOCK_STREAM we must continue reading. */
+		expected_ret = sizeof(data);
+	} else {
+		/* For SOCK_SEQPACKET socket's queue must be empty. */
+		expected_ret = -EAGAIN;
+	}
+
+	recv_buf(fd, data, sizeof(data), MSG_DONTWAIT, expected_ret);
+
+	control_writeln("DONE");
+
+	close(fd);
+}
+
+static void test_inv_buf_server(const struct test_opts *opts, bool stream)
+{
+	unsigned char data[INV_BUF_TEST_DATA_LEN] = {0};
+	int fd;
+
+	if (stream)
+		fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+	else
+		fd = vsock_seqpacket_accept(VMADDR_CID_ANY, 1234, NULL);
+
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	send_buf(fd, data, sizeof(data), 0, sizeof(data));
+
+	control_writeln("SENDDONE");
+
+	control_expectln("DONE");
+
+	close(fd);
+}
+
+static void test_stream_inv_buf_client(const struct test_opts *opts)
+{
+	test_inv_buf_client(opts, true);
+}
+
+static void test_stream_inv_buf_server(const struct test_opts *opts)
+{
+	test_inv_buf_server(opts, true);
+}
+
+static void test_seqpacket_inv_buf_client(const struct test_opts *opts)
+{
+	test_inv_buf_client(opts, false);
+}
+
+static void test_seqpacket_inv_buf_server(const struct test_opts *opts)
+{
+	test_inv_buf_server(opts, false);
+}
+
+#define HELLO_STR "HELLO"
+#define WORLD_STR "WORLD"
+
+static void test_stream_virtio_skb_merge_client(const struct test_opts *opts)
+{
+	int fd;
+
+	fd = vsock_stream_connect(opts->peer_cid, 1234);
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Send first skbuff. */
+	send_buf(fd, HELLO_STR, strlen(HELLO_STR), 0, strlen(HELLO_STR));
+
+	control_writeln("SEND0");
+	/* Peer reads part of first skbuff. */
+	control_expectln("REPLY0");
+
+	/* Send second skbuff, it will be appended to the first. */
+	send_buf(fd, WORLD_STR, strlen(WORLD_STR), 0, strlen(WORLD_STR));
+
+	control_writeln("SEND1");
+	/* Peer reads merged skbuff packet. */
+	control_expectln("REPLY1");
+
+	close(fd);
+}
+
+static void test_stream_virtio_skb_merge_server(const struct test_opts *opts)
+{
+	size_t read = 0, to_read;
+	unsigned char buf[64];
+	int fd;
+
+	fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("SEND0");
+
+	/* Read skbuff partially. */
+	to_read = 2;
+	recv_buf(fd, buf + read, to_read, 0, to_read);
+	read += to_read;
+
+	control_writeln("REPLY0");
+	control_expectln("SEND1");
+
+	/* Read the rest of both buffers */
+	to_read = strlen(HELLO_STR WORLD_STR) - read;
+	recv_buf(fd, buf + read, to_read, 0, to_read);
+	read += to_read;
+
+	/* No more bytes should be there */
+	to_read = sizeof(buf) - read;
+	recv_buf(fd, buf + read, to_read, MSG_DONTWAIT, -EAGAIN);
+
+	if (memcmp(buf, HELLO_STR WORLD_STR, strlen(HELLO_STR WORLD_STR))) {
+		fprintf(stderr, "pattern mismatch\n");
+		exit(EXIT_FAILURE);
+	}
+
+	control_writeln("REPLY1");
+
+	close(fd);
+}
+
+static void test_seqpacket_msg_peek_client(const struct test_opts *opts)
+{
+	return test_msg_peek_client(opts, true);
+}
+
+static void test_seqpacket_msg_peek_server(const struct test_opts *opts)
+{
+	return test_msg_peek_server(opts, true);
+}
+
+static sig_atomic_t have_sigpipe;
+
+static void sigpipe(int signo)
+{
+	have_sigpipe = 1;
+}
+
+static void test_stream_check_sigpipe(int fd)
+{
+	ssize_t res;
+
+	have_sigpipe = 0;
+
+	res = send(fd, "A", 1, 0);
+	if (res != -1) {
+		fprintf(stderr, "expected send(2) failure, got %zi\n", res);
+		exit(EXIT_FAILURE);
+	}
+
+	if (!have_sigpipe) {
+		fprintf(stderr, "SIGPIPE expected\n");
+		exit(EXIT_FAILURE);
+	}
+
+	have_sigpipe = 0;
+
+	res = send(fd, "A", 1, MSG_NOSIGNAL);
+	if (res != -1) {
+		fprintf(stderr, "expected send(2) failure, got %zi\n", res);
+		exit(EXIT_FAILURE);
+	}
+
+	if (have_sigpipe) {
+		fprintf(stderr, "SIGPIPE not expected\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void test_stream_shutwr_client(const struct test_opts *opts)
+{
+	int fd;
+
+	struct sigaction act = {
+		.sa_handler = sigpipe,
+	};
+
+	sigaction(SIGPIPE, &act, NULL);
+
+	fd = vsock_stream_connect(opts->peer_cid, 1234);
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	if (shutdown(fd, SHUT_WR)) {
+		perror("shutdown");
+		exit(EXIT_FAILURE);
+	}
+
+	test_stream_check_sigpipe(fd);
+
+	control_writeln("CLIENTDONE");
+
+	close(fd);
+}
+
+static void test_stream_shutwr_server(const struct test_opts *opts)
+{
+	int fd;
+
+	fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("CLIENTDONE");
+
+	close(fd);
+}
+
+static void test_stream_shutrd_client(const struct test_opts *opts)
+{
+	int fd;
+
+	struct sigaction act = {
+		.sa_handler = sigpipe,
+	};
+
+	sigaction(SIGPIPE, &act, NULL);
+
+	fd = vsock_stream_connect(opts->peer_cid, 1234);
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("SHUTRDDONE");
+
+	test_stream_check_sigpipe(fd);
+
+	control_writeln("CLIENTDONE");
+
+	close(fd);
+}
+
+static void test_stream_shutrd_server(const struct test_opts *opts)
+{
+	int fd;
+
+	fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	if (shutdown(fd, SHUT_RD)) {
+		perror("shutdown");
+		exit(EXIT_FAILURE);
+	}
+
+	control_writeln("SHUTRDDONE");
+	control_expectln("CLIENTDONE");
+
+	close(fd);
+}
+
+static void test_double_bind_connect_server(const struct test_opts *opts)
+{
+	int listen_fd, client_fd, i;
+	struct sockaddr_vm sa_client;
+	socklen_t socklen_client = sizeof(sa_client);
+
+	listen_fd = vsock_stream_listen(VMADDR_CID_ANY, 1234);
+
+	for (i = 0; i < 2; i++) {
+		control_writeln("LISTENING");
+
+		timeout_begin(TIMEOUT);
+		do {
+			client_fd = accept(listen_fd, (struct sockaddr *)&sa_client,
+					   &socklen_client);
+			timeout_check("accept");
+		} while (client_fd < 0 && errno == EINTR);
+		timeout_end();
+
+		if (client_fd < 0) {
+			perror("accept");
+			exit(EXIT_FAILURE);
+		}
+
+		/* Waiting for remote peer to close connection */
+		vsock_wait_remote_close(client_fd);
+	}
+
+	close(listen_fd);
+}
+
+static void test_double_bind_connect_client(const struct test_opts *opts)
+{
+	int i, client_fd;
+
+	for (i = 0; i < 2; i++) {
+		/* Wait until server is ready to accept a new connection */
+		control_expectln("LISTENING");
+
+		client_fd = vsock_bind_connect(opts->peer_cid, 1234, 4321, SOCK_STREAM);
+
+		close(client_fd);
+	}
 }
 
 static struct test_case test_cases[] = {
@@ -753,6 +1286,61 @@ static struct test_case test_cases[] = {
 		.name = "SOCK_STREAM poll() + SO_RCVLOWAT",
 		.run_client = test_stream_poll_rcvlowat_client,
 		.run_server = test_stream_poll_rcvlowat_server,
+	},
+	{
+		.name = "SOCK_SEQPACKET big message",
+		.run_client = test_seqpacket_bigmsg_client,
+		.run_server = test_seqpacket_bigmsg_server,
+	},
+	{
+		.name = "SOCK_STREAM test invalid buffer",
+		.run_client = test_stream_inv_buf_client,
+		.run_server = test_stream_inv_buf_server,
+	},
+	{
+		.name = "SOCK_SEQPACKET test invalid buffer",
+		.run_client = test_seqpacket_inv_buf_client,
+		.run_server = test_seqpacket_inv_buf_server,
+	},
+	{
+		.name = "SOCK_STREAM virtio skb merge",
+		.run_client = test_stream_virtio_skb_merge_client,
+		.run_server = test_stream_virtio_skb_merge_server,
+	},
+	{
+		.name = "SOCK_SEQPACKET MSG_PEEK",
+		.run_client = test_seqpacket_msg_peek_client,
+		.run_server = test_seqpacket_msg_peek_server,
+	},
+	{
+		.name = "SOCK_STREAM SHUT_WR",
+		.run_client = test_stream_shutwr_client,
+		.run_server = test_stream_shutwr_server,
+	},
+	{
+		.name = "SOCK_STREAM SHUT_RD",
+		.run_client = test_stream_shutrd_client,
+		.run_server = test_stream_shutrd_server,
+	},
+	{
+		.name = "SOCK_STREAM MSG_ZEROCOPY",
+		.run_client = test_stream_msgzcopy_client,
+		.run_server = test_stream_msgzcopy_server,
+	},
+	{
+		.name = "SOCK_SEQPACKET MSG_ZEROCOPY",
+		.run_client = test_seqpacket_msgzcopy_client,
+		.run_server = test_seqpacket_msgzcopy_server,
+	},
+	{
+		.name = "SOCK_STREAM MSG_ZEROCOPY empty MSG_ERRQUEUE",
+		.run_client = test_stream_msgzcopy_empty_errq_client,
+		.run_server = test_stream_msgzcopy_empty_errq_server,
+	},
+	{
+		.name = "SOCK_STREAM double bind connect",
+		.run_client = test_double_bind_connect_client,
+		.run_server = test_double_bind_connect_server,
 	},
 	{},
 };
@@ -837,6 +1425,7 @@ int main(int argc, char **argv)
 		.peer_cid = VMADDR_CID_ANY,
 	};
 
+	srand(time(NULL));
 	init_signals();
 
 	for (;;) {

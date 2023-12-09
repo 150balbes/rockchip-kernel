@@ -68,7 +68,7 @@ enum policy_rule_list { IMA_DEFAULT_POLICY = 1, IMA_CUSTOM_POLICY };
 
 struct ima_rule_opt_list {
 	size_t count;
-	char *items[];
+	char *items[] __counted_by(count);
 };
 
 /*
@@ -342,6 +342,7 @@ static struct ima_rule_opt_list *ima_alloc_rule_opt_list(const substring_t *src)
 		kfree(src_copy);
 		return ERR_PTR(-ENOMEM);
 	}
+	opt_list->count = count;
 
 	/*
 	 * strsep() has already replaced all instances of '|' with '\0',
@@ -357,7 +358,6 @@ static struct ima_rule_opt_list *ima_alloc_rule_opt_list(const substring_t *src)
 		opt_list->items[i] = cur;
 		cur = strchr(cur, '\0') + 1;
 	}
-	opt_list->count = count;
 
 	return opt_list;
 }
@@ -552,7 +552,7 @@ static bool ima_match_rule_data(struct ima_rule_entry *rule,
 /**
  * ima_match_rules - determine whether an inode matches the policy rule.
  * @rule: a pointer to a rule
- * @mnt_userns:	user namespace of the mount the inode was found from
+ * @idmap: idmap of the mount the inode was found from
  * @inode: a pointer to an inode
  * @cred: a pointer to a credentials structure for user validation
  * @secid: the secid of the task to be validated
@@ -563,7 +563,7 @@ static bool ima_match_rule_data(struct ima_rule_entry *rule,
  * Returns true on rule match, false on failure.
  */
 static bool ima_match_rules(struct ima_rule_entry *rule,
-			    struct user_namespace *mnt_userns,
+			    struct mnt_idmap *idmap,
 			    struct inode *inode, const struct cred *cred,
 			    u32 secid, enum ima_hooks func, int mask,
 			    const char *func_data)
@@ -624,11 +624,11 @@ static bool ima_match_rules(struct ima_rule_entry *rule,
 			return false;
 	}
 	if ((rule->flags & IMA_FOWNER) &&
-	    !rule->fowner_op(i_uid_into_vfsuid(mnt_userns, inode),
+	    !rule->fowner_op(i_uid_into_vfsuid(idmap, inode),
 			     rule->fowner))
 		return false;
 	if ((rule->flags & IMA_FGROUP) &&
-	    !rule->fgroup_op(i_gid_into_vfsgid(mnt_userns, inode),
+	    !rule->fgroup_op(i_gid_into_vfsgid(idmap, inode),
 			     rule->fgroup))
 		return false;
 	for (i = 0; i < MAX_LSM_RULES; i++) {
@@ -697,6 +697,7 @@ static int get_subaction(struct ima_rule_entry *rule, enum ima_hooks func)
 
 	switch (func) {
 	case MMAP_CHECK:
+	case MMAP_CHECK_REQPROT:
 		return IMA_MMAP_APPRAISE;
 	case BPRM_CHECK:
 		return IMA_BPRM_APPRAISE;
@@ -713,13 +714,14 @@ static int get_subaction(struct ima_rule_entry *rule, enum ima_hooks func)
 
 /**
  * ima_match_policy - decision based on LSM and other conditions
- * @mnt_userns:	user namespace of the mount the inode was found from
+ * @idmap: idmap of the mount the inode was found from
  * @inode: pointer to an inode for which the policy decision is being made
  * @cred: pointer to a credentials structure for which the policy decision is
  *        being made
  * @secid: LSM secid of the task to be validated
  * @func: IMA hook identifier
  * @mask: requested action (MAY_READ | MAY_WRITE | MAY_APPEND | MAY_EXEC)
+ * @flags: IMA actions to consider (e.g. IMA_MEASURE | IMA_APPRAISE)
  * @pcr: set the pcr to extend
  * @template_desc: the template that should be used for this rule
  * @func_data: func specific data, may be NULL
@@ -732,7 +734,7 @@ static int get_subaction(struct ima_rule_entry *rule, enum ima_hooks func)
  * list when walking it.  Reads are many orders of magnitude more numerous
  * than writes so ima_match_policy() is classical RCU candidate.
  */
-int ima_match_policy(struct user_namespace *mnt_userns, struct inode *inode,
+int ima_match_policy(struct mnt_idmap *idmap, struct inode *inode,
 		     const struct cred *cred, u32 secid, enum ima_hooks func,
 		     int mask, int flags, int *pcr,
 		     struct ima_template_desc **template_desc,
@@ -752,7 +754,7 @@ int ima_match_policy(struct user_namespace *mnt_userns, struct inode *inode,
 		if (!(entry->action & actmask))
 			continue;
 
-		if (!ima_match_rules(entry, mnt_userns, inode, cred, secid,
+		if (!ima_match_rules(entry, idmap, inode, cred, secid,
 				     func, mask, func_data))
 			continue;
 
@@ -1266,6 +1268,7 @@ static bool ima_validate_rule(struct ima_rule_entry *entry)
 	case NONE:
 	case FILE_CHECK:
 	case MMAP_CHECK:
+	case MMAP_CHECK_REQPROT:
 	case BPRM_CHECK:
 	case CREDS_CHECK:
 	case POST_SETATTR:
@@ -1277,7 +1280,7 @@ static bool ima_validate_rule(struct ima_rule_entry *entry)
 				     IMA_FSNAME | IMA_GID | IMA_EGID |
 				     IMA_FGROUP | IMA_DIGSIG_REQUIRED |
 				     IMA_PERMIT_DIRECTIO | IMA_VALIDATE_ALGOS |
-				     IMA_VERITY_REQUIRED))
+				     IMA_CHECK_BLACKLIST | IMA_VERITY_REQUIRED))
 			return false;
 
 		break;
@@ -1352,7 +1355,7 @@ static bool ima_validate_rule(struct ima_rule_entry *entry)
 
 	/* Ensure that combinations of flags are compatible with each other */
 	if (entry->flags & IMA_CHECK_BLACKLIST &&
-	    !(entry->flags & IMA_MODSIG_ALLOWED))
+	    !(entry->flags & IMA_DIGSIG_REQUIRED))
 		return false;
 
 	/*
@@ -1504,6 +1507,8 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 			else if ((strcmp(args[0].from, "FILE_MMAP") == 0)
 				|| (strcmp(args[0].from, "MMAP_CHECK") == 0))
 				entry->func = MMAP_CHECK;
+			else if ((strcmp(args[0].from, "MMAP_CHECK_REQPROT") == 0))
+				entry->func = MMAP_CHECK_REQPROT;
 			else if (strcmp(args[0].from, "BPRM_CHECK") == 0)
 				entry->func = BPRM_CHECK;
 			else if (strcmp(args[0].from, "CREDS_CHECK") == 0)
@@ -1798,11 +1803,11 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 				if (entry->flags & IMA_VERITY_REQUIRED)
 					result = -EINVAL;
 				else
-					entry->flags |= IMA_DIGSIG_REQUIRED;
+					entry->flags |= IMA_DIGSIG_REQUIRED | IMA_CHECK_BLACKLIST;
 			} else if (strcmp(args[0].from, "sigv3") == 0) {
 				/* Only fsverity supports sigv3 for now */
 				if (entry->flags & IMA_VERITY_REQUIRED)
-					entry->flags |= IMA_DIGSIG_REQUIRED;
+					entry->flags |= IMA_DIGSIG_REQUIRED | IMA_CHECK_BLACKLIST;
 				else
 					result = -EINVAL;
 			} else if (IS_ENABLED(CONFIG_IMA_APPRAISE_MODSIG) &&
@@ -1811,18 +1816,13 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 					result = -EINVAL;
 				else
 					entry->flags |= IMA_DIGSIG_REQUIRED |
-						IMA_MODSIG_ALLOWED;
+						IMA_MODSIG_ALLOWED | IMA_CHECK_BLACKLIST;
 			} else {
 				result = -EINVAL;
 			}
 			break;
 		case Opt_appraise_flag:
 			ima_log_string(ab, "appraise_flag", args[0].from);
-			if (IS_ENABLED(CONFIG_IMA_APPRAISE_MODSIG) &&
-			    strstr(args[0].from, "blacklist"))
-				entry->flags |= IMA_CHECK_BLACKLIST;
-			else
-				result = -EINVAL;
 			break;
 		case Opt_appraise_algos:
 			ima_log_string(ab, "appraise_algos", args[0].from);
@@ -1911,7 +1911,7 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 
 /**
  * ima_parse_add_rule - add a rule to ima_policy_rules
- * @rule - ima measurement policy rule
+ * @rule: ima measurement policy rule
  *
  * Avoid locking by allowing just one writer at a time in ima_write_policy()
  * Returns the length of the rule parsed, an error code on failure
@@ -1955,7 +1955,8 @@ ssize_t ima_parse_add_rule(char *rule)
 }
 
 /**
- * ima_delete_rules() called to cleanup invalid in-flight policy.
+ * ima_delete_rules() - called to cleanup invalid in-flight policy.
+ *
  * We don't need locking as we operate on the temp list, which is
  * different from the active one.  There is also only one user of
  * ima_delete_rules() at a time.
@@ -2265,8 +2266,6 @@ int ima_policy_show(struct seq_file *m, void *v)
 	}
 	if (entry->flags & IMA_VERITY_REQUIRED)
 		seq_puts(m, "digest_type=verity ");
-	if (entry->flags & IMA_CHECK_BLACKLIST)
-		seq_puts(m, "appraise_flag=check_blacklist ");
 	if (entry->flags & IMA_PERMIT_DIRECTIO)
 		seq_puts(m, "permit_directio ");
 	rcu_read_unlock();

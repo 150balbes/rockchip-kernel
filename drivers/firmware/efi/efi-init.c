@@ -55,6 +55,15 @@ static phys_addr_t __init efi_to_phys(unsigned long addr)
 
 extern __weak const efi_config_table_type_t efi_arch_tables[];
 
+/*
+ * x86 defines its own screen_info and uses it even without EFI,
+ * everything else can get it from here.
+ */
+#if !defined(CONFIG_X86) && (defined(CONFIG_SYSFB) || defined(CONFIG_EFI_EARLYCON))
+struct screen_info screen_info __section(".data");
+EXPORT_SYMBOL_GPL(screen_info);
+#endif
+
 static void __init init_screen_info(void)
 {
 	struct screen_info *si;
@@ -72,6 +81,9 @@ static void __init init_screen_info(void)
 		if (memblock_is_map_memory(screen_info.lfb_base))
 			memblock_mark_nomap(screen_info.lfb_base,
 					    screen_info.lfb_size);
+
+		if (IS_ENABLED(CONFIG_EFI_EARLYCON))
+			efi_earlycon_reprobe();
 	}
 }
 
@@ -92,7 +104,7 @@ static int __init uefi_init(u64 efi_system_table)
 	if (IS_ENABLED(CONFIG_64BIT))
 		set_bit(EFI_64BIT, &efi.flags);
 
-	retval = efi_systab_check_header(&systab->hdr, 2);
+	retval = efi_systab_check_header(&systab->hdr);
 	if (retval)
 		goto out;
 
@@ -237,5 +249,8 @@ void __init efi_init(void)
 	memblock_reserve(data.phys_map & PAGE_MASK,
 			 PAGE_ALIGN(data.size + (data.phys_map & ~PAGE_MASK)));
 
-	init_screen_info();
+	if (IS_ENABLED(CONFIG_X86) ||
+	    IS_ENABLED(CONFIG_SYSFB) ||
+	    IS_ENABLED(CONFIG_EFI_EARLYCON))
+		init_screen_info();
 }

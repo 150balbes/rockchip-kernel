@@ -58,7 +58,6 @@
 #define DRV_NAME		EVENT_DEV_NAME
 #define EVENT_DEV_NAME_FMT	(EVENT_DEV_NAME "%d")
 static struct class event_class = {
-	.owner	= THIS_MODULE,
 	.name	= EVENT_CLASS_NAME,
 };
 
@@ -96,7 +95,7 @@ struct ec_event_queue {
 	int capacity;
 	int head;
 	int tail;
-	struct ec_event *entries[];
+	struct ec_event *entries[] __counted_by(capacity);
 };
 
 /* Maximum number of events to store in ec_event_queue */
