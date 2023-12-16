@@ -6,8 +6,7 @@
 
 set -e
 
-# shellcheck source=lib/stat_output.sh
-. "$(dirname $0)"/lib/stat_output.sh
+. $(dirname $0)/lib/stat_output.sh
 
 stat_output=$(mktemp /tmp/__perf_test.stat_output.std.XXXXX)
 
@@ -29,6 +28,7 @@ trap trap_cleanup EXIT TERM INT
 
 function commachecker()
 {
+	local -i cnt=0
 	local prefix=1
 
 	case "$1"

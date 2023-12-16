@@ -54,6 +54,7 @@ struct xen_9pfs_front_priv {
 	char *tag;
 	struct p9_client *client;
 
+	int num_rings;
 	struct xen_9pfs_dataring *rings;
 };
 
@@ -130,7 +131,7 @@ static int p9_xen_request(struct p9_client *client, struct p9_req_t *p9_req)
 	if (list_entry_is_head(priv, &xen_9pfs_devs, list))
 		return -EINVAL;
 
-	num = p9_req->tc.tag % XEN_9PFS_NUM_RINGS;
+	num = p9_req->tc.tag % priv->num_rings;
 	ring = &priv->rings[num];
 
 again:
@@ -278,7 +279,7 @@ static void xen_9pfs_front_free(struct xen_9pfs_front_priv *priv)
 	list_del(&priv->list);
 	write_unlock(&xen_9pfs_lock);
 
-	for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
+	for (i = 0; i < priv->num_rings; i++) {
 		struct xen_9pfs_dataring *ring = &priv->rings[i];
 
 		cancel_work_sync(&ring->work);
@@ -407,14 +408,15 @@ static int xen_9pfs_front_init(struct xenbus_device *dev)
 	if (p9_xen_trans.maxsize > XEN_FLEX_RING_SIZE(max_ring_order))
 		p9_xen_trans.maxsize = XEN_FLEX_RING_SIZE(max_ring_order) / 2;
 
-	priv->rings = kcalloc(XEN_9PFS_NUM_RINGS, sizeof(*priv->rings),
+	priv->num_rings = XEN_9PFS_NUM_RINGS;
+	priv->rings = kcalloc(priv->num_rings, sizeof(*priv->rings),
 			      GFP_KERNEL);
 	if (!priv->rings) {
 		kfree(priv);
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
+	for (i = 0; i < priv->num_rings; i++) {
 		priv->rings[i].priv = priv;
 		ret = xen_9pfs_front_alloc_dataring(dev, &priv->rings[i],
 						    max_ring_order);
@@ -432,11 +434,10 @@ static int xen_9pfs_front_init(struct xenbus_device *dev)
 	if (ret)
 		goto error_xenbus;
 	ret = xenbus_printf(xbt, dev->nodename, "num-rings", "%u",
-			    XEN_9PFS_NUM_RINGS);
+			    priv->num_rings);
 	if (ret)
 		goto error_xenbus;
-
-	for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
+	for (i = 0; i < priv->num_rings; i++) {
 		char str[16];
 
 		BUILD_BUG_ON(XEN_9PFS_NUM_RINGS > 9);

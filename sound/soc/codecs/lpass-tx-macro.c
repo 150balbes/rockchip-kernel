@@ -1967,25 +1967,25 @@ static int tx_macro_probe(struct platform_device *pdev)
 
 	tx->macro = devm_clk_get_optional(dev, "macro");
 	if (IS_ERR(tx->macro))
-		return dev_err_probe(dev, PTR_ERR(tx->macro), "unable to get macro clock\n");
+		return PTR_ERR(tx->macro);
 
 	tx->dcodec = devm_clk_get_optional(dev, "dcodec");
 	if (IS_ERR(tx->dcodec))
-		return dev_err_probe(dev, PTR_ERR(tx->dcodec), "unable to get dcodec clock\n");
+		return PTR_ERR(tx->dcodec);
 
 	tx->mclk = devm_clk_get(dev, "mclk");
 	if (IS_ERR(tx->mclk))
-		return dev_err_probe(dev, PTR_ERR(tx->mclk), "unable to get mclk clock\n");
+		return PTR_ERR(tx->mclk);
 
 	if (flags & LPASS_MACRO_FLAG_HAS_NPL_CLOCK) {
 		tx->npl = devm_clk_get(dev, "npl");
 		if (IS_ERR(tx->npl))
-			return dev_err_probe(dev, PTR_ERR(tx->npl), "unable to get npl clock\n");
+			return PTR_ERR(tx->npl);
 	}
 
 	tx->fsgen = devm_clk_get(dev, "fsgen");
 	if (IS_ERR(tx->fsgen))
-		return dev_err_probe(dev, PTR_ERR(tx->fsgen), "unable to get fsgen clock\n");
+		return PTR_ERR(tx->fsgen);
 
 	tx->pds = lpass_macro_pds_init(dev);
 	if (IS_ERR(tx->pds))
@@ -2045,19 +2045,15 @@ static int tx_macro_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_fsgen;
 
-
 	/* reset soundwire block */
-	if (flags & LPASS_MACRO_FLAG_RESET_SWR)
-		regmap_update_bits(tx->regmap, CDC_TX_CLK_RST_CTRL_SWR_CONTROL,
-				   CDC_TX_SWR_RESET_MASK, CDC_TX_SWR_RESET_ENABLE);
+	regmap_update_bits(tx->regmap, CDC_TX_CLK_RST_CTRL_SWR_CONTROL,
+			   CDC_TX_SWR_RESET_MASK, CDC_TX_SWR_RESET_ENABLE);
 
 	regmap_update_bits(tx->regmap, CDC_TX_CLK_RST_CTRL_SWR_CONTROL,
 			   CDC_TX_SWR_CLK_EN_MASK,
 			   CDC_TX_SWR_CLK_ENABLE);
-
-	if (flags & LPASS_MACRO_FLAG_RESET_SWR)
-		regmap_update_bits(tx->regmap, CDC_TX_CLK_RST_CTRL_SWR_CONTROL,
-				   CDC_TX_SWR_RESET_MASK, 0x0);
+	regmap_update_bits(tx->regmap, CDC_TX_CLK_RST_CTRL_SWR_CONTROL,
+			   CDC_TX_SWR_RESET_MASK, 0x0);
 
 	ret = devm_snd_soc_register_component(dev, &tx_macro_component_drv,
 					      tx_macro_dai,
@@ -2162,22 +2158,18 @@ static const struct dev_pm_ops tx_macro_pm_ops = {
 static const struct of_device_id tx_macro_dt_match[] = {
 	{
 		.compatible = "qcom,sc7280-lpass-tx-macro",
-		.data = (void *)(LPASS_MACRO_FLAG_HAS_NPL_CLOCK | LPASS_MACRO_FLAG_RESET_SWR),
-	}, {
-		.compatible = "qcom,sm6115-lpass-tx-macro",
 		.data = (void *)LPASS_MACRO_FLAG_HAS_NPL_CLOCK,
 	}, {
 		.compatible = "qcom,sm8250-lpass-tx-macro",
-		.data = (void *)(LPASS_MACRO_FLAG_HAS_NPL_CLOCK | LPASS_MACRO_FLAG_RESET_SWR),
+		.data = (void *)LPASS_MACRO_FLAG_HAS_NPL_CLOCK,
 	}, {
 		.compatible = "qcom,sm8450-lpass-tx-macro",
-		.data = (void *)(LPASS_MACRO_FLAG_HAS_NPL_CLOCK | LPASS_MACRO_FLAG_RESET_SWR),
+		.data = (void *)LPASS_MACRO_FLAG_HAS_NPL_CLOCK,
 	}, {
 		.compatible = "qcom,sm8550-lpass-tx-macro",
-		.data = (void *)LPASS_MACRO_FLAG_RESET_SWR,
 	}, {
 		.compatible = "qcom,sc8280xp-lpass-tx-macro",
-		.data = (void *)(LPASS_MACRO_FLAG_HAS_NPL_CLOCK | LPASS_MACRO_FLAG_RESET_SWR),
+		.data = (void *)LPASS_MACRO_FLAG_HAS_NPL_CLOCK,
 	},
 	{ }
 };

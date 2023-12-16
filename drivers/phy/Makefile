@@ -31,7 +31,6 @@ obj-y					+= allwinner/	\
 					   samsung/	\
 					   socionext/	\
 					   st/		\
-					   starfive/	\
 					   sunplus/	\
 					   tegra/	\
 					   ti/		\

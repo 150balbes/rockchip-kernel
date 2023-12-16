@@ -224,7 +224,7 @@ static int iptunnel_pmtud_build_icmp(struct sk_buff *skb, int mtu)
 		.un.frag.__unused	= 0,
 		.un.frag.mtu		= htons(mtu),
 	};
-	icmph->checksum = csum_fold(skb_checksum(skb, 0, len, 0));
+	icmph->checksum = ip_compute_csum(icmph, len);
 	skb_reset_transport_header(skb);
 
 	niph = skb_push(skb, sizeof(*niph));

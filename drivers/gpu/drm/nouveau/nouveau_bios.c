@@ -27,8 +27,6 @@
 #include "dispnv04/hw.h"
 #include "nouveau_encoder.h"
 
-#include <subdev/gsp.h>
-
 #include <linux/io-mapping.h>
 #include <linux/firmware.h>
 
@@ -2089,8 +2087,7 @@ nouveau_bios_init(struct drm_device *dev)
 	int ret;
 
 	/* only relevant for PCI devices */
-	if (!dev_is_pci(dev->dev) ||
-	    nvkm_gsp_rm(nvxx_device(&drm->client.device)->gsp))
+	if (!dev_is_pci(dev->dev))
 		return 0;
 
 	if (!NVInitVBIOS(dev))

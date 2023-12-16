@@ -6,7 +6,6 @@
 #include <linux/elf.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/moduleloader.h>
 #include <linux/ftrace.h>
 
 Elf_Addr module_emit_got_entry(struct module *mod, Elf_Shdr *sechdrs, Elf_Addr val)

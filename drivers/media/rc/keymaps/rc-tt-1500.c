@@ -76,4 +76,3 @@ module_exit(exit_rc_map_tt_1500)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("Technotrend 1500 remote controller keytable");

@@ -5,7 +5,7 @@
  * Copied from cfg.c - originally
  * Copyright 2006-2010	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2014	Intel Corporation (Author: Johannes Berg)
- * Copyright (C) 2018, 2022-2023 Intel Corporation
+ * Copyright (C) 2018, 2022 Intel Corporation
  */
 #include <linux/types.h>
 #include <net/cfg80211.h>
@@ -19,16 +19,11 @@ static int ieee80211_set_ringparam(struct net_device *dev,
 				   struct netlink_ext_ack *extack)
 {
 	struct ieee80211_local *local = wiphy_priv(dev->ieee80211_ptr->wiphy);
-	int ret;
 
 	if (rp->rx_mini_pending != 0 || rp->rx_jumbo_pending != 0)
 		return -EINVAL;
 
-	wiphy_lock(local->hw.wiphy);
-	ret = drv_set_ringparam(local, rp->tx_pending, rp->rx_pending);
-	wiphy_unlock(local->hw.wiphy);
-
-	return ret;
+	return drv_set_ringparam(local, rp->tx_pending, rp->rx_pending);
 }
 
 static void ieee80211_get_ringparam(struct net_device *dev,
@@ -40,10 +35,8 @@ static void ieee80211_get_ringparam(struct net_device *dev,
 
 	memset(rp, 0, sizeof(*rp));
 
-	wiphy_lock(local->hw.wiphy);
 	drv_get_ringparam(local, &rp->tx_pending, &rp->tx_max_pending,
 			  &rp->rx_pending, &rp->rx_max_pending);
-	wiphy_unlock(local->hw.wiphy);
 }
 
 static const char ieee80211_gstrings_sta_stats[][ETH_GSTRING_LEN] = {
@@ -109,7 +102,7 @@ static void ieee80211_get_stats(struct net_device *dev,
 	 * network device.
 	 */
 
-	wiphy_lock(local->hw.wiphy);
+	mutex_lock(&local->sta_mtx);
 
 	if (sdata->vif.type == NL80211_IFTYPE_STATION) {
 		sta = sta_info_get_bss(sdata, sdata->deflink.u.mgd.bssid);
@@ -205,13 +198,12 @@ do_survey:
 	else
 		data[i++] = -1LL;
 
-	if (WARN_ON(i != STA_STATS_LEN)) {
-		wiphy_unlock(local->hw.wiphy);
+	mutex_unlock(&local->sta_mtx);
+
+	if (WARN_ON(i != STA_STATS_LEN))
 		return;
-	}
 
 	drv_get_et_stats(sdata, stats, &(data[STA_STATS_LEN]));
-	wiphy_unlock(local->hw.wiphy);
 }
 
 static void ieee80211_get_strings(struct net_device *dev, u32 sset, u8 *data)

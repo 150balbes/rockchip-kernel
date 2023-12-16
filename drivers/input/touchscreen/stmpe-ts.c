@@ -350,11 +350,13 @@ static int stmpe_input_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void stmpe_ts_remove(struct platform_device *pdev)
+static int stmpe_ts_remove(struct platform_device *pdev)
 {
 	struct stmpe_touch *ts = platform_get_drvdata(pdev);
 
 	stmpe_disable(ts->stmpe, STMPE_BLOCK_TOUCHSCREEN);
+
+	return 0;
 }
 
 static struct platform_driver stmpe_ts_driver = {
@@ -362,7 +364,7 @@ static struct platform_driver stmpe_ts_driver = {
 		.name = STMPE_TS_NAME,
 	},
 	.probe = stmpe_input_probe,
-	.remove_new = stmpe_ts_remove,
+	.remove = stmpe_ts_remove,
 };
 module_platform_driver(stmpe_ts_driver);
 

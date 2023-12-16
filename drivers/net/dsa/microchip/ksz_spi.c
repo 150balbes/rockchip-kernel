@@ -114,7 +114,10 @@ static void ksz_spi_shutdown(struct spi_device *spi)
 	if (!dev)
 		return;
 
-	ksz_switch_shutdown(dev);
+	if (dev->dev_ops->reset)
+		dev->dev_ops->reset(dev);
+
+	dsa_switch_shutdown(dev->ds);
 
 	spi_set_drvdata(spi, NULL);
 }

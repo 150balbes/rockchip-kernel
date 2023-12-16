@@ -1,7 +1,6 @@
 #
 # Feature name:          ELF-ASLR
 #         Kconfig:       ARCH_HAS_ELF_RANDOMIZE
-#         Kconfig:       ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT
 #         description:   arch randomizes the stack, heap and binary images of ELF binaries
 #
     -----------------------
@@ -11,9 +10,10 @@
     |         arc: | TODO |
     |         arm: |  ok  |
     |       arm64: |  ok  |
-    |        csky: |  ok  |
+    |        csky: | TODO |
     |     hexagon: | TODO |
-    |   loongarch: |  ok  |
+    |        ia64: | TODO |
+    |   loongarch: | TODO |
     |        m68k: | TODO |
     |  microblaze: | TODO |
     |        mips: |  ok  |

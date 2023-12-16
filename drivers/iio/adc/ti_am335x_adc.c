@@ -14,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/iio/iio.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/iio/machine.h>
 #include <linux/iio/driver.h>
 #include <linux/iopoll.h>
@@ -681,7 +682,7 @@ err_dma:
 	return err;
 }
 
-static void tiadc_remove(struct platform_device *pdev)
+static int tiadc_remove(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct tiadc_device *adc_dev = iio_priv(indio_dev);
@@ -697,6 +698,8 @@ static void tiadc_remove(struct platform_device *pdev)
 
 	step_en = get_adc_step_mask(adc_dev);
 	am335x_tsc_se_clr(adc_dev->mfd_tscadc, step_en);
+
+	return 0;
 }
 
 static int tiadc_suspend(struct device *dev)
@@ -745,7 +748,7 @@ static struct platform_driver tiadc_driver = {
 		.of_match_table = ti_adc_dt_ids,
 	},
 	.probe	= tiadc_probe,
-	.remove_new = tiadc_remove,
+	.remove	= tiadc_remove,
 };
 module_platform_driver(tiadc_driver);
 

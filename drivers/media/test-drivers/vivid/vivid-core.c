@@ -240,7 +240,7 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	strscpy(cap->driver, "vivid", sizeof(cap->driver));
 	strscpy(cap->card, "vivid", sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info),
-		 "platform:%s-%03d", VIVID_MODULE_NAME, dev->inst);
+			"platform:%s", dev->v4l2_dev.name);
 
 	cap->capabilities = dev->vid_cap_caps | dev->vid_out_caps |
 		dev->vbi_cap_caps | dev->vbi_out_caps |
@@ -628,6 +628,7 @@ static int vivid_fop_release(struct file *file)
 		v4l2_info(&dev->v4l2_dev, "reconnect\n");
 		vivid_reconnect(dev);
 	}
+	mutex_unlock(&dev->mutex);
 	if (file->private_data == dev->radio_rx_rds_owner) {
 		dev->radio_rx_rds_last_block = 0;
 		dev->radio_rx_rds_owner = NULL;
@@ -636,7 +637,6 @@ static int vivid_fop_release(struct file *file)
 		dev->radio_tx_rds_last_block = 0;
 		dev->radio_tx_rds_owner = NULL;
 	}
-	mutex_unlock(&dev->mutex);
 	if (vdev->queue)
 		return vb2_fop_release(file);
 	return v4l2_fh_release(file);

@@ -87,7 +87,7 @@ struct afs_addr_list {
 	enum dns_lookup_status	status:8;
 	unsigned long		failed;		/* Mask of addrs that failed locally/ICMP */
 	unsigned long		responded;	/* Mask of addrs that responded */
-	struct sockaddr_rxrpc	addrs[] __counted_by(max_addrs);
+	struct sockaddr_rxrpc	addrs[];
 #define AFS_MAX_ADDRESSES ((unsigned int)(sizeof(unsigned long) * 8))
 };
 
@@ -553,7 +553,6 @@ struct afs_server_entry {
 };
 
 struct afs_server_list {
-	struct rcu_head		rcu;
 	afs_volid_t		vids[AFS_MAXTYPES]; /* Volume IDs */
 	refcount_t		usage;
 	unsigned char		nr_servers;
@@ -682,8 +681,6 @@ static inline void afs_vnode_set_cache(struct afs_vnode *vnode,
 {
 #ifdef CONFIG_AFS_FSCACHE
 	vnode->netfs.cache = cookie;
-	if (cookie)
-		mapping_set_release_always(vnode->netfs.inode.i_mapping);
 #endif
 }
 
@@ -706,7 +703,7 @@ struct afs_permits {
 	refcount_t		usage;
 	unsigned short		nr_permits;	/* Number of records */
 	bool			invalidated;	/* Invalidated due to key change */
-	struct afs_permit	permits[] __counted_by(nr_permits);	/* List of permits sorted by key pointer */
+	struct afs_permit	permits[];	/* List of permits sorted by key pointer */
 };
 
 /*
@@ -1542,7 +1539,7 @@ int afs_launder_folio(struct folio *);
 /*
  * xattr.c
  */
-extern const struct xattr_handler * const afs_xattr_handlers[];
+extern const struct xattr_handler *afs_xattr_handlers[];
 
 /*
  * yfsclient.c

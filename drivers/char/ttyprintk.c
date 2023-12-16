@@ -51,7 +51,7 @@ static void tpk_flush(void)
 	}
 }
 
-static int tpk_printk(const u8 *buf, int count)
+static int tpk_printk(const unsigned char *buf, int count)
 {
 	int i;
 
@@ -103,7 +103,8 @@ static void tpk_close(struct tty_struct *tty, struct file *filp)
 /*
  * TTY operations write function.
  */
-static ssize_t tpk_write(struct tty_struct *tty, const u8 *buf, size_t count)
+static int tpk_write(struct tty_struct *tty,
+		const unsigned char *buf, int count)
 {
 	struct ttyprintk_port *tpkp = tty->driver_data;
 	unsigned long flags;

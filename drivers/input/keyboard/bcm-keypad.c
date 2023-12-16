@@ -307,6 +307,7 @@ static int bcm_kp_probe(struct platform_device *pdev)
 {
 	struct bcm_kp *kp;
 	struct input_dev *input_dev;
+	struct resource *res;
 	int error;
 
 	kp = devm_kzalloc(&pdev->dev, sizeof(*kp), GFP_KERNEL);
@@ -352,16 +353,29 @@ static int bcm_kp_probe(struct platform_device *pdev)
 		return error;
 	}
 
-	kp->base = devm_platform_ioremap_resource(pdev, 0);
+	/* Get the KEYPAD base address */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(&pdev->dev, "Missing keypad base address resource\n");
+		return -ENODEV;
+	}
+
+	kp->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(kp->base))
 		return PTR_ERR(kp->base);
 
 	/* Enable clock */
-	kp->clk = devm_clk_get_optional(&pdev->dev, "peri_clk");
+	kp->clk = devm_clk_get(&pdev->dev, "peri_clk");
 	if (IS_ERR(kp->clk)) {
-		return dev_err_probe(&pdev->dev, PTR_ERR(kp->clk), "Failed to get clock\n");
-	} else if (!kp->clk) {
-		dev_dbg(&pdev->dev, "No clock specified. Assuming it's enabled\n");
+		error = PTR_ERR(kp->clk);
+		if (error != -ENOENT) {
+			if (error != -EPROBE_DEFER)
+				dev_err(&pdev->dev, "Failed to get clock\n");
+			return error;
+		}
+		dev_dbg(&pdev->dev,
+			"No clock specified. Assuming it's enabled\n");
+		kp->clk = NULL;
 	} else {
 		unsigned int desired_rate;
 		long actual_rate;

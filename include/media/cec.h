@@ -113,25 +113,22 @@ struct cec_fh {
 #define CEC_FREE_TIME_TO_USEC(ft)		((ft) * 2400)
 
 struct cec_adap_ops {
-	/* Low-level callbacks, called with adap->lock held */
+	/* Low-level callbacks */
 	int (*adap_enable)(struct cec_adapter *adap, bool enable);
 	int (*adap_monitor_all_enable)(struct cec_adapter *adap, bool enable);
 	int (*adap_monitor_pin_enable)(struct cec_adapter *adap, bool enable);
 	int (*adap_log_addr)(struct cec_adapter *adap, u8 logical_addr);
-	void (*adap_unconfigured)(struct cec_adapter *adap);
+	void (*adap_configured)(struct cec_adapter *adap, bool configured);
 	int (*adap_transmit)(struct cec_adapter *adap, u8 attempts,
 			     u32 signal_free_time, struct cec_msg *msg);
-	void (*adap_nb_transmit_canceled)(struct cec_adapter *adap,
-					  const struct cec_msg *msg);
 	void (*adap_status)(struct cec_adapter *adap, struct seq_file *file);
 	void (*adap_free)(struct cec_adapter *adap);
 
-	/* Error injection callbacks, called without adap->lock held */
+	/* Error injection callbacks */
 	int (*error_inj_show)(struct cec_adapter *adap, struct seq_file *sf);
 	bool (*error_inj_parse_line)(struct cec_adapter *adap, char *line);
 
-	/* High-level CEC message callback, called without adap->lock held */
-	void (*configured)(struct cec_adapter *adap);
+	/* High-level CEC message callback */
 	int (*received)(struct cec_adapter *adap, struct cec_msg *msg);
 };
 
@@ -275,7 +272,7 @@ struct cec_adapter {
 
 	u32 sequence;
 
-	char input_phys[40];
+	char input_phys[32];
 };
 
 static inline void *cec_get_drvdata(const struct cec_adapter *adap)

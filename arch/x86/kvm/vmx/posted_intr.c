@@ -175,7 +175,7 @@ static void pi_enable_wakeup_handler(struct kvm_vcpu *vcpu)
 	 * scheduled out).
 	 */
 	if (pi_test_on(&new))
-		__apic_send_IPI_self(POSTED_INTR_WAKEUP_VECTOR);
+		apic->send_IPI_self(POSTED_INTR_WAKEUP_VECTOR);
 
 	local_irq_restore(flags);
 }

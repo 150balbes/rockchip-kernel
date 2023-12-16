@@ -22,6 +22,8 @@
 #include <objtool/elf.h>
 #include <objtool/warn.h>
 
+#define MAX_NAME_LEN 128
+
 static inline u32 str_hash(const char *str)
 {
 	return jhash(str, strlen(str), 0);
@@ -513,7 +515,7 @@ static int read_symbols(struct elf *elf)
 	/* Create parent/child links for any cold subfunctions */
 	list_for_each_entry(sec, &elf->sections, list) {
 		sec_for_each_sym(sec, sym) {
-			char *pname;
+			char pname[MAX_NAME_LEN + 1];
 			size_t pnamelen;
 			if (sym->type != STT_FUNC)
 				continue;
@@ -529,15 +531,15 @@ static int read_symbols(struct elf *elf)
 				continue;
 
 			pnamelen = coldstr - sym->name;
-			pname = strndup(sym->name, pnamelen);
-			if (!pname) {
-				WARN("%s(): failed to allocate memory",
-				     sym->name);
+			if (pnamelen > MAX_NAME_LEN) {
+				WARN("%s(): parent function name exceeds maximum length of %d characters",
+				     sym->name, MAX_NAME_LEN);
 				return -1;
 			}
 
+			strncpy(pname, sym->name, pnamelen);
+			pname[pnamelen] = '\0';
 			pfunc = find_symbol_by_name(elf, pname);
-			free(pname);
 
 			if (!pfunc) {
 				WARN("%s(): can't find parent function",

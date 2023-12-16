@@ -249,12 +249,13 @@ static int goldfish_battery_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void goldfish_battery_remove(struct platform_device *pdev)
+static int goldfish_battery_remove(struct platform_device *pdev)
 {
 	struct goldfish_battery_data *data = platform_get_drvdata(pdev);
 
 	power_supply_unregister(data->battery);
 	power_supply_unregister(data->ac);
+	return 0;
 }
 
 static const struct of_device_id goldfish_battery_of_match[] = {
@@ -273,7 +274,7 @@ MODULE_DEVICE_TABLE(acpi, goldfish_battery_acpi_match);
 
 static struct platform_driver goldfish_battery_device = {
 	.probe		= goldfish_battery_probe,
-	.remove_new	= goldfish_battery_remove,
+	.remove		= goldfish_battery_remove,
 	.driver = {
 		.name = "goldfish-battery",
 		.of_match_table = goldfish_battery_of_match,

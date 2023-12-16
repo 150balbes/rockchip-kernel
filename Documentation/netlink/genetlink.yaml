@@ -13,11 +13,6 @@ $defs:
     type: [ string, integer ]
     pattern: ^[0-9A-Za-z_]+( - 1)?$
     minimum: 0
-  len-or-limit:
-    # literal int or limit based on fixed-width type e.g. u8-min, u16-max, etc.
-    type: [ string, integer ]
-    pattern: ^[su](8|16|32|64)-(min|max)$
-    minimum: 0
 
 # Schema for specs
 title: Protocol
@@ -31,6 +26,10 @@ properties:
     type: string
   doc:
     type: string
+  version:
+    description: Generic Netlink family version. Default is 1.
+    type: integer
+    minimum: 1
   protocol:
     description: Schema compatibility level. Default is "genetlink".
     enum: [ genetlink ]
@@ -116,14 +115,13 @@ properties:
           type: array
           items:
             type: object
-            required: [ name ]
+            required: [ name, type ]
             additionalProperties: False
             properties:
               name:
                 type: string
               type: &attr-type
-                enum: [ unused, pad, flag, binary,
-                        uint, sint, u8, u16, u32, u64, s32, s64,
+                enum: [ unused, pad, flag, binary, u8, u16, u32, u64, s32, s64,
                         string, nest, array-nest, nest-type-value ]
               doc:
                 description: Documentation of the attribute.
@@ -162,18 +160,12 @@ properties:
                     type: string
                   min:
                     description: Min value for an integer attribute.
-                    $ref: '#/$defs/len-or-limit'
-                  max:
-                    description: Max value for an integer attribute.
-                    $ref: '#/$defs/len-or-limit'
+                    type: integer
                   min-len:
                     description: Min length for a binary attribute.
                     $ref: '#/$defs/len-or-define'
                   max-len:
                     description: Max length for a string or a binary attribute.
-                    $ref: '#/$defs/len-or-define'
-                  exact-len:
-                    description: Exact length for a string or a binary attribute.
                     $ref: '#/$defs/len-or-define'
               sub-type: *attr-type
               display-hint: &display-hint
@@ -191,18 +183,6 @@ properties:
         subset-of:
           not:
             required: [ name-prefix ]
-
-      # type property is only required if not in subset definition
-      if:
-        properties:
-          subset-of:
-            not:
-              type: string
-      then:
-        properties:
-          attributes:
-            items:
-              required: [ type ]
 
   operations:
     description: Operations supported by the protocol.
@@ -263,12 +243,7 @@ properties:
               description: Kernel attribute validation flags.
               type: array
               items:
-                enum: [ strict, dump, dump-strict ]
-            config-cond:
-              description: |
-                Name of the kernel config option gating the presence of
-                the operation, without the 'CONFIG_' prefix.
-              type: string
+                enum: [ strict, dump ]
             do: &subop-type
               description: Main command handler.
               type: object

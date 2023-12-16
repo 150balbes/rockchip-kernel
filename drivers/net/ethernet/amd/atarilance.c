@@ -367,7 +367,7 @@ static void *slow_memcpy( void *dst, const void *src, size_t len )
 }
 
 
-static struct net_device * __init atarilance_probe(void)
+struct net_device * __init atarilance_probe(void)
 {
 	int i;
 	static int found;

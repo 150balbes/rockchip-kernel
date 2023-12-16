@@ -10,6 +10,7 @@
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/leds.h>
@@ -326,7 +327,6 @@ static struct platform_device db1200_ide_dev = {
 
 /**********************************************************************/
 
-#ifdef CONFIG_MMC_AU1X
 /* SD carddetects:  they're supposed to be edge-triggered, but ack
  * doesn't seem to work (CPLD Rev 2).  Instead, the screaming one
  * is disabled and its counterpart enabled.  The 200ms timeout is
@@ -340,7 +340,14 @@ static irqreturn_t db1200_mmc_cd(int irq, void *ptr)
 
 static irqreturn_t db1200_mmc_cdfn(int irq, void *ptr)
 {
-	mmc_detect_change(ptr, msecs_to_jiffies(200));
+	void (*mmc_cd)(struct mmc_host *, unsigned long);
+
+	/* link against CONFIG_MMC=m */
+	mmc_cd = symbol_get(mmc_detect_change);
+	if (mmc_cd) {
+		mmc_cd(ptr, msecs_to_jiffies(200));
+		symbol_put(mmc_detect_change);
+	}
 
 	msleep(100);	/* debounce */
 	if (irq == DB1200_SD0_INSERT_INT)
@@ -424,7 +431,14 @@ static irqreturn_t pb1200_mmc1_cd(int irq, void *ptr)
 
 static irqreturn_t pb1200_mmc1_cdfn(int irq, void *ptr)
 {
-	mmc_detect_change(ptr, msecs_to_jiffies(200));
+	void (*mmc_cd)(struct mmc_host *, unsigned long);
+
+	/* link against CONFIG_MMC=m */
+	mmc_cd = symbol_get(mmc_detect_change);
+	if (mmc_cd) {
+		mmc_cd(ptr, msecs_to_jiffies(200));
+		symbol_put(mmc_detect_change);
+	}
 
 	msleep(100);	/* debounce */
 	if (irq == PB1200_SD1_INSERT_INT)
@@ -585,7 +599,6 @@ static struct platform_device pb1200_mmc1_dev = {
 	.num_resources	= ARRAY_SIZE(au1200_mmc1_res),
 	.resource	= au1200_mmc1_res,
 };
-#endif /* CONFIG_MMC_AU1X */
 
 /**********************************************************************/
 
@@ -753,9 +766,7 @@ static struct platform_device db1200_audiodma_dev = {
 static struct platform_device *db1200_devs[] __initdata = {
 	NULL,		/* PSC0, selected by S6.8 */
 	&db1200_ide_dev,
-#ifdef CONFIG_MMC_AU1X
 	&db1200_mmc0_dev,
-#endif
 	&au1200_lcd_dev,
 	&db1200_eth_dev,
 	&db1200_nand_dev,
@@ -766,9 +777,7 @@ static struct platform_device *db1200_devs[] __initdata = {
 };
 
 static struct platform_device *pb1200_devs[] __initdata = {
-#ifdef CONFIG_MMC_AU1X
 	&pb1200_mmc1_dev,
-#endif
 };
 
 /* Some peripheral base addresses differ on the PB1200 */

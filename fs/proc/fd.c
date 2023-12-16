@@ -113,12 +113,10 @@ static bool tid_fd_mode(struct task_struct *task, unsigned fd, fmode_t *mode)
 	struct file *file;
 
 	rcu_read_lock();
-	file = task_lookup_fdget_rcu(task, fd);
-	rcu_read_unlock();
-	if (file) {
+	file = task_lookup_fd_rcu(task, fd);
+	if (file)
 		*mode = file->f_mode;
-		fput(file);
-	}
+	rcu_read_unlock();
 	return !!file;
 }
 
@@ -261,13 +259,12 @@ static int proc_readfd_common(struct file *file, struct dir_context *ctx,
 		char name[10 + 1];
 		unsigned int len;
 
-		f = task_lookup_next_fdget_rcu(p, &fd);
+		f = task_lookup_next_fd_rcu(p, &fd);
 		ctx->pos = fd + 2LL;
 		if (!f)
 			break;
 		data.mode = f->f_mode;
 		rcu_read_unlock();
-		fput(f);
 		data.fd = fd;
 
 		len = snprintf(name, sizeof(name), "%u", fd);
@@ -355,7 +352,7 @@ static int proc_fd_getattr(struct mnt_idmap *idmap,
 	struct inode *inode = d_inode(path->dentry);
 	int rv = 0;
 
-	generic_fillattr(&nop_mnt_idmap, request_mask, inode, stat);
+	generic_fillattr(&nop_mnt_idmap, inode, stat);
 
 	/* If it's a directory, put the number of open fds there */
 	if (S_ISDIR(inode->i_mode)) {

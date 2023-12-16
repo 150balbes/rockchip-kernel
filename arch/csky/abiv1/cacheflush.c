@@ -15,51 +15,45 @@
 
 #define PG_dcache_clean		PG_arch_1
 
-void flush_dcache_folio(struct folio *folio)
+void flush_dcache_page(struct page *page)
 {
 	struct address_space *mapping;
 
-	if (is_zero_pfn(folio_pfn(folio)))
+	if (page == ZERO_PAGE(0))
 		return;
 
-	mapping = folio_flush_mapping(folio);
+	mapping = page_mapping_file(page);
 
-	if (mapping && !folio_mapped(folio))
-		clear_bit(PG_dcache_clean, &folio->flags);
+	if (mapping && !page_mapcount(page))
+		clear_bit(PG_dcache_clean, &page->flags);
 	else {
 		dcache_wbinv_all();
 		if (mapping)
 			icache_inv_all();
-		set_bit(PG_dcache_clean, &folio->flags);
+		set_bit(PG_dcache_clean, &page->flags);
 	}
-}
-EXPORT_SYMBOL(flush_dcache_folio);
-
-void flush_dcache_page(struct page *page)
-{
-	flush_dcache_folio(page_folio(page));
 }
 EXPORT_SYMBOL(flush_dcache_page);
 
-void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
-		unsigned long addr, pte_t *ptep, unsigned int nr)
+void update_mmu_cache(struct vm_area_struct *vma, unsigned long addr,
+	pte_t *ptep)
 {
 	unsigned long pfn = pte_pfn(*ptep);
-	struct folio *folio;
+	struct page *page;
 
 	flush_tlb_page(vma, addr);
 
 	if (!pfn_valid(pfn))
 		return;
 
-	if (is_zero_pfn(pfn))
+	page = pfn_to_page(pfn);
+	if (page == ZERO_PAGE(0))
 		return;
 
-	folio = page_folio(pfn_to_page(pfn));
-	if (!test_and_set_bit(PG_dcache_clean, &folio->flags))
+	if (!test_and_set_bit(PG_dcache_clean, &page->flags))
 		dcache_wbinv_all();
 
-	if (folio_flush_mapping(folio)) {
+	if (page_mapping_file(page)) {
 		if (vma->vm_flags & VM_EXEC)
 			icache_inv_all();
 	}

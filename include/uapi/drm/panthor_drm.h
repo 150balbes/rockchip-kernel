@@ -95,9 +95,6 @@ enum drm_panthor_ioctl_id {
 	/** @DRM_PANTHOR_VM_BIND: Bind/unbind memory to a VM. */
 	DRM_PANTHOR_VM_BIND,
 
-	/** @DRM_PANTHOR_VM_GET_STATE: Get VM state. */
-	DRM_PANTHOR_VM_GET_STATE,
-
 	/** @DRM_PANTHOR_BO_CREATE: Create a buffer object. */
 	DRM_PANTHOR_BO_CREATE,
 
@@ -152,8 +149,6 @@ enum drm_panthor_ioctl_id {
 	DRM_IOCTL_PANTHOR(WR, VM_DESTROY, vm_destroy)
 #define DRM_IOCTL_PANTHOR_VM_BIND \
 	DRM_IOCTL_PANTHOR(WR, VM_BIND, vm_bind)
-#define DRM_IOCTL_PANTHOR_VM_GET_STATE \
-	DRM_IOCTL_PANTHOR(WR, VM_GET_STATE, vm_get_state)
 #define DRM_IOCTL_PANTHOR_BO_CREATE \
 	DRM_IOCTL_PANTHOR(WR, BO_CREATE, bo_create)
 #define DRM_IOCTL_PANTHOR_BO_MMAP_OFFSET \
@@ -478,16 +473,6 @@ enum drm_panthor_vm_bind_op_flags {
 
 	/** @DRM_PANTHOR_VM_BIND_OP_TYPE_UNMAP: Unmap operation. */
 	DRM_PANTHOR_VM_BIND_OP_TYPE_UNMAP = 1 << 28,
-
-	/**
-	 * @DRM_PANTHOR_VM_BIND_OP_TYPE_SYNC_ONLY: No VM operation.
-	 *
-	 * Just serves as a synchronization point on a VM queue.
-	 *
-	 * Only valid if %DRM_PANTHOR_VM_BIND_ASYNC is set in drm_panthor_vm_bind::flags,
-	 * and drm_panthor_vm_bind_op::syncs contains at least one element.
-	 */
-	DRM_PANTHOR_VM_BIND_OP_TYPE_SYNC_ONLY = 2 << 28,
 };
 
 /**
@@ -499,26 +484,22 @@ struct drm_panthor_vm_bind_op {
 
 	/**
 	 * @bo_handle: Handle of the buffer object to map.
-	 * MBZ for unmap or sync-only operations.
+	 * MBZ for unmap operations.
 	 */
 	__u32 bo_handle;
 
 	/**
 	 * @bo_offset: Buffer object offset.
-	 * MBZ for unmap or sync-only operations.
+	 * MBZ for unmap operations.
 	 */
 	__u64 bo_offset;
 
 	/**
 	 * @va: Virtual address to map/unmap.
-	 * MBZ for sync-only operations.
 	 */
 	__u64 va;
 
-	/**
-	 * @size: Size to map/unmap.
-	 * MBZ for sync-only operations.
-	 */
+	/** @size: Size to map/unmap. */
 	__u64 size;
 
 	/**
@@ -527,8 +508,6 @@ struct drm_panthor_vm_bind_op {
 	 *
 	 * This array must be empty if %DRM_PANTHOR_VM_BIND_ASYNC is not set on
 	 * the drm_panthor_vm_bind object containing this VM bind operation.
-	 *
-	 * This array shall not be empty for sync-only operations.
 	 */
 	struct drm_panthor_obj_array syncs;
 
@@ -557,48 +536,6 @@ struct drm_panthor_vm_bind {
 
 	/** @ops: Array of struct drm_panthor_vm_bind_op bind operations. */
 	struct drm_panthor_obj_array ops;
-};
-
-/**
- * enum drm_panthor_vm_state - VM states.
- */
-enum drm_panthor_vm_state {
-	/**
-	 * @DRM_PANTHOR_VM_STATE_USABLE: VM is usable.
-	 *
-	 * New VM operations will be accepted on this VM.
-	 */
-	DRM_PANTHOR_VM_STATE_USABLE,
-
-	/**
-	 * @DRM_PANTHOR_VM_STATE_UNSABLE: VM is unsable.
-	 *
-	 * Something put the VM in an unusable state (like an asynchronous
-	 * VM_BIND request failing for any reason).
-	 *
-	 * Once the VM is in this state, all new MAP operations will be
-	 * rejected, and any GPU job targeting this VM will fail.
-	 * UNMAP operations are still accepted.
-	 *
-	 * The only way to recover from an unusable VM is to create a new
-	 * VM, and destroy the old one.
-	 */
-	DRM_PANTHOR_VM_STATE_UNUSABLE,
-};
-
-/**
- * struct drm_panthor_vm_get_state - Get VM state.
- */
-struct drm_panthor_vm_get_state {
-	/** @vm_id: VM targeted by the get_state request. */
-	__u32 vm_id;
-
-	/**
-	 * @state: state returned by the driver.
-	 *
-	 * Must be one of the enum drm_panthor_vm_state values.
-	 */
-	__u32 state;
 };
 
 /**

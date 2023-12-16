@@ -66,7 +66,7 @@ static int match_context(const void *v, struct file *file, unsigned fd)
  */
 static struct spu_context *coredump_next_context(int *fd)
 {
-	struct spu_context *ctx = NULL;
+	struct spu_context *ctx;
 	struct file *file;
 	int n = iterate_fd(current->files, *fd, match_context, NULL);
 	if (!n)
@@ -74,13 +74,10 @@ static struct spu_context *coredump_next_context(int *fd)
 	*fd = n - 1;
 
 	rcu_read_lock();
-	file = lookup_fdget_rcu(*fd);
+	file = lookup_fd_rcu(*fd);
+	ctx = SPUFS_I(file_inode(file))->i_ctx;
+	get_spu_context(ctx);
 	rcu_read_unlock();
-	if (file) {
-		ctx = SPUFS_I(file_inode(file))->i_ctx;
-		get_spu_context(ctx);
-		fput(file);
-	}
 
 	return ctx;
 }

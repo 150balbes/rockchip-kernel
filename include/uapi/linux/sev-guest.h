@@ -14,11 +14,9 @@
 
 #include <linux/types.h>
 
-#define SNP_REPORT_USER_DATA_SIZE 64
-
 struct snp_report_req {
 	/* user data that should be included in the report */
-	__u8 user_data[SNP_REPORT_USER_DATA_SIZE];
+	__u8 user_data[64];
 
 	/* The vmpl level to be included in the report */
 	__u32 vmpl;

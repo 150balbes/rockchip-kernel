@@ -25,6 +25,5 @@
 #include <asm-generic/irq.h>
 
 extern void arc_init_IRQ(void);
-extern void arch_do_IRQ(unsigned int, struct pt_regs *);
 
 #endif

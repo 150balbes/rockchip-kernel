@@ -177,8 +177,7 @@ static void comedi_device_detach_cleanup(struct comedi_device *dev)
 		dev->n_subdevices = 0;
 	}
 	kfree(dev->private);
-	if (!IS_ERR(dev->pacer))
-		kfree(dev->pacer);
+	kfree(dev->pacer);
 	dev->private = NULL;
 	dev->pacer = NULL;
 	dev->driver = NULL;

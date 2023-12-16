@@ -24,9 +24,10 @@ const struct nla_policy ethnl_rings_get_policy[] = {
 
 static int rings_prepare_data(const struct ethnl_req_info *req_base,
 			      struct ethnl_reply_data *reply_base,
-			      const struct genl_info *info)
+			      struct genl_info *info)
 {
 	struct rings_reply_data *data = RINGS_REPDATA(reply_base);
+	struct netlink_ext_ack *extack = info ? info->extack : NULL;
 	struct net_device *dev = reply_base->dev;
 	int ret;
 
@@ -38,7 +39,7 @@ static int rings_prepare_data(const struct ethnl_req_info *req_base,
 	if (ret < 0)
 		return ret;
 	dev->ethtool_ops->get_ringparam(dev, &data->ringparam,
-					&data->kernel_ringparam, info->extack);
+					&data->kernel_ringparam, extack);
 	ethnl_ops_complete(dev);
 
 	return 0;

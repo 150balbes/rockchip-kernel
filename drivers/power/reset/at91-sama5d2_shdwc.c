@@ -331,6 +331,7 @@ static const struct of_device_id at91_pmc_ids[] = {
 
 static int __init at91_shdwc_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	const struct of_device_id *match;
 	struct device_node *np;
 	u32 ddr_type;
@@ -348,7 +349,8 @@ static int __init at91_shdwc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, at91_shdwc);
 
-	at91_shdwc->shdwc_base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	at91_shdwc->shdwc_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(at91_shdwc->shdwc_base))
 		return PTR_ERR(at91_shdwc->shdwc_base);
 

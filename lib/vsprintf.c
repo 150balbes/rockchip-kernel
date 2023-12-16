@@ -34,7 +34,6 @@
 #include <linux/dcache.h>
 #include <linux/cred.h>
 #include <linux/rtc.h>
-#include <linux/sprintf.h>
 #include <linux/time.h>
 #include <linux/uuid.h>
 #include <linux/of.h>
@@ -60,8 +59,7 @@
 bool no_hash_pointers __ro_after_init;
 EXPORT_SYMBOL_GPL(no_hash_pointers);
 
-noinline
-static unsigned long long simple_strntoull(const char *startp, char **endp, unsigned int base, size_t max_chars)
+static noinline unsigned long long simple_strntoull(const char *startp, size_t max_chars, char **endp, unsigned int base)
 {
 	const char *cp;
 	unsigned long long result = 0ULL;
@@ -96,7 +94,7 @@ static unsigned long long simple_strntoull(const char *startp, char **endp, unsi
 noinline
 unsigned long long simple_strtoull(const char *cp, char **endp, unsigned int base)
 {
-	return simple_strntoull(cp, endp, base, INT_MAX);
+	return simple_strntoull(cp, INT_MAX, endp, base);
 }
 EXPORT_SYMBOL(simple_strtoull);
 
@@ -131,8 +129,8 @@ long simple_strtol(const char *cp, char **endp, unsigned int base)
 }
 EXPORT_SYMBOL(simple_strtol);
 
-noinline
-static long long simple_strntoll(const char *cp, char **endp, unsigned int base, size_t max_chars)
+static long long simple_strntoll(const char *cp, size_t max_chars, char **endp,
+				 unsigned int base)
 {
 	/*
 	 * simple_strntoull() safely handles receiving max_chars==0 in the
@@ -141,9 +139,9 @@ static long long simple_strntoll(const char *cp, char **endp, unsigned int base,
 	 * and the content of *cp is irrelevant.
 	 */
 	if (*cp == '-' && max_chars > 0)
-		return -simple_strntoull(cp + 1, endp, base, max_chars - 1);
+		return -simple_strntoull(cp + 1, max_chars - 1, endp, base);
 
-	return simple_strntoull(cp, endp, base, max_chars);
+	return simple_strntoull(cp, max_chars, endp, base);
 }
 
 /**
@@ -156,7 +154,7 @@ static long long simple_strntoll(const char *cp, char **endp, unsigned int base,
  */
 long long simple_strtoll(const char *cp, char **endp, unsigned int base)
 {
-	return simple_strntoll(cp, endp, base, INT_MAX);
+	return simple_strntoll(cp, INT_MAX, endp, base);
 }
 EXPORT_SYMBOL(simple_strtoll);
 
@@ -3649,11 +3647,13 @@ int vsscanf(const char *buf, const char *fmt, va_list args)
 			break;
 
 		if (is_sign)
-			val.s = simple_strntoll(str, &next, base,
-						field_width >= 0 ? field_width : INT_MAX);
+			val.s = simple_strntoll(str,
+						field_width >= 0 ? field_width : INT_MAX,
+						&next, base);
 		else
-			val.u = simple_strntoull(str, &next, base,
-						 field_width >= 0 ? field_width : INT_MAX);
+			val.u = simple_strntoull(str,
+						 field_width >= 0 ? field_width : INT_MAX,
+						 &next, base);
 
 		switch (qualifier) {
 		case 'H':	/* that's 'hh' in format */

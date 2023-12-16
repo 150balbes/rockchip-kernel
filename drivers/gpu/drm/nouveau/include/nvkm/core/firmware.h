@@ -10,7 +10,6 @@ struct nvkm_firmware {
 		enum nvkm_firmware_type {
 			NVKM_FIRMWARE_IMG_RAM,
 			NVKM_FIRMWARE_IMG_DMA,
-			NVKM_FIRMWARE_IMG_SGT,
 		} type;
 	} *func;
 	const char *name;
@@ -22,10 +21,7 @@ struct nvkm_firmware {
 
 	struct nvkm_firmware_mem {
 		struct nvkm_memory memory;
-		union {
-			struct scatterlist sgl; /* DMA */
-			struct sg_table sgt;	/* SGT */
-		};
+		struct scatterlist sgl;
 	} mem;
 };
 

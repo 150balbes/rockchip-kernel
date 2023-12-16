@@ -548,9 +548,11 @@ static int race_signal_callback(void *arg)
 		for (i = 0; i < ARRAY_SIZE(t); i++) {
 			int err;
 
-			err = kthread_stop_put(t[i].task);
+			err = kthread_stop(t[i].task);
 			if (err && !ret)
 				ret = err;
+
+			put_task_struct(t[i].task);
 		}
 	}
 

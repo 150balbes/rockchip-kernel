@@ -270,4 +270,3 @@ static void __exit ip_vs_dh_cleanup(void)
 module_init(ip_vs_dh_init);
 module_exit(ip_vs_dh_cleanup);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ipvs destination hashing scheduler");

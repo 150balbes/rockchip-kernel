@@ -75,10 +75,9 @@ static inline void idxd_prep_desc_common(struct idxd_wq *wq,
 	hw->xfer_size = len;
 	/*
 	 * For dedicated WQ, this field is ignored and HW will use the WQCFG.priv
-	 * field instead. This field should be set to 0 for kernel descriptors
-	 * since kernel DMA on VT-d supports "user" privilege only.
+	 * field instead. This field should be set to 1 for kernel descriptors.
 	 */
-	hw->priv = 0;
+	hw->priv = 1;
 	hw->completion_addr = compl;
 }
 
@@ -306,12 +305,6 @@ static int idxd_dmaengine_drv_probe(struct idxd_dev *idxd_dev)
 		return -ENXIO;
 
 	mutex_lock(&wq->wq_lock);
-	if (!idxd_wq_driver_name_match(wq, dev)) {
-		idxd->cmd_status = IDXD_SCMD_WQ_NO_DRV_NAME;
-		rc = -ENODEV;
-		goto err;
-	}
-
 	wq->type = IDXD_WQT_KERNEL;
 
 	rc = drv_enable_wq(wq);

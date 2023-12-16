@@ -15,7 +15,6 @@
 #include <linux/types.h>
 #include <linux/zorro.h>
 
-#include "zorro.h"
 
 struct zorro_prod_info {
 	__u16 prod;

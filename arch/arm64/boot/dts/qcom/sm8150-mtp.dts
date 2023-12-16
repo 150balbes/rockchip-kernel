@@ -16,7 +16,6 @@
 / {
 	model = "Qualcomm Technologies, Inc. SM8150 MTP";
 	compatible = "qcom,sm8150-mtp", "qcom,sm8150";
-	chassis-type = "handset";
 
 	aliases {
 		serial0 = &uart2;

@@ -5,7 +5,6 @@
  */
 #include "qla_def.h"
 
-#include <linux/bitfield.h>
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
 #include <linux/delay.h>
@@ -45,11 +44,10 @@ module_param(ql2xfulldump_on_mpifail, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(ql2xfulldump_on_mpifail,
 		 "Set this to take full dump on MPI hang.");
 
-int ql2xenforce_iocb_limit = 2;
+int ql2xenforce_iocb_limit = 1;
 module_param(ql2xenforce_iocb_limit, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(ql2xenforce_iocb_limit,
-		 "Enforce IOCB throttling, to avoid FW congestion. (default: 2) "
-		 "1: track usage per queue, 2: track usage per adapter");
+		 "Enforce IOCB throttling, to avoid FW congestion. (default: 1)");
 
 /*
  * CT6 CTX allocation cache
@@ -434,7 +432,6 @@ static void qla_init_base_qpair(struct scsi_qla_host *vha, struct req_que *req,
 	ha->base_qpair->msix = &ha->msix_entries[QLA_MSIX_RSP_Q];
 	ha->base_qpair->srb_mempool = ha->srb_mempool;
 	INIT_LIST_HEAD(&ha->base_qpair->hints_list);
-	INIT_LIST_HEAD(&ha->base_qpair->dsd_list);
 	ha->base_qpair->enable_class_2 = ql2xenableclass2;
 	/* init qpair to this cpu. Will adjust at run time. */
 	qla_cpu_update(rsp->qpair, raw_smp_processor_id());
@@ -634,8 +631,8 @@ qla24xx_pci_info_str(struct scsi_qla_host *vha, char *str, size_t str_len)
 		const char *speed_str;
 
 		pcie_capability_read_dword(ha->pdev, PCI_EXP_LNKCAP, &lstat);
-		lspeed = FIELD_GET(PCI_EXP_LNKCAP_SLS, lstat);
-		lwidth = FIELD_GET(PCI_EXP_LNKCAP_MLW, lstat);
+		lspeed = lstat & PCI_EXP_LNKCAP_SLS;
+		lwidth = (lstat & PCI_EXP_LNKCAP_MLW) >> 4;
 
 		switch (lspeed) {
 		case 1:
@@ -753,9 +750,9 @@ void qla2x00_sp_free_dma(srb_t *sp)
 
 		dma_pool_free(ha->fcp_cmnd_dma_pool, ctx1->fcp_cmnd,
 		    ctx1->fcp_cmnd_dma);
-		list_splice(&ctx1->dsd_list, &sp->qpair->dsd_list);
-		sp->qpair->dsd_inuse -= ctx1->dsd_use_cnt;
-		sp->qpair->dsd_avail += ctx1->dsd_use_cnt;
+		list_splice(&ctx1->dsd_list, &ha->gbl_dsd_list);
+		ha->gbl_dsd_inuse -= ctx1->dsd_use_cnt;
+		ha->gbl_dsd_avail += ctx1->dsd_use_cnt;
 	}
 
 	if (sp->flags & SRB_GOT_BUF)
@@ -839,9 +836,9 @@ void qla2xxx_qpair_sp_free_dma(srb_t *sp)
 
 		dma_pool_free(ha->fcp_cmnd_dma_pool, ctx1->fcp_cmnd,
 		    ctx1->fcp_cmnd_dma);
-		list_splice(&ctx1->dsd_list, &sp->qpair->dsd_list);
-		sp->qpair->dsd_inuse -= ctx1->dsd_use_cnt;
-		sp->qpair->dsd_avail += ctx1->dsd_use_cnt;
+		list_splice(&ctx1->dsd_list, &ha->gbl_dsd_list);
+		ha->gbl_dsd_inuse -= ctx1->dsd_use_cnt;
+		ha->gbl_dsd_avail += ctx1->dsd_use_cnt;
 		sp->flags &= ~SRB_FCP_CMND_DMA_VALID;
 	}
 
@@ -1491,9 +1488,8 @@ qla2xxx_eh_device_reset(struct scsi_cmnd *cmd)
 		goto eh_reset_failed;
 	}
 	err = 3;
-	if (qla2x00_eh_wait_for_pending_commands(vha, fcport->d_id.b24,
-						 cmd->device->lun,
-						 WAIT_LUN) != QLA_SUCCESS) {
+	if (qla2x00_eh_wait_for_pending_commands(vha, sdev->id,
+	    sdev->lun, WAIT_LUN) != QLA_SUCCESS) {
 		ql_log(ql_log_warn, vha, 0x800d,
 		    "wait for pending cmds failed for cmd=%p.\n", cmd);
 		goto eh_reset_failed;
@@ -1559,8 +1555,8 @@ qla2xxx_eh_target_reset(struct scsi_cmnd *cmd)
 		goto eh_reset_failed;
 	}
 	err = 3;
-	if (qla2x00_eh_wait_for_pending_commands(vha, fcport->d_id.b24, 0,
-						 WAIT_TARGET) != QLA_SUCCESS) {
+	if (qla2x00_eh_wait_for_pending_commands(vha, sdev->id,
+	    0, WAIT_TARGET) != QLA_SUCCESS) {
 		ql_log(ql_log_warn, vha, 0x800d,
 		    "wait for pending cmds failed for cmd=%p.\n", cmd);
 		goto eh_reset_failed;
@@ -1837,16 +1833,8 @@ static void qla2x00_abort_srb(struct qla_qpair *qp, srb_t *sp, const int res,
 		}
 
 		spin_lock_irqsave(qp->qp_lock_ptr, *flags);
-		switch (sp->type) {
-		case SRB_SCSI_CMD:
-			if (ret_cmd && blk_mq_request_started(scsi_cmd_to_rq(cmd)))
-				sp->done(sp, res);
-			break;
-		default:
-			if (ret_cmd)
-				sp->done(sp, res);
-			break;
-		}
+		if (ret_cmd && blk_mq_request_started(scsi_cmd_to_rq(cmd)))
+			sp->done(sp, res);
 	} else {
 		sp->done(sp, res);
 	}
@@ -3018,10 +3006,9 @@ qla2x00_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	ha->max_exchg = FW_MAX_EXCHANGES_CNT;
 	atomic_set(&ha->num_pend_mbx_stage1, 0);
 	atomic_set(&ha->num_pend_mbx_stage2, 0);
+	atomic_set(&ha->num_pend_mbx_stage3, 0);
 	atomic_set(&ha->zio_threshold, DEFAULT_ZIO_THRESHOLD);
 	ha->last_zio_threshold = DEFAULT_ZIO_THRESHOLD;
-	INIT_LIST_HEAD(&ha->tmf_pending);
-	INIT_LIST_HEAD(&ha->tmf_active);
 
 	/* Assign ISP specific operations. */
 	if (IS_QLA2100(ha)) {
@@ -3298,13 +3285,6 @@ qla2x00_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	host->max_id = ha->max_fibre_devices;
 	host->cmd_per_lun = 3;
 	host->unique_id = host->host_no;
-
-	if (ql2xenabledif && ql2xenabledif != 2) {
-		ql_log(ql_log_warn, base_vha, 0x302d,
-		       "Invalid value for ql2xenabledif, resetting it to default (2)\n");
-		ql2xenabledif = 2;
-	}
-
 	if (IS_T10_PI_CAPABLE(ha) && ql2xenabledif)
 		host->max_cmd_len = 32;
 	else
@@ -3541,6 +3521,8 @@ skip_dpc:
 			base_vha->flags.difdix_supported = 1;
 			ql_dbg(ql_dbg_init, base_vha, 0x00f1,
 			    "Registering for DIF/DIX type 1 and 3 protection.\n");
+			if (ql2xenabledif == 1)
+				prot = SHOST_DIX_TYPE0_PROTECTION;
 			if (ql2xprotmask)
 				scsi_host_set_prot(host, ql2xprotmask);
 			else
@@ -4417,6 +4399,7 @@ qla2x00_mem_alloc(struct qla_hw_data *ha, uint16_t req_len, uint16_t rsp_len,
 			   "sf_init_cb=%p.\n", ha->sf_init_cb);
 	}
 
+	INIT_LIST_HEAD(&ha->gbl_dsd_list);
 
 	/* Get consistent memory allocated for Async Port-Database. */
 	if (!IS_FWI2_CAPABLE(ha)) {
@@ -4471,9 +4454,8 @@ qla2x00_mem_alloc(struct qla_hw_data *ha, uint16_t req_len, uint16_t rsp_len,
 
 	ha->elsrej.size = sizeof(struct fc_els_ls_rjt) + 16;
 	ha->elsrej.c = dma_alloc_coherent(&ha->pdev->dev,
-					  ha->elsrej.size,
-					  &ha->elsrej.cdma,
-					  GFP_KERNEL);
+	    ha->elsrej.size, &ha->elsrej.cdma, GFP_KERNEL);
+
 	if (!ha->elsrej.c) {
 		ql_dbg_pci(ql_dbg_init, ha->pdev, 0xffff,
 		    "Alloc failed for els reject cmd.\n");
@@ -4482,21 +4464,8 @@ qla2x00_mem_alloc(struct qla_hw_data *ha, uint16_t req_len, uint16_t rsp_len,
 	ha->elsrej.c->er_cmd = ELS_LS_RJT;
 	ha->elsrej.c->er_reason = ELS_RJT_LOGIC;
 	ha->elsrej.c->er_explan = ELS_EXPL_UNAB_DATA;
-
-	ha->lsrjt.size = sizeof(struct fcnvme_ls_rjt);
-	ha->lsrjt.c = dma_alloc_coherent(&ha->pdev->dev, ha->lsrjt.size,
-			&ha->lsrjt.cdma, GFP_KERNEL);
-	if (!ha->lsrjt.c) {
-		ql_dbg_pci(ql_dbg_init, ha->pdev, 0xffff,
-			   "Alloc failed for nvme fc reject cmd.\n");
-		goto fail_lsrjt;
-	}
-
 	return 0;
 
-fail_lsrjt:
-	dma_free_coherent(&ha->pdev->dev, ha->elsrej.size,
-			  ha->elsrej.c, ha->elsrej.cdma);
 fail_elsrej:
 	dma_pool_destroy(ha->purex_dma_pool);
 fail_flt:
@@ -4962,16 +4931,18 @@ qla2x00_mem_free(struct qla_hw_data *ha)
 	ha->gid_list = NULL;
 	ha->gid_list_dma = 0;
 
-	if (ha->base_qpair && !list_empty(&ha->base_qpair->dsd_list)) {
-		struct dsd_dma *dsd_ptr, *tdsd_ptr;
+	if (IS_QLA82XX(ha)) {
+		if (!list_empty(&ha->gbl_dsd_list)) {
+			struct dsd_dma *dsd_ptr, *tdsd_ptr;
 
-		/* clean up allocated prev pool */
-		list_for_each_entry_safe(dsd_ptr, tdsd_ptr,
-					 &ha->base_qpair->dsd_list, list) {
-			dma_pool_free(ha->dl_dma_pool, dsd_ptr->dsd_addr,
-				      dsd_ptr->dsd_list_dma);
-			list_del(&dsd_ptr->list);
-			kfree(dsd_ptr);
+			/* clean up allocated prev pool */
+			list_for_each_entry_safe(dsd_ptr,
+				tdsd_ptr, &ha->gbl_dsd_list, list) {
+				dma_pool_free(ha->dl_dma_pool,
+				dsd_ptr->dsd_addr, dsd_ptr->dsd_list_dma);
+				list_del(&dsd_ptr->list);
+				kfree(dsd_ptr);
+			}
 		}
 	}
 
@@ -5024,12 +4995,6 @@ qla2x00_mem_free(struct qla_hw_data *ha)
 		dma_free_coherent(&ha->pdev->dev, ha->elsrej.size,
 		    ha->elsrej.c, ha->elsrej.cdma);
 		ha->elsrej.c = NULL;
-	}
-
-	if (ha->lsrjt.c) {
-		dma_free_coherent(&ha->pdev->dev, ha->lsrjt.size, ha->lsrjt.c,
-				  ha->lsrjt.cdma);
-		ha->lsrjt.c = NULL;
 	}
 
 	ha->init_cb = NULL;

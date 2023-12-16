@@ -767,7 +767,8 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 	if (!i2c_dev)
 		return -ENOMEM;
 
-	i2c_dev->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	i2c_dev->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(i2c_dev->base))
 		return PTR_ERR(i2c_dev->base);
 
@@ -783,17 +784,23 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	i2c_dev->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	i2c_dev->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(i2c_dev->clk)) {
-		dev_err(&pdev->dev, "Failed to enable clock\n");
+		dev_err(&pdev->dev, "Error: Missing controller clock\n");
 		return PTR_ERR(i2c_dev->clk);
+	}
+	ret = clk_prepare_enable(i2c_dev->clk);
+	if (ret) {
+		dev_err(i2c_dev->dev, "Failed to prepare_enable clock\n");
+		return ret;
 	}
 
 	rst = devm_reset_control_get_exclusive(&pdev->dev, NULL);
-	if (IS_ERR(rst))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rst),
-				     "Error: Missing reset ctrl\n");
-
+	if (IS_ERR(rst)) {
+		ret = dev_err_probe(&pdev->dev, PTR_ERR(rst),
+				    "Error: Missing reset ctrl\n");
+		goto clk_free;
+	}
 	reset_control_assert(rst);
 	udelay(2);
 	reset_control_deassert(rst);
@@ -810,7 +817,7 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to request irq event %i\n",
 			irq_event);
-		return ret;
+		goto clk_free;
 	}
 
 	ret = devm_request_irq(&pdev->dev, irq_error, stm32f4_i2c_isr_error, 0,
@@ -818,12 +825,12 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to request irq error %i\n",
 			irq_error);
-		return ret;
+		goto clk_free;
 	}
 
 	ret = stm32f4_i2c_hw_config(i2c_dev);
 	if (ret)
-		return ret;
+		goto clk_free;
 
 	adap = &i2c_dev->adap;
 	i2c_set_adapdata(adap, i2c_dev);
@@ -839,7 +846,7 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 
 	ret = i2c_add_adapter(adap);
 	if (ret)
-		return ret;
+		goto clk_free;
 
 	platform_set_drvdata(pdev, i2c_dev);
 
@@ -848,6 +855,10 @@ static int stm32f4_i2c_probe(struct platform_device *pdev)
 	dev_info(i2c_dev->dev, "STM32F4 I2C driver registered\n");
 
 	return 0;
+
+clk_free:
+	clk_disable_unprepare(i2c_dev->clk);
+	return ret;
 }
 
 static void stm32f4_i2c_remove(struct platform_device *pdev)
@@ -855,6 +866,8 @@ static void stm32f4_i2c_remove(struct platform_device *pdev)
 	struct stm32f4_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&i2c_dev->adap);
+
+	clk_unprepare(i2c_dev->clk);
 }
 
 static const struct of_device_id stm32f4_i2c_match[] = {

@@ -8,7 +8,7 @@ $schema: http://devicetree.org/meta-schemas/base.yaml#
 title: Thermal zone
 
 maintainers:
-  - Daniel Lezcano <daniel.lezcano@linaro.org>
+  - Amit Kucheria <amitk@kernel.org>
 
 description: |
   Thermal management is achieved in devicetree by describing the sensor hardware

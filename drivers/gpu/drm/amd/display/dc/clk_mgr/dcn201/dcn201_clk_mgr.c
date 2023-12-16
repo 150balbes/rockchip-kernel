@@ -59,6 +59,8 @@
 
 #define CTX \
 	clk_mgr->base.ctx
+#define DC_LOGGER \
+	clk_mgr->base.ctx->logger
 
 static const struct clk_mgr_registers clk_mgr_regs = {
 		CLK_COMMON_REG_LIST_DCN_201()

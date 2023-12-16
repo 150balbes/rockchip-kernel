@@ -37,6 +37,8 @@
 #include "util/parse-branch-options.h"
 #include "util/parse-regs-options.h"
 #include "util/perf_api_probe.h"
+#include "util/llvm-utils.h"
+#include "util/bpf-loader.h"
 #include "util/trigger.h"
 #include "util/perf-hooks.h"
 #include "util/cpu-set-sched.h"
@@ -906,65 +908,6 @@ static int record__config_off_cpu(struct record *rec)
 	return off_cpu_prepare(rec->evlist, &rec->opts.target, &rec->opts);
 }
 
-static bool record__tracking_system_wide(struct record *rec)
-{
-	struct evlist *evlist = rec->evlist;
-	struct evsel *evsel;
-
-	/*
-	 * If non-dummy evsel exists, system_wide sideband is need to
-	 * help parse sample information.
-	 * For example, PERF_EVENT_MMAP event to help parse symbol,
-	 * and PERF_EVENT_COMM event to help parse task executable name.
-	 */
-	evlist__for_each_entry(evlist, evsel) {
-		if (!evsel__is_dummy_event(evsel))
-			return true;
-	}
-
-	return false;
-}
-
-static int record__config_tracking_events(struct record *rec)
-{
-	struct record_opts *opts = &rec->opts;
-	struct evlist *evlist = rec->evlist;
-	bool system_wide = false;
-	struct evsel *evsel;
-
-	/*
-	 * For initial_delay, system wide or a hybrid system, we need to add
-	 * tracking event so that we can track PERF_RECORD_MMAP to cover the
-	 * delay of waiting or event synthesis.
-	 */
-	if (opts->target.initial_delay || target__has_cpu(&opts->target) ||
-	    perf_pmus__num_core_pmus() > 1) {
-
-		/*
-		 * User space tasks can migrate between CPUs, so when tracing
-		 * selected CPUs, sideband for all CPUs is still needed.
-		 */
-		if (!!opts->target.cpu_list && record__tracking_system_wide(rec))
-			system_wide = true;
-
-		evsel = evlist__findnew_tracking_event(evlist, system_wide);
-		if (!evsel)
-			return -ENOMEM;
-
-		/*
-		 * Enable the tracking event when the process is forked for
-		 * initial_delay, immediately for system wide.
-		 */
-		if (opts->target.initial_delay && !evsel->immediate &&
-		    !target__has_cpu(&opts->target))
-			evsel->core.attr.enable_on_exec = 1;
-		else
-			evsel->immediate = 1;
-	}
-
-	return 0;
-}
-
 static bool record__kcore_readable(struct machine *machine)
 {
 	char kcore[PATH_MAX];
@@ -1344,6 +1287,33 @@ static int record__open(struct record *rec)
 	struct perf_session *session = rec->session;
 	struct record_opts *opts = &rec->opts;
 	int rc = 0;
+
+	/*
+	 * For initial_delay, system wide or a hybrid system, we need to add a
+	 * dummy event so that we can track PERF_RECORD_MMAP to cover the delay
+	 * of waiting or event synthesis.
+	 */
+	if (opts->target.initial_delay || target__has_cpu(&opts->target) ||
+	    perf_pmus__num_core_pmus() > 1) {
+		pos = evlist__get_tracking_event(evlist);
+		if (!evsel__is_dummy_event(pos)) {
+			/* Set up dummy event. */
+			if (evlist__add_dummy(evlist))
+				return -ENOMEM;
+			pos = evlist__last(evlist);
+			evlist__set_tracking_event(evlist, pos);
+		}
+
+		/*
+		 * Enable the dummy event when the process is forked for
+		 * initial_delay, immediately for system wide.
+		 */
+		if (opts->target.initial_delay && !pos->immediate &&
+		    !target__has_cpu(&opts->target))
+			pos->core.attr.enable_on_exec = 1;
+		else
+			pos->immediate = 1;
+	}
 
 	evlist__config(evlist, opts, &callchain_param);
 
@@ -2495,6 +2465,16 @@ static int __cmd_record(struct record *rec, int argc, const char **argv)
 		}
 	}
 
+	err = bpf__apply_obj_config();
+	if (err) {
+		char errbuf[BUFSIZ];
+
+		bpf__strerror_apply_obj_config(err, errbuf, sizeof(errbuf));
+		pr_err("ERROR: Apply config to BPF failed: %s\n",
+			 errbuf);
+		goto out_free_threads;
+	}
+
 	/*
 	 * Normally perf_session__new would do this, but it doesn't have the
 	 * evlist.
@@ -3506,6 +3486,10 @@ static struct option __record_options[] = {
 		    "collect kernel callchains"),
 	OPT_BOOLEAN(0, "user-callchains", &record.opts.user_callchains,
 		    "collect user callchains"),
+	OPT_STRING(0, "clang-path", &llvm_param.clang_path, "clang path",
+		   "clang binary to use for compiling BPF scriptlets"),
+	OPT_STRING(0, "clang-opt", &llvm_param.clang_opt, "clang options",
+		   "options passed to clang when compiling BPF scriptlets"),
 	OPT_STRING(0, "vmlinux", &symbol_conf.vmlinux_name,
 		   "file", "vmlinux pathname"),
 	OPT_BOOLEAN(0, "buildid-all", &record.buildid_all,
@@ -3983,6 +3967,27 @@ int cmd_record(int argc, const char **argv)
 
 	setlocale(LC_ALL, "");
 
+#ifndef HAVE_LIBBPF_SUPPORT
+# define set_nobuild(s, l, c) set_option_nobuild(record_options, s, l, "NO_LIBBPF=1", c)
+	set_nobuild('\0', "clang-path", true);
+	set_nobuild('\0', "clang-opt", true);
+# undef set_nobuild
+#endif
+
+#ifndef HAVE_BPF_PROLOGUE
+# if !defined (HAVE_DWARF_SUPPORT)
+#  define REASON  "NO_DWARF=1"
+# elif !defined (HAVE_LIBBPF_SUPPORT)
+#  define REASON  "NO_LIBBPF=1"
+# else
+#  define REASON  "this architecture doesn't support BPF prologue"
+# endif
+# define set_nobuild(s, l, c) set_option_nobuild(record_options, s, l, REASON, c)
+	set_nobuild('\0', "vmlinux", true);
+# undef set_nobuild
+# undef REASON
+#endif
+
 #ifndef HAVE_BPF_SKEL
 # define set_nobuild(s, l, m, c) set_option_nobuild(record_options, s, l, m, c)
 	set_nobuild('\0', "off-cpu", "no BUILD_BPF_SKEL=1", true);
@@ -4111,6 +4116,14 @@ int cmd_record(int argc, const char **argv)
 	if (dry_run)
 		goto out;
 
+	err = bpf__setup_stdout(rec->evlist);
+	if (err) {
+		bpf__strerror_setup_stdout(rec->evlist, err, errbuf, sizeof(errbuf));
+		pr_err("ERROR: Setup BPF stdout failed: %s\n",
+			 errbuf);
+		goto out;
+	}
+
 	err = -ENOMEM;
 
 	if (rec->no_buildid_cache || rec->no_buildid) {
@@ -4224,12 +4237,6 @@ int cmd_record(int argc, const char **argv)
 
 	if (record_opts__config(&rec->opts)) {
 		err = -EINVAL;
-		goto out;
-	}
-
-	err = record__config_tracking_events(rec);
-	if (err) {
-		pr_err("record__config_tracking_events failed, error %d\n", err);
 		goto out;
 	}
 

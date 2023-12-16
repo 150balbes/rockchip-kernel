@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * SPI host driver for ICP DAS LP-8841 RTC
+ * SPI master driver for ICP DAS LP-8841 RTC
  *
  * Copyright (C) 2016 Sergei Ianovich
  *
@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/spi/spi.h>
 
 #define DRIVER_NAME	"spi_lp8841_rtc"
@@ -73,15 +74,15 @@ bitbang_txrx_be_cpha0_lsb(struct spi_lp8841_rtc *data,
 	/* clock starts at inactive polarity */
 	for (; likely(bits); bits--) {
 
-		/* setup LSB (to target) on leading edge */
-		if ((flags & SPI_CONTROLLER_NO_TX) == 0)
+		/* setup LSB (to slave) on leading edge */
+		if ((flags & SPI_MASTER_NO_TX) == 0)
 			setmosi(data, (word & 1));
 
 		usleep_range(usecs, usecs + 1);	/* T(setup) */
 
-		/* sample LSB (from target) on trailing edge */
+		/* sample LSB (from slave) on trailing edge */
 		word >>= 1;
-		if ((flags & SPI_CONTROLLER_NO_RX) == 0)
+		if ((flags & SPI_MASTER_NO_RX) == 0)
 			word |= (getmiso(data) << 31);
 
 		setsck(data, !cpol);
@@ -95,11 +96,11 @@ bitbang_txrx_be_cpha0_lsb(struct spi_lp8841_rtc *data,
 }
 
 static int
-spi_lp8841_rtc_transfer_one(struct spi_controller *host,
+spi_lp8841_rtc_transfer_one(struct spi_master *master,
 			    struct spi_device *spi,
 			    struct spi_transfer *t)
 {
-	struct spi_lp8841_rtc	*data = spi_controller_get_devdata(host);
+	struct spi_lp8841_rtc	*data = spi_master_get_devdata(master);
 	unsigned		count = t->len;
 	const u8		*tx = t->tx_buf;
 	u8			*rx = t->rx_buf;
@@ -112,7 +113,7 @@ spi_lp8841_rtc_transfer_one(struct spi_controller *host,
 		while (likely(count > 0)) {
 			word = *tx++;
 			bitbang_txrx_be_cpha0_lsb(data, 1, 0,
-					SPI_CONTROLLER_NO_RX, word, 8);
+					SPI_MASTER_NO_RX, word, 8);
 			count--;
 		}
 	} else if (rx) {
@@ -120,7 +121,7 @@ spi_lp8841_rtc_transfer_one(struct spi_controller *host,
 		writeb(data->state, data->iomem);
 		while (likely(count > 0)) {
 			word = bitbang_txrx_be_cpha0_lsb(data, 1, 0,
-					SPI_CONTROLLER_NO_TX, word, 8);
+					SPI_MASTER_NO_TX, word, 8);
 			*rx++ = word;
 			count--;
 		}
@@ -128,7 +129,7 @@ spi_lp8841_rtc_transfer_one(struct spi_controller *host,
 		ret = -EINVAL;
 	}
 
-	spi_finalize_current_transfer(host);
+	spi_finalize_current_transfer(master);
 
 	return ret;
 }
@@ -136,7 +137,7 @@ spi_lp8841_rtc_transfer_one(struct spi_controller *host,
 static void
 spi_lp8841_rtc_set_cs(struct spi_device *spi, bool enable)
 {
-	struct spi_lp8841_rtc *data = spi_controller_get_devdata(spi->controller);
+	struct spi_lp8841_rtc *data = spi_master_get_devdata(spi->master);
 
 	data->state = 0;
 	writeb(data->state, data->iomem);
@@ -182,48 +183,48 @@ static int
 spi_lp8841_rtc_probe(struct platform_device *pdev)
 {
 	int				ret;
-	struct spi_controller		*host;
+	struct spi_master		*master;
 	struct spi_lp8841_rtc		*data;
 
-	host = spi_alloc_host(&pdev->dev, sizeof(*data));
-	if (!host)
+	master = spi_alloc_master(&pdev->dev, sizeof(*data));
+	if (!master)
 		return -ENOMEM;
-	platform_set_drvdata(pdev, host);
+	platform_set_drvdata(pdev, master);
 
-	host->flags = SPI_CONTROLLER_HALF_DUPLEX;
-	host->mode_bits = SPI_CS_HIGH | SPI_3WIRE | SPI_LSB_FIRST;
+	master->flags = SPI_MASTER_HALF_DUPLEX;
+	master->mode_bits = SPI_CS_HIGH | SPI_3WIRE | SPI_LSB_FIRST;
 
-	host->bus_num = pdev->id;
-	host->num_chipselect = 1;
-	host->setup = spi_lp8841_rtc_setup;
-	host->set_cs = spi_lp8841_rtc_set_cs;
-	host->transfer_one = spi_lp8841_rtc_transfer_one;
-	host->bits_per_word_mask = SPI_BPW_MASK(8);
+	master->bus_num = pdev->id;
+	master->num_chipselect = 1;
+	master->setup = spi_lp8841_rtc_setup;
+	master->set_cs = spi_lp8841_rtc_set_cs;
+	master->transfer_one = spi_lp8841_rtc_transfer_one;
+	master->bits_per_word_mask = SPI_BPW_MASK(8);
 #ifdef CONFIG_OF
-	host->dev.of_node = pdev->dev.of_node;
+	master->dev.of_node = pdev->dev.of_node;
 #endif
 
-	data = spi_controller_get_devdata(host);
+	data = spi_master_get_devdata(master);
 
 	data->iomem = devm_platform_ioremap_resource(pdev, 0);
 	ret = PTR_ERR_OR_ZERO(data->iomem);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to get IO address\n");
-		goto err_put_host;
+		goto err_put_master;
 	}
 
 	/* register with the SPI framework */
-	ret = devm_spi_register_controller(&pdev->dev, host);
+	ret = devm_spi_register_master(&pdev->dev, master);
 	if (ret) {
-		dev_err(&pdev->dev, "cannot register spi host\n");
-		goto err_put_host;
+		dev_err(&pdev->dev, "cannot register spi master\n");
+		goto err_put_master;
 	}
 
 	return ret;
 
 
-err_put_host:
-	spi_controller_put(host);
+err_put_master:
+	spi_master_put(master);
 
 	return ret;
 }
@@ -239,6 +240,6 @@ static struct platform_driver spi_lp8841_rtc_driver = {
 };
 module_platform_driver(spi_lp8841_rtc_driver);
 
-MODULE_DESCRIPTION("SPI host driver for ICP DAS LP-8841 RTC");
+MODULE_DESCRIPTION("SPI master driver for ICP DAS LP-8841 RTC");
 MODULE_AUTHOR("Sergei Ianovich");
 MODULE_LICENSE("GPL");

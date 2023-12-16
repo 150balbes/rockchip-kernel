@@ -41,7 +41,8 @@
 #define SMU_13_0_0_PP_OVERDRIVE_VERSION 0x83        // OverDrive 8 Table Version 0.2
 #define SMU_13_0_0_PP_POWERSAVINGCLOCK_VERSION 0x01 // Power Saving Clock Table Version 1.00
 
-enum SMU_13_0_0_ODFEATURE_CAP {
+enum SMU_13_0_0_ODFEATURE_CAP
+{
     SMU_13_0_0_ODCAP_GFXCLK_LIMITS = 0,
     SMU_13_0_0_ODCAP_UCLK_LIMITS,
     SMU_13_0_0_ODCAP_POWER_LIMIT,
@@ -61,7 +62,8 @@ enum SMU_13_0_0_ODFEATURE_CAP {
     SMU_13_0_0_ODCAP_COUNT,
 };
 
-enum SMU_13_0_0_ODFEATURE_ID {
+enum SMU_13_0_0_ODFEATURE_ID
+{
     SMU_13_0_0_ODFEATURE_GFXCLK_LIMITS           = 1 << SMU_13_0_0_ODCAP_GFXCLK_LIMITS,           //GFXCLK Limit feature
     SMU_13_0_0_ODFEATURE_UCLK_LIMITS             = 1 << SMU_13_0_0_ODCAP_UCLK_LIMITS,             //UCLK Limit feature
     SMU_13_0_0_ODFEATURE_POWER_LIMIT             = 1 << SMU_13_0_0_ODCAP_POWER_LIMIT,             //Power Limit feature
@@ -83,7 +85,8 @@ enum SMU_13_0_0_ODFEATURE_ID {
 
 #define SMU_13_0_0_MAX_ODFEATURE 32 //Maximum Number of OD Features
 
-enum SMU_13_0_0_ODSETTING_ID {
+enum SMU_13_0_0_ODSETTING_ID
+{
     SMU_13_0_0_ODSETTING_GFXCLKFMAX = 0,
     SMU_13_0_0_ODSETTING_GFXCLKFMIN,
     SMU_13_0_0_ODSETTING_UCLKFMIN,
@@ -120,7 +123,8 @@ enum SMU_13_0_0_ODSETTING_ID {
 };
 #define SMU_13_0_0_MAX_ODSETTING 64 //Maximum Number of ODSettings
 
-enum SMU_13_0_0_PWRMODE_SETTING {
+enum SMU_13_0_0_PWRMODE_SETTING
+{
     SMU_13_0_0_PMSETTING_POWER_LIMIT_QUIET = 0,
     SMU_13_0_0_PMSETTING_POWER_LIMIT_BALANCE,
     SMU_13_0_0_PMSETTING_POWER_LIMIT_TURBO,
@@ -140,7 +144,8 @@ enum SMU_13_0_0_PWRMODE_SETTING {
 };
 #define SMU_13_0_0_MAX_PMSETTING 32 //Maximum Number of PowerMode Settings
 
-struct smu_13_0_0_overdrive_table {
+struct smu_13_0_0_overdrive_table
+{
     uint8_t revision;                             //Revision = SMU_13_0_0_PP_OVERDRIVE_VERSION
     uint8_t reserve[3];                           //Zero filled field reserved for future use
     uint32_t feature_count;                       //Total number of supported features
@@ -151,7 +156,8 @@ struct smu_13_0_0_overdrive_table {
     int16_t pm_setting[SMU_13_0_0_MAX_PMSETTING]; //Optimized power mode feature settings
 };
 
-enum SMU_13_0_0_PPCLOCK_ID {
+enum SMU_13_0_0_PPCLOCK_ID
+{
     SMU_13_0_0_PPCLOCK_GFXCLK = 0,
     SMU_13_0_0_PPCLOCK_SOCCLK,
     SMU_13_0_0_PPCLOCK_UCLK,
@@ -169,7 +175,8 @@ enum SMU_13_0_0_PPCLOCK_ID {
 };
 #define SMU_13_0_0_MAX_PPCLOCK 16 //Maximum Number of PP Clocks
 
-struct smu_13_0_0_powerplay_table {
+struct smu_13_0_0_powerplay_table
+{
     struct atom_common_table_header header; //For SMU13, header.format_revision = 15, header.content_revision = 0
     uint8_t table_revision;                 //For SMU13, table_revision = 2
     uint8_t padding;

@@ -1110,7 +1110,6 @@
 
 	uartb: serial@70006040 {
 		compatible = "nvidia,tegra30-hsuart";
-		reset-names = "serial";
 		/delete-property/ reg-shift;
 		status = "okay";
 
@@ -1119,7 +1118,6 @@
 
 	uartc: serial@70006200 {
 		compatible = "nvidia,tegra30-hsuart";
-		reset-names = "serial";
 		/delete-property/ reg-shift;
 		status = "okay";
 
@@ -2628,7 +2626,7 @@
 	};
 
 	display-panel {
-		compatible = "hannstar,hsd101pww2", "panel-lvds";
+		compatible = "panel-lvds";
 
 		width-mm = <217>;
 		height-mm = <136>;

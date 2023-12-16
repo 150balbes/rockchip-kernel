@@ -37,11 +37,8 @@ properties:
 
   rockchip,system-power-controller:
     type: boolean
-    deprecated: true
     description:
       Telling whether or not this PMIC is controlling the system power.
-
-  system-power-controller: true
 
   wakeup-source:
     type: boolean
@@ -102,7 +99,6 @@ properties:
       "^(DCDC_REG[1-4]|DCDC_BOOST|LDO_REG[1-9]|SWITCH_REG|HDMI_SWITCH|OTG_SWITCH)$":
         type: object
         $ref: ../regulator/regulator.yaml#
-        unevaluatedProperties: false
     unevaluatedProperties: false
 
 required:

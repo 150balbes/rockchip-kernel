@@ -38,6 +38,7 @@ struct find_free_extent_ctl;
 	__print_symbolic(type,						\
 		{ BTRFS_TREE_BLOCK_REF_KEY, 	"TREE_BLOCK_REF" },	\
 		{ BTRFS_EXTENT_DATA_REF_KEY, 	"EXTENT_DATA_REF" },	\
+		{ BTRFS_EXTENT_REF_V0_KEY, 	"EXTENT_REF_V0" },	\
 		{ BTRFS_SHARED_BLOCK_REF_KEY, 	"SHARED_BLOCK_REF" },	\
 		{ BTRFS_SHARED_DATA_REF_KEY, 	"SHARED_DATA_REF" })
 
@@ -1561,6 +1562,7 @@ DECLARE_EVENT_CLASS(btrfs__work,
 		__field(	const void *,	wq			)
 		__field(	const void *,	func			)
 		__field(	const void *,	ordered_func		)
+		__field(	const void *,	ordered_free		)
 		__field(	const void *,	normal_work		)
 	),
 
@@ -1569,12 +1571,14 @@ DECLARE_EVENT_CLASS(btrfs__work,
 		__entry->wq		= work->wq;
 		__entry->func		= work->func;
 		__entry->ordered_func	= work->ordered_func;
+		__entry->ordered_free	= work->ordered_free;
 		__entry->normal_work	= &work->normal_work;
 	),
 
-	TP_printk_btrfs("work=%p (normal_work=%p) wq=%p func=%ps ordered_func=%p",
+	TP_printk_btrfs("work=%p (normal_work=%p) wq=%p func=%ps ordered_func=%p "
+		  "ordered_free=%p",
 		  __entry->work, __entry->normal_work, __entry->wq,
-		   __entry->func, __entry->ordered_func)
+		   __entry->func, __entry->ordered_func, __entry->ordered_free)
 );
 
 /*
@@ -2478,7 +2482,7 @@ DECLARE_EVENT_CLASS(btrfs_raid56_bio,
 		__entry->offset, __entry->opf, __entry->physical, __entry->len)
 );
 
-DEFINE_EVENT(btrfs_raid56_bio, raid56_read,
+DEFINE_EVENT(btrfs_raid56_bio, raid56_read_partial,
 	TP_PROTO(const struct btrfs_raid_bio *rbio,
 		 const struct bio *bio,
 		 const struct raid56_bio_trace_info *trace_info),
@@ -2486,7 +2490,7 @@ DEFINE_EVENT(btrfs_raid56_bio, raid56_read,
 	TP_ARGS(rbio, bio, trace_info)
 );
 
-DEFINE_EVENT(btrfs_raid56_bio, raid56_write,
+DEFINE_EVENT(btrfs_raid56_bio, raid56_write_stripe,
 	TP_PROTO(const struct btrfs_raid_bio *rbio,
 		 const struct bio *bio,
 		 const struct raid56_bio_trace_info *trace_info),
@@ -2494,80 +2498,29 @@ DEFINE_EVENT(btrfs_raid56_bio, raid56_write,
 	TP_ARGS(rbio, bio, trace_info)
 );
 
-TRACE_EVENT(btrfs_insert_one_raid_extent,
 
-	TP_PROTO(const struct btrfs_fs_info *fs_info, u64 logical, u64 length,
-		 int num_stripes),
+DEFINE_EVENT(btrfs_raid56_bio, raid56_scrub_write_stripe,
+	TP_PROTO(const struct btrfs_raid_bio *rbio,
+		 const struct bio *bio,
+		 const struct raid56_bio_trace_info *trace_info),
 
-	TP_ARGS(fs_info, logical, length, num_stripes),
-
-	TP_STRUCT__entry_btrfs(
-		__field(	u64,	logical		)
-		__field(	u64,	length		)
-		__field(	int,	num_stripes	)
-	),
-
-	TP_fast_assign_btrfs(fs_info,
-		__entry->logical	= logical;
-		__entry->length		= length;
-		__entry->num_stripes	= num_stripes;
-	),
-
-	TP_printk_btrfs("logical=%llu length=%llu num_stripes=%d",
-			__entry->logical, __entry->length,
-			__entry->num_stripes)
+	TP_ARGS(rbio, bio, trace_info)
 );
 
-TRACE_EVENT(btrfs_raid_extent_delete,
+DEFINE_EVENT(btrfs_raid56_bio, raid56_scrub_read,
+	TP_PROTO(const struct btrfs_raid_bio *rbio,
+		 const struct bio *bio,
+		 const struct raid56_bio_trace_info *trace_info),
 
-	TP_PROTO(const struct btrfs_fs_info *fs_info, u64 start, u64 end,
-		 u64 found_start, u64 found_end),
-
-	TP_ARGS(fs_info, start, end, found_start, found_end),
-
-	TP_STRUCT__entry_btrfs(
-		__field(	u64,	start		)
-		__field(	u64,	end		)
-		__field(	u64,	found_start	)
-		__field(	u64,	found_end	)
-	),
-
-	TP_fast_assign_btrfs(fs_info,
-		__entry->start		= start;
-		__entry->end		= end;
-		__entry->found_start	= found_start;
-		__entry->found_end	= found_end;
-	),
-
-	TP_printk_btrfs("start=%llu end=%llu found_start=%llu found_end=%llu",
-			__entry->start, __entry->end, __entry->found_start,
-			__entry->found_end)
+	TP_ARGS(rbio, bio, trace_info)
 );
 
-TRACE_EVENT(btrfs_get_raid_extent_offset,
+DEFINE_EVENT(btrfs_raid56_bio, raid56_scrub_read_recover,
+	TP_PROTO(const struct btrfs_raid_bio *rbio,
+		 const struct bio *bio,
+		 const struct raid56_bio_trace_info *trace_info),
 
-	TP_PROTO(const struct btrfs_fs_info *fs_info, u64 logical, u64 length,
-		 u64 physical, u64 devid),
-
-	TP_ARGS(fs_info, logical, length, physical, devid),
-
-	TP_STRUCT__entry_btrfs(
-		__field(	u64,	logical		)
-		__field(	u64,	length		)
-		__field(	u64,	physical	)
-		__field(	u64,	devid		)
-	),
-
-	TP_fast_assign_btrfs(fs_info,
-		__entry->logical	= logical;
-		__entry->length		= length;
-		__entry->physical	= physical;
-		__entry->devid		= devid;
-	),
-
-	TP_printk_btrfs("logical=%llu length=%llu physical=%llu devid=%llu",
-			__entry->logical, __entry->length, __entry->physical,
-			__entry->devid)
+	TP_ARGS(rbio, bio, trace_info)
 );
 
 #endif /* _TRACE_BTRFS_H */

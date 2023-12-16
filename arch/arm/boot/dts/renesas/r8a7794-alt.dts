@@ -90,6 +90,11 @@
 		states = <3300000 1>, <1800000 0>;
 	};
 
+	lbsc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+	};
+
 	keyboard {
 		compatible = "gpio-keys";
 

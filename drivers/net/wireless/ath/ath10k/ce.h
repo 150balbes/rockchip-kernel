@@ -110,7 +110,7 @@ struct ath10k_ce_ring {
 	struct ce_desc_64 *shadow_base;
 
 	/* keep last */
-	void *per_transfer_context[] __counted_by(nentries);
+	void *per_transfer_context[];
 };
 
 struct ath10k_ce_pipe {

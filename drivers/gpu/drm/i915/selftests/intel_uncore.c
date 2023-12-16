@@ -24,8 +24,6 @@
 
 #include "../i915_selftest.h"
 
-#include "gt/intel_gt.h"
-
 static int intel_fw_table_check(const struct intel_forcewake_range *ranges,
 				unsigned int num_ranges,
 				bool is_watertight)
@@ -212,7 +210,7 @@ static int live_forcewake_ops(void *arg)
 
 	for_each_engine(engine, gt, id) {
 		i915_reg_t mmio = _MMIO(engine->mmio_base + r->offset);
-		u32 __iomem *reg = intel_uncore_regs(uncore) + engine->mmio_base + r->offset;
+		u32 __iomem *reg = uncore->regs + engine->mmio_base + r->offset;
 		enum forcewake_domains fw_domains;
 		u32 val;
 

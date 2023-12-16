@@ -272,7 +272,8 @@ static void smpboot_destroy_threads(struct smp_hotplug_thread *ht)
 		struct task_struct *tsk = *per_cpu_ptr(ht->store, cpu);
 
 		if (tsk) {
-			kthread_stop_put(tsk);
+			kthread_stop(tsk);
+			put_task_struct(tsk);
 			*per_cpu_ptr(ht->store, cpu) = NULL;
 		}
 	}

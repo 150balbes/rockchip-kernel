@@ -16,7 +16,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/hdmi.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_eld.h>
 #include <sound/pcm_params.h>
 #include <sound/jack.h>
 #include <sound/soc.h>
@@ -1772,6 +1771,7 @@ static int create_fill_jack_kcontrols(struct snd_soc_card *card,
 {
 	struct hdac_hdmi_pin *pin;
 	struct snd_kcontrol_new *kc;
+	char kc_name[NAME_SIZE], xname[NAME_SIZE];
 	char *name;
 	int i = 0, j;
 	struct hdac_hdmi_priv *hdmi = hdev_to_hdmi_priv(hdev);
@@ -1785,14 +1785,14 @@ static int create_fill_jack_kcontrols(struct snd_soc_card *card,
 
 	list_for_each_entry(pin, &hdmi->pin_list, head) {
 		for (j = 0; j < pin->num_ports; j++) {
-			name = devm_kasprintf(component->dev, GFP_KERNEL,
-					      "hif%d-%d Jack",
-					      pin->nid, pin->ports[j].id);
+			snprintf(xname, sizeof(xname), "hif%d-%d Jack",
+						pin->nid, pin->ports[j].id);
+			name = devm_kstrdup(component->dev, xname, GFP_KERNEL);
 			if (!name)
 				return -ENOMEM;
-
-			kc[i].name = devm_kasprintf(component->dev, GFP_KERNEL,
-						    "%s Switch", name);
+			snprintf(kc_name, sizeof(kc_name), "%s Switch", xname);
+			kc[i].name = devm_kstrdup(component->dev, kc_name,
+							GFP_KERNEL);
 			if (!kc[i].name)
 				return -ENOMEM;
 

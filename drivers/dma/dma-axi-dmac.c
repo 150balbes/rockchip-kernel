@@ -117,7 +117,7 @@ struct axi_dmac_desc {
 	unsigned int num_submitted;
 	unsigned int num_completed;
 	unsigned int num_sgs;
-	struct axi_dmac_sg sg[] __counted_by(num_sgs);
+	struct axi_dmac_sg sg[];
 };
 
 struct axi_dmac_chan {
@@ -484,10 +484,11 @@ static struct axi_dmac_desc *axi_dmac_alloc_desc(unsigned int num_sgs)
 	desc = kzalloc(struct_size(desc, sg, num_sgs), GFP_NOWAIT);
 	if (!desc)
 		return NULL;
-	desc->num_sgs = num_sgs;
 
 	for (i = 0; i < num_sgs; i++)
 		desc->sg[i].id = AXI_DMAC_SG_UNUSED;
+
+	desc->num_sgs = num_sgs;
 
 	return desc;
 }
@@ -1028,7 +1029,7 @@ err_clk_disable:
 	return ret;
 }
 
-static void axi_dmac_remove(struct platform_device *pdev)
+static int axi_dmac_remove(struct platform_device *pdev)
 {
 	struct axi_dmac *dmac = platform_get_drvdata(pdev);
 
@@ -1037,6 +1038,8 @@ static void axi_dmac_remove(struct platform_device *pdev)
 	tasklet_kill(&dmac->chan.vchan.task);
 	dma_async_device_unregister(&dmac->dma_dev);
 	clk_disable_unprepare(dmac->clk);
+
+	return 0;
 }
 
 static const struct of_device_id axi_dmac_of_match_table[] = {
@@ -1051,7 +1054,7 @@ static struct platform_driver axi_dmac_driver = {
 		.of_match_table = axi_dmac_of_match_table,
 	},
 	.probe = axi_dmac_probe,
-	.remove_new = axi_dmac_remove,
+	.remove = axi_dmac_remove,
 };
 module_platform_driver(axi_dmac_driver);
 

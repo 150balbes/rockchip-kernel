@@ -74,7 +74,6 @@
 #define KF_ITER_NEW     (1 << 8) /* kfunc implements BPF iter constructor */
 #define KF_ITER_NEXT    (1 << 9) /* kfunc implements BPF iter next method */
 #define KF_ITER_DESTROY (1 << 10) /* kfunc implements BPF iter destructor */
-#define KF_RCU_PROTECTED (1 << 11) /* kfunc should be protected by rcu cs when they are invoked */
 
 /*
  * Tag marking a kernel function as a kfunc. This is meant to minimize the
@@ -83,17 +82,6 @@
  * kfunc, or a global kfunc in an LTO build.
  */
 #define __bpf_kfunc __used noinline
-
-#define __bpf_kfunc_start_defs()					       \
-	__diag_push();							       \
-	__diag_ignore_all("-Wmissing-declarations",			       \
-			  "Global kfuncs as their definitions will be in BTF");\
-	__diag_ignore_all("-Wmissing-prototypes",			       \
-			  "Global kfuncs as their definitions will be in BTF")
-
-#define __bpf_kfunc_end_defs() __diag_pop()
-#define __bpf_hook_start() __bpf_kfunc_start_defs()
-#define __bpf_hook_end() __bpf_kfunc_end_defs()
 
 /*
  * Return the name of the passed struct, if exists, or halt the build if for
@@ -216,12 +204,13 @@ u32 btf_nr_types(const struct btf *btf);
 bool btf_member_is_reg_int(const struct btf *btf, const struct btf_type *s,
 			   const struct btf_member *m,
 			   u32 expected_offset, u32 expected_size);
+int btf_find_spin_lock(const struct btf *btf, const struct btf_type *t);
+int btf_find_timer(const struct btf *btf, const struct btf_type *t);
 struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
 				    u32 field_mask, u32 value_size);
 int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec);
 bool btf_type_is_void(const struct btf_type *t);
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind);
-s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p);
 const struct btf_type *btf_type_skip_modifiers(const struct btf *btf,
 					       u32 id, u32 *res_id);
 const struct btf_type *btf_type_resolve_ptr(const struct btf *btf,

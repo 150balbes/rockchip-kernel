@@ -201,3 +201,6 @@ static inline void xen_pcibk_lateeoi(struct xen_pcibk_device *pdev,
 int xen_pcibk_xenbus_register(void);
 void xen_pcibk_xenbus_unregister(void);
 #endif
+
+/* Handles shared IRQs that can to device domain and control domain. */
+void xen_pcibk_irq_handler(struct pci_dev *dev, int reset);

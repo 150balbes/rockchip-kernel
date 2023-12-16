@@ -10,7 +10,7 @@
 
 #include <linux/kernel.h>
 #include <linux/io.h>
-#include <linux/of.h>
+#include <linux/of_platform.h>
 
 #include <asm/machdep.h>
 #include <asm/ipic.h>

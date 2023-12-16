@@ -35,7 +35,7 @@ static const char * const nct6775_sio_names[] __initconst = {
 	"NCT6796D",
 	"NCT6797D",
 	"NCT6798D",
-	"NCT6796D-S/NCT6799D-R",
+	"NCT6799D",
 };
 
 static unsigned short force_id;
@@ -586,7 +586,7 @@ nct6775_check_fan_inputs(struct nct6775_data *data, struct nct6775_sio_data *sio
 		int creb;
 		int cred;
 
-		cre6 = sio_data->sio_inb(sio_data, 0xe6);
+		cre6 = sio_data->sio_inb(sio_data, 0xe0);
 
 		sio_data->sio_select(sio_data, NCT6775_LD_12);
 		cre0 = sio_data->sio_inb(sio_data, 0xe0);
@@ -1465,8 +1465,10 @@ static const char * const asus_msi_boards[] = {
 static int nct6775_asuswmi_device_match(struct device *dev, void *data)
 {
 	struct acpi_device *adev = to_acpi_device(dev);
+	const char *uid = acpi_device_uid(adev);
+	const char *hid = acpi_device_hid(adev);
 
-	if (acpi_dev_hid_uid_match(adev, ASUSWMI_DEVICE_HID, data)) {
+	if (hid && !strcmp(hid, ASUSWMI_DEVICE_HID) && uid && !strcmp(uid, data)) {
 		asus_acpi_dev = adev;
 		return 1;
 	}

@@ -1333,8 +1333,7 @@ error_ldo:
 	return ret;
 }
 
-int aic32x4_probe(struct device *dev, struct regmap *regmap,
-		  enum aic32x4_type type)
+int aic32x4_probe(struct device *dev, struct regmap *regmap)
 {
 	struct aic32x4_priv *aic32x4;
 	struct aic32x4_pdata *pdata = dev->platform_data;
@@ -1350,7 +1349,7 @@ int aic32x4_probe(struct device *dev, struct regmap *regmap,
 		return -ENOMEM;
 
 	aic32x4->dev = dev;
-	aic32x4->type = type;
+	aic32x4->type = (enum aic32x4_type)dev_get_drvdata(dev);
 
 	dev_set_drvdata(dev, aic32x4);
 

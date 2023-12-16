@@ -5,10 +5,10 @@
 #include <net/rtnetlink.h>
 
 #include "netlink.h"
-#include "user.h"
+#include "slave.h"
 
 static const struct nla_policy dsa_policy[IFLA_DSA_MAX + 1] = {
-	[IFLA_DSA_CONDUIT]	= { .type = NLA_U32 },
+	[IFLA_DSA_MASTER]	= { .type = NLA_U32 },
 };
 
 static int dsa_changelink(struct net_device *dev, struct nlattr *tb[],
@@ -20,15 +20,15 @@ static int dsa_changelink(struct net_device *dev, struct nlattr *tb[],
 	if (!data)
 		return 0;
 
-	if (data[IFLA_DSA_CONDUIT]) {
-		u32 ifindex = nla_get_u32(data[IFLA_DSA_CONDUIT]);
-		struct net_device *conduit;
+	if (data[IFLA_DSA_MASTER]) {
+		u32 ifindex = nla_get_u32(data[IFLA_DSA_MASTER]);
+		struct net_device *master;
 
-		conduit = __dev_get_by_index(dev_net(dev), ifindex);
-		if (!conduit)
+		master = __dev_get_by_index(dev_net(dev), ifindex);
+		if (!master)
 			return -EINVAL;
 
-		err = dsa_user_change_conduit(dev, conduit, extack);
+		err = dsa_slave_change_master(dev, master, extack);
 		if (err)
 			return err;
 	}
@@ -38,15 +38,15 @@ static int dsa_changelink(struct net_device *dev, struct nlattr *tb[],
 
 static size_t dsa_get_size(const struct net_device *dev)
 {
-	return nla_total_size(sizeof(u32)) +	/* IFLA_DSA_CONDUIT  */
+	return nla_total_size(sizeof(u32)) +	/* IFLA_DSA_MASTER  */
 	       0;
 }
 
 static int dsa_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
-	struct net_device *conduit = dsa_user_to_conduit(dev);
+	struct net_device *master = dsa_slave_to_master(dev);
 
-	if (nla_put_u32(skb, IFLA_DSA_CONDUIT, conduit->ifindex))
+	if (nla_put_u32(skb, IFLA_DSA_MASTER, master->ifindex))
 		return -EMSGSIZE;
 
 	return 0;

@@ -202,10 +202,11 @@ void symbols__fixup_duplicate(struct rb_root_cached *symbols)
 		curr = rb_entry(nd, struct symbol, rb_node);
 again:
 		nd = rb_next(&curr->rb_node);
+		next = rb_entry(nd, struct symbol, rb_node);
+
 		if (!nd)
 			break;
 
-		next = rb_entry(nd, struct symbol, rb_node);
 		if (curr->start != next->start)
 			continue;
 
@@ -718,7 +719,6 @@ static bool symbol__is_idle(const char *name)
 		"cpu_startup_entry",
 		"idle_cpu",
 		"intel_idle",
-		"intel_idle_ibrs",
 		"default_idle",
 		"native_safe_halt",
 		"enter_idle",
@@ -877,7 +877,7 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 			*module++ = '\0';
 			curr_map_dso = map__dso(curr_map);
 			if (strcmp(curr_map_dso->short_name, module)) {
-				if (!RC_CHK_EQUAL(curr_map, initial_map) &&
+				if (RC_CHK_ACCESS(curr_map) != RC_CHK_ACCESS(initial_map) &&
 				    dso->kernel == DSO_SPACE__KERNEL_GUEST &&
 				    machine__is_default_guest(machine)) {
 					/*
@@ -1469,7 +1469,7 @@ static int dso__load_kcore(struct dso *dso, struct map *map,
 
 		list_del_init(&new_node->node);
 
-		if (RC_CHK_EQUAL(new_map, replacement_map)) {
+		if (RC_CHK_ACCESS(new_map) == RC_CHK_ACCESS(replacement_map)) {
 			struct map *map_ref;
 
 			map__set_start(map, map__start(new_map));
@@ -1733,10 +1733,8 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile)
 			/* PE symbols can only have 4 bytes, so use .text high bits */
 			dso->text_offset = section->vma - (u32)section->vma;
 			dso->text_offset += (u32)bfd_asymbol_value(symbols[i]);
-			dso->text_end = (section->vma - dso->text_offset) + section->size;
 		} else {
 			dso->text_offset = section->vma - section->filepos;
-			dso->text_end = section->filepos + section->size;
 		}
 	}
 
@@ -2206,20 +2204,15 @@ int dso__load_vmlinux(struct dso *dso, struct map *map,
 	if (symsrc__init(&ss, dso, symfs_vmlinux, symtab_type))
 		return -1;
 
-	/*
-	 * dso__load_sym() may copy 'dso' which will result in the copies having
-	 * an incorrect long name unless we set it here first.
-	 */
-	dso__set_long_name(dso, vmlinux, vmlinux_allocated);
-	if (dso->kernel == DSO_SPACE__KERNEL_GUEST)
-		dso->binary_type = DSO_BINARY_TYPE__GUEST_VMLINUX;
-	else
-		dso->binary_type = DSO_BINARY_TYPE__VMLINUX;
-
 	err = dso__load_sym(dso, map, &ss, &ss, 0);
 	symsrc__destroy(&ss);
 
 	if (err > 0) {
+		if (dso->kernel == DSO_SPACE__KERNEL_GUEST)
+			dso->binary_type = DSO_BINARY_TYPE__GUEST_VMLINUX;
+		else
+			dso->binary_type = DSO_BINARY_TYPE__VMLINUX;
+		dso__set_long_name(dso, vmlinux, vmlinux_allocated);
 		dso__set_loaded(dso);
 		pr_debug("Using %s for symbols\n", symfs_vmlinux);
 	}
@@ -2791,11 +2784,8 @@ struct mem_info *mem_info__get(struct mem_info *mi)
 
 void mem_info__put(struct mem_info *mi)
 {
-	if (mi && refcount_dec_and_test(&mi->refcnt)) {
-		addr_map_symbol__exit(&mi->iaddr);
-		addr_map_symbol__exit(&mi->daddr);
+	if (mi && refcount_dec_and_test(&mi->refcnt))
 		free(mi);
-	}
 }
 
 struct mem_info *mem_info__new(void)

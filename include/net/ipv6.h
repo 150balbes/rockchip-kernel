@@ -373,12 +373,12 @@ static inline void ipcm6_init(struct ipcm6_cookie *ipc6)
 }
 
 static inline void ipcm6_init_sk(struct ipcm6_cookie *ipc6,
-				 const struct sock *sk)
+				 const struct ipv6_pinfo *np)
 {
 	*ipc6 = (struct ipcm6_cookie) {
 		.hlimit = -1,
-		.tclass = inet6_sk(sk)->tclass,
-		.dontfrag = inet6_test_bit(DONTFRAG, sk),
+		.tclass = np->tclass,
+		.dontfrag = np->dontfrag,
 	};
 }
 
@@ -428,7 +428,7 @@ int ipv6_flowlabel_opt_get(struct sock *sk, struct in6_flowlabel_req *freq,
 			   int flags);
 int ip6_flowlabel_init(void);
 void ip6_flowlabel_cleanup(void);
-bool ip6_autoflowlabel(struct net *net, const struct sock *sk);
+bool ip6_autoflowlabel(struct net *net, const struct ipv6_pinfo *np);
 
 static inline void fl6_sock_release(struct ip6_flowlabel *fl)
 {
@@ -752,8 +752,12 @@ static inline u32 ipv6_addr_hash(const struct in6_addr *a)
 /* more secured version of ipv6_addr_hash() */
 static inline u32 __ipv6_addr_jhash(const struct in6_addr *a, const u32 initval)
 {
-	return jhash2((__force const u32 *)a->s6_addr32,
-		      ARRAY_SIZE(a->s6_addr32), initval);
+	u32 v = (__force u32)a->s6_addr32[0] ^ (__force u32)a->s6_addr32[1];
+
+	return jhash_3words(v,
+			    (__force u32)a->s6_addr32[2],
+			    (__force u32)a->s6_addr32[3],
+			    initval);
 }
 
 static inline bool ipv6_addr_loopback(const struct in6_addr *a)
@@ -782,11 +786,6 @@ static inline bool ipv6_addr_v4mapped(const struct in6_addr *a)
 #endif
 		(__force unsigned long)(a->s6_addr32[2] ^
 					cpu_to_be32(0x0000ffff))) == 0UL;
-}
-
-static inline bool ipv6_addr_v4mapped_any(const struct in6_addr *a)
-{
-	return ipv6_addr_v4mapped(a) && ipv4_is_zeronet(a->s6_addr32[3]);
 }
 
 static inline bool ipv6_addr_v4mapped_loopback(const struct in6_addr *a)
@@ -914,9 +913,9 @@ static inline int ip6_sk_dst_hoplimit(struct ipv6_pinfo *np, struct flowi6 *fl6,
 	int hlimit;
 
 	if (ipv6_addr_is_multicast(&fl6->daddr))
-		hlimit = READ_ONCE(np->mcast_hops);
+		hlimit = np->mcast_hops;
 	else
-		hlimit = READ_ONCE(np->hop_limit);
+		hlimit = np->hop_limit;
 	if (hlimit < 0)
 		hlimit = ip6_dst_hoplimit(dst);
 	return hlimit;
@@ -942,8 +941,7 @@ static inline bool ipv6_can_nonlocal_bind(struct net *net,
 					  struct inet_sock *inet)
 {
 	return net->ipv6.sysctl.ip_nonlocal_bind ||
-		test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
-		test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
+		inet->freebind || inet->transparent;
 }
 
 /* Sysctl settings for net ipv6.auto_flowlabels */
@@ -1133,6 +1131,12 @@ struct dst_entry *ip6_dst_lookup_flow(struct net *net, const struct sock *sk, st
 struct dst_entry *ip6_sk_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
 					 const struct in6_addr *final_dst,
 					 bool connected);
+struct dst_entry *ip6_dst_lookup_tunnel(struct sk_buff *skb,
+					struct net_device *dev,
+					struct net *net, struct socket *sock,
+					struct in6_addr *saddr,
+					const struct ip_tunnel_info *info,
+					u8 protocol, bool use_cache);
 struct dst_entry *ip6_blackhole_route(struct net *net,
 				      struct dst_entry *orig_dst);
 
@@ -1216,7 +1220,6 @@ void inet6_cleanup_sock(struct sock *sk);
 void inet6_sock_destruct(struct sock *sk);
 int inet6_release(struct socket *sock);
 int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len);
-int inet6_bind_sk(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 int inet6_getname(struct socket *sock, struct sockaddr *uaddr,
 		  int peer);
 int inet6_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
@@ -1271,9 +1274,7 @@ static inline int snmp6_unregister_dev(struct inet6_dev *idev) { return 0; }
 
 #ifdef CONFIG_SYSCTL
 struct ctl_table *ipv6_icmp_sysctl_init(struct net *net);
-size_t ipv6_icmp_sysctl_table_size(void);
 struct ctl_table *ipv6_route_sysctl_init(struct net *net);
-size_t ipv6_route_sysctl_table_size(struct net *net);
 int ipv6_sysctl_register(void);
 void ipv6_sysctl_unregister(void);
 #endif
@@ -1297,16 +1298,15 @@ static inline int ip6_sock_set_v6only(struct sock *sk)
 
 static inline void ip6_sock_set_recverr(struct sock *sk)
 {
-	inet6_set_bit(RECVERR6, sk);
+	lock_sock(sk);
+	inet6_sk(sk)->recverr = true;
+	release_sock(sk);
 }
 
-#define IPV6_PREFER_SRC_MASK (IPV6_PREFER_SRC_TMP | IPV6_PREFER_SRC_PUBLIC | \
-			      IPV6_PREFER_SRC_COA)
-
-static inline int ip6_sock_set_addr_preferences(struct sock *sk, int val)
+static inline int __ip6_sock_set_addr_preferences(struct sock *sk, int val)
 {
-	unsigned int prefmask = ~IPV6_PREFER_SRC_MASK;
 	unsigned int pref = 0;
+	unsigned int prefmask = ~0;
 
 	/* check PUBLIC/TMP/PUBTMP_DEFAULT conflicts */
 	switch (val & (IPV6_PREFER_SRC_PUBLIC |
@@ -1356,9 +1356,18 @@ static inline int ip6_sock_set_addr_preferences(struct sock *sk, int val)
 		return -EINVAL;
 	}
 
-	WRITE_ONCE(inet6_sk(sk)->srcprefs,
-		   (READ_ONCE(inet6_sk(sk)->srcprefs) & prefmask) | pref);
+	inet6_sk(sk)->srcprefs = (inet6_sk(sk)->srcprefs & prefmask) | pref;
 	return 0;
+}
+
+static inline int ip6_sock_set_addr_preferences(struct sock *sk, bool val)
+{
+	int ret;
+
+	lock_sock(sk);
+	ret = __ip6_sock_set_addr_preferences(sk, val);
+	release_sock(sk);
+	return ret;
 }
 
 static inline void ip6_sock_set_recvpktinfo(struct sock *sk)

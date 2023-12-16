@@ -37,7 +37,6 @@ properties:
       "^buck[0123]$":
         type: object
         $ref: /schemas/regulator/regulator.yaml#
-        unevaluatedProperties: false
 
     required:
       - buck0

@@ -14,7 +14,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/phy/ulpi_phy.h>
 #include <linux/power_supply.h>
-#include <linux/property.h>
 #include <linux/workqueue.h>
 
 #define TUSB1211_POWER_CONTROL				0x3d

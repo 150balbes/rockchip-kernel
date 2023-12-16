@@ -930,8 +930,8 @@ static irqreturn_t w5100_interrupt(int irq, void *ndev_instance)
 
 		if (priv->ops->may_sleep)
 			queue_work(priv->xfer_wq, &priv->rx_work);
-		else
-			napi_schedule(&priv->napi);
+		else if (napi_schedule_prep(&priv->napi))
+			__napi_schedule(&priv->napi);
 	}
 
 	return IRQ_HANDLED;
@@ -1062,9 +1062,11 @@ static int w5100_mmio_probe(struct platform_device *pdev)
 			   mac_addr, irq, data ? data->link_gpio : -EINVAL);
 }
 
-static void w5100_mmio_remove(struct platform_device *pdev)
+static int w5100_mmio_remove(struct platform_device *pdev)
 {
 	w5100_remove(&pdev->dev);
+
+	return 0;
 }
 
 void *w5100_ops_priv(const struct net_device *ndev)
@@ -1271,6 +1273,6 @@ static struct platform_driver w5100_mmio_driver = {
 		.pm	= &w5100_pm_ops,
 	},
 	.probe		= w5100_mmio_probe,
-	.remove_new	= w5100_mmio_remove,
+	.remove		= w5100_mmio_remove,
 };
 module_platform_driver(w5100_mmio_driver);

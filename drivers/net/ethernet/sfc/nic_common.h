@@ -15,10 +15,11 @@
 #include "ptp.h"
 
 enum {
-	/* Revisions 0-3 were Falcon A0, A1, B0 and Siena respectively.
+	/* Revisions 0-2 were Falcon A0, A1 and B0 respectively.
 	 * They are not supported by this driver but these revision numbers
 	 * form part of the ethtool API for register dumping.
 	 */
+	EFX_REV_SIENA_A0 = 3,
 	EFX_REV_HUNT_A0 = 4,
 	EFX_REV_EF100 = 5,
 };
@@ -32,7 +33,7 @@ static inline int efx_nic_rev(struct efx_nic *efx)
 static inline efx_qword_t *efx_event(struct efx_channel *channel,
 				     unsigned int index)
 {
-	return ((efx_qword_t *)(channel->eventq.addr)) +
+	return ((efx_qword_t *) (channel->eventq.buf.addr)) +
 		(index & channel->eventq_mask);
 }
 
@@ -58,7 +59,7 @@ static inline int efx_event_present(efx_qword_t *event)
 static inline efx_qword_t *
 efx_tx_desc(struct efx_tx_queue *tx_queue, unsigned int index)
 {
-	return ((efx_qword_t *)(tx_queue->txd.addr)) + index;
+	return ((efx_qword_t *) (tx_queue->txd.buf.addr)) + index;
 }
 
 /* Report whether this TX queue would be empty for the given write_count.
@@ -79,7 +80,9 @@ int efx_enqueue_skb_tso(struct efx_tx_queue *tx_queue, struct sk_buff *skb,
 
 /* Decide whether to push a TX descriptor to the NIC vs merely writing
  * the doorbell.  This can reduce latency when we are adding a single
- * descriptor to an empty queue, but is otherwise pointless.
+ * descriptor to an empty queue, but is otherwise pointless.  Further,
+ * Falcon and Siena have hardware bugs (SF bug 33851) that may be
+ * triggered if we don't check this.
  * We use the write_count used for the last doorbell push, to get the
  * NIC's view of the tx queue.
  */
@@ -96,7 +99,7 @@ static inline bool efx_nic_may_push_tx_desc(struct efx_tx_queue *tx_queue,
 static inline efx_qword_t *
 efx_rx_desc(struct efx_rx_queue *rx_queue, unsigned int index)
 {
-	return ((efx_qword_t *)(rx_queue->rxd.addr)) + index;
+	return ((efx_qword_t *) (rx_queue->rxd.buf.addr)) + index;
 }
 
 /* Alignment of PCIe DMA boundaries (4KB) */

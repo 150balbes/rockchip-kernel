@@ -37,7 +37,7 @@ config HW_RANDOM_TIMERIOMEM
 
 config HW_RANDOM_INTEL
 	tristate "Intel HW Random Number Generator support"
-	depends on (X86 || COMPILE_TEST) && PCI
+	depends on (X86 || IA64) && PCI
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -50,8 +50,7 @@ config HW_RANDOM_INTEL
 
 config HW_RANDOM_AMD
 	tristate "AMD HW Random Number Generator support"
-	depends on (X86 || PPC_MAPLE || COMPILE_TEST)
-	depends on PCI && HAS_IOPORT_MAP
+	depends on (X86 || PPC_MAPLE) && PCI
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -64,7 +63,7 @@ config HW_RANDOM_AMD
 
 config HW_RANDOM_ATMEL
 	tristate "Atmel Random Number Generator support"
-	depends on (ARCH_AT91 || COMPILE_TEST)
+	depends on (ARCH_AT91 || COMPILE_TEST) && HAVE_CLK && OF
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -114,8 +113,7 @@ config HW_RANDOM_IPROC_RNG200
 
 config HW_RANDOM_GEODE
 	tristate "AMD Geode HW Random Number Generator support"
-	depends on (X86_32 || COMPILE_TEST)
-	depends on PCI
+	depends on X86_32 && PCI
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -207,7 +205,7 @@ config HW_RANDOM_OCTEON
 
 config HW_RANDOM_PASEMI
 	tristate "PA Semi HW Random Number Generator support"
-	depends on PPC_PASEMI || (PPC && COMPILE_TEST)
+	depends on PPC_PASEMI
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -230,7 +228,7 @@ config HW_RANDOM_VIRTIO
 
 config HW_RANDOM_MXC_RNGA
 	tristate "Freescale i.MX RNGA Random Number Generator"
-	depends on SOC_IMX31 || COMPILE_TEST
+	depends on SOC_IMX31
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -243,7 +241,7 @@ config HW_RANDOM_MXC_RNGA
 
 config HW_RANDOM_IMX_RNGC
 	tristate "Freescale i.MX RNGC Random Number Generator"
-	depends on HAS_IOMEM
+	depends on HAS_IOMEM && HAVE_CLK
 	depends on SOC_IMX25 || SOC_IMX6SL || SOC_IMX6SLL || SOC_IMX6UL || COMPILE_TEST
 	default HW_RANDOM
 	help
@@ -258,7 +256,8 @@ config HW_RANDOM_IMX_RNGC
 
 config HW_RANDOM_INGENIC_RNG
 	tristate "Ingenic Random Number Generator support"
-	depends on MACH_JZ4780 || MACH_X1000 || COMPILE_TEST
+	depends on HW_RANDOM
+	depends on MACH_JZ4780 || MACH_X1000
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number Generator
@@ -272,7 +271,8 @@ config HW_RANDOM_INGENIC_RNG
 
 config HW_RANDOM_INGENIC_TRNG
 	tristate "Ingenic True Random Number Generator support"
-	depends on MACH_X1830 || COMPILE_TEST
+	depends on HW_RANDOM
+	depends on MACH_X1830
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the True Random Number Generator
@@ -324,7 +324,7 @@ config HW_RANDOM_POWERNV
 
 config HW_RANDOM_HISI
 	tristate "Hisilicon Random Number Generator support"
-	depends on ARCH_HISI || COMPILE_TEST
+	depends on HW_RANDOM && ARCH_HISI
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -348,7 +348,7 @@ config HW_RANDOM_HISTB
 
 config HW_RANDOM_ST
 	tristate "ST Microelectronics HW Random Number Generator support"
-	depends on ARCH_STI || COMPILE_TEST
+	depends on HW_RANDOM && (ARCH_STI || COMPILE_TEST)
 	help
 	  This driver provides kernel-side support for the Random Number
 	  Generator hardware found on STi series of SoCs.
@@ -358,7 +358,7 @@ config HW_RANDOM_ST
 
 config HW_RANDOM_XGENE
 	tristate "APM X-Gene True Random Number Generator (TRNG) support"
-	depends on ARCH_XGENE || COMPILE_TEST
+	depends on HW_RANDOM && ARCH_XGENE
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number
@@ -371,7 +371,7 @@ config HW_RANDOM_XGENE
 
 config HW_RANDOM_STM32
 	tristate "STMicroelectronics STM32 random number generator"
-	depends on ARCH_STM32 || COMPILE_TEST
+	depends on HW_RANDOM && (ARCH_STM32 || COMPILE_TEST)
 	depends on HAS_IOMEM
 	default HW_RANDOM
 	help
@@ -385,8 +385,8 @@ config HW_RANDOM_STM32
 
 config HW_RANDOM_PIC32
 	tristate "Microchip PIC32 Random Number Generator support"
-	depends on MACH_PIC32 || COMPILE_TEST
-	default HW_RANDOM if MACH_PIC32
+	depends on HW_RANDOM && MACH_PIC32
+	default y
 	help
 	  This driver provides kernel-side support for the Random Number
 	  Generator hardware found on a PIC32.
@@ -425,8 +425,7 @@ config HW_RANDOM_MESON
 
 config HW_RANDOM_CAVIUM
 	tristate "Cavium ThunderX Random Number Generator support"
-	depends on PCI
-	depends on ARCH_THUNDER || (ARM64 && COMPILE_TEST)
+	depends on HW_RANDOM && PCI && ARCH_THUNDER
 	default HW_RANDOM
 	help
 	  This driver provides kernel-side support for the Random Number

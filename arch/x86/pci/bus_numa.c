@@ -101,7 +101,7 @@ void update_res(struct pci_root_info *info, resource_size_t start,
 	if (start > end)
 		return;
 
-	if (start == RESOURCE_SIZE_MAX)
+	if (start == MAX_RESOURCE)
 		return;
 
 	if (!merge)

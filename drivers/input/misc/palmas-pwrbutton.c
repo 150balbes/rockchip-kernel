@@ -245,7 +245,7 @@ err_free_mem:
  *
  * Return: 0
  */
-static void palmas_pwron_remove(struct platform_device *pdev)
+static int palmas_pwron_remove(struct platform_device *pdev)
 {
 	struct palmas_pwron *pwron = platform_get_drvdata(pdev);
 
@@ -254,6 +254,8 @@ static void palmas_pwron_remove(struct platform_device *pdev)
 
 	input_unregister_device(pwron->input_dev);
 	kfree(pwron);
+
+	return 0;
 }
 
 /**
@@ -310,7 +312,7 @@ MODULE_DEVICE_TABLE(of, of_palmas_pwr_match);
 
 static struct platform_driver palmas_pwron_driver = {
 	.probe	= palmas_pwron_probe,
-	.remove_new = palmas_pwron_remove,
+	.remove	= palmas_pwron_remove,
 	.driver	= {
 		.name	= "palmas_pwrbutton",
 		.of_match_table = of_match_ptr(of_palmas_pwr_match),

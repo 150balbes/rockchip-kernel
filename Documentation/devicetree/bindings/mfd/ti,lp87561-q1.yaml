@@ -41,7 +41,6 @@ properties:
       buck3210:
         type: object
         $ref: /schemas/regulator/regulator.yaml#
-        unevaluatedProperties: false
 
     required:
       - buck3210

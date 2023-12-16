@@ -59,6 +59,10 @@ AMDKFD_FILES	:= $(AMDKFD_PATH)/kfd_module.o \
 		$(AMDKFD_PATH)/kfd_crat.o \
 		$(AMDKFD_PATH)/kfd_debug.o
 
+ifneq ($(CONFIG_AMD_IOMMU_V2),)
+AMDKFD_FILES += $(AMDKFD_PATH)/kfd_iommu.o
+endif
+
 ifneq ($(CONFIG_DEBUG_FS),)
 AMDKFD_FILES += $(AMDKFD_PATH)/kfd_debugfs.o
 endif

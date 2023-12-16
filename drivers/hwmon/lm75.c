@@ -13,6 +13,7 @@
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/util_macros.h>
@@ -578,7 +579,7 @@ static int lm75_probe(struct i2c_client *client)
 	enum lm75_type kind;
 
 	if (client->dev.of_node)
-		kind = (uintptr_t)of_device_get_match_data(&client->dev);
+		kind = (enum lm75_type)of_device_get_match_data(&client->dev);
 	else
 		kind = i2c_match_id(lm75_ids, client)->driver_data;
 

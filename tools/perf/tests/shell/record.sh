@@ -5,7 +5,6 @@
 set -e
 
 shelldir=$(dirname "$0")
-# shellcheck source=lib/waiting.sh
 . "${shelldir}"/lib/waiting.sh
 
 err=0

@@ -68,20 +68,6 @@ extern void ia32_pick_mmap_layout(struct mm_struct *mm);
 
 #endif
 
-extern bool __ia32_enabled;
-
-static inline bool ia32_enabled(void)
-{
-	return __ia32_enabled;
-}
-
-#else /* !CONFIG_IA32_EMULATION */
-
-static inline bool ia32_enabled(void)
-{
-	return IS_ENABLED(CONFIG_X86_32);
-}
-
-#endif
+#endif /* CONFIG_IA32_EMULATION */
 
 #endif /* _ASM_X86_IA32_H */

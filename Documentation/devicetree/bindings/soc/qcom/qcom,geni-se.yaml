@@ -52,8 +52,6 @@ properties:
   iommus:
     maxItems: 1
 
-  dma-coherent: true
-
 required:
   - compatible
   - reg

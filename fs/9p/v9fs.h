@@ -108,7 +108,7 @@ enum p9_cache_bits {
 
 struct v9fs_session_info {
 	/* options */
-	unsigned int flags;
+	unsigned char flags;
 	unsigned char nodev;
 	unsigned short debug;
 	unsigned int afid;

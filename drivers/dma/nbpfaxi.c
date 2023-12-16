@@ -15,6 +15,7 @@
 #include <linux/log2.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -1454,7 +1455,7 @@ e_clk_off:
 	return ret;
 }
 
-static void nbpf_remove(struct platform_device *pdev)
+static int nbpf_remove(struct platform_device *pdev)
 {
 	struct nbpf_device *nbpf = platform_get_drvdata(pdev);
 	int i;
@@ -1472,6 +1473,8 @@ static void nbpf_remove(struct platform_device *pdev)
 	of_dma_controller_free(pdev->dev.of_node);
 	dma_async_device_unregister(&nbpf->dma_dev);
 	clk_disable_unprepare(nbpf->clk);
+
+	return 0;
 }
 
 static const struct platform_device_id nbpf_ids[] = {
@@ -1515,7 +1518,7 @@ static struct platform_driver nbpf_driver = {
 	},
 	.id_table = nbpf_ids,
 	.probe = nbpf_probe,
-	.remove_new = nbpf_remove,
+	.remove = nbpf_remove,
 };
 
 module_platform_driver(nbpf_driver);

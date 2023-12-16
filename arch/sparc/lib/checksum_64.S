@@ -14,7 +14,7 @@
  *	BSD4.4 portable checksum routine
  */
 
-#include <linux/export.h>
+#include <asm/export.h>
 	.text
 
 csum_partial_fix_alignment:

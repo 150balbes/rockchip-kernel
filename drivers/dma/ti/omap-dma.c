@@ -16,8 +16,8 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-#include <linux/of.h>
 #include <linux/of_dma.h>
+#include <linux/of_device.h>
 
 #include "../virt-dma.h"
 
@@ -124,7 +124,7 @@ struct omap_desc {
 	uint32_t csdp;		/* CSDP value */
 
 	unsigned sglen;
-	struct omap_sg sg[] __counted_by(sglen);
+	struct omap_sg sg[];
 };
 
 enum {
@@ -1005,7 +1005,6 @@ static struct dma_async_tx_descriptor *omap_dma_prep_slave_sg(
 	d = kzalloc(struct_size(d, sg, sglen), GFP_ATOMIC);
 	if (!d)
 		return NULL;
-	d->sglen = sglen;
 
 	d->dir = dir;
 	d->dev_addr = dev_addr;
@@ -1120,6 +1119,8 @@ static struct dma_async_tx_descriptor *omap_dma_prep_slave_sg(
 			omap_dma_fill_type2_desc(d, i, dir, (i == sglen - 1));
 		}
 	}
+
+	d->sglen = sglen;
 
 	/* Release the dma_pool entries if one allocation failed */
 	if (ll_failed) {
@@ -1843,7 +1844,7 @@ static int omap_dma_probe(struct platform_device *pdev)
 	return rc;
 }
 
-static void omap_dma_remove(struct platform_device *pdev)
+static int omap_dma_remove(struct platform_device *pdev)
 {
 	struct omap_dmadev *od = platform_get_drvdata(pdev);
 	int irq;
@@ -1868,6 +1869,8 @@ static void omap_dma_remove(struct platform_device *pdev)
 		dma_pool_destroy(od->desc_pool);
 
 	omap_dma_free(od);
+
+	return 0;
 }
 
 static const struct omap_dma_config omap2420_data = {
@@ -1915,7 +1918,7 @@ MODULE_DEVICE_TABLE(of, omap_dma_match);
 
 static struct platform_driver omap_dma_driver = {
 	.probe	= omap_dma_probe,
-	.remove_new = omap_dma_remove,
+	.remove	= omap_dma_remove,
 	.driver = {
 		.name = "omap-dma-engine",
 		.of_match_table = omap_dma_match,

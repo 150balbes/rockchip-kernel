@@ -423,9 +423,11 @@ static void offb_init_fb(struct platform_device *parent, const char *name,
 	fix = &info->fix;
 	var = &info->var;
 
-	if (name)
-		snprintf(fix->id, sizeof(fix->id), "OFfb %s", name);
-	else
+	if (name) {
+		strcpy(fix->id, "OFfb ");
+		strncat(fix->id, name, sizeof(fix->id) - sizeof("OFfb "));
+		fix->id[sizeof(fix->id) - 1] = '\0';
+	} else
 		snprintf(fix->id, sizeof(fix->id), "OFfb %pOFn", dp);
 
 

@@ -95,7 +95,6 @@ sesInfoFree(struct cifs_ses *buf_to_free)
 		return;
 	}
 
-	unload_nls(buf_to_free->local_nls);
 	atomic_dec(&sesInfoAllocCount);
 	kfree(buf_to_free->serverOS);
 	kfree(buf_to_free->serverDomain);
@@ -113,22 +112,18 @@ sesInfoFree(struct cifs_ses *buf_to_free)
 }
 
 struct cifs_tcon *
-tcon_info_alloc(bool dir_leases_enabled)
+tconInfoAlloc(void)
 {
 	struct cifs_tcon *ret_buf;
 
 	ret_buf = kzalloc(sizeof(*ret_buf), GFP_KERNEL);
 	if (!ret_buf)
 		return NULL;
-
-	if (dir_leases_enabled == true) {
-		ret_buf->cfids = init_cached_dirs();
-		if (!ret_buf->cfids) {
-			kfree(ret_buf);
-			return NULL;
-		}
+	ret_buf->cfids = init_cached_dirs();
+	if (!ret_buf->cfids) {
+		kfree(ret_buf);
+		return NULL;
 	}
-	/* else ret_buf->cfids is already set to NULL above */
 
 	atomic_inc(&tconInfoAllocCount);
 	ret_buf->status = TID_NEW;
@@ -480,7 +475,7 @@ is_valid_oplock_break(char *buffer, struct TCP_Server_Info *srv)
 		return false;
 
 	/* If server is a channel, select the primary channel */
-	pserver = SERVER_IS_CHAN(srv) ? srv->primary_server : srv;
+	pserver = CIFS_SERVER_IS_CHAN(srv) ? srv->primary_server : srv;
 
 	/* look up tcon based on tid & uid */
 	spin_lock(&cifs_tcp_ses_lock);

@@ -100,7 +100,8 @@ void hci_devcd_reset(struct hci_dev *hdev)
 /* Call with hci_dev_lock only. */
 static void hci_devcd_free(struct hci_dev *hdev)
 {
-	vfree(hdev->dump.head);
+	if (hdev->dump.head)
+		vfree(hdev->dump.head);
 
 	hci_devcd_reset(hdev);
 }

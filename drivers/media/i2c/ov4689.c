@@ -99,7 +99,8 @@ struct ov4689 {
 
 	u32 clock_rate;
 
-	struct mutex mutex; /* lock to protect ctrls and cur_mode */
+	struct mutex mutex; /* lock to protect streaming, ctrls and cur_mode */
+	bool streaming;
 	struct v4l2_ctrl_handler ctrl_handler;
 	struct v4l2_ctrl *exposure;
 
@@ -467,6 +468,10 @@ static int ov4689_s_stream(struct v4l2_subdev *sd, int on)
 
 	mutex_lock(&ov4689->mutex);
 
+	on = !!on;
+	if (on == ov4689->streaming)
+		goto unlock_and_return;
+
 	if (on) {
 		ret = pm_runtime_resume_and_get(&client->dev);
 		if (ret < 0)
@@ -498,6 +503,8 @@ static int ov4689_s_stream(struct v4l2_subdev *sd, int on)
 				 OV4689_MODE_SW_STANDBY);
 		pm_runtime_put(&client->dev);
 	}
+
+	ov4689->streaming = on;
 
 unlock_and_return:
 	mutex_unlock(&ov4689->mutex);

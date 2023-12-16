@@ -513,4 +513,3 @@ module_init(choke_module_init)
 module_exit(choke_module_exit)
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Choose and keep responsive flows scheduler");

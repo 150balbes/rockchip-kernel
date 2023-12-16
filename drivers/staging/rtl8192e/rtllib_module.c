@@ -34,6 +34,9 @@
 #include <net/arp.h>
 #include "rtllib.h"
 
+u32 rt_global_debug_component = COMP_ERR;
+EXPORT_SYMBOL(rt_global_debug_component);
+
 static inline int rtllib_networks_allocate(struct rtllib_device *ieee)
 {
 	if (ieee->networks)
@@ -94,6 +97,9 @@ struct net_device *alloc_rtllib(int sizeof_priv)
 	ieee->scan_age = DEFAULT_MAX_SCAN_AGE;
 	ieee->open_wep = 1;
 
+	/* Default to enabling full open WEP with host based encrypt/decrypt */
+	ieee->host_encrypt = 1;
+	ieee->host_decrypt = 1;
 	ieee->ieee802_1x = 1; /* Default to supporting 802.1x */
 
 	ieee->rtllib_ap_sec_type = rtllib_ap_sec_type;
@@ -111,6 +117,7 @@ struct net_device *alloc_rtllib(int sizeof_priv)
 	ieee->drop_unencrypted = 0;
 	ieee->privacy_invoked = 0;
 	ieee->ieee802_1x = 1;
+	ieee->raw_tx = 0;
 	ieee->hwsec_active = 0;
 
 	memset(ieee->swcamtable, 0, sizeof(struct sw_cam_table) * 32);
@@ -122,9 +129,9 @@ struct net_device *alloc_rtllib(int sizeof_priv)
 	if (!ieee->ht_info)
 		goto free_softmac;
 
-	ht_update_default_setting(ieee);
+	HTUpdateDefaultSetting(ieee);
 	HTInitializeHTInfo(ieee);
-	rtllib_ts_init(ieee);
+	TSInitialize(ieee);
 	for (i = 0; i < IEEE_IBSS_MAC_HASH_SIZE; i++)
 		INIT_LIST_HEAD(&ieee->ibss_mac_hash[i]);
 

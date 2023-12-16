@@ -45,12 +45,12 @@
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/list.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/of_dma.h>
+#include <linux/of_device.h>
 #include <linux/property.h>
 #include <linux/delay.h>
 #include <linux/acpi.h>
@@ -745,7 +745,7 @@ static bool hidma_test_capability(struct device *dev, enum hidma_cap test_cap)
 {
 	enum hidma_cap cap;
 
-	cap = (uintptr_t) device_get_match_data(dev);
+	cap = (enum hidma_cap) device_get_match_data(dev);
 	return cap ? ((cap & test_cap) > 0) : 0;
 }
 
@@ -765,15 +765,17 @@ static int hidma_probe(struct platform_device *pdev)
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 
-	trca = devm_platform_get_and_ioremap_resource(pdev, 0, &trca_resource);
+	trca_resource = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	trca = devm_ioremap_resource(&pdev->dev, trca_resource);
 	if (IS_ERR(trca)) {
-		rc = PTR_ERR(trca);
+		rc = -ENOMEM;
 		goto bailout;
 	}
 
-	evca = devm_platform_get_and_ioremap_resource(pdev, 1, &evca_resource);
+	evca_resource = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	evca = devm_ioremap_resource(&pdev->dev, evca_resource);
 	if (IS_ERR(evca)) {
-		rc = PTR_ERR(evca);
+		rc = -ENOMEM;
 		goto bailout;
 	}
 
@@ -783,7 +785,7 @@ static int hidma_probe(struct platform_device *pdev)
 	 */
 	chirq = platform_get_irq(pdev, 0);
 	if (chirq < 0) {
-		rc = chirq;
+		rc = -ENODEV;
 		goto bailout;
 	}
 
@@ -915,7 +917,7 @@ static void hidma_shutdown(struct platform_device *pdev)
 
 }
 
-static void hidma_remove(struct platform_device *pdev)
+static int hidma_remove(struct platform_device *pdev)
 {
 	struct hidma_dev *dmadev = platform_get_drvdata(pdev);
 
@@ -935,6 +937,8 @@ static void hidma_remove(struct platform_device *pdev)
 	dev_info(&pdev->dev, "HI-DMA engine removed\n");
 	pm_runtime_put_sync_suspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 #if IS_ENABLED(CONFIG_ACPI)
@@ -958,7 +962,7 @@ MODULE_DEVICE_TABLE(of, hidma_match);
 
 static struct platform_driver hidma_driver = {
 	.probe = hidma_probe,
-	.remove_new = hidma_remove,
+	.remove = hidma_remove,
 	.shutdown = hidma_shutdown,
 	.driver = {
 		   .name = "hidma",

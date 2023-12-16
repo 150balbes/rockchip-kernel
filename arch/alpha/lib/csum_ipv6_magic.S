@@ -13,7 +13,7 @@
  * added by Ivan Kokshaysky <ink@jurassic.park.msu.ru>
  */
 
-#include <linux/export.h>
+#include <asm/export.h>
 	.globl csum_ipv6_magic
 	.align 4
 	.ent csum_ipv6_magic

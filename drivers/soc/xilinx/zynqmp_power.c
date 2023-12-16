@@ -11,7 +11,6 @@
 
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <linux/suspend.h>
@@ -243,8 +242,8 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 		}
 	} else if (of_property_present(pdev->dev.of_node, "interrupts")) {
 		irq = platform_get_irq(pdev, 0);
-		if (irq < 0)
-			return irq;
+		if (irq <= 0)
+			return -ENXIO;
 
 		ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 						zynqmp_pm_isr,

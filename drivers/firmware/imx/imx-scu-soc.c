@@ -78,22 +78,6 @@ static int imx_scu_soc_id(void)
 	return msg.data.resp.id;
 }
 
-static const char *imx_scu_soc_name(u32 id)
-{
-	switch (id) {
-	case 0x1:
-		return "i.MX8QM";
-	case 0x2:
-		return "i.MX8QXP";
-	case 0xe:
-		return "i.MX8DXL";
-	default:
-		break;
-	}
-
-	return "NULL";
-}
-
 int imx_scu_soc_init(struct device *dev)
 {
 	struct soc_device_attribute *soc_dev_attr;
@@ -129,7 +113,9 @@ int imx_scu_soc_init(struct device *dev)
 
 	/* format soc_id value passed from SCU firmware */
 	val = id & 0x1f;
-	soc_dev_attr->soc_id = imx_scu_soc_name(val);
+	soc_dev_attr->soc_id = devm_kasprintf(dev, GFP_KERNEL, "0x%x", val);
+	if (!soc_dev_attr->soc_id)
+		return -ENOMEM;
 
 	/* format revision value passed from SCU firmware */
 	val = (id >> 5) & 0xf;

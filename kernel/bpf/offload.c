@@ -25,7 +25,6 @@
 #include <linux/rhashtable.h>
 #include <linux/rtnetlink.h>
 #include <linux/rwsem.h>
-#include <net/xdp.h>
 
 /* Protects offdevs, members of bpf_offload_netdev and offload members
  * of all progs.
@@ -199,14 +198,12 @@ static int __bpf_prog_dev_bound_init(struct bpf_prog *prog, struct net_device *n
 	offload->netdev = netdev;
 
 	ondev = bpf_offload_find_netdev(offload->netdev);
-	/* When program is offloaded require presence of "true"
-	 * bpf_offload_netdev, avoid the one created for !ondev case below.
-	 */
-	if (bpf_prog_is_offloaded(prog->aux) && (!ondev || !ondev->offdev)) {
-		err = -EINVAL;
-		goto err_free;
-	}
 	if (!ondev) {
+		if (bpf_prog_is_offloaded(prog->aux)) {
+			err = -EINVAL;
+			goto err_free;
+		}
+
 		/* When only binding to the device, explicitly
 		 * create an entry in the hashtable.
 		 */
@@ -234,14 +231,7 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 	    attr->prog_type != BPF_PROG_TYPE_XDP)
 		return -EINVAL;
 
-	if (attr->prog_flags & ~(BPF_F_XDP_DEV_BOUND_ONLY | BPF_F_XDP_HAS_FRAGS))
-		return -EINVAL;
-
-	/* Frags are allowed only if program is dev-bound-only, but not
-	 * if it is requesting bpf offload.
-	 */
-	if (attr->prog_flags & BPF_F_XDP_HAS_FRAGS &&
-	    !(attr->prog_flags & BPF_F_XDP_DEV_BOUND_ONLY))
+	if (attr->prog_flags & ~BPF_F_XDP_DEV_BOUND_ONLY)
 		return -EINVAL;
 
 	if (attr->prog_type == BPF_PROG_TYPE_SCHED_CLS &&
@@ -854,11 +844,10 @@ void *bpf_dev_bound_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
 	if (!ops)
 		goto out;
 
-#define XDP_METADATA_KFUNC(name, _, __, xmo) \
-	if (func_id == bpf_xdp_metadata_kfunc_id(name)) p = ops->xmo;
-	XDP_METADATA_KFUNC_xxx
-#undef XDP_METADATA_KFUNC
-
+	if (func_id == bpf_xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
+		p = ops->xmo_rx_timestamp;
+	else if (func_id == bpf_xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
+		p = ops->xmo_rx_hash;
 out:
 	up_read(&bpf_devs_lock);
 

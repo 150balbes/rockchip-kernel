@@ -22,7 +22,6 @@
  */
 
 #include <linux/kthread.h>
-#include <linux/types.h>
 
 #include <drm/drm_ioctl.h>
 #include <drm/drm_vblank.h>
@@ -32,7 +31,6 @@
 
 #define DRM_IF_VERSION(maj, min) (maj << 16 | min)
 
-struct cea_sad;
 struct dentry;
 struct dma_buf;
 struct iosys_map;
@@ -155,8 +153,6 @@ int drm_sysfs_init(void);
 void drm_sysfs_destroy(void);
 struct device *drm_sysfs_minor_alloc(struct drm_minor *minor);
 int drm_sysfs_connector_add(struct drm_connector *connector);
-int drm_sysfs_connector_add_late(struct drm_connector *connector);
-void drm_sysfs_connector_remove_early(struct drm_connector *connector);
 void drm_sysfs_connector_remove(struct drm_connector *connector);
 
 void drm_sysfs_lease_event(struct drm_device *dev);
@@ -269,7 +265,3 @@ int drm_syncobj_query_ioctl(struct drm_device *dev, void *data,
 void drm_framebuffer_print_info(struct drm_printer *p, unsigned int indent,
 				const struct drm_framebuffer *fb);
 void drm_framebuffer_debugfs_init(struct drm_device *dev);
-
-/* drm_edid.c */
-void drm_edid_cta_sad_get(const struct cea_sad *cta_sad, u8 *sad);
-void drm_edid_cta_sad_set(struct cea_sad *cta_sad, const u8 *sad);

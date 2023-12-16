@@ -287,9 +287,8 @@ struct qaic_execute_entry {
  * struct qaic_partial_execute_entry - Defines a BO to resize and submit.
  * @handle: In. GEM handle of the BO to commit to the device.
  * @dir: In. Direction of data. 1 = to device, 2 = from device.
- * @resize: In. New size of the BO.  Must be <= the original BO size.
- *	    @resize as 0 would be interpreted as no DMA transfer is
- *	    involved.
+ * @resize: In. New size of the BO.  Must be <= the original BO size.  0 is
+ *	    short for no resize.
  */
 struct qaic_partial_execute_entry {
 	__u32 handle;

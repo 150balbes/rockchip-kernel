@@ -60,7 +60,6 @@ properties:
 
   ports:
     $ref: audio-graph-port.yaml#/definitions/port-base
-    unevaluatedProperties: false
     properties:
       port@0:
         $ref: audio-graph-port.yaml#

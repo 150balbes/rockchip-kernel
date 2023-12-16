@@ -21,17 +21,13 @@ set -e
 # this should work for both the pSeries zImage and the iSeries vmlinux.sm
 image_name=`basename $2`
 
-
-echo "Warning: '${INSTALLKERNEL}' command not available... Copying" \
-     "directly to $4/$image_name-$1" >&2
-
-if [ -f $4/$image_name-$1 ]; then
-	mv $4/$image_name-$1 $4/$image_name-$1.old
+if [ -f $4/$image_name ]; then
+	mv $4/$image_name $4/$image_name.old
 fi
 
-if [ -f $4/System.map-$1 ]; then
-	mv $4/System.map-$1 $4/System-$1.old
+if [ -f $4/System.map ]; then
+	mv $4/System.map $4/System.old
 fi
 
-cat $2 > $4/$image_name-$1
-cp $3 $4/System.map-$1
+cat $2 > $4/$image_name
+cp $3 $4/System.map

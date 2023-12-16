@@ -16,8 +16,7 @@
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 /* I2C registers */
 #define OWL_I2C_REG_CTL		0x0000

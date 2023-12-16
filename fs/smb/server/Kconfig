@@ -1,11 +1,10 @@
 config SMB_SERVER
-	tristate "SMB3 server support"
+	tristate "SMB3 server support (EXPERIMENTAL)"
 	depends on INET
 	depends on MULTIUSER
 	depends on FILE_LOCKING
 	select NLS
 	select NLS_UTF8
-	select NLS_UCS2_UTILS
 	select CRYPTO
 	select CRYPTO_MD5
 	select CRYPTO_HMAC

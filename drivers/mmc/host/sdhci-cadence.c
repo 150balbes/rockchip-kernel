@@ -11,7 +11,7 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/reset.h>
 
 #include "sdhci-pltfm.h"
@@ -487,9 +487,13 @@ static int sdhci_cdns_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	static const u16 version = SDHCI_SPEC_400 << SDHCI_SPEC_VER_SHIFT;
 
-	clk = devm_clk_get_enabled(dev, NULL);
+	clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
+
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		return ret;
 
 	data = of_device_get_match_data(dev);
 	if (!data)
@@ -498,8 +502,10 @@ static int sdhci_cdns_probe(struct platform_device *pdev)
 	nr_phy_params = sdhci_cdns_phy_param_count(dev->of_node);
 	host = sdhci_pltfm_init(pdev, &data->pltfm_data,
 				struct_size(priv, phy_params, nr_phy_params));
-	if (IS_ERR(host))
-		return PTR_ERR(host);
+	if (IS_ERR(host)) {
+		ret = PTR_ERR(host);
+		goto disable_clk;
+	}
 
 	pltfm_host = sdhci_priv(host);
 	pltfm_host->clk = clk;
@@ -550,6 +556,9 @@ static int sdhci_cdns_probe(struct platform_device *pdev)
 	return 0;
 free:
 	sdhci_pltfm_free(pdev);
+disable_clk:
+	clk_disable_unprepare(clk);
+
 	return ret;
 }
 
@@ -608,7 +617,7 @@ static struct platform_driver sdhci_cdns_driver = {
 		.of_match_table = sdhci_cdns_match,
 	},
 	.probe = sdhci_cdns_probe,
-	.remove_new = sdhci_pltfm_remove,
+	.remove = sdhci_pltfm_unregister,
 };
 module_platform_driver(sdhci_cdns_driver);
 

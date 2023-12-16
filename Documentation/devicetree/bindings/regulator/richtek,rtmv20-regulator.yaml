@@ -121,7 +121,6 @@ properties:
     description: load switch current regulator description.
     type: object
     $ref: regulator.yaml#
-    unevaluatedProperties: false
 
 required:
   - compatible

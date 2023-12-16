@@ -266,8 +266,11 @@ static unsigned int disk_clear_events(struct gendisk *disk, unsigned int mask)
  * disk_check_media_change - check if a removable media has been changed
  * @disk: gendisk to check
  *
- * Returns %true and marks the disk for a partition rescan whether a removable
- * media has been changed, and %false if the media did not change.
+ * Check whether a removable media has been changed, and attempt to free all
+ * dentries and inodes and invalidates all block device page cache entries in
+ * that case.
+ *
+ * Returns %true if the media has changed, or %false if not.
  */
 bool disk_check_media_change(struct gendisk *disk)
 {
@@ -275,28 +278,41 @@ bool disk_check_media_change(struct gendisk *disk)
 
 	events = disk_clear_events(disk, DISK_EVENT_MEDIA_CHANGE |
 				   DISK_EVENT_EJECT_REQUEST);
-	if (events & DISK_EVENT_MEDIA_CHANGE) {
-		set_bit(GD_NEED_PART_SCAN, &disk->state);
-		return true;
-	}
-	return false;
+	if (!(events & DISK_EVENT_MEDIA_CHANGE))
+		return false;
+
+	if (__invalidate_device(disk->part0, true))
+		pr_warn("VFS: busy inodes on changed media %s\n",
+			disk->disk_name);
+	set_bit(GD_NEED_PART_SCAN, &disk->state);
+	return true;
 }
 EXPORT_SYMBOL(disk_check_media_change);
 
 /**
  * disk_force_media_change - force a media change event
  * @disk: the disk which will raise the event
+ * @events: the events to raise
  *
- * Should be called when the media changes for @disk.  Generates a uevent
- * and attempts to free all dentries and inodes and invalidates all block
+ * Generate uevents for the disk. If DISK_EVENT_MEDIA_CHANGE is present,
+ * attempt to free all dentries and inodes and invalidates all block
  * device page cache entries in that case.
+ *
+ * Returns %true if DISK_EVENT_MEDIA_CHANGE was raised, or %false if not.
  */
-void disk_force_media_change(struct gendisk *disk)
+bool disk_force_media_change(struct gendisk *disk, unsigned int events)
 {
-	disk_event_uevent(disk, DISK_EVENT_MEDIA_CHANGE);
+	disk_event_uevent(disk, events);
+
+	if (!(events & DISK_EVENT_MEDIA_CHANGE))
+		return false;
+
 	inc_diskseq(disk);
-	bdev_mark_dead(disk->part0, true);
+	if (__invalidate_device(disk->part0, true))
+		pr_warn("VFS: busy inodes on changed media %s\n",
+			disk->disk_name);
 	set_bit(GD_NEED_PART_SCAN, &disk->state);
+	return true;
 }
 EXPORT_SYMBOL_GPL(disk_force_media_change);
 

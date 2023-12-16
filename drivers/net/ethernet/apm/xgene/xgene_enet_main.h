@@ -15,10 +15,9 @@
 #include <linux/efi.h>
 #include <linux/irq.h>
 #include <linux/io.h>
-#include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/of_net.h>
 #include <linux/of_mdio.h>
-#include <linux/platform_device.h>
 #include <linux/mdio/mdio-xgene.h>
 #include <linux/module.h>
 #include <net/ip.h>

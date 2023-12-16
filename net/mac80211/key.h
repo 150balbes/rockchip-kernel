@@ -2,7 +2,7 @@
 /*
  * Copyright 2002-2004, Instant802 Networks, Inc.
  * Copyright 2005, Devicescape Software, Inc.
- * Copyright (C) 2019, 2022-2023 Intel Corporation
+ * Copyright (C) 2019, 2022 Intel Corporation
  */
 
 #ifndef IEEE80211_KEY_H
@@ -168,7 +168,12 @@ void ieee80211_reenable_keys(struct ieee80211_sub_if_data *sdata);
 int ieee80211_key_switch_links(struct ieee80211_sub_if_data *sdata,
 			       unsigned long del_links_mask,
 			       unsigned long add_links_mask);
-void ieee80211_delayed_tailroom_dec(struct wiphy *wiphy,
-				    struct wiphy_work *wk);
+
+#define key_mtx_dereference(local, ref) \
+	rcu_dereference_protected(ref, lockdep_is_held(&((local)->key_mtx)))
+#define rcu_dereference_check_key_mtx(local, ref) \
+	rcu_dereference_check(ref, lockdep_is_held(&((local)->key_mtx)))
+
+void ieee80211_delayed_tailroom_dec(struct work_struct *wk);
 
 #endif /* IEEE80211_KEY_H */

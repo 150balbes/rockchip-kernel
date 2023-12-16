@@ -43,7 +43,6 @@ ap_ts_pen_1v8: &i2c4 {
 		interrupt-parent = <&tlmm>;
 		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
 
-		panel = <&panel>;
 		post-power-on-delay-ms = <20>;
 		hid-descr-addr = <0x0001>;
 
@@ -56,7 +55,7 @@ ap_ts_pen_1v8: &i2c4 {
 };
 
 &pm6150_adc {
-	/delete-node/ channel@4f;
+	/delete-node/ charger-thermistor@4f;
 };
 
 &pm6150_adc_tm {

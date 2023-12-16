@@ -14,7 +14,6 @@
 #include <linux/net_tstamp.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/miscdevice.h>
-#include <net/xdp.h>
 
 #define TSNEP "tsnep"
 
@@ -143,7 +142,7 @@ struct tsnep_rx {
 
 struct tsnep_queue {
 	struct tsnep_adapter *adapter;
-	char name[IFNAMSIZ + 16];
+	char name[IFNAMSIZ + 9];
 
 	struct tsnep_tx *tx;
 	struct tsnep_rx *rx;

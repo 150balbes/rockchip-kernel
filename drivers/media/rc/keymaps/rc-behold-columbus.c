@@ -102,4 +102,3 @@ module_exit(exit_rc_map_behold_columbus)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("BeholdTV Columbus remote controller keytable");

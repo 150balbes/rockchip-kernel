@@ -41,7 +41,8 @@ int pci_iov_vf_id(struct pci_dev *dev)
 		return -EINVAL;
 
 	pf = pci_physfn(dev);
-	return (pci_dev_id(dev) - (pci_dev_id(pf) + pf->sriov->offset)) /
+	return (((dev->bus->number << 8) + dev->devfn) -
+		((pf->bus->number << 8) + pf->devfn + pf->sriov->offset)) /
 	       pf->sriov->stride;
 }
 EXPORT_SYMBOL_GPL(pci_iov_vf_id);

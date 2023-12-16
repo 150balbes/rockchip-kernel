@@ -7,7 +7,6 @@
  * Copyright (C) 1998 Jakub Jelinek (jj@ultra.linux.cz)
  */
 
-#include <linux/export.h>
 #include <linux/linkage.h>
 
 #include <asm/asi.h>
@@ -15,6 +14,7 @@
 #include <asm/ptrace.h>
 #include <asm/visasm.h>
 #include <asm/thread_info.h>
+#include <asm/export.h>
 
 	/* On entry: %o5=current FPRS value, %g7 is callers address */
 	/* May clobber %o5, %g1, %g2, %g3, %g7, %icc, %xcc */

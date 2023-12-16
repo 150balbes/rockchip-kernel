@@ -47,8 +47,10 @@ static int read_patterns(void)
 
 		sprintf(pf, "/sys/kernel/debug/pcmtest/fill_pattern%d", i);
 		fp = fopen(pf, "r");
-		if (!fp)
+		if (!fp) {
+			fclose(fpl);
 			return -1;
+		}
 		fread(patterns[i].buf, 1, patterns[i].len, fp);
 		fclose(fp);
 	}
@@ -313,6 +315,7 @@ TEST_F(pcmtest, ni_playback) {
  */
 TEST_F(pcmtest, reset_ioctl) {
 	snd_pcm_t *handle;
+	unsigned char *it;
 	int test_res;
 	struct pcmtest_test_params *params = &self->params;
 

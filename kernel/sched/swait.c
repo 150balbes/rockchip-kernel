@@ -18,7 +18,7 @@ EXPORT_SYMBOL(__init_swait_queue_head);
  * If for some reason it would return 0, that means the previously waiting
  * task is already running, so it will observe condition true (or has already).
  */
-void swake_up_locked(struct swait_queue_head *q, int wake_flags)
+void swake_up_locked(struct swait_queue_head *q)
 {
 	struct swait_queue *curr;
 
@@ -26,7 +26,7 @@ void swake_up_locked(struct swait_queue_head *q, int wake_flags)
 		return;
 
 	curr = list_first_entry(&q->task_list, typeof(*curr), task_list);
-	try_to_wake_up(curr->task, TASK_NORMAL, wake_flags);
+	wake_up_process(curr->task);
 	list_del_init(&curr->task_list);
 }
 EXPORT_SYMBOL(swake_up_locked);
@@ -41,7 +41,7 @@ EXPORT_SYMBOL(swake_up_locked);
 void swake_up_all_locked(struct swait_queue_head *q)
 {
 	while (!list_empty(&q->task_list))
-		swake_up_locked(q, 0);
+		swake_up_locked(q);
 }
 
 void swake_up_one(struct swait_queue_head *q)
@@ -49,7 +49,7 @@ void swake_up_one(struct swait_queue_head *q)
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&q->lock, flags);
-	swake_up_locked(q, 0);
+	swake_up_locked(q);
 	raw_spin_unlock_irqrestore(&q->lock, flags);
 }
 EXPORT_SYMBOL(swake_up_one);

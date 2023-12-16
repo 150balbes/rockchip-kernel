@@ -74,6 +74,8 @@ static inline bool vcpu_is_preempted(long cpu)
  */
 DECLARE_STATIC_KEY_TRUE(virt_spin_lock_key);
 
+void native_pv_lock_init(void) __init;
+
 /*
  * Shortcut for the queued_spin_lock_slowpath() function that allows
  * virt to hijack it.
@@ -101,7 +103,10 @@ static inline bool virt_spin_lock(struct qspinlock *lock)
 
 	return true;
 }
-
+#else
+static inline void native_pv_lock_init(void)
+{
+}
 #endif /* CONFIG_PARAVIRT */
 
 #include <asm-generic/qspinlock.h>

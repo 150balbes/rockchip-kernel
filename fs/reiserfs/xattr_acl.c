@@ -285,7 +285,7 @@ __reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
 	if (error == -ENODATA) {
 		error = 0;
 		if (type == ACL_TYPE_ACCESS) {
-			inode_set_ctime_current(inode);
+			inode->i_ctime = current_time(inode);
 			mark_inode_dirty(inode);
 		}
 	}

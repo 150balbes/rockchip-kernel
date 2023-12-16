@@ -143,14 +143,11 @@ pte_t huge_ptep_modify_prot_start(struct vm_area_struct *vma,
 void huge_ptep_modify_prot_commit(struct vm_area_struct *vma, unsigned long addr,
 				  pte_t *ptep, pte_t old_pte, pte_t pte)
 {
-	unsigned long psize;
 
 	if (radix_enabled())
 		return radix__huge_ptep_modify_prot_commit(vma, addr, ptep,
 							   old_pte, pte);
-
-	psize = huge_page_size(hstate_vma(vma));
-	set_huge_pte_at(vma->vm_mm, addr, ptep, pte, psize);
+	set_huge_pte_at(vma->vm_mm, addr, ptep, pte);
 }
 
 void __init hugetlbpage_init_defaultsize(void)

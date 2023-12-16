@@ -288,7 +288,7 @@ struct mxser_board {
 	enum mxser_must_hwid must_hwid;
 	speed_t max_baud;
 
-	struct mxser_port ports[] __counted_by(nports);
+	struct mxser_port ports[];
 };
 
 static DECLARE_BITMAP(mxser_boards, MXSER_BOARDS);
@@ -901,7 +901,7 @@ static void mxser_close(struct tty_struct *tty, struct file *filp)
 	tty_port_close(tty->port, tty, filp);
 }
 
-static ssize_t mxser_write(struct tty_struct *tty, const u8 *buf, size_t count)
+static int mxser_write(struct tty_struct *tty, const unsigned char *buf, int count)
 {
 	struct mxser_port *info = tty->driver_data;
 	unsigned long flags;
@@ -920,7 +920,7 @@ static ssize_t mxser_write(struct tty_struct *tty, const u8 *buf, size_t count)
 	return written;
 }
 
-static int mxser_put_char(struct tty_struct *tty, u8 ch)
+static int mxser_put_char(struct tty_struct *tty, unsigned char ch)
 {
 	struct mxser_port *info = tty->driver_data;
 	unsigned long flags;

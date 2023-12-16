@@ -45,7 +45,7 @@ static int timerlat_u_main(int cpu, struct timerlat_u_params *params)
 
 	retval = sched_setaffinity(gettid(), sizeof(set), &set);
 	if (retval == -1) {
-		debug_msg("Error setting user thread affinity %d, is the CPU online?\n", cpu);
+		err_msg("Error setting user thread affinity\n");
 		exit(1);
 	}
 
@@ -193,9 +193,7 @@ void *timerlat_u_dispatcher(void *data)
 					procs_count--;
 				}
 			}
-
-			if (!procs_count)
-				break;
+			break;
 		}
 
 		sleep(1);

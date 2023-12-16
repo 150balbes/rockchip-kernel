@@ -937,6 +937,7 @@ static int cx231xx_load_firmware(struct cx231xx *dev)
 	u32 *p_current_fw, *p_fw;
 	u32 *p_fw_data;
 	int frame = 0;
+	u16 _buffer_size = 4096;
 	u8 *p_buffer;
 
 	p_current_fw = vmalloc(1884180 * 4);
@@ -946,7 +947,7 @@ static int cx231xx_load_firmware(struct cx231xx *dev)
 		return -ENOMEM;
 	}
 
-	p_buffer = vmalloc(EP5_BUF_SIZE);
+	p_buffer = vmalloc(4096);
 	if (p_buffer == NULL) {
 		dprintk(2, "FAIL!!!\n");
 		vfree(p_current_fw);
@@ -1029,9 +1030,9 @@ static int cx231xx_load_firmware(struct cx231xx *dev)
 
 	/*download the firmware by ep5-out*/
 
-	for (frame = 0; frame < (int)(CX231xx_FIRM_IMAGE_SIZE*20/EP5_BUF_SIZE);
+	for (frame = 0; frame < (int)(CX231xx_FIRM_IMAGE_SIZE*20/_buffer_size);
 	     frame++) {
-		for (i = 0; i < EP5_BUF_SIZE; i++) {
+		for (i = 0; i < _buffer_size; i++) {
 			*(p_buffer + i) = (u8)(*(p_fw + (frame * 128 * 8 + (i / 4))) & 0x000000FF);
 			i++;
 			*(p_buffer + i) = (u8)((*(p_fw + (frame * 128 * 8 + (i / 4))) & 0x0000FF00) >> 8);
@@ -1040,7 +1041,7 @@ static int cx231xx_load_firmware(struct cx231xx *dev)
 			i++;
 			*(p_buffer + i) = (u8)((*(p_fw + (frame * 128 * 8 + (i / 4))) & 0xFF000000) >> 24);
 		}
-		cx231xx_ep5_bulkout(dev, p_buffer, EP5_BUF_SIZE);
+		cx231xx_ep5_bulkout(dev, p_buffer, _buffer_size);
 	}
 
 	p_current_fw = p_fw;

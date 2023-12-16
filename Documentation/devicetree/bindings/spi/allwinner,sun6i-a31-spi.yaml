@@ -68,8 +68,6 @@ properties:
 patternProperties:
   "^.*@[0-9a-f]+":
     type: object
-    additionalProperties: true
-
     properties:
       reg:
         items:

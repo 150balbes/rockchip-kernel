@@ -73,12 +73,29 @@ int __no_sanitize_address arch_stack_walk_reliable(stack_trace_consume_fn consum
 	bool firstframe;
 
 	stack_end = stack_page + THREAD_SIZE;
-
-	// See copy_thread() for details.
-	if (task->flags & PF_KTHREAD)
-		stack_end -= STACK_FRAME_MIN_SIZE;
-	else
+	if (!is_idle_task(task)) {
+		/*
+		 * For user tasks, this is the SP value loaded on
+		 * kernel entry, see "PACAKSAVE(r13)" in _switch() and
+		 * system_call_common().
+		 *
+		 * Likewise for non-swapper kernel threads,
+		 * this also happens to be the top of the stack
+		 * as setup by copy_thread().
+		 *
+		 * Note that stack backlinks are not properly setup by
+		 * copy_thread() and thus, a forked task() will have
+		 * an unreliable stack trace until it's been
+		 * _switch()'ed to for the first time.
+		 */
 		stack_end -= STACK_USER_INT_FRAME_SIZE;
+	} else {
+		/*
+		 * idle tasks have a custom stack layout,
+		 * c.f. cpu_idle_thread_init().
+		 */
+		stack_end -= STACK_FRAME_MIN_SIZE;
+	}
 
 	if (task == current)
 		sp = current_stack_frame();
@@ -204,8 +221,8 @@ static void raise_backtrace_ipi(cpumask_t *mask)
 	}
 }
 
-void arch_trigger_cpumask_backtrace(const cpumask_t *mask, int exclude_cpu)
+void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
 {
-	nmi_trigger_cpumask_backtrace(mask, exclude_cpu, raise_backtrace_ipi);
+	nmi_trigger_cpumask_backtrace(mask, exclude_self, raise_backtrace_ipi);
 }
 #endif /* defined(CONFIG_PPC_BOOK3S_64) && defined(CONFIG_NMI_IPI) */

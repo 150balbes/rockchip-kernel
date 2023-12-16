@@ -302,7 +302,8 @@ static int kfd_dbg_set_queue_workaround(struct queue *q, bool enable)
 	if (!q)
 		return 0;
 
-	if (!kfd_dbg_has_cwsr_workaround(q->device))
+	if (KFD_GC_VERSION(q->device) < IP_VERSION(11, 0, 0) ||
+	    KFD_GC_VERSION(q->device) >= IP_VERSION(12, 0, 0))
 		return 0;
 
 	if (enable && q->properties.is_user_cu_masked)
@@ -344,10 +345,11 @@ unwind:
 	return r;
 }
 
-int kfd_dbg_set_mes_debug_mode(struct kfd_process_device *pdd, bool sq_trap_en)
+int kfd_dbg_set_mes_debug_mode(struct kfd_process_device *pdd)
 {
 	uint32_t spi_dbg_cntl = pdd->spi_dbg_override | pdd->spi_dbg_launch_mode;
 	uint32_t flags = pdd->process->dbg_flags;
+	bool sq_trap_en = !!spi_dbg_cntl;
 
 	if (!kfd_dbg_is_per_vmid_supported(pdd->dev))
 		return 0;
@@ -431,7 +433,7 @@ int kfd_dbg_trap_clear_dev_address_watch(struct kfd_process_device *pdd,
 	if (!pdd->dev->kfd->shared_resources.enable_mes)
 		r = debug_map_and_unlock(pdd->dev->dqm);
 	else
-		r = kfd_dbg_set_mes_debug_mode(pdd, true);
+		r = kfd_dbg_set_mes_debug_mode(pdd);
 
 	kfd_dbg_clear_dev_watch_id(pdd, watch_id);
 
@@ -444,8 +446,7 @@ int kfd_dbg_trap_set_dev_address_watch(struct kfd_process_device *pdd,
 					uint32_t *watch_id,
 					uint32_t watch_mode)
 {
-	int xcc_id, r = kfd_dbg_get_dev_watch_id(pdd, watch_id);
-	uint32_t xcc_mask = pdd->dev->xcc_mask;
+	int r = kfd_dbg_get_dev_watch_id(pdd, watch_id);
 
 	if (r)
 		return r;
@@ -459,21 +460,19 @@ int kfd_dbg_trap_set_dev_address_watch(struct kfd_process_device *pdd,
 	}
 
 	amdgpu_gfx_off_ctrl(pdd->dev->adev, false);
-	for_each_inst(xcc_id, xcc_mask)
-		pdd->watch_points[*watch_id] = pdd->dev->kfd2kgd->set_address_watch(
+	pdd->watch_points[*watch_id] = pdd->dev->kfd2kgd->set_address_watch(
 				pdd->dev->adev,
 				watch_address,
 				watch_address_mask,
 				*watch_id,
 				watch_mode,
-				pdd->dev->vm_info.last_vmid_kfd,
-				xcc_id);
+				pdd->dev->vm_info.last_vmid_kfd);
 	amdgpu_gfx_off_ctrl(pdd->dev->adev, true);
 
 	if (!pdd->dev->kfd->shared_resources.enable_mes)
 		r = debug_map_and_unlock(pdd->dev->dqm);
 	else
-		r = kfd_dbg_set_mes_debug_mode(pdd, true);
+		r = kfd_dbg_set_mes_debug_mode(pdd);
 
 	/* HWS is broken so no point in HW rollback but release the watchpoint anyways */
 	if (r)
@@ -515,7 +514,7 @@ int kfd_dbg_trap_set_flags(struct kfd_process *target, uint32_t *flags)
 		if (!pdd->dev->kfd->shared_resources.enable_mes)
 			r = debug_refresh_runlist(pdd->dev->dqm);
 		else
-			r = kfd_dbg_set_mes_debug_mode(pdd, true);
+			r = kfd_dbg_set_mes_debug_mode(pdd);
 
 		if (r) {
 			target->dbg_flags = prev_flags;
@@ -538,7 +537,7 @@ int kfd_dbg_trap_set_flags(struct kfd_process *target, uint32_t *flags)
 			if (!pdd->dev->kfd->shared_resources.enable_mes)
 				debug_refresh_runlist(pdd->dev->dqm);
 			else
-				kfd_dbg_set_mes_debug_mode(pdd, true);
+				kfd_dbg_set_mes_debug_mode(pdd);
 		}
 	}
 
@@ -600,7 +599,7 @@ void kfd_dbg_trap_deactivate(struct kfd_process *target, bool unwind, int unwind
 		if (!pdd->dev->kfd->shared_resources.enable_mes)
 			debug_refresh_runlist(pdd->dev->dqm);
 		else
-			kfd_dbg_set_mes_debug_mode(pdd, !kfd_dbg_has_cwsr_workaround(pdd->dev));
+			kfd_dbg_set_mes_debug_mode(pdd);
 	}
 
 	kfd_dbg_set_workaround(target, false);
@@ -716,7 +715,7 @@ int kfd_dbg_trap_activate(struct kfd_process *target)
 		if (!pdd->dev->kfd->shared_resources.enable_mes)
 			r = debug_refresh_runlist(pdd->dev->dqm);
 		else
-			r = kfd_dbg_set_mes_debug_mode(pdd, true);
+			r = kfd_dbg_set_mes_debug_mode(pdd);
 
 		if (r) {
 			target->runtime_info.runtime_state =
@@ -752,8 +751,7 @@ int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
 		if (!KFD_IS_SOC15(pdd->dev))
 			return -ENODEV;
 
-		if (pdd->qpd.num_gws && (!kfd_dbg_has_gws_support(pdd->dev) ||
-					 kfd_dbg_has_cwsr_workaround(pdd->dev)))
+		if (!kfd_dbg_has_gws_support(pdd->dev) && pdd->qpd.num_gws)
 			return -EBUSY;
 	}
 
@@ -850,7 +848,7 @@ int kfd_dbg_trap_set_wave_launch_override(struct kfd_process *target,
 		if (!pdd->dev->kfd->shared_resources.enable_mes)
 			r = debug_refresh_runlist(pdd->dev->dqm);
 		else
-			r = kfd_dbg_set_mes_debug_mode(pdd, true);
+			r = kfd_dbg_set_mes_debug_mode(pdd);
 
 		if (r)
 			break;
@@ -882,7 +880,7 @@ int kfd_dbg_trap_set_wave_launch_mode(struct kfd_process *target,
 		if (!pdd->dev->kfd->shared_resources.enable_mes)
 			r = debug_refresh_runlist(pdd->dev->dqm);
 		else
-			r = kfd_dbg_set_mes_debug_mode(pdd, true);
+			r = kfd_dbg_set_mes_debug_mode(pdd);
 
 		if (r)
 			break;

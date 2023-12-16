@@ -67,7 +67,7 @@ static u8 CISCO_BROADCOM[3] = {0x00, 0x17, 0x94};
 
 static u8 LINKSYS_MARVELL_4400N[3] = {0x00, 0x14, 0xa4};
 
-void ht_update_default_setting(struct rtllib_device *ieee)
+void HTUpdateDefaultSetting(struct rtllib_device *ieee)
 {
 	struct rt_hi_throughput *ht_info = ieee->ht_info;
 
@@ -207,6 +207,27 @@ static void HTIOTPeerDetermine(struct rtllib_device *ieee)
 	netdev_dbg(ieee->dev, "IOTPEER: %x\n", ht_info->IOTPeer);
 }
 
+static u8 HTIOTActIsDisableMCS14(struct rtllib_device *ieee, u8 *PeerMacAddr)
+{
+	return 0;
+}
+
+static bool HTIOTActIsDisableMCS15(struct rtllib_device *ieee)
+{
+	return false;
+}
+
+static bool HTIOTActIsDisableMCSTwoSpatialStream(struct rtllib_device *ieee)
+{
+	return false;
+}
+
+static u8 HTIOTActIsDisableEDCATurbo(struct rtllib_device *ieee,
+				     u8 *PeerMacAddr)
+{
+	return false;
+}
+
 static u8 HTIOTActIsMgntUseCCK6M(struct rtllib_device *ieee,
 				 struct rtllib_network *network)
 {
@@ -331,6 +352,7 @@ void HTConstructCapabilityElement(struct rtllib_device *ieee, u8 *posHTCap,
 void HTConstructInfoElement(struct rtllib_device *ieee, u8 *posHTInfo,
 			    u8 *len, u8 IsEncrypt)
 {
+	struct rt_hi_throughput *pHT = ieee->ht_info;
 	struct ht_info_ele *pHTInfoEle = (struct ht_info_ele *)posHTInfo;
 
 	if (!posHTInfo || !pHTInfoEle) {
@@ -341,7 +363,33 @@ void HTConstructInfoElement(struct rtllib_device *ieee, u8 *posHTInfo,
 	}
 
 	memset(posHTInfo, 0, *len);
-	*len = 0;
+	if ((ieee->iw_mode == IW_MODE_ADHOC) ||
+	    (ieee->iw_mode == IW_MODE_MASTER)) {
+		pHTInfoEle->ControlChl	= ieee->current_network.channel;
+		pHTInfoEle->ExtChlOffset = ((!pHT->bRegBW40MHz) ?
+					    HT_EXTCHNL_OFFSET_NO_EXT :
+					    (ieee->current_network.channel <= 6)
+					    ? HT_EXTCHNL_OFFSET_UPPER :
+					    HT_EXTCHNL_OFFSET_LOWER);
+		pHTInfoEle->RecommemdedTxWidth	= pHT->bRegBW40MHz;
+		pHTInfoEle->RIFS			= 0;
+		pHTInfoEle->PSMPAccessOnly		= 0;
+		pHTInfoEle->SrvIntGranularity		= 0;
+		pHTInfoEle->OptMode			= pHT->current_op_mode;
+		pHTInfoEle->NonGFDevPresent		= 0;
+		pHTInfoEle->DualBeacon			= 0;
+		pHTInfoEle->SecondaryBeacon		= 0;
+		pHTInfoEle->LSigTxopProtectFull		= 0;
+		pHTInfoEle->PcoActive			= 0;
+		pHTInfoEle->PcoPhase			= 0;
+
+		memset(pHTInfoEle->BasicMSC, 0, 16);
+
+		*len = 22 + 2;
+
+	} else {
+		*len = 0;
+	}
 }
 
 void HTConstructRT2RTAggElement(struct rtllib_device *ieee, u8 *posRT2RTAgg,
@@ -468,7 +516,7 @@ void HTOnAssocRsp(struct rtllib_device *ieee)
 	static const u8 EWC11NHTCap[] = { 0x00, 0x90, 0x4c, 0x33 };
 	static const u8 EWC11NHTInfo[] = { 0x00, 0x90, 0x4c, 0x34 };
 
-	if (!ht_info->current_ht_support) {
+	if (!ht_info->bCurrentHTSupport) {
 		netdev_warn(ieee->dev, "%s(): HT_DISABLE\n", __func__);
 		return;
 	}
@@ -573,7 +621,7 @@ void HTInitializeHTInfo(struct rtllib_device *ieee)
 {
 	struct rt_hi_throughput *ht_info = ieee->ht_info;
 
-	ht_info->current_ht_support = false;
+	ht_info->bCurrentHTSupport = false;
 
 	ht_info->bCurBW40MHz = false;
 	ht_info->cur_tx_bw40mhz = false;
@@ -644,7 +692,7 @@ void HTResetSelfAndSavePeerSetting(struct rtllib_device *ieee,
 	 * function rtllib_softmac_new_net. WB 2008.09.10
 	 */
 	if (pNetwork->bssht.bd_support_ht) {
-		ht_info->current_ht_support = true;
+		ht_info->bCurrentHTSupport = true;
 		ht_info->ePeerHTSpecVer = pNetwork->bssht.bd_ht_spec_ver;
 
 		if (pNetwork->bssht.bd_ht_cap_len > 0 &&
@@ -675,6 +723,22 @@ void HTResetSelfAndSavePeerSetting(struct rtllib_device *ieee,
 		HTIOTPeerDetermine(ieee);
 
 		ht_info->iot_action = 0;
+		bIOTAction = HTIOTActIsDisableMCS14(ieee, pNetwork->bssid);
+		if (bIOTAction)
+			ht_info->iot_action |= HT_IOT_ACT_DISABLE_MCS14;
+
+		bIOTAction = HTIOTActIsDisableMCS15(ieee);
+		if (bIOTAction)
+			ht_info->iot_action |= HT_IOT_ACT_DISABLE_MCS15;
+
+		bIOTAction = HTIOTActIsDisableMCSTwoSpatialStream(ieee);
+		if (bIOTAction)
+			ht_info->iot_action |= HT_IOT_ACT_DISABLE_ALL_2SS;
+
+		bIOTAction = HTIOTActIsDisableEDCATurbo(ieee, pNetwork->bssid);
+		if (bIOTAction)
+			ht_info->iot_action |= HT_IOT_ACT_DISABLE_EDCA_TURBO;
+
 		bIOTAction = HTIOTActIsMgntUseCCK6M(ieee, pNetwork);
 		if (bIOTAction)
 			ht_info->iot_action |= HT_IOT_ACT_MGNT_USE_CCK_6M;
@@ -682,7 +746,7 @@ void HTResetSelfAndSavePeerSetting(struct rtllib_device *ieee,
 		if (bIOTAction)
 			ht_info->iot_action |= HT_IOT_ACT_CDD_FSYNC;
 	} else {
-		ht_info->current_ht_support = false;
+		ht_info->bCurrentHTSupport = false;
 		ht_info->current_rt2rt_aggregation = false;
 		ht_info->current_rt2rt_long_slot_time = false;
 		ht_info->RT2RT_HT_Mode = (enum rt_ht_capability)0;
@@ -699,16 +763,52 @@ void HT_update_self_and_peer_setting(struct rtllib_device *ieee,
 	struct ht_info_ele *pPeerHTInfo =
 		 (struct ht_info_ele *)pNetwork->bssht.bd_ht_info_buf;
 
-	if (ht_info->current_ht_support) {
+	if (ht_info->bCurrentHTSupport) {
 		if (pNetwork->bssht.bd_ht_info_len != 0)
 			ht_info->current_op_mode = pPeerHTInfo->OptMode;
 	}
 }
 EXPORT_SYMBOL(HT_update_self_and_peer_setting);
 
+void HTUseDefaultSetting(struct rtllib_device *ieee)
+{
+	struct rt_hi_throughput *ht_info = ieee->ht_info;
+
+	if (ht_info->enable_ht) {
+		ht_info->bCurrentHTSupport = true;
+		ht_info->bCurSuppCCK = ht_info->bRegSuppCCK;
+
+		ht_info->bCurBW40MHz = ht_info->bRegBW40MHz;
+		ht_info->bCurShortGI20MHz = ht_info->bRegShortGI20MHz;
+
+		ht_info->bCurShortGI40MHz = ht_info->bRegShortGI40MHz;
+
+		if (ieee->iw_mode == IW_MODE_ADHOC)
+			ieee->current_network.qos_data.active =
+				 ieee->current_network.qos_data.supported;
+		ht_info->bCurrent_AMSDU_Support = ht_info->bAMSDU_Support;
+		ht_info->nCurrent_AMSDU_MaxSize = ht_info->nAMSDU_MaxSize;
+
+		ht_info->bCurrentAMPDUEnable = ht_info->bAMPDUEnable;
+		ht_info->CurrentAMPDUFactor = ht_info->AMPDU_Factor;
+
+		ht_info->current_mpdu_density = ht_info->current_mpdu_density;
+
+		HTFilterMCSRate(ieee, ieee->reg_dot11tx_ht_oper_rate_set,
+				ieee->dot11ht_oper_rate_set);
+		ieee->HTHighestOperaRate = HTGetHighestMCSRate(ieee,
+							       ieee->dot11ht_oper_rate_set,
+							       MCS_FILTER_ALL);
+		ieee->HTCurrentOperaRate = ieee->HTHighestOperaRate;
+
+	} else {
+		ht_info->bCurrentHTSupport = false;
+	}
+}
+
 u8 HTCCheck(struct rtllib_device *ieee, u8 *pFrame)
 {
-	if (ieee->ht_info->current_ht_support) {
+	if (ieee->ht_info->bCurrentHTSupport) {
 		if ((IsQoSDataFrame(pFrame) && Frame_Order(pFrame)) == 1) {
 			netdev_dbg(ieee->dev, "HT CONTROL FILED EXIST!!\n");
 			return true;

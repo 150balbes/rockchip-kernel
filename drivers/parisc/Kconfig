@@ -100,9 +100,8 @@ config SUPERIO
 
 config CHASSIS_LCD_LED
 	bool "Chassis LCD and LED support"
-	depends on LEDS_CLASS=y
 	default y
-	select LEDS_TRIGGERS
+	select VM_EVENT_COUNTERS
 	help
 	  Say Y here if you want to enable support for the Heartbeat,
 	  Disk/Network activities LEDs on some PA-RISC machines,

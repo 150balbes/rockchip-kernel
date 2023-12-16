@@ -24,8 +24,8 @@
 
 #include <linux/uaccess.h>
 
-static struct vfsmount *anon_inode_mnt __ro_after_init;
-static struct inode *anon_inode_inode __ro_after_init;
+static struct vfsmount *anon_inode_mnt __read_mostly;
+static struct inode *anon_inode_inode;
 
 /*
  * anon_inodefs_dname() is called from d_path().

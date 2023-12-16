@@ -190,6 +190,8 @@ bool kvm_make_vcpus_request_mask(struct kvm *kvm, unsigned int req,
 bool kvm_make_all_cpus_request(struct kvm *kvm, unsigned int req);
 bool kvm_make_all_cpus_request_except(struct kvm *kvm, unsigned int req,
 				      struct kvm_vcpu *except);
+bool kvm_make_cpus_request_mask(struct kvm *kvm, unsigned int req,
+				unsigned long *vcpu_bitmap);
 
 #define KVM_USERSPACE_IRQ_SOURCE_ID		0
 #define KVM_IRQFD_RESAMPLE_IRQ_SOURCE_ID	1
@@ -254,15 +256,11 @@ int kvm_async_pf_wakeup_all(struct kvm_vcpu *vcpu);
 #endif
 
 #ifdef KVM_ARCH_WANT_MMU_NOTIFIER
-union kvm_mmu_notifier_arg {
-	pte_t pte;
-};
-
 struct kvm_gfn_range {
 	struct kvm_memory_slot *slot;
 	gfn_t start;
 	gfn_t end;
-	union kvm_mmu_notifier_arg arg;
+	pte_t pte;
 	bool may_block;
 };
 bool kvm_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range);
@@ -664,7 +662,7 @@ struct kvm_irq_routing_table {
 	 * Array indexed by gsi. Each entry contains list of irq chips
 	 * the gsi is connected to.
 	 */
-	struct hlist_head map[] __counted_by(nr_rt_entries);
+	struct hlist_head map[];
 };
 #endif
 
@@ -863,25 +861,6 @@ static inline void kvm_vm_bugged(struct kvm *kvm)
 	bool __ret = !!(cond);					\
 								\
 	if (WARN_ON_ONCE(__ret && !(kvm)->vm_bugged))		\
-		kvm_vm_bugged(kvm);				\
-	unlikely(__ret);					\
-})
-
-/*
- * Note, "data corruption" refers to corruption of host kernel data structures,
- * not guest data.  Guest data corruption, suspected or confirmed, that is tied
- * and contained to a single VM should *never* BUG() and potentially panic the
- * host, i.e. use this variant of KVM_BUG() if and only if a KVM data structure
- * is corrupted and that corruption can have a cascading effect to other parts
- * of the hosts and/or to other VMs.
- */
-#define KVM_BUG_ON_DATA_CORRUPTION(cond, kvm)			\
-({								\
-	bool __ret = !!(cond);					\
-								\
-	if (IS_ENABLED(CONFIG_BUG_ON_DATA_CORRUPTION))		\
-		BUG_ON(__ret);					\
-	else if (WARN_ON_ONCE(__ret && !(kvm)->vm_bugged))	\
 		kvm_vm_bugged(kvm);				\
 	unlikely(__ret);					\
 })
@@ -1380,9 +1359,6 @@ int kvm_vcpu_yield_to(struct kvm_vcpu *target);
 void kvm_vcpu_on_spin(struct kvm_vcpu *vcpu, bool yield_to_kernel_mode);
 
 void kvm_flush_remote_tlbs(struct kvm *kvm);
-void kvm_flush_remote_tlbs_range(struct kvm *kvm, gfn_t gfn, u64 nr_pages);
-void kvm_flush_remote_tlbs_memslot(struct kvm *kvm,
-				   const struct kvm_memory_slot *memslot);
 
 #ifdef KVM_ARCH_NR_OBJS_PER_MEMORY_CACHE
 int kvm_mmu_topup_memory_cache(struct kvm_mmu_memory_cache *mc, int min);
@@ -1411,7 +1387,10 @@ void kvm_arch_mmu_enable_log_dirty_pt_masked(struct kvm *kvm,
 					unsigned long mask);
 void kvm_arch_sync_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot);
 
-#ifndef CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT
+#ifdef CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT
+void kvm_arch_flush_remote_tlbs_memslot(struct kvm *kvm,
+					const struct kvm_memory_slot *memslot);
+#else /* !CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT */
 int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log);
 int kvm_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log,
 		      int *is_dirty, struct kvm_memory_slot **memslot);
@@ -1500,23 +1479,11 @@ static inline void kvm_arch_free_vm(struct kvm *kvm)
 }
 #endif
 
-#ifndef __KVM_HAVE_ARCH_FLUSH_REMOTE_TLBS
-static inline int kvm_arch_flush_remote_tlbs(struct kvm *kvm)
+#ifndef __KVM_HAVE_ARCH_FLUSH_REMOTE_TLB
+static inline int kvm_arch_flush_remote_tlb(struct kvm *kvm)
 {
 	return -ENOTSUPP;
 }
-#else
-int kvm_arch_flush_remote_tlbs(struct kvm *kvm);
-#endif
-
-#ifndef __KVM_HAVE_ARCH_FLUSH_REMOTE_TLBS_RANGE
-static inline int kvm_arch_flush_remote_tlbs_range(struct kvm *kvm,
-						    gfn_t gfn, u64 nr_pages)
-{
-	return -EOPNOTSUPP;
-}
-#else
-int kvm_arch_flush_remote_tlbs_range(struct kvm *kvm, gfn_t gfn, u64 nr_pages);
 #endif
 
 #ifdef __KVM_HAVE_ARCH_NONCOHERENT_DMA
@@ -2181,6 +2148,8 @@ struct kvm_device_ops {
 	int (*mmap)(struct kvm_device *dev, struct vm_area_struct *vma);
 };
 
+void kvm_device_get(struct kvm_device *dev);
+void kvm_device_put(struct kvm_device *dev);
 struct kvm_device *kvm_device_from_filp(struct file *filp);
 int kvm_register_device_ops(const struct kvm_device_ops *ops, u32 type);
 void kvm_unregister_device_ops(u32 type);

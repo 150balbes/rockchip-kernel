@@ -345,12 +345,11 @@ static int qt1010_init(struct dvb_frontend *fe)
 			else
 				valptr = &tmpval;
 
-			if (i >= ARRAY_SIZE(i2c_data) - 1)
-				err = -EIO;
-			else
-				err = qt1010_init_meas1(priv, i2c_data[i + 1].reg,
-							i2c_data[i].reg,
-							i2c_data[i].val, valptr);
+			BUG_ON(i >= ARRAY_SIZE(i2c_data) - 1);
+
+			err = qt1010_init_meas1(priv, i2c_data[i+1].reg,
+						i2c_data[i].reg,
+						i2c_data[i].val, valptr);
 			i++;
 			break;
 		}
@@ -441,7 +440,7 @@ struct dvb_frontend * qt1010_attach(struct dvb_frontend *fe,
 	fe->tuner_priv = priv;
 	return fe;
 }
-EXPORT_SYMBOL_GPL(qt1010_attach);
+EXPORT_SYMBOL(qt1010_attach);
 
 MODULE_DESCRIPTION("Quantek QT1010 silicon tuner driver");
 MODULE_AUTHOR("Antti Palosaari <crope@iki.fi>");

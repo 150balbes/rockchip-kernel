@@ -7,33 +7,32 @@
 #include <asm/cache.h>
 #include <asm/tlbflush.h>
 
-void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
-		unsigned long address, pte_t *pte, unsigned int nr)
+void update_mmu_cache(struct vm_area_struct *vma, unsigned long address,
+		      pte_t *pte)
 {
-	unsigned long pfn = pte_pfn(*pte);
-	struct folio *folio;
-	unsigned int i;
+	unsigned long addr;
+	struct page *page;
 
 	flush_tlb_page(vma, address);
 
-	if (!pfn_valid(pfn))
+	if (!pfn_valid(pte_pfn(*pte)))
 		return;
 
-	folio = page_folio(pfn_to_page(pfn));
-
-	if (test_and_set_bit(PG_dcache_clean, &folio->flags))
+	page = pfn_to_page(pte_pfn(*pte));
+	if (page == ZERO_PAGE(0))
 		return;
 
-	icache_inv_range(address, address + nr*PAGE_SIZE);
-	for (i = 0; i < folio_nr_pages(folio); i++) {
-		unsigned long addr = (unsigned long) kmap_local_folio(folio,
-								i * PAGE_SIZE);
+	if (test_and_set_bit(PG_dcache_clean, &page->flags))
+		return;
 
-		dcache_wb_range(addr, addr + PAGE_SIZE);
-		if (vma->vm_flags & VM_EXEC)
-			icache_inv_range(addr, addr + PAGE_SIZE);
-		kunmap_local((void *) addr);
-	}
+	addr = (unsigned long) kmap_atomic(page);
+
+	dcache_wb_range(addr, addr + PAGE_SIZE);
+
+	if (vma->vm_flags & VM_EXEC)
+		icache_inv_range(addr, addr + PAGE_SIZE);
+
+	kunmap_atomic((void *) addr);
 }
 
 void flush_icache_deferred(struct mm_struct *mm)

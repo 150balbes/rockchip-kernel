@@ -14,6 +14,7 @@
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/of_device.h>
 
 #define BITS_PER_REG	32
 
@@ -127,6 +128,8 @@ static int meson_reset_probe(struct platform_device *pdev)
 	data->param = of_device_get_match_data(&pdev->dev);
 	if (!data->param)
 		return -ENODEV;
+
+	platform_set_drvdata(pdev, data);
 
 	spin_lock_init(&data->lock);
 

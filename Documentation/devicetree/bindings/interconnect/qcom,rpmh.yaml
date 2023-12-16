@@ -18,6 +18,9 @@ description: |
    least one RPMh device child node pertaining to their RSC and each provider
    can map to multiple RPMh resources.
 
+allOf:
+  - $ref: qcom,rpmh-common.yaml#
+
 properties:
   reg:
     maxItems: 1
@@ -88,7 +91,6 @@ properties:
       - qcom,sm8250-mc-virt
       - qcom,sm8250-mmss-noc
       - qcom,sm8250-npu-noc
-      - qcom,sm8250-qup-virt
       - qcom,sm8250-system-noc
       - qcom,sm8350-aggre1-noc
       - qcom,sm8350-aggre2-noc
@@ -105,20 +107,7 @@ properties:
 
 required:
   - compatible
-
-allOf:
-  - $ref: qcom,rpmh-common.yaml#
-  - if:
-      not:
-        properties:
-          compatible:
-            enum:
-              - qcom,sdx65-mc-virt
-              - qcom,sm8250-qup-virt
-    then:
-      required:
-        - reg
-
+  - reg
 
 unevaluatedProperties: false
 

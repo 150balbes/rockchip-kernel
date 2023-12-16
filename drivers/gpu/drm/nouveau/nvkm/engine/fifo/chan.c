@@ -24,6 +24,7 @@
 #include "chan.h"
 #include "chid.h"
 #include "cgrp.h"
+#include "chid.h"
 #include "runl.h"
 #include "priv.h"
 
@@ -274,16 +275,12 @@ nvkm_chan_del(struct nvkm_chan **pchan)
 	nvkm_gpuobj_del(&chan->cache);
 	nvkm_gpuobj_del(&chan->ramfc);
 
-	if (chan->cgrp) {
-		if (!chan->func->id_put)
-			nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
-		else
-			chan->func->id_put(chan);
+	nvkm_memory_unref(&chan->userd.mem);
 
+	if (chan->cgrp) {
+		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
 		nvkm_cgrp_unref(&chan->cgrp);
 	}
-
-	nvkm_memory_unref(&chan->userd.mem);
 
 	if (chan->vmm) {
 		nvkm_vmm_part(chan->vmm, chan->inst->memory);
@@ -441,32 +438,7 @@ nvkm_chan_new_(const struct nvkm_chan_func *func, struct nvkm_runl *runl, int ru
 	}
 
 	/* Allocate channel ID. */
-	if (!chan->func->id_get) {
-		chan->id = nvkm_chid_get(runl->chid, chan);
-		if (chan->id >= 0) {
-			if (func->userd->bar < 0) {
-				if (ouserd + chan->func->userd->size >=
-					nvkm_memory_size(userd)) {
-					RUNL_DEBUG(runl, "ouserd %llx", ouserd);
-					return -EINVAL;
-				}
-
-				ret = nvkm_memory_kmap(userd, &chan->userd.mem);
-				if (ret) {
-					RUNL_DEBUG(runl, "userd %d", ret);
-					return ret;
-				}
-
-				chan->userd.base = ouserd;
-			} else {
-				chan->userd.mem = nvkm_memory_ref(fifo->userd.mem);
-				chan->userd.base = chan->id * chan->func->userd->size;
-			}
-		}
-	} else {
-		chan->id = chan->func->id_get(chan, userd, ouserd);
-	}
-
+	chan->id = nvkm_chid_get(runl->chid, chan);
 	if (chan->id < 0) {
 		RUNL_ERROR(runl, "!chids");
 		return -ENOSPC;
@@ -476,6 +448,24 @@ nvkm_chan_new_(const struct nvkm_chan_func *func, struct nvkm_runl *runl, int ru
 		cgrp->id = chan->id;
 
 	/* Initialise USERD. */
+	if (func->userd->bar < 0) {
+		if (ouserd + chan->func->userd->size >= nvkm_memory_size(userd)) {
+			RUNL_DEBUG(runl, "ouserd %llx", ouserd);
+			return -EINVAL;
+		}
+
+		ret = nvkm_memory_kmap(userd, &chan->userd.mem);
+		if (ret) {
+			RUNL_DEBUG(runl, "userd %d", ret);
+			return ret;
+		}
+
+		chan->userd.base = ouserd;
+	} else {
+		chan->userd.mem = nvkm_memory_ref(fifo->userd.mem);
+		chan->userd.base = chan->id * chan->func->userd->size;
+	}
+
 	if (chan->func->userd->clear)
 		chan->func->userd->clear(chan);
 

@@ -408,15 +408,17 @@ static const struct testvec_config default_hash_testvec_configs[] = {
 		.finalization_type = FINALIZATION_TYPE_FINAL,
 		.key_offset = 1,
 	}, {
-		.name = "digest misaligned buffer",
+		.name = "digest buffer aligned only to alignmask",
 		.src_divs = {
 			{
 				.proportion_of_total = 10000,
 				.offset = 1,
+				.offset_relative_to_alignmask = true,
 			},
 		},
 		.finalization_type = FINALIZATION_TYPE_DIGEST,
 		.key_offset = 1,
+		.key_offset_relative_to_alignmask = true,
 	}, {
 		.name = "init+update+update+final two even splits",
 		.src_divs = {
@@ -1273,6 +1275,7 @@ static int test_shash_vec_cfg(const struct hash_testvec *vec,
 			      u8 *hashstate)
 {
 	struct crypto_shash *tfm = desc->tfm;
+	const unsigned int alignmask = crypto_shash_alignmask(tfm);
 	const unsigned int digestsize = crypto_shash_digestsize(tfm);
 	const unsigned int statesize = crypto_shash_statesize(tfm);
 	const char *driver = crypto_shash_driver_name(tfm);
@@ -1284,7 +1287,7 @@ static int test_shash_vec_cfg(const struct hash_testvec *vec,
 	/* Set the key, if specified */
 	if (vec->ksize) {
 		err = do_setkey(crypto_shash_setkey, tfm, vec->key, vec->ksize,
-				cfg, 0);
+				cfg, alignmask);
 		if (err) {
 			if (err == vec->setkey_error)
 				return 0;
@@ -1301,7 +1304,7 @@ static int test_shash_vec_cfg(const struct hash_testvec *vec,
 	}
 
 	/* Build the scatterlist for the source data */
-	err = build_hash_sglist(tsgl, vec, cfg, 0, divs);
+	err = build_hash_sglist(tsgl, vec, cfg, alignmask, divs);
 	if (err) {
 		pr_err("alg: shash: %s: error preparing scatterlist for test vector %s, cfg=\"%s\"\n",
 		       driver, vec_name, cfg->name);
@@ -1456,6 +1459,7 @@ static int test_ahash_vec_cfg(const struct hash_testvec *vec,
 			      u8 *hashstate)
 {
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
+	const unsigned int alignmask = crypto_ahash_alignmask(tfm);
 	const unsigned int digestsize = crypto_ahash_digestsize(tfm);
 	const unsigned int statesize = crypto_ahash_statesize(tfm);
 	const char *driver = crypto_ahash_driver_name(tfm);
@@ -1471,7 +1475,7 @@ static int test_ahash_vec_cfg(const struct hash_testvec *vec,
 	/* Set the key, if specified */
 	if (vec->ksize) {
 		err = do_setkey(crypto_ahash_setkey, tfm, vec->key, vec->ksize,
-				cfg, 0);
+				cfg, alignmask);
 		if (err) {
 			if (err == vec->setkey_error)
 				return 0;
@@ -1488,7 +1492,7 @@ static int test_ahash_vec_cfg(const struct hash_testvec *vec,
 	}
 
 	/* Build the scatterlist for the source data */
-	err = build_hash_sglist(tsgl, vec, cfg, 0, divs);
+	err = build_hash_sglist(tsgl, vec, cfg, alignmask, divs);
 	if (err) {
 		pr_err("alg: ahash: %s: error preparing scatterlist for test vector %s, cfg=\"%s\"\n",
 		       driver, vec_name, cfg->name);
@@ -4959,7 +4963,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "ecb(arc4)",
-		.generic_driver = "arc4-generic",
+		.generic_driver = "ecb(arc4)-generic",
 		.test = alg_test_skcipher,
 		.suite = {
 			.cipher = __VECS(arc4_tv_template)
@@ -5457,18 +5461,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.akcipher = __VECS(pkcs1pad_rsa_tv_template)
 		}
 	}, {
-		.alg = "pkcs1pad(rsa,sha3-256)",
-		.test = alg_test_null,
-		.fips_allowed = 1,
-	}, {
-		.alg = "pkcs1pad(rsa,sha3-384)",
-		.test = alg_test_null,
-		.fips_allowed = 1,
-	}, {
-		.alg = "pkcs1pad(rsa,sha3-512)",
-		.test = alg_test_null,
-		.fips_allowed = 1,
-	}, {
 		.alg = "pkcs1pad(rsa,sha384)",
 		.test = alg_test_null,
 		.fips_allowed = 1,
@@ -5781,6 +5773,16 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.hash = __VECS(xxhash64_tv_template)
 		}
 	}, {
+		.alg = "zlib-deflate",
+		.test = alg_test_comp,
+		.fips_allowed = 1,
+		.suite = {
+			.comp = {
+				.comp = __VECS(zlib_deflate_comp_tv_template),
+				.decomp = __VECS(zlib_deflate_decomp_tv_template)
+			}
+		}
+	}, {
 		.alg = "zstd",
 		.test = alg_test_comp,
 		.fips_allowed = 1,
@@ -5943,25 +5945,6 @@ test_done:
 	return rc;
 
 notest:
-	if ((type & CRYPTO_ALG_TYPE_MASK) == CRYPTO_ALG_TYPE_LSKCIPHER) {
-		char nalg[CRYPTO_MAX_ALG_NAME];
-
-		if (snprintf(nalg, sizeof(nalg), "ecb(%s)", alg) >=
-		    sizeof(nalg))
-			goto notest2;
-
-		i = alg_find_test(nalg);
-		if (i < 0)
-			goto notest2;
-
-		if (fips_enabled && !alg_test_descs[i].fips_allowed)
-			goto non_fips_alg;
-
-		rc = alg_test_skcipher(alg_test_descs + i, driver, type, mask);
-		goto test_done;
-	}
-
-notest2:
 	printk(KERN_INFO "alg: No test for %s (%s)\n", alg, driver);
 
 	if (type & CRYPTO_ALG_FIPS_INTERNAL)

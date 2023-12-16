@@ -17,7 +17,8 @@ arch_string()
 
 asm_errno_file()
 {
-	arch="$1"
+	local arch="$1"
+	local header
 
 	header="$toolsdir/arch/$arch/include/uapi/asm/errno.h"
 	if test -r "$header"; then
@@ -29,7 +30,8 @@ asm_errno_file()
 
 create_errno_lookup_func()
 {
-	arch=$(arch_string "$1")
+	local arch=$(arch_string "$1")
+	local nr name
 
 	printf "static const char *errno_to_name__%s(int err)\n{\n\tswitch (err) {\n" $arch
 
@@ -42,8 +44,8 @@ create_errno_lookup_func()
 
 process_arch()
 {
-	arch="$1"
-	asm_errno=$(asm_errno_file "$arch")
+	local arch="$1"
+	local asm_errno=$(asm_errno_file "$arch")
 
 	$gcc $CFLAGS $include_path -E -dM -x c $asm_errno \
 		|grep -hE '^#define[[:blank:]]+(E[^[:blank:]]+)[[:blank:]]+([[:digit:]]+).*' \
@@ -54,8 +56,9 @@ process_arch()
 
 create_arch_errno_table_func()
 {
-	archlist="$1"
-	default="$2"
+	local archlist="$1"
+	local default="$2"
+	local arch
 
 	printf 'const char *arch_syscalls__strerrno(const char *arch, int err)\n'
 	printf '{\n'

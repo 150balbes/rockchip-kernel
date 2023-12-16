@@ -172,14 +172,6 @@ struct vring_virtqueue {
 	/* Host publishes avail event idx */
 	bool event;
 
-	/* Do DMA mapping by driver */
-	bool premapped;
-
-	/* Do unmap or not for desc. Just when premapped is False and
-	 * use_dma_api is true, this is true.
-	 */
-	bool do_unmap;
-
 	/* Head of free buffer list. */
 	unsigned int free_head;
 	/* Number we've added since last sync. */
@@ -363,14 +355,10 @@ static struct device *vring_dma_dev(const struct vring_virtqueue *vq)
 }
 
 /* Map one sg entry. */
-static int vring_map_one_sg(const struct vring_virtqueue *vq, struct scatterlist *sg,
-			    enum dma_data_direction direction, dma_addr_t *addr)
+static dma_addr_t vring_map_one_sg(const struct vring_virtqueue *vq,
+				   struct scatterlist *sg,
+				   enum dma_data_direction direction)
 {
-	if (vq->premapped) {
-		*addr = sg_dma_address(sg);
-		return 0;
-	}
-
 	if (!vq->use_dma_api) {
 		/*
 		 * If DMA is not used, KMSAN doesn't know that the scatterlist
@@ -378,8 +366,7 @@ static int vring_map_one_sg(const struct vring_virtqueue *vq, struct scatterlist
 		 * depending on the direction.
 		 */
 		kmsan_handle_dma(sg_page(sg), sg->offset, sg->length, direction);
-		*addr = (dma_addr_t)sg_phys(sg);
-		return 0;
+		return (dma_addr_t)sg_phys(sg);
 	}
 
 	/*
@@ -387,14 +374,9 @@ static int vring_map_one_sg(const struct vring_virtqueue *vq, struct scatterlist
 	 * the way it expects (we don't guarantee that the scatterlist
 	 * will exist for the lifetime of the mapping).
 	 */
-	*addr = dma_map_page(vring_dma_dev(vq),
+	return dma_map_page(vring_dma_dev(vq),
 			    sg_page(sg), sg->offset, sg->length,
 			    direction);
-
-	if (dma_mapping_error(vring_dma_dev(vq), *addr))
-		return -ENOMEM;
-
-	return 0;
 }
 
 static dma_addr_t vring_map_single(const struct vring_virtqueue *vq,
@@ -445,7 +427,7 @@ static void vring_unmap_one_split_indirect(const struct vring_virtqueue *vq,
 {
 	u16 flags;
 
-	if (!vq->do_unmap)
+	if (!vq->use_dma_api)
 		return;
 
 	flags = virtio16_to_cpu(vq->vq.vdev, desc->flags);
@@ -463,21 +445,18 @@ static unsigned int vring_unmap_one_split(const struct vring_virtqueue *vq,
 	struct vring_desc_extra *extra = vq->split.desc_extra;
 	u16 flags;
 
+	if (!vq->use_dma_api)
+		goto out;
+
 	flags = extra[i].flags;
 
 	if (flags & VRING_DESC_F_INDIRECT) {
-		if (!vq->use_dma_api)
-			goto out;
-
 		dma_unmap_single(vring_dma_dev(vq),
 				 extra[i].addr,
 				 extra[i].len,
 				 (flags & VRING_DESC_F_WRITE) ?
 				 DMA_FROM_DEVICE : DMA_TO_DEVICE);
 	} else {
-		if (!vq->do_unmap)
-			goto out;
-
 		dma_unmap_page(vring_dma_dev(vq),
 			       extra[i].addr,
 			       extra[i].len,
@@ -609,9 +588,8 @@ static inline int virtqueue_add_split(struct virtqueue *_vq,
 
 	for (n = 0; n < out_sgs; n++) {
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
-			dma_addr_t addr;
-
-			if (vring_map_one_sg(vq, sg, DMA_TO_DEVICE, &addr))
+			dma_addr_t addr = vring_map_one_sg(vq, sg, DMA_TO_DEVICE);
+			if (vring_mapping_error(vq, addr))
 				goto unmap_release;
 
 			prev = i;
@@ -625,9 +603,8 @@ static inline int virtqueue_add_split(struct virtqueue *_vq,
 	}
 	for (; n < (out_sgs + in_sgs); n++) {
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
-			dma_addr_t addr;
-
-			if (vring_map_one_sg(vq, sg, DMA_FROM_DEVICE, &addr))
+			dma_addr_t addr = vring_map_one_sg(vq, sg, DMA_FROM_DEVICE);
+			if (vring_mapping_error(vq, addr))
 				goto unmap_release;
 
 			prev = i;
@@ -643,7 +620,7 @@ static inline int virtqueue_add_split(struct virtqueue *_vq,
 	}
 	/* Last one doesn't continue. */
 	desc[prev].flags &= cpu_to_virtio16(_vq->vdev, ~VRING_DESC_F_NEXT);
-	if (!indirect && vq->do_unmap)
+	if (!indirect && vq->use_dma_api)
 		vq->split.desc_extra[prev & (vq->split.vring.num - 1)].flags &=
 			~VRING_DESC_F_NEXT;
 
@@ -652,12 +629,8 @@ static inline int virtqueue_add_split(struct virtqueue *_vq,
 		dma_addr_t addr = vring_map_single(
 			vq, desc, total_sg * sizeof(struct vring_desc),
 			DMA_TO_DEVICE);
-		if (vring_mapping_error(vq, addr)) {
-			if (vq->premapped)
-				goto free_indirect;
-
+		if (vring_mapping_error(vq, addr))
 			goto unmap_release;
-		}
 
 		virtqueue_add_desc_split(_vq, vq->split.vring.desc,
 					 head, addr,
@@ -723,7 +696,6 @@ unmap_release:
 			i = vring_unmap_one_split(vq, i);
 	}
 
-free_indirect:
 	if (indirect)
 		kfree(desc);
 
@@ -802,10 +774,8 @@ static void detach_buf_split(struct vring_virtqueue *vq, unsigned int head,
 				VRING_DESC_F_INDIRECT));
 		BUG_ON(len == 0 || len % sizeof(struct vring_desc));
 
-		if (vq->do_unmap) {
-			for (j = 0; j < len / sizeof(struct vring_desc); j++)
-				vring_unmap_one_split_indirect(vq, &indir_desc[j]);
-		}
+		for (j = 0; j < len / sizeof(struct vring_desc); j++)
+			vring_unmap_one_split_indirect(vq, &indir_desc[j]);
 
 		kfree(indir_desc);
 		vq->split.desc_state[head].indir_desc = NULL;
@@ -1225,20 +1195,17 @@ static void vring_unmap_extra_packed(const struct vring_virtqueue *vq,
 {
 	u16 flags;
 
+	if (!vq->use_dma_api)
+		return;
+
 	flags = extra->flags;
 
 	if (flags & VRING_DESC_F_INDIRECT) {
-		if (!vq->use_dma_api)
-			return;
-
 		dma_unmap_single(vring_dma_dev(vq),
 				 extra->addr, extra->len,
 				 (flags & VRING_DESC_F_WRITE) ?
 				 DMA_FROM_DEVICE : DMA_TO_DEVICE);
 	} else {
-		if (!vq->do_unmap)
-			return;
-
 		dma_unmap_page(vring_dma_dev(vq),
 			       extra->addr, extra->len,
 			       (flags & VRING_DESC_F_WRITE) ?
@@ -1251,7 +1218,7 @@ static void vring_unmap_desc_packed(const struct vring_virtqueue *vq,
 {
 	u16 flags;
 
-	if (!vq->do_unmap)
+	if (!vq->use_dma_api)
 		return;
 
 	flags = le16_to_cpu(desc->flags);
@@ -1312,8 +1279,9 @@ static int virtqueue_add_indirect_packed(struct vring_virtqueue *vq,
 
 	for (n = 0; n < out_sgs + in_sgs; n++) {
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
-			if (vring_map_one_sg(vq, sg, n < out_sgs ?
-					     DMA_TO_DEVICE : DMA_FROM_DEVICE, &addr))
+			addr = vring_map_one_sg(vq, sg, n < out_sgs ?
+					DMA_TO_DEVICE : DMA_FROM_DEVICE);
+			if (vring_mapping_error(vq, addr))
 				goto unmap_release;
 
 			desc[i].flags = cpu_to_le16(n < out_sgs ?
@@ -1328,19 +1296,15 @@ static int virtqueue_add_indirect_packed(struct vring_virtqueue *vq,
 	addr = vring_map_single(vq, desc,
 			total_sg * sizeof(struct vring_packed_desc),
 			DMA_TO_DEVICE);
-	if (vring_mapping_error(vq, addr)) {
-		if (vq->premapped)
-			goto free_desc;
-
+	if (vring_mapping_error(vq, addr))
 		goto unmap_release;
-	}
 
 	vq->packed.vring.desc[head].addr = cpu_to_le64(addr);
 	vq->packed.vring.desc[head].len = cpu_to_le32(total_sg *
 				sizeof(struct vring_packed_desc));
 	vq->packed.vring.desc[head].id = cpu_to_le16(id);
 
-	if (vq->do_unmap) {
+	if (vq->use_dma_api) {
 		vq->packed.desc_extra[id].addr = addr;
 		vq->packed.desc_extra[id].len = total_sg *
 				sizeof(struct vring_packed_desc);
@@ -1391,7 +1355,6 @@ unmap_release:
 	for (i = 0; i < err_idx; i++)
 		vring_unmap_desc_packed(vq, &desc[i]);
 
-free_desc:
 	kfree(desc);
 
 	END_USE(vq);
@@ -1463,10 +1426,9 @@ static inline int virtqueue_add_packed(struct virtqueue *_vq,
 	c = 0;
 	for (n = 0; n < out_sgs + in_sgs; n++) {
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
-			dma_addr_t addr;
-
-			if (vring_map_one_sg(vq, sg, n < out_sgs ?
-					     DMA_TO_DEVICE : DMA_FROM_DEVICE, &addr))
+			dma_addr_t addr = vring_map_one_sg(vq, sg, n < out_sgs ?
+					DMA_TO_DEVICE : DMA_FROM_DEVICE);
+			if (vring_mapping_error(vq, addr))
 				goto unmap_release;
 
 			flags = cpu_to_le16(vq->packed.avail_used_flags |
@@ -1481,7 +1443,7 @@ static inline int virtqueue_add_packed(struct virtqueue *_vq,
 			desc[i].len = cpu_to_le32(sg->length);
 			desc[i].id = cpu_to_le16(id);
 
-			if (unlikely(vq->do_unmap)) {
+			if (unlikely(vq->use_dma_api)) {
 				vq->packed.desc_extra[curr].addr = addr;
 				vq->packed.desc_extra[curr].len = sg->length;
 				vq->packed.desc_extra[curr].flags =
@@ -1499,7 +1461,7 @@ static inline int virtqueue_add_packed(struct virtqueue *_vq,
 		}
 	}
 
-	if (i <= head)
+	if (i < head)
 		vq->packed.avail_wrap_counter ^= 1;
 
 	/* We're using some buffers from the free list. */
@@ -1615,7 +1577,7 @@ static void detach_buf_packed(struct vring_virtqueue *vq,
 	vq->free_head = id;
 	vq->vq.num_free += state->num;
 
-	if (unlikely(vq->do_unmap)) {
+	if (unlikely(vq->use_dma_api)) {
 		curr = id;
 		for (i = 0; i < state->num; i++) {
 			vring_unmap_extra_packed(vq,
@@ -1632,7 +1594,7 @@ static void detach_buf_packed(struct vring_virtqueue *vq,
 		if (!desc)
 			return;
 
-		if (vq->do_unmap) {
+		if (vq->use_dma_api) {
 			len = vq->packed.desc_extra[id].len;
 			for (i = 0; i < len / sizeof(struct vring_packed_desc);
 					i++)
@@ -2090,8 +2052,6 @@ static struct virtqueue *vring_create_virtqueue_packed(
 	vq->packed_ring = true;
 	vq->dma_dev = dma_dev;
 	vq->use_dma_api = vring_use_dma_api(vdev);
-	vq->premapped = false;
-	vq->do_unmap = vq->use_dma_api;
 
 	vq->indirect = virtio_has_feature(vdev, VIRTIO_RING_F_INDIRECT_DESC) &&
 		!context;
@@ -2152,43 +2112,6 @@ err_ring:
 	return -ENOMEM;
 }
 
-static int virtqueue_disable_and_recycle(struct virtqueue *_vq,
-					 void (*recycle)(struct virtqueue *vq, void *buf))
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	struct virtio_device *vdev = vq->vq.vdev;
-	void *buf;
-	int err;
-
-	if (!vq->we_own_ring)
-		return -EPERM;
-
-	if (!vdev->config->disable_vq_and_reset)
-		return -ENOENT;
-
-	if (!vdev->config->enable_vq_after_reset)
-		return -ENOENT;
-
-	err = vdev->config->disable_vq_and_reset(_vq);
-	if (err)
-		return err;
-
-	while ((buf = virtqueue_detach_unused_buf(_vq)) != NULL)
-		recycle(_vq, buf);
-
-	return 0;
-}
-
-static int virtqueue_enable_after_reset(struct virtqueue *_vq)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	struct virtio_device *vdev = vq->vq.vdev;
-
-	if (vdev->config->enable_vq_after_reset(_vq))
-		return -EBUSY;
-
-	return 0;
-}
 
 /*
  * Generic functions and exported symbols.
@@ -2313,23 +2236,6 @@ int virtqueue_add_inbuf_ctx(struct virtqueue *vq,
 	return virtqueue_add(vq, &sg, num, 0, 1, data, ctx, gfp);
 }
 EXPORT_SYMBOL_GPL(virtqueue_add_inbuf_ctx);
-
-/**
- * virtqueue_dma_dev - get the dma dev
- * @_vq: the struct virtqueue we're talking about.
- *
- * Returns the dma dev. That can been used for dma api.
- */
-struct device *virtqueue_dma_dev(struct virtqueue *_vq)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-
-	if (vq->use_dma_api)
-		return vring_dma_dev(vq);
-	else
-		return NULL;
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_dev);
 
 /**
  * virtqueue_kick_prepare - first half of split virtqueue_kick call.
@@ -2635,8 +2541,6 @@ static struct virtqueue *__vring_new_virtqueue(unsigned int index,
 #endif
 	vq->dma_dev = dma_dev;
 	vq->use_dma_api = vring_use_dma_api(vdev);
-	vq->premapped = false;
-	vq->do_unmap = vq->use_dma_api;
 
 	vq->indirect = virtio_has_feature(vdev, VIRTIO_RING_F_INDIRECT_DESC) &&
 		!context;
@@ -2715,7 +2619,7 @@ EXPORT_SYMBOL_GPL(vring_create_virtqueue_dma);
  * virtqueue_resize - resize the vring of vq
  * @_vq: the struct virtqueue we're talking about.
  * @num: new ring num
- * @recycle: callback to recycle unused buffers
+ * @recycle: callback for recycle the useless buffer
  *
  * When it is really necessary to create a new vring, it will set the current vq
  * into the reset state. Then call the passed callback to recycle the buffer
@@ -2739,7 +2643,12 @@ int virtqueue_resize(struct virtqueue *_vq, u32 num,
 		     void (*recycle)(struct virtqueue *vq, void *buf))
 {
 	struct vring_virtqueue *vq = to_vvq(_vq);
+	struct virtio_device *vdev = vq->vq.vdev;
+	void *buf;
 	int err;
+
+	if (!vq->we_own_ring)
+		return -EPERM;
 
 	if (num > vq->vq.num_max)
 		return -E2BIG;
@@ -2750,100 +2659,30 @@ int virtqueue_resize(struct virtqueue *_vq, u32 num,
 	if ((vq->packed_ring ? vq->packed.vring.num : vq->split.vring.num) == num)
 		return 0;
 
-	err = virtqueue_disable_and_recycle(_vq, recycle);
+	if (!vdev->config->disable_vq_and_reset)
+		return -ENOENT;
+
+	if (!vdev->config->enable_vq_after_reset)
+		return -ENOENT;
+
+	err = vdev->config->disable_vq_and_reset(_vq);
 	if (err)
 		return err;
+
+	while ((buf = virtqueue_detach_unused_buf(_vq)) != NULL)
+		recycle(_vq, buf);
 
 	if (vq->packed_ring)
 		err = virtqueue_resize_packed(_vq, num);
 	else
 		err = virtqueue_resize_split(_vq, num);
 
-	return virtqueue_enable_after_reset(_vq);
+	if (vdev->config->enable_vq_after_reset(_vq))
+		return -EBUSY;
+
+	return err;
 }
 EXPORT_SYMBOL_GPL(virtqueue_resize);
-
-/**
- * virtqueue_set_dma_premapped - set the vring premapped mode
- * @_vq: the struct virtqueue we're talking about.
- *
- * Enable the premapped mode of the vq.
- *
- * The vring in premapped mode does not do dma internally, so the driver must
- * do dma mapping in advance. The driver must pass the dma_address through
- * dma_address of scatterlist. When the driver got a used buffer from
- * the vring, it has to unmap the dma address.
- *
- * This function must be called immediately after creating the vq, or after vq
- * reset, and before adding any buffers to it.
- *
- * Caller must ensure we don't call this with other virtqueue operations
- * at the same time (except where noted).
- *
- * Returns zero or a negative error.
- * 0: success.
- * -EINVAL: vring does not use the dma api, so we can not enable premapped mode.
- */
-int virtqueue_set_dma_premapped(struct virtqueue *_vq)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	u32 num;
-
-	START_USE(vq);
-
-	num = vq->packed_ring ? vq->packed.vring.num : vq->split.vring.num;
-
-	if (num != vq->vq.num_free) {
-		END_USE(vq);
-		return -EINVAL;
-	}
-
-	if (!vq->use_dma_api) {
-		END_USE(vq);
-		return -EINVAL;
-	}
-
-	vq->premapped = true;
-	vq->do_unmap = false;
-
-	END_USE(vq);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(virtqueue_set_dma_premapped);
-
-/**
- * virtqueue_reset - detach and recycle all unused buffers
- * @_vq: the struct virtqueue we're talking about.
- * @recycle: callback to recycle unused buffers
- *
- * Caller must ensure we don't call this with other virtqueue operations
- * at the same time (except where noted).
- *
- * Returns zero or a negative error.
- * 0: success.
- * -EBUSY: Failed to sync with device, vq may not work properly
- * -ENOENT: Transport or device not supported
- * -EPERM: Operation not permitted
- */
-int virtqueue_reset(struct virtqueue *_vq,
-		    void (*recycle)(struct virtqueue *vq, void *buf))
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	int err;
-
-	err = virtqueue_disable_and_recycle(_vq, recycle);
-	if (err)
-		return err;
-
-	if (vq->packed_ring)
-		virtqueue_reinit_packed(vq);
-	else
-		virtqueue_reinit_split(vq);
-
-	return virtqueue_enable_after_reset(_vq);
-}
-EXPORT_SYMBOL_GPL(virtqueue_reset);
 
 /* Only available for split ring */
 struct virtqueue *vring_new_virtqueue(unsigned int index,
@@ -3105,150 +2944,5 @@ const struct vring *virtqueue_get_vring(const struct virtqueue *vq)
 	return &to_vvq(vq)->split.vring;
 }
 EXPORT_SYMBOL_GPL(virtqueue_get_vring);
-
-/**
- * virtqueue_dma_map_single_attrs - map DMA for _vq
- * @_vq: the struct virtqueue we're talking about.
- * @ptr: the pointer of the buffer to do dma
- * @size: the size of the buffer to do dma
- * @dir: DMA direction
- * @attrs: DMA Attrs
- *
- * The caller calls this to do dma mapping in advance. The DMA address can be
- * passed to this _vq when it is in pre-mapped mode.
- *
- * return DMA address. Caller should check that by virtqueue_dma_mapping_error().
- */
-dma_addr_t virtqueue_dma_map_single_attrs(struct virtqueue *_vq, void *ptr,
-					  size_t size,
-					  enum dma_data_direction dir,
-					  unsigned long attrs)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-
-	if (!vq->use_dma_api)
-		return (dma_addr_t)virt_to_phys(ptr);
-
-	return dma_map_single_attrs(vring_dma_dev(vq), ptr, size, dir, attrs);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_map_single_attrs);
-
-/**
- * virtqueue_dma_unmap_single_attrs - unmap DMA for _vq
- * @_vq: the struct virtqueue we're talking about.
- * @addr: the dma address to unmap
- * @size: the size of the buffer
- * @dir: DMA direction
- * @attrs: DMA Attrs
- *
- * Unmap the address that is mapped by the virtqueue_dma_map_* APIs.
- *
- */
-void virtqueue_dma_unmap_single_attrs(struct virtqueue *_vq, dma_addr_t addr,
-				      size_t size, enum dma_data_direction dir,
-				      unsigned long attrs)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-
-	if (!vq->use_dma_api)
-		return;
-
-	dma_unmap_single_attrs(vring_dma_dev(vq), addr, size, dir, attrs);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_unmap_single_attrs);
-
-/**
- * virtqueue_dma_mapping_error - check dma address
- * @_vq: the struct virtqueue we're talking about.
- * @addr: DMA address
- *
- * Returns 0 means dma valid. Other means invalid dma address.
- */
-int virtqueue_dma_mapping_error(struct virtqueue *_vq, dma_addr_t addr)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-
-	if (!vq->use_dma_api)
-		return 0;
-
-	return dma_mapping_error(vring_dma_dev(vq), addr);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_mapping_error);
-
-/**
- * virtqueue_dma_need_sync - check a dma address needs sync
- * @_vq: the struct virtqueue we're talking about.
- * @addr: DMA address
- *
- * Check if the dma address mapped by the virtqueue_dma_map_* APIs needs to be
- * synchronized
- *
- * return bool
- */
-bool virtqueue_dma_need_sync(struct virtqueue *_vq, dma_addr_t addr)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-
-	if (!vq->use_dma_api)
-		return false;
-
-	return dma_need_sync(vring_dma_dev(vq), addr);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_need_sync);
-
-/**
- * virtqueue_dma_sync_single_range_for_cpu - dma sync for cpu
- * @_vq: the struct virtqueue we're talking about.
- * @addr: DMA address
- * @offset: DMA address offset
- * @size: buf size for sync
- * @dir: DMA direction
- *
- * Before calling this function, use virtqueue_dma_need_sync() to confirm that
- * the DMA address really needs to be synchronized
- *
- */
-void virtqueue_dma_sync_single_range_for_cpu(struct virtqueue *_vq,
-					     dma_addr_t addr,
-					     unsigned long offset, size_t size,
-					     enum dma_data_direction dir)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	struct device *dev = vring_dma_dev(vq);
-
-	if (!vq->use_dma_api)
-		return;
-
-	dma_sync_single_range_for_cpu(dev, addr, offset, size,
-				      DMA_BIDIRECTIONAL);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_sync_single_range_for_cpu);
-
-/**
- * virtqueue_dma_sync_single_range_for_device - dma sync for device
- * @_vq: the struct virtqueue we're talking about.
- * @addr: DMA address
- * @offset: DMA address offset
- * @size: buf size for sync
- * @dir: DMA direction
- *
- * Before calling this function, use virtqueue_dma_need_sync() to confirm that
- * the DMA address really needs to be synchronized
- */
-void virtqueue_dma_sync_single_range_for_device(struct virtqueue *_vq,
-						dma_addr_t addr,
-						unsigned long offset, size_t size,
-						enum dma_data_direction dir)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	struct device *dev = vring_dma_dev(vq);
-
-	if (!vq->use_dma_api)
-		return;
-
-	dma_sync_single_range_for_device(dev, addr, offset, size,
-					 DMA_BIDIRECTIONAL);
-}
-EXPORT_SYMBOL_GPL(virtqueue_dma_sync_single_range_for_device);
 
 MODULE_LICENSE("GPL");

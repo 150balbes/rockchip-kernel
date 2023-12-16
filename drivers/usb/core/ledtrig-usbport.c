@@ -350,7 +350,18 @@ static struct led_trigger usbport_led_trigger = {
 	.deactivate = usbport_trig_deactivate,
 };
 
-module_led_trigger(usbport_led_trigger);
+static int __init usbport_trig_init(void)
+{
+	return led_trigger_register(&usbport_led_trigger);
+}
+
+static void __exit usbport_trig_exit(void)
+{
+	led_trigger_unregister(&usbport_led_trigger);
+}
+
+module_init(usbport_trig_init);
+module_exit(usbport_trig_exit);
 
 MODULE_AUTHOR("Rafał Miłecki <rafal@milecki.pl>");
 MODULE_DESCRIPTION("USB port trigger");

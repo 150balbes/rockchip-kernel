@@ -23,7 +23,6 @@ properties:
 
   connector:
     $ref: /schemas/connector/usb-connector.yaml#
-    unevaluatedProperties: false
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports

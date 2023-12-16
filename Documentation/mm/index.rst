@@ -44,6 +44,7 @@ above structured documentation, or deleted if it has served its purpose.
    balance
    damon/index
    free_page_reporting
+   frontswap
    hmm
    hwpoison
    hugetlbfs_reserv

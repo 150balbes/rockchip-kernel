@@ -27,7 +27,7 @@
  * as fixes will need to be made in multiple places.  The performance gain
  * is worth it.
  */
-#include <linux/export.h>
+#include <asm/export.h>
 	.set noat
 	.set noreorder
 .text

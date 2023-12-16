@@ -3,7 +3,12 @@
  * Copyright 2012 Sascha Hauer, Pengutronix
  */
 
+#include <linux/irq.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
+#include <linux/of_platform.h>
 #include <asm/mach/arch.h>
+#include <asm/mach/time.h>
 #include "common.h"
 #include "hardware.h"
 

@@ -41,6 +41,14 @@ int cmd_idle_set(int argc, char **argv)
 			cont = 0;
 			break;
 		case 'd':
+			if (param) {
+				param = -1;
+				cont = 0;
+				break;
+			}
+			param = ret;
+			idlestate = atoi(optarg);
+			break;
 		case 'e':
 			if (param) {
 				param = -1;
@@ -48,13 +56,7 @@ int cmd_idle_set(int argc, char **argv)
 				break;
 			}
 			param = ret;
-			strtol(optarg, &endptr, 10);
-			if (*endptr != '\0') {
-				printf(_("Bad value: %s, Integer expected\n"), optarg);
-				exit(EXIT_FAILURE);
-			} else {
-				idlestate = atoi(optarg);
-			}
+			idlestate = atoi(optarg);
 			break;
 		case 'D':
 			if (param) {

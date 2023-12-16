@@ -6,9 +6,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -33,9 +30,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -60,9 +54,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -87,9 +78,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -114,9 +102,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -141,9 +126,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -168,9 +150,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -195,9 +174,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -222,9 +198,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -249,9 +222,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -276,9 +246,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -303,9 +270,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -330,9 +294,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -362,9 +323,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -394,9 +352,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -422,9 +377,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             "$TC actions add action skbmod set etype 0x0001",
             "$TC actions add action skbmod set etype 0x0011",
@@ -448,9 +400,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",
@@ -476,9 +425,6 @@
             "actions",
             "skbmod"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbmod",

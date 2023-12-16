@@ -31,7 +31,6 @@
 #include <linux/prefetch.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/platform_device.h>
 
 #include <net/ip.h>
 
@@ -90,7 +89,7 @@ static struct ehea_bcmc_reg_array ehea_bcmc_regs;
 
 static int ehea_probe_adapter(struct platform_device *dev);
 
-static void ehea_remove(struct platform_device *dev);
+static int ehea_remove(struct platform_device *dev);
 
 static const struct of_device_id ehea_module_device_table[] = {
 	{
@@ -121,7 +120,7 @@ static struct platform_driver ehea_driver = {
 		.of_match_table = ehea_device_table,
 	},
 	.probe = ehea_probe_adapter,
-	.remove_new = ehea_remove,
+	.remove = ehea_remove,
 };
 
 void ehea_dump(void *adr, int len, char *msg)
@@ -900,7 +899,7 @@ static int ehea_poll(struct napi_struct *napi, int budget)
 		if (!cqe && !cqe_skb)
 			return rx;
 
-		if (!napi_schedule(napi))
+		if (!napi_reschedule(napi))
 			return rx;
 
 		cqe_skb = ehea_proc_cqes(pr, EHEA_POLL_MAX_CQES);
@@ -3471,7 +3470,7 @@ out:
 	return ret;
 }
 
-static void ehea_remove(struct platform_device *dev)
+static int ehea_remove(struct platform_device *dev)
 {
 	struct ehea_adapter *adapter = platform_get_drvdata(dev);
 	int i;
@@ -3492,6 +3491,8 @@ static void ehea_remove(struct platform_device *dev)
 	list_del(&adapter->list);
 
 	ehea_update_firmware_handles();
+
+	return 0;
 }
 
 static int check_module_parm(void)

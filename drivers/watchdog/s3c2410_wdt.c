@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
 #include <linux/delay.h>
@@ -378,11 +379,10 @@ static int s3c2410wdt_enable(struct s3c2410_wdt *wdt, bool en)
 static int s3c2410wdt_keepalive(struct watchdog_device *wdd)
 {
 	struct s3c2410_wdt *wdt = watchdog_get_drvdata(wdd);
-	unsigned long flags;
 
-	spin_lock_irqsave(&wdt->lock, flags);
+	spin_lock(&wdt->lock);
 	writel(wdt->count, wdt->reg_base + S3C2410_WTCNT);
-	spin_unlock_irqrestore(&wdt->lock, flags);
+	spin_unlock(&wdt->lock);
 
 	return 0;
 }
@@ -399,11 +399,10 @@ static void __s3c2410wdt_stop(struct s3c2410_wdt *wdt)
 static int s3c2410wdt_stop(struct watchdog_device *wdd)
 {
 	struct s3c2410_wdt *wdt = watchdog_get_drvdata(wdd);
-	unsigned long flags;
 
-	spin_lock_irqsave(&wdt->lock, flags);
+	spin_lock(&wdt->lock);
 	__s3c2410wdt_stop(wdt);
-	spin_unlock_irqrestore(&wdt->lock, flags);
+	spin_unlock(&wdt->lock);
 
 	return 0;
 }
@@ -412,9 +411,8 @@ static int s3c2410wdt_start(struct watchdog_device *wdd)
 {
 	unsigned long wtcon;
 	struct s3c2410_wdt *wdt = watchdog_get_drvdata(wdd);
-	unsigned long flags;
 
-	spin_lock_irqsave(&wdt->lock, flags);
+	spin_lock(&wdt->lock);
 
 	__s3c2410wdt_stop(wdt);
 
@@ -435,7 +433,7 @@ static int s3c2410wdt_start(struct watchdog_device *wdd)
 	writel(wdt->count, wdt->reg_base + S3C2410_WTDAT);
 	writel(wdt->count, wdt->reg_base + S3C2410_WTCNT);
 	writel(wtcon, wdt->reg_base + S3C2410_WTCON);
-	spin_unlock_irqrestore(&wdt->lock, flags);
+	spin_unlock(&wdt->lock);
 
 	return 0;
 }

@@ -2244,15 +2244,13 @@ static ssize_t qib_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct qib_ctxtdata *rcd = ctxt_fp(iocb->ki_filp);
 	struct qib_user_sdma_queue *pq = fp->pq;
 
-	if (!user_backed_iter(from) || !from->nr_segs || !pq)
+	if (!from->user_backed || !from->nr_segs || !pq)
 		return -EINVAL;
 
 	return qib_user_sdma_writev(rcd, pq, iter_iov(from), from->nr_segs);
 }
 
-static const struct class qib_class = {
-	.name = "ipath",
-};
+static struct class *qib_class;
 static dev_t qib_dev;
 
 int qib_cdev_init(int minor, const char *name,
@@ -2283,7 +2281,7 @@ int qib_cdev_init(int minor, const char *name,
 		goto err_cdev;
 	}
 
-	device = device_create(&qib_class, NULL, dev, NULL, "%s", name);
+	device = device_create(qib_class, NULL, dev, NULL, "%s", name);
 	if (!IS_ERR(device))
 		goto done;
 	ret = PTR_ERR(device);
@@ -2327,8 +2325,9 @@ int __init qib_dev_init(void)
 		goto done;
 	}
 
-	ret = class_register(&qib_class);
-	if (ret) {
+	qib_class = class_create("ipath");
+	if (IS_ERR(qib_class)) {
+		ret = PTR_ERR(qib_class);
 		pr_err("Could not create device class (err %d)\n", -ret);
 		unregister_chrdev_region(qib_dev, QIB_NMINORS);
 	}
@@ -2339,8 +2338,10 @@ done:
 
 void qib_dev_cleanup(void)
 {
-	if (class_is_registered(&qib_class))
-		class_unregister(&qib_class);
+	if (qib_class) {
+		class_destroy(qib_class);
+		qib_class = NULL;
+	}
 
 	unregister_chrdev_region(qib_dev, QIB_NMINORS);
 }

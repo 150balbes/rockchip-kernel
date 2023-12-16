@@ -299,8 +299,6 @@ enum rdma_nldev_command {
 
 	RDMA_NLDEV_CMD_STAT_GET_STATUS,
 
-	RDMA_NLDEV_CMD_RES_SRQ_GET_RAW,
-
 	RDMA_NLDEV_NUM_OPS
 };
 
@@ -555,8 +553,6 @@ enum rdma_nldev_attr {
 
 	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_INDEX,	/* u32 */
 	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_DYNAMIC, /* u8 */
-
-	RDMA_NLDEV_SYS_ATTR_PRIVILEGED_QKEY_MODE, /* u8 */
 
 	/*
 	 * Always the end

@@ -11,6 +11,7 @@ cout=""
 ksft_skip=4
 timeout_poll=30
 timeout_test=$((timeout_poll * 2 + 1))
+mptcp_connect=""
 iptables="iptables"
 ip6tables="ip6tables"
 
@@ -182,13 +183,11 @@ do_transfer()
 
 	local mptcp_connect="./mptcp_connect -r 20"
 
-	local local_addr ip
+	local local_addr
 	if is_v6 "${connect_addr}"; then
 		local_addr="::"
-		ip=ipv6
 	else
 		local_addr="0.0.0.0"
-		ip=ipv4
 	fi
 
 	cmsg="TIMESTAMPNS"
@@ -224,8 +223,6 @@ do_transfer()
 		echo -e "\nnetns ${connector_ns} socket stat for ${port}:" 1>&2
 		ip netns exec ${connector_ns} ss -Menita 1>&2 -o "dport = :$port"
 
-		mptcp_lib_result_fail "transfer ${ip}"
-
 		ret=1
 		return 1
 	fi
@@ -239,10 +236,8 @@ do_transfer()
 	fi
 
 	check_transfer $cin $sout "file received by server"
-	rets=$?
 
-	mptcp_lib_result_code "${retc}" "mark ${ip}"
-	mptcp_lib_result_code "${rets}" "transfer ${ip}"
+	rets=$?
 
 	if [ $retc -eq 0 ] && [ $rets -eq 0 ];then
 		return 0
@@ -269,7 +264,6 @@ do_mptcp_sockopt_tests()
 
 	if ! mptcp_lib_kallsyms_has "mptcp_diag_fill_info$"; then
 		echo "INFO: MPTCP sockopt not supported: SKIP"
-		mptcp_lib_result_skip "sockopt"
 		return
 	fi
 
@@ -278,22 +272,18 @@ do_mptcp_sockopt_tests()
 
 	if [ $lret -ne 0 ]; then
 		echo "FAIL: SOL_MPTCP getsockopt" 1>&2
-		mptcp_lib_result_fail "sockopt v4"
 		ret=$lret
 		return
 	fi
-	mptcp_lib_result_pass "sockopt v4"
 
 	ip netns exec "$ns_sbox" ./mptcp_sockopt -6
 	lret=$?
 
 	if [ $lret -ne 0 ]; then
 		echo "FAIL: SOL_MPTCP getsockopt (ipv6)" 1>&2
-		mptcp_lib_result_fail "sockopt v6"
 		ret=$lret
 		return
 	fi
-	mptcp_lib_result_pass "sockopt v6"
 }
 
 run_tests()
@@ -320,12 +310,10 @@ do_tcpinq_test()
 	if [ $lret -ne 0 ];then
 		ret=$lret
 		echo "FAIL: mptcp_inq $@" 1>&2
-		mptcp_lib_result_fail "TCP_INQ: $*"
 		return $lret
 	fi
 
 	echo "PASS: TCP_INQ cmsg/ioctl $@"
-	mptcp_lib_result_pass "TCP_INQ: $*"
 	return $lret
 }
 
@@ -335,7 +323,6 @@ do_tcpinq_tests()
 
 	if ! mptcp_lib_kallsyms_has "mptcp_ioctl$"; then
 		echo "INFO: TCP_INQ not supported: SKIP"
-		mptcp_lib_result_skip "TCP_INQ"
 		return
 	fi
 
@@ -380,6 +367,4 @@ if [ $ret -eq 0 ];then
 fi
 
 do_tcpinq_tests
-
-mptcp_lib_result_print_all_tap
 exit $ret

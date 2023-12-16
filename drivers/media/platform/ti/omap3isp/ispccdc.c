@@ -1140,13 +1140,8 @@ static void ccdc_configure(struct isp_ccdc_device *ccdc)
 	if (ccdc->input == CCDC_INPUT_PARALLEL) {
 		struct v4l2_subdev *sd =
 			to_isp_pipeline(&ccdc->subdev.entity)->external;
-		struct isp_bus_cfg *bus_cfg;
 
-		bus_cfg = v4l2_subdev_to_bus_cfg(sd);
-		if (WARN_ON(!bus_cfg))
-			return;
-
-		parcfg = &bus_cfg->bus.parallel;
+		parcfg = &v4l2_subdev_to_bus_cfg(sd)->bus.parallel;
 		ccdc->bt656 = parcfg->bt656;
 	}
 
@@ -2441,11 +2436,7 @@ static int ccdc_link_validate(struct v4l2_subdev *sd,
 	if (ccdc->input == CCDC_INPUT_PARALLEL) {
 		struct v4l2_subdev *sd =
 			media_entity_to_v4l2_subdev(link->source->entity);
-		struct isp_bus_cfg *bus_cfg;
-
-		bus_cfg = v4l2_subdev_to_bus_cfg(sd);
-		if (WARN_ON(!bus_cfg))
-			return -EPIPE;
+		struct isp_bus_cfg *bus_cfg = v4l2_subdev_to_bus_cfg(sd);
 
 		parallel_shift = bus_cfg->bus.parallel.data_lane_shift;
 	} else {

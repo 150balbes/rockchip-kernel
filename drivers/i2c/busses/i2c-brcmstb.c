@@ -160,7 +160,6 @@ struct brcmstb_i2c_dev {
 	struct completion done;
 	u32 clk_freq_hz;
 	int data_regsz;
-	bool atomic;
 };
 
 /* register accessors for both be and le cpu arch */
@@ -241,7 +240,7 @@ static int brcmstb_i2c_wait_for_completion(struct brcmstb_i2c_dev *dev)
 	int ret = 0;
 	unsigned long timeout = msecs_to_jiffies(I2C_TIMEOUT);
 
-	if (dev->irq >= 0 && !dev->atomic) {
+	if (dev->irq >= 0) {
 		if (!wait_for_completion_timeout(&dev->done, timeout))
 			ret = -ETIMEDOUT;
 	} else {
@@ -288,7 +287,7 @@ static int brcmstb_send_i2c_cmd(struct brcmstb_i2c_dev *dev,
 		return rc;
 
 	/* only if we are in interrupt mode */
-	if (dev->irq >= 0 && !dev->atomic)
+	if (dev->irq >= 0)
 		reinit_completion(&dev->done);
 
 	/* enable BSC CTL interrupt line */
@@ -521,23 +520,6 @@ out:
 
 }
 
-static int brcmstb_i2c_xfer_atomic(struct i2c_adapter *adapter,
-				   struct i2c_msg msgs[], int num)
-{
-	struct brcmstb_i2c_dev *dev = i2c_get_adapdata(adapter);
-	int ret;
-
-	if (dev->irq >= 0)
-		disable_irq(dev->irq);
-	dev->atomic = true;
-	ret = brcmstb_i2c_xfer(adapter, msgs, num);
-	dev->atomic = false;
-	if (dev->irq >= 0)
-		enable_irq(dev->irq);
-
-	return ret;
-}
-
 static u32 brcmstb_i2c_functionality(struct i2c_adapter *adap)
 {
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL | I2C_FUNC_10BIT_ADDR
@@ -546,7 +528,6 @@ static u32 brcmstb_i2c_functionality(struct i2c_adapter *adap)
 
 static const struct i2c_algorithm brcmstb_i2c_algo = {
 	.master_xfer = brcmstb_i2c_xfer,
-	.master_xfer_atomic = brcmstb_i2c_xfer_atomic,
 	.functionality = brcmstb_i2c_functionality,
 };
 
@@ -613,10 +594,11 @@ static int bcm2711_release_bsc(struct brcmstb_i2c_dev *dev)
 
 static int brcmstb_i2c_probe(struct platform_device *pdev)
 {
+	int rc = 0;
 	struct brcmstb_i2c_dev *dev;
 	struct i2c_adapter *adap;
+	struct resource *iomem;
 	const char *int_name;
-	int rc;
 
 	/* Allocate memory for private data structure */
 	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
@@ -632,15 +614,18 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	init_completion(&dev->done);
 
 	/* Map hardware registers */
-	dev->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(dev->base))
-		return PTR_ERR(dev->base);
+	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dev->base = devm_ioremap_resource(dev->device, iomem);
+	if (IS_ERR(dev->base)) {
+		rc = -ENOMEM;
+		goto probe_errorout;
+	}
 
 	if (of_device_is_compatible(dev->device->of_node,
 				    "brcm,bcm2711-hdmi-i2c")) {
 		rc = bcm2711_release_bsc(dev);
 		if (rc)
-			return rc;
+			goto probe_errorout;
 	}
 
 	rc = of_property_read_string(dev->device->of_node, "interrupt-names",
@@ -693,13 +678,16 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	adap->dev.of_node = pdev->dev.of_node;
 	rc = i2c_add_adapter(adap);
 	if (rc)
-		return rc;
+		goto probe_errorout;
 
 	dev_info(dev->device, "%s@%dhz registered in %s mode\n",
 		 int_name ? int_name : " ", dev->clk_freq_hz,
 		 (dev->irq >= 0) ? "interrupt" : "polling");
 
 	return 0;
+
+probe_errorout:
+	return rc;
 }
 
 static void brcmstb_i2c_remove(struct platform_device *pdev)
@@ -709,6 +697,7 @@ static void brcmstb_i2c_remove(struct platform_device *pdev)
 	i2c_del_adapter(&dev->adapter);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int brcmstb_i2c_suspend(struct device *dev)
 {
 	struct brcmstb_i2c_dev *i2c_dev = dev_get_drvdata(dev);
@@ -726,9 +715,10 @@ static int brcmstb_i2c_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(brcmstb_i2c_pm, brcmstb_i2c_suspend,
-				brcmstb_i2c_resume);
+static SIMPLE_DEV_PM_OPS(brcmstb_i2c_pm, brcmstb_i2c_suspend,
+			 brcmstb_i2c_resume);
 
 static const struct of_device_id brcmstb_i2c_of_match[] = {
 	{.compatible = "brcm,brcmstb-i2c"},
@@ -742,7 +732,7 @@ static struct platform_driver brcmstb_i2c_driver = {
 	.driver = {
 		   .name = "brcmstb-i2c",
 		   .of_match_table = brcmstb_i2c_of_match,
-		   .pm = pm_sleep_ptr(&brcmstb_i2c_pm),
+		   .pm = &brcmstb_i2c_pm,
 		   },
 	.probe = brcmstb_i2c_probe,
 	.remove_new = brcmstb_i2c_remove,

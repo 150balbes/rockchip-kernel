@@ -541,6 +541,7 @@ long arch_ptrace(struct task_struct *child, long request,
 	return ret;
 }
 
+void do_syscall_trace_leave(struct pt_regs *regs);
 int do_syscall_trace_enter(struct pt_regs *regs)
 {
 	if (regs->syscall == NO_SYSCALL)

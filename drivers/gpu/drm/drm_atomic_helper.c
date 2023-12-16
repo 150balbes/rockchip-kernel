@@ -290,8 +290,7 @@ static int
 update_connector_routing(struct drm_atomic_state *state,
 			 struct drm_connector *connector,
 			 struct drm_connector_state *old_connector_state,
-			 struct drm_connector_state *new_connector_state,
-			 bool added_by_user)
+			 struct drm_connector_state *new_connector_state)
 {
 	const struct drm_connector_helper_funcs *funcs;
 	struct drm_encoder *new_encoder;
@@ -340,13 +339,9 @@ update_connector_routing(struct drm_atomic_state *state,
 	 * there's a chance the connector may have been destroyed during the
 	 * process, but it's better to ignore that then cause
 	 * drm_atomic_helper_resume() to fail.
-	 *
-	 * Last, we want to ignore connector registration when the connector
-	 * was not pulled in the atomic state by user-space (ie, was pulled
-	 * in by the driver, e.g. when updating a DP-MST stream).
 	 */
 	if (!state->duplicated && drm_connector_is_unregistered(connector) &&
-	    added_by_user && crtc_state->active) {
+	    crtc_state->active) {
 		drm_dbg_atomic(connector->dev,
 			       "[CONNECTOR:%d:%s] is not registered\n",
 			       connector->base.id, connector->name);
@@ -625,10 +620,7 @@ drm_atomic_helper_check_modeset(struct drm_device *dev,
 	struct drm_connector *connector;
 	struct drm_connector_state *old_connector_state, *new_connector_state;
 	int i, ret;
-	unsigned int connectors_mask = 0, user_connectors_mask = 0;
-
-	for_each_oldnew_connector_in_state(state, connector, old_connector_state, new_connector_state, i)
-		user_connectors_mask |= BIT(i);
+	unsigned int connectors_mask = 0;
 
 	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
 		bool has_connectors =
@@ -693,8 +685,7 @@ drm_atomic_helper_check_modeset(struct drm_device *dev,
 		 */
 		ret = update_connector_routing(state, connector,
 					       old_connector_state,
-					       new_connector_state,
-					       BIT(i) & user_connectors_mask);
+					       new_connector_state);
 		if (ret)
 			return ret;
 		if (old_connector_state->crtc) {
@@ -861,6 +852,7 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 					bool can_position,
 					bool can_update_disabled)
 {
+	struct drm_framebuffer *fb = plane_state->fb;
 	struct drm_rect *src = &plane_state->src;
 	struct drm_rect *dst = &plane_state->dst;
 	unsigned int rotation = plane_state->rotation;
@@ -872,7 +864,7 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 	*src = drm_plane_state_src(plane_state);
 	*dst = drm_plane_state_dest(plane_state);
 
-	if (!drm_plane_has_visible_data(plane_state)) {
+	if (!fb) {
 		plane_state->visible = false;
 		return 0;
 	}
@@ -889,31 +881,25 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 		return -EINVAL;
 	}
 
-	/* Check that selected pixel source is valid */
-	if (plane_state->pixel_source == DRM_PLANE_PIXEL_SOURCE_FB && plane_state->fb) {
-		struct drm_framebuffer *fb = plane_state->fb;
-		drm_rect_rotate(src, fb->width << 16, fb->height << 16, rotation);
+	drm_rect_rotate(src, fb->width << 16, fb->height << 16, rotation);
 
-		/* Check scaling */
-		hscale = drm_rect_calc_hscale(src, dst, min_scale, max_scale);
-		vscale = drm_rect_calc_vscale(src, dst, min_scale, max_scale);
-
-		if (hscale < 0 || vscale < 0) {
-			drm_dbg_kms(plane_state->plane->dev,
-					"Invalid scaling of plane\n");
-			drm_rect_debug_print("src: ", &plane_state->src, true);
-			drm_rect_debug_print("dst: ", &plane_state->dst, false);
-			return -ERANGE;
-		}
-
-		if (crtc_state->enable)
-			drm_mode_get_hv_timing(&crtc_state->mode, &clip.x2, &clip.y2);
-
-		plane_state->visible = drm_rect_clip_scaled(src, dst, &clip);
-		drm_rect_rotate_inv(src, fb->width << 16, fb->height << 16, rotation);
-	} else if (drm_plane_solid_fill_enabled(plane_state)) {
-		plane_state->visible = true;
+	/* Check scaling */
+	hscale = drm_rect_calc_hscale(src, dst, min_scale, max_scale);
+	vscale = drm_rect_calc_vscale(src, dst, min_scale, max_scale);
+	if (hscale < 0 || vscale < 0) {
+		drm_dbg_kms(plane_state->plane->dev,
+			    "Invalid scaling of plane\n");
+		drm_rect_debug_print("src: ", &plane_state->src, true);
+		drm_rect_debug_print("dst: ", &plane_state->dst, false);
+		return -ERANGE;
 	}
+
+	if (crtc_state->enable)
+		drm_mode_get_hv_timing(&crtc_state->mode, &clip.x2, &clip.y2);
+
+	plane_state->visible = drm_rect_clip_scaled(src, dst, &clip);
+
+	drm_rect_rotate_inv(src, fb->width << 16, fb->height << 16, rotation);
 
 	if (!plane_state->visible)
 		/*
@@ -2387,10 +2373,10 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 EXPORT_SYMBOL(drm_atomic_helper_setup_commit);
 
 /**
- * drm_atomic_helper_wait_for_dependencies - wait for required preceding commits
+ * drm_atomic_helper_wait_for_dependencies - wait for required preceeding commits
  * @old_state: atomic state object with old state structures
  *
- * This function waits for all preceding commits that touch the same CRTC as
+ * This function waits for all preceeding commits that touch the same CRTC as
  * @old_state to both be committed to the hardware (as signalled by
  * drm_atomic_helper_commit_hw_done()) and executed by the hardware (as signalled
  * by calling drm_crtc_send_vblank_event() on the &drm_crtc_state.event).

@@ -3,6 +3,11 @@
 #define _ASM_POWERPC_IO_H
 #ifdef __KERNEL__
 
+#define ARCH_HAS_IOREMAP_WC
+#ifdef CONFIG_PPC32
+#define ARCH_HAS_IOREMAP_WT
+#endif
+
 /*
  */
 
@@ -727,7 +732,9 @@ static inline void name at					\
 #define writel_relaxed(v, addr)	writel(v, addr)
 #define writeq_relaxed(v, addr)	writeq(v, addr)
 
-#ifndef CONFIG_GENERIC_IOMAP
+#ifdef CONFIG_GENERIC_IOMAP
+#include <asm-generic/iomap.h>
+#else
 /*
  * Here comes the implementation of the IOMAP interfaces.
  */
@@ -889,8 +896,8 @@ static inline void iosync(void)
  *
  */
 extern void __iomem *ioremap(phys_addr_t address, unsigned long size);
-#define ioremap ioremap
-#define ioremap_prot ioremap_prot
+extern void __iomem *ioremap_prot(phys_addr_t address, unsigned long size,
+				  unsigned long flags);
 extern void __iomem *ioremap_wc(phys_addr_t address, unsigned long size);
 #define ioremap_wc ioremap_wc
 
@@ -904,12 +911,14 @@ void __iomem *ioremap_coherent(phys_addr_t address, unsigned long size);
 #define ioremap_cache(addr, size) \
 	ioremap_prot((addr), (size), pgprot_val(PAGE_KERNEL))
 
-#define iounmap iounmap
+extern void iounmap(volatile void __iomem *addr);
 
 void __iomem *ioremap_phb(phys_addr_t paddr, unsigned long size);
 
 int early_ioremap_range(unsigned long ea, phys_addr_t pa,
 			unsigned long size, pgprot_t prot);
+void __iomem *do_ioremap(phys_addr_t pa, phys_addr_t offset, unsigned long size,
+			 pgprot_t prot, void *caller);
 
 extern void __iomem *__ioremap_caller(phys_addr_t, unsigned long size,
 				      pgprot_t prot, void *caller);
@@ -950,7 +959,7 @@ extern void __iomem *__ioremap_caller(phys_addr_t, unsigned long size,
  *	almost all conceivable cases a device driver should not be using
  *	this function
  */
-static inline unsigned long virt_to_phys(const volatile void * address)
+static inline unsigned long virt_to_phys(volatile void * address)
 {
 	WARN_ON(IS_ENABLED(CONFIG_DEBUG_VIRTUAL) && !virt_addr_valid(address));
 

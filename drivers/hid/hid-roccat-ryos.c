@@ -28,6 +28,8 @@ struct ryos_report_special {
 	uint8_t data[4];
 } __packed;
 
+static struct class *ryos_class;
+
 ROCCAT_COMMON2_BIN_ATTRIBUTE_W(control, 0x04, 0x03);
 ROCCAT_COMMON2_BIN_ATTRIBUTE_RW(profile, 0x05, 0x03);
 ROCCAT_COMMON2_BIN_ATTRIBUTE_RW(keys_primary, 0x06, 0x7d);
@@ -78,11 +80,6 @@ static const struct attribute_group *ryos_groups[] = {
 	NULL,
 };
 
-static const struct class ryos_class = {
-	.name = "ryos",
-	.dev_groups = ryos_groups,
-};
-
 static int ryos_init_specials(struct hid_device *hdev)
 {
 	struct usb_interface *intf = to_usb_interface(hdev->dev.parent);
@@ -109,7 +106,7 @@ static int ryos_init_specials(struct hid_device *hdev)
 		goto exit_free;
 	}
 
-	retval = roccat_connect(&ryos_class, hdev,
+	retval = roccat_connect(ryos_class, hdev,
 			sizeof(struct ryos_report_special));
 	if (retval < 0) {
 		hid_err(hdev, "couldn't init char dev\n");
@@ -219,20 +216,21 @@ static int __init ryos_init(void)
 {
 	int retval;
 
-	retval = class_register(&ryos_class);
-	if (retval)
-		return retval;
+	ryos_class = class_create("ryos");
+	if (IS_ERR(ryos_class))
+		return PTR_ERR(ryos_class);
+	ryos_class->dev_groups = ryos_groups;
 
 	retval = hid_register_driver(&ryos_driver);
 	if (retval)
-		class_unregister(&ryos_class);
+		class_destroy(ryos_class);
 	return retval;
 }
 
 static void __exit ryos_exit(void)
 {
 	hid_unregister_driver(&ryos_driver);
-	class_unregister(&ryos_class);
+	class_destroy(ryos_class);
 }
 
 module_init(ryos_init);

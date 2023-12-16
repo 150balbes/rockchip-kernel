@@ -1217,10 +1217,10 @@ int octeon_core_drv_init(struct octeon_recv_info *recv_info, void *buf)
 		goto core_drv_init_err;
 	}
 
-	strscpy(app_name,
+	strncpy(app_name,
 		get_oct_app_string(
 		(u32)recv_pkt->rh.r_core_drv_init.app_mode),
-		sizeof(app_name));
+		sizeof(app_name) - 1);
 	oct->app_mode = (u32)recv_pkt->rh.r_core_drv_init.app_mode;
 	if (recv_pkt->rh.r_core_drv_init.app_mode == CVM_DRV_NIC_APP) {
 		oct->fw_info.max_nic_ports =
@@ -1257,10 +1257,9 @@ int octeon_core_drv_init(struct octeon_recv_info *recv_info, void *buf)
 	memcpy(cs, get_rbd(
 	       recv_pkt->buffer_ptr[0]) + OCT_DROQ_INFO_SIZE, sizeof(*cs));
 
-	strscpy(oct->boardinfo.name, cs->boardname,
-		    sizeof(oct->boardinfo.name));
-	strscpy(oct->boardinfo.serial_number, cs->board_serial_number,
-		    sizeof(oct->boardinfo.serial_number));
+	strncpy(oct->boardinfo.name, cs->boardname, OCT_BOARD_NAME);
+	strncpy(oct->boardinfo.serial_number, cs->board_serial_number,
+		OCT_SERIAL_LEN);
 
 	octeon_swap_8B_data((u64 *)cs, (sizeof(*cs) >> 3));
 

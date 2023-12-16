@@ -96,7 +96,7 @@ struct mISDNclock
 		printk(KERN_ERR "%s: No memory for clock entry.\n", __func__);
 		return NULL;
 	}
-	strscpy(iclock->name, name, sizeof(iclock->name));
+	strncpy(iclock->name, name, sizeof(iclock->name) - 1);
 	iclock->pri = pri;
 	iclock->priv = priv;
 	iclock->ctl = ctl;

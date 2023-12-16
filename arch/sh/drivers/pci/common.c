@@ -50,21 +50,20 @@ int __init pci_is_66mhz_capable(struct pci_channel *hose,
 				int top_bus, int current_bus)
 {
 	u32 pci_devfn;
-	u16 vid;
+	unsigned short vid;
 	int cap66 = -1;
 	u16 stat;
-	int ret;
 
 	pr_info("PCI: Checking 66MHz capabilities...\n");
 
 	for (pci_devfn = 0; pci_devfn < 0xff; pci_devfn++) {
 		if (PCI_FUNC(pci_devfn))
 			continue;
-		ret = early_read_config_word(hose, top_bus, current_bus,
-					     pci_devfn, PCI_VENDOR_ID, &vid);
-		if (ret != PCIBIOS_SUCCESSFUL)
+		if (early_read_config_word(hose, top_bus, current_bus,
+					   pci_devfn, PCI_VENDOR_ID, &vid) !=
+		    PCIBIOS_SUCCESSFUL)
 			continue;
-		if (PCI_POSSIBLE_ERROR(vid))
+		if (vid == 0xffff)
 			continue;
 
 		/* check 66MHz capability */

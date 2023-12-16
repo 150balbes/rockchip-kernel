@@ -562,8 +562,7 @@ xfs_dquot_from_disk(
 	struct xfs_dquot	*dqp,
 	struct xfs_buf		*bp)
 {
-	struct xfs_dqblk	*dqb = xfs_buf_offset(bp, dqp->q_bufoffset);
-	struct xfs_disk_dquot	*ddqp = &dqb->dd_diskdq;
+	struct xfs_disk_dquot	*ddqp = bp->b_addr + dqp->q_bufoffset;
 
 	/*
 	 * Ensure that we got the type and ID we were looking for.
@@ -1251,7 +1250,7 @@ xfs_qm_dqflush(
 	}
 
 	/* Flush the incore dquot to the ondisk buffer. */
-	dqblk = xfs_buf_offset(bp, dqp->q_bufoffset);
+	dqblk = bp->b_addr + dqp->q_bufoffset;
 	xfs_dquot_to_disk(&dqblk->dd_diskdq, dqp);
 
 	/*
@@ -1387,7 +1386,7 @@ xfs_qm_dqiterate(
 			return error;
 
 		error = iter_fn(dq, type, priv);
-		id = dq->q_id + 1;
+		id = dq->q_id;
 		xfs_qm_dqput(dq);
 	} while (error == 0 && id != 0);
 

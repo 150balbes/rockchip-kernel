@@ -696,10 +696,6 @@ static int rcar_du_probe(struct platform_device *pdev)
 	/* DRM/KMS objects */
 	ret = rcar_du_modeset_init(rcdu);
 	if (ret < 0) {
-		/*
-		 * Don't use dev_err_probe(), as it would overwrite the probe
-		 * deferral reason recorded in rcar_du_modeset_init().
-		 */
 		if (ret != -EPROBE_DEFER)
 			dev_err(&pdev->dev,
 				"failed to initialize DRM/KMS (%d)\n", ret);
@@ -714,7 +710,7 @@ static int rcar_du_probe(struct platform_device *pdev)
 	if (ret)
 		goto error;
 
-	drm_info(&rcdu->ddev, "Device %s probed\n", dev_name(&pdev->dev));
+	DRM_INFO("Device %s probed\n", dev_name(&pdev->dev));
 
 	drm_fbdev_generic_setup(&rcdu->ddev, 32);
 

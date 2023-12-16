@@ -123,7 +123,7 @@ int pqm_set_gws(struct process_queue_manager *pqm, unsigned int qid,
 	if (!gws && pdd->qpd.num_gws == 0)
 		return -EINVAL;
 
-	if (KFD_GC_VERSION(dev) != IP_VERSION(9, 4, 3) && !dev->kfd->shared_resources.enable_mes) {
+	if (KFD_GC_VERSION(dev) != IP_VERSION(9, 4, 3)) {
 		if (gws)
 			ret = amdgpu_amdkfd_add_gws_to_process(pdd->process->kgd_process_info,
 				gws, &mem);
@@ -136,9 +136,7 @@ int pqm_set_gws(struct process_queue_manager *pqm, unsigned int qid,
 	} else {
 		/*
 		 * Intentionally set GWS to a non-NULL value
-		 * for devices that do not use GWS for global wave
-		 * synchronization but require the formality
-		 * of setting GWS for cooperative groups.
+		 * for GFX 9.4.3.
 		 */
 		pqn->q->gws = gws ? ERR_PTR(-ENOMEM) : NULL;
 	}
@@ -175,8 +173,7 @@ void pqm_uninit(struct process_queue_manager *pqm)
 
 	list_for_each_entry_safe(pqn, next, &pqm->queues, process_queue_list) {
 		if (pqn->q && pqn->q->gws &&
-		    KFD_GC_VERSION(pqn->q->device) != IP_VERSION(9, 4, 3) &&
-		    !pqn->q->device->kfd->shared_resources.enable_mes)
+		    KFD_GC_VERSION(pqn->q->device) != IP_VERSION(9, 4, 3))
 			amdgpu_amdkfd_remove_gws_from_process(pqm->process->kgd_process_info,
 				pqn->q->gws);
 		kfd_procfs_del_queue(pqn->q);
@@ -368,21 +365,17 @@ int pqm_create_queue(struct process_queue_manager *pqm,
 		goto err_create_queue;
 	}
 
-	if (q && p_doorbell_offset_in_process) {
+	if (q && p_doorbell_offset_in_process)
 		/* Return the doorbell offset within the doorbell page
 		 * to the caller so it can be passed up to user mode
 		 * (in bytes).
-		 * relative doorbell index = Absolute doorbell index -
-		 * absolute index of first doorbell in the page.
+		 * There are always 1024 doorbells per process, so in case
+		 * of 8-byte doorbells, there are two doorbell pages per
+		 * process.
 		 */
-		uint32_t first_db_index = amdgpu_doorbell_index_on_bar(pdd->dev->adev,
-								       pdd->qpd.proc_doorbells,
-								       0,
-								       pdd->dev->kfd->device_info.doorbell_size);
-
-		*p_doorbell_offset_in_process = (q->properties.doorbell_off
-						- first_db_index) * sizeof(uint32_t);
-	}
+		*p_doorbell_offset_in_process =
+			(q->properties.doorbell_off * sizeof(uint32_t)) &
+			(kfd_doorbell_process_slice(dev->kfd) - 1);
 
 	pr_debug("PQM After DQM create queue\n");
 
@@ -462,8 +455,7 @@ int pqm_destroy_queue(struct process_queue_manager *pqm, unsigned int qid)
 		}
 
 		if (pqn->q->gws) {
-			if (KFD_GC_VERSION(pqn->q->device) != IP_VERSION(9, 4, 3) &&
-			    !dev->kfd->shared_resources.enable_mes)
+			if (KFD_GC_VERSION(pqn->q->device) != IP_VERSION(9, 4, 3))
 				amdgpu_amdkfd_remove_gws_from_process(
 						pqm->process->kgd_process_info,
 						pqn->q->gws);
@@ -934,6 +926,12 @@ int kfd_criu_restore_queue(struct kfd_process *p,
 	if (!pdd) {
 		pr_err("Failed to get pdd\n");
 		ret = -EINVAL;
+		goto exit;
+	}
+
+	if (!pdd->doorbell_index &&
+	    kfd_alloc_process_doorbells(pdd->dev->kfd, &pdd->doorbell_index) < 0) {
+		ret = -ENOMEM;
 		goto exit;
 	}
 

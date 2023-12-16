@@ -187,8 +187,7 @@ struct ath11k_hw_params {
 	bool supports_shadow_regs;
 	bool idle_ps;
 	bool supports_sta_ps;
-	bool coldboot_cal_mm;
-	bool coldboot_cal_ftm;
+	bool cold_boot_calib;
 	bool cbcal_restart_fw;
 	int fw_mem_mode;
 	u32 num_vdevs;

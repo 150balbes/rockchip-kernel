@@ -56,7 +56,7 @@ struct iwl_cfg;
 /**
  * iwl_drv_start - start the drv
  *
- * @trans: the transport
+ * @trans_ops: the ops of the transport
  *
  * starts the driver: fetches the firmware. This should be called by bus
  * specific system flows implementations. For example, the bus specific probe

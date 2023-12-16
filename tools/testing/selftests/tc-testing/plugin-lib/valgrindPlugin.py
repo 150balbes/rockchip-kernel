@@ -25,10 +25,9 @@ class SubPlugin(TdcPlugin):
         self._tsr = TestSuiteReport()
         super().__init__()
 
-    def pre_suite(self, testcount, testist):
+    def pre_suite(self, testcount, testidlist):
         '''run commands before test_runner goes into a test loop'''
-        self.testidlist = [tidx['id'] for tidx in testlist]
-        super().pre_suite(testcount, testlist)
+        super().pre_suite(testcount, testidlist)
         if self.args.verbose > 1:
             print('{}.pre_suite'.format(self.sub_class))
         if self.args.valgrind:

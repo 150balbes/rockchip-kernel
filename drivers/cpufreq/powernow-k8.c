@@ -1101,8 +1101,7 @@ static int powernowk8_cpu_exit(struct cpufreq_policy *pol)
 
 	kfree(data->powernow_table);
 	kfree(data);
-	/* pol->cpus will be empty here, use related_cpus instead. */
-	for_each_cpu(cpu, pol->related_cpus)
+	for_each_cpu(cpu, pol->cpus)
 		per_cpu(powernow_data, cpu) = NULL;
 
 	return 0;

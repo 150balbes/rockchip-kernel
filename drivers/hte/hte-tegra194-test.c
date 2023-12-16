@@ -153,10 +153,8 @@ static int tegra_hte_test_probe(struct platform_device *pdev)
 	}
 
 	cnt = of_hte_req_count(hte.pdev);
-	if (cnt < 0) {
-		ret = cnt;
+	if (cnt < 0)
 		goto free_irq;
-	}
 
 	dev_info(&pdev->dev, "Total requested lines:%d\n", cnt);
 

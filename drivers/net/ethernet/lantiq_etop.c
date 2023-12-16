@@ -721,7 +721,8 @@ err_out:
 	return err;
 }
 
-static void ltq_etop_remove(struct platform_device *pdev)
+static int
+ltq_etop_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 
@@ -731,10 +732,11 @@ static void ltq_etop_remove(struct platform_device *pdev)
 		ltq_etop_mdio_cleanup(dev);
 		unregister_netdev(dev);
 	}
+	return 0;
 }
 
 static struct platform_driver ltq_mii_driver = {
-	.remove_new = ltq_etop_remove,
+	.remove = ltq_etop_remove,
 	.driver = {
 		.name = "ltq_etop",
 	},

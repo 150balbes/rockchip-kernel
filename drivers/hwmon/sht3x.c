@@ -147,20 +147,8 @@ static const u16 mode_to_update_interval[] = {
 	 100,
 };
 
-static const struct hwmon_channel_info * const sht3x_channel_info[] = {
-	HWMON_CHANNEL_INFO(chip, HWMON_C_UPDATE_INTERVAL),
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_MIN |
-				HWMON_T_MIN_HYST | HWMON_T_MAX |
-				HWMON_T_MAX_HYST | HWMON_T_ALARM),
-	HWMON_CHANNEL_INFO(humidity, HWMON_H_INPUT | HWMON_H_MIN |
-				HWMON_H_MIN_HYST | HWMON_H_MAX |
-				HWMON_H_MAX_HYST | HWMON_H_ALARM),
-	NULL,
-};
-
 struct sht3x_data {
 	struct i2c_client *client;
-	enum sht3x_chips chip_id;
 	struct mutex i2c_lock; /* lock for sending i2c commands */
 	struct mutex data_lock; /* lock for updating driver data */
 
@@ -288,24 +276,27 @@ out:
 	return data;
 }
 
-static int temp1_input_read(struct device *dev)
+/* sysfs attributes */
+static ssize_t temp1_input_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
 	struct sht3x_data *data = sht3x_update_client(dev);
 
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
-	return data->temperature;
+	return sprintf(buf, "%d\n", data->temperature);
 }
 
-static int humidity1_input_read(struct device *dev)
+static ssize_t humidity1_input_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
 {
 	struct sht3x_data *data = sht3x_update_client(dev);
 
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
-	return data->humidity;
+	return sprintf(buf, "%u\n", data->humidity);
 }
 
 /*
@@ -341,24 +332,33 @@ static int limits_update(struct sht3x_data *data)
 	return ret;
 }
 
-static int temp1_limit_read(struct device *dev, int index)
+static ssize_t temp1_limit_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
 {
 	struct sht3x_data *data = dev_get_drvdata(dev);
+	u8 index = to_sensor_dev_attr(attr)->index;
+	int temperature_limit = data->temperature_limits[index];
 
-	return data->temperature_limits[index];
+	return sysfs_emit(buf, "%d\n", temperature_limit);
 }
 
-static int humidity1_limit_read(struct device *dev, int index)
+static ssize_t humidity1_limit_show(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
 {
 	struct sht3x_data *data = dev_get_drvdata(dev);
+	u8 index = to_sensor_dev_attr(attr)->index;
+	u32 humidity_limit = data->humidity_limits[index];
 
-	return data->humidity_limits[index];
+	return sysfs_emit(buf, "%u\n", humidity_limit);
 }
 
 /*
- * limit_write must only be called with data_lock held
+ * limit_store must only be called with data_lock held
  */
-static size_t limit_write(struct device *dev,
+static size_t limit_store(struct device *dev,
+			  size_t count,
 			  u8 index,
 			  int temperature,
 			  u32 humidity)
@@ -379,7 +379,7 @@ static size_t limit_write(struct device *dev,
 	 * ST = (T + 45) / 175 * 2^16
 	 * SRH = RH / 100 * 2^16
 	 * adapted for fixed point arithmetic and packed the same as
-	 * in limit_read()
+	 * in limit_show()
 	 */
 	raw = ((u32)(temperature + 45000) * 24543) >> (16 + 7);
 	raw |= ((humidity * 42950) >> 16) & 0xfe00;
@@ -400,35 +400,50 @@ static size_t limit_write(struct device *dev,
 
 	data->temperature_limits[index] = temperature;
 	data->humidity_limits[index] = humidity;
-
-	return 0;
+	return count;
 }
 
-static int temp1_limit_write(struct device *dev, int index, int val)
+static ssize_t temp1_limit_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf,
+				 size_t count)
 {
 	int temperature;
 	int ret;
 	struct sht3x_data *data = dev_get_drvdata(dev);
+	u8 index = to_sensor_dev_attr(attr)->index;
 
-	temperature = clamp_val(val, SHT3X_MIN_TEMPERATURE,
+	ret = kstrtoint(buf, 0, &temperature);
+	if (ret)
+		return ret;
+
+	temperature = clamp_val(temperature, SHT3X_MIN_TEMPERATURE,
 				SHT3X_MAX_TEMPERATURE);
 	mutex_lock(&data->data_lock);
-	ret = limit_write(dev, index, temperature,
+	ret = limit_store(dev, count, index, temperature,
 			  data->humidity_limits[index]);
 	mutex_unlock(&data->data_lock);
 
 	return ret;
 }
 
-static int humidity1_limit_write(struct device *dev, int index, int val)
+static ssize_t humidity1_limit_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf,
+				     size_t count)
 {
 	u32 humidity;
 	int ret;
 	struct sht3x_data *data = dev_get_drvdata(dev);
+	u8 index = to_sensor_dev_attr(attr)->index;
 
-	humidity = clamp_val(val, SHT3X_MIN_HUMIDITY, SHT3X_MAX_HUMIDITY);
+	ret = kstrtou32(buf, 0, &humidity);
+	if (ret)
+		return ret;
+
+	humidity = clamp_val(humidity, SHT3X_MIN_HUMIDITY, SHT3X_MAX_HUMIDITY);
 	mutex_lock(&data->data_lock);
-	ret = limit_write(dev, index, data->temperature_limits[index],
+	ret = limit_store(dev, count, index, data->temperature_limits[index],
 			  humidity);
 	mutex_unlock(&data->data_lock);
 
@@ -459,6 +474,7 @@ static void sht3x_select_command(struct sht3x_data *data)
 }
 
 static int status_register_read(struct device *dev,
+				struct device_attribute *attr,
 				char *buffer, int length)
 {
 	int ret;
@@ -471,30 +487,34 @@ static int status_register_read(struct device *dev,
 	return ret;
 }
 
-static int temp1_alarm_read(struct device *dev)
+static ssize_t temp1_alarm_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
 {
 	char buffer[SHT3X_WORD_LEN + SHT3X_CRC8_LEN];
 	int ret;
 
-	ret = status_register_read(dev, buffer,
+	ret = status_register_read(dev, attr, buffer,
 				   SHT3X_WORD_LEN + SHT3X_CRC8_LEN);
 	if (ret)
 		return ret;
 
-	return !!(buffer[0] & 0x04);
+	return sysfs_emit(buf, "%d\n", !!(buffer[0] & 0x04));
 }
 
-static int humidity1_alarm_read(struct device *dev)
+static ssize_t humidity1_alarm_show(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
 {
 	char buffer[SHT3X_WORD_LEN + SHT3X_CRC8_LEN];
 	int ret;
 
-	ret = status_register_read(dev, buffer,
+	ret = status_register_read(dev, attr, buffer,
 				   SHT3X_WORD_LEN + SHT3X_CRC8_LEN);
 	if (ret)
 		return ret;
 
-	return !!(buffer[0] & 0x08);
+	return sysfs_emit(buf, "%d\n", !!(buffer[0] & 0x08));
 }
 
 static ssize_t heater_enable_show(struct device *dev,
@@ -504,7 +524,7 @@ static ssize_t heater_enable_show(struct device *dev,
 	char buffer[SHT3X_WORD_LEN + SHT3X_CRC8_LEN];
 	int ret;
 
-	ret = status_register_read(dev, buffer,
+	ret = status_register_read(dev, attr, buffer,
 				   SHT3X_WORD_LEN + SHT3X_CRC8_LEN);
 	if (ret)
 		return ret;
@@ -540,28 +560,39 @@ static ssize_t heater_enable_store(struct device *dev,
 	return ret;
 }
 
-static int update_interval_read(struct device *dev)
+static ssize_t update_interval_show(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
 {
 	struct sht3x_data *data = dev_get_drvdata(dev);
 
-	return mode_to_update_interval[data->mode];
+	return sysfs_emit(buf, "%u\n",
+			 mode_to_update_interval[data->mode]);
 }
 
-static int update_interval_write(struct device *dev, int val)
+static ssize_t update_interval_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf,
+				     size_t count)
 {
+	u16 update_interval;
 	u8 mode;
 	int ret;
 	const char *command;
 	struct sht3x_data *data = dev_get_drvdata(dev);
 	struct i2c_client *client = data->client;
 
-	mode = get_mode_from_update_interval(val);
+	ret = kstrtou16(buf, 0, &update_interval);
+	if (ret)
+		return ret;
+
+	mode = get_mode_from_update_interval(update_interval);
 
 	mutex_lock(&data->data_lock);
 	/* mode did not change */
 	if (mode == data->mode) {
 		mutex_unlock(&data->data_lock);
-		return 0;
+		return count;
 	}
 
 	mutex_lock(&data->i2c_lock);
@@ -603,7 +634,7 @@ out:
 	if (ret != SHT3X_CMD_LENGTH)
 		return ret < 0 ? ret : -EIO;
 
-	return 0;
+	return count;
 }
 
 static ssize_t repeatability_show(struct device *dev,
@@ -637,219 +668,60 @@ static ssize_t repeatability_store(struct device *dev,
 	return count;
 }
 
+static SENSOR_DEVICE_ATTR_RO(temp1_input, temp1_input, 0);
+static SENSOR_DEVICE_ATTR_RO(humidity1_input, humidity1_input, 0);
+static SENSOR_DEVICE_ATTR_RW(temp1_max, temp1_limit, limit_max);
+static SENSOR_DEVICE_ATTR_RW(humidity1_max, humidity1_limit, limit_max);
+static SENSOR_DEVICE_ATTR_RW(temp1_max_hyst, temp1_limit, limit_max_hyst);
+static SENSOR_DEVICE_ATTR_RW(humidity1_max_hyst, humidity1_limit,
+			     limit_max_hyst);
+static SENSOR_DEVICE_ATTR_RW(temp1_min, temp1_limit, limit_min);
+static SENSOR_DEVICE_ATTR_RW(humidity1_min, humidity1_limit, limit_min);
+static SENSOR_DEVICE_ATTR_RW(temp1_min_hyst, temp1_limit, limit_min_hyst);
+static SENSOR_DEVICE_ATTR_RW(humidity1_min_hyst, humidity1_limit,
+			     limit_min_hyst);
+static SENSOR_DEVICE_ATTR_RO(temp1_alarm, temp1_alarm, 0);
+static SENSOR_DEVICE_ATTR_RO(humidity1_alarm, humidity1_alarm, 0);
 static SENSOR_DEVICE_ATTR_RW(heater_enable, heater_enable, 0);
+static SENSOR_DEVICE_ATTR_RW(update_interval, update_interval, 0);
 static SENSOR_DEVICE_ATTR_RW(repeatability, repeatability, 0);
 
 static struct attribute *sht3x_attrs[] = {
+	&sensor_dev_attr_temp1_input.dev_attr.attr,
+	&sensor_dev_attr_humidity1_input.dev_attr.attr,
+	&sensor_dev_attr_temp1_max.dev_attr.attr,
+	&sensor_dev_attr_temp1_max_hyst.dev_attr.attr,
+	&sensor_dev_attr_humidity1_max.dev_attr.attr,
+	&sensor_dev_attr_humidity1_max_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp1_min.dev_attr.attr,
+	&sensor_dev_attr_temp1_min_hyst.dev_attr.attr,
+	&sensor_dev_attr_humidity1_min.dev_attr.attr,
+	&sensor_dev_attr_humidity1_min_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp1_alarm.dev_attr.attr,
+	&sensor_dev_attr_humidity1_alarm.dev_attr.attr,
 	&sensor_dev_attr_heater_enable.dev_attr.attr,
+	&sensor_dev_attr_update_interval.dev_attr.attr,
+	&sensor_dev_attr_repeatability.dev_attr.attr,
+	NULL
+};
+
+static struct attribute *sts3x_attrs[] = {
+	&sensor_dev_attr_temp1_input.dev_attr.attr,
+	&sensor_dev_attr_temp1_max.dev_attr.attr,
+	&sensor_dev_attr_temp1_max_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp1_min.dev_attr.attr,
+	&sensor_dev_attr_temp1_min_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp1_alarm.dev_attr.attr,
+	&sensor_dev_attr_heater_enable.dev_attr.attr,
+	&sensor_dev_attr_update_interval.dev_attr.attr,
 	&sensor_dev_attr_repeatability.dev_attr.attr,
 	NULL
 };
 
 ATTRIBUTE_GROUPS(sht3x);
+ATTRIBUTE_GROUPS(sts3x);
 
-static umode_t sht3x_is_visible(const void *data, enum hwmon_sensor_types type,
-				u32 attr, int channel)
-{
-	const struct sht3x_data *chip_data = data;
-
-	switch (type) {
-	case hwmon_chip:
-		switch (attr) {
-		case hwmon_chip_update_interval:
-			return 0644;
-		default:
-			break;
-		}
-		break;
-	case hwmon_temp:
-		switch (attr) {
-		case hwmon_temp_input:
-		case hwmon_temp_alarm:
-			return 0444;
-		case hwmon_temp_max:
-		case hwmon_temp_max_hyst:
-		case hwmon_temp_min:
-		case hwmon_temp_min_hyst:
-			return 0644;
-		default:
-			break;
-		}
-		break;
-	case hwmon_humidity:
-		if (chip_data->chip_id == sts3x)
-			break;
-		switch (attr) {
-		case hwmon_humidity_input:
-		case hwmon_humidity_alarm:
-			return 0444;
-		case hwmon_humidity_max:
-		case hwmon_humidity_max_hyst:
-		case hwmon_humidity_min:
-		case hwmon_humidity_min_hyst:
-			return 0644;
-		default:
-			break;
-		}
-		break;
-	default:
-		break;
-	}
-
-	return 0;
-}
-
-static int sht3x_read(struct device *dev, enum hwmon_sensor_types type,
-		      u32 attr, int channel, long *val)
-{
-	enum sht3x_limits index;
-
-	switch (type) {
-	case hwmon_chip:
-		switch (attr) {
-		case hwmon_chip_update_interval:
-			*val = update_interval_read(dev);
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-		break;
-	case hwmon_temp:
-		switch (attr) {
-		case hwmon_temp_input:
-			*val = temp1_input_read(dev);
-			break;
-		case hwmon_temp_alarm:
-			*val = temp1_alarm_read(dev);
-			break;
-		case hwmon_temp_max:
-			index = limit_max;
-			*val = temp1_limit_read(dev, index);
-			break;
-		case hwmon_temp_max_hyst:
-			index = limit_max_hyst;
-			*val = temp1_limit_read(dev, index);
-			break;
-		case hwmon_temp_min:
-			index = limit_min;
-			*val = temp1_limit_read(dev, index);
-			break;
-		case hwmon_temp_min_hyst:
-			index = limit_min_hyst;
-			*val = temp1_limit_read(dev, index);
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-		break;
-	case hwmon_humidity:
-		switch (attr) {
-		case hwmon_humidity_input:
-			*val = humidity1_input_read(dev);
-			break;
-		case hwmon_humidity_alarm:
-			*val = humidity1_alarm_read(dev);
-			break;
-		case hwmon_humidity_max:
-			index = limit_max;
-			*val = humidity1_limit_read(dev, index);
-			break;
-		case hwmon_humidity_max_hyst:
-			index = limit_max_hyst;
-			*val = humidity1_limit_read(dev, index);
-			break;
-		case hwmon_humidity_min:
-			index = limit_min;
-			*val = humidity1_limit_read(dev, index);
-			break;
-		case hwmon_humidity_min_hyst:
-			index = limit_min_hyst;
-			*val = humidity1_limit_read(dev, index);
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-		break;
-	default:
-		return -EOPNOTSUPP;
-	}
-
-	return 0;
-}
-
-static int sht3x_write(struct device *dev, enum hwmon_sensor_types type,
-		       u32 attr, int channel, long val)
-{
-	enum sht3x_limits index;
-
-	switch (type) {
-	case hwmon_chip:
-		switch (attr) {
-		case hwmon_chip_update_interval:
-			return update_interval_write(dev, val);
-		default:
-			return -EOPNOTSUPP;
-		}
-	case hwmon_temp:
-		switch (attr) {
-		case hwmon_temp_max:
-			index = limit_max;
-			break;
-		case hwmon_temp_max_hyst:
-			index = limit_max_hyst;
-			break;
-		case hwmon_temp_min:
-			index = limit_min;
-			break;
-		case hwmon_temp_min_hyst:
-			index = limit_min_hyst;
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-		return temp1_limit_write(dev, index, val);
-	case hwmon_humidity:
-		switch (attr) {
-		case hwmon_humidity_max:
-			index = limit_max;
-			break;
-		case hwmon_humidity_max_hyst:
-			index = limit_max_hyst;
-			break;
-		case hwmon_humidity_min:
-			index = limit_min;
-			break;
-		case hwmon_humidity_min_hyst:
-			index = limit_min_hyst;
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-		return humidity1_limit_write(dev, index, val);
-	default:
-		return -EOPNOTSUPP;
-	}
-}
-
-static const struct hwmon_ops sht3x_ops = {
-	.is_visible = sht3x_is_visible,
-	.read = sht3x_read,
-	.write = sht3x_write,
-};
-
-static const struct hwmon_chip_info sht3x_chip_info = {
-	.ops = &sht3x_ops,
-	.info = sht3x_channel_info,
-};
-
-/* device ID table */
-static const struct i2c_device_id sht3x_ids[] = {
-	{"sht3x", sht3x},
-	{"sts3x", sts3x},
-	{}
-};
-
-MODULE_DEVICE_TABLE(i2c, sht3x_ids);
+static const struct i2c_device_id sht3x_ids[];
 
 static int sht3x_probe(struct i2c_client *client)
 {
@@ -858,6 +730,7 @@ static int sht3x_probe(struct i2c_client *client)
 	struct device *hwmon_dev;
 	struct i2c_adapter *adap = client->adapter;
 	struct device *dev = &client->dev;
+	const struct attribute_group **attribute_groups;
 
 	/*
 	 * we require full i2c support since the sht3x uses multi-byte read and
@@ -880,7 +753,6 @@ static int sht3x_probe(struct i2c_client *client)
 	data->mode = 0;
 	data->last_update = jiffies - msecs_to_jiffies(3000);
 	data->client = client;
-	data->chip_id = i2c_match_id(sht3x_ids, client)->driver_data;
 	crc8_populate_msb(sht3x_crc8_table, SHT3X_CRC8_POLYNOMIAL);
 
 	sht3x_select_command(data);
@@ -899,17 +771,30 @@ static int sht3x_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
-	hwmon_dev = devm_hwmon_device_register_with_info(dev,
-							 client->name,
-							 data,
-							 &sht3x_chip_info,
-							 sht3x_groups);
+	if (i2c_match_id(sht3x_ids, client)->driver_data == sts3x)
+		attribute_groups = sts3x_groups;
+	else
+		attribute_groups = sht3x_groups;
+
+	hwmon_dev = devm_hwmon_device_register_with_groups(dev,
+							   client->name,
+							   data,
+							   attribute_groups);
 
 	if (IS_ERR(hwmon_dev))
 		dev_dbg(dev, "unable to register hwmon device\n");
 
 	return PTR_ERR_OR_ZERO(hwmon_dev);
 }
+
+/* device ID table */
+static const struct i2c_device_id sht3x_ids[] = {
+	{"sht3x", sht3x},
+	{"sts3x", sts3x},
+	{}
+};
+
+MODULE_DEVICE_TABLE(i2c, sht3x_ids);
 
 static struct i2c_driver sht3x_i2c_driver = {
 	.driver.name = "sht3x",

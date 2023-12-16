@@ -11,4 +11,3 @@ ARM
    hypercalls
    pvtime
    ptp_kvm
-   vcpu-features

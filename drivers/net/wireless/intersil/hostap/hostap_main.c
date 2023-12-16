@@ -796,6 +796,7 @@ static const struct net_device_ops hostap_netdev_ops = {
 
 	.ndo_open		= prism2_open,
 	.ndo_stop		= prism2_close,
+	.ndo_do_ioctl		= hostap_ioctl,
 	.ndo_siocdevprivate	= hostap_siocdevprivate,
 	.ndo_set_mac_address	= prism2_set_mac_address,
 	.ndo_set_rx_mode	= hostap_set_multicast_list,
@@ -808,6 +809,7 @@ static const struct net_device_ops hostap_mgmt_netdev_ops = {
 
 	.ndo_open		= prism2_open,
 	.ndo_stop		= prism2_close,
+	.ndo_do_ioctl		= hostap_ioctl,
 	.ndo_siocdevprivate	= hostap_siocdevprivate,
 	.ndo_set_mac_address	= prism2_set_mac_address,
 	.ndo_set_rx_mode	= hostap_set_multicast_list,
@@ -820,6 +822,7 @@ static const struct net_device_ops hostap_master_ops = {
 
 	.ndo_open		= prism2_open,
 	.ndo_stop		= prism2_close,
+	.ndo_do_ioctl		= hostap_ioctl,
 	.ndo_siocdevprivate	= hostap_siocdevprivate,
 	.ndo_set_mac_address	= prism2_set_mac_address,
 	.ndo_set_rx_mode	= hostap_set_multicast_list,

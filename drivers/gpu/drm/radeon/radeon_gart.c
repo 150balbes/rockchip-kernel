@@ -74,9 +74,9 @@ int radeon_gart_table_ram_alloc(struct radeon_device *rdev)
 
 	ptr = dma_alloc_coherent(&rdev->pdev->dev, rdev->gart.table_size,
 				 &rdev->gart.table_addr, GFP_KERNEL);
-	if (!ptr)
+	if (ptr == NULL) {
 		return -ENOMEM;
-
+	}
 #ifdef CONFIG_X86
 	if (rdev->family == CHIP_RS400 || rdev->family == CHIP_RS480 ||
 	    rdev->family == CHIP_RS690 || rdev->family == CHIP_RS740) {
@@ -99,9 +99,9 @@ int radeon_gart_table_ram_alloc(struct radeon_device *rdev)
  */
 void radeon_gart_table_ram_free(struct radeon_device *rdev)
 {
-	if (!rdev->gart.ptr)
+	if (rdev->gart.ptr == NULL) {
 		return;
-
+	}
 #ifdef CONFIG_X86
 	if (rdev->family == CHIP_RS400 || rdev->family == CHIP_RS480 ||
 	    rdev->family == CHIP_RS690 || rdev->family == CHIP_RS740) {
@@ -133,8 +133,9 @@ int radeon_gart_table_vram_alloc(struct radeon_device *rdev)
 		r = radeon_bo_create(rdev, rdev->gart.table_size,
 				     PAGE_SIZE, true, RADEON_GEM_DOMAIN_VRAM,
 				     0, NULL, NULL, &rdev->gart.robj);
-		if (r)
+		if (r) {
 			return r;
+		}
 	}
 	return 0;
 }
@@ -196,9 +197,9 @@ void radeon_gart_table_vram_unpin(struct radeon_device *rdev)
 {
 	int r;
 
-	if (!rdev->gart.robj)
+	if (rdev->gart.robj == NULL) {
 		return;
-
+	}
 	r = radeon_bo_reserve(rdev->gart.robj, false);
 	if (likely(r == 0)) {
 		radeon_bo_kunmap(rdev->gart.robj);
@@ -219,9 +220,9 @@ void radeon_gart_table_vram_unpin(struct radeon_device *rdev)
  */
 void radeon_gart_table_vram_free(struct radeon_device *rdev)
 {
-	if (!rdev->gart.robj)
+	if (rdev->gart.robj == NULL) {
 		return;
-
+	}
 	radeon_bo_unref(&rdev->gart.robj);
 }
 
@@ -238,10 +239,11 @@ void radeon_gart_table_vram_free(struct radeon_device *rdev)
  * Unbinds the requested pages from the gart page table and
  * replaces them with the dummy page (all asics).
  */
-void radeon_gart_unbind(struct radeon_device *rdev, unsigned int offset,
+void radeon_gart_unbind(struct radeon_device *rdev, unsigned offset,
 			int pages)
 {
-	unsigned int t, p;
+	unsigned t;
+	unsigned p;
 	int i, j;
 
 	if (!rdev->gart.ready) {
@@ -282,11 +284,12 @@ void radeon_gart_unbind(struct radeon_device *rdev, unsigned int offset,
  * (all asics).
  * Returns 0 for success, -EINVAL for failure.
  */
-int radeon_gart_bind(struct radeon_device *rdev, unsigned int offset,
+int radeon_gart_bind(struct radeon_device *rdev, unsigned offset,
 		     int pages, struct page **pagelist, dma_addr_t *dma_addr,
 		     uint32_t flags)
 {
-	unsigned int t, p;
+	unsigned t;
+	unsigned p;
 	uint64_t page_base, page_entry;
 	int i, j;
 
@@ -304,9 +307,9 @@ int radeon_gart_bind(struct radeon_device *rdev, unsigned int offset,
 		for (j = 0; j < (PAGE_SIZE / RADEON_GPU_PAGE_SIZE); j++, t++) {
 			page_entry = radeon_gart_get_page_entry(page_base, flags);
 			rdev->gart.pages_entry[t] = page_entry;
-			if (rdev->gart.ptr)
+			if (rdev->gart.ptr) {
 				radeon_gart_set_page(rdev, t, page_entry);
-
+			}
 			page_base += RADEON_GPU_PAGE_SIZE;
 		}
 	}
@@ -329,9 +332,9 @@ int radeon_gart_init(struct radeon_device *rdev)
 {
 	int r, i;
 
-	if (rdev->gart.pages)
+	if (rdev->gart.pages) {
 		return 0;
-
+	}
 	/* We need PAGE_SIZE >= RADEON_GPU_PAGE_SIZE */
 	if (PAGE_SIZE < RADEON_GPU_PAGE_SIZE) {
 		DRM_ERROR("Page size is smaller than GPU page size!\n");

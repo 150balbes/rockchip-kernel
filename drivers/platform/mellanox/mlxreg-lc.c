@@ -907,7 +907,7 @@ i2c_get_adapter_fail:
 	return err;
 }
 
-static void mlxreg_lc_remove(struct platform_device *pdev)
+static int mlxreg_lc_remove(struct platform_device *pdev)
 {
 	struct mlxreg_core_data *data = dev_get_platdata(&pdev->dev);
 	struct mlxreg_lc *mlxreg_lc = platform_get_drvdata(pdev);
@@ -921,7 +921,7 @@ static void mlxreg_lc_remove(struct platform_device *pdev)
 	 * is nothing to remove.
 	 */
 	if (!data->notifier || !data->notifier->handle)
-		return;
+		return 0;
 
 	/* Clear event notification callback and handle. */
 	data->notifier->user_handler = NULL;
@@ -940,11 +940,13 @@ static void mlxreg_lc_remove(struct platform_device *pdev)
 		i2c_put_adapter(data->hpdev.adapter);
 		data->hpdev.adapter = NULL;
 	}
+
+	return 0;
 }
 
 static struct platform_driver mlxreg_lc_driver = {
 	.probe = mlxreg_lc_probe,
-	.remove_new = mlxreg_lc_remove,
+	.remove = mlxreg_lc_remove,
 	.driver = {
 		.name = "mlxreg-lc",
 	},

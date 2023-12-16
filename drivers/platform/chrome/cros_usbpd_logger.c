@@ -219,12 +219,14 @@ static int cros_usbpd_logger_probe(struct platform_device *pd)
 	return 0;
 }
 
-static void cros_usbpd_logger_remove(struct platform_device *pd)
+static int cros_usbpd_logger_remove(struct platform_device *pd)
 {
 	struct logger_data *logger = platform_get_drvdata(pd);
 
 	cancel_delayed_work_sync(&logger->log_work);
 	destroy_workqueue(logger->log_workqueue);
+
+	return 0;
 }
 
 static int __maybe_unused cros_usbpd_logger_resume(struct device *dev)
@@ -255,7 +257,7 @@ static struct platform_driver cros_usbpd_logger_driver = {
 		.pm = &cros_usbpd_logger_pm_ops,
 	},
 	.probe = cros_usbpd_logger_probe,
-	.remove_new = cros_usbpd_logger_remove,
+	.remove = cros_usbpd_logger_remove,
 };
 
 module_platform_driver(cros_usbpd_logger_driver);

@@ -251,6 +251,7 @@ static int tpm1_binary_bios_measurements_show(struct seq_file *m, void *v)
 
 static int tpm1_ascii_bios_measurements_show(struct seq_file *m, void *v)
 {
+	int len = 0;
 	char *eventname;
 	struct tcpa_event *event = v;
 	unsigned char *event_entry =
@@ -272,7 +273,7 @@ static int tpm1_ascii_bios_measurements_show(struct seq_file *m, void *v)
 	/* 3rd: event type identifier */
 	seq_printf(m, " %02x", do_endian_conversion(event->event_type));
 
-	get_event_name(eventname, event, event_entry);
+	len += get_event_name(eventname, event, event_entry);
 
 	/* 4th: eventname <= max + \'0' delimiter */
 	seq_printf(m, " %s\n", eventname);

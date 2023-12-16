@@ -4,7 +4,6 @@
  */
 /dts-v1/;
 
-#include <dt-bindings/leds/common.h>
 #include <dt-bindings/input/input.h>
 #include "omap4460.dtsi"
 
@@ -189,6 +188,15 @@
 		pinctrl-0 = <&mpu9150h_pins>;
 		interrupt-parent = <&gpio2>;
 		interrupt = <19 IRQ_TYPE_LEVEL_HIGH>;
+
+		i2c-gate {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			magnetometer@c {
+				compatible = "asahi-kasei,ak8975";
+				reg = <0x0c>;
+			};
+		};
 	};
 };
 
@@ -198,31 +206,7 @@
 
 	clock-frequency = <100000>;
 
-	led-controller@66 {
-		compatible = "rohm,bd2606mvv";
-		reg = <0x66>;
-
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		led@0 {
-			reg = <0>;
-			color = <LED_COLOR_ID_GREEN>;
-			function = LED_FUNCTION_STATUS;
-		};
-
-		led@2 {
-			reg = <2>;
-			color = <LED_COLOR_ID_BLUE>;
-			function = LED_FUNCTION_STATUS;
-		};
-
-		led@4 {
-			reg = <4>;
-			color = <LED_COLOR_ID_RED>;
-			function = LED_FUNCTION_STATUS;
-		};
-	};
+	/* TODO: BD2606MVV at 0x66 */
 };
 
 &i2c4 {
@@ -243,16 +227,7 @@
 		reset-gpios = <&gpio2 23 GPIO_ACTIVE_LOW>;
 	};
 
-	mpu9150: imu@68 {
-		compatible = "invensense,mpu9150";
-		reg = <0x68>;
-
-		pinctrl-names = "default";
-		pinctrl-0 = <&mpu9150_pins>;
-		interrupt-parent = <&gpio2>;
-		interrupt = <7 IRQ_TYPE_LEVEL_HIGH>;
-		invensense,level-shifter;
-	};
+	/* TODO: mpu9150 at control unit, seems to require quirks */
 };
 
 &keypad {
@@ -387,12 +362,6 @@
 		>;
 	};
 
-	mpu9150_pins: pinmux-mpu9150-pins {
-		pinctrl-single,pins = <
-			OMAP4_IOPAD(0x5e, PIN_INPUT_PULLUP | MUX_MODE3)
-		>;
-	};
-
 	mpu9150h_pins: pinmux-mpu9150h-pins {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x76, PIN_INPUT_PULLUP | MUX_MODE3)
@@ -441,7 +410,7 @@
 		>;
 	};
 
-	wl12xx_gpio: pinmux-wl12xx-gpio-pins {
+	wl12xx_gpio: pinmux-wl12xx-gpio {
 		pinctrl-single,pins = <
 			OMAP4_IOPAD(0x1c8, PIN_OUTPUT | MUX_MODE3)  /* gpio_24 / WLAN_EN */
 		>;

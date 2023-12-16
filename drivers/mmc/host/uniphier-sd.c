@@ -13,6 +13,7 @@
 #include <linux/mmc/host.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -705,19 +706,19 @@ static int uniphier_sd_probe(struct platform_device *pdev)
 	tmio_data->max_segs = 1;
 	tmio_data->max_blk_count = U16_MAX;
 
-	sd_ctrl_write32_as_16_and_16(host, CTL_IRQ_MASK, TMIO_MASK_ALL);
-
-	ret = devm_request_irq(dev, irq, tmio_mmc_irq, IRQF_SHARED,
-			       dev_name(dev), host);
-	if (ret)
-		goto disable_clk;
-
 	ret = tmio_mmc_host_probe(host);
 	if (ret)
 		goto disable_clk;
 
+	ret = devm_request_irq(dev, irq, tmio_mmc_irq, IRQF_SHARED,
+			       dev_name(dev), host);
+	if (ret)
+		goto remove_host;
+
 	return 0;
 
+remove_host:
+	tmio_mmc_host_remove(host);
 disable_clk:
 	uniphier_sd_clk_disable(host);
 free_host:
@@ -726,13 +727,15 @@ free_host:
 	return ret;
 }
 
-static void uniphier_sd_remove(struct platform_device *pdev)
+static int uniphier_sd_remove(struct platform_device *pdev)
 {
 	struct tmio_mmc_host *host = platform_get_drvdata(pdev);
 
 	tmio_mmc_host_remove(host);
 	uniphier_sd_clk_disable(host);
 	tmio_mmc_host_free(host);
+
+	return 0;
 }
 
 static const struct of_device_id uniphier_sd_match[] = {
@@ -754,7 +757,7 @@ MODULE_DEVICE_TABLE(of, uniphier_sd_match);
 
 static struct platform_driver uniphier_sd_driver = {
 	.probe = uniphier_sd_probe,
-	.remove_new = uniphier_sd_remove,
+	.remove = uniphier_sd_remove,
 	.driver = {
 		.name = "uniphier-sd",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,

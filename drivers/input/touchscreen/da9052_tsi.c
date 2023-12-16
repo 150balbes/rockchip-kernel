@@ -311,7 +311,7 @@ err_free_mem:
 	return error;
 }
 
-static void da9052_ts_remove(struct platform_device *pdev)
+static int  da9052_ts_remove(struct platform_device *pdev)
 {
 	struct da9052_tsi *tsi = platform_get_drvdata(pdev);
 
@@ -322,11 +322,13 @@ static void da9052_ts_remove(struct platform_device *pdev)
 
 	input_unregister_device(tsi->dev);
 	kfree(tsi);
+
+	return 0;
 }
 
 static struct platform_driver da9052_tsi_driver = {
 	.probe	= da9052_ts_probe,
-	.remove_new = da9052_ts_remove,
+	.remove	= da9052_ts_remove,
 	.driver	= {
 		.name	= "da9052-tsi",
 	},

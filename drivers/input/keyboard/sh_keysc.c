@@ -265,7 +265,7 @@ static int sh_keysc_probe(struct platform_device *pdev)
 	return error;
 }
 
-static void sh_keysc_remove(struct platform_device *pdev)
+static int sh_keysc_remove(struct platform_device *pdev)
 {
 	struct sh_keysc_priv *priv = platform_get_drvdata(pdev);
 
@@ -279,6 +279,8 @@ static void sh_keysc_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	kfree(priv);
+
+	return 0;
 }
 
 static int sh_keysc_suspend(struct device *dev)
@@ -319,7 +321,7 @@ static DEFINE_SIMPLE_DEV_PM_OPS(sh_keysc_dev_pm_ops,
 
 static struct platform_driver sh_keysc_device_driver = {
 	.probe		= sh_keysc_probe,
-	.remove_new	= sh_keysc_remove,
+	.remove		= sh_keysc_remove,
 	.driver		= {
 		.name	= "sh_keysc",
 		.pm	= pm_sleep_ptr(&sh_keysc_dev_pm_ops),

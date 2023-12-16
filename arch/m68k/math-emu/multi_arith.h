@@ -15,10 +15,8 @@
    implement the subset of integer arithmetic that we need in order to
    multiply, divide, and normalize 128-bit unsigned mantissae.  */
 
-#ifndef _MULTI_ARITH_H
-#define _MULTI_ARITH_H
-
-#include "fp_emu.h"
+#ifndef MULTI_ARITH_H
+#define MULTI_ARITH_H
 
 static inline void fp_denormalize(struct fp_ext *reg, unsigned int cnt)
 {
@@ -287,4 +285,4 @@ static inline void fp_putmant128(struct fp_ext *dest, union fp_mant128 *src,
 	}
 }
 
-#endif	/* _MULTI_ARITH_H */
+#endif	/* MULTI_ARITH_H */

@@ -18,7 +18,6 @@
 #include "dlm_internal.h"
 #include "midcomms.h"
 #include "lock.h"
-#include "ast.h"
 
 #define DLM_DEBUG_BUF_LEN 4096
 static char debug_buf[DLM_DEBUG_BUF_LEN];
@@ -366,52 +365,6 @@ static void print_format4(struct dlm_rsb *r, struct seq_file *s)
 	unlock_rsb(r);
 }
 
-static void print_format5_lock(struct seq_file *s, struct dlm_lkb *lkb)
-{
-	struct dlm_callback *cb;
-
-	/* lkb_id lkb_flags mode flags sb_status sb_flags */
-
-	spin_lock(&lkb->lkb_cb_lock);
-	list_for_each_entry(cb, &lkb->lkb_callbacks, list) {
-		seq_printf(s, "%x %x %d %x %d %x\n",
-			   lkb->lkb_id,
-			   dlm_iflags_val(lkb),
-			   cb->mode,
-			   cb->flags,
-			   cb->sb_status,
-			   cb->sb_flags);
-	}
-	spin_unlock(&lkb->lkb_cb_lock);
-}
-
-static void print_format5(struct dlm_rsb *r, struct seq_file *s)
-{
-	struct dlm_lkb *lkb;
-
-	lock_rsb(r);
-
-	list_for_each_entry(lkb, &r->res_grantqueue, lkb_statequeue) {
-		print_format5_lock(s, lkb);
-		if (seq_has_overflowed(s))
-			goto out;
-	}
-
-	list_for_each_entry(lkb, &r->res_convertqueue, lkb_statequeue) {
-		print_format5_lock(s, lkb);
-		if (seq_has_overflowed(s))
-			goto out;
-	}
-
-	list_for_each_entry(lkb, &r->res_waitqueue, lkb_statequeue) {
-		print_format5_lock(s, lkb);
-		if (seq_has_overflowed(s))
-			goto out;
-	}
- out:
-	unlock_rsb(r);
-}
-
 struct rsbtbl_iter {
 	struct dlm_rsb *rsb;
 	unsigned bucket;
@@ -455,13 +408,6 @@ static int table_seq_show(struct seq_file *seq, void *iter_ptr)
 		}
 		print_format4(ri->rsb, seq);
 		break;
-	case 5:
-		if (ri->header) {
-			seq_puts(seq, "lkb_id lkb_flags mode flags sb_status sb_flags\n");
-			ri->header = 0;
-		}
-		print_format5(ri->rsb, seq);
-		break;
 	}
 
 	return 0;
@@ -471,7 +417,6 @@ static const struct seq_operations format1_seq_ops;
 static const struct seq_operations format2_seq_ops;
 static const struct seq_operations format3_seq_ops;
 static const struct seq_operations format4_seq_ops;
-static const struct seq_operations format5_seq_ops;
 
 static void *table_seq_start(struct seq_file *seq, loff_t *pos)
 {
@@ -503,8 +448,6 @@ static void *table_seq_start(struct seq_file *seq, loff_t *pos)
 		ri->format = 3;
 	if (seq->op == &format4_seq_ops)
 		ri->format = 4;
-	if (seq->op == &format5_seq_ops)
-		ri->format = 5;
 
 	tree = toss ? &ls->ls_rsbtbl[bucket].toss : &ls->ls_rsbtbl[bucket].keep;
 
@@ -659,18 +602,10 @@ static const struct seq_operations format4_seq_ops = {
 	.show  = table_seq_show,
 };
 
-static const struct seq_operations format5_seq_ops = {
-	.start = table_seq_start,
-	.next  = table_seq_next,
-	.stop  = table_seq_stop,
-	.show  = table_seq_show,
-};
-
 static const struct file_operations format1_fops;
 static const struct file_operations format2_fops;
 static const struct file_operations format3_fops;
 static const struct file_operations format4_fops;
-static const struct file_operations format5_fops;
 
 static int table_open1(struct inode *inode, struct file *file)
 {
@@ -748,21 +683,7 @@ static int table_open4(struct inode *inode, struct file *file)
 	struct seq_file *seq;
 	int ret;
 
-	ret = seq_open(file, &format5_seq_ops);
-	if (ret)
-		return ret;
-
-	seq = file->private_data;
-	seq->private = inode->i_private; /* the dlm_ls */
-	return 0;
-}
-
-static int table_open5(struct inode *inode, struct file *file)
-{
-	struct seq_file *seq;
-	int ret;
-
-	ret = seq_open(file, &format5_seq_ops);
+	ret = seq_open(file, &format4_seq_ops);
 	if (ret)
 		return ret;
 
@@ -799,14 +720,6 @@ static const struct file_operations format3_fops = {
 static const struct file_operations format4_fops = {
 	.owner   = THIS_MODULE,
 	.open    = table_open4,
-	.read    = seq_read,
-	.llseek  = seq_lseek,
-	.release = seq_release
-};
-
-static const struct file_operations format5_fops = {
-	.owner   = THIS_MODULE,
-	.open    = table_open5,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
 	.release = seq_release
@@ -880,7 +793,6 @@ void dlm_delete_debug_file(struct dlm_ls *ls)
 	debugfs_remove(ls->ls_debug_locks_dentry);
 	debugfs_remove(ls->ls_debug_all_dentry);
 	debugfs_remove(ls->ls_debug_toss_dentry);
-	debugfs_remove(ls->ls_debug_queued_asts_dentry);
 }
 
 static int dlm_state_show(struct seq_file *file, void *offset)
@@ -973,8 +885,7 @@ void dlm_delete_debug_comms_file(void *ctx)
 
 void dlm_create_debug_file(struct dlm_ls *ls)
 {
-	/* Reserve enough space for the longest file name */
-	char name[DLM_LOCKSPACE_LEN + sizeof("_queued_asts")];
+	char name[DLM_LOCKSPACE_LEN + 8];
 
 	/* format 1 */
 
@@ -986,7 +897,8 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 
 	/* format 2 */
 
-	snprintf(name, sizeof(name), "%s_locks", ls->ls_name);
+	memset(name, 0, sizeof(name));
+	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_locks", ls->ls_name);
 
 	ls->ls_debug_locks_dentry = debugfs_create_file(name,
 							0644,
@@ -996,7 +908,8 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 
 	/* format 3 */
 
-	snprintf(name, sizeof(name), "%s_all", ls->ls_name);
+	memset(name, 0, sizeof(name));
+	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_all", ls->ls_name);
 
 	ls->ls_debug_all_dentry = debugfs_create_file(name,
 						      S_IFREG | S_IRUGO,
@@ -1006,7 +919,8 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 
 	/* format 4 */
 
-	snprintf(name, sizeof(name), "%s_toss", ls->ls_name);
+	memset(name, 0, sizeof(name));
+	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_toss", ls->ls_name);
 
 	ls->ls_debug_toss_dentry = debugfs_create_file(name,
 						       S_IFREG | S_IRUGO,
@@ -1014,23 +928,14 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 						       ls,
 						       &format4_fops);
 
-	snprintf(name, sizeof(name), "%s_waiters", ls->ls_name);
+	memset(name, 0, sizeof(name));
+	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_waiters", ls->ls_name);
 
 	ls->ls_debug_waiters_dentry = debugfs_create_file(name,
 							  0644,
 							  dlm_root,
 							  ls,
 							  &waiters_fops);
-
-	/* format 5 */
-
-	snprintf(name, sizeof(name), "%s_queued_asts", ls->ls_name);
-
-	ls->ls_debug_queued_asts_dentry = debugfs_create_file(name,
-							      0644,
-							      dlm_root,
-							      ls,
-							      &format5_fops);
 }
 
 void __init dlm_register_debugfs(void)

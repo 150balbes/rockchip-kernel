@@ -101,10 +101,11 @@ static void cdns_ufs_set_l4_attr(struct ufs_hba *hba)
 }
 
 /**
- * cdns_ufs_set_hclkdiv() - set HCLKDIV register value based on the core_clk.
+ * cdns_ufs_set_hclkdiv()
+ * Sets HCLKDIV register value based on the core_clk
  * @hba: host controller instance
  *
- * Return: zero for success and non-zero for failure.
+ * Return zero for success and non-zero for failure
  */
 static int cdns_ufs_set_hclkdiv(struct ufs_hba *hba)
 {
@@ -142,11 +143,12 @@ static int cdns_ufs_set_hclkdiv(struct ufs_hba *hba)
 }
 
 /**
- * cdns_ufs_hce_enable_notify() - set HCLKDIV register
+ * cdns_ufs_hce_enable_notify()
+ * Called before and after HCE enable bit is set.
  * @hba: host controller instance
  * @status: notify stage (pre, post change)
  *
- * Return: zero for success and non-zero for failure.
+ * Return zero for success and non-zero for failure
  */
 static int cdns_ufs_hce_enable_notify(struct ufs_hba *hba,
 				      enum ufs_notify_change_status status)
@@ -158,10 +160,12 @@ static int cdns_ufs_hce_enable_notify(struct ufs_hba *hba,
 }
 
 /**
- * cdns_ufs_hibern8_notify() - save and restore L4 attributes.
+ * cdns_ufs_hibern8_notify()
+ * Called around hibern8 enter/exit.
  * @hba: host controller instance
  * @cmd: UIC Command
  * @status: notify stage (pre, post change)
+ *
  */
 static void cdns_ufs_hibern8_notify(struct ufs_hba *hba, enum uic_cmd_dme cmd,
 				    enum ufs_notify_change_status status)
@@ -173,11 +177,12 @@ static void cdns_ufs_hibern8_notify(struct ufs_hba *hba, enum uic_cmd_dme cmd,
 }
 
 /**
- * cdns_ufs_link_startup_notify() - handle link startup.
+ * cdns_ufs_link_startup_notify()
+ * Called before and after Link startup is carried out.
  * @hba: host controller instance
  * @status: notify stage (pre, post change)
  *
- * Return: zero for success and non-zero for failure.
+ * Return zero for success and non-zero for failure
  */
 static int cdns_ufs_link_startup_notify(struct ufs_hba *hba,
 					enum ufs_notify_change_status status)
@@ -207,7 +212,7 @@ static int cdns_ufs_link_startup_notify(struct ufs_hba *hba,
  * cdns_ufs_init - performs additional ufs initialization
  * @hba: host controller instance
  *
- * Return: status of initialization.
+ * Returns status of initialization
  */
 static int cdns_ufs_init(struct ufs_hba *hba)
 {
@@ -230,7 +235,7 @@ static int cdns_ufs_init(struct ufs_hba *hba)
  * cdns_ufs_m31_16nm_phy_initialization - performs m31 phy initialization
  * @hba: host controller instance
  *
- * Return: 0 (success).
+ * Always returns 0
  */
 static int cdns_ufs_m31_16nm_phy_initialization(struct ufs_hba *hba)
 {
@@ -279,7 +284,7 @@ MODULE_DEVICE_TABLE(of, cdns_ufs_of_match);
  * cdns_ufs_pltfrm_probe - probe routine of the driver
  * @pdev: pointer to platform device handle
  *
- * Return: zero for success and non-zero for failure.
+ * Return zero for success and non-zero for failure
  */
 static int cdns_ufs_pltfrm_probe(struct platform_device *pdev)
 {
@@ -303,13 +308,14 @@ static int cdns_ufs_pltfrm_probe(struct platform_device *pdev)
  * cdns_ufs_pltfrm_remove - removes the ufs driver
  * @pdev: pointer to platform device handle
  *
- * Return: 0 (success).
+ * Always returns 0
  */
-static void cdns_ufs_pltfrm_remove(struct platform_device *pdev)
+static int cdns_ufs_pltfrm_remove(struct platform_device *pdev)
 {
 	struct ufs_hba *hba =  platform_get_drvdata(pdev);
 
 	ufshcd_remove(hba);
+	return 0;
 }
 
 static const struct dev_pm_ops cdns_ufs_dev_pm_ops = {
@@ -321,7 +327,7 @@ static const struct dev_pm_ops cdns_ufs_dev_pm_ops = {
 
 static struct platform_driver cdns_ufs_pltfrm_driver = {
 	.probe	= cdns_ufs_pltfrm_probe,
-	.remove_new = cdns_ufs_pltfrm_remove,
+	.remove	= cdns_ufs_pltfrm_remove,
 	.driver	= {
 		.name   = "cdns-ufshcd",
 		.pm     = &cdns_ufs_dev_pm_ops,

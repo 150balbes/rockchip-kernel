@@ -512,7 +512,6 @@ static int fat_validate_dir(struct inode *dir)
 int fat_fill_inode(struct inode *inode, struct msdos_dir_entry *de)
 {
 	struct msdos_sb_info *sbi = MSDOS_SB(inode->i_sb);
-	struct timespec64 mtime;
 	int error;
 
 	MSDOS_I(inode)->i_pos = 0;
@@ -562,18 +561,14 @@ int fat_fill_inode(struct inode *inode, struct msdos_dir_entry *de)
 	inode->i_blocks = ((inode->i_size + (sbi->cluster_size - 1))
 			   & ~((loff_t)sbi->cluster_size - 1)) >> 9;
 
-	fat_time_fat2unix(sbi, &mtime, de->time, de->date, 0);
-	inode_set_mtime_to_ts(inode, mtime);
-	inode_set_ctime_to_ts(inode, mtime);
+	fat_time_fat2unix(sbi, &inode->i_mtime, de->time, de->date, 0);
+	inode->i_ctime = inode->i_mtime;
 	if (sbi->options.isvfat) {
-		struct timespec64 atime;
-
-		fat_time_fat2unix(sbi, &atime, 0, de->adate, 0);
-		inode_set_atime_to_ts(inode, atime);
+		fat_time_fat2unix(sbi, &inode->i_atime, 0, de->adate, 0);
 		fat_time_fat2unix(sbi, &MSDOS_I(inode)->i_crtime, de->ctime,
 				  de->cdate, de->ctime_cs);
 	} else
-		inode_set_atime_to_ts(inode, fat_truncate_atime(sbi, &mtime));
+		inode->i_atime = fat_truncate_atime(sbi, &inode->i_mtime);
 
 	return 0;
 }
@@ -854,7 +849,6 @@ static int __fat_write_inode(struct inode *inode, int wait)
 	struct msdos_sb_info *sbi = MSDOS_SB(sb);
 	struct buffer_head *bh;
 	struct msdos_dir_entry *raw_entry;
-	struct timespec64 mtime;
 	loff_t i_pos;
 	sector_t blocknr;
 	int err, offset;
@@ -888,14 +882,12 @@ retry:
 		raw_entry->size = cpu_to_le32(inode->i_size);
 	raw_entry->attr = fat_make_attrs(inode);
 	fat_set_start(raw_entry, MSDOS_I(inode)->i_logstart);
-	mtime = inode_get_mtime(inode);
-	fat_time_unix2fat(sbi, &mtime, &raw_entry->time,
+	fat_time_unix2fat(sbi, &inode->i_mtime, &raw_entry->time,
 			  &raw_entry->date, NULL);
 	if (sbi->options.isvfat) {
-		struct timespec64 ts = inode_get_atime(inode);
 		__le16 atime;
-
-		fat_time_unix2fat(sbi, &ts, &atime, &raw_entry->adate, NULL);
+		fat_time_unix2fat(sbi, &inode->i_atime, &atime,
+				  &raw_entry->adate, NULL);
 		fat_time_unix2fat(sbi, &MSDOS_I(inode)->i_crtime, &raw_entry->ctime,
 				  &raw_entry->cdate, &raw_entry->ctime_cs);
 	}
@@ -1415,8 +1407,8 @@ static int fat_read_root(struct inode *inode)
 	MSDOS_I(inode)->mmu_private = inode->i_size;
 
 	fat_save_attrs(inode, ATTR_DIR);
-	inode_set_mtime_to_ts(inode,
-			      inode_set_atime_to_ts(inode, inode_set_ctime(inode, 0, 0)));
+	inode->i_mtime.tv_sec = inode->i_atime.tv_sec = inode->i_ctime.tv_sec = 0;
+	inode->i_mtime.tv_nsec = inode->i_atime.tv_nsec = inode->i_ctime.tv_nsec = 0;
 	set_nlink(inode, fat_subdirs(inode)+2);
 
 	return 0;

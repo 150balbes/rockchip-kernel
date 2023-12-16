@@ -24,6 +24,9 @@ properties:
       - enum:
           - apple,s5l-uart
           - axis,artpec8-uart
+          - samsung,s3c2410-uart
+          - samsung,s3c2412-uart
+          - samsung,s3c2440-uart
           - samsung,s3c6400-uart
           - samsung,s5pv210-uart
           - samsung,exynos4210-uart
@@ -83,6 +86,8 @@ required:
   - interrupts
   - reg
 
+unevaluatedProperties: false
+
 allOf:
   - $ref: serial.yaml#
 
@@ -91,6 +96,7 @@ allOf:
         compatible:
           contains:
             enum:
+              - samsung,s3c2410-uart
               - samsung,s5pv210-uart
     then:
       properties:
@@ -121,8 +127,6 @@ allOf:
           items:
             - const: uart
             - const: clk_uart_baud0
-
-unevaluatedProperties: false
 
 examples:
   - |

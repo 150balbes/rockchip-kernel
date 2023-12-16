@@ -24,7 +24,6 @@
 #include <linux/device.h>
 #include <linux/hardirq.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 
 #include <asm/machdep.h>
 #include <asm/irq.h>
@@ -379,9 +378,10 @@ static int pmac_cpufreq_cpu_init(struct cpufreq_policy *policy)
 
 static u32 read_gpio(struct device_node *np)
 {
-	u64 offset;
+	const u32 *reg = of_get_property(np, "reg", NULL);
+	u32 offset;
 
-	if (of_property_read_reg(np, 0, &offset, NULL) < 0)
+	if (reg == NULL)
 		return 0;
 	/* That works for all keylargos but shall be fixed properly
 	 * some day... The problem is that it seems we can't rely
@@ -389,6 +389,7 @@ static u32 read_gpio(struct device_node *np)
 	 * relative to the base of KeyLargo or to the base of the
 	 * GPIO space, and the device-tree doesn't help.
 	 */
+	offset = *reg;
 	if (offset < KEYLARGO_GPIO_LEVELS0)
 		offset += KEYLARGO_GPIO_LEVELS0;
 	return offset;

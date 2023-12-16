@@ -149,6 +149,7 @@ static int gbaudio_remove_controls(struct snd_card *card, struct device *dev,
 	for (i = 0; i < num_controls; i++) {
 		const struct snd_kcontrol_new *control = &controls[i];
 		struct snd_ctl_elem_id id;
+		struct snd_kcontrol *kctl;
 
 		if (prefix)
 			snprintf(id.name, sizeof(id.name), "%s %s", prefix,
@@ -160,10 +161,17 @@ static int gbaudio_remove_controls(struct snd_card *card, struct device *dev,
 		id.device = control->device;
 		id.subdevice = control->subdevice;
 		id.index = control->index;
-		err = snd_ctl_remove_id(card, &id);
-		if (err < 0)
+		kctl = snd_ctl_find_id(card, &id);
+		if (!kctl) {
+			dev_err(dev, "Failed to find %s\n", control->name);
+			continue;
+		}
+		err = snd_ctl_remove(card, kctl);
+		if (err < 0) {
 			dev_err(dev, "%d: Failed to remove %s\n", err,
 				control->name);
+			continue;
+		}
 	}
 	return 0;
 }
@@ -173,7 +181,11 @@ int gbaudio_remove_component_controls(struct snd_soc_component *component,
 				      unsigned int num_controls)
 {
 	struct snd_card *card = component->card->snd_card;
+	int err;
 
-	return gbaudio_remove_controls(card, component->dev, controls,
-				       num_controls, component->name_prefix);
+	down_write(&card->controls_rwsem);
+	err = gbaudio_remove_controls(card, component->dev, controls,
+				      num_controls, component->name_prefix);
+	up_write(&card->controls_rwsem);
+	return err;
 }

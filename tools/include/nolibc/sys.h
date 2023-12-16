@@ -7,6 +7,7 @@
 #ifndef _NOLIBC_SYS_H
 #define _NOLIBC_SYS_H
 
+#include <stdarg.h>
 #include "std.h"
 
 /* system includes */
@@ -20,38 +21,12 @@
 #include <linux/auxvec.h>
 #include <linux/fcntl.h> /* for O_* and AT_* */
 #include <linux/stat.h>  /* for statx() */
+#include <linux/reboot.h> /* for LINUX_REBOOT_* */
 #include <linux/prctl.h>
 
 #include "arch.h"
 #include "errno.h"
-#include "stdarg.h"
 #include "types.h"
-
-
-/* Syscall return helper: takes the syscall value in argument and checks for an
- * error in it. This may only be used with signed returns (int or long), but
- * not with pointers. An error is any value < 0. When an error is encountered,
- * -ret is set into errno and -1 is returned. Otherwise the returned value is
- * passed as-is with its type preserved.
- */
-
-#define __sysret(arg)							\
-({									\
-	__typeof__(arg) __sysret_arg = (arg);				\
-	(__sysret_arg < 0)                              /* error ? */	\
-		? (({ SET_ERRNO(-__sysret_arg); }), -1) /* ret -1 with errno = -arg */ \
-		: __sysret_arg;                         /* return original value */ \
-})
-
-/* Syscall ENOSYS helper: Avoids unused-parameter warnings and provides a
- * debugging hook.
- */
-
-static __inline__ int __nolibc_enosys(const char *syscall, ...)
-{
-	(void)syscall;
-	return -ENOSYS;
-}
 
 
 /* Functions in this file only describe syscalls. They're declared static so
@@ -103,10 +78,10 @@ int brk(void *addr)
 static __attribute__((unused))
 void *sbrk(intptr_t inc)
 {
-	/* first call to find current end */
-	void *ret = sys_brk(0);
+	void *ret;
 
-	if (ret && sys_brk(ret + inc) == ret + inc)
+	/* first call to find current end */
+	if ((ret = sys_brk(0)) && (sys_brk(ret + inc) == ret + inc))
 		return ret + inc;
 
 	SET_ERRNO(ENOMEM);
@@ -127,7 +102,13 @@ int sys_chdir(const char *path)
 static __attribute__((unused))
 int chdir(const char *path)
 {
-	return __sysret(sys_chdir(path));
+	int ret = sys_chdir(path);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -143,14 +124,20 @@ int sys_chmod(const char *path, mode_t mode)
 #elif defined(__NR_chmod)
 	return my_syscall2(__NR_chmod, path, mode);
 #else
-	return __nolibc_enosys(__func__, path, mode);
+#error Neither __NR_fchmodat nor __NR_chmod defined, cannot implement sys_chmod()
 #endif
 }
 
 static __attribute__((unused))
 int chmod(const char *path, mode_t mode)
 {
-	return __sysret(sys_chmod(path, mode));
+	int ret = sys_chmod(path, mode);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -166,14 +153,20 @@ int sys_chown(const char *path, uid_t owner, gid_t group)
 #elif defined(__NR_chown)
 	return my_syscall3(__NR_chown, path, owner, group);
 #else
-	return __nolibc_enosys(__func__, path, owner, group);
+#error Neither __NR_fchownat nor __NR_chown defined, cannot implement sys_chown()
 #endif
 }
 
 static __attribute__((unused))
 int chown(const char *path, uid_t owner, gid_t group)
 {
-	return __sysret(sys_chown(path, owner, group));
+	int ret = sys_chown(path, owner, group);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -190,7 +183,13 @@ int sys_chroot(const char *path)
 static __attribute__((unused))
 int chroot(const char *path)
 {
-	return __sysret(sys_chroot(path));
+	int ret = sys_chroot(path);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -207,7 +206,13 @@ int sys_close(int fd)
 static __attribute__((unused))
 int close(int fd)
 {
-	return __sysret(sys_close(fd));
+	int ret = sys_close(fd);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -224,7 +229,13 @@ int sys_dup(int fd)
 static __attribute__((unused))
 int dup(int fd)
 {
-	return __sysret(sys_dup(fd));
+	int ret = sys_dup(fd);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -240,14 +251,20 @@ int sys_dup2(int old, int new)
 #elif defined(__NR_dup2)
 	return my_syscall2(__NR_dup2, old, new);
 #else
-	return __nolibc_enosys(__func__, old, new);
+#error Neither __NR_dup3 nor __NR_dup2 defined, cannot implement sys_dup2()
 #endif
 }
 
 static __attribute__((unused))
 int dup2(int old, int new)
 {
-	return __sysret(sys_dup2(old, new));
+	int ret = sys_dup2(old, new);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -265,7 +282,13 @@ int sys_dup3(int old, int new, int flags)
 static __attribute__((unused))
 int dup3(int old, int new, int flags)
 {
-	return __sysret(sys_dup3(old, new, flags));
+	int ret = sys_dup3(old, new, flags);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 #endif
 
@@ -283,7 +306,13 @@ int sys_execve(const char *filename, char *const argv[], char *const envp[])
 static __attribute__((unused))
 int execve(const char *filename, char *const argv[], char *const envp[])
 {
-	return __sysret(sys_execve(filename, argv, envp));
+	int ret = sys_execve(filename, argv, envp);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -322,7 +351,7 @@ pid_t sys_fork(void)
 #elif defined(__NR_fork)
 	return my_syscall0(__NR_fork);
 #else
-	return __nolibc_enosys(__func__);
+#error Neither __NR_clone nor __NR_fork defined, cannot implement sys_fork()
 #endif
 }
 #endif
@@ -330,7 +359,13 @@ pid_t sys_fork(void)
 static __attribute__((unused))
 pid_t fork(void)
 {
-	return __sysret(sys_fork());
+	pid_t ret = sys_fork();
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -347,7 +382,13 @@ int sys_fsync(int fd)
 static __attribute__((unused))
 int fsync(int fd)
 {
-	return __sysret(sys_fsync(fd));
+	int ret = sys_fsync(fd);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -364,7 +405,13 @@ int sys_getdents64(int fd, struct linux_dirent64 *dirp, int count)
 static __attribute__((unused))
 int getdents64(int fd, struct linux_dirent64 *dirp, int count)
 {
-	return __sysret(sys_getdents64(fd, dirp, count));
+	int ret = sys_getdents64(fd, dirp, count);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -402,7 +449,13 @@ pid_t sys_getpgid(pid_t pid)
 static __attribute__((unused))
 pid_t getpgid(pid_t pid)
 {
-	return __sysret(sys_getpgid(pid));
+	pid_t ret = sys_getpgid(pid);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -476,13 +529,21 @@ pid_t gettid(void)
 static unsigned long getauxval(unsigned long key);
 
 /*
- * int getpagesize(void);
+ * long getpagesize(void);
  */
 
 static __attribute__((unused))
-int getpagesize(void)
+long getpagesize(void)
 {
-	return __sysret((int)getauxval(AT_PAGESZ) ?: -ENOENT);
+	long ret;
+
+	ret = getauxval(AT_PAGESZ);
+	if (!ret) {
+		SET_ERRNO(ENOENT);
+		return -1;
+	}
+
+	return ret;
 }
 
 
@@ -493,17 +554,19 @@ int getpagesize(void)
 static __attribute__((unused))
 int sys_gettimeofday(struct timeval *tv, struct timezone *tz)
 {
-#ifdef __NR_gettimeofday
 	return my_syscall2(__NR_gettimeofday, tv, tz);
-#else
-	return __nolibc_enosys(__func__, tv, tz);
-#endif
 }
 
 static __attribute__((unused))
 int gettimeofday(struct timeval *tv, struct timezone *tz)
 {
-	return __sysret(sys_gettimeofday(tv, tz));
+	int ret = sys_gettimeofday(tv, tz);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -541,7 +604,13 @@ int sys_ioctl(int fd, unsigned long req, void *value)
 static __attribute__((unused))
 int ioctl(int fd, unsigned long req, void *value)
 {
-	return __sysret(sys_ioctl(fd, req, value));
+	int ret = sys_ioctl(fd, req, value);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 /*
@@ -557,7 +626,13 @@ int sys_kill(pid_t pid, int signal)
 static __attribute__((unused))
 int kill(pid_t pid, int signal)
 {
-	return __sysret(sys_kill(pid, signal));
+	int ret = sys_kill(pid, signal);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -573,14 +648,20 @@ int sys_link(const char *old, const char *new)
 #elif defined(__NR_link)
 	return my_syscall2(__NR_link, old, new);
 #else
-	return __nolibc_enosys(__func__, old, new);
+#error Neither __NR_linkat nor __NR_link defined, cannot implement sys_link()
 #endif
 }
 
 static __attribute__((unused))
 int link(const char *old, const char *new)
 {
-	return __sysret(sys_link(old, new));
+	int ret = sys_link(old, new);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -591,17 +672,19 @@ int link(const char *old, const char *new)
 static __attribute__((unused))
 off_t sys_lseek(int fd, off_t offset, int whence)
 {
-#ifdef __NR_lseek
 	return my_syscall3(__NR_lseek, fd, offset, whence);
-#else
-	return __nolibc_enosys(__func__, fd, offset, whence);
-#endif
 }
 
 static __attribute__((unused))
 off_t lseek(int fd, off_t offset, int whence)
 {
-	return __sysret(sys_lseek(fd, offset, whence));
+	off_t ret = sys_lseek(fd, offset, whence);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -617,36 +700,20 @@ int sys_mkdir(const char *path, mode_t mode)
 #elif defined(__NR_mkdir)
 	return my_syscall2(__NR_mkdir, path, mode);
 #else
-	return __nolibc_enosys(__func__, path, mode);
+#error Neither __NR_mkdirat nor __NR_mkdir defined, cannot implement sys_mkdir()
 #endif
 }
 
 static __attribute__((unused))
 int mkdir(const char *path, mode_t mode)
 {
-	return __sysret(sys_mkdir(path, mode));
-}
+	int ret = sys_mkdir(path, mode);
 
-/*
- * int rmdir(const char *path);
- */
-
-static __attribute__((unused))
-int sys_rmdir(const char *path)
-{
-#ifdef __NR_rmdir
-	return my_syscall1(__NR_rmdir, path);
-#elif defined(__NR_unlinkat)
-	return my_syscall3(__NR_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
-#else
-	return __nolibc_enosys(__func__, path);
-#endif
-}
-
-static __attribute__((unused))
-int rmdir(const char *path)
-{
-	return __sysret(sys_rmdir(path));
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -662,21 +729,42 @@ long sys_mknod(const char *path, mode_t mode, dev_t dev)
 #elif defined(__NR_mknod)
 	return my_syscall3(__NR_mknod, path, mode, dev);
 #else
-	return __nolibc_enosys(__func__, path, mode, dev);
+#error Neither __NR_mknodat nor __NR_mknod defined, cannot implement sys_mknod()
 #endif
 }
 
 static __attribute__((unused))
 int mknod(const char *path, mode_t mode, dev_t dev)
 {
-	return __sysret(sys_mknod(path, mode, dev));
+	int ret = sys_mknod(path, mode, dev);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
+
+#ifndef MAP_SHARED
+#define MAP_SHARED		0x01	/* Share changes */
+#define MAP_PRIVATE		0x02	/* Changes are private */
+#define MAP_SHARED_VALIDATE	0x03	/* share + validate extension flags */
+#endif
+
+#ifndef MAP_FAILED
+#define MAP_FAILED ((void *)-1)
+#endif
 
 #ifndef sys_mmap
 static __attribute__((unused))
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd,
 	       off_t offset)
 {
+#ifndef my_syscall6
+	/* Function not implemented. */
+	return (void *)-ENOSYS;
+#else
+
 	int n;
 
 #if defined(__NR_mmap2)
@@ -687,13 +775,9 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd,
 #endif
 
 	return (void *)my_syscall6(n, addr, length, prot, flags, fd, offset);
+#endif
 }
 #endif
-
-/* Note that on Linux, MAP_FAILED is -1 so we can use the generic __sysret()
- * which returns -1 upon error and still satisfy user land that checks for
- * MAP_FAILED.
- */
 
 static __attribute__((unused))
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
@@ -716,7 +800,13 @@ int sys_munmap(void *addr, size_t length)
 static __attribute__((unused))
 int munmap(void *addr, size_t length)
 {
-	return __sysret(sys_munmap(addr, length));
+	int ret = sys_munmap(addr, length);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 /*
@@ -736,7 +826,13 @@ int mount(const char *src, const char *tgt,
           const char *fst, unsigned long flags,
           const void *data)
 {
-	return __sysret(sys_mount(src, tgt, fst, flags, data));
+	int ret = sys_mount(src, tgt, fst, flags, data);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -752,7 +848,7 @@ int sys_open(const char *path, int flags, mode_t mode)
 #elif defined(__NR_open)
 	return my_syscall3(__NR_open, path, flags, mode);
 #else
-	return __nolibc_enosys(__func__, path, flags, mode);
+#error Neither __NR_openat nor __NR_open defined, cannot implement sys_open()
 #endif
 }
 
@@ -760,6 +856,7 @@ static __attribute__((unused))
 int open(const char *path, int flags, ...)
 {
 	mode_t mode = 0;
+	int ret;
 
 	if (flags & O_CREAT) {
 		va_list args;
@@ -769,31 +866,13 @@ int open(const char *path, int flags, ...)
 		va_end(args);
 	}
 
-	return __sysret(sys_open(path, flags, mode));
-}
+	ret = sys_open(path, flags, mode);
 
-
-/*
- * int pipe2(int pipefd[2], int flags);
- * int pipe(int pipefd[2]);
- */
-
-static __attribute__((unused))
-int sys_pipe2(int pipefd[2], int flags)
-{
-	return my_syscall2(__NR_pipe2, pipefd, flags);
-}
-
-static __attribute__((unused))
-int pipe2(int pipefd[2], int flags)
-{
-	return __sysret(sys_pipe2(pipefd, flags));
-}
-
-static __attribute__((unused))
-int pipe(int pipefd[2])
-{
-	return pipe2(pipefd, 0);
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -813,7 +892,13 @@ static __attribute__((unused))
 int prctl(int option, unsigned long arg2, unsigned long arg3,
 		      unsigned long arg4, unsigned long arg5)
 {
-	return __sysret(sys_prctl(option, arg2, arg3, arg4, arg5));
+	int ret = sys_prctl(option, arg2, arg3, arg4, arg5);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -830,7 +915,13 @@ int sys_pivot_root(const char *new, const char *old)
 static __attribute__((unused))
 int pivot_root(const char *new, const char *old)
 {
-	return __sysret(sys_pivot_root(new, old));
+	int ret = sys_pivot_root(new, old);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -852,14 +943,20 @@ int sys_poll(struct pollfd *fds, int nfds, int timeout)
 #elif defined(__NR_poll)
 	return my_syscall3(__NR_poll, fds, nfds, timeout);
 #else
-	return __nolibc_enosys(__func__, fds, nfds, timeout);
+#error Neither __NR_ppoll nor __NR_poll defined, cannot implement sys_poll()
 #endif
 }
 
 static __attribute__((unused))
 int poll(struct pollfd *fds, int nfds, int timeout)
 {
-	return __sysret(sys_poll(fds, nfds, timeout));
+	int ret = sys_poll(fds, nfds, timeout);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -876,7 +973,13 @@ ssize_t sys_read(int fd, void *buf, size_t count)
 static __attribute__((unused))
 ssize_t read(int fd, void *buf, size_t count)
 {
-	return __sysret(sys_read(fd, buf, count));
+	ssize_t ret = sys_read(fd, buf, count);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -894,7 +997,13 @@ ssize_t sys_reboot(int magic1, int magic2, int cmd, void *arg)
 static __attribute__((unused))
 int reboot(int cmd)
 {
-	return __sysret(sys_reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, cmd, 0));
+	int ret = sys_reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, cmd, 0);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -911,7 +1020,13 @@ int sys_sched_yield(void)
 static __attribute__((unused))
 int sched_yield(void)
 {
-	return __sysret(sys_sched_yield());
+	int ret = sys_sched_yield();
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -930,11 +1045,7 @@ int sys_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeva
 		struct timeval *t;
 	} arg = { .n = nfds, .r = rfds, .w = wfds, .e = efds, .t = timeout };
 	return my_syscall1(__NR_select, &arg);
-#elif defined(__NR__newselect)
-	return my_syscall5(__NR__newselect, nfds, rfds, wfds, efds, timeout);
-#elif defined(__NR_select)
-	return my_syscall5(__NR_select, nfds, rfds, wfds, efds, timeout);
-#elif defined(__NR_pselect6)
+#elif defined(__ARCH_WANT_SYS_PSELECT6) && defined(__NR_pselect6)
 	struct timespec t;
 
 	if (timeout) {
@@ -942,15 +1053,26 @@ int sys_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeva
 		t.tv_nsec = timeout->tv_usec * 1000;
 	}
 	return my_syscall6(__NR_pselect6, nfds, rfds, wfds, efds, timeout ? &t : NULL, NULL);
+#elif defined(__NR__newselect) || defined(__NR_select)
+#ifndef __NR__newselect
+#define __NR__newselect __NR_select
+#endif
+	return my_syscall5(__NR__newselect, nfds, rfds, wfds, efds, timeout);
 #else
-	return __nolibc_enosys(__func__, nfds, rfds, wfds, efds, timeout);
+#error None of __NR_select, __NR_pselect6, nor __NR__newselect defined, cannot implement sys_select()
 #endif
 }
 
 static __attribute__((unused))
 int select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeval *timeout)
 {
-	return __sysret(sys_select(nfds, rfds, wfds, efds, timeout));
+	int ret = sys_select(nfds, rfds, wfds, efds, timeout);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -967,7 +1089,13 @@ int sys_setpgid(pid_t pid, pid_t pgid)
 static __attribute__((unused))
 int setpgid(pid_t pid, pid_t pgid)
 {
-	return __sysret(sys_setpgid(pid, pgid));
+	int ret = sys_setpgid(pid, pgid);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -984,41 +1112,55 @@ pid_t sys_setsid(void)
 static __attribute__((unused))
 pid_t setsid(void)
 {
-	return __sysret(sys_setsid());
+	pid_t ret = sys_setsid();
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
+#if defined(__NR_statx)
 /*
  * int statx(int fd, const char *path, int flags, unsigned int mask, struct statx *buf);
- * int stat(const char *path, struct stat *buf);
  */
 
 static __attribute__((unused))
 int sys_statx(int fd, const char *path, int flags, unsigned int mask, struct statx *buf)
 {
-#ifdef __NR_statx
 	return my_syscall5(__NR_statx, fd, path, flags, mask, buf);
-#else
-	return __nolibc_enosys(__func__, fd, path, flags, mask, buf);
-#endif
 }
 
 static __attribute__((unused))
 int statx(int fd, const char *path, int flags, unsigned int mask, struct statx *buf)
 {
-	return __sysret(sys_statx(fd, path, flags, mask, buf));
+	int ret = sys_statx(fd, path, flags, mask, buf);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
+#endif
 
+/*
+ * int stat(const char *path, struct stat *buf);
+ * Warning: the struct stat's layout is arch-dependent.
+ */
 
+#if defined(__NR_statx) && !defined(__NR_newfstatat) && !defined(__NR_stat)
+/*
+ * Maybe we can just use statx() when available for all architectures?
+ */
 static __attribute__((unused))
-int stat(const char *path, struct stat *buf)
+int sys_stat(const char *path, struct stat *buf)
 {
 	struct statx statx;
 	long ret;
 
-	ret = __sysret(sys_statx(AT_FDCWD, path, AT_NO_AUTOMOUNT, STATX_BASIC_STATS, &statx));
-	if (ret == -1)
-		return ret;
-
+	ret = sys_statx(AT_FDCWD, path, AT_NO_AUTOMOUNT, STATX_BASIC_STATS, &statx);
 	buf->st_dev          = ((statx.stx_dev_minor & 0xff)
 			       | (statx.stx_dev_major << 8)
 			       | ((statx.stx_dev_minor & ~0xff) << 12));
@@ -1039,8 +1181,53 @@ int stat(const char *path, struct stat *buf)
 	buf->st_mtim.tv_nsec = statx.stx_mtime.tv_nsec;
 	buf->st_ctim.tv_sec  = statx.stx_ctime.tv_sec;
 	buf->st_ctim.tv_nsec = statx.stx_ctime.tv_nsec;
+	return ret;
+}
+#else
+static __attribute__((unused))
+int sys_stat(const char *path, struct stat *buf)
+{
+	struct sys_stat_struct stat;
+	long ret;
 
-	return 0;
+#ifdef __NR_newfstatat
+	/* only solution for arm64 */
+	ret = my_syscall4(__NR_newfstatat, AT_FDCWD, path, &stat, 0);
+#elif defined(__NR_stat)
+	ret = my_syscall2(__NR_stat, path, &stat);
+#else
+#error Neither __NR_newfstatat nor __NR_stat defined, cannot implement sys_stat()
+#endif
+	buf->st_dev          = stat.st_dev;
+	buf->st_ino          = stat.st_ino;
+	buf->st_mode         = stat.st_mode;
+	buf->st_nlink        = stat.st_nlink;
+	buf->st_uid          = stat.st_uid;
+	buf->st_gid          = stat.st_gid;
+	buf->st_rdev         = stat.st_rdev;
+	buf->st_size         = stat.st_size;
+	buf->st_blksize      = stat.st_blksize;
+	buf->st_blocks       = stat.st_blocks;
+	buf->st_atim.tv_sec  = stat.st_atime;
+	buf->st_atim.tv_nsec = stat.st_atime_nsec;
+	buf->st_mtim.tv_sec  = stat.st_mtime;
+	buf->st_mtim.tv_nsec = stat.st_mtime_nsec;
+	buf->st_ctim.tv_sec  = stat.st_ctime;
+	buf->st_ctim.tv_nsec = stat.st_ctime_nsec;
+	return ret;
+}
+#endif
+
+static __attribute__((unused))
+int stat(const char *path, struct stat *buf)
+{
+	int ret = sys_stat(path, buf);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1056,14 +1243,20 @@ int sys_symlink(const char *old, const char *new)
 #elif defined(__NR_symlink)
 	return my_syscall2(__NR_symlink, old, new);
 #else
-	return __nolibc_enosys(__func__, old, new);
+#error Neither __NR_symlinkat nor __NR_symlink defined, cannot implement sys_symlink()
 #endif
 }
 
 static __attribute__((unused))
 int symlink(const char *old, const char *new)
 {
-	return __sysret(sys_symlink(old, new));
+	int ret = sys_symlink(old, new);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1097,7 +1290,13 @@ int sys_umount2(const char *path, int flags)
 static __attribute__((unused))
 int umount2(const char *path, int flags)
 {
-	return __sysret(sys_umount2(path, flags));
+	int ret = sys_umount2(path, flags);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1113,14 +1312,20 @@ int sys_unlink(const char *path)
 #elif defined(__NR_unlink)
 	return my_syscall1(__NR_unlink, path);
 #else
-	return __nolibc_enosys(__func__, path);
+#error Neither __NR_unlinkat nor __NR_unlink defined, cannot implement sys_unlink()
 #endif
 }
 
 static __attribute__((unused))
 int unlink(const char *path)
 {
-	return __sysret(sys_unlink(path));
+	int ret = sys_unlink(path);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1133,30 +1338,44 @@ int unlink(const char *path)
 static __attribute__((unused))
 pid_t sys_wait4(pid_t pid, int *status, int options, struct rusage *rusage)
 {
-#ifdef __NR_wait4
 	return my_syscall4(__NR_wait4, pid, status, options, rusage);
-#else
-	return __nolibc_enosys(__func__, pid, status, options, rusage);
-#endif
 }
 
 static __attribute__((unused))
 pid_t wait(int *status)
 {
-	return __sysret(sys_wait4(-1, status, 0, NULL));
+	pid_t ret = sys_wait4(-1, status, 0, NULL);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 static __attribute__((unused))
 pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage)
 {
-	return __sysret(sys_wait4(pid, status, options, rusage));
+	pid_t ret = sys_wait4(pid, status, options, rusage);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
 static __attribute__((unused))
 pid_t waitpid(pid_t pid, int *status, int options)
 {
-	return __sysret(sys_wait4(pid, status, options, NULL));
+	pid_t ret = sys_wait4(pid, status, options, NULL);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1173,7 +1392,13 @@ ssize_t sys_write(int fd, const void *buf, size_t count)
 static __attribute__((unused))
 ssize_t write(int fd, const void *buf, size_t count)
 {
-	return __sysret(sys_write(fd, buf, count));
+	ssize_t ret = sys_write(fd, buf, count);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 
@@ -1190,7 +1415,13 @@ int sys_memfd_create(const char *name, unsigned int flags)
 static __attribute__((unused))
 int memfd_create(const char *name, unsigned int flags)
 {
-	return __sysret(sys_memfd_create(name, flags));
+	ssize_t ret = sys_memfd_create(name, flags);
+
+	if (ret < 0) {
+		SET_ERRNO(-ret);
+		ret = -1;
+	}
+	return ret;
 }
 
 /* make sure to include all global symbols */

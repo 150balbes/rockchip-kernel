@@ -197,7 +197,7 @@ fail:
 	return err;
 }
 
-static void pcap_ts_remove(struct platform_device *pdev)
+static int pcap_ts_remove(struct platform_device *pdev)
 {
 	struct pcap_ts *pcap_ts = platform_get_drvdata(pdev);
 
@@ -207,6 +207,8 @@ static void pcap_ts_remove(struct platform_device *pdev)
 	input_unregister_device(pcap_ts->input);
 
 	kfree(pcap_ts);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -238,7 +240,7 @@ static const struct dev_pm_ops pcap_ts_pm_ops = {
 
 static struct platform_driver pcap_ts_driver = {
 	.probe		= pcap_ts_probe,
-	.remove_new	= pcap_ts_remove,
+	.remove		= pcap_ts_remove,
 	.driver		= {
 		.name	= "pcap-ts",
 		.pm	= PCAP_TS_PM_OPS,

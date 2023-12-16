@@ -71,4 +71,3 @@ module_exit(exit_rc_map_dvico_portable)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("dvico-portable remote controller keytable");

@@ -11,7 +11,7 @@
 #include <linux/err.h>
 #include <linux/pgtable.h>
 #include <linux/bitfield.h>
-#include <asm/fault.h>
+
 #include <asm/gmap.h>
 #include "kvm-s390.h"
 #include "gaccess.h"
@@ -466,6 +466,23 @@ static int ar_translation(struct kvm_vcpu *vcpu, union asce *asce, u8 ar,
 	return 0;
 }
 
+struct trans_exc_code_bits {
+	unsigned long addr : 52; /* Translation-exception Address */
+	unsigned long fsi  : 2;  /* Access Exception Fetch/Store Indication */
+	unsigned long	   : 2;
+	unsigned long b56  : 1;
+	unsigned long	   : 3;
+	unsigned long b60  : 1;
+	unsigned long b61  : 1;
+	unsigned long as   : 2;  /* ASCE Identifier */
+};
+
+enum {
+	FSI_UNKNOWN = 0, /* Unknown whether fetch or store */
+	FSI_STORE   = 1, /* Exception was due to store operation */
+	FSI_FETCH   = 2  /* Exception was due to fetch operation */
+};
+
 enum prot_type {
 	PROT_TYPE_LA   = 0,
 	PROT_TYPE_KEYC = 1,
@@ -480,11 +497,11 @@ static int trans_exc_ending(struct kvm_vcpu *vcpu, int code, unsigned long gva, 
 			    enum gacc_mode mode, enum prot_type prot, bool terminate)
 {
 	struct kvm_s390_pgm_info *pgm = &vcpu->arch.pgm;
-	union teid *teid;
+	struct trans_exc_code_bits *tec;
 
 	memset(pgm, 0, sizeof(*pgm));
 	pgm->code = code;
-	teid = (union teid *)&pgm->trans_exc_code;
+	tec = (struct trans_exc_code_bits *)&pgm->trans_exc_code;
 
 	switch (code) {
 	case PGM_PROTECTION:
@@ -494,25 +511,25 @@ static int trans_exc_ending(struct kvm_vcpu *vcpu, int code, unsigned long gva, 
 			WARN_ON_ONCE(1);
 			break;
 		case PROT_TYPE_IEP:
-			teid->b61 = 1;
+			tec->b61 = 1;
 			fallthrough;
 		case PROT_TYPE_LA:
-			teid->b56 = 1;
+			tec->b56 = 1;
 			break;
 		case PROT_TYPE_KEYC:
-			teid->b60 = 1;
+			tec->b60 = 1;
 			break;
 		case PROT_TYPE_ALC:
-			teid->b60 = 1;
+			tec->b60 = 1;
 			fallthrough;
 		case PROT_TYPE_DAT:
-			teid->b61 = 1;
+			tec->b61 = 1;
 			break;
 		}
 		if (terminate) {
-			teid->b56 = 0;
-			teid->b60 = 0;
-			teid->b61 = 0;
+			tec->b56 = 0;
+			tec->b60 = 0;
+			tec->b61 = 0;
 		}
 		fallthrough;
 	case PGM_ASCE_TYPE:
@@ -526,9 +543,9 @@ static int trans_exc_ending(struct kvm_vcpu *vcpu, int code, unsigned long gva, 
 		 * exc_access_id has to be set to 0 for some instructions. Both
 		 * cases have to be handled by the caller.
 		 */
-		teid->addr = gva >> PAGE_SHIFT;
-		teid->fsi = mode == GACC_STORE ? TEID_FSI_STORE : TEID_FSI_FETCH;
-		teid->as = psw_bits(vcpu->arch.sie_block->gpsw).as;
+		tec->addr = gva >> PAGE_SHIFT;
+		tec->fsi = mode == GACC_STORE ? FSI_STORE : FSI_FETCH;
+		tec->as = psw_bits(vcpu->arch.sie_block->gpsw).as;
 		fallthrough;
 	case PGM_ALEN_TRANSLATION:
 	case PGM_ALE_SEQUENCE:
@@ -1365,7 +1382,6 @@ static int kvm_s390_shadow_tables(struct gmap *sg, unsigned long saddr,
 				  unsigned long *pgt, int *dat_protection,
 				  int *fake)
 {
-	struct kvm *kvm;
 	struct gmap *parent;
 	union asce asce;
 	union vaddress vaddr;
@@ -1374,7 +1390,6 @@ static int kvm_s390_shadow_tables(struct gmap *sg, unsigned long saddr,
 
 	*fake = 0;
 	*dat_protection = 0;
-	kvm = sg->private;
 	parent = sg->parent;
 	vaddr.addr = saddr;
 	asce.val = sg->orig_asce;
@@ -1435,7 +1450,6 @@ shadow_r2t:
 		rc = gmap_shadow_r2t(sg, saddr, rfte.val, *fake);
 		if (rc)
 			return rc;
-		kvm->stat.gmap_shadow_r1_entry++;
 	}
 		fallthrough;
 	case ASCE_TYPE_REGION2: {
@@ -1464,7 +1478,6 @@ shadow_r3t:
 		rc = gmap_shadow_r3t(sg, saddr, rste.val, *fake);
 		if (rc)
 			return rc;
-		kvm->stat.gmap_shadow_r2_entry++;
 	}
 		fallthrough;
 	case ASCE_TYPE_REGION3: {
@@ -1502,7 +1515,6 @@ shadow_sgt:
 		rc = gmap_shadow_sgt(sg, saddr, rtte.val, *fake);
 		if (rc)
 			return rc;
-		kvm->stat.gmap_shadow_r3_entry++;
 	}
 		fallthrough;
 	case ASCE_TYPE_SEGMENT: {
@@ -1536,7 +1548,6 @@ shadow_pgt:
 		rc = gmap_shadow_pgt(sg, saddr, ste.val, *fake);
 		if (rc)
 			return rc;
-		kvm->stat.gmap_shadow_sg_entry++;
 	}
 	}
 	/* Return the parent address of the page table */
@@ -1607,7 +1618,6 @@ shadow_page:
 	pte.p |= dat_protection;
 	if (!rc)
 		rc = gmap_shadow_page(sg, saddr, __pte(pte.val));
-	vcpu->kvm->stat.gmap_shadow_pg_entry++;
 	ipte_unlock(vcpu->kvm);
 	mmap_read_unlock(sg->mm);
 	return rc;

@@ -18,11 +18,11 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
-#include <linux/of.h>
+#if defined(CONFIG_OF)
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
-
+#include <linux/of_platform.h>
+#endif
 #include "mb862xxfb.h"
 #include "mb862xx_reg.h"
 

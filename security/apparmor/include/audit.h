@@ -103,18 +103,13 @@ enum audit_type {
 #define OP_PROF_LOAD "profile_load"
 #define OP_PROF_RM "profile_remove"
 
-#define OP_USERNS_CREATE "userns_create"
-
-#define OP_URING_OVERRIDE "uring_override"
-#define OP_URING_SQPOLL "uring_sqpoll"
 
 struct apparmor_audit_data {
 	int error;
 	int type;
 	u16 class;
 	const char *op;
-	const struct cred *subj_cred;
-	struct aa_label *subj_label;
+	struct aa_label *label;
 	const char *name;
 	const char *info;
 	u32 request;
@@ -156,39 +151,34 @@ struct apparmor_audit_data {
 			const char *data;
 			unsigned long flags;
 		} mnt;
-		struct {
-			struct aa_label *target;
-		} uring;
 	};
-
-	struct common_audit_data common;
 };
 
 /* macros for dealing with  apparmor_audit_data structure */
-#define aad(SA) (container_of(SA, struct apparmor_audit_data, common))
-#define aad_of_va(VA) aad((struct common_audit_data *)(VA))
-
+#define aad(SA) ((SA)->apparmor_audit_data)
 #define DEFINE_AUDIT_DATA(NAME, T, C, X)				\
 	/* TODO: cleanup audit init so we don't need _aad = {0,} */	\
-	struct apparmor_audit_data NAME = {				\
+	struct apparmor_audit_data NAME ## _aad = {                     \
 		.class = (C),						\
 		.op = (X),                                              \
-		.common.type = (T),					\
-		.common.u.tsk = NULL,					\
-		.common.apparmor_audit_data = &NAME,			\
-	};
+	};                                                              \
+	struct common_audit_data NAME =					\
+	{								\
+	.type = (T),							\
+	.u.tsk = NULL,							\
+	};								\
+	NAME.apparmor_audit_data = &(NAME ## _aad)
 
-void aa_audit_msg(int type, struct apparmor_audit_data *ad,
+void aa_audit_msg(int type, struct common_audit_data *sa,
 		  void (*cb) (struct audit_buffer *, void *));
-int aa_audit(int type, struct aa_profile *profile,
-	     struct apparmor_audit_data *ad,
+int aa_audit(int type, struct aa_profile *profile, struct common_audit_data *sa,
 	     void (*cb) (struct audit_buffer *, void *));
 
-#define aa_audit_error(ERROR, AD, CB)				\
+#define aa_audit_error(ERROR, SA, CB)				\
 ({								\
-	(AD)->error = (ERROR);					\
-	aa_audit_msg(AUDIT_APPARMOR_ERROR, (AD), (CB));		\
-	(AD)->error;					\
+	aad((SA))->error = (ERROR);				\
+	aa_audit_msg(AUDIT_APPARMOR_ERROR, (SA), (CB));		\
+	aad((SA))->error;					\
 })
 
 

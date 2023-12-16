@@ -6,7 +6,6 @@
  *	Andrew F. Davis <afd@ti.com>
  */
 
-#include <linux/debugfs.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/i2c.h>
@@ -100,13 +99,11 @@ enum ina3221_channels {
  * @label: label of channel input source
  * @shunt_resistor: shunt resistor value of channel input source
  * @disconnected: connection status of channel input source
- * @summation_disable: channel summation status of input source
  */
 struct ina3221_input {
 	const char *label;
 	int shunt_resistor;
 	bool disconnected;
-	bool summation_disable;
 };
 
 /**
@@ -116,10 +113,8 @@ struct ina3221_input {
  * @fields: Register fields of the device
  * @inputs: Array of channel input source specific structures
  * @lock: mutex lock to serialize sysfs attribute accesses
- * @debugfs: Pointer to debugfs entry for device
  * @reg_config: Register value of INA3221_CONFIG
  * @summation_shunt_resistor: equivalent shunt resistor value for summation
- * @summation_channel_control: Value written to SCC field in INA3221_MASK_ENABLE
  * @single_shot: running in single-shot operating mode
  */
 struct ina3221_data {
@@ -128,10 +123,8 @@ struct ina3221_data {
 	struct regmap_field *fields[F_MAX_FIELDS];
 	struct ina3221_input inputs[INA3221_NUM_CHANNELS];
 	struct mutex lock;
-	struct dentry *debugfs;
 	u32 reg_config;
 	int summation_shunt_resistor;
-	u32 summation_channel_control;
 
 	bool single_shot;
 };
@@ -161,8 +154,7 @@ static inline int ina3221_summation_shunt_resistor(struct ina3221_data *ina)
 	int i, shunt_resistor = 0;
 
 	for (i = 0; i < INA3221_NUM_CHANNELS; i++) {
-		if (input[i].disconnected || !input[i].shunt_resistor ||
-		    input[i].summation_disable)
+		if (input[i].disconnected || !input[i].shunt_resistor)
 			continue;
 		if (!shunt_resistor) {
 			/* Found the reference shunt resistor value */
@@ -794,9 +786,6 @@ static int ina3221_probe_child_from_dt(struct device *dev,
 	/* Save the connected input label if available */
 	of_property_read_string(child, "label", &input->label);
 
-	/* summation channel control */
-	input->summation_disable = of_property_read_bool(child, "ti,summation-disable");
-
 	/* Overwrite default shunt resistor value optionally */
 	if (!of_property_read_u32(child, "shunt-resistor-micro-ohms", &val)) {
 		if (val < 1 || val > INT_MAX) {
@@ -838,7 +827,6 @@ static int ina3221_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	struct ina3221_data *ina;
 	struct device *hwmon_dev;
-	char name[32];
 	int i, ret;
 
 	ina = devm_kzalloc(dev, sizeof(*ina), GFP_KERNEL);
@@ -885,10 +873,6 @@ static int ina3221_probe(struct i2c_client *client)
 
 	/* Initialize summation_shunt_resistor for summation channel control */
 	ina->summation_shunt_resistor = ina3221_summation_shunt_resistor(ina);
-	for (i = 0; i < INA3221_NUM_CHANNELS; i++) {
-		if (!ina->inputs[i].summation_disable)
-			ina->summation_channel_control |= BIT(14 - i);
-	}
 
 	ina->pm_dev = dev;
 	mutex_init(&ina->lock);
@@ -916,15 +900,6 @@ static int ina3221_probe(struct i2c_client *client)
 		goto fail;
 	}
 
-	scnprintf(name, sizeof(name), "%s-%s", INA3221_DRIVER_NAME, dev_name(dev));
-	ina->debugfs = debugfs_create_dir(name, NULL);
-
-	for (i = 0; i < INA3221_NUM_CHANNELS; i++) {
-		scnprintf(name, sizeof(name), "in%d_summation_disable", i);
-		debugfs_create_bool(name, 0400, ina->debugfs,
-				    &ina->inputs[i].summation_disable);
-	}
-
 	return 0;
 
 fail:
@@ -942,8 +917,6 @@ static void ina3221_remove(struct i2c_client *client)
 {
 	struct ina3221_data *ina = dev_get_drvdata(&client->dev);
 	int i;
-
-	debugfs_remove_recursive(ina->debugfs);
 
 	pm_runtime_disable(ina->pm_dev);
 	pm_runtime_set_suspended(ina->pm_dev);
@@ -1005,13 +978,13 @@ static int ina3221_resume(struct device *dev)
 	/* Initialize summation channel control */
 	if (ina->summation_shunt_resistor) {
 		/*
-		 * Sum only channels that are not disabled for summation.
+		 * Take all three channels into summation by default
 		 * Shunt measurements of disconnected channels should
 		 * be 0, so it does not matter for summation.
 		 */
 		ret = regmap_update_bits(ina->regmap, INA3221_MASK_ENABLE,
 					 INA3221_MASK_ENABLE_SCC_MASK,
-					 ina->summation_channel_control);
+					 INA3221_MASK_ENABLE_SCC_MASK);
 		if (ret) {
 			dev_err(dev, "Unable to control summation channel\n");
 			return ret;

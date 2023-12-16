@@ -792,8 +792,10 @@ err_put_syncwait_obj:
 	return NULL;
 }
 
-static void group_free_queue(struct panthor_group *group, struct panthor_queue *queue)
+static void group_free_queue(struct panthor_group *group, u32 idx)
 {
+	struct panthor_queue *queue = group->queues[idx];
+
 	if (IS_ERR_OR_NULL(queue))
 		return;
 
@@ -821,7 +823,7 @@ static void group_release_work(struct work_struct *work)
 	u32 i;
 
 	for (i = 0; i < group->queue_count; i++)
-		group_free_queue(group, group->queues[i]);
+		group_free_queue(group, i);
 
 	if (group->suspend_buf)
 		panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), group->suspend_buf);
@@ -1228,12 +1230,14 @@ cs_slot_process_fatal_event_locked(struct panthor_device *ptdev,
 	struct panthor_scheduler *sched = ptdev->scheduler;
 	struct panthor_csg_slot *csg_slot = &sched->csg_slots[csg_id];
 	struct panthor_group *group = csg_slot->group;
+	struct panthor_fw_cs_iface *csg_iface;
 	struct panthor_fw_cs_iface *cs_iface;
 	u32 fatal;
 	u64 info;
 
 	lockdep_assert_held(&sched->lock);
 
+	csg_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
 	cs_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
 	fatal = cs_iface->output->fatal;
 	info = cs_iface->output->fatal_info;
@@ -1311,9 +1315,10 @@ cs_slot_process_tiler_oom_event_locked(struct panthor_device *ptdev,
 	struct panthor_group *group = csg_slot->group;
 	struct panthor_fw_cs_iface *cs_iface;
 	struct panthor_heap_pool *heaps;
-	u32 vt_start, vt_end, frag_end;
+	struct panthor_queue *queue;
+	u32 fault, vt_start, vt_end, frag_end;
 	u32 renderpasses_in_flight, pending_frag_count;
-	u64 heap_address, new_chunk_va;
+	u64 info, heap_address, new_chunk_va;
 	int ret;
 
 	lockdep_assert_held(&sched->lock);
@@ -1322,7 +1327,10 @@ cs_slot_process_tiler_oom_event_locked(struct panthor_device *ptdev,
 		return;
 
 	cs_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
+	queue = group->queues[cs_id];
 	heaps = panthor_vm_get_heap_pool(group->vm, false);
+	fault = cs_iface->output->fault;
+	info = cs_iface->output->fault_info;
 	heap_address = cs_iface->output->heap_address;
 	vt_start = cs_iface->output->heap_vt_start;
 	vt_end = cs_iface->output->heap_vt_end;
@@ -1972,6 +1980,7 @@ tick_ctx_apply(struct panthor_scheduler *sched, struct panthor_sched_tick_ctx *c
 	for (prio = PANTHOR_CSG_PRIORITY_COUNT - 1; prio >= 0; prio--) {
 		/* Suspend or terminate evicted groups. */
 		list_for_each_entry(group, &ctx->old_groups[prio], run_node) {
+			struct panthor_fw_csg_iface *csg_iface;
 			bool term = !group_can_run(group);
 			int csg_id = group->csg_id;
 
@@ -1979,6 +1988,7 @@ tick_ctx_apply(struct panthor_scheduler *sched, struct panthor_sched_tick_ctx *c
 				continue;
 
 			csg_slot = &sched->csg_slots[csg_id];
+			csg_iface = panthor_fw_get_csg_iface(ptdev, csg_id);
 			csgs_upd_ctx_queue_reqs(ptdev, &upd_ctx, csg_id,
 						term ? CSG_STATE_TERMINATE : CSG_STATE_SUSPEND,
 						CSG_STATE_MASK);
@@ -2468,6 +2478,7 @@ void panthor_sched_suspend(struct panthor_device *ptdev)
 	struct panthor_csg_slots_upd_ctx upd_ctx;
 	u64 suspended_slots, faulty_slots;
 	struct panthor_group *group;
+	int ret;
 	u32 i;
 
 	mutex_lock(&sched->lock);
@@ -2484,7 +2495,7 @@ void panthor_sched_suspend(struct panthor_device *ptdev)
 
 	suspended_slots = upd_ctx.update_mask;
 
-	csgs_upd_ctx_apply_locked(ptdev, &upd_ctx);
+	ret = csgs_upd_ctx_apply_locked(ptdev, &upd_ctx);
 	suspended_slots &= ~upd_ctx.timedout_mask;
 	faulty_slots = upd_ctx.timedout_mask;
 
@@ -2891,12 +2902,12 @@ group_create_queue(struct panthor_group *group,
 						  PANTHOR_VM_KERNEL_AUTO_VA);
 	if (IS_ERR(queue->ringbuf)) {
 		ret = PTR_ERR(queue->ringbuf);
-		goto err_free_queue;
+		goto out;
 	}
 
 	ret = panthor_kernel_bo_vmap(queue->ringbuf);
 	if (ret)
-		goto err_free_queue;
+		goto out;
 
 	queue->iface.mem = panthor_fw_alloc_queue_iface_mem(group->ptdev,
 							    &queue->iface.input,
@@ -2905,26 +2916,28 @@ group_create_queue(struct panthor_group *group,
 							    &queue->iface.output_fw_va);
 	if (IS_ERR(queue->iface.mem)) {
 		ret = PTR_ERR(queue->iface.mem);
-		goto err_free_queue;
+		goto out;
 	}
 
 	ret = drm_sched_init(&queue->scheduler, &panthor_queue_sched_ops,
-			     group->ptdev->scheduler->drm_sched_wq, 1,
+			     group->ptdev->scheduler->drm_sched_wq,
 			     args->ringbuf_size / (NUM_INSTRS_PER_SLOT * sizeof(u64)),
 			     0, msecs_to_jiffies(JOB_TIMEOUT_MS),
 			     group->ptdev->reset.wq,
-			     NULL, "panthor-queue", group->ptdev->base.dev);
+			     NULL, "panthor-queue", DRM_SCHED_POLICY_SINGLE_ENTITY,
+			     group->ptdev->base.dev);
 	if (ret)
-		goto err_free_queue;
+		goto out;
 
 	drm_sched = &queue->scheduler;
-	ret = drm_sched_entity_init(&queue->entity, 0, &drm_sched, 1, NULL);
+	ret = drm_sched_entity_init(&queue->entity, DRM_SCHED_PRIORITY_NORMAL,
+				    &drm_sched, 1, NULL);
+
+out:
+	if (ret)
+		return ERR_PTR(ret);
 
 	return queue;
-
-err_free_queue:
-	group_free_queue(group, queue);
-	return ERR_PTR(ret);
 }
 
 #define MAX_GROUPS_PER_POOL		128
@@ -3255,7 +3268,7 @@ panthor_job_create(struct panthor_file *pfile,
 
 	ret = drm_sched_job_init(&job->base,
 				 &job->group->queues[job->queue_idx]->entity,
-				 1, job->group);
+				 job->group);
 	if (ret)
 		goto err_put_job;
 
@@ -3371,20 +3384,14 @@ int panthor_sched_init(struct panthor_device *ptdev)
 	INIT_WORK(&sched->sync_upd_work, sync_upd_work);
 	INIT_WORK(&sched->fw_events_work, process_fw_events_work);
 
-	ret = drmm_mutex_init(&ptdev->base, &sched->lock);
-	if (ret)
-		return ret;
-
+	drmm_mutex_init(&ptdev->base, &sched->lock);
 	for (prio = PANTHOR_CSG_PRIORITY_COUNT - 1; prio >= 0; prio--) {
 		INIT_LIST_HEAD(&sched->groups.runnable[prio]);
 		INIT_LIST_HEAD(&sched->groups.idle[prio]);
 	}
 	INIT_LIST_HEAD(&sched->groups.waiting);
 
-	ret = drmm_mutex_init(&ptdev->base, &sched->reset.lock);
-	if (ret)
-		return ret;
-
+	drmm_mutex_init(&ptdev->base, &sched->reset.lock);
 	INIT_LIST_HEAD(&sched->reset.stopped_groups);
 
 	/* sched->wq will be used for heap chunk allocation on tiler OOM

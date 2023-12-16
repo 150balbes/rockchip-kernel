@@ -10,6 +10,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root plug",
         "expExitCode": "0",
@@ -17,7 +18,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -31,6 +33,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root plug block",
         "expExitCode": "0",
@@ -38,7 +41,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -52,6 +56,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root plug release",
         "expExitCode": "0",
@@ -59,7 +64,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -73,6 +79,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root plug release_indefinite",
         "expExitCode": "0",
@@ -80,7 +87,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -94,6 +102,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root plug limit 100",
         "expExitCode": "0",
@@ -101,7 +110,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -115,6 +125,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root plug"
         ],
         "cmdUnderTest": "$TC qdisc del dev $DUMMY handle 1: root",
@@ -123,6 +134,7 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -136,6 +148,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root plug"
         ],
         "cmdUnderTest": "$TC qdisc replace dev $DUMMY handle 1: root plug limit 1000",
@@ -144,7 +157,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -158,6 +172,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root plug"
         ],
         "cmdUnderTest": "$TC qdisc change dev $DUMMY handle 1: root plug limit 1000",
@@ -166,7 +181,8 @@
         "matchPattern": "qdisc plug 1: root refcnt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     }
 ]

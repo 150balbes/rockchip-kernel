@@ -5,7 +5,6 @@
  */
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 #include <asm/asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/assembler.h>
@@ -16,7 +15,7 @@
 	.altmacro
 	.option norelax
 
-SYM_FUNC_START(__cpu_suspend_enter)
+ENTRY(__cpu_suspend_enter)
 	/* Save registers (except A0 and T0-T6) */
 	REG_S	ra, (SUSPEND_CONTEXT_REGS + PT_RA)(a0)
 	REG_S	sp, (SUSPEND_CONTEXT_REGS + PT_SP)(a0)
@@ -57,11 +56,14 @@ SYM_FUNC_START(__cpu_suspend_enter)
 
 	/* Return to C code */
 	ret
-SYM_FUNC_END(__cpu_suspend_enter)
+END(__cpu_suspend_enter)
 
-SYM_TYPED_FUNC_START(__cpu_resume_enter)
+ENTRY(__cpu_resume_enter)
 	/* Load the global pointer */
-	load_global_pointer
+	.option push
+	.option norelax
+		la gp, __global_pointer$
+	.option pop
 
 #ifdef CONFIG_MMU
 	/* Save A0 and A1 */
@@ -92,4 +94,4 @@ SYM_TYPED_FUNC_START(__cpu_resume_enter)
 
 	/* Return to C code */
 	ret
-SYM_FUNC_END(__cpu_resume_enter)
+END(__cpu_resume_enter)

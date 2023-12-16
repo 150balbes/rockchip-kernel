@@ -48,12 +48,12 @@ struct child_sync {
 		}							\
 	} while (0)
 
-#define PARENT_SKIP_IF_UNSUPPORTED(x, sync, msg)			\
+#define PARENT_SKIP_IF_UNSUPPORTED(x, sync)				\
 	do {								\
 		if ((x) == -1 && (errno == ENODEV || errno == EINVAL)) { \
 			(sync)->parent_gave_up = true;			\
 			prod_child(sync);				\
-			SKIP_IF_MSG(1, msg);				\
+			SKIP_IF(1);					\
 		}							\
 	} while (0)
 

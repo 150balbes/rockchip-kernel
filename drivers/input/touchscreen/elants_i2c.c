@@ -1299,7 +1299,7 @@ static ELANTS_VERSION_ATTR(solution_version);
 static ELANTS_VERSION_ATTR(bc_version);
 static ELANTS_VERSION_ATTR(iap_version);
 
-static struct attribute *elants_i2c_attrs[] = {
+static struct attribute *elants_attributes[] = {
 	&dev_attr_calibrate.attr,
 	&dev_attr_update_fw.attr,
 	&dev_attr_iap_mode.attr,
@@ -1313,7 +1313,10 @@ static struct attribute *elants_i2c_attrs[] = {
 	&elants_ver_attr_iap_version.dattr.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(elants_i2c);
+
+static const struct attribute_group elants_attribute_group = {
+	.attrs = elants_attributes,
+};
 
 static int elants_i2c_power_on(struct elants_data *ts)
 {
@@ -1435,14 +1438,24 @@ static int elants_i2c_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, ts);
 
 	ts->vcc33 = devm_regulator_get(&client->dev, "vcc33");
-	if (IS_ERR(ts->vcc33))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->vcc33),
-				     "Failed to get 'vcc33' regulator\n");
+	if (IS_ERR(ts->vcc33)) {
+		error = PTR_ERR(ts->vcc33);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"Failed to get 'vcc33' regulator: %d\n",
+				error);
+		return error;
+	}
 
 	ts->vccio = devm_regulator_get(&client->dev, "vccio");
-	if (IS_ERR(ts->vccio))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->vccio),
-				     "Failed to get 'vccio' regulator\n");
+	if (IS_ERR(ts->vccio)) {
+		error = PTR_ERR(ts->vccio);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"Failed to get 'vccio' regulator: %d\n",
+				error);
+		return error;
+	}
 
 	ts->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(ts->reset_gpio)) {
@@ -1546,6 +1559,13 @@ static int elants_i2c_probe(struct i2c_client *client)
 					  client->name, ts);
 	if (error) {
 		dev_err(&client->dev, "Failed to register interrupt\n");
+		return error;
+	}
+
+	error = devm_device_add_group(&client->dev, &elants_attribute_group);
+	if (error) {
+		dev_err(&client->dev, "failed to create sysfs attributes: %d\n",
+			error);
 		return error;
 	}
 
@@ -1657,7 +1677,6 @@ static struct i2c_driver elants_i2c_driver = {
 	.id_table = elants_i2c_id,
 	.driver = {
 		.name = DEVICE_NAME,
-		.dev_groups = elants_i2c_groups,
 		.pm = pm_sleep_ptr(&elants_i2c_pm_ops),
 		.acpi_match_table = ACPI_PTR(elants_acpi_id),
 		.of_match_table = of_match_ptr(elants_of_match),

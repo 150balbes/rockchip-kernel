@@ -10,7 +10,6 @@
 / {
 	model = "Qualcomm Technologies, Inc. MSM 8996 MTP";
 	compatible = "qcom,msm8996-mtp", "qcom,msm8996";
-	chassis-type = "handset";
 
 	aliases {
 		serial0 = &blsp2_uart2;

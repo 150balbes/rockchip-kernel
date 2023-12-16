@@ -7,12 +7,13 @@
  */
 
 #include <linux/init.h>
+#include <linux/fs_enet_pd.h>
 #include <linux/of_platform.h>
 
 #include <asm/time.h>
 #include <asm/machdep.h>
 #include <asm/cpm1.h>
-#include <asm/8xx_immap.h>
+#include <asm/fs_pd.h>
 #include <asm/udbg.h>
 
 #include "mpc8xx.h"

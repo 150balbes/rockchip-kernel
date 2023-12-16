@@ -109,8 +109,9 @@ properties:
     enum: [0, 2000]
 
 patternProperties:
-  "@[0-9a-f]$":
+  "^ethernet-phy@[0-9a-f]$":
     type: object
+    $ref: ethernet-phy.yaml#
 
 required:
   - compatible

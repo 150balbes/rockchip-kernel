@@ -1322,10 +1322,11 @@ static void hso_serial_close(struct tty_struct *tty, struct file *filp)
 }
 
 /* close the requested serial port */
-static ssize_t hso_serial_write(struct tty_struct *tty, const u8 *buf,
-				size_t count)
+static int hso_serial_write(struct tty_struct *tty, const unsigned char *buf,
+			    int count)
 {
 	struct hso_serial *serial = tty->driver_data;
+	int space, tx_bytes;
 	unsigned long flags;
 
 	/* sanity check */
@@ -1336,16 +1337,21 @@ static ssize_t hso_serial_write(struct tty_struct *tty, const u8 *buf,
 
 	spin_lock_irqsave(&serial->serial_lock, flags);
 
-	count = min_t(size_t, serial->tx_data_length - serial->tx_buffer_count,
-		      count);
-	memcpy(serial->tx_buffer + serial->tx_buffer_count, buf, count);
-	serial->tx_buffer_count += count;
+	space = serial->tx_data_length - serial->tx_buffer_count;
+	tx_bytes = (count < space) ? count : space;
 
+	if (!tx_bytes)
+		goto out;
+
+	memcpy(serial->tx_buffer + serial->tx_buffer_count, buf, tx_bytes);
+	serial->tx_buffer_count += tx_bytes;
+
+out:
 	spin_unlock_irqrestore(&serial->serial_lock, flags);
 
 	hso_kick_transmit(serial);
 	/* done */
-	return count;
+	return tx_bytes;
 }
 
 /* how much room is there for writing */

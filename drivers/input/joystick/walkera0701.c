@@ -296,4 +296,15 @@ static struct parport_driver walkera0701_parport_driver = {
 	.devmodel = true,
 };
 
-module_parport_driver(walkera0701_parport_driver);
+static int __init walkera0701_init(void)
+{
+	return parport_register_driver(&walkera0701_parport_driver);
+}
+
+static void __exit walkera0701_exit(void)
+{
+	parport_unregister_driver(&walkera0701_parport_driver);
+}
+
+module_init(walkera0701_init);
+module_exit(walkera0701_exit);

@@ -74,16 +74,16 @@
 static DEFINE_SPINLOCK(pdc_lock);
 #endif
 
-static unsigned long pdc_result[NUM_PDC_RESULT]  __aligned(8);
-static unsigned long pdc_result2[NUM_PDC_RESULT] __aligned(8);
+unsigned long pdc_result[NUM_PDC_RESULT]  __aligned(8);
+unsigned long pdc_result2[NUM_PDC_RESULT] __aligned(8);
 
 #ifdef CONFIG_64BIT
-#define WIDE_FIRMWARE		PDC_MODEL_OS64
-#define NARROW_FIRMWARE		PDC_MODEL_OS32
+#define WIDE_FIRMWARE 0x1
+#define NARROW_FIRMWARE 0x2
 
-/* Firmware needs to be initially set to narrow to determine the
+/* Firmware needs to be initially set to narrow to determine the 
  * actual firmware width. */
-int parisc_narrow_firmware __ro_after_init = NARROW_FIRMWARE;
+int parisc_narrow_firmware __ro_after_init = 2;
 #endif
 
 /* On most currently-supported platforms, IODC I/O calls are 32-bit calls
@@ -166,10 +166,10 @@ void set_firmware_width_unlocked(void)
 	if (pdc_result[0] != NARROW_FIRMWARE)
 		parisc_narrow_firmware = 0;
 }
-
+	
 /**
  * set_firmware_width - Determine if the firmware is wide or narrow.
- *
+ * 
  * This function must be called before any pdc_* function that uses the
  * convert_to_wide function.
  */
@@ -178,7 +178,7 @@ void set_firmware_width(void)
 	unsigned long flags;
 
 	/* already initialized? */
-	if (parisc_narrow_firmware != NARROW_FIRMWARE)
+	if (parisc_narrow_firmware != 2)
 		return;
 
 	spin_lock_irqsave(&pdc_lock, flags);
@@ -334,7 +334,7 @@ int __pdc_cpu_rendezvous(void)
 /**
  * pdc_cpu_rendezvous_lock - Lock PDC while transitioning to rendezvous state
  */
-void pdc_cpu_rendezvous_lock(void) __acquires(&pdc_lock)
+void pdc_cpu_rendezvous_lock(void)
 {
 	spin_lock(&pdc_lock);
 }
@@ -342,7 +342,7 @@ void pdc_cpu_rendezvous_lock(void) __acquires(&pdc_lock)
 /**
  * pdc_cpu_rendezvous_unlock - Unlock PDC after reaching rendezvous state
  */
-void pdc_cpu_rendezvous_unlock(void) __releases(&pdc_lock)
+void pdc_cpu_rendezvous_unlock(void)
 {
 	spin_unlock(&pdc_lock);
 }
@@ -687,6 +687,7 @@ int pdc_spaceid_bits(unsigned long *space_bits)
 	return retval;
 }
 
+#ifndef CONFIG_PA20
 /**
  * pdc_btlb_info - Return block TLB information.
  * @btlb: The return buffer.
@@ -695,51 +696,18 @@ int pdc_spaceid_bits(unsigned long *space_bits)
  */
 int pdc_btlb_info(struct pdc_btlb_info *btlb) 
 {
-	int retval;
+        int retval;
 	unsigned long flags;
 
-	if (IS_ENABLED(CONFIG_PA20))
-		return PDC_BAD_PROC;
+        spin_lock_irqsave(&pdc_lock, flags);
+        retval = mem_pdc_call(PDC_BLOCK_TLB, PDC_BTLB_INFO, __pa(pdc_result), 0);
+        memcpy(btlb, pdc_result, sizeof(*btlb));
+        spin_unlock_irqrestore(&pdc_lock, flags);
 
-	spin_lock_irqsave(&pdc_lock, flags);
-	retval = mem_pdc_call(PDC_BLOCK_TLB, PDC_BTLB_INFO, __pa(pdc_result), 0);
-	memcpy(btlb, pdc_result, sizeof(*btlb));
-	spin_unlock_irqrestore(&pdc_lock, flags);
-
-	if(retval < 0) {
-		btlb->max_size = 0;
-	}
-	return retval;
-}
-
-int pdc_btlb_insert(unsigned long long vpage, unsigned long physpage, unsigned long len,
-		    unsigned long entry_info, unsigned long slot)
-{
-	int retval;
-	unsigned long flags;
-
-	if (IS_ENABLED(CONFIG_PA20))
-		return PDC_BAD_PROC;
-
-	spin_lock_irqsave(&pdc_lock, flags);
-	retval = mem_pdc_call(PDC_BLOCK_TLB, PDC_BTLB_INSERT, (unsigned long) (vpage >> 32),
-			      (unsigned long) vpage, physpage, len, entry_info, slot);
-	spin_unlock_irqrestore(&pdc_lock, flags);
-	return retval;
-}
-
-int pdc_btlb_purge_all(void)
-{
-	int retval;
-	unsigned long flags;
-
-	if (IS_ENABLED(CONFIG_PA20))
-		return PDC_BAD_PROC;
-
-	spin_lock_irqsave(&pdc_lock, flags);
-	retval = mem_pdc_call(PDC_BLOCK_TLB, PDC_BTLB_PURGE_ALL);
-	spin_unlock_irqrestore(&pdc_lock, flags);
-	return retval;
+        if(retval < 0) {
+                btlb->max_size = 0;
+        }
+        return retval;
 }
 
 /**
@@ -760,9 +728,6 @@ int pdc_mem_map_hpa(struct pdc_memory_map *address,
         int retval;
 	unsigned long flags;
 
-	if (IS_ENABLED(CONFIG_PA20))
-		return PDC_BAD_PROC;
-
         spin_lock_irqsave(&pdc_lock, flags);
         memcpy(pdc_result2, mod_path, sizeof(*mod_path));
         retval = mem_pdc_call(PDC_MEM_MAP, PDC_MEM_MAP_HPA, __pa(pdc_result),
@@ -772,6 +737,7 @@ int pdc_mem_map_hpa(struct pdc_memory_map *address,
 
         return retval;
 }
+#endif	/* !CONFIG_PA20 */
 
 /**
  * pdc_lan_station_id - Get the LAN address.

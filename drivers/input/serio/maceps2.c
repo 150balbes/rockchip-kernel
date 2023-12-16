@@ -148,10 +148,12 @@ static int maceps2_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void maceps2_remove(struct platform_device *dev)
+static int maceps2_remove(struct platform_device *dev)
 {
 	serio_unregister_port(maceps2_port[0]);
 	serio_unregister_port(maceps2_port[1]);
+
+	return 0;
 }
 
 static struct platform_driver maceps2_driver = {
@@ -159,7 +161,7 @@ static struct platform_driver maceps2_driver = {
 		.name	= "maceps2",
 	},
 	.probe		= maceps2_probe,
-	.remove_new	= maceps2_remove,
+	.remove		= maceps2_remove,
 };
 
 static int __init maceps2_init(void)

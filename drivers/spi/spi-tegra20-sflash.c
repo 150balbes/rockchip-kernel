@@ -455,11 +455,7 @@ static int tegra_sflash_probe(struct platform_device *pdev)
 		goto exit_free_master;
 	}
 
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
-		goto exit_free_master;
-	tsd->irq = ret;
-
+	tsd->irq = platform_get_irq(pdev, 0);
 	ret = request_irq(tsd->irq, tegra_sflash_isr, 0,
 			dev_name(&pdev->dev), tsd);
 	if (ret < 0) {

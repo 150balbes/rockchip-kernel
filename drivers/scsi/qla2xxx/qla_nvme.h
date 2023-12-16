@@ -21,7 +21,6 @@
 #define Q2T_NVME_NUM_TAGS 2048
 #define QLA_MAX_FC_SEGMENTS 64
 
-struct qla_nvme_unsol_ctx;
 struct scsi_qla_host;
 struct qla_hw_data;
 struct req_que;
@@ -38,7 +37,6 @@ struct nvme_private {
 
 struct qla_nvme_rport {
 	struct fc_port *fcport;
-	struct qla_nvme_unsol_ctx *uctx;
 };
 
 #define COMMAND_NVME    0x88            /* Command Type FC-NVMe IOCB */
@@ -76,9 +74,6 @@ struct cmd_nvme {
 
 	struct dsd64 nvme_dsd;
 };
-
-#define PURLS_MSLEEP_INTERVAL	1
-#define PURLS_RETRY_COUNT	5
 
 #define PT_LS4_REQUEST 0x89	/* Link Service pass-through IOCB (request) */
 struct pt_ls4_request {
@@ -123,19 +118,21 @@ struct pt_ls4_rx_unsol {
 	__le32	exchange_address;
 	uint8_t d_id[3];
 	uint8_t r_ctl;
-	le_id_t s_id;
+	be_id_t s_id;
 	uint8_t cs_ctl;
 	uint8_t f_ctl[3];
 	uint8_t type;
 	__le16	seq_cnt;
 	uint8_t df_ctl;
 	uint8_t seq_id;
-	__le16 rx_id;
-	__le16 ox_id;
-	__le32  desc0;
+	__le16	rx_id;
+	__le16	ox_id;
+	__le32	param;
+	__le32	desc0;
 #define PT_LS4_PAYLOAD_OFFSET 0x2c
 #define PT_LS4_FIRST_PACKET_LEN 20
-	__le32 payload[5];
+	__le32	desc_len;
+	__le32	payload[3];
 };
 
 /*

@@ -41,10 +41,6 @@ static void run_test(__u32 input_retval, __u16 want_side_effect, __s16 want_ret)
 	ASSERT_EQ(skel->bss->fexit_result, 1, "modify_return fexit_result");
 	ASSERT_EQ(skel->bss->fmod_ret_result, 1, "modify_return fmod_ret_result");
 
-	ASSERT_EQ(skel->bss->fentry_result2, 1, "modify_return fentry_result2");
-	ASSERT_EQ(skel->bss->fexit_result2, 1, "modify_return fexit_result2");
-	ASSERT_EQ(skel->bss->fmod_ret_result2, 1, "modify_return fmod_ret_result2");
-
 cleanup:
 	modify_return__destroy(skel);
 }
@@ -53,9 +49,9 @@ cleanup:
 void serial_test_modify_return(void)
 {
 	run_test(0 /* input_retval */,
-		 2 /* want_side_effect */,
-		 33 /* want_ret */);
+		 1 /* want_side_effect */,
+		 4 /* want_ret */);
 	run_test(-EINVAL /* input_retval */,
 		 0 /* want_side_effect */,
-		 -EINVAL * 2 /* want_ret */);
+		 -EINVAL /* want_ret */);
 }

@@ -403,6 +403,7 @@ static struct mhi_driver mhi_net_driver = {
 	.id_table = mhi_net_id_table,
 	.driver = {
 		.name = "mhi_net",
+		.owner = THIS_MODULE,
 	},
 };
 

@@ -1004,7 +1004,7 @@ static DEVICE_ATTR(boot_mode, S_IRUGO, raydium_i2c_boot_mode_show, NULL);
 static DEVICE_ATTR(update_fw, S_IWUSR, NULL, raydium_i2c_update_fw_store);
 static DEVICE_ATTR(calibrate, S_IWUSR, NULL, raydium_i2c_calibrate_store);
 
-static struct attribute *raydium_i2c_attrs[] = {
+static struct attribute *raydium_i2c_attributes[] = {
 	&dev_attr_update_fw.attr,
 	&dev_attr_boot_mode.attr,
 	&dev_attr_fw_version.attr,
@@ -1012,7 +1012,10 @@ static struct attribute *raydium_i2c_attrs[] = {
 	&dev_attr_calibrate.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(raydium_i2c);
+
+static const struct attribute_group raydium_i2c_attribute_group = {
+	.attrs = raydium_i2c_attributes,
+};
 
 static int raydium_i2c_power_on(struct raydium_data *ts)
 {
@@ -1084,20 +1087,32 @@ static int raydium_i2c_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, ts);
 
 	ts->avdd = devm_regulator_get(&client->dev, "avdd");
-	if (IS_ERR(ts->avdd))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->avdd),
-				     "Failed to get 'avdd' regulator\n");
+	if (IS_ERR(ts->avdd)) {
+		error = PTR_ERR(ts->avdd);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"Failed to get 'avdd' regulator: %d\n", error);
+		return error;
+	}
 
 	ts->vccio = devm_regulator_get(&client->dev, "vccio");
-	if (IS_ERR(ts->vccio))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->vccio),
-				     "Failed to get 'vccio' regulator\n");
+	if (IS_ERR(ts->vccio)) {
+		error = PTR_ERR(ts->vccio);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"Failed to get 'vccio' regulator: %d\n", error);
+		return error;
+	}
 
 	ts->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
 						 GPIOD_OUT_LOW);
-	if (IS_ERR(ts->reset_gpio))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->reset_gpio),
-				     "Failed to get reset gpio\n");
+	if (IS_ERR(ts->reset_gpio)) {
+		error = PTR_ERR(ts->reset_gpio);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"failed to get reset gpio: %d\n", error);
+		return error;
+	}
 
 	error = raydium_i2c_power_on(ts);
 	if (error)
@@ -1168,6 +1183,14 @@ static int raydium_i2c_probe(struct i2c_client *client)
 					  IRQF_ONESHOT, client->name, ts);
 	if (error) {
 		dev_err(&client->dev, "Failed to register interrupt\n");
+		return error;
+	}
+
+	error = devm_device_add_group(&client->dev,
+				   &raydium_i2c_attribute_group);
+	if (error) {
+		dev_err(&client->dev, "failed to create sysfs attributes: %d\n",
+			error);
 		return error;
 	}
 
@@ -1254,7 +1277,6 @@ static struct i2c_driver raydium_i2c_driver = {
 	.id_table = raydium_i2c_id,
 	.driver = {
 		.name = "raydium_ts",
-		.dev_groups = raydium_i2c_groups,
 		.pm = pm_sleep_ptr(&raydium_i2c_pm_ops),
 		.acpi_match_table = ACPI_PTR(raydium_acpi_id),
 		.of_match_table = of_match_ptr(raydium_of_match),

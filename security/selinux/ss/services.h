@@ -2,7 +2,7 @@
 /*
  * Implementation of the security services.
  *
- * Author : Stephen Smalley, <stephen.smalley.work@gmail.com>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  */
 #ifndef _SS_SERVICES_H_
 #define _SS_SERVICES_H_
@@ -12,7 +12,7 @@
 /* Mapping for a single class */
 struct selinux_mapping {
 	u16 value; /* policy value for class */
-	u16 num_perms; /* number of permissions in class */
+	unsigned int num_perms; /* number of permissions in class */
 	u32 perms[sizeof(u32) * 8]; /* policy values for permissions */
 };
 

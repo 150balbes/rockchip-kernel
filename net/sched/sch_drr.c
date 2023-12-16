@@ -17,6 +17,7 @@
 
 struct drr_class {
 	struct Qdisc_class_common	common;
+	unsigned int			filter_cnt;
 
 	struct gnet_stats_basic_sync		bstats;
 	struct gnet_stats_queue		qstats;
@@ -149,10 +150,8 @@ static int drr_delete_class(struct Qdisc *sch, unsigned long arg,
 	struct drr_sched *q = qdisc_priv(sch);
 	struct drr_class *cl = (struct drr_class *)arg;
 
-	if (qdisc_class_in_use(&cl->common)) {
-		NL_SET_ERR_MSG(extack, "DRR class is in use");
+	if (cl->filter_cnt > 0)
 		return -EBUSY;
-	}
 
 	sch_tree_lock(sch);
 
@@ -188,8 +187,8 @@ static unsigned long drr_bind_tcf(struct Qdisc *sch, unsigned long parent,
 {
 	struct drr_class *cl = drr_find_class(sch, classid);
 
-	if (cl)
-		qdisc_class_get(&cl->common);
+	if (cl != NULL)
+		cl->filter_cnt++;
 
 	return (unsigned long)cl;
 }
@@ -198,7 +197,7 @@ static void drr_unbind_tcf(struct Qdisc *sch, unsigned long arg)
 {
 	struct drr_class *cl = (struct drr_class *)arg;
 
-	qdisc_class_put(&cl->common);
+	cl->filter_cnt--;
 }
 
 static int drr_graft_class(struct Qdisc *sch, unsigned long arg,
@@ -495,4 +494,3 @@ static void __exit drr_exit(void)
 module_init(drr_init);
 module_exit(drr_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Deficit Round Robin scheduler");

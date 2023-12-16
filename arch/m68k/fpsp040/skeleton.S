@@ -499,13 +499,13 @@ in_ea:
 	dbf	%d0,morein
 	rts
 
-	.section .fixup,"ax"
+	.section .fixup,#alloc,#execinstr
 	.even
 1:
 	jbsr	fpsp040_die
 	jbra	.Lnotkern
 
-	.section __ex_table,"a"
+	.section __ex_table,#alloc
 	.align	4
 
 	.long	in_ea,1b

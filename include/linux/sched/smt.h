@@ -17,4 +17,4 @@ static inline bool sched_smt_active(void) { return false; }
 
 void arch_smt_update(void);
 
-#endif /* _LINUX_SCHED_SMT_H */
+#endif

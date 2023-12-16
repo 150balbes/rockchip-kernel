@@ -14,15 +14,12 @@
 #include <linux/kernel.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/suspend.h>
 #include <linux/slab.h>
 
-#include "mailbox.h"
-
-#define IMX_MU_CHANS		24
+#define IMX_MU_CHANS		17
 /* TX0/RX0/RXDB[0-3] */
 #define IMX_MU_SCU_CHANS	6
 /* TX0/RX0 */
@@ -41,7 +38,6 @@ enum imx_mu_chan_type {
 	IMX_MU_TYPE_TXDB	= 2, /* Tx doorbell */
 	IMX_MU_TYPE_RXDB	= 3, /* Rx doorbell */
 	IMX_MU_TYPE_RST		= 4, /* Reset */
-	IMX_MU_TYPE_TXDB_V2	= 5, /* Tx doorbell with S/W ACK */
 };
 
 enum imx_mu_xcr {
@@ -228,9 +224,6 @@ static int imx_mu_generic_tx(struct imx_mu_priv *priv,
 	case IMX_MU_TYPE_TXDB:
 		imx_mu_xcr_rmw(priv, IMX_MU_GCR, IMX_MU_xCR_GIRn(priv->dcfg->type, cp->idx), 0);
 		tasklet_schedule(&cp->txdb_tasklet);
-		break;
-	case IMX_MU_TYPE_TXDB_V2:
-		imx_mu_xcr_rmw(priv, IMX_MU_GCR, IMX_MU_xCR_GIRn(priv->dcfg->type, cp->idx), 0);
 		break;
 	default:
 		dev_warn_ratelimited(priv->dev, "Send data on wrong channel type: %d\n", cp->type);
@@ -560,9 +553,6 @@ static int imx_mu_startup(struct mbox_chan *chan)
 	int ret;
 
 	pm_runtime_get_sync(priv->dev);
-	if (cp->type == IMX_MU_TYPE_TXDB_V2)
-		return 0;
-
 	if (cp->type == IMX_MU_TYPE_TXDB) {
 		/* Tx doorbell don't have ACK support */
 		tasklet_init(&cp->txdb_tasklet, imx_mu_txdb_tasklet,
@@ -603,11 +593,6 @@ static void imx_mu_shutdown(struct mbox_chan *chan)
 	struct imx_mu_con_priv *cp = chan->con_priv;
 	int ret;
 	u32 sr;
-
-	if (cp->type == IMX_MU_TYPE_TXDB_V2) {
-		pm_runtime_put_sync(priv->dev);
-		return;
-	}
 
 	if (cp->type == IMX_MU_TYPE_TXDB) {
 		tasklet_kill(&cp->txdb_tasklet);
@@ -685,7 +670,6 @@ static struct mbox_chan *imx_mu_specific_xlate(struct mbox_controller *mbox,
 static struct mbox_chan * imx_mu_xlate(struct mbox_controller *mbox,
 				       const struct of_phandle_args *sp)
 {
-	struct mbox_chan *p_chan;
 	u32 type, idx, chan;
 
 	if (sp->args_count != 2) {
@@ -695,25 +679,14 @@ static struct mbox_chan * imx_mu_xlate(struct mbox_controller *mbox,
 
 	type = sp->args[0]; /* channel type */
 	idx = sp->args[1]; /* index */
-
-	/* RST only supports 1 channel */
-	if ((type == IMX_MU_TYPE_RST) && idx) {
-		dev_err(mbox->dev, "Invalid RST channel %d\n", idx);
-		return ERR_PTR(-EINVAL);
-	}
-
 	chan = type * 4 + idx;
+
 	if (chan >= mbox->num_chans) {
 		dev_err(mbox->dev, "Not supported channel number: %d. (type: %d, idx: %d)\n", chan, type, idx);
 		return ERR_PTR(-EINVAL);
 	}
 
-	p_chan = &mbox->chans[chan];
-
-	if (type == IMX_MU_TYPE_TXDB_V2)
-		p_chan->txdone_method = TXDONE_BY_ACK;
-
-	return p_chan;
+	return &mbox->chans[chan];
 }
 
 static struct mbox_chan *imx_mu_seco_xlate(struct mbox_controller *mbox,

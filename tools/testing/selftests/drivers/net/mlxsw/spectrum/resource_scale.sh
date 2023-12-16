@@ -30,7 +30,6 @@ ALL_TESTS="
 	port
 	rif_mac_profile
 	rif_counter
-	port_range
 "
 
 for current_test in ${TESTS:-$ALL_TESTS}; do

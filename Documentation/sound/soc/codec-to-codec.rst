@@ -70,8 +70,7 @@ file:
     .dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
             | SND_SOC_DAIFMT_CBM_CFM,
     .ignore_suspend = 1,
-    .c2c_params = &dsp_codec_params,
-    .num_c2c_params = 1,
+    .params = &dsp_codec_params,
  },
  {
     .name = "DSP-CODEC",
@@ -82,13 +81,12 @@ file:
     .dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
             | SND_SOC_DAIFMT_CBM_CFM,
     .ignore_suspend = 1,
-    .c2c_params = &dsp_codec_params,
-    .num_c2c_params = 1,
+    .params = &dsp_codec_params,
  },
 
 Above code snippet is motivated from sound/soc/samsung/speyside.c.
 
-Note the "c2c_params" callback which lets the dapm know that this
+Note the "params" callback which lets the dapm know that this
 dai_link is a codec to codec connection.
 
 In dapm core a route is created between cpu_dai playback widget

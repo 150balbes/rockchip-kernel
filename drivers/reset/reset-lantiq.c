@@ -173,6 +173,7 @@ static int lantiq_rcu_reset_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	priv->dev = &pdev->dev;
+	platform_set_drvdata(pdev, priv);
 
 	err = lantiq_rcu_reset_of_parse(pdev, priv);
 	if (err)

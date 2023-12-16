@@ -154,7 +154,7 @@ static int  amdgpu_debugfs_process_reg_op(bool read, struct file *f,
 		} else {
 			r = get_user(value, (uint32_t *)buf);
 			if (!r)
-				amdgpu_mm_wreg_mmio_rlc(adev, *pos >> 2, value, 0);
+				amdgpu_mm_wreg_mmio_rlc(adev, *pos >> 2, value);
 		}
 		if (r) {
 			result = r;
@@ -283,7 +283,7 @@ static ssize_t amdgpu_debugfs_regs2_op(struct file *f, char __user *buf, u32 off
 		} else {
 			r = get_user(value, (uint32_t *)buf);
 			if (!r)
-				amdgpu_mm_wreg_mmio_rlc(adev, offset >> 2, value, rd->id.xcc_id);
+				amdgpu_mm_wreg_mmio_rlc(adev, offset >> 2, value);
 		}
 		if (r) {
 			result = r;
@@ -375,7 +375,7 @@ static int amdgpu_debugfs_gprwave_open(struct inode *inode, struct file *file)
 {
 	struct amdgpu_debugfs_gprwave_data *rd;
 
-	rd = kzalloc(sizeof(*rd), GFP_KERNEL);
+	rd = kzalloc(sizeof *rd, GFP_KERNEL);
 	if (!rd)
 		return -ENOMEM;
 	rd->adev = file_inode(file)->i_private;
@@ -388,7 +388,6 @@ static int amdgpu_debugfs_gprwave_open(struct inode *inode, struct file *file)
 static int amdgpu_debugfs_gprwave_release(struct inode *inode, struct file *file)
 {
 	struct amdgpu_debugfs_gprwave_data *rd = file->private_data;
-
 	mutex_destroy(&rd->lock);
 	kfree(file->private_data);
 	return 0;
@@ -748,9 +747,6 @@ static ssize_t amdgpu_debugfs_regs_smc_read(struct file *f, char __user *buf,
 	ssize_t result = 0;
 	int r;
 
-	if (!adev->smc_rreg)
-		return -EPERM;
-
 	if (size & 0x3 || *pos & 0x3)
 		return -EINVAL;
 
@@ -806,9 +802,6 @@ static ssize_t amdgpu_debugfs_regs_smc_write(struct file *f, const char __user *
 	struct amdgpu_device *adev = file_inode(f)->i_private;
 	ssize_t result = 0;
 	int r;
-
-	if (!adev->smc_wreg)
-		return -EPERM;
 
 	if (size & 0x3 || *pos & 0x3)
 		return -EINVAL;
@@ -1665,9 +1658,9 @@ static int amdgpu_debugfs_test_ib_show(struct seq_file *m, void *unused)
 	for (i = 0; i < AMDGPU_MAX_RINGS; i++) {
 		struct amdgpu_ring *ring = adev->rings[i];
 
-		if (!ring || !drm_sched_wqueue_ready(&ring->sched))
+		if (!ring || !drm_sched_submit_ready(&ring->sched))
 			continue;
-		drm_sched_wqueue_stop(&ring->sched);
+		drm_sched_submit_stop(&ring->sched);
 	}
 
 	seq_puts(m, "run ib test:\n");
@@ -1681,9 +1674,9 @@ static int amdgpu_debugfs_test_ib_show(struct seq_file *m, void *unused)
 	for (i = 0; i < AMDGPU_MAX_RINGS; i++) {
 		struct amdgpu_ring *ring = adev->rings[i];
 
-		if (!ring || !drm_sched_wqueue_ready(&ring->sched))
+		if (!ring || !drm_sched_submit_ready(&ring->sched))
 			continue;
-		drm_sched_wqueue_start(&ring->sched);
+		drm_sched_submit_start(&ring->sched);
 	}
 
 	up_write(&adev->reset_domain->sem);
@@ -1904,7 +1897,7 @@ static int amdgpu_debugfs_ib_preempt(void *data, u64 val)
 	ring = adev->rings[val];
 
 	if (!ring || !ring->funcs->preempt_ib ||
-	    !drm_sched_wqueue_ready(&ring->sched))
+	    !drm_sched_submit_ready(&ring->sched))
 		return -EINVAL;
 
 	/* the last preemption failed */
@@ -1922,7 +1915,7 @@ static int amdgpu_debugfs_ib_preempt(void *data, u64 val)
 		goto pro_end;
 
 	/* stop the scheduler */
-	drm_sched_wqueue_stop(&ring->sched);
+	drm_sched_submit_stop(&ring->sched);
 
 	/* preempt the IB */
 	r = amdgpu_ring_preempt_ib(ring);
@@ -1956,7 +1949,7 @@ static int amdgpu_debugfs_ib_preempt(void *data, u64 val)
 
 failure:
 	/* restart the scheduler */
-	drm_sched_wqueue_start(&ring->sched);
+	drm_sched_submit_start(&ring->sched);
 
 	up_read(&adev->reset_domain->sem);
 
@@ -2023,8 +2016,8 @@ static ssize_t amdgpu_reset_dump_register_list_read(struct file *f,
 	if (ret)
 		return ret;
 
-	for (i = 0; i < adev->reset_info.num_regs; i++) {
-		sprintf(reg_offset, "0x%x\n", adev->reset_info.reset_dump_reg_list[i]);
+	for (i = 0; i < adev->num_regs; i++) {
+		sprintf(reg_offset, "0x%x\n", adev->reset_dump_reg_list[i]);
 		up_read(&adev->reset_domain->sem);
 		if (copy_to_user(buf + len, reg_offset, strlen(reg_offset)))
 			return -EFAULT;
@@ -2081,9 +2074,9 @@ static ssize_t amdgpu_reset_dump_register_list_write(struct file *f,
 	if (ret)
 		goto error_free;
 
-	swap(adev->reset_info.reset_dump_reg_list, tmp);
-	swap(adev->reset_info.reset_dump_reg_value, new);
-	adev->reset_info.num_regs = i;
+	swap(adev->reset_dump_reg_list, tmp);
+	swap(adev->reset_dump_reg_value, new);
+	adev->num_regs = i;
 	up_write(&adev->reset_domain->sem);
 	ret = size;
 

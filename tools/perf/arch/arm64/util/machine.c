@@ -6,7 +6,6 @@
 #include "debug.h"
 #include "symbol.h"
 #include "callchain.h"
-#include "perf_regs.h"
 #include "record.h"
 #include "util/perf_regs.h"
 

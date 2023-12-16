@@ -1687,11 +1687,10 @@ clean_up:
 
 /*-------------------------------------------------------------------------*/
 static struct platform_driver m66592_driver = {
-	.probe =	m66592_probe,
 	.remove_new =	m66592_remove,
 	.driver		= {
 		.name =	udc_name,
 	},
 };
 
-module_platform_driver(m66592_driver);
+module_platform_driver_probe(m66592_driver, m66592_probe);

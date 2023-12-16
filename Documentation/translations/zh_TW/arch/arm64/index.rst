@@ -4,7 +4,7 @@
 
 :Original: :ref:`Documentation/arch/arm64/index.rst <arm64_index>`
 :Translator: Bailu Lin <bailu.lin@vivo.com>
-             Hu Haowen <src.res.211@gmail.com>
+             Hu Haowen <src.res@email.cn>
 
 .. _tw_arm64_index:
 

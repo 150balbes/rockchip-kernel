@@ -57,7 +57,6 @@ struct xprt_class;
 struct seq_file;
 struct svc_serv;
 struct net;
-#include <linux/lwq.h>
 
 /*
  * This describes a complete RPC request
@@ -122,7 +121,7 @@ struct rpc_rqst {
 	int			rq_ntrans;
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
-	struct lwq_node		rq_bc_list;	/* Callback service list */
+	struct list_head	rq_bc_list;	/* Callback service list */
 	unsigned long		rq_bc_pa_state;	/* Backchannel prealloc state */
 	struct list_head	rq_bc_pa_list;	/* Backchannel prealloc list */
 #endif /* CONFIG_SUNRPC_BACKCHANEL */
@@ -352,8 +351,6 @@ struct xprt_create {
 	struct rpc_xprt_switch	*bc_xps;
 	unsigned int		flags;
 	struct xprtsec_parms	xprtsec;
-	unsigned long		connect_timeout;
-	unsigned long		reconnect_timeout;
 };
 
 struct xprt_class {

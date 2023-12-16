@@ -96,4 +96,3 @@ module_exit(exit_rc_map_winfast)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("Leadtek Winfast remote controller keytable");

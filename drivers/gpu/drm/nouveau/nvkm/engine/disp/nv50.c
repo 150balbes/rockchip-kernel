@@ -1504,7 +1504,7 @@ nv50_disp_intr(struct nvkm_disp *disp)
 }
 
 void
-nv50_disp_fini(struct nvkm_disp *disp, bool suspend)
+nv50_disp_fini(struct nvkm_disp *disp)
 {
 	struct nvkm_device *device = disp->engine.subdev.device;
 	/* disable all interrupts */

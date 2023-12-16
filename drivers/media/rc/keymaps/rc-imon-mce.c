@@ -137,4 +137,3 @@ module_exit(exit_rc_map_imon_mce)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jarod Wilson <jarod@redhat.com>");
-MODULE_DESCRIPTION("iMON MCE remote controller keytable");

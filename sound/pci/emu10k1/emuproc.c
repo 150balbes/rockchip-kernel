@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
- *                   Lee Revell <rlrevell@joe-job.com>
- *                   James Courtier-Dutton <James@superbug.co.uk>
- *                   Oswald Buddenhagen <oswald.buddenhagen@gmx.de>
  *                   Creative Labs, Inc.
- *
  *  Routines for control of EMU10K1 chips / proc interface routines
+ *
+ *  Copyright (c) by James Courtier-Dutton <James@superbug.co.uk>
+ *  	Added EMU 1010 support.
+ *
+ *  BUGS:
+ *    --
+ *
+ *  TODO:
+ *    --
  */
 
 #include <linux/slab.h>
@@ -531,14 +536,15 @@ static unsigned int snd_ptr_read(struct snd_emu10k1 * emu,
 				 unsigned int reg,
 				 unsigned int chn)
 {
+	unsigned long flags;
 	unsigned int regptr, val;
 
 	regptr = (reg << 16) | chn;
 
-	spin_lock_irq(&emu->emu_lock);
+	spin_lock_irqsave(&emu->emu_lock, flags);
 	outl(regptr, emu->port + iobase + PTR);
 	val = inl(emu->port + iobase + DATA);
-	spin_unlock_irq(&emu->emu_lock);
+	spin_unlock_irqrestore(&emu->emu_lock, flags);
 	return val;
 }
 
@@ -549,13 +555,14 @@ static void snd_ptr_write(struct snd_emu10k1 *emu,
 			  unsigned int data)
 {
 	unsigned int regptr;
+	unsigned long flags;
 
 	regptr = (reg << 16) | chn;
 
-	spin_lock_irq(&emu->emu_lock);
+	spin_lock_irqsave(&emu->emu_lock, flags);
 	outl(regptr, emu->port + iobase + PTR);
 	outl(data, emu->port + iobase + DATA);
-	spin_unlock_irq(&emu->emu_lock);
+	spin_unlock_irqrestore(&emu->emu_lock, flags);
 }
 
 

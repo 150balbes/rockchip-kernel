@@ -446,9 +446,7 @@ enum v4l2_subdev_pre_streamon_flags {
  * @s_stream: start (enabled == 1) or stop (enabled == 0) streaming on the
  *	sub-device. Failure on stop will remove any resources acquired in
  *	streaming start, while the error code is still returned by the driver.
- *	The caller shall track the subdev state, and shall not start or stop an
- *	already started or stopped subdev. Also see call_s_stream wrapper in
- *	v4l2-subdev.c.
+ *	Also see call_s_stream wrapper in v4l2-subdev.c.
  *
  * @g_pixelaspect: callback to return the pixelaspect ratio.
  *
@@ -824,9 +822,8 @@ struct v4l2_subdev_state {
  *		     operation shall fail if the pad index it has been called on
  *		     is not valid or in case of unrecoverable failures.
  *
- * @set_routing: Enable or disable data connection routes described in the
- *		 subdevice routing table. Subdevs that implement this operation
- *		 must set the V4L2_SUBDEV_FL_STREAMS flag.
+ * @set_routing: enable or disable data connection routes described in the
+ *		 subdevice routing table.
  *
  * @enable_streams: Enable the streams defined in streams_mask on the given
  *	source pad. Subdevs that implement this operation must use the active
@@ -951,6 +948,8 @@ struct v4l2_subdev_internal_ops {
 	void (*release)(struct v4l2_subdev *sd);
 };
 
+#define V4L2_SUBDEV_NAME_SIZE 32
+
 /* Set this flag if this subdev is a i2c device. */
 #define V4L2_SUBDEV_FL_IS_I2C			(1U << 0)
 /* Set this flag if this subdev is a spi device. */
@@ -1021,14 +1020,12 @@ struct v4l2_subdev_platform_data {
  * @dev: pointer to the physical device, if any
  * @fwnode: The fwnode_handle of the subdev, usually the same as
  *	    either dev->of_node->fwnode or dev->fwnode (whichever is non-NULL).
- * @async_list: Links this subdev to a global subdev_list or
- *		@notifier->done_list list.
- * @async_subdev_endpoint_list: List entry in async_subdev_endpoint_entry of
- *				&struct v4l2_async_subdev_endpoint.
+ * @async_list: Links this subdev to a global subdev_list or @notifier->done
+ *	list.
+ * @asd: Pointer to respective &struct v4l2_async_subdev.
+ * @notifier: Pointer to the managing notifier.
  * @subdev_notifier: A sub-device notifier implicitly registered for the sub-
  *		     device using v4l2_async_register_subdev_sensor().
- * @asc_list: Async connection list, of &struct
- *	      v4l2_async_connection.subdev_entry.
  * @pdata: common part of subdevice platform data
  * @state_lock: A pointer to a lock used for all the subdev's states, set by the
  *		driver. This is	optional. If NULL, each state instance will get
@@ -1060,7 +1057,7 @@ struct v4l2_subdev {
 	const struct v4l2_subdev_ops *ops;
 	const struct v4l2_subdev_internal_ops *internal_ops;
 	struct v4l2_ctrl_handler *ctrl_handler;
-	char name[52];
+	char name[V4L2_SUBDEV_NAME_SIZE];
 	u32 grp_id;
 	void *dev_priv;
 	void *host_priv;
@@ -1068,9 +1065,9 @@ struct v4l2_subdev {
 	struct device *dev;
 	struct fwnode_handle *fwnode;
 	struct list_head async_list;
-	struct list_head async_subdev_endpoint_list;
+	struct v4l2_async_subdev *asd;
+	struct v4l2_async_notifier *notifier;
 	struct v4l2_async_notifier *subdev_notifier;
-	struct list_head asc_list;
 	struct v4l2_subdev_platform_data *pdata;
 	struct mutex *state_lock;
 
@@ -1386,9 +1383,8 @@ int __v4l2_subdev_init_finalize(struct v4l2_subdev *sd, const char *name,
  * v4l2_subdev_cleanup() - Releases the resources allocated by the subdevice
  * @sd: The subdevice
  *
- * Clean up a V4L2 async sub-device. Must be called for a sub-device as part of
- * its release if resources have been associated with it using
- * v4l2_async_subdev_endpoint_add() or v4l2_subdev_init_finalize().
+ * This function will release the resources allocated in
+ * v4l2_subdev_init_finalize.
  */
 void v4l2_subdev_cleanup(struct v4l2_subdev *sd);
 
@@ -1536,7 +1532,7 @@ __v4l2_subdev_next_active_route(const struct v4l2_subdev_krouting *routing,
  */
 int v4l2_subdev_set_routing_with_fmt(struct v4l2_subdev *sd,
 				     struct v4l2_subdev_state *state,
-				     const struct v4l2_subdev_krouting *routing,
+				     struct v4l2_subdev_krouting *routing,
 				     const struct v4l2_mbus_framefmt *fmt);
 
 /**

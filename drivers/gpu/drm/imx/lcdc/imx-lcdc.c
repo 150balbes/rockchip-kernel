@@ -342,12 +342,21 @@ static const struct drm_mode_config_helper_funcs imx_lcdc_mode_config_helpers = 
 	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
+static void imx_lcdc_release(struct drm_device *drm)
+{
+	struct imx_lcdc *lcdc = imx_lcdc_from_drmdev(drm);
+
+	drm_kms_helper_poll_fini(drm);
+	kfree(lcdc);
+}
+
 DEFINE_DRM_GEM_DMA_FOPS(imx_lcdc_drm_fops);
 
 static struct drm_driver imx_lcdc_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops = &imx_lcdc_drm_fops,
 	DRM_GEM_DMA_DRIVER_OPS_VMAP,
+	.release = imx_lcdc_release,
 	.name = "imx-lcdc",
 	.desc = "i.MX LCDC driver",
 	.date = "20200716",
@@ -506,12 +515,14 @@ static int imx_lcdc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void imx_lcdc_remove(struct platform_device *pdev)
+static int imx_lcdc_remove(struct platform_device *pdev)
 {
 	struct drm_device *drm = platform_get_drvdata(pdev);
 
 	drm_dev_unregister(drm);
 	drm_atomic_helper_shutdown(drm);
+
+	return 0;
 }
 
 static void imx_lcdc_shutdown(struct platform_device *pdev)
@@ -525,7 +536,7 @@ static struct platform_driver imx_lcdc_driver = {
 		.of_match_table = imx_lcdc_of_dev_id,
 	},
 	.probe = imx_lcdc_probe,
-	.remove_new = imx_lcdc_remove,
+	.remove = imx_lcdc_remove,
 	.shutdown = imx_lcdc_shutdown,
 };
 module_platform_driver(imx_lcdc_driver);

@@ -566,7 +566,7 @@ static int sf_pdma_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void sf_pdma_remove(struct platform_device *pdev)
+static int sf_pdma_remove(struct platform_device *pdev)
 {
 	struct sf_pdma *pdma = platform_get_drvdata(pdev);
 	struct sf_pdma_chan *ch;
@@ -584,6 +584,8 @@ static void sf_pdma_remove(struct platform_device *pdev)
 	}
 
 	dma_async_device_unregister(&pdma->dma_dev);
+
+	return 0;
 }
 
 static const struct of_device_id sf_pdma_dt_ids[] = {
@@ -595,7 +597,7 @@ MODULE_DEVICE_TABLE(of, sf_pdma_dt_ids);
 
 static struct platform_driver sf_pdma_driver = {
 	.probe		= sf_pdma_probe,
-	.remove_new	= sf_pdma_remove,
+	.remove		= sf_pdma_remove,
 	.driver		= {
 		.name	= "sf-pdma",
 		.of_match_table = sf_pdma_dt_ids,

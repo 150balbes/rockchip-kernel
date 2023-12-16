@@ -8,6 +8,7 @@
  * Copyright 2022 Google LLC
  * Author: Vipin Sharma <vipinsh@google.com>
  */
+
 #include "kvm_util.h"
 #include "processor.h"
 #include "hyperv.h"
@@ -83,7 +84,7 @@ int main(void)
 
 	switch (get_ucall(vcpu, &uc)) {
 	case UCALL_ABORT:
-		REPORT_GUEST_ASSERT(uc);
+		REPORT_GUEST_ASSERT_2(uc, "arg1 = %ld, arg2 = %ld");
 		break;
 	case UCALL_DONE:
 		break;

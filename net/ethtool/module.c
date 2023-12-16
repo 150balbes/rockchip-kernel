@@ -38,9 +38,10 @@ static int module_get_power_mode(struct net_device *dev,
 
 static int module_prepare_data(const struct ethnl_req_info *req_base,
 			       struct ethnl_reply_data *reply_base,
-			       const struct genl_info *info)
+			       struct genl_info *info)
 {
 	struct module_reply_data *data = MODULE_REPDATA(reply_base);
+	struct netlink_ext_ack *extack = info ? info->extack : NULL;
 	struct net_device *dev = reply_base->dev;
 	int ret;
 
@@ -48,7 +49,7 @@ static int module_prepare_data(const struct ethnl_req_info *req_base,
 	if (ret < 0)
 		return ret;
 
-	ret = module_get_power_mode(dev, data, info->extack);
+	ret = module_get_power_mode(dev, data, extack);
 	if (ret < 0)
 		goto out_complete;
 

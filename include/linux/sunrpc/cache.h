@@ -56,14 +56,10 @@ struct cache_head {
 	struct kref	ref;
 	unsigned long	flags;
 };
-
-/* cache_head.flags */
-enum {
-	CACHE_VALID,		/* Entry contains valid data */
-	CACHE_NEGATIVE,		/* Negative entry - there is no match for the key */
-	CACHE_PENDING,		/* An upcall has been sent but no reply received yet*/
-	CACHE_CLEANED,		/* Entry has been cleaned from cache */
-};
+#define	CACHE_VALID	0	/* Entry contains valid data */
+#define	CACHE_NEGATIVE	1	/* Negative entry - there is no match for the key */
+#define	CACHE_PENDING	2	/* An upcall has been sent but no reply received yet*/
+#define	CACHE_CLEANED	3	/* Entry has been cleaned from cache */
 
 #define	CACHE_NEW_EXPIRY 120	/* keep new things pending confirmation for 120 seconds */
 

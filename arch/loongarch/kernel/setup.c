@@ -16,6 +16,7 @@
 #include <linux/dmi.h>
 #include <linux/efi.h>
 #include <linux/export.h>
+#include <linux/screen_info.h>
 #include <linux/memblock.h>
 #include <linux/initrd.h>
 #include <linux/ioport.h>
@@ -55,6 +56,8 @@
 #define SMBIOS_FREQLOW_MASK		0xFF
 #define SMBIOS_CORE_PACKAGE_OFFSET	0x23
 #define LOONGSON_EFI_ENABLE		(1 << 3)
+
+struct screen_info screen_info __section(".data");
 
 unsigned long fw_arg0, fw_arg1, fw_arg2;
 DEFINE_PER_CPU(unsigned long, kernelsp);
@@ -158,19 +161,19 @@ static void __init smbios_parse(void)
 }
 
 #ifdef CONFIG_ARCH_WRITECOMBINE
-bool wc_enabled = true;
+pgprot_t pgprot_wc = PAGE_KERNEL_WUC;
 #else
-bool wc_enabled = false;
+pgprot_t pgprot_wc = PAGE_KERNEL_SUC;
 #endif
 
-EXPORT_SYMBOL(wc_enabled);
+EXPORT_SYMBOL(pgprot_wc);
 
 static int __init setup_writecombine(char *p)
 {
 	if (!strcmp(p, "on"))
-		wc_enabled = true;
+		pgprot_wc = PAGE_KERNEL_WUC;
 	else if (!strcmp(p, "off"))
-		wc_enabled = false;
+		pgprot_wc = PAGE_KERNEL_SUC;
 	else
 		pr_warn("Unknown writecombine setting \"%s\".\n", p);
 
@@ -264,9 +267,7 @@ static void __init arch_parse_crashkernel(void)
 	unsigned long long crash_base, crash_size;
 
 	total_mem = memblock_phys_mem_size();
-	ret = parse_crashkernel(boot_command_line, total_mem,
-				&crash_size, &crash_base,
-				NULL, NULL);
+	ret = parse_crashkernel(boot_command_line, total_mem, &crash_size, &crash_base);
 	if (ret < 0 || crash_size <= 0)
 		return;
 
@@ -331,24 +332,8 @@ static void __init bootcmdline_init(char **cmdline_p)
 			strlcat(boot_command_line, " ", COMMAND_LINE_SIZE);
 
 		strlcat(boot_command_line, init_command_line, COMMAND_LINE_SIZE);
-		goto out;
 	}
 #endif
-
-	/*
-	 * Append built-in command line to the bootloader command line if
-	 * CONFIG_CMDLINE_EXTEND is enabled.
-	 */
-	if (IS_ENABLED(CONFIG_CMDLINE_EXTEND) && CONFIG_CMDLINE[0]) {
-		strlcat(boot_command_line, " ", COMMAND_LINE_SIZE);
-		strlcat(boot_command_line, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
-	}
-
-	/*
-	 * Use built-in command line if the bootloader command line is empty.
-	 */
-	if (IS_ENABLED(CONFIG_CMDLINE_BOOTLOADER) && !boot_command_line[0])
-		strscpy(boot_command_line, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
 
 out:
 	*cmdline_p = boot_command_line;
@@ -625,8 +610,4 @@ void __init setup_arch(char **cmdline_p)
 #endif
 
 	paging_init();
-
-#ifdef CONFIG_KASAN
-	kasan_init();
-#endif
 }

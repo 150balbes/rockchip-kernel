@@ -937,6 +937,7 @@ static int spear_smi_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct spear_smi_plat_data *pdata = NULL;
 	struct spear_smi *dev;
+	struct resource *smi_base;
 	int irq, ret = 0;
 	int i;
 
@@ -974,7 +975,9 @@ static int spear_smi_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	dev->io_base = devm_platform_ioremap_resource(pdev, 0);
+	smi_base = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+	dev->io_base = devm_ioremap_resource(&pdev->dev, smi_base);
 	if (IS_ERR(dev->io_base)) {
 		ret = PTR_ERR(dev->io_base);
 		goto err;
@@ -993,17 +996,21 @@ static int spear_smi_probe(struct platform_device *pdev)
 		dev->num_flashes = MAX_NUM_FLASH_CHIP;
 	}
 
-	dev->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	dev->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(dev->clk)) {
 		ret = PTR_ERR(dev->clk);
 		goto err;
 	}
 
+	ret = clk_prepare_enable(dev->clk);
+	if (ret)
+		goto err;
+
 	ret = devm_request_irq(&pdev->dev, irq, spear_smi_int_handler, 0,
 			       pdev->name, dev);
 	if (ret) {
 		dev_err(&dev->pdev->dev, "SMI IRQ allocation failed\n");
-		goto err;
+		goto err_irq;
 	}
 
 	mutex_init(&dev->lock);
@@ -1016,11 +1023,14 @@ static int spear_smi_probe(struct platform_device *pdev)
 		ret = spear_smi_setup_banks(pdev, i, pdata->np[i]);
 		if (ret) {
 			dev_err(&dev->pdev->dev, "bank setup failed\n");
-			goto err;
+			goto err_irq;
 		}
 	}
 
 	return 0;
+
+err_irq:
+	clk_disable_unprepare(dev->clk);
 err:
 	return ret;
 }
@@ -1031,7 +1041,7 @@ err:
  *
  * free all allocations and delete the partitions.
  */
-static void spear_smi_remove(struct platform_device *pdev)
+static int spear_smi_remove(struct platform_device *pdev)
 {
 	struct spear_smi *dev;
 	struct spear_snor_flash *flash;
@@ -1048,6 +1058,10 @@ static void spear_smi_remove(struct platform_device *pdev)
 		/* clean up mtd stuff */
 		WARN_ON(mtd_device_unregister(&flash->mtd));
 	}
+
+	clk_disable_unprepare(dev->clk);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1093,7 +1107,7 @@ static struct platform_driver spear_smi_driver = {
 		.pm = &spear_smi_pm_ops,
 	},
 	.probe = spear_smi_probe,
-	.remove_new = spear_smi_remove,
+	.remove = spear_smi_remove,
 };
 module_platform_driver(spear_smi_driver);
 

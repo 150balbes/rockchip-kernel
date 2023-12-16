@@ -95,7 +95,7 @@ struct ec_event_queue {
 	int capacity;
 	int head;
 	int tail;
-	struct ec_event *entries[] __counted_by(capacity);
+	struct ec_event *entries[];
 };
 
 /* Maximum number of events to store in ec_event_queue */

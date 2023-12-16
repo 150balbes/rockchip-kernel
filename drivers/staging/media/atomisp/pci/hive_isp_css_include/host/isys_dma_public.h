@@ -16,6 +16,7 @@
 #ifndef __ISYS_DMA_PUBLIC_H_INCLUDED__
 #define __ISYS_DMA_PUBLIC_H_INCLUDED__
 
+#ifdef ISP2401
 
 #include "system_local.h"
 #include "type_support.h"
@@ -33,5 +34,6 @@ void isys2401_dma_set_max_burst_size(
     const isys2401_dma_ID_t dma_id,
     uint32_t		max_burst_size);
 
+#endif /* ISP2401 */
 
 #endif /* __ISYS_DMA_PUBLIC_H_INCLUDED__ */

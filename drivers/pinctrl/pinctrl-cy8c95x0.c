@@ -164,7 +164,6 @@ struct cy8c95x0_pinctrl {
 	struct pinctrl_desc pinctrl_desc;
 	char name[32];
 	unsigned int tpin;
-	struct gpio_desc *gpio_reset;
 };
 
 static const struct pinctrl_pin_desc cy8c9560_pins[] = {
@@ -554,7 +553,7 @@ out:
 
 static int cy8c95x0_gpio_direction_input(struct gpio_chip *gc, unsigned int off)
 {
-	return pinctrl_gpio_direction_input(gc, off);
+	return pinctrl_gpio_direction_input(gc->base + off);
 }
 
 static int cy8c95x0_gpio_direction_output(struct gpio_chip *gc,
@@ -571,7 +570,7 @@ static int cy8c95x0_gpio_direction_output(struct gpio_chip *gc,
 	if (ret)
 		return ret;
 
-	return pinctrl_gpio_direction_output(gc, off);
+	return pinctrl_gpio_direction_output(gc->base + off);
 }
 
 static int cy8c95x0_gpio_get_value(struct gpio_chip *gc, unsigned int off)
@@ -1346,7 +1345,9 @@ static int cy8c95x0_probe(struct i2c_client *client)
 	chip->dev = &client->dev;
 
 	/* Set the device type */
-	chip->driver_data = (uintptr_t)i2c_get_match_data(client);
+	chip->driver_data = (unsigned long)device_get_match_data(&client->dev);
+	if (!chip->driver_data)
+		chip->driver_data = i2c_match_id(cy8c95x0_id, client)->driver_data;
 	if (!chip->driver_data)
 		return -ENODEV;
 
@@ -1380,20 +1381,6 @@ static int cy8c95x0_probe(struct i2c_client *client)
 			return ret;
 		}
 		chip->regulator = reg;
-	}
-
-	/* bring the chip out of reset if reset pin is provided */
-	chip->gpio_reset = devm_gpiod_get_optional(&client->dev, "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(chip->gpio_reset)) {
-		ret = dev_err_probe(chip->dev, PTR_ERR(chip->gpio_reset),
-				    "Failed to get GPIO 'reset'\n");
-		goto err_exit;
-	} else if (chip->gpio_reset) {
-		usleep_range(1000, 2000);
-		gpiod_set_value_cansleep(chip->gpio_reset, 0);
-		usleep_range(250000, 300000);
-
-		gpiod_set_consumer_name(chip->gpio_reset, "CY8C95X0 RESET");
 	}
 
 	chip->regmap = devm_regmap_init_i2c(client, &cy8c95x0_i2c_regmap);

@@ -21,6 +21,12 @@
  * exceptions should be unmasked.
  */
 
+static __always_inline bool __irqflags_uses_pmr(void)
+{
+	return IS_ENABLED(CONFIG_ARM64_PSEUDO_NMI) &&
+	       alternative_has_cap_unlikely(ARM64_HAS_GIC_PRIO_MASKING);
+}
+
 static __always_inline void __daif_local_irq_enable(void)
 {
 	barrier();
@@ -43,7 +49,7 @@ static __always_inline void __pmr_local_irq_enable(void)
 
 static inline void arch_local_irq_enable(void)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		__pmr_local_irq_enable();
 	} else {
 		__daif_local_irq_enable();
@@ -71,7 +77,7 @@ static __always_inline void __pmr_local_irq_disable(void)
 
 static inline void arch_local_irq_disable(void)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		__pmr_local_irq_disable();
 	} else {
 		__daif_local_irq_disable();
@@ -93,7 +99,7 @@ static __always_inline unsigned long __pmr_local_save_flags(void)
  */
 static inline unsigned long arch_local_save_flags(void)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		return __pmr_local_save_flags();
 	} else {
 		return __daif_local_save_flags();
@@ -112,7 +118,7 @@ static __always_inline bool __pmr_irqs_disabled_flags(unsigned long flags)
 
 static inline bool arch_irqs_disabled_flags(unsigned long flags)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		return __pmr_irqs_disabled_flags(flags);
 	} else {
 		return __daif_irqs_disabled_flags(flags);
@@ -131,7 +137,7 @@ static __always_inline bool __pmr_irqs_disabled(void)
 
 static inline bool arch_irqs_disabled(void)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		return __pmr_irqs_disabled();
 	} else {
 		return __daif_irqs_disabled();
@@ -163,7 +169,7 @@ static __always_inline unsigned long __pmr_local_irq_save(void)
 
 static inline unsigned long arch_local_irq_save(void)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		return __pmr_local_irq_save();
 	} else {
 		return __daif_local_irq_save();
@@ -190,7 +196,7 @@ static __always_inline void __pmr_local_irq_restore(unsigned long flags)
  */
 static inline void arch_local_irq_restore(unsigned long flags)
 {
-	if (system_uses_irq_prio_masking()) {
+	if (__irqflags_uses_pmr()) {
 		__pmr_local_irq_restore(flags);
 	} else {
 		__daif_local_irq_restore(flags);

@@ -70,7 +70,7 @@
  */
 #ifdef CONFIG_X86_64
 /* PIO is a win only if write-combining is possible */
-#ifdef ioremap_wc
+#ifdef ARCH_HAS_IOREMAP_WC
 #define EFX_USE_PIO 1
 #endif
 #endif

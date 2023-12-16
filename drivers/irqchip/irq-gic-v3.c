@@ -39,7 +39,8 @@
 
 #define FLAGS_WORKAROUND_GICR_WAKER_MSM8996	(1ULL << 0)
 #define FLAGS_WORKAROUND_CAVIUM_ERRATUM_38539	(1ULL << 1)
-#define FLAGS_WORKAROUND_ASR_ERRATUM_8601001	(1ULL << 2)
+#define FLAGS_WORKAROUND_MTK_GICR_SAVE		(1ULL << 2)
+#define FLAGS_WORKAROUND_ASR_ERRATUM_8601001	(1ULL << 3)
 
 #define GIC_IRQ_TYPE_PARTITION	(GIC_IRQ_TYPE_LPI + 1)
 
@@ -68,21 +69,12 @@ struct gic_chip_data {
 static void __iomem *t241_dist_base_alias[T241_CHIPS_MAX] __read_mostly;
 static DEFINE_STATIC_KEY_FALSE(gic_nvidia_t241_erratum);
 
-static DEFINE_STATIC_KEY_FALSE(gic_arm64_2941627_erratum);
-
 static struct gic_chip_data gic_data __read_mostly;
 static DEFINE_STATIC_KEY_TRUE(supports_deactivate_key);
 
 #define GIC_ID_NR	(1U << GICD_TYPER_ID_BITS(gic_data.rdists.gicd_typer))
 #define GIC_LINE_NR	min(GICD_TYPER_SPIS(gic_data.rdists.gicd_typer), 1020U)
 #define GIC_ESPI_NR	GICD_TYPER_ESPIS(gic_data.rdists.gicd_typer)
-
-/*
- * There are 16 SGIs, though we only actually use 8 in Linux. The other 8 SGIs
- * are potentially stolen by the secure side. Some code, especially code dealing
- * with hwirq IDs, is simplified by accounting for all 16.
- */
-#define SGI_NR		16
 
 /*
  * The behaviours of RPR and PMR registers differ depending on the value of
@@ -131,8 +123,8 @@ EXPORT_SYMBOL(gic_nonsecure_priorities);
 		__priority;						\
 	})
 
-/* rdist_nmi_refs[n] == number of cpus having the rdist interrupt n set as NMI */
-static refcount_t *rdist_nmi_refs;
+/* ppi_nmi_refs[n] == number of cpus having ppi[n + 16] set as NMI */
+static refcount_t *ppi_nmi_refs;
 
 static struct gic_kvm_info gic_v3_kvm_info __initdata;
 static DEFINE_PER_CPU(bool, has_rss);
@@ -275,6 +267,17 @@ static void gic_redist_wait_for_rwp(void)
 {
 	gic_do_wait_for_rwp(gic_data_rdist_rd_base(), GICR_CTLR_RWP);
 }
+
+#ifdef CONFIG_ARM64
+
+static u64 __maybe_unused gic_read_iar(void)
+{
+	if (cpus_have_const_cap(ARM64_WORKAROUND_CAVIUM_23154))
+		return gic_read_iar_cavium_thunderx();
+	else
+		return gic_read_iar_common();
+}
+#endif
 
 static void gic_enable_redist(bool enable)
 {
@@ -514,22 +517,9 @@ static u32 __gic_get_ppi_index(irq_hw_number_t hwirq)
 	}
 }
 
-static u32 __gic_get_rdist_index(irq_hw_number_t hwirq)
+static u32 gic_get_ppi_index(struct irq_data *d)
 {
-	switch (__get_intid_range(hwirq)) {
-	case SGI_RANGE:
-	case PPI_RANGE:
-		return hwirq;
-	case EPPI_RANGE:
-		return hwirq - EPPI_BASE_INTID + 32;
-	default:
-		unreachable();
-	}
-}
-
-static u32 gic_get_rdist_index(struct irq_data *d)
-{
-	return __gic_get_rdist_index(d->hwirq);
+	return __gic_get_ppi_index(d->hwirq);
 }
 
 static int gic_irq_nmi_setup(struct irq_data *d)
@@ -553,14 +543,11 @@ static int gic_irq_nmi_setup(struct irq_data *d)
 
 	/* desc lock should already be held */
 	if (gic_irq_in_rdist(d)) {
-		u32 idx = gic_get_rdist_index(d);
+		u32 idx = gic_get_ppi_index(d);
 
-		/*
-		 * Setting up a percpu interrupt as NMI, only switch handler
-		 * for first NMI
-		 */
-		if (!refcount_inc_not_zero(&rdist_nmi_refs[idx])) {
-			refcount_set(&rdist_nmi_refs[idx], 1);
+		/* Setting up PPI as NMI, only switch handler for first NMI */
+		if (!refcount_inc_not_zero(&ppi_nmi_refs[idx])) {
+			refcount_set(&ppi_nmi_refs[idx], 1);
 			desc->handle_irq = handle_percpu_devid_fasteoi_nmi;
 		}
 	} else {
@@ -593,10 +580,10 @@ static void gic_irq_nmi_teardown(struct irq_data *d)
 
 	/* desc lock should already be held */
 	if (gic_irq_in_rdist(d)) {
-		u32 idx = gic_get_rdist_index(d);
+		u32 idx = gic_get_ppi_index(d);
 
 		/* Tearing down NMI, only switch handler for last NMI */
-		if (refcount_dec_and_test(&rdist_nmi_refs[idx]))
+		if (refcount_dec_and_test(&ppi_nmi_refs[idx]))
 			desc->handle_irq = handle_percpu_devid_irq;
 	} else {
 		desc->handle_irq = handle_fasteoi_irq;
@@ -605,39 +592,10 @@ static void gic_irq_nmi_teardown(struct irq_data *d)
 	gic_irq_set_prio(d, GICD_INT_DEF_PRI);
 }
 
-static bool gic_arm64_erratum_2941627_needed(struct irq_data *d)
-{
-	enum gic_intid_range range;
-
-	if (!static_branch_unlikely(&gic_arm64_2941627_erratum))
-		return false;
-
-	range = get_intid_range(d);
-
-	/*
-	 * The workaround is needed if the IRQ is an SPI and
-	 * the target cpu is different from the one we are
-	 * executing on.
-	 */
-	return (range == SPI_RANGE || range == ESPI_RANGE) &&
-		!cpumask_test_cpu(raw_smp_processor_id(),
-				  irq_data_get_effective_affinity_mask(d));
-}
-
 static void gic_eoi_irq(struct irq_data *d)
 {
 	write_gicreg(gic_irq(d), ICC_EOIR1_EL1);
 	isb();
-
-	if (gic_arm64_erratum_2941627_needed(d)) {
-		/*
-		 * Make sure the GIC stream deactivate packet
-		 * issued by ICC_EOIR1_EL1 has completed before
-		 * deactivating through GICD_IACTIVER.
-		 */
-		dsb(sy);
-		gic_poke_irq(d, GICD_ICACTIVER);
-	}
 }
 
 static void gic_eoimode1_eoi_irq(struct irq_data *d)
@@ -648,11 +606,7 @@ static void gic_eoimode1_eoi_irq(struct irq_data *d)
 	 */
 	if (gic_irq(d) >= 8192 || irqd_is_forwarded_to_vcpu(d))
 		return;
-
-	if (!gic_arm64_erratum_2941627_needed(d))
-		gic_write_dir(gic_irq(d));
-	else
-		gic_poke_irq(d, GICD_ICACTIVER);
+	gic_write_dir(gic_irq(d));
 }
 
 static int gic_set_type(struct irq_data *d, unsigned int type)
@@ -1290,10 +1244,10 @@ static void gic_cpu_init(void)
 	rbase = gic_data_rdist_sgi_base();
 
 	/* Configure SGIs/PPIs as non-secure Group-1 */
-	for (i = 0; i < gic_data.ppi_nr + SGI_NR; i += 32)
+	for (i = 0; i < gic_data.ppi_nr + 16; i += 32)
 		writel_relaxed(~0, rbase + GICR_IGROUPR0 + i / 8);
 
-	gic_cpu_config(rbase, gic_data.ppi_nr + SGI_NR, gic_redist_wait_for_rwp);
+	gic_cpu_config(rbase, gic_data.ppi_nr + 16, gic_redist_wait_for_rwp);
 
 	/* initialise system registers */
 	gic_cpu_sys_reg_init();
@@ -1778,6 +1732,15 @@ static bool gic_enable_quirk_msm8996(void *data)
 	return true;
 }
 
+static bool gic_enable_quirk_mtk_gicr(void *data)
+{
+	struct gic_chip_data *d = data;
+
+	d->flags |= FLAGS_WORKAROUND_MTK_GICR_SAVE;
+
+	return true;
+}
+
 static bool gic_enable_quirk_cavium_38539(void *data)
 {
 	struct gic_chip_data *d = data;
@@ -1853,20 +1816,6 @@ static bool gic_enable_quirk_asr8601(void *data)
 	return true;
 }
 
-static bool gic_enable_quirk_arm64_2941627(void *data)
-{
-	static_branch_enable(&gic_arm64_2941627_erratum);
-	return true;
-}
-
-static bool rd_set_non_coherent(void *data)
-{
-	struct gic_chip_data *d = data;
-
-	d->rdists.flags |= RDIST_FLAGS_FORCE_NON_SHAREABLE;
-	return true;
-}
-
 static const struct gic_quirk gic_quirks[] = {
 	{
 		.desc	= "GICv3: Qualcomm MSM8996 broken firmware",
@@ -1877,6 +1826,11 @@ static const struct gic_quirk gic_quirks[] = {
 		.desc	= "GICv3: ASR erratum 8601001",
 		.compatible = "asr,asr8601-gic-v3",
 		.init	= gic_enable_quirk_asr8601,
+	},
+	{
+		.desc	= "GICv3: Mediatek Chromebook GICR save problem",
+		.property = "mediatek,broken-save-restore-fw",
+		.init	= gic_enable_quirk_mtk_gicr,
 	},
 	{
 		.desc	= "GICv3: HIP06 erratum 161010803",
@@ -1910,30 +1864,6 @@ static const struct gic_quirk gic_quirks[] = {
 		.init	= gic_enable_quirk_nvidia_t241,
 	},
 	{
-		/*
-		 * GIC-700: 2941627 workaround - IP variant [0,1]
-		 *
-		 */
-		.desc	= "GICv3: ARM64 erratum 2941627",
-		.iidr	= 0x0400043b,
-		.mask	= 0xff0e0fff,
-		.init	= gic_enable_quirk_arm64_2941627,
-	},
-	{
-		/*
-		 * GIC-700: 2941627 workaround - IP variant [2]
-		 */
-		.desc	= "GICv3: ARM64 erratum 2941627",
-		.iidr	= 0x0402043b,
-		.mask	= 0xff0f0fff,
-		.init	= gic_enable_quirk_arm64_2941627,
-	},
-	{
-		.desc   = "GICv3: non-coherent attribute",
-		.property = "dma-noncoherent",
-		.init   = rd_set_non_coherent,
-	},
-	{
 	}
 };
 
@@ -1944,13 +1874,17 @@ static void gic_enable_nmi_support(void)
 	if (!gic_prio_masking_enabled())
 		return;
 
-	rdist_nmi_refs = kcalloc(gic_data.ppi_nr + SGI_NR,
-				 sizeof(*rdist_nmi_refs), GFP_KERNEL);
-	if (!rdist_nmi_refs)
+	if (gic_data.flags & FLAGS_WORKAROUND_MTK_GICR_SAVE) {
+		pr_warn("Skipping NMI enable due to firmware issues\n");
+		return;
+	}
+
+	ppi_nmi_refs = kcalloc(gic_data.ppi_nr, sizeof(*ppi_nmi_refs), GFP_KERNEL);
+	if (!ppi_nmi_refs)
 		return;
 
-	for (i = 0; i < gic_data.ppi_nr + SGI_NR; i++)
-		refcount_set(&rdist_nmi_refs[i], 0);
+	for (i = 0; i < gic_data.ppi_nr; i++)
+		refcount_set(&ppi_nmi_refs[i], 0);
 
 	pr_info("Pseudo-NMIs enabled using %s ICC_PMR_EL1 synchronisation\n",
 		gic_has_relaxed_pmr_sync() ? "relaxed" : "forced");
@@ -2067,7 +2001,6 @@ static int __init gic_init_bases(phys_addr_t dist_phys_base,
 
 	gic_dist_init();
 	gic_cpu_init();
-	gic_enable_nmi_support();
 	gic_smp_init();
 	gic_cpu_pm_init();
 
@@ -2079,6 +2012,8 @@ static int __init gic_init_bases(phys_addr_t dist_phys_base,
 		if (IS_ENABLED(CONFIG_ARM_GIC_V2M))
 			gicv2m_init(handle, gic_data.domain);
 	}
+
+	gic_enable_nmi_support();
 
 	return 0;
 
@@ -2372,7 +2307,8 @@ gic_acpi_parse_madt_gicc(union acpi_subtable_headers *header,
 	u32 size = reg == GIC_PIDR2_ARCH_GICv4 ? SZ_64K * 4 : SZ_64K * 2;
 	void __iomem *redist_base;
 
-	if (!acpi_gicc_is_usable(gicc))
+	/* GICC entry which has !ACPI_MADT_ENABLED is not unusable so skip */
+	if (!(gicc->flags & ACPI_MADT_ENABLED))
 		return 0;
 
 	redist_base = ioremap(gicc->gicr_base_address, size);
@@ -2422,7 +2358,7 @@ static int __init gic_acpi_match_gicc(union acpi_subtable_headers *header,
 	 * If GICC is enabled and has valid gicr base address, then it means
 	 * GICR base is presented via GICC
 	 */
-	if (acpi_gicc_is_usable(gicc) && gicc->gicr_base_address) {
+	if ((gicc->flags & ACPI_MADT_ENABLED) && gicc->gicr_base_address) {
 		acpi_data.enabled_rdists++;
 		return 0;
 	}
@@ -2431,7 +2367,7 @@ static int __init gic_acpi_match_gicc(union acpi_subtable_headers *header,
 	 * It's perfectly valid firmware can pass disabled GICC entry, driver
 	 * should not treat as errors, skip the entry instead of probe fail.
 	 */
-	if (!acpi_gicc_is_usable(gicc))
+	if (!(gicc->flags & ACPI_MADT_ENABLED))
 		return 0;
 
 	return -ENODEV;
@@ -2490,7 +2426,8 @@ static int __init gic_acpi_parse_virt_madt_gicc(union acpi_subtable_headers *hea
 	int maint_irq_mode;
 	static int first_madt = true;
 
-	if (!acpi_gicc_is_usable(gicc))
+	/* Skip unusable CPUs */
+	if (!(gicc->flags & ACPI_MADT_ENABLED))
 		return 0;
 
 	maint_irq_mode = (gicc->flags & ACPI_MADT_VGIC_IRQ_MODE) ?

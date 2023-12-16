@@ -74,4 +74,3 @@ module_exit(exit_rc_map_zx_irdec)
 
 MODULE_AUTHOR("Shawn Guo <shawn.guo@linaro.org>");
 MODULE_LICENSE("GPL v2");
-MODULE_DESCRIPTION("zx-irdec remote controller keytable");

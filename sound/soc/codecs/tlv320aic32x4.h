@@ -17,8 +17,7 @@ enum aic32x4_type {
 };
 
 extern const struct regmap_config aic32x4_regmap_config;
-int aic32x4_probe(struct device *dev, struct regmap *regmap,
-		  enum aic32x4_type type);
+int aic32x4_probe(struct device *dev, struct regmap *regmap);
 void aic32x4_remove(struct device *dev);
 int aic32x4_register_clocks(struct device *dev, const char *mclk_name);
 
@@ -224,9 +223,8 @@ int aic32x4_register_clocks(struct device *dev, const char *mclk_name);
 #define AIC32X4_REFPOWERUP_120MS	0x07
 
 /* Common mask and enable for all of the dividers */
-#define AIC32X4_DIVEN			BIT(7)
-#define AIC32X4_DIV_MASK		GENMASK(6, 0)
-#define AIC32X4_DIV_MAX			128
+#define AIC32X4_DIVEN           BIT(7)
+#define AIC32X4_DIV_MASK        GENMASK(6, 0)
 
 /* Clock Limits */
 #define AIC32X4_MAX_DOSR_FREQ		6200000

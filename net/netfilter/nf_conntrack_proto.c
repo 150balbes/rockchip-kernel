@@ -699,4 +699,3 @@ MODULE_ALIAS("ip_conntrack");
 MODULE_ALIAS("nf_conntrack-" __stringify(AF_INET));
 MODULE_ALIAS("nf_conntrack-" __stringify(AF_INET6));
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("IPv4 and IPv6 connection tracking");

@@ -1,7 +1,5 @@
-.. SPDX-License-Identifier: GPL-2.0
-
-Undefined Behavior Sanitizer - UBSAN
-====================================
+The Undefined Behavior Sanitizer - UBSAN
+========================================
 
 UBSAN is a runtime undefined behaviour checker.
 

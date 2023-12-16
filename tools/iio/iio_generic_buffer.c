@@ -51,15 +51,12 @@ enum autochan {
  * Has the side effect of filling the channels[i].location values used
  * in processing the buffer output.
  **/
-static unsigned int size_from_channelarray(struct iio_channel_info *channels, int num_channels)
+static int size_from_channelarray(struct iio_channel_info *channels, int num_channels)
 {
-	unsigned int bytes = 0;
-	int i = 0, max = 0;
-	unsigned int misalignment;
+	int bytes = 0;
+	int i = 0;
 
 	while (i < num_channels) {
-		if (channels[i].bytes > max)
-			max = channels[i].bytes;
 		if (bytes % channels[i].bytes == 0)
 			channels[i].location = bytes;
 		else
@@ -69,14 +66,6 @@ static unsigned int size_from_channelarray(struct iio_channel_info *channels, in
 		bytes = channels[i].location + channels[i].bytes;
 		i++;
 	}
-	/*
-	 * We want the data in next sample to also be properly aligned so
-	 * we'll add padding at the end if needed. Adding padding only
-	 * works for channel data which size is 2^n bytes.
-	 */
-	misalignment = bytes % max;
-	if (misalignment)
-		bytes += max - misalignment;
 
 	return bytes;
 }
@@ -359,7 +348,7 @@ int main(int argc, char **argv)
 	ssize_t read_size;
 	int dev_num = -1, trig_num = -1;
 	char *buffer_access = NULL;
-	unsigned int scan_size;
+	int scan_size;
 	int noevents = 0;
 	int notrigger = 0;
 	char *dummy;
@@ -685,16 +674,7 @@ int main(int argc, char **argv)
 	}
 
 	scan_size = size_from_channelarray(channels, num_channels);
-
-	size_t total_buf_len = scan_size * buf_len;
-
-	if (scan_size > 0 && total_buf_len / scan_size != buf_len) {
-		ret = -EFAULT;
-		perror("Integer overflow happened when calculate scan_size * buf_len");
-		goto error;
-	}
-
-	data = malloc(total_buf_len);
+	data = malloc(scan_size * buf_len);
 	if (!data) {
 		ret = -ENOMEM;
 		goto error;

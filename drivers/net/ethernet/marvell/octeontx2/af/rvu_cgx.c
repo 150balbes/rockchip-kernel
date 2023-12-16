@@ -236,11 +236,6 @@ static void cgx_notify_pfs(struct cgx_link_event *event, struct rvu *rvu)
 
 	linfo = &event->link_uinfo;
 	pfmap = cgxlmac_to_pfmap(rvu, event->cgx_id, event->lmac_id);
-	if (!pfmap) {
-		dev_err(rvu->dev, "CGX port%d:%d not mapped with PF\n",
-			event->cgx_id, event->lmac_id);
-		return;
-	}
 
 	do {
 		pfid = find_first_bit(&pfmap,
@@ -350,7 +345,7 @@ int rvu_cgx_init(struct rvu *rvu)
 	rvu->cgx_cnt_max = cgx_get_cgxcnt_max();
 	if (!rvu->cgx_cnt_max) {
 		dev_info(rvu->dev, "No CGX devices found!\n");
-		return 0;
+		return -ENODEV;
 	}
 
 	rvu->cgx_idmap = devm_kzalloc(rvu->dev, rvu->cgx_cnt_max *
@@ -691,7 +686,7 @@ int rvu_mbox_handler_cgx_mac_addr_get(struct rvu *rvu,
 {
 	int pf = rvu_get_pf(req->hdr.pcifunc);
 	u8 cgx_id, lmac_id;
-	int rc = 0;
+	int rc = 0, i;
 	u64 cfg;
 
 	if (!is_cgx_config_permitted(rvu, req->hdr.pcifunc))
@@ -702,7 +697,8 @@ int rvu_mbox_handler_cgx_mac_addr_get(struct rvu *rvu,
 	rsp->hdr.rc = rc;
 	cfg = cgx_lmac_addr_get(cgx_id, lmac_id);
 	/* copy 48 bit mac address to req->mac_addr */
-	u64_to_ether_addr(cfg, rsp->mac_addr);
+	for (i = 0; i < ETH_ALEN; i++)
+		rsp->mac_addr[i] = cfg >> (ETH_ALEN - 1 - i) * 8;
 	return 0;
 }
 
@@ -756,11 +752,12 @@ static int rvu_cgx_ptp_rx_cfg(struct rvu *rvu, u16 pcifunc, bool enable)
 	if (!is_mac_feature_supported(rvu, pf, RVU_LMAC_FEAT_PTP))
 		return 0;
 
-	/* This msg is expected only from PF/VFs that are mapped to CGX/RPM LMACs,
+	/* This msg is expected only from PFs that are mapped to CGX LMACs,
 	 * if received from other PF/VF simply ACK, nothing to do.
 	 */
-	if (!is_pf_cgxmapped(rvu, pf))
-		return -EPERM;
+	if ((pcifunc & RVU_PFVF_FUNC_MASK) ||
+	    !is_pf_cgxmapped(rvu, pf))
+		return -ENODEV;
 
 	rvu_get_cgx_lmac_id(rvu->pf2cgxlmac_map[pf], &cgx_id, &lmac_id);
 	cgxd = rvu_cgx_pdata(cgx_id, rvu);

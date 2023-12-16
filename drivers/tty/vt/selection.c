@@ -376,7 +376,7 @@ int paste_selection(struct tty_struct *tty)
 {
 	struct vc_data *vc = tty->driver_data;
 	int	pasted = 0;
-	size_t count;
+	unsigned int count;
 	struct  tty_ldisc *ld;
 	DECLARE_WAITQUEUE(wait, current);
 	int ret = 0;

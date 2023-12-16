@@ -9,13 +9,12 @@
 #ifndef GPIOLIB_H
 #define GPIOLIB_H
 
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/err.h>
-#include <linux/gpio/consumer.h> /* for enum gpiod_flags */
 #include <linux/gpio/driver.h>
+#include <linux/gpio/consumer.h> /* for enum gpiod_flags */
+#include <linux/err.h>
+#include <linux/device.h>
 #include <linux/module.h>
-#include <linux/notifier.h>
+#include <linux/cdev.h>
 #include <linux/rwsem.h>
 
 #define GPIOCHIP_NAME	"gpiochip"
@@ -39,10 +38,8 @@
  * or name of the IP component in a System on Chip.
  * @data: per-instance data assigned by the driver
  * @list: links gpio_device:s together for traversal
- * @line_state_notifier: used to notify subscribers about lines being
- *                       requested, released or reconfigured
- * @device_notifier: used to notify character device wait queues about the GPIO
- *                   device being unregistered
+ * @notifier: used to notify subscribers about lines being requested, released
+ *            or reconfigured
  * @sem: protects the structure from a NULL-pointer dereference of @chip by
  *       user-space operations when the device gets unregistered during
  *       a hot-unplug event
@@ -66,8 +63,7 @@ struct gpio_device {
 	const char		*label;
 	void			*data;
 	struct list_head        list;
-	struct blocking_notifier_head line_state_notifier;
-	struct blocking_notifier_head device_notifier;
+	struct blocking_notifier_head notifier;
 	struct rw_semaphore	sem;
 
 #ifdef CONFIG_PINCTRL
@@ -84,6 +80,16 @@ struct gpio_device {
 static inline struct gpio_device *to_gpio_device(struct device *dev)
 {
 	return container_of(dev, struct gpio_device, dev);
+}
+
+static inline struct gpio_device *gpio_device_get(struct gpio_device *gdev)
+{
+	return to_gpio_device(get_device(&gdev->dev));
+}
+
+static inline void gpio_device_put(struct gpio_device *gdev)
+{
+	put_device(&gdev->dev);
 }
 
 /* gpio suffixes used for ACPI and device tree lookup */
@@ -112,6 +118,8 @@ struct gpio_array {
 	unsigned long		invert_mask[];
 };
 
+struct gpio_desc *gpiochip_get_desc(struct gpio_chip *gc, unsigned int hwnum);
+
 #define for_each_gpio_desc(gc, desc)					\
 	for (unsigned int __i = 0;					\
 	     __i < gc->ngpio && (desc = gpiochip_get_desc(gc, __i));	\
@@ -132,12 +140,9 @@ int gpiod_set_array_value_complex(bool raw, bool can_sleep,
 				  struct gpio_array *array_info,
 				  unsigned long *value_bitmap);
 
-int gpiod_set_transitory(struct gpio_desc *desc, bool transitory);
-
 extern spinlock_t gpio_lock;
 extern struct list_head gpio_devices;
 
-void gpiod_line_state_notify(struct gpio_desc *desc, unsigned long action);
 
 /**
  * struct gpio_desc - Opaque descriptor for a GPIO
@@ -212,7 +217,6 @@ int gpiod_configure_flags(struct gpio_desc *desc, const char *con_id,
 int gpio_set_debounce_timeout(struct gpio_desc *desc, unsigned int debounce);
 int gpiod_hog(struct gpio_desc *desc, const char *name,
 		unsigned long lflags, enum gpiod_flags dflags);
-int gpiochip_get_ngpios(struct gpio_chip *gc, struct device *dev);
 
 /*
  * Return the GPIO number of the passed descriptor relative to its chip

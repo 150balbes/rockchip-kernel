@@ -517,9 +517,9 @@ static const char * const pd_rev[] = {
 	((cc) == TYPEC_CC_RP_DEF || (cc) == TYPEC_CC_RP_1_5 || \
 	 (cc) == TYPEC_CC_RP_3_0)
 
-/* As long as cc is pulled up, we can consider it as sink. */
 #define tcpm_port_is_sink(port) \
-	(tcpm_cc_is_sink((port)->cc1) || tcpm_cc_is_sink((port)->cc2))
+	((tcpm_cc_is_sink((port)->cc1) && !tcpm_cc_is_sink((port)->cc2)) || \
+	 (tcpm_cc_is_sink((port)->cc2) && !tcpm_cc_is_sink((port)->cc1)))
 
 #define tcpm_cc_is_source(cc) ((cc) == TYPEC_CC_RD)
 #define tcpm_cc_is_audio(cc) ((cc) == TYPEC_CC_RA)
@@ -1625,9 +1625,6 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 			if (PD_VDO_VID(p[0]) != USB_SID_PD)
 				break;
 
-			if (IS_ERR_OR_NULL(port->partner))
-				break;
-
 			if (PD_VDO_SVDM_VER(p[0]) < svdm_version) {
 				typec_partner_set_svdm_version(port->partner,
 							       PD_VDO_SVDM_VER(p[0]));
@@ -1880,8 +1877,7 @@ static void tcpm_handle_vdm_request(struct tcpm_port *port,
 			}
 			break;
 		case ADEV_ATTENTION:
-			if (typec_altmode_attention(adev, p[1]))
-				tcpm_log(port, "typec_altmode_attention no port partner altmode");
+			typec_altmode_attention(adev, p[1]);
 			break;
 		}
 	}
@@ -2757,13 +2753,6 @@ static void tcpm_pd_ctrl_request(struct tcpm_port *port,
 			port->sink_cap_done = true;
 			tcpm_set_state(port, ready_state(port), 0);
 			break;
-		/*
-		 * Some port partners do not support GET_STATUS, avoid soft reset the link to
-		 * prevent redundant power re-negotiation
-		 */
-		case GET_STATUS_SEND:
-			tcpm_set_state(port, ready_state(port), 0);
-			break;
 		case SRC_READY:
 		case SNK_READY:
 			if (port->vdm_state > VDM_STATE_READY) {
@@ -3264,12 +3253,23 @@ static int tcpm_pd_select_pdo(struct tcpm_port *port, int *sink_pdo,
 	return ret;
 }
 
+#define min_pps_apdo_current(x, y)	\
+	min(pdo_pps_apdo_max_current(x), pdo_pps_apdo_max_current(y))
+
 static unsigned int tcpm_pd_select_pps_apdo(struct tcpm_port *port)
 {
-	unsigned int i, src_ma, max_temp_mw = 0, max_op_ma, op_mw;
-	unsigned int src_pdo = 0;
-	u32 pdo, src;
+	unsigned int i, j, max_mw = 0, max_mv = 0;
+	unsigned int min_src_mv, max_src_mv, src_ma, src_mw;
+	unsigned int min_snk_mv, max_snk_mv;
+	unsigned int max_op_mv;
+	u32 pdo, src, snk;
+	unsigned int src_pdo = 0, snk_pdo = 0;
 
+	/*
+	 * Select the source PPS APDO providing the most power while staying
+	 * within the board's limits. We skip the first PDO as this is always
+	 * 5V 3A.
+	 */
 	for (i = 1; i < port->nr_source_caps; ++i) {
 		pdo = port->source_caps[i];
 
@@ -3280,17 +3280,54 @@ static unsigned int tcpm_pd_select_pps_apdo(struct tcpm_port *port)
 				continue;
 			}
 
-			if (port->pps_data.req_out_volt > pdo_pps_apdo_max_voltage(pdo) ||
-			    port->pps_data.req_out_volt < pdo_pps_apdo_min_voltage(pdo))
-				continue;
-
+			min_src_mv = pdo_pps_apdo_min_voltage(pdo);
+			max_src_mv = pdo_pps_apdo_max_voltage(pdo);
 			src_ma = pdo_pps_apdo_max_current(pdo);
-			max_op_ma = min(src_ma, port->pps_data.req_op_curr);
-			op_mw = max_op_ma * port->pps_data.req_out_volt / 1000;
-			if (op_mw > max_temp_mw) {
-				src_pdo = i;
-				max_temp_mw = op_mw;
+			src_mw = (src_ma * max_src_mv) / 1000;
+
+			/*
+			 * Now search through the sink PDOs to find a matching
+			 * PPS APDO. Again skip the first sink PDO as this will
+			 * always be 5V 3A.
+			 */
+			for (j = 1; j < port->nr_snk_pdo; j++) {
+				pdo = port->snk_pdo[j];
+
+				switch (pdo_type(pdo)) {
+				case PDO_TYPE_APDO:
+					if (pdo_apdo_type(pdo) != APDO_TYPE_PPS) {
+						tcpm_log(port,
+							 "Not PPS APDO (sink), ignoring");
+						continue;
+					}
+
+					min_snk_mv =
+						pdo_pps_apdo_min_voltage(pdo);
+					max_snk_mv =
+						pdo_pps_apdo_max_voltage(pdo);
+					break;
+				default:
+					tcpm_log(port,
+						 "Not APDO type (sink), ignoring");
+					continue;
+				}
+
+				if (min_src_mv <= max_snk_mv &&
+				    max_src_mv >= min_snk_mv) {
+					max_op_mv = min(max_src_mv, max_snk_mv);
+					src_mw = (max_op_mv * src_ma) / 1000;
+					/* Prefer higher voltages if available */
+					if ((src_mw == max_mw &&
+					     max_op_mv > max_mv) ||
+					    src_mw > max_mw) {
+						src_pdo = i;
+						snk_pdo = j;
+						max_mw = src_mw;
+						max_mv = max_op_mv;
+					}
+				}
 			}
+
 			break;
 		default:
 			tcpm_log(port, "Not APDO type (source), ignoring");
@@ -3300,10 +3337,16 @@ static unsigned int tcpm_pd_select_pps_apdo(struct tcpm_port *port)
 
 	if (src_pdo) {
 		src = port->source_caps[src_pdo];
+		snk = port->snk_pdo[snk_pdo];
 
-		port->pps_data.req_min_volt = pdo_pps_apdo_min_voltage(src);
-		port->pps_data.req_max_volt = pdo_pps_apdo_max_voltage(src);
-		port->pps_data.req_max_curr = pdo_pps_apdo_max_current(src);
+		port->pps_data.req_min_volt = max(pdo_pps_apdo_min_voltage(src),
+						  pdo_pps_apdo_min_voltage(snk));
+		port->pps_data.req_max_volt = min(pdo_pps_apdo_max_voltage(src),
+						  pdo_pps_apdo_max_voltage(snk));
+		port->pps_data.req_max_curr = min_pps_apdo_current(src, snk);
+		port->pps_data.req_out_volt = min(port->pps_data.req_max_volt,
+						  max(port->pps_data.req_min_volt,
+						      port->pps_data.req_out_volt));
 		port->pps_data.req_op_curr = min(port->pps_data.req_max_curr,
 						 port->pps_data.req_op_curr);
 	}
@@ -3421,16 +3464,32 @@ static int tcpm_pd_send_request(struct tcpm_port *port)
 static int tcpm_pd_build_pps_request(struct tcpm_port *port, u32 *rdo)
 {
 	unsigned int out_mv, op_ma, op_mw, max_mv, max_ma, flags;
+	enum pd_pdo_type type;
 	unsigned int src_pdo_index;
+	u32 pdo;
 
 	src_pdo_index = tcpm_pd_select_pps_apdo(port);
 	if (!src_pdo_index)
 		return -EOPNOTSUPP;
 
-	max_mv = port->pps_data.req_max_volt;
-	max_ma = port->pps_data.req_max_curr;
-	out_mv = port->pps_data.req_out_volt;
-	op_ma = port->pps_data.req_op_curr;
+	pdo = port->source_caps[src_pdo_index];
+	type = pdo_type(pdo);
+
+	switch (type) {
+	case PDO_TYPE_APDO:
+		if (pdo_apdo_type(pdo) != APDO_TYPE_PPS) {
+			tcpm_log(port, "Invalid APDO selected!");
+			return -EINVAL;
+		}
+		max_mv = port->pps_data.req_max_volt;
+		max_ma = port->pps_data.req_max_curr;
+		out_mv = port->pps_data.req_out_volt;
+		op_ma = port->pps_data.req_op_curr;
+		break;
+	default:
+		tcpm_log(port, "Invalid PDO selected!");
+		return -EINVAL;
+	}
 
 	flags = RDO_USB_COMM | RDO_NO_SUSPEND;
 
@@ -3730,9 +3789,6 @@ static void tcpm_detach(struct tcpm_port *port)
 	if (tcpm_port_is_disconnected(port))
 		port->hard_reset_count = 0;
 
-	port->try_src_count = 0;
-	port->try_snk_count = 0;
-
 	if (!port->attached)
 		return;
 
@@ -3872,29 +3928,6 @@ static enum typec_cc_status tcpm_pwr_opmode_to_rp(enum typec_pwr_opmode opmode)
 	}
 }
 
-static void tcpm_set_initial_svdm_version(struct tcpm_port *port)
-{
-	switch (port->negotiated_rev) {
-	case PD_REV30:
-		break;
-	/*
-	 * 6.4.4.2.3 Structured VDM Version
-	 * 2.0 states "At this time, there is only one version (1.0) defined.
-	 * This field Shall be set to zero to indicate Version 1.0."
-	 * 3.0 states "This field Shall be set to 01b to indicate Version 2.0."
-	 * To ensure that we follow the Power Delivery revision we are currently
-	 * operating on, downgrade the SVDM version to the highest one supported
-	 * by the Power Delivery revision.
-	 */
-	case PD_REV20:
-		typec_partner_set_svdm_version(port->partner, SVDM_VER_1_0);
-		break;
-	default:
-		typec_partner_set_svdm_version(port->partner, SVDM_VER_1_0);
-		break;
-	}
-}
-
 static void run_state_machine(struct tcpm_port *port)
 {
 	int ret;
@@ -3906,8 +3939,6 @@ static void run_state_machine(struct tcpm_port *port)
 		port->potential_contaminant = ((port->enter_state == SRC_ATTACH_WAIT &&
 						port->state == SRC_UNATTACHED) ||
 					       (port->enter_state == SNK_ATTACH_WAIT &&
-						port->state == SNK_UNATTACHED) ||
-					       (port->enter_state == SNK_DEBOUNCED &&
 						port->state == SNK_UNATTACHED));
 
 	port->enter_state = port->state;
@@ -4134,12 +4165,10 @@ static void run_state_machine(struct tcpm_port *port)
 		 * For now, this driver only supports SOP for DISCOVER_IDENTITY, thus using
 		 * port->explicit_contract to decide whether to send the command.
 		 */
-		if (port->explicit_contract) {
-			tcpm_set_initial_svdm_version(port);
+		if (port->explicit_contract)
 			mod_send_discover_delayed_work(port, 0);
-		} else {
+		else
 			port->send_discover = false;
-		}
 
 		/*
 		 * 6.3.5
@@ -4272,10 +4301,7 @@ static void run_state_machine(struct tcpm_port *port)
 			if (port->slow_charger_loop && (current_lim > PD_P_SNK_STDBY_MW / 5))
 				current_lim = PD_P_SNK_STDBY_MW / 5;
 			tcpm_set_current_limit(port, current_lim, 5000);
-			/* Not sink vbus if operational current is 0mA */
-			tcpm_set_charge(port, !port->pd_supported ||
-					pdo_max_current(port->snk_pdo[0]));
-
+			tcpm_set_charge(port, true);
 			if (!port->pd_supported)
 				tcpm_set_state(port, SNK_READY, 0);
 			else
@@ -4429,12 +4455,10 @@ static void run_state_machine(struct tcpm_port *port)
 		 * For now, this driver only supports SOP for DISCOVER_IDENTITY, thus using
 		 * port->explicit_contract.
 		 */
-		if (port->explicit_contract) {
-			tcpm_set_initial_svdm_version(port);
+		if (port->explicit_contract)
 			mod_send_discover_delayed_work(port, 0);
-		} else {
+		else
 			port->send_discover = false;
-		}
 
 		power_supply_changed(port->psy);
 		break;
@@ -4558,8 +4582,7 @@ static void run_state_machine(struct tcpm_port *port)
 			tcpm_set_current_limit(port,
 					       tcpm_get_current_limit(port),
 					       5000);
-			/* Not sink vbus if operational current is 0mA */
-			tcpm_set_charge(port, !!pdo_max_current(port->snk_pdo[0]));
+			tcpm_set_charge(port, true);
 		}
 		if (port->ams == HARD_RESET)
 			tcpm_ams_finish(port);
@@ -5326,10 +5349,6 @@ static void _tcpm_pd_vbus_off(struct tcpm_port *port)
 		/* Do nothing, vbus drop expected */
 		break;
 
-	case SNK_HARD_RESET_WAIT_VBUS:
-		/* Do nothing, its OK to receive vbus off events */
-		break;
-
 	default:
 		if (port->pwr_role == TYPEC_SINK && port->attached)
 			tcpm_set_state(port, SNK_UNATTACHED, tcpm_wait_for_discharge(port));
@@ -5376,9 +5395,6 @@ static void _tcpm_pd_vbus_vsafe0v(struct tcpm_port *port)
 	case SNK_DEBOUNCED:
 		/*Do nothing, still waiting for VSAFE5V for connect */
 		break;
-	case SNK_HARD_RESET_WAIT_VBUS:
-		/* Do nothing, its OK to receive vbus off events */
-		break;
 	default:
 		if (port->pwr_role == TYPEC_SINK && port->auto_vbus_discharge_enabled)
 			tcpm_set_state(port, SNK_UNATTACHED, 0);
@@ -5391,15 +5407,6 @@ static void _tcpm_pd_hard_reset(struct tcpm_port *port)
 	tcpm_log_force(port, "Received hard reset");
 	if (port->bist_request == BDO_MODE_TESTDATA && port->tcpc->set_bist_data)
 		port->tcpc->set_bist_data(port->tcpc, false);
-
-	switch (port->state) {
-	case ERROR_RECOVERY:
-	case PORT_RESET:
-	case PORT_RESET_WAIT_OFF:
-		return;
-	default:
-		break;
-	}
 
 	if (port->ams != NONE_AMS)
 		port->ams = NONE_AMS;
@@ -5872,6 +5879,12 @@ static int tcpm_pps_set_out_volt(struct tcpm_port *port, u16 req_out_volt)
 
 	if (port->state != SNK_READY) {
 		ret = -EAGAIN;
+		goto port_unlock;
+	}
+
+	if (req_out_volt < port->pps_data.min_volt ||
+	    req_out_volt > port->pps_data.max_volt) {
+		ret = -EINVAL;
 		goto port_unlock;
 	}
 
@@ -6427,7 +6440,11 @@ static int tcpm_psy_set_prop(struct power_supply *psy,
 		ret = tcpm_psy_set_online(port, val);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		ret = tcpm_pps_set_out_volt(port, val->intval / 1000);
+		if (val->intval < port->pps_data.min_volt * 1000 ||
+		    val->intval > port->pps_data.max_volt * 1000)
+			ret = -EINVAL;
+		else
+			ret = tcpm_pps_set_out_volt(port, val->intval / 1000);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		if (val->intval > port->pps_data.max_curr * 1000)

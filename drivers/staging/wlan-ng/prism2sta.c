@@ -90,6 +90,9 @@ static int prism2sta_getcardinfo(struct wlandevice *wlandev);
 static int prism2sta_globalsetup(struct wlandevice *wlandev);
 static int prism2sta_setmulticast(struct wlandevice *wlandev,
 				  struct net_device *dev);
+
+static void prism2sta_inf_handover(struct wlandevice *wlandev,
+				   struct hfa384x_inf_frame *inf);
 static void prism2sta_inf_tallies(struct wlandevice *wlandev,
 				  struct hfa384x_inf_frame *inf);
 static void prism2sta_inf_hostscanresults(struct wlandevice *wlandev,
@@ -265,50 +268,46 @@ static int prism2sta_mlmerequest(struct wlandevice *wlandev,
 
 	switch (msg->msgcode) {
 	case DIDMSG_DOT11REQ_MIBGET:
-		netdev_dbg(wlandev->netdev, "Received mibget request\n");
+		pr_debug("Received mibget request\n");
 		result = prism2mgmt_mibset_mibget(wlandev, msg);
 		break;
 	case DIDMSG_DOT11REQ_MIBSET:
-		netdev_dbg(wlandev->netdev, "Received mibset request\n");
+		pr_debug("Received mibset request\n");
 		result = prism2mgmt_mibset_mibget(wlandev, msg);
 		break;
 	case DIDMSG_DOT11REQ_SCAN:
-		netdev_dbg(wlandev->netdev, "Received scan request\n");
+		pr_debug("Received scan request\n");
 		result = prism2mgmt_scan(wlandev, msg);
 		break;
 	case DIDMSG_DOT11REQ_SCAN_RESULTS:
-		netdev_dbg(wlandev->netdev, "Received scan_results request\n");
+		pr_debug("Received scan_results request\n");
 		result = prism2mgmt_scan_results(wlandev, msg);
 		break;
 	case DIDMSG_DOT11REQ_START:
-		netdev_dbg(wlandev->netdev, "Received mlme start request\n");
+		pr_debug("Received mlme start request\n");
 		result = prism2mgmt_start(wlandev, msg);
 		break;
 		/*
 		 * Prism2 specific messages
 		 */
 	case DIDMSG_P2REQ_READPDA:
-		netdev_dbg(wlandev->netdev, "Received mlme readpda request\n");
+		pr_debug("Received mlme readpda request\n");
 		result = prism2mgmt_readpda(wlandev, msg);
 		break;
 	case DIDMSG_P2REQ_RAMDL_STATE:
-		netdev_dbg(wlandev->netdev,
-			   "Received mlme ramdl_state request\n");
+		pr_debug("Received mlme ramdl_state request\n");
 		result = prism2mgmt_ramdl_state(wlandev, msg);
 		break;
 	case DIDMSG_P2REQ_RAMDL_WRITE:
-		netdev_dbg(wlandev->netdev,
-			   "Received mlme ramdl_write request\n");
+		pr_debug("Received mlme ramdl_write request\n");
 		result = prism2mgmt_ramdl_write(wlandev, msg);
 		break;
 	case DIDMSG_P2REQ_FLASHDL_STATE:
-		netdev_dbg(wlandev->netdev,
-			   "Received mlme flashdl_state request\n");
+		pr_debug("Received mlme flashdl_state request\n");
 		result = prism2mgmt_flashdl_state(wlandev, msg);
 		break;
 	case DIDMSG_P2REQ_FLASHDL_WRITE:
-		netdev_dbg(wlandev->netdev,
-			   "Received mlme flashdl_write request\n");
+		pr_debug("Received mlme flashdl_write request\n");
 		result = prism2mgmt_flashdl_write(wlandev, msg);
 		break;
 		/*
@@ -319,7 +318,7 @@ static int prism2sta_mlmerequest(struct wlandevice *wlandev,
 	case DIDMSG_LNXREQ_IFSTATE: {
 		struct p80211msg_lnxreq_ifstate *ifstatemsg;
 
-		netdev_dbg(wlandev->netdev, "Received mlme ifstate request\n");
+		pr_debug("Received mlme ifstate request\n");
 		ifstatemsg = (struct p80211msg_lnxreq_ifstate *)msg;
 		result = prism2sta_ifstate(wlandev,
 					   ifstatemsg->ifstate.data);
@@ -330,18 +329,17 @@ static int prism2sta_mlmerequest(struct wlandevice *wlandev,
 		break;
 	}
 	case DIDMSG_LNXREQ_WLANSNIFF:
-		netdev_dbg(wlandev->netdev,
-			   "Received mlme wlansniff request\n");
+		pr_debug("Received mlme wlansniff request\n");
 		result = prism2mgmt_wlansniff(wlandev, msg);
 		break;
 	case DIDMSG_LNXREQ_AUTOJOIN:
-		netdev_dbg(wlandev->netdev, "Received mlme autojoin request\n");
+		pr_debug("Received mlme autojoin request\n");
 		result = prism2mgmt_autojoin(wlandev, msg);
 		break;
 	case DIDMSG_LNXREQ_COMMSQUALITY: {
 		struct p80211msg_lnxreq_commsquality *qualmsg;
 
-		netdev_dbg(wlandev->netdev, "Received commsquality request\n");
+		pr_debug("Received commsquality request\n");
 
 		qualmsg = (struct p80211msg_lnxreq_commsquality *)msg;
 
@@ -394,8 +392,8 @@ u32 prism2sta_ifstate(struct wlandevice *wlandev, u32 ifstate)
 
 	result = P80211ENUM_resultcode_implementation_failure;
 
-	netdev_dbg(wlandev->netdev, "Current MSD state(%d), requesting(%d)\n",
-		   wlandev->msdstate, ifstate);
+	pr_debug("Current MSD state(%d), requesting(%d)\n",
+		 wlandev->msdstate, ifstate);
 	switch (ifstate) {
 	case P80211ENUM_ifstate_fwload:
 		switch (wlandev->msdstate) {
@@ -925,6 +923,30 @@ exit:
 }
 
 /*
+ * prism2sta_inf_handover
+ *
+ * Handles the receipt of a Handover info frame. Should only be present
+ * in APs only.
+ *
+ * Arguments:
+ *	wlandev		wlan device structure
+ *	inf		ptr to info frame (contents in hfa384x order)
+ *
+ * Returns:
+ *	nothing
+ *
+ * Side effects:
+ *
+ * Call context:
+ *	interrupt
+ */
+static void prism2sta_inf_handover(struct wlandevice *wlandev,
+				   struct hfa384x_inf_frame *inf)
+{
+	pr_debug("received infoframe:HANDOVER (unhandled)\n");
+}
+
+/*
  * prism2sta_inf_tallies
  *
  * Handles the receipt of a CommTallies info frame.
@@ -1003,15 +1025,15 @@ static void prism2sta_inf_scanresults(struct wlandevice *wlandev,
 	nbss /= sizeof(struct hfa384x_scan_result_sub);
 
 	/* Print em */
-	netdev_dbg(wlandev->netdev, "rx scanresults, reason=%d, nbss=%d:\n",
-		   inf->info.scanresult.scanreason, nbss);
+	pr_debug("rx scanresults, reason=%d, nbss=%d:\n",
+		 inf->info.scanresult.scanreason, nbss);
 	for (i = 0; i < nbss; i++) {
-		netdev_dbg(wlandev->netdev, "chid=%d anl=%d sl=%d bcnint=%d\n",
-			   sr->result[i].chid, sr->result[i].anl,
-			   sr->result[i].sl, sr->result[i].bcnint);
-		netdev_dbg(wlandev->netdev,
-			   "  capinfo=0x%04x proberesp_rate=%d\n",
-			   sr->result[i].capinfo, sr->result[i].proberesp_rate);
+		pr_debug("chid=%d anl=%d sl=%d bcnint=%d\n",
+			 sr->result[i].chid,
+			 sr->result[i].anl,
+			 sr->result[i].sl, sr->result[i].bcnint);
+		pr_debug("  capinfo=0x%04x proberesp_rate=%d\n",
+			 sr->result[i].capinfo, sr->result[i].proberesp_rate);
 	}
 	/* issue a join request */
 	joinreq.channel = sr->result[0].chid;
@@ -1049,7 +1071,7 @@ static void prism2sta_inf_hostscanresults(struct wlandevice *wlandev,
 	int nbss;
 
 	nbss = (inf->framelen - 3) / 32;
-	netdev_dbg(wlandev->netdev, "Received %d hostscan results\n", nbss);
+	pr_debug("Received %d hostscan results\n", nbss);
 
 	if (nbss > 32)
 		nbss = 32;
@@ -1112,14 +1134,13 @@ static void prism2sta_inf_chinforesults(struct wlandevice *wlandev,
 		chinforesult->pnl = result->pnl;
 		chinforesult->active = result->active;
 
-		netdev_dbg(wlandev->netdev,
-			   "chinfo: channel %d, %s level (avg/peak)=%d/%d dB, pcf %d\n",
-			   chan + 1,
-			   (chinforesult->active & HFA384x_CHINFORESULT_BSSACTIVE) ?
-			   "signal" : "noise",
-			   chinforesult->anl,
-			   chinforesult->pnl,
-			   (chinforesult->active & HFA384x_CHINFORESULT_PCFACTIVE) ? 1 : 0);
+		pr_debug("chinfo: channel %d, %s level (avg/peak)=%d/%d dB, pcf %d\n",
+			 chan + 1,
+			 (chinforesult->active & HFA384x_CHINFORESULT_BSSACTIVE)
+				? "signal" : "noise",
+			 chinforesult->anl, chinforesult->pnl,
+			 (chinforesult->active & HFA384x_CHINFORESULT_PCFACTIVE)
+				? 1 : 0);
 		n++;
 	}
 	atomic_set(&hw->channel_info.done, 2);
@@ -1198,9 +1219,9 @@ void prism2sta_processing_defer(struct work_struct *data)
 							wlandev->bssid,
 							WLAN_BSSID_LEN);
 			if (result) {
-				netdev_dbg(wlandev->netdev,
-					   "getconfig(0x%02x) failed, result = %d\n",
-					   HFA384x_RID_CURRENTBSSID, result);
+				pr_debug
+				    ("getconfig(0x%02x) failed, result = %d\n",
+				     HFA384x_RID_CURRENTBSSID, result);
 				return;
 			}
 
@@ -1208,9 +1229,9 @@ void prism2sta_processing_defer(struct work_struct *data)
 							HFA384x_RID_CURRENTSSID,
 							&ssid, sizeof(ssid));
 			if (result) {
-				netdev_dbg(wlandev->netdev,
-					   "getconfig(0x%02x) failed, result = %d\n",
-					   HFA384x_RID_CURRENTSSID, result);
+				pr_debug
+				    ("getconfig(0x%02x) failed, result = %d\n",
+				     HFA384x_RID_CURRENTSSID, result);
 				return;
 			}
 			prism2mgmt_bytestr2pstr((struct hfa384x_bytestr *)&ssid,
@@ -1221,9 +1242,9 @@ void prism2sta_processing_defer(struct work_struct *data)
 							  HFA384x_RID_PORTSTATUS,
 							  &portstatus);
 			if (result) {
-				netdev_dbg(wlandev->netdev,
-					   "getconfig(0x%02x) failed, result = %d\n",
-					   HFA384x_RID_PORTSTATUS, result);
+				pr_debug
+				    ("getconfig(0x%02x) failed, result = %d\n",
+				     HFA384x_RID_PORTSTATUS, result);
 				return;
 			}
 			wlandev->macmode =
@@ -1281,9 +1302,8 @@ void prism2sta_processing_defer(struct work_struct *data)
 						HFA384x_RID_CURRENTBSSID,
 						wlandev->bssid, WLAN_BSSID_LEN);
 		if (result) {
-			netdev_dbg(wlandev->netdev,
-				   "getconfig(0x%02x) failed, result = %d\n",
-				   HFA384x_RID_CURRENTBSSID, result);
+			pr_debug("getconfig(0x%02x) failed, result = %d\n",
+				 HFA384x_RID_CURRENTBSSID, result);
 			return;
 		}
 
@@ -1291,9 +1311,8 @@ void prism2sta_processing_defer(struct work_struct *data)
 						HFA384x_RID_CURRENTSSID,
 						&ssid, sizeof(ssid));
 		if (result) {
-			netdev_dbg(wlandev->netdev,
-				   "getconfig(0x%02x) failed, result = %d\n",
-				   HFA384x_RID_CURRENTSSID, result);
+			pr_debug("getconfig(0x%02x) failed, result = %d\n",
+				 HFA384x_RID_CURRENTSSID, result);
 			return;
 		}
 		prism2mgmt_bytestr2pstr((struct hfa384x_bytestr *)&ssid,
@@ -1705,8 +1724,7 @@ void prism2sta_ev_info(struct wlandevice *wlandev,
 	/* Dispatch */
 	switch (inf->infotype) {
 	case HFA384x_IT_HANDOVERADDR:
-		netdev_dbg(wlandev->netdev,
-			   "received infoframe:HANDOVER (unhandled)\n");
+		prism2sta_inf_handover(wlandev, inf);
 		break;
 	case HFA384x_IT_COMMTALLIES:
 		prism2sta_inf_tallies(wlandev, inf);
@@ -1749,6 +1767,30 @@ void prism2sta_ev_info(struct wlandevice *wlandev,
 }
 
 /*
+ * prism2sta_ev_txexc
+ *
+ * Handles the TxExc event.  A Transmit Exception event indicates
+ * that the MAC's TX process was unsuccessful - so the packet did
+ * not get transmitted.
+ *
+ * Arguments:
+ *	wlandev		wlan device structure
+ *	status		tx frame status word
+ *
+ * Returns:
+ *	nothing
+ *
+ * Side effects:
+ *
+ * Call context:
+ *	interrupt
+ */
+void prism2sta_ev_txexc(struct wlandevice *wlandev, u16 status)
+{
+	pr_debug("TxExc status=0x%x.\n", status);
+}
+
+/*
  * prism2sta_ev_tx
  *
  * Handles the Tx event.
@@ -1766,7 +1808,7 @@ void prism2sta_ev_info(struct wlandevice *wlandev,
  */
 void prism2sta_ev_tx(struct wlandevice *wlandev, u16 status)
 {
-	netdev_dbg(wlandev->netdev, "Tx Complete, status=0x%04x\n", status);
+	pr_debug("Tx Complete, status=0x%04x\n", status);
 	/* update linux network stats */
 	wlandev->netdev->stats.tx_packets++;
 }
@@ -1875,10 +1917,10 @@ void prism2sta_commsqual_defer(struct work_struct *data)
 			return;
 		}
 
-		netdev_dbg(wlandev->netdev, "commsqual %d %d %d\n",
-			   le16_to_cpu(hw->qual.cq_curr_bss),
-			   le16_to_cpu(hw->qual.asl_curr_bss),
-			   le16_to_cpu(hw->qual.anl_curr_fc));
+		pr_debug("commsqual %d %d %d\n",
+			 le16_to_cpu(hw->qual.cq_curr_bss),
+			 le16_to_cpu(hw->qual.asl_curr_bss),
+			 le16_to_cpu(hw->qual.anl_curr_fc));
 	}
 
 	/* Get the signal rate */
@@ -1887,8 +1929,8 @@ void prism2sta_commsqual_defer(struct work_struct *data)
 	result = p80211req_dorequest(wlandev, (u8 *)&msg);
 
 	if (result) {
-		netdev_dbg(wlandev->netdev,
-			   "get signal rate failed, result = %d\n", result);
+		pr_debug("get signal rate failed, result = %d\n",
+			 result);
 		return;
 	}
 
@@ -1906,8 +1948,7 @@ void prism2sta_commsqual_defer(struct work_struct *data)
 		hw->txrate = 110;
 		break;
 	default:
-		netdev_dbg(wlandev->netdev, "Bad ratebit (%d)\n",
-			   mibitem->data);
+		pr_debug("Bad ratebit (%d)\n", mibitem->data);
 	}
 
 	/* Lastly, we need to make sure the BSSID didn't change on us */
@@ -1915,9 +1956,8 @@ void prism2sta_commsqual_defer(struct work_struct *data)
 					HFA384x_RID_CURRENTBSSID,
 					wlandev->bssid, WLAN_BSSID_LEN);
 	if (result) {
-		netdev_dbg(wlandev->netdev,
-			   "getconfig(0x%02x) failed, result = %d\n",
-			   HFA384x_RID_CURRENTBSSID, result);
+		pr_debug("getconfig(0x%02x) failed, result = %d\n",
+			 HFA384x_RID_CURRENTBSSID, result);
 		return;
 	}
 
@@ -1925,9 +1965,8 @@ void prism2sta_commsqual_defer(struct work_struct *data)
 					HFA384x_RID_CURRENTSSID,
 					&ssid, sizeof(ssid));
 	if (result) {
-		netdev_dbg(wlandev->netdev,
-			   "getconfig(0x%02x) failed, result = %d\n",
-			   HFA384x_RID_CURRENTSSID, result);
+		pr_debug("getconfig(0x%02x) failed, result = %d\n",
+			 HFA384x_RID_CURRENTSSID, result);
 		return;
 	}
 	prism2mgmt_bytestr2pstr((struct hfa384x_bytestr *)&ssid,

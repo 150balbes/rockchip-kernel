@@ -7,6 +7,7 @@
 #include <asm/asm.h>
 
 SYM_FUNC_START(__memmove)
+SYM_FUNC_START_WEAK(memmove)
 	/*
 	 * Returns
 	 *   a0 - dest
@@ -25,8 +26,8 @@ SYM_FUNC_START(__memmove)
 	 */
 
 	/* Return if nothing to do */
-	beq a0, a1, .Lreturn_from_memmove
-	beqz a2, .Lreturn_from_memmove
+	beq a0, a1, return_from_memmove
+	beqz a2, return_from_memmove
 
 	/*
 	 * Register Uses
@@ -59,7 +60,7 @@ SYM_FUNC_START(__memmove)
 	 * small enough not to bother.
 	 */
 	andi t0, a2, -(2 * SZREG)
-	beqz t0, .Lbyte_copy
+	beqz t0, byte_copy
 
 	/*
 	 * Now solve for t5 and t6.
@@ -86,14 +87,14 @@ SYM_FUNC_START(__memmove)
 	 */
 	xor  t0, a0, a1
 	andi t1, t0, (SZREG - 1)
-	beqz t1, .Lcoaligned_copy
+	beqz t1, coaligned_copy
 	/* Fall through to misaligned fixup copy */
 
-.Lmisaligned_fixup_copy:
-	bltu a1, a0, .Lmisaligned_fixup_copy_reverse
+misaligned_fixup_copy:
+	bltu a1, a0, misaligned_fixup_copy_reverse
 
-.Lmisaligned_fixup_copy_forward:
-	jal  t0, .Lbyte_copy_until_aligned_forward
+misaligned_fixup_copy_forward:
+	jal  t0, byte_copy_until_aligned_forward
 
 	andi a5, a1, (SZREG - 1) /* Find the alignment offset of src (a1) */
 	slli a6, a5, 3 /* Multiply by 8 to convert that to bits to shift */
@@ -152,10 +153,10 @@ SYM_FUNC_START(__memmove)
 	mv    t3, t6 /* Fix the dest pointer in case the loop was broken */
 
 	add  a1, t3, a5 /* Restore the src pointer */
-	j .Lbyte_copy_forward /* Copy any remaining bytes */
+	j byte_copy_forward /* Copy any remaining bytes */
 
-.Lmisaligned_fixup_copy_reverse:
-	jal  t0, .Lbyte_copy_until_aligned_reverse
+misaligned_fixup_copy_reverse:
+	jal  t0, byte_copy_until_aligned_reverse
 
 	andi a5, a4, (SZREG - 1) /* Find the alignment offset of src (a4) */
 	slli a6, a5, 3 /* Multiply by 8 to convert that to bits to shift */
@@ -214,18 +215,18 @@ SYM_FUNC_START(__memmove)
 	mv    t4, t5 /* Fix the dest pointer in case the loop was broken */
 
 	add  a4, t4, a5 /* Restore the src pointer */
-	j .Lbyte_copy_reverse /* Copy any remaining bytes */
+	j byte_copy_reverse /* Copy any remaining bytes */
 
 /*
  * Simple copy loops for SZREG co-aligned memory locations.
  * These also make calls to do byte copies for any unaligned
  * data at their terminations.
  */
-.Lcoaligned_copy:
-	bltu a1, a0, .Lcoaligned_copy_reverse
+coaligned_copy:
+	bltu a1, a0, coaligned_copy_reverse
 
-.Lcoaligned_copy_forward:
-	jal t0, .Lbyte_copy_until_aligned_forward
+coaligned_copy_forward:
+	jal t0, byte_copy_until_aligned_forward
 
 	1:
 	REG_L t1, ( 0 * SZREG)(a1)
@@ -234,10 +235,10 @@ SYM_FUNC_START(__memmove)
 	REG_S t1, (-1 * SZREG)(t3)
 	bne   t3, t6, 1b
 
-	j .Lbyte_copy_forward /* Copy any remaining bytes */
+	j byte_copy_forward /* Copy any remaining bytes */
 
-.Lcoaligned_copy_reverse:
-	jal t0, .Lbyte_copy_until_aligned_reverse
+coaligned_copy_reverse:
+	jal t0, byte_copy_until_aligned_reverse
 
 	1:
 	REG_L t1, (-1 * SZREG)(a4)
@@ -246,7 +247,7 @@ SYM_FUNC_START(__memmove)
 	REG_S t1, ( 0 * SZREG)(t4)
 	bne   t4, t5, 1b
 
-	j .Lbyte_copy_reverse /* Copy any remaining bytes */
+	j byte_copy_reverse /* Copy any remaining bytes */
 
 /*
  * These are basically sub-functions within the function.  They
@@ -257,7 +258,7 @@ SYM_FUNC_START(__memmove)
  * up from where they were left and we avoid code duplication
  * without any overhead except the call in and return jumps.
  */
-.Lbyte_copy_until_aligned_forward:
+byte_copy_until_aligned_forward:
 	beq  t3, t5, 2f
 	1:
 	lb   t1,  0(a1)
@@ -268,7 +269,7 @@ SYM_FUNC_START(__memmove)
 	2:
 	jalr zero, 0x0(t0) /* Return to multibyte copy loop */
 
-.Lbyte_copy_until_aligned_reverse:
+byte_copy_until_aligned_reverse:
 	beq  t4, t6, 2f
 	1:
 	lb   t1, -1(a4)
@@ -284,10 +285,10 @@ SYM_FUNC_START(__memmove)
  * These will byte copy until they reach the end of data to copy.
  * At that point, they will call to return from memmove.
  */
-.Lbyte_copy:
-	bltu a1, a0, .Lbyte_copy_reverse
+byte_copy:
+	bltu a1, a0, byte_copy_reverse
 
-.Lbyte_copy_forward:
+byte_copy_forward:
 	beq  t3, t4, 2f
 	1:
 	lb   t1,  0(a1)
@@ -298,7 +299,7 @@ SYM_FUNC_START(__memmove)
 	2:
 	ret
 
-.Lbyte_copy_reverse:
+byte_copy_reverse:
 	beq  t4, t3, 2f
 	1:
 	lb   t1, -1(a4)
@@ -308,10 +309,10 @@ SYM_FUNC_START(__memmove)
 	bne  t4, t3, 1b
 	2:
 
-.Lreturn_from_memmove:
+return_from_memmove:
 	ret
 
+SYM_FUNC_END(memmove)
 SYM_FUNC_END(__memmove)
-SYM_FUNC_ALIAS_WEAK(memmove, __memmove)
 SYM_FUNC_ALIAS(__pi_memmove, __memmove)
 SYM_FUNC_ALIAS(__pi___memmove, __memmove)

@@ -75,12 +75,11 @@ int arch_evlist__add_default_attrs(struct evlist *evlist,
 
 int arch_evlist__cmp(const struct evsel *lhs, const struct evsel *rhs)
 {
-	if (topdown_sys_has_perf_metrics() &&
-	    (arch_evsel__must_be_in_group(lhs) || arch_evsel__must_be_in_group(rhs))) {
+	if (topdown_sys_has_perf_metrics() && evsel__sys_has_perf_metrics(lhs)) {
 		/* Ensure the topdown slots comes first. */
-		if (strcasestr(lhs->name, "slots") && !strcasestr(lhs->name, "uops_retired.slots"))
+		if (strcasestr(lhs->name, "slots"))
 			return -1;
-		if (strcasestr(rhs->name, "slots") && !strcasestr(rhs->name, "uops_retired.slots"))
+		if (strcasestr(rhs->name, "slots"))
 			return 1;
 		/* Followed by topdown events. */
 		if (strcasestr(lhs->name, "topdown") && !strcasestr(rhs->name, "topdown"))

@@ -504,15 +504,17 @@ static int dln2_gpio_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void dln2_gpio_remove(struct platform_device *pdev)
+static int dln2_gpio_remove(struct platform_device *pdev)
 {
 	dln2_unregister_event_cb(pdev, DLN2_GPIO_CONDITION_MET_EV);
+
+	return 0;
 }
 
 static struct platform_driver dln2_gpio_driver = {
 	.driver.name	= "dln2-gpio",
 	.probe		= dln2_gpio_probe,
-	.remove_new	= dln2_gpio_remove,
+	.remove		= dln2_gpio_remove,
 };
 
 module_platform_driver(dln2_gpio_driver);

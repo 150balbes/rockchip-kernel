@@ -182,9 +182,11 @@ static int omap_cpufreq_probe(struct platform_device *pdev)
 	return cpufreq_register_driver(&omap_driver);
 }
 
-static void omap_cpufreq_remove(struct platform_device *pdev)
+static int omap_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&omap_driver);
+
+	return 0;
 }
 
 static struct platform_driver omap_cpufreq_platdrv = {
@@ -192,7 +194,7 @@ static struct platform_driver omap_cpufreq_platdrv = {
 		.name	= "omap-cpufreq",
 	},
 	.probe		= omap_cpufreq_probe,
-	.remove_new	= omap_cpufreq_remove,
+	.remove		= omap_cpufreq_remove,
 };
 module_platform_driver(omap_cpufreq_platdrv);
 

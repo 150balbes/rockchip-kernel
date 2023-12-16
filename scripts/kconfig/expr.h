@@ -275,6 +275,7 @@ struct jump_key {
 	struct list_head entries;
 	size_t offset;
 	struct menu *target;
+	int index;
 };
 
 extern struct file *file_list;

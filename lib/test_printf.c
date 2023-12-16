@@ -12,7 +12,6 @@
 #include <linux/random.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
-#include <linux/sprintf.h>
 #include <linux/string.h>
 
 #include <linux/bitmap.h>
@@ -41,6 +40,8 @@ KSTM_MODULE_GLOBALS();
 
 static char *test_buffer __initdata;
 static char *alloced_buffer __initdata;
+
+extern bool no_hash_pointers;
 
 static int __printf(4, 0) __init
 do_test(int bufsize, const char *expect, int elen,

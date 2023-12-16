@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2021, Linaro Ltd <loic.poulain@linaro.org> */
 
-#include <linux/bitmap.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/debugfs.h>
@@ -302,7 +301,7 @@ static void wwan_remove_dev(struct wwan_device *wwandev)
 
 static const struct {
 	const char * const name;	/* Port type name */
-	const char * const devsuf;	/* Port device name suffix */
+	const char * const devsuf;	/* Port devce name suffix */
 } wwan_port_types[WWAN_PORT_MAX + 1] = {
 	[WWAN_PORT_AT] = {
 		.name = "AT",
@@ -396,7 +395,7 @@ static int __wwan_port_dev_assign_name(struct wwan_port *port, const char *fmt)
 	char buf[0x20];
 	int id;
 
-	idmap = bitmap_zalloc(max_ports, GFP_KERNEL);
+	idmap = (unsigned long *)get_zeroed_page(GFP_KERNEL);
 	if (!idmap)
 		return -ENOMEM;
 
@@ -415,7 +414,7 @@ static int __wwan_port_dev_assign_name(struct wwan_port *port, const char *fmt)
 
 	/* Allocate unique id */
 	id = find_first_zero_bit(idmap, max_ports);
-	bitmap_free(idmap);
+	free_page((unsigned long)idmap);
 
 	snprintf(buf, sizeof(buf), fmt, id);	/* Name generation */
 
@@ -1184,7 +1183,7 @@ void wwan_unregister_ops(struct device *parent)
 	 */
 	put_device(&wwandev->dev);
 
-	rtnl_lock();	/* Prevent concurrent netdev(s) creation/destroying */
+	rtnl_lock();	/* Prevent concurent netdev(s) creation/destroying */
 
 	/* Remove all child netdev(s), using batch removing */
 	device_for_each_child(&wwandev->dev, &kill_list,

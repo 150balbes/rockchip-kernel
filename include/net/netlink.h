@@ -128,8 +128,6 @@
  *   nla_len(nla)			length of attribute payload
  *
  * Attribute Payload Access for Basic Types:
- *   nla_get_uint(nla)			get payload for a uint attribute
- *   nla_get_sint(nla)			get payload for a sint attribute
  *   nla_get_u8(nla)			get payload for a u8 attribute
  *   nla_get_u16(nla)			get payload for a u16 attribute
  *   nla_get_u32(nla)			get payload for a u32 attribute
@@ -185,8 +183,6 @@ enum {
 	NLA_REJECT,
 	NLA_BE16,
 	NLA_BE32,
-	NLA_SINT,
-	NLA_UINT,
 	__NLA_TYPE_MAX,
 };
 
@@ -233,7 +229,6 @@ enum nla_policy_validation {
  *                         nested header (or empty); len field is used if
  *                         nested_policy is also used, for the max attr
  *                         number in the nested policy.
- *    NLA_SINT, NLA_UINT,
  *    NLA_U8, NLA_U16,
  *    NLA_U32, NLA_U64,
  *    NLA_S8, NLA_S16,
@@ -265,14 +260,12 @@ enum nla_policy_validation {
  *                         while an array has the nested attributes at another
  *                         level down and the attribute types directly in the
  *                         nesting don't matter.
- *    NLA_UINT,
  *    NLA_U8,
  *    NLA_U16,
  *    NLA_U32,
  *    NLA_U64,
  *    NLA_BE16,
  *    NLA_BE32,
- *    NLA_SINT,
  *    NLA_S8,
  *    NLA_S16,
  *    NLA_S32,
@@ -287,7 +280,6 @@ enum nla_policy_validation {
  *                         or NLA_POLICY_FULL_RANGE_SIGNED() macros instead.
  *                         Use the NLA_POLICY_MIN(), NLA_POLICY_MAX() and
  *                         NLA_POLICY_RANGE() macros.
- *    NLA_UINT,
  *    NLA_U8,
  *    NLA_U16,
  *    NLA_U32,
@@ -296,7 +288,6 @@ enum nla_policy_validation {
  *                         to a struct netlink_range_validation that indicates
  *                         the min/max values.
  *                         Use NLA_POLICY_FULL_RANGE().
- *    NLA_SINT,
  *    NLA_S8,
  *    NLA_S16,
  *    NLA_S32,
@@ -360,8 +351,8 @@ struct nla_policy {
 		const u32 mask;
 		const char *reject_message;
 		const struct nla_policy *nested_policy;
-		const struct netlink_range_validation *range;
-		const struct netlink_range_validation_signed *range_signed;
+		struct netlink_range_validation *range;
+		struct netlink_range_validation_signed *range_signed;
 		struct {
 			s16 min, max;
 		};
@@ -384,13 +375,12 @@ struct nla_policy {
 #define NLA_POLICY_BITFIELD32(valid) \
 	{ .type = NLA_BITFIELD32, .bitfield32_valid = valid }
 
-#define __NLA_IS_UINT_TYPE(tp)					\
-	(tp == NLA_U8 || tp == NLA_U16 || tp == NLA_U32 ||	\
-	 tp == NLA_U64 || tp == NLA_UINT ||			\
-	 tp == NLA_BE16 || tp == NLA_BE32)
+#define __NLA_IS_UINT_TYPE(tp)						\
+	(tp == NLA_U8 || tp == NLA_U16 || tp == NLA_U32 || tp == NLA_U64)
 #define __NLA_IS_SINT_TYPE(tp)						\
-	(tp == NLA_S8 || tp == NLA_S16 || tp == NLA_S32 || tp == NLA_S64 || \
-	 tp == NLA_SINT)
+	(tp == NLA_S8 || tp == NLA_S16 || tp == NLA_S32 || tp == NLA_S64)
+#define __NLA_IS_BEINT_TYPE(tp)						\
+	(tp == NLA_BE16 || tp == NLA_BE32)
 
 #define __NLA_ENSURE(condition) BUILD_BUG_ON_ZERO(!(condition))
 #define NLA_ENSURE_UINT_TYPE(tp)			\
@@ -404,6 +394,7 @@ struct nla_policy {
 #define NLA_ENSURE_INT_OR_BINARY_TYPE(tp)		\
 	(__NLA_ENSURE(__NLA_IS_UINT_TYPE(tp) ||		\
 		      __NLA_IS_SINT_TYPE(tp) ||		\
+		      __NLA_IS_BEINT_TYPE(tp) ||	\
 		      tp == NLA_MSECS ||		\
 		      tp == NLA_BINARY) + tp)
 #define NLA_ENSURE_NO_VALIDATION_PTR(tp)		\
@@ -411,6 +402,8 @@ struct nla_policy {
 		      tp != NLA_REJECT &&		\
 		      tp != NLA_NESTED &&		\
 		      tp != NLA_NESTED_ARRAY) + tp)
+#define NLA_ENSURE_BEINT_TYPE(tp)			\
+	(__NLA_ENSURE(__NLA_IS_BEINT_TYPE(tp)) + tp)
 
 #define NLA_POLICY_RANGE(tp, _min, _max) {		\
 	.type = NLA_ENSURE_INT_OR_BINARY_TYPE(tp),	\
@@ -1369,22 +1362,6 @@ static inline int nla_put_u32(struct sk_buff *skb, int attrtype, u32 value)
 }
 
 /**
- * nla_put_uint - Add a variable-size unsigned int to a socket buffer
- * @skb: socket buffer to add attribute to
- * @attrtype: attribute type
- * @value: numeric value
- */
-static inline int nla_put_uint(struct sk_buff *skb, int attrtype, u64 value)
-{
-	u64 tmp64 = value;
-	u32 tmp32 = value;
-
-	if (tmp64 == tmp32)
-		return nla_put_u32(skb, attrtype, tmp32);
-	return nla_put(skb, attrtype, sizeof(u64), &tmp64);
-}
-
-/**
  * nla_put_be32 - Add a __be32 netlink attribute to a socket buffer
  * @skb: socket buffer to add attribute to
  * @attrtype: attribute type
@@ -1536,22 +1513,6 @@ static inline int nla_put_s64(struct sk_buff *skb, int attrtype, s64 value,
 	s64 tmp = value;
 
 	return nla_put_64bit(skb, attrtype, sizeof(s64), &tmp, padattr);
-}
-
-/**
- * nla_put_sint - Add a variable-size signed int to a socket buffer
- * @skb: socket buffer to add attribute to
- * @attrtype: attribute type
- * @value: numeric value
- */
-static inline int nla_put_sint(struct sk_buff *skb, int attrtype, s64 value)
-{
-	s64 tmp64 = value;
-	s32 tmp32 = value;
-
-	if (tmp64 == tmp32)
-		return nla_put_s32(skb, attrtype, tmp32);
-	return nla_put(skb, attrtype, sizeof(s64), &tmp64);
 }
 
 /**
@@ -1711,17 +1672,6 @@ static inline u64 nla_get_u64(const struct nlattr *nla)
 }
 
 /**
- * nla_get_uint - return payload of uint attribute
- * @nla: uint netlink attribute
- */
-static inline u64 nla_get_uint(const struct nlattr *nla)
-{
-	if (nla_len(nla) == sizeof(u32))
-		return nla_get_u32(nla);
-	return nla_get_u64(nla);
-}
-
-/**
  * nla_get_be64 - return payload of __be64 attribute
  * @nla: __be64 netlink attribute
  */
@@ -1781,17 +1731,6 @@ static inline s64 nla_get_s64(const struct nlattr *nla)
 	nla_memcpy(&tmp, nla, sizeof(tmp));
 
 	return tmp;
-}
-
-/**
- * nla_get_sint - return payload of uint attribute
- * @nla: uint netlink attribute
- */
-static inline s64 nla_get_sint(const struct nlattr *nla)
-{
-	if (nla_len(nla) == sizeof(s32))
-		return nla_get_s32(nla);
-	return nla_get_s64(nla);
 }
 
 /**

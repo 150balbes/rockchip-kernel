@@ -313,6 +313,8 @@ out:
 	return ret;
 }
 
+#define DYNAMIC_POWER "dynamic-power-coefficient"
+
 static int mtk_cpufreq_opp_notifier(struct notifier_block *nb,
 				    unsigned long event, void *data)
 {

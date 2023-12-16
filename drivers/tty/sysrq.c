@@ -98,13 +98,14 @@ static int __init sysrq_always_enabled_setup(char *str)
 __setup("sysrq_always_enabled", sysrq_always_enabled_setup);
 
 
-static void sysrq_handle_loglevel(u8 key)
+static void sysrq_handle_loglevel(int key)
 {
-	u8 loglevel = key - '0';
+	int i;
 
+	i = key - '0';
 	console_loglevel = CONSOLE_LOGLEVEL_DEFAULT;
-	pr_info("Loglevel set to %u\n", loglevel);
-	console_loglevel = loglevel;
+	pr_info("Loglevel set to %d\n", i);
+	console_loglevel = i;
 }
 static const struct sysrq_key_op sysrq_loglevel_op = {
 	.handler	= sysrq_handle_loglevel,
@@ -114,7 +115,7 @@ static const struct sysrq_key_op sysrq_loglevel_op = {
 };
 
 #ifdef CONFIG_VT
-static void sysrq_handle_SAK(u8 key)
+static void sysrq_handle_SAK(int key)
 {
 	struct work_struct *SAK_work = &vc_cons[fg_console].SAK_work;
 
@@ -131,7 +132,7 @@ static const struct sysrq_key_op sysrq_SAK_op = {
 #endif
 
 #ifdef CONFIG_VT
-static void sysrq_handle_unraw(u8 key)
+static void sysrq_handle_unraw(int key)
 {
 	vt_reset_unicode(fg_console);
 }
@@ -146,7 +147,7 @@ static const struct sysrq_key_op sysrq_unraw_op = {
 #define sysrq_unraw_op (*(const struct sysrq_key_op *)NULL)
 #endif /* CONFIG_VT */
 
-static void sysrq_handle_crash(u8 key)
+static void sysrq_handle_crash(int key)
 {
 	/* release the RCU read lock before crashing */
 	rcu_read_unlock();
@@ -160,7 +161,7 @@ static const struct sysrq_key_op sysrq_crash_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
-static void sysrq_handle_reboot(u8 key)
+static void sysrq_handle_reboot(int key)
 {
 	lockdep_off();
 	local_irq_enable();
@@ -175,7 +176,7 @@ static const struct sysrq_key_op sysrq_reboot_op = {
 
 const struct sysrq_key_op *__sysrq_reboot_op = &sysrq_reboot_op;
 
-static void sysrq_handle_sync(u8 key)
+static void sysrq_handle_sync(int key)
 {
 	emergency_sync();
 }
@@ -186,7 +187,7 @@ static const struct sysrq_key_op sysrq_sync_op = {
 	.enable_mask	= SYSRQ_ENABLE_SYNC,
 };
 
-static void sysrq_handle_show_timers(u8 key)
+static void sysrq_handle_show_timers(int key)
 {
 	sysrq_timer_list_show();
 }
@@ -197,7 +198,7 @@ static const struct sysrq_key_op sysrq_show_timers_op = {
 	.action_msg	= "Show clockevent devices & pending hrtimers (no others)",
 };
 
-static void sysrq_handle_mountro(u8 key)
+static void sysrq_handle_mountro(int key)
 {
 	emergency_remount();
 }
@@ -209,7 +210,7 @@ static const struct sysrq_key_op sysrq_mountro_op = {
 };
 
 #ifdef CONFIG_LOCKDEP
-static void sysrq_handle_showlocks(u8 key)
+static void sysrq_handle_showlocks(int key)
 {
 	debug_show_all_locks();
 }
@@ -249,7 +250,7 @@ static void sysrq_showregs_othercpus(struct work_struct *dummy)
 
 static DECLARE_WORK(sysrq_showallcpus, sysrq_showregs_othercpus);
 
-static void sysrq_handle_showallcpus(u8 key)
+static void sysrq_handle_showallcpus(int key)
 {
 	/*
 	 * Fall back to the workqueue based printing if the
@@ -262,14 +263,13 @@ static void sysrq_handle_showallcpus(u8 key)
 		if (in_hardirq())
 			regs = get_irq_regs();
 
-		pr_info("CPU%d:\n", get_cpu());
+		pr_info("CPU%d:\n", smp_processor_id());
 		if (regs)
 			show_regs(regs);
 		else
 			show_stack(NULL, NULL, KERN_INFO);
 
 		schedule_work(&sysrq_showallcpus);
-		put_cpu();
 	}
 }
 
@@ -283,7 +283,7 @@ static const struct sysrq_key_op sysrq_showallcpus_op = {
 #define sysrq_showallcpus_op (*(const struct sysrq_key_op *)NULL)
 #endif
 
-static void sysrq_handle_showregs(u8 key)
+static void sysrq_handle_showregs(int key)
 {
 	struct pt_regs *regs = NULL;
 
@@ -300,7 +300,7 @@ static const struct sysrq_key_op sysrq_showregs_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
-static void sysrq_handle_showstate(u8 key)
+static void sysrq_handle_showstate(int key)
 {
 	show_state();
 	show_all_workqueues();
@@ -312,7 +312,7 @@ static const struct sysrq_key_op sysrq_showstate_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
-static void sysrq_handle_showstate_blocked(u8 key)
+static void sysrq_handle_showstate_blocked(int key)
 {
 	show_state_filter(TASK_UNINTERRUPTIBLE);
 }
@@ -326,7 +326,7 @@ static const struct sysrq_key_op sysrq_showstate_blocked_op = {
 #ifdef CONFIG_TRACING
 #include <linux/ftrace.h>
 
-static void sysrq_ftrace_dump(u8 key)
+static void sysrq_ftrace_dump(int key)
 {
 	ftrace_dump(DUMP_ALL);
 }
@@ -340,9 +340,9 @@ static const struct sysrq_key_op sysrq_ftrace_dump_op = {
 #define sysrq_ftrace_dump_op (*(const struct sysrq_key_op *)NULL)
 #endif
 
-static void sysrq_handle_showmem(u8 key)
+static void sysrq_handle_showmem(int key)
 {
-	show_mem();
+	show_mem(0, NULL);
 }
 static const struct sysrq_key_op sysrq_showmem_op = {
 	.handler	= sysrq_handle_showmem,
@@ -370,7 +370,7 @@ static void send_sig_all(int sig)
 	read_unlock(&tasklist_lock);
 }
 
-static void sysrq_handle_term(u8 key)
+static void sysrq_handle_term(int key)
 {
 	send_sig_all(SIGTERM);
 	console_loglevel = CONSOLE_LOGLEVEL_DEBUG;
@@ -401,7 +401,7 @@ static void moom_callback(struct work_struct *ignored)
 
 static DECLARE_WORK(moom_work, moom_callback);
 
-static void sysrq_handle_moom(u8 key)
+static void sysrq_handle_moom(int key)
 {
 	schedule_work(&moom_work);
 }
@@ -413,7 +413,7 @@ static const struct sysrq_key_op sysrq_moom_op = {
 };
 
 #ifdef CONFIG_BLOCK
-static void sysrq_handle_thaw(u8 key)
+static void sysrq_handle_thaw(int key)
 {
 	emergency_thaw_all();
 }
@@ -427,7 +427,7 @@ static const struct sysrq_key_op sysrq_thaw_op = {
 #define sysrq_thaw_op (*(const struct sysrq_key_op *)NULL)
 #endif
 
-static void sysrq_handle_kill(u8 key)
+static void sysrq_handle_kill(int key)
 {
 	send_sig_all(SIGKILL);
 	console_loglevel = CONSOLE_LOGLEVEL_DEBUG;
@@ -439,7 +439,7 @@ static const struct sysrq_key_op sysrq_kill_op = {
 	.enable_mask	= SYSRQ_ENABLE_SIGNAL,
 };
 
-static void sysrq_handle_unrt(u8 key)
+static void sysrq_handle_unrt(int key)
 {
 	normalize_rt_tasks();
 }
@@ -531,24 +531,25 @@ static const struct sysrq_key_op *sysrq_key_table[62] = {
 };
 
 /* key2index calculation, -1 on invalid index */
-static int sysrq_key_table_key2index(u8 key)
+static int sysrq_key_table_key2index(int key)
 {
-	switch (key) {
-	case '0' ... '9':
-		return key - '0';
-	case 'a' ... 'z':
-		return key - 'a' + 10;
-	case 'A' ... 'Z':
-		return key - 'A' + 10 + 26;
-	default:
-		return -1;
-	}
+	int retval;
+
+	if ((key >= '0') && (key <= '9'))
+		retval = key - '0';
+	else if ((key >= 'a') && (key <= 'z'))
+		retval = key + 10 - 'a';
+	else if ((key >= 'A') && (key <= 'Z'))
+		retval = key + 36 - 'A';
+	else
+		retval = -1;
+	return retval;
 }
 
 /*
  * get and put functions for the table, exposed to modules.
  */
-static const struct sysrq_key_op *__sysrq_get_key_op(u8 key)
+static const struct sysrq_key_op *__sysrq_get_key_op(int key)
 {
 	const struct sysrq_key_op *op_p = NULL;
 	int i;
@@ -560,7 +561,7 @@ static const struct sysrq_key_op *__sysrq_get_key_op(u8 key)
 	return op_p;
 }
 
-static void __sysrq_put_key_op(u8 key, const struct sysrq_key_op *op_p)
+static void __sysrq_put_key_op(int key, const struct sysrq_key_op *op_p)
 {
 	int i = sysrq_key_table_key2index(key);
 
@@ -568,7 +569,7 @@ static void __sysrq_put_key_op(u8 key, const struct sysrq_key_op *op_p)
 		sysrq_key_table[i] = op_p;
 }
 
-void __handle_sysrq(u8 key, bool check_mask)
+void __handle_sysrq(int key, bool check_mask)
 {
 	const struct sysrq_key_op *op_p;
 	int orig_log_level;
@@ -627,7 +628,7 @@ void __handle_sysrq(u8 key, bool check_mask)
 	suppress_printk = orig_suppress_printk;
 }
 
-void handle_sysrq(u8 key)
+void handle_sysrq(int key)
 {
 	if (sysrq_on())
 		__handle_sysrq(key, true);
@@ -1111,7 +1112,7 @@ int sysrq_toggle_support(int enable_mask)
 }
 EXPORT_SYMBOL_GPL(sysrq_toggle_support);
 
-static int __sysrq_swap_key_ops(u8 key, const struct sysrq_key_op *insert_op_p,
+static int __sysrq_swap_key_ops(int key, const struct sysrq_key_op *insert_op_p,
 				const struct sysrq_key_op *remove_op_p)
 {
 	int retval;
@@ -1135,13 +1136,13 @@ static int __sysrq_swap_key_ops(u8 key, const struct sysrq_key_op *insert_op_p,
 	return retval;
 }
 
-int register_sysrq_key(u8 key, const struct sysrq_key_op *op_p)
+int register_sysrq_key(int key, const struct sysrq_key_op *op_p)
 {
 	return __sysrq_swap_key_ops(key, op_p, NULL);
 }
 EXPORT_SYMBOL(register_sysrq_key);
 
-int unregister_sysrq_key(u8 key, const struct sysrq_key_op *op_p)
+int unregister_sysrq_key(int key, const struct sysrq_key_op *op_p)
 {
 	return __sysrq_swap_key_ops(key, NULL, op_p);
 }

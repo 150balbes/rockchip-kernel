@@ -296,6 +296,7 @@ static int sc27xx_led_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	platform_set_drvdata(pdev, priv);
+	mutex_init(&priv->lock);
 	priv->base = base;
 	priv->regmap = dev_get_regmap(dev->parent, NULL);
 	if (!priv->regmap) {
@@ -308,19 +309,19 @@ static int sc27xx_led_probe(struct platform_device *pdev)
 		err = of_property_read_u32(child, "reg", &reg);
 		if (err) {
 			of_node_put(child);
+			mutex_destroy(&priv->lock);
 			return err;
 		}
 
 		if (reg >= SC27XX_LEDS_MAX || priv->leds[reg].active) {
 			of_node_put(child);
+			mutex_destroy(&priv->lock);
 			return -EINVAL;
 		}
 
 		priv->leds[reg].fwnode = of_fwnode_handle(child);
 		priv->leds[reg].active = true;
 	}
-
-	mutex_init(&priv->lock);
 
 	err = sc27xx_led_register(dev, priv);
 	if (err)
@@ -329,11 +330,12 @@ static int sc27xx_led_probe(struct platform_device *pdev)
 	return err;
 }
 
-static void sc27xx_led_remove(struct platform_device *pdev)
+static int sc27xx_led_remove(struct platform_device *pdev)
 {
 	struct sc27xx_led_priv *priv = platform_get_drvdata(pdev);
 
 	mutex_destroy(&priv->lock);
+	return 0;
 }
 
 static const struct of_device_id sc27xx_led_of_match[] = {
@@ -348,7 +350,7 @@ static struct platform_driver sc27xx_led_driver = {
 		.of_match_table = sc27xx_led_of_match,
 	},
 	.probe = sc27xx_led_probe,
-	.remove_new = sc27xx_led_remove,
+	.remove = sc27xx_led_remove,
 };
 
 module_platform_driver(sc27xx_led_driver);

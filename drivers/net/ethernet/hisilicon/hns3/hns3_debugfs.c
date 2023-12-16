@@ -411,12 +411,6 @@ static struct hns3_dbg_cap_info hns3_dbg_cap[] = {
 	}, {
 		.name = "support wake on lan",
 		.cap_bit = HNAE3_DEV_SUPPORT_WOL_B,
-	}, {
-		.name = "support tm flush",
-		.cap_bit = HNAE3_DEV_SUPPORT_TM_FLUSH_B,
-	}, {
-		.name = "support vf fault detect",
-		.cap_bit = HNAE3_DEV_SUPPORT_VF_FAULT_B,
 	}
 };
 
@@ -467,9 +461,9 @@ static void hns3_dbg_fill_content(char *content, u16 len,
 		if (result) {
 			if (item_len < strlen(result[i]))
 				break;
-			memcpy(pos, result[i], strlen(result[i]));
+			strscpy(pos, result[i], strlen(result[i]));
 		} else {
-			memcpy(pos, items[i].name, strlen(items[i].name));
+			strscpy(pos, items[i].name, strlen(items[i].name));
 		}
 		pos += item_len;
 		len -= item_len;
@@ -503,14 +497,11 @@ static void hns3_get_coal_info(struct hns3_enet_tqp_vector *tqp_vector,
 	}
 
 	sprintf(result[j++], "%d", i);
-	sprintf(result[j++], "%s", dim->state < ARRAY_SIZE(dim_state_str) ?
-		dim_state_str[dim->state] : "unknown");
+	sprintf(result[j++], "%s", dim_state_str[dim->state]);
 	sprintf(result[j++], "%u", dim->profile_ix);
-	sprintf(result[j++], "%s", dim->mode < ARRAY_SIZE(dim_cqe_mode_str) ?
-		dim_cqe_mode_str[dim->mode] : "unknown");
+	sprintf(result[j++], "%s", dim_cqe_mode_str[dim->mode]);
 	sprintf(result[j++], "%s",
-		dim->tune_state < ARRAY_SIZE(dim_tune_stat_str) ?
-		dim_tune_stat_str[dim->tune_state] : "unknown");
+		dim_tune_stat_str[dim->tune_state]);
 	sprintf(result[j++], "%u", dim->steps_left);
 	sprintf(result[j++], "%u", dim->steps_right);
 	sprintf(result[j++], "%u", dim->tired);
@@ -1051,7 +1042,6 @@ hns3_dbg_dev_specs(struct hnae3_handle *h, char *buf, int len, int *pos)
 	struct hnae3_ae_dev *ae_dev = pci_get_drvdata(h->pdev);
 	struct hnae3_dev_specs *dev_specs = &ae_dev->dev_specs;
 	struct hnae3_knic_private_info *kinfo = &h->kinfo;
-	struct net_device *dev = kinfo->netdev;
 
 	*pos += scnprintf(buf + *pos, len - *pos, "dev_spec:\n");
 	*pos += scnprintf(buf + *pos, len - *pos, "MAC entry num: %u\n",
@@ -1094,9 +1084,6 @@ hns3_dbg_dev_specs(struct hnae3_handle *h, char *buf, int len, int *pos)
 			  dev_specs->mc_mac_size);
 	*pos += scnprintf(buf + *pos, len - *pos, "MAC statistics number: %u\n",
 			  dev_specs->mac_stats_num);
-	*pos += scnprintf(buf + *pos, len - *pos,
-			  "TX timeout threshold: %d seconds\n",
-			  dev->watchdog_timeo / HZ);
 }
 
 static int hns3_dbg_dev_info(struct hnae3_handle *h, char *buf, int len)
@@ -1421,18 +1408,15 @@ int hns3_dbg_init(struct hnae3_handle *handle)
 	return 0;
 
 out:
+	mutex_destroy(&handle->dbgfs_lock);
 	debugfs_remove_recursive(handle->hnae3_dbgfs);
 	handle->hnae3_dbgfs = NULL;
-	mutex_destroy(&handle->dbgfs_lock);
 	return ret;
 }
 
 void hns3_dbg_uninit(struct hnae3_handle *handle)
 {
 	u32 i;
-
-	debugfs_remove_recursive(handle->hnae3_dbgfs);
-	handle->hnae3_dbgfs = NULL;
 
 	for (i = 0; i < ARRAY_SIZE(hns3_dbg_cmd); i++)
 		if (handle->dbgfs_buf[i]) {
@@ -1441,6 +1425,8 @@ void hns3_dbg_uninit(struct hnae3_handle *handle)
 		}
 
 	mutex_destroy(&handle->dbgfs_lock);
+	debugfs_remove_recursive(handle->hnae3_dbgfs);
+	handle->hnae3_dbgfs = NULL;
 }
 
 void hns3_dbg_register_debugfs(const char *debugfs_dir_name)

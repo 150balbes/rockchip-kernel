@@ -41,83 +41,17 @@
 #include "internal.h"
 #include "shuffle.h"
 
-enum {
-	MEMMAP_ON_MEMORY_DISABLE = 0,
-	MEMMAP_ON_MEMORY_ENABLE,
-	MEMMAP_ON_MEMORY_FORCE,
-};
-
-static int memmap_mode __read_mostly = MEMMAP_ON_MEMORY_DISABLE;
-
-static inline unsigned long memory_block_memmap_size(void)
-{
-	return PHYS_PFN(memory_block_size_bytes()) * sizeof(struct page);
-}
-
-static inline unsigned long memory_block_memmap_on_memory_pages(void)
-{
-	unsigned long nr_pages = PFN_UP(memory_block_memmap_size());
-
-	/*
-	 * In "forced" memmap_on_memory mode, we add extra pages to align the
-	 * vmemmap size to cover full pageblocks. That way, we can add memory
-	 * even if the vmemmap size is not properly aligned, however, we might waste
-	 * memory.
-	 */
-	if (memmap_mode == MEMMAP_ON_MEMORY_FORCE)
-		return pageblock_align(nr_pages);
-	return nr_pages;
-}
-
 #ifdef CONFIG_MHP_MEMMAP_ON_MEMORY
 /*
  * memory_hotplug.memmap_on_memory parameter
  */
-static int set_memmap_mode(const char *val, const struct kernel_param *kp)
-{
-	int ret, mode;
-	bool enabled;
-
-	if (sysfs_streq(val, "force") ||  sysfs_streq(val, "FORCE")) {
-		mode = MEMMAP_ON_MEMORY_FORCE;
-	} else {
-		ret = kstrtobool(val, &enabled);
-		if (ret < 0)
-			return ret;
-		if (enabled)
-			mode = MEMMAP_ON_MEMORY_ENABLE;
-		else
-			mode = MEMMAP_ON_MEMORY_DISABLE;
-	}
-	*((int *)kp->arg) = mode;
-	if (mode == MEMMAP_ON_MEMORY_FORCE) {
-		unsigned long memmap_pages = memory_block_memmap_on_memory_pages();
-
-		pr_info_once("Memory hotplug will waste %ld pages in each memory block\n",
-			     memmap_pages - PFN_UP(memory_block_memmap_size()));
-	}
-	return 0;
-}
-
-static int get_memmap_mode(char *buffer, const struct kernel_param *kp)
-{
-	if (*((int *)kp->arg) == MEMMAP_ON_MEMORY_FORCE)
-		return sprintf(buffer,  "force\n");
-	return param_get_bool(buffer, kp);
-}
-
-static const struct kernel_param_ops memmap_mode_ops = {
-	.set = set_memmap_mode,
-	.get = get_memmap_mode,
-};
-module_param_cb(memmap_on_memory, &memmap_mode_ops, &memmap_mode, 0444);
-MODULE_PARM_DESC(memmap_on_memory, "Enable memmap on memory for memory hotplug\n"
-		 "With value \"force\" it could result in memory wastage due "
-		 "to memmap size limitations (Y/N/force)");
+static bool memmap_on_memory __ro_after_init;
+module_param(memmap_on_memory, bool, 0444);
+MODULE_PARM_DESC(memmap_on_memory, "Enable memmap on memory for memory hotplug");
 
 static inline bool mhp_memmap_on_memory(void)
 {
-	return memmap_mode != MEMMAP_ON_MEMORY_DISABLE;
+	return memmap_on_memory;
 }
 #else
 static inline bool mhp_memmap_on_memory(void)
@@ -1313,22 +1247,11 @@ static int online_memory_block(struct memory_block *mem, void *arg)
 	return device_online(&mem->dev);
 }
 
-#ifndef arch_supports_memmap_on_memory
-static inline bool arch_supports_memmap_on_memory(unsigned long vmemmap_size)
+bool mhp_supports_memmap_on_memory(unsigned long size)
 {
-	/*
-	 * As default, we want the vmemmap to span a complete PMD such that we
-	 * can map the vmemmap using a single PMD if supported by the
-	 * architecture.
-	 */
-	return IS_ALIGNED(vmemmap_size, PMD_SIZE);
-}
-#endif
-
-static bool mhp_supports_memmap_on_memory(unsigned long size)
-{
-	unsigned long vmemmap_size = memory_block_memmap_size();
-	unsigned long memmap_pages = memory_block_memmap_on_memory_pages();
+	unsigned long nr_vmemmap_pages = size / PAGE_SIZE;
+	unsigned long vmemmap_size = nr_vmemmap_pages * sizeof(struct page);
+	unsigned long remaining_size = size - vmemmap_size;
 
 	/*
 	 * Besides having arch support and the feature enabled at runtime, we
@@ -1356,28 +1279,10 @@ static bool mhp_supports_memmap_on_memory(unsigned long size)
 	 *       altmap as an alternative source of memory, and we do not exactly
 	 *       populate a single PMD.
 	 */
-	if (!mhp_memmap_on_memory() || size != memory_block_size_bytes())
-		return false;
-
-	/*
-	 * Make sure the vmemmap allocation is fully contained
-	 * so that we always allocate vmemmap memory from altmap area.
-	 */
-	if (!IS_ALIGNED(vmemmap_size, PAGE_SIZE))
-		return false;
-
-	/*
-	 * start pfn should be pageblock_nr_pages aligned for correctly
-	 * setting migrate types
-	 */
-	if (!pageblock_aligned(memmap_pages))
-		return false;
-
-	if (memmap_pages == PHYS_PFN(memory_block_size_bytes()))
-		/* No effective hotplugged memory doesn't make sense. */
-		return false;
-
-	return arch_supports_memmap_on_memory(vmemmap_size);
+	return mhp_memmap_on_memory() &&
+	       size == memory_block_size_bytes() &&
+	       IS_ALIGNED(vmemmap_size, PMD_SIZE) &&
+	       IS_ALIGNED(remaining_size, (pageblock_nr_pages << PAGE_SHIFT));
 }
 
 /*
@@ -1390,10 +1295,7 @@ int __ref add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 {
 	struct mhp_params params = { .pgprot = pgprot_mhp(PAGE_KERNEL) };
 	enum memblock_flags memblock_flags = MEMBLOCK_NONE;
-	struct vmem_altmap mhp_altmap = {
-		.base_pfn =  PHYS_PFN(res->start),
-		.end_pfn  =  PHYS_PFN(res->end),
-	};
+	struct vmem_altmap mhp_altmap = {};
 	struct memory_group *group = NULL;
 	u64 start, size;
 	bool new_node = false;
@@ -1437,29 +1339,26 @@ int __ref add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 	 * Self hosted memmap array
 	 */
 	if (mhp_flags & MHP_MEMMAP_ON_MEMORY) {
-		if (mhp_supports_memmap_on_memory(size)) {
-			mhp_altmap.free = memory_block_memmap_on_memory_pages();
-			params.altmap = kmalloc(sizeof(struct vmem_altmap), GFP_KERNEL);
-			if (!params.altmap) {
-				ret = -ENOMEM;
-				goto error;
-			}
-
-			memcpy(params.altmap, &mhp_altmap, sizeof(mhp_altmap));
+		if (!mhp_supports_memmap_on_memory(size)) {
+			ret = -EINVAL;
+			goto error;
 		}
-		/* fallback to not using altmap  */
+		mhp_altmap.free = PHYS_PFN(size);
+		mhp_altmap.base_pfn = PHYS_PFN(start);
+		params.altmap = &mhp_altmap;
 	}
 
 	/* call arch's memory hotadd */
 	ret = arch_add_memory(nid, start, size, &params);
 	if (ret < 0)
-		goto error_free;
+		goto error;
 
 	/* create memory block devices after memory was added */
-	ret = create_memory_block_devices(start, size, params.altmap, group);
+	ret = create_memory_block_devices(start, size, mhp_altmap.alloc,
+					  group);
 	if (ret) {
 		arch_remove_memory(start, size, NULL);
-		goto error_free;
+		goto error;
 	}
 
 	if (new_node) {
@@ -1496,8 +1395,6 @@ int __ref add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 		walk_memory_blocks(start, size, NULL, online_memory_block);
 
 	return ret;
-error_free:
-	kfree(params.altmap);
 error:
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK))
 		memblock_remove(start, size);
@@ -1689,7 +1586,7 @@ static int scan_movable_pages(unsigned long start, unsigned long end,
 		 */
 		if (HPageMigratable(head))
 			goto found;
-		skip = compound_nr(head) - (pfn - page_to_pfn(head));
+		skip = compound_nr(head) - (page - head);
 		pfn += skip - 1;
 	}
 	return -ENOENT;
@@ -1946,11 +1843,6 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	do {
 		pfn = start_pfn;
 		do {
-			/*
-			 * Historically we always checked for any signal and
-			 * can't limit it to fatal signals without eventually
-			 * breaking user space.
-			 */
 			if (signal_pending(current)) {
 				ret = -EINTR;
 				reason = "signal backoff";
@@ -2012,16 +1904,12 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	/*
-	 * Make sure to mark the node as memory-less before rebuilding the zone
-	 * list. Otherwise this node would still appear in the fallback lists.
-	 */
-	node_states_clear_node(node, &arg);
 	if (!populated_zone(zone)) {
 		zone_pcp_reset(zone);
 		build_all_zonelists(NULL);
 	}
 
+	node_states_clear_node(node, &arg);
 	if (arg.status_change_nid >= 0) {
 		kcompactd_stop(node);
 		kswapd_stop(node);
@@ -2068,18 +1956,12 @@ static int check_memblock_offlined_cb(struct memory_block *mem, void *arg)
 	return 0;
 }
 
-static int test_has_altmap_cb(struct memory_block *mem, void *arg)
+static int get_nr_vmemmap_pages_cb(struct memory_block *mem, void *arg)
 {
-	struct memory_block **mem_ptr = (struct memory_block **)arg;
 	/*
-	 * return the memblock if we have altmap
-	 * and break callback.
+	 * If not set, continue with the next block.
 	 */
-	if (mem->altmap) {
-		*mem_ptr = mem;
-		return 1;
-	}
-	return 0;
+	return mem->nr_vmemmap_pages;
 }
 
 static int check_cpu_on_node(int nid)
@@ -2154,9 +2036,10 @@ EXPORT_SYMBOL(try_offline_node);
 
 static int __ref try_remove_memory(u64 start, u64 size)
 {
-	struct memory_block *mem;
-	int rc = 0, nid = NUMA_NO_NODE;
+	struct vmem_altmap mhp_altmap = {};
 	struct vmem_altmap *altmap = NULL;
+	unsigned long nr_vmemmap_pages;
+	int rc = 0, nid = NUMA_NO_NODE;
 
 	BUG_ON(check_hotplug_memory_range(start, size));
 
@@ -2178,20 +2061,23 @@ static int __ref try_remove_memory(u64 start, u64 size)
 	 * the same granularity it was added - a single memory block.
 	 */
 	if (mhp_memmap_on_memory()) {
-		rc = walk_memory_blocks(start, size, &mem, test_has_altmap_cb);
-		if (rc) {
+		nr_vmemmap_pages = walk_memory_blocks(start, size, NULL,
+						      get_nr_vmemmap_pages_cb);
+		if (nr_vmemmap_pages) {
 			if (size != memory_block_size_bytes()) {
 				pr_warn("Refuse to remove %#llx - %#llx,"
 					"wrong granularity\n",
 					start, start + size);
 				return -EINVAL;
 			}
-			altmap = mem->altmap;
+
 			/*
-			 * Mark altmap NULL so that we can add a debug
-			 * check on memblock free.
+			 * Let remove_pmd_table->free_hugepage_table do the
+			 * right thing if we used vmem_altmap when hot-adding
+			 * the range.
 			 */
-			mem->altmap = NULL;
+			mhp_altmap.alloc = nr_vmemmap_pages;
+			altmap = &mhp_altmap;
 		}
 	}
 
@@ -2207,12 +2093,6 @@ static int __ref try_remove_memory(u64 start, u64 size)
 	mem_hotplug_begin();
 
 	arch_remove_memory(start, size, altmap);
-
-	/* Verify that all vmemmap pages have actually been freed. */
-	if (altmap) {
-		WARN(altmap->alloc, "Altmap not fully unmapped");
-		kfree(altmap);
-	}
 
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK)) {
 		memblock_phys_free(start, size);

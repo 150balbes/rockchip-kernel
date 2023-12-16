@@ -309,6 +309,7 @@ static struct clk *_register_divider(struct device_node *node,
 				     u32 flags,
 				     struct clk_omap_divider *div)
 {
+	struct clk *clk;
 	struct clk_init_data init;
 	const char *parent_name;
 	const char *name;
@@ -325,7 +326,12 @@ static struct clk *_register_divider(struct device_node *node,
 	div->hw.init = &init;
 
 	/* register the clock */
-	return of_ti_clk_register(node, &div->hw, name);
+	clk = of_ti_clk_register(node, &div->hw, name);
+
+	if (IS_ERR(clk))
+		kfree(div);
+
+	return clk;
 }
 
 int ti_clk_parse_divider_data(int *div_table, int num_dividers, int max_div,

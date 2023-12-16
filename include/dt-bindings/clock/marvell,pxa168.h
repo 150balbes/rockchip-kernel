@@ -63,4 +63,5 @@
 #define PXA168_CLK_SDH01_AXI		111
 #define PXA168_CLK_SDH23_AXI		112
 
+#define PXA168_NR_CLKS			200
 #endif

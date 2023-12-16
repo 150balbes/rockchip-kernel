@@ -14,6 +14,5 @@ Netlink documentation for users.
    specs
    c-code-gen
    genetlink-legacy
-   netlink-raw
 
 See also :ref:`Documentation/core-api/netlink.rst <kernel_netlink>`.

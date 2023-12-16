@@ -476,15 +476,18 @@ static int __init tpm_init(void)
 {
 	int rc;
 
-	rc = class_register(&tpm_class);
-	if (rc) {
+	tpm_class = class_create("tpm");
+	if (IS_ERR(tpm_class)) {
 		pr_err("couldn't create tpm class\n");
-		return rc;
+		return PTR_ERR(tpm_class);
 	}
 
-	rc = class_register(&tpmrm_class);
-	if (rc) {
+	tpm_class->shutdown_pre = tpm_class_shutdown;
+
+	tpmrm_class = class_create("tpmrm");
+	if (IS_ERR(tpmrm_class)) {
 		pr_err("couldn't create tpmrm class\n");
+		rc = PTR_ERR(tpmrm_class);
 		goto out_destroy_tpm_class;
 	}
 
@@ -505,9 +508,9 @@ static int __init tpm_init(void)
 out_unreg_chrdev:
 	unregister_chrdev_region(tpm_devt, 2 * TPM_NUM_DEVICES);
 out_destroy_tpmrm_class:
-	class_unregister(&tpmrm_class);
+	class_destroy(tpmrm_class);
 out_destroy_tpm_class:
-	class_unregister(&tpm_class);
+	class_destroy(tpm_class);
 
 	return rc;
 }
@@ -515,8 +518,8 @@ out_destroy_tpm_class:
 static void __exit tpm_exit(void)
 {
 	idr_destroy(&dev_nums_idr);
-	class_unregister(&tpm_class);
-	class_unregister(&tpmrm_class);
+	class_destroy(tpm_class);
+	class_destroy(tpmrm_class);
 	unregister_chrdev_region(tpm_devt, 2*TPM_NUM_DEVICES);
 	tpm_dev_common_exit();
 }

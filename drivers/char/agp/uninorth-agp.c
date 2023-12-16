@@ -3,7 +3,6 @@
  * UniNorth AGPGART routines.
  */
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/init.h>

@@ -180,6 +180,7 @@ struct mwifiex_rxinfo {
 };
 
 struct mwifiex_txinfo {
+	u32 status_code;
 	u8 flags;
 	u8 bss_num;
 	u8 bss_type;

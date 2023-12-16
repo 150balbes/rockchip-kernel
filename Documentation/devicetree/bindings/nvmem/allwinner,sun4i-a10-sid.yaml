@@ -12,7 +12,6 @@ maintainers:
 
 allOf:
   - $ref: nvmem.yaml#
-  - $ref: nvmem-deprecated-cells.yaml#
 
 properties:
   compatible:
@@ -24,9 +23,7 @@ properties:
       - const: allwinner,sun20i-d1-sid
       - const: allwinner,sun50i-a64-sid
       - items:
-          - enum:
-              - allwinner,sun50i-a100-sid
-              - allwinner,sun50i-h616-sid
+          - const: allwinner,sun50i-a100-sid
           - const: allwinner,sun50i-a64-sid
       - const: allwinner,sun50i-h5-sid
       - const: allwinner,sun50i-h6-sid

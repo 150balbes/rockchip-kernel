@@ -29,10 +29,9 @@
 
 #include <linux/if_vlan.h>
 #include <linux/mfd/syscon.h>
-#include <linux/of.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/phylink.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
@@ -1968,19 +1967,21 @@ err_put_clk:
 	return err;
 }
 
-static void ag71xx_remove(struct platform_device *pdev)
+static int ag71xx_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct ag71xx *ag;
 
 	if (!ndev)
-		return;
+		return 0;
 
 	ag = netdev_priv(ndev);
 	unregister_netdev(ndev);
 	ag71xx_mdio_remove(ag);
 	clk_disable_unprepare(ag->clk_eth);
 	platform_set_drvdata(pdev, NULL);
+
+	return 0;
 }
 
 static const u32 ar71xx_fifo_ar7100[] = {
@@ -2067,7 +2068,7 @@ static const struct of_device_id ag71xx_match[] = {
 
 static struct platform_driver ag71xx_driver = {
 	.probe		= ag71xx_probe,
-	.remove_new	= ag71xx_remove,
+	.remove		= ag71xx_remove,
 	.driver = {
 		.name	= "ag71xx",
 		.of_match_table = ag71xx_match,

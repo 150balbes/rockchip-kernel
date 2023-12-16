@@ -47,7 +47,6 @@
 #include <asm/smp.h>
 #include <asm/time.h>
 #include <asm/machdep.h>
-#include <asm/mmu_context.h>
 #include <asm/cputhreads.h>
 #include <asm/cputable.h>
 #include <asm/mpic.h>
@@ -1051,7 +1050,7 @@ static struct sched_domain_topology_level powerpc_topology[] = {
 #endif
 	{ shared_cache_mask, powerpc_shared_cache_flags, SD_INIT_NAME(CACHE) },
 	{ cpu_mc_mask, SD_INIT_NAME(MC) },
-	{ cpu_cpu_mask, SD_INIT_NAME(PKG) },
+	{ cpu_cpu_mask, SD_INIT_NAME(DIE) },
 	{ NULL, },
 };
 
@@ -1088,7 +1087,7 @@ static int __init init_big_cores(void)
 
 void __init smp_prepare_cpus(unsigned int max_cpus)
 {
-	unsigned int cpu, num_threads;
+	unsigned int cpu;
 
 	DBG("smp_prepare_cpus\n");
 
@@ -1155,12 +1154,6 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 
 	if (smp_ops && smp_ops->probe)
 		smp_ops->probe();
-
-	// Initalise the generic SMT topology support
-	num_threads = 1;
-	if (smt_enabled_at_boot)
-		num_threads = smt_enabled_at_boot;
-	cpu_smt_set_num_threads(num_threads, threads_per_core);
 }
 
 void smp_prepare_boot_cpu(void)
@@ -1595,7 +1588,7 @@ static void add_cpu_to_masks(int cpu)
 	/* Skip all CPUs already part of current CPU core mask */
 	cpumask_andnot(mask, cpu_online_mask, cpu_core_mask(cpu));
 
-	/* If chip_id is -1; limit the cpu_core_mask to within PKG */
+	/* If chip_id is -1; limit the cpu_core_mask to within DIE*/
 	if (chip_id == -1)
 		cpumask_and(mask, mask, cpu_cpu_mask(cpu));
 
@@ -1623,13 +1616,10 @@ void start_secondary(void *unused)
 
 	mmgrab_lazy_tlb(&init_mm);
 	current->active_mm = &init_mm;
-	VM_WARN_ON(cpumask_test_cpu(smp_processor_id(), mm_cpumask(&init_mm)));
-	cpumask_set_cpu(cpu, mm_cpumask(&init_mm));
-	inc_mm_active_cpus(&init_mm);
 
 	smp_store_cpu_info(cpu);
 	set_dec(tb_ticks_per_jiffy);
-	rcutree_report_cpu_starting(cpu);
+	rcu_cpu_starting(cpu);
 	cpu_callin_map[cpu] = 1;
 
 	if (smp_ops->setup_cpu)
@@ -1761,14 +1751,6 @@ int __cpu_disable(void)
 
 void __cpu_die(unsigned int cpu)
 {
-	/*
-	 * This could perhaps be a generic call in idlea_task_dead(), but
-	 * that requires testing from all archs, so first put it here to
-	 */
-	VM_WARN_ON_ONCE(!cpumask_test_cpu(cpu, mm_cpumask(&init_mm)));
-	dec_mm_active_cpus(&init_mm);
-	cpumask_clear_cpu(cpu, mm_cpumask(&init_mm));
-
 	if (smp_ops->cpu_die)
 		smp_ops->cpu_die(cpu);
 }

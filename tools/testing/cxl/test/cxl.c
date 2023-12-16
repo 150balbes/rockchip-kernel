@@ -831,7 +831,7 @@ static void mock_init_hdm_decoder(struct cxl_decoder *cxld)
 			cxld->interleave_ways = 2;
 		else
 			cxld->interleave_ways = 1;
-		cxld->interleave_granularity = 4096;
+		cxld->interleave_granularity = 256;
 		cxld->hpa_range = (struct range) {
 			.start = base,
 			.end = base + size - 1,
@@ -997,6 +997,10 @@ static void mock_companion(struct acpi_device *adev, struct device *dev)
 
 #ifndef SZ_64G
 #define SZ_64G (SZ_32G * 2)
+#endif
+
+#ifndef SZ_512G
+#define SZ_512G (SZ_64G * 8)
 #endif
 
 static __init int cxl_rch_init(void)

@@ -10,6 +10,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000",
         "expExitCode": "0",
@@ -17,7 +18,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 83p max 250p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -31,6 +33,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 min 100",
         "expExitCode": "0",
@@ -38,7 +41,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 100p max 250p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -52,6 +56,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 max 900",
         "expExitCode": "0",
@@ -59,7 +64,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min.*max 900p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -73,6 +79,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 ecn",
         "expExitCode": "0",
@@ -80,7 +87,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 83p max 250p ecn",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -94,6 +102,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 burst 100",
         "expExitCode": "0",
@@ -101,7 +110,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 83p max 250p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -115,6 +125,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000"
         ],
         "cmdUnderTest": "$TC qdisc del dev $DUMMY handle 1: root",
@@ -123,6 +134,7 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 83p max 250p",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -136,6 +148,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000"
         ],
         "cmdUnderTest": "$TC qdisc replace dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 min 100",
@@ -144,7 +157,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 100p max 250p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -158,6 +172,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000"
         ],
         "cmdUnderTest": "$TC qdisc change dev $DUMMY handle 1: root choke limit 1000 bandwidth 10000 min 100",
@@ -166,7 +181,8 @@
         "matchPattern": "qdisc choke 1: root refcnt [0-9]+ limit 1000p min 100p max 250p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     }
 ]

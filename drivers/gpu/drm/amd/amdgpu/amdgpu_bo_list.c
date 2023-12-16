@@ -75,17 +75,27 @@ int amdgpu_bo_list_create(struct amdgpu_device *adev, struct drm_file *filp,
 	struct amdgpu_bo_list_entry *array;
 	struct amdgpu_bo_list *list;
 	uint64_t total_size = 0;
+	size_t size;
 	unsigned i;
 	int r;
 
-	list = kvzalloc(struct_size(list, entries, num_entries), GFP_KERNEL);
+	if (num_entries > (SIZE_MAX - sizeof(struct amdgpu_bo_list))
+				/ sizeof(struct amdgpu_bo_list_entry))
+		return -EINVAL;
+
+	size = sizeof(struct amdgpu_bo_list);
+	size += num_entries * sizeof(struct amdgpu_bo_list_entry);
+	list = kvmalloc(size, GFP_KERNEL);
 	if (!list)
 		return -ENOMEM;
 
 	kref_init(&list->refcount);
+	list->gds_obj = NULL;
+	list->gws_obj = NULL;
+	list->oa_obj = NULL;
 
-	list->num_entries = num_entries;
-	array = list->entries;
+	array = amdgpu_bo_list_array_entry(list, 0);
+	memset(array, 0, num_entries * sizeof(struct amdgpu_bo_list_entry));
 
 	for (i = 0; i < num_entries; ++i) {
 		struct amdgpu_bo_list_entry *entry;
@@ -130,6 +140,7 @@ int amdgpu_bo_list_create(struct amdgpu_device *adev, struct drm_file *filp,
 	}
 
 	list->first_userptr = first_userptr;
+	list->num_entries = num_entries;
 	sort(array, last_entry, sizeof(struct amdgpu_bo_list_entry),
 	     amdgpu_bo_list_entry_cmp, NULL);
 
@@ -172,7 +183,6 @@ int amdgpu_bo_list_get(struct amdgpu_fpriv *fpriv, int id,
 	}
 
 	rcu_read_unlock();
-	*result = NULL;
 	return -ENOENT;
 }
 

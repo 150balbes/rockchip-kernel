@@ -13,7 +13,6 @@
 #include <linux/reboot.h>
 #include <linux/ftrace.h>
 #include <linux/debug_locks.h>
-#include <asm/pfault.h>
 #include <asm/cio.h>
 #include <asm/setup.h>
 #include <asm/smp.h>
@@ -94,12 +93,12 @@ static noinline void __machine_kdump(void *image)
 	if (MACHINE_HAS_VX)
 		save_vx_regs((__vector128 *) mcesa->vector_save_area);
 	if (MACHINE_HAS_GS) {
-		local_ctl_store(2, &cr2_old.reg);
+		__ctl_store(cr2_old.val, 2, 2);
 		cr2_new = cr2_old;
 		cr2_new.gse = 1;
-		local_ctl_load(2, &cr2_new.reg);
+		__ctl_load(cr2_new.val, 2, 2);
 		save_gs_cb((struct gs_cb *) mcesa->guarded_storage_save_area);
-		local_ctl_load(2, &cr2_old.reg);
+		__ctl_load(cr2_old.val, 2, 2);
 	}
 	/*
 	 * To create a good backchain for this CPU in the dump store_status
@@ -216,8 +215,8 @@ void arch_crash_save_vmcoreinfo(void)
 	VMCOREINFO_SYMBOL(lowcore_ptr);
 	VMCOREINFO_SYMBOL(high_memory);
 	VMCOREINFO_LENGTH(lowcore_ptr, NR_CPUS);
-	vmcoreinfo_append_str("SAMODE31=%lx\n", (unsigned long)__samode31);
-	vmcoreinfo_append_str("EAMODE31=%lx\n", (unsigned long)__eamode31);
+	vmcoreinfo_append_str("SAMODE31=%lx\n", __samode31);
+	vmcoreinfo_append_str("EAMODE31=%lx\n", __eamode31);
 	vmcoreinfo_append_str("KERNELOFFSET=%lx\n", kaslr_offset());
 	abs_lc = get_abs_lowcore();
 	abs_lc->vmcore_info = paddr_vmcoreinfo_note();

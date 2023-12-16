@@ -51,10 +51,6 @@ properties:
     description:
       Optional power supply.
 
-  reset-gpios:
-    description: GPIO connected to the XRES pin
-    maxItems: 1
-
 patternProperties:
   '-pins$':
     type: object

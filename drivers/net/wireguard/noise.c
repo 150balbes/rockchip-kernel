@@ -15,7 +15,7 @@
 #include <linux/bitmap.h>
 #include <linux/scatterlist.h>
 #include <linux/highmem.h>
-#include <crypto/utils.h>
+#include <crypto/algapi.h>
 
 /* This implements Noise_IKpsk2:
  *

@@ -90,33 +90,12 @@ void hypfs_dbfs_remove_file(struct hypfs_dbfs_file *df)
 	debugfs_remove(df->dentry);
 }
 
-static int __init hypfs_dbfs_init(void)
+void hypfs_dbfs_init(void)
 {
-	int rc = -ENODATA;
-
 	dbfs_dir = debugfs_create_dir("s390_hypfs", NULL);
-	if (hypfs_diag_init())
-		goto fail_dbfs_exit;
-	if (hypfs_vm_init())
-		goto fail_hypfs_diag_exit;
-	hypfs_sprp_init();
-	if (hypfs_diag0c_init())
-		goto fail_hypfs_sprp_exit;
-	rc = hypfs_fs_init();
-	if (rc)
-		goto fail_hypfs_diag0c_exit;
-	return 0;
-
-fail_hypfs_diag0c_exit:
-	hypfs_diag0c_exit();
-fail_hypfs_sprp_exit:
-	hypfs_sprp_exit();
-	hypfs_vm_exit();
-fail_hypfs_diag_exit:
-	hypfs_diag_exit();
-	pr_err("Initialization of hypfs failed with rc=%i\n", rc);
-fail_dbfs_exit:
-	debugfs_remove(dbfs_dir);
-	return rc;
 }
-device_initcall(hypfs_dbfs_init)
+
+void hypfs_dbfs_exit(void)
+{
+	debugfs_remove(dbfs_dir);
+}

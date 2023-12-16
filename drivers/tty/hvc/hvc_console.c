@@ -496,11 +496,11 @@ static int hvc_push(struct hvc_struct *hp)
 	return n;
 }
 
-static ssize_t hvc_write(struct tty_struct *tty, const u8 *buf, size_t count)
+static int hvc_write(struct tty_struct *tty, const unsigned char *buf, int count)
 {
 	struct hvc_struct *hp = tty->driver_data;
 	unsigned long flags;
-	size_t rsize, written = 0;
+	int rsize, written = 0;
 
 	/* This write was probably executed during a tty close. */
 	if (!hp)

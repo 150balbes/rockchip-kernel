@@ -17,6 +17,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
@@ -694,7 +695,6 @@ static void npcm_i2c_callback(struct npcm_i2c *bus,
 {
 	struct i2c_msg *msgs;
 	int msgs_num;
-	bool do_complete = false;
 
 	msgs = bus->msgs;
 	msgs_num = bus->msgs_num;
@@ -723,17 +723,23 @@ static void npcm_i2c_callback(struct npcm_i2c *bus,
 				 msgs[1].flags & I2C_M_RD)
 				msgs[1].len = info;
 		}
-		do_complete = true;
-		break;
+		if (completion_done(&bus->cmd_complete) == false)
+			complete(&bus->cmd_complete);
+	break;
+
 	case I2C_NACK_IND:
 		/* MASTER transmit got a NACK before tx all bytes */
 		bus->cmd_err = -ENXIO;
-		do_complete = true;
+		if (bus->master_or_slave == I2C_MASTER)
+			complete(&bus->cmd_complete);
+
 		break;
 	case I2C_BUS_ERR_IND:
 		/* Bus error */
 		bus->cmd_err = -EAGAIN;
-		do_complete = true;
+		if (bus->master_or_slave == I2C_MASTER)
+			complete(&bus->cmd_complete);
+
 		break;
 	case I2C_WAKE_UP_IND:
 		/* I2C wake up */
@@ -747,8 +753,6 @@ static void npcm_i2c_callback(struct npcm_i2c *bus,
 	if (bus->slave)
 		bus->master_or_slave = I2C_SLAVE;
 #endif
-	if (do_complete)
-		complete(&bus->cmd_complete);
 }
 
 static u8 npcm_i2c_fifo_usage(struct npcm_i2c *bus)

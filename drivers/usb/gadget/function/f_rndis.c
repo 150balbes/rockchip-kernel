@@ -84,6 +84,19 @@ static inline struct f_rndis *func_to_rndis(struct usb_function *f)
 	return container_of(f, struct f_rndis, port.func);
 }
 
+/* peak (theoretical) bulk transfer rate in bits-per-second */
+static unsigned int bitrate(struct usb_gadget *g)
+{
+	if (gadget_is_superspeed(g) && g->speed >= USB_SPEED_SUPER_PLUS)
+		return 4250000000U;
+	if (gadget_is_superspeed(g) && g->speed == USB_SPEED_SUPER)
+		return 3750000000U;
+	else if (gadget_is_dualspeed(g) && g->speed == USB_SPEED_HIGH)
+		return 13 * 512 * 8 * 1000 * 8;
+	else
+		return 19 * 64 * 1 * 1000 * 8;
+}
+
 /*-------------------------------------------------------------------------*/
 
 /*
@@ -627,7 +640,7 @@ static void rndis_open(struct gether *geth)
 	DBG(cdev, "%s\n", __func__);
 
 	rndis_set_param_medium(rndis->params, RNDIS_MEDIUM_802_3,
-				gether_bitrate(cdev->gadget) / 100);
+				bitrate(cdev->gadget) / 100);
 	rndis_signal_connect(rndis->params);
 }
 
@@ -798,7 +811,9 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	 * until we're activated via set_alt().
 	 */
 
-	DBG(cdev, "RNDIS: IN/%s OUT/%s NOTIFY/%s\n",
+	DBG(cdev, "RNDIS: %s speed IN/%s OUT/%s NOTIFY/%s\n",
+			gadget_is_superspeed(c->cdev->gadget) ? "super" :
+			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			rndis->port.in_ep->name, rndis->port.out_ep->name,
 			rndis->notify->name);
 	return 0;

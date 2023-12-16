@@ -361,7 +361,8 @@ static void serial_cleanup(struct tty_struct *tty)
 	module_put(owner);
 }
 
-static ssize_t serial_write(struct tty_struct *tty, const u8 *buf, size_t count)
+static int serial_write(struct tty_struct *tty, const unsigned char *buf,
+								int count)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	int retval = -ENODEV;
@@ -369,7 +370,7 @@ static ssize_t serial_write(struct tty_struct *tty, const u8 *buf, size_t count)
 	if (port->serial->dev->state == USB_STATE_NOTATTACHED)
 		goto exit;
 
-	dev_dbg(&port->dev, "%s - %zu byte(s)\n", __func__, count);
+	dev_dbg(&port->dev, "%s - %d byte(s)\n", __func__, count);
 
 	retval = port->serial->type->write(tty, port, buf, count);
 	if (retval < 0)

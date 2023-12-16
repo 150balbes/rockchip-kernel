@@ -68,13 +68,8 @@ void exclude_cmds(struct cmdnames *cmds, struct cmdnames *excludes)
 	while (ci < cmds->cnt && ei < excludes->cnt) {
 		cmp = strcmp(cmds->names[ci]->name, excludes->names[ei]->name);
 		if (cmp < 0) {
-			if (ci == cj) {
-				ci++;
-				cj++;
-			} else {
-				zfree(&cmds->names[cj]);
-				cmds->names[cj++] = cmds->names[ci++];
-			}
+			zfree(&cmds->names[cj]);
+			cmds->names[cj++] = cmds->names[ci++];
 		} else if (cmp == 0) {
 			ci++;
 			ei++;
@@ -82,11 +77,10 @@ void exclude_cmds(struct cmdnames *cmds, struct cmdnames *excludes)
 			ei++;
 		}
 	}
-	if (ci != cj) {
-		while (ci < cmds->cnt) {
-			zfree(&cmds->names[cj]);
-			cmds->names[cj++] = cmds->names[ci++];
-		}
+
+	while (ci < cmds->cnt) {
+		zfree(&cmds->names[cj]);
+		cmds->names[cj++] = cmds->names[ci++];
 	}
 	for (ci = cj; ci < cmds->cnt; ci++)
 		zfree(&cmds->names[ci]);

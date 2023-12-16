@@ -115,10 +115,8 @@ struct ath_tx_status {
 	u8 qid;
 	u16 desc_id;
 	u8 tid;
-	struct_group(ba,
-		u32 ba_low;
-		u32 ba_high;
-	);
+	u32 ba_low;
+	u32 ba_high;
 	u32 evm0;
 	u32 evm1;
 	u32 evm2;

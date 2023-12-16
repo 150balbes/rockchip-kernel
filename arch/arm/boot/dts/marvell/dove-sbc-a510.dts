@@ -76,20 +76,22 @@
 		stdout-path = &uart0;
 	};
 
-	usb0_power: regulator-2 {
-		compatible = "regulator-fixed";
-		regulator-name = "USB Power";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		gpio = <&gpio_ext 0 GPIO_ACTIVE_HIGH>;
-	};
+	regulators {
+		usb0_power: regulator@2 {
+			compatible = "regulator-fixed";
+			regulator-name = "USB Power";
+			regulator-min-microvolt = <5000000>;
+			regulator-max-microvolt = <5000000>;
+			gpio = <&gpio_ext 0 GPIO_ACTIVE_HIGH>;
+		};
 
-	mmc_power: regulator-3 {
-		compatible = "regulator-fixed";
-		regulator-name = "MMC Power";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio_ext 13 GPIO_ACTIVE_HIGH>;
+		mmc_power: regulator@3 {
+			compatible = "regulator-fixed";
+			regulator-name = "MMC Power";
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <3300000>;
+			gpio = <&gpio_ext 13 GPIO_ACTIVE_HIGH>;
+		};
 	};
 };
 

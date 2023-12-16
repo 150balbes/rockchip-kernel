@@ -3,7 +3,7 @@
  * A policy database (policydb) specifies the
  * configuration data for the security policy.
  *
- * Author : Stephen Smalley, <stephen.smalley.work@gmail.com>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  */
 
 /*
@@ -366,12 +366,9 @@ static inline int next_entry(void *buf, struct policy_file *fp, size_t bytes)
 	return 0;
 }
 
-static inline int put_entry(const void *buf, size_t bytes, size_t num, struct policy_file *fp)
+static inline int put_entry(const void *buf, size_t bytes, int num, struct policy_file *fp)
 {
-	size_t len;
-
-	if (unlikely(check_mul_overflow(bytes, num, &len)))
-		return -EINVAL;
+	size_t len = bytes * num;
 
 	if (len > fp->len)
 		return -EINVAL;

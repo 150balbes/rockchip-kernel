@@ -4,11 +4,10 @@
  * Written by David Howells (dhowells@redhat.com)
  */
 
-#include <crypto/pkcs7.h>
-#include <linux/cred.h>
 #include <linux/kernel.h>
+#include <linux/cred.h>
 #include <linux/key.h>
-#include <linux/module.h>
+#include <crypto/pkcs7.h>
 #include "x509_parser.h"
 
 struct certs_test {
@@ -176,7 +175,7 @@ static const struct certs_test certs_tests[] __initconst = {
 	TEST(certs_selftest_1_data, certs_selftest_1_pkcs7),
 };
 
-static int __init fips_signature_selftest(void)
+int __init fips_signature_selftest(void)
 {
 	struct key *keyring;
 	int ret, i;
@@ -223,9 +222,3 @@ static int __init fips_signature_selftest(void)
 	key_put(keyring);
 	return 0;
 }
-
-late_initcall(fips_signature_selftest);
-
-MODULE_DESCRIPTION("X.509 self tests");
-MODULE_AUTHOR("Red Hat, Inc.");
-MODULE_LICENSE("GPL");

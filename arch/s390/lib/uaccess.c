@@ -12,22 +12,21 @@
 #include <linux/export.h>
 #include <linux/mm.h>
 #include <asm/asm-extable.h>
-#include <asm/ctlreg.h>
 
 #ifdef CONFIG_DEBUG_ENTRY
 void debug_user_asce(int exit)
 {
-	struct ctlreg cr1, cr7;
+	unsigned long cr1, cr7;
 
-	local_ctl_store(1, &cr1);
-	local_ctl_store(7, &cr7);
-	if (cr1.val == S390_lowcore.kernel_asce.val && cr7.val == S390_lowcore.user_asce.val)
+	__ctl_store(cr1, 1, 1);
+	__ctl_store(cr7, 7, 7);
+	if (cr1 == S390_lowcore.kernel_asce && cr7 == S390_lowcore.user_asce)
 		return;
 	panic("incorrect ASCE on kernel %s\n"
 	      "cr1:    %016lx cr7:  %016lx\n"
-	      "kernel: %016lx user: %016lx\n",
-	      exit ? "exit" : "entry", cr1.val, cr7.val,
-	      S390_lowcore.kernel_asce.val, S390_lowcore.user_asce.val);
+	      "kernel: %016llx user: %016llx\n",
+	      exit ? "exit" : "entry", cr1, cr7,
+	      S390_lowcore.kernel_asce, S390_lowcore.user_asce);
 }
 #endif /*CONFIG_DEBUG_ENTRY */
 

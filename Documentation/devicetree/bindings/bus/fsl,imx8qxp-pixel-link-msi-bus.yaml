@@ -73,6 +73,9 @@ patternProperties:
   "^.*@[0-9a-f]+$":
     description: Devices attached to the bus
     type: object
+    properties:
+      reg:
+        maxItems: 1
 
     required:
       - reg

@@ -34,7 +34,6 @@
 
 #include "dce_clock_source.h"
 #include "clk_mgr.h"
-#include "dccg.h"
 
 #include "reg_helper.h"
 
@@ -44,10 +43,7 @@
 #define CTX \
 	clk_src->base.ctx
 
-#define DC_LOGGER \
-	calc_pll_cs->ctx->logger
-#define DC_LOGGER_INIT() \
-	struct calc_pll_clock_source *calc_pll_cs = &clk_src->calc_pll
+#define DC_LOGGER_INIT()
 
 #undef FN
 #define FN(reg_name, field_name) \
@@ -1258,7 +1254,6 @@ static uint32_t dcn3_get_pix_clk_dividers(
 		struct pll_settings *pll_settings)
 {
 	unsigned long long actual_pix_clk_100Hz = pix_clk_params ? pix_clk_params->requested_pix_clk_100hz : 0;
-	struct dce110_clk_src *clk_src = TO_DCE110_CLK_SRC(cs);
 
 	DC_LOGGER_INIT();
 

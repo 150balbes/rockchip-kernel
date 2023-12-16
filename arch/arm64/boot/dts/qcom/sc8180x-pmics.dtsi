@@ -74,7 +74,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		pon: pon@800 {
+		pon: power-on@800 {
 			compatible = "qcom,pm8916-pon";
 			reg = <0x0800>;
 			pwrkey {
@@ -105,19 +105,19 @@
 			#io-channel-cells = <1>;
 			interrupts = <0x0 0x31 0x0 IRQ_TYPE_EDGE_RISING>;
 
-			channel@0 {
+			ref-gnd@0 {
 				reg = <ADC5_REF_GND>;
 				qcom,pre-scaling = <1 1>;
 				label = "ref_gnd";
 			};
 
-			channel@1 {
+			vref-1p25@1 {
 				reg = <ADC5_1P25VREF>;
 				qcom,pre-scaling = <1 1>;
 				label = "vref_1p25";
 			};
 
-			channel@6 {
+			die-temp@6 {
 				reg = <ADC5_DIE_TEMP>;
 				qcom,pre-scaling = <1 1>;
 				label = "die_temp";
@@ -142,10 +142,9 @@
 		};
 
 		pmc8180_gpios: gpio@c000 {
-			compatible = "qcom,pmc8180-gpio", "qcom,spmi-gpio";
+			compatible = "qcom,pmc8180-gpio";
 			reg = <0xc000>;
 			gpio-controller;
-			gpio-ranges = <&pmc8180_gpios 0 0 10>;
 			#gpio-cells = <2>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
@@ -173,19 +172,19 @@
 			#io-channel-cells = <1>;
 			interrupts = <0x2 0x31 0x0 IRQ_TYPE_EDGE_RISING>;
 
-			channel@0 {
+			ref-gnd@0 {
 				reg = <ADC5_REF_GND>;
 				qcom,pre-scaling = <1 1>;
 				label = "ref_gnd";
 			};
 
-			channel@1 {
+			vref-1p25@1 {
 				reg = <ADC5_1P25VREF>;
 				qcom,pre-scaling = <1 1>;
 				label = "vref_1p25";
 			};
 
-			channel@85 {
+			vcoin@85 {
 				reg = <0x85>;
 				qcom,pre-scaling = <1 1>;
 				label = "vcoin2";
@@ -221,19 +220,19 @@
 			#io-channel-cells = <1>;
 			interrupts = <0xa 0x31 0x0 IRQ_TYPE_EDGE_RISING>;
 
-			channel@0 {
+			ref-gnd@0 {
 				reg = <ADC5_REF_GND>;
 				qcom,pre-scaling = <1 1>;
 				label = "ref_gnd";
 			};
 
-			channel@1 {
+			vref-1p25@1 {
 				reg = <ADC5_1P25VREF>;
 				qcom,pre-scaling = <1 1>;
 				label = "vref_1p25";
 			};
 
-			channel@85 {
+			vcoin@85 {
 				reg = <0x85>;
 				qcom,pre-scaling = <1 1>;
 				label = "vcoin";
@@ -247,7 +246,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		pon@800 {
+		power-on@800 {
 			compatible = "qcom,pm8916-pon";
 			reg = <0x0800>;
 
@@ -271,19 +270,19 @@
 			#io-channel-cells = <1>;
 			interrupts = <0x4 0x31 0x0 IRQ_TYPE_EDGE_RISING>;
 
-			channel@0 {
+			ref-gnd@0 {
 				reg = <ADC5_REF_GND>;
 				qcom,pre-scaling = <1 1>;
 				label = "ref_gnd";
 			};
 
-			channel@1 {
+			vref-1p25@1 {
 				reg = <ADC5_1P25VREF>;
 				qcom,pre-scaling = <1 1>;
 				label = "vref_1p25";
 			};
 
-			channel@6 {
+			die-temp@6 {
 				reg = <ADC5_DIE_TEMP>;
 				qcom,pre-scaling = <1 1>;
 				label = "die_temp";
@@ -301,10 +300,9 @@
 		};
 
 		pmc8180c_gpios: gpio@c000 {
-			compatible = "qcom,pmc8180c-gpio", "qcom,spmi-gpio";
+			compatible = "qcom,pmc8180c-gpio";
 			reg = <0xc000>;
 			gpio-controller;
-			gpio-ranges = <&pmc8180c_gpios 0 0 12>;
 			#gpio-cells = <2>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
@@ -315,7 +313,7 @@
 		compatible = "qcom,pmc8180c", "qcom,spmi-pmic";
 		reg = <0x5 SPMI_USID>;
 
-		pmc8180c_lpg: pwm {
+		pmc8180c_lpg: lpg {
 			compatible = "qcom,pmc8180c-lpg";
 
 			#address-cells = <1>;

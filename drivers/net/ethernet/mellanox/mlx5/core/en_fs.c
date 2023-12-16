@@ -1283,7 +1283,9 @@ static int mlx5e_create_inner_ttc_table(struct mlx5e_flow_steering *fs,
 	mlx5e_set_inner_ttc_params(fs, rx_res, &ttc_params);
 	fs->inner_ttc = mlx5_create_inner_ttc_table(fs->mdev,
 						    &ttc_params);
-	return PTR_ERR_OR_ZERO(fs->inner_ttc);
+	if (IS_ERR(fs->inner_ttc))
+		return PTR_ERR(fs->inner_ttc);
+	return 0;
 }
 
 int mlx5e_create_ttc_table(struct mlx5e_flow_steering *fs,
@@ -1293,7 +1295,9 @@ int mlx5e_create_ttc_table(struct mlx5e_flow_steering *fs,
 
 	mlx5e_set_ttc_params(fs, rx_res, &ttc_params, true);
 	fs->ttc = mlx5_create_ttc_table(fs->mdev, &ttc_params);
-	return PTR_ERR_OR_ZERO(fs->ttc);
+	if (IS_ERR(fs->ttc))
+		return PTR_ERR(fs->ttc);
+	return 0;
 }
 
 int mlx5e_create_flow_steering(struct mlx5e_flow_steering *fs,

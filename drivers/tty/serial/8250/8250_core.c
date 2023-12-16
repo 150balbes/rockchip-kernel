@@ -259,7 +259,7 @@ static void serial8250_backup_timeout(struct timer_list *t)
 	unsigned int iir, ier = 0, lsr;
 	unsigned long flags;
 
-	uart_port_lock_irqsave(&up->port, &flags);
+	spin_lock_irqsave(&up->port.lock, flags);
 
 	/*
 	 * Must disable interrupts or else we risk racing with the interrupt
@@ -292,7 +292,7 @@ static void serial8250_backup_timeout(struct timer_list *t)
 	if (up->port.irq)
 		serial_out(up, UART_IER, ier);
 
-	uart_port_unlock_irqrestore(&up->port, flags);
+	spin_unlock_irqrestore(&up->port.lock, flags);
 
 	/* Standard timer interval plus 0.2s to keep the port running */
 	mod_timer(&up->timer,
@@ -497,7 +497,6 @@ static struct uart_8250_port *serial8250_setup_port(int index)
 
 	up = &serial8250_ports[index];
 	up->port.line = index;
-	up->port.port_id = index;
 
 	serial8250_init_port(up);
 	if (!base_ops)
@@ -611,7 +610,7 @@ static int univ8250_console_setup(struct console *co, char *options)
 	 * if so, search for the first available port that does have
 	 * console support.
 	 */
-	if (co->index < 0 || co->index >= UART_NR)
+	if (co->index >= UART_NR)
 		co->index = 0;
 
 	/*
@@ -992,11 +991,11 @@ static void serial_8250_overrun_backoff_work(struct work_struct *work)
 	struct uart_port *port = &up->port;
 	unsigned long flags;
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 	up->ier |= UART_IER_RLSI | UART_IER_RDI;
 	up->port.read_status_mask |= UART_LSR_DR;
 	serial_out(up, UART_IER, up->ier);
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
 /**
@@ -1041,7 +1040,6 @@ int serial8250_register_8250_port(const struct uart_8250_port *up)
 			uart_remove_one_port(&serial8250_reg, &uart->port);
 
 		uart->port.ctrl_id	= up->port.ctrl_id;
-		uart->port.port_id	= up->port.port_id;
 		uart->port.iobase       = up->port.iobase;
 		uart->port.membase      = up->port.membase;
 		uart->port.irq          = up->port.irq;
@@ -1194,9 +1192,9 @@ void serial8250_unregister_port(int line)
 	if (uart->em485) {
 		unsigned long flags;
 
-		uart_port_lock_irqsave(&uart->port, &flags);
+		spin_lock_irqsave(&uart->port.lock, flags);
 		serial8250_em485_destroy(uart);
-		uart_port_unlock_irqrestore(&uart->port, flags);
+		spin_unlock_irqrestore(&uart->port.lock, flags);
 	}
 
 	uart_remove_one_port(&serial8250_reg, &uart->port);
@@ -1204,7 +1202,6 @@ void serial8250_unregister_port(int line)
 		uart->port.flags &= ~UPF_BOOT_AUTOCONF;
 		uart->port.type = PORT_UNKNOWN;
 		uart->port.dev = &serial8250_isa_devs->dev;
-		uart->port.port_id = line;
 		uart->capabilities = 0;
 		serial8250_init_port(uart);
 		serial8250_apply_quirks(uart);

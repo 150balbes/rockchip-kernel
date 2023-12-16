@@ -351,7 +351,7 @@ err_free_mem:
 	return error;
 }
 
-static void max8997_haptic_remove(struct platform_device *pdev)
+static int max8997_haptic_remove(struct platform_device *pdev)
 {
 	struct max8997_haptic *chip = platform_get_drvdata(pdev);
 
@@ -362,6 +362,8 @@ static void max8997_haptic_remove(struct platform_device *pdev)
 		pwm_put(chip->pwm);
 
 	kfree(chip);
+
+	return 0;
 }
 
 static int max8997_haptic_suspend(struct device *dev)
@@ -389,7 +391,7 @@ static struct platform_driver max8997_haptic_driver = {
 		.pm	= pm_sleep_ptr(&max8997_haptic_pm_ops),
 	},
 	.probe		= max8997_haptic_probe,
-	.remove_new	= max8997_haptic_remove,
+	.remove		= max8997_haptic_remove,
 	.id_table	= max8997_haptic_id,
 };
 module_platform_driver(max8997_haptic_driver);

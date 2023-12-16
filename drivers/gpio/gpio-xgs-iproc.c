@@ -291,7 +291,7 @@ static int iproc_gpio_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void iproc_gpio_remove(struct platform_device *pdev)
+static int iproc_gpio_remove(struct platform_device *pdev)
 {
 	struct iproc_gpio_chip *chip = platform_get_drvdata(pdev);
 
@@ -302,6 +302,8 @@ static void iproc_gpio_remove(struct platform_device *pdev)
 		val &= ~IPROC_CCA_INT_F_GPIOINT;
 		writel_relaxed(val, chip->intr + IPROC_CCA_INT_MASK);
 	}
+
+	return 0;
 }
 
 static const struct of_device_id bcm_iproc_gpio_of_match[] = {
@@ -316,7 +318,7 @@ static struct platform_driver bcm_iproc_gpio_driver = {
 		.of_match_table = bcm_iproc_gpio_of_match,
 	},
 	.probe = iproc_gpio_probe,
-	.remove_new = iproc_gpio_remove,
+	.remove = iproc_gpio_remove,
 };
 
 module_platform_driver(bcm_iproc_gpio_driver);

@@ -189,6 +189,7 @@ static int spear_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static const struct pwm_ops spear_pwm_ops = {
 	.apply = spear_pwm_apply,
+	.owner = THIS_MODULE,
 };
 
 static int spear_pwm_probe(struct platform_device *pdev)
@@ -206,21 +207,26 @@ static int spear_pwm_probe(struct platform_device *pdev)
 	if (IS_ERR(pc->mmio_base))
 		return PTR_ERR(pc->mmio_base);
 
-	pc->clk = devm_clk_get_prepared(&pdev->dev, NULL);
+	pc->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(pc->clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(pc->clk),
-				     "Failed to get clock\n");
+		return PTR_ERR(pc->clk);
+
+	platform_set_drvdata(pdev, pc);
 
 	pc->chip.dev = &pdev->dev;
 	pc->chip.ops = &spear_pwm_ops;
 	pc->chip.npwm = NUM_PWM;
 
+	ret = clk_prepare(pc->clk);
+	if (ret)
+		return ret;
+
 	if (of_device_is_compatible(np, "st,spear1340-pwm")) {
 		ret = clk_enable(pc->clk);
-		if (ret)
-			return dev_err_probe(&pdev->dev, ret,
-					     "Failed to enable clk\n");
-
+		if (ret) {
+			clk_unprepare(pc->clk);
+			return ret;
+		}
 		/*
 		 * Following enables PWM chip, channels would still be
 		 * enabled individually through their control register
@@ -232,11 +238,23 @@ static int spear_pwm_probe(struct platform_device *pdev)
 		clk_disable(pc->clk);
 	}
 
-	ret = devm_pwmchip_add(&pdev->dev, &pc->chip);
-	if (ret < 0)
-		return dev_err_probe(&pdev->dev, ret, "pwmchip_add() failed\n");
+	ret = pwmchip_add(&pc->chip);
+	if (ret < 0) {
+		clk_unprepare(pc->clk);
+		dev_err(&pdev->dev, "pwmchip_add() failed: %d\n", ret);
+	}
 
-	return 0;
+	return ret;
+}
+
+static void spear_pwm_remove(struct platform_device *pdev)
+{
+	struct spear_pwm_chip *pc = platform_get_drvdata(pdev);
+
+	pwmchip_remove(&pc->chip);
+
+	/* clk was prepared in probe, hence unprepare it here */
+	clk_unprepare(pc->clk);
 }
 
 static const struct of_device_id spear_pwm_of_match[] = {
@@ -253,6 +271,7 @@ static struct platform_driver spear_pwm_driver = {
 		.of_match_table = spear_pwm_of_match,
 	},
 	.probe = spear_pwm_probe,
+	.remove_new = spear_pwm_remove,
 };
 
 module_platform_driver(spear_pwm_driver);

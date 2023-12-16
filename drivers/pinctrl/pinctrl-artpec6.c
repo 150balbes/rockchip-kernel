@@ -970,11 +970,13 @@ static int artpec6_pmx_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void artpec6_pmx_remove(struct platform_device *pdev)
+static int artpec6_pmx_remove(struct platform_device *pdev)
 {
 	struct artpec6_pmx *pmx = platform_get_drvdata(pdev);
 
 	pinctrl_unregister(pmx->pctl);
+
+	return 0;
 }
 
 static const struct of_device_id artpec6_pinctrl_match[] = {
@@ -988,7 +990,7 @@ static struct platform_driver artpec6_pmx_driver = {
 		.of_match_table = artpec6_pinctrl_match,
 	},
 	.probe = artpec6_pmx_probe,
-	.remove_new = artpec6_pmx_remove,
+	.remove = artpec6_pmx_remove,
 };
 
 static int __init artpec6_pmx_init(void)

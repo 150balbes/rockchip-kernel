@@ -6,10 +6,18 @@
 #include <linux/kvm_host.h>
 #include <asm/kvm_host.h>
 
-#ifdef CONFIG_KVM_PROVE_MMU
-#define KVM_MMU_WARN_ON(x) WARN_ON_ONCE(x)
+#undef MMU_DEBUG
+
+#ifdef MMU_DEBUG
+extern bool dbg;
+
+#define pgprintk(x...) do { if (dbg) printk(x); } while (0)
+#define rmap_printk(fmt, args...) do { if (dbg) printk("%s: " fmt, __func__, ## args); } while (0)
+#define MMU_WARN_ON(x) WARN_ON(x)
 #else
-#define KVM_MMU_WARN_ON(x) BUILD_BUG_ON_INVALID(x)
+#define pgprintk(x...) do { } while (0)
+#define rmap_printk(x...) do { } while (0)
+#define MMU_WARN_ON(x) do { } while (0)
 #endif
 
 /* Page table builder macros common to shadow (host) PTEs and guest PTEs. */
@@ -36,16 +44,6 @@
 #define INVALID_PAE_ROOT	0
 #define IS_VALID_PAE_ROOT(x)	(!!(x))
 
-static inline hpa_t kvm_mmu_get_dummy_root(void)
-{
-	return my_zero_pfn(0) << PAGE_SHIFT;
-}
-
-static inline bool kvm_mmu_is_dummy_root(hpa_t shadow_page)
-{
-	return is_zero_pfn(shadow_page >> PAGE_SHIFT);
-}
-
 typedef u64 __rcu *tdp_ptep_t;
 
 struct kvm_mmu_page {
@@ -58,12 +56,7 @@ struct kvm_mmu_page {
 
 	bool tdp_mmu_page;
 	bool unsync;
-	union {
-		u8 mmu_valid_gen;
-
-		/* Only accessed under slots_lock.  */
-		bool tdp_mmu_scheduled_root_to_zap;
-	};
+	u8 mmu_valid_gen;
 
 	 /*
 	  * The shadow page can't be replaced by an equivalent huge page
@@ -105,7 +98,13 @@ struct kvm_mmu_page {
 		struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
 		tdp_ptep_t ptep;
 	};
-	DECLARE_BITMAP(unsync_child_bitmap, 512);
+	union {
+		DECLARE_BITMAP(unsync_child_bitmap, 512);
+		struct {
+			struct work_struct tdp_mmu_async_work;
+			void *tdp_mmu_async_data;
+		};
+	};
 
 	/*
 	 * Tracks shadow pages that, if zapped, would allow KVM to create an NX
@@ -170,6 +169,9 @@ void kvm_mmu_gfn_allow_lpage(const struct kvm_memory_slot *slot, gfn_t gfn);
 bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 				    struct kvm_memory_slot *slot, u64 gfn,
 				    int min_level);
+
+void kvm_flush_remote_tlbs_range(struct kvm *kvm, gfn_t start_gfn,
+				 gfn_t nr_pages);
 
 /* Flush the given page (huge or not) of guest memory. */
 static inline void kvm_flush_remote_tlbs_gfn(struct kvm *kvm, gfn_t gfn, int level)

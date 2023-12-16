@@ -188,11 +188,8 @@ static ssize_t anycast_mask_store(struct device *dev,
 	uint32_t datum;
 	int ret;
 
-	ret = kstrtouint(buf, 16, &datum);
-	if (ret)
-		return ret;
-
 	memset(&mesh_access, 0, sizeof(mesh_access));
+	sscanf(buf, "%x", &datum);
 	mesh_access.data[0] = cpu_to_le32(datum);
 
 	ret = lbs_mesh_access(priv, CMD_ACT_MESH_SET_ANYCAST, &mesh_access);
@@ -244,14 +241,15 @@ static ssize_t prb_rsp_limit_store(struct device *dev,
 	int ret;
 	unsigned long retry_limit;
 
+	memset(&mesh_access, 0, sizeof(mesh_access));
+	mesh_access.data[0] = cpu_to_le32(CMD_ACT_SET);
+
 	ret = kstrtoul(buf, 10, &retry_limit);
 	if (ret)
 		return ret;
 	if (retry_limit > 15)
 		return -ENOTSUPP;
 
-	memset(&mesh_access, 0, sizeof(mesh_access));
-	mesh_access.data[0] = cpu_to_le32(CMD_ACT_SET);
 	mesh_access.data[1] = cpu_to_le32(retry_limit);
 
 	ret = lbs_mesh_access(priv, CMD_ACT_MESH_SET_GET_PRB_RSP_LIMIT,
@@ -287,12 +285,9 @@ static ssize_t lbs_mesh_store(struct device *dev,
 			      const char *buf, size_t count)
 {
 	struct lbs_private *priv = to_net_dev(dev)->ml_priv;
-	int ret, enable;
+	int enable;
 
-	ret = kstrtoint(buf, 16, &enable);
-	if (ret)
-		return ret;
-
+	sscanf(buf, "%x", &enable);
 	enable = !!enable;
 	if (enable == !!priv->mesh_dev)
 		return count;
@@ -392,13 +387,11 @@ static ssize_t bootflag_store(struct device *dev, struct device_attribute *attr,
 	uint32_t datum;
 	int ret;
 
-	ret = kstrtouint(buf, 10, &datum);
-	if (ret)
-		return ret;
-	if (datum > 1)
+	memset(&cmd, 0, sizeof(cmd));
+	ret = sscanf(buf, "%d", &datum);
+	if ((ret != 1) || (datum > 1))
 		return -EINVAL;
 
-	memset(&cmd, 0, sizeof(cmd));
 	*((__le32 *)&cmd.data[0]) = cpu_to_le32(!!datum);
 	cmd.length = cpu_to_le16(sizeof(uint32_t));
 	ret = lbs_mesh_config_send(priv, &cmd, CMD_ACT_MESH_CONFIG_SET,
@@ -445,13 +438,10 @@ static ssize_t boottime_store(struct device *dev,
 	uint32_t datum;
 	int ret;
 
-	ret = kstrtouint(buf, 10, &datum);
-	if (ret)
-		return ret;
-	if (datum > 255)
-		return -EINVAL;
-
 	memset(&cmd, 0, sizeof(cmd));
+	ret = sscanf(buf, "%d", &datum);
+	if ((ret != 1) || (datum > 255))
+		return -EINVAL;
 
 	/* A too small boot time will result in the device booting into
 	 * standalone (no-host) mode before the host can take control of it,
@@ -507,13 +497,11 @@ static ssize_t channel_store(struct device *dev, struct device_attribute *attr,
 	uint32_t datum;
 	int ret;
 
-	ret = kstrtouint(buf, 10, &datum);
-	if (ret)
-		return ret;
-	if (datum < 1 || datum > 11)
+	memset(&cmd, 0, sizeof(cmd));
+	ret = sscanf(buf, "%d", &datum);
+	if (ret != 1 || datum < 1 || datum > 11)
 		return -EINVAL;
 
-	memset(&cmd, 0, sizeof(cmd));
 	*((__le16 *)&cmd.data[0]) = cpu_to_le16(datum);
 	cmd.length = cpu_to_le16(sizeof(uint16_t));
 	ret = lbs_mesh_config_send(priv, &cmd, CMD_ACT_MESH_CONFIG_SET,
@@ -638,13 +626,10 @@ static ssize_t protocol_id_store(struct device *dev,
 	uint32_t datum;
 	int ret;
 
-	ret = kstrtouint(buf, 10, &datum);
-	if (ret)
-		return ret;
-	if (datum > 255)
-		return -EINVAL;
-
 	memset(&cmd, 0, sizeof(cmd));
+	ret = sscanf(buf, "%d", &datum);
+	if ((ret != 1) || (datum > 255))
+		return -EINVAL;
 
 	/* fetch all other Information Element parameters */
 	ret = mesh_get_default_parameters(dev, &defs);

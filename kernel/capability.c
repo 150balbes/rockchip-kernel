@@ -112,7 +112,7 @@ static inline int cap_get_target_pid(pid_t pid, kernel_cap_t *pEp,
 	int ret;
 
 	if (pid && (pid != task_pid_vnr(current))) {
-		const struct task_struct *target;
+		struct task_struct *target;
 
 		rcu_read_lock();
 

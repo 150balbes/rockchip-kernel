@@ -162,16 +162,6 @@ struct kvm_vcpu_csr {
 	unsigned long hvip;
 	unsigned long vsatp;
 	unsigned long scounteren;
-	unsigned long senvcfg;
-};
-
-struct kvm_vcpu_config {
-	u64 henvcfg;
-	u64 hstateen0;
-};
-
-struct kvm_vcpu_smstateen_csr {
-	unsigned long sstateen0;
 };
 
 struct kvm_vcpu_arch {
@@ -193,8 +183,6 @@ struct kvm_vcpu_arch {
 	unsigned long host_sscratch;
 	unsigned long host_stvec;
 	unsigned long host_scounteren;
-	unsigned long host_senvcfg;
-	unsigned long host_sstateen0;
 
 	/* CPU context of Host */
 	struct kvm_cpu_context host_context;
@@ -204,9 +192,6 @@ struct kvm_vcpu_arch {
 
 	/* CPU CSR context of Guest VCPU */
 	struct kvm_vcpu_csr guest_csr;
-
-	/* CPU Smstateen CSR context of Guest VCPU */
-	struct kvm_vcpu_smstateen_csr smstateen_csr;
 
 	/* CPU context upon Guest VCPU reset */
 	struct kvm_cpu_context guest_reset_context;
@@ -259,9 +244,6 @@ struct kvm_vcpu_arch {
 
 	/* Performance monitoring context */
 	struct kvm_pmu pmu_context;
-
-	/* 'static' configurations which are set only once */
-	struct kvm_vcpu_config cfg;
 };
 
 static inline void kvm_arch_sync_events(struct kvm *kvm) {}
@@ -354,15 +336,6 @@ int kvm_riscv_vcpu_exit(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			struct kvm_cpu_trap *trap);
 
 void __kvm_riscv_switch_to(struct kvm_vcpu_arch *vcpu_arch);
-
-void kvm_riscv_vcpu_setup_isa(struct kvm_vcpu *vcpu);
-unsigned long kvm_riscv_vcpu_num_regs(struct kvm_vcpu *vcpu);
-int kvm_riscv_vcpu_copy_reg_indices(struct kvm_vcpu *vcpu,
-				    u64 __user *uindices);
-int kvm_riscv_vcpu_get_reg(struct kvm_vcpu *vcpu,
-			   const struct kvm_one_reg *reg);
-int kvm_riscv_vcpu_set_reg(struct kvm_vcpu *vcpu,
-			   const struct kvm_one_reg *reg);
 
 int kvm_riscv_vcpu_set_interrupt(struct kvm_vcpu *vcpu, unsigned int irq);
 int kvm_riscv_vcpu_unset_interrupt(struct kvm_vcpu *vcpu, unsigned int irq);

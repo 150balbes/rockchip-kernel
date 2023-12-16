@@ -10,11 +10,9 @@
 #include "debug.h"
 #include "evlist.h"
 #include "expr.h"
-#include <util/expr-bison.h>
-#include <util/expr-flex.h>
+#include "expr-bison.h"
+#include "expr-flex.h"
 #include "util/hashmap.h"
-#include "util/header.h"
-#include "util/pmu.h"
 #include "smt.h"
 #include "tsc.h"
 #include <api/fs/fs.h>
@@ -427,13 +425,6 @@ double expr__get_literal(const char *literal, const struct expr_scanner_ctx *ctx
 		result = cpu__max_present_cpu().cpu;
 		goto out;
 	}
-	if (!strcmp("#num_cpus_online", literal)) {
-		struct perf_cpu_map *online = cpu_map__online();
-
-		if (online)
-			result = perf_cpu_map__nr(online);
-		goto out;
-	}
 
 	if (!strcasecmp("#system_tsc_freq", literal)) {
 		result = arch_get_tsc_freq();
@@ -502,21 +493,5 @@ double expr__has_event(const struct expr_parse_ctx *ctx, bool compute_ids, const
 		return NAN;
 	ret = parse_event(tmp, id) ? 0 : 1;
 	evlist__delete(tmp);
-	return ret;
-}
-
-double expr__strcmp_cpuid_str(const struct expr_parse_ctx *ctx __maybe_unused,
-		       bool compute_ids __maybe_unused, const char *test_id)
-{
-	double ret;
-	struct perf_pmu *pmu = perf_pmus__find_core_pmu();
-	char *cpuid = perf_pmu__getcpuid(pmu);
-
-	if (!cpuid)
-		return NAN;
-
-	ret = !strcmp_cpuid_str(test_id, cpuid);
-
-	free(cpuid);
 	return ret;
 }

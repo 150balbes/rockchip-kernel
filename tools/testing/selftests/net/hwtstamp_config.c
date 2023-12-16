@@ -16,8 +16,6 @@
 #include <linux/net_tstamp.h>
 #include <linux/sockios.h>
 
-#include "kselftest.h"
-
 static int
 lookup_value(const char **names, int size, const char *name)
 {
@@ -52,7 +50,7 @@ static const char *tx_types[] = {
 	TX_TYPE(ONESTEP_SYNC)
 #undef TX_TYPE
 };
-#define N_TX_TYPES ((int)(ARRAY_SIZE(tx_types)))
+#define N_TX_TYPES ((int)(sizeof(tx_types) / sizeof(tx_types[0])))
 
 static const char *rx_filters[] = {
 #define RX_FILTER(name) [HWTSTAMP_FILTER_ ## name] = #name
@@ -73,7 +71,7 @@ static const char *rx_filters[] = {
 	RX_FILTER(PTP_V2_DELAY_REQ),
 #undef RX_FILTER
 };
-#define N_RX_FILTERS ((int)(ARRAY_SIZE(rx_filters)))
+#define N_RX_FILTERS ((int)(sizeof(rx_filters) / sizeof(rx_filters[0])))
 
 static void usage(void)
 {

@@ -113,6 +113,7 @@ DECLARE_SUITE(fdarray__filter);
 DECLARE_SUITE(fdarray__add);
 DECLARE_SUITE(kmod_path__parse);
 DECLARE_SUITE(thread_map);
+DECLARE_SUITE(llvm);
 DECLARE_SUITE(bpf);
 DECLARE_SUITE(session_topology);
 DECLARE_SUITE(thread_map_synthesize);
@@ -128,6 +129,7 @@ DECLARE_SUITE(sdt_event);
 DECLARE_SUITE(is_printable_array);
 DECLARE_SUITE(bitmap_print);
 DECLARE_SUITE(perf_hooks);
+DECLARE_SUITE(clang);
 DECLARE_SUITE(unit_number__scnprint);
 DECLARE_SUITE(mem2node);
 DECLARE_SUITE(maps__merge_in);
@@ -145,7 +147,6 @@ DECLARE_SUITE(dlfilter);
 DECLARE_SUITE(sigtrap);
 DECLARE_SUITE(event_groups);
 DECLARE_SUITE(symbols);
-DECLARE_SUITE(util);
 
 /*
  * PowerPC and S390 do not support creation of instruction breakpoints using the

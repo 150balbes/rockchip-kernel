@@ -31,6 +31,7 @@
 
 // Minimum amount of time between queue kicks in msec (10 seconds)
 #define MIN_TX_TIMEOUT_GAP (1000 * 10)
+#define DQO_TX_MAX	0x3FFFF
 
 char gve_driver_name[] = "gve";
 const char gve_version_str[] = GVE_VERSION;
@@ -190,7 +191,7 @@ static int gve_alloc_stats_report(struct gve_priv *priv)
 	rx_stats_num = (GVE_RX_STATS_REPORT_NUM + NIC_RX_STATS_REPORT_NUM) *
 		       priv->rx_cfg.num_queues;
 	priv->stats_report_len = struct_size(priv->stats_report, stats,
-					     size_add(tx_stats_num, rx_stats_num));
+					     tx_stats_num + rx_stats_num);
 	priv->stats_report =
 		dma_alloc_coherent(&priv->pdev->dev, priv->stats_report_len,
 				   &priv->stats_report_bus, GFP_KERNEL);
@@ -254,12 +255,9 @@ static int gve_napi_poll(struct napi_struct *napi, int budget)
 	if (block->tx) {
 		if (block->tx->q_num < priv->tx_cfg.num_queues)
 			reschedule |= gve_tx_poll(block, budget);
-		else if (budget)
+		else
 			reschedule |= gve_xdp_poll(block, budget);
 	}
-
-	if (!budget)
-		return 0;
 
 	if (block->rx) {
 		work_done = gve_rx_poll(block, budget);
@@ -284,7 +282,7 @@ static int gve_napi_poll(struct napi_struct *napi, int budget)
 		if (block->rx)
 			reschedule |= gve_rx_work_pending(block->rx);
 
-		if (reschedule && napi_schedule(napi))
+		if (reschedule && napi_reschedule(napi))
 			iowrite32be(GVE_IRQ_MASK, irq_doorbell);
 	}
 	return work_done;
@@ -300,9 +298,6 @@ static int gve_napi_poll_dqo(struct napi_struct *napi, int budget)
 
 	if (block->tx)
 		reschedule |= gve_tx_poll_dqo(block, /*do_clean=*/true);
-
-	if (!budget)
-		return 0;
 
 	if (block->rx) {
 		work_done = gve_rx_poll_dqo(block, budget);
@@ -499,7 +494,7 @@ static int gve_setup_device_resources(struct gve_priv *priv)
 		goto abort_with_stats_report;
 	}
 
-	if (!gve_is_gqi(priv)) {
+	if (priv->queue_format == GVE_DQO_RDA_FORMAT) {
 		priv->ptype_lut_dqo = kvzalloc(sizeof(*priv->ptype_lut_dqo),
 					       GFP_KERNEL);
 		if (!priv->ptype_lut_dqo) {
@@ -1088,12 +1083,11 @@ free_qpls:
 static int gve_alloc_qpls(struct gve_priv *priv)
 {
 	int max_queues = priv->tx_cfg.max_queues + priv->rx_cfg.max_queues;
-	int page_count;
 	int start_id;
 	int i, j;
 	int err;
 
-	if (!gve_is_qpl(priv))
+	if (priv->queue_format != GVE_GQI_QPL_FORMAT)
 		return 0;
 
 	priv->qpls = kvcalloc(max_queues, sizeof(*priv->qpls), GFP_KERNEL);
@@ -1101,25 +1095,17 @@ static int gve_alloc_qpls(struct gve_priv *priv)
 		return -ENOMEM;
 
 	start_id = gve_tx_start_qpl_id(priv);
-	page_count = priv->tx_pages_per_qpl;
 	for (i = start_id; i < start_id + gve_num_tx_qpls(priv); i++) {
 		err = gve_alloc_queue_page_list(priv, i,
-						page_count);
+						priv->tx_pages_per_qpl);
 		if (err)
 			goto free_qpls;
 	}
 
 	start_id = gve_rx_start_qpl_id(priv);
-
-	/* For GQI_QPL number of pages allocated have 1:1 relationship with
-	 * number of descriptors. For DQO, number of pages required are
-	 * more than descriptors (because of out of order completions).
-	 */
-	page_count = priv->queue_format == GVE_GQI_QPL_FORMAT ?
-		priv->rx_data_slot_cnt : priv->rx_pages_per_qpl;
 	for (i = start_id; i < start_id + gve_num_rx_qpls(priv); i++) {
 		err = gve_alloc_queue_page_list(priv, i,
-						page_count);
+						priv->rx_data_slot_cnt);
 		if (err)
 			goto free_qpls;
 	}
@@ -2065,7 +2051,7 @@ static int gve_init_priv(struct gve_priv *priv, bool skip_describe_device)
 
 	/* Big TCP is only supported on DQ*/
 	if (!gve_is_gqi(priv))
-		netif_set_tso_max_size(priv->dev, GVE_DQO_TX_MAX);
+		netif_set_tso_max_size(priv->dev, DQO_TX_MAX);
 
 	priv->num_registered_pages = 0;
 	priv->rx_copybreak = GVE_DEFAULT_RX_COPYBREAK;

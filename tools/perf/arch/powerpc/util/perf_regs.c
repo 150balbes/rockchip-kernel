@@ -4,7 +4,6 @@
 #include <regex.h>
 #include <linux/zalloc.h>
 
-#include "perf_regs.h"
 #include "../../../util/perf_regs.h"
 #include "../../../util/debug.h"
 #include "../../../util/event.h"
@@ -226,9 +225,4 @@ uint64_t arch__intr_reg_mask(void)
 		mask |= extended_mask;
 	}
 	return mask;
-}
-
-uint64_t arch__user_reg_mask(void)
-{
-	return PERF_REGS_MASK;
 }

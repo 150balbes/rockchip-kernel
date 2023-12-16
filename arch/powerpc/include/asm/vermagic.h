@@ -2,9 +2,7 @@
 #ifndef _ASM_VERMAGIC_H
 #define _ASM_VERMAGIC_H
 
-#ifdef CONFIG_ARCH_USING_PATCHABLE_FUNCTION_ENTRY
-#define MODULE_ARCH_VERMAGIC_FTRACE	"patchable-function-entry "
-#elif defined(CONFIG_MPROFILE_KERNEL)
+#ifdef CONFIG_MPROFILE_KERNEL
 #define MODULE_ARCH_VERMAGIC_FTRACE	"mprofile-kernel "
 #else
 #define MODULE_ARCH_VERMAGIC_FTRACE	""

@@ -41,10 +41,6 @@ properties:
   gpio-ranges:
     maxItems: 1
 
-  gpio-reserved-ranges:
-    minItems: 1
-    maxItems: 88
-
   gpio-line-names:
     maxItems: 175
 

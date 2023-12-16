@@ -113,7 +113,7 @@ stutter
 		  without pausing.
 
 shuffle_interval
-		  The number of seconds to keep the test threads affinitized
+		  The number of seconds to keep the test threads affinitied
 		  to a particular subset of the CPUs, defaults to 3 seconds.
 		  Used in conjunction with test_no_idle_hz.
 

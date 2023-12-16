@@ -66,7 +66,7 @@ static gfp_t dma_direct_optimal_gfp_mask(struct device *dev, u64 *phys_limit)
 	return 0;
 }
 
-bool dma_coherent_ok(struct device *dev, phys_addr_t phys, size_t size)
+static bool dma_coherent_ok(struct device *dev, phys_addr_t phys, size_t size)
 {
 	dma_addr_t dma_addr = phys_to_dma_direct(dev, phys);
 
@@ -220,7 +220,13 @@ void *dma_direct_alloc(struct device *dev, size_t size,
 		return dma_direct_alloc_no_mapping(dev, size, dma_handle, gfp);
 
 	if (!dev_is_dma_coherent(dev)) {
-		if (IS_ENABLED(CONFIG_ARCH_HAS_DMA_ALLOC) &&
+		/*
+		 * Fallback to the arch handler if it exists.  This should
+		 * eventually go away.
+		 */
+		if (!IS_ENABLED(CONFIG_ARCH_HAS_DMA_SET_UNCACHED) &&
+		    !IS_ENABLED(CONFIG_DMA_DIRECT_REMAP) &&
+		    !IS_ENABLED(CONFIG_DMA_GLOBAL_POOL) &&
 		    !is_swiotlb_for_alloc(dev))
 			return arch_dma_alloc(dev, size, dma_handle, gfp,
 					      attrs);
@@ -234,24 +240,27 @@ void *dma_direct_alloc(struct device *dev, size_t size,
 					dma_handle);
 
 		/*
-		 * Otherwise we require the architecture to either be able to
-		 * mark arbitrary parts of the kernel direct mapping uncached,
-		 * or remapped it uncached.
+		 * Otherwise remap if the architecture is asking for it.  But
+		 * given that remapping memory is a blocking operation we'll
+		 * instead have to dip into the atomic pools.
 		 */
-		set_uncached = IS_ENABLED(CONFIG_ARCH_HAS_DMA_SET_UNCACHED);
 		remap = IS_ENABLED(CONFIG_DMA_DIRECT_REMAP);
-		if (!set_uncached && !remap) {
-			pr_warn_once("coherent DMA allocations not supported on this platform.\n");
-			return NULL;
+		if (remap) {
+			if (dma_direct_use_pool(dev, gfp))
+				return dma_direct_alloc_from_pool(dev, size,
+						dma_handle, gfp);
+		} else {
+			if (!IS_ENABLED(CONFIG_ARCH_HAS_DMA_SET_UNCACHED))
+				return NULL;
+			set_uncached = true;
 		}
 	}
 
 	/*
-	 * Remapping or decrypting memory may block, allocate the memory from
-	 * the atomic pools instead if we aren't allowed block.
+	 * Decrypting memory may block, so allocate the memory from the atomic
+	 * pools if we can't block.
 	 */
-	if ((remap || force_dma_unencrypted(dev)) &&
-	    dma_direct_use_pool(dev, gfp))
+	if (force_dma_unencrypted(dev) && dma_direct_use_pool(dev, gfp))
 		return dma_direct_alloc_from_pool(dev, size, dma_handle, gfp);
 
 	/* we always manually zero the memory once we are done */
@@ -321,7 +330,9 @@ void dma_direct_free(struct device *dev, size_t size,
 		return;
 	}
 
-	if (IS_ENABLED(CONFIG_ARCH_HAS_DMA_ALLOC) &&
+	if (!IS_ENABLED(CONFIG_ARCH_HAS_DMA_SET_UNCACHED) &&
+	    !IS_ENABLED(CONFIG_DMA_DIRECT_REMAP) &&
+	    !IS_ENABLED(CONFIG_DMA_GLOBAL_POOL) &&
 	    !dev_is_dma_coherent(dev) &&
 	    !is_swiotlb_for_alloc(dev)) {
 		arch_dma_free(dev, size, cpu_addr, dma_addr, attrs);
@@ -585,46 +596,6 @@ int dma_direct_supported(struct device *dev, u64 mask)
 	if (IS_ENABLED(CONFIG_ZONE_DMA))
 		min_mask = min_t(u64, min_mask, DMA_BIT_MASK(zone_dma_bits));
 	return mask >= phys_to_dma_unencrypted(dev, min_mask);
-}
-
-/*
- * To check whether all ram resource ranges are covered by dma range map
- * Returns 0 when further check is needed
- * Returns 1 if there is some RAM range can't be covered by dma_range_map
- */
-static int check_ram_in_range_map(unsigned long start_pfn,
-				  unsigned long nr_pages, void *data)
-{
-	unsigned long end_pfn = start_pfn + nr_pages;
-	const struct bus_dma_region *bdr = NULL;
-	const struct bus_dma_region *m;
-	struct device *dev = data;
-
-	while (start_pfn < end_pfn) {
-		for (m = dev->dma_range_map; PFN_DOWN(m->size); m++) {
-			unsigned long cpu_start_pfn = PFN_DOWN(m->cpu_start);
-
-			if (start_pfn >= cpu_start_pfn &&
-			    start_pfn - cpu_start_pfn < PFN_DOWN(m->size)) {
-				bdr = m;
-				break;
-			}
-		}
-		if (!bdr)
-			return 1;
-
-		start_pfn = PFN_DOWN(bdr->cpu_start) + PFN_DOWN(bdr->size);
-	}
-
-	return 0;
-}
-
-bool dma_direct_all_ram_mapped(struct device *dev)
-{
-	if (!dev->dma_range_map)
-		return true;
-	return !walk_system_ram_range(0, PFN_DOWN(ULONG_MAX) + 1, dev,
-				      check_ram_in_range_map);
 }
 
 size_t dma_direct_max_mapping_size(struct device *dev)

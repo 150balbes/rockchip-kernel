@@ -15,12 +15,11 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <net/net_namespace.h>
-#include <net/page_pool/helpers.h>
+#include <net/page_pool.h>
 #include <linux/error-injection.h>
 #include <linux/smp.h>
 #include <linux/sock_diag.h>
 #include <linux/netfilter.h>
-#include <net/netdev_rx_queue.h>
 #include <net/xdp.h>
 #include <net/netfilter/nf_bpf_link.h>
 
@@ -503,8 +502,9 @@ out:
  * architecture dependent calling conventions. 7+ can be supported in the
  * future.
  */
-__bpf_kfunc_start_defs();
-
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "Global functions as their definitions will be in vmlinux BTF");
 __bpf_kfunc int bpf_fentry_test1(int a)
 {
 	return a + 1;
@@ -542,7 +542,6 @@ struct bpf_fentry_test_t {
 
 int noinline bpf_fentry_test7(struct bpf_fentry_test_t *arg)
 {
-	asm volatile ("");
 	return (long)arg;
 }
 
@@ -556,21 +555,10 @@ __bpf_kfunc u32 bpf_fentry_test9(u32 *a)
 	return *a;
 }
 
-void noinline bpf_fentry_test_sinfo(struct skb_shared_info *sinfo)
-{
-}
-
 __bpf_kfunc int bpf_modify_return_test(int a, int *b)
 {
 	*b += 1;
 	return a + *b;
-}
-
-__bpf_kfunc int bpf_modify_return_test2(int a, int *b, short c, int d,
-					void *e, char f, int g)
-{
-	*b += 1;
-	return a + *b + c + d + (long)e + f + g;
 }
 
 int noinline bpf_fentry_shadow_test(int a)
@@ -604,11 +592,10 @@ __bpf_kfunc void bpf_kfunc_call_memb_release(struct prog_test_member *p)
 {
 }
 
-__bpf_kfunc_end_defs();
+__diag_pop();
 
 BTF_SET8_START(bpf_test_modify_return_ids)
 BTF_ID_FLAGS(func, bpf_modify_return_test)
-BTF_ID_FLAGS(func, bpf_modify_return_test2)
 BTF_ID_FLAGS(func, bpf_fentry_test1, KF_SLEEPABLE)
 BTF_SET8_END(bpf_test_modify_return_ids)
 
@@ -676,11 +663,7 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 	case BPF_MODIFY_RETURN:
 		ret = bpf_modify_return_test(1, &b);
 		if (b != 2)
-			side_effect++;
-		b = 2;
-		ret += bpf_modify_return_test2(1, &b, 3, 4, (void *)5, 6, 7);
-		if (b != 2)
-			side_effect++;
+			side_effect = 1;
 		break;
 	default:
 		goto out;

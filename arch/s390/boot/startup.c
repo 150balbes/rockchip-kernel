@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/string.h>
 #include <linux/elf.h>
-#include <asm/page-states.h>
 #include <asm/boot_data.h>
 #include <asm/sections.h>
 #include <asm/maccess.h>
@@ -28,7 +27,6 @@ struct page *__bootdata_preserved(vmemmap);
 unsigned long __bootdata_preserved(vmemmap_size);
 unsigned long __bootdata_preserved(MODULES_VADDR);
 unsigned long __bootdata_preserved(MODULES_END);
-unsigned long __bootdata_preserved(max_mappable);
 unsigned long __bootdata(ident_map_size);
 
 u64 __bootdata_preserved(stfle_fac_list[16]);
@@ -50,54 +48,14 @@ static void detect_facilities(void)
 {
 	if (test_facility(8)) {
 		machine.has_edat1 = 1;
-		local_ctl_set_bit(0, CR0_EDAT_BIT);
+		__ctl_set_bit(0, 23);
 	}
 	if (test_facility(78))
 		machine.has_edat2 = 1;
-	if (test_facility(130))
+	if (!noexec_disabled && test_facility(130)) {
 		machine.has_nx = 1;
-}
-
-static int cmma_test_essa(void)
-{
-	unsigned long reg1, reg2, tmp = 0;
-	int rc = 1;
-	psw_t old;
-
-	/* Test ESSA_GET_STATE */
-	asm volatile(
-		"	mvc	0(16,%[psw_old]),0(%[psw_pgm])\n"
-		"	epsw	%[reg1],%[reg2]\n"
-		"	st	%[reg1],0(%[psw_pgm])\n"
-		"	st	%[reg2],4(%[psw_pgm])\n"
-		"	larl	%[reg1],1f\n"
-		"	stg	%[reg1],8(%[psw_pgm])\n"
-		"	.insn	rrf,0xb9ab0000,%[tmp],%[tmp],%[cmd],0\n"
-		"	la	%[rc],0\n"
-		"1:	mvc	0(16,%[psw_pgm]),0(%[psw_old])\n"
-		: [reg1] "=&d" (reg1),
-		  [reg2] "=&a" (reg2),
-		  [rc] "+&d" (rc),
-		  [tmp] "=&d" (tmp),
-		  "+Q" (S390_lowcore.program_new_psw),
-		  "=Q" (old)
-		: [psw_old] "a" (&old),
-		  [psw_pgm] "a" (&S390_lowcore.program_new_psw),
-		  [cmd] "i" (ESSA_GET_STATE)
-		: "cc", "memory");
-	return rc;
-}
-
-static void cmma_init(void)
-{
-	if (!cmma_flag)
-		return;
-	if (cmma_test_essa()) {
-		cmma_flag = 0;
-		return;
+		__ctl_set_bit(0, 20);
 	}
-	if (test_facility(147))
-		cmma_flag = 2;
 }
 
 static void setup_lpp(void)
@@ -218,7 +176,6 @@ static unsigned long setup_kernel_memory_layout(void)
 	unsigned long asce_limit;
 	unsigned long rte_size;
 	unsigned long pages;
-	unsigned long vsize;
 	unsigned long vmax;
 
 	pages = ident_map_size / PAGE_SIZE;
@@ -226,19 +183,19 @@ static unsigned long setup_kernel_memory_layout(void)
 	vmemmap_size = SECTION_ALIGN_UP(pages) * sizeof(struct page);
 
 	/* choose kernel address space layout: 4 or 3 levels. */
-	vsize = round_up(ident_map_size, _REGION3_SIZE) + vmemmap_size +
-		MODULES_LEN + MEMCPY_REAL_SIZE + ABS_LOWCORE_MAP_SIZE;
-	vsize = size_add(vsize, vmalloc_size);
-	if (IS_ENABLED(CONFIG_KASAN) || (vsize > _REGION2_SIZE)) {
+	vmemmap_start = round_up(ident_map_size, _REGION3_SIZE);
+	if (IS_ENABLED(CONFIG_KASAN) ||
+	    vmalloc_size > _REGION2_SIZE ||
+	    vmemmap_start + vmemmap_size + vmalloc_size + MODULES_LEN >
+		    _REGION2_SIZE) {
 		asce_limit = _REGION1_SIZE;
 		rte_size = _REGION2_SIZE;
 	} else {
 		asce_limit = _REGION2_SIZE;
 		rte_size = _REGION3_SIZE;
 	}
-
 	/*
-	 * Forcing modules and vmalloc area under the ultravisor
+	 * forcing modules and vmalloc area under the ultravisor
 	 * secure storage limit, so that any vmalloc allocation
 	 * we do could be used to back secure guest storage.
 	 */
@@ -247,7 +204,7 @@ static unsigned long setup_kernel_memory_layout(void)
 	/* force vmalloc and modules below kasan shadow */
 	vmax = min(vmax, KASAN_SHADOW_START);
 #endif
-	__memcpy_real_area = round_down(vmax - MEMCPY_REAL_SIZE, PAGE_SIZE);
+	__memcpy_real_area = round_down(vmax - PAGE_SIZE, PAGE_SIZE);
 	__abs_lowcore = round_down(__memcpy_real_area - ABS_LOWCORE_MAP_SIZE,
 				   sizeof(struct lowcore));
 	MODULES_END = round_down(__abs_lowcore, _SEGMENT_SIZE);
@@ -263,9 +220,8 @@ static unsigned long setup_kernel_memory_layout(void)
 	pages = SECTION_ALIGN_UP(pages);
 	/* keep vmemmap_start aligned to a top level region table entry */
 	vmemmap_start = round_down(VMALLOC_START - pages * sizeof(struct page), rte_size);
+	/* vmemmap_start is the future VMEM_MAX_PHYS, make sure it is within MAX_PHYSMEM */
 	vmemmap_start = min(vmemmap_start, 1UL << MAX_PHYSMEM_BITS);
-	/* maximum mappable address as seen by arch_get_mappable_range() */
-	max_mappable = vmemmap_start;
 	/* make sure identity map doesn't overlay with vmemmap */
 	ident_map_size = min(ident_map_size, vmemmap_start);
 	vmemmap_size = SECTION_ALIGN_UP(ident_map_size / PAGE_SIZE) * sizeof(struct page);
@@ -330,9 +286,8 @@ void startup_kernel(void)
 
 	setup_lpp();
 	safe_addr = mem_safe_offset();
-
 	/*
-	 * Reserve decompressor memory together with decompression heap, buffer and
+	 * reserve decompressor memory together with decompression heap, buffer and
 	 * memory which might be occupied by uncompressed kernel at default 1Mb
 	 * position (if KASLR is off or failed).
 	 */
@@ -349,7 +304,6 @@ void startup_kernel(void)
 	setup_boot_command_line();
 	parse_boot_command_line();
 	detect_facilities();
-	cmma_init();
 	sanitize_prot_virt_host();
 	max_physmem_end = detect_max_physmem_end();
 	setup_ident_map_size(max_physmem_end);

@@ -125,6 +125,7 @@ struct mt7615_sta {
 
 	struct mt7615_vif *vif;
 
+	struct list_head poll_list;
 	u32 airtime_ac[8];
 
 	struct ieee80211_tx_rate rates[4];
@@ -260,6 +261,9 @@ struct mt7615_dev {
 	struct work_struct reset_work;
 	wait_queue_head_t reset_wait;
 	u32 reset_state;
+
+	struct list_head sta_poll_list;
+	spinlock_t sta_poll_lock;
 
 	struct {
 		u8 n_pulses;

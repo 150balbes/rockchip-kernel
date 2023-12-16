@@ -473,12 +473,11 @@ void handle_nested_irq(unsigned int irq)
 	action = desc->action;
 	if (unlikely(!action || irqd_irq_disabled(&desc->irq_data))) {
 		desc->istate |= IRQS_PENDING;
-		raw_spin_unlock_irq(&desc->lock);
-		return;
+		goto out_unlock;
 	}
 
 	kstat_incr_irqs_this_cpu(desc);
-	atomic_inc(&desc->threads_active);
+	irqd_set(&desc->irq_data, IRQD_IRQ_INPROGRESS);
 	raw_spin_unlock_irq(&desc->lock);
 
 	action_ret = IRQ_NONE;
@@ -488,7 +487,11 @@ void handle_nested_irq(unsigned int irq)
 	if (!irq_settings_no_debug(desc))
 		note_interrupt(desc, action_ret);
 
-	wake_threads_waitq(desc);
+	raw_spin_lock_irq(&desc->lock);
+	irqd_clear(&desc->irq_data, IRQD_IRQ_INPROGRESS);
+
+out_unlock:
+	raw_spin_unlock_irq(&desc->lock);
 }
 EXPORT_SYMBOL_GPL(handle_nested_irq);
 

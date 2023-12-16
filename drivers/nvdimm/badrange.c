@@ -257,9 +257,9 @@ static void badblocks_populate(struct badrange *badrange,
 
 /**
  * nvdimm_badblocks_populate() - Convert a list of badranges to badblocks
- * @nd_region: parent region of the range to interrogate
+ * @region: parent region of the range to interrogate
  * @bb: badblocks instance to populate
- * @range: resource range to consider
+ * @res: resource range to consider
  *
  * The badrange list generated during bus initialization may contain
  * multiple, possibly overlapping physical address ranges.  Compare each

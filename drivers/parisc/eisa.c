@@ -400,11 +400,10 @@ static struct parisc_driver eisa_driver __refdata = {
 	.probe =	eisa_probe,
 };
 
-static int __init parisc_eisa_init(void)
+void __init parisc_eisa_init(void)
 {
-	return register_parisc_driver(&eisa_driver);
+	register_parisc_driver(&eisa_driver);
 }
-arch_initcall(parisc_eisa_init);
 
 
 static unsigned int eisa_irq_configured;

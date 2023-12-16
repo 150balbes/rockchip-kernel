@@ -58,7 +58,7 @@ int pa_serialize_tlb_flushes __ro_after_init;
 
 struct pdc_cache_info cache_info __ro_after_init;
 #ifndef CONFIG_PA20
-struct pdc_btlb_info btlb_info __ro_after_init;
+static struct pdc_btlb_info btlb_info __ro_after_init;
 #endif
 
 DEFINE_STATIC_KEY_TRUE(parisc_has_cache);
@@ -94,11 +94,11 @@ static inline void flush_data_cache(void)
 /* Kernel virtual address of pfn.  */
 #define pfn_va(pfn)	__va(PFN_PHYS(pfn))
 
-void __update_cache(pte_t pte)
+void
+__update_cache(pte_t pte)
 {
 	unsigned long pfn = pte_pfn(pte);
-	struct folio *folio;
-	unsigned int nr;
+	struct page *page;
 
 	/* We don't have pte special.  As a result, we can be called with
 	   an invalid pfn and we don't need to flush the kernel dcache page.
@@ -106,17 +106,13 @@ void __update_cache(pte_t pte)
 	if (!pfn_valid(pfn))
 		return;
 
-	folio = page_folio(pfn_to_page(pfn));
-	pfn = folio_pfn(folio);
-	nr = folio_nr_pages(folio);
-	if (folio_flush_mapping(folio) &&
-	    test_bit(PG_dcache_dirty, &folio->flags)) {
-		while (nr--)
-			flush_kernel_dcache_page_addr(pfn_va(pfn + nr));
-		clear_bit(PG_dcache_dirty, &folio->flags);
+	page = pfn_to_page(pfn);
+	if (page_mapping_file(page) &&
+	    test_bit(PG_dcache_dirty, &page->flags)) {
+		flush_kernel_dcache_page_addr(pfn_va(pfn));
+		clear_bit(PG_dcache_dirty, &page->flags);
 	} else if (parisc_requires_coherency())
-		while (nr--)
-			flush_kernel_dcache_page_addr(pfn_va(pfn + nr));
+		flush_kernel_dcache_page_addr(pfn_va(pfn));
 }
 
 void
@@ -264,6 +260,12 @@ parisc_cache_init(void)
 	icache_stride = CAFL_STRIDE(cache_info.ic_conf);
 #undef CAFL_STRIDE
 
+#ifndef CONFIG_PA20
+	if (pdc_btlb_info(&btlb_info) < 0) {
+		memset(&btlb_info, 0, sizeof btlb_info);
+	}
+#endif
+
 	if ((boot_cpu_data.pdc.capabilities & PDC_MODEL_NVA_MASK) ==
 						PDC_MODEL_NVA_UNSUPPORTED) {
 		printk(KERN_WARNING "parisc_cache_init: Only equivalent aliasing supported!\n");
@@ -364,20 +366,6 @@ static void flush_user_cache_page(struct vm_area_struct *vma, unsigned long vmad
 	preempt_enable();
 }
 
-void flush_icache_pages(struct vm_area_struct *vma, struct page *page,
-		unsigned int nr)
-{
-	void *kaddr = page_address(page);
-
-	for (;;) {
-		flush_kernel_dcache_page_addr(kaddr);
-		flush_kernel_icache_page(kaddr);
-		if (--nr == 0)
-			break;
-		kaddr += PAGE_SIZE;
-	}
-}
-
 static inline pte_t *get_ptep(struct mm_struct *mm, unsigned long addr)
 {
 	pte_t *ptep = NULL;
@@ -406,30 +394,27 @@ static inline bool pte_needs_flush(pte_t pte)
 		== (_PAGE_PRESENT | _PAGE_ACCESSED);
 }
 
-void flush_dcache_folio(struct folio *folio)
+void flush_dcache_page(struct page *page)
 {
-	struct address_space *mapping = folio_flush_mapping(folio);
-	struct vm_area_struct *vma;
+	struct address_space *mapping = page_mapping_file(page);
+	struct vm_area_struct *mpnt;
+	unsigned long offset;
 	unsigned long addr, old_addr = 0;
-	void *kaddr;
 	unsigned long count = 0;
-	unsigned long i, nr, flags;
+	unsigned long flags;
 	pgoff_t pgoff;
 
 	if (mapping && !mapping_mapped(mapping)) {
-		set_bit(PG_dcache_dirty, &folio->flags);
+		set_bit(PG_dcache_dirty, &page->flags);
 		return;
 	}
 
-	nr = folio_nr_pages(folio);
-	kaddr = folio_address(folio);
-	for (i = 0; i < nr; i++)
-		flush_kernel_dcache_page_addr(kaddr + i * PAGE_SIZE);
+	flush_kernel_dcache_page_addr(page_address(page));
 
 	if (!mapping)
 		return;
 
-	pgoff = folio->index;
+	pgoff = page->index;
 
 	/*
 	 * We have carefully arranged in arch_get_unmapped_area() that
@@ -439,33 +424,20 @@ void flush_dcache_folio(struct folio *folio)
 	 * on machines that support equivalent aliasing
 	 */
 	flush_dcache_mmap_lock_irqsave(mapping, flags);
-	vma_interval_tree_foreach(vma, &mapping->i_mmap, pgoff, pgoff + nr - 1) {
-		unsigned long offset = pgoff - vma->vm_pgoff;
-		unsigned long pfn = folio_pfn(folio);
-
-		addr = vma->vm_start;
-		nr = folio_nr_pages(folio);
-		if (offset > -nr) {
-			pfn -= offset;
-			nr += offset;
-		} else {
-			addr += offset * PAGE_SIZE;
-		}
-		if (addr + nr * PAGE_SIZE > vma->vm_end)
-			nr = (vma->vm_end - addr) / PAGE_SIZE;
-
+	vma_interval_tree_foreach(mpnt, &mapping->i_mmap, pgoff, pgoff) {
+		offset = (pgoff - mpnt->vm_pgoff) << PAGE_SHIFT;
+		addr = mpnt->vm_start + offset;
 		if (parisc_requires_coherency()) {
-			for (i = 0; i < nr; i++) {
-				pte_t *ptep = get_ptep(vma->vm_mm,
-							addr + i * PAGE_SIZE);
-				if (!ptep)
-					continue;
-				if (pte_needs_flush(*ptep))
-					flush_user_cache_page(vma,
-							addr + i * PAGE_SIZE);
-				/* Optimise accesses to the same table? */
+			bool needs_flush = false;
+			pte_t *ptep;
+
+			ptep = get_ptep(mpnt->vm_mm, addr);
+			if (ptep) {
+				needs_flush = pte_needs_flush(*ptep);
 				pte_unmap(ptep);
 			}
+			if (needs_flush)
+				flush_user_cache_page(mpnt, addr);
 		} else {
 			/*
 			 * The TLB is the engine of coherence on parisc:
@@ -478,32 +450,27 @@ void flush_dcache_folio(struct folio *folio)
 			 * in (until the user or kernel specifically
 			 * accesses it, of course)
 			 */
-			for (i = 0; i < nr; i++)
-				flush_tlb_page(vma, addr + i * PAGE_SIZE);
+			flush_tlb_page(mpnt, addr);
 			if (old_addr == 0 || (old_addr & (SHM_COLOUR - 1))
 					!= (addr & (SHM_COLOUR - 1))) {
-				for (i = 0; i < nr; i++)
-					__flush_cache_page(vma,
-						addr + i * PAGE_SIZE,
-						(pfn + i) * PAGE_SIZE);
+				__flush_cache_page(mpnt, addr, page_to_phys(page));
 				/*
 				 * Software is allowed to have any number
 				 * of private mappings to a page.
 				 */
-				if (!(vma->vm_flags & VM_SHARED))
+				if (!(mpnt->vm_flags & VM_SHARED))
 					continue;
 				if (old_addr)
 					pr_err("INEQUIVALENT ALIASES 0x%lx and 0x%lx in file %pD\n",
-						old_addr, addr, vma->vm_file);
-				if (nr == folio_nr_pages(folio))
-					old_addr = addr;
+						old_addr, addr, mpnt->vm_file);
+				old_addr = addr;
 			}
 		}
 		WARN_ON(++count == 4096);
 	}
 	flush_dcache_mmap_unlock_irqrestore(mapping, flags);
 }
-EXPORT_SYMBOL(flush_dcache_folio);
+EXPORT_SYMBOL(flush_dcache_page);
 
 /* Defined in arch/parisc/kernel/pacache.S */
 EXPORT_SYMBOL(flush_kernel_dcache_range_asm);

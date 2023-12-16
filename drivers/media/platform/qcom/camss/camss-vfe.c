@@ -37,10 +37,10 @@ struct vfe_format {
 };
 
 static const struct vfe_format formats_rdi_8x16[] = {
-	{ MEDIA_BUS_FMT_UYVY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_VYUY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YUYV8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YVYU8_1X16, 8 },
+	{ MEDIA_BUS_FMT_UYVY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_VYUY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YUYV8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YVYU8_2X8, 8 },
 	{ MEDIA_BUS_FMT_SBGGR8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGBRG8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGRBG8_1X8, 8 },
@@ -57,17 +57,17 @@ static const struct vfe_format formats_rdi_8x16[] = {
 };
 
 static const struct vfe_format formats_pix_8x16[] = {
-	{ MEDIA_BUS_FMT_UYVY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_VYUY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YUYV8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YVYU8_1X16, 8 },
+	{ MEDIA_BUS_FMT_UYVY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_VYUY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YUYV8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YVYU8_2X8, 8 },
 };
 
 static const struct vfe_format formats_rdi_8x96[] = {
-	{ MEDIA_BUS_FMT_UYVY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_VYUY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YUYV8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YVYU8_1X16, 8 },
+	{ MEDIA_BUS_FMT_UYVY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_VYUY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YUYV8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YVYU8_2X8, 8 },
 	{ MEDIA_BUS_FMT_SBGGR8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGBRG8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGRBG8_1X8, 8 },
@@ -90,17 +90,17 @@ static const struct vfe_format formats_rdi_8x96[] = {
 };
 
 static const struct vfe_format formats_pix_8x96[] = {
-	{ MEDIA_BUS_FMT_UYVY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_VYUY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YUYV8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YVYU8_1X16, 8 },
+	{ MEDIA_BUS_FMT_UYVY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_VYUY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YUYV8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YVYU8_2X8, 8 },
 };
 
 static const struct vfe_format formats_rdi_845[] = {
-	{ MEDIA_BUS_FMT_UYVY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_VYUY8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YUYV8_1X16, 8 },
-	{ MEDIA_BUS_FMT_YVYU8_1X16, 8 },
+	{ MEDIA_BUS_FMT_UYVY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_VYUY8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YUYV8_2X8, 8 },
+	{ MEDIA_BUS_FMT_YVYU8_2X8, 8 },
 	{ MEDIA_BUS_FMT_SBGGR8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGBRG8_1X8, 8 },
 	{ MEDIA_BUS_FMT_SGRBG8_1X8, 8 },
@@ -170,43 +170,42 @@ static u32 vfe_src_pad_code(struct vfe_line *line, u32 sink_code,
 {
 	struct vfe_device *vfe = to_vfe(line);
 
-	switch (vfe->camss->res->version) {
-	case CAMSS_8x16:
+	if (vfe->camss->version == CAMSS_8x16)
 		switch (sink_code) {
-		case MEDIA_BUS_FMT_YUYV8_1X16:
+		case MEDIA_BUS_FMT_YUYV8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_YUYV8_1X16,
+				MEDIA_BUS_FMT_YUYV8_2X8,
 				MEDIA_BUS_FMT_YUYV8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_YVYU8_1X16:
+		case MEDIA_BUS_FMT_YVYU8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_YVYU8_1X16,
+				MEDIA_BUS_FMT_YVYU8_2X8,
 				MEDIA_BUS_FMT_YVYU8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_UYVY8_1X16:
+		case MEDIA_BUS_FMT_UYVY8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_UYVY8_1X16,
+				MEDIA_BUS_FMT_UYVY8_2X8,
 				MEDIA_BUS_FMT_UYVY8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_VYUY8_1X16:
+		case MEDIA_BUS_FMT_VYUY8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_VYUY8_1X16,
+				MEDIA_BUS_FMT_VYUY8_2X8,
 				MEDIA_BUS_FMT_VYUY8_1_5X8,
 			};
 
@@ -219,58 +218,57 @@ static u32 vfe_src_pad_code(struct vfe_line *line, u32 sink_code,
 
 			return sink_code;
 		}
-		break;
-	case CAMSS_8x96:
-	case CAMSS_660:
-	case CAMSS_845:
-	case CAMSS_8250:
+	else if (vfe->camss->version == CAMSS_8x96 ||
+		 vfe->camss->version == CAMSS_660 ||
+		 vfe->camss->version == CAMSS_845 ||
+		 vfe->camss->version == CAMSS_8250)
 		switch (sink_code) {
-		case MEDIA_BUS_FMT_YUYV8_1X16:
+		case MEDIA_BUS_FMT_YUYV8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_YUYV8_1X16,
-				MEDIA_BUS_FMT_YVYU8_1X16,
-				MEDIA_BUS_FMT_UYVY8_1X16,
-				MEDIA_BUS_FMT_VYUY8_1X16,
+				MEDIA_BUS_FMT_YUYV8_2X8,
+				MEDIA_BUS_FMT_YVYU8_2X8,
+				MEDIA_BUS_FMT_UYVY8_2X8,
+				MEDIA_BUS_FMT_VYUY8_2X8,
 				MEDIA_BUS_FMT_YUYV8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_YVYU8_1X16:
+		case MEDIA_BUS_FMT_YVYU8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_YVYU8_1X16,
-				MEDIA_BUS_FMT_YUYV8_1X16,
-				MEDIA_BUS_FMT_UYVY8_1X16,
-				MEDIA_BUS_FMT_VYUY8_1X16,
+				MEDIA_BUS_FMT_YVYU8_2X8,
+				MEDIA_BUS_FMT_YUYV8_2X8,
+				MEDIA_BUS_FMT_UYVY8_2X8,
+				MEDIA_BUS_FMT_VYUY8_2X8,
 				MEDIA_BUS_FMT_YVYU8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_UYVY8_1X16:
+		case MEDIA_BUS_FMT_UYVY8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_UYVY8_1X16,
-				MEDIA_BUS_FMT_YUYV8_1X16,
-				MEDIA_BUS_FMT_YVYU8_1X16,
-				MEDIA_BUS_FMT_VYUY8_1X16,
+				MEDIA_BUS_FMT_UYVY8_2X8,
+				MEDIA_BUS_FMT_YUYV8_2X8,
+				MEDIA_BUS_FMT_YVYU8_2X8,
+				MEDIA_BUS_FMT_VYUY8_2X8,
 				MEDIA_BUS_FMT_UYVY8_1_5X8,
 			};
 
 			return vfe_find_code(src_code, ARRAY_SIZE(src_code),
 					     index, src_req_code);
 		}
-		case MEDIA_BUS_FMT_VYUY8_1X16:
+		case MEDIA_BUS_FMT_VYUY8_2X8:
 		{
 			u32 src_code[] = {
-				MEDIA_BUS_FMT_VYUY8_1X16,
-				MEDIA_BUS_FMT_YUYV8_1X16,
-				MEDIA_BUS_FMT_YVYU8_1X16,
-				MEDIA_BUS_FMT_UYVY8_1X16,
+				MEDIA_BUS_FMT_VYUY8_2X8,
+				MEDIA_BUS_FMT_YUYV8_2X8,
+				MEDIA_BUS_FMT_YVYU8_2X8,
+				MEDIA_BUS_FMT_UYVY8_2X8,
 				MEDIA_BUS_FMT_VYUY8_1_5X8,
 			};
 
@@ -283,9 +281,8 @@ static u32 vfe_src_pad_code(struct vfe_line *line, u32 sink_code,
 
 			return sink_code;
 		}
-		break;
-	}
-	return 0;
+	else
+		return 0;
 }
 
 int vfe_reset(struct vfe_device *vfe)
@@ -410,49 +407,6 @@ int vfe_put_output(struct vfe_line *line)
 	return 0;
 }
 
-static int vfe_disable_output(struct vfe_line *line)
-{
-	struct vfe_device *vfe = to_vfe(line);
-	struct vfe_output *output = &line->output;
-	unsigned long flags;
-	unsigned int i;
-
-	spin_lock_irqsave(&vfe->output_lock, flags);
-	for (i = 0; i < output->wm_num; i++)
-		vfe->ops->vfe_wm_stop(vfe, output->wm_idx[i]);
-	output->gen2.active_num = 0;
-	spin_unlock_irqrestore(&vfe->output_lock, flags);
-
-	return vfe_reset(vfe);
-}
-
-/*
- * vfe_disable - Disable streaming on VFE line
- * @line: VFE line
- *
- * Return 0 on success or a negative error code otherwise
- */
-int vfe_disable(struct vfe_line *line)
-{
-	struct vfe_device *vfe = to_vfe(line);
-	int ret;
-
-	ret = vfe_disable_output(line);
-	if (ret)
-		goto error;
-
-	vfe_put_output(line);
-
-	mutex_lock(&vfe->stream_lock);
-
-	vfe->stream_count--;
-
-	mutex_unlock(&vfe->stream_lock);
-
-error:
-	return ret;
-}
-
 /**
  * vfe_isr_comp_done() - Process composite image done interrupt
  * @vfe: VFE Device
@@ -472,20 +426,6 @@ void vfe_isr_comp_done(struct vfe_device *vfe, u8 comp)
 void vfe_isr_reset_ack(struct vfe_device *vfe)
 {
 	complete(&vfe->reset_complete);
-}
-
-static int vfe_match_clock_names(struct vfe_device *vfe,
-				 struct camss_clock *clock)
-{
-	char vfe_name[7]; /* vfeXXX\0 */
-	char vfe_lite_name[12]; /* vfe_liteXXX\0 */
-
-	snprintf(vfe_name, sizeof(vfe_name), "vfe%d", vfe->id);
-	snprintf(vfe_lite_name, sizeof(vfe_lite_name), "vfe_lite%d", vfe->id);
-
-	return (!strcmp(clock->name, vfe_name) ||
-		!strcmp(clock->name, vfe_lite_name) ||
-		!strcmp(clock->name, "vfe_lite"));
 }
 
 /*
@@ -511,7 +451,9 @@ static int vfe_set_clock_rates(struct vfe_device *vfe)
 	for (i = 0; i < vfe->nclocks; i++) {
 		struct camss_clock *clock = &vfe->clock[i];
 
-		if (vfe_match_clock_names(vfe, clock)) {
+		if (!strcmp(clock->name, "vfe0") ||
+		    !strcmp(clock->name, "vfe1") ||
+		    !strcmp(clock->name, "vfe_lite")) {
 			u64 min_rate = 0;
 			long rate;
 
@@ -592,7 +534,8 @@ static int vfe_check_clock_rates(struct vfe_device *vfe)
 	for (i = 0; i < vfe->nclocks; i++) {
 		struct camss_clock *clock = &vfe->clock[i];
 
-		if (vfe_match_clock_names(vfe, clock)) {
+		if (!strcmp(clock->name, "vfe0") ||
+		    !strcmp(clock->name, "vfe1")) {
 			u64 min_rate = 0;
 			unsigned long rate;
 
@@ -668,7 +611,7 @@ int vfe_get(struct vfe_device *vfe)
 	} else {
 		ret = vfe_check_clock_rates(vfe);
 		if (ret < 0)
-			goto error_pm_domain;
+			goto error_pm_runtime_get;
 	}
 	vfe->power_count++;
 
@@ -901,7 +844,7 @@ static void vfe_try_format(struct vfe_line *line,
 
 		/* If not found, use UYVY as default */
 		if (i >= line->nformats)
-			fmt->code = MEDIA_BUS_FMT_UYVY8_1X16;
+			fmt->code = MEDIA_BUS_FMT_UYVY8_2X8;
 
 		fmt->width = clamp_t(u32, fmt->width, 1, 8191);
 		fmt->height = clamp_t(u32, fmt->height, 1, 8191);
@@ -1318,7 +1261,7 @@ static int vfe_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		.which = fh ? V4L2_SUBDEV_FORMAT_TRY :
 			      V4L2_SUBDEV_FORMAT_ACTIVE,
 		.format = {
-			.code = MEDIA_BUS_FMT_UYVY8_1X16,
+			.code = MEDIA_BUS_FMT_UYVY8_2X8,
 			.width = 1920,
 			.height = 1080
 		}
@@ -1335,19 +1278,32 @@ static int vfe_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
  * Return 0 on success or a negative error code otherwise
  */
 int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
-			const struct camss_subdev_resources *res, u8 id)
+			const struct resources *res, u8 id)
 {
 	struct device *dev = camss->dev;
 	struct platform_device *pdev = to_platform_device(dev);
 	int i, j;
 	int ret;
 
-	vfe->ops = res->ops;
-
-	if (!res->line_num)
+	switch (camss->version) {
+	case CAMSS_8x16:
+		vfe->ops = &vfe_ops_4_1;
+		break;
+	case CAMSS_8x96:
+		vfe->ops = &vfe_ops_4_7;
+		break;
+	case CAMSS_660:
+		vfe->ops = &vfe_ops_4_8;
+		break;
+	case CAMSS_845:
+		vfe->ops = &vfe_ops_170;
+		break;
+	case CAMSS_8250:
+		vfe->ops = &vfe_ops_480;
+		break;
+	default:
 		return -EINVAL;
-
-	vfe->line_num = res->line_num;
+	}
 	vfe->ops->subdev_init(dev, vfe);
 
 	/* Memory */
@@ -1435,8 +1391,7 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
 		init_completion(&l->output.sof);
 		init_completion(&l->output.reg_update);
 
-		switch (camss->res->version) {
-		case CAMSS_8x16:
+		if (camss->version == CAMSS_8x16) {
 			if (i == VFE_LINE_PIX) {
 				l->formats = formats_pix_8x16;
 				l->nformats = ARRAY_SIZE(formats_pix_8x16);
@@ -1444,9 +1399,8 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
 				l->formats = formats_rdi_8x16;
 				l->nformats = ARRAY_SIZE(formats_rdi_8x16);
 			}
-			break;
-		case CAMSS_8x96:
-		case CAMSS_660:
+		} else if (camss->version == CAMSS_8x96 ||
+			   camss->version == CAMSS_660) {
 			if (i == VFE_LINE_PIX) {
 				l->formats = formats_pix_8x96;
 				l->nformats = ARRAY_SIZE(formats_pix_8x96);
@@ -1454,12 +1408,12 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
 				l->formats = formats_rdi_8x96;
 				l->nformats = ARRAY_SIZE(formats_rdi_8x96);
 			}
-			break;
-		case CAMSS_845:
-		case CAMSS_8250:
+		} else if (camss->version == CAMSS_845 ||
+			   camss->version == CAMSS_8250) {
 			l->formats = formats_rdi_845;
 			l->nformats = ARRAY_SIZE(formats_rdi_845);
-			break;
+		} else {
+			return -EINVAL;
 		}
 	}
 
@@ -1587,8 +1541,8 @@ int msm_vfe_register_entities(struct vfe_device *vfe,
 		}
 
 		video_out->ops = &vfe->video_ops;
-		if (vfe->camss->res->version == CAMSS_845 ||
-		    vfe->camss->res->version == CAMSS_8250)
+		if (vfe->camss->version == CAMSS_845 ||
+		    vfe->camss->version == CAMSS_8250)
 			video_out->bpl_alignment = 16;
 		else
 			video_out->bpl_alignment = 8;

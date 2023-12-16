@@ -310,7 +310,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 		struct msm_gem_submit *submit, int idx,
 		uint64_t iova, uint32_t size, bool full)
 {
-	struct drm_gem_object *obj = submit->bos[idx].obj;
+	struct msm_gem_object *obj = submit->bos[idx].obj;
 	unsigned offset = 0;
 	const char *buf;
 
@@ -318,7 +318,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 		offset = iova - submit->bos[idx].iova;
 	} else {
 		iova = submit->bos[idx].iova;
-		size = obj->size;
+		size = obj->base.size;
 	}
 
 	/*
@@ -335,7 +335,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 	if (!(submit->bos[idx].flags & MSM_SUBMIT_BO_READ))
 		return;
 
-	buf = msm_gem_get_vaddr_active(obj);
+	buf = msm_gem_get_vaddr_active(&obj->base);
 	if (IS_ERR(buf))
 		return;
 
@@ -343,7 +343,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 
 	rd_write_section(rd, RD_BUFFER_CONTENTS, buf, size);
 
-	msm_gem_put_vaddr_locked(obj);
+	msm_gem_put_vaddr_locked(&obj->base);
 }
 
 /* called under gpu->lock */

@@ -52,8 +52,10 @@ struct insn_emulation {
 	int min;
 	int max;
 
-	/* sysctl for this emulation */
-	struct ctl_table sysctl;
+	/*
+	 * sysctl for this emulation + a sentinal entry.
+	 */
+	struct ctl_table sysctl[2];
 };
 
 #define ARM_OPCODE_CONDTEST_FAIL   0
@@ -556,7 +558,7 @@ static void __init register_insn_emulation(struct insn_emulation *insn)
 	update_insn_emulation_mode(insn, INSN_UNDEF);
 
 	if (insn->status != INSN_UNAVAILABLE) {
-		sysctl = &insn->sysctl;
+		sysctl = &insn->sysctl[0];
 
 		sysctl->mode = 0644;
 		sysctl->maxlen = sizeof(int);
@@ -567,7 +569,7 @@ static void __init register_insn_emulation(struct insn_emulation *insn)
 		sysctl->extra2 = &insn->max;
 		sysctl->proc_handler = emulation_proc_handler;
 
-		register_sysctl_sz("abi", sysctl, 1);
+		register_sysctl("abi", sysctl);
 	}
 }
 

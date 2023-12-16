@@ -26,8 +26,6 @@
 
 #include "clearstate_defs.h"
 
-#define AMDGPU_MAX_RLC_INSTANCES	8
-
 /* firmware ID used in rlc toc */
 typedef enum _FIRMWARE_ID_ {
 	FIRMWARE_ID_INVALID					= 0,
@@ -203,7 +201,7 @@ struct amdgpu_rlc {
 	u32                     cp_table_size;
 
 	/* safe mode for updating CG/PG state */
-	bool in_safe_mode[AMDGPU_MAX_RLC_INSTANCES];
+	bool in_safe_mode[8];
 	const struct amdgpu_rlc_funcs *funcs;
 
 	/* for firmware data */
@@ -259,7 +257,7 @@ struct amdgpu_rlc {
 
 	bool rlcg_reg_access_supported;
 	/* registers for rlcg indirect reg access */
-	struct amdgpu_rlcg_reg_access_ctrl reg_access_ctrl[AMDGPU_MAX_RLC_INSTANCES];
+	struct amdgpu_rlcg_reg_access_ctrl reg_access_ctrl;
 };
 
 void amdgpu_gfx_rlc_enter_safe_mode(struct amdgpu_device *adev, int xcc_id);

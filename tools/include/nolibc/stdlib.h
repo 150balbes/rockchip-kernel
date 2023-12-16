@@ -83,10 +83,11 @@ void free(void *ptr)
  * declared as a char **, and must be terminated by a NULL (it is recommended
  * to set this variable to the "envp" argument of main()). If the requested
  * environment variable exists its value is returned otherwise NULL is
- * returned.
+ * returned. getenv() is forcefully inlined so that the reference to "environ"
+ * will be dropped if unused, even at -O0.
  */
 static __attribute__((unused))
-char *getenv(const char *name)
+char *_getenv(const char *name, char **environ)
 {
 	int idx, i;
 
@@ -99,6 +100,13 @@ char *getenv(const char *name)
 		}
 	}
 	return NULL;
+}
+
+static __inline__ __attribute__((unused,always_inline))
+char *getenv(const char *name)
+{
+	extern char **environ;
+	return _getenv(name, environ);
 }
 
 static __attribute__((unused))

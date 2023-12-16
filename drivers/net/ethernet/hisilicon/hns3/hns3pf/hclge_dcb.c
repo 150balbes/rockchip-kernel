@@ -52,10 +52,7 @@ static void hclge_tm_info_to_ieee_ets(struct hclge_dev *hdev,
 
 	for (i = 0; i < HNAE3_MAX_TC; i++) {
 		ets->prio_tc[i] = hdev->tm_info.prio_tc[i];
-		if (i < hdev->tm_info.num_tc)
-			ets->tc_tx_bw[i] = hdev->tm_info.pg_info[0].tc_dwrr[i];
-		else
-			ets->tc_tx_bw[i] = 0;
+		ets->tc_tx_bw[i] = hdev->tm_info.pg_info[0].tc_dwrr[i];
 
 		if (hdev->tm_info.tc_info[i].tc_sch_mode ==
 		    HCLGE_SCH_MODE_SP)
@@ -126,8 +123,7 @@ static u8 hclge_ets_tc_changed(struct hclge_dev *hdev, struct ieee_ets *ets,
 }
 
 static int hclge_ets_sch_mode_validate(struct hclge_dev *hdev,
-				       struct ieee_ets *ets, bool *changed,
-				       u8 tc_num)
+				       struct ieee_ets *ets, bool *changed)
 {
 	bool has_ets_tc = false;
 	u32 total_ets_bw = 0;
@@ -141,13 +137,6 @@ static int hclge_ets_sch_mode_validate(struct hclge_dev *hdev,
 				*changed = true;
 			break;
 		case IEEE_8021QAZ_TSA_ETS:
-			if (i >= tc_num) {
-				dev_err(&hdev->pdev->dev,
-					"tc%u is disabled, cannot set ets bw\n",
-					i);
-				return -EINVAL;
-			}
-
 			/* The hardware will switch to sp mode if bandwidth is
 			 * 0, so limit ets bandwidth must be greater than 0.
 			 */
@@ -187,7 +176,7 @@ static int hclge_ets_validate(struct hclge_dev *hdev, struct ieee_ets *ets,
 	if (ret)
 		return ret;
 
-	ret = hclge_ets_sch_mode_validate(hdev, ets, changed, tc_num);
+	ret = hclge_ets_sch_mode_validate(hdev, ets, changed);
 	if (ret)
 		return ret;
 
@@ -227,10 +216,6 @@ static int hclge_notify_down_uinit(struct hclge_dev *hdev)
 	if (ret)
 		return ret;
 
-	ret = hclge_tm_flush_cfg(hdev, true);
-	if (ret)
-		return ret;
-
 	return hclge_notify_client(hdev, HNAE3_UNINIT_CLIENT);
 }
 
@@ -239,10 +224,6 @@ static int hclge_notify_init_up(struct hclge_dev *hdev)
 	int ret;
 
 	ret = hclge_notify_client(hdev, HNAE3_INIT_CLIENT);
-	if (ret)
-		return ret;
-
-	ret = hclge_tm_flush_cfg(hdev, false);
 	if (ret)
 		return ret;
 
@@ -259,7 +240,7 @@ static int hclge_ieee_setets(struct hnae3_handle *h, struct ieee_ets *ets)
 	int ret;
 
 	if (!(hdev->dcbx_cap & DCB_CAP_DCBX_VER_IEEE) ||
-	    h->kinfo.tc_info.mqprio_active)
+	    hdev->flag & HCLGE_FLAG_MQPRIO_ENABLE)
 		return -EINVAL;
 
 	ret = hclge_ets_validate(hdev, ets, &num_tc, &map_changed);
@@ -275,7 +256,10 @@ static int hclge_ieee_setets(struct hnae3_handle *h, struct ieee_ets *ets)
 	}
 
 	hclge_tm_schd_info_update(hdev, num_tc);
-	h->kinfo.tc_info.dcb_ets_active = num_tc > 1;
+	if (num_tc > 1)
+		hdev->flag |= HCLGE_FLAG_DCB_ENABLE;
+	else
+		hdev->flag &= ~HCLGE_FLAG_DCB_ENABLE;
 
 	ret = hclge_ieee_ets_to_tm_info(hdev, ets);
 	if (ret)
@@ -329,7 +313,6 @@ static int hclge_ieee_setpfc(struct hnae3_handle *h, struct ieee_pfc *pfc)
 	struct net_device *netdev = h->kinfo.netdev;
 	struct hclge_dev *hdev = vport->back;
 	u8 i, j, pfc_map, *prio_tc;
-	int last_bad_ret = 0;
 	int ret;
 
 	if (!(hdev->dcbx_cap & DCB_CAP_DCBX_VER_IEEE))
@@ -367,28 +350,13 @@ static int hclge_ieee_setpfc(struct hnae3_handle *h, struct ieee_pfc *pfc)
 	if (ret)
 		return ret;
 
-	ret = hclge_tm_flush_cfg(hdev, true);
-	if (ret)
-		return ret;
-
-	/* No matter whether the following operations are performed
-	 * successfully or not, disabling the tm flush and notify
-	 * the network status to up are necessary.
-	 * Do not return immediately.
-	 */
 	ret = hclge_buffer_alloc(hdev);
-	if (ret)
-		last_bad_ret = ret;
+	if (ret) {
+		hclge_notify_client(hdev, HNAE3_UP_CLIENT);
+		return ret;
+	}
 
-	ret = hclge_tm_flush_cfg(hdev, false);
-	if (ret)
-		last_bad_ret = ret;
-
-	ret = hclge_notify_client(hdev, HNAE3_UP_CLIENT);
-	if (ret)
-		last_bad_ret = ret;
-
-	return last_bad_ret;
+	return hclge_notify_client(hdev, HNAE3_UP_CLIENT);
 }
 
 static int hclge_ieee_setapp(struct hnae3_handle *h, struct dcb_app *app)
@@ -484,7 +452,7 @@ static u8 hclge_getdcbx(struct hnae3_handle *h)
 	struct hclge_vport *vport = hclge_get_vport(h);
 	struct hclge_dev *hdev = vport->back;
 
-	if (h->kinfo.tc_info.mqprio_active)
+	if (hdev->flag & HCLGE_FLAG_MQPRIO_ENABLE)
 		return 0;
 
 	return hdev->dcbx_cap;
@@ -608,8 +576,7 @@ static int hclge_setup_tc(struct hnae3_handle *h,
 	if (!test_bit(HCLGE_STATE_NIC_REGISTERED, &hdev->state))
 		return -EBUSY;
 
-	kinfo = &vport->nic.kinfo;
-	if (kinfo->tc_info.dcb_ets_active)
+	if (hdev->flag & HCLGE_FLAG_DCB_ENABLE)
 		return -EINVAL;
 
 	ret = hclge_mqprio_qopt_check(hdev, mqprio_qopt);
@@ -623,6 +590,7 @@ static int hclge_setup_tc(struct hnae3_handle *h,
 	if (ret)
 		return ret;
 
+	kinfo = &vport->nic.kinfo;
 	memcpy(&old_tc_info, &kinfo->tc_info, sizeof(old_tc_info));
 	hclge_sync_mqprio_qopt(&kinfo->tc_info, mqprio_qopt);
 	kinfo->tc_info.mqprio_active = tc > 0;
@@ -630,6 +598,13 @@ static int hclge_setup_tc(struct hnae3_handle *h,
 	ret = hclge_config_tc(hdev, &kinfo->tc_info);
 	if (ret)
 		goto err_out;
+
+	hdev->flag &= ~HCLGE_FLAG_DCB_ENABLE;
+
+	if (tc > 1)
+		hdev->flag |= HCLGE_FLAG_MQPRIO_ENABLE;
+	else
+		hdev->flag &= ~HCLGE_FLAG_MQPRIO_ENABLE;
 
 	return hclge_notify_init_up(hdev);
 

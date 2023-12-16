@@ -63,6 +63,11 @@
 		};
 	};
 
+	lbsc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+	};
+
 	leds {
 		compatible = "gpio-leds";
 

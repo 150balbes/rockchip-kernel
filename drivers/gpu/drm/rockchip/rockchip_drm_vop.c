@@ -247,22 +247,14 @@ static inline void vop_cfg_done(struct vop *vop)
 	VOP_REG_SET(vop, common, cfg_done, 1);
 }
 
-static bool has_rb_swapped(uint32_t version, uint32_t format)
+static bool has_rb_swapped(uint32_t format)
 {
 	switch (format) {
 	case DRM_FORMAT_XBGR8888:
 	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_BGR888:
 	case DRM_FORMAT_BGR565:
 		return true;
-	/*
-	 * full framework (IP version 3.x) only need rb swapped for RGB888 and
-	 * little framework (IP version 2.x) only need rb swapped for BGR888,
-	 * check for 3.x to also only rb swap BGR888 for unknown vop version
-	 */
-	case DRM_FORMAT_RGB888:
-		return VOP_MAJOR(version) == 3;
-	case DRM_FORMAT_BGR888:
-		return VOP_MAJOR(version) != 3;
 	default:
 		return false;
 	}
@@ -274,18 +266,6 @@ static bool has_uv_swapped(uint32_t format)
 	case DRM_FORMAT_NV21:
 	case DRM_FORMAT_NV61:
 	case DRM_FORMAT_NV42:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool is_fmt_10(uint32_t format)
-{
-	switch (format) {
-	case DRM_FORMAT_NV15:
-	case DRM_FORMAT_NV20:
-	case DRM_FORMAT_NV30:
 		return true;
 	default:
 		return false;
@@ -307,15 +287,12 @@ static enum vop_data_format vop_convert_format(uint32_t format)
 	case DRM_FORMAT_BGR565:
 		return VOP_FMT_RGB565;
 	case DRM_FORMAT_NV12:
-	case DRM_FORMAT_NV15:
 	case DRM_FORMAT_NV21:
 		return VOP_FMT_YUV420SP;
 	case DRM_FORMAT_NV16:
-	case DRM_FORMAT_NV20:
 	case DRM_FORMAT_NV61:
 		return VOP_FMT_YUV422SP;
 	case DRM_FORMAT_NV24:
-	case DRM_FORMAT_NV30:
 	case DRM_FORMAT_NV42:
 		return VOP_FMT_YUV444SP;
 	default:
@@ -850,12 +827,12 @@ static int vop_plane_atomic_check(struct drm_plane *plane,
 	 * need align with 2 pixel.
 	 */
 	if (fb->format->is_yuv && ((new_plane_state->src.x1 >> 16) % 2)) {
-		DRM_DEBUG_KMS("Invalid Source: Yuv format not support odd xpos\n");
+		DRM_ERROR("Invalid Source: Yuv format not support odd xpos\n");
 		return -EINVAL;
 	}
 
 	if (fb->format->is_yuv && new_plane_state->rotation & DRM_MODE_REFLECT_Y) {
-		DRM_DEBUG_KMS("Invalid Source: Yuv format does not support this rotation\n");
+		DRM_ERROR("Invalid Source: Yuv format does not support this rotation\n");
 		return -EINVAL;
 	}
 
@@ -863,7 +840,7 @@ static int vop_plane_atomic_check(struct drm_plane *plane,
 		struct vop *vop = to_vop(crtc);
 
 		if (!vop->data->afbc) {
-			DRM_DEBUG_KMS("vop does not support AFBC\n");
+			DRM_ERROR("vop does not support AFBC\n");
 			return -EINVAL;
 		}
 
@@ -872,16 +849,15 @@ static int vop_plane_atomic_check(struct drm_plane *plane,
 			return ret;
 
 		if (new_plane_state->src.x1 || new_plane_state->src.y1) {
-			DRM_DEBUG_KMS("AFBC does not support offset display, " \
-				      "xpos=%d, ypos=%d, offset=%d\n",
-				      new_plane_state->src.x1, new_plane_state->src.y1,
-				      fb->offsets[0]);
+			DRM_ERROR("AFBC does not support offset display, xpos=%d, ypos=%d, offset=%d\n",
+				  new_plane_state->src.x1,
+				  new_plane_state->src.y1, fb->offsets[0]);
 			return -EINVAL;
 		}
 
 		if (new_plane_state->rotation && new_plane_state->rotation != DRM_MODE_ROTATE_0) {
-			DRM_DEBUG_KMS("No rotation support in AFBC, rotation=%d\n",
-				      new_plane_state->rotation);
+			DRM_ERROR("No rotation support in AFBC, rotation=%d\n",
+				  new_plane_state->rotation);
 			return -EINVAL;
 		}
 	}
@@ -962,12 +938,7 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	dsp_sty = dest->y1 + crtc->mode.vtotal - crtc->mode.vsync_start;
 	dsp_st = dsp_sty << 16 | (dsp_stx & 0xffff);
 
-	if (fb->format->char_per_block[0])
-		offset = drm_format_info_min_pitch(fb->format, 0,
-						   src->x1 >> 16);
-	else
-		offset = (src->x1 >> 16) * fb->format->cpp[0];
-
+	offset = (src->x1 >> 16) * fb->format->cpp[0];
 	offset += (src->y1 >> 16) * fb->pitches[0];
 	dma_addr = rk_obj->dma_addr + offset + fb->offsets[0];
 
@@ -993,7 +964,6 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	}
 
 	VOP_WIN_SET(vop, win, format, format);
-	VOP_WIN_SET(vop, win, fmt_10, is_fmt_10(fb->format->format));
 	VOP_WIN_SET(vop, win, yrgb_vir, DIV_ROUND_UP(fb->pitches[0], 4));
 	VOP_WIN_SET(vop, win, yrgb_mst, dma_addr);
 	VOP_WIN_YUV2YUV_SET(vop, win_yuv2yuv, y2r_en, is_yuv);
@@ -1003,16 +973,15 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 		    (new_state->rotation & DRM_MODE_REFLECT_X) ? 1 : 0);
 
 	if (is_yuv) {
+		int hsub = fb->format->hsub;
+		int vsub = fb->format->vsub;
+		int bpp = fb->format->cpp[1];
+
 		uv_obj = fb->obj[1];
 		rk_uv_obj = to_rockchip_obj(uv_obj);
 
-		if (fb->format->char_per_block[1])
-			offset = drm_format_info_min_pitch(fb->format, 1,
-							   src->x1 >> 16);
-		else
-			offset = (src->x1 >> 16) * fb->format->cpp[1];
-		offset /= fb->format->hsub;
-		offset += (src->y1 >> 16) * fb->pitches[1] / fb->format->vsub;
+		offset = (src->x1 >> 16) * bpp / hsub;
+		offset += (src->y1 >> 16) * fb->pitches[1] / vsub;
 
 		dma_addr = rk_uv_obj->dma_addr + offset + fb->offsets[1];
 		VOP_WIN_SET(vop, win, uv_vir, DIV_ROUND_UP(fb->pitches[1], 4));
@@ -1038,7 +1007,7 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	VOP_WIN_SET(vop, win, dsp_info, dsp_info);
 	VOP_WIN_SET(vop, win, dsp_st, dsp_st);
 
-	rb_swap = has_rb_swapped(vop->data->version, fb->format->format);
+	rb_swap = has_rb_swapped(fb->format->format);
 	VOP_WIN_SET(vop, win, rb_swap, rb_swap);
 
 	/*

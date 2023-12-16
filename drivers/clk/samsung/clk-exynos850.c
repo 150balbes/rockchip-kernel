@@ -9,25 +9,13 @@
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #include <dt-bindings/clock/exynos850.h>
 
 #include "clk.h"
 #include "clk-exynos-arm64.h"
-
-/* NOTE: Must be equal to the last clock ID increased by one */
-#define CLKS_NR_TOP			(CLK_DOUT_G3D_SWITCH + 1)
-#define CLKS_NR_APM			(CLK_GOUT_SYSREG_APM_PCLK + 1)
-#define CLKS_NR_AUD			(CLK_GOUT_AUD_CMU_AUD_PCLK + 1)
-#define CLKS_NR_CMGP			(CLK_GOUT_SYSREG_CMGP_PCLK + 1)
-#define CLKS_NR_G3D			(CLK_GOUT_G3D_SYSREG_PCLK + 1)
-#define CLKS_NR_HSI			(CLK_GOUT_HSI_CMU_HSI_PCLK + 1)
-#define CLKS_NR_IS			(CLK_GOUT_IS_SYSREG_PCLK + 1)
-#define CLKS_NR_MFCMSCL			(CLK_GOUT_MFCMSCL_SYSREG_PCLK + 1)
-#define CLKS_NR_PERI			(CLK_GOUT_WDT1_PCLK + 1)
-#define CLKS_NR_CORE			(CLK_GOUT_SYSREG_CORE_PCLK + 1)
-#define CLKS_NR_DPU			(CLK_GOUT_DPU_SYSREG_PCLK + 1)
 
 /* ---- CMU_TOP ------------------------------------------------------------- */
 
@@ -498,7 +486,7 @@ static const struct samsung_cmu_info top_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(top_div_clks),
 	.gate_clks		= top_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(top_gate_clks),
-	.nr_clk_ids		= CLKS_NR_TOP,
+	.nr_clk_ids		= TOP_NR_CLK,
 	.clk_regs		= top_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(top_clk_regs),
 };
@@ -638,7 +626,7 @@ static const struct samsung_cmu_info apm_cmu_info __initconst = {
 	.nr_gate_clks		= ARRAY_SIZE(apm_gate_clks),
 	.fixed_clks		= apm_fixed_clks,
 	.nr_fixed_clks		= ARRAY_SIZE(apm_fixed_clks),
-	.nr_clk_ids		= CLKS_NR_APM,
+	.nr_clk_ids		= APM_NR_CLK,
 	.clk_regs		= apm_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(apm_clk_regs),
 	.clk_name		= "dout_clkcmu_apm_bus",
@@ -921,7 +909,7 @@ static const struct samsung_cmu_info aud_cmu_info __initconst = {
 	.nr_gate_clks		= ARRAY_SIZE(aud_gate_clks),
 	.fixed_clks		= aud_fixed_clks,
 	.nr_fixed_clks		= ARRAY_SIZE(aud_fixed_clks),
-	.nr_clk_ids		= CLKS_NR_AUD,
+	.nr_clk_ids		= AUD_NR_CLK,
 	.clk_regs		= aud_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(aud_clk_regs),
 	.clk_name		= "dout_aud",
@@ -1024,7 +1012,7 @@ static const struct samsung_cmu_info cmgp_cmu_info __initconst = {
 	.nr_gate_clks		= ARRAY_SIZE(cmgp_gate_clks),
 	.fixed_clks		= cmgp_fixed_clks,
 	.nr_fixed_clks		= ARRAY_SIZE(cmgp_fixed_clks),
-	.nr_clk_ids		= CLKS_NR_CMGP,
+	.nr_clk_ids		= CMGP_NR_CLK,
 	.clk_regs		= cmgp_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(cmgp_clk_regs),
 	.clk_name		= "gout_clkcmu_cmgp_bus",
@@ -1120,7 +1108,7 @@ static const struct samsung_cmu_info g3d_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(g3d_div_clks),
 	.gate_clks		= g3d_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(g3d_gate_clks),
-	.nr_clk_ids		= CLKS_NR_G3D,
+	.nr_clk_ids		= G3D_NR_CLK,
 	.clk_regs		= g3d_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(g3d_clk_regs),
 	.clk_name		= "dout_g3d_switch",
@@ -1222,7 +1210,7 @@ static const struct samsung_cmu_info hsi_cmu_info __initconst = {
 	.nr_mux_clks		= ARRAY_SIZE(hsi_mux_clks),
 	.gate_clks		= hsi_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(hsi_gate_clks),
-	.nr_clk_ids		= CLKS_NR_HSI,
+	.nr_clk_ids		= HSI_NR_CLK,
 	.clk_regs		= hsi_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(hsi_clk_regs),
 	.clk_name		= "dout_hsi_bus",
@@ -1354,7 +1342,7 @@ static const struct samsung_cmu_info is_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(is_div_clks),
 	.gate_clks		= is_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(is_gate_clks),
-	.nr_clk_ids		= CLKS_NR_IS,
+	.nr_clk_ids		= IS_NR_CLK,
 	.clk_regs		= is_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(is_clk_regs),
 	.clk_name		= "dout_is_bus",
@@ -1463,7 +1451,7 @@ static const struct samsung_cmu_info mfcmscl_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(mfcmscl_div_clks),
 	.gate_clks		= mfcmscl_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(mfcmscl_gate_clks),
-	.nr_clk_ids		= CLKS_NR_MFCMSCL,
+	.nr_clk_ids		= MFCMSCL_NR_CLK,
 	.clk_regs		= mfcmscl_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(mfcmscl_clk_regs),
 	.clk_name		= "dout_mfcmscl_mfc",
@@ -1638,7 +1626,7 @@ static const struct samsung_cmu_info peri_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(peri_div_clks),
 	.gate_clks		= peri_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(peri_gate_clks),
-	.nr_clk_ids		= CLKS_NR_PERI,
+	.nr_clk_ids		= PERI_NR_CLK,
 	.clk_regs		= peri_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(peri_clk_regs),
 	.clk_name		= "dout_peri_bus",
@@ -1745,7 +1733,7 @@ static const struct samsung_cmu_info core_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(core_div_clks),
 	.gate_clks		= core_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(core_gate_clks),
-	.nr_clk_ids		= CLKS_NR_CORE,
+	.nr_clk_ids		= CORE_NR_CLK,
 	.clk_regs		= core_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(core_clk_regs),
 	.clk_name		= "dout_core_bus",
@@ -1819,7 +1807,7 @@ static const struct samsung_cmu_info dpu_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(dpu_div_clks),
 	.gate_clks		= dpu_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(dpu_gate_clks),
-	.nr_clk_ids		= CLKS_NR_DPU,
+	.nr_clk_ids		= DPU_NR_CLK,
 	.clk_regs		= dpu_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(dpu_clk_regs),
 	.clk_name		= "dout_dpu",

@@ -8,12 +8,9 @@ else
 	FILE_MAIN=DONE
 fi
 
-SCRIPTDIR=`dirname "$0"`
-TRACER=$SCRIPTDIR/../../../power/x86/amd_pstate_tracer/amd_pstate_trace.py
-
-source $SCRIPTDIR/basic.sh
-source $SCRIPTDIR/tbench.sh
-source $SCRIPTDIR/gitsource.sh
+source basic.sh
+source tbench.sh
+source gitsource.sh
 
 # amd-pstate-ut only run on x86/x86_64 AMD systems.
 ARCH=$(uname -m 2>/dev/null | sed -e 's/i.86/x86/' -e 's/x86_64/x86/')
@@ -25,7 +22,6 @@ OUTFILE=selftest
 OUTFILE_TBENCH="$OUTFILE.tbench"
 OUTFILE_GIT="$OUTFILE.gitsource"
 
-PERF=/usr/bin/perf
 SYSFS=
 CPUROOT=
 CPUFREQROOT=
@@ -155,7 +151,6 @@ help()
 	[-p <tbench process number>]
 	[-l <loop times for tbench>]
 	[-i <amd tracer interval>]
-	[-b <perf binary>]
 	[-m <comparative test: acpi-cpufreq>]
 	\n"
 	exit 2
@@ -163,7 +158,7 @@ help()
 
 parse_arguments()
 {
-	while getopts ho:c:t:p:l:i:b:m: arg
+	while getopts ho:c:t:p:l:i:m: arg
 	do
 		case $arg in
 			h) # --help
@@ -194,10 +189,6 @@ parse_arguments()
 				TRACER_INTERVAL=$OPTARG
 				;;
 
-			b) # --perf-binary
-				PERF=`realpath $OPTARG`
-				;;
-
 			m) # --comparative-test
 				COMPARATIVE_TEST=$OPTARG
 				;;
@@ -211,8 +202,8 @@ parse_arguments()
 
 command_perf()
 {
-	if ! $PERF -v; then
-		echo $msg please install perf or provide perf binary path as argument >&2
+	if ! command -v perf > /dev/null; then
+		echo $msg please install perf. >&2
 		exit $ksft_skip
 	fi
 }

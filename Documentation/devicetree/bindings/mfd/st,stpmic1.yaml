@@ -106,7 +106,6 @@ properties:
         const: st,stpmic1-regulators
 
       ldo3:
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -129,7 +128,6 @@ properties:
         additionalProperties: false
 
       ldo4:
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -144,14 +142,11 @@ properties:
           regulator-name: true
           regulator-boot-on: true
           regulator-always-on: true
-          regulator-min-microvolt: true
-          regulator-max-microvolt: true
           regulator-over-current-protection: true
 
         additionalProperties: false
 
       vref_ddr:
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -170,7 +165,6 @@ properties:
         additionalProperties: false
 
       boost:
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -193,8 +187,10 @@ properties:
       "^(buck[1-4]|ldo[1-6]|vref_ddr|boost|pwr_sw[1-2])-supply$":
         description: STPMIC1 voltage regulators supplies
 
+      "^(buck[1-4]|ldo[1-6]|boost|vref_ddr|pwr_sw[1-2])$":
+        $ref: ../regulator/regulator.yaml
+
       "^ldo[1-2,5-6]$":
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -217,7 +213,6 @@ properties:
         additionalProperties: false
 
       "^buck[1-4]$":
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:
@@ -242,7 +237,6 @@ properties:
         additionalProperties: false
 
       "^pwr_sw[1-2]$":
-        $ref: /schemas/regulator/regulator.yaml
         type: object
 
         properties:

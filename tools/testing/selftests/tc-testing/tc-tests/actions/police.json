@@ -6,9 +6,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -33,9 +30,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -61,9 +55,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -88,9 +79,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -115,9 +103,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -142,9 +127,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -169,9 +151,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -196,9 +175,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -223,9 +199,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -250,9 +223,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -277,9 +247,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -304,9 +271,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -331,9 +295,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -358,9 +319,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -385,9 +343,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -412,9 +367,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -439,9 +391,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -466,9 +415,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -493,9 +439,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -520,9 +463,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -548,9 +488,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -583,9 +520,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -611,9 +545,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -646,9 +577,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             "$TC actions add action police rate 1mbit burst 100k index 1",
             "$TC actions add action police rate 2mbit burst 200k index 2",
@@ -675,9 +603,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -702,9 +627,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -729,9 +651,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -756,9 +675,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -783,9 +699,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -810,9 +723,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -837,9 +747,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -865,9 +772,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -892,9 +796,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",
@@ -919,9 +820,6 @@
             "actions",
             "police"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action police",

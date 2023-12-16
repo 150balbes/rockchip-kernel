@@ -12,18 +12,10 @@
 #include <linux/regmap.h>
 #include <drm/drm_modes.h>
 
-/* a feature to splice two windows and two vps to support resolution > 4096 */
-#define VOP_FEATURE_SPLICE		BIT(5)
-//[CC:] dupplicate of #define VOP_FEATURE_OUTPUT_RGB10	BIT(0) in vop.h
-#define VOP_FEATURE_OUTPUT_10BIT	BIT(0)
+#define VOP_FEATURE_OUTPUT_10BIT        BIT(0)
 
-//[CC:] downstream uses #define WIN_FEATURE_AFBDC               BIT(3)
 #define WIN_FEATURE_AFBDC		BIT(0)
 #define WIN_FEATURE_CLUSTER		BIT(1)
-/* Left win in splice mode */
-#define WIN_FEATURE_SPLICE_LEFT		BIT(6)
-
-#define HIWORD_UPDATE(v, h, l)		((GENMASK(h, l) << 16) | ((v) << (l)))
 
 /*
  *  the delay number of a window in different mode.
@@ -46,18 +38,6 @@ enum vop2_scale_down_mode {
 	VOP2_SCALE_DOWN_BIL,
 	VOP2_SCALE_DOWN_AVG,
 };
-
-/*
- * vop2 internal power domain id,
- * should be all none zero, 0 will be treat as invalid;
- */
-#define VOP2_PD_CLUSTER0	BIT(0)
-#define VOP2_PD_CLUSTER1	BIT(1)
-#define VOP2_PD_CLUSTER2	BIT(2)
-#define VOP2_PD_CLUSTER3	BIT(3)
-#define VOP2_PD_DSC_8K		BIT(5)
-#define VOP2_PD_DSC_4K		BIT(6)
-#define VOP2_PD_ESMART		BIT(7)
 
 enum vop2_win_regs {
 	VOP2_WIN_ENABLE,
@@ -127,7 +107,6 @@ enum vop2_win_regs {
 struct vop2_win_data {
 	const char *name;
 	unsigned int phys_id;
-	uint8_t splice_win_id;
 
 	u32 base;
 	enum drm_plane_type type;
@@ -150,31 +129,26 @@ struct vop2_win_data {
 
 struct vop2_video_port_data {
 	unsigned int id;
-	uint8_t splice_vp_id;
 	u32 feature;
 	u16 gamma_lut_len;
 	u16 cubic_lut_len;
-	unsigned long dclk_max;
 	struct vop_rect max_output;
 	const u8 pre_scan_max_dly[4];
+	const struct vop2_video_port_regs *regs;
 	unsigned int offset;
 };
 
 struct vop2_data {
 	u8 nr_vps;
+	const struct vop2_ctrl *ctrl;
 	const struct vop2_win_data *win;
 	const struct vop2_video_port_data *vp;
+	const struct vop_csc_table *csc_table;
 	struct vop_rect max_input;
 	struct vop_rect max_output;
 
 	unsigned int win_size;
-	// [CC:] convert to an enum as it is used in conditional statements
 	unsigned int soc_id;
-
-	uint8_t nr_dscs;
-	uint8_t nr_conns;
-	const struct vop2_dsc_data *dsc;
-	const struct vop2_connector_if_data *conn;
 };
 
 /* interrupt define */
@@ -425,6 +399,10 @@ enum dst_factor_mode {
 #define RK3568_SYS_DSP_INFACE_EN_HDMI			BIT(1)
 #define RK3568_SYS_DSP_INFACE_EN_RGB			BIT(0)
 
+#define RK3588_SYS_DSP_INFACE_EN_HDMI_MUX		GENMASK(17, 16)
+#define RK3588_SYS_DSP_INFACE_EN_HDMI0			BIT(3)
+#define RK3588_SYS_DSP_INFACE_EN_EDP0			BIT(2)
+
 #define RK3568_DSP_IF_POL__MIPI_PIN_POL			GENMASK(19, 16)
 #define RK3568_DSP_IF_POL__EDP_PIN_POL			GENMASK(15, 12)
 #define RK3568_DSP_IF_POL__HDMI_PIN_POL			GENMASK(7, 4)
@@ -478,45 +456,6 @@ enum dst_factor_mode {
 #define VP_INT_FS		BIT(0)
 
 #define POLFLAG_DCLK_INV	BIT(3)
-
-/* RK3588 registers */
-#define RK3588_GRF_SOC_CON1				0x0304
-#define RK3588_GRF_VOP_CON2				0x08
-#define RK3588_GRF_VO1_CON0				0x00
-
-#define RK3588_GRF_VO1_CON0__HDMI0_PIN_POL		GENMASK(6, 5)
-
-#define RK3588_SYS_PD_CTRL				0x034
-#define RK3588_VP_CLK_CTRL				0x0c
-
-#define RK3588_VP_CLK_CTRL__DCLK_OUT_DIV		GENMASK(3, 2)
-#define RK3588_VP_CLK_CTRL__DCLK_CORE_DIV		GENMASK(1, 0)
-
-#define RK3588_SYS_DSP_INFACE_EN_MIPI1_MUX		GENMASK(22, 21)
-#define RK3588_SYS_DSP_INFACE_EN_MIPI0_MUX		GENMASK(20, 20)
-#define RK3588_SYS_DSP_INFACE_EN_EDP_HDMI1_MUX		GENMASK(19, 18)
-#define RK3588_SYS_DSP_INFACE_EN_EDP_HDMI0_MUX		GENMASK(17, 16)
-#define RK3588_SYS_DSP_INFACE_EN_DP1_MUX		GENMASK(15, 14)
-#define RK3588_SYS_DSP_INFACE_EN_DP0_MUX		GENMASK(13, 12)
-#define RK3588_SYS_DSP_INFACE_EN_DPI			GENMASK(9, 8)
-#define RK3588_SYS_DSP_INFACE_EN_MIPI1			BIT(7)
-#define RK3588_SYS_DSP_INFACE_EN_MIPI0			BIT(6)
-#define RK3588_SYS_DSP_INFACE_EN_HDMI1			BIT(5)
-#define RK3588_SYS_DSP_INFACE_EN_EDP1			BIT(4)
-#define RK3588_SYS_DSP_INFACE_EN_HDMI0			BIT(3)
-#define RK3588_SYS_DSP_INFACE_EN_EDP0			BIT(2)
-#define RK3588_SYS_DSP_INFACE_EN_DP1			BIT(1)
-#define RK3588_SYS_DSP_INFACE_EN_DP0			BIT(0)
-
-#define RK3588_DSP_IF_MIPI1_PCLK_DIV			GENMASK(27, 26)
-#define RK3588_DSP_IF_MIPI0_PCLK_DIV			GENMASK(25, 24)
-#define RK3588_DSP_IF_EDP_HDMI1_PCLK_DIV		GENMASK(22, 22)
-#define RK3588_DSP_IF_EDP_HDMI1_DCLK_DIV		GENMASK(21, 20)
-#define RK3588_DSP_IF_EDP_HDMI0_PCLK_DIV		GENMASK(18, 18)
-#define RK3588_DSP_IF_EDP_HDMI0_DCLK_DIV		GENMASK(17, 16)
-
-#define RK3588_DSP_IF_POL__DP1_PIN_POL			GENMASK(14, 12)
-#define RK3588_DSP_IF_POL__DP0_PIN_POL			GENMASK(10, 8)
 
 enum vop2_layer_phy_id {
 	ROCKCHIP_VOP2_CLUSTER0 = 0,

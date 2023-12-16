@@ -176,7 +176,7 @@ void gfs2_glock_free(struct gfs2_glock *gl)
 	wake_up_glock(gl);
 	call_rcu(&gl->gl_rcu, gfs2_glock_dealloc);
 	if (atomic_dec_and_test(&sdp->sd_glock_disposal))
-		wake_up(&sdp->sd_kill_wait);
+		wake_up(&sdp->sd_glock_wait);
 }
 
 /**
@@ -468,10 +468,10 @@ done:
  * do_promote - promote as many requests as possible on the current queue
  * @gl: The glock
  * 
- * Returns true on success (i.e., progress was made or there are no waiters).
+ * Returns: 1 if there is a blocked holder at the head of the list
  */
 
-static bool do_promote(struct gfs2_glock *gl)
+static int do_promote(struct gfs2_glock *gl)
 {
 	struct gfs2_holder *gh, *current_gh;
 
@@ -484,10 +484,10 @@ static bool do_promote(struct gfs2_glock *gl)
 			 * If we get here, it means we may not grant this
 			 * holder for some reason. If this holder is at the
 			 * head of the list, it means we have a blocked holder
-			 * at the head, so return false.
+			 * at the head, so return 1.
 			 */
 			if (list_is_first(&gh->gh_list, &gl->gl_holders))
-				return false;
+				return 1;
 			do_error(gl, 0);
 			break;
 		}
@@ -497,7 +497,7 @@ static bool do_promote(struct gfs2_glock *gl)
 		if (!current_gh)
 			current_gh = gh;
 	}
-	return true;
+	return 0;
 }
 
 /**
@@ -591,11 +591,10 @@ static void finish_xmote(struct gfs2_glock *gl, unsigned int ret)
 		if (gh && !test_bit(GLF_DEMOTE_IN_PROGRESS, &gl->gl_flags)) {
 			/* move to back of queue and try next entry */
 			if (ret & LM_OUT_CANCELED) {
-				list_move_tail(&gh->gh_list, &gl->gl_holders);
+				if ((gh->gh_flags & LM_FLAG_PRIORITY) == 0)
+					list_move_tail(&gh->gh_list, &gl->gl_holders);
 				gh = find_first_waiter(gl);
 				gl->gl_target = gh->gh_state;
-				if (do_promote(gl))
-					goto out;
 				goto retry;
 			}
 			/* Some error or failed "try lock" - report it */
@@ -680,7 +679,8 @@ __acquires(&gl->gl_lockref.lock)
 	    gh && !(gh->gh_flags & LM_FLAG_NOEXP))
 		goto skip_inval;
 
-	lck_flags &= (LM_FLAG_TRY | LM_FLAG_TRY_1CB | LM_FLAG_NOEXP);
+	lck_flags &= (LM_FLAG_TRY | LM_FLAG_TRY_1CB | LM_FLAG_NOEXP |
+		      LM_FLAG_PRIORITY);
 	GLOCK_BUG_ON(gl, gl->gl_state == target);
 	GLOCK_BUG_ON(gl, gl->gl_state == gl->gl_target);
 	if ((target == LM_ST_UNLOCKED || target == LM_ST_DEFERRED) &&
@@ -834,7 +834,7 @@ __acquires(&gl->gl_lockref.lock)
 	} else {
 		if (test_bit(GLF_DEMOTE, &gl->gl_flags))
 			gfs2_demote_wake(gl);
-		if (do_promote(gl))
+		if (do_promote(gl) == 0)
 			goto out_unlock;
 		gh = find_first_waiter(gl);
 		gl->gl_target = gh->gh_state;
@@ -1022,7 +1022,7 @@ static void delete_work_func(struct work_struct *work)
 		 * step entirely.
 		 */
 		if (gfs2_try_evict(gl)) {
-			if (test_bit(SDF_KILL, &sdp->sd_flags))
+			if (test_bit(SDF_DEACTIVATING, &sdp->sd_flags))
 				goto out;
 			if (gfs2_queue_verify_evict(gl))
 				return;
@@ -1035,7 +1035,7 @@ static void delete_work_func(struct work_struct *work)
 					    GFS2_BLKST_UNLINKED);
 		if (IS_ERR(inode)) {
 			if (PTR_ERR(inode) == -EAGAIN &&
-			    !test_bit(SDF_KILL, &sdp->sd_flags) &&
+			    !test_bit(SDF_DEACTIVATING, &sdp->sd_flags) &&
 			    gfs2_queue_verify_evict(gl))
 				return;
 		} else {
@@ -1231,7 +1231,7 @@ int gfs2_glock_get(struct gfs2_sbd *sdp, u64 number,
 out_free:
 	gfs2_glock_dealloc(&gl->gl_rcu);
 	if (atomic_dec_and_test(&sdp->sd_glock_disposal))
-		wake_up(&sdp->sd_kill_wait);
+		wake_up(&sdp->sd_glock_wait);
 
 out:
 	return ret;
@@ -1515,19 +1515,27 @@ fail:
 		}
 		if (test_bit(HIF_HOLDER, &gh2->gh_iflags))
 			continue;
+		if (unlikely((gh->gh_flags & LM_FLAG_PRIORITY) && !insert_pt))
+			insert_pt = &gh2->gh_list;
 	}
 	trace_gfs2_glock_queue(gh, 1);
 	gfs2_glstats_inc(gl, GFS2_LKS_QCOUNT);
 	gfs2_sbstats_inc(gl, GFS2_LKS_QCOUNT);
 	if (likely(insert_pt == NULL)) {
 		list_add_tail(&gh->gh_list, &gl->gl_holders);
+		if (unlikely(gh->gh_flags & LM_FLAG_PRIORITY))
+			goto do_cancel;
 		return;
 	}
 	list_add_tail(&gh->gh_list, insert_pt);
-	spin_unlock(&gl->gl_lockref.lock);
-	if (sdp->sd_lockstruct.ls_ops->lm_cancel)
-		sdp->sd_lockstruct.ls_ops->lm_cancel(gl);
-	spin_lock(&gl->gl_lockref.lock);
+do_cancel:
+	gh = list_first_entry(&gl->gl_holders, struct gfs2_holder, gh_list);
+	if (!(gh->gh_flags & LM_FLAG_PRIORITY)) {
+		spin_unlock(&gl->gl_lockref.lock);
+		if (sdp->sd_lockstruct.ls_ops->lm_cancel)
+			sdp->sd_lockstruct.ls_ops->lm_cancel(gl);
+		spin_lock(&gl->gl_lockref.lock);
+	}
 	return;
 
 trap_recursive:
@@ -2009,9 +2017,7 @@ static long gfs2_scan_glock_lru(int nr)
 		if (!test_bit(GLF_LOCK, &gl->gl_flags)) {
 			if (!spin_trylock(&gl->gl_lockref.lock))
 				continue;
-			if (gl->gl_lockref.count <= 1 &&
-			    (gl->gl_state == LM_ST_UNLOCKED ||
-			     demote_ok(gl))) {
+			if (!gl->gl_lockref.count) {
 				list_move(&gl->gl_lru, &dispose);
 				atomic_dec(&lru_count);
 				freed++;
@@ -2040,7 +2046,11 @@ static unsigned long gfs2_glock_shrink_count(struct shrinker *shrink,
 	return vfs_pressure_ratio(atomic_read(&lru_count));
 }
 
-static struct shrinker *glock_shrinker;
+static struct shrinker glock_shrinker = {
+	.seeks = DEFAULT_SEEKS,
+	.count_objects = gfs2_glock_shrink_count,
+	.scan_objects = gfs2_glock_shrink_scan,
+};
 
 /**
  * glock_hash_walk - Call a function for glock in a hash bucket
@@ -2185,7 +2195,7 @@ void gfs2_gl_hash_clear(struct gfs2_sbd *sdp)
 	flush_workqueue(glock_workqueue);
 	glock_hash_walk(clear_glock, sdp);
 	flush_workqueue(glock_workqueue);
-	wait_event_timeout(sdp->sd_kill_wait,
+	wait_event_timeout(sdp->sd_glock_wait,
 			   atomic_read(&sdp->sd_glock_disposal) == 0,
 			   HZ * 600);
 	glock_hash_walk(dump_glock_func, sdp);
@@ -2217,6 +2227,8 @@ static const char *hflags2str(char *buf, u16 flags, unsigned long iflags)
 		*p++ = 'e';
 	if (flags & LM_FLAG_ANY)
 		*p++ = 'A';
+	if (flags & LM_FLAG_PRIORITY)
+		*p++ = 'p';
 	if (flags & LM_FLAG_NODE_SCOPE)
 		*p++ = 'n';
 	if (flags & GL_ASYNC)
@@ -2460,17 +2472,12 @@ int __init gfs2_glock_init(void)
 		return -ENOMEM;
 	}
 
-	glock_shrinker = shrinker_alloc(0, "gfs2-glock");
-	if (!glock_shrinker) {
+	ret = register_shrinker(&glock_shrinker, "gfs2-glock");
+	if (ret) {
 		destroy_workqueue(glock_workqueue);
 		rhashtable_destroy(&gl_hash_table);
-		return -ENOMEM;
+		return ret;
 	}
-
-	glock_shrinker->count_objects = gfs2_glock_shrink_count;
-	glock_shrinker->scan_objects = gfs2_glock_shrink_scan;
-
-	shrinker_register(glock_shrinker);
 
 	for (i = 0; i < GLOCK_WAIT_TABLE_SIZE; i++)
 		init_waitqueue_head(glock_wait_table + i);
@@ -2480,7 +2487,7 @@ int __init gfs2_glock_init(void)
 
 void gfs2_glock_exit(void)
 {
-	shrinker_free(glock_shrinker);
+	unregister_shrinker(&glock_shrinker);
 	rhashtable_destroy(&gl_hash_table);
 	destroy_workqueue(glock_workqueue);
 }
@@ -2719,19 +2726,16 @@ static struct file *gfs2_glockfd_next_file(struct gfs2_glockfd_iter *i)
 	for(;; i->fd++) {
 		struct inode *inode;
 
-		i->file = task_lookup_next_fdget_rcu(i->task, &i->fd);
+		i->file = task_lookup_next_fd_rcu(i->task, &i->fd);
 		if (!i->file) {
 			i->fd = 0;
 			break;
 		}
-
 		inode = file_inode(i->file);
-		if (inode->i_sb == i->sb)
+		if (inode->i_sb != i->sb)
+			continue;
+		if (get_file_rcu(i->file))
 			break;
-
-		rcu_read_unlock();
-		fput(i->file);
-		rcu_read_lock();
 	}
 	rcu_read_unlock();
 	return i->file;

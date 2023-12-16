@@ -8,7 +8,8 @@
  */
 #include <linux/acpi.h>
 #include <linux/units.h>
-#include <linux/thermal.h>
+
+#include "thermal_core.h"
 
 /*
  * Minimum temperature for full military grade is 218°K (-55°C) and

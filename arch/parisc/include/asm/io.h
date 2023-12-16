@@ -125,17 +125,12 @@ static inline void gsc_writeq(unsigned long long val, unsigned long addr)
 /*
  * The standard PCI ioremap interfaces
  */
-#define ioremap_prot ioremap_prot
-
-#define _PAGE_IOREMAP (_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | \
-		       _PAGE_ACCESSED | _PAGE_NO_CACHE)
-
-#define ioremap_wc(addr, size)  \
-	ioremap_prot((addr), (size), _PAGE_IOREMAP)
-#define ioremap_uc(addr, size)  \
-	ioremap_prot((addr), (size), _PAGE_IOREMAP)
-
+void __iomem *ioremap(unsigned long offset, unsigned long size);
+#define ioremap_wc			ioremap
+#define ioremap_uc			ioremap
 #define pci_iounmap			pci_iounmap
+
+extern void iounmap(const volatile void __iomem *addr);
 
 void memset_io(volatile void __iomem *addr, unsigned char val, int count);
 void memcpy_fromio(void *dst, const volatile void __iomem *src, int count);

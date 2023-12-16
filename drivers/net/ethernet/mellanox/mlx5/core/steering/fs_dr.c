@@ -209,17 +209,10 @@ static struct mlx5dr_action *create_ft_action(struct mlx5dr_domain *domain,
 					      struct mlx5_flow_rule *dst)
 {
 	struct mlx5_flow_table *dest_ft = dst->dest_attr.ft;
-	struct mlx5dr_action *tbl_action;
 
 	if (mlx5dr_is_fw_table(dest_ft))
 		return mlx5dr_action_create_dest_flow_fw_table(domain, dest_ft);
-
-	tbl_action = mlx5dr_action_create_dest_table(dest_ft->fs_dr_table.dr_table);
-	if (tbl_action)
-		tbl_action->dest_tbl->is_wire_ft =
-			dest_ft->flags & MLX5_FLOW_TABLE_UPLINK_VPORT ? 1 : 0;
-
-	return tbl_action;
+	return mlx5dr_action_create_dest_table(dest_ft->fs_dr_table.dr_table);
 }
 
 static struct mlx5dr_action *create_range_action(struct mlx5dr_domain *domain,
@@ -343,7 +336,7 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 		if (fte->action.pkt_reformat->owner == MLX5_FLOW_RESOURCE_OWNER_FW) {
 			err = -EINVAL;
 			mlx5dr_err(domain, "FW-owned reformat can't be used in SW rule\n");
-			goto free_actions;
+				goto free_actions;
 		}
 
 		is_decap = fte->action.pkt_reformat->reformat_type ==
@@ -788,14 +781,14 @@ restore_fte:
 
 static int mlx5_cmd_dr_set_peer(struct mlx5_flow_root_namespace *ns,
 				struct mlx5_flow_root_namespace *peer_ns,
-				u16 peer_vhca_id)
+				u8 peer_idx)
 {
 	struct mlx5dr_domain *peer_domain = NULL;
 
 	if (peer_ns)
 		peer_domain = peer_ns->fs_dr_domain.dr_domain;
 	mlx5dr_domain_set_peer(ns->fs_dr_domain.dr_domain,
-			       peer_domain, peer_vhca_id);
+			       peer_domain, peer_idx);
 	return 0;
 }
 

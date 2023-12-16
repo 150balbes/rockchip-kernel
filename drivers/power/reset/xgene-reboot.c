@@ -13,7 +13,7 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/notifier.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
@@ -87,4 +87,9 @@ static struct platform_driver xgene_reboot_driver = {
 		.of_match_table = xgene_reboot_of_match,
 	},
 };
-builtin_platform_driver(xgene_reboot_driver);
+
+static int __init xgene_reboot_init(void)
+{
+	return platform_driver_register(&xgene_reboot_driver);
+}
+device_initcall(xgene_reboot_init);

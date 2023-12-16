@@ -79,8 +79,8 @@ static void set_midi_substream_names(struct snd_rawmidi_str *stream,
 	struct snd_rawmidi_substream *substream;
 
 	list_for_each_entry(substream, &stream->substreams, list) {
-		scnprintf(substream->name, sizeof(substream->name),
-			  "%s MIDI %d", name, substream->number + 1);
+		snprintf(substream->name, sizeof(substream->name),
+			 "%s MIDI %d", name, substream->number + 1);
 	}
 }
 

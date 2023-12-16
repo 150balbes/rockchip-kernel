@@ -52,11 +52,6 @@ properties:
   touchscreen-swapped-x-y: true
   touchscreen-max-pressure: true
 
-  linux,keycodes:
-    description: Keycodes for the touch keys
-    minItems: 1
-    maxItems: 15
-
 additionalProperties: false
 
 required:

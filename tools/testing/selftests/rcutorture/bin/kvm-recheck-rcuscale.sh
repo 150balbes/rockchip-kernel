@@ -40,10 +40,6 @@ awk '
 	sum += $5 / 1000.;
 }
 
-/rcu_scale: Grace-period kthread CPU time/ {
-	cputime = $6;
-}
-
 END {
 	newNR = asort(gptimes);
 	if (newNR <= 0) {
@@ -82,8 +78,6 @@ END {
 	print "90th percentile grace-period duration: " gptimes[pct90];
 	print "99th percentile grace-period duration: " gptimes[pct99];
 	print "Maximum grace-period duration: " gptimes[newNR];
-	if (cputime != "")
-		cpustr = " CPU: " cputime;
-	print "Grace periods: " ngps + 0 " Batches: " nbatches + 0 " Ratio: " ngps / nbatches cpustr;
+	print "Grace periods: " ngps + 0 " Batches: " nbatches + 0 " Ratio: " ngps / nbatches;
 	print "Computed from rcuscale printk output.";
 }'

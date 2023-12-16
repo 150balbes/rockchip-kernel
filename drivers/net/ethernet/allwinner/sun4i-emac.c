@@ -1083,7 +1083,7 @@ out:
 	return ret;
 }
 
-static void emac_remove(struct platform_device *pdev)
+static int emac_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct emac_board_info *db = netdev_priv(ndev);
@@ -1101,6 +1101,7 @@ static void emac_remove(struct platform_device *pdev)
 	free_netdev(ndev);
 
 	dev_dbg(&pdev->dev, "released and freed device\n");
+	return 0;
 }
 
 static int emac_suspend(struct platform_device *dev, pm_message_t state)
@@ -1142,7 +1143,7 @@ static struct platform_driver emac_driver = {
 		.of_match_table = emac_of_match,
 	},
 	.probe = emac_probe,
-	.remove_new = emac_remove,
+	.remove = emac_remove,
 	.suspend = emac_suspend,
 	.resume = emac_resume,
 };

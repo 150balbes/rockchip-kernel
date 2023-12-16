@@ -12,7 +12,6 @@
  * - When APPLE_PWM_CTRL is set to 0, the output is constant low
  */
 
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
@@ -99,6 +98,7 @@ static int apple_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 static const struct pwm_ops apple_pwm_ops = {
 	.apply = apple_pwm_apply,
 	.get_state = apple_pwm_get_state,
+	.owner = THIS_MODULE,
 };
 
 static int apple_pwm_probe(struct platform_device *pdev)

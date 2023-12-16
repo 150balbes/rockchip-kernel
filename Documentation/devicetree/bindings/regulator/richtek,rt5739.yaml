@@ -21,7 +21,6 @@ allOf:
 properties:
   compatible:
     enum:
-      - richtek,rt5733
       - richtek,rt5739
 
   reg:

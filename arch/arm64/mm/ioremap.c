@@ -3,22 +3,20 @@
 #include <linux/mm.h>
 #include <linux/io.h>
 
-void __iomem *ioremap_prot(phys_addr_t phys_addr, size_t size,
-			   unsigned long prot)
+bool ioremap_allowed(phys_addr_t phys_addr, size_t size, unsigned long prot)
 {
 	unsigned long last_addr = phys_addr + size - 1;
 
 	/* Don't allow outside PHYS_MASK */
 	if (last_addr & ~PHYS_MASK)
-		return NULL;
+		return false;
 
 	/* Don't allow RAM to be mapped. */
 	if (WARN_ON(pfn_is_map_memory(__phys_to_pfn(phys_addr))))
-		return NULL;
+		return false;
 
-	return generic_ioremap_prot(phys_addr, size, __pgprot(prot));
+	return true;
 }
-EXPORT_SYMBOL(ioremap_prot);
 
 /*
  * Must be called after early_fixmap_init

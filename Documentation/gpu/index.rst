@@ -17,8 +17,6 @@ GPU Driver Developer's Guide
    backlight
    vga-switcheroo
    vgaarbiter
-   automated_testing
-   implementation_guidelines
    todo
    rfc/index
 

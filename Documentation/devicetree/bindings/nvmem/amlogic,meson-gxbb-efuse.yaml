@@ -11,7 +11,6 @@ maintainers:
 
 allOf:
   - $ref: nvmem.yaml#
-  - $ref: nvmem-deprecated-cells.yaml#
 
 properties:
   compatible:

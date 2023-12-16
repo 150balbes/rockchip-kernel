@@ -15,7 +15,6 @@
 #include "avs.h"
 #include "control.h"
 #include "topology.h"
-#include "utils.h"
 
 /* Get pointer to vendor array at the specified offset. */
 #define avs_tplg_vendor_array_at(array, offset) \
@@ -372,50 +371,22 @@ parse_audio_format_bitfield(struct snd_soc_component *comp, void *elem, void *ob
 	return 0;
 }
 
-static int avs_ssp_sprint(char *buf, size_t size, const char *fmt, int port, int tdm)
-{
-	char *needle = strstr(fmt, "%d");
-	int retsize;
-
-	/*
-	 * If there is %d present in fmt string it should be replaced by either
-	 * SSP or SSP:TDM, where SSP and TDM are numbers, all other formatting
-	 * will be ignored.
-	 */
-	if (needle) {
-		retsize = scnprintf(buf, min_t(size_t, size, needle - fmt + 1), "%s", fmt);
-		retsize += scnprintf(buf + retsize, size - retsize, "%d", port);
-		if (tdm)
-			retsize += scnprintf(buf + retsize, size - retsize, ":%d", tdm);
-		retsize += scnprintf(buf + retsize, size - retsize, "%s", needle + 2);
-		return retsize;
-	}
-
-	return snprintf(buf, size, "%s", fmt);
-}
-
 static int parse_link_formatted_string(struct snd_soc_component *comp, void *elem,
 				       void *object, u32 offset)
 {
 	struct snd_soc_tplg_vendor_string_elem *tuple = elem;
 	struct snd_soc_acpi_mach *mach = dev_get_platdata(comp->card->dev);
 	char *val = (char *)((u8 *)object + offset);
-	int ssp_port, tdm_slot;
 
 	/*
 	 * Dynamic naming - string formats, e.g.: ssp%d - supported only for
 	 * topologies describing single device e.g.: an I2S codec on SSP0.
 	 */
-	if (!avs_mach_singular_ssp(mach))
+	if (hweight_long(mach->mach_params.i2s_link_mask) != 1)
 		return avs_parse_string_token(comp, elem, object, offset);
 
-	ssp_port = avs_mach_ssp_port(mach);
-	if (!avs_mach_singular_tdm(mach, ssp_port))
-		return avs_parse_string_token(comp, elem, object, offset);
-
-	tdm_slot = avs_mach_ssp_tdm(mach, ssp_port);
-
-	avs_ssp_sprint(val, SNDRV_CTL_ELEM_ID_NAME_MAXLEN, tuple->string, ssp_port, tdm_slot);
+	snprintf(val, SNDRV_CTL_ELEM_ID_NAME_MAXLEN, tuple->string,
+		 __ffs(mach->mach_params.i2s_link_mask));
 
 	return 0;
 }
@@ -842,7 +813,6 @@ static void
 assign_copier_gtw_instance(struct snd_soc_component *comp, struct avs_tplg_modcfg_ext *cfg)
 {
 	struct snd_soc_acpi_mach *mach;
-	int ssp_port, tdm_slot;
 
 	if (!guid_equal(&cfg->type, &AVS_COPIER_MOD_UUID))
 		return;
@@ -856,22 +826,11 @@ assign_copier_gtw_instance(struct snd_soc_component *comp, struct avs_tplg_modcf
 		return;
 	}
 
-	/* If topology sets value don't overwrite it */
-	if (cfg->copier.vindex.i2s.instance)
-		return;
-
 	mach = dev_get_platdata(comp->card->dev);
 
-	if (!avs_mach_singular_ssp(mach))
-		return;
-	ssp_port = avs_mach_ssp_port(mach);
-
-	if (!avs_mach_singular_tdm(mach, ssp_port))
-		return;
-	tdm_slot = avs_mach_ssp_tdm(mach, ssp_port);
-
-	cfg->copier.vindex.i2s.instance = ssp_port;
-	cfg->copier.vindex.i2s.time_slot = tdm_slot;
+	/* Automatic assignment only when board describes single SSP. */
+	if (hweight_long(mach->mach_params.i2s_link_mask) == 1 && !cfg->copier.vindex.i2s.instance)
+		cfg->copier.vindex.i2s.instance = __ffs(mach->mach_params.i2s_link_mask);
 }
 
 static int avs_tplg_parse_modcfg_ext(struct snd_soc_component *comp,
@@ -1422,24 +1381,20 @@ static int avs_route_load(struct snd_soc_component *comp, int index,
 	struct snd_soc_acpi_mach *mach = dev_get_platdata(comp->card->dev);
 	size_t len = SNDRV_CTL_ELEM_ID_NAME_MAXLEN;
 	char buf[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
-	int ssp_port, tdm_slot;
+	u32 port;
 
 	/* See parse_link_formatted_string() for dynamic naming when(s). */
-	if (!avs_mach_singular_ssp(mach))
-		return 0;
-	ssp_port = avs_mach_ssp_port(mach);
+	if (hweight_long(mach->mach_params.i2s_link_mask) == 1) {
+		port = __ffs(mach->mach_params.i2s_link_mask);
 
-	if (!avs_mach_singular_tdm(mach, ssp_port))
-		return 0;
-	tdm_slot = avs_mach_ssp_tdm(mach, ssp_port);
-
-	avs_ssp_sprint(buf, len, route->source, ssp_port, tdm_slot);
-	strscpy((char *)route->source, buf, len);
-	avs_ssp_sprint(buf, len, route->sink, ssp_port, tdm_slot);
-	strscpy((char *)route->sink, buf, len);
-	if (route->control) {
-		avs_ssp_sprint(buf, len, route->control, ssp_port, tdm_slot);
-		strscpy((char *)route->control, buf, len);
+		snprintf(buf, len, route->source, port);
+		strncpy((char *)route->source, buf, len);
+		snprintf(buf, len, route->sink, port);
+		strncpy((char *)route->sink, buf, len);
+		if (route->control) {
+			snprintf(buf, len, route->control, port);
+			strncpy((char *)route->control, buf, len);
+		}
 	}
 
 	return 0;
@@ -1453,7 +1408,6 @@ static int avs_widget_load(struct snd_soc_component *comp, int index,
 	struct avs_tplg_path_template *template;
 	struct avs_soc_component *acomp = to_avs_soc_component(comp);
 	struct avs_tplg *tplg;
-	int ssp_port, tdm_slot;
 
 	if (!le32_to_cpu(dw->priv.size))
 		return 0;
@@ -1465,28 +1419,16 @@ static int avs_widget_load(struct snd_soc_component *comp, int index,
 
 	tplg = acomp->tplg;
 	mach = dev_get_platdata(comp->card->dev);
-	if (!avs_mach_singular_ssp(mach))
-		goto static_name;
-	ssp_port = avs_mach_ssp_port(mach);
 
 	/* See parse_link_formatted_string() for dynamic naming when(s). */
-	if (avs_mach_singular_tdm(mach, ssp_port)) {
-		/* size is based on possible %d -> SSP:TDM, where SSP and TDM < 10 + '\0' */
-		size_t size = strlen(dw->name) + 2;
-		char *buf;
-
-		tdm_slot = avs_mach_ssp_tdm(mach, ssp_port);
-
-		buf = kmalloc(size, GFP_KERNEL);
-		if (!buf)
-			return -ENOMEM;
-		avs_ssp_sprint(buf, size, dw->name, ssp_port, tdm_slot);
+	if (hweight_long(mach->mach_params.i2s_link_mask) == 1) {
 		kfree(w->name);
 		/* w->name is freed later by soc_tplg_dapm_widget_create() */
-		w->name = buf;
+		w->name = kasprintf(GFP_KERNEL, dw->name, __ffs(mach->mach_params.i2s_link_mask));
+		if (!w->name)
+			return -ENOMEM;
 	}
 
-static_name:
 	template = avs_tplg_path_template_create(comp, tplg, dw->priv.array,
 						 le32_to_cpu(dw->priv.size));
 	if (IS_ERR(template)) {

@@ -153,8 +153,6 @@ out:
  * selected if any non-HT peers are present in our MBSS.  20MHz-protection mode
  * is selected if all peers in our 20/40MHz MBSS support HT and at least one
  * HT20 peer is present. Otherwise no-protection mode is selected.
- *
- * Returns: BSS_CHANGED_HT or 0 for no change
  */
 static u64 mesh_set_ht_prot_mode(struct ieee80211_sub_if_data *sdata)
 {
@@ -364,7 +362,7 @@ free:
  * Mesh paths with this peer as next hop should be flushed
  * by the caller outside of plink_lock.
  *
- * Returns: beacon changed flag if the beacon content changed.
+ * Returns beacon changed flag if the beacon content changed.
  *
  * Locking: the caller must hold sta->mesh->plink_lock
  */
@@ -392,8 +390,6 @@ static u64 __mesh_plink_deactivate(struct sta_info *sta)
  * @sta: mesh peer link to deactivate
  *
  * All mesh paths with this peer as next hop will be flushed
- *
- * Returns: beacon changed flag if the beacon content changed.
  */
 u64 mesh_plink_deactivate(struct sta_info *sta)
 {
@@ -455,7 +451,7 @@ static void mesh_sta_info_init(struct ieee80211_sub_if_data *sdata,
 		changed |= IEEE80211_RC_BW_CHANGED;
 
 	ieee80211_vht_cap_ie_to_sta_vht_cap(sdata, sband,
-					    elems->vht_cap_elem, NULL,
+					    elems->vht_cap_elem,
 					    &sta->deflink);
 
 	ieee80211_he_cap_ie_to_sta_he_cap(sdata, sband, elems->he_cap,

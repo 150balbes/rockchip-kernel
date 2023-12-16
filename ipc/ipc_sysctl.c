@@ -259,9 +259,7 @@ bool setup_ipc_sysctls(struct ipc_namespace *ns)
 				tbl[i].data = NULL;
 		}
 
-		ns->ipc_sysctls = __register_sysctl_table(&ns->ipc_set,
-							  "kernel", tbl,
-							  ARRAY_SIZE(ipc_sysctls));
+		ns->ipc_sysctls = __register_sysctl_table(&ns->ipc_set, "kernel", tbl);
 	}
 	if (!ns->ipc_sysctls) {
 		kfree(tbl);

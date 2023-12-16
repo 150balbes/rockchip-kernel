@@ -53,14 +53,6 @@
 #define mmCLK1_CLK3_DFS_CNTL                            0x16E72
 #define mmCLK1_CLK4_DFS_CNTL                            0x16E75
 
-#define mmCLK1_CLK0_CURRENT_CNT                         0x16EE7
-#define mmCLK1_CLK1_CURRENT_CNT                         0x16EE8
-#define mmCLK1_CLK2_CURRENT_CNT                         0x16EE9
-#define mmCLK1_CLK3_CURRENT_CNT                         0x16EEA
-#define mmCLK1_CLK4_CURRENT_CNT                         0x16EEB
-
-#define mmCLK4_CLK0_CURRENT_CNT                         0x1B0C9
-
 #define CLK1_CLK_PLL_REQ__FbMult_int_MASK               0x000001ffUL
 #define CLK1_CLK_PLL_REQ__PllSpineDiv_MASK              0x0000f000UL
 #define CLK1_CLK_PLL_REQ__FbMult_frac_MASK              0xffff0000UL
@@ -305,7 +297,7 @@ void dcn32_update_clocks_update_dpp_dto(struct clk_mgr_internal *clk_mgr,
 
 	clk_mgr->dccg->ref_dppclk = clk_mgr->base.clks.dppclk_khz;
 	for (i = 0; i < clk_mgr->base.ctx->dc->res_pool->pipe_count; i++) {
-		int dpp_inst = 0, dppclk_khz, prev_dppclk_khz;
+		int dpp_inst, dppclk_khz, prev_dppclk_khz;
 
 		dppclk_khz = context->res_ctx.pipe_ctx[i].plane_res.bw.dppclk_khz;
 
@@ -363,7 +355,7 @@ static void dcn32_update_clocks_update_dentist(
 			int32_t N;
 			int32_t j;
 
-			if (!resource_is_pipe_type(pipe_ctx, OTG_MASTER))
+			if (!pipe_ctx->stream)
 				continue;
 			/* Virtual encoders don't have this function */
 			if (!stream_enc->funcs->get_fifo_cal_average_level)
@@ -409,7 +401,7 @@ static void dcn32_update_clocks_update_dentist(
 			int32_t N;
 			int32_t j;
 
-			if (!resource_is_pipe_type(pipe_ctx, OTG_MASTER))
+			if (!pipe_ctx->stream)
 				continue;
 			/* Virtual encoders don't have this function */
 			if (!stream_enc->funcs->get_fifo_cal_average_level)
@@ -458,58 +450,6 @@ static int dcn32_get_dispclk_from_dentist(struct clk_mgr *clk_mgr_base)
 	return 0;
 }
 
-static void dcn32_auto_dpm_test_log(struct dc_clocks *new_clocks, struct clk_mgr_internal *clk_mgr)
-{
-    unsigned int dispclk_khz_reg    = REG_READ(CLK1_CLK0_CURRENT_CNT); // DISPCLK
-    unsigned int dppclk_khz_reg     = REG_READ(CLK1_CLK1_CURRENT_CNT); // DPPCLK
-    unsigned int dprefclk_khz_reg   = REG_READ(CLK1_CLK2_CURRENT_CNT); // DPREFCLK
-    unsigned int dcfclk_khz_reg     = REG_READ(CLK1_CLK3_CURRENT_CNT); // DCFCLK
-    unsigned int dtbclk_khz_reg     = REG_READ(CLK1_CLK4_CURRENT_CNT); // DTBCLK
-    unsigned int fclk_khz_reg       = REG_READ(CLK4_CLK0_CURRENT_CNT); // FCLK
-
-    // Overrides for these clocks in case there is no p_state change support
-    int dramclk_khz_override = new_clocks->dramclk_khz;
-    int fclk_khz_override = new_clocks->fclk_khz;
-
-    int num_fclk_levels = clk_mgr->base.bw_params->clk_table.num_entries_per_clk.num_fclk_levels - 1;
-
-    if (!new_clocks->p_state_change_support) {
-	    dramclk_khz_override = clk_mgr->base.bw_params->max_memclk_mhz * 1000;
-    }
-    if (!new_clocks->fclk_p_state_change_support) {
-	    fclk_khz_override = clk_mgr->base.bw_params->clk_table.entries[num_fclk_levels].fclk_mhz * 1000;
-    }
-
-	////////////////////////////////////////////////////////////////////////////
-	//	IMPORTANT: 	When adding more clocks to these logs, do NOT put a newline
-	//	 			anywhere other than at the very end of the string.
-	//
-	//	Formatting example (make sure to have " - " between each entry):
-	//
-	//				AutoDPMTest: clk1:%d - clk2:%d - clk3:%d - clk4:%d\n"
-	////////////////////////////////////////////////////////////////////////////
-	if (new_clocks &&
-		new_clocks->dramclk_khz > 0 &&
-		new_clocks->fclk_khz > 0 &&
-		new_clocks->dcfclk_khz > 0 &&
-		new_clocks->dppclk_khz > 0) {
-
-		DC_LOG_AUTO_DPM_TEST("AutoDPMTest: dramclk:%d - fclk:%d - "
-			"dcfclk:%d - dppclk:%d - dispclk_hw:%d - "
-			"dppclk_hw:%d - dprefclk_hw:%d - dcfclk_hw:%d - "
-			"dtbclk_hw:%d - fclk_hw:%d\n",
-			dramclk_khz_override,
-			fclk_khz_override,
-			new_clocks->dcfclk_khz,
-			new_clocks->dppclk_khz,
-			dispclk_khz_reg,
-			dppclk_khz_reg,
-			dprefclk_khz_reg,
-			dcfclk_khz_reg,
-			dtbclk_khz_reg,
-			fclk_khz_reg);
-	}
-}
 
 static void dcn32_update_clocks(struct clk_mgr *clk_mgr_base,
 			struct dc_state *context,
@@ -615,11 +555,6 @@ static void dcn32_update_clocks(struct clk_mgr *clk_mgr_base,
 			}
 		}
 
-		if (context->bw_ctx.bw.dcn.clk.fw_based_mclk_switching)
-			dcn32_smu_wait_for_dmub_ack_mclk(clk_mgr, true);
-		else
-			dcn32_smu_wait_for_dmub_ack_mclk(clk_mgr, false);
-
 		/* Always update saved value, even if new value not set due to P-State switching unsupported. Also check safe_to_lower for FCLK */
 		if (safe_to_lower && (clk_mgr_base->clks.fclk_p_state_change_support != clk_mgr_base->clks.fclk_prev_p_state_change_support)) {
 			update_fclk = true;
@@ -706,10 +641,6 @@ static void dcn32_update_clocks(struct clk_mgr *clk_mgr_base,
 		/*update dmcu for wait_loop count*/
 		dmcu->funcs->set_psr_wait_loop(dmcu,
 				clk_mgr_base->clks.dispclk_khz / 1000 / 7);
-
-	if (dc->config.enable_auto_dpm_test_logs) {
-	    dcn32_auto_dpm_test_log(new_clocks, clk_mgr);
-	}
 }
 
 static uint32_t dcn32_get_vco_frequency_from_reg(struct clk_mgr_internal *clk_mgr)
@@ -871,7 +802,7 @@ static void dcn32_set_hard_min_memclk(struct clk_mgr *clk_mgr_base, bool current
 					khz_to_mhz_ceil(clk_mgr_base->clks.dramclk_khz));
 		else
 			dcn32_smu_set_hard_min_by_freq(clk_mgr, PPCLK_UCLK,
-					clk_mgr_base->bw_params->max_memclk_mhz);
+					clk_mgr_base->bw_params->clk_table.entries[clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_memclk_levels - 1].memclk_mhz);
 	} else {
 		dcn32_smu_set_hard_min_by_freq(clk_mgr, PPCLK_UCLK,
 				clk_mgr_base->bw_params->clk_table.entries[0].memclk_mhz);

@@ -8,9 +8,7 @@
 #include <string.h>
 #include <endian.h>
 #include <byteswap.h>
-#include <linux/kernel.h>
 #include <linux/compiler.h>
-#include <asm-generic/unaligned.h>
 
 #include "intel-pt-pkt-decoder.h"
 
@@ -19,11 +17,17 @@
 #define BIT63		((uint64_t)1 << 63)
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define le16_to_cpu bswap_16
+#define le32_to_cpu bswap_32
+#define le64_to_cpu bswap_64
 #define memcpy_le64(d, s, n) do { \
 	memcpy((d), (s), (n));    \
 	*(d) = le64_to_cpu(*(d)); \
 } while (0)
 #else
+#define le16_to_cpu
+#define le32_to_cpu
+#define le64_to_cpu
 #define memcpy_le64 memcpy
 #endif
 
@@ -79,7 +83,7 @@ static int intel_pt_get_long_tnt(const unsigned char *buf, size_t len,
 	if (len < 8)
 		return INTEL_PT_NEED_MORE_BYTES;
 
-	payload = get_unaligned_le64(buf);
+	payload = le64_to_cpu(*(uint64_t *)buf);
 
 	for (count = 47; count; count--) {
 		if (payload & BIT63)
@@ -120,21 +124,26 @@ static int intel_pt_get_cbr(const unsigned char *buf, size_t len,
 	if (len < 4)
 		return INTEL_PT_NEED_MORE_BYTES;
 	packet->type = INTEL_PT_CBR;
-	packet->payload = get_unaligned_le16(buf + 2);
+	packet->payload = le16_to_cpu(*(uint16_t *)(buf + 2));
 	return 4;
 }
 
 static int intel_pt_get_vmcs(const unsigned char *buf, size_t len,
 			     struct intel_pt_pkt *packet)
 {
-	if (len < 7)
+	unsigned int count = (52 - 5) >> 3;
+
+	if (count < 1 || count > 7)
+		return INTEL_PT_BAD_PACKET;
+
+	if (len < count + 2)
 		return INTEL_PT_NEED_MORE_BYTES;
 
 	packet->type = INTEL_PT_VMCS;
-	packet->count = 5;
-	memcpy_le64(&packet->payload, buf + 2, 5);
+	packet->count = count;
+	memcpy_le64(&packet->payload, buf + 2, count);
 
-	return 7;
+	return count + 2;
 }
 
 static int intel_pt_get_ovf(struct intel_pt_pkt *packet)
@@ -190,7 +199,7 @@ static int intel_pt_get_mnt(const unsigned char *buf, size_t len,
 	if (len < 11)
 		return INTEL_PT_NEED_MORE_BYTES;
 	packet->type = INTEL_PT_MNT;
-	packet->payload = get_unaligned_le64(buf + 3);
+	memcpy_le64(&packet->payload, buf + 3, 8);
 	return 11;
 }
 
@@ -219,12 +228,12 @@ static int intel_pt_get_ptwrite(const unsigned char *buf, size_t len,
 	case 0:
 		if (len < 6)
 			return INTEL_PT_NEED_MORE_BYTES;
-		packet->payload = get_unaligned_le32(buf + 2);
+		packet->payload = le32_to_cpu(*(uint32_t *)(buf + 2));
 		return 6;
 	case 1:
 		if (len < 10)
 			return INTEL_PT_NEED_MORE_BYTES;
-		packet->payload = get_unaligned_le64(buf + 2);
+		packet->payload = le64_to_cpu(*(uint64_t *)(buf + 2));
 		return 10;
 	default:
 		return INTEL_PT_BAD_PACKET;
@@ -249,7 +258,7 @@ static int intel_pt_get_mwait(const unsigned char *buf, size_t len,
 	if (len < 10)
 		return INTEL_PT_NEED_MORE_BYTES;
 	packet->type = INTEL_PT_MWAIT;
-	packet->payload = get_unaligned_le64(buf + 2);
+	packet->payload = le64_to_cpu(*(uint64_t *)(buf + 2));
 	return 10;
 }
 
@@ -302,7 +311,7 @@ static int intel_pt_get_bip_8(const unsigned char *buf, size_t len,
 		return INTEL_PT_NEED_MORE_BYTES;
 	packet->type = INTEL_PT_BIP;
 	packet->count = buf[0] >> 3;
-	packet->payload = get_unaligned_le64(buf + 1);
+	memcpy_le64(&packet->payload, buf + 1, 8);
 	return 9;
 }
 
@@ -341,7 +350,7 @@ static int intel_pt_get_evd(const unsigned char *buf, size_t len,
 	packet->type = INTEL_PT_EVD;
 	packet->count = buf[2] & 0x3f;
 	packet->payload = buf[3];
-	packet->payload = get_unaligned_le64(buf + 3);
+	memcpy_le64(&packet->payload, buf + 3, 8);
 	return 11;
 }
 
@@ -456,13 +465,13 @@ static int intel_pt_get_ip(enum intel_pt_pkt_type type, unsigned int byte,
 		if (len < 3)
 			return INTEL_PT_NEED_MORE_BYTES;
 		ip_len = 2;
-		packet->payload = get_unaligned_le16(buf + 1);
+		packet->payload = le16_to_cpu(*(uint16_t *)(buf + 1));
 		break;
 	case 2:
 		if (len < 5)
 			return INTEL_PT_NEED_MORE_BYTES;
 		ip_len = 4;
-		packet->payload = get_unaligned_le32(buf + 1);
+		packet->payload = le32_to_cpu(*(uint32_t *)(buf + 1));
 		break;
 	case 3:
 	case 4:
@@ -475,7 +484,7 @@ static int intel_pt_get_ip(enum intel_pt_pkt_type type, unsigned int byte,
 		if (len < 9)
 			return INTEL_PT_NEED_MORE_BYTES;
 		ip_len = 8;
-		packet->payload = get_unaligned_le64(buf + 1);
+		packet->payload = le64_to_cpu(*(uint64_t *)(buf + 1));
 		break;
 	default:
 		return INTEL_PT_BAD_PACKET;

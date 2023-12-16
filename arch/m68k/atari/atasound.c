@@ -28,7 +28,6 @@
 #include <asm/irq.h>
 #include <asm/atariints.h>
 
-#include "atari.h"
 
 /*
  * stuff from the old atasound.c

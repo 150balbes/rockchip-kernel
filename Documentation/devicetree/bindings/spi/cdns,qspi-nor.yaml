@@ -86,17 +86,7 @@ properties:
     maxItems: 1
 
   clocks:
-    minItems: 1
-    maxItems: 3
-
-  clock-names:
-    oneOf:
-      - items:
-          - const: ref
-      - items:
-          - const: ref
-          - const: ahb
-          - const: apb
+    maxItems: 1
 
   cdns,fifo-depth:
     description:

@@ -578,7 +578,7 @@ free_pltfm:
 	return err;
 }
 
-static void xenon_remove(struct platform_device *pdev)
+static int xenon_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -595,6 +595,8 @@ static void xenon_remove(struct platform_device *pdev)
 	clk_disable_unprepare(pltfm_host->clk);
 
 	sdhci_pltfm_free(pdev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -703,7 +705,7 @@ static struct platform_driver sdhci_xenon_driver = {
 		.pm = &sdhci_xenon_dev_pm_ops,
 	},
 	.probe	= xenon_probe,
-	.remove_new = xenon_remove,
+	.remove	= xenon_remove,
 };
 
 module_platform_driver(sdhci_xenon_driver);

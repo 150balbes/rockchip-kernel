@@ -2,14 +2,13 @@
     {
         "id": "a519",
         "name": "Add bfifo qdisc with system default parameters on egress",
+        "__comment": "When omitted, queue size in bfifo is calculated as: txqueuelen * (MTU + LinkLayerHdrSize), where LinkLayerHdrSize=14 for Ethernet",
         "category": [
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root bfifo",
         "expExitCode": "0",
@@ -17,20 +16,20 @@
         "matchPattern": "qdisc bfifo 1: root.*limit [0-9]+b",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root bfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root bfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
         "id": "585c",
         "name": "Add pfifo qdisc with system default parameters on egress",
+        "__comment": "When omitted, queue size in pfifo is defaulted to the interface's txqueuelen value.",
         "category": [
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root pfifo",
         "expExitCode": "0",
@@ -38,7 +37,8 @@
         "matchPattern": "qdisc pfifo 1: root.*limit [0-9]+p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root pfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root pfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -48,10 +48,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY root handle ffff: bfifo",
         "expExitCode": "0",
@@ -59,7 +57,8 @@
         "matchPattern": "qdisc bfifo ffff: root.*limit [0-9]+b",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle ffff: root bfifo"
+            "$TC qdisc del dev $DUMMY handle ffff: root bfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -69,10 +68,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root bfifo limit 3000b",
         "expExitCode": "0",
@@ -80,7 +77,8 @@
         "matchPattern": "qdisc bfifo 1: root.*limit 3000b",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root bfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root bfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -90,11 +88,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
-            "$IP link set dev $DUMMY txqueuelen 3000"
+            "$IP link add dev $DUMMY txqueuelen 3000 type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root pfifo limit 3000",
         "expExitCode": "0",
@@ -102,7 +97,8 @@
         "matchPattern": "qdisc pfifo 1: root.*limit 3000p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root pfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root pfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -112,10 +108,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY root handle 10000: bfifo",
         "expExitCode": "255",
@@ -123,6 +117,7 @@
         "matchPattern": "qdisc bfifo 10000: root.*limit [0-9]+b",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -132,10 +127,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root bfifo foorbar",
         "expExitCode": "1",
@@ -143,6 +136,7 @@
         "matchPattern": "qdisc bfifo 1: root",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -152,10 +146,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root pfifo foorbar",
         "expExitCode": "1",
@@ -163,6 +155,7 @@
         "matchPattern": "qdisc pfifo 1: root",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -172,11 +165,9 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
-            "$IP link set dev $DUMMY txqueuelen 1000",
+            "$IP link del dev $DUMMY type dummy || /bin/true",
+            "$IP link add dev $DUMMY txqueuelen 1000 type dummy",
             "$TC qdisc add dev $DUMMY handle 1: root bfifo"
         ],
         "cmdUnderTest": "$TC qdisc replace dev $DUMMY handle 1: root bfifo limit 3000b",
@@ -185,7 +176,8 @@
         "matchPattern": "qdisc bfifo 1: root.*limit 3000b",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root bfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root bfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -195,11 +187,9 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
-            "$IP link set dev $DUMMY txqueuelen 1000",
+            "$IP link del dev $DUMMY type dummy || /bin/true",
+            "$IP link add dev $DUMMY txqueuelen 1000 type dummy",
             "$TC qdisc add dev $DUMMY handle 1: root pfifo"
         ],
         "cmdUnderTest": "$TC qdisc replace dev $DUMMY handle 1: root pfifo limit 30",
@@ -208,7 +198,8 @@
         "matchPattern": "qdisc pfifo 1: root.*limit 30p",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root pfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root pfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -218,10 +209,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root bfifo limit foo-bar",
         "expExitCode": "1",
@@ -229,6 +218,7 @@
         "matchPattern": "qdisc bfifo 1: root.*limit foo-bar",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -238,10 +228,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root bfifo"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root bfifo",
@@ -250,7 +238,8 @@
         "matchPattern": "qdisc bfifo 1: root",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root bfifo"
+            "$TC qdisc del dev $DUMMY handle 1: root bfifo",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -260,10 +249,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc del dev $DUMMY root handle 1: bfifo",
         "expExitCode": "2",
@@ -271,6 +258,7 @@
         "matchPattern": "qdisc bfifo 1: root",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -280,10 +268,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY root handle 123^ bfifo limit 100b",
         "expExitCode": "255",
@@ -291,6 +277,7 @@
         "matchPattern": "qdisc bfifo 123 root",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -300,10 +287,8 @@
             "qdisc",
             "fifo"
         ],
-        "plugins": {
-            "requires": "nsPlugin"
-        },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY root handle 1: bfifo",
             "$TC qdisc del dev $DUMMY root handle 1: bfifo"
         ],
@@ -313,6 +298,7 @@
         "matchPattern": "qdisc bfifo 1: root",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     }
 ]

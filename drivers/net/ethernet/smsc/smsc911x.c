@@ -43,6 +43,7 @@
 #include <linux/smsc911x.h>
 #include <linux/device.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/of_net.h>
 #include <linux/acpi.h>
@@ -551,7 +552,7 @@ static void smsc911x_mac_write(struct smsc911x_data *pdata,
 /* Get a phy register */
 static int smsc911x_mii_read(struct mii_bus *bus, int phyaddr, int regidx)
 {
-	struct smsc911x_data *pdata = bus->priv;
+	struct smsc911x_data *pdata = (struct smsc911x_data *)bus->priv;
 	unsigned long flags;
 	unsigned int addr;
 	int i, reg;
@@ -590,7 +591,7 @@ out:
 static int smsc911x_mii_write(struct mii_bus *bus, int phyaddr, int regidx,
 			   u16 val)
 {
-	struct smsc911x_data *pdata = bus->priv;
+	struct smsc911x_data *pdata = (struct smsc911x_data *)bus->priv;
 	unsigned long flags;
 	unsigned int addr;
 	int i, reg;
@@ -2314,7 +2315,7 @@ static int smsc911x_init(struct net_device *dev)
 	return 0;
 }
 
-static void smsc911x_drv_remove(struct platform_device *pdev)
+static int smsc911x_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *dev;
 	struct smsc911x_data *pdata;
@@ -2348,6 +2349,8 @@ static void smsc911x_drv_remove(struct platform_device *pdev)
 	free_netdev(dev);
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 /* standard register acces */
@@ -2666,7 +2669,7 @@ MODULE_DEVICE_TABLE(acpi, smsc911x_acpi_match);
 
 static struct platform_driver smsc911x_driver = {
 	.probe = smsc911x_drv_probe,
-	.remove_new = smsc911x_drv_remove,
+	.remove = smsc911x_drv_remove,
 	.driver = {
 		.name	= SMSC_CHIPNAME,
 		.pm	= SMSC911X_PM_OPS,

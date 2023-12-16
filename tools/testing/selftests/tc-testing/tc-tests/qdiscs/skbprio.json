@@ -10,6 +10,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root skbprio",
         "expExitCode": "0",
@@ -17,7 +18,8 @@
         "matchPattern": "qdisc skbprio 1: root refcnt [0-9]+ limit 64",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -31,6 +33,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root skbprio limit 1",
         "expExitCode": "0",
@@ -38,7 +41,8 @@
         "matchPattern": "qdisc skbprio 1: root refcnt [0-9]+ limit 1",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -52,6 +56,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root skbprio"
         ],
         "cmdUnderTest": "$TC qdisc change dev $DUMMY handle 1: root skbprio limit 32",
@@ -60,7 +65,8 @@
         "matchPattern": "qdisc skbprio 1: root refcnt [0-9]+ limit 32",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -74,6 +80,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root skbprio",
         "expExitCode": "0",
@@ -81,7 +88,8 @@
         "matchPattern": "class skbprio 1:",
         "matchCount": "64",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     }
 ]

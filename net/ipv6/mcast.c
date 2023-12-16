@@ -642,7 +642,7 @@ bool inet6_mc_check(const struct sock *sk, const struct in6_addr *mc_addr,
 	}
 	if (!mc) {
 		rcu_read_unlock();
-		return inet6_test_bit(MC6_ALL, sk);
+		return np->mc_all;
 	}
 	psl = rcu_dereference(mc->sflist);
 	if (!psl) {
@@ -1699,9 +1699,11 @@ mld_scount(struct ifmcaddr6 *pmc, int type, int gdeleted, int sdeleted)
 	return scount;
 }
 
-static void ip6_mc_hdr(const struct sock *sk, struct sk_buff *skb,
-		       struct net_device *dev, const struct in6_addr *saddr,
-		       const struct in6_addr *daddr, int proto, int len)
+static void ip6_mc_hdr(struct sock *sk, struct sk_buff *skb,
+		       struct net_device *dev,
+		       const struct in6_addr *saddr,
+		       const struct in6_addr *daddr,
+		       int proto, int len)
 {
 	struct ipv6hdr *hdr;
 
@@ -1716,7 +1718,7 @@ static void ip6_mc_hdr(const struct sock *sk, struct sk_buff *skb,
 
 	hdr->payload_len = htons(len);
 	hdr->nexthdr = proto;
-	hdr->hop_limit = READ_ONCE(inet6_sk(sk)->hop_limit);
+	hdr->hop_limit = inet6_sk(sk)->hop_limit;
 
 	hdr->saddr = *saddr;
 	hdr->daddr = *daddr;
@@ -1789,7 +1791,7 @@ static void mld_sendpack(struct sk_buff *skb)
 
 	rcu_read_lock();
 	idev = __in6_dev_get(skb->dev);
-	IP6_INC_STATS(net, idev, IPSTATS_MIB_OUTREQUESTS);
+	IP6_UPD_PO_STATS(net, idev, IPSTATS_MIB_OUT, skb->len);
 
 	payload_len = (skb_tail_pointer(skb) - skb_network_header(skb)) -
 		sizeof(*pip6);
@@ -2147,7 +2149,8 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 	full_len = sizeof(struct ipv6hdr) + payload_len;
 
 	rcu_read_lock();
-	IP6_INC_STATS(net, __in6_dev_get(dev), IPSTATS_MIB_OUTREQUESTS);
+	IP6_UPD_PO_STATS(net, __in6_dev_get(dev),
+		      IPSTATS_MIB_OUT, full_len);
 	rcu_read_unlock();
 
 	skb = sock_alloc_send_skb(sk, hlen + tlen + full_len, 1, &err);
@@ -3010,6 +3013,8 @@ static struct ip6_sf_list *igmp6_mcf_get_next(struct seq_file *seq, struct ip6_s
 				continue;
 			state->im = rcu_dereference(state->idev->mc_list);
 		}
+		if (!state->im)
+			break;
 		psf = rcu_dereference(state->im->mca_sources);
 	}
 out:

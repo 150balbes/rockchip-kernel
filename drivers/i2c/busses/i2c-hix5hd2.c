@@ -475,6 +475,7 @@ static void hix5hd2_i2c_remove(struct platform_device *pdev)
 	pm_runtime_set_suspended(priv->dev);
 }
 
+#ifdef CONFIG_PM
 static int hix5hd2_i2c_runtime_suspend(struct device *dev)
 {
 	struct hix5hd2_i2c_priv *priv = dev_get_drvdata(dev);
@@ -493,11 +494,12 @@ static int hix5hd2_i2c_runtime_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static const struct dev_pm_ops hix5hd2_i2c_pm_ops = {
-	RUNTIME_PM_OPS(hix5hd2_i2c_runtime_suspend,
-		       hix5hd2_i2c_runtime_resume,
-		       NULL)
+	SET_RUNTIME_PM_OPS(hix5hd2_i2c_runtime_suspend,
+			      hix5hd2_i2c_runtime_resume,
+			      NULL)
 };
 
 static const struct of_device_id hix5hd2_i2c_match[] = {
@@ -511,7 +513,7 @@ static struct platform_driver hix5hd2_i2c_driver = {
 	.remove_new	= hix5hd2_i2c_remove,
 	.driver		= {
 		.name	= "hix5hd2-i2c",
-		.pm	= pm_ptr(&hix5hd2_i2c_pm_ops),
+		.pm	= &hix5hd2_i2c_pm_ops,
 		.of_match_table = hix5hd2_i2c_match,
 	},
 };

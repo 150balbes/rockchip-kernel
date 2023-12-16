@@ -131,13 +131,8 @@ void wp_get_instr_detail(struct pt_regs *regs, ppc_inst_t *instr,
 			 int *type, int *size, unsigned long *ea)
 {
 	struct instruction_op op;
-	int err;
 
-	pagefault_disable();
-	err = __get_user_instr(*instr, (void __user *)regs->nip);
-	pagefault_enable();
-
-	if (err)
+	if (__get_user_instr(*instr, (void __user *)regs->nip))
 		return;
 
 	analyse_instr(&op, regs, *instr);

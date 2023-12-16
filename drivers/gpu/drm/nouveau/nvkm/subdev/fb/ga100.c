@@ -22,8 +22,6 @@
 #include "gf100.h"
 #include "ram.h"
 
-#include <subdev/gsp.h>
-
 static const struct nvkm_fb_func
 ga100_fb = {
 	.dtor = gf100_fb_dtor,
@@ -40,8 +38,5 @@ ga100_fb = {
 int
 ga100_fb_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst, struct nvkm_fb **pfb)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return r535_fb_new(&ga100_fb, device, type, inst, pfb);
-
 	return gf100_fb_new_(&ga100_fb, device, type, inst, pfb);
 }

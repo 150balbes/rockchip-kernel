@@ -18,8 +18,10 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
+#include <linux/of_irq.h>
 #include <linux/prefetch.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
@@ -497,13 +499,11 @@ static int xudc_eptxrx(struct xusb_ep *ep, struct xusb_req *req,
 		/* Get the Buffer address and copy the transmit data.*/
 		eprambase = (u32 __force *)(udc->addr + ep->rambase);
 		if (ep->is_in) {
-			memcpy_toio((void __iomem *)eprambase, bufferptr,
-				    bytestosend);
+			memcpy(eprambase, bufferptr, bytestosend);
 			udc->write_fn(udc->addr, ep->offset +
 				      XUSB_EP_BUF0COUNT_OFFSET, bufferlen);
 		} else {
-			memcpy_toio((void __iomem *)bufferptr, eprambase,
-				    bytestosend);
+			memcpy(bufferptr, eprambase, bytestosend);
 		}
 		/*
 		 * Enable the buffer for transmission.
@@ -517,13 +517,11 @@ static int xudc_eptxrx(struct xusb_ep *ep, struct xusb_req *req,
 		eprambase = (u32 __force *)(udc->addr + ep->rambase +
 			     ep->ep_usb.maxpacket);
 		if (ep->is_in) {
-			memcpy_toio((void __iomem *)eprambase, bufferptr,
-				    bytestosend);
+			memcpy(eprambase, bufferptr, bytestosend);
 			udc->write_fn(udc->addr, ep->offset +
 				      XUSB_EP_BUF1COUNT_OFFSET, bufferlen);
 		} else {
-			memcpy_toio((void __iomem *)bufferptr, eprambase,
-				    bytestosend);
+			memcpy(bufferptr, eprambase, bytestosend);
 		}
 		/*
 		 * Enable the buffer for transmission.
@@ -1025,7 +1023,7 @@ static int __xudc_ep0_queue(struct xusb_ep *ep0, struct xusb_req *req)
 			   udc->addr);
 		length = req->usb_req.actual = min_t(u32, length,
 						     EP0_MAX_PACKET);
-		memcpy_toio((void __iomem *)corebuf, req->usb_req.buf, length);
+		memcpy(corebuf, req->usb_req.buf, length);
 		udc->write_fn(udc->addr, XUSB_EP_BUF0COUNT_OFFSET, length);
 		udc->write_fn(udc->addr, XUSB_BUFFREADY_OFFSET, 1);
 	} else {
@@ -1619,13 +1617,13 @@ static void xudc_getstatus(struct xusb_udc *udc)
 	case USB_RECIP_INTERFACE:
 		break;
 	case USB_RECIP_ENDPOINT:
-		epnum = le16_to_cpu(udc->setup.wIndex) & USB_ENDPOINT_NUMBER_MASK;
+		epnum = udc->setup.wIndex & USB_ENDPOINT_NUMBER_MASK;
 		if (epnum >= XUSB_MAX_ENDPOINTS)
 			goto stall;
 		target_ep = &udc->ep[epnum];
 		epcfgreg = udc->read_fn(udc->addr + target_ep->offset);
 		halt = epcfgreg & XUSB_EP_CFG_STALL_MASK;
-		if (le16_to_cpu(udc->setup.wIndex) & USB_DIR_IN) {
+		if (udc->setup.wIndex & USB_DIR_IN) {
 			if (!target_ep->is_in)
 				goto stall;
 		} else {
@@ -1640,7 +1638,7 @@ static void xudc_getstatus(struct xusb_udc *udc)
 	}
 
 	req->usb_req.length = 2;
-	*(__le16 *)req->usb_req.buf = cpu_to_le16(status);
+	*(u16 *)req->usb_req.buf = cpu_to_le16(status);
 	ret = __xudc_ep0_queue(ep0, req);
 	if (ret == 0)
 		return;
@@ -1668,7 +1666,7 @@ static void xudc_set_clear_feature(struct xusb_udc *udc)
 
 	switch (udc->setup.bRequestType) {
 	case USB_RECIP_DEVICE:
-		switch (le16_to_cpu(udc->setup.wValue)) {
+		switch (udc->setup.wValue) {
 		case USB_DEVICE_TEST_MODE:
 			/*
 			 * The Test Mode will be executed
@@ -1688,15 +1686,13 @@ static void xudc_set_clear_feature(struct xusb_udc *udc)
 		break;
 	case USB_RECIP_ENDPOINT:
 		if (!udc->setup.wValue) {
-			endpoint = le16_to_cpu(udc->setup.wIndex) &
-					       USB_ENDPOINT_NUMBER_MASK;
+			endpoint = udc->setup.wIndex & USB_ENDPOINT_NUMBER_MASK;
 			if (endpoint >= XUSB_MAX_ENDPOINTS) {
 				xudc_ep0_stall(udc);
 				return;
 			}
 			target_ep = &udc->ep[endpoint];
-			outinbit = le16_to_cpu(udc->setup.wIndex) &
-					       USB_ENDPOINT_DIR_MASK;
+			outinbit = udc->setup.wIndex & USB_ENDPOINT_DIR_MASK;
 			outinbit = outinbit >> 7;
 
 			/* Make sure direction matches.*/
@@ -1756,12 +1752,12 @@ static void xudc_handle_setup(struct xusb_udc *udc)
 
 	/* Load up the chapter 9 command buffer.*/
 	ep0rambase = (u32 __force *) (udc->addr + XUSB_SETUP_PKT_ADDR_OFFSET);
-	memcpy_toio((void __iomem *)&setup, ep0rambase, 8);
+	memcpy(&setup, ep0rambase, 8);
 
 	udc->setup = setup;
-	udc->setup.wValue = cpu_to_le16((u16 __force)setup.wValue);
-	udc->setup.wIndex = cpu_to_le16((u16 __force)setup.wIndex);
-	udc->setup.wLength = cpu_to_le16((u16 __force)setup.wLength);
+	udc->setup.wValue = cpu_to_le16(setup.wValue);
+	udc->setup.wIndex = cpu_to_le16(setup.wIndex);
+	udc->setup.wLength = cpu_to_le16(setup.wLength);
 
 	/* Clear previous requests */
 	xudc_nuke(ep0, -ECONNRESET);
@@ -1843,7 +1839,7 @@ static void xudc_ep0_out(struct xusb_udc *udc)
 			     (ep0->rambase << 2));
 		buffer = req->usb_req.buf + req->usb_req.actual;
 		req->usb_req.actual = req->usb_req.actual + bytes_to_rx;
-		memcpy_toio((void __iomem *)buffer, ep0rambase, bytes_to_rx);
+		memcpy(buffer, ep0rambase, bytes_to_rx);
 
 		if (req->usb_req.length == req->usb_req.actual) {
 			/* Data transfer completed get ready for Status stage */
@@ -1873,7 +1869,7 @@ static void xudc_ep0_in(struct xusb_udc *udc)
 	u16 count = 0;
 	u16 length;
 	u8 *ep0rambase;
-	u8 test_mode = le16_to_cpu(udc->setup.wIndex) >> 8;
+	u8 test_mode = udc->setup.wIndex >> 8;
 
 	req = list_first_entry(&ep0->queue, struct xusb_req, queue);
 	bytes_to_tx = req->usb_req.length - req->usb_req.actual;
@@ -1884,12 +1880,12 @@ static void xudc_ep0_in(struct xusb_udc *udc)
 		case USB_REQ_SET_ADDRESS:
 			/* Set the address of the device.*/
 			udc->write_fn(udc->addr, XUSB_ADDRESS_OFFSET,
-				      le16_to_cpu(udc->setup.wValue));
+				      udc->setup.wValue);
 			break;
 		case USB_REQ_SET_FEATURE:
 			if (udc->setup.bRequestType ==
 					USB_RECIP_DEVICE) {
-				if (le16_to_cpu(udc->setup.wValue) ==
+				if (udc->setup.wValue ==
 						USB_DEVICE_TEST_MODE)
 					udc->write_fn(udc->addr,
 						      XUSB_TESTMODE_OFFSET,
@@ -1919,7 +1915,7 @@ static void xudc_ep0_in(struct xusb_udc *udc)
 				     (ep0->rambase << 2));
 			buffer = req->usb_req.buf + req->usb_req.actual;
 			req->usb_req.actual = req->usb_req.actual + length;
-			memcpy_toio((void __iomem *)ep0rambase, buffer, length);
+			memcpy(ep0rambase, buffer, length);
 		}
 		udc->write_fn(udc->addr, XUSB_EP_BUF0COUNT_OFFSET, count);
 		udc->write_fn(udc->addr, XUSB_BUFFREADY_OFFSET, 1);
@@ -2084,7 +2080,8 @@ static int xudc_probe(struct platform_device *pdev)
 	udc->req->usb_req.buf = buff;
 
 	/* Map the registers */
-	udc->addr = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	udc->addr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(udc->addr))
 		return PTR_ERR(udc->addr);
 

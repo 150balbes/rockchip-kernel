@@ -45,7 +45,7 @@ static int mtk_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	struct mtk_pinctrl *hw = pinctrl_dev_get_drvdata(pctldev);
 	struct function_desc *func;
 	struct group_desc *grp;
-	int i, err;
+	int i;
 
 	func = pinmux_generic_get_function(pctldev, selector);
 	if (!func)
@@ -67,11 +67,8 @@ static int mtk_pinmux_set_mux(struct pinctrl_dev *pctldev,
 		if (!desc->name)
 			return -ENOTSUPP;
 
-		err = mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_MODE,
-				       pin_modes[i]);
-
-		if (err)
-			return err;
+		mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_MODE,
+				 pin_modes[i]);
 	}
 
 	return 0;
@@ -510,12 +507,17 @@ static void mtk_gpio_set(struct gpio_chip *chip, unsigned int gpio, int value)
 	mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_DO, !!value);
 }
 
+static int mtk_gpio_direction_input(struct gpio_chip *chip, unsigned int gpio)
+{
+	return pinctrl_gpio_direction_input(chip->base + gpio);
+}
+
 static int mtk_gpio_direction_output(struct gpio_chip *chip, unsigned int gpio,
 				     int value)
 {
 	mtk_gpio_set(chip, gpio, value);
 
-	return pinctrl_gpio_direction_output(chip, gpio);
+	return pinctrl_gpio_direction_output(chip->base + gpio);
 }
 
 static int mtk_gpio_to_irq(struct gpio_chip *chip, unsigned int offset)
@@ -564,7 +566,7 @@ static int mtk_build_gpiochip(struct mtk_pinctrl *hw)
 	chip->parent		= hw->dev;
 	chip->request		= gpiochip_generic_request;
 	chip->free		= gpiochip_generic_free;
-	chip->direction_input	= pinctrl_gpio_direction_input;
+	chip->direction_input	= mtk_gpio_direction_input;
 	chip->direction_output	= mtk_gpio_direction_output;
 	chip->get		= mtk_gpio_get;
 	chip->set		= mtk_gpio_set;

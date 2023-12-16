@@ -552,7 +552,7 @@ err_charger_init:
 	return ret;
 }
 
-static void da9030_battery_remove(struct platform_device *dev)
+static int da9030_battery_remove(struct platform_device *dev)
 {
 	struct da9030_charger *charger = platform_get_drvdata(dev);
 
@@ -564,6 +564,8 @@ static void da9030_battery_remove(struct platform_device *dev)
 	cancel_delayed_work_sync(&charger->work);
 	da9030_set_charge(charger, 0);
 	power_supply_unregister(charger->psy);
+
+	return 0;
 }
 
 static struct platform_driver da903x_battery_driver = {
@@ -571,7 +573,7 @@ static struct platform_driver da903x_battery_driver = {
 		.name	= "da903x-battery",
 	},
 	.probe = da9030_battery_probe,
-	.remove_new = da9030_battery_remove,
+	.remove = da9030_battery_remove,
 };
 
 module_platform_driver(da903x_battery_driver);

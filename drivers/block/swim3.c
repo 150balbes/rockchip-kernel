@@ -1277,7 +1277,7 @@ static struct macio_driver swim3_driver =
 };
 
 
-static int swim3_init(void)
+int swim3_init(void)
 {
 	macio_register_driver(&swim3_driver);
 	return 0;

@@ -1547,12 +1547,6 @@ struct batadv_priv {
 	struct net_device *soft_iface;
 
 	/**
-	 * @mtu_set_by_user: MTU was set once by user
-	 * protected by rtnl_lock
-	 */
-	int mtu_set_by_user;
-
-	/**
 	 * @bat_counters: mesh internal traffic statistic counters (see
 	 *  batadv_counters)
 	 */
@@ -2197,10 +2191,11 @@ struct batadv_algo_gw_ops {
 	void (*init_sel_class)(struct batadv_priv *bat_priv);
 
 	/**
-	 * @sel_class_max: maximum allowed GW selection class
+	 * @store_sel_class: parse and stores a new GW selection class
+	 *  (optional)
 	 */
-	u32 sel_class_max;
-
+	ssize_t (*store_sel_class)(struct batadv_priv *bat_priv, char *buff,
+				   size_t count);
 	/**
 	 * @get_best_gw_node: select the best GW from the list of available
 	 *  nodes (optional)

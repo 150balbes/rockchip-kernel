@@ -9,12 +9,9 @@
 
 #include <linux/clk.h>
 #include <linux/delay.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
-#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
 
@@ -97,12 +94,16 @@ static int stm32_dac_probe(struct platform_device *pdev)
 	struct reset_control *rst;
 	int ret;
 
+	if (!dev->of_node)
+		return -ENODEV;
+
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, &priv->common);
 
-	cfg = device_get_match_data(dev);
+	cfg = (const struct stm32_dac_cfg *)
+		of_match_device(dev->driver->of_match_table, dev)->data;
 
 	mmio = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(mmio))
@@ -182,7 +183,7 @@ err_pm_stop:
 	return ret;
 }
 
-static void stm32_dac_remove(struct platform_device *pdev)
+static int stm32_dac_remove(struct platform_device *pdev)
 {
 	pm_runtime_get_sync(&pdev->dev);
 	of_platform_depopulate(&pdev->dev);
@@ -190,6 +191,8 @@ static void stm32_dac_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
+
+	return 0;
 }
 
 static int stm32_dac_core_resume(struct device *dev)
@@ -246,7 +249,7 @@ MODULE_DEVICE_TABLE(of, stm32_dac_of_match);
 
 static struct platform_driver stm32_dac_driver = {
 	.probe = stm32_dac_probe,
-	.remove_new = stm32_dac_remove,
+	.remove = stm32_dac_remove,
 	.driver = {
 		.name = "stm32-dac-core",
 		.of_match_table = stm32_dac_of_match,

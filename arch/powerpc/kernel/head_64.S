@@ -40,6 +40,7 @@
 #include <asm/hw_irq.h>
 #include <asm/cputhreads.h>
 #include <asm/ppc-opcode.h>
+#include <asm/export.h>
 #include <asm/feature-fixups.h>
 #ifdef CONFIG_PPC_BOOK3S
 #include <asm/exception-64s.h>
@@ -374,7 +375,8 @@ _GLOBAL(generic_secondary_smp_init)
 	beq	20f
 
 	/* start the specified thread */
-	LOAD_REG_ADDR(r5, DOTSYM(fsl_secondary_thread_init))
+	LOAD_REG_ADDR(r5, fsl_secondary_thread_init)
+	ld	r4, 0(r5)
 	bl	book3e_start_thread
 
 	/* stop the current thread */

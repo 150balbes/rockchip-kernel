@@ -20,7 +20,7 @@
 #include <linux/phy.h>
 #include <linux/of_address.h>
 #include <linux/of_mdio.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 
 #define DELAY 1
 

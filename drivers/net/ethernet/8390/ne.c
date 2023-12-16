@@ -823,7 +823,7 @@ static int __init ne_drv_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ne_drv_remove(struct platform_device *pdev)
+static int ne_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 
@@ -842,6 +842,7 @@ static void ne_drv_remove(struct platform_device *pdev)
 		release_region(dev->base_addr, NE_IO_EXTENT);
 		free_netdev(dev);
 	}
+	return 0;
 }
 
 /* Remove unused devices or all if true. */
@@ -894,7 +895,7 @@ static int ne_drv_resume(struct platform_device *pdev)
 #endif
 
 static struct platform_driver ne_driver = {
-	.remove_new	= ne_drv_remove,
+	.remove		= ne_drv_remove,
 	.suspend	= ne_drv_suspend,
 	.resume		= ne_drv_resume,
 	.driver		= {

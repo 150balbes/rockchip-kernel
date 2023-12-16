@@ -61,7 +61,7 @@ patternProperties:
     required:
       - reg
 
-    additionalProperties: false
+    additionalProperties: true
 
 allOf:
   - $ref: /schemas/spi/spi-peripheral-props.yaml#

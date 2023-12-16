@@ -20,7 +20,6 @@
 #include <asm/cputable.h>
 #include <asm/kvm_ppc.h>
 #include <asm/dbell.h>
-#include <asm/ppc-opcode.h>
 
 #include "booke.h"
 #include "e500.h"
@@ -93,11 +92,7 @@ void kvmppc_e500_tlbil_all(struct kvmppc_vcpu_e500 *vcpu_e500)
 
 	local_irq_save(flags);
 	mtspr(SPRN_MAS5, MAS5_SGS | get_lpid(&vcpu_e500->vcpu));
-	/*
-	 * clang-17 and older could not assemble tlbilxlpid.
-	 * https://github.com/ClangBuiltLinux/linux/issues/1891
-	 */
-	asm volatile (PPC_TLBILX_LPID);
+	asm volatile("tlbilxlpid");
 	mtspr(SPRN_MAS5, 0);
 	local_irq_restore(flags);
 }

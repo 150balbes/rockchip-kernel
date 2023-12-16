@@ -266,7 +266,7 @@ static ssize_t sys_##_prefix##_##_name##_store(struct kobject *kobj,	\
 		struct kobj_attribute *attr,				\
 		const char *buf, size_t len)				\
 {									\
-	strscpy(_value, buf, sizeof(_value));				\
+	strncpy(_value, buf, sizeof(_value) - 1);			\
 	strim(_value);							\
 	return len;							\
 }									\
@@ -557,12 +557,15 @@ static struct kobj_attribute sys_ipl_ccw_loadparm_attr =
 	__ATTR(loadparm, 0444, ipl_ccw_loadparm_show, NULL);
 
 static struct attribute *ipl_fcp_attrs[] = {
+	&sys_ipl_type_attr.attr,
 	&sys_ipl_device_attr.attr,
 	&sys_ipl_fcp_wwpn_attr.attr,
 	&sys_ipl_fcp_lun_attr.attr,
 	&sys_ipl_fcp_bootprog_attr.attr,
 	&sys_ipl_fcp_br_lba_attr.attr,
 	&sys_ipl_ccw_loadparm_attr.attr,
+	&sys_ipl_secure_attr.attr,
+	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
@@ -572,11 +575,14 @@ static struct attribute_group ipl_fcp_attr_group = {
 };
 
 static struct attribute *ipl_nvme_attrs[] = {
+	&sys_ipl_type_attr.attr,
 	&sys_ipl_nvme_fid_attr.attr,
 	&sys_ipl_nvme_nsid_attr.attr,
 	&sys_ipl_nvme_bootprog_attr.attr,
 	&sys_ipl_nvme_br_lba_attr.attr,
 	&sys_ipl_ccw_loadparm_attr.attr,
+	&sys_ipl_secure_attr.attr,
+	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
@@ -586,10 +592,13 @@ static struct attribute_group ipl_nvme_attr_group = {
 };
 
 static struct attribute *ipl_eckd_attrs[] = {
+	&sys_ipl_type_attr.attr,
 	&sys_ipl_eckd_bootprog_attr.attr,
 	&sys_ipl_eckd_br_chr_attr.attr,
 	&sys_ipl_ccw_loadparm_attr.attr,
 	&sys_ipl_device_attr.attr,
+	&sys_ipl_secure_attr.attr,
+	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
@@ -601,15 +610,21 @@ static struct attribute_group ipl_eckd_attr_group = {
 /* CCW ipl device attributes */
 
 static struct attribute *ipl_ccw_attrs_vm[] = {
+	&sys_ipl_type_attr.attr,
 	&sys_ipl_device_attr.attr,
 	&sys_ipl_ccw_loadparm_attr.attr,
 	&sys_ipl_vm_parm_attr.attr,
+	&sys_ipl_secure_attr.attr,
+	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
 static struct attribute *ipl_ccw_attrs_lpar[] = {
+	&sys_ipl_type_attr.attr,
 	&sys_ipl_device_attr.attr,
 	&sys_ipl_ccw_loadparm_attr.attr,
+	&sys_ipl_secure_attr.attr,
+	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
@@ -621,15 +636,15 @@ static struct attribute_group ipl_ccw_attr_group_lpar = {
 	.attrs = ipl_ccw_attrs_lpar
 };
 
-static struct attribute *ipl_common_attrs[] = {
+/* UNKNOWN ipl device attributes */
+
+static struct attribute *ipl_unknown_attrs[] = {
 	&sys_ipl_type_attr.attr,
-	&sys_ipl_secure_attr.attr,
-	&sys_ipl_has_secure_attr.attr,
 	NULL,
 };
 
-static struct attribute_group ipl_common_attr_group = {
-	.attrs = ipl_common_attrs,
+static struct attribute_group ipl_unknown_attr_group = {
+	.attrs = ipl_unknown_attrs,
 };
 
 static struct kset *ipl_kset;
@@ -653,9 +668,6 @@ static int __init ipl_init(void)
 		rc = -ENOMEM;
 		goto out;
 	}
-	rc = sysfs_create_group(&ipl_kset->kobj, &ipl_common_attr_group);
-	if (rc)
-		goto out;
 	switch (ipl_info.type) {
 	case IPL_TYPE_CCW:
 		if (MACHINE_IS_VM)
@@ -666,7 +678,6 @@ static int __init ipl_init(void)
 						&ipl_ccw_attr_group_lpar);
 		break;
 	case IPL_TYPE_ECKD:
-	case IPL_TYPE_ECKD_DUMP:
 		rc = sysfs_create_group(&ipl_kset->kobj, &ipl_eckd_attr_group);
 		break;
 	case IPL_TYPE_FCP:
@@ -678,6 +689,8 @@ static int __init ipl_init(void)
 		rc = sysfs_create_group(&ipl_kset->kobj, &ipl_nvme_attr_group);
 		break;
 	default:
+		rc = sysfs_create_group(&ipl_kset->kobj,
+					&ipl_unknown_attr_group);
 		break;
 	}
 out:
@@ -2382,7 +2395,7 @@ void s390_reset_system(void)
 	set_prefix(0);
 
 	/* Disable lowcore protection */
-	local_ctl_clear_bit(0, CR0_LOW_ADDRESS_PROTECTION_BIT);
+	__ctl_clear_bit(0, 28);
 	diag_amode31_ops.diag308_reset();
 }
 

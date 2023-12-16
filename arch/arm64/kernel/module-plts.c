@@ -167,6 +167,9 @@ static unsigned int count_plts(Elf64_Sym *syms, Elf64_Rela *rela, int num,
 		switch (ELF64_R_TYPE(rela[i].r_info)) {
 		case R_AARCH64_JUMP26:
 		case R_AARCH64_CALL26:
+			if (!IS_ENABLED(CONFIG_RANDOMIZE_BASE))
+				break;
+
 			/*
 			 * We only have to consider branch targets that resolve
 			 * to symbols that are defined in a different section.
@@ -200,7 +203,8 @@ static unsigned int count_plts(Elf64_Sym *syms, Elf64_Rela *rela, int num,
 			break;
 		case R_AARCH64_ADR_PREL_PG_HI21_NC:
 		case R_AARCH64_ADR_PREL_PG_HI21:
-			if (!cpus_have_final_cap(ARM64_WORKAROUND_843419))
+			if (!IS_ENABLED(CONFIG_ARM64_ERRATUM_843419) ||
+			    !cpus_have_const_cap(ARM64_WORKAROUND_843419))
 				break;
 
 			/*
@@ -235,13 +239,13 @@ static unsigned int count_plts(Elf64_Sym *syms, Elf64_Rela *rela, int num,
 		}
 	}
 
-	if (cpus_have_final_cap(ARM64_WORKAROUND_843419)) {
+	if (IS_ENABLED(CONFIG_ARM64_ERRATUM_843419) &&
+	    cpus_have_const_cap(ARM64_WORKAROUND_843419))
 		/*
 		 * Add some slack so we can skip PLT slots that may trigger
 		 * the erratum due to the placement of the ADRP instruction.
 		 */
 		ret += DIV_ROUND_UP(ret, (SZ_4K / sizeof(struct plt_entry)));
-	}
 
 	return ret;
 }
@@ -264,6 +268,9 @@ static int partition_branch_plt_relas(Elf64_Sym *syms, Elf64_Rela *rela,
 				      int numrels, Elf64_Word dstidx)
 {
 	int i = 0, j = numrels - 1;
+
+	if (!IS_ENABLED(CONFIG_RANDOMIZE_BASE))
+		return 0;
 
 	while (i < j) {
 		if (branch_rela_needs_plt(syms, &rela[i], dstidx))
@@ -332,7 +339,7 @@ int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 		if (nents)
 			sort(rels, nents, sizeof(Elf64_Rela), cmp_rela, NULL);
 
-		if (!module_init_layout_section(secstrings + dstsec->sh_name))
+		if (!str_has_prefix(secstrings + dstsec->sh_name, ".init"))
 			core_plts += count_plts(syms, rels, numrels,
 						sechdrs[i].sh_info, dstsec);
 		else

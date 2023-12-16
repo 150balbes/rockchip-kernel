@@ -81,4 +81,3 @@ module_exit(exit_rc_map_kaiomy)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("Kaiomy TVnPC U2 remote controller keytable");

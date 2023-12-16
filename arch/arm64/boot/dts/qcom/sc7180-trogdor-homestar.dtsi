@@ -7,8 +7,6 @@
 
 /* This file must be included after sc7180-trogdor.dtsi */
 
-#include "sc7180-trogdor-rt5682i-sku.dtsi"
-
 / {
 	/* BOARD-SPECIFIC TOP LEVEL NODES */
 
@@ -118,7 +116,6 @@ ap_ts_pen_1v8: &i2c4 {
 		interrupt-parent = <&tlmm>;
 		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
 
-		panel = <&panel>;
 		reset-gpios = <&tlmm 8 GPIO_ACTIVE_LOW>;
 
 		vdd-supply = <&pp3300_touch>;
@@ -148,11 +145,10 @@ ap_ts_pen_1v8: &i2c4 {
 };
 
 &pm6150_adc {
-	channel@4d {
+	skin-temp-thermistor@4d {
 		reg = <ADC5_AMUX_THM1_100K_PU>;
 		qcom,ratiometric;
 		qcom,hw-settle-time = <200>;
-		label = "skin_therm";
 	};
 };
 

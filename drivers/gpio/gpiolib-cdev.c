@@ -230,7 +230,9 @@ static long linehandle_set_config(struct linehandle_state *lh,
 				return ret;
 		}
 
-		gpiod_line_state_notify(desc, GPIO_V2_LINE_CHANGED_CONFIG);
+		blocking_notifier_call_chain(&desc->gdev->notifier,
+					     GPIO_V2_LINE_CHANGED_CONFIG,
+					     desc);
 	}
 	return 0;
 }
@@ -412,7 +414,8 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 				goto out_free_lh;
 		}
 
-		gpiod_line_state_notify(desc, GPIO_V2_LINE_CHANGED_REQUESTED);
+		blocking_notifier_call_chain(&desc->gdev->notifier,
+					     GPIO_V2_LINE_CHANGED_REQUESTED, desc);
 
 		dev_dbg(&gdev->dev, "registered chardev handle for line %d\n",
 			offset);
@@ -552,7 +555,6 @@ struct line {
  * @label: consumer label used to tag GPIO descriptors
  * @num_lines: the number of lines in the lines array
  * @wait: wait queue that handles blocking reads of events
- * @device_unregistered_nb: notifier block for receiving gdev unregister events
  * @event_buffer_size: the number of elements allocated in @events
  * @events: KFIFO for the GPIO events
  * @seqno: the sequence number for edge events generated on all lines in
@@ -567,12 +569,11 @@ struct linereq {
 	const char *label;
 	u32 num_lines;
 	wait_queue_head_t wait;
-	struct notifier_block device_unregistered_nb;
 	u32 event_buffer_size;
 	DECLARE_KFIFO_PTR(events, struct gpio_v2_line_event);
 	atomic_t seqno;
 	struct mutex config_mutex;
-	struct line lines[] __counted_by(num_lines);
+	struct line lines[];
 };
 
 #define GPIO_V2_LINE_BIAS_FLAGS \
@@ -608,17 +609,6 @@ struct linereq {
 	(GPIO_V2_LINE_FLAG_ACTIVE_LOW | \
 	 GPIO_V2_LINE_FLAG_EVENT_CLOCK_HTE | \
 	 GPIO_V2_LINE_EDGE_FLAGS)
-
-static int linereq_unregistered_notify(struct notifier_block *nb,
-				       unsigned long action, void *data)
-{
-	struct linereq *lr = container_of(nb, struct linereq,
-					  device_unregistered_nb);
-
-	wake_up_poll(&lr->wait, EPOLLIN | EPOLLERR);
-
-	return NOTIFY_OK;
-}
 
 static void linereq_put_event(struct linereq *lr,
 			      struct gpio_v2_line_event *le)
@@ -1417,7 +1407,9 @@ static long linereq_set_config_unlocked(struct linereq *lr,
 
 		WRITE_ONCE(line->edflags, edflags);
 
-		gpiod_line_state_notify(desc, GPIO_V2_LINE_CHANGED_CONFIG);
+		blocking_notifier_call_chain(&desc->gdev->notifier,
+					     GPIO_V2_LINE_CHANGED_CONFIG,
+					     desc);
 	}
 	return 0;
 }
@@ -1575,10 +1567,6 @@ static void linereq_free(struct linereq *lr)
 {
 	unsigned int i;
 
-	if (lr->device_unregistered_nb.notifier_call)
-		blocking_notifier_chain_unregister(&lr->gdev->device_notifier,
-						   &lr->device_unregistered_nb);
-
 	for (i = 0; i < lr->num_lines; i++) {
 		if (lr->lines[i].desc) {
 			edge_detector_stop(&lr->lines[i]);
@@ -1656,7 +1644,6 @@ static int linereq_create(struct gpio_device *gdev, void __user *ip)
 	lr = kzalloc(struct_size(lr, lines, ulr.num_lines), GFP_KERNEL);
 	if (!lr)
 		return -ENOMEM;
-	lr->num_lines = ulr.num_lines;
 
 	lr->gdev = gpio_device_get(gdev);
 
@@ -1685,6 +1672,7 @@ static int linereq_create(struct gpio_device *gdev, void __user *ip)
 		lr->event_buffer_size = GPIO_V2_LINES_MAX * 16;
 
 	atomic_set(&lr->seqno, 0);
+	lr->num_lines = ulr.num_lines;
 
 	/* Request each GPIO */
 	for (i = 0; i < ulr.num_lines; i++) {
@@ -1732,17 +1720,12 @@ static int linereq_create(struct gpio_device *gdev, void __user *ip)
 
 		lr->lines[i].edflags = edflags;
 
-		gpiod_line_state_notify(desc, GPIO_V2_LINE_CHANGED_REQUESTED);
+		blocking_notifier_call_chain(&desc->gdev->notifier,
+					     GPIO_V2_LINE_CHANGED_REQUESTED, desc);
 
 		dev_dbg(&gdev->dev, "registered chardev handle for line %d\n",
 			offset);
 	}
-
-	lr->device_unregistered_nb.notifier_call = linereq_unregistered_notify;
-	ret = blocking_notifier_chain_register(&gdev->device_notifier,
-					       &lr->device_unregistered_nb);
-	if (ret)
-		goto out_free_linereq;
 
 	fd = get_unused_fd_flags(O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
@@ -1796,7 +1779,6 @@ out_free_linereq:
  * @eflags: the event flags this line was requested with
  * @irq: the interrupt that trigger in response to events on this GPIO
  * @wait: wait queue that handles blocking reads of events
- * @device_unregistered_nb: notifier block for receiving gdev unregister events
  * @events: KFIFO for the GPIO events
  * @timestamp: cache for the timestamp storing it between hardirq
  * and IRQ thread, used to bring the timestamp close to the actual
@@ -1809,7 +1791,6 @@ struct lineevent_state {
 	u32 eflags;
 	int irq;
 	wait_queue_head_t wait;
-	struct notifier_block device_unregistered_nb;
 	DECLARE_KFIFO(events, struct gpioevent_data, 16);
 	u64 timestamp;
 };
@@ -1841,17 +1822,6 @@ static __poll_t lineevent_poll(struct file *file,
 	struct lineevent_state *le = file->private_data;
 
 	return call_poll_locked(file, wait, le->gdev, lineevent_poll_unlocked);
-}
-
-static int lineevent_unregistered_notify(struct notifier_block *nb,
-					 unsigned long action, void *data)
-{
-	struct lineevent_state *le = container_of(nb, struct lineevent_state,
-						  device_unregistered_nb);
-
-	wake_up_poll(&le->wait, EPOLLIN | EPOLLERR);
-
-	return NOTIFY_OK;
 }
 
 struct compat_gpioeevent_data {
@@ -1939,9 +1909,6 @@ static ssize_t lineevent_read(struct file *file, char __user *buf,
 
 static void lineevent_free(struct lineevent_state *le)
 {
-	if (le->device_unregistered_nb.notifier_call)
-		blocking_notifier_chain_unregister(&le->gdev->device_notifier,
-						   &le->device_unregistered_nb);
 	if (le->irq)
 		free_irq(le->irq, le);
 	if (le->desc)
@@ -2150,7 +2117,8 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 	if (ret)
 		goto out_free_le;
 
-	gpiod_line_state_notify(desc, GPIO_V2_LINE_CHANGED_REQUESTED);
+	blocking_notifier_call_chain(&desc->gdev->notifier,
+				     GPIO_V2_LINE_CHANGED_REQUESTED, desc);
 
 	irq = gpiod_to_irq(desc);
 	if (irq <= 0) {
@@ -2168,12 +2136,6 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 
 	INIT_KFIFO(le->events);
 	init_waitqueue_head(&le->wait);
-
-	le->device_unregistered_nb.notifier_call = lineevent_unregistered_notify;
-	ret = blocking_notifier_chain_register(&gdev->device_notifier,
-					       &le->device_unregistered_nb);
-	if (ret)
-		goto out_free_le;
 
 	/* Request a thread to read the events */
 	ret = request_threaded_irq(irq,
@@ -2287,7 +2249,8 @@ static void gpio_desc_to_lineinfo(struct gpio_desc *desc,
 	 * FIXME: find a non-racy way to retrieve this information. Maybe a
 	 * lock common to both frameworks?
 	 */
-	ok_for_pinctrl = pinctrl_gpio_can_use_line(gc, info->offset);
+	ok_for_pinctrl =
+		pinctrl_gpio_can_use_line(gc->base + info->offset);
 
 	spin_lock_irqsave(&gpio_lock, flags);
 
@@ -2357,7 +2320,6 @@ struct gpio_chardev_data {
 	wait_queue_head_t wait;
 	DECLARE_KFIFO(events, struct gpio_v2_line_info_changed, 32);
 	struct notifier_block lineinfo_changed_nb;
-	struct notifier_block device_unregistered_nb;
 	unsigned long *watched_lines;
 #ifdef CONFIG_GPIO_CDEV_V1
 	atomic_t watch_abi_version;
@@ -2529,11 +2491,16 @@ static long gpio_ioctl_compat(struct file *file, unsigned int cmd,
 }
 #endif
 
+static struct gpio_chardev_data *
+to_gpio_chardev_data(struct notifier_block *nb)
+{
+	return container_of(nb, struct gpio_chardev_data, lineinfo_changed_nb);
+}
+
 static int lineinfo_changed_notify(struct notifier_block *nb,
 				   unsigned long action, void *data)
 {
-	struct gpio_chardev_data *cdev =
-		container_of(nb, struct gpio_chardev_data, lineinfo_changed_nb);
+	struct gpio_chardev_data *cdev = to_gpio_chardev_data(nb);
 	struct gpio_v2_line_info_changed chg;
 	struct gpio_desc *desc = data;
 	int ret;
@@ -2551,18 +2518,6 @@ static int lineinfo_changed_notify(struct notifier_block *nb,
 		wake_up_poll(&cdev->wait, EPOLLIN);
 	else
 		pr_debug_ratelimited("lineinfo event FIFO is full - event dropped\n");
-
-	return NOTIFY_OK;
-}
-
-static int gpio_device_unregistered_notify(struct notifier_block *nb,
-					   unsigned long action, void *data)
-{
-	struct gpio_chardev_data *cdev = container_of(nb,
-						      struct gpio_chardev_data,
-						      device_unregistered_nb);
-
-	wake_up_poll(&cdev->wait, EPOLLIN | EPOLLERR);
 
 	return NOTIFY_OK;
 }
@@ -2716,33 +2671,23 @@ static int gpio_chrdev_open(struct inode *inode, struct file *file)
 	cdev->gdev = gpio_device_get(gdev);
 
 	cdev->lineinfo_changed_nb.notifier_call = lineinfo_changed_notify;
-	ret = blocking_notifier_chain_register(&gdev->line_state_notifier,
+	ret = blocking_notifier_chain_register(&gdev->notifier,
 					       &cdev->lineinfo_changed_nb);
 	if (ret)
 		goto out_free_bitmap;
-
-	cdev->device_unregistered_nb.notifier_call =
-					gpio_device_unregistered_notify;
-	ret = blocking_notifier_chain_register(&gdev->device_notifier,
-					       &cdev->device_unregistered_nb);
-	if (ret)
-		goto out_unregister_line_notifier;
 
 	file->private_data = cdev;
 
 	ret = nonseekable_open(inode, file);
 	if (ret)
-		goto out_unregister_device_notifier;
+		goto out_unregister_notifier;
 
 	up_read(&gdev->sem);
 
 	return ret;
 
-out_unregister_device_notifier:
-	blocking_notifier_chain_unregister(&gdev->device_notifier,
-					   &cdev->device_unregistered_nb);
-out_unregister_line_notifier:
-	blocking_notifier_chain_unregister(&gdev->line_state_notifier,
+out_unregister_notifier:
+	blocking_notifier_chain_unregister(&gdev->notifier,
 					   &cdev->lineinfo_changed_nb);
 out_free_bitmap:
 	gpio_device_put(gdev);
@@ -2766,9 +2711,7 @@ static int gpio_chrdev_release(struct inode *inode, struct file *file)
 	struct gpio_device *gdev = cdev->gdev;
 
 	bitmap_free(cdev->watched_lines);
-	blocking_notifier_chain_unregister(&gdev->device_notifier,
-					   &cdev->device_unregistered_nb);
-	blocking_notifier_chain_unregister(&gdev->line_state_notifier,
+	blocking_notifier_chain_unregister(&gdev->notifier,
 					   &cdev->lineinfo_changed_nb);
 	gpio_device_put(gdev);
 	kfree(cdev);
@@ -2810,5 +2753,4 @@ int gpiolib_cdev_register(struct gpio_device *gdev, dev_t devt)
 void gpiolib_cdev_unregister(struct gpio_device *gdev)
 {
 	cdev_device_del(&gdev->chrdev, &gdev->dev);
-	blocking_notifier_call_chain(&gdev->device_notifier, 0, NULL);
 }

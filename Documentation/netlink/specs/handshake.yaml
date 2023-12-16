@@ -34,16 +34,16 @@ attribute-sets:
     attributes:
       -
         name: cert
-        type: s32
+        type: u32
       -
         name: privkey
-        type: s32
+        type: u32
   -
     name: accept
     attributes:
       -
         name: sockfd
-        type: s32
+        type: u32
       -
         name: handler-class
         type: u32
@@ -79,7 +79,7 @@ attribute-sets:
         type: u32
       -
         name: sockfd
-        type: s32
+        type: u32
       -
         name: remote-auth
         type: u32

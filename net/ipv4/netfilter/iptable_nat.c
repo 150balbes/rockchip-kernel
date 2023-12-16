@@ -170,4 +170,3 @@ module_init(iptable_nat_init);
 module_exit(iptable_nat_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("iptables legacy nat table");

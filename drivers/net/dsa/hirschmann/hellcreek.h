@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (GPL-2.0 OR MIT) */
+/* SPDX-License-Identifier: (GPL-2.0 or MIT) */
 /*
  * DSA driver for:
  * Hirschmann Hellcreek TSN switch.

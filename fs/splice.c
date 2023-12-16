@@ -83,7 +83,8 @@ static bool page_cache_pipe_buf_try_steal(struct pipe_inode_info *pipe,
 		 */
 		folio_wait_writeback(folio);
 
-		if (!filemap_release_folio(folio, GFP_KERNEL))
+		if (folio_has_private(folio) &&
+		    !filemap_release_folio(folio, GFP_KERNEL))
 			goto out_unlock;
 
 		/*
@@ -119,17 +120,17 @@ static void page_cache_pipe_buf_release(struct pipe_inode_info *pipe,
 static int page_cache_pipe_buf_confirm(struct pipe_inode_info *pipe,
 				       struct pipe_buffer *buf)
 {
-	struct folio *folio = page_folio(buf->page);
+	struct page *page = buf->page;
 	int err;
 
-	if (!folio_test_uptodate(folio)) {
-		folio_lock(folio);
+	if (!PageUptodate(page)) {
+		lock_page(page);
 
 		/*
-		 * Folio got truncated/unhashed. This will cause a 0-byte
+		 * Page got truncated/unhashed. This will cause a 0-byte
 		 * splice, if this is the first page.
 		 */
-		if (!folio->mapping) {
+		if (!page->mapping) {
 			err = -ENODATA;
 			goto error;
 		}
@@ -137,18 +138,20 @@ static int page_cache_pipe_buf_confirm(struct pipe_inode_info *pipe,
 		/*
 		 * Uh oh, read-error from disk.
 		 */
-		if (!folio_test_uptodate(folio)) {
+		if (!PageUptodate(page)) {
 			err = -EIO;
 			goto error;
 		}
 
-		/* Folio is ok after all, we are done */
-		folio_unlock(folio);
+		/*
+		 * Page is ok afterall, we are done.
+		 */
+		unlock_page(page);
 	}
 
 	return 0;
 error:
-	folio_unlock(folio);
+	unlock_page(page);
 	return err;
 }
 
@@ -873,8 +876,6 @@ ssize_t splice_to_socket(struct pipe_inode_info *pipe, struct file *out,
 			msg.msg_flags |= MSG_MORE;
 		if (remain && pipe_occupancy(pipe->head, tail) > 0)
 			msg.msg_flags |= MSG_MORE;
-		if (out->f_flags & O_NONBLOCK)
-			msg.msg_flags |= MSG_DONTWAIT;
 
 		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, bvec, bc,
 			      len - remain);
@@ -1266,8 +1267,10 @@ long do_splice(struct file *in, loff_t *off_in, struct file *out,
 		if ((in->f_flags | out->f_flags) & O_NONBLOCK)
 			flags |= SPLICE_F_NONBLOCK;
 
-		ret = splice_pipe_to_pipe(ipipe, opipe, len, flags);
-	} else if (ipipe) {
+		return splice_pipe_to_pipe(ipipe, opipe, len, flags);
+	}
+
+	if (ipipe) {
 		if (off_in)
 			return -ESPIPE;
 		if (off_out) {
@@ -1292,11 +1295,18 @@ long do_splice(struct file *in, loff_t *off_in, struct file *out,
 		ret = do_splice_from(ipipe, out, &offset, len, flags);
 		file_end_write(out);
 
+		if (ret > 0)
+			fsnotify_modify(out);
+
 		if (!off_out)
 			out->f_pos = offset;
 		else
 			*off_out = offset;
-	} else if (opipe) {
+
+		return ret;
+	}
+
+	if (opipe) {
 		if (off_out)
 			return -ESPIPE;
 		if (off_in) {
@@ -1312,25 +1322,18 @@ long do_splice(struct file *in, loff_t *off_in, struct file *out,
 
 		ret = splice_file_to_pipe(in, opipe, &offset, len, flags);
 
+		if (ret > 0)
+			fsnotify_access(in);
+
 		if (!off_in)
 			in->f_pos = offset;
 		else
 			*off_in = offset;
-	} else {
-		ret = -EINVAL;
+
+		return ret;
 	}
 
-	if (ret > 0) {
-		/*
-		 * Generate modify out before access in:
-		 * do_splice_from() may've already sent modify out,
-		 * and this ensures the events get merged.
-		 */
-		fsnotify_modify(out);
-		fsnotify_access(in);
-	}
-
-	return ret;
+	return -EINVAL;
 }
 
 static long __do_splice(struct file *in, loff_t __user *off_in,
@@ -1459,9 +1462,6 @@ static long vmsplice_to_user(struct file *file, struct iov_iter *iter,
 		pipe_unlock(pipe);
 	}
 
-	if (ret > 0)
-		fsnotify_access(file);
-
 	return ret;
 }
 
@@ -1491,10 +1491,8 @@ static long vmsplice_to_pipe(struct file *file, struct iov_iter *iter,
 	if (!ret)
 		ret = iter_to_pipe(iter, pipe, buf_flag);
 	pipe_unlock(pipe);
-	if (ret > 0) {
+	if (ret > 0)
 		wakeup_pipe_readers(pipe);
-		fsnotify_modify(file);
-	}
 	return ret;
 }
 
@@ -1926,11 +1924,6 @@ long do_tee(struct file *in, struct file *out, size_t len, unsigned int flags)
 			if (!ret)
 				ret = link_pipe(ipipe, opipe, len, flags);
 		}
-	}
-
-	if (ret > 0) {
-		fsnotify_access(in);
-		fsnotify_modify(out);
 	}
 
 	return ret;

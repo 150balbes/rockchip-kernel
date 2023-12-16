@@ -161,11 +161,6 @@ static int memblock_can_resize __initdata_memblock;
 static int memblock_memory_in_slab __initdata_memblock;
 static int memblock_reserved_in_slab __initdata_memblock;
 
-bool __init_memblock memblock_has_mirror(void)
-{
-	return system_has_some_mirror;
-}
-
 static enum memblock_flags __init_memblock choose_memblock_flags(void)
 {
 	return system_has_some_mirror ? MEMBLOCK_MIRROR : MEMBLOCK_NONE;
@@ -424,7 +419,7 @@ static int __init_memblock memblock_double_array(struct memblock_type *type,
 	 * of memory that aren't suitable for allocation
 	 */
 	if (!memblock_can_resize)
-		panic("memblock: cannot resize %s array\n", type->name);
+		return -1;
 
 	/* Calculate new doubled size */
 	old_size = type->max * sizeof(struct memblock_region);
@@ -892,7 +887,6 @@ int __init_memblock memblock_physmem_add(phys_addr_t base, phys_addr_t size)
 
 /**
  * memblock_setclr_flag - set or clear flag for a memory region
- * @type: memblock type to set/clear flag for
  * @base: base address of the region
  * @size: size of the region
  * @set: set or clear the flag
@@ -902,9 +896,10 @@ int __init_memblock memblock_physmem_add(phys_addr_t base, phys_addr_t size)
  *
  * Return: 0 on success, -errno on failure.
  */
-static int __init_memblock memblock_setclr_flag(struct memblock_type *type,
-				phys_addr_t base, phys_addr_t size, int set, int flag)
+static int __init_memblock memblock_setclr_flag(phys_addr_t base,
+				phys_addr_t size, int set, int flag)
 {
+	struct memblock_type *type = &memblock.memory;
 	int i, ret, start_rgn, end_rgn;
 
 	ret = memblock_isolate_range(type, base, size, &start_rgn, &end_rgn);
@@ -933,7 +928,7 @@ static int __init_memblock memblock_setclr_flag(struct memblock_type *type,
  */
 int __init_memblock memblock_mark_hotplug(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 1, MEMBLOCK_HOTPLUG);
+	return memblock_setclr_flag(base, size, 1, MEMBLOCK_HOTPLUG);
 }
 
 /**
@@ -945,7 +940,7 @@ int __init_memblock memblock_mark_hotplug(phys_addr_t base, phys_addr_t size)
  */
 int __init_memblock memblock_clear_hotplug(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 0, MEMBLOCK_HOTPLUG);
+	return memblock_setclr_flag(base, size, 0, MEMBLOCK_HOTPLUG);
 }
 
 /**
@@ -962,7 +957,7 @@ int __init_memblock memblock_mark_mirror(phys_addr_t base, phys_addr_t size)
 
 	system_has_some_mirror = true;
 
-	return memblock_setclr_flag(&memblock.memory, base, size, 1, MEMBLOCK_MIRROR);
+	return memblock_setclr_flag(base, size, 1, MEMBLOCK_MIRROR);
 }
 
 /**
@@ -982,7 +977,7 @@ int __init_memblock memblock_mark_mirror(phys_addr_t base, phys_addr_t size)
  */
 int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 1, MEMBLOCK_NOMAP);
+	return memblock_setclr_flag(base, size, 1, MEMBLOCK_NOMAP);
 }
 
 /**
@@ -994,25 +989,7 @@ int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
  */
 int __init_memblock memblock_clear_nomap(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 0, MEMBLOCK_NOMAP);
-}
-
-/**
- * memblock_reserved_mark_noinit - Mark a reserved memory region with flag
- * MEMBLOCK_RSRV_NOINIT which results in the struct pages not being initialized
- * for this region.
- * @base: the base phys addr of the region
- * @size: the size of the region
- *
- * struct pages will not be initialized for reserved memory regions marked with
- * %MEMBLOCK_RSRV_NOINIT.
- *
- * Return: 0 on success, -errno on failure.
- */
-int __init_memblock memblock_reserved_mark_noinit(phys_addr_t base, phys_addr_t size)
-{
-	return memblock_setclr_flag(&memblock.reserved, base, size, 1,
-				    MEMBLOCK_RSRV_NOINIT);
+	return memblock_setclr_flag(base, size, 0, MEMBLOCK_NOMAP);
 }
 
 static bool should_skip_region(struct memblock_type *type,
@@ -2131,18 +2108,13 @@ static void __init memmap_init_reserved_pages(void)
 		memblock_set_node(start, end, &memblock.reserved, nid);
 	}
 
-	/*
-	 * initialize struct pages for reserved regions that don't have
-	 * the MEMBLOCK_RSRV_NOINIT flag set
-	 */
+	/* initialize struct pages for the reserved regions */
 	for_each_reserved_mem_region(region) {
-		if (!memblock_is_reserved_noinit(region)) {
-			nid = memblock_get_region_node(region);
-			start = region->base;
-			end = start + region->size;
+		nid = memblock_get_region_node(region);
+		start = region->base;
+		end = start + region->size;
 
-			reserve_bootmem_region(start, end, nid);
-		}
+		reserve_bootmem_region(start, end, nid);
 	}
 }
 

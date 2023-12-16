@@ -10,8 +10,9 @@
 #include <linux/percpu.h>
 #include <linux/types.h>
 #include <linux/export.h>
-#include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/pgtable.h>
 
 #include <asm/io.h>

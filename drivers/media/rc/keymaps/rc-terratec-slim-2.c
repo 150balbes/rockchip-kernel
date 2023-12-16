@@ -58,4 +58,3 @@ module_exit(exit_rc_map_terratec_slim_2)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Antti Palosaari <crope@iki.fi>");
-MODULE_DESCRIPTION("TerraTec slim remote controller keytable");

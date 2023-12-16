@@ -7,7 +7,7 @@
 #include <linux/interconnect-provider.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/slab.h>
 
 #include "bcm-voter.h"
@@ -185,7 +185,6 @@ int qcom_icc_rpmh_probe(struct platform_device *pdev)
 	data = devm_kzalloc(dev, struct_size(data, nodes, num_nodes), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
-	data->num_nodes = num_nodes;
 
 	provider = &qp->provider;
 	provider->dev = dev;
@@ -229,6 +228,8 @@ int qcom_icc_rpmh_probe(struct platform_device *pdev)
 		data->nodes[i] = node;
 	}
 
+	data->num_nodes = num_nodes;
+
 	ret = icc_provider_register(provider);
 	if (ret)
 		goto err_remove_nodes;
@@ -253,12 +254,14 @@ err_remove_nodes:
 }
 EXPORT_SYMBOL_GPL(qcom_icc_rpmh_probe);
 
-void qcom_icc_rpmh_remove(struct platform_device *pdev)
+int qcom_icc_rpmh_remove(struct platform_device *pdev)
 {
 	struct qcom_icc_provider *qp = platform_get_drvdata(pdev);
 
 	icc_provider_deregister(&qp->provider);
 	icc_nodes_remove(&qp->provider);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(qcom_icc_rpmh_remove);
 

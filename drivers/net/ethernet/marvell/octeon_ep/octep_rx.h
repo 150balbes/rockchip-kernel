@@ -20,7 +20,6 @@ struct octep_oq_desc_hw {
 	dma_addr_t buffer_ptr;
 	u64 info_ptr;
 };
-static_assert(sizeof(struct octep_oq_desc_hw) == 16);
 
 #define OCTEP_OQ_DESC_SIZE    (sizeof(struct octep_oq_desc_hw))
 
@@ -40,7 +39,6 @@ struct octep_oq_resp_hw_ext {
 	/* checksum verified. */
 	u64 csum_verified:2;
 };
-static_assert(sizeof(struct octep_oq_resp_hw_ext) == 8);
 
 #define  OCTEP_OQ_RESP_HW_EXT_SIZE   (sizeof(struct octep_oq_resp_hw_ext))
 
@@ -52,7 +50,6 @@ struct octep_oq_resp_hw {
 	/* The Length of the packet. */
 	__be64 length;
 };
-static_assert(sizeof(struct octep_oq_resp_hw) == 8);
 
 #define OCTEP_OQ_RESP_HW_SIZE   (sizeof(struct octep_oq_resp_hw))
 

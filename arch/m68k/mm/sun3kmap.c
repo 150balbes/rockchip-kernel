@@ -18,9 +18,11 @@
 #include <asm/io.h>
 #include <asm/sun3mmu.h>
 
-#include "../sun3/sun3.h"
-
 #undef SUN3_KMAP_DEBUG
+
+#ifdef SUN3_KMAP_DEBUG
+extern void print_pte_vaddr(unsigned long vaddr);
+#endif
 
 extern void mmu_emu_map_pmeg (int context, int vaddr);
 

@@ -44,6 +44,10 @@
 #define ITS_FLAGS_WORKAROUND_CAVIUM_23144	(1ULL << 2)
 #define ITS_FLAGS_FORCE_NON_SHAREABLE		(1ULL << 3)
 
+#define RDIST_FLAGS_PROPBASE_NEEDS_FLUSHING	(1 << 0)
+#define RDIST_FLAGS_RD_TABLES_PREALLOCATED	(1 << 1)
+#define RDIST_FLAGS_FORCE_NON_SHAREABLE		(1 << 2)
+
 #define RD_LOCAL_LPI_ENABLED                    BIT(0)
 #define RD_LOCAL_PENDTABLE_PREALLOCATED         BIT(1)
 #define RD_LOCAL_MEMRESERVE_DONE                BIT(2)
@@ -269,23 +273,13 @@ static void vpe_to_cpuid_unlock(struct its_vpe *vpe, unsigned long flags)
 	raw_spin_unlock_irqrestore(&vpe->vpe_lock, flags);
 }
 
-static struct irq_chip its_vpe_irq_chip;
-
 static int irq_to_cpuid_lock(struct irq_data *d, unsigned long *flags)
 {
-	struct its_vpe *vpe = NULL;
+	struct its_vlpi_map *map = get_vlpi_map(d);
 	int cpu;
 
-	if (d->chip == &its_vpe_irq_chip) {
-		vpe = irq_data_get_irq_chip_data(d);
-	} else {
-		struct its_vlpi_map *map = get_vlpi_map(d);
-		if (map)
-			vpe = map->vpe;
-	}
-
-	if (vpe) {
-		cpu = vpe_to_cpuid_lock(vpe, flags);
+	if (map) {
+		cpu = vpe_to_cpuid_lock(map->vpe, flags);
 	} else {
 		/* Physical LPIs are already locked via the irq_desc lock */
 		struct its_device *its_dev = irq_data_get_irq_chip_data(d);
@@ -299,18 +293,10 @@ static int irq_to_cpuid_lock(struct irq_data *d, unsigned long *flags)
 
 static void irq_to_cpuid_unlock(struct irq_data *d, unsigned long flags)
 {
-	struct its_vpe *vpe = NULL;
+	struct its_vlpi_map *map = get_vlpi_map(d);
 
-	if (d->chip == &its_vpe_irq_chip) {
-		vpe = irq_data_get_irq_chip_data(d);
-	} else {
-		struct its_vlpi_map *map = get_vlpi_map(d);
-		if (map)
-			vpe = map->vpe;
-	}
-
-	if (vpe)
-		vpe_to_cpuid_unlock(vpe, flags);
+	if (map)
+		vpe_to_cpuid_unlock(map->vpe, flags);
 }
 
 static struct its_collection *valid_col(struct its_collection *col)
@@ -1447,28 +1433,13 @@ static void wait_for_syncr(void __iomem *rdbase)
 		cpu_relax();
 }
 
-static void __direct_lpi_inv(struct irq_data *d, u64 val)
-{
-	void __iomem *rdbase;
-	unsigned long flags;
-	int cpu;
-
-	/* Target the redistributor this LPI is currently routed to */
-	cpu = irq_to_cpuid_lock(d, &flags);
-	raw_spin_lock(&gic_data_rdist_cpu(cpu)->rd_lock);
-
-	rdbase = per_cpu_ptr(gic_rdists->rdist, cpu)->rd_base;
-	gic_write_lpir(val, rdbase + GICR_INVLPIR);
-	wait_for_syncr(rdbase);
-
-	raw_spin_unlock(&gic_data_rdist_cpu(cpu)->rd_lock);
-	irq_to_cpuid_unlock(d, flags);
-}
-
 static void direct_lpi_inv(struct irq_data *d)
 {
 	struct its_vlpi_map *map = get_vlpi_map(d);
+	void __iomem *rdbase;
+	unsigned long flags;
 	u64 val;
+	int cpu;
 
 	if (map) {
 		struct its_device *its_dev = irq_data_get_irq_chip_data(d);
@@ -1482,7 +1453,15 @@ static void direct_lpi_inv(struct irq_data *d)
 		val = d->hwirq;
 	}
 
-	__direct_lpi_inv(d, val);
+	/* Target the redistributor this LPI is currently routed to */
+	cpu = irq_to_cpuid_lock(d, &flags);
+	raw_spin_lock(&gic_data_rdist_cpu(cpu)->rd_lock);
+	rdbase = per_cpu_ptr(gic_rdists->rdist, cpu)->rd_base;
+	gic_write_lpir(val, rdbase + GICR_INVLPIR);
+
+	wait_for_syncr(rdbase);
+	raw_spin_unlock(&gic_data_rdist_cpu(cpu)->rd_lock);
+	irq_to_cpuid_unlock(d, flags);
 }
 
 static void lpi_update_config(struct irq_data *d, u8 clr, u8 set)
@@ -2379,11 +2358,11 @@ retry_baser:
 		break;
 	}
 
-	if (!shr)
-		gic_flush_dcache_to_poc(base, PAGE_ORDER_TO_SIZE(order));
-
 	its_write_baser(its, baser, val);
 	tmp = baser->val;
+
+	if (its->flags & ITS_FLAGS_FORCE_NON_SHAREABLE)
+		tmp &= ~GITS_BASER_SHAREABILITY_MASK;
 
 	if ((val ^ tmp) & GITS_BASER_SHAREABILITY_MASK) {
 		/*
@@ -2394,9 +2373,10 @@ retry_baser:
 		 * non-cacheable as well.
 		 */
 		shr = tmp & GITS_BASER_SHAREABILITY_MASK;
-		if (!shr)
+		if (!shr) {
 			cache = GITS_BASER_nC;
-
+			gic_flush_dcache_to_poc(base, PAGE_ORDER_TO_SIZE(order));
+		}
 		goto retry_baser;
 	}
 
@@ -2607,11 +2587,6 @@ static int its_alloc_tables(struct its_node *its)
 	if (its->flags & ITS_FLAGS_WORKAROUND_CAVIUM_22375)
 		/* erratum 24313: ignore memory access type */
 		cache = GITS_BASER_nCnB;
-
-	if (its->flags & ITS_FLAGS_FORCE_NON_SHAREABLE) {
-		cache = GITS_BASER_nC;
-		shr = 0;
-	}
 
 	for (i = 0; i < GITS_BASER_NR_REGS; i++) {
 		struct its_baser *baser = its->tables + i;
@@ -3978,10 +3953,18 @@ static void its_vpe_send_inv(struct irq_data *d)
 {
 	struct its_vpe *vpe = irq_data_get_irq_chip_data(d);
 
-	if (gic_rdists->has_direct_lpi)
-		__direct_lpi_inv(d, d->parent_data->hwirq);
-	else
+	if (gic_rdists->has_direct_lpi) {
+		void __iomem *rdbase;
+
+		/* Target the redistributor this VPE is currently known on */
+		raw_spin_lock(&gic_data_rdist_cpu(vpe->col_idx)->rd_lock);
+		rdbase = per_cpu_ptr(gic_rdists->rdist, vpe->col_idx)->rd_base;
+		gic_write_lpir(d->parent_data->hwirq, rdbase + GICR_INVLPIR);
+		wait_for_syncr(rdbase);
+		raw_spin_unlock(&gic_data_rdist_cpu(vpe->col_idx)->rd_lock);
+	} else {
 		its_vpe_send_cmd(vpe, its_send_inv);
+	}
 }
 
 static void its_vpe_mask_irq(struct irq_data *d)
@@ -4754,14 +4737,6 @@ static bool __maybe_unused its_enable_rk3588001(void *data)
 	return true;
 }
 
-static bool its_set_non_coherent(void *data)
-{
-	struct its_node *its = data;
-
-	its->flags |= ITS_FLAGS_FORCE_NON_SHAREABLE;
-	return true;
-}
-
 static const struct gic_quirk its_quirks[] = {
 #ifdef CONFIG_CAVIUM_ERRATUM_22375
 	{
@@ -4817,11 +4792,6 @@ static const struct gic_quirk its_quirks[] = {
 	},
 #endif
 	{
-		.desc   = "ITS: non-coherent attribute",
-		.property = "dma-noncoherent",
-		.init   = its_set_non_coherent,
-	},
-	{
 	}
 };
 
@@ -4830,10 +4800,6 @@ static void its_enable_quirks(struct its_node *its)
 	u32 iidr = readl_relaxed(its->base + GITS_IIDR);
 
 	gic_enable_quirks(iidr, its_quirks, its);
-
-	if (is_of_node(its->fwnode_handle))
-		gic_enable_of_quirks(to_of_node(its->fwnode_handle),
-				     its_quirks, its);
 }
 
 static int its_save_disable(void)
@@ -4969,7 +4935,7 @@ out_unmap:
 	return NULL;
 }
 
-static int its_init_domain(struct its_node *its)
+static int its_init_domain(struct fwnode_handle *handle, struct its_node *its)
 {
 	struct irq_domain *inner_domain;
 	struct msi_domain_info *info;
@@ -4983,7 +4949,7 @@ static int its_init_domain(struct its_node *its)
 
 	inner_domain = irq_domain_create_hierarchy(its_parent,
 						   its->msi_domain_flags, 0,
-						   its->fwnode_handle, &its_domain_ops,
+						   handle, &its_domain_ops,
 						   info);
 	if (!inner_domain) {
 		kfree(info);
@@ -5034,7 +5000,8 @@ static int its_init_vpe_domain(void)
 	return 0;
 }
 
-static int __init its_compute_its_list_map(struct its_node *its)
+static int __init its_compute_its_list_map(struct resource *res,
+					   void __iomem *its_base)
 {
 	int its_number;
 	u32 ctlr;
@@ -5048,15 +5015,15 @@ static int __init its_compute_its_list_map(struct its_node *its)
 	its_number = find_first_zero_bit(&its_list_map, GICv4_ITS_LIST_MAX);
 	if (its_number >= GICv4_ITS_LIST_MAX) {
 		pr_err("ITS@%pa: No ITSList entry available!\n",
-		       &its->phys_base);
+		       &res->start);
 		return -EINVAL;
 	}
 
-	ctlr = readl_relaxed(its->base + GITS_CTLR);
+	ctlr = readl_relaxed(its_base + GITS_CTLR);
 	ctlr &= ~GITS_CTLR_ITS_NUMBER;
 	ctlr |= its_number << GITS_CTLR_ITS_NUMBER_SHIFT;
-	writel_relaxed(ctlr, its->base + GITS_CTLR);
-	ctlr = readl_relaxed(its->base + GITS_CTLR);
+	writel_relaxed(ctlr, its_base + GITS_CTLR);
+	ctlr = readl_relaxed(its_base + GITS_CTLR);
 	if ((ctlr & GITS_CTLR_ITS_NUMBER) != (its_number << GITS_CTLR_ITS_NUMBER_SHIFT)) {
 		its_number = ctlr & GITS_CTLR_ITS_NUMBER;
 		its_number >>= GITS_CTLR_ITS_NUMBER_SHIFT;
@@ -5064,49 +5031,74 @@ static int __init its_compute_its_list_map(struct its_node *its)
 
 	if (test_and_set_bit(its_number, &its_list_map)) {
 		pr_err("ITS@%pa: Duplicate ITSList entry %d\n",
-		       &its->phys_base, its_number);
+		       &res->start, its_number);
 		return -EINVAL;
 	}
 
 	return its_number;
 }
 
-static int __init its_probe_one(struct its_node *its)
+static int __init its_probe_one(struct resource *res,
+				struct fwnode_handle *handle, int numa_node)
 {
-	u64 baser, tmp;
+	struct its_node *its;
+	void __iomem *its_base;
+	u64 baser, tmp, typer;
 	struct page *page;
 	u32 ctlr;
 	int err;
 
+	its_base = its_map_one(res, &err);
+	if (!its_base)
+		return err;
+
+	pr_info("ITS %pR\n", res);
+
+	its = kzalloc(sizeof(*its), GFP_KERNEL);
+	if (!its) {
+		err = -ENOMEM;
+		goto out_unmap;
+	}
+
+	raw_spin_lock_init(&its->lock);
+	mutex_init(&its->dev_alloc_lock);
+	INIT_LIST_HEAD(&its->entry);
+	INIT_LIST_HEAD(&its->its_device_list);
+	typer = gic_read_typer(its_base + GITS_TYPER);
+	its->typer = typer;
+	its->base = its_base;
+	its->phys_base = res->start;
 	if (is_v4(its)) {
-		if (!(its->typer & GITS_TYPER_VMOVP)) {
-			err = its_compute_its_list_map(its);
+		if (!(typer & GITS_TYPER_VMOVP)) {
+			err = its_compute_its_list_map(res, its_base);
 			if (err < 0)
-				goto out;
+				goto out_free_its;
 
 			its->list_nr = err;
 
 			pr_info("ITS@%pa: Using ITS number %d\n",
-				&its->phys_base, err);
+				&res->start, err);
 		} else {
-			pr_info("ITS@%pa: Single VMOVP capable\n", &its->phys_base);
+			pr_info("ITS@%pa: Single VMOVP capable\n", &res->start);
 		}
 
 		if (is_v4_1(its)) {
-			u32 svpet = FIELD_GET(GITS_TYPER_SVPET, its->typer);
+			u32 svpet = FIELD_GET(GITS_TYPER_SVPET, typer);
 
-			its->sgir_base = ioremap(its->phys_base + SZ_128K, SZ_64K);
+			its->sgir_base = ioremap(res->start + SZ_128K, SZ_64K);
 			if (!its->sgir_base) {
 				err = -ENOMEM;
-				goto out;
+				goto out_free_its;
 			}
 
-			its->mpidr = readl_relaxed(its->base + GITS_MPIDR);
+			its->mpidr = readl_relaxed(its_base + GITS_MPIDR);
 
 			pr_info("ITS@%pa: Using GICv4.1 mode %08x %08x\n",
-				&its->phys_base, its->mpidr, svpet);
+				&res->start, its->mpidr, svpet);
 		}
 	}
+
+	its->numa_node = numa_node;
 
 	page = alloc_pages_node(its->numa_node, GFP_KERNEL | __GFP_ZERO,
 				get_order(ITS_CMD_QUEUE_SZ));
@@ -5116,6 +5108,11 @@ static int __init its_probe_one(struct its_node *its)
 	}
 	its->cmd_base = (void *)page_address(page);
 	its->cmd_write = its->cmd_base;
+	its->fwnode_handle = handle;
+	its->get_msi_base = its_irq_get_msi_base;
+	its->msi_domain_flags = IRQ_DOMAIN_FLAG_ISOLATED_MSI;
+
+	its_enable_quirks(its);
 
 	err = its_alloc_tables(its);
 	if (err)
@@ -5160,7 +5157,7 @@ static int __init its_probe_one(struct its_node *its)
 		ctlr |= GITS_CTLR_ImDe;
 	writel_relaxed(ctlr, its->base + GITS_CTLR);
 
-	err = its_init_domain(its);
+	err = its_init_domain(handle, its);
 	if (err)
 		goto out_free_tables;
 
@@ -5177,8 +5174,11 @@ out_free_cmd:
 out_unmap_sgir:
 	if (its->sgir_base)
 		iounmap(its->sgir_base);
-out:
-	pr_err("ITS@%pa: failed probing (%d)\n", &its->phys_base, err);
+out_free_its:
+	kfree(its);
+out_unmap:
+	iounmap(its_base);
+	pr_err("ITS@%pa: failed probing (%d)\n", &res->start, err);
 	return err;
 }
 
@@ -5339,55 +5339,10 @@ static const struct of_device_id its_device_id[] = {
 	{},
 };
 
-static struct its_node __init *its_node_init(struct resource *res,
-					     struct fwnode_handle *handle, int numa_node)
-{
-	void __iomem *its_base;
-	struct its_node *its;
-	int err;
-
-	its_base = its_map_one(res, &err);
-	if (!its_base)
-		return NULL;
-
-	pr_info("ITS %pR\n", res);
-
-	its = kzalloc(sizeof(*its), GFP_KERNEL);
-	if (!its)
-		goto out_unmap;
-
-	raw_spin_lock_init(&its->lock);
-	mutex_init(&its->dev_alloc_lock);
-	INIT_LIST_HEAD(&its->entry);
-	INIT_LIST_HEAD(&its->its_device_list);
-
-	its->typer = gic_read_typer(its_base + GITS_TYPER);
-	its->base = its_base;
-	its->phys_base = res->start;
-	its->get_msi_base = its_irq_get_msi_base;
-	its->msi_domain_flags = IRQ_DOMAIN_FLAG_ISOLATED_MSI;
-
-	its->numa_node = numa_node;
-	its->fwnode_handle = handle;
-
-	return its;
-
-out_unmap:
-	iounmap(its_base);
-	return NULL;
-}
-
-static void its_node_destroy(struct its_node *its)
-{
-	iounmap(its->base);
-	kfree(its);
-}
-
 static int __init its_of_probe(struct device_node *node)
 {
 	struct device_node *np;
 	struct resource res;
-	int err;
 
 	/*
 	 * Make sure *all* the ITS are reset before we probe any, as
@@ -5397,6 +5352,8 @@ static int __init its_of_probe(struct device_node *node)
 	 */
 	for (np = of_find_matching_node(node, its_device_id); np;
 	     np = of_find_matching_node(np, its_device_id)) {
+		int err;
+
 		if (!of_device_is_available(np) ||
 		    !of_property_read_bool(np, "msi-controller") ||
 		    of_address_to_resource(np, 0, &res))
@@ -5409,8 +5366,6 @@ static int __init its_of_probe(struct device_node *node)
 
 	for (np = of_find_matching_node(node, its_device_id); np;
 	     np = of_find_matching_node(np, its_device_id)) {
-		struct its_node *its;
-
 		if (!of_device_is_available(np))
 			continue;
 		if (!of_property_read_bool(np, "msi-controller")) {
@@ -5424,17 +5379,7 @@ static int __init its_of_probe(struct device_node *node)
 			continue;
 		}
 
-
-		its = its_node_init(&res, &np->fwnode, of_node_to_nid(np));
-		if (!its)
-			return -ENOMEM;
-
-		its_enable_quirks(its);
-		err = its_probe_one(its);
-		if (err)  {
-			its_node_destroy(its);
-			return err;
-		}
+		its_probe_one(&res, &np->fwnode, of_node_to_nid(np));
 	}
 	return 0;
 }
@@ -5546,7 +5491,6 @@ static int __init gic_acpi_parse_madt_its(union acpi_subtable_headers *header,
 {
 	struct acpi_madt_generic_translator *its_entry;
 	struct fwnode_handle *dom_handle;
-	struct its_node *its;
 	struct resource res;
 	int err;
 
@@ -5571,18 +5515,11 @@ static int __init gic_acpi_parse_madt_its(union acpi_subtable_headers *header,
 		goto dom_err;
 	}
 
-	its = its_node_init(&res, dom_handle,
-			    acpi_get_its_numa_node(its_entry->translation_id));
-	if (!its) {
-		err = -ENOMEM;
-		goto node_err;
-	}
-
-	err = its_probe_one(its);
+	err = its_probe_one(&res, dom_handle,
+			acpi_get_its_numa_node(its_entry->translation_id));
 	if (!err)
 		return 0;
 
-node_err:
 	iort_deregister_domain_token(its_entry->translation_id);
 dom_err:
 	irq_domain_free_fwnode(dom_handle);

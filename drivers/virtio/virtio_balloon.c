@@ -111,7 +111,7 @@ struct virtio_balloon {
 	struct virtio_balloon_stat stats[VIRTIO_BALLOON_S_NR];
 
 	/* Shrinker to return free pages - VIRTIO_BALLOON_F_FREE_PAGE_HINT */
-	struct shrinker *shrinker;
+	struct shrinker shrinker;
 
 	/* OOM notifier to deflate on OOM - VIRTIO_BALLOON_F_DEFLATE_ON_OOM */
 	struct notifier_block oom_nb;
@@ -395,11 +395,7 @@ static inline s64 towards_target(struct virtio_balloon *vb)
 	virtio_cread_le(vb->vdev, struct virtio_balloon_config, num_pages,
 			&num_pages);
 
-	/*
-	 * Aligned up to guest page size to avoid inflating and deflating
-	 * balloon endlessly.
-	 */
-	target = ALIGN(num_pages, VIRTIO_BALLOON_PAGES_PER_PAGE);
+	target = num_pages;
 	return target - vb->num_pages;
 }
 
@@ -745,7 +741,7 @@ static void report_free_page_func(struct work_struct *work)
  *  2) update the host about the old page removed from vb->pages list;
  *
  * This function preforms the balloon page migration task.
- * Called through movable_operations->migrate_page
+ * Called through balloon_mapping->a_ops->migratepage
  */
 static int virtballoon_migratepage(struct balloon_dev_info *vb_dev_info,
 		struct page *newpage, struct page *page, enum migrate_mode mode)
@@ -820,7 +816,8 @@ static unsigned long shrink_free_pages(struct virtio_balloon *vb,
 static unsigned long virtio_balloon_shrinker_scan(struct shrinker *shrinker,
 						  struct shrink_control *sc)
 {
-	struct virtio_balloon *vb = shrinker->private_data;
+	struct virtio_balloon *vb = container_of(shrinker,
+					struct virtio_balloon, shrinker);
 
 	return shrink_free_pages(vb, sc->nr_to_scan);
 }
@@ -828,7 +825,8 @@ static unsigned long virtio_balloon_shrinker_scan(struct shrinker *shrinker,
 static unsigned long virtio_balloon_shrinker_count(struct shrinker *shrinker,
 						   struct shrink_control *sc)
 {
-	struct virtio_balloon *vb = shrinker->private_data;
+	struct virtio_balloon *vb = container_of(shrinker,
+					struct virtio_balloon, shrinker);
 
 	return vb->num_free_page_blocks * VIRTIO_BALLOON_HINT_BLOCK_PAGES;
 }
@@ -849,22 +847,16 @@ static int virtio_balloon_oom_notify(struct notifier_block *nb,
 
 static void virtio_balloon_unregister_shrinker(struct virtio_balloon *vb)
 {
-	shrinker_free(vb->shrinker);
+	unregister_shrinker(&vb->shrinker);
 }
 
 static int virtio_balloon_register_shrinker(struct virtio_balloon *vb)
 {
-	vb->shrinker = shrinker_alloc(0, "virtio-balloon");
-	if (!vb->shrinker)
-		return -ENOMEM;
+	vb->shrinker.scan_objects = virtio_balloon_shrinker_scan;
+	vb->shrinker.count_objects = virtio_balloon_shrinker_count;
+	vb->shrinker.seeks = DEFAULT_SEEKS;
 
-	vb->shrinker->scan_objects = virtio_balloon_shrinker_scan;
-	vb->shrinker->count_objects = virtio_balloon_shrinker_count;
-	vb->shrinker->private_data = vb;
-
-	shrinker_register(vb->shrinker);
-
-	return 0;
+	return register_shrinker(&vb->shrinker, "virtio-balloon");
 }
 
 static int virtballoon_probe(struct virtio_device *vdev)

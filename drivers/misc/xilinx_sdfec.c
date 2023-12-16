@@ -15,8 +15,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
@@ -1348,6 +1347,7 @@ static int xsdfec_probe(struct platform_device *pdev)
 {
 	struct xsdfec_dev *xsdfec;
 	struct device *dev;
+	struct resource *res;
 	int err;
 	bool irq_enabled = true;
 
@@ -1363,7 +1363,8 @@ static int xsdfec_probe(struct platform_device *pdev)
 		return err;
 
 	dev = xsdfec->dev;
-	xsdfec->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	xsdfec->regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(xsdfec->regs)) {
 		err = PTR_ERR(xsdfec->regs);
 		goto err_xsdfec_dev;

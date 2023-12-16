@@ -91,8 +91,6 @@ static int mei_cl_conn_status_to_errno(enum mei_cl_connect_status status)
  * @dev: mei device
  * @hdr: mei header
  * @data: payload
- *
- * Return: >=0 on success, <0 on error
  */
 static inline int mei_hbm_write_message(struct mei_device *dev,
 					struct mei_msg_hdr *hdr,
@@ -113,7 +111,7 @@ void mei_hbm_idle(struct mei_device *dev)
 }
 
 /**
- * mei_hbm_reset - reset hbm counters and book keeping data structures
+ * mei_hbm_reset - reset hbm counters and book keeping data structurs
  *
  * @dev: the device structure
  */
@@ -909,7 +907,7 @@ int mei_hbm_cl_disconnect_req(struct mei_device *dev, struct mei_cl *cl)
 }
 
 /**
- * mei_hbm_cl_disconnect_rsp - sends disconnect response to the FW
+ * mei_hbm_cl_disconnect_rsp - sends disconnect respose to the FW
  *
  * @dev: the device structure
  * @cl: a client to disconnect from

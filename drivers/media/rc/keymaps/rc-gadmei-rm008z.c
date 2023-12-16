@@ -75,4 +75,3 @@ module_exit(exit_rc_map_gadmei_rm008z)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("GADMEI UTV330+ RM008Z remote controller keytable");

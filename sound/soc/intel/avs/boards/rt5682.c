@@ -21,7 +21,6 @@
 #include <sound/soc-acpi.h>
 #include "../../common/soc-intel-quirks.h"
 #include "../../../codecs/rt5682.h"
-#include "../utils.h"
 
 #define AVS_RT5682_SSP_CODEC(quirk)	((quirk) & GENMASK(2, 0))
 #define AVS_RT5682_SSP_CODEC_MASK	(GENMASK(2, 0))
@@ -80,31 +79,14 @@ static const struct snd_soc_dapm_route card_base_routes[] = {
 	{ "IN1P", NULL, "Headset Mic" },
 };
 
-static struct snd_soc_jack_pin card_jack_pins[] = {
-	{
-		.pin = "Headphone Jack",
-		.mask = SND_JACK_HEADPHONE,
-	},
-	{
-		.pin = "Headset Mic",
-		.mask = SND_JACK_MICROPHONE,
-	},
-};
-
 static int avs_rt5682_codec_init(struct snd_soc_pcm_runtime *runtime)
 {
-	struct snd_soc_component *component = snd_soc_rtd_to_codec(runtime, 0)->component;
-	struct snd_soc_card *card = runtime->card;
-	struct snd_soc_jack_pin *pins;
+	struct snd_soc_component *component = asoc_rtd_to_codec(runtime, 0)->component;
 	struct snd_soc_jack *jack;
-	int num_pins, ret;
+	struct snd_soc_card *card = runtime->card;
+	int ret;
 
 	jack = snd_soc_card_get_drvdata(card);
-	num_pins = ARRAY_SIZE(card_jack_pins);
-
-	pins = devm_kmemdup(card->dev, card_jack_pins, sizeof(*pins) * num_pins, GFP_KERNEL);
-	if (!pins)
-		return -ENOMEM;
 
 	/* Need to enable ASRC function for 24MHz mclk rate */
 	if ((avs_rt5682_quirk & AVS_RT5682_MCLK_EN) &&
@@ -113,10 +95,12 @@ static int avs_rt5682_codec_init(struct snd_soc_pcm_runtime *runtime)
 					RT5682_AD_STEREO1_FILTER, RT5682_CLK_SEL_I2S1_ASRC);
 	}
 
-
-	ret = snd_soc_card_jack_new_pins(card, "Headset Jack", SND_JACK_HEADSET | SND_JACK_BTN_0 |
-					 SND_JACK_BTN_1 | SND_JACK_BTN_2 | SND_JACK_BTN_3, jack,
-					 pins, num_pins);
+	/*
+	 * Headset buttons map to the google Reference headset.
+	 * These can be configured by userspace.
+	 */
+	ret = snd_soc_card_jack_new(card, "Headset", SND_JACK_HEADSET | SND_JACK_BTN_0 |
+				    SND_JACK_BTN_1 | SND_JACK_BTN_2 | SND_JACK_BTN_3, jack);
 	if (ret) {
 		dev_err(card->dev, "Headset Jack creation failed: %d\n", ret);
 		return ret;
@@ -138,44 +122,47 @@ static int avs_rt5682_codec_init(struct snd_soc_pcm_runtime *runtime)
 
 static void avs_rt5682_codec_exit(struct snd_soc_pcm_runtime *rtd)
 {
-	snd_soc_component_set_jack(snd_soc_rtd_to_codec(rtd, 0)->component, NULL, NULL);
+	snd_soc_component_set_jack(asoc_rtd_to_codec(rtd, 0)->component, NULL, NULL);
 }
 
 static int
 avs_rt5682_hw_params(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *runtime = snd_soc_substream_to_rtd(substream);
-	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(runtime, 0);
-	int pll_source, freq_in, freq_out;
-	int ret;
+	struct snd_soc_pcm_runtime *runtime = asoc_substream_to_rtd(substream);
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(runtime, 0);
+	int clk_id, clk_freq;
+	int pll_out, ret;
 
 	if (avs_rt5682_quirk & AVS_RT5682_MCLK_EN) {
-		pll_source = RT5682_PLL1_S_MCLK;
+		clk_id = RT5682_PLL1_S_MCLK;
 		if (avs_rt5682_quirk & AVS_RT5682_MCLK_24MHZ)
-			freq_in = 24000000;
+			clk_freq = 24000000;
 		else
-			freq_in = 19200000;
+			clk_freq = 19200000;
 	} else {
-		pll_source = RT5682_PLL1_S_BCLK1;
-		freq_in = params_rate(params) * 50;
+		clk_id = RT5682_PLL1_S_BCLK1;
+		clk_freq = params_rate(params) * 50;
 	}
 
-	freq_out = params_rate(params) * 512;
+	pll_out = params_rate(params) * 512;
 
-	ret = snd_soc_dai_set_pll(codec_dai, RT5682_PLL1, pll_source, freq_in, freq_out);
+	ret = snd_soc_dai_set_pll(codec_dai, 0, clk_id, clk_freq, pll_out);
 	if (ret < 0)
-		dev_err(runtime->dev, "Set PLL failed: %d\n", ret);
+		dev_err(runtime->dev, "snd_soc_dai_set_pll err = %d\n", ret);
 
-	ret = snd_soc_dai_set_sysclk(codec_dai, RT5682_SCLK_S_PLL1, freq_out, SND_SOC_CLOCK_IN);
+	/* Configure sysclk for codec */
+	ret = snd_soc_dai_set_sysclk(codec_dai, RT5682_SCLK_S_PLL1, pll_out, SND_SOC_CLOCK_IN);
 	if (ret < 0)
-		dev_err(runtime->dev, "Set sysclk failed: %d\n", ret);
+		dev_err(runtime->dev, "snd_soc_dai_set_sysclk err = %d\n", ret);
 
-	/* slot_width should be equal or larger than data length. */
+	/* slot_width should equal or large than data length, set them be the same */
 	ret = snd_soc_dai_set_tdm_slot(codec_dai, 0x0, 0x0, 2, params_width(params));
-	if (ret < 0)
-		dev_err(runtime->dev, "Set TDM slot failed: %d\n", ret);
+	if (ret < 0) {
+		dev_err(runtime->dev, "set TDM slot err:%d\n", ret);
+		return ret;
+	}
 
-	return ret;
+	return 0;
 }
 
 static const struct snd_soc_ops avs_rt5682_ops = {
@@ -204,7 +191,7 @@ avs_rt5682_be_fixup(struct snd_soc_pcm_runtime *runtime, struct snd_pcm_hw_param
 }
 
 static int avs_create_dai_link(struct device *dev, const char *platform_name, int ssp_port,
-			       int tdm_slot, struct snd_soc_dai_link **dai_link)
+			       struct snd_soc_dai_link **dai_link)
 {
 	struct snd_soc_dai_link_component *platform;
 	struct snd_soc_dai_link *dl;
@@ -216,15 +203,13 @@ static int avs_create_dai_link(struct device *dev, const char *platform_name, in
 
 	platform->name = platform_name;
 
-	dl->name = devm_kasprintf(dev, GFP_KERNEL,
-				  AVS_STRING_FMT("SSP", "-Codec", ssp_port, tdm_slot));
+	dl->name = devm_kasprintf(dev, GFP_KERNEL, "SSP%d-Codec", ssp_port);
 	dl->cpus = devm_kzalloc(dev, sizeof(*dl->cpus), GFP_KERNEL);
 	dl->codecs = devm_kzalloc(dev, sizeof(*dl->codecs), GFP_KERNEL);
 	if (!dl->name || !dl->cpus || !dl->codecs)
 		return -ENOMEM;
 
-	dl->cpus->dai_name = devm_kasprintf(dev, GFP_KERNEL,
-					    AVS_STRING_FMT("SSP", " Pin", ssp_port, tdm_slot));
+	dl->cpus->dai_name = devm_kasprintf(dev, GFP_KERNEL, "SSP%d Pin", ssp_port);
 	dl->codecs->name = devm_kasprintf(dev, GFP_KERNEL, "i2c-10EC5682:00");
 	dl->codecs->dai_name = devm_kasprintf(dev, GFP_KERNEL, AVS_RT5682_CODEC_DAI_NAME);
 	if (!dl->cpus->dai_name || !dl->codecs->name || !dl->codecs->dai_name)
@@ -235,7 +220,6 @@ static int avs_create_dai_link(struct device *dev, const char *platform_name, in
 	dl->platforms = platform;
 	dl->num_platforms = 1;
 	dl->id = 0;
-	dl->dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBC_CFC;
 	dl->init = avs_rt5682_codec_init;
 	dl->exit = avs_rt5682_codec_exit;
 	dl->be_hw_params_fixup = avs_rt5682_be_fixup;
@@ -273,7 +257,7 @@ static int avs_rt5682_probe(struct platform_device *pdev)
 	struct snd_soc_jack *jack;
 	struct device *dev = &pdev->dev;
 	const char *pname;
-	int ssp_port, tdm_slot, ret;
+	int ssp_port, ret;
 
 	if (pdev->id_entry && pdev->id_entry->driver_data)
 		avs_rt5682_quirk = (unsigned long)pdev->id_entry->driver_data;
@@ -283,12 +267,9 @@ static int avs_rt5682_probe(struct platform_device *pdev)
 
 	mach = dev_get_platdata(dev);
 	pname = mach->mach_params.platform;
+	ssp_port = __ffs(mach->mach_params.i2s_link_mask);
 
-	ret = avs_mach_get_ssp_tdm(dev, mach, &ssp_port, &tdm_slot);
-	if (ret)
-		return ret;
-
-	ret = avs_create_dai_link(dev, pname, ssp_port, tdm_slot, &dai_link);
+	ret = avs_create_dai_link(dev, pname, ssp_port, &dai_link);
 	if (ret) {
 		dev_err(dev, "Failed to create dai link: %d", ret);
 		return ret;

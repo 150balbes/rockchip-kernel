@@ -562,25 +562,30 @@ static unsigned long shm_pagesize(struct vm_area_struct *vma)
 }
 
 #ifdef CONFIG_NUMA
-static int shm_set_policy(struct vm_area_struct *vma, struct mempolicy *mpol)
+static int shm_set_policy(struct vm_area_struct *vma, struct mempolicy *new)
 {
-	struct shm_file_data *sfd = shm_file_data(vma->vm_file);
+	struct file *file = vma->vm_file;
+	struct shm_file_data *sfd = shm_file_data(file);
 	int err = 0;
 
 	if (sfd->vm_ops->set_policy)
-		err = sfd->vm_ops->set_policy(vma, mpol);
+		err = sfd->vm_ops->set_policy(vma, new);
 	return err;
 }
 
 static struct mempolicy *shm_get_policy(struct vm_area_struct *vma,
-					unsigned long addr, pgoff_t *ilx)
+					unsigned long addr)
 {
-	struct shm_file_data *sfd = shm_file_data(vma->vm_file);
-	struct mempolicy *mpol = vma->vm_policy;
+	struct file *file = vma->vm_file;
+	struct shm_file_data *sfd = shm_file_data(file);
+	struct mempolicy *pol = NULL;
 
 	if (sfd->vm_ops->get_policy)
-		mpol = sfd->vm_ops->get_policy(vma, addr, ilx);
-	return mpol;
+		pol = sfd->vm_ops->get_policy(vma, addr);
+	else if (vma->vm_policy)
+		pol = vma->vm_policy;
+
+	return pol;
 }
 #endif
 
@@ -1657,7 +1662,7 @@ long do_shmat(int shmid, char __user *shmaddr, int shmflg,
 			goto invalid;
 	}
 
-	addr = do_mmap(file, addr, size, prot, flags, 0, 0, &populate, NULL);
+	addr = do_mmap(file, addr, size, prot, flags, 0, &populate, NULL);
 	*raddr = addr;
 	err = 0;
 	if (IS_ERR_VALUE(addr))

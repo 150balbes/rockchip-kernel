@@ -16,7 +16,6 @@
 #include "xfs_trans.h"
 #include "xfs_rtalloc.h"
 #include "xfs_error.h"
-#include "xfs_rtbitmap.h"
 
 /*
  * Realtime allocator bitmap functions shared with userspace.
@@ -47,69 +46,25 @@ const struct xfs_buf_ops xfs_rtbuf_ops = {
 	.verify_write = xfs_rtbuf_verify_write,
 };
 
-/* Release cached rt bitmap and summary buffers. */
-void
-xfs_rtbuf_cache_relse(
-	struct xfs_rtalloc_args	*args)
-{
-	if (args->rbmbp) {
-		xfs_trans_brelse(args->tp, args->rbmbp);
-		args->rbmbp = NULL;
-		args->rbmoff = NULLFILEOFF;
-	}
-	if (args->sumbp) {
-		xfs_trans_brelse(args->tp, args->sumbp);
-		args->sumbp = NULL;
-		args->sumoff = NULLFILEOFF;
-	}
-}
-
 /*
  * Get a buffer for the bitmap or summary file block specified.
  * The buffer is returned read and locked.
  */
 int
 xfs_rtbuf_get(
-	struct xfs_rtalloc_args	*args,
-	xfs_fileoff_t		block,	/* block number in bitmap or summary */
-	int			issum)	/* is summary not bitmap */
+	xfs_mount_t	*mp,		/* file system mount structure */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	block,		/* block number in bitmap or summary */
+	int		issum,		/* is summary not bitmap */
+	struct xfs_buf	**bpp)		/* output: buffer for the block */
 {
-	struct xfs_mount	*mp = args->mp;
-	struct xfs_buf		**cbpp;	/* cached block buffer */
-	xfs_fileoff_t		*coffp;	/* cached block number */
-	struct xfs_buf		*bp;	/* block buffer, result */
-	struct xfs_inode	*ip;	/* bitmap or summary inode */
-	struct xfs_bmbt_irec	map;
-	enum xfs_blft		type;
-	int			nmap = 1;
-	int			error;
+	struct xfs_buf	*bp;		/* block buffer, result */
+	xfs_inode_t	*ip;		/* bitmap or summary inode */
+	xfs_bmbt_irec_t	map;
+	int		nmap = 1;
+	int		error;		/* error value */
 
-	if (issum) {
-		cbpp = &args->sumbp;
-		coffp = &args->sumoff;
-		ip = mp->m_rsumip;
-		type = XFS_BLFT_RTSUMMARY_BUF;
-	} else {
-		cbpp = &args->rbmbp;
-		coffp = &args->rbmoff;
-		ip = mp->m_rbmip;
-		type = XFS_BLFT_RTBITMAP_BUF;
-	}
-
-	/*
-	 * If we have a cached buffer, and the block number matches, use that.
-	 */
-	if (*cbpp && *coffp == block)
-		return 0;
-
-	/*
-	 * Otherwise we have to have to get the buffer.  If there was an old
-	 * one, get rid of it first.
-	 */
-	if (*cbpp) {
-		xfs_trans_brelse(args->tp, *cbpp);
-		*cbpp = NULL;
-	}
+	ip = issum ? mp->m_rsumip : mp->m_rbmip;
 
 	error = xfs_bmapi_read(ip, block, 1, &map, &nmap, 0);
 	if (error)
@@ -119,15 +74,15 @@ xfs_rtbuf_get(
 		return -EFSCORRUPTED;
 
 	ASSERT(map.br_startblock != NULLFSBLOCK);
-	error = xfs_trans_read_buf(mp, args->tp, mp->m_ddev_targp,
+	error = xfs_trans_read_buf(mp, tp, mp->m_ddev_targp,
 				   XFS_FSB_TO_DADDR(mp, map.br_startblock),
 				   mp->m_bsize, 0, &bp, &xfs_rtbuf_ops);
 	if (error)
 		return error;
 
-	xfs_trans_buf_set_type(args->tp, bp, type);
-	*cbpp = bp;
-	*coffp = block;
+	xfs_trans_buf_set_type(tp, bp, issum ? XFS_BLFT_RTSUMMARY_BUF
+					     : XFS_BLFT_RTBITMAP_BUF);
+	*bpp = bp;
 	return 0;
 }
 
@@ -137,44 +92,47 @@ xfs_rtbuf_get(
  */
 int
 xfs_rtfind_back(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext to look at */
-	xfs_rtxnum_t		limit,	/* last rtext to look at */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext found */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* starting block to look at */
+	xfs_rtblock_t	limit,		/* last block to look at */
+	xfs_rtblock_t	*rtblock)	/* out: start block found */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			bit;	/* bit number in the word */
-	xfs_fileoff_t		block;	/* bitmap block number */
-	int			error;	/* error value */
-	xfs_rtxnum_t		firstbit; /* first useful bit in the word */
-	xfs_rtxnum_t		i;	/* current bit number rel. to start */
-	xfs_rtxnum_t		len;	/* length of inspected area */
-	xfs_rtword_t		mask;	/* mask of relevant bits for value */
-	xfs_rtword_t		want;	/* mask for "good" values */
-	xfs_rtword_t		wdiff;	/* difference from wanted value */
-	xfs_rtword_t		incore;
-	unsigned int		word;	/* word number in the buffer */
+	xfs_rtword_t	*b;		/* current word in buffer */
+	int		bit;		/* bit number in the word */
+	xfs_rtblock_t	block;		/* bitmap block number */
+	struct xfs_buf	*bp;		/* buf for the block */
+	xfs_rtword_t	*bufp;		/* starting word in buffer */
+	int		error;		/* error value */
+	xfs_rtblock_t	firstbit;	/* first useful bit in the word */
+	xfs_rtblock_t	i;		/* current bit number rel. to start */
+	xfs_rtblock_t	len;		/* length of inspected area */
+	xfs_rtword_t	mask;		/* mask of relevant bits for value */
+	xfs_rtword_t	want;		/* mask for "good" values */
+	xfs_rtword_t	wdiff;		/* difference from wanted value */
+	int		word;		/* word number in the buffer */
 
 	/*
 	 * Compute and read in starting bitmap block for starting block.
 	 */
-	block = xfs_rtx_to_rbmblock(mp, start);
-	error = xfs_rtbitmap_read_buf(args, block);
-	if (error)
+	block = XFS_BITTOBLOCK(mp, start);
+	error = xfs_rtbuf_get(mp, tp, block, 0, &bp);
+	if (error) {
 		return error;
-
+	}
+	bufp = bp->b_addr;
 	/*
 	 * Get the first word's index & point to it.
 	 */
-	word = xfs_rtx_to_rbmword(mp, start);
+	word = XFS_BITTOWORD(mp, start);
+	b = &bufp[word];
 	bit = (int)(start & (XFS_NBWORD - 1));
 	len = start - limit + 1;
 	/*
 	 * Compute match value, based on the bit at start: if 1 (free)
 	 * then all-ones, else all-zeroes.
 	 */
-	incore = xfs_rtbitmap_getword(args, word);
-	want = (incore & ((xfs_rtword_t)1 << bit)) ? -1 : 0;
+	want = (*b & ((xfs_rtword_t)1 << bit)) ? -1 : 0;
 	/*
 	 * If the starting position is not word-aligned, deal with the
 	 * partial word.
@@ -191,12 +149,13 @@ xfs_rtfind_back(
 		 * Calculate the difference between the value there
 		 * and what we're looking for.
 		 */
-		if ((wdiff = (incore ^ want) & mask)) {
+		if ((wdiff = (*b ^ want) & mask)) {
 			/*
 			 * Different.  Mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i = bit - XFS_RTHIBIT(wdiff);
-			*rtx = start - i + 1;
+			*rtblock = start - i + 1;
 			return 0;
 		}
 		i = bit - firstbit + 1;
@@ -208,11 +167,19 @@ xfs_rtfind_back(
 			/*
 			 * If done with this block, get the previous one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, --block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, --block, 0, &bp);
+			if (error) {
 				return error;
-
-			word = mp->m_blockwsize - 1;
+			}
+			bufp = bp->b_addr;
+			word = XFS_BLOCKWMASK(mp);
+			b = &bufp[word];
+		} else {
+			/*
+			 * Go on to the previous word in the buffer.
+			 */
+			b--;
 		}
 	} else {
 		/*
@@ -228,13 +195,13 @@ xfs_rtfind_back(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = incore ^ want)) {
+		if ((wdiff = *b ^ want)) {
 			/*
 			 * Different, mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_NBWORD - 1 - XFS_RTHIBIT(wdiff);
-			*rtx = start - i + 1;
+			*rtblock = start - i + 1;
 			return 0;
 		}
 		i += XFS_NBWORD;
@@ -246,11 +213,19 @@ xfs_rtfind_back(
 			/*
 			 * If done with this block, get the previous one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, --block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, --block, 0, &bp);
+			if (error) {
 				return error;
-
-			word = mp->m_blockwsize - 1;
+			}
+			bufp = bp->b_addr;
+			word = XFS_BLOCKWMASK(mp);
+			b = &bufp[word];
+		} else {
+			/*
+			 * Go on to the previous word in the buffer.
+			 */
+			b--;
 		}
 	}
 	/*
@@ -267,13 +242,13 @@ xfs_rtfind_back(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = (incore ^ want) & mask)) {
+		if ((wdiff = (*b ^ want) & mask)) {
 			/*
 			 * Different, mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_NBWORD - 1 - XFS_RTHIBIT(wdiff);
-			*rtx = start - i + 1;
+			*rtblock = start - i + 1;
 			return 0;
 		} else
 			i = len;
@@ -281,7 +256,8 @@ xfs_rtfind_back(
 	/*
 	 * No match, return that we scanned the whole area.
 	 */
-	*rtx = start - i + 1;
+	xfs_trans_brelse(tp, bp);
+	*rtblock = start - i + 1;
 	return 0;
 }
 
@@ -291,44 +267,47 @@ xfs_rtfind_back(
  */
 int
 xfs_rtfind_forw(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext to look at */
-	xfs_rtxnum_t		limit,	/* last rtext to look at */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext found */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* starting block to look at */
+	xfs_rtblock_t	limit,		/* last block to look at */
+	xfs_rtblock_t	*rtblock)	/* out: start block found */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			bit;	/* bit number in the word */
-	xfs_fileoff_t		block;	/* bitmap block number */
-	int			error;
-	xfs_rtxnum_t		i;	/* current bit number rel. to start */
-	xfs_rtxnum_t		lastbit;/* last useful bit in the word */
-	xfs_rtxnum_t		len;	/* length of inspected area */
-	xfs_rtword_t		mask;	/* mask of relevant bits for value */
-	xfs_rtword_t		want;	/* mask for "good" values */
-	xfs_rtword_t		wdiff;	/* difference from wanted value */
-	xfs_rtword_t		incore;
-	unsigned int		word;	/* word number in the buffer */
+	xfs_rtword_t	*b;		/* current word in buffer */
+	int		bit;		/* bit number in the word */
+	xfs_rtblock_t	block;		/* bitmap block number */
+	struct xfs_buf	*bp;		/* buf for the block */
+	xfs_rtword_t	*bufp;		/* starting word in buffer */
+	int		error;		/* error value */
+	xfs_rtblock_t	i;		/* current bit number rel. to start */
+	xfs_rtblock_t	lastbit;	/* last useful bit in the word */
+	xfs_rtblock_t	len;		/* length of inspected area */
+	xfs_rtword_t	mask;		/* mask of relevant bits for value */
+	xfs_rtword_t	want;		/* mask for "good" values */
+	xfs_rtword_t	wdiff;		/* difference from wanted value */
+	int		word;		/* word number in the buffer */
 
 	/*
 	 * Compute and read in starting bitmap block for starting block.
 	 */
-	block = xfs_rtx_to_rbmblock(mp, start);
-	error = xfs_rtbitmap_read_buf(args, block);
-	if (error)
+	block = XFS_BITTOBLOCK(mp, start);
+	error = xfs_rtbuf_get(mp, tp, block, 0, &bp);
+	if (error) {
 		return error;
-
+	}
+	bufp = bp->b_addr;
 	/*
 	 * Get the first word's index & point to it.
 	 */
-	word = xfs_rtx_to_rbmword(mp, start);
+	word = XFS_BITTOWORD(mp, start);
+	b = &bufp[word];
 	bit = (int)(start & (XFS_NBWORD - 1));
 	len = limit - start + 1;
 	/*
 	 * Compute match value, based on the bit at start: if 1 (free)
 	 * then all-ones, else all-zeroes.
 	 */
-	incore = xfs_rtbitmap_getword(args, word);
-	want = (incore & ((xfs_rtword_t)1 << bit)) ? -1 : 0;
+	want = (*b & ((xfs_rtword_t)1 << bit)) ? -1 : 0;
 	/*
 	 * If the starting position is not word-aligned, deal with the
 	 * partial word.
@@ -344,12 +323,13 @@ xfs_rtfind_forw(
 		 * Calculate the difference between the value there
 		 * and what we're looking for.
 		 */
-		if ((wdiff = (incore ^ want) & mask)) {
+		if ((wdiff = (*b ^ want) & mask)) {
 			/*
 			 * Different.  Mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i = XFS_RTLOBIT(wdiff) - bit;
-			*rtx = start + i - 1;
+			*rtblock = start + i - 1;
 			return 0;
 		}
 		i = lastbit - bit;
@@ -357,15 +337,22 @@ xfs_rtfind_forw(
 		 * Go on to next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * If done with this block, get the previous one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
+			}
+			b = bufp = bp->b_addr;
 			word = 0;
+		} else {
+			/*
+			 * Go on to the previous word in the buffer.
+			 */
+			b++;
 		}
 	} else {
 		/*
@@ -381,13 +368,13 @@ xfs_rtfind_forw(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = incore ^ want)) {
+		if ((wdiff = *b ^ want)) {
 			/*
 			 * Different, mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_RTLOBIT(wdiff);
-			*rtx = start + i - 1;
+			*rtblock = start + i - 1;
 			return 0;
 		}
 		i += XFS_NBWORD;
@@ -395,15 +382,22 @@ xfs_rtfind_forw(
 		 * Go on to next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * If done with this block, get the next one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
+			}
+			b = bufp = bp->b_addr;
 			word = 0;
+		} else {
+			/*
+			 * Go on to the next word in the buffer.
+			 */
+			b++;
 		}
 	}
 	/*
@@ -418,13 +412,13 @@ xfs_rtfind_forw(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = (incore ^ want) & mask)) {
+		if ((wdiff = (*b ^ want) & mask)) {
 			/*
 			 * Different, mark where we are and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_RTLOBIT(wdiff);
-			*rtx = start + i - 1;
+			*rtblock = start + i - 1;
 			return 0;
 		} else
 			i = len;
@@ -432,23 +426,9 @@ xfs_rtfind_forw(
 	/*
 	 * No match, return that we scanned the whole area.
 	 */
-	*rtx = start + i - 1;
+	xfs_trans_brelse(tp, bp);
+	*rtblock = start + i - 1;
 	return 0;
-}
-
-/* Log rtsummary counter at @infoword. */
-static inline void
-xfs_trans_log_rtsummary(
-	struct xfs_rtalloc_args	*args,
-	unsigned int		infoword)
-{
-	struct xfs_buf		*bp = args->sumbp;
-	size_t			first, last;
-
-	first = (void *)xfs_rsumblock_infoptr(args, infoword) - bp->b_addr;
-	last = first + sizeof(xfs_suminfo_t) - 1;
-
-	xfs_trans_log_buf(args->tp, bp, first, last);
 }
 
 /*
@@ -462,77 +442,86 @@ xfs_trans_log_rtsummary(
  */
 int
 xfs_rtmodify_summary_int(
-	struct xfs_rtalloc_args	*args,
-	int			log,	/* log2 of extent size */
-	xfs_fileoff_t		bbno,	/* bitmap block number */
-	int			delta,	/* change to make to summary info */
-	xfs_suminfo_t		*sum)	/* out: summary info for this block */
+	xfs_mount_t	*mp,		/* file system mount structure */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	int		log,		/* log2 of extent size */
+	xfs_rtblock_t	bbno,		/* bitmap block number */
+	int		delta,		/* change to make to summary info */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_suminfo_t	*sum)		/* out: summary info for this block */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			error;
-	xfs_fileoff_t		sb;	/* summary fsblock */
-	xfs_rtsumoff_t		so;	/* index into the summary file */
-	unsigned int		infoword;
+	struct xfs_buf	*bp;		/* buffer for the summary block */
+	int		error;		/* error value */
+	xfs_fsblock_t	sb;		/* summary fsblock */
+	int		so;		/* index into the summary file */
+	xfs_suminfo_t	*sp;		/* pointer to returned data */
 
 	/*
 	 * Compute entry number in the summary file.
 	 */
-	so = xfs_rtsumoffs(mp, log, bbno);
+	so = XFS_SUMOFFS(mp, log, bbno);
 	/*
 	 * Compute the block number in the summary file.
 	 */
-	sb = xfs_rtsumoffs_to_block(mp, so);
-
-	error = xfs_rtsummary_read_buf(args, sb);
-	if (error)
-		return error;
-
+	sb = XFS_SUMOFFSTOBLOCK(mp, so);
+	/*
+	 * If we have an old buffer, and the block number matches, use that.
+	 */
+	if (*rbpp && *rsb == sb)
+		bp = *rbpp;
+	/*
+	 * Otherwise we have to get the buffer.
+	 */
+	else {
+		/*
+		 * If there was an old one, get rid of it first.
+		 */
+		if (*rbpp)
+			xfs_trans_brelse(tp, *rbpp);
+		error = xfs_rtbuf_get(mp, tp, sb, 1, &bp);
+		if (error) {
+			return error;
+		}
+		/*
+		 * Remember this buffer and block for the next call.
+		 */
+		*rbpp = bp;
+		*rsb = sb;
+	}
 	/*
 	 * Point to the summary information, modify/log it, and/or copy it out.
 	 */
-	infoword = xfs_rtsumoffs_to_infoword(mp, so);
+	sp = XFS_SUMPTR(mp, bp, so);
 	if (delta) {
-		xfs_suminfo_t	val = xfs_suminfo_add(args, infoword, delta);
+		uint first = (uint)((char *)sp - (char *)bp->b_addr);
 
+		*sp += delta;
 		if (mp->m_rsum_cache) {
-			if (val == 0 && log + 1 == mp->m_rsum_cache[bbno])
+			if (*sp == 0 && log == mp->m_rsum_cache[bbno])
+				mp->m_rsum_cache[bbno]++;
+			if (*sp != 0 && log < mp->m_rsum_cache[bbno])
 				mp->m_rsum_cache[bbno] = log;
-			if (val != 0 && log >= mp->m_rsum_cache[bbno])
-				mp->m_rsum_cache[bbno] = log + 1;
 		}
-		xfs_trans_log_rtsummary(args, infoword);
-		if (sum)
-			*sum = val;
-	} else if (sum) {
-		*sum = xfs_suminfo_get(args, infoword);
+		xfs_trans_log_buf(tp, bp, first, first + sizeof(*sp) - 1);
 	}
+	if (sum)
+		*sum = *sp;
 	return 0;
 }
 
 int
 xfs_rtmodify_summary(
-	struct xfs_rtalloc_args	*args,
-	int			log,	/* log2 of extent size */
-	xfs_fileoff_t		bbno,	/* bitmap block number */
-	int			delta)	/* in/out: summary block number */
+	xfs_mount_t	*mp,		/* file system mount structure */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	int		log,		/* log2 of extent size */
+	xfs_rtblock_t	bbno,		/* bitmap block number */
+	int		delta,		/* change to make to summary info */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb)		/* in/out: summary block number */
 {
-	return xfs_rtmodify_summary_int(args, log, bbno, delta, NULL);
-}
-
-/* Log rtbitmap block from the word @from to the byte before @next. */
-static inline void
-xfs_trans_log_rtbitmap(
-	struct xfs_rtalloc_args	*args,
-	unsigned int		from,
-	unsigned int		next)
-{
-	struct xfs_buf		*bp = args->rbmbp;
-	size_t			first, last;
-
-	first = (void *)xfs_rbmblock_wordptr(args, from) - bp->b_addr;
-	last = ((void *)xfs_rbmblock_wordptr(args, next) - 1) - bp->b_addr;
-
-	xfs_trans_log_buf(args->tp, bp, first, last);
+	return xfs_rtmodify_summary_int(mp, tp, log, bbno,
+					delta, rbpp, rsb, NULL);
 }
 
 /*
@@ -541,37 +530,41 @@ xfs_trans_log_rtbitmap(
  */
 int
 xfs_rtmodify_range(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext to modify */
-	xfs_rtxlen_t		len,	/* length of extent to modify */
-	int			val)	/* 1 for free, 0 for allocated */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* starting block to modify */
+	xfs_extlen_t	len,		/* length of extent to modify */
+	int		val)		/* 1 for free, 0 for allocated */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			bit;	/* bit number in the word */
-	xfs_fileoff_t		block;	/* bitmap block number */
-	int			error;
-	int			i;	/* current bit number rel. to start */
-	int			lastbit; /* last useful bit in word */
-	xfs_rtword_t		mask;	 /* mask of relevant bits for value */
-	xfs_rtword_t		incore;
-	unsigned int		firstword; /* first word used in the buffer */
-	unsigned int		word;	/* word number in the buffer */
+	xfs_rtword_t	*b;		/* current word in buffer */
+	int		bit;		/* bit number in the word */
+	xfs_rtblock_t	block;		/* bitmap block number */
+	struct xfs_buf	*bp;		/* buf for the block */
+	xfs_rtword_t	*bufp;		/* starting word in buffer */
+	int		error;		/* error value */
+	xfs_rtword_t	*first;		/* first used word in the buffer */
+	int		i;		/* current bit number rel. to start */
+	int		lastbit;	/* last useful bit in word */
+	xfs_rtword_t	mask;		/* mask o frelevant bits for value */
+	int		word;		/* word number in the buffer */
 
 	/*
 	 * Compute starting bitmap block number.
 	 */
-	block = xfs_rtx_to_rbmblock(mp, start);
+	block = XFS_BITTOBLOCK(mp, start);
 	/*
 	 * Read the bitmap block, and point to its data.
 	 */
-	error = xfs_rtbitmap_read_buf(args, block);
-	if (error)
+	error = xfs_rtbuf_get(mp, tp, block, 0, &bp);
+	if (error) {
 		return error;
-
+	}
+	bufp = bp->b_addr;
 	/*
 	 * Compute the starting word's address, and starting bit.
 	 */
-	firstword = word = xfs_rtx_to_rbmword(mp, start);
+	word = XFS_BITTOWORD(mp, start);
+	first = b = &bufp[word];
 	bit = (int)(start & (XFS_NBWORD - 1));
 	/*
 	 * 0 (allocated) => all zeroes; 1 (free) => all ones.
@@ -590,28 +583,34 @@ xfs_rtmodify_range(
 		/*
 		 * Set/clear the active bits.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
 		if (val)
-			incore |= mask;
+			*b |= mask;
 		else
-			incore &= ~mask;
-		xfs_rtbitmap_setword(args, word, incore);
+			*b &= ~mask;
 		i = lastbit - bit;
 		/*
 		 * Go on to the next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * Log the changed part of this block.
 			 * Get the next one.
 			 */
-			xfs_trans_log_rtbitmap(args, firstword, word);
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_log_buf(tp, bp,
+				(uint)((char *)first - (char *)bufp),
+				(uint)((char *)b - (char *)bufp));
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
-			firstword = word = 0;
+			}
+			first = b = bufp = bp->b_addr;
+			word = 0;
+		} else {
+			/*
+			 * Go on to the next word in the buffer
+			 */
+			b++;
 		}
 	} else {
 		/*
@@ -627,23 +626,31 @@ xfs_rtmodify_range(
 		/*
 		 * Set the word value correctly.
 		 */
-		xfs_rtbitmap_setword(args, word, val);
+		*b = val;
 		i += XFS_NBWORD;
 		/*
 		 * Go on to the next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * Log the changed part of this block.
 			 * Get the next one.
 			 */
-			xfs_trans_log_rtbitmap(args, firstword, word);
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_log_buf(tp, bp,
+				(uint)((char *)first - (char *)bufp),
+				(uint)((char *)b - (char *)bufp));
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
-			firstword = word = 0;
+			}
+			first = b = bufp = bp->b_addr;
+			word = 0;
+		} else {
+			/*
+			 * Go on to the next word in the buffer
+			 */
+			b++;
 		}
 	}
 	/*
@@ -658,19 +665,18 @@ xfs_rtmodify_range(
 		/*
 		 * Set/clear the active bits.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
 		if (val)
-			incore |= mask;
+			*b |= mask;
 		else
-			incore &= ~mask;
-		xfs_rtbitmap_setword(args, word, incore);
-		word++;
+			*b &= ~mask;
+		b++;
 	}
 	/*
 	 * Log any remaining changed bytes.
 	 */
-	if (word > firstword)
-		xfs_trans_log_rtbitmap(args, firstword, word);
+	if (b > first)
+		xfs_trans_log_buf(tp, bp, (uint)((char *)first - (char *)bufp),
+			(uint)((char *)b - (char *)bufp - 1));
 	return 0;
 }
 
@@ -680,21 +686,23 @@ xfs_rtmodify_range(
  */
 int
 xfs_rtfree_range(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext to free */
-	xfs_rtxlen_t		len)	/* in/out: summary block number */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* starting block to free */
+	xfs_extlen_t	len,		/* length to free */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb)		/* in/out: summary block number */
 {
-	struct xfs_mount	*mp = args->mp;
-	xfs_rtxnum_t		end;	/* end of the freed extent */
-	int			error;	/* error value */
-	xfs_rtxnum_t		postblock; /* first rtext freed > end */
-	xfs_rtxnum_t		preblock;  /* first rtext freed < start */
+	xfs_rtblock_t	end;		/* end of the freed extent */
+	int		error;		/* error value */
+	xfs_rtblock_t	postblock;	/* first block freed > end */
+	xfs_rtblock_t	preblock;	/* first block freed < start */
 
 	end = start + len - 1;
 	/*
 	 * Modify the bitmap to mark this extent freed.
 	 */
-	error = xfs_rtmodify_range(args, start, len, 1);
+	error = xfs_rtmodify_range(mp, tp, start, len, 1);
 	if (error) {
 		return error;
 	}
@@ -703,15 +711,15 @@ xfs_rtfree_range(
 	 * We need to find the beginning and end of the extent so we can
 	 * properly update the summary.
 	 */
-	error = xfs_rtfind_back(args, start, 0, &preblock);
+	error = xfs_rtfind_back(mp, tp, start, 0, &preblock);
 	if (error) {
 		return error;
 	}
 	/*
 	 * Find the next allocated block (end of allocated extent).
 	 */
-	error = xfs_rtfind_forw(args, end, mp->m_sb.sb_rextents - 1,
-			&postblock);
+	error = xfs_rtfind_forw(mp, tp, end, mp->m_sb.sb_rextents - 1,
+		&postblock);
 	if (error)
 		return error;
 	/*
@@ -719,9 +727,9 @@ xfs_rtfree_range(
 	 * old extent, add summary data for them to be allocated.
 	 */
 	if (preblock < start) {
-		error = xfs_rtmodify_summary(args,
-				XFS_RTBLOCKLOG(start - preblock),
-				xfs_rtx_to_rbmblock(mp, preblock), -1);
+		error = xfs_rtmodify_summary(mp, tp,
+			XFS_RTBLOCKLOG(start - preblock),
+			XFS_BITTOBLOCK(mp, preblock), -1, rbpp, rsb);
 		if (error) {
 			return error;
 		}
@@ -731,9 +739,9 @@ xfs_rtfree_range(
 	 * old extent, add summary data for them to be allocated.
 	 */
 	if (postblock > end) {
-		error = xfs_rtmodify_summary(args,
-				XFS_RTBLOCKLOG(postblock - end),
-				xfs_rtx_to_rbmblock(mp, end + 1), -1);
+		error = xfs_rtmodify_summary(mp, tp,
+			XFS_RTBLOCKLOG(postblock - end),
+			XFS_BITTOBLOCK(mp, end + 1), -1, rbpp, rsb);
 		if (error) {
 			return error;
 		}
@@ -742,9 +750,10 @@ xfs_rtfree_range(
 	 * Increment the summary information corresponding to the entire
 	 * (new) free extent.
 	 */
-	return xfs_rtmodify_summary(args,
-			XFS_RTBLOCKLOG(postblock + 1 - preblock),
-			xfs_rtx_to_rbmblock(mp, preblock), 1);
+	error = xfs_rtmodify_summary(mp, tp,
+		XFS_RTBLOCKLOG(postblock + 1 - preblock),
+		XFS_BITTOBLOCK(mp, preblock), 1, rbpp, rsb);
+	return error;
 }
 
 /*
@@ -753,39 +762,43 @@ xfs_rtfree_range(
  */
 int
 xfs_rtcheck_range(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext number of extent */
-	xfs_rtxlen_t		len,	/* length of extent */
-	int			val,	/* 1 for free, 0 for allocated */
-	xfs_rtxnum_t		*new,	/* out: first rtext not matching */
-	int			*stat)	/* out: 1 for matches, 0 for not */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* starting block number of extent */
+	xfs_extlen_t	len,		/* length of extent */
+	int		val,		/* 1 for free, 0 for allocated */
+	xfs_rtblock_t	*new,		/* out: first block not matching */
+	int		*stat)		/* out: 1 for matches, 0 for not */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			bit;	/* bit number in the word */
-	xfs_fileoff_t		block;	/* bitmap block number */
-	int			error;
-	xfs_rtxnum_t		i;	/* current bit number rel. to start */
-	xfs_rtxnum_t		lastbit; /* last useful bit in word */
-	xfs_rtword_t		mask;	/* mask of relevant bits for value */
-	xfs_rtword_t		wdiff;	/* difference from wanted value */
-	xfs_rtword_t		incore;
-	unsigned int		word;	/* word number in the buffer */
+	xfs_rtword_t	*b;		/* current word in buffer */
+	int		bit;		/* bit number in the word */
+	xfs_rtblock_t	block;		/* bitmap block number */
+	struct xfs_buf	*bp;		/* buf for the block */
+	xfs_rtword_t	*bufp;		/* starting word in buffer */
+	int		error;		/* error value */
+	xfs_rtblock_t	i;		/* current bit number rel. to start */
+	xfs_rtblock_t	lastbit;	/* last useful bit in word */
+	xfs_rtword_t	mask;		/* mask of relevant bits for value */
+	xfs_rtword_t	wdiff;		/* difference from wanted value */
+	int		word;		/* word number in the buffer */
 
 	/*
 	 * Compute starting bitmap block number
 	 */
-	block = xfs_rtx_to_rbmblock(mp, start);
+	block = XFS_BITTOBLOCK(mp, start);
 	/*
 	 * Read the bitmap block.
 	 */
-	error = xfs_rtbitmap_read_buf(args, block);
-	if (error)
+	error = xfs_rtbuf_get(mp, tp, block, 0, &bp);
+	if (error) {
 		return error;
-
+	}
+	bufp = bp->b_addr;
 	/*
 	 * Compute the starting word's address, and starting bit.
 	 */
-	word = xfs_rtx_to_rbmword(mp, start);
+	word = XFS_BITTOWORD(mp, start);
+	b = &bufp[word];
 	bit = (int)(start & (XFS_NBWORD - 1));
 	/*
 	 * 0 (allocated) => all zero's; 1 (free) => all one's.
@@ -807,11 +820,11 @@ xfs_rtcheck_range(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = (incore ^ val) & mask)) {
+		if ((wdiff = (*b ^ val) & mask)) {
 			/*
 			 * Different, compute first wrong bit and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i = XFS_RTLOBIT(wdiff) - bit;
 			*new = start + i;
 			*stat = 0;
@@ -822,15 +835,22 @@ xfs_rtcheck_range(
 		 * Go on to next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * If done with this block, get the next one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
+			}
+			b = bufp = bp->b_addr;
 			word = 0;
+		} else {
+			/*
+			 * Go on to the next word in the buffer.
+			 */
+			b++;
 		}
 	} else {
 		/*
@@ -846,11 +866,11 @@ xfs_rtcheck_range(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = incore ^ val)) {
+		if ((wdiff = *b ^ val)) {
 			/*
 			 * Different, compute first wrong bit and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_RTLOBIT(wdiff);
 			*new = start + i;
 			*stat = 0;
@@ -861,15 +881,22 @@ xfs_rtcheck_range(
 		 * Go on to next block if that's where the next word is
 		 * and we need the next word.
 		 */
-		if (++word == mp->m_blockwsize && i < len) {
+		if (++word == XFS_BLOCKWSIZE(mp) && i < len) {
 			/*
 			 * If done with this block, get the next one.
 			 */
-			error = xfs_rtbitmap_read_buf(args, ++block);
-			if (error)
+			xfs_trans_brelse(tp, bp);
+			error = xfs_rtbuf_get(mp, tp, ++block, 0, &bp);
+			if (error) {
 				return error;
-
+			}
+			b = bufp = bp->b_addr;
 			word = 0;
+		} else {
+			/*
+			 * Go on to the next word in the buffer.
+			 */
+			b++;
 		}
 	}
 	/*
@@ -884,11 +911,11 @@ xfs_rtcheck_range(
 		/*
 		 * Compute difference between actual and desired value.
 		 */
-		incore = xfs_rtbitmap_getword(args, word);
-		if ((wdiff = (incore ^ val) & mask)) {
+		if ((wdiff = (*b ^ val) & mask)) {
 			/*
 			 * Different, compute first wrong bit and return.
 			 */
+			xfs_trans_brelse(tp, bp);
 			i += XFS_RTLOBIT(wdiff);
 			*new = start + i;
 			*stat = 0;
@@ -899,6 +926,7 @@ xfs_rtcheck_range(
 	/*
 	 * Successful, return.
 	 */
+	xfs_trans_brelse(tp, bp);
 	*new = start + i;
 	*stat = 1;
 	return 0;
@@ -908,57 +936,57 @@ xfs_rtcheck_range(
 /*
  * Check that the given extent (block range) is allocated already.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtcheck_alloc_range(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext number of extent */
-	xfs_rtxlen_t		len)	/* length of extent */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bno,		/* starting block number of extent */
+	xfs_extlen_t	len)		/* length of extent */
 {
-	xfs_rtxnum_t		new;	/* dummy for xfs_rtcheck_range */
-	int			stat;
-	int			error;
+	xfs_rtblock_t	new;		/* dummy for xfs_rtcheck_range */
+	int		stat;
+	int		error;
 
-	error = xfs_rtcheck_range(args, start, len, 0, &new, &stat);
+	error = xfs_rtcheck_range(mp, tp, bno, len, 0, &new, &stat);
 	if (error)
 		return error;
 	ASSERT(stat);
 	return 0;
 }
 #else
-#define xfs_rtcheck_alloc_range(a,b,l)	(0)
+#define xfs_rtcheck_alloc_range(m,t,b,l)	(0)
 #endif
 /*
  * Free an extent in the realtime subvolume.  Length is expressed in
  * realtime extents, as is the block number.
  */
-int
+int					/* error */
 xfs_rtfree_extent(
-	struct xfs_trans	*tp,	/* transaction pointer */
-	xfs_rtxnum_t		start,	/* starting rtext number to free */
-	xfs_rtxlen_t		len)	/* length of extent freed */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bno,		/* starting block number to free */
+	xfs_extlen_t	len)		/* length of extent freed */
 {
-	struct xfs_mount	*mp = tp->t_mountp;
-	struct xfs_rtalloc_args	args = {
-		.mp		= mp,
-		.tp		= tp,
-	};
-	int			error;
-	struct timespec64	atime;
+	int		error;		/* error value */
+	xfs_mount_t	*mp;		/* file system mount structure */
+	xfs_fsblock_t	sb;		/* summary file block number */
+	struct xfs_buf	*sumbp = NULL;	/* summary file block buffer */
+
+	mp = tp->t_mountp;
 
 	ASSERT(mp->m_rbmip->i_itemp != NULL);
 	ASSERT(xfs_isilocked(mp->m_rbmip, XFS_ILOCK_EXCL));
 
-	error = xfs_rtcheck_alloc_range(&args, start, len);
+	error = xfs_rtcheck_alloc_range(mp, tp, bno, len);
 	if (error)
 		return error;
 
 	/*
 	 * Free the range of realtime blocks.
 	 */
-	error = xfs_rtfree_range(&args, start, len);
-	if (error)
-		goto out;
-
+	error = xfs_rtfree_range(mp, tp, bno, len, &sumbp, &sb);
+	if (error) {
+		return error;
+	}
 	/*
 	 * Mark more blocks free in the superblock.
 	 */
@@ -971,49 +999,10 @@ xfs_rtfree_extent(
 	    mp->m_sb.sb_rextents) {
 		if (!(mp->m_rbmip->i_diflags & XFS_DIFLAG_NEWRTBM))
 			mp->m_rbmip->i_diflags |= XFS_DIFLAG_NEWRTBM;
-
-		atime = inode_get_atime(VFS_I(mp->m_rbmip));
-		atime.tv_sec = 0;
-		inode_set_atime_to_ts(VFS_I(mp->m_rbmip), atime);
+		*(uint64_t *)&VFS_I(mp->m_rbmip)->i_atime = 0;
 		xfs_trans_log_inode(tp, mp->m_rbmip, XFS_ILOG_CORE);
 	}
-	error = 0;
-out:
-	xfs_rtbuf_cache_relse(&args);
-	return error;
-}
-
-/*
- * Free some blocks in the realtime subvolume.  rtbno and rtlen are in units of
- * rt blocks, not rt extents; must be aligned to the rt extent size; and rtlen
- * cannot exceed XFS_MAX_BMBT_EXTLEN.
- */
-int
-xfs_rtfree_blocks(
-	struct xfs_trans	*tp,
-	xfs_fsblock_t		rtbno,
-	xfs_filblks_t		rtlen)
-{
-	struct xfs_mount	*mp = tp->t_mountp;
-	xfs_rtxnum_t		start;
-	xfs_filblks_t		len;
-	xfs_extlen_t		mod;
-
-	ASSERT(rtlen <= XFS_MAX_BMBT_EXTLEN);
-
-	len = xfs_rtb_to_rtxrem(mp, rtlen, &mod);
-	if (mod) {
-		ASSERT(mod == 0);
-		return -EIO;
-	}
-
-	start = xfs_rtb_to_rtxrem(mp, rtbno, &mod);
-	if (mod) {
-		ASSERT(mod == 0);
-		return -EIO;
-	}
-
-	return xfs_rtfree_extent(tp, start, len);
+	return 0;
 }
 
 /* Find all the free records within a given range. */
@@ -1026,14 +1015,10 @@ xfs_rtalloc_query_range(
 	xfs_rtalloc_query_range_fn	fn,
 	void				*priv)
 {
-	struct xfs_rtalloc_args		args = {
-		.mp			= mp,
-		.tp			= tp,
-	};
 	struct xfs_rtalloc_rec		rec;
-	xfs_rtxnum_t			rtstart;
-	xfs_rtxnum_t			rtend;
-	xfs_rtxnum_t			high_key;
+	xfs_rtblock_t			rtstart;
+	xfs_rtblock_t			rtend;
+	xfs_rtblock_t			high_key;
 	int				is_free;
 	int				error = 0;
 
@@ -1049,13 +1034,13 @@ xfs_rtalloc_query_range(
 	rtstart = low_rec->ar_startext;
 	while (rtstart <= high_key) {
 		/* Is the first block free? */
-		error = xfs_rtcheck_range(&args, rtstart, 1, 1, &rtend,
+		error = xfs_rtcheck_range(mp, tp, rtstart, 1, 1, &rtend,
 				&is_free);
 		if (error)
 			break;
 
 		/* How long does the extent go for? */
-		error = xfs_rtfind_forw(&args, rtstart, high_key, &rtend);
+		error = xfs_rtfind_forw(mp, tp, rtstart, high_key, &rtend);
 		if (error)
 			break;
 
@@ -1071,7 +1056,6 @@ xfs_rtalloc_query_range(
 		rtstart = rtend + 1;
 	}
 
-	xfs_rtbuf_cache_relse(&args);
 	return error;
 }
 
@@ -1097,79 +1081,18 @@ int
 xfs_rtalloc_extent_is_free(
 	struct xfs_mount		*mp,
 	struct xfs_trans		*tp,
-	xfs_rtxnum_t			start,
-	xfs_rtxlen_t			len,
+	xfs_rtblock_t			start,
+	xfs_extlen_t			len,
 	bool				*is_free)
 {
-	struct xfs_rtalloc_args		args = {
-		.mp			= mp,
-		.tp			= tp,
-	};
-	xfs_rtxnum_t			end;
+	xfs_rtblock_t			end;
 	int				matches;
 	int				error;
 
-	error = xfs_rtcheck_range(&args, start, len, 1, &end, &matches);
-	xfs_rtbuf_cache_relse(&args);
+	error = xfs_rtcheck_range(mp, tp, start, len, 1, &end, &matches);
 	if (error)
 		return error;
 
 	*is_free = matches;
 	return 0;
-}
-
-/*
- * Compute the number of rtbitmap blocks needed to track the given number of rt
- * extents.
- */
-xfs_filblks_t
-xfs_rtbitmap_blockcount(
-	struct xfs_mount	*mp,
-	xfs_rtbxlen_t		rtextents)
-{
-	return howmany_64(rtextents, NBBY * mp->m_sb.sb_blocksize);
-}
-
-/*
- * Compute the number of rtbitmap words needed to populate every block of a
- * bitmap that is large enough to track the given number of rt extents.
- */
-unsigned long long
-xfs_rtbitmap_wordcount(
-	struct xfs_mount	*mp,
-	xfs_rtbxlen_t		rtextents)
-{
-	xfs_filblks_t		blocks;
-
-	blocks = xfs_rtbitmap_blockcount(mp, rtextents);
-	return XFS_FSB_TO_B(mp, blocks) >> XFS_WORDLOG;
-}
-
-/* Compute the number of rtsummary blocks needed to track the given rt space. */
-xfs_filblks_t
-xfs_rtsummary_blockcount(
-	struct xfs_mount	*mp,
-	unsigned int		rsumlevels,
-	xfs_extlen_t		rbmblocks)
-{
-	unsigned long long	rsumwords;
-
-	rsumwords = (unsigned long long)rsumlevels * rbmblocks;
-	return XFS_B_TO_FSB(mp, rsumwords << XFS_WORDLOG);
-}
-
-/*
- * Compute the number of rtsummary info words needed to populate every block of
- * a summary file that is large enough to track the given rt space.
- */
-unsigned long long
-xfs_rtsummary_wordcount(
-	struct xfs_mount	*mp,
-	unsigned int		rsumlevels,
-	xfs_extlen_t		rbmblocks)
-{
-	xfs_filblks_t		blocks;
-
-	blocks = xfs_rtsummary_blockcount(mp, rsumlevels, rbmblocks);
-	return XFS_FSB_TO_B(mp, blocks) >> XFS_WORDLOG;
 }

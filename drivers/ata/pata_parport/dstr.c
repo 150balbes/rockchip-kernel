@@ -230,6 +230,4 @@ static struct pi_protocol dstr = {
 };
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Grant R. Guenther <grant@torque.net>");
-MODULE_DESCRIPTION("DataStor EP2000 parallel port IDE adapter protocol driver");
 module_pata_parport_driver(dstr);

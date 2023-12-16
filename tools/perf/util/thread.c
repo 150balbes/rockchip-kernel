@@ -80,15 +80,6 @@ err_thread:
 	return NULL;
 }
 
-static void (*thread__priv_destructor)(void *priv);
-
-void thread__set_priv_destructor(void (*destructor)(void *priv))
-{
-	assert(thread__priv_destructor == NULL);
-
-	thread__priv_destructor = destructor;
-}
-
 void thread__delete(struct thread *thread)
 {
 	struct namespaces *namespaces, *tmp_namespaces;
@@ -121,10 +112,6 @@ void thread__delete(struct thread *thread)
 	exit_rwsem(thread__namespaces_lock(thread));
 	exit_rwsem(thread__comm_lock(thread));
 	thread__free_stitch_list(thread);
-
-	if (thread__priv_destructor)
-		thread__priv_destructor(thread__priv(thread));
-
 	RC_CHK_FREE(thread);
 }
 

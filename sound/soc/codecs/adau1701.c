@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regmap.h>
@@ -777,7 +778,7 @@ static const struct regmap_config adau1701_regmap = {
 	.reg_bits		= 16,
 	.val_bits		= 32,
 	.max_register		= ADAU1701_MAX_REGISTER,
-	.cache_type		= REGCACHE_MAPLE,
+	.cache_type		= REGCACHE_RBTREE,
 	.volatile_reg		= adau1701_volatile_reg,
 	.reg_write		= adau1701_reg_write,
 	.reg_read		= adau1701_reg_read,

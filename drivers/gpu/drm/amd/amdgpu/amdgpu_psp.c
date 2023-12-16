@@ -45,6 +45,9 @@
 
 #define AMD_VBIOS_FILE_MAX_SIZE_B      (1024*1024*3)
 
+static int psp_sysfs_init(struct amdgpu_device *adev);
+static void psp_sysfs_fini(struct amdgpu_device *adev);
+
 static int psp_load_smu_fw(struct psp_context *psp);
 static int psp_rap_terminate(struct psp_context *psp);
 static int psp_securedisplay_terminate(struct psp_context *psp);
@@ -100,7 +103,7 @@ static void psp_check_pmfw_centralized_cstate_management(struct psp_context *psp
 		return;
 	}
 
-	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	switch (adev->ip_versions[MP0_HWIP][0]) {
 	case IP_VERSION(11, 0, 0):
 	case IP_VERSION(11, 0, 4):
 	case IP_VERSION(11, 0, 5):
@@ -128,7 +131,7 @@ static int psp_init_sriov_microcode(struct psp_context *psp)
 
 	amdgpu_ucode_ip_version_decode(adev, MP0_HWIP, ucode_prefix, sizeof(ucode_prefix));
 
-	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	switch (adev->ip_versions[MP0_HWIP][0]) {
 	case IP_VERSION(9, 0, 0):
 	case IP_VERSION(11, 0, 7):
 	case IP_VERSION(11, 0, 9):
@@ -145,7 +148,6 @@ static int psp_init_sriov_microcode(struct psp_context *psp)
 		break;
 	case IP_VERSION(13, 0, 6):
 		ret = psp_init_cap_microcode(psp, ucode_prefix);
-		ret &= psp_init_ta_microcode(psp, ucode_prefix);
 		break;
 	case IP_VERSION(13, 0, 10):
 		adev->virt.autoload_ucode_id = AMDGPU_UCODE_ID_CP_MES1_DATA;
@@ -162,7 +164,7 @@ static int psp_early_init(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	struct psp_context *psp = &adev->psp;
 
-	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	switch (adev->ip_versions[MP0_HWIP][0]) {
 	case IP_VERSION(9, 0, 0):
 		psp_v3_1_set_psp_funcs(psp);
 		psp->autoload_supported = false;
@@ -178,11 +180,9 @@ static int psp_early_init(void *handle)
 		psp->autoload_supported = false;
 		break;
 	case IP_VERSION(11, 0, 0):
-	case IP_VERSION(11, 0, 7):
-		adev->psp.sup_pd_fw_up = !amdgpu_sriov_vf(adev);
-		fallthrough;
 	case IP_VERSION(11, 0, 5):
 	case IP_VERSION(11, 0, 9):
+	case IP_VERSION(11, 0, 7):
 	case IP_VERSION(11, 0, 11):
 	case IP_VERSION(11, 5, 0):
 	case IP_VERSION(11, 0, 12):
@@ -202,8 +202,8 @@ static int psp_early_init(void *handle)
 	case IP_VERSION(13, 0, 3):
 	case IP_VERSION(13, 0, 5):
 	case IP_VERSION(13, 0, 8):
+	case IP_VERSION(13, 0, 10):
 	case IP_VERSION(13, 0, 11):
-	case IP_VERSION(14, 0, 0):
 		psp_v13_0_set_psp_funcs(psp);
 		psp->autoload_supported = true;
 		break;
@@ -215,10 +215,8 @@ static int psp_early_init(void *handle)
 		break;
 	case IP_VERSION(13, 0, 0):
 	case IP_VERSION(13, 0, 7):
-	case IP_VERSION(13, 0, 10):
 		psp_v13_0_set_psp_funcs(psp);
 		psp->autoload_supported = true;
-		adev->psp.sup_ifwi_up = !amdgpu_sriov_vf(adev);
 		break;
 	case IP_VERSION(13, 0, 4):
 		psp_v13_0_4_set_psp_funcs(psp);
@@ -334,7 +332,7 @@ static bool psp_get_runtime_db_entry(struct amdgpu_device *adev,
 	bool ret = false;
 	int i;
 
-	if (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 6))
+	if (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(13, 0, 6))
 		return false;
 
 	db_header_pos = adev->gmc.mc_vram_size - PSP_RUNTIME_DB_OFFSET;
@@ -413,7 +411,7 @@ static int psp_sw_init(void *handle)
 
 	adev->psp.xgmi_context.supports_extended_data =
 		!adev->gmc.xgmi.connected_to_cpu &&
-		amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 2);
+			adev->ip_versions[MP0_HWIP][0] == IP_VERSION(13, 0, 2);
 
 	memset(&scpm_entry, 0, sizeof(scpm_entry));
 	if ((psp_get_runtime_db_entry(adev,
@@ -439,15 +437,14 @@ static int psp_sw_init(void *handle)
 			/* If psp runtime database exists, then
 			 * only enable two stage memory training
 			 * when TWO_STAGE_DRAM_TRAINING bit is set
-			 * in runtime database
-			 */
+			 * in runtime database */
 			mem_training_ctx->enable_mem_training = true;
 		}
 
 	} else {
-		/* If psp runtime database doesn't exist or is
-		 * invalid, force enable two stage memory training
-		 */
+		/* If psp runtime database doesn't exist or
+		 * is invalid, force enable two stage memory
+		 * training */
 		mem_training_ctx->enable_mem_training = true;
 	}
 
@@ -463,6 +460,13 @@ static int psp_sw_init(void *handle)
 			DRM_ERROR("Failed to process memory training!\n");
 			return ret;
 		}
+	}
+
+	if (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 0) ||
+	    adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 7)) {
+		ret = psp_sysfs_init(adev);
+		if (ret)
+			return ret;
 	}
 
 	ret = amdgpu_bo_create_kernel(adev, PSP_1_MEG, PSP_1_MEG,
@@ -494,11 +498,11 @@ static int psp_sw_init(void *handle)
 	return 0;
 
 failed2:
-	amdgpu_bo_free_kernel(&psp->fence_buf_bo,
-			      &psp->fence_buf_mc_addr, &psp->fence_buf);
-failed1:
 	amdgpu_bo_free_kernel(&psp->fw_pri_bo,
 			      &psp->fw_pri_mc_addr, &psp->fw_pri_buf);
+failed1:
+	amdgpu_bo_free_kernel(&psp->fence_buf_bo,
+			      &psp->fence_buf_mc_addr, &psp->fence_buf);
 	return ret;
 }
 
@@ -515,6 +519,10 @@ static int psp_sw_fini(void *handle)
 	amdgpu_ucode_release(&psp->ta_fw);
 	amdgpu_ucode_release(&psp->cap_fw);
 	amdgpu_ucode_release(&psp->toc_fw);
+
+	if (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 0) ||
+	    adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 7))
+		psp_sysfs_fini(adev);
 
 	kfree(cmd);
 	cmd = NULL;
@@ -773,7 +781,7 @@ static int psp_load_toc(struct psp_context *psp,
 
 static bool psp_boottime_tmr(struct psp_context *psp)
 {
-	switch (amdgpu_ip_version(psp->adev, MP0_HWIP, 0)) {
+	switch (psp->adev->ip_versions[MP0_HWIP][0]) {
 	case IP_VERSION(13, 0, 6):
 		return true;
 	default:
@@ -799,8 +807,7 @@ static int psp_tmr_init(struct psp_context *psp)
 	tmr_size = PSP_TMR_SIZE(psp->adev);
 
 	/* For ASICs support RLC autoload, psp will parse the toc
-	 * and calculate the total size of TMR needed
-	 */
+	 * and calculate the total size of TMR needed */
 	if (!amdgpu_sriov_vf(psp->adev) &&
 	    psp->toc.start_addr &&
 	    psp->toc.size_bytes &&
@@ -828,7 +835,7 @@ static int psp_tmr_init(struct psp_context *psp)
 
 static bool psp_skip_tmr(struct psp_context *psp)
 {
-	switch (amdgpu_ip_version(psp->adev, MP0_HWIP, 0)) {
+	switch (psp->adev->ip_versions[MP0_HWIP][0]) {
 	case IP_VERSION(11, 0, 9):
 	case IP_VERSION(11, 0, 7):
 	case IP_VERSION(13, 0, 2):
@@ -1140,9 +1147,9 @@ int psp_ta_init_shared_buf(struct psp_context *psp,
 				  struct ta_mem_context *mem_ctx)
 {
 	/*
-	 * Allocate 16k memory aligned to 4k from Frame Buffer (local
-	 * physical) for ta to host memory
-	 */
+	* Allocate 16k memory aligned to 4k from Frame Buffer (local
+	* physical) for ta to host memory
+	*/
 	return amdgpu_bo_create_kernel(psp->adev, mem_ctx->shared_mem_size,
 				      PAGE_SIZE, AMDGPU_GEM_DOMAIN_VRAM |
 				      AMDGPU_GEM_DOMAIN_GTT,
@@ -1215,8 +1222,8 @@ int psp_xgmi_terminate(struct psp_context *psp)
 	struct amdgpu_device *adev = psp->adev;
 
 	/* XGMI TA unload currently is not supported on Arcturus/Aldebaran A+A */
-	if (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(11, 0, 4) ||
-	    (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 2) &&
+	if (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 4) ||
+	    (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(13, 0, 2) &&
 	     adev->gmc.xgmi.connected_to_cpu))
 		return 0;
 
@@ -1267,8 +1274,6 @@ invoke:
 	xgmi_cmd->cmd_id = TA_COMMAND_XGMI__INITIALIZE;
 
 	ret = psp_xgmi_invoke(psp, xgmi_cmd->cmd_id);
-	/* note down the capbility flag for XGMI TA */
-	psp->xgmi_context.xgmi_ta_caps = xgmi_cmd->caps_flag;
 
 	return ret;
 }
@@ -1315,11 +1320,9 @@ int psp_xgmi_get_node_id(struct psp_context *psp, uint64_t *node_id)
 
 static bool psp_xgmi_peer_link_info_supported(struct psp_context *psp)
 {
-	return (amdgpu_ip_version(psp->adev, MP0_HWIP, 0) ==
-			IP_VERSION(13, 0, 2) &&
+	return (psp->adev->ip_versions[MP0_HWIP][0] == IP_VERSION(13, 0, 2) &&
 		psp->xgmi_context.context.bin_desc.fw_version >= 0x2000000b) ||
-	       amdgpu_ip_version(psp->adev, MP0_HWIP, 0) >=
-		       IP_VERSION(13, 0, 6);
+		psp->adev->ip_versions[MP0_HWIP][0] >= IP_VERSION(13, 0, 6);
 }
 
 /*
@@ -1390,7 +1393,7 @@ int psp_xgmi_get_topology_info(struct psp_context *psp,
 
 	/* Fill in the shared memory with topology information as input */
 	topology_info_input = &xgmi_cmd->xgmi_in_message.get_topology_info;
-	xgmi_cmd->cmd_id = TA_COMMAND_XGMI__GET_TOPOLOGY_INFO;
+	xgmi_cmd->cmd_id = TA_COMMAND_XGMI__GET_GET_TOPOLOGY_INFO;
 	topology_info_input->num_nodes = number_devices;
 
 	for (i = 0; i < topology_info_input->num_nodes; i++) {
@@ -1401,7 +1404,7 @@ int psp_xgmi_get_topology_info(struct psp_context *psp,
 	}
 
 	/* Invoke xgmi ta to get the topology information */
-	ret = psp_xgmi_invoke(psp, TA_COMMAND_XGMI__GET_TOPOLOGY_INFO);
+	ret = psp_xgmi_invoke(psp, TA_COMMAND_XGMI__GET_GET_TOPOLOGY_INFO);
 	if (ret)
 		return ret;
 
@@ -1426,58 +1429,26 @@ int psp_xgmi_get_topology_info(struct psp_context *psp,
 
 	/* Invoke xgmi ta again to get the link information */
 	if (psp_xgmi_peer_link_info_supported(psp)) {
-		struct ta_xgmi_cmd_get_peer_link_info *link_info_output;
-		struct ta_xgmi_cmd_get_extend_peer_link_info *link_extend_info_output;
+		struct ta_xgmi_cmd_get_peer_link_info_output *link_info_output;
 		bool requires_reflection =
-			(psp->xgmi_context.supports_extended_data &&
-			 get_extended_data) ||
-			amdgpu_ip_version(psp->adev, MP0_HWIP, 0) ==
-				IP_VERSION(13, 0, 6);
-		bool ta_port_num_support = psp->xgmi_context.xgmi_ta_caps &
-						EXTEND_PEER_LINK_INFO_CMD_FLAG;
+			(psp->xgmi_context.supports_extended_data && get_extended_data) ||
+				psp->adev->ip_versions[MP0_HWIP][0] == IP_VERSION(13, 0, 6);
 
-		/* popluate the shared output buffer rather than the cmd input buffer
-		 * with node_ids as the input for GET_PEER_LINKS command execution.
-		 * This is required for GET_PEER_LINKS per xgmi ta implementation.
-		 * The same requirement for GET_EXTEND_PEER_LINKS command.
-		 */
-		if (ta_port_num_support) {
-			link_extend_info_output = &xgmi_cmd->xgmi_out_message.get_extend_link_info;
+		xgmi_cmd->cmd_id = TA_COMMAND_XGMI__GET_PEER_LINKS;
 
-			for (i = 0; i < topology->num_nodes; i++)
-				link_extend_info_output->nodes[i].node_id = topology->nodes[i].node_id;
+		ret = psp_xgmi_invoke(psp, TA_COMMAND_XGMI__GET_PEER_LINKS);
 
-			link_extend_info_output->num_nodes = topology->num_nodes;
-			xgmi_cmd->cmd_id = TA_COMMAND_XGMI__GET_EXTEND_PEER_LINKS;
-		} else {
-			link_info_output = &xgmi_cmd->xgmi_out_message.get_link_info;
-
-			for (i = 0; i < topology->num_nodes; i++)
-				link_info_output->nodes[i].node_id = topology->nodes[i].node_id;
-
-			link_info_output->num_nodes = topology->num_nodes;
-			xgmi_cmd->cmd_id = TA_COMMAND_XGMI__GET_PEER_LINKS;
-		}
-
-		ret = psp_xgmi_invoke(psp, xgmi_cmd->cmd_id);
 		if (ret)
 			return ret;
 
+		link_info_output = &xgmi_cmd->xgmi_out_message.get_link_info;
 		for (i = 0; i < topology->num_nodes; i++) {
-			uint8_t node_num_links = ta_port_num_support ?
-				link_extend_info_output->nodes[i].num_links : link_info_output->nodes[i].num_links;
 			/* accumulate num_links on extended data */
-			if (get_extended_data) {
-				topology->nodes[i].num_links = topology->nodes[i].num_links + node_num_links;
-			} else {
-				topology->nodes[i].num_links = (requires_reflection && topology->nodes[i].num_links) ?
-								topology->nodes[i].num_links : node_num_links;
-			}
-			/* popluate the connected port num info if supported and available */
-			if (ta_port_num_support && topology->nodes[i].num_links) {
-				memcpy(topology->nodes[i].port_num, link_extend_info_output->nodes[i].port_num,
-				       sizeof(struct xgmi_connected_port_num) * TA_XGMI__MAX_PORT_NUM);
-			}
+			topology->nodes[i].num_links = get_extended_data ?
+					topology->nodes[i].num_links +
+							link_info_output->nodes[i].num_links :
+					((requires_reflection && topology->nodes[i].num_links) ? topology->nodes[i].num_links :
+					 link_info_output->nodes[i].num_links);
 
 			/* reflect the topology information for bi-directionality */
 			if (requires_reflection && topology->nodes[i].num_hops)
@@ -1767,8 +1738,7 @@ int psp_ras_trigger_error(struct psp_context *psp,
 		return -EINVAL;
 
 	/* If err_event_athub occurs error inject was successful, however
-	 *  return status from TA is no long reliable
-	 */
+	   return status from TA is no long reliable */
 	if (amdgpu_ras_intr_triggered())
 		return 0;
 
@@ -2114,32 +2084,6 @@ int psp_securedisplay_invoke(struct psp_context *psp, uint32_t ta_cmd_id)
 }
 /* SECUREDISPLAY end */
 
-int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev)
-{
-	struct psp_context *psp = &adev->psp;
-	int ret = 0;
-
-	if (!amdgpu_sriov_vf(adev) && psp->funcs && psp->funcs->wait_for_bootloader != NULL)
-		ret = psp->funcs->wait_for_bootloader(psp);
-
-	return ret;
-}
-
-int amdgpu_psp_query_boot_status(struct amdgpu_device *adev)
-{
-	struct psp_context *psp = &adev->psp;
-	int ret = 0;
-
-	if (amdgpu_sriov_vf(adev) || (adev->flags & AMD_IS_APU))
-		return 0;
-
-	if (psp->funcs &&
-	    psp->funcs->query_boot_status)
-		ret = psp->funcs->query_boot_status(psp);
-
-	return ret;
-}
-
 static int psp_hw_start(struct psp_context *psp)
 {
 	struct amdgpu_device *adev = psp->adev;
@@ -2441,27 +2385,6 @@ static int psp_get_fw_type(struct amdgpu_firmware_info *ucode,
 	case AMDGPU_UCODE_ID_CP_RS64_MEC_P3_STACK:
 		*type = GFX_FW_TYPE_RS64_MEC_P3_STACK;
 		break;
-	case AMDGPU_UCODE_ID_VPE_CTX:
-		*type = GFX_FW_TYPE_VPEC_FW1;
-		break;
-	case AMDGPU_UCODE_ID_VPE_CTL:
-		*type = GFX_FW_TYPE_VPEC_FW2;
-		break;
-	case AMDGPU_UCODE_ID_VPE:
-		*type = GFX_FW_TYPE_VPE;
-		break;
-	case AMDGPU_UCODE_ID_UMSCH_MM_UCODE:
-		*type = GFX_FW_TYPE_UMSCH_UCODE;
-		break;
-	case AMDGPU_UCODE_ID_UMSCH_MM_DATA:
-		*type = GFX_FW_TYPE_UMSCH_DATA;
-		break;
-	case AMDGPU_UCODE_ID_UMSCH_MM_CMD_BUFFER:
-		*type = GFX_FW_TYPE_UMSCH_CMD_BUFFER;
-		break;
-	case AMDGPU_UCODE_ID_P2S_TABLE:
-		*type = GFX_FW_TYPE_P2S_TABLE;
-		break;
 	case AMDGPU_UCODE_ID_MAXIMUM:
 	default:
 		return -EINVAL;
@@ -2536,8 +2459,8 @@ static int psp_prep_load_ip_fw_cmd_buf(struct amdgpu_firmware_info *ucode,
 	return ret;
 }
 
-int psp_execute_ip_fw_load(struct psp_context *psp,
-			   struct amdgpu_firmware_info *ucode)
+static int psp_execute_non_psp_fw_load(struct psp_context *psp,
+				  struct amdgpu_firmware_info *ucode)
 {
 	int ret = 0;
 	struct psp_gfx_cmd_resp *cmd = acquire_psp_cmd_buf(psp);
@@ -2549,31 +2472,6 @@ int psp_execute_ip_fw_load(struct psp_context *psp,
 	}
 
 	release_psp_cmd_buf(psp);
-
-	return ret;
-}
-
-static int psp_load_p2s_table(struct psp_context *psp)
-{
-	int ret;
-	struct amdgpu_device *adev = psp->adev;
-	struct amdgpu_firmware_info *ucode =
-		&adev->firmware.ucode[AMDGPU_UCODE_ID_P2S_TABLE];
-
-	if (adev->in_runpm && (adev->pm.rpm_mode == AMDGPU_RUNPM_BACO))
-		return 0;
-
-	if (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 6)) {
-		uint32_t supp_vers = adev->flags & AMD_IS_APU ? 0x0036013D :
-								0x0036003C;
-		if (psp->sos.fw_version < supp_vers)
-			return 0;
-	}
-
-	if (!ucode->fw || amdgpu_sriov_vf(psp->adev))
-		return 0;
-
-	ret = psp_execute_ip_fw_load(psp, ucode);
 
 	return ret;
 }
@@ -2596,15 +2494,16 @@ static int psp_load_smu_fw(struct psp_context *psp)
 	if (!ucode->fw || amdgpu_sriov_vf(psp->adev))
 		return 0;
 
-	if ((amdgpu_in_reset(adev) && ras && adev->ras_enabled &&
-	     (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(11, 0, 4) ||
-	      amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(11, 0, 2)))) {
+	if ((amdgpu_in_reset(adev) &&
+	     ras && adev->ras_enabled &&
+	     (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 4) ||
+	      adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 2)))) {
 		ret = amdgpu_dpm_set_mp1_state(adev, PP_MP1_STATE_UNLOAD);
 		if (ret)
 			DRM_WARN("Failed to set MP1 state prepare for reload\n");
 	}
 
-	ret = psp_execute_ip_fw_load(psp, ucode);
+	ret = psp_execute_non_psp_fw_load(psp, ucode);
 
 	if (ret)
 		DRM_ERROR("PSP load smu failed!\n");
@@ -2616,9 +2515,6 @@ static bool fw_load_skip_check(struct psp_context *psp,
 			       struct amdgpu_firmware_info *ucode)
 {
 	if (!ucode->fw || !ucode->ucode_size)
-		return true;
-
-	if (ucode->ucode_id == AMDGPU_UCODE_ID_P2S_TABLE)
 		return true;
 
 	if (ucode->ucode_id == AMDGPU_UCODE_ID_SMC &&
@@ -2649,7 +2545,7 @@ int psp_load_fw_list(struct psp_context *psp,
 	for (i = 0; i < ucode_count; ++i) {
 		ucode = ucode_list[i];
 		psp_print_fw_hdr(psp, ucode);
-		ret = psp_execute_ip_fw_load(psp, ucode);
+		ret = psp_execute_non_psp_fw_load(psp, ucode);
 		if (ret)
 			return ret;
 	}
@@ -2669,9 +2565,6 @@ static int psp_load_non_psp_fw(struct psp_context *psp)
 			return ret;
 	}
 
-	/* Load P2S table first if it's available */
-	psp_load_p2s_table(psp);
-
 	for (i = 0; i < adev->firmware.max_ucodes; i++) {
 		ucode = &adev->firmware.ucode[i];
 
@@ -2687,23 +2580,19 @@ static int psp_load_non_psp_fw(struct psp_context *psp)
 			continue;
 
 		if (psp->autoload_supported &&
-		    (amdgpu_ip_version(adev, MP0_HWIP, 0) ==
-			     IP_VERSION(11, 0, 7) ||
-		     amdgpu_ip_version(adev, MP0_HWIP, 0) ==
-			     IP_VERSION(11, 0, 11) ||
-		     amdgpu_ip_version(adev, MP0_HWIP, 0) ==
-			     IP_VERSION(11, 0, 12)) &&
+		    (adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 7) ||
+		     adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 11) ||
+		     adev->ip_versions[MP0_HWIP][0] == IP_VERSION(11, 0, 12)) &&
 		    (ucode->ucode_id == AMDGPU_UCODE_ID_SDMA1 ||
 		     ucode->ucode_id == AMDGPU_UCODE_ID_SDMA2 ||
 		     ucode->ucode_id == AMDGPU_UCODE_ID_SDMA3))
 			/* PSP only receive one SDMA fw for sienna_cichlid,
-			 * as all four sdma fw are same
-			 */
+			 * as all four sdma fw are same */
 			continue;
 
 		psp_print_fw_hdr(psp, ucode);
 
-		ret = psp_execute_ip_fw_load(psp, ucode);
+		ret = psp_execute_non_psp_fw_load(psp, ucode);
 		if (ret)
 			return ret;
 
@@ -2763,8 +2652,8 @@ static int psp_load_fw(struct amdgpu_device *adev)
 		if (adev->gmc.xgmi.num_physical_nodes > 1) {
 			ret = psp_xgmi_initialize(psp, false, true);
 			/* Warning the XGMI seesion initialize failure
-			 * Instead of stop driver initialization
-			 */
+			* Instead of stop driver initialization
+			*/
 			if (ret)
 				dev_err(psp->adev->dev,
 					"XGMI: Failed to initialize XGMI session\n");
@@ -3042,6 +2931,19 @@ int psp_rlc_autoload_start(struct psp_context *psp)
 	return ret;
 }
 
+int psp_update_vcn_sram(struct amdgpu_device *adev, int inst_idx,
+			uint64_t cmd_gpu_addr, int cmd_size)
+{
+	struct amdgpu_firmware_info ucode = {0};
+
+	ucode.ucode_id = inst_idx ? AMDGPU_UCODE_ID_VCN1_RAM :
+		AMDGPU_UCODE_ID_VCN0_RAM;
+	ucode.mc_addr = cmd_gpu_addr;
+	ucode.ucode_size = cmd_size;
+
+	return psp_execute_non_psp_fw_load(&adev->psp, &ucode);
+}
+
 int psp_ring_cmd_submit(struct psp_context *psp,
 			uint64_t cmd_buf_mc_addr,
 			uint64_t fence_mc_addr,
@@ -3233,7 +3135,7 @@ static int psp_init_sos_base_fw(struct amdgpu_device *adev)
 		le32_to_cpu(sos_hdr->header.ucode_array_offset_bytes);
 
 	if (adev->gmc.xgmi.connected_to_cpu ||
-	    (amdgpu_ip_version(adev, MP0_HWIP, 0) != IP_VERSION(13, 0, 2))) {
+	    (adev->ip_versions[MP0_HWIP][0] != IP_VERSION(13, 0, 2))) {
 		adev->psp.sos.fw_version = le32_to_cpu(sos_hdr->header.ucode_version);
 		adev->psp.sos.feature_version = le32_to_cpu(sos_hdr->sos.fw_version);
 
@@ -3682,11 +3584,6 @@ void psp_copy_fw(struct psp_context *psp, uint8_t *start_addr, uint32_t bin_size
 	drm_dev_exit(idx);
 }
 
-/**
- * DOC: usbc_pd_fw
- * Reading from this file will retrieve the USB-C PD firmware version. Writing to
- * this file will trigger the update process.
- */
 static DEVICE_ATTR(usbc_pd_fw, 0644,
 		   psp_usbc_pd_fw_sysfs_read,
 		   psp_usbc_pd_fw_sysfs_write);
@@ -3727,7 +3624,7 @@ static ssize_t amdgpu_psp_vbflash_write(struct file *filp, struct kobject *kobj,
 	adev->psp.vbflash_image_size += count;
 	mutex_unlock(&adev->psp.mutex);
 
-	dev_dbg(adev->dev, "IFWI staged for update");
+	dev_info(adev->dev, "VBIOS flash write PSP done");
 
 	return count;
 }
@@ -3747,7 +3644,7 @@ static ssize_t amdgpu_psp_vbflash_read(struct file *filp, struct kobject *kobj,
 	if (adev->psp.vbflash_image_size == 0)
 		return -EINVAL;
 
-	dev_dbg(adev->dev, "PSP IFWI flash process initiated");
+	dev_info(adev->dev, "VBIOS flash to PSP started");
 
 	ret = amdgpu_bo_create_kernel(adev, adev->psp.vbflash_image_size,
 					AMDGPU_GPU_PAGE_SIZE,
@@ -3772,32 +3669,14 @@ rel_buf:
 	adev->psp.vbflash_image_size = 0;
 
 	if (ret) {
-		dev_err(adev->dev, "Failed to load IFWI, err = %d", ret);
+		dev_err(adev->dev, "Failed to load VBIOS FW, err = %d", ret);
 		return ret;
 	}
 
-	dev_dbg(adev->dev, "PSP IFWI flash process done");
+	dev_info(adev->dev, "VBIOS flash to PSP done");
 	return 0;
 }
 
-/**
- * DOC: psp_vbflash
- * Writing to this file will stage an IFWI for update. Reading from this file
- * will trigger the update process.
- */
-static struct bin_attribute psp_vbflash_bin_attr = {
-	.attr = {.name = "psp_vbflash", .mode = 0660},
-	.size = 0,
-	.write = amdgpu_psp_vbflash_write,
-	.read = amdgpu_psp_vbflash_read,
-};
-
-/**
- * DOC: psp_vbflash_status
- * The status of the flash process.
- * 0: IFWI flash not complete.
- * 1: IFWI flash complete.
- */
 static ssize_t amdgpu_psp_vbflash_status(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
@@ -3814,48 +3693,38 @@ static ssize_t amdgpu_psp_vbflash_status(struct device *dev,
 
 	return sysfs_emit(buf, "0x%x\n", vbflash_status);
 }
+
+static const struct bin_attribute psp_vbflash_bin_attr = {
+	.attr = {.name = "psp_vbflash", .mode = 0660},
+	.size = 0,
+	.write = amdgpu_psp_vbflash_write,
+	.read = amdgpu_psp_vbflash_read,
+};
+
 static DEVICE_ATTR(psp_vbflash_status, 0440, amdgpu_psp_vbflash_status, NULL);
 
-static struct bin_attribute *bin_flash_attrs[] = {
-	&psp_vbflash_bin_attr,
-	NULL
-};
-
-static struct attribute *flash_attrs[] = {
-	&dev_attr_psp_vbflash_status.attr,
-	&dev_attr_usbc_pd_fw.attr,
-	NULL
-};
-
-static umode_t amdgpu_flash_attr_is_visible(struct kobject *kobj, struct attribute *attr, int idx)
+int amdgpu_psp_sysfs_init(struct amdgpu_device *adev)
 {
-	struct device *dev = kobj_to_dev(kobj);
-	struct drm_device *ddev = dev_get_drvdata(dev);
-	struct amdgpu_device *adev = drm_to_adev(ddev);
+	int ret = 0;
 
-	if (attr == &dev_attr_usbc_pd_fw.attr)
-		return adev->psp.sup_pd_fw_up ? 0660 : 0;
+	if (amdgpu_sriov_vf(adev))
+		return -EINVAL;
 
-	return adev->psp.sup_ifwi_up ? 0440 : 0;
+	switch (adev->ip_versions[MP0_HWIP][0]) {
+	case IP_VERSION(13, 0, 0):
+	case IP_VERSION(13, 0, 7):
+	case IP_VERSION(13, 0, 10):
+		ret = sysfs_create_bin_file(&adev->dev->kobj, &psp_vbflash_bin_attr);
+		if (ret)
+			dev_err(adev->dev, "Failed to create device file psp_vbflash");
+		ret = device_create_file(adev->dev, &dev_attr_psp_vbflash_status);
+		if (ret)
+			dev_err(adev->dev, "Failed to create device file psp_vbflash_status");
+		return ret;
+	default:
+		return 0;
+	}
 }
-
-static umode_t amdgpu_bin_flash_attr_is_visible(struct kobject *kobj,
-						struct bin_attribute *attr,
-						int idx)
-{
-	struct device *dev = kobj_to_dev(kobj);
-	struct drm_device *ddev = dev_get_drvdata(dev);
-	struct amdgpu_device *adev = drm_to_adev(ddev);
-
-	return adev->psp.sup_ifwi_up ? 0660 : 0;
-}
-
-const struct attribute_group amdgpu_flash_attr_group = {
-	.attrs = flash_attrs,
-	.bin_attrs = bin_flash_attrs,
-	.is_bin_visible = amdgpu_bin_flash_attr_is_visible,
-	.is_visible = amdgpu_flash_attr_is_visible,
-};
 
 const struct amd_ip_funcs psp_ip_funcs = {
 	.name = "psp",
@@ -3874,6 +3743,27 @@ const struct amd_ip_funcs psp_ip_funcs = {
 	.set_clockgating_state = psp_set_clockgating_state,
 	.set_powergating_state = psp_set_powergating_state,
 };
+
+static int psp_sysfs_init(struct amdgpu_device *adev)
+{
+	int ret = device_create_file(adev->dev, &dev_attr_usbc_pd_fw);
+
+	if (ret)
+		DRM_ERROR("Failed to create USBC PD FW control file!");
+
+	return ret;
+}
+
+void amdgpu_psp_sysfs_fini(struct amdgpu_device *adev)
+{
+	sysfs_remove_bin_file(&adev->dev->kobj, &psp_vbflash_bin_attr);
+	device_remove_file(adev->dev, &dev_attr_psp_vbflash_status);
+}
+
+static void psp_sysfs_fini(struct amdgpu_device *adev)
+{
+	device_remove_file(adev->dev, &dev_attr_usbc_pd_fw);
+}
 
 const struct amdgpu_ip_block_version psp_v3_1_ip_block = {
 	.type = AMD_IP_BLOCK_TYPE_PSP,

@@ -544,7 +544,6 @@ static void um_pci_irq_vq_cb(struct virtqueue *vq)
 	}
 }
 
-#ifdef CONFIG_OF
 /* Copied from arch/x86/kernel/devicetree.c */
 struct device_node *pcibios_get_phb_of_node(struct pci_bus *bus)
 {
@@ -563,7 +562,6 @@ struct device_node *pcibios_get_phb_of_node(struct pci_bus *bus)
 	}
 	return NULL;
 }
-#endif
 
 static int um_pci_init_vqs(struct um_pci_device *dev)
 {

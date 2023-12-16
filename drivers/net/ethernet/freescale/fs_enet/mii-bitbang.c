@@ -29,8 +29,8 @@
 
 struct bb_info {
 	struct mdiobb_ctrl ctrl;
-	u32 __iomem *dir;
-	u32 __iomem *dat;
+	__be32 __iomem *dir;
+	__be32 __iomem *dat;
 	u32 mdio_msk;
 	u32 mdc_msk;
 };
@@ -192,7 +192,7 @@ out:
 	return ret;
 }
 
-static void fs_enet_mdio_remove(struct platform_device *ofdev)
+static int fs_enet_mdio_remove(struct platform_device *ofdev)
 {
 	struct mii_bus *bus = platform_get_drvdata(ofdev);
 	struct bb_info *bitbang = bus->priv;
@@ -201,6 +201,8 @@ static void fs_enet_mdio_remove(struct platform_device *ofdev)
 	free_mdio_bitbang(bus);
 	iounmap(bitbang->dir);
 	kfree(bitbang);
+
+	return 0;
 }
 
 static const struct of_device_id fs_enet_mdio_bb_match[] = {
@@ -217,7 +219,7 @@ static struct platform_driver fs_enet_bb_mdio_driver = {
 		.of_match_table = fs_enet_mdio_bb_match,
 	},
 	.probe = fs_enet_mdio_probe,
-	.remove_new = fs_enet_mdio_remove,
+	.remove = fs_enet_mdio_remove,
 };
 
 module_platform_driver(fs_enet_bb_mdio_driver);

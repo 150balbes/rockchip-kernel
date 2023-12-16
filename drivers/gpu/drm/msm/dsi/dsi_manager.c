@@ -466,8 +466,9 @@ static const struct drm_bridge_funcs dsi_mgr_bridge_funcs = {
 };
 
 /* initialize bridge */
-int msm_dsi_manager_bridge_init(struct msm_dsi *msm_dsi)
+struct drm_bridge *msm_dsi_manager_bridge_init(u8 id)
 {
+	struct msm_dsi *msm_dsi = dsi_mgr_get_dsi(id);
 	struct drm_bridge *bridge = NULL;
 	struct dsi_bridge *dsi_bridge;
 	struct drm_encoder *encoder;
@@ -475,27 +476,31 @@ int msm_dsi_manager_bridge_init(struct msm_dsi *msm_dsi)
 
 	dsi_bridge = devm_kzalloc(msm_dsi->dev->dev,
 				sizeof(*dsi_bridge), GFP_KERNEL);
-	if (!dsi_bridge)
-		return -ENOMEM;
+	if (!dsi_bridge) {
+		ret = -ENOMEM;
+		goto fail;
+	}
 
-	dsi_bridge->id = msm_dsi->id;
+	dsi_bridge->id = id;
 
 	encoder = msm_dsi->encoder;
 
 	bridge = &dsi_bridge->base;
 	bridge->funcs = &dsi_mgr_bridge_funcs;
 
-	ret = devm_drm_bridge_add(msm_dsi->dev->dev, bridge);
-	if (ret)
-		return ret;
+	drm_bridge_add(bridge);
 
 	ret = drm_bridge_attach(encoder, bridge, NULL, 0);
 	if (ret)
-		return ret;
+		goto fail;
 
-	msm_dsi->bridge = bridge;
+	return bridge;
 
-	return 0;
+fail:
+	if (bridge)
+		msm_dsi_manager_bridge_destroy(bridge);
+
+	return ERR_PTR(ret);
 }
 
 int msm_dsi_manager_ext_bridge_init(u8 id)
@@ -550,6 +555,11 @@ int msm_dsi_manager_ext_bridge_init(u8 id)
 	msm_dsi_manager_set_split_display(id);
 
 	return 0;
+}
+
+void msm_dsi_manager_bridge_destroy(struct drm_bridge *bridge)
+{
+	drm_bridge_remove(bridge);
 }
 
 int msm_dsi_manager_cmd_xfer(int id, const struct mipi_dsi_msg *msg)

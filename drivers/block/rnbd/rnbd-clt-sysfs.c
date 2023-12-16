@@ -25,7 +25,7 @@
 
 static struct device *rnbd_dev;
 static const struct class rnbd_dev_class = {
-	.name = "rnbd-client",
+	.name = "rnbd_client",
 };
 static struct kobject *rnbd_devs_kobj;
 

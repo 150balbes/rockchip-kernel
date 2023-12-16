@@ -1440,8 +1440,6 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 		curr_dso->kernel = dso->kernel;
 		curr_dso->long_name = dso->long_name;
 		curr_dso->long_name_len = dso->long_name_len;
-		curr_dso->binary_type = dso->binary_type;
-		curr_dso->adjust_symbols = dso->adjust_symbols;
 		curr_map = map__new2(start, curr_dso);
 		dso__put(curr_dso);
 		if (curr_map == NULL)
@@ -1514,10 +1512,8 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 	}
 
 	if (elf_section_by_name(runtime_ss->elf, &runtime_ss->ehdr, &tshdr,
-				".text", NULL)) {
+				".text", NULL))
 		dso->text_offset = tshdr.sh_addr - tshdr.sh_offset;
-		dso->text_end = tshdr.sh_offset + tshdr.sh_size;
-	}
 
 	if (runtime_ss->opdsec)
 		opddata = elf_rawdata(runtime_ss->opdsec, NULL);

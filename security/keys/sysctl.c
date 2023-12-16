@@ -9,7 +9,7 @@
 #include <linux/sysctl.h>
 #include "internal.h"
 
-static struct ctl_table key_sysctls[] = {
+struct ctl_table key_sysctls[] = {
 	{
 		.procname = "maxkeys",
 		.data = &key_quota_maxkeys,

@@ -45,6 +45,7 @@
 
 static void __machine__remove_thread(struct machine *machine, struct thread_rb_node *nd,
 				     struct thread *th, bool lock);
+static int append_inlines(struct callchain_cursor *cursor, struct map_symbol *ms, u64 ip);
 
 static struct dso *machine__kernel_dso(struct machine *machine)
 {
@@ -67,6 +68,7 @@ static void machine__threads_init(struct machine *machine)
 		threads->entries = RB_ROOT_CACHED;
 		init_rwsem(&threads->lock);
 		threads->nr = 0;
+		INIT_LIST_HEAD(&threads->dead);
 		threads->last_match = NULL;
 	}
 }
@@ -968,7 +970,7 @@ static int machine__process_ksymbol_unregister(struct machine *machine,
 	if (!map)
 		return 0;
 
-	if (!RC_CHK_EQUAL(map, machine->vmlinux_map))
+	if (RC_CHK_ACCESS(map) != RC_CHK_ACCESS(machine->vmlinux_map))
 		maps__remove(machine__kernel_maps(machine), map);
 	else {
 		struct dso *dso = map__dso(map);
@@ -1214,9 +1216,7 @@ static int machine__get_running_kernel_start(struct machine *machine,
 
 	*start = addr;
 
-	err = kallsyms__get_symbol_start(filename, "_edata", &addr);
-	if (err)
-		err = kallsyms__get_function_start(filename, "_etext", &addr);
+	err = kallsyms__get_function_start(filename, "_etext", &addr);
 	if (!err)
 		*end = addr;
 
@@ -2057,7 +2057,7 @@ static void __machine__remove_thread(struct machine *machine, struct thread_rb_n
 	if (!nd)
 		nd = thread_rb_node__find(th, &threads->entries.rb_root);
 
-	if (threads->last_match && RC_CHK_EQUAL(threads->last_match, th))
+	if (threads->last_match && RC_CHK_ACCESS(threads->last_match) == RC_CHK_ACCESS(th))
 		threads__set_last_match(threads, NULL);
 
 	if (lock)
@@ -2212,7 +2212,9 @@ int machine__process_event(struct machine *machine, union perf_event *event,
 
 static bool symbol__match_regex(struct symbol *sym, regex_t *regex)
 {
-	return regexec(regex, sym->name, 0, NULL, 0) == 0;
+	if (!regexec(regex, sym->name, 0, NULL, 0))
+		return true;
+	return false;
 }
 
 static void ip__resolve_ams(struct thread *thread,
@@ -2383,13 +2385,18 @@ static int add_callchain_ip(struct thread *thread,
 	ms.maps = maps__get(al.maps);
 	ms.map = map__get(al.map);
 	ms.sym = al.sym;
+
+	if (!branch && append_inlines(cursor, &ms, ip) == 0)
+		goto out;
+
 	srcline = callchain_srcline(&ms, al.addr);
 	err = callchain_cursor_append(cursor, ip, &ms,
 				      branch, flags, nr_loop_iter,
 				      iter_cycles, branch_from, srcline);
 out:
 	addr_location__exit(&al);
-	map_symbol__exit(&ms);
+	maps__put(ms.maps);
+	map__put(ms.map);
 	return err;
 }
 
@@ -2620,18 +2627,16 @@ static int lbr_callchain_add_lbr_ip(struct thread *thread,
 		save_lbr_cursor_node(thread, cursor, i);
 	}
 
-	if (lbr_nr > 0) {
-		/* Add LBR ip from first entries.to */
-		ip = entries[0].to;
-		flags = &entries[0].flags;
-		*branch_from = entries[0].from;
-		err = add_callchain_ip(thread, cursor, parent,
-				root_al, &cpumode, ip,
-				true, flags, NULL,
-				*branch_from);
-		if (err)
-			return err;
-	}
+	/* Add LBR ip from first entries.to */
+	ip = entries[0].to;
+	flags = &entries[0].flags;
+	*branch_from = entries[0].from;
+	err = add_callchain_ip(thread, cursor, parent,
+			       root_al, &cpumode, ip,
+			       true, flags, NULL,
+			       *branch_from);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -3115,7 +3120,8 @@ static int append_inlines(struct callchain_cursor *cursor, struct map_symbol *ms
 		if (ret != 0)
 			return ret;
 	}
-	map_symbol__exit(&ilist_ms);
+	map__put(ilist_ms.map);
+	maps__put(ilist_ms.maps);
 
 	return ret;
 }

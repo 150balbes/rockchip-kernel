@@ -56,13 +56,12 @@ irqreturn_t kcs_bmc_handle_event(struct kcs_bmc_device *kcs_bmc)
 {
 	struct kcs_bmc_client *client;
 	irqreturn_t rc = IRQ_NONE;
-	unsigned long flags;
 
-	spin_lock_irqsave(&kcs_bmc->lock, flags);
+	spin_lock(&kcs_bmc->lock);
 	client = kcs_bmc->client;
 	if (client)
 		rc = client->ops->event(client);
-	spin_unlock_irqrestore(&kcs_bmc->lock, flags);
+	spin_unlock(&kcs_bmc->lock);
 
 	return rc;
 }

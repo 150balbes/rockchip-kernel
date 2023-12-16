@@ -95,7 +95,7 @@ panthor_kernel_bo_create(struct panthor_device *ptdev, struct panthor_vm *vm,
 	bo->flags = bo_flags;
 
 	if (!vm)
-		return kbo;
+		return 0;
 
 	ret = panthor_vm_alloc_va(vm, gpu_va, size, &kbo->va_node);
 	if (ret)
@@ -157,7 +157,7 @@ static const struct drm_gem_object_funcs panthor_gem_funcs = {
 
 /**
  * panthor_gem_create_object - Implementation of driver->gem_create_object.
- * @ddev: DRM device
+ * @dev: DRM device
  * @size: Size in bytes of the memory the object will reference
  *
  * This lets the GEM helpers allocate object structs for us, and keep

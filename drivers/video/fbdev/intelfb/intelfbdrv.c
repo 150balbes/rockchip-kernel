@@ -198,7 +198,6 @@ static const struct fb_ops intel_fb_ops = {
 	.owner =		THIS_MODULE,
 	.fb_open =              intelfb_open,
 	.fb_release =           intelfb_release,
-	__FB_DEFAULT_IOMEM_OPS_RDWR,
 	.fb_check_var =         intelfb_check_var,
 	.fb_set_par =           intelfb_set_par,
 	.fb_setcolreg =		intelfb_setcolreg,
@@ -209,8 +208,7 @@ static const struct fb_ops intel_fb_ops = {
 	.fb_imageblit =         intelfb_imageblit,
 	.fb_cursor =            intelfb_cursor,
 	.fb_sync =              intelfb_sync,
-	.fb_ioctl =		intelfb_ioctl,
-	__FB_DEFAULT_IOMEM_OPS_MMAP,
+	.fb_ioctl =		intelfb_ioctl
 };
 
 /* PCI driver module table */

@@ -36,6 +36,9 @@ ifdef CONFIG_RELOCATABLE
 	$(call if_changed,relocs_strip)
 endif
 
+%.ko: FORCE
+	@true
+
 clean:
 	@true
 

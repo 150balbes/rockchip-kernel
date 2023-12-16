@@ -217,6 +217,8 @@ static int gpio_exar_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	platform_set_drvdata(pdev, exar_gpio);
+
 	return 0;
 }
 

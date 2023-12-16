@@ -332,7 +332,7 @@ void ikbd_write(const char *str, int len)
 }
 
 /* Reset (without touching the clock) */
-static void ikbd_reset(void)
+void ikbd_reset(void)
 {
 	static const char cmd[2] = { 0x80, 0x01 };
 

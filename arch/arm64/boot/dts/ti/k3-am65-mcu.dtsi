@@ -112,7 +112,6 @@
 		dmas = <&mcu_udmap 0x7100>,
 			<&mcu_udmap 0x7101 >;
 		dma-names = "fifo0", "fifo1";
-		status = "disabled";
 
 		adc {
 			#io-channel-cells = <1>;
@@ -131,7 +130,6 @@
 		dmas = <&mcu_udmap 0x7102>,
 			<&mcu_udmap 0x7103>;
 		dma-names = "fifo0", "fifo1";
-		status = "disabled";
 
 		adc {
 			#io-channel-cells = <1>;
@@ -185,7 +183,7 @@
 	};
 
 	mcu_navss: bus@28380000 {
-		compatible = "simple-bus";
+		compatible = "simple-mfd";
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges = <0x00 0x28380000 0x00 0x28380000 0x00 0x03880000>;
@@ -196,13 +194,11 @@
 
 		mcu_ringacc: ringacc@2b800000 {
 			compatible = "ti,am654-navss-ringacc";
-			reg = <0x0 0x2b800000 0x0 0x400000>,
-			      <0x0 0x2b000000 0x0 0x400000>,
-			      <0x0 0x28590000 0x0 0x100>,
-			      <0x0 0x2a500000 0x0 0x40000>,
-			      <0x0 0x28440000 0x0 0x40000>;
-			reg-names = "rt", "fifos", "proxy_gcfg",
-				    "proxy_target", "cfg";
+			reg =	<0x0 0x2b800000 0x0 0x400000>,
+				<0x0 0x2b000000 0x0 0x400000>,
+				<0x0 0x28590000 0x0 0x100>,
+				<0x0 0x2a500000 0x0 0x40000>;
+			reg-names = "rt", "fifos", "proxy_gcfg", "proxy_target";
 			ti,num-rings = <286>;
 			ti,sci-rm-range-gp-rings = <0x1>; /* GP ring range */
 			ti,sci = <&dmsc>;
@@ -212,9 +208,9 @@
 
 		mcu_udmap: dma-controller@285c0000 {
 			compatible = "ti,am654-navss-mcu-udmap";
-			reg = <0x0 0x285c0000 0x0 0x100>,
-			      <0x0 0x2a800000 0x0 0x40000>,
-			      <0x0 0x2aa00000 0x0 0x40000>;
+			reg =	<0x0 0x285c0000 0x0 0x100>,
+				<0x0 0x2a800000 0x0 0x40000>,
+				<0x0 0x2aa00000 0x0 0x40000>;
 			reg-names = "gcfg", "rchanrt", "tchanrt";
 			msi-parent = <&inta_main_udmass>;
 			#dma-cells = <1>;
@@ -278,7 +274,7 @@
 		status = "disabled";
 	};
 
-	fss: bus@47000000 {
+	fss: fss@47000000 {
 		compatible = "simple-bus";
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -299,7 +295,6 @@
 			power-domains = <&k3_pds 248 TI_SCI_PD_EXCLUSIVE>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			status = "disabled";
 		};
 
 		ospi1: spi@47050000 {
@@ -314,7 +309,6 @@
 			power-domains = <&k3_pds 249 TI_SCI_PD_EXCLUSIVE>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			status = "disabled";
 		};
 	};
 

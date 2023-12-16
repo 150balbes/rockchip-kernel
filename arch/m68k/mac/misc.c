@@ -25,8 +25,6 @@
 
 #include <asm/machdep.h>
 
-#include "mac.h"
-
 /*
  * Offset between Unix time (1970-based) and Mac time (1904-based). Cuda and PMU
  * times wrap in 2040. If we need to handle later times, the read_time functions
@@ -556,7 +554,7 @@ static void unmktime(time64_t time, long offset,
 		/* Leap years.  */
 		{ 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366 }
 	};
-	int days, rem, y, wday;
+	int days, rem, y, wday, yday;
 	const unsigned short int *ip;
 
 	days = div_u64_rem(time, SECS_PER_DAY, &rem);
@@ -594,6 +592,7 @@ static void unmktime(time64_t time, long offset,
 		y = yg;
 	}
 	*yearp = y - 1900;
+	yday = days; /* day in the year.  Not currently used. */
 	ip = __mon_yday[__isleap(y)];
 	for (y = 11; days < (long int) ip[y]; --y)
 		continue;

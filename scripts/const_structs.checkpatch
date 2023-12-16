@@ -94,4 +94,3 @@ vm_operations_struct
 wacom_features
 watchdog_ops
 wd_ops
-xattr_handler

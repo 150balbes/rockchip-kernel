@@ -14,7 +14,7 @@ struct vcap_tc_flower_parse_usage {
 	u16 l3_proto;
 	u8 l4_proto;
 	u16 tpid;
-	unsigned long long used_keys;
+	unsigned int used_keys;
 };
 
 int vcap_tc_flower_handler_ethaddr_usage(struct vcap_tc_flower_parse_usage *st);

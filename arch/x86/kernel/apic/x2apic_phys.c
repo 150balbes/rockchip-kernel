@@ -8,13 +8,11 @@
 int x2apic_phys;
 
 static struct apic apic_x2apic_phys;
-u32 x2apic_max_apicid __ro_after_init = UINT_MAX;
+static u32 x2apic_max_apicid __ro_after_init;
 
 void __init x2apic_set_max_apicid(u32 apicid)
 {
 	x2apic_max_apicid = apicid;
-	if (apic->x2apic_set_max_apicid)
-		apic->max_apic_id = apicid;
 }
 
 static int __init set_x2apic_phys_mode(char *arg)
@@ -83,34 +81,18 @@ static void
 	__x2apic_send_IPI_mask(mask, vector, APIC_DEST_ALLBUT);
 }
 
-static void __x2apic_send_IPI_shorthand(int vector, u32 which)
-{
-	unsigned long cfg = __prepare_ICR(which, vector, 0);
-
-	/* x2apic MSRs are special and need a special fence: */
-	weak_wrmsr_fence();
-	native_x2apic_icr_write(cfg, 0);
-}
-
-void x2apic_send_IPI_allbutself(int vector)
+static void x2apic_send_IPI_allbutself(int vector)
 {
 	__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLBUT);
 }
 
-void x2apic_send_IPI_all(int vector)
+static void x2apic_send_IPI_all(int vector)
 {
 	__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLINC);
 }
 
-void x2apic_send_IPI_self(int vector)
+static void init_x2apic_ldr(void)
 {
-	apic_write(APIC_SELF_IPI, vector);
-}
-
-void __x2apic_send_IPI_dest(unsigned int apicid, int vector, unsigned int dest)
-{
-	unsigned long cfg = __prepare_ICR(0, vector, dest);
-	native_x2apic_icr_write(cfg, apicid);
 }
 
 static int x2apic_phys_probe(void)
@@ -124,19 +106,53 @@ static int x2apic_phys_probe(void)
 	return apic == &apic_x2apic_phys;
 }
 
-u32 x2apic_get_apic_id(u32 id)
+/* Common x2apic functions, also used by x2apic_cluster */
+int x2apic_apic_id_valid(u32 apicid)
+{
+	if (x2apic_max_apicid && apicid > x2apic_max_apicid)
+		return 0;
+
+	return 1;
+}
+
+int x2apic_apic_id_registered(void)
+{
+	return 1;
+}
+
+void __x2apic_send_IPI_dest(unsigned int apicid, int vector, unsigned int dest)
+{
+	unsigned long cfg = __prepare_ICR(0, vector, dest);
+	native_x2apic_icr_write(cfg, apicid);
+}
+
+void __x2apic_send_IPI_shorthand(int vector, u32 which)
+{
+	unsigned long cfg = __prepare_ICR(which, vector, 0);
+
+	/* x2apic MSRs are special and need a special fence: */
+	weak_wrmsr_fence();
+	native_x2apic_icr_write(cfg, 0);
+}
+
+unsigned int x2apic_get_apic_id(unsigned long id)
 {
 	return id;
 }
 
-u32 x2apic_set_apic_id(u32 id)
+u32 x2apic_set_apic_id(unsigned int id)
 {
 	return id;
 }
 
-u32 x2apic_phys_pkg_id(u32 initial_apicid, int index_msb)
+int x2apic_phys_pkg_id(int initial_apicid, int index_msb)
 {
 	return initial_apicid >> index_msb;
+}
+
+void x2apic_send_IPI_self(int vector)
+{
+	apic_write(APIC_SELF_IPI, vector);
 }
 
 static struct apic apic_x2apic_phys __ro_after_init = {
@@ -144,17 +160,23 @@ static struct apic apic_x2apic_phys __ro_after_init = {
 	.name				= "physical x2apic",
 	.probe				= x2apic_phys_probe,
 	.acpi_madt_oem_check		= x2apic_acpi_madt_oem_check,
+	.apic_id_valid			= x2apic_apic_id_valid,
+	.apic_id_registered		= x2apic_apic_id_registered,
 
 	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
 	.dest_mode_logical		= false,
 
 	.disable_esr			= 0,
 
+	.check_apicid_used		= NULL,
+	.init_apic_ldr			= init_x2apic_ldr,
+	.ioapic_phys_id_map		= NULL,
+	.setup_apic_routing		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
+	.apicid_to_cpu_present		= NULL,
+	.check_phys_apicid_present	= default_check_phys_apicid_present,
 	.phys_pkg_id			= x2apic_phys_pkg_id,
 
-	.max_apic_id			= UINT_MAX,
-	.x2apic_set_max_apicid		= true,
 	.get_apic_id			= x2apic_get_apic_id,
 	.set_apic_id			= x2apic_set_apic_id,
 
@@ -166,13 +188,16 @@ static struct apic apic_x2apic_phys __ro_after_init = {
 	.send_IPI_allbutself		= x2apic_send_IPI_allbutself,
 	.send_IPI_all			= x2apic_send_IPI_all,
 	.send_IPI_self			= x2apic_send_IPI_self,
-	.nmi_to_offline_cpu		= true,
+
+	.inquire_remote_apic		= NULL,
 
 	.read				= native_apic_msr_read,
 	.write				= native_apic_msr_write,
-	.eoi				= native_apic_msr_eoi,
+	.eoi_write			= native_apic_msr_eoi_write,
 	.icr_read			= native_x2apic_icr_read,
 	.icr_write			= native_x2apic_icr_write,
+	.wait_icr_idle			= native_x2apic_wait_icr_idle,
+	.safe_wait_icr_idle		= native_safe_x2apic_wait_icr_idle,
 };
 
 apic_driver(apic_x2apic_phys);

@@ -14,13 +14,7 @@ properties:
     pattern: "^easrc@.*"
 
   compatible:
-    oneOf:
-      - enum:
-          - fsl,imx8mn-easrc
-      - items:
-          - enum:
-              - fsl,imx8mp-easrc
-          - const: fsl,imx8mn-easrc
+    const: fsl,imx8mn-easrc
 
   reg:
     maxItems: 1

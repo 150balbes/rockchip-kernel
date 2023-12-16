@@ -51,8 +51,7 @@ static bool gud_is_big_endian(void)
 
 static size_t gud_xrgb8888_to_r124(u8 *dst, const struct drm_format_info *format,
 				   void *src, struct drm_framebuffer *fb,
-				   struct drm_rect *rect,
-				   struct drm_format_conv_state *fmtcnv_state)
+				   struct drm_rect *rect)
 {
 	unsigned int block_width = drm_format_info_block_width(format, 0);
 	unsigned int bits_per_pixel = 8 / block_width;
@@ -76,7 +75,7 @@ static size_t gud_xrgb8888_to_r124(u8 *dst, const struct drm_format_info *format
 
 	iosys_map_set_vaddr(&dst_map, buf);
 	iosys_map_set_vaddr(&vmap, src);
-	drm_fb_xrgb8888_to_gray8(&dst_map, NULL, &vmap, fb, rect, fmtcnv_state);
+	drm_fb_xrgb8888_to_gray8(&dst_map, NULL, &vmap, fb, rect);
 	pix8 = buf;
 
 	for (y = 0; y < height; y++) {
@@ -153,8 +152,7 @@ static size_t gud_xrgb8888_to_color(u8 *dst, const struct drm_format_info *forma
 static int gud_prep_flush(struct gud_device *gdrm, struct drm_framebuffer *fb,
 			  const struct iosys_map *src, bool cached_reads,
 			  const struct drm_format_info *format, struct drm_rect *rect,
-			  struct gud_set_buffer_req *req,
-			  struct drm_format_conv_state *fmtcnv_state)
+			  struct gud_set_buffer_req *req)
 {
 	u8 compression = gdrm->compression;
 	struct iosys_map dst;
@@ -180,23 +178,23 @@ retry:
 	 */
 	if (format != fb->format) {
 		if (format->format == GUD_DRM_FORMAT_R1) {
-			len = gud_xrgb8888_to_r124(buf, format, vaddr, fb, rect, fmtcnv_state);
+			len = gud_xrgb8888_to_r124(buf, format, vaddr, fb, rect);
 			if (!len)
 				return -ENOMEM;
 		} else if (format->format == DRM_FORMAT_R8) {
-			drm_fb_xrgb8888_to_gray8(&dst, NULL, src, fb, rect, fmtcnv_state);
+			drm_fb_xrgb8888_to_gray8(&dst, NULL, src, fb, rect);
 		} else if (format->format == DRM_FORMAT_RGB332) {
-			drm_fb_xrgb8888_to_rgb332(&dst, NULL, src, fb, rect, fmtcnv_state);
+			drm_fb_xrgb8888_to_rgb332(&dst, NULL, src, fb, rect);
 		} else if (format->format == DRM_FORMAT_RGB565) {
-			drm_fb_xrgb8888_to_rgb565(&dst, NULL, src, fb, rect, fmtcnv_state,
+			drm_fb_xrgb8888_to_rgb565(&dst, NULL, src, fb, rect,
 						  gud_is_big_endian());
 		} else if (format->format == DRM_FORMAT_RGB888) {
-			drm_fb_xrgb8888_to_rgb888(&dst, NULL, src, fb, rect, fmtcnv_state);
+			drm_fb_xrgb8888_to_rgb888(&dst, NULL, src, fb, rect);
 		} else {
 			len = gud_xrgb8888_to_color(buf, format, vaddr, fb, rect);
 		}
 	} else if (gud_is_big_endian() && format->cpp[0] > 1) {
-		drm_fb_swab(&dst, NULL, src, fb, rect, cached_reads, fmtcnv_state);
+		drm_fb_swab(&dst, NULL, src, fb, rect, cached_reads);
 	} else if (compression && cached_reads && pitch == fb->pitches[0]) {
 		/* can compress directly from the framebuffer */
 		buf = vaddr + rect->y1 * pitch;
@@ -268,8 +266,7 @@ static int gud_usb_bulk(struct gud_device *gdrm, size_t len)
 
 static int gud_flush_rect(struct gud_device *gdrm, struct drm_framebuffer *fb,
 			  const struct iosys_map *src, bool cached_reads,
-			  const struct drm_format_info *format, struct drm_rect *rect,
-			  struct drm_format_conv_state *fmtcnv_state)
+			  const struct drm_format_info *format, struct drm_rect *rect)
 {
 	struct gud_set_buffer_req req;
 	size_t len, trlen;
@@ -277,7 +274,7 @@ static int gud_flush_rect(struct gud_device *gdrm, struct drm_framebuffer *fb,
 
 	drm_dbg(&gdrm->drm, "Flushing [FB:%d] " DRM_RECT_FMT "\n", fb->base.id, DRM_RECT_ARG(rect));
 
-	ret = gud_prep_flush(gdrm, fb, src, cached_reads, format, rect, &req, fmtcnv_state);
+	ret = gud_prep_flush(gdrm, fb, src, cached_reads, format, rect, &req);
 	if (ret)
 		return ret;
 
@@ -321,7 +318,6 @@ static void gud_flush_damage(struct gud_device *gdrm, struct drm_framebuffer *fb
 			     const struct iosys_map *src, bool cached_reads,
 			     struct drm_rect *damage)
 {
-	struct drm_format_conv_state fmtcnv_state = DRM_FORMAT_CONV_STATE_INIT;
 	const struct drm_format_info *format;
 	unsigned int i, lines;
 	size_t pitch;
@@ -344,7 +340,7 @@ static void gud_flush_damage(struct gud_device *gdrm, struct drm_framebuffer *fb
 		rect.y1 += i * lines;
 		rect.y2 = min_t(u32, rect.y1 + lines, damage->y2);
 
-		ret = gud_flush_rect(gdrm, fb, src, cached_reads, format, &rect, &fmtcnv_state);
+		ret = gud_flush_rect(gdrm, fb, src, cached_reads, format, &rect);
 		if (ret) {
 			if (ret != -ENODEV && ret != -ECONNRESET &&
 			    ret != -ESHUTDOWN && ret != -EPROTO)
@@ -354,8 +350,6 @@ static void gud_flush_damage(struct gud_device *gdrm, struct drm_framebuffer *fb
 			break;
 		}
 	}
-
-	drm_format_conv_state_release(&fmtcnv_state);
 }
 
 void gud_flush_work(struct work_struct *work)
@@ -509,7 +503,7 @@ int gud_pipe_check(struct drm_simple_display_pipe *pipe,
 		return -ENOENT;
 
 	len = struct_size(req, properties,
-			  size_add(GUD_PROPERTIES_MAX_NUM, GUD_CONNECTOR_PROPERTIES_MAX_NUM));
+			  GUD_PROPERTIES_MAX_NUM + GUD_CONNECTOR_PROPERTIES_MAX_NUM);
 	req = kzalloc(len, GFP_KERNEL);
 	if (!req)
 		return -ENOMEM;

@@ -386,8 +386,7 @@ nvkm_outp_new_(const struct nvkm_outp_func *func, struct nvkm_disp *disp,
 	outp->disp = disp;
 	outp->index = index;
 	outp->info = *dcbE;
-	if (!disp->rm.client.gsp)
-		outp->i2c = nvkm_i2c_bus_find(i2c, dcbE->i2c_index);
+	outp->i2c = nvkm_i2c_bus_find(i2c, dcbE->i2c_index);
 
 	OUTP_DBG(outp, "type %02x loc %d or %d link %d con %x "
 		       "edid %x bus %d head %x",

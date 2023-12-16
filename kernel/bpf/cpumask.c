@@ -9,6 +9,7 @@
 /**
  * struct bpf_cpumask - refcounted BPF cpumask wrapper structure
  * @cpumask:	The actual cpumask embedded in the struct.
+ * @rcu:	The RCU head used to free the cpumask with RCU safety.
  * @usage:	Object reference counter. When the refcount goes to 0, the
  *		memory is released back to the BPF allocator, which provides
  *		RCU safety.
@@ -24,6 +25,7 @@
  */
 struct bpf_cpumask {
 	cpumask_t cpumask;
+	struct rcu_head rcu;
 	refcount_t usage;
 };
 
@@ -34,7 +36,9 @@ static bool cpu_valid(u32 cpu)
 	return cpu < nr_cpu_ids;
 }
 
-__bpf_kfunc_start_defs();
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "Global kfuncs as their definitions will be in BTF");
 
 /**
  * bpf_cpumask_create() - Create a mutable BPF cpumask.
@@ -78,6 +82,16 @@ __bpf_kfunc struct bpf_cpumask *bpf_cpumask_acquire(struct bpf_cpumask *cpumask)
 	return cpumask;
 }
 
+static void cpumask_free_cb(struct rcu_head *head)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = container_of(head, struct bpf_cpumask, rcu);
+	migrate_disable();
+	bpf_mem_cache_free(&bpf_cpumask_ma, cpumask);
+	migrate_enable();
+}
+
 /**
  * bpf_cpumask_release() - Release a previously acquired BPF cpumask.
  * @cpumask: The cpumask being released.
@@ -88,12 +102,8 @@ __bpf_kfunc struct bpf_cpumask *bpf_cpumask_acquire(struct bpf_cpumask *cpumask)
  */
 __bpf_kfunc void bpf_cpumask_release(struct bpf_cpumask *cpumask)
 {
-	if (!refcount_dec_and_test(&cpumask->usage))
-		return;
-
-	migrate_disable();
-	bpf_mem_cache_free_rcu(&bpf_cpumask_ma, cpumask);
-	migrate_enable();
+	if (refcount_dec_and_test(&cpumask->usage))
+		call_rcu(&cpumask->rcu, cpumask_free_cb);
 }
 
 /**
@@ -405,7 +415,7 @@ __bpf_kfunc u32 bpf_cpumask_any_and_distribute(const struct cpumask *src1,
 	return cpumask_any_and_distribute(src1, src2);
 }
 
-__bpf_kfunc_end_defs();
+__diag_pop();
 
 BTF_SET8_START(cpumask_kfunc_btf_ids)
 BTF_ID_FLAGS(func, bpf_cpumask_create, KF_ACQUIRE | KF_RET_NULL)

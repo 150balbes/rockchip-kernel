@@ -811,9 +811,6 @@ static int xenbus_probe_thread(void *unused)
 
 static int __init xenbus_probe_initcall(void)
 {
-	if (!xen_domain())
-		return -ENODEV;
-
 	/*
 	 * Probe XenBus here in the XS_PV case, and also XS_HVM unless we
 	 * need to wait for the platform PCI device to come up or
@@ -1025,7 +1022,7 @@ static int __init xenbus_init(void)
 			if (err < 0) {
 				pr_err("xenstore_late_init couldn't bind irq err=%d\n",
 				       err);
-				goto out_error;
+				return err;
 			}
 
 			xs_init_irq = err;

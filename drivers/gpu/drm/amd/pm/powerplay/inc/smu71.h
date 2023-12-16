@@ -118,7 +118,8 @@ typedef struct {
 
 #endif
 
-struct SMU71_PIDController {
+struct SMU71_PIDController
+{
     uint32_t Ki;
     int32_t LFWindupUpperLim;
     int32_t LFWindupLowerLim;
@@ -132,7 +133,8 @@ struct SMU71_PIDController {
 
 typedef struct SMU71_PIDController SMU71_PIDController;
 
-struct SMU7_LocalDpmScoreboard {
+struct SMU7_LocalDpmScoreboard
+{
     uint32_t PercentageBusy;
 
     int32_t  PIDError;
@@ -177,8 +179,8 @@ struct SMU7_LocalDpmScoreboard {
     uint8_t  DteClampMode;
     uint8_t  FpsClampMode;
 
-    uint16_t LevelResidencyCounters[SMU71_MAX_LEVELS_GRAPHICS];
-    uint16_t LevelSwitchCounters[SMU71_MAX_LEVELS_GRAPHICS];
+    uint16_t LevelResidencyCounters [SMU71_MAX_LEVELS_GRAPHICS];
+    uint16_t LevelSwitchCounters [SMU71_MAX_LEVELS_GRAPHICS];
 
     void     (*TargetStateCalculator)(uint8_t);
     void     (*SavedTargetStateCalculator)(uint8_t);
@@ -198,7 +200,8 @@ typedef struct SMU7_LocalDpmScoreboard SMU7_LocalDpmScoreboard;
 
 #define SMU7_MAX_VOLTAGE_CLIENTS 12
 
-struct SMU7_VoltageScoreboard {
+struct SMU7_VoltageScoreboard
+{
     uint16_t CurrentVoltage;
     uint16_t HighestVoltage;
     uint16_t MaxVid;
@@ -322,7 +325,8 @@ typedef struct SMU7_PowerScoreboard SMU7_PowerScoreboard;
 
 // --------------------------------------------------------------------------------------------------
 
-struct SMU7_ThermalScoreboard {
+struct SMU7_ThermalScoreboard
+{
    int16_t  GpuLimit;
    int16_t  GpuHyst;
    uint16_t CurrGnbTemp;
@@ -356,7 +360,8 @@ typedef struct SMU7_ThermalScoreboard SMU7_ThermalScoreboard;
 #define SMU7_VCE_SCLK_HANDSHAKE_DISABLE                  0x00020000
 
 // All 'soft registers' should be uint32_t.
-struct SMU71_SoftRegisters {
+struct SMU71_SoftRegisters
+{
     uint32_t        RefClockFrequency;
     uint32_t        PmTimerPeriod;
     uint32_t        FeatureEnables;
@@ -408,7 +413,8 @@ struct SMU71_SoftRegisters {
 
 typedef struct SMU71_SoftRegisters SMU71_SoftRegisters;
 
-struct SMU71_Firmware_Header {
+struct SMU71_Firmware_Header
+{
     uint32_t Digest[5];
     uint32_t Version;
     uint32_t HeaderSize;

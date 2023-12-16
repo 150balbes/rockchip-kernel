@@ -20,7 +20,6 @@
 
 #include <asm/pstate.h>
 #include <asm/elf.h>
-#include <asm/unaligned.h>
 
 #include "opcodes.h"
 
@@ -36,7 +35,7 @@ static int crc32c_sparc64_setkey(struct crypto_shash *hash, const u8 *key,
 
 	if (keylen != sizeof(u32))
 		return -EINVAL;
-	*mctx = get_unaligned_le32(key);
+	*mctx = le32_to_cpup((__le32 *)key);
 	return 0;
 }
 
@@ -52,26 +51,18 @@ static int crc32c_sparc64_init(struct shash_desc *desc)
 
 extern void crc32c_sparc64(u32 *crcp, const u64 *data, unsigned int len);
 
-static u32 crc32c_compute(u32 crc, const u8 *data, unsigned int len)
+static void crc32c_compute(u32 *crcp, const u64 *data, unsigned int len)
 {
-	unsigned int n = -(uintptr_t)data & 7;
+	unsigned int asm_len;
 
-	if (n) {
-		/* Data isn't 8-byte aligned.  Align it. */
-		n = min(n, len);
-		crc = __crc32c_le(crc, data, n);
-		data += n;
-		len -= n;
-	}
-	n = len & ~7U;
-	if (n) {
-		crc32c_sparc64(&crc, (const u64 *)data, n);
-		data += n;
-		len -= n;
+	asm_len = len & ~7U;
+	if (asm_len) {
+		crc32c_sparc64(crcp, data, asm_len);
+		data += asm_len / 8;
+		len -= asm_len;
 	}
 	if (len)
-		crc = __crc32c_le(crc, data, len);
-	return crc;
+		*crcp = __crc32c_le(*crcp, (const unsigned char *) data, len);
 }
 
 static int crc32c_sparc64_update(struct shash_desc *desc, const u8 *data,
@@ -79,14 +70,19 @@ static int crc32c_sparc64_update(struct shash_desc *desc, const u8 *data,
 {
 	u32 *crcp = shash_desc_ctx(desc);
 
-	*crcp = crc32c_compute(*crcp, data, len);
+	crc32c_compute(crcp, (const u64 *) data, len);
+
 	return 0;
 }
 
-static int __crc32c_sparc64_finup(const u32 *crcp, const u8 *data,
-				  unsigned int len, u8 *out)
+static int __crc32c_sparc64_finup(u32 *crcp, const u8 *data, unsigned int len,
+				  u8 *out)
 {
-	put_unaligned_le32(~crc32c_compute(*crcp, data, len), out);
+	u32 tmp = *crcp;
+
+	crc32c_compute(&tmp, (const u64 *) data, len);
+
+	*(__le32 *) out = ~cpu_to_le32(tmp);
 	return 0;
 }
 
@@ -100,7 +96,7 @@ static int crc32c_sparc64_final(struct shash_desc *desc, u8 *out)
 {
 	u32 *crcp = shash_desc_ctx(desc);
 
-	put_unaligned_le32(~*crcp, out);
+	*(__le32 *) out = ~cpu_to_le32p(crcp);
 	return 0;
 }
 
@@ -139,6 +135,7 @@ static struct shash_alg alg = {
 		.cra_flags		=	CRYPTO_ALG_OPTIONAL_KEY,
 		.cra_blocksize		=	CHKSUM_BLOCK_SIZE,
 		.cra_ctxsize		=	sizeof(u32),
+		.cra_alignmask		=	7,
 		.cra_module		=	THIS_MODULE,
 		.cra_init		=	crc32c_sparc64_cra_init,
 	}

@@ -2,14 +2,12 @@
 #ifndef _ASM_X86_FB_H
 #define _ASM_X86_FB_H
 
-#include <asm/page.h>
-
 struct fb_info;
+struct file;
+struct vm_area_struct;
 
-pgprot_t pgprot_framebuffer(pgprot_t prot,
-			    unsigned long vm_start, unsigned long vm_end,
-			    unsigned long offset);
-#define pgprot_framebuffer pgprot_framebuffer
+void fb_pgprotect(struct file *file, struct vm_area_struct *vma, unsigned long off);
+#define fb_pgprotect fb_pgprotect
 
 int fb_is_primary_device(struct fb_info *info);
 #define fb_is_primary_device fb_is_primary_device

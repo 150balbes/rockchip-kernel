@@ -156,7 +156,7 @@ err:
 	return error;
 }
 
-static void da9052_led_remove(struct platform_device *pdev)
+static int da9052_led_remove(struct platform_device *pdev)
 {
 	struct da9052_led *led = platform_get_drvdata(pdev);
 	struct da9052_pdata *pdata;
@@ -172,6 +172,8 @@ static void da9052_led_remove(struct platform_device *pdev)
 		da9052_set_led_brightness(&led[i], LED_OFF);
 		led_classdev_unregister(&led[i].cdev);
 	}
+
+	return 0;
 }
 
 static struct platform_driver da9052_led_driver = {
@@ -179,7 +181,7 @@ static struct platform_driver da9052_led_driver = {
 		.name	= "da9052-leds",
 	},
 	.probe		= da9052_led_probe,
-	.remove_new	= da9052_led_remove,
+	.remove		= da9052_led_remove,
 };
 
 module_platform_driver(da9052_led_driver);

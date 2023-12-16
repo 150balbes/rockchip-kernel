@@ -47,7 +47,7 @@
  * using the 2.6 Linux kernel kref construct.
  *
  * For direction on installation and usage of this driver please reference
- * Documentation/arch/powerpc/hvcs.rst.
+ * Documentation/powerpc/hvcs.rst.
  */
 
 #include <linux/device.h>
@@ -664,6 +664,7 @@ static void hvcs_return_index(int index)
 static void hvcs_destruct_port(struct tty_port *p)
 {
 	struct hvcs_struct *hvcsd = container_of(p, struct hvcs_struct, port);
+	struct vio_dev *vdev;
 	struct completion *comp;
 	unsigned long flags;
 
@@ -685,6 +686,7 @@ static void hvcs_destruct_port(struct tty_port *p)
 	printk(KERN_INFO "HVCS: Destroyed hvcs_struct for vty-server@%X.\n",
 			hvcsd->vdev->unit_address);
 
+	vdev = hvcsd->vdev;
 	hvcsd->vdev = NULL;
 
 	hvcsd->p_unit_address = 0;
@@ -1255,14 +1257,15 @@ static void hvcs_hangup(struct tty_struct * tty)
  * tty_hangup will allow hvcs_write time to complete execution before it
  * terminates our device.
  */
-static ssize_t hvcs_write(struct tty_struct *tty, const u8 *buf, size_t count)
+static int hvcs_write(struct tty_struct *tty,
+		const unsigned char *buf, int count)
 {
 	struct hvcs_struct *hvcsd = tty->driver_data;
 	unsigned int unit_address;
 	const unsigned char *charbuf;
 	unsigned long flags;
-	size_t total_sent = 0;
-	size_t tosend = 0;
+	int total_sent = 0;
+	int tosend = 0;
 	int result = 0;
 
 	/*
@@ -1297,8 +1300,7 @@ static ssize_t hvcs_write(struct tty_struct *tty, const u8 *buf, size_t count)
 	unit_address = hvcsd->vdev->unit_address;
 
 	while (count > 0) {
-		tosend = min_t(size_t, count,
-			       (HVCS_BUFF_LEN - hvcsd->chars_in_buffer));
+		tosend = min(count, (HVCS_BUFF_LEN - hvcsd->chars_in_buffer));
 		/*
 		 * No more space, this probably means that the last call to
 		 * hvcs_write() didn't succeed and the buffer was filled up.

@@ -56,9 +56,6 @@
 #define SRC_KFC			0x28200
 #define DIV_KFC0		0x28500
 
-/* NOTE: Must be equal to the last clock ID increased by one */
-#define CLKS_NR			512
-
 /* list of PLLs */
 enum exynos5410_plls {
 	apll, cpll, epll, mpll,
@@ -263,7 +260,7 @@ static const struct samsung_cmu_info cmu __initconst = {
 	.nr_div_clks	= ARRAY_SIZE(exynos5410_div_clks),
 	.gate_clks	= exynos5410_gate_clks,
 	.nr_gate_clks	= ARRAY_SIZE(exynos5410_gate_clks),
-	.nr_clk_ids	= CLKS_NR,
+	.nr_clk_ids	= CLK_NR_CLKS,
 };
 
 /* register exynos5410 clocks */

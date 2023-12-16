@@ -19,6 +19,7 @@
 #include <linux/platform_data/pxa_sdhci.h>
 #include <linux/slab.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/mmc.h>
 #include <linux/pinctrl/consumer.h>
@@ -268,21 +269,26 @@ static int sdhci_pxav2_probe(struct platform_device *pdev)
 	pltfm_host = sdhci_priv(host);
 	pxav2_host = sdhci_pltfm_priv(pltfm_host);
 
-	clk = devm_clk_get_optional_enabled(dev, "io");
-	if (!clk)
-		clk = devm_clk_get_enabled(dev, NULL);
+	clk = devm_clk_get(dev, "io");
+	if (IS_ERR(clk) && PTR_ERR(clk) != -EPROBE_DEFER)
+		clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(clk)) {
 		ret = PTR_ERR(clk);
 		dev_err_probe(dev, ret, "failed to get io clock\n");
 		goto free;
 	}
 	pltfm_host->clk = clk;
+	ret = clk_prepare_enable(clk);
+	if (ret) {
+		dev_err(dev, "failed to enable io clock\n");
+		goto free;
+	}
 
 	clk_core = devm_clk_get_optional_enabled(dev, "core");
 	if (IS_ERR(clk_core)) {
 		ret = PTR_ERR(clk_core);
 		dev_err_probe(dev, ret, "failed to enable core clock\n");
-		goto free;
+		goto disable_clk;
 	}
 
 	host->quirks = SDHCI_QUIRK_BROKEN_ADMA
@@ -334,10 +340,12 @@ static int sdhci_pxav2_probe(struct platform_device *pdev)
 
 	ret = sdhci_add_host(host);
 	if (ret)
-		goto free;
+		goto disable_clk;
 
 	return 0;
 
+disable_clk:
+	clk_disable_unprepare(clk);
 free:
 	sdhci_pltfm_free(pdev);
 	return ret;
@@ -351,7 +359,7 @@ static struct platform_driver sdhci_pxav2_driver = {
 		.pm	= &sdhci_pltfm_pmops,
 	},
 	.probe		= sdhci_pxav2_probe,
-	.remove_new	= sdhci_pltfm_remove,
+	.remove		= sdhci_pltfm_unregister,
 };
 
 module_platform_driver(sdhci_pxav2_driver);

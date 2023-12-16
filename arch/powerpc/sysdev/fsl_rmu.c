@@ -25,6 +25,7 @@
 #include <linux/interrupt.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 
 #include "fsl_rio.h"
@@ -359,7 +360,7 @@ out:
 	return IRQ_HANDLED;
 }
 
-static void msg_unit_error_handler(void)
+void msg_unit_error_handler(void)
 {
 
 	/*XXX: Error recovery is not implemented, we just clear errors */

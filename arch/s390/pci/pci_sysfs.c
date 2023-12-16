@@ -56,7 +56,6 @@ static ssize_t recover_store(struct device *dev, struct device_attribute *attr,
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct zpci_dev *zdev = to_zpci(pdev);
 	int ret = 0;
-	u8 status;
 
 	/* Can't use device_remove_self() here as that would lead us to lock
 	 * the pci_rescan_remove_lock while holding the device' kernfs lock.
@@ -83,6 +82,12 @@ static ssize_t recover_store(struct device *dev, struct device_attribute *attr,
 	pci_lock_rescan_remove();
 	if (pci_dev_is_added(pdev)) {
 		pci_stop_and_remove_bus_device(pdev);
+		if (zdev->dma_table) {
+			ret = zpci_dma_exit_device(zdev);
+			if (ret)
+				goto out;
+		}
+
 		if (zdev_enabled(zdev)) {
 			ret = zpci_disable_device(zdev);
 			/*
@@ -100,16 +105,14 @@ static ssize_t recover_store(struct device *dev, struct device_attribute *attr,
 		ret = zpci_enable_device(zdev);
 		if (ret)
 			goto out;
-
-		if (zdev->dma_table) {
-			ret = zpci_register_ioat(zdev, 0, zdev->start_dma, zdev->end_dma,
-						 virt_to_phys(zdev->dma_table), &status);
-			if (ret)
-				zpci_disable_device(zdev);
+		ret = zpci_dma_init_device(zdev);
+		if (ret) {
+			zpci_disable_device(zdev);
+			goto out;
 		}
+		pci_rescan_bus(zdev->zbus->bus);
 	}
 out:
-	pci_rescan_bus(zdev->zbus->bus);
 	pci_unlock_rescan_remove();
 	if (kn)
 		sysfs_unbreak_active_protection(kn);

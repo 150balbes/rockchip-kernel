@@ -1,9 +1,9 @@
 .. SPDX-License-Identifier: GPL-2.0
 .. Copyright (C) 2022, Google LLC.
 
-===============================
-Kernel Memory Sanitizer (KMSAN)
-===============================
+===================================
+The Kernel Memory Sanitizer (KMSAN)
+===================================
 
 KMSAN is a dynamic error detector aimed at finding uses of uninitialized
 values. It is based on compiler instrumentation, and is quite similar to the

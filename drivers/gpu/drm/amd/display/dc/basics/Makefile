@@ -24,14 +24,7 @@
 # It provides the general basic services required by other DAL
 # subcomponents.
 
-BASICS := \
-	conversion.o \
-	fixpt31_32.o \
-	vector.o \
-	dc_common.o \
-	dce_calcs.o \
-	custom_float.o \
-	bw_fixed.o
+BASICS = conversion.o fixpt31_32.o vector.o dc_common.o
 
 AMD_DAL_BASICS = $(addprefix $(AMDDALPATH)/dc/basics/,$(BASICS))
 

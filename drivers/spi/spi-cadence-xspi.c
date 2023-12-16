@@ -11,6 +11,7 @@
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -419,7 +420,7 @@ static int cdns_xspi_mem_op_execute(struct spi_mem *mem,
 				    const struct spi_mem_op *op)
 {
 	struct cdns_xspi_dev *cdns_xspi =
-		spi_controller_get_devdata(mem->spi->controller);
+		spi_master_get_devdata(mem->spi->master);
 	int ret = 0;
 
 	ret = cdns_xspi_mem_op(cdns_xspi, mem, op);
@@ -430,7 +431,7 @@ static int cdns_xspi_mem_op_execute(struct spi_mem *mem,
 static int cdns_xspi_adjust_mem_op_size(struct spi_mem *mem, struct spi_mem_op *op)
 {
 	struct cdns_xspi_dev *cdns_xspi =
-		spi_controller_get_devdata(mem->spi->controller);
+		spi_master_get_devdata(mem->spi->master);
 
 	op->data.nbytes = clamp_val(op->data.nbytes, 0, cdns_xspi->sdmasize);
 
@@ -527,26 +528,26 @@ static void cdns_xspi_print_phy_config(struct cdns_xspi_dev *cdns_xspi)
 static int cdns_xspi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct spi_controller *host = NULL;
+	struct spi_master *master = NULL;
 	struct cdns_xspi_dev *cdns_xspi = NULL;
 	struct resource *res;
 	int ret;
 
-	host = devm_spi_alloc_host(dev, sizeof(*cdns_xspi));
-	if (!host)
+	master = devm_spi_alloc_master(dev, sizeof(*cdns_xspi));
+	if (!master)
 		return -ENOMEM;
 
-	host->mode_bits = SPI_3WIRE | SPI_TX_DUAL  | SPI_TX_QUAD  |
+	master->mode_bits = SPI_3WIRE | SPI_TX_DUAL  | SPI_TX_QUAD  |
 		SPI_RX_DUAL | SPI_RX_QUAD | SPI_TX_OCTAL | SPI_RX_OCTAL |
 		SPI_MODE_0  | SPI_MODE_3;
 
-	host->mem_ops = &cadence_xspi_mem_ops;
-	host->dev.of_node = pdev->dev.of_node;
-	host->bus_num = -1;
+	master->mem_ops = &cadence_xspi_mem_ops;
+	master->dev.of_node = pdev->dev.of_node;
+	master->bus_num = -1;
 
-	platform_set_drvdata(pdev, host);
+	platform_set_drvdata(pdev, master);
 
-	cdns_xspi = spi_controller_get_devdata(host);
+	cdns_xspi = spi_master_get_devdata(master);
 	cdns_xspi->pdev = pdev;
 	cdns_xspi->dev = &pdev->dev;
 	cdns_xspi->cur_cs = 0;
@@ -596,15 +597,15 @@ static int cdns_xspi_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	host->num_chipselect = 1 << cdns_xspi->hw_num_banks;
+	master->num_chipselect = 1 << cdns_xspi->hw_num_banks;
 
-	ret = devm_spi_register_controller(dev, host);
+	ret = devm_spi_register_master(dev, master);
 	if (ret) {
-		dev_err(dev, "Failed to register SPI host\n");
+		dev_err(dev, "Failed to register SPI master\n");
 		return ret;
 	}
 
-	dev_info(dev, "Successfully registered SPI host\n");
+	dev_info(dev, "Successfully registered SPI master\n");
 
 	return 0;
 }

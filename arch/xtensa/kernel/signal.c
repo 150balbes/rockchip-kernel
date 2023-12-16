@@ -26,8 +26,6 @@
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
 #include <asm/coprocessor.h>
-#include <asm/processor.h>
-#include <asm/syscall.h>
 #include <asm/unistd.h>
 
 extern struct task_struct *coproc_owners[];

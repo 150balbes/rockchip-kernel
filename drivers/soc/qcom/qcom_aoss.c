@@ -205,42 +205,37 @@ static bool qmp_message_empty(struct qmp *qmp)
 /**
  * qmp_send() - send a message to the AOSS
  * @qmp: qmp context
- * @fmt: format string for message to be sent
- * @...: arguments for the format string
+ * @data: message to be sent
+ * @len: length of the message
  *
- * Transmit message to AOSS and wait for the AOSS to acknowledge the message.
- * data must not be longer than the mailbox size. Access is synchronized by
- * this implementation.
+ * Transmit @data to AOSS and wait for the AOSS to acknowledge the message.
+ * @len must be a multiple of 4 and not longer than the mailbox size. Access is
+ * synchronized by this implementation.
  *
  * Return: 0 on success, negative errno on failure
  */
-int qmp_send(struct qmp *qmp, const char *fmt, ...)
+int qmp_send(struct qmp *qmp, const void *data, size_t len)
 {
-	char buf[QMP_MSG_LEN];
 	long time_left;
-	va_list args;
-	int len;
 	int ret;
 
-	if (WARN_ON(IS_ERR_OR_NULL(qmp) || !fmt))
+	if (WARN_ON(IS_ERR_OR_NULL(qmp) || !data))
 		return -EINVAL;
 
-	memset(buf, 0, sizeof(buf));
-	va_start(args, fmt);
-	len = vsnprintf(buf, sizeof(buf), fmt, args);
-	va_end(args);
+	if (WARN_ON(len + sizeof(u32) > qmp->size))
+		return -EINVAL;
 
-	if (WARN_ON(len >= sizeof(buf)))
+	if (WARN_ON(len % sizeof(u32)))
 		return -EINVAL;
 
 	mutex_lock(&qmp->tx_lock);
 
 	/* The message RAM only implements 32-bit accesses */
 	__iowrite32_copy(qmp->msgram + qmp->offset + sizeof(u32),
-			 buf, sizeof(buf) / sizeof(u32));
-	writel(sizeof(buf), qmp->msgram + qmp->offset);
+			 data, len / sizeof(u32));
+	writel(len, qmp->msgram + qmp->offset);
 
-	/* Read back length to confirm data written in message RAM */
+	/* Read back len to confirm data written in message RAM */
 	readl(qmp->msgram + qmp->offset);
 	qmp_kick(qmp);
 
@@ -260,22 +255,22 @@ int qmp_send(struct qmp *qmp, const char *fmt, ...)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(qmp_send);
+EXPORT_SYMBOL(qmp_send);
 
 static int qmp_qdss_clk_prepare(struct clk_hw *hw)
 {
-	static const char *buf = "{class: clock, res: qdss, val: 1}";
+	static const char buf[QMP_MSG_LEN] = "{class: clock, res: qdss, val: 1}";
 	struct qmp *qmp = container_of(hw, struct qmp, qdss_clk);
 
-	return qmp_send(qmp, buf);
+	return qmp_send(qmp, buf, sizeof(buf));
 }
 
 static void qmp_qdss_clk_unprepare(struct clk_hw *hw)
 {
-	static const char *buf = "{class: clock, res: qdss, val: 0}";
+	static const char buf[QMP_MSG_LEN] = "{class: clock, res: qdss, val: 0}";
 	struct qmp *qmp = container_of(hw, struct qmp, qdss_clk);
 
-	qmp_send(qmp, buf);
+	qmp_send(qmp, buf, sizeof(buf));
 }
 
 static const struct clk_ops qmp_qdss_clk_ops = {
@@ -334,6 +329,7 @@ static int qmp_cdev_set_cur_state(struct thermal_cooling_device *cdev,
 				  unsigned long state)
 {
 	struct qmp_cooling_device *qmp_cdev = cdev->devdata;
+	char buf[QMP_MSG_LEN] = {};
 	bool cdev_state;
 	int ret;
 
@@ -343,8 +339,13 @@ static int qmp_cdev_set_cur_state(struct thermal_cooling_device *cdev,
 	if (qmp_cdev->state == state)
 		return 0;
 
-	ret = qmp_send(qmp_cdev->qmp, "{class: volt_flr, event:zero_temp, res:%s, value:%s}",
-		       qmp_cdev->name, cdev_state ? "on" : "off");
+	snprintf(buf, sizeof(buf),
+		 "{class: volt_flr, event:zero_temp, res:%s, value:%s}",
+			qmp_cdev->name,
+			cdev_state ? "on" : "off");
+
+	ret = qmp_send(qmp_cdev->qmp, buf, sizeof(buf));
+
 	if (!ret)
 		qmp_cdev->state = cdev_state;
 
@@ -458,7 +459,7 @@ struct qmp *qmp_get(struct device *dev)
 	}
 	return qmp;
 }
-EXPORT_SYMBOL_GPL(qmp_get);
+EXPORT_SYMBOL(qmp_get);
 
 /**
  * qmp_put() - release a qmp handle
@@ -473,7 +474,7 @@ void qmp_put(struct qmp *qmp)
 	if (!IS_ERR_OR_NULL(qmp))
 		put_device(qmp->dev);
 }
-EXPORT_SYMBOL_GPL(qmp_put);
+EXPORT_SYMBOL(qmp_put);
 
 static int qmp_probe(struct platform_device *pdev)
 {
@@ -533,7 +534,7 @@ err_free_mbox:
 	return ret;
 }
 
-static void qmp_remove(struct platform_device *pdev)
+static int qmp_remove(struct platform_device *pdev)
 {
 	struct qmp *qmp = platform_get_drvdata(pdev);
 
@@ -542,6 +543,8 @@ static void qmp_remove(struct platform_device *pdev)
 
 	qmp_close(qmp);
 	mbox_free_channel(qmp->mbox_chan);
+
+	return 0;
 }
 
 static const struct of_device_id qmp_dt_match[] = {
@@ -563,7 +566,7 @@ static struct platform_driver qmp_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe = qmp_probe,
-	.remove_new = qmp_remove,
+	.remove	= qmp_remove,
 };
 module_platform_driver(qmp_driver);
 

@@ -64,8 +64,9 @@ static int qibfs_mknod(struct inode *dir, struct dentry *dentry,
 	inode->i_uid = GLOBAL_ROOT_UID;
 	inode->i_gid = GLOBAL_ROOT_GID;
 	inode->i_blocks = 0;
-	simple_inode_init_ts(inode);
-	
+	inode->i_atime = current_time(inode);
+	inode->i_mtime = inode->i_atime;
+	inode->i_ctime = inode->i_atime;
 	inode->i_private = data;
 	if (S_ISDIR(mode)) {
 		inode->i_op = &simple_dir_inode_operations;

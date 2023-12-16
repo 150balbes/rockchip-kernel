@@ -66,7 +66,6 @@ tc_act_parse_redirect_ingress(struct mlx5e_tc_act_parse_state *parse_state,
 	if (err)
 		return err;
 
-	parse_state->if_count = 0;
 	esw_attr->out_count++;
 
 	return 0;

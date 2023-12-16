@@ -20,8 +20,6 @@
 #include <asm/traps.h>
 #include <asm/blinken.h>
 
-#include "time.h"
-
 static u64 hp300_read_clk(struct clocksource *cs);
 
 static struct clocksource hp300_clk = {

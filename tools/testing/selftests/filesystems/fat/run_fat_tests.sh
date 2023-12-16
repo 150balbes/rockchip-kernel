@@ -12,7 +12,7 @@ set -u
 set -o pipefail
 
 BASE_DIR="$(dirname $0)"
-TMP_DIR="$(mktemp -d /tmp/fat_tests_tmp.XXXXXX)"
+TMP_DIR="$(mktemp -d /tmp/fat_tests_tmp.XXXX)"
 IMG_PATH="${TMP_DIR}/fat.img"
 MNT_PATH="${TMP_DIR}/mnt"
 

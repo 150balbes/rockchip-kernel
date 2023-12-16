@@ -24,7 +24,6 @@
 #include "vmm.h"
 
 #include <core/option.h>
-#include <subdev/gsp.h>
 
 #include <nvif/class.h>
 
@@ -55,8 +54,5 @@ int
 tu102_mmu_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	      struct nvkm_mmu **pmmu)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return r535_mmu_new(&tu102_mmu, device, type, inst, pmmu);
-
 	return nvkm_mmu_new_(&tu102_mmu, device, type, inst, pmmu);
 }

@@ -286,8 +286,6 @@ int cg_destroy(const char *cgroup)
 {
 	int ret;
 
-	if (!cgroup)
-		return 0;
 retry:
 	ret = rmdir(cgroup);
 	if (ret && errno == EBUSY) {

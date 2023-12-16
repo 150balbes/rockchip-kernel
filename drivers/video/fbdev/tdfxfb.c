@@ -1142,7 +1142,6 @@ static int tdfxfb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 
 static const struct fb_ops tdfxfb_ops = {
 	.owner		= THIS_MODULE,
-	__FB_DEFAULT_IOMEM_OPS_RDWR,
 	.fb_check_var	= tdfxfb_check_var,
 	.fb_set_par	= tdfxfb_set_par,
 	.fb_setcolreg	= tdfxfb_setcolreg,
@@ -1155,9 +1154,10 @@ static const struct fb_ops tdfxfb_ops = {
 	.fb_copyarea	= tdfxfb_copyarea,
 	.fb_imageblit	= tdfxfb_imageblit,
 #else
-	__FB_DEFAULT_IOMEM_OPS_DRAW,
+	.fb_fillrect	= cfb_fillrect,
+	.fb_copyarea	= cfb_copyarea,
+	.fb_imageblit	= cfb_imageblit,
 #endif
-	__FB_DEFAULT_IOMEM_OPS_MMAP,
 };
 
 #ifdef CONFIG_FB_3DFX_I2C

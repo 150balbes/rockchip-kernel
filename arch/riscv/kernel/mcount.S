@@ -3,7 +3,6 @@
 
 #include <linux/init.h>
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 #include <asm/asm.h>
 #include <asm/csr.h>
 #include <asm/unistd.h>
@@ -48,20 +47,16 @@
 	addi	sp, sp, 4*SZREG
 	.endm
 
-SYM_TYPED_FUNC_START(ftrace_stub)
+ENTRY(ftrace_stub)
 #ifdef CONFIG_DYNAMIC_FTRACE
        .global MCOUNT_NAME
        .set    MCOUNT_NAME, ftrace_stub
 #endif
 	ret
-SYM_FUNC_END(ftrace_stub)
+ENDPROC(ftrace_stub)
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-SYM_TYPED_FUNC_START(ftrace_stub_graph)
-	ret
-SYM_FUNC_END(ftrace_stub_graph)
-
-SYM_FUNC_START(return_to_handler)
+ENTRY(return_to_handler)
 /*
  * On implementing the frame point test, the ideal way is to compare the
  * s0 (frame pointer, if enabled) on entry and the sp (stack pointer) on return.
@@ -76,25 +71,25 @@ SYM_FUNC_START(return_to_handler)
 	mv	a2, a0
 	RESTORE_RET_ABI_STATE
 	jalr	a2
-SYM_FUNC_END(return_to_handler)
+ENDPROC(return_to_handler)
 #endif
 
 #ifndef CONFIG_DYNAMIC_FTRACE
-SYM_FUNC_START(MCOUNT_NAME)
+ENTRY(MCOUNT_NAME)
 	la	t4, ftrace_stub
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	la	t0, ftrace_graph_return
 	REG_L	t1, 0(t0)
-	bne	t1, t4, .Ldo_ftrace_graph_caller
+	bne	t1, t4, do_ftrace_graph_caller
 
 	la	t3, ftrace_graph_entry
 	REG_L	t2, 0(t3)
 	la	t6, ftrace_graph_entry_stub
-	bne	t2, t6, .Ldo_ftrace_graph_caller
+	bne	t2, t6, do_ftrace_graph_caller
 #endif
 	la	t3, ftrace_trace_function
 	REG_L	t5, 0(t3)
-	bne	t5, t4, .Ldo_trace
+	bne	t5, t4, do_trace
 	ret
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
@@ -102,7 +97,7 @@ SYM_FUNC_START(MCOUNT_NAME)
  * A pseudo representation for the function graph tracer:
  * prepare_to_return(&ra_to_caller_of_caller, ra_to_caller)
  */
-.Ldo_ftrace_graph_caller:
+do_ftrace_graph_caller:
 	addi	a0, s0, -SZREG
 	mv	a1, ra
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
@@ -118,7 +113,7 @@ SYM_FUNC_START(MCOUNT_NAME)
  * A pseudo representation for the function tracer:
  * (*ftrace_trace_function)(ra_to_caller, ra_to_caller_of_caller)
  */
-.Ldo_trace:
+do_trace:
 	REG_L	a1, -SZREG(s0)
 	mv	a0, ra
 
@@ -126,6 +121,6 @@ SYM_FUNC_START(MCOUNT_NAME)
 	jalr	t5
 	RESTORE_ABI_STATE
 	ret
-SYM_FUNC_END(MCOUNT_NAME)
+ENDPROC(MCOUNT_NAME)
 #endif
 EXPORT_SYMBOL(MCOUNT_NAME)

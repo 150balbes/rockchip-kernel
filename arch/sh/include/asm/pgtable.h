@@ -102,16 +102,13 @@ extern void __update_cache(struct vm_area_struct *vma,
 extern void __update_tlb(struct vm_area_struct *vma,
 			 unsigned long address, pte_t pte);
 
-static inline void update_mmu_cache_range(struct vm_fault *vmf,
-		struct vm_area_struct *vma, unsigned long address,
-		pte_t *ptep, unsigned int nr)
+static inline void
+update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t *ptep)
 {
 	pte_t pte = *ptep;
 	__update_cache(vma, address, pte);
 	__update_tlb(vma, address, pte);
 }
-#define update_mmu_cache(vma, addr, ptep) \
-	update_mmu_cache_range(NULL, vma, addr, ptep, 1)
 
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 extern void paging_init(void);

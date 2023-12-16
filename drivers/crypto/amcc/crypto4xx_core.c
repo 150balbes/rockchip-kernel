@@ -1507,7 +1507,7 @@ err_alloc_dev:
 	return rc;
 }
 
-static void crypto4xx_remove(struct platform_device *ofdev)
+static int crypto4xx_remove(struct platform_device *ofdev)
 {
 	struct device *dev = &ofdev->dev;
 	struct crypto4xx_core_device *core_dev = dev_get_drvdata(dev);
@@ -1523,6 +1523,8 @@ static void crypto4xx_remove(struct platform_device *ofdev)
 	mutex_destroy(&core_dev->rng_lock);
 	/* Free all allocated memory */
 	crypto4xx_stop_all(core_dev);
+
+	return 0;
 }
 
 static const struct of_device_id crypto4xx_match[] = {
@@ -1537,7 +1539,7 @@ static struct platform_driver crypto4xx_driver = {
 		.of_match_table = crypto4xx_match,
 	},
 	.probe		= crypto4xx_probe,
-	.remove_new	= crypto4xx_remove,
+	.remove		= crypto4xx_remove,
 };
 
 module_platform_driver(crypto4xx_driver);

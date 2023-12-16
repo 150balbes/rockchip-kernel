@@ -229,22 +229,29 @@ ice_aq_delete_sched_elems(struct ice_hw *hw, u16 grps_req,
  * ice_sched_remove_elems - remove nodes from HW
  * @hw: pointer to the HW struct
  * @parent: pointer to the parent node
- * @node_teid: node teid to be deleted
+ * @num_nodes: number of nodes
+ * @node_teids: array of node teids to be deleted
  *
  * This function remove nodes from HW
  */
 static int
 ice_sched_remove_elems(struct ice_hw *hw, struct ice_sched_node *parent,
-		       u32 node_teid)
+		       u16 num_nodes, u32 *node_teids)
 {
-	DEFINE_FLEX(struct ice_aqc_delete_elem, buf, teid, 1);
-	u16 buf_size = __struct_size(buf);
-	u16 num_groups_removed = 0;
+	struct ice_aqc_delete_elem *buf;
+	u16 i, num_groups_removed = 0;
+	u16 buf_size;
 	int status;
 
+	buf_size = struct_size(buf, teid, num_nodes);
+	buf = devm_kzalloc(ice_hw_to_dev(hw), buf_size, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
 	buf->hdr.parent_teid = parent->info.node_teid;
-	buf->hdr.num_elems = cpu_to_le16(1);
-	buf->teid[0] = cpu_to_le32(node_teid);
+	buf->hdr.num_elems = cpu_to_le16(num_nodes);
+	for (i = 0; i < num_nodes; i++)
+		buf->teid[i] = cpu_to_le32(node_teids[i]);
 
 	status = ice_aq_delete_sched_elems(hw, 1, buf, buf_size,
 					   &num_groups_removed, NULL);
@@ -252,6 +259,7 @@ ice_sched_remove_elems(struct ice_hw *hw, struct ice_sched_node *parent,
 		ice_debug(hw, ICE_DBG_SCHED, "remove node failed FW error %d\n",
 			  hw->adminq.sq_last_status);
 
+	devm_kfree(ice_hw_to_dev(hw), buf);
 	return status;
 }
 
@@ -318,7 +326,7 @@ void ice_free_sched_node(struct ice_port_info *pi, struct ice_sched_node *node)
 	    node->info.data.elem_type != ICE_AQC_ELEM_TYPE_LEAF) {
 		u32 teid = le32_to_cpu(node->info.node_teid);
 
-		ice_sched_remove_elems(hw, node->parent, teid);
+		ice_sched_remove_elems(hw, node->parent, 1, &teid);
 	}
 	parent = node->parent;
 	/* root has no parent */
@@ -429,20 +437,24 @@ ice_aq_cfg_sched_elems(struct ice_hw *hw, u16 elems_req,
 }
 
 /**
- * ice_aq_move_sched_elems - move scheduler element (just 1 group)
+ * ice_aq_move_sched_elems - move scheduler elements
  * @hw: pointer to the HW struct
+ * @grps_req: number of groups to move
  * @buf: pointer to buffer
  * @buf_size: buffer size in bytes
  * @grps_movd: returns total number of groups moved
+ * @cd: pointer to command details structure or NULL
  *
  * Move scheduling elements (0x0408)
  */
-int
-ice_aq_move_sched_elems(struct ice_hw *hw, struct ice_aqc_move_elem *buf,
-			u16 buf_size, u16 *grps_movd)
+static int
+ice_aq_move_sched_elems(struct ice_hw *hw, u16 grps_req,
+			struct ice_aqc_move_elem *buf, u16 buf_size,
+			u16 *grps_movd, struct ice_sq_cd *cd)
 {
 	return ice_aqc_send_sched_elem_cmd(hw, ice_aqc_opc_move_sched_elems,
-					   1, buf, buf_size, grps_movd, NULL);
+					   grps_req, (void *)buf, buf_size,
+					   grps_movd, cd);
 }
 
 /**
@@ -514,7 +526,7 @@ ice_aq_query_sched_res(struct ice_hw *hw, u16 buf_size,
  *
  * This function suspends or resumes HW nodes
  */
-int
+static int
 ice_sched_suspend_resume_elems(struct ice_hw *hw, u8 num_nodes, u32 *node_teids,
 			       bool suspend)
 {
@@ -557,24 +569,18 @@ ice_alloc_lan_q_ctx(struct ice_hw *hw, u16 vsi_handle, u8 tc, u16 new_numqs)
 {
 	struct ice_vsi_ctx *vsi_ctx;
 	struct ice_q_ctx *q_ctx;
-	u16 idx;
 
 	vsi_ctx = ice_get_vsi_ctx(hw, vsi_handle);
 	if (!vsi_ctx)
 		return -EINVAL;
 	/* allocate LAN queue contexts */
 	if (!vsi_ctx->lan_q_ctx[tc]) {
-		q_ctx = devm_kcalloc(ice_hw_to_dev(hw), new_numqs,
-				     sizeof(*q_ctx), GFP_KERNEL);
-		if (!q_ctx)
+		vsi_ctx->lan_q_ctx[tc] = devm_kcalloc(ice_hw_to_dev(hw),
+						      new_numqs,
+						      sizeof(*q_ctx),
+						      GFP_KERNEL);
+		if (!vsi_ctx->lan_q_ctx[tc])
 			return -ENOMEM;
-
-		for (idx = 0; idx < new_numqs; idx++) {
-			q_ctx[idx].q_handle = ICE_INVAL_Q_HANDLE;
-			q_ctx[idx].q_teid = ICE_INVAL_TEID;
-		}
-
-		vsi_ctx->lan_q_ctx[tc] = q_ctx;
 		vsi_ctx->num_lan_q_entries[tc] = new_numqs;
 		return 0;
 	}
@@ -586,16 +592,9 @@ ice_alloc_lan_q_ctx(struct ice_hw *hw, u16 vsi_handle, u8 tc, u16 new_numqs)
 				     sizeof(*q_ctx), GFP_KERNEL);
 		if (!q_ctx)
 			return -ENOMEM;
-
 		memcpy(q_ctx, vsi_ctx->lan_q_ctx[tc],
 		       prev_num * sizeof(*q_ctx));
 		devm_kfree(ice_hw_to_dev(hw), vsi_ctx->lan_q_ctx[tc]);
-
-		for (idx = prev_num; idx < new_numqs; idx++) {
-			q_ctx[idx].q_handle = ICE_INVAL_Q_HANDLE;
-			q_ctx[idx].q_teid = ICE_INVAL_TEID;
-		}
-
 		vsi_ctx->lan_q_ctx[tc] = q_ctx;
 		vsi_ctx->num_lan_q_entries[tc] = new_numqs;
 	}
@@ -1045,7 +1044,7 @@ ice_sched_add_nodes_to_hw_layer(struct ice_port_info *pi,
  *
  * This function add nodes to a given layer.
  */
-int
+static int
 ice_sched_add_nodes_to_layer(struct ice_port_info *pi,
 			     struct ice_sched_node *tc_node,
 			     struct ice_sched_node *parent, u8 layer,
@@ -1120,7 +1119,7 @@ static u8 ice_sched_get_qgrp_layer(struct ice_hw *hw)
  *
  * This function returns the current VSI layer number
  */
-u8 ice_sched_get_vsi_layer(struct ice_hw *hw)
+static u8 ice_sched_get_vsi_layer(struct ice_hw *hw)
 {
 	/* Num Layers       VSI layer
 	 *     9               6
@@ -1143,7 +1142,7 @@ u8 ice_sched_get_vsi_layer(struct ice_hw *hw)
  *
  * This function returns the current aggregator layer number
  */
-u8 ice_sched_get_agg_layer(struct ice_hw *hw)
+static u8 ice_sched_get_agg_layer(struct ice_hw *hw)
 {
 	/* Num Layers       aggregator layer
 	 *     9               4
@@ -1181,7 +1180,7 @@ static void ice_rm_dflt_leaf_node(struct ice_port_info *pi)
 		int status;
 
 		/* remove the default leaf node */
-		status = ice_sched_remove_elems(pi->hw, node->parent, teid);
+		status = ice_sched_remove_elems(pi->hw, node->parent, 1, &teid);
 		if (!status)
 			ice_free_sched_node(pi, node);
 	}
@@ -1578,7 +1577,7 @@ ice_sched_get_vsi_node(struct ice_port_info *pi, struct ice_sched_node *tc_node,
  * This function retrieves an aggregator node for a given aggregator ID from
  * a given TC branch
  */
-struct ice_sched_node *
+static struct ice_sched_node *
 ice_sched_get_agg_node(struct ice_port_info *pi, struct ice_sched_node *tc_node,
 		       u32 agg_id)
 {
@@ -2140,7 +2139,7 @@ ice_get_agg_info(struct ice_hw *hw, u32 agg_id)
  * This function walks through the aggregator subtree to find a free parent
  * node
  */
-struct ice_sched_node *
+static struct ice_sched_node *
 ice_sched_get_free_vsi_parent(struct ice_hw *hw, struct ice_sched_node *node,
 			      u16 *num_nodes)
 {
@@ -2220,12 +2219,12 @@ int
 ice_sched_move_nodes(struct ice_port_info *pi, struct ice_sched_node *parent,
 		     u16 num_items, u32 *list)
 {
-	DEFINE_FLEX(struct ice_aqc_move_elem, buf, teid, 1);
-	u16 buf_len = __struct_size(buf);
+	struct ice_aqc_move_elem *buf;
 	struct ice_sched_node *node;
 	u16 i, grps_movd = 0;
 	struct ice_hw *hw;
 	int status = 0;
+	u16 buf_len;
 
 	hw = pi->hw;
 
@@ -2237,27 +2236,35 @@ ice_sched_move_nodes(struct ice_port_info *pi, struct ice_sched_node *parent,
 	    hw->max_children[parent->tx_sched_layer])
 		return -ENOSPC;
 
+	buf_len = struct_size(buf, teid, 1);
+	buf = kzalloc(buf_len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
 	for (i = 0; i < num_items; i++) {
 		node = ice_sched_find_node_by_teid(pi->root, list[i]);
 		if (!node) {
 			status = -EINVAL;
-			break;
+			goto move_err_exit;
 		}
 
 		buf->hdr.src_parent_teid = node->info.parent_teid;
 		buf->hdr.dest_parent_teid = parent->info.node_teid;
 		buf->teid[0] = node->info.node_teid;
 		buf->hdr.num_elems = cpu_to_le16(1);
-		status = ice_aq_move_sched_elems(hw, buf, buf_len, &grps_movd);
+		status = ice_aq_move_sched_elems(hw, 1, buf, buf_len,
+						 &grps_movd, NULL);
 		if (status && grps_movd != 1) {
 			status = -EIO;
-			break;
+			goto move_err_exit;
 		}
 
 		/* update the SW DB */
 		ice_sched_update_parent(parent, node);
 	}
 
+move_err_exit:
+	kfree(buf);
 	return status;
 }
 
@@ -3951,7 +3958,7 @@ ice_sched_get_node_by_id_type(struct ice_port_info *pi, u32 id,
  * This function sets BW limit of VSI or Aggregator scheduling node
  * based on TC information from passed in argument BW.
  */
-static int
+int
 ice_sched_set_node_bw_lmt_per_tc(struct ice_port_info *pi, u32 id,
 				 enum ice_agg_type agg_type, u8 tc,
 				 enum ice_rl_type rl_type, u32 bw)

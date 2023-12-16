@@ -204,7 +204,6 @@ static int sgx_vepc_release(struct inode *inode, struct file *file)
 			continue;
 
 		xa_erase(&vepc->page_array, index);
-		cond_resched();
 	}
 
 	/*
@@ -223,7 +222,6 @@ static int sgx_vepc_release(struct inode *inode, struct file *file)
 			list_add_tail(&epc_page->list, &secs_pages);
 
 		xa_erase(&vepc->page_array, index);
-		cond_resched();
 	}
 
 	/*
@@ -245,7 +243,6 @@ static int sgx_vepc_release(struct inode *inode, struct file *file)
 
 		if (sgx_vepc_free_page(epc_page))
 			list_add_tail(&epc_page->list, &secs_pages);
-		cond_resched();
 	}
 
 	if (!list_empty(&secs_pages))

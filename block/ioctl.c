@@ -20,8 +20,6 @@ static int blkpg_do_ioctl(struct block_device *bdev,
 	struct blkpg_partition p;
 	long long start, length;
 
-	if (disk->flags & GENHD_FL_NO_PART)
-		return -EINVAL;
 	if (!capable(CAP_SYS_ADMIN))
 		return -EACCES;
 	if (copy_from_user(&p, upart, sizeof(struct blkpg_partition)))
@@ -366,15 +364,7 @@ static int blkdev_flushbuf(struct block_device *bdev, unsigned cmd,
 {
 	if (!capable(CAP_SYS_ADMIN))
 		return -EACCES;
-
-	mutex_lock(&bdev->bd_holder_lock);
-	if (bdev->bd_holder_ops && bdev->bd_holder_ops->sync)
-		bdev->bd_holder_ops->sync(bdev);
-	else {
-		mutex_unlock(&bdev->bd_holder_lock);
-		sync_blockdev(bdev);
-	}
-
+	fsync_bdev(bdev);
 	invalidate_bdev(bdev);
 	return 0;
 }
@@ -468,7 +458,6 @@ static int blkdev_bszset(struct block_device *bdev, blk_mode_t mode,
 		int __user *argp)
 {
 	int ret, n;
-	struct bdev_handle *handle;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EACCES;
@@ -480,11 +469,10 @@ static int blkdev_bszset(struct block_device *bdev, blk_mode_t mode,
 	if (mode & BLK_OPEN_EXCL)
 		return set_blocksize(bdev, n);
 
-	handle = bdev_open_by_dev(bdev->bd_dev, mode, &bdev, NULL);
-	if (IS_ERR(handle))
+	if (IS_ERR(blkdev_get_by_dev(bdev->bd_dev, mode, &bdev, NULL)))
 		return -EBUSY;
 	ret = set_blocksize(bdev, n);
-	bdev_release(handle);
+	blkdev_put(bdev, &bdev);
 
 	return ret;
 }

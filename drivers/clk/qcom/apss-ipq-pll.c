@@ -2,7 +2,7 @@
 // Copyright (c) 2018, The Linux Foundation. All rights reserved.
 #include <linux/clk-provider.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
@@ -68,13 +68,13 @@ static struct clk_alpha_pll ipq_pll_stromer_plus = {
 				.fw_name = "xo",
 			},
 			.num_parents = 1,
-			.ops = &clk_alpha_pll_stromer_plus_ops,
+			.ops = &clk_alpha_pll_stromer_ops,
 		},
 	},
 };
 
 static const struct alpha_pll_config ipq5332_pll_config = {
-	.l = 0x2d,
+	.l = 0x3e,
 	.config_ctl_val = 0x4001075b,
 	.config_ctl_hi_val = 0x304,
 	.main_output_mask = BIT(0),

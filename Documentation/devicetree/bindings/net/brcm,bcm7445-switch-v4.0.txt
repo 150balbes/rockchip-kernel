@@ -1,4 +1,4 @@
-* Broadcom Starfighter 2 integrated switch
+* Broadcom Starfighter 2 integrated swich
 
 See dsa/brcm,bcm7445-switch-v4.0.yaml for the documentation.
 

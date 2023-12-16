@@ -21,7 +21,7 @@ struct netlink_policy_dump_state {
 	struct {
 		const struct nla_policy *policy;
 		unsigned int maxtype;
-	} policies[] __counted_by(n_alloc);
+	} policies[];
 };
 
 static int add_policy(struct netlink_policy_dump_state **statep,
@@ -29,7 +29,7 @@ static int add_policy(struct netlink_policy_dump_state **statep,
 		      unsigned int maxtype)
 {
 	struct netlink_policy_dump_state *state = *statep;
-	unsigned int old_n_alloc, n_alloc, i;
+	unsigned int n_alloc, i;
 
 	if (!policy || !maxtype)
 		return 0;
@@ -52,13 +52,12 @@ static int add_policy(struct netlink_policy_dump_state **statep,
 	if (!state)
 		return -ENOMEM;
 
-	old_n_alloc = state->n_alloc;
-	state->n_alloc = n_alloc;
-	memset(&state->policies[old_n_alloc], 0,
-	       flex_array_size(state, policies, n_alloc - old_n_alloc));
+	memset(&state->policies[state->n_alloc], 0,
+	       flex_array_size(state, policies, n_alloc - state->n_alloc));
 
-	state->policies[old_n_alloc].policy = policy;
-	state->policies[old_n_alloc].maxtype = maxtype;
+	state->policies[state->n_alloc].policy = policy;
+	state->policies[state->n_alloc].maxtype = maxtype;
+	state->n_alloc = n_alloc;
 	*statep = state;
 
 	return 0;
@@ -230,8 +229,6 @@ int netlink_policy_dump_attr_size_estimate(const struct nla_policy *pt)
 	case NLA_S16:
 	case NLA_S32:
 	case NLA_S64:
-	case NLA_SINT:
-	case NLA_UINT:
 		/* maximum is common, u64 min/max with padding */
 		return common +
 		       2 * (nla_attr_size(0) + nla_attr_size(sizeof(u64)));
@@ -290,7 +287,6 @@ __netlink_policy_dump_write_attr(struct netlink_policy_dump_state *state,
 	case NLA_U16:
 	case NLA_U32:
 	case NLA_U64:
-	case NLA_UINT:
 	case NLA_MSECS: {
 		struct netlink_range_validation range;
 
@@ -300,10 +296,8 @@ __netlink_policy_dump_write_attr(struct netlink_policy_dump_state *state,
 			type = NL_ATTR_TYPE_U16;
 		else if (pt->type == NLA_U32)
 			type = NL_ATTR_TYPE_U32;
-		else if (pt->type == NLA_U64)
-			type = NL_ATTR_TYPE_U64;
 		else
-			type = NL_ATTR_TYPE_UINT;
+			type = NL_ATTR_TYPE_U64;
 
 		if (pt->validation_type == NLA_VALIDATE_MASK) {
 			if (nla_put_u64_64bit(skb, NL_POLICY_TYPE_ATTR_MASK,
@@ -325,8 +319,7 @@ __netlink_policy_dump_write_attr(struct netlink_policy_dump_state *state,
 	case NLA_S8:
 	case NLA_S16:
 	case NLA_S32:
-	case NLA_S64:
-	case NLA_SINT: {
+	case NLA_S64: {
 		struct netlink_range_validation_signed range;
 
 		if (pt->type == NLA_S8)
@@ -335,10 +328,8 @@ __netlink_policy_dump_write_attr(struct netlink_policy_dump_state *state,
 			type = NL_ATTR_TYPE_S16;
 		else if (pt->type == NLA_S32)
 			type = NL_ATTR_TYPE_S32;
-		else if (pt->type == NLA_S64)
-			type = NL_ATTR_TYPE_S64;
 		else
-			type = NL_ATTR_TYPE_SINT;
+			type = NL_ATTR_TYPE_S64;
 
 		nla_get_range_signed(pt, &range);
 

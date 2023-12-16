@@ -21,8 +21,6 @@
  */
 #include "priv.h"
 
-#include <subdev/gsp.h>
-
 #include <nvif/class.h>
 
 static const struct nvkm_engine_func
@@ -43,8 +41,5 @@ int
 ga102_ce_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	     struct nvkm_engine **pengine)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return r535_ce_new(&ga102_ce, device, type, inst, pengine);
-
 	return nvkm_engine_new_(&ga102_ce, device, type, inst, true, pengine);
 }

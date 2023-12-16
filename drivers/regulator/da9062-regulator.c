@@ -73,7 +73,7 @@ struct da9062_regulators {
 	int					irq_ldo_lim;
 	unsigned				n_regulators;
 	/* Array size to be defined during init. Keep at end. */
-	struct da9062_regulator			regulator[] __counted_by(n_regulators);
+	struct da9062_regulator			regulator[];
 };
 
 /* Regulator operations */
@@ -924,7 +924,7 @@ static int da9062_regulator_probe(struct platform_device *pdev)
 	struct da9062_regulator *regl;
 	struct regulator_config config = { };
 	const struct da9062_regulator_info *rinfo;
-	int n, ret;
+	int irq, n, ret;
 	int max_regulators;
 
 	switch (chip->chip_type) {
@@ -1012,11 +1012,12 @@ static int da9062_regulator_probe(struct platform_device *pdev)
 	}
 
 	/* LDOs overcurrent event support */
-	regulators->irq_ldo_lim = platform_get_irq_byname_optional(pdev, "LDO_LIM");
-	if (regulators->irq_ldo_lim < 0)
-		return 0;
+	irq = platform_get_irq_byname(pdev, "LDO_LIM");
+	if (irq < 0)
+		return irq;
+	regulators->irq_ldo_lim = irq;
 
-	ret = devm_request_threaded_irq(&pdev->dev, regulators->irq_ldo_lim,
+	ret = devm_request_threaded_irq(&pdev->dev, irq,
 					NULL, da9062_ldo_lim_event,
 					IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 					"LDO_LIM", regulators);

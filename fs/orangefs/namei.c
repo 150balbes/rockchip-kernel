@@ -421,7 +421,7 @@ static int orangefs_rename(struct mnt_idmap *idmap,
 		     ret);
 
 	if (new_dentry->d_inode)
-		inode_set_ctime_current(d_inode(new_dentry));
+		new_dentry->d_inode->i_ctime = current_time(new_dentry->d_inode);
 
 	op_release(new_op);
 	return ret;

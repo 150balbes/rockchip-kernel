@@ -202,9 +202,9 @@ static inline void iosapic_write(void __iomem *iosapic, unsigned int reg, u32 va
 
 static DEFINE_SPINLOCK(iosapic_lock);
 
-static inline void iosapic_eoi(__le32 __iomem *addr, __le32 data)
+static inline void iosapic_eoi(void __iomem *addr, unsigned int data)
 {
-	__raw_writel((__force u32)data, addr);
+	__raw_writel(data, addr);
 }
 
 /*
@@ -348,9 +348,12 @@ iosapic_load_irt(unsigned long cell_num, struct irt_entry **irt)
 }
 
 
-static int __init iosapic_init(void)
+
+void __init iosapic_init(void)
 {
 	unsigned long cell = 0;
+
+	DBG("iosapic_init()\n");
 
 #ifdef __LP64__
 	if (is_pdc_pat()) {
@@ -368,10 +371,7 @@ static int __init iosapic_init(void)
 	irt_num_entry = iosapic_load_irt(cell, &irt_cell);
 	if (irt_num_entry == 0)
 		irt_cell = NULL;	/* old PDC w/o iosapic */
-
-	return 0;
 }
-arch_initcall(iosapic_init);
 
 
 /*
@@ -890,7 +890,7 @@ iosapic_rd_version(struct iosapic_info *isi)
 **	o allocate and initialize isi_vector[]
 **	o allocate irq region
 */
-void *iosapic_register(unsigned long hpa, void __iomem *vaddr)
+void *iosapic_register(unsigned long hpa)
 {
 	struct iosapic_info *isi = NULL;
 	struct irt_entry *irte = irt_cell;
@@ -919,7 +919,7 @@ void *iosapic_register(unsigned long hpa, void __iomem *vaddr)
 		return NULL;
 	}
 
-	isi->addr = vaddr;
+	isi->addr = ioremap(hpa, 4096);
 	isi->isi_hpa = hpa;
 	isi->isi_version = iosapic_rd_version(isi);
 	isi->isi_num_vectors = IOSAPIC_IRDT_MAX_ENTRY(isi->isi_version) + 1;

@@ -50,9 +50,8 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/spinlock.h>
 #include <linux/pm_runtime.h>
 
@@ -73,7 +72,7 @@ struct intmux_data {
 	void __iomem			*regs;
 	struct clk			*ipg_clk;
 	int				channum;
-	struct intmux_irqchip_data	irqchip_data[] __counted_by(channum);
+	struct intmux_irqchip_data	irqchip_data[];
 };
 
 static void imx_intmux_irq_mask(struct irq_data *d)

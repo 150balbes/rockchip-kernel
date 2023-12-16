@@ -15,15 +15,11 @@
 #include <linux/fs.h>
 #include "overlayfs.h"
 
-#include "../internal.h"	/* for sb_init_dio_done_wq */
-
 struct ovl_aio_req {
 	struct kiocb iocb;
 	refcount_t ref;
 	struct kiocb *orig_iocb;
-	/* used for aio completion */
-	struct work_struct work;
-	long res;
+	struct fd fd;
 };
 
 static struct kmem_cache *ovl_aio_request_cachep;
@@ -119,8 +115,8 @@ static int ovl_real_fdget_meta(const struct file *file, struct fd *real,
 	if (allow_meta) {
 		ovl_path_real(dentry, &realpath);
 	} else {
-		/* lazy lookup and verify of lowerdata */
-		err = ovl_verify_lowerdata(dentry);
+		/* lazy lookup of lowerdata */
+		err = ovl_maybe_lookup_lowerdata(dentry);
 		if (err)
 			return err;
 
@@ -163,8 +159,8 @@ static int ovl_open(struct inode *inode, struct file *file)
 	struct path realpath;
 	int err;
 
-	/* lazy lookup and verify lowerdata */
-	err = ovl_verify_lowerdata(dentry);
+	/* lazy lookup of lowerdata */
+	err = ovl_maybe_lookup_lowerdata(dentry);
 	if (err)
 		return err;
 
@@ -240,17 +236,9 @@ static loff_t ovl_llseek(struct file *file, loff_t offset, int whence)
 	return ret;
 }
 
-static void ovl_file_modified(struct file *file)
-{
-	/* Update size/mtime */
-	ovl_copyattr(file_inode(file));
-}
-
 static void ovl_file_accessed(struct file *file)
 {
 	struct inode *inode, *upperinode;
-	struct timespec64 ctime, uctime;
-	struct timespec64 mtime, umtime;
 
 	if (file->f_flags & O_NOATIME)
 		return;
@@ -261,31 +249,35 @@ static void ovl_file_accessed(struct file *file)
 	if (!upperinode)
 		return;
 
-	ctime = inode_get_ctime(inode);
-	uctime = inode_get_ctime(upperinode);
-	mtime = inode_get_mtime(inode);
-	umtime = inode_get_mtime(upperinode);
-	if ((!timespec64_equal(&mtime, &umtime)) ||
-	     !timespec64_equal(&ctime, &uctime)) {
-		inode_set_mtime_to_ts(inode, inode_get_mtime(upperinode));
-		inode_set_ctime_to_ts(inode, uctime);
+	if ((!timespec64_equal(&inode->i_mtime, &upperinode->i_mtime) ||
+	     !timespec64_equal(&inode->i_ctime, &upperinode->i_ctime))) {
+		inode->i_mtime = upperinode->i_mtime;
+		inode->i_ctime = upperinode->i_ctime;
 	}
 
 	touch_atime(&file->f_path);
 }
 
-#define OVL_IOCB_MASK \
-	(IOCB_NOWAIT | IOCB_HIPRI | IOCB_DSYNC | IOCB_SYNC | IOCB_APPEND)
-
-static rwf_t iocb_to_rw_flags(int flags)
+static rwf_t ovl_iocb_to_rwf(int ifl)
 {
-	return (__force rwf_t)(flags & OVL_IOCB_MASK);
+	rwf_t flags = 0;
+
+	if (ifl & IOCB_NOWAIT)
+		flags |= RWF_NOWAIT;
+	if (ifl & IOCB_HIPRI)
+		flags |= RWF_HIPRI;
+	if (ifl & IOCB_DSYNC)
+		flags |= RWF_DSYNC;
+	if (ifl & IOCB_SYNC)
+		flags |= RWF_SYNC;
+
+	return flags;
 }
 
 static inline void ovl_aio_put(struct ovl_aio_req *aio_req)
 {
 	if (refcount_dec_and_test(&aio_req->ref)) {
-		fput(aio_req->iocb.ki_filp);
+		fdput(aio_req->fd);
 		kmem_cache_free(ovl_aio_request_cachep, aio_req);
 	}
 }
@@ -296,8 +288,13 @@ static void ovl_aio_cleanup_handler(struct ovl_aio_req *aio_req)
 	struct kiocb *orig_iocb = aio_req->orig_iocb;
 
 	if (iocb->ki_flags & IOCB_WRITE) {
-		kiocb_end_write(iocb);
-		ovl_file_modified(orig_iocb->ki_filp);
+		struct inode *inode = file_inode(orig_iocb->ki_filp);
+
+		/* Actually acquired in ovl_write_iter() */
+		__sb_writers_acquired(file_inode(iocb->ki_filp)->i_sb,
+				      SB_FREEZE_WRITE);
+		file_end_write(iocb->ki_filp);
+		ovl_copyattr(inode);
 	}
 
 	orig_iocb->ki_pos = iocb->ki_pos;
@@ -312,37 +309,6 @@ static void ovl_aio_rw_complete(struct kiocb *iocb, long res)
 
 	ovl_aio_cleanup_handler(aio_req);
 	orig_iocb->ki_complete(orig_iocb, res);
-}
-
-static void ovl_aio_complete_work(struct work_struct *work)
-{
-	struct ovl_aio_req *aio_req = container_of(work,
-						   struct ovl_aio_req, work);
-
-	ovl_aio_rw_complete(&aio_req->iocb, aio_req->res);
-}
-
-static void ovl_aio_queue_completion(struct kiocb *iocb, long res)
-{
-	struct ovl_aio_req *aio_req = container_of(iocb,
-						   struct ovl_aio_req, iocb);
-	struct kiocb *orig_iocb = aio_req->orig_iocb;
-
-	/*
-	 * Punt to a work queue to serialize updates of mtime/size.
-	 */
-	aio_req->res = res;
-	INIT_WORK(&aio_req->work, ovl_aio_complete_work);
-	queue_work(file_inode(orig_iocb->ki_filp)->i_sb->s_dio_done_wq,
-		   &aio_req->work);
-}
-
-static int ovl_init_aio_done_wq(struct super_block *sb)
-{
-	if (sb->s_dio_done_wq)
-		return 0;
-
-	return sb_init_dio_done_wq(sb);
 }
 
 static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
@@ -366,9 +332,8 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 
 	old_cred = ovl_override_creds(file_inode(file)->i_sb);
 	if (is_sync_kiocb(iocb)) {
-		rwf_t rwf = iocb_to_rw_flags(iocb->ki_flags);
-
-		ret = vfs_iter_read(real.file, iter, &iocb->ki_pos, rwf);
+		ret = vfs_iter_read(real.file, iter, &iocb->ki_pos,
+				    ovl_iocb_to_rwf(iocb->ki_flags));
 	} else {
 		struct ovl_aio_req *aio_req;
 
@@ -377,8 +342,10 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		if (!aio_req)
 			goto out;
 
+		aio_req->fd = real;
+		real.flags = 0;
 		aio_req->orig_iocb = iocb;
-		kiocb_clone(&aio_req->iocb, iocb, get_file(real.file));
+		kiocb_clone(&aio_req->iocb, iocb, real.file);
 		aio_req->iocb.ki_complete = ovl_aio_rw_complete;
 		refcount_set(&aio_req->ref, 2);
 		ret = vfs_iocb_iter_read(real.file, &aio_req->iocb, iter);
@@ -426,39 +393,33 @@ static ssize_t ovl_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	if (!ovl_should_sync(OVL_FS(inode->i_sb)))
 		ifl &= ~(IOCB_DSYNC | IOCB_SYNC);
 
-	/*
-	 * Overlayfs doesn't support deferred completions, don't copy
-	 * this property in case it is set by the issuer.
-	 */
-	ifl &= ~IOCB_DIO_CALLER_COMP;
-
 	old_cred = ovl_override_creds(file_inode(file)->i_sb);
 	if (is_sync_kiocb(iocb)) {
-		rwf_t rwf = iocb_to_rw_flags(ifl);
-
 		file_start_write(real.file);
-		ret = vfs_iter_write(real.file, iter, &iocb->ki_pos, rwf);
+		ret = vfs_iter_write(real.file, iter, &iocb->ki_pos,
+				     ovl_iocb_to_rwf(ifl));
 		file_end_write(real.file);
 		/* Update size */
-		ovl_file_modified(file);
+		ovl_copyattr(inode);
 	} else {
 		struct ovl_aio_req *aio_req;
-
-		ret = ovl_init_aio_done_wq(inode->i_sb);
-		if (ret)
-			goto out;
 
 		ret = -ENOMEM;
 		aio_req = kmem_cache_zalloc(ovl_aio_request_cachep, GFP_KERNEL);
 		if (!aio_req)
 			goto out;
 
+		file_start_write(real.file);
+		/* Pacify lockdep, same trick as done in aio_write() */
+		__sb_writers_release(file_inode(real.file)->i_sb,
+				     SB_FREEZE_WRITE);
+		aio_req->fd = real;
+		real.flags = 0;
 		aio_req->orig_iocb = iocb;
-		kiocb_clone(&aio_req->iocb, iocb, get_file(real.file));
+		kiocb_clone(&aio_req->iocb, iocb, real.file);
 		aio_req->iocb.ki_flags = ifl;
-		aio_req->iocb.ki_complete = ovl_aio_queue_completion;
+		aio_req->iocb.ki_complete = ovl_aio_rw_complete;
 		refcount_set(&aio_req->ref, 2);
-		kiocb_start_write(&aio_req->iocb);
 		ret = vfs_iocb_iter_write(real.file, &aio_req->iocb, iter);
 		ovl_aio_put(aio_req);
 		if (ret != -EIOCBQUEUED)
@@ -530,7 +491,7 @@ static ssize_t ovl_splice_write(struct pipe_inode_info *pipe, struct file *out,
 
 	file_end_write(real.file);
 	/* Update size */
-	ovl_file_modified(out);
+	ovl_copyattr(inode);
 	revert_creds(old_cred);
 	fdput(real);
 
@@ -611,7 +572,7 @@ static long ovl_fallocate(struct file *file, int mode, loff_t offset, loff_t len
 	revert_creds(old_cred);
 
 	/* Update size */
-	ovl_file_modified(file);
+	ovl_copyattr(inode);
 
 	fdput(real);
 
@@ -695,7 +656,7 @@ static loff_t ovl_copyfile(struct file *file_in, loff_t pos_in,
 	revert_creds(old_cred);
 
 	/* Update size */
-	ovl_file_modified(file_out);
+	ovl_copyattr(inode_out);
 
 	fdput(real_in);
 	fdput(real_out);

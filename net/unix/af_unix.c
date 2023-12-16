@@ -116,7 +116,6 @@
 #include <linux/freezer.h>
 #include <linux/file.h>
 #include <linux/btf_ids.h>
-#include <linux/bpf-cgroup.h>
 
 #include "scm.h"
 
@@ -290,29 +289,17 @@ static int unix_validate_addr(struct sockaddr_un *sunaddr, int addr_len)
 	return 0;
 }
 
-static int unix_mkname_bsd(struct sockaddr_un *sunaddr, int addr_len)
+static void unix_mkname_bsd(struct sockaddr_un *sunaddr, int addr_len)
 {
-	struct sockaddr_storage *addr = (struct sockaddr_storage *)sunaddr;
-	short offset = offsetof(struct sockaddr_storage, __data);
-
-	BUILD_BUG_ON(offset != offsetof(struct sockaddr_un, sun_path));
-
 	/* This may look like an off by one error but it is a bit more
 	 * subtle.  108 is the longest valid AF_UNIX path for a binding.
 	 * sun_path[108] doesn't as such exist.  However in kernel space
 	 * we are guaranteed that it is a valid memory location in our
 	 * kernel address buffer because syscall functions always pass
 	 * a pointer of struct sockaddr_storage which has a bigger buffer
-	 * than 108.  Also, we must terminate sun_path for strlen() in
-	 * getname_kernel().
+	 * than 108.
 	 */
-	addr->__data[addr_len - offset] = 0;
-
-	/* Don't pass sunaddr->sun_path to strlen().  Otherwise, 108 will
-	 * cause panic if CONFIG_FORTIFY_SOURCE=y.  Let __fortify_strlen()
-	 * know the actual buffer.
-	 */
-	return strlen(addr->__data) + offset + 1;
+	((char *)sunaddr)[addr_len] = 0;
 }
 
 static void __unix_remove_socket(struct sock *sk)
@@ -681,7 +668,7 @@ static void unix_release_sock(struct sock *sk, int embrion)
 	 *	  What the above comment does talk about? --ANK(980817)
 	 */
 
-	if (READ_ONCE(unix_tot_inflight))
+	if (unix_tot_inflight)
 		unix_gc();		/* Garbage collect fds */
 }
 
@@ -791,7 +778,7 @@ static int unix_set_peek_off(struct sock *sk, int val)
 	if (mutex_lock_interruptible(&u->iolock))
 		return -EINTR;
 
-	WRITE_ONCE(sk->sk_peek_off, val);
+	sk->sk_peek_off = val;
 	mutex_unlock(&u->iolock);
 
 	return 0;
@@ -1221,7 +1208,10 @@ static int unix_bind_bsd(struct sock *sk, struct sockaddr_un *sunaddr,
 	struct path parent;
 	int err;
 
-	addr_len = unix_mkname_bsd(sunaddr, addr_len);
+	unix_mkname_bsd(sunaddr, addr_len);
+	addr_len = strlen(sunaddr->sun_path) +
+		offsetof(struct sockaddr_un, sun_path) + 1;
+
 	addr = unix_create_addr(sunaddr, addr_len);
 	if (!addr)
 		return -ENOMEM;
@@ -1382,10 +1372,6 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 		if (err)
 			goto out;
 
-		err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, addr, &alen);
-		if (err)
-			goto out;
-
 		if ((test_bit(SOCK_PASSCRED, &sock->flags) ||
 		     test_bit(SOCK_PASSPIDFD, &sock->flags)) &&
 		    !unix_sk(sk)->addr) {
@@ -1492,10 +1478,6 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	int st;
 
 	err = unix_validate_addr(sunaddr, addr_len);
-	if (err)
-		goto out;
-
-	err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, uaddr, &addr_len);
 	if (err)
 		goto out;
 
@@ -1779,13 +1761,6 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int peer)
 	} else {
 		err = addr->len;
 		memcpy(sunaddr, addr->name, addr->len);
-
-		if (peer)
-			BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &err,
-					       CGROUP_UNIX_GETPEERNAME);
-		else
-			BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &err,
-					       CGROUP_UNIX_GETSOCKNAME);
 	}
 	sock_put(sk);
 out:
@@ -1936,13 +1911,6 @@ static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
 
 	if (msg->msg_namelen) {
 		err = unix_validate_addr(sunaddr, msg->msg_namelen);
-		if (err)
-			goto out;
-
-		err = BPF_CGROUP_RUN_PROG_UNIX_SENDMSG_LOCK(sk,
-							    msg->msg_name,
-							    &msg->msg_namelen,
-							    NULL);
 		if (err)
 			goto out;
 	} else {
@@ -2413,13 +2381,8 @@ int __unix_dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t size,
 						EPOLLOUT | EPOLLWRNORM |
 						EPOLLWRBAND);
 
-	if (msg->msg_name) {
+	if (msg->msg_name)
 		unix_copy_addr(msg, skb->sk);
-
-		BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
-						      msg->msg_name,
-						      &msg->msg_namelen);
-	}
 
 	if (size > skb->len - skip)
 		size = skb->len - skip;
@@ -2581,16 +2544,15 @@ static int unix_stream_recv_urg(struct unix_stream_read_state *state)
 
 	if (!(state->flags & MSG_PEEK))
 		WRITE_ONCE(u->oob_skb, NULL);
-	else
-		skb_get(oob_skb);
+
 	unix_state_unlock(sk);
 
 	chunk = state->recv_actor(oob_skb, 0, chunk, state);
 
-	if (!(state->flags & MSG_PEEK))
+	if (!(state->flags & MSG_PEEK)) {
 		UNIXCB(oob_skb).consumed += 1;
-
-	consume_skb(oob_skb);
+		kfree_skb(oob_skb);
+	}
 
 	mutex_unlock(&u->iolock);
 
@@ -2773,11 +2735,6 @@ unlock:
 			DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr,
 					 state->msg->msg_name);
 			unix_copy_addr(state->msg, skb->sk);
-
-			BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
-							      state->msg->msg_name,
-							      &state->msg->msg_namelen);
-
 			sunaddr = NULL;
 		}
 
@@ -3345,7 +3302,7 @@ static const struct seq_operations unix_seq_ops = {
 	.show   = unix_seq_show,
 };
 
-#ifdef CONFIG_BPF_SYSCALL
+#if IS_BUILTIN(CONFIG_UNIX) && defined(CONFIG_BPF_SYSCALL)
 struct bpf_unix_iter_state {
 	struct seq_net_private p;
 	unsigned int cur_sk;
@@ -3607,7 +3564,7 @@ static struct pernet_operations unix_net_ops = {
 	.exit = unix_net_exit,
 };
 
-#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
+#if IS_BUILTIN(CONFIG_UNIX) && defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
 DEFINE_BPF_ITER_FUNC(unix, struct bpf_iter_meta *meta,
 		     struct unix_sock *unix_sk, uid_t uid)
 
@@ -3707,7 +3664,7 @@ static int __init af_unix_init(void)
 	register_pernet_subsys(&unix_net_ops);
 	unix_bpf_build_proto();
 
-#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
+#if IS_BUILTIN(CONFIG_UNIX) && defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
 	bpf_iter_register();
 #endif
 
@@ -3715,5 +3672,20 @@ out:
 	return rc;
 }
 
-/* Later than subsys_initcall() because we depend on stuff initialised there */
+static void __exit af_unix_exit(void)
+{
+	sock_unregister(PF_UNIX);
+	proto_unregister(&unix_dgram_proto);
+	proto_unregister(&unix_stream_proto);
+	unregister_pernet_subsys(&unix_net_ops);
+}
+
+/* Earlier than device_initcall() so that other drivers invoking
+   request_module() don't end up in a loop when modprobe tries
+   to use a UNIX socket. But later than subsys_initcall() because
+   we depend on stuff initialised there */
 fs_initcall(af_unix_init);
+module_exit(af_unix_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_ALIAS_NETPROTO(PF_UNIX);

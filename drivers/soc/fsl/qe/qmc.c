@@ -1415,7 +1415,7 @@ err_tsa_serial_disconnect:
 	return ret;
 }
 
-static void qmc_remove(struct platform_device *pdev)
+static int qmc_remove(struct platform_device *pdev)
 {
 	struct qmc *qmc = platform_get_drvdata(pdev);
 
@@ -1427,6 +1427,8 @@ static void qmc_remove(struct platform_device *pdev)
 
 	/* Disconnect the serial from TSA */
 	tsa_serial_disconnect(qmc->tsa_serial);
+
+	return 0;
 }
 
 static const struct of_device_id qmc_id_table[] = {
@@ -1441,7 +1443,7 @@ static struct platform_driver qmc_driver = {
 		.of_match_table = of_match_ptr(qmc_id_table),
 	},
 	.probe = qmc_probe,
-	.remove_new = qmc_remove,
+	.remove = qmc_remove,
 };
 module_platform_driver(qmc_driver);
 

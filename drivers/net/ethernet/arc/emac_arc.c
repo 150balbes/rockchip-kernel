@@ -58,12 +58,14 @@ out_netdev:
 	return err;
 }
 
-static void emac_arc_remove(struct platform_device *pdev)
+static int emac_arc_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	arc_emac_remove(ndev);
 	free_netdev(ndev);
+
+	return 0;
 }
 
 static const struct of_device_id emac_arc_dt_ids[] = {
@@ -74,7 +76,7 @@ MODULE_DEVICE_TABLE(of, emac_arc_dt_ids);
 
 static struct platform_driver emac_arc_driver = {
 	.probe = emac_arc_probe,
-	.remove_new = emac_arc_remove,
+	.remove = emac_arc_remove,
 	.driver = {
 		.name = DRV_NAME,
 		.of_match_table  = emac_arc_dt_ids,

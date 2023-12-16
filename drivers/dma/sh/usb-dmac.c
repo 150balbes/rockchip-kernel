@@ -57,7 +57,7 @@ struct usb_dmac_desc {
 	u32 residue;
 	struct list_head node;
 	dma_cookie_t done_cookie;
-	struct usb_dmac_sg sg[] __counted_by(sg_allocated_len);
+	struct usb_dmac_sg sg[];
 };
 
 #define to_usb_dmac_desc(vd)	container_of(vd, struct usb_dmac_desc, vd)
@@ -866,7 +866,7 @@ static void usb_dmac_chan_remove(struct usb_dmac *dmac,
 	devm_free_irq(dmac->dev, uchan->irq, uchan);
 }
 
-static void usb_dmac_remove(struct platform_device *pdev)
+static int usb_dmac_remove(struct platform_device *pdev)
 {
 	struct usb_dmac *dmac = platform_get_drvdata(pdev);
 	int i;
@@ -877,6 +877,8 @@ static void usb_dmac_remove(struct platform_device *pdev)
 	dma_async_device_unregister(&dmac->engine);
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static void usb_dmac_shutdown(struct platform_device *pdev)
@@ -899,7 +901,7 @@ static struct platform_driver usb_dmac_driver = {
 		.of_match_table = usb_dmac_of_ids,
 	},
 	.probe		= usb_dmac_probe,
-	.remove_new	= usb_dmac_remove,
+	.remove		= usb_dmac_remove,
 	.shutdown	= usb_dmac_shutdown,
 };
 

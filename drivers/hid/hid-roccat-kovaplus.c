@@ -24,6 +24,8 @@
 
 static uint profile_numbers[5] = {0, 1, 2, 3, 4};
 
+static struct class *kovaplus_class;
+
 static uint kovaplus_convert_event_cpi(uint value)
 {
 	return (value == 7 ? 4 : (value == 4 ? 3 : value));
@@ -407,11 +409,6 @@ static const struct attribute_group *kovaplus_groups[] = {
 	NULL,
 };
 
-static const struct class kovaplus_class = {
-	.name = "kovaplus",
-	.dev_groups = kovaplus_groups,
-};
-
 static int kovaplus_init_kovaplus_device_struct(struct usb_device *usb_dev,
 		struct kovaplus_device *kovaplus)
 {
@@ -466,8 +463,8 @@ static int kovaplus_init_specials(struct hid_device *hdev)
 			goto exit_free;
 		}
 
-		retval = roccat_connect(&kovaplus_class, hdev,
-					sizeof(struct kovaplus_roccat_report));
+		retval = roccat_connect(kovaplus_class, hdev,
+				sizeof(struct kovaplus_roccat_report));
 		if (retval < 0) {
 			hid_err(hdev, "couldn't init char dev\n");
 		} else {
@@ -641,20 +638,21 @@ static int __init kovaplus_init(void)
 {
 	int retval;
 
-	retval = class_register(&kovaplus_class);
-	if (retval)
-		return retval;
+	kovaplus_class = class_create("kovaplus");
+	if (IS_ERR(kovaplus_class))
+		return PTR_ERR(kovaplus_class);
+	kovaplus_class->dev_groups = kovaplus_groups;
 
 	retval = hid_register_driver(&kovaplus_driver);
 	if (retval)
-		class_unregister(&kovaplus_class);
+		class_destroy(kovaplus_class);
 	return retval;
 }
 
 static void __exit kovaplus_exit(void)
 {
 	hid_unregister_driver(&kovaplus_driver);
-	class_unregister(&kovaplus_class);
+	class_destroy(kovaplus_class);
 }
 
 module_init(kovaplus_init);

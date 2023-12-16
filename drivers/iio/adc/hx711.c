@@ -580,7 +580,7 @@ error_regulator:
 	return ret;
 }
 
-static void hx711_remove(struct platform_device *pdev)
+static int hx711_remove(struct platform_device *pdev)
 {
 	struct hx711_data *hx711_data;
 	struct iio_dev *indio_dev;
@@ -593,6 +593,8 @@ static void hx711_remove(struct platform_device *pdev)
 	iio_triggered_buffer_cleanup(indio_dev);
 
 	regulator_disable(hx711_data->reg_avdd);
+
+	return 0;
 }
 
 static const struct of_device_id of_hx711_match[] = {
@@ -604,7 +606,7 @@ MODULE_DEVICE_TABLE(of, of_hx711_match);
 
 static struct platform_driver hx711_driver = {
 	.probe		= hx711_probe,
-	.remove_new	= hx711_remove,
+	.remove		= hx711_remove,
 	.driver		= {
 		.name		= "hx711-gpio",
 		.of_match_table	= of_hx711_match,

@@ -72,6 +72,7 @@ copy_word:
 	LONG_ADDI	s5, s5, -1
 	beqz		s5, process_entry
 	b		copy_word
+	b		process_entry
 
 done:
 	ibar		0

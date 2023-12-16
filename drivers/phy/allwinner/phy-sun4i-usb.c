@@ -23,6 +23,8 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-sun4i-usb.h>
@@ -782,7 +784,7 @@ static int sun4i_usb_phy_probe(struct platform_device *pdev)
 
 	for (i = 0; i < data->cfg->num_phys; i++) {
 		struct sun4i_usb_phy *phy = data->phys + i;
-		char name[32];
+		char name[16];
 
 		if (data->cfg->missing_phys & BIT(i))
 			continue;

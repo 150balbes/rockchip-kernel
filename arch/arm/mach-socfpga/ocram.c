@@ -4,8 +4,10 @@
  */
 #include <linux/delay.h>
 #include <linux/io.h>
-#include <linux/of.h>
+#include <linux/genalloc.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
+#include <linux/of_platform.h>
 
 #include "core.h"
 

@@ -10,7 +10,6 @@
 #include <linux/cdev.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
-#include <linux/mod_devicetable.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/list.h>
@@ -588,12 +587,6 @@ static int scom_remove(struct device *dev)
 	return 0;
 }
 
-static const struct of_device_id scom_of_ids[] = {
-	{ .compatible = "ibm,fsi2pib" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, scom_of_ids);
-
 static const struct fsi_device_id scom_ids[] = {
 	{
 		.engine_type = FSI_ENGID_SCOM,
@@ -607,7 +600,6 @@ static struct fsi_driver scom_drv = {
 	.drv = {
 		.name = "scom",
 		.bus = &fsi_bus_type,
-		.of_match_table = scom_of_ids,
 		.probe = scom_probe,
 		.remove = scom_remove,
 	}

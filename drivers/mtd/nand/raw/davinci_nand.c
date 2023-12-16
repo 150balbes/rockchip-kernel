@@ -18,6 +18,7 @@
 #include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
 #include <linux/slab.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 
 #include <linux/platform_data/mtd-davinci.h>

@@ -88,7 +88,7 @@ static void *__kmap_pgprot(struct page *page, unsigned long addr, pgprot_t prot)
 	pte_t pte;
 	int tlbidx;
 
-	BUG_ON(folio_test_dcache_dirty(page_folio(page)));
+	BUG_ON(Page_dcache_dirty(page));
 
 	preempt_disable();
 	pagefault_disable();
@@ -169,12 +169,11 @@ void kunmap_coherent(void)
 void copy_user_highpage(struct page *to, struct page *from,
 	unsigned long vaddr, struct vm_area_struct *vma)
 {
-	struct folio *src = page_folio(from);
 	void *vfrom, *vto;
 
 	vto = kmap_atomic(to);
 	if (cpu_has_dc_aliases &&
-	    folio_mapped(src) && !folio_test_dcache_dirty(src)) {
+	    page_mapcount(from) && !Page_dcache_dirty(from)) {
 		vfrom = kmap_coherent(from, vaddr);
 		copy_page(vto, vfrom);
 		kunmap_coherent();
@@ -195,17 +194,15 @@ void copy_to_user_page(struct vm_area_struct *vma,
 	struct page *page, unsigned long vaddr, void *dst, const void *src,
 	unsigned long len)
 {
-	struct folio *folio = page_folio(page);
-
 	if (cpu_has_dc_aliases &&
-	    folio_mapped(folio) && !folio_test_dcache_dirty(folio)) {
+	    page_mapcount(page) && !Page_dcache_dirty(page)) {
 		void *vto = kmap_coherent(page, vaddr) + (vaddr & ~PAGE_MASK);
 		memcpy(vto, src, len);
 		kunmap_coherent();
 	} else {
 		memcpy(dst, src, len);
 		if (cpu_has_dc_aliases)
-			folio_set_dcache_dirty(folio);
+			SetPageDcacheDirty(page);
 	}
 	if (vma->vm_flags & VM_EXEC)
 		flush_cache_page(vma, vaddr, page_to_pfn(page));
@@ -215,17 +212,15 @@ void copy_from_user_page(struct vm_area_struct *vma,
 	struct page *page, unsigned long vaddr, void *dst, const void *src,
 	unsigned long len)
 {
-	struct folio *folio = page_folio(page);
-
 	if (cpu_has_dc_aliases &&
-	    folio_mapped(folio) && !folio_test_dcache_dirty(folio)) {
+	    page_mapcount(page) && !Page_dcache_dirty(page)) {
 		void *vfrom = kmap_coherent(page, vaddr) + (vaddr & ~PAGE_MASK);
 		memcpy(dst, vfrom, len);
 		kunmap_coherent();
 	} else {
 		memcpy(dst, src, len);
 		if (cpu_has_dc_aliases)
-			folio_set_dcache_dirty(folio);
+			SetPageDcacheDirty(page);
 	}
 }
 EXPORT_SYMBOL_GPL(copy_from_user_page);
@@ -453,10 +448,10 @@ static inline void __init mem_init_free_highmem(void)
 void __init mem_init(void)
 {
 	/*
-	 * When PFN_PTE_SHIFT is greater than PAGE_SHIFT we won't have enough PTE
+	 * When _PFN_SHIFT is greater than PAGE_SHIFT we won't have enough PTE
 	 * bits to hold a full 32b physical address on MIPS32 systems.
 	 */
-	BUILD_BUG_ON(IS_ENABLED(CONFIG_32BIT) && (PFN_PTE_SHIFT > PAGE_SHIFT));
+	BUILD_BUG_ON(IS_ENABLED(CONFIG_32BIT) && (_PFN_SHIFT > PAGE_SHIFT));
 
 #ifdef CONFIG_HIGHMEM
 	max_mapnr = highend_pfn ? highend_pfn : max_low_pfn;

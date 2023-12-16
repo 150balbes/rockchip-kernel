@@ -75,7 +75,7 @@
 	REG_L x31, PT_T6(sp)
 	.endm
 
-SYM_CODE_START(arch_rethook_trampoline)
+ENTRY(arch_rethook_trampoline)
 	addi sp, sp, -(PT_SIZE_ON_STACK)
 	save_all_base_regs
 
@@ -90,4 +90,4 @@ SYM_CODE_START(arch_rethook_trampoline)
 	addi sp, sp, PT_SIZE_ON_STACK
 
 	ret
-SYM_CODE_END(arch_rethook_trampoline)
+ENDPROC(arch_rethook_trampoline)

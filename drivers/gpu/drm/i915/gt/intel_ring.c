@@ -13,7 +13,6 @@
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_ring.h"
-#include "intel_gt.h"
 #include "intel_timeline.h"
 
 unsigned int intel_ring_update_space(struct intel_ring *ring)
@@ -57,7 +56,7 @@ int intel_ring_pin(struct intel_ring *ring, struct i915_gem_ww_ctx *ww)
 	if (i915_vma_is_map_and_fenceable(vma) && !HAS_LLC(vma->vm->i915)) {
 		addr = (void __force *)i915_vma_pin_iomap(vma);
 	} else {
-		int type = intel_gt_coherent_map_type(vma->vm->gt, vma->obj, false);
+		int type = i915_coherent_map_type(vma->vm->i915, vma->obj, false);
 
 		addr = i915_gem_object_pin_map(vma->obj, type);
 	}

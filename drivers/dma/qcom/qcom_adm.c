@@ -904,7 +904,7 @@ err_disable_core_clk:
 	return ret;
 }
 
-static void adm_dma_remove(struct platform_device *pdev)
+static int adm_dma_remove(struct platform_device *pdev)
 {
 	struct adm_device *adev = platform_get_drvdata(pdev);
 	struct adm_chan *achan;
@@ -927,6 +927,8 @@ static void adm_dma_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(adev->core_clk);
 	clk_disable_unprepare(adev->iface_clk);
+
+	return 0;
 }
 
 static const struct of_device_id adm_of_match[] = {
@@ -937,7 +939,7 @@ MODULE_DEVICE_TABLE(of, adm_of_match);
 
 static struct platform_driver adm_dma_driver = {
 	.probe = adm_dma_probe,
-	.remove_new = adm_dma_remove,
+	.remove = adm_dma_remove,
 	.driver = {
 		.name = "adm-dma-engine",
 		.of_match_table = adm_of_match,

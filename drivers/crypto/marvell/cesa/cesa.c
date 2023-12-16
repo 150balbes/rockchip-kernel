@@ -581,7 +581,7 @@ err_cleanup:
 	return ret;
 }
 
-static void mv_cesa_remove(struct platform_device *pdev)
+static int mv_cesa_remove(struct platform_device *pdev)
 {
 	struct mv_cesa_dev *cesa = platform_get_drvdata(pdev);
 	int i;
@@ -594,6 +594,8 @@ static void mv_cesa_remove(struct platform_device *pdev)
 		mv_cesa_put_sram(pdev, i);
 		irq_set_affinity_hint(cesa->engines[i].irq, NULL);
 	}
+
+	return 0;
 }
 
 static const struct platform_device_id mv_cesa_plat_id_table[] = {
@@ -604,7 +606,7 @@ MODULE_DEVICE_TABLE(platform, mv_cesa_plat_id_table);
 
 static struct platform_driver marvell_cesa = {
 	.probe		= mv_cesa_probe,
-	.remove_new	= mv_cesa_remove,
+	.remove		= mv_cesa_remove,
 	.id_table	= mv_cesa_plat_id_table,
 	.driver		= {
 		.name	= "marvell-cesa",

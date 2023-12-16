@@ -71,4 +71,3 @@ module_exit(exit_rc_map_pixelview)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("002-T IR remote keytable");

@@ -13,9 +13,6 @@ maintainers:
 description: |
   Semtech's SX9324 proximity sensor.
 
-allOf:
-  - $ref: /schemas/iio/iio.yaml#
-
 properties:
   compatible:
     const: semtech,sx9324
@@ -170,7 +167,7 @@ required:
   - reg
   - "#io-channel-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

@@ -51,9 +51,6 @@ static int ftrace_event_register(struct trace_event_call *call,
 #undef __array
 #define __array(type, item, size)			type item[size];
 
-#undef __stack_array
-#define __stack_array(type, item, size, field)		__array(type, item, size)
-
 #undef __array_desc
 #define __array_desc(type, container, item, size)	type item[size];
 
@@ -117,9 +114,6 @@ static void __always_unused ____ftrace_check_##name(void)		\
 	is_signed_type(_type), .filter_type = FILTER_OTHER,			\
 	.len = _len },
 
-#undef __stack_array
-#define __stack_array(_type, _item, _len, _field) __array(_type, _item, _len)
-
 #undef __array_desc
 #define __array_desc(_type, _container, _item, _len) __array(_type, _item, _len)
 
@@ -154,9 +148,6 @@ static struct trace_event_fields ftrace_event_fields_##name[] = {	\
 
 #undef __array
 #define __array(type, item, len)
-
-#undef __stack_array
-#define __stack_array(type, item, len, field)
 
 #undef __array_desc
 #define __array_desc(type, container, item, len)

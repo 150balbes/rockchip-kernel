@@ -51,7 +51,8 @@ static int fallback_set_params(struct eeprom_req_info *request,
 }
 
 static int eeprom_fallback(struct eeprom_req_info *request,
-			   struct eeprom_reply_data *reply)
+			   struct eeprom_reply_data *reply,
+			   struct genl_info *info)
 {
 	struct net_device *dev = reply->base.dev;
 	struct ethtool_modinfo modinfo = {0};
@@ -102,7 +103,7 @@ static int get_module_eeprom_by_page(struct net_device *dev,
 
 static int eeprom_prepare_data(const struct ethnl_req_info *req_base,
 			       struct ethnl_reply_data *reply_base,
-			       const struct genl_info *info)
+			       struct genl_info *info)
 {
 	struct eeprom_reply_data *reply = MODULE_EEPROM_REPDATA(reply_base);
 	struct eeprom_req_info *request = MODULE_EEPROM_REQINFO(req_base);
@@ -123,7 +124,7 @@ static int eeprom_prepare_data(const struct ethnl_req_info *req_base,
 	if (ret)
 		goto err_free;
 
-	ret = get_module_eeprom_by_page(dev, &page_data, info->extack);
+	ret = get_module_eeprom_by_page(dev, &page_data, info ? info->extack : NULL);
 	if (ret < 0)
 		goto err_ops;
 
@@ -139,7 +140,7 @@ err_free:
 	kfree(page_data.data);
 
 	if (ret == -EOPNOTSUPP)
-		return eeprom_fallback(request, reply);
+		return eeprom_fallback(request, reply, info);
 	return ret;
 }
 

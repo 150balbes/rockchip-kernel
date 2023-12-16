@@ -19,7 +19,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
-#include <linux/units.h>
 #include <linux/fpga-dfl.h>
 
 #include "dfl.h"
@@ -232,19 +231,19 @@ static int thermal_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	switch (attr) {
 	case hwmon_temp_input:
 		v = readq(feature->ioaddr + FME_THERM_RDSENSOR_FMT1);
-		*val = (long)(FIELD_GET(FPGA_TEMPERATURE, v) * MILLI);
+		*val = (long)(FIELD_GET(FPGA_TEMPERATURE, v) * 1000);
 		break;
 	case hwmon_temp_max:
 		v = readq(feature->ioaddr + FME_THERM_THRESHOLD);
-		*val = (long)(FIELD_GET(TEMP_THRESHOLD1, v) * MILLI);
+		*val = (long)(FIELD_GET(TEMP_THRESHOLD1, v) * 1000);
 		break;
 	case hwmon_temp_crit:
 		v = readq(feature->ioaddr + FME_THERM_THRESHOLD);
-		*val = (long)(FIELD_GET(TEMP_THRESHOLD2, v) * MILLI);
+		*val = (long)(FIELD_GET(TEMP_THRESHOLD2, v) * 1000);
 		break;
 	case hwmon_temp_emergency:
 		v = readq(feature->ioaddr + FME_THERM_THRESHOLD);
-		*val = (long)(FIELD_GET(TRIP_THRESHOLD, v) * MILLI);
+		*val = (long)(FIELD_GET(TRIP_THRESHOLD, v) * 1000);
 		break;
 	case hwmon_temp_max_alarm:
 		v = readq(feature->ioaddr + FME_THERM_THRESHOLD);
@@ -383,15 +382,15 @@ static int power_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	switch (attr) {
 	case hwmon_power_input:
 		v = readq(feature->ioaddr + FME_PWR_STATUS);
-		*val = (long)(FIELD_GET(PWR_CONSUMED, v) * MICRO);
+		*val = (long)(FIELD_GET(PWR_CONSUMED, v) * 1000000);
 		break;
 	case hwmon_power_max:
 		v = readq(feature->ioaddr + FME_PWR_THRESHOLD);
-		*val = (long)(FIELD_GET(PWR_THRESHOLD1, v) * MICRO);
+		*val = (long)(FIELD_GET(PWR_THRESHOLD1, v) * 1000000);
 		break;
 	case hwmon_power_crit:
 		v = readq(feature->ioaddr + FME_PWR_THRESHOLD);
-		*val = (long)(FIELD_GET(PWR_THRESHOLD2, v) * MICRO);
+		*val = (long)(FIELD_GET(PWR_THRESHOLD2, v) * 1000000);
 		break;
 	case hwmon_power_max_alarm:
 		v = readq(feature->ioaddr + FME_PWR_THRESHOLD);
@@ -416,7 +415,7 @@ static int power_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 	int ret = 0;
 	u64 v;
 
-	val = clamp_val(val / MICRO, 0, PWR_THRESHOLD_MAX);
+	val = clamp_val(val / 1000000, 0, PWR_THRESHOLD_MAX);
 
 	mutex_lock(&pdata->lock);
 

@@ -4,7 +4,6 @@
 // Author: Cyrille Pitchen <cyrille.pitchen@free-electrons.com>
 
 #include <linux/kernel.h>
-#include <linux/of.h>
 
 #include "pcie-cadence.h"
 

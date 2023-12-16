@@ -154,18 +154,20 @@ out_disable_rpm:
 	return error;
 }
 
-static void rpcif_hb_remove(struct platform_device *pdev)
+static int rpcif_hb_remove(struct platform_device *pdev)
 {
 	struct rpcif_hyperbus *hyperbus = platform_get_drvdata(pdev);
 
 	hyperbus_unregister_device(&hyperbus->hbdev);
 
 	pm_runtime_disable(hyperbus->rpc.dev);
+
+	return 0;
 }
 
 static struct platform_driver rpcif_platform_driver = {
 	.probe	= rpcif_hb_probe,
-	.remove_new = rpcif_hb_remove,
+	.remove	= rpcif_hb_remove,
 	.driver	= {
 		.name	= "rpc-if-hyperflash",
 	},

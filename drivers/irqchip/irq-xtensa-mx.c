@@ -12,7 +12,6 @@
 #include <linux/irqdomain.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
-#include <linux/irqchip/xtensa-mx.h>
 #include <linux/of.h>
 
 #include <asm/mxregs.h>

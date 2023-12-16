@@ -91,7 +91,6 @@
  */
 
 #include <linux/pm_runtime.h>
-#include <linux/of_graph.h>
 #include "rsnd.h"
 
 #define RSND_RATES SNDRV_PCM_RATE_8000_192000
@@ -691,9 +690,9 @@ static void rsnd_dai_stream_quit(struct rsnd_dai_stream *io)
 static
 struct snd_soc_dai *rsnd_substream_to_dai(struct snd_pcm_substream *substream)
 {
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 
-	return snd_soc_rtd_to_cpu(rtd, 0);
+	return  asoc_rtd_to_cpu(rtd, 0);
 }
 
 static
@@ -1086,6 +1085,17 @@ static u64 rsnd_soc_dai_formats[] = {
 	SND_SOC_POSSIBLE_DAIFMT_DSP_B,
 };
 
+static const struct snd_soc_dai_ops rsnd_soc_dai_ops = {
+	.startup	= rsnd_soc_dai_startup,
+	.shutdown	= rsnd_soc_dai_shutdown,
+	.trigger	= rsnd_soc_dai_trigger,
+	.set_fmt	= rsnd_soc_dai_set_fmt,
+	.set_tdm_slot	= rsnd_soc_set_dai_tdm_slot,
+	.prepare	= rsnd_soc_dai_prepare,
+	.auto_selectable_formats	= rsnd_soc_dai_formats,
+	.num_auto_selectable_formats	= ARRAY_SIZE(rsnd_soc_dai_formats),
+};
+
 static void rsnd_parse_tdm_split_mode(struct rsnd_priv *priv,
 				      struct rsnd_dai_stream *io,
 				      struct device_node *dai_np)
@@ -1250,13 +1260,13 @@ int rsnd_node_count(struct rsnd_priv *priv, struct device_node *node, char *name
 	return i;
 }
 
-static int rsnd_dai_of_node(struct rsnd_priv *priv, int *is_graph)
+static struct device_node *rsnd_dai_of_node(struct rsnd_priv *priv,
+					    int *is_graph)
 {
 	struct device *dev = rsnd_priv_to_dev(priv);
 	struct device_node *np = dev->of_node;
-	struct device_node *ports, *node;
-	int nr = 0;
-	int i = 0;
+	struct device_node *dai_node;
+	struct device_node *ret;
 
 	*is_graph = 0;
 
@@ -1264,53 +1274,26 @@ static int rsnd_dai_of_node(struct rsnd_priv *priv, int *is_graph)
 	 * parse both previous dai (= rcar_sound,dai), and
 	 * graph dai (= ports/port)
 	 */
-
-	/*
-	 * Simple-Card
-	 */
-	node = of_get_child_by_name(np, RSND_NODE_DAI);
-	if (!node)
-		goto audio_graph;
-
-	of_node_put(node);
-
-	for_each_child_of_node(np, node) {
-		if (!of_node_name_eq(node, RSND_NODE_DAI))
-			continue;
-
-		priv->component_dais[i] = of_get_child_count(node);
-		nr += priv->component_dais[i];
-		i++;
-		if (i >= RSND_MAX_COMPONENT) {
-			dev_info(dev, "reach to max component\n");
-			of_node_put(node);
-			break;
-		}
+	dai_node = of_get_child_by_name(np, RSND_NODE_DAI);
+	if (dai_node) {
+		ret = dai_node;
+		goto of_node_compatible;
 	}
 
-	return nr;
+	ret = np;
 
-audio_graph:
-	/*
-	 * Audio-Graph-Card
-	 */
-	for_each_child_of_node(np, ports) {
-		if (!of_node_name_eq(ports, "ports") &&
-		    !of_node_name_eq(ports, "port"))
-			continue;
-		priv->component_dais[i] = of_graph_get_endpoint_count(ports);
-		nr += priv->component_dais[i];
-		i++;
-		if (i >= RSND_MAX_COMPONENT) {
-			dev_info(dev, "reach to max component\n");
-			of_node_put(ports);
-			break;
-		}
-	}
+	dai_node = of_graph_get_next_endpoint(np, NULL);
+	if (dai_node)
+		goto of_node_graph;
 
+	return NULL;
+
+of_node_graph:
 	*is_graph = 1;
+of_node_compatible:
+	of_node_put(dai_node);
 
-	return nr;
+	return ret;
 }
 
 
@@ -1345,7 +1328,8 @@ static int rsnd_preallocate_pages(struct snd_soc_pcm_runtime *rtd,
 	return 0;
 }
 
-static int rsnd_soc_dai_pcm_new(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai)
+static int rsnd_pcm_new(struct snd_soc_pcm_runtime *rtd,
+			struct snd_soc_dai *dai)
 {
 	struct rsnd_dai *rdai = rsnd_dai_to_rdai(dai);
 	int ret;
@@ -1371,22 +1355,8 @@ static int rsnd_soc_dai_pcm_new(struct snd_soc_pcm_runtime *rtd, struct snd_soc_
 	return 0;
 }
 
-static const struct snd_soc_dai_ops rsnd_soc_dai_ops = {
-	.pcm_new			= rsnd_soc_dai_pcm_new,
-	.startup			= rsnd_soc_dai_startup,
-	.shutdown			= rsnd_soc_dai_shutdown,
-	.trigger			= rsnd_soc_dai_trigger,
-	.set_fmt			= rsnd_soc_dai_set_fmt,
-	.set_tdm_slot			= rsnd_soc_set_dai_tdm_slot,
-	.prepare			= rsnd_soc_dai_prepare,
-	.auto_selectable_formats	= rsnd_soc_dai_formats,
-	.num_auto_selectable_formats	= ARRAY_SIZE(rsnd_soc_dai_formats),
-};
-
 static void __rsnd_dai_probe(struct rsnd_priv *priv,
 			     struct device_node *dai_np,
-			     struct device_node *node_np,
-			     uint32_t node_arg,
 			     int dai_i)
 {
 	struct rsnd_dai_stream *io_playback;
@@ -1404,16 +1374,10 @@ static void __rsnd_dai_probe(struct rsnd_priv *priv,
 
 	snprintf(rdai->name, RSND_DAI_NAME_SIZE, "rsnd-dai.%d", dai_i);
 
-	/* for multi Component */
-	rdai->dai_args.np		= node_np;
-	rdai->dai_args.args_count	= 1;
-	rdai->dai_args.args[0]		= node_arg;
-
 	rdai->priv	= priv;
 	drv->name	= rdai->name;
 	drv->ops	= &rsnd_soc_dai_ops;
-	drv->id		= dai_i;
-	drv->dai_args	= &rdai->dai_args;
+	drv->pcm_new	= rsnd_pcm_new;
 
 	io_playback->rdai		= rdai;
 	io_capture->rdai		= rdai;
@@ -1477,15 +1441,21 @@ static void __rsnd_dai_probe(struct rsnd_priv *priv,
 
 static int rsnd_dai_probe(struct rsnd_priv *priv)
 {
+	struct device_node *dai_node;
+	struct device_node *dai_np;
 	struct snd_soc_dai_driver *rdrv;
 	struct device *dev = rsnd_priv_to_dev(priv);
-	struct device_node *np = dev->of_node;
 	struct rsnd_dai *rdai;
-	int nr = 0;
+	int nr;
 	int is_graph;
 	int dai_i;
 
-	nr = rsnd_dai_of_node(priv, &is_graph);
+	dai_node = rsnd_dai_of_node(priv, &is_graph);
+	if (is_graph)
+		nr = of_graph_get_endpoint_count(dai_node);
+	else
+		nr = of_get_child_count(dai_node);
+
 	if (!nr)
 		return -EINVAL;
 
@@ -1503,42 +1473,26 @@ static int rsnd_dai_probe(struct rsnd_priv *priv)
 	 */
 	dai_i = 0;
 	if (is_graph) {
-		struct device_node *ports;
-		struct device_node *dai_np;
+		for_each_endpoint_of_node(dai_node, dai_np) {
+			__rsnd_dai_probe(priv, dai_np, dai_i);
+			if (rsnd_is_gen3(priv) || rsnd_is_gen4(priv)) {
+				rdai = rsnd_rdai_get(priv, dai_i);
 
-		for_each_child_of_node(np, ports) {
-			if (!of_node_name_eq(ports, "ports") &&
-			    !of_node_name_eq(ports, "port"))
-				continue;
-			for_each_endpoint_of_node(ports, dai_np) {
-				__rsnd_dai_probe(priv, dai_np, dai_np, 0, dai_i);
-				if (rsnd_is_gen3(priv) || rsnd_is_gen4(priv)) {
-					rdai = rsnd_rdai_get(priv, dai_i);
-
-					rsnd_parse_connect_graph(priv, &rdai->playback, dai_np);
-					rsnd_parse_connect_graph(priv, &rdai->capture,  dai_np);
-				}
-				dai_i++;
+				rsnd_parse_connect_graph(priv, &rdai->playback, dai_np);
+				rsnd_parse_connect_graph(priv, &rdai->capture,  dai_np);
 			}
+			dai_i++;
 		}
 	} else {
-		struct device_node *node;
-		struct device_node *dai_np;
+		for_each_child_of_node(dai_node, dai_np) {
+			__rsnd_dai_probe(priv, dai_np, dai_i);
+			if (rsnd_is_gen3(priv) || rsnd_is_gen4(priv)) {
+				rdai = rsnd_rdai_get(priv, dai_i);
 
-		for_each_child_of_node(np, node) {
-			if (!of_node_name_eq(node, RSND_NODE_DAI))
-				continue;
-
-			for_each_child_of_node(node, dai_np) {
-				__rsnd_dai_probe(priv, dai_np, np, dai_i, dai_i);
-				if (rsnd_is_gen3(priv) || rsnd_is_gen4(priv)) {
-					rdai = rsnd_rdai_get(priv, dai_i);
-
-					rsnd_parse_connect_simple(priv, &rdai->playback, dai_np);
-					rsnd_parse_connect_simple(priv, &rdai->capture,  dai_np);
-				}
-				dai_i++;
+				rsnd_parse_connect_simple(priv, &rdai->playback, dai_np);
+				rsnd_parse_connect_simple(priv, &rdai->capture,  dai_np);
 			}
+			dai_i++;
 		}
 	}
 
@@ -1575,7 +1529,7 @@ static int rsnd_hw_params(struct snd_soc_component *component,
 	struct snd_soc_dai *dai = rsnd_substream_to_dai(substream);
 	struct rsnd_dai *rdai = rsnd_dai_to_rdai(dai);
 	struct rsnd_dai_stream *io = rsnd_rdai_to_io(rdai, substream);
-	struct snd_soc_pcm_runtime *fe = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_pcm_runtime *fe = asoc_substream_to_rtd(substream);
 
 	/*
 	 * rsnd assumes that it might be used under DPCM if user want to use
@@ -1968,7 +1922,6 @@ static int rsnd_probe(struct platform_device *pdev)
 		rsnd_dai_probe,
 	};
 	int ret, i;
-	int ci;
 
 	/*
 	 *	init priv data
@@ -2005,18 +1958,11 @@ static int rsnd_probe(struct platform_device *pdev)
 	/*
 	 *	asoc register
 	 */
-	ci = 0;
-	for (i = 0; priv->component_dais[i] > 0; i++) {
-		int nr = priv->component_dais[i];
-
-		ret = devm_snd_soc_register_component(dev, &rsnd_soc_component,
-						      priv->daidrv + ci, nr);
-		if (ret < 0) {
-			dev_err(dev, "cannot snd component register\n");
-			goto exit_snd_probe;
-		}
-
-		ci += nr;
+	ret = devm_snd_soc_register_component(dev, &rsnd_soc_component,
+					 priv->daidrv, rsnd_rdai_nr(priv));
+	if (ret < 0) {
+		dev_err(dev, "cannot snd dai register\n");
+		goto exit_snd_probe;
 	}
 
 	pm_runtime_enable(dev);

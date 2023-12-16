@@ -8,10 +8,9 @@
 #include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
@@ -162,7 +161,7 @@ struct tegra_adma {
 	const struct tegra_adma_chip_data *cdata;
 
 	/* Last member of the structure */
-	struct tegra_adma_chan		channels[] __counted_by(nr_channels);
+	struct tegra_adma_chan		channels[];
 };
 
 static inline void tdma_write(struct tegra_adma *tdma, u32 reg, u32 val)
@@ -949,7 +948,7 @@ irq_dispose:
 	return ret;
 }
 
-static void tegra_adma_remove(struct platform_device *pdev)
+static int tegra_adma_remove(struct platform_device *pdev)
 {
 	struct tegra_adma *tdma = platform_get_drvdata(pdev);
 	int i;
@@ -961,6 +960,8 @@ static void tegra_adma_remove(struct platform_device *pdev)
 		irq_dispose_mapping(tdma->channels[i].irq);
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct dev_pm_ops tegra_adma_dev_pm_ops = {
@@ -977,7 +978,7 @@ static struct platform_driver tegra_admac_driver = {
 		.of_match_table = tegra_adma_of_match,
 	},
 	.probe		= tegra_adma_probe,
-	.remove_new	= tegra_adma_remove,
+	.remove		= tegra_adma_remove,
 };
 
 module_platform_driver(tegra_admac_driver);

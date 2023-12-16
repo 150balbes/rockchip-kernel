@@ -146,8 +146,7 @@ void mlx5_vdpa_add_debugfs(struct mlx5_vdpa_net *ndev)
 		ndev->rx_dent = debugfs_create_dir("rx", ndev->debugfs);
 }
 
-void mlx5_vdpa_remove_debugfs(struct mlx5_vdpa_net *ndev)
+void mlx5_vdpa_remove_debugfs(struct dentry *dbg)
 {
-	debugfs_remove_recursive(ndev->debugfs);
-	ndev->debugfs = NULL;
+	debugfs_remove_recursive(dbg);
 }

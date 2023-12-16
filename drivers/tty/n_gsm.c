@@ -2,7 +2,6 @@
 /*
  * n_gsm.c GSM 0710 tty multiplexor
  * Copyright (c) 2009/10 Intel Corporation
- * Copyright (c) 2022/23 Siemens Mobility GmbH
  *
  *	* THIS IS A DEVELOPMENT SNAPSHOT IT IS NOT A FINAL RELEASE *
  *
@@ -340,7 +339,6 @@ struct gsm_mux {
 	unsigned long bad_fcs;
 	unsigned long malformed;
 	unsigned long io_error;
-	unsigned long open_error;
 	unsigned long bad_size;
 	unsigned long unsupported;
 };
@@ -1452,16 +1450,15 @@ static int gsm_control_command(struct gsm_mux *gsm, int cmd, const u8 *data,
 			       int dlen)
 {
 	struct gsm_msg *msg;
-	struct gsm_dlci *dlci = gsm->dlci[0];
 
-	msg = gsm_data_alloc(gsm, 0, dlen + 2, dlci->ftype);
+	msg = gsm_data_alloc(gsm, 0, dlen + 2, gsm->dlci[0]->ftype);
 	if (msg == NULL)
 		return -ENOMEM;
 
 	msg->data[0] = (cmd << 1) | CR | EA;	/* Set C/R */
 	msg->data[1] = (dlen << 1) | EA;
 	memcpy(msg->data + 2, data, dlen);
-	gsm_data_queue(dlci, msg);
+	gsm_data_queue(gsm->dlci[0], msg);
 
 	return 0;
 }
@@ -1480,15 +1477,14 @@ static void gsm_control_reply(struct gsm_mux *gsm, int cmd, const u8 *data,
 					int dlen)
 {
 	struct gsm_msg *msg;
-	struct gsm_dlci *dlci = gsm->dlci[0];
 
-	msg = gsm_data_alloc(gsm, 0, dlen + 2, dlci->ftype);
+	msg = gsm_data_alloc(gsm, 0, dlen + 2, gsm->dlci[0]->ftype);
 	if (msg == NULL)
 		return;
 	msg->data[0] = (cmd & 0xFE) << 1 | EA;	/* Clear C/R */
 	msg->data[1] = (dlen << 1) | EA;
 	memcpy(msg->data + 2, data, dlen);
-	gsm_data_queue(dlci, msg);
+	gsm_data_queue(gsm->dlci[0], msg);
 }
 
 /**
@@ -1593,7 +1589,6 @@ static int gsm_process_negotiation(struct gsm_mux *gsm, unsigned int addr,
 		if (debug & DBG_ERRORS)
 			pr_info("%s unsupported I frame request in PN\n",
 				__func__);
-		gsm->unsupported++;
 		return -EINVAL;
 	default:
 		if (debug & DBG_ERRORS)
@@ -1735,32 +1730,25 @@ static void gsm_control_negotiation(struct gsm_mux *gsm, unsigned int cr,
 	struct gsm_dlci *dlci;
 	struct gsm_dlci_param_bits *params;
 
-	if (dlen < sizeof(struct gsm_dlci_param_bits)) {
-		gsm->open_error++;
+	if (dlen < sizeof(struct gsm_dlci_param_bits))
 		return;
-	}
 
 	/* Invalid DLCI? */
 	params = (struct gsm_dlci_param_bits *)data;
 	addr = FIELD_GET(PN_D_FIELD_DLCI, params->d_bits);
-	if (addr == 0 || addr >= NUM_DLCI || !gsm->dlci[addr]) {
-		gsm->open_error++;
+	if (addr == 0 || addr >= NUM_DLCI || !gsm->dlci[addr])
 		return;
-	}
 	dlci = gsm->dlci[addr];
 
 	/* Too late for parameter negotiation? */
-	if ((!cr && dlci->state == DLCI_OPENING) || dlci->state == DLCI_OPEN) {
-		gsm->open_error++;
+	if ((!cr && dlci->state == DLCI_OPENING) || dlci->state == DLCI_OPEN)
 		return;
-	}
 
 	/* Process the received parameters */
 	if (gsm_process_negotiation(gsm, addr, cr, params) != 0) {
 		/* Negotiation failed. Close the link. */
 		if (debug & DBG_ERRORS)
 			pr_info("%s PN failed\n", __func__);
-		gsm->open_error++;
 		gsm_dlci_close(dlci);
 		return;
 	}
@@ -1780,7 +1768,6 @@ static void gsm_control_negotiation(struct gsm_mux *gsm, unsigned int cr,
 	} else {
 		if (debug & DBG_ERRORS)
 			pr_info("%s PN in invalid state\n", __func__);
-		gsm->open_error++;
 	}
 }
 
@@ -1901,8 +1888,6 @@ static void gsm_control_message(struct gsm_mux *gsm, unsigned int command,
 		/* Optional unsupported commands */
 	case CMD_RPN:	/* Remote port negotiation */
 	case CMD_SNC:	/* Service negotiation command */
-		gsm->unsupported++;
-		fallthrough;
 	default:
 		/* Reply to bad commands with an NSC */
 		buf[0] = command;
@@ -2236,7 +2221,6 @@ static void gsm_dlci_t1(struct timer_list *t)
 			dlci->retries--;
 			mod_timer(&dlci->t1, jiffies + gsm->t1 * HZ / 100);
 		} else {
-			gsm->open_error++;
 			gsm_dlci_begin_close(dlci); /* prevent half open link */
 		}
 		break;
@@ -2252,7 +2236,6 @@ static void gsm_dlci_t1(struct timer_list *t)
 			dlci->mode = DLCI_MODE_ADM;
 			gsm_dlci_open(dlci);
 		} else {
-			gsm->open_error++;
 			gsm_dlci_begin_close(dlci); /* prevent half open link */
 		}
 
@@ -2461,10 +2444,8 @@ static void gsm_dlci_command(struct gsm_dlci *dlci, const u8 *data, int len)
 	data += dlen;
 
 	/* Malformed command? */
-	if (clen > len) {
-		dlci->gsm->malformed++;
+	if (clen > len)
 		return;
-	}
 
 	if (command & 1)
 		gsm_control_message(dlci->gsm, command, data, clen);
@@ -2551,8 +2532,6 @@ static int gsm_dlci_config(struct gsm_dlci *dlci, struct gsm_dlci_config *dc, in
 		return -EINVAL;
 	if (dc->k > 7)
 		return -EINVAL;
-	if (dc->flags & ~GSM_FL_RESTART)   /* allow future extensions */
-		return -EINVAL;
 
 	/*
 	 * See what is needed for reconfiguration
@@ -2566,8 +2545,6 @@ static int gsm_dlci_config(struct gsm_dlci *dlci, struct gsm_dlci_config *dc, in
 		need_restart = true;
 	/* Requires care */
 	if (dc->priority != dlci->prio)
-		need_restart = true;
-	if (dc->flags & GSM_FL_RESTART)
 		need_restart = true;
 
 	if ((open && gsm->wait_config) || need_restart)
@@ -2776,16 +2753,12 @@ static void gsm_queue(struct gsm_mux *gsm)
 
 	switch (gsm->control) {
 	case SABM|PF:
-		if (cr == 1) {
-			gsm->open_error++;
+		if (cr == 1)
 			goto invalid;
-		}
 		if (dlci == NULL)
 			dlci = gsm_dlci_alloc(gsm, address);
-		if (dlci == NULL) {
-			gsm->open_error++;
+		if (dlci == NULL)
 			return;
-		}
 		if (dlci->dead)
 			gsm_response(gsm, address, DM|PF);
 		else {
@@ -3069,13 +3042,12 @@ static void gsm_error(struct gsm_mux *gsm)
 static void gsm_cleanup_mux(struct gsm_mux *gsm, bool disc)
 {
 	int i;
-	struct gsm_dlci *dlci;
+	struct gsm_dlci *dlci = gsm->dlci[0];
 	struct gsm_msg *txq, *ntxq;
 
 	gsm->dead = true;
 	mutex_lock(&gsm->mutex);
 
-	dlci = gsm->dlci[0];
 	if (dlci) {
 		if (disc && dlci->state != DLCI_CLOSED) {
 			gsm_dlci_begin_close(dlci);
@@ -3301,6 +3273,7 @@ static void gsm_copy_config_values(struct gsm_mux *gsm,
 
 static int gsm_config(struct gsm_mux *gsm, struct gsm_config *c)
 {
+	int ret = 0;
 	int need_close = 0;
 	int need_restart = 0;
 
@@ -3379,7 +3352,7 @@ static int gsm_config(struct gsm_mux *gsm, struct gsm_config *c)
 	 * and removing from the mux array
 	 */
 	if (gsm->dead) {
-		int ret = gsm_activate_mux(gsm);
+		ret = gsm_activate_mux(gsm);
 		if (ret)
 			return ret;
 		if (gsm->initiator)
@@ -3398,7 +3371,6 @@ static void gsm_copy_config_ext_values(struct gsm_mux *gsm,
 
 static int gsm_config_ext(struct gsm_mux *gsm, struct gsm_config_ext *ce)
 {
-	bool need_restart = false;
 	unsigned int i;
 
 	/*
@@ -3408,34 +3380,12 @@ static int gsm_config_ext(struct gsm_mux *gsm, struct gsm_config_ext *ce)
 	for (i = 0; i < ARRAY_SIZE(ce->reserved); i++)
 		if (ce->reserved[i])
 			return -EINVAL;
-	if (ce->flags & ~GSM_FL_RESTART)
-		return -EINVAL;
-
-	/* Requires care */
-	if (ce->flags & GSM_FL_RESTART)
-		need_restart = true;
-
-	/*
-	 * Close down what is needed, restart and initiate the new
-	 * configuration. On the first time there is no DLCI[0]
-	 * and closing or cleaning up is not necessary.
-	 */
-	if (need_restart)
-		gsm_cleanup_mux(gsm, true);
 
 	/*
 	 * Setup the new configuration values
 	 */
 	gsm->wait_config = ce->wait_config ? true : false;
 	gsm->keep_alive = ce->keep_alive;
-
-	if (gsm->dead) {
-		int ret = gsm_activate_mux(gsm);
-		if (ret)
-			return ret;
-		if (gsm->initiator)
-			gsm_dlci_begin_open(gsm->dlci[0]);
-	}
 
 	return 0;
 }
@@ -3537,8 +3487,8 @@ static void gsmld_detach_gsm(struct tty_struct *tty, struct gsm_mux *gsm)
 	gsm->tty = NULL;
 }
 
-static void gsmld_receive_buf(struct tty_struct *tty, const u8 *cp,
-			      const u8 *fp, size_t count)
+static void gsmld_receive_buf(struct tty_struct *tty, const unsigned char *cp,
+			      const char *fp, int count)
 {
 	struct gsm_mux *gsm = tty->disc_data;
 	char flags = TTY_NORMAL;
@@ -3624,9 +3574,6 @@ static int gsmld_open(struct tty_struct *tty)
 {
 	struct gsm_mux *gsm;
 
-	if (!capable(CAP_NET_ADMIN))
-		return -EPERM;
-
 	if (tty->ops->write == NULL)
 		return -EINVAL;
 
@@ -3686,8 +3633,9 @@ static void gsmld_write_wakeup(struct tty_struct *tty)
  *	This code must be sure never to sleep through a hangup.
  */
 
-static ssize_t gsmld_read(struct tty_struct *tty, struct file *file, u8 *buf,
-			  size_t nr, void **cookie, unsigned long offset)
+static ssize_t gsmld_read(struct tty_struct *tty, struct file *file,
+			  unsigned char *buf, size_t nr,
+			  void **cookie, unsigned long offset)
 {
 	return -EOPNOTSUPP;
 }
@@ -3707,7 +3655,7 @@ static ssize_t gsmld_read(struct tty_struct *tty, struct file *file, u8 *buf,
  */
 
 static ssize_t gsmld_write(struct tty_struct *tty, struct file *file,
-			   const u8 *buf, size_t nr)
+			   const unsigned char *buf, size_t nr)
 {
 	struct gsm_mux *gsm = tty->disc_data;
 	unsigned long flags;
@@ -4109,8 +4057,6 @@ static int gsm_modem_upd_via_msc(struct gsm_dlci *dlci, u8 brk)
 
 static int gsm_modem_update(struct gsm_dlci *dlci, u8 brk)
 {
-	if (dlci->gsm->dead)
-		return -EL2HLT;
 	if (dlci->adaption == 2) {
 		/* Send convergence layer type 2 empty data frame. */
 		gsm_modem_upd_via_data(dlci, brk);
@@ -4305,7 +4251,8 @@ static void gsmtty_hangup(struct tty_struct *tty)
 	gsm_dlci_begin_close(dlci);
 }
 
-static ssize_t gsmtty_write(struct tty_struct *tty, const u8 *buf, size_t len)
+static int gsmtty_write(struct tty_struct *tty, const unsigned char *buf,
+								    int len)
 {
 	int sent;
 	struct gsm_dlci *dlci = tty->driver_data;

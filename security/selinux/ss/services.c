@@ -2,7 +2,7 @@
 /*
  * Implementation of the security services.
  *
- * Authors : Stephen Smalley, <stephen.smalley.work@gmail.com>
+ * Authors : Stephen Smalley, <sds@tycho.nsa.gov>
  *	     James Morris <jmorris@redhat.com>
  *
  * Updated: Trusted Computer Solutions, Inc. <dgoeddel@trustedcs.com>
@@ -97,6 +97,7 @@ static int selinux_set_mapping(struct policydb *pol,
 			       struct selinux_map *out_map)
 {
 	u16 i, j;
+	unsigned k;
 	bool print_unknown_handle = false;
 
 	/* Find number of classes in the input mapping */
@@ -116,7 +117,6 @@ static int selinux_set_mapping(struct policydb *pol,
 	while (map[j].name) {
 		const struct security_class_mapping *p_in = map + (j++);
 		struct selinux_mapping *p_out = out_map->mapping + j;
-		u16 k;
 
 		/* An empty class string skips ahead */
 		if (!strcmp(p_in->name, "")) {
@@ -207,22 +207,22 @@ static void map_decision(struct selinux_map *map,
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->allowed & mapping->perms[i])
-				result |= (u32)1<<i;
+				result |= 1<<i;
 			if (allow_unknown && !mapping->perms[i])
-				result |= (u32)1<<i;
+				result |= 1<<i;
 		}
 		avd->allowed = result;
 
 		for (i = 0, result = 0; i < n; i++)
 			if (avd->auditallow & mapping->perms[i])
-				result |= (u32)1<<i;
+				result |= 1<<i;
 		avd->auditallow = result;
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->auditdeny & mapping->perms[i])
-				result |= (u32)1<<i;
+				result |= 1<<i;
 			if (!allow_unknown && !mapping->perms[i])
-				result |= (u32)1<<i;
+				result |= 1<<i;
 		}
 		/*
 		 * In case the kernel has a bug and requests a permission
@@ -230,7 +230,7 @@ static void map_decision(struct selinux_map *map,
 		 * should audit that denial
 		 */
 		for (; i < (sizeof(u32)*8); i++)
-			result |= (u32)1<<i;
+			result |= 1<<i;
 		avd->auditdeny = result;
 	}
 }
@@ -856,7 +856,7 @@ int security_bounded_transition(u32 old_sid, u32 new_sid)
 	struct sidtab *sidtab;
 	struct sidtab_entry *old_entry, *new_entry;
 	struct type_datum *type;
-	u32 index;
+	int index;
 	int rc;
 
 	if (!selinux_initialized())
@@ -1511,7 +1511,7 @@ static int security_context_to_sid_core(const char *scontext, u32 scontext_len,
 		return -ENOMEM;
 
 	if (!selinux_initialized()) {
-		u32 i;
+		int i;
 
 		for (i = 1; i < SECINITSID_NUM; i++) {
 			const char *s = initial_sid_to_string[i];
@@ -1694,7 +1694,7 @@ static void filename_compute_type(struct policydb *policydb,
 static int security_compute_sid(u32 ssid,
 				u32 tsid,
 				u16 orig_tclass,
-				u16 specified,
+				u32 specified,
 				const char *objname,
 				u32 *out_sid,
 				bool kern)
@@ -1706,7 +1706,8 @@ static int security_compute_sid(u32 ssid,
 	struct context *scontext, *tcontext, newcontext;
 	struct sidtab_entry *sentry, *tentry;
 	struct avtab_key avkey;
-	struct avtab_node *avnode, *node;
+	struct avtab_datum *avdatum;
+	struct avtab_node *node;
 	u16 tclass;
 	int rc = 0;
 	bool sock;
@@ -1814,22 +1815,22 @@ retry:
 	avkey.target_type = tcontext->type;
 	avkey.target_class = tclass;
 	avkey.specified = specified;
-	avnode = avtab_search_node(&policydb->te_avtab, &avkey);
+	avdatum = avtab_search(&policydb->te_avtab, &avkey);
 
 	/* If no permanent rule, also check for enabled conditional rules */
-	if (!avnode) {
+	if (!avdatum) {
 		node = avtab_search_node(&policydb->te_cond_avtab, &avkey);
 		for (; node; node = avtab_search_node_next(node, specified)) {
 			if (node->key.specified & AVTAB_ENABLED) {
-				avnode = node;
+				avdatum = &node->datum;
 				break;
 			}
 		}
 	}
 
-	if (avnode) {
+	if (avdatum) {
 		/* Use the type from the type transition/member/change rule. */
-		newcontext.type = avnode->datum.u.data;
+		newcontext.type = avdatum->u.data;
 	}
 
 	/* if we have a objname this is a file trans check so check those rules */
@@ -2821,6 +2822,7 @@ static inline int __security_genfs_sid(struct selinux_policy *policy,
 {
 	struct policydb *policydb = &policy->policydb;
 	struct sidtab *sidtab = policy->sidtab;
+	int len;
 	u16 sclass;
 	struct genfs *genfs;
 	struct ocontext *c;
@@ -2842,7 +2844,7 @@ static inline int __security_genfs_sid(struct selinux_policy *policy,
 		return -ENOENT;
 
 	for (c = genfs->head; c; c = c->next) {
-		size_t len = strlen(c->u.name);
+		len = strlen(c->u.name);
 		if ((!c->v.sclass || sclass == c->v.sclass) &&
 		    (strncmp(c->u.name, path, len) == 0))
 			break;
@@ -3330,7 +3332,7 @@ static int get_classes_callback(void *k, void *d, void *args)
 {
 	struct class_datum *datum = d;
 	char *name = k, **classes = args;
-	u32 value = datum->value - 1;
+	int value = datum->value - 1;
 
 	classes[value] = kstrdup(name, GFP_ATOMIC);
 	if (!classes[value])
@@ -3340,7 +3342,7 @@ static int get_classes_callback(void *k, void *d, void *args)
 }
 
 int security_get_classes(struct selinux_policy *policy,
-			 char ***classes, u32 *nclasses)
+			 char ***classes, int *nclasses)
 {
 	struct policydb *policydb;
 	int rc;
@@ -3356,8 +3358,7 @@ int security_get_classes(struct selinux_policy *policy,
 	rc = hashtab_map(&policydb->p_classes.table, get_classes_callback,
 			 *classes);
 	if (rc) {
-		u32 i;
-
+		int i;
 		for (i = 0; i < *nclasses; i++)
 			kfree((*classes)[i]);
 		kfree(*classes);
@@ -3371,7 +3372,7 @@ static int get_permissions_callback(void *k, void *d, void *args)
 {
 	struct perm_datum *datum = d;
 	char *name = k, **perms = args;
-	u32 value = datum->value - 1;
+	int value = datum->value - 1;
 
 	perms[value] = kstrdup(name, GFP_ATOMIC);
 	if (!perms[value])
@@ -3381,11 +3382,10 @@ static int get_permissions_callback(void *k, void *d, void *args)
 }
 
 int security_get_permissions(struct selinux_policy *policy,
-			     const char *class, char ***perms, u32 *nperms)
+			     char *class, char ***perms, int *nperms)
 {
 	struct policydb *policydb;
-	u32 i;
-	int rc;
+	int rc, i;
 	struct class_datum *match;
 
 	policydb = &policy->policydb;
@@ -3600,7 +3600,7 @@ err:
 /* Check to see if the rule contains any selinux fields */
 int selinux_audit_rule_known(struct audit_krule *rule)
 {
-	u32 i;
+	int i;
 
 	for (i = 0; i < rule->field_count; i++) {
 		struct audit_field *f = &rule->fields[i];

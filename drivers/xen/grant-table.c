@@ -427,14 +427,16 @@ EXPORT_SYMBOL_GPL(gnttab_grant_foreign_access);
 
 static int gnttab_end_foreign_access_ref_v1(grant_ref_t ref)
 {
-	u16 *pflags = &gnttab_shared.v1[ref].flags;
-	u16 flags;
+	u16 flags, nflags;
+	u16 *pflags;
 
-	flags = *pflags;
+	pflags = &gnttab_shared.v1[ref].flags;
+	nflags = *pflags;
 	do {
+		flags = nflags;
 		if (flags & (GTF_reading|GTF_writing))
 			return 0;
-	} while (!sync_try_cmpxchg(pflags, &flags, 0));
+	} while ((nflags = sync_cmpxchg(pflags, flags, 0)) != flags);
 
 	return 1;
 }
@@ -496,21 +498,14 @@ static LIST_HEAD(deferred_list);
 static void gnttab_handle_deferred(struct timer_list *);
 static DEFINE_TIMER(deferred_timer, gnttab_handle_deferred);
 
-static atomic64_t deferred_count;
-static atomic64_t leaked_count;
-static unsigned int free_per_iteration = 10;
-module_param(free_per_iteration, uint, 0600);
-
 static void gnttab_handle_deferred(struct timer_list *unused)
 {
-	unsigned int nr = READ_ONCE(free_per_iteration);
-	const bool ignore_limit = nr == 0;
+	unsigned int nr = 10;
 	struct deferred_entry *first = NULL;
 	unsigned long flags;
-	size_t freed = 0;
 
 	spin_lock_irqsave(&gnttab_list_lock, flags);
-	while ((ignore_limit || nr--) && !list_empty(&deferred_list)) {
+	while (nr--) {
 		struct deferred_entry *entry
 			= list_first_entry(&deferred_list,
 					   struct deferred_entry, list);
@@ -520,14 +515,10 @@ static void gnttab_handle_deferred(struct timer_list *unused)
 		list_del(&entry->list);
 		spin_unlock_irqrestore(&gnttab_list_lock, flags);
 		if (_gnttab_end_foreign_access_ref(entry->ref)) {
-			uint64_t ret = atomic64_dec_return(&deferred_count);
-
 			put_free_entry(entry->ref);
-			pr_debug("freeing g.e. %#x (pfn %#lx), %llu remaining\n",
-				 entry->ref, page_to_pfn(entry->page),
-				 (unsigned long long)ret);
+			pr_debug("freeing g.e. %#x (pfn %#lx)\n",
+				 entry->ref, page_to_pfn(entry->page));
 			put_page(entry->page);
-			freed++;
 			kfree(entry);
 			entry = NULL;
 		} else {
@@ -539,22 +530,21 @@ static void gnttab_handle_deferred(struct timer_list *unused)
 		spin_lock_irqsave(&gnttab_list_lock, flags);
 		if (entry)
 			list_add_tail(&entry->list, &deferred_list);
+		else if (list_empty(&deferred_list))
+			break;
 	}
-	if (list_empty(&deferred_list))
-		WARN_ON(atomic64_read(&deferred_count));
-	else if (!timer_pending(&deferred_timer)) {
+	if (!list_empty(&deferred_list) && !timer_pending(&deferred_timer)) {
 		deferred_timer.expires = jiffies + HZ;
 		add_timer(&deferred_timer);
 	}
 	spin_unlock_irqrestore(&gnttab_list_lock, flags);
-	pr_debug("Freed %zu references", freed);
 }
 
 static void gnttab_add_deferred(grant_ref_t ref, struct page *page)
 {
 	struct deferred_entry *entry;
 	gfp_t gfp = (in_atomic() || irqs_disabled()) ? GFP_ATOMIC : GFP_KERNEL;
-	uint64_t leaked, deferred;
+	const char *what = KERN_WARNING "leaking";
 
 	entry = kmalloc(sizeof(*entry), gfp);
 	if (!page) {
@@ -577,16 +567,10 @@ static void gnttab_add_deferred(grant_ref_t ref, struct page *page)
 			add_timer(&deferred_timer);
 		}
 		spin_unlock_irqrestore(&gnttab_list_lock, flags);
-		deferred = atomic64_inc_return(&deferred_count);
-		leaked = atomic64_read(&leaked_count);
-		pr_debug("deferring g.e. %#x (pfn %#lx) (total deferred %llu, total leaked %llu)\n",
-			 ref, page ? page_to_pfn(page) : -1, deferred, leaked);
-	} else {
-		deferred = atomic64_read(&deferred_count);
-		leaked = atomic64_inc_return(&leaked_count);
-		pr_warn("leaking g.e. %#x (pfn %#lx) (total deferred %llu, total leaked %llu)\n",
-			ref, page ? page_to_pfn(page) : -1, deferred, leaked);
+		what = KERN_DEBUG "deferring";
 	}
+	printk("%s g.e. %#x (pfn %#lx)\n",
+	       what, ref, page ? page_to_pfn(page) : -1);
 }
 
 int gnttab_try_end_foreign_access(grant_ref_t ref)
@@ -1042,7 +1026,7 @@ EXPORT_SYMBOL_GPL(gnttab_pages_clear_private);
 
 /**
  * gnttab_free_pages - free pages allocated by gnttab_alloc_pages()
- * @nr_pages: number of pages to free
+ * @nr_pages; number of pages to free
  * @pages: the pages
  */
 void gnttab_free_pages(int nr_pages, struct page **pages)

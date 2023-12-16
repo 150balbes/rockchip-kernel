@@ -15,6 +15,7 @@
 
 #include "system_global.h"
 
+#ifdef ISP2401
 
 #include "assert_support.h"
 #include "platform_support.h"
@@ -164,3 +165,4 @@ int ia_css_isys_csi_rx_unregister_stream(
 	}
 	return retval;
 }
+#endif

@@ -22,8 +22,7 @@
 #include <linux/mfd/axp20x.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/property.h>
+#include <linux/of_device.h>
 #include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -343,7 +342,7 @@ static const struct regmap_config axp152_regmap_config = {
 	.wr_table	= &axp152_writeable_table,
 	.volatile_table	= &axp152_volatile_table,
 	.max_register	= AXP152_PWM1_DUTY_CYCLE,
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 static const struct regmap_config axp192_regmap_config = {
@@ -361,7 +360,7 @@ static const struct regmap_config axp20x_regmap_config = {
 	.wr_table	= &axp20x_writeable_table,
 	.volatile_table	= &axp20x_volatile_table,
 	.max_register	= AXP20X_OCV(AXP20X_OCV_MAX),
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 static const struct regmap_config axp22x_regmap_config = {
@@ -370,7 +369,7 @@ static const struct regmap_config axp22x_regmap_config = {
 	.wr_table	= &axp22x_writeable_table,
 	.volatile_table	= &axp22x_volatile_table,
 	.max_register	= AXP22X_BATLOW_THRES1,
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 static const struct regmap_config axp288_regmap_config = {
@@ -379,7 +378,7 @@ static const struct regmap_config axp288_regmap_config = {
 	.wr_table	= &axp288_writeable_table,
 	.volatile_table	= &axp288_volatile_table,
 	.max_register	= AXP288_FG_TUNE5,
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 static const struct regmap_config axp313a_regmap_config = {
@@ -397,7 +396,7 @@ static const struct regmap_config axp806_regmap_config = {
 	.wr_table	= &axp806_writeable_table,
 	.volatile_table	= &axp806_volatile_table,
 	.max_register	= AXP806_REG_ADDR_EXT,
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 static const struct regmap_config axp15060_regmap_config = {
@@ -406,7 +405,7 @@ static const struct regmap_config axp15060_regmap_config = {
 	.wr_table	= &axp15060_writeable_table,
 	.volatile_table	= &axp15060_volatile_table,
 	.max_register	= AXP15060_IRQ2_STATE,
-	.cache_type	= REGCACHE_MAPLE,
+	.cache_type	= REGCACHE_RBTREE,
 };
 
 #define INIT_REGMAP_IRQ(_variant, _irq, _off, _mask)			\
@@ -1132,10 +1131,25 @@ static int axp20x_power_off(struct sys_off_data *data)
 int axp20x_match_device(struct axp20x_dev *axp20x)
 {
 	struct device *dev = axp20x->dev;
-	const struct mfd_cell *cells_no_irq = NULL;
-	int nr_cells_no_irq = 0;
+	const struct acpi_device_id *acpi_id;
+	const struct of_device_id *of_id;
 
-	axp20x->variant = (long)device_get_match_data(dev);
+	if (dev->of_node) {
+		of_id = of_match_device(dev->driver->of_match_table, dev);
+		if (!of_id) {
+			dev_err(dev, "Unable to match OF ID\n");
+			return -ENODEV;
+		}
+		axp20x->variant = (long)of_id->data;
+	} else {
+		acpi_id = acpi_match_device(dev->driver->acpi_match_table, dev);
+		if (!acpi_id || !acpi_id->driver_data) {
+			dev_err(dev, "Unable to match ACPI ID and data\n");
+			return -ENODEV;
+		}
+		axp20x->variant = (long)acpi_id->driver_data;
+	}
+
 	switch (axp20x->variant) {
 	case AXP152_ID:
 		axp20x->nr_cells = ARRAY_SIZE(axp152_cells);
@@ -1193,15 +1207,14 @@ int axp20x_match_device(struct axp20x_dev *axp20x)
 		 * if there is no interrupt line.
 		 */
 		if (of_property_read_bool(axp20x->dev->of_node,
-					  "x-powers,self-working-mode")) {
+					  "x-powers,self-working-mode") &&
+		    axp20x->irq > 0) {
 			axp20x->nr_cells = ARRAY_SIZE(axp806_self_working_cells);
 			axp20x->cells = axp806_self_working_cells;
 		} else {
 			axp20x->nr_cells = ARRAY_SIZE(axp806_cells);
 			axp20x->cells = axp806_cells;
 		}
-		nr_cells_no_irq = ARRAY_SIZE(axp806_cells);
-		cells_no_irq = axp806_cells;
 		axp20x->regmap_cfg = &axp806_regmap_config;
 		axp20x->regmap_irq_chip = &axp806_regmap_irq_chip;
 		break;
@@ -1225,8 +1238,24 @@ int axp20x_match_device(struct axp20x_dev *axp20x)
 		axp20x->regmap_irq_chip = &axp803_regmap_irq_chip;
 		break;
 	case AXP15060_ID:
-		axp20x->nr_cells = ARRAY_SIZE(axp15060_cells);
-		axp20x->cells = axp15060_cells;
+		/*
+		 * Don't register the power key part if there is no interrupt
+		 * line.
+		 *
+		 * Since most use cases of AXP PMICs are Allwinner SOCs, board
+		 * designers follow Allwinner's reference design and connects
+		 * IRQ line to SOC, there's no need for those variants to deal
+		 * with cases that IRQ isn't connected. However, AXP15660 is
+		 * used by some other vendors' SOCs that didn't connect IRQ
+		 * line, we need to deal with this case.
+		 */
+		if (axp20x->irq > 0) {
+			axp20x->nr_cells = ARRAY_SIZE(axp15060_cells);
+			axp20x->cells = axp15060_cells;
+		} else {
+			axp20x->nr_cells = ARRAY_SIZE(axp_regulator_only_cells);
+			axp20x->cells = axp_regulator_only_cells;
+		}
 		axp20x->regmap_cfg = &axp15060_regmap_config;
 		axp20x->regmap_irq_chip = &axp15060_regmap_irq_chip;
 		break;
@@ -1234,23 +1263,6 @@ int axp20x_match_device(struct axp20x_dev *axp20x)
 		dev_err(dev, "unsupported AXP20X ID %lu\n", axp20x->variant);
 		return -EINVAL;
 	}
-
-	/*
-	 * Use an alternative cell array when no interrupt line is connected,
-	 * since IRQs are required by some drivers.
-	 * The default is the safe "regulator-only", as this works fine without
-	 * an interrupt specified.
-	 */
-	if (axp20x->irq <= 0) {
-		if (cells_no_irq) {
-			axp20x->nr_cells = nr_cells_no_irq;
-			axp20x->cells = cells_no_irq;
-		} else {
-			axp20x->nr_cells = ARRAY_SIZE(axp_regulator_only_cells);
-			axp20x->cells = axp_regulator_only_cells;
-		}
-	}
-
 	dev_info(dev, "AXP20x variant %s found\n",
 		 axp20x_model_names[axp20x->variant]);
 

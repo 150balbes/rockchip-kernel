@@ -220,7 +220,7 @@ static inline void atmel_lcdfb_power_control(struct atmel_lcdfb_info *sinfo, int
 	}
 }
 
-static const struct fb_fix_screeninfo atmel_lcdfb_fix = {
+static const struct fb_fix_screeninfo atmel_lcdfb_fix __initconst = {
 	.type		= FB_TYPE_PACKED_PIXELS,
 	.visual		= FB_VISUAL_TRUECOLOR,
 	.xpanstep	= 0,
@@ -841,7 +841,7 @@ static void atmel_lcdfb_task(struct work_struct *work)
 	atmel_lcdfb_reset(sinfo);
 }
 
-static int atmel_lcdfb_init_fbinfo(struct atmel_lcdfb_info *sinfo)
+static int __init atmel_lcdfb_init_fbinfo(struct atmel_lcdfb_info *sinfo)
 {
 	struct fb_info *info = sinfo->info;
 	int ret = 0;
@@ -1017,7 +1017,7 @@ put_display_node:
 	return ret;
 }
 
-static int atmel_lcdfb_probe(struct platform_device *pdev)
+static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct fb_info *info;
@@ -1223,14 +1223,14 @@ out:
 	return ret;
 }
 
-static void atmel_lcdfb_remove(struct platform_device *pdev)
+static int __exit atmel_lcdfb_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct fb_info *info = dev_get_drvdata(dev);
 	struct atmel_lcdfb_info *sinfo;
 
 	if (!info || !info->par)
-		return;
+		return 0;
 	sinfo = info->par;
 
 	cancel_work_sync(&sinfo->task);
@@ -1252,6 +1252,8 @@ static void atmel_lcdfb_remove(struct platform_device *pdev)
 	}
 
 	framebuffer_release(info);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1299,16 +1301,16 @@ static int atmel_lcdfb_resume(struct platform_device *pdev)
 #endif
 
 static struct platform_driver atmel_lcdfb_driver = {
-	.probe		= atmel_lcdfb_probe,
-	.remove_new	= atmel_lcdfb_remove,
+	.remove		= __exit_p(atmel_lcdfb_remove),
 	.suspend	= atmel_lcdfb_suspend,
 	.resume		= atmel_lcdfb_resume,
 	.driver		= {
 		.name	= "atmel_lcdfb",
-		.of_match_table	= atmel_lcdfb_dt_ids,
+		.of_match_table	= of_match_ptr(atmel_lcdfb_dt_ids),
 	},
 };
-module_platform_driver(atmel_lcdfb_driver);
+
+module_platform_driver_probe(atmel_lcdfb_driver, atmel_lcdfb_probe);
 
 MODULE_DESCRIPTION("AT91 LCD Controller framebuffer driver");
 MODULE_AUTHOR("Nicolas Ferre <nicolas.ferre@atmel.com>");

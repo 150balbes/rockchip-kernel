@@ -21,11 +21,6 @@
 #include "intel_gt_regs.h"
 #include "intel_gtt.h"
 
-bool i915_ggtt_require_binder(struct drm_i915_private *i915)
-{
-	/* Wa_13010847436 & Wa_14019519902 */
-	return MEDIA_VER_FULL(i915) == IP_VER(13, 0);
-}
 
 static bool intel_ggtt_update_needs_vtd_wa(struct drm_i915_private *i915)
 {
@@ -94,7 +89,7 @@ int map_pt_dma(struct i915_address_space *vm, struct drm_i915_gem_object *obj)
 	enum i915_map_type type;
 	void *vaddr;
 
-	type = intel_gt_coherent_map_type(vm->gt, obj, true);
+	type = i915_coherent_map_type(vm->i915, obj, true);
 	vaddr = i915_gem_object_pin_map_unlocked(obj, type);
 	if (IS_ERR(vaddr))
 		return PTR_ERR(vaddr);
@@ -108,7 +103,7 @@ int map_pt_dma_locked(struct i915_address_space *vm, struct drm_i915_gem_object 
 	enum i915_map_type type;
 	void *vaddr;
 
-	type = intel_gt_coherent_map_type(vm->gt, obj, true);
+	type = i915_coherent_map_type(vm->i915, obj, true);
 	vaddr = i915_gem_object_pin_map(obj, type);
 	if (IS_ERR(vaddr))
 		return PTR_ERR(vaddr);

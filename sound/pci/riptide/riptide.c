@@ -2105,15 +2105,15 @@ __snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id
 	strcpy(card->driver, "RIPTIDE");
 	strcpy(card->shortname, "Riptide");
 #ifdef SUPPORT_JOYSTICK
-	scnprintf(card->longname, sizeof(card->longname),
-		  "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x gameport 0x%x",
-		  card->shortname, chip->port, chip->irq, chip->mpuaddr,
-		  chip->opladdr, chip->gameaddr);
+	snprintf(card->longname, sizeof(card->longname),
+		 "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x gameport 0x%x",
+		 card->shortname, chip->port, chip->irq, chip->mpuaddr,
+		 chip->opladdr, chip->gameaddr);
 #else
-	scnprintf(card->longname, sizeof(card->longname),
-		  "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x",
-		  card->shortname, chip->port, chip->irq, chip->mpuaddr,
-		  chip->opladdr);
+	snprintf(card->longname, sizeof(card->longname),
+		 "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x",
+		 card->shortname, chip->port, chip->irq, chip->mpuaddr,
+		 chip->opladdr);
 #endif
 	snd_riptide_proc_init(chip);
 	err = snd_card_register(card);

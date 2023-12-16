@@ -39,7 +39,8 @@ static struct ktstate kts;
 #ifndef MODULE
 static int __init aoe_iflist_setup(char *str)
 {
-	strscpy(aoe_iflist, str, IFLISTSZ);
+	strncpy(aoe_iflist, str, IFLISTSZ);
+	aoe_iflist[IFLISTSZ - 1] = '\0';
 	return 1;
 }
 

@@ -53,8 +53,6 @@
 bool probe_event_dry_run;	/* Dry run flag */
 struct probe_conf probe_conf = { .magic_num = DEFAULT_PROBE_MAGIC_NUM };
 
-static char *synthesize_perf_probe_point(struct perf_probe_point *pp);
-
 #define semantic_error(msg ...) pr_err("Semantic error :" msg)
 
 int e_snprintf(char *str, size_t size, const char *format, ...)
@@ -963,9 +961,8 @@ static int try_to_find_probe_trace_events(struct perf_probe_event *pev,
 	debuginfo__delete(dinfo);
 
 	if (ntevs == 0)	{	/* No error but failed to find probe point. */
-		char *probe_point = synthesize_perf_probe_point(&pev->point);
-		pr_warning("Probe point '%s' not found.\n", probe_point);
-		free(probe_point);
+		pr_warning("Probe point '%s' not found.\n",
+			   synthesize_perf_probe_point(&pev->point));
 		return -ENODEV;
 	} else if (ntevs < 0) {
 		/* Error path : ntevs < 0 */
@@ -2012,7 +2009,7 @@ out:
 }
 
 /* Compose only probe point (not argument) */
-static char *synthesize_perf_probe_point(struct perf_probe_point *pp)
+char *synthesize_perf_probe_point(struct perf_probe_point *pp)
 {
 	struct strbuf buf;
 	char *tmp, *ret = NULL;
@@ -2065,18 +2062,14 @@ char *synthesize_perf_probe_command(struct perf_probe_event *pev)
 			goto out;
 
 	tmp = synthesize_perf_probe_point(&pev->point);
-	if (!tmp || strbuf_addstr(&buf, tmp) < 0) {
-		free(tmp);
+	if (!tmp || strbuf_addstr(&buf, tmp) < 0)
 		goto out;
-	}
 	free(tmp);
 
 	for (i = 0; i < pev->nargs; i++) {
 		tmp = synthesize_perf_probe_arg(pev->args + i);
-		if (!tmp || strbuf_addf(&buf, " %s", tmp) < 0) {
-			free(tmp);
+		if (!tmp || strbuf_addf(&buf, " %s", tmp) < 0)
 			goto out;
-		}
 		free(tmp);
 	}
 
@@ -2807,18 +2800,13 @@ static void warn_uprobe_event_compat(struct probe_trace_event *tev)
 	if (!tev->uprobes || tev->nargs == 0 || !buf)
 		goto out;
 
-	for (i = 0; i < tev->nargs; i++) {
-		if (strchr(tev->args[i].value, '@')) {
-			pr_warning("%s accesses a variable by symbol name, but that is not supported for user application probe.\n",
+	for (i = 0; i < tev->nargs; i++)
+		if (strglobmatch(tev->args[i].value, "[$@+-]*")) {
+			pr_warning("Please upgrade your kernel to at least "
+				   "3.14 to have access to feature %s\n",
 				   tev->args[i].value);
 			break;
 		}
-		if (strglobmatch(tev->args[i].value, "[$+-]*")) {
-			pr_warning("Please upgrade your kernel to at least 3.14 to have access to feature %s\n",
-				   tev->args[i].value);
-			break;
-		}
-	}
 out:
 	free(buf);
 }

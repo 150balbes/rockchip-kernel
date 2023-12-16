@@ -56,7 +56,7 @@ strcmp_prefix(const char *a, const char *a_prefix)
 static const struct xattr_handler *
 xattr_resolve_name(struct inode *inode, const char **name)
 {
-	const struct xattr_handler * const *handlers = inode->i_sb->s_xattr;
+	const struct xattr_handler **handlers = inode->i_sb->s_xattr;
 	const struct xattr_handler *handler;
 
 	if (!(inode->i_opflags & IOP_XATTR)) {
@@ -162,7 +162,7 @@ xattr_permission(struct mnt_idmap *idmap, struct inode *inode,
 int
 xattr_supports_user_prefix(struct inode *inode)
 {
-	const struct xattr_handler * const *handlers = inode->i_sb->s_xattr;
+	const struct xattr_handler **handlers = inode->i_sb->s_xattr;
 	const struct xattr_handler *handler;
 
 	if (!(inode->i_opflags & IOP_XATTR)) {
@@ -999,7 +999,7 @@ int xattr_list_one(char **buffer, ssize_t *remaining_size, const char *name)
 ssize_t
 generic_listxattr(struct dentry *dentry, char *buffer, size_t buffer_size)
 {
-	const struct xattr_handler *handler, * const *handlers = dentry->d_sb->s_xattr;
+	const struct xattr_handler *handler, **handlers = dentry->d_sb->s_xattr;
 	ssize_t remaining_size = buffer_size;
 	int err = 0;
 
@@ -1040,32 +1040,12 @@ const char *xattr_full_name(const struct xattr_handler *handler,
 EXPORT_SYMBOL(xattr_full_name);
 
 /**
- * simple_xattr_space - estimate the memory used by a simple xattr
- * @name: the full name of the xattr
- * @size: the size of its value
- *
- * This takes no account of how much larger the two slab objects actually are:
- * that would depend on the slab implementation, when what is required is a
- * deterministic number, which grows with name length and size and quantity.
- *
- * Return: The approximate number of bytes of memory used by such an xattr.
- */
-size_t simple_xattr_space(const char *name, size_t size)
-{
-	/*
-	 * Use "40" instead of sizeof(struct simple_xattr), to return the
-	 * same result on 32-bit and 64-bit, and even if simple_xattr grows.
-	 */
-	return 40 + size + strlen(name);
-}
-
-/**
- * simple_xattr_free - free an xattr object
+ * free_simple_xattr - free an xattr object
  * @xattr: the xattr object
  *
  * Free the xattr object. Can handle @xattr being NULL.
  */
-void simple_xattr_free(struct simple_xattr *xattr)
+static inline void free_simple_xattr(struct simple_xattr *xattr)
 {
 	if (xattr)
 		kfree(xattr->name);
@@ -1093,7 +1073,7 @@ struct simple_xattr *simple_xattr_alloc(const void *value, size_t size)
 	if (len < sizeof(*new_xattr))
 		return NULL;
 
-	new_xattr = kvmalloc(len, GFP_KERNEL_ACCOUNT);
+	new_xattr = kvmalloc(len, GFP_KERNEL);
 	if (!new_xattr)
 		return NULL;
 
@@ -1184,6 +1164,7 @@ int simple_xattr_get(struct simple_xattrs *xattrs, const char *name,
  * @value: the value to store along the xattr
  * @size: the size of @value
  * @flags: the flags determining how to set the xattr
+ * @removed_size: the size of the removed xattr
  *
  * Set a new xattr object.
  * If @value is passed a new xattr object will be allocated. If XATTR_REPLACE
@@ -1200,27 +1181,29 @@ int simple_xattr_get(struct simple_xattrs *xattrs, const char *name,
  * nothing if XATTR_CREATE is specified in @flags or @flags is zero. For
  * XATTR_REPLACE we fail as mentioned above.
  *
- * Return: On success, the removed or replaced xattr is returned, to be freed
- * by the caller; or NULL if none. On failure a negative error code is returned.
+ * Return: On success zero and on error a negative error code is returned.
  */
-struct simple_xattr *simple_xattr_set(struct simple_xattrs *xattrs,
-				      const char *name, const void *value,
-				      size_t size, int flags)
+int simple_xattr_set(struct simple_xattrs *xattrs, const char *name,
+		     const void *value, size_t size, int flags,
+		     ssize_t *removed_size)
 {
-	struct simple_xattr *old_xattr = NULL, *new_xattr = NULL;
+	struct simple_xattr *xattr = NULL, *new_xattr = NULL;
 	struct rb_node *parent = NULL, **rbp;
 	int err = 0, ret;
+
+	if (removed_size)
+		*removed_size = -1;
 
 	/* value == NULL means remove */
 	if (value) {
 		new_xattr = simple_xattr_alloc(value, size);
 		if (!new_xattr)
-			return ERR_PTR(-ENOMEM);
+			return -ENOMEM;
 
-		new_xattr->name = kstrdup(name, GFP_KERNEL_ACCOUNT);
+		new_xattr->name = kstrdup(name, GFP_KERNEL);
 		if (!new_xattr->name) {
-			simple_xattr_free(new_xattr);
-			return ERR_PTR(-ENOMEM);
+			free_simple_xattr(new_xattr);
+			return -ENOMEM;
 		}
 	}
 
@@ -1234,12 +1217,12 @@ struct simple_xattr *simple_xattr_set(struct simple_xattrs *xattrs,
 		else if (ret > 0)
 			rbp = &(*rbp)->rb_right;
 		else
-			old_xattr = rb_entry(*rbp, struct simple_xattr, rb_node);
-		if (old_xattr)
+			xattr = rb_entry(*rbp, struct simple_xattr, rb_node);
+		if (xattr)
 			break;
 	}
 
-	if (old_xattr) {
+	if (xattr) {
 		/* Fail if XATTR_CREATE is requested and the xattr exists. */
 		if (flags & XATTR_CREATE) {
 			err = -EEXIST;
@@ -1247,10 +1230,12 @@ struct simple_xattr *simple_xattr_set(struct simple_xattrs *xattrs,
 		}
 
 		if (new_xattr)
-			rb_replace_node(&old_xattr->rb_node,
-					&new_xattr->rb_node, &xattrs->rb_root);
+			rb_replace_node(&xattr->rb_node, &new_xattr->rb_node,
+					&xattrs->rb_root);
 		else
-			rb_erase(&old_xattr->rb_node, &xattrs->rb_root);
+			rb_erase(&xattr->rb_node, &xattrs->rb_root);
+		if (!err && removed_size)
+			*removed_size = xattr->size;
 	} else {
 		/* Fail if XATTR_REPLACE is requested but no xattr is found. */
 		if (flags & XATTR_REPLACE) {
@@ -1275,10 +1260,12 @@ struct simple_xattr *simple_xattr_set(struct simple_xattrs *xattrs,
 
 out_unlock:
 	write_unlock(&xattrs->lock);
-	if (!err)
-		return old_xattr;
-	simple_xattr_free(new_xattr);
-	return ERR_PTR(err);
+	if (err)
+		free_simple_xattr(new_xattr);
+	else
+		free_simple_xattr(xattr);
+	return err;
+
 }
 
 static bool xattr_is_trusted(const char *name)
@@ -1383,17 +1370,14 @@ void simple_xattrs_init(struct simple_xattrs *xattrs)
 /**
  * simple_xattrs_free - free xattrs
  * @xattrs: xattr header whose xattrs to destroy
- * @freed_space: approximate number of bytes of memory freed from @xattrs
  *
  * Destroy all xattrs in @xattr. When this is called no one can hold a
  * reference to any of the xattrs anymore.
  */
-void simple_xattrs_free(struct simple_xattrs *xattrs, size_t *freed_space)
+void simple_xattrs_free(struct simple_xattrs *xattrs)
 {
 	struct rb_node *rbp;
 
-	if (freed_space)
-		*freed_space = 0;
 	rbp = rb_first(&xattrs->rb_root);
 	while (rbp) {
 		struct simple_xattr *xattr;
@@ -1402,10 +1386,7 @@ void simple_xattrs_free(struct simple_xattrs *xattrs, size_t *freed_space)
 		rbp_next = rb_next(rbp);
 		xattr = rb_entry(rbp, struct simple_xattr, rb_node);
 		rb_erase(&xattr->rb_node, &xattrs->rb_root);
-		if (freed_space)
-			*freed_space += simple_xattr_space(xattr->name,
-							   xattr->size);
-		simple_xattr_free(xattr);
+		free_simple_xattr(xattr);
 		rbp = rbp_next;
 	}
 }

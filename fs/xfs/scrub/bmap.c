@@ -38,7 +38,8 @@ xchk_setup_inode_bmap(
 	if (error)
 		goto out;
 
-	xchk_ilock(sc, XFS_IOLOCK_EXCL);
+	sc->ilock_flags = XFS_IOLOCK_EXCL;
+	xfs_ilock(sc->ip, XFS_IOLOCK_EXCL);
 
 	/*
 	 * We don't want any ephemeral data/cow fork updates sitting around
@@ -49,7 +50,8 @@ xchk_setup_inode_bmap(
 	    sc->sm->sm_type != XFS_SCRUB_TYPE_BMBTA) {
 		struct address_space	*mapping = VFS_I(sc->ip)->i_mapping;
 
-		xchk_ilock(sc, XFS_MMAPLOCK_EXCL);
+		sc->ilock_flags |= XFS_MMAPLOCK_EXCL;
+		xfs_ilock(sc->ip, XFS_MMAPLOCK_EXCL);
 
 		inode_dio_wait(VFS_I(sc->ip));
 
@@ -77,8 +79,9 @@ xchk_setup_inode_bmap(
 	error = xchk_trans_alloc(sc, 0);
 	if (error)
 		goto out;
+	sc->ilock_flags |= XFS_ILOCK_EXCL;
+	xfs_ilock(sc->ip, XFS_ILOCK_EXCL);
 
-	xchk_ilock(sc, XFS_ILOCK_EXCL);
 out:
 	/* scrub teardown will unlock and release the inode */
 	return error;
@@ -410,7 +413,7 @@ xchk_bmap_iextent(
 
 	/* Make sure the extent points to a valid place. */
 	if (info->is_rt &&
-	    !xfs_verify_rtbext(mp, irec->br_startblock, irec->br_blockcount))
+	    !xfs_verify_rtext(mp, irec->br_startblock, irec->br_blockcount))
 		xchk_fblock_set_corrupt(info->sc, info->whichfork,
 				irec->br_startoff);
 	if (!info->is_rt &&
@@ -841,7 +844,7 @@ xchk_bmap(
 
 	/* Non-existent forks can be ignored. */
 	if (!ifp)
-		return -ENOENT;
+		goto out;
 
 	info.is_rt = whichfork == XFS_DATA_FORK && XFS_IS_REALTIME_INODE(ip);
 	info.whichfork = whichfork;
@@ -850,10 +853,10 @@ xchk_bmap(
 
 	switch (whichfork) {
 	case XFS_COW_FORK:
-		/* No CoW forks on non-reflink filesystems. */
-		if (!xfs_has_reflink(mp)) {
+		/* No CoW forks on non-reflink inodes/filesystems. */
+		if (!xfs_is_reflink_inode(ip)) {
 			xchk_ino_set_corrupt(sc, sc->ip->i_ino);
-			return 0;
+			goto out;
 		}
 		break;
 	case XFS_ATTR_FORK:
@@ -873,31 +876,31 @@ xchk_bmap(
 		/* No mappings to check. */
 		if (whichfork == XFS_COW_FORK)
 			xchk_fblock_set_corrupt(sc, whichfork, 0);
-		return 0;
+		goto out;
 	case XFS_DINODE_FMT_EXTENTS:
 		break;
 	case XFS_DINODE_FMT_BTREE:
 		if (whichfork == XFS_COW_FORK) {
 			xchk_fblock_set_corrupt(sc, whichfork, 0);
-			return 0;
+			goto out;
 		}
 
 		error = xchk_bmap_btree(sc, whichfork, &info);
 		if (error)
-			return error;
+			goto out;
 		break;
 	default:
 		xchk_fblock_set_corrupt(sc, whichfork, 0);
-		return 0;
+		goto out;
 	}
 
 	if (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT)
-		return 0;
+		goto out;
 
 	/* Find the offset of the last extent in the mapping. */
 	error = xfs_bmap_last_offset(ip, &endoff, whichfork);
 	if (!xchk_fblock_process_error(sc, whichfork, 0, &error))
-		return error;
+		goto out;
 
 	/*
 	 * Scrub extent records.  We use a special iterator function here that
@@ -910,12 +913,12 @@ xchk_bmap(
 	while (xchk_bmap_iext_iter(&info, &irec)) {
 		if (xchk_should_terminate(sc, &error) ||
 		    (sc->sm->sm_flags & XFS_SCRUB_OFLAG_CORRUPT))
-			return 0;
+			goto out;
 
 		if (irec.br_startoff >= endoff) {
 			xchk_fblock_set_corrupt(sc, whichfork,
 					irec.br_startoff);
-			return 0;
+			goto out;
 		}
 
 		if (isnullstartblock(irec.br_startblock))
@@ -928,10 +931,10 @@ xchk_bmap(
 	if (xchk_bmap_want_check_rmaps(&info)) {
 		error = xchk_bmap_check_rmaps(sc, whichfork);
 		if (!xchk_fblock_xref_process_error(sc, whichfork, 0, &error))
-			return error;
+			goto out;
 	}
-
-	return 0;
+out:
+	return error;
 }
 
 /* Scrub an inode's data fork. */
@@ -955,5 +958,8 @@ int
 xchk_bmap_cow(
 	struct xfs_scrub	*sc)
 {
+	if (!xfs_is_reflink_inode(sc->ip))
+		return -ENOENT;
+
 	return xchk_bmap(sc, XFS_COW_FORK);
 }

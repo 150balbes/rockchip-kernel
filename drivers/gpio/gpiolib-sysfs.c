@@ -515,9 +515,8 @@ static ssize_t unexport_store(const struct class *class,
 	 * they may be undone on its behalf too.
 	 */
 	if (test_and_clear_bit(FLAG_SYSFS, &desc->flags)) {
-		gpiod_unexport(desc);
-		gpiod_free(desc);
 		status = 0;
+		gpiod_free(desc);
 	}
 done:
 	if (status)
@@ -782,10 +781,8 @@ void gpiochip_sysfs_unregister(struct gpio_device *gdev)
 	mutex_unlock(&sysfs_lock);
 
 	/* unregister gpiod class devices owned by sysfs */
-	for_each_gpio_desc_with_flag(chip, desc, FLAG_SYSFS) {
-		gpiod_unexport(desc);
+	for_each_gpio_desc_with_flag(chip, desc, FLAG_SYSFS)
 		gpiod_free(desc);
-	}
 }
 
 static int __init gpiolib_sysfs_init(void)
@@ -814,7 +811,7 @@ static int __init gpiolib_sysfs_init(void)
 		 * gpiochip_sysfs_register() acquires a mutex. This is unsafe
 		 * and needs to be fixed.
 		 *
-		 * Also it would be nice to use gpio_device_find() here so we
+		 * Also it would be nice to use gpiochip_find() here so we
 		 * can keep gpio_chips local to gpiolib.c, but the yield of
 		 * gpio_lock prevents us from doing this.
 		 */

@@ -17,6 +17,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef CLONE_NEWNS
+# define CLONE_NEWNS 0x00020000
+#endif
+
 static char *fw_path = NULL;
 
 static void die(char *fmt, ...)

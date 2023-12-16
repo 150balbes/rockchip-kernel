@@ -121,6 +121,9 @@ static struct snd_soc_dai_driver aiu_cpu_dai_drv[] = {
 			.formats	= AIU_FORMATS,
 		},
 		.ops		= &aiu_fifo_i2s_dai_ops,
+		.pcm_new	= aiu_fifo_pcm_new,
+		.probe		= aiu_fifo_i2s_dai_probe,
+		.remove		= aiu_fifo_dai_remove,
 	},
 	[CPU_SPDIF_FIFO] = {
 		.name = "SPDIF FIFO",
@@ -134,6 +137,9 @@ static struct snd_soc_dai_driver aiu_cpu_dai_drv[] = {
 			.formats	= AIU_FORMATS,
 		},
 		.ops		= &aiu_fifo_spdif_dai_ops,
+		.pcm_new	= aiu_fifo_pcm_new,
+		.probe		= aiu_fifo_spdif_dai_probe,
+		.remove		= aiu_fifo_dai_remove,
 	},
 	[CPU_I2S_ENCODER] = {
 		.name = "I2S Encoder",

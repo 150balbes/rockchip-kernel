@@ -12,6 +12,7 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
 #include <linux/platform_data/mlxreg.h>
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
@@ -112,7 +113,7 @@ static int mlxreg_hotplug_device_create(struct mlxreg_hotplug_priv_data *priv,
 	 * Return if adapter number is negative. It could be in case hotplug
 	 * event is not associated with hotplug device.
 	 */
-	if (data->hpdev.nr < 0 && data->hpdev.action != MLXREG_HOTPLUG_DEVICE_NO_ACTION)
+	if (data->hpdev.nr < 0)
 		return 0;
 
 	pdata = dev_get_platdata(&priv->pdev->dev);
@@ -786,13 +787,15 @@ static int mlxreg_hotplug_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void mlxreg_hotplug_remove(struct platform_device *pdev)
+static int mlxreg_hotplug_remove(struct platform_device *pdev)
 {
 	struct mlxreg_hotplug_priv_data *priv = dev_get_drvdata(&pdev->dev);
 
 	/* Clean interrupts setup. */
 	mlxreg_hotplug_unset_irq(priv);
 	devm_free_irq(&pdev->dev, priv->irq, priv);
+
+	return 0;
 }
 
 static struct platform_driver mlxreg_hotplug_driver = {
@@ -800,7 +803,7 @@ static struct platform_driver mlxreg_hotplug_driver = {
 		.name = "mlxreg-hotplug",
 	},
 	.probe = mlxreg_hotplug_probe,
-	.remove_new = mlxreg_hotplug_remove,
+	.remove = mlxreg_hotplug_remove,
 };
 
 module_platform_driver(mlxreg_hotplug_driver);

@@ -78,7 +78,8 @@ int acpiphp_register_attention(struct acpiphp_attention_info *info)
 {
 	int retval = -EINVAL;
 
-	if (info && info->set_attn && info->get_attn && !attention_info) {
+	if (info && info->owner && info->set_attn &&
+			info->get_attn && !attention_info) {
 		retval = 0;
 		attention_info = info;
 	}

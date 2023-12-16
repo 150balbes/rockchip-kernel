@@ -17,7 +17,6 @@
 #include <linux/mm.h>
 #include <asm/processor.h>
 #include <asm/mmu_context.h>
-#include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
 

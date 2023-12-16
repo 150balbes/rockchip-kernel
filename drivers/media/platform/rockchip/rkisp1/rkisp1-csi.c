@@ -30,6 +30,23 @@ static inline struct rkisp1_csi *to_rkisp1_csi(struct v4l2_subdev *sd)
 	return container_of(sd, struct rkisp1_csi, sd);
 }
 
+static struct v4l2_mbus_framefmt *
+rkisp1_csi_get_pad_fmt(struct rkisp1_csi *csi,
+		       struct v4l2_subdev_state *sd_state,
+		       unsigned int pad, u32 which)
+{
+	struct v4l2_subdev_state state = {
+		.pads = csi->pad_cfg
+	};
+
+	lockdep_assert_held(&csi->lock);
+
+	if (which == V4L2_SUBDEV_FORMAT_TRY)
+		return v4l2_subdev_get_try_format(&csi->sd, sd_state, pad);
+	else
+		return v4l2_subdev_get_try_format(&csi->sd, &state, pad);
+}
+
 int rkisp1_csi_link_sensor(struct rkisp1_device *rkisp1, struct v4l2_subdev *sd,
 			   struct rkisp1_sensor_async *s_asd,
 			   unsigned int source_pad)
@@ -59,8 +76,7 @@ int rkisp1_csi_link_sensor(struct rkisp1_device *rkisp1, struct v4l2_subdev *sd,
 }
 
 static int rkisp1_csi_config(struct rkisp1_csi *csi,
-			     const struct rkisp1_sensor_async *sensor,
-			     const struct rkisp1_mbus_info *format)
+			     const struct rkisp1_sensor_async *sensor)
 {
 	struct rkisp1_device *rkisp1 = csi->rkisp1;
 	unsigned int lanes = sensor->lanes;
@@ -82,7 +98,7 @@ static int rkisp1_csi_config(struct rkisp1_csi *csi,
 
 	/* Configure Data Type and Virtual Channel */
 	rkisp1_write(rkisp1, RKISP1_CIF_MIPI_IMG_DATA_SEL,
-		     RKISP1_CIF_MIPI_DATA_SEL_DT(format->mipi_dt) |
+		     RKISP1_CIF_MIPI_DATA_SEL_DT(csi->sink_fmt->mipi_dt) |
 		     RKISP1_CIF_MIPI_DATA_SEL_VC(0));
 
 	/* Clear MIPI interrupts */
@@ -135,8 +151,7 @@ static void rkisp1_csi_disable(struct rkisp1_csi *csi)
 }
 
 static int rkisp1_csi_start(struct rkisp1_csi *csi,
-			    const struct rkisp1_sensor_async *sensor,
-			    const struct rkisp1_mbus_info *format)
+			    const struct rkisp1_sensor_async *sensor)
 {
 	struct rkisp1_device *rkisp1 = csi->rkisp1;
 	union phy_configure_opts opts;
@@ -144,7 +159,7 @@ static int rkisp1_csi_start(struct rkisp1_csi *csi,
 	s64 pixel_clock;
 	int ret;
 
-	ret = rkisp1_csi_config(csi, sensor, format);
+	ret = rkisp1_csi_config(csi, sensor);
 	if (ret)
 		return ret;
 
@@ -154,7 +169,7 @@ static int rkisp1_csi_start(struct rkisp1_csi *csi,
 		return -EINVAL;
 	}
 
-	phy_mipi_dphy_get_default_config(pixel_clock, format->bus_width,
+	phy_mipi_dphy_get_default_config(pixel_clock, csi->sink_fmt->bus_width,
 					 sensor->lanes, cfg);
 	phy_set_mode(csi->dphy, PHY_MODE_MIPI_DPHY);
 	phy_configure(csi->dphy, &opts);
@@ -233,6 +248,7 @@ static int rkisp1_csi_enum_mbus_code(struct v4l2_subdev *sd,
 				     struct v4l2_subdev_state *sd_state,
 				     struct v4l2_subdev_mbus_code_enum *code)
 {
+	struct rkisp1_csi *csi = to_rkisp1_csi(sd);
 	unsigned int i;
 	int pos = 0;
 
@@ -242,9 +258,14 @@ static int rkisp1_csi_enum_mbus_code(struct v4l2_subdev *sd,
 		if (code->index)
 			return -EINVAL;
 
-		sink_fmt = v4l2_subdev_get_pad_format(sd, sd_state,
-						      RKISP1_CSI_PAD_SINK);
+		mutex_lock(&csi->lock);
+
+		sink_fmt = rkisp1_csi_get_pad_fmt(csi, sd_state,
+						  RKISP1_CSI_PAD_SINK,
+						  code->which);
 		code->code = sink_fmt->code;
+
+		mutex_unlock(&csi->lock);
 
 		return 0;
 	}
@@ -275,9 +296,9 @@ static int rkisp1_csi_init_config(struct v4l2_subdev *sd,
 {
 	struct v4l2_mbus_framefmt *sink_fmt, *src_fmt;
 
-	sink_fmt = v4l2_subdev_get_pad_format(sd, sd_state,
+	sink_fmt = v4l2_subdev_get_try_format(sd, sd_state,
 					      RKISP1_CSI_PAD_SINK);
-	src_fmt = v4l2_subdev_get_pad_format(sd, sd_state,
+	src_fmt = v4l2_subdev_get_try_format(sd, sd_state,
 					     RKISP1_CSI_PAD_SRC);
 
 	sink_fmt->width = RKISP1_DEFAULT_WIDTH;
@@ -290,18 +311,36 @@ static int rkisp1_csi_init_config(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int rkisp1_csi_get_fmt(struct v4l2_subdev *sd,
+			      struct v4l2_subdev_state *sd_state,
+			      struct v4l2_subdev_format *fmt)
+{
+	struct rkisp1_csi *csi = to_rkisp1_csi(sd);
+
+	mutex_lock(&csi->lock);
+	fmt->format = *rkisp1_csi_get_pad_fmt(csi, sd_state, fmt->pad,
+					      fmt->which);
+	mutex_unlock(&csi->lock);
+
+	return 0;
+}
+
 static int rkisp1_csi_set_fmt(struct v4l2_subdev *sd,
 			      struct v4l2_subdev_state *sd_state,
 			      struct v4l2_subdev_format *fmt)
 {
+	struct rkisp1_csi *csi = to_rkisp1_csi(sd);
 	const struct rkisp1_mbus_info *mbus_info;
 	struct v4l2_mbus_framefmt *sink_fmt, *src_fmt;
 
 	/* The format on the source pad always matches the sink pad. */
 	if (fmt->pad == RKISP1_CSI_PAD_SRC)
-		return v4l2_subdev_get_fmt(sd, sd_state, fmt);
+		return rkisp1_csi_get_fmt(sd, sd_state, fmt);
 
-	sink_fmt = v4l2_subdev_get_pad_format(sd, sd_state, RKISP1_CSI_PAD_SINK);
+	mutex_lock(&csi->lock);
+
+	sink_fmt = rkisp1_csi_get_pad_fmt(csi, sd_state, RKISP1_CSI_PAD_SINK,
+					  fmt->which);
 
 	sink_fmt->code = fmt->format.code;
 
@@ -320,9 +359,15 @@ static int rkisp1_csi_set_fmt(struct v4l2_subdev *sd,
 
 	fmt->format = *sink_fmt;
 
+	if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE)
+		csi->sink_fmt = mbus_info;
+
 	/* Propagate the format to the source pad. */
-	src_fmt = v4l2_subdev_get_pad_format(sd, sd_state, RKISP1_CSI_PAD_SRC);
+	src_fmt = rkisp1_csi_get_pad_fmt(csi, sd_state, RKISP1_CSI_PAD_SRC,
+					 fmt->which);
 	*src_fmt = *sink_fmt;
+
+	mutex_unlock(&csi->lock);
 
 	return 0;
 }
@@ -335,11 +380,7 @@ static int rkisp1_csi_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct rkisp1_csi *csi = to_rkisp1_csi(sd);
 	struct rkisp1_device *rkisp1 = csi->rkisp1;
-	const struct v4l2_mbus_framefmt *sink_fmt;
-	const struct rkisp1_mbus_info *format;
 	struct rkisp1_sensor_async *source_asd;
-	struct v4l2_async_connection *asc;
-	struct v4l2_subdev_state *sd_state;
 	struct media_pad *source_pad;
 	struct v4l2_subdev *source;
 	int ret;
@@ -365,20 +406,13 @@ static int rkisp1_csi_s_stream(struct v4l2_subdev *sd, int enable)
 		return -EPIPE;
 	}
 
-	asc = v4l2_async_connection_unique(source);
-	if (!asc)
-		return -EPIPE;
-
-	source_asd = container_of(asc, struct rkisp1_sensor_async, asd);
+	source_asd = container_of(source->asd, struct rkisp1_sensor_async, asd);
 	if (source_asd->mbus_type != V4L2_MBUS_CSI2_DPHY)
 		return -EINVAL;
 
-	sd_state = v4l2_subdev_lock_and_get_active_state(sd);
-	sink_fmt = v4l2_subdev_get_pad_format(sd, sd_state, RKISP1_CSI_PAD_SINK);
-	format = rkisp1_mbus_info_get_by_code(sink_fmt->code);
-	v4l2_subdev_unlock_state(sd_state);
-
-	ret = rkisp1_csi_start(csi, source_asd, format);
+	mutex_lock(&csi->lock);
+	ret = rkisp1_csi_start(csi, source_asd);
+	mutex_unlock(&csi->lock);
 	if (ret)
 		return ret;
 
@@ -408,7 +442,7 @@ static const struct v4l2_subdev_video_ops rkisp1_csi_video_ops = {
 static const struct v4l2_subdev_pad_ops rkisp1_csi_pad_ops = {
 	.enum_mbus_code = rkisp1_csi_enum_mbus_code,
 	.init_cfg = rkisp1_csi_init_config,
-	.get_fmt = v4l2_subdev_get_fmt,
+	.get_fmt = rkisp1_csi_get_fmt,
 	.set_fmt = rkisp1_csi_set_fmt,
 };
 
@@ -420,11 +454,13 @@ static const struct v4l2_subdev_ops rkisp1_csi_ops = {
 int rkisp1_csi_register(struct rkisp1_device *rkisp1)
 {
 	struct rkisp1_csi *csi = &rkisp1->csi;
+	struct v4l2_subdev_state state = {};
 	struct media_pad *pads;
 	struct v4l2_subdev *sd;
 	int ret;
 
 	csi->rkisp1 = rkisp1;
+	mutex_init(&csi->lock);
 
 	sd = &csi->sd;
 	v4l2_subdev_init(sd, &rkisp1_csi_ops);
@@ -440,26 +476,26 @@ int rkisp1_csi_register(struct rkisp1_device *rkisp1)
 	pads[RKISP1_CSI_PAD_SRC].flags = MEDIA_PAD_FL_SOURCE |
 					 MEDIA_PAD_FL_MUST_CONNECT;
 
+	csi->sink_fmt = rkisp1_mbus_info_get_by_code(RKISP1_CSI_DEF_FMT);
+
 	ret = media_entity_pads_init(&sd->entity, RKISP1_CSI_PAD_NUM, pads);
 	if (ret)
-		goto err_entity_cleanup;
+		goto error;
 
-	ret = v4l2_subdev_init_finalize(sd);
-	if (ret)
-		goto err_entity_cleanup;
+	state.pads = csi->pad_cfg;
+	rkisp1_csi_init_config(sd, &state);
 
 	ret = v4l2_device_register_subdev(&csi->rkisp1->v4l2_dev, sd);
 	if (ret) {
 		dev_err(sd->dev, "Failed to register csi receiver subdev\n");
-		goto err_subdev_cleanup;
+		goto error;
 	}
 
 	return 0;
 
-err_subdev_cleanup:
-	v4l2_subdev_cleanup(sd);
-err_entity_cleanup:
+error:
 	media_entity_cleanup(&sd->entity);
+	mutex_destroy(&csi->lock);
 	csi->rkisp1 = NULL;
 	return ret;
 }
@@ -472,8 +508,8 @@ void rkisp1_csi_unregister(struct rkisp1_device *rkisp1)
 		return;
 
 	v4l2_device_unregister_subdev(&csi->sd);
-	v4l2_subdev_cleanup(&csi->sd);
 	media_entity_cleanup(&csi->sd.entity);
+	mutex_destroy(&csi->lock);
 }
 
 int rkisp1_csi_init(struct rkisp1_device *rkisp1)

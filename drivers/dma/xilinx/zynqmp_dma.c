@@ -11,9 +11,8 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/of_dma.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
@@ -1147,7 +1146,7 @@ err_disable_pm:
  *
  * Return: Always '0'
  */
-static void zynqmp_dma_remove(struct platform_device *pdev)
+static int zynqmp_dma_remove(struct platform_device *pdev)
 {
 	struct zynqmp_dma_device *zdev = platform_get_drvdata(pdev);
 
@@ -1158,6 +1157,8 @@ static void zynqmp_dma_remove(struct platform_device *pdev)
 	pm_runtime_disable(zdev->dev);
 	if (!pm_runtime_enabled(zdev->dev))
 		zynqmp_dma_runtime_suspend(zdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id zynqmp_dma_of_match[] = {
@@ -1173,7 +1174,7 @@ static struct platform_driver zynqmp_dma_driver = {
 		.pm = &zynqmp_dma_dev_pm_ops,
 	},
 	.probe = zynqmp_dma_probe,
-	.remove_new = zynqmp_dma_remove,
+	.remove = zynqmp_dma_remove,
 };
 
 module_platform_driver(zynqmp_dma_driver);

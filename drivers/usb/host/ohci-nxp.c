@@ -202,7 +202,8 @@ static int ohci_hcd_nxp_probe(struct platform_device *pdev)
 		goto fail_hcd;
 	}
 
-	hcd->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hcd->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hcd->regs)) {
 		ret = PTR_ERR(hcd->regs);
 		goto fail_resource;

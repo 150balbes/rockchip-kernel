@@ -244,7 +244,7 @@ err:
 	return ret;
 }
 
-static void twl4030_madc_battery_remove(struct platform_device *pdev)
+static int twl4030_madc_battery_remove(struct platform_device *pdev)
 {
 	struct twl4030_madc_battery *bat = platform_get_drvdata(pdev);
 
@@ -253,6 +253,8 @@ static void twl4030_madc_battery_remove(struct platform_device *pdev)
 	iio_channel_release(bat->channel_vbat);
 	iio_channel_release(bat->channel_ichg);
 	iio_channel_release(bat->channel_temp);
+
+	return 0;
 }
 
 static struct platform_driver twl4030_madc_battery_driver = {
@@ -260,7 +262,7 @@ static struct platform_driver twl4030_madc_battery_driver = {
 		.name = "twl4030_madc_battery",
 	},
 	.probe  = twl4030_madc_battery_probe,
-	.remove_new = twl4030_madc_battery_remove,
+	.remove = twl4030_madc_battery_remove,
 };
 module_platform_driver(twl4030_madc_battery_driver);
 

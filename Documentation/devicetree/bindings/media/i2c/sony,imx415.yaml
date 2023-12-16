@@ -44,9 +44,16 @@ properties:
     description: Sensor reset (XCLR) GPIO
     maxItems: 1
 
+  flash-leds: true
+
+  lens-focus: true
+
+  orientation: true
+
+  rotation: true
+
   port:
     $ref: /schemas/graph.yaml#/$defs/port-base
-    unevaluatedProperties: false
 
     properties:
       endpoint:
@@ -81,7 +88,7 @@ required:
   - ovdd-supply
   - port
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

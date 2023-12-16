@@ -27,15 +27,15 @@ static int sk_diag_put_flags(struct sock *sk, struct sk_buff *skb)
 
 	if (nlk->cb_running)
 		flags |= NDIAG_FLAG_CB_RUNNING;
-	if (nlk_test_bit(RECV_PKTINFO, sk))
+	if (nlk->flags & NETLINK_F_RECV_PKTINFO)
 		flags |= NDIAG_FLAG_PKTINFO;
-	if (nlk_test_bit(BROADCAST_SEND_ERROR, sk))
+	if (nlk->flags & NETLINK_F_BROADCAST_SEND_ERROR)
 		flags |= NDIAG_FLAG_BROADCAST_ERROR;
-	if (nlk_test_bit(RECV_NO_ENOBUFS, sk))
+	if (nlk->flags & NETLINK_F_RECV_NO_ENOBUFS)
 		flags |= NDIAG_FLAG_NO_ENOBUFS;
-	if (nlk_test_bit(LISTEN_ALL_NSID, sk))
+	if (nlk->flags & NETLINK_F_LISTEN_ALL_NSID)
 		flags |= NDIAG_FLAG_LISTEN_ALL_NSID;
-	if (nlk_test_bit(CAP_ACK, sk))
+	if (nlk->flags & NETLINK_F_CAP_ACK)
 		flags |= NDIAG_FLAG_CAP_ACK;
 
 	return nla_put_u32(skb, NETLINK_DIAG_FLAGS, flags);
@@ -257,6 +257,5 @@ static void __exit netlink_diag_exit(void)
 
 module_init(netlink_diag_init);
 module_exit(netlink_diag_exit);
-MODULE_DESCRIPTION("Netlink-based socket monitoring/diagnostic interface (sock_diag)");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_NET_PF_PROTO_TYPE(PF_NETLINK, NETLINK_SOCK_DIAG, 16 /* AF_NETLINK */);

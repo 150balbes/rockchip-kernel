@@ -11,7 +11,7 @@
  * version has cropped that bit o' nastiness as well as assuming that
  * __stxncpy is in range of a branch.
  */
-#include <linux/export.h>
+#include <asm/export.h>
 	.set noat
 	.set noreorder
 

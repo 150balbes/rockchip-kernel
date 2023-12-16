@@ -8,6 +8,7 @@
  * hypercalls are properly masked or unmasked to the guest when disabled or
  * enabled from the KVM userspace, respectively.
  */
+
 #include <errno.h>
 #include <linux/arm-smccc.h>
 #include <asm/kvm.h>
@@ -104,17 +105,15 @@ static void guest_test_hvc(const struct test_hvc_info *hc_info)
 		switch (stage) {
 		case TEST_STAGE_HVC_IFACE_FEAT_DISABLED:
 		case TEST_STAGE_HVC_IFACE_FALSE_INFO:
-			__GUEST_ASSERT(res.a0 == SMCCC_RET_NOT_SUPPORTED,
-				       "a0 = 0x%lx, func_id = 0x%x, arg1 = 0x%llx, stage = %u",
-					res.a0, hc_info->func_id, hc_info->arg1, stage);
+			GUEST_ASSERT_3(res.a0 == SMCCC_RET_NOT_SUPPORTED,
+					res.a0, hc_info->func_id, hc_info->arg1);
 			break;
 		case TEST_STAGE_HVC_IFACE_FEAT_ENABLED:
-			__GUEST_ASSERT(res.a0 != SMCCC_RET_NOT_SUPPORTED,
-				       "a0 = 0x%lx, func_id = 0x%x, arg1 = 0x%llx, stage = %u",
-					res.a0, hc_info->func_id, hc_info->arg1, stage);
+			GUEST_ASSERT_3(res.a0 != SMCCC_RET_NOT_SUPPORTED,
+					res.a0, hc_info->func_id, hc_info->arg1);
 			break;
 		default:
-			GUEST_FAIL("Unexpected stage = %u", stage);
+			GUEST_ASSERT_1(0, stage);
 		}
 	}
 }
@@ -133,7 +132,7 @@ static void guest_code(void)
 			guest_test_hvc(false_hvc_info);
 			break;
 		default:
-			GUEST_FAIL("Unexpected stage = %u", stage);
+			GUEST_ASSERT_1(0, stage);
 		}
 
 		GUEST_SYNC(stage);
@@ -291,7 +290,10 @@ static void test_run(void)
 			guest_done = true;
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			REPORT_GUEST_ASSERT_N(uc, "values: 0x%lx, 0x%lx; 0x%lx, stage: %u",
+					      GUEST_ASSERT_ARG(uc, 0),
+					      GUEST_ASSERT_ARG(uc, 1),
+					      GUEST_ASSERT_ARG(uc, 2), stage);
 			break;
 		default:
 			TEST_FAIL("Unexpected guest exit\n");

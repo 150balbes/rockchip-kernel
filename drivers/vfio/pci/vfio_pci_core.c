@@ -27,7 +27,6 @@
 #include <linux/vgaarb.h>
 #include <linux/nospec.h>
 #include <linux/sched/mm.h>
-#include <linux/iommufd.h>
 #if IS_ENABLED(CONFIG_EEH)
 #include <asm/eeh.h>
 #endif
@@ -181,8 +180,7 @@ no_mmap:
 struct vfio_pci_group_info;
 static void vfio_pci_dev_set_try_reset(struct vfio_device_set *dev_set);
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_group_info *groups,
-				      struct iommufd_ctx *iommufd_ctx);
+				      struct vfio_pci_group_info *groups);
 
 /*
  * INTx masking requires the ability to disable INTx signaling via PCI_COMMAND
@@ -778,65 +776,29 @@ static int vfio_pci_count_devs(struct pci_dev *pdev, void *data)
 }
 
 struct vfio_pci_fill_info {
-	struct vfio_pci_dependent_device __user *devices;
-	struct vfio_pci_dependent_device __user *devices_end;
-	struct vfio_device *vdev;
-	u32 count;
-	u32 flags;
+	int max;
+	int cur;
+	struct vfio_pci_dependent_device *devices;
 };
 
 static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
 {
-	struct vfio_pci_dependent_device info = {
-		.segment = pci_domain_nr(pdev->bus),
-		.bus = pdev->bus->number,
-		.devfn = pdev->devfn,
-	};
 	struct vfio_pci_fill_info *fill = data;
+	struct iommu_group *iommu_group;
 
-	fill->count++;
-	if (fill->devices >= fill->devices_end)
-		return 0;
+	if (fill->cur == fill->max)
+		return -EAGAIN; /* Something changed, try again */
 
-	if (fill->flags & VFIO_PCI_HOT_RESET_FLAG_DEV_ID) {
-		struct iommufd_ctx *iommufd = vfio_iommufd_device_ictx(fill->vdev);
-		struct vfio_device_set *dev_set = fill->vdev->dev_set;
-		struct vfio_device *vdev;
+	iommu_group = iommu_group_get(&pdev->dev);
+	if (!iommu_group)
+		return -EPERM; /* Cannot reset non-isolated devices */
 
-		/*
-		 * hot-reset requires all affected devices be represented in
-		 * the dev_set.
-		 */
-		vdev = vfio_find_device_in_devset(dev_set, &pdev->dev);
-		if (!vdev) {
-			info.devid = VFIO_PCI_DEVID_NOT_OWNED;
-		} else {
-			int id = vfio_iommufd_get_dev_id(vdev, iommufd);
-
-			if (id > 0)
-				info.devid = id;
-			else if (id == -ENOENT)
-				info.devid = VFIO_PCI_DEVID_OWNED;
-			else
-				info.devid = VFIO_PCI_DEVID_NOT_OWNED;
-		}
-		/* If devid is VFIO_PCI_DEVID_NOT_OWNED, clear owned flag. */
-		if (info.devid == VFIO_PCI_DEVID_NOT_OWNED)
-			fill->flags &= ~VFIO_PCI_HOT_RESET_FLAG_DEV_ID_OWNED;
-	} else {
-		struct iommu_group *iommu_group;
-
-		iommu_group = iommu_group_get(&pdev->dev);
-		if (!iommu_group)
-			return -EPERM; /* Cannot reset non-isolated devices */
-
-		info.group_id = iommu_group_id(iommu_group);
-		iommu_group_put(iommu_group);
-	}
-
-	if (copy_to_user(fill->devices, &info, sizeof(info)))
-		return -EFAULT;
-	fill->devices++;
+	fill->devices[fill->cur].group_id = iommu_group_id(iommu_group);
+	fill->devices[fill->cur].segment = pci_domain_nr(pdev->bus);
+	fill->devices[fill->cur].bus = pdev->bus->number;
+	fill->devices[fill->cur].devfn = pdev->devfn;
+	fill->cur++;
+	iommu_group_put(iommu_group);
 	return 0;
 }
 
@@ -958,9 +920,13 @@ static int vfio_pci_ioctl_get_info(struct vfio_pci_core_device *vdev,
 				   struct vfio_device_info __user *arg)
 {
 	unsigned long minsz = offsetofend(struct vfio_device_info, num_irqs);
-	struct vfio_device_info info = {};
+	struct vfio_device_info info;
 	struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
+	unsigned long capsz;
 	int ret;
+
+	/* For backward compatibility, cannot require this */
+	capsz = offsetofend(struct vfio_iommu_type1_info, cap_offset);
 
 	if (copy_from_user(&info, arg, minsz))
 		return -EFAULT;
@@ -968,7 +934,10 @@ static int vfio_pci_ioctl_get_info(struct vfio_pci_core_device *vdev,
 	if (info.argsz < minsz)
 		return -EINVAL;
 
-	minsz = min_t(size_t, info.argsz, sizeof(info));
+	if (info.argsz >= capsz) {
+		minsz = capsz;
+		info.cap_offset = 0;
+	}
 
 	info.flags = VFIO_DEVICE_FLAGS_PCI;
 
@@ -1259,7 +1228,8 @@ static int vfio_pci_ioctl_get_pci_hot_reset_info(
 	unsigned long minsz =
 		offsetofend(struct vfio_pci_hot_reset_info, count);
 	struct vfio_pci_hot_reset_info hdr;
-	struct vfio_pci_fill_info fill = {};
+	struct vfio_pci_fill_info fill = { 0 };
+	struct vfio_pci_dependent_device *devices = NULL;
 	bool slot = false;
 	int ret = 0;
 
@@ -1277,41 +1247,77 @@ static int vfio_pci_ioctl_get_pci_hot_reset_info(
 	else if (pci_probe_reset_bus(vdev->pdev->bus))
 		return -ENODEV;
 
-	fill.devices = arg->devices;
-	fill.devices_end = arg->devices +
-			   (hdr.argsz - sizeof(hdr)) / sizeof(arg->devices[0]);
-	fill.vdev = &vdev->vdev;
-
-	if (vfio_device_cdev_opened(&vdev->vdev))
-		fill.flags |= VFIO_PCI_HOT_RESET_FLAG_DEV_ID |
-			     VFIO_PCI_HOT_RESET_FLAG_DEV_ID_OWNED;
-
-	mutex_lock(&vdev->vdev.dev_set->lock);
-	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_fill_devs,
-					    &fill, slot);
-	mutex_unlock(&vdev->vdev.dev_set->lock);
+	/* How many devices are affected? */
+	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_count_devs,
+					    &fill.max, slot);
 	if (ret)
 		return ret;
 
-	hdr.count = fill.count;
-	hdr.flags = fill.flags;
-	if (copy_to_user(arg, &hdr, minsz))
-		return -EFAULT;
+	WARN_ON(!fill.max); /* Should always be at least one */
 
-	if (fill.count > fill.devices - arg->devices)
-		return -ENOSPC;
-	return 0;
+	/*
+	 * If there's enough space, fill it now, otherwise return -ENOSPC and
+	 * the number of devices affected.
+	 */
+	if (hdr.argsz < sizeof(hdr) + (fill.max * sizeof(*devices))) {
+		ret = -ENOSPC;
+		hdr.count = fill.max;
+		goto reset_info_exit;
+	}
+
+	devices = kcalloc(fill.max, sizeof(*devices), GFP_KERNEL);
+	if (!devices)
+		return -ENOMEM;
+
+	fill.devices = devices;
+
+	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_fill_devs,
+					    &fill, slot);
+
+	/*
+	 * If a device was removed between counting and filling, we may come up
+	 * short of fill.max.  If a device was added, we'll have a return of
+	 * -EAGAIN above.
+	 */
+	if (!ret)
+		hdr.count = fill.cur;
+
+reset_info_exit:
+	if (copy_to_user(arg, &hdr, minsz))
+		ret = -EFAULT;
+
+	if (!ret) {
+		if (copy_to_user(&arg->devices, devices,
+				 hdr.count * sizeof(*devices)))
+			ret = -EFAULT;
+	}
+
+	kfree(devices);
+	return ret;
 }
 
-static int
-vfio_pci_ioctl_pci_hot_reset_groups(struct vfio_pci_core_device *vdev,
-				    int array_count, bool slot,
-				    struct vfio_pci_hot_reset __user *arg)
+static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
+					struct vfio_pci_hot_reset __user *arg)
 {
+	unsigned long minsz = offsetofend(struct vfio_pci_hot_reset, count);
+	struct vfio_pci_hot_reset hdr;
 	int32_t *group_fds;
 	struct file **files;
 	struct vfio_pci_group_info info;
+	bool slot = false;
 	int file_idx, count = 0, ret = 0;
+
+	if (copy_from_user(&hdr, arg, minsz))
+		return -EFAULT;
+
+	if (hdr.argsz < minsz || hdr.flags)
+		return -EINVAL;
+
+	/* Can we do a slot or bus reset or neither? */
+	if (!pci_probe_reset_slot(vdev->pdev->slot))
+		slot = true;
+	else if (pci_probe_reset_bus(vdev->pdev->bus))
+		return -ENODEV;
 
 	/*
 	 * We can't let userspace give us an arbitrarily large buffer to copy,
@@ -1323,11 +1329,12 @@ vfio_pci_ioctl_pci_hot_reset_groups(struct vfio_pci_core_device *vdev,
 	if (ret)
 		return ret;
 
-	if (array_count > count)
+	/* Somewhere between 1 and count is OK */
+	if (!hdr.count || hdr.count > count)
 		return -EINVAL;
 
-	group_fds = kcalloc(array_count, sizeof(*group_fds), GFP_KERNEL);
-	files = kcalloc(array_count, sizeof(*files), GFP_KERNEL);
+	group_fds = kcalloc(hdr.count, sizeof(*group_fds), GFP_KERNEL);
+	files = kcalloc(hdr.count, sizeof(*files), GFP_KERNEL);
 	if (!group_fds || !files) {
 		kfree(group_fds);
 		kfree(files);
@@ -1335,17 +1342,18 @@ vfio_pci_ioctl_pci_hot_reset_groups(struct vfio_pci_core_device *vdev,
 	}
 
 	if (copy_from_user(group_fds, arg->group_fds,
-			   array_count * sizeof(*group_fds))) {
+			   hdr.count * sizeof(*group_fds))) {
 		kfree(group_fds);
 		kfree(files);
 		return -EFAULT;
 	}
 
 	/*
-	 * Get the group file for each fd to ensure the group is held across
-	 * the reset
+	 * For each group_fd, get the group through the vfio external user
+	 * interface and store the group and iommu ID.  This ensures the group
+	 * is held across the reset.
 	 */
-	for (file_idx = 0; file_idx < array_count; file_idx++) {
+	for (file_idx = 0; file_idx < hdr.count; file_idx++) {
 		struct file *file = fget(group_fds[file_idx]);
 
 		if (!file) {
@@ -1369,10 +1377,10 @@ vfio_pci_ioctl_pci_hot_reset_groups(struct vfio_pci_core_device *vdev,
 	if (ret)
 		goto hot_reset_release;
 
-	info.count = array_count;
+	info.count = hdr.count;
 	info.files = files;
 
-	ret = vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, &info, NULL);
+	ret = vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, &info);
 
 hot_reset_release:
 	for (file_idx--; file_idx >= 0; file_idx--)
@@ -1380,36 +1388,6 @@ hot_reset_release:
 
 	kfree(files);
 	return ret;
-}
-
-static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
-					struct vfio_pci_hot_reset __user *arg)
-{
-	unsigned long minsz = offsetofend(struct vfio_pci_hot_reset, count);
-	struct vfio_pci_hot_reset hdr;
-	bool slot = false;
-
-	if (copy_from_user(&hdr, arg, minsz))
-		return -EFAULT;
-
-	if (hdr.argsz < minsz || hdr.flags)
-		return -EINVAL;
-
-	/* zero-length array is only for cdev opened devices */
-	if (!!hdr.count == vfio_device_cdev_opened(&vdev->vdev))
-		return -EINVAL;
-
-	/* Can we do a slot or bus reset or neither? */
-	if (!pci_probe_reset_slot(vdev->pdev->slot))
-		slot = true;
-	else if (pci_probe_reset_bus(vdev->pdev->bus))
-		return -ENODEV;
-
-	if (hdr.count)
-		return vfio_pci_ioctl_pci_hot_reset_groups(vdev, hdr.count, slot, arg);
-
-	return vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, NULL,
-					  vfio_iommufd_device_ictx(&vdev->vdev));
 }
 
 static int vfio_pci_ioctl_ioeventfd(struct vfio_pci_core_device *vdev,
@@ -2377,16 +2355,13 @@ const struct pci_error_handlers vfio_pci_core_err_handlers = {
 };
 EXPORT_SYMBOL_GPL(vfio_pci_core_err_handlers);
 
-static bool vfio_dev_in_groups(struct vfio_device *vdev,
+static bool vfio_dev_in_groups(struct vfio_pci_core_device *vdev,
 			       struct vfio_pci_group_info *groups)
 {
 	unsigned int i;
 
-	if (!groups)
-		return false;
-
 	for (i = 0; i < groups->count; i++)
-		if (vfio_file_has_dev(groups->files[i], vdev))
+		if (vfio_file_has_dev(groups->files[i], &vdev->vdev))
 			return true;
 	return false;
 }
@@ -2394,8 +2369,12 @@ static bool vfio_dev_in_groups(struct vfio_device *vdev,
 static int vfio_pci_is_device_in_set(struct pci_dev *pdev, void *data)
 {
 	struct vfio_device_set *dev_set = data;
+	struct vfio_device *cur;
 
-	return vfio_find_device_in_devset(dev_set, &pdev->dev) ? 0 : -ENODEV;
+	list_for_each_entry(cur, &dev_set->device_list, dev_set_list)
+		if (cur->dev == &pdev->dev)
+			return 0;
+	return -EBUSY;
 }
 
 /*
@@ -2462,8 +2441,7 @@ unwind:
  * get each memory_lock.
  */
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_group_info *groups,
-				      struct iommufd_ctx *iommufd_ctx)
+				      struct vfio_pci_group_info *groups)
 {
 	struct vfio_pci_core_device *cur_mem;
 	struct vfio_pci_core_device *cur_vma;
@@ -2493,38 +2471,11 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 		goto err_unlock;
 
 	list_for_each_entry(cur_vma, &dev_set->device_list, vdev.dev_set_list) {
-		bool owned;
-
 		/*
-		 * Test whether all the affected devices can be reset by the
-		 * user.
-		 *
-		 * If called from a group opened device and the user provides
-		 * a set of groups, all the devices in the dev_set should be
-		 * contained by the set of groups provided by the user.
-		 *
-		 * If called from a cdev opened device and the user provides
-		 * a zero-length array, all the devices in the dev_set must
-		 * be bound to the same iommufd_ctx as the input iommufd_ctx.
-		 * If there is any device that has not been bound to any
-		 * iommufd_ctx yet, check if its iommu_group has any device
-		 * bound to the input iommufd_ctx.  Such devices can be
-		 * considered owned by the input iommufd_ctx as the device
-		 * cannot be owned by another iommufd_ctx when its iommu_group
-		 * is owned.
-		 *
-		 * Otherwise, reset is not allowed.
+		 * Test whether all the affected devices are contained by the
+		 * set of groups provided by the user.
 		 */
-		if (iommufd_ctx) {
-			int devid = vfio_iommufd_get_dev_id(&cur_vma->vdev,
-							    iommufd_ctx);
-
-			owned = (devid > 0 || devid == -ENOENT);
-		} else {
-			owned = vfio_dev_in_groups(&cur_vma->vdev, groups);
-		}
-
-		if (!owned) {
+		if (!vfio_dev_in_groups(cur_vma, groups)) {
 			ret = -EINVAL;
 			goto err_undo;
 		}

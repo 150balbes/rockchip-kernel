@@ -12,6 +12,9 @@
 #include "intel_wakeref.h"
 
 enum aux_ch;
+enum dpio_channel;
+enum dpio_phy;
+enum i915_drm_suspend_mode;
 enum port;
 struct drm_i915_private;
 struct i915_power_well;
@@ -108,6 +111,7 @@ enum intel_display_power_domain {
 	POWER_DOMAIN_AUX_TBT6,
 
 	POWER_DOMAIN_GMBUS,
+	POWER_DOMAIN_MODESET,
 	POWER_DOMAIN_GT_IRQ,
 	POWER_DOMAIN_DC_OFF,
 	POWER_DOMAIN_TC_COLD_OFF,
@@ -150,7 +154,6 @@ struct i915_power_domains {
 	struct delayed_work async_put_work;
 	intel_wakeref_t async_put_wakeref;
 	struct intel_power_domain_mask async_put_domains[2];
-	int async_put_next_delay;
 
 	struct i915_power_well *power_wells;
 };
@@ -197,8 +200,7 @@ intel_display_power_get_if_enabled(struct drm_i915_private *dev_priv,
 				   enum intel_display_power_domain domain);
 void __intel_display_power_put_async(struct drm_i915_private *i915,
 				     enum intel_display_power_domain domain,
-				     intel_wakeref_t wakeref,
-				     int delay_ms);
+				     intel_wakeref_t wakeref);
 void intel_display_power_flush_work(struct drm_i915_private *i915);
 #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_RUNTIME_PM)
 void intel_display_power_put(struct drm_i915_private *dev_priv,
@@ -209,16 +211,7 @@ intel_display_power_put_async(struct drm_i915_private *i915,
 			      enum intel_display_power_domain domain,
 			      intel_wakeref_t wakeref)
 {
-	__intel_display_power_put_async(i915, domain, wakeref, -1);
-}
-
-static inline void
-intel_display_power_put_async_delay(struct drm_i915_private *i915,
-				    enum intel_display_power_domain domain,
-				    intel_wakeref_t wakeref,
-				    int delay_ms)
-{
-	__intel_display_power_put_async(i915, domain, wakeref, delay_ms);
+	__intel_display_power_put_async(i915, domain, wakeref);
 }
 #else
 void intel_display_power_put_unchecked(struct drm_i915_private *dev_priv,
@@ -237,16 +230,7 @@ intel_display_power_put_async(struct drm_i915_private *i915,
 			      enum intel_display_power_domain domain,
 			      intel_wakeref_t wakeref)
 {
-	__intel_display_power_put_async(i915, domain, -1, -1);
-}
-
-static inline void
-intel_display_power_put_async_delay(struct drm_i915_private *i915,
-				    enum intel_display_power_domain domain,
-				    intel_wakeref_t wakeref,
-				    int delay_ms)
-{
-	__intel_display_power_put_async(i915, domain, -1, delay_ms);
+	__intel_display_power_put_async(i915, domain, -1);
 }
 #endif
 

@@ -75,10 +75,9 @@ l0_%=:	r0 += 1;					\
 "	::: __clobber_all);
 }
 
-SEC("socket")
+SEC("tracepoint")
 __description("bounded loop, start in the middle")
-__success
-__failure_unpriv __msg_unpriv("back-edge")
+__failure __msg("back-edge")
 __naked void loop_start_in_the_middle(void)
 {
 	asm volatile ("					\
@@ -137,9 +136,7 @@ l0_%=:	exit;						\
 
 SEC("tracepoint")
 __description("bounded recursion")
-__failure
-/* verifier limitation in detecting max stack depth */
-__msg("the call stack of 8 frames is too deep !")
+__failure __msg("back-edge")
 __naked void bounded_recursion(void)
 {
 	asm volatile ("					\

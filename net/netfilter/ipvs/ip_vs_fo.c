@@ -72,4 +72,3 @@ static void __exit ip_vs_fo_cleanup(void)
 module_init(ip_vs_fo_init);
 module_exit(ip_vs_fo_cleanup);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ipvs weighted failover scheduler");

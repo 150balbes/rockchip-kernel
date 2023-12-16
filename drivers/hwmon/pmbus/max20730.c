@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/pmbus.h>
 #include <linux/util_macros.h>
 #include "pmbus.h"
@@ -114,7 +114,6 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 	const struct pmbus_driver_info *info;
 	const struct max20730_data *data;
 	char tbuf[DEBUG_FS_DATA_MAX] = { 0 };
-	char *result = tbuf;
 	u16 val;
 
 	info = pmbus_get_driver_info(psu->client);
@@ -149,13 +148,13 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 			>> MAX20730_MFR_DEVSET1_TSTAT_BIT_POS;
 
 		if (val == 0)
-			result = "2000\n";
+			len = strlcpy(tbuf, "2000\n", DEBUG_FS_DATA_MAX);
 		else if (val == 1)
-			result = "125\n";
+			len = strlcpy(tbuf, "125\n", DEBUG_FS_DATA_MAX);
 		else if (val == 2)
-			result = "62.5\n";
+			len = strlcpy(tbuf, "62.5\n", DEBUG_FS_DATA_MAX);
 		else
-			result = "32\n";
+			len = strlcpy(tbuf, "32\n", DEBUG_FS_DATA_MAX);
 		break;
 	case MAX20730_DEBUGFS_INTERNAL_GAIN:
 		val = (data->mfr_devset1 & MAX20730_MFR_DEVSET1_RGAIN_MASK)
@@ -164,35 +163,35 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 		if (data->id == max20734) {
 			/* AN6209 */
 			if (val == 0)
-				result = "0.8\n";
+				len = strlcpy(tbuf, "0.8\n", DEBUG_FS_DATA_MAX);
 			else if (val == 1)
-				result = "3.2\n";
+				len = strlcpy(tbuf, "3.2\n", DEBUG_FS_DATA_MAX);
 			else if (val == 2)
-				result = "1.6\n";
+				len = strlcpy(tbuf, "1.6\n", DEBUG_FS_DATA_MAX);
 			else
-				result = "6.4\n";
+				len = strlcpy(tbuf, "6.4\n", DEBUG_FS_DATA_MAX);
 		} else if (data->id == max20730 || data->id == max20710) {
 			/* AN6042 or AN6140 */
 			if (val == 0)
-				result = "0.9\n";
+				len = strlcpy(tbuf, "0.9\n", DEBUG_FS_DATA_MAX);
 			else if (val == 1)
-				result = "3.6\n";
+				len = strlcpy(tbuf, "3.6\n", DEBUG_FS_DATA_MAX);
 			else if (val == 2)
-				result = "1.8\n";
+				len = strlcpy(tbuf, "1.8\n", DEBUG_FS_DATA_MAX);
 			else
-				result = "7.2\n";
+				len = strlcpy(tbuf, "7.2\n", DEBUG_FS_DATA_MAX);
 		} else if (data->id == max20743) {
 			/* AN6042 */
 			if (val == 0)
-				result = "0.45\n";
+				len = strlcpy(tbuf, "0.45\n", DEBUG_FS_DATA_MAX);
 			else if (val == 1)
-				result = "1.8\n";
+				len = strlcpy(tbuf, "1.8\n", DEBUG_FS_DATA_MAX);
 			else if (val == 2)
-				result = "0.9\n";
+				len = strlcpy(tbuf, "0.9\n", DEBUG_FS_DATA_MAX);
 			else
-				result = "3.6\n";
+				len = strlcpy(tbuf, "3.6\n", DEBUG_FS_DATA_MAX);
 		} else {
-			result = "Not supported\n";
+			len = strlcpy(tbuf, "Not supported\n", DEBUG_FS_DATA_MAX);
 		}
 		break;
 	case MAX20730_DEBUGFS_BOOT_VOLTAGE:
@@ -200,26 +199,26 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 			>> MAX20730_MFR_DEVSET1_VBOOT_BIT_POS;
 
 		if (val == 0)
-			result = "0.6484\n";
+			len = strlcpy(tbuf, "0.6484\n", DEBUG_FS_DATA_MAX);
 		else if (val == 1)
-			result = "0.8984\n";
+			len = strlcpy(tbuf, "0.8984\n", DEBUG_FS_DATA_MAX);
 		else if (val == 2)
-			result = "1.0\n";
+			len = strlcpy(tbuf, "1.0\n", DEBUG_FS_DATA_MAX);
 		else
-			result = "Invalid\n";
+			len = strlcpy(tbuf, "Invalid\n", DEBUG_FS_DATA_MAX);
 		break;
 	case MAX20730_DEBUGFS_OUT_V_RAMP_RATE:
 		val = (data->mfr_devset2 & MAX20730_MFR_DEVSET2_VRATE)
 			>> MAX20730_MFR_DEVSET2_VRATE_BIT_POS;
 
 		if (val == 0)
-			result = "4\n";
+			len = strlcpy(tbuf, "4\n", DEBUG_FS_DATA_MAX);
 		else if (val == 1)
-			result = "2\n";
+			len = strlcpy(tbuf, "2\n", DEBUG_FS_DATA_MAX);
 		else if (val == 2)
-			result = "1\n";
+			len = strlcpy(tbuf, "1\n", DEBUG_FS_DATA_MAX);
 		else
-			result = "Invalid\n";
+			len = strlcpy(tbuf, "Invalid\n", DEBUG_FS_DATA_MAX);
 		break;
 	case MAX20730_DEBUGFS_OC_PROTECT_MODE:
 		ret = (data->mfr_devset2 & MAX20730_MFR_DEVSET2_OCPM_MASK)
@@ -231,13 +230,13 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 			>> MAX20730_MFR_DEVSET2_SS_BIT_POS;
 
 		if (val == 0)
-			result = "0.75\n";
+			len = strlcpy(tbuf, "0.75\n", DEBUG_FS_DATA_MAX);
 		else if (val == 1)
-			result = "1.5\n";
+			len = strlcpy(tbuf, "1.5\n", DEBUG_FS_DATA_MAX);
 		else if (val == 2)
-			result = "3\n";
+			len = strlcpy(tbuf, "3\n", DEBUG_FS_DATA_MAX);
 		else
-			result = "6\n";
+			len = strlcpy(tbuf, "6\n", DEBUG_FS_DATA_MAX);
 		break;
 	case MAX20730_DEBUGFS_IMAX:
 		ret = (data->mfr_devset2 & MAX20730_MFR_DEVSET2_IMAX_MASK)
@@ -288,11 +287,10 @@ static ssize_t max20730_debugfs_read(struct file *file, char __user *buf,
 				"%d.%d\n", ret / 10000, ret % 10000);
 		break;
 	default:
-		result = "Invalid\n";
+		len = strlcpy(tbuf, "Invalid\n", DEBUG_FS_DATA_MAX);
 	}
 
-	len = strlen(result);
-	return simple_read_from_buffer(buf, count, ppos, result, len);
+	return simple_read_from_buffer(buf, count, ppos, tbuf, len);
 }
 
 static const struct file_operations max20730_fops = {
@@ -716,7 +714,7 @@ static int max20730_probe(struct i2c_client *client)
 	}
 
 	if (client->dev.of_node)
-		chip_id = (uintptr_t)of_device_get_match_data(dev);
+		chip_id = (enum chips)of_device_get_match_data(dev);
 	else
 		chip_id = i2c_match_id(max20730_id, client)->driver_data;
 

@@ -13,8 +13,9 @@
 #include <linux/pci.h>
 #include <linux/io.h>
 #include <linux/init.h>
-#include <linux/mod_devicetable.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
+#include <linux/of_irq.h>
+#include <linux/of_pci.h>
 
 #include <asm/mach-ralink/rt288x.h>
 

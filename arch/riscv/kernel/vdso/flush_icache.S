@@ -8,7 +8,7 @@
 
 	.text
 /* int __vdso_flush_icache(void *start, void *end, unsigned long flags); */
-SYM_FUNC_START(__vdso_flush_icache)
+ENTRY(__vdso_flush_icache)
 	.cfi_startproc
 #ifdef CONFIG_SMP
 	li a7, __NR_riscv_flush_icache
@@ -19,4 +19,4 @@ SYM_FUNC_START(__vdso_flush_icache)
 #endif
 	ret
 	.cfi_endproc
-SYM_FUNC_END(__vdso_flush_icache)
+ENDPROC(__vdso_flush_icache)

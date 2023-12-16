@@ -366,10 +366,10 @@ static int evtchn_resize_ring(struct per_user_data *u)
 	return 0;
 }
 
-static int evtchn_bind_to_user(struct per_user_data *u, evtchn_port_t port,
-			       bool is_static)
+static int evtchn_bind_to_user(struct per_user_data *u, evtchn_port_t port)
 {
 	struct user_evtchn *evtchn;
+	struct evtchn_close close;
 	int rc = 0;
 
 	/*
@@ -397,19 +397,19 @@ static int evtchn_bind_to_user(struct per_user_data *u, evtchn_port_t port,
 	if (rc < 0)
 		goto err;
 
-	rc = bind_evtchn_to_irqhandler_lateeoi(port, evtchn_interrupt, IRQF_SHARED,
+	rc = bind_evtchn_to_irqhandler_lateeoi(port, evtchn_interrupt, 0,
 					       u->name, evtchn);
 	if (rc < 0)
 		goto err;
 
-	rc = evtchn_make_refcounted(port, is_static);
+	rc = evtchn_make_refcounted(port);
 	return rc;
 
 err:
 	/* bind failed, should close the port now */
-	if (!is_static)
-		xen_evtchn_close(port);
-
+	close.port = port;
+	if (HYPERVISOR_event_channel_op(EVTCHNOP_close, &close) != 0)
+		BUG();
 	del_evtchn(u, evtchn);
 	return rc;
 }
@@ -456,7 +456,7 @@ static long evtchn_ioctl(struct file *file,
 		if (rc != 0)
 			break;
 
-		rc = evtchn_bind_to_user(u, bind_virq.port, false);
+		rc = evtchn_bind_to_user(u, bind_virq.port);
 		if (rc == 0)
 			rc = bind_virq.port;
 		break;
@@ -482,7 +482,7 @@ static long evtchn_ioctl(struct file *file,
 		if (rc != 0)
 			break;
 
-		rc = evtchn_bind_to_user(u, bind_interdomain.local_port, false);
+		rc = evtchn_bind_to_user(u, bind_interdomain.local_port);
 		if (rc == 0)
 			rc = bind_interdomain.local_port;
 		break;
@@ -507,7 +507,7 @@ static long evtchn_ioctl(struct file *file,
 		if (rc != 0)
 			break;
 
-		rc = evtchn_bind_to_user(u, alloc_unbound.port, false);
+		rc = evtchn_bind_to_user(u, alloc_unbound.port);
 		if (rc == 0)
 			rc = alloc_unbound.port;
 		break;
@@ -533,23 +533,6 @@ static long evtchn_ioctl(struct file *file,
 		disable_irq(irq_from_evtchn(unbind.port));
 		evtchn_unbind_from_user(u, evtchn);
 		rc = 0;
-		break;
-	}
-
-	case IOCTL_EVTCHN_BIND_STATIC: {
-		struct ioctl_evtchn_bind bind;
-		struct user_evtchn *evtchn;
-
-		rc = -EFAULT;
-		if (copy_from_user(&bind, uarg, sizeof(bind)))
-			break;
-
-		rc = -EISCONN;
-		evtchn = find_evtchn(u, bind.port);
-		if (evtchn)
-			break;
-
-		rc = evtchn_bind_to_user(u, bind.port, true);
 		break;
 	}
 

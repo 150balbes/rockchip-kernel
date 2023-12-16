@@ -28,10 +28,6 @@ properties:
 
   gpio-controller: true
 
-  gpio-line-names:
-    minItems: 1
-    maxItems: 24
-
   interrupt-controller: true
 
   st,norequest-mask:

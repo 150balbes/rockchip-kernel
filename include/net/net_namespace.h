@@ -42,7 +42,6 @@
 #include <linux/idr.h>
 #include <linux/skbuff.h>
 #include <linux/notifier.h>
-#include <linux/xarray.h>
 
 struct user_namespace;
 struct proc_dir_entry;
@@ -70,7 +69,7 @@ struct net {
 	atomic_t		dev_unreg_count;
 
 	unsigned int		dev_base_seq;	/* protected by rtnl_mutex */
-	u32			ifindex;
+	int			ifindex;
 
 	spinlock_t		nsid_lock;
 	atomic_t		fnhe_genid;
@@ -111,7 +110,6 @@ struct net {
 
 	struct hlist_head 	*dev_name_head;
 	struct hlist_head	*dev_index_head;
-	struct xarray		dev_by_index;
 	struct raw_notifier_head	netdev_chain;
 
 	/* Note that @hash_mix can be read millions times per second,
@@ -368,30 +366,21 @@ static inline void put_net_track(struct net *net, netns_tracker *tracker)
 
 typedef struct {
 #ifdef CONFIG_NET_NS
-	struct net __rcu *net;
+	struct net *net;
 #endif
 } possible_net_t;
 
 static inline void write_pnet(possible_net_t *pnet, struct net *net)
 {
 #ifdef CONFIG_NET_NS
-	rcu_assign_pointer(pnet->net, net);
+	pnet->net = net;
 #endif
 }
 
 static inline struct net *read_pnet(const possible_net_t *pnet)
 {
 #ifdef CONFIG_NET_NS
-	return rcu_dereference_protected(pnet->net, true);
-#else
-	return &init_net;
-#endif
-}
-
-static inline struct net *read_pnet_rcu(possible_net_t *pnet)
-{
-#ifdef CONFIG_NET_NS
-	return rcu_dereference(pnet->net);
+	return pnet->net;
 #else
 	return &init_net;
 #endif
@@ -480,17 +469,15 @@ void unregister_pernet_device(struct pernet_operations *);
 
 struct ctl_table;
 
-#define register_net_sysctl(net, path, table)	\
-	register_net_sysctl_sz(net, path, table, ARRAY_SIZE(table))
 #ifdef CONFIG_SYSCTL
 int net_sysctl_init(void);
-struct ctl_table_header *register_net_sysctl_sz(struct net *net, const char *path,
-					     struct ctl_table *table, size_t table_size);
+struct ctl_table_header *register_net_sysctl(struct net *net, const char *path,
+					     struct ctl_table *table);
 void unregister_net_sysctl_table(struct ctl_table_header *header);
 #else
 static inline int net_sysctl_init(void) { return 0; }
-static inline struct ctl_table_header *register_net_sysctl_sz(struct net *net,
-	const char *path, struct ctl_table *table, size_t table_size)
+static inline struct ctl_table_header *register_net_sysctl(struct net *net,
+	const char *path, struct ctl_table *table)
 {
 	return NULL;
 }

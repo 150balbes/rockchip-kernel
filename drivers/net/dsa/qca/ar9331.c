@@ -1002,8 +1002,6 @@ static const struct regmap_config ar9331_mdio_regmap_config = {
 	.val_bits = 32,
 	.reg_stride = 4,
 	.max_register = AR9331_SW_REG_PAGE,
-	.use_single_read = true,
-	.use_single_write = true,
 
 	.ranges = ar9331_regmap_range,
 	.num_ranges = ARRAY_SIZE(ar9331_regmap_range),
@@ -1012,7 +1010,7 @@ static const struct regmap_config ar9331_mdio_regmap_config = {
 	.wr_table = &ar9331_register_set,
 	.rd_table = &ar9331_register_set,
 
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 
 static struct regmap_bus ar9331_sw_bus = {
@@ -1020,6 +1018,8 @@ static struct regmap_bus ar9331_sw_bus = {
 	.val_format_endian_default = REGMAP_ENDIAN_NATIVE,
 	.read = ar9331_mdio_read,
 	.write = ar9331_sw_bus_write,
+	.max_raw_read = 4,
+	.max_raw_write = 4,
 };
 
 static int ar9331_sw_probe(struct mdio_device *mdiodev)

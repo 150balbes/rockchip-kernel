@@ -25,7 +25,7 @@
 
 #include "internal.h"
 
-static struct kobj_map *cdev_map __ro_after_init;
+static struct kobj_map *cdev_map;
 
 static DEFINE_MUTEX(chrdevs_lock);
 
@@ -350,7 +350,7 @@ static struct kobject *cdev_get(struct cdev *p)
 	struct module *owner = p->owner;
 	struct kobject *kobj;
 
-	if (!try_module_get(owner))
+	if (owner && !try_module_get(owner))
 		return NULL;
 	kobj = kobject_get_unless_zero(&p->kobj);
 	if (!kobj)

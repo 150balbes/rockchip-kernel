@@ -1047,9 +1047,9 @@ static void fnic_fcpio_itmf_cmpl_handler(struct fnic *fnic,
 {
 	u8 type;
 	u8 hdr_status;
-	struct fcpio_tag ftag;
+	struct fcpio_tag tag;
 	u32 id;
-	struct scsi_cmnd *sc = NULL;
+	struct scsi_cmnd *sc;
 	struct fnic_io_req *io_req;
 	struct fnic_stats *fnic_stats = &fnic->fnic_stats;
 	struct abort_stats *abts_stats = &fnic->fnic_stats.abts_stats;
@@ -1058,43 +1058,27 @@ static void fnic_fcpio_itmf_cmpl_handler(struct fnic *fnic,
 	unsigned long flags;
 	spinlock_t *io_lock;
 	unsigned long start_time;
-	unsigned int tag;
 
-	fcpio_header_dec(&desc->hdr, &type, &hdr_status, &ftag);
-	fcpio_tag_id_dec(&ftag, &id);
+	fcpio_header_dec(&desc->hdr, &type, &hdr_status, &tag);
+	fcpio_tag_id_dec(&tag, &id);
 
-	tag = id & FNIC_TAG_MASK;
-	if (tag == fnic->fnic_max_tag_id) {
-		if (!(id & FNIC_TAG_DEV_RST)) {
-			shost_printk(KERN_ERR, fnic->lport->host,
-						"Tag out of range id 0x%x hdr status = %s\n",
-						id, fnic_fcpio_status_to_str(hdr_status));
-			return;
-		}
-	} else if (tag > fnic->fnic_max_tag_id) {
+	if ((id & FNIC_TAG_MASK) >= fnic->fnic_max_tag_id) {
 		shost_printk(KERN_ERR, fnic->lport->host,
-					"Tag out of range tag 0x%x hdr status = %s\n",
-					tag, fnic_fcpio_status_to_str(hdr_status));
+		"Tag out of range tag %x hdr status = %s\n",
+		id, fnic_fcpio_status_to_str(hdr_status));
 		return;
 	}
 
-	if ((tag == fnic->fnic_max_tag_id) && (id & FNIC_TAG_DEV_RST)) {
-		sc = fnic->sgreset_sc;
-		io_lock = &fnic->sgreset_lock;
-	} else {
-		sc = scsi_host_find_tag(fnic->lport->host, id & FNIC_TAG_MASK);
-		io_lock = fnic_io_lock_hash(fnic, sc);
-	}
-
+	sc = scsi_host_find_tag(fnic->lport->host, id & FNIC_TAG_MASK);
 	WARN_ON_ONCE(!sc);
 	if (!sc) {
 		atomic64_inc(&fnic_stats->io_stats.sc_null);
 		shost_printk(KERN_ERR, fnic->lport->host,
 			  "itmf_cmpl sc is null - hdr status = %s tag = 0x%x\n",
-			  fnic_fcpio_status_to_str(hdr_status), tag);
+			  fnic_fcpio_status_to_str(hdr_status), id);
 		return;
 	}
-
+	io_lock = fnic_io_lock_hash(fnic, sc);
 	spin_lock_irqsave(io_lock, flags);
 	io_req = fnic_priv(sc)->io_req;
 	WARN_ON_ONCE(!io_req);
@@ -1105,7 +1089,7 @@ static void fnic_fcpio_itmf_cmpl_handler(struct fnic *fnic,
 		shost_printk(KERN_ERR, fnic->lport->host,
 			  "itmf_cmpl io_req is null - "
 			  "hdr status = %s tag = 0x%x sc 0x%p\n",
-			  fnic_fcpio_status_to_str(hdr_status), tag, sc);
+			  fnic_fcpio_status_to_str(hdr_status), id, sc);
 		return;
 	}
 	start_time = io_req->start_time;
@@ -1954,10 +1938,6 @@ static inline int fnic_queue_dr_io_req(struct fnic *fnic,
 	struct scsi_lun fc_lun;
 	int ret = 0;
 	unsigned long intr_flags;
-	unsigned int tag = scsi_cmd_to_rq(sc)->tag;
-
-	if (tag == SCSI_NO_TAG)
-		tag = io_req->tag;
 
 	spin_lock_irqsave(host->host_lock, intr_flags);
 	if (unlikely(fnic_chk_state_flags_locked(fnic,
@@ -1984,8 +1964,7 @@ static inline int fnic_queue_dr_io_req(struct fnic *fnic,
 	/* fill in the lun info */
 	int_to_scsilun(sc->device->lun, &fc_lun);
 
-	tag |= FNIC_TAG_DEV_RST;
-	fnic_queue_wq_copy_desc_itmf(wq, tag,
+	fnic_queue_wq_copy_desc_itmf(wq, scsi_cmd_to_rq(sc)->tag | FNIC_TAG_DEV_RST,
 				     0, FCPIO_ITMF_LUN_RESET, SCSI_NO_TAG,
 				     fc_lun.scsi_lun, io_req->port_id,
 				     fnic->config.ra_tov, fnic->config.ed_tov);
@@ -2160,14 +2139,15 @@ static int fnic_clean_pending_aborts(struct fnic *fnic,
 				     bool new_sc)
 
 {
-	int ret = 0;
+	int ret = SUCCESS;
 	struct fnic_pending_aborts_iter_data iter_data = {
 		.fnic = fnic,
 		.lun_dev = lr_sc->device,
 		.ret = SUCCESS,
 	};
 
-	iter_data.lr_sc = lr_sc;
+	if (new_sc)
+		iter_data.lr_sc = lr_sc;
 
 	scsi_host_busy_iter(fnic->lport->host,
 			    fnic_pending_aborts_iter, &iter_data);
@@ -2179,12 +2159,43 @@ static int fnic_clean_pending_aborts(struct fnic *fnic,
 
 	/* walk again to check, if IOs are still pending in fw */
 	if (fnic_is_abts_pending(fnic, lr_sc))
-		ret = 1;
+		ret = FAILED;
 
 clean_pending_aborts_end:
-	FNIC_SCSI_DBG(KERN_INFO, fnic->lport->host,
-			"%s: exit status: %d\n", __func__, ret);
 	return ret;
+}
+
+/*
+ * fnic_scsi_host_start_tag
+ * Allocates tagid from host's tag list
+ **/
+static inline int
+fnic_scsi_host_start_tag(struct fnic *fnic, struct scsi_cmnd *sc)
+{
+	struct request *rq = scsi_cmd_to_rq(sc);
+	struct request_queue *q = rq->q;
+	struct request *dummy;
+
+	dummy = blk_mq_alloc_request(q, REQ_OP_WRITE, BLK_MQ_REQ_NOWAIT);
+	if (IS_ERR(dummy))
+		return SCSI_NO_TAG;
+
+	rq->tag = dummy->tag;
+	sc->host_scribble = (unsigned char *)dummy;
+
+	return dummy->tag;
+}
+
+/*
+ * fnic_scsi_host_end_tag
+ * frees tag allocated by fnic_scsi_host_start_tag.
+ **/
+static inline void
+fnic_scsi_host_end_tag(struct fnic *fnic, struct scsi_cmnd *sc)
+{
+	struct request *dummy = (struct request *)sc->host_scribble;
+
+	blk_mq_free_request(dummy);
 }
 
 /*
@@ -2209,6 +2220,7 @@ int fnic_device_reset(struct scsi_cmnd *sc)
 	struct reset_stats *reset_stats;
 	int tag = rq->tag;
 	DECLARE_COMPLETION_ONSTACK(tm_done);
+	int tag_gen_flag = 0;   /*to track tags allocated by fnic driver*/
 	bool new_sc = 0;
 
 	/* Wait for rport to unblock */
@@ -2238,26 +2250,20 @@ int fnic_device_reset(struct scsi_cmnd *sc)
 	}
 
 	fnic_priv(sc)->flags = FNIC_DEVICE_RESET;
+	/* Allocate tag if not present */
 
 	if (unlikely(tag < 0)) {
 		/*
-		 * For device reset issued through sg3utils, we let
-		 * only one LUN_RESET to go through and use a special
-		 * tag equal to max_tag_id so that we don't have to allocate
-		 * or free it. It won't interact with tags
-		 * allocated by mid layer.
+		 * Really should fix the midlayer to pass in a proper
+		 * request for ioctls...
 		 */
-		mutex_lock(&fnic->sgreset_mutex);
-		tag = fnic->fnic_max_tag_id;
+		tag = fnic_scsi_host_start_tag(fnic, sc);
+		if (unlikely(tag == SCSI_NO_TAG))
+			goto fnic_device_reset_end;
+		tag_gen_flag = 1;
 		new_sc = 1;
-		fnic->sgreset_sc = sc;
-		io_lock = &fnic->sgreset_lock;
-		FNIC_SCSI_DBG(KERN_INFO, fnic->lport->host,
-			"fcid: 0x%x lun: 0x%llx flags: 0x%x tag: 0x%x Issuing sgreset\n",
-			rport->port_id, sc->device->lun, fnic_priv(sc)->flags, tag);
-	} else
-		io_lock = fnic_io_lock_hash(fnic, sc);
-
+	}
+	io_lock = fnic_io_lock_hash(fnic, sc);
 	spin_lock_irqsave(io_lock, flags);
 	io_req = fnic_priv(sc)->io_req;
 
@@ -2273,8 +2279,6 @@ int fnic_device_reset(struct scsi_cmnd *sc)
 		}
 		memset(io_req, 0, sizeof(*io_req));
 		io_req->port_id = rport->port_id;
-		io_req->tag = tag;
-		io_req->sc = sc;
 		fnic_priv(sc)->io_req = io_req;
 	}
 	io_req->dr_done = &tm_done;
@@ -2428,10 +2432,9 @@ fnic_device_reset_end:
 		  (u64)sc->cmnd[4] << 8 | sc->cmnd[5]),
 		  fnic_flags_and_state(sc));
 
-	if (new_sc) {
-		fnic->sgreset_sc = NULL;
-		mutex_unlock(&fnic->sgreset_mutex);
-	}
+	/* free tag if it is allocated */
+	if (unlikely(tag_gen_flag))
+		fnic_scsi_host_end_tag(fnic, sc);
 
 	FNIC_SCSI_DBG(KERN_DEBUG, fnic->lport->host,
 		      "Returning from device reset %s\n",

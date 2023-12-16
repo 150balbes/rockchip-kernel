@@ -211,6 +211,7 @@ static int tegra_gmi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct tegra_gmi *gmi;
+	struct resource *res;
 	int err;
 
 	gmi = devm_kzalloc(dev, sizeof(*gmi), GFP_KERNEL);
@@ -220,7 +221,8 @@ static int tegra_gmi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, gmi);
 	gmi->dev = dev;
 
-	gmi->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	gmi->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(gmi->base))
 		return PTR_ERR(gmi->base);
 

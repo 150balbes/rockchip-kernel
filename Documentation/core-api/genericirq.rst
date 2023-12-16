@@ -264,7 +264,7 @@ The following control flow is implemented (simplified excerpt)::
             desc->irq_data.chip->irq_unmask();
         desc->status &= ~pending;
         handle_irq_event(desc->action);
-    } while (desc->status & pending);
+    } while (status & pending);
     desc->status &= ~running;
 
 

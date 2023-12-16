@@ -476,11 +476,12 @@ err_free_serio:
 	return error;
 }
 
-static void ps2_gpio_remove(struct platform_device *pdev)
+static int ps2_gpio_remove(struct platform_device *pdev)
 {
 	struct ps2_gpio_data *drvdata = platform_get_drvdata(pdev);
 
 	serio_unregister_port(drvdata->serio);
+	return 0;
 }
 
 #if defined(CONFIG_OF)
@@ -493,7 +494,7 @@ MODULE_DEVICE_TABLE(of, ps2_gpio_match);
 
 static struct platform_driver ps2_gpio_driver = {
 	.probe		= ps2_gpio_probe,
-	.remove_new	= ps2_gpio_remove,
+	.remove		= ps2_gpio_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = of_match_ptr(ps2_gpio_match),

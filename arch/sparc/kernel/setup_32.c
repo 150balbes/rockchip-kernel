@@ -17,6 +17,7 @@
 #include <linux/initrd.h>
 #include <asm/smp.h>
 #include <linux/user.h>
+#include <linux/screen_info.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
@@ -50,6 +51,18 @@
 
 #include "kernel.h"
 
+struct screen_info screen_info = {
+	0, 0,			/* orig-x, orig-y */
+	0,			/* unused */
+	0,			/* orig-video-page */
+	0,			/* orig-video-mode */
+	128,			/* orig-video-cols */
+	0,0,0,			/* ega_ax, ega_bx, ega_cx */
+	54,			/* orig-video-lines */
+	0,                      /* orig-video-isVGA */
+	16                      /* orig-video-points */
+};
+
 /* Typing sync at the prom prompt calls the function pointed to by
  * romvec->pv_synchook which I set to the following function.
  * This should sync all filesystems and return, for now it just
@@ -70,7 +83,7 @@ static void prom_sync_me(void)
 			     "nop\n\t" : : "r" (&trapbase));
 
 	prom_printf("PROM SYNC COMMAND...\n");
-	show_mem();
+	show_free_areas(0, NULL);
 	if (!is_idle_task(current)) {
 		local_irq_enable();
 		ksys_sync();

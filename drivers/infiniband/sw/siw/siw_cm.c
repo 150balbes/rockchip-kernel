@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+// SPDX-License-Identifier: GPL-2.0 or BSD-3-Clause
 
 /* Authors: Bernard Metzler <bmt@zurich.ibm.com> */
 /*          Fredy Neeser */
@@ -976,7 +976,6 @@ static void siw_accept_newconn(struct siw_cep *cep)
 			siw_cep_put(cep);
 			new_cep->listen_cep = NULL;
 			if (rv) {
-				siw_cancel_mpatimer(new_cep);
 				siw_cep_set_free(new_cep);
 				goto error;
 			}
@@ -1101,12 +1100,9 @@ static void siw_cm_work_handler(struct work_struct *w)
 				/*
 				 * Socket close before MPA request received.
 				 */
-				if (cep->listen_cep) {
-					siw_dbg_cep(cep,
-						"no mpareq: drop listener\n");
-					siw_cep_put(cep->listen_cep);
-					cep->listen_cep = NULL;
-				}
+				siw_dbg_cep(cep, "no mpareq: drop listener\n");
+				siw_cep_put(cep->listen_cep);
+				cep->listen_cep = NULL;
 			}
 		}
 		release_cep = 1;
@@ -1231,11 +1227,7 @@ static void siw_cm_llp_data_ready(struct sock *sk)
 	if (!cep)
 		goto out;
 
-	siw_dbg_cep(cep, "cep state: %d, socket state %d\n",
-		    cep->state, sk->sk_state);
-
-	if (sk->sk_state != TCP_ESTABLISHED)
-		goto out;
+	siw_dbg_cep(cep, "state: %d\n", cep->state);
 
 	switch (cep->state) {
 	case SIW_EPSTATE_RDMA_MODE:
@@ -1509,6 +1501,7 @@ error:
 
 		cep->cm_id = NULL;
 		id->rem_ref(id);
+		siw_cep_put(cep);
 
 		qp->cep = NULL;
 		siw_cep_put(cep);

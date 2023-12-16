@@ -114,8 +114,10 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_i2c_gpio>;
-		sda-gpios = <&gpio5 1 GPIO_ACTIVE_HIGH>;
-		scl-gpios = <&gpio5 0 GPIO_ACTIVE_HIGH>;
+		gpios = <
+			&gpio5 1 GPIO_ACTIVE_HIGH /* SDA */
+			&gpio5 0 GPIO_ACTIVE_HIGH /* SCL */
+		>;
 		clock-frequency = <400000>;
 		status = "okay";
 

@@ -61,6 +61,7 @@ static void hyperv_flush_tlb_multi(const struct cpumask *cpus,
 				   const struct flush_tlb_info *info)
 {
 	int cpu, vcpu, gva_n, max_gvas;
+	struct hv_tlb_flush **flush_pcpu;
 	struct hv_tlb_flush *flush;
 	u64 status;
 	unsigned long flags;
@@ -73,7 +74,10 @@ static void hyperv_flush_tlb_multi(const struct cpumask *cpus,
 
 	local_irq_save(flags);
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	flush_pcpu = (struct hv_tlb_flush **)
+		     this_cpu_ptr(hyperv_pcpu_input_arg);
+
+	flush = *flush_pcpu;
 
 	if (unlikely(!flush)) {
 		local_irq_restore(flags);
@@ -174,13 +178,17 @@ static u64 hyperv_flush_tlb_others_ex(const struct cpumask *cpus,
 				      const struct flush_tlb_info *info)
 {
 	int nr_bank = 0, max_gvas, gva_n;
+	struct hv_tlb_flush_ex **flush_pcpu;
 	struct hv_tlb_flush_ex *flush;
 	u64 status;
 
 	if (!(ms_hyperv.hints & HV_X64_EX_PROCESSOR_MASKS_RECOMMENDED))
 		return HV_STATUS_INVALID_PARAMETER;
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	flush_pcpu = (struct hv_tlb_flush_ex **)
+		     this_cpu_ptr(hyperv_pcpu_input_arg);
+
+	flush = *flush_pcpu;
 
 	if (info->mm) {
 		/*

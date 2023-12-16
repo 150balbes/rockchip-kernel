@@ -1260,11 +1260,8 @@ static int emac_tso_csum(struct emac_adapter *adpt,
 		if (skb->protocol == htons(ETH_P_IP)) {
 			u32 pkt_len = ((unsigned char *)ip_hdr(skb) - skb->data)
 				       + ntohs(ip_hdr(skb)->tot_len);
-			if (skb->len > pkt_len) {
-				ret = pskb_trim(skb, pkt_len);
-				if (unlikely(ret))
-					return ret;
-			}
+			if (skb->len > pkt_len)
+				pskb_trim(skb, pkt_len);
 		}
 
 		hdr_len = skb_tcp_all_headers(skb);

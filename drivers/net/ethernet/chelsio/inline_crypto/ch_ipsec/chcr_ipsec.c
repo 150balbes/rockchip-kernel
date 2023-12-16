@@ -39,6 +39,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/crypto.h>
 #include <linux/skbuff.h>
 #include <linux/rtnetlink.h>
 #include <linux/highmem.h>
@@ -48,6 +49,7 @@
 #include <net/esp.h>
 #include <net/xfrm.h>
 #include <crypto/aes.h>
+#include <crypto/algapi.h>
 #include <crypto/hash.h>
 #include <crypto/sha1.h>
 #include <crypto/sha2.h>

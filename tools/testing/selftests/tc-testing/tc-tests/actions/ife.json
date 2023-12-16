@@ -6,9 +6,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -33,9 +30,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -60,9 +54,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -87,9 +78,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -114,9 +102,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -141,9 +126,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -168,9 +150,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -195,9 +174,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -220,9 +196,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -247,9 +220,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -274,9 +244,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -301,9 +268,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -328,9 +292,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -355,9 +316,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -382,9 +340,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -409,9 +364,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -434,9 +386,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -461,9 +410,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -488,9 +434,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -515,9 +458,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -542,9 +482,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -569,9 +506,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -596,9 +530,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -623,9 +554,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -650,9 +578,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -675,9 +600,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -702,9 +624,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -729,9 +648,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -756,9 +672,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -783,9 +696,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -810,9 +720,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -837,9 +744,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -864,9 +768,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -891,9 +792,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -918,9 +816,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -945,9 +840,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -972,9 +864,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -999,9 +888,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1026,9 +912,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1051,9 +934,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1076,9 +956,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1103,9 +980,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1128,9 +1002,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1153,9 +1024,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1178,9 +1046,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1203,9 +1068,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1231,9 +1093,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",
@@ -1259,9 +1118,6 @@
             "actions",
             "ife"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ife",

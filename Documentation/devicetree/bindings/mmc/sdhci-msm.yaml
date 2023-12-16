@@ -58,7 +58,6 @@ properties:
               - qcom,sm8350-sdhci
               - qcom,sm8450-sdhci
               - qcom,sm8550-sdhci
-              - qcom,sm8650-sdhci
           - const: qcom,sdhci-msm-v5 # for sdcc version 5.0
 
   reg:
@@ -70,7 +69,7 @@ properties:
     maxItems: 4
 
   clocks:
-    minItems: 2
+    minItems: 3
     items:
       - description: Main peripheral bus clock, PCLK/HCLK - AHB Bus clock
       - description: SDC MMC clock, MCLK
@@ -86,10 +85,10 @@ properties:
       - const: iface
       - const: core
       - const: xo
-      - enum: [ice, bus, cal, sleep]
-      - enum: [ice, bus, cal, sleep]
-      - enum: [ice, bus, cal, sleep]
-      - enum: [ice, bus, cal, sleep]
+      - const: ice
+      - const: bus
+      - const: cal
+      - const: sleep
 
   dma-coherent: true
 
@@ -216,7 +215,7 @@ examples:
     #include <dt-bindings/interrupt-controller/arm-gic.h>
     #include <dt-bindings/clock/qcom,gcc-sm8250.h>
     #include <dt-bindings/clock/qcom,rpmh.h>
-    #include <dt-bindings/power/qcom,rpmhpd.h>
+    #include <dt-bindings/power/qcom-rpmpd.h>
 
     sdhc_2: mmc@8804000 {
       compatible = "qcom,sm8250-sdhci", "qcom,sdhci-msm-v5";
@@ -233,7 +232,7 @@ examples:
       iommus = <&apps_smmu 0x4a0 0x0>;
       qcom,dll-config = <0x0007642c>;
       qcom,ddr-config = <0x80040868>;
-      power-domains = <&rpmhpd RPMHPD_CX>;
+      power-domains = <&rpmhpd SM8250_CX>;
 
       operating-points-v2 = <&sdhc2_opp_table>;
 

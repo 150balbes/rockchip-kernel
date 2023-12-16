@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright(c) 2013 - 2021 Intel Corporation. */
 
-#include "i40e_alloc.h"
-#include "i40e_dcb.h"
+#include "i40e_adminq.h"
 #include "i40e_prototype.h"
+#include "i40e_dcb.h"
 
 /**
  * i40e_get_dcbx_status
@@ -17,7 +17,7 @@ int i40e_get_dcbx_status(struct i40e_hw *hw, u16 *status)
 	u32 reg;
 
 	if (!status)
-		return -EINVAL;
+		return I40E_ERR_PARAM;
 
 	reg = rd32(hw, I40E_PRTDCB_GENS);
 	*status = (u16)((reg & I40E_PRTDCB_GENS_DCBX_STATUS_MASK) >>
@@ -508,7 +508,7 @@ int i40e_lldp_to_dcb_config(u8 *lldpmib,
 	u16 type;
 
 	if (!lldpmib || !dcbcfg)
-		return -EINVAL;
+		return I40E_ERR_PARAM;
 
 	/* set to the start of LLDPDU */
 	lldpmib += ETH_HLEN;
@@ -874,7 +874,7 @@ int i40e_init_dcb(struct i40e_hw *hw, bool enable_mib_change)
 	int ret = 0;
 
 	if (!hw->func_caps.dcb)
-		return -EOPNOTSUPP;
+		return I40E_NOT_SUPPORTED;
 
 	/* Read LLDP NVM area */
 	if (hw->flags & I40E_HW_FLAG_FW_LLDP_PERSISTENT) {
@@ -885,7 +885,7 @@ int i40e_init_dcb(struct i40e_hw *hw, bool enable_mib_change)
 		else if (hw->mac.type == I40E_MAC_X722)
 			offset = I40E_LLDP_CURRENT_STATUS_X722_OFFSET;
 		else
-			return -EOPNOTSUPP;
+			return I40E_NOT_SUPPORTED;
 
 		ret = i40e_read_nvm_module_data(hw,
 						I40E_SR_EMP_SR_SETTINGS_PTR,
@@ -897,7 +897,7 @@ int i40e_init_dcb(struct i40e_hw *hw, bool enable_mib_change)
 		ret = i40e_read_lldp_cfg(hw, &lldp_cfg);
 	}
 	if (ret)
-		return -EBUSY;
+		return I40E_ERR_NOT_READY;
 
 	/* Get the LLDP AdminStatus for the current port */
 	adminstatus = lldp_cfg.adminstatus >> (hw->port * 4);
@@ -906,7 +906,7 @@ int i40e_init_dcb(struct i40e_hw *hw, bool enable_mib_change)
 	/* LLDP agent disabled */
 	if (!adminstatus) {
 		hw->dcbx_status = I40E_DCBX_STATUS_DISABLED;
-		return -EBUSY;
+		return I40E_ERR_NOT_READY;
 	}
 
 	/* Get DCBX status */
@@ -922,7 +922,7 @@ int i40e_init_dcb(struct i40e_hw *hw, bool enable_mib_change)
 		if (ret)
 			return ret;
 	} else if (hw->dcbx_status == I40E_DCBX_STATUS_DISABLED) {
-		return -EBUSY;
+		return I40E_ERR_NOT_READY;
 	}
 
 	/* Configure the LLDP MIB change event */
@@ -949,7 +949,7 @@ i40e_get_fw_lldp_status(struct i40e_hw *hw,
 	int ret;
 
 	if (!lldp_status)
-		return -EINVAL;
+		return I40E_ERR_PARAM;
 
 	/* Allocate buffer for the LLDPDU */
 	ret = i40e_allocate_virt_mem(hw, &mem, I40E_LLDPDU_SIZE);
@@ -1299,7 +1299,7 @@ int i40e_dcb_config_to_lldp(u8 *lldpmib, u16 *miblen,
 			      sizeof(tlv->typelength) + length);
 	} while (tlvid < I40E_TLV_ID_END_OF_LLDPPDU);
 	*miblen = offset;
-	return 0;
+	return I40E_SUCCESS;
 }
 
 /**
@@ -1957,7 +1957,7 @@ int i40e_read_lldp_cfg(struct i40e_hw *hw,
 	u32 mem;
 
 	if (!lldp_cfg)
-		return -EINVAL;
+		return I40E_ERR_PARAM;
 
 	ret = i40e_acquire_nvm(hw, I40E_RESOURCE_READ);
 	if (ret)

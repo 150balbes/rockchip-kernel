@@ -93,6 +93,9 @@
         "ArchStdEvent": "L1D_CACHE_LMISS_RD"
     },
     {
+        "ArchStdEvent": "L1D_CACHE_LMISS"
+    },
+    {
         "ArchStdEvent": "L1I_CACHE_LMISS"
     },
     {

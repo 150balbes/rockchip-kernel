@@ -211,8 +211,7 @@ static ssize_t ntfs_list_ea(struct ntfs_inode *ni, char *buffer,
 	size = le32_to_cpu(info->size);
 
 	/* Enumerate all xattrs. */
-	ret = 0;
-	for (off = 0; off + sizeof(struct EA_FULL) < size; off += ea_size) {
+	for (ret = 0, off = 0; off < size; off += ea_size) {
 		ea = Add2Ptr(ea_all, off);
 		ea_size = unpacked_ea_size(ea);
 
@@ -220,10 +219,6 @@ static ssize_t ntfs_list_ea(struct ntfs_inode *ni, char *buffer,
 			break;
 
 		if (buffer) {
-			/* Check if we can use field ea->name */
-			if (off + ea_size > size)
-				break;
-
 			if (ret + ea->name_len + 1 > bytes_per_buffer) {
 				err = -ERANGE;
 				goto out;
@@ -642,7 +637,7 @@ static noinline int ntfs_set_acl_ex(struct mnt_idmap *idmap,
 	if (!err) {
 		set_cached_acl(inode, type, acl);
 		inode->i_mode = mode;
-		inode_set_ctime_current(inode);
+		inode->i_ctime = current_time(inode);
 		mark_inode_dirty(inode);
 	}
 
@@ -929,7 +924,7 @@ set_new_fa:
 			  NULL);
 
 out:
-	inode_set_ctime_current(inode);
+	inode->i_ctime = current_time(inode);
 	mark_inode_dirty(inode);
 
 	return err;
@@ -1021,7 +1016,7 @@ static const struct xattr_handler ntfs_other_xattr_handler = {
 	.list	= ntfs_xattr_user_list,
 };
 
-const struct xattr_handler * const ntfs_xattr_handlers[] = {
+const struct xattr_handler *ntfs_xattr_handlers[] = {
 	&ntfs_other_xattr_handler,
 	NULL,
 };

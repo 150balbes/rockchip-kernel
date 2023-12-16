@@ -536,7 +536,6 @@ extern ssize_t fb_io_read(struct fb_info *info, char __user *buf,
 			  size_t count, loff_t *ppos);
 extern ssize_t fb_io_write(struct fb_info *info, const char __user *buf,
 			   size_t count, loff_t *ppos);
-int fb_io_mmap(struct fb_info *info, struct vm_area_struct *vma);
 
 #define __FB_DEFAULT_IOMEM_OPS_RDWR \
 	.fb_read	= fb_io_read, \
@@ -548,7 +547,7 @@ int fb_io_mmap(struct fb_info *info, struct vm_area_struct *vma);
 	.fb_imageblit	= cfb_imageblit
 
 #define __FB_DEFAULT_IOMEM_OPS_MMAP \
-	.fb_mmap	= fb_io_mmap
+	.fb_mmap	= NULL /* default implementation */
 
 #define FB_DEFAULT_IOMEM_OPS \
 	__FB_DEFAULT_IOMEM_OPS_RDWR, \
@@ -589,7 +588,7 @@ extern ssize_t fb_sys_write(struct fb_info *info, const char __user *buf,
 	.fb_copyarea	= sys_copyarea, \
 	.fb_imageblit	= sys_imageblit
 
-/* fbmem.c */
+/* drivers/video/fbmem.c */
 extern int register_framebuffer(struct fb_info *fb_info);
 extern void unregister_framebuffer(struct fb_info *fb_info);
 extern char* fb_get_buffer_offset(struct fb_info *info, struct fb_pixmap *buf, u32 size);
@@ -627,7 +626,7 @@ static inline void __fb_pad_aligned_buffer(u8 *dst, u32 d_pitch,
 	}
 }
 
-/* fb_defio.c */
+/* drivers/video/fb_defio.c */
 int fb_deferred_io_mmap(struct fb_info *info, struct vm_area_struct *vma);
 extern int  fb_deferred_io_init(struct fb_info *info);
 extern void fb_deferred_io_open(struct fb_info *info,
@@ -730,7 +729,7 @@ extern struct fb_info *framebuffer_alloc(size_t size, struct device *dev);
 extern void framebuffer_release(struct fb_info *info);
 extern void fb_bl_default_curve(struct fb_info *fb_info, u8 off, u8 min, u8 max);
 
-/* fbmon.c */
+/* drivers/video/fbmon.c */
 #define FB_MAXTIMINGS		0
 #define FB_VSYNCTIMINGS		1
 #define FB_HSYNCTIMINGS		2
@@ -764,7 +763,7 @@ extern int of_get_fb_videomode(struct device_node *np,
 extern int fb_videomode_from_videomode(const struct videomode *vm,
 				       struct fb_videomode *fbmode);
 
-/* modedb.c */
+/* drivers/video/modedb.c */
 #define VESA_MODEDB_SIZE 43
 #define DMT_SIZE 0x50
 
@@ -790,7 +789,7 @@ extern void fb_videomode_to_modelist(const struct fb_videomode *modedb, int num,
 extern const struct fb_videomode *fb_find_best_display(const struct fb_monspecs *specs,
 						       struct list_head *head);
 
-/* fbcmap.c */
+/* drivers/video/fbcmap.c */
 extern int fb_alloc_cmap(struct fb_cmap *cmap, int len, int transp);
 extern int fb_alloc_cmap_gfp(struct fb_cmap *cmap, int len, int transp, gfp_t flags);
 extern void fb_dealloc_cmap(struct fb_cmap *cmap);
@@ -849,10 +848,7 @@ static inline bool fb_modesetting_disabled(const char *drvname)
 }
 #endif
 
-/*
- * Convenience logging macros
- */
-
+/* Convenience logging macros */
 #define fb_err(fb_info, fmt, ...)					\
 	pr_err("fb%d: " fmt, (fb_info)->node, ##__VA_ARGS__)
 #define fb_notice(info, fmt, ...)					\
@@ -863,13 +859,5 @@ static inline bool fb_modesetting_disabled(const char *drvname)
 	pr_info("fb%d: " fmt, (fb_info)->node, ##__VA_ARGS__)
 #define fb_dbg(fb_info, fmt, ...)					\
 	pr_debug("fb%d: " fmt, (fb_info)->node, ##__VA_ARGS__)
-
-#define fb_warn_once(fb_info, fmt, ...)					\
-	pr_warn_once("fb%d: " fmt, (fb_info)->node, ##__VA_ARGS__)
-
-#define fb_WARN_ONCE(fb_info, condition, fmt, ...) \
-	WARN_ONCE(condition, "fb%d: " fmt, (fb_info)->node, ##__VA_ARGS__)
-#define fb_WARN_ON_ONCE(fb_info, x) \
-	fb_WARN_ONCE(fb_info, (x), "%s", "fb_WARN_ON_ONCE(" __stringify(x) ")")
 
 #endif /* _LINUX_FB_H */

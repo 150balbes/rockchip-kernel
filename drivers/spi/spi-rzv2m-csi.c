@@ -5,18 +5,13 @@
  * Copyright (C) 2023 Renesas Electronics Corporation
  */
 
-#include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/count_zeros.h>
 #include <linux/interrupt.h>
 #include <linux/iopoll.h>
-#include <linux/log2.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/reset.h>
 #include <linux/spi/spi.h>
-#include <linux/units.h>
 
 /* Registers */
 #define CSI_MODE		0x00	/* CSI mode control */
@@ -39,12 +34,8 @@
 #define CSI_MODE_SETUP		0x00000040
 
 /* CSI_CLKSEL */
-#define CSI_CLKSEL_SS_ENA	BIT(19)
-#define CSI_CLKSEL_SS_POL	BIT(18)
-#define CSI_CLKSEL_SS		(CSI_CLKSEL_SS_ENA | CSI_CLKSEL_SS_POL)
 #define CSI_CLKSEL_CKP		BIT(17)
 #define CSI_CLKSEL_DAP		BIT(16)
-#define CSI_CLKSEL_MODE		(CSI_CLKSEL_CKP|CSI_CLKSEL_DAP)
 #define CSI_CLKSEL_SLAVE	BIT(15)
 #define CSI_CLKSEL_CKS		GENMASK(14, 1)
 
@@ -69,26 +60,17 @@
 /* CSI_FIFOTRG */
 #define CSI_FIFOTRG_R_TRG       GENMASK(2, 0)
 
-#define CSI_FIFO_SIZE_BYTES	32U
-#define CSI_FIFO_HALF_SIZE	16U
+#define CSI_FIFO_SIZE_BYTES	32
+#define CSI_FIFO_HALF_SIZE	16
 #define CSI_EN_DIS_TIMEOUT_US	100
-/*
- * Clock "csiclk" gets divided by 2 * CSI_CLKSEL_CKS in order to generate the
- * serial clock (output from master), with CSI_CLKSEL_CKS ranging from 0x1 (that
- * means "csiclk" is divided by 2) to 0x3FFF ("csiclk" is divided by 32766).
- */
-#define CSI_CKS_MAX		GENMASK(13, 0)
+#define CSI_CKS_MAX		0x3FFF
 
 #define UNDERRUN_ERROR		BIT(0)
 #define OVERFLOW_ERROR		BIT(1)
 #define TX_TIMEOUT_ERROR	BIT(2)
 #define RX_TIMEOUT_ERROR	BIT(3)
 
-#define CSI_MAX_SPI_SCKO	(8 * HZ_PER_MHZ)
-
-#define CSI_CLKSEL_SS_DISABLED			0
-#define CSI_CLKSEL_SS_ENABLED_ACTIVE_LOW	BIT(1)
-#define CSI_CLKSEL_SS_ENABLED_ACTIVE_HIGH	GENMASK(1, 0)
+#define CSI_MAX_SPI_SCKO	8000000
 
 struct rzv2m_csi_priv {
 	void __iomem *base;
@@ -96,19 +78,31 @@ struct rzv2m_csi_priv {
 	struct clk *pclk;
 	struct device *dev;
 	struct spi_controller *controller;
-	const void *txbuf;
-	void *rxbuf;
-	unsigned int buffer_len;
-	unsigned int bytes_sent;
-	unsigned int bytes_received;
-	unsigned int bytes_to_transfer;
-	unsigned int words_to_transfer;
-	unsigned int bytes_per_word;
+	const u8 *txbuf;
+	u8 *rxbuf;
+	int buffer_len;
+	int bytes_sent;
+	int bytes_received;
+	int bytes_to_transfer;
+	int words_to_transfer;
+	unsigned char bytes_per_word;
 	wait_queue_head_t wait;
-	u32 errors;
+	u8 errors;
 	u32 status;
-	bool target_aborted;
-	bool use_ss_pin;
+};
+
+static const unsigned char x_trg[] = {
+	0, 1, 1, 2, 2, 2, 2, 3,
+	3, 3, 3, 3, 3, 3, 3, 4,
+	4, 4, 4, 4, 4, 4, 4, 4,
+	4, 4, 4, 4, 4, 4, 4, 5
+};
+
+static const unsigned char x_trg_words[] = {
+	1,  2,  2,  4,  4,  4,  4,  8,
+	8,  8,  8,  8,  8,  8,  8,  16,
+	16, 16, 16, 16, 16, 16, 16, 16,
+	16, 16, 16, 16, 16, 16, 16, 32
 };
 
 static void rzv2m_csi_reg_write_bit(const struct rzv2m_csi_priv *csi,
@@ -130,12 +124,13 @@ static int rzv2m_csi_sw_reset(struct rzv2m_csi_priv *csi, int assert)
 
 	rzv2m_csi_reg_write_bit(csi, CSI_CNT, CSI_CNT_CSIRST, assert);
 
-	if (!assert)
-		return 0;
+	if (assert) {
+		return readl_poll_timeout(csi->base + CSI_MODE, reg,
+					  !(reg & CSI_MODE_CSOT), 0,
+					  CSI_EN_DIS_TIMEOUT_US);
+	}
 
-	return readl_poll_timeout(csi->base + CSI_MODE, reg,
-				  !(reg & CSI_MODE_CSOT), 0,
-				  CSI_EN_DIS_TIMEOUT_US);
+	return 0;
 }
 
 static int rzv2m_csi_start_stop_operation(const struct rzv2m_csi_priv *csi,
@@ -145,28 +140,28 @@ static int rzv2m_csi_start_stop_operation(const struct rzv2m_csi_priv *csi,
 
 	rzv2m_csi_reg_write_bit(csi, CSI_MODE, CSI_MODE_CSIE, enable);
 
-	if (enable || !wait)
-		return 0;
+	if (!enable && wait)
+		return readl_poll_timeout(csi->base + CSI_MODE, reg,
+					  !(reg & CSI_MODE_CSOT), 0,
+					  CSI_EN_DIS_TIMEOUT_US);
 
-	return readl_poll_timeout(csi->base + CSI_MODE, reg,
-				  !(reg & CSI_MODE_CSOT), 0,
-				  CSI_EN_DIS_TIMEOUT_US);
+	return 0;
 }
 
 static int rzv2m_csi_fill_txfifo(struct rzv2m_csi_priv *csi)
 {
-	unsigned int i;
+	int i;
 
 	if (readl(csi->base + CSI_OFIFOL))
 		return -EIO;
 
 	if (csi->bytes_per_word == 2) {
-		const u16 *buf = csi->txbuf;
+		u16 *buf = (u16 *)csi->txbuf;
 
 		for (i = 0; i < csi->words_to_transfer; i++)
 			writel(buf[i], csi->base + CSI_OFIFO);
 	} else {
-		const u8 *buf = csi->txbuf;
+		u8 *buf = (u8 *)csi->txbuf;
 
 		for (i = 0; i < csi->words_to_transfer; i++)
 			writel(buf[i], csi->base + CSI_OFIFO);
@@ -180,18 +175,18 @@ static int rzv2m_csi_fill_txfifo(struct rzv2m_csi_priv *csi)
 
 static int rzv2m_csi_read_rxfifo(struct rzv2m_csi_priv *csi)
 {
-	unsigned int i;
+	int i;
 
 	if (readl(csi->base + CSI_IFIFOL) != csi->bytes_to_transfer)
 		return -EIO;
 
 	if (csi->bytes_per_word == 2) {
-		u16 *buf = csi->rxbuf;
+		u16 *buf = (u16 *)csi->rxbuf;
 
 		for (i = 0; i < csi->words_to_transfer; i++)
 			buf[i] = (u16)readl(csi->base + CSI_IFIFO);
 	} else {
-		u8 *buf = csi->rxbuf;
+		u8 *buf = (u8 *)csi->rxbuf;
 
 		for (i = 0; i < csi->words_to_transfer; i++)
 			buf[i] = (u8)readl(csi->base + CSI_IFIFO);
@@ -203,19 +198,11 @@ static int rzv2m_csi_read_rxfifo(struct rzv2m_csi_priv *csi)
 	return 0;
 }
 
-static inline void rzv2m_csi_empty_rxfifo(struct rzv2m_csi_priv *csi)
-{
-	unsigned int i;
-
-	for (i = 0; i < csi->words_to_transfer; i++)
-		readl(csi->base + CSI_IFIFO);
-}
-
 static inline void rzv2m_csi_calc_current_transfer(struct rzv2m_csi_priv *csi)
 {
-	unsigned int bytes_transferred = max(csi->bytes_received, csi->bytes_sent);
-	unsigned int bytes_remaining = csi->buffer_len - bytes_transferred;
-	unsigned int to_transfer;
+	int bytes_transferred = max_t(int, csi->bytes_received, csi->bytes_sent);
+	int bytes_remaining = csi->buffer_len - bytes_transferred;
+	int to_transfer;
 
 	if (csi->txbuf)
 		/*
@@ -223,9 +210,9 @@ static inline void rzv2m_csi_calc_current_transfer(struct rzv2m_csi_priv *csi)
 		 * hard to raise an overflow error (which is only possible
 		 * when IP transmits and receives at the same time).
 		 */
-		to_transfer = min(CSI_FIFO_HALF_SIZE, bytes_remaining);
+		to_transfer = min_t(int, CSI_FIFO_HALF_SIZE, bytes_remaining);
 	else
-		to_transfer = min(CSI_FIFO_SIZE_BYTES, bytes_remaining);
+		to_transfer = min_t(int, CSI_FIFO_SIZE_BYTES, bytes_remaining);
 
 	if (csi->bytes_per_word == 2)
 		to_transfer >>= 1;
@@ -236,7 +223,7 @@ static inline void rzv2m_csi_calc_current_transfer(struct rzv2m_csi_priv *csi)
 	 * less than or equal to the number of bytes we need to transfer.
 	 * This may result in multiple smaller transfers.
 	 */
-	csi->words_to_transfer = rounddown_pow_of_two(to_transfer);
+	csi->words_to_transfer = x_trg_words[to_transfer - 1];
 
 	if (csi->bytes_per_word == 2)
 		csi->bytes_to_transfer = csi->words_to_transfer << 1;
@@ -247,7 +234,7 @@ static inline void rzv2m_csi_calc_current_transfer(struct rzv2m_csi_priv *csi)
 static inline void rzv2m_csi_set_rx_fifo_trigger_level(struct rzv2m_csi_priv *csi)
 {
 	rzv2m_csi_reg_write_bit(csi, CSI_FIFOTRG, CSI_FIFOTRG_R_TRG,
-				ilog2(csi->words_to_transfer));
+				x_trg[csi->words_to_transfer - 1]);
 }
 
 static inline void rzv2m_csi_enable_rx_trigger(struct rzv2m_csi_priv *csi,
@@ -297,22 +284,32 @@ static int rzv2m_csi_wait_for_interrupt(struct rzv2m_csi_priv *csi,
 
 	rzv2m_csi_enable_irqs(csi, enable_bits);
 
-	if (spi_controller_is_target(csi->controller)) {
-		ret = wait_event_interruptible(csi->wait,
-				((csi->status & wait_mask) == wait_mask) ||
-				csi->errors || csi->target_aborted);
-		if (ret || csi->target_aborted)
-			ret = -EINTR;
-	} else {
-		ret = wait_event_timeout(csi->wait,
-				((csi->status & wait_mask) == wait_mask) ||
-				csi->errors, HZ) == 0 ? -ETIMEDOUT : 0;
-	}
+	ret = wait_event_timeout(csi->wait,
+				 ((csi->status & wait_mask) == wait_mask) ||
+				 csi->errors, HZ);
 
 	rzv2m_csi_disable_irqs(csi, enable_bits);
 
 	if (csi->errors)
 		return -EIO;
+
+	if (!ret)
+		return -ETIMEDOUT;
+
+	return 0;
+}
+
+static int rzv2m_csi_wait_for_tx_empty(struct rzv2m_csi_priv *csi)
+{
+	int ret;
+
+	if (readl(csi->base + CSI_OFIFOL) == 0)
+		return 0;
+
+	ret = rzv2m_csi_wait_for_interrupt(csi, CSI_INT_TREND, CSI_CNT_TREND_E);
+
+	if (ret == -ETIMEDOUT)
+		csi->errors |= TX_TIMEOUT_ERROR;
 
 	return ret;
 }
@@ -321,11 +318,12 @@ static inline int rzv2m_csi_wait_for_rx_ready(struct rzv2m_csi_priv *csi)
 {
 	int ret;
 
-	if (readl(csi->base + CSI_IFIFOL) >= csi->bytes_to_transfer)
+	if (readl(csi->base + CSI_IFIFOL) == csi->bytes_to_transfer)
 		return 0;
 
 	ret = rzv2m_csi_wait_for_interrupt(csi, CSI_INT_R_TRGR,
 					   CSI_CNT_R_TRGR_E);
+
 	if (ret == -ETIMEDOUT)
 		csi->errors |= RX_TIMEOUT_ERROR;
 
@@ -334,7 +332,7 @@ static inline int rzv2m_csi_wait_for_rx_ready(struct rzv2m_csi_priv *csi)
 
 static irqreturn_t rzv2m_csi_irq_handler(int irq, void *data)
 {
-	struct rzv2m_csi_priv *csi = data;
+	struct rzv2m_csi_priv *csi = (struct rzv2m_csi_priv *)data;
 
 	csi->status = readl(csi->base + CSI_INT);
 	rzv2m_csi_disable_irqs(csi, csi->status);
@@ -397,7 +395,6 @@ static void rzv2m_csi_setup_operating_mode(struct rzv2m_csi_priv *csi,
 static int rzv2m_csi_setup(struct spi_device *spi)
 {
 	struct rzv2m_csi_priv *csi = spi_controller_get_devdata(spi->controller);
-	u32 slave_selection = CSI_CLKSEL_SS_DISABLED;
 	int ret;
 
 	rzv2m_csi_sw_reset(csi, 0);
@@ -405,24 +402,17 @@ static int rzv2m_csi_setup(struct spi_device *spi)
 	writel(CSI_MODE_SETUP, csi->base + CSI_MODE);
 
 	/* Setup clock polarity and phase timing */
-	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_MODE,
-				~spi->mode & SPI_MODE_X_MASK);
+	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_CKP,
+				!(spi->mode & SPI_CPOL));
+	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_DAP,
+				!(spi->mode & SPI_CPHA));
 
 	/* Setup serial data order */
 	rzv2m_csi_reg_write_bit(csi, CSI_MODE, CSI_MODE_DIR,
 				!!(spi->mode & SPI_LSB_FIRST));
 
-	/* Set the role, 1 for target and 0 for host */
-	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_SLAVE,
-				!!spi_controller_is_target(csi->controller));
-
-	if (csi->use_ss_pin)
-		slave_selection = spi->mode & SPI_CS_HIGH ?
-			CSI_CLKSEL_SS_ENABLED_ACTIVE_HIGH :
-			CSI_CLKSEL_SS_ENABLED_ACTIVE_LOW;
-
-	/* Configure the slave selection (SS) pin */
-	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_SS, slave_selection);
+	/* Set the operation mode as master */
+	rzv2m_csi_reg_write_bit(csi, CSI_CLKSEL, CSI_CLKSEL_SLAVE, 0);
 
 	/* Give the IP a SW reset */
 	ret = rzv2m_csi_sw_reset(csi, 1);
@@ -443,20 +433,16 @@ static int rzv2m_csi_setup(struct spi_device *spi)
 
 static int rzv2m_csi_pio_transfer(struct rzv2m_csi_priv *csi)
 {
-	bool tx_completed = !csi->txbuf;
-	bool rx_completed = !csi->rxbuf;
+	bool tx_completed = csi->txbuf ? false : true;
+	bool rx_completed = csi->rxbuf ? false : true;
 	int ret = 0;
 
 	/* Make sure the TX FIFO is empty */
 	writel(0, csi->base + CSI_OFIFOL);
 
-	/* Make sure the RX FIFO is empty */
-	writel(0, csi->base + CSI_IFIFOL);
-
 	csi->bytes_sent = 0;
 	csi->bytes_received = 0;
 	csi->errors = 0;
-	csi->target_aborted = false;
 
 	rzv2m_csi_disable_all_irqs(csi);
 	rzv2m_csi_clear_all_irqs(csi);
@@ -475,8 +461,13 @@ static int rzv2m_csi_pio_transfer(struct rzv2m_csi_priv *csi)
 
 		rzv2m_csi_enable_irqs(csi, CSI_INT_OVERF | CSI_INT_UNDER);
 
+		/* Make sure the RX FIFO is empty */
+		writel(0, csi->base + CSI_IFIFOL);
+
 		writel(readl(csi->base + CSI_INT), csi->base + CSI_INT);
 		csi->status = 0;
+
+		rzv2m_csi_start_stop_operation(csi, 1, false);
 
 		/* TX */
 		if (csi->txbuf) {
@@ -484,11 +475,13 @@ static int rzv2m_csi_pio_transfer(struct rzv2m_csi_priv *csi)
 			if (ret)
 				break;
 
+			ret = rzv2m_csi_wait_for_tx_empty(csi);
+			if (ret)
+				break;
+
 			if (csi->bytes_sent == csi->buffer_len)
 				tx_completed = true;
 		}
-
-		rzv2m_csi_start_stop_operation(csi, 1, false);
 
 		/*
 		 * Make sure the RX FIFO contains the desired number of words.
@@ -499,28 +492,31 @@ static int rzv2m_csi_pio_transfer(struct rzv2m_csi_priv *csi)
 		if (ret)
 			break;
 
-		if (!spi_controller_is_target(csi->controller))
-			rzv2m_csi_start_stop_operation(csi, 0, false);
-
 		/* RX */
 		if (csi->rxbuf) {
+			rzv2m_csi_start_stop_operation(csi, 0, false);
+
 			ret = rzv2m_csi_read_rxfifo(csi);
 			if (ret)
 				break;
 
 			if (csi->bytes_received == csi->buffer_len)
 				rx_completed = true;
-		} else {
-			rzv2m_csi_empty_rxfifo(csi);
 		}
+
+		ret = rzv2m_csi_start_stop_operation(csi, 0, true);
+		if (ret)
+			goto pio_quit;
 
 		if (csi->errors) {
 			ret = -EIO;
-			break;
+			goto pio_quit;
 		}
 	}
 
 	rzv2m_csi_start_stop_operation(csi, 0, true);
+
+pio_quit:
 	rzv2m_csi_disable_all_irqs(csi);
 	rzv2m_csi_enable_rx_trigger(csi, false);
 	rzv2m_csi_clear_all_irqs(csi);
@@ -542,8 +538,7 @@ static int rzv2m_csi_transfer_one(struct spi_controller *controller,
 
 	rzv2m_csi_setup_operating_mode(csi, transfer);
 
-	if (!spi_controller_is_target(csi->controller))
-		rzv2m_csi_setup_clock(csi, transfer->speed_hz);
+	rzv2m_csi_setup_clock(csi, transfer->speed_hz);
 
 	ret = rzv2m_csi_pio_transfer(csi);
 	if (ret) {
@@ -560,48 +555,24 @@ static int rzv2m_csi_transfer_one(struct spi_controller *controller,
 	return ret;
 }
 
-static int rzv2m_csi_target_abort(struct spi_controller *ctlr)
-{
-	struct rzv2m_csi_priv *csi = spi_controller_get_devdata(ctlr);
-
-	csi->target_aborted = true;
-	wake_up(&csi->wait);
-
-	return 0;
-}
-
 static int rzv2m_csi_probe(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
 	struct spi_controller *controller;
 	struct device *dev = &pdev->dev;
 	struct rzv2m_csi_priv *csi;
 	struct reset_control *rstc;
-	bool target_mode;
 	int irq;
 	int ret;
 
-	target_mode = of_property_read_bool(np, "spi-slave");
-
-	if (target_mode)
-		controller = devm_spi_alloc_target(dev, sizeof(*csi));
-	else
-		controller = devm_spi_alloc_host(dev, sizeof(*csi));
-
+	controller = devm_spi_alloc_master(dev, sizeof(*csi));
 	if (!controller)
 		return -ENOMEM;
 
 	csi = spi_controller_get_devdata(controller);
 	platform_set_drvdata(pdev, csi);
 
-	csi->use_ss_pin = false;
-	if (spi_controller_is_target(controller) &&
-	    !of_property_read_bool(np, "renesas,csi-no-ss"))
-		csi->use_ss_pin = true;
-
 	csi->dev = dev;
 	csi->controller = controller;
-	csi->target_aborted = false;
 
 	csi->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(csi->base))
@@ -627,14 +598,12 @@ static int rzv2m_csi_probe(struct platform_device *pdev)
 
 	init_waitqueue_head(&csi->wait);
 
-	controller->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST | SPI_CS_HIGH;
+	controller->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST;
+	controller->dev.of_node = pdev->dev.of_node;
 	controller->bits_per_word_mask = SPI_BPW_MASK(16) | SPI_BPW_MASK(8);
 	controller->setup = rzv2m_csi_setup;
 	controller->transfer_one = rzv2m_csi_transfer_one;
 	controller->use_gpio_descriptors = true;
-	controller->target_abort = rzv2m_csi_target_abort;
-
-	device_set_node(&controller->dev, dev_fwnode(dev));
 
 	ret = devm_request_irq(dev, irq, rzv2m_csi_irq_handler, 0,
 			       dev_name(dev), csi);
@@ -666,13 +635,15 @@ static int rzv2m_csi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void rzv2m_csi_remove(struct platform_device *pdev)
+static int rzv2m_csi_remove(struct platform_device *pdev)
 {
 	struct rzv2m_csi_priv *csi = platform_get_drvdata(pdev);
 
 	spi_unregister_controller(csi->controller);
 	rzv2m_csi_sw_reset(csi, 1);
 	clk_disable_unprepare(csi->csiclk);
+
+	return 0;
 }
 
 static const struct of_device_id rzv2m_csi_match[] = {
@@ -683,7 +654,7 @@ MODULE_DEVICE_TABLE(of, rzv2m_csi_match);
 
 static struct platform_driver rzv2m_csi_drv = {
 	.probe = rzv2m_csi_probe,
-	.remove_new = rzv2m_csi_remove,
+	.remove = rzv2m_csi_remove,
 	.driver = {
 		.name = "rzv2m_csi",
 		.of_match_table = rzv2m_csi_match,

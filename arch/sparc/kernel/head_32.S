@@ -11,7 +11,6 @@
  * CompactPCI platform by Eric Brower, 1999.
  */
 
-#include <linux/export.h>
 #include <linux/version.h>
 #include <linux/init.h>
 
@@ -26,6 +25,7 @@
 #include <asm/thread_info.h>	/* TI_UWINMASK */
 #include <asm/errno.h>
 #include <asm/pgtable.h>	/* PGDIR_SHIFT */
+#include <asm/export.h>
 
 	.data
 /* The following are used with the prom_vector node-ops to figure out

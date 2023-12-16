@@ -1480,7 +1480,7 @@ exit_remove_files:
 	return err;
 }
 
-static void f71805f_remove(struct platform_device *pdev)
+static int f71805f_remove(struct platform_device *pdev)
 {
 	struct f71805f_data *data = platform_get_drvdata(pdev);
 	int i;
@@ -1490,6 +1490,8 @@ static void f71805f_remove(struct platform_device *pdev)
 	for (i = 0; i < 4; i++)
 		sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_optin[i]);
 	sysfs_remove_group(&pdev->dev.kobj, &f71805f_group_pwm_freq);
+
+	return 0;
 }
 
 static struct platform_driver f71805f_driver = {
@@ -1497,7 +1499,7 @@ static struct platform_driver f71805f_driver = {
 		.name	= DRVNAME,
 	},
 	.probe		= f71805f_probe,
-	.remove_new	= f71805f_remove,
+	.remove		= f71805f_remove,
 };
 
 static int __init f71805f_device_add(unsigned short address,

@@ -50,8 +50,8 @@
 	    "	.previous"						"\n"	\
 	)
 
-#if defined(CONFIG_PARISC) && defined(CONFIG_64BIT)
-#define KSYM_FUNC(name)		P%name
+#ifdef CONFIG_IA64
+#define KSYM_FUNC(name)		@fptr(name)
 #else
 #define KSYM_FUNC(name)		name
 #endif

@@ -71,7 +71,6 @@ struct lp855x {
 	struct device *dev;
 	struct lp855x_platform_data *pdata;
 	struct pwm_device *pwm;
-	bool needs_pwm_init;
 	struct regulator *supply;	/* regulator for VDD input */
 	struct regulator *enable;	/* regulator for EN/VDDIO input */
 };
@@ -217,24 +216,16 @@ err:
 	return ret;
 }
 
-static int lp855x_pwm_ctrl(struct lp855x *lp, int br, int max_br)
+static void lp855x_pwm_ctrl(struct lp855x *lp, int br, int max_br)
 {
 	struct pwm_state state;
 
-	if (lp->needs_pwm_init) {
-		pwm_init_state(lp->pwm, &state);
-		/* Legacy platform data compatibility */
-		if (lp->pdata->period_ns > 0)
-			state.period = lp->pdata->period_ns;
-		lp->needs_pwm_init = false;
-	} else {
-		pwm_get_state(lp->pwm, &state);
-	}
+	pwm_get_state(lp->pwm, &state);
 
 	state.duty_cycle = div_u64(br * state.period, max_br);
 	state.enabled = state.duty_cycle;
 
-	return pwm_apply_state(lp->pwm, &state);
+	pwm_apply_state(lp->pwm, &state);
 }
 
 static int lp855x_bl_update_status(struct backlight_device *bl)
@@ -246,12 +237,11 @@ static int lp855x_bl_update_status(struct backlight_device *bl)
 		brightness = 0;
 
 	if (lp->mode == PWM_BASED)
-		return lp855x_pwm_ctrl(lp, brightness,
-				      bl->props.max_brightness);
+		lp855x_pwm_ctrl(lp, brightness, bl->props.max_brightness);
 	else if (lp->mode == REGISTER_BASED)
-		return lp855x_write_byte(lp, lp->cfg->reg_brightness,
-					(u8)brightness);
-	return -EINVAL;
+		lp855x_write_byte(lp, lp->cfg->reg_brightness, (u8)brightness);
+
+	return 0;
 }
 
 static const struct backlight_ops lp855x_bl_ops = {
@@ -397,6 +387,7 @@ static int lp855x_probe(struct i2c_client *cl)
 	const struct i2c_device_id *id = i2c_client_get_device_id(cl);
 	const struct acpi_device_id *acpi_id = NULL;
 	struct device *dev = &cl->dev;
+	struct pwm_state pwmstate;
 	struct lp855x *lp;
 	int ret;
 
@@ -479,11 +470,15 @@ static int lp855x_probe(struct i2c_client *cl)
 		else
 			return dev_err_probe(dev, ret, "getting PWM\n");
 
-		lp->needs_pwm_init = false;
 		lp->mode = REGISTER_BASED;
 		dev_dbg(dev, "mode: register based\n");
 	} else {
-		lp->needs_pwm_init = true;
+		pwm_init_state(lp->pwm, &pwmstate);
+		/* Legacy platform data compatibility */
+		if (lp->pdata->period_ns > 0)
+			pwmstate.period = lp->pdata->period_ns;
+		pwm_apply_state(lp->pwm, &pwmstate);
+
 		lp->mode = PWM_BASED;
 		dev_dbg(dev, "mode: PWM based\n");
 	}

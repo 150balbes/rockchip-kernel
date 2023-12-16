@@ -39,7 +39,6 @@ void radix__flush_hugetlb_tlb_range(struct vm_area_struct *vma, unsigned long st
 		radix__flush_tlb_pwc_range_psize(vma->vm_mm, start, end, psize);
 	else
 		radix__flush_tlb_range_psize(vma->vm_mm, start, end, psize);
-	mmu_notifier_arch_invalidate_secondary_tlbs(vma->vm_mm, start, end);
 }
 
 void radix__huge_ptep_modify_prot_commit(struct vm_area_struct *vma,
@@ -47,7 +46,6 @@ void radix__huge_ptep_modify_prot_commit(struct vm_area_struct *vma,
 					 pte_t old_pte, pte_t pte)
 {
 	struct mm_struct *mm = vma->vm_mm;
-	unsigned long psize = huge_page_size(hstate_vma(vma));
 
 	/*
 	 * POWER9 NMMU must flush the TLB after clearing the PTE before
@@ -59,5 +57,5 @@ void radix__huge_ptep_modify_prot_commit(struct vm_area_struct *vma,
 	    atomic_read(&mm->context.copros) > 0)
 		radix__flush_hugetlb_page(vma, addr);
 
-	set_huge_pte_at(vma->vm_mm, addr, ptep, pte, psize);
+	set_huge_pte_at(vma->vm_mm, addr, ptep, pte);
 }

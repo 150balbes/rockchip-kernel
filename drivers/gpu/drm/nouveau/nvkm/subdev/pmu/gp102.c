@@ -23,8 +23,6 @@
  */
 #include "priv.h"
 
-#include <subdev/gsp.h>
-
 static const struct nvkm_falcon_func
 gp102_pmu_flcn = {
 	.disable = gm200_flcn_disable,
@@ -56,8 +54,5 @@ int
 gp102_pmu_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	      struct nvkm_pmu **ppmu)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return -ENODEV;
-
 	return nvkm_pmu_new_(gp102_pmu_fwif, device, type, inst, ppmu);
 }

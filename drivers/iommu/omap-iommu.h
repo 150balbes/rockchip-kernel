@@ -80,7 +80,7 @@ struct omap_iommu {
 	u32 id;
 
 	struct iommu_device iommu;
-	bool has_iommu_driver;
+	struct iommu_group *group;
 
 	u8 pwrst;
 };

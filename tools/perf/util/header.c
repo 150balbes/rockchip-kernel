@@ -456,8 +456,6 @@ static int write_cpudesc(struct feat_fd *ff,
 #define CPUINFO_PROC	{ "Processor", }
 #elif defined(__xtensa__)
 #define CPUINFO_PROC	{ "core ID", }
-#elif defined(__loongarch__)
-#define CPUINFO_PROC	{ "Model Name", }
 #else
 #define CPUINFO_PROC	{ "model name", }
 #endif
@@ -748,14 +746,20 @@ static int write_pmu_mappings(struct feat_fd *ff,
 	 * Do a first pass to count number of pmu to avoid lseek so this
 	 * works in pipe mode as well.
 	 */
-	while ((pmu = perf_pmus__scan(pmu)))
+	while ((pmu = perf_pmus__scan(pmu))) {
+		if (!pmu->name)
+			continue;
 		pmu_num++;
+	}
 
 	ret = do_write(ff, &pmu_num, sizeof(pmu_num));
 	if (ret < 0)
 		return ret;
 
 	while ((pmu = perf_pmus__scan(pmu))) {
+		if (!pmu->name)
+			continue;
+
 		ret = do_write(ff, &pmu->type, sizeof(pmu->type));
 		if (ret < 0)
 			return ret;
@@ -1601,15 +1605,8 @@ static int write_pmu_caps(struct feat_fd *ff,
 	int ret;
 
 	while ((pmu = perf_pmus__scan(pmu))) {
-		if (!strcmp(pmu->name, "cpu")) {
-			/*
-			 * The "cpu" PMU is special and covered by
-			 * HEADER_CPU_PMU_CAPS. Note, core PMUs are
-			 * counted/written here for ARM, s390 and Intel hybrid.
-			 */
-			continue;
-		}
-		if (perf_pmu__caps_parse(pmu) <= 0)
+		if (!pmu->name || !strcmp(pmu->name, "cpu") ||
+		    perf_pmu__caps_parse(pmu) <= 0)
 			continue;
 		nr_pmu++;
 	}
@@ -1622,17 +1619,23 @@ static int write_pmu_caps(struct feat_fd *ff,
 		return 0;
 
 	/*
-	 * Note older perf tools assume core PMUs come first, this is a property
-	 * of perf_pmus__scan.
+	 * Write hybrid pmu caps first to maintain compatibility with
+	 * older perf tool.
 	 */
+	if (perf_pmus__num_core_pmus() > 1) {
+		pmu = NULL;
+		while ((pmu = perf_pmus__scan_core(pmu))) {
+			ret = __write_pmu_caps(ff, pmu, true);
+			if (ret < 0)
+				return ret;
+		}
+	}
+
 	pmu = NULL;
 	while ((pmu = perf_pmus__scan(pmu))) {
-		if (!strcmp(pmu->name, "cpu")) {
-			/* Skip as above. */
+		if (pmu->is_core || !pmu->nr_caps)
 			continue;
-		}
-		if (perf_pmu__caps_parse(pmu) <= 0)
-			continue;
+
 		ret = __write_pmu_caps(ff, pmu, true);
 		if (ret < 0)
 			return ret;
@@ -2573,7 +2576,7 @@ error:
 static int process_cpu_topology(struct feat_fd *ff, void *data __maybe_unused)
 {
 	u32 nr, i;
-	char *str = NULL;
+	char *str;
 	struct strbuf sb;
 	int cpu_nr = ff->ph->env.nr_cpus_avail;
 	u64 size = 0;
@@ -2601,7 +2604,7 @@ static int process_cpu_topology(struct feat_fd *ff, void *data __maybe_unused)
 		if (strbuf_add(&sb, str, strlen(str) + 1) < 0)
 			goto error;
 		size += string_size(str);
-		zfree(&str);
+		free(str);
 	}
 	ph->env.sibling_cores = strbuf_detach(&sb, NULL);
 
@@ -2620,7 +2623,7 @@ static int process_cpu_topology(struct feat_fd *ff, void *data __maybe_unused)
 		if (strbuf_add(&sb, str, strlen(str) + 1) < 0)
 			goto error;
 		size += string_size(str);
-		zfree(&str);
+		free(str);
 	}
 	ph->env.sibling_threads = strbuf_detach(&sb, NULL);
 
@@ -2684,7 +2687,7 @@ static int process_cpu_topology(struct feat_fd *ff, void *data __maybe_unused)
 		if (strbuf_add(&sb, str, strlen(str) + 1) < 0)
 			goto error;
 		size += string_size(str);
-		zfree(&str);
+		free(str);
 	}
 	ph->env.sibling_dies = strbuf_detach(&sb, NULL);
 
@@ -2699,7 +2702,6 @@ static int process_cpu_topology(struct feat_fd *ff, void *data __maybe_unused)
 
 error:
 	strbuf_release(&sb);
-	zfree(&str);
 free_cpu:
 	zfree(&ph->env.cpu);
 	return -1;
@@ -2737,9 +2739,10 @@ static int process_numa_topology(struct feat_fd *ff, void *data __maybe_unused)
 			goto error;
 
 		n->map = perf_cpu_map__new(str);
-		free(str);
 		if (!n->map)
 			goto error;
+
+		free(str);
 	}
 	ff->ph->env.nr_numa_nodes = nr;
 	ff->ph->env.numa_nodes = nodes;
@@ -2913,10 +2916,10 @@ static int process_cache(struct feat_fd *ff, void *data __maybe_unused)
 		return -1;
 
 	for (i = 0; i < cnt; i++) {
-		struct cpu_cache_level *c = &caches[i];
+		struct cpu_cache_level c;
 
 		#define _R(v)						\
-			if (do_read_u32(ff, &c->v))			\
+			if (do_read_u32(ff, &c.v))\
 				goto out_free_caches;			\
 
 		_R(level)
@@ -2926,25 +2929,22 @@ static int process_cache(struct feat_fd *ff, void *data __maybe_unused)
 		#undef _R
 
 		#define _R(v)					\
-			c->v = do_read_string(ff);		\
-			if (!c->v)				\
-				goto out_free_caches;		\
+			c.v = do_read_string(ff);		\
+			if (!c.v)				\
+				goto out_free_caches;
 
 		_R(type)
 		_R(size)
 		_R(map)
 		#undef _R
+
+		caches[i] = c;
 	}
 
 	ff->ph->env.caches = caches;
 	ff->ph->env.caches_cnt = cnt;
 	return 0;
 out_free_caches:
-	for (i = 0; i < cnt; i++) {
-		free(caches[i].type);
-		free(caches[i].size);
-		free(caches[i].map);
-	}
 	free(caches);
 	return -1;
 }
@@ -3588,15 +3588,17 @@ static int perf_header__adds_write(struct perf_header *header,
 				   struct feat_copier *fc)
 {
 	int nr_sections;
-	struct feat_fd ff = {
-		.fd  = fd,
-		.ph = header,
-	};
+	struct feat_fd ff;
 	struct perf_file_section *feat_sec, *p;
 	int sec_size;
 	u64 sec_start;
 	int feat;
 	int err;
+
+	ff = (struct feat_fd){
+		.fd  = fd,
+		.ph = header,
+	};
 
 	nr_sections = bitmap_weight(header->adds_features, HEADER_FEAT_BITS);
 	if (!nr_sections)
@@ -3624,7 +3626,6 @@ static int perf_header__adds_write(struct perf_header *header,
 	err = do_write(&ff, feat_sec, sec_size);
 	if (err < 0)
 		pr_debug("failed to write feature section\n");
-	free(ff.buf); /* TODO: added to silence clang-tidy. */
 	free(feat_sec);
 	return err;
 }
@@ -3632,10 +3633,10 @@ static int perf_header__adds_write(struct perf_header *header,
 int perf_header__write_pipe(int fd)
 {
 	struct perf_pipe_file_header f_header;
-	struct feat_fd ff = {
-		.fd = fd,
-	};
+	struct feat_fd ff;
 	int err;
+
+	ff = (struct feat_fd){ .fd = fd };
 
 	f_header = (struct perf_pipe_file_header){
 		.magic	   = PERF_MAGIC,
@@ -3647,7 +3648,7 @@ int perf_header__write_pipe(int fd)
 		pr_debug("failed to write perf pipe header\n");
 		return err;
 	}
-	free(ff.buf);
+
 	return 0;
 }
 
@@ -3660,12 +3661,11 @@ static int perf_session__do_write_header(struct perf_session *session,
 	struct perf_file_attr   f_attr;
 	struct perf_header *header = &session->header;
 	struct evsel *evsel;
-	struct feat_fd ff = {
-		.fd = fd,
-	};
+	struct feat_fd ff;
 	u64 attr_offset;
 	int err;
 
+	ff = (struct feat_fd){ .fd = fd};
 	lseek(fd, sizeof(f_header), SEEK_SET);
 
 	evlist__for_each_entry(session->evlist, evsel) {
@@ -3673,7 +3673,6 @@ static int perf_session__do_write_header(struct perf_session *session,
 		err = do_write(&ff, evsel->core.id, evsel->core.ids * sizeof(u64));
 		if (err < 0) {
 			pr_debug("failed to write perf header\n");
-			free(ff.buf);
 			return err;
 		}
 	}
@@ -3699,7 +3698,6 @@ static int perf_session__do_write_header(struct perf_session *session,
 		err = do_write(&ff, &f_attr, sizeof(f_attr));
 		if (err < 0) {
 			pr_debug("failed to write perf header attribute\n");
-			free(ff.buf);
 			return err;
 		}
 	}
@@ -3710,10 +3708,8 @@ static int perf_session__do_write_header(struct perf_session *session,
 
 	if (at_exit) {
 		err = perf_header__adds_write(header, evlist, fd, fc);
-		if (err < 0) {
-			free(ff.buf);
+		if (err < 0)
 			return err;
-		}
 	}
 
 	f_header = (struct perf_file_header){
@@ -3735,7 +3731,6 @@ static int perf_session__do_write_header(struct perf_session *session,
 
 	lseek(fd, 0, SEEK_SET);
 	err = do_write(&ff, &f_header, sizeof(f_header));
-	free(ff.buf);
 	if (err < 0) {
 		pr_debug("failed to write perf header\n");
 		return err;
@@ -4386,8 +4381,7 @@ int perf_event__process_attr(struct perf_tool *tool __maybe_unused,
 			     union perf_event *event,
 			     struct evlist **pevlist)
 {
-	u32 i, n_ids;
-	u64 *ids;
+	u32 i, ids, n_ids;
 	struct evsel *evsel;
 	struct evlist *evlist = *pevlist;
 
@@ -4403,8 +4397,9 @@ int perf_event__process_attr(struct perf_tool *tool __maybe_unused,
 
 	evlist__add(evlist, evsel);
 
-	n_ids = event->header.size - sizeof(event->header) - event->attr.attr.size;
-	n_ids = n_ids / sizeof(u64);
+	ids = event->header.size;
+	ids -= (void *)&event->attr.id - (void *)event;
+	n_ids = ids / sizeof(u64);
 	/*
 	 * We don't have the cpu and thread maps on the header, so
 	 * for allocating the perf_sample_id table we fake 1 cpu and
@@ -4413,9 +4408,8 @@ int perf_event__process_attr(struct perf_tool *tool __maybe_unused,
 	if (perf_evsel__alloc_id(&evsel->core, 1, n_ids))
 		return -ENOMEM;
 
-	ids = perf_record_header_attr_id(event);
 	for (i = 0; i < n_ids; i++) {
-		perf_evlist__id_add(&evlist->core, &evsel->core, 0, i, ids[i]);
+		perf_evlist__id_add(&evlist->core, &evsel->core, 0, i, event->attr.id[i]);
 	}
 
 	return 0;

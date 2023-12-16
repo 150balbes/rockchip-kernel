@@ -131,14 +131,13 @@ static void determine_cpu_caches (unsigned int);
 
 static char __initdata command_line[COMMAND_LINE_SIZE];
 
-#ifdef CONFIG_VGA_CONSOLE
 /*
  * The format of "screen_info" is strange, and due to early
  * i386-setup code. This is just enough to make the console
  * code think we're on a VGA color display.
  */
 
-struct screen_info vgacon_screen_info = {
+struct screen_info screen_info = {
 	.orig_x = 0,
 	.orig_y = 25,
 	.orig_video_cols = 80,
@@ -146,7 +145,8 @@ struct screen_info vgacon_screen_info = {
 	.orig_video_isVGA = 1,
 	.orig_video_points = 16
 };
-#endif
+
+EXPORT_SYMBOL(screen_info);
 
 /*
  * The direct map I/O window, if any.  This should be the same
@@ -385,7 +385,8 @@ setup_memory(void *kernel_end)
 #endif /* CONFIG_BLK_DEV_INITRD */
 }
 
-int page_is_ram(unsigned long pfn)
+int __init
+page_is_ram(unsigned long pfn)
 {
 	struct memclust_struct * cluster;
 	struct memdesc_struct * memdesc;
@@ -421,7 +422,7 @@ register_cpus(void)
 arch_initcall(register_cpus);
 
 #ifdef CONFIG_MAGIC_SYSRQ
-static void sysrq_reboot_handler(u8 unused)
+static void sysrq_reboot_handler(int unused)
 {
 	machine_halt();
 }
@@ -652,7 +653,7 @@ setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_VT
 #if defined(CONFIG_VGA_CONSOLE)
-	vgacon_register_screen(&vgacon_screen_info);
+	conswitchp = &vga_con;
 #endif
 #endif
 

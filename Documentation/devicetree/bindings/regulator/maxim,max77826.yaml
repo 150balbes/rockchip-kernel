@@ -30,12 +30,10 @@ properties:
       "^LDO([1-9]|1[0-5])$":
         type: object
         $ref: regulator.yaml#
-        unevaluatedProperties: false
 
       "^BUCK|BUCKBOOST$":
         type: object
         $ref: regulator.yaml#
-        unevaluatedProperties: false
 
     additionalProperties: false
 

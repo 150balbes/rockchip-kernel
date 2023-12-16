@@ -28,18 +28,17 @@
  */
 
 #include <dt-bindings/interconnect/qcom,msm8974.h>
-
-#include <linux/args.h>
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/interconnect-provider.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-#include "icc-rpm.h"
+#include "smd-rpm.h"
 
 enum {
 	MSM8974_BIMC_MAS_AMPSS_M0 = 1,
@@ -233,7 +232,7 @@ struct msm8974_icc_desc {
 		.buswidth = _buswidth,					\
 		.mas_rpm_id = _mas_rpm_id,				\
 		.slv_rpm_id = _slv_rpm_id,				\
-		.num_links = COUNT_ARGS(__VA_ARGS__),			\
+		.num_links = ARRAY_SIZE(((int[]){ __VA_ARGS__ })),	\
 		.links = { __VA_ARGS__ },				\
 	}
 
@@ -677,7 +676,6 @@ static int msm8974_icc_probe(struct platform_device *pdev)
 			    GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
-	data->num_nodes = num_nodes;
 
 	qp->bus_clks = devm_kmemdup(dev, msm8974_icc_bus_clocks,
 				    sizeof(msm8974_icc_bus_clocks), GFP_KERNEL);
@@ -724,6 +722,7 @@ static int msm8974_icc_probe(struct platform_device *pdev)
 
 		data->nodes[i] = node;
 	}
+	data->num_nodes = num_nodes;
 
 	ret = icc_provider_register(provider);
 	if (ret)

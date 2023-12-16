@@ -739,7 +739,6 @@ static __always_inline unsigned long arch_local_irq_save(void)
 	     ".popsection")
 
 extern void default_banner(void);
-void native_pv_lock_init(void) __init;
 
 #else  /* __ASSEMBLY__ */
 
@@ -779,12 +778,6 @@ void native_pv_lock_init(void) __init;
 #endif /* __ASSEMBLY__ */
 #else  /* CONFIG_PARAVIRT */
 # define default_banner x86_init_noop
-
-#ifndef __ASSEMBLY__
-static inline void native_pv_lock_init(void)
-{
-}
-#endif
 #endif /* !CONFIG_PARAVIRT */
 
 #ifndef __ASSEMBLY__

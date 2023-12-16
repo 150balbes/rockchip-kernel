@@ -108,13 +108,9 @@ static void *nvme_add_user_metadata(struct request *req, void __user *ubuf,
 	if (!buf)
 		goto out;
 
-	if (req_op(req) == REQ_OP_DRV_OUT) {
-		ret = -EFAULT;
-		if (copy_from_user(buf, ubuf, len))
-			goto out_free_meta;
-	} else {
-		memset(buf, 0, len);
-	}
+	ret = -EFAULT;
+	if ((req_op(req) == REQ_OP_DRV_OUT) && copy_from_user(buf, ubuf, len))
+		goto out_free_meta;
 
 	bip = bio_integrity_alloc(bio, GFP_KERNEL, 1);
 	if (IS_ERR(bip)) {
@@ -122,6 +118,7 @@ static void *nvme_add_user_metadata(struct request *req, void __user *ubuf,
 		goto out_free_meta;
 	}
 
+	bip->bip_iter.bi_size = len;
 	bip->bip_iter.bi_sector = seed;
 	ret = bio_integrity_add_page(bio, virt_to_page(buf), len,
 			offset_in_page(buf));
@@ -510,13 +507,10 @@ static enum rq_end_io_ret nvme_uring_cmd_end_io(struct request *req,
 	struct nvme_uring_cmd_pdu *pdu = nvme_uring_cmd_pdu(ioucmd);
 
 	req->bio = pdu->bio;
-	if (nvme_req(req)->flags & NVME_REQ_CANCELLED) {
+	if (nvme_req(req)->flags & NVME_REQ_CANCELLED)
 		pdu->nvme_status = -EINTR;
-	} else {
+	else
 		pdu->nvme_status = nvme_req(req)->status;
-		if (!pdu->nvme_status)
-			pdu->nvme_status = blk_status_to_errno(err);
-	}
 	pdu->u.result = le64_to_cpu(nvme_req(req)->result.u64);
 
 	/*
@@ -792,9 +786,11 @@ int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd,
 	if (!(ioucmd->flags & IORING_URING_CMD_POLLED))
 		return 0;
 
+	rcu_read_lock();
 	req = READ_ONCE(ioucmd->cookie);
 	if (req && blk_rq_is_poll(req))
 		ret = blk_rq_poll(req, iob, poll_flags);
+	rcu_read_unlock();
 	return ret;
 }
 #ifdef CONFIG_NVME_MULTIPATH

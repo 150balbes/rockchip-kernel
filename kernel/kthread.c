@@ -159,10 +159,11 @@ bool kthread_should_stop(void)
 }
 EXPORT_SYMBOL(kthread_should_stop);
 
-static bool __kthread_should_park(struct task_struct *k)
+bool __kthread_should_park(struct task_struct *k)
 {
 	return test_bit(KTHREAD_SHOULD_PARK, &to_kthread(k)->flags);
 }
+EXPORT_SYMBOL_GPL(__kthread_should_park);
 
 /**
  * kthread_should_park - should this kthread park now?
@@ -714,24 +715,6 @@ int kthread_stop(struct task_struct *k)
 	return ret;
 }
 EXPORT_SYMBOL(kthread_stop);
-
-/**
- * kthread_stop_put - stop a thread and put its task struct
- * @k: thread created by kthread_create().
- *
- * Stops a thread created by kthread_create() and put its task_struct.
- * Only use when holding an extra task struct reference obtained by
- * calling get_task_struct().
- */
-int kthread_stop_put(struct task_struct *k)
-{
-	int ret;
-
-	ret = kthread_stop(k);
-	put_task_struct(k);
-	return ret;
-}
-EXPORT_SYMBOL(kthread_stop_put);
 
 int kthreadd(void *unused)
 {
@@ -1487,6 +1470,7 @@ void kthread_unuse_mm(struct mm_struct *mm)
 	 * clearing tsk->mm.
 	 */
 	smp_mb__after_spinlock();
+	sync_mm_rss(mm);
 	local_irq_disable();
 	tsk->mm = NULL;
 	membarrier_update_current_mm(NULL);

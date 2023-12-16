@@ -117,7 +117,7 @@ static int slave_configure(struct scsi_device *sdev)
 	} while (0)
 
 /* queue a command */
-/* This is always called with spin_lock_irq(host->host_lock) held */
+/* This is always called with scsi_lock(host) held */
 static int queuecommand_lck(struct scsi_cmnd *srb)
 {
 	void (*done)(struct scsi_cmnd *) = scsi_done;
@@ -159,18 +159,18 @@ static int command_abort(struct scsi_cmnd *srb)
 	struct rtsx_dev *dev = host_to_rtsx(host);
 	struct rtsx_chip *chip = dev->chip;
 
-	spin_lock_irq(host->host_lock);
+	scsi_lock(host);
 
 	/* Is this command still active? */
 	if (chip->srb != srb) {
-		spin_unlock_irq(host->host_lock);
+		scsi_unlock(host);
 		dev_info(&dev->pci->dev, "-- nothing to abort\n");
 		return FAILED;
 	}
 
 	rtsx_set_stat(chip, RTSX_STAT_ABORT);
 
-	spin_unlock_irq(host->host_lock);
+	scsi_unlock(host);
 
 	/* Wait for the aborted command to finish */
 	wait_for_completion(&dev->notify);
@@ -366,7 +366,7 @@ static int rtsx_control_thread(void *__dev)
 		}
 
 		/* lock access to the state */
-		spin_lock_irq(host->host_lock);
+		scsi_lock(host);
 
 		/* has the command aborted ? */
 		if (rtsx_chk_stat(chip, RTSX_STAT_ABORT)) {
@@ -374,7 +374,7 @@ static int rtsx_control_thread(void *__dev)
 			goto skip_for_abort;
 		}
 
-		spin_unlock_irq(host->host_lock);
+		scsi_unlock(host);
 
 		/* reject the command if the direction indicator
 		 * is UNKNOWN
@@ -402,7 +402,7 @@ static int rtsx_control_thread(void *__dev)
 		}
 
 		/* lock access to the state */
-		spin_lock_irq(host->host_lock);
+		scsi_lock(host);
 
 		/* did the command already complete because of a disconnect? */
 		if (!chip->srb)
@@ -424,7 +424,7 @@ skip_for_abort:
 
 		/* finished working on this command */
 		chip->srb = NULL;
-		spin_unlock_irq(host->host_lock);
+		scsi_unlock(host);
 
 		/* unlock the device pointers */
 		mutex_unlock(&dev->dev_mutex);
@@ -603,9 +603,9 @@ static void quiesce_and_remove_host(struct rtsx_dev *dev)
 	 * interrupt a SCSI-scan or device-reset delay
 	 */
 	mutex_lock(&dev->dev_mutex);
-	spin_lock_irq(host->host_lock);
+	scsi_lock(host);
 	rtsx_set_stat(chip, RTSX_STAT_DISCONNECT);
-	spin_unlock_irq(host->host_lock);
+	scsi_unlock(host);
 	mutex_unlock(&dev->dev_mutex);
 	wake_up(&dev->delay_wait);
 	wait_for_completion(&dev->scanning_done);
@@ -621,10 +621,10 @@ static void quiesce_and_remove_host(struct rtsx_dev *dev)
 	mutex_lock(&dev->dev_mutex);
 	if (chip->srb) {
 		chip->srb->result = DID_NO_CONNECT << 16;
-		spin_lock_irq(host->host_lock);
+		scsi_lock(host);
 		scsi_done(dev->chip->srb);
 		chip->srb = NULL;
-		spin_unlock_irq(host->host_lock);
+		scsi_unlock(host);
 	}
 	mutex_unlock(&dev->dev_mutex);
 

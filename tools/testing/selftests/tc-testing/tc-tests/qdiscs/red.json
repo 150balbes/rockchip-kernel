@@ -10,6 +10,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -17,7 +18,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -31,6 +33,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red adaptive limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -38,7 +41,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb adaptive $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -52,6 +56,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red ecn limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -59,7 +64,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb ecn $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -73,6 +79,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red ecn adaptive limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -80,7 +87,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb ecn adaptive $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -94,6 +102,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red ecn harddrop limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -101,7 +110,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb ecn harddrop $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -115,6 +125,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red ecn nodrop limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -122,7 +133,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb ecn nodrop $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -136,6 +148,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red nodrop limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "2",
@@ -143,6 +156,7 @@
         "matchPattern": "qdisc red",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -156,6 +170,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red ecn harddrop nodrop limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -163,7 +178,8 @@
         "matchPattern": "qdisc red 1: root .* limit 1Mb min 100Kb max 300Kb ecn harddrop nodrop $",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -177,6 +193,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root red limit 1M avpkt 1500 min 100K max 300K",
         "expExitCode": "0",
@@ -184,7 +201,8 @@
         "matchPattern": "class red 1:[0-9]+ parent 1:",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     }
 ]

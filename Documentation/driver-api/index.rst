@@ -114,7 +114,6 @@ available subsections can be seen below.
    zorro
    hte/index
    wmi
-   dpll
 
 .. only::  subproject and html
 

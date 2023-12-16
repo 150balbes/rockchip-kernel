@@ -15,9 +15,8 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/hi6421-pmic.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/regmap.h>
 
 static const struct mfd_cell hi6421_devs[] = {
@@ -51,12 +50,16 @@ MODULE_DEVICE_TABLE(of, of_hi6421_pmic_match);
 static int hi6421_pmic_probe(struct platform_device *pdev)
 {
 	struct hi6421_pmic *pmic;
+	const struct of_device_id *id;
 	const struct mfd_cell *subdevs;
 	enum hi6421_type type;
 	void __iomem *base;
 	int n_subdevs, ret;
 
-	type = (uintptr_t)device_get_match_data(&pdev->dev);
+	id = of_match_device(of_hi6421_pmic_match, &pdev->dev);
+	if (!id)
+		return -EINVAL;
+	type = (enum hi6421_type)id->data;
 
 	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
 	if (!pmic)

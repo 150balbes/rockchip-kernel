@@ -31,6 +31,7 @@
 #include <asm/ptrace.h>
 #include <asm/bug.h>
 #include <asm/kvm_book3s_asm.h>
+#include <asm/export.h>
 #include <asm/feature-fixups.h>
 #include <asm/interrupt.h>
 
@@ -412,10 +413,10 @@ END_FTR_SECTION_IFSET(CPU_FTR_FPU_UNAVAILABLE)
 	. = INTERRUPT_INST_TLB_MISS_603
 InstructionTLBMiss:
 /*
- * r0:	userspace flag (later scratch)
+ * r0:	scratch
  * r1:	linux style pte ( later becomes ppc hardware pte )
  * r2:	ptr to linux-style pte
- * r3:	fault address
+ * r3:	scratch
  */
 	/* Get PTE (linux-style) and check access */
 	mfspr	r3,SPRN_IMISS
@@ -424,13 +425,12 @@ InstructionTLBMiss:
 	cmplw	0,r1,r3
 #endif
 	mfspr	r2, SPRN_SDR1
-	li	r1,_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_EXEC
+	li	r1,_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_EXEC | _PAGE_USER
 	rlwinm	r2, r2, 28, 0xfffff000
 #ifdef CONFIG_MODULES
-	li	r0, 3
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
-	li	r0, 0
+	li	r1,_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_EXEC
 	addi	r2, r2, (swapper_pg_dir - PAGE_OFFSET)@l	/* kernel page table */
 #endif
 112:	rlwimi	r2,r3,12,20,29		/* insert top 10 bits of address */
@@ -438,15 +438,13 @@ InstructionTLBMiss:
 	rlwinm.	r2,r2,0,0,19		/* extract address of pte page */
 	beq-	InstructionAddressInvalid	/* return if no mapping */
 	rlwimi	r2,r3,22,20,29		/* insert next 10 bits of address */
-	lwz	r2,0(r2)		/* get linux-style pte */
-	andc.	r1,r1,r2		/* check access & ~permission */
+	lwz	r0,0(r2)		/* get linux-style pte */
+	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	InstructionAddressInvalid /* return if access not permitted */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-#ifdef CONFIG_MODULES
-	rlwimi	r2, r0, 0, 31, 31	/* userspace ? -> PP lsb */
-#endif
+	rlwimi	r0,r0,32-2,31,31	/* _PAGE_USER -> PP lsb */
 	ori	r1, r1, 0xe06		/* clear out reserved bits */
-	andc	r1, r2, r1		/* PP = user? 1 : 0 */
+	andc	r1, r0, r1		/* PP = user? 1 : 0 */
 BEGIN_FTR_SECTION
 	rlwinm	r1,r1,0,~_PAGE_COHERENT	/* clear M (coherence not required) */
 END_FTR_SECTION_IFCLR(CPU_FTR_NEED_COHERENT)
@@ -481,38 +479,38 @@ InstructionAddressInvalid:
 	. = INTERRUPT_DATA_LOAD_TLB_MISS_603
 DataLoadTLBMiss:
 /*
- * r0:	userspace flag (later scratch)
+ * r0:	scratch
  * r1:	linux style pte ( later becomes ppc hardware pte )
  * r2:	ptr to linux-style pte
- * r3:	fault address
+ * r3:	scratch
  */
 	/* Get PTE (linux-style) and check access */
 	mfspr	r3,SPRN_DMISS
 	lis	r1, TASK_SIZE@h		/* check if kernel address */
 	cmplw	0,r1,r3
 	mfspr	r2, SPRN_SDR1
-	li	r1, _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_READ
+	li	r1, _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_USER
 	rlwinm	r2, r2, 28, 0xfffff000
-	li	r0, 3
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
-	li	r0, 0
+	li	r1, _PAGE_PRESENT | _PAGE_ACCESSED
 	addi	r2, r2, (swapper_pg_dir - PAGE_OFFSET)@l	/* kernel page table */
 112:	rlwimi	r2,r3,12,20,29		/* insert top 10 bits of address */
 	lwz	r2,0(r2)		/* get pmd entry */
 	rlwinm.	r2,r2,0,0,19		/* extract address of pte page */
 	beq-	DataAddressInvalid	/* return if no mapping */
 	rlwimi	r2,r3,22,20,29		/* insert next 10 bits of address */
-	lwz	r2,0(r2)		/* get linux-style pte */
-	andc.	r1,r1,r2		/* check access & ~permission */
+	lwz	r0,0(r2)		/* get linux-style pte */
+	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	DataAddressInvalid	/* return if access not permitted */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-	rlwinm	r1,r2,32-9,30,30	/* _PAGE_WRITE -> PP msb */
-	rlwimi	r2,r0,0,30,31		/* userspace ? -> PP */
-	rlwimi	r1,r2,32-3,24,24	/* _PAGE_WRITE -> _PAGE_DIRTY */
+	rlwinm	r1,r0,32-9,30,30	/* _PAGE_RW -> PP msb */
+	rlwimi	r0,r0,32-1,30,30	/* _PAGE_USER -> PP msb */
+	rlwimi	r1,r0,32-3,24,24	/* _PAGE_RW -> _PAGE_DIRTY */
+	rlwimi	r0,r0,32-1,31,31	/* _PAGE_USER -> PP lsb */
 	xori	r1,r1,_PAGE_DIRTY	/* clear dirty when not rw */
 	ori	r1,r1,0xe04		/* clear out reserved bits */
-	andc	r1,r2,r1		/* PP = user? rw? 1: 3: 0 */
+	andc	r1,r0,r1		/* PP = user? rw? 1: 3: 0 */
 BEGIN_FTR_SECTION
 	rlwinm	r1,r1,0,~_PAGE_COHERENT	/* clear M (coherence not required) */
 END_FTR_SECTION_IFCLR(CPU_FTR_NEED_COHERENT)
@@ -561,35 +559,34 @@ DataAddressInvalid:
 	. = INTERRUPT_DATA_STORE_TLB_MISS_603
 DataStoreTLBMiss:
 /*
- * r0:	userspace flag (later scratch)
+ * r0:	scratch
  * r1:	linux style pte ( later becomes ppc hardware pte )
  * r2:	ptr to linux-style pte
- * r3:	fault address
+ * r3:	scratch
  */
 	/* Get PTE (linux-style) and check access */
 	mfspr	r3,SPRN_DMISS
 	lis	r1, TASK_SIZE@h		/* check if kernel address */
 	cmplw	0,r1,r3
 	mfspr	r2, SPRN_SDR1
-	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED
+	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_USER
 	rlwinm	r2, r2, 28, 0xfffff000
-	li	r0, 3
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
-	li	r0, 0
+	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED
 	addi	r2, r2, (swapper_pg_dir - PAGE_OFFSET)@l	/* kernel page table */
 112:	rlwimi	r2,r3,12,20,29		/* insert top 10 bits of address */
 	lwz	r2,0(r2)		/* get pmd entry */
 	rlwinm.	r2,r2,0,0,19		/* extract address of pte page */
 	beq-	DataAddressInvalid	/* return if no mapping */
 	rlwimi	r2,r3,22,20,29		/* insert next 10 bits of address */
-	lwz	r2,0(r2)		/* get linux-style pte */
-	andc.	r1,r1,r2		/* check access & ~permission */
+	lwz	r0,0(r2)		/* get linux-style pte */
+	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	DataAddressInvalid	/* return if access not permitted */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-	rlwimi	r2,r0,0,31,31		/* userspace ? -> PP lsb */
+	rlwimi	r0,r0,32-2,31,31	/* _PAGE_USER -> PP lsb */
 	li	r1,0xe06		/* clear out reserved bits & PP msb */
-	andc	r1,r2,r1		/* PP = user? 1: 0 */
+	andc	r1,r0,r1		/* PP = user? 1: 0 */
 BEGIN_FTR_SECTION
 	rlwinm	r1,r1,0,~_PAGE_COHERENT	/* clear M (coherence not required) */
 END_FTR_SECTION_IFCLR(CPU_FTR_NEED_COHERENT)
@@ -693,8 +690,7 @@ hash_page_dsi:
 	mfdar	r4
 	mfsrr0	r5
 	mfsrr1	r9
-	rlwinm	r3, r3, 32 - 15, _PAGE_WRITE	/* DSISR_STORE -> _PAGE_WRITE */
-	ori	r3, r3, _PAGE_PRESENT | _PAGE_READ
+	rlwinm	r3, r3, 32 - 15, _PAGE_RW	/* DSISR_STORE -> _PAGE_RW */
 	bl	hash_page
 	mfspr	r10, SPRN_SPRG_THREAD
 	restore_regs_thread r10
@@ -704,7 +700,7 @@ hash_page_isi:
 	mr	r11, r10
 	mfspr	r10, SPRN_SPRG_THREAD
 	save_regs_thread	r10
-	li	r3, _PAGE_PRESENT | _PAGE_EXEC
+	li	r3, 0
 	lwz	r4, SRR0(r10)
 	lwz	r9, SRR1(r10)
 	bl	hash_page

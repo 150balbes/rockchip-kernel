@@ -13,6 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_platform.h>
 #include <linux/gpio/consumer.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
@@ -132,14 +133,28 @@ static int at91_usart_spi_configure_dma(struct spi_controller *ctlr,
 	dma_cap_set(DMA_SLAVE, mask);
 
 	ctlr->dma_tx = dma_request_chan(dev, "tx");
-	if (IS_ERR(ctlr->dma_tx)) {
-		err = PTR_ERR(ctlr->dma_tx);
+	if (IS_ERR_OR_NULL(ctlr->dma_tx)) {
+		if (IS_ERR(ctlr->dma_tx)) {
+			err = PTR_ERR(ctlr->dma_tx);
+			goto at91_usart_spi_error_clear;
+		}
+
+		dev_dbg(dev,
+			"DMA TX channel not available, SPI unable to use DMA\n");
+		err = -EBUSY;
 		goto at91_usart_spi_error_clear;
 	}
 
 	ctlr->dma_rx = dma_request_chan(dev, "rx");
-	if (IS_ERR(ctlr->dma_rx)) {
-		err = PTR_ERR(ctlr->dma_rx);
+	if (IS_ERR_OR_NULL(ctlr->dma_rx)) {
+		if (IS_ERR(ctlr->dma_rx)) {
+			err = PTR_ERR(ctlr->dma_rx);
+			goto at91_usart_spi_error;
+		}
+
+		dev_dbg(dev,
+			"DMA RX channel not available, SPI unable to use DMA\n");
+		err = -EBUSY;
 		goto at91_usart_spi_error;
 	}
 
@@ -471,7 +486,10 @@ static int at91_usart_gpio_setup(struct platform_device *pdev)
 
 	cs_gpios = devm_gpiod_get_array_optional(&pdev->dev, "cs", GPIOD_OUT_LOW);
 
-	return PTR_ERR_OR_ZERO(cs_gpios);
+	if (IS_ERR(cs_gpios))
+		return PTR_ERR(cs_gpios);
+
+	return 0;
 }
 
 static int at91_usart_spi_probe(struct platform_device *pdev)
@@ -509,7 +527,7 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 	controller->dev.of_node = pdev->dev.parent->of_node;
 	controller->bits_per_word_mask = SPI_BPW_MASK(8);
 	controller->setup = at91_usart_spi_setup;
-	controller->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
+	controller->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
 	controller->transfer_one = at91_usart_spi_transfer_one;
 	controller->prepare_message = at91_usart_spi_prepare_message;
 	controller->unprepare_message = at91_usart_spi_unprepare_message;

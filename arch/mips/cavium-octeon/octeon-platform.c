@@ -8,10 +8,8 @@
  */
 
 #include <linux/etherdevice.h>
-#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/of_fdt.h>
-#include <linux/platform_device.h>
 #include <linux/libfdt.h>
 
 #include <asm/octeon/octeon.h>
@@ -452,6 +450,7 @@ static const struct of_device_id octeon_ids[] __initconst = {
 	{ .compatible = "cavium,octeon-3860-bootbus", },
 	{ .compatible = "cavium,mdio-mux", },
 	{ .compatible = "gpio-leds", },
+	{ .compatible = "cavium,octeon-7130-usb-uctl", },
 	{},
 };
 

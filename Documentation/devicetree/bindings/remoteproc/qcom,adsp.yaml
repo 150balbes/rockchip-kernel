@@ -26,7 +26,6 @@ properties:
       - qcom,sdm660-adsp-pas
       - qcom,sdm845-adsp-pas
       - qcom,sdm845-cdsp-pas
-      - qcom,sdm845-slpi-pas
 
   reg:
     maxItems: 1
@@ -45,13 +44,8 @@ properties:
     maxItems: 1
     description: Reference to the reserved-memory for the Hexagon core
 
-  firmware-name:
-    maxItems: 1
-    description: Firmware name for the Hexagon core
-
 required:
   - compatible
-  - memory-region
 
 unevaluatedProperties: false
 
@@ -66,12 +60,9 @@ allOf:
               - qcom,msm8953-adsp-pil
               - qcom,msm8974-adsp-pil
               - qcom,msm8996-adsp-pil
-              - qcom,msm8996-slpi-pil
               - qcom,msm8998-adsp-pas
-              - qcom,msm8998-slpi-pas
               - qcom,sdm845-adsp-pas
               - qcom,sdm845-cdsp-pas
-              - qcom,sdm845-slpi-pas
     then:
       properties:
         clocks:
@@ -80,6 +71,24 @@ allOf:
         clock-names:
           items:
             - const: xo
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - qcom,msm8996-slpi-pil
+              - qcom,msm8998-slpi-pas
+    then:
+      properties:
+        clocks:
+          items:
+            - description: XO clock
+            - description: AGGRE2 clock
+        clock-names:
+          items:
+            - const: xo
+            - const: aggre2
 
   - if:
       properties:
@@ -95,7 +104,6 @@ allOf:
               - qcom,msm8998-slpi-pas
               - qcom,sdm845-adsp-pas
               - qcom,sdm845-cdsp-pas
-              - qcom,sdm845-slpi-pas
     then:
       properties:
         interrupts:
@@ -148,22 +156,6 @@ allOf:
             - const: ssc_cx
       required:
         - px-supply
-
-  - if:
-      properties:
-        compatible:
-          enum:
-            - qcom,sdm845-slpi-pas
-    then:
-      properties:
-        power-domains:
-          items:
-            - description: LCX power domain
-            - description: LMX power domain
-        power-domain-names:
-          items:
-            - const: lcx
-            - const: lmx
 
   - if:
       properties:

@@ -294,7 +294,7 @@ int br_nf_pre_routing_finish_bridge(struct net *net, struct sock *sk, struct sk_
 			/* tell br_dev_xmit to continue with forwarding */
 			nf_bridge->bridged_dnat = 1;
 			/* FIXME Need to refragment */
-			ret = READ_ONCE(neigh->output)(neigh, skb);
+			ret = neigh->output(neigh, skb);
 		}
 		neigh_release(neigh);
 		return ret;
@@ -486,11 +486,11 @@ static unsigned int br_nf_pre_routing(void *priv,
 	struct brnf_net *brnet;
 
 	if (unlikely(!pskb_may_pull(skb, len)))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_PKT_TOO_SMALL, 0);
+		return NF_DROP;
 
 	p = br_port_get_rcu(state->in);
 	if (p == NULL)
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_DEV_READY, 0);
+		return NF_DROP;
 	br = p->br;
 
 	brnet = net_generic(state->net, brnf_net_id);
@@ -501,7 +501,7 @@ static unsigned int br_nf_pre_routing(void *priv,
 			return NF_ACCEPT;
 		if (!ipv6_mod_enabled()) {
 			pr_warn_once("Module ipv6 is disabled, so call_ip6tables is not supported.");
-			return NF_DROP_REASON(skb, SKB_DROP_REASON_IPV6DISABLED, 0);
+			return NF_DROP;
 		}
 
 		nf_bridge_pull_encap_header_rcsum(skb);
@@ -518,12 +518,12 @@ static unsigned int br_nf_pre_routing(void *priv,
 	nf_bridge_pull_encap_header_rcsum(skb);
 
 	if (br_validate_ipv4(state->net, skb))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_IP_INHDR, 0);
+		return NF_DROP;
 
 	if (!nf_bridge_alloc(skb))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_NOMEM, 0);
+		return NF_DROP;
 	if (!setup_pre_routing(skb, state->net))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_DEV_READY, 0);
+		return NF_DROP;
 
 	nf_bridge = nf_bridge_info_get(skb);
 	nf_bridge->ipv4_daddr = ip_hdr(skb)->daddr;
@@ -570,12 +570,18 @@ static int br_nf_forward_finish(struct net *net, struct sock *sk, struct sk_buff
 }
 
 
-static unsigned int br_nf_forward_ip(struct sk_buff *skb,
-				     const struct nf_hook_state *state,
-				     u8 pf)
+/* This is the 'purely bridged' case.  For IP, we pass the packet to
+ * netfilter with indev and outdev set to the bridge device,
+ * but we are still able to filter on the 'real' indev/outdev
+ * because of the physdev module. For ARP, indev and outdev are the
+ * bridge ports. */
+static unsigned int br_nf_forward_ip(void *priv,
+				     struct sk_buff *skb,
+				     const struct nf_hook_state *state)
 {
 	struct nf_bridge_info *nf_bridge;
 	struct net_device *parent;
+	u_int8_t pf;
 
 	nf_bridge = nf_bridge_info_get(skb);
 	if (!nf_bridge)
@@ -584,15 +590,24 @@ static unsigned int br_nf_forward_ip(struct sk_buff *skb,
 	/* Need exclusive nf_bridge_info since we might have multiple
 	 * different physoutdevs. */
 	if (!nf_bridge_unshare(skb))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_NOMEM, 0);
+		return NF_DROP;
 
 	nf_bridge = nf_bridge_info_get(skb);
 	if (!nf_bridge)
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_NOMEM, 0);
+		return NF_DROP;
 
 	parent = bridge_parent(state->out);
 	if (!parent)
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_DEV_READY, 0);
+		return NF_DROP;
+
+	if (IS_IP(skb) || is_vlan_ip(skb, state->net) ||
+	    is_pppoe_ip(skb, state->net))
+		pf = NFPROTO_IPV4;
+	else if (IS_IPV6(skb) || is_vlan_ipv6(skb, state->net) ||
+		 is_pppoe_ipv6(skb, state->net))
+		pf = NFPROTO_IPV6;
+	else
+		return NF_ACCEPT;
 
 	nf_bridge_pull_encap_header(skb);
 
@@ -603,20 +618,21 @@ static unsigned int br_nf_forward_ip(struct sk_buff *skb,
 
 	if (pf == NFPROTO_IPV4) {
 		if (br_validate_ipv4(state->net, skb))
-			return NF_DROP_REASON(skb, SKB_DROP_REASON_IP_INHDR, 0);
+			return NF_DROP;
 		IPCB(skb)->frag_max_size = nf_bridge->frag_max_size;
-		skb->protocol = htons(ETH_P_IP);
-	} else if (pf == NFPROTO_IPV6) {
+	}
+
+	if (pf == NFPROTO_IPV6) {
 		if (br_validate_ipv6(state->net, skb))
-			return NF_DROP_REASON(skb, SKB_DROP_REASON_IP_INHDR, 0);
+			return NF_DROP;
 		IP6CB(skb)->frag_max_size = nf_bridge->frag_max_size;
-		skb->protocol = htons(ETH_P_IPV6);
-	} else {
-		WARN_ON_ONCE(1);
-		return NF_DROP;
 	}
 
 	nf_bridge->physoutdev = skb->dev;
+	if (pf == NFPROTO_IPV4)
+		skb->protocol = htons(ETH_P_IP);
+	else
+		skb->protocol = htons(ETH_P_IPV6);
 
 	NF_HOOK(pf, NF_INET_FORWARD, state->net, NULL, skb,
 		brnf_get_logical_dev(skb, state->in, state->net),
@@ -625,7 +641,8 @@ static unsigned int br_nf_forward_ip(struct sk_buff *skb,
 	return NF_STOLEN;
 }
 
-static unsigned int br_nf_forward_arp(struct sk_buff *skb,
+static unsigned int br_nf_forward_arp(void *priv,
+				      struct sk_buff *skb,
 				      const struct nf_hook_state *state)
 {
 	struct net_bridge_port *p;
@@ -642,11 +659,14 @@ static unsigned int br_nf_forward_arp(struct sk_buff *skb,
 	if (!brnet->call_arptables && !br_opt_get(br, BROPT_NF_CALL_ARPTABLES))
 		return NF_ACCEPT;
 
-	if (is_vlan_arp(skb, state->net))
+	if (!IS_ARP(skb)) {
+		if (!is_vlan_arp(skb, state->net))
+			return NF_ACCEPT;
 		nf_bridge_pull_encap_header(skb);
+	}
 
 	if (unlikely(!pskb_may_pull(skb, sizeof(struct arphdr))))
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_PKT_TOO_SMALL, 0);
+		return NF_DROP;
 
 	if (arp_hdr(skb)->ar_pln != 4) {
 		if (is_vlan_arp(skb, state->net))
@@ -658,28 +678,6 @@ static unsigned int br_nf_forward_arp(struct sk_buff *skb,
 		state->in, state->out, br_nf_forward_finish);
 
 	return NF_STOLEN;
-}
-
-/* This is the 'purely bridged' case.  For IP, we pass the packet to
- * netfilter with indev and outdev set to the bridge device,
- * but we are still able to filter on the 'real' indev/outdev
- * because of the physdev module. For ARP, indev and outdev are the
- * bridge ports.
- */
-static unsigned int br_nf_forward(void *priv,
-				  struct sk_buff *skb,
-				  const struct nf_hook_state *state)
-{
-	if (IS_IP(skb) || is_vlan_ip(skb, state->net) ||
-	    is_pppoe_ip(skb, state->net))
-		return br_nf_forward_ip(skb, state, NFPROTO_IPV4);
-	if (IS_IPV6(skb) || is_vlan_ipv6(skb, state->net) ||
-	    is_pppoe_ipv6(skb, state->net))
-		return br_nf_forward_ip(skb, state, NFPROTO_IPV6);
-	if (IS_ARP(skb) || is_vlan_arp(skb, state->net))
-		return br_nf_forward_arp(skb, state);
-
-	return NF_ACCEPT;
 }
 
 static int br_nf_push_frag_xmit(struct net *net, struct sock *sk, struct sk_buff *skb)
@@ -833,7 +831,7 @@ static unsigned int br_nf_post_routing(void *priv,
 		return NF_ACCEPT;
 
 	if (!realoutdev)
-		return NF_DROP_REASON(skb, SKB_DROP_REASON_DEV_READY, 0);
+		return NF_DROP;
 
 	if (IS_IP(skb) || is_vlan_ip(skb, state->net) ||
 	    is_pppoe_ip(skb, state->net))
@@ -939,7 +937,13 @@ static const struct nf_hook_ops br_nf_ops[] = {
 		.priority = NF_BR_PRI_BRNF,
 	},
 	{
-		.hook = br_nf_forward,
+		.hook = br_nf_forward_ip,
+		.pf = NFPROTO_BRIDGE,
+		.hooknum = NF_BR_FORWARD,
+		.priority = NF_BR_PRI_BRNF - 1,
+	},
+	{
+		.hook = br_nf_forward_arp,
 		.pf = NFPROTO_BRIDGE,
 		.hooknum = NF_BR_FORWARD,
 		.priority = NF_BR_PRI_BRNF,
@@ -1131,8 +1135,7 @@ static int br_netfilter_sysctl_init_net(struct net *net)
 
 	br_netfilter_sysctl_default(brnet);
 
-	brnet->ctl_hdr = register_net_sysctl_sz(net, "net/bridge", table,
-						ARRAY_SIZE(brnf_table));
+	brnet->ctl_hdr = register_net_sysctl(net, "net/bridge", table);
 	if (!brnet->ctl_hdr) {
 		if (!net_eq(net, &init_net))
 			kfree(table);

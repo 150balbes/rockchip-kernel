@@ -9,7 +9,9 @@
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/of_graph.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/amba/bus.h>
 #include <linux/coresight.h>
@@ -492,18 +494,19 @@ static inline bool acpi_validate_dsd_graph(const union acpi_object *graph)
 
 /* acpi_get_dsd_graph	- Find the _DSD Graph property for the given device. */
 static const union acpi_object *
-acpi_get_dsd_graph(struct acpi_device *adev, struct acpi_buffer *buf)
+acpi_get_dsd_graph(struct acpi_device *adev)
 {
 	int i;
+	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER };
 	acpi_status status;
 	const union acpi_object *dsd;
 
 	status = acpi_evaluate_object_typed(adev->handle, "_DSD", NULL,
-					    buf, ACPI_TYPE_PACKAGE);
+					    &buf, ACPI_TYPE_PACKAGE);
 	if (ACPI_FAILURE(status))
 		return NULL;
 
-	dsd = buf->pointer;
+	dsd = buf.pointer;
 
 	/*
 	 * _DSD property consists tuples { Prop_UUID, Package() }
@@ -554,12 +557,12 @@ acpi_validate_coresight_graph(const union acpi_object *cs_graph)
  * returns NULL.
  */
 static const union acpi_object *
-acpi_get_coresight_graph(struct acpi_device *adev, struct acpi_buffer *buf)
+acpi_get_coresight_graph(struct acpi_device *adev)
 {
 	const union acpi_object *graph_list, *graph;
 	int i, nr_graphs;
 
-	graph_list = acpi_get_dsd_graph(adev, buf);
+	graph_list = acpi_get_dsd_graph(adev);
 	if (!graph_list)
 		return graph_list;
 
@@ -660,24 +663,18 @@ static int acpi_coresight_parse_graph(struct device *dev,
 				      struct acpi_device *adev,
 				      struct coresight_platform_data *pdata)
 {
-	int ret = 0;
 	int i, nlinks;
 	const union acpi_object *graph;
 	struct coresight_connection conn, zero_conn = {};
 	struct coresight_connection *new_conn;
-	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER, NULL };
 
-	graph = acpi_get_coresight_graph(adev, &buf);
-	/*
-	 * There are no graph connections, which is fine for some components.
-	 * e.g., ETE
-	 */
+	graph = acpi_get_coresight_graph(adev);
 	if (!graph)
-		goto free;
+		return -ENOENT;
 
 	nlinks = graph->package.elements[2].integer.value;
 	if (!nlinks)
-		goto free;
+		return 0;
 
 	for (i = 0; i < nlinks; i++) {
 		const union acpi_object *link = &graph->package.elements[3 + i];
@@ -685,28 +682,17 @@ static int acpi_coresight_parse_graph(struct device *dev,
 
 		conn = zero_conn;
 		dir = acpi_coresight_parse_link(adev, link, &conn);
-		if (dir < 0) {
-			ret = dir;
-			goto free;
-		}
+		if (dir < 0)
+			return dir;
 
 		if (dir == ACPI_CORESIGHT_LINK_MASTER) {
 			new_conn = coresight_add_out_conn(dev, pdata, &conn);
-			if (IS_ERR(new_conn)) {
-				ret = PTR_ERR(new_conn);
-				goto free;
-			}
+			if (IS_ERR(new_conn))
+				return PTR_ERR(new_conn);
 		}
 	}
 
-free:
-	/*
-	 * When ACPI fails to alloc a buffer, it will free the buffer
-	 * created via ACPI_ALLOCATE_BUFFER and set to NULL.
-	 * ACPI_FREE can handle NULL pointers, so free it directly.
-	 */
-	ACPI_FREE(buf.pointer);
-	return ret;
+	return 0;
 }
 
 /*

@@ -10,7 +10,7 @@
  * a successful copy).  There is also some rather minor exception setup
  * stuff.
  */
-#include <linux/export.h>
+#include <asm/export.h>
 
 /* Allow an exception for an insn; exit if we get one.  */
 #define EX(x,y...)			\

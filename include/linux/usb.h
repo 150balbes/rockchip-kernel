@@ -25,6 +25,7 @@
 
 struct usb_device;
 struct usb_driver;
+struct wusb_dev;
 
 /*-------------------------------------------------------------------------*/
 
@@ -424,6 +425,7 @@ struct usb_host_config {
 struct usb_host_bos {
 	struct usb_bos_descriptor	*desc;
 
+	/* wireless cap descriptor is handled by wusb */
 	struct usb_ext_cap_descriptor	*ext_cap;
 	struct usb_ss_cap_descriptor	*ss_cap;
 	struct usb_ssp_cap_descriptor	*ssp_cap;
@@ -610,6 +612,7 @@ struct usb3_lpm_parameters {
  *	WUSB devices are not, until we authorize them from user space.
  *	FIXME -- complete doc
  * @authenticated: Crypto authentication passed
+ * @wusb: device is Wireless USB
  * @lpm_capable: device supports LPM
  * @lpm_devinit_allow: Allow USB3 device initiated LPM, exit latency is in range
  * @usb2_hw_lpm_capable: device can perform USB2 hardware LPM
@@ -631,6 +634,8 @@ struct usb3_lpm_parameters {
  * @do_remote_wakeup:  remote wakeup should be enabled
  * @reset_resume: needs reset instead of resume
  * @port_is_suspended: the upstream port is suspended (L2 or U3)
+ * @wusb_dev: if this is a Wireless USB device, link to the WUSB
+ *	specific data for the device.
  * @slot_id: Slot ID assigned by xHCI
  * @removable: Device can be physically removed from this port
  * @l1_params: best effor service latency for USB2 L1 LPM state, and L1 timeout.
@@ -691,6 +696,7 @@ struct usb_device {
 	unsigned have_langid:1;
 	unsigned authorized:1;
 	unsigned authenticated:1;
+	unsigned wusb:1;
 	unsigned lpm_capable:1;
 	unsigned lpm_devinit_allow:1;
 	unsigned usb2_hw_lpm_capable:1;
@@ -721,6 +727,7 @@ struct usb_device {
 	unsigned reset_resume:1;
 	unsigned port_is_suspended:1;
 
+	struct wusb_dev *wusb_dev;
 	int slot_id;
 	struct usb2_lpm_parameters l1_params;
 	struct usb3_lpm_parameters u1_params;
@@ -1735,6 +1742,11 @@ static inline void usb_fill_bulk_urb(struct urb *urb,
  * encoding of the endpoint interval, and express polling intervals in
  * microframes (eight per millisecond) rather than in frames (one per
  * millisecond).
+ *
+ * Wireless USB also uses the logarithmic encoding, but specifies it in units of
+ * 128us instead of 125us.  For Wireless USB devices, the interval is passed
+ * through to the host controller, rather than being translated into microframe
+ * units.
  */
 static inline void usb_fill_int_urb(struct urb *urb,
 				    struct usb_device *dev,
@@ -1822,6 +1834,22 @@ void *usb_alloc_coherent(struct usb_device *dev, size_t size,
 	gfp_t mem_flags, dma_addr_t *dma);
 void usb_free_coherent(struct usb_device *dev, size_t size,
 	void *addr, dma_addr_t dma);
+
+#if 0
+struct urb *usb_buffer_map(struct urb *urb);
+void usb_buffer_dmasync(struct urb *urb);
+void usb_buffer_unmap(struct urb *urb);
+#endif
+
+struct scatterlist;
+int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
+		      struct scatterlist *sg, int nents);
+#if 0
+void usb_buffer_dmasync_sg(const struct usb_device *dev, int is_in,
+			   struct scatterlist *sg, int n_hw_ents);
+#endif
+void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
+			 struct scatterlist *sg, int n_hw_ents);
 
 /*-------------------------------------------------------------------*
  *                         SYNCHRONOUS CALL SUPPORT                  *

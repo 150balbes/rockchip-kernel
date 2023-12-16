@@ -830,7 +830,7 @@ err:
 	return rc;
 }
 
-static void __exit dryice_rtc_remove(struct platform_device *pdev)
+static int __exit dryice_rtc_remove(struct platform_device *pdev)
 {
 	struct imxdi_dev *imxdi = platform_get_drvdata(pdev);
 
@@ -840,6 +840,8 @@ static void __exit dryice_rtc_remove(struct platform_device *pdev)
 	writel(0, imxdi->ioaddr + DIER);
 
 	clk_disable_unprepare(imxdi->clk);
+
+	return 0;
 }
 
 static const struct of_device_id dryice_dt_ids[] = {
@@ -849,18 +851,12 @@ static const struct of_device_id dryice_dt_ids[] = {
 
 MODULE_DEVICE_TABLE(of, dryice_dt_ids);
 
-/*
- * dryice_rtc_remove() lives in .exit.text. For drivers registered via
- * module_platform_driver_probe() this is ok because they cannot get unbound at
- * runtime. So mark the driver struct with __refdata to prevent modpost
- * triggering a section mismatch warning.
- */
-static struct platform_driver dryice_rtc_driver __refdata = {
+static struct platform_driver dryice_rtc_driver = {
 	.driver = {
 		   .name = "imxdi_rtc",
 		   .of_match_table = dryice_dt_ids,
 		   },
-	.remove_new = __exit_p(dryice_rtc_remove),
+	.remove = __exit_p(dryice_rtc_remove),
 };
 
 module_platform_driver_probe(dryice_rtc_driver, dryice_rtc_probe);

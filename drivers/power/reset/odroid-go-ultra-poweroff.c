@@ -4,8 +4,7 @@
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/mfd/rk808.h>
 #include <linux/regmap.h>
 #include <linux/module.h>

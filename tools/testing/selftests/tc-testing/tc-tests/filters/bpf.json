@@ -51,10 +51,7 @@
             "bpf-filter"
         ],
         "plugins": {
-            "requires": [
-               "buildebpfPlugin",
-               "nsPlugin"
-            ]
+            "requires": "buildebpfPlugin"
         },
         "setup": [
             "$TC qdisc add dev $DEV1 ingress"
@@ -76,10 +73,7 @@
             "bpf-filter"
         ],
         "plugins": {
-            "requires": [
-               "buildebpfPlugin",
-               "nsPlugin"
-            ]
+            "requires": "buildebpfPlugin"
         },
         "setup": [
             "$TC qdisc add dev $DEV1 ingress"

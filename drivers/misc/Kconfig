@@ -166,7 +166,7 @@ config ENCLOSURE_SERVICES
 config SGI_XP
 	tristate "Support communication between SGI SSIs"
 	depends on NET
-	depends on X86_UV && SMP
+	depends on (IA64_SGI_UV || X86_UV) && SMP
 	depends on X86_64 || BROKEN
 	select SGI_GRU if X86_64 && SMP
 	help
@@ -496,7 +496,6 @@ config HISI_HIKEY_USB
 config OPEN_DICE
 	tristate "Open Profile for DICE driver"
 	depends on OF_RESERVED_MEM
-	depends on HAS_IOMEM
 	help
 	  This driver exposes a DICE reserved memory region to userspace via
 	  a character device. The memory region contains Compound Device

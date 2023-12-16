@@ -367,7 +367,9 @@ geth_bind(struct usb_configuration *c, struct usb_function *f)
 	 * until we're activated via set_alt().
 	 */
 
-	DBG(cdev, "CDC Subset: IN/%s OUT/%s\n",
+	DBG(cdev, "CDC Subset: %s speed IN/%s OUT/%s\n",
+			gadget_is_superspeed(c->cdev->gadget) ? "super" :
+			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
 			geth->port.in_ep->name, geth->port.out_ep->name);
 	return 0;
 

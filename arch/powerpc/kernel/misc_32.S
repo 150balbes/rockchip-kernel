@@ -8,7 +8,6 @@
  *
  */
 
-#include <linux/export.h>
 #include <linux/sys.h>
 #include <asm/unistd.h>
 #include <asm/errno.h>
@@ -23,6 +22,7 @@
 #include <asm/processor.h>
 #include <asm/bug.h>
 #include <asm/ptrace.h>
+#include <asm/export.h>
 #include <asm/feature-fixups.h>
 
 	.text

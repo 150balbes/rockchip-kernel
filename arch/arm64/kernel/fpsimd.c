@@ -589,6 +589,7 @@ static struct ctl_table sve_default_vl_table[] = {
 		.proc_handler	= vec_proc_do_default_vl,
 		.extra1		= &vl_info[ARM64_VEC_SVE],
 	},
+	{ }
 };
 
 static int __init sve_sysctl_init(void)
@@ -612,6 +613,7 @@ static struct ctl_table sme_default_vl_table[] = {
 		.proc_handler	= vec_proc_do_default_vl,
 		.extra1		= &vl_info[ARM64_VEC_SME],
 	},
+	{ }
 };
 
 static int __init sme_sysctl_init(void)
@@ -677,7 +679,7 @@ static void fpsimd_to_sve(struct task_struct *task)
 	void *sst = task->thread.sve_state;
 	struct user_fpsimd_state const *fst = &task->thread.uw.fpsimd_state;
 
-	if (!system_supports_sve() && !system_supports_sme())
+	if (!system_supports_sve())
 		return;
 
 	vq = sve_vq_from_vl(thread_get_cur_vl(&task->thread));
@@ -703,7 +705,7 @@ static void sve_to_fpsimd(struct task_struct *task)
 	unsigned int i;
 	__uint128_t const *p;
 
-	if (!system_supports_sve() && !system_supports_sme())
+	if (!system_supports_sve())
 		return;
 
 	vl = thread_get_cur_vl(&task->thread);
@@ -833,8 +835,7 @@ void sve_sync_from_fpsimd_zeropad(struct task_struct *task)
 	void *sst = task->thread.sve_state;
 	struct user_fpsimd_state const *fst = &task->thread.uw.fpsimd_state;
 
-	if (!test_tsk_thread_flag(task, TIF_SVE) &&
-	    !thread_sm_enabled(&task->thread))
+	if (!test_tsk_thread_flag(task, TIF_SVE))
 		return;
 
 	vq = sve_vq_from_vl(thread_get_cur_vl(&task->thread));
@@ -846,8 +847,6 @@ void sve_sync_from_fpsimd_zeropad(struct task_struct *task)
 int vec_set_vector_length(struct task_struct *task, enum vec_type type,
 			  unsigned long vl, unsigned long flags)
 {
-	bool free_sme = false;
-
 	if (flags & ~(unsigned long)(PR_SVE_VL_INHERIT |
 				     PR_SVE_SET_VL_ONEXEC))
 		return -EINVAL;
@@ -898,39 +897,24 @@ int vec_set_vector_length(struct task_struct *task, enum vec_type type,
 		task->thread.fp_type = FP_STATE_FPSIMD;
 	}
 
-	if (system_supports_sme()) {
-		if (type == ARM64_VEC_SME ||
-		    !(task->thread.svcr & (SVCR_SM_MASK | SVCR_ZA_MASK))) {
-			/*
-			 * We are changing the SME VL or weren't using
-			 * SME anyway, discard the state and force a
-			 * reallocation.
-			 */
-			task->thread.svcr &= ~(SVCR_SM_MASK |
-					       SVCR_ZA_MASK);
-			clear_tsk_thread_flag(task, TIF_SME);
-			free_sme = true;
-		}
+	if (system_supports_sme() && type == ARM64_VEC_SME) {
+		task->thread.svcr &= ~(SVCR_SM_MASK |
+				       SVCR_ZA_MASK);
+		clear_thread_flag(TIF_SME);
 	}
 
 	if (task == current)
 		put_cpu_fpsimd_context();
 
-	task_set_vl(task, type, vl);
-
 	/*
-	 * Free the changed states if they are not in use, SME will be
-	 * reallocated to the correct size on next use and we just
-	 * allocate SVE now in case it is needed for use in streaming
-	 * mode.
+	 * Force reallocation of task SVE and SME state to the correct
+	 * size on next use:
 	 */
-	if (system_supports_sve()) {
-		sve_free(task);
-		sve_alloc(task, true);
-	}
-
-	if (free_sme)
+	sve_free(task);
+	if (system_supports_sme() && type == ARM64_VEC_SME)
 		sme_free(task);
+
+	task_set_vl(task, type, vl);
 
 out:
 	update_tsk_thread_flag(task, vec_vl_inherit_flag(type),
@@ -1158,20 +1142,51 @@ fail:
 	panic("Cannot allocate percpu memory for EFI SVE save/restore");
 }
 
-void cpu_enable_sve(const struct arm64_cpu_capabilities *__always_unused p)
+/*
+ * Enable SVE for EL1.
+ * Intended for use by the cpufeatures code during CPU boot.
+ */
+void sve_kernel_enable(const struct arm64_cpu_capabilities *__always_unused p)
 {
 	write_sysreg(read_sysreg(CPACR_EL1) | CPACR_EL1_ZEN_EL1EN, CPACR_EL1);
 	isb();
 }
 
+/*
+ * Read the pseudo-ZCR used by cpufeatures to identify the supported SVE
+ * vector length.
+ *
+ * Use only if SVE is present.
+ * This function clobbers the SVE vector length.
+ */
+u64 read_zcr_features(void)
+{
+	u64 zcr;
+	unsigned int vq_max;
+
+	/*
+	 * Set the maximum possible VL, and write zeroes to all other
+	 * bits to see if they stick.
+	 */
+	sve_kernel_enable(NULL);
+	write_sysreg_s(ZCR_ELx_LEN_MASK, SYS_ZCR_EL1);
+
+	zcr = read_sysreg_s(SYS_ZCR_EL1);
+	zcr &= ~(u64)ZCR_ELx_LEN_MASK; /* find sticky 1s outside LEN field */
+	vq_max = sve_vq_from_vl(sve_get_vl());
+	zcr |= vq_max - 1; /* set LEN field to maximum effective value */
+
+	return zcr;
+}
+
 void __init sve_setup(void)
 {
 	struct vl_info *info = &vl_info[ARM64_VEC_SVE];
+	u64 zcr;
 	DECLARE_BITMAP(tmp_map, SVE_VQ_MAX);
 	unsigned long b;
-	int max_bit;
 
-	if (!cpus_have_cap(ARM64_SVE))
+	if (!system_supports_sve())
 		return;
 
 	/*
@@ -1182,8 +1197,17 @@ void __init sve_setup(void)
 	if (WARN_ON(!test_bit(__vq_to_bit(SVE_VQ_MIN), info->vq_map)))
 		set_bit(__vq_to_bit(SVE_VQ_MIN), info->vq_map);
 
-	max_bit = find_first_bit(info->vq_map, SVE_VQ_MAX);
-	info->max_vl = sve_vl_from_vq(__bit_to_vq(max_bit));
+	zcr = read_sanitised_ftr_reg(SYS_ZCR_EL1);
+	info->max_vl = sve_vl_from_vq((zcr & ZCR_ELx_LEN_MASK) + 1);
+
+	/*
+	 * Sanity-check that the max VL we determined through CPU features
+	 * corresponds properly to sve_vq_map.  If not, do our best:
+	 */
+	if (WARN_ON(info->max_vl != find_supported_vector_length(ARM64_VEC_SVE,
+								 info->max_vl)))
+		info->max_vl = find_supported_vector_length(ARM64_VEC_SVE,
+							    info->max_vl);
 
 	/*
 	 * For the default VL, pick the maximum supported value <= 64.
@@ -1243,9 +1267,9 @@ void fpsimd_release_task(struct task_struct *dead_task)
  * the interest of testability and predictability, the architecture
  * guarantees that when ZA is enabled it will be zeroed.
  */
-void sme_alloc(struct task_struct *task, bool flush)
+void sme_alloc(struct task_struct *task)
 {
-	if (task->thread.sme_state && flush) {
+	if (task->thread.sme_state) {
 		memset(task->thread.sme_state, 0, sme_state_size(task));
 		return;
 	}
@@ -1261,7 +1285,7 @@ static void sme_free(struct task_struct *task)
 	task->thread.sme_state = NULL;
 }
 
-void cpu_enable_sme(const struct arm64_cpu_capabilities *__always_unused p)
+void sme_kernel_enable(const struct arm64_cpu_capabilities *__always_unused p)
 {
 	/* Set priority for all PEs to architecturally defined minimum */
 	write_sysreg_s(read_sysreg_s(SYS_SMPRI_EL1) & ~SMPRI_EL1_PRIORITY_MASK,
@@ -1276,48 +1300,87 @@ void cpu_enable_sme(const struct arm64_cpu_capabilities *__always_unused p)
 	isb();
 }
 
-void cpu_enable_sme2(const struct arm64_cpu_capabilities *__always_unused p)
+/*
+ * This must be called after sme_kernel_enable(), we rely on the
+ * feature table being sorted to ensure this.
+ */
+void sme2_kernel_enable(const struct arm64_cpu_capabilities *__always_unused p)
 {
-	/* This must be enabled after SME */
-	BUILD_BUG_ON(ARM64_SME2 <= ARM64_SME);
-
 	/* Allow use of ZT0 */
 	write_sysreg_s(read_sysreg_s(SYS_SMCR_EL1) | SMCR_ELx_EZT0_MASK,
 		       SYS_SMCR_EL1);
 }
 
-void cpu_enable_fa64(const struct arm64_cpu_capabilities *__always_unused p)
+/*
+ * This must be called after sme_kernel_enable(), we rely on the
+ * feature table being sorted to ensure this.
+ */
+void fa64_kernel_enable(const struct arm64_cpu_capabilities *__always_unused p)
 {
-	/* This must be enabled after SME */
-	BUILD_BUG_ON(ARM64_SME_FA64 <= ARM64_SME);
-
 	/* Allow use of FA64 */
 	write_sysreg_s(read_sysreg_s(SYS_SMCR_EL1) | SMCR_ELx_FA64_MASK,
 		       SYS_SMCR_EL1);
 }
 
+/*
+ * Read the pseudo-SMCR used by cpufeatures to identify the supported
+ * vector length.
+ *
+ * Use only if SME is present.
+ * This function clobbers the SME vector length.
+ */
+u64 read_smcr_features(void)
+{
+	u64 smcr;
+	unsigned int vq_max;
+
+	sme_kernel_enable(NULL);
+
+	/*
+	 * Set the maximum possible VL.
+	 */
+	write_sysreg_s(read_sysreg_s(SYS_SMCR_EL1) | SMCR_ELx_LEN_MASK,
+		       SYS_SMCR_EL1);
+
+	smcr = read_sysreg_s(SYS_SMCR_EL1);
+	smcr &= ~(u64)SMCR_ELx_LEN_MASK; /* Only the LEN field */
+	vq_max = sve_vq_from_vl(sme_get_vl());
+	smcr |= vq_max - 1; /* set LEN field to maximum effective value */
+
+	return smcr;
+}
+
 void __init sme_setup(void)
 {
 	struct vl_info *info = &vl_info[ARM64_VEC_SME];
-	int min_bit, max_bit;
+	u64 smcr;
+	int min_bit;
 
-	if (!cpus_have_cap(ARM64_SME))
+	if (!system_supports_sme())
 		return;
 
 	/*
 	 * SME doesn't require any particular vector length be
 	 * supported but it does require at least one.  We should have
 	 * disabled the feature entirely while bringing up CPUs but
-	 * let's double check here.  The bitmap is SVE_VQ_MAP sized for
-	 * sharing with SVE.
+	 * let's double check here.
 	 */
 	WARN_ON(bitmap_empty(info->vq_map, SVE_VQ_MAX));
 
 	min_bit = find_last_bit(info->vq_map, SVE_VQ_MAX);
 	info->min_vl = sve_vl_from_vq(__bit_to_vq(min_bit));
 
-	max_bit = find_first_bit(info->vq_map, SVE_VQ_MAX);
-	info->max_vl = sve_vl_from_vq(__bit_to_vq(max_bit));
+	smcr = read_sanitised_ftr_reg(SYS_SMCR_EL1);
+	info->max_vl = sve_vl_from_vq((smcr & SMCR_ELx_LEN_MASK) + 1);
+
+	/*
+	 * Sanity-check that the max VL we determined through CPU features
+	 * corresponds properly to sme_vq_map.  If not, do our best:
+	 */
+	if (WARN_ON(info->max_vl != find_supported_vector_length(ARM64_VEC_SME,
+								 info->max_vl)))
+		info->max_vl = find_supported_vector_length(ARM64_VEC_SME,
+							    info->max_vl);
 
 	WARN_ON(info->min_vl > info->max_vl);
 
@@ -1434,7 +1497,7 @@ void do_sme_acc(unsigned long esr, struct pt_regs *regs)
 	}
 
 	sve_alloc(current, false);
-	sme_alloc(current, true);
+	sme_alloc(current);
 	if (!current->thread.sve_state || !current->thread.sme_state) {
 		force_sig(SIGKILL);
 		return;
@@ -1462,17 +1525,8 @@ void do_sme_acc(unsigned long esr, struct pt_regs *regs)
  */
 void do_fpsimd_acc(unsigned long esr, struct pt_regs *regs)
 {
-	/* Even if we chose not to use FPSIMD, the hardware could still trap: */
-	if (!system_supports_fpsimd()) {
-		force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
-		return;
-	}
-
-	/*
-	 * When FPSIMD is enabled, we should never take a trap unless something
-	 * has gone very wrong.
-	 */
-	BUG();
+	/* TODO: implement lazy context saving/restoring */
+	WARN_ON(1);
 }
 
 /*
@@ -1595,6 +1649,7 @@ void fpsimd_flush_thread(void)
 
 		fpsimd_flush_thread_vl(ARM64_VEC_SME);
 		current->thread.svcr = 0;
+		sme_smstop();
 	}
 
 	current->thread.fp_type = FP_STATE_FPSIMD;
@@ -1713,23 +1768,13 @@ void fpsimd_bind_state_to_cpu(struct cpu_fp_state *state)
 void fpsimd_restore_current_state(void)
 {
 	/*
-	 * TIF_FOREIGN_FPSTATE is set on the init task and copied by
-	 * arch_dup_task_struct() regardless of whether FP/SIMD is detected.
-	 * Thus user threads can have this set even when FP/SIMD hasn't been
-	 * detected.
-	 *
-	 * When FP/SIMD is detected, begin_new_exec() will set
-	 * TIF_FOREIGN_FPSTATE via flush_thread() -> fpsimd_flush_thread(),
-	 * and fpsimd_thread_switch() will set TIF_FOREIGN_FPSTATE when
-	 * switching tasks. We detect FP/SIMD before we exec the first user
-	 * process, ensuring this has TIF_FOREIGN_FPSTATE set and
-	 * do_notify_resume() will call fpsimd_restore_current_state() to
-	 * install the user FP/SIMD context.
-	 *
-	 * When FP/SIMD is not detected, nothing else will clear or set
-	 * TIF_FOREIGN_FPSTATE prior to the first return to userspace, and
-	 * we must clear TIF_FOREIGN_FPSTATE to avoid do_notify_resume()
-	 * looping forever calling fpsimd_restore_current_state().
+	 * For the tasks that were created before we detected the absence of
+	 * FP/SIMD, the TIF_FOREIGN_FPSTATE could be set via fpsimd_thread_switch(),
+	 * e.g, init. This could be then inherited by the children processes.
+	 * If we later detect that the system doesn't support FP/SIMD,
+	 * we must clear the flag for  all the tasks to indicate that the
+	 * FPSTATE is clean (as we can't have one) to avoid looping for ever in
+	 * do_notify_resume().
 	 */
 	if (!system_supports_fpsimd()) {
 		clear_thread_flag(TIF_FOREIGN_FPSTATE);
@@ -2061,13 +2106,6 @@ static inline void fpsimd_hotplug_init(void)
 #else
 static inline void fpsimd_hotplug_init(void) { }
 #endif
-
-void cpu_enable_fpsimd(const struct arm64_cpu_capabilities *__always_unused p)
-{
-	unsigned long enable = CPACR_EL1_FPEN_EL1EN | CPACR_EL1_FPEN_EL0EN;
-	write_sysreg(read_sysreg(CPACR_EL1) | enable, CPACR_EL1);
-	isb();
-}
 
 /*
  * FP/SIMD support code initialisation.

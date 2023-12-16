@@ -11,10 +11,6 @@ struct nvkm_bar {
 	spinlock_t lock;
 	bool bar2;
 
-	void __iomem *flushBAR2PhysMode;
-	struct nvkm_memory *flushFBZero;
-	void __iomem *flushBAR2;
-
 	/* whether the BAR supports to be ioremapped WC or should be uncached */
 	bool iomap_uncached;
 };

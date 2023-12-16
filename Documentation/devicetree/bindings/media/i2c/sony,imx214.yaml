@@ -91,7 +91,7 @@ required:
   - vddd-supply
   - port
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

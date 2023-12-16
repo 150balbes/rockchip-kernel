@@ -24,8 +24,6 @@ properties:
   linux,keycodes:
     maxItems: 1
 
-  wakeup-source: true
-
 required:
   - compatible
   - linux,keycodes

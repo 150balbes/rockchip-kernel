@@ -24,8 +24,6 @@
  */
 #include "priv.h"
 
-#include <subdev/gsp.h>
-
 static void
 gf100_bus_intr(struct nvkm_bus *bus)
 {
@@ -74,8 +72,5 @@ int
 gf100_bus_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	      struct nvkm_bus **pbus)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return -ENODEV;
-
 	return nvkm_bus_new_(&gf100_bus, device, type, inst, pbus);
 }

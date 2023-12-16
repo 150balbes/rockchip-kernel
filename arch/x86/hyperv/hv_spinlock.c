@@ -20,7 +20,7 @@ static bool __initdata hv_pvspin = true;
 
 static void hv_qlock_kick(int cpu)
 {
-	__apic_send_IPI(cpu, X86_PLATFORM_IPI_VECTOR);
+	apic->send_IPI(cpu, X86_PLATFORM_IPI_VECTOR);
 }
 
 static void hv_qlock_wait(u8 *byte, u8 val)

@@ -236,6 +236,7 @@ static struct ctl_table mac_hid_files[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+	{ }
 };
 
 static struct ctl_table_header *mac_hid_sysctl_header;

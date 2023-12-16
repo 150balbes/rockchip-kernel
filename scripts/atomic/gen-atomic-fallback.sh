@@ -102,7 +102,7 @@ gen_proto_order_variant()
 	fi
 
 	# Allow ACQUIRE/RELEASE/RELAXED ops to be defined in terms of FULL ops
-	if [ ! -z "${order}" ] && ! meta_is_implicitly_relaxed "${meta}"; then
+	if [ ! -z "${order}" ]; then
 		printf "#elif defined(arch_${basename})\n"
 		printf "\t${retstmt}arch_${basename}(${args});\n"
 	fi
@@ -223,15 +223,14 @@ gen_xchg_fallbacks()
 
 gen_try_cmpxchg_fallback()
 {
-	local prefix="$1"; shift
 	local cmpxchg="$1"; shift;
-	local suffix="$1"; shift;
+	local order="$1"; shift;
 
 cat <<EOF
-#define raw_${prefix}try_${cmpxchg}${suffix}(_ptr, _oldp, _new) \\
+#define raw_try_${cmpxchg}${order}(_ptr, _oldp, _new) \\
 ({ \\
 	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \\
-	___r = raw_${prefix}${cmpxchg}${suffix}((_ptr), ___o, (_new)); \\
+	___r = raw_${cmpxchg}${order}((_ptr), ___o, (_new)); \\
 	if (unlikely(___r != ___o)) \\
 		*___op = ___r; \\
 	likely(___r == ___o); \\
@@ -260,11 +259,11 @@ gen_try_cmpxchg_order_fallback()
 	fi
 
 	printf "#else\n"
-	gen_try_cmpxchg_fallback "" "${cmpxchg}" "${order}"
+	gen_try_cmpxchg_fallback "${cmpxchg}" "${order}"
 	printf "#endif\n\n"
 }
 
-gen_try_cmpxchg_order_fallbacks()
+gen_try_cmpxchg_fallbacks()
 {
 	local cmpxchg="$1"; shift;
 
@@ -273,17 +272,15 @@ gen_try_cmpxchg_order_fallbacks()
 	done
 }
 
-gen_def_and_try_cmpxchg_fallback()
+gen_cmpxchg_local_fallbacks()
 {
-	local prefix="$1"; shift
 	local cmpxchg="$1"; shift
-	local suffix="$1"; shift
 
-	printf "#define raw_${prefix}${cmpxchg}${suffix} arch_${prefix}${cmpxchg}${suffix}\n\n"
-	printf "#ifdef arch_${prefix}try_${cmpxchg}${suffix}\n"
-	printf "#define raw_${prefix}try_${cmpxchg}${suffix} arch_${prefix}try_${cmpxchg}${suffix}\n"
+	printf "#define raw_${cmpxchg} arch_${cmpxchg}\n\n"
+	printf "#ifdef arch_try_${cmpxchg}\n"
+	printf "#define raw_try_${cmpxchg} arch_try_${cmpxchg}\n"
 	printf "#else\n"
-	gen_try_cmpxchg_fallback "${prefix}" "${cmpxchg}" "${suffix}"
+	gen_try_cmpxchg_fallback "${cmpxchg}" ""
 	printf "#endif\n\n"
 }
 
@@ -305,15 +302,15 @@ for xchg in "xchg" "cmpxchg" "cmpxchg64" "cmpxchg128"; do
 done
 
 for cmpxchg in "cmpxchg" "cmpxchg64" "cmpxchg128"; do
-	gen_try_cmpxchg_order_fallbacks "${cmpxchg}"
+	gen_try_cmpxchg_fallbacks "${cmpxchg}"
 done
 
-for cmpxchg in "cmpxchg" "cmpxchg64" "cmpxchg128"; do
-	gen_def_and_try_cmpxchg_fallback "" "${cmpxchg}" "_local"
+for cmpxchg in "cmpxchg_local" "cmpxchg64_local" "cmpxchg128_local"; do
+	gen_cmpxchg_local_fallbacks "${cmpxchg}" ""
 done
 
-for cmpxchg in "cmpxchg"; do
-	gen_def_and_try_cmpxchg_fallback "sync_" "${cmpxchg}" ""
+for cmpxchg in "sync_cmpxchg"; do
+	printf "#define raw_${cmpxchg} arch_${cmpxchg}\n\n"
 done
 
 grep '^[a-z]' "$1" | while read name meta args; do

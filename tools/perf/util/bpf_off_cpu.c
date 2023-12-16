@@ -98,31 +98,28 @@ static void off_cpu_finish(void *arg __maybe_unused)
 /* v5.18 kernel added prev_state arg, so it needs to check the signature */
 static void check_sched_switch_args(void)
 {
-	struct btf *btf = btf__load_vmlinux_btf();
+	const struct btf *btf = bpf_object__btf(skel->obj);
 	const struct btf_type *t1, *t2, *t3;
 	u32 type_id;
 
 	type_id = btf__find_by_name_kind(btf, "btf_trace_sched_switch",
 					 BTF_KIND_TYPEDEF);
 	if ((s32)type_id < 0)
-		goto cleanup;
+		return;
 
 	t1 = btf__type_by_id(btf, type_id);
 	if (t1 == NULL)
-		goto cleanup;
+		return;
 
 	t2 = btf__type_by_id(btf, t1->type);
 	if (t2 == NULL || !btf_is_ptr(t2))
-		goto cleanup;
+		return;
 
 	t3 = btf__type_by_id(btf, t2->type);
-	/* btf_trace func proto has one more argument for the context */
-	if (t3 && btf_is_func_proto(t3) && btf_vlen(t3) == 5) {
+	if (t3 && btf_is_func_proto(t3) && btf_vlen(t3) == 4) {
 		/* new format: pass prev_state as 4th arg */
 		skel->rodata->has_prev_state = true;
 	}
-cleanup:
-	btf__free(btf);
 }
 
 int off_cpu_prepare(struct evlist *evlist, struct target *target,

@@ -74,7 +74,6 @@ static bool cs35l41_readable_reg(struct device *dev, unsigned int reg)
 	case CS35L41_FABID:
 	case CS35L41_RELID:
 	case CS35L41_OTPID:
-	case CS35L41_SFT_RESET:
 	case CS35L41_TEST_KEY_CTL:
 	case CS35L41_USER_KEY_CTL:
 	case CS35L41_OTP_CTRL0:
@@ -744,7 +743,7 @@ struct regmap_config cs35l41_regmap_i2c = {
 	.volatile_reg = cs35l41_volatile_reg,
 	.readable_reg = cs35l41_readable_reg,
 	.precious_reg = cs35l41_precious_reg,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 EXPORT_SYMBOL_GPL(cs35l41_regmap_i2c);
 
@@ -761,7 +760,7 @@ struct regmap_config cs35l41_regmap_spi = {
 	.volatile_reg = cs35l41_volatile_reg,
 	.readable_reg = cs35l41_readable_reg,
 	.precious_reg = cs35l41_precious_reg,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 EXPORT_SYMBOL_GPL(cs35l41_regmap_spi);
 
@@ -1081,32 +1080,28 @@ static const struct reg_sequence cs35l41_safe_to_reset[] = {
 	{ 0x00000040,			0x00000033 },
 };
 
-static const struct reg_sequence cs35l41_active_to_safe_start[] = {
+static const struct reg_sequence cs35l41_active_to_safe[] = {
 	{ 0x00000040,			0x00000055 },
 	{ 0x00000040,			0x000000AA },
 	{ 0x00007438,			0x00585941 },
 	{ CS35L41_PWR_CTRL1,		0x00000000 },
-	{ 0x0000742C,			0x00000009 },
-};
-
-static const struct reg_sequence cs35l41_active_to_safe_end[] = {
+	{ 0x0000742C,			0x00000009, 3000 },
 	{ 0x00007438,			0x00580941 },
 	{ 0x00000040,			0x000000CC },
 	{ 0x00000040,			0x00000033 },
 };
 
-static const struct reg_sequence cs35l41_safe_to_active_start[] = {
+static const struct reg_sequence cs35l41_safe_to_active[] = {
 	{ 0x00000040,			0x00000055 },
 	{ 0x00000040,			0x000000AA },
 	{ 0x0000742C,			0x0000000F },
 	{ 0x0000742C,			0x00000079 },
 	{ 0x00007438,			0x00585941 },
-	{ CS35L41_PWR_CTRL1,		0x00000001 }, // GLOBAL_EN = 1
-};
-
-static const struct reg_sequence cs35l41_safe_to_active_en_spk[] = {
+	{ CS35L41_PWR_CTRL1,		0x00000001, 3000 }, // GLOBAL_EN = 1
 	{ 0x0000742C,			0x000000F9 },
 	{ 0x00007438,			0x00580941 },
+	{ 0x00000040,			0x000000CC },
+	{ 0x00000040,			0x00000033 },
 };
 
 static const struct reg_sequence cs35l41_reset_to_safe[] = {
@@ -1193,51 +1188,21 @@ bool cs35l41_safe_reset(struct regmap *regmap, enum cs35l41_boost_type b_type)
 }
 EXPORT_SYMBOL_GPL(cs35l41_safe_reset);
 
-/*
- * Enabling the CS35L41_SHD_BOOST_ACTV and CS35L41_SHD_BOOST_PASS shared boosts
- * does also require a call to cs35l41_mdsync_up(), but not before getting the
- * PLL Lock signal.
- *
- * PLL Lock seems to be triggered soon after snd_pcm_start() is executed and
- * SNDRV_PCM_TRIGGER_START command is processed, which happens (long) after the
- * SND_SOC_DAPM_PRE_PMU event handler is invoked as part of snd_pcm_prepare().
- *
- * This event handler is where cs35l41_global_enable() is normally called from,
- * but waiting for PLL Lock here will time out. Increasing the wait duration
- * will not help, as the only consequence of it would be to add an unnecessary
- * delay in the invocation of snd_pcm_start().
- *
- * Trying to move the wait in the SNDRV_PCM_TRIGGER_START callback is not a
- * solution either, as the trigger is executed in an IRQ-off atomic context.
- *
- * The current approach is to invoke cs35l41_mdsync_up() right after receiving
- * the PLL Lock interrupt, in the IRQ handler.
- */
-int cs35l41_global_enable(struct device *dev, struct regmap *regmap, enum cs35l41_boost_type b_type,
-			  int enable, bool firmware_running)
+int cs35l41_global_enable(struct regmap *regmap, enum cs35l41_boost_type b_type, int enable,
+			  struct completion *pll_lock)
 {
 	int ret;
-	unsigned int gpio1_func, pad_control, pwr_ctrl1, pwr_ctrl3, int_status, pup_pdn_mask;
-	unsigned int pwr_ctl1_val;
+	unsigned int gpio1_func, pad_control, pwr_ctrl1, pwr_ctrl3;
 	struct reg_sequence cs35l41_mdsync_down_seq[] = {
 		{CS35L41_PWR_CTRL3,		0},
 		{CS35L41_GPIO_PAD_CONTROL,	0},
 		{CS35L41_PWR_CTRL1,		0, 3000},
 	};
-
-	pup_pdn_mask = enable ? CS35L41_PUP_DONE_MASK : CS35L41_PDN_DONE_MASK;
-
-	ret = regmap_read(regmap, CS35L41_PWR_CTRL1, &pwr_ctl1_val);
-	if (ret)
-		return ret;
-
-	if ((pwr_ctl1_val & CS35L41_GLOBAL_EN_MASK) && enable) {
-		dev_dbg(dev, "Cannot set Global Enable - already set.\n");
-		return 0;
-	} else if (!(pwr_ctl1_val & CS35L41_GLOBAL_EN_MASK) && !enable) {
-		dev_dbg(dev, "Cannot unset Global Enable - not set.\n");
-		return 0;
-	}
+	struct reg_sequence cs35l41_mdsync_up_seq[] = {
+		{CS35L41_PWR_CTRL3,	0},
+		{CS35L41_PWR_CTRL1,	0x00000000, 3000},
+		{CS35L41_PWR_CTRL1,	0x00000001, 3000},
+	};
 
 	switch (b_type) {
 	case CS35L41_SHD_BOOST_ACTV:
@@ -1257,91 +1222,38 @@ int cs35l41_global_enable(struct device *dev, struct regmap *regmap, enum cs35l4
 		cs35l41_mdsync_down_seq[0].def = pwr_ctrl3;
 		cs35l41_mdsync_down_seq[1].def = pad_control;
 		cs35l41_mdsync_down_seq[2].def = pwr_ctrl1;
-
 		ret = regmap_multi_reg_write(regmap, cs35l41_mdsync_down_seq,
 					     ARRAY_SIZE(cs35l41_mdsync_down_seq));
-		/* Activation to be completed later via cs35l41_mdsync_up() */
-		if (ret || enable)
-			return ret;
+		if (!enable)
+			break;
 
-		ret = regmap_read_poll_timeout(regmap, CS35L41_IRQ1_STATUS1,
-					int_status, int_status & pup_pdn_mask,
-					1000, 100000);
-		if (ret)
-			dev_err(dev, "Enable(%d) failed: %d\n", enable, ret);
+		if (!pll_lock)
+			return -EINVAL;
 
-		/* Clear PUP/PDN status */
-		regmap_write(regmap, CS35L41_IRQ1_STATUS1, pup_pdn_mask);
+		ret = wait_for_completion_timeout(pll_lock, msecs_to_jiffies(1000));
+		if (ret == 0) {
+			ret = -ETIMEDOUT;
+		} else {
+			regmap_read(regmap, CS35L41_PWR_CTRL3, &pwr_ctrl3);
+			pwr_ctrl3 |= CS35L41_SYNC_EN_MASK;
+			cs35l41_mdsync_up_seq[0].def = pwr_ctrl3;
+			ret = regmap_multi_reg_write(regmap, cs35l41_mdsync_up_seq,
+						     ARRAY_SIZE(cs35l41_mdsync_up_seq));
+		}
 		break;
 	case CS35L41_INT_BOOST:
 		ret = regmap_update_bits(regmap, CS35L41_PWR_CTRL1, CS35L41_GLOBAL_EN_MASK,
 					 enable << CS35L41_GLOBAL_EN_SHIFT);
-		if (ret) {
-			dev_err(dev, "CS35L41_PWR_CTRL1 set failed: %d\n", ret);
-			return ret;
-		}
-
-		ret = regmap_read_poll_timeout(regmap, CS35L41_IRQ1_STATUS1,
-					int_status, int_status & pup_pdn_mask,
-					1000, 100000);
-		if (ret)
-			dev_err(dev, "Enable(%d) failed: %d\n", enable, ret);
-
-		/* Clear PUP/PDN status */
-		regmap_write(regmap, CS35L41_IRQ1_STATUS1, pup_pdn_mask);
+		usleep_range(3000, 3100);
 		break;
 	case CS35L41_EXT_BOOST:
 	case CS35L41_EXT_BOOST_NO_VSPK_SWITCH:
-		if (enable) {
-			/* Test Key is unlocked here */
-			ret = regmap_multi_reg_write(regmap, cs35l41_safe_to_active_start,
-						     ARRAY_SIZE(cs35l41_safe_to_active_start));
-			if (ret)
-				return ret;
-
-			ret = regmap_read_poll_timeout(regmap, CS35L41_IRQ1_STATUS1, int_status,
-				       int_status & CS35L41_PUP_DONE_MASK, 1000, 100000);
-			if (ret) {
-				dev_err(dev, "Failed waiting for CS35L41_PUP_DONE_MASK: %d\n", ret);
-				/* Lock the test key, it was unlocked during the multi_reg_write */
-				cs35l41_test_key_lock(dev, regmap);
-				return ret;
-			}
-			regmap_write(regmap, CS35L41_IRQ1_STATUS1, CS35L41_PUP_DONE_MASK);
-
-			if (firmware_running)
-				ret = cs35l41_set_cspl_mbox_cmd(dev, regmap,
-								CSPL_MBOX_CMD_SPK_OUT_ENABLE);
-			else
-				ret = regmap_multi_reg_write(regmap, cs35l41_safe_to_active_en_spk,
-							ARRAY_SIZE(cs35l41_safe_to_active_en_spk));
-
-			/* Lock the test key, it was unlocked during the multi_reg_write */
-			cs35l41_test_key_lock(dev, regmap);
-		} else {
-			/* Test Key is unlocked here */
-			ret = regmap_multi_reg_write(regmap, cs35l41_active_to_safe_start,
-						     ARRAY_SIZE(cs35l41_active_to_safe_start));
-			if (ret) {
-				/* Lock the test key, it was unlocked during the multi_reg_write */
-				cs35l41_test_key_lock(dev, regmap);
-				return ret;
-			}
-
-			ret = regmap_read_poll_timeout(regmap, CS35L41_IRQ1_STATUS1, int_status,
-				       int_status & CS35L41_PDN_DONE_MASK, 1000, 100000);
-			if (ret) {
-				dev_err(dev, "Failed waiting for CS35L41_PDN_DONE_MASK: %d\n", ret);
-				/* Lock the test key, it was unlocked during the multi_reg_write */
-				cs35l41_test_key_lock(dev, regmap);
-				return ret;
-			}
-			regmap_write(regmap, CS35L41_IRQ1_STATUS1, CS35L41_PDN_DONE_MASK);
-
-			/* Test Key is locked here */
-			ret = regmap_multi_reg_write(regmap, cs35l41_active_to_safe_end,
-						     ARRAY_SIZE(cs35l41_active_to_safe_end));
-		}
+		if (enable)
+			ret = regmap_multi_reg_write(regmap, cs35l41_safe_to_active,
+						     ARRAY_SIZE(cs35l41_safe_to_active));
+		else
+			ret = regmap_multi_reg_write(regmap, cs35l41_active_to_safe,
+						     ARRAY_SIZE(cs35l41_active_to_safe));
 		break;
 	default:
 		ret = -EINVAL;
@@ -1351,17 +1263,6 @@ int cs35l41_global_enable(struct device *dev, struct regmap *regmap, enum cs35l4
 	return ret;
 }
 EXPORT_SYMBOL_GPL(cs35l41_global_enable);
-
-/*
- * To be called after receiving the IRQ Lock interrupt, in order to complete
- * any shared boost activation initiated by cs35l41_global_enable().
- */
-int cs35l41_mdsync_up(struct regmap *regmap)
-{
-	return regmap_update_bits(regmap, CS35L41_PWR_CTRL3,
-				  CS35L41_SYNC_EN_MASK, CS35L41_SYNC_EN_MASK);
-}
-EXPORT_SYMBOL_GPL(cs35l41_mdsync_up);
 
 int cs35l41_gpio_config(struct regmap *regmap, struct cs35l41_hw_cfg *hw_cfg)
 {
@@ -1443,8 +1344,6 @@ static bool cs35l41_check_cspl_mbox_sts(enum cs35l41_cspl_mbox_cmd cmd,
 		return (sts == CSPL_MBOX_STS_RUNNING);
 	case CSPL_MBOX_CMD_STOP_PRE_REINIT:
 		return (sts == CSPL_MBOX_STS_RDY_FOR_REINIT);
-	case CSPL_MBOX_CMD_SPK_OUT_ENABLE:
-		return (sts == CSPL_MBOX_STS_RUNNING);
 	default:
 		return false;
 	}
@@ -1472,11 +1371,6 @@ int cs35l41_set_cspl_mbox_cmd(struct device *dev, struct regmap *regmap,
 		if (ret < 0) {
 			dev_err(dev, "Failed to read MBOX STS: %d\n", ret);
 			continue;
-		}
-
-		if (sts == CSPL_MBOX_STS_ERROR || sts == CSPL_MBOX_STS_ERROR2) {
-			dev_err(dev, "CSPL Error Detected\n");
-			return -EINVAL;
 		}
 
 		if (!cs35l41_check_cspl_mbox_sts(cmd, sts))

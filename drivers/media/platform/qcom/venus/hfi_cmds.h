@@ -242,7 +242,7 @@ struct hfi_session_parse_sequence_header_pkt {
 
 struct hfi_sfr {
 	u32 buf_size;
-	u8 data[] __counted_by(buf_size);
+	u8 data[1];
 };
 
 struct hfi_sys_test_ssr_pkt {

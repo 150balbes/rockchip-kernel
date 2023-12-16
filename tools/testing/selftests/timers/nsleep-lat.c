@@ -118,7 +118,7 @@ int nanosleep_lat_test(int clockid, long long ns)
 	clock_gettime(clockid, &end);
 
 	if (((timespec_sub(start, end)/count)-ns) > UNRESONABLE_LATENCY) {
-		ksft_print_msg("Large rel latency: %lld ns :", (timespec_sub(start, end)/count)-ns);
+		printf("Large rel latency: %lld ns :", (timespec_sub(start, end)/count)-ns);
 		return -1;
 	}
 
@@ -132,22 +132,19 @@ int nanosleep_lat_test(int clockid, long long ns)
 	}
 
 	if (latency/count > UNRESONABLE_LATENCY) {
-		ksft_print_msg("Large abs latency: %lld ns :", latency/count);
+		printf("Large abs latency: %lld ns :", latency/count);
 		return -1;
 	}
 
 	return 0;
 }
 
-#define SKIPPED_CLOCK_COUNT 3
+
 
 int main(int argc, char **argv)
 {
 	long long length;
 	int clockid, ret;
-
-	ksft_print_header();
-	ksft_set_plan(NR_CLOCKIDS - CLOCK_REALTIME - SKIPPED_CLOCK_COUNT);
 
 	for (clockid = CLOCK_REALTIME; clockid < NR_CLOCKIDS; clockid++) {
 
@@ -156,6 +153,9 @@ int main(int argc, char **argv)
 				clockid == CLOCK_THREAD_CPUTIME_ID ||
 				clockid == CLOCK_HWSPECIFIC)
 			continue;
+
+		printf("nsleep latency %-26s ", clockstring(clockid));
+		fflush(stdout);
 
 		length = 10;
 		while (length <= (NSEC_PER_SEC * 10)) {
@@ -167,12 +167,14 @@ int main(int argc, char **argv)
 		}
 
 		if (ret == UNSUPPORTED) {
-			ksft_test_result_skip("%s\n", clockstring(clockid));
-		} else {
-			ksft_test_result(ret >= 0, "%s\n",
-					 clockstring(clockid));
+			printf("[UNSUPPORTED]\n");
+			continue;
 		}
+		if (ret < 0) {
+			printf("[FAILED]\n");
+			return ksft_exit_fail();
+		}
+		printf("[OK]\n");
 	}
-
-	ksft_finished();
+	return ksft_exit_pass();
 }

@@ -131,11 +131,11 @@ static int smp_stop_nmi_callback(unsigned int val, struct pt_regs *regs)
 }
 
 /*
- * this function calls the 'stop' function on all other CPUs in the system.
+ * Disable virtualization, APIC etc. and park the CPU in a HLT loop
  */
 DEFINE_IDTENTRY_SYSVEC(sysvec_reboot)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	cpu_emergency_disable_virtualization();
 	stop_this_cpu(NULL);
 }
@@ -172,13 +172,17 @@ static void native_stop_other_cpus(int wait)
 	 * 2) Wait for all other CPUs to report that they reached the
 	 *    HLT loop in stop_this_cpu()
 	 *
-	 * 3) If #2 timed out send an NMI to the CPUs which did not
-	 *    yet report
+	 * 3) If the system uses INIT/STARTUP for CPU bringup, then
+	 *    send all present CPUs an INIT vector, which brings them
+	 *    completely out of the way.
 	 *
-	 * 4) Wait for all other CPUs to report that they reached the
+	 * 4) If #3 is not possible and #2 timed out send an NMI to the
+	 *    CPUs which did not yet report
+	 *
+	 * 5) Wait for all other CPUs to report that they reached the
 	 *    HLT loop in stop_this_cpu()
 	 *
-	 * #3 can obviously race against a CPU reaching the HLT loop late.
+	 * #4 can obviously race against a CPU reaching the HLT loop late.
 	 * That CPU will have reported already and the "have all CPUs
 	 * reached HLT" condition will be true despite the fact that the
 	 * other CPU is still handling the NMI. Again, there is no
@@ -194,7 +198,7 @@ static void native_stop_other_cpus(int wait)
 		/*
 		 * Don't wait longer than a second for IPI completion. The
 		 * wait request is not checked here because that would
-		 * prevent an NMI shutdown attempt in case that not all
+		 * prevent an NMI/INIT shutdown in case that not all
 		 * CPUs reach shutdown state.
 		 */
 		timeout = USEC_PER_SEC;
@@ -202,7 +206,27 @@ static void native_stop_other_cpus(int wait)
 			udelay(1);
 	}
 
-	/* if the REBOOT_VECTOR didn't work, try with the NMI */
+	/*
+	 * Park all other CPUs in INIT including "offline" CPUs, if
+	 * possible. That's a safe place where they can't resume execution
+	 * of HLT and then execute the HLT loop from overwritten text or
+	 * page tables.
+	 *
+	 * The only downside is a broadcast MCE, but up to the point where
+	 * the kexec() kernel brought all APs online again an MCE will just
+	 * make HLT resume and handle the MCE. The machine crashes and burns
+	 * due to overwritten text, page tables and data. So there is a
+	 * choice between fire and frying pan. The result is pretty much
+	 * the same. Chose frying pan until x86 provides a sane mechanism
+	 * to park a CPU.
+	 */
+	if (smp_park_other_cpus_in_init())
+		goto done;
+
+	/*
+	 * If park with INIT was not possible and the REBOOT_VECTOR didn't
+	 * take all secondary CPUs offline, try with the NMI.
+	 */
 	if (!cpumask_empty(&cpus_stop_mask)) {
 		/*
 		 * If NMI IPI is enabled, try to register the stop handler
@@ -213,7 +237,7 @@ static void native_stop_other_cpus(int wait)
 			pr_emerg("Shutting down cpus with NMI\n");
 
 			for_each_cpu(cpu, &cpus_stop_mask)
-				__apic_send_IPI(cpu, NMI_VECTOR);
+				apic->send_IPI(cpu, NMI_VECTOR);
 		}
 		/*
 		 * Don't wait longer than 10 ms if the caller didn't
@@ -225,6 +249,7 @@ static void native_stop_other_cpus(int wait)
 			udelay(1);
 	}
 
+done:
 	local_irq_save(flags);
 	disable_local_APIC();
 	mcheck_cpu_clear(this_cpu_ptr(&cpu_info));
@@ -243,7 +268,7 @@ static void native_stop_other_cpus(int wait)
  */
 DEFINE_IDTENTRY_SYSVEC_SIMPLE(sysvec_reschedule_ipi)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	trace_reschedule_entry(RESCHEDULE_VECTOR);
 	inc_irq_stat(irq_resched_count);
 	scheduler_ipi();
@@ -252,7 +277,7 @@ DEFINE_IDTENTRY_SYSVEC_SIMPLE(sysvec_reschedule_ipi)
 
 DEFINE_IDTENTRY_SYSVEC(sysvec_call_function)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	trace_call_function_entry(CALL_FUNCTION_VECTOR);
 	inc_irq_stat(irq_call_count);
 	generic_smp_call_function_interrupt();
@@ -261,7 +286,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_call_function)
 
 DEFINE_IDTENTRY_SYSVEC(sysvec_call_function_single)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	trace_call_function_single_entry(CALL_FUNCTION_SINGLE_VECTOR);
 	inc_irq_stat(irq_call_count);
 	generic_smp_call_function_single_interrupt();

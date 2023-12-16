@@ -1,6 +1,6 @@
 /*
 
-  fp_log.c: floating-point math routines for the Linux-m68k
+  fp_trig.c: floating-point math routines for the Linux-m68k
   floating point emulator.
 
   Copyright (c) 1998-1999 David Huggins-Daines / Roman Zippel.
@@ -15,15 +15,18 @@
 
 */
 
-#include "fp_arith.h"
 #include "fp_emu.h"
-#include "fp_log.h"
 
-static const struct fp_ext fp_one = {
+static const struct fp_ext fp_one =
+{
 	.exp = 0x3fff,
 };
 
-struct fp_ext *fp_fsqrt(struct fp_ext *dest, struct fp_ext *src)
+extern struct fp_ext *fp_fadd(struct fp_ext *dest, const struct fp_ext *src);
+extern struct fp_ext *fp_fdiv(struct fp_ext *dest, const struct fp_ext *src);
+
+struct fp_ext *
+fp_fsqrt(struct fp_ext *dest, struct fp_ext *src)
 {
 	struct fp_ext tmp, src2;
 	int i, exp;
@@ -67,8 +70,7 @@ struct fp_ext *fp_fsqrt(struct fp_ext *dest, struct fp_ext *src)
 	 *	sqrt(x) = 1 + 1/2*(x-1)
 	 *		= 1/2*(1+x)
 	 */
-	/* It is safe to cast away the constness, as fp_one is normalized */
-	fp_fadd(dest, (struct fp_ext *)&fp_one);
+	fp_fadd(dest, &fp_one);
 	dest->exp--;		/* * 1/2 */
 
 	/*
@@ -96,7 +98,8 @@ struct fp_ext *fp_fsqrt(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_fetoxm1(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_fetoxm1(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("fetoxm1\n");
 
@@ -105,7 +108,8 @@ struct fp_ext *fp_fetoxm1(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_fetox(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_fetox(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("fetox\n");
 
@@ -114,7 +118,8 @@ struct fp_ext *fp_fetox(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_ftwotox(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_ftwotox(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("ftwotox\n");
 
@@ -123,7 +128,8 @@ struct fp_ext *fp_ftwotox(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_ftentox(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_ftentox(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("ftentox\n");
 
@@ -132,7 +138,8 @@ struct fp_ext *fp_ftentox(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_flogn(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_flogn(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("flogn\n");
 
@@ -141,7 +148,8 @@ struct fp_ext *fp_flogn(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_flognp1(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_flognp1(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("flognp1\n");
 
@@ -150,7 +158,8 @@ struct fp_ext *fp_flognp1(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_flog10(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_flog10(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("flog10\n");
 
@@ -159,7 +168,8 @@ struct fp_ext *fp_flog10(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_flog2(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_flog2(struct fp_ext *dest, struct fp_ext *src)
 {
 	uprint("flog2\n");
 
@@ -168,7 +178,8 @@ struct fp_ext *fp_flog2(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_fgetexp(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_fgetexp(struct fp_ext *dest, struct fp_ext *src)
 {
 	dprint(PINSTR, "fgetexp\n");
 
@@ -188,7 +199,8 @@ struct fp_ext *fp_fgetexp(struct fp_ext *dest, struct fp_ext *src)
 	return dest;
 }
 
-struct fp_ext *fp_fgetman(struct fp_ext *dest, struct fp_ext *src)
+struct fp_ext *
+fp_fgetman(struct fp_ext *dest, struct fp_ext *src)
 {
 	dprint(PINSTR, "fgetman\n");
 

@@ -34,7 +34,6 @@
 
 #define SC_IRQ_WDOG			1
 #define SC_IRQ_GROUP_WDOG		1
-#define SC_TIMER_ERR_BUSY		10
 
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0000);
@@ -62,9 +61,7 @@ static int imx_sc_wdt_start(struct watchdog_device *wdog)
 
 	arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_START_WDOG,
 		      0, 0, 0, 0, 0, 0, &res);
-
-	/* Ignore if already enabled(SC_TIMER_ERR_BUSY) */
-	if (res.a0 && res.a0 != SC_TIMER_ERR_BUSY)
+	if (res.a0)
 		return -EACCES;
 
 	arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_SET_WDOG_ACT,

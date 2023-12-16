@@ -7,7 +7,7 @@
 #include "misc.h"
 #include "error.h"
 
-void warn(const char *m)
+void warn(char *m)
 {
 	error_putstr("\n\n");
 	error_putstr(m);

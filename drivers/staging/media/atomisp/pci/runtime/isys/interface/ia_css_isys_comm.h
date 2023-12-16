@@ -19,6 +19,7 @@
 #include <type_support.h>
 #include <input_system.h>
 
+#ifdef ISP2401
 #include <platform_support.h>		/* inline */
 #include <input_system_global.h>
 #include <ia_css_stream_public.h>	/* IA_CSS_STREAM_MAX_ISYS_STREAM_PER_CH */
@@ -49,4 +50,5 @@ static inline uint32_t ia_css_isys_generate_stream_id(
 	return sp_thread_id * IA_CSS_STREAM_MAX_ISYS_STREAM_PER_CH + stream_id;
 }
 
+#endif  /* ISP2401*/
 #endif  /*_IA_CSS_ISYS_COMM_H */

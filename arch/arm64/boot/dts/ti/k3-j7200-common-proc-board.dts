@@ -8,9 +8,8 @@
 #include "k3-j7200-som-p0.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/net/ti-dp83867.h>
+#include <dt-bindings/mux/ti-serdes.h>
 #include <dt-bindings/phy/phy.h>
-
-#include "k3-serdes.h"
 
 / {
 	compatible = "ti,j7200-evm", "ti,j7200";
@@ -240,14 +239,25 @@
 	pinctrl-0 = <&main_uart3_pins_default>;
 };
 
-&main_gpio0 {
-	status = "okay";
+&main_gpio2 {
+	status = "disabled";
+};
+
+&main_gpio4 {
+	status = "disabled";
+};
+
+&main_gpio6 {
+	status = "disabled";
 };
 
 &wkup_gpio0 {
-	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&wkup_gpio_pins_default>;
+};
+
+&wkup_gpio1 {
+	status = "disabled";
 };
 
 &mcu_cpsw {
@@ -315,7 +325,6 @@
 
 &main_sdhci0 {
 	/* eMMC */
-	status = "okay";
 	non-removable;
 	ti,driver-strength-ohm = <50>;
 	disable-wp;
@@ -323,7 +332,6 @@
 
 &main_sdhci1 {
 	/* SD card */
-	status = "okay";
 	pinctrl-0 = <&main_mmc1_pins_default>;
 	pinctrl-names = "default";
 	vmmc-supply = <&vdd_mmc1>;

@@ -499,9 +499,6 @@ void *uffd_poll_thread(void *arg)
 	int ret;
 	char tmp_chr;
 
-	if (!args->handle_fault)
-		args->handle_fault = uffd_handle_page_fault;
-
 	pollfd[0].fd = uffd;
 	pollfd[0].events = POLLIN;
 	pollfd[1].fd = pipefd[cpu*2];
@@ -530,7 +527,7 @@ void *uffd_poll_thread(void *arg)
 			err("unexpected msg event %u\n", msg.event);
 			break;
 		case UFFD_EVENT_PAGEFAULT:
-			args->handle_fault(&msg, args);
+			uffd_handle_page_fault(&msg, args);
 			break;
 		case UFFD_EVENT_FORK:
 			close(uffd);

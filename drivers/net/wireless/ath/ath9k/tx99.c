@@ -172,8 +172,9 @@ static ssize_t write_file_tx99(struct file *file, const char __user *user_buf,
 {
 	struct ath_softc *sc = file->private_data;
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
+	char buf[32];
 	bool start;
-	ssize_t ret;
+	ssize_t len;
 	int r;
 
 	if (count < 1)
@@ -182,9 +183,14 @@ static ssize_t write_file_tx99(struct file *file, const char __user *user_buf,
 	if (sc->cur_chan->nvifs > 1)
 		return -EOPNOTSUPP;
 
-	ret = kstrtobool_from_user(user_buf, count, &start);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+
+	if (kstrtobool(buf, &start))
+		return -EINVAL;
 
 	mutex_lock(&sc->mutex);
 

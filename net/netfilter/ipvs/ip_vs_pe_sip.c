@@ -185,4 +185,3 @@ static void __exit ip_vs_sip_cleanup(void)
 module_init(ip_vs_sip_init);
 module_exit(ip_vs_sip_cleanup);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ipvs sip helper");

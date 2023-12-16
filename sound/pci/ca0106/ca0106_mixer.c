@@ -706,9 +706,19 @@ static int remove_ctl(struct snd_card *card, const char *name)
 	return snd_ctl_remove_id(card, &id);
 }
 
+static struct snd_kcontrol *ctl_find(struct snd_card *card, const char *name)
+{
+	struct snd_ctl_elem_id sid;
+	memset(&sid, 0, sizeof(sid));
+	/* FIXME: strcpy is bad. */
+	strcpy(sid.name, name);
+	sid.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+	return snd_ctl_find_id(card, &sid);
+}
+
 static int rename_ctl(struct snd_card *card, const char *src, const char *dst)
 {
-	struct snd_kcontrol *kctl = snd_ctl_find_id_mixer(card, src);
+	struct snd_kcontrol *kctl = ctl_find(card, src);
 	if (kctl) {
 		snd_ctl_rename(card, kctl, dst);
 		return 0;
@@ -750,6 +760,16 @@ static const char * const follower_sws[] = {
 	"IEC958 Playback Switch",
 	NULL
 };
+
+static void add_followers(struct snd_card *card,
+			  struct snd_kcontrol *master, const char * const *list)
+{
+	for (; *list; list++) {
+		struct snd_kcontrol *follower = ctl_find(card, *list);
+		if (follower)
+			snd_ctl_add_follower(master, follower);
+	}
+}
 
 int snd_ca0106_mixer(struct snd_ca0106 *emu)
 {
@@ -832,9 +852,7 @@ int snd_ca0106_mixer(struct snd_ca0106 *emu)
 	err = snd_ctl_add(card, vmaster);
 	if (err < 0)
 		return err;
-	err = snd_ctl_add_followers(card, vmaster, follower_vols);
-	if (err < 0)
-		return err;
+	add_followers(card, vmaster, follower_vols);
 
 	if (emu->details->spi_dac) {
 		vmaster = snd_ctl_make_virtual_master("Master Playback Switch",
@@ -844,9 +862,7 @@ int snd_ca0106_mixer(struct snd_ca0106 *emu)
 		err = snd_ctl_add(card, vmaster);
 		if (err < 0)
 			return err;
-		err = snd_ctl_add_followers(card, vmaster, follower_sws);
-		if (err < 0)
-			return err;
+		add_followers(card, vmaster, follower_sws);
 	}
 
 	strcpy(card->mixername, "CA0106");

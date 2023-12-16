@@ -93,15 +93,15 @@ extern void __iomem *ioport_map(unsigned long port, unsigned int nr);
 extern void ioport_unmap(void __iomem *);
 #endif
 
-#ifndef ioremap_wc
+#ifndef ARCH_HAS_IOREMAP_WC
 #define ioremap_wc ioremap
 #endif
 
-#ifndef ioremap_wt
+#ifndef ARCH_HAS_IOREMAP_WT
 #define ioremap_wt ioremap
 #endif
 
-#ifndef ioremap_np
+#ifndef ARCH_HAS_IOREMAP_NP
 /* See the comment in asm-generic/io.h about ioremap_np(). */
 #define ioremap_np ioremap_np
 static inline void __iomem *ioremap_np(phys_addr_t offset, size_t size)

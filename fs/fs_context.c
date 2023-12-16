@@ -162,10 +162,6 @@ EXPORT_SYMBOL(vfs_parse_fs_param);
 
 /**
  * vfs_parse_fs_string - Convenience function to just parse a string.
- * @fc: Filesystem context.
- * @key: Parameter name.
- * @value: Default value.
- * @v_size: Maximum number of bytes in the value.
  */
 int vfs_parse_fs_string(struct fs_context *fc, const char *key,
 			const char *value, size_t v_size)
@@ -192,19 +188,17 @@ int vfs_parse_fs_string(struct fs_context *fc, const char *key,
 EXPORT_SYMBOL(vfs_parse_fs_string);
 
 /**
- * vfs_parse_monolithic_sep - Parse key[=val][,key[=val]]* mount data
- * @fc: The superblock configuration to fill in.
+ * generic_parse_monolithic - Parse key[=val][,key[=val]]* mount data
+ * @ctx: The superblock configuration to fill in.
  * @data: The data to parse
- * @sep: callback for separating next option
  *
- * Parse a blob of data that's in key[=val][,key[=val]]* form with a custom
- * option separator callback.
+ * Parse a blob of data that's in key[=val][,key[=val]]* form.  This can be
+ * called from the ->monolithic_mount_data() fs_context operation.
  *
  * Returns 0 on success or the error returned by the ->parse_option() fs_context
  * operation on failure.
  */
-int vfs_parse_monolithic_sep(struct fs_context *fc, void *data,
-			     char *(*sep)(char **))
+int generic_parse_monolithic(struct fs_context *fc, void *data)
 {
 	char *options = data, *key;
 	int ret = 0;
@@ -216,7 +210,7 @@ int vfs_parse_monolithic_sep(struct fs_context *fc, void *data,
 	if (ret)
 		return ret;
 
-	while ((key = sep(&options)) != NULL) {
+	while ((key = strsep(&options, ",")) != NULL) {
 		if (*key) {
 			size_t v_len = 0;
 			char *value = strchr(key, '=');
@@ -234,28 +228,6 @@ int vfs_parse_monolithic_sep(struct fs_context *fc, void *data,
 	}
 
 	return ret;
-}
-EXPORT_SYMBOL(vfs_parse_monolithic_sep);
-
-static char *vfs_parse_comma_sep(char **s)
-{
-	return strsep(s, ",");
-}
-
-/**
- * generic_parse_monolithic - Parse key[=val][,key[=val]]* mount data
- * @fc: The superblock configuration to fill in.
- * @data: The data to parse
- *
- * Parse a blob of data that's in key[=val][,key[=val]]* form.  This can be
- * called from the ->monolithic_mount_data() fs_context operation.
- *
- * Returns 0 on success or the error returned by the ->parse_option() fs_context
- * operation on failure.
- */
-int generic_parse_monolithic(struct fs_context *fc, void *data)
-{
-	return vfs_parse_monolithic_sep(fc, data, vfs_parse_comma_sep);
 }
 EXPORT_SYMBOL(generic_parse_monolithic);
 
@@ -343,31 +315,10 @@ struct fs_context *fs_context_for_reconfigure(struct dentry *dentry,
 }
 EXPORT_SYMBOL(fs_context_for_reconfigure);
 
-/**
- * fs_context_for_submount: allocate a new fs_context for a submount
- * @type: file_system_type of the new context
- * @reference: reference dentry from which to copy relevant info
- *
- * Allocate a new fs_context suitable for a submount. This also ensures that
- * the fc->security object is inherited from @reference (if needed).
- */
 struct fs_context *fs_context_for_submount(struct file_system_type *type,
 					   struct dentry *reference)
 {
-	struct fs_context *fc;
-	int ret;
-
-	fc = alloc_fs_context(type, reference, 0, 0, FS_CONTEXT_FOR_SUBMOUNT);
-	if (IS_ERR(fc))
-		return fc;
-
-	ret = security_fs_context_submount(fc, reference->d_sb);
-	if (ret) {
-		put_fs_context(fc);
-		return ERR_PTR(ret);
-	}
-
-	return fc;
+	return alloc_fs_context(type, reference, 0, 0, FS_CONTEXT_FOR_SUBMOUNT);
 }
 EXPORT_SYMBOL(fs_context_for_submount);
 
@@ -382,7 +333,7 @@ void fc_drop_locked(struct fs_context *fc)
 static void legacy_fs_context_free(struct fs_context *fc);
 
 /**
- * vfs_dup_fs_context - Duplicate a filesystem context.
+ * vfs_dup_fc_config: Duplicate a filesystem context.
  * @src_fc: The context to copy.
  */
 struct fs_context *vfs_dup_fs_context(struct fs_context *src_fc)
@@ -428,9 +379,7 @@ EXPORT_SYMBOL(vfs_dup_fs_context);
 
 /**
  * logfc - Log a message to a filesystem context
- * @log: The filesystem context to log to, or NULL to use printk.
- * @prefix: A string to prefix the output with, or NULL.
- * @level: 'w' for a warning, 'e' for an error.  Anything else is a notice.
+ * @fc: The filesystem context to log to.
  * @fmt: The format of the buffer.
  */
 void logfc(struct fc_log *log, const char *prefix, char level, const char *fmt, ...)
@@ -743,7 +692,6 @@ void vfs_clean_context(struct fs_context *fc)
 	security_free_mnt_opts(&fc->security);
 	kfree(fc->source);
 	fc->source = NULL;
-	fc->exclusive = false;
 
 	fc->purpose = FS_CONTEXT_FOR_RECONFIGURE;
 	fc->phase = FS_CONTEXT_AWAITING_RECONF;

@@ -472,7 +472,7 @@ struct altera_tse_private {
 	/* ethtool msglvl option */
 	u32 msg_enable;
 
-	const struct altera_dmaops *dmaops;
+	struct altera_dmaops *dmaops;
 
 	struct phylink *phylink;
 	struct phylink_config phylink_config;

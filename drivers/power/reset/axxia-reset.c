@@ -80,4 +80,9 @@ static struct platform_driver axxia_reset_driver = {
 		.of_match_table = of_match_ptr(of_axxia_reset_match),
 	},
 };
-builtin_platform_driver(axxia_reset_driver);
+
+static int __init axxia_reset_init(void)
+{
+	return platform_driver_register(&axxia_reset_driver);
+}
+device_initcall(axxia_reset_init);

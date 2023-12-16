@@ -31,7 +31,6 @@ config BPF_SYSCALL
 	select TASKS_TRACE_RCU
 	select BINARY_PRINTF
 	select NET_SOCK_MSG if NET
-	select NET_XGRESS if NET
 	select PAGE_POOL if NET
 	default n
 	help

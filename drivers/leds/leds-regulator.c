@@ -173,12 +173,13 @@ static int regulator_led_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void regulator_led_remove(struct platform_device *pdev)
+static int regulator_led_remove(struct platform_device *pdev)
 {
 	struct regulator_led *led = platform_get_drvdata(pdev);
 
 	led_classdev_unregister(&led->cdev);
 	regulator_led_disable(led);
+	return 0;
 }
 
 static const struct of_device_id regulator_led_of_match[] = {
@@ -193,7 +194,7 @@ static struct platform_driver regulator_led_driver = {
 		.of_match_table = regulator_led_of_match,
 	},
 	.probe  = regulator_led_probe,
-	.remove_new = regulator_led_remove,
+	.remove = regulator_led_remove,
 };
 
 module_platform_driver(regulator_led_driver);

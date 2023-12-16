@@ -31,5 +31,5 @@ Missing Features
 ================
 (alias TODO list)
 
-	* 2D acceleration
+	* 2D acceleratrion
 	* dual-head support

@@ -139,8 +139,8 @@ static int dove_thermal_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	thermal = thermal_tripless_zone_device_register("dove_thermal", priv,
-							&ops, NULL);
+	thermal = thermal_zone_device_register("dove_thermal", 0, 0,
+					       priv, &ops, NULL, 0, 0);
 	if (IS_ERR(thermal)) {
 		dev_err(&pdev->dev,
 			"Failed to register thermal zone device\n");
@@ -158,19 +158,21 @@ static int dove_thermal_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void dove_thermal_exit(struct platform_device *pdev)
+static int dove_thermal_exit(struct platform_device *pdev)
 {
 	struct thermal_zone_device *dove_thermal =
 		platform_get_drvdata(pdev);
 
 	thermal_zone_device_unregister(dove_thermal);
+
+	return 0;
 }
 
 MODULE_DEVICE_TABLE(of, dove_thermal_id_table);
 
 static struct platform_driver dove_thermal_driver = {
 	.probe = dove_thermal_probe,
-	.remove_new = dove_thermal_exit,
+	.remove = dove_thermal_exit,
 	.driver = {
 		.name = "dove_thermal",
 		.of_match_table = dove_thermal_id_table,

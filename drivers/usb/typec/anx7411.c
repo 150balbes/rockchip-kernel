@@ -1550,7 +1550,8 @@ static void anx7411_i2c_remove(struct i2c_client *client)
 	if (plat->workqueue)
 		destroy_workqueue(plat->workqueue);
 
-	i2c_unregister_device(plat->spi_client);
+	if (plat->spi_client)
+		i2c_unregister_device(plat->spi_client);
 
 	if (plat->typec.role_sw)
 		usb_role_switch_put(plat->typec.role_sw);

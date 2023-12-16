@@ -150,14 +150,6 @@ size_t nvme_auth_hmac_hash_len(u8 hmac_id)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_hmac_hash_len);
 
-u32 nvme_auth_key_struct_size(u32 key_len)
-{
-	struct nvme_dhchap_key key;
-
-	return struct_size(&key, key, key_len);
-}
-EXPORT_SYMBOL_GPL(nvme_auth_key_struct_size);
-
 struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
 					      u8 key_hash)
 {
@@ -171,9 +163,14 @@ struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
 	p = strrchr(secret, ':');
 	if (p)
 		allocated_len = p - secret;
-	key = nvme_auth_alloc_key(allocated_len, 0);
+	key = kzalloc(sizeof(*key), GFP_KERNEL);
 	if (!key)
 		return ERR_PTR(-ENOMEM);
+	key->key = kzalloc(allocated_len, GFP_KERNEL);
+	if (!key->key) {
+		ret = -ENOMEM;
+		goto out_free_key;
+	}
 
 	key_len = base64_decode(secret, allocated_len, key->key);
 	if (key_len < 0) {
@@ -186,6 +183,14 @@ struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
 	if (key_len != 36 && key_len != 52 &&
 	    key_len != 68) {
 		pr_err("Invalid key len %d\n", key_len);
+		ret = -EINVAL;
+		goto out_free_secret;
+	}
+
+	if (key_hash > 0 &&
+	    (key_len - 4) != nvme_auth_hmac_hash_len(key_hash)) {
+		pr_err("Mismatched key len %d for %s\n", key_len,
+		       nvme_auth_hmac_name(key_hash));
 		ret = -EINVAL;
 		goto out_free_secret;
 	}
@@ -208,51 +213,37 @@ struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
 	key->hash = key_hash;
 	return key;
 out_free_secret:
-	nvme_auth_free_key(key);
+	kfree_sensitive(key->key);
+out_free_key:
+	kfree(key);
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(nvme_auth_extract_key);
-
-struct nvme_dhchap_key *nvme_auth_alloc_key(u32 len, u8 hash)
-{
-	u32 num_bytes = nvme_auth_key_struct_size(len);
-	struct nvme_dhchap_key *key = kzalloc(num_bytes, GFP_KERNEL);
-
-	if (key) {
-		key->len = len;
-		key->hash = hash;
-	}
-	return key;
-}
-EXPORT_SYMBOL_GPL(nvme_auth_alloc_key);
 
 void nvme_auth_free_key(struct nvme_dhchap_key *key)
 {
 	if (!key)
 		return;
-	kfree_sensitive(key);
+	kfree_sensitive(key->key);
+	kfree(key);
 }
 EXPORT_SYMBOL_GPL(nvme_auth_free_key);
 
-struct nvme_dhchap_key *nvme_auth_transform_key(
-		struct nvme_dhchap_key *key, char *nqn)
+u8 *nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn)
 {
 	const char *hmac_name;
 	struct crypto_shash *key_tfm;
 	struct shash_desc *shash;
-	struct nvme_dhchap_key *transformed_key;
-	int ret, key_len;
+	u8 *transformed_key;
+	int ret;
 
-	if (!key) {
+	if (!key || !key->key) {
 		pr_warn("No key specified\n");
 		return ERR_PTR(-ENOKEY);
 	}
 	if (key->hash == 0) {
-		key_len = nvme_auth_key_struct_size(key->len);
-		transformed_key = kmemdup(key, key_len, GFP_KERNEL);
-		if (!transformed_key)
-			return ERR_PTR(-ENOMEM);
-		return transformed_key;
+		transformed_key = kmemdup(key->key, key->len, GFP_KERNEL);
+		return transformed_key ? transformed_key : ERR_PTR(-ENOMEM);
 	}
 	hmac_name = nvme_auth_hmac_name(key->hash);
 	if (!hmac_name) {
@@ -262,7 +253,7 @@ struct nvme_dhchap_key *nvme_auth_transform_key(
 
 	key_tfm = crypto_alloc_shash(hmac_name, 0, 0);
 	if (IS_ERR(key_tfm))
-		return ERR_CAST(key_tfm);
+		return (u8 *)key_tfm;
 
 	shash = kmalloc(sizeof(struct shash_desc) +
 			crypto_shash_descsize(key_tfm),
@@ -272,8 +263,7 @@ struct nvme_dhchap_key *nvme_auth_transform_key(
 		goto out_free_key;
 	}
 
-	key_len = crypto_shash_digestsize(key_tfm);
-	transformed_key = nvme_auth_alloc_key(key_len, key->hash);
+	transformed_key = kzalloc(crypto_shash_digestsize(key_tfm), GFP_KERNEL);
 	if (!transformed_key) {
 		ret = -ENOMEM;
 		goto out_free_shash;
@@ -292,7 +282,7 @@ struct nvme_dhchap_key *nvme_auth_transform_key(
 	ret = crypto_shash_update(shash, "NVMe-over-Fabrics", 17);
 	if (ret < 0)
 		goto out_free_transformed_key;
-	ret = crypto_shash_final(shash, transformed_key->key);
+	ret = crypto_shash_final(shash, transformed_key);
 	if (ret < 0)
 		goto out_free_transformed_key;
 
@@ -302,7 +292,7 @@ struct nvme_dhchap_key *nvme_auth_transform_key(
 	return transformed_key;
 
 out_free_transformed_key:
-	nvme_auth_free_key(transformed_key);
+	kfree_sensitive(transformed_key);
 out_free_shash:
 	kfree(shash);
 out_free_key:
@@ -341,6 +331,7 @@ int nvme_auth_augmented_challenge(u8 hmac_id, u8 *skey, size_t skey_len,
 		u8 *challenge, u8 *aug, size_t hlen)
 {
 	struct crypto_shash *tfm;
+	struct shash_desc *desc;
 	u8 *hashed_key;
 	const char *hmac_name;
 	int ret;
@@ -368,11 +359,29 @@ int nvme_auth_augmented_challenge(u8 hmac_id, u8 *skey, size_t skey_len,
 		goto out_free_key;
 	}
 
+	desc = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(tfm),
+		       GFP_KERNEL);
+	if (!desc) {
+		ret = -ENOMEM;
+		goto out_free_hash;
+	}
+	desc->tfm = tfm;
+
 	ret = crypto_shash_setkey(tfm, hashed_key, hlen);
 	if (ret)
-		goto out_free_hash;
+		goto out_free_desc;
 
-	ret = crypto_shash_tfm_digest(tfm, challenge, hlen, aug);
+	ret = crypto_shash_init(desc);
+	if (ret)
+		goto out_free_desc;
+
+	ret = crypto_shash_update(desc, challenge, hlen);
+	if (ret)
+		goto out_free_desc;
+
+	ret = crypto_shash_final(desc, aug);
+out_free_desc:
+	kfree_sensitive(desc);
 out_free_hash:
 	crypto_free_shash(tfm);
 out_free_key:

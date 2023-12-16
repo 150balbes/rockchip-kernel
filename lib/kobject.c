@@ -56,14 +56,6 @@ void kobject_get_ownership(const struct kobject *kobj, kuid_t *uid, kgid_t *gid)
 		kobj->ktype->get_ownership(kobj, uid, gid);
 }
 
-static bool kobj_ns_type_is_valid(enum kobj_ns_type type)
-{
-	if ((type <= KOBJ_NS_TYPE_NONE) || (type >= KOBJ_NS_TYPES))
-		return false;
-
-	return true;
-}
-
 static int create_dir(struct kobject *kobj)
 {
 	const struct kobj_type *ktype = get_ktype(kobj);
@@ -74,10 +66,12 @@ static int create_dir(struct kobject *kobj)
 	if (error)
 		return error;
 
-	error = sysfs_create_groups(kobj, ktype->default_groups);
-	if (error) {
-		sysfs_remove_dir(kobj);
-		return error;
+	if (ktype) {
+		error = sysfs_create_groups(kobj, ktype->default_groups);
+		if (error) {
+			sysfs_remove_dir(kobj);
+			return error;
+		}
 	}
 
 	/*
@@ -92,7 +86,8 @@ static int create_dir(struct kobject *kobj)
 	 */
 	ops = kobj_child_ns_ops(kobj);
 	if (ops) {
-		BUG_ON(!kobj_ns_type_is_valid(ops->type));
+		BUG_ON(ops->type <= KOBJ_NS_TYPE_NONE);
+		BUG_ON(ops->type >= KOBJ_NS_TYPES);
 		BUG_ON(!kobj_ns_type_registered(ops->type));
 
 		sysfs_enable_ns(kobj->sd);
@@ -589,7 +584,8 @@ static void __kobject_del(struct kobject *kobj)
 	sd = kobj->sd;
 	ktype = get_ktype(kobj);
 
-	sysfs_remove_groups(kobj, ktype->default_groups);
+	if (ktype)
+		sysfs_remove_groups(kobj, ktype->default_groups);
 
 	/* send "remove" if the caller did not do it but sent "add" */
 	if (kobj->state_add_uevent_sent && !kobj->state_remove_uevent_sent) {
@@ -666,6 +662,10 @@ static void kobject_cleanup(struct kobject *kobj)
 	pr_debug("'%s' (%p): %s, parent %p\n",
 		 kobject_name(kobj), kobj, __func__, kobj->parent);
 
+	if (t && !t->release)
+		pr_debug("'%s' (%p): does not have a release() function, it is broken and must be fixed. See Documentation/core-api/kobject.rst.\n",
+			 kobject_name(kobj), kobj);
+
 	/* remove from sysfs if the caller did not do it */
 	if (kobj->state_in_sysfs) {
 		pr_debug("'%s' (%p): auto cleanup kobject_del\n",
@@ -676,13 +676,10 @@ static void kobject_cleanup(struct kobject *kobj)
 		parent = NULL;
 	}
 
-	if (t->release) {
+	if (t && t->release) {
 		pr_debug("'%s' (%p): calling ktype release\n",
 			 kobject_name(kobj), kobj);
 		t->release(kobj);
-	} else {
-		pr_debug("'%s' (%p): does not have a release() function, it is broken and must be fixed. See Documentation/core-api/kobject.rst.\n",
-			 kobject_name(kobj), kobj);
 	}
 
 	/* free name if we allocated it */
@@ -857,11 +854,6 @@ int kset_register(struct kset *k)
 	if (!k)
 		return -EINVAL;
 
-	if (!k->kobj.ktype) {
-		pr_err("must have a ktype to be initialized properly!\n");
-		return -EINVAL;
-	}
-
 	kset_init(k);
 	err = kobject_add_internal(&k->kobj);
 	if (err) {
@@ -1025,7 +1017,11 @@ int kobj_ns_type_register(const struct kobj_ns_type_operations *ops)
 	spin_lock(&kobj_ns_type_lock);
 
 	error = -EINVAL;
-	if (!kobj_ns_type_is_valid(type))
+	if (type >= KOBJ_NS_TYPES)
+		goto out;
+
+	error = -EINVAL;
+	if (type <= KOBJ_NS_TYPE_NONE)
 		goto out;
 
 	error = -EBUSY;
@@ -1045,7 +1041,7 @@ int kobj_ns_type_registered(enum kobj_ns_type type)
 	int registered = 0;
 
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type))
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES))
 		registered = kobj_ns_ops_tbl[type] != NULL;
 	spin_unlock(&kobj_ns_type_lock);
 
@@ -1056,7 +1052,7 @@ const struct kobj_ns_type_operations *kobj_child_ns_ops(const struct kobject *pa
 {
 	const struct kobj_ns_type_operations *ops = NULL;
 
-	if (parent && parent->ktype->child_ns_type)
+	if (parent && parent->ktype && parent->ktype->child_ns_type)
 		ops = parent->ktype->child_ns_type(parent);
 
 	return ops;
@@ -1072,7 +1068,8 @@ bool kobj_ns_current_may_mount(enum kobj_ns_type type)
 	bool may_mount = true;
 
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type) && kobj_ns_ops_tbl[type])
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type])
 		may_mount = kobj_ns_ops_tbl[type]->current_may_mount();
 	spin_unlock(&kobj_ns_type_lock);
 
@@ -1084,7 +1081,8 @@ void *kobj_ns_grab_current(enum kobj_ns_type type)
 	void *ns = NULL;
 
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type) && kobj_ns_ops_tbl[type])
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type])
 		ns = kobj_ns_ops_tbl[type]->grab_current_ns();
 	spin_unlock(&kobj_ns_type_lock);
 
@@ -1097,7 +1095,8 @@ const void *kobj_ns_netlink(enum kobj_ns_type type, struct sock *sk)
 	const void *ns = NULL;
 
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type) && kobj_ns_ops_tbl[type])
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type])
 		ns = kobj_ns_ops_tbl[type]->netlink_ns(sk);
 	spin_unlock(&kobj_ns_type_lock);
 
@@ -1109,7 +1108,8 @@ const void *kobj_ns_initial(enum kobj_ns_type type)
 	const void *ns = NULL;
 
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type) && kobj_ns_ops_tbl[type])
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type])
 		ns = kobj_ns_ops_tbl[type]->initial_ns();
 	spin_unlock(&kobj_ns_type_lock);
 
@@ -1119,7 +1119,7 @@ const void *kobj_ns_initial(enum kobj_ns_type type)
 void kobj_ns_drop(enum kobj_ns_type type, void *ns)
 {
 	spin_lock(&kobj_ns_type_lock);
-	if (kobj_ns_type_is_valid(type) &&
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
 	    kobj_ns_ops_tbl[type] && kobj_ns_ops_tbl[type]->drop_ns)
 		kobj_ns_ops_tbl[type]->drop_ns(ns);
 	spin_unlock(&kobj_ns_type_lock);

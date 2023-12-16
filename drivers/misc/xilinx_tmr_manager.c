@@ -15,8 +15,7 @@
 
 #include <asm/xilinx_mb_manager.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 /* TMR Manager Register offsets */
 #define XTMR_MANAGER_CR_OFFSET		0x0
@@ -171,7 +170,8 @@ static int xtmr_manager_probe(struct platform_device *pdev)
 	if (!xtmr_manager)
 		return -ENOMEM;
 
-	xtmr_manager->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	xtmr_manager->regs =  devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(xtmr_manager->regs))
 		return PTR_ERR(xtmr_manager->regs);
 

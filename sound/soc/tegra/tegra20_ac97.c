@@ -203,6 +203,10 @@ static int tegra20_ac97_trigger(struct snd_pcm_substream *substream, int cmd,
 	return 0;
 }
 
+static const struct snd_soc_dai_ops tegra20_ac97_dai_ops = {
+	.trigger	= tegra20_ac97_trigger,
+};
+
 static int tegra20_ac97_probe(struct snd_soc_dai *dai)
 {
 	struct tegra20_ac97 *ac97 = snd_soc_dai_get_drvdata(dai);
@@ -213,13 +217,9 @@ static int tegra20_ac97_probe(struct snd_soc_dai *dai)
 	return 0;
 }
 
-static const struct snd_soc_dai_ops tegra20_ac97_dai_ops = {
-	.probe		= tegra20_ac97_probe,
-	.trigger	= tegra20_ac97_trigger,
-};
-
 static struct snd_soc_dai_driver tegra20_ac97_dai = {
 	.name = "tegra-ac97-pcm",
+	.probe = tegra20_ac97_probe,
 	.playback = {
 		.stream_name = "PCM Playback",
 		.channels_min = 2,
@@ -328,7 +328,8 @@ static int tegra20_ac97_platform_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	regs = devm_platform_get_and_ioremap_resource(pdev, 0, &mem);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(regs)) {
 		ret = PTR_ERR(regs);
 		goto err_clk_put;

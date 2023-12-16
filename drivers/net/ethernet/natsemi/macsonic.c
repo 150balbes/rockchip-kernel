@@ -532,7 +532,7 @@ MODULE_ALIAS("platform:macsonic");
 
 #include "sonic.c"
 
-static void mac_sonic_platform_remove(struct platform_device *pdev)
+static int mac_sonic_platform_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct sonic_local* lp = netdev_priv(dev);
@@ -541,11 +541,13 @@ static void mac_sonic_platform_remove(struct platform_device *pdev)
 	dma_free_coherent(lp->device, SIZEOF_SONIC_DESC * SONIC_BUS_SCALE(lp->dma_bitmode),
 	                  lp->descriptors, lp->descriptors_laddr);
 	free_netdev(dev);
+
+	return 0;
 }
 
 static struct platform_driver mac_sonic_platform_driver = {
 	.probe  = mac_sonic_platform_probe,
-	.remove_new = mac_sonic_platform_remove,
+	.remove = mac_sonic_platform_remove,
 	.driver = {
 		.name = "macsonic",
 	},

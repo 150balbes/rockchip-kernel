@@ -127,15 +127,15 @@ void dasd_gendisk_free(struct dasd_block *block)
  */
 int dasd_scan_partitions(struct dasd_block *block)
 {
-	struct bdev_handle *bdev_handle;
+	struct block_device *bdev;
 	int rc;
 
-	bdev_handle = bdev_open_by_dev(disk_devt(block->gdp), BLK_OPEN_READ,
-				       NULL, NULL);
-	if (IS_ERR(bdev_handle)) {
+	bdev = blkdev_get_by_dev(disk_devt(block->gdp), BLK_OPEN_READ, NULL,
+				 NULL);
+	if (IS_ERR(bdev)) {
 		DBF_DEV_EVENT(DBF_ERR, block->base,
 			      "scan partitions error, blkdev_get returned %ld",
-			      PTR_ERR(bdev_handle));
+			      PTR_ERR(bdev));
 		return -ENODEV;
 	}
 
@@ -147,15 +147,16 @@ int dasd_scan_partitions(struct dasd_block *block)
 				"scan partitions error, rc %d", rc);
 
 	/*
-	 * Since the matching bdev_release() call to the
-	 * bdev_open_by_path() in this function is not called before
-	 * dasd_destroy_partitions the offline open_count limit needs to be
-	 * increased from 0 to 1. This is done by setting device->bdev_handle
-	 * (see dasd_generic_set_offline). As long as the partition detection
-	 * is running no offline should be allowed. That is why the assignment
-	 * to block->bdev_handle is done AFTER the BLKRRPART ioctl.
+	 * Since the matching blkdev_put call to the blkdev_get in
+	 * this function is not called before dasd_destroy_partitions
+	 * the offline open_count limit needs to be increased from
+	 * 0 to 1. This is done by setting device->bdev (see
+	 * dasd_generic_set_offline). As long as the partition
+	 * detection is running no offline should be allowed. That
+	 * is why the assignment to device->bdev is done AFTER
+	 * the BLKRRPART ioctl.
 	 */
-	block->bdev_handle = bdev_handle;
+	block->bdev = bdev;
 	return 0;
 }
 
@@ -165,21 +166,21 @@ int dasd_scan_partitions(struct dasd_block *block)
  */
 void dasd_destroy_partitions(struct dasd_block *block)
 {
-	struct bdev_handle *bdev_handle;
+	struct block_device *bdev;
 
 	/*
-	 * Get the bdev_handle pointer from the device structure and clear
-	 * device->bdev_handle to lower the offline open_count limit again.
+	 * Get the bdev pointer from the device structure and clear
+	 * device->bdev to lower the offline open_count limit again.
 	 */
-	bdev_handle = block->bdev_handle;
-	block->bdev_handle = NULL;
+	bdev = block->bdev;
+	block->bdev = NULL;
 
-	mutex_lock(&bdev_handle->bdev->bd_disk->open_mutex);
-	bdev_disk_changed(bdev_handle->bdev->bd_disk, true);
-	mutex_unlock(&bdev_handle->bdev->bd_disk->open_mutex);
+	mutex_lock(&bdev->bd_disk->open_mutex);
+	bdev_disk_changed(bdev->bd_disk, true);
+	mutex_unlock(&bdev->bd_disk->open_mutex);
 
 	/* Matching blkdev_put to the blkdev_get in dasd_scan_partitions. */
-	bdev_release(bdev_handle);
+	blkdev_put(bdev, NULL);
 }
 
 int dasd_gendisk_init(void)

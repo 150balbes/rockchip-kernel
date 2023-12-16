@@ -6,11 +6,10 @@
 
 #include <linux/math64.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <sound/graph_card.h>
 #include <sound/pcm_params.h>
-#include <sound/soc-dai.h>
 
 #define MAX_PLLA_OUT0_DIV 128
 
@@ -34,7 +33,7 @@ enum srate_type {
 };
 
 struct tegra_audio_priv {
-	struct simple_util_priv simple;
+	struct asoc_simple_priv simple;
 	struct clk *clk_plla_out0;
 	struct clk *clk_plla;
 };
@@ -45,27 +44,12 @@ struct tegra_audio_cdata {
 	unsigned int plla_out0_rates[NUM_RATE_TYPE];
 };
 
-static bool need_clk_update(struct snd_soc_dai *dai)
-{
-	if (snd_soc_dai_is_dummy(dai) ||
-	    !dai->driver->ops ||
-	    !dai->driver->name)
-		return false;
-
-	if (strstr(dai->driver->name, "I2S") ||
-	    strstr(dai->driver->name, "DMIC") ||
-	    strstr(dai->driver->name, "DSPK"))
-		return true;
-
-	return false;
-}
-
 /* Setup PLL clock as per the given sample rate */
 static int tegra_audio_graph_update_pll(struct snd_pcm_substream *substream,
 					struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
-	struct simple_util_priv *simple = snd_soc_card_get_drvdata(rtd->card);
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct asoc_simple_priv *simple = snd_soc_card_get_drvdata(rtd->card);
 	struct tegra_audio_priv *priv = simple_to_tegra_priv(simple);
 	struct device *dev = rtd->card->dev;
 	const struct tegra_audio_cdata *data = of_device_get_match_data(dev);
@@ -152,28 +136,40 @@ static int tegra_audio_graph_update_pll(struct snd_pcm_substream *substream,
 static int tegra_audio_graph_hw_params(struct snd_pcm_substream *substream,
 				       struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	int err;
 
-	if (need_clk_update(cpu_dai)) {
+	/*
+	 * This gets called for each DAI link (FE or BE) when DPCM is used.
+	 * We may not want to update PLLA rate for each call. So PLLA update
+	 * must be restricted to external I/O links (I2S, DMIC or DSPK) since
+	 * they actually depend on it. I/O modules update their clocks in
+	 * hw_param() of their respective component driver and PLLA rate
+	 * update here helps them to derive appropriate rates.
+	 *
+	 * TODO: When more HW accelerators get added (like sample rate
+	 * converter, volume gain controller etc., which don't really
+	 * depend on PLLA) we need a better way to filter here.
+	 */
+	if (cpu_dai->driver->ops && rtd->dai_link->no_pcm) {
 		err = tegra_audio_graph_update_pll(substream, params);
 		if (err)
 			return err;
 	}
 
-	return simple_util_hw_params(substream, params);
+	return asoc_simple_hw_params(substream, params);
 }
 
 static const struct snd_soc_ops tegra_audio_graph_ops = {
-	.startup	= simple_util_startup,
-	.shutdown	= simple_util_shutdown,
+	.startup	= asoc_simple_startup,
+	.shutdown	= asoc_simple_shutdown,
 	.hw_params	= tegra_audio_graph_hw_params,
 };
 
 static int tegra_audio_graph_card_probe(struct snd_soc_card *card)
 {
-	struct simple_util_priv *simple = snd_soc_card_get_drvdata(card);
+	struct asoc_simple_priv *simple = snd_soc_card_get_drvdata(card);
 	struct tegra_audio_priv *priv = simple_to_tegra_priv(simple);
 
 	priv->clk_plla = devm_clk_get(card->dev, "pll_a");
@@ -188,7 +184,7 @@ static int tegra_audio_graph_card_probe(struct snd_soc_card *card)
 		return PTR_ERR(priv->clk_plla_out0);
 	}
 
-	return graph_util_card_probe(card);
+	return asoc_graph_card_probe(card);
 }
 
 static int tegra_audio_graph_probe(struct platform_device *pdev)
@@ -248,7 +244,7 @@ static struct platform_driver tegra_audio_graph_card = {
 		.of_match_table = graph_of_tegra_match,
 	},
 	.probe = tegra_audio_graph_probe,
-	.remove_new = simple_util_remove,
+	.remove = asoc_simple_remove,
 };
 module_platform_driver(tegra_audio_graph_card);
 

@@ -5,7 +5,6 @@ hugepage-mremap
 hugepage-shm
 hugepage-vmemmap
 hugetlb-madvise
-hugetlb-read-hwpoison
 khugepaged
 map_hugetlb
 map_populate
@@ -18,8 +17,6 @@ mremap_dontunmap
 mremap_test
 on-fault-limit
 transhuge-stress
-pagemap_ioctl
-*.tmp*
 protection_keys
 protection_keys_32
 protection_keys_64
@@ -45,4 +42,3 @@ mdwe_test
 gup_longterm
 mkdirty
 va_high_addr_switch
-hugetlb_fault_after_madv

@@ -17,7 +17,6 @@
 /*
  * Sets up all exception vectors
  */
-#include <linux/cpu.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/linkage.h>
@@ -27,8 +26,6 @@
 #include <asm/setup.h>
 #include <asm/fpu.h>
 #include <asm/traps.h>
-
-#include "vectors.h"
 
 /* assembler routines */
 asmlinkage void system_call(void);

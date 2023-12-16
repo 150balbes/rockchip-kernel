@@ -1864,9 +1864,8 @@ static char *random_msg(int len)
 		n += i;
 		len -= i;
 	}
-
-	snprintf(m + n, olen - n, "%.*s", len,
-	     "abcdefghijklmnopqrstuvwxyz");
+	i = snprintf(m + n, olen - n, "%.*s", len,
+		     "abcdefghijklmnopqrstuvwxyz");
 	return m;
 }
 

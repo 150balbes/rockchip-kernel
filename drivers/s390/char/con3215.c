@@ -1021,8 +1021,8 @@ static unsigned int tty3215_write_room(struct tty_struct *tty)
 /*
  * String write routine for 3215 ttys
  */
-static ssize_t tty3215_write(struct tty_struct *tty, const u8 *buf,
-			     size_t count)
+static int tty3215_write(struct tty_struct *tty,
+			 const unsigned char *buf, int count)
 {
 	handle_write(tty->driver_data, buf, count);
 	return count;
@@ -1031,7 +1031,7 @@ static ssize_t tty3215_write(struct tty_struct *tty, const u8 *buf,
 /*
  * Put character routine for 3215 ttys
  */
-static int tty3215_put_char(struct tty_struct *tty, u8 ch)
+static int tty3215_put_char(struct tty_struct *tty, unsigned char ch)
 {
 	struct raw3215_info *raw = tty->driver_data;
 

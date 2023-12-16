@@ -18,6 +18,4 @@
 
 #define __pte_free_tlb(tlb, pte, address)	pte_free((tlb)->mm, pte)
 
-void check_tlb_sanity(void);
-
 #endif	/* _XTENSA_TLB_H */

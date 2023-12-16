@@ -147,7 +147,17 @@ static struct platform_driver dummy_driver = {
 	},
 };
 
-module_platform_driver(dummy_driver);
+static int __init dummy_init(void)
+{
+	return platform_driver_register(&dummy_driver);
+}
+module_init(dummy_init);
+
+static void __exit dummy_exit(void)
+{
+	platform_driver_unregister(&dummy_driver);
+}
+module_exit(dummy_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("CoreSight dummy driver");

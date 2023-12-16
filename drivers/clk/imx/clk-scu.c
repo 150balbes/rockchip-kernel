@@ -9,13 +9,11 @@
 #include <linux/bsearch.h>
 #include <linux/clk-provider.h>
 #include <linux/err.h>
-#include <linux/of.h>
-#include <linux/firmware/imx/svc/rm.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
-#include <xen/xen.h>
 
 #include "clk-scu.h"
 
@@ -672,18 +670,6 @@ static int imx_clk_scu_attach_pd(struct device *dev, u32 rsrc_id)
 	return of_genpd_add_device(&genpdspec, dev);
 }
 
-static bool imx_clk_is_resource_owned(u32 rsrc)
-{
-	/*
-	 * A-core resources are special. SCFW reports they are not "owned" by
-	 * current partition but linux can still adjust them for cpufreq.
-	 */
-	if (rsrc == IMX_SC_R_A53 || rsrc == IMX_SC_R_A72 || rsrc == IMX_SC_R_A35)
-		return true;
-
-	return imx_sc_rm_is_resource_owned(ccm_ipc_handle, rsrc);
-}
-
 struct clk_hw *imx_clk_scu_alloc_dev(const char *name,
 				     const char * const *parents,
 				     int num_parents, u32 rsrc_id, u8 clk_type)
@@ -700,9 +686,6 @@ struct clk_hw *imx_clk_scu_alloc_dev(const char *name,
 
 	if (!imx_scu_clk_is_valid(rsrc_id))
 		return ERR_PTR(-EINVAL);
-
-	if (!imx_clk_is_resource_owned(rsrc_id))
-		return NULL;
 
 	pdev = platform_device_alloc(name, PLATFORM_DEVID_NONE);
 	if (!pdev) {
@@ -885,9 +868,6 @@ struct clk_hw *__imx_clk_gpr_scu(const char *name, const char * const *parent_na
 		kfree(clk_node);
 		return ERR_PTR(-EINVAL);
 	}
-
-	if (!imx_clk_is_resource_owned(rsrc_id))
-		return NULL;
 
 	clk = kzalloc(sizeof(*clk), GFP_KERNEL);
 	if (!clk) {

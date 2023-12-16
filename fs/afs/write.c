@@ -424,7 +424,7 @@ try_next_key:
 
 	op->store.write_iter = iter;
 	op->store.i_size = max(pos + size, vnode->netfs.remote_i_size);
-	op->mtime = inode_get_mtime(&vnode->netfs.inode);
+	op->mtime = vnode->netfs.inode.i_mtime;
 
 	afs_wait_for_operation(op);
 

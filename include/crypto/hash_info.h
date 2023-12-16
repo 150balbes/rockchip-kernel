@@ -10,7 +10,6 @@
 
 #include <crypto/sha1.h>
 #include <crypto/sha2.h>
-#include <crypto/sha3.h>
 #include <crypto/md5.h>
 #include <crypto/streebog.h>
 

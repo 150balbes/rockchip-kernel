@@ -120,7 +120,7 @@ static int tegra_pinctrl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 		/* EINVAL=missing, which is fine since it's optional */
 		if (ret != -EINVAL)
 			dev_err(dev,
-				"%pOF: could not parse property nvidia,function\n", np);
+				"could not parse property nvidia,function\n");
 		function = NULL;
 	}
 
@@ -134,8 +134,8 @@ static int tegra_pinctrl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 				goto exit;
 		/* EINVAL=missing, which is fine since it's optional */
 		} else if (ret != -EINVAL) {
-			dev_err(dev, "%pOF: could not parse property %s\n",
-				np, cfg_params[i].property);
+			dev_err(dev, "could not parse property %s\n",
+				cfg_params[i].property);
 		}
 	}
 
@@ -146,7 +146,7 @@ static int tegra_pinctrl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 		reserve++;
 	ret = of_property_count_strings(np, "nvidia,pins");
 	if (ret < 0) {
-		dev_err(dev, "%pOF: could not parse property nvidia,pins\n", np);
+		dev_err(dev, "could not parse property nvidia,pins\n");
 		goto exit;
 	}
 	reserve *= ret;
@@ -747,7 +747,10 @@ static int tegra_pinctrl_resume(struct device *dev)
 	return 0;
 }
 
-DEFINE_NOIRQ_DEV_PM_OPS(tegra_pinctrl_pm, tegra_pinctrl_suspend, tegra_pinctrl_resume);
+const struct dev_pm_ops tegra_pinctrl_pm = {
+	.suspend_noirq = &tegra_pinctrl_suspend,
+	.resume_noirq = &tegra_pinctrl_resume
+};
 
 static bool tegra_pinctrl_gpio_node_has_range(struct tegra_pmx *pmx)
 {

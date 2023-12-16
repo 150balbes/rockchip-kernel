@@ -933,7 +933,7 @@ err_list_del:
 	return ret;
 }
 
-static void omap_sr_remove(struct platform_device *pdev)
+static int omap_sr_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct omap_sr *sr_info = platform_get_drvdata(pdev);
@@ -945,6 +945,7 @@ static void omap_sr_remove(struct platform_device *pdev)
 	pm_runtime_disable(dev);
 	clk_unprepare(sr_info->fck);
 	list_del(&sr_info->node);
+	return 0;
 }
 
 static void omap_sr_shutdown(struct platform_device *pdev)
@@ -969,7 +970,7 @@ MODULE_DEVICE_TABLE(of, omap_sr_match);
 
 static struct platform_driver smartreflex_driver = {
 	.probe		= omap_sr_probe,
-	.remove_new     = omap_sr_remove,
+	.remove         = omap_sr_remove,
 	.shutdown	= omap_sr_shutdown,
 	.driver		= {
 		.name	= DRIVER_NAME,

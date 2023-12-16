@@ -59,7 +59,9 @@ Generic Error Codes
 
     -  -  ``ENOTTY``
 
-       -  The ioctl is not supported by the file descriptor.
+       -  The ioctl is not supported by the driver, actually meaning that
+	  the required functionality is not available, or the file
+	  descriptor is not for a media device.
 
     -  -  ``ENOSPC``
 

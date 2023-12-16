@@ -26,8 +26,6 @@
 #include <asm/macints.h>
 #include <asm/mac_psc.h>
 
-#include "mac.h"
-
 #define DEBUG_PSC
 
 volatile __u8 *psc;

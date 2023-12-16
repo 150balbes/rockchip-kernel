@@ -4,10 +4,6 @@
 #ifndef _I40E_HMC_H_
 #define _I40E_HMC_H_
 
-#include "i40e_alloc.h"
-#include "i40e_io.h"
-#include "i40e_register.h"
-
 #define I40E_HMC_MAX_BP_COUNT 512
 
 /* forward-declare the HW struct for the compiler */

@@ -11,7 +11,7 @@
 #include "icp_qat_hal.h"
 #include "icp_qat_fw_loader_handle.h"
 
-#define UWORD_CPYBUF_SIZE 1024U
+#define UWORD_CPYBUF_SIZE 1024
 #define INVLD_UWORD 0xffffffffffull
 #define PID_MINOR_REV 0xf
 #define PID_MAJOR_REV (0xf << 4)
@@ -200,7 +200,7 @@ static int qat_uclo_parse_num(char *str, unsigned int *num)
 	unsigned long ae = 0;
 	int i;
 
-	strscpy(buf, str, sizeof(buf));
+	strncpy(buf, str, 15);
 	for (i = 0; i < 16; i++) {
 		if (!isdigit(buf[i])) {
 			buf[i] = '\0';
@@ -1986,7 +1986,10 @@ static void qat_uclo_wr_uimage_raw_page(struct icp_qat_fw_loader_handle *handle,
 	uw_relative_addr = 0;
 	words_num = encap_page->micro_words_num;
 	while (words_num) {
-		cpylen = min(words_num, UWORD_CPYBUF_SIZE);
+		if (words_num < UWORD_CPYBUF_SIZE)
+			cpylen = words_num;
+		else
+			cpylen = UWORD_CPYBUF_SIZE;
 
 		/* load the buffer */
 		for (i = 0; i < cpylen; i++)

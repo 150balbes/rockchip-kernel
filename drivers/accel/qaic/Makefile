@@ -9,5 +9,4 @@ qaic-y := \
 	mhi_controller.o \
 	qaic_control.o \
 	qaic_data.o \
-	qaic_drv.o \
-	qaic_timesync.o
+	qaic_drv.o

@@ -52,12 +52,13 @@ static LIST_HEAD(tls_device_list);
 static LIST_HEAD(tls_device_down_list);
 static DEFINE_SPINLOCK(tls_device_lock);
 
-static struct page *dummy_page;
-
 static void tls_device_free_ctx(struct tls_context *ctx)
 {
-	if (ctx->tx_conf == TLS_HW)
+	if (ctx->tx_conf == TLS_HW) {
 		kfree(tls_offload_ctx_tx(ctx));
+		kfree(ctx->tx.rec_seq);
+		kfree(ctx->tx.iv);
+	}
 
 	if (ctx->rx_conf == TLS_HW)
 		kfree(tls_offload_ctx_rx(ctx));
@@ -311,33 +312,36 @@ static int tls_push_record(struct sock *sk,
 	return tls_push_sg(sk, ctx, offload_ctx->sg_tx_data, 0, flags);
 }
 
-static void tls_device_record_close(struct sock *sk,
-				    struct tls_context *ctx,
-				    struct tls_record_info *record,
-				    struct page_frag *pfrag,
-				    unsigned char record_type)
+static int tls_device_record_close(struct sock *sk,
+				   struct tls_context *ctx,
+				   struct tls_record_info *record,
+				   struct page_frag *pfrag,
+				   unsigned char record_type)
 {
 	struct tls_prot_info *prot = &ctx->prot_info;
-	struct page_frag dummy_tag_frag;
+	int ret;
 
 	/* append tag
 	 * device will fill in the tag, we just need to append a placeholder
 	 * use socket memory to improve coalescing (re-using a single buffer
 	 * increases frag count)
-	 * if we can't allocate memory now use the dummy page
+	 * if we can't allocate memory now, steal some back from data
 	 */
-	if (unlikely(pfrag->size - pfrag->offset < prot->tag_size) &&
-	    !skb_page_frag_refill(prot->tag_size, pfrag, sk->sk_allocation)) {
-		dummy_tag_frag.page = dummy_page;
-		dummy_tag_frag.offset = 0;
-		pfrag = &dummy_tag_frag;
+	if (likely(skb_page_frag_refill(prot->tag_size, pfrag,
+					sk->sk_allocation))) {
+		ret = 0;
+		tls_append_frag(record, pfrag, prot->tag_size);
+	} else {
+		ret = prot->tag_size;
+		if (record->len <= prot->overhead_size)
+			return -ENOMEM;
 	}
-	tls_append_frag(record, pfrag, prot->tag_size);
 
 	/* fill prepend */
 	tls_fill_prepend(ctx, skb_frag_address(&record->frags[0]),
 			 record->len - prot->overhead_size,
 			 record_type);
+	return ret;
 }
 
 static int tls_create_new_record(struct tls_offload_context_tx *offload_ctx,
@@ -437,12 +441,8 @@ static int tls_push_data(struct sock *sk,
 	long timeo;
 
 	if (flags &
-	    ~(MSG_MORE | MSG_DONTWAIT | MSG_NOSIGNAL |
-	      MSG_SPLICE_PAGES | MSG_EOR))
+	    ~(MSG_MORE | MSG_DONTWAIT | MSG_NOSIGNAL | MSG_SPLICE_PAGES))
 		return -EOPNOTSUPP;
-
-	if ((flags & (MSG_MORE | MSG_EOR)) == (MSG_MORE | MSG_EOR))
-		return -EINVAL;
 
 	if (unlikely(sk->sk_err))
 		return -sk->sk_err;
@@ -541,8 +541,18 @@ last_record:
 
 		if (done || record->len >= max_open_record_len ||
 		    (record->num_frags >= MAX_SKB_FRAGS - 1)) {
-			tls_device_record_close(sk, tls_ctx, record,
-						pfrag, record_type);
+			rc = tls_device_record_close(sk, tls_ctx, record,
+						     pfrag, record_type);
+			if (rc) {
+				if (rc > 0) {
+					size += rc;
+				} else {
+					size = orig_size;
+					destroy_record(record);
+					ctx->open_record = NULL;
+					break;
+				}
+			}
 
 			rc = tls_push_record(sk,
 					     tls_ctx,
@@ -881,18 +891,24 @@ static int
 tls_device_reencrypt(struct sock *sk, struct tls_context *tls_ctx)
 {
 	struct tls_sw_context_rx *sw_ctx = tls_sw_ctx_rx(tls_ctx);
-	const struct tls_cipher_desc *cipher_desc;
+	const struct tls_cipher_size_desc *cipher_sz;
 	int err, offset, copy, data_len, pos;
 	struct sk_buff *skb, *skb_iter;
 	struct scatterlist sg[1];
 	struct strp_msg *rxm;
 	char *orig_buf, *buf;
 
-	cipher_desc = get_cipher_desc(tls_ctx->crypto_recv.info.cipher_type);
-	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
+	switch (tls_ctx->crypto_recv.info.cipher_type) {
+	case TLS_CIPHER_AES_GCM_128:
+	case TLS_CIPHER_AES_GCM_256:
+		break;
+	default:
+		return -EINVAL;
+	}
+	cipher_sz = &tls_cipher_size_desc[tls_ctx->crypto_recv.info.cipher_type];
 
 	rxm = strp_msg(tls_strp_msg(sw_ctx));
-	orig_buf = kmalloc(rxm->full_len + TLS_HEADER_SIZE + cipher_desc->iv,
+	orig_buf = kmalloc(rxm->full_len + TLS_HEADER_SIZE + cipher_sz->iv,
 			   sk->sk_allocation);
 	if (!orig_buf)
 		return -ENOMEM;
@@ -908,8 +924,8 @@ tls_device_reencrypt(struct sock *sk, struct tls_context *tls_ctx)
 
 	sg_init_table(sg, 1);
 	sg_set_buf(&sg[0], buf,
-		   rxm->full_len + TLS_HEADER_SIZE + cipher_desc->iv);
-	err = skb_copy_bits(skb, offset, buf, TLS_HEADER_SIZE + cipher_desc->iv);
+		   rxm->full_len + TLS_HEADER_SIZE + cipher_sz->iv);
+	err = skb_copy_bits(skb, offset, buf, TLS_HEADER_SIZE + cipher_sz->iv);
 	if (err)
 		goto free_buf;
 
@@ -920,7 +936,7 @@ tls_device_reencrypt(struct sock *sk, struct tls_context *tls_ctx)
 	else
 		err = 0;
 
-	data_len = rxm->full_len - cipher_desc->tag;
+	data_len = rxm->full_len - cipher_sz->tag;
 
 	if (skb_pagelen(skb) > offset) {
 		copy = min_t(int, skb_pagelen(skb) - offset, data_len);
@@ -1033,45 +1049,22 @@ static void tls_device_attach(struct tls_context *ctx, struct sock *sk,
 	}
 }
 
-static struct tls_offload_context_tx *alloc_offload_ctx_tx(struct tls_context *ctx)
+int tls_set_device_offload(struct sock *sk, struct tls_context *ctx)
 {
-	struct tls_offload_context_tx *offload_ctx;
-	__be64 rcd_sn;
-
-	offload_ctx = kzalloc(sizeof(*offload_ctx), GFP_KERNEL);
-	if (!offload_ctx)
-		return NULL;
-
-	INIT_WORK(&offload_ctx->destruct_work, tls_device_tx_del_task);
-	INIT_LIST_HEAD(&offload_ctx->records_list);
-	spin_lock_init(&offload_ctx->lock);
-	sg_init_table(offload_ctx->sg_tx_data,
-		      ARRAY_SIZE(offload_ctx->sg_tx_data));
-
-	/* start at rec_seq - 1 to account for the start marker record */
-	memcpy(&rcd_sn, ctx->tx.rec_seq, sizeof(rcd_sn));
-	offload_ctx->unacked_record_sn = be64_to_cpu(rcd_sn) - 1;
-
-	offload_ctx->ctx = ctx;
-
-	return offload_ctx;
-}
-
-int tls_set_device_offload(struct sock *sk)
-{
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	struct tls_prot_info *prot = &tls_ctx->prot_info;
+	const struct tls_cipher_size_desc *cipher_sz;
 	struct tls_record_info *start_marker_record;
 	struct tls_offload_context_tx *offload_ctx;
-	const struct tls_cipher_desc *cipher_desc;
 	struct tls_crypto_info *crypto_info;
-	struct tls_prot_info *prot;
 	struct net_device *netdev;
-	struct tls_context *ctx;
-	struct sk_buff *skb;
 	char *iv, *rec_seq;
+	struct sk_buff *skb;
+	__be64 rcd_sn;
 	int rc;
 
-	ctx = tls_get_ctx(sk);
-	prot = &ctx->prot_info;
+	if (!ctx)
+		return -EINVAL;
 
 	if (ctx->priv_ctx_tx)
 		return -EEXIST;
@@ -1093,29 +1086,58 @@ int tls_set_device_offload(struct sock *sk)
 		goto release_netdev;
 	}
 
-	cipher_desc = get_cipher_desc(crypto_info->cipher_type);
-	if (!cipher_desc || !cipher_desc->offloadable) {
+	switch (crypto_info->cipher_type) {
+	case TLS_CIPHER_AES_GCM_128:
+		iv = ((struct tls12_crypto_info_aes_gcm_128 *)crypto_info)->iv;
+		rec_seq =
+		 ((struct tls12_crypto_info_aes_gcm_128 *)crypto_info)->rec_seq;
+		break;
+	case TLS_CIPHER_AES_GCM_256:
+		iv = ((struct tls12_crypto_info_aes_gcm_256 *)crypto_info)->iv;
+		rec_seq =
+		 ((struct tls12_crypto_info_aes_gcm_256 *)crypto_info)->rec_seq;
+		break;
+	default:
+		rc = -EINVAL;
+		goto release_netdev;
+	}
+	cipher_sz = &tls_cipher_size_desc[crypto_info->cipher_type];
+
+	/* Sanity-check the rec_seq_size for stack allocations */
+	if (cipher_sz->rec_seq > TLS_MAX_REC_SEQ_SIZE) {
 		rc = -EINVAL;
 		goto release_netdev;
 	}
 
-	rc = init_prot_info(prot, crypto_info, cipher_desc);
-	if (rc)
-		goto release_netdev;
-
-	iv = crypto_info_iv(crypto_info, cipher_desc);
-	rec_seq = crypto_info_rec_seq(crypto_info, cipher_desc);
-
-	memcpy(ctx->tx.iv + cipher_desc->salt, iv, cipher_desc->iv);
-	memcpy(ctx->tx.rec_seq, rec_seq, cipher_desc->rec_seq);
-
-	start_marker_record = kmalloc(sizeof(*start_marker_record), GFP_KERNEL);
-	if (!start_marker_record) {
+	prot->version = crypto_info->version;
+	prot->cipher_type = crypto_info->cipher_type;
+	prot->prepend_size = TLS_HEADER_SIZE + cipher_sz->iv;
+	prot->tag_size = cipher_sz->tag;
+	prot->overhead_size = prot->prepend_size + prot->tag_size;
+	prot->iv_size = cipher_sz->iv;
+	prot->salt_size = cipher_sz->salt;
+	ctx->tx.iv = kmalloc(cipher_sz->iv + cipher_sz->salt, GFP_KERNEL);
+	if (!ctx->tx.iv) {
 		rc = -ENOMEM;
 		goto release_netdev;
 	}
 
-	offload_ctx = alloc_offload_ctx_tx(ctx);
+	memcpy(ctx->tx.iv + cipher_sz->salt, iv, cipher_sz->iv);
+
+	prot->rec_seq_size = cipher_sz->rec_seq;
+	ctx->tx.rec_seq = kmemdup(rec_seq, cipher_sz->rec_seq, GFP_KERNEL);
+	if (!ctx->tx.rec_seq) {
+		rc = -ENOMEM;
+		goto free_iv;
+	}
+
+	start_marker_record = kmalloc(sizeof(*start_marker_record), GFP_KERNEL);
+	if (!start_marker_record) {
+		rc = -ENOMEM;
+		goto free_rec_seq;
+	}
+
+	offload_ctx = kzalloc(TLS_OFFLOAD_CONTEXT_SIZE_TX, GFP_KERNEL);
 	if (!offload_ctx) {
 		rc = -ENOMEM;
 		goto free_marker_record;
@@ -1125,10 +1147,22 @@ int tls_set_device_offload(struct sock *sk)
 	if (rc)
 		goto free_offload_ctx;
 
+	/* start at rec_seq - 1 to account for the start marker record */
+	memcpy(&rcd_sn, ctx->tx.rec_seq, sizeof(rcd_sn));
+	offload_ctx->unacked_record_sn = be64_to_cpu(rcd_sn) - 1;
+
 	start_marker_record->end_seq = tcp_sk(sk)->write_seq;
 	start_marker_record->len = 0;
 	start_marker_record->num_frags = 0;
+
+	INIT_WORK(&offload_ctx->destruct_work, tls_device_tx_del_task);
+	offload_ctx->ctx = ctx;
+
+	INIT_LIST_HEAD(&offload_ctx->records_list);
 	list_add_tail(&start_marker_record->list, &offload_ctx->records_list);
+	spin_lock_init(&offload_ctx->lock);
+	sg_init_table(offload_ctx->sg_tx_data,
+		      ARRAY_SIZE(offload_ctx->sg_tx_data));
 
 	clean_acked_data_enable(inet_csk(sk), &tls_icsk_clean_acked);
 	ctx->push_pending_record = tls_device_push_pending_record;
@@ -1185,6 +1219,10 @@ free_offload_ctx:
 	ctx->priv_ctx_tx = NULL;
 free_marker_record:
 	kfree(start_marker_record);
+free_rec_seq:
+	kfree(ctx->tx.rec_seq);
+free_iv:
+	kfree(ctx->tx.iv);
 release_netdev:
 	dev_put(netdev);
 	return rc;
@@ -1225,7 +1263,7 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 		goto release_lock;
 	}
 
-	context = kzalloc(sizeof(*context), GFP_KERNEL);
+	context = kzalloc(TLS_OFFLOAD_CONTEXT_SIZE_RX, GFP_KERNEL);
 	if (!context) {
 		rc = -ENOMEM;
 		goto release_lock;
@@ -1233,7 +1271,7 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 	context->resync_nh_reset = 1;
 
 	ctx->priv_ctx_rx = context;
-	rc = tls_set_sw_offload(sk, 0);
+	rc = tls_set_sw_offload(sk, ctx, 0);
 	if (rc)
 		goto release_ctx;
 
@@ -1412,26 +1450,14 @@ int __init tls_device_init(void)
 {
 	int err;
 
-	dummy_page = alloc_page(GFP_KERNEL);
-	if (!dummy_page)
-		return -ENOMEM;
-
 	destruct_wq = alloc_workqueue("ktls_device_destruct", 0, 0);
-	if (!destruct_wq) {
-		err = -ENOMEM;
-		goto err_free_dummy;
-	}
+	if (!destruct_wq)
+		return -ENOMEM;
 
 	err = register_netdevice_notifier(&tls_dev_notifier);
 	if (err)
-		goto err_destroy_wq;
+		destroy_workqueue(destruct_wq);
 
-	return 0;
-
-err_destroy_wq:
-	destroy_workqueue(destruct_wq);
-err_free_dummy:
-	put_page(dummy_page);
 	return err;
 }
 
@@ -1440,5 +1466,4 @@ void __exit tls_device_cleanup(void)
 	unregister_netdevice_notifier(&tls_dev_notifier);
 	destroy_workqueue(destruct_wq);
 	clean_acked_data_flush();
-	put_page(dummy_page);
 }

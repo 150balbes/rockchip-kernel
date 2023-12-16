@@ -14,7 +14,6 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
-#include <linux/cpu.h>
 #include <asm/traps.h>
 #include <asm/io.h>
 #include <asm/machdep.h>
@@ -26,8 +25,6 @@
 #else
 #include <asm/MC68328.h>
 #endif
-
-#include "ints.h"
 
 /* assembler routines */
 asmlinkage void system_call(void);
@@ -77,7 +74,7 @@ asmlinkage irqreturn_t inthandler7(void);
  * into one vector and look in the blasted mask register...
  * This code is designed to be fast, almost constant time, not clean!
  */
-asmlinkage void process_int(int vec, struct pt_regs *fp)
+void process_int(int vec, struct pt_regs *fp)
 {
 	int irq;
 	int mask;

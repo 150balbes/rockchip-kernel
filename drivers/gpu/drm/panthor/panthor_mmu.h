@@ -62,7 +62,6 @@ int panthor_vm_pool_destroy_vm(struct panthor_vm_pool *pool, u32 handle);
 struct panthor_vm *panthor_vm_pool_get_vm(struct panthor_vm_pool *pool, u32 handle);
 
 bool panthor_vm_has_unhandled_faults(struct panthor_vm *vm);
-bool panthor_vm_is_unusable(struct panthor_vm *vm);
 
 /*
  * PANTHOR_VM_KERNEL_AUTO_VA: Use this magic address when you want the GEM

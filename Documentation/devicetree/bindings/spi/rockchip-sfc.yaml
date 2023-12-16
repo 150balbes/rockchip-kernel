@@ -47,8 +47,6 @@ properties:
 patternProperties:
   "^flash@[0-3]$":
     type: object
-    additionalProperties: true
-
     properties:
       reg:
         minimum: 0

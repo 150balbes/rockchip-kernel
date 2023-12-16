@@ -85,7 +85,7 @@ int ntfs_getattr(struct mnt_idmap *idmap, const struct path *path,
 
 	stat->attributes_mask |= STATX_ATTR_COMPRESSED | STATX_ATTR_ENCRYPTED;
 
-	generic_fillattr(idmap, request_mask, inode, stat);
+	generic_fillattr(idmap, inode, stat);
 
 	stat->result_mask |= STATX_BTIME;
 	stat->btime = ni->i_crtime;
@@ -187,7 +187,7 @@ static int ntfs_zero_range(struct inode *inode, u64 vbo, u64 vbo_to)
 	struct buffer_head *head, *bh;
 	u32 bh_next, bh_off, to;
 	sector_t iblock;
-	struct folio *folio;
+	struct page *page;
 
 	for (; idx < idx_end; idx += 1, from = 0) {
 		page_off = (loff_t)idx << PAGE_SHIFT;
@@ -195,17 +195,16 @@ static int ntfs_zero_range(struct inode *inode, u64 vbo, u64 vbo_to)
 						       PAGE_SIZE;
 		iblock = page_off >> inode->i_blkbits;
 
-		folio = __filemap_get_folio(mapping, idx,
-				FGP_LOCK | FGP_ACCESSED | FGP_CREAT,
-				mapping_gfp_constraint(mapping, ~__GFP_FS));
-		if (IS_ERR(folio))
-			return PTR_ERR(folio);
+		page = find_or_create_page(mapping, idx,
+					   mapping_gfp_constraint(mapping,
+								  ~__GFP_FS));
+		if (!page)
+			return -ENOMEM;
 
-		head = folio_buffers(folio);
-		if (!head)
-			head = create_empty_buffers(folio, blocksize, 0);
+		if (!page_has_buffers(page))
+			create_empty_buffers(page, blocksize, 0);
 
-		bh = head;
+		bh = head = page_buffers(page);
 		bh_off = 0;
 		do {
 			bh_next = bh_off + blocksize;
@@ -221,14 +220,14 @@ static int ntfs_zero_range(struct inode *inode, u64 vbo, u64 vbo_to)
 			}
 
 			/* Ok, it's mapped. Make sure it's up-to-date. */
-			if (folio_test_uptodate(folio))
+			if (PageUptodate(page))
 				set_buffer_uptodate(bh);
 
 			if (!buffer_uptodate(bh)) {
 				err = bh_read(bh, 0);
 				if (err < 0) {
-					folio_unlock(folio);
-					folio_put(folio);
+					unlock_page(page);
+					put_page(page);
 					goto out;
 				}
 			}
@@ -238,10 +237,10 @@ static int ntfs_zero_range(struct inode *inode, u64 vbo, u64 vbo_to)
 		} while (bh_off = bh_next, iblock += 1,
 			 head != (bh = bh->b_this_page));
 
-		folio_zero_segment(folio, from, to);
+		zero_user_segment(page, from, to);
 
-		folio_unlock(folio);
-		folio_put(folio);
+		unlock_page(page);
+		put_page(page);
 		cond_resched();
 	}
 out:
@@ -343,7 +342,7 @@ static int ntfs_extend(struct inode *inode, loff_t pos, size_t count,
 		err = 0;
 	}
 
-	inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	mark_inode_dirty(inode);
 
 	if (IS_SYNC(inode)) {
@@ -401,7 +400,7 @@ static int ntfs_truncate(struct inode *inode, loff_t new_size)
 	ni_unlock(ni);
 
 	ni->std_fa |= FILE_ATTRIBUTE_ARCHIVE;
-	inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	if (!IS_DIRSYNC(inode)) {
 		dirty = 1;
 	} else {
@@ -643,7 +642,7 @@ out:
 		filemap_invalidate_unlock(mapping);
 
 	if (!err) {
-		inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+		inode->i_ctime = inode->i_mtime = current_time(inode);
 		mark_inode_dirty(inode);
 	}
 
@@ -746,8 +745,8 @@ static ssize_t ntfs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 static ssize_t ntfs_file_splice_read(struct file *in, loff_t *ppos,
-				     struct pipe_inode_info *pipe, size_t len,
-				     unsigned int flags)
+				     struct pipe_inode_info *pipe,
+				     size_t len, unsigned int flags)
 {
 	struct inode *inode = in->f_mapping->host;
 	struct ntfs_inode *ni = ntfs_i(inode);

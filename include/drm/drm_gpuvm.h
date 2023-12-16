@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 OR MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 
 #ifndef __DRM_GPUVM_H__
 #define __DRM_GPUVM_H__
@@ -25,12 +25,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <linux/dma-resv.h>
 #include <linux/list.h>
+#include <linux/dma-resv.h>
 #include <linux/rbtree.h>
 #include <linux/types.h>
 
-#include <drm/drm_device.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_exec.h>
 
@@ -201,12 +200,12 @@ enum drm_gpuvm_flags {
 	 * @DRM_GPUVM_RESV_PROTECTED: GPUVM is protected externally by the
 	 * GPUVM's &dma_resv lock
 	 */
-	DRM_GPUVM_RESV_PROTECTED = BIT(0),
+	DRM_GPUVM_RESV_PROTECTED = (1 << 0),
 
 	/**
 	 * @DRM_GPUVM_USERBITS: user defined bits
 	 */
-	DRM_GPUVM_USERBITS = BIT(1),
+	DRM_GPUVM_USERBITS = (1 << 1),
 };
 
 /**
@@ -231,11 +230,6 @@ struct drm_gpuvm {
 	 * @flags: the &drm_gpuvm_flags of this GPUVM
 	 */
 	enum drm_gpuvm_flags flags;
-
-	/**
-	 * @drm: the &drm_device this VM lives in
-	 */
-	struct drm_device *drm;
 
 	/**
 	 * @mm_start: start of the VA space
@@ -263,11 +257,6 @@ struct drm_gpuvm {
 	} rb;
 
 	/**
-	 * @kref: reference count of this object
-	 */
-	struct kref kref;
-
-	/**
 	 * @kernel_alloc_node:
 	 *
 	 * &drm_gpuva representing the address space cutout reserved for
@@ -281,7 +270,7 @@ struct drm_gpuvm {
 	const struct drm_gpuvm_ops *ops;
 
 	/**
-	 * @r_obj: Resv GEM object; representing the GPUVM's common &dma_resv.
+	 * @r_obj: Root GEM object; representing the GPUVM's common &dma_resv.
 	 */
 	struct drm_gem_object *r_obj;
 
@@ -330,36 +319,17 @@ struct drm_gpuvm {
 	} evict;
 };
 
-void drm_gpuvm_init(struct drm_gpuvm *gpuvm, const char *name,
-		    enum drm_gpuvm_flags flags,
-		    struct drm_device *drm,
-		    struct drm_gem_object *r_obj,
+void drm_gpuvm_init(struct drm_gpuvm *gpuvm, struct drm_gem_object *r_obj,
+		    const char *name, enum drm_gpuvm_flags flags,
 		    u64 start_offset, u64 range,
 		    u64 reserve_offset, u64 reserve_range,
 		    const struct drm_gpuvm_ops *ops);
+void drm_gpuvm_destroy(struct drm_gpuvm *gpuvm);
 
-/**
- * drm_gpuvm_get() - acquire a struct drm_gpuvm reference
- * @gpuvm: the &drm_gpuvm to acquire the reference of
- *
- * This function acquires an additional reference to @gpuvm. It is illegal to
- * call this without already holding a reference. No locks required.
- */
-static inline struct drm_gpuvm *
-drm_gpuvm_get(struct drm_gpuvm *gpuvm)
-{
-	kref_get(&gpuvm->kref);
-
-	return gpuvm;
-}
-
-void drm_gpuvm_put(struct drm_gpuvm *gpuvm);
-
-bool drm_gpuvm_range_valid(struct drm_gpuvm *gpuvm, u64 addr, u64 range);
 bool drm_gpuvm_interval_empty(struct drm_gpuvm *gpuvm, u64 addr, u64 range);
 
 struct drm_gem_object *
-drm_gpuvm_resv_object_alloc(struct drm_device *drm);
+drm_gpuvm_root_object_alloc(struct drm_device *drm);
 
 /**
  * drm_gpuvm_resv_protected() - indicates whether &DRM_GPUVM_RESV_PROTECTED is
@@ -512,20 +482,9 @@ struct drm_gpuvm_exec {
 	struct drm_exec exec;
 
 	/**
-	 * @flags: the flags for the struct drm_exec
-	 */
-	uint32_t flags;
-
-	/**
 	 * @vm: the &drm_gpuvm to lock its DMA reservations
 	 */
 	struct drm_gpuvm *vm;
-
-	/**
-	 * @num_fences: the number of fences to reserve for the &dma_resv of the
-	 * locked &drm_gem_objects
-	 */
-	unsigned int num_fences;
 
 	/**
 	 * @extra: Callback and corresponding private data for the driver to
@@ -535,7 +494,8 @@ struct drm_gpuvm_exec {
 		/**
 		 * @fn: The driver callback to lock additional &drm_gem_objects.
 		 */
-		int (*fn)(struct drm_gpuvm_exec *vm_exec);
+		int (*fn)(struct drm_gpuvm_exec *vm_exec,
+			  unsigned int num_fences);
 
 		/**
 		 * @priv: driver private data for the @fn callback
@@ -574,14 +534,20 @@ int drm_gpuvm_prepare_range(struct drm_gpuvm *gpuvm,
 			    u64 addr, u64 range,
 			    unsigned int num_fences);
 
-int drm_gpuvm_exec_lock(struct drm_gpuvm_exec *vm_exec);
+int drm_gpuvm_exec_lock(struct drm_gpuvm_exec *vm_exec,
+			unsigned int num_fences,
+			bool interruptible);
 
 int drm_gpuvm_exec_lock_array(struct drm_gpuvm_exec *vm_exec,
 			      struct drm_gem_object **objs,
-			      unsigned int num_objs);
+			      unsigned int num_objs,
+			      unsigned int num_fences,
+			      bool interruptible);
 
 int drm_gpuvm_exec_lock_range(struct drm_gpuvm_exec *vm_exec,
-			      u64 addr, u64 range);
+			      u64 addr, u64 range,
+			      unsigned int num_fences,
+			      bool interruptible);
 
 /**
  * drm_gpuvm_exec_unlock() - lock all dma-resv of all assoiciated BOs
@@ -653,15 +619,14 @@ drm_gpuvm_exec_validate(struct drm_gpuvm_exec *vm_exec)
  * last mapping of the GEM object in this GPU-VM is unmapped.
  */
 struct drm_gpuvm_bo {
+
 	/**
-	 * @vm: The &drm_gpuvm the @obj is mapped in. This is a reference
-	 * counted pointer.
+	 * @vm: The &drm_gpuvm the @obj is mapped in.
 	 */
 	struct drm_gpuvm *vm;
 
 	/**
-	 * @obj: The &drm_gem_object being mapped in @vm. This is a reference
-	 * counted pointer.
+	 * @obj: The &drm_gem_object being mapped in @vm.
 	 */
 	struct drm_gem_object *obj;
 
@@ -682,9 +647,6 @@ struct drm_gpuvm_bo {
 	struct {
 		/**
 		 * @gpuva: The list of linked &drm_gpuvas.
-		 *
-		 * It is safe to access entries from this list as long as the
-		 * GEM's gpuva lock is held. See also struct drm_gem_object.
 		 */
 		struct list_head gpuva;
 
@@ -738,7 +700,7 @@ drm_gpuvm_bo_get(struct drm_gpuvm_bo *vm_bo)
 	return vm_bo;
 }
 
-bool drm_gpuvm_bo_put(struct drm_gpuvm_bo *vm_bo);
+void drm_gpuvm_bo_put(struct drm_gpuvm_bo *vm_bo);
 
 struct drm_gpuvm_bo *
 drm_gpuvm_bo_find(struct drm_gpuvm *gpuvm,
@@ -772,8 +734,6 @@ void drm_gpuvm_bo_extobj_add(struct drm_gpuvm_bo *vm_bo);
  *
  * This iterator walks over all &drm_gpuva structures associated with the
  * &drm_gpuvm_bo.
- *
- * The caller must hold the GEM's gpuva lock.
  */
 #define drm_gpuvm_bo_for_each_va(va__, vm_bo__) \
 	list_for_each_entry(va__, &(vm_bo)->list.gpuva, gem.entry)
@@ -788,8 +748,6 @@ void drm_gpuvm_bo_extobj_add(struct drm_gpuvm_bo *vm_bo);
  * This iterator walks over all &drm_gpuva structures associated with the
  * &drm_gpuvm_bo. It is implemented with list_for_each_entry_safe(), hence
  * it is save against removal of elements.
- *
- * The caller must hold the GEM's gpuva lock.
  */
 #define drm_gpuvm_bo_for_each_va_safe(va__, next__, vm_bo__) \
 	list_for_each_entry_safe(va__, next__, &(vm_bo)->list.gpuva, gem.entry)
@@ -1084,14 +1042,6 @@ static inline void drm_gpuva_init_from_op(struct drm_gpuva *va,
  */
 struct drm_gpuvm_ops {
 	/**
-	 * @vm_free: called when the last reference of a struct drm_gpuvm is
-	 * dropped
-	 *
-	 * This callback is mandatory.
-	 */
-	void (*vm_free)(struct drm_gpuvm *gpuvm);
-
-	/**
 	 * @op_alloc: called when the &drm_gpuvm allocates
 	 * a struct drm_gpuva_op
 	 *
@@ -1212,33 +1162,5 @@ void drm_gpuva_remap(struct drm_gpuva *prev,
 		     struct drm_gpuva_op_remap *op);
 
 void drm_gpuva_unmap(struct drm_gpuva_op_unmap *op);
-
-/**
- * drm_gpuva_op_remap_to_unmap_range() - Helper to get the start and range of
- * the unmap stage of a remap op.
- * @op: Remap op.
- * @start_addr: Output pointer for the start of the required unmap.
- * @range: Output pointer for the length of the required unmap.
- *
- * The given start address and range will be set such that they represent the
- * range of the address space that was previously covered by the mapping being
- * re-mapped, but is now empty.
- */
-static inline void
-drm_gpuva_op_remap_to_unmap_range(const struct drm_gpuva_op_remap *op,
-				  u64 *start_addr, u64 *range)
-{
-	const u64 va_start = op->prev ?
-			     op->prev->va.addr + op->prev->va.range :
-			     op->unmap->va->va.addr;
-	const u64 va_end = op->next ?
-			   op->next->va.addr :
-			   op->unmap->va->va.addr + op->unmap->va->va.range;
-
-	if (start_addr)
-		*start_addr = va_start;
-	if (range)
-		*range = va_end - va_start;
-}
 
 #endif /* __DRM_GPUVM_H__ */

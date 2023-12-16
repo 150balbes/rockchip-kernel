@@ -18,8 +18,6 @@
 #include <asm/mcfsim.h>
 #include <asm/mcfwdebug.h>
 
-#include "vectors.h"
-
 /***************************************************************************/
 
 #ifdef TRAP_DBG_INTERRUPT

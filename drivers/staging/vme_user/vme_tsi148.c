@@ -2118,9 +2118,8 @@ static int tsi148_slot_get(struct vme_bridge *tsi148_bridge)
 	if (!geoid) {
 		slot = ioread32be(bridge->base + TSI148_LCSR_VSTAT);
 		slot = slot & TSI148_LCSR_VSTAT_GA_M;
-	} else {
+	} else
 		slot = geoid;
-	}
 
 	return (int)slot;
 }
@@ -2197,9 +2196,9 @@ static int tsi148_crcsr_init(struct vme_bridge *tsi148_bridge,
 	dev_info(tsi148_bridge->parent, "CR/CSR Offset: %d\n", cbar);
 
 	crat = ioread32be(bridge->base + TSI148_LCSR_CRAT);
-	if (crat & TSI148_LCSR_CRAT_EN) {
+	if (crat & TSI148_LCSR_CRAT_EN)
 		dev_info(tsi148_bridge->parent, "CR/CSR already enabled\n");
-	} else {
+	else {
 		dev_info(tsi148_bridge->parent, "Enabling CR/CSR space\n");
 		iowrite32be(crat | TSI148_LCSR_CRAT_EN,
 			bridge->base + TSI148_LCSR_CRAT);
@@ -2310,7 +2309,7 @@ static int tsi148_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mutex_init(&tsi148_device->vme_rmw);
 
 	tsi148_bridge->parent = &pdev->dev;
-	strscpy(tsi148_bridge->name, driver_name, VMENAMSIZ);
+	strcpy(tsi148_bridge->name, driver_name);
 
 	/* Setup IRQ */
 	retval = tsi148_irq_init(tsi148_bridge);

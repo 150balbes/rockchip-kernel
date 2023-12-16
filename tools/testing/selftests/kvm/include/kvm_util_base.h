@@ -15,7 +15,6 @@
 #include <linux/kernel.h>
 #include <linux/kvm.h>
 #include "linux/rbtree.h"
-#include <linux/types.h>
 
 #include <asm/atomic.h>
 
@@ -125,26 +124,6 @@ struct kvm_vm {
 	uint32_t memslots[NR_MEM_REGIONS];
 };
 
-struct vcpu_reg_sublist {
-	const char *name;
-	long capability;
-	int feature;
-	bool finalize;
-	__u64 *regs;
-	__u64 regs_n;
-	__u64 *rejects_set;
-	__u64 rejects_set_n;
-	__u64 *skips_set;
-	__u64 skips_set_n;
-};
-
-struct vcpu_reg_list {
-	char *name;
-	struct vcpu_reg_sublist sublists[];
-};
-
-#define for_each_sublist(c, s)		\
-	for ((s) = &(c)->sublists[0]; (s)->regs; ++(s))
 
 #define kvm_for_each_vcpu(vm, i, vcpu)			\
 	for ((i) = 0; (i) <= (vm)->last_vcpu_id; (i)++)	\
@@ -383,10 +362,8 @@ static inline void read_stats_header(int stats_fd, struct kvm_stats_header *head
 {
 	ssize_t ret;
 
-	ret = pread(stats_fd, header, sizeof(*header), 0);
-	TEST_ASSERT(ret == sizeof(*header),
-		    "Failed to read '%lu' header bytes, ret = '%ld'",
-		    sizeof(*header), ret);
+	ret = read(stats_fd, header, sizeof(*header));
+	TEST_ASSERT(ret == sizeof(*header), "Read stats header");
 }
 
 struct kvm_stats_desc *read_stats_descriptors(int stats_fd,

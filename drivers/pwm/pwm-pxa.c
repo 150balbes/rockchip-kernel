@@ -15,7 +15,6 @@
  *   input clock (PWMCR_SD is set) and the output is driven to inactive.
  */
 
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -24,7 +23,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/pwm.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 
 #include <asm/div64.h>
 
@@ -135,6 +134,7 @@ static int pxa_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static const struct pwm_ops pxa_pwm_ops = {
 	.apply = pxa_pwm_apply,
+	.owner = THIS_MODULE,
 };
 
 #ifdef CONFIG_OF
@@ -156,6 +156,13 @@ MODULE_DEVICE_TABLE(of, pwm_of_match);
 #define pwm_of_match NULL
 #endif
 
+static const struct platform_device_id *pxa_pwm_get_id_dt(struct device *dev)
+{
+	const struct of_device_id *id = of_match_device(pwm_of_match, dev);
+
+	return id ? id->data : NULL;
+}
+
 static int pwm_probe(struct platform_device *pdev)
 {
 	const struct platform_device_id *id = platform_get_device_id(pdev);
@@ -163,7 +170,7 @@ static int pwm_probe(struct platform_device *pdev)
 	int ret = 0;
 
 	if (IS_ENABLED(CONFIG_OF) && id == NULL)
-		id = of_device_get_match_data(&pdev->dev);
+		id = pxa_pwm_get_id_dt(&pdev->dev);
 
 	if (id == NULL)
 		return -EINVAL;

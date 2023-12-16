@@ -12,12 +12,12 @@
  */
 #define pr_fmt(fmt) "pinmux core: " fmt
 
-#include <linux/array_size.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/radix-tree.h>
@@ -173,8 +173,10 @@ static int pin_request(struct pinctrl_dev *pctldev,
 	else
 		status = 0;
 
-	if (status)
+	if (status) {
+		dev_err(pctldev->dev, "request() failed for pin %d\n", pin);
 		module_put(pctldev->owner);
+	}
 
 out_free_pin:
 	if (status) {
@@ -870,7 +872,7 @@ int pinmux_generic_add_function(struct pinctrl_dev *pctldev,
 				void *data)
 {
 	struct function_desc *function;
-	int selector, error;
+	int selector;
 
 	if (!name)
 		return -EINVAL;
@@ -890,9 +892,7 @@ int pinmux_generic_add_function(struct pinctrl_dev *pctldev,
 	function->num_group_names = num_groups;
 	function->data = data;
 
-	error = radix_tree_insert(&pctldev->pin_function_tree, selector, function);
-	if (error)
-		return error;
+	radix_tree_insert(&pctldev->pin_function_tree, selector, function);
 
 	pctldev->num_functions++;
 

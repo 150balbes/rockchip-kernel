@@ -74,4 +74,3 @@ module_exit(exit_rc_map_npgtech)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("npgtech remote controller keytable");

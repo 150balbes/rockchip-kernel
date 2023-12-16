@@ -21,15 +21,6 @@ properties:
   reg:
     maxItems: 1
 
-  "#sound-dai-cells":
-    const: 0
-
-  clocks:
-    maxItems: 1
-
-  clock-names:
-    const: mclk
-
   nuvoton,spk-btl:
     description:
       If set, configure the two loudspeaker outputs as a Bridge Tied Load output
@@ -39,9 +30,6 @@ properties:
 required:
   - compatible
   - reg
-
-allOf:
-  - $ref: dai-common.yaml#
 
 additionalProperties: false
 

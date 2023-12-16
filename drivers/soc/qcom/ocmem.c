@@ -14,8 +14,7 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/firmware/qcom/qcom_scm.h>
 #include <linux/sizes.h>
@@ -55,8 +54,6 @@ struct ocmem {
 	const struct ocmem_config *config;
 	struct resource *memory;
 	void __iomem *mmio;
-	struct clk *core_clk;
-	struct clk *iface_clk;
 	unsigned int num_ports;
 	unsigned int num_macros;
 	bool interleaved;
@@ -83,8 +80,8 @@ struct ocmem {
 #define OCMEM_HW_VERSION_MINOR(val)		FIELD_GET(GENMASK(27, 16), val)
 #define OCMEM_HW_VERSION_STEP(val)		FIELD_GET(GENMASK(15, 0), val)
 
-#define OCMEM_HW_PROFILE_NUM_PORTS(val)		FIELD_GET(0x0000000f, (val))
-#define OCMEM_HW_PROFILE_NUM_MACROS(val)	FIELD_GET(0x00003f00, (val))
+#define OCMEM_HW_PROFILE_NUM_PORTS(val)		FIELD_PREP(0x0000000f, (val))
+#define OCMEM_HW_PROFILE_NUM_MACROS(val)	FIELD_PREP(0x00003f00, (val))
 
 #define OCMEM_HW_PROFILE_LAST_REGN_HALFSIZE	0x00010000
 #define OCMEM_HW_PROFILE_INTERLEAVING		0x00020000
@@ -97,6 +94,16 @@ struct ocmem {
 #define OCMEM_PSGSC_CTL_MACRO1_MODE(val)	FIELD_PREP(0x00000070, (val))
 #define OCMEM_PSGSC_CTL_MACRO2_MODE(val)	FIELD_PREP(0x00000700, (val))
 #define OCMEM_PSGSC_CTL_MACRO3_MODE(val)	FIELD_PREP(0x00007000, (val))
+
+#define OCMEM_CLK_CORE_IDX			0
+static struct clk_bulk_data ocmem_clks[] = {
+	{
+		.id = "core",
+	},
+	{
+		.id = "iface",
+	},
+};
 
 static inline void ocmem_write(struct ocmem *ocmem, u32 reg, u32 data)
 {
@@ -211,7 +218,7 @@ struct ocmem *of_get_ocmem(struct device *dev)
 	}
 	return ocmem;
 }
-EXPORT_SYMBOL_GPL(of_get_ocmem);
+EXPORT_SYMBOL(of_get_ocmem);
 
 struct ocmem_buf *ocmem_allocate(struct ocmem *ocmem, enum ocmem_client client,
 				 unsigned long size)
@@ -267,7 +274,7 @@ err_unlock:
 
 	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL_GPL(ocmem_allocate);
+EXPORT_SYMBOL(ocmem_allocate);
 
 void ocmem_free(struct ocmem *ocmem, enum ocmem_client client,
 		struct ocmem_buf *buf)
@@ -294,7 +301,7 @@ void ocmem_free(struct ocmem *ocmem, enum ocmem_client client,
 
 	clear_bit_unlock(BIT(client), &ocmem->active_allocations);
 }
-EXPORT_SYMBOL_GPL(ocmem_free);
+EXPORT_SYMBOL(ocmem_free);
 
 static int ocmem_dev_probe(struct platform_device *pdev)
 {
@@ -313,20 +320,19 @@ static int ocmem_dev_probe(struct platform_device *pdev)
 	ocmem->dev = dev;
 	ocmem->config = device_get_match_data(dev);
 
-	ocmem->core_clk = devm_clk_get(dev, "core");
-	if (IS_ERR(ocmem->core_clk))
-		return dev_err_probe(dev, PTR_ERR(ocmem->core_clk),
-				     "Unable to get core clock\n");
+	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(ocmem_clks), ocmem_clks);
+	if (ret) {
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "Unable to get clocks\n");
 
-	ocmem->iface_clk = devm_clk_get_optional(dev, "iface");
-	if (IS_ERR(ocmem->iface_clk))
-		return dev_err_probe(dev, PTR_ERR(ocmem->iface_clk),
-				     "Unable to get iface clock\n");
+		return ret;
+	}
 
 	ocmem->mmio = devm_platform_ioremap_resource_byname(pdev, "ctrl");
-	if (IS_ERR(ocmem->mmio))
-		return dev_err_probe(&pdev->dev, PTR_ERR(ocmem->mmio),
-				     "Failed to ioremap ocmem_ctrl resource\n");
+	if (IS_ERR(ocmem->mmio)) {
+		dev_err(&pdev->dev, "Failed to ioremap ocmem_ctrl resource\n");
+		return PTR_ERR(ocmem->mmio);
+	}
 
 	ocmem->memory = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						     "mem");
@@ -336,23 +342,19 @@ static int ocmem_dev_probe(struct platform_device *pdev)
 	}
 
 	/* The core clock is synchronous with graphics */
-	WARN_ON(clk_set_rate(ocmem->core_clk, 1000) < 0);
+	WARN_ON(clk_set_rate(ocmem_clks[OCMEM_CLK_CORE_IDX].clk, 1000) < 0);
 
-	ret = clk_prepare_enable(ocmem->core_clk);
-	if (ret)
-		return dev_err_probe(ocmem->dev, ret, "Failed to enable core clock\n");
-
-	ret = clk_prepare_enable(ocmem->iface_clk);
+	ret = clk_bulk_prepare_enable(ARRAY_SIZE(ocmem_clks), ocmem_clks);
 	if (ret) {
-		clk_disable_unprepare(ocmem->core_clk);
-		return dev_err_probe(ocmem->dev, ret, "Failed to enable iface clock\n");
+		dev_info(ocmem->dev, "Failed to enable clocks\n");
+		return ret;
 	}
 
 	if (qcom_scm_restore_sec_cfg_available()) {
 		dev_dbg(dev, "configuring scm\n");
 		ret = qcom_scm_restore_sec_cfg(QCOM_SCM_OCMEM_DEV_ID, 0);
 		if (ret) {
-			dev_err_probe(dev, ret, "Could not enable secure configuration\n");
+			dev_err(dev, "Could not enable secure configuration\n");
 			goto err_clk_disable;
 		}
 	}
@@ -411,23 +413,16 @@ static int ocmem_dev_probe(struct platform_device *pdev)
 	return 0;
 
 err_clk_disable:
-	clk_disable_unprepare(ocmem->core_clk);
-	clk_disable_unprepare(ocmem->iface_clk);
+	clk_bulk_disable_unprepare(ARRAY_SIZE(ocmem_clks), ocmem_clks);
 	return ret;
 }
 
-static void ocmem_dev_remove(struct platform_device *pdev)
+static int ocmem_dev_remove(struct platform_device *pdev)
 {
-	struct ocmem *ocmem = platform_get_drvdata(pdev);
+	clk_bulk_disable_unprepare(ARRAY_SIZE(ocmem_clks), ocmem_clks);
 
-	clk_disable_unprepare(ocmem->core_clk);
-	clk_disable_unprepare(ocmem->iface_clk);
+	return 0;
 }
-
-static const struct ocmem_config ocmem_8226_config = {
-	.num_regions = 1,
-	.macro_size = SZ_128K,
-};
 
 static const struct ocmem_config ocmem_8974_config = {
 	.num_regions = 3,
@@ -435,7 +430,6 @@ static const struct ocmem_config ocmem_8974_config = {
 };
 
 static const struct of_device_id ocmem_of_match[] = {
-	{ .compatible = "qcom,msm8226-ocmem", .data = &ocmem_8226_config },
 	{ .compatible = "qcom,msm8974-ocmem", .data = &ocmem_8974_config },
 	{ }
 };
@@ -444,7 +438,7 @@ MODULE_DEVICE_TABLE(of, ocmem_of_match);
 
 static struct platform_driver ocmem_driver = {
 	.probe = ocmem_dev_probe,
-	.remove_new = ocmem_dev_remove,
+	.remove = ocmem_dev_remove,
 	.driver = {
 		.name = "ocmem",
 		.of_match_table = ocmem_of_match,

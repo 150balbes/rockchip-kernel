@@ -330,7 +330,6 @@ out_unlock:
  * @heap_gpu_va: The GPU address of the heap context.
  * @renderpasses_in_flight: Number of render passes currently in-flight.
  * @pending_frag_count: Number of fragment jobs waiting for execution/completion.
- * @new_chunk_gpu_va: Pointer used to return the chunk VA.
  */
 int panthor_heap_grow(struct panthor_heap_pool *pool,
 		      u64 heap_gpu_va,
@@ -368,16 +367,6 @@ int panthor_heap_grow(struct panthor_heap_pool *pool,
 		goto out_unlock;
 	}
 
-	/* FIXME: panthor_alloc_heap_chunk() triggers a kernel BO creation, which
-	 * relies on blocking allocations (both for the BO itself, and backing
-	 * memory), which might cause a deadlock because we're called from a context
-	 * where we hold the panthor scheduler lock, thus preventing job cleanups
-	 * that could free up some memory. The jobs themselves will timeout, but
-	 * we'll still be blocked there. The only solution here is to implement
-	 * something similar to shmem_sg_alloc_table() in i915, so we can do
-	 * non-blocking allocations, and just kill the job when we run out-of-memory
-	 * for the tiler context.
-	 */
 	ret = panthor_alloc_heap_chunk(pool->ptdev, pool->vm, heap, false);
 	if (ret)
 		goto out_unlock;

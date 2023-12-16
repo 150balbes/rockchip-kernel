@@ -732,7 +732,8 @@ static int prism2_download(local_info_t *local,
 		goto out;
 	}
 
-	dl = kzalloc(struct_size(dl, data, param->num_areas), GFP_KERNEL);
+	dl = kzalloc(sizeof(*dl) + param->num_areas *
+		     sizeof(struct prism2_download_data_area), GFP_KERNEL);
 	if (dl == NULL) {
 		ret = -ENOMEM;
 		goto out;

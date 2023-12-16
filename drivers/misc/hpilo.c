@@ -25,9 +25,7 @@
 #include <linux/slab.h>
 #include "hpilo.h"
 
-static const struct class ilo_class = {
-	.name = "iLO",
-};
+static struct class *ilo_class;
 static unsigned int ilo_major;
 static unsigned int max_ccb = 16;
 static char ilo_hwdev[MAX_ILO_DEV];
@@ -748,7 +746,7 @@ static void ilo_remove(struct pci_dev *pdev)
 
 	minor = MINOR(ilo_hw->cdev.dev);
 	for (i = minor; i < minor + max_ccb; i++)
-		device_destroy(&ilo_class, MKDEV(ilo_major, i));
+		device_destroy(ilo_class, MKDEV(ilo_major, i));
 
 	cdev_del(&ilo_hw->cdev);
 	ilo_disable_interrupts(ilo_hw);
@@ -841,7 +839,7 @@ static int ilo_probe(struct pci_dev *pdev,
 
 	for (minor = 0 ; minor < max_ccb; minor++) {
 		struct device *dev;
-		dev = device_create(&ilo_class, &pdev->dev,
+		dev = device_create(ilo_class, &pdev->dev,
 				    MKDEV(ilo_major, minor), NULL,
 				    "hpilo!d%dccb%d", devnum, minor);
 		if (IS_ERR(dev))
@@ -884,9 +882,11 @@ static int __init ilo_init(void)
 	int error;
 	dev_t dev;
 
-	error = class_register(&ilo_class);
-	if (error)
+	ilo_class = class_create("iLO");
+	if (IS_ERR(ilo_class)) {
+		error = PTR_ERR(ilo_class);
 		goto out;
+	}
 
 	error = alloc_chrdev_region(&dev, 0, MAX_OPEN, ILO_NAME);
 	if (error)
@@ -902,7 +902,7 @@ static int __init ilo_init(void)
 chr_remove:
 	unregister_chrdev_region(dev, MAX_OPEN);
 class_destroy:
-	class_unregister(&ilo_class);
+	class_destroy(ilo_class);
 out:
 	return error;
 }
@@ -911,7 +911,7 @@ static void __exit ilo_exit(void)
 {
 	pci_unregister_driver(&ilo_driver);
 	unregister_chrdev_region(MKDEV(ilo_major, 0), MAX_OPEN);
-	class_unregister(&ilo_class);
+	class_destroy(ilo_class);
 }
 
 MODULE_VERSION("1.5.0");

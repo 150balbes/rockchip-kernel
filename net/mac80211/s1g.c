@@ -2,7 +2,6 @@
 /*
  * S1G handling
  * Copyright(c) 2020 Adapt-IP
- * Copyright (C) 2023 Intel Corporation
  */
 #include <linux/ieee80211.h>
 #include <net/mac80211.h>
@@ -154,11 +153,11 @@ void ieee80211_s1g_rx_twt_action(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_local *local = sdata->local;
 	struct sta_info *sta;
 
-	lockdep_assert_wiphy(local->hw.wiphy);
+	mutex_lock(&local->sta_mtx);
 
 	sta = sta_info_get_bss(sdata, mgmt->sa);
 	if (!sta)
-		return;
+		goto out;
 
 	switch (mgmt->u.action.u.s1g.action_code) {
 	case WLAN_S1G_TWT_SETUP:
@@ -170,6 +169,9 @@ void ieee80211_s1g_rx_twt_action(struct ieee80211_sub_if_data *sdata,
 	default:
 		break;
 	}
+
+out:
+	mutex_unlock(&local->sta_mtx);
 }
 
 void ieee80211_s1g_status_twt_action(struct ieee80211_sub_if_data *sdata,
@@ -179,11 +181,11 @@ void ieee80211_s1g_status_twt_action(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_local *local = sdata->local;
 	struct sta_info *sta;
 
-	lockdep_assert_wiphy(local->hw.wiphy);
+	mutex_lock(&local->sta_mtx);
 
 	sta = sta_info_get_bss(sdata, mgmt->da);
 	if (!sta)
-		return;
+		goto out;
 
 	switch (mgmt->u.action.u.s1g.action_code) {
 	case WLAN_S1G_TWT_SETUP:
@@ -193,4 +195,7 @@ void ieee80211_s1g_status_twt_action(struct ieee80211_sub_if_data *sdata,
 	default:
 		break;
 	}
+
+out:
+	mutex_unlock(&local->sta_mtx);
 }

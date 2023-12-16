@@ -17,6 +17,7 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/tps65090.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/err.h>
 
 #define NUM_INT_REG 2
@@ -151,7 +152,7 @@ static const struct regmap_config tps65090_regmap_config = {
 	.val_bits = 8,
 	.max_register = TPS65090_MAX_REG,
 	.num_reg_defaults_raw = TPS65090_NUM_REGS,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.volatile_reg = is_volatile_reg,
 };
 

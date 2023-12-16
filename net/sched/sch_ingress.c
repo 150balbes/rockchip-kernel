@@ -13,7 +13,6 @@
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
-#include <net/tcx.h>
 
 struct ingress_sched_data {
 	struct tcf_block *block;
@@ -79,8 +78,6 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct bpf_mprog_entry *entry;
-	bool created;
 	int err;
 
 	if (sch->parent != TC_H_INGRESS)
@@ -88,13 +85,7 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 
 	net_inc_ingress_queue();
 
-	entry = tcx_entry_fetch_or_create(dev, true, &created);
-	if (!entry)
-		return -ENOMEM;
-	tcx_miniq_set_active(entry, true);
-	mini_qdisc_pair_init(&q->miniqp, sch, &tcx_entry(entry)->miniq);
-	if (created)
-		tcx_entry_update(dev, entry, true);
+	mini_qdisc_pair_init(&q->miniqp, sch, &dev->miniq_ingress);
 
 	q->block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->block_info.chain_head_change = clsact_chain_head_change;
@@ -112,22 +103,11 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 static void ingress_destroy(struct Qdisc *sch)
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
-	struct net_device *dev = qdisc_dev(sch);
-	struct bpf_mprog_entry *entry = rtnl_dereference(dev->tcx_ingress);
 
 	if (sch->parent != TC_H_INGRESS)
 		return;
 
 	tcf_block_put_ext(q->block, sch, &q->block_info);
-
-	if (entry) {
-		tcx_miniq_set_active(entry, false);
-		if (!tcx_entry_is_active(entry)) {
-			tcx_entry_update(dev, NULL, true);
-			tcx_entry_free(entry);
-		}
-	}
-
 	net_dec_ingress_queue();
 }
 
@@ -243,8 +223,6 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct clsact_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct bpf_mprog_entry *entry;
-	bool created;
 	int err;
 
 	if (sch->parent != TC_H_CLSACT)
@@ -253,13 +231,7 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	net_inc_ingress_queue();
 	net_inc_egress_queue();
 
-	entry = tcx_entry_fetch_or_create(dev, true, &created);
-	if (!entry)
-		return -ENOMEM;
-	tcx_miniq_set_active(entry, true);
-	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &tcx_entry(entry)->miniq);
-	if (created)
-		tcx_entry_update(dev, entry, true);
+	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &dev->miniq_ingress);
 
 	q->ingress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->ingress_block_info.chain_head_change = clsact_chain_head_change;
@@ -272,13 +244,7 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 
 	mini_qdisc_pair_block_init(&q->miniqp_ingress, q->ingress_block);
 
-	entry = tcx_entry_fetch_or_create(dev, false, &created);
-	if (!entry)
-		return -ENOMEM;
-	tcx_miniq_set_active(entry, true);
-	mini_qdisc_pair_init(&q->miniqp_egress, sch, &tcx_entry(entry)->miniq);
-	if (created)
-		tcx_entry_update(dev, entry, false);
+	mini_qdisc_pair_init(&q->miniqp_egress, sch, &dev->miniq_egress);
 
 	q->egress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_EGRESS;
 	q->egress_block_info.chain_head_change = clsact_chain_head_change;
@@ -290,31 +256,12 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 static void clsact_destroy(struct Qdisc *sch)
 {
 	struct clsact_sched_data *q = qdisc_priv(sch);
-	struct net_device *dev = qdisc_dev(sch);
-	struct bpf_mprog_entry *ingress_entry = rtnl_dereference(dev->tcx_ingress);
-	struct bpf_mprog_entry *egress_entry = rtnl_dereference(dev->tcx_egress);
 
 	if (sch->parent != TC_H_CLSACT)
 		return;
 
-	tcf_block_put_ext(q->ingress_block, sch, &q->ingress_block_info);
 	tcf_block_put_ext(q->egress_block, sch, &q->egress_block_info);
-
-	if (ingress_entry) {
-		tcx_miniq_set_active(ingress_entry, false);
-		if (!tcx_entry_is_active(ingress_entry)) {
-			tcx_entry_update(dev, NULL, true);
-			tcx_entry_free(ingress_entry);
-		}
-	}
-
-	if (egress_entry) {
-		tcx_miniq_set_active(egress_entry, false);
-		if (!tcx_entry_is_active(egress_entry)) {
-			tcx_entry_update(dev, NULL, false);
-			tcx_entry_free(egress_entry);
-		}
-	}
+	tcf_block_put_ext(q->ingress_block, sch, &q->ingress_block_info);
 
 	net_dec_ingress_queue();
 	net_dec_egress_queue();
@@ -370,4 +317,3 @@ module_exit(ingress_module_exit);
 
 MODULE_ALIAS("sch_clsact");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Ingress and clsact based ingress and egress qdiscs");

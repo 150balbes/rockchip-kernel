@@ -58,4 +58,9 @@ struct adfs_newdirtail {
 	__u8 dircheckbyte;
 } __attribute__((packed));
 
+union adfs_dirtail {
+	struct adfs_olddirtail old;
+	struct adfs_newdirtail new;
+};
+
 #endif

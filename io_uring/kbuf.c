@@ -19,17 +19,12 @@
 
 #define BGID_ARRAY	64
 
-/* BIDs are addressed by a 16-bit field in a CQE */
-#define MAX_BIDS_PER_BGID (1 << 16)
-
-struct kmem_cache *io_buf_cachep;
-
 struct io_provide_buf {
 	struct file			*file;
 	__u64				addr;
 	__u32				len;
 	__u32				bgid;
-	__u32				nbufs;
+	__u16				nbufs;
 	__u16				bid;
 };
 
@@ -52,7 +47,7 @@ static int io_buffer_add_list(struct io_ring_ctx *ctx,
 	return xa_err(xa_store(&ctx->io_bl_xa, bgid, bl, GFP_KERNEL));
 }
 
-bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
+void io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_buffer_list *bl;
@@ -65,7 +60,7 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 	 * multiple use.
 	 */
 	if (req->flags & REQ_F_PARTIAL_IO)
-		return false;
+		return;
 
 	io_ring_submit_lock(ctx, issue_flags);
 
@@ -76,7 +71,7 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 	req->buf_index = buf->bgid;
 
 	io_ring_submit_unlock(ctx, issue_flags);
-	return true;
+	return;
 }
 
 unsigned int __io_put_kbuf(struct io_kiocb *req, unsigned issue_flags)
@@ -223,7 +218,11 @@ static int __io_remove_buffers(struct io_ring_ctx *ctx,
 	if (bl->is_mapped) {
 		i = bl->buf_ring->tail - bl->head;
 		if (bl->is_mmap) {
-			folio_put(virt_to_folio(bl->buf_ring));
+			struct page *page;
+
+			page = virt_to_head_page(bl->buf_ring);
+			if (put_page_testzero(page))
+				free_compound_page(page);
 			bl->buf_ring = NULL;
 			bl->is_mmap = 0;
 		} else if (bl->buf_nr_pages) {
@@ -260,8 +259,6 @@ static int __io_remove_buffers(struct io_ring_ctx *ctx,
 void io_destroy_buffers(struct io_ring_ctx *ctx)
 {
 	struct io_buffer_list *bl;
-	struct list_head *item, *tmp;
-	struct io_buffer *buf;
 	unsigned long index;
 	int i;
 
@@ -277,9 +274,12 @@ void io_destroy_buffers(struct io_ring_ctx *ctx)
 		kfree(bl);
 	}
 
-	list_for_each_safe(item, tmp, &ctx->io_buffers_cache) {
-		buf = list_entry(item, struct io_buffer, list);
-		kmem_cache_free(io_buf_cachep, buf);
+	while (!list_empty(&ctx->io_buffers_pages)) {
+		struct page *page;
+
+		page = list_first_entry(&ctx->io_buffers_pages, struct page, lru);
+		list_del_init(&page->lru);
+		__free_page(page);
 	}
 }
 
@@ -293,7 +293,7 @@ int io_remove_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return -EINVAL;
 
 	tmp = READ_ONCE(sqe->fd);
-	if (!tmp || tmp > MAX_BIDS_PER_BGID)
+	if (!tmp || tmp > USHRT_MAX)
 		return -EINVAL;
 
 	memset(p, 0, sizeof(*p));
@@ -336,7 +336,7 @@ int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 		return -EINVAL;
 
 	tmp = READ_ONCE(sqe->fd);
-	if (!tmp || tmp > MAX_BIDS_PER_BGID)
+	if (!tmp || tmp > USHRT_MAX)
 		return -E2BIG;
 	p->nbufs = tmp;
 	p->addr = READ_ONCE(sqe->addr);
@@ -356,18 +356,17 @@ int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 	tmp = READ_ONCE(sqe->off);
 	if (tmp > USHRT_MAX)
 		return -E2BIG;
-	if (tmp + p->nbufs > MAX_BIDS_PER_BGID)
+	if (tmp + p->nbufs >= USHRT_MAX)
 		return -EINVAL;
 	p->bid = tmp;
 	return 0;
 }
 
-#define IO_BUFFER_ALLOC_BATCH 64
-
 static int io_refill_buffer_cache(struct io_ring_ctx *ctx)
 {
-	struct io_buffer *bufs[IO_BUFFER_ALLOC_BATCH];
-	int allocated;
+	struct io_buffer *buf;
+	struct page *page;
+	int bufs_in_page;
 
 	/*
 	 * Completions that don't happen inline (eg not under uring_lock) will
@@ -387,24 +386,21 @@ static int io_refill_buffer_cache(struct io_ring_ctx *ctx)
 
 	/*
 	 * No free buffers and no completion entries either. Allocate a new
-	 * batch of buffer entries and add those to our freelist.
+	 * page worth of buffer entries and add those to our freelist.
 	 */
+	page = alloc_page(GFP_KERNEL_ACCOUNT);
+	if (!page)
+		return -ENOMEM;
 
-	allocated = kmem_cache_alloc_bulk(io_buf_cachep, GFP_KERNEL_ACCOUNT,
-					  ARRAY_SIZE(bufs), (void **) bufs);
-	if (unlikely(!allocated)) {
-		/*
-		 * Bulk alloc is all-or-nothing. If we fail to get a batch,
-		 * retry single alloc to be on the safe side.
-		 */
-		bufs[0] = kmem_cache_alloc(io_buf_cachep, GFP_KERNEL);
-		if (!bufs[0])
-			return -ENOMEM;
-		allocated = 1;
+	list_add(&page->lru, &ctx->io_buffers_pages);
+
+	buf = page_address(page);
+	bufs_in_page = PAGE_SIZE / sizeof(*buf);
+	while (bufs_in_page) {
+		list_add_tail(&buf->list, &ctx->io_buffers_cache);
+		buf++;
+		bufs_in_page--;
 	}
-
-	while (allocated)
-		list_add_tail(&bufs[--allocated]->list, &ctx->io_buffers_cache);
 
 	return 0;
 }
@@ -485,24 +481,13 @@ static int io_pin_pbuf_ring(struct io_uring_buf_reg *reg,
 {
 	struct io_uring_buf_ring *br;
 	struct page **pages;
-	int i, nr_pages;
+	int nr_pages;
 
 	pages = io_pin_pages(reg->ring_addr,
 			     flex_array_size(br, bufs, reg->ring_entries),
 			     &nr_pages);
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
-
-	/*
-	 * Apparently some 32-bit boxes (ARM) will return highmem pages,
-	 * which then need to be mapped. We could support that, but it'd
-	 * complicate the code and slowdown the common cases quite a bit.
-	 * So just error out, returning -EINVAL just like we did on kernels
-	 * that didn't support mapped buffer rings.
-	 */
-	for (i = 0; i < nr_pages; i++)
-		if (PageHighMem(pages[i]))
-			goto error_unpin;
 
 	br = page_address(pages[0]);
 #ifdef SHM_COLOUR
@@ -515,8 +500,13 @@ static int io_pin_pbuf_ring(struct io_uring_buf_reg *reg,
 	 * should use IOU_PBUF_RING_MMAP instead, and liburing will handle
 	 * this transparently.
 	 */
-	if ((reg->ring_addr | (unsigned long) br) & (SHM_COLOUR - 1))
-		goto error_unpin;
+	if ((reg->ring_addr | (unsigned long) br) & (SHM_COLOUR - 1)) {
+		int i;
+
+		for (i = 0; i < nr_pages; i++)
+			unpin_user_page(pages[i]);
+		return -EINVAL;
+	}
 #endif
 	bl->buf_pages = pages;
 	bl->buf_nr_pages = nr_pages;
@@ -524,11 +514,6 @@ static int io_pin_pbuf_ring(struct io_uring_buf_reg *reg,
 	bl->is_mapped = 1;
 	bl->is_mmap = 0;
 	return 0;
-error_unpin:
-	for (i = 0; i < nr_pages; i++)
-		unpin_user_page(pages[i]);
-	kvfree(pages);
-	return -EINVAL;
 }
 
 static int io_alloc_pbuf_ring(struct io_uring_buf_reg *reg,

@@ -548,7 +548,7 @@ static int wil_rx_crypto_check_edma(struct wil6210_priv *wil,
 	s = &wil->sta[cid];
 	c = mc ? &s->group_crypto_rx : &s->tid_crypto_rx[tid];
 	cc = &c->key_id[key_id];
-	pn = (u8 *)&st->ext.pn;
+	pn = (u8 *)&st->ext.pn_15_0;
 
 	if (!cc->key_set) {
 		wil_err_ratelimited(wil,

@@ -826,4 +826,3 @@ static void __exit ets_exit(void)
 module_init(ets_init);
 module_exit(ets_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Enhanced Transmission Selection(ETS) scheduler");

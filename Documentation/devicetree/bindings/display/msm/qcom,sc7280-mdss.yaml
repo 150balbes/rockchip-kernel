@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-only or BSD-2-Clause
 %YAML 1.2
 ---
 $id: http://devicetree.org/schemas/display/msm/qcom,sc7280-mdss.yaml#
@@ -44,24 +44,18 @@ properties:
 patternProperties:
   "^display-controller@[0-9a-f]+$":
     type: object
-    additionalProperties: true
-
     properties:
       compatible:
         const: qcom,sc7280-dpu
 
   "^displayport-controller@[0-9a-f]+$":
     type: object
-    additionalProperties: true
-
     properties:
       compatible:
         const: qcom,sc7280-dp
 
   "^dsi@[0-9a-f]+$":
     type: object
-    additionalProperties: true
-
     properties:
       compatible:
         items:
@@ -70,16 +64,12 @@ patternProperties:
 
   "^edp@[0-9a-f]+$":
     type: object
-    additionalProperties: true
-
     properties:
       compatible:
         const: qcom,sc7280-edp
 
   "^phy@[0-9a-f]+$":
     type: object
-    additionalProperties: true
-
     properties:
       compatible:
         enum:

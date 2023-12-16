@@ -74,7 +74,7 @@ typedef struct _ATOM_PPLIB_THERMALCONTROLLER
 typedef struct _ATOM_PPLIB_STATE
 {
     UCHAR ucNonClockStateIndex;
-    UCHAR ucClockStateIndices[]; // variable-sized
+    UCHAR ucClockStateIndices[1]; // variable-sized
 } ATOM_PPLIB_STATE;
 
 

@@ -71,7 +71,7 @@ int init_new_context(struct task_struct *t, struct mm_struct *mm)
 	mm->context.id = __init_new_context();
 	mm->context.sr0 = CTX_TO_VSID(mm->context.id, 0);
 
-	if (IS_ENABLED(CONFIG_PPC_KUEP))
+	if (!kuep_is_disabled())
 		mm->context.sr0 |= SR_NX;
 	if (!kuap_is_disabled())
 		mm->context.sr0 |= SR_KS;

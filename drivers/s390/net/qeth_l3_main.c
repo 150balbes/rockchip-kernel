@@ -2018,11 +2018,9 @@ static int qeth_l3_set_online(struct qeth_card *card, bool carrier_ok)
 		netif_device_attach(dev);
 		qeth_enable_hw_features(dev);
 
-		if (netif_running(dev)) {
-			local_bh_disable();
-			napi_schedule(&card->napi);
-			/* kick-start the NAPI softirq: */
-			local_bh_enable();
+		if (card->info.open_when_online) {
+			card->info.open_when_online = 0;
+			dev_open(dev, NULL);
 		}
 		rtnl_unlock();
 	}

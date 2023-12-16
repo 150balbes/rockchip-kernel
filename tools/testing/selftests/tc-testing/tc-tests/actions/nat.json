@@ -6,9 +6,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -33,9 +30,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -60,9 +54,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -87,9 +78,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -114,9 +102,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -141,9 +126,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -168,9 +150,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -195,9 +174,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -227,9 +203,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -259,9 +232,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -291,9 +261,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -318,9 +285,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -345,9 +309,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -372,9 +333,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -399,9 +357,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -426,9 +381,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -453,9 +405,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -480,9 +429,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -507,9 +453,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -534,9 +477,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -561,9 +501,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -588,9 +525,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -615,9 +549,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -642,9 +573,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -669,9 +597,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -697,9 +622,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",
@@ -725,9 +647,6 @@
             "actions",
             "nat"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action nat",

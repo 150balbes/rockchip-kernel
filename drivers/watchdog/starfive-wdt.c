@@ -8,8 +8,7 @@
 #include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 #include <linux/watchdog.h>
@@ -527,6 +526,7 @@ static void starfive_wdt_shutdown(struct platform_device *pdev)
 	starfive_wdt_pm_stop(&wdt->wdd);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int starfive_wdt_suspend(struct device *dev)
 {
 	struct starfive_wdt *wdt = dev_get_drvdata(dev);
@@ -556,7 +556,9 @@ static int starfive_wdt_resume(struct device *dev)
 
 	return starfive_wdt_start(wdt);
 }
+#endif /* CONFIG_PM_SLEEP */
 
+#ifdef CONFIG_PM
 static int starfive_wdt_runtime_suspend(struct device *dev)
 {
 	struct starfive_wdt *wdt = dev_get_drvdata(dev);
@@ -572,10 +574,11 @@ static int starfive_wdt_runtime_resume(struct device *dev)
 
 	return starfive_wdt_enable_clock(wdt);
 }
+#endif /* CONFIG_PM */
 
 static const struct dev_pm_ops starfive_wdt_pm_ops = {
-	RUNTIME_PM_OPS(starfive_wdt_runtime_suspend, starfive_wdt_runtime_resume, NULL)
-	SYSTEM_SLEEP_PM_OPS(starfive_wdt_suspend, starfive_wdt_resume)
+	SET_RUNTIME_PM_OPS(starfive_wdt_runtime_suspend, starfive_wdt_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(starfive_wdt_suspend, starfive_wdt_resume)
 };
 
 static const struct of_device_id starfive_wdt_match[] = {
@@ -591,7 +594,7 @@ static struct platform_driver starfive_wdt_driver = {
 	.shutdown = starfive_wdt_shutdown,
 	.driver = {
 		.name = "starfive-wdt",
-		.pm = pm_ptr(&starfive_wdt_pm_ops),
+		.pm = &starfive_wdt_pm_ops,
 		.of_match_table = starfive_wdt_match,
 	},
 };

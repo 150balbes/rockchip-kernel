@@ -43,7 +43,6 @@ properties:
   # PHY 1.
   mdios:
     type: object
-    additionalProperties: false
 
     properties:
       '#address-cells':
@@ -75,9 +74,8 @@ properties:
 
 patternProperties:
   "^(ethernet-)?ports$":
-    additionalProperties: true
     patternProperties:
-      "^(ethernet-)?port@[0-9]$":
+      "^(ethernet-)?port@[0-9]+$":
         allOf:
           - if:
               properties:

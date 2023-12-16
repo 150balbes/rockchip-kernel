@@ -279,8 +279,10 @@ static int smsusb1_load_firmware(struct usb_device *udev, int id, int board_id)
 		}
 	}
 
-	fw_buffer = kmemdup(fw->data, fw->size, GFP_KERNEL);
+	fw_buffer = kmalloc(fw->size, GFP_KERNEL);
 	if (fw_buffer) {
+		memcpy(fw_buffer, fw->data, fw->size);
+
 		rc = usb_bulk_msg(udev, usb_sndbulkpipe(udev, 2),
 				  fw_buffer, fw->size, &dummy, 1000);
 
@@ -453,7 +455,12 @@ static int smsusb_init_device(struct usb_interface *intf, int board_id)
 	rc = smscore_register_device(&params, &dev->coredev, 0, mdev);
 	if (rc < 0) {
 		pr_err("smscore_register_device(...) failed, rc %d\n", rc);
-		goto err_unregister_device;
+		smsusb_term_device(intf);
+#ifdef CONFIG_MEDIA_CONTROLLER_DVB
+		media_device_unregister(mdev);
+#endif
+		kfree(mdev);
+		return rc;
 	}
 
 	smscore_set_board_id(dev->coredev, board_id);
@@ -470,7 +477,8 @@ static int smsusb_init_device(struct usb_interface *intf, int board_id)
 	rc = smsusb_start_streaming(dev);
 	if (rc < 0) {
 		pr_err("smsusb_start_streaming(...) failed\n");
-		goto err_unregister_device;
+		smsusb_term_device(intf);
+		return rc;
 	}
 
 	dev->state = SMSUSB_ACTIVE;
@@ -478,19 +486,12 @@ static int smsusb_init_device(struct usb_interface *intf, int board_id)
 	rc = smscore_start_device(dev->coredev);
 	if (rc < 0) {
 		pr_err("smscore_start_device(...) failed\n");
-		goto err_unregister_device;
+		smsusb_term_device(intf);
+		return rc;
 	}
 
 	pr_debug("device 0x%p created\n", dev);
 
-	return rc;
-
-err_unregister_device:
-	smsusb_term_device(intf);
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	media_device_unregister(mdev);
-#endif
-	kfree(mdev);
 	return rc;
 }
 

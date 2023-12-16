@@ -75,7 +75,10 @@ static int sdhci_dove_probe(struct platform_device *pdev)
 		return PTR_ERR(host);
 
 	pltfm_host = sdhci_priv(host);
-	pltfm_host->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	pltfm_host->clk = devm_clk_get(&pdev->dev, NULL);
+
+	if (!IS_ERR(pltfm_host->clk))
+		clk_prepare_enable(pltfm_host->clk);
 
 	ret = mmc_of_parse(host->mmc);
 	if (ret)
@@ -88,6 +91,7 @@ static int sdhci_dove_probe(struct platform_device *pdev)
 	return 0;
 
 err_sdhci_add:
+	clk_disable_unprepare(pltfm_host->clk);
 	sdhci_pltfm_free(pdev);
 	return ret;
 }
@@ -106,7 +110,7 @@ static struct platform_driver sdhci_dove_driver = {
 		.of_match_table = sdhci_dove_of_match_table,
 	},
 	.probe		= sdhci_dove_probe,
-	.remove_new	= sdhci_pltfm_remove,
+	.remove		= sdhci_pltfm_unregister,
 };
 
 module_platform_driver(sdhci_dove_driver);

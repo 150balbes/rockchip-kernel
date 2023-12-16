@@ -14,7 +14,6 @@
  */
 
 #define __KERNEL_SYSCALLS__
-#include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
@@ -39,7 +38,6 @@
 #include <asm/io.h>
 #include <asm/processor.h>
 #include <asm/spr_defs.h>
-#include <asm/switch_to.h>
 
 #include <linux/smp.h>
 
@@ -121,6 +119,8 @@ void flush_thread(void)
 
 void show_regs(struct pt_regs *regs)
 {
+	extern void show_registers(struct pt_regs *regs);
+
 	show_regs_print_info(KERN_DEFAULT);
 	/* __PHX__ cleanup this mess */
 	show_registers(regs);

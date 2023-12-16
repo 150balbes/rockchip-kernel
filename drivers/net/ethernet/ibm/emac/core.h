@@ -27,6 +27,7 @@
 #include <linux/netdevice.h>
 #include <linux/dma-mapping.h>
 #include <linux/spinlock.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 
 #include <asm/io.h>

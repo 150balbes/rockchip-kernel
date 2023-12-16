@@ -161,11 +161,13 @@ at91_clk_register_utmi_internal(struct regmap *regmap_pmc,
 
 	init.name = name;
 	init.ops = ops;
-	if (parent_hw)
-		init.parent_hws = (const struct clk_hw **)&parent_hw;
-	else
-		init.parent_names = &parent_name;
-	init.num_parents = 1;
+	if (parent_hw) {
+		init.parent_hws = parent_hw ? (const struct clk_hw **)&parent_hw : NULL;
+		init.num_parents = parent_hw ? 1 : 0;
+	} else {
+		init.parent_names = parent_name ? &parent_name : NULL;
+		init.num_parents = parent_name ? 1 : 0;
+	}
 	init.flags = flags;
 
 	utmi->hw.init = &init;

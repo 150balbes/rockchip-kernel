@@ -1419,7 +1419,10 @@ static struct attribute *mip4_attrs[] = {
 	&dev_attr_update_fw.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(mip4);
+
+static const struct attribute_group mip4_attr_group = {
+	.attrs = mip4_attrs,
+};
 
 static int mip4_probe(struct i2c_client *client)
 {
@@ -1448,8 +1451,13 @@ static int mip4_probe(struct i2c_client *client)
 
 	ts->gpio_ce = devm_gpiod_get_optional(&client->dev,
 					      "ce", GPIOD_OUT_LOW);
-	if (IS_ERR(ts->gpio_ce))
-		return dev_err_probe(&client->dev, PTR_ERR(ts->gpio_ce), "Failed to get gpio\n");
+	if (IS_ERR(ts->gpio_ce)) {
+		error = PTR_ERR(ts->gpio_ce);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"Failed to get gpio: %d\n", error);
+		return error;
+	}
 
 	error = mip4_power_on(ts);
 	if (error)
@@ -1508,6 +1516,13 @@ static int mip4_probe(struct i2c_client *client)
 	if (error) {
 		dev_err(&client->dev,
 			"Failed to register input device: %d\n", error);
+		return error;
+	}
+
+	error = devm_device_add_group(&client->dev, &mip4_attr_group);
+	if (error) {
+		dev_err(&client->dev,
+			"Failed to create sysfs attribute group: %d\n", error);
 		return error;
 	}
 
@@ -1579,7 +1594,6 @@ static struct i2c_driver mip4_driver = {
 	.probe = mip4_probe,
 	.driver = {
 		.name = MIP4_DEVICE_NAME,
-		.dev_groups = mip4_groups,
 		.of_match_table = of_match_ptr(mip4_of_match),
 		.acpi_match_table = ACPI_PTR(mip4_acpi_match),
 		.pm = pm_sleep_ptr(&mip4_pm_ops),

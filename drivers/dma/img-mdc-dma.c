@@ -17,6 +17,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -1017,7 +1018,7 @@ suspend:
 	return ret;
 }
 
-static void mdc_dma_remove(struct platform_device *pdev)
+static int mdc_dma_remove(struct platform_device *pdev)
 {
 	struct mdc_dma *mdma = platform_get_drvdata(pdev);
 	struct mdc_chan *mchan, *next;
@@ -1037,6 +1038,8 @@ static void mdc_dma_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		img_mdc_runtime_suspend(&pdev->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1076,7 +1079,7 @@ static struct platform_driver mdc_dma_driver = {
 		.of_match_table = of_match_ptr(mdc_dma_of_match),
 	},
 	.probe = mdc_dma_probe,
-	.remove_new = mdc_dma_remove,
+	.remove = mdc_dma_remove,
 };
 module_platform_driver(mdc_dma_driver);
 

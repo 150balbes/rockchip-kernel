@@ -835,8 +835,7 @@ static bool tcp_error(const struct tcphdr *th,
 
 static noinline bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,
 			     unsigned int dataoff,
-			     const struct tcphdr *th,
-			     const struct nf_hook_state *state)
+			     const struct tcphdr *th)
 {
 	enum tcp_conntrack new_state;
 	struct net *net = nf_ct_net(ct);
@@ -847,7 +846,7 @@ static noinline bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,
 
 	/* Invalid: delete conntrack */
 	if (new_state >= TCP_CONNTRACK_MAX) {
-		tcp_error_log(skb, state, "invalid new");
+		pr_debug("nf_ct_tcp: invalid new deleting.\n");
 		return false;
 	}
 
@@ -981,7 +980,7 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 	if (tcp_error(th, skb, dataoff, state))
 		return -NF_ACCEPT;
 
-	if (!nf_ct_is_confirmed(ct) && !tcp_new(ct, skb, dataoff, th, state))
+	if (!nf_ct_is_confirmed(ct) && !tcp_new(ct, skb, dataoff, th))
 		return -NF_ACCEPT;
 
 	spin_lock_bh(&ct->lock);

@@ -15,19 +15,10 @@ description:
 
 properties:
   compatible:
-    oneOf:
-      - enum:
-          - qcom,sm6115-adsp-pas
-          - qcom,sm6115-cdsp-pas
-          - qcom,sm6115-mpss-pas
-
-      - items:
-          - const: qcom,qcm2290-adsp-pas
-          - const: qcom,sm6115-adsp-pas
-
-      - items:
-          - const: qcom,qcm2290-mpss-pas
-          - const: qcom,sm6115-mpss-pas
+    enum:
+      - qcom,sm6115-adsp-pas
+      - qcom,sm6115-cdsp-pas
+      - qcom,sm6115-mpss-pas
 
   reg:
     maxItems: 1
@@ -41,7 +32,7 @@ properties:
       - const: xo
 
   memory-region:
-    maxItems: 1
+    minItems: 1
     description: Reference to the reserved-memory for the Hexagon core
 
   smd-edge: false
@@ -53,17 +44,15 @@ properties:
 required:
   - compatible
   - reg
-  - memory-region
 
 allOf:
   - $ref: /schemas/remoteproc/qcom,pas-common.yaml#
   - if:
       properties:
         compatible:
-          contains:
-            enum:
-              - qcom,sm6115-adsp-pas
-              - qcom,sm6115-cdsp-pas
+          enum:
+            - qcom,sm6115-adsp-pas
+            - qcom,sm6115-cdsp-pas
     then:
       properties:
         interrupts:
@@ -80,10 +69,9 @@ allOf:
   - if:
       properties:
         compatible:
-          contains:
-            enum:
-              - qcom,sm6115-cdsp-pas
-              - qcom,sm6115-mpss-pas
+          enum:
+            - qcom,sm6115-cdsp-pas
+            - qcom,sm6115-mpss-pas
     then:
       properties:
         power-domains:
@@ -96,9 +84,8 @@ allOf:
   - if:
       properties:
         compatible:
-          contains:
-            enum:
-              - qcom,sm6115-adsp-pas
+          enum:
+            - qcom,sm6115-adsp-pas
     then:
       properties:
         power-domains:

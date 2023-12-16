@@ -2732,7 +2732,7 @@ static bool ci_is_dpm_running(struct pp_hwmgr *hwmgr)
 
 static int ci_smu_init(struct pp_hwmgr *hwmgr)
 {
-	struct ci_smumgr *ci_priv;
+	struct ci_smumgr *ci_priv = NULL;
 
 	ci_priv = kzalloc(sizeof(struct ci_smumgr), GFP_KERNEL);
 

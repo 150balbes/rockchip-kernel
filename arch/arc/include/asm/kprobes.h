@@ -32,6 +32,9 @@ struct kprobe;
 
 void arch_remove_kprobe(struct kprobe *p);
 
+int kprobe_exceptions_notify(struct notifier_block *self,
+			     unsigned long val, void *data);
+
 struct prev_kprobe {
 	struct kprobe *kp;
 	unsigned long status;

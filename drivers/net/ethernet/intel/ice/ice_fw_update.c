@@ -293,16 +293,15 @@ ice_write_one_nvm_block(struct ice_pf *pf, u16 module, u32 offset,
 {
 	u16 completion_module, completion_retval;
 	struct device *dev = ice_pf_to_dev(pf);
-	struct ice_aq_task task = {};
+	struct ice_rq_event_info event;
 	struct ice_hw *hw = &pf->hw;
-	struct ice_aq_desc *desc;
 	u32 completion_offset;
 	int err;
 
+	memset(&event, 0, sizeof(event));
+
 	dev_dbg(dev, "Writing block of %u bytes for module 0x%02x at offset %u\n",
 		block_size, module, offset);
-
-	ice_aq_prep_for_event(pf, &task, ice_aqc_opc_nvm_write);
 
 	err = ice_aq_update_nvm(hw, module, offset, block_size, block,
 				last_cmd, 0, NULL);
@@ -320,7 +319,7 @@ ice_write_one_nvm_block(struct ice_pf *pf, u16 module, u32 offset,
 	 * is conservative and is intended to prevent failure to update when
 	 * firmware is slow to respond.
 	 */
-	err = ice_aq_wait_for_event(pf, &task, 15 * HZ);
+	err = ice_aq_wait_for_event(pf, ice_aqc_opc_nvm_write, 15 * HZ, &event);
 	if (err) {
 		dev_err(dev, "Timed out while trying to flash module 0x%02x with block of size %u at offset %u, err %d\n",
 			module, block_size, offset, err);
@@ -328,12 +327,11 @@ ice_write_one_nvm_block(struct ice_pf *pf, u16 module, u32 offset,
 		return -EIO;
 	}
 
-	desc = &task.event.desc;
-	completion_module = le16_to_cpu(desc->params.nvm.module_typeid);
-	completion_retval = le16_to_cpu(desc->retval);
+	completion_module = le16_to_cpu(event.desc.params.nvm.module_typeid);
+	completion_retval = le16_to_cpu(event.desc.retval);
 
-	completion_offset = le16_to_cpu(desc->params.nvm.offset_low);
-	completion_offset |= desc->params.nvm.offset_high << 16;
+	completion_offset = le16_to_cpu(event.desc.params.nvm.offset_low);
+	completion_offset |= event.desc.params.nvm.offset_high << 16;
 
 	if (completion_module != module) {
 		dev_err(dev, "Unexpected module_typeid in write completion: got 0x%x, expected 0x%x\n",
@@ -365,8 +363,8 @@ ice_write_one_nvm_block(struct ice_pf *pf, u16 module, u32 offset,
 	 */
 	if (reset_level && last_cmd && module == ICE_SR_1ST_NVM_BANK_PTR) {
 		if (hw->dev_caps.common_cap.pcie_reset_avoidance) {
-			*reset_level = desc->params.nvm.cmd_flags &
-				       ICE_AQC_NVM_RESET_LVL_M;
+			*reset_level = (event.desc.params.nvm.cmd_flags &
+					ICE_AQC_NVM_RESET_LVL_M);
 			dev_dbg(dev, "Firmware reported required reset level as %u\n",
 				*reset_level);
 		} else {
@@ -481,19 +479,18 @@ ice_erase_nvm_module(struct ice_pf *pf, u16 module, const char *component,
 {
 	u16 completion_module, completion_retval;
 	struct device *dev = ice_pf_to_dev(pf);
-	struct ice_aq_task task = {};
+	struct ice_rq_event_info event;
 	struct ice_hw *hw = &pf->hw;
-	struct ice_aq_desc *desc;
 	struct devlink *devlink;
 	int err;
 
 	dev_dbg(dev, "Beginning erase of flash component '%s', module 0x%02x\n", component, module);
 
+	memset(&event, 0, sizeof(event));
+
 	devlink = priv_to_devlink(pf);
 
 	devlink_flash_update_timeout_notify(devlink, "Erasing", component, ICE_FW_ERASE_TIMEOUT);
-
-	ice_aq_prep_for_event(pf, &task, ice_aqc_opc_nvm_erase);
 
 	err = ice_aq_erase_nvm(hw, module, NULL);
 	if (err) {
@@ -505,7 +502,7 @@ ice_erase_nvm_module(struct ice_pf *pf, u16 module, const char *component,
 		goto out_notify_devlink;
 	}
 
-	err = ice_aq_wait_for_event(pf, &task, ICE_FW_ERASE_TIMEOUT * HZ);
+	err = ice_aq_wait_for_event(pf, ice_aqc_opc_nvm_erase, ICE_FW_ERASE_TIMEOUT * HZ, &event);
 	if (err) {
 		dev_err(dev, "Timed out waiting for firmware to respond with erase completion for %s (module 0x%02x), err %d\n",
 			component, module, err);
@@ -513,9 +510,8 @@ ice_erase_nvm_module(struct ice_pf *pf, u16 module, const char *component,
 		goto out_notify_devlink;
 	}
 
-	desc = &task.event.desc;
-	completion_module = le16_to_cpu(desc->params.nvm.module_typeid);
-	completion_retval = le16_to_cpu(desc->retval);
+	completion_module = le16_to_cpu(event.desc.params.nvm.module_typeid);
+	completion_retval = le16_to_cpu(event.desc.retval);
 
 	if (completion_module != module) {
 		dev_err(dev, "Unexpected module_typeid in erase completion for %s: got 0x%x, expected 0x%x\n",
@@ -564,13 +560,13 @@ ice_switch_flash_banks(struct ice_pf *pf, u8 activate_flags,
 		       u8 *emp_reset_available, struct netlink_ext_ack *extack)
 {
 	struct device *dev = ice_pf_to_dev(pf);
-	struct ice_aq_task task = {};
+	struct ice_rq_event_info event;
 	struct ice_hw *hw = &pf->hw;
 	u16 completion_retval;
 	u8 response_flags;
 	int err;
 
-	ice_aq_prep_for_event(pf, &task, ice_aqc_opc_nvm_write_activate);
+	memset(&event, 0, sizeof(event));
 
 	err = ice_nvm_write_activate(hw, activate_flags, &response_flags);
 	if (err) {
@@ -596,7 +592,8 @@ ice_switch_flash_banks(struct ice_pf *pf, u8 activate_flags,
 		}
 	}
 
-	err = ice_aq_wait_for_event(pf, &task, 30 * HZ);
+	err = ice_aq_wait_for_event(pf, ice_aqc_opc_nvm_write_activate, 30 * HZ,
+				    &event);
 	if (err) {
 		dev_err(dev, "Timed out waiting for firmware to switch active flash banks, err %d\n",
 			err);
@@ -604,7 +601,7 @@ ice_switch_flash_banks(struct ice_pf *pf, u8 activate_flags,
 		return err;
 	}
 
-	completion_retval = le16_to_cpu(task.event.desc.retval);
+	completion_retval = le16_to_cpu(event.desc.retval);
 	if (completion_retval) {
 		dev_err(dev, "Firmware failed to switch active flash banks aq_err %s\n",
 			ice_aq_str((enum ice_aq_err)completion_retval));

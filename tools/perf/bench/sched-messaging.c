@@ -36,7 +36,6 @@ static bool use_pipes = false;
 static unsigned int nr_loops = 100;
 static bool thread_mode = false;
 static unsigned int num_groups = 10;
-static unsigned int total_children = 0;
 static struct list_head sender_contexts = LIST_HEAD_INIT(sender_contexts);
 static struct list_head receiver_contexts = LIST_HEAD_INIT(receiver_contexts);
 
@@ -55,13 +54,6 @@ struct receiver_context {
 	int ready_out;
 	int wakefd;
 };
-
-union messaging_worker {
-	pthread_t thread;
-	pid_t pid;
-};
-
-static union messaging_worker *worker_tab;
 
 static void fdpair(int fds[2])
 {
@@ -106,7 +98,7 @@ static void *sender(struct sender_context *ctx)
 
 again:
 			ret = write(ctx->out_fds[j], data + done,
-				    sizeof(data) - done);
+				    sizeof(data)-done);
 			if (ret < 0)
 				err(EXIT_FAILURE, "SENDER: write");
 			done += ret;
@@ -147,11 +139,29 @@ again:
 	return NULL;
 }
 
-static void create_thread_worker(union messaging_worker *worker,
-				 void *ctx, void *(*func)(void *))
+static pthread_t create_worker(void *ctx, void *(*func)(void *))
 {
 	pthread_attr_t attr;
+	pthread_t childid;
 	int ret;
+
+	if (!thread_mode) {
+		/* process mode */
+		/* Fork the receiver. */
+		switch (fork()) {
+		case -1:
+			err(EXIT_FAILURE, "fork()");
+			break;
+		case 0:
+			(*func) (ctx);
+			exit(0);
+			break;
+		default:
+			break;
+		}
+
+		return (pthread_t)0;
+	}
 
 	if (pthread_attr_init(&attr) != 0)
 		err(EXIT_FAILURE, "pthread_attr_init:");
@@ -161,37 +171,15 @@ static void create_thread_worker(union messaging_worker *worker,
 		err(EXIT_FAILURE, "pthread_attr_setstacksize");
 #endif
 
-	ret = pthread_create(&worker->thread, &attr, func, ctx);
+	ret = pthread_create(&childid, &attr, func, ctx);
 	if (ret != 0)
 		err(EXIT_FAILURE, "pthread_create failed");
 
 	pthread_attr_destroy(&attr);
+	return childid;
 }
 
-static void create_process_worker(union messaging_worker *worker,
-				  void *ctx, void *(*func)(void *))
-{
-	/* Fork the receiver. */
-	worker->pid = fork();
-
-	if (worker->pid == -1) {
-		err(EXIT_FAILURE, "fork()");
-	} else if (worker->pid == 0) {
-		(*func) (ctx);
-		exit(0);
-	}
-}
-
-static void create_worker(union messaging_worker *worker,
-			  void *ctx, void *(*func)(void *))
-{
-	if (!thread_mode)
-		return create_process_worker(worker, ctx, func);
-	else
-		return create_thread_worker(worker, ctx, func);
-}
-
-static void reap_worker(union messaging_worker *worker)
+static void reap_worker(pthread_t id)
 {
 	int proc_status;
 	void *thread_status;
@@ -202,19 +190,19 @@ static void reap_worker(union messaging_worker *worker)
 		if (!WIFEXITED(proc_status))
 			exit(1);
 	} else {
-		pthread_join(worker->thread, &thread_status);
+		pthread_join(id, &thread_status);
 	}
 }
 
 /* One group of senders and receivers */
-static unsigned int group(union messaging_worker *worker,
+static unsigned int group(pthread_t *pth,
 		unsigned int num_fds,
 		int ready_out,
 		int wakefd)
 {
 	unsigned int i;
-	struct sender_context *snd_ctx = malloc(sizeof(struct sender_context) +
-						num_fds * sizeof(int));
+	struct sender_context *snd_ctx = malloc(sizeof(struct sender_context)
+			+ num_fds * sizeof(int));
 
 	if (!snd_ctx)
 		err(EXIT_FAILURE, "malloc()");
@@ -238,7 +226,7 @@ static unsigned int group(union messaging_worker *worker,
 		ctx->ready_out = ready_out;
 		ctx->wakefd = wakefd;
 
-		create_worker(worker + i, ctx, (void *)receiver);
+		pth[i] = create_worker(ctx, (void *)receiver);
 
 		snd_ctx->out_fds[i] = fds[1];
 		if (!thread_mode)
@@ -251,7 +239,7 @@ static unsigned int group(union messaging_worker *worker,
 		snd_ctx->wakefd = wakefd;
 		snd_ctx->num_fds = num_fds;
 
-		create_worker(worker + num_fds + i, snd_ctx, (void *)sender);
+		pth[num_fds+i] = create_worker(snd_ctx, (void *)sender);
 	}
 
 	/* Close the fds we have left */
@@ -261,17 +249,6 @@ static unsigned int group(union messaging_worker *worker,
 
 	/* Return number of children to reap */
 	return num_fds * 2;
-}
-
-static void sig_handler(int sig __maybe_unused)
-{
-	unsigned int i;
-
-	/*
-	 * When exit abnormally, kill all forked child processes.
-	 */
-	for (i = 0; i < total_children; i++)
-		kill(worker_tab[i].pid, SIGKILL);
 }
 
 static const struct option options[] = {
@@ -291,30 +268,27 @@ static const char * const bench_sched_message_usage[] = {
 
 int bench_sched_messaging(int argc, const char **argv)
 {
-	unsigned int i;
+	unsigned int i, total_children;
 	struct timeval start, stop, diff;
 	unsigned int num_fds = 20;
 	int readyfds[2], wakefds[2];
 	char dummy;
+	pthread_t *pth_tab;
 	struct sender_context *pos, *n;
 
 	argc = parse_options(argc, argv, options,
 			     bench_sched_message_usage, 0);
 
-	worker_tab = malloc(num_fds * 2 * num_groups * sizeof(union messaging_worker));
-	if (!worker_tab)
+	pth_tab = malloc(num_fds * 2 * num_groups * sizeof(pthread_t));
+	if (!pth_tab)
 		err(EXIT_FAILURE, "main:malloc()");
 
 	fdpair(readyfds);
 	fdpair(wakefds);
 
-	if (!thread_mode) {
-		signal(SIGINT, sig_handler);
-		signal(SIGTERM, sig_handler);
-	}
-
+	total_children = 0;
 	for (i = 0; i < num_groups; i++)
-		total_children += group(worker_tab + total_children, num_fds,
+		total_children += group(pth_tab+total_children, num_fds,
 					readyfds[1], wakefds[0]);
 
 	/* Wait for everyone to be ready */
@@ -330,7 +304,7 @@ int bench_sched_messaging(int argc, const char **argv)
 
 	/* Reap them all */
 	for (i = 0; i < total_children; i++)
-		reap_worker(worker_tab + i);
+		reap_worker(pth_tab[i]);
 
 	gettimeofday(&stop, NULL);
 
@@ -358,7 +332,7 @@ int bench_sched_messaging(int argc, const char **argv)
 		break;
 	}
 
-	free(worker_tab);
+	free(pth_tab);
 	list_for_each_entry_safe(pos, n, &sender_contexts, list) {
 		list_del_init(&pos->list);
 		free(pos);

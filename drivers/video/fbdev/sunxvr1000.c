@@ -8,8 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/fb.h>
 #include <linux/init.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 struct gfb_info {
 	struct fb_info		*info;

@@ -10,27 +10,20 @@
 #ifndef __PANTHOR_REGS_H__
 #define __PANTHOR_REGS_H__
 
-#define GPU_ID						0x0
-#define   GPU_ARCH_MAJOR(x)				((x) >> 28)
-#define   GPU_ARCH_MINOR(x)				(((x) & GENMASK(27, 24)) >> 24)
-#define   GPU_ARCH_REV(x)				(((x) & GENMASK(23, 20)) >> 20)
-#define   GPU_PROD_MAJOR(x)				(((x) & GENMASK(19, 16)) >> 16)
-#define   GPU_VER_MAJOR(x)				(((x) & GENMASK(15, 12)) >> 12)
-#define   GPU_VER_MINOR(x)				(((x) & GENMASK(11, 4)) >> 4)
-#define   GPU_VER_STATUS(x)				((x) & GENMASK(3, 0))
+#define GPU_ID						0x00
+#define GPU_L2_FEATURES					0x004
 
-#define GPU_L2_FEATURES					0x4
-#define  GPU_L2_FEATURES_LINE_SIZE(x)			(1 << ((x) & GENMASK(7, 0)))
+#define GPU_L2_FEATURES_LINE_SIZE(x)			(1 << ((x) & GENMASK(7, 0)))
 
-#define GPU_TILER_FEATURES				0xC
-#define GPU_MEM_FEATURES				0x10
+#define GPU_TILER_FEATURES				0x00C
+#define GPU_MEM_FEATURES				0x010
 #define   GROUPS_L2_COHERENT				BIT(0)
 
-#define GPU_MMU_FEATURES				0x14
+#define GPU_MMU_FEATURES				0x014
 #define  GPU_MMU_FEATURES_VA_BITS(x)			((x) & GENMASK(7, 0))
 #define  GPU_MMU_FEATURES_PA_BITS(x)			(((x) >> 8) & GENMASK(7, 0))
-#define GPU_AS_PRESENT					0x18
-#define GPU_CSF_ID					0x1C
+#define GPU_AS_PRESENT					0x018
+#define GPU_CSF_ID					0x01C
 
 #define GPU_INT_RAWSTAT					0x20
 #define GPU_INT_CLEAR					0x24
@@ -166,10 +159,10 @@
 #define MMU_AS_SHIFT					6
 #define MMU_AS(as)					(MMU_BASE + ((as) << MMU_AS_SHIFT))
 
-#define AS_TRANSTAB_LO(as)				(MMU_AS(as) + 0x0)
-#define AS_TRANSTAB_HI(as)				(MMU_AS(as) + 0x4)
-#define AS_MEMATTR_LO(as)				(MMU_AS(as) + 0x8)
-#define AS_MEMATTR_HI(as)				(MMU_AS(as) + 0xC)
+#define AS_TRANSTAB_LO(as)				(MMU_AS(as) + 0x00)
+#define AS_TRANSTAB_HI(as)				(MMU_AS(as) + 0x04)
+#define AS_MEMATTR_LO(as)				(MMU_AS(as) + 0x08)
+#define AS_MEMATTR_HI(as)				(MMU_AS(as) + 0x0C)
 #define   AS_MEMATTR_AARCH64_INNER_ALLOC_IMPL		(2 << 2)
 #define   AS_MEMATTR_AARCH64_INNER_ALLOC_EXPL(w, r)	((3 << 2) | \
 							 ((w) ? BIT(0) : 0) | \

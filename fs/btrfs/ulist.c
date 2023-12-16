@@ -223,8 +223,7 @@ int ulist_add_merge(struct ulist *ulist, u64 val, u64 aux,
 }
 
 /*
- * Delete one node from ulist.
- *
+ * ulist_del - delete one node from ulist
  * @ulist:	ulist to remove node from
  * @val:	value to delete
  * @aux:	aux to delete

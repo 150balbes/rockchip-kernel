@@ -233,8 +233,7 @@ int parent_create_sysfs_files(struct mdev_parent *parent)
 out_err:
 	while (--i >= 0)
 		mdev_type_remove(parent->types[i]);
-	kset_unregister(parent->mdev_types_kset);
-	return ret;
+	return 0;
 }
 
 static ssize_t remove_store(struct device *dev, struct device_attribute *attr,

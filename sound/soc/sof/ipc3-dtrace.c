@@ -186,6 +186,7 @@ static ssize_t dfsentry_trace_filter_write(struct file *file, const char __user 
 	struct snd_sof_dfsentry *dfse = file->private_data;
 	struct sof_ipc_trace_filter_elem *elems = NULL;
 	struct snd_sof_dev *sdev = dfse->sdev;
+	loff_t pos = 0;
 	int num_elems;
 	char *string;
 	int ret;
@@ -196,9 +197,15 @@ static ssize_t dfsentry_trace_filter_write(struct file *file, const char __user 
 		return -EINVAL;
 	}
 
-	string = memdup_user_nul(from, count);
-	if (IS_ERR(string))
-		return PTR_ERR(string);
+	string = kmalloc(count + 1, GFP_KERNEL);
+	if (!string)
+		return -ENOMEM;
+
+	/* assert null termination */
+	string[count] = 0;
+	ret = simple_write_to_buffer(string, count, &pos, from, count);
+	if (ret < 0)
+		goto error;
 
 	ret = trace_filter_parse(sdev, string, &num_elems, &elems);
 	if (ret < 0)
@@ -494,7 +501,7 @@ static int ipc3_dtrace_init(struct snd_sof_dev *sdev)
 	int ret;
 
 	/* dtrace is only supported with SOF_IPC */
-	if (sdev->pdata->ipc_type != SOF_IPC_TYPE_3)
+	if (sdev->pdata->ipc_type != SOF_IPC)
 		return -EOPNOTSUPP;
 
 	if (sdev->fw_trace_data) {

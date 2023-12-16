@@ -690,7 +690,7 @@ err:
 	return ret;
 }
 
-static void xge_remove(struct platform_device *pdev)
+static int xge_remove(struct platform_device *pdev)
 {
 	struct xge_pdata *pdata;
 	struct net_device *ndev;
@@ -706,6 +706,8 @@ static void xge_remove(struct platform_device *pdev)
 	xge_mdio_remove(ndev);
 	unregister_netdev(ndev);
 	free_netdev(ndev);
+
+	return 0;
 }
 
 static void xge_shutdown(struct platform_device *pdev)
@@ -734,7 +736,7 @@ static struct platform_driver xge_driver = {
 		   .acpi_match_table = ACPI_PTR(xge_acpi_match),
 	},
 	.probe = xge_probe,
-	.remove_new = xge_remove,
+	.remove = xge_remove,
 	.shutdown = xge_shutdown,
 };
 module_platform_driver(xge_driver);

@@ -440,7 +440,7 @@ static void snprint_time(char *buf, size_t bufsiz, s64 nr)
 
 static void seq_time(struct seq_file *m, s64 time)
 {
-	char num[22];
+	char num[15];
 
 	snprint_time(num, sizeof(num), time);
 	seq_printf(m, " %14s", num);

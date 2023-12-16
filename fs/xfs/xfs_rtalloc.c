@@ -19,7 +19,6 @@
 #include "xfs_icache.h"
 #include "xfs_rtalloc.h"
 #include "xfs_sb.h"
-#include "xfs_rtbitmap.h"
 
 /*
  * Read and return the summary information for a given extent size,
@@ -29,48 +28,48 @@
  */
 static int
 xfs_rtget_summary(
-	struct xfs_rtalloc_args	*args,
-	int			log,	/* log2 of extent size */
-	xfs_fileoff_t		bbno,	/* bitmap block number */
-	xfs_suminfo_t		*sum)	/* out: summary info for this block */
+	xfs_mount_t	*mp,		/* file system mount structure */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	int		log,		/* log2 of extent size */
+	xfs_rtblock_t	bbno,		/* bitmap block number */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_suminfo_t	*sum)		/* out: summary info for this block */
 {
-	return xfs_rtmodify_summary_int(args, log, bbno, 0, sum);
+	return xfs_rtmodify_summary_int(mp, tp, log, bbno, 0, rbpp, rsb, sum);
 }
 
 /*
  * Return whether there are any free extents in the size range given
  * by low and high, for the bitmap block bbno.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtany_summary(
-	struct xfs_rtalloc_args	*args,
-	int			low,	/* low log2 extent size */
-	int			high,	/* high log2 extent size */
-	xfs_fileoff_t		bbno,	/* bitmap block number */
-	int			*maxlog) /* out: max log2 extent size free */
+	xfs_mount_t	*mp,		/* file system mount structure */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	int		low,		/* low log2 extent size */
+	int		high,		/* high log2 extent size */
+	xfs_rtblock_t	bbno,		/* bitmap block number */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	int		*stat)		/* out: any good extents here? */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			error;
-	int			log;	/* loop counter, log2 of ext. size */
-	xfs_suminfo_t		sum;	/* summary data */
+	int		error;		/* error value */
+	int		log;		/* loop counter, log2 of ext. size */
+	xfs_suminfo_t	sum;		/* summary data */
 
-	/* There are no extents at levels >= m_rsum_cache[bbno]. */
-	if (mp->m_rsum_cache) {
-		high = min(high, mp->m_rsum_cache[bbno] - 1);
-		if (low > high) {
-			*maxlog = -1;
-			return 0;
-		}
-	}
+	/* There are no extents at levels < m_rsum_cache[bbno]. */
+	if (mp->m_rsum_cache && low < mp->m_rsum_cache[bbno])
+		low = mp->m_rsum_cache[bbno];
 
 	/*
 	 * Loop over logs of extent sizes.
 	 */
-	for (log = high; log >= low; log--) {
+	for (log = low; log <= high; log++) {
 		/*
 		 * Get one summary datum.
 		 */
-		error = xfs_rtget_summary(args, log, bbno, &sum);
+		error = xfs_rtget_summary(mp, tp, log, bbno, rbpp, rsb, &sum);
 		if (error) {
 			return error;
 		}
@@ -78,18 +77,18 @@ xfs_rtany_summary(
 		 * If there are any, return success.
 		 */
 		if (sum) {
-			*maxlog = log;
+			*stat = 1;
 			goto out;
 		}
 	}
 	/*
 	 * Found nothing, return failure.
 	 */
-	*maxlog = -1;
+	*stat = 0;
 out:
-	/* There were no extents at levels > log. */
-	if (mp->m_rsum_cache && log + 1 < mp->m_rsum_cache[bbno])
-		mp->m_rsum_cache[bbno] = log + 1;
+	/* There were no extents at levels < log. */
+	if (mp->m_rsum_cache && log > mp->m_rsum_cache[bbno])
+		mp->m_rsum_cache[bbno] = log;
 	return 0;
 }
 
@@ -98,54 +97,60 @@ out:
  * Copy and transform the summary file, given the old and new
  * parameters in the mount structures.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtcopy_summary(
-	struct xfs_rtalloc_args	*oargs,
-	struct xfs_rtalloc_args	*nargs)
+	xfs_mount_t	*omp,		/* old file system mount point */
+	xfs_mount_t	*nmp,		/* new file system mount point */
+	xfs_trans_t	*tp)		/* transaction pointer */
 {
-	xfs_fileoff_t		bbno;	/* bitmap block number */
-	int			error;
-	int			log;	/* summary level number (log length) */
-	xfs_suminfo_t		sum;	/* summary data */
+	xfs_rtblock_t	bbno;		/* bitmap block number */
+	struct xfs_buf	*bp;		/* summary buffer */
+	int		error;		/* error return value */
+	int		log;		/* summary level number (log length) */
+	xfs_suminfo_t	sum;		/* summary data */
+	xfs_fsblock_t	sumbno;		/* summary block number */
 
-	for (log = oargs->mp->m_rsumlevels - 1; log >= 0; log--) {
-		for (bbno = oargs->mp->m_sb.sb_rbmblocks - 1;
+	bp = NULL;
+	for (log = omp->m_rsumlevels - 1; log >= 0; log--) {
+		for (bbno = omp->m_sb.sb_rbmblocks - 1;
 		     (xfs_srtblock_t)bbno >= 0;
 		     bbno--) {
-			error = xfs_rtget_summary(oargs, log, bbno, &sum);
+			error = xfs_rtget_summary(omp, tp, log, bbno, &bp,
+				&sumbno, &sum);
 			if (error)
-				goto out;
+				return error;
 			if (sum == 0)
 				continue;
-			error = xfs_rtmodify_summary(oargs, log, bbno, -sum);
+			error = xfs_rtmodify_summary(omp, tp, log, bbno, -sum,
+				&bp, &sumbno);
 			if (error)
-				goto out;
-			error = xfs_rtmodify_summary(nargs, log, bbno, sum);
+				return error;
+			error = xfs_rtmodify_summary(nmp, tp, log, bbno, sum,
+				&bp, &sumbno);
 			if (error)
-				goto out;
+				return error;
 			ASSERT(sum > 0);
 		}
 	}
-	error = 0;
-out:
-	xfs_rtbuf_cache_relse(oargs);
 	return 0;
 }
 /*
  * Mark an extent specified by start and len allocated.
  * Updates all the summary information as well as the bitmap.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtallocate_range(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* start rtext to allocate */
-	xfs_rtxlen_t		len)	/* in/out: summary block number */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	start,		/* start block to allocate */
+	xfs_extlen_t	len,		/* length to allocate */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb)		/* in/out: summary block number */
 {
-	struct xfs_mount	*mp = args->mp;
-	xfs_rtxnum_t		end;	/* end of the allocated rtext */
-	int			error;
-	xfs_rtxnum_t		postblock = 0; /* first rtext allocated > end */
-	xfs_rtxnum_t		preblock = 0; /* first rtext allocated < start */
+	xfs_rtblock_t	end;		/* end of the allocated extent */
+	int		error;		/* error value */
+	xfs_rtblock_t	postblock = 0;	/* first block allocated > end */
+	xfs_rtblock_t	preblock = 0;	/* first block allocated < start */
 
 	end = start + len - 1;
 	/*
@@ -153,15 +158,15 @@ xfs_rtallocate_range(
 	 * We need to find the beginning and end of the extent so we can
 	 * properly update the summary.
 	 */
-	error = xfs_rtfind_back(args, start, 0, &preblock);
+	error = xfs_rtfind_back(mp, tp, start, 0, &preblock);
 	if (error) {
 		return error;
 	}
 	/*
 	 * Find the next allocated block (end of free extent).
 	 */
-	error = xfs_rtfind_forw(args, end, mp->m_sb.sb_rextents - 1,
-			&postblock);
+	error = xfs_rtfind_forw(mp, tp, end, mp->m_sb.sb_rextents - 1,
+		&postblock);
 	if (error) {
 		return error;
 	}
@@ -169,9 +174,9 @@ xfs_rtallocate_range(
 	 * Decrement the summary information corresponding to the entire
 	 * (old) free extent.
 	 */
-	error = xfs_rtmodify_summary(args,
-			XFS_RTBLOCKLOG(postblock + 1 - preblock),
-			xfs_rtx_to_rbmblock(mp, preblock), -1);
+	error = xfs_rtmodify_summary(mp, tp,
+		XFS_RTBLOCKLOG(postblock + 1 - preblock),
+		XFS_BITTOBLOCK(mp, preblock), -1, rbpp, rsb);
 	if (error) {
 		return error;
 	}
@@ -180,9 +185,9 @@ xfs_rtallocate_range(
 	 * old extent, add summary data for them to be free.
 	 */
 	if (preblock < start) {
-		error = xfs_rtmodify_summary(args,
-				XFS_RTBLOCKLOG(start - preblock),
-				xfs_rtx_to_rbmblock(mp, preblock), 1);
+		error = xfs_rtmodify_summary(mp, tp,
+			XFS_RTBLOCKLOG(start - preblock),
+			XFS_BITTOBLOCK(mp, preblock), 1, rbpp, rsb);
 		if (error) {
 			return error;
 		}
@@ -192,9 +197,9 @@ xfs_rtallocate_range(
 	 * old extent, add summary data for them to be free.
 	 */
 	if (postblock > end) {
-		error = xfs_rtmodify_summary(args,
-				XFS_RTBLOCKLOG(postblock - end),
-				xfs_rtx_to_rbmblock(mp, end + 1), 1);
+		error = xfs_rtmodify_summary(mp, tp,
+			XFS_RTBLOCKLOG(postblock - end),
+			XFS_BITTOBLOCK(mp, end + 1), 1, rbpp, rsb);
 		if (error) {
 			return error;
 		}
@@ -202,69 +207,54 @@ xfs_rtallocate_range(
 	/*
 	 * Modify the bitmap to mark this extent allocated.
 	 */
-	error = xfs_rtmodify_range(args, start, len, 0);
+	error = xfs_rtmodify_range(mp, tp, start, len, 0);
 	return error;
-}
-
-/*
- * Make sure we don't run off the end of the rt volume.  Be careful that
- * adjusting maxlen downwards doesn't cause us to fail the alignment checks.
- */
-static inline xfs_rtxlen_t
-xfs_rtallocate_clamp_len(
-	struct xfs_mount	*mp,
-	xfs_rtxnum_t		startrtx,
-	xfs_rtxlen_t		rtxlen,
-	xfs_rtxlen_t		prod)
-{
-	xfs_rtxlen_t		ret;
-
-	ret = min(mp->m_sb.sb_rextents, startrtx + rtxlen) - startrtx;
-	return rounddown(ret, prod);
 }
 
 /*
  * Attempt to allocate an extent minlen<=len<=maxlen starting from
  * bitmap block bbno.  If we don't get maxlen then use prod to trim
- * the length, if given.  Returns error; returns starting block in *rtx.
+ * the length, if given.  Returns error; returns starting block in *rtblock.
  * The lengths are all in rtextents.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtallocate_extent_block(
-	struct xfs_rtalloc_args	*args,
-	xfs_fileoff_t		bbno,	/* bitmap block number */
-	xfs_rtxlen_t		minlen,	/* minimum length to allocate */
-	xfs_rtxlen_t		maxlen,	/* maximum length to allocate */
-	xfs_rtxlen_t		*len,	/* out: actual length allocated */
-	xfs_rtxnum_t		*nextp,	/* out: next rtext to try */
-	xfs_rtxlen_t		prod,	/* extent product factor */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext allocated */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bbno,		/* bitmap block number */
+	xfs_extlen_t	minlen,		/* minimum length to allocate */
+	xfs_extlen_t	maxlen,		/* maximum length to allocate */
+	xfs_extlen_t	*len,		/* out: actual length allocated */
+	xfs_rtblock_t	*nextp,		/* out: next block to try */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_extlen_t	prod,		/* extent product factor */
+	xfs_rtblock_t	*rtblock)	/* out: start block allocated */
 {
-	struct xfs_mount	*mp = args->mp;
-	xfs_rtxnum_t		besti;	/* best rtext found so far */
-	xfs_rtxnum_t		bestlen;/* best length found so far */
-	xfs_rtxnum_t		end;	/* last rtext in chunk */
-	int			error;
-	xfs_rtxnum_t		i;	/* current rtext trying */
-	xfs_rtxnum_t		next;	/* next rtext to try */
-	int			stat;	/* status from internal calls */
+	xfs_rtblock_t	besti;		/* best rtblock found so far */
+	xfs_rtblock_t	bestlen;	/* best length found so far */
+	xfs_rtblock_t	end;		/* last rtblock in chunk */
+	int		error;		/* error value */
+	xfs_rtblock_t	i;		/* current rtblock trying */
+	xfs_rtblock_t	next;		/* next rtblock to try */
+	int		stat;		/* status from internal calls */
 
 	/*
 	 * Loop over all the extents starting in this bitmap block,
 	 * looking for one that's long enough.
 	 */
-	for (i = xfs_rbmblock_to_rtx(mp, bbno), besti = -1, bestlen = 0,
-		end = xfs_rbmblock_to_rtx(mp, bbno + 1) - 1;
+	for (i = XFS_BLOCKTOBIT(mp, bbno), besti = -1, bestlen = 0,
+		end = XFS_BLOCKTOBIT(mp, bbno + 1) - 1;
 	     i <= end;
 	     i++) {
 		/* Make sure we don't scan off the end of the rt volume. */
-		maxlen = xfs_rtallocate_clamp_len(mp, i, maxlen, prod);
+		maxlen = min(mp->m_sb.sb_rextents, i + maxlen) - i;
 
 		/*
 		 * See if there's a free extent of maxlen starting at i.
 		 * If it's not so then next will contain the first non-free.
 		 */
-		error = xfs_rtcheck_range(args, i, maxlen, 1, &next, &stat);
+		error = xfs_rtcheck_range(mp, tp, i, maxlen, 1, &next, &stat);
 		if (error) {
 			return error;
 		}
@@ -272,12 +262,13 @@ xfs_rtallocate_extent_block(
 			/*
 			 * i for maxlen is all free, allocate and return that.
 			 */
-			error = xfs_rtallocate_range(args, i, maxlen);
+			error = xfs_rtallocate_range(mp, tp, i, maxlen, rbpp,
+				rsb);
 			if (error) {
 				return error;
 			}
 			*len = maxlen;
-			*rtx = i;
+			*rtblock = i;
 			return 0;
 		}
 		/*
@@ -287,7 +278,7 @@ xfs_rtallocate_extent_block(
 		 * so far, remember it.
 		 */
 		if (minlen < maxlen) {
-			xfs_rtxnum_t	thislen;	/* this extent size */
+			xfs_rtblock_t	thislen;	/* this extent size */
 
 			thislen = next - i;
 			if (thislen >= minlen && thislen > bestlen) {
@@ -299,7 +290,7 @@ xfs_rtallocate_extent_block(
 		 * If not done yet, find the start of the next free space.
 		 */
 		if (next < end) {
-			error = xfs_rtfind_forw(args, next, end, &i);
+			error = xfs_rtfind_forw(mp, tp, next, end, &i);
 			if (error) {
 				return error;
 			}
@@ -310,7 +301,7 @@ xfs_rtallocate_extent_block(
 	 * Searched the whole thing & didn't find a maxlen free extent.
 	 */
 	if (minlen < maxlen && besti != -1) {
-		xfs_rtxlen_t	p;	/* amount to trim length by */
+		xfs_extlen_t	p;	/* amount to trim length by */
 
 		/*
 		 * If size should be a multiple of prod, make that so.
@@ -324,49 +315,51 @@ xfs_rtallocate_extent_block(
 		/*
 		 * Allocate besti for bestlen & return that.
 		 */
-		error = xfs_rtallocate_range(args, besti, bestlen);
+		error = xfs_rtallocate_range(mp, tp, besti, bestlen, rbpp, rsb);
 		if (error) {
 			return error;
 		}
 		*len = bestlen;
-		*rtx = besti;
+		*rtblock = besti;
 		return 0;
 	}
 	/*
 	 * Allocation failed.  Set *nextp to the next block to try.
 	 */
 	*nextp = next;
-	*rtx = NULLRTEXTNO;
+	*rtblock = NULLRTBLOCK;
 	return 0;
 }
 
 /*
  * Allocate an extent of length minlen<=len<=maxlen, starting at block
  * bno.  If we don't get maxlen then use prod to trim the length, if given.
- * Returns error; returns starting block in *rtx.
+ * Returns error; returns starting block in *rtblock.
  * The lengths are all in rtextents.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtallocate_extent_exact(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext number to allocate */
-	xfs_rtxlen_t		minlen,	/* minimum length to allocate */
-	xfs_rtxlen_t		maxlen,	/* maximum length to allocate */
-	xfs_rtxlen_t		*len,	/* out: actual length allocated */
-	xfs_rtxlen_t		prod,	/* extent product factor */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext allocated */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bno,		/* starting block number to allocate */
+	xfs_extlen_t	minlen,		/* minimum length to allocate */
+	xfs_extlen_t	maxlen,		/* maximum length to allocate */
+	xfs_extlen_t	*len,		/* out: actual length allocated */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_extlen_t	prod,		/* extent product factor */
+	xfs_rtblock_t	*rtblock)	/* out: start block allocated */
 {
-	int			error;
-	xfs_rtxlen_t		i;	/* extent length trimmed due to prod */
-	int			isfree;	/* extent is free */
-	xfs_rtxnum_t		next;	/* next rtext to try (dummy) */
+	int		error;		/* error value */
+	xfs_extlen_t	i;		/* extent length trimmed due to prod */
+	int		isfree;		/* extent is free */
+	xfs_rtblock_t	next;		/* next block to try (dummy) */
 
-	ASSERT(minlen % prod == 0);
-	ASSERT(maxlen % prod == 0);
+	ASSERT(minlen % prod == 0 && maxlen % prod == 0);
 	/*
 	 * Check if the range in question (for maxlen) is free.
 	 */
-	error = xfs_rtcheck_range(args, start, maxlen, 1, &next, &isfree);
+	error = xfs_rtcheck_range(mp, tp, bno, maxlen, 1, &next, &isfree);
 	if (error) {
 		return error;
 	}
@@ -374,23 +367,23 @@ xfs_rtallocate_extent_exact(
 		/*
 		 * If it is, allocate it and return success.
 		 */
-		error = xfs_rtallocate_range(args, start, maxlen);
+		error = xfs_rtallocate_range(mp, tp, bno, maxlen, rbpp, rsb);
 		if (error) {
 			return error;
 		}
 		*len = maxlen;
-		*rtx = start;
+		*rtblock = bno;
 		return 0;
 	}
 	/*
 	 * If not, allocate what there is, if it's at least minlen.
 	 */
-	maxlen = next - start;
+	maxlen = next - bno;
 	if (maxlen < minlen) {
 		/*
 		 * Failed, return failure status.
 		 */
-		*rtx = NULLRTEXTNO;
+		*rtblock = NULLRTBLOCK;
 		return 0;
 	}
 	/*
@@ -402,82 +395,81 @@ xfs_rtallocate_extent_exact(
 			/*
 			 * Now we can't do it, return failure status.
 			 */
-			*rtx = NULLRTEXTNO;
+			*rtblock = NULLRTBLOCK;
 			return 0;
 		}
 	}
 	/*
 	 * Allocate what we can and return it.
 	 */
-	error = xfs_rtallocate_range(args, start, maxlen);
+	error = xfs_rtallocate_range(mp, tp, bno, maxlen, rbpp, rsb);
 	if (error) {
 		return error;
 	}
 	*len = maxlen;
-	*rtx = start;
+	*rtblock = bno;
 	return 0;
 }
 
 /*
  * Allocate an extent of length minlen<=len<=maxlen, starting as near
- * to start as possible.  If we don't get maxlen then use prod to trim
+ * to bno as possible.  If we don't get maxlen then use prod to trim
  * the length, if given.  The lengths are all in rtextents.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtallocate_extent_near(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxnum_t		start,	/* starting rtext number to allocate */
-	xfs_rtxlen_t		minlen,	/* minimum length to allocate */
-	xfs_rtxlen_t		maxlen,	/* maximum length to allocate */
-	xfs_rtxlen_t		*len,	/* out: actual length allocated */
-	xfs_rtxlen_t		prod,	/* extent product factor */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext allocated */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bno,		/* starting block number to allocate */
+	xfs_extlen_t	minlen,		/* minimum length to allocate */
+	xfs_extlen_t	maxlen,		/* maximum length to allocate */
+	xfs_extlen_t	*len,		/* out: actual length allocated */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_extlen_t	prod,		/* extent product factor */
+	xfs_rtblock_t	*rtblock)	/* out: start block allocated */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			maxlog;	/* max useful extent from summary */
-	xfs_fileoff_t		bbno;	/* bitmap block number */
-	int			error;
-	int			i;	/* bitmap block offset (loop control) */
-	int			j;	/* secondary loop control */
-	int			log2len; /* log2 of minlen */
-	xfs_rtxnum_t		n;	/* next rtext to try */
-	xfs_rtxnum_t		r;	/* result rtext */
+	int		any;		/* any useful extents from summary */
+	xfs_rtblock_t	bbno;		/* bitmap block number */
+	int		error;		/* error value */
+	int		i;		/* bitmap block offset (loop control) */
+	int		j;		/* secondary loop control */
+	int		log2len;	/* log2 of minlen */
+	xfs_rtblock_t	n;		/* next block to try */
+	xfs_rtblock_t	r;		/* result block */
 
-	ASSERT(minlen % prod == 0);
-	ASSERT(maxlen % prod == 0);
-
+	ASSERT(minlen % prod == 0 && maxlen % prod == 0);
 	/*
 	 * If the block number given is off the end, silently set it to
 	 * the last block.
 	 */
-	if (start >= mp->m_sb.sb_rextents)
-		start = mp->m_sb.sb_rextents - 1;
+	if (bno >= mp->m_sb.sb_rextents)
+		bno = mp->m_sb.sb_rextents - 1;
 
 	/* Make sure we don't run off the end of the rt volume. */
-	maxlen = xfs_rtallocate_clamp_len(mp, start, maxlen, prod);
+	maxlen = min(mp->m_sb.sb_rextents, bno + maxlen) - bno;
 	if (maxlen < minlen) {
-		*rtx = NULLRTEXTNO;
+		*rtblock = NULLRTBLOCK;
 		return 0;
 	}
 
 	/*
 	 * Try the exact allocation first.
 	 */
-	error = xfs_rtallocate_extent_exact(args, start, minlen, maxlen, len,
-			prod, &r);
+	error = xfs_rtallocate_extent_exact(mp, tp, bno, minlen, maxlen, len,
+		rbpp, rsb, prod, &r);
 	if (error) {
 		return error;
 	}
 	/*
 	 * If the exact allocation worked, return that.
 	 */
-	if (r != NULLRTEXTNO) {
-		*rtx = r;
+	if (r != NULLRTBLOCK) {
+		*rtblock = r;
 		return 0;
 	}
-	bbno = xfs_rtx_to_rbmblock(mp, start);
+	bbno = XFS_BITTOBLOCK(mp, bno);
 	i = 0;
-	j = -1;
 	ASSERT(minlen != 0);
 	log2len = xfs_highbit32(minlen);
 	/*
@@ -488,8 +480,8 @@ xfs_rtallocate_extent_near(
 		 * Get summary information of extents of all useful levels
 		 * starting in this bitmap block.
 		 */
-		error = xfs_rtany_summary(args, log2len, mp->m_rsumlevels - 1,
-				bbno + i, &maxlog);
+		error = xfs_rtany_summary(mp, tp, log2len, mp->m_rsumlevels - 1,
+			bbno + i, rbpp, rsb, &any);
 		if (error) {
 			return error;
 		}
@@ -497,10 +489,7 @@ xfs_rtallocate_extent_near(
 		 * If there are any useful extents starting here, try
 		 * allocating one.
 		 */
-		if (maxlog >= 0) {
-			xfs_extlen_t maxavail =
-				min_t(xfs_rtblock_t, maxlen,
-				      (1ULL << (maxlog + 1)) - 1);
+		if (any) {
 			/*
 			 * On the positive side of the starting location.
 			 */
@@ -509,17 +498,17 @@ xfs_rtallocate_extent_near(
 				 * Try to allocate an extent starting in
 				 * this block.
 				 */
-				error = xfs_rtallocate_extent_block(args,
-						bbno + i, minlen, maxavail, len,
-						&n, prod, &r);
+				error = xfs_rtallocate_extent_block(mp, tp,
+					bbno + i, minlen, maxlen, len, &n, rbpp,
+					rsb, prod, &r);
 				if (error) {
 					return error;
 				}
 				/*
 				 * If it worked, return it.
 				 */
-				if (r != NULLRTEXTNO) {
-					*rtx = r;
+				if (r != NULLRTBLOCK) {
+					*rtblock = r;
 					return 0;
 				}
 			}
@@ -527,45 +516,67 @@ xfs_rtallocate_extent_near(
 			 * On the negative side of the starting location.
 			 */
 			else {		/* i < 0 */
-				int	maxblocks;
-
 				/*
-				 * Loop backwards to find the end of the extent
-				 * we found in the realtime summary.
-				 *
-				 * maxblocks is the maximum possible number of
-				 * bitmap blocks from the start of the extent
-				 * to the end of the extent.
+				 * Loop backwards through the bitmap blocks from
+				 * the starting point-1 up to where we are now.
+				 * There should be an extent which ends in this
+				 * bitmap block and is long enough.
 				 */
-				if (maxlog == 0)
-					maxblocks = 0;
-				else if (maxlog < mp->m_blkbit_log)
-					maxblocks = 1;
-				else
-					maxblocks = 2 << (maxlog - mp->m_blkbit_log);
-
-				/*
-				 * We need to check bbno + i + maxblocks down to
-				 * bbno + i. We already checked bbno down to
-				 * bbno + j + 1, so we don't need to check those
-				 * again.
-				 */
-				j = min(i + maxblocks, j);
-				for (; j >= i; j--) {
-					error = xfs_rtallocate_extent_block(args,
-							bbno + j, minlen,
-							maxavail, len, &n, prod,
-							&r);
+				for (j = -1; j > i; j--) {
+					/*
+					 * Grab the summary information for
+					 * this bitmap block.
+					 */
+					error = xfs_rtany_summary(mp, tp,
+						log2len, mp->m_rsumlevels - 1,
+						bbno + j, rbpp, rsb, &any);
+					if (error) {
+						return error;
+					}
+					/*
+					 * If there's no extent given in the
+					 * summary that means the extent we
+					 * found must carry over from an
+					 * earlier block.  If there is an
+					 * extent given, we've already tried
+					 * that allocation, don't do it again.
+					 */
+					if (any)
+						continue;
+					error = xfs_rtallocate_extent_block(mp,
+						tp, bbno + j, minlen, maxlen,
+						len, &n, rbpp, rsb, prod, &r);
 					if (error) {
 						return error;
 					}
 					/*
 					 * If it works, return the extent.
 					 */
-					if (r != NULLRTEXTNO) {
-						*rtx = r;
+					if (r != NULLRTBLOCK) {
+						*rtblock = r;
 						return 0;
 					}
+				}
+				/*
+				 * There weren't intervening bitmap blocks
+				 * with a long enough extent, or the
+				 * allocation didn't work for some reason
+				 * (i.e. it's a little * too short).
+				 * Try to allocate from the summary block
+				 * that we found.
+				 */
+				error = xfs_rtallocate_extent_block(mp, tp,
+					bbno + i, minlen, maxlen, len, &n, rbpp,
+					rsb, prod, &r);
+				if (error) {
+					return error;
+				}
+				/*
+				 * If it works, return the extent.
+				 */
+				if (r != NULLRTBLOCK) {
+					*rtblock = r;
+					return 0;
 				}
 			}
 		}
@@ -599,7 +610,7 @@ xfs_rtallocate_extent_near(
 		else
 			break;
 	}
-	*rtx = NULLRTEXTNO;
+	*rtblock = NULLRTBLOCK;
 	return 0;
 }
 
@@ -608,25 +619,26 @@ xfs_rtallocate_extent_near(
  * specified.  If we don't get maxlen then use prod to trim
  * the length, if given.  The lengths are all in rtextents.
  */
-STATIC int
+STATIC int				/* error */
 xfs_rtallocate_extent_size(
-	struct xfs_rtalloc_args	*args,
-	xfs_rtxlen_t		minlen,	/* minimum length to allocate */
-	xfs_rtxlen_t		maxlen,	/* maximum length to allocate */
-	xfs_rtxlen_t		*len,	/* out: actual length allocated */
-	xfs_rtxlen_t		prod,	/* extent product factor */
-	xfs_rtxnum_t		*rtx)	/* out: start rtext allocated */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_extlen_t	minlen,		/* minimum length to allocate */
+	xfs_extlen_t	maxlen,		/* maximum length to allocate */
+	xfs_extlen_t	*len,		/* out: actual length allocated */
+	struct xfs_buf	**rbpp,		/* in/out: summary block buffer */
+	xfs_fsblock_t	*rsb,		/* in/out: summary block number */
+	xfs_extlen_t	prod,		/* extent product factor */
+	xfs_rtblock_t	*rtblock)	/* out: start block allocated */
 {
-	struct xfs_mount	*mp = args->mp;
-	int			error;
-	xfs_fileoff_t		i;	/* bitmap block number */
-	int			l;	/* level number (loop control) */
-	xfs_rtxnum_t		n;	/* next rtext to be tried */
-	xfs_rtxnum_t		r;	/* result rtext number */
-	xfs_suminfo_t		sum;	/* summary information for extents */
+	int		error;		/* error value */
+	int		i;		/* bitmap block number */
+	int		l;		/* level number (loop control) */
+	xfs_rtblock_t	n;		/* next block to be tried */
+	xfs_rtblock_t	r;		/* result block number */
+	xfs_suminfo_t	sum;		/* summary information for extents */
 
-	ASSERT(minlen % prod == 0);
-	ASSERT(maxlen % prod == 0);
+	ASSERT(minlen % prod == 0 && maxlen % prod == 0);
 	ASSERT(maxlen != 0);
 
 	/*
@@ -644,7 +656,8 @@ xfs_rtallocate_extent_size(
 			/*
 			 * Get the summary for this level/block.
 			 */
-			error = xfs_rtget_summary(args, l, i, &sum);
+			error = xfs_rtget_summary(mp, tp, l, i, rbpp, rsb,
+				&sum);
 			if (error) {
 				return error;
 			}
@@ -656,16 +669,16 @@ xfs_rtallocate_extent_size(
 			/*
 			 * Try allocating the extent.
 			 */
-			error = xfs_rtallocate_extent_block(args, i, maxlen,
-					maxlen, len, &n, prod, &r);
+			error = xfs_rtallocate_extent_block(mp, tp, i, maxlen,
+				maxlen, len, &n, rbpp, rsb, prod, &r);
 			if (error) {
 				return error;
 			}
 			/*
 			 * If it worked, return that.
 			 */
-			if (r != NULLRTEXTNO) {
-				*rtx = r;
+			if (r != NULLRTBLOCK) {
+				*rtblock = r;
 				return 0;
 			}
 			/*
@@ -673,8 +686,8 @@ xfs_rtallocate_extent_size(
 			 * allocator is beyond the next bitmap block,
 			 * skip to that bitmap block.
 			 */
-			if (xfs_rtx_to_rbmblock(mp, n) > i + 1)
-				i = xfs_rtx_to_rbmblock(mp, n) - 1;
+			if (XFS_BITTOBLOCK(mp, n) > i + 1)
+				i = XFS_BITTOBLOCK(mp, n) - 1;
 		}
 	}
 	/*
@@ -682,7 +695,7 @@ xfs_rtallocate_extent_size(
 	 * we're asking for a fixed size extent.
 	 */
 	if (minlen > --maxlen) {
-		*rtx = NULLRTEXTNO;
+		*rtblock = NULLRTBLOCK;
 		return 0;
 	}
 	ASSERT(minlen != 0);
@@ -702,7 +715,8 @@ xfs_rtallocate_extent_size(
 			/*
 			 * Get the summary information for this level/block.
 			 */
-			error =	xfs_rtget_summary(args, l, i, &sum);
+			error =	xfs_rtget_summary(mp, tp, l, i, rbpp, rsb,
+						  &sum);
 			if (error) {
 				return error;
 			}
@@ -716,18 +730,18 @@ xfs_rtallocate_extent_size(
 			 * minlen/maxlen are in the possible range for
 			 * this summary level.
 			 */
-			error = xfs_rtallocate_extent_block(args, i,
+			error = xfs_rtallocate_extent_block(mp, tp, i,
 					XFS_RTMAX(minlen, 1 << l),
 					XFS_RTMIN(maxlen, (1 << (l + 1)) - 1),
-					len, &n, prod, &r);
+					len, &n, rbpp, rsb, prod, &r);
 			if (error) {
 				return error;
 			}
 			/*
 			 * If it worked, return that extent.
 			 */
-			if (r != NULLRTEXTNO) {
-				*rtx = r;
+			if (r != NULLRTBLOCK) {
+				*rtblock = r;
 				return 0;
 			}
 			/*
@@ -735,14 +749,14 @@ xfs_rtallocate_extent_size(
 			 * allocator is beyond the next bitmap block,
 			 * skip to that bitmap block.
 			 */
-			if (xfs_rtx_to_rbmblock(mp, n) > i + 1)
-				i = xfs_rtx_to_rbmblock(mp, n) - 1;
+			if (XFS_BITTOBLOCK(mp, n) > i + 1)
+				i = XFS_BITTOBLOCK(mp, n) - 1;
 		}
 	}
 	/*
 	 * Got nothing, return failure.
 	 */
-	*rtx = NULLRTEXTNO;
+	*rtblock = NULLRTBLOCK;
 	return 0;
 }
 
@@ -872,14 +886,12 @@ xfs_alloc_rsum_cache(
 	xfs_extlen_t	rbmblocks)	/* number of rt bitmap blocks */
 {
 	/*
-	 * The rsum cache is initialized to the maximum value, which is
-	 * trivially an upper bound on the maximum level with any free extents.
-	 * We can continue without the cache if it couldn't be allocated.
+	 * The rsum cache is initialized to all zeroes, which is trivially a
+	 * lower bound on the minimum level with any free extents. We can
+	 * continue without the cache if it couldn't be allocated.
 	 */
-	mp->m_rsum_cache = kvmalloc(rbmblocks, GFP_KERNEL);
-	if (mp->m_rsum_cache)
-		memset(mp->m_rsum_cache, -1, rbmblocks);
-	else
+	mp->m_rsum_cache = kvzalloc(rbmblocks, GFP_KERNEL);
+	if (!mp->m_rsum_cache)
 		xfs_warn(mp, "could not allocate realtime summary cache");
 }
 
@@ -895,13 +907,13 @@ xfs_growfs_rt(
 	xfs_mount_t	*mp,		/* mount point for filesystem */
 	xfs_growfs_rt_t	*in)		/* growfs rt input struct */
 {
-	xfs_fileoff_t	bmbno;		/* bitmap block number */
+	xfs_rtblock_t	bmbno;		/* bitmap block number */
 	struct xfs_buf	*bp;		/* temporary buffer */
 	int		error;		/* error return value */
 	xfs_mount_t	*nmp;		/* new (fake) mount structure */
 	xfs_rfsblock_t	nrblocks;	/* new number of realtime blocks */
 	xfs_extlen_t	nrbmblocks;	/* new number of rt bitmap blocks */
-	xfs_rtxnum_t	nrextents;	/* new number of realtime extents */
+	xfs_rtblock_t	nrextents;	/* new number of realtime extents */
 	uint8_t		nrextslog;	/* new log2 of sb_rextents */
 	xfs_extlen_t	nrsumblocks;	/* new number of summary blocks */
 	uint		nrsumlevels;	/* new rt summary levels */
@@ -910,6 +922,7 @@ xfs_growfs_rt(
 	xfs_extlen_t	rbmblocks;	/* current number of rt bitmap blocks */
 	xfs_extlen_t	rsumblocks;	/* current number of rt summary blks */
 	xfs_sb_t	*sbp;		/* old superblock */
+	xfs_fsblock_t	sumbno;		/* summary block number */
 	uint8_t		*rsum_cache;	/* old summary cache */
 
 	sbp = &mp->m_sb;
@@ -941,7 +954,7 @@ xfs_growfs_rt(
 		return -EINVAL;
 
 	/* Unsupported realtime features. */
-	if (xfs_has_rmapbt(mp) || xfs_has_reflink(mp) || xfs_has_quota(mp))
+	if (xfs_has_rmapbt(mp) || xfs_has_reflink(mp))
 		return -EOPNOTSUPP;
 
 	nrblocks = in->newblocks;
@@ -963,10 +976,11 @@ xfs_growfs_rt(
 	 */
 	nrextents = nrblocks;
 	do_div(nrextents, in->extsize);
-	nrbmblocks = xfs_rtbitmap_blockcount(mp, nrextents);
+	nrbmblocks = howmany_64(nrextents, NBBY * sbp->sb_blocksize);
 	nrextslog = xfs_highbit32(nrextents);
 	nrsumlevels = nrextslog + 1;
-	nrsumblocks = xfs_rtsummary_blockcount(mp, nrsumlevels, nrbmblocks);
+	nrsumsize = (uint)sizeof(xfs_suminfo_t) * nrsumlevels * nrbmblocks;
+	nrsumblocks = XFS_B_TO_FSB(mp, nrsumsize);
 	nrsumsize = XFS_FSB_TO_B(mp, nrsumblocks);
 	/*
 	 * New summary size can't be more than half the size of
@@ -1009,12 +1023,6 @@ xfs_growfs_rt(
 		     ((sbp->sb_rextents & ((1 << mp->m_blkbit_log) - 1)) != 0);
 	     bmbno < nrbmblocks;
 	     bmbno++) {
-		struct xfs_rtalloc_args	args = {
-			.mp		= mp,
-		};
-		struct xfs_rtalloc_args	nargs = {
-			.mp		= nmp,
-		};
 		struct xfs_trans	*tp;
 		xfs_rfsblock_t		nrblocks_step;
 
@@ -1024,17 +1032,19 @@ xfs_growfs_rt(
 		 * Calculate new sb and mount fields for this round.
 		 */
 		nsbp->sb_rextsize = in->extsize;
-		nmp->m_rtxblklog = -1; /* don't use shift or masking */
 		nsbp->sb_rbmblocks = bmbno + 1;
 		nrblocks_step = (bmbno + 1) * NBBY * nsbp->sb_blocksize *
 				nsbp->sb_rextsize;
 		nsbp->sb_rblocks = min(nrblocks, nrblocks_step);
-		nsbp->sb_rextents = xfs_rtb_to_rtx(nmp, nsbp->sb_rblocks);
+		nsbp->sb_rextents = nsbp->sb_rblocks;
+		do_div(nsbp->sb_rextents, nsbp->sb_rextsize);
 		ASSERT(nsbp->sb_rextents != 0);
 		nsbp->sb_rextslog = xfs_highbit32(nsbp->sb_rextents);
 		nrsumlevels = nmp->m_rsumlevels = nsbp->sb_rextslog + 1;
-		nrsumblocks = xfs_rtsummary_blockcount(mp, nrsumlevels,
-				nsbp->sb_rbmblocks);
+		nrsumsize =
+			(uint)sizeof(xfs_suminfo_t) * nrsumlevels *
+			nsbp->sb_rbmblocks;
+		nrsumblocks = XFS_B_TO_FSB(mp, nrsumsize);
 		nmp->m_rsumsize = nrsumsize = XFS_FSB_TO_B(mp, nrsumblocks);
 		/*
 		 * Start a transaction, get the log reservation.
@@ -1043,9 +1053,6 @@ xfs_growfs_rt(
 				&tp);
 		if (error)
 			break;
-		args.tp = tp;
-		nargs.tp = tp;
-
 		/*
 		 * Lock out other callers by grabbing the bitmap inode lock.
 		 */
@@ -1079,7 +1086,7 @@ xfs_growfs_rt(
 		 */
 		if (sbp->sb_rbmblocks != nsbp->sb_rbmblocks ||
 		    mp->m_rsumlevels != nmp->m_rsumlevels) {
-			error = xfs_rtcopy_summary(&args, &nargs);
+			error = xfs_rtcopy_summary(mp, nmp, tp);
 			if (error)
 				goto error_cancel;
 		}
@@ -1104,9 +1111,9 @@ xfs_growfs_rt(
 		/*
 		 * Free new extent.
 		 */
-		error = xfs_rtfree_range(&nargs, sbp->sb_rextents,
-				nsbp->sb_rextents - sbp->sb_rextents);
-		xfs_rtbuf_cache_relse(&nargs);
+		bp = NULL;
+		error = xfs_rtfree_range(nmp, tp, sbp->sb_rextents,
+			nsbp->sb_rextents - sbp->sb_rextents, &bp, &sumbno);
 		if (error) {
 error_cancel:
 			xfs_trans_cancel(tp);
@@ -1164,60 +1171,59 @@ out_free:
  * parameters.  The length units are all in realtime extents, as is the
  * result block number.
  */
-int
+int					/* error */
 xfs_rtallocate_extent(
-	struct xfs_trans	*tp,
-	xfs_rtxnum_t		start,	/* starting rtext number to allocate */
-	xfs_rtxlen_t		minlen,	/* minimum length to allocate */
-	xfs_rtxlen_t		maxlen,	/* maximum length to allocate */
-	xfs_rtxlen_t		*len,	/* out: actual length allocated */
-	int			wasdel,	/* was a delayed allocation extent */
-	xfs_rtxlen_t		prod,	/* extent product factor */
-	xfs_rtxnum_t		*rtblock) /* out: start rtext allocated */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_rtblock_t	bno,		/* starting block number to allocate */
+	xfs_extlen_t	minlen,		/* minimum length to allocate */
+	xfs_extlen_t	maxlen,		/* maximum length to allocate */
+	xfs_extlen_t	*len,		/* out: actual length allocated */
+	int		wasdel,		/* was a delayed allocation extent */
+	xfs_extlen_t	prod,		/* extent product factor */
+	xfs_rtblock_t	*rtblock)	/* out: start block allocated */
 {
-	struct xfs_rtalloc_args	args = {
-		.mp		= tp->t_mountp,
-		.tp		= tp,
-	};
-	int			error;	/* error value */
-	xfs_rtxnum_t		r;	/* result allocated rtext */
+	xfs_mount_t	*mp = tp->t_mountp;
+	int		error;		/* error value */
+	xfs_rtblock_t	r;		/* result allocated block */
+	xfs_fsblock_t	sb;		/* summary file block number */
+	struct xfs_buf	*sumbp;		/* summary file block buffer */
 
-	ASSERT(xfs_isilocked(args.mp->m_rbmip, XFS_ILOCK_EXCL));
+	ASSERT(xfs_isilocked(mp->m_rbmip, XFS_ILOCK_EXCL));
 	ASSERT(minlen > 0 && minlen <= maxlen);
 
 	/*
 	 * If prod is set then figure out what to do to minlen and maxlen.
 	 */
 	if (prod > 1) {
-		xfs_rtxlen_t	i;
+		xfs_extlen_t	i;
 
 		if ((i = maxlen % prod))
 			maxlen -= i;
 		if ((i = minlen % prod))
 			minlen += prod - i;
 		if (maxlen < minlen) {
-			*rtblock = NULLRTEXTNO;
+			*rtblock = NULLRTBLOCK;
 			return 0;
 		}
 	}
 
 retry:
-	if (start == 0) {
-		error = xfs_rtallocate_extent_size(&args, minlen,
-				maxlen, len, prod, &r);
+	sumbp = NULL;
+	if (bno == 0) {
+		error = xfs_rtallocate_extent_size(mp, tp, minlen, maxlen, len,
+				&sumbp,	&sb, prod, &r);
 	} else {
-		error = xfs_rtallocate_extent_near(&args, start, minlen,
-				maxlen, len, prod, &r);
+		error = xfs_rtallocate_extent_near(mp, tp, bno, minlen, maxlen,
+				len, &sumbp, &sb, prod, &r);
 	}
 
-	xfs_rtbuf_cache_relse(&args);
 	if (error)
 		return error;
 
 	/*
 	 * If it worked, update the superblock.
 	 */
-	if (r != NULLRTEXTNO) {
+	if (r != NULLRTBLOCK) {
 		long	slen = (long)*len;
 
 		ASSERT(*len >= minlen && *len <= maxlen);
@@ -1244,7 +1250,6 @@ xfs_rtmount_init(
 	struct xfs_buf		*bp;	/* buffer for last block of subvolume */
 	struct xfs_sb		*sbp;	/* filesystem superblock copy in mount */
 	xfs_daddr_t		d;	/* address of last block of subvolume */
-	unsigned int		rsumblocks;
 	int			error;
 
 	sbp = &mp->m_sb;
@@ -1256,9 +1261,10 @@ xfs_rtmount_init(
 		return -ENODEV;
 	}
 	mp->m_rsumlevels = sbp->sb_rextslog + 1;
-	rsumblocks = xfs_rtsummary_blockcount(mp, mp->m_rsumlevels,
-			mp->m_sb.sb_rbmblocks);
-	mp->m_rsumsize = XFS_FSB_TO_B(mp, rsumblocks);
+	mp->m_rsumsize =
+		(uint)sizeof(xfs_suminfo_t) * mp->m_rsumlevels *
+		sbp->sb_rbmblocks;
+	mp->m_rsumsize = roundup(mp->m_rsumsize, sbp->sb_blocksize);
 	mp->m_rbmip = mp->m_rsumip = NULL;
 	/*
 	 * Check that the realtime section is an ok size.
@@ -1412,28 +1418,27 @@ xfs_rtunmount_inodes(
  * of rtextents and the fraction.
  * The fraction sequence is 0, 1/2, 1/4, 3/4, 1/8, ..., 7/8, 1/16, ...
  */
-int						/* error */
+int					/* error */
 xfs_rtpick_extent(
-	xfs_mount_t		*mp,		/* file system mount point */
-	xfs_trans_t		*tp,		/* transaction pointer */
-	xfs_rtxlen_t		len,		/* allocation length (rtextents) */
-	xfs_rtxnum_t		*pick)		/* result rt extent */
+	xfs_mount_t	*mp,		/* file system mount point */
+	xfs_trans_t	*tp,		/* transaction pointer */
+	xfs_extlen_t	len,		/* allocation length (rtextents) */
+	xfs_rtblock_t	*pick)		/* result rt extent */
 {
-	xfs_rtxnum_t		b;		/* result rtext */
-	int			log2;		/* log of sequence number */
-	uint64_t		resid;		/* residual after log removed */
-	uint64_t		seq;		/* sequence number of file creation */
-	struct timespec64	ts;		/* timespec in inode */
+	xfs_rtblock_t	b;		/* result block */
+	int		log2;		/* log of sequence number */
+	uint64_t	resid;		/* residual after log removed */
+	uint64_t	seq;		/* sequence number of file creation */
+	uint64_t	*seqp;		/* pointer to seqno in inode */
 
 	ASSERT(xfs_isilocked(mp->m_rbmip, XFS_ILOCK_EXCL));
 
-	ts = inode_get_atime(VFS_I(mp->m_rbmip));
+	seqp = (uint64_t *)&VFS_I(mp->m_rbmip)->i_atime;
 	if (!(mp->m_rbmip->i_diflags & XFS_DIFLAG_NEWRTBM)) {
 		mp->m_rbmip->i_diflags |= XFS_DIFLAG_NEWRTBM;
-		seq = 0;
-	} else {
-		seq = ts.tv_sec;
+		*seqp = 0;
 	}
+	seq = *seqp;
 	if ((log2 = xfs_highbit64(seq)) == -1)
 		b = 0;
 	else {
@@ -1445,8 +1450,7 @@ xfs_rtpick_extent(
 		if (b + len > mp->m_sb.sb_rextents)
 			b = mp->m_sb.sb_rextents - len;
 	}
-	ts.tv_sec = seq + 1;
-	inode_set_atime_to_ts(VFS_I(mp->m_rbmip), ts);
+	*seqp = seq + 1;
 	xfs_trans_log_inode(tp, mp->m_rbmip, XFS_ILOG_CORE);
 	*pick = b;
 	return 0;

@@ -184,7 +184,7 @@ void line_flush_chars(struct tty_struct *tty)
 	line_flush_buffer(tty);
 }
 
-ssize_t line_write(struct tty_struct *tty, const u8 *buf, size_t len)
+int line_write(struct tty_struct *tty, const unsigned char *buf, int len)
 {
 	struct line *line = tty->driver_data;
 	unsigned long flags;

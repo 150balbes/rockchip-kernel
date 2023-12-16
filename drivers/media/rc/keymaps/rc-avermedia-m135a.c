@@ -142,4 +142,3 @@ module_exit(exit_rc_map_avermedia_m135a)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("Avermedia M135A with RM-JX and RM-K6 remote controller keytable");

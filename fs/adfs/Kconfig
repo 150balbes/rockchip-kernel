@@ -2,7 +2,6 @@
 config ADFS_FS
 	tristate "ADFS file system support"
 	depends on BLOCK
-	select BUFFER_HEAD
 	help
 	  The Acorn Disc Filing System is the standard file system of the
 	  RiscOS operating system which runs on Acorn's ARM-based Risc PC

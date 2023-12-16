@@ -340,8 +340,9 @@ static struct atom_display_object_path_v2 *get_bios_object(
 }
 
 /* from graphics_object_id, find display path which includes the object_id */
-static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(struct bios_parser *bp,
-									struct graphics_object_id id)
+static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(
+	struct bios_parser *bp,
+	struct graphics_object_id id)
 {
 	unsigned int i;
 	struct graphics_object_id obj_id = {0};
@@ -355,7 +356,7 @@ static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(struct b
 					&& id.enum_id == obj_id.enum_id)
 				return &bp->object_info_tbl.v1_5->display_path[i];
 		}
-	break;
+        break;
 
 	case OBJECT_TYPE_CONNECTOR:
 	case OBJECT_TYPE_GENERIC:
@@ -369,7 +370,7 @@ static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(struct b
 					&& id.enum_id == obj_id.enum_id)
 				return &bp->object_info_tbl.v1_5->display_path[i];
 		}
-	break;
+        break;
 
 	default:
 		return NULL;
@@ -405,16 +406,16 @@ static enum bp_result bios_parser_get_i2c_info(struct dc_bios *dcb,
 	}
 
 	switch (bp->object_info_tbl.revision.minor) {
-	case 4:
-	default:
-		object = get_bios_object(bp, id);
+	    case 4:
+	    default:
+	        object = get_bios_object(bp, id);
 
-		if (!object)
-			return BP_RESULT_BADINPUT;
+	        if (!object)
+				return BP_RESULT_BADINPUT;
 
-		offset = object->disp_recordoffset + bp->object_info_tbl_offset;
-		break;
-	case 5:
+	        offset = object->disp_recordoffset + bp->object_info_tbl_offset;
+	        break;
+	    case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, id);
 
 		if (!object_path_v3)
@@ -520,8 +521,9 @@ static enum bp_result get_gpio_i2c_info(
 	return BP_RESULT_OK;
 }
 
-static struct atom_hpd_int_record *get_hpd_record_for_path_v3(struct bios_parser *bp,
-							      struct atom_display_object_path_v3 *object)
+static struct atom_hpd_int_record *get_hpd_record_for_path_v3(
+	struct bios_parser *bp,
+	struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -568,16 +570,17 @@ static enum bp_result bios_parser_get_hpd_info(
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	case 4:
-	default:
-		object = get_bios_object(bp, id);
+	    case 4:
+	    default:
+	        object = get_bios_object(bp, id);
 
 		if (!object)
 			return BP_RESULT_BADINPUT;
 
-		record = get_hpd_record(bp, object);
-		break;
-	case 5:
+	        record = get_hpd_record(bp, object);
+
+	        break;
+	    case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, id);
 
 		if (!object_path_v3)
@@ -771,20 +774,20 @@ static enum bp_result bios_parser_get_device_tag(
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	case 4:
-	default:
+	    case 4:
+	    default:
 	        /* getBiosObject will return MXM object */
-		object = get_bios_object(bp, connector_object_id);
+	        object = get_bios_object(bp, connector_object_id);
 
 		if (!object) {
 			BREAK_TO_DEBUGGER(); /* Invalid object id */
 			return BP_RESULT_BADINPUT;
 		}
 
-		info->acpi_device = 0; /* BIOS no longer provides this */
-		info->dev_id = device_type_from_device_id(object->device_tag);
-		break;
-	case 5:
+	        info->acpi_device = 0; /* BIOS no longer provides this */
+	        info->dev_id = device_type_from_device_id(object->device_tag);
+	        break;
+	    case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, connector_object_id);
 
 		if (!object_path_v3) {
@@ -1579,13 +1582,13 @@ static bool bios_parser_is_device_id_supported(
 	uint32_t mask = get_support_mask_for_device_id(id);
 
 	switch (bp->object_info_tbl.revision.minor) {
-	case 4:
-	default:
-		return (le16_to_cpu(bp->object_info_tbl.v1_4->supporteddevices) & mask) != 0;
-		break;
-	case 5:
-		return (le16_to_cpu(bp->object_info_tbl.v1_5->supporteddevices) & mask) != 0;
-		break;
+	    case 4:
+	    default:
+	        return (le16_to_cpu(bp->object_info_tbl.v1_4->supporteddevices) & mask) != 0;
+			break;
+	    case 5:
+			return (le16_to_cpu(bp->object_info_tbl.v1_5->supporteddevices) & mask) != 0;
+			break;
 	}
 
 	return false;
@@ -1722,6 +1725,15 @@ static void bios_parser_set_scratch_critical_state(
 	bios_set_scratch_critical_state(dcb, state);
 }
 
+struct atom_dig_transmitter_info_header_v5_3 {
+    struct atom_common_table_header table_header;
+    uint16_t dpphy_hdmi_settings_offset;
+    uint16_t dpphy_dvi_settings_offset;
+    uint16_t dpphy_dp_setting_table_offset;
+    uint16_t uniphy_xbar_settings_v2_table_offset;
+    uint16_t dpphy_internal_reg_overide_offset;
+};
+
 static enum bp_result bios_parser_get_firmware_info(
 	struct dc_bios *dcb,
 	struct dc_firmware_info *info)
@@ -1745,7 +1757,7 @@ static enum bp_result bios_parser_get_firmware_info(
 			case 2:
 			case 3:
 				result = get_firmware_info_v3_2(bp, info);
-				break;
+                                break;
 			case 4:
 				result = get_firmware_info_v3_4(bp, info);
 				break;
@@ -2163,8 +2175,9 @@ static struct atom_disp_connector_caps_record *get_disp_connector_caps_record(
 	return NULL;
 }
 
-static struct atom_connector_caps_record *get_connector_caps_record(struct bios_parser *bp,
-								    struct atom_display_object_path_v3 *object)
+static struct atom_connector_caps_record *get_connector_caps_record(
+	struct bios_parser *bp,
+	struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -2205,15 +2218,17 @@ static enum bp_result bios_parser_get_disp_connector_caps_info(
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
 	struct atom_display_object_path_v2 *object;
+
 	struct atom_display_object_path_v3 *object_path_v3;
 	struct atom_connector_caps_record *record_path_v3;
+
 	struct atom_disp_connector_caps_record *record = NULL;
 
 	if (!info)
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	case 4:
+	    case 4:
 	    default:
 		    object = get_bios_object(bp, object_id);
 
@@ -2249,8 +2264,9 @@ static enum bp_result bios_parser_get_disp_connector_caps_info(
 	return BP_RESULT_OK;
 }
 
-static struct atom_connector_speed_record *get_connector_speed_cap_record(struct bios_parser *bp,
-									  struct atom_display_object_path_v3 *object)
+static struct atom_connector_speed_record *get_connector_speed_cap_record(
+	struct bios_parser *bp,
+	struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -3074,7 +3090,7 @@ static struct integrated_info *bios_parser_create_integrated_info(
 	struct dc_bios *dcb)
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
-	struct integrated_info *info;
+	struct integrated_info *info = NULL;
 
 	info = kzalloc(sizeof(struct integrated_info), GFP_KERNEL);
 
@@ -3663,7 +3679,7 @@ struct dc_bios *firmware_parser_create(
 	struct bp_init_data *init,
 	enum dce_version dce_version)
 {
-	struct bios_parser *bp;
+	struct bios_parser *bp = NULL;
 
 	bp = kzalloc(sizeof(struct bios_parser), GFP_KERNEL);
 	if (!bp)

@@ -5,7 +5,6 @@
 &unittest_test_bus {
 	#address-cells = <1>;
 	#size-cells = <0>;
-
 	gpio@4 {
 		line-c {
 			gpio-hog;

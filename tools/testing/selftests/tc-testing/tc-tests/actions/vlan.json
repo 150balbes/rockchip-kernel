@@ -6,9 +6,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -33,9 +30,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -60,9 +54,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -87,9 +78,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -114,9 +102,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -141,9 +126,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -168,9 +150,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -195,9 +174,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -220,9 +196,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -247,9 +220,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -272,9 +242,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -297,9 +264,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -322,9 +286,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -349,9 +310,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -376,9 +334,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -403,9 +358,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -430,9 +382,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -457,9 +406,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -484,9 +430,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -509,9 +452,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -536,9 +476,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -563,9 +500,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -590,9 +524,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -618,9 +549,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -646,9 +574,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -674,9 +599,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -702,9 +624,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -728,9 +647,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -754,9 +670,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -783,9 +696,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -810,9 +720,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -838,9 +745,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -865,9 +769,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -891,9 +792,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -918,9 +816,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",
@@ -944,9 +839,6 @@
             "actions",
             "vlan"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action vlan",

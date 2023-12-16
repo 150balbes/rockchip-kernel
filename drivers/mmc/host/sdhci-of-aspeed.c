@@ -450,19 +450,22 @@ err_pltfm_free:
 	return ret;
 }
 
-static void aspeed_sdhci_remove(struct platform_device *pdev)
+static int aspeed_sdhci_remove(struct platform_device *pdev)
 {
 	struct sdhci_pltfm_host *pltfm_host;
 	struct sdhci_host *host;
+	int dead = 0;
 
 	host = platform_get_drvdata(pdev);
 	pltfm_host = sdhci_priv(host);
 
-	sdhci_remove_host(host, 0);
+	sdhci_remove_host(host, dead);
 
 	clk_disable_unprepare(pltfm_host->clk);
 
 	sdhci_pltfm_free(pdev);
+
+	return 0;
 }
 
 static const struct aspeed_sdhci_pdata ast2400_sdhci_pdata = {
@@ -518,7 +521,7 @@ static struct platform_driver aspeed_sdhci_driver = {
 		.of_match_table = aspeed_sdhci_of_match,
 	},
 	.probe		= aspeed_sdhci_probe,
-	.remove_new	= aspeed_sdhci_remove,
+	.remove		= aspeed_sdhci_remove,
 };
 
 static int aspeed_sdc_probe(struct platform_device *pdev)
@@ -571,11 +574,13 @@ err_clk:
 	return ret;
 }
 
-static void aspeed_sdc_remove(struct platform_device *pdev)
+static int aspeed_sdc_remove(struct platform_device *pdev)
 {
 	struct aspeed_sdc *sdc = dev_get_drvdata(&pdev->dev);
 
 	clk_disable_unprepare(sdc->clk);
+
+	return 0;
 }
 
 static const struct of_device_id aspeed_sdc_of_match[] = {
@@ -595,7 +600,7 @@ static struct platform_driver aspeed_sdc_driver = {
 		.of_match_table = aspeed_sdc_of_match,
 	},
 	.probe		= aspeed_sdc_probe,
-	.remove_new	= aspeed_sdc_remove,
+	.remove		= aspeed_sdc_remove,
 };
 
 #if defined(CONFIG_MMC_SDHCI_OF_ASPEED_TEST)

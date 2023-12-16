@@ -69,19 +69,19 @@
 	};
 
 	aliases {
-		serial0 = &sbc_serial0;
+		ttyAS0 = &sbc_serial0;
 		ethernet0 = &ethernet0;
 	};
 
-	leds {
-		compatible = "gpio-leds";
-		led-green {
-			gpios = <&pio1 3 GPIO_ACTIVE_LOW>;
-			default-state = "off";
-		};
-	};
-
 	soc {
+		leds {
+			compatible = "gpio-leds";
+			led-green {
+				gpios = <&pio1 3 GPIO_ACTIVE_HIGH>;
+				default-state = "off";
+			};
+		};
+
 		pin-controller-sbc@961f080 {
 			gmac1 {
 				rgmii1-0 {

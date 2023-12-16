@@ -14,9 +14,6 @@ description: |-
   interface and CCI (I2C compatible) control bus. The output format
   is raw Bayer.
 
-allOf:
-  - $ref: /schemas/media/video-interface-devices.yaml#
-
 properties:
   compatible:
     const: hynix,hi846
@@ -89,7 +86,7 @@ required:
   - vddd-supply
   - port
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
@@ -112,8 +109,6 @@ examples:
             vddio-supply = <&reg_camera_vddio>;
             reset-gpios = <&gpio1 25 GPIO_ACTIVE_LOW>;
             shutdown-gpios = <&gpio5 4 GPIO_ACTIVE_LOW>;
-            orientation = <0>;
-            rotation = <0>;
 
             port {
                 camera_out: endpoint {

@@ -691,12 +691,26 @@ snd_nm256_playback_silence(struct snd_pcm_substream *substream,
 static int
 snd_nm256_playback_copy(struct snd_pcm_substream *substream,
 			int channel, unsigned long pos,
-			struct iov_iter *src, unsigned long count)
+			void __user *src, unsigned long count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct nm256_stream *s = runtime->private_data;
 
-	return copy_from_iter_toio(s->bufptr + pos, src, count);
+	if (copy_from_user_toio(s->bufptr + pos, src, count))
+		return -EFAULT;
+	return 0;
+}
+
+static int
+snd_nm256_playback_copy_kernel(struct snd_pcm_substream *substream,
+			       int channel, unsigned long pos,
+			       void *src, unsigned long count)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct nm256_stream *s = runtime->private_data;
+
+	memcpy_toio(s->bufptr + pos, src, count);
+	return 0;
 }
 
 /*
@@ -705,12 +719,26 @@ snd_nm256_playback_copy(struct snd_pcm_substream *substream,
 static int
 snd_nm256_capture_copy(struct snd_pcm_substream *substream,
 		       int channel, unsigned long pos,
-		       struct iov_iter *dst, unsigned long count)
+		       void __user *dst, unsigned long count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct nm256_stream *s = runtime->private_data;
 
-	return copy_to_iter_fromio(dst, s->bufptr + pos, count);
+	if (copy_to_user_fromio(dst, s->bufptr + pos, count))
+		return -EFAULT;
+	return 0;
+}
+
+static int
+snd_nm256_capture_copy_kernel(struct snd_pcm_substream *substream,
+			      int channel, unsigned long pos,
+			      void *dst, unsigned long count)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct nm256_stream *s = runtime->private_data;
+
+	memcpy_fromio(dst, s->bufptr + pos, count);
+	return 0;
 }
 
 #endif /* !__i386__ */
@@ -881,7 +909,8 @@ static const struct snd_pcm_ops snd_nm256_playback_ops = {
 	.trigger =	snd_nm256_playback_trigger,
 	.pointer =	snd_nm256_playback_pointer,
 #ifndef __i386__
-	.copy =		snd_nm256_playback_copy,
+	.copy_user =	snd_nm256_playback_copy,
+	.copy_kernel =	snd_nm256_playback_copy_kernel,
 	.fill_silence =	snd_nm256_playback_silence,
 #endif
 	.mmap =		snd_pcm_lib_mmap_iomem,
@@ -895,7 +924,8 @@ static const struct snd_pcm_ops snd_nm256_capture_ops = {
 	.trigger =	snd_nm256_capture_trigger,
 	.pointer =	snd_nm256_capture_pointer,
 #ifndef __i386__
-	.copy =		snd_nm256_capture_copy,
+	.copy_user =	snd_nm256_capture_copy,
+	.copy_kernel =	snd_nm256_capture_copy_kernel,
 #endif
 	.mmap =		snd_pcm_lib_mmap_iomem,
 };

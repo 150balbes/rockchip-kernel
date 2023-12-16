@@ -22,7 +22,7 @@
 #include <linux/sizes.h>
 #include <linux/spi/flash.h>
 #include <linux/spi/spi.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 
 struct mchp48_caps {
 	unsigned int size;

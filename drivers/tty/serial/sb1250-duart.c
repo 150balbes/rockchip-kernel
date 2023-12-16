@@ -331,9 +331,8 @@ static void sbd_receive_chars(struct sbd_port *sport)
 {
 	struct uart_port *uport = &sport->port;
 	struct uart_icount *icount;
-	unsigned int status;
+	unsigned int status, ch, flag;
 	int count;
-	u8 ch, flag;
 
 	for (count = 16; count; count--) {
 		status = read_sbdchn(sport, R_DUART_STATUS);
@@ -610,7 +609,7 @@ static void sbd_set_termios(struct uart_port *uport, struct ktermios *termios,
 	else
 		aux &= ~M_DUART_CTS_CHNG_ENA;
 
-	uart_port_lock(uport);
+	spin_lock(&uport->lock);
 
 	if (sport->tx_stopped)
 		command |= M_DUART_TX_DIS;
@@ -632,7 +631,7 @@ static void sbd_set_termios(struct uart_port *uport, struct ktermios *termios,
 
 	write_sbdchn(sport, R_DUART_CMD, command);
 
-	uart_port_unlock(uport);
+	spin_unlock(&uport->lock);
 }
 
 
@@ -839,22 +838,22 @@ static void sbd_console_write(struct console *co, const char *s,
 	unsigned int mask;
 
 	/* Disable transmit interrupts and enable the transmitter. */
-	uart_port_lock_irqsave(uport, &flags);
+	spin_lock_irqsave(&uport->lock, flags);
 	mask = read_sbdshr(sport, R_DUART_IMRREG((uport->line) % 2));
 	write_sbdshr(sport, R_DUART_IMRREG((uport->line) % 2),
 		     mask & ~M_DUART_IMR_TX);
 	write_sbdchn(sport, R_DUART_CMD, M_DUART_TX_EN);
-	uart_port_unlock_irqrestore(uport, flags);
+	spin_unlock_irqrestore(&uport->lock, flags);
 
 	uart_console_write(&sport->port, s, count, sbd_console_putchar);
 
 	/* Restore transmit interrupts and the transmitter enable. */
-	uart_port_lock_irqsave(uport, &flags);
+	spin_lock_irqsave(&uport->lock, flags);
 	sbd_line_drain(sport);
 	if (sport->tx_stopped)
 		write_sbdchn(sport, R_DUART_CMD, M_DUART_TX_DIS);
 	write_sbdshr(sport, R_DUART_IMRREG((uport->line) % 2), mask);
-	uart_port_unlock_irqrestore(uport, flags);
+	spin_unlock_irqrestore(&uport->lock, flags);
 }
 
 static int __init sbd_console_setup(struct console *co, char *options)

@@ -130,6 +130,7 @@ dependencies:
 examples:
   - |
     #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/leds/common.h>
 
     i2c {
         #address-cells = <1>;

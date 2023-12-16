@@ -4,14 +4,13 @@
 /* bits taken from ppc */
 
 extern void *avail_ram, *end_avail;
-void gunzip(void *dst, int dstlen, unsigned char *src, int *lenp);
 
-static void exit(void)
+void exit (void)
 {
   for (;;);
 }
 
-static void *zalloc(unsigned int size)
+void *zalloc(unsigned size)
 {
         void *p = avail_ram;
 

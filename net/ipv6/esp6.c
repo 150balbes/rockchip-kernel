@@ -770,9 +770,7 @@ static inline int esp_remove_trailer(struct sk_buff *skb)
 		skb->csum = csum_block_sub(skb->csum, csumdiff,
 					   skb->len - trimlen);
 	}
-	ret = pskb_trim(skb, skb->len - trimlen);
-	if (unlikely(ret))
-		return ret;
+	pskb_trim(skb, skb->len - trimlen);
 
 	ret = nexthdr[1];
 
@@ -833,7 +831,7 @@ int esp6_input_done2(struct sk_buff *skb, int err)
 
 		/*
 		 * 1) if the NAT-T peer's IP or port changed then
-		 *    advertise the change to the keying daemon.
+		 *    advertize the change to the keying daemon.
 		 *    This is an inbound SA, so just compare
 		 *    SRC ports.
 		 */

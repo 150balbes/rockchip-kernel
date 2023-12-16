@@ -57,17 +57,16 @@ static int tasdevice_change_chn_book(struct tasdevice_priv *tas_priv,
 
 		if (client->addr != tasdev->dev_addr) {
 			client->addr = tasdev->dev_addr;
-			/* All tas2781s share the same regmap, clear the page
-			 * inside regmap once switching to another tas2781.
-			 * Register 0 at any pages and any books inside tas2781
-			 * is the same one for page-switching.
-			 */
-			ret = regmap_write(map, TASDEVICE_PAGE_SELECT, 0);
-			if (ret < 0) {
-				dev_err(tas_priv->dev, "%s, E=%d\n",
-					__func__, ret);
-				goto out;
+			if (tasdev->cur_book == book) {
+				ret = regmap_write(map,
+					TASDEVICE_PAGE_SELECT, 0);
+				if (ret < 0) {
+					dev_err(tas_priv->dev, "%s, E=%d\n",
+						__func__, ret);
+					goto out;
+				}
 			}
+			goto out;
 		}
 
 		if (tasdev->cur_book != book) {

@@ -135,8 +135,9 @@
 		"Headphone", "Headphone Jack",
 		"Microphone", "Mic Jack",
 		"Microphone", "DMIC";
-	audio-routing = "Headphone Jack", "HPL",
-			"Headphone Jack", "HPR",
-			"IN1", "Mic Jack",
-			"Mic Jack", "MICBIAS";
+	samsung,audio-routing =
+		"Headphone Jack", "HPL",
+		"Headphone Jack", "HPR",
+		"IN1", "Mic Jack",
+		"Mic Jack", "MICBIAS";
 };

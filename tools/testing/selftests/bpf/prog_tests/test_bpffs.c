@@ -8,8 +8,7 @@
 #include <sys/types.h>
 #include <test_progs.h>
 
-/* TDIR must be in a location we can create a directory in. */
-#define TDIR "/tmp/test_bpffs_testdir"
+#define TDIR "/sys/kernel/debug"
 
 static int read_iter(char *file)
 {
@@ -44,11 +43,8 @@ static int fn(void)
 	if (!ASSERT_OK(err, "mount /"))
 		goto out;
 
-	err =  mkdir(TDIR, 0777);
-	/* If the directory already exists we can carry on. It may be left over
-	 * from a previous run.
-	 */
-	if ((err && errno != EEXIST) && !ASSERT_OK(err, "mkdir " TDIR))
+	err = umount(TDIR);
+	if (!ASSERT_OK(err, "umount " TDIR))
 		goto out;
 
 	err = mount("none", TDIR, "tmpfs", 0, NULL);
@@ -142,7 +138,6 @@ out:
 	rmdir(TDIR "/fs1");
 	rmdir(TDIR "/fs2");
 	umount(TDIR);
-	rmdir(TDIR);
 	exit(err);
 }
 

@@ -17,7 +17,7 @@
 #include <linux/kexec.h>
 #include <linux/of_fdt.h>
 #include <linux/libfdt.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/memblock.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -27,12 +27,11 @@
 #include <asm/kexec_ranges.h>
 #include <asm/crashdump-ppc64.h>
 #include <asm/mmzone.h>
-#include <asm/iommu.h>
 #include <asm/prom.h>
 #include <asm/plpks.h>
 
 struct umem_info {
-	__be64 *buf;		/* data buffer for usable-memory property */
+	u64 *buf;		/* data buffer for usable-memory property */
 	u32 size;		/* size allocated for the data buffer */
 	u32 max_entries;	/* maximum no. of entries */
 	u32 idx;		/* index of current entry */
@@ -443,10 +442,10 @@ static int locate_mem_hole_bottom_up_ppc64(struct kexec_buf *kbuf,
  *
  * Returns buffer on success, NULL on error.
  */
-static __be64 *check_realloc_usable_mem(struct umem_info *um_info, int cnt)
+static u64 *check_realloc_usable_mem(struct umem_info *um_info, int cnt)
 {
 	u32 new_size;
-	__be64 *tbuf;
+	u64 *tbuf;
 
 	if ((um_info->idx + cnt) <= um_info->max_entries)
 		return um_info->buf;
@@ -934,9 +933,9 @@ out:
 }
 
 /**
- * cpu_node_size - Compute the size of a CPU node in the FDT.
- *                 This should be done only once and the value is stored in
- *                 a static variable.
+ * get_cpu_node_size - Compute the size of a CPU node in the FDT.
+ *                     This should be done only once and the value is stored in
+ *                     a static variable.
  * Returns the max size of a CPU node in the FDT.
  */
 static unsigned int cpu_node_size(void)
@@ -1138,15 +1137,11 @@ static int update_pci_dma_nodes(void *fdt, const char *dmapropname)
 			continue;
 
 		ret = copy_property(fdt, pci_offset, dn, "ibm,dma-window");
-		if (ret < 0) {
-			of_node_put(dn);
+		if (ret < 0)
 			break;
-		}
 		ret = copy_property(fdt, pci_offset, dn, dmapropname);
-		if (ret < 0) {
-			of_node_put(dn);
+		if (ret < 0)
 			break;
-		}
 	}
 
 	return ret;
@@ -1213,6 +1208,8 @@ int setup_new_fdt_ppc64(const struct kimage *image, void *fdt,
 	if (ret < 0)
 		goto out;
 
+#define DIRECT64_PROPNAME "linux,direct64-ddr-window-info"
+#define DMA64_PROPNAME "linux,dma64-ddr-window-info"
 	ret = update_pci_dma_nodes(fdt, DIRECT64_PROPNAME);
 	if (ret < 0)
 		goto out;
@@ -1220,6 +1217,8 @@ int setup_new_fdt_ppc64(const struct kimage *image, void *fdt,
 	ret = update_pci_dma_nodes(fdt, DMA64_PROPNAME);
 	if (ret < 0)
 		goto out;
+#undef DMA64_PROPNAME
+#undef DIRECT64_PROPNAME
 
 	/* Update memory reserve map */
 	ret = get_reserved_memory_ranges(&rmem);

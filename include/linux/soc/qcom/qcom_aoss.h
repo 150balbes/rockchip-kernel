@@ -13,13 +13,13 @@ struct qmp;
 
 #if IS_ENABLED(CONFIG_QCOM_AOSS_QMP)
 
-int qmp_send(struct qmp *qmp, const char *fmt, ...);
+int qmp_send(struct qmp *qmp, const void *data, size_t len);
 struct qmp *qmp_get(struct device *dev);
 void qmp_put(struct qmp *qmp);
 
 #else
 
-static inline int qmp_send(struct qmp *qmp, const char *fmt, ...)
+static inline int qmp_send(struct qmp *qmp, const void *data, size_t len)
 {
 	return -ENODEV;
 }

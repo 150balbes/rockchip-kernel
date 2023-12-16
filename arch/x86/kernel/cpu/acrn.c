@@ -51,7 +51,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_acrn_hv_callback)
 	 * will block the interrupt whose vector is lower than
 	 * HYPERVISOR_CALLBACK_VECTOR.
 	 */
-	apic_eoi();
+	ack_APIC_irq();
 	inc_irq_stat(irq_hv_callback_count);
 
 	if (acrn_intr_handler)

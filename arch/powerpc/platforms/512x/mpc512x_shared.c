@@ -29,6 +29,20 @@
 
 static struct mpc512x_reset_module __iomem *reset_module_base;
 
+static void __init mpc512x_restart_init(void)
+{
+	struct device_node *np;
+	const char *reset_compat;
+
+	reset_compat = mpc512x_select_reset_compat();
+	np = of_find_compatible_node(NULL, NULL, reset_compat);
+	if (!np)
+		return;
+
+	reset_module_base = of_iomap(np, 0);
+	of_node_put(np);
+}
+
 void __noreturn mpc512x_restart(char *cmd)
 {
 	if (reset_module_base) {
@@ -349,7 +363,7 @@ const char *__init mpc512x_select_psc_compat(void)
 	return NULL;
 }
 
-static const char *__init mpc512x_select_reset_compat(void)
+const char *__init mpc512x_select_reset_compat(void)
 {
 	if (of_machine_is_compatible("fsl,mpc5121"))
 		return "fsl,mpc5121-reset";
@@ -439,20 +453,6 @@ static void __init mpc512x_psc_fifo_init(void)
 
 		iounmap(psc);
 	}
-}
-
-static void __init mpc512x_restart_init(void)
-{
-	struct device_node *np;
-	const char *reset_compat;
-
-	reset_compat = mpc512x_select_reset_compat();
-	np = of_find_compatible_node(NULL, NULL, reset_compat);
-	if (!np)
-		return;
-
-	reset_module_base = of_iomap(np, 0);
-	of_node_put(np);
 }
 
 void __init mpc512x_init_early(void)

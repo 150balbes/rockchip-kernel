@@ -9,11 +9,9 @@
 #ifndef __SOUND_SOC_INTEL_AVS_MSGS_H
 #define __SOUND_SOC_INTEL_AVS_MSGS_H
 
-#include <linux/sizes.h>
-
 struct avs_dev;
 
-#define AVS_MAILBOX_SIZE SZ_4K
+#define AVS_MAILBOX_SIZE 4096
 
 enum avs_msg_target {
 	AVS_FW_GEN_MSG = 0,

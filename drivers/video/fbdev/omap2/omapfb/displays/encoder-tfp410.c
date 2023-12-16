@@ -217,7 +217,7 @@ err_reg:
 	return r;
 }
 
-static void tfp410_remove(struct platform_device *pdev)
+static int __exit tfp410_remove(struct platform_device *pdev)
 {
 	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
 	struct omap_dss_device *dssdev = &ddata->dssdev;
@@ -234,6 +234,8 @@ static void tfp410_remove(struct platform_device *pdev)
 		tfp410_disconnect(dssdev, dssdev->dst);
 
 	omap_dss_put_device(in);
+
+	return 0;
 }
 
 static const struct of_device_id tfp410_of_match[] = {
@@ -245,10 +247,11 @@ MODULE_DEVICE_TABLE(of, tfp410_of_match);
 
 static struct platform_driver tfp410_driver = {
 	.probe	= tfp410_probe,
-	.remove_new = tfp410_remove,
+	.remove	= __exit_p(tfp410_remove),
 	.driver	= {
 		.name	= "tfp410",
 		.of_match_table = tfp410_of_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

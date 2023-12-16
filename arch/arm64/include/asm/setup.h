@@ -21,22 +21,9 @@ static inline bool arch_parse_debug_rodata(char *arg)
 	extern bool rodata_enabled;
 	extern bool rodata_full;
 
-	if (!arg)
-		return false;
-
-	if (!strcmp(arg, "full")) {
-		rodata_enabled = rodata_full = true;
-		return true;
-	}
-
-	if (!strcmp(arg, "off")) {
-		rodata_enabled = rodata_full = false;
-		return true;
-	}
-
-	if (!strcmp(arg, "on")) {
+	if (arg && !strcmp(arg, "full")) {
 		rodata_enabled = true;
-		rodata_full = false;
+		rodata_full = true;
 		return true;
 	}
 

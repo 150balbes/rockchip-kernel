@@ -117,10 +117,11 @@ static int adjust_pte(struct vm_area_struct *vma, unsigned long address,
 	 * must use the nested version.  This also means we need to
 	 * open-code the spin-locking.
 	 */
-	pte = pte_offset_map_nolock(vma->vm_mm, pmd, address, &ptl);
+	pte = pte_offset_map(pmd, address);
 	if (!pte)
 		return 0;
 
+	ptl = pte_lockptr(vma->vm_mm, pmd);
 	do_pte_lock(ptl);
 
 	ret = do_adjust_pte(vma, address, pfn, pte);
@@ -180,12 +181,12 @@ make_coherent(struct address_space *mapping, struct vm_area_struct *vma,
  *
  * Note that the pte lock will be held.
  */
-void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
-		unsigned long addr, pte_t *ptep, unsigned int nr)
+void update_mmu_cache(struct vm_area_struct *vma, unsigned long addr,
+	pte_t *ptep)
 {
 	unsigned long pfn = pte_pfn(*ptep);
 	struct address_space *mapping;
-	struct folio *folio;
+	struct page *page;
 
 	if (!pfn_valid(pfn))
 		return;
@@ -194,13 +195,13 @@ void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
 	 * The zero page is never written to, so never has any dirty
 	 * cache lines, and therefore never needs to be flushed.
 	 */
-	if (is_zero_pfn(pfn))
+	page = pfn_to_page(pfn);
+	if (page == ZERO_PAGE(0))
 		return;
 
-	folio = page_folio(pfn_to_page(pfn));
-	mapping = folio_flush_mapping(folio);
-	if (!test_and_set_bit(PG_dcache_clean, &folio->flags))
-		__flush_dcache_folio(mapping, folio);
+	mapping = page_mapping_file(page);
+	if (!test_and_set_bit(PG_dcache_clean, &page->flags))
+		__flush_dcache_page(mapping, page);
 	if (mapping) {
 		if (cache_is_vivt())
 			make_coherent(mapping, vma, addr, ptep, pfn);

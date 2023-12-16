@@ -20,7 +20,7 @@
 #include <media/dvb_frontend.h>
 #include "drxk.h"
 #include "drxk_hard.h"
-#include <linux/int_log.h>
+#include <media/dvb_math.h>
 
 static int power_down_dvbt(struct drxk_state *state, bool set_power_mode);
 static int power_down_qam(struct drxk_state *state);
@@ -229,8 +229,13 @@ static int i2c_write(struct drxk_state *state, u8 adr, u8 *data, int len)
 	struct i2c_msg msg = {
 	    .addr = adr, .flags = 0, .buf = data, .len = len };
 
-	dprintk(3, ": %*ph\n", len, data);
-
+	dprintk(3, ":");
+	if (debug > 2) {
+		int i;
+		for (i = 0; i < len; i++)
+			pr_cont(" %02x", data[i]);
+		pr_cont("\n");
+	}
 	status = drxk_i2c_transfer(state, &msg, 1);
 	if (status >= 0 && status != 1)
 		status = -EIO;
@@ -262,7 +267,16 @@ static int i2c_read(struct drxk_state *state,
 		pr_err("i2c read error at addr 0x%02x\n", adr);
 		return status;
 	}
-	dprintk(3, ": read from %*ph, value = %*ph\n", len, msg, alen, answ);
+	if (debug > 2) {
+		int i;
+		dprintk(2, ": read from");
+		for (i = 0; i < len; i++)
+			pr_cont(" %02x", msg[i]);
+		pr_cont(", value = ");
+		for (i = 0; i < alen; i++)
+			pr_cont(" %02x", answ[i]);
+		pr_cont("\n");
+	}
 	return 0;
 }
 
@@ -427,8 +441,13 @@ static int write_block(struct drxk_state *state, u32 address,
 		}
 		memcpy(&state->chunk[adr_length], p_block, chunk);
 		dprintk(2, "(0x%08x, 0x%02x)\n", address, flags);
-		if (p_block)
-			dprintk(2, "%*ph\n", chunk, p_block);
+		if (debug > 1) {
+			int i;
+			if (p_block)
+				for (i = 0; i < chunk; i++)
+					pr_cont(" %02x", p_block[i]);
+			pr_cont("\n");
+		}
 		status = i2c_write(state, state->demod_address,
 				   &state->chunk[0], chunk + adr_length);
 		if (status < 0) {
@@ -6814,7 +6833,7 @@ error:
 	kfree(state);
 	return NULL;
 }
-EXPORT_SYMBOL_GPL(drxk_attach);
+EXPORT_SYMBOL(drxk_attach);
 
 MODULE_DESCRIPTION("DRX-K driver");
 MODULE_AUTHOR("Ralph Metzler");

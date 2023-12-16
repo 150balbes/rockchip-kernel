@@ -468,12 +468,13 @@ static int hisi_spi_nor_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void hisi_spi_nor_remove(struct platform_device *pdev)
+static int hisi_spi_nor_remove(struct platform_device *pdev)
 {
 	struct hifmc_host *host = platform_get_drvdata(pdev);
 
 	hisi_spi_nor_unregister_all(host);
 	mutex_destroy(&host->lock);
+	return 0;
 }
 
 static const struct of_device_id hisi_spi_nor_dt_ids[] = {
@@ -488,7 +489,7 @@ static struct platform_driver hisi_spi_nor_driver = {
 		.of_match_table = hisi_spi_nor_dt_ids,
 	},
 	.probe	= hisi_spi_nor_probe,
-	.remove_new = hisi_spi_nor_remove,
+	.remove	= hisi_spi_nor_remove,
 };
 module_platform_driver(hisi_spi_nor_driver);
 

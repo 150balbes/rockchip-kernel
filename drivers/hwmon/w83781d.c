@@ -1816,13 +1816,16 @@ w83781d_isa_probe(struct platform_device *pdev)
 	return err;
 }
 
-static void w83781d_isa_remove(struct platform_device *pdev)
+static int
+w83781d_isa_remove(struct platform_device *pdev)
 {
 	struct w83781d_data *data = platform_get_drvdata(pdev);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	w83781d_remove_files(&pdev->dev);
 	device_remove_file(&pdev->dev, &dev_attr_name);
+
+	return 0;
 }
 
 static struct platform_driver w83781d_isa_driver = {
@@ -1830,7 +1833,7 @@ static struct platform_driver w83781d_isa_driver = {
 		.name = "w83781d",
 	},
 	.probe = w83781d_isa_probe,
-	.remove_new = w83781d_isa_remove,
+	.remove = w83781d_isa_remove,
 };
 
 /* return 1 if a supported chip is found, 0 otherwise */

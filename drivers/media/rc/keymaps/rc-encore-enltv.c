@@ -106,4 +106,3 @@ module_exit(exit_rc_map_encore_enltv)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("Encore ENLTV-FM remote controller keytable");

@@ -396,9 +396,6 @@ static char *eval_clause(const char *str, size_t len, int argc, char *argv[])
 
 		p++;
 	}
-
-	if (new_argc >= FUNCTION_MAX_ARGS)
-		pperror("too many function arguments");
 	new_argv[new_argc++] = prev;
 
 	/*

@@ -7,8 +7,8 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/init.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/of_platform.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
 #include <linux/io.h>
@@ -17,7 +17,6 @@
 #include <linux/icmp.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
-#include <linux/platform_device.h>
 #include <linux/udp.h>
 #include <linux/tcp.h>
 #include <linux/net.h>
@@ -3498,7 +3497,7 @@ free_netdev:
 	return err;
 }
 
-static void dpaa_remove(struct platform_device *pdev)
+static int dpaa_remove(struct platform_device *pdev)
 {
 	struct net_device *net_dev;
 	struct dpaa_priv *priv;
@@ -3517,9 +3516,6 @@ static void dpaa_remove(struct platform_device *pdev)
 	phylink_destroy(priv->mac_dev->phylink);
 
 	err = dpaa_fq_free(dev, &priv->dpaa_fq_list);
-	if (err)
-		dev_err(dev, "Failed to free FQs on remove (%pE)\n",
-			ERR_PTR(err));
 
 	qman_delete_cgr_safe(&priv->ingress_cgr);
 	qman_release_cgrid(priv->ingress_cgr.cgrid);
@@ -3531,6 +3527,8 @@ static void dpaa_remove(struct platform_device *pdev)
 	dpaa_bps_free(priv);
 
 	free_netdev(net_dev);
+
+	return err;
 }
 
 static const struct platform_device_id dpaa_devtype[] = {
@@ -3548,7 +3546,7 @@ static struct platform_driver dpaa_driver = {
 	},
 	.id_table = dpaa_devtype,
 	.probe = dpaa_eth_probe,
-	.remove_new = dpaa_remove
+	.remove = dpaa_remove
 };
 
 static int __init dpaa_load(void)

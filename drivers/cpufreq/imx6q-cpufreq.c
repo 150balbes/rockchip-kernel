@@ -519,7 +519,7 @@ put_node:
 	return ret;
 }
 
-static void imx6q_cpufreq_remove(struct platform_device *pdev)
+static int imx6q_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&imx6q_cpufreq_driver);
 	dev_pm_opp_free_cpufreq_table(cpu_dev, &freq_table);
@@ -530,6 +530,8 @@ static void imx6q_cpufreq_remove(struct platform_device *pdev)
 	regulator_put(soc_reg);
 
 	clk_bulk_put(num_clks, clks);
+
+	return 0;
 }
 
 static struct platform_driver imx6q_cpufreq_platdrv = {
@@ -537,7 +539,7 @@ static struct platform_driver imx6q_cpufreq_platdrv = {
 		.name	= "imx6q-cpufreq",
 	},
 	.probe		= imx6q_cpufreq_probe,
-	.remove_new	= imx6q_cpufreq_remove,
+	.remove		= imx6q_cpufreq_remove,
 };
 module_platform_driver(imx6q_cpufreq_platdrv);
 

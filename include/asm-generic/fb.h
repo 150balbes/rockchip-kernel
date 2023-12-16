@@ -12,14 +12,14 @@
 #include <linux/pgtable.h>
 
 struct fb_info;
+struct file;
 
-#ifndef pgprot_framebuffer
-#define pgprot_framebuffer pgprot_framebuffer
-static inline pgprot_t pgprot_framebuffer(pgprot_t prot,
-					  unsigned long vm_start, unsigned long vm_end,
-					  unsigned long offset)
+#ifndef fb_pgprotect
+#define fb_pgprotect fb_pgprotect
+static inline void fb_pgprotect(struct file *file, struct vm_area_struct *vma,
+				unsigned long off)
 {
-	return pgprot_writecombine(prot);
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 }
 #endif
 

@@ -11,7 +11,7 @@
 #include <linux/err.h>
 #include <linux/kvm_host.h>
 #include <linux/uaccess.h>
-#include <asm/cpufeature.h>
+#include <asm/hwcap.h>
 #include <asm/kvm_vcpu_vector.h>
 #include <asm/vector.h>
 
@@ -91,93 +91,95 @@ void kvm_riscv_vcpu_free_vector_context(struct kvm_vcpu *vcpu)
 }
 #endif
 
-static int kvm_riscv_vcpu_vreg_addr(struct kvm_vcpu *vcpu,
-				    unsigned long reg_num,
-				    size_t reg_size,
-				    void **reg_addr)
+static void *kvm_riscv_vcpu_vreg_addr(struct kvm_vcpu *vcpu,
+				      unsigned long reg_num,
+				      size_t reg_size)
 {
 	struct kvm_cpu_context *cntx = &vcpu->arch.guest_context;
+	void *reg_val;
 	size_t vlenb = riscv_v_vsize / 32;
 
 	if (reg_num < KVM_REG_RISCV_VECTOR_REG(0)) {
 		if (reg_size != sizeof(unsigned long))
-			return -EINVAL;
+			return NULL;
 		switch (reg_num) {
 		case KVM_REG_RISCV_VECTOR_CSR_REG(vstart):
-			*reg_addr = &cntx->vector.vstart;
+			reg_val = &cntx->vector.vstart;
 			break;
 		case KVM_REG_RISCV_VECTOR_CSR_REG(vl):
-			*reg_addr = &cntx->vector.vl;
+			reg_val = &cntx->vector.vl;
 			break;
 		case KVM_REG_RISCV_VECTOR_CSR_REG(vtype):
-			*reg_addr = &cntx->vector.vtype;
+			reg_val = &cntx->vector.vtype;
 			break;
 		case KVM_REG_RISCV_VECTOR_CSR_REG(vcsr):
-			*reg_addr = &cntx->vector.vcsr;
+			reg_val = &cntx->vector.vcsr;
 			break;
 		case KVM_REG_RISCV_VECTOR_CSR_REG(datap):
 		default:
-			return -ENOENT;
+			return NULL;
 		}
 	} else if (reg_num <= KVM_REG_RISCV_VECTOR_REG(31)) {
 		if (reg_size != vlenb)
-			return -EINVAL;
-		*reg_addr = cntx->vector.datap +
-			    (reg_num - KVM_REG_RISCV_VECTOR_REG(0)) * vlenb;
+			return NULL;
+		reg_val = cntx->vector.datap
+			  + (reg_num - KVM_REG_RISCV_VECTOR_REG(0)) * vlenb;
 	} else {
-		return -ENOENT;
+		return NULL;
 	}
 
-	return 0;
+	return reg_val;
 }
 
 int kvm_riscv_vcpu_get_reg_vector(struct kvm_vcpu *vcpu,
-				  const struct kvm_one_reg *reg)
+				  const struct kvm_one_reg *reg,
+				  unsigned long rtype)
 {
 	unsigned long *isa = vcpu->arch.isa;
 	unsigned long __user *uaddr =
 			(unsigned long __user *)(unsigned long)reg->addr;
 	unsigned long reg_num = reg->id & ~(KVM_REG_ARCH_MASK |
 					    KVM_REG_SIZE_MASK |
-					    KVM_REG_RISCV_VECTOR);
+					    rtype);
+	void *reg_val = NULL;
 	size_t reg_size = KVM_REG_SIZE(reg->id);
-	void *reg_addr;
-	int rc;
 
-	if (!riscv_isa_extension_available(isa, v))
-		return -ENOENT;
+	if (rtype == KVM_REG_RISCV_VECTOR &&
+	    riscv_isa_extension_available(isa, v)) {
+		reg_val = kvm_riscv_vcpu_vreg_addr(vcpu, reg_num, reg_size);
+	}
 
-	rc = kvm_riscv_vcpu_vreg_addr(vcpu, reg_num, reg_size, &reg_addr);
-	if (rc)
-		return rc;
+	if (!reg_val)
+		return -EINVAL;
 
-	if (copy_to_user(uaddr, reg_addr, reg_size))
+	if (copy_to_user(uaddr, reg_val, reg_size))
 		return -EFAULT;
 
 	return 0;
 }
 
 int kvm_riscv_vcpu_set_reg_vector(struct kvm_vcpu *vcpu,
-				  const struct kvm_one_reg *reg)
+				  const struct kvm_one_reg *reg,
+				  unsigned long rtype)
 {
 	unsigned long *isa = vcpu->arch.isa;
 	unsigned long __user *uaddr =
 			(unsigned long __user *)(unsigned long)reg->addr;
 	unsigned long reg_num = reg->id & ~(KVM_REG_ARCH_MASK |
 					    KVM_REG_SIZE_MASK |
-					    KVM_REG_RISCV_VECTOR);
+					    rtype);
+	void *reg_val = NULL;
 	size_t reg_size = KVM_REG_SIZE(reg->id);
-	void *reg_addr;
-	int rc;
 
-	if (!riscv_isa_extension_available(isa, v))
-		return -ENOENT;
+	if (rtype == KVM_REG_RISCV_VECTOR &&
+	    riscv_isa_extension_available(isa, v)) {
+		reg_val = kvm_riscv_vcpu_vreg_addr(vcpu, reg_num, reg_size);
+	}
 
-	rc = kvm_riscv_vcpu_vreg_addr(vcpu, reg_num, reg_size, &reg_addr);
-	if (rc)
-		return rc;
+	if (!reg_val)
+		return -EINVAL;
 
-	if (copy_from_user(reg_addr, uaddr, reg_size))
+	if (copy_from_user(reg_val, uaddr, reg_size))
 		return -EFAULT;
 
 	return 0;

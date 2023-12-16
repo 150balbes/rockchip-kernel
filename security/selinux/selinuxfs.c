@@ -97,7 +97,7 @@ static int selinux_fs_info_create(struct super_block *sb)
 static void selinux_fs_info_free(struct super_block *sb)
 {
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	unsigned int i;
+	int i;
 
 	if (fsi) {
 		for (i = 0; i < fsi->bool_num; i++)
@@ -138,8 +138,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 {
 	char *page = NULL;
 	ssize_t length;
-	int scan_value;
-	bool old_value, new_value;
+	int old_value, new_value;
 
 	if (count >= PAGE_SIZE)
 		return -ENOMEM;
@@ -153,10 +152,10 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 		return PTR_ERR(page);
 
 	length = -EINVAL;
-	if (sscanf(page, "%d", &scan_value) != 1)
+	if (sscanf(page, "%d", &new_value) != 1)
 		goto out;
 
-	new_value = !!scan_value;
+	new_value = !!new_value;
 
 	old_value = enforcing_enabled();
 	if (new_value != old_value) {
@@ -1075,8 +1074,8 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 	u32 sid, *sids = NULL;
 	ssize_t length;
 	char *newcon;
-	int rc;
-	u32 i, len, nsids;
+	int i, rc;
+	u32 len, nsids;
 
 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
 			      SECCLASS_SECURITY, SECURITY__COMPUTE_USER,
@@ -1192,13 +1191,13 @@ out:
 	return length;
 }
 
-static struct inode *sel_make_inode(struct super_block *sb, umode_t mode)
+static struct inode *sel_make_inode(struct super_block *sb, int mode)
 {
 	struct inode *ret = new_inode(sb);
 
 	if (ret) {
 		ret->i_mode = mode;
-		simple_inode_init_ts(ret);
+		ret->i_atime = ret->i_mtime = ret->i_ctime = current_time(ret);
 	}
 	return ret;
 }
@@ -1613,7 +1612,7 @@ static int sel_make_avc_files(struct dentry *dir)
 {
 	struct super_block *sb = dir->d_sb;
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	unsigned int i;
+	int i;
 	static const struct tree_descr files[] = {
 		{ "cache_threshold",
 		  &sel_avc_cache_threshold_ops, S_IRUGO|S_IWUSR },
@@ -1649,7 +1648,7 @@ static int sel_make_ss_files(struct dentry *dir)
 {
 	struct super_block *sb = dir->d_sb;
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	unsigned int i;
+	int i;
 	static const struct tree_descr files[] = {
 		{ "sidtab_hash_stats", &sel_sidtab_hash_stats_ops, S_IRUGO },
 	};
@@ -1700,7 +1699,7 @@ static const struct file_operations sel_initcon_ops = {
 
 static int sel_make_initcon_files(struct dentry *dir)
 {
-	unsigned int i;
+	int i;
 
 	for (i = 1; i <= SECINITSID_NUM; i++) {
 		struct inode *inode;
@@ -1798,8 +1797,7 @@ static int sel_make_perm_files(struct selinux_policy *newpolicy,
 			char *objclass, int classvalue,
 			struct dentry *dir)
 {
-	u32 i, nperms;
-	int rc;
+	int i, rc, nperms;
 	char **perms;
 
 	rc = security_get_permissions(newpolicy, objclass, &perms, &nperms);
@@ -1869,8 +1867,8 @@ static int sel_make_classes(struct selinux_policy *newpolicy,
 			    struct dentry *class_dir,
 			    unsigned long *last_class_ino)
 {
-	u32 i, nclasses;
-	int rc;
+
+	int rc, nclasses, i;
 	char **classes;
 
 	rc = security_get_classes(newpolicy, &classes, &nclasses);

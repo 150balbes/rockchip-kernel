@@ -2115,7 +2115,8 @@ static int size_entry_mwt(const struct ebt_entry *entry, const unsigned char *ba
 		return ret;
 
 	offsets[0] = sizeof(struct ebt_entry); /* matches come first */
-	memcpy(&offsets[1], &entry->offsets, sizeof(entry->offsets));
+	memcpy(&offsets[1], &entry->watchers_offset,
+			sizeof(offsets) - sizeof(offsets[0]));
 
 	if (state->buf_kern_start) {
 		buf_start = state->buf_kern_start + state->buf_kern_offset;
@@ -2595,4 +2596,3 @@ EXPORT_SYMBOL(ebt_do_table);
 module_init(ebtables_init);
 module_exit(ebtables_fini);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ebtables legacy core");

@@ -131,7 +131,8 @@ ath5k_register_led(struct ath5k_hw *ah, struct ath5k_led *led,
 	int err;
 
 	led->ah = ah;
-	strscpy(led->name, name, sizeof(led->name));
+	strncpy(led->name, name, sizeof(led->name));
+	led->name[sizeof(led->name)-1] = 0;
 	led->led_dev.name = led->name;
 	led->led_dev.default_trigger = trigger;
 	led->led_dev.brightness_set = ath5k_led_brightness_set;

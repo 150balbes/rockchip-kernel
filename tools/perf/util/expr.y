@@ -1,16 +1,12 @@
 /* Simple expression parser */
 %{
-#ifndef NDEBUG
 #define YYDEBUG 1
-#endif
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include "util/debug.h"
 #define IN_EXPR_Y 1
 #include "expr.h"
-#include "expr-bison.h"
-int expr_lex(YYSTYPE * yylval_param , void *yyscanner);
 %}
 
 %define api.pure full
@@ -41,7 +37,7 @@ int expr_lex(YYSTYPE * yylval_param , void *yyscanner);
 	} ids;
 }
 
-%token ID NUMBER MIN MAX IF ELSE LITERAL D_RATIO SOURCE_COUNT HAS_EVENT STRCMP_CPUID_STR EXPR_ERROR
+%token ID NUMBER MIN MAX IF ELSE LITERAL D_RATIO SOURCE_COUNT HAS_EVENT EXPR_ERROR
 %left MIN MAX IF
 %left '|'
 %left '^'
@@ -60,7 +56,7 @@ int expr_lex(YYSTYPE * yylval_param , void *yyscanner);
 static void expr_error(double *final_val __maybe_unused,
 		       struct expr_parse_ctx *ctx __maybe_unused,
 		       bool compute_ids __maybe_unused,
-		       void *scanner __maybe_unused,
+		       void *scanner,
 		       const char *s)
 {
 	pr_debug("%s\n", s);
@@ -206,12 +202,6 @@ expr: NUMBER
 | HAS_EVENT '(' ID ')'
 {
 	$$.val = expr__has_event(ctx, compute_ids, $3);
-	$$.ids = NULL;
-	free($3);
-}
-| STRCMP_CPUID_STR '(' ID ')'
-{
-	$$.val = expr__strcmp_cpuid_str(ctx, compute_ids, $3);
 	$$.ids = NULL;
 	free($3);
 }

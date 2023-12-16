@@ -35,7 +35,6 @@ properties:
       "^(p|n)avdd$":
         type: object
         $ref: regulator.yaml#
-        unevaluatedProperties: false
         description: |
           regulator description for pavdd and navdd.
 

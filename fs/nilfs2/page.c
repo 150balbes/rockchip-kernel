@@ -25,19 +25,19 @@
 	(BIT(BH_Uptodate) | BIT(BH_Mapped) | BIT(BH_NILFS_Node) |	\
 	 BIT(BH_NILFS_Volatile) | BIT(BH_NILFS_Checked))
 
-static struct buffer_head *__nilfs_get_folio_block(struct folio *folio,
-		unsigned long block, pgoff_t index, int blkbits,
-		unsigned long b_state)
+static struct buffer_head *
+__nilfs_get_page_block(struct page *page, unsigned long block, pgoff_t index,
+		       int blkbits, unsigned long b_state)
 
 {
 	unsigned long first_block;
-	struct buffer_head *bh = folio_buffers(folio);
+	struct buffer_head *bh;
 
-	if (!bh)
-		bh = create_empty_buffers(folio, 1 << blkbits, b_state);
+	if (!page_has_buffers(page))
+		create_empty_buffers(page, 1 << blkbits, b_state);
 
 	first_block = (unsigned long)index << (PAGE_SHIFT - blkbits);
-	bh = get_nth_bh(bh, block - first_block);
+	bh = nilfs_page_get_nth_block(page, block - first_block);
 
 	touch_buffer(bh);
 	wait_on_buffer(bh);
@@ -51,17 +51,17 @@ struct buffer_head *nilfs_grab_buffer(struct inode *inode,
 {
 	int blkbits = inode->i_blkbits;
 	pgoff_t index = blkoff >> (PAGE_SHIFT - blkbits);
-	struct folio *folio;
+	struct page *page;
 	struct buffer_head *bh;
 
-	folio = filemap_grab_folio(mapping, index);
-	if (IS_ERR(folio))
+	page = grab_cache_page(mapping, index);
+	if (unlikely(!page))
 		return NULL;
 
-	bh = __nilfs_get_folio_block(folio, blkoff, index, blkbits, b_state);
+	bh = __nilfs_get_page_block(page, blkoff, index, blkbits, b_state);
 	if (unlikely(!bh)) {
-		folio_unlock(folio);
-		folio_put(folio);
+		unlock_page(page);
+		put_page(page);
 		return NULL;
 	}
 	return bh;
@@ -184,32 +184,30 @@ void nilfs_page_bug(struct page *page)
 }
 
 /**
- * nilfs_copy_folio -- copy the folio with buffers
- * @dst: destination folio
- * @src: source folio
- * @copy_dirty: flag whether to copy dirty states on the folio's buffer heads.
+ * nilfs_copy_page -- copy the page with buffers
+ * @dst: destination page
+ * @src: source page
+ * @copy_dirty: flag whether to copy dirty states on the page's buffer heads.
  *
- * This function is for both data folios and btnode folios.  The dirty flag
- * should be treated by caller.  The folio must not be under i/o.
- * Both src and dst folio must be locked
+ * This function is for both data pages and btnode pages.  The dirty flag
+ * should be treated by caller.  The page must not be under i/o.
+ * Both src and dst page must be locked
  */
-static void nilfs_copy_folio(struct folio *dst, struct folio *src,
-		bool copy_dirty)
+static void nilfs_copy_page(struct page *dst, struct page *src, int copy_dirty)
 {
 	struct buffer_head *dbh, *dbufs, *sbh;
 	unsigned long mask = NILFS_BUFFER_INHERENT_BITS;
 
-	BUG_ON(folio_test_writeback(dst));
+	BUG_ON(PageWriteback(dst));
 
-	sbh = folio_buffers(src);
-	dbh = folio_buffers(dst);
-	if (!dbh)
-		dbh = create_empty_buffers(dst, sbh->b_size, 0);
+	sbh = page_buffers(src);
+	if (!page_has_buffers(dst))
+		create_empty_buffers(dst, sbh->b_size, 0);
 
 	if (copy_dirty)
 		mask |= BIT(BH_Dirty);
 
-	dbufs = dbh;
+	dbh = dbufs = page_buffers(dst);
 	do {
 		lock_buffer(sbh);
 		lock_buffer(dbh);
@@ -220,16 +218,16 @@ static void nilfs_copy_folio(struct folio *dst, struct folio *src,
 		dbh = dbh->b_this_page;
 	} while (dbh != dbufs);
 
-	folio_copy(dst, src);
+	copy_highpage(dst, src);
 
-	if (folio_test_uptodate(src) && !folio_test_uptodate(dst))
-		folio_mark_uptodate(dst);
-	else if (!folio_test_uptodate(src) && folio_test_uptodate(dst))
-		folio_clear_uptodate(dst);
-	if (folio_test_mappedtodisk(src) && !folio_test_mappedtodisk(dst))
-		folio_set_mappedtodisk(dst);
-	else if (!folio_test_mappedtodisk(src) && folio_test_mappedtodisk(dst))
-		folio_clear_mappedtodisk(dst);
+	if (PageUptodate(src) && !PageUptodate(dst))
+		SetPageUptodate(dst);
+	else if (!PageUptodate(src) && PageUptodate(dst))
+		ClearPageUptodate(dst);
+	if (PageMappedToDisk(src) && !PageMappedToDisk(dst))
+		SetPageMappedToDisk(dst);
+	else if (!PageMappedToDisk(src) && PageMappedToDisk(dst))
+		ClearPageMappedToDisk(dst);
 
 	do {
 		unlock_buffer(sbh);
@@ -271,7 +269,7 @@ repeat:
 			NILFS_PAGE_BUG(&folio->page,
 				       "found empty page in dat page cache");
 
-		nilfs_copy_folio(dfolio, folio, true);
+		nilfs_copy_page(&dfolio->page, &folio->page, 1);
 		filemap_dirty_folio(folio_mapping(dfolio), dfolio);
 
 		folio_unlock(dfolio);
@@ -316,7 +314,7 @@ repeat:
 		if (!IS_ERR(dfolio)) {
 			/* overwrite existing folio in the destination cache */
 			WARN_ON(folio_test_dirty(dfolio));
-			nilfs_copy_folio(dfolio, folio, false);
+			nilfs_copy_page(&dfolio->page, &folio->page, 0);
 			folio_unlock(dfolio);
 			folio_put(dfolio);
 			/* Do we not need to remove folio from smap here? */

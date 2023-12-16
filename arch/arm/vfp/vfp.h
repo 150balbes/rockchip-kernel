@@ -375,4 +375,3 @@ struct op {
 };
 
 asmlinkage void vfp_save_state(void *location, u32 fpexc);
-asmlinkage u32 vfp_load_state(const void *location);

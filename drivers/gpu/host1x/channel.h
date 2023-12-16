@@ -10,7 +10,6 @@
 
 #include <linux/io.h>
 #include <linux/kref.h>
-#include <linux/mutex.h>
 
 #include "cdma.h"
 
@@ -19,8 +18,6 @@ struct host1x_channel;
 
 struct host1x_channel_list {
 	struct host1x_channel *channels;
-
-	struct mutex lock;
 	unsigned long *allocated_channels;
 };
 
@@ -40,6 +37,5 @@ int host1x_channel_list_init(struct host1x_channel_list *chlist,
 void host1x_channel_list_free(struct host1x_channel_list *chlist);
 struct host1x_channel *host1x_channel_get_index(struct host1x *host,
 						unsigned int index);
-void host1x_channel_stop_all(struct host1x *host);
 
 #endif

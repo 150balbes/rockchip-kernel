@@ -8,7 +8,7 @@ title: Qualcomm Global Clock & Reset Controller on QCS404
 
 maintainers:
   - Stephen Boyd <sboyd@kernel.org>
-  - Taniya Das <quic_tdas@quicinc.com>
+  - Taniya Das <tdas@codeaurora.org>
 
 description: |
   Qualcomm global clock control module provides the clocks, resets and power

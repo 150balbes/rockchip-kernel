@@ -257,7 +257,6 @@ struct ci_hdrc {
 	bool				id_event;
 	bool				b_sess_valid_event;
 	bool				imx28_write_fix;
-	bool				has_portsc_pec_bug;
 	bool				supports_runtime_pm;
 	bool				in_lpm;
 	bool				wakeup_int;
@@ -282,19 +281,8 @@ static inline int ci_role_start(struct ci_hdrc *ci, enum ci_role role)
 		return -ENXIO;
 
 	ret = ci->roles[role]->start(ci);
-	if (ret)
-		return ret;
-
-	ci->role = role;
-
-	if (ci->usb_phy) {
-		if (role == CI_ROLE_HOST)
-			usb_phy_set_event(ci->usb_phy, USB_EVENT_ID);
-		else
-			/* in device mode but vbus is invalid*/
-			usb_phy_set_event(ci->usb_phy, USB_EVENT_NONE);
-	}
-
+	if (!ret)
+		ci->role = role;
 	return ret;
 }
 
@@ -308,9 +296,6 @@ static inline void ci_role_stop(struct ci_hdrc *ci)
 	ci->role = CI_ROLE_END;
 
 	ci->roles[role]->stop(ci);
-
-	if (ci->usb_phy)
-		usb_phy_set_event(ci->usb_phy, USB_EVENT_NONE);
 }
 
 static inline enum usb_role ci_role_to_usb_role(struct ci_hdrc *ci)

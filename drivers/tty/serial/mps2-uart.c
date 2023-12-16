@@ -16,6 +16,7 @@
 #include <linux/console.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
@@ -188,12 +189,12 @@ static irqreturn_t mps2_uart_rxirq(int irq, void *data)
 	if (unlikely(!(irqflag & UARTn_INT_RX)))
 		return IRQ_NONE;
 
-	uart_port_lock(port);
+	spin_lock(&port->lock);
 
 	mps2_uart_write8(port, UARTn_INT_RX, UARTn_INT);
 	mps2_uart_rx_chars(port);
 
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 
 	return IRQ_HANDLED;
 }
@@ -206,12 +207,12 @@ static irqreturn_t mps2_uart_txirq(int irq, void *data)
 	if (unlikely(!(irqflag & UARTn_INT_TX)))
 		return IRQ_NONE;
 
-	uart_port_lock(port);
+	spin_lock(&port->lock);
 
 	mps2_uart_write8(port, UARTn_INT_TX, UARTn_INT);
 	mps2_uart_tx_chars(port);
 
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 
 	return IRQ_HANDLED;
 }
@@ -222,7 +223,7 @@ static irqreturn_t mps2_uart_oerrirq(int irq, void *data)
 	struct uart_port *port = data;
 	u8 irqflag = mps2_uart_read8(port, UARTn_INT);
 
-	uart_port_lock(port);
+	spin_lock(&port->lock);
 
 	if (irqflag & UARTn_INT_RX_OVERRUN) {
 		struct tty_port *tport = &port->state->port;
@@ -244,7 +245,7 @@ static irqreturn_t mps2_uart_oerrirq(int irq, void *data)
 		handled = IRQ_HANDLED;
 	}
 
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 
 	return handled;
 }
@@ -356,12 +357,12 @@ mps2_uart_set_termios(struct uart_port *port, struct ktermios *termios,
 
 	bauddiv = DIV_ROUND_CLOSEST(port->uartclk, baud);
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 
 	uart_update_timeout(port, termios->c_cflag, baud);
 	mps2_uart_write32(port, bauddiv, UARTn_BAUDDIV);
 
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 
 	if (tty_termios_baud_rate(termios))
 		tty_termios_encode_baud_rate(termios, baud, baud);
@@ -538,7 +539,8 @@ static int mps2_init_port(struct platform_device *pdev,
 	struct resource *res;
 	int ret;
 
-	mps_port->port.membase = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mps_port->port.membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mps_port->port.membase))
 		return PTR_ERR(mps_port->port.membase);
 

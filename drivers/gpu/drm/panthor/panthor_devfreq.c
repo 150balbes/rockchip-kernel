@@ -35,10 +35,8 @@ struct panthor_devfreq {
 	bool last_busy_state;
 
 	/*
-	 * @lock: Lock used to protect busy_time, idle_time, time_last_update and
-	 * last_busy_state.
-	 *
-	 * These fields can be accessed concurrently by panthor_devfreq_get_dev_status()
+	 * Protect busy_time, idle_time, time_last_update and last_busy_state
+	 * because these can be accessed concurrently by panthor_devfreq_get_dev_status()
 	 * and panthor_devfreq_record_{busy,idle}().
 	 */
 	spinlock_t lock;

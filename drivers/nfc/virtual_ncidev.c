@@ -26,14 +26,10 @@ struct virtual_nci_dev {
 	struct mutex mtx;
 	struct sk_buff *send_buff;
 	struct wait_queue_head wq;
-	bool running;
 };
 
 static int virtual_nci_open(struct nci_dev *ndev)
 {
-	struct virtual_nci_dev *vdev = nci_get_drvdata(ndev);
-
-	vdev->running = true;
 	return 0;
 }
 
@@ -44,7 +40,6 @@ static int virtual_nci_close(struct nci_dev *ndev)
 	mutex_lock(&vdev->mtx);
 	kfree_skb(vdev->send_buff);
 	vdev->send_buff = NULL;
-	vdev->running = false;
 	mutex_unlock(&vdev->mtx);
 
 	return 0;
@@ -55,7 +50,7 @@ static int virtual_nci_send(struct nci_dev *ndev, struct sk_buff *skb)
 	struct virtual_nci_dev *vdev = nci_get_drvdata(ndev);
 
 	mutex_lock(&vdev->mtx);
-	if (vdev->send_buff || !vdev->running) {
+	if (vdev->send_buff) {
 		mutex_unlock(&vdev->mtx);
 		kfree_skb(skb);
 		return -1;
@@ -205,7 +200,18 @@ static struct miscdevice miscdev = {
 	.mode = 0600,
 };
 
-module_misc_device(miscdev);
+static int __init virtual_ncidev_init(void)
+{
+	return misc_register(&miscdev);
+}
+
+static void __exit virtual_ncidev_exit(void)
+{
+	misc_deregister(&miscdev);
+}
+
+module_init(virtual_ncidev_init);
+module_exit(virtual_ncidev_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Virtual NCI device simulation driver");

@@ -8,7 +8,6 @@
 
 #include <linux/netdevice.h>
 #include <linux/refcount.h>
-#include <net/xdp.h>
 #include <soc/fsl/qman.h>
 #include <soc/fsl/bman.h>
 

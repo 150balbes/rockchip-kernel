@@ -20,27 +20,22 @@
 #include <linux/mm.h>
 #include <linux/smp.h>
 #include <linux/kdebug.h>
+#include <linux/kprobes.h>
 #include <linux/perf_event.h>
 #include <linux/uaccess.h>
-#include <linux/kfence.h>
 
 #include <asm/branch.h>
-#include <asm/exception.h>
 #include <asm/mmu_context.h>
 #include <asm/ptrace.h>
 
 int show_unhandled_signals = 1;
 
-static void __kprobes no_context(struct pt_regs *regs,
-			unsigned long write, unsigned long address)
+static void __kprobes no_context(struct pt_regs *regs, unsigned long address)
 {
 	const int field = sizeof(unsigned long) * 2;
 
 	/* Are we prepared to handle this kernel fault?	 */
 	if (fixup_exception(regs))
-		return;
-
-	if (kfence_handle_page_fault(address, write, regs))
 		return;
 
 	/*
@@ -56,15 +51,14 @@ static void __kprobes no_context(struct pt_regs *regs,
 	die("Oops", regs);
 }
 
-static void __kprobes do_out_of_memory(struct pt_regs *regs,
-			unsigned long write, unsigned long address)
+static void __kprobes do_out_of_memory(struct pt_regs *regs, unsigned long address)
 {
 	/*
 	 * We ran out of memory, call the OOM killer, and return the userspace
 	 * (which will retry the fault, or kill us if we got oom-killed).
 	 */
 	if (!user_mode(regs)) {
-		no_context(regs, write, address);
+		no_context(regs, address);
 		return;
 	}
 	pagefault_out_of_memory();
@@ -75,7 +69,7 @@ static void __kprobes do_sigbus(struct pt_regs *regs,
 {
 	/* Kernel mode? Handle exceptions or die */
 	if (!user_mode(regs)) {
-		no_context(regs, write, address);
+		no_context(regs, address);
 		return;
 	}
 
@@ -96,7 +90,7 @@ static void __kprobes do_sigsegv(struct pt_regs *regs,
 
 	/* Kernel mode? Handle exceptions or die */
 	if (!user_mode(regs)) {
-		no_context(regs, write, address);
+		no_context(regs, address);
 		return;
 	}
 
@@ -155,7 +149,7 @@ static void __kprobes __do_page_fault(struct pt_regs *regs,
 	 */
 	if (address & __UA_LIMIT) {
 		if (!user_mode(regs))
-			no_context(regs, write, address);
+			no_context(regs, address);
 		else
 			do_sigsegv(regs, write, address, si_code);
 		return;
@@ -217,7 +211,7 @@ good_area:
 
 	if (fault_signal_pending(fault, regs)) {
 		if (!user_mode(regs))
-			no_context(regs, write, address);
+			no_context(regs, address);
 		return;
 	}
 
@@ -238,7 +232,7 @@ good_area:
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		mmap_read_unlock(mm);
 		if (fault & VM_FAULT_OOM) {
-			do_out_of_memory(regs, write, address);
+			do_out_of_memory(regs, address);
 			return;
 		} else if (fault & VM_FAULT_SIGSEGV) {
 			do_sigsegv(regs, write, address, si_code);

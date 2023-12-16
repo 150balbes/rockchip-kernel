@@ -26,6 +26,7 @@
 		led-5ghz {
 			label = "bcm53xx:blue:5ghz";
 			gpios = <&chipcommon 11 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "default-off";
 		};
 
 		led-system {
@@ -41,6 +42,7 @@
 		led-2ghz {
 			label = "bcm53xx:blue:2ghz";
 			gpios = <&pcie0_chipcommon 3 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "default-off";
 		};
 	};
 
@@ -80,23 +82,4 @@
 			};
 		};
 	};
-};
-
-&gmac0 {
-	phy-mode = "rgmii";
-	phy-handle = <&bcm54210e>;
-
-	/delete-node/ fixed-link;
-
-	mdio {
-		/delete-node/ switch@1e;
-
-		bcm54210e: ethernet-phy@0 {
-			reg = <0>;
-		};
-	};
-};
-
-&gmac1 {
-	status = "disabled";
 };

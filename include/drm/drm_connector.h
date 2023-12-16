@@ -817,14 +817,6 @@ struct drm_display_info {
 	 * @quirks: EDID based quirks. Internal to EDID parsing.
 	 */
 	u32 quirks;
-
-	/**
-	 * @source_physical_address: Source Physical Address from HDMI
-	 * Vendor-Specific Data Block, for CEC usage.
-	 *
-	 * Defaults to CEC_PHYS_ADDR_INVALID (0xffff).
-	 */
-	u16 source_physical_address;
 };
 
 int drm_display_info_set_bus_formats(struct drm_display_info *info,
@@ -1336,8 +1328,7 @@ struct drm_connector_funcs {
 	 * This will get called when a hotplug-event for a drm-connector
 	 * has been received from a source outside the display driver / device.
 	 */
-	void (*oob_hotplug_event)(struct drm_connector *connector,
-				  enum drm_connector_status status);
+	void (*oob_hotplug_event)(struct drm_connector *connector);
 
 	/**
 	 * @debugfs_init:
@@ -1981,8 +1972,7 @@ drm_connector_is_unregistered(struct drm_connector *connector)
 		DRM_CONNECTOR_UNREGISTERED;
 }
 
-void drm_connector_oob_hotplug_event(struct fwnode_handle *connector_fwnode,
-				     enum drm_connector_status status);
+void drm_connector_oob_hotplug_event(struct fwnode_handle *connector_fwnode);
 const char *drm_get_connector_type_name(unsigned int connector_type);
 const char *drm_get_connector_status_name(enum drm_connector_status status);
 const char *drm_get_subpixel_order_name(enum subpixel_order order);

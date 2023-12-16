@@ -248,13 +248,14 @@ err3:
 	return ret;
 }
 
-static void wm97xx_bat_remove(struct platform_device *dev)
+static int wm97xx_bat_remove(struct platform_device *dev)
 {
 	if (charge_gpiod)
 		free_irq(gpiod_to_irq(charge_gpiod), dev);
 	cancel_work_sync(&bat_work);
 	power_supply_unregister(bat_psy);
 	kfree(prop);
+	return 0;
 }
 
 static struct platform_driver wm97xx_bat_driver = {
@@ -265,7 +266,7 @@ static struct platform_driver wm97xx_bat_driver = {
 #endif
 	},
 	.probe		= wm97xx_bat_probe,
-	.remove_new	= wm97xx_bat_remove,
+	.remove		= wm97xx_bat_remove,
 };
 
 module_platform_driver(wm97xx_bat_driver);

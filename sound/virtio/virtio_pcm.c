@@ -109,9 +109,7 @@ static int virtsnd_pcm_build_hw(struct virtio_pcm_substream *vss,
 		SNDRV_PCM_INFO_BATCH |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER |
 		SNDRV_PCM_INFO_INTERLEAVED |
-		SNDRV_PCM_INFO_PAUSE |
-		SNDRV_PCM_INFO_NO_REWINDS |
-		SNDRV_PCM_INFO_SYNC_APPLPTR;
+		SNDRV_PCM_INFO_PAUSE;
 
 	if (!info->channels_min || info->channels_min > info->channels_max) {
 		dev_err(&vdev->dev,
@@ -473,7 +471,7 @@ int virtsnd_pcm_build_devs(struct virtio_snd *snd)
 			for (kss = ks->substream; kss; kss = kss->next)
 				vs->substreams[kss->number]->substream = kss;
 
-			snd_pcm_set_ops(vpcm->pcm, i, &virtsnd_pcm_ops[i]);
+			snd_pcm_set_ops(vpcm->pcm, i, &virtsnd_pcm_ops);
 		}
 
 		snd_pcm_set_managed_buffer_all(vpcm->pcm,

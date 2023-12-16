@@ -51,15 +51,16 @@ static int cfag12864bfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	struct page *pages = virt_to_page(cfag12864b_buffer);
 
-	vma->vm_page_prot = pgprot_decrypted(vma->vm_page_prot);
-
 	return vm_map_pages_zero(vma, &pages, 1);
 }
 
 static const struct fb_ops cfag12864bfb_ops = {
 	.owner = THIS_MODULE,
-	__FB_DEFAULT_SYSMEM_OPS_RDWR,
-	__FB_DEFAULT_SYSMEM_OPS_DRAW,
+	.fb_read = fb_sys_read,
+	.fb_write = fb_sys_write,
+	.fb_fillrect = sys_fillrect,
+	.fb_copyarea = sys_copyarea,
+	.fb_imageblit = sys_imageblit,
 	.fb_mmap = cfag12864bfb_mmap,
 };
 
@@ -71,7 +72,6 @@ static int cfag12864bfb_probe(struct platform_device *device)
 	if (!info)
 		goto none;
 
-	info->flags = FBINFO_VIRTFB;
 	info->screen_buffer = cfag12864b_buffer;
 	info->screen_size = CFAG12864B_SIZE;
 	info->fbops = &cfag12864bfb_ops;

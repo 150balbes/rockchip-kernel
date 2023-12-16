@@ -463,18 +463,16 @@ static int nb7vpq904m_probe(struct i2c_client *client)
 
 	ret = nb7vpq904m_register_bridge(nb7);
 	if (ret)
-		goto err_disable_gpio;
+		return ret;
 
 	sw_desc.drvdata = nb7;
 	sw_desc.fwnode = dev->fwnode;
 	sw_desc.set = nb7vpq904m_sw_set;
 
 	nb7->sw = typec_switch_register(dev, &sw_desc);
-	if (IS_ERR(nb7->sw)) {
-		ret = dev_err_probe(dev, PTR_ERR(nb7->sw),
-				    "Error registering typec switch\n");
-		goto err_disable_gpio;
-	}
+	if (IS_ERR(nb7->sw))
+		return dev_err_probe(dev, PTR_ERR(nb7->sw),
+				     "Error registering typec switch\n");
 
 	retimer_desc.drvdata = nb7;
 	retimer_desc.fwnode = dev->fwnode;
@@ -482,21 +480,12 @@ static int nb7vpq904m_probe(struct i2c_client *client)
 
 	nb7->retimer = typec_retimer_register(dev, &retimer_desc);
 	if (IS_ERR(nb7->retimer)) {
-		ret = dev_err_probe(dev, PTR_ERR(nb7->retimer),
-				    "Error registering typec retimer\n");
-		goto err_switch_unregister;
+		typec_switch_unregister(nb7->sw);
+		return dev_err_probe(dev, PTR_ERR(nb7->retimer),
+				     "Error registering typec retimer\n");
 	}
 
 	return 0;
-
-err_switch_unregister:
-	typec_switch_unregister(nb7->sw);
-
-err_disable_gpio:
-	gpiod_set_value(nb7->enable_gpio, 0);
-	regulator_disable(nb7->vcc_supply);
-
-	return ret;
 }
 
 static void nb7vpq904m_remove(struct i2c_client *client)
@@ -528,7 +517,7 @@ static struct i2c_driver nb7vpq904m_driver = {
 		.name = "nb7vpq904m",
 		.of_match_table = nb7vpq904m_of_table,
 	},
-	.probe		= nb7vpq904m_probe,
+	.probe_new	= nb7vpq904m_probe,
 	.remove		= nb7vpq904m_remove,
 	.id_table	= nb7vpq904m_table,
 };

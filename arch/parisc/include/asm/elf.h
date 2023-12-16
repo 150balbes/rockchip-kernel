@@ -163,7 +163,8 @@ typedef struct elf32_fdesc {
 
 /* Format for the Elf64 Function descriptor */
 typedef struct elf64_fdesc {
-	__u64	dummy[2]; /* used by 64-bit eBPF and tracing functions */
+	__u64	dummy[2]; /* FIXME: nothing uses these, why waste
+			   * the space */
 	__u64	addr;
 	__u64	gp;
 } Elf64_Fdesc;
@@ -349,7 +350,15 @@ struct pt_regs;	/* forward declaration... */
 
 #define ELF_HWCAP	0
 
-#define STACK_RND_MASK	0x7ff	/* 8MB of VA */
+/* Masks for stack and mmap randomization */
+#define BRK_RND_MASK	(is_32bit_task() ? 0x07ffUL : 0x3ffffUL)
+#define MMAP_RND_MASK	(is_32bit_task() ? 0x1fffUL : 0x3ffffUL)
+#define STACK_RND_MASK	MMAP_RND_MASK
+
+struct mm_struct;
+extern unsigned long arch_randomize_brk(struct mm_struct *);
+#define arch_randomize_brk arch_randomize_brk
+
 
 #define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
 struct linux_binprm;

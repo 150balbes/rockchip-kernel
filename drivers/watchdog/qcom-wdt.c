@@ -11,6 +11,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/watchdog.h>
+#include <linux/of_device.h>
 
 enum wdt_reg {
 	WDT_RST,

@@ -53,11 +53,11 @@ DESTDIR ?=
 
 VERSION:=			$(shell ./utils/version-gen.sh)
 LIB_MAJ=			0.0.1
-LIB_MIN=			1
+LIB_MIN=			0
 
 PACKAGE =			cpupower
 PACKAGE_BUGREPORT =		linux-pm@vger.kernel.org
-LANGUAGES = 			de fr it cs pt ka
+LANGUAGES = 			de fr it cs pt
 
 
 # Directory definitions. These are default and most probably

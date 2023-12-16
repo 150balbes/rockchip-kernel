@@ -2609,7 +2609,7 @@ static void rtl8723b_fill_default_txdesc(
 	pmlmeinfo = &(pmlmeext->mlmext_info);
 
 	pattrib = &pxmitframe->attrib;
-	bmcst = is_multicast_ether_addr(pattrib->ra);
+	bmcst = IS_MCAST(pattrib->ra);
 
 	ptxdesc = (struct txdesc_8723b *)pbuf;
 

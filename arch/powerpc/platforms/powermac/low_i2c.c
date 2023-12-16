@@ -925,10 +925,8 @@ static void __init smu_i2c_probe(void)
 
 		sz = sizeof(struct pmac_i2c_bus) + sizeof(struct smu_i2c_cmd);
 		bus = kzalloc(sz, GFP_KERNEL);
-		if (bus == NULL) {
-			of_node_put(busnode);
+		if (bus == NULL)
 			return;
-		}
 
 		bus->controller = controller;
 		bus->busnode = of_node_get(busnode);

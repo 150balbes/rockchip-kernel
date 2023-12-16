@@ -20,7 +20,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/overflow.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -239,7 +239,7 @@ struct at_desc {
 	bool				memset_buffer;
 	dma_addr_t			memset_paddr;
 	int				*memset_vaddr;
-	struct atdma_sg			sg[] __counted_by(sglen);
+	struct atdma_sg			sg[];
 };
 
 /*--  Channels  --------------------------------------------------------*/
@@ -2100,7 +2100,7 @@ err_irq:
 	return err;
 }
 
-static void at_dma_remove(struct platform_device *pdev)
+static int at_dma_remove(struct platform_device *pdev)
 {
 	struct at_dma		*atdma = platform_get_drvdata(pdev);
 	struct dma_chan		*chan, *_chan;
@@ -2122,6 +2122,8 @@ static void at_dma_remove(struct platform_device *pdev)
 	}
 
 	clk_disable_unprepare(atdma->clk);
+
+	return 0;
 }
 
 static void at_dma_shutdown(struct platform_device *pdev)
@@ -2240,7 +2242,7 @@ static const struct dev_pm_ops __maybe_unused at_dma_dev_pm_ops = {
 };
 
 static struct platform_driver at_dma_driver = {
-	.remove_new	= at_dma_remove,
+	.remove		= at_dma_remove,
 	.shutdown	= at_dma_shutdown,
 	.id_table	= atdma_devtypes,
 	.driver = {

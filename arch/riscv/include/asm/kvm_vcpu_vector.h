@@ -74,7 +74,9 @@ static inline void kvm_riscv_vcpu_free_vector_context(struct kvm_vcpu *vcpu)
 #endif
 
 int kvm_riscv_vcpu_get_reg_vector(struct kvm_vcpu *vcpu,
-				  const struct kvm_one_reg *reg);
+				  const struct kvm_one_reg *reg,
+				  unsigned long rtype);
 int kvm_riscv_vcpu_set_reg_vector(struct kvm_vcpu *vcpu,
-				  const struct kvm_one_reg *reg);
+				  const struct kvm_one_reg *reg,
+				  unsigned long rtype);
 #endif

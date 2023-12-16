@@ -22,7 +22,6 @@
 #include <linux/err.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
-#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/of.h>
 
@@ -30,7 +29,6 @@
 #include <linux/mfd/tps6586x.h>
 
 #define TPS6586X_SUPPLYENE	0x14
-#define SOFT_RST_BIT		BIT(0)
 #define EXITSLREQ_BIT		BIT(1)
 #define SLEEP_MODE_BIT		BIT(3)
 
@@ -456,37 +454,16 @@ static const struct regmap_config tps6586x_regmap_config = {
 	.val_bits = 8,
 	.max_register = TPS6586X_MAX_REGISTER,
 	.volatile_reg = is_volatile_reg,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 
-static int tps6586x_power_off_handler(struct sys_off_data *data)
+static struct device *tps6586x_dev;
+static void tps6586x_power_off(void)
 {
-	int ret;
+	if (tps6586x_clr_bits(tps6586x_dev, TPS6586X_SUPPLYENE, EXITSLREQ_BIT))
+		return;
 
-	/* Put the PMIC into sleep state. This takes at least 20ms. */
-	ret = tps6586x_clr_bits(data->dev, TPS6586X_SUPPLYENE, EXITSLREQ_BIT);
-	if (ret)
-		return notifier_from_errno(ret);
-
-	ret = tps6586x_set_bits(data->dev, TPS6586X_SUPPLYENE, SLEEP_MODE_BIT);
-	if (ret)
-		return notifier_from_errno(ret);
-
-	mdelay(50);
-	return notifier_from_errno(-ETIME);
-}
-
-static int tps6586x_restart_handler(struct sys_off_data *data)
-{
-	int ret;
-
-	/* Put the PMIC into hard reboot state. This takes at least 20ms. */
-	ret = tps6586x_set_bits(data->dev, TPS6586X_SUPPLYENE, SOFT_RST_BIT);
-	if (ret)
-		return notifier_from_errno(ret);
-
-	mdelay(50);
-	return notifier_from_errno(-ETIME);
+	tps6586x_set_bits(tps6586x_dev, TPS6586X_SUPPLYENE, SLEEP_MODE_BIT);
 }
 
 static void tps6586x_print_version(struct i2c_client *client, int version)
@@ -582,20 +559,9 @@ static int tps6586x_i2c_probe(struct i2c_client *client)
 		goto err_add_devs;
 	}
 
-	if (pdata->pm_off) {
-		ret = devm_register_power_off_handler(&client->dev, &tps6586x_power_off_handler,
-						      NULL);
-		if (ret) {
-			dev_err(&client->dev, "register power off handler failed: %d\n", ret);
-			goto err_add_devs;
-		}
-
-		ret = devm_register_restart_handler(&client->dev, &tps6586x_restart_handler,
-						    NULL);
-		if (ret) {
-			dev_err(&client->dev, "register restart handler failed: %d\n", ret);
-			goto err_add_devs;
-		}
+	if (pdata->pm_off && !pm_power_off) {
+		tps6586x_dev = &client->dev;
+		pm_power_off = tps6586x_power_off;
 	}
 
 	return 0;

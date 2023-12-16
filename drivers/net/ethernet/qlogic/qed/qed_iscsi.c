@@ -999,14 +999,13 @@ static void _qed_iscsi_get_pstats(struct qed_hwfn *p_hwfn,
 }
 
 static int qed_iscsi_get_stats(struct qed_hwfn *p_hwfn,
-			       struct qed_iscsi_stats *stats,
-			       bool is_atomic)
+			       struct qed_iscsi_stats *stats)
 {
 	struct qed_ptt *p_ptt;
 
 	memset(stats, 0, sizeof(*stats));
 
-	p_ptt = qed_ptt_acquire_context(p_hwfn, is_atomic);
+	p_ptt = qed_ptt_acquire(p_hwfn);
 	if (!p_ptt) {
 		DP_ERR(p_hwfn, "Failed to acquire ptt\n");
 		return -EAGAIN;
@@ -1337,16 +1336,9 @@ static int qed_iscsi_destroy_conn(struct qed_dev *cdev,
 					   QED_SPQ_MODE_EBLOCK, NULL);
 }
 
-static int qed_iscsi_stats_context(struct qed_dev *cdev,
-				   struct qed_iscsi_stats *stats,
-				   bool is_atomic)
-{
-	return qed_iscsi_get_stats(QED_AFFIN_HWFN(cdev), stats, is_atomic);
-}
-
 static int qed_iscsi_stats(struct qed_dev *cdev, struct qed_iscsi_stats *stats)
 {
-	return qed_iscsi_stats_context(cdev, stats, false);
+	return qed_iscsi_get_stats(QED_AFFIN_HWFN(cdev), stats);
 }
 
 static int qed_iscsi_change_mac(struct qed_dev *cdev,
@@ -1366,14 +1358,13 @@ static int qed_iscsi_change_mac(struct qed_dev *cdev,
 }
 
 void qed_get_protocol_stats_iscsi(struct qed_dev *cdev,
-				  struct qed_mcp_iscsi_stats *stats,
-				  bool is_atomic)
+				  struct qed_mcp_iscsi_stats *stats)
 {
 	struct qed_iscsi_stats proto_stats;
 
 	/* Retrieve FW statistics */
 	memset(&proto_stats, 0, sizeof(proto_stats));
-	if (qed_iscsi_stats_context(cdev, &proto_stats, is_atomic)) {
+	if (qed_iscsi_stats(cdev, &proto_stats)) {
 		DP_VERBOSE(cdev, QED_MSG_STORAGE,
 			   "Failed to collect ISCSI statistics\n");
 		return;

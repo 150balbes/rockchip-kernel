@@ -29,13 +29,10 @@ struct gb_raw {
 struct raw_data {
 	struct list_head entry;
 	u32 len;
-	u8 data[] __counted_by(len);
+	u8 data[];
 };
 
-static const struct class raw_class = {
-	.name = "gb_raw",
-};
-
+static struct class *raw_class;
 static int raw_major;
 static const struct file_operations raw_fops;
 static DEFINE_IDA(minors);
@@ -73,7 +70,7 @@ static int receive_data(struct gb_raw *raw, u32 len, u8 *data)
 		goto exit;
 	}
 
-	raw_data = kmalloc(struct_size(raw_data, data, len), GFP_KERNEL);
+	raw_data = kmalloc(sizeof(*raw_data) + len, GFP_KERNEL);
 	if (!raw_data) {
 		retval = -ENOMEM;
 		goto exit;
@@ -198,7 +195,7 @@ static int gb_raw_probe(struct gb_bundle *bundle,
 	if (retval)
 		goto error_connection_disable;
 
-	raw->device = device_create(&raw_class, &connection->bundle->dev,
+	raw->device = device_create(raw_class, &connection->bundle->dev,
 				    raw->dev, raw, "gb!raw%d", minor);
 	if (IS_ERR(raw->device)) {
 		retval = PTR_ERR(raw->device);
@@ -232,7 +229,7 @@ static void gb_raw_disconnect(struct gb_bundle *bundle)
 	struct raw_data *temp;
 
 	// FIXME - handle removing a connection when the char device node is open.
-	device_destroy(&raw_class, raw->dev);
+	device_destroy(raw_class, raw->dev);
 	cdev_del(&raw->cdev);
 	gb_connection_disable(connection);
 	ida_simple_remove(&minors, MINOR(raw->dev));
@@ -343,9 +340,11 @@ static int raw_init(void)
 	dev_t dev;
 	int retval;
 
-	retval = class_register(&raw_class);
-	if (retval)
+	raw_class = class_create("gb_raw");
+	if (IS_ERR(raw_class)) {
+		retval = PTR_ERR(raw_class);
 		goto error_class;
+	}
 
 	retval = alloc_chrdev_region(&dev, 0, NUM_MINORS, "gb_raw");
 	if (retval < 0)
@@ -362,7 +361,7 @@ static int raw_init(void)
 error_gb:
 	unregister_chrdev_region(dev, NUM_MINORS);
 error_chrdev:
-	class_unregister(&raw_class);
+	class_destroy(raw_class);
 error_class:
 	return retval;
 }
@@ -372,7 +371,7 @@ static void __exit raw_exit(void)
 {
 	greybus_deregister(&gb_raw_driver);
 	unregister_chrdev_region(MKDEV(raw_major, 0), NUM_MINORS);
-	class_unregister(&raw_class);
+	class_destroy(raw_class);
 	ida_destroy(&minors);
 }
 module_exit(raw_exit);

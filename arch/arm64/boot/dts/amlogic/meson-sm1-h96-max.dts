@@ -29,6 +29,7 @@
 		assigned-clock-rates = <294912000>,
 				       <270950400>,
 				       <393216000>;
+		status = "okay";
 
 		dai-link-0 {
 			sound-dai = <&frddr_a>;
@@ -99,7 +100,7 @@
 
 		interrupt-parent = <&gpio_intc>;
 		/* MAC_INTR on GPIOZ_14 */
-		interrupts = <IRQID_GPIOZ_14 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <26 IRQ_TYPE_LEVEL_LOW>;
 	};
 };
 

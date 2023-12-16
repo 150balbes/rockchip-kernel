@@ -1351,10 +1351,11 @@ static const struct fb_ops smtcfb_ops = {
 	.fb_set_par   = smtc_set_par,
 	.fb_setcolreg = smtc_setcolreg,
 	.fb_blank     = smtc_blank,
-	__FB_DEFAULT_IOMEM_OPS_DRAW,
+	.fb_fillrect  = cfb_fillrect,
+	.fb_imageblit = cfb_imageblit,
+	.fb_copyarea  = cfb_copyarea,
 	.fb_read      = smtcfb_read,
 	.fb_write     = smtcfb_write,
-	__FB_DEFAULT_IOMEM_OPS_MMAP,
 };
 
 /*

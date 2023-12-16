@@ -488,7 +488,7 @@ poll_more:
 		if (unlikely(ib_req_notify_cq(priv->recv_cq,
 					      IB_CQ_NEXT_COMP |
 					      IB_CQ_REPORT_MISSED_EVENTS)) &&
-		    napi_schedule(napi))
+		    napi_reschedule(napi))
 			goto poll_more;
 	}
 
@@ -518,7 +518,7 @@ poll_more:
 		napi_complete(napi);
 		if (unlikely(ib_req_notify_cq(priv->send_cq, IB_CQ_NEXT_COMP |
 					      IB_CQ_REPORT_MISSED_EVENTS)) &&
-		    napi_schedule(napi))
+		    napi_reschedule(napi))
 			goto poll_more;
 	}
 	return n < 0 ? 0 : n;

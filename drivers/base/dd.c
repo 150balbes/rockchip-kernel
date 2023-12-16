@@ -693,8 +693,6 @@ re_probe:
 
 		device_remove(dev);
 		driver_sysfs_remove(dev);
-		if (dev->bus && dev->bus->dma_cleanup)
-			dev->bus->dma_cleanup(dev);
 		device_unbind_cleanup(dev);
 
 		goto re_probe;
@@ -1274,8 +1272,8 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 		if (dev->bus && dev->bus->dma_cleanup)
 			dev->bus->dma_cleanup(dev);
 
-		device_unbind_cleanup(dev);
 		device_links_driver_cleanup(dev);
+		device_unbind_cleanup(dev);
 
 		klist_remove(&dev->p->knode_driver);
 		device_pm_check_callbacks(dev);

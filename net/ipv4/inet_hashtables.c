@@ -28,9 +28,9 @@
 #include <net/tcp.h>
 #include <net/sock_reuseport.h>
 
-u32 inet_ehashfn(const struct net *net, const __be32 laddr,
-		 const __u16 lport, const __be32 faddr,
-		 const __be16 fport)
+static u32 inet_ehashfn(const struct net *net, const __be32 laddr,
+			const __u16 lport, const __be32 faddr,
+			const __be16 fport)
 {
 	static u32 inet_ehash_secret __read_mostly;
 
@@ -39,7 +39,6 @@ u32 inet_ehashfn(const struct net *net, const __be32 laddr,
 	return __inet_ehashfn(laddr, lport, faddr, fport,
 			      inet_ehash_secret + net_hash_mix(net));
 }
-EXPORT_SYMBOL_GPL(inet_ehashfn);
 
 /* This function handles inet_sock, but also timewait and request sockets
  * for IPv4/IPv6.
@@ -149,14 +148,8 @@ static bool inet_bind2_bucket_addr_match(const struct inet_bind2_bucket *tb2,
 					 const struct sock *sk)
 {
 #if IS_ENABLED(CONFIG_IPV6)
-	if (sk->sk_family != tb2->family) {
-		if (sk->sk_family == AF_INET)
-			return ipv6_addr_v4mapped(&tb2->v6_rcv_saddr) &&
-				tb2->v6_rcv_saddr.s6_addr32[3] == sk->sk_rcv_saddr;
-
-		return ipv6_addr_v4mapped(&sk->sk_v6_rcv_saddr) &&
-			sk->sk_v6_rcv_saddr.s6_addr32[3] == tb2->rcv_saddr;
-	}
+	if (sk->sk_family != tb2->family)
+		return false;
 
 	if (sk->sk_family == AF_INET6)
 		return ipv6_addr_equal(&tb2->v6_rcv_saddr,
@@ -339,38 +332,20 @@ static inline int compute_score(struct sock *sk, struct net *net,
 	return score;
 }
 
-/**
- * inet_lookup_reuseport() - execute reuseport logic on AF_INET socket if necessary.
- * @net: network namespace.
- * @sk: AF_INET socket, must be in TCP_LISTEN state for TCP or TCP_CLOSE for UDP.
- * @skb: context for a potential SK_REUSEPORT program.
- * @doff: header offset.
- * @saddr: source address.
- * @sport: source port.
- * @daddr: destination address.
- * @hnum: destination port in host byte order.
- * @ehashfn: hash function used to generate the fallback hash.
- *
- * Return: NULL if sk doesn't have SO_REUSEPORT set, otherwise a pointer to
- *         the selected sock or an error.
- */
-struct sock *inet_lookup_reuseport(struct net *net, struct sock *sk,
-				   struct sk_buff *skb, int doff,
-				   __be32 saddr, __be16 sport,
-				   __be32 daddr, unsigned short hnum,
-				   inet_ehashfn_t *ehashfn)
+static inline struct sock *lookup_reuseport(struct net *net, struct sock *sk,
+					    struct sk_buff *skb, int doff,
+					    __be32 saddr, __be16 sport,
+					    __be32 daddr, unsigned short hnum)
 {
 	struct sock *reuse_sk = NULL;
 	u32 phash;
 
 	if (sk->sk_reuseport) {
-		phash = INDIRECT_CALL_2(ehashfn, udp_ehashfn, inet_ehashfn,
-					net, daddr, hnum, saddr, sport);
+		phash = inet_ehashfn(net, daddr, hnum, saddr, sport);
 		reuse_sk = reuseport_select_sock(sk, phash, skb, doff);
 	}
 	return reuse_sk;
 }
-EXPORT_SYMBOL_GPL(inet_lookup_reuseport);
 
 /*
  * Here are some nice properties to exploit here. The BSD API
@@ -394,8 +369,8 @@ static struct sock *inet_lhash2_lookup(struct net *net,
 	sk_nulls_for_each_rcu(sk, node, &ilb2->nulls_head) {
 		score = compute_score(sk, net, hnum, daddr, dif, sdif);
 		if (score > hiscore) {
-			result = inet_lookup_reuseport(net, sk, skb, doff,
-						       saddr, sport, daddr, hnum, inet_ehashfn);
+			result = lookup_reuseport(net, sk, skb, doff,
+						  saddr, sport, daddr, hnum);
 			if (result)
 				return result;
 
@@ -407,23 +382,24 @@ static struct sock *inet_lhash2_lookup(struct net *net,
 	return result;
 }
 
-struct sock *inet_lookup_run_sk_lookup(struct net *net,
-				       int protocol,
-				       struct sk_buff *skb, int doff,
-				       __be32 saddr, __be16 sport,
-				       __be32 daddr, u16 hnum, const int dif,
-				       inet_ehashfn_t *ehashfn)
+static inline struct sock *inet_lookup_run_bpf(struct net *net,
+					       struct inet_hashinfo *hashinfo,
+					       struct sk_buff *skb, int doff,
+					       __be32 saddr, __be16 sport,
+					       __be32 daddr, u16 hnum, const int dif)
 {
 	struct sock *sk, *reuse_sk;
 	bool no_reuseport;
 
-	no_reuseport = bpf_sk_lookup_run_v4(net, protocol, saddr, sport,
+	if (hashinfo != net->ipv4.tcp_death_row.hashinfo)
+		return NULL; /* only TCP is supported */
+
+	no_reuseport = bpf_sk_lookup_run_v4(net, IPPROTO_TCP, saddr, sport,
 					    daddr, hnum, dif, &sk);
 	if (no_reuseport || IS_ERR_OR_NULL(sk))
 		return sk;
 
-	reuse_sk = inet_lookup_reuseport(net, sk, skb, doff, saddr, sport, daddr, hnum,
-					 ehashfn);
+	reuse_sk = lookup_reuseport(net, sk, skb, doff, saddr, sport, daddr, hnum);
 	if (reuse_sk)
 		sk = reuse_sk;
 	return sk;
@@ -441,11 +417,9 @@ struct sock *__inet_lookup_listener(struct net *net,
 	unsigned int hash2;
 
 	/* Lookup redirect from BPF */
-	if (static_branch_unlikely(&bpf_sk_lookup_enabled) &&
-	    hashinfo == net->ipv4.tcp_death_row.hashinfo) {
-		result = inet_lookup_run_sk_lookup(net, IPPROTO_TCP, skb, doff,
-						   saddr, sport, daddr, hnum, dif,
-						   inet_ehashfn);
+	if (static_branch_unlikely(&bpf_sk_lookup_enabled)) {
+		result = inet_lookup_run_bpf(net, hashinfo, skb, doff,
+					     saddr, sport, daddr, hnum, dif);
 		if (result)
 			goto done;
 	}
@@ -676,8 +650,20 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	spin_lock(lock);
 	if (osk) {
 		WARN_ON_ONCE(sk->sk_hash != osk->sk_hash);
-		ret = sk_nulls_del_node_init_rcu(osk);
-	} else if (found_dup_sk) {
+		ret = sk_hashed(osk);
+		if (ret) {
+			/* Before deleting the node, we insert a new one to make
+			 * sure that the look-up-sk process would not miss either
+			 * of them and that at least one node would exist in ehash
+			 * table all the time. Otherwise there's a tiny chance
+			 * that lookup process could find nothing in ehash table.
+			 */
+			__sk_nulls_add_node_tail_rcu(sk, list);
+			sk_nulls_del_node_init_rcu(osk);
+		}
+		goto unlock;
+	}
+	if (found_dup_sk) {
 		*found_dup_sk = inet_ehash_lookup_by_sk(sk, list);
 		if (*found_dup_sk)
 			ret = false;
@@ -686,6 +672,7 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	if (ret)
 		__sk_nulls_add_node_rcu(sk, list);
 
+unlock:
 	spin_unlock(lock);
 
 	return ret;
@@ -751,12 +738,12 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 		if (err)
 			goto unlock;
 	}
-	sock_set_flag(sk, SOCK_RCU_FREE);
 	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
 		sk->sk_family == AF_INET6)
 		__sk_nulls_add_node_tail_rcu(sk, &ilb2->nulls_head);
 	else
 		__sk_nulls_add_node_rcu(sk, &ilb2->nulls_head);
+	sock_set_flag(sk, SOCK_RCU_FREE);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 unlock:
 	spin_unlock(&ilb2->lock);
@@ -821,33 +808,41 @@ static bool inet_bind2_bucket_match(const struct inet_bind2_bucket *tb,
 				    const struct net *net, unsigned short port,
 				    int l3mdev, const struct sock *sk)
 {
-	if (!net_eq(ib2_net(tb), net) || tb->port != port ||
-	    tb->l3mdev != l3mdev)
+#if IS_ENABLED(CONFIG_IPV6)
+	if (sk->sk_family != tb->family)
 		return false;
 
-	return inet_bind2_bucket_addr_match(tb, sk);
+	if (sk->sk_family == AF_INET6)
+		return net_eq(ib2_net(tb), net) && tb->port == port &&
+			tb->l3mdev == l3mdev &&
+			ipv6_addr_equal(&tb->v6_rcv_saddr, &sk->sk_v6_rcv_saddr);
+	else
+#endif
+		return net_eq(ib2_net(tb), net) && tb->port == port &&
+			tb->l3mdev == l3mdev && tb->rcv_saddr == sk->sk_rcv_saddr;
 }
 
 bool inet_bind2_bucket_match_addr_any(const struct inet_bind2_bucket *tb, const struct net *net,
 				      unsigned short port, int l3mdev, const struct sock *sk)
 {
-	if (!net_eq(ib2_net(tb), net) || tb->port != port ||
-	    tb->l3mdev != l3mdev)
-		return false;
-
 #if IS_ENABLED(CONFIG_IPV6)
 	if (sk->sk_family != tb->family) {
 		if (sk->sk_family == AF_INET)
-			return ipv6_addr_any(&tb->v6_rcv_saddr) ||
-				ipv6_addr_v4mapped_any(&tb->v6_rcv_saddr);
+			return net_eq(ib2_net(tb), net) && tb->port == port &&
+				tb->l3mdev == l3mdev &&
+				ipv6_addr_any(&tb->v6_rcv_saddr);
 
 		return false;
 	}
 
 	if (sk->sk_family == AF_INET6)
-		return ipv6_addr_any(&tb->v6_rcv_saddr);
+		return net_eq(ib2_net(tb), net) && tb->port == port &&
+			tb->l3mdev == l3mdev &&
+			ipv6_addr_any(&tb->v6_rcv_saddr);
+	else
 #endif
-	return tb->rcv_saddr == 0;
+		return net_eq(ib2_net(tb), net) && tb->port == port &&
+			tb->l3mdev == l3mdev && tb->rcv_saddr == 0;
 }
 
 /* The socket's bhash2 hashbucket spinlock must be held when this is called */

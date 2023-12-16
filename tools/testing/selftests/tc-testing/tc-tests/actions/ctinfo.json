@@ -6,9 +6,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC action flush action ctinfo",
@@ -33,9 +30,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -60,9 +54,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC action flush action ctinfo",
@@ -87,9 +78,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC action flush action ctinfo",
@@ -114,9 +102,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -147,9 +132,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -180,9 +162,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -213,9 +192,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC action flush action ctinfo",
@@ -243,9 +219,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -273,9 +246,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -301,9 +271,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",
@@ -328,9 +295,6 @@
             "actions",
             "ctinfo"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action ctinfo",

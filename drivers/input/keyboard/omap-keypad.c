@@ -287,7 +287,7 @@ err2:
 	return -EINVAL;
 }
 
-static void omap_kp_remove(struct platform_device *pdev)
+static int omap_kp_remove(struct platform_device *pdev)
 {
 	struct omap_kp *omap_kp = platform_get_drvdata(pdev);
 
@@ -303,11 +303,13 @@ static void omap_kp_remove(struct platform_device *pdev)
 	input_unregister_device(omap_kp->input);
 
 	kfree(omap_kp);
+
+	return 0;
 }
 
 static struct platform_driver omap_kp_driver = {
 	.probe		= omap_kp_probe,
-	.remove_new	= omap_kp_remove,
+	.remove		= omap_kp_remove,
 	.driver		= {
 		.name	= "omap-keypad",
 	},

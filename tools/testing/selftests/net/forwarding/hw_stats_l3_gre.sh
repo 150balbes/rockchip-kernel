@@ -99,8 +99,6 @@ test_stats_rx()
 	test_stats g2a rx
 }
 
-skip_on_veth
-
 trap cleanup EXIT
 
 setup_prepare

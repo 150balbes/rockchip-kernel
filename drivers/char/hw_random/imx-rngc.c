@@ -51,8 +51,8 @@
 
 #define RNGC_ERROR_STATUS_STAT_ERR	0x00000008
 
-#define RNGC_SELFTEST_TIMEOUT 2500 /* us */
-#define RNGC_SEED_TIMEOUT      200 /* ms */
+#define RNGC_TIMEOUT  3000 /* 3 sec */
+
 
 static bool self_test = true;
 module_param(self_test, bool, 0);
@@ -110,8 +110,7 @@ static int imx_rngc_self_test(struct imx_rngc *rngc)
 	cmd = readl(rngc->base + RNGC_COMMAND);
 	writel(cmd | RNGC_CMD_SELF_TEST, rngc->base + RNGC_COMMAND);
 
-	ret = wait_for_completion_timeout(&rngc->rng_op_done,
-					  usecs_to_jiffies(RNGC_SELFTEST_TIMEOUT));
+	ret = wait_for_completion_timeout(&rngc->rng_op_done, msecs_to_jiffies(RNGC_TIMEOUT));
 	imx_rngc_irq_mask_clear(rngc);
 	if (!ret)
 		return -ETIMEDOUT;
@@ -183,8 +182,7 @@ static int imx_rngc_init(struct hwrng *rng)
 		cmd = readl(rngc->base + RNGC_COMMAND);
 		writel(cmd | RNGC_CMD_SEED, rngc->base + RNGC_COMMAND);
 
-		ret = wait_for_completion_timeout(&rngc->rng_op_done,
-						  msecs_to_jiffies(RNGC_SEED_TIMEOUT));
+		ret = wait_for_completion_timeout(&rngc->rng_op_done, msecs_to_jiffies(RNGC_TIMEOUT));
 		if (!ret) {
 			ret = -ETIMEDOUT;
 			goto err;
@@ -241,8 +239,10 @@ static int __init imx_rngc_probe(struct platform_device *pdev)
 		return PTR_ERR(rngc->base);
 
 	rngc->clk = devm_clk_get_enabled(&pdev->dev, NULL);
-	if (IS_ERR(rngc->clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rngc->clk), "Cannot get rng_clk\n");
+	if (IS_ERR(rngc->clk)) {
+		dev_err(&pdev->dev, "Can not get rng_clk\n");
+		return PTR_ERR(rngc->clk);
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -272,18 +272,24 @@ static int __init imx_rngc_probe(struct platform_device *pdev)
 
 	ret = devm_request_irq(&pdev->dev,
 			irq, imx_rngc_irq, 0, pdev->name, (void *)rngc);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "Can't get interrupt working.\n");
+	if (ret) {
+		dev_err(rngc->dev, "Can't get interrupt working.\n");
+		return ret;
+	}
 
 	if (self_test) {
 		ret = imx_rngc_self_test(rngc);
-		if (ret)
-			return dev_err_probe(&pdev->dev, ret, "self test failed\n");
+		if (ret) {
+			dev_err(rngc->dev, "self test failed\n");
+			return ret;
+		}
 	}
 
 	ret = devm_hwrng_register(&pdev->dev, &rngc->rng);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "hwrng registration failed\n");
+	if (ret) {
+		dev_err(&pdev->dev, "hwrng registration failed\n");
+		return ret;
+	}
 
 	dev_info(&pdev->dev,
 		"Freescale RNG%c registered (HW revision %d.%02d)\n",

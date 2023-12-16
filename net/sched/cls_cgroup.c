@@ -222,5 +222,4 @@ static void __exit exit_cgroup_cls(void)
 
 module_init(init_cgroup_cls);
 module_exit(exit_cgroup_cls);
-MODULE_DESCRIPTION("TC cgroup classifier");
 MODULE_LICENSE("GPL");

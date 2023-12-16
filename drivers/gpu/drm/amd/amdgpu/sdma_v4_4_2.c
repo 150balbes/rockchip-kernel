@@ -132,8 +132,7 @@ static int sdma_v4_4_2_init_microcode(struct amdgpu_device *adev)
 	int ret, i;
 
 	for (i = 0; i < adev->sdma.num_instances; i++) {
-		if (amdgpu_ip_version(adev, SDMA0_HWIP, 0) ==
-		    IP_VERSION(4, 4, 2)) {
+		if (adev->ip_versions[SDMA0_HWIP][0] == IP_VERSION(4, 4, 2)) {
 			ret = amdgpu_sdma_init_microcode(adev, 0, true);
 			break;
 		} else {
@@ -155,13 +154,13 @@ static int sdma_v4_4_2_init_microcode(struct amdgpu_device *adev)
  */
 static uint64_t sdma_v4_4_2_ring_get_rptr(struct amdgpu_ring *ring)
 {
-	u64 rptr;
+	u64 *rptr;
 
 	/* XXX check if swapping is necessary on BE */
-	rptr = READ_ONCE(*((u64 *)&ring->adev->wb.wb[ring->rptr_offs]));
+	rptr = ((u64 *)&ring->adev->wb.wb[ring->rptr_offs]);
 
-	DRM_DEBUG("rptr before shift == 0x%016llx\n", rptr);
-	return rptr >> 2;
+	DRM_DEBUG("rptr before shift == 0x%016llx\n", *rptr);
+	return ((*rptr) >> 2);
 }
 
 /**
@@ -427,7 +426,6 @@ static void sdma_v4_4_2_inst_gfx_stop(struct amdgpu_device *adev,
 				      uint32_t inst_mask)
 {
 	struct amdgpu_ring *sdma[AMDGPU_MAX_SDMA_INSTANCES];
-	u32 doorbell_offset, doorbell;
 	u32 rb_cntl, ib_cntl;
 	int i, unset = 0;
 
@@ -445,18 +443,6 @@ static void sdma_v4_4_2_inst_gfx_stop(struct amdgpu_device *adev,
 		ib_cntl = RREG32_SDMA(i, regSDMA_GFX_IB_CNTL);
 		ib_cntl = REG_SET_FIELD(ib_cntl, SDMA_GFX_IB_CNTL, IB_ENABLE, 0);
 		WREG32_SDMA(i, regSDMA_GFX_IB_CNTL, ib_cntl);
-
-		if (sdma[i]->use_doorbell) {
-			doorbell = RREG32_SDMA(i, regSDMA_GFX_DOORBELL);
-			doorbell_offset = RREG32_SDMA(i, regSDMA_GFX_DOORBELL_OFFSET);
-
-			doorbell = REG_SET_FIELD(doorbell, SDMA_GFX_DOORBELL, ENABLE, 0);
-			doorbell_offset = REG_SET_FIELD(doorbell_offset,
-					SDMA_GFX_DOORBELL_OFFSET,
-					OFFSET, 0);
-			WREG32_SDMA(i, regSDMA_GFX_DOORBELL, doorbell);
-			WREG32_SDMA(i, regSDMA_GFX_DOORBELL_OFFSET, doorbell_offset);
-		}
 	}
 }
 
@@ -644,6 +630,12 @@ static void sdma_v4_4_2_gfx_resume(struct amdgpu_device *adev, unsigned int i)
 	rb_cntl = sdma_v4_4_2_rb_cntl(ring, rb_cntl);
 	WREG32_SDMA(i, regSDMA_GFX_RB_CNTL, rb_cntl);
 
+	/* Initialize the ring buffer's read and write pointers */
+	WREG32_SDMA(i, regSDMA_GFX_RB_RPTR, 0);
+	WREG32_SDMA(i, regSDMA_GFX_RB_RPTR_HI, 0);
+	WREG32_SDMA(i, regSDMA_GFX_RB_WPTR, 0);
+	WREG32_SDMA(i, regSDMA_GFX_RB_WPTR_HI, 0);
+
 	/* set the wb address whether it's enabled or not */
 	WREG32_SDMA(i, regSDMA_GFX_RB_RPTR_ADDR_HI,
 	       upper_32_bits(adev->wb.gpu_addr + wb_offset) & 0xFFFFFFFF);
@@ -660,12 +652,6 @@ static void sdma_v4_4_2_gfx_resume(struct amdgpu_device *adev, unsigned int i)
 
 	/* before programing wptr to a less value, need set minor_ptr_update first */
 	WREG32_SDMA(i, regSDMA_GFX_MINOR_PTR_UPDATE, 1);
-
-	/* Initialize the ring buffer's read and write pointers */
-	WREG32_SDMA(i, regSDMA_GFX_RB_RPTR, 0);
-	WREG32_SDMA(i, regSDMA_GFX_RB_RPTR_HI, 0);
-	WREG32_SDMA(i, regSDMA_GFX_RB_WPTR, 0);
-	WREG32_SDMA(i, regSDMA_GFX_RB_WPTR_HI, 0);
 
 	doorbell = RREG32_SDMA(i, regSDMA_GFX_DOORBELL);
 	doorbell_offset = RREG32_SDMA(i, regSDMA_GFX_DOORBELL_OFFSET);
@@ -1245,7 +1231,7 @@ static void sdma_v4_4_2_ring_emit_reg_wait(struct amdgpu_ring *ring, uint32_t re
 
 static bool sdma_v4_4_2_fw_support_paging_queue(struct amdgpu_device *adev)
 {
-	switch (amdgpu_ip_version(adev, SDMA0_HWIP, 0)) {
+	switch (adev->ip_versions[SDMA0_HWIP][0]) {
 	case IP_VERSION(4, 4, 2):
 		return false;
 	default:
@@ -1259,8 +1245,10 @@ static int sdma_v4_4_2_early_init(void *handle)
 	int r;
 
 	r = sdma_v4_4_2_init_microcode(adev);
-	if (r)
+	if (r) {
+		DRM_ERROR("Failed to load sdma firmware!\n");
 		return r;
+	}
 
 	/* TODO: Page queue breaks driver reload under SRIOV */
 	if (sdma_v4_4_2_fw_support_paging_queue(adev))
@@ -1289,8 +1277,11 @@ static int sdma_v4_4_2_late_init(void *handle)
 		.cb = sdma_v4_4_2_process_ras_data_cb,
 	};
 #endif
-	if (!amdgpu_persistent_edc_harvesting_supported(adev))
-		amdgpu_ras_reset_error_count(adev, AMDGPU_RAS_BLOCK__SDMA);
+	if (!amdgpu_persistent_edc_harvesting_supported(adev)) {
+		if (adev->sdma.ras && adev->sdma.ras->ras_block.hw_ops &&
+		    adev->sdma.ras->ras_block.hw_ops->reset_ras_error_count)
+			adev->sdma.ras->ras_block.hw_ops->reset_ras_error_count(adev);
+	}
 
 	return 0;
 }
@@ -1410,7 +1401,7 @@ static int sdma_v4_4_2_sw_fini(void *handle)
 			amdgpu_ring_fini(&adev->sdma.instance[i].page);
 	}
 
-	if (amdgpu_ip_version(adev, SDMA0_HWIP, 0) == IP_VERSION(4, 4, 2))
+	if (adev->ip_versions[SDMA0_HWIP][0] == IP_VERSION(4, 4, 2))
 		amdgpu_sdma_destroy_inst_ctx(adev, true);
 	else
 		amdgpu_sdma_destroy_inst_ctx(adev, false);
@@ -2061,7 +2052,7 @@ const struct amdgpu_ip_block_version sdma_v4_4_2_ip_block = {
 	.type = AMD_IP_BLOCK_TYPE_SDMA,
 	.major = 4,
 	.minor = 4,
-	.rev = 2,
+	.rev = 0,
 	.funcs = &sdma_v4_4_2_ip_funcs,
 };
 
@@ -2140,11 +2131,6 @@ static void sdma_v4_4_2_inst_query_ras_error_count(struct amdgpu_device *adev,
 {
 	struct ras_err_data *err_data = (struct ras_err_data *)ras_err_status;
 	uint32_t sdma_dev_inst = GET_INST(SDMA0, sdma_inst);
-	unsigned long ue_count = 0;
-	struct amdgpu_smuio_mcm_config_info mcm_info = {
-		.socket_id = adev->smuio.funcs->get_socket_id(adev),
-		.die_id = adev->sdma.instance[sdma_inst].aid_id,
-	};
 
 	/* sdma v4_4_2 doesn't support query ce counts */
 	amdgpu_ras_inst_query_ras_error_count(adev,
@@ -2154,9 +2140,7 @@ static void sdma_v4_4_2_inst_query_ras_error_count(struct amdgpu_device *adev,
 					ARRAY_SIZE(sdma_v4_4_2_ras_memory_list),
 					sdma_dev_inst,
 					AMDGPU_RAS_ERROR__MULTI_UNCORRECTABLE,
-					&ue_count);
-
-	amdgpu_ras_error_statistic_ue_count(err_data, &mcm_info, ue_count);
+					&err_data->ue_count);
 }
 
 static void sdma_v4_4_2_query_ras_error_count(struct amdgpu_device *adev,

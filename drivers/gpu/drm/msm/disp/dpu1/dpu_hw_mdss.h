@@ -101,6 +101,11 @@ enum dpu_hw_blk_type {
 	DPU_HW_BLK_MAX,
 };
 
+enum dpu_mdp {
+	MDP_TOP = 0x1,
+	MDP_MAX,
+};
+
 enum dpu_sspp {
 	SSPP_NONE,
 	SSPP_VIG0,

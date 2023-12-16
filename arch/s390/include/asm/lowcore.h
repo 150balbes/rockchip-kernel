@@ -11,7 +11,6 @@
 
 #include <linux/types.h>
 #include <asm/ptrace.h>
-#include <asm/ctlreg.h>
 #include <asm/cpu.h>
 #include <asm/types.h>
 
@@ -140,8 +139,8 @@ struct lowcore {
 	__u32	restart_flags;			/* 0x0384 */
 
 	/* Address space pointer. */
-	struct ctlreg kernel_asce;		/* 0x0388 */
-	struct ctlreg user_asce;		/* 0x0390 */
+	__u64	kernel_asce;			/* 0x0388 */
+	__u64	user_asce;			/* 0x0390 */
 
 	/*
 	 * The lpp and current_pid fields form a
@@ -200,7 +199,7 @@ struct lowcore {
 	__u32	clock_comp_save_area[2];	/* 0x1330 */
 	__u64	last_break_save_area;		/* 0x1338 */
 	__u32	access_regs_save_area[16];	/* 0x1340 */
-	struct ctlreg cregs_save_area[16];	/* 0x1380 */
+	__u64	cregs_save_area[16];		/* 0x1380 */
 	__u8	pad_0x1400[0x1500-0x1400];	/* 0x1400 */
 	/* Cryptography-counter designation */
 	__u64	ccd;				/* 0x1500 */
@@ -220,6 +219,14 @@ extern struct lowcore *lowcore_ptr[];
 static inline void set_prefix(__u32 address)
 {
 	asm volatile("spx %0" : : "Q" (address) : "memory");
+}
+
+static inline __u32 store_prefix(void)
+{
+	__u32 address;
+
+	asm volatile("stpx %0" : "=Q" (address));
+	return address;
 }
 
 #endif /* _ASM_S390_LOWCORE_H */

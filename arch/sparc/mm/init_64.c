@@ -195,26 +195,21 @@ atomic_t dcpage_flushes_xcall = ATOMIC_INIT(0);
 #endif
 #endif
 
-inline void flush_dcache_folio_impl(struct folio *folio)
+inline void flush_dcache_page_impl(struct page *page)
 {
-	unsigned int i, nr = folio_nr_pages(folio);
-
 	BUG_ON(tlb_type == hypervisor);
 #ifdef CONFIG_DEBUG_DCFLUSH
 	atomic_inc(&dcpage_flushes);
 #endif
 
 #ifdef DCACHE_ALIASING_POSSIBLE
-	for (i = 0; i < nr; i++)
-		__flush_dcache_page(folio_address(folio) + i * PAGE_SIZE,
-				    ((tlb_type == spitfire) &&
-				     folio_flush_mapping(folio) != NULL));
+	__flush_dcache_page(page_address(page),
+			    ((tlb_type == spitfire) &&
+			     page_mapping_file(page) != NULL));
 #else
-	if (folio_flush_mapping(folio) != NULL &&
-	    tlb_type == spitfire) {
-		for (i = 0; i < nr; i++)
-			__flush_icache_page((pfn + i) * PAGE_SIZE);
-	}
+	if (page_mapping_file(page) != NULL &&
+	    tlb_type == spitfire)
+		__flush_icache_page(__pa(page_address(page)));
 #endif
 }
 
@@ -223,10 +218,10 @@ inline void flush_dcache_folio_impl(struct folio *folio)
 #define PG_dcache_cpu_mask	\
 	((1UL<<ilog2(roundup_pow_of_two(NR_CPUS)))-1UL)
 
-#define dcache_dirty_cpu(folio) \
-	(((folio)->flags >> PG_dcache_cpu_shift) & PG_dcache_cpu_mask)
+#define dcache_dirty_cpu(page) \
+	(((page)->flags >> PG_dcache_cpu_shift) & PG_dcache_cpu_mask)
 
-static inline void set_dcache_dirty(struct folio *folio, int this_cpu)
+static inline void set_dcache_dirty(struct page *page, int this_cpu)
 {
 	unsigned long mask = this_cpu;
 	unsigned long non_cpu_bits;
@@ -243,11 +238,11 @@ static inline void set_dcache_dirty(struct folio *folio, int this_cpu)
 			     "bne,pn	%%xcc, 1b\n\t"
 			     " nop"
 			     : /* no outputs */
-			     : "r" (mask), "r" (non_cpu_bits), "r" (&folio->flags)
+			     : "r" (mask), "r" (non_cpu_bits), "r" (&page->flags)
 			     : "g1", "g7");
 }
 
-static inline void clear_dcache_dirty_cpu(struct folio *folio, unsigned long cpu)
+static inline void clear_dcache_dirty_cpu(struct page *page, unsigned long cpu)
 {
 	unsigned long mask = (1UL << PG_dcache_dirty);
 
@@ -265,7 +260,7 @@ static inline void clear_dcache_dirty_cpu(struct folio *folio, unsigned long cpu
 			     " nop\n"
 			     "2:"
 			     : /* no outputs */
-			     : "r" (cpu), "r" (mask), "r" (&folio->flags),
+			     : "r" (cpu), "r" (mask), "r" (&page->flags),
 			       "i" (PG_dcache_cpu_mask),
 			       "i" (PG_dcache_cpu_shift)
 			     : "g1", "g7");
@@ -289,10 +284,9 @@ static void flush_dcache(unsigned long pfn)
 
 	page = pfn_to_page(pfn);
 	if (page) {
-		struct folio *folio = page_folio(page);
 		unsigned long pg_flags;
 
-		pg_flags = folio->flags;
+		pg_flags = page->flags;
 		if (pg_flags & (1UL << PG_dcache_dirty)) {
 			int cpu = ((pg_flags >> PG_dcache_cpu_shift) &
 				   PG_dcache_cpu_mask);
@@ -302,11 +296,11 @@ static void flush_dcache(unsigned long pfn)
 			 * in the SMP case.
 			 */
 			if (cpu == this_cpu)
-				flush_dcache_folio_impl(folio);
+				flush_dcache_page_impl(page);
 			else
-				smp_flush_dcache_folio_impl(folio, cpu);
+				smp_flush_dcache_page_impl(page, cpu);
 
-			clear_dcache_dirty_cpu(folio, cpu);
+			clear_dcache_dirty_cpu(page, cpu);
 
 			put_cpu();
 		}
@@ -394,14 +388,12 @@ bool __init arch_hugetlb_valid_size(unsigned long size)
 }
 #endif	/* CONFIG_HUGETLB_PAGE */
 
-void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
-		unsigned long address, pte_t *ptep, unsigned int nr)
+void update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t *ptep)
 {
 	struct mm_struct *mm;
 	unsigned long flags;
 	bool is_huge_tsb;
 	pte_t pte = *ptep;
-	unsigned int i;
 
 	if (tlb_type != hypervisor) {
 		unsigned long pfn = pte_pfn(pte);
@@ -448,21 +440,15 @@ void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
 		}
 	}
 #endif
-	if (!is_huge_tsb) {
-		for (i = 0; i < nr; i++) {
-			__update_mmu_tsb_insert(mm, MM_TSB_BASE, PAGE_SHIFT,
-						address, pte_val(pte));
-			address += PAGE_SIZE;
-			pte_val(pte) += PAGE_SIZE;
-		}
-	}
+	if (!is_huge_tsb)
+		__update_mmu_tsb_insert(mm, MM_TSB_BASE, PAGE_SHIFT,
+					address, pte_val(pte));
 
 	spin_unlock_irqrestore(&mm->context.lock, flags);
 }
 
-void flush_dcache_folio(struct folio *folio)
+void flush_dcache_page(struct page *page)
 {
-	unsigned long pfn = folio_pfn(folio);
 	struct address_space *mapping;
 	int this_cpu;
 
@@ -473,35 +459,35 @@ void flush_dcache_folio(struct folio *folio)
 	 * is merely the zero page.  The 'bigcore' testcase in GDB
 	 * causes this case to run millions of times.
 	 */
-	if (is_zero_pfn(pfn))
+	if (page == ZERO_PAGE(0))
 		return;
 
 	this_cpu = get_cpu();
 
-	mapping = folio_flush_mapping(folio);
+	mapping = page_mapping_file(page);
 	if (mapping && !mapping_mapped(mapping)) {
-		bool dirty = test_bit(PG_dcache_dirty, &folio->flags);
+		int dirty = test_bit(PG_dcache_dirty, &page->flags);
 		if (dirty) {
-			int dirty_cpu = dcache_dirty_cpu(folio);
+			int dirty_cpu = dcache_dirty_cpu(page);
 
 			if (dirty_cpu == this_cpu)
 				goto out;
-			smp_flush_dcache_folio_impl(folio, dirty_cpu);
+			smp_flush_dcache_page_impl(page, dirty_cpu);
 		}
-		set_dcache_dirty(folio, this_cpu);
+		set_dcache_dirty(page, this_cpu);
 	} else {
 		/* We could delay the flush for the !page_mapping
 		 * case too.  But that case is for exec env/arg
 		 * pages and those are %99 certainly going to get
 		 * faulted into the tlb (and thus flushed) anyways.
 		 */
-		flush_dcache_folio_impl(folio);
+		flush_dcache_page_impl(page);
 	}
 
 out:
 	put_cpu();
 }
-EXPORT_SYMBOL(flush_dcache_folio);
+EXPORT_SYMBOL(flush_dcache_page);
 
 void __kprobes flush_icache_range(unsigned long start, unsigned long end)
 {
@@ -2294,10 +2280,10 @@ void __init paging_init(void)
 	setup_page_offset();
 
 	/* These build time checkes make sure that the dcache_dirty_cpu()
-	 * folio->flags usage will work.
+	 * page->flags usage will work.
 	 *
 	 * When a page gets marked as dcache-dirty, we store the
-	 * cpu number starting at bit 32 in the folio->flags.  Also,
+	 * cpu number starting at bit 32 in the page->flags.  Also,
 	 * functions like clear_dcache_dirty_cpu use the cpu mask
 	 * in 13-bit signed-immediate instruction fields.
 	 */
@@ -2907,15 +2893,14 @@ pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
 
 pgtable_t pte_alloc_one(struct mm_struct *mm)
 {
-	struct ptdesc *ptdesc = pagetable_alloc(GFP_KERNEL | __GFP_ZERO, 0);
-
-	if (!ptdesc)
+	struct page *page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!page)
 		return NULL;
-	if (!pagetable_pte_ctor(ptdesc)) {
-		pagetable_free(ptdesc);
+	if (!pgtable_pte_page_ctor(page)) {
+		__free_page(page);
 		return NULL;
 	}
-	return ptdesc_address(ptdesc);
+	return (pte_t *) page_address(page);
 }
 
 void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
@@ -2925,10 +2910,10 @@ void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
 
 static void __pte_free(pgtable_t pte)
 {
-	struct ptdesc *ptdesc = virt_to_ptdesc(pte);
+	struct page *page = virt_to_page(pte);
 
-	pagetable_pte_dtor(ptdesc);
-	pagetable_free(ptdesc);
+	pgtable_pte_page_dtor(page);
+	__free_page(page);
 }
 
 void pte_free(struct mm_struct *mm, pgtable_t pte)
@@ -2945,22 +2930,6 @@ void pgtable_free(void *table, bool is_page)
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-static void pte_free_now(struct rcu_head *head)
-{
-	struct page *page;
-
-	page = container_of(head, struct page, rcu_head);
-	__pte_free((pgtable_t)page_address(page));
-}
-
-void pte_free_defer(struct mm_struct *mm, pgtable_t pgtable)
-{
-	struct page *page;
-
-	page = virt_to_page(pgtable);
-	call_rcu(&page->rcu_head, pte_free_now);
-}
-
 void update_mmu_cache_pmd(struct vm_area_struct *vma, unsigned long addr,
 			  pmd_t *pmd)
 {

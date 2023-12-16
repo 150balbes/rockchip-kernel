@@ -84,7 +84,7 @@ test_platform_device_register_node(char *name, int id, int nid)
 
 	pdev = platform_device_alloc(name, id);
 	if (!pdev)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	if (nid != NUMA_NO_NODE)
 		set_dev_node(&pdev->dev, nid);

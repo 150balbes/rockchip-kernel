@@ -30,6 +30,7 @@
 #include <linux/phy.h>
 #include <linux/fec.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/of_net.h>
 
@@ -442,21 +443,21 @@ static int fec_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
  */
 static int fec_ptp_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts)
 {
-	struct fec_enet_private *fep =
+	struct fec_enet_private *adapter =
 	    container_of(ptp, struct fec_enet_private, ptp_caps);
 	u64 ns;
 	unsigned long flags;
 
-	mutex_lock(&fep->ptp_clk_mutex);
+	mutex_lock(&adapter->ptp_clk_mutex);
 	/* Check the ptp clock */
-	if (!fep->ptp_clk_on) {
-		mutex_unlock(&fep->ptp_clk_mutex);
+	if (!adapter->ptp_clk_on) {
+		mutex_unlock(&adapter->ptp_clk_mutex);
 		return -EINVAL;
 	}
-	spin_lock_irqsave(&fep->tmreg_lock, flags);
-	ns = timecounter_read(&fep->tc);
-	spin_unlock_irqrestore(&fep->tmreg_lock, flags);
-	mutex_unlock(&fep->ptp_clk_mutex);
+	spin_lock_irqsave(&adapter->tmreg_lock, flags);
+	ns = timecounter_read(&adapter->tc);
+	spin_unlock_irqrestore(&adapter->tmreg_lock, flags);
+	mutex_unlock(&adapter->ptp_clk_mutex);
 
 	*ts = ns_to_timespec64(ns);
 
@@ -605,12 +606,28 @@ static int fec_ptp_enable(struct ptp_clock_info *ptp,
 	}
 }
 
-int fec_ptp_set(struct net_device *ndev, struct kernel_hwtstamp_config *config,
-		struct netlink_ext_ack *extack)
+/**
+ * fec_ptp_disable_hwts - disable hardware time stamping
+ * @ndev: pointer to net_device
+ */
+void fec_ptp_disable_hwts(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
 
-	switch (config->tx_type) {
+	fep->hwts_tx_en = 0;
+	fep->hwts_rx_en = 0;
+}
+
+int fec_ptp_set(struct net_device *ndev, struct ifreq *ifr)
+{
+	struct fec_enet_private *fep = netdev_priv(ndev);
+
+	struct hwtstamp_config config;
+
+	if (copy_from_user(&config, ifr->ifr_data, sizeof(config)))
+		return -EFAULT;
+
+	switch (config.tx_type) {
 	case HWTSTAMP_TX_OFF:
 		fep->hwts_tx_en = 0;
 		break;
@@ -621,28 +638,33 @@ int fec_ptp_set(struct net_device *ndev, struct kernel_hwtstamp_config *config,
 		return -ERANGE;
 	}
 
-	switch (config->rx_filter) {
+	switch (config.rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
 		fep->hwts_rx_en = 0;
 		break;
 
 	default:
 		fep->hwts_rx_en = 1;
-		config->rx_filter = HWTSTAMP_FILTER_ALL;
+		config.rx_filter = HWTSTAMP_FILTER_ALL;
 		break;
 	}
 
-	return 0;
+	return copy_to_user(ifr->ifr_data, &config, sizeof(config)) ?
+	    -EFAULT : 0;
 }
 
-void fec_ptp_get(struct net_device *ndev, struct kernel_hwtstamp_config *config)
+int fec_ptp_get(struct net_device *ndev, struct ifreq *ifr)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
+	struct hwtstamp_config config;
 
-	config->flags = 0;
-	config->tx_type = fep->hwts_tx_en ? HWTSTAMP_TX_ON : HWTSTAMP_TX_OFF;
-	config->rx_filter = (fep->hwts_rx_en ?
-			     HWTSTAMP_FILTER_ALL : HWTSTAMP_FILTER_NONE);
+	config.flags = 0;
+	config.tx_type = fep->hwts_tx_en ? HWTSTAMP_TX_ON : HWTSTAMP_TX_OFF;
+	config.rx_filter = (fep->hwts_rx_en ?
+			    HWTSTAMP_FILTER_ALL : HWTSTAMP_FILTER_NONE);
+
+	return copy_to_user(ifr->ifr_data, &config, sizeof(config)) ?
+		-EFAULT : 0;
 }
 
 /*

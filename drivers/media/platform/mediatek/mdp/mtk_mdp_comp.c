@@ -7,6 +7,8 @@
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_platform.h>
 
 #include "mtk_mdp_comp.h"
 

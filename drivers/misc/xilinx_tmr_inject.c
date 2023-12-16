@@ -11,8 +11,7 @@
 
 #include <asm/xilinx_mb_manager.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/fault-inject.h>
 
 /* TMR Inject Register offsets */

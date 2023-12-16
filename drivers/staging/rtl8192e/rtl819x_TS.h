@@ -10,6 +10,7 @@
 #define TS_ADDBA_DELAY		60
 
 #define TOTAL_TS_NUM		16
+#define TCLAS_NUM		4
 
 enum tr_select {
 	TX_DIR = 0,
@@ -18,8 +19,13 @@ enum tr_select {
 
 struct ts_common_info {
 	struct list_head		List;
-	u8				addr[ETH_ALEN];
-	struct qos_tsinfo TSpec;
+	struct timer_list		SetupTimer;
+	struct timer_list		InactTimer;
+	u8				Addr[ETH_ALEN];
+	union tspec_body TSpec;
+	union qos_tclas TClass[TCLAS_NUM];
+	u8				TClasProc;
+	u8				TClasNum;
 };
 
 struct tx_ts_record {

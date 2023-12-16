@@ -16,15 +16,15 @@ extern void fsstack_copy_inode_size(struct inode *dst, struct inode *src);
 static inline void fsstack_copy_attr_atime(struct inode *dest,
 					   const struct inode *src)
 {
-	inode_set_atime_to_ts(dest, inode_get_atime(src));
+	dest->i_atime = src->i_atime;
 }
 
 static inline void fsstack_copy_attr_times(struct inode *dest,
 					   const struct inode *src)
 {
-	inode_set_atime_to_ts(dest, inode_get_atime(src));
-	inode_set_mtime_to_ts(dest, inode_get_mtime(src));
-	inode_set_ctime_to_ts(dest, inode_get_ctime(src));
+	dest->i_atime = src->i_atime;
+	dest->i_mtime = src->i_mtime;
+	dest->i_ctime = src->i_ctime;
 }
 
 #endif /* _LINUX_FS_STACK_H */

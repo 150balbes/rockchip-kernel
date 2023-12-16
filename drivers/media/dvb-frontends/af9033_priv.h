@@ -14,7 +14,7 @@
 #include <linux/math64.h>
 #include <linux/regmap.h>
 #include <linux/kernel.h>
-#include <linux/int_log.h>
+#include <media/dvb_math.h>
 
 struct reg_val {
 	u32 reg;

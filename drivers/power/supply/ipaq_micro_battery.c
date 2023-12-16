@@ -265,7 +265,7 @@ batt_err:
 	return ret;
 }
 
-static void micro_batt_remove(struct platform_device *pdev)
+static int micro_batt_remove(struct platform_device *pdev)
 
 {
 	struct micro_battery *mb = platform_get_drvdata(pdev);
@@ -274,6 +274,8 @@ static void micro_batt_remove(struct platform_device *pdev)
 	power_supply_unregister(micro_batt_power);
 	cancel_delayed_work_sync(&mb->update);
 	destroy_workqueue(mb->wq);
+
+	return 0;
 }
 
 static int __maybe_unused micro_batt_suspend(struct device *dev)
@@ -302,7 +304,7 @@ static struct platform_driver micro_batt_device_driver = {
 		.pm	= &micro_batt_dev_pm_ops,
 	},
 	.probe		= micro_batt_probe,
-	.remove_new	= micro_batt_remove,
+	.remove		= micro_batt_remove,
 };
 module_platform_driver(micro_batt_device_driver);
 

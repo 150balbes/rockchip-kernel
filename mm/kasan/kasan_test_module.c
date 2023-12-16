@@ -5,7 +5,7 @@
  * Author: Andrey Ryabinin <a.ryabinin@samsung.com>
  */
 
-#define pr_fmt(fmt) "kasan: test: " fmt
+#define pr_fmt(fmt) "kasan test: %s " fmt, __func__
 
 #include <linux/mman.h>
 #include <linux/module.h>

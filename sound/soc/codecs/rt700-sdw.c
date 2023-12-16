@@ -452,7 +452,9 @@ static int rt700_sdw_probe(struct sdw_slave *slave,
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	return rt700_init(&slave->dev, sdw_regmap, regmap, slave);
+	rt700_init(&slave->dev, sdw_regmap, regmap, slave);
+
+	return 0;
 }
 
 static int rt700_sdw_remove(struct sdw_slave *slave)
@@ -464,7 +466,8 @@ static int rt700_sdw_remove(struct sdw_slave *slave)
 		cancel_delayed_work_sync(&rt700->jack_btn_check_work);
 	}
 
-	pm_runtime_disable(&slave->dev);
+	if (rt700->first_hw_init)
+		pm_runtime_disable(&slave->dev);
 
 	return 0;
 }

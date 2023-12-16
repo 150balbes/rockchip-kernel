@@ -36,11 +36,6 @@ const char * const led_colors[LED_COLOR_ID_MAX] = {
 	[LED_COLOR_ID_IR] = "ir",
 	[LED_COLOR_ID_MULTI] = "multicolor",
 	[LED_COLOR_ID_RGB] = "rgb",
-	[LED_COLOR_ID_PURPLE] = "purple",
-	[LED_COLOR_ID_ORANGE] = "orange",
-	[LED_COLOR_ID_PINK] = "pink",
-	[LED_COLOR_ID_CYAN] = "cyan",
-	[LED_COLOR_ID_LIME] = "lime",
 };
 EXPORT_SYMBOL_GPL(led_colors);
 
@@ -364,17 +359,17 @@ EXPORT_SYMBOL_GPL(led_set_brightness_sync);
 
 int led_update_brightness(struct led_classdev *led_cdev)
 {
-	int ret;
+	int ret = 0;
 
 	if (led_cdev->brightness_get) {
 		ret = led_cdev->brightness_get(led_cdev);
-		if (ret < 0)
-			return ret;
-
-		led_cdev->brightness = ret;
+		if (ret >= 0) {
+			led_cdev->brightness = ret;
+			return 0;
+		}
 	}
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(led_update_brightness);
 
@@ -478,6 +473,10 @@ int led_compose_name(struct device *dev, struct led_init_data *init_data,
 	struct led_properties props = {};
 	struct fwnode_handle *fwnode = init_data->fwnode;
 	const char *devicename = init_data->devicename;
+
+	/* We want to label LEDs that can produce full range of colors
+	 * as RGB, not multicolor */
+	BUG_ON(props.color == LED_COLOR_ID_MULTI);
 
 	if (!led_classdev_name)
 		return -EINVAL;

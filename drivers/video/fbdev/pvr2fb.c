@@ -725,18 +725,16 @@ out_unmap:
 
 static const struct fb_ops pvr2fb_ops = {
 	.owner		= THIS_MODULE,
-#ifdef CONFIG_PVR2_DMA
-	.fb_read	= fb_io_read,
-	.fb_write	= pvr2fb_write,
-#else
-	__FB_DEFAULT_IOMEM_OPS_RDWR,
-#endif
 	.fb_setcolreg	= pvr2fb_setcolreg,
 	.fb_blank	= pvr2fb_blank,
-	__FB_DEFAULT_IOMEM_OPS_DRAW,
 	.fb_check_var	= pvr2fb_check_var,
 	.fb_set_par	= pvr2fb_set_par,
-	__FB_DEFAULT_IOMEM_OPS_MMAP,
+#ifdef CONFIG_PVR2_DMA
+	.fb_write	= pvr2fb_write,
+#endif
+	.fb_fillrect	= cfb_fillrect,
+	.fb_copyarea	= cfb_copyarea,
+	.fb_imageblit	= cfb_imageblit,
 };
 
 #ifndef MODULE

@@ -62,7 +62,7 @@ struct aw2013_led {
 
 struct aw2013 {
 	struct mutex mutex; /* held when writing to registers */
-	struct regulator_bulk_data regulators[2];
+	struct regulator *vcc_regulator;
 	struct i2c_client *client;
 	struct aw2013_led leds[AW2013_MAX_LEDS];
 	struct regmap *regmap;
@@ -106,11 +106,10 @@ static void aw2013_chip_disable(struct aw2013 *chip)
 
 	regmap_write(chip->regmap, AW2013_GCR, 0);
 
-	ret = regulator_bulk_disable(ARRAY_SIZE(chip->regulators),
-				     chip->regulators);
+	ret = regulator_disable(chip->vcc_regulator);
 	if (ret) {
 		dev_err(&chip->client->dev,
-			"Failed to disable regulators: %d\n", ret);
+			"Failed to disable regulator: %d\n", ret);
 		return;
 	}
 
@@ -124,11 +123,10 @@ static int aw2013_chip_enable(struct aw2013 *chip)
 	if (chip->enabled)
 		return 0;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(chip->regulators),
-				    chip->regulators);
+	ret = regulator_enable(chip->vcc_regulator);
 	if (ret) {
 		dev_err(&chip->client->dev,
-			"Failed to enable regulators: %d\n", ret);
+			"Failed to enable regulator: %d\n", ret);
 		return ret;
 	}
 	chip->enabled = true;
@@ -350,23 +348,19 @@ static int aw2013_probe(struct i2c_client *client)
 		goto error;
 	}
 
-	chip->regulators[0].supply = "vcc";
-	chip->regulators[1].supply = "vio";
-	ret = devm_regulator_bulk_get(&client->dev,
-				      ARRAY_SIZE(chip->regulators),
-				      chip->regulators);
-	if (ret < 0) {
+	chip->vcc_regulator = devm_regulator_get(&client->dev, "vcc");
+	ret = PTR_ERR_OR_ZERO(chip->vcc_regulator);
+	if (ret) {
 		if (ret != -EPROBE_DEFER)
 			dev_err(&client->dev,
-				"Failed to request regulators: %d\n", ret);
+				"Failed to request regulator: %d\n", ret);
 		goto error;
 	}
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(chip->regulators),
-				    chip->regulators);
+	ret = regulator_enable(chip->vcc_regulator);
 	if (ret) {
 		dev_err(&client->dev,
-			"Failed to enable regulators: %d\n", ret);
+			"Failed to enable regulator: %d\n", ret);
 		goto error;
 	}
 
@@ -388,11 +382,10 @@ static int aw2013_probe(struct i2c_client *client)
 	if (ret < 0)
 		goto error_reg;
 
-	ret = regulator_bulk_disable(ARRAY_SIZE(chip->regulators),
-				     chip->regulators);
+	ret = regulator_disable(chip->vcc_regulator);
 	if (ret) {
 		dev_err(&client->dev,
-			"Failed to disable regulators: %d\n", ret);
+			"Failed to disable regulator: %d\n", ret);
 		goto error;
 	}
 
@@ -401,8 +394,7 @@ static int aw2013_probe(struct i2c_client *client)
 	return 0;
 
 error_reg:
-	regulator_bulk_disable(ARRAY_SIZE(chip->regulators),
-			       chip->regulators);
+	regulator_disable(chip->vcc_regulator);
 
 error:
 	mutex_destroy(&chip->mutex);
@@ -428,7 +420,7 @@ MODULE_DEVICE_TABLE(of, aw2013_match_table);
 static struct i2c_driver aw2013_driver = {
 	.driver = {
 		.name = "leds-aw2013",
-		.of_match_table = aw2013_match_table,
+		.of_match_table = of_match_ptr(aw2013_match_table),
 	},
 	.probe = aw2013_probe,
 	.remove = aw2013_remove,

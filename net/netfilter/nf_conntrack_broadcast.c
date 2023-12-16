@@ -82,4 +82,3 @@ out:
 EXPORT_SYMBOL_GPL(nf_conntrack_broadcast_help);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Broadcast connection tracking helper");

@@ -29,8 +29,6 @@ properties:
   '#gpio-cells':
     const: 2
 
-  system-power-controller: true
-
   vcc1-supply:
     description:
       The input supply for dcdc-reg1.

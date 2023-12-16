@@ -92,6 +92,9 @@
 
 struct tca6507_platform_data {
 	struct led_platform_data leds;
+#ifdef CONFIG_GPIOLIB
+	int gpio_base;
+#endif
 };
 
 #define	TCA6507_MAKE_GPIO 1
@@ -633,7 +636,7 @@ static int tca6507_probe_gpios(struct device *dev,
 
 	tca->gpio.label = "gpio-tca6507";
 	tca->gpio.ngpio = gpios;
-	tca->gpio.base = -1;
+	tca->gpio.base = pdata->gpio_base;
 	tca->gpio.owner = THIS_MODULE;
 	tca->gpio.direction_output = tca6507_gpio_direction_output;
 	tca->gpio.set = tca6507_gpio_set_value;
@@ -712,6 +715,9 @@ tca6507_led_dt_init(struct device *dev)
 
 	pdata->leds.leds = tca_leds;
 	pdata->leds.num_leds = NUM_LEDS;
+#ifdef CONFIG_GPIOLIB
+	pdata->gpio_base = -1;
+#endif
 
 	return pdata;
 }

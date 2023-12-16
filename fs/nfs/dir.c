@@ -1089,17 +1089,6 @@ static void nfs_do_filldir(struct nfs_readdir_descriptor *desc,
 	for (i = desc->cache_entry_index; i < array->size; i++) {
 		struct nfs_cache_array_entry *ent;
 
-		/*
-		 * nfs_readdir_handle_cache_misses return force clear at
-		 * (cache_misses > NFS_READDIR_CACHE_MISS_THRESHOLD) for
-		 * readdir heuristic, NFS_READDIR_CACHE_MISS_THRESHOLD + 1
-		 * entries need be emitted here.
-		 */
-		if (first_emit && i > NFS_READDIR_CACHE_MISS_THRESHOLD + 2) {
-			desc->eob = true;
-			break;
-		}
-
 		ent = &array->array[i];
 		if (!dir_emit(desc->ctx, ent->name, ent->name_len,
 		    nfs_compat_user_ino64(ent->ino), ent->d_type)) {
@@ -1118,6 +1107,10 @@ static void nfs_do_filldir(struct nfs_readdir_descriptor *desc,
 			desc->ctx->pos = desc->dir_cookie;
 		else
 			desc->ctx->pos++;
+		if (first_emit && i > NFS_READDIR_CACHE_MISS_THRESHOLD + 1) {
+			desc->eob = true;
+			break;
+		}
 	}
 	if (array->folio_is_eof)
 		desc->eof = !desc->eob;
@@ -2532,7 +2525,7 @@ EXPORT_SYMBOL_GPL(nfs_unlink);
 int nfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 		struct dentry *dentry, const char *symname)
 {
-	struct folio *folio;
+	struct page *page;
 	char *kaddr;
 	struct iattr attr;
 	unsigned int pathlen = strlen(symname);
@@ -2547,24 +2540,24 @@ int nfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	attr.ia_mode = S_IFLNK | S_IRWXUGO;
 	attr.ia_valid = ATTR_MODE;
 
-	folio = folio_alloc(GFP_USER, 0);
-	if (!folio)
+	page = alloc_page(GFP_USER);
+	if (!page)
 		return -ENOMEM;
 
-	kaddr = folio_address(folio);
+	kaddr = page_address(page);
 	memcpy(kaddr, symname, pathlen);
 	if (pathlen < PAGE_SIZE)
 		memset(kaddr + pathlen, 0, PAGE_SIZE - pathlen);
 
 	trace_nfs_symlink_enter(dir, dentry);
-	error = NFS_PROTO(dir)->symlink(dir, dentry, folio, pathlen, &attr);
+	error = NFS_PROTO(dir)->symlink(dir, dentry, page, pathlen, &attr);
 	trace_nfs_symlink_exit(dir, dentry, error);
 	if (error != 0) {
 		dfprintk(VFS, "NFS: symlink(%s/%lu, %pd, %s) error %d\n",
 			dir->i_sb->s_id, dir->i_ino,
 			dentry, symname, error);
 		d_drop(dentry);
-		folio_put(folio);
+		__free_page(page);
 		return error;
 	}
 
@@ -2574,13 +2567,18 @@ int nfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	 * No big deal if we can't add this page to the page cache here.
 	 * READLINK will get the missing page from the server if needed.
 	 */
-	if (filemap_add_folio(d_inode(dentry)->i_mapping, folio, 0,
-							GFP_KERNEL) == 0) {
-		folio_mark_uptodate(folio);
-		folio_unlock(folio);
-	}
+	if (!add_to_page_cache_lru(page, d_inode(dentry)->i_mapping, 0,
+							GFP_KERNEL)) {
+		SetPageUptodate(page);
+		unlock_page(page);
+		/*
+		 * add_to_page_cache_lru() grabs an extra page refcount.
+		 * Drop it here to avoid leaking this page later.
+		 */
+		put_page(page);
+	} else
+		__free_page(page);
 
-	folio_put(folio);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_symlink);

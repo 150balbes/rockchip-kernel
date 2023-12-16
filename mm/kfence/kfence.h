@@ -102,10 +102,7 @@ struct kfence_metadata {
 #endif
 };
 
-#define KFENCE_METADATA_SIZE PAGE_ALIGN(sizeof(struct kfence_metadata) * \
-					CONFIG_KFENCE_NUM_OBJECTS)
-
-extern struct kfence_metadata *kfence_metadata;
+extern struct kfence_metadata kfence_metadata[CONFIG_KFENCE_NUM_OBJECTS];
 
 static inline struct kfence_metadata *addr_to_metadata(unsigned long addr)
 {

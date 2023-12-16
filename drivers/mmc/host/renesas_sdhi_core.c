@@ -983,12 +983,12 @@ int renesas_sdhi_probe(struct platform_device *pdev,
 
 	}
 
-	host->write16_hook = renesas_sdhi_write16_hook;
-	host->clk_enable = renesas_sdhi_clk_enable;
-	host->clk_disable = renesas_sdhi_clk_disable;
-	host->set_clock = renesas_sdhi_set_clock;
-	host->multi_io_quirk = renesas_sdhi_multi_io_quirk;
-	host->dma_ops = dma_ops;
+	host->write16_hook	= renesas_sdhi_write16_hook;
+	host->clk_enable	= renesas_sdhi_clk_enable;
+	host->clk_disable	= renesas_sdhi_clk_disable;
+	host->set_clock		= renesas_sdhi_set_clock;
+	host->multi_io_quirk	= renesas_sdhi_multi_io_quirk;
+	host->dma_ops		= dma_ops;
 
 	if (sdhi_has_quirk(priv, hs400_disabled))
 		host->mmc->caps2 &= ~(MMC_CAP2_HS400 | MMC_CAP2_HS400_ES);
@@ -1006,8 +1006,6 @@ int renesas_sdhi_probe(struct platform_device *pdev,
 		host->sdcard_irq_setbit_mask = TMIO_STAT_ALWAYS_SET_27;
 		host->sdcard_irq_mask_all = TMIO_MASK_ALL_RCAR2;
 		host->reset = renesas_sdhi_reset;
-	} else {
-		host->sdcard_irq_mask_all = TMIO_MASK_ALL;
 	}
 
 	/* Orginally registers were 16 bit apart, could be 32 or 64 nowadays */
@@ -1102,7 +1100,9 @@ int renesas_sdhi_probe(struct platform_device *pdev,
 		host->ops.hs400_complete = renesas_sdhi_hs400_complete;
 	}
 
-	sd_ctrl_write32_as_16_and_16(host, CTL_IRQ_MASK, host->sdcard_irq_mask_all);
+	ret = tmio_mmc_host_probe(host);
+	if (ret < 0)
+		goto edisclk;
 
 	num_irqs = platform_irq_count(pdev);
 	if (num_irqs < 0) {
@@ -1129,10 +1129,6 @@ int renesas_sdhi_probe(struct platform_device *pdev,
 			goto eirq;
 	}
 
-	ret = tmio_mmc_host_probe(host);
-	if (ret < 0)
-		goto edisclk;
-
 	dev_info(&pdev->dev, "%s base at %pa, max clock rate %u MHz\n",
 		 mmc_hostname(host->mmc), &res->start, host->mmc->f_max / 1000000);
 
@@ -1149,13 +1145,15 @@ efree:
 }
 EXPORT_SYMBOL_GPL(renesas_sdhi_probe);
 
-void renesas_sdhi_remove(struct platform_device *pdev)
+int renesas_sdhi_remove(struct platform_device *pdev)
 {
 	struct tmio_mmc_host *host = platform_get_drvdata(pdev);
 
 	tmio_mmc_host_remove(host);
 	renesas_sdhi_clk_disable(host);
 	tmio_mmc_host_free(host);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(renesas_sdhi_remove);
 

@@ -67,11 +67,10 @@ Globals
 kernel-policy
 ~~~~~~~~~~~~~
 
-Defines whether the kernel validation policy is ``global`` i.e. the same for all
-operations of the family, defined for each operation individually - ``per-op``,
-or separately for each operation and operation type (do vs dump) - ``split``.
-New families should use ``per-op`` (default) to be able to narrow down the
-attributes accepted by a specific command.
+Defines if the kernel validation policy is per operation (``per-op``)
+or for the entire family (``global``). New families should use ``per-op``
+(default) to be able to narrow down the attributes accepted by a specific
+command.
 
 checks
 ------

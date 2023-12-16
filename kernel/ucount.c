@@ -104,8 +104,7 @@ bool setup_userns_sysctls(struct user_namespace *ns)
 		for (i = 0; i < UCOUNT_COUNTS; i++) {
 			tbl[i].data = &ns->ucount_max[i];
 		}
-		ns->sysctls = __register_sysctl_table(&ns->set, "user", tbl,
-						      ARRAY_SIZE(user_table));
+		ns->sysctls = __register_sysctl_table(&ns->set, "user", tbl);
 	}
 	if (!ns->sysctls) {
 		kfree(tbl);
@@ -365,7 +364,7 @@ static __init int user_namespace_sysctl_init(void)
 	 * default set so that registrations in the child sets work
 	 * properly.
 	 */
-	user_header = register_sysctl_sz("user", empty, 0);
+	user_header = register_sysctl("user", empty);
 	kmemleak_ignore(user_header);
 	BUG_ON(!user_header);
 	BUG_ON(!setup_userns_sysctls(&init_user_ns));

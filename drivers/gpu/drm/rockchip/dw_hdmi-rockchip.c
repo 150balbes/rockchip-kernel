@@ -10,13 +10,12 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/phy/phy.h>
-#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
-#include <linux/regulator/consumer.h>
+#include <linux/pm_runtime.h>
 
 #include <drm/drm_of.h>
 #include <drm/drm_crtc_helper.h>
-#include <drm/display/drm_dsc.h>
+#include <drm/drm_dsc.h>
 #include <drm/drm_edid.h>
 #include <drm/bridge/dw_hdmi.h>
 #include <drm/drm_edid.h>
@@ -149,12 +148,12 @@ struct rockchip_hdmi {
 	struct device *dev;
 	struct regmap *regmap;
 	struct regmap *vo1_regmap;
-	struct rockchip_encoder encoder;
+	struct drm_encoder encoder;
 	struct drm_device *drm_dev;
 	const struct rockchip_hdmi_chip_data *chip_data;
 	struct dw_hdmi_plat_data *plat_data;
 	struct clk *aud_clk;
-	struct clk *ref_clk;
+	struct clk *phyref_clk;
 	struct clk *grf_clk;
 	struct clk *hclk_vio;
 	struct clk *hclk_vo1;
@@ -166,8 +165,6 @@ struct rockchip_hdmi {
 	struct dw_hdmi *hdmi;
 	struct dw_hdmi_qp *hdmi_qp;
 
-	struct regulator *avdd_0v9;
-	struct regulator *avdd_1v8;
 	struct phy *phy;
 
 	u32 max_tmdsclk;
@@ -219,95 +216,197 @@ struct rockchip_hdmi {
 	struct workqueue_struct *workqueue;
 };
 
-static struct rockchip_hdmi *to_rockchip_hdmi(struct drm_encoder *encoder)
-{
-	struct rockchip_encoder *rkencoder = to_rockchip_encoder(encoder);
+#define to_rockchip_hdmi(x)	container_of(x, struct rockchip_hdmi, x)
 
-	return container_of(rkencoder, struct rockchip_hdmi, encoder);
-}
+/*
+ * There are some rates that would be ranged for better clock jitter at
+ * Chrome OS tree, like 25.175Mhz would range to 25.170732Mhz. But due
+ * to the clock is aglined to KHz in struct drm_display_mode, this would
+ * bring some inaccurate error if we still run the compute_n math, so
+ * let's just code an const table for it until we can actually get the
+ * right clock rate.
+ */
+static const struct dw_hdmi_audio_tmds_n rockchip_werid_tmds_n_table[] = {
+	/* 25176471 for 25.175 MHz = 428000000 / 17. */
+	{ .tmds = 25177000, .n_32k = 4352, .n_44k1 = 14994, .n_48k = 6528, },
+	/* 57290323 for 57.284 MHz */
+	{ .tmds = 57291000, .n_32k = 3968, .n_44k1 = 4557, .n_48k = 5952, },
+	/* 74437500 for 74.44 MHz = 297750000 / 4 */
+	{ .tmds = 74438000, .n_32k = 8192, .n_44k1 = 18816, .n_48k = 4096, },
+	/* 118666667 for 118.68 MHz */
+	{ .tmds = 118667000, .n_32k = 4224, .n_44k1 = 5292, .n_48k = 6336, },
+	/* 121714286 for 121.75 MHz */
+	{ .tmds = 121715000, .n_32k = 4480, .n_44k1 = 6174, .n_48k = 6272, },
+	/* 136800000 for 136.75 MHz */
+	{ .tmds = 136800000, .n_32k = 4096, .n_44k1 = 5684, .n_48k = 6144, },
+	/* End of table */
+	{ .tmds = 0,         .n_32k = 0,    .n_44k1 = 0,    .n_48k = 0, },
+};
 
 static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
 	{
-		27000000, {
-			{ 0x00b3, 0x0000},
-			{ 0x2153, 0x0000},
-			{ 0x40f3, 0x0000}
+		30666000, {
+			{ 0x00b3, 0x0000 },
+			{ 0x2153, 0x0000 },
+			{ 0x40f3, 0x0000 },
 		},
-	}, {
-		36000000, {
-			{ 0x00b3, 0x0000},
-			{ 0x2153, 0x0000},
-			{ 0x40f3, 0x0000}
+	},  {
+		36800000, {
+			{ 0x00b3, 0x0000 },
+			{ 0x2153, 0x0000 },
+			{ 0x40a2, 0x0001 },
 		},
-	}, {
-		40000000, {
-			{ 0x00b3, 0x0000},
-			{ 0x2153, 0x0000},
-			{ 0x40f3, 0x0000}
+	},  {
+		46000000, {
+			{ 0x00b3, 0x0000 },
+			{ 0x2142, 0x0001 },
+			{ 0x40a2, 0x0001 },
 		},
-	}, {
-		54000000, {
-			{ 0x0072, 0x0001},
-			{ 0x2142, 0x0001},
-			{ 0x40a2, 0x0001},
+	},  {
+		61333000, {
+			{ 0x0072, 0x0001 },
+			{ 0x2142, 0x0001 },
+			{ 0x40a2, 0x0001 },
 		},
-	}, {
-		65000000, {
-			{ 0x0072, 0x0001},
-			{ 0x2142, 0x0001},
-			{ 0x40a2, 0x0001},
+	},  {
+		73600000, {
+			{ 0x0072, 0x0001 },
+			{ 0x2142, 0x0001 },
+			{ 0x4061, 0x0002 },
 		},
-	}, {
-		66000000, {
-			{ 0x013e, 0x0003},
-			{ 0x217e, 0x0002},
-			{ 0x4061, 0x0002}
+	},  {
+		92000000, {
+			{ 0x0072, 0x0001 },
+			{ 0x2145, 0x0002 },
+			{ 0x4061, 0x0002 },
 		},
-	}, {
-		74250000, {
-			{ 0x0072, 0x0001},
-			{ 0x2145, 0x0002},
-			{ 0x4061, 0x0002}
+	},  {
+		122666000, {
+			{ 0x0051, 0x0002 },
+			{ 0x2145, 0x0002 },
+			{ 0x4061, 0x0002 },
 		},
-	}, {
-		83500000, {
-			{ 0x0072, 0x0001},
+	},  {
+		147200000, {
+			{ 0x0051, 0x0002 },
+			{ 0x2145, 0x0002 },
+			{ 0x4064, 0x0003 },
 		},
-	}, {
-		108000000, {
-			{ 0x0051, 0x0002},
-			{ 0x2145, 0x0002},
-			{ 0x4061, 0x0002}
+	},  {
+		184000000, {
+			{ 0x0051, 0x0002 },
+			{ 0x214c, 0x0003 },
+			{ 0x4064, 0x0003 },
 		},
-	}, {
-		106500000, {
-			{ 0x0051, 0x0002},
-			{ 0x2145, 0x0002},
-			{ 0x4061, 0x0002}
+	},  {
+		226666000, {
+			{ 0x0040, 0x0003 },
+			{ 0x214c, 0x0003 },
+			{ 0x4064, 0x0003 },
 		},
-	}, {
-		146250000, {
-			{ 0x0051, 0x0002},
-			{ 0x2145, 0x0002},
-			{ 0x4061, 0x0002}
+	},  {
+		272000000, {
+			{ 0x0040, 0x0003 },
+			{ 0x214c, 0x0003 },
+			{ 0x5a64, 0x0003 },
 		},
-	}, {
-		148500000, {
-			{ 0x0051, 0x0003},
-			{ 0x214c, 0x0003},
-			{ 0x4064, 0x0003}
-		},
-	}, {
+	},  {
 		340000000, {
 			{ 0x0040, 0x0003 },
 			{ 0x3b4c, 0x0003 },
 			{ 0x5a64, 0x0003 },
 		},
-	}, {
+	},  {
+		600000000, {
+			{ 0x1a40, 0x0003 },
+			{ 0x3b4c, 0x0003 },
+			{ 0x5a64, 0x0003 },
+		},
+	},  {
 		~0UL, {
-			{ 0x00a0, 0x000a },
-			{ 0x2001, 0x000f },
-			{ 0x4002, 0x000f },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+		},
+	}
+};
+
+static const struct dw_hdmi_mpll_config rockchip_mpll_cfg_420[] = {
+	{
+		30666000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2157, 0x0000 },
+			{ 0x40f7, 0x0000 },
+		},
+	},  {
+		92000000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2143, 0x0001 },
+			{ 0x40a3, 0x0001 },
+		},
+	},  {
+		184000000, {
+			{ 0x0073, 0x0001 },
+			{ 0x2146, 0x0002 },
+			{ 0x4062, 0x0002 },
+		},
+	},  {
+		340000000, {
+			{ 0x0052, 0x0003 },
+			{ 0x214d, 0x0003 },
+			{ 0x4065, 0x0003 },
+		},
+	},  {
+		600000000, {
+			{ 0x0041, 0x0003 },
+			{ 0x3b4d, 0x0003 },
+			{ 0x5a65, 0x0003 },
+		},
+	},  {
+		~0UL, {
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+		},
+	}
+};
+
+static const struct dw_hdmi_mpll_config rockchip_rk3288w_mpll_cfg_420[] = {
+	{
+		30666000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2157, 0x0000 },
+			{ 0x40f7, 0x0000 },
+		},
+	},  {
+		92000000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2143, 0x0001 },
+			{ 0x40a3, 0x0001 },
+		},
+	},  {
+		184000000, {
+			{ 0x0073, 0x0001 },
+			{ 0x2146, 0x0002 },
+			{ 0x4062, 0x0002 },
+		},
+	},  {
+		340000000, {
+			{ 0x0052, 0x0003 },
+			{ 0x214d, 0x0003 },
+			{ 0x4065, 0x0003 },
+		},
+	},  {
+		600000000, {
+			{ 0x0040, 0x0003 },
+			{ 0x3b4c, 0x0003 },
+			{ 0x5a65, 0x0003 },
+		},
+	},  {
+		~0UL, {
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
 		},
 	}
 };
@@ -315,34 +414,20 @@ static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
 static const struct dw_hdmi_curr_ctrl rockchip_cur_ctr[] = {
 	/*      pixelclk    bpp8    bpp10   bpp12 */
 	{
-		40000000,  { 0x0018, 0x0018, 0x0018 },
-	}, {
-		65000000,  { 0x0028, 0x0028, 0x0028 },
-	}, {
-		66000000,  { 0x0038, 0x0038, 0x0038 },
-	}, {
-		74250000,  { 0x0028, 0x0038, 0x0038 },
-	}, {
-		83500000,  { 0x0028, 0x0038, 0x0038 },
-	}, {
-		146250000, { 0x0038, 0x0038, 0x0038 },
-	}, {
-		148500000, { 0x0000, 0x0038, 0x0038 },
-	}, {
 		600000000, { 0x0000, 0x0000, 0x0000 },
-	}, {
+	},  {
 		~0UL,      { 0x0000, 0x0000, 0x0000},
 	}
 };
 
-static const struct dw_hdmi_phy_config rockchip_phy_config[] = {
+static struct dw_hdmi_phy_config rockchip_phy_config[] = {
 	/*pixelclk   symbol   term   vlev*/
 	{ 74250000,  0x8009, 0x0004, 0x0272},
-	{ 148500000, 0x802b, 0x0004, 0x028d},
 	{ 165000000, 0x802b, 0x0004, 0x0209},
 	{ 297000000, 0x8039, 0x0005, 0x028d},
 	{ 594000000, 0x8039, 0x0000, 0x019d},
-	{ ~0UL,	     0x0000, 0x0000, 0x0000}
+	{ ~0UL,	     0x0000, 0x0000, 0x0000},
+	{ ~0UL,      0x0000, 0x0000, 0x0000},
 };
 
 enum ROW_INDEX_BPP {
@@ -715,7 +800,7 @@ static void hdmi_select_link_config(struct rockchip_hdmi *hdmi,
 	hdmi->link_cfg.rate_per_lane = max_rate_per_lane;
 
 	if (!max_frl_rate || (tmdsclk < HDMI20_MAX_RATE && mode.clock < HDMI20_MAX_RATE)) {
-		dev_info(hdmi->dev, "use tmds mode\n");
+		dev_dbg(hdmi->dev, "use tmds mode\n");
 		hdmi->link_cfg.frl_mode = false;
 		return;
 	}
@@ -1030,7 +1115,7 @@ static void dw_hdmi_qp_dsc_configure(struct rockchip_hdmi *hdmi,
 		dev_err(hdmi->dev, "set vdsc cfg failed\n");
 		return;
 	}
-	dev_info(hdmi->dev, "dsc_enable\n");
+	dev_dbg(hdmi->dev, "dsc_enable\n");
 	s->dsc_enable = 1;
 	s->dsc_sink_cap.version_major = 1;
 	s->dsc_sink_cap.version_minor = 2;
@@ -1044,29 +1129,29 @@ static void dw_hdmi_qp_dsc_configure(struct rockchip_hdmi *hdmi,
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 
-// static int rockchip_hdmi_update_phy_table(struct rockchip_hdmi *hdmi,
-// 					  u32 *config,
-// 					  int phy_table_size)
-// {
-// 	int i;
-//
-// 	if (phy_table_size > ARRAY_SIZE(rockchip_phy_config)) {
-// 		dev_err(hdmi->dev, "phy table array number is out of range\n");
-// 		return -E2BIG;
-// 	}
-//
-// 	for (i = 0; i < phy_table_size; i++) {
-// 		if (config[i * 4] != 0)
-// 			rockchip_phy_config[i].mpixelclock = (u64)config[i * 4];
-// 		else
-// 			rockchip_phy_config[i].mpixelclock = ~0UL;
-// 		rockchip_phy_config[i].sym_ctr = (u16)config[i * 4 + 1];
-// 		rockchip_phy_config[i].term = (u16)config[i * 4 + 2];
-// 		rockchip_phy_config[i].vlev_ctr = (u16)config[i * 4 + 3];
-// 	}
-//
-// 	return 0;
-// }
+static int rockchip_hdmi_update_phy_table(struct rockchip_hdmi *hdmi,
+					  u32 *config,
+					  int phy_table_size)
+{
+	int i;
+
+	if (phy_table_size > ARRAY_SIZE(rockchip_phy_config)) {
+		dev_err(hdmi->dev, "phy table array number is out of range\n");
+		return -E2BIG;
+	}
+
+	for (i = 0; i < phy_table_size; i++) {
+		if (config[i * 4] != 0)
+			rockchip_phy_config[i].mpixelclock = (u64)config[i * 4];
+		else
+			rockchip_phy_config[i].mpixelclock = ~0UL;
+		rockchip_phy_config[i].sym_ctr = (u16)config[i * 4 + 1];
+		rockchip_phy_config[i].term = (u16)config[i * 4 + 2];
+		rockchip_phy_config[i].vlev_ctr = (u16)config[i * 4 + 3];
+	}
+
+	return 0;
+}
 
 static void repo_hpd_event(struct work_struct *p_work)
 {
@@ -1076,7 +1161,7 @@ static void repo_hpd_event(struct work_struct *p_work)
 	change = drm_helper_hpd_irq_event(hdmi->drm_dev);
 	if (change) {
 		dev_dbg(hdmi->dev, "hpd stat changed:%d\n", hdmi->hpd_stat);
-		// dw_hdmi_qp_cec_set_hpd(hdmi->hdmi_qp, hdmi->hpd_stat, change);
+		dw_hdmi_qp_cec_set_hpd(hdmi->hdmi_qp, hdmi->hpd_stat, change);
 	}
 }
 
@@ -1165,8 +1250,9 @@ static void init_hpd_work(struct rockchip_hdmi *hdmi)
 
 static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
 {
+	int ret, val, phy_table_size;
+	u32 *phy_config;
 	struct device_node *np = hdmi->dev->of_node;
-	int ret;
 
 	hdmi->regmap = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
 	if (IS_ERR(hdmi->regmap)) {
@@ -1182,15 +1268,17 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
 		}
 	}
 
-	hdmi->ref_clk = devm_clk_get_optional(hdmi->dev, "ref");
-	if (!hdmi->ref_clk)
-		hdmi->ref_clk = devm_clk_get_optional(hdmi->dev, "vpll");
+	hdmi->phyref_clk = devm_clk_get(hdmi->dev, "vpll");
+	if (PTR_ERR(hdmi->phyref_clk) == -ENOENT)
+		hdmi->phyref_clk = devm_clk_get(hdmi->dev, "ref");
 
-	if (PTR_ERR(hdmi->ref_clk) == -EPROBE_DEFER) {
+	if (PTR_ERR(hdmi->phyref_clk) == -ENOENT) {
+		hdmi->phyref_clk = NULL;
+	} else if (PTR_ERR(hdmi->phyref_clk) == -EPROBE_DEFER) {
 		return -EPROBE_DEFER;
-	} else if (IS_ERR(hdmi->ref_clk)) {
-		DRM_DEV_ERROR(hdmi->dev, "failed to get reference clock\n");
-		return PTR_ERR(hdmi->ref_clk);
+	} else if (IS_ERR(hdmi->phyref_clk)) {
+		DRM_DEV_ERROR(hdmi->dev, "failed to get grf clock\n");
+		return PTR_ERR(hdmi->phyref_clk);
 	}
 
 	hdmi->grf_clk = devm_clk_get(hdmi->dev, "grf");
@@ -1202,14 +1290,6 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
 		DRM_DEV_ERROR(hdmi->dev, "failed to get grf clock\n");
 		return PTR_ERR(hdmi->grf_clk);
 	}
-
-	hdmi->avdd_0v9 = devm_regulator_get(hdmi->dev, "avdd-0v9");
-	if (IS_ERR(hdmi->avdd_0v9))
-		return PTR_ERR(hdmi->avdd_0v9);
-
-	hdmi->avdd_1v8 = devm_regulator_get(hdmi->dev, "avdd-1v8");
-	if (IS_ERR(hdmi->avdd_1v8))
-		return PTR_ERR(hdmi->avdd_1v8);
 
 	hdmi->hclk_vio = devm_clk_get(hdmi->dev, "hclk_vio");
 	if (PTR_ERR(hdmi->hclk_vio) == -ENOENT) {
@@ -1284,129 +1364,112 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
 	hdmi->skip_check_420_mode =
 		of_property_read_bool(np, "skip-check-420-mode");
 
+	if (of_get_property(np, "rockchip,phy-table", &val)) {
+		phy_config = kmalloc(val, GFP_KERNEL);
+		if (!phy_config) {
+			/* use default table when kmalloc failed. */
+			dev_err(hdmi->dev, "kmalloc phy table failed\n");
+
+			return -ENOMEM;
+		}
+		phy_table_size = val / 16;
+		of_property_read_u32_array(np, "rockchip,phy-table",
+					   phy_config, val / sizeof(u32));
+		ret = rockchip_hdmi_update_phy_table(hdmi, phy_config,
+						     phy_table_size);
+		if (ret) {
+			kfree(phy_config);
+			return ret;
+		}
+		kfree(phy_config);
+	} else {
+		dev_dbg(hdmi->dev, "use default hdmi phy table\n");
+	}
+
 	return 0;
 }
 
 static enum drm_mode_status
-dw_hdmi_rockchip_mode_valid(struct dw_hdmi *dw_hdmi, void *data,
+dw_hdmi_rockchip_mode_valid(struct dw_hdmi *hdm, void *data,
 			    const struct drm_display_info *info,
 			    const struct drm_display_mode *mode)
 {
 	struct rockchip_hdmi *hdmi = data;
-	const struct dw_hdmi_mpll_config *mpll_cfg = rockchip_mpll_cfg;
-	int pclk = mode->clock * 1000;
-	bool exact_match = hdmi->plat_data->phy_force_vendor;
-	int i;
+	enum drm_mode_status status = MODE_OK;
 
-	if (hdmi->ref_clk) {
-		int rpclk = clk_round_rate(hdmi->ref_clk, pclk);
+	/*
+	 * Pixel clocks we support are always < 2GHz and so fit in an
+	 * int.  We should make sure source rate does too so we don't get
+	 * overflow when we multiply by 1000.
+	 */
+	if (mode->clock > INT_MAX / 1000)
+		return MODE_BAD;
 
-		if (abs(rpclk - pclk) > pclk / 1000)
-			return MODE_NOCLOCK;
+/*
+	if (!encoder) {
+		const struct drm_connector_helper_funcs *funcs;
+
+		funcs = connector->helper_private;
+		if (funcs->atomic_best_encoder)
+			encoder = funcs->atomic_best_encoder(connector,
+							     connector->state);
+		else
+			encoder = funcs->best_encoder(connector);
 	}
 
-	for (i = 0; mpll_cfg[i].mpixelclock != (~0UL); i++) {
-		/*
-		 * For vendor specific phys force an exact match of the pixelclock
-		 * to preserve the original behaviour of the driver.
-		 */
-		if (exact_match && pclk == mpll_cfg[i].mpixelclock)
-			return MODE_OK;
-		/*
-		 * The Synopsys phy can work with pixelclocks up to the value given
-		 * in the corresponding mpll_cfg entry.
-		 */
-		if (!exact_match && pclk <= mpll_cfg[i].mpixelclock)
-			return MODE_OK;
+	if (!encoder || !encoder->possible_crtcs)
+		return MODE_BAD;
+
+
+	hdmi = to_rockchip_hdmi(encoder);
+*/
+
+	/*
+	 * If sink max TMDS clock < 340MHz, we should check the mode pixel
+	 * clock > 340MHz is YCbCr420 or not and whether the platform supports
+	 * YCbCr420.
+	 */
+	if (!hdmi->skip_check_420_mode) {
+		if (mode->clock > 340000 &&
+		    info->max_tmds_clock < 340000 &&
+		    !drm_mode_is_420(info, mode))
+			return MODE_BAD;
+
+		if (hdmi->max_tmdsclk <= 340000 && mode->clock > 340000 &&
+		    !drm_mode_is_420(info, mode))
+			return MODE_BAD;
+	};
+
+	if (hdmi->phy) {
+		if (hdmi->is_hdmi_qp)
+			phy_set_bus_width(hdmi->phy, mode->clock * 10);
+		else
+			phy_set_bus_width(hdmi->phy, 8);
 	}
 
-	return MODE_BAD;
+	/*
+	 * ensure all drm display mode can work, if someone want support more
+	 * resolutions, please limit the possible_crtc, only connect to
+	 * needed crtc.
+	drm_for_each_crtc(crtc, connector->dev) {
+		int pipe = drm_crtc_index(crtc);
+		const struct rockchip_crtc_funcs *funcs =
+						priv->crtc_funcs[pipe];
+
+		if (!(encoder->possible_crtcs & drm_crtc_mask(crtc)))
+			continue;
+		if (!funcs || !funcs->mode_valid)
+			continue;
+
+		status = funcs->mode_valid(crtc, mode,
+					   DRM_MODE_CONNECTOR_HDMIA);
+		if (status != MODE_OK)
+			return status;
+	}
+	 */
+
+	return status;
 }
-/* [CC:] enable downstream mode_valid() */
-// static enum drm_mode_status
-// dw_hdmi_rockchip_mode_valid(struct drm_connector *connector, void *data,
-// 			    const struct drm_display_info *info,
-// 			    const struct drm_display_mode *mode)
-// {
-// 	struct drm_encoder *encoder = connector->encoder;
-// 	enum drm_mode_status status = MODE_OK;
-// 	struct drm_device *dev = connector->dev;
-// 	struct rockchip_drm_private *priv = dev->dev_private;
-// 	struct drm_crtc *crtc;
-// 	struct rockchip_hdmi *hdmi;
-//
-// 	/*
-// 	 * Pixel clocks we support are always < 2GHz and so fit in an
-// 	 * int.  We should make sure source rate does too so we don't get
-// 	 * overflow when we multiply by 1000.
-// 	 */
-// 	if (mode->clock > INT_MAX / 1000)
-// 		return MODE_BAD;
-//
-// 	if (!encoder) {
-// 		const struct drm_connector_helper_funcs *funcs;
-//
-// 		funcs = connector->helper_private;
-// 		if (funcs->atomic_best_encoder)
-// 			encoder = funcs->atomic_best_encoder(connector,
-// 							     connector->state);
-// 		else
-// 			encoder = funcs->best_encoder(connector);
-// 	}
-//
-// 	if (!encoder || !encoder->possible_crtcs)
-// 		return MODE_BAD;
-//
-// 	hdmi = to_rockchip_hdmi(encoder);
-//
-// 	/*
-// 	 * If sink max TMDS clock < 340MHz, we should check the mode pixel
-// 	 * clock > 340MHz is YCbCr420 or not and whether the platform supports
-// 	 * YCbCr420.
-// 	 */
-// 	if (!hdmi->skip_check_420_mode) {
-// 		if (mode->clock > 340000 &&
-// 		    connector->display_info.max_tmds_clock < 340000 &&
-// 		    (!drm_mode_is_420(&connector->display_info, mode) ||
-// 		     !connector->ycbcr_420_allowed))
-// 			return MODE_BAD;
-//
-// 		if (hdmi->max_tmdsclk <= 340000 && mode->clock > 340000 &&
-// 		    !drm_mode_is_420(&connector->display_info, mode))
-// 			return MODE_BAD;
-// 	};
-//
-// 	if (hdmi->phy) {
-// 		if (hdmi->is_hdmi_qp)
-// 			phy_set_bus_width(hdmi->phy, mode->clock * 10);
-// 		else
-// 			phy_set_bus_width(hdmi->phy, 8);
-// 	}
-//
-// 	/*
-// 	 * ensure all drm display mode can work, if someone want support more
-// 	 * resolutions, please limit the possible_crtc, only connect to
-// 	 * needed crtc.
-// 	 */
-// 	drm_for_each_crtc(crtc, connector->dev) {
-// 		int pipe = drm_crtc_index(crtc);
-// 		const struct rockchip_crtc_funcs *funcs =
-// 						priv->crtc_funcs[pipe];
-//
-// 		if (!(encoder->possible_crtcs & drm_crtc_mask(crtc)))
-// 			continue;
-// 		if (!funcs || !funcs->mode_valid)
-// 			continue;
-//
-// 		status = funcs->mode_valid(crtc, mode,
-// 					   DRM_MODE_CONNECTOR_HDMIA);
-// 		if (status != MODE_OK)
-// 			return status;
-// 	}
-//
-// 	return status;
-// }
-//
 
 static void dw_hdmi_rockchip_encoder_disable(struct drm_encoder *encoder)
 {
@@ -1432,44 +1495,6 @@ static void dw_hdmi_rockchip_encoder_disable(struct drm_encoder *encoder)
 		phy_set_bus_width(hdmi->phy, 8);
 }
 
-static bool
-dw_hdmi_rockchip_encoder_mode_fixup(struct drm_encoder *encoder,
-				    const struct drm_display_mode *mode,
-				    struct drm_display_mode *adj_mode)
-{
-	return true;
-}
-
-static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
-					      struct drm_display_mode *mode,
-					      struct drm_display_mode *adj_mode)
-{
-	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
-	struct drm_crtc *crtc;
-	struct rockchip_crtc_state *s;
-
-	if (!encoder->crtc)
-		return;
-	crtc = encoder->crtc;
-
-	if (!crtc->state)
-		return;
-	s = to_rockchip_crtc_state(crtc->state);
-
-	if (!s)
-		return;
-
-	if (hdmi->is_hdmi_qp) {
-		s->dsc_enable = 0;
-		if (hdmi->link_cfg.dsc_mode)
-			dw_hdmi_qp_dsc_configure(hdmi, s, crtc->state);
-
-		phy_set_bus_width(hdmi->phy, hdmi->phy_bus_width);
-	}
-
-	clk_set_rate(hdmi->ref_clk, adj_mode->clock * 1000);
-}
-
 static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
 {
 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
@@ -1484,7 +1509,7 @@ static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
 	if (hdmi->phy)
 		phy_set_bus_width(hdmi->phy, hdmi->phy_bus_width);
 
-	clk_set_rate(hdmi->ref_clk,
+	clk_set_rate(hdmi->phyref_clk,
 		     crtc->state->adjusted_mode.crtc_clock * 1000);
 
 	if (hdmi->chip_data->lcdsel_grf_reg < 0)
@@ -1698,7 +1723,7 @@ dw_hdmi_rockchip_select_output(struct drm_connector_state *conn_state,
 	    info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30)
 		support_dc = true;
 	if (*color_format == RK_IF_FORMAT_YCBCR444 &&
-	    info->edid_hdmi_rgb444_dc_modes &
+	    info->edid_hdmi_ycbcr444_dc_modes &
 	    (DRM_EDID_HDMI_DC_Y444 | DRM_EDID_HDMI_DC_30))
 		support_dc = true;
 	if (*color_format == RK_IF_FORMAT_YCBCR422)
@@ -1974,6 +1999,7 @@ secondary:
 
 	return 0;
 }
+
 
 static unsigned long
 dw_hdmi_rockchip_get_input_bus_format(void *data)
@@ -2311,14 +2337,7 @@ dw_hdmi_rockchip_attach_properties(struct drm_connector *connector,
 	if (!drm_mode_create_hdmi_colorspace_property(connector, 0))
 		drm_object_attach_property(&connector->base,
 					   connector->colorspace_property, 0);
-
-	// [CC:] if this is not needed, also drop connector_id_prop
-	if (!private->connector_id_prop)
-		private->connector_id_prop = drm_property_create_range(connector->dev,
-				DRM_MODE_PROP_ATOMIC | DRM_MODE_PROP_IMMUTABLE,
-				"CONNECTOR_ID", 0, 0xf);
-	if (private->connector_id_prop)
-		drm_object_attach_property(&connector->base, private->connector_id_prop, hdmi->id);
+	drm_object_attach_property(&connector->base, private->connector_id_prop, hdmi->id);
 }
 
 static void
@@ -2464,11 +2483,11 @@ dw_hdmi_rockchip_get_property(struct drm_connector *connector,
 		/* RK3368 only support 8bit */
 		if (hdmi->unsupported_deep_color)
 			return 0;
-		if (info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30)
+		if ((info->edid_hdmi_rgb444_dc_modes | info->edid_hdmi_ycbcr444_dc_modes) & DRM_EDID_HDMI_DC_30)
 			*val |= BIT(RK_IF_DEPTH_10);
-		if (info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_36)
+		if ((info->edid_hdmi_rgb444_dc_modes | info->edid_hdmi_ycbcr444_dc_modes) & DRM_EDID_HDMI_DC_36)
 			*val |= BIT(RK_IF_DEPTH_12);
-		if (info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_48)
+		if ((info->edid_hdmi_rgb444_dc_modes | info->edid_hdmi_ycbcr444_dc_modes) & DRM_EDID_HDMI_DC_48)
 			*val |= BIT(RK_IF_DEPTH_16);
 		if (info->hdmi.y420_dc_modes & DRM_EDID_YCBCR420_DC_30)
 			*val |= BIT(RK_IF_DEPTH_420_10);
@@ -2518,15 +2537,45 @@ static const struct dw_hdmi_property_ops dw_hdmi_rockchip_property_ops = {
 	.get_property		= dw_hdmi_rockchip_get_property,
 };
 
+static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+					      struct drm_display_mode *mode,
+					      struct drm_display_mode *adj)
+{
+	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
+	struct drm_crtc *crtc;
+	struct rockchip_crtc_state *s;
+
+	if (!encoder->crtc)
+		return;
+	crtc = encoder->crtc;
+
+	if (!crtc->state)
+		return;
+	s = to_rockchip_crtc_state(crtc->state);
+
+	if (!s)
+		return;
+
+	if (hdmi->is_hdmi_qp) {
+		s->dsc_enable = 0;
+		if (hdmi->link_cfg.dsc_mode)
+			dw_hdmi_qp_dsc_configure(hdmi, s, crtc->state);
+
+		phy_set_bus_width(hdmi->phy, hdmi->phy_bus_width);
+	}
+
+	clk_set_rate(hdmi->phyref_clk, adj->crtc_clock * 1000);
+}
+
 static const struct drm_encoder_helper_funcs dw_hdmi_rockchip_encoder_helper_funcs = {
-	.mode_fixup = dw_hdmi_rockchip_encoder_mode_fixup,
-	.mode_set   = dw_hdmi_rockchip_encoder_mode_set,
 	.enable     = dw_hdmi_rockchip_encoder_enable,
 	.disable    = dw_hdmi_rockchip_encoder_disable,
 	.atomic_check = dw_hdmi_rockchip_encoder_atomic_check,
+	.mode_set = dw_hdmi_rockchip_encoder_mode_set,
 };
 
-static void dw_hdmi_rockchip_genphy_disable(struct dw_hdmi *dw_hdmi, void *data)
+static void
+dw_hdmi_rockchip_genphy_disable(struct dw_hdmi *dw_hdmi, void *data)
 {
 	struct rockchip_hdmi *hdmi = (struct rockchip_hdmi *)data;
 
@@ -2534,15 +2583,15 @@ static void dw_hdmi_rockchip_genphy_disable(struct dw_hdmi *dw_hdmi, void *data)
 		phy_power_off(hdmi->phy);
 }
 
-static int dw_hdmi_rockchip_genphy_init(struct dw_hdmi *dw_hdmi, void *data,
-					const struct drm_display_info *display,
-					const struct drm_display_mode *mode)
+static int
+dw_hdmi_rockchip_genphy_init(struct dw_hdmi *dw_hdmi, void *data,
+			     const struct drm_display_info *display,
+			     const struct drm_display_mode *mode)
 {
 	struct rockchip_hdmi *hdmi = (struct rockchip_hdmi *)data;
 
 	dw_hdmi_rockchip_genphy_disable(dw_hdmi, data);
 	dw_hdmi_set_high_tmds_clock_ratio(dw_hdmi, display);
-
 	return phy_power_on(hdmi->phy);
 }
 
@@ -2715,6 +2764,8 @@ static const struct dw_hdmi_plat_data rk3228_hdmi_drv_data = {
 	.phy_ops = &rk3228_hdmi_phy_ops,
 	.phy_name = "inno_dw_hdmi_phy2",
 	.phy_force_vendor = true,
+	.max_tmdsclk = 371250,
+	.ycbcr_420_allowed = true,
 };
 
 static struct rockchip_hdmi_chip_data rk3288_chip_data = {
@@ -2726,9 +2777,13 @@ static struct rockchip_hdmi_chip_data rk3288_chip_data = {
 static const struct dw_hdmi_plat_data rk3288_hdmi_drv_data = {
 	.mode_valid = dw_hdmi_rockchip_mode_valid,
 	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_rk3288w_mpll_cfg_420,
 	.cur_ctr    = rockchip_cur_ctr,
 	.phy_config = rockchip_phy_config,
 	.phy_data = &rk3288_chip_data,
+	.tmds_n_table = rockchip_werid_tmds_n_table,
+	.unsupported_yuv_input = true,
+	.ycbcr_420_allowed = true,
 };
 
 static const struct dw_hdmi_phy_ops rk3328_hdmi_phy_ops = {
@@ -2753,6 +2808,24 @@ static const struct dw_hdmi_plat_data rk3328_hdmi_drv_data = {
 	.phy_name = "inno_dw_hdmi_phy2",
 	.phy_force_vendor = true,
 	.use_drm_infoframe = true,
+	.max_tmdsclk = 371250,
+	.ycbcr_420_allowed = true,
+};
+
+static struct rockchip_hdmi_chip_data rk3368_chip_data = {
+	.lcdsel_grf_reg = -1,
+};
+
+static const struct dw_hdmi_plat_data rk3368_hdmi_drv_data = {
+	.mode_valid = dw_hdmi_rockchip_mode_valid,
+	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_mpll_cfg_420,
+	.cur_ctr    = rockchip_cur_ctr,
+	.phy_config = rockchip_phy_config,
+	.phy_data = &rk3368_chip_data,
+	.unsupported_deep_color = true,
+	.max_tmdsclk = 340000,
+	.ycbcr_420_allowed = true,
 };
 
 static struct rockchip_hdmi_chip_data rk3399_chip_data = {
@@ -2764,22 +2837,27 @@ static struct rockchip_hdmi_chip_data rk3399_chip_data = {
 static const struct dw_hdmi_plat_data rk3399_hdmi_drv_data = {
 	.mode_valid = dw_hdmi_rockchip_mode_valid,
 	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_mpll_cfg_420,
 	.cur_ctr    = rockchip_cur_ctr,
 	.phy_config = rockchip_phy_config,
 	.phy_data = &rk3399_chip_data,
 	.use_drm_infoframe = true,
+	.ycbcr_420_allowed = true,
 };
 
 static struct rockchip_hdmi_chip_data rk3568_chip_data = {
 	.lcdsel_grf_reg = -1,
+	.ddc_en_reg = RK3568_GRF_VO_CON1,
 };
 
 static const struct dw_hdmi_plat_data rk3568_hdmi_drv_data = {
 	.mode_valid = dw_hdmi_rockchip_mode_valid,
 	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_mpll_cfg_420,
 	.cur_ctr    = rockchip_cur_ctr,
 	.phy_config = rockchip_phy_config,
 	.phy_data = &rk3568_chip_data,
+	.ycbcr_420_allowed = true,
 	.use_drm_infoframe = true,
 };
 
@@ -2817,6 +2895,10 @@ static const struct of_device_id dw_hdmi_rockchip_dt_ids[] = {
 	{ .compatible = "rockchip,rk3328-dw-hdmi",
 	  .data = &rk3328_hdmi_drv_data
 	},
+	{
+	 .compatible = "rockchip,rk3368-dw-hdmi",
+	 .data = &rk3368_hdmi_drv_data
+	},
 	{ .compatible = "rockchip,rk3399-dw-hdmi",
 	  .data = &rk3399_hdmi_drv_data
 	},
@@ -2834,10 +2916,10 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 				 void *data)
 {
 	struct platform_device *pdev = to_platform_device(dev);
-	struct dw_hdmi_plat_data *plat_data;
 	struct drm_device *drm = data;
 	struct drm_encoder *encoder;
 	struct rockchip_hdmi *hdmi;
+	struct dw_hdmi_plat_data *plat_data;
 	struct rockchip_hdmi *secondary;
 	int ret;
 	u32 val;
@@ -2880,6 +2962,7 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	plat_data->convert_to_split_mode = drm_mode_convert_to_split_mode;
 	plat_data->convert_to_origin_mode = drm_mode_convert_to_origin_mode;
 	plat_data->dclk_set = dw_hdmi_dclk_set;
+	plat_data->priv_data = hdmi;
 
 	plat_data->property_ops = &dw_hdmi_rockchip_property_ops;
 
@@ -2909,10 +2992,8 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	}
 
 	if (!plat_data->first_screen) {
-		encoder = &hdmi->encoder.encoder;
-		encoder->possible_crtcs = drm_of_find_possible_crtcs(drm, dev->of_node);
-		rockchip_drm_encoder_set_crtc_endpoint_id(&hdmi->encoder,
-							  dev->of_node, 0, 0);
+		encoder = &hdmi->encoder;
+		encoder->possible_crtcs = rockchip_drm_of_find_possible_crtcs(drm, dev->of_node);
 		/*
 		 * If we failed to find the CRTC(s) which this encoder is
 		 * supposed to be connected to, it's because the CRTC has
@@ -2923,7 +3004,6 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 			return -EPROBE_DEFER;
 
 		drm_encoder_helper_add(encoder, &dw_hdmi_rockchip_encoder_helper_funcs);
-		// [CC:] consider using drmm_simple_encoder_alloc()
 		drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_TMDS);
 	}
 
@@ -3022,6 +3102,13 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 		init_hpd_work(hdmi);
 	}
 
+	ret = clk_prepare_enable(hdmi->phyref_clk);
+	if (ret) {
+		DRM_DEV_ERROR(hdmi->dev, "Failed to enable HDMI vpll: %d\n",
+			      ret);
+		return ret;
+	}
+
 	ret = clk_prepare_enable(hdmi->hclk_vio);
 	if (ret) {
 		dev_err(hdmi->dev, "Failed to enable HDMI hclk_vio: %d\n",
@@ -3034,25 +3121,6 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 		dev_err(hdmi->dev, "Failed to enable HDMI hclk_vop: %d\n",
 			ret);
 		return ret;
-	}
-
-	ret = clk_prepare_enable(hdmi->ref_clk);
-	if (ret) {
-		DRM_DEV_ERROR(hdmi->dev, "Failed to enable HDMI reference clock: %d\n",
-			      ret);
-		goto err_clk;
-	}
-
-	ret = regulator_enable(hdmi->avdd_0v9);
-	if (ret) {
-		DRM_DEV_ERROR(hdmi->dev, "failed to enable avdd0v9: %d\n", ret);
-		goto err_avdd_0v9;
-	}
-
-	ret = regulator_enable(hdmi->avdd_1v8);
-	if (ret) {
-		DRM_DEV_ERROR(hdmi->dev, "failed to enable avdd1v8: %d\n", ret);
-		goto err_avdd_1v8;
 	}
 
 	if (!hdmi->id)
@@ -3087,12 +3155,11 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	}
 
 	if (hdmi->is_hdmi_qp) {
-		// [CC:] do proper error handling, e.g. clk_disable_unprepare
-		hdmi->hdmi_qp = dw_hdmi_qp_bind(pdev, &hdmi->encoder.encoder, plat_data);
+		hdmi->hdmi_qp = dw_hdmi_qp_bind(pdev, &hdmi->encoder, plat_data);
 
 		if (IS_ERR(hdmi->hdmi_qp)) {
 			ret = PTR_ERR(hdmi->hdmi_qp);
-			drm_encoder_cleanup(&hdmi->encoder.encoder);
+			drm_encoder_cleanup(&hdmi->encoder);
 		}
 
 		if (plat_data->connector) {
@@ -3114,7 +3181,7 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 		return ret;
 	}
 
-	hdmi->hdmi = dw_hdmi_bind(pdev, &hdmi->encoder.encoder, plat_data);
+	hdmi->hdmi = dw_hdmi_bind(pdev, &hdmi->encoder, plat_data);
 
 	/*
 	 * If dw_hdmi_bind() fails we'll never call dw_hdmi_unbind(),
@@ -3122,7 +3189,15 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	 */
 	if (IS_ERR(hdmi->hdmi)) {
 		ret = PTR_ERR(hdmi->hdmi);
-		goto err_bind;
+		drm_encoder_cleanup(&hdmi->encoder);
+		clk_disable_unprepare(hdmi->aud_clk);
+		clk_disable_unprepare(hdmi->phyref_clk);
+		clk_disable_unprepare(hdmi->hclk_vop);
+		clk_disable_unprepare(hdmi->hpd_clk);
+		clk_disable_unprepare(hdmi->hclk_vo1);
+		clk_disable_unprepare(hdmi->earc_clk);
+		clk_disable_unprepare(hdmi->hdmitx_ref);
+		clk_disable_unprepare(hdmi->pclk);
 	}
 
 	if (plat_data->connector) {
@@ -3131,23 +3206,6 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 		rockchip_drm_register_sub_dev(&hdmi->sub_dev);
 	}
 
-	return 0;
-
-err_bind:
-	drm_encoder_cleanup(&hdmi->encoder.encoder);
-	clk_disable_unprepare(hdmi->aud_clk);
-	clk_disable_unprepare(hdmi->ref_clk);
-	clk_disable_unprepare(hdmi->hclk_vop);
-	clk_disable_unprepare(hdmi->hpd_clk);
-	clk_disable_unprepare(hdmi->hclk_vo1);
-	clk_disable_unprepare(hdmi->earc_clk);
-	clk_disable_unprepare(hdmi->hdmitx_ref);
-	clk_disable_unprepare(hdmi->pclk);
-err_clk:
-	regulator_disable(hdmi->avdd_1v8);
-err_avdd_1v8:
-	regulator_disable(hdmi->avdd_0v9);
-err_avdd_0v9:
 	return ret;
 }
 
@@ -3169,20 +3227,14 @@ static void dw_hdmi_rockchip_unbind(struct device *dev, struct device *master,
 		dw_hdmi_qp_unbind(hdmi->hdmi_qp);
 	else
 		dw_hdmi_unbind(hdmi->hdmi);
-
-	drm_encoder_cleanup(&hdmi->encoder.encoder);
-
 	clk_disable_unprepare(hdmi->aud_clk);
-	clk_disable_unprepare(hdmi->ref_clk);
+	clk_disable_unprepare(hdmi->phyref_clk);
 	clk_disable_unprepare(hdmi->hclk_vop);
 	clk_disable_unprepare(hdmi->hpd_clk);
 	clk_disable_unprepare(hdmi->hclk_vo1);
 	clk_disable_unprepare(hdmi->earc_clk);
 	clk_disable_unprepare(hdmi->hdmitx_ref);
 	clk_disable_unprepare(hdmi->pclk);
-
-	regulator_disable(hdmi->avdd_1v8);
-	regulator_disable(hdmi->avdd_0v9);
 }
 
 static const struct component_ops dw_hdmi_rockchip_ops = {
@@ -3242,10 +3294,12 @@ static void dw_hdmi_rockchip_shutdown(struct platform_device *pdev)
 	pm_runtime_put_sync(&pdev->dev);
 }
 
-static void dw_hdmi_rockchip_remove(struct platform_device *pdev)
+static int dw_hdmi_rockchip_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &dw_hdmi_rockchip_ops);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static int dw_hdmi_rockchip_suspend(struct device *dev)
@@ -3256,13 +3310,12 @@ static int dw_hdmi_rockchip_suspend(struct device *dev)
 		dw_hdmi_qp_suspend(dev, hdmi->hdmi_qp);
 	else
 		dw_hdmi_suspend(hdmi->hdmi);
-
 	pm_runtime_put_sync(dev);
 
 	return 0;
 }
 
-static int __maybe_unused dw_hdmi_rockchip_resume(struct device *dev)
+static int dw_hdmi_rockchip_resume(struct device *dev)
 {
 	struct rockchip_hdmi *hdmi = dev_get_drvdata(dev);
 	u32 val;
@@ -3315,7 +3368,7 @@ static const struct dev_pm_ops dw_hdmi_rockchip_pm = {
 
 struct platform_driver dw_hdmi_rockchip_pltfm_driver = {
 	.probe  = dw_hdmi_rockchip_probe,
-	.remove_new = dw_hdmi_rockchip_remove,
+	.remove = dw_hdmi_rockchip_remove,
 	.shutdown = dw_hdmi_rockchip_shutdown,
 	.driver = {
 		.name = "dwhdmi-rockchip",

@@ -3,8 +3,6 @@
 #include <asm/sun3mmu.h>
 #include <asm/io.h>
 
-#include "sun3.h"
-
 void sun3_leds(unsigned char byte)
 {
 	unsigned char dfc;

@@ -1169,7 +1169,6 @@
        },
        .result = ACCEPT,
        .prog_type = BPF_PROG_TYPE_SK_SKB,
-       .flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
        "pkt_end < pkt taken check",
@@ -1191,5 +1190,4 @@
        },
        .result = ACCEPT,
        .prog_type = BPF_PROG_TYPE_SK_SKB,
-       .flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },

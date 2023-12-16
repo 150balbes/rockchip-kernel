@@ -6,9 +6,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -33,9 +30,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -60,9 +54,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -85,9 +76,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -112,9 +100,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -139,9 +124,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -164,9 +146,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -189,9 +168,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -217,9 +193,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -244,9 +217,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -271,9 +241,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -298,9 +265,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -325,9 +289,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -352,9 +313,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -379,9 +337,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -406,9 +361,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -433,9 +385,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -460,9 +409,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -487,9 +433,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -514,9 +457,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -541,9 +481,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -568,9 +505,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -595,9 +529,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -626,9 +557,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -653,9 +581,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -678,9 +603,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -706,9 +628,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             "$TC actions add action skbedit mark 500",
             "$TC actions add action skbedit mark 501",
@@ -734,9 +653,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -762,9 +678,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",
@@ -789,9 +702,6 @@
             "actions",
             "skbedit"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action skbedit",

@@ -39,10 +39,10 @@
 /* Maximum number of mounts in a mount namespace */
 static unsigned int sysctl_mount_max __read_mostly = 100000;
 
-static unsigned int m_hash_mask __ro_after_init;
-static unsigned int m_hash_shift __ro_after_init;
-static unsigned int mp_hash_mask __ro_after_init;
-static unsigned int mp_hash_shift __ro_after_init;
+static unsigned int m_hash_mask __read_mostly;
+static unsigned int m_hash_shift __read_mostly;
+static unsigned int mp_hash_mask __read_mostly;
+static unsigned int mp_hash_shift __read_mostly;
 
 static __initdata unsigned long mhash_entries;
 static int __init set_mhash_entries(char *str)
@@ -68,9 +68,9 @@ static u64 event;
 static DEFINE_IDA(mnt_id_ida);
 static DEFINE_IDA(mnt_group_ida);
 
-static struct hlist_head *mount_hashtable __ro_after_init;
-static struct hlist_head *mountpoint_hashtable __ro_after_init;
-static struct kmem_cache *mnt_cache __ro_after_init;
+static struct hlist_head *mount_hashtable __read_mostly;
+static struct hlist_head *mountpoint_hashtable __read_mostly;
+static struct kmem_cache *mnt_cache __read_mostly;
 static DECLARE_RWSEM(namespace_sem);
 static HLIST_HEAD(unmounted);	/* protected by namespace_sem */
 static LIST_HEAD(ex_mountpoints); /* protected by namespace_sem */
@@ -86,7 +86,7 @@ struct mount_kattr {
 };
 
 /* /sys/fs */
-struct kobject *fs_kobj __ro_after_init;
+struct kobject *fs_kobj;
 EXPORT_SYMBOL_GPL(fs_kobj);
 
 /*
@@ -330,16 +330,16 @@ static int mnt_is_readonly(struct vfsmount *mnt)
  * can determine when writes are able to occur to a filesystem.
  */
 /**
- * mnt_get_write_access - get write access to a mount without freeze protection
+ * __mnt_want_write - get write access to a mount without freeze protection
  * @m: the mount on which to take a write
  *
  * This tells the low-level filesystem that a write is about to be performed to
  * it, and makes sure that writes are allowed (mnt it read-write) before
  * returning success. This operation does not protect against filesystem being
- * frozen. When the write operation is finished, mnt_put_write_access() must be
+ * frozen. When the write operation is finished, __mnt_drop_write() must be
  * called. This is effectively a refcount.
  */
-int mnt_get_write_access(struct vfsmount *m)
+int __mnt_want_write(struct vfsmount *m)
 {
 	struct mount *mnt = real_mount(m);
 	int ret = 0;
@@ -386,7 +386,6 @@ int mnt_get_write_access(struct vfsmount *m)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(mnt_get_write_access);
 
 /**
  * mnt_want_write - get write access to a mount
@@ -402,7 +401,7 @@ int mnt_want_write(struct vfsmount *m)
 	int ret;
 
 	sb_start_write(m->mnt_sb);
-	ret = mnt_get_write_access(m);
+	ret = __mnt_want_write(m);
 	if (ret)
 		sb_end_write(m->mnt_sb);
 	return ret;
@@ -410,15 +409,15 @@ int mnt_want_write(struct vfsmount *m)
 EXPORT_SYMBOL_GPL(mnt_want_write);
 
 /**
- * mnt_get_write_access_file - get write access to a file's mount
+ * __mnt_want_write_file - get write access to a file's mount
  * @file: the file who's mount on which to take a write
  *
- * This is like mnt_get_write_access, but if @file is already open for write it
+ * This is like __mnt_want_write, but if the file is already open for writing it
  * skips incrementing mnt_writers (since the open file already has a reference)
  * and instead only does the check for emergency r/o remounts.  This must be
- * paired with mnt_put_write_access_file.
+ * paired with __mnt_drop_write_file.
  */
-int mnt_get_write_access_file(struct file *file)
+int __mnt_want_write_file(struct file *file)
 {
 	if (file->f_mode & FMODE_WRITER) {
 		/*
@@ -429,7 +428,7 @@ int mnt_get_write_access_file(struct file *file)
 			return -EROFS;
 		return 0;
 	}
-	return mnt_get_write_access(file->f_path.mnt);
+	return __mnt_want_write(file->f_path.mnt);
 }
 
 /**
@@ -446,7 +445,7 @@ int mnt_want_write_file(struct file *file)
 	int ret;
 
 	sb_start_write(file_inode(file)->i_sb);
-	ret = mnt_get_write_access_file(file);
+	ret = __mnt_want_write_file(file);
 	if (ret)
 		sb_end_write(file_inode(file)->i_sb);
 	return ret;
@@ -454,20 +453,19 @@ int mnt_want_write_file(struct file *file)
 EXPORT_SYMBOL_GPL(mnt_want_write_file);
 
 /**
- * mnt_put_write_access - give up write access to a mount
+ * __mnt_drop_write - give up write access to a mount
  * @mnt: the mount on which to give up write access
  *
  * Tells the low-level filesystem that we are done
  * performing writes to it.  Must be matched with
- * mnt_get_write_access() call above.
+ * __mnt_want_write() call above.
  */
-void mnt_put_write_access(struct vfsmount *mnt)
+void __mnt_drop_write(struct vfsmount *mnt)
 {
 	preempt_disable();
 	mnt_dec_writers(real_mount(mnt));
 	preempt_enable();
 }
-EXPORT_SYMBOL_GPL(mnt_put_write_access);
 
 /**
  * mnt_drop_write - give up write access to a mount
@@ -479,20 +477,20 @@ EXPORT_SYMBOL_GPL(mnt_put_write_access);
  */
 void mnt_drop_write(struct vfsmount *mnt)
 {
-	mnt_put_write_access(mnt);
+	__mnt_drop_write(mnt);
 	sb_end_write(mnt->mnt_sb);
 }
 EXPORT_SYMBOL_GPL(mnt_drop_write);
 
-void mnt_put_write_access_file(struct file *file)
+void __mnt_drop_write_file(struct file *file)
 {
 	if (!(file->f_mode & FMODE_WRITER))
-		mnt_put_write_access(file->f_path.mnt);
+		__mnt_drop_write(file->f_path.mnt);
 }
 
 void mnt_drop_write_file(struct file *file)
 {
-	mnt_put_write_access_file(file);
+	__mnt_drop_write_file(file);
 	sb_end_write(file_inode(file)->i_sb);
 }
 EXPORT_SYMBOL(mnt_drop_write_file);
@@ -1346,9 +1344,9 @@ void mntput(struct vfsmount *mnt)
 {
 	if (mnt) {
 		struct mount *m = real_mount(mnt);
-		/* avoid cacheline pingpong */
+		/* avoid cacheline pingpong, hope gcc doesn't get "smart" */
 		if (unlikely(m->mnt_expiry_mark))
-			WRITE_ONCE(m->mnt_expiry_mark, 0);
+			m->mnt_expiry_mark = 0;
 		mntput_no_expire(m);
 	}
 }

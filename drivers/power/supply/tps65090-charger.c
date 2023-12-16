@@ -13,7 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/slab.h>
@@ -328,13 +328,15 @@ fail_unregister_supply:
 	return ret;
 }
 
-static void tps65090_charger_remove(struct platform_device *pdev)
+static int tps65090_charger_remove(struct platform_device *pdev)
 {
 	struct tps65090_charger *cdata = platform_get_drvdata(pdev);
 
 	if (cdata->irq == -ENXIO)
 		kthread_stop(cdata->poll_task);
 	power_supply_unregister(cdata->ac);
+
+	return 0;
 }
 
 static const struct of_device_id of_tps65090_charger_match[] = {
@@ -349,7 +351,7 @@ static struct platform_driver tps65090_charger_driver = {
 		.of_match_table = of_tps65090_charger_match,
 	},
 	.probe	= tps65090_charger_probe,
-	.remove_new = tps65090_charger_remove,
+	.remove = tps65090_charger_remove,
 };
 module_platform_driver(tps65090_charger_driver);
 

@@ -5,7 +5,7 @@
  */
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/spinlock.h>
+#include <linux/of_platform.h>
 
 #include <asm/mach-pic32/pic32.h>
 

@@ -43,8 +43,7 @@ TRACE_EVENT(virtio_transport_alloc_pkt,
 		 __u32 len,
 		 __u16 type,
 		 __u16 op,
-		 __u32 flags,
-		 bool zcopy
+		 __u32 flags
 	),
 	TP_ARGS(
 		src_cid, src_port,
@@ -52,8 +51,7 @@ TRACE_EVENT(virtio_transport_alloc_pkt,
 		len,
 		type,
 		op,
-		flags,
-		zcopy
+		flags
 	),
 	TP_STRUCT__entry(
 		__field(__u32, src_cid)
@@ -64,7 +62,6 @@ TRACE_EVENT(virtio_transport_alloc_pkt,
 		__field(__u16, type)
 		__field(__u16, op)
 		__field(__u32, flags)
-		__field(bool, zcopy)
 	),
 	TP_fast_assign(
 		__entry->src_cid = src_cid;
@@ -75,15 +72,14 @@ TRACE_EVENT(virtio_transport_alloc_pkt,
 		__entry->type = type;
 		__entry->op = op;
 		__entry->flags = flags;
-		__entry->zcopy = zcopy;
 	),
-	TP_printk("%u:%u -> %u:%u len=%u type=%s op=%s flags=%#x zcopy=%s",
+	TP_printk("%u:%u -> %u:%u len=%u type=%s op=%s flags=%#x",
 		  __entry->src_cid, __entry->src_port,
 		  __entry->dst_cid, __entry->dst_port,
 		  __entry->len,
 		  show_type(__entry->type),
 		  show_op(__entry->op),
-		  __entry->flags, __entry->zcopy ? "true" : "false")
+		  __entry->flags)
 );
 
 TRACE_EVENT(virtio_transport_recv_pkt,

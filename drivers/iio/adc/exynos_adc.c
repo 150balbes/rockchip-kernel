@@ -826,26 +826,16 @@ static int exynos_adc_probe(struct platform_device *pdev)
 		}
 	}
 
-	/* leave out any TS related code if unreachable */
-	if (IS_REACHABLE(CONFIG_INPUT)) {
-		has_ts = of_property_read_bool(pdev->dev.of_node,
-					       "has-touchscreen") || pdata;
-	}
-
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
 	info->irq = irq;
 
-	if (has_ts) {
-		irq = platform_get_irq(pdev, 1);
-		if (irq == -EPROBE_DEFER)
-			return irq;
+	irq = platform_get_irq(pdev, 1);
+	if (irq == -EPROBE_DEFER)
+		return irq;
 
-		info->tsirq = irq;
-	} else {
-		info->tsirq = -1;
-	}
+	info->tsirq = irq;
 
 	info->dev = &pdev->dev;
 
@@ -910,6 +900,12 @@ static int exynos_adc_probe(struct platform_device *pdev)
 	if (info->data->init_hw)
 		info->data->init_hw(info);
 
+	/* leave out any TS related code if unreachable */
+	if (IS_REACHABLE(CONFIG_INPUT)) {
+		has_ts = of_property_read_bool(pdev->dev.of_node,
+					       "has-touchscreen") || pdata;
+	}
+
 	if (pdata)
 		info->delay = pdata->delay;
 	else
@@ -950,7 +946,7 @@ err_disable_reg:
 	return ret;
 }
 
-static void exynos_adc_remove(struct platform_device *pdev)
+static int exynos_adc_remove(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct exynos_adc *info = iio_priv(indio_dev);
@@ -968,6 +964,8 @@ static void exynos_adc_remove(struct platform_device *pdev)
 	exynos_adc_disable_clk(info);
 	exynos_adc_unprepare_clk(info);
 	regulator_disable(info->vdd);
+
+	return 0;
 }
 
 static int exynos_adc_suspend(struct device *dev)
@@ -1008,7 +1006,7 @@ static DEFINE_SIMPLE_DEV_PM_OPS(exynos_adc_pm_ops, exynos_adc_suspend,
 
 static struct platform_driver exynos_adc_driver = {
 	.probe		= exynos_adc_probe,
-	.remove_new	= exynos_adc_remove,
+	.remove		= exynos_adc_remove,
 	.driver		= {
 		.name	= "exynos-adc",
 		.of_match_table = exynos_adc_match,

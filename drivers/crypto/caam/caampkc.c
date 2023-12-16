@@ -16,12 +16,8 @@
 #include "desc_constr.h"
 #include "sg_sw_sec4.h"
 #include "caampkc.h"
-#include <crypto/internal/engine.h>
 #include <linux/dma-mapping.h>
-#include <linux/err.h>
 #include <linux/kernel.h>
-#include <linux/slab.h>
-#include <linux/string.h>
 
 #define DESC_RSA_PUB_LEN	(2 * CAAM_CMD_SZ + SIZEOF_RSA_PUB_PDB)
 #define DESC_RSA_PRIV_F1_LEN	(2 * CAAM_CMD_SZ + \
@@ -42,7 +38,7 @@ static u8 *zero_buffer;
 static bool init_done;
 
 struct caam_akcipher_alg {
-	struct akcipher_engine_alg akcipher;
+	struct akcipher_alg akcipher;
 	bool registered;
 };
 
@@ -229,9 +225,7 @@ static int caam_rsa_count_leading_zeros(struct scatterlist *sgl,
 		if (len && *buff)
 			break;
 
-		if (!sg_miter_next(&miter))
-			break;
-
+		sg_miter_next(&miter);
 		buff = miter.addr;
 		len = miter.length;
 
@@ -1127,6 +1121,8 @@ static int caam_rsa_init_tfm(struct crypto_akcipher *tfm)
 		return -ENOMEM;
 	}
 
+	ctx->enginectx.op.do_one_request = akcipher_do_one_req;
+
 	return 0;
 }
 
@@ -1143,7 +1139,7 @@ static void caam_rsa_exit_tfm(struct crypto_akcipher *tfm)
 }
 
 static struct caam_akcipher_alg caam_rsa = {
-	.akcipher.base = {
+	.akcipher = {
 		.encrypt = caam_rsa_enc,
 		.decrypt = caam_rsa_dec,
 		.set_pub_key = caam_rsa_set_pub_key,
@@ -1159,10 +1155,7 @@ static struct caam_akcipher_alg caam_rsa = {
 			.cra_ctxsize = sizeof(struct caam_rsa_ctx) +
 				       CRYPTO_DMA_PADDING,
 		},
-	},
-	.akcipher.op = {
-		.do_one_request = akcipher_do_one_req,
-	},
+	}
 };
 
 /* Public Key Cryptography module initialization handler */
@@ -1200,12 +1193,12 @@ int caam_pkc_init(struct device *ctrldev)
 	if (!zero_buffer)
 		return -ENOMEM;
 
-	err = crypto_engine_register_akcipher(&caam_rsa.akcipher);
+	err = crypto_register_akcipher(&caam_rsa.akcipher);
 
 	if (err) {
 		kfree(zero_buffer);
 		dev_warn(ctrldev, "%s alg registration failed\n",
-			 caam_rsa.akcipher.base.base.cra_driver_name);
+			 caam_rsa.akcipher.base.cra_driver_name);
 	} else {
 		init_done = true;
 		caam_rsa.registered = true;
@@ -1221,7 +1214,7 @@ void caam_pkc_exit(void)
 		return;
 
 	if (caam_rsa.registered)
-		crypto_engine_unregister_akcipher(&caam_rsa.akcipher);
+		crypto_unregister_akcipher(&caam_rsa.akcipher);
 
 	kfree(zero_buffer);
 }

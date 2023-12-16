@@ -27,7 +27,6 @@ static const struct mlx5_ib_counter basic_q_cnts[] = {
 	INIT_Q_COUNTER(rx_write_requests),
 	INIT_Q_COUNTER(rx_read_requests),
 	INIT_Q_COUNTER(rx_atomic_requests),
-	INIT_Q_COUNTER(rx_dct_connect),
 	INIT_Q_COUNTER(out_of_buffer),
 };
 
@@ -47,7 +46,6 @@ static const struct mlx5_ib_counter vport_basic_q_cnts[] = {
 	INIT_VPORT_Q_COUNTER(rx_write_requests),
 	INIT_VPORT_Q_COUNTER(rx_read_requests),
 	INIT_VPORT_Q_COUNTER(rx_atomic_requests),
-	INIT_VPORT_Q_COUNTER(rx_dct_connect),
 	INIT_VPORT_Q_COUNTER(out_of_buffer),
 };
 

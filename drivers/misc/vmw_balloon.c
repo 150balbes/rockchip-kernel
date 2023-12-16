@@ -380,7 +380,16 @@ struct vmballoon {
 	/**
 	 * @shrinker: shrinker interface that is used to avoid over-inflation.
 	 */
-	struct shrinker *shrinker;
+	struct shrinker shrinker;
+
+	/**
+	 * @shrinker_registered: whether the shrinker was registered.
+	 *
+	 * The shrinker interface does not handle gracefully the removal of
+	 * shrinker that was not registered before. This indication allows to
+	 * simplify the unregistration process.
+	 */
+	bool shrinker_registered;
 };
 
 static struct vmballoon balloon;
@@ -1559,27 +1568,29 @@ static unsigned long vmballoon_shrinker_count(struct shrinker *shrinker,
 
 static void vmballoon_unregister_shrinker(struct vmballoon *b)
 {
-	shrinker_free(b->shrinker);
-	b->shrinker = NULL;
+	if (b->shrinker_registered)
+		unregister_shrinker(&b->shrinker);
+	b->shrinker_registered = false;
 }
 
 static int vmballoon_register_shrinker(struct vmballoon *b)
 {
+	int r;
+
 	/* Do nothing if the shrinker is not enabled */
 	if (!vmwballoon_shrinker_enable)
 		return 0;
 
-	b->shrinker = shrinker_alloc(0, "vmw-balloon");
-	if (!b->shrinker)
-		return -ENOMEM;
+	b->shrinker.scan_objects = vmballoon_shrinker_scan;
+	b->shrinker.count_objects = vmballoon_shrinker_count;
+	b->shrinker.seeks = DEFAULT_SEEKS;
 
-	b->shrinker->scan_objects = vmballoon_shrinker_scan;
-	b->shrinker->count_objects = vmballoon_shrinker_count;
-	b->shrinker->private_data = b;
+	r = register_shrinker(&b->shrinker, "vmw-balloon");
 
-	shrinker_register(b->shrinker);
+	if (r == 0)
+		b->shrinker_registered = true;
 
-	return 0;
+	return r;
 }
 
 /*
@@ -1872,7 +1883,7 @@ static int __init vmballoon_init(void)
 
 	error = vmballoon_register_shrinker(&balloon);
 	if (error)
-		return error;
+		goto fail;
 
 	/*
 	 * Initialization of compaction must be done after the call to
@@ -1894,6 +1905,9 @@ static int __init vmballoon_init(void)
 	vmballoon_debugfs_init(&balloon);
 
 	return 0;
+fail:
+	vmballoon_unregister_shrinker(&balloon);
+	return error;
 }
 
 /*

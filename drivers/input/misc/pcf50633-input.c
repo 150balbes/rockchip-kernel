@@ -87,7 +87,7 @@ static int pcf50633_input_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void pcf50633_input_remove(struct platform_device *pdev)
+static int pcf50633_input_remove(struct platform_device *pdev)
 {
 	struct pcf50633_input *input  = platform_get_drvdata(pdev);
 
@@ -96,6 +96,8 @@ static void pcf50633_input_remove(struct platform_device *pdev)
 
 	input_unregister_device(input->input_dev);
 	kfree(input);
+
+	return 0;
 }
 
 static struct platform_driver pcf50633_input_driver = {
@@ -103,7 +105,7 @@ static struct platform_driver pcf50633_input_driver = {
 		.name = "pcf50633-input",
 	},
 	.probe = pcf50633_input_probe,
-	.remove_new = pcf50633_input_remove,
+	.remove = pcf50633_input_remove,
 };
 module_platform_driver(pcf50633_input_driver);
 

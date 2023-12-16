@@ -9,9 +9,10 @@
     |       alpha: | TODO |
     |         arc: | TODO |
     |         arm: | TODO |
-    |       arm64: |  ok  |
+    |       arm64: | N/A  |
     |        csky: | TODO |
     |     hexagon: | TODO |
+    |        ia64: | TODO |
     |   loongarch: | TODO |
     |        m68k: |  ..  |
     |  microblaze: |  ..  |

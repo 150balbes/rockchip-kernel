@@ -178,18 +178,20 @@ out_node:
 	return err;
 }
 
-static void kirkwood_cpufreq_remove(struct platform_device *pdev)
+static int kirkwood_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&kirkwood_cpufreq_driver);
 
 	clk_disable_unprepare(priv.powersave_clk);
 	clk_disable_unprepare(priv.ddr_clk);
 	clk_disable_unprepare(priv.cpu_clk);
+
+	return 0;
 }
 
 static struct platform_driver kirkwood_cpufreq_platform_driver = {
 	.probe = kirkwood_cpufreq_probe,
-	.remove_new = kirkwood_cpufreq_remove,
+	.remove = kirkwood_cpufreq_remove,
 	.driver = {
 		.name = "kirkwood-cpufreq",
 	},

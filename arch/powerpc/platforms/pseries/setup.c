@@ -816,8 +816,6 @@ static void __init pSeries_setup_arch(void)
 	/* Discover PIC type and setup ppc_md accordingly */
 	smp_init_pseries();
 
-	// Setup CPU hotplug callbacks
-	pseries_cpu_hotplug_init();
 
 	if (radix_enabled() && !mmu_has_feature(MMU_FTR_GTSE))
 		if (!firmware_has_feature(FW_FEATURE_RPT_INVALIDATE))
@@ -849,7 +847,7 @@ static void __init pSeries_setup_arch(void)
 	if (firmware_has_feature(FW_FEATURE_LPAR)) {
 		vpa_init(boot_cpuid);
 
-		if (lppaca_shared_proc()) {
+		if (lppaca_shared_proc(get_lppaca())) {
 			static_branch_enable(&shared_processor);
 			pv_spinlocks_init();
 #ifdef CONFIG_PARAVIRT_TIME_ACCOUNTING
@@ -1117,13 +1115,6 @@ static int pSeries_pci_probe_mode(struct pci_bus *bus)
 		return PCI_PROBE_DEVTREE;
 	return PCI_PROBE_NORMAL;
 }
-
-#ifdef CONFIG_MEMORY_HOTPLUG
-static unsigned long pseries_memory_block_size(void)
-{
-	return memory_block_size;
-}
-#endif
 
 struct pci_controller_ops pseries_pci_controller_ops = {
 	.probe_mode		= pSeries_pci_probe_mode,

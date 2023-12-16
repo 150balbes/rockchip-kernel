@@ -158,8 +158,6 @@ allOf:
               patternProperties:
                 "^ethernet-phy@[0-9a-f]$":
                   type: object
-                  $ref: ethernet-phy.yaml#
-                  unevaluatedProperties: false
                   description:
                     Integrated PHY node
 

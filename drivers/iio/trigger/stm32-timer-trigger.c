@@ -809,7 +809,7 @@ static int stm32_timer_trigger_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void stm32_timer_trigger_remove(struct platform_device *pdev)
+static int stm32_timer_trigger_remove(struct platform_device *pdev)
 {
 	struct stm32_timer_trigger *priv = platform_get_drvdata(pdev);
 	u32 val;
@@ -824,6 +824,8 @@ static void stm32_timer_trigger_remove(struct platform_device *pdev)
 
 	if (priv->enabled)
 		clk_disable(priv->clk);
+
+	return 0;
 }
 
 static int stm32_timer_trigger_suspend(struct device *dev)
@@ -902,7 +904,7 @@ MODULE_DEVICE_TABLE(of, stm32_trig_of_match);
 
 static struct platform_driver stm32_timer_trigger_driver = {
 	.probe = stm32_timer_trigger_probe,
-	.remove_new = stm32_timer_trigger_remove,
+	.remove = stm32_timer_trigger_remove,
 	.driver = {
 		.name = "stm32-timer-trigger",
 		.of_match_table = stm32_trig_of_match,

@@ -63,4 +63,3 @@ module_exit(exit_rc_map_proteus_2309)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("proteus-2309 remote controller keytable");

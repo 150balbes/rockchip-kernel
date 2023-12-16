@@ -7,12 +7,9 @@
 #include <linux/slab.h>
 #include <linux/uacce.h>
 
+static struct class *uacce_class;
 static dev_t uacce_devt;
 static DEFINE_XARRAY_ALLOC(uacce_xa);
-
-static const struct class uacce_class = {
-	.name = UACCE_NAME,
-};
 
 /*
  * If the parent driver or the device disappears, the queue state is invalid and
@@ -533,7 +530,7 @@ struct uacce_device *uacce_alloc(struct device *parent,
 	mutex_init(&uacce->mutex);
 	device_initialize(&uacce->dev);
 	uacce->dev.devt = MKDEV(MAJOR(uacce_devt), uacce->dev_id);
-	uacce->dev.class = &uacce_class;
+	uacce->dev.class = uacce_class;
 	uacce->dev.groups = uacce_dev_groups;
 	uacce->dev.parent = uacce->parent;
 	uacce->dev.release = uacce_release;
@@ -626,13 +623,13 @@ static int __init uacce_init(void)
 {
 	int ret;
 
-	ret = class_register(&uacce_class);
-	if (ret)
-		return ret;
+	uacce_class = class_create(UACCE_NAME);
+	if (IS_ERR(uacce_class))
+		return PTR_ERR(uacce_class);
 
 	ret = alloc_chrdev_region(&uacce_devt, 0, MINORMASK, UACCE_NAME);
 	if (ret)
-		class_unregister(&uacce_class);
+		class_destroy(uacce_class);
 
 	return ret;
 }
@@ -640,7 +637,7 @@ static int __init uacce_init(void)
 static __exit void uacce_exit(void)
 {
 	unregister_chrdev_region(uacce_devt, MINORMASK);
-	class_unregister(&uacce_class);
+	class_destroy(uacce_class);
 }
 
 subsys_initcall(uacce_init);

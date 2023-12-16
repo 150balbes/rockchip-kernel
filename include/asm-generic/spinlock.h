@@ -68,18 +68,11 @@ static __always_inline void arch_spin_unlock(arch_spinlock_t *lock)
 	smp_store_release(ptr, (u16)val + 1);
 }
 
-static __always_inline int arch_spin_value_unlocked(arch_spinlock_t lock)
-{
-	u32 val = lock.counter;
-
-	return ((val >> 16) == (val & 0xffff));
-}
-
 static __always_inline int arch_spin_is_locked(arch_spinlock_t *lock)
 {
-	arch_spinlock_t val = READ_ONCE(*lock);
+	u32 val = atomic_read(lock);
 
-	return !arch_spin_value_unlocked(val);
+	return ((val >> 16) != (val & 0xffff));
 }
 
 static __always_inline int arch_spin_is_contended(arch_spinlock_t *lock)
@@ -87,6 +80,11 @@ static __always_inline int arch_spin_is_contended(arch_spinlock_t *lock)
 	u32 val = atomic_read(lock);
 
 	return (s16)((val >> 16) - (val & 0xffff)) > 1;
+}
+
+static __always_inline int arch_spin_value_unlocked(arch_spinlock_t lock)
+{
+	return !arch_spin_is_locked(&lock);
 }
 
 #include <asm/qrwlock.h>

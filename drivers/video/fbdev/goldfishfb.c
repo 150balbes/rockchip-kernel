@@ -201,8 +201,8 @@ static int goldfish_fb_probe(struct platform_device *pdev)
 	}
 
 	fb->irq = platform_get_irq(pdev, 0);
-	if (fb->irq < 0) {
-		ret = fb->irq;
+	if (fb->irq <= 0) {
+		ret = -ENODEV;
 		goto err_no_irq;
 	}
 

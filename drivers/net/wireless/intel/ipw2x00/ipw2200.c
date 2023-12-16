@@ -1176,20 +1176,23 @@ static ssize_t debug_level_show(struct device_driver *d, char *buf)
 static ssize_t debug_level_store(struct device_driver *d, const char *buf,
 				 size_t count)
 {
-	unsigned long val;
+	char *p = (char *)buf;
+	u32 val;
 
-	int result = kstrtoul(buf, 0, &val);
-
-	if (result == -EINVAL)
+	if (p[1] == 'x' || p[1] == 'X' || p[0] == 'x' || p[0] == 'X') {
+		p++;
+		if (p[0] == 'x' || p[0] == 'X')
+			p++;
+		val = simple_strtoul(p, &p, 16);
+	} else
+		val = simple_strtoul(p, &p, 10);
+	if (p == buf)
 		printk(KERN_INFO DRV_NAME
 		       ": %s is not in hex or decimal form.\n", buf);
-	else if (result == -ERANGE)
-		printk(KERN_INFO DRV_NAME
-			 ": %s has overflowed.\n", buf);
 	else
 		ipw_debug_level = val;
 
-	return count;
+	return strnlen(buf, count);
 }
 static DRIVER_ATTR_RW(debug_level);
 
@@ -1458,13 +1461,25 @@ static ssize_t scan_age_store(struct device *d, struct device_attribute *attr,
 {
 	struct ipw_priv *priv = dev_get_drvdata(d);
 	struct net_device *dev = priv->net_dev;
+	char buffer[] = "00000000";
+	unsigned long len =
+	    (sizeof(buffer) - 1) > count ? count : sizeof(buffer) - 1;
+	unsigned long val;
+	char *p = buffer;
 
 	IPW_DEBUG_INFO("enter\n");
 
-	unsigned long val;
-	int result = kstrtoul(buf, 0, &val);
+	strncpy(buffer, buf, len);
+	buffer[len] = 0;
 
-	if (result == -EINVAL || result == -ERANGE) {
+	if (p[1] == 'x' || p[1] == 'X' || p[0] == 'x' || p[0] == 'X') {
+		p++;
+		if (p[0] == 'x' || p[0] == 'X')
+			p++;
+		val = simple_strtoul(p, &p, 16);
+	} else
+		val = simple_strtoul(p, &p, 10);
+	if (p == buffer) {
 		IPW_DEBUG_INFO("%s: user supplied invalid value.\n", dev->name);
 	} else {
 		priv->ieee->scan_age = val;
@@ -1472,7 +1487,7 @@ static ssize_t scan_age_store(struct device *d, struct device_attribute *attr,
 	}
 
 	IPW_DEBUG_INFO("exit\n");
-	return count;
+	return len;
 }
 
 static DEVICE_ATTR_RW(scan_age);
@@ -9656,30 +9671,31 @@ static int ipw_wx_get_wireless_mode(struct net_device *dev,
 	mutex_lock(&priv->mutex);
 	switch (priv->ieee->mode) {
 	case IEEE_A:
-		strscpy_pad(extra, "802.11a (1)", MAX_WX_STRING);
+		strncpy(extra, "802.11a (1)", MAX_WX_STRING);
 		break;
 	case IEEE_B:
-		strscpy_pad(extra, "802.11b (2)", MAX_WX_STRING);
+		strncpy(extra, "802.11b (2)", MAX_WX_STRING);
 		break;
 	case IEEE_A | IEEE_B:
-		strscpy_pad(extra, "802.11ab (3)", MAX_WX_STRING);
+		strncpy(extra, "802.11ab (3)", MAX_WX_STRING);
 		break;
 	case IEEE_G:
-		strscpy_pad(extra, "802.11g (4)", MAX_WX_STRING);
+		strncpy(extra, "802.11g (4)", MAX_WX_STRING);
 		break;
 	case IEEE_A | IEEE_G:
-		strscpy_pad(extra, "802.11ag (5)", MAX_WX_STRING);
+		strncpy(extra, "802.11ag (5)", MAX_WX_STRING);
 		break;
 	case IEEE_B | IEEE_G:
-		strscpy_pad(extra, "802.11bg (6)", MAX_WX_STRING);
+		strncpy(extra, "802.11bg (6)", MAX_WX_STRING);
 		break;
 	case IEEE_A | IEEE_B | IEEE_G:
-		strscpy_pad(extra, "802.11abg (7)", MAX_WX_STRING);
+		strncpy(extra, "802.11abg (7)", MAX_WX_STRING);
 		break;
 	default:
-		strscpy_pad(extra, "unknown", MAX_WX_STRING);
+		strncpy(extra, "unknown", MAX_WX_STRING);
 		break;
 	}
+	extra[MAX_WX_STRING - 1] = '\0';
 
 	IPW_DEBUG_WX("PRIV GET MODE: %s\n", extra);
 
@@ -10377,6 +10393,7 @@ static void ipw_ethtool_get_drvinfo(struct net_device *dev,
 {
 	struct ipw_priv *p = libipw_priv(dev);
 	char vers[64];
+	char date[32];
 	u32 len;
 
 	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
@@ -10384,8 +10401,11 @@ static void ipw_ethtool_get_drvinfo(struct net_device *dev,
 
 	len = sizeof(vers);
 	ipw_get_ordinal(p, IPW_ORD_STAT_FW_VERSION, vers, &len);
+	len = sizeof(date);
+	ipw_get_ordinal(p, IPW_ORD_STAT_FW_DATE, date, &len);
 
-	strscpy(info->fw_version, vers, sizeof(info->fw_version));
+	snprintf(info->fw_version, sizeof(info->fw_version), "%s (%s)",
+		 vers, date);
 	strscpy(info->bus_info, pci_name(p->pci_dev),
 		sizeof(info->bus_info));
 }

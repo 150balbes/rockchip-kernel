@@ -20,9 +20,7 @@ properties:
       - fsl,imx7ulp-cm4
       - fsl,imx8mm-cm4
       - fsl,imx8mn-cm7
-      - fsl,imx8mn-cm7-mmio
       - fsl,imx8mp-cm7
-      - fsl,imx8mp-cm7-mmio
       - fsl,imx8mq-cm4
       - fsl,imx8qm-cm4
       - fsl,imx8qxp-cm4
@@ -72,11 +70,6 @@ properties:
     description:
       Specify CPU entry address for SCU enabled processor.
 
-  fsl,iomuxc-gpr:
-    $ref: /schemas/types.yaml#/definitions/phandle
-    description:
-      Phandle to IOMUXC GPR block which provide access to CM7 CPUWAIT bit.
-
   fsl,resource-id:
     $ref: /schemas/types.yaml#/definitions/uint32
     description:
@@ -85,19 +78,6 @@ properties:
 
 required:
   - compatible
-
-allOf:
-  - if:
-      properties:
-        compatible:
-          not:
-            contains:
-              enum:
-                - fsl,imx8mn-cm7-mmio
-                - fsl,imx8mp-cm7-mmio
-    then:
-      properties:
-        fsl,iomuxc-gpr: false
 
 additionalProperties: false
 

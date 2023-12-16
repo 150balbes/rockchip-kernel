@@ -264,17 +264,23 @@ static int sdhci_brcmstb_probe(struct platform_device *pdev)
 
 	dev_dbg(&pdev->dev, "Probe found match for %s\n",  match->compatible);
 
-	clk = devm_clk_get_optional_enabled(&pdev->dev, NULL);
+	clk = devm_clk_get_optional(&pdev->dev, NULL);
 	if (IS_ERR(clk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(clk),
-				     "Failed to get and enable clock from Device Tree\n");
+				     "Failed to get clock from Device Tree\n");
+
+	res = clk_prepare_enable(clk);
+	if (res)
+		return res;
 
 	memset(&brcmstb_pdata, 0, sizeof(brcmstb_pdata));
 	brcmstb_pdata.ops = match_priv->ops;
 	host = sdhci_pltfm_init(pdev, &brcmstb_pdata,
 				sizeof(struct sdhci_brcmstb_priv));
-	if (IS_ERR(host))
-		return PTR_ERR(host);
+	if (IS_ERR(host)) {
+		res = PTR_ERR(host);
+		goto err_clk;
+	}
 
 	pltfm_host = sdhci_priv(host);
 	priv = sdhci_pltfm_priv(pltfm_host);
@@ -363,7 +369,9 @@ add_host:
 
 err:
 	sdhci_pltfm_free(pdev);
+err_clk:
 	clk_disable_unprepare(base_clk);
+	clk_disable_unprepare(clk);
 	return res;
 }
 
@@ -422,7 +430,7 @@ static struct platform_driver sdhci_brcmstb_driver = {
 		.of_match_table = of_match_ptr(sdhci_brcm_of_match),
 	},
 	.probe		= sdhci_brcmstb_probe,
-	.remove_new	= sdhci_pltfm_remove,
+	.remove		= sdhci_pltfm_unregister,
 	.shutdown	= sdhci_brcmstb_shutdown,
 };
 

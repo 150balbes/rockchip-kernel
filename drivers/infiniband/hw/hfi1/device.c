@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+// SPDX-License-Identifier: GPL-2.0 or BSD-3-Clause
 /*
  * Copyright(c) 2015, 2016 Intel Corporation.
  */
@@ -10,29 +10,8 @@
 #include "hfi.h"
 #include "device.h"
 
-static char *hfi1_devnode(const struct device *dev, umode_t *mode)
-{
-	if (mode)
-		*mode = 0600;
-	return kasprintf(GFP_KERNEL, "%s", dev_name(dev));
-}
-
-static const struct class class = {
-	.name = "hfi1",
-	.devnode = hfi1_devnode,
-};
-
-static char *hfi1_user_devnode(const struct device *dev, umode_t *mode)
-{
-	if (mode)
-		*mode = 0666;
-	return kasprintf(GFP_KERNEL, "%s", dev_name(dev));
-}
-
-static const struct class user_class = {
-	.name = "hfi1_user",
-	.devnode = hfi1_user_devnode,
-};
+static struct class *class;
+static struct class *user_class;
 static dev_t hfi1_dev;
 
 int hfi1_cdev_init(int minor, const char *name,
@@ -58,9 +37,9 @@ int hfi1_cdev_init(int minor, const char *name,
 	}
 
 	if (user_accessible)
-		device = device_create(&user_class, NULL, dev, NULL, "%s", name);
+		device = device_create(user_class, NULL, dev, NULL, "%s", name);
 	else
-		device = device_create(&class, NULL, dev, NULL, "%s", name);
+		device = device_create(class, NULL, dev, NULL, "%s", name);
 
 	if (IS_ERR(device)) {
 		ret = PTR_ERR(device);
@@ -93,6 +72,26 @@ const char *class_name(void)
 	return hfi1_class_name;
 }
 
+static char *hfi1_devnode(const struct device *dev, umode_t *mode)
+{
+	if (mode)
+		*mode = 0600;
+	return kasprintf(GFP_KERNEL, "%s", dev_name(dev));
+}
+
+static const char *hfi1_class_name_user = "hfi1_user";
+static const char *class_name_user(void)
+{
+	return hfi1_class_name_user;
+}
+
+static char *hfi1_user_devnode(const struct device *dev, umode_t *mode)
+{
+	if (mode)
+		*mode = 0666;
+	return kasprintf(GFP_KERNEL, "%s", dev_name(dev));
+}
+
 int __init dev_init(void)
 {
 	int ret;
@@ -103,21 +102,27 @@ int __init dev_init(void)
 		goto done;
 	}
 
-	ret = class_register(&class);
-	if (ret) {
+	class = class_create(class_name());
+	if (IS_ERR(class)) {
+		ret = PTR_ERR(class);
 		pr_err("Could not create device class (err %d)\n", -ret);
 		unregister_chrdev_region(hfi1_dev, HFI1_NMINORS);
 		goto done;
 	}
+	class->devnode = hfi1_devnode;
 
-	ret = class_register(&user_class);
-	if (ret) {
+	user_class = class_create(class_name_user());
+	if (IS_ERR(user_class)) {
+		ret = PTR_ERR(user_class);
 		pr_err("Could not create device class for user accessible files (err %d)\n",
 		       -ret);
-		class_unregister(&class);
+		class_destroy(class);
+		class = NULL;
+		user_class = NULL;
 		unregister_chrdev_region(hfi1_dev, HFI1_NMINORS);
 		goto done;
 	}
+	user_class->devnode = hfi1_user_devnode;
 
 done:
 	return ret;
@@ -125,8 +130,11 @@ done:
 
 void dev_cleanup(void)
 {
-	class_unregister(&class);
-	class_unregister(&user_class);
+	class_destroy(class);
+	class = NULL;
+
+	class_destroy(user_class);
+	user_class = NULL;
 
 	unregister_chrdev_region(hfi1_dev, HFI1_NMINORS);
 }

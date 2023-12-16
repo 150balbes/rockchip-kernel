@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- *  Security-Enhanced Linux (SELinux) security module
+ *  NSA Security-Enhanced Linux (SELinux) security module
  *
  *  This file contains the SELinux XFRM hook function implementations.
  *

@@ -853,8 +853,7 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
 	if (WARN_ON_ONCE(len > skb->len))
 		return -EINVAL;
 
-	if (pskb_trim(skb, len))
-		return -EINVAL;
+	pskb_trim(skb, len);
 
 	status->chains = BIT(0);
 	signal = mt76x02_mac_get_rssi(dev, rxwi->rssi[0], 0);

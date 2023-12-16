@@ -25,16 +25,6 @@ struct panfrost_perfcnt;
 #define NUM_JOB_SLOTS 3
 #define MAX_PM_DOMAINS 5
 
-/**
- * enum panfrost_gpu_pm - Supported kernel power management features
- * @GPU_PM_CLK_DIS:  Allow disabling clocks during system suspend
- * @GPU_PM_VREG_OFF: Allow turning off regulators during system suspend
- */
-enum panfrost_gpu_pm {
-	GPU_PM_CLK_DIS,
-	GPU_PM_VREG_OFF,
-};
-
 struct panfrost_features {
 	u16 id;
 	u16 revision;
@@ -85,9 +75,6 @@ struct panfrost_compatible {
 
 	/* Vendor implementation quirks callback */
 	void (*vendor_quirk)(struct panfrost_device *pfdev);
-
-	/* Allowed PM features */
-	u8 pm_features;
 };
 
 struct panfrost_device {
@@ -132,7 +119,7 @@ struct panfrost_device {
 
 	struct mutex shrinker_lock;
 	struct list_head shrinker_list;
-	struct shrinker *shrinker;
+	struct shrinker shrinker;
 
 	struct panfrost_devfreq pfdevfreq;
 

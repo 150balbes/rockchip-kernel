@@ -460,6 +460,7 @@ static void atomisp_dev_init_struct(struct atomisp_device *isp)
 
 static void atomisp_subdev_init_struct(struct atomisp_sub_device *asd)
 {
+	v4l2_ctrl_s_ctrl(asd->run_mode, ATOMISP_RUN_MODE_STILL_CAPTURE);
 	memset(&asd->params.css_param, 0, sizeof(asd->params.css_param));
 	asd->params.color_effect = V4L2_COLORFX_NONE;
 	asd->params.bad_pixel_en = true;
@@ -512,8 +513,8 @@ static int atomisp_open(struct file *file)
 	 */
 	if (pipe->users) {
 		dev_dbg(isp->dev, "video node already opened\n");
-		ret = -EBUSY;
-		goto error;
+		mutex_unlock(&isp->mutex);
+		return -EBUSY;
 	}
 
 	/* runtime power management, turn on ISP */
@@ -532,6 +533,8 @@ static int atomisp_open(struct file *file)
 	}
 
 	atomisp_subdev_init_struct(asd);
+	/* Ensure that a mode is set */
+	v4l2_ctrl_s_ctrl(asd->run_mode, ATOMISP_RUN_MODE_PREVIEW);
 
 	pipe->users++;
 	mutex_unlock(&isp->mutex);

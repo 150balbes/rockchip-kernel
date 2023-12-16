@@ -22,9 +22,8 @@
 #include <linux/mtd/ndfc.h>
 #include <linux/slab.h>
 #include <linux/mtd/mtd.h>
-#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <asm/io.h>
 
 #define NDFC_MAX_CS    4

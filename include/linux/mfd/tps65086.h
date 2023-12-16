@@ -13,9 +13,8 @@
 #include <linux/regmap.h>
 
 /* List of registers for TPS65086 */
-#define TPS65086_DEVICEID1		0x00
-#define TPS65086_DEVICEID2		0x01
-#define TPS65086_IRQ		0x02
+#define TPS65086_DEVICEID		0x01
+#define TPS65086_IRQ			0x02
 #define TPS65086_IRQ_MASK		0x03
 #define TPS65086_PMICSTAT		0x04
 #define TPS65086_SHUTDNSRC		0x05
@@ -76,16 +75,10 @@
 #define TPS65086_IRQ_SHUTDN_MASK	BIT(3)
 #define TPS65086_IRQ_FAULT_MASK		BIT(7)
 
-/* DEVICEID1 Register field definitions */
-#define TPS6508640_ID			0x00
-#define TPS65086401_ID			0x01
-#define TPS6508641_ID			0x10
-#define TPS65086470_ID			0x70
-
-/* DEVICEID2 Register field definitions */
-#define TPS65086_DEVICEID2_PART_MASK	GENMASK(3, 0)
-#define TPS65086_DEVICEID2_OTP_MASK	GENMASK(5, 4)
-#define TPS65086_DEVICEID2_REV_MASK	GENMASK(7, 6)
+/* DEVICEID Register field definitions */
+#define TPS65086_DEVICEID_PART_MASK	GENMASK(3, 0)
+#define TPS65086_DEVICEID_OTP_MASK	GENMASK(5, 4)
+#define TPS65086_DEVICEID_REV_MASK	GENMASK(7, 6)
 
 /* VID Masks */
 #define BUCK_VID_MASK			GENMASK(7, 1)
@@ -99,8 +92,6 @@ enum tps65086_irqs {
 	TPS65086_IRQ_FAULT,
 };
 
-struct tps65086_regulator_config;
-
 /**
  * struct tps65086 - state holder for the tps65086 driver
  *
@@ -109,8 +100,6 @@ struct tps65086_regulator_config;
 struct tps65086 {
 	struct device *dev;
 	struct regmap *regmap;
-	unsigned int chip_id;
-	const struct tps65086_regulator_config *reg_config;
 
 	/* IRQ Data */
 	int irq;

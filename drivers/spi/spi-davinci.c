@@ -15,6 +15,7 @@
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi_bitbang.h>
 #include <linux/slab.h>
@@ -201,7 +202,7 @@ static void davinci_spi_chipselect(struct spi_device *spi, int value)
 	u8 chip_sel = spi_get_chipselect(spi, 0);
 	u16 spidat1 = CS_DEFAULT;
 
-	dspi = spi_controller_get_devdata(spi->controller);
+	dspi = spi_master_get_devdata(spi->master);
 
 	/* program delay transfers if tx_delay is non zero */
 	if (spicfg && spicfg->wdelay)
@@ -271,7 +272,7 @@ static int davinci_spi_setup_transfer(struct spi_device *spi,
 	u32 hz = 0, spifmt = 0;
 	int prescale;
 
-	dspi = spi_controller_get_devdata(spi->controller);
+	dspi = spi_master_get_devdata(spi->master);
 	spicfg = spi->controller_data;
 	if (!spicfg)
 		spicfg = &davinci_spi_default_cfg;
@@ -379,7 +380,7 @@ static int davinci_spi_of_setup(struct spi_device *spi)
 {
 	struct davinci_spi_config *spicfg = spi->controller_data;
 	struct device_node *np = spi->dev.of_node;
-	struct davinci_spi *dspi = spi_controller_get_devdata(spi->controller);
+	struct davinci_spi *dspi = spi_master_get_devdata(spi->master);
 	u32 prop;
 
 	if (spicfg == NULL && np) {
@@ -411,7 +412,7 @@ static int davinci_spi_setup(struct spi_device *spi)
 	struct device_node *np = spi->dev.of_node;
 	bool internal_cs = true;
 
-	dspi = spi_controller_get_devdata(spi->controller);
+	dspi = spi_master_get_devdata(spi->master);
 
 	if (!(spi->mode & SPI_NO_CS)) {
 		if (np && spi_get_csgpiod(spi, 0))
@@ -441,7 +442,7 @@ static void davinci_spi_cleanup(struct spi_device *spi)
 		kfree(spicfg);
 }
 
-static bool davinci_spi_can_dma(struct spi_controller *host,
+static bool davinci_spi_can_dma(struct spi_master *master,
 				struct spi_device *spi,
 				struct spi_transfer *xfer)
 {
@@ -571,7 +572,7 @@ static int davinci_spi_bufs(struct spi_device *spi, struct spi_transfer *t)
 	struct davinci_spi_config *spicfg;
 	struct davinci_spi_platform_data *pdata;
 
-	dspi = spi_controller_get_devdata(spi->controller);
+	dspi = spi_master_get_devdata(spi->master);
 	pdata = &dspi->pdata;
 	spicfg = (struct davinci_spi_config *)spi->controller_data;
 	if (!spicfg)
@@ -592,7 +593,7 @@ static int davinci_spi_bufs(struct spi_device *spi, struct spi_transfer *t)
 
 	reinit_completion(&dspi->done);
 
-	if (!davinci_spi_can_dma(spi->controller, spi, t)) {
+	if (!davinci_spi_can_dma(spi->master, spi, t)) {
 		if (spicfg->io_type != SPI_IO_TYPE_POLL)
 			set_io_bits(dspi->base + SPIINT, SPIINT_MASKINT);
 		/* start the transfer */
@@ -673,7 +674,7 @@ static int davinci_spi_bufs(struct spi_device *spi, struct spi_transfer *t)
 	}
 
 	clear_io_bits(dspi->base + SPIINT, SPIINT_MASKALL);
-	if (davinci_spi_can_dma(spi->controller, spi, t))
+	if (davinci_spi_can_dma(spi->master, spi, t))
 		clear_io_bits(dspi->base + SPIINT, SPIINT_DMA_REQ_EN);
 
 	clear_io_bits(dspi->base + SPIGCR1, SPIGCR1_SPIENA_MASK);
@@ -855,22 +856,22 @@ static int spi_davinci_get_pdata(struct platform_device *pdev,
  */
 static int davinci_spi_probe(struct platform_device *pdev)
 {
-	struct spi_controller *host;
+	struct spi_master *master;
 	struct davinci_spi *dspi;
 	struct davinci_spi_platform_data *pdata;
 	struct resource *r;
 	int ret = 0;
 	u32 spipc0;
 
-	host = spi_alloc_host(&pdev->dev, sizeof(struct davinci_spi));
-	if (host == NULL) {
+	master = spi_alloc_master(&pdev->dev, sizeof(struct davinci_spi));
+	if (master == NULL) {
 		ret = -ENOMEM;
 		goto err;
 	}
 
-	platform_set_drvdata(pdev, host);
+	platform_set_drvdata(pdev, master);
 
-	dspi = spi_controller_get_devdata(host);
+	dspi = spi_master_get_devdata(master);
 
 	if (dev_get_platdata(&pdev->dev)) {
 		pdata = dev_get_platdata(&pdev->dev);
@@ -879,7 +880,7 @@ static int davinci_spi_probe(struct platform_device *pdev)
 		/* update dspi pdata with that from the DT */
 		ret = spi_davinci_get_pdata(pdev, dspi);
 		if (ret < 0)
-			goto free_host;
+			goto free_master;
 	}
 
 	/* pdata in dspi is now updated and point pdata to that */
@@ -891,45 +892,57 @@ static int davinci_spi_probe(struct platform_device *pdev)
 					    GFP_KERNEL);
 	if (dspi->bytes_per_word == NULL) {
 		ret = -ENOMEM;
-		goto free_host;
+		goto free_master;
 	}
 
-	dspi->base = devm_platform_get_and_ioremap_resource(pdev, 0, &r);
+	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (r == NULL) {
+		ret = -ENOENT;
+		goto free_master;
+	}
+
+	dspi->pbase = r->start;
+
+	dspi->base = devm_ioremap_resource(&pdev->dev, r);
 	if (IS_ERR(dspi->base)) {
 		ret = PTR_ERR(dspi->base);
-		goto free_host;
+		goto free_master;
 	}
-	dspi->pbase = r->start;
 
 	init_completion(&dspi->done);
 
 	ret = platform_get_irq(pdev, 0);
+	if (ret == 0)
+		ret = -EINVAL;
 	if (ret < 0)
-		goto free_host;
+		goto free_master;
 	dspi->irq = ret;
 
 	ret = devm_request_threaded_irq(&pdev->dev, dspi->irq, davinci_spi_irq,
 				dummy_thread_fn, 0, dev_name(&pdev->dev), dspi);
 	if (ret)
-		goto free_host;
+		goto free_master;
 
-	dspi->bitbang.master = host;
+	dspi->bitbang.master = master;
 
-	dspi->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	dspi->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(dspi->clk)) {
 		ret = -ENODEV;
-		goto free_host;
+		goto free_master;
 	}
+	ret = clk_prepare_enable(dspi->clk);
+	if (ret)
+		goto free_master;
 
-	host->use_gpio_descriptors = true;
-	host->dev.of_node = pdev->dev.of_node;
-	host->bus_num = pdev->id;
-	host->num_chipselect = pdata->num_chipselect;
-	host->bits_per_word_mask = SPI_BPW_RANGE_MASK(2, 16);
-	host->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_GPIO_SS;
-	host->setup = davinci_spi_setup;
-	host->cleanup = davinci_spi_cleanup;
-	host->can_dma = davinci_spi_can_dma;
+	master->use_gpio_descriptors = true;
+	master->dev.of_node = pdev->dev.of_node;
+	master->bus_num = pdev->id;
+	master->num_chipselect = pdata->num_chipselect;
+	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(2, 16);
+	master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_GPIO_SS;
+	master->setup = davinci_spi_setup;
+	master->cleanup = davinci_spi_cleanup;
+	master->can_dma = davinci_spi_can_dma;
 
 	dspi->bitbang.chipselect = davinci_spi_chipselect;
 	dspi->bitbang.setup_transfer = davinci_spi_setup_transfer;
@@ -944,7 +957,7 @@ static int davinci_spi_probe(struct platform_device *pdev)
 
 	ret = davinci_spi_request_dma(dspi);
 	if (ret == -EPROBE_DEFER) {
-		goto free_host;
+		goto free_clk;
 	} else if (ret) {
 		dev_info(&pdev->dev, "DMA is not supported (%d)\n", ret);
 		dspi->dma_rx = NULL;
@@ -970,7 +983,7 @@ static int davinci_spi_probe(struct platform_device *pdev)
 
 	iowrite32(CS_DEFAULT, dspi->base + SPIDEF);
 
-	/* host mode default */
+	/* master mode default */
 	set_io_bits(dspi->base + SPIGCR1, SPIGCR1_CLKMOD_MASK);
 	set_io_bits(dspi->base + SPIGCR1, SPIGCR1_MASTER_MASK);
 	set_io_bits(dspi->base + SPIGCR1, SPIGCR1_POWERDOWN_MASK);
@@ -988,8 +1001,10 @@ free_dma:
 		dma_release_channel(dspi->dma_rx);
 		dma_release_channel(dspi->dma_tx);
 	}
-free_host:
-	spi_controller_put(host);
+free_clk:
+	clk_disable_unprepare(dspi->clk);
+free_master:
+	spi_master_put(master);
 err:
 	return ret;
 }
@@ -1006,19 +1021,21 @@ err:
 static void davinci_spi_remove(struct platform_device *pdev)
 {
 	struct davinci_spi *dspi;
-	struct spi_controller *host;
+	struct spi_master *master;
 
-	host = platform_get_drvdata(pdev);
-	dspi = spi_controller_get_devdata(host);
+	master = platform_get_drvdata(pdev);
+	dspi = spi_master_get_devdata(master);
 
 	spi_bitbang_stop(&dspi->bitbang);
+
+	clk_disable_unprepare(dspi->clk);
 
 	if (dspi->dma_rx) {
 		dma_release_channel(dspi->dma_rx);
 		dma_release_channel(dspi->dma_tx);
 	}
 
-	spi_controller_put(host);
+	spi_master_put(master);
 }
 
 static struct platform_driver davinci_spi_driver = {

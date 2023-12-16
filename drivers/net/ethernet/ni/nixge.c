@@ -7,10 +7,11 @@
 #include <linux/etherdevice.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
-#include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
+#include <linux/of_irq.h>
 #include <linux/skbuff.h>
 #include <linux/phy.h>
 #include <linux/mii.h>
@@ -683,7 +684,7 @@ static int nixge_poll(struct napi_struct *napi, int budget)
 		if (status & (XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK)) {
 			/* If there's more, reschedule, but clear */
 			nixge_dma_write_reg(priv, XAXIDMA_RX_SR_OFFSET, status);
-			napi_schedule(napi);
+			napi_reschedule(napi);
 		} else {
 			/* if not, turn on RX IRQs again ... */
 			cr = nixge_dma_read_reg(priv, XAXIDMA_RX_CR_OFFSET);
@@ -755,7 +756,8 @@ static irqreturn_t nixge_rx_irq(int irq, void *_ndev)
 		cr &= ~(XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK);
 		nixge_dma_write_reg(priv, XAXIDMA_RX_CR_OFFSET, cr);
 
-		napi_schedule(&priv->napi);
+		if (napi_schedule_prep(&priv->napi))
+			__napi_schedule(&priv->napi);
 		goto out;
 	}
 	if (!(status & XAXIDMA_IRQ_ALL_MASK)) {
@@ -1396,7 +1398,7 @@ free_netdev:
 	return err;
 }
 
-static void nixge_remove(struct platform_device *pdev)
+static int nixge_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct nixge_priv *priv = netdev_priv(ndev);
@@ -1411,11 +1413,13 @@ static void nixge_remove(struct platform_device *pdev)
 		mdiobus_unregister(priv->mii_bus);
 
 	free_netdev(ndev);
+
+	return 0;
 }
 
 static struct platform_driver nixge_driver = {
 	.probe		= nixge_probe,
-	.remove_new	= nixge_remove,
+	.remove		= nixge_remove,
 	.driver		= {
 		.name		= "nixge",
 		.of_match_table	= nixge_dt_ids,

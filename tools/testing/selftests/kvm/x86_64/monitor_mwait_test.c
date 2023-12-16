@@ -16,25 +16,14 @@ enum monitor_mwait_testcases {
 	MWAIT_DISABLED = BIT(2),
 };
 
-/*
- * If both MWAIT and its quirk are disabled, MONITOR/MWAIT should #UD, in all
- * other scenarios KVM should emulate them as nops.
- */
-#define GUEST_ASSERT_MONITOR_MWAIT(insn, testcase, vector)		\
-do {									\
-	bool fault_wanted = ((testcase) & MWAIT_QUIRK_DISABLED) &&	\
-			    ((testcase) & MWAIT_DISABLED);		\
-									\
-	if (fault_wanted)						\
-		__GUEST_ASSERT((vector) == UD_VECTOR,			\
-			       "Expected #UD on " insn " for testcase '0x%x', got '0x%x'", vector); \
-	else								\
-		__GUEST_ASSERT(!(vector),				\
-			       "Expected success on " insn " for testcase '0x%x', got '0x%x'", vector); \
-} while (0)
-
 static void guest_monitor_wait(int testcase)
 {
+	/*
+	 * If both MWAIT and its quirk are disabled, MONITOR/MWAIT should #UD,
+	 * in all other scenarios KVM should emulate them as nops.
+	 */
+	bool fault_wanted = (testcase & MWAIT_QUIRK_DISABLED) &&
+			    (testcase & MWAIT_DISABLED);
 	u8 vector;
 
 	GUEST_SYNC(testcase);
@@ -44,10 +33,16 @@ static void guest_monitor_wait(int testcase)
 	 * intercept checks, so the inputs for MONITOR and MWAIT must be valid.
 	 */
 	vector = kvm_asm_safe("monitor", "a"(guest_monitor_wait), "c"(0), "d"(0));
-	GUEST_ASSERT_MONITOR_MWAIT("MONITOR", testcase, vector);
+	if (fault_wanted)
+		GUEST_ASSERT_2(vector == UD_VECTOR, testcase, vector);
+	else
+		GUEST_ASSERT_2(!vector, testcase, vector);
 
 	vector = kvm_asm_safe("mwait", "a"(guest_monitor_wait), "c"(0), "d"(0));
-	GUEST_ASSERT_MONITOR_MWAIT("MWAIT", testcase, vector);
+	if (fault_wanted)
+		GUEST_ASSERT_2(vector == UD_VECTOR, testcase, vector);
+	else
+		GUEST_ASSERT_2(!vector, testcase, vector);
 }
 
 static void guest_code(void)
@@ -90,7 +85,7 @@ int main(int argc, char *argv[])
 			testcase = uc.args[1];
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			REPORT_GUEST_ASSERT_2(uc, "testcase = %lx, vector = %ld");
 			goto done;
 		case UCALL_DONE:
 			goto done;

@@ -32,6 +32,7 @@
 #include <linux/prefetch.h>
 #include <linux/debugfs.h>
 #include <linux/mii.h>
+#include <linux/of_device.h>
 #include <linux/of_net.h>
 #include <linux/dmi.h>
 
@@ -4528,7 +4529,7 @@ static __init void sky2_debug_init(void)
 	struct dentry *ent;
 
 	ent = debugfs_create_dir("sky2", NULL);
-	if (IS_ERR(ent))
+	if (!ent || IS_ERR(ent))
 		return;
 
 	sky2_debug = ent;

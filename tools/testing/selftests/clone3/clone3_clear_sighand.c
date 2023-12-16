@@ -16,6 +16,10 @@
 #include "../kselftest.h"
 #include "clone3_selftests.h"
 
+#ifndef CLONE_CLEAR_SIGHAND
+#define CLONE_CLEAR_SIGHAND 0x100000000ULL
+#endif
+
 static void nop_handler(int signo)
 {
 }

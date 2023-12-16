@@ -613,24 +613,6 @@ out_free:
 	kfree(isw);
 }
 
-static bool isw_prepare_wbs_switch(struct inode_switch_wbs_context *isw,
-				   struct list_head *list, int *nr)
-{
-	struct inode *inode;
-
-	list_for_each_entry(inode, list, i_io_list) {
-		if (!inode_prepare_wbs_switch(inode, isw->new_wb))
-			continue;
-
-		isw->inodes[*nr] = inode;
-		(*nr)++;
-
-		if (*nr >= WB_MAX_INODES_PER_ISW - 1)
-			return true;
-	}
-	return false;
-}
-
 /**
  * cleanup_offline_cgwb - detach associated inodes
  * @wb: target wb
@@ -643,6 +625,7 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
 {
 	struct cgroup_subsys_state *memcg_css;
 	struct inode_switch_wbs_context *isw;
+	struct inode *inode;
 	int nr;
 	bool restart = false;
 
@@ -664,17 +647,17 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
 
 	nr = 0;
 	spin_lock(&wb->list_lock);
-	/*
-	 * In addition to the inodes that have completed writeback, also switch
-	 * cgwbs for those inodes only with dirty timestamps. Otherwise, those
-	 * inodes won't be written back for a long time when lazytime is
-	 * enabled, and thus pinning the dying cgwbs. It won't break the
-	 * bandwidth restrictions, as writeback of inode metadata is not
-	 * accounted for.
-	 */
-	restart = isw_prepare_wbs_switch(isw, &wb->b_attached, &nr);
-	if (!restart)
-		restart = isw_prepare_wbs_switch(isw, &wb->b_dirty_time, &nr);
+	list_for_each_entry(inode, &wb->b_attached, i_io_list) {
+		if (!inode_prepare_wbs_switch(inode, isw->new_wb))
+			continue;
+
+		isw->inodes[nr++] = inode;
+
+		if (nr >= WB_MAX_INODES_PER_ISW - 1) {
+			restart = true;
+			break;
+		}
+	}
 	spin_unlock(&wb->list_lock);
 
 	/* no attached inodes? bail out */
@@ -1552,15 +1535,10 @@ static void requeue_inode(struct inode *inode, struct bdi_writeback *wb,
 
 	if (wbc->pages_skipped) {
 		/*
-		 * Writeback is not making progress due to locked buffers.
-		 * Skip this inode for now. Although having skipped pages
-		 * is odd for clean inodes, it can happen for some
-		 * filesystems so handle that gracefully.
+		 * writeback is not making progress due to locked
+		 * buffers. Skip this inode for now.
 		 */
-		if (inode->i_state & I_DIRTY_ALL)
-			redirty_tail_locked(inode, wb);
-		else
-			inode_cgwb_move_to_attached(inode, wb);
+		redirty_tail_locked(inode, wb);
 		return;
 	}
 
@@ -1975,9 +1953,9 @@ static long __writeback_inodes_wb(struct bdi_writeback *wb,
 		struct inode *inode = wb_inode(wb->b_io.prev);
 		struct super_block *sb = inode->i_sb;
 
-		if (!super_trylock_shared(sb)) {
+		if (!trylock_super(sb)) {
 			/*
-			 * super_trylock_shared() may fail consistently due to
+			 * trylock_super() may fail consistently due to
 			 * s_umount being grabbed by someone else. Don't use
 			 * requeue_io() to avoid busy retrying the inode/sb.
 			 */

@@ -17,16 +17,11 @@ description: |
 
 properties:
   compatible:
-    oneOf:
-      - items:
-          - enum:
-              - qcom,msm8916-iommu
-              - qcom,msm8953-iommu
-          - const: qcom,msm-iommu-v1
-      - items:
-          - enum:
-              - qcom,msm8976-iommu
-          - const: qcom,msm-iommu-v2
+    items:
+      - enum:
+          - qcom,msm8916-iommu
+          - qcom,msm8953-iommu
+      - const: qcom,msm-iommu-v1
 
   clocks:
     items:
@@ -69,19 +64,12 @@ patternProperties:
         enum:
           - qcom,msm-iommu-v1-ns
           - qcom,msm-iommu-v1-sec
-          - qcom,msm-iommu-v2-ns
-          - qcom,msm-iommu-v2-sec
 
       interrupts:
         maxItems: 1
 
       reg:
         maxItems: 1
-
-      qcom,ctx-asid:
-        $ref: /schemas/types.yaml#/definitions/uint32
-        description:
-          The ASID number associated to the context bank.
 
     required:
       - compatible

@@ -7,7 +7,6 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/io.h>
-#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/rpmsg.h>
@@ -287,7 +286,7 @@ struct rpmsg_endpoint *qcom_wcnss_open_channel(void *wcnss, const char *name, rp
 
 	return rpmsg_create_ept(_wcnss->channel->rpdev, cb, priv, chinfo);
 }
-EXPORT_SYMBOL_GPL(qcom_wcnss_open_channel);
+EXPORT_SYMBOL(qcom_wcnss_open_channel);
 
 static void wcnss_async_probe(struct work_struct *work)
 {
@@ -355,6 +354,7 @@ static struct rpmsg_driver wcnss_ctrl_driver = {
 	.callback = wcnss_ctrl_smd_callback,
 	.drv  = {
 		.name  = "qcom_wcnss_ctrl",
+		.owner = THIS_MODULE,
 		.of_match_table = wcnss_ctrl_of_match,
 	},
 };

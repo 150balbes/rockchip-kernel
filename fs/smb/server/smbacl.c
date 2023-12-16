@@ -1107,7 +1107,6 @@ pass:
 		struct smb_acl *pdacl;
 		struct smb_sid *powner_sid = NULL, *pgroup_sid = NULL;
 		int powner_sid_size = 0, pgroup_sid_size = 0, pntsd_size;
-		int pntsd_alloc_size;
 
 		if (parent_pntsd->osidoffset) {
 			powner_sid = (struct smb_sid *)((char *)parent_pntsd +
@@ -1120,10 +1119,9 @@ pass:
 			pgroup_sid_size = 1 + 1 + 6 + (pgroup_sid->num_subauth * 4);
 		}
 
-		pntsd_alloc_size = sizeof(struct smb_ntsd) + powner_sid_size +
-			pgroup_sid_size + sizeof(struct smb_acl) + nt_size;
-
-		pntsd = kzalloc(pntsd_alloc_size, GFP_KERNEL);
+		pntsd = kzalloc(sizeof(struct smb_ntsd) + powner_sid_size +
+				pgroup_sid_size + sizeof(struct smb_acl) +
+				nt_size, GFP_KERNEL);
 		if (!pntsd) {
 			rc = -ENOMEM;
 			goto free_aces_base;
@@ -1137,27 +1135,6 @@ pass:
 		pntsd->osidoffset = parent_pntsd->osidoffset;
 		pntsd->gsidoffset = parent_pntsd->gsidoffset;
 		pntsd->dacloffset = parent_pntsd->dacloffset;
-
-		if ((u64)le32_to_cpu(pntsd->osidoffset) + powner_sid_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
-
-		if ((u64)le32_to_cpu(pntsd->gsidoffset) + pgroup_sid_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
-
-		if ((u64)le32_to_cpu(pntsd->dacloffset) + sizeof(struct smb_acl) + nt_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
 
 		if (pntsd->osidoffset) {
 			struct smb_sid *owner_sid = (struct smb_sid *)((char *)pntsd +
@@ -1443,6 +1420,7 @@ int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 out:
 	posix_acl_release(fattr.cf_acls);
 	posix_acl_release(fattr.cf_dacls);
+	mark_inode_dirty(inode);
 	return rc;
 }
 

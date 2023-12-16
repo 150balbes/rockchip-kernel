@@ -69,4 +69,3 @@ module_exit(exit_rc_map_tbs_nec)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mauro Carvalho Chehab");
-MODULE_DESCRIPTION("tbs-nec remote controller keytable");

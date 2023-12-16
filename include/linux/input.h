@@ -562,7 +562,7 @@ struct ff_device {
 
 	int max_effects;
 	struct ff_effect *effects;
-	struct file *effect_owners[] __counted_by(max_effects);
+	struct file *effect_owners[];
 };
 
 int input_ff_create(struct input_dev *dev, unsigned int max_effects);

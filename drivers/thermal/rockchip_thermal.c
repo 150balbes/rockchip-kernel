@@ -1601,7 +1601,7 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void rockchip_thermal_remove(struct platform_device *pdev)
+static int rockchip_thermal_remove(struct platform_device *pdev)
 {
 	struct rockchip_thermal_data *thermal = platform_get_drvdata(pdev);
 	int i;
@@ -1614,6 +1614,8 @@ static void rockchip_thermal_remove(struct platform_device *pdev)
 	}
 
 	thermal->chip->control(thermal->regs, false);
+
+	return 0;
 }
 
 static int __maybe_unused rockchip_thermal_suspend(struct device *dev)
@@ -1689,7 +1691,7 @@ static struct platform_driver rockchip_thermal_driver = {
 		.of_match_table = of_rockchip_thermal_match,
 	},
 	.probe = rockchip_thermal_probe,
-	.remove_new = rockchip_thermal_remove,
+	.remove = rockchip_thermal_remove,
 };
 
 int rk_get_temperature(void)

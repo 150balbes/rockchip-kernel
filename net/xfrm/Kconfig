@@ -15,7 +15,6 @@ config XFRM_ALGO
 	tristate
 	select XFRM
 	select CRYPTO
-	select CRYPTO_AEAD
 	select CRYPTO_HASH
 	select CRYPTO_SKCIPHER
 

@@ -25,6 +25,7 @@
 #include <linux/ptrace.h>
 #include <linux/kgdb.h>
 #include <linux/kdebug.h>
+#include <linux/kprobes.h>
 #include <linux/notifier.h>
 #include <linux/irq.h>
 #include <linux/perf_event.h>
@@ -34,11 +35,8 @@
 #include <asm/branch.h>
 #include <asm/break.h>
 #include <asm/cpu.h>
-#include <asm/exception.h>
 #include <asm/fpu.h>
-#include <asm/lbt.h>
 #include <asm/inst.h>
-#include <asm/kgdb.h>
 #include <asm/loongarch.h>
 #include <asm/mmu_context.h>
 #include <asm/pgtable.h>
@@ -52,6 +50,21 @@
 #include <asm/uprobes.h>
 
 #include "access-helper.h"
+
+extern asmlinkage void handle_ade(void);
+extern asmlinkage void handle_ale(void);
+extern asmlinkage void handle_bce(void);
+extern asmlinkage void handle_sys(void);
+extern asmlinkage void handle_bp(void);
+extern asmlinkage void handle_ri(void);
+extern asmlinkage void handle_fpu(void);
+extern asmlinkage void handle_fpe(void);
+extern asmlinkage void handle_lbt(void);
+extern asmlinkage void handle_lsx(void);
+extern asmlinkage void handle_lasx(void);
+extern asmlinkage void handle_reserved(void);
+extern asmlinkage void handle_watch(void);
+extern asmlinkage void handle_vint(void);
 
 static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
 			   const char *loglvl, bool user)
@@ -370,15 +383,16 @@ void show_registers(struct pt_regs *regs)
 
 static DEFINE_RAW_SPINLOCK(die_lock);
 
-void die(const char *str, struct pt_regs *regs)
+void __noreturn die(const char *str, struct pt_regs *regs)
 {
-	int ret;
 	static int die_counter;
+	int sig = SIGSEGV;
 
 	oops_enter();
 
-	ret = notify_die(DIE_OOPS, str, regs, 0,
-			 current->thread.trap_nr, SIGSEGV);
+	if (notify_die(DIE_OOPS, str, regs, 0, current->thread.trap_nr,
+		       SIGSEGV) == NOTIFY_STOP)
+		sig = 0;
 
 	console_verbose();
 	raw_spin_lock_irq(&die_lock);
@@ -391,9 +405,6 @@ void die(const char *str, struct pt_regs *regs)
 
 	oops_exit();
 
-	if (ret == NOTIFY_STOP)
-		return;
-
 	if (regs && kexec_should_crash(current))
 		crash_kexec(regs);
 
@@ -403,7 +414,7 @@ void die(const char *str, struct pt_regs *regs)
 	if (panic_on_oops)
 		panic("Fatal exception");
 
-	make_task_dead(SIGSEGV);
+	make_task_dead(sig);
 }
 
 static inline void setup_vint_size(unsigned int size)
@@ -424,8 +435,8 @@ static inline void setup_vint_size(unsigned int size)
  * happen together with Overflow or Underflow, and `ptrace' can set
  * any bits.
  */
-static void force_fcsr_sig(unsigned long fcsr,
-			void __user *fault_addr, struct task_struct *tsk)
+void force_fcsr_sig(unsigned long fcsr, void __user *fault_addr,
+		     struct task_struct *tsk)
 {
 	int si_code = FPE_FLTUNK;
 
@@ -443,7 +454,7 @@ static void force_fcsr_sig(unsigned long fcsr,
 	force_sig_fault(SIGFPE, si_code, fault_addr);
 }
 
-static int process_fpemu_return(int sig, void __user *fault_addr, unsigned long fcsr)
+int process_fpemu_return(int sig, void __user *fault_addr, unsigned long fcsr)
 {
 	int si_code;
 
@@ -689,11 +700,6 @@ asmlinkage void noinstr do_bp(struct pt_regs *regs)
 	 * pertain to them.
 	 */
 	switch (bcode) {
-	case BRK_KDB:
-		if (kgdb_breakpoint_handler(regs))
-			goto out;
-		else
-			break;
 	case BRK_KPROBE_BP:
 		if (kprobe_breakpoint_handler(regs))
 			goto out;
@@ -760,9 +766,6 @@ asmlinkage void noinstr do_watch(struct pt_regs *regs)
 #ifndef CONFIG_HAVE_HW_BREAKPOINT
 	pr_warn("Hardware watch point handler not implemented!\n");
 #else
-	if (kgdb_breakpoint_handler(regs))
-		goto out;
-
 	if (test_tsk_thread_flag(current, TIF_SINGLESTEP)) {
 		int llbit = (csr_read32(LOONGARCH_CSR_LLBCTL) & 0x1);
 		unsigned long pc = instruction_pointer(regs);
@@ -809,7 +812,7 @@ out:
 asmlinkage void noinstr do_ri(struct pt_regs *regs)
 {
 	int status = SIGILL;
-	unsigned int __maybe_unused opcode;
+	unsigned int opcode = 0;
 	unsigned int __user *era = (unsigned int __user *)exception_era(regs);
 	irqentry_state_t state = irqentry_enter(regs);
 
@@ -961,47 +964,13 @@ out:
 	irqentry_exit(regs, state);
 }
 
-static void init_restore_lbt(void)
-{
-	if (!thread_lbt_context_live()) {
-		/* First time LBT context user */
-		init_lbt();
-		set_thread_flag(TIF_LBT_CTX_LIVE);
-	} else {
-		if (!is_lbt_owner())
-			own_lbt_inatomic(1);
-	}
-
-	BUG_ON(!is_lbt_enabled());
-}
-
 asmlinkage void noinstr do_lbt(struct pt_regs *regs)
 {
 	irqentry_state_t state = irqentry_enter(regs);
 
-	/*
-	 * BTD (Binary Translation Disable exception) can be triggered
-	 * during FP save/restore if TM (Top Mode) is on, which may
-	 * cause irq_enable during 'switch_to'. To avoid this situation
-	 * (including the user using 'MOVGR2GCSR' to turn on TM, which
-	 * will not trigger the BTE), we need to check PRMD first.
-	 */
-	if (regs->csr_prmd & CSR_PRMD_PIE)
-		local_irq_enable();
-
-	if (!cpu_has_lbt) {
-		force_sig(SIGILL);
-		goto out;
-	}
-	BUG_ON(is_lbt_enabled());
-
-	preempt_disable();
-	init_restore_lbt();
-	preempt_enable();
-
-out:
-	if (regs->csr_prmd & CSR_PRMD_PIE)
-		local_irq_disable();
+	local_irq_enable();
+	force_sig(SIGILL);
+	local_irq_disable();
 
 	irqentry_exit(regs, state);
 }

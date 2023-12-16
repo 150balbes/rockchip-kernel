@@ -284,7 +284,7 @@ struct ucan_priv {
 	 */
 	spinlock_t echo_skb_lock;
 
-	/* usb device information */
+	/* usb device information information */
 	u8 intf_index;
 	u8 in_ep_addr;
 	u8 out_ep_addr;

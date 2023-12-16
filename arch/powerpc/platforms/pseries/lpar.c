@@ -41,7 +41,6 @@
 #include <asm/kexec.h>
 #include <asm/fadump.h>
 #include <asm/dtl.h>
-#include <asm/vphn.h>
 
 #include "pseries.h"
 
@@ -192,9 +191,9 @@ static void free_dtl_buffers(unsigned long *time_limit)
 			continue;
 		kmem_cache_free(dtl_cache, pp->dispatch_log);
 		pp->dtl_ridx = 0;
-		pp->dispatch_log = NULL;
-		pp->dispatch_log_end = NULL;
-		pp->dtl_curr = NULL;
+		pp->dispatch_log = 0;
+		pp->dispatch_log_end = 0;
+		pp->dtl_curr = 0;
 
 		if (time_limit && time_after(jiffies, *time_limit)) {
 			cond_resched();
@@ -223,7 +222,7 @@ static void destroy_cpu_associativity(void)
 {
 	kfree(vcpu_associativity);
 	kfree(pcpu_associativity);
-	vcpu_associativity = pcpu_associativity = NULL;
+	vcpu_associativity = pcpu_associativity = 0;
 }
 
 static __be32 *__get_cpu_associativity(int cpu, __be32 *cpu_assoc, int flag)
@@ -526,10 +525,8 @@ static ssize_t vcpudispatch_stats_write(struct file *file, const char __user *p,
 
 	if (cmd) {
 		rc = init_cpu_associativity();
-		if (rc) {
-			destroy_cpu_associativity();
+		if (rc)
 			goto out;
-		}
 
 		for_each_possible_cpu(cpu) {
 			disp = per_cpu_ptr(&vcpu_disp_data, cpu);
@@ -642,8 +639,16 @@ static const struct proc_ops vcpudispatch_stats_freq_proc_ops = {
 
 static int __init vcpudispatch_stats_procfs_init(void)
 {
-	if (!lppaca_shared_proc())
+	/*
+	 * Avoid smp_processor_id while preemptible. All CPUs should have
+	 * the same value for lppaca_shared_proc.
+	 */
+	preempt_disable();
+	if (!lppaca_shared_proc(get_lppaca())) {
+		preempt_enable();
 		return 0;
+	}
+	preempt_enable();
 
 	if (!proc_create("powerpc/vcpudispatch_stats", 0600, NULL,
 					&vcpudispatch_stats_proc_ops))

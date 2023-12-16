@@ -14,7 +14,7 @@ static inline void cpu_relax(void)
 	__asm__ __volatile__ ("div %0, %0, zero" : "=r" (dummy));
 #endif
 
-#ifdef CONFIG_TOOLCHAIN_HAS_ZIHINTPAUSE
+#ifdef __riscv_zihintpause
 	/*
 	 * Reduce instruction retirement.
 	 * This assumes the PC changes.

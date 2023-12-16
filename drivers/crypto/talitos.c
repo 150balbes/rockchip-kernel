@@ -19,9 +19,9 @@
 #include <linux/interrupt.h>
 #include <linux/crypto.h>
 #include <linux/hw_random.h>
-#include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/spinlock.h>
@@ -2119,14 +2119,13 @@ static int ahash_finup(struct ahash_request *areq)
 
 static int ahash_digest(struct ahash_request *areq)
 {
-	ahash_init(areq);
-	return ahash_finup(areq);
-}
+	struct talitos_ahash_req_ctx *req_ctx = ahash_request_ctx(areq);
+	struct crypto_ahash *ahash = crypto_ahash_reqtfm(areq);
 
-static int ahash_digest_sha224_swinit(struct ahash_request *areq)
-{
-	ahash_init_sha224_swinit(areq);
-	return ahash_finup(areq);
+	ahash->init(areq);
+	req_ctx->last = 1;
+
+	return ahash_process_req(areq, areq->nbytes);
 }
 
 static int ahash_export(struct ahash_request *areq, void *out)
@@ -3137,7 +3136,7 @@ static int hw_supports(struct device *dev, __be32 desc_hdr_template)
 	return ret;
 }
 
-static void talitos_remove(struct platform_device *ofdev)
+static int talitos_remove(struct platform_device *ofdev)
 {
 	struct device *dev = &ofdev->dev;
 	struct talitos_private *priv = dev_get_drvdata(dev);
@@ -3171,6 +3170,8 @@ static void talitos_remove(struct platform_device *ofdev)
 	tasklet_kill(&priv->done_task[0]);
 	if (priv->irq[1])
 		tasklet_kill(&priv->done_task[1]);
+
+	return 0;
 }
 
 static struct talitos_crypto_alg *talitos_alg_alloc(struct device *dev,
@@ -3241,8 +3242,6 @@ static struct talitos_crypto_alg *talitos_alg_alloc(struct device *dev,
 		    (!strcmp(alg->cra_name, "sha224") ||
 		     !strcmp(alg->cra_name, "hmac(sha224)"))) {
 			t_alg->algt.alg.hash.init = ahash_init_sha224_swinit;
-			t_alg->algt.alg.hash.digest =
-				ahash_digest_sha224_swinit;
 			t_alg->algt.desc_hdr_template =
 					DESC_HDR_TYPE_COMMON_NONSNOOP_NO_AFEU |
 					DESC_HDR_SEL0_MDEUA |
@@ -3260,7 +3259,7 @@ static struct talitos_crypto_alg *talitos_alg_alloc(struct device *dev,
 		alg->cra_priority = t_alg->algt.priority;
 	else
 		alg->cra_priority = TALITOS_CRA_PRIORITY;
-	if (has_ftr_sec1(priv) && t_alg->algt.type != CRYPTO_ALG_TYPE_AHASH)
+	if (has_ftr_sec1(priv))
 		alg->cra_alignmask = 3;
 	else
 		alg->cra_alignmask = 0;
@@ -3560,7 +3559,7 @@ static struct platform_driver talitos_driver = {
 		.of_match_table = talitos_match,
 	},
 	.probe = talitos_probe,
-	.remove_new = talitos_remove,
+	.remove = talitos_remove,
 };
 
 module_platform_driver(talitos_driver);

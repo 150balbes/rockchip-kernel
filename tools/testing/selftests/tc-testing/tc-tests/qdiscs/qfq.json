@@ -10,6 +10,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root qfq",
         "expExitCode": "0",
@@ -17,7 +18,8 @@
         "matchPattern": "qdisc qfq 1: root refcnt [0-9]+",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -31,6 +33,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
         "cmdUnderTest": "$TC class add dev $DUMMY parent 1: classid 1:1 qfq weight 100",
@@ -39,7 +42,8 @@
         "matchPattern": "class qfq 1:1 root weight 100 maxpkt",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -53,6 +57,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
         "cmdUnderTest": "$TC class add dev $DUMMY parent 1: classid 1:1 qfq weight 9999",
@@ -61,7 +66,8 @@
         "matchPattern": "class qfq 1:1 root weight 9999 maxpkt",
         "matchCount": "0",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -75,6 +81,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
         "cmdUnderTest": "$TC class add dev $DUMMY parent 1: classid 1:1 qfq maxpkt 2000",
@@ -83,7 +90,8 @@
         "matchPattern": "class qfq 1:1 root weight 1 maxpkt 2000",
         "matchCount": "1",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -97,6 +105,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
         "cmdUnderTest": "$TC class add dev $DUMMY parent 1: classid 1:1 qfq maxpkt 128",
@@ -105,7 +114,8 @@
         "matchPattern": "class qfq 1:1 root weight 1 maxpkt 128",
         "matchCount": "0",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -119,6 +129,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
         "cmdUnderTest": "$TC class add dev $DUMMY parent 1: classid 1:1 qfq maxpkt 99999",
@@ -127,7 +138,8 @@
         "matchPattern": "class qfq 1:1 root weight 1 maxpkt 99999",
         "matchCount": "0",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -141,6 +153,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq",
             "$TC class add dev $DUMMY parent 1: classid 1:1 qfq weight 100"
         ],
@@ -150,7 +163,8 @@
         "matchPattern": "class qfq 1:[0-9]+ root weight [0-9]+00 maxpkt",
         "matchCount": "2",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -164,6 +178,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq",
             "$TC class add dev $DUMMY parent 1: classid 1:1 qfq weight 100"
         ],
@@ -173,6 +188,7 @@
         "matchPattern": "qdisc qfq 1: root refcnt [0-9]+",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -186,6 +202,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true"
         ],
         "cmdUnderTest": "$TC qdisc add dev $DUMMY handle 1: root qfq",
         "expExitCode": "0",
@@ -193,7 +210,8 @@
         "matchPattern": "class qfq 1:",
         "matchCount": "0",
         "teardown": [
-            "$TC qdisc del dev $DUMMY handle 1: root"
+            "$TC qdisc del dev $DUMMY handle 1: root",
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -207,6 +225,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$IP link set dev $DUMMY mtu 2147483647 || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
@@ -216,6 +235,7 @@
         "matchPattern": "class qfq 1:",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -229,6 +249,7 @@
             "requires": "nsPlugin"
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$IP link set dev $DUMMY mtu 256 || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: root qfq"
         ],
@@ -238,6 +259,7 @@
         "matchPattern": "class qfq 1:",
         "matchCount": "0",
         "teardown": [
+            "$IP link del dev $DUMMY type dummy"
         ]
     },
     {
@@ -255,6 +277,7 @@
             ]
         },
         "setup": [
+            "$IP link add dev $DUMMY type dummy || /bin/true",
             "$IP link set dev $DUMMY up || /bin/true",
             "$TC qdisc add dev $DUMMY handle 1: stab mtu 2048 tsize 512 mpu 0 overhead 999999999 linklayer ethernet root qfq",
             "$TC class add dev $DUMMY parent 1: classid 1:1 qfq weight 100",

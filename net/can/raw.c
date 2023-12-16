@@ -84,8 +84,6 @@ struct raw_sock {
 	struct sock sk;
 	int bound;
 	int ifindex;
-	struct net_device *dev;
-	netdevice_tracker dev_tracker;
 	struct list_head notifier;
 	int loopback;
 	int recv_own_msgs;
@@ -279,24 +277,21 @@ static void raw_notify(struct raw_sock *ro, unsigned long msg,
 	if (!net_eq(dev_net(dev), sock_net(sk)))
 		return;
 
-	if (ro->dev != dev)
+	if (ro->ifindex != dev->ifindex)
 		return;
 
 	switch (msg) {
 	case NETDEV_UNREGISTER:
 		lock_sock(sk);
 		/* remove current filters & unregister */
-		if (ro->bound) {
+		if (ro->bound)
 			raw_disable_allfilters(dev_net(dev), dev, sk);
-			netdev_put(dev, &ro->dev_tracker);
-		}
 
 		if (ro->count > 1)
 			kfree(ro->filter);
 
 		ro->ifindex = 0;
 		ro->bound = 0;
-		ro->dev = NULL;
 		ro->count = 0;
 		release_sock(sk);
 
@@ -342,7 +337,6 @@ static int raw_init(struct sock *sk)
 
 	ro->bound            = 0;
 	ro->ifindex          = 0;
-	ro->dev              = NULL;
 
 	/* set default filter to single entry dfilter */
 	ro->dfilter.can_id   = 0;
@@ -389,14 +383,18 @@ static int raw_release(struct socket *sock)
 	list_del(&ro->notifier);
 	spin_unlock(&raw_notifier_lock);
 
-	rtnl_lock();
 	lock_sock(sk);
 
 	/* remove current filters & unregister */
 	if (ro->bound) {
-		if (ro->dev) {
-			raw_disable_allfilters(dev_net(ro->dev), ro->dev, sk);
-			netdev_put(ro->dev, &ro->dev_tracker);
+		if (ro->ifindex) {
+			struct net_device *dev;
+
+			dev = dev_get_by_index(sock_net(sk), ro->ifindex);
+			if (dev) {
+				raw_disable_allfilters(dev_net(dev), dev, sk);
+				dev_put(dev);
+			}
 		} else {
 			raw_disable_allfilters(sock_net(sk), NULL, sk);
 		}
@@ -407,7 +405,6 @@ static int raw_release(struct socket *sock)
 
 	ro->ifindex = 0;
 	ro->bound = 0;
-	ro->dev = NULL;
 	ro->count = 0;
 	free_percpu(ro->uniq);
 
@@ -415,8 +412,6 @@ static int raw_release(struct socket *sock)
 	sock->sk = NULL;
 
 	release_sock(sk);
-	rtnl_unlock();
-
 	sock_put(sk);
 
 	return 0;
@@ -427,7 +422,6 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct sock *sk = sock->sk;
 	struct raw_sock *ro = raw_sk(sk);
-	struct net_device *dev = NULL;
 	int ifindex;
 	int err = 0;
 	int notify_enetdown = 0;
@@ -437,23 +431,24 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	if (addr->can_family != AF_CAN)
 		return -EINVAL;
 
-	rtnl_lock();
 	lock_sock(sk);
 
 	if (ro->bound && addr->can_ifindex == ro->ifindex)
 		goto out;
 
 	if (addr->can_ifindex) {
+		struct net_device *dev;
+
 		dev = dev_get_by_index(sock_net(sk), addr->can_ifindex);
 		if (!dev) {
 			err = -ENODEV;
 			goto out;
 		}
 		if (dev->type != ARPHRD_CAN) {
+			dev_put(dev);
 			err = -ENODEV;
-			goto out_put_dev;
+			goto out;
 		}
-
 		if (!(dev->flags & IFF_UP))
 			notify_enetdown = 1;
 
@@ -461,9 +456,7 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 
 		/* filters set by default/setsockopt */
 		err = raw_enable_allfilters(sock_net(sk), dev, sk);
-		if (err)
-			goto out_put_dev;
-
+		dev_put(dev);
 	} else {
 		ifindex = 0;
 
@@ -474,29 +467,26 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	if (!err) {
 		if (ro->bound) {
 			/* unregister old filters */
-			if (ro->dev) {
-				raw_disable_allfilters(dev_net(ro->dev),
-						       ro->dev, sk);
-				/* drop reference to old ro->dev */
-				netdev_put(ro->dev, &ro->dev_tracker);
+			if (ro->ifindex) {
+				struct net_device *dev;
+
+				dev = dev_get_by_index(sock_net(sk),
+						       ro->ifindex);
+				if (dev) {
+					raw_disable_allfilters(dev_net(dev),
+							       dev, sk);
+					dev_put(dev);
+				}
 			} else {
 				raw_disable_allfilters(sock_net(sk), NULL, sk);
 			}
 		}
 		ro->ifindex = ifindex;
 		ro->bound = 1;
-		/* bind() ok -> hold a reference for new ro->dev */
-		ro->dev = dev;
-		if (ro->dev)
-			netdev_hold(ro->dev, &ro->dev_tracker, GFP_KERNEL);
 	}
 
-out_put_dev:
-	/* remove potential reference from dev_get_by_index() */
-	dev_put(dev);
-out:
+ out:
 	release_sock(sk);
-	rtnl_unlock();
 
 	if (notify_enetdown) {
 		sk->sk_err = ENETDOWN;
@@ -563,9 +553,9 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 		rtnl_lock();
 		lock_sock(sk);
 
-		dev = ro->dev;
-		if (ro->bound && dev) {
-			if (dev->reg_state != NETREG_REGISTERED) {
+		if (ro->bound && ro->ifindex) {
+			dev = dev_get_by_index(sock_net(sk), ro->ifindex);
+			if (!dev) {
 				if (count > 1)
 					kfree(filter);
 				err = -ENODEV;
@@ -606,6 +596,7 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 		ro->count  = count;
 
  out_fil:
+		dev_put(dev);
 		release_sock(sk);
 		rtnl_unlock();
 
@@ -623,9 +614,9 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 		rtnl_lock();
 		lock_sock(sk);
 
-		dev = ro->dev;
-		if (ro->bound && dev) {
-			if (dev->reg_state != NETREG_REGISTERED) {
+		if (ro->bound && ro->ifindex) {
+			dev = dev_get_by_index(sock_net(sk), ro->ifindex);
+			if (!dev) {
 				err = -ENODEV;
 				goto out_err;
 			}
@@ -649,6 +640,7 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 		ro->err_mask = err_mask;
 
  out_err:
+		dev_put(dev);
 		release_sock(sk);
 		rtnl_unlock();
 
@@ -880,8 +872,8 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	}
 
 	skb->dev = dev;
-	skb->priority = READ_ONCE(sk->sk_priority);
-	skb->mark = READ_ONCE(sk->sk_mark);
+	skb->priority = sk->sk_priority;
+	skb->mark = sk->sk_mark;
 	skb->tstamp = sockc.transmit_time;
 
 	skb_setup_tx_timestamp(skb, sockc.tsflags);

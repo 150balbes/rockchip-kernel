@@ -1902,7 +1902,7 @@ out:
 /*
  * exit func, stops hardware and unregisters netdevice
  */
-static void bcm_enet_remove(struct platform_device *pdev)
+static int bcm_enet_remove(struct platform_device *pdev)
 {
 	struct bcm_enet_priv *priv;
 	struct net_device *dev;
@@ -1932,13 +1932,15 @@ static void bcm_enet_remove(struct platform_device *pdev)
 	clk_disable_unprepare(priv->mac_clk);
 
 	free_netdev(dev);
+	return 0;
 }
 
 static struct platform_driver bcm63xx_enet_driver = {
 	.probe	= bcm_enet_probe,
-	.remove_new = bcm_enet_remove,
+	.remove	= bcm_enet_remove,
 	.driver	= {
 		.name	= "bcm63xx_enet",
+		.owner  = THIS_MODULE,
 	},
 };
 
@@ -2530,8 +2532,8 @@ static int bcm_enetsw_get_sset_count(struct net_device *netdev,
 static void bcm_enetsw_get_drvinfo(struct net_device *netdev,
 				   struct ethtool_drvinfo *drvinfo)
 {
-	strscpy(drvinfo->driver, bcm_enet_driver_name, sizeof(drvinfo->driver));
-	strscpy(drvinfo->bus_info, "bcm63xx", sizeof(drvinfo->bus_info));
+	strncpy(drvinfo->driver, bcm_enet_driver_name, sizeof(drvinfo->driver));
+	strncpy(drvinfo->bus_info, "bcm63xx", sizeof(drvinfo->bus_info));
 }
 
 static void bcm_enetsw_get_ethtool_stats(struct net_device *netdev,
@@ -2738,7 +2740,7 @@ out:
 
 
 /* exit func, stops hardware and unregisters netdevice */
-static void bcm_enetsw_remove(struct platform_device *pdev)
+static int bcm_enetsw_remove(struct platform_device *pdev)
 {
 	struct bcm_enet_priv *priv;
 	struct net_device *dev;
@@ -2751,13 +2753,15 @@ static void bcm_enetsw_remove(struct platform_device *pdev)
 	clk_disable_unprepare(priv->mac_clk);
 
 	free_netdev(dev);
+	return 0;
 }
 
 static struct platform_driver bcm63xx_enetsw_driver = {
 	.probe	= bcm_enetsw_probe,
-	.remove_new = bcm_enetsw_remove,
+	.remove	= bcm_enetsw_remove,
 	.driver	= {
 		.name	= "bcm63xx_enetsw",
+		.owner  = THIS_MODULE,
 	},
 };
 
@@ -2787,6 +2791,7 @@ struct platform_driver bcm63xx_enet_shared_driver = {
 	.probe	= bcm_enet_shared_probe,
 	.driver	= {
 		.name	= "bcm63xx_enet_shared",
+		.owner  = THIS_MODULE,
 	},
 };
 

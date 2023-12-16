@@ -12,8 +12,7 @@
 #include <linux/delay.h>
 #include <linux/seq_file.h>
 #include <linux/interrupt.h>
-#include <linux/of.h>
-#include <linux/of_address.h>
+#include <linux/of_platform.h>
 #include <linux/fsl/guts.h>
 
 #include <asm/time.h>

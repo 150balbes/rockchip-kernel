@@ -19,10 +19,11 @@
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/pm_runtime.h>
-#include <linux/property.h>
 #include <linux/reset.h>
 #include <linux/io.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/of_irq.h>
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/delay.h>
@@ -858,7 +859,7 @@ static int
 mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 		  struct device *dev)
 {
-	const struct mv64xxx_i2c_regs *data;
+	const struct of_device_id *device;
 	struct device_node *np = dev->of_node;
 	u32 bus_freq, tclk;
 	int rc = 0;
@@ -896,11 +897,11 @@ mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 	 */
 	drv_data->adapter.timeout = HZ;
 
-	data = device_get_match_data(dev);
-	if (!data)
+	device = of_match_device(mv64xxx_i2c_of_match_table, dev);
+	if (!device)
 		return -ENODEV;
 
-	memcpy(&drv_data->reg_offsets, data, sizeof(drv_data->reg_offsets));
+	memcpy(&drv_data->reg_offsets, device->data, sizeof(drv_data->reg_offsets));
 
 	/*
 	 * For controllers embedded in new SoCs activate the

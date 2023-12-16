@@ -94,6 +94,7 @@ static int bcm_iproc_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct bcm_iproc_intc *priv;
 	struct bcm_qspi_soc_intc *soc_intc;
+	struct resource *res;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -103,12 +104,14 @@ static int bcm_iproc_probe(struct platform_device *pdev)
 
 	spin_lock_init(&priv->soclock);
 
-	priv->int_reg = devm_platform_ioremap_resource_byname(pdev, "intr_regs");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "intr_regs");
+	priv->int_reg = devm_ioremap_resource(dev, res);
 	if (IS_ERR(priv->int_reg))
 		return PTR_ERR(priv->int_reg);
 
-	priv->int_status_reg = devm_platform_ioremap_resource_byname(pdev,
-								     "intr_status_reg");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+					   "intr_status_reg");
+	priv->int_status_reg = devm_ioremap_resource(dev, res);
 	if (IS_ERR(priv->int_status_reg))
 		return PTR_ERR(priv->int_status_reg);
 

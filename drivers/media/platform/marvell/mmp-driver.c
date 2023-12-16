@@ -180,7 +180,7 @@ static int mmpcam_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct fwnode_handle *ep;
 	struct mmp_camera_platform_data *pdata;
-	struct v4l2_async_connection *asd;
+	struct v4l2_async_subdev *asd;
 	int ret;
 
 	cam = devm_kzalloc(&pdev->dev, sizeof(*cam), GFP_KERNEL);
@@ -223,7 +223,8 @@ static int mmpcam_probe(struct platform_device *pdev)
 	/*
 	 * Get our I/O memory.
 	 */
-	mcam->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mcam->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mcam->regs))
 		return PTR_ERR(mcam->regs);
 	mcam->regs_size = resource_size(res);
@@ -238,10 +239,10 @@ static int mmpcam_probe(struct platform_device *pdev)
 	if (!ep)
 		return -ENODEV;
 
-	v4l2_async_nf_init(&mcam->notifier, &mcam->v4l2_dev);
+	v4l2_async_nf_init(&mcam->notifier);
 
 	asd = v4l2_async_nf_add_fwnode_remote(&mcam->notifier, ep,
-					      struct v4l2_async_connection);
+					      struct v4l2_async_subdev);
 	fwnode_handle_put(ep);
 	if (IS_ERR(asd)) {
 		ret = PTR_ERR(asd);
@@ -361,7 +362,7 @@ static struct platform_driver mmpcam_driver = {
 	.remove_new	= mmpcam_remove,
 	.driver = {
 		.name	= "mmp-camera",
-		.of_match_table = mmpcam_of_match,
+		.of_match_table = of_match_ptr(mmpcam_of_match),
 		.pm = &mmpcam_pm_ops,
 	}
 };

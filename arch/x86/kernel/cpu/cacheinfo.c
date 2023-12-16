@@ -661,7 +661,7 @@ static int find_num_cache_leaves(struct cpuinfo_x86 *c)
 	return i;
 }
 
-void cacheinfo_amd_init_llc_id(struct cpuinfo_x86 *c)
+void cacheinfo_amd_init_llc_id(struct cpuinfo_x86 *c, int cpu)
 {
 	/*
 	 * We may have multiple LLCs if L3 caches exist, so check if we
@@ -672,13 +672,13 @@ void cacheinfo_amd_init_llc_id(struct cpuinfo_x86 *c)
 
 	if (c->x86 < 0x17) {
 		/* LLC is at the node level. */
-		c->topo.llc_id = c->topo.die_id;
+		per_cpu(cpu_llc_id, cpu) = c->cpu_die_id;
 	} else if (c->x86 == 0x17 && c->x86_model <= 0x1F) {
 		/*
 		 * LLC is at the core complex level.
 		 * Core complex ID is ApicId[3] for these processors.
 		 */
-		c->topo.llc_id = c->topo.apicid >> 3;
+		per_cpu(cpu_llc_id, cpu) = c->apicid >> 3;
 	} else {
 		/*
 		 * LLC ID is calculated from the number of threads sharing the
@@ -694,12 +694,12 @@ void cacheinfo_amd_init_llc_id(struct cpuinfo_x86 *c)
 		if (num_sharing_cache) {
 			int bits = get_count_order(num_sharing_cache);
 
-			c->topo.llc_id = c->topo.apicid >> bits;
+			per_cpu(cpu_llc_id, cpu) = c->apicid >> bits;
 		}
 	}
 }
 
-void cacheinfo_hygon_init_llc_id(struct cpuinfo_x86 *c)
+void cacheinfo_hygon_init_llc_id(struct cpuinfo_x86 *c, int cpu)
 {
 	/*
 	 * We may have multiple LLCs if L3 caches exist, so check if we
@@ -712,7 +712,7 @@ void cacheinfo_hygon_init_llc_id(struct cpuinfo_x86 *c)
 	 * LLC is at the core complex level.
 	 * Core complex ID is ApicId[3] for these processors.
 	 */
-	c->topo.llc_id = c->topo.apicid >> 3;
+	per_cpu(cpu_llc_id, cpu) = c->apicid >> 3;
 }
 
 void init_amd_cacheinfo(struct cpuinfo_x86 *c)
@@ -740,6 +740,9 @@ void init_intel_cacheinfo(struct cpuinfo_x86 *c)
 	unsigned int new_l1d = 0, new_l1i = 0; /* Cache sizes from cpuid(4) */
 	unsigned int new_l2 = 0, new_l3 = 0, i; /* Cache sizes from cpuid(4) */
 	unsigned int l2_id = 0, l3_id = 0, num_threads_sharing, index_msb;
+#ifdef CONFIG_SMP
+	unsigned int cpu = c->cpu_index;
+#endif
 
 	if (c->cpuid_level > 3) {
 		static int is_initialized;
@@ -773,13 +776,13 @@ void init_intel_cacheinfo(struct cpuinfo_x86 *c)
 				new_l2 = this_leaf.size/1024;
 				num_threads_sharing = 1 + this_leaf.eax.split.num_threads_sharing;
 				index_msb = get_count_order(num_threads_sharing);
-				l2_id = c->topo.apicid & ~((1 << index_msb) - 1);
+				l2_id = c->apicid & ~((1 << index_msb) - 1);
 				break;
 			case 3:
 				new_l3 = this_leaf.size/1024;
 				num_threads_sharing = 1 + this_leaf.eax.split.num_threads_sharing;
 				index_msb = get_count_order(num_threads_sharing);
-				l3_id = c->topo.apicid & ~((1 << index_msb) - 1);
+				l3_id = c->apicid & ~((1 << index_msb) - 1);
 				break;
 			default:
 				break;
@@ -853,24 +856,30 @@ void init_intel_cacheinfo(struct cpuinfo_x86 *c)
 
 	if (new_l2) {
 		l2 = new_l2;
-		c->topo.llc_id = l2_id;
-		c->topo.l2c_id = l2_id;
+#ifdef CONFIG_SMP
+		per_cpu(cpu_llc_id, cpu) = l2_id;
+		per_cpu(cpu_l2c_id, cpu) = l2_id;
+#endif
 	}
 
 	if (new_l3) {
 		l3 = new_l3;
-		c->topo.llc_id = l3_id;
+#ifdef CONFIG_SMP
+		per_cpu(cpu_llc_id, cpu) = l3_id;
+#endif
 	}
 
+#ifdef CONFIG_SMP
 	/*
-	 * If llc_id is not yet set, this means cpuid_level < 4 which in
+	 * If cpu_llc_id is not yet set, this means cpuid_level < 4 which in
 	 * turns means that the only possibility is SMT (as indicated in
 	 * cpuid1). Since cpuid2 doesn't specify shared caches, and we know
 	 * that SMT shares all caches, we can unconditionally set cpu_llc_id to
-	 * c->topo.pkg_id.
+	 * c->phys_proc_id.
 	 */
-	if (c->topo.llc_id == BAD_APICID)
-		c->topo.llc_id = c->topo.pkg_id;
+	if (per_cpu(cpu_llc_id, cpu) == BAD_APICID)
+		per_cpu(cpu_llc_id, cpu) = c->phys_proc_id;
+#endif
 
 	c->x86_cache_size = l3 ? l3 : (l2 ? l2 : (l1i+l1d));
 
@@ -906,7 +915,7 @@ static int __cache_amd_cpumap_setup(unsigned int cpu, int index,
 		unsigned int apicid, nshared, first, last;
 
 		nshared = base->eax.split.num_threads_sharing + 1;
-		apicid = cpu_data(cpu).topo.apicid;
+		apicid = cpu_data(cpu).apicid;
 		first = apicid - (apicid % nshared);
 		last = first + nshared - 1;
 
@@ -915,14 +924,14 @@ static int __cache_amd_cpumap_setup(unsigned int cpu, int index,
 			if (!this_cpu_ci->info_list)
 				continue;
 
-			apicid = cpu_data(i).topo.apicid;
+			apicid = cpu_data(i).apicid;
 			if ((apicid < first) || (apicid > last))
 				continue;
 
 			this_leaf = this_cpu_ci->info_list + index;
 
 			for_each_online_cpu(sibling) {
-				apicid = cpu_data(sibling).topo.apicid;
+				apicid = cpu_data(sibling).apicid;
 				if ((apicid < first) || (apicid > last))
 					continue;
 				cpumask_set_cpu(sibling,
@@ -960,7 +969,7 @@ static void __cache_cpumap_setup(unsigned int cpu, int index,
 	index_msb = get_count_order(num_threads_sharing);
 
 	for_each_online_cpu(i)
-		if (cpu_data(i).topo.apicid >> index_msb == c->topo.apicid >> index_msb) {
+		if (cpu_data(i).apicid >> index_msb == c->apicid >> index_msb) {
 			struct cpu_cacheinfo *sib_cpu_ci = get_cpu_cacheinfo(i);
 
 			if (i == cpu || !sib_cpu_ci->info_list)
@@ -1015,7 +1024,7 @@ static void get_cache_id(int cpu, struct _cpuid4_info_regs *id4_regs)
 
 	num_threads_sharing = 1 + id4_regs->eax.split.num_threads_sharing;
 	index_msb = get_count_order(num_threads_sharing);
-	id4_regs->id = c->topo.apicid >> index_msb;
+	id4_regs->id = c->apicid >> index_msb;
 }
 
 int populate_cache_leaves(unsigned int cpu)

@@ -31,7 +31,6 @@
 #include "../sof-pci-dev.h"
 #include "../ops.h"
 #include "hda.h"
-#include "telemetry.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/sof_intel.h>
@@ -72,11 +71,6 @@ static u32 hda_get_interface_mask(struct snd_sof_dev *sdev)
 				    BIT(SOF_DAI_INTEL_HDA) | BIT(SOF_DAI_INTEL_ALH);
 		interface_mask[1] = BIT(SOF_DAI_INTEL_HDA);
 		break;
-	case SOF_INTEL_ACE_2_0:
-		interface_mask[0] = BIT(SOF_DAI_INTEL_SSP) | BIT(SOF_DAI_INTEL_DMIC) |
-				    BIT(SOF_DAI_INTEL_HDA) | BIT(SOF_DAI_INTEL_ALH);
-		interface_mask[1] = interface_mask[0]; /* all interfaces accessible without DSP */
-		break;
 	default:
 		break;
 	}
@@ -111,34 +105,6 @@ static int sdw_params_stream(struct device *dev,
 
 struct sdw_intel_ops sdw_callback = {
 	.params_stream = sdw_params_stream,
-};
-
-static int sdw_ace2x_params_stream(struct device *dev,
-				   struct sdw_intel_stream_params_data *params_data)
-{
-	return sdw_hda_dai_hw_params(params_data->substream,
-				     params_data->hw_params,
-				     params_data->dai,
-				     params_data->link_id);
-}
-
-static int sdw_ace2x_free_stream(struct device *dev,
-				 struct sdw_intel_stream_free_data *free_data)
-{
-	return sdw_hda_dai_hw_free(free_data->substream,
-				   free_data->dai,
-				   free_data->link_id);
-}
-
-static int sdw_ace2x_trigger(struct snd_pcm_substream *substream, int cmd, struct snd_soc_dai *dai)
-{
-	return sdw_hda_dai_trigger(substream, cmd, dai);
-}
-
-static struct sdw_intel_ops sdw_ace2x_callback = {
-	.params_stream = sdw_ace2x_params_stream,
-	.free_stream = sdw_ace2x_free_stream,
-	.trigger = sdw_ace2x_trigger,
 };
 
 void hda_common_enable_sdw_irq(struct snd_sof_dev *sdev, bool enable)
@@ -208,7 +174,6 @@ static int hda_sdw_probe(struct snd_sof_dev *sdev)
 		res.shim_base = hdev->desc->sdw_shim_base;
 		res.alh_base = hdev->desc->sdw_alh_base;
 		res.ext = false;
-		res.ops = &sdw_callback;
 	} else {
 		/*
 		 * retrieve eml_lock needed to protect shared registers
@@ -226,13 +191,11 @@ static int hda_sdw_probe(struct snd_sof_dev *sdev)
 		 */
 		res.hw_ops = &sdw_intel_lnl_hw_ops;
 		res.ext = true;
-		res.ops = &sdw_ace2x_callback;
-
 	}
 	res.irq = sdev->ipc_irq;
 	res.handle = hdev->info.handle;
 	res.parent = sdev->dev;
-
+	res.ops = &sdw_callback;
 	res.dev = sdev->dev;
 	res.clock_stop_quirks = sdw_clock_stop_quirks;
 	res.hbus = sof_to_bus(sdev);
@@ -400,30 +363,19 @@ static irqreturn_t hda_dsp_sdw_thread(int irq, void *context)
 	return sdw_intel_thread(irq, context);
 }
 
-bool hda_sdw_check_wakeen_irq_common(struct snd_sof_dev *sdev)
+static bool hda_sdw_check_wakeen_irq(struct snd_sof_dev *sdev)
 {
+	u32 interface_mask = hda_get_interface_mask(sdev);
 	struct sof_intel_hda_dev *hdev;
+
+	if (!(interface_mask & BIT(SOF_DAI_INTEL_ALH)))
+		return false;
 
 	hdev = sdev->pdata->hw_pdata;
 	if (hdev->sdw &&
 	    snd_sof_dsp_read(sdev, HDA_DSP_BAR,
 			     hdev->desc->sdw_shim_base + SDW_SHIM_WAKESTS))
 		return true;
-
-	return false;
-}
-
-static bool hda_sdw_check_wakeen_irq(struct snd_sof_dev *sdev)
-{
-	u32 interface_mask = hda_get_interface_mask(sdev);
-	const struct sof_intel_dsp_desc *chip;
-
-	if (!(interface_mask & BIT(SOF_DAI_INTEL_ALH)))
-		return false;
-
-	chip = get_chip_info(sdev->pdata);
-	if (chip && chip->check_sdw_wakeen_irq)
-		return chip->check_sdw_wakeen_irq(sdev);
 
 	return false;
 }
@@ -719,7 +671,7 @@ void hda_dsp_dump(struct snd_sof_dev *sdev, u32 flags)
 	hda_dsp_get_state(sdev, level);
 
 	/* The firmware register dump only available with IPC3 */
-	if (flags & SOF_DBG_DUMP_REGS && sdev->pdata->ipc_type == SOF_IPC_TYPE_3) {
+	if (flags & SOF_DBG_DUMP_REGS && sdev->pdata->ipc_type == SOF_IPC) {
 		u32 status = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_SRAM_REG_FW_STATUS);
 		u32 panic = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_SRAM_REG_FW_TRACEP);
 
@@ -730,19 +682,6 @@ void hda_dsp_dump(struct snd_sof_dev *sdev, u32 flags)
 	} else {
 		hda_dsp_dump_ext_rom_status(sdev, level, flags);
 	}
-}
-
-void hda_ipc4_dsp_dump(struct snd_sof_dev *sdev, u32 flags)
-{
-	char *level = (flags & SOF_DBG_DUMP_OPTIONAL) ? KERN_DEBUG : KERN_ERR;
-
-	/* print ROM/FW status */
-	hda_dsp_get_state(sdev, level);
-
-	if (flags & SOF_DBG_DUMP_REGS)
-		sof_ipc4_intel_dump_telemetry_state(sdev, flags);
-	else
-		hda_dsp_dump_ext_rom_status(sdev, level, flags);
 }
 
 static bool hda_check_ipc_irq(struct snd_sof_dev *sdev)
@@ -862,21 +801,13 @@ static int hda_init(struct snd_sof_dev *sdev)
 
 	/* init i915 and HDMI codecs */
 	ret = hda_codec_i915_init(sdev);
-	if (ret < 0 && ret != -ENODEV) {
-		dev_err_probe(sdev->dev, ret, "init of i915 and HDMI codec failed\n");
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(sdev->dev, "init of i915 and HDMI codec failed\n");
 
 	/* get controller capabilities */
 	ret = hda_dsp_ctrl_get_caps(sdev);
-	if (ret < 0) {
-		dev_err(sdev->dev, "error: get caps error\n");
-		hda_codec_i915_exit(sdev);
-	}
-
-out:
 	if (ret < 0)
-		iounmap(sof_to_bus(sdev)->remap_addr);
+		dev_err(sdev->dev, "error: get caps error\n");
 
 	return ret;
 }
@@ -1140,10 +1071,11 @@ static irqreturn_t hda_dsp_interrupt_thread(int irq, void *context)
 	return IRQ_HANDLED;
 }
 
-int hda_dsp_probe_early(struct snd_sof_dev *sdev)
+int hda_dsp_probe(struct snd_sof_dev *sdev)
 {
 	struct pci_dev *pci = to_pci_dev(sdev->dev);
 	struct sof_intel_hda_dev *hdev;
+	struct hdac_bus *bus;
 	const struct sof_intel_dsp_desc *chip;
 	int ret = 0;
 
@@ -1182,17 +1114,6 @@ int hda_dsp_probe_early(struct snd_sof_dev *sdev)
 		return -ENOMEM;
 	sdev->pdata->hw_pdata = hdev;
 	hdev->desc = chip;
-	ret = hda_init(sdev);
-
-err:
-	return ret;
-}
-
-int hda_dsp_probe(struct snd_sof_dev *sdev)
-{
-	struct pci_dev *pci = to_pci_dev(sdev->dev);
-	struct sof_intel_hda_dev *hdev = sdev->pdata->hw_pdata;
-	int ret = 0;
 
 	hdev->dmic_dev = platform_device_register_data(sdev->dev, "dmic-codec",
 						       PLATFORM_DEVID_NONE,
@@ -1214,6 +1135,12 @@ int hda_dsp_probe(struct snd_sof_dev *sdev)
 
 	if (sdev->dspless_mode_selected)
 		hdev->no_ipc_position = 1;
+
+	/* set up HDA base */
+	bus = sof_to_bus(sdev);
+	ret = hda_init(sdev);
+	if (ret < 0)
+		goto hdac_bus_unmap;
 
 	if (sdev->dspless_mode_selected)
 		goto skip_dsp_setup;
@@ -1323,14 +1250,17 @@ free_streams:
 		iounmap(sdev->bar[HDA_DSP_BAR]);
 hdac_bus_unmap:
 	platform_device_unregister(hdev->dmic_dev);
-
+	iounmap(bus->remap_addr);
+	hda_codec_i915_exit(sdev);
+err:
 	return ret;
 }
 
-void hda_dsp_remove(struct snd_sof_dev *sdev)
+int hda_dsp_remove(struct snd_sof_dev *sdev)
 {
 	struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
 	const struct sof_intel_dsp_desc *chip = hda->desc;
+	struct hdac_bus *bus = sof_to_bus(sdev);
 	struct pci_dev *pci = to_pci_dev(sdev->dev);
 	struct nhlt_acpi_table *nhlt = hda->nhlt;
 
@@ -1380,13 +1310,14 @@ skip_disable_dsp:
 
 	if (!sdev->dspless_mode_selected)
 		iounmap(sdev->bar[HDA_DSP_BAR]);
-}
 
-void hda_dsp_remove_late(struct snd_sof_dev *sdev)
-{
-	iounmap(sof_to_bus(sdev)->remap_addr);
+	iounmap(bus->remap_addr);
+
 	sof_hda_bus_exit(sdev);
+
 	hda_codec_i915_exit(sdev);
+
+	return 0;
 }
 
 int hda_power_down_dsp(struct snd_sof_dev *sdev)
@@ -1498,6 +1429,83 @@ static void hda_generic_machine_select(struct snd_sof_dev *sdev,
 
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_INTEL_SOUNDWIRE)
 
+#define SDW_CODEC_ADR_MASK(_adr) ((_adr) & (SDW_DISCO_LINK_ID_MASK | SDW_VERSION_MASK | \
+				  SDW_MFG_ID_MASK | SDW_PART_ID_MASK))
+
+/* Check if all Slaves defined on the link can be found */
+static bool link_slaves_found(struct snd_sof_dev *sdev,
+			      const struct snd_soc_acpi_link_adr *link,
+			      struct sdw_intel_ctx *sdw)
+{
+	struct hdac_bus *bus = sof_to_bus(sdev);
+	struct sdw_intel_slave_id *ids = sdw->ids;
+	int num_slaves = sdw->num_slaves;
+	unsigned int part_id, link_id, unique_id, mfg_id, version;
+	int i, j, k;
+
+	for (i = 0; i < link->num_adr; i++) {
+		u64 adr = link->adr_d[i].adr;
+		int reported_part_count = 0;
+
+		mfg_id = SDW_MFG_ID(adr);
+		part_id = SDW_PART_ID(adr);
+		link_id = SDW_DISCO_LINK_ID(adr);
+		version = SDW_VERSION(adr);
+
+		for (j = 0; j < num_slaves; j++) {
+			/* find out how many identical parts were reported on that link */
+			if (ids[j].link_id == link_id &&
+			    ids[j].id.part_id == part_id &&
+			    ids[j].id.mfg_id == mfg_id &&
+			    ids[j].id.sdw_version == version)
+				reported_part_count++;
+		}
+
+		for (j = 0; j < num_slaves; j++) {
+			int expected_part_count = 0;
+
+			if (ids[j].link_id != link_id ||
+			    ids[j].id.part_id != part_id ||
+			    ids[j].id.mfg_id != mfg_id ||
+			    ids[j].id.sdw_version != version)
+				continue;
+
+			/* find out how many identical parts are expected */
+			for (k = 0; k < link->num_adr; k++) {
+				u64 adr2 = link->adr_d[k].adr;
+
+				if (SDW_CODEC_ADR_MASK(adr2) == SDW_CODEC_ADR_MASK(adr))
+					expected_part_count++;
+			}
+
+			if (reported_part_count == expected_part_count) {
+				/*
+				 * we have to check unique id
+				 * if there is more than one
+				 * Slave on the link
+				 */
+				unique_id = SDW_UNIQUE_ID(adr);
+				if (reported_part_count == 1 ||
+				    ids[j].id.unique_id == unique_id) {
+					dev_dbg(bus->dev, "found %x at link %d\n",
+						part_id, link_id);
+					break;
+				}
+			} else {
+				dev_dbg(bus->dev, "part %x reported %d expected %d on link %d, skipping\n",
+					part_id, reported_part_count, expected_part_count, link_id);
+			}
+		}
+		if (j == num_slaves) {
+			dev_dbg(bus->dev,
+				"Slave %x not found\n",
+				part_id);
+			return false;
+		}
+	}
+	return true;
+}
+
 static struct snd_soc_acpi_mach *hda_sdw_machine_select(struct snd_sof_dev *sdev)
 {
 	struct snd_sof_pdata *pdata = sdev->pdata;
@@ -1541,9 +1549,7 @@ static struct snd_soc_acpi_mach *hda_sdw_machine_select(struct snd_sof_dev *sdev
 				 * Try next machine if any expected Slaves
 				 * are not found on this link.
 				 */
-				if (!snd_soc_acpi_sdw_link_slaves_found(sdev->dev, link,
-									hdev->sdw->ids,
-									hdev->sdw->num_slaves))
+				if (!link_slaves_found(sdev, link, hdev->sdw))
 					break;
 			}
 			/* Found if all Slaves are checked */

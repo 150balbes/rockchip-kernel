@@ -572,7 +572,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 	}
 
 	dir->i_size += paste_size;
-	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+	dir->i_mtime = dir->i_ctime = current_time(dir);
 	if (!S_ISDIR(inode->i_mode) && visible)
 		/* reiserfs_mkdir or reiserfs_rename will do that by itself */
 		reiserfs_update_sd(th, dir);
@@ -966,8 +966,7 @@ static int reiserfs_rmdir(struct inode *dir, struct dentry *dentry)
 			       inode->i_nlink);
 
 	clear_nlink(inode);
-	inode_set_mtime_to_ts(dir,
-			      inode_set_ctime_to_ts(dir, inode_set_ctime_current(inode)));
+	inode->i_ctime = dir->i_ctime = dir->i_mtime = current_time(dir);
 	reiserfs_update_sd(&th, inode);
 
 	DEC_DIR_INODE_NLINK(dir)
@@ -1071,11 +1070,11 @@ static int reiserfs_unlink(struct inode *dir, struct dentry *dentry)
 		inc_nlink(inode);
 		goto end_unlink;
 	}
-	inode_set_ctime_current(inode);
+	inode->i_ctime = current_time(inode);
 	reiserfs_update_sd(&th, inode);
 
 	dir->i_size -= (de.de_entrylen + DEH_SIZE);
-	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+	dir->i_ctime = dir->i_mtime = current_time(dir);
 	reiserfs_update_sd(&th, dir);
 
 	if (!savelink)
@@ -1251,7 +1250,7 @@ static int reiserfs_link(struct dentry *old_dentry, struct inode *dir,
 		return err ? err : retval;
 	}
 
-	inode_set_ctime_current(inode);
+	inode->i_ctime = current_time(inode);
 	reiserfs_update_sd(&th, inode);
 
 	ihold(inode);
@@ -1326,6 +1325,7 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 	int jbegin_count;
 	umode_t old_inode_mode;
 	unsigned long savelink = 1;
+	struct timespec64 ctime;
 
 	if (flags & ~RENAME_NOREPLACE)
 		return -EINVAL;
@@ -1576,11 +1576,14 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 
 	mark_de_hidden(old_de.de_deh + old_de.de_entry_num);
 	journal_mark_dirty(&th, old_de.de_bh);
+	ctime = current_time(old_dir);
+	old_dir->i_ctime = old_dir->i_mtime = ctime;
+	new_dir->i_ctime = new_dir->i_mtime = ctime;
 	/*
 	 * thanks to Alex Adriaanse <alex_a@caltech.edu> for patch
 	 * which adds ctime update of renamed object
 	 */
-	simple_rename_timestamp(old_dir, old_dentry, new_dir, new_dentry);
+	old_inode->i_ctime = ctime;
 
 	if (new_dentry_inode) {
 		/* adjust link number of the victim */
@@ -1589,6 +1592,7 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 		} else {
 			drop_nlink(new_dentry_inode);
 		}
+		new_dentry_inode->i_ctime = ctime;
 		savelink = new_dentry_inode->i_nlink;
 	}
 

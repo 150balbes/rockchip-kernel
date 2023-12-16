@@ -304,8 +304,7 @@ static unsigned int kgdb_nmi_tty_write_room(struct tty_struct *tty)
 	return 2048;
 }
 
-static ssize_t kgdb_nmi_tty_write(struct tty_struct *tty, const u8 *buf,
-				  size_t c)
+static int kgdb_nmi_tty_write(struct tty_struct *tty, const unchar *buf, int c)
 {
 	int i;
 

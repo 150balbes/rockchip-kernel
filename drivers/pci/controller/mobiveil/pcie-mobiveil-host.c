@@ -17,6 +17,9 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/msi.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
+#include <linux/of_platform.h>
 #include <linux/of_pci.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
@@ -539,7 +542,7 @@ static bool mobiveil_pcie_is_bridge(struct mobiveil_pcie *pcie)
 	u32 header_type;
 
 	header_type = mobiveil_csr_readb(pcie, PCI_HEADER_TYPE);
-	header_type &= PCI_HEADER_TYPE_MASK;
+	header_type &= 0x7f;
 
 	return header_type == PCI_HEADER_TYPE_BRIDGE;
 }

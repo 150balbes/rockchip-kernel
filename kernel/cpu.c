@@ -592,10 +592,7 @@ static void lockdep_release_cpus_lock(void)
 void __weak arch_smt_update(void) { }
 
 #ifdef CONFIG_HOTPLUG_SMT
-
 enum cpuhp_smt_control cpu_smt_control __read_mostly = CPU_SMT_ENABLED;
-static unsigned int cpu_smt_max_threads __ro_after_init;
-unsigned int cpu_smt_num_threads __read_mostly = UINT_MAX;
 
 void __init cpu_smt_disable(bool force)
 {
@@ -609,33 +606,16 @@ void __init cpu_smt_disable(bool force)
 		pr_info("SMT: disabled\n");
 		cpu_smt_control = CPU_SMT_DISABLED;
 	}
-	cpu_smt_num_threads = 1;
 }
 
 /*
  * The decision whether SMT is supported can only be done after the full
  * CPU identification. Called from architecture code.
  */
-void __init cpu_smt_set_num_threads(unsigned int num_threads,
-				    unsigned int max_threads)
+void __init cpu_smt_check_topology(void)
 {
-	WARN_ON(!num_threads || (num_threads > max_threads));
-
-	if (max_threads == 1)
+	if (!topology_smt_supported())
 		cpu_smt_control = CPU_SMT_NOT_SUPPORTED;
-
-	cpu_smt_max_threads = max_threads;
-
-	/*
-	 * If SMT has been disabled via the kernel command line or SMT is
-	 * not supported, set cpu_smt_num_threads to 1 for consistency.
-	 * If enabled, take the architecture requested number of threads
-	 * to bring up into account.
-	 */
-	if (cpu_smt_control != CPU_SMT_ENABLED)
-		cpu_smt_num_threads = 1;
-	else if (num_threads < cpu_smt_num_threads)
-		cpu_smt_num_threads = num_threads;
 }
 
 static int __init smt_cmdline_disable(char *str)
@@ -645,31 +625,9 @@ static int __init smt_cmdline_disable(char *str)
 }
 early_param("nosmt", smt_cmdline_disable);
 
-/*
- * For Archicture supporting partial SMT states check if the thread is allowed.
- * Otherwise this has already been checked through cpu_smt_max_threads when
- * setting the SMT level.
- */
-static inline bool cpu_smt_thread_allowed(unsigned int cpu)
+static inline bool cpu_smt_allowed(unsigned int cpu)
 {
-#ifdef CONFIG_SMT_NUM_THREADS_DYNAMIC
-	return topology_smt_thread_allowed(cpu);
-#else
-	return true;
-#endif
-}
-
-static inline bool cpu_bootable(unsigned int cpu)
-{
-	if (cpu_smt_control == CPU_SMT_ENABLED && cpu_smt_thread_allowed(cpu))
-		return true;
-
-	/* All CPUs are bootable if controls are not configured */
-	if (cpu_smt_control == CPU_SMT_NOT_IMPLEMENTED)
-		return true;
-
-	/* All CPUs are bootable if CPU is not SMT capable */
-	if (cpu_smt_control == CPU_SMT_NOT_SUPPORTED)
+	if (cpu_smt_control == CPU_SMT_ENABLED)
 		return true;
 
 	if (topology_is_primary_thread(cpu))
@@ -684,7 +642,7 @@ static inline bool cpu_bootable(unsigned int cpu)
 	return !cpumask_test_cpu(cpu, &cpus_booted_once_mask);
 }
 
-/* Returns true if SMT is supported and not forcefully (irreversibly) disabled */
+/* Returns true if SMT is not supported of forcefully (irreversibly) disabled */
 bool cpu_smt_possible(void)
 {
 	return cpu_smt_control != CPU_SMT_FORCE_DISABLED &&
@@ -692,8 +650,22 @@ bool cpu_smt_possible(void)
 }
 EXPORT_SYMBOL_GPL(cpu_smt_possible);
 
+static inline bool cpuhp_smt_aware(void)
+{
+	return topology_smt_supported();
+}
+
+static inline const struct cpumask *cpuhp_get_primary_thread_mask(void)
+{
+	return cpu_primary_thread_mask;
+}
 #else
-static inline bool cpu_bootable(unsigned int cpu) { return true; }
+static inline bool cpu_smt_allowed(unsigned int cpu) { return true; }
+static inline bool cpuhp_smt_aware(void) { return false; }
+static inline const struct cpumask *cpuhp_get_primary_thread_mask(void)
+{
+	return cpu_present_mask;
+}
 #endif
 
 static inline enum cpuhp_state
@@ -796,10 +768,10 @@ static int bringup_wait_for_ap_online(unsigned int cpu)
 	 * SMT soft disabling on X86 requires to bring the CPU out of the
 	 * BIOS 'wait for SIPI' state in order to set the CR4.MCE bit.  The
 	 * CPU marked itself as booted_once in notify_cpu_starting() so the
-	 * cpu_bootable() check will now return false if this is not the
+	 * cpu_smt_allowed() check will now return false if this is not the
 	 * primary sibling.
 	 */
-	if (!cpu_bootable(cpu))
+	if (!cpu_smt_allowed(cpu))
 		return -ECANCELED;
 	return 0;
 }
@@ -1380,14 +1352,7 @@ static int takedown_cpu(unsigned int cpu)
 	cpuhp_bp_sync_dead(cpu);
 
 	tick_cleanup_dead_cpu(cpu);
-
-	/*
-	 * Callbacks must be re-integrated right away to the RCU state machine.
-	 * Otherwise an RCU callback could block a further teardown function
-	 * waiting for its completion.
-	 */
 	rcutree_migrate_callbacks(cpu);
-
 	return 0;
 }
 
@@ -1403,10 +1368,10 @@ void cpuhp_report_idle_dead(void)
 	struct cpuhp_cpu_state *st = this_cpu_ptr(&cpuhp_state);
 
 	BUG_ON(st->state != CPUHP_AP_OFFLINE);
-	rcutree_report_cpu_dead();
+	rcu_report_dead(smp_processor_id());
 	st->state = CPUHP_AP_IDLE_DEAD;
 	/*
-	 * We cannot call complete after rcutree_report_cpu_dead() so we delegate it
+	 * We cannot call complete after rcu_report_dead() so we delegate it
 	 * to an online cpu.
 	 */
 	smp_call_function_single(cpumask_first(cpu_online_mask),
@@ -1502,22 +1467,8 @@ out:
 	return ret;
 }
 
-struct cpu_down_work {
-	unsigned int		cpu;
-	enum cpuhp_state	target;
-};
-
-static long __cpu_down_maps_locked(void *arg)
-{
-	struct cpu_down_work *work = arg;
-
-	return _cpu_down(work->cpu, 0, work->target);
-}
-
 static int cpu_down_maps_locked(unsigned int cpu, enum cpuhp_state target)
 {
-	struct cpu_down_work work = { .cpu = cpu, .target = target, };
-
 	/*
 	 * If the platform does not support hotplug, report it explicitly to
 	 * differentiate it from a transient offlining failure.
@@ -1526,18 +1477,7 @@ static int cpu_down_maps_locked(unsigned int cpu, enum cpuhp_state target)
 		return -EOPNOTSUPP;
 	if (cpu_hotplug_disabled)
 		return -EBUSY;
-
-	/*
-	 * Ensure that the control task does not run on the to be offlined
-	 * CPU to prevent a deadlock against cfs_b->period_timer.
-	 * Also keep at least one housekeeping cpu onlined to avoid generating
-	 * an empty sched_domain span.
-	 */
-	for_each_cpu_and(cpu, cpu_online_mask, housekeeping_cpumask(HK_TYPE_DOMAIN)) {
-		if (cpu != work.cpu)
-			return work_on_cpu(cpu, __cpu_down_maps_locked, &work);
-	}
-	return -EBUSY;
+	return _cpu_down(cpu, 0, target);
 }
 
 static int cpu_down(unsigned int cpu, enum cpuhp_state target)
@@ -1635,7 +1575,7 @@ void notify_cpu_starting(unsigned int cpu)
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	enum cpuhp_state target = min((int)st->target, CPUHP_AP_ONLINE);
 
-	rcutree_report_cpu_starting(cpu);	/* Enables RCU usage on this CPU. */
+	rcu_cpu_starting(cpu);	/* Enables RCU usage on this CPU. */
 	cpumask_set_cpu(cpu, &cpus_booted_once_mask);
 
 	/*
@@ -1743,6 +1683,9 @@ static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 	if (!cpu_possible(cpu)) {
 		pr_err("can't online cpu %d because it is not configured as may-hotadd at boot time\n",
 		       cpu);
+#if defined(CONFIG_IA64)
+		pr_err("please check additional_cpus= boot parameter\n");
+#endif
 		return -EINVAL;
 	}
 
@@ -1756,7 +1699,7 @@ static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 		err = -EBUSY;
 		goto out;
 	}
-	if (!cpu_bootable(cpu)) {
+	if (!cpu_smt_allowed(cpu)) {
 		err = -EPERM;
 		goto out;
 	}
@@ -1849,16 +1792,6 @@ static int __init parallel_bringup_parse_param(char *arg)
 	return kstrtobool(arg, &__cpuhp_parallel_bringup);
 }
 early_param("cpuhp.parallel", parallel_bringup_parse_param);
-
-static inline bool cpuhp_smt_aware(void)
-{
-	return cpu_smt_max_threads > 1;
-}
-
-static inline const struct cpumask *cpuhp_get_primary_thread_mask(void)
-{
-	return cpu_primary_thread_mask;
-}
 
 /*
  * On architectures which have enabled parallel bringup this invokes all BP
@@ -2113,7 +2046,7 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 	[CPUHP_HRTIMERS_PREPARE] = {
 		.name			= "hrtimers:prepare",
 		.startup.single		= hrtimers_prepare_cpu,
-		.teardown.single	= NULL,
+		.teardown.single	= hrtimers_dead_cpu,
 	},
 	[CPUHP_SMPCFD_PREPARE] = {
 		.name			= "smpcfd:prepare",
@@ -2205,12 +2138,6 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 		.startup.single		= NULL,
 		.teardown.single	= smpcfd_dying_cpu,
 	},
-	[CPUHP_AP_HRTIMERS_DYING] = {
-		.name			= "hrtimers:dying",
-		.startup.single		= NULL,
-		.teardown.single	= hrtimers_cpu_dying,
-	},
-
 	/* Entry state on starting. Interrupts enabled from here on. Transient
 	 * state for synchronsization */
 	[CPUHP_AP_ONLINE] = {
@@ -2699,12 +2626,6 @@ int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 	for_each_online_cpu(cpu) {
 		if (topology_is_primary_thread(cpu))
 			continue;
-		/*
-		 * Disable can be called with CPU_SMT_ENABLED when changing
-		 * from a higher to lower number of SMT threads per core.
-		 */
-		if (ctrlval == CPU_SMT_ENABLED && cpu_smt_thread_allowed(cpu))
-			continue;
 		ret = cpu_down_maps_locked(cpu, CPUHP_OFFLINE);
 		if (ret)
 			break;
@@ -2738,8 +2659,6 @@ int cpuhp_smt_enable(void)
 	for_each_present_cpu(cpu) {
 		/* Skip online CPUs and CPUs on offline nodes */
 		if (cpu_online(cpu) || !node_online(cpu_to_node(cpu)))
-			continue;
-		if (!cpu_smt_thread_allowed(cpu))
 			continue;
 		ret = _cpu_up(cpu, 0, CPUHP_ONLINE);
 		if (ret)
@@ -2919,19 +2838,20 @@ static const struct attribute_group cpuhp_cpu_root_attr_group = {
 
 #ifdef CONFIG_HOTPLUG_SMT
 
-static bool cpu_smt_num_threads_valid(unsigned int threads)
-{
-	if (IS_ENABLED(CONFIG_SMT_NUM_THREADS_DYNAMIC))
-		return threads >= 1 && threads <= cpu_smt_max_threads;
-	return threads == 1 || threads == cpu_smt_max_threads;
-}
-
 static ssize_t
 __store_smt_control(struct device *dev, struct device_attribute *attr,
 		    const char *buf, size_t count)
 {
-	int ctrlval, ret, num_threads, orig_threads;
-	bool force_off;
+	int ctrlval, ret;
+
+	if (sysfs_streq(buf, "on"))
+		ctrlval = CPU_SMT_ENABLED;
+	else if (sysfs_streq(buf, "off"))
+		ctrlval = CPU_SMT_DISABLED;
+	else if (sysfs_streq(buf, "forceoff"))
+		ctrlval = CPU_SMT_FORCE_DISABLED;
+	else
+		return -EINVAL;
 
 	if (cpu_smt_control == CPU_SMT_FORCE_DISABLED)
 		return -EPERM;
@@ -2939,39 +2859,21 @@ __store_smt_control(struct device *dev, struct device_attribute *attr,
 	if (cpu_smt_control == CPU_SMT_NOT_SUPPORTED)
 		return -ENODEV;
 
-	if (sysfs_streq(buf, "on")) {
-		ctrlval = CPU_SMT_ENABLED;
-		num_threads = cpu_smt_max_threads;
-	} else if (sysfs_streq(buf, "off")) {
-		ctrlval = CPU_SMT_DISABLED;
-		num_threads = 1;
-	} else if (sysfs_streq(buf, "forceoff")) {
-		ctrlval = CPU_SMT_FORCE_DISABLED;
-		num_threads = 1;
-	} else if (kstrtoint(buf, 10, &num_threads) == 0) {
-		if (num_threads == 1)
-			ctrlval = CPU_SMT_DISABLED;
-		else if (cpu_smt_num_threads_valid(num_threads))
-			ctrlval = CPU_SMT_ENABLED;
-		else
-			return -EINVAL;
-	} else {
-		return -EINVAL;
-	}
-
 	ret = lock_device_hotplug_sysfs();
 	if (ret)
 		return ret;
 
-	orig_threads = cpu_smt_num_threads;
-	cpu_smt_num_threads = num_threads;
-
-	force_off = ctrlval != cpu_smt_control && ctrlval == CPU_SMT_FORCE_DISABLED;
-
-	if (num_threads > orig_threads)
-		ret = cpuhp_smt_enable();
-	else if (num_threads < orig_threads || force_off)
-		ret = cpuhp_smt_disable(ctrlval);
+	if (ctrlval != cpu_smt_control) {
+		switch (ctrlval) {
+		case CPU_SMT_ENABLED:
+			ret = cpuhp_smt_enable();
+			break;
+		case CPU_SMT_DISABLED:
+		case CPU_SMT_FORCE_DISABLED:
+			ret = cpuhp_smt_disable(ctrlval);
+			break;
+		}
+	}
 
 	unlock_device_hotplug();
 	return ret ? ret : count;
@@ -2998,17 +2900,6 @@ static ssize_t control_show(struct device *dev,
 			    struct device_attribute *attr, char *buf)
 {
 	const char *state = smt_states[cpu_smt_control];
-
-#ifdef CONFIG_HOTPLUG_SMT
-	/*
-	 * If SMT is enabled but not all threads are enabled then show the
-	 * number of threads. If all threads are enabled show "on". Otherwise
-	 * show the state name.
-	 */
-	if (cpu_smt_control == CPU_SMT_ENABLED &&
-	    cpu_smt_num_threads != cpu_smt_max_threads)
-		return sysfs_emit(buf, "%d\n", cpu_smt_num_threads);
-#endif
 
 	return snprintf(buf, PAGE_SIZE - 2, "%s\n", state);
 }

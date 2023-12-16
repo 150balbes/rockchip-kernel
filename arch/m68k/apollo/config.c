@@ -4,6 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/tty.h>
+#include <linux/console.h>
 #include <linux/rtc.h>
 #include <linux/vt_kern.h>
 #include <linux/interrupt.h>
@@ -17,8 +18,6 @@
 #include <asm/machdep.h>
 #include <asm/config.h>
 
-#include "apollo.h"
-
 u_long sio01_physaddr;
 u_long sio23_physaddr;
 u_long rtc_physaddr;
@@ -29,8 +28,9 @@ u_long timer_physaddr;
 u_long apollo_model;
 
 extern void dn_sched_init(void);
+extern void dn_init_IRQ(void);
 extern int dn_dummy_hwclk(int, struct rtc_time *);
-static void dn_dummy_reset(void);
+extern void dn_dummy_reset(void);
 #ifdef CONFIG_HEARTBEAT
 static void dn_heartbeat(int on);
 #endif
@@ -108,7 +108,28 @@ static void __init dn_setup_model(void)
 
 }
 
-static void dn_serial_print(const char *str)
+int dn_serial_console_wait_key(struct console *co) {
+
+	while(!(sio01.srb_csrb & 1))
+		barrier();
+	return sio01.rhrb_thrb;
+}
+
+void dn_serial_console_write (struct console *co, const char *str,unsigned int count)
+{
+   while(count--) {
+	if (*str == '\n') {
+	sio01.rhrb_thrb = (unsigned char)'\r';
+	while (!(sio01.srb_csrb & 0x4))
+                ;
+	}
+    sio01.rhrb_thrb = (unsigned char)*str++;
+    while (!(sio01.srb_csrb & 0x4))
+            ;
+  }
+}
+
+void dn_serial_print (const char *str)
 {
     while (*str) {
         if (*str == '\n') {
@@ -147,13 +168,13 @@ void __init config_apollo(void)
 
 irqreturn_t dn_timer_int(int irq, void *dev_id)
 {
-	unsigned char *at = (unsigned char *)apollo_timer;
+	volatile unsigned char x;
 
 	legacy_timer_tick(1);
 	timer_heartbeat();
 
-	READ_ONCE(*(at + 3));
-	READ_ONCE(*(at + 5));
+	x = *(volatile unsigned char *)(apollo_timer + 3);
+	x = *(volatile unsigned char *)(apollo_timer + 5);
 
 	return IRQ_HANDLED;
 }
@@ -208,11 +229,17 @@ int dn_dummy_hwclk(int op, struct rtc_time *t) {
 
 }
 
-static void dn_dummy_reset(void)
-{
+void dn_dummy_reset(void) {
+
   dn_serial_print("The end !\n");
 
   for(;;);
+
+}
+
+void dn_dummy_waitbut(void) {
+
+  dn_serial_print("waitbut\n");
 
 }
 

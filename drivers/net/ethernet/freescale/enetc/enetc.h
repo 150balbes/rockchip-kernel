@@ -11,7 +11,6 @@
 #include <linux/if_vlan.h>
 #include <linux/phylink.h>
 #include <linux/dim.h>
-#include <net/xdp.h>
 
 #include "enetc_hw.h"
 
@@ -297,7 +296,7 @@ struct enetc_int_vector {
 	char name[ENETC_INT_NAME_MAX];
 
 	struct enetc_bdr rx_ring;
-	struct enetc_bdr tx_ring[] __counted_by(count_tx_rings);
+	struct enetc_bdr tx_ring[];
 } ____cacheline_aligned_in_smp;
 
 struct enetc_cls_rule {

@@ -114,18 +114,6 @@ struct panthor_device {
 	/** @devfreq: Device frequency scaling management data. */
 	struct panthor_devfreq *devfreq;
 
-	/** @unplug: Device unplug related fields. */
-	struct {
-		/** @lock: Lock used to serialize unplug operations. */
-		struct mutex lock;
-
-		/**
-		 * @done: Completion object signaled when the unplug
-		 * operation is done.
-		 */
-		struct completion done;
-	} unplug;
-
 	/** @reset: Reset related fields. */
 	struct {
 		/** @wq: Ordered worqueud used to schedule reset operations. */

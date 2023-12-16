@@ -16,6 +16,7 @@
 #ifndef __ISYS_IRQ_GLOBAL_H__
 #define __ISYS_IRQ_GLOBAL_H__
 
+#if defined(ISP2401)
 
 /* Register offset/index from base location */
 #define ISYS_IRQ_EDGE_REG_IDX		(0)
@@ -30,5 +31,6 @@
 #define ISYS_IRQ_CLEAR_REG_VALUE	(0xFFFF)
 #define ISYS_IRQ_ENABLE_REG_VALUE	(0xFFFF)
 
+#endif /* defined(ISP2401) */
 
 #endif	/* __ISYS_IRQ_GLOBAL_H__ */

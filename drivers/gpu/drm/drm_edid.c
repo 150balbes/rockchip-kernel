@@ -29,7 +29,6 @@
  */
 
 #include <linux/bitfield.h>
-#include <linux/cec.h>
 #include <linux/hdmi.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
@@ -41,12 +40,10 @@
 #include <drm/drm_displayid.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_eld.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_print.h>
 
 #include "drm_crtc_internal.h"
-#include "drm_internal.h"
 
 static int oui(u8 first, u8 second, u8 third)
 {
@@ -125,9 +122,6 @@ static const struct edid_quirk {
 
 	/* AEO model 0 reports 8 bpc, but is a 6 bpc panel */
 	EDID_QUIRK('A', 'E', 'O', 0, EDID_QUIRK_FORCE_6BPC),
-
-	/* BenQ GW2765 */
-	EDID_QUIRK('B', 'N', 'Q', 0x78d6, EDID_QUIRK_FORCE_8BPC),
 
 	/* BOE model on HP Pavilion 15-n233sl reports 8 bpc, but is a 6 bpc panel */
 	EDID_QUIRK('B', 'O', 'E', 0x78b, EDID_QUIRK_FORCE_6BPC),
@@ -3116,7 +3110,7 @@ drm_monitor_supports_rb(const struct drm_edid *drm_edid)
 		return ret;
 	}
 
-	return drm_edid_is_digital(drm_edid);
+	return ((drm_edid->edid->input & DRM_EDID_INPUT_DIGITAL) != 0);
 }
 
 static void
@@ -3463,10 +3457,6 @@ static struct drm_display_mode *drm_mode_detailed(struct drm_connector *connecto
 			    connector->base.id, connector->name);
 		return NULL;
 	}
-	if (!(pt->misc & DRM_EDID_PT_SEPARATE_SYNC)) {
-		drm_dbg_kms(dev, "[CONNECTOR:%d:%s] Composite sync not supported\n",
-			    connector->base.id, connector->name);
-	}
 
 	/* it is incorrect if hsync/vsync width is zero */
 	if (!hsync_pulse_width || !vsync_pulse_width) {
@@ -3521,10 +3511,27 @@ static struct drm_display_mode *drm_mode_detailed(struct drm_connector *connecto
 	if (info->quirks & EDID_QUIRK_DETAILED_SYNC_PP) {
 		mode->flags |= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
 	} else {
-		mode->flags |= (pt->misc & DRM_EDID_PT_HSYNC_POSITIVE) ?
-			DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC;
-		mode->flags |= (pt->misc & DRM_EDID_PT_VSYNC_POSITIVE) ?
-			DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC;
+		switch (pt->misc & DRM_EDID_PT_SYNC_MASK) {
+		case DRM_EDID_PT_ANALOG_CSYNC:
+		case DRM_EDID_PT_BIPOLAR_ANALOG_CSYNC:
+			drm_dbg_kms(dev, "[CONNECTOR:%d:%s] Analog composite sync!\n",
+				    connector->base.id, connector->name);
+			mode->flags |= DRM_MODE_FLAG_CSYNC | DRM_MODE_FLAG_NCSYNC;
+			break;
+		case DRM_EDID_PT_DIGITAL_CSYNC:
+			drm_dbg_kms(dev, "[CONNECTOR:%d:%s] Digital composite sync!\n",
+				    connector->base.id, connector->name);
+			mode->flags |= DRM_MODE_FLAG_CSYNC;
+			mode->flags |= (pt->misc & DRM_EDID_PT_HSYNC_POSITIVE) ?
+				DRM_MODE_FLAG_PCSYNC : DRM_MODE_FLAG_NCSYNC;
+			break;
+		case DRM_EDID_PT_DIGITAL_SEPARATE_SYNC:
+			mode->flags |= (pt->misc & DRM_EDID_PT_HSYNC_POSITIVE) ?
+				DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC;
+			mode->flags |= (pt->misc & DRM_EDID_PT_VSYNC_POSITIVE) ?
+				DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC;
+			break;
+		}
 	}
 
 set_size:
@@ -5512,27 +5519,6 @@ static void clear_eld(struct drm_connector *connector)
 }
 
 /*
- * Get 3-byte SAD buffer from struct cea_sad.
- */
-void drm_edid_cta_sad_get(const struct cea_sad *cta_sad, u8 *sad)
-{
-	sad[0] = cta_sad->format << 3 | cta_sad->channels;
-	sad[1] = cta_sad->freq;
-	sad[2] = cta_sad->byte2;
-}
-
-/*
- * Set struct cea_sad from 3-byte SAD buffer.
- */
-void drm_edid_cta_sad_set(struct cea_sad *cta_sad, const u8 *sad)
-{
-	cta_sad->format = (sad[0] & 0x78) >> 3;
-	cta_sad->channels = sad[0] & 0x07;
-	cta_sad->freq = sad[1] & 0x7f;
-	cta_sad->byte2 = sad[2];
-}
-
-/*
  * drm_edid_to_eld - build ELD from EDID
  * @connector: connector corresponding to the HDMI/DP sink
  * @drm_edid: EDID to parse
@@ -5616,7 +5602,7 @@ static void drm_edid_to_eld(struct drm_connector *connector,
 }
 
 static int _drm_edid_to_sad(const struct drm_edid *drm_edid,
-			    struct cea_sad **psads)
+			    struct cea_sad **sads)
 {
 	const struct cea_db *db;
 	struct cea_db_iter iter;
@@ -5625,16 +5611,20 @@ static int _drm_edid_to_sad(const struct drm_edid *drm_edid,
 	cea_db_iter_edid_begin(drm_edid, &iter);
 	cea_db_iter_for_each(db, &iter) {
 		if (cea_db_tag(db) == CTA_DB_AUDIO) {
-			struct cea_sad *sads;
-			int i;
+			int j;
 
 			count = cea_db_payload_len(db) / 3; /* SAD is 3B */
-			sads = kcalloc(count, sizeof(*sads), GFP_KERNEL);
-			*psads = sads;
-			if (!sads)
+			*sads = kcalloc(count, sizeof(**sads), GFP_KERNEL);
+			if (!*sads)
 				return -ENOMEM;
-			for (i = 0; i < count; i++)
-				drm_edid_cta_sad_set(&sads[i], &db->data[i * 3]);
+			for (j = 0; j < count; j++) {
+				const u8 *sad = &db->data[j * 3];
+
+				(*sads)[j].format = (sad[0] & 0x78) >> 3;
+				(*sads)[j].channels = sad[0] & 0x7;
+				(*sads)[j].freq = sad[1] & 0x7F;
+				(*sads)[j].byte2 = sad[2];
+			}
 			break;
 		}
 	}
@@ -6223,8 +6213,6 @@ drm_parse_hdmi_vsdb_video(struct drm_connector *connector, const u8 *db)
 
 	info->is_hdmi = true;
 
-	info->source_physical_address = (db[4] << 8) | db[5];
-
 	if (len >= 6)
 		info->dvi_dual = db[6] & 1;
 	if (len >= 7)
@@ -6503,8 +6491,6 @@ static void drm_reset_display_info(struct drm_connector *connector)
 	info->vics_len = 0;
 
 	info->quirks = 0;
-
-	info->source_physical_address = CEC_PHYS_ADDR_INVALID;
 }
 
 static void update_displayid_info(struct drm_connector *connector,
@@ -6554,7 +6540,7 @@ static void update_display_info(struct drm_connector *connector,
 	if (edid->revision < 3)
 		goto out;
 
-	if (!drm_edid_is_digital(drm_edid))
+	if (!(edid->input & DRM_EDID_INPUT_DIGITAL))
 		goto out;
 
 	info->color_formats |= DRM_COLOR_FORMAT_RGB444;
@@ -7370,16 +7356,3 @@ static void _drm_update_tile_info(struct drm_connector *connector,
 		connector->tile_group = NULL;
 	}
 }
-
-/**
- * drm_edid_is_digital - is digital?
- * @drm_edid: The EDID
- *
- * Return true if input is digital.
- */
-bool drm_edid_is_digital(const struct drm_edid *drm_edid)
-{
-	return drm_edid && drm_edid->edid &&
-		drm_edid->edid->input & DRM_EDID_INPUT_DIGITAL;
-}
-EXPORT_SYMBOL(drm_edid_is_digital);

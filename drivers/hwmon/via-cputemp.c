@@ -182,7 +182,7 @@ exit_remove:
 	return err;
 }
 
-static void via_cputemp_remove(struct platform_device *pdev)
+static int via_cputemp_remove(struct platform_device *pdev)
 {
 	struct via_cputemp_data *data = platform_get_drvdata(pdev);
 
@@ -190,6 +190,7 @@ static void via_cputemp_remove(struct platform_device *pdev)
 	if (data->vrm)
 		device_remove_file(&pdev->dev, &dev_attr_cpu0_vid);
 	sysfs_remove_group(&pdev->dev.kobj, &via_cputemp_group);
+	return 0;
 }
 
 static struct platform_driver via_cputemp_driver = {
@@ -197,7 +198,7 @@ static struct platform_driver via_cputemp_driver = {
 		.name = DRVNAME,
 	},
 	.probe = via_cputemp_probe,
-	.remove_new = via_cputemp_remove,
+	.remove = via_cputemp_remove,
 };
 
 struct pdev_entry {

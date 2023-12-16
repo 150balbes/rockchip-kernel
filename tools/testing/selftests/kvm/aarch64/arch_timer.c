@@ -19,6 +19,7 @@
  *
  * Copyright (c) 2021, Google LLC.
  */
+
 #define _GNU_SOURCE
 
 #include <stdlib.h>
@@ -154,13 +155,11 @@ static void guest_validate_irq(unsigned int intid,
 	xcnt_diff_us = cycles_to_usec(xcnt - shared_data->xcnt);
 
 	/* Make sure we are dealing with the correct timer IRQ */
-	GUEST_ASSERT_EQ(intid, timer_irq);
+	GUEST_ASSERT_2(intid == timer_irq, intid, timer_irq);
 
 	/* Basic 'timer condition met' check */
-	__GUEST_ASSERT(xcnt >= cval,
-		       "xcnt = 0x%llx, cval = 0x%llx, xcnt_diff_us = 0x%llx",
-		       xcnt, cval, xcnt_diff_us);
-	__GUEST_ASSERT(xctl & CTL_ISTATUS, "xcnt = 0x%llx", xcnt);
+	GUEST_ASSERT_3(xcnt >= cval, xcnt, cval, xcnt_diff_us);
+	GUEST_ASSERT_1(xctl & CTL_ISTATUS, xctl);
 
 	WRITE_ONCE(shared_data->nr_iter, shared_data->nr_iter + 1);
 }
@@ -193,7 +192,8 @@ static void guest_run_stage(struct test_vcpu_shared_data *shared_data,
 			TIMER_TEST_ERR_MARGIN_US);
 
 		irq_iter = READ_ONCE(shared_data->nr_iter);
-		GUEST_ASSERT_EQ(config_iter + 1, irq_iter);
+		GUEST_ASSERT_2(config_iter + 1 == irq_iter,
+				config_iter + 1, irq_iter);
 	}
 }
 
@@ -243,9 +243,13 @@ static void *test_vcpu_run(void *arg)
 		break;
 	case UCALL_ABORT:
 		sync_global_from_guest(vm, *shared_data);
-		fprintf(stderr, "Guest assert failed,  vcpu %u; stage; %u; iter: %u\n",
-			vcpu_idx, shared_data->guest_stage, shared_data->nr_iter);
-		REPORT_GUEST_ASSERT(uc);
+		REPORT_GUEST_ASSERT_N(uc, "values: %lu, %lu; %lu, vcpu %u; stage; %u; iter: %u",
+				      GUEST_ASSERT_ARG(uc, 0),
+				      GUEST_ASSERT_ARG(uc, 1),
+				      GUEST_ASSERT_ARG(uc, 2),
+				      vcpu_idx,
+				      shared_data->guest_stage,
+				      shared_data->nr_iter);
 		break;
 	default:
 		TEST_FAIL("Unexpected guest exit\n");

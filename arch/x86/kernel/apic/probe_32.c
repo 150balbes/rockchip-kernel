@@ -10,27 +10,49 @@
 #include <linux/errno.h>
 #include <linux/smp.h>
 
-#include <xen/xen.h>
-
 #include <asm/io_apic.h>
 #include <asm/apic.h>
 #include <asm/acpi.h>
 
 #include "local.h"
 
-static u32 default_phys_pkg_id(u32 cpuid_apic, int index_msb)
+static int default_x86_32_early_logical_apicid(int cpu)
 {
-	return cpuid_apic >> index_msb;
+	return 1 << cpu;
 }
 
-static u32 default_get_apic_id(u32 x)
+static void setup_apic_flat_routing(void)
 {
-	unsigned int ver = GET_APIC_VERSION(apic_read(APIC_LVR));
+#ifdef CONFIG_X86_IO_APIC
+	printk(KERN_INFO
+		"Enabling APIC mode:  Flat.  Using %d I/O APICs\n",
+		nr_ioapics);
+#endif
+}
 
-	if (APIC_XAPIC(ver) || boot_cpu_has(X86_FEATURE_EXTD_APICID))
-		return (x >> 24) & 0xFF;
-	else
-		return (x >> 24) & 0x0F;
+static int default_apic_id_registered(void)
+{
+	return physid_isset(read_apic_id(), phys_cpu_present_map);
+}
+
+/*
+ * Set up the logical destination ID.  Intel recommends to set DFR, LDR and
+ * TPR before enabling an APIC.  See e.g. "AP-388 82489DX User's Manual"
+ * (Intel document number 292116).
+ */
+static void default_init_apic_ldr(void)
+{
+	unsigned long val;
+
+	apic_write(APIC_DFR, APIC_DFR_VALUE);
+	val = apic_read(APIC_LDR) & ~APIC_LDR_MASK;
+	val |= SET_APIC_LOGICAL_ID(1UL << smp_processor_id());
+	apic_write(APIC_LDR, val);
+}
+
+static int default_phys_pkg_id(int cpuid_apic, int index_msb)
+{
+	return cpuid_apic >> index_msb;
 }
 
 /* should be called last. */
@@ -43,6 +65,8 @@ static struct apic apic_default __ro_after_init = {
 
 	.name				= "default",
 	.probe				= probe_default,
+	.acpi_madt_oem_check		= NULL,
+	.apic_id_valid			= default_apic_id_valid,
 	.apic_id_registered		= default_apic_id_registered,
 
 	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
@@ -53,11 +77,14 @@ static struct apic apic_default __ro_after_init = {
 	.check_apicid_used		= default_check_apicid_used,
 	.init_apic_ldr			= default_init_apic_ldr,
 	.ioapic_phys_id_map		= default_ioapic_phys_id_map,
+	.setup_apic_routing		= setup_apic_flat_routing,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
+	.apicid_to_cpu_present		= physid_set_mask_of_physid,
+	.check_phys_apicid_present	= default_check_phys_apicid_present,
 	.phys_pkg_id			= default_phys_pkg_id,
 
-	.max_apic_id			= 0xFE,
 	.get_apic_id			= default_get_apic_id,
+	.set_apic_id			= NULL,
 
 	.calc_dest_apicid		= apic_flat_calc_apicid,
 
@@ -68,13 +95,17 @@ static struct apic apic_default __ro_after_init = {
 	.send_IPI_all			= default_send_IPI_all,
 	.send_IPI_self			= default_send_IPI_self,
 
+	.inquire_remote_apic		= default_inquire_remote_apic,
+
 	.read				= native_apic_mem_read,
 	.write				= native_apic_mem_write,
-	.eoi				= native_apic_mem_eoi,
+	.eoi_write			= native_apic_mem_write,
 	.icr_read			= native_apic_icr_read,
 	.icr_write			= native_apic_icr_write,
-	.wait_icr_idle			= apic_mem_wait_icr_idle,
-	.safe_wait_icr_idle		= apic_mem_wait_icr_idle_timeout,
+	.wait_icr_idle			= native_apic_wait_icr_idle,
+	.safe_wait_icr_idle		= native_safe_apic_wait_icr_idle,
+
+	.x86_32_early_logical_apicid	= default_x86_32_early_logical_apicid,
 };
 
 apic_driver(apic_default);
@@ -92,7 +123,7 @@ static int __init parse_apic(char *arg)
 
 	for (drv = __apicdrivers; drv < __apicdrivers_end; drv++) {
 		if (!strcmp((*drv)->name, arg)) {
-			apic_install_driver(*drv);
+			apic = *drv;
 			cmdline_apic = 1;
 			return 0;
 		}
@@ -103,43 +134,49 @@ static int __init parse_apic(char *arg)
 }
 early_param("apic", parse_apic);
 
-void __init x86_32_probe_bigsmp_early(void)
+void __init default_setup_apic_routing(void)
 {
-	if (nr_cpu_ids <= 8 || xen_pv_domain())
-		return;
+	int version = boot_cpu_apic_version;
 
-	if (IS_ENABLED(CONFIG_X86_BIGSMP)) {
+	if (num_possible_cpus() > 8) {
 		switch (boot_cpu_data.x86_vendor) {
 		case X86_VENDOR_INTEL:
-			if (!APIC_XAPIC(boot_cpu_apic_version))
+			if (!APIC_XAPIC(version)) {
+				def_to_bigsmp = 0;
 				break;
+			}
 			/* P4 and above */
 			fallthrough;
 		case X86_VENDOR_HYGON:
 		case X86_VENDOR_AMD:
-			if (apic_bigsmp_possible(cmdline_apic))
-				return;
-			break;
+			def_to_bigsmp = 1;
 		}
 	}
-	pr_info("Limiting to 8 possible CPUs\n");
-	set_nr_cpu_ids(8);
+
+#ifdef CONFIG_X86_BIGSMP
+	/*
+	 * This is used to switch to bigsmp mode when
+	 * - There is no apic= option specified by the user
+	 * - generic_apic_probe() has chosen apic_default as the sub_arch
+	 * - we find more than 8 CPUs in acpi LAPIC listing with xAPIC support
+	 */
+
+	if (!cmdline_apic && apic == &apic_default)
+		generic_bigsmp_probe();
+#endif
+
+	if (apic->setup_apic_routing)
+		apic->setup_apic_routing();
 }
 
-void __init x86_32_install_bigsmp(void)
-{
-	if (nr_cpu_ids > 8 && !xen_pv_domain())
-		apic_bigsmp_force();
-}
-
-void __init x86_32_probe_apic(void)
+void __init generic_apic_probe(void)
 {
 	if (!cmdline_apic) {
 		struct apic **drv;
 
 		for (drv = __apicdrivers; drv < __apicdrivers_end; drv++) {
 			if ((*drv)->probe()) {
-				apic_install_driver(*drv);
+				apic = *drv;
 				break;
 			}
 		}
@@ -147,4 +184,26 @@ void __init x86_32_probe_apic(void)
 		if (drv == __apicdrivers_end)
 			panic("Didn't find an APIC driver");
 	}
+	printk(KERN_INFO "Using APIC driver %s\n", apic->name);
+}
+
+/* This function can switch the APIC even after the initial ->probe() */
+int __init default_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
+{
+	struct apic **drv;
+
+	for (drv = __apicdrivers; drv < __apicdrivers_end; drv++) {
+		if (!(*drv)->acpi_madt_oem_check)
+			continue;
+		if (!(*drv)->acpi_madt_oem_check(oem_id, oem_table_id))
+			continue;
+
+		if (!cmdline_apic) {
+			apic = *drv;
+			printk(KERN_INFO "Switched to APIC driver `%s'.\n",
+			       apic->name);
+		}
+		return 1;
+	}
+	return 0;
 }

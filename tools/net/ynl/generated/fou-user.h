@@ -91,7 +91,6 @@ fou_add_req_set_local_v6(struct fou_add_req *req, const void *local_v6,
 			 size_t len)
 {
 	free(req->local_v6);
-	req->_present.local_v6_len = len;
 	req->local_v6 = malloc(req->_present.local_v6_len);
 	memcpy(req->local_v6, local_v6, req->_present.local_v6_len);
 }
@@ -100,7 +99,6 @@ fou_add_req_set_peer_v6(struct fou_add_req *req, const void *peer_v6,
 			size_t len)
 {
 	free(req->peer_v6);
-	req->_present.peer_v6_len = len;
 	req->peer_v6 = malloc(req->_present.peer_v6_len);
 	memcpy(req->peer_v6, peer_v6, req->_present.peer_v6_len);
 }
@@ -194,7 +192,6 @@ fou_del_req_set_local_v6(struct fou_del_req *req, const void *local_v6,
 			 size_t len)
 {
 	free(req->local_v6);
-	req->_present.local_v6_len = len;
 	req->local_v6 = malloc(req->_present.local_v6_len);
 	memcpy(req->local_v6, local_v6, req->_present.local_v6_len);
 }
@@ -203,7 +200,6 @@ fou_del_req_set_peer_v6(struct fou_del_req *req, const void *peer_v6,
 			size_t len)
 {
 	free(req->peer_v6);
-	req->_present.peer_v6_len = len;
 	req->peer_v6 = malloc(req->_present.peer_v6_len);
 	memcpy(req->peer_v6, peer_v6, req->_present.peer_v6_len);
 }
@@ -284,7 +280,6 @@ fou_get_req_set_local_v6(struct fou_get_req *req, const void *local_v6,
 			 size_t len)
 {
 	free(req->local_v6);
-	req->_present.local_v6_len = len;
 	req->local_v6 = malloc(req->_present.local_v6_len);
 	memcpy(req->local_v6, local_v6, req->_present.local_v6_len);
 }
@@ -293,7 +288,6 @@ fou_get_req_set_peer_v6(struct fou_get_req *req, const void *peer_v6,
 			size_t len)
 {
 	free(req->peer_v6);
-	req->_present.peer_v6_len = len;
 	req->peer_v6 = malloc(req->_present.peer_v6_len);
 	memcpy(req->peer_v6, peer_v6, req->_present.peer_v6_len);
 }
@@ -333,7 +327,7 @@ struct fou_get_rsp *fou_get(struct ynl_sock *ys, struct fou_get_req *req);
 /* FOU_CMD_GET - dump */
 struct fou_get_list {
 	struct fou_get_list *next;
-	struct fou_get_rsp obj __attribute__((aligned(8)));
+	struct fou_get_rsp obj __attribute__ ((aligned (8)));
 };
 
 void fou_get_list_free(struct fou_get_list *rsp);

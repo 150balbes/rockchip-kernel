@@ -728,7 +728,7 @@ err:
 	return ret;
 }
 
-static void max77693_charger_remove(struct platform_device *pdev)
+static int max77693_charger_remove(struct platform_device *pdev)
 {
 	struct max77693_charger *chg = platform_get_drvdata(pdev);
 
@@ -737,6 +737,8 @@ static void max77693_charger_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_fast_charge_timer);
 
 	power_supply_unregister(chg->charger);
+
+	return 0;
 }
 
 static const struct platform_device_id max77693_charger_id[] = {
@@ -750,7 +752,7 @@ static struct platform_driver max77693_charger_driver = {
 		.name	= "max77693-charger",
 	},
 	.probe		= max77693_charger_probe,
-	.remove_new	= max77693_charger_remove,
+	.remove		= max77693_charger_remove,
 	.id_table	= max77693_charger_id,
 };
 module_platform_driver(max77693_charger_driver);

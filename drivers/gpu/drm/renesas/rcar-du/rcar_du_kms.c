@@ -935,8 +935,7 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	/* Initialize the Color Management Modules. */
 	ret = rcar_du_cmm_init(rcdu);
 	if (ret)
-		return dev_err_probe(rcdu->dev, ret,
-				     "failed to initialize CMM\n");
+		return ret;
 
 	/* Create the CRTCs. */
 	for (swindex = 0, hwindex = 0; swindex < rcdu->num_crtcs; ++hwindex) {
@@ -956,8 +955,7 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	/* Initialize the encoders. */
 	ret = rcar_du_encoders_init(rcdu);
 	if (ret < 0)
-		return dev_err_probe(rcdu->dev, ret,
-				     "failed to initialize encoders\n");
+		return ret;
 
 	if (ret == 0) {
 		dev_err(rcdu->dev, "error: no encoder could be initialized\n");

@@ -741,7 +741,6 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	struct acpi_handle_list dep_devices;
 	acpi_handle supplier = ACPI_HANDLE(&pdev->dev);
 	acpi_status status;
-	bool ret = false;
 	int i;
 
 	if (!acpi_has_method(handle, "_DEP"))
@@ -754,14 +753,11 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	}
 
 	for (i = 0; i < dep_devices.count; i++) {
-		if (dep_devices.handles[i] == supplier) {
-			ret = true;
-			break;
-		}
+		if (dep_devices.handles[i] == supplier)
+			return true;
 	}
 
-	acpi_handle_list_free(&dep_devices);
-	return ret;
+	return false;
 }
 
 static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
@@ -854,7 +850,7 @@ err_enable_events:
 	return status;
 }
 
-static void san_remove(struct platform_device *pdev)
+static int san_remove(struct platform_device *pdev)
 {
 	acpi_handle san = ACPI_HANDLE(&pdev->dev);
 
@@ -868,6 +864,8 @@ static void san_remove(struct platform_device *pdev)
 	 * all delayed works they may have spawned are run to completion.
 	 */
 	flush_workqueue(san_wq);
+
+	return 0;
 }
 
 static const struct acpi_device_id san_match[] = {
@@ -878,7 +876,7 @@ MODULE_DEVICE_TABLE(acpi, san_match);
 
 static struct platform_driver surface_acpi_notify = {
 	.probe = san_probe,
-	.remove_new = san_remove,
+	.remove = san_remove,
 	.driver = {
 		.name = "surface_acpi_notify",
 		.acpi_match_table = san_match,

@@ -1,4 +1,3 @@
-#!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 # Arnaldo Carvalho de Melo <acme@kernel.org>, 2017
 

@@ -66,13 +66,12 @@ lack of a better place.
    :maxdepth: 1
 
    applying-patches
-   backporting
    adding-syscalls
    magic-number
    volatile-considered-harmful
    botching-up-ioctls
    clang-format
-   ../arch/riscv/patch-acceptance
+   ../riscv/patch-acceptance
    ../core-api/unaligned-memory-access
 
 .. only::  subproject and html

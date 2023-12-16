@@ -29,12 +29,10 @@ properties:
     patternProperties:
       "^buck[1-4]$":
         $ref: regulator.yaml#
-        unevaluatedProperties: false
         type: object
 
       "^ldo[1-4]$":
         $ref: regulator.yaml#
-        unevaluatedProperties: false
         type: object
 
     additionalProperties: false

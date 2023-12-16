@@ -11,7 +11,7 @@
 
 #include <linux/dvb/version.h>
 #include <media/dvb_frontend.h>
-#include <linux/int_log.h>
+#include <media/dvb_math.h>
 #include "cxd2820r.h"
 #include <linux/gpio/driver.h> /* For gpio_chip */
 #include <linux/math64.h>

@@ -809,11 +809,8 @@ static void pulse8_ping_eeprom_work_handler(struct work_struct *work)
 
 	mutex_lock(&pulse8->lock);
 	cmd = MSGCODE_PING;
-	if (pulse8_send_and_wait(pulse8, &cmd, 1,
-				 MSGCODE_COMMAND_ACCEPTED, 0)) {
-		dev_warn(pulse8->dev, "failed to ping EEPROM\n");
-		goto unlock;
-	}
+	pulse8_send_and_wait(pulse8, &cmd, 1,
+			     MSGCODE_COMMAND_ACCEPTED, 0);
 
 	if (pulse8->vers < 2)
 		goto unlock;

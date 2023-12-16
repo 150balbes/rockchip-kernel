@@ -70,7 +70,7 @@ panthor_set_uobj(u64 usr_ptr, u32 usr_size, u32 min_size, u32 kern_size, const v
  * panthor_get_uobj_array() - Copy a user object array into a kernel accessible object array.
  * @in: The object array to copy.
  * @min_stride: Minimum array stride.
- * @obj_size: Kernel object size.
+ * @obj_kernel: Kernel object size.
  *
  * Helper automating user -> kernel object copies.
  *
@@ -260,7 +260,7 @@ struct panthor_job_ctx {
 	/** @job: The job that is about to be submitted to drm_sched. */
 	struct drm_sched_job *job;
 
-	/** @syncops: Array of sync operations. */
+	/** @syncobjs: Array of sync operations. */
 	struct drm_panthor_sync_op *syncops;
 
 	/** @syncop_count: Number of sync operations. */
@@ -726,7 +726,6 @@ static int panthor_submit_ctx_init(struct panthor_submit_ctx *ctx,
 /**
  * panthor_submit_ctx_cleanup() - Cleanup a submission context
  * @ctx: Submit context to cleanup.
- * @job_put: Job put callback.
  */
 static void panthor_submit_ctx_cleanup(struct panthor_submit_ctx *ctx,
 				       void (*job_put)(struct drm_sched_job *))
@@ -1222,26 +1221,6 @@ static int panthor_ioctl_vm_bind(struct drm_device *ddev, void *data,
 	return ret;
 }
 
-static int panthor_ioctl_vm_get_state(struct drm_device *ddev, void *data,
-				      struct drm_file *file)
-{
-	struct panthor_file *pfile = file->driver_priv;
-	struct drm_panthor_vm_get_state *args = data;
-	struct panthor_vm *vm;
-
-	vm = panthor_vm_pool_get_vm(pfile->vms, args->vm_id);
-	if (!vm)
-		return -EINVAL;
-
-	if (panthor_vm_is_unusable(vm))
-		args->state = DRM_PANTHOR_VM_STATE_UNUSABLE;
-	else
-		args->state = DRM_PANTHOR_VM_STATE_USABLE;
-
-	panthor_vm_put(vm);
-	return 0;
-}
-
 static int
 panthor_open(struct drm_device *ddev, struct drm_file *file)
 {
@@ -1302,7 +1281,6 @@ static const struct drm_ioctl_desc panthor_drm_driver_ioctls[] = {
 	PANTHOR_IOCTL(VM_CREATE, vm_create, DRM_RENDER_ALLOW),
 	PANTHOR_IOCTL(VM_DESTROY, vm_destroy, DRM_RENDER_ALLOW),
 	PANTHOR_IOCTL(VM_BIND, vm_bind, DRM_RENDER_ALLOW),
-	PANTHOR_IOCTL(VM_GET_STATE, vm_get_state, DRM_RENDER_ALLOW),
 	PANTHOR_IOCTL(BO_CREATE, bo_create, DRM_RENDER_ALLOW),
 	PANTHOR_IOCTL(BO_MMAP_OFFSET, bo_mmap_offset, DRM_RENDER_ALLOW),
 	PANTHOR_IOCTL(GROUP_CREATE, group_create, DRM_RENDER_ALLOW),
@@ -1345,7 +1323,7 @@ static const struct file_operations panthor_drm_driver_fops = {
 };
 
 #ifdef CONFIG_DEBUG_FS
-static void panthor_debugfs_init(struct drm_minor *minor)
+void panthor_debugfs_init(struct drm_minor *minor)
 {
 	panthor_mmu_debugfs_init(minor);
 }
@@ -1424,8 +1402,8 @@ static struct platform_driver panthor_driver = {
 	},
 };
 
-/*
- * Workqueue used to cleanup stuff.
+/**
+ * @cleanup_wq: Workqueue used to cleanup stuff.
  *
  * We create a dedicated workqueue so we can drain on unplug and
  * make sure all resources are freed before the module is unloaded.

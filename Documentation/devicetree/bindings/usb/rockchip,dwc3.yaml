@@ -15,10 +15,13 @@ description:
   Phy documentation is provided in the following places.
 
   USB2.0 PHY
-  Documentation/devicetree/bindings/phy/rockchip,inno-usb2phy.yaml
+  Documentation/devicetree/bindings/phy/phy-rockchip-inno-usb2.yaml
 
   Type-C PHY
   Documentation/devicetree/bindings/phy/phy-rockchip-typec.txt
+
+allOf:
+  - $ref: snps,dwc3.yaml#
 
 select:
   properties:
@@ -89,52 +92,6 @@ required:
   - interrupts
   - clocks
   - clock-names
-
-allOf:
-  - $ref: snps,dwc3.yaml#
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: rockchip,rk3328-dwc3
-    then:
-      properties:
-        clocks:
-          minItems: 3
-          maxItems: 4
-        clock-names:
-          minItems: 3
-          items:
-            - const: ref_clk
-            - const: suspend_clk
-            - const: bus_clk
-            - const: grf_clk
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: rockchip,rk3568-dwc3
-    then:
-      properties:
-        clocks:
-          maxItems: 3
-        clock-names:
-          maxItems: 3
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: rockchip,rk3588-dwc3
-    then:
-      properties:
-        clock-names:
-          minItems: 3
-          items:
-            - const: ref_clk
-            - const: suspend_clk
-            - const: bus_clk
-            - const: utmi
-            - const: pipe
 
 examples:
   - |

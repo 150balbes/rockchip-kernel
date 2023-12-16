@@ -56,11 +56,9 @@ o        `                     ~~~~\___/~~~~    ` controller in FPGA is ,.`
 #include <linux/slab.h>
 #include <linux/bitops.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/mod_devicetable.h>
 #include <linux/of.h>
-
-#include "gpiolib.h"
+#include <linux/of_device.h>
 
 static void bgpio_write8(void __iomem *reg, unsigned long data)
 {
@@ -616,14 +614,9 @@ int bgpio_init(struct gpio_chip *gc, struct device *dev,
 	gc->parent = dev;
 	gc->label = dev_name(dev);
 	gc->base = -1;
+	gc->ngpio = gc->bgpio_bits;
 	gc->request = bgpio_request;
 	gc->be_bits = !!(flags & BGPIOF_BIG_ENDIAN);
-
-	ret = gpiochip_get_ngpios(gc, dev);
-	if (ret)
-		gc->ngpio = gc->bgpio_bits;
-	else
-		gc->bgpio_bits = roundup_pow_of_two(round_up(gc->ngpio, 8));
 
 	ret = bgpio_setup_io(gc, dat, set, clr, flags);
 	if (ret)
@@ -702,7 +695,7 @@ static struct bgpio_pdata *bgpio_parse_dt(struct platform_device *pdev,
 {
 	struct bgpio_pdata *pdata;
 
-	if (!pdev->dev.of_node)
+	if (!of_match_device(bgpio_of_match, &pdev->dev))
 		return NULL;
 
 	pdata = devm_kzalloc(&pdev->dev, sizeof(struct bgpio_pdata),

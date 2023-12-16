@@ -215,11 +215,13 @@ static int pm860x_led_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void pm860x_led_remove(struct platform_device *pdev)
+static int pm860x_led_remove(struct platform_device *pdev)
 {
 	struct pm860x_led *data = platform_get_drvdata(pdev);
 
 	led_classdev_unregister(&data->cdev);
+
+	return 0;
 }
 
 static struct platform_driver pm860x_led_driver = {
@@ -227,7 +229,7 @@ static struct platform_driver pm860x_led_driver = {
 		.name	= "88pm860x-led",
 	},
 	.probe	= pm860x_led_probe,
-	.remove_new = pm860x_led_remove,
+	.remove	= pm860x_led_remove,
 };
 
 module_platform_driver(pm860x_led_driver);

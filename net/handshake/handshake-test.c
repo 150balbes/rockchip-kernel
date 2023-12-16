@@ -235,7 +235,7 @@ static void handshake_req_submit_test4(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, req, result);
 
 	handshake_req_cancel(sock->sk);
-	fput(filp);
+	sock_release(sock);
 }
 
 static void handshake_req_submit_test5(struct kunit *test)
@@ -272,7 +272,7 @@ static void handshake_req_submit_test5(struct kunit *test)
 	/* Assert */
 	KUNIT_EXPECT_EQ(test, err, -EAGAIN);
 
-	fput(filp);
+	sock_release(sock);
 	hn->hn_pending = saved;
 }
 
@@ -306,7 +306,7 @@ static void handshake_req_submit_test6(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, err, -EBUSY);
 
 	handshake_req_cancel(sock->sk);
-	fput(filp);
+	sock_release(sock);
 }
 
 static void handshake_req_cancel_test1(struct kunit *test)
@@ -340,7 +340,7 @@ static void handshake_req_cancel_test1(struct kunit *test)
 	/* Assert */
 	KUNIT_EXPECT_TRUE(test, result);
 
-	fput(filp);
+	sock_release(sock);
 }
 
 static void handshake_req_cancel_test2(struct kunit *test)
@@ -382,7 +382,7 @@ static void handshake_req_cancel_test2(struct kunit *test)
 	/* Assert */
 	KUNIT_EXPECT_TRUE(test, result);
 
-	fput(filp);
+	sock_release(sock);
 }
 
 static void handshake_req_cancel_test3(struct kunit *test)
@@ -427,7 +427,7 @@ static void handshake_req_cancel_test3(struct kunit *test)
 	/* Assert */
 	KUNIT_EXPECT_FALSE(test, result);
 
-	fput(filp);
+	sock_release(sock);
 }
 
 static struct handshake_req *handshake_req_destroy_test;
@@ -471,7 +471,7 @@ static void handshake_req_destroy_test1(struct kunit *test)
 	handshake_req_cancel(sock->sk);
 
 	/* Act */
-	fput(filp);
+	sock_release(sock);
 
 	/* Assert */
 	KUNIT_EXPECT_PTR_EQ(test, handshake_req_destroy_test, req);

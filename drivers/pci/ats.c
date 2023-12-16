@@ -9,7 +9,6 @@
  * Copyright (C) 2011 Advanced Micro Devices,
  */
 
-#include <linux/bitfield.h>
 #include <linux/export.h>
 #include <linux/pci-ats.h>
 #include <linux/pci.h>
@@ -481,6 +480,8 @@ int pci_pasid_features(struct pci_dev *pdev)
 }
 EXPORT_SYMBOL_GPL(pci_pasid_features);
 
+#define PASID_NUMBER_SHIFT	8
+#define PASID_NUMBER_MASK	(0x1f << PASID_NUMBER_SHIFT)
 /**
  * pci_max_pasids - Get maximum number of PASIDs supported by device
  * @pdev: PCI device structure
@@ -502,7 +503,9 @@ int pci_max_pasids(struct pci_dev *pdev)
 
 	pci_read_config_word(pdev, pasid + PCI_PASID_CAP, &supported);
 
-	return (1 << FIELD_GET(PCI_PASID_CAP_WIDTH, supported));
+	supported = (supported & PASID_NUMBER_MASK) >> PASID_NUMBER_SHIFT;
+
+	return (1 << supported);
 }
 EXPORT_SYMBOL_GPL(pci_max_pasids);
 #endif /* CONFIG_PCI_PASID */

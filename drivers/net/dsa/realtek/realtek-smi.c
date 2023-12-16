@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/skbuff.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_mdio.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
@@ -378,25 +379,25 @@ static int realtek_smi_setup_mdio(struct dsa_switch *ds)
 		return -ENODEV;
 	}
 
-	priv->user_mii_bus = devm_mdiobus_alloc(priv->dev);
-	if (!priv->user_mii_bus) {
+	priv->slave_mii_bus = devm_mdiobus_alloc(priv->dev);
+	if (!priv->slave_mii_bus) {
 		ret = -ENOMEM;
 		goto err_put_node;
 	}
-	priv->user_mii_bus->priv = priv;
-	priv->user_mii_bus->name = "SMI user MII";
-	priv->user_mii_bus->read = realtek_smi_mdio_read;
-	priv->user_mii_bus->write = realtek_smi_mdio_write;
-	snprintf(priv->user_mii_bus->id, MII_BUS_ID_SIZE, "SMI-%d",
+	priv->slave_mii_bus->priv = priv;
+	priv->slave_mii_bus->name = "SMI slave MII";
+	priv->slave_mii_bus->read = realtek_smi_mdio_read;
+	priv->slave_mii_bus->write = realtek_smi_mdio_write;
+	snprintf(priv->slave_mii_bus->id, MII_BUS_ID_SIZE, "SMI-%d",
 		 ds->index);
-	priv->user_mii_bus->dev.of_node = mdio_np;
-	priv->user_mii_bus->parent = priv->dev;
-	ds->user_mii_bus = priv->user_mii_bus;
+	priv->slave_mii_bus->dev.of_node = mdio_np;
+	priv->slave_mii_bus->parent = priv->dev;
+	ds->slave_mii_bus = priv->slave_mii_bus;
 
-	ret = devm_of_mdiobus_register(priv->dev, priv->user_mii_bus, mdio_np);
+	ret = devm_of_mdiobus_register(priv->dev, priv->slave_mii_bus, mdio_np);
 	if (ret) {
 		dev_err(priv->dev, "unable to register MDIO bus %s\n",
-			priv->user_mii_bus->id);
+			priv->slave_mii_bus->id);
 		goto err_put_node;
 	}
 
@@ -506,20 +507,22 @@ static int realtek_smi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void realtek_smi_remove(struct platform_device *pdev)
+static int realtek_smi_remove(struct platform_device *pdev)
 {
 	struct realtek_priv *priv = platform_get_drvdata(pdev);
 
 	if (!priv)
-		return;
+		return 0;
 
 	dsa_unregister_switch(priv->ds);
-	if (priv->user_mii_bus)
-		of_node_put(priv->user_mii_bus->dev.of_node);
+	if (priv->slave_mii_bus)
+		of_node_put(priv->slave_mii_bus->dev.of_node);
 
 	/* leave the device reset asserted */
 	if (priv->reset)
 		gpiod_set_value(priv->reset, 1);
+
+	return 0;
 }
 
 static void realtek_smi_shutdown(struct platform_device *pdev)
@@ -554,10 +557,10 @@ MODULE_DEVICE_TABLE(of, realtek_smi_of_match);
 static struct platform_driver realtek_smi_driver = {
 	.driver = {
 		.name = "realtek-smi",
-		.of_match_table = realtek_smi_of_match,
+		.of_match_table = of_match_ptr(realtek_smi_of_match),
 	},
 	.probe  = realtek_smi_probe,
-	.remove_new = realtek_smi_remove,
+	.remove = realtek_smi_remove,
 	.shutdown = realtek_smi_shutdown,
 };
 module_platform_driver(realtek_smi_driver);

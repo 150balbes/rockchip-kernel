@@ -7,7 +7,6 @@ Human Interface Devices (HID)
 .. toctree::
    :maxdepth: 1
 
-   hidintro
    hiddev
    hidraw
    hid-sensor

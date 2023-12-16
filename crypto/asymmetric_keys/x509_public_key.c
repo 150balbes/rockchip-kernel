@@ -130,11 +130,6 @@ int x509_check_for_self_signed(struct x509_certificate *cert)
 			goto out;
 	}
 
-	if (cert->unsupported_sig) {
-		ret = 0;
-		goto out;
-	}
-
 	ret = public_key_verify_signature(cert->pub, cert->sig);
 	if (ret < 0) {
 		if (ret == -ENOPKG) {
@@ -262,9 +257,15 @@ static struct asymmetric_key_parser x509_key_parser = {
 /*
  * Module stuff
  */
+extern int __init certs_selftest(void);
 static int __init x509_key_init(void)
 {
-	return register_asymmetric_key_parser(&x509_key_parser);
+	int ret;
+
+	ret = register_asymmetric_key_parser(&x509_key_parser);
+	if (ret < 0)
+		return ret;
+	return fips_signature_selftest();
 }
 
 static void __exit x509_key_exit(void)

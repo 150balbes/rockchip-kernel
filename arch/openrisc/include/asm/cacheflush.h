@@ -56,16 +56,10 @@ static inline void sync_icache_dcache(struct page *page)
  */
 #define PG_dc_clean                  PG_arch_1
 
-static inline void flush_dcache_folio(struct folio *folio)
-{
-	clear_bit(PG_dc_clean, &folio->flags);
-}
-#define flush_dcache_folio flush_dcache_folio
-
 #define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 1
 static inline void flush_dcache_page(struct page *page)
 {
-	flush_dcache_folio(page_folio(page));
+	clear_bit(PG_dc_clean, &page->flags);
 }
 
 #define flush_icache_user_page(vma, page, addr, len)	\

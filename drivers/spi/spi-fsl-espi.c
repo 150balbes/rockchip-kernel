@@ -148,7 +148,7 @@ static inline void fsl_espi_write_reg8(struct fsl_espi *espi, int offset,
 
 static int fsl_espi_check_message(struct spi_message *m)
 {
-	struct fsl_espi *espi = spi_controller_get_devdata(m->spi->controller);
+	struct fsl_espi *espi = spi_master_get_devdata(m->spi->master);
 	struct spi_transfer *t, *first;
 
 	if (m->frame_length > SPCOM_TRANLEN_MAX) {
@@ -323,7 +323,7 @@ start:
 static void fsl_espi_setup_transfer(struct spi_device *spi,
 					struct spi_transfer *t)
 {
-	struct fsl_espi *espi = spi_controller_get_devdata(spi->controller);
+	struct fsl_espi *espi = spi_master_get_devdata(spi->master);
 	int bits_per_word = t ? t->bits_per_word : spi->bits_per_word;
 	u32 pm, hz = t ? t->speed_hz : spi->max_speed_hz;
 	struct fsl_espi_cs *cs = spi_get_ctldata(spi);
@@ -351,7 +351,7 @@ static void fsl_espi_setup_transfer(struct spi_device *spi,
 
 static int fsl_espi_bufs(struct spi_device *spi, struct spi_transfer *t)
 {
-	struct fsl_espi *espi = spi_controller_get_devdata(spi->controller);
+	struct fsl_espi *espi = spi_master_get_devdata(spi->master);
 	unsigned int rx_len = t->len;
 	u32 mask, spcom;
 	int ret;
@@ -396,7 +396,7 @@ static int fsl_espi_bufs(struct spi_device *spi, struct spi_transfer *t)
 
 static int fsl_espi_trans(struct spi_message *m, struct spi_transfer *trans)
 {
-	struct fsl_espi *espi = spi_controller_get_devdata(m->spi->controller);
+	struct fsl_espi *espi = spi_master_get_devdata(m->spi->master);
 	struct spi_device *spi = m->spi;
 	int ret;
 
@@ -432,7 +432,7 @@ static int fsl_espi_trans(struct spi_message *m, struct spi_transfer *trans)
 	return ret;
 }
 
-static int fsl_espi_do_one_msg(struct spi_controller *host,
+static int fsl_espi_do_one_msg(struct spi_master *master,
 			       struct spi_message *m)
 {
 	unsigned int rx_nbits = 0, delay_nsecs = 0;
@@ -470,7 +470,7 @@ out:
 	if (m->status == -EINPROGRESS)
 		m->status = ret;
 
-	spi_finalize_current_message(host);
+	spi_finalize_current_message(master);
 
 	return ret;
 }
@@ -488,7 +488,7 @@ static int fsl_espi_setup(struct spi_device *spi)
 		spi_set_ctldata(spi, cs);
 	}
 
-	espi = spi_controller_get_devdata(spi->controller);
+	espi = spi_master_get_devdata(spi->master);
 
 	pm_runtime_get_sync(espi->dev);
 
@@ -584,8 +584,8 @@ static irqreturn_t fsl_espi_irq(s32 irq, void *context_data)
 #ifdef CONFIG_PM
 static int fsl_espi_runtime_suspend(struct device *dev)
 {
-	struct spi_controller *host = dev_get_drvdata(dev);
-	struct fsl_espi *espi = spi_controller_get_devdata(host);
+	struct spi_master *master = dev_get_drvdata(dev);
+	struct fsl_espi *espi = spi_master_get_devdata(master);
 	u32 regval;
 
 	regval = fsl_espi_read_reg(espi, ESPI_SPMODE);
@@ -597,8 +597,8 @@ static int fsl_espi_runtime_suspend(struct device *dev)
 
 static int fsl_espi_runtime_resume(struct device *dev)
 {
-	struct spi_controller *host = dev_get_drvdata(dev);
-	struct fsl_espi *espi = spi_controller_get_devdata(host);
+	struct spi_master *master = dev_get_drvdata(dev);
+	struct fsl_espi *espi = spi_master_get_devdata(master);
 	u32 regval;
 
 	regval = fsl_espi_read_reg(espi, ESPI_SPMODE);
@@ -616,8 +616,8 @@ static size_t fsl_espi_max_message_size(struct spi_device *spi)
 
 static void fsl_espi_init_regs(struct device *dev, bool initial)
 {
-	struct spi_controller *host = dev_get_drvdata(dev);
-	struct fsl_espi *espi = spi_controller_get_devdata(host);
+	struct spi_master *master = dev_get_drvdata(dev);
+	struct fsl_espi *espi = spi_master_get_devdata(master);
 	struct device_node *nc;
 	u32 csmode, cs, prop;
 	int ret;
@@ -629,10 +629,10 @@ static void fsl_espi_init_regs(struct device *dev, bool initial)
 	fsl_espi_write_reg(espi, ESPI_SPIE, 0xffffffff);
 
 	/* Init eSPI CS mode register */
-	for_each_available_child_of_node(host->dev.of_node, nc) {
+	for_each_available_child_of_node(master->dev.of_node, nc) {
 		/* get chip select */
 		ret = of_property_read_u32(nc, "reg", &cs);
-		if (ret || cs >= host->num_chipselect)
+		if (ret || cs >= master->num_chipselect)
 			continue;
 
 		csmode = CSMODE_INIT_VAL;
@@ -664,28 +664,28 @@ static void fsl_espi_init_regs(struct device *dev, bool initial)
 static int fsl_espi_probe(struct device *dev, struct resource *mem,
 			  unsigned int irq, unsigned int num_cs)
 {
-	struct spi_controller *host;
+	struct spi_master *master;
 	struct fsl_espi *espi;
 	int ret;
 
-	host = spi_alloc_host(dev, sizeof(struct fsl_espi));
-	if (!host)
+	master = spi_alloc_master(dev, sizeof(struct fsl_espi));
+	if (!master)
 		return -ENOMEM;
 
-	dev_set_drvdata(dev, host);
+	dev_set_drvdata(dev, master);
 
-	host->mode_bits = SPI_RX_DUAL | SPI_CPOL | SPI_CPHA | SPI_CS_HIGH |
-			  SPI_LSB_FIRST | SPI_LOOP;
-	host->dev.of_node = dev->of_node;
-	host->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
-	host->setup = fsl_espi_setup;
-	host->cleanup = fsl_espi_cleanup;
-	host->transfer_one_message = fsl_espi_do_one_msg;
-	host->auto_runtime_pm = true;
-	host->max_message_size = fsl_espi_max_message_size;
-	host->num_chipselect = num_cs;
+	master->mode_bits = SPI_RX_DUAL | SPI_CPOL | SPI_CPHA | SPI_CS_HIGH |
+			    SPI_LSB_FIRST | SPI_LOOP;
+	master->dev.of_node = dev->of_node;
+	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
+	master->setup = fsl_espi_setup;
+	master->cleanup = fsl_espi_cleanup;
+	master->transfer_one_message = fsl_espi_do_one_msg;
+	master->auto_runtime_pm = true;
+	master->max_message_size = fsl_espi_max_message_size;
+	master->num_chipselect = num_cs;
 
-	espi = spi_controller_get_devdata(host);
+	espi = spi_master_get_devdata(master);
 	spin_lock_init(&espi->lock);
 
 	espi->dev = dev;
@@ -696,8 +696,8 @@ static int fsl_espi_probe(struct device *dev, struct resource *mem,
 		goto err_probe;
 	}
 	/* determined by clock divider fields DIV16/PM in register SPMODEx */
-	host->min_speed_hz = DIV_ROUND_UP(espi->spibrg, 4 * 16 * 16);
-	host->max_speed_hz = DIV_ROUND_UP(espi->spibrg, 4);
+	master->min_speed_hz = DIV_ROUND_UP(espi->spibrg, 4 * 16 * 16);
+	master->max_speed_hz = DIV_ROUND_UP(espi->spibrg, 4);
 
 	init_completion(&espi->done);
 
@@ -720,7 +720,7 @@ static int fsl_espi_probe(struct device *dev, struct resource *mem,
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
 
-	ret = devm_spi_register_controller(dev, host);
+	ret = devm_spi_register_master(dev, master);
 	if (ret < 0)
 		goto err_pm;
 
@@ -736,7 +736,7 @@ err_pm:
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
 err_probe:
-	spi_controller_put(host);
+	spi_master_put(master);
 	return ret;
 }
 
@@ -791,10 +791,10 @@ static void of_fsl_espi_remove(struct platform_device *dev)
 #ifdef CONFIG_PM_SLEEP
 static int of_fsl_espi_suspend(struct device *dev)
 {
-	struct spi_controller *host = dev_get_drvdata(dev);
+	struct spi_master *master = dev_get_drvdata(dev);
 	int ret;
 
-	ret = spi_controller_suspend(host);
+	ret = spi_master_suspend(master);
 	if (ret)
 		return ret;
 
@@ -803,7 +803,7 @@ static int of_fsl_espi_suspend(struct device *dev)
 
 static int of_fsl_espi_resume(struct device *dev)
 {
-	struct spi_controller *host = dev_get_drvdata(dev);
+	struct spi_master *master = dev_get_drvdata(dev);
 	int ret;
 
 	fsl_espi_init_regs(dev, false);
@@ -812,7 +812,7 @@ static int of_fsl_espi_resume(struct device *dev)
 	if (ret < 0)
 		return ret;
 
-	return spi_controller_resume(host);
+	return spi_master_resume(master);
 }
 #endif /* CONFIG_PM_SLEEP */
 

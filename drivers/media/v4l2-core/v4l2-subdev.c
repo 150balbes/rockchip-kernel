@@ -15,7 +15,6 @@
 #include <linux/module.h>
 #include <linux/overflow.h>
 #include <linux/slab.h>
-#include <linux/string.h>
 #include <linux/types.h>
 #include <linux/version.h>
 #include <linux/videodev2.h>
@@ -201,6 +200,9 @@ static inline int check_format(struct v4l2_subdev *sd,
 	if (!format)
 		return -EINVAL;
 
+	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS))
+		format->stream = 0;
+
 	return check_which(format->which) ? : check_pad(sd, format->pad) ? :
 	       check_state(sd, state, format->which, format->pad, format->stream);
 }
@@ -228,6 +230,9 @@ static int call_enum_mbus_code(struct v4l2_subdev *sd,
 	if (!code)
 		return -EINVAL;
 
+	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS))
+		code->stream = 0;
+
 	return check_which(code->which) ? : check_pad(sd, code->pad) ? :
 	       check_state(sd, state, code->which, code->pad, code->stream) ? :
 	       sd->ops->pad->enum_mbus_code(sd, state, code);
@@ -239,6 +244,9 @@ static int call_enum_frame_size(struct v4l2_subdev *sd,
 {
 	if (!fse)
 		return -EINVAL;
+
+	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS))
+		fse->stream = 0;
 
 	return check_which(fse->which) ? : check_pad(sd, fse->pad) ? :
 	       check_state(sd, state, fse->which, fse->pad, fse->stream) ? :
@@ -275,6 +283,9 @@ static int call_enum_frame_interval(struct v4l2_subdev *sd,
 	if (!fie)
 		return -EINVAL;
 
+	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS))
+		fie->stream = 0;
+
 	return check_which(fie->which) ? : check_pad(sd, fie->pad) ? :
 	       check_state(sd, state, fie->which, fie->pad, fie->stream) ? :
 	       sd->ops->pad->enum_frame_interval(sd, state, fie);
@@ -286,6 +297,9 @@ static inline int check_selection(struct v4l2_subdev *sd,
 {
 	if (!sel)
 		return -EINVAL;
+
+	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS))
+		sel->stream = 0;
 
 	return check_which(sel->which) ? : check_pad(sd, sel->pad) ? :
 	       check_state(sd, state, sel->which, sel->pad, sel->stream);
@@ -305,42 +319,6 @@ static int call_set_selection(struct v4l2_subdev *sd,
 {
 	return check_selection(sd, state, sel) ? :
 	       sd->ops->pad->set_selection(sd, state, sel);
-}
-
-static int call_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
-			       struct v4l2_mbus_frame_desc *fd)
-{
-	unsigned int i;
-	int ret;
-
-	memset(fd, 0, sizeof(*fd));
-
-	ret = sd->ops->pad->get_frame_desc(sd, pad, fd);
-	if (ret)
-		return ret;
-
-	dev_dbg(sd->dev, "Frame descriptor on pad %u, type %s\n", pad,
-		fd->type == V4L2_MBUS_FRAME_DESC_TYPE_PARALLEL ? "parallel" :
-		fd->type == V4L2_MBUS_FRAME_DESC_TYPE_CSI2 ? "CSI-2" :
-		"unknown");
-
-	for (i = 0; i < fd->num_entries; i++) {
-		struct v4l2_mbus_frame_desc_entry *entry = &fd->entry[i];
-		char buf[20] = "";
-
-		if (fd->type == V4L2_MBUS_FRAME_DESC_TYPE_CSI2)
-			WARN_ON(snprintf(buf, sizeof(buf),
-					 ", vc %u, dt 0x%02x",
-					 entry->bus.csi2.vc,
-					 entry->bus.csi2.dt) >= sizeof(buf));
-
-		dev_dbg(sd->dev,
-			"\tstream %u, code 0x%04x, length %u, flags 0x%04x%s\n",
-			entry->stream, entry->pixelcode, entry->length,
-			entry->flags, buf);
-	}
-
-	return 0;
 }
 
 static inline int check_edid(struct v4l2_subdev *sd,
@@ -396,18 +374,6 @@ static int call_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	int ret;
 
-	/*
-	 * The .s_stream() operation must never be called to start or stop an
-	 * already started or stopped subdev. Catch offenders but don't return
-	 * an error yet to avoid regressions.
-	 *
-	 * As .s_stream() is mutually exclusive with the .enable_streams() and
-	 * .disable_streams() operation, we can use the enabled_streams field
-	 * to store the subdev streaming state.
-	 */
-	if (WARN_ON(!!sd->enabled_streams == !!enable))
-		return 0;
-
 #if IS_REACHABLE(CONFIG_LEDS_CLASS)
 	if (!IS_ERR_OR_NULL(sd->privacy_led)) {
 		if (enable)
@@ -421,11 +387,8 @@ static int call_s_stream(struct v4l2_subdev *sd, int enable)
 
 	if (!enable && ret < 0) {
 		dev_warn(sd->dev, "disabling streaming failed (%d)\n", ret);
-		ret = 0;
+		return 0;
 	}
-
-	if (!ret)
-		sd->enabled_streams = enable ? BIT(0) : 0;
 
 	return ret;
 }
@@ -483,7 +446,6 @@ static const struct v4l2_subdev_pad_ops v4l2_subdev_call_pad_wrappers = {
 	.set_edid		= call_set_edid,
 	.dv_timings_cap		= call_dv_timings_cap,
 	.enum_dv_timings	= call_enum_dv_timings,
-	.get_frame_desc		= call_get_frame_desc,
 	.get_mbus_config	= call_get_mbus_config,
 };
 
@@ -554,13 +516,6 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg,
 	bool client_supports_streams = subdev_fh->client_caps &
 				       V4L2_SUBDEV_CLIENT_CAP_STREAMS;
 	int rval;
-
-	/*
-	 * If the streams API is not enabled, remove V4L2_SUBDEV_CAP_STREAMS.
-	 * Remove this when the API is no longer experimental.
-	 */
-	if (!v4l2_subdev_enable_streams_api)
-		streams_subdev = false;
 
 	switch (cmd) {
 	case VIDIOC_SUBDEV_QUERYCAP: {
@@ -1512,20 +1467,8 @@ EXPORT_SYMBOL_GPL(__v4l2_subdev_init_finalize);
 
 void v4l2_subdev_cleanup(struct v4l2_subdev *sd)
 {
-	struct v4l2_async_subdev_endpoint *ase, *ase_tmp;
-
 	__v4l2_subdev_state_free(sd->active_state);
 	sd->active_state = NULL;
-
-	if (list_empty(&sd->async_subdev_endpoint_list))
-		return;
-
-	list_for_each_entry_safe(ase, ase_tmp, &sd->async_subdev_endpoint_list,
-				 async_subdev_endpoint_entry) {
-		list_del(&ase->async_subdev_endpoint_entry);
-
-		kfree(ase);
-	}
 }
 EXPORT_SYMBOL_GPL(v4l2_subdev_cleanup);
 
@@ -1662,7 +1605,7 @@ EXPORT_SYMBOL_GPL(__v4l2_subdev_next_active_route);
 
 int v4l2_subdev_set_routing_with_fmt(struct v4l2_subdev *sd,
 				     struct v4l2_subdev_state *state,
-				     const struct v4l2_subdev_krouting *routing,
+				     struct v4l2_subdev_krouting *routing,
 				     const struct v4l2_mbus_framefmt *fmt)
 {
 	struct v4l2_subdev_stream_configs *stream_configs;
@@ -2049,16 +1992,11 @@ int v4l2_subdev_enable_streams(struct v4l2_subdev *sd, u32 pad,
 		goto done;
 	}
 
-	dev_dbg(dev, "enable streams %u:%#llx\n", pad, streams_mask);
-
 	/* Call the .enable_streams() operation. */
 	ret = v4l2_subdev_call(sd, pad, enable_streams, state, pad,
 			       streams_mask);
-	if (ret) {
-		dev_dbg(dev, "enable streams %u:%#llx failed: %d\n", pad,
-			streams_mask, ret);
+	if (ret)
 		goto done;
-	}
 
 	/* Mark the streams as enabled. */
 	for (i = 0; i < state->stream_configs.num_configs; ++i) {
@@ -2166,16 +2104,11 @@ int v4l2_subdev_disable_streams(struct v4l2_subdev *sd, u32 pad,
 		goto done;
 	}
 
-	dev_dbg(dev, "disable streams %u:%#llx\n", pad, streams_mask);
-
 	/* Call the .disable_streams() operation. */
 	ret = v4l2_subdev_call(sd, pad, disable_streams, state, pad,
 			       streams_mask);
-	if (ret) {
-		dev_dbg(dev, "disable streams %u:%#llx failed: %d\n", pad,
-			streams_mask, ret);
+	if (ret)
 		goto done;
-	}
 
 	/* Mark the streams as disabled. */
 	for (i = 0; i < state->stream_configs.num_configs; ++i) {
@@ -2249,7 +2182,6 @@ void v4l2_subdev_init(struct v4l2_subdev *sd, const struct v4l2_subdev_ops *ops)
 	sd->dev_priv = NULL;
 	sd->host_priv = NULL;
 	sd->privacy_led = NULL;
-	INIT_LIST_HEAD(&sd->async_subdev_endpoint_list);
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	sd->entity.name = sd->name;
 	sd->entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;

@@ -656,9 +656,10 @@ int bnx2fc_init_mp_req(struct bnx2fc_cmd *io_req)
 	return SUCCESS;
 }
 
-static int bnx2fc_initiate_tmf(struct fc_lport *lport, struct fc_rport *rport,
-			       u64 tm_lun, u8 tm_flags)
+static int bnx2fc_initiate_tmf(struct scsi_cmnd *sc_cmd, u8 tm_flags)
 {
+	struct fc_lport *lport;
+	struct fc_rport *rport;
 	struct fc_rport_libfc_priv *rp;
 	struct fcoe_port *port;
 	struct bnx2fc_interface *interface;
@@ -667,6 +668,7 @@ static int bnx2fc_initiate_tmf(struct fc_lport *lport, struct fc_rport *rport,
 	struct bnx2fc_mp_req *tm_req;
 	struct fcoe_task_ctx_entry *task;
 	struct fcoe_task_ctx_entry *task_page;
+	struct Scsi_Host *host = sc_cmd->device->host;
 	struct fc_frame_header *fc_hdr;
 	struct fcp_cmnd *fcp_cmnd;
 	int task_idx, index;
@@ -675,6 +677,8 @@ static int bnx2fc_initiate_tmf(struct fc_lport *lport, struct fc_rport *rport,
 	u32 sid, did;
 	unsigned long start = jiffies;
 
+	lport = shost_priv(host);
+	rport = starget_to_rport(scsi_target(sc_cmd->device));
 	port = lport_priv(lport);
 	interface = port->priv;
 
@@ -685,7 +689,7 @@ static int bnx2fc_initiate_tmf(struct fc_lport *lport, struct fc_rport *rport,
 	}
 	rp = rport->dd_data;
 
-	rc = fc_block_rport(rport);
+	rc = fc_block_scsi_eh(sc_cmd);
 	if (rc)
 		return rc;
 
@@ -714,7 +718,7 @@ retry_tmf:
 		goto retry_tmf;
 	}
 	/* Initialize rest of io_req fields */
-	io_req->sc_cmd = NULL;
+	io_req->sc_cmd = sc_cmd;
 	io_req->port = port;
 	io_req->tgt = tgt;
 
@@ -732,13 +736,11 @@ retry_tmf:
 	/* Set TM flags */
 	io_req->io_req_flags = 0;
 	tm_req->tm_flags = tm_flags;
-	tm_req->tm_lun = tm_lun;
 
 	/* Fill FCP_CMND */
 	bnx2fc_build_fcp_cmnd(io_req, (struct fcp_cmnd *)tm_req->req_buf);
 	fcp_cmnd = (struct fcp_cmnd *)tm_req->req_buf;
-	int_to_scsilun(tm_lun, &fcp_cmnd->fc_lun);
-	memset(fcp_cmnd->fc_cdb, 0,  BNX2FC_MAX_CMD_LEN);
+	memset(fcp_cmnd->fc_cdb, 0,  sc_cmd->cmd_len);
 	fcp_cmnd->fc_dl = 0;
 
 	/* Fill FC header */
@@ -760,6 +762,8 @@ retry_tmf:
 			interface->hba->task_ctx[task_idx];
 	task = &(task_page[index]);
 	bnx2fc_init_mp_task(io_req, task);
+
+	bnx2fc_priv(sc_cmd)->io_req = io_req;
 
 	/* Obtain free SQ entry */
 	spin_lock_bh(&tgt->tgt_lock);
@@ -1058,10 +1062,7 @@ cleanup_err:
  */
 int bnx2fc_eh_target_reset(struct scsi_cmnd *sc_cmd)
 {
-	struct fc_rport *rport = starget_to_rport(scsi_target(sc_cmd->device));
-	struct fc_lport *lport = shost_priv(rport_to_shost(rport));
-
-	return bnx2fc_initiate_tmf(lport, rport, 0, FCP_TMF_TGT_RESET);
+	return bnx2fc_initiate_tmf(sc_cmd, FCP_TMF_TGT_RESET);
 }
 
 /**
@@ -1074,11 +1075,7 @@ int bnx2fc_eh_target_reset(struct scsi_cmnd *sc_cmd)
  */
 int bnx2fc_eh_device_reset(struct scsi_cmnd *sc_cmd)
 {
-	struct fc_rport *rport = starget_to_rport(scsi_target(sc_cmd->device));
-	struct fc_lport *lport = shost_priv(rport_to_shost(rport));
-
-	return bnx2fc_initiate_tmf(lport, rport, sc_cmd->device->lun,
-				   FCP_TMF_LUN_RESET);
+	return bnx2fc_initiate_tmf(sc_cmd, FCP_TMF_LUN_RESET);
 }
 
 static int bnx2fc_abts_cleanup(struct bnx2fc_cmd *io_req)
@@ -1453,9 +1450,10 @@ io_compl:
 
 static void bnx2fc_lun_reset_cmpl(struct bnx2fc_cmd *io_req)
 {
+	struct scsi_cmnd *sc_cmd = io_req->sc_cmd;
 	struct bnx2fc_rport *tgt = io_req->tgt;
 	struct bnx2fc_cmd *cmd, *tmp;
-	struct bnx2fc_mp_req *tm_req = &io_req->mp_req;
+	u64 tm_lun = sc_cmd->device->lun;
 	u64 lun;
 	int rc = 0;
 
@@ -1467,10 +1465,8 @@ static void bnx2fc_lun_reset_cmpl(struct bnx2fc_cmd *io_req)
 	 */
 	list_for_each_entry_safe(cmd, tmp, &tgt->active_cmd_queue, link) {
 		BNX2FC_TGT_DBG(tgt, "LUN RST cmpl: scan for pending IOs\n");
-		if (!cmd->sc_cmd)
-			continue;
 		lun = cmd->sc_cmd->device->lun;
-		if (lun == tm_req->tm_lun) {
+		if (lun == tm_lun) {
 			/* Initiate ABTS on this cmd */
 			if (!test_and_set_bit(BNX2FC_FLAG_ISSUE_ABTS,
 					      &cmd->req_flags)) {
@@ -1574,36 +1570,31 @@ void bnx2fc_process_tm_compl(struct bnx2fc_cmd *io_req,
 		printk(KERN_ERR PFX "tmf's fc_hdr r_ctl = 0x%x\n",
 			fc_hdr->fh_r_ctl);
 	}
-	if (sc_cmd) {
-		if (!bnx2fc_priv(sc_cmd)->io_req) {
-			printk(KERN_ERR PFX "tm_compl: io_req is NULL\n");
-			return;
-		}
-		switch (io_req->fcp_status) {
-		case FC_GOOD:
-			if (io_req->cdb_status == 0) {
-				/* Good IO completion */
-				sc_cmd->result = DID_OK << 16;
-			} else {
-				/* Transport status is good, SCSI status not good */
-				sc_cmd->result = (DID_OK << 16) | io_req->cdb_status;
-			}
-			if (io_req->fcp_resid)
-				scsi_set_resid(sc_cmd, io_req->fcp_resid);
-			break;
-
-		default:
-			BNX2FC_IO_DBG(io_req, "process_tm_compl: fcp_status = %d\n",
-				      io_req->fcp_status);
-			break;
-		}
-
-		sc_cmd = io_req->sc_cmd;
-		io_req->sc_cmd = NULL;
-
-		bnx2fc_priv(sc_cmd)->io_req = NULL;
-		scsi_done(sc_cmd);
+	if (!bnx2fc_priv(sc_cmd)->io_req) {
+		printk(KERN_ERR PFX "tm_compl: io_req is NULL\n");
+		return;
 	}
+	switch (io_req->fcp_status) {
+	case FC_GOOD:
+		if (io_req->cdb_status == 0) {
+			/* Good IO completion */
+			sc_cmd->result = DID_OK << 16;
+		} else {
+			/* Transport status is good, SCSI status not good */
+			sc_cmd->result = (DID_OK << 16) | io_req->cdb_status;
+		}
+		if (io_req->fcp_resid)
+			scsi_set_resid(sc_cmd, io_req->fcp_resid);
+		break;
+
+	default:
+		BNX2FC_IO_DBG(io_req, "process_tm_compl: fcp_status = %d\n",
+			   io_req->fcp_status);
+		break;
+	}
+
+	sc_cmd = io_req->sc_cmd;
+	io_req->sc_cmd = NULL;
 
 	/* check if the io_req exists in tgt's tmf_q */
 	if (io_req->on_tmf_queue) {
@@ -1615,6 +1606,9 @@ void bnx2fc_process_tm_compl(struct bnx2fc_cmd *io_req,
 		printk(KERN_ERR PFX "Command not on active_cmd_queue!\n");
 		return;
 	}
+
+	bnx2fc_priv(sc_cmd)->io_req = NULL;
+	scsi_done(sc_cmd);
 
 	kref_put(&io_req->refcount, bnx2fc_cmd_release);
 	if (io_req->wait_for_abts_comp) {
@@ -1744,9 +1738,15 @@ static void bnx2fc_unmap_sg_list(struct bnx2fc_cmd *io_req)
 void bnx2fc_build_fcp_cmnd(struct bnx2fc_cmd *io_req,
 				  struct fcp_cmnd *fcp_cmnd)
 {
+	struct scsi_cmnd *sc_cmd = io_req->sc_cmd;
+
 	memset(fcp_cmnd, 0, sizeof(struct fcp_cmnd));
 
+	int_to_scsilun(sc_cmd->device->lun, &fcp_cmnd->fc_lun);
+
 	fcp_cmnd->fc_dl = htonl(io_req->data_xfer_len);
+	memcpy(fcp_cmnd->fc_cdb, sc_cmd->cmnd, sc_cmd->cmd_len);
+
 	fcp_cmnd->fc_cmdref = 0;
 	fcp_cmnd->fc_pri_ta = 0;
 	fcp_cmnd->fc_tm_flags = io_req->mp_req.tm_flags;

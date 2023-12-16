@@ -148,13 +148,6 @@ static const struct dw_pcie_ops keembay_pcie_ops = {
 	.stop_link	= keembay_pcie_stop_link,
 };
 
-static inline void keembay_pcie_disable_clock(void *data)
-{
-	struct clk *clk = data;
-
-	clk_disable_unprepare(clk);
-}
-
 static inline struct clk *keembay_pcie_probe_clock(struct device *dev,
 						   const char *id, u64 rate)
 {
@@ -175,7 +168,9 @@ static inline struct clk *keembay_pcie_probe_clock(struct device *dev,
 	if (ret)
 		return ERR_PTR(ret);
 
-	ret = devm_add_action_or_reset(dev, keembay_pcie_disable_clock, clk);
+	ret = devm_add_action_or_reset(dev,
+				       (void(*)(void *))clk_disable_unprepare,
+				       clk);
 	if (ret)
 		return ERR_PTR(ret);
 

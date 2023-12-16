@@ -12,6 +12,7 @@
 #include <linux/netdevice.h>
 #include <linux/phy.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 
 #include "cpsw.h"
 

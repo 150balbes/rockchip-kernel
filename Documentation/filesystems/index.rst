@@ -122,7 +122,6 @@ Documentation for filesystem implementations.
    virtiofs
    vfat
    xfs-delayed-logging-design
-   xfs-maintainer-entry-profile
    xfs-self-describing-metadata
    xfs-online-fsck-design
    zonefs

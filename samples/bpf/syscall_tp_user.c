@@ -17,9 +17,9 @@
 
 static void usage(const char *cmd)
 {
-	printf("USAGE: %s [-i nr_tests] [-h]\n", cmd);
-	printf("       -i nr_tests      # rounds of test to run\n");
-	printf("       -h               # help\n");
+	printf("USAGE: %s [-i num_progs] [-h]\n", cmd);
+	printf("       -i num_progs      # number of progs of the test\n");
+	printf("       -h                # help\n");
 }
 
 static void verify_map(int map_id)
@@ -45,32 +45,19 @@ static void verify_map(int map_id)
 	}
 }
 
-static int test(char *filename, int nr_tests)
+static int test(char *filename, int num_progs)
 {
-	int map0_fds[nr_tests], map1_fds[nr_tests], fd, i, j = 0;
-	struct bpf_link **links = NULL;
-	struct bpf_object *objs[nr_tests];
+	int map0_fds[num_progs], map1_fds[num_progs], fd, i, j = 0;
+	struct bpf_link *links[num_progs * 4];
+	struct bpf_object *objs[num_progs];
 	struct bpf_program *prog;
 
-	for (i = 0; i < nr_tests; i++) {
+	for (i = 0; i < num_progs; i++) {
 		objs[i] = bpf_object__open_file(filename, NULL);
 		if (libbpf_get_error(objs[i])) {
 			fprintf(stderr, "opening BPF object file failed\n");
 			objs[i] = NULL;
 			goto cleanup;
-		}
-
-		/* One-time initialization */
-		if (!links) {
-			int nr_progs = 0;
-
-			bpf_object__for_each_program(prog, objs[i])
-				nr_progs += 1;
-
-			links = calloc(nr_progs * nr_tests, sizeof(struct bpf_link *));
-
-			if (!links)
-				goto cleanup;
 		}
 
 		/* load BPF program */
@@ -114,18 +101,14 @@ static int test(char *filename, int nr_tests)
 	close(fd);
 
 	/* verify the map */
-	for (i = 0; i < nr_tests; i++) {
+	for (i = 0; i < num_progs; i++) {
 		verify_map(map0_fds[i]);
 		verify_map(map1_fds[i]);
 	}
 
 cleanup:
-	if (links) {
-		for (j--; j >= 0; j--)
-			bpf_link__destroy(links[j]);
-
-		free(links);
-	}
+	for (j--; j >= 0; j--)
+		bpf_link__destroy(links[j]);
 
 	for (i--; i >= 0; i--)
 		bpf_object__close(objs[i]);
@@ -134,13 +117,13 @@ cleanup:
 
 int main(int argc, char **argv)
 {
-	int opt, nr_tests = 1;
+	int opt, num_progs = 1;
 	char filename[256];
 
 	while ((opt = getopt(argc, argv, "i:h")) != -1) {
 		switch (opt) {
 		case 'i':
-			nr_tests = atoi(optarg);
+			num_progs = atoi(optarg);
 			break;
 		case 'h':
 		default:
@@ -151,5 +134,5 @@ int main(int argc, char **argv)
 
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 
-	return test(filename, nr_tests);
+	return test(filename, num_progs);
 }

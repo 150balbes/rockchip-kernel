@@ -101,12 +101,12 @@ static int rpckbd_probe(struct platform_device *dev)
 	int tx_irq, rx_irq;
 
 	rx_irq = platform_get_irq(dev, 0);
-	if (rx_irq < 0)
-		return rx_irq;
+	if (rx_irq <= 0)
+		return rx_irq < 0 ? rx_irq : -ENXIO;
 
 	tx_irq = platform_get_irq(dev, 1);
-	if (tx_irq < 0)
-		return tx_irq;
+	if (tx_irq <= 0)
+		return tx_irq < 0 ? tx_irq : -ENXIO;
 
 	serio = kzalloc(sizeof(struct serio), GFP_KERNEL);
 	rpckbd = kzalloc(sizeof(*rpckbd), GFP_KERNEL);
@@ -133,18 +133,20 @@ static int rpckbd_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void rpckbd_remove(struct platform_device *dev)
+static int rpckbd_remove(struct platform_device *dev)
 {
 	struct serio *serio = platform_get_drvdata(dev);
 	struct rpckbd_data *rpckbd = serio->port_data;
 
 	serio_unregister_port(serio);
 	kfree(rpckbd);
+
+	return 0;
 }
 
 static struct platform_driver rpckbd_driver = {
 	.probe		= rpckbd_probe,
-	.remove_new	= rpckbd_remove,
+	.remove		= rpckbd_remove,
 	.driver		= {
 		.name	= "kart",
 	},

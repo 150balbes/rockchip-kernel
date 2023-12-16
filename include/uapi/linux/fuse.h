@@ -206,11 +206,6 @@
  *  - add extension header
  *  - add FUSE_EXT_GROUPS
  *  - add FUSE_CREATE_SUPP_GROUP
- *  - add FUSE_HAS_EXPIRE_ONLY
- *
- *  7.39
- *  - add FUSE_DIRECT_IO_RELAX
- *  - add FUSE_STATX and related structures
  */
 
 #ifndef _LINUX_FUSE_H
@@ -246,7 +241,7 @@
 #define FUSE_KERNEL_VERSION 7
 
 /** Minor version number of this interface */
-#define FUSE_KERNEL_MINOR_VERSION 39
+#define FUSE_KERNEL_MINOR_VERSION 38
 
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
@@ -271,40 +266,6 @@ struct fuse_attr {
 	uint32_t	rdev;
 	uint32_t	blksize;
 	uint32_t	flags;
-};
-
-/*
- * The following structures are bit-for-bit compatible with the statx(2) ABI in
- * Linux.
- */
-struct fuse_sx_time {
-	int64_t		tv_sec;
-	uint32_t	tv_nsec;
-	int32_t		__reserved;
-};
-
-struct fuse_statx {
-	uint32_t	mask;
-	uint32_t	blksize;
-	uint64_t	attributes;
-	uint32_t	nlink;
-	uint32_t	uid;
-	uint32_t	gid;
-	uint16_t	mode;
-	uint16_t	__spare0[1];
-	uint64_t	ino;
-	uint64_t	size;
-	uint64_t	blocks;
-	uint64_t	attributes_mask;
-	struct fuse_sx_time	atime;
-	struct fuse_sx_time	btime;
-	struct fuse_sx_time	ctime;
-	struct fuse_sx_time	mtime;
-	uint32_t	rdev_major;
-	uint32_t	rdev_minor;
-	uint32_t	dev_major;
-	uint32_t	dev_minor;
-	uint64_t	__spare2[14];
 };
 
 struct fuse_kstatfs {
@@ -408,9 +369,6 @@ struct fuse_file_lock {
  * FUSE_HAS_INODE_DAX:  use per inode DAX
  * FUSE_CREATE_SUPP_GROUP: add supplementary group info to create, mkdir,
  *			symlink and mknod (single group that matches parent)
- * FUSE_HAS_EXPIRE_ONLY: kernel supports expiry-only entry invalidation
- * FUSE_DIRECT_IO_RELAX: relax restrictions in FOPEN_DIRECT_IO mode, for now
- *                       allow shared mmap
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -448,8 +406,6 @@ struct fuse_file_lock {
 #define FUSE_SECURITY_CTX	(1ULL << 32)
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
 #define FUSE_CREATE_SUPP_GROUP	(1ULL << 34)
-#define FUSE_HAS_EXPIRE_ONLY	(1ULL << 35)
-#define FUSE_DIRECT_IO_RELAX	(1ULL << 36)
 
 /**
  * CUSE INIT request/reply flags
@@ -616,7 +572,6 @@ enum fuse_opcode {
 	FUSE_REMOVEMAPPING	= 49,
 	FUSE_SYNCFS		= 50,
 	FUSE_TMPFILE		= 51,
-	FUSE_STATX		= 52,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -679,22 +634,6 @@ struct fuse_attr_out {
 	uint32_t	attr_valid_nsec;
 	uint32_t	dummy;
 	struct fuse_attr attr;
-};
-
-struct fuse_statx_in {
-	uint32_t	getattr_flags;
-	uint32_t	reserved;
-	uint64_t	fh;
-	uint32_t	sx_flags;
-	uint32_t	sx_mask;
-};
-
-struct fuse_statx_out {
-	uint64_t	attr_valid;	/* Cache timeout for the attributes */
-	uint32_t	attr_valid_nsec;
-	uint32_t	flags;
-	uint64_t	spare[2];
-	struct fuse_statx stat;
 };
 
 #define FUSE_COMPAT_MKNOD_IN_SIZE 8

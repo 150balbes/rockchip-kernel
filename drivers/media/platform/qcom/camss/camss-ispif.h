@@ -66,10 +66,10 @@ struct ispif_device {
 	struct camss *camss;
 };
 
-struct camss_subdev_resources;
+struct resources_ispif;
 
 int msm_ispif_subdev_init(struct camss *camss,
-			  const struct camss_subdev_resources *res);
+			  const struct resources_ispif *res);
 
 int msm_ispif_register_entities(struct ispif_device *ispif,
 				struct v4l2_device *v4l2_dev);

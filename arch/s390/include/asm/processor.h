@@ -228,6 +228,7 @@ typedef struct thread_struct thread_struct;
 	execve_tail();							\
 } while (0)
 
+/* Forward declaration, a strange C thing */
 struct task_struct;
 struct mm_struct;
 struct seq_file;

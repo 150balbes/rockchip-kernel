@@ -157,7 +157,7 @@ static void *vcpu_worker(void *__data)
 				goto done;
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			REPORT_GUEST_ASSERT_1(uc, "val = %lu");
 			break;
 		case UCALL_DONE:
 			goto done;
@@ -560,7 +560,7 @@ static void guest_code_test_memslot_rw(void)
 		     ptr < MEM_TEST_GPA + MEM_TEST_SIZE; ptr += page_size) {
 			uint64_t val = *(uint64_t *)ptr;
 
-			GUEST_ASSERT_EQ(val, MEM_TEST_VAL_2);
+			GUEST_ASSERT_1(val == MEM_TEST_VAL_2, val);
 			*(uint64_t *)ptr = 0;
 		}
 
@@ -1033,8 +1033,9 @@ static bool test_loop(const struct test_data *data,
 		      struct test_result *rbestruntime)
 {
 	uint64_t maxslots;
-	struct test_result result = {};
+	struct test_result result;
 
+	result.nloops = 0;
 	if (!test_execute(targs->nslots, &maxslots, targs->seconds, data,
 			  &result.nloops,
 			  &result.slot_runtime, &result.guest_runtime)) {
@@ -1088,7 +1089,7 @@ int main(int argc, char *argv[])
 		.seconds = 5,
 		.runs = 1,
 	};
-	struct test_result rbestslottime = {};
+	struct test_result rbestslottime;
 	int tctr;
 
 	if (!check_memory_sizes())
@@ -1097,10 +1098,11 @@ int main(int argc, char *argv[])
 	if (!parse_args(argc, argv, &targs))
 		return -1;
 
+	rbestslottime.slottimens = 0;
 	for (tctr = targs.tfirst; tctr <= targs.tlast; tctr++) {
 		const struct test_data *data = &tests[tctr];
 		unsigned int runctr;
-		struct test_result rbestruntime = {};
+		struct test_result rbestruntime;
 
 		if (tctr > targs.tfirst)
 			pr_info("\n");
@@ -1108,6 +1110,7 @@ int main(int argc, char *argv[])
 		pr_info("Testing %s performance with %i runs, %d seconds each\n",
 			data->name, targs.runs, targs.seconds);
 
+		rbestruntime.runtimens = 0;
 		for (runctr = 0; runctr < targs.runs; runctr++)
 			if (!test_loop(data, &targs,
 				       &rbestslottime, &rbestruntime))

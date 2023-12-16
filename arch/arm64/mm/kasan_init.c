@@ -300,11 +300,7 @@ void __init kasan_init(void)
 	kasan_init_shadow();
 	kasan_init_depth();
 #if defined(CONFIG_KASAN_GENERIC)
-	/*
-	 * Generic KASAN is now fully initialized.
-	 * Software and Hardware Tag-Based modes still require
-	 * kasan_init_sw_tags() and kasan_init_hw_tags() correspondingly.
-	 */
+	/* CONFIG_KASAN_SW_TAGS also requires kasan_init_sw_tags(). */
 	pr_info("KernelAddressSanitizer initialized (generic)\n");
 #endif
 }

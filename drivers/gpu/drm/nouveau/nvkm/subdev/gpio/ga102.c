@@ -21,8 +21,6 @@
  */
 #include "priv.h"
 
-#include <subdev/gsp.h>
-
 static void
 ga102_gpio_reset(struct nvkm_gpio *gpio, u8 match)
 {
@@ -117,8 +115,5 @@ int
 ga102_gpio_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	       struct nvkm_gpio **pgpio)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return -ENODEV;
-
 	return nvkm_gpio_new_(&ga102_gpio, device, type, inst, pgpio);
 }

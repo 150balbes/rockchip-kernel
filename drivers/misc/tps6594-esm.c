@@ -13,8 +13,6 @@
 
 #include <linux/mfd/tps6594.h>
 
-#define TPS6594_DEV_REV_1 0x08
-
 static irqreturn_t tps6594_esm_isr(int irq, void *dev_id)
 {
 	struct platform_device *pdev = dev_id;
@@ -34,29 +32,15 @@ static int tps6594_esm_probe(struct platform_device *pdev)
 {
 	struct tps6594 *tps = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
-	unsigned int rev;
 	int irq;
 	int ret;
 	int i;
 
-	/*
-	 * Due to a bug in revision 1 of the PMIC, the GPIO3 used for the
-	 * SoC ESM function is used to power the load switch instead.
-	 * As a consequence, ESM can not be used on those PMIC.
-	 * Check the version and return an error in case of revision 1.
-	 */
-	ret = regmap_read(tps->regmap, TPS6594_REG_DEV_REV, &rev);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "Failed to read PMIC revision\n");
-	if (rev == TPS6594_DEV_REV_1)
-		return dev_err_probe(dev, -ENODEV,
-			      "ESM not supported for revision 1 PMIC\n");
-
-	for (i = 0; i < pdev->num_resources; i++) {
+	for (i = 0 ; i < pdev->num_resources ; i++) {
 		irq = platform_get_irq_byname(pdev, pdev->resource[i].name);
 		if (irq < 0)
-			return irq;
+			return dev_err_probe(dev, irq, "Failed to get %s irq\n",
+					     pdev->resource[i].name);
 
 		ret = devm_request_threaded_irq(dev, irq, NULL,
 						tps6594_esm_isr, IRQF_ONESHOT,
@@ -81,7 +65,7 @@ static int tps6594_esm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void tps6594_esm_remove(struct platform_device *pdev)
+static int tps6594_esm_remove(struct platform_device *pdev)
 {
 	struct tps6594 *tps = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
@@ -102,6 +86,8 @@ static void tps6594_esm_remove(struct platform_device *pdev)
 out:
 	pm_runtime_put_sync(dev);
 	pm_runtime_disable(dev);
+
+	return ret;
 }
 
 static int tps6594_esm_suspend(struct device *dev)
@@ -135,7 +121,7 @@ static struct platform_driver tps6594_esm_driver = {
 		.pm = pm_sleep_ptr(&tps6594_esm_pm_ops),
 	},
 	.probe = tps6594_esm_probe,
-	.remove_new = tps6594_esm_remove,
+	.remove = tps6594_esm_remove,
 };
 
 module_platform_driver(tps6594_esm_driver);

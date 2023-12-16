@@ -61,28 +61,11 @@ __init efi_element_handler_t get_handler_for_db(const efi_guid_t *sig_type)
 __init efi_element_handler_t get_handler_for_mok(const efi_guid_t *sig_type)
 {
 	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0) {
-		if (IS_ENABLED(CONFIG_INTEGRITY_MACHINE_KEYRING) &&
-		    imputed_trust_enabled())
+		if (IS_ENABLED(CONFIG_INTEGRITY_MACHINE_KEYRING) && trust_moklist())
 			return add_to_machine_keyring;
 		else
 			return add_to_platform_keyring;
 	}
-	return NULL;
-}
-
-__init efi_element_handler_t get_handler_for_ca_keys(const efi_guid_t *sig_type)
-{
-	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0)
-		return add_to_machine_keyring;
-
-	return NULL;
-}
-
-__init efi_element_handler_t get_handler_for_code_signing_keys(const efi_guid_t *sig_type)
-{
-	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0)
-		return add_to_secondary_keyring;
-
 	return NULL;
 }
 

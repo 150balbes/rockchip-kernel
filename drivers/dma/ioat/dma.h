@@ -74,7 +74,6 @@ struct ioatdma_device {
 	struct dca_provider *dca;
 	enum ioat_irq_mode irq_mode;
 	u32 cap;
-	int chancnt;
 
 	/* shadow version for CB3.3 chan reset errata workaround */
 	u64 msixtba0;

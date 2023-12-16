@@ -79,17 +79,17 @@ static struct page *has_unmovable_pages(unsigned long start_pfn, unsigned long e
 		 * handle each tail page individually in migration.
 		 */
 		if (PageHuge(page) || PageTransCompound(page)) {
-			struct folio *folio = page_folio(page);
+			struct page *head = compound_head(page);
 			unsigned int skip_pages;
 
 			if (PageHuge(page)) {
-				if (!hugepage_migration_supported(folio_hstate(folio)))
+				if (!hugepage_migration_supported(page_hstate(head)))
 					return page;
-			} else if (!folio_test_lru(folio) && !__folio_test_movable(folio)) {
+			} else if (!PageLRU(head) && !__PageMovable(head)) {
 				return page;
 			}
 
-			skip_pages = folio_nr_pages(folio) - folio_page_idx(folio, page);
+			skip_pages = compound_nr(head) - (page - head);
 			pfn += skip_pages - 1;
 			continue;
 		}

@@ -28,9 +28,9 @@ static void subtest(int cgroup_fd, struct connect_ping *skel,
 		.sin6_family = AF_INET6,
 		.sin6_addr = IN6ADDR_LOOPBACK_INIT,
 	};
-	struct sockaddr *sa = NULL;
+	struct sockaddr *sa;
 	socklen_t sa_len;
-	int protocol = -1;
+	int protocol;
 	int sock_fd;
 
 	switch (family) {

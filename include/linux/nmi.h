@@ -157,31 +157,31 @@ static inline void touch_nmi_watchdog(void)
 #ifdef arch_trigger_cpumask_backtrace
 static inline bool trigger_all_cpu_backtrace(void)
 {
-	arch_trigger_cpumask_backtrace(cpu_online_mask, -1);
+	arch_trigger_cpumask_backtrace(cpu_online_mask, false);
 	return true;
 }
 
-static inline bool trigger_allbutcpu_cpu_backtrace(int exclude_cpu)
+static inline bool trigger_allbutself_cpu_backtrace(void)
 {
-	arch_trigger_cpumask_backtrace(cpu_online_mask, exclude_cpu);
+	arch_trigger_cpumask_backtrace(cpu_online_mask, true);
 	return true;
 }
 
 static inline bool trigger_cpumask_backtrace(struct cpumask *mask)
 {
-	arch_trigger_cpumask_backtrace(mask, -1);
+	arch_trigger_cpumask_backtrace(mask, false);
 	return true;
 }
 
 static inline bool trigger_single_cpu_backtrace(int cpu)
 {
-	arch_trigger_cpumask_backtrace(cpumask_of(cpu), -1);
+	arch_trigger_cpumask_backtrace(cpumask_of(cpu), false);
 	return true;
 }
 
 /* generic implementation */
 void nmi_trigger_cpumask_backtrace(const cpumask_t *mask,
-				   int exclude_cpu,
+				   bool exclude_self,
 				   void (*raise)(cpumask_t *mask));
 bool nmi_cpu_backtrace(struct pt_regs *regs);
 
@@ -190,7 +190,7 @@ static inline bool trigger_all_cpu_backtrace(void)
 {
 	return false;
 }
-static inline bool trigger_allbutcpu_cpu_backtrace(int exclude_cpu)
+static inline bool trigger_allbutself_cpu_backtrace(void)
 {
 	return false;
 }

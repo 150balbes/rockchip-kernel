@@ -7,8 +7,7 @@
 #include <linux/clkdev.h>
 #include <linux/delay.h>
 #include <linux/io.h>
-#include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include "sifive-prci.h"
 #include "fu540-prci.h"
 #include "fu740-prci.h"
@@ -619,8 +618,9 @@ static struct platform_driver sifive_prci_driver = {
 	},
 	.probe = sifive_prci_probe,
 };
-module_platform_driver(sifive_prci_driver);
 
-MODULE_AUTHOR("Paul Walmsley <paul.walmsley@sifive.com>");
-MODULE_DESCRIPTION("SiFive Power Reset Clock Interface (PRCI) driver");
-MODULE_LICENSE("GPL");
+static int __init sifive_prci_init(void)
+{
+	return platform_driver_register(&sifive_prci_driver);
+}
+core_initcall(sifive_prci_init);

@@ -16,9 +16,9 @@
 #include <linux/kthread.h>
 #include <linux/i2c.h>
 #include <linux/list.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/nvmem-provider.h>
 #include <linux/regmap.h>
@@ -759,6 +759,7 @@ static void video_i2c_release(struct video_device *vdev)
 
 static int video_i2c_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct video_i2c_data *data;
 	struct v4l2_device *v4l2_dev;
 	struct vb2_queue *queue;
@@ -768,8 +769,11 @@ static int video_i2c_probe(struct i2c_client *client)
 	if (!data)
 		return -ENOMEM;
 
-	data->chip = i2c_get_match_data(client);
-	if (!data->chip)
+	if (dev_fwnode(&client->dev))
+		data->chip = device_get_match_data(&client->dev);
+	else if (id)
+		data->chip = &video_i2c_chip[id->driver_data];
+	else
 		goto error_free_device;
 
 	data->regmap = regmap_init_i2c(client, data->chip->regmap_config);
@@ -936,8 +940,8 @@ static const struct dev_pm_ops video_i2c_pm_ops = {
 };
 
 static const struct i2c_device_id video_i2c_id_table[] = {
-	{ "amg88xx", (kernel_ulong_t)&video_i2c_chip[AMG88XX] },
-	{ "mlx90640", (kernel_ulong_t)&video_i2c_chip[MLX90640] },
+	{ "amg88xx", AMG88XX },
+	{ "mlx90640", MLX90640 },
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, video_i2c_id_table);

@@ -1175,15 +1175,18 @@ const struct sja1105_dynamic_table_ops sja1110_dyn_ops[BLK_IDX_MAX_DYN] = {
 
 static int
 sja1105_dynamic_config_poll_valid(struct sja1105_private *priv,
-				  const struct sja1105_dynamic_table_ops *ops,
-				  void *entry, bool check_valident,
-				  bool check_errors)
+				  struct sja1105_dyn_cmd *cmd,
+				  const struct sja1105_dynamic_table_ops *ops)
 {
 	u8 packed_buf[SJA1105_MAX_DYN_CMD_SIZE] = {};
-	struct sja1105_dyn_cmd cmd = {};
 	int rc;
 
-	/* Read back the whole entry + command structure. */
+	/* We don't _need_ to read the full entry, just the command area which
+	 * is a fixed SJA1105_SIZE_DYN_CMD. But our cmd_packing() API expects a
+	 * buffer that contains the full entry too. Additionally, our API
+	 * doesn't really know how many bytes into the buffer does the command
+	 * area really begin. So just read back the whole entry.
+	 */
 	rc = sja1105_xfer_buf(priv, SPI_READ, ops->addr, packed_buf,
 			      ops->packed_size);
 	if (rc)
@@ -1192,25 +1195,11 @@ sja1105_dynamic_config_poll_valid(struct sja1105_private *priv,
 	/* Unpack the command structure, and return it to the caller in case it
 	 * needs to perform further checks on it (VALIDENT).
 	 */
-	ops->cmd_packing(packed_buf, &cmd, UNPACK);
+	memset(cmd, 0, sizeof(*cmd));
+	ops->cmd_packing(packed_buf, cmd, UNPACK);
 
 	/* Hardware hasn't cleared VALID => still working on it */
-	if (cmd.valid)
-		return -EAGAIN;
-
-	if (check_valident && !cmd.valident && !(ops->access & OP_VALID_ANYWAY))
-		return -ENOENT;
-
-	if (check_errors && cmd.errors)
-		return -EINVAL;
-
-	/* Don't dereference possibly NULL pointer - maybe caller
-	 * only wanted to see whether the entry existed or not.
-	 */
-	if (entry)
-		ops->entry_packing(packed_buf, entry, UNPACK);
-
-	return 0;
+	return cmd->valid ? -EAGAIN : 0;
 }
 
 /* Poll the dynamic config entry's control area until the hardware has
@@ -1219,19 +1208,16 @@ sja1105_dynamic_config_poll_valid(struct sja1105_private *priv,
  */
 static int
 sja1105_dynamic_config_wait_complete(struct sja1105_private *priv,
-				     const struct sja1105_dynamic_table_ops *ops,
-				     void *entry, bool check_valident,
-				     bool check_errors)
+				     struct sja1105_dyn_cmd *cmd,
+				     const struct sja1105_dynamic_table_ops *ops)
 {
-	int err, rc;
+	int rc;
 
-	err = read_poll_timeout(sja1105_dynamic_config_poll_valid,
-				rc, rc != -EAGAIN,
-				SJA1105_DYNAMIC_CONFIG_SLEEP_US,
-				SJA1105_DYNAMIC_CONFIG_TIMEOUT_US,
-				false, priv, ops, entry, check_valident,
-				check_errors);
-	return err < 0 ? err : rc;
+	return read_poll_timeout(sja1105_dynamic_config_poll_valid,
+				 rc, rc != -EAGAIN,
+				 SJA1105_DYNAMIC_CONFIG_SLEEP_US,
+				 SJA1105_DYNAMIC_CONFIG_TIMEOUT_US,
+				 false, priv, cmd, ops);
 }
 
 /* Provides read access to the settings through the dynamic interface
@@ -1300,14 +1286,25 @@ int sja1105_dynamic_config_read(struct sja1105_private *priv,
 	mutex_lock(&priv->dynamic_config_lock);
 	rc = sja1105_xfer_buf(priv, SPI_WRITE, ops->addr, packed_buf,
 			      ops->packed_size);
-	if (rc < 0)
-		goto out;
+	if (rc < 0) {
+		mutex_unlock(&priv->dynamic_config_lock);
+		return rc;
+	}
 
-	rc = sja1105_dynamic_config_wait_complete(priv, ops, entry, true, false);
-out:
+	rc = sja1105_dynamic_config_wait_complete(priv, &cmd, ops);
 	mutex_unlock(&priv->dynamic_config_lock);
+	if (rc < 0)
+		return rc;
 
-	return rc;
+	if (!cmd.valident && !(ops->access & OP_VALID_ANYWAY))
+		return -ENOENT;
+
+	/* Don't dereference possibly NULL pointer - maybe caller
+	 * only wanted to see whether the entry existed or not.
+	 */
+	if (entry)
+		ops->entry_packing(packed_buf, entry, UNPACK);
+	return 0;
 }
 
 int sja1105_dynamic_config_write(struct sja1105_private *priv,
@@ -1359,14 +1356,22 @@ int sja1105_dynamic_config_write(struct sja1105_private *priv,
 	mutex_lock(&priv->dynamic_config_lock);
 	rc = sja1105_xfer_buf(priv, SPI_WRITE, ops->addr, packed_buf,
 			      ops->packed_size);
-	if (rc < 0)
-		goto out;
+	if (rc < 0) {
+		mutex_unlock(&priv->dynamic_config_lock);
+		return rc;
+	}
 
-	rc = sja1105_dynamic_config_wait_complete(priv, ops, NULL, false, true);
-out:
+	rc = sja1105_dynamic_config_wait_complete(priv, &cmd, ops);
 	mutex_unlock(&priv->dynamic_config_lock);
+	if (rc < 0)
+		return rc;
 
-	return rc;
+	cmd = (struct sja1105_dyn_cmd) {0};
+	ops->cmd_packing(packed_buf, &cmd, UNPACK);
+	if (cmd.errors)
+		return -EINVAL;
+
+	return 0;
 }
 
 static u8 sja1105_crc8_add(u8 crc, u8 byte, u8 poly)

@@ -14,7 +14,6 @@
 #include <linux/irq.h>
 #include <linux/init.h>
 #include <linux/console.h>
-#include <linux/platform_device.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/serial_core.h>
@@ -22,6 +21,7 @@
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/err.h>
 
 /*
@@ -227,7 +227,7 @@ static irqreturn_t vt8500_irq(int irq, void *dev_id)
 	struct uart_port *port = dev_id;
 	unsigned long isr;
 
-	uart_port_lock(port);
+	spin_lock(&port->lock);
 	isr = vt8500_read(port, VT8500_URISR);
 
 	/* Acknowledge active status bits */
@@ -240,7 +240,7 @@ static irqreturn_t vt8500_irq(int irq, void *dev_id)
 	if (isr & TCTS)
 		handle_delta_cts(port);
 
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 
 	return IRQ_HANDLED;
 }
@@ -342,7 +342,7 @@ static void vt8500_set_termios(struct uart_port *port,
 	unsigned int baud, lcr;
 	unsigned int loops = 1000;
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 
 	/* calculate and set baud rate */
 	baud = uart_get_baud_rate(port, termios, old, 900, 921600);
@@ -410,7 +410,7 @@ static void vt8500_set_termios(struct uart_port *port,
 	vt8500_write(&vt8500_port->uart, 0x881, VT8500_URFCR);
 	vt8500_write(&vt8500_port->uart, vt8500_port->ier, VT8500_URIER);
 
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static const char *vt8500_type(struct uart_port *port)
@@ -611,6 +611,10 @@ static int vt8500_serial_probe(struct platform_device *pdev)
 	if (!flags)
 		return -EINVAL;
 
+	mmres = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!mmres)
+		return -ENODEV;
+
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
@@ -643,7 +647,7 @@ static int vt8500_serial_probe(struct platform_device *pdev)
 	if (!vt8500_port)
 		return -ENOMEM;
 
-	vt8500_port->uart.membase = devm_platform_get_and_ioremap_resource(pdev, 0, &mmres);
+	vt8500_port->uart.membase = devm_ioremap_resource(&pdev->dev, mmres);
 	if (IS_ERR(vt8500_port->uart.membase))
 		return PTR_ERR(vt8500_port->uart.membase);
 

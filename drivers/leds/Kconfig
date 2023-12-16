@@ -187,7 +187,6 @@ config LEDS_TURRIS_OMNIA
 	depends on I2C
 	depends on MACH_ARMADA_38X || COMPILE_TEST
 	depends on OF
-	select LEDS_TRIGGERS
 	help
 	  This option enables basic support for the LEDs found on the front
 	  side of CZ.NIC's Turris Omnia router. There are 12 RGB LEDs on the
@@ -521,15 +520,6 @@ config LEDS_PCA963X
 	  This option enables support for LEDs connected to the PCA963x
 	  LED driver chip accessed via the I2C bus. Supported
 	  devices include PCA9633 and PCA9634
-
-config LEDS_PCA995X
-	tristate "LED Support for PCA995x I2C chips"
-	depends on LEDS_CLASS
-	depends on I2C
-	help
-	  This option enables support for LEDs connected to PCA995x
-	  LED driver chips accessed via the I2C bus. Supported
-	  devices include PCA9955BTW, PCA9952TW and PCA9955TW.
 
 config LEDS_WM831X_STATUS
 	tristate "LED support for status LEDs on WM831x PMICs"

@@ -112,7 +112,7 @@ struct aw200xx {
 	struct mutex mutex;
 	u32 num_leds;
 	u32 display_rows;
-	struct aw200xx_led leds[] __counted_by(num_leds);
+	struct aw200xx_led leds[];
 };
 
 static ssize_t dim_show(struct device *dev, struct device_attribute *devattr,
@@ -368,7 +368,7 @@ static int aw200xx_probe_fw(struct device *dev, struct aw200xx *chip)
 
 	if (!chip->display_rows ||
 	    chip->display_rows > chip->cdef->display_size_rows_max) {
-		return dev_err_probe(dev, -EINVAL,
+		return dev_err_probe(dev, ret,
 				     "Invalid leds display size %u\n",
 				     chip->display_rows);
 	}
@@ -479,7 +479,7 @@ static const struct regmap_config aw200xx_regmap_config = {
 	.num_ranges = ARRAY_SIZE(aw200xx_ranges),
 	.rd_table = &aw200xx_readable_table,
 	.wr_table = &aw200xx_writeable_table,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 
 static int aw200xx_probe(struct i2c_client *client)
@@ -583,7 +583,7 @@ static struct i2c_driver aw200xx_driver = {
 		.name = "aw200xx",
 		.of_match_table = aw200xx_match_table,
 	},
-	.probe = aw200xx_probe,
+	.probe_new = aw200xx_probe,
 	.remove = aw200xx_remove,
 	.id_table = aw200xx_id,
 };

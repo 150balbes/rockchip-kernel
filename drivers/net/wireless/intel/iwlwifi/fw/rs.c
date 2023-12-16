@@ -208,6 +208,7 @@ int rs_pretty_print_rate(char *buf, int bufsz, const u32 rate)
 
 		return scnprintf(buf, bufsz, "Legacy | ANT: %s Rate: %s Mbps",
 				 iwl_rs_pretty_ant(ant),
+				 index == IWL_RATE_INVALID ? "BAD" :
 				 iwl_rate_mcs(index)->mbps);
 	}
 

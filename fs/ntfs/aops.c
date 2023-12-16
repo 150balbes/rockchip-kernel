@@ -145,12 +145,13 @@ still_busy:
 }
 
 /**
- * ntfs_read_block - fill a @folio of an address space with data
- * @folio:	page cache folio to fill with data
+ * ntfs_read_block - fill a @page of an address space with data
+ * @page:	page cache page to fill with data
  *
+ * Fill the page @page of the address space belonging to the @page->host inode.
  * We read each buffer asynchronously and when all buffers are read in, our io
  * completion handler ntfs_end_buffer_read_async(), if required, automatically
- * applies the mst fixups to the folio before finally marking it uptodate and
+ * applies the mst fixups to the page before finally marking it uptodate and
  * unlocking it.
  *
  * We only enforce allocated_size limit because i_size is checked for in
@@ -160,7 +161,7 @@ still_busy:
  *
  * Contains an adapted version of fs/buffer.c::block_read_full_folio().
  */
-static int ntfs_read_block(struct folio *folio)
+static int ntfs_read_block(struct page *page)
 {
 	loff_t i_size;
 	VCN vcn;
@@ -177,7 +178,7 @@ static int ntfs_read_block(struct folio *folio)
 	int i, nr;
 	unsigned char blocksize_bits;
 
-	vi = folio->mapping->host;
+	vi = page->mapping->host;
 	ni = NTFS_I(vi);
 	vol = ni->vol;
 
@@ -187,10 +188,15 @@ static int ntfs_read_block(struct folio *folio)
 	blocksize = vol->sb->s_blocksize;
 	blocksize_bits = vol->sb->s_blocksize_bits;
 
-	head = folio_buffers(folio);
-	if (!head)
-		head = create_empty_buffers(folio, blocksize, 0);
-	bh = head;
+	if (!page_has_buffers(page)) {
+		create_empty_buffers(page, blocksize, 0);
+		if (unlikely(!page_has_buffers(page))) {
+			unlock_page(page);
+			return -ENOMEM;
+		}
+	}
+	bh = head = page_buffers(page);
+	BUG_ON(!bh);
 
 	/*
 	 * We may be racing with truncate.  To avoid some of the problems we
@@ -199,11 +205,11 @@ static int ntfs_read_block(struct folio *folio)
 	 * may leave some buffers unmapped which are now allocated.  This is
 	 * not a problem since these buffers will just get mapped when a write
 	 * occurs.  In case of a shrinking truncate, we will detect this later
-	 * on due to the runlist being incomplete and if the folio is being
+	 * on due to the runlist being incomplete and if the page is being
 	 * fully truncated, truncate will throw it away as soon as we unlock
 	 * it so no need to worry what we do with it.
 	 */
-	iblock = (s64)folio->index << (PAGE_SHIFT - blocksize_bits);
+	iblock = (s64)page->index << (PAGE_SHIFT - blocksize_bits);
 	read_lock_irqsave(&ni->size_lock, flags);
 	lblock = (ni->allocated_size + blocksize - 1) >> blocksize_bits;
 	init_size = ni->initialized_size;
@@ -215,7 +221,7 @@ static int ntfs_read_block(struct folio *folio)
 	}
 	zblock = (init_size + blocksize - 1) >> blocksize_bits;
 
-	/* Loop through all the buffers in the folio. */
+	/* Loop through all the buffers in the page. */
 	rl = NULL;
 	nr = i = 0;
 	do {
@@ -293,7 +299,7 @@ lock_retry_remap:
 			if (!err)
 				err = -EIO;
 			bh->b_blocknr = -1;
-			folio_set_error(folio);
+			SetPageError(page);
 			ntfs_error(vol->sb, "Failed to read from inode 0x%lx, "
 					"attribute type 0x%x, vcn 0x%llx, "
 					"offset 0x%x because its location on "
@@ -306,13 +312,13 @@ lock_retry_remap:
 		/*
 		 * Either iblock was outside lblock limits or
 		 * ntfs_rl_vcn_to_lcn() returned error.  Just zero that portion
-		 * of the folio and set the buffer uptodate.
+		 * of the page and set the buffer uptodate.
 		 */
 handle_hole:
 		bh->b_blocknr = -1UL;
 		clear_buffer_mapped(bh);
 handle_zblock:
-		folio_zero_range(folio, i * blocksize, blocksize);
+		zero_user(page, i * blocksize, blocksize);
 		if (likely(!err))
 			set_buffer_uptodate(bh);
 	} while (i++, iblock++, (bh = bh->b_this_page) != head);
@@ -343,11 +349,11 @@ handle_zblock:
 		return 0;
 	}
 	/* No i/o was scheduled on any of the buffers. */
-	if (likely(!folio_test_error(folio)))
-		folio_mark_uptodate(folio);
+	if (likely(!PageError(page)))
+		SetPageUptodate(page);
 	else /* Signal synchronous i/o error. */
 		nr = -EIO;
-	folio_unlock(folio);
+	unlock_page(page);
 	return nr;
 }
 
@@ -427,7 +433,7 @@ retry_readpage:
 	/* NInoNonResident() == NInoIndexAllocPresent() */
 	if (NInoNonResident(ni)) {
 		/* Normal, non-resident data stream. */
-		return ntfs_read_block(folio);
+		return ntfs_read_block(page);
 	}
 	/*
 	 * Attribute is resident, implying it is not compressed or encrypted.
@@ -501,29 +507,28 @@ err_out:
 #ifdef NTFS_RW
 
 /**
- * ntfs_write_block - write a @folio to the backing store
- * @folio:	page cache folio to write out
+ * ntfs_write_block - write a @page to the backing store
+ * @page:	page cache page to write out
  * @wbc:	writeback control structure
  *
- * This function is for writing folios belonging to non-resident, non-mst
+ * This function is for writing pages belonging to non-resident, non-mst
  * protected attributes to their backing store.
  *
- * For a folio with buffers, map and write the dirty buffers asynchronously
- * under folio writeback. For a folio without buffers, create buffers for the
- * folio, then proceed as above.
+ * For a page with buffers, map and write the dirty buffers asynchronously
+ * under page writeback. For a page without buffers, create buffers for the
+ * page, then proceed as above.
  *
- * If a folio doesn't have buffers the folio dirty state is definitive. If
- * a folio does have buffers, the folio dirty state is just a hint,
- * and the buffer dirty state is definitive. (A hint which has rules:
- * dirty buffers against a clean folio is illegal. Other combinations are
- * legal and need to be handled. In particular a dirty folio containing
- * clean buffers for example.)
+ * If a page doesn't have buffers the page dirty state is definitive. If a page
+ * does have buffers, the page dirty state is just a hint, and the buffer dirty
+ * state is definitive. (A hint which has rules: dirty buffers against a clean
+ * page is illegal. Other combinations are legal and need to be handled. In
+ * particular a dirty page containing clean buffers for example.)
  *
  * Return 0 on success and -errno on error.
  *
  * Based on ntfs_read_block() and __block_write_full_folio().
  */
-static int ntfs_write_block(struct folio *folio, struct writeback_control *wbc)
+static int ntfs_write_block(struct page *page, struct writeback_control *wbc)
 {
 	VCN vcn;
 	LCN lcn;
@@ -541,29 +546,41 @@ static int ntfs_write_block(struct folio *folio, struct writeback_control *wbc)
 	bool need_end_writeback;
 	unsigned char blocksize_bits;
 
-	vi = folio->mapping->host;
+	vi = page->mapping->host;
 	ni = NTFS_I(vi);
 	vol = ni->vol;
 
 	ntfs_debug("Entering for inode 0x%lx, attribute type 0x%x, page index "
-			"0x%lx.", ni->mft_no, ni->type, folio->index);
+			"0x%lx.", ni->mft_no, ni->type, page->index);
 
 	BUG_ON(!NInoNonResident(ni));
 	BUG_ON(NInoMstProtected(ni));
 	blocksize = vol->sb->s_blocksize;
 	blocksize_bits = vol->sb->s_blocksize_bits;
-	head = folio_buffers(folio);
-	if (!head) {
-		BUG_ON(!folio_test_uptodate(folio));
-		head = create_empty_buffers(folio, blocksize,
+	if (!page_has_buffers(page)) {
+		BUG_ON(!PageUptodate(page));
+		create_empty_buffers(page, blocksize,
 				(1 << BH_Uptodate) | (1 << BH_Dirty));
+		if (unlikely(!page_has_buffers(page))) {
+			ntfs_warning(vol->sb, "Error allocating page "
+					"buffers.  Redirtying page so we try "
+					"again later.");
+			/*
+			 * Put the page back on mapping->dirty_pages, but leave
+			 * its buffers' dirty state as-is.
+			 */
+			redirty_page_for_writepage(wbc, page);
+			unlock_page(page);
+			return 0;
+		}
 	}
-	bh = head;
+	bh = head = page_buffers(page);
+	BUG_ON(!bh);
 
 	/* NOTE: Different naming scheme to ntfs_read_block()! */
 
-	/* The first block in the folio. */
-	block = (s64)folio->index << (PAGE_SHIFT - blocksize_bits);
+	/* The first block in the page. */
+	block = (s64)page->index << (PAGE_SHIFT - blocksize_bits);
 
 	read_lock_irqsave(&ni->size_lock, flags);
 	i_size = i_size_read(vi);
@@ -580,14 +597,14 @@ static int ntfs_write_block(struct folio *folio, struct writeback_control *wbc)
 	 * Be very careful.  We have no exclusion from block_dirty_folio
 	 * here, and the (potentially unmapped) buffers may become dirty at
 	 * any time.  If a buffer becomes dirty here after we've inspected it
-	 * then we just miss that fact, and the folio stays dirty.
+	 * then we just miss that fact, and the page stays dirty.
 	 *
 	 * Buffers outside i_size may be dirtied by block_dirty_folio;
 	 * handle that here by just cleaning them.
 	 */
 
 	/*
-	 * Loop through all the buffers in the folio, mapping all the dirty
+	 * Loop through all the buffers in the page, mapping all the dirty
 	 * buffers to disk addresses and handling any aliases from the
 	 * underlying block device's mapping.
 	 */
@@ -599,13 +616,13 @@ static int ntfs_write_block(struct folio *folio, struct writeback_control *wbc)
 		if (unlikely(block >= dblock)) {
 			/*
 			 * Mapped buffers outside i_size will occur, because
-			 * this folio can be outside i_size when there is a
+			 * this page can be outside i_size when there is a
 			 * truncate in progress. The contents of such buffers
 			 * were zeroed by ntfs_writepage().
 			 *
 			 * FIXME: What about the small race window where
 			 * ntfs_writepage() has not done any clearing because
-			 * the folio was within i_size but before we get here,
+			 * the page was within i_size but before we get here,
 			 * vmtruncate() modifies i_size?
 			 */
 			clear_buffer_dirty(bh);
@@ -621,38 +638,38 @@ static int ntfs_write_block(struct folio *folio, struct writeback_control *wbc)
 		if (unlikely((block >= iblock) &&
 				(initialized_size < i_size))) {
 			/*
-			 * If this folio is fully outside initialized
-			 * size, zero out all folios between the current
-			 * initialized size and the current folio. Just
+			 * If this page is fully outside initialized
+			 * size, zero out all pages between the current
+			 * initialized size and the current page. Just
 			 * use ntfs_read_folio() to do the zeroing
 			 * transparently.
 			 */
 			if (block > iblock) {
 				// TODO:
-				// For each folio do:
-				// - read_cache_folio()
-				// Again for each folio do:
-				// - wait_on_folio_locked()
-				// - Check (folio_test_uptodate(folio) &&
-				//		!folio_test_error(folio))
+				// For each page do:
+				// - read_cache_page()
+				// Again for each page do:
+				// - wait_on_page_locked()
+				// - Check (PageUptodate(page) &&
+				//			!PageError(page))
 				// Update initialized size in the attribute and
 				// in the inode.
-				// Again, for each folio do:
+				// Again, for each page do:
 				//	block_dirty_folio();
-				// folio_put()
+				// put_page()
 				// We don't need to wait on the writes.
 				// Update iblock.
 			}
 			/*
-			 * The current folio straddles initialized size. Zero
+			 * The current page straddles initialized size. Zero
 			 * all non-uptodate buffers and set them uptodate (and
 			 * dirty?). Note, there aren't any non-uptodate buffers
-			 * if the folio is uptodate.
-			 * FIXME: For an uptodate folio, the buffers may need to
+			 * if the page is uptodate.
+			 * FIXME: For an uptodate page, the buffers may need to
 			 * be written out because they were not initialized on
 			 * disk before.
 			 */
-			if (!folio_test_uptodate(folio)) {
+			if (!PageUptodate(page)) {
 				// TODO:
 				// Zero any non-uptodate buffers up to i_size.
 				// Set them uptodate and dirty.
@@ -710,14 +727,14 @@ lock_retry_remap:
 			unsigned long *bpos, *bend;
 
 			/* Check if the buffer is zero. */
-			kaddr = kmap_local_folio(folio, bh_offset(bh));
-			bpos = (unsigned long *)kaddr;
-			bend = (unsigned long *)(kaddr + blocksize);
+			kaddr = kmap_atomic(page);
+			bpos = (unsigned long *)(kaddr + bh_offset(bh));
+			bend = (unsigned long *)((u8*)bpos + blocksize);
 			do {
 				if (unlikely(*bpos))
 					break;
 			} while (likely(++bpos < bend));
-			kunmap_local(kaddr);
+			kunmap_atomic(kaddr);
 			if (bpos == bend) {
 				/*
 				 * Buffer is zero and sparse, no need to write
@@ -757,7 +774,7 @@ lock_retry_remap:
 		if (err == -ENOENT || lcn == LCN_ENOENT) {
 			bh->b_blocknr = -1;
 			clear_buffer_dirty(bh);
-			folio_zero_range(folio, bh_offset(bh), blocksize);
+			zero_user(page, bh_offset(bh), blocksize);
 			set_buffer_uptodate(bh);
 			err = 0;
 			continue;
@@ -784,7 +801,7 @@ lock_retry_remap:
 	bh = head;
 
 	/* Just an optimization, so ->read_folio() is not called later. */
-	if (unlikely(!folio_test_uptodate(folio))) {
+	if (unlikely(!PageUptodate(page))) {
 		int uptodate = 1;
 		do {
 			if (!buffer_uptodate(bh)) {
@@ -794,7 +811,7 @@ lock_retry_remap:
 			}
 		} while ((bh = bh->b_this_page) != head);
 		if (uptodate)
-			folio_mark_uptodate(folio);
+			SetPageUptodate(page);
 	}
 
 	/* Setup all mapped, dirty buffers for async write i/o. */
@@ -809,7 +826,7 @@ lock_retry_remap:
 		} else if (unlikely(err)) {
 			/*
 			 * For the error case. The buffer may have been set
-			 * dirty during attachment to a dirty folio.
+			 * dirty during attachment to a dirty page.
 			 */
 			if (err != -ENOMEM)
 				clear_buffer_dirty(bh);
@@ -822,20 +839,20 @@ lock_retry_remap:
 			err = 0;
 		else if (err == -ENOMEM) {
 			ntfs_warning(vol->sb, "Error allocating memory. "
-					"Redirtying folio so we try again "
+					"Redirtying page so we try again "
 					"later.");
 			/*
-			 * Put the folio back on mapping->dirty_pages, but
+			 * Put the page back on mapping->dirty_pages, but
 			 * leave its buffer's dirty state as-is.
 			 */
-			folio_redirty_for_writepage(wbc, folio);
+			redirty_page_for_writepage(wbc, page);
 			err = 0;
 		} else
-			folio_set_error(folio);
+			SetPageError(page);
 	}
 
-	BUG_ON(folio_test_writeback(folio));
-	folio_start_writeback(folio);	/* Keeps try_to_free_buffers() away. */
+	BUG_ON(PageWriteback(page));
+	set_page_writeback(page);	/* Keeps try_to_free_buffers() away. */
 
 	/* Submit the prepared buffers for i/o. */
 	need_end_writeback = true;
@@ -847,11 +864,11 @@ lock_retry_remap:
 		}
 		bh = next;
 	} while (bh != head);
-	folio_unlock(folio);
+	unlock_page(page);
 
-	/* If no i/o was started, need to end writeback here. */
+	/* If no i/o was started, need to end_page_writeback(). */
 	if (unlikely(need_end_writeback))
-		folio_end_writeback(folio);
+		end_page_writeback(page);
 
 	ntfs_debug("Done.");
 	return err;
@@ -1320,9 +1337,8 @@ done:
  */
 static int ntfs_writepage(struct page *page, struct writeback_control *wbc)
 {
-	struct folio *folio = page_folio(page);
 	loff_t i_size;
-	struct inode *vi = folio->mapping->host;
+	struct inode *vi = page->mapping->host;
 	ntfs_inode *base_ni = NULL, *ni = NTFS_I(vi);
 	char *addr;
 	ntfs_attr_search_ctx *ctx = NULL;
@@ -1331,13 +1347,14 @@ static int ntfs_writepage(struct page *page, struct writeback_control *wbc)
 	int err;
 
 retry_writepage:
-	BUG_ON(!folio_test_locked(folio));
+	BUG_ON(!PageLocked(page));
 	i_size = i_size_read(vi);
-	/* Is the folio fully outside i_size? (truncate in progress) */
-	if (unlikely(folio->index >= (i_size + PAGE_SIZE - 1) >>
+	/* Is the page fully outside i_size? (truncate in progress) */
+	if (unlikely(page->index >= (i_size + PAGE_SIZE - 1) >>
 			PAGE_SHIFT)) {
+		struct folio *folio = page_folio(page);
 		/*
-		 * The folio may have dirty, unmapped buffers.  Make them
+		 * The page may have dirty, unmapped buffers.  Make them
 		 * freeable here, so the page does not leak.
 		 */
 		block_invalidate_folio(folio, 0, folio_size(folio));
@@ -1356,7 +1373,7 @@ retry_writepage:
 	if (ni->type != AT_INDEX_ALLOCATION) {
 		/* If file is encrypted, deny access, just like NT4. */
 		if (NInoEncrypted(ni)) {
-			folio_unlock(folio);
+			unlock_page(page);
 			BUG_ON(ni->type != AT_DATA);
 			ntfs_debug("Denying write access to encrypted file.");
 			return -EACCES;
@@ -1367,14 +1384,14 @@ retry_writepage:
 			BUG_ON(ni->name_len);
 			// TODO: Implement and replace this with
 			// return ntfs_write_compressed_block(page);
-			folio_unlock(folio);
+			unlock_page(page);
 			ntfs_error(vi->i_sb, "Writing to compressed files is "
 					"not supported yet.  Sorry.");
 			return -EOPNOTSUPP;
 		}
 		// TODO: Implement and remove this check.
 		if (NInoNonResident(ni) && NInoSparse(ni)) {
-			folio_unlock(folio);
+			unlock_page(page);
 			ntfs_error(vi->i_sb, "Writing to sparse files is not "
 					"supported yet.  Sorry.");
 			return -EOPNOTSUPP;
@@ -1383,34 +1400,34 @@ retry_writepage:
 	/* NInoNonResident() == NInoIndexAllocPresent() */
 	if (NInoNonResident(ni)) {
 		/* We have to zero every time due to mmap-at-end-of-file. */
-		if (folio->index >= (i_size >> PAGE_SHIFT)) {
-			/* The folio straddles i_size. */
-			unsigned int ofs = i_size & (folio_size(folio) - 1);
-			folio_zero_segment(folio, ofs, folio_size(folio));
+		if (page->index >= (i_size >> PAGE_SHIFT)) {
+			/* The page straddles i_size. */
+			unsigned int ofs = i_size & ~PAGE_MASK;
+			zero_user_segment(page, ofs, PAGE_SIZE);
 		}
 		/* Handle mst protected attributes. */
 		if (NInoMstProtected(ni))
 			return ntfs_write_mst_block(page, wbc);
 		/* Normal, non-resident data stream. */
-		return ntfs_write_block(folio, wbc);
+		return ntfs_write_block(page, wbc);
 	}
 	/*
 	 * Attribute is resident, implying it is not compressed, encrypted, or
 	 * mst protected.  This also means the attribute is smaller than an mft
-	 * record and hence smaller than a folio, so can simply return error on
-	 * any folios with index above 0.  Note the attribute can actually be
+	 * record and hence smaller than a page, so can simply return error on
+	 * any pages with index above 0.  Note the attribute can actually be
 	 * marked compressed but if it is resident the actual data is not
 	 * compressed so we are ok to ignore the compressed flag here.
 	 */
-	BUG_ON(folio_buffers(folio));
-	BUG_ON(!folio_test_uptodate(folio));
-	if (unlikely(folio->index > 0)) {
-		ntfs_error(vi->i_sb, "BUG()! folio->index (0x%lx) > 0.  "
-				"Aborting write.", folio->index);
-		BUG_ON(folio_test_writeback(folio));
-		folio_start_writeback(folio);
-		folio_unlock(folio);
-		folio_end_writeback(folio);
+	BUG_ON(page_has_buffers(page));
+	BUG_ON(!PageUptodate(page));
+	if (unlikely(page->index > 0)) {
+		ntfs_error(vi->i_sb, "BUG()! page->index (0x%lx) > 0.  "
+				"Aborting write.", page->index);
+		BUG_ON(PageWriteback(page));
+		set_page_writeback(page);
+		unlock_page(page);
+		end_page_writeback(page);
 		return -EIO;
 	}
 	if (!NInoAttr(ni))
@@ -1443,12 +1460,12 @@ retry_writepage:
 	if (unlikely(err))
 		goto err_out;
 	/*
-	 * Keep the VM happy.  This must be done otherwise
-	 * PAGECACHE_TAG_DIRTY remains set even though the folio is clean.
+	 * Keep the VM happy.  This must be done otherwise the radix-tree tag
+	 * PAGECACHE_TAG_DIRTY remains set even though the page is clean.
 	 */
-	BUG_ON(folio_test_writeback(folio));
-	folio_start_writeback(folio);
-	folio_unlock(folio);
+	BUG_ON(PageWriteback(page));
+	set_page_writeback(page);
+	unlock_page(page);
 	attr_len = le32_to_cpu(ctx->attr->data.resident.value_length);
 	i_size = i_size_read(vi);
 	if (unlikely(attr_len > i_size)) {
@@ -1463,18 +1480,18 @@ retry_writepage:
 		/* Shrinking cannot fail. */
 		BUG_ON(err);
 	}
-	addr = kmap_local_folio(folio, 0);
-	/* Copy the data from the folio to the mft record. */
+	addr = kmap_atomic(page);
+	/* Copy the data from the page to the mft record. */
 	memcpy((u8*)ctx->attr +
 			le16_to_cpu(ctx->attr->data.resident.value_offset),
 			addr, attr_len);
-	/* Zero out of bounds area in the page cache folio. */
-	memset(addr + attr_len, 0, folio_size(folio) - attr_len);
-	kunmap_local(addr);
-	flush_dcache_folio(folio);
+	/* Zero out of bounds area in the page cache page. */
+	memset(addr + attr_len, 0, PAGE_SIZE - attr_len);
+	kunmap_atomic(addr);
+	flush_dcache_page(page);
 	flush_dcache_mft_record_page(ctx->ntfs_ino);
-	/* We are done with the folio. */
-	folio_end_writeback(folio);
+	/* We are done with the page. */
+	end_page_writeback(page);
 	/* Finally, mark the mft record dirty, so it gets written back. */
 	mark_mft_record_dirty(ctx->ntfs_ino);
 	ntfs_attr_put_search_ctx(ctx);
@@ -1485,18 +1502,18 @@ err_out:
 		ntfs_warning(vi->i_sb, "Error allocating memory. Redirtying "
 				"page so we try again later.");
 		/*
-		 * Put the folio back on mapping->dirty_pages, but leave its
+		 * Put the page back on mapping->dirty_pages, but leave its
 		 * buffers' dirty state as-is.
 		 */
-		folio_redirty_for_writepage(wbc, folio);
+		redirty_page_for_writepage(wbc, page);
 		err = 0;
 	} else {
 		ntfs_error(vi->i_sb, "Resident attribute write failed with "
 				"error %i.", err);
-		folio_set_error(folio);
+		SetPageError(page);
 		NVolSetErrors(ni->vol);
 	}
-	folio_unlock(folio);
+	unlock_page(page);
 	if (ctx)
 		ntfs_attr_put_search_ctx(ctx);
 	if (m)

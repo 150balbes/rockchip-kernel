@@ -7,10 +7,8 @@
  *
  */
 
-#include <linux/mod_devicetable.h>
-#include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/mfd/syscon.h>
+#include <linux/of_device.h>
 #include <linux/regmap.h>
 
 #include "stmmac_platform.h"
@@ -24,7 +22,7 @@ struct starfive_dwmac {
 	struct clk *clk_tx;
 };
 
-static void starfive_dwmac_fix_mac_speed(void *priv, unsigned int speed, unsigned int mode)
+static void starfive_dwmac_fix_mac_speed(void *priv, unsigned int speed)
 {
 	struct starfive_dwmac *dwmac = priv;
 	unsigned long rate;
@@ -60,7 +58,7 @@ static int starfive_dwmac_set_mode(struct plat_stmmacenet_data *plat_dat)
 	unsigned int mode;
 	int err;
 
-	switch (plat_dat->mac_interface) {
+	switch (plat_dat->interface) {
 	case PHY_INTERFACE_MODE_RMII:
 		mode = STARFIVE_DWMAC_PHY_INFT_RMII;
 		break;
@@ -72,7 +70,7 @@ static int starfive_dwmac_set_mode(struct plat_stmmacenet_data *plat_dat)
 
 	default:
 		dev_err(dwmac->dev, "unsupported interface %d\n",
-			plat_dat->mac_interface);
+			plat_dat->interface);
 		return -EINVAL;
 	}
 
@@ -105,7 +103,7 @@ static int starfive_dwmac_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, err,
 				     "failed to get resources\n");
 
-	plat_dat = devm_stmmac_probe_config_dt(pdev, stmmac_res.mac);
+	plat_dat = stmmac_probe_config_dt(pdev, stmmac_res.mac);
 	if (IS_ERR(plat_dat))
 		return dev_err_probe(&pdev->dev, PTR_ERR(plat_dat),
 				     "dt configuration failed\n");
@@ -141,7 +139,13 @@ static int starfive_dwmac_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
-	return stmmac_dvr_probe(&pdev->dev, plat_dat, &stmmac_res);
+	err = stmmac_dvr_probe(&pdev->dev, plat_dat, &stmmac_res);
+	if (err) {
+		stmmac_remove_config_dt(pdev, plat_dat);
+		return err;
+	}
+
+	return 0;
 }
 
 static const struct of_device_id starfive_dwmac_match[] = {

@@ -625,12 +625,15 @@ static ssize_t ads7846_disable_store(struct device *dev,
 
 static DEVICE_ATTR(disable, 0664, ads7846_disable_show, ads7846_disable_store);
 
-static struct attribute *ads784x_attrs[] = {
+static struct attribute *ads784x_attributes[] = {
 	&dev_attr_pen_down.attr,
 	&dev_attr_disable.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(ads784x);
+
+static const struct attribute_group ads784x_attr_group = {
+	.attrs = ads784x_attributes,
+};
 
 /*--------------------------------------------------------------------------*/
 
@@ -1354,6 +1357,10 @@ static int ads7846_probe(struct spi_device *spi)
 	else
 		(void) ads7846_read12_ser(dev, READ_12BIT_SER(vaux));
 
+	err = devm_device_add_group(dev, &ads784x_attr_group);
+	if (err)
+		return err;
+
 	err = input_register_device(input_dev);
 	if (err)
 		return err;
@@ -1379,10 +1386,9 @@ static void ads7846_remove(struct spi_device *spi)
 
 static struct spi_driver ads7846_driver = {
 	.driver = {
-		.name		= "ads7846",
-		.dev_groups	= ads784x_groups,
-		.pm		= pm_sleep_ptr(&ads7846_pm),
-		.of_match_table	= ads7846_dt_ids,
+		.name	= "ads7846",
+		.pm	= pm_sleep_ptr(&ads7846_pm),
+		.of_match_table = ads7846_dt_ids,
 	},
 	.probe		= ads7846_probe,
 	.remove		= ads7846_remove,

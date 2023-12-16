@@ -144,6 +144,7 @@ static const struct iio_info ms5637_info = {
 
 static int ms5637_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	const struct ms_tp_data *data;
 	struct ms_tp_dev *dev_data;
 	struct iio_dev *indio_dev;
@@ -158,7 +159,10 @@ static int ms5637_probe(struct i2c_client *client)
 		return -EOPNOTSUPP;
 	}
 
-	data = i2c_get_match_data(client);
+	if (id)
+		data = (const struct ms_tp_data *)id->driver_data;
+	else
+		data = device_get_match_data(&client->dev);
 	if (!data)
 		return -EINVAL;
 

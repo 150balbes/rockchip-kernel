@@ -14,8 +14,6 @@
 #include <asm/io.h>
 #include <asm/hw_irq.h>
 #include <asm/ipic.h>
-#include <asm/fixmap.h>
-
 #include <sysdev/fsl_soc.h>
 #include <sysdev/fsl_pci.h>
 

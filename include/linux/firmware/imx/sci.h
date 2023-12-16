@@ -21,37 +21,31 @@ int imx_scu_enable_general_irq_channel(struct device *dev);
 int imx_scu_irq_register_notifier(struct notifier_block *nb);
 int imx_scu_irq_unregister_notifier(struct notifier_block *nb);
 int imx_scu_irq_group_enable(u8 group, u32 mask, u8 enable);
-int imx_scu_irq_get_status(u8 group, u32 *irq_status);
 int imx_scu_soc_init(struct device *dev);
 #else
 static inline int imx_scu_soc_init(struct device *dev)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 
 static inline int imx_scu_enable_general_irq_channel(struct device *dev)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 
 static inline int imx_scu_irq_register_notifier(struct notifier_block *nb)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 
 static inline int imx_scu_irq_unregister_notifier(struct notifier_block *nb)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 
 static inline int imx_scu_irq_group_enable(u8 group, u32 mask, u8 enable)
 {
-	return -EOPNOTSUPP;
-}
-
-static inline int imx_scu_irq_get_status(u8 group, u32 *irq_status)
-{
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 #endif
 #endif /* _SC_SCI_H */

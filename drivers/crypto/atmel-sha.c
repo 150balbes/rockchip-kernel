@@ -28,7 +28,7 @@
 #include <linux/irq.h>
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
-#include <linux/mod_devicetable.h>
+#include <linux/of_device.h>
 #include <linux/delay.h>
 #include <linux/crypto.h>
 #include <crypto/scatterwalk.h>
@@ -1300,6 +1300,7 @@ static struct ahash_alg sha_384_512_algs[] = {
 	.halg.base.cra_name		= "sha384",
 	.halg.base.cra_driver_name	= "atmel-sha384",
 	.halg.base.cra_blocksize	= SHA384_BLOCK_SIZE,
+	.halg.base.cra_alignmask	= 0x3,
 
 	.halg.digestsize = SHA384_DIGEST_SIZE,
 },
@@ -1307,6 +1308,7 @@ static struct ahash_alg sha_384_512_algs[] = {
 	.halg.base.cra_name		= "sha512",
 	.halg.base.cra_driver_name	= "atmel-sha512",
 	.halg.base.cra_blocksize	= SHA512_BLOCK_SIZE,
+	.halg.base.cra_alignmask	= 0x3,
 
 	.halg.digestsize = SHA512_DIGEST_SIZE,
 },
@@ -1768,8 +1770,7 @@ static int atmel_sha_hmac_compute_ipad_hash(struct atmel_sha_dev *dd)
 	size_t bs = ctx->block_size;
 	size_t i, num_words = bs / sizeof(u32);
 
-	unsafe_memcpy(hmac->opad, hmac->ipad, bs,
-		      "fortified memcpy causes -Wrestrict warning");
+	memcpy(hmac->opad, hmac->ipad, bs);
 	for (i = 0; i < num_words; ++i) {
 		hmac->ipad[i] ^= 0x36363636;
 		hmac->opad[i] ^= 0x5c5c5c5c;
@@ -2498,8 +2499,8 @@ static int atmel_sha_dma_init(struct atmel_sha_dev *dd)
 {
 	dd->dma_lch_in.chan = dma_request_chan(dd->dev, "tx");
 	if (IS_ERR(dd->dma_lch_in.chan)) {
-		return dev_err_probe(dd->dev, PTR_ERR(dd->dma_lch_in.chan),
-			"DMA channel is not available\n");
+		dev_err(dd->dev, "DMA channel is not available\n");
+		return PTR_ERR(dd->dma_lch_in.chan);
 	}
 
 	dd->dma_lch_in.dma_conf.dst_addr = dd->phys_base +
@@ -2569,12 +2570,14 @@ static void atmel_sha_get_cap(struct atmel_sha_dev *dd)
 	}
 }
 
+#if defined(CONFIG_OF)
 static const struct of_device_id atmel_sha_dt_ids[] = {
 	{ .compatible = "atmel,at91sam9g46-sha" },
 	{ /* sentinel */ }
 };
 
 MODULE_DEVICE_TABLE(of, atmel_sha_dt_ids);
+#endif
 
 static int atmel_sha_probe(struct platform_device *pdev)
 {
@@ -2601,9 +2604,11 @@ static int atmel_sha_probe(struct platform_device *pdev)
 
 	crypto_init_queue(&sha_dd->queue, ATMEL_SHA_QUEUE_LENGTH);
 
-	sha_dd->io_base = devm_platform_get_and_ioremap_resource(pdev, 0, &sha_res);
-	if (IS_ERR(sha_dd->io_base)) {
-		err = PTR_ERR(sha_dd->io_base);
+	/* Get the base address */
+	sha_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!sha_res) {
+		dev_err(dev, "no MEM resource info\n");
+		err = -ENODEV;
 		goto err_tasklet_kill;
 	}
 	sha_dd->phys_base = sha_res->start;
@@ -2627,6 +2632,13 @@ static int atmel_sha_probe(struct platform_device *pdev)
 	if (IS_ERR(sha_dd->iclk)) {
 		dev_err(dev, "clock initialization failed.\n");
 		err = PTR_ERR(sha_dd->iclk);
+		goto err_tasklet_kill;
+	}
+
+	sha_dd->io_base = devm_ioremap_resource(&pdev->dev, sha_res);
+	if (IS_ERR(sha_dd->io_base)) {
+		dev_err(dev, "can't ioremap\n");
+		err = PTR_ERR(sha_dd->io_base);
 		goto err_tasklet_kill;
 	}
 
@@ -2678,7 +2690,7 @@ err_tasklet_kill:
 	return err;
 }
 
-static void atmel_sha_remove(struct platform_device *pdev)
+static int atmel_sha_remove(struct platform_device *pdev)
 {
 	struct atmel_sha_dev *sha_dd = platform_get_drvdata(pdev);
 
@@ -2695,14 +2707,16 @@ static void atmel_sha_remove(struct platform_device *pdev)
 		atmel_sha_dma_cleanup(sha_dd);
 
 	clk_unprepare(sha_dd->iclk);
+
+	return 0;
 }
 
 static struct platform_driver atmel_sha_driver = {
 	.probe		= atmel_sha_probe,
-	.remove_new	= atmel_sha_remove,
+	.remove		= atmel_sha_remove,
 	.driver		= {
 		.name	= "atmel_sha",
-		.of_match_table	= atmel_sha_dt_ids,
+		.of_match_table	= of_match_ptr(atmel_sha_dt_ids),
 	},
 };
 

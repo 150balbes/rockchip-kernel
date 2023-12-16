@@ -10,10 +10,8 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/of_device.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/fpga/fpga-bridge.h>
 
 #define CTRL_CMD_DECOUPLE	BIT(0)
@@ -83,6 +81,7 @@ static const struct fpga_bridge_ops xlnx_pr_decoupler_br_ops = {
 	.enable_show = xlnx_pr_decoupler_enable_show,
 };
 
+#ifdef CONFIG_OF
 static const struct xlnx_config_data decoupler_config = {
 	.name = "Xilinx PR Decoupler",
 };
@@ -101,20 +100,30 @@ static const struct of_device_id xlnx_pr_decoupler_of_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, xlnx_pr_decoupler_of_match);
+#endif
 
 static int xlnx_pr_decoupler_probe(struct platform_device *pdev)
 {
+	struct device_node *np = pdev->dev.of_node;
 	struct xlnx_pr_decoupler_data *priv;
 	struct fpga_bridge *br;
 	int err;
+	struct resource *res;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	priv->ipconfig = device_get_match_data(&pdev->dev);
+	if (np) {
+		const struct of_device_id *match;
 
-	priv->io_base = devm_platform_ioremap_resource(pdev, 0);
+		match = of_match_node(xlnx_pr_decoupler_of_match, np);
+		if (match && match->data)
+			priv->ipconfig = match->data;
+	}
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->io_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(priv->io_base))
 		return PTR_ERR(priv->io_base);
 
@@ -167,7 +176,7 @@ static struct platform_driver xlnx_pr_decoupler_driver = {
 	.remove = xlnx_pr_decoupler_remove,
 	.driver = {
 		.name = "xlnx_pr_decoupler",
-		.of_match_table = xlnx_pr_decoupler_of_match,
+		.of_match_table = of_match_ptr(xlnx_pr_decoupler_of_match),
 	},
 };
 

@@ -52,4 +52,3 @@ module_exit(exit_rc_map_khadas)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Christian Hewitt <christianshewitt@gmail.com>");
-MODULE_DESCRIPTION("Khadas VIM/EDGE SBC remote controller keytable");

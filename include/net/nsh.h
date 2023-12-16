@@ -192,7 +192,7 @@
 
 /**
  * struct nsh_md1_ctx - Keeps track of NSH context data
- * @context: NSH Contexts.
+ * @nshc<1-4>: NSH Contexts.
  */
 struct nsh_md1_ctx {
 	__be32 context[4];

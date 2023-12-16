@@ -35,6 +35,7 @@ struct threads {
 	struct rb_root_cached  entries;
 	struct rw_semaphore    lock;
 	unsigned int	       nr;
+	struct list_head       dead;
 	struct thread	       *last_match;
 };
 

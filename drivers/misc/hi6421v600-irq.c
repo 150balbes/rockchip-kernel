@@ -244,8 +244,10 @@ static int hi6421v600_irq_probe(struct platform_device *pdev)
 	pmic_pdev = container_of(pmic_dev, struct platform_device, dev);
 
 	priv->irq = platform_get_irq(pmic_pdev, 0);
-	if (priv->irq < 0)
+	if (priv->irq < 0) {
+		dev_err(dev, "Error %d when getting IRQs\n", priv->irq);
 		return priv->irq;
+	}
 
 	platform_set_drvdata(pdev, priv);
 

@@ -859,14 +859,16 @@ static int sprd_dpu_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &dpu_component_ops);
 }
 
-static void sprd_dpu_remove(struct platform_device *pdev)
+static int sprd_dpu_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &dpu_component_ops);
+
+	return 0;
 }
 
 struct platform_driver sprd_dpu_driver = {
 	.probe = sprd_dpu_probe,
-	.remove_new = sprd_dpu_remove,
+	.remove = sprd_dpu_remove,
 	.driver = {
 		.name = "sprd-dpu-drv",
 		.of_match_table = dpu_match_table,

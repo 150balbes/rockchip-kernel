@@ -17,8 +17,6 @@
 
 struct mm_struct;
 
-#define NO_INTERLEAVE_INDEX (-1UL)	/* use task il_prev for interleaving */
-
 #ifdef CONFIG_NUMA
 
 /*
@@ -91,6 +89,8 @@ static inline struct mempolicy *mpol_dup(struct mempolicy *pol)
 	return pol;
 }
 
+#define vma_policy(vma) ((vma)->vm_policy)
+
 static inline void mpol_get(struct mempolicy *pol)
 {
 	if (pol)
@@ -107,30 +107,35 @@ static inline bool mpol_equal(struct mempolicy *a, struct mempolicy *b)
 
 /*
  * Tree of shared policies for a shared memory region.
+ * Maintain the policies in a pseudo mm that contains vmas. The vmas
+ * carry the policy. As a special twist the pseudo mm is indexed in pages, not
+ * bytes, so that we can work with shared memory segments bigger than
+ * unsigned long.
  */
+
+struct sp_node {
+	struct rb_node nd;
+	unsigned long start, end;
+	struct mempolicy *policy;
+};
+
 struct shared_policy {
 	struct rb_root root;
 	rwlock_t lock;
 };
-struct sp_node {
-	struct rb_node nd;
-	pgoff_t start, end;
-	struct mempolicy *policy;
-};
 
 int vma_dup_policy(struct vm_area_struct *src, struct vm_area_struct *dst);
 void mpol_shared_policy_init(struct shared_policy *sp, struct mempolicy *mpol);
-int mpol_set_shared_policy(struct shared_policy *sp,
-			   struct vm_area_struct *vma, struct mempolicy *mpol);
-void mpol_free_shared_policy(struct shared_policy *sp);
+int mpol_set_shared_policy(struct shared_policy *info,
+				struct vm_area_struct *vma,
+				struct mempolicy *new);
+void mpol_free_shared_policy(struct shared_policy *p);
 struct mempolicy *mpol_shared_policy_lookup(struct shared_policy *sp,
-					    pgoff_t idx);
+					    unsigned long idx);
 
 struct mempolicy *get_task_policy(struct task_struct *p);
 struct mempolicy *__get_vma_policy(struct vm_area_struct *vma,
-		unsigned long addr, pgoff_t *ilx);
-struct mempolicy *get_vma_policy(struct vm_area_struct *vma,
-		unsigned long addr, int order, pgoff_t *ilx);
+		unsigned long addr);
 bool vma_policy_mof(struct vm_area_struct *vma);
 
 extern void numa_default_policy(void);
@@ -144,6 +149,8 @@ extern int huge_node(struct vm_area_struct *vma,
 extern bool init_nodemask_of_mempolicy(nodemask_t *mask);
 extern bool mempolicy_in_oom_domain(struct task_struct *tsk,
 				const nodemask_t *mask);
+extern nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy);
+
 extern unsigned int mempolicy_slab_node(void);
 
 extern enum zone_type policy_zone;
@@ -167,7 +174,7 @@ extern void mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol);
 /* Check if a vma is migratable */
 extern bool vma_migratable(struct vm_area_struct *vma);
 
-int mpol_misplaced(struct folio *, struct vm_area_struct *, unsigned long);
+extern int mpol_misplaced(struct page *, struct vm_area_struct *, unsigned long);
 extern void mpol_put_task_policy(struct task_struct *);
 
 static inline bool mpol_is_preferred_many(struct mempolicy *pol)
@@ -181,17 +188,12 @@ extern bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone);
 
 struct mempolicy {};
 
-static inline struct mempolicy *get_task_policy(struct task_struct *p)
-{
-	return NULL;
-}
-
 static inline bool mpol_equal(struct mempolicy *a, struct mempolicy *b)
 {
 	return true;
 }
 
-static inline void mpol_put(struct mempolicy *pol)
+static inline void mpol_put(struct mempolicy *p)
 {
 }
 
@@ -210,22 +212,17 @@ static inline void mpol_shared_policy_init(struct shared_policy *sp,
 {
 }
 
-static inline void mpol_free_shared_policy(struct shared_policy *sp)
+static inline void mpol_free_shared_policy(struct shared_policy *p)
 {
 }
 
 static inline struct mempolicy *
-mpol_shared_policy_lookup(struct shared_policy *sp, pgoff_t idx)
+mpol_shared_policy_lookup(struct shared_policy *sp, unsigned long idx)
 {
 	return NULL;
 }
 
-static inline struct mempolicy *get_vma_policy(struct vm_area_struct *vma,
-				unsigned long addr, int order, pgoff_t *ilx)
-{
-	*ilx = 0;
-	return NULL;
-}
+#define vma_policy(vma) NULL
 
 static inline int
 vma_dup_policy(struct vm_area_struct *src, struct vm_area_struct *dst)
@@ -281,8 +278,7 @@ static inline int mpol_parse_str(char *str, struct mempolicy **mpol)
 }
 #endif
 
-static inline int mpol_misplaced(struct folio *folio,
-				 struct vm_area_struct *vma,
+static inline int mpol_misplaced(struct page *page, struct vm_area_struct *vma,
 				 unsigned long address)
 {
 	return -1; /* no node preference */

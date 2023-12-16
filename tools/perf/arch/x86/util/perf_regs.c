@@ -5,7 +5,6 @@
 #include <linux/kernel.h>
 #include <linux/zalloc.h>
 
-#include "perf_regs.h"
 #include "../../../perf-sys.h"
 #include "../../../util/perf_regs.h"
 #include "../../../util/debug.h"
@@ -316,10 +315,5 @@ uint64_t arch__intr_reg_mask(void)
 		return (PERF_REG_EXTENDED_MASK | PERF_REGS_MASK);
 	}
 
-	return PERF_REGS_MASK;
-}
-
-uint64_t arch__user_reg_mask(void)
-{
 	return PERF_REGS_MASK;
 }

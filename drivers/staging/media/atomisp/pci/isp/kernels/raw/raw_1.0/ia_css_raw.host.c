@@ -73,9 +73,17 @@ int ia_css_raw_config(struct sh_css_isp_raw_isp_config *to,
 	const struct ia_css_frame_info *internal_info = from->internal_info;
 	int ret;
 
-	if (!IS_ISP2401 || !in_info)
+#if !defined(ISP2401)
+	/* 2401 input system uses input width width */
+	in_info = internal_info;
+#else
+	/*in some cases, in_info is NULL*/
+	if (in_info)
+		(void)internal_info;
+	else
 		in_info = internal_info;
 
+#endif
 	ret = ia_css_dma_configure_from_info(&to->port_b, in_info);
 	if (ret)
 		return ret;
@@ -91,12 +99,11 @@ int ia_css_raw_config(struct sh_css_isp_raw_isp_config *to,
 	to->two_ppc             = from->two_ppc;
 	to->stream_format       = css2isp_stream_format(from->stream_format);
 	to->deinterleaved       = from->deinterleaved;
-
-	if (IS_ISP2401) {
-		to->start_column        = in_info->crop_info.start_column;
-		to->start_line          = in_info->crop_info.start_line;
-		to->enable_left_padding = from->enable_left_padding;
-	}
+#if defined(ISP2401)
+	to->start_column        = in_info->crop_info.start_column;
+	to->start_line          = in_info->crop_info.start_line;
+	to->enable_left_padding = from->enable_left_padding;
+#endif
 
 	return 0;
 }

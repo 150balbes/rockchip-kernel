@@ -367,13 +367,15 @@ static int rt8515_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void rt8515_remove(struct platform_device *pdev)
+static int rt8515_remove(struct platform_device *pdev)
 {
 	struct rt8515 *rt = platform_get_drvdata(pdev);
 
 	rt8515_v4l2_flash_release(rt);
 	del_timer_sync(&rt->powerdown_timer);
 	mutex_destroy(&rt->lock);
+
+	return 0;
 }
 
 static const struct of_device_id rt8515_match[] = {
@@ -388,7 +390,7 @@ static struct platform_driver rt8515_driver = {
 		.of_match_table = rt8515_match,
 	},
 	.probe  = rt8515_probe,
-	.remove_new = rt8515_remove,
+	.remove = rt8515_remove,
 };
 module_platform_driver(rt8515_driver);
 

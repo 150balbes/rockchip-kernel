@@ -46,14 +46,26 @@
 
 &dsi {
 	status = "okay";
-};
+	phy-dsi-supply = <&reg18>;
 
-&dsi_in {
-	remote-endpoint = <&ltdc_out_dsi>;
-};
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
 
-&dsi_out {
-	remote-endpoint = <&bridge_in_dsi>;
+		port@0 {
+			reg = <0>;
+			dsi_in_ltdc: endpoint {
+				remote-endpoint = <&ltdc_out_dsi>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			dsi_out_bridge: endpoint {
+				remote-endpoint = <&bridge_in_dsi>;
+			};
+		};
+	};
 };
 
 &i2c6 {
@@ -76,7 +88,7 @@
 			port@0 {
 				reg = <0>;
 				bridge_in_dsi: endpoint {
-					remote-endpoint = <&dsi_out>;
+					remote-endpoint = <&dsi_out_bridge>;
 					data-lanes = <1 2>;
 				};
 			};
@@ -96,7 +108,7 @@
 
 	port {
 		ltdc_out_dsi: endpoint {
-			remote-endpoint = <&dsi_in>;
+			remote-endpoint = <&dsi_in_ltdc>;
 		};
 	};
 };

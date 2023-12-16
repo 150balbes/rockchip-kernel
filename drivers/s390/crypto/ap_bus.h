@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * Copyright IBM Corp. 2006, 2023
+ * Copyright IBM Corp. 2006, 2019
  * Author(s): Cornelia Huck <cornelia.huck@de.ibm.com>
  *	      Martin Schwidefsky <schwidefsky@de.ibm.com>
  *	      Ralph Wuerthner <rwuerthn@de.ibm.com>
@@ -67,8 +67,15 @@ static inline int ap_test_bit(unsigned int *ptr, unsigned int nr)
 #define AP_RESPONSE_INVALID_DOMAIN	     0x42
 
 /*
- * Supported AP device types
+ * Known device types
  */
+#define AP_DEVICE_TYPE_PCICC	3
+#define AP_DEVICE_TYPE_PCICA	4
+#define AP_DEVICE_TYPE_PCIXCC	5
+#define AP_DEVICE_TYPE_CEX2A	6
+#define AP_DEVICE_TYPE_CEX2C	7
+#define AP_DEVICE_TYPE_CEX3A	8
+#define AP_DEVICE_TYPE_CEX3C	9
 #define AP_DEVICE_TYPE_CEX4	10
 #define AP_DEVICE_TYPE_CEX5	11
 #define AP_DEVICE_TYPE_CEX6	12
@@ -206,7 +213,7 @@ struct ap_queue {
 	bool config;			/* configured state */
 	bool chkstop;			/* checkstop state */
 	ap_qid_t qid;			/* AP queue id. */
-	bool se_bound;			/* SE bound state */
+	bool interrupt;			/* indicate if interrupts are enabled */
 	unsigned int assoc_idx;		/* SE association index */
 	int queue_count;		/* # messages currently on AP queue. */
 	int pendingq_count;		/* # requests on pendingq list. */
@@ -265,17 +272,23 @@ static inline void ap_release_message(struct ap_message *ap_msg)
 	kfree_sensitive(ap_msg->private);
 }
 
+/*
+ * Note: don't use ap_send/ap_recv after using ap_queue_message
+ * for the first time. Otherwise the ap message queue will get
+ * confused.
+ */
+int ap_send(ap_qid_t qid, unsigned long psmid, void *msg, size_t msglen);
+int ap_recv(ap_qid_t qid, unsigned long *psmid, void *msg, size_t msglen);
+
 enum ap_sm_wait ap_sm_event(struct ap_queue *aq, enum ap_sm_event event);
 enum ap_sm_wait ap_sm_event_loop(struct ap_queue *aq, enum ap_sm_event event);
 
 int ap_queue_message(struct ap_queue *aq, struct ap_message *ap_msg);
 void ap_cancel_message(struct ap_queue *aq, struct ap_message *ap_msg);
 void ap_flush_queue(struct ap_queue *aq);
-bool ap_queue_usable(struct ap_queue *aq);
 
 void *ap_airq_ptr(void);
 int ap_sb_available(void);
-bool ap_is_se_guest(void);
 void ap_wait(enum ap_sm_wait wait);
 void ap_request_timeout(struct timer_list *t);
 void ap_bus_force_rescan(void);
@@ -288,7 +301,6 @@ struct ap_queue *ap_queue_create(ap_qid_t qid, int device_type);
 void ap_queue_prepare_remove(struct ap_queue *aq);
 void ap_queue_remove(struct ap_queue *aq);
 void ap_queue_init_state(struct ap_queue *aq);
-void _ap_queue_init_state(struct ap_queue *aq);
 
 struct ap_card *ap_card_create(int id, int queue_depth, int raw_type,
 			       int comp_type, unsigned int functions, int ml);

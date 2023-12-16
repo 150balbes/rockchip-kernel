@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (GPL-2.0+ OR MIT) */
+/* SPDX-License-Identifier: (GPL-2.0+ or MIT) */
 /*
  * Copyright (c) 2021 Amlogic, Inc.
  * Author: Shunzhou Jiang <shunzhou.jiang@amlogic.com>

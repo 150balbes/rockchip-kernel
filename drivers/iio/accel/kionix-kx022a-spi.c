@@ -2,7 +2,7 @@
 /*
  * Copyright (C) 2022 ROHM Semiconductors
  *
- * ROHM/KIONIX accelerometer driver
+ * ROHM/KIONIX KX022A accelerometer driver
  */
 
 #include <linux/interrupt.h>
@@ -15,7 +15,6 @@
 static int kx022a_spi_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
-	const struct kx022a_chip_info *chip_info;
 	struct regmap *regmap;
 
 	if (!spi->irq) {
@@ -23,30 +22,22 @@ static int kx022a_spi_probe(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	chip_info = spi_get_device_match_data(spi);
-	if (!chip_info)
-		return -EINVAL;
-
-	regmap = devm_regmap_init_spi(spi, chip_info->regmap_config);
+	regmap = devm_regmap_init_spi(spi, &kx022a_regmap);
 	if (IS_ERR(regmap))
 		return dev_err_probe(dev, PTR_ERR(regmap),
 				     "Failed to initialize Regmap\n");
 
-	return kx022a_probe_internal(dev, chip_info);
+	return kx022a_probe_internal(dev);
 }
 
 static const struct spi_device_id kx022a_id[] = {
-	{ .name = "kx022a", .driver_data = (kernel_ulong_t)&kx022a_chip_info },
-	{ .name = "kx132-1211", .driver_data = (kernel_ulong_t)&kx132_chip_info },
-	{ .name = "kx132acr-lbz", .driver_data = (kernel_ulong_t)&kx132acr_chip_info },
+	{ "kx022a" },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, kx022a_id);
 
 static const struct of_device_id kx022a_of_match[] = {
-	{ .compatible = "kionix,kx022a", .data = &kx022a_chip_info },
-	{ .compatible = "kionix,kx132-1211", .data = &kx132_chip_info },
-	{ .compatible = "rohm,kx132acr-lbz", .data = &kx132acr_chip_info },
+	{ .compatible = "kionix,kx022a", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, kx022a_of_match);

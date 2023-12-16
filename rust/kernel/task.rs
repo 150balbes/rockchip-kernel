@@ -82,7 +82,7 @@ impl Task {
     /// Returns a task reference for the currently executing task/thread.
     ///
     /// The recommended way to get the current task/thread is to use the
-    /// [`current`] macro because it is safe.
+    /// [`current`](crate::current) macro because it is safe.
     ///
     /// # Safety
     ///

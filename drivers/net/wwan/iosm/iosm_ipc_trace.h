@@ -29,7 +29,7 @@ enum trace_ctrl_mode {
  * @ipc_imem:		Imem instance
  * @dev:		Pointer to device struct
  * @channel:		Channel instance
- * @chl_id:		Channel Identifier
+ * @chl_id:		Channel Indentifier
  * @trc_mutex:		Mutex used for read and write mode
  * @mode:		Mode for enable and disable trace
  */

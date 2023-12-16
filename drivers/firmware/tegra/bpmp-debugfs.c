@@ -610,7 +610,7 @@ static int debugfs_show(struct seq_file *m, void *p)
 	}
 
 	len = strlen(filename);
-	strscpy_pad(namevirt, filename, namesize);
+	strncpy(namevirt, filename, namesize);
 
 	err = mrq_debugfs_read(bpmp, namephys, len, dataphys, datasize,
 			       &nbytes);
@@ -661,7 +661,7 @@ static ssize_t debugfs_store(struct file *file, const char __user *buf,
 	}
 
 	len = strlen(filename);
-	strscpy_pad(namevirt, filename, namesize);
+	strncpy(namevirt, filename, namesize);
 
 	if (copy_from_user(datavirt, buf, count)) {
 		err = -EFAULT;

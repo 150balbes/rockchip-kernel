@@ -108,7 +108,7 @@ struct ccu_nm {
 		},							\
 	}
 
-#define SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX_FEAT(_struct, _name,	\
+#define SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX(_struct, _name,	\
 						 _parent, _reg,		\
 						 _min_rate, _max_rate,	\
 						 _nshift, _nwidth,	\
@@ -116,8 +116,7 @@ struct ccu_nm {
 						 _frac_en, _frac_sel,	\
 						 _frac_rate_0,		\
 						 _frac_rate_1,		\
-						 _gate, _lock, _flags,	\
-						 _features)		\
+						 _gate, _lock, _flags)	\
 	struct ccu_nm _struct = {					\
 		.enable		= _gate,				\
 		.lock		= _lock,				\
@@ -130,54 +129,13 @@ struct ccu_nm {
 		.max_rate	= _max_rate,				\
 		.common		= {					\
 			.reg		= _reg,				\
-			.features	= _features,			\
+			.features	= CCU_FEATURE_FRACTIONAL,	\
 			.hw.init	= CLK_HW_INIT(_name,		\
 						      _parent,		\
 						      &ccu_nm_ops,	\
 						      _flags),		\
 		},							\
 	}
-
-#define SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX(_struct, _name,	\
-						 _parent, _reg,		\
-						 _min_rate, _max_rate,	\
-						 _nshift, _nwidth,	\
-						 _mshift, _mwidth,	\
-						 _frac_en, _frac_sel,	\
-						 _frac_rate_0,		\
-						 _frac_rate_1,		\
-						 _gate, _lock, _flags)	\
-	SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX_FEAT(_struct, _name,	\
-						_parent, _reg,		\
-						_min_rate, _max_rate,	\
-						_nshift, _nwidth,	\
-						_mshift, _mwidth,	\
-						_frac_en, _frac_sel,	\
-						_frac_rate_0,		\
-						_frac_rate_1,		\
-						_gate, _lock, _flags,	\
-						CCU_FEATURE_FRACTIONAL)
-
-#define SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX_CLOSEST(_struct, _name, \
-						 _parent, _reg,		\
-						 _min_rate, _max_rate,	\
-						 _nshift, _nwidth,	\
-						 _mshift, _mwidth,	\
-						 _frac_en, _frac_sel,	\
-						 _frac_rate_0,		\
-						 _frac_rate_1,		\
-						 _gate, _lock, _flags)	\
-	SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK_MIN_MAX_FEAT(_struct, _name,	\
-						_parent, _reg,		\
-						_min_rate, _max_rate,	\
-						_nshift, _nwidth,	\
-						_mshift, _mwidth,	\
-						_frac_en, _frac_sel,	\
-						_frac_rate_0,		\
-						_frac_rate_1,		\
-						_gate, _lock, _flags,	\
-						CCU_FEATURE_FRACTIONAL |\
-						CCU_FEATURE_CLOSEST_RATE)
 
 #define SUNXI_CCU_NM_WITH_GATE_LOCK(_struct, _name, _parent, _reg,	\
 				    _nshift, _nwidth,			\

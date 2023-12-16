@@ -12,8 +12,7 @@
 #include <linux/semaphore.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/mtd/partitions.h>
 
 #include <asm/octeon/octeon.h>

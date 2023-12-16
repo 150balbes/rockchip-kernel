@@ -4,6 +4,7 @@
 #include <linux/mm.h>
 #include <linux/mmdebug.h>
 #include <linux/highmem.h>
+#include <linux/page_ext.h>
 #include <linux/poison.h>
 #include <linux/ratelimit.h>
 #include <linux/kasan.h>

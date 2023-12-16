@@ -1,5 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later
-** -*- mode: asm -*-
+/* -*- mode: asm -*-
 **
 ** head.S -- This file contains the initial boot code for the
 **	     Linux/68k kernel.
@@ -26,6 +25,11 @@
 **            for linux-2.1.115
 ** 1999/02/11  Richard Zidlicky: added Q40 support (initial version 99/01/01)
 ** 2004/05/13 Kars de Jong: Finalised HP300 support
+**
+** This file is subject to the terms and conditions of the GNU General Public
+** License. See the file README.legal in the main directory of this archive
+** for more details.
+**
 */
 
 /*

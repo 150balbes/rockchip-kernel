@@ -1675,19 +1675,16 @@ static int wsa_macro_spk_boost_event(struct snd_soc_dapm_widget *w,
 	u16 boost_path_ctl, boost_path_cfg1;
 	u16 reg, reg_mix;
 
-	if (!snd_soc_dapm_widget_name_cmp(w, "WSA_RX INT0 CHAIN")) {
+	if (!strcmp(w->name, "WSA_RX INT0 CHAIN")) {
 		boost_path_ctl = CDC_WSA_BOOST0_BOOST_PATH_CTL;
 		boost_path_cfg1 = CDC_WSA_RX0_RX_PATH_CFG1;
 		reg = CDC_WSA_RX0_RX_PATH_CTL;
 		reg_mix = CDC_WSA_RX0_RX_PATH_MIX_CTL;
-	} else if (!snd_soc_dapm_widget_name_cmp(w, "WSA_RX INT1 CHAIN")) {
+	} else if (!strcmp(w->name, "WSA_RX INT1 CHAIN")) {
 		boost_path_ctl = CDC_WSA_BOOST1_BOOST_PATH_CTL;
 		boost_path_cfg1 = CDC_WSA_RX1_RX_PATH_CFG1;
 		reg = CDC_WSA_RX1_RX_PATH_CTL;
 		reg_mix = CDC_WSA_RX1_RX_PATH_MIX_CTL;
-	} else {
-		dev_warn(component->dev, "Incorrect widget name in the driver\n");
-		return -EINVAL;
 	}
 
 	switch (event) {
@@ -2399,25 +2396,25 @@ static int wsa_macro_probe(struct platform_device *pdev)
 
 	wsa->macro = devm_clk_get_optional(dev, "macro");
 	if (IS_ERR(wsa->macro))
-		return dev_err_probe(dev, PTR_ERR(wsa->macro), "unable to get macro clock\n");
+		return PTR_ERR(wsa->macro);
 
 	wsa->dcodec = devm_clk_get_optional(dev, "dcodec");
 	if (IS_ERR(wsa->dcodec))
-		return dev_err_probe(dev, PTR_ERR(wsa->dcodec), "unable to get dcodec clock\n");
+		return PTR_ERR(wsa->dcodec);
 
 	wsa->mclk = devm_clk_get(dev, "mclk");
 	if (IS_ERR(wsa->mclk))
-		return dev_err_probe(dev, PTR_ERR(wsa->mclk), "unable to get mclk clock\n");
+		return PTR_ERR(wsa->mclk);
 
 	if (flags & LPASS_MACRO_FLAG_HAS_NPL_CLOCK) {
 		wsa->npl = devm_clk_get(dev, "npl");
 		if (IS_ERR(wsa->npl))
-			return dev_err_probe(dev, PTR_ERR(wsa->npl), "unable to get npl clock\n");
+			return PTR_ERR(wsa->npl);
 	}
 
 	wsa->fsgen = devm_clk_get(dev, "fsgen");
 	if (IS_ERR(wsa->fsgen))
-		return dev_err_probe(dev, PTR_ERR(wsa->fsgen), "unable to get fsgen clock\n");
+		return PTR_ERR(wsa->fsgen);
 
 	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))

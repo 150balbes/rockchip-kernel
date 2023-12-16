@@ -11,8 +11,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 #define CTRL		0x0
 #define  PD		BIT(0)

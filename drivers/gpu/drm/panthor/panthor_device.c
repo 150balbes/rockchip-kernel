@@ -47,34 +47,16 @@ static int panthor_clk_init(struct panthor_device *ptdev)
 
 void panthor_device_unplug(struct panthor_device *ptdev)
 {
-	/* This function can be called from two different path: the reset work
-	 * and the platform device remove callback. drm_dev_unplug() doesn't
-	 * deal with concurrent callers, so we have to protect drm_dev_unplug()
-	 * calls with our own lock, and bail out if the device is already
-	 * unplugged.
-	 */
-	mutex_lock(&ptdev->unplug.lock);
-	if (drm_dev_is_unplugged(&ptdev->base)) {
-		/* Someone beat us, release the lock and wait for the unplug
-		 * operation to be reported as done.
-		 **/
-		mutex_unlock(&ptdev->unplug.lock);
-		wait_for_completion(&ptdev->unplug.done);
+	/* FIXME: This is racy. */
+	if (drm_dev_is_unplugged(&ptdev->base))
 		return;
-	}
+
+	drm_WARN_ON(&ptdev->base, pm_runtime_get_sync(ptdev->base.dev) < 0);
 
 	/* Call drm_dev_unplug() so any access to HW block happening after
 	 * that point get rejected.
 	 */
 	drm_dev_unplug(&ptdev->base);
-
-	/* We do the rest of the unplug with the unplug lock released,
-	 * Future callers will wait on ptdev->unplug.done anyway.
-	 */
-	mutex_unlock(&ptdev->unplug.lock);
-
-	drm_WARN_ON(&ptdev->base, pm_runtime_get_sync(ptdev->base.dev) < 0);
-
 
 	/* Now, try to cleanly shutdown the GPU before the device resources
 	 * get reclaimed.
@@ -86,11 +68,6 @@ void panthor_device_unplug(struct panthor_device *ptdev)
 
 	pm_runtime_dont_use_autosuspend(ptdev->base.dev);
 	pm_runtime_put_sync_suspend(ptdev->base.dev);
-
-	/* Report the unplug operation as done to unblock concurrent
-	 * panthor_device_unplug() callers.
-	 */
-	complete_all(&ptdev->unplug.done);
 }
 
 static void panthor_device_reset_cleanup(struct drm_device *ddev, void *data)
@@ -131,13 +108,13 @@ static void panthor_device_reset_work(struct work_struct *work)
 	atomic_set(&ptdev->reset.pending, 0);
 	panthor_sched_post_reset(ptdev);
 
-out_dev_exit:
-	drm_dev_exit(cookie);
-
 	if (ret) {
 		panthor_device_unplug(ptdev);
 		drm_err(&ptdev->base, "Failed to boot MCU after reset, making device unusable.");
 	}
+
+out_dev_exit:
+	drm_dev_exit(cookie);
 }
 
 static bool panthor_device_is_initialized(struct panthor_device *ptdev)
@@ -158,15 +135,7 @@ int panthor_device_init(struct panthor_device *ptdev)
 
 	ptdev->coherent = device_get_dma_attr(ptdev->base.dev) == DEV_DMA_COHERENT;
 
-	init_completion(&ptdev->unplug.done);
-	ret = drmm_mutex_init(&ptdev->base, &ptdev->unplug.lock);
-	if (ret)
-		return ret;
-
-	ret = drmm_mutex_init(&ptdev->base, &ptdev->pm.mmio_lock);
-	if (ret)
-		return ret;
-
+	drmm_mutex_init(&ptdev->base, &ptdev->pm.mmio_lock);
 	atomic_set(&ptdev->pm.state, PANTHOR_DEVICE_PM_STATE_SUSPENDED);
 	p = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (!p)

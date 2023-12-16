@@ -453,13 +453,11 @@
 
 	serial@70006040 {
 		compatible = "nvidia,tegra20-hsuart";
-		reset-names = "serial";
 		/delete-property/ reg-shift;
 	};
 
 	serial@70006300 {
 		compatible = "nvidia,tegra20-hsuart";
-		reset-names = "serial";
 		/delete-property/ reg-shift;
 	};
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Portions
- * Copyright (C) 2022-2023 Intel Corporation
+ * Copyright (C) 2022 Intel Corporation
  */
 #include <linux/ieee80211.h>
 #include <linux/export.h>
@@ -109,7 +109,7 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 
 	BUILD_BUG_ON(IEEE80211_MAX_SSID_LEN != IEEE80211_MAX_MESH_ID_LEN);
 
-	lockdep_assert_wiphy(wdev->wiphy);
+	ASSERT_WDEV_LOCK(wdev);
 
 	if (dev->ieee80211_ptr->iftype != NL80211_IFTYPE_MESH_POINT)
 		return -EOPNOTSUPP;
@@ -172,6 +172,7 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 	 * basic rates
 	 */
 	if (!setup->basic_rates) {
+		enum nl80211_bss_scan_width scan_width;
 		struct ieee80211_supported_band *sband =
 				rdev->wiphy.bands[setup->chandef.chan->band];
 
@@ -192,7 +193,9 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 				}
 			}
 		} else {
-			setup->basic_rates = ieee80211_mandatory_rates(sband);
+			scan_width = cfg80211_chandef_to_scan_width(&setup->chandef);
+			setup->basic_rates = ieee80211_mandatory_rates(sband,
+								       scan_width);
 		}
 	}
 
@@ -254,13 +257,13 @@ int cfg80211_set_mesh_channel(struct cfg80211_registered_device *rdev,
 	return 0;
 }
 
-int cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
-			struct net_device *dev)
+int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
+			  struct net_device *dev)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
 	int err;
 
-	lockdep_assert_wiphy(wdev->wiphy);
+	ASSERT_WDEV_LOCK(wdev);
 
 	if (dev->ieee80211_ptr->iftype != NL80211_IFTYPE_MESH_POINT)
 		return -EOPNOTSUPP;
@@ -281,6 +284,19 @@ int cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
 		rdev_set_qos_map(rdev, dev, NULL);
 		cfg80211_sched_dfs_chan_update(rdev);
 	}
+
+	return err;
+}
+
+int cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
+			struct net_device *dev)
+{
+	struct wireless_dev *wdev = dev->ieee80211_ptr;
+	int err;
+
+	wdev_lock(wdev);
+	err = __cfg80211_leave_mesh(rdev, dev);
+	wdev_unlock(wdev);
 
 	return err;
 }

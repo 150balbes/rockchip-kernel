@@ -85,7 +85,7 @@ static struct orc_entry *__orc_find(int *ip_table, struct orc_entry *u_table,
 {
 	int *first = ip_table;
 	int *last = ip_table + num_entries - 1;
-	int *mid, *found = first;
+	int *mid = first, *found = first;
 
 	if (!num_entries)
 		return NULL;

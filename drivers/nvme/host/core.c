@@ -420,7 +420,7 @@ void nvme_complete_rq(struct request *req)
 		nvme_failover_req(req);
 		return;
 	case AUTHENTICATE:
-#ifdef CONFIG_NVME_HOST_AUTH
+#ifdef CONFIG_NVME_AUTH
 		queue_work(nvme_wq, &ctrl->dhchap_auth_work);
 		nvme_retry_req(req);
 #else
@@ -1813,18 +1813,16 @@ set_pi:
 	return ret;
 }
 
-static int nvme_configure_metadata(struct nvme_ns *ns, struct nvme_id_ns *id)
+static void nvme_configure_metadata(struct nvme_ns *ns, struct nvme_id_ns *id)
 {
 	struct nvme_ctrl *ctrl = ns->ctrl;
-	int ret;
 
-	ret = nvme_init_ms(ns, id);
-	if (ret)
-		return ret;
+	if (nvme_init_ms(ns, id))
+		return;
 
 	ns->features &= ~(NVME_NS_METADATA_SUPPORTED | NVME_NS_EXT_LBAS);
 	if (!ns->ms || !(ctrl->ops->flags & NVME_F_METADATA_SUPPORTED))
-		return 0;
+		return;
 
 	if (ctrl->ops->flags & NVME_F_FABRICS) {
 		/*
@@ -1833,7 +1831,7 @@ static int nvme_configure_metadata(struct nvme_ns *ns, struct nvme_id_ns *id)
 		 * remap the separate metadata buffer from the block layer.
 		 */
 		if (WARN_ON_ONCE(!(id->flbas & NVME_NS_FLBAS_META_EXT)))
-			return 0;
+			return;
 
 		ns->features |= NVME_NS_EXT_LBAS;
 
@@ -1860,7 +1858,6 @@ static int nvme_configure_metadata(struct nvme_ns *ns, struct nvme_id_ns *id)
 		else
 			ns->features |= NVME_NS_METADATA_SUPPORTED;
 	}
-	return 0;
 }
 
 static void nvme_set_queue_limits(struct nvme_ctrl *ctrl,
@@ -2034,11 +2031,7 @@ static int nvme_update_ns_info_block(struct nvme_ns *ns,
 	ns->lba_shift = id->lbaf[lbaf].ds;
 	nvme_set_queue_limits(ns->ctrl, ns->queue);
 
-	ret = nvme_configure_metadata(ns, id);
-	if (ret < 0) {
-		blk_mq_unfreeze_queue(ns->disk->queue);
-		goto out;
-	}
+	nvme_configure_metadata(ns, id);
 	nvme_set_chunk_sectors(ns, id);
 	nvme_update_disk_info(ns->disk, ns, id);
 
@@ -2252,8 +2245,25 @@ int nvme_enable_ctrl(struct nvme_ctrl *ctrl)
 	else
 		ctrl->ctrl_config = NVME_CC_CSS_NVM;
 
-	if (ctrl->cap & NVME_CAP_CRMS_CRWMS && ctrl->cap & NVME_CAP_CRMS_CRIMS)
-		ctrl->ctrl_config |= NVME_CC_CRIME;
+	if (ctrl->cap & NVME_CAP_CRMS_CRWMS) {
+		u32 crto;
+
+		ret = ctrl->ops->reg_read32(ctrl, NVME_REG_CRTO, &crto);
+		if (ret) {
+			dev_err(ctrl->device, "Reading CRTO failed (%d)\n",
+				ret);
+			return ret;
+		}
+
+		if (ctrl->cap & NVME_CAP_CRMS_CRIMS) {
+			ctrl->ctrl_config |= NVME_CC_CRIME;
+			timeout = NVME_CRTO_CRIMT(crto);
+		} else {
+			timeout = NVME_CRTO_CRWMT(crto);
+		}
+	} else {
+		timeout = NVME_CAP_TIMEOUT(ctrl->cap);
+	}
 
 	ctrl->ctrl_config |= (NVME_CTRL_PAGE_SHIFT - 12) << NVME_CC_MPS_SHIFT;
 	ctrl->ctrl_config |= NVME_CC_AMS_RR | NVME_CC_SHN_NONE;
@@ -2266,39 +2276,6 @@ int nvme_enable_ctrl(struct nvme_ctrl *ctrl)
 	ret = ctrl->ops->reg_read32(ctrl, NVME_REG_CC, &ctrl->ctrl_config);
 	if (ret)
 		return ret;
-
-	/* CAP value may change after initial CC write */
-	ret = ctrl->ops->reg_read64(ctrl, NVME_REG_CAP, &ctrl->cap);
-	if (ret)
-		return ret;
-
-	timeout = NVME_CAP_TIMEOUT(ctrl->cap);
-	if (ctrl->cap & NVME_CAP_CRMS_CRWMS) {
-		u32 crto, ready_timeout;
-
-		ret = ctrl->ops->reg_read32(ctrl, NVME_REG_CRTO, &crto);
-		if (ret) {
-			dev_err(ctrl->device, "Reading CRTO failed (%d)\n",
-				ret);
-			return ret;
-		}
-
-		/*
-		 * CRTO should always be greater or equal to CAP.TO, but some
-		 * devices are known to get this wrong. Use the larger of the
-		 * two values.
-		 */
-		if (ctrl->ctrl_config & NVME_CC_CRIME)
-			ready_timeout = NVME_CRTO_CRIMT(crto);
-		else
-			ready_timeout = NVME_CRTO_CRWMT(crto);
-
-		if (ready_timeout < timeout)
-			dev_warn_once(ctrl->device, "bad crto:%x cap:%llx\n",
-				      crto, ctrl->cap);
-		else
-			timeout = ready_timeout;
-	}
 
 	ctrl->ctrl_config |= NVME_CC_ENABLE;
 	ret = ctrl->ops->reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
@@ -3206,8 +3183,6 @@ int nvme_init_ctrl_finish(struct nvme_ctrl *ctrl, bool was_suspended)
 	clear_bit(NVME_CTRL_DIRTY_CAPABILITY, &ctrl->flags);
 	ctrl->identified = true;
 
-	nvme_start_keep_alive(ctrl);
-
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nvme_init_ctrl_finish);
@@ -3958,12 +3933,6 @@ void nvme_remove_namespaces(struct nvme_ctrl *ctrl)
 	 */
 	nvme_mpath_clear_ctrl_paths(ctrl);
 
-	/*
-	 * Unquiesce io queues so any pending IO won't hang, especially
-	 * those submitted from scan work
-	 */
-	nvme_unquiesce_io_queues(ctrl);
-
 	/* prevent racing with ns scanning */
 	flush_work(&ctrl->scan_work);
 
@@ -3973,8 +3942,10 @@ void nvme_remove_namespaces(struct nvme_ctrl *ctrl)
 	 * removing the namespaces' disks; fail all the queues now to avoid
 	 * potentially having to clean up the failed sync later.
 	 */
-	if (ctrl->state == NVME_CTRL_DEAD)
+	if (ctrl->state == NVME_CTRL_DEAD) {
 		nvme_mark_namespaces_dead(ctrl);
+		nvme_unquiesce_io_queues(ctrl);
+	}
 
 	/* this is a no-op when called from the controller reset handler */
 	nvme_change_ctrl_state(ctrl, NVME_CTRL_DELETING_NOIO);
@@ -4082,21 +4053,8 @@ static void nvme_get_fw_slot_info(struct nvme_ctrl *ctrl)
 		return;
 
 	if (nvme_get_log(ctrl, NVME_NSID_ALL, NVME_LOG_FW_SLOT, 0, NVME_CSI_NVM,
-			 log, sizeof(*log), 0)) {
+			log, sizeof(*log), 0))
 		dev_warn(ctrl->device, "Get FW SLOT INFO log error\n");
-		goto out_free_log;
-	}
-
-	if (log->afi & 0x70 || !(log->afi & 0x7)) {
-		dev_info(ctrl->device,
-			 "Firmware is activated after next Controller Level Reset\n");
-		goto out_free_log;
-	}
-
-	memcpy(ctrl->subsys->firmware_rev, &log->frs[(log->afi & 0x7) - 1],
-		sizeof(ctrl->subsys->firmware_rev));
-
-out_free_log:
 	kfree(log);
 }
 
@@ -4365,6 +4323,8 @@ EXPORT_SYMBOL_GPL(nvme_stop_ctrl);
 
 void nvme_start_ctrl(struct nvme_ctrl *ctrl)
 {
+	nvme_start_keep_alive(ctrl);
+
 	nvme_enable_aen(ctrl);
 
 	/*
@@ -4419,7 +4379,7 @@ static void nvme_free_ctrl(struct device *dev)
 
 	if (!subsys || ctrl->instance != subsys->instance)
 		ida_free(&nvme_instance_ida, ctrl->instance);
-	key_put(ctrl->tls_key);
+
 	nvme_free_cels(ctrl);
 	nvme_mpath_uninit(ctrl);
 	nvme_auth_stop(ctrl);
@@ -4743,6 +4703,7 @@ static int __init nvme_core_init(void)
 		result = PTR_ERR(nvme_ns_chr_class);
 		goto unregister_generic_ns;
 	}
+
 	result = nvme_init_auth();
 	if (result)
 		goto destroy_ns_chr;

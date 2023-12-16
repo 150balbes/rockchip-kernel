@@ -9,6 +9,7 @@
 #include <linux/gpio/driver.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/mfd/syscon.h>
@@ -247,6 +248,8 @@ static int syscon_gpio_probe(struct platform_device *pdev)
 		priv->chip.set = priv->data->set ? : syscon_gpio_set;
 		priv->chip.direction_output = syscon_gpio_dir_out;
 	}
+
+	platform_set_drvdata(pdev, priv);
 
 	return devm_gpiochip_add_data(&pdev->dev, &priv->chip, priv);
 }

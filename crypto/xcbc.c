@@ -27,7 +27,7 @@ static u_int32_t ks[12] = {0x01010101, 0x01010101, 0x01010101, 0x01010101,
  */
 struct xcbc_tfm_ctx {
 	struct crypto_cipher *child;
-	u8 consts[];
+	u8 ctx[];
 };
 
 /*
@@ -43,7 +43,7 @@ struct xcbc_tfm_ctx {
  */
 struct xcbc_desc_ctx {
 	unsigned int len;
-	u8 odds[];
+	u8 ctx[];
 };
 
 #define XCBC_BLOCKSIZE	16
@@ -51,8 +51,9 @@ struct xcbc_desc_ctx {
 static int crypto_xcbc_digest_setkey(struct crypto_shash *parent,
 				     const u8 *inkey, unsigned int keylen)
 {
+	unsigned long alignmask = crypto_shash_alignmask(parent);
 	struct xcbc_tfm_ctx *ctx = crypto_shash_ctx(parent);
-	u8 *consts = ctx->consts;
+	u8 *consts = PTR_ALIGN(&ctx->ctx[0], alignmask + 1);
 	int err = 0;
 	u8 key1[XCBC_BLOCKSIZE];
 	int bs = sizeof(key1);
@@ -70,9 +71,10 @@ static int crypto_xcbc_digest_setkey(struct crypto_shash *parent,
 
 static int crypto_xcbc_digest_init(struct shash_desc *pdesc)
 {
+	unsigned long alignmask = crypto_shash_alignmask(pdesc->tfm);
 	struct xcbc_desc_ctx *ctx = shash_desc_ctx(pdesc);
 	int bs = crypto_shash_blocksize(pdesc->tfm);
-	u8 *prev = &ctx->odds[bs];
+	u8 *prev = PTR_ALIGN(&ctx->ctx[0], alignmask + 1) + bs;
 
 	ctx->len = 0;
 	memset(prev, 0, bs);
@@ -84,11 +86,12 @@ static int crypto_xcbc_digest_update(struct shash_desc *pdesc, const u8 *p,
 				     unsigned int len)
 {
 	struct crypto_shash *parent = pdesc->tfm;
+	unsigned long alignmask = crypto_shash_alignmask(parent);
 	struct xcbc_tfm_ctx *tctx = crypto_shash_ctx(parent);
 	struct xcbc_desc_ctx *ctx = shash_desc_ctx(pdesc);
 	struct crypto_cipher *tfm = tctx->child;
 	int bs = crypto_shash_blocksize(parent);
-	u8 *odds = ctx->odds;
+	u8 *odds = PTR_ALIGN(&ctx->ctx[0], alignmask + 1);
 	u8 *prev = odds + bs;
 
 	/* checking the data can fill the block */
@@ -129,11 +132,13 @@ static int crypto_xcbc_digest_update(struct shash_desc *pdesc, const u8 *p,
 static int crypto_xcbc_digest_final(struct shash_desc *pdesc, u8 *out)
 {
 	struct crypto_shash *parent = pdesc->tfm;
+	unsigned long alignmask = crypto_shash_alignmask(parent);
 	struct xcbc_tfm_ctx *tctx = crypto_shash_ctx(parent);
 	struct xcbc_desc_ctx *ctx = shash_desc_ctx(pdesc);
 	struct crypto_cipher *tfm = tctx->child;
 	int bs = crypto_shash_blocksize(parent);
-	u8 *odds = ctx->odds;
+	u8 *consts = PTR_ALIGN(&tctx->ctx[0], alignmask + 1);
+	u8 *odds = PTR_ALIGN(&ctx->ctx[0], alignmask + 1);
 	u8 *prev = odds + bs;
 	unsigned int offset = 0;
 
@@ -152,7 +157,7 @@ static int crypto_xcbc_digest_final(struct shash_desc *pdesc, u8 *out)
 	}
 
 	crypto_xor(prev, odds, bs);
-	crypto_xor(prev, &tctx->consts[offset], bs);
+	crypto_xor(prev, consts + offset, bs);
 
 	crypto_cipher_encrypt_one(tfm, out, prev);
 
@@ -186,6 +191,7 @@ static int xcbc_create(struct crypto_template *tmpl, struct rtattr **tb)
 	struct shash_instance *inst;
 	struct crypto_cipher_spawn *spawn;
 	struct crypto_alg *alg;
+	unsigned long alignmask;
 	u32 mask;
 	int err;
 
@@ -212,15 +218,21 @@ static int xcbc_create(struct crypto_template *tmpl, struct rtattr **tb)
 	if (err)
 		goto err_free_inst;
 
+	alignmask = alg->cra_alignmask | 3;
+	inst->alg.base.cra_alignmask = alignmask;
 	inst->alg.base.cra_priority = alg->cra_priority;
 	inst->alg.base.cra_blocksize = alg->cra_blocksize;
-	inst->alg.base.cra_ctxsize = sizeof(struct xcbc_tfm_ctx) +
-				     alg->cra_blocksize * 2;
 
 	inst->alg.digestsize = alg->cra_blocksize;
-	inst->alg.descsize = sizeof(struct xcbc_desc_ctx) +
+	inst->alg.descsize = ALIGN(sizeof(struct xcbc_desc_ctx),
+				   crypto_tfm_ctx_alignment()) +
+			     (alignmask &
+			      ~(crypto_tfm_ctx_alignment() - 1)) +
 			     alg->cra_blocksize * 2;
 
+	inst->alg.base.cra_ctxsize = ALIGN(sizeof(struct xcbc_tfm_ctx),
+					   alignmask + 1) +
+				     alg->cra_blocksize * 2;
 	inst->alg.base.cra_init = xcbc_init_tfm;
 	inst->alg.base.cra_exit = xcbc_exit_tfm;
 

@@ -11,6 +11,7 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_clk.h>
+#include <linux/of_platform.h>
 #include <linux/of_address.h>
 #include <linux/clk-provider.h>
 #include <linux/bitfield.h>

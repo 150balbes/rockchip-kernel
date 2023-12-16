@@ -1240,23 +1240,26 @@ static void hsw_set_infoframes(struct intel_encoder *encoder,
 void intel_dp_dual_mode_set_tmds_output(struct intel_hdmi *hdmi, bool enable)
 {
 	struct drm_i915_private *dev_priv = intel_hdmi_to_i915(hdmi);
-	struct i2c_adapter *ddc = hdmi->attached_connector->base.ddc;
+	struct i2c_adapter *adapter;
 
 	if (hdmi->dp_dual_mode.type < DRM_DP_DUAL_MODE_TYPE2_DVI)
 		return;
 
+	adapter = intel_gmbus_get_adapter(dev_priv, hdmi->ddc_bus);
+
 	drm_dbg_kms(&dev_priv->drm, "%s DP dual mode adaptor TMDS output\n",
 		    enable ? "Enabling" : "Disabling");
 
-	drm_dp_dual_mode_set_tmds_output(&dev_priv->drm,
-					 hdmi->dp_dual_mode.type, ddc, enable);
+	drm_dp_dual_mode_set_tmds_output(&dev_priv->drm, hdmi->dp_dual_mode.type, adapter, enable);
 }
 
 static int intel_hdmi_hdcp_read(struct intel_digital_port *dig_port,
 				unsigned int offset, void *buffer, size_t size)
 {
+	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 	struct intel_hdmi *hdmi = &dig_port->hdmi;
-	struct i2c_adapter *ddc = hdmi->attached_connector->base.ddc;
+	struct i2c_adapter *adapter = intel_gmbus_get_adapter(i915,
+							      hdmi->ddc_bus);
 	int ret;
 	u8 start = offset & 0xff;
 	struct i2c_msg msgs[] = {
@@ -1273,7 +1276,7 @@ static int intel_hdmi_hdcp_read(struct intel_digital_port *dig_port,
 			.buf = buffer
 		}
 	};
-	ret = i2c_transfer(ddc, msgs, ARRAY_SIZE(msgs));
+	ret = i2c_transfer(adapter, msgs, ARRAY_SIZE(msgs));
 	if (ret == ARRAY_SIZE(msgs))
 		return 0;
 	return ret >= 0 ? -EIO : ret;
@@ -1282,8 +1285,10 @@ static int intel_hdmi_hdcp_read(struct intel_digital_port *dig_port,
 static int intel_hdmi_hdcp_write(struct intel_digital_port *dig_port,
 				 unsigned int offset, void *buffer, size_t size)
 {
+	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 	struct intel_hdmi *hdmi = &dig_port->hdmi;
-	struct i2c_adapter *ddc = hdmi->attached_connector->base.ddc;
+	struct i2c_adapter *adapter = intel_gmbus_get_adapter(i915,
+							      hdmi->ddc_bus);
 	int ret;
 	u8 *write_buf;
 	struct i2c_msg msg;
@@ -1300,7 +1305,7 @@ static int intel_hdmi_hdcp_write(struct intel_digital_port *dig_port,
 	msg.len = size + 1,
 	msg.buf = write_buf;
 
-	ret = i2c_transfer(ddc, &msg, 1);
+	ret = i2c_transfer(adapter, &msg, 1);
 	if (ret == 1)
 		ret = 0;
 	else if (ret >= 0)
@@ -1316,7 +1321,8 @@ int intel_hdmi_hdcp_write_an_aksv(struct intel_digital_port *dig_port,
 {
 	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 	struct intel_hdmi *hdmi = &dig_port->hdmi;
-	struct i2c_adapter *ddc = hdmi->attached_connector->base.ddc;
+	struct i2c_adapter *adapter = intel_gmbus_get_adapter(i915,
+							      hdmi->ddc_bus);
 	int ret;
 
 	ret = intel_hdmi_hdcp_write(dig_port, DRM_HDCP_DDC_AN, an,
@@ -1327,7 +1333,7 @@ int intel_hdmi_hdcp_write_an_aksv(struct intel_digital_port *dig_port,
 		return ret;
 	}
 
-	ret = intel_gmbus_output_aksv(ddc);
+	ret = intel_gmbus_output_aksv(adapter);
 	if (ret < 0) {
 		drm_dbg_kms(&i915->drm, "Failed to output aksv (%d)\n", ret);
 		return ret;
@@ -1659,10 +1665,9 @@ intel_hdmi_hdcp2_wait_for_msg(struct intel_digital_port *dig_port,
 }
 
 static
-int intel_hdmi_hdcp2_write_msg(struct intel_connector *connector,
+int intel_hdmi_hdcp2_write_msg(struct intel_digital_port *dig_port,
 			       void *buf, size_t size)
 {
-	struct intel_digital_port *dig_port = intel_attached_dig_port(connector);
 	unsigned int offset;
 
 	offset = HDCP_2_2_HDMI_REG_WR_MSG_OFFSET;
@@ -1670,10 +1675,9 @@ int intel_hdmi_hdcp2_write_msg(struct intel_connector *connector,
 }
 
 static
-int intel_hdmi_hdcp2_read_msg(struct intel_connector *connector,
+int intel_hdmi_hdcp2_read_msg(struct intel_digital_port *dig_port,
 			      u8 msg_id, void *buf, size_t size)
 {
-	struct intel_digital_port *dig_port = intel_attached_dig_port(connector);
 	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 	struct intel_hdmi *hdmi = &dig_port->hdmi;
 	struct intel_hdcp *hdcp = &hdmi->attached_connector->hdcp;
@@ -1729,10 +1733,9 @@ int intel_hdmi_hdcp2_check_link(struct intel_digital_port *dig_port,
 }
 
 static
-int intel_hdmi_hdcp2_capable(struct intel_connector *connector,
+int intel_hdmi_hdcp2_capable(struct intel_digital_port *dig_port,
 			     bool *capable)
 {
-	struct intel_digital_port *dig_port = intel_attached_dig_port(connector);
 	u8 hdcp2_version;
 	int ret;
 
@@ -2397,10 +2400,9 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
 	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
-	struct i2c_adapter *ddc = connector->ddc;
-	enum drm_dp_dual_mode_type type;
-
-	type = drm_dp_dual_mode_detect(&dev_priv->drm, ddc);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, hdmi->ddc_bus);
+	enum drm_dp_dual_mode_type type = drm_dp_dual_mode_detect(&dev_priv->drm, adapter);
 
 	/*
 	 * Type 1 DVI adaptors are not required to implement any
@@ -2427,7 +2429,7 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
 
 	hdmi->dp_dual_mode.type = type;
 	hdmi->dp_dual_mode.max_tmds_clock =
-		drm_dp_dual_mode_max_tmds_clock(&dev_priv->drm, type, ddc);
+		drm_dp_dual_mode_max_tmds_clock(&dev_priv->drm, type, adapter);
 
 	drm_dbg_kms(&dev_priv->drm,
 		    "DP dual mode adaptor (%s) detected (max TMDS clock: %d kHz)\n",
@@ -2448,21 +2450,24 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 {
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_hdmi *intel_hdmi = intel_attached_hdmi(to_intel_connector(connector));
-	struct i2c_adapter *ddc = connector->ddc;
 	intel_wakeref_t wakeref;
 	const struct drm_edid *drm_edid;
+	const struct edid *edid;
 	bool connected = false;
+	struct i2c_adapter *i2c;
 
 	wakeref = intel_display_power_get(dev_priv, POWER_DOMAIN_GMBUS);
 
-	drm_edid = drm_edid_read_ddc(connector, ddc);
+	i2c = intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
 
-	if (!drm_edid && !intel_gmbus_is_forced_bit(ddc)) {
+	drm_edid = drm_edid_read_ddc(connector, i2c);
+
+	if (!drm_edid && !intel_gmbus_is_forced_bit(i2c)) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "HDMI GMBUS EDID read failed, retry using GPIO bit-banging\n");
-		intel_gmbus_force_bit(ddc, true);
-		drm_edid = drm_edid_read_ddc(connector, ddc);
-		intel_gmbus_force_bit(ddc, false);
+		intel_gmbus_force_bit(i2c, true);
+		drm_edid = drm_edid_read_ddc(connector, i2c);
+		intel_gmbus_force_bit(i2c, false);
 	}
 
 	/* Below we depend on display info having been updated */
@@ -2470,7 +2475,9 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 
 	to_intel_connector(connector)->detect_edid = drm_edid;
 
-	if (drm_edid_is_digital(drm_edid)) {
+	/* FIXME: Get rid of drm_edid_raw() */
+	edid = drm_edid_raw(drm_edid);
+	if (edid && edid->input & DRM_EDID_INPUT_DIGITAL) {
 		intel_hdmi_dp_dual_mode_detect(connector);
 
 		connected = true;
@@ -2478,8 +2485,7 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 
 	intel_display_power_put(dev_priv, POWER_DOMAIN_GMBUS, wakeref);
 
-	cec_notifier_set_phys_addr(intel_hdmi->cec_notifier,
-				   connector->display_info.source_physical_address);
+	cec_notifier_set_phys_addr_from_edid(intel_hdmi->cec_notifier, edid);
 
 	return connected;
 }
@@ -2496,7 +2502,7 @@ intel_hdmi_detect(struct drm_connector *connector, bool force)
 	drm_dbg_kms(&dev_priv->drm, "[CONNECTOR:%d:%s]\n",
 		    connector->base.id, connector->name);
 
-	if (!intel_display_device_enabled(dev_priv))
+	if (!INTEL_DISPLAY_ENABLED(dev_priv))
 		return connector_status_disconnected;
 
 	wakeref = intel_display_power_get(dev_priv, POWER_DOMAIN_GMBUS);
@@ -2515,6 +2521,12 @@ out:
 
 	if (status != connector_status_connected)
 		cec_notifier_phys_addr_invalidate(intel_hdmi->cec_notifier);
+
+	/*
+	 * Make sure the refs for power wells enabled during detect are
+	 * dropped to avoid a new detect cycle triggered by HPD polling.
+	 */
+	intel_display_power_flush_work(dev_priv);
 
 	return status;
 }
@@ -2541,6 +2553,37 @@ static int intel_hdmi_get_modes(struct drm_connector *connector)
 	return drm_edid_connector_add_modes(connector);
 }
 
+static struct i2c_adapter *
+intel_hdmi_get_i2c_adapter(struct drm_connector *connector)
+{
+	struct drm_i915_private *dev_priv = to_i915(connector->dev);
+	struct intel_hdmi *intel_hdmi = intel_attached_hdmi(to_intel_connector(connector));
+
+	return intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+}
+
+static void intel_hdmi_create_i2c_symlink(struct drm_connector *connector)
+{
+	struct drm_i915_private *i915 = to_i915(connector->dev);
+	struct i2c_adapter *adapter = intel_hdmi_get_i2c_adapter(connector);
+	struct kobject *i2c_kobj = &adapter->dev.kobj;
+	struct kobject *connector_kobj = &connector->kdev->kobj;
+	int ret;
+
+	ret = sysfs_create_link(connector_kobj, i2c_kobj, i2c_kobj->name);
+	if (ret)
+		drm_err(&i915->drm, "Failed to create i2c symlink (%d)\n", ret);
+}
+
+static void intel_hdmi_remove_i2c_symlink(struct drm_connector *connector)
+{
+	struct i2c_adapter *adapter = intel_hdmi_get_i2c_adapter(connector);
+	struct kobject *i2c_kobj = &adapter->dev.kobj;
+	struct kobject *connector_kobj = &connector->kdev->kobj;
+
+	sysfs_remove_link(connector_kobj, i2c_kobj->name);
+}
+
 static int
 intel_hdmi_connector_register(struct drm_connector *connector)
 {
@@ -2549,6 +2592,8 @@ intel_hdmi_connector_register(struct drm_connector *connector)
 	ret = intel_connector_register(connector);
 	if (ret)
 		return ret;
+
+	intel_hdmi_create_i2c_symlink(connector);
 
 	return ret;
 }
@@ -2559,6 +2604,7 @@ static void intel_hdmi_connector_unregister(struct drm_connector *connector)
 
 	cec_notifier_conn_unregister(n);
 
+	intel_hdmi_remove_i2c_symlink(connector);
 	intel_connector_unregister(connector);
 }
 
@@ -2834,11 +2880,20 @@ static u8 g4x_port_to_ddc_pin(struct drm_i915_private *dev_priv,
 	return ddc_pin;
 }
 
-static u8 intel_hdmi_default_ddc_pin(struct intel_encoder *encoder)
+static u8 intel_hdmi_ddc_pin(struct intel_encoder *encoder)
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	enum port port = encoder->port;
 	u8 ddc_pin;
+
+	ddc_pin = intel_bios_hdmi_ddc_pin(encoder->devdata);
+	if (ddc_pin) {
+		drm_dbg_kms(&dev_priv->drm,
+			    "[ENCODER:%d:%s] Using DDC pin 0x%x (VBT)\n",
+			    encoder->base.base.id, encoder->base.name,
+			    ddc_pin);
+		return ddc_pin;
+	}
 
 	if (IS_ALDERLAKE_S(dev_priv))
 		ddc_pin = adls_port_to_ddc_pin(dev_priv, port);
@@ -2848,8 +2903,7 @@ static u8 intel_hdmi_default_ddc_pin(struct intel_encoder *encoder)
 		ddc_pin = rkl_port_to_ddc_pin(dev_priv, port);
 	else if (DISPLAY_VER(dev_priv) == 9 && HAS_PCH_TGP(dev_priv))
 		ddc_pin = gen9bc_tgp_port_to_ddc_pin(dev_priv, port);
-	else if ((IS_JASPERLAKE(dev_priv) || IS_ELKHARTLAKE(dev_priv)) &&
-		 HAS_PCH_TGP(dev_priv))
+	else if (IS_JSL_EHL(dev_priv) && HAS_PCH_TGP(dev_priv))
 		ddc_pin = mcc_port_to_ddc_pin(dev_priv, port);
 	else if (INTEL_PCH_TYPE(dev_priv) >= PCH_ICP)
 		ddc_pin = icl_port_to_ddc_pin(dev_priv, port);
@@ -2862,66 +2916,10 @@ static u8 intel_hdmi_default_ddc_pin(struct intel_encoder *encoder)
 	else
 		ddc_pin = g4x_port_to_ddc_pin(dev_priv, port);
 
-	return ddc_pin;
-}
-
-static struct intel_encoder *
-get_encoder_by_ddc_pin(struct intel_encoder *encoder, u8 ddc_pin)
-{
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
-	struct intel_encoder *other;
-
-	for_each_intel_encoder(&i915->drm, other) {
-		struct intel_connector *connector;
-
-		if (other == encoder)
-			continue;
-
-		if (!intel_encoder_is_dig_port(other))
-			continue;
-
-		connector = enc_to_dig_port(other)->hdmi.attached_connector;
-
-		if (connector && connector->base.ddc == intel_gmbus_get_adapter(i915, ddc_pin))
-			return other;
-	}
-
-	return NULL;
-}
-
-static u8 intel_hdmi_ddc_pin(struct intel_encoder *encoder)
-{
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
-	struct intel_encoder *other;
-	const char *source;
-	u8 ddc_pin;
-
-	ddc_pin = intel_bios_hdmi_ddc_pin(encoder->devdata);
-	source = "VBT";
-
-	if (!ddc_pin) {
-		ddc_pin = intel_hdmi_default_ddc_pin(encoder);
-		source = "platform default";
-	}
-
-	if (!intel_gmbus_is_valid_pin(i915, ddc_pin)) {
-		drm_dbg_kms(&i915->drm, "[ENCODER:%d:%s] Invalid DDC pin %d\n",
-			    encoder->base.base.id, encoder->base.name, ddc_pin);
-		return 0;
-	}
-
-	other = get_encoder_by_ddc_pin(encoder, ddc_pin);
-	if (other) {
-		drm_dbg_kms(&i915->drm, "[ENCODER:%d:%s] DDC pin %d already claimed by [ENCODER:%d:%s]\n",
-			    encoder->base.base.id, encoder->base.name, ddc_pin,
-			    other->base.base.id, other->base.name);
-		return 0;
-	}
-
-	drm_dbg_kms(&i915->drm,
-		    "[ENCODER:%d:%s] Using DDC pin 0x%x (%s)\n",
+	drm_dbg_kms(&dev_priv->drm,
+		    "[ENCODER:%d:%s] Using DDC pin 0x%x (platform default)\n",
 		    encoder->base.base.id, encoder->base.name,
-		    ddc_pin, source);
+		    ddc_pin);
 
 	return ddc_pin;
 }
@@ -2974,9 +2972,9 @@ void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 	struct intel_encoder *intel_encoder = &dig_port->base;
 	struct drm_device *dev = intel_encoder->base.dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
+	struct i2c_adapter *ddc;
 	enum port port = intel_encoder->port;
 	struct cec_connector_info conn_info;
-	u8 ddc_pin;
 
 	drm_dbg_kms(&dev_priv->drm,
 		    "Adding HDMI connector on [ENCODER:%d:%s]\n",
@@ -2991,15 +2989,13 @@ void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 		     intel_encoder->base.name))
 		return;
 
-	ddc_pin = intel_hdmi_ddc_pin(intel_encoder);
-	if (!ddc_pin)
-		return;
+	intel_hdmi->ddc_bus = intel_hdmi_ddc_pin(intel_encoder);
+	ddc = intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
 
 	drm_connector_init_with_ddc(dev, connector,
 				    &intel_hdmi_connector_funcs,
 				    DRM_MODE_CONNECTOR_HDMIA,
-				    intel_gmbus_get_adapter(dev_priv, ddc_pin));
-
+				    ddc);
 	drm_connector_helper_add(connector, &intel_hdmi_connector_helper_funcs);
 
 	if (DISPLAY_VER(dev_priv) < 12)
@@ -3028,6 +3024,16 @@ void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 		if (ret)
 			drm_dbg_kms(&dev_priv->drm,
 				    "HDCP init failed, skipping.\n");
+	}
+
+	/* For G4X desktop chip, PEG_BAND_GAP_DATA 3:0 must first be written
+	 * 0xd.  Failure to do so will result in spurious interrupts being
+	 * generated on the port when a cable is not attached.
+	 */
+	if (IS_G45(dev_priv)) {
+		u32 temp = intel_de_read(dev_priv, PEG_BAND_GAP_DATA);
+		intel_de_write(dev_priv, PEG_BAND_GAP_DATA,
+		               (temp & ~0xf) | 0xd);
 	}
 
 	cec_fill_conn_info_from_drm(&conn_info, connector);

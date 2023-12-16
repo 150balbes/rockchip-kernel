@@ -313,8 +313,7 @@ static int record_event_files(struct tracepoint_path *tps)
 	}
 	err = 0;
 out:
-	if (dir)
-		closedir(dir);
+	closedir(dir);
 	put_tracing_file(path);
 
 	return err;

@@ -34,7 +34,7 @@ static const struct regmap_access_table tps65086_volatile_table = {
 static const struct regmap_config tps65086_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.volatile_table = &tps65086_volatile_table,
 };
 
@@ -81,23 +81,16 @@ static int tps65086_probe(struct i2c_client *client)
 		return PTR_ERR(tps->regmap);
 	}
 
-	/* Store device ID to load regulator configuration that fit to IC variant */
-	ret = regmap_read(tps->regmap, TPS65086_DEVICEID1, &tps->chip_id);
+	ret = regmap_read(tps->regmap, TPS65086_DEVICEID, &version);
 	if (ret) {
-		dev_err(tps->dev, "Failed to read revision register 1\n");
-		return ret;
-	}
-
-	ret = regmap_read(tps->regmap, TPS65086_DEVICEID2, &version);
-	if (ret) {
-		dev_err(tps->dev, "Failed to read revision register 2\n");
+		dev_err(tps->dev, "Failed to read revision register\n");
 		return ret;
 	}
 
 	dev_info(tps->dev, "Device: TPS65086%01lX, OTP: %c, Rev: %ld\n",
-		 (version & TPS65086_DEVICEID2_PART_MASK),
-		 (char)((version & TPS65086_DEVICEID2_OTP_MASK) >> 4) + 'A',
-		 (version & TPS65086_DEVICEID2_REV_MASK) >> 6);
+		 (version & TPS65086_DEVICEID_PART_MASK),
+		 (char)((version & TPS65086_DEVICEID_OTP_MASK) >> 4) + 'A',
+		 (version & TPS65086_DEVICEID_REV_MASK) >> 6);
 
 	if (tps->irq > 0) {
 		ret = regmap_add_irq_chip(tps->regmap, tps->irq, IRQF_ONESHOT, 0,

@@ -36,7 +36,7 @@ static int set_dvs_level(const struct regulator_desc *desc,
 	}
 	for (i = 0; i < desc->n_voltages; i++) {
 		/* NOTE to next hacker - Does not support pickable ranges */
-		if (desc->linear_range_selectors_bitfield)
+		if (desc->linear_range_selectors)
 			return -EINVAL;
 		if (desc->n_linear_ranges)
 			ret = regulator_desc_list_voltage_linear_range(desc, i);

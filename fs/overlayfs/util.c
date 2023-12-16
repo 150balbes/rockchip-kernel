@@ -10,60 +10,33 @@
 #include <linux/cred.h>
 #include <linux/xattr.h>
 #include <linux/exportfs.h>
-#include <linux/file.h>
 #include <linux/fileattr.h>
 #include <linux/uuid.h>
 #include <linux/namei.h>
 #include <linux/ratelimit.h>
 #include "overlayfs.h"
 
-/* Get write access to upper mnt - may fail if upper sb was remounted ro */
-int ovl_get_write_access(struct dentry *dentry)
-{
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
-	return mnt_get_write_access(ovl_upper_mnt(ofs));
-}
-
-/* Get write access to upper sb - may block if upper sb is frozen */
-void ovl_start_write(struct dentry *dentry)
-{
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
-	sb_start_write(ovl_upper_mnt(ofs)->mnt_sb);
-}
-
 int ovl_want_write(struct dentry *dentry)
 {
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 	return mnt_want_write(ovl_upper_mnt(ofs));
-}
-
-void ovl_put_write_access(struct dentry *dentry)
-{
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
-	mnt_put_write_access(ovl_upper_mnt(ofs));
-}
-
-void ovl_end_write(struct dentry *dentry)
-{
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
-	sb_end_write(ovl_upper_mnt(ofs)->mnt_sb);
 }
 
 void ovl_drop_write(struct dentry *dentry)
 {
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 	mnt_drop_write(ovl_upper_mnt(ofs));
 }
 
 struct dentry *ovl_workdir(struct dentry *dentry)
 {
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 	return ofs->workdir;
 }
 
 const struct cred *ovl_override_creds(struct super_block *sb)
 {
-	struct ovl_fs *ofs = OVL_FS(sb);
+	struct ovl_fs *ofs = sb->s_fs_info;
 
 	return override_creds(ofs->creator_cred);
 }
@@ -81,7 +54,7 @@ int ovl_can_decode_fh(struct super_block *sb)
 	if (!capable(CAP_DAC_READ_SEARCH))
 		return 0;
 
-	if (!exportfs_can_decode_fh(sb->s_export_op))
+	if (!sb->s_export_op || !sb->s_export_op->fh_to_dentry)
 		return 0;
 
 	return sb->s_export_op->encode_fh ? -1 : FILEID_INO32_GEN;
@@ -89,7 +62,7 @@ int ovl_can_decode_fh(struct super_block *sb)
 
 struct dentry *ovl_indexdir(struct super_block *sb)
 {
-	struct ovl_fs *ofs = OVL_FS(sb);
+	struct ovl_fs *ofs = sb->s_fs_info;
 
 	return ofs->indexdir;
 }
@@ -97,7 +70,7 @@ struct dentry *ovl_indexdir(struct super_block *sb)
 /* Index all files on copy up. For now only enabled for NFS export */
 bool ovl_index_all(struct super_block *sb)
 {
-	struct ovl_fs *ofs = OVL_FS(sb);
+	struct ovl_fs *ofs = sb->s_fs_info;
 
 	return ofs->config.nfs_export && ofs->config.index;
 }
@@ -105,7 +78,7 @@ bool ovl_index_all(struct super_block *sb)
 /* Verify lower origin on lookup. For now only enabled for NFS export */
 bool ovl_verify_lower(struct super_block *sb)
 {
-	struct ovl_fs *ofs = OVL_FS(sb);
+	struct ovl_fs *ofs = sb->s_fs_info;
 
 	return ofs->config.nfs_export && ofs->config.index;
 }
@@ -230,7 +203,7 @@ enum ovl_path_type ovl_path_type(struct dentry *dentry)
 
 void ovl_path_upper(struct dentry *dentry, struct path *path)
 {
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 
 	path->mnt = ovl_upper_mnt(ofs);
 	path->dentry = ovl_dentry_upper(dentry);
@@ -601,16 +574,6 @@ bool ovl_is_whiteout(struct dentry *dentry)
 	return inode && IS_WHITEOUT(inode);
 }
 
-/*
- * Use this over ovl_is_whiteout for upper and lower files, as it also
- * handles overlay.whiteout xattr whiteout files.
- */
-bool ovl_path_is_whiteout(struct ovl_fs *ofs, const struct path *path)
-{
-	return ovl_is_whiteout(path->dentry) ||
-		ovl_path_check_xwhiteout_xattr(ofs, path);
-}
-
 struct file *ovl_path_open(const struct path *path, int flags)
 {
 	struct inode *inode = d_inode(path->dentry);
@@ -680,36 +643,22 @@ bool ovl_already_copied_up(struct dentry *dentry, int flags)
 	return false;
 }
 
-/*
- * The copy up "transaction" keeps an elevated mnt write count on upper mnt,
- * but leaves taking freeze protection on upper sb to lower level helpers.
- */
 int ovl_copy_up_start(struct dentry *dentry, int flags)
 {
 	struct inode *inode = d_inode(dentry);
 	int err;
 
 	err = ovl_inode_lock_interruptible(inode);
-	if (err)
-		return err;
-
-	if (ovl_already_copied_up_locked(dentry, flags))
+	if (!err && ovl_already_copied_up_locked(dentry, flags)) {
 		err = 1; /* Already copied up */
-	else
-		err = ovl_get_write_access(dentry);
-	if (err)
-		goto out_unlock;
+		ovl_inode_unlock(inode);
+	}
 
-	return 0;
-
-out_unlock:
-	ovl_inode_unlock(inode);
 	return err;
 }
 
 void ovl_copy_up_end(struct dentry *dentry)
 {
-	ovl_put_write_access(dentry);
 	ovl_inode_unlock(d_inode(dentry));
 }
 
@@ -723,91 +672,6 @@ bool ovl_path_check_origin_xattr(struct ovl_fs *ofs, const struct path *path)
 	if (res >= 0)
 		return true;
 
-	return false;
-}
-
-bool ovl_path_check_xwhiteout_xattr(struct ovl_fs *ofs, const struct path *path)
-{
-	struct dentry *dentry = path->dentry;
-	int res;
-
-	/* xattr.whiteout must be a zero size regular file */
-	if (!d_is_reg(dentry) || i_size_read(d_inode(dentry)) != 0)
-		return false;
-
-	res = ovl_path_getxattr(ofs, path, OVL_XATTR_XWHITEOUT, NULL, 0);
-	return res >= 0;
-}
-
-bool ovl_path_check_xwhiteouts_xattr(struct ovl_fs *ofs, const struct path *path)
-{
-	struct dentry *dentry = path->dentry;
-	int res;
-
-	/* xattr.whiteouts must be a directory */
-	if (!d_is_dir(dentry))
-		return false;
-
-	res = ovl_path_getxattr(ofs, path, OVL_XATTR_XWHITEOUTS, NULL, 0);
-	return res >= 0;
-}
-
-/*
- * Load persistent uuid from xattr into s_uuid if found, or store a new
- * random generated value in s_uuid and in xattr.
- */
-bool ovl_init_uuid_xattr(struct super_block *sb, struct ovl_fs *ofs,
-			 const struct path *upperpath)
-{
-	bool set = false;
-	int res;
-
-	/* Try to load existing persistent uuid */
-	res = ovl_path_getxattr(ofs, upperpath, OVL_XATTR_UUID, sb->s_uuid.b,
-				UUID_SIZE);
-	if (res == UUID_SIZE)
-		return true;
-
-	if (res != -ENODATA)
-		goto fail;
-
-	/*
-	 * With uuid=auto, if uuid xattr is found, it will be used.
-	 * If uuid xattrs is not found, generate a persistent uuid only on mount
-	 * of new overlays where upper root dir is not yet marked as impure.
-	 * An upper dir is marked as impure on copy up or lookup of its subdirs.
-	 */
-	if (ofs->config.uuid == OVL_UUID_AUTO) {
-		res = ovl_path_getxattr(ofs, upperpath, OVL_XATTR_IMPURE, NULL,
-					0);
-		if (res > 0) {
-			/* Any mount of old overlay - downgrade to uuid=null */
-			ofs->config.uuid = OVL_UUID_NULL;
-			return true;
-		} else if (res == -ENODATA) {
-			/* First mount of new overlay - upgrade to uuid=on */
-			ofs->config.uuid = OVL_UUID_ON;
-		} else if (res < 0) {
-			goto fail;
-		}
-
-	}
-
-	/* Generate overlay instance uuid */
-	uuid_gen(&sb->s_uuid);
-
-	/* Try to store persistent uuid */
-	set = true;
-	res = ovl_setxattr(ofs, upperpath->dentry, OVL_XATTR_UUID, sb->s_uuid.b,
-			   UUID_SIZE);
-	if (res == 0)
-		return true;
-
-fail:
-	memset(sb->s_uuid.b, 0, UUID_SIZE);
-	ofs->config.uuid = OVL_UUID_NULL;
-	pr_warn("failed to %s uuid (%pd2, err=%i); falling back to uuid=null.\n",
-		set ? "set" : "get", upperpath->dentry, res);
 	return false;
 }
 
@@ -833,11 +697,8 @@ bool ovl_path_check_dir_xattr(struct ovl_fs *ofs, const struct path *path,
 #define OVL_XATTR_IMPURE_POSTFIX	"impure"
 #define OVL_XATTR_NLINK_POSTFIX		"nlink"
 #define OVL_XATTR_UPPER_POSTFIX		"upper"
-#define OVL_XATTR_UUID_POSTFIX		"uuid"
 #define OVL_XATTR_METACOPY_POSTFIX	"metacopy"
 #define OVL_XATTR_PROTATTR_POSTFIX	"protattr"
-#define OVL_XATTR_XWHITEOUT_POSTFIX	"whiteout"
-#define OVL_XATTR_XWHITEOUTS_POSTFIX	"whiteouts"
 
 #define OVL_XATTR_TAB_ENTRY(x) \
 	[x] = { [false] = OVL_XATTR_TRUSTED_PREFIX x ## _POSTFIX, \
@@ -850,11 +711,8 @@ const char *const ovl_xattr_table[][2] = {
 	OVL_XATTR_TAB_ENTRY(OVL_XATTR_IMPURE),
 	OVL_XATTR_TAB_ENTRY(OVL_XATTR_NLINK),
 	OVL_XATTR_TAB_ENTRY(OVL_XATTR_UPPER),
-	OVL_XATTR_TAB_ENTRY(OVL_XATTR_UUID),
 	OVL_XATTR_TAB_ENTRY(OVL_XATTR_METACOPY),
 	OVL_XATTR_TAB_ENTRY(OVL_XATTR_PROTATTR),
-	OVL_XATTR_TAB_ENTRY(OVL_XATTR_XWHITEOUT),
-	OVL_XATTR_TAB_ENTRY(OVL_XATTR_XWHITEOUTS),
 };
 
 int ovl_check_setxattr(struct ovl_fs *ofs, struct dentry *upperdentry,
@@ -978,7 +836,7 @@ int ovl_set_protattr(struct inode *inode, struct dentry *upper,
 	return 0;
 }
 
-/*
+/**
  * Caller must hold a reference to inode to prevent it from being freed while
  * it is marked inuse.
  */
@@ -1053,18 +911,12 @@ static void ovl_cleanup_index(struct dentry *dentry)
 	struct dentry *index = NULL;
 	struct inode *inode;
 	struct qstr name = { };
-	bool got_write = false;
 	int err;
 
 	err = ovl_get_index_name(ofs, lowerdentry, &name);
 	if (err)
 		goto fail;
 
-	err = ovl_want_write(dentry);
-	if (err)
-		goto fail;
-
-	got_write = true;
 	inode = d_inode(upperdentry);
 	if (!S_ISDIR(inode->i_mode) && inode->i_nlink != 1) {
 		pr_warn_ratelimited("cleanup linked index (%pd2, ino=%lu, nlink=%u)\n",
@@ -1102,8 +954,6 @@ static void ovl_cleanup_index(struct dentry *dentry)
 		goto fail;
 
 out:
-	if (got_write)
-		ovl_drop_write(dentry);
 	kfree(name.name);
 	dput(index);
 	return;
@@ -1150,12 +1000,8 @@ int ovl_nlink_start(struct dentry *dentry)
 	if (err)
 		return err;
 
-	err = ovl_want_write(dentry);
-	if (err)
-		goto out_unlock;
-
 	if (d_is_dir(dentry) || !ovl_test_flag(OVL_INDEX, inode))
-		return 0;
+		goto out;
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	/*
@@ -1166,15 +1012,10 @@ int ovl_nlink_start(struct dentry *dentry)
 	 */
 	err = ovl_set_nlink_upper(dentry);
 	revert_creds(old_cred);
+
+out:
 	if (err)
-		goto out_drop_write;
-
-	return 0;
-
-out_drop_write:
-	ovl_drop_write(dentry);
-out_unlock:
-	ovl_inode_unlock(inode);
+		ovl_inode_unlock(inode);
 
 	return err;
 }
@@ -1182,8 +1023,6 @@ out_unlock:
 void ovl_nlink_end(struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
-
-	ovl_drop_write(dentry);
 
 	if (ovl_test_flag(OVL_INDEX, inode) && inode->i_nlink == 0) {
 		const struct cred *old_cred;
@@ -1215,12 +1054,8 @@ err:
 	return -EIO;
 }
 
-/*
- * err < 0, 0 if no metacopy xattr, metacopy data size if xattr found.
- * an empty xattr returns OVL_METACOPY_MIN_SIZE to distinguish from no xattr value.
- */
-int ovl_check_metacopy_xattr(struct ovl_fs *ofs, const struct path *path,
-			     struct ovl_metacopy *data)
+/* err < 0, 0 if no metacopy xattr, 1 if metacopy xattr found */
+int ovl_check_metacopy_xattr(struct ovl_fs *ofs, const struct path *path)
 {
 	int res;
 
@@ -1228,8 +1063,7 @@ int ovl_check_metacopy_xattr(struct ovl_fs *ofs, const struct path *path,
 	if (!S_ISREG(d_inode(path->dentry)->i_mode))
 		return 0;
 
-	res = ovl_path_getxattr(ofs, path, OVL_XATTR_METACOPY,
-				data, data ? OVL_METACOPY_MAX_SIZE : 0);
+	res = ovl_path_getxattr(ofs, path, OVL_XATTR_METACOPY, NULL, 0);
 	if (res < 0) {
 		if (res == -ENODATA || res == -EOPNOTSUPP)
 			return 0;
@@ -1243,46 +1077,10 @@ int ovl_check_metacopy_xattr(struct ovl_fs *ofs, const struct path *path,
 		goto out;
 	}
 
-	if (res == 0) {
-		/* Emulate empty data for zero size metacopy xattr */
-		res = OVL_METACOPY_MIN_SIZE;
-		if (data) {
-			memset(data, 0, res);
-			data->len = res;
-		}
-	} else if (res < OVL_METACOPY_MIN_SIZE) {
-		pr_warn_ratelimited("metacopy file '%pd' has too small xattr\n",
-				    path->dentry);
-		return -EIO;
-	} else if (data) {
-		if (data->version != 0) {
-			pr_warn_ratelimited("metacopy file '%pd' has unsupported version\n",
-					    path->dentry);
-			return -EIO;
-		}
-		if (res != data->len) {
-			pr_warn_ratelimited("metacopy file '%pd' has invalid xattr size\n",
-					    path->dentry);
-			return -EIO;
-		}
-	}
-
-	return res;
+	return 1;
 out:
 	pr_warn_ratelimited("failed to get metacopy (%i)\n", res);
 	return res;
-}
-
-int ovl_set_metacopy_xattr(struct ovl_fs *ofs, struct dentry *d, struct ovl_metacopy *metacopy)
-{
-	size_t len = metacopy->len;
-
-	/* If no flags or digest fall back to empty metacopy file */
-	if (metacopy->version == 0 && metacopy->flags == 0 && metacopy->digest_algo == 0)
-		len = 0;
-
-	return ovl_check_setxattr(ofs, d, OVL_XATTR_METACOPY,
-				  metacopy, len, -EOPNOTSUPP);
 }
 
 bool ovl_is_metacopy_dentry(struct dentry *dentry)
@@ -1347,112 +1145,6 @@ err_free:
 	return ERR_PTR(res);
 }
 
-/* Call with mounter creds as it may open the file */
-int ovl_ensure_verity_loaded(struct path *datapath)
-{
-	struct inode *inode = d_inode(datapath->dentry);
-	struct file *filp;
-
-	if (!fsverity_active(inode) && IS_VERITY(inode)) {
-		/*
-		 * If this inode was not yet opened, the verity info hasn't been
-		 * loaded yet, so we need to do that here to force it into memory.
-		 */
-		filp = kernel_file_open(datapath, O_RDONLY, inode, current_cred());
-		if (IS_ERR(filp))
-			return PTR_ERR(filp);
-		fput(filp);
-	}
-
-	return 0;
-}
-
-int ovl_validate_verity(struct ovl_fs *ofs,
-			struct path *metapath,
-			struct path *datapath)
-{
-	struct ovl_metacopy metacopy_data;
-	u8 actual_digest[FS_VERITY_MAX_DIGEST_SIZE];
-	int xattr_digest_size, digest_size;
-	int xattr_size, err;
-	u8 verity_algo;
-
-	if (!ofs->config.verity_mode ||
-	    /* Verity only works on regular files */
-	    !S_ISREG(d_inode(metapath->dentry)->i_mode))
-		return 0;
-
-	xattr_size = ovl_check_metacopy_xattr(ofs, metapath, &metacopy_data);
-	if (xattr_size < 0)
-		return xattr_size;
-
-	if (!xattr_size || !metacopy_data.digest_algo) {
-		if (ofs->config.verity_mode == OVL_VERITY_REQUIRE) {
-			pr_warn_ratelimited("metacopy file '%pd' has no digest specified\n",
-					    metapath->dentry);
-			return -EIO;
-		}
-		return 0;
-	}
-
-	xattr_digest_size = ovl_metadata_digest_size(&metacopy_data);
-
-	err = ovl_ensure_verity_loaded(datapath);
-	if (err < 0) {
-		pr_warn_ratelimited("lower file '%pd' failed to load fs-verity info\n",
-				    datapath->dentry);
-		return -EIO;
-	}
-
-	digest_size = fsverity_get_digest(d_inode(datapath->dentry), actual_digest,
-					  &verity_algo, NULL);
-	if (digest_size == 0) {
-		pr_warn_ratelimited("lower file '%pd' has no fs-verity digest\n", datapath->dentry);
-		return -EIO;
-	}
-
-	if (xattr_digest_size != digest_size ||
-	    metacopy_data.digest_algo != verity_algo ||
-	    memcmp(metacopy_data.digest, actual_digest, xattr_digest_size) != 0) {
-		pr_warn_ratelimited("lower file '%pd' has the wrong fs-verity digest\n",
-				    datapath->dentry);
-		return -EIO;
-	}
-
-	return 0;
-}
-
-int ovl_get_verity_digest(struct ovl_fs *ofs, struct path *src,
-			  struct ovl_metacopy *metacopy)
-{
-	int err, digest_size;
-
-	if (!ofs->config.verity_mode || !S_ISREG(d_inode(src->dentry)->i_mode))
-		return 0;
-
-	err = ovl_ensure_verity_loaded(src);
-	if (err < 0) {
-		pr_warn_ratelimited("lower file '%pd' failed to load fs-verity info\n",
-				    src->dentry);
-		return -EIO;
-	}
-
-	digest_size = fsverity_get_digest(d_inode(src->dentry),
-					  metacopy->digest, &metacopy->digest_algo, NULL);
-	if (digest_size == 0 ||
-	    WARN_ON_ONCE(digest_size > FS_VERITY_MAX_DIGEST_SIZE)) {
-		if (ofs->config.verity_mode == OVL_VERITY_REQUIRE) {
-			pr_warn_ratelimited("lower file '%pd' has no fs-verity digest\n",
-					    src->dentry);
-			return -EIO;
-		}
-		return 0;
-	}
-
-	metacopy->len += digest_size;
-	return 0;
-}
-
 /*
  * ovl_sync_status() - Check fs sync status for volatile mounts
  *
@@ -1502,16 +1194,14 @@ void ovl_copyattr(struct inode *inode)
 	realinode = ovl_i_path_real(inode, &realpath);
 	real_idmap = mnt_idmap(realpath.mnt);
 
-	spin_lock(&inode->i_lock);
 	vfsuid = i_uid_into_vfsuid(real_idmap, realinode);
 	vfsgid = i_gid_into_vfsgid(real_idmap, realinode);
 
 	inode->i_uid = vfsuid_into_kuid(vfsuid);
 	inode->i_gid = vfsgid_into_kgid(vfsgid);
 	inode->i_mode = realinode->i_mode;
-	inode_set_atime_to_ts(inode, inode_get_atime(realinode));
-	inode_set_mtime_to_ts(inode, inode_get_mtime(realinode));
-	inode_set_ctime_to_ts(inode, inode_get_ctime(realinode));
+	inode->i_atime = realinode->i_atime;
+	inode->i_mtime = realinode->i_mtime;
+	inode->i_ctime = realinode->i_ctime;
 	i_size_write(inode, i_size_read(realinode));
-	spin_unlock(&inode->i_lock);
 }

@@ -180,7 +180,8 @@ static void sl82c105_bmdma_start(struct ata_queued_cmd *qc)
  *	document.
  *
  *	This function is also called to turn off DMA when a timeout occurs
- *	during DMA operation. In both cases we need to reset the engine.
+ *	during DMA operation. In both cases we need to reset the engine,
+ *	so no actual eng_timeout handler is required.
  *
  *	We assume bmdma_stop is always called if bmdma_start as called. If
  *	not then we may need to wrap qc_issue.

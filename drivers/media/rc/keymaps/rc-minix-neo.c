@@ -53,4 +53,3 @@ module_exit(exit_rc_map_minix_neo)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Christian Hewitt <christianshewitt@gmail.com");
-MODULE_DESCRIPTION("Minix NEO remote controller keytable");

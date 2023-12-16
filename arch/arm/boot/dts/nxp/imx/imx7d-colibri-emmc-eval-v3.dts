@@ -11,6 +11,7 @@
 	model = "Toradex Colibri iMX7D 1GB (eMMC) on Colibri Evaluation Board V3";
 	compatible = "toradex,colibri-imx7d-emmc-eval-v3",
 		     "toradex,colibri-imx7d-emmc",
+		     "toradex,colibri-imx7d",
 		     "fsl,imx7d";
 };
 

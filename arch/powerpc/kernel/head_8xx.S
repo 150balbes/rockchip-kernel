@@ -29,6 +29,7 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
+#include <asm/export.h>
 #include <asm/code-patching-asm.h>
 #include <asm/interrupt.h>
 

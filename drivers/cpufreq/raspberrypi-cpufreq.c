@@ -65,7 +65,7 @@ remove_opp:
 	return ret;
 }
 
-static void raspberrypi_cpufreq_remove(struct platform_device *pdev)
+static int raspberrypi_cpufreq_remove(struct platform_device *pdev)
 {
 	struct device *cpu_dev;
 
@@ -74,6 +74,8 @@ static void raspberrypi_cpufreq_remove(struct platform_device *pdev)
 		dev_pm_opp_remove_all_dynamic(cpu_dev);
 
 	platform_device_unregister(cpufreq_dt);
+
+	return 0;
 }
 
 /*
@@ -85,7 +87,7 @@ static struct platform_driver raspberrypi_cpufreq_driver = {
 		.name = "raspberrypi-cpufreq",
 	},
 	.probe          = raspberrypi_cpufreq_probe,
-	.remove_new	= raspberrypi_cpufreq_remove,
+	.remove		= raspberrypi_cpufreq_remove,
 };
 module_platform_driver(raspberrypi_cpufreq_driver);
 

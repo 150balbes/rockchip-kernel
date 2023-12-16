@@ -12,7 +12,6 @@
 #include "common.h"
 #include "cred.h"
 #include "fs.h"
-#include "net.h"
 #include "ptrace.h"
 #include "setup.h"
 
@@ -30,7 +29,6 @@ static int __init landlock_init(void)
 	landlock_add_cred_hooks();
 	landlock_add_ptrace_hooks();
 	landlock_add_fs_hooks();
-	landlock_add_net_hooks();
 	landlock_initialized = true;
 	pr_info("Up and running.\n");
 	return 0;

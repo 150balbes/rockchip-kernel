@@ -141,9 +141,36 @@ static const struct uniphier_aio_pll uniphier_aio_pll_pxs2[] = {
 	[AUD_PLL_HSC0] = { .enable = true, },
 };
 
+static int uniphier_aio_pxs2_probe(struct snd_soc_dai *dai)
+{
+	int ret;
+
+	ret = uniphier_aio_dai_probe(dai);
+	if (ret < 0)
+		return ret;
+
+	ret = snd_soc_dai_set_pll(dai, AUD_PLL_A1, 0, 0, 36864000);
+	if (ret < 0)
+		return ret;
+	ret = snd_soc_dai_set_pll(dai, AUD_PLL_F1, 0, 0, 36864000);
+	if (ret < 0)
+		return ret;
+
+	ret = snd_soc_dai_set_pll(dai, AUD_PLL_A2, 0, 0, 33868800);
+	if (ret < 0)
+		return ret;
+	ret = snd_soc_dai_set_pll(dai, AUD_PLL_F2, 0, 0, 33868800);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 	{
 		.name    = AUD_GNAME_HDMI,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
 		.playback = {
 			.stream_name = AUD_NAME_HPCMOUT1,
 			.formats     = SNDRV_PCM_FMTBIT_S32_LE,
@@ -151,10 +178,12 @@ static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 			.channels_min = 2,
 			.channels_max = 2,
 		},
-		.ops = &uniphier_aio_i2s_pxs2_ops,
+		.ops = &uniphier_aio_i2s_ops,
 	},
 	{
 		.name    = AUD_GNAME_LINE,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
 		.playback = {
 			.stream_name = AUD_NAME_PCMOUT1,
 			.formats     = SNDRV_PCM_FMTBIT_S32_LE,
@@ -169,10 +198,12 @@ static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 			.channels_min = 2,
 			.channels_max = 2,
 		},
-		.ops = &uniphier_aio_i2s_pxs2_ops,
+		.ops = &uniphier_aio_i2s_ops,
 	},
 	{
 		.name    = AUD_GNAME_AUX,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
 		.playback = {
 			.stream_name = AUD_NAME_PCMOUT2,
 			.formats     = SNDRV_PCM_FMTBIT_S32_LE,
@@ -187,10 +218,12 @@ static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 			.channels_min = 2,
 			.channels_max = 2,
 		},
-		.ops = &uniphier_aio_i2s_pxs2_ops,
+		.ops = &uniphier_aio_i2s_ops,
 	},
 	{
 		.name    = AUD_NAME_HIECOUT1,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
 		.playback = {
 			.stream_name = AUD_NAME_HIECOUT1,
 			.formats     = SNDRV_PCM_FMTBIT_S32_LE,
@@ -198,10 +231,12 @@ static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 			.channels_min = 2,
 			.channels_max = 2,
 		},
-		.ops = &uniphier_aio_spdif_pxs2_ops,
+		.ops = &uniphier_aio_spdif_ops,
 	},
 	{
 		.name    = AUD_NAME_IECOUT1,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
 		.playback = {
 			.stream_name = AUD_NAME_IECOUT1,
 			.formats     = SNDRV_PCM_FMTBIT_S32_LE,
@@ -209,25 +244,31 @@ static struct snd_soc_dai_driver uniphier_aio_dai_pxs2[] = {
 			.channels_min = 2,
 			.channels_max = 2,
 		},
-		.ops = &uniphier_aio_spdif_pxs2_ops,
+		.ops = &uniphier_aio_spdif_ops,
 	},
 	{
 		.name    = AUD_NAME_HIECCOMPOUT1,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
+		.compress_new = snd_soc_new_compress,
 		.playback = {
 			.stream_name = AUD_NAME_HIECCOMPOUT1,
 			.channels_min = 1,
 			.channels_max = 1,
 		},
-		.ops = &uniphier_aio_spdif_pxs2_ops2,
+		.ops = &uniphier_aio_spdif_ops,
 	},
 	{
 		.name    = AUD_NAME_IECCOMPOUT1,
+		.probe   = uniphier_aio_pxs2_probe,
+		.remove  = uniphier_aio_dai_remove,
+		.compress_new = snd_soc_new_compress,
 		.playback = {
 			.stream_name = AUD_NAME_IECCOMPOUT1,
 			.channels_min = 1,
 			.channels_max = 1,
 		},
-		.ops = &uniphier_aio_spdif_pxs2_ops2,
+		.ops = &uniphier_aio_spdif_ops,
 	},
 };
 
@@ -256,7 +297,7 @@ static struct platform_driver uniphier_aio_driver = {
 		.of_match_table = of_match_ptr(uniphier_aio_of_match),
 	},
 	.probe    = uniphier_aio_probe,
-	.remove_new = uniphier_aio_remove,
+	.remove   = uniphier_aio_remove,
 };
 module_platform_driver(uniphier_aio_driver);
 

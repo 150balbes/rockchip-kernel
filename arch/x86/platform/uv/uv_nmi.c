@@ -17,7 +17,6 @@
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/slab.h>
-#include <linux/string.h>
 #include <linux/clocksource.h>
 
 #include <asm/apic.h>
@@ -179,56 +178,53 @@ module_param_named(debug, uv_nmi_debug, int, 0644);
 	} while (0)
 
 /* Valid NMI Actions */
-enum action_t {
-	nmi_act_kdump,
-	nmi_act_dump,
-	nmi_act_ips,
-	nmi_act_kdb,
-	nmi_act_kgdb,
-	nmi_act_health,
-	nmi_act_max
+#define	ACTION_LEN	16
+static struct nmi_action {
+	char	*action;
+	char	*desc;
+} valid_acts[] = {
+	{	"kdump",	"do kernel crash dump"			},
+	{	"dump",		"dump process stack for each cpu"	},
+	{	"ips",		"dump Inst Ptr info for each cpu"	},
+	{	"kdb",		"enter KDB (needs kgdboc= assignment)"	},
+	{	"kgdb",		"enter KGDB (needs gdb target remote)"	},
+	{	"health",	"check if CPUs respond to NMI"		},
 };
-
-static const char * const actions[nmi_act_max] = {
-	[nmi_act_kdump] = "kdump",
-	[nmi_act_dump] = "dump",
-	[nmi_act_ips] = "ips",
-	[nmi_act_kdb] = "kdb",
-	[nmi_act_kgdb] = "kgdb",
-	[nmi_act_health] = "health",
-};
-
-static const char * const actions_desc[nmi_act_max] = {
-	[nmi_act_kdump] = "do kernel crash dump",
-	[nmi_act_dump] = "dump process stack for each cpu",
-	[nmi_act_ips] = "dump Inst Ptr info for each cpu",
-	[nmi_act_kdb] = "enter KDB (needs kgdboc= assignment)",
-	[nmi_act_kgdb] = "enter KGDB (needs gdb target remote)",
-	[nmi_act_health] = "check if CPUs respond to NMI",
-};
-
-static enum action_t uv_nmi_action = nmi_act_dump;
+typedef char action_t[ACTION_LEN];
+static action_t uv_nmi_action = { "dump" };
 
 static int param_get_action(char *buffer, const struct kernel_param *kp)
 {
-	return sprintf(buffer, "%s\n", actions[uv_nmi_action]);
+	return sprintf(buffer, "%s\n", uv_nmi_action);
 }
 
 static int param_set_action(const char *val, const struct kernel_param *kp)
 {
-	int i, n = ARRAY_SIZE(actions);
+	int i;
+	int n = ARRAY_SIZE(valid_acts);
+	char arg[ACTION_LEN], *p;
 
-	i = sysfs_match_string(actions, val);
-	if (i >= 0) {
-		uv_nmi_action = i;
-		pr_info("UV: New NMI action:%s\n", actions[i]);
+	/* (remove possible '\n') */
+	strncpy(arg, val, ACTION_LEN - 1);
+	arg[ACTION_LEN - 1] = '\0';
+	p = strchr(arg, '\n');
+	if (p)
+		*p = '\0';
+
+	for (i = 0; i < n; i++)
+		if (!strcmp(arg, valid_acts[i].action))
+			break;
+
+	if (i < n) {
+		strcpy(uv_nmi_action, arg);
+		pr_info("UV: New NMI action:%s\n", uv_nmi_action);
 		return 0;
 	}
 
-	pr_err("UV: Invalid NMI action. Valid actions are:\n");
+	pr_err("UV: Invalid NMI action:%s, valid actions are:\n", arg);
 	for (i = 0; i < n; i++)
-		pr_err("UV: %-8s - %s\n", actions[i], actions_desc[i]);
-
+		pr_err("UV: %-8s - %s\n",
+			valid_acts[i].action, valid_acts[i].desc);
 	return -EINVAL;
 }
 
@@ -236,9 +232,14 @@ static const struct kernel_param_ops param_ops_action = {
 	.get = param_get_action,
 	.set = param_set_action,
 };
-#define param_check_action(name, p) __param_check(name, p, enum action_t)
+#define param_check_action(name, p) __param_check(name, p, action_t)
 
 module_param_named(action, uv_nmi_action, action, 0644);
+
+static inline bool uv_nmi_action_is(const char *action)
+{
+	return (strncmp(uv_nmi_action, action, strlen(action)) == 0);
+}
 
 /* Setup which NMI support is present in system */
 static void uv_nmi_setup_mmrs(void)
@@ -600,7 +601,7 @@ static void uv_nmi_nr_cpus_ping(void)
 	for_each_cpu(cpu, uv_nmi_cpu_mask)
 		uv_cpu_nmi_per(cpu).pinging = 1;
 
-	__apic_send_IPI_mask(uv_nmi_cpu_mask, APIC_DM_NMI);
+	apic->send_IPI_mask(uv_nmi_cpu_mask, APIC_DM_NMI);
 }
 
 /* Clean up flags for CPU's that ignored both NMI and ping */
@@ -730,10 +731,10 @@ static void uv_nmi_dump_state_cpu(int cpu, struct pt_regs *regs)
 	if (cpu == 0)
 		uv_nmi_dump_cpu_ip_hdr();
 
-	if (current->pid != 0 || uv_nmi_action != nmi_act_ips)
+	if (current->pid != 0 || !uv_nmi_action_is("ips"))
 		uv_nmi_dump_cpu_ip(cpu, regs);
 
-	if (uv_nmi_action == nmi_act_dump) {
+	if (uv_nmi_action_is("dump")) {
 		pr_info("UV:%sNMI process trace for CPU %d\n", dots, cpu);
 		show_regs(regs);
 	}
@@ -801,7 +802,7 @@ static void uv_nmi_dump_state(int cpu, struct pt_regs *regs, int master)
 		int saved_console_loglevel = console_loglevel;
 
 		pr_alert("UV: tracing %s for %d CPUs from CPU %d\n",
-			uv_nmi_action == nmi_act_ips ? "IPs" : "processes",
+			uv_nmi_action_is("ips") ? "IPs" : "processes",
 			atomic_read(&uv_nmi_cpus_in_nmi), cpu);
 
 		console_loglevel = uv_nmi_loglevel;
@@ -877,7 +878,7 @@ static inline int uv_nmi_kdb_reason(void)
 static inline int uv_nmi_kdb_reason(void)
 {
 	/* Ensure user is expecting to attach gdb remote */
-	if (uv_nmi_action == nmi_act_kgdb)
+	if (uv_nmi_action_is("kgdb"))
 		return 0;
 
 	pr_err("UV: NMI error: KDB is not enabled in this kernel\n");
@@ -953,35 +954,28 @@ static int uv_handle_nmi(unsigned int reason, struct pt_regs *regs)
 	master = (atomic_read(&uv_nmi_cpu) == cpu);
 
 	/* If NMI action is "kdump", then attempt to do it */
-	if (uv_nmi_action == nmi_act_kdump) {
+	if (uv_nmi_action_is("kdump")) {
 		uv_nmi_kdump(cpu, master, regs);
 
 		/* Unexpected return, revert action to "dump" */
 		if (master)
-			uv_nmi_action = nmi_act_dump;
+			strncpy(uv_nmi_action, "dump", strlen(uv_nmi_action));
 	}
 
 	/* Pause as all CPU's enter the NMI handler */
 	uv_nmi_wait(master);
 
 	/* Process actions other than "kdump": */
-	switch (uv_nmi_action) {
-	case nmi_act_health:
+	if (uv_nmi_action_is("health")) {
 		uv_nmi_action_health(cpu, regs, master);
-		break;
-	case nmi_act_ips:
-	case nmi_act_dump:
+	} else if (uv_nmi_action_is("ips") || uv_nmi_action_is("dump")) {
 		uv_nmi_dump_state(cpu, regs, master);
-		break;
-	case nmi_act_kdb:
-	case nmi_act_kgdb:
+	} else if (uv_nmi_action_is("kdb") || uv_nmi_action_is("kgdb")) {
 		uv_call_kgdb_kdb(cpu, regs, master);
-		break;
-	default:
+	} else {
 		if (master)
-			pr_alert("UV: unknown NMI action: %d\n", uv_nmi_action);
+			pr_alert("UV: unknown NMI action: %s\n", uv_nmi_action);
 		uv_nmi_sync_exit(master);
-		break;
 	}
 
 	/* Clear per_cpu "in_nmi" flag */

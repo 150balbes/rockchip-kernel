@@ -84,8 +84,8 @@ static void set_midi_substream_names(struct snd_efw *efw,
 	struct snd_rawmidi_substream *subs;
 
 	list_for_each_entry(subs, &str->substreams, list) {
-		scnprintf(subs->name, sizeof(subs->name),
-			  "%s MIDI %d", efw->card->shortname, subs->number + 1);
+		snprintf(subs->name, sizeof(subs->name),
+			 "%s MIDI %d", efw->card->shortname, subs->number + 1);
 	}
 }
 

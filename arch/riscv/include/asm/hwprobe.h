@@ -8,11 +8,6 @@
 
 #include <uapi/asm/hwprobe.h>
 
-#define RISCV_HWPROBE_MAX_KEY 6
-
-static inline bool riscv_hwprobe_key_is_valid(__s64 key)
-{
-	return key >= 0 && key <= RISCV_HWPROBE_MAX_KEY;
-}
+#define RISCV_HWPROBE_MAX_KEY 5
 
 #endif

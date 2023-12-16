@@ -81,17 +81,8 @@ out_rq:
 
 	i915_request_add(rq);
 
-	if (!err) {
-		/*
-		 * Start timeout for i915_request_wait only after considering one possible
-		 * pending GSC-HECI submission cycle on the other (non-privileged) path.
-		 */
-		if (wait_for(i915_request_started(rq), GSC_HECI_REPLY_LATENCY_MS))
-			drm_dbg(&gsc_uc_to_gt(gsc)->i915->drm,
-				"Delay in gsc-heci-priv submission to gsccs-hw");
-		if (i915_request_wait(rq, 0, msecs_to_jiffies(GSC_HECI_REPLY_LATENCY_MS)) < 0)
-			err = -ETIME;
-	}
+	if (!err && i915_request_wait(rq, 0, msecs_to_jiffies(500)) < 0)
+		err = -ETIME;
 
 	i915_request_put(rq);
 
@@ -195,13 +186,6 @@ out_rq:
 	i915_request_add(rq);
 
 	if (!err) {
-		/*
-		 * Start timeout for i915_request_wait only after considering one possible
-		 * pending GSC-HECI submission cycle on the other (privileged) path.
-		 */
-		if (wait_for(i915_request_started(rq), GSC_HECI_REPLY_LATENCY_MS))
-			drm_dbg(&gsc_uc_to_gt(gsc)->i915->drm,
-				"Delay in gsc-heci-non-priv submission to gsccs-hw");
 		if (i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE,
 				      msecs_to_jiffies(timeout_ms)) < 0)
 			err = -ETIME;

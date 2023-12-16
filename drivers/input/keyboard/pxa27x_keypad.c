@@ -717,6 +717,7 @@ static int pxa27x_keypad_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct pxa27x_keypad *keypad;
 	struct input_dev *input_dev;
+	struct resource *res;
 	int irq, error;
 
 	/* Driver need build keycode from device tree or pdata */
@@ -726,6 +727,12 @@ static int pxa27x_keypad_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return -ENXIO;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (res == NULL) {
+		dev_err(&pdev->dev, "failed to get I/O memory\n");
+		return -ENXIO;
+	}
 
 	keypad = devm_kzalloc(&pdev->dev, sizeof(*keypad),
 			      GFP_KERNEL);
@@ -740,7 +747,7 @@ static int pxa27x_keypad_probe(struct platform_device *pdev)
 	keypad->input_dev = input_dev;
 	keypad->irq = irq;
 
-	keypad->mmio_base = devm_platform_ioremap_resource(pdev, 0);
+	keypad->mmio_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(keypad->mmio_base))
 		return PTR_ERR(keypad->mmio_base);
 

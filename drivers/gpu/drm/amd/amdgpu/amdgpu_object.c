@@ -158,14 +158,6 @@ void amdgpu_bo_placement_from_domain(struct amdgpu_bo *abo, u32 domain)
 		c++;
 	}
 
-	if (domain & AMDGPU_GEM_DOMAIN_DOORBELL) {
-		places[c].fpfn = 0;
-		places[c].lpfn = 0;
-		places[c].mem_type = AMDGPU_PL_DOORBELL;
-		places[c].flags = 0;
-		c++;
-	}
-
 	if (domain & AMDGPU_GEM_DOMAIN_GTT) {
 		places[c].fpfn = 0;
 		places[c].lpfn = 0;
@@ -459,7 +451,7 @@ void amdgpu_bo_free_kernel(struct amdgpu_bo **bo, u64 *gpu_addr,
 		*cpu_addr = NULL;
 }
 
-/* Validate bo size is bit bigger than the request domain */
+/* Validate bo size is bit bigger then the request domain */
 static bool amdgpu_bo_validate_size(struct amdgpu_device *adev,
 					  unsigned long size, u32 domain)
 {
@@ -469,24 +461,29 @@ static bool amdgpu_bo_validate_size(struct amdgpu_device *adev,
 	 * If GTT is part of requested domains the check must succeed to
 	 * allow fall back to GTT.
 	 */
-	if (domain & AMDGPU_GEM_DOMAIN_GTT)
+	if (domain & AMDGPU_GEM_DOMAIN_GTT) {
 		man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
-	else if (domain & AMDGPU_GEM_DOMAIN_VRAM)
-		man = ttm_manager_type(&adev->mman.bdev, TTM_PL_VRAM);
-	else
-		return true;
 
-	if (!man) {
-		if (domain & AMDGPU_GEM_DOMAIN_GTT)
+		if (man && size < man->size)
+			return true;
+		else if (!man)
 			WARN_ON_ONCE("GTT domain requested but GTT mem manager uninitialized");
-		return false;
+		goto fail;
+	} else if (domain & AMDGPU_GEM_DOMAIN_VRAM) {
+		man = ttm_manager_type(&adev->mman.bdev, TTM_PL_VRAM);
+
+		if (man && size < man->size)
+			return true;
+		goto fail;
 	}
 
-	/* TODO add more domains checks, such as AMDGPU_GEM_DOMAIN_CPU, _DOMAIN_DOORBELL */
-	if (size < man->size)
-		return true;
+	/* TODO add more domains checks, such as AMDGPU_GEM_DOMAIN_CPU */
+	return true;
 
-	DRM_DEBUG("BO size %lu > total memory in domain: %llu\n", size, man->size);
+fail:
+	if (man)
+		DRM_DEBUG("BO size %lu > total memory in domain: %llu\n", size,
+			  man->size);
 	return false;
 }
 
@@ -1032,7 +1029,6 @@ void amdgpu_bo_unpin(struct amdgpu_bo *bo)
 	} else if (bo->tbo.resource->mem_type == TTM_PL_TT) {
 		atomic64_sub(amdgpu_bo_size(bo), &adev->gart_pin_size);
 	}
-
 }
 
 static const char * const amdgpu_vram_names[] = {
@@ -1579,31 +1575,23 @@ u64 amdgpu_bo_print_info(int id, struct amdgpu_bo *bo, struct seq_file *m)
 {
 	struct dma_buf_attachment *attachment;
 	struct dma_buf *dma_buf;
+	unsigned int domain;
 	const char *placement;
 	unsigned int pin_count;
 	u64 size;
 
-	if (dma_resv_trylock(bo->tbo.base.resv)) {
-		unsigned int domain;
-		domain = amdgpu_mem_type_to_domain(bo->tbo.resource->mem_type);
-		switch (domain) {
-		case AMDGPU_GEM_DOMAIN_VRAM:
-			if (amdgpu_bo_in_cpu_visible_vram(bo))
-				placement = "VRAM VISIBLE";
-			else
-				placement = "VRAM";
-			break;
-		case AMDGPU_GEM_DOMAIN_GTT:
-			placement = "GTT";
-			break;
-		case AMDGPU_GEM_DOMAIN_CPU:
-		default:
-			placement = "CPU";
-			break;
-		}
-		dma_resv_unlock(bo->tbo.base.resv);
-	} else {
-		placement = "UNKNOWN";
+	domain = amdgpu_mem_type_to_domain(bo->tbo.resource->mem_type);
+	switch (domain) {
+	case AMDGPU_GEM_DOMAIN_VRAM:
+		placement = "VRAM";
+		break;
+	case AMDGPU_GEM_DOMAIN_GTT:
+		placement = " GTT";
+		break;
+	case AMDGPU_GEM_DOMAIN_CPU:
+	default:
+		placement = " CPU";
+		break;
 	}
 
 	size = amdgpu_bo_size(bo);

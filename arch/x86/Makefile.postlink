@@ -34,6 +34,9 @@ ifeq ($(CONFIG_X86_NEED_RELOCS),y)
 	$(call cmd,strip_relocs)
 endif
 
+%.ko: FORCE
+	@true
+
 clean:
 	@rm -f $(OUT_RELOCS)/vmlinux.relocs
 

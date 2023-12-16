@@ -1098,7 +1098,7 @@ repeat:
 			}
 		} else if (TC_ACT_EXT_CMP(ret, TC_ACT_GOTO_CHAIN)) {
 			if (unlikely(!rcu_access_pointer(a->goto_chain))) {
-				tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
+				net_warn_ratelimited("can't go to NULL chain!\n");
 				return TC_ACT_SHOT;
 			}
 			tcf_action_goto_chain_exec(a, res);

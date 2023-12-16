@@ -2005,6 +2005,9 @@ snd_es1968_mixer(struct es1968 *chip)
 {
 	struct snd_ac97_bus *pbus;
 	struct snd_ac97_template ac97;
+#ifndef CONFIG_SND_ES1968_INPUT
+	struct snd_ctl_elem_id elem_id;
+#endif
 	int err;
 	static const struct snd_ac97_bus_ops ops = {
 		.write = snd_es1968_ac97_write,
@@ -2024,10 +2027,14 @@ snd_es1968_mixer(struct es1968 *chip)
 
 #ifndef CONFIG_SND_ES1968_INPUT
 	/* attach master switch / volumes for h/w volume control */
-	chip->master_switch = snd_ctl_find_id_mixer(chip->card,
-						    "Master Playback Switch");
-	chip->master_volume = snd_ctl_find_id_mixer(chip->card,
-						    "Master Playback Volume");
+	memset(&elem_id, 0, sizeof(elem_id));
+	elem_id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+	strcpy(elem_id.name, "Master Playback Switch");
+	chip->master_switch = snd_ctl_find_id(chip->card, &elem_id);
+	memset(&elem_id, 0, sizeof(elem_id));
+	elem_id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+	strcpy(elem_id.name, "Master Playback Volume");
+	chip->master_volume = snd_ctl_find_id(chip->card, &elem_id);
 #endif
 
 	return 0;

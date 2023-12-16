@@ -47,8 +47,6 @@
 #include <linux/spinlock.h>
 #include <net/devlink.h>
 #include <linux/rwsem.h>
-#include <linux/auxiliary_bus.h>
-#include <linux/notifier.h>
 
 #include <linux/mlx4/device.h>
 #include <linux/mlx4/driver.h>
@@ -864,11 +862,6 @@ struct mlx4_steer {
 	struct list_head steer_entries[MLX4_NUM_STEERS];
 };
 
-struct mlx4_port_map {
-	u8	port1;
-	u8	port2;
-};
-
 enum {
 	MLX4_PCI_DEV_IS_VF		= 1 << 0,
 	MLX4_PCI_DEV_FORCE_SENSE_PORT	= 1 << 1,
@@ -882,9 +875,9 @@ enum {
 struct mlx4_priv {
 	struct mlx4_dev		dev;
 
-	struct mlx4_adev	**adev;
-	int			adev_idx;
-	struct atomic_notifier_head event_nh;
+	struct list_head	dev_list;
+	struct list_head	ctx_list;
+	spinlock_t		ctx_lock;
 
 	int			pci_dev_data;
 	int                     removed;
@@ -1052,13 +1045,10 @@ void mlx4_catas_end(struct mlx4_dev *dev);
 int mlx4_crdump_init(struct mlx4_dev *dev);
 void mlx4_crdump_end(struct mlx4_dev *dev);
 int mlx4_restart_one(struct pci_dev *pdev);
-
-int mlx4_adev_init(struct mlx4_dev *dev);
-void mlx4_adev_cleanup(struct mlx4_dev *dev);
 int mlx4_register_device(struct mlx4_dev *dev);
 void mlx4_unregister_device(struct mlx4_dev *dev);
 void mlx4_dispatch_event(struct mlx4_dev *dev, enum mlx4_dev_event type,
-			 void *param);
+			 unsigned long param);
 
 struct mlx4_dev_cap;
 struct mlx4_init_hca_param;

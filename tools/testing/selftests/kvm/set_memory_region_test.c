@@ -88,7 +88,7 @@ static void *vcpu_worker(void *data)
 	}
 
 	if (run->exit_reason == KVM_EXIT_IO && cmd == UCALL_ABORT)
-		REPORT_GUEST_ASSERT(uc);
+		REPORT_GUEST_ASSERT_1(uc, "val = %lu");
 
 	return NULL;
 }
@@ -156,22 +156,19 @@ static void guest_code_move_memory_region(void)
 	 * window where the memslot is invalid is usually quite small.
 	 */
 	val = guest_spin_on_val(0);
-	__GUEST_ASSERT(val == 1 || val == MMIO_VAL,
-		       "Expected '1' or MMIO ('%llx'), got '%llx'", MMIO_VAL, val);
+	GUEST_ASSERT_1(val == 1 || val == MMIO_VAL, val);
 
 	/* Spin until the misaligning memory region move completes. */
 	val = guest_spin_on_val(MMIO_VAL);
-	__GUEST_ASSERT(val == 1 || val == 0,
-		       "Expected '0' or '1' (no MMIO), got '%llx'", val);
+	GUEST_ASSERT_1(val == 1 || val == 0, val);
 
 	/* Spin until the memory region starts to get re-aligned. */
 	val = guest_spin_on_val(0);
-	__GUEST_ASSERT(val == 1 || val == MMIO_VAL,
-		       "Expected '1' or MMIO ('%llx'), got '%llx'", MMIO_VAL, val);
+	GUEST_ASSERT_1(val == 1 || val == MMIO_VAL, val);
 
 	/* Spin until the re-aligning memory region move completes. */
 	val = guest_spin_on_val(MMIO_VAL);
-	GUEST_ASSERT_EQ(val, 1);
+	GUEST_ASSERT_1(val == 1, val);
 
 	GUEST_DONE();
 }
@@ -227,15 +224,15 @@ static void guest_code_delete_memory_region(void)
 
 	/* Spin until the memory region is deleted. */
 	val = guest_spin_on_val(0);
-	GUEST_ASSERT_EQ(val, MMIO_VAL);
+	GUEST_ASSERT_1(val == MMIO_VAL, val);
 
 	/* Spin until the memory region is recreated. */
 	val = guest_spin_on_val(MMIO_VAL);
-	GUEST_ASSERT_EQ(val, 0);
+	GUEST_ASSERT_1(val == 0, val);
 
 	/* Spin until the memory region is deleted. */
 	val = guest_spin_on_val(0);
-	GUEST_ASSERT_EQ(val, MMIO_VAL);
+	GUEST_ASSERT_1(val == MMIO_VAL, val);
 
 	asm("1:\n\t"
 	    ".pushsection .rodata\n\t"
@@ -252,7 +249,7 @@ static void guest_code_delete_memory_region(void)
 	    "final_rip_end: .quad 1b\n\t"
 	    ".popsection");
 
-	GUEST_ASSERT(0);
+	GUEST_ASSERT_1(0, 0);
 }
 
 static void test_delete_memory_region(void)

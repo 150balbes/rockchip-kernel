@@ -1248,6 +1248,28 @@ static void atomisp_update_capture_mode(struct atomisp_sub_device *asd)
 		atomisp_css_capture_set_mode(asd, IA_CSS_CAPTURE_MODE_PRIMARY);
 }
 
+/* ISP2401 */
+int atomisp_set_sensor_runmode(struct atomisp_sub_device *asd,
+			       struct atomisp_s_runmode *runmode)
+{
+	struct atomisp_device *isp = asd->isp;
+	struct v4l2_ctrl *c;
+	int ret = 0;
+
+	if (!(runmode && (runmode->mode & RUNMODE_MASK)))
+		return -EINVAL;
+
+	mutex_lock(asd->ctrl_handler.lock);
+	c = v4l2_ctrl_find(isp->inputs[asd->input_curr].camera->ctrl_handler,
+			   V4L2_CID_RUN_MODE);
+
+	if (c)
+		ret = v4l2_ctrl_s_ctrl(c, runmode->mode);
+
+	mutex_unlock(asd->ctrl_handler.lock);
+	return ret;
+}
+
 /*
  * Function to enable/disable lens geometry distortion correction (GDC) and
  * chromatic aberration correction (CAC)
@@ -2771,16 +2793,12 @@ int atomisp_cp_dvs_6axis_config(struct atomisp_sub_device *asd,
 			css_param->dvs_6axis = NULL;
 
 			dvs_6axis_config = ia_css_dvs2_6axis_config_allocate(stream);
-			if (!dvs_6axis_config) {
-				ret = -ENOMEM;
-				goto error;
-			}
+			if (!dvs_6axis_config)
+				return -ENOMEM;
 		} else if (!dvs_6axis_config) {
 			dvs_6axis_config = ia_css_dvs2_6axis_config_allocate(stream);
-			if (!dvs_6axis_config) {
-				ret = -ENOMEM;
-				goto error;
-			}
+			if (!dvs_6axis_config)
+				return -ENOMEM;
 		}
 
 		dvs_6axis_config->exp_id = source_6axis_config->exp_id;
@@ -2878,10 +2896,8 @@ int atomisp_cp_morph_table(struct atomisp_sub_device *asd,
 		morph_table = atomisp_css_morph_table_allocate(
 				source_morph_table->width,
 				source_morph_table->height);
-		if (!morph_table) {
-			ret = -ENOMEM;
-			goto error;
-		}
+		if (!morph_table)
+			return -ENOMEM;
 
 		for (i = 0; i < IA_CSS_MORPH_TABLE_NUM_PLANES; i++) {
 			if (copy_from_compatible(morph_table->coordinates_x[i],
@@ -2985,6 +3001,12 @@ void atomisp_handle_parameter_and_buffer(struct atomisp_video_pipe *pipe)
 	bool need_to_enqueue_buffer = false;
 	int i;
 
+	if (!asd) {
+		dev_err(pipe->isp->dev, "%s(): asd is NULL, device is %s\n",
+			__func__, pipe->vdev.name);
+		return;
+	}
+
 	lockdep_assert_held(&asd->isp->mutex);
 
 	/*
@@ -3045,6 +3067,12 @@ int atomisp_set_parameters(struct video_device *vdev,
 	struct atomisp_css_params_with_list *param = NULL;
 	struct atomisp_css_params *css_param = &asd->params.css_param;
 	int ret;
+
+	if (!asd) {
+		dev_err(pipe->isp->dev, "%s(): asd is NULL, device is %s\n",
+			__func__, vdev->name);
+		return -EINVAL;
+	}
 
 	lockdep_assert_held(&asd->isp->mutex);
 
@@ -3792,10 +3820,6 @@ int atomisp_try_fmt(struct atomisp_device *isp, struct v4l2_pix_format *f,
 			return -EINVAL;
 	}
 
-	/* The preview pipeline does not support width > 1920 */
-	if (asd->run_mode->val == ATOMISP_RUN_MODE_PREVIEW)
-		f->width = min_t(u32, f->width, 1920);
-
 	/*
 	 * atomisp_set_fmt() will set the sensor resolution to the requested
 	 * resolution + padding. Add padding here and remove it again after
@@ -4043,6 +4067,12 @@ static int atomisp_set_fmt_to_isp(struct video_device *vdev,
 	const struct atomisp_in_fmt_conv *fc = NULL;
 	int ret, i;
 
+	if (!asd) {
+		dev_err(isp->dev, "%s(): asd is NULL, device is %s\n",
+			__func__, vdev->name);
+		return -EINVAL;
+	}
+
 	isp_sink_crop = atomisp_subdev_get_rect(
 			    &asd->subdev, NULL, V4L2_SUBDEV_FORMAT_ACTIVE,
 			    ATOMISP_SUBDEV_PAD_SINK, V4L2_SEL_TGT_CROP);
@@ -4249,6 +4279,12 @@ static int atomisp_set_fmt_to_snr(struct video_device *vdev, const struct v4l2_p
 	struct atomisp_input_stream_info *stream_info =
 	    (struct atomisp_input_stream_info *)ffmt->reserved;
 	int ret;
+
+	if (!asd) {
+		dev_err(pipe->isp->dev, "%s(): asd is NULL, device is %s\n",
+			__func__, vdev->name);
+		return -EINVAL;
+	}
 
 	format = atomisp_get_format_bridge(f->pixelformat);
 	if (!format)

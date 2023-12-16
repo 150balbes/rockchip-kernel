@@ -1584,11 +1584,13 @@ static int i8042_probe(struct platform_device *dev)
 	return error;
 }
 
-static void i8042_remove(struct platform_device *dev)
+static int i8042_remove(struct platform_device *dev)
 {
 	i8042_unregister_ports();
 	i8042_free_irqs();
 	i8042_controller_reset(false);
+
+	return 0;
 }
 
 static struct platform_driver i8042_driver = {
@@ -1599,7 +1601,7 @@ static struct platform_driver i8042_driver = {
 #endif
 	},
 	.probe		= i8042_probe,
-	.remove_new	= i8042_remove,
+	.remove		= i8042_remove,
 	.shutdown	= i8042_shutdown,
 };
 

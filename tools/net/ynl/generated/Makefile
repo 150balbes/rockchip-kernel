@@ -14,12 +14,12 @@ YNL_GEN_ARG_ethtool:=--user-header linux/ethtool_netlink.h \
 
 TOOL:=../ynl-gen-c.py
 
-GENS:=ethtool devlink handshake fou netdev nfsd
+GENS:=ethtool devlink handshake fou netdev
 SRCS=$(patsubst %,%-user.c,${GENS})
 HDRS=$(patsubst %,%-user.h,${GENS})
 OBJS=$(patsubst %,%-user.o,${GENS})
 
-all: protos.a $(HDRS) $(SRCS) $(KHDRS) $(KSRCS) $(UAPI)
+all: protos.a $(HDRS) $(SRCS) $(KHDRS) $(KSRCS) $(UAPI) regen
 
 protos.a: $(OBJS)
 	@echo -e "\tAR $@"
@@ -27,11 +27,11 @@ protos.a: $(OBJS)
 
 %-user.h: ../../../../Documentation/netlink/specs/%.yaml $(TOOL)
 	@echo -e "\tGEN $@"
-	@$(TOOL) --mode user --header --spec $< -o $@ $(YNL_GEN_ARG_$*)
+	@$(TOOL) --mode user --header --spec $< $(YNL_GEN_ARG_$*) > $@
 
 %-user.c: ../../../../Documentation/netlink/specs/%.yaml $(TOOL)
 	@echo -e "\tGEN $@"
-	@$(TOOL) --mode user --source --spec $< -o $@ $(YNL_GEN_ARG_$*)
+	@$(TOOL) --mode user --source --spec $< $(YNL_GEN_ARG_$*) > $@
 
 %-user.o: %-user.c %-user.h
 	@echo -e "\tCC $@"

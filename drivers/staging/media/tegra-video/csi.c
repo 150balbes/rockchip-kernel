@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
@@ -607,10 +608,10 @@ static int tegra_csi_channel_init(struct tegra_csi_channel *chan)
 	v4l2_subdev_init(subdev, &tegra_csi_ops);
 	subdev->dev = csi->dev;
 	if (IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
-		snprintf(subdev->name, sizeof(subdev->name), "%s-%d", "tpg",
+		snprintf(subdev->name, V4L2_SUBDEV_NAME_SIZE, "%s-%d", "tpg",
 			 chan->csi_port_nums[0]);
 	else
-		snprintf(subdev->name, sizeof(subdev->name), "%s",
+		snprintf(subdev->name, V4L2_SUBDEV_NAME_SIZE, "%s",
 			 kbasename(chan->of_node->full_name));
 
 	v4l2_set_subdevdata(subdev, chan);

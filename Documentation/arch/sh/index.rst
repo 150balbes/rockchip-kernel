@@ -43,6 +43,12 @@ mach-x3proto
 Busses
 ======
 
+SuperHyway
+----------
+
+.. kernel-doc:: drivers/sh/superhyway/superhyway.c
+   :export:
+
 Maple
 -----
 

@@ -7,7 +7,7 @@
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -936,11 +936,13 @@ unregister_gpiochip:
 	return ret;
 }
 
-static void pm8xxx_mpp_remove(struct platform_device *pdev)
+static int pm8xxx_mpp_remove(struct platform_device *pdev)
 {
 	struct pm8xxx_mpp *pctrl = platform_get_drvdata(pdev);
 
 	gpiochip_remove(&pctrl->chip);
+
+	return 0;
 }
 
 static struct platform_driver pm8xxx_mpp_driver = {
@@ -949,7 +951,7 @@ static struct platform_driver pm8xxx_mpp_driver = {
 		.of_match_table = pm8xxx_mpp_of_match,
 	},
 	.probe = pm8xxx_mpp_probe,
-	.remove_new = pm8xxx_mpp_remove,
+	.remove = pm8xxx_mpp_remove,
 };
 
 module_platform_driver(pm8xxx_mpp_driver);

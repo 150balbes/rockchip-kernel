@@ -21,7 +21,6 @@
 #include <linux/spinlock.h>
 #include <linux/smp.h>
 #include <linux/rcupdate_wait.h>
-#include <linux/rcu_notifier.h>
 #include <linux/interrupt.h>
 #include <linux/sched/signal.h>
 #include <uapi/linux/sched/types.h>
@@ -811,7 +810,7 @@ static void synchronize_rcu_trivial(void)
 	int cpu;
 
 	for_each_online_cpu(cpu) {
-		torture_sched_setaffinity(current->pid, cpumask_of(cpu));
+		rcutorture_sched_setaffinity(current->pid, cpumask_of(cpu));
 		WARN_ON_ONCE(raw_smp_processor_id() != cpu);
 	}
 }
@@ -1150,7 +1149,7 @@ static int rcu_torture_boost(void *arg)
 				mutex_unlock(&boost_mutex);
 				break;
 			}
-			schedule_timeout_uninterruptible(HZ / 20);
+			schedule_timeout_uninterruptible(1);
 		}
 
 		/* Go do the stutter. */
@@ -1161,7 +1160,7 @@ checkwait:	if (stutter_wait("rcu_torture_boost"))
 	/* Clean up and exit. */
 	while (!kthread_should_stop()) {
 		torture_shutdown_absorb("rcu_torture_boost");
-		schedule_timeout_uninterruptible(HZ / 20);
+		schedule_timeout_uninterruptible(1);
 	}
 	torture_kthread_stopping("rcu_torture_boost");
 	return 0;
@@ -1184,7 +1183,7 @@ rcu_torture_fqs(void *arg)
 		fqs_resume_time = jiffies + fqs_stutter * HZ;
 		while (time_before(jiffies, fqs_resume_time) &&
 		       !kthread_should_stop()) {
-			schedule_timeout_interruptible(HZ / 20);
+			schedule_timeout_interruptible(1);
 		}
 		fqs_burst_remaining = fqs_duration;
 		while (fqs_burst_remaining > 0 &&
@@ -1582,7 +1581,6 @@ rcu_torture_writer(void *arg)
 				    rcu_access_pointer(rcu_torture_current) !=
 				    &rcu_tortures[i]) {
 					tracing_off();
-					show_rcu_gp_kthreads();
 					WARN(1, "%s: rtort_pipe_count: %d\n", __func__, rcu_tortures[i].rtort_pipe_count);
 					rcu_ftrace_dump(DUMP_ALL);
 				}
@@ -1878,7 +1876,7 @@ static int
 rcutorture_extend_mask(int oldmask, struct torture_random_state *trsp)
 {
 	int mask = rcutorture_extend_mask_max();
-	unsigned long randmask1 = torture_random(trsp);
+	unsigned long randmask1 = torture_random(trsp) >> 8;
 	unsigned long randmask2 = randmask1 >> 3;
 	unsigned long preempts = RCUTORTURE_RDR_PREEMPT | RCUTORTURE_RDR_SCHED;
 	unsigned long preempts_irq = preempts | RCUTORTURE_RDR_IRQ;
@@ -1937,7 +1935,7 @@ rcutorture_loop_extend(int *readstate, struct torture_random_state *trsp,
 	if (!((mask - 1) & mask))
 		return rtrsp;  /* Current RCU reader not extendable. */
 	/* Bias towards larger numbers of loops. */
-	i = torture_random(trsp);
+	i = (torture_random(trsp) >> 3);
 	i = ((i | (i >> 3)) & RCUTORTURE_RDR_MAX_LOOPS) + 1;
 	for (j = 0; j < i; j++) {
 		mask = rcutorture_extend_mask(*readstate, trsp);
@@ -2127,7 +2125,7 @@ static int rcu_nocb_toggle(void *arg)
 	VERBOSE_TOROUT_STRING("rcu_nocb_toggle task started");
 	while (!rcu_inkernel_boot_has_ended())
 		schedule_timeout_interruptible(HZ / 10);
-	for_each_possible_cpu(cpu)
+	for_each_online_cpu(cpu)
 		maxcpu = cpu;
 	WARN_ON(maxcpu < 0);
 	if (toggle_interval > ULONG_MAX)
@@ -2138,7 +2136,7 @@ static int rcu_nocb_toggle(void *arg)
 		toggle_fuzz = NSEC_PER_USEC;
 	do {
 		r = torture_random(&rand);
-		cpu = (r >> 1) % (maxcpu + 1);
+		cpu = (r >> 4) % (maxcpu + 1);
 		if (r & 0x1) {
 			rcu_nocb_cpu_offload(cpu);
 			atomic_long_inc(&n_nocb_offload);
@@ -2429,16 +2427,6 @@ static int rcutorture_booster_init(unsigned int cpu)
 	return 0;
 }
 
-static int rcu_torture_stall_nf(struct notifier_block *nb, unsigned long v, void *ptr)
-{
-	pr_info("%s: v=%lu, duration=%lu.\n", __func__, v, (unsigned long)ptr);
-	return NOTIFY_OK;
-}
-
-static struct notifier_block rcu_torture_stall_block = {
-	.notifier_call = rcu_torture_stall_nf,
-};
-
 /*
  * CPU-stall kthread.  It waits as specified by stall_cpu_holdoff, then
  * induces a CPU stall for the time specified by stall_cpu.
@@ -2446,14 +2434,9 @@ static struct notifier_block rcu_torture_stall_block = {
 static int rcu_torture_stall(void *args)
 {
 	int idx;
-	int ret;
 	unsigned long stop_at;
 
 	VERBOSE_TOROUT_STRING("rcu_torture_stall task started");
-	ret = rcu_stall_chain_notifier_register(&rcu_torture_stall_block);
-	if (ret)
-		pr_info("%s: rcu_stall_chain_notifier_register() returned %d, %sexpected.\n",
-			__func__, ret, !IS_ENABLED(CONFIG_RCU_STALL_COMMON) ? "un" : "");
 	if (stall_cpu_holdoff > 0) {
 		VERBOSE_TOROUT_STRING("rcu_torture_stall begin holdoff");
 		schedule_timeout_interruptible(stall_cpu_holdoff * HZ);
@@ -2497,11 +2480,6 @@ static int rcu_torture_stall(void *args)
 		cur_ops->readunlock(idx);
 	}
 	pr_alert("%s end.\n", __func__);
-	if (!ret) {
-		ret = rcu_stall_chain_notifier_unregister(&rcu_torture_stall_block);
-		if (ret)
-			pr_info("%s: rcu_stall_chain_notifier_unregister() returned %d.\n", __func__, ret);
-	}
 	torture_shutdown_absorb("rcu_torture_stall");
 	while (!kthread_should_stop())
 		schedule_timeout_interruptible(10 * HZ);
@@ -2920,7 +2898,7 @@ static int rcu_torture_fwd_prog(void *args)
 			WRITE_ONCE(rcu_fwd_seq, rcu_fwd_seq + 1);
 		} else {
 			while (READ_ONCE(rcu_fwd_seq) == oldseq && !torture_must_stop())
-				schedule_timeout_interruptible(HZ / 20);
+				schedule_timeout_interruptible(1);
 			oldseq = READ_ONCE(rcu_fwd_seq);
 		}
 		pr_alert("%s: Starting forward-progress test %d\n", __func__, rfp->rcu_fwd_id);
@@ -3221,7 +3199,7 @@ static int rcu_torture_read_exit_child(void *trsp_in)
 	set_user_nice(current, MAX_NICE);
 	// Minimize time between reading and exiting.
 	while (!kthread_should_stop())
-		schedule_timeout_uninterruptible(HZ / 20);
+		schedule_timeout_uninterruptible(1);
 	(void)rcu_torture_one_read(trsp, -1);
 	return 0;
 }
@@ -3269,7 +3247,7 @@ static int rcu_torture_read_exit(void *unused)
 	smp_mb(); // Store before wakeup.
 	wake_up(&read_exit_wq);
 	while (!torture_must_stop())
-		schedule_timeout_uninterruptible(HZ / 20);
+		schedule_timeout_uninterruptible(1);
 	torture_kthread_stopping("rcu_torture_read_exit");
 	return 0;
 }

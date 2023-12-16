@@ -25,13 +25,25 @@ struct bmof_priv {
 	struct bin_attribute bmof_bin_attr;
 };
 
-static ssize_t read_bmof(struct file *filp, struct kobject *kobj, struct bin_attribute *attr,
-			 char *buf, loff_t off, size_t count)
+static ssize_t
+read_bmof(struct file *filp, struct kobject *kobj,
+	 struct bin_attribute *attr,
+	 char *buf, loff_t off, size_t count)
 {
-	struct bmof_priv *priv = container_of(attr, struct bmof_priv, bmof_bin_attr);
+	struct bmof_priv *priv =
+		container_of(attr, struct bmof_priv, bmof_bin_attr);
 
-	return memory_read_from_buffer(buf, count, &off, priv->bmofdata->buffer.pointer,
-				       priv->bmofdata->buffer.length);
+	if (off < 0)
+		return -EINVAL;
+
+	if (off >= priv->bmofdata->buffer.length)
+		return 0;
+
+	if (count > priv->bmofdata->buffer.length - off)
+		count = priv->bmofdata->buffer.length - off;
+
+	memcpy(buf, priv->bmofdata->buffer.pointer + off, count);
+	return count;
 }
 
 static int wmi_bmof_probe(struct wmi_device *wdev, const void *context)
@@ -63,7 +75,7 @@ static int wmi_bmof_probe(struct wmi_device *wdev, const void *context)
 	priv->bmof_bin_attr.read = read_bmof;
 	priv->bmof_bin_attr.size = priv->bmofdata->buffer.length;
 
-	ret = device_create_bin_file(&wdev->dev, &priv->bmof_bin_attr);
+	ret = sysfs_create_bin_file(&wdev->dev.kobj, &priv->bmof_bin_attr);
 	if (ret)
 		goto err_free;
 
@@ -78,7 +90,7 @@ static void wmi_bmof_remove(struct wmi_device *wdev)
 {
 	struct bmof_priv *priv = dev_get_drvdata(&wdev->dev);
 
-	device_remove_bin_file(&wdev->dev, &priv->bmof_bin_attr);
+	sysfs_remove_bin_file(&wdev->dev.kobj, &priv->bmof_bin_attr);
 	kfree(priv->bmofdata);
 }
 

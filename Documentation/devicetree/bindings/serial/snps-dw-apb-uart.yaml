@@ -117,6 +117,7 @@ properties:
 required:
   - compatible
   - reg
+  - interrupts
 
 unevaluatedProperties: false
 

@@ -193,8 +193,10 @@ int class_register(const struct class *cls)
 	lockdep_register_key(key);
 	__mutex_init(&cp->mutex, "subsys mutex", key);
 	error = kobject_set_name(&cp->subsys.kobj, "%s", cls->name);
-	if (error)
-		goto err_out;
+	if (error) {
+		kfree(cp);
+		return error;
+	}
 
 	cp->subsys.kobj.kset = class_kset;
 	cp->subsys.kobj.ktype = &class_ktype;

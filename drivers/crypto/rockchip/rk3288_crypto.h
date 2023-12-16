@@ -3,18 +3,21 @@
 #define __RK3288_CRYPTO_H__
 
 #include <crypto/aes.h>
-#include <crypto/engine.h>
 #include <crypto/internal/des.h>
+#include <crypto/algapi.h>
+#include <linux/dma-mapping.h>
+#include <linux/interrupt.h>
+#include <linux/debugfs.h>
+#include <linux/delay.h>
+#include <linux/pm_runtime.h>
+#include <linux/scatterlist.h>
+#include <crypto/engine.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/skcipher.h>
+
 #include <crypto/md5.h>
 #include <crypto/sha1.h>
 #include <crypto/sha2.h>
-#include <linux/dma-mapping.h>
-#include <linux/interrupt.h>
-#include <linux/pm_runtime.h>
-#include <linux/scatterlist.h>
-#include <linux/types.h>
 
 #define _SBF(v, f)			((v) << (f))
 
@@ -228,6 +231,7 @@ struct rk_crypto_info {
 
 /* the private variable of hash */
 struct rk_ahash_ctx {
+	struct crypto_engine_ctx enginectx;
 	/* for fallback */
 	struct crypto_ahash		*fallback_tfm;
 };
@@ -242,6 +246,7 @@ struct rk_ahash_rctx {
 
 /* the private variable of cipher */
 struct rk_cipher_ctx {
+	struct crypto_engine_ctx enginectx;
 	unsigned int			keylen;
 	u8				key[AES_MAX_KEY_SIZE];
 	u8				iv[AES_BLOCK_SIZE];
@@ -259,8 +264,8 @@ struct rk_crypto_tmp {
 	u32 type;
 	struct rk_crypto_info           *dev;
 	union {
-		struct skcipher_engine_alg skcipher;
-		struct ahash_engine_alg hash;
+		struct skcipher_alg	skcipher;
+		struct ahash_alg	hash;
 	} alg;
 	unsigned long stat_req;
 	unsigned long stat_fb;

@@ -8,22 +8,17 @@
 
 #include <linux/acpi.h>
 #include <linux/component.h>
-#include <linux/usb.h>
 
 #include "class.h"
 
 static int typec_aggregate_bind(struct device *dev)
 {
-	struct typec_port *port = to_typec_port(dev);
-
-	return component_bind_all(dev, &port->con);
+	return component_bind_all(dev, NULL);
 }
 
 static void typec_aggregate_unbind(struct device *dev)
 {
-	struct typec_port *port = to_typec_port(dev);
-
-	component_unbind_all(dev, &port->con);
+	component_unbind_all(dev, NULL);
 }
 
 static const struct component_master_ops typec_aggregate_ops = {

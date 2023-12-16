@@ -80,20 +80,9 @@ BUILD_FPR_ACCESS(32)
 BUILD_FPR_ACCESS(64)
 
 struct loongarch_fpu {
+	unsigned int	fcsr;
 	uint64_t	fcc;	/* 8x8 */
-	uint32_t	fcsr;
-	uint32_t	ftop;
 	union fpureg	fpr[NUM_FPU_REGS];
-};
-
-struct loongarch_lbt {
-	/* Scratch registers */
-	unsigned long scr0;
-	unsigned long scr1;
-	unsigned long scr2;
-	unsigned long scr3;
-	/* Eflags register */
-	unsigned long eflags;
 };
 
 #define INIT_CPUMASK { \
@@ -124,6 +113,15 @@ struct thread_struct {
 	unsigned long csr_ecfg;
 	unsigned long csr_badvaddr;	/* Last user fault */
 
+	/* Scratch registers */
+	unsigned long scr0;
+	unsigned long scr1;
+	unsigned long scr2;
+	unsigned long scr3;
+
+	/* Eflags register */
+	unsigned long eflags;
+
 	/* Other stuff associated with the thread. */
 	unsigned long trap_nr;
 	unsigned long error_code;
@@ -135,7 +133,6 @@ struct thread_struct {
 	 * context because they are conditionally copied at fork().
 	 */
 	struct loongarch_fpu fpu FPU_ALIGN;
-	struct loongarch_lbt lbt; /* Also conditionally copied */
 
 	/* Hardware breakpoints pinned to this task. */
 	struct perf_event *hbp_break[LOONGARCH_MAX_BRP];
@@ -177,9 +174,8 @@ struct thread_struct {
 	 * FPU & vector registers				\
 	 */							\
 	.fpu			= {				\
-		.fcc		= 0,				\
 		.fcsr		= 0,				\
-		.ftop		= 0,				\
+		.fcc		= 0,				\
 		.fpr		= {{{0,},},},			\
 	},							\
 	.hbp_break		= {0},				\

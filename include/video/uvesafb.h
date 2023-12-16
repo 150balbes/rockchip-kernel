@@ -109,6 +109,8 @@ struct uvesafb_ktask {
 	u32 ack;
 };
 
+static int uvesafb_exec(struct uvesafb_ktask *tsk);
+
 #define UVESAFB_EXACT_RES	1
 #define UVESAFB_EXACT_DEPTH	2
 

@@ -54,7 +54,7 @@ struct vexpress_syscfg_func {
 	struct vexpress_syscfg *syscfg;
 	struct regmap *regmap;
 	int num_templates;
-	u32 template[] __counted_by(num_templates); /* Keep it last! */
+	u32 template[]; /* Keep it last! */
 };
 
 struct vexpress_config_bridge_ops {
@@ -350,6 +350,7 @@ static struct vexpress_config_bridge_ops vexpress_syscfg_bridge_ops = {
 static int vexpress_syscfg_probe(struct platform_device *pdev)
 {
 	struct vexpress_syscfg *syscfg;
+	struct resource *res;
 	struct vexpress_config_bridge *bridge;
 	struct device_node *node;
 	int master;
@@ -361,7 +362,8 @@ static int vexpress_syscfg_probe(struct platform_device *pdev)
 	syscfg->dev = &pdev->dev;
 	INIT_LIST_HEAD(&syscfg->funcs);
 
-	syscfg->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	syscfg->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(syscfg->base))
 		return PTR_ERR(syscfg->base);
 

@@ -34,14 +34,6 @@ static int nhpoly1305_sse2_update(struct shash_desc *desc,
 	return 0;
 }
 
-static int nhpoly1305_sse2_digest(struct shash_desc *desc,
-				  const u8 *src, unsigned int srclen, u8 *out)
-{
-	return crypto_nhpoly1305_init(desc) ?:
-	       nhpoly1305_sse2_update(desc, src, srclen) ?:
-	       crypto_nhpoly1305_final(desc, out);
-}
-
 static struct shash_alg nhpoly1305_alg = {
 	.base.cra_name		= "nhpoly1305",
 	.base.cra_driver_name	= "nhpoly1305-sse2",
@@ -52,7 +44,6 @@ static struct shash_alg nhpoly1305_alg = {
 	.init			= crypto_nhpoly1305_init,
 	.update			= nhpoly1305_sse2_update,
 	.final			= crypto_nhpoly1305_final,
-	.digest			= nhpoly1305_sse2_digest,
 	.setkey			= crypto_nhpoly1305_setkey,
 	.descsize		= sizeof(struct nhpoly1305_state),
 };

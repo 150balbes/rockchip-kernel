@@ -19,6 +19,7 @@
 #include <linux/mux/consumer.h>
 #include <linux/mux/driver.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 
 /*

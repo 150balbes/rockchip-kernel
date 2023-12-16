@@ -28,8 +28,7 @@
 	* the HW OPP table, the silicon looks like it is Revision 1.0 (ie the
 	* EFUSE_SMA register reads as all zeros).
 	*/
-	opp-1000000000 {
-		/* OPP Nitro */
+	oppnitro-1000000000 {
 		opp-supported-hw = <0x06 0x0100>;
 	};
 };

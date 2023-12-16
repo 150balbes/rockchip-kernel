@@ -72,11 +72,22 @@ __ioremap_29bit(phys_addr_t offset, unsigned long size, pgprot_t prot)
 #define __ioremap_29bit(offset, size, prot)		NULL
 #endif /* CONFIG_29BIT */
 
-void __iomem __ref *ioremap_prot(phys_addr_t phys_addr, size_t size,
-				 unsigned long prot)
+/*
+ * Remap an arbitrary physical address space into the kernel virtual
+ * address space. Needed when the kernel wants to access high addresses
+ * directly.
+ *
+ * NOTE! We need to allow non-page-aligned mappings too: we will obviously
+ * have to convert them into an offset in a page-aligned mapping, but the
+ * caller shouldn't need to know that small detail.
+ */
+void __iomem * __ref
+__ioremap_caller(phys_addr_t phys_addr, unsigned long size,
+		 pgprot_t pgprot, void *caller)
 {
+	struct vm_struct *area;
+	unsigned long offset, last_addr, addr, orig_addr;
 	void __iomem *mapped;
-	pgprot_t pgprot = __pgprot(prot);
 
 	mapped = __ioremap_trapped(phys_addr, size);
 	if (mapped)
@@ -85,6 +96,11 @@ void __iomem __ref *ioremap_prot(phys_addr_t phys_addr, size_t size,
 	mapped = __ioremap_29bit(phys_addr, size, pgprot);
 	if (mapped)
 		return mapped;
+
+	/* Don't allow wraparound or zero size */
+	last_addr = phys_addr + size - 1;
+	if (!size || last_addr < phys_addr)
+		return NULL;
 
 	/*
 	 * If we can't yet use the regular approach, go the fixmap route.
@@ -96,14 +112,34 @@ void __iomem __ref *ioremap_prot(phys_addr_t phys_addr, size_t size,
 	 * First try to remap through the PMB.
 	 * PMB entries are all pre-faulted.
 	 */
-	mapped = pmb_remap_caller(phys_addr, size, pgprot,
-			__builtin_return_address(0));
+	mapped = pmb_remap_caller(phys_addr, size, pgprot, caller);
 	if (mapped && !IS_ERR(mapped))
 		return mapped;
 
-	return generic_ioremap_prot(phys_addr, size, pgprot);
+	/*
+	 * Mappings have to be page-aligned
+	 */
+	offset = phys_addr & ~PAGE_MASK;
+	phys_addr &= PAGE_MASK;
+	size = PAGE_ALIGN(last_addr+1) - phys_addr;
+
+	/*
+	 * Ok, go for it..
+	 */
+	area = get_vm_area_caller(size, VM_IOREMAP, caller);
+	if (!area)
+		return NULL;
+	area->phys_addr = phys_addr;
+	orig_addr = addr = (unsigned long)area->addr;
+
+	if (ioremap_page_range(addr, addr + size, phys_addr, pgprot)) {
+		vunmap((void *)orig_addr);
+		return NULL;
+	}
+
+	return (void __iomem *)(offset + (char *)orig_addr);
 }
-EXPORT_SYMBOL(ioremap_prot);
+EXPORT_SYMBOL(__ioremap_caller);
 
 /*
  * Simple checks for non-translatable mappings.
@@ -122,9 +158,10 @@ static inline int iomapping_nontranslatable(unsigned long offset)
 	return 0;
 }
 
-void iounmap(volatile void __iomem *addr)
+void iounmap(void __iomem *addr)
 {
 	unsigned long vaddr = (unsigned long __force)addr;
+	struct vm_struct *p;
 
 	/*
 	 * Nothing to do if there is no translatable mapping.
@@ -135,15 +172,21 @@ void iounmap(volatile void __iomem *addr)
 	/*
 	 * There's no VMA if it's from an early fixed mapping.
 	 */
-	if (iounmap_fixed((void __iomem *)addr) == 0)
+	if (iounmap_fixed(addr) == 0)
 		return;
 
 	/*
 	 * If the PMB handled it, there's nothing else to do.
 	 */
-	if (pmb_unmap((void __iomem *)addr) == 0)
+	if (pmb_unmap(addr) == 0)
 		return;
 
-	generic_iounmap(addr);
+	p = remove_vm_area((void *)(vaddr & PAGE_MASK));
+	if (!p) {
+		printk(KERN_ERR "%s: bad address %p\n", __func__, addr);
+		return;
+	}
+
+	kfree(p);
 }
 EXPORT_SYMBOL(iounmap);

@@ -470,7 +470,7 @@ err_clk_get:
 	return ret;
 }
 
-static void sdhci_pxav3_remove(struct platform_device *pdev)
+static int sdhci_pxav3_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -486,6 +486,8 @@ static void sdhci_pxav3_remove(struct platform_device *pdev)
 	clk_disable_unprepare(pxa->clk_core);
 
 	sdhci_pltfm_free(pdev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -568,7 +570,7 @@ static struct platform_driver sdhci_pxav3_driver = {
 		.pm	= &sdhci_pxav3_pmops,
 	},
 	.probe		= sdhci_pxav3_probe,
-	.remove_new	= sdhci_pxav3_remove,
+	.remove		= sdhci_pxav3_remove,
 };
 
 module_platform_driver(sdhci_pxav3_driver);

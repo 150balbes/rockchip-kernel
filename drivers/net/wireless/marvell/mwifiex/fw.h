@@ -779,7 +779,7 @@ struct mwifiex_ie_types_rxba_sync {
 	u8 reserved;
 	__le16 seq_num;
 	__le16 bitmap_len;
-	u8 bitmap[];
+	u8 bitmap[1];
 } __packed;
 
 struct chan_band_param_set {

@@ -108,7 +108,7 @@ struct rcb_common_cb {
 	u32 ring_num;
 	u32 desc_num; /*  desc num per queue*/
 
-	struct ring_pair_cb ring_pair_cb[] __counted_by(ring_num);
+	struct ring_pair_cb ring_pair_cb[];
 };
 
 int hns_rcb_buf_size2type(u32 buf_size);

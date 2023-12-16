@@ -2252,9 +2252,8 @@ static int get_virtual_node_size(struct super_block *sb, struct buffer_head *bh)
 
 	return sizeof(struct virtual_node) +
 	    max(max_num_of_items * sizeof(struct virtual_item),
-		sizeof(struct virtual_item) +
-		struct_size_t(struct direntry_uarea, entry_sizes,
-			      max_num_of_entries));
+		sizeof(struct virtual_item) + sizeof(struct direntry_uarea) +
+		(max_num_of_entries - 1) * sizeof(__u16));
 }
 
 /*

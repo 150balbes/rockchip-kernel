@@ -9,7 +9,6 @@
 
 #include <linux/clk-provider.h>
 #include "clk-regmap.h"
-#include "meson-clkc-utils.h"
 
 struct platform_device;
 
@@ -18,7 +17,7 @@ struct meson_eeclkc_data {
 	unsigned int			regmap_clk_num;
 	const struct reg_sequence	*init_regs;
 	unsigned int			init_count;
-	struct meson_clk_hw_data	hw_clks;
+	struct clk_hw_onecell_data	*hw_onecell_data;
 };
 
 int meson_eeclkc_probe(struct platform_device *pdev);

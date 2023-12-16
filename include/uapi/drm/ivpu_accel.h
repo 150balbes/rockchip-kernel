@@ -196,7 +196,7 @@ struct drm_ivpu_bo_create {
 	 *
 	 * %DRM_IVPU_BO_UNCACHED:
 	 *
-	 * Not supported. Use DRM_IVPU_BO_WC instead.
+	 * Allocated BO will not be cached on host side nor snooped on the VPU side.
 	 *
 	 * %DRM_IVPU_BO_WC:
 	 *

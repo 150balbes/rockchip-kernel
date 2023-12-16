@@ -82,7 +82,7 @@
 	.endm
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_REGS */
 
-SYM_FUNC_START(ftrace_caller)
+ENTRY(ftrace_caller)
 	SAVE_ABI
 
 	addi	a0, t0, -FENTRY_RA_OFFSET
@@ -91,7 +91,8 @@ SYM_FUNC_START(ftrace_caller)
 	mv	a1, ra
 	mv	a3, sp
 
-SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
+ftrace_call:
+	.global ftrace_call
 	call	ftrace_stub
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
@@ -101,15 +102,16 @@ SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	mv	a2, s0
 #endif
-SYM_INNER_LABEL(ftrace_graph_call, SYM_L_GLOBAL)
+ftrace_graph_call:
+	.global ftrace_graph_call
 	call	ftrace_stub
 #endif
 	RESTORE_ABI
 	jr t0
-SYM_FUNC_END(ftrace_caller)
+ENDPROC(ftrace_caller)
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS
-SYM_FUNC_START(ftrace_regs_caller)
+ENTRY(ftrace_regs_caller)
 	SAVE_ALL
 
 	addi	a0, t0, -FENTRY_RA_OFFSET
@@ -118,7 +120,8 @@ SYM_FUNC_START(ftrace_regs_caller)
 	mv	a1, ra
 	mv	a3, sp
 
-SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
+ftrace_regs_call:
+	.global ftrace_regs_call
 	call	ftrace_stub
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
@@ -128,11 +131,12 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	mv	a2, s0
 #endif
-SYM_INNER_LABEL(ftrace_graph_regs_call, SYM_L_GLOBAL)
+ftrace_graph_regs_call:
+	.global ftrace_graph_regs_call
 	call	ftrace_stub
 #endif
 
 	RESTORE_ALL
 	jr t0
-SYM_FUNC_END(ftrace_regs_caller)
+ENDPROC(ftrace_regs_caller)
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_REGS */

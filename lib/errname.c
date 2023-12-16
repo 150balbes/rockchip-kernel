@@ -111,6 +111,9 @@ static const char *names_0[] = {
 	E(ENOSPC),
 	E(ENOSR),
 	E(ENOSTR),
+#ifdef ENOSYM
+	E(ENOSYM),
+#endif
 	E(ENOSYS),
 	E(ENOTBLK),
 	E(ENOTCONN),
@@ -141,6 +144,9 @@ static const char *names_0[] = {
 #endif
 	E(EREMOTE),
 	E(EREMOTEIO),
+#ifdef EREMOTERELEASE
+	E(EREMOTERELEASE),
+#endif
 	E(ERESTART),
 	E(ERFKILL),
 	E(EROFS),
@@ -222,4 +228,3 @@ const char *errname(int err)
 
 	return err > 0 ? name + 1 : name;
 }
-EXPORT_SYMBOL(errname);

@@ -4,17 +4,6 @@
  */
 
 #include "aspeed-hace.h"
-#include <crypto/des.h>
-#include <crypto/engine.h>
-#include <crypto/internal/des.h>
-#include <crypto/internal/skcipher.h>
-#include <linux/dma-mapping.h>
-#include <linux/err.h>
-#include <linux/io.h>
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/scatterlist.h>
-#include <linux/string.h>
 
 #ifdef CONFIG_CRYPTO_DEV_ASPEED_HACE_CRYPTO_DEBUG
 #define CIPHER_DBG(h, fmt, ...)	\
@@ -707,7 +696,7 @@ static int aspeed_crypto_cra_init(struct crypto_skcipher *tfm)
 	struct aspeed_hace_alg *crypto_alg;
 
 
-	crypto_alg = container_of(alg, struct aspeed_hace_alg, alg.skcipher.base);
+	crypto_alg = container_of(alg, struct aspeed_hace_alg, alg.skcipher);
 	ctx->hace_dev = crypto_alg->hace_dev;
 	ctx->start = aspeed_hace_skcipher_trigger;
 
@@ -724,6 +713,10 @@ static int aspeed_crypto_cra_init(struct crypto_skcipher *tfm)
 	crypto_skcipher_set_reqsize(tfm, sizeof(struct aspeed_cipher_reqctx) +
 			 crypto_skcipher_reqsize(ctx->fallback_tfm));
 
+	ctx->enginectx.op.do_one_request = aspeed_crypto_do_request;
+	ctx->enginectx.op.prepare_request = NULL;
+	ctx->enginectx.op.unprepare_request = NULL;
+
 	return 0;
 }
 
@@ -738,7 +731,7 @@ static void aspeed_crypto_cra_exit(struct crypto_skcipher *tfm)
 
 static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.min_keysize	= AES_MIN_KEY_SIZE,
 			.max_keysize	= AES_MAX_KEY_SIZE,
 			.setkey		= aspeed_aes_setkey,
@@ -758,13 +751,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= AES_BLOCK_SIZE,
 			.min_keysize	= AES_MIN_KEY_SIZE,
 			.max_keysize	= AES_MAX_KEY_SIZE,
@@ -785,13 +775,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= AES_BLOCK_SIZE,
 			.min_keysize	= AES_MIN_KEY_SIZE,
 			.max_keysize	= AES_MAX_KEY_SIZE,
@@ -812,13 +799,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= AES_BLOCK_SIZE,
 			.min_keysize	= AES_MIN_KEY_SIZE,
 			.max_keysize	= AES_MAX_KEY_SIZE,
@@ -839,13 +823,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.min_keysize	= DES_KEY_SIZE,
 			.max_keysize	= DES_KEY_SIZE,
 			.setkey		= aspeed_des_setkey,
@@ -865,13 +846,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES_KEY_SIZE,
 			.max_keysize	= DES_KEY_SIZE,
@@ -892,13 +870,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES_KEY_SIZE,
 			.max_keysize	= DES_KEY_SIZE,
@@ -919,13 +894,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES_KEY_SIZE,
 			.max_keysize	= DES_KEY_SIZE,
@@ -946,13 +918,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.min_keysize	= DES3_EDE_KEY_SIZE,
 			.max_keysize	= DES3_EDE_KEY_SIZE,
 			.setkey		= aspeed_des_setkey,
@@ -972,13 +941,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES3_EDE_KEY_SIZE,
 			.max_keysize	= DES3_EDE_KEY_SIZE,
@@ -999,13 +965,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES3_EDE_KEY_SIZE,
 			.max_keysize	= DES3_EDE_KEY_SIZE,
@@ -1026,13 +989,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES3_EDE_KEY_SIZE,
 			.max_keysize	= DES3_EDE_KEY_SIZE,
@@ -1053,16 +1013,13 @@ static struct aspeed_hace_alg aspeed_crypto_algs[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 };
 
 static struct aspeed_hace_alg aspeed_crypto_algs_g6[] = {
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= AES_BLOCK_SIZE,
 			.min_keysize	= AES_MIN_KEY_SIZE,
 			.max_keysize	= AES_MAX_KEY_SIZE,
@@ -1082,13 +1039,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs_g6[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES_KEY_SIZE,
 			.max_keysize	= DES_KEY_SIZE,
@@ -1108,13 +1062,10 @@ static struct aspeed_hace_alg aspeed_crypto_algs_g6[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 	{
-		.alg.skcipher.base = {
+		.alg.skcipher = {
 			.ivsize		= DES_BLOCK_SIZE,
 			.min_keysize	= DES3_EDE_KEY_SIZE,
 			.max_keysize	= DES3_EDE_KEY_SIZE,
@@ -1134,10 +1085,7 @@ static struct aspeed_hace_alg aspeed_crypto_algs_g6[] = {
 				.cra_alignmask		= 0x0f,
 				.cra_module		= THIS_MODULE,
 			}
-		},
-		.alg.skcipher.op = {
-			.do_one_request = aspeed_crypto_do_request,
-		},
+		}
 	},
 
 };
@@ -1147,13 +1095,13 @@ void aspeed_unregister_hace_crypto_algs(struct aspeed_hace_dev *hace_dev)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(aspeed_crypto_algs); i++)
-		crypto_engine_unregister_skcipher(&aspeed_crypto_algs[i].alg.skcipher);
+		crypto_unregister_skcipher(&aspeed_crypto_algs[i].alg.skcipher);
 
 	if (hace_dev->version != AST2600_VERSION)
 		return;
 
 	for (i = 0; i < ARRAY_SIZE(aspeed_crypto_algs_g6); i++)
-		crypto_engine_unregister_skcipher(&aspeed_crypto_algs_g6[i].alg.skcipher);
+		crypto_unregister_skcipher(&aspeed_crypto_algs_g6[i].alg.skcipher);
 }
 
 void aspeed_register_hace_crypto_algs(struct aspeed_hace_dev *hace_dev)
@@ -1164,10 +1112,10 @@ void aspeed_register_hace_crypto_algs(struct aspeed_hace_dev *hace_dev)
 
 	for (i = 0; i < ARRAY_SIZE(aspeed_crypto_algs); i++) {
 		aspeed_crypto_algs[i].hace_dev = hace_dev;
-		rc = crypto_engine_register_skcipher(&aspeed_crypto_algs[i].alg.skcipher);
+		rc = crypto_register_skcipher(&aspeed_crypto_algs[i].alg.skcipher);
 		if (rc) {
 			CIPHER_DBG(hace_dev, "Failed to register %s\n",
-				   aspeed_crypto_algs[i].alg.skcipher.base.base.cra_name);
+				   aspeed_crypto_algs[i].alg.skcipher.base.cra_name);
 		}
 	}
 
@@ -1176,10 +1124,10 @@ void aspeed_register_hace_crypto_algs(struct aspeed_hace_dev *hace_dev)
 
 	for (i = 0; i < ARRAY_SIZE(aspeed_crypto_algs_g6); i++) {
 		aspeed_crypto_algs_g6[i].hace_dev = hace_dev;
-		rc = crypto_engine_register_skcipher(&aspeed_crypto_algs_g6[i].alg.skcipher);
+		rc = crypto_register_skcipher(&aspeed_crypto_algs_g6[i].alg.skcipher);
 		if (rc) {
 			CIPHER_DBG(hace_dev, "Failed to register %s\n",
-				   aspeed_crypto_algs_g6[i].alg.skcipher.base.base.cra_name);
+				   aspeed_crypto_algs_g6[i].alg.skcipher.base.cra_name);
 		}
 	}
 }

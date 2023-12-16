@@ -223,4 +223,3 @@ static struct phy_driver bcm87xx_driver[] = {
 module_phy_driver(bcm87xx_driver);
 
 MODULE_LICENSE("GPL v2");
-MODULE_DESCRIPTION("Broadcom BCM87xx PHY driver");

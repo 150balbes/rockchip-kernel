@@ -33,12 +33,10 @@
 #include <linux/comedi/comedi_8255.h>
 
 struct subdev_8255_private {
-	unsigned long context;
+	unsigned long regbase;
 	int (*io)(struct comedi_device *dev, int dir, int port, int data,
-		  unsigned long context);
+		  unsigned long regbase);
 };
-
-#ifdef CONFIG_HAS_IOPORT
 
 static int subdev_8255_io(struct comedi_device *dev,
 			  int dir, int port, int data, unsigned long regbase)
@@ -49,8 +47,6 @@ static int subdev_8255_io(struct comedi_device *dev,
 	}
 	return inb(dev->iobase + regbase + port);
 }
-
-#endif /* CONFIG_HAS_IOPORT */
 
 static int subdev_8255_mmio(struct comedi_device *dev,
 			    int dir, int port, int data, unsigned long regbase)
@@ -68,7 +64,7 @@ static int subdev_8255_insn(struct comedi_device *dev,
 			    unsigned int *data)
 {
 	struct subdev_8255_private *spriv = s->private;
-	unsigned long context = spriv->context;
+	unsigned long regbase = spriv->regbase;
 	unsigned int mask;
 	unsigned int v;
 
@@ -76,18 +72,18 @@ static int subdev_8255_insn(struct comedi_device *dev,
 	if (mask) {
 		if (mask & 0xff)
 			spriv->io(dev, 1, I8255_DATA_A_REG,
-				  s->state & 0xff, context);
+				  s->state & 0xff, regbase);
 		if (mask & 0xff00)
 			spriv->io(dev, 1, I8255_DATA_B_REG,
-				  (s->state >> 8) & 0xff, context);
+				  (s->state >> 8) & 0xff, regbase);
 		if (mask & 0xff0000)
 			spriv->io(dev, 1, I8255_DATA_C_REG,
-				  (s->state >> 16) & 0xff, context);
+				  (s->state >> 16) & 0xff, regbase);
 	}
 
-	v = spriv->io(dev, 0, I8255_DATA_A_REG, 0, context);
-	v |= (spriv->io(dev, 0, I8255_DATA_B_REG, 0, context) << 8);
-	v |= (spriv->io(dev, 0, I8255_DATA_C_REG, 0, context) << 16);
+	v = spriv->io(dev, 0, I8255_DATA_A_REG, 0, regbase);
+	v |= (spriv->io(dev, 0, I8255_DATA_B_REG, 0, regbase) << 8);
+	v |= (spriv->io(dev, 0, I8255_DATA_C_REG, 0, regbase) << 16);
 
 	data[1] = v;
 
@@ -98,7 +94,7 @@ static void subdev_8255_do_config(struct comedi_device *dev,
 				  struct comedi_subdevice *s)
 {
 	struct subdev_8255_private *spriv = s->private;
-	unsigned long context = spriv->context;
+	unsigned long regbase = spriv->regbase;
 	int config;
 
 	config = I8255_CTRL_CW;
@@ -112,7 +108,7 @@ static void subdev_8255_do_config(struct comedi_device *dev,
 	if (!(s->io_bits & 0xf00000))
 		config |= I8255_CTRL_C_HI_IO;
 
-	spriv->io(dev, 1, I8255_CTRL_REG, config, context);
+	spriv->io(dev, 1, I8255_CTRL_REG, config, regbase);
 }
 
 static int subdev_8255_insn_config(struct comedi_device *dev,
@@ -146,19 +142,23 @@ static int __subdev_8255_init(struct comedi_device *dev,
 			      struct comedi_subdevice *s,
 			      int (*io)(struct comedi_device *dev,
 					int dir, int port, int data,
-					unsigned long context),
-			      unsigned long context)
+					unsigned long regbase),
+			      unsigned long regbase,
+			      bool is_mmio)
 {
 	struct subdev_8255_private *spriv;
-
-	if (!io)
-		return -EINVAL;
 
 	spriv = comedi_alloc_spriv(s, sizeof(*spriv));
 	if (!spriv)
 		return -ENOMEM;
 
-	spriv->context = context;
+	if (io)
+		spriv->io = io;
+	else if (is_mmio)
+		spriv->io = subdev_8255_mmio;
+	else
+		spriv->io = subdev_8255_io;
+	spriv->regbase	= regbase;
 
 	s->type		= COMEDI_SUBD_DIO;
 	s->subdev_flags	= SDF_READABLE | SDF_WRITABLE;
@@ -173,88 +173,89 @@ static int __subdev_8255_init(struct comedi_device *dev,
 	return 0;
 }
 
-#ifdef CONFIG_HAS_IOPORT
-
 /**
- * subdev_8255_io_init - initialize DIO subdevice for driving I/O mapped 8255
+ * subdev_8255_init - initialize DIO subdevice for driving I/O mapped 8255
  * @dev: comedi device owning subdevice
  * @s: comedi subdevice to initialize
- * @regbase: offset of 8255 registers from dev->iobase
+ * @io: (optional) register I/O call-back function
+ * @regbase: offset of 8255 registers from dev->iobase, or call-back context
  *
  * Initializes a comedi subdevice as a DIO subdevice driving an 8255 chip.
  *
+ * If the optional I/O call-back function is provided, its prototype is of
+ * the following form:
+ *
+ *   int my_8255_callback(struct comedi_device *dev, int dir, int port,
+ *                        int data, unsigned long regbase);
+ *
+ * where 'dev', and 'regbase' match the values passed to this function,
+ * 'port' is the 8255 port number 0 to 3 (including the control port), 'dir'
+ * is the direction (0 for read, 1 for write) and 'data' is the value to be
+ * written.  It should return 0 if writing or the value read if reading.
+ *
+ * If the optional I/O call-back function is not provided, an internal
+ * call-back function is used which uses consecutive I/O port addresses
+ * starting at dev->iobase + regbase.
+ *
  * Return: -ENOMEM if failed to allocate memory, zero on success.
  */
-int subdev_8255_io_init(struct comedi_device *dev, struct comedi_subdevice *s,
+int subdev_8255_init(struct comedi_device *dev, struct comedi_subdevice *s,
+		     int (*io)(struct comedi_device *dev, int dir, int port,
+			       int data, unsigned long regbase),
 		     unsigned long regbase)
 {
-	return __subdev_8255_init(dev, s, subdev_8255_io, regbase);
+	return __subdev_8255_init(dev, s, io, regbase, false);
 }
-EXPORT_SYMBOL_GPL(subdev_8255_io_init);
-
-#endif	/* CONFIG_HAS_IOPORT */
+EXPORT_SYMBOL_GPL(subdev_8255_init);
 
 /**
  * subdev_8255_mm_init - initialize DIO subdevice for driving mmio-mapped 8255
  * @dev: comedi device owning subdevice
  * @s: comedi subdevice to initialize
- * @regbase: offset of 8255 registers from dev->mmio
+ * @io: (optional) register I/O call-back function
+ * @regbase: offset of 8255 registers from dev->mmio, or call-back context
  *
  * Initializes a comedi subdevice as a DIO subdevice driving an 8255 chip.
  *
- * Return: -ENOMEM if failed to allocate memory, zero on success.
- */
-int subdev_8255_mm_init(struct comedi_device *dev, struct comedi_subdevice *s,
-			unsigned long regbase)
-{
-	return __subdev_8255_init(dev, s, subdev_8255_mmio, regbase);
-}
-EXPORT_SYMBOL_GPL(subdev_8255_mm_init);
-
-/**
- * subdev_8255_cb_init - initialize DIO subdevice for driving callback-mapped 8255
- * @dev: comedi device owning subdevice
- * @s: comedi subdevice to initialize
- * @io: register I/O call-back function
- * @context: call-back context
- *
- * Initializes a comedi subdevice as a DIO subdevice driving an 8255 chip.
- *
- * The prototype of the I/O call-back function is of the following form:
+ * If the optional I/O call-back function is provided, its prototype is of
+ * the following form:
  *
  *   int my_8255_callback(struct comedi_device *dev, int dir, int port,
- *                        int data, unsigned long context);
+ *                        int data, unsigned long regbase);
  *
- * where 'dev', and 'context' match the values passed to this function,
+ * where 'dev', and 'regbase' match the values passed to this function,
  * 'port' is the 8255 port number 0 to 3 (including the control port), 'dir'
  * is the direction (0 for read, 1 for write) and 'data' is the value to be
  * written.  It should return 0 if writing or the value read if reading.
  *
+ * If the optional I/O call-back function is not provided, an internal
+ * call-back function is used which uses consecutive MMIO virtual addresses
+ * starting at dev->mmio + regbase.
  *
  * Return: -ENOMEM if failed to allocate memory, zero on success.
  */
-int subdev_8255_cb_init(struct comedi_device *dev, struct comedi_subdevice *s,
+int subdev_8255_mm_init(struct comedi_device *dev, struct comedi_subdevice *s,
 			int (*io)(struct comedi_device *dev, int dir, int port,
-				  int data, unsigned long context),
-			unsigned long context)
+				  int data, unsigned long regbase),
+			unsigned long regbase)
 {
-	return __subdev_8255_init(dev, s, io, context);
+	return __subdev_8255_init(dev, s, io, regbase, true);
 }
-EXPORT_SYMBOL_GPL(subdev_8255_cb_init);
+EXPORT_SYMBOL_GPL(subdev_8255_mm_init);
 
 /**
  * subdev_8255_regbase - get offset of 8255 registers or call-back context
  * @s: comedi subdevice
  *
- * Returns the 'regbase' or 'context' parameter that was previously passed to
- * subdev_8255_io_init(), subdev_8255_mm_init(), or subdev_8255_cb_init() to
- * set up the subdevice.  Only valid if the subdevice was set up successfully.
+ * Returns the 'regbase' parameter that was previously passed to
+ * subdev_8255_init() or subdev_8255_mm_init() to set up the subdevice.
+ * Only valid if the subdevice was set up successfully.
  */
 unsigned long subdev_8255_regbase(struct comedi_subdevice *s)
 {
 	struct subdev_8255_private *spriv = s->private;
 
-	return spriv->context;
+	return spriv->regbase;
 }
 EXPORT_SYMBOL_GPL(subdev_8255_regbase);
 

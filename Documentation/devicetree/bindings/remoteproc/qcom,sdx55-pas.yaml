@@ -46,7 +46,7 @@ properties:
       - const: mss
 
   memory-region:
-    maxItems: 1
+    minItems: 1
     description: Reference to the reserved-memory for the Hexagon core
 
   qcom,qmp:
@@ -62,7 +62,6 @@ properties:
 required:
   - compatible
   - reg
-  - memory-region
 
 allOf:
   - $ref: /schemas/remoteproc/qcom,pas-common.yaml#

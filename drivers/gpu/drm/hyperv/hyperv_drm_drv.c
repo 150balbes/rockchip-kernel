@@ -73,10 +73,9 @@ static int hyperv_setup_vram(struct hyperv_drm_device *hv,
 	struct drm_device *dev = &hv->dev;
 	int ret;
 
-	if (IS_ENABLED(CONFIG_SYSFB))
-		drm_aperture_remove_conflicting_framebuffers(screen_info.lfb_base,
-							     screen_info.lfb_size,
-							     &hyperv_driver);
+	drm_aperture_remove_conflicting_framebuffers(screen_info.lfb_base,
+						     screen_info.lfb_size,
+						     &hyperv_driver);
 
 	hv->fb_size = (unsigned long)hv->mmio_megabytes * 1024 * 1024;
 

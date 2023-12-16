@@ -80,12 +80,15 @@ static int vfb_mmap(struct fb_info *info,
 
 static const struct fb_ops vfb_ops = {
 	.owner		= THIS_MODULE,
-	__FB_DEFAULT_SYSMEM_OPS_RDWR,
+	.fb_read        = fb_sys_read,
+	.fb_write       = fb_sys_write,
 	.fb_check_var	= vfb_check_var,
 	.fb_set_par	= vfb_set_par,
 	.fb_setcolreg	= vfb_setcolreg,
 	.fb_pan_display	= vfb_pan_display,
-	__FB_DEFAULT_SYSMEM_OPS_DRAW,
+	.fb_fillrect	= sys_fillrect,
+	.fb_copyarea	= sys_copyarea,
+	.fb_imageblit	= sys_imageblit,
 	.fb_mmap	= vfb_mmap,
 };
 
@@ -382,8 +385,6 @@ static int vfb_pan_display(struct fb_var_screeninfo *var,
 static int vfb_mmap(struct fb_info *info,
 		    struct vm_area_struct *vma)
 {
-	vma->vm_page_prot = pgprot_decrypted(vma->vm_page_prot);
-
 	return remap_vmalloc_range(vma, (void *)info->fix.smem_start, vma->vm_pgoff);
 }
 
@@ -439,7 +440,6 @@ static int vfb_probe(struct platform_device *dev)
 	if (!info)
 		goto err;
 
-	info->flags |= FBINFO_VIRTFB;
 	info->screen_buffer = videomemory;
 	info->fbops = &vfb_ops;
 

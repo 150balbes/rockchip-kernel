@@ -1,6 +1,4 @@
 #ifndef _TOOLS_INCLUDE_LINUX_SEQ_FILE_H
 #define _TOOLS_INCLUDE_LINUX_SEQ_FILE_H
 
-struct seq_file;
-
 #endif /* _TOOLS_INCLUDE_LINUX_SEQ_FILE_H */

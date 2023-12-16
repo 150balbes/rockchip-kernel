@@ -27,8 +27,7 @@ int vgic_check_iorange(struct kvm *kvm, phys_addr_t ioaddr,
 	if (addr + size < addr)
 		return -EINVAL;
 
-	if (addr & ~kvm_phys_mask(&kvm->arch.mmu) ||
-	    (addr + size) > kvm_phys_size(&kvm->arch.mmu))
+	if (addr & ~kvm_phys_mask(kvm) || addr + size > kvm_phys_size(kvm))
 		return -E2BIG;
 
 	return 0;
@@ -340,9 +339,13 @@ int vgic_v2_parse_attr(struct kvm_device *dev, struct kvm_device_attr *attr,
 {
 	int cpuid;
 
-	cpuid = FIELD_GET(KVM_DEV_ARM_VGIC_CPUID_MASK, attr->attr);
+	cpuid = (attr->attr & KVM_DEV_ARM_VGIC_CPUID_MASK) >>
+		 KVM_DEV_ARM_VGIC_CPUID_SHIFT;
 
-	reg_attr->vcpu = kvm_get_vcpu_by_id(dev->kvm, cpuid);
+	if (cpuid >= atomic_read(&dev->kvm->online_vcpus))
+		return -EINVAL;
+
+	reg_attr->vcpu = kvm_get_vcpu(dev->kvm, cpuid);
 	reg_attr->addr = attr->attr & KVM_DEV_ARM_VGIC_OFFSET_MASK;
 
 	return 0;

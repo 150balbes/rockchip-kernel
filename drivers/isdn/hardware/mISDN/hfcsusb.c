@@ -678,7 +678,7 @@ ph_state(struct dchannel *dch)
 }
 
 /*
- * disable/enable BChannel for desired protocol
+ * disable/enable BChannel for desired protocoll
  */
 static int
 hfcsusb_setup_bch(struct bchannel *bch, int protocol)

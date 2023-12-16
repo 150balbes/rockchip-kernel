@@ -667,7 +667,7 @@ out_unlock:
 static unsigned long bch_mca_scan(struct shrinker *shrink,
 				  struct shrink_control *sc)
 {
-	struct cache_set *c = shrink->private_data;
+	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
 	struct btree *b, *t;
 	unsigned long i, nr = sc->nr_to_scan;
 	unsigned long freed = 0;
@@ -734,7 +734,7 @@ out:
 static unsigned long bch_mca_count(struct shrinker *shrink,
 				   struct shrink_control *sc)
 {
-	struct cache_set *c = shrink->private_data;
+	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
 
 	if (c->shrinker_disabled)
 		return 0;
@@ -752,8 +752,8 @@ void bch_btree_cache_free(struct cache_set *c)
 
 	closure_init_stack(&cl);
 
-	if (c->shrink)
-		shrinker_free(c->shrink);
+	if (c->shrink.list.next)
+		unregister_shrinker(&c->shrink);
 
 	mutex_lock(&c->bucket_lock);
 
@@ -828,19 +828,14 @@ int bch_btree_cache_alloc(struct cache_set *c)
 		c->verify_data = NULL;
 #endif
 
-	c->shrink = shrinker_alloc(0, "md-bcache:%pU", c->set_uuid);
-	if (!c->shrink) {
-		pr_warn("bcache: %s: could not allocate shrinker\n", __func__);
-		return 0;
-	}
+	c->shrink.count_objects = bch_mca_count;
+	c->shrink.scan_objects = bch_mca_scan;
+	c->shrink.seeks = 4;
+	c->shrink.batch = c->btree_pages * 2;
 
-	c->shrink->count_objects = bch_mca_count;
-	c->shrink->scan_objects = bch_mca_scan;
-	c->shrink->seeks = 4;
-	c->shrink->batch = c->btree_pages * 2;
-	c->shrink->private_data = c;
-
-	shrinker_register(c->shrink);
+	if (register_shrinker(&c->shrink, "md-bcache:%pU", c->set_uuid))
+		pr_warn("bcache: %s: could not register shrinker\n",
+				__func__);
 
 	return 0;
 }
@@ -1000,9 +995,6 @@ err:
  *
  * The btree node will have either a read or a write lock held, depending on
  * level and op->lock.
- *
- * Note: Only error code or btree pointer will be returned, it is unncessary
- *       for callers to check NULL pointer.
  */
 struct btree *bch_btree_node_get(struct cache_set *c, struct btree_op *op,
 				 struct bkey *k, int level, bool write,
@@ -1114,10 +1106,6 @@ retry:
 	mutex_unlock(&b->c->bucket_lock);
 }
 
-/*
- * Only error code or btree pointer will be returned, it is unncessary for
- * callers to check NULL pointer.
- */
 struct btree *__bch_btree_node_alloc(struct cache_set *c, struct btree_op *op,
 				     int level, bool wait,
 				     struct btree *parent)
@@ -1375,7 +1363,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	memset(new_nodes, 0, sizeof(new_nodes));
 	closure_init_stack(&cl);
 
-	while (nodes < GC_MERGE_NODES && !IS_ERR_OR_NULL(r[nodes].b))
+	while (nodes < GC_MERGE_NODES && !IS_ERR(r[nodes].b))
 		keys += r[nodes++].keys;
 
 	blocks = btree_default_blocks(b->c) * 2 / 3;
@@ -1539,8 +1527,6 @@ static int btree_gc_rewrite_node(struct btree *b, struct btree_op *op,
 		return 0;
 
 	n = btree_node_alloc_replacement(replace, NULL);
-	if (IS_ERR(n))
-		return 0;
 
 	/* recheck reserve after allocating replacement node */
 	if (btree_check_reserve(b, NULL)) {

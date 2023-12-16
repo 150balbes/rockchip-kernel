@@ -91,93 +91,82 @@
 			#size-cells = <0>;
 			#io-channel-cells = <1>;
 
-			channel@0 {
+			ref_gnd: ref_gnd@0 {
 				reg = <ADC5_REF_GND>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 1>;
-				label = "ref_gnd";
 			};
 
-			channel@1 {
+			vref_1p25: vref_1p25@1 {
 				reg = <ADC5_1P25VREF>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 1>;
-				label = "vref_1p25";
 			};
 
-			channel@6 {
+			die_temp: die_temp@6 {
 				reg = <ADC5_DIE_TEMP>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 1>;
-				label = "die_temp";
 			};
 
-			channel@4c {
+			xo_therm: xo_therm@4c {
 				reg = <ADC5_XO_THERM_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "xo_therm";
 			};
 
-			channel@4d {
+			msm_therm: msm_therm@4d {
 				reg = <ADC5_AMUX_THM1_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "msm_therm";
 			};
 
-			channel@4e {
+			emmc_therm: emmc_therm@4e {
 				reg = <ADC5_AMUX_THM2_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "emmc_therm";
 			};
 
-			channel@4f {
+			pa_therm0: thermistor0@4f {
 				reg = <ADC5_AMUX_THM3_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "pa_therm0";
 			};
 
-			channel@50 {
+			pa_therm1: thermistor1@50 {
 				reg = <ADC5_AMUX_THM4_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "pa_therm1";
 			};
 
-			channel@51 {
+			quiet_therm: quiet_therm@51 {
 				reg = <ADC5_AMUX_THM5_100K_PU>;
 				qcom,pre-scaling = <1 1>;
 				qcom,decimation = <1024>;
 				qcom,hw-settle-time = <200>;
 				qcom,ratiometric;
-				label = "quiet_therm";
 			};
 
-			channel@83 {
+			vadc_vph_pwr: vph_pwr@83 {
 				reg = <ADC5_VPH_PWR>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 3>;
-				label = "vph_pwr";
 			};
 
-			channel@85 {
+			vcoin: vcoin@85 {
 				reg = <ADC5_VCOIN>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 3>;
-				label = "vcoin";
 			};
 		};
 

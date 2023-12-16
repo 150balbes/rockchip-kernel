@@ -41,10 +41,6 @@ static const struct pll_vco lucid_5lpe_vco[] = {
 	{ 249600000, 1750000000, 0 },
 };
 
-static const struct pll_vco lucid_5lpe_vco_8280xp[] = {
-	{ 249600000, 1800000000, 0 },
-};
-
 static const struct alpha_pll_config video_pll0_config = {
 	.l = 0x25,
 	.alpha = 0x8000,
@@ -163,16 +159,6 @@ static const struct freq_tbl ftbl_video_cc_mvs0_clk_src[] = {
 	{ }
 };
 
-static const struct freq_tbl ftbl_video_cc_mvs0_clk_src_8280xp[] = {
-	F(720000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	F(1014000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	F(1098000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	F(1332000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	F(1599000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	F(1680000000, P_VIDEO_PLL0_OUT_MAIN, 1, 0, 0),
-	{ }
-};
-
 static struct clk_rcg2 video_cc_mvs0_clk_src = {
 	.cmd_rcgr = 0xb94,
 	.mnd_width = 0,
@@ -192,15 +178,6 @@ static const struct freq_tbl ftbl_video_cc_mvs1_clk_src[] = {
 	F(840000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
 	F(1098000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
 	F(1332000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
-	{ }
-};
-
-static const struct freq_tbl ftbl_video_cc_mvs1_clk_src_8280xp[] = {
-	F(840000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
-	F(1098000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
-	F(1332000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
-	F(1600000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
-	F(1800000000, P_VIDEO_PLL1_OUT_MAIN, 1, 0, 0),
 	{ }
 };
 
@@ -522,7 +499,6 @@ static struct qcom_cc_desc video_cc_sm8350_desc = {
 
 static int video_cc_sm8350_probe(struct platform_device *pdev)
 {
-	u32 video_cc_xo_clk_cbcr = 0xeec;
 	struct regmap *regmap;
 	int ret;
 
@@ -533,21 +509,6 @@ static int video_cc_sm8350_probe(struct platform_device *pdev)
 	ret = pm_runtime_resume_and_get(&pdev->dev);
 	if (ret)
 		return ret;
-
-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,sc8280xp-videocc")) {
-		video_cc_sleep_clk_src.cmd_rcgr = 0xf38;
-		video_cc_sleep_clk.halt_reg = 0xf58;
-		video_cc_sleep_clk.clkr.enable_reg = 0xf58;
-		video_cc_xo_clk_src.cmd_rcgr = 0xf14;
-		video_cc_xo_clk_cbcr = 0xf34;
-
-		video_pll0.vco_table = video_pll1.vco_table = lucid_5lpe_vco_8280xp;
-		/* No change, but assign it for completeness */
-		video_pll0.num_vco = video_pll1.num_vco = ARRAY_SIZE(lucid_5lpe_vco_8280xp);
-
-		video_cc_mvs0_clk_src.freq_tbl = ftbl_video_cc_mvs0_clk_src_8280xp;
-		video_cc_mvs1_clk_src.freq_tbl = ftbl_video_cc_mvs1_clk_src_8280xp;
-	}
 
 	regmap = qcom_cc_map(pdev, &video_cc_sm8350_desc);
 	if (IS_ERR(regmap)) {
@@ -564,7 +525,7 @@ static int video_cc_sm8350_probe(struct platform_device *pdev)
 	 *      video_cc_xo_clk
 	 */
 	regmap_update_bits(regmap, 0xe58, BIT(0), BIT(0));
-	regmap_update_bits(regmap, video_cc_xo_clk_cbcr, BIT(0), BIT(0));
+	regmap_update_bits(regmap, 0xeec, BIT(0), BIT(0));
 
 	ret = qcom_cc_really_probe(pdev, &video_cc_sm8350_desc, regmap);
 	pm_runtime_put(&pdev->dev);
@@ -573,7 +534,6 @@ static int video_cc_sm8350_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id video_cc_sm8350_match_table[] = {
-	{ .compatible = "qcom,sc8280xp-videocc" },
 	{ .compatible = "qcom,sm8350-videocc" },
 	{ }
 };

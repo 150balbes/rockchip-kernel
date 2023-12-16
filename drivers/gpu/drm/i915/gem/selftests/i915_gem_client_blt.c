@@ -83,7 +83,8 @@ static int linear_x_y_to_ftiled_pos(int x, int y, u32 stride, int bpp)
 enum client_tiling {
 	CLIENT_TILING_LINEAR,
 	CLIENT_TILING_X,
-	CLIENT_TILING_Y,  /* Y-major, either Tile4 (Xe_HP and beyond) or legacy TileY */
+	CLIENT_TILING_Y,
+	CLIENT_TILING_4,
 	CLIENT_NUM_TILING_TYPES
 };
 
@@ -164,10 +165,11 @@ static int prepare_blit(const struct tiled_blits *t,
 			 BLIT_CCTL_DST_MOCS(gt->mocs.uc_index));
 
 		src_pitch = t->width; /* in dwords */
-		if (src->tiling == CLIENT_TILING_Y) {
+		if (src->tiling == CLIENT_TILING_4) {
 			src_tiles = XY_FAST_COPY_BLT_D0_SRC_TILE_MODE(YMAJOR);
-			if (GRAPHICS_VER_FULL(to_i915(batch->base.dev)) >= IP_VER(12, 50))
-				src_4t = XY_FAST_COPY_BLT_D1_SRC_TILE4;
+			src_4t = XY_FAST_COPY_BLT_D1_SRC_TILE4;
+		} else if (src->tiling == CLIENT_TILING_Y) {
+			src_tiles = XY_FAST_COPY_BLT_D0_SRC_TILE_MODE(YMAJOR);
 		} else if (src->tiling == CLIENT_TILING_X) {
 			src_tiles = XY_FAST_COPY_BLT_D0_SRC_TILE_MODE(TILE_X);
 		} else {
@@ -175,10 +177,11 @@ static int prepare_blit(const struct tiled_blits *t,
 		}
 
 		dst_pitch = t->width; /* in dwords */
-		if (dst->tiling == CLIENT_TILING_Y) {
+		if (dst->tiling == CLIENT_TILING_4) {
 			dst_tiles = XY_FAST_COPY_BLT_D0_DST_TILE_MODE(YMAJOR);
-			if (GRAPHICS_VER_FULL(to_i915(batch->base.dev)) >= IP_VER(12, 50))
-				dst_4t = XY_FAST_COPY_BLT_D1_DST_TILE4;
+			dst_4t = XY_FAST_COPY_BLT_D1_DST_TILE4;
+		} else if (dst->tiling == CLIENT_TILING_Y) {
+			dst_tiles = XY_FAST_COPY_BLT_D0_DST_TILE_MODE(YMAJOR);
 		} else if (dst->tiling == CLIENT_TILING_X) {
 			dst_tiles = XY_FAST_COPY_BLT_D0_DST_TILE_MODE(TILE_X);
 		} else {
@@ -323,6 +326,12 @@ static int tiled_blits_create_buffers(struct tiled_blits *t,
 		t->buffers[i].vma = vma;
 		t->buffers[i].tiling =
 			i915_prandom_u32_max_state(CLIENT_NUM_TILING_TYPES, prng);
+
+		/* Platforms support either TileY or Tile4, not both */
+		if (HAS_4TILE(i915) && t->buffers[i].tiling == CLIENT_TILING_Y)
+			t->buffers[i].tiling = CLIENT_TILING_4;
+		else if (!HAS_4TILE(i915) && t->buffers[i].tiling == CLIENT_TILING_4)
+			t->buffers[i].tiling = CLIENT_TILING_Y;
 	}
 
 	return 0;
@@ -358,19 +367,18 @@ static u64 tiled_offset(const struct intel_gt *gt,
 
 	y = div64_u64_rem(v, stride, &x);
 
-	if (tiling == CLIENT_TILING_X) {
+	if (tiling == CLIENT_TILING_4) {
+		v = linear_x_y_to_ftiled_pos(x_pos, y_pos, stride, 32);
+
+		/* no swizzling for f-tiling */
+		swizzle = I915_BIT_6_SWIZZLE_NONE;
+	} else if (tiling == CLIENT_TILING_X) {
 		v = div64_u64_rem(y, 8, &y) * stride * 8;
 		v += y * 512;
 		v += div64_u64_rem(x, 512, &x) << 12;
 		v += x;
 
 		swizzle = gt->ggtt->bit_6_swizzle_x;
-	} else if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
-		/* Y-major tiling layout is Tile4 for Xe_HP and beyond */
-		v = linear_x_y_to_ftiled_pos(x_pos, y_pos, stride, 32);
-
-		/* no swizzling for f-tiling */
-		swizzle = I915_BIT_6_SWIZZLE_NONE;
 	} else {
 		const unsigned int ytile_span = 16;
 		const unsigned int ytile_height = 512;
@@ -406,7 +414,8 @@ static const char *repr_tiling(enum client_tiling tiling)
 	switch (tiling) {
 	case CLIENT_TILING_LINEAR: return "linear";
 	case CLIENT_TILING_X: return "X";
-	case CLIENT_TILING_Y: return "Y / 4";
+	case CLIENT_TILING_Y: return "Y";
+	case CLIENT_TILING_4: return "F";
 	default: return "unknown";
 	}
 }

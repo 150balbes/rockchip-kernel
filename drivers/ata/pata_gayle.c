@@ -27,6 +27,7 @@
 #include <asm/amigahw.h>
 #include <asm/amigaints.h>
 #include <asm/amigayle.h>
+#include <asm/ide.h>
 #include <asm/setup.h>
 
 #define DRV_NAME "pata_gayle"
@@ -124,7 +125,7 @@ static struct ata_port_operations pata_gayle_a4000_ops = {
 	.set_mode	= pata_gayle_set_mode,
 };
 
-static int pata_gayle_init_one(struct platform_device *pdev)
+static int __init pata_gayle_init_one(struct platform_device *pdev)
 {
 	struct resource *res;
 	struct gayle_ide_platform_data *pdata;
@@ -193,22 +194,23 @@ static int pata_gayle_init_one(struct platform_device *pdev)
 	return 0;
 }
 
-static void pata_gayle_remove_one(struct platform_device *pdev)
+static int __exit pata_gayle_remove_one(struct platform_device *pdev)
 {
 	struct ata_host *host = platform_get_drvdata(pdev);
 
 	ata_host_detach(host);
+
+	return 0;
 }
 
 static struct platform_driver pata_gayle_driver = {
-	.probe = pata_gayle_init_one,
-	.remove_new = pata_gayle_remove_one,
+	.remove = __exit_p(pata_gayle_remove_one),
 	.driver   = {
 		.name	= "amiga-gayle-ide",
 	},
 };
 
-module_platform_driver(pata_gayle_driver);
+module_platform_driver_probe(pata_gayle_driver, pata_gayle_init_one);
 
 MODULE_AUTHOR("Bartlomiej Zolnierkiewicz");
 MODULE_DESCRIPTION("low-level driver for Amiga Gayle PATA");

@@ -213,7 +213,7 @@ struct max98373_cache {
 
 struct max98373_priv {
 	struct regmap *regmap;
-	struct gpio_desc *reset;
+	int reset_gpio;
 	unsigned int v_slot;
 	unsigned int i_slot;
 	unsigned int spkfb_slot;

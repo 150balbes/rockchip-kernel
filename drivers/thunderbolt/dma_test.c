@@ -101,7 +101,7 @@ struct dma_test {
 	unsigned int packets_sent;
 	unsigned int packets_received;
 	unsigned int link_speed;
-	enum tb_link_width link_width;
+	unsigned int link_width;
 	unsigned int crc_errors;
 	unsigned int buffer_overflow_errors;
 	enum dma_test_result result;
@@ -465,9 +465,9 @@ DMA_TEST_DEBUGFS_ATTR(packets_to_send, packets_to_send_get,
 static int dma_test_set_bonding(struct dma_test *dt)
 {
 	switch (dt->link_width) {
-	case TB_LINK_WIDTH_DUAL:
+	case 2:
 		return tb_xdomain_lane_bonding_enable(dt->xd);
-	case TB_LINK_WIDTH_SINGLE:
+	case 1:
 		tb_xdomain_lane_bonding_disable(dt->xd);
 		fallthrough;
 	default:
@@ -490,8 +490,12 @@ static void dma_test_check_errors(struct dma_test *dt, int ret)
 	if (!dt->error_code) {
 		if (dt->link_speed && dt->xd->link_speed != dt->link_speed) {
 			dt->error_code = DMA_TEST_SPEED_ERROR;
-		} else if (dt->link_width && dt->link_width != dt->xd->link_width) {
-			dt->error_code = DMA_TEST_WIDTH_ERROR;
+		} else if (dt->link_width) {
+			const struct tb_xdomain *xd = dt->xd;
+
+			if ((dt->link_width == 1 && xd->link_width != TB_LINK_WIDTH_SINGLE) ||
+			    (dt->link_width == 2 && xd->link_width < TB_LINK_WIDTH_DUAL))
+				dt->error_code = DMA_TEST_WIDTH_ERROR;
 		} else if (dt->packets_to_send != dt->packets_sent ||
 			 dt->packets_to_receive != dt->packets_received ||
 			 dt->crc_errors || dt->buffer_overflow_errors) {

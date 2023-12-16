@@ -13,7 +13,6 @@
  */
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
@@ -52,9 +51,9 @@ struct pwm_sifive_ddata {
 };
 
 static inline
-struct pwm_sifive_ddata *pwm_sifive_chip_to_ddata(struct pwm_chip *chip)
+struct pwm_sifive_ddata *pwm_sifive_chip_to_ddata(struct pwm_chip *c)
 {
-	return container_of(chip, struct pwm_sifive_ddata, chip);
+	return container_of(c, struct pwm_sifive_ddata, chip);
 }
 
 static int pwm_sifive_request(struct pwm_chip *chip, struct pwm_device *pwm)
@@ -203,6 +202,7 @@ static const struct pwm_ops pwm_sifive_ops = {
 	.free = pwm_sifive_free,
 	.get_state = pwm_sifive_get_state,
 	.apply = pwm_sifive_apply,
+	.owner = THIS_MODULE,
 };
 
 static int pwm_sifive_clock_notifier(struct notifier_block *nb,

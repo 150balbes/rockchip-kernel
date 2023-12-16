@@ -8,7 +8,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/jiffies.h>
 #include <linux/mman.h>
@@ -647,7 +646,7 @@ static int hv_memory_notifier(struct notifier_block *nb, unsigned long val,
 			      void *v)
 {
 	struct memory_notify *mem = (struct memory_notify *)v;
-	unsigned long pfn_count;
+	unsigned long flags, pfn_count;
 
 	switch (val) {
 	case MEM_ONLINE:
@@ -656,22 +655,21 @@ static int hv_memory_notifier(struct notifier_block *nb, unsigned long val,
 		break;
 
 	case MEM_OFFLINE:
-		scoped_guard(spinlock_irqsave, &dm_device.ha_lock) {
-			pfn_count = hv_page_offline_check(mem->start_pfn,
-							  mem->nr_pages);
-			if (pfn_count <= dm_device.num_pages_onlined) {
-				dm_device.num_pages_onlined -= pfn_count;
-			} else {
-				/*
-				 * We're offlining more pages than we
-				 * managed to online. This is
-				 * unexpected. In any case don't let
-				 * num_pages_onlined wrap around zero.
-				 */
-				WARN_ON_ONCE(1);
-				dm_device.num_pages_onlined = 0;
-			}
+		spin_lock_irqsave(&dm_device.ha_lock, flags);
+		pfn_count = hv_page_offline_check(mem->start_pfn,
+						  mem->nr_pages);
+		if (pfn_count <= dm_device.num_pages_onlined) {
+			dm_device.num_pages_onlined -= pfn_count;
+		} else {
+			/*
+			 * We're offlining more pages than we managed to online.
+			 * This is unexpected. In any case don't let
+			 * num_pages_onlined wrap around zero.
+			 */
+			WARN_ON_ONCE(1);
+			dm_device.num_pages_onlined = 0;
 		}
+		spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 		break;
 	case MEM_GOING_ONLINE:
 	case MEM_GOING_OFFLINE:
@@ -723,23 +721,24 @@ static void hv_mem_hot_add(unsigned long start, unsigned long size,
 	unsigned long start_pfn;
 	unsigned long processed_pfn;
 	unsigned long total_pfn = pfn_count;
+	unsigned long flags;
 
 	for (i = 0; i < (size/HA_CHUNK); i++) {
 		start_pfn = start + (i * HA_CHUNK);
 
-		scoped_guard(spinlock_irqsave, &dm_device.ha_lock) {
-			has->ha_end_pfn +=  HA_CHUNK;
+		spin_lock_irqsave(&dm_device.ha_lock, flags);
+		has->ha_end_pfn +=  HA_CHUNK;
 
-			if (total_pfn > HA_CHUNK) {
-				processed_pfn = HA_CHUNK;
-				total_pfn -= HA_CHUNK;
-			} else {
-				processed_pfn = total_pfn;
-				total_pfn = 0;
-			}
-
-			has->covered_end_pfn +=  processed_pfn;
+		if (total_pfn > HA_CHUNK) {
+			processed_pfn = HA_CHUNK;
+			total_pfn -= HA_CHUNK;
+		} else {
+			processed_pfn = total_pfn;
+			total_pfn = 0;
 		}
+
+		has->covered_end_pfn +=  processed_pfn;
+		spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 
 		reinit_completion(&dm_device.ol_waitevent);
 
@@ -759,10 +758,10 @@ static void hv_mem_hot_add(unsigned long start, unsigned long size,
 				 */
 				do_hot_add = false;
 			}
-			scoped_guard(spinlock_irqsave, &dm_device.ha_lock) {
-				has->ha_end_pfn -= HA_CHUNK;
-				has->covered_end_pfn -=  processed_pfn;
-			}
+			spin_lock_irqsave(&dm_device.ha_lock, flags);
+			has->ha_end_pfn -= HA_CHUNK;
+			has->covered_end_pfn -=  processed_pfn;
+			spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 			break;
 		}
 
@@ -782,9 +781,10 @@ static void hv_mem_hot_add(unsigned long start, unsigned long size,
 static void hv_online_page(struct page *pg, unsigned int order)
 {
 	struct hv_hotadd_state *has;
+	unsigned long flags;
 	unsigned long pfn = page_to_pfn(pg);
 
-	guard(spinlock_irqsave)(&dm_device.ha_lock);
+	spin_lock_irqsave(&dm_device.ha_lock, flags);
 	list_for_each_entry(has, &dm_device.ha_region_list, list) {
 		/* The page belongs to a different HAS. */
 		if ((pfn < has->start_pfn) ||
@@ -794,6 +794,7 @@ static void hv_online_page(struct page *pg, unsigned int order)
 		hv_bring_pgs_online(has, pfn, 1UL << order);
 		break;
 	}
+	spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 }
 
 static int pfn_covered(unsigned long start_pfn, unsigned long pfn_cnt)
@@ -802,8 +803,9 @@ static int pfn_covered(unsigned long start_pfn, unsigned long pfn_cnt)
 	struct hv_hotadd_gap *gap;
 	unsigned long residual, new_inc;
 	int ret = 0;
+	unsigned long flags;
 
-	guard(spinlock_irqsave)(&dm_device.ha_lock);
+	spin_lock_irqsave(&dm_device.ha_lock, flags);
 	list_for_each_entry(has, &dm_device.ha_region_list, list) {
 		/*
 		 * If the pfn range we are dealing with is not in the current
@@ -850,6 +852,7 @@ static int pfn_covered(unsigned long start_pfn, unsigned long pfn_cnt)
 		ret = 1;
 		break;
 	}
+	spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 
 	return ret;
 }
@@ -944,6 +947,7 @@ static unsigned long process_hot_add(unsigned long pg_start,
 {
 	struct hv_hotadd_state *ha_region = NULL;
 	int covered;
+	unsigned long flags;
 
 	if (pfn_cnt == 0)
 		return 0;
@@ -975,9 +979,9 @@ static unsigned long process_hot_add(unsigned long pg_start,
 		ha_region->covered_end_pfn = pg_start;
 		ha_region->end_pfn = rg_start + rg_size;
 
-		scoped_guard(spinlock_irqsave, &dm_device.ha_lock) {
-			list_add_tail(&ha_region->list, &dm_device.ha_region_list);
-		}
+		spin_lock_irqsave(&dm_device.ha_lock, flags);
+		list_add_tail(&ha_region->list, &dm_device.ha_region_list);
+		spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 	}
 
 do_pg_range:
@@ -1624,7 +1628,7 @@ static int hv_free_page_report(struct page_reporting_dev_info *pr_dev_info,
 	WARN_ON_ONCE(nents > HV_MEMORY_HINT_MAX_GPA_PAGE_RANGES);
 	WARN_ON_ONCE(sgl->length < (HV_HYP_PAGE_SIZE << page_reporting_order));
 	local_irq_save(flags);
-	hint = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	hint = *(struct hv_memory_hint **)this_cpu_ptr(hyperv_pcpu_input_arg);
 	if (!hint) {
 		local_irq_restore(flags);
 		return -ENOSPC;
@@ -2043,6 +2047,7 @@ static void balloon_remove(struct hv_device *dev)
 	struct hv_dynmem_device *dm = hv_get_drvdata(dev);
 	struct hv_hotadd_state *has, *tmp;
 	struct hv_hotadd_gap *gap, *tmp_gap;
+	unsigned long flags;
 
 	if (dm->num_pages_ballooned != 0)
 		pr_warn("Ballooned pages: %d\n", dm->num_pages_ballooned);
@@ -2068,7 +2073,7 @@ static void balloon_remove(struct hv_device *dev)
 #endif
 	}
 
-	guard(spinlock_irqsave)(&dm_device.ha_lock);
+	spin_lock_irqsave(&dm_device.ha_lock, flags);
 	list_for_each_entry_safe(has, tmp, &dm->ha_region_list, list) {
 		list_for_each_entry_safe(gap, tmp_gap, &has->gap_list, list) {
 			list_del(&gap->list);
@@ -2077,6 +2082,7 @@ static void balloon_remove(struct hv_device *dev)
 		list_del(&has->list);
 		kfree(has);
 	}
+	spin_unlock_irqrestore(&dm_device.ha_lock, flags);
 }
 
 static int balloon_suspend(struct hv_device *hv_dev)

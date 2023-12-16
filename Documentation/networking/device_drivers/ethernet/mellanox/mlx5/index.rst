@@ -13,6 +13,7 @@ Contents:
    :maxdepth: 2
 
    kconfig
+   devlink
    switchdev
    tracepoints
    counters

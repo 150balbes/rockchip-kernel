@@ -60,10 +60,9 @@
  */
 #include <linux/interrupt.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/of_irq.h>
+#include <linux/of_address.h>
 #include <linux/of_platform.h>
-#include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
 #include <linux/dmaengine.h>
@@ -857,7 +856,7 @@ static void fsl_re_remove_chan(struct fsl_re_chan *chan)
 		      chan->oub_phys_addr);
 }
 
-static void fsl_re_remove(struct platform_device *ofdev)
+static int fsl_re_remove(struct platform_device *ofdev)
 {
 	struct fsl_re_drv_private *re_priv;
 	struct device *dev;
@@ -872,6 +871,8 @@ static void fsl_re_remove(struct platform_device *ofdev)
 
 	/* Unregister the driver */
 	dma_async_device_unregister(&re_priv->dma_dev);
+
+	return 0;
 }
 
 static const struct of_device_id fsl_re_ids[] = {
@@ -886,7 +887,7 @@ static struct platform_driver fsl_re_driver = {
 		.of_match_table = fsl_re_ids,
 	},
 	.probe = fsl_re_probe,
-	.remove_new = fsl_re_remove,
+	.remove = fsl_re_remove,
 };
 
 module_platform_driver(fsl_re_driver);

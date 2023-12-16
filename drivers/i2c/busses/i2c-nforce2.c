@@ -327,8 +327,8 @@ static int nforce2_probe_smb(struct pci_dev *dev, int bar, int alt_reg,
 		/* Older incarnations of the device used non-standard BARs */
 		u16 iobase;
 
-		error = pci_read_config_word(dev, alt_reg, &iobase);
-		if (error != PCIBIOS_SUCCESSFUL) {
+		if (pci_read_config_word(dev, alt_reg, &iobase)
+		    != PCIBIOS_SUCCESSFUL) {
 			dev_err(&dev->dev, "Error reading PCI config for %s\n",
 				name);
 			return -EIO;

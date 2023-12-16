@@ -119,7 +119,8 @@ static void map_buffer_to_folio(struct folio *folio, struct buffer_head *bh,
 			folio_mark_uptodate(folio);
 			return;
 		}
-		head = create_empty_buffers(folio, i_blocksize(inode), 0);
+		create_empty_buffers(&folio->page, i_blocksize(inode), 0);
+		head = folio_buffers(folio);
 	}
 
 	page_bh = head;

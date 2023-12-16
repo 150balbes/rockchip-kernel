@@ -1038,7 +1038,9 @@ static int thread_stack__trace_end(struct thread_stack *ts,
 
 static bool is_x86_retpoline(const char *name)
 {
-	return strstr(name, "__x86_indirect_thunk_") == name;
+	const char *p = strstr(name, "__x86_indirect_thunk_");
+
+	return p == name || !strcmp(name, "__indirect_thunk_start");
 }
 
 /*

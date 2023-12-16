@@ -205,19 +205,18 @@ EXPORT_SYMBOL(devm_clk_put);
 struct clk *devm_get_clk_from_child(struct device *dev,
 				    struct device_node *np, const char *con_id)
 {
-	struct devm_clk_state *state;
-	struct clk *clk;
+	struct clk **ptr, *clk;
 
-	state = devres_alloc(devm_clk_release, sizeof(*state), GFP_KERNEL);
-	if (!state)
+	ptr = devres_alloc(devm_clk_release, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
 		return ERR_PTR(-ENOMEM);
 
 	clk = of_clk_get_by_name(np, con_id);
 	if (!IS_ERR(clk)) {
-		state->clk = clk;
-		devres_add(dev, state);
+		*ptr = clk;
+		devres_add(dev, ptr);
 	} else {
-		devres_free(state);
+		devres_free(ptr);
 	}
 
 	return clk;

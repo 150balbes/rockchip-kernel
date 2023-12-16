@@ -591,9 +591,7 @@ int pop_ptr_off(void *(*op)(void *head))
 	n = op(&p->head);
 	bpf_spin_unlock(&p->lock);
 
-	if (!n)
-		return 0;
-	bpf_spin_lock((void *)n);
+	bpf_this_cpu_ptr(n);
 	return 0;
 }
 

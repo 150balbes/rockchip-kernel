@@ -44,10 +44,10 @@ struct panthor_model {
 	/** @name: Model name. */
 	const char *name;
 
-	/** @arch_major: Major version number of architecture. */
+	/** @arch_major: Major version number of architecture */
 	u8 arch_major;
 
-	/** @product_major: Major version number of product. */
+	/* @product_major: Major version number of product */
 	u8 product_major;
 };
 
@@ -55,9 +55,6 @@ struct panthor_model {
  * GPU_MODEL() - Define a GPU model. A GPU product can be uniquely identified
  * by a combination of the major architecture version and the major product
  * version.
- * @name: Name for the GPU model.
- * @_arch_major: Architecture major.
- * @_product_major: Product major.
  */
 #define GPU_MODEL(_name, _arch_major, _product_major) \
 {\
@@ -110,11 +107,11 @@ static void panthor_gpu_init_info(struct panthor_device *ptdev)
 	ptdev->gpu_info.l2_present = gpu_read(ptdev, GPU_L2_PRESENT_LO);
 	ptdev->gpu_info.l2_present |= (u64)gpu_read(ptdev, GPU_L2_PRESENT_HI) << 32;
 
-	arch_major = GPU_ARCH_MAJOR(ptdev->gpu_info.gpu_id);
-	product_major = GPU_PROD_MAJOR(ptdev->gpu_info.gpu_id);
-	major = GPU_VER_MAJOR(ptdev->gpu_info.gpu_id);
-	minor = GPU_VER_MINOR(ptdev->gpu_info.gpu_id);
-	status = GPU_VER_STATUS(ptdev->gpu_info.gpu_id);
+	arch_major = (ptdev->gpu_info.gpu_id >> 28) & 0xf;
+	product_major = (ptdev->gpu_info.gpu_id >> 16) & 0xf;
+	major = (ptdev->gpu_info.gpu_id >> 12) & 0xf;
+	minor = (ptdev->gpu_info.gpu_id >> 4) & 0xff;
+	status = ptdev->gpu_info.gpu_id & 0xf;
 
 	for (model = gpu_models; model->name; model++) {
 		if (model->arch_major == arch_major &&
@@ -166,7 +163,6 @@ PANTHOR_IRQ_HANDLER(gpu, GPU, panthor_gpu_irq_handler);
 
 /**
  * panthor_gpu_unplug() - Called when the GPU is unplugged.
- * @ptdev: Device to unplug.
  */
 void panthor_gpu_unplug(struct panthor_device *ptdev)
 {
@@ -227,7 +223,7 @@ int panthor_gpu_init(struct panthor_device *ptdev)
  * @pwroff_reg: Power-off register for this block.
  * @pwrtrans_reg: Power transition register for this block.
  * @mask: Sub-elements to power-off.
- * @timeout_us: Timeout in microseconds.
+ * @timeout_ms: Timeout in milliseconds.
  *
  * Return: 0 on success, a negative error code otherwise.
  */
@@ -286,9 +282,8 @@ int panthor_gpu_block_power_off(struct panthor_device *ptdev,
  * @blk_name: Block name.
  * @pwron_reg: Power-on register for this block.
  * @pwrtrans_reg: Power transition register for this block.
- * @rdy_reg: Power transition ready register.
  * @mask: Sub-elements to power-on.
- * @timeout_us: Timeout in microseconds.
+ * @timeout_ms: Timeout in milliseconds.
  *
  * Return: 0 on success, a negative error code otherwise.
  */
@@ -469,7 +464,6 @@ void panthor_gpu_suspend(struct panthor_device *ptdev)
 
 /**
  * panthor_gpu_resume() - Resume the GPU block.
- * @ptdev: Device.
  *
  * Resume the IRQ handler and power-on the L2-cache.
  * The FW takes care of powering the other blocks.

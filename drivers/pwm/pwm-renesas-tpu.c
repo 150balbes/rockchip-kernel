@@ -85,7 +85,6 @@ struct tpu_device {
 
 	void __iomem *base;
 	struct clk *clk;
-	struct tpu_pwm_device tpd[TPU_CHANNEL_MAX];
 };
 
 #define to_tpu_device(c)	container_of(c, struct tpu_device, chip)
@@ -216,7 +215,9 @@ static int tpu_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 	if (pwm->hwpwm >= TPU_CHANNEL_MAX)
 		return -EINVAL;
 
-	tpd = &tpu->tpd[pwm->hwpwm];
+	tpd = kzalloc(sizeof(*tpd), GFP_KERNEL);
+	if (tpd == NULL)
+		return -ENOMEM;
 
 	tpd->tpu = tpu;
 	tpd->channel = pwm->hwpwm;
@@ -227,22 +228,24 @@ static int tpu_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 
 	tpd->timer_on = false;
 
+	pwm_set_chip_data(pwm, tpd);
+
 	return 0;
 }
 
 static void tpu_pwm_free(struct pwm_chip *chip, struct pwm_device *pwm)
 {
-	struct tpu_device *tpu = to_tpu_device(chip);
-	struct tpu_pwm_device *tpd = &tpu->tpd[pwm->hwpwm];
+	struct tpu_pwm_device *tpd = pwm_get_chip_data(pwm);
 
 	tpu_pwm_timer_stop(tpd);
+	kfree(tpd);
 }
 
 static int tpu_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 			  u64 duty_ns, u64 period_ns, bool enabled)
 {
+	struct tpu_pwm_device *tpd = pwm_get_chip_data(pwm);
 	struct tpu_device *tpu = to_tpu_device(chip);
-	struct tpu_pwm_device *tpd = &tpu->tpd[pwm->hwpwm];
 	unsigned int prescaler;
 	bool duty_only = false;
 	u32 clk_rate;
@@ -350,8 +353,7 @@ static int tpu_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 static int tpu_pwm_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 				enum pwm_polarity polarity)
 {
-	struct tpu_device *tpu = to_tpu_device(chip);
-	struct tpu_pwm_device *tpd = &tpu->tpd[pwm->hwpwm];
+	struct tpu_pwm_device *tpd = pwm_get_chip_data(pwm);
 
 	tpd->polarity = polarity;
 
@@ -360,8 +362,7 @@ static int tpu_pwm_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static int tpu_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
-	struct tpu_device *tpu = to_tpu_device(chip);
-	struct tpu_pwm_device *tpd = &tpu->tpd[pwm->hwpwm];
+	struct tpu_pwm_device *tpd = pwm_get_chip_data(pwm);
 	int ret;
 
 	ret = tpu_pwm_timer_start(tpd);
@@ -383,8 +384,7 @@ static int tpu_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 
 static void tpu_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
-	struct tpu_device *tpu = to_tpu_device(chip);
-	struct tpu_pwm_device *tpd = &tpu->tpd[pwm->hwpwm];
+	struct tpu_pwm_device *tpd = pwm_get_chip_data(pwm);
 
 	/* The timer must be running to modify the pin output configuration. */
 	tpu_pwm_timer_start(tpd);
@@ -431,6 +431,7 @@ static const struct pwm_ops tpu_pwm_ops = {
 	.request = tpu_pwm_request,
 	.free = tpu_pwm_free,
 	.apply = tpu_pwm_apply,
+	.owner = THIS_MODULE,
 };
 
 /* -----------------------------------------------------------------------------

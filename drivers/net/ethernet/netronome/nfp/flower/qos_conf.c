@@ -523,31 +523,25 @@ int nfp_flower_setup_qos_offload(struct nfp_app *app, struct net_device *netdev,
 {
 	struct netlink_ext_ack *extack = flow->common.extack;
 	struct nfp_flower_priv *fl_priv = app->priv;
-	int ret;
 
 	if (!(fl_priv->flower_ext_feats & NFP_FL_FEATS_VF_RLIM)) {
 		NL_SET_ERR_MSG_MOD(extack, "unsupported offload: loaded firmware does not support qos rate limit offload");
 		return -EOPNOTSUPP;
 	}
 
-	mutex_lock(&fl_priv->nfp_fl_lock);
 	switch (flow->command) {
 	case TC_CLSMATCHALL_REPLACE:
-		ret = nfp_flower_install_rate_limiter(app, netdev, flow, extack);
-		break;
+		return nfp_flower_install_rate_limiter(app, netdev, flow,
+						       extack);
 	case TC_CLSMATCHALL_DESTROY:
-		ret = nfp_flower_remove_rate_limiter(app, netdev, flow, extack);
-		break;
+		return nfp_flower_remove_rate_limiter(app, netdev, flow,
+						      extack);
 	case TC_CLSMATCHALL_STATS:
-		ret = nfp_flower_stats_rate_limiter(app, netdev, flow, extack);
-		break;
+		return nfp_flower_stats_rate_limiter(app, netdev, flow,
+						     extack);
 	default:
-		ret = -EOPNOTSUPP;
-		break;
+		return -EOPNOTSUPP;
 	}
-	mutex_unlock(&fl_priv->nfp_fl_lock);
-
-	return ret;
 }
 
 /* Offload tc action, currently only for tc police */

@@ -5,14 +5,13 @@
 // Copyright 2007, 2008 Wolfson Microelectronics PLC.
 // Copyright 2008 SlimLogic Ltd.
 
-#include <linux/bitops.h>
-#include <linux/delay.h>
-#include <linux/err.h>
-#include <linux/export.h>
 #include <linux/kernel.h>
+#include <linux/err.h>
+#include <linux/delay.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regulator/driver.h>
+#include <linux/module.h>
 
 #include "internal.h"
 
@@ -105,14 +104,13 @@ static int regulator_range_selector_to_index(struct regulator_dev *rdev,
 {
 	int i;
 
-	if (!rdev->desc->linear_range_selectors_bitfield)
+	if (!rdev->desc->linear_range_selectors)
 		return -EINVAL;
 
 	rval &= rdev->desc->vsel_range_mask;
-	rval >>= ffs(rdev->desc->vsel_range_mask) - 1;
 
 	for (i = 0; i < rdev->desc->n_linear_ranges; i++) {
-		if (rdev->desc->linear_range_selectors_bitfield[i] == rval)
+		if (rdev->desc->linear_range_selectors[i] == rval)
 			return i;
 	}
 	return -EINVAL;
@@ -196,8 +194,7 @@ int regulator_set_voltage_sel_pickable_regmap(struct regulator_dev *rdev,
 	sel <<= ffs(rdev->desc->vsel_mask) - 1;
 	sel += rdev->desc->linear_ranges[i].min_sel;
 
-	range = rdev->desc->linear_range_selectors_bitfield[i];
-	range <<= ffs(rdev->desc->vsel_range_mask) - 1;
+	range = rdev->desc->linear_range_selectors[i];
 
 	if (rdev->desc->vsel_reg == rdev->desc->vsel_range_reg) {
 		ret = regmap_update_bits(rdev->regmap,

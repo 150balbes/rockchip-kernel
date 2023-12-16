@@ -73,7 +73,7 @@ struct dsa_tag_8021q_vlan {
 struct dsa_8021q_context {
 	struct dsa_switch *ds;
 	struct list_head vlans;
-	/* EtherType of RX VID, used for filtering on conduit interface */
+	/* EtherType of RX VID, used for filtering on master interface */
 	__be16 proto;
 };
 
@@ -338,7 +338,7 @@ static int dsa_tag_8021q_port_setup(struct dsa_switch *ds, int port)
 	struct dsa_8021q_context *ctx = ds->tag_8021q_ctx;
 	struct dsa_port *dp = dsa_to_port(ds, port);
 	u16 vid = dsa_tag_8021q_standalone_vid(dp);
-	struct net_device *conduit;
+	struct net_device *master;
 	int err;
 
 	/* The CPU port is implicitly configured by
@@ -347,7 +347,7 @@ static int dsa_tag_8021q_port_setup(struct dsa_switch *ds, int port)
 	if (!dsa_port_is_user(dp))
 		return 0;
 
-	conduit = dsa_port_to_conduit(dp);
+	master = dsa_port_to_master(dp);
 
 	err = dsa_port_tag_8021q_vlan_add(dp, vid, false);
 	if (err) {
@@ -357,8 +357,8 @@ static int dsa_tag_8021q_port_setup(struct dsa_switch *ds, int port)
 		return err;
 	}
 
-	/* Add the VLAN to the conduit's RX filter. */
-	vlan_vid_add(conduit, ctx->proto, vid);
+	/* Add the VLAN to the master's RX filter. */
+	vlan_vid_add(master, ctx->proto, vid);
 
 	return err;
 }
@@ -368,7 +368,7 @@ static void dsa_tag_8021q_port_teardown(struct dsa_switch *ds, int port)
 	struct dsa_8021q_context *ctx = ds->tag_8021q_ctx;
 	struct dsa_port *dp = dsa_to_port(ds, port);
 	u16 vid = dsa_tag_8021q_standalone_vid(dp);
-	struct net_device *conduit;
+	struct net_device *master;
 
 	/* The CPU port is implicitly configured by
 	 * configuring the front-panel ports
@@ -376,11 +376,11 @@ static void dsa_tag_8021q_port_teardown(struct dsa_switch *ds, int port)
 	if (!dsa_port_is_user(dp))
 		return;
 
-	conduit = dsa_port_to_conduit(dp);
+	master = dsa_port_to_master(dp);
 
 	dsa_port_tag_8021q_vlan_del(dp, vid, false);
 
-	vlan_vid_del(conduit, ctx->proto, vid);
+	vlan_vid_del(master, ctx->proto, vid);
 }
 
 static int dsa_tag_8021q_setup(struct dsa_switch *ds)
@@ -468,10 +468,10 @@ struct sk_buff *dsa_8021q_xmit(struct sk_buff *skb, struct net_device *netdev,
 }
 EXPORT_SYMBOL_GPL(dsa_8021q_xmit);
 
-struct net_device *dsa_tag_8021q_find_port_by_vbid(struct net_device *conduit,
+struct net_device *dsa_tag_8021q_find_port_by_vbid(struct net_device *master,
 						   int vbid)
 {
-	struct dsa_port *cpu_dp = conduit->dsa_ptr;
+	struct dsa_port *cpu_dp = master->dsa_ptr;
 	struct dsa_switch_tree *dst = cpu_dp->dst;
 	struct dsa_port *dp;
 
@@ -490,7 +490,7 @@ struct net_device *dsa_tag_8021q_find_port_by_vbid(struct net_device *conduit,
 			continue;
 
 		if (dsa_port_bridge_num_get(dp) == vbid)
-			return dp->user;
+			return dp->slave;
 	}
 
 	return NULL;

@@ -6,7 +6,7 @@
  *  Copyright (C) 2001 Paul Diefenbaugh <paul.s.diefenbaugh@intel.com>
  *  Copyright (C) 2001 Patrick Mochel <mochel@osdl.org>
  */
-#include <acpi/proc_cap_intel.h>
+#include <acpi/pdc_intel.h>
 
 #include <asm/numa.h>
 #include <asm/fixmap.h>
@@ -15,10 +15,6 @@
 #include <asm/mpspec.h>
 #include <asm/x86_init.h>
 #include <asm/cpufeature.h>
-#include <asm/irq_vectors.h>
-#include <asm/xen/hypervisor.h>
-
-#include <xen/xen.h>
 
 #ifdef CONFIG_ACPI_APEI
 # include <asm/pgtable_types.h>
@@ -35,7 +31,6 @@ extern int acpi_skip_timer_override;
 extern int acpi_use_timer_override;
 extern int acpi_fix_pin2_polarity;
 extern int acpi_disable_cmcff;
-extern bool acpi_int_src_ovr[NR_IRQS_LEGACY];
 
 extern u8 acpi_sci_flags;
 extern u32 acpi_sci_override_gsi;
@@ -105,42 +100,23 @@ static inline bool arch_has_acpi_pdc(void)
 		c->x86_vendor == X86_VENDOR_CENTAUR);
 }
 
-static inline void arch_acpi_set_proc_cap_bits(u32 *cap)
+static inline void arch_acpi_set_pdc_bits(u32 *buf)
 {
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	*cap |= ACPI_PROC_CAP_C_CAPABILITY_SMP;
-
-	/* Enable coordination with firmware's _TSD info */
-	*cap |= ACPI_PROC_CAP_SMP_T_SWCOORD;
+	buf[2] |= ACPI_PDC_C_CAPABILITY_SMP;
 
 	if (cpu_has(c, X86_FEATURE_EST))
-		*cap |= ACPI_PROC_CAP_EST_CAPABILITY_SWSMP;
+		buf[2] |= ACPI_PDC_EST_CAPABILITY_SWSMP;
 
 	if (cpu_has(c, X86_FEATURE_ACPI))
-		*cap |= ACPI_PROC_CAP_T_FFH;
-
-	if (cpu_has(c, X86_FEATURE_HWP))
-		*cap |= ACPI_PROC_CAP_COLLAB_PROC_PERF;
+		buf[2] |= ACPI_PDC_T_FFH;
 
 	/*
-	 * If mwait/monitor is unsupported, C_C1_FFH and
-	 * C2/C3_FFH will be disabled.
+	 * If mwait/monitor is unsupported, C2/C3_FFH will be disabled
 	 */
-	if (!cpu_has(c, X86_FEATURE_MWAIT) ||
-	    boot_option_idle_override == IDLE_NOMWAIT)
-		*cap &= ~(ACPI_PROC_CAP_C_C1_FFH | ACPI_PROC_CAP_C_C2C3_FFH);
-
-	if (xen_initial_domain()) {
-		/*
-		 * When Linux is running as Xen dom0, the hypervisor is the
-		 * entity in charge of the processor power management, and so
-		 * Xen needs to check the OS capabilities reported in the
-		 * processor capabilities buffer matches what the hypervisor
-		 * driver supports.
-		 */
-		xen_sanitize_proc_cap_bits(cap);
-	}
+	if (!cpu_has(c, X86_FEATURE_MWAIT))
+		buf[2] &= ~(ACPI_PDC_C_C2C3_FFH);
 }
 
 static inline bool acpi_has_cpu_in_madt(void)

@@ -5,6 +5,7 @@
  * Copyright 2011 Linaro Ltd.
  */
 
+#include <linux/of_platform.h>
 #include <asm/mach/arch.h>
 
 #include "common.h"

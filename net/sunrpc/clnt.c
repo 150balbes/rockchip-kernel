@@ -111,8 +111,7 @@ static void rpc_clnt_remove_pipedir(struct rpc_clnt *clnt)
 
 	pipefs_sb = rpc_get_sb_net(net);
 	if (pipefs_sb) {
-		if (pipefs_sb == clnt->pipefs_sb)
-			__rpc_clnt_remove_pipedir(clnt);
+		__rpc_clnt_remove_pipedir(clnt);
 		rpc_put_sb_net(net);
 	}
 }
@@ -151,8 +150,6 @@ static int
 rpc_setup_pipedir(struct super_block *pipefs_sb, struct rpc_clnt *clnt)
 {
 	struct dentry *dentry;
-
-	clnt->pipefs_sb = pipefs_sb;
 
 	if (clnt->cl_program->pipe_dir_name != NULL) {
 		dentry = rpc_setup_pipedir_sb(pipefs_sb, clnt);
@@ -537,8 +534,6 @@ struct rpc_clnt *rpc_create(struct rpc_create_args *args)
 		.servername = args->servername,
 		.bc_xprt = args->bc_xprt,
 		.xprtsec = args->xprtsec,
-		.connect_timeout = args->connect_timeout,
-		.reconnect_timeout = args->reconnect_timeout,
 	};
 	char servername[48];
 	struct rpc_clnt *clnt;
@@ -2174,7 +2169,6 @@ call_connect_status(struct rpc_task *task)
 	task->tk_status = 0;
 	switch (status) {
 	case -ECONNREFUSED:
-	case -ECONNRESET:
 		/* A positive refusal suggests a rebind is needed. */
 		if (RPC_IS_SOFTCONN(task))
 			break;
@@ -2183,6 +2177,7 @@ call_connect_status(struct rpc_task *task)
 			goto out_retry;
 		}
 		fallthrough;
+	case -ECONNRESET:
 	case -ECONNABORTED:
 	case -ENETDOWN:
 	case -ENETUNREACH:
@@ -2223,7 +2218,7 @@ call_connect_status(struct rpc_task *task)
 			}
 			xprt_switch_put(xps);
 			if (!task->tk_xprt)
-				goto out;
+				return;
 		}
 		goto out_retry;
 	case -ENOBUFS:
@@ -2238,7 +2233,6 @@ out_next:
 out_retry:
 	/* Check for timeouts before looping back to call_bind */
 	task->tk_action = call_bind;
-out:
 	rpc_check_timeout(task);
 }
 
@@ -2480,7 +2474,8 @@ call_status(struct rpc_task *task)
 		goto out_exit;
 	}
 	task->tk_action = call_encode;
-	rpc_check_timeout(task);
+	if (status != -ECONNRESET && status != -ECONNABORTED)
+		rpc_check_timeout(task);
 	return;
 out_exit:
 	rpc_call_rpcerror(task, status);
@@ -2607,7 +2602,6 @@ out:
 	case 0:
 		task->tk_action = rpc_exit_task;
 		task->tk_status = rpcauth_unwrap_resp(task, &xdr);
-		xdr_finish_decode(&xdr);
 		return;
 	case -EAGAIN:
 		task->tk_status = 0;
@@ -2728,15 +2722,7 @@ out_unparsable:
 
 out_verifier:
 	trace_rpc_bad_verifier(task);
-	switch (error) {
-	case -EPROTONOSUPPORT:
-		goto out_err;
-	case -EACCES:
-		/* Re-encode with a fresh cred */
-		fallthrough;
-	default:
-		goto out_garbage;
-	}
+	goto out_err;
 
 out_msg_denied:
 	error = -EACCES;
@@ -2762,7 +2748,6 @@ out_msg_denied:
 	case rpc_autherr_rejectedverf:
 	case rpcsec_gsserr_credproblem:
 	case rpcsec_gsserr_ctxproblem:
-		rpcauth_invalcred(task);
 		if (!task->tk_cred_retry)
 			break;
 		task->tk_cred_retry--;
@@ -2919,22 +2904,19 @@ static const struct rpc_call_ops rpc_cb_add_xprt_call_ops = {
  * @clnt: pointer to struct rpc_clnt
  * @xps: pointer to struct rpc_xprt_switch,
  * @xprt: pointer struct rpc_xprt
- * @in_max_connect: pointer to the max_connect value for the passed in xprt transport
+ * @dummy: unused
  */
 int rpc_clnt_test_and_add_xprt(struct rpc_clnt *clnt,
 		struct rpc_xprt_switch *xps, struct rpc_xprt *xprt,
-		void *in_max_connect)
+		void *dummy)
 {
 	struct rpc_cb_add_xprt_calldata *data;
 	struct rpc_task *task;
-	int max_connect = clnt->cl_max_connect;
 
-	if (in_max_connect)
-		max_connect = *(int *)in_max_connect;
-	if (xps->xps_nunique_destaddr_xprts + 1 > max_connect) {
+	if (xps->xps_nunique_destaddr_xprts + 1 > clnt->cl_max_connect) {
 		rcu_read_lock();
 		pr_warn("SUNRPC: reached max allowed number (%d) did not add "
-			"transport to server: %s\n", max_connect,
+			"transport to server: %s\n", clnt->cl_max_connect,
 			rpc_peeraddr2str(clnt, RPC_DISPLAY_ADDR));
 		rcu_read_unlock();
 		return -EINVAL;
@@ -3087,11 +3069,6 @@ int rpc_clnt_add_xprt(struct rpc_clnt *clnt,
 	}
 	xprt->resvport = resvport;
 	xprt->reuseport = reuseport;
-
-	if (xprtargs->connect_timeout)
-		connect_timeout = xprtargs->connect_timeout;
-	if (xprtargs->reconnect_timeout)
-		reconnect_timeout = xprtargs->reconnect_timeout;
 	if (xprt->ops->set_connect_timeout != NULL)
 		xprt->ops->set_connect_timeout(xprt,
 				connect_timeout,

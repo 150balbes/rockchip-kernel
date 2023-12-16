@@ -21,8 +21,6 @@
  */
 #include "priv.h"
 
-#include <subdev/gsp.h>
-
 #include <nvif/class.h>
 
 static void
@@ -106,8 +104,5 @@ int
 tu102_vfn_new(struct nvkm_device *device,
 	      enum nvkm_subdev_type type, int inst, struct nvkm_vfn **pvfn)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return r535_vfn_new(&tu102_vfn, device, type, inst, 0xb80000, pvfn);
-
 	return nvkm_vfn_new_(&tu102_vfn, device, type, inst, 0xb80000, pvfn);
 }

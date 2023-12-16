@@ -23,7 +23,6 @@
  * for more details.
  */
 
-#include <linux/cpu.h>
 #include <linux/kernel.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/debug.h>

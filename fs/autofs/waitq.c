@@ -32,9 +32,8 @@ void autofs_catatonic_mode(struct autofs_sb_info *sbi)
 		wq->status = -ENOENT; /* Magic is gone - report failure */
 		kfree(wq->name.name - wq->offset);
 		wq->name.name = NULL;
-		wake_up(&wq->queue);
-		if (!--wq->wait_ctr)
-			kfree(wq);
+		wq->wait_ctr--;
+		wake_up_interruptible(&wq->queue);
 		wq = nwq;
 	}
 	fput(sbi->pipe);	/* Close the pipe */

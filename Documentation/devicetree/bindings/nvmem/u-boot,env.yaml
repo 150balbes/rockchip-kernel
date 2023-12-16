@@ -51,8 +51,6 @@ properties:
   ethaddr:
     type: object
     description: Ethernet interfaces base MAC address.
-    additionalProperties: false
-
     properties:
       "#nvmem-cell-cells":
         description: The first argument is a MAC address offset.

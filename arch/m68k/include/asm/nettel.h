@@ -14,8 +14,9 @@
 #define	nettel_h
 /****************************************************************************/
 
+
 /****************************************************************************/
-#if defined(CONFIG_NETtel) || defined(CONFIG_CLEOPATRA)
+#ifdef CONFIG_NETtel
 /****************************************************************************/
 
 #ifdef CONFIG_COLDFIRE
@@ -25,7 +26,7 @@
 #endif
 
 /*---------------------------------------------------------------------------*/
-#if defined(CONFIG_M5307) || defined(CONFIG_M5407)
+#if defined(CONFIG_M5307)
 /*
  *	NETtel/5307 based hardware first. DTR/DCD lines are wired to
  *	GPIO lines. Most of the LED's are driver through a latch

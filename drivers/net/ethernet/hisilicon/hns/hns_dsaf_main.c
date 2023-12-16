@@ -3007,7 +3007,7 @@ free_dev:
  * hns_dsaf_remove - remove dsaf dev
  * @pdev: dasf platform device
  */
-static void hns_dsaf_remove(struct platform_device *pdev)
+static int hns_dsaf_remove(struct platform_device *pdev)
 {
 	struct dsaf_device *dsaf_dev = dev_get_drvdata(&pdev->dev);
 
@@ -3020,6 +3020,8 @@ static void hns_dsaf_remove(struct platform_device *pdev)
 	hns_dsaf_free(dsaf_dev);
 
 	hns_dsaf_free_dev(dsaf_dev);
+
+	return 0;
 }
 
 static const struct of_device_id g_dsaf_match[] = {
@@ -3031,7 +3033,7 @@ MODULE_DEVICE_TABLE(of, g_dsaf_match);
 
 static struct platform_driver g_dsaf_driver = {
 	.probe = hns_dsaf_probe,
-	.remove_new = hns_dsaf_remove,
+	.remove = hns_dsaf_remove,
 	.driver = {
 		.name = DSAF_DRV_NAME,
 		.of_match_table = g_dsaf_match,

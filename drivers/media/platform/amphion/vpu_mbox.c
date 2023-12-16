@@ -9,6 +9,8 @@
 #include <linux/list.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include "vpu.h"
 #include "vpu_mbox.h"
@@ -44,10 +46,11 @@ static int vpu_mbox_request_channel(struct device *dev, struct vpu_mbox *mbox)
 	cl->rx_callback = vpu_mbox_rx_callback;
 
 	ch = mbox_request_channel_byname(cl, mbox->name);
-	if (IS_ERR(ch))
-		return dev_err_probe(dev, PTR_ERR(ch),
-				     "Failed to request mbox chan %s\n",
-				     mbox->name);
+	if (IS_ERR(ch)) {
+		dev_err(dev, "Failed to request mbox chan %s, ret : %ld\n",
+			mbox->name, PTR_ERR(ch));
+		return PTR_ERR(ch);
+	}
 
 	mbox->ch = ch;
 	return 0;

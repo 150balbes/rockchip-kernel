@@ -254,7 +254,7 @@ enum evict_result {
 
 typedef enum evict_result (*le_predicate)(struct lru_entry *le, void *context);
 
-static struct lru_entry *lru_evict(struct lru *lru, le_predicate pred, void *context, bool no_sleep)
+static struct lru_entry *lru_evict(struct lru *lru, le_predicate pred, void *context)
 {
 	unsigned long tested = 0;
 	struct list_head *h = lru->cursor;
@@ -295,8 +295,7 @@ static struct lru_entry *lru_evict(struct lru *lru, le_predicate pred, void *con
 
 		h = h->next;
 
-		if (!no_sleep)
-			cond_resched();
+		cond_resched();
 	}
 
 	return NULL;
@@ -383,10 +382,7 @@ struct dm_buffer {
  */
 
 struct buffer_tree {
-	union {
-		struct rw_semaphore lock;
-		rwlock_t spinlock;
-	} u;
+	struct rw_semaphore lock;
 	struct rb_root root;
 } ____cacheline_aligned_in_smp;
 
@@ -397,11 +393,8 @@ struct dm_buffer_cache {
 	 * on the locks.
 	 */
 	unsigned int num_locks;
-	bool no_sleep;
 	struct buffer_tree trees[];
 };
-
-static DEFINE_STATIC_KEY_FALSE(no_sleep_enabled);
 
 static inline unsigned int cache_index(sector_t block, unsigned int num_locks)
 {
@@ -410,34 +403,22 @@ static inline unsigned int cache_index(sector_t block, unsigned int num_locks)
 
 static inline void cache_read_lock(struct dm_buffer_cache *bc, sector_t block)
 {
-	if (static_branch_unlikely(&no_sleep_enabled) && bc->no_sleep)
-		read_lock_bh(&bc->trees[cache_index(block, bc->num_locks)].u.spinlock);
-	else
-		down_read(&bc->trees[cache_index(block, bc->num_locks)].u.lock);
+	down_read(&bc->trees[cache_index(block, bc->num_locks)].lock);
 }
 
 static inline void cache_read_unlock(struct dm_buffer_cache *bc, sector_t block)
 {
-	if (static_branch_unlikely(&no_sleep_enabled) && bc->no_sleep)
-		read_unlock_bh(&bc->trees[cache_index(block, bc->num_locks)].u.spinlock);
-	else
-		up_read(&bc->trees[cache_index(block, bc->num_locks)].u.lock);
+	up_read(&bc->trees[cache_index(block, bc->num_locks)].lock);
 }
 
 static inline void cache_write_lock(struct dm_buffer_cache *bc, sector_t block)
 {
-	if (static_branch_unlikely(&no_sleep_enabled) && bc->no_sleep)
-		write_lock_bh(&bc->trees[cache_index(block, bc->num_locks)].u.spinlock);
-	else
-		down_write(&bc->trees[cache_index(block, bc->num_locks)].u.lock);
+	down_write(&bc->trees[cache_index(block, bc->num_locks)].lock);
 }
 
 static inline void cache_write_unlock(struct dm_buffer_cache *bc, sector_t block)
 {
-	if (static_branch_unlikely(&no_sleep_enabled) && bc->no_sleep)
-		write_unlock_bh(&bc->trees[cache_index(block, bc->num_locks)].u.spinlock);
-	else
-		up_write(&bc->trees[cache_index(block, bc->num_locks)].u.lock);
+	up_write(&bc->trees[cache_index(block, bc->num_locks)].lock);
 }
 
 /*
@@ -461,32 +442,18 @@ static void lh_init(struct lock_history *lh, struct dm_buffer_cache *cache, bool
 
 static void __lh_lock(struct lock_history *lh, unsigned int index)
 {
-	if (lh->write) {
-		if (static_branch_unlikely(&no_sleep_enabled) && lh->cache->no_sleep)
-			write_lock_bh(&lh->cache->trees[index].u.spinlock);
-		else
-			down_write(&lh->cache->trees[index].u.lock);
-	} else {
-		if (static_branch_unlikely(&no_sleep_enabled) && lh->cache->no_sleep)
-			read_lock_bh(&lh->cache->trees[index].u.spinlock);
-		else
-			down_read(&lh->cache->trees[index].u.lock);
-	}
+	if (lh->write)
+		down_write(&lh->cache->trees[index].lock);
+	else
+		down_read(&lh->cache->trees[index].lock);
 }
 
 static void __lh_unlock(struct lock_history *lh, unsigned int index)
 {
-	if (lh->write) {
-		if (static_branch_unlikely(&no_sleep_enabled) && lh->cache->no_sleep)
-			write_unlock_bh(&lh->cache->trees[index].u.spinlock);
-		else
-			up_write(&lh->cache->trees[index].u.lock);
-	} else {
-		if (static_branch_unlikely(&no_sleep_enabled) && lh->cache->no_sleep)
-			read_unlock_bh(&lh->cache->trees[index].u.spinlock);
-		else
-			up_read(&lh->cache->trees[index].u.lock);
-	}
+	if (lh->write)
+		up_write(&lh->cache->trees[index].lock);
+	else
+		up_read(&lh->cache->trees[index].lock);
 }
 
 /*
@@ -535,18 +502,14 @@ static struct dm_buffer *list_to_buffer(struct list_head *l)
 	return le_to_buffer(le);
 }
 
-static void cache_init(struct dm_buffer_cache *bc, unsigned int num_locks, bool no_sleep)
+static void cache_init(struct dm_buffer_cache *bc, unsigned int num_locks)
 {
 	unsigned int i;
 
 	bc->num_locks = num_locks;
-	bc->no_sleep = no_sleep;
 
 	for (i = 0; i < bc->num_locks; i++) {
-		if (no_sleep)
-			rwlock_init(&bc->trees[i].u.spinlock);
-		else
-			init_rwsem(&bc->trees[i].u.lock);
+		init_rwsem(&bc->trees[i].lock);
 		bc->trees[i].root = RB_ROOT;
 	}
 
@@ -685,7 +648,7 @@ static struct dm_buffer *__cache_evict(struct dm_buffer_cache *bc, int list_mode
 	struct lru_entry *le;
 	struct dm_buffer *b;
 
-	le = lru_evict(&bc->lru[list_mode], __evict_pred, &w, bc->no_sleep);
+	le = lru_evict(&bc->lru[list_mode], __evict_pred, &w);
 	if (!le)
 		return NULL;
 
@@ -739,7 +702,7 @@ static void __cache_mark_many(struct dm_buffer_cache *bc, int old_mode, int new_
 	struct evict_wrapper w = {.lh = lh, .pred = pred, .context = context};
 
 	while (true) {
-		le = lru_evict(&bc->lru[old_mode], __evict_pred, &w, bc->no_sleep);
+		le = lru_evict(&bc->lru[old_mode], __evict_pred, &w);
 		if (!le)
 			break;
 
@@ -952,11 +915,10 @@ static void cache_remove_range(struct dm_buffer_cache *bc,
 {
 	unsigned int i;
 
-	BUG_ON(bc->no_sleep);
 	for (i = 0; i < bc->num_locks; i++) {
-		down_write(&bc->trees[i].u.lock);
+		down_write(&bc->trees[i].lock);
 		__remove_range(bc, &bc->trees[i].root, begin, end, pred, release);
-		up_write(&bc->trees[i].u.lock);
+		up_write(&bc->trees[i].lock);
 	}
 }
 
@@ -1001,7 +963,7 @@ struct dm_bufio_client {
 
 	sector_t start;
 
-	struct shrinker *shrinker;
+	struct shrinker shrinker;
 	struct work_struct shrink_work;
 	atomic_long_t need_shrink;
 
@@ -1016,6 +978,8 @@ struct dm_bufio_client {
 
 	struct dm_buffer_cache cache; /* must be last member */
 };
+
+static DEFINE_STATIC_KEY_FALSE(no_sleep_enabled);
 
 /*----------------------------------------------------------------*/
 
@@ -1907,8 +1871,7 @@ static void *new_read(struct dm_bufio_client *c, sector_t block,
 	if (need_submit)
 		submit_io(b, REQ_OP_READ, read_endio);
 
-	if (nf != NF_GET)	/* we already tested this condition above */
-		wait_on_bit_io(&b->state, B_READING, TASK_UNINTERRUPTIBLE);
+	wait_on_bit_io(&b->state, B_READING, TASK_UNINTERRUPTIBLE);
 
 	if (b->read_error) {
 		int error = blk_status_to_errno(b->read_error);
@@ -2405,7 +2368,7 @@ static unsigned long dm_bufio_shrink_scan(struct shrinker *shrink, struct shrink
 {
 	struct dm_bufio_client *c;
 
-	c = shrink->private_data;
+	c = container_of(shrink, struct dm_bufio_client, shrinker);
 	atomic_long_add(sc->nr_to_scan, &c->need_shrink);
 	queue_work(dm_bufio_wq, &c->shrink_work);
 
@@ -2414,7 +2377,7 @@ static unsigned long dm_bufio_shrink_scan(struct shrinker *shrink, struct shrink
 
 static unsigned long dm_bufio_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 {
-	struct dm_bufio_client *c = shrink->private_data;
+	struct dm_bufio_client *c = container_of(shrink, struct dm_bufio_client, shrinker);
 	unsigned long count = cache_total(&c->cache);
 	unsigned long retain_target = get_retain_buffers(c);
 	unsigned long queued_for_cleanup = atomic_long_read(&c->need_shrink);
@@ -2458,7 +2421,7 @@ struct dm_bufio_client *dm_bufio_client_create(struct block_device *bdev, unsign
 		r = -ENOMEM;
 		goto bad_client;
 	}
-	cache_init(&c->cache, num_locks, (flags & DM_BUFIO_CLIENT_NO_SLEEP) != 0);
+	cache_init(&c->cache, num_locks);
 
 	c->bdev = bdev;
 	c->block_size = block_size;
@@ -2527,20 +2490,14 @@ struct dm_bufio_client *dm_bufio_client_create(struct block_device *bdev, unsign
 	INIT_WORK(&c->shrink_work, shrink_work);
 	atomic_long_set(&c->need_shrink, 0);
 
-	c->shrinker = shrinker_alloc(0, "dm-bufio:(%u:%u)",
-				     MAJOR(bdev->bd_dev), MINOR(bdev->bd_dev));
-	if (!c->shrinker) {
-		r = -ENOMEM;
+	c->shrinker.count_objects = dm_bufio_shrink_count;
+	c->shrinker.scan_objects = dm_bufio_shrink_scan;
+	c->shrinker.seeks = 1;
+	c->shrinker.batch = 0;
+	r = register_shrinker(&c->shrinker, "dm-bufio:(%u:%u)",
+			      MAJOR(bdev->bd_dev), MINOR(bdev->bd_dev));
+	if (r)
 		goto bad;
-	}
-
-	c->shrinker->count_objects = dm_bufio_shrink_count;
-	c->shrinker->scan_objects = dm_bufio_shrink_scan;
-	c->shrinker->seeks = 1;
-	c->shrinker->batch = 0;
-	c->shrinker->private_data = c;
-
-	shrinker_register(c->shrinker);
 
 	mutex_lock(&dm_bufio_clients_lock);
 	dm_bufio_client_count++;
@@ -2580,7 +2537,7 @@ void dm_bufio_client_destroy(struct dm_bufio_client *c)
 
 	drop_buffers(c);
 
-	shrinker_free(c->shrinker);
+	unregister_shrinker(&c->shrinker);
 	flush_work(&c->shrink_work);
 
 	mutex_lock(&dm_bufio_clients_lock);

@@ -412,11 +412,13 @@ static int ts5500_dio_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ts5500_dio_remove(struct platform_device *pdev)
+static int ts5500_dio_remove(struct platform_device *pdev)
 {
 	struct ts5500_priv *priv = platform_get_drvdata(pdev);
 
 	ts5500_disable_irq(priv);
+
+	return 0;
 }
 
 static const struct platform_device_id ts5500_dio_ids[] = {
@@ -433,7 +435,7 @@ static struct platform_driver ts5500_dio_driver = {
 		.name = "ts5500-dio",
 	},
 	.probe = ts5500_dio_probe,
-	.remove_new = ts5500_dio_remove,
+	.remove = ts5500_dio_remove,
 	.id_table = ts5500_dio_ids,
 };
 

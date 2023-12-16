@@ -8,7 +8,7 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/iopoll.h>
 #include <linux/serial_core.h>
 #include <linux/slab.h>
@@ -269,16 +269,16 @@ static void receive_chars(struct uart_ma35d1_port *up)
 		if (uart_handle_sysrq_char(&up->port, ch))
 			continue;
 
-		uart_port_lock(&up->port);
+		spin_lock(&up->port.lock);
 		uart_insert_char(&up->port, fsr, MA35_FSR_RX_OVER_IF, ch, flag);
-		uart_port_unlock(&up->port);
+		spin_unlock(&up->port.lock);
 
 		fsr = serial_in(up, MA35_FSR_REG);
 	} while (!(fsr & MA35_FSR_RX_EMPTY) && (max_count-- > 0));
 
-	uart_port_lock(&up->port);
+	spin_lock(&up->port.lock);
 	tty_flip_buffer_push(&up->port.state->port);
-	uart_port_unlock(&up->port);
+	spin_unlock(&up->port.lock);
 }
 
 static irqreturn_t ma35d1serial_interrupt(int irq, void *dev_id)
@@ -364,14 +364,14 @@ static void ma35d1serial_break_ctl(struct uart_port *port, int break_state)
 	unsigned long flags;
 	u32 lcr;
 
-	uart_port_lock_irqsave(&up->port, &flags);
+	spin_lock_irqsave(&up->port.lock, flags);
 	lcr = serial_in(up, MA35_LCR_REG);
 	if (break_state != 0)
 		lcr |= MA35_LCR_BREAK;
 	else
 		lcr &= ~MA35_LCR_BREAK;
 	serial_out(up, MA35_LCR_REG, lcr);
-	uart_port_unlock_irqrestore(&up->port, flags);
+	spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
 static int ma35d1serial_startup(struct uart_port *port)
@@ -441,7 +441,7 @@ static void ma35d1serial_set_termios(struct uart_port *port,
 	 * Ok, we're now changing the port state.  Do it with
 	 * interrupts disabled.
 	 */
-	uart_port_lock_irqsave(&up->port, &flags);
+	spin_lock_irqsave(&up->port.lock, flags);
 
 	up->port.read_status_mask = MA35_FSR_RX_OVER_IF;
 	if (termios->c_iflag & INPCK)
@@ -475,7 +475,7 @@ static void ma35d1serial_set_termios(struct uart_port *port,
 
 	serial_out(up, MA35_LCR_REG, lcr);
 
-	uart_port_unlock_irqrestore(&up->port, flags);
+	spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
 static const char *ma35d1serial_type(struct uart_port *port)
@@ -560,9 +560,9 @@ static void ma35d1serial_console_write(struct console *co, const char *s, u32 co
 	if (up->port.sysrq)
 		locked = 0;
 	else if (oops_in_progress)
-		locked = uart_port_trylock_irqsave(&up->port, &flags);
+		locked = spin_trylock_irqsave(&up->port.lock, flags);
 	else
-		uart_port_lock_irqsave(&up->port, &flags);
+		spin_lock_irqsave(&up->port.lock, flags);
 
 	/*
 	 *  First save the IER then disable the interrupts
@@ -576,7 +576,7 @@ static void ma35d1serial_console_write(struct console *co, const char *s, u32 co
 	serial_out(up, MA35_IER_REG, ier);
 
 	if (locked)
-		uart_port_unlock_irqrestore(&up->port, flags);
+		spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
 static int __init ma35d1serial_console_setup(struct console *co, char *options)
@@ -695,9 +695,6 @@ static int ma35d1serial_probe(struct platform_device *pdev)
 
 	up->port.iobase = res_mem->start;
 	up->port.membase = ioremap(up->port.iobase, MA35_UART_REG_SIZE);
-	if (!up->port.membase)
-		return -ENOMEM;
-
 	up->port.ops = &ma35d1serial_ops;
 
 	spin_lock_init(&up->port.lock);
@@ -791,6 +788,7 @@ static struct platform_driver ma35d1serial_driver = {
 	.resume     = ma35d1serial_resume,
 	.driver     = {
 		.name   = "ma35d1-uart",
+		.owner  = THIS_MODULE,
 		.of_match_table = of_match_ptr(ma35d1_serial_of_match),
 	},
 };

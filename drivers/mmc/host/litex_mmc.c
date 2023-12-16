@@ -629,11 +629,12 @@ static int litex_mmc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void litex_mmc_remove(struct platform_device *pdev)
+static int litex_mmc_remove(struct platform_device *pdev)
 {
 	struct litex_mmc_host *host = platform_get_drvdata(pdev);
 
 	mmc_remove_host(host->mmc);
+	return 0;
 }
 
 static const struct of_device_id litex_match[] = {
@@ -644,7 +645,7 @@ MODULE_DEVICE_TABLE(of, litex_match);
 
 static struct platform_driver litex_mmc_driver = {
 	.probe = litex_mmc_probe,
-	.remove_new = litex_mmc_remove,
+	.remove = litex_mmc_remove,
 	.driver = {
 		.name = "litex-mmc",
 		.of_match_table = litex_match,

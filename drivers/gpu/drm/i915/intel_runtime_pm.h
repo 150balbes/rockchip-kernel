@@ -6,10 +6,11 @@
 #ifndef __INTEL_RUNTIME_PM_H__
 #define __INTEL_RUNTIME_PM_H__
 
-#include <linux/pm_runtime.h>
 #include <linux/types.h>
 
 #include "intel_wakeref.h"
+
+#include "i915_utils.h"
 
 struct device;
 struct drm_i915_private;
@@ -42,6 +43,7 @@ struct intel_runtime_pm {
 	atomic_t wakeref_count;
 	struct device *kdev; /* points to i915->drm.dev */
 	bool available;
+	bool suspended;
 	bool irqs_enabled;
 	bool no_wakeref_tracking;
 
@@ -108,7 +110,7 @@ intel_rpm_wakelock_count(int wakeref_count)
 static inline void
 assert_rpm_device_not_suspended(struct intel_runtime_pm *rpm)
 {
-	WARN_ONCE(pm_runtime_suspended(rpm->kdev),
+	WARN_ONCE(rpm->suspended,
 		  "Device suspended during HW access\n");
 }
 

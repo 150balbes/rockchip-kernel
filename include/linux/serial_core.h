@@ -459,8 +459,7 @@ struct uart_port {
 						struct serial_rs485 *rs485);
 	int			(*iso7816_config)(struct uart_port *,
 						  struct serial_iso7816 *iso7816);
-	unsigned int		ctrl_id;		/* optional serial core controller id */
-	unsigned int		port_id;		/* optional serial core port id */
+	int			ctrl_id;		/* optional serial core controller id */
 	unsigned int		irq;			/* irq number */
 	unsigned long		irqflags;		/* irq flags  */
 	unsigned int		uartclk;		/* base uart clock */
@@ -570,7 +569,7 @@ struct uart_port {
 	struct serial_port_device *port_dev;		/* serial core port device */
 
 	unsigned long		sysrq;			/* sysrq timeout */
-	u8			sysrq_ch;		/* char for sysrq */
+	unsigned int		sysrq_ch;		/* char for sysrq */
 	unsigned char		has_sysrq;
 	unsigned char		sysrq_seq;		/* index in sysrq_toggle_seq */
 
@@ -587,85 +586,6 @@ struct uart_port {
 	struct serial_iso7816   iso7816;
 	void			*private_data;		/* generic platform data pointer */
 };
-
-/**
- * uart_port_lock - Lock the UART port
- * @up:		Pointer to UART port structure
- */
-static inline void uart_port_lock(struct uart_port *up)
-{
-	spin_lock(&up->lock);
-}
-
-/**
- * uart_port_lock_irq - Lock the UART port and disable interrupts
- * @up:		Pointer to UART port structure
- */
-static inline void uart_port_lock_irq(struct uart_port *up)
-{
-	spin_lock_irq(&up->lock);
-}
-
-/**
- * uart_port_lock_irqsave - Lock the UART port, save and disable interrupts
- * @up:		Pointer to UART port structure
- * @flags:	Pointer to interrupt flags storage
- */
-static inline void uart_port_lock_irqsave(struct uart_port *up, unsigned long *flags)
-{
-	spin_lock_irqsave(&up->lock, *flags);
-}
-
-/**
- * uart_port_trylock - Try to lock the UART port
- * @up:		Pointer to UART port structure
- *
- * Returns: True if lock was acquired, false otherwise
- */
-static inline bool uart_port_trylock(struct uart_port *up)
-{
-	return spin_trylock(&up->lock);
-}
-
-/**
- * uart_port_trylock_irqsave - Try to lock the UART port, save and disable interrupts
- * @up:		Pointer to UART port structure
- * @flags:	Pointer to interrupt flags storage
- *
- * Returns: True if lock was acquired, false otherwise
- */
-static inline bool uart_port_trylock_irqsave(struct uart_port *up, unsigned long *flags)
-{
-	return spin_trylock_irqsave(&up->lock, *flags);
-}
-
-/**
- * uart_port_unlock - Unlock the UART port
- * @up:		Pointer to UART port structure
- */
-static inline void uart_port_unlock(struct uart_port *up)
-{
-	spin_unlock(&up->lock);
-}
-
-/**
- * uart_port_unlock_irq - Unlock the UART port and re-enable interrupts
- * @up:		Pointer to UART port structure
- */
-static inline void uart_port_unlock_irq(struct uart_port *up)
-{
-	spin_unlock_irq(&up->lock);
-}
-
-/**
- * uart_port_unlock_irqrestore - Unlock the UART port, restore interrupts
- * @up:		Pointer to UART port structure
- * @flags:	The saved interrupt flags for restore
- */
-static inline void uart_port_unlock_irqrestore(struct uart_port *up, unsigned long flags)
-{
-	spin_unlock_irqrestore(&up->lock, flags);
-}
 
 static inline int serial_port_in(struct uart_port *up, int offset)
 {
@@ -983,16 +903,16 @@ void uart_handle_dcd_change(struct uart_port *uport, bool active);
 void uart_handle_cts_change(struct uart_port *uport, bool active);
 
 void uart_insert_char(struct uart_port *port, unsigned int status,
-		      unsigned int overrun, u8 ch, u8 flag);
+		      unsigned int overrun, unsigned int ch, unsigned int flag);
 
 void uart_xchar_out(struct uart_port *uport, int offset);
 
 #ifdef CONFIG_MAGIC_SYSRQ_SERIAL
 #define SYSRQ_TIMEOUT	(HZ * 5)
 
-bool uart_try_toggle_sysrq(struct uart_port *port, u8 ch);
+bool uart_try_toggle_sysrq(struct uart_port *port, unsigned int ch);
 
-static inline int uart_handle_sysrq_char(struct uart_port *port, u8 ch)
+static inline int uart_handle_sysrq_char(struct uart_port *port, unsigned int ch)
 {
 	if (!port->sysrq)
 		return 0;
@@ -1011,7 +931,7 @@ static inline int uart_handle_sysrq_char(struct uart_port *port, u8 ch)
 	return 0;
 }
 
-static inline int uart_prepare_sysrq_char(struct uart_port *port, u8 ch)
+static inline int uart_prepare_sysrq_char(struct uart_port *port, unsigned int ch)
 {
 	if (!port->sysrq)
 		return 0;
@@ -1032,17 +952,17 @@ static inline int uart_prepare_sysrq_char(struct uart_port *port, u8 ch)
 
 static inline void uart_unlock_and_check_sysrq(struct uart_port *port)
 {
-	u8 sysrq_ch;
+	int sysrq_ch;
 
 	if (!port->has_sysrq) {
-		uart_port_unlock(port);
+		spin_unlock(&port->lock);
 		return;
 	}
 
 	sysrq_ch = port->sysrq_ch;
 	port->sysrq_ch = 0;
 
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 
 	if (sysrq_ch)
 		handle_sysrq(sysrq_ch);
@@ -1051,38 +971,38 @@ static inline void uart_unlock_and_check_sysrq(struct uart_port *port)
 static inline void uart_unlock_and_check_sysrq_irqrestore(struct uart_port *port,
 		unsigned long flags)
 {
-	u8 sysrq_ch;
+	int sysrq_ch;
 
 	if (!port->has_sysrq) {
-		uart_port_unlock_irqrestore(port, flags);
+		spin_unlock_irqrestore(&port->lock, flags);
 		return;
 	}
 
 	sysrq_ch = port->sysrq_ch;
 	port->sysrq_ch = 0;
 
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 
 	if (sysrq_ch)
 		handle_sysrq(sysrq_ch);
 }
 #else	/* CONFIG_MAGIC_SYSRQ_SERIAL */
-static inline int uart_handle_sysrq_char(struct uart_port *port, u8 ch)
+static inline int uart_handle_sysrq_char(struct uart_port *port, unsigned int ch)
 {
 	return 0;
 }
-static inline int uart_prepare_sysrq_char(struct uart_port *port, u8 ch)
+static inline int uart_prepare_sysrq_char(struct uart_port *port, unsigned int ch)
 {
 	return 0;
 }
 static inline void uart_unlock_and_check_sysrq(struct uart_port *port)
 {
-	uart_port_unlock(port);
+	spin_unlock(&port->lock);
 }
 static inline void uart_unlock_and_check_sysrq_irqrestore(struct uart_port *port,
 		unsigned long flags)
 {
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 #endif	/* CONFIG_MAGIC_SYSRQ_SERIAL */
 

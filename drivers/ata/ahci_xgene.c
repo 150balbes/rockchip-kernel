@@ -13,7 +13,9 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/ahci_platform.h>
-#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_irq.h>
 #include <linux/phy/phy.h>
 #include "ahci.h"
 
@@ -108,8 +110,9 @@ static int xgene_ahci_init_memram(struct xgene_ahci_context *ctx)
  * @timeout : timeout for achieving the value.
  */
 static int xgene_ahci_poll_reg_val(struct ata_port *ap,
-				   void __iomem *reg, unsigned int val,
-				   unsigned int interval, unsigned int timeout)
+				   void __iomem *reg, unsigned
+				   int val, unsigned long interval,
+				   unsigned long timeout)
 {
 	unsigned long deadline;
 	unsigned int tmp;
@@ -347,7 +350,7 @@ static void xgene_ahci_set_phy_cfg(struct xgene_ahci_context *ctx, int channel)
 static int xgene_ahci_do_hardreset(struct ata_link *link,
 				   unsigned long deadline, bool *online)
 {
-	const unsigned int *timing = sata_ehc_deb_timing(&link->eh_context);
+	const unsigned long *timing = sata_ehc_deb_timing(&link->eh_context);
 	struct ata_port *ap = link->ap;
 	struct ahci_host_priv *hpriv = ap->host->private_data;
 	struct xgene_ahci_context *ctx = hpriv->plat_data;
@@ -733,6 +736,7 @@ static int xgene_ahci_probe(struct platform_device *pdev)
 	struct ahci_host_priv *hpriv;
 	struct xgene_ahci_context *ctx;
 	struct resource *res;
+	const struct of_device_id *of_devid;
 	enum xgene_ahci_version version = XGENE_AHCI_V1;
 	const struct ata_port_info *ppi[] = { &xgene_ahci_v1_port_info,
 					      &xgene_ahci_v2_port_info };
@@ -751,17 +755,20 @@ static int xgene_ahci_probe(struct platform_device *pdev)
 	ctx->dev = dev;
 
 	/* Retrieve the IP core resource */
-	ctx->csr_core = devm_platform_ioremap_resource(pdev, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	ctx->csr_core = devm_ioremap_resource(dev, res);
 	if (IS_ERR(ctx->csr_core))
 		return PTR_ERR(ctx->csr_core);
 
 	/* Retrieve the IP diagnostic resource */
-	ctx->csr_diag = devm_platform_ioremap_resource(pdev, 2);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+	ctx->csr_diag = devm_ioremap_resource(dev, res);
 	if (IS_ERR(ctx->csr_diag))
 		return PTR_ERR(ctx->csr_diag);
 
 	/* Retrieve the IP AXI resource */
-	ctx->csr_axi = devm_platform_ioremap_resource(pdev, 3);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 3);
+	ctx->csr_axi = devm_ioremap_resource(dev, res);
 	if (IS_ERR(ctx->csr_axi))
 		return PTR_ERR(ctx->csr_axi);
 
@@ -775,8 +782,10 @@ static int xgene_ahci_probe(struct platform_device *pdev)
 		ctx->csr_mux = csr;
 	}
 
-	if (dev->of_node) {
-		version = (enum xgene_ahci_version)of_device_get_match_data(dev);
+	of_devid = of_match_device(xgene_ahci_of_match, dev);
+	if (of_devid) {
+		if (of_devid->data)
+			version = (unsigned long) of_devid->data;
 	}
 #ifdef CONFIG_ACPI
 	else {

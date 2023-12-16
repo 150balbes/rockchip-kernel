@@ -41,6 +41,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_SECONDARY] =  {
@@ -61,6 +62,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_TERTIARY] =  {
@@ -81,6 +83,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_QUATERNARY] =  {
@@ -116,6 +119,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 };
@@ -123,7 +127,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 static int apq8016_lpass_alloc_dma_channel(struct lpass_data *drvdata,
 					   int direction, unsigned int dai_id)
 {
-	const struct lpass_variant *v = drvdata->variant;
+	struct lpass_variant *v = drvdata->variant;
 	int chan = 0;
 
 	if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -157,7 +161,7 @@ static int apq8016_lpass_free_dma_channel(struct lpass_data *drvdata, int chan, 
 static int apq8016_lpass_init(struct platform_device *pdev)
 {
 	struct lpass_data *drvdata = platform_get_drvdata(pdev);
-	const struct lpass_variant *variant = drvdata->variant;
+	struct lpass_variant *variant = drvdata->variant;
 	struct device *dev = &pdev->dev;
 	int ret, i;
 
@@ -223,7 +227,7 @@ static int apq8016_lpass_exit(struct platform_device *pdev)
 }
 
 
-static const struct lpass_variant apq8016_data = {
+static struct lpass_variant apq8016_data = {
 	.i2sctrl_reg_base	= 0x1000,
 	.i2sctrl_reg_stride	= 0x1000,
 	.i2s_ports		= 4,
@@ -300,7 +304,7 @@ static struct platform_driver apq8016_lpass_cpu_platform_driver = {
 		.of_match_table	= of_match_ptr(apq8016_lpass_cpu_device_id),
 	},
 	.probe	= asoc_qcom_lpass_cpu_platform_probe,
-	.remove_new = asoc_qcom_lpass_cpu_platform_remove,
+	.remove	= asoc_qcom_lpass_cpu_platform_remove,
 };
 module_platform_driver(apq8016_lpass_cpu_platform_driver);
 

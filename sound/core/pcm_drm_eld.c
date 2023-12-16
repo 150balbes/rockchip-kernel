@@ -6,7 +6,6 @@
 #include <linux/export.h>
 #include <linux/hdmi.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_eld.h>
 #include <sound/pcm.h>
 #include <sound/pcm_drm_eld.h>
 

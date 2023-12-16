@@ -48,25 +48,20 @@
  */
 void __init MMU_init_hw(void)
 {
-	int i;
-	unsigned long zpr;
-
 	/*
 	 * The Zone Protection Register (ZPR) defines how protection will
-	 * be applied to every page which is a member of a given zone.
+	 * be applied to every page which is a member of a given zone. At
+	 * present, we utilize only two of the 4xx's zones.
 	 * The zone index bits (of ZSEL) in the PTE are used for software
-	 * indicators. We use the 4 upper bits of virtual address to select
-	 * the zone. We set all zones above TASK_SIZE to zero, allowing
-	 * only kernel access as indicated in the PTE. For zones below
-	 * TASK_SIZE, we set a 01 binary (a value of 10 will not work)
+	 * indicators, except the LSB.  For user access, zone 1 is used,
+	 * for kernel access, zone 0 is used.  We set all but zone 1
+	 * to zero, allowing only kernel access as indicated in the PTE.
+	 * For zone 1, we set a 01 binary (a value of 10 will not work)
 	 * to allow user access as indicated in the PTE.  This also allows
 	 * kernel access as indicated in the PTE.
 	 */
 
-	for (i = 0, zpr = 0; i < TASK_SIZE >> 28; i++)
-		zpr |= 1 << (30 - i * 2);
-
-	mtspr(SPRN_ZPR, zpr);
+        mtspr(SPRN_ZPR, 0x10000000);
 
 	flush_instruction_cache();
 

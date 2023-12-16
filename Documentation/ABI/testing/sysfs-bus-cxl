@@ -82,12 +82,7 @@ Description:
 		whether it resides in persistent capacity, volatile capacity,
 		or the LSA, is made permanently unavailable by whatever means
 		is appropriate for the media type. This functionality requires
-		the device to be disabled, that is, not actively decoding any
-		HPA ranges. This permits avoiding explicit global CPU cache
-		management, relying instead for it to be done when a region
-		transitions between software programmed and hardware committed
-		states. If this file is not present, then there is no hardware
-		support for the operation.
+		the device to be not be actively decoding any HPA ranges.
 
 
 What            /sys/bus/cxl/devices/memX/security/erase
@@ -97,13 +92,7 @@ Contact:        linux-cxl@vger.kernel.org
 Description:
 		(WO) Write a boolean 'true' string value to this attribute to
 		secure erase user data by changing the media encryption keys for
-		all user data areas of the device. This functionality requires
-		the device to be disabled, that is, not actively decoding any
-		HPA ranges. This permits avoiding explicit global CPU cache
-		management, relying instead for it to be done when a region
-		transitions between software programmed and hardware committed
-		states. If this file is not present, then there is no hardware
-		support for the operation.
+		all user data areas of the device.
 
 
 What:		/sys/bus/cxl/devices/memX/firmware/
@@ -176,21 +165,6 @@ Description:
 		may target in its decode of CXL memory resources.  The 'Y'
 		integer reflects the hardware port unique-id used in the
 		hardware decoder target list.
-
-
-What:		/sys/bus/cxl/devices/portX/decoders_committed
-Date:		October, 2023
-KernelVersion:	v6.7
-Contact:	linux-cxl@vger.kernel.org
-Description:
-		(RO) A memory device is considered active when any of its
-		decoders are in the "committed" state (See CXL 3.0 8.2.4.19.7
-		CXL HDM Decoder n Control Register). Hotplug and destructive
-		operations like "sanitize" are blocked while device is actively
-		decoding a Host Physical Address range. Note that this number
-		may be elevated without any regionX objects active or even
-		enumerated, as this may be due to decoders established by
-		platform firwmare or a previous kernel (kexec).
 
 
 What:		/sys/bus/cxl/devices/decoderX.Y
@@ -382,21 +356,6 @@ Contact:	linux-cxl@vger.kernel.org
 Description:
 		(WO) Write a string in the form 'regionZ' to delete that region,
 		provided it is currently idle / not bound to a driver.
-
-
-What:		/sys/bus/cxl/devices/decoderX.Y/qos_class
-Date:		May, 2023
-KernelVersion:	v6.5
-Contact:	linux-cxl@vger.kernel.org
-Description:
-		(RO) For CXL host platforms that support "QoS Telemmetry" this
-		root-decoder-only attribute conveys a platform specific cookie
-		that identifies a QoS performance class for the CXL Window.
-		This class-id can be compared against a similar "qos_class"
-		published for each memory-type that an endpoint supports. While
-		it is not required that endpoints map their local memory-class
-		to a matching platform class, mismatches are not recommended and
-		there are platform specific side-effects that may result.
 
 
 What:		/sys/bus/cxl/devices/regionZ/uuid

@@ -13,6 +13,8 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 
+static struct clk *rng_clk;
+
 static int nmk_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 {
 	void __iomem *base = (void __iomem *)rng->priv;
@@ -34,17 +36,21 @@ static struct hwrng nmk_rng = {
 
 static int nmk_rng_probe(struct amba_device *dev, const struct amba_id *id)
 {
-	struct clk *rng_clk;
 	void __iomem *base;
 	int ret;
 
-	rng_clk = devm_clk_get_enabled(&dev->dev, NULL);
-	if (IS_ERR(rng_clk))
-		return dev_err_probe(&dev->dev, PTR_ERR(rng_clk), "could not get rng clock\n");
+	rng_clk = devm_clk_get(&dev->dev, NULL);
+	if (IS_ERR(rng_clk)) {
+		dev_err(&dev->dev, "could not get rng clock\n");
+		ret = PTR_ERR(rng_clk);
+		return ret;
+	}
+
+	clk_prepare_enable(rng_clk);
 
 	ret = amba_request_regions(dev, dev->dev.init_name);
 	if (ret)
-		return ret;
+		goto out_clk;
 	ret = -ENOMEM;
 	base = devm_ioremap(&dev->dev, dev->res.start,
 			    resource_size(&dev->res));
@@ -58,12 +64,15 @@ static int nmk_rng_probe(struct amba_device *dev, const struct amba_id *id)
 
 out_release:
 	amba_release_regions(dev);
+out_clk:
+	clk_disable_unprepare(rng_clk);
 	return ret;
 }
 
 static void nmk_rng_remove(struct amba_device *dev)
 {
 	amba_release_regions(dev);
+	clk_disable_unprepare(rng_clk);
 }
 
 static const struct amba_id nmk_rng_ids[] = {
@@ -88,5 +97,4 @@ static struct amba_driver nmk_rng_driver = {
 
 module_amba_driver(nmk_rng_driver);
 
-MODULE_DESCRIPTION("ST-Ericsson Nomadik Random Number Generator");
 MODULE_LICENSE("GPL");

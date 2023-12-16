@@ -131,10 +131,6 @@
 	status = "okay";
 };
 
-&gpu {
-	status = "okay";
-};
-
 &lpass {
 	status = "okay";
 };
@@ -370,6 +366,7 @@
 		function = "gpio";
 		pins = "gpio107";
 		bias-pull-up;
+		input-enable;
 	};
 };
 
@@ -378,6 +375,7 @@
 	pinctrl-0 = <&pinctrl_otg_default>;
 	pinctrl-1 = <&pinctrl_otg_host>;
 	pinctrl-2 = <&pinctrl_otg_device>;
+	pin-switch-delay-us = <100000>;
 	usb-role-switch;
 	status = "okay";
 
@@ -394,8 +392,4 @@
 
 &wcnss_iris {
 	compatible = "qcom,wcn3680";
-};
-
-&wcnss_mem {
-	status = "okay";
 };

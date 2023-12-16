@@ -7,7 +7,7 @@
 #include <net/dsa.h>
 #include <linux/etherdevice.h>
 #include <linux/if_bridge.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/netdev_features.h>
 #include <linux/if_hsr.h>
 #include "xrs700x.h"
@@ -548,13 +548,12 @@ static void xrs700x_bridge_leave(struct dsa_switch *ds, int port,
 }
 
 static int xrs700x_hsr_join(struct dsa_switch *ds, int port,
-			    struct net_device *hsr,
-			    struct netlink_ext_ack *extack)
+			    struct net_device *hsr)
 {
 	unsigned int val = XRS_HSR_CFG_HSR_PRP;
 	struct dsa_port *partner = NULL, *dp;
 	struct xrs700x *priv = ds->priv;
-	struct net_device *user;
+	struct net_device *slave;
 	int ret, i, hsr_pair[2];
 	enum hsr_version ver;
 	bool fwd = false;
@@ -563,21 +562,16 @@ static int xrs700x_hsr_join(struct dsa_switch *ds, int port,
 	if (ret)
 		return ret;
 
-	if (port != 1 && port != 2) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "Only ports 1 and 2 can offload HSR/PRP");
+	/* Only ports 1 and 2 can be HSR/PRP redundant ports. */
+	if (port != 1 && port != 2)
 		return -EOPNOTSUPP;
-	}
 
-	if (ver == HSR_V1) {
+	if (ver == HSR_V1)
 		val |= XRS_HSR_CFG_HSR;
-	} else if (ver == PRP_V1) {
+	else if (ver == PRP_V1)
 		val |= XRS_HSR_CFG_PRP;
-	} else {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "Only HSR v1 and PRP v1 can be offloaded");
+	else
 		return -EOPNOTSUPP;
-	}
 
 	dsa_hsr_foreach_port(dp, ds, hsr) {
 		if (dp->index != port) {
@@ -638,8 +632,8 @@ static int xrs700x_hsr_join(struct dsa_switch *ds, int port,
 	hsr_pair[0] = port;
 	hsr_pair[1] = partner->index;
 	for (i = 0; i < ARRAY_SIZE(hsr_pair); i++) {
-		user = dsa_to_port(ds, hsr_pair[i])->user;
-		user->features |= XRS7000X_SUPPORTED_HSR_FEATURES;
+		slave = dsa_to_port(ds, hsr_pair[i])->slave;
+		slave->features |= XRS7000X_SUPPORTED_HSR_FEATURES;
 	}
 
 	return 0;
@@ -650,7 +644,7 @@ static int xrs700x_hsr_leave(struct dsa_switch *ds, int port,
 {
 	struct dsa_port *partner = NULL, *dp;
 	struct xrs700x *priv = ds->priv;
-	struct net_device *user;
+	struct net_device *slave;
 	int i, hsr_pair[2];
 	unsigned int val;
 
@@ -692,8 +686,8 @@ static int xrs700x_hsr_leave(struct dsa_switch *ds, int port,
 	hsr_pair[0] = port;
 	hsr_pair[1] = partner->index;
 	for (i = 0; i < ARRAY_SIZE(hsr_pair); i++) {
-		user = dsa_to_port(ds, hsr_pair[i])->user;
-		user->features &= ~XRS7000X_SUPPORTED_HSR_FEATURES;
+		slave = dsa_to_port(ds, hsr_pair[i])->slave;
+		slave->features &= ~XRS7000X_SUPPORTED_HSR_FEATURES;
 	}
 
 	return 0;

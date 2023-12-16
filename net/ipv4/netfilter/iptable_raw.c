@@ -108,4 +108,3 @@ static void __exit iptable_raw_fini(void)
 module_init(iptable_raw_init);
 module_exit(iptable_raw_fini);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("iptables legacy raw table");

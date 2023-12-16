@@ -10,8 +10,6 @@
 #ifndef _COMEDI_8255_H
 #define _COMEDI_8255_H
 
-#include <linux/errno.h>
-
 #define I8255_SIZE		0x04
 
 #define I8255_DATA_A_REG	0x00
@@ -29,25 +27,15 @@
 struct comedi_device;
 struct comedi_subdevice;
 
-#ifdef CONFIG_HAS_IOPORT
-int subdev_8255_io_init(struct comedi_device *dev, struct comedi_subdevice *s,
-			unsigned long regbase);
-#else
-static inline int subdev_8255_io_init(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      unsigned long regbase)
-{
-	return -ENXIO;
-}
-#endif
+int subdev_8255_init(struct comedi_device *dev, struct comedi_subdevice *s,
+		     int (*io)(struct comedi_device *dev, int dir, int port,
+			       int data, unsigned long regbase),
+		     unsigned long regbase);
 
 int subdev_8255_mm_init(struct comedi_device *dev, struct comedi_subdevice *s,
-			unsigned long regbase);
-
-int subdev_8255_cb_init(struct comedi_device *dev, struct comedi_subdevice *s,
 			int (*io)(struct comedi_device *dev, int dir, int port,
-				  int data, unsigned long context),
-			unsigned long context);
+				  int data, unsigned long regbase),
+			unsigned long regbase);
 
 unsigned long subdev_8255_regbase(struct comedi_subdevice *s);
 

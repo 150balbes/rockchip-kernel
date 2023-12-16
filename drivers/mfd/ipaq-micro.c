@@ -78,6 +78,8 @@ EXPORT_SYMBOL(ipaq_micro_tx_msg);
 
 static void micro_rx_msg(struct ipaq_micro *micro, u8 id, int len, u8 *data)
 {
+	int i;
+
 	dev_dbg(micro->dev, "RX msg: %02x, %d bytes\n", id, len);
 
 	spin_lock(&micro->lock);
@@ -129,7 +131,10 @@ static void micro_rx_msg(struct ipaq_micro *micro, u8 id, int len, u8 *data)
 		break;
 	default:
 		dev_err(micro->dev,
-			"unknown msg %d [%d] %*ph\n", id, len, len, data);
+			"unknown msg %d [%d] ", id, len);
+		for (i = 0; i < len; ++i)
+			pr_cont("0x%02x ", data[i]);
+		pr_cont("\n");
 	}
 	spin_unlock(&micro->lock);
 }

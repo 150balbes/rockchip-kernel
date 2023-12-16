@@ -242,7 +242,7 @@ struct cs_etm_packet_queue {
 
 int cs_etm__process_auxtrace_info(union perf_event *event,
 				  struct perf_session *session);
-void cs_etm_get_default_config(const struct perf_pmu *pmu, struct perf_event_attr *attr);
+struct perf_event_attr *cs_etm_get_default_config(struct perf_pmu *pmu);
 
 enum cs_etm_pid_fmt {
 	CS_ETM_PIDFMT_NONE,

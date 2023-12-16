@@ -282,7 +282,7 @@ panthor_fw_get_glb_iface(struct panthor_device *ptdev)
 }
 
 /**
- * panthor_fw_get_csg_iface() - Get a command stream group slot interface
+ * panthor_fw_get_glb_iface() - Get a command stream group slot interface
  * @ptdev: Device.
  * @csg_slot: Index of the command stream group slot.
  *
@@ -298,7 +298,7 @@ panthor_fw_get_csg_iface(struct panthor_device *ptdev, u32 csg_slot)
 }
 
 /**
- * panthor_fw_get_cs_iface() - Get a command stream slot interface
+ * panthor_fw_get_glb_iface() - Get a command stream slot interface
  * @ptdev: Device.
  * @csg_slot: Index of the command stream group slot.
  * @cs_slot: Index of the command stream slot.
@@ -423,10 +423,6 @@ static void panthor_fw_init_section_mem(struct panthor_device *ptdev,
  * @input: Pointer holding the input interface on success.
  * Should be ignored on failure.
  * @output: Pointer holding the output interface on success.
- * Should be ignored on failure.
- * @input_fw_va: Pointer holding the input interface FW VA on success.
- * Should be ignored on failure.
- * @output_fw_va: Pointer holding the output interface FW VA on success.
  * Should be ignored on failure.
  *
  * Allocates panthor_fw_ringbuf_{input,out}_iface interfaces. The input
@@ -697,15 +693,9 @@ static int panthor_fw_load(struct panthor_device *ptdev)
 	const struct firmware *fw = NULL;
 	struct panthor_fw_binary_iter iter = {};
 	struct panthor_fw_binary_hdr hdr;
-	char fw_path[128];
 	int ret;
 
-	snprintf(fw_path, sizeof(fw_path), "arm/mali/arch%d.%d/%s",
-		 (u32)GPU_ARCH_MAJOR(ptdev->gpu_info.gpu_id),
-		 (u32)GPU_ARCH_MINOR(ptdev->gpu_info.gpu_id),
-		 CSF_FW_NAME);
-
-	ret = request_firmware(&fw, fw_path, ptdev->base.dev);
+	ret = request_firmware(&fw, CSF_FW_NAME, ptdev->base.dev);
 	if (ret) {
 		drm_err(&ptdev->base, "Failed to load firmware image '%s'\n",
 			CSF_FW_NAME);
@@ -1186,9 +1176,8 @@ int panthor_fw_glb_wait_acks(struct panthor_device *ptdev,
 }
 
 /**
- * panthor_fw_csg_wait_acks() - Wait for command stream group requests to be acknowledged.
+ * panthor_fw_glb_wait_acks() - Wait for command stream group requests to be acknowledged.
  * @ptdev: Device.
- * @csg_slot: CSG slot ID.
  * @req_mask: Mask of requests to wait for.
  * @acked: Pointer to field that's updated with the acked requests.
  * If the function returns 0, *acked == req_mask.
@@ -1330,5 +1319,3 @@ err_unplug_fw:
 	panthor_fw_unplug(ptdev);
 	return ret;
 }
-
-MODULE_FIRMWARE("arm/mali/arch10.8/mali_csffw.bin");

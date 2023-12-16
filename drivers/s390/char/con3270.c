@@ -1803,8 +1803,8 @@ static void tty3270_do_write(struct tty3270 *tp, struct tty_struct *tty,
 /*
  * String write routine for 3270 ttys
  */
-static ssize_t tty3270_write(struct tty_struct *tty, const u8 *buf,
-			     size_t count)
+static int tty3270_write(struct tty_struct *tty,
+			 const unsigned char *buf, int count)
 {
 	struct tty3270 *tp;
 
@@ -1822,7 +1822,7 @@ static ssize_t tty3270_write(struct tty_struct *tty, const u8 *buf,
 /*
  * Put single characters to the ttys character buffer
  */
-static int tty3270_put_char(struct tty_struct *tty, u8 ch)
+static int tty3270_put_char(struct tty_struct *tty, unsigned char ch)
 {
 	struct tty3270 *tp;
 

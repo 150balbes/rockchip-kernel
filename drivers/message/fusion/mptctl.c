@@ -1328,8 +1328,8 @@ mptctl_getiocinfo (MPT_ADAPTER *ioc, unsigned long arg, unsigned int data_size)
 
 	/* Set the Version Strings.
 	 */
-	strscpy_pad(karg->driverVersion, MPT_LINUX_PACKAGE_NAME,
-		    sizeof(karg->driverVersion));
+	strncpy (karg->driverVersion, MPT_LINUX_PACKAGE_NAME, MPT_IOCTL_VERSION_LENGTH);
+	karg->driverVersion[MPT_IOCTL_VERSION_LENGTH-1]='\0';
 
 	karg->busChangeEvent = 0;
 	karg->hostId = ioc->pfacts[port].PortSCSIID;
@@ -1493,8 +1493,10 @@ mptctl_readtest (MPT_ADAPTER *ioc, unsigned long arg)
 #else
 	karg.chip_type = ioc->pcidev->device;
 #endif
-	strscpy_pad(karg.name, ioc->name, sizeof(karg.name));
-	strscpy_pad(karg.product, ioc->prod_name, sizeof(karg.product));
+	strncpy (karg.name, ioc->name, MPT_MAX_NAME);
+	karg.name[MPT_MAX_NAME-1]='\0';
+	strncpy (karg.product, ioc->prod_name, MPT_PRODUCT_LENGTH);
+	karg.product[MPT_PRODUCT_LENGTH-1]='\0';
 
 	/* Copy the data from kernel memory to user memory
 	 */
@@ -2392,7 +2394,7 @@ mptctl_hp_hostinfo(MPT_ADAPTER *ioc, unsigned long arg, unsigned int data_size)
 	cfg.dir = 0;	/* read */
 	cfg.timeout = 10;
 
-	strscpy_pad(karg.serial_number, " ", sizeof(karg.serial_number));
+	strncpy(karg.serial_number, " ", 24);
 	if (mpt_config(ioc, &cfg) == 0) {
 		if (cfg.cfghdr.hdr->PageLength > 0) {
 			/* Issue the second config page request */
@@ -2406,9 +2408,8 @@ mptctl_hp_hostinfo(MPT_ADAPTER *ioc, unsigned long arg, unsigned int data_size)
 				if (mpt_config(ioc, &cfg) == 0) {
 					ManufacturingPage0_t *pdata = (ManufacturingPage0_t *) pbuf;
 					if (strlen(pdata->BoardTracerNumber) > 1) {
-						strscpy_pad(karg.serial_number,
-							pdata->BoardTracerNumber,
-							sizeof(karg.serial_number));
+						strscpy(karg.serial_number,
+							pdata->BoardTracerNumber, 24);
 					}
 				}
 				dma_free_coherent(&ioc->pcidev->dev,
@@ -2455,7 +2456,7 @@ mptctl_hp_hostinfo(MPT_ADAPTER *ioc, unsigned long arg, unsigned int data_size)
 		}
 	}
 
-	/*
+	/* 
 	 * Gather ISTWI(Industry Standard Two Wire Interface) Data
 	 */
 	if ((mf = mpt_get_msg_frame(mptctl_id, ioc)) == NULL) {

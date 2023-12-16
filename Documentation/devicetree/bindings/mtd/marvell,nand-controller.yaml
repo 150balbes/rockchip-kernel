@@ -16,7 +16,6 @@ properties:
           - const: marvell,armada-8k-nand-controller
           - const: marvell,armada370-nand-controller
       - enum:
-          - marvell,ac5-nand-controller
           - marvell,armada370-nand-controller
           - marvell,pxa3xx-nand-controller
       - description: legacy bindings

@@ -180,9 +180,11 @@ static int ct82c710_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void ct82c710_remove(struct platform_device *dev)
+static int ct82c710_remove(struct platform_device *dev)
 {
 	serio_unregister_port(ct82c710_port);
+
+	return 0;
 }
 
 static struct platform_driver ct82c710_driver = {
@@ -190,7 +192,7 @@ static struct platform_driver ct82c710_driver = {
 		.name	= "ct82c710",
 	},
 	.probe		= ct82c710_probe,
-	.remove_new	= ct82c710_remove,
+	.remove		= ct82c710_remove,
 };
 
 

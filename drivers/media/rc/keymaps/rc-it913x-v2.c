@@ -88,4 +88,3 @@ module_exit(exit_rc_it913x_v2_map)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Malcolm Priestley tvboxspy@gmail.com");
-MODULE_DESCRIPTION("it913x-v2 remote controller keytable");

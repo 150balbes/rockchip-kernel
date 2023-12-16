@@ -48,14 +48,6 @@ properties:
   iommus:
     maxItems: 2
 
-  interconnects:
-    maxItems: 2
-
-  interconnect-names:
-    items:
-      - const: video-mem
-      - const: cpu-cfg
-
   operating-points-v2: true
   opp-table:
     type: object

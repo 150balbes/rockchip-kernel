@@ -283,7 +283,7 @@ err_gpio:
 	return r;
 }
 
-static void tpd_remove(struct platform_device *pdev)
+static int __exit tpd_remove(struct platform_device *pdev)
 {
 	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
 	struct omap_dss_device *dssdev = &ddata->dssdev;
@@ -300,6 +300,8 @@ static void tpd_remove(struct platform_device *pdev)
 		tpd_disconnect(dssdev, dssdev->dst);
 
 	omap_dss_put_device(in);
+
+	return 0;
 }
 
 static const struct of_device_id tpd_of_match[] = {
@@ -311,10 +313,11 @@ MODULE_DEVICE_TABLE(of, tpd_of_match);
 
 static struct platform_driver tpd_driver = {
 	.probe	= tpd_probe,
-	.remove_new = tpd_remove,
+	.remove	= __exit_p(tpd_remove),
 	.driver	= {
 		.name	= "tpd12s015",
 		.of_match_table = tpd_of_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

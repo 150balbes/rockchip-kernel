@@ -74,11 +74,10 @@ static u64 sparx5_ptp_get_nominal_value(struct sparx5 *sparx5)
 	return res;
 }
 
-int sparx5_ptp_hwtstamp_set(struct sparx5_port *port,
-			    struct kernel_hwtstamp_config *cfg,
-			    struct netlink_ext_ack *extack)
+int sparx5_ptp_hwtstamp_set(struct sparx5_port *port, struct ifreq *ifr)
 {
 	struct sparx5 *sparx5 = port->sparx5;
+	struct hwtstamp_config cfg;
 	struct sparx5_phc *phc;
 
 	/* For now don't allow to run ptp on ports that are part of a bridge,
@@ -89,7 +88,10 @@ int sparx5_ptp_hwtstamp_set(struct sparx5_port *port,
 	if (test_bit(port->portno, sparx5->bridge_mask))
 		return -EINVAL;
 
-	switch (cfg->tx_type) {
+	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
+		return -EFAULT;
+
+	switch (cfg.tx_type) {
 	case HWTSTAMP_TX_ON:
 		port->ptp_cmd = IFH_REW_OP_TWO_STEP_PTP;
 		break;
@@ -103,7 +105,7 @@ int sparx5_ptp_hwtstamp_set(struct sparx5_port *port,
 		return -ERANGE;
 	}
 
-	switch (cfg->rx_filter) {
+	switch (cfg.rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
 		break;
 	case HWTSTAMP_FILTER_ALL:
@@ -120,7 +122,7 @@ int sparx5_ptp_hwtstamp_set(struct sparx5_port *port,
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
 	case HWTSTAMP_FILTER_NTP_ALL:
-		cfg->rx_filter = HWTSTAMP_FILTER_ALL;
+		cfg.rx_filter = HWTSTAMP_FILTER_ALL;
 		break;
 	default:
 		return -ERANGE;
@@ -129,20 +131,20 @@ int sparx5_ptp_hwtstamp_set(struct sparx5_port *port,
 	/* Commit back the result & save it */
 	mutex_lock(&sparx5->ptp_lock);
 	phc = &sparx5->phc[SPARX5_PHC_PORT];
-	phc->hwtstamp_config = *cfg;
+	memcpy(&phc->hwtstamp_config, &cfg, sizeof(cfg));
 	mutex_unlock(&sparx5->ptp_lock);
 
-	return 0;
+	return copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg)) ? -EFAULT : 0;
 }
 
-void sparx5_ptp_hwtstamp_get(struct sparx5_port *port,
-			     struct kernel_hwtstamp_config *cfg)
+int sparx5_ptp_hwtstamp_get(struct sparx5_port *port, struct ifreq *ifr)
 {
 	struct sparx5 *sparx5 = port->sparx5;
 	struct sparx5_phc *phc;
 
 	phc = &sparx5->phc[SPARX5_PHC_PORT];
-	*cfg = phc->hwtstamp_config;
+	return copy_to_user(ifr->ifr_data, &phc->hwtstamp_config,
+			    sizeof(phc->hwtstamp_config)) ? -EFAULT : 0;
 }
 
 static void sparx5_ptp_classify(struct sparx5_port *port, struct sk_buff *skb,

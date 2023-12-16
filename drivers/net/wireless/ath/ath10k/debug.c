@@ -1140,7 +1140,7 @@ void ath10k_debug_get_et_strings(struct ieee80211_hw *hw,
 				 u32 sset, u8 *data)
 {
 	if (sset == ETH_SS_STATS)
-		memcpy(data, ath10k_gstrings_stats,
+		memcpy(data, *ath10k_gstrings_stats,
 		       sizeof(ath10k_gstrings_stats));
 }
 
@@ -1964,13 +1964,20 @@ static ssize_t ath10k_write_btcoex(struct file *file,
 				   size_t count, loff_t *ppos)
 {
 	struct ath10k *ar = file->private_data;
-	ssize_t ret;
+	char buf[32];
+	size_t buf_size;
+	int ret;
 	bool val;
 	u32 pdev_param;
 
-	ret = kstrtobool_from_user(ubuf, count, &val);
-	if (ret)
-		return ret;
+	buf_size = min(count, (sizeof(buf) - 1));
+	if (copy_from_user(buf, ubuf, buf_size))
+		return -EFAULT;
+
+	buf[buf_size] = '\0';
+
+	if (kstrtobool(buf, &val) != 0)
+		return -EINVAL;
 
 	if (!ar->coex_support)
 		return -EOPNOTSUPP;
@@ -1993,7 +2000,7 @@ static ssize_t ath10k_write_btcoex(struct file *file,
 		     ar->running_fw->fw_file.fw_features)) {
 		ret = ath10k_wmi_pdev_set_param(ar, pdev_param, val);
 		if (ret) {
-			ath10k_warn(ar, "failed to enable btcoex: %zd\n", ret);
+			ath10k_warn(ar, "failed to enable btcoex: %d\n", ret);
 			ret = count;
 			goto exit;
 		}
@@ -2096,12 +2103,19 @@ static ssize_t ath10k_write_peer_stats(struct file *file,
 				       size_t count, loff_t *ppos)
 {
 	struct ath10k *ar = file->private_data;
-	ssize_t ret;
+	char buf[32];
+	size_t buf_size;
+	int ret;
 	bool val;
 
-	ret = kstrtobool_from_user(ubuf, count, &val);
-	if (ret)
-		return ret;
+	buf_size = min(count, (sizeof(buf) - 1));
+	if (copy_from_user(buf, ubuf, buf_size))
+		return -EFAULT;
+
+	buf[buf_size] = '\0';
+
+	if (kstrtobool(buf, &val) != 0)
+		return -EINVAL;
 
 	mutex_lock(&ar->conf_mutex);
 
@@ -2225,16 +2239,21 @@ static ssize_t ath10k_sta_tid_stats_mask_write(struct file *file,
 					       size_t count, loff_t *ppos)
 {
 	struct ath10k *ar = file->private_data;
-	ssize_t ret;
+	char buf[32];
+	ssize_t len;
 	u32 mask;
 
-	ret = kstrtoint_from_user(user_buf, count, 0, &mask);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+	if (kstrtoint(buf, 0, &mask))
+		return -EINVAL;
 
 	ar->sta_tid_stats_mask = mask;
 
-	return count;
+	return len;
 }
 
 static const struct file_operations fops_sta_tid_stats_mask = {

@@ -33,12 +33,14 @@ static int fsl_sai_clk_probe(struct platform_device *pdev)
 	struct clk_parent_data pdata = { .index = 0 };
 	void __iomem *base;
 	struct clk_hw *hw;
+	struct resource *res;
 
 	sai_clk = devm_kzalloc(dev, sizeof(*sai_clk), GFP_KERNEL);
 	if (!sai_clk)
 		return -ENOMEM;
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 

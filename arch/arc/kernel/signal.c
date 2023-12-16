@@ -53,7 +53,6 @@
 #include <linux/sched/task_stack.h>
 
 #include <asm/ucontext.h>
-#include <asm/entry.h>
 
 struct rt_sigframe {
 	struct siginfo info;

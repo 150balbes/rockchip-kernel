@@ -780,7 +780,7 @@ static void macvlan_change_rx_flags(struct net_device *dev, int change)
 	if (dev->flags & IFF_UP) {
 		if (change & IFF_ALLMULTI)
 			dev_set_allmulti(lowerdev, dev->flags & IFF_ALLMULTI ? 1 : -1);
-		if (!macvlan_passthru(vlan->port) && change & IFF_PROMISC)
+		if (change & IFF_PROMISC)
 			dev_set_promiscuity(lowerdev,
 					    dev->flags & IFF_PROMISC ? 1 : -1);
 
@@ -868,24 +868,31 @@ static int macvlan_change_mtu(struct net_device *dev, int new_mtu)
 	return 0;
 }
 
-static int macvlan_hwtstamp_get(struct net_device *dev,
-				struct kernel_hwtstamp_config *cfg)
+static int macvlan_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct net_device *real_dev = macvlan_dev_real_dev(dev);
+	const struct net_device_ops *ops = real_dev->netdev_ops;
+	struct ifreq ifrr;
+	int err = -EOPNOTSUPP;
 
-	return generic_hwtstamp_get_lower(real_dev, cfg);
-}
+	strscpy(ifrr.ifr_name, real_dev->name, IFNAMSIZ);
+	ifrr.ifr_ifru = ifr->ifr_ifru;
 
-static int macvlan_hwtstamp_set(struct net_device *dev,
-				struct kernel_hwtstamp_config *cfg,
-				struct netlink_ext_ack *extack)
-{
-	struct net_device *real_dev = macvlan_dev_real_dev(dev);
+	switch (cmd) {
+	case SIOCSHWTSTAMP:
+		if (!net_eq(dev_net(dev), &init_net))
+			break;
+		fallthrough;
+	case SIOCGHWTSTAMP:
+		if (netif_device_present(real_dev) && ops->ndo_eth_ioctl)
+			err = ops->ndo_eth_ioctl(real_dev, &ifrr, cmd);
+		break;
+	}
 
-	if (!net_eq(dev_net(dev), &init_net))
-		return -EOPNOTSUPP;
+	if (!err)
+		ifr->ifr_ifru = ifrr.ifr_ifru;
 
-	return generic_hwtstamp_set_lower(real_dev, cfg, extack);
+	return err;
 }
 
 /*
@@ -1186,6 +1193,7 @@ static const struct net_device_ops macvlan_netdev_ops = {
 	.ndo_stop		= macvlan_stop,
 	.ndo_start_xmit		= macvlan_start_xmit,
 	.ndo_change_mtu		= macvlan_change_mtu,
+	.ndo_eth_ioctl		= macvlan_eth_ioctl,
 	.ndo_fix_features	= macvlan_fix_features,
 	.ndo_change_rx_flags	= macvlan_change_rx_flags,
 	.ndo_set_mac_address	= macvlan_set_mac_address,
@@ -1204,8 +1212,6 @@ static const struct net_device_ops macvlan_netdev_ops = {
 #endif
 	.ndo_get_iflink		= macvlan_dev_get_iflink,
 	.ndo_features_check	= passthru_features_check,
-	.ndo_hwtstamp_get	= macvlan_hwtstamp_get,
-	.ndo_hwtstamp_set	= macvlan_hwtstamp_set,
 };
 
 static void macvlan_dev_free(struct net_device *dev)
@@ -1740,7 +1746,6 @@ static const struct nla_policy macvlan_policy[IFLA_MACVLAN_MAX + 1] = {
 	[IFLA_MACVLAN_MACADDR_COUNT] = { .type = NLA_U32 },
 	[IFLA_MACVLAN_BC_QUEUE_LEN] = { .type = NLA_U32 },
 	[IFLA_MACVLAN_BC_QUEUE_LEN_USED] = { .type = NLA_REJECT },
-	[IFLA_MACVLAN_BC_CUTOFF] = { .type = NLA_S32 },
 };
 
 int macvlan_link_register(struct rtnl_link_ops *ops)

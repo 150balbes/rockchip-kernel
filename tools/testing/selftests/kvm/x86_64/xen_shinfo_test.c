@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * svm_vmcall_test
+ *
  * Copyright © 2021 Amazon.com, Inc. or its affiliates.
+ *
+ * Xen shared_info / pvclock testing
  */
 
 #include "test_util.h"

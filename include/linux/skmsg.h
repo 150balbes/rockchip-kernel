@@ -62,7 +62,6 @@ struct sk_psock_progs {
 
 enum sk_psock_state_bits {
 	SK_PSOCK_TX_ENABLED,
-	SK_PSOCK_RX_STRP_ENABLED,
 };
 
 struct sk_psock_link {

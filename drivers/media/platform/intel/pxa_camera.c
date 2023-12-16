@@ -2044,7 +2044,7 @@ static const struct video_device pxa_camera_videodev_template = {
 
 static int pxa_camera_sensor_bound(struct v4l2_async_notifier *notifier,
 		     struct v4l2_subdev *subdev,
-		     struct v4l2_async_connection *asd)
+		     struct v4l2_async_subdev *asd)
 {
 	int err;
 	struct v4l2_device *v4l2_dev = notifier->v4l2_dev;
@@ -2123,7 +2123,7 @@ out:
 
 static void pxa_camera_sensor_unbind(struct v4l2_async_notifier *notifier,
 		     struct v4l2_subdev *subdev,
-		     struct v4l2_async_connection *asd)
+		     struct v4l2_async_subdev *asd)
 {
 	struct pxa_camera_dev *pcdev = v4l2_dev_to_pcdev(notifier->v4l2_dev);
 
@@ -2197,7 +2197,7 @@ static int pxa_camera_pdata_from_dt(struct device *dev,
 				    struct pxa_camera_dev *pcdev)
 {
 	u32 mclk_rate;
-	struct v4l2_async_connection *asd;
+	struct v4l2_async_subdev *asd;
 	struct device_node *np = dev->of_node;
 	struct v4l2_fwnode_endpoint ep = { .bus_type = 0 };
 	int err = of_property_read_u32(np, "clock-frequency",
@@ -2252,7 +2252,7 @@ static int pxa_camera_pdata_from_dt(struct device *dev,
 
 	asd = v4l2_async_nf_add_fwnode_remote(&pcdev->notifier,
 					      of_fwnode_handle(np),
-					      struct v4l2_async_connection);
+					      struct v4l2_async_subdev);
 	if (IS_ERR(asd))
 		err = PTR_ERR(asd);
 out:
@@ -2274,8 +2274,9 @@ static int pxa_camera_probe(struct platform_device *pdev)
 	int irq;
 	int err = 0, i;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (!res || irq < 0)
 		return -ENODEV;
 
 	pcdev = devm_kzalloc(&pdev->dev, sizeof(*pcdev), GFP_KERNEL);
@@ -2288,41 +2289,27 @@ static int pxa_camera_probe(struct platform_device *pdev)
 	if (IS_ERR(pcdev->clk))
 		return PTR_ERR(pcdev->clk);
 
-	/*
-	 * Request the regions.
-	 */
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
-
-	pcdev->irq = irq;
-	pcdev->base = base;
-
-	err = v4l2_device_register(&pdev->dev, &pcdev->v4l2_dev);
-	if (err)
-		return err;
-
-	v4l2_async_nf_init(&pcdev->notifier, &pcdev->v4l2_dev);
+	v4l2_async_nf_init(&pcdev->notifier);
 	pcdev->res = res;
 	pcdev->pdata = pdev->dev.platform_data;
 	if (pcdev->pdata) {
-		struct v4l2_async_connection *asd;
+		struct v4l2_async_subdev *asd;
 
 		pcdev->platform_flags = pcdev->pdata->flags;
 		pcdev->mclk = pcdev->pdata->mclk_10khz * 10000;
 		asd = v4l2_async_nf_add_i2c(&pcdev->notifier,
 					    pcdev->pdata->sensor_i2c_adapter_id,
 					    pcdev->pdata->sensor_i2c_address,
-					    struct v4l2_async_connection);
+					    struct v4l2_async_subdev);
 		if (IS_ERR(asd))
 			err = PTR_ERR(asd);
 	} else if (pdev->dev.of_node) {
 		err = pxa_camera_pdata_from_dt(&pdev->dev, pcdev);
 	} else {
-		err = -ENODEV;
+		return -ENODEV;
 	}
 	if (err < 0)
-		goto exit_v4l2_device_unregister;
+		return err;
 
 	if (!(pcdev->platform_flags & (PXA_CAMERA_DATAWIDTH_8 |
 			PXA_CAMERA_DATAWIDTH_9 | PXA_CAMERA_DATAWIDTH_10))) {
@@ -2351,12 +2338,21 @@ static int pxa_camera_probe(struct platform_device *pdev)
 	spin_lock_init(&pcdev->lock);
 	mutex_init(&pcdev->mlock);
 
+	/*
+	 * Request the regions.
+	 */
+	base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(base))
+		return PTR_ERR(base);
+
+	pcdev->irq = irq;
+	pcdev->base = base;
+
 	/* request dma */
 	pcdev->dma_chans[0] = dma_request_chan(&pdev->dev, "CI_Y");
 	if (IS_ERR(pcdev->dma_chans[0])) {
 		dev_err(&pdev->dev, "Can't request DMA for Y\n");
-		err = PTR_ERR(pcdev->dma_chans[0]);
-		goto exit_notifier_cleanup;
+		return PTR_ERR(pcdev->dma_chans[0]);
 	}
 
 	pcdev->dma_chans[1] = dma_request_chan(&pdev->dev, "CI_U");
@@ -2383,30 +2379,36 @@ static int pxa_camera_probe(struct platform_device *pdev)
 		}
 	}
 
-	tasklet_setup(&pcdev->task_eof, pxa_camera_eof);
-
-	pxa_camera_activate(pcdev);
-
-	platform_set_drvdata(pdev, pcdev);
-
-	err = pxa_camera_init_videobuf2(pcdev);
-	if (err)
-		goto exit_deactivate;
-
 	/* request irq */
 	err = devm_request_irq(&pdev->dev, pcdev->irq, pxa_camera_irq, 0,
 			       PXA_CAM_DRV_NAME, pcdev);
 	if (err) {
 		dev_err(&pdev->dev, "Camera interrupt register failed\n");
-		goto exit_deactivate;
+		goto exit_free_dma;
 	}
 
-	pcdev->notifier.ops = &pxa_camera_sensor_ops;
-	err = v4l2_async_nf_register(&pcdev->notifier);
+	tasklet_setup(&pcdev->task_eof, pxa_camera_eof);
+
+	pxa_camera_activate(pcdev);
+
+	platform_set_drvdata(pdev, pcdev);
+	err = v4l2_device_register(&pdev->dev, &pcdev->v4l2_dev);
 	if (err)
 		goto exit_deactivate;
 
+	err = pxa_camera_init_videobuf2(pcdev);
+	if (err)
+		goto exit_notifier_cleanup;
+
+	pcdev->notifier.ops = &pxa_camera_sensor_ops;
+	err = v4l2_async_nf_register(&pcdev->v4l2_dev, &pcdev->notifier);
+	if (err)
+		goto exit_notifier_cleanup;
+
 	return 0;
+exit_notifier_cleanup:
+	v4l2_async_nf_cleanup(&pcdev->notifier);
+	v4l2_device_unregister(&pcdev->v4l2_dev);
 exit_deactivate:
 	pxa_camera_deactivate(pcdev);
 	tasklet_kill(&pcdev->task_eof);
@@ -2416,10 +2418,6 @@ exit_free_dma_u:
 	dma_release_channel(pcdev->dma_chans[1]);
 exit_free_dma_y:
 	dma_release_channel(pcdev->dma_chans[0]);
-exit_notifier_cleanup:
-	v4l2_async_nf_cleanup(&pcdev->notifier);
-exit_v4l2_device_unregister:
-	v4l2_device_unregister(&pcdev->v4l2_dev);
 	return err;
 }
 
@@ -2456,7 +2454,7 @@ static struct platform_driver pxa_camera_driver = {
 	.driver		= {
 		.name	= PXA_CAM_DRV_NAME,
 		.pm	= &pxa_camera_pm,
-		.of_match_table = pxa_camera_of_match,
+		.of_match_table = of_match_ptr(pxa_camera_of_match),
 	},
 	.probe		= pxa_camera_probe,
 	.remove_new	= pxa_camera_remove,

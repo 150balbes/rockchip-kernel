@@ -240,6 +240,8 @@
 
 	pcie2x1l0: pcie@fe170000 {
 		compatible = "rockchip,rk3588-pcie", "rockchip,rk3568-pcie";
+		#address-cells = <3>;
+		#size-cells = <2>;
 		bus-range = <0x20 0x2f>;
 		clocks = <&cru ACLK_PCIE_1L0_MSTR>, <&cru ACLK_PCIE_1L0_SLV>,
 			 <&cru ACLK_PCIE_1L0_DBI>, <&cru PCLK_PCIE_1L0>,
@@ -276,8 +278,6 @@
 		reg-names = "dbi", "apb", "config";
 		resets = <&cru SRST_PCIE2_POWER_UP>, <&cru SRST_P_PCIE2>;
 		reset-names = "pwr", "pipe";
-		#address-cells = <3>;
-		#size-cells = <2>;
 		status = "disabled";
 
 		pcie2x1l0_intc: legacy-interrupt-controller {

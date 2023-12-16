@@ -86,7 +86,6 @@ extern unsigned long VMALLOC_END;
 #define vmemmap			((struct page *)VMEMMAP_BASE)
 
 #include <linux/sched.h>
-#include <asm/tlbflush.h>
 
 bool kern_addr_valid(unsigned long addr);
 
@@ -518,7 +517,7 @@ static inline pte_t pte_mkclean(pte_t pte)
 	return __pte(val);
 }
 
-static inline pte_t pte_mkwrite_novma(pte_t pte)
+static inline pte_t pte_mkwrite(pte_t pte)
 {
 	unsigned long val = pte_val(pte), mask;
 
@@ -773,11 +772,11 @@ static inline pmd_t pmd_mkyoung(pmd_t pmd)
 	return __pmd(pte_val(pte));
 }
 
-static inline pmd_t pmd_mkwrite_novma(pmd_t pmd)
+static inline pmd_t pmd_mkwrite(pmd_t pmd)
 {
 	pte_t pte = __pte(pmd_val(pmd));
 
-	pte = pte_mkwrite_novma(pte);
+	pte = pte_mkwrite(pte);
 
 	return __pmd(pte_val(pte));
 }
@@ -928,21 +927,8 @@ static inline void __set_pte_at(struct mm_struct *mm, unsigned long addr,
 	maybe_tlb_batch_add(mm, addr, ptep, orig, fullmm, PAGE_SHIFT);
 }
 
-static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
-		pte_t *ptep, pte_t pte, unsigned int nr)
-{
-	arch_enter_lazy_mmu_mode();
-	for (;;) {
-		__set_pte_at(mm, addr, ptep, pte, 0);
-		if (--nr == 0)
-			break;
-		ptep++;
-		pte_val(pte) += PAGE_SIZE;
-		addr += PAGE_SIZE;
-	}
-	arch_leave_lazy_mmu_mode();
-}
-#define set_ptes set_ptes
+#define set_pte_at(mm,addr,ptep,pte)	\
+	__set_pte_at((mm), (addr), (ptep), (pte), 0)
 
 #define pte_clear(mm,addr,ptep)		\
 	set_pte_at((mm), (addr), (ptep), __pte(0UL))
@@ -961,8 +947,8 @@ static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 									\
 		if (pfn_valid(this_pfn) &&				\
 		    (((old_addr) ^ (new_addr)) & (1 << 13)))		\
-			flush_dcache_folio_all(current->mm,		\
-				page_folio(pfn_to_page(this_pfn)));	\
+			flush_dcache_page_all(current->mm,		\
+					      pfn_to_page(this_pfn));	\
 	}								\
 	newpte;								\
 })
@@ -977,10 +963,7 @@ struct seq_file;
 void mmu_info(struct seq_file *);
 
 struct vm_area_struct;
-void update_mmu_cache_range(struct vm_fault *, struct vm_area_struct *,
-		unsigned long addr, pte_t *ptep, unsigned int nr);
-#define update_mmu_cache(vma, addr, ptep) \
-	update_mmu_cache_range(NULL, vma, addr, ptep, 1)
+void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t *);
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 void update_mmu_cache_pmd(struct vm_area_struct *vma, unsigned long addr,
 			  pmd_t *pmd);
@@ -1137,6 +1120,8 @@ static inline bool pte_access_permitted(pte_t pte, bool write)
 	return (pte_val(pte) & (prot | _PAGE_SPECIAL)) == prot;
 }
 #define pte_access_permitted pte_access_permitted
+
+#include <asm/tlbflush.h>
 
 /* We provide our own get_unmapped_area to cope with VA holes and
  * SHM area cache aliasing for userland.

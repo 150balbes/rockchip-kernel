@@ -142,7 +142,7 @@ err_out_free_mdiobus:
 	return ret;
 }
 
-static void sun4i_mdio_remove(struct platform_device *pdev)
+static int sun4i_mdio_remove(struct platform_device *pdev)
 {
 	struct mii_bus *bus = platform_get_drvdata(pdev);
 	struct sun4i_mdio_data *data = bus->priv;
@@ -151,6 +151,8 @@ static void sun4i_mdio_remove(struct platform_device *pdev)
 	if (data->regulator)
 		regulator_disable(data->regulator);
 	mdiobus_free(bus);
+
+	return 0;
 }
 
 static const struct of_device_id sun4i_mdio_dt_ids[] = {
@@ -164,7 +166,7 @@ MODULE_DEVICE_TABLE(of, sun4i_mdio_dt_ids);
 
 static struct platform_driver sun4i_mdio_driver = {
 	.probe = sun4i_mdio_probe,
-	.remove_new = sun4i_mdio_remove,
+	.remove = sun4i_mdio_remove,
 	.driver = {
 		.name = "sun4i-mdio",
 		.of_match_table = sun4i_mdio_dt_ids,

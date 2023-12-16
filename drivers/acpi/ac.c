@@ -17,7 +17,6 @@
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
-#include <linux/string_choices.h>
 #include <linux/acpi.h>
 #include <acpi/battery.h>
 
@@ -33,10 +32,9 @@ MODULE_AUTHOR("Paul Diefenbaugh");
 MODULE_DESCRIPTION("ACPI AC Adapter Driver");
 MODULE_LICENSE("GPL");
 
-static int acpi_ac_probe(struct platform_device *pdev);
-static void acpi_ac_remove(struct platform_device *pdev);
-
-static void acpi_ac_notify(acpi_handle handle, u32 event, void *data);
+static int acpi_ac_add(struct acpi_device *device);
+static void acpi_ac_remove(struct acpi_device *device);
+static void acpi_ac_notify(struct acpi_device *device, u32 event);
 
 static const struct acpi_device_id ac_device_ids[] = {
 	{"ACPI0003", 0},
@@ -51,6 +49,19 @@ static SIMPLE_DEV_PM_OPS(acpi_ac_pm, NULL, acpi_ac_resume);
 
 static int ac_sleep_before_get_state_ms;
 static int ac_only;
+
+static struct acpi_driver acpi_ac_driver = {
+	.name = "ac",
+	.class = ACPI_AC_CLASS,
+	.ids = ac_device_ids,
+	.flags = ACPI_DRIVER_ALL_NOTIFY_EVENTS,
+	.ops = {
+		.add = acpi_ac_add,
+		.remove = acpi_ac_remove,
+		.notify = acpi_ac_notify,
+		},
+	.drv.pm = &acpi_ac_pm,
+};
 
 struct acpi_ac {
 	struct power_supply *charger;
@@ -117,14 +128,16 @@ static enum power_supply_property ac_props[] = {
 };
 
 /* Driver Model */
-static void acpi_ac_notify(acpi_handle handle, u32 event, void *data)
+static void acpi_ac_notify(struct acpi_device *device, u32 event)
 {
-	struct acpi_ac *ac = data;
-	struct acpi_device *adev = ac->device;
+	struct acpi_ac *ac = acpi_driver_data(device);
+
+	if (!ac)
+		return;
 
 	switch (event) {
 	default:
-		acpi_handle_debug(adev->handle, "Unsupported event [0x%x]\n",
+		acpi_handle_debug(device->handle, "Unsupported event [0x%x]\n",
 				  event);
 		fallthrough;
 	case ACPI_AC_NOTIFY_STATUS:
@@ -141,10 +154,10 @@ static void acpi_ac_notify(acpi_handle handle, u32 event, void *data)
 			msleep(ac_sleep_before_get_state_ms);
 
 		acpi_ac_get_state(ac);
-		acpi_bus_generate_netlink_event(adev->pnp.device_class,
-						  dev_name(&adev->dev), event,
+		acpi_bus_generate_netlink_event(device->pnp.device_class,
+						  dev_name(&device->dev), event,
 						  (u32) ac->state);
-		acpi_notifier_call_chain(adev, event, (u32) ac->state);
+		acpi_notifier_call_chain(device, event, (u32) ac->state);
 		kobject_uevent(&ac->charger->dev.kobj, KOBJ_CHANGE);
 	}
 }
@@ -201,59 +214,51 @@ static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 	{},
 };
 
-static int acpi_ac_probe(struct platform_device *pdev)
+static int acpi_ac_add(struct acpi_device *device)
 {
-	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
 	struct power_supply_config psy_cfg = {};
-	struct acpi_ac *ac;
-	int result;
+	int result = 0;
+	struct acpi_ac *ac = NULL;
+
+
+	if (!device)
+		return -EINVAL;
 
 	ac = kzalloc(sizeof(struct acpi_ac), GFP_KERNEL);
 	if (!ac)
 		return -ENOMEM;
 
-	ac->device = adev;
-	strcpy(acpi_device_name(adev), ACPI_AC_DEVICE_NAME);
-	strcpy(acpi_device_class(adev), ACPI_AC_CLASS);
-
-	platform_set_drvdata(pdev, ac);
+	ac->device = device;
+	strcpy(acpi_device_name(device), ACPI_AC_DEVICE_NAME);
+	strcpy(acpi_device_class(device), ACPI_AC_CLASS);
+	device->driver_data = ac;
 
 	result = acpi_ac_get_state(ac);
 	if (result)
-		goto err_release_ac;
+		goto end;
 
 	psy_cfg.drv_data = ac;
 
-	ac->charger_desc.name = acpi_device_bid(adev);
+	ac->charger_desc.name = acpi_device_bid(device);
 	ac->charger_desc.type = POWER_SUPPLY_TYPE_MAINS;
 	ac->charger_desc.properties = ac_props;
 	ac->charger_desc.num_properties = ARRAY_SIZE(ac_props);
 	ac->charger_desc.get_property = get_ac_property;
-	ac->charger = power_supply_register(&pdev->dev,
+	ac->charger = power_supply_register(&ac->device->dev,
 					    &ac->charger_desc, &psy_cfg);
 	if (IS_ERR(ac->charger)) {
 		result = PTR_ERR(ac->charger);
-		goto err_release_ac;
+		goto end;
 	}
 
-	pr_info("%s [%s] (%s-line)\n", acpi_device_name(adev),
-		acpi_device_bid(adev), str_on_off(ac->state));
+	pr_info("%s [%s] (%s)\n", acpi_device_name(device),
+		acpi_device_bid(device), ac->state ? "on-line" : "off-line");
 
 	ac->battery_nb.notifier_call = acpi_ac_battery_notify;
 	register_acpi_notifier(&ac->battery_nb);
-
-	result = acpi_dev_install_notify_handler(adev, ACPI_ALL_NOTIFY,
-						 acpi_ac_notify, ac);
+end:
 	if (result)
-		goto err_unregister;
-
-	return 0;
-
-err_unregister:
-	power_supply_unregister(ac->charger);
-	unregister_acpi_notifier(&ac->battery_nb);
-err_release_ac:
-	kfree(ac);
+		kfree(ac);
 
 	return result;
 }
@@ -261,8 +266,15 @@ err_release_ac:
 #ifdef CONFIG_PM_SLEEP
 static int acpi_ac_resume(struct device *dev)
 {
-	struct acpi_ac *ac = dev_get_drvdata(dev);
+	struct acpi_ac *ac;
 	unsigned int old_state;
+
+	if (!dev)
+		return -EINVAL;
+
+	ac = acpi_driver_data(to_acpi_device(dev));
+	if (!ac)
+		return -EINVAL;
 
 	old_state = ac->state;
 	if (acpi_ac_get_state(ac))
@@ -276,27 +288,20 @@ static int acpi_ac_resume(struct device *dev)
 #define acpi_ac_resume NULL
 #endif
 
-static void acpi_ac_remove(struct platform_device *pdev)
+static void acpi_ac_remove(struct acpi_device *device)
 {
-	struct acpi_ac *ac = platform_get_drvdata(pdev);
+	struct acpi_ac *ac = NULL;
 
-	acpi_dev_remove_notify_handler(ac->device, ACPI_ALL_NOTIFY,
-				       acpi_ac_notify);
+	if (!device || !acpi_driver_data(device))
+		return;
+
+	ac = acpi_driver_data(device);
+
 	power_supply_unregister(ac->charger);
 	unregister_acpi_notifier(&ac->battery_nb);
 
 	kfree(ac);
 }
-
-static struct platform_driver acpi_ac_driver = {
-	.probe = acpi_ac_probe,
-	.remove_new = acpi_ac_remove,
-	.driver = {
-		.name = "ac",
-		.acpi_match_table = ac_device_ids,
-		.pm = &acpi_ac_pm,
-	},
-};
 
 static int __init acpi_ac_init(void)
 {
@@ -310,7 +315,7 @@ static int __init acpi_ac_init(void)
 
 	dmi_check_system(ac_dmi_table);
 
-	result = platform_driver_register(&acpi_ac_driver);
+	result = acpi_bus_register_driver(&acpi_ac_driver);
 	if (result < 0)
 		return -ENODEV;
 
@@ -319,7 +324,7 @@ static int __init acpi_ac_init(void)
 
 static void __exit acpi_ac_exit(void)
 {
-	platform_driver_unregister(&acpi_ac_driver);
+	acpi_bus_unregister_driver(&acpi_ac_driver);
 }
 module_init(acpi_ac_init);
 module_exit(acpi_ac_exit);

@@ -25,7 +25,6 @@
 
 #include "spufs/spufs.h"
 #include "interrupt.h"
-#include "spu_priv1_mmio.h"
 
 struct device_node *spu_devnode(struct spu *spu)
 {

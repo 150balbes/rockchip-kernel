@@ -228,26 +228,32 @@ static vm_fault_t __dev_dax_pud_fault(struct dev_dax *dev_dax,
 }
 #endif /* !CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD */
 
-static vm_fault_t dev_dax_huge_fault(struct vm_fault *vmf, unsigned int order)
+static vm_fault_t dev_dax_huge_fault(struct vm_fault *vmf,
+		enum page_entry_size pe_size)
 {
 	struct file *filp = vmf->vma->vm_file;
 	vm_fault_t rc = VM_FAULT_SIGBUS;
 	int id;
 	struct dev_dax *dev_dax = filp->private_data;
 
-	dev_dbg(&dev_dax->dev, "%s: %s (%#lx - %#lx) order:%d\n", current->comm,
+	dev_dbg(&dev_dax->dev, "%s: %s (%#lx - %#lx) size = %d\n", current->comm,
 			(vmf->flags & FAULT_FLAG_WRITE) ? "write" : "read",
-			vmf->vma->vm_start, vmf->vma->vm_end, order);
+			vmf->vma->vm_start, vmf->vma->vm_end, pe_size);
 
 	id = dax_read_lock();
-	if (order == 0)
+	switch (pe_size) {
+	case PE_SIZE_PTE:
 		rc = __dev_dax_pte_fault(dev_dax, vmf);
-	else if (order == PMD_ORDER)
+		break;
+	case PE_SIZE_PMD:
 		rc = __dev_dax_pmd_fault(dev_dax, vmf);
-	else if (order == PUD_ORDER)
+		break;
+	case PE_SIZE_PUD:
 		rc = __dev_dax_pud_fault(dev_dax, vmf);
-	else
+		break;
+	default:
 		rc = VM_FAULT_SIGBUS;
+	}
 
 	dax_read_unlock(id);
 
@@ -256,7 +262,7 @@ static vm_fault_t dev_dax_huge_fault(struct vm_fault *vmf, unsigned int order)
 
 static vm_fault_t dev_dax_fault(struct vm_fault *vmf)
 {
-	return dev_dax_huge_fault(vmf, 0);
+	return dev_dax_huge_fault(vmf, PE_SIZE_PTE);
 }
 
 static int dev_dax_may_split(struct vm_area_struct *vma, unsigned long addr)

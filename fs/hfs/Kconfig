@@ -2,7 +2,6 @@
 config HFS_FS
 	tristate "Apple Macintosh file system support"
 	depends on BLOCK
-	select BUFFER_HEAD
 	select NLS
 	select LEGACY_DIRECT_IO
 	help

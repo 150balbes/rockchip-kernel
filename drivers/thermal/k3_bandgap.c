@@ -11,7 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/thermal.h>
 #include <linux/types.h>
@@ -225,6 +225,7 @@ static int k3_bandgap_probe(struct platform_device *pdev)
 		devm_thermal_add_hwmon_sysfs(dev, data[id].tzd);
 	}
 
+	platform_set_drvdata(pdev, bgp);
 
 	return 0;
 
@@ -235,10 +236,12 @@ err_alloc:
 	return ret;
 }
 
-static void k3_bandgap_remove(struct platform_device *pdev)
+static int k3_bandgap_remove(struct platform_device *pdev)
 {
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id of_k3_bandgap_match[] = {
@@ -251,7 +254,7 @@ MODULE_DEVICE_TABLE(of, of_k3_bandgap_match);
 
 static struct platform_driver k3_bandgap_sensor_driver = {
 	.probe = k3_bandgap_probe,
-	.remove_new = k3_bandgap_remove,
+	.remove = k3_bandgap_remove,
 	.driver = {
 		.name = "k3-soc-thermal",
 		.of_match_table	= of_k3_bandgap_match,

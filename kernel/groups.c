@@ -19,7 +19,7 @@ struct group_info *groups_alloc(int gidsetsize)
 	if (!gi)
 		return NULL;
 
-	refcount_set(&gi->usage, 1);
+	atomic_set(&gi->usage, 1);
 	gi->ngroups = gidsetsize;
 	return gi;
 }

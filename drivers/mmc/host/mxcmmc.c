@@ -31,6 +31,7 @@
 #include <linux/dmaengine.h>
 #include <linux/types.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/mmc/slot-gpio.h>
 
@@ -988,6 +989,7 @@ static int mxcmci_probe(struct platform_device *pdev)
 
 	pr_info("i.MX/MPC512x SDHC driver\n");
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
@@ -998,7 +1000,7 @@ static int mxcmci_probe(struct platform_device *pdev)
 
 	host = mmc_priv(mmc);
 
-	host->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	host->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(host->base)) {
 		ret = PTR_ERR(host->base);
 		goto out_free;
@@ -1162,7 +1164,7 @@ out_free:
 	return ret;
 }
 
-static void mxcmci_remove(struct platform_device *pdev)
+static int mxcmci_remove(struct platform_device *pdev)
 {
 	struct mmc_host *mmc = platform_get_drvdata(pdev);
 	struct mxcmci_host *host = mmc_priv(mmc);
@@ -1179,6 +1181,8 @@ static void mxcmci_remove(struct platform_device *pdev)
 	clk_disable_unprepare(host->clk_ipg);
 
 	mmc_free_host(mmc);
+
+	return 0;
 }
 
 static int mxcmci_suspend(struct device *dev)
@@ -1212,7 +1216,7 @@ static DEFINE_SIMPLE_DEV_PM_OPS(mxcmci_pm_ops, mxcmci_suspend, mxcmci_resume);
 
 static struct platform_driver mxcmci_driver = {
 	.probe		= mxcmci_probe,
-	.remove_new	= mxcmci_remove,
+	.remove		= mxcmci_remove,
 	.driver		= {
 		.name		= DRIVER_NAME,
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,

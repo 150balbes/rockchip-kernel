@@ -11,10 +11,9 @@
 #include <linux/component.h>
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
-#include <linux/mod_devicetable.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/property.h>
 #include <linux/regmap.h>
 
 #include <drm/drm_fourcc.h>
@@ -104,7 +103,7 @@ struct gsc_context {
 	unsigned int			num_formats;
 
 	void __iomem	*regs;
-	const char	*const *clk_names;
+	const char	**clk_names;
 	struct clk	*clocks[GSC_MAX_CLOCKS];
 	int		num_clocks;
 	struct gsc_scaler	sc;
@@ -1218,7 +1217,7 @@ static const unsigned int gsc_tiled_formats[] = {
 static int gsc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	const struct gsc_driverdata *driver_data;
+	struct gsc_driverdata *driver_data;
 	struct exynos_drm_ipp_formats *formats;
 	struct gsc_context *ctx;
 	int num_formats, ret, i, j;
@@ -1227,7 +1226,7 @@ static int gsc_probe(struct platform_device *pdev)
 	if (!ctx)
 		return -ENOMEM;
 
-	driver_data = device_get_match_data(dev);
+	driver_data = (struct gsc_driverdata *)of_device_get_match_data(dev);
 	ctx->dev = dev;
 	ctx->num_clocks = driver_data->num_clocks;
 	ctx->clk_names = driver_data->clk_names;
@@ -1427,6 +1426,6 @@ struct platform_driver gsc_driver = {
 		.name	= "exynos-drm-gsc",
 		.owner	= THIS_MODULE,
 		.pm	= &gsc_pm_ops,
-		.of_match_table = exynos_drm_gsc_of_match,
+		.of_match_table = of_match_ptr(exynos_drm_gsc_of_match),
 	},
 };

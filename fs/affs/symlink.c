@@ -13,9 +13,10 @@
 
 static int affs_symlink_read_folio(struct file *file, struct folio *folio)
 {
+	struct page *page = &folio->page;
 	struct buffer_head *bh;
-	struct inode *inode = folio->mapping->host;
-	char *link = folio_address(folio);
+	struct inode *inode = page->mapping->host;
+	char *link = page_address(page);
 	struct slink_front *lf;
 	int			 i, j;
 	char			 c;
@@ -57,11 +58,12 @@ static int affs_symlink_read_folio(struct file *file, struct folio *folio)
 	}
 	link[i] = '\0';
 	affs_brelse(bh);
-	folio_mark_uptodate(folio);
-	folio_unlock(folio);
+	SetPageUptodate(page);
+	unlock_page(page);
 	return 0;
 fail:
-	folio_unlock(folio);
+	SetPageError(page);
+	unlock_page(page);
 	return -EIO;
 }
 

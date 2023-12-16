@@ -81,7 +81,6 @@ struct bnxt_en_dev {
 							 * mode only. Will be
 							 * updated in resume.
 							 */
-	void __iomem                    *bar0;
 };
 
 static inline bool bnxt_ulp_registered(struct bnxt_en_dev *edev)

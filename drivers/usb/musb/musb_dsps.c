@@ -26,7 +26,9 @@
 #include <linux/sizes.h>
 
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/usb/of.h>
 
 #include <linux/debugfs.h>
@@ -849,7 +851,7 @@ static int dsps_setup_optional_vbus_irq(struct platform_device *pdev,
 
 	error = devm_request_threaded_irq(glue->dev, glue->vbus_irq,
 					  NULL, dsps_vbus_threaded_irq,
-					  IRQF_SHARED,
+					  IRQF_ONESHOT,
 					  "vbus", glue);
 	if (error) {
 		glue->vbus_irq = 0;

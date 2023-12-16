@@ -477,13 +477,15 @@ fail0:
 	return ret;
 }
 
-static void isp1704_charger_remove(struct platform_device *pdev)
+static int isp1704_charger_remove(struct platform_device *pdev)
 {
 	struct isp1704_charger *isp = platform_get_drvdata(pdev);
 
 	usb_unregister_notifier(isp->phy, &isp->nb);
 	power_supply_unregister(isp->psy);
 	isp1704_charger_set_power(isp, 0);
+
+	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -501,7 +503,7 @@ static struct platform_driver isp1704_charger_driver = {
 		.of_match_table = of_match_ptr(omap_isp1704_of_match),
 	},
 	.probe = isp1704_charger_probe,
-	.remove_new = isp1704_charger_remove,
+	.remove = isp1704_charger_remove,
 };
 
 module_platform_driver(isp1704_charger_driver);

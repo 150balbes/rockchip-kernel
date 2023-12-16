@@ -144,4 +144,9 @@ static inline void set_page_idle(struct page *page)
 {
 	folio_set_idle(page_folio(page));
 }
+
+static inline void clear_page_idle(struct page *page)
+{
+	folio_clear_idle(page_folio(page));
+}
 #endif /* _LINUX_MM_PAGE_IDLE_H */

@@ -13,7 +13,9 @@
 #include <linux/export.h>
 #include <linux/mod_devicetable.h>
 #include <linux/pci.h>
-#include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/atomic.h>
 
 #include <asm/errno.h>

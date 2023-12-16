@@ -22,7 +22,6 @@
 #include "priv.h"
 
 #include <core/memory.h>
-#include <subdev/gsp.h>
 #include <subdev/mc.h>
 #include <subdev/mmu.h>
 #include <subdev/vfn.h>
@@ -176,12 +175,7 @@ int
 tu102_fault_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 		struct nvkm_fault **pfault)
 {
-	int ret;
-
-	if (nvkm_gsp_rm(device->gsp))
-		return -ENODEV;
-
-	ret = nvkm_fault_new_(&tu102_fault, device, type, inst, pfault);
+	int ret = nvkm_fault_new_(&tu102_fault, device, type, inst, pfault);
 	if (ret)
 		return ret;
 

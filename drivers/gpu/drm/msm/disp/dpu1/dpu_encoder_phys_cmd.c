@@ -50,7 +50,6 @@ static void _dpu_encoder_phys_cmd_update_intf_cfg(
 			to_dpu_encoder_phys_cmd(phys_enc);
 	struct dpu_hw_ctl *ctl;
 	struct dpu_hw_intf_cfg intf_cfg = { 0 };
-	struct dpu_hw_intf_cmd_mode_cfg cmd_mode_cfg = {};
 
 	ctl = phys_enc->hw_ctl;
 	if (!ctl->ops.setup_intf_cfg)
@@ -69,16 +68,11 @@ static void _dpu_encoder_phys_cmd_update_intf_cfg(
 				phys_enc->hw_intf,
 				phys_enc->hw_pp->idx);
 
-	if (intf_cfg.dsc != 0)
-		cmd_mode_cfg.data_compress = true;
-
-	cmd_mode_cfg.wide_bus_en = dpu_encoder_is_widebus_enabled(phys_enc->parent);
-
-	if (phys_enc->hw_intf->ops.program_intf_cmd_cfg)
-		phys_enc->hw_intf->ops.program_intf_cmd_cfg(phys_enc->hw_intf, &cmd_mode_cfg);
+	if (intf_cfg.dsc != 0 && phys_enc->hw_intf->ops.enable_compression)
+		phys_enc->hw_intf->ops.enable_compression(phys_enc->hw_intf);
 }
 
-static void dpu_encoder_phys_cmd_pp_tx_done_irq(void *arg)
+static void dpu_encoder_phys_cmd_pp_tx_done_irq(void *arg, int irq_idx)
 {
 	struct dpu_encoder_phys *phys_enc = arg;
 	unsigned long lock_flags;
@@ -105,10 +99,18 @@ static void dpu_encoder_phys_cmd_pp_tx_done_irq(void *arg)
 	DPU_ATRACE_END("pp_done_irq");
 }
 
-static void dpu_encoder_phys_cmd_te_rd_ptr_irq(void *arg)
+static void dpu_encoder_phys_cmd_te_rd_ptr_irq(void *arg, int irq_idx)
 {
 	struct dpu_encoder_phys *phys_enc = arg;
 	struct dpu_encoder_phys_cmd *cmd_enc;
+
+	if (phys_enc->has_intf_te) {
+		if (!phys_enc->hw_intf)
+			return;
+	} else {
+		if (!phys_enc->hw_pp)
+			return;
+	}
 
 	DPU_ATRACE_BEGIN("rd_ptr_irq");
 	cmd_enc = to_dpu_encoder_phys_cmd(phys_enc);
@@ -120,7 +122,7 @@ static void dpu_encoder_phys_cmd_te_rd_ptr_irq(void *arg)
 	DPU_ATRACE_END("rd_ptr_irq");
 }
 
-static void dpu_encoder_phys_cmd_ctl_start_irq(void *arg)
+static void dpu_encoder_phys_cmd_ctl_start_irq(void *arg, int irq_idx)
 {
 	struct dpu_encoder_phys *phys_enc = arg;
 
@@ -133,7 +135,7 @@ static void dpu_encoder_phys_cmd_ctl_start_irq(void *arg)
 	DPU_ATRACE_END("ctl_start_irq");
 }
 
-static void dpu_encoder_phys_cmd_underrun_irq(void *arg)
+static void dpu_encoder_phys_cmd_underrun_irq(void *arg, int irq_idx)
 {
 	struct dpu_encoder_phys *phys_enc = arg;
 
@@ -327,20 +329,23 @@ static void dpu_encoder_phys_cmd_tearcheck_config(
 	unsigned long vsync_hz;
 	struct dpu_kms *dpu_kms;
 
-	/*
-	 * TODO: if/when resource allocation is refactored, move this to a
-	 * place where the driver can actually return an error.
-	 */
-	if (!phys_enc->has_intf_te &&
-	    (!phys_enc->hw_pp ||
-	     !phys_enc->hw_pp->ops.enable_tearcheck)) {
-		DPU_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
-		return;
-	}
+	if (phys_enc->has_intf_te) {
+		if (!phys_enc->hw_intf ||
+		    !phys_enc->hw_intf->ops.enable_tearcheck) {
+			DPU_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
+			return;
+		}
 
-	DPU_DEBUG_CMDENC(cmd_enc, "intf %d pp %d\n",
-			 phys_enc->hw_intf ? phys_enc->hw_intf->idx - INTF_0 : -1,
-			 phys_enc->hw_pp ? phys_enc->hw_pp->idx - PINGPONG_0 : -1);
+		DPU_DEBUG_CMDENC(cmd_enc, "");
+	} else {
+		if (!phys_enc->hw_pp ||
+		    !phys_enc->hw_pp->ops.enable_tearcheck) {
+			DPU_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
+			return;
+		}
+
+		DPU_DEBUG_CMDENC(cmd_enc, "pp %d\n", phys_enc->hw_pp->idx - PINGPONG_0);
+	}
 
 	mode = &phys_enc->cached_mode;
 
@@ -767,19 +772,8 @@ struct dpu_encoder_phys *dpu_encoder_phys_cmd_init(
 	phys_enc->intf_mode = INTF_MODE_CMD;
 	cmd_enc->stream_sel = 0;
 
-	if (!phys_enc->hw_intf) {
-		DPU_ERROR_CMDENC(cmd_enc, "no INTF provided\n");
-		return ERR_PTR(-EINVAL);
-	}
-
-	/* DPU before 5.0 use PINGPONG for TE handling */
-	if (phys_enc->dpu_kms->catalog->mdss_ver->core_major_ver >= 5)
-		phys_enc->has_intf_te = true;
-
-	if (phys_enc->has_intf_te && !phys_enc->hw_intf->ops.enable_tearcheck) {
-		DPU_ERROR_CMDENC(cmd_enc, "tearcheck not supported\n");
-		return ERR_PTR(-EINVAL);
-	}
+	phys_enc->has_intf_te = test_bit(DPU_INTF_TE,
+					 &phys_enc->hw_intf->cap->features);
 
 	atomic_set(&cmd_enc->pending_vblank_cnt, 0);
 	init_waitqueue_head(&cmd_enc->pending_vblank_wq);

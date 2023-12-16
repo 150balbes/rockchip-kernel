@@ -33,8 +33,7 @@
 	chassis-type = "convertible";
 
 	aliases {
-		serial0 = &uart9;
-		serial1 = &uart6;
+		hsuart0 = &uart6;
 	};
 
 	gpio-keys {
@@ -81,46 +80,11 @@
 		};
 	};
 
-	sw_edp_1p2: edp-1p2-regulator {
-		compatible = "regulator-fixed";
-		regulator-name = "sw_edp_1p2";
-
-		regulator-min-microvolt = <1200000>;
-		regulator-max-microvolt = <1200000>;
-
-		pinctrl-0 = <&sw_edp_1p2_en>;
-		pinctrl-names = "default";
-
-		gpio = <&pm8998_gpios 9 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-
-		vin-supply = <&vreg_l2a_1p2>;
-	};
-
 	sn65dsi86_refclk: sn65dsi86-refclk {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 
 		clock-frequency = <19200000>;
-	};
-
-	vph_pwr: regulator-vph-pwr {
-		compatible = "regulator-fixed";
-		regulator-name = "vph_pwr";
-		regulator-min-microvolt = <3700000>;
-		regulator-max-microvolt = <3700000>;
-	};
-
-	vlcm_3v3: regulator-vlcm-3v3 {
-		compatible = "regulator-fixed";
-		regulator-name = "vlcm_3v3";
-
-		vin-supply = <&vph_pwr>;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-
-		gpio = <&tlmm 88 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
 	};
 
 	backlight: backlight {
@@ -423,8 +387,6 @@
 
 		enable-gpios = <&tlmm 96 GPIO_ACTIVE_HIGH>;
 
-		vcca-supply = <&sw_edp_1p2>;
-		vcc-supply = <&sw_edp_1p2>;
 		vpll-supply = <&vreg_l14a_1p88>;
 		vccio-supply = <&vreg_l14a_1p88>;
 
@@ -457,7 +419,6 @@
 			panel: panel {
 				compatible = "boe,nv133fhm-n61";
 				backlight = <&backlight>;
-				power-supply = <&vlcm_3v3>;
 
 				port {
 					panel_in_edp: endpoint {
@@ -517,16 +478,6 @@
 &mss_pil {
 	status = "okay";
 	firmware-name = "qcom/sdm850/LENOVO/81JL/qcdsp1v2850.mbn", "qcom/sdm850/LENOVO/81JL/qcdsp2850.mbn";
-};
-
-&pm8998_gpios {
-	/* This pin is pulled down by a fixed resistor */
-	sw_edp_1p2_en: pm8998-gpio9-state {
-		pins = "gpio9";
-		function = "normal";
-		bias-disable;
-		qcom,drive-strength = <0>;
-	};
 };
 
 &qup_i2c10_default {
@@ -707,10 +658,6 @@
 	};
 };
 
-&uart9 {
-	status = "okay";
-};
-
 &ufs_mem_hc {
 	status = "okay";
 
@@ -832,5 +779,5 @@
 
 &crypto {
 	/* FIXME: qce_start triggers an SError */
-	status = "disabled";
+	status = "disable";
 };

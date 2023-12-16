@@ -314,18 +314,16 @@
 };
 
 &pm6150_adc {
-	channel@4e {
+	thermistor@4e {
 		reg = <ADC5_AMUX_THM2_100K_PU>;
 		qcom,ratiometric;
 		qcom,hw-settle-time = <200>;
-		label = "thermistor";
 	};
 
-	channel@4f {
+	charger-thermistor@4f {
 		reg = <ADC5_AMUX_THM3_100K_PU>;
 		qcom,ratiometric;
 		qcom,hw-settle-time = <200>;
-		label = "charger_thermistor";
 	};
 };
 

@@ -43,10 +43,6 @@ struct io_uring_sqe {
 	union {
 		__u64	addr;	/* pointer to buffer or iovecs */
 		__u64	splice_off_in;
-		struct {
-			__u32	level;
-			__u32	optname;
-		};
 	};
 	__u32	len;		/* buffer size or number of iovecs */
 	union {
@@ -69,8 +65,6 @@ struct io_uring_sqe {
 		__u32		xattr_flags;
 		__u32		msg_ring_flags;
 		__u32		uring_cmd_flags;
-		__u32		waitid_flags;
-		__u32		futex_flags;
 	};
 	__u64	user_data;	/* data to be passed back at completion time */
 	/* pack this to avoid bogus arm OABI complaints */
@@ -85,7 +79,6 @@ struct io_uring_sqe {
 	union {
 		__s32	splice_fd_in;
 		__u32	file_index;
-		__u32	optlen;
 		struct {
 			__u16	addr_len;
 			__u16	__pad3[1];
@@ -96,7 +89,6 @@ struct io_uring_sqe {
 			__u64	addr3;
 			__u64	__pad2[1];
 		};
-		__u64	optval;
 		/*
 		 * If the ring is initialized with IORING_SETUP_SQE128, then
 		 * this field is used for 80 bytes of arbitrary command data
@@ -193,11 +185,6 @@ enum {
  */
 #define IORING_SETUP_REGISTERED_FD_ONLY	(1U << 15)
 
-/*
- * Removes indirection through the SQ index array.
- */
-#define IORING_SETUP_NO_SQARRAY		(1U << 16)
-
 enum io_uring_op {
 	IORING_OP_NOP,
 	IORING_OP_READV,
@@ -248,23 +235,19 @@ enum io_uring_op {
 	IORING_OP_URING_CMD,
 	IORING_OP_SEND_ZC,
 	IORING_OP_SENDMSG_ZC,
-	IORING_OP_READ_MULTISHOT,
-	IORING_OP_WAITID,
-	IORING_OP_FUTEX_WAIT,
-	IORING_OP_FUTEX_WAKE,
-	IORING_OP_FUTEX_WAITV,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
 };
 
 /*
- * sqe->uring_cmd_flags		top 8bits aren't available for userspace
+ * sqe->uring_cmd_flags
  * IORING_URING_CMD_FIXED	use registered buffer; pass this flag
  *				along with setting sqe->buf_index.
+ * IORING_URING_CMD_POLLED	driver use only
  */
 #define IORING_URING_CMD_FIXED	(1U << 0)
-#define IORING_URING_CMD_MASK	IORING_URING_CMD_FIXED
+#define IORING_URING_CMD_POLLED	(1U << 31)
 
 
 /*
@@ -316,15 +299,11 @@ enum io_uring_op {
  *				request 'user_data'
  * IORING_ASYNC_CANCEL_ANY	Match any request
  * IORING_ASYNC_CANCEL_FD_FIXED	'fd' passed in is a fixed descriptor
- * IORING_ASYNC_CANCEL_USERDATA	Match on user_data, default for no other key
- * IORING_ASYNC_CANCEL_OP	Match request based on opcode
  */
 #define IORING_ASYNC_CANCEL_ALL	(1U << 0)
 #define IORING_ASYNC_CANCEL_FD	(1U << 1)
 #define IORING_ASYNC_CANCEL_ANY	(1U << 2)
 #define IORING_ASYNC_CANCEL_FD_FIXED	(1U << 3)
-#define IORING_ASYNC_CANCEL_USERDATA	(1U << 4)
-#define IORING_ASYNC_CANCEL_OP	(1U << 5)
 
 /*
  * send/sendmsg and recv/recvmsg flags (sqe->ioprio)
@@ -718,9 +697,7 @@ struct io_uring_sync_cancel_reg {
 	__s32				fd;
 	__u32				flags;
 	struct __kernel_timespec	timeout;
-	__u8				opcode;
-	__u8				pad[7];
-	__u64				pad2[3];
+	__u64				pad[4];
 };
 
 /*
@@ -738,16 +715,6 @@ struct io_uring_recvmsg_out {
 	__u32 controllen;
 	__u32 payloadlen;
 	__u32 flags;
-};
-
-/*
- * Argument for IORING_OP_URING_CMD when file is a socket
- */
-enum {
-	SOCKET_URING_OP_SIOCINQ		= 0,
-	SOCKET_URING_OP_SIOCOUTQ,
-	SOCKET_URING_OP_GETSOCKOPT,
-	SOCKET_URING_OP_SETSOCKOPT,
 };
 
 #ifdef __cplusplus

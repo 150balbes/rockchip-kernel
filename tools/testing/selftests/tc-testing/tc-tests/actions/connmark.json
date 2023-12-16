@@ -6,9 +6,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -33,9 +30,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -60,9 +54,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -87,9 +78,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -114,9 +102,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -141,9 +126,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -168,9 +150,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -195,9 +174,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -222,9 +198,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -249,9 +222,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -276,9 +246,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -304,9 +271,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -331,9 +295,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -359,9 +320,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",
@@ -387,9 +345,6 @@
             "actions",
             "connmark"
         ],
-        "plugins": {
-           "requires": "nsPlugin"
-        },
         "setup": [
             [
                 "$TC actions flush action connmark",

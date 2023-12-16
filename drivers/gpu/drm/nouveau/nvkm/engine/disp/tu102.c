@@ -25,7 +25,6 @@
 #include "ior.h"
 
 #include <core/gpuobj.h>
-#include <subdev/gsp.h>
 #include <subdev/timer.h>
 
 #include <nvif/class.h>
@@ -234,8 +233,5 @@ int
 tu102_disp_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 	       struct nvkm_disp **pdisp)
 {
-	if (nvkm_gsp_rm(device->gsp))
-		return r535_disp_new(&tu102_disp, device, type, inst, pdisp);
-
 	return nvkm_disp_new_(&tu102_disp, device, type, inst, pdisp);
 }

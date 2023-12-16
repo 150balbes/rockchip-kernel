@@ -34,12 +34,12 @@ gv100_gsp_flcn = {
 	.dmem_pio = &gm200_flcn_dmem_pio,
 };
 
-const struct nvkm_gsp_func
+static const struct nvkm_gsp_func
 gv100_gsp = {
 	.flcn = &gv100_gsp_flcn,
 };
 
-int
+static int
 gv100_gsp_nofw(struct nvkm_gsp *gsp, int ver, const struct nvkm_gsp_fwif *fwif)
 {
 	return 0;

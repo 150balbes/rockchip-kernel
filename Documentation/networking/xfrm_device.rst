@@ -1,5 +1,4 @@
 .. SPDX-License-Identifier: GPL-2.0
-.. _xfrm_device:
 
 ===============================================
 XFRM device - offloading the IPsec computations

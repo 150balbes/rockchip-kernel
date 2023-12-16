@@ -11,11 +11,9 @@
 #include <linux/msi.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
-#include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
-#include <linux/property.h>
+#include <linux/of_platform.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
 #include <linux/seq_file.h>
@@ -394,6 +392,7 @@ static int fsl_msi_setup_hwirq(struct fsl_msi *msi, struct platform_device *dev,
 static const struct of_device_id fsl_of_msi_ids[];
 static int fsl_of_msi_probe(struct platform_device *dev)
 {
+	const struct of_device_id *match;
 	struct fsl_msi *msi;
 	struct resource res, msiir;
 	int err, i, j, irq_index, count;
@@ -403,7 +402,10 @@ static int fsl_of_msi_probe(struct platform_device *dev)
 	u32 offset;
 	struct pci_controller *phb;
 
-	features = device_get_match_data(&dev->dev);
+	match = of_match_device(fsl_of_msi_ids, &dev->dev);
+	if (!match)
+		return -EINVAL;
+	features = match->data;
 
 	printk(KERN_DEBUG "Setting up Freescale MSI support\n");
 

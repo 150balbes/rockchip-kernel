@@ -401,7 +401,7 @@ static int hyp_set_prot_attr(enum kvm_pgtable_prot prot, kvm_pte_t *ptep)
 		if (device)
 			return -EINVAL;
 
-		if (system_supports_bti_kernel())
+		if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) && system_supports_bti())
 			attr |= KVM_PTE_LEAF_ATTR_HI_S1_GP;
 	} else {
 		attr |= KVM_PTE_LEAF_ATTR_HI_S1_XN;
@@ -664,30 +664,10 @@ u64 kvm_get_vtcr(u64 mmfr0, u64 mmfr1, u32 phys_shift)
 
 static bool stage2_has_fwb(struct kvm_pgtable *pgt)
 {
-	if (!cpus_have_final_cap(ARM64_HAS_STAGE2_FWB))
+	if (!cpus_have_const_cap(ARM64_HAS_STAGE2_FWB))
 		return false;
 
 	return !(pgt->flags & KVM_PGTABLE_S2_NOFWB);
-}
-
-void kvm_tlb_flush_vmid_range(struct kvm_s2_mmu *mmu,
-				phys_addr_t addr, size_t size)
-{
-	unsigned long pages, inval_pages;
-
-	if (!system_supports_tlb_range()) {
-		kvm_call_hyp(__kvm_tlb_flush_vmid, mmu);
-		return;
-	}
-
-	pages = size >> PAGE_SHIFT;
-	while (pages > 0) {
-		inval_pages = min(pages, MAX_TLBI_RANGE_PAGES);
-		kvm_call_hyp(__kvm_tlb_flush_vmid_range, mmu, addr, inval_pages);
-
-		addr += inval_pages << PAGE_SHIFT;
-		pages -= inval_pages;
-	}
 }
 
 #define KVM_S2_MEMATTR(pgt, attr) PAGE_S2_MEMATTR(attr, stage2_has_fwb(pgt))
@@ -806,8 +786,7 @@ static bool stage2_try_break_pte(const struct kvm_pgtable_visit_ctx *ctx,
 		 * evicted pte value (if any).
 		 */
 		if (kvm_pte_table(ctx->old, ctx->level))
-			kvm_tlb_flush_vmid_range(mmu, ctx->addr,
-						kvm_granule_size(ctx->level));
+			kvm_call_hyp(__kvm_tlb_flush_vmid, mmu);
 		else if (kvm_pte_valid(ctx->old))
 			kvm_call_hyp(__kvm_tlb_flush_vmid_ipa, mmu,
 				     ctx->addr, ctx->level);
@@ -831,36 +810,16 @@ static void stage2_make_pte(const struct kvm_pgtable_visit_ctx *ctx, kvm_pte_t n
 	smp_store_release(ctx->ptep, new);
 }
 
-static bool stage2_unmap_defer_tlb_flush(struct kvm_pgtable *pgt)
+static void stage2_put_pte(const struct kvm_pgtable_visit_ctx *ctx, struct kvm_s2_mmu *mmu,
+			   struct kvm_pgtable_mm_ops *mm_ops)
 {
 	/*
-	 * If FEAT_TLBIRANGE is implemented, defer the individual
-	 * TLB invalidations until the entire walk is finished, and
-	 * then use the range-based TLBI instructions to do the
-	 * invalidations. Condition deferred TLB invalidation on the
-	 * system supporting FWB as the optimization is entirely
-	 * pointless when the unmap walker needs to perform CMOs.
-	 */
-	return system_supports_tlb_range() && stage2_has_fwb(pgt);
-}
-
-static void stage2_unmap_put_pte(const struct kvm_pgtable_visit_ctx *ctx,
-				struct kvm_s2_mmu *mmu,
-				struct kvm_pgtable_mm_ops *mm_ops)
-{
-	struct kvm_pgtable *pgt = ctx->arg;
-
-	/*
-	 * Clear the existing PTE, and perform break-before-make if it was
-	 * valid. Depending on the system support, defer the TLB maintenance
-	 * for the same until the entire unmap walk is completed.
+	 * Clear the existing PTE, and perform break-before-make with
+	 * TLB maintenance if it was valid.
 	 */
 	if (kvm_pte_valid(ctx->old)) {
 		kvm_clear_pte(ctx->ptep);
-
-		if (!stage2_unmap_defer_tlb_flush(pgt))
-			kvm_call_hyp(__kvm_tlb_flush_vmid_ipa, mmu,
-					ctx->addr, ctx->level);
+		kvm_call_hyp(__kvm_tlb_flush_vmid_ipa, mmu, ctx->addr, ctx->level);
 	}
 
 	mm_ops->put_page(ctx->ptep);
@@ -1118,7 +1077,7 @@ static int stage2_unmap_walker(const struct kvm_pgtable_visit_ctx *ctx,
 	 * block entry and rely on the remaining portions being faulted
 	 * back lazily.
 	 */
-	stage2_unmap_put_pte(ctx, mmu, mm_ops);
+	stage2_put_pte(ctx, mmu, mm_ops);
 
 	if (need_flush && mm_ops->dcache_clean_inval_poc)
 		mm_ops->dcache_clean_inval_poc(kvm_pte_follow(ctx->old, mm_ops),
@@ -1132,19 +1091,13 @@ static int stage2_unmap_walker(const struct kvm_pgtable_visit_ctx *ctx,
 
 int kvm_pgtable_stage2_unmap(struct kvm_pgtable *pgt, u64 addr, u64 size)
 {
-	int ret;
 	struct kvm_pgtable_walker walker = {
 		.cb	= stage2_unmap_walker,
 		.arg	= pgt,
 		.flags	= KVM_PGTABLE_WALK_LEAF | KVM_PGTABLE_WALK_TABLE_POST,
 	};
 
-	ret = kvm_pgtable_walk(pgt, addr, size, &walker);
-	if (stage2_unmap_defer_tlb_flush(pgt))
-		/* Perform the deferred TLB invalidations */
-		kvm_tlb_flush_vmid_range(pgt->mmu, addr, size);
-
-	return ret;
+	return kvm_pgtable_walk(pgt, addr, size, &walker);
 }
 
 struct stage2_attr_data {
@@ -1242,54 +1195,25 @@ kvm_pte_t kvm_pgtable_stage2_mkyoung(struct kvm_pgtable *pgt, u64 addr)
 	return pte;
 }
 
-struct stage2_age_data {
-	bool	mkold;
-	bool	young;
-};
-
-static int stage2_age_walker(const struct kvm_pgtable_visit_ctx *ctx,
-			     enum kvm_pgtable_walk_flags visit)
+kvm_pte_t kvm_pgtable_stage2_mkold(struct kvm_pgtable *pgt, u64 addr)
 {
-	kvm_pte_t new = ctx->old & ~KVM_PTE_LEAF_ATTR_LO_S2_AF;
-	struct stage2_age_data *data = ctx->arg;
-
-	if (!kvm_pte_valid(ctx->old) || new == ctx->old)
-		return 0;
-
-	data->young = true;
-
-	/*
-	 * stage2_age_walker() is always called while holding the MMU lock for
-	 * write, so this will always succeed. Nonetheless, this deliberately
-	 * follows the race detection pattern of the other stage-2 walkers in
-	 * case the locking mechanics of the MMU notifiers is ever changed.
-	 */
-	if (data->mkold && !stage2_try_set_pte(ctx, new))
-		return -EAGAIN;
-
+	kvm_pte_t pte = 0;
+	stage2_update_leaf_attrs(pgt, addr, 1, 0, KVM_PTE_LEAF_ATTR_LO_S2_AF,
+				 &pte, NULL, 0);
 	/*
 	 * "But where's the TLBI?!", you scream.
 	 * "Over in the core code", I sigh.
 	 *
 	 * See the '->clear_flush_young()' callback on the KVM mmu notifier.
 	 */
-	return 0;
+	return pte;
 }
 
-bool kvm_pgtable_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr,
-					 u64 size, bool mkold)
+bool kvm_pgtable_stage2_is_young(struct kvm_pgtable *pgt, u64 addr)
 {
-	struct stage2_age_data data = {
-		.mkold		= mkold,
-	};
-	struct kvm_pgtable_walker walker = {
-		.cb		= stage2_age_walker,
-		.arg		= &data,
-		.flags		= KVM_PGTABLE_WALK_LEAF,
-	};
-
-	WARN_ON(kvm_pgtable_walk(pgt, addr, size, &walker));
-	return data.young;
+	kvm_pte_t pte = 0;
+	stage2_update_leaf_attrs(pgt, addr, 1, 0, 0, &pte, NULL, 0);
+	return pte & KVM_PTE_LEAF_ATTR_LO_S2_AF;
 }
 
 int kvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr,
@@ -1314,7 +1238,7 @@ int kvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr,
 	ret = stage2_update_leaf_attrs(pgt, addr, 1, set, clr, NULL, &level,
 				       KVM_PGTABLE_WALK_HANDLE_FAULT |
 				       KVM_PGTABLE_WALK_SHARED);
-	if (!ret || ret == -EAGAIN)
+	if (!ret)
 		kvm_call_hyp(__kvm_tlb_flush_vmid_ipa_nsh, pgt->mmu, addr, level);
 	return ret;
 }
@@ -1511,7 +1435,7 @@ int __kvm_pgtable_stage2_init(struct kvm_pgtable *pgt, struct kvm_s2_mmu *mmu,
 			      kvm_pgtable_force_pte_cb_t force_pte_cb)
 {
 	size_t pgd_sz;
-	u64 vtcr = mmu->vtcr;
+	u64 vtcr = mmu->arch->vtcr;
 	u32 ia_bits = VTCR_EL2_IPA(vtcr);
 	u32 sl0 = FIELD_GET(VTCR_EL2_SL0_MASK, vtcr);
 	u32 start_level = VTCR_EL2_TGRAN_SL0_BASE - sl0;

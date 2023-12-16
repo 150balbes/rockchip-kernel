@@ -15,6 +15,7 @@
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
 #include <sound/pcm.h>
@@ -562,12 +563,19 @@ static int cs4271_component_probe(struct snd_soc_component *component)
 	struct cs4271_private *cs4271 = snd_soc_component_get_drvdata(component);
 	struct cs4271_platform_data *cs4271plat = component->dev->platform_data;
 	int ret;
-	bool amutec_eq_bmutec;
+	bool amutec_eq_bmutec = false;
 
-	amutec_eq_bmutec = of_property_read_bool(component->dev->of_node,
-						 "cirrus,amutec-eq-bmutec");
-	cs4271->enable_soft_reset = of_property_read_bool(component->dev->of_node,
-							  "cirrus,enable-soft-reset");
+#ifdef CONFIG_OF
+	if (of_match_device(cs4271_dt_ids, component->dev)) {
+		if (of_get_property(component->dev->of_node,
+				     "cirrus,amutec-eq-bmutec", NULL))
+			amutec_eq_bmutec = true;
+
+		if (of_get_property(component->dev->of_node,
+				     "cirrus,enable-soft-reset", NULL))
+			cs4271->enable_soft_reset = true;
+	}
+#endif
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(cs4271->supplies),
 				    cs4271->supplies);
@@ -647,7 +655,9 @@ static int cs4271_common_probe(struct device *dev,
 	if (!cs4271)
 		return -ENOMEM;
 
-	cs4271->gpio_nreset = of_get_named_gpio(dev->of_node, "reset-gpio", 0);
+	if (of_match_device(cs4271_dt_ids, dev))
+		cs4271->gpio_nreset =
+			of_get_named_gpio(dev->of_node, "reset-gpio", 0);
 
 	if (cs4271plat)
 		cs4271->gpio_nreset = cs4271plat->gpio_nreset;

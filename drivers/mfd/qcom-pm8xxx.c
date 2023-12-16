@@ -103,9 +103,8 @@ static int
 pm8xxx_config_irq(struct pm_irq_chip *chip, unsigned int bp, unsigned int cp)
 {
 	int	rc;
-	unsigned long flags;
 
-	spin_lock_irqsave(&chip->pm_irq_lock, flags);
+	spin_lock(&chip->pm_irq_lock);
 	rc = regmap_write(chip->regmap, SSBI_REG_ADDR_IRQ_BLK_SEL, bp);
 	if (rc) {
 		pr_err("Failed Selecting Block %d rc=%d\n", bp, rc);
@@ -117,7 +116,7 @@ pm8xxx_config_irq(struct pm_irq_chip *chip, unsigned int bp, unsigned int cp)
 	if (rc)
 		pr_err("Failed Configuring IRQ rc=%d\n", rc);
 bail:
-	spin_unlock_irqrestore(&chip->pm_irq_lock, flags);
+	spin_unlock(&chip->pm_irq_lock);
 	return rc;
 }
 
@@ -322,7 +321,6 @@ static int pm8xxx_irq_get_irqchip_state(struct irq_data *d,
 	struct pm_irq_chip *chip = irq_data_get_irq_chip_data(d);
 	unsigned int pmirq = irqd_to_hwirq(d);
 	unsigned int bits;
-	unsigned long flags;
 	int irq_bit;
 	u8 block;
 	int rc;
@@ -333,7 +331,7 @@ static int pm8xxx_irq_get_irqchip_state(struct irq_data *d,
 	block = pmirq / 8;
 	irq_bit = pmirq % 8;
 
-	spin_lock_irqsave(&chip->pm_irq_lock, flags);
+	spin_lock(&chip->pm_irq_lock);
 	rc = regmap_write(chip->regmap, SSBI_REG_ADDR_IRQ_BLK_SEL, block);
 	if (rc) {
 		pr_err("Failed Selecting Block %d rc=%d\n", block, rc);
@@ -348,7 +346,7 @@ static int pm8xxx_irq_get_irqchip_state(struct irq_data *d,
 
 	*state = !!(bits & BIT(irq_bit));
 bail:
-	spin_unlock_irqrestore(&chip->pm_irq_lock, flags);
+	spin_unlock(&chip->pm_irq_lock);
 
 	return rc;
 }

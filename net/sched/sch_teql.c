@@ -523,4 +523,3 @@ module_init(teql_init);
 module_exit(teql_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("True (or trivial) link equalizer qdisc");

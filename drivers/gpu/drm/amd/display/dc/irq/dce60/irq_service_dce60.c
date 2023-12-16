@@ -73,27 +73,27 @@ static bool hpd_ack(
 	return true;
 }
 
-static struct irq_source_info_funcs hpd_irq_info_funcs  = {
+static const struct irq_source_info_funcs hpd_irq_info_funcs = {
 	.set = NULL,
 	.ack = hpd_ack
 };
 
-static struct irq_source_info_funcs hpd_rx_irq_info_funcs = {
+static const struct irq_source_info_funcs hpd_rx_irq_info_funcs = {
 	.set = NULL,
 	.ack = NULL
 };
 
-static struct irq_source_info_funcs pflip_irq_info_funcs = {
+static const struct irq_source_info_funcs pflip_irq_info_funcs = {
 	.set = NULL,
 	.ack = NULL
 };
 
-static struct irq_source_info_funcs vblank_irq_info_funcs = {
+static const struct irq_source_info_funcs vblank_irq_info_funcs = {
 	.set = dce110_vblank_set,
 	.ack = NULL
 };
 
-static struct irq_source_info_funcs vblank_irq_info_funcs_dce60 = {
+static const struct irq_source_info_funcs vblank_irq_info_funcs_dce60 = {
 	.set = NULL,
 	.ack = NULL
 };
@@ -192,7 +192,7 @@ static struct irq_source_info_funcs vblank_irq_info_funcs_dce60 = {
 	[DC_IRQ_SOURCE_DC ## reg_num ## UNDERFLOW] = dummy_irq_entry()
 
 
-static struct irq_source_info_funcs dummy_irq_info_funcs = {
+static const struct irq_source_info_funcs dummy_irq_info_funcs = {
 	.set = dal_irq_service_dummy_set,
 	.ack = dal_irq_service_dummy_ack
 };

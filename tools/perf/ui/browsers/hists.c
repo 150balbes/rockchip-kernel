@@ -407,6 +407,11 @@ static bool hist_browser__selection_has_children(struct hist_browser *browser)
 	return container_of(ms, struct callchain_list, ms)->has_children;
 }
 
+static bool hist_browser__he_selection_unfolded(struct hist_browser *browser)
+{
+	return browser->he_selection ? browser->he_selection->unfolded : false;
+}
+
 static bool hist_browser__selection_unfolded(struct hist_browser *browser)
 {
 	struct hist_entry *he = browser->he_selection;
@@ -579,8 +584,8 @@ static int hierarchy_set_folding(struct hist_browser *hb, struct hist_entry *he,
 	return n;
 }
 
-static void hist_entry__set_folding(struct hist_entry *he,
-				    struct hist_browser *hb, bool unfold)
+static void __hist_entry__set_folding(struct hist_entry *he,
+				      struct hist_browser *hb, bool unfold)
 {
 	hist_entry__init_have_children(he);
 	he->unfolded = unfold ? he->has_children : false;
@@ -598,12 +603,34 @@ static void hist_entry__set_folding(struct hist_entry *he,
 		he->nr_rows = 0;
 }
 
+static void hist_entry__set_folding(struct hist_entry *he,
+				    struct hist_browser *browser, bool unfold)
+{
+	double percent;
+
+	percent = hist_entry__get_percent_limit(he);
+	if (he->filtered || percent < browser->min_pcnt)
+		return;
+
+	__hist_entry__set_folding(he, browser, unfold);
+
+	if (!he->depth || unfold)
+		browser->nr_hierarchy_entries++;
+	if (he->leaf)
+		browser->nr_callchain_rows += he->nr_rows;
+	else if (unfold && !hist_entry__has_hierarchy_children(he, browser->min_pcnt)) {
+		browser->nr_hierarchy_entries++;
+		he->has_no_entry = true;
+		he->nr_rows = 1;
+	} else
+		he->has_no_entry = false;
+}
+
 static void
 __hist_browser__set_folding(struct hist_browser *browser, bool unfold)
 {
 	struct rb_node *nd;
 	struct hist_entry *he;
-	double percent;
 
 	nd = rb_first_cached(&browser->hists->entries);
 	while (nd) {
@@ -613,21 +640,6 @@ __hist_browser__set_folding(struct hist_browser *browser, bool unfold)
 		nd = __rb_hierarchy_next(nd, HMD_FORCE_CHILD);
 
 		hist_entry__set_folding(he, browser, unfold);
-
-		percent = hist_entry__get_percent_limit(he);
-		if (he->filtered || percent < browser->min_pcnt)
-			continue;
-
-		if (!he->depth || unfold)
-			browser->nr_hierarchy_entries++;
-		if (he->leaf)
-			browser->nr_callchain_rows += he->nr_rows;
-		else if (unfold && !hist_entry__has_hierarchy_children(he, browser->min_pcnt)) {
-			browser->nr_hierarchy_entries++;
-			he->has_no_entry = true;
-			he->nr_rows = 1;
-		} else
-			he->has_no_entry = false;
 	}
 }
 
@@ -647,10 +659,8 @@ static void hist_browser__set_folding_selected(struct hist_browser *browser, boo
 	if (!browser->he_selection)
 		return;
 
-	if (unfold == browser->he_selection->unfolded)
-		return;
-
-	hist_browser__toggle_fold(browser);
+	hist_entry__set_folding(browser->he_selection, browser, unfold);
+	browser->b.nr_entries = hist_browser__nr_entries(browser);
 }
 
 static void ui_browser__warn_lost_events(struct ui_browser *browser)
@@ -722,8 +732,8 @@ static int hist_browser__handle_hotkey(struct hist_browser *browser, bool warn_l
 		hist_browser__set_folding(browser, true);
 		break;
 	case 'e':
-		/* Toggle expand/collapse the selected entry. */
-		hist_browser__toggle_fold(browser);
+		/* Expand the selected entry. */
+		hist_browser__set_folding_selected(browser, !hist_browser__he_selection_unfolded(browser));
 		break;
 	case 'H':
 		browser->show_headers = !browser->show_headers;
@@ -1769,7 +1779,7 @@ static void hists_browser__hierarchy_headers(struct hist_browser *browser)
 	hists_browser__scnprintf_hierarchy_headers(browser, headers,
 						   sizeof(headers));
 
-	ui_browser__gotorc_title(&browser->b, 0, 0);
+	ui_browser__gotorc(&browser->b, 0, 0);
 	ui_browser__set_color(&browser->b, HE_COLORSET_ROOT);
 	ui_browser__write_nstring(&browser->b, headers, browser->b.width + 1);
 }
@@ -2416,12 +2426,12 @@ close_file_and_continue:
 struct popup_action {
 	unsigned long		time;
 	struct thread 		*thread;
-	struct evsel	*evsel;
-	int (*fn)(struct hist_browser *browser, struct popup_action *act);
 	struct map_symbol 	ms;
 	int			socket;
+	struct evsel	*evsel;
 	enum rstype		rstype;
 
+	int (*fn)(struct hist_browser *browser, struct popup_action *act);
 };
 
 static int
@@ -3302,7 +3312,7 @@ do_hotkey:		 // key came straight from options ui__popup_menu()
 							&options[nr_options],
 							&bi->to.ms,
 							bi->to.al_addr);
-		} else if (browser->he_selection) {
+		} else {
 			nr_options += add_annotate_opt(browser,
 						       &actions[nr_options],
 						       &options[nr_options],

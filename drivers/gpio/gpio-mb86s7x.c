@@ -10,16 +10,17 @@
 #include <linux/io.h>
 #include <linux/init.h>
 #include <linux/clk.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/ioport.h>
+#include <linux/of_device.h>
 #include <linux/gpio/driver.h>
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 
+#include "gpiolib.h"
 #include "gpiolib-acpi.h"
 
 /*
@@ -204,13 +205,15 @@ static int mb86s70_gpio_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void mb86s70_gpio_remove(struct platform_device *pdev)
+static int mb86s70_gpio_remove(struct platform_device *pdev)
 {
 	struct mb86s70_gpio_chip *gchip = platform_get_drvdata(pdev);
 
 	acpi_gpiochip_free_interrupts(&gchip->gc);
 	gpiochip_remove(&gchip->gc);
 	clk_disable_unprepare(gchip->clk);
+
+	return 0;
 }
 
 static const struct of_device_id mb86s70_gpio_dt_ids[] = {
@@ -234,7 +237,7 @@ static struct platform_driver mb86s70_gpio_driver = {
 		.acpi_match_table = ACPI_PTR(mb86s70_gpio_acpi_ids),
 	},
 	.probe = mb86s70_gpio_probe,
-	.remove_new = mb86s70_gpio_remove,
+	.remove = mb86s70_gpio_remove,
 };
 module_platform_driver(mb86s70_gpio_driver);
 

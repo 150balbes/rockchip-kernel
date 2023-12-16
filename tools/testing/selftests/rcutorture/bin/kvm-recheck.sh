@@ -13,10 +13,8 @@
 #
 # Authors: Paul E. McKenney <paulmck@linux.ibm.com>
 
-T="`mktemp ${TMPDIR-/tmp}/kvm-recheck.sh.XXXXXX`"
+T=/tmp/kvm-recheck.sh.$$
 trap 'rm -f $T' 0 2
-
-configerrors=0
 
 PATH=`pwd`/tools/testing/selftests/rcutorture/bin:$PATH; export PATH
 . functions.sh
@@ -34,7 +32,7 @@ do
 		fi
 		TORTURE_SUITE="`cat $i/../torture_suite`" ; export TORTURE_SUITE
 		configfile=`echo $i | sed -e 's,^.*/,,'`
-		rm -f $i/console.log.*.diags $i/ConfigFragment.diags
+		rm -f $i/console.log.*.diags
 		case "${TORTURE_SUITE}" in
 		X*)
 			;;
@@ -51,21 +49,8 @@ do
 			then
 				echo QEMU killed
 			fi
-			configcheck.sh $i/.config $i/ConfigFragment > $i/ConfigFragment.diags 2>&1
-			if grep -q '^CONFIG_KCSAN=y$' $i/ConfigFragment.input
-			then
-				# KCSAN forces a number of Kconfig options, so remove
-				# complaints about those Kconfig options in KCSAN runs.
-				mv $i/ConfigFragment.diags $i/ConfigFragment.diags.kcsan
-				grep -v -E 'CONFIG_PROVE_RCU|CONFIG_PREEMPT_COUNT' $i/ConfigFragment.diags.kcsan > $i/ConfigFragment.diags
-			fi
-			if test -s $i/ConfigFragment.diags
-			then
-				cat $i/ConfigFragment.diags
-				configerrors=$((configerrors+1))
-			else
-				rm $i/ConfigFragment.diags
-			fi
+			configcheck.sh $i/.config $i/ConfigFragment > $T 2>&1
+			cat $T
 			if test -r $i/Make.oldconfig.err
 			then
 				cat $i/Make.oldconfig.err
@@ -80,14 +65,7 @@ do
 			if test -f "$i/buildonly"
 			then
 				echo Build-only run, no boot/test
-				configcheck.sh $i/.config $i/ConfigFragment > $i/ConfigFragment.diags 2>&1
-				if test -s $i/ConfigFragment.diags
-				then
-					cat $i/ConfigFragment.diags
-					configerrors=$((configerrors+1))
-				else
-					rm $i/ConfigFragment.diags
-				fi
+				configcheck.sh $i/.config $i/ConfigFragment
 				parse-build.sh $i/Make.out $configfile
 			elif test -f "$i/qemu-cmd"
 			then
@@ -101,10 +79,10 @@ do
 	done
 	if test -f "$rd/kcsan.sum"
 	then
-		if ! test -f $i/ConfigFragment.diags
+		if ! test -f $T
 		then
 			:
-		elif grep -q CONFIG_KCSAN=y $i/ConfigFragment.diags
+		elif grep -q CONFIG_KCSAN=y $T
 		then
 			echo "Compiler or architecture does not support KCSAN!"
 			echo Did you forget to switch your compiler with '--kmake-arg CC=<cc-that-supports-kcsan>'?
@@ -116,23 +94,17 @@ do
 		fi
 	fi
 done
-
-if test "$configerrors" -gt 0
-then
-	echo $configerrors runs with .config errors.
-	ret=1
-fi
 EDITOR=echo kvm-find-errors.sh "${@: -1}" > $T 2>&1
 builderrors="`tr ' ' '\012' < $T | grep -c '/Make.out.diags'`"
 if test "$builderrors" -gt 0
 then
 	echo $builderrors runs with build errors.
-	ret=2
+	ret=1
 fi
 runerrors="`tr ' ' '\012' < $T | grep -c '/console.log.diags'`"
 if test "$runerrors" -gt 0
 then
 	echo $runerrors runs with runtime errors.
-	ret=3
+	ret=2
 fi
 exit $ret

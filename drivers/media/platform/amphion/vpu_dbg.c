@@ -50,13 +50,6 @@ static char *vpu_stat_name[] = {
 	[VPU_BUF_STATE_ERROR] = "error",
 };
 
-static inline const char *to_vpu_stat_name(int state)
-{
-	if (state <= VPU_BUF_STATE_ERROR)
-		return vpu_stat_name[state];
-	return "unknown";
-}
-
 static int vpu_dbg_instance(struct seq_file *s, void *data)
 {
 	struct vpu_inst *inst = s->private;
@@ -74,7 +67,7 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 	num = scnprintf(str, sizeof(str), "tgig = %d,pid = %d\n", inst->tgid, inst->pid);
 	if (seq_write(s, str, num))
 		return 0;
-	num = scnprintf(str, sizeof(str), "state = %s\n", vpu_codec_state_name(inst->state));
+	num = scnprintf(str, sizeof(str), "state = %d\n", inst->state);
 	if (seq_write(s, str, num))
 		return 0;
 	num = scnprintf(str, sizeof(str),
@@ -148,7 +141,7 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 		num = scnprintf(str, sizeof(str),
 				"output [%2d] state = %10s, %8s\n",
 				i, vb2_stat_name[vb->state],
-				to_vpu_stat_name(vpu_get_buffer_state(vbuf)));
+				vpu_stat_name[vpu_get_buffer_state(vbuf)]);
 		if (seq_write(s, str, num))
 			return 0;
 	}
@@ -163,7 +156,7 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 		num = scnprintf(str, sizeof(str),
 				"capture[%2d] state = %10s, %8s\n",
 				i, vb2_stat_name[vb->state],
-				to_vpu_stat_name(vpu_get_buffer_state(vbuf)));
+				vpu_stat_name[vpu_get_buffer_state(vbuf)]);
 		if (seq_write(s, str, num))
 			return 0;
 	}
@@ -195,9 +188,9 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 
 		if (!inst->flows[idx])
 			continue;
-		num = scnprintf(str, sizeof(str), "\t[%s] %s\n",
+		num = scnprintf(str, sizeof(str), "\t[%s]0x%x\n",
 				inst->flows[idx] >= VPU_MSG_ID_NOOP ? "M" : "C",
-				vpu_id_name(inst->flows[idx]));
+				inst->flows[idx]);
 		if (seq_write(s, str, num)) {
 			mutex_unlock(&inst->core->cmd_lock);
 			return 0;

@@ -368,8 +368,7 @@ The machine driver sets some additional parameters to the DAI link i.e.
 		.codec_name = "modem",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
-		.c2c_params = &dai_params,
-		.num_c2c_params = 1,
+		.params = &dai_params,
 	}
 	< ... more DAI links here ... >
 

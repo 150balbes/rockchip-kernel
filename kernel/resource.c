@@ -56,17 +56,33 @@ struct resource_constraint {
 
 static DEFINE_RWLOCK(resource_lock);
 
-static struct resource *next_resource(struct resource *p, bool skip_children)
+static struct resource *next_resource(struct resource *p)
 {
-	if (!skip_children && p->child)
+	if (p->child)
 		return p->child;
 	while (!p->sibling && p->parent)
 		p = p->parent;
 	return p->sibling;
 }
 
+static struct resource *next_resource_skip_children(struct resource *p)
+{
+	while (!p->sibling && p->parent)
+		p = p->parent;
+	return p->sibling;
+}
+
 #define for_each_resource(_root, _p, _skip_children) \
-	for ((_p) = (_root)->child; (_p); (_p) = next_resource(_p, _skip_children))
+	for ((_p) = (_root)->child; (_p); \
+	     (_p) = (_skip_children) ? next_resource_skip_children(_p) : \
+				       next_resource(_p))
+
+static void *r_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	struct resource *p = v;
+	(*pos)++;
+	return (void *)next_resource(p);
+}
 
 #ifdef CONFIG_PROC_FS
 
@@ -75,26 +91,12 @@ enum { MAX_IORES_LEVEL = 5 };
 static void *r_start(struct seq_file *m, loff_t *pos)
 	__acquires(resource_lock)
 {
-	struct resource *root = pde_data(file_inode(m->file));
-	struct resource *p;
-	loff_t l = *pos;
-
+	struct resource *p = pde_data(file_inode(m->file));
+	loff_t l = 0;
 	read_lock(&resource_lock);
-	for_each_resource(root, p, false) {
-		if (l-- == 0)
-			break;
-	}
-
+	for (p = p->child; p && l < *pos; p = r_next(m, p, &l))
+		;
 	return p;
-}
-
-static void *r_next(struct seq_file *m, void *v, loff_t *pos)
-{
-	struct resource *p = v;
-
-	(*pos)++;
-
-	return (void *)next_resource(p, false);
 }
 
 static void r_stop(struct seq_file *m, void *v)
@@ -334,7 +336,7 @@ static int find_next_iomem_res(resource_size_t start, resource_size_t end,
 
 	read_lock(&resource_lock);
 
-	for_each_resource(&iomem_resource, p, false) {
+	for (p = iomem_resource.child; p; p = next_resource(p)) {
 		/* If we passed the resource we are looking for, stop */
 		if (p->start > end) {
 			p = NULL;
@@ -1639,12 +1641,13 @@ __setup("reserve=", reserve_setup);
  */
 int iomem_map_sanity_check(resource_size_t addr, unsigned long size)
 {
+	struct resource *p = &iomem_resource;
 	resource_size_t end = addr + size - 1;
-	struct resource *p;
 	int err = 0;
+	loff_t l;
 
 	read_lock(&resource_lock);
-	for_each_resource(&iomem_resource, p, false) {
+	for (p = p->child; p ; p = r_next(NULL, p, &l)) {
 		/*
 		 * We can probably skip the resources without
 		 * IORESOURCE_IO attribute?

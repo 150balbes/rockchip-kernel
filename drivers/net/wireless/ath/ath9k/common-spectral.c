@@ -855,11 +855,16 @@ static ssize_t write_file_spectral_short_repeat(struct file *file,
 {
 	struct ath_spec_scan_priv *spec_priv = file->private_data;
 	unsigned long val;
-	ssize_t ret;
+	char buf[32];
+	ssize_t len;
 
-	ret = kstrtoul_from_user(user_buf, count, 0, &val);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+	if (kstrtoul(buf, 0, &val))
+		return -EINVAL;
 
 	if (val > 1)
 		return -EINVAL;
@@ -898,11 +903,17 @@ static ssize_t write_file_spectral_count(struct file *file,
 {
 	struct ath_spec_scan_priv *spec_priv = file->private_data;
 	unsigned long val;
-	ssize_t ret;
+	char buf[32];
+	ssize_t len;
 
-	ret = kstrtoul_from_user(user_buf, count, 0, &val);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+	if (kstrtoul(buf, 0, &val))
+		return -EINVAL;
+
 	if (val > 255)
 		return -EINVAL;
 
@@ -940,11 +951,16 @@ static ssize_t write_file_spectral_period(struct file *file,
 {
 	struct ath_spec_scan_priv *spec_priv = file->private_data;
 	unsigned long val;
-	ssize_t ret;
+	char buf[32];
+	ssize_t len;
 
-	ret = kstrtoul_from_user(user_buf, count, 0, &val);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+	if (kstrtoul(buf, 0, &val))
+		return -EINVAL;
 
 	if (val > 255)
 		return -EINVAL;
@@ -983,11 +999,16 @@ static ssize_t write_file_spectral_fft_period(struct file *file,
 {
 	struct ath_spec_scan_priv *spec_priv = file->private_data;
 	unsigned long val;
-	ssize_t ret;
+	char buf[32];
+	ssize_t len;
 
-	ret = kstrtoul_from_user(user_buf, count, 0, &val);
-	if (ret)
-		return ret;
+	len = min(count, sizeof(buf) - 1);
+	if (copy_from_user(buf, user_buf, len))
+		return -EFAULT;
+
+	buf[len] = '\0';
+	if (kstrtoul(buf, 0, &val))
+		return -EINVAL;
 
 	if (val > 15)
 		return -EINVAL;

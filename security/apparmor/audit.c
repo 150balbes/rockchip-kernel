@@ -58,8 +58,8 @@ static const char *const aa_class_names[] = {
 	"io_uring",
 	"module",
 	"lsm",
-	"namespace",
-	"io_uring",
+	"unknown",
+	"unknown",
 	"unknown",
 	"unknown",
 	"unknown",
@@ -85,36 +85,37 @@ static const char *const aa_class_names[] = {
 /**
  * audit_pre() - core AppArmor function.
  * @ab: audit buffer to fill (NOT NULL)
- * @va: audit structure containing data to audit (NOT NULL)
+ * @ca: audit structure containing data to audit (NOT NULL)
  *
- * Record common AppArmor audit data from @va
+ * Record common AppArmor audit data from @sa
  */
-static void audit_pre(struct audit_buffer *ab, void *va)
+static void audit_pre(struct audit_buffer *ab, void *ca)
 {
-	struct apparmor_audit_data *ad = aad_of_va(va);
+	struct common_audit_data *sa = ca;
 
 	if (aa_g_audit_header) {
 		audit_log_format(ab, "apparmor=\"%s\"",
-				 aa_audit_type[ad->type]);
+				 aa_audit_type[aad(sa)->type]);
 	}
 
-	if (ad->op)
-		audit_log_format(ab, " operation=\"%s\"", ad->op);
+	if (aad(sa)->op) {
+		audit_log_format(ab, " operation=\"%s\"", aad(sa)->op);
+	}
 
-	if (ad->class)
+	if (aad(sa)->class)
 		audit_log_format(ab, " class=\"%s\"",
-				 ad->class <= AA_CLASS_LAST ?
-				 aa_class_names[ad->class] :
+				 aad(sa)->class <= AA_CLASS_LAST ?
+				 aa_class_names[aad(sa)->class] :
 				 "unknown");
 
-	if (ad->info) {
-		audit_log_format(ab, " info=\"%s\"", ad->info);
-		if (ad->error)
-			audit_log_format(ab, " error=%d", ad->error);
+	if (aad(sa)->info) {
+		audit_log_format(ab, " info=\"%s\"", aad(sa)->info);
+		if (aad(sa)->error)
+			audit_log_format(ab, " error=%d", aad(sa)->error);
 	}
 
-	if (ad->subj_label) {
-		struct aa_label *label = ad->subj_label;
+	if (aad(sa)->label) {
+		struct aa_label *label = aad(sa)->label;
 
 		if (label_isprofile(label)) {
 			struct aa_profile *profile = labels_profile(label);
@@ -133,44 +134,42 @@ static void audit_pre(struct audit_buffer *ab, void *va)
 		}
 	}
 
-	if (ad->name) {
+	if (aad(sa)->name) {
 		audit_log_format(ab, " name=");
-		audit_log_untrustedstring(ab, ad->name);
+		audit_log_untrustedstring(ab, aad(sa)->name);
 	}
 }
 
 /**
  * aa_audit_msg - Log a message to the audit subsystem
- * @type: audit type for the message
- * @ad: audit event structure (NOT NULL)
+ * @sa: audit event structure (NOT NULL)
  * @cb: optional callback fn for type specific fields (MAYBE NULL)
  */
-void aa_audit_msg(int type, struct apparmor_audit_data *ad,
+void aa_audit_msg(int type, struct common_audit_data *sa,
 		  void (*cb) (struct audit_buffer *, void *))
 {
-	ad->type = type;
-	common_lsm_audit(&ad->common, audit_pre, cb);
+	aad(sa)->type = type;
+	common_lsm_audit(sa, audit_pre, cb);
 }
 
 /**
  * aa_audit - Log a profile based audit event to the audit subsystem
  * @type: audit type for the message
  * @profile: profile to check against (NOT NULL)
- * @ad: audit event (NOT NULL)
+ * @sa: audit event (NOT NULL)
  * @cb: optional callback fn for type specific fields (MAYBE NULL)
  *
  * Handle default message switching based off of audit mode flags
  *
  * Returns: error on failure
  */
-int aa_audit(int type, struct aa_profile *profile,
-	     struct apparmor_audit_data *ad,
+int aa_audit(int type, struct aa_profile *profile, struct common_audit_data *sa,
 	     void (*cb) (struct audit_buffer *, void *))
 {
 	AA_BUG(!profile);
 
 	if (type == AUDIT_APPARMOR_AUTO) {
-		if (likely(!ad->error)) {
+		if (likely(!aad(sa)->error)) {
 			if (AUDIT_MODE(profile) != AUDIT_ALL)
 				return 0;
 			type = AUDIT_APPARMOR_AUDIT;
@@ -182,24 +181,24 @@ int aa_audit(int type, struct aa_profile *profile,
 	if (AUDIT_MODE(profile) == AUDIT_QUIET ||
 	    (type == AUDIT_APPARMOR_DENIED &&
 	     AUDIT_MODE(profile) == AUDIT_QUIET_DENIED))
-		return ad->error;
+		return aad(sa)->error;
 
 	if (KILL_MODE(profile) && type == AUDIT_APPARMOR_DENIED)
 		type = AUDIT_APPARMOR_KILL;
 
-	ad->subj_label = &profile->label;
+	aad(sa)->label = &profile->label;
 
-	aa_audit_msg(type, ad, cb);
+	aa_audit_msg(type, sa, cb);
 
-	if (ad->type == AUDIT_APPARMOR_KILL)
+	if (aad(sa)->type == AUDIT_APPARMOR_KILL)
 		(void)send_sig_info(SIGKILL, NULL,
-			ad->common.type == LSM_AUDIT_DATA_TASK &&
-			ad->common.u.tsk ? ad->common.u.tsk : current);
+			sa->type == LSM_AUDIT_DATA_TASK && sa->u.tsk ?
+				    sa->u.tsk : current);
 
-	if (ad->type == AUDIT_APPARMOR_ALLOWED)
-		return complain_error(ad->error);
+	if (aad(sa)->type == AUDIT_APPARMOR_ALLOWED)
+		return complain_error(aad(sa)->error);
 
-	return ad->error;
+	return aad(sa)->error;
 }
 
 struct aa_audit_rule {

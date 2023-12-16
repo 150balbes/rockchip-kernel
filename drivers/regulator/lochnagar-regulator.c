@@ -13,6 +13,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
@@ -242,6 +243,7 @@ static int lochnagar_regulator_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct lochnagar *lochnagar = dev_get_drvdata(dev->parent);
 	struct regulator_config config = { };
+	const struct of_device_id *of_id;
 	const struct regulator_desc *desc;
 	struct regulator_dev *rdev;
 	int ret;
@@ -250,9 +252,11 @@ static int lochnagar_regulator_probe(struct platform_device *pdev)
 	config.regmap = lochnagar->regmap;
 	config.driver_data = lochnagar;
 
-	desc = device_get_match_data(dev);
-	if (!desc)
+	of_id = of_match_device(lochnagar_of_match, dev);
+	if (!of_id)
 		return -EINVAL;
+
+	desc = of_id->data;
 
 	rdev = devm_regulator_register(dev, desc, &config);
 	if (IS_ERR(rdev)) {

@@ -26,6 +26,3 @@
 #ifndef __NR_getcpu
 #define __NR_getcpu 309
 #endif
-#ifndef __NR_seccomp
-#define __NR_seccomp 317
-#endif

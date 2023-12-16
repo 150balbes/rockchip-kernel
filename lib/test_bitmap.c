@@ -330,29 +330,6 @@ static void __init test_copy(void)
 	expect_eq_pbl("0-108,128-1023", bmap2, 1024);
 }
 
-static void __init test_bitmap_region(void)
-{
-	int pos, order;
-
-	DECLARE_BITMAP(bmap, 1000);
-
-	bitmap_zero(bmap, 1000);
-
-	for (order = 0; order < 10; order++) {
-		pos = bitmap_find_free_region(bmap, 1000, order);
-		if (order == 0)
-			expect_eq_uint(pos, 0);
-		else
-			expect_eq_uint(pos, order < 9 ? BIT(order) : -ENOMEM);
-	}
-
-	bitmap_release_region(bmap, 0, 0);
-	for (order = 1; order < 9; order++)
-		bitmap_release_region(bmap, BIT(order), order);
-
-	expect_eq_uint(bitmap_weight(bmap, 1000), 0);
-}
-
 #define EXP2_IN_BITS	(sizeof(exp2) * 8)
 
 static void __init test_replace(void)
@@ -1184,10 +1161,6 @@ static void __init test_bitmap_print_buf(void)
 	}
 }
 
-/*
- * FIXME: Clang breaks compile-time evaluations when KASAN and GCOV are enabled.
- * To workaround it, GCOV is force-disabled in Makefile for this configuration.
- */
 static void __init test_bitmap_const_eval(void)
 {
 	DECLARE_BITMAP(bitmap, BITS_PER_LONG);
@@ -1213,7 +1186,11 @@ static void __init test_bitmap_const_eval(void)
 	 * the compiler is fixed.
 	 */
 	bitmap_clear(bitmap, 0, BITS_PER_LONG);
+#if defined(__s390__) && defined(__clang__)
+	if (!const_test_bit(7, bitmap))
+#else
 	if (!test_bit(7, bitmap))
+#endif
 		bitmap_set(bitmap, 5, 2);
 
 	/* Equals to `unsigned long bitopvar = BIT(20)` */
@@ -1250,7 +1227,6 @@ static void __init selftest(void)
 	test_zero_clear();
 	test_fill_set();
 	test_copy();
-	test_bitmap_region();
 	test_replace();
 	test_bitmap_arr32();
 	test_bitmap_arr64();

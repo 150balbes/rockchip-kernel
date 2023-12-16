@@ -367,9 +367,9 @@ static int meson_clk_pll_enable(struct clk_hw *hw)
 	 * 3. enable the lock detect module
 	 */
 	if (MESON_PARM_APPLICABLE(&pll->current_en)) {
-		udelay(10);
+		usleep_range(10, 20);
 		meson_parm_write(clk->map, &pll->current_en, 1);
-		udelay(40);
+		usleep_range(40, 50);
 	}
 
 	if (MESON_PARM_APPLICABLE(&pll->l_detect)) {

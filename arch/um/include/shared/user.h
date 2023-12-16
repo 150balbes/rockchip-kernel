@@ -50,6 +50,7 @@ static inline int printk(const char *fmt, ...)
 #endif
 
 extern int in_aton(char *str);
+extern size_t strlcpy(char *, const char *, size_t);
 extern size_t strlcat(char *, const char *, size_t);
 extern size_t strscpy(char *, const char *, size_t);
 

@@ -30,7 +30,6 @@
 #include <asm/fpsimd.h>
 #include <asm/debug-monitors.h>
 #include <asm/processor.h>
-#include <asm/traps.h>
 
 struct kvm_exception_table_entry {
 	int insn, fixup;
@@ -71,26 +70,20 @@ static inline void __activate_traps_fpsimd32(struct kvm_vcpu *vcpu)
 	}
 }
 
-#define compute_clr_set(vcpu, reg, clr, set)				\
-	do {								\
-		u64 hfg;						\
-		hfg = __vcpu_sys_reg(vcpu, reg) & ~__ ## reg ## _RES0;	\
-		set |= hfg & __ ## reg ## _MASK; 			\
-		clr |= ~hfg & __ ## reg ## _nMASK; 			\
-	} while(0)
-
-
-static inline void __activate_traps_hfgxtr(struct kvm_vcpu *vcpu)
+static inline bool __hfgxtr_traps_required(void)
 {
-	struct kvm_cpu_context *hctxt = &this_cpu_ptr(&kvm_host_data)->host_ctxt;
+	if (cpus_have_final_cap(ARM64_SME))
+		return true;
+
+	if (cpus_have_final_cap(ARM64_WORKAROUND_AMPERE_AC03_CPU_38))
+		return true;
+
+	return false;
+}
+
+static inline void __activate_traps_hfgxtr(void)
+{
 	u64 r_clr = 0, w_clr = 0, r_set = 0, w_set = 0, tmp;
-	u64 r_val, w_val;
-
-	if (!cpus_have_final_cap(ARM64_HAS_FGT))
-		return;
-
-	ctxt_sys_reg(hctxt, HFGRTR_EL2) = read_sysreg_s(SYS_HFGRTR_EL2);
-	ctxt_sys_reg(hctxt, HFGWTR_EL2) = read_sysreg_s(SYS_HFGWTR_EL2);
 
 	if (cpus_have_final_cap(ARM64_SME)) {
 		tmp = HFGxTR_EL2_nSMPRI_EL1_MASK | HFGxTR_EL2_nTPIDR2_EL0_MASK;
@@ -105,72 +98,26 @@ static inline void __activate_traps_hfgxtr(struct kvm_vcpu *vcpu)
 	if (cpus_have_final_cap(ARM64_WORKAROUND_AMPERE_AC03_CPU_38))
 		w_set |= HFGxTR_EL2_TCR_EL1_MASK;
 
-	if (vcpu_has_nv(vcpu) && !is_hyp_ctxt(vcpu)) {
-		compute_clr_set(vcpu, HFGRTR_EL2, r_clr, r_set);
-		compute_clr_set(vcpu, HFGWTR_EL2, w_clr, w_set);
-	}
-
-	/* The default is not to trap anything but ACCDATA_EL1 */
-	r_val = __HFGRTR_EL2_nMASK & ~HFGxTR_EL2_nACCDATA_EL1;
-	r_val |= r_set;
-	r_val &= ~r_clr;
-
-	w_val = __HFGWTR_EL2_nMASK & ~HFGxTR_EL2_nACCDATA_EL1;
-	w_val |= w_set;
-	w_val &= ~w_clr;
-
-	write_sysreg_s(r_val, SYS_HFGRTR_EL2);
-	write_sysreg_s(w_val, SYS_HFGWTR_EL2);
-
-	if (!vcpu_has_nv(vcpu) || is_hyp_ctxt(vcpu))
-		return;
-
-	ctxt_sys_reg(hctxt, HFGITR_EL2) = read_sysreg_s(SYS_HFGITR_EL2);
-
-	r_set = r_clr = 0;
-	compute_clr_set(vcpu, HFGITR_EL2, r_clr, r_set);
-	r_val = __HFGITR_EL2_nMASK;
-	r_val |= r_set;
-	r_val &= ~r_clr;
-
-	write_sysreg_s(r_val, SYS_HFGITR_EL2);
-
-	ctxt_sys_reg(hctxt, HDFGRTR_EL2) = read_sysreg_s(SYS_HDFGRTR_EL2);
-	ctxt_sys_reg(hctxt, HDFGWTR_EL2) = read_sysreg_s(SYS_HDFGWTR_EL2);
-
-	r_clr = r_set = w_clr = w_set = 0;
-
-	compute_clr_set(vcpu, HDFGRTR_EL2, r_clr, r_set);
-	compute_clr_set(vcpu, HDFGWTR_EL2, w_clr, w_set);
-
-	r_val = __HDFGRTR_EL2_nMASK;
-	r_val |= r_set;
-	r_val &= ~r_clr;
-
-	w_val = __HDFGWTR_EL2_nMASK;
-	w_val |= w_set;
-	w_val &= ~w_clr;
-
-	write_sysreg_s(r_val, SYS_HDFGRTR_EL2);
-	write_sysreg_s(w_val, SYS_HDFGWTR_EL2);
+	sysreg_clear_set_s(SYS_HFGRTR_EL2, r_clr, r_set);
+	sysreg_clear_set_s(SYS_HFGWTR_EL2, w_clr, w_set);
 }
 
-static inline void __deactivate_traps_hfgxtr(struct kvm_vcpu *vcpu)
+static inline void __deactivate_traps_hfgxtr(void)
 {
-	struct kvm_cpu_context *hctxt = &this_cpu_ptr(&kvm_host_data)->host_ctxt;
+	u64 r_clr = 0, w_clr = 0, r_set = 0, w_set = 0, tmp;
 
-	if (!cpus_have_final_cap(ARM64_HAS_FGT))
-		return;
+	if (cpus_have_final_cap(ARM64_SME)) {
+		tmp = HFGxTR_EL2_nSMPRI_EL1_MASK | HFGxTR_EL2_nTPIDR2_EL0_MASK;
 
-	write_sysreg_s(ctxt_sys_reg(hctxt, HFGRTR_EL2), SYS_HFGRTR_EL2);
-	write_sysreg_s(ctxt_sys_reg(hctxt, HFGWTR_EL2), SYS_HFGWTR_EL2);
+		r_set |= tmp;
+		w_set |= tmp;
+	}
 
-	if (!vcpu_has_nv(vcpu) || is_hyp_ctxt(vcpu))
-		return;
+	if (cpus_have_final_cap(ARM64_WORKAROUND_AMPERE_AC03_CPU_38))
+		w_clr |= HFGxTR_EL2_TCR_EL1_MASK;
 
-	write_sysreg_s(ctxt_sys_reg(hctxt, HFGITR_EL2), SYS_HFGITR_EL2);
-	write_sysreg_s(ctxt_sys_reg(hctxt, HDFGRTR_EL2), SYS_HDFGRTR_EL2);
-	write_sysreg_s(ctxt_sys_reg(hctxt, HDFGWTR_EL2), SYS_HDFGWTR_EL2);
+	sysreg_clear_set_s(SYS_HFGRTR_EL2, r_clr, r_set);
+	sysreg_clear_set_s(SYS_HFGWTR_EL2, w_clr, w_set);
 }
 
 static inline void __activate_traps_common(struct kvm_vcpu *vcpu)
@@ -198,21 +145,8 @@ static inline void __activate_traps_common(struct kvm_vcpu *vcpu)
 	vcpu->arch.mdcr_el2_host = read_sysreg(mdcr_el2);
 	write_sysreg(vcpu->arch.mdcr_el2, mdcr_el2);
 
-	if (cpus_have_final_cap(ARM64_HAS_HCX)) {
-		u64 hcrx = HCRX_GUEST_FLAGS;
-		if (vcpu_has_nv(vcpu) && !is_hyp_ctxt(vcpu)) {
-			u64 clr = 0, set = 0;
-
-			compute_clr_set(vcpu, HCRX_EL2, clr, set);
-
-			hcrx |= set;
-			hcrx &= ~clr;
-		}
-
-		write_sysreg_s(hcrx, SYS_HCRX_EL2);
-	}
-
-	__activate_traps_hfgxtr(vcpu);
+	if (__hfgxtr_traps_required())
+		__activate_traps_hfgxtr();
 }
 
 static inline void __deactivate_traps_common(struct kvm_vcpu *vcpu)
@@ -228,10 +162,8 @@ static inline void __deactivate_traps_common(struct kvm_vcpu *vcpu)
 		vcpu_clear_flag(vcpu, PMUSERENR_ON_CPU);
 	}
 
-	if (cpus_have_final_cap(ARM64_HAS_HCX))
-		write_sysreg_s(HCRX_HOST_FLAGS, SYS_HCRX_EL2);
-
-	__deactivate_traps_hfgxtr(vcpu);
+	if (__hfgxtr_traps_required())
+		__deactivate_traps_hfgxtr();
 }
 
 static inline void ___activate_traps(struct kvm_vcpu *vcpu)
@@ -245,6 +177,9 @@ static inline void ___activate_traps(struct kvm_vcpu *vcpu)
 
 	if (cpus_have_final_cap(ARM64_HAS_RAS_EXTN) && (hcr & HCR_VSE))
 		write_sysreg_s(vcpu->arch.vsesr_el2, SYS_VSESR_EL2);
+
+	if (cpus_have_final_cap(ARM64_HAS_HCX))
+		write_sysreg_s(HCRX_GUEST_FLAGS, SYS_HCRX_EL2);
 }
 
 static inline void ___deactivate_traps(struct kvm_vcpu *vcpu)
@@ -259,27 +194,14 @@ static inline void ___deactivate_traps(struct kvm_vcpu *vcpu)
 		vcpu->arch.hcr_el2 &= ~HCR_VSE;
 		vcpu->arch.hcr_el2 |= read_sysreg(hcr_el2) & HCR_VSE;
 	}
+
+	if (cpus_have_final_cap(ARM64_HAS_HCX))
+		write_sysreg_s(HCRX_HOST_FLAGS, SYS_HCRX_EL2);
 }
 
 static inline bool __populate_fault_info(struct kvm_vcpu *vcpu)
 {
 	return __get_fault_info(vcpu->arch.fault.esr_el2, &vcpu->arch.fault);
-}
-
-static bool kvm_hyp_handle_mops(struct kvm_vcpu *vcpu, u64 *exit_code)
-{
-	*vcpu_pc(vcpu) = read_sysreg_el2(SYS_ELR);
-	arm64_mops_reset_regs(vcpu_gp_regs(vcpu), vcpu->arch.fault.esr_el2);
-	write_sysreg_el2(*vcpu_pc(vcpu), SYS_ELR);
-
-	/*
-	 * Finish potential single step before executing the prologue
-	 * instruction.
-	 */
-	*vcpu_cpsr(vcpu) &= ~DBG_SPSR_SS;
-	write_sysreg_el2(*vcpu_cpsr(vcpu), SYS_SPSR);
-
-	return true;
 }
 
 static inline void __hyp_sve_restore_guest(struct kvm_vcpu *vcpu)
@@ -535,7 +457,6 @@ static bool handle_ampere1_tcr(struct kvm_vcpu *vcpu)
 	 */
 	val &= ~(TCR_HD | TCR_HA);
 	write_sysreg_el1(val, SYS_TCR);
-	__kvm_skip_instr(vcpu);
 	return true;
 }
 

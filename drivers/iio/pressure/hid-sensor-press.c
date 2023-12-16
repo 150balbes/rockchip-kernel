@@ -323,7 +323,7 @@ error_remove_trigger:
 }
 
 /* Function to deinitialize the processing for usage id */
-static void hid_press_remove(struct platform_device *pdev)
+static int hid_press_remove(struct platform_device *pdev)
 {
 	struct hid_sensor_hub_device *hsdev = pdev->dev.platform_data;
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
@@ -332,6 +332,8 @@ static void hid_press_remove(struct platform_device *pdev)
 	sensor_hub_remove_callback(hsdev, HID_USAGE_SENSOR_PRESSURE);
 	iio_device_unregister(indio_dev);
 	hid_sensor_remove_trigger(indio_dev, &press_state->common_attributes);
+
+	return 0;
 }
 
 static const struct platform_device_id hid_press_ids[] = {
@@ -350,7 +352,7 @@ static struct platform_driver hid_press_platform_driver = {
 		.pm	= &hid_sensor_pm_ops,
 	},
 	.probe		= hid_press_probe,
-	.remove_new	= hid_press_remove,
+	.remove		= hid_press_remove,
 };
 module_platform_driver(hid_press_platform_driver);
 

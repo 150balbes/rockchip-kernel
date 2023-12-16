@@ -658,8 +658,7 @@ static struct inode *zonefs_get_file_inode(struct inode *dir,
 
 	inode->i_ino = ino;
 	inode->i_mode = z->z_mode;
-	inode_set_mtime_to_ts(inode,
-			      inode_set_atime_to_ts(inode, inode_set_ctime_to_ts(inode, inode_get_ctime(dir))));
+	inode->i_ctime = inode->i_mtime = inode->i_atime = dir->i_ctime;
 	inode->i_uid = z->z_uid;
 	inode->i_gid = z->z_gid;
 	inode->i_size = z->z_wpoffset;
@@ -695,8 +694,7 @@ static struct inode *zonefs_get_zgroup_inode(struct super_block *sb,
 	inode->i_ino = ino;
 	inode_init_owner(&nop_mnt_idmap, inode, root, S_IFDIR | 0555);
 	inode->i_size = sbi->s_zgroup[ztype].g_nr_zones;
-	inode_set_mtime_to_ts(inode,
-			      inode_set_atime_to_ts(inode, inode_set_ctime_to_ts(inode, inode_get_ctime(root))));
+	inode->i_ctime = inode->i_mtime = inode->i_atime = root->i_ctime;
 	inode->i_private = &sbi->s_zgroup[ztype];
 	set_nlink(inode, 2);
 
@@ -1319,7 +1317,7 @@ static int zonefs_fill_super(struct super_block *sb, void *data, int silent)
 
 	inode->i_ino = bdev_nr_zones(sb->s_bdev);
 	inode->i_mode = S_IFDIR | 0555;
-	simple_inode_init_ts(inode);
+	inode->i_ctime = inode->i_mtime = inode->i_atime = current_time(inode);
 	inode->i_op = &zonefs_dir_inode_operations;
 	inode->i_fop = &zonefs_dir_operations;
 	inode->i_size = 2;
@@ -1414,9 +1412,13 @@ static int __init zonefs_init(void)
 
 	BUILD_BUG_ON(sizeof(struct zonefs_super) != ZONEFS_SUPER_SIZE);
 
-	ret = zonefs_init_inodecache();
+	ret = zonefs_file_bioset_init();
 	if (ret)
 		return ret;
+
+	ret = zonefs_init_inodecache();
+	if (ret)
+		goto destroy_bioset;
 
 	ret = zonefs_sysfs_init();
 	if (ret)
@@ -1432,6 +1434,8 @@ sysfs_exit:
 	zonefs_sysfs_exit();
 destroy_inodecache:
 	zonefs_destroy_inodecache();
+destroy_bioset:
+	zonefs_file_bioset_exit();
 
 	return ret;
 }
@@ -1441,6 +1445,7 @@ static void __exit zonefs_exit(void)
 	unregister_filesystem(&zonefs_type);
 	zonefs_sysfs_exit();
 	zonefs_destroy_inodecache();
+	zonefs_file_bioset_exit();
 }
 
 MODULE_AUTHOR("Damien Le Moal");

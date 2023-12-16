@@ -1434,7 +1434,9 @@ static int yas5xx_probe(struct i2c_client *i2c)
 		goto assert_reset;
 	}
 
-	ci = i2c_get_match_data(i2c);
+	ci = device_get_match_data(dev);
+	if (!ci)
+		ci = (const struct yas5xx_chip_info *)id->driver_data;
 	yas5xx->chip_info = ci;
 
 	ret = regmap_read(yas5xx->map, YAS5XX_DEVICE_ID, &id_check);

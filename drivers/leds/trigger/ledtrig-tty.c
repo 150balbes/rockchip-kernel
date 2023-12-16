@@ -7,8 +7,6 @@
 #include <linux/tty.h>
 #include <uapi/linux/serial.h>
 
-#define LEDTRIG_TTY_INTERVAL	50
-
 struct ledtrig_tty_data {
 	struct led_classdev *led_cdev;
 	struct delayed_work dwork;
@@ -124,19 +122,17 @@ static void ledtrig_tty_work(struct work_struct *work)
 
 	if (icount.rx != trigger_data->rx ||
 	    icount.tx != trigger_data->tx) {
-		unsigned long interval = LEDTRIG_TTY_INTERVAL;
-
-		led_blink_set_oneshot(trigger_data->led_cdev, &interval,
-				      &interval, 0);
+		led_set_brightness_sync(trigger_data->led_cdev, LED_ON);
 
 		trigger_data->rx = icount.rx;
 		trigger_data->tx = icount.tx;
+	} else {
+		led_set_brightness_sync(trigger_data->led_cdev, LED_OFF);
 	}
 
 out:
 	mutex_unlock(&trigger_data->mutex);
-	schedule_delayed_work(&trigger_data->dwork,
-			      msecs_to_jiffies(LEDTRIG_TTY_INTERVAL * 2));
+	schedule_delayed_work(&trigger_data->dwork, msecs_to_jiffies(100));
 }
 
 static struct attribute *ledtrig_tty_attrs[] = {

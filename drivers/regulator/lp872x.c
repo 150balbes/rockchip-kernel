@@ -864,7 +864,7 @@ static struct lp872x_platform_data
 
 	for (i = 0; i < num_matches; i++) {
 		pdata->regulator_data[i].id =
-				(uintptr_t)match[i].driver_data;
+				(enum lp872x_regulator_id)match[i].driver_data;
 		pdata->regulator_data[i].init_data = match[i].init_data;
 	}
 out:

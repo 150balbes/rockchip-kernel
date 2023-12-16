@@ -427,7 +427,7 @@ static int ovl_adaptor_comp_init(struct device *dev, struct component_match **ma
 			continue;
 		}
 
-		type = (enum mtk_ovl_adaptor_comp_type)(uintptr_t)of_id->data;
+		type = (enum mtk_ovl_adaptor_comp_type)of_id->data;
 		id = ovl_adaptor_comp_get_id(dev, node, type);
 		if (id < 0) {
 			dev_warn(dev, "Skipping unknown component %pOF\n",
@@ -531,15 +531,16 @@ static int mtk_disp_ovl_adaptor_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void mtk_disp_ovl_adaptor_remove(struct platform_device *pdev)
+static int mtk_disp_ovl_adaptor_remove(struct platform_device *pdev)
 {
 	component_master_del(&pdev->dev, &mtk_disp_ovl_adaptor_master_ops);
 	pm_runtime_disable(&pdev->dev);
+	return 0;
 }
 
 struct platform_driver mtk_disp_ovl_adaptor_driver = {
 	.probe		= mtk_disp_ovl_adaptor_probe,
-	.remove_new	= mtk_disp_ovl_adaptor_remove,
+	.remove		= mtk_disp_ovl_adaptor_remove,
 	.driver		= {
 		.name	= "mediatek-disp-ovl-adaptor",
 		.owner	= THIS_MODULE,

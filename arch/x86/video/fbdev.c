@@ -13,17 +13,16 @@
 #include <linux/vgaarb.h>
 #include <asm/fb.h>
 
-pgprot_t pgprot_framebuffer(pgprot_t prot,
-			    unsigned long vm_start, unsigned long vm_end,
-			    unsigned long offset)
+void fb_pgprotect(struct file *file, struct vm_area_struct *vma, unsigned long off)
 {
-	pgprot_val(prot) &= ~_PAGE_CACHE_MASK;
-	if (boot_cpu_data.x86 > 3)
-		pgprot_val(prot) |= cachemode2protval(_PAGE_CACHE_MODE_UC_MINUS);
+	unsigned long prot;
 
-	return prot;
+	prot = pgprot_val(vma->vm_page_prot) & ~_PAGE_CACHE_MASK;
+	if (boot_cpu_data.x86 > 3)
+		pgprot_val(vma->vm_page_prot) =
+			prot | cachemode2protval(_PAGE_CACHE_MODE_UC_MINUS);
 }
-EXPORT_SYMBOL(pgprot_framebuffer);
+EXPORT_SYMBOL(fb_pgprotect);
 
 int fb_is_primary_device(struct fb_info *info)
 {

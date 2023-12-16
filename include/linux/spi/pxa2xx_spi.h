@@ -19,7 +19,7 @@ struct pxa2xx_spi_controller {
 	u16 num_chipselect;
 	u8 enable_dma;
 	u8 dma_burst_size;
-	bool is_target;
+	bool is_slave;
 
 	/* DMA engine specific config */
 	bool (*dma_filter)(struct dma_chan *chan, void *param);
@@ -31,7 +31,7 @@ struct pxa2xx_spi_controller {
 };
 
 /*
- * The controller specific data for SPI target devices
+ * The controller specific data for SPI slave devices
  * (resides in spi_board_info.controller_data),
  * copied to spi_device.platform_data ... mostly for
  * DMA tuning.

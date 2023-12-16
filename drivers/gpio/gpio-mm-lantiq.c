@@ -121,11 +121,13 @@ static int ltq_mm_probe(struct platform_device *pdev)
 	return of_mm_gpiochip_add_data(pdev->dev.of_node, &chip->mmchip, chip);
 }
 
-static void ltq_mm_remove(struct platform_device *pdev)
+static int ltq_mm_remove(struct platform_device *pdev)
 {
 	struct ltq_mm *chip = platform_get_drvdata(pdev);
 
 	of_mm_gpiochip_remove(&chip->mmchip);
+
+	return 0;
 }
 
 static const struct of_device_id ltq_mm_match[] = {
@@ -136,7 +138,7 @@ MODULE_DEVICE_TABLE(of, ltq_mm_match);
 
 static struct platform_driver ltq_mm_driver = {
 	.probe = ltq_mm_probe,
-	.remove_new = ltq_mm_remove,
+	.remove = ltq_mm_remove,
 	.driver = {
 		.name = "gpio-mm-ltq",
 		.of_match_table = ltq_mm_match,

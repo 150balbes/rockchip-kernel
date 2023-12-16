@@ -24,12 +24,6 @@
 #include <subdev/mc.h>
 #include <subdev/timer.h>
 
-bool
-ga102_flcn_riscv_active(struct nvkm_falcon *falcon)
-{
-	return (nvkm_falcon_rd32(falcon, falcon->addr2 + 0x388) & 0x00000080) != 0;
-}
-
 static bool
 ga102_flcn_dma_done(struct nvkm_falcon *falcon)
 {

@@ -55,4 +55,5 @@
 #define PXA910_CLK_CCIC0_PHY		108
 #define PXA910_CLK_CCIC0_SPHY		109
 
+#define PXA910_NR_CLKS			200
 #endif

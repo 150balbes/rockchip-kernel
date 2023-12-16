@@ -148,10 +148,10 @@ xfs_verify_rtbno(
 
 /* Verify that a realtime device extent is fully contained inside the volume. */
 bool
-xfs_verify_rtbext(
+xfs_verify_rtext(
 	struct xfs_mount	*mp,
 	xfs_rtblock_t		rtbno,
-	xfs_filblks_t		len)
+	xfs_rtblock_t		len)
 {
 	if (rtbno + len <= rtbno)
 		return false;

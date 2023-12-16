@@ -97,8 +97,8 @@ memory fences. Ideally with helper support so people don't get it wrong in all
 possible ways.
 
 As a key measurable result, the benefits of ASYNC VM_BIND and a discussion of
-various flavors, error handling and sample API suggestions are documented in
-:doc:`The ASYNC VM_BIND document </gpu/drm-vm-bind-async>`.
+various flavors, error handling and a sample API should be documented here or in
+a separate document pointed to by this document.
 
 Userptr integration and vm_bind
 -------------------------------
@@ -123,14 +123,9 @@ Documentation should include:
 
  * O(1) complexity under VM_BIND.
 
-The document is now included in the drm documentation :doc:`here </gpu/drm-vm-bind-async>`.
-
 Some parts of userptr like mmu_notifiers should become GPUVA or DRM helpers when
 the second driver supporting VM_BIND+userptr appears. Details to be defined when
 the time comes.
-
-The DRM GPUVM helpers do not yet include the userptr parts, but discussions
-about implementing them are ongoing.
 
 Long running compute: minimal data structure/scaffolding
 --------------------------------------------------------

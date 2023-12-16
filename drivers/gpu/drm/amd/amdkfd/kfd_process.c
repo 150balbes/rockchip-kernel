@@ -28,6 +28,7 @@
 #include <linux/sched/task.h>
 #include <linux/mmu_context.h>
 #include <linux/slab.h>
+#include <linux/amd-iommu.h>
 #include <linux/notifier.h>
 #include <linux/compat.h>
 #include <linux/mman.h>
@@ -40,6 +41,7 @@ struct mm_struct;
 
 #include "kfd_priv.h"
 #include "kfd_device_queue_manager.h"
+#include "kfd_iommu.h"
 #include "kfd_svm.h"
 #include "kfd_smi_events.h"
 #include "kfd_debug.h"
@@ -1033,9 +1035,10 @@ static void kfd_process_destroy_pdds(struct kfd_process *p)
 			free_pages((unsigned long)pdd->qpd.cwsr_kaddr,
 				get_order(KFD_CWSR_TBA_TMA_SIZE));
 
+		bitmap_free(pdd->qpd.doorbell_bitmap);
 		idr_destroy(&pdd->alloc_idr);
 
-		kfd_free_process_doorbells(pdd->dev->kfd, pdd);
+		kfd_free_process_doorbells(pdd->dev->kfd, pdd->doorbell_index);
 
 		if (pdd->dev->kfd->shared_resources.enable_mes)
 			amdgpu_amdkfd_free_gtt_mem(pdd->dev->adev,
@@ -1120,6 +1123,7 @@ static void kfd_process_wq_release(struct work_struct *work)
 	dma_fence_signal(p->ef);
 
 	kfd_process_remove_sysfs(p);
+	kfd_iommu_unbind_process(p);
 
 	kfd_process_kunmap_signal_bo(p);
 	kfd_process_free_outstanding_kfd_bos(p);
@@ -1416,13 +1420,8 @@ bool kfd_process_xnack_mode(struct kfd_process *p, bool supported)
 		 * per-process XNACK mode selection. But let the dev->noretry
 		 * setting still influence the default XNACK mode.
 		 */
-		if (supported && KFD_SUPPORT_XNACK_PER_PROCESS(dev)) {
-			if (!amdgpu_sriov_xnack_support(dev->kfd->adev)) {
-				pr_debug("SRIOV platform xnack not supported\n");
-				return false;
-			}
+		if (supported && KFD_SUPPORT_XNACK_PER_PROCESS(dev))
 			continue;
-		}
 
 		/* GFXv10 and later GPUs do not support shader preemption
 		 * during page faults. This can lead to poor QoS for queue
@@ -1551,6 +1550,38 @@ err_alloc_process:
 	return ERR_PTR(err);
 }
 
+static int init_doorbell_bitmap(struct qcm_process_device *qpd,
+			struct kfd_dev *dev)
+{
+	unsigned int i;
+	int range_start = dev->shared_resources.non_cp_doorbells_start;
+	int range_end = dev->shared_resources.non_cp_doorbells_end;
+
+	if (!KFD_IS_SOC15(dev))
+		return 0;
+
+	qpd->doorbell_bitmap = bitmap_zalloc(KFD_MAX_NUM_OF_QUEUES_PER_PROCESS,
+					     GFP_KERNEL);
+	if (!qpd->doorbell_bitmap)
+		return -ENOMEM;
+
+	/* Mask out doorbells reserved for SDMA, IH, and VCN on SOC15. */
+	pr_debug("reserved doorbell 0x%03x - 0x%03x\n", range_start, range_end);
+	pr_debug("reserved doorbell 0x%03x - 0x%03x\n",
+			range_start + KFD_QUEUE_DOORBELL_MIRROR_OFFSET,
+			range_end + KFD_QUEUE_DOORBELL_MIRROR_OFFSET);
+
+	for (i = 0; i < KFD_MAX_NUM_OF_QUEUES_PER_PROCESS / 2; i++) {
+		if (i >= range_start && i <= range_end) {
+			__set_bit(i, qpd->doorbell_bitmap);
+			__set_bit(i + KFD_QUEUE_DOORBELL_MIRROR_OFFSET,
+				  qpd->doorbell_bitmap);
+		}
+	}
+
+	return 0;
+}
+
 struct kfd_process_device *kfd_get_process_device_data(struct kfd_node *dev,
 							struct kfd_process *p)
 {
@@ -1574,6 +1605,11 @@ struct kfd_process_device *kfd_create_process_device_data(struct kfd_node *dev,
 	pdd = kzalloc(sizeof(*pdd), GFP_KERNEL);
 	if (!pdd)
 		return NULL;
+
+	if (init_doorbell_bitmap(&pdd->qpd, dev->kfd)) {
+		pr_err("Failed to init doorbell for process\n");
+		goto err_free_pdd;
+	}
 
 	pdd->dev = dev;
 	INIT_LIST_HEAD(&pdd->qpd.queues_list);
@@ -1730,6 +1766,10 @@ struct kfd_process_device *kfd_bind_process_to_device(struct kfd_node *dev,
 		}
 	}
 
+	err = kfd_iommu_bind_process_to_device(pdd);
+	if (err)
+		goto out;
+
 	/*
 	 * make sure that runtime_usage counter is incremented just once
 	 * per pdd
@@ -1737,6 +1777,15 @@ struct kfd_process_device *kfd_bind_process_to_device(struct kfd_node *dev,
 	pdd->runtime_inuse = true;
 
 	return pdd;
+
+out:
+	/* balance runpm reference count and exit with error */
+	if (!pdd->runtime_inuse) {
+		pm_runtime_mark_last_busy(adev_to_drm(dev->adev)->dev);
+		pm_runtime_put_autosuspend(adev_to_drm(dev->adev)->dev);
+	}
+
+	return ERR_PTR(err);
 }
 
 /* Create specific handle mapped to mem from process local memory idr

@@ -252,9 +252,7 @@ static int ovl_copy_up_file(struct ovl_fs *ofs, struct dentry *dentry,
 		return PTR_ERR(old_file);
 
 	/* Try to use clone_file_range to clone up within the same fs */
-	ovl_start_write(dentry);
 	cloned = do_clone_file_range(old_file, 0, new_file, 0, len, 0);
-	ovl_end_write(dentry);
 	if (cloned == len)
 		goto out_fput;
 	/* Couldn't clone, so now we try to copy the data */
@@ -289,12 +287,8 @@ static int ovl_copy_up_file(struct ovl_fs *ofs, struct dentry *dentry,
 		 * it may not recognize all kind of holes and sometimes
 		 * only skips partial of hole area. However, it will be
 		 * enough for most of the use cases.
-		 *
-		 * We do not hold upper sb_writers throughout the loop to avert
-		 * lockdep warning with llseek of lower file in nested overlay:
-		 * - upper sb_writers
-		 * -- lower ovl_inode_lock (ovl_llseek)
 		 */
+
 		if (skip_hole && data_pos < old_pos) {
 			data_pos = vfs_llseek(old_file, old_pos, SEEK_DATA);
 			if (data_pos > old_pos) {
@@ -309,11 +303,9 @@ static int ovl_copy_up_file(struct ovl_fs *ofs, struct dentry *dentry,
 			}
 		}
 
-		ovl_start_write(dentry);
 		bytes = do_splice_direct(old_file, &old_pos,
 					 new_file, &new_pos,
 					 this_len, SPLICE_F_MOVE);
-		ovl_end_write(dentry);
 		if (bytes <= 0) {
 			error = bytes;
 			break;
@@ -345,7 +337,7 @@ static int ovl_set_timestamps(struct ovl_fs *ofs, struct dentry *upperdentry,
 {
 	struct iattr attr = {
 		.ia_valid =
-		     ATTR_ATIME | ATTR_MTIME | ATTR_ATIME_SET | ATTR_MTIME_SET | ATTR_CTIME,
+		     ATTR_ATIME | ATTR_MTIME | ATTR_ATIME_SET | ATTR_MTIME_SET,
 		.ia_atime = stat->atime,
 		.ia_mtime = stat->mtime,
 	};
@@ -424,7 +416,7 @@ struct ovl_fh *ovl_encode_real_fh(struct ovl_fs *ofs, struct dentry *real,
 	if (is_upper)
 		fh->fb.flags |= OVL_FH_FLAG_PATH_UPPER;
 	fh->fb.len = sizeof(fh->fb) + buflen;
-	if (ovl_origin_uuid(ofs))
+	if (ofs->config.uuid)
 		fh->fb.uuid = *uuid;
 
 	return fh;
@@ -434,29 +426,29 @@ out_err:
 	return ERR_PTR(err);
 }
 
-struct ovl_fh *ovl_get_origin_fh(struct ovl_fs *ofs, struct dentry *origin)
+int ovl_set_origin(struct ovl_fs *ofs, struct dentry *lower,
+		   struct dentry *upper)
 {
+	const struct ovl_fh *fh = NULL;
+	int err;
+
 	/*
 	 * When lower layer doesn't support export operations store a 'null' fh,
 	 * so we can use the overlay.origin xattr to distignuish between a copy
 	 * up and a pure upper inode.
 	 */
-	if (!ovl_can_decode_fh(origin->d_sb))
-		return NULL;
-
-	return ovl_encode_real_fh(ofs, origin, false);
-}
-
-int ovl_set_origin_fh(struct ovl_fs *ofs, const struct ovl_fh *fh,
-		      struct dentry *upper)
-{
-	int err;
+	if (ovl_can_decode_fh(lower->d_sb)) {
+		fh = ovl_encode_real_fh(ofs, lower, false);
+		if (IS_ERR(fh))
+			return PTR_ERR(fh);
+	}
 
 	/*
 	 * Do not fail when upper doesn't support xattrs.
 	 */
 	err = ovl_check_setxattr(ofs, upper, OVL_XATTR_ORIGIN, fh->buf,
 				 fh ? fh->fb.len : 0, 0);
+	kfree(fh);
 
 	/* Ignore -EPERM from setting "user.*" on symlink/special */
 	return err == -EPERM ? 0 : err;
@@ -484,7 +476,7 @@ static int ovl_set_upper_fh(struct ovl_fs *ofs, struct dentry *upper,
  *
  * Caller must hold i_mutex on indexdir.
  */
-static int ovl_create_index(struct dentry *dentry, const struct ovl_fh *fh,
+static int ovl_create_index(struct dentry *dentry, struct dentry *origin,
 			    struct dentry *upper)
 {
 	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
@@ -510,7 +502,7 @@ static int ovl_create_index(struct dentry *dentry, const struct ovl_fh *fh,
 	if (WARN_ON(ovl_test_flag(OVL_INDEX, d_inode(dentry))))
 		return -EIO;
 
-	err = ovl_get_index_name_fh(fh, &name);
+	err = ovl_get_index_name(ofs, origin, &name);
 	if (err)
 		return err;
 
@@ -549,11 +541,9 @@ struct ovl_copy_up_ctx {
 	struct dentry *destdir;
 	struct qstr destname;
 	struct dentry *workdir;
-	const struct ovl_fh *origin_fh;
 	bool origin;
 	bool indexed;
 	bool metacopy;
-	bool metacopy_digest;
 };
 
 static int ovl_link_up(struct ovl_copy_up_ctx *c)
@@ -564,16 +554,14 @@ static int ovl_link_up(struct ovl_copy_up_ctx *c)
 	struct ovl_fs *ofs = OVL_FS(c->dentry->d_sb);
 	struct inode *udir = d_inode(upperdir);
 
-	ovl_start_write(c->dentry);
-
 	/* Mark parent "impure" because it may now contain non-pure upper */
 	err = ovl_set_impure(c->parent, upperdir);
 	if (err)
-		goto out;
+		return err;
 
 	err = ovl_set_nlink_lower(c->dentry);
 	if (err)
-		goto out;
+		return err;
 
 	inode_lock_nested(udir, I_MUTEX_PARENT);
 	upper = ovl_lookup_upper(ofs, c->dentry->d_name.name, upperdir,
@@ -592,12 +580,10 @@ static int ovl_link_up(struct ovl_copy_up_ctx *c)
 	}
 	inode_unlock(udir);
 	if (err)
-		goto out;
+		return err;
 
 	err = ovl_set_nlink_upper(c->dentry);
 
-out:
-	ovl_end_write(c->dentry);
 	return err;
 }
 
@@ -631,8 +617,7 @@ static int ovl_copy_up_metadata(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	if (err)
 		return err;
 
-	if (inode->i_flags & OVL_COPY_I_FLAGS_MASK &&
-	    (S_ISREG(c->stat.mode) || S_ISDIR(c->stat.mode))) {
+	if (inode->i_flags & OVL_COPY_I_FLAGS_MASK) {
 		/*
 		 * Copy the fileattr inode flags that are the source of already
 		 * copied i_flags
@@ -650,26 +635,14 @@ static int ovl_copy_up_metadata(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	 * hard link.
 	 */
 	if (c->origin) {
-		err = ovl_set_origin_fh(ofs, c->origin_fh, temp);
+		err = ovl_set_origin(ofs, c->lowerpath.dentry, temp);
 		if (err)
 			return err;
 	}
 
 	if (c->metacopy) {
-		struct path lowerdatapath;
-		struct ovl_metacopy metacopy_data = OVL_METACOPY_INIT;
-
-		ovl_path_lowerdata(c->dentry, &lowerdatapath);
-		if (WARN_ON_ONCE(lowerdatapath.dentry == NULL))
-			return -EIO;
-		err = ovl_get_verity_digest(ofs, &lowerdatapath, &metacopy_data);
-		if (err)
-			return err;
-
-		if (metacopy_data.digest_algo)
-			c->metacopy_digest = true;
-
-		err = ovl_set_metacopy_xattr(ofs, temp, &metacopy_data);
+		err = ovl_check_setxattr(ofs, temp, OVL_XATTR_METACOPY,
+					 NULL, 0, -EOPNOTSUPP);
 		if (err)
 			return err;
 	}
@@ -732,19 +705,21 @@ static int ovl_copy_up_workdir(struct ovl_copy_up_ctx *c)
 		.link = c->link
 	};
 
+	/* workdir and destdir could be the same when copying up to indexdir */
+	err = -EIO;
+	if (lock_rename(c->workdir, c->destdir) != NULL)
+		goto unlock;
+
 	err = ovl_prep_cu_creds(c->dentry, &cc);
 	if (err)
-		return err;
+		goto unlock;
 
-	ovl_start_write(c->dentry);
-	inode_lock(wdir);
 	temp = ovl_create_temp(ofs, c->workdir, &cattr);
-	inode_unlock(wdir);
-	ovl_end_write(c->dentry);
 	ovl_revert_cu_creds(&cc);
 
+	err = PTR_ERR(temp);
 	if (IS_ERR(temp))
-		return PTR_ERR(temp);
+		goto unlock;
 
 	/*
 	 * Copy up data first and then xattrs. Writing data after
@@ -752,28 +727,15 @@ static int ovl_copy_up_workdir(struct ovl_copy_up_ctx *c)
 	 */
 	path.dentry = temp;
 	err = ovl_copy_up_data(c, &path);
-	/*
-	 * We cannot hold lock_rename() throughout this helper, because or
-	 * lock ordering with sb_writers, which shouldn't be held when calling
-	 * ovl_copy_up_data(), so lock workdir and destdir and make sure that
-	 * temp wasn't moved before copy up completion or cleanup.
-	 * If temp was moved, abort without the cleanup.
-	 */
-	ovl_start_write(c->dentry);
-	if (lock_rename(c->workdir, c->destdir) != NULL ||
-	    temp->d_parent != c->workdir) {
-		err = -EIO;
-		goto unlock;
-	} else if (err) {
+	if (err)
 		goto cleanup;
-	}
 
 	err = ovl_copy_up_metadata(c, temp);
 	if (err)
 		goto cleanup;
 
 	if (S_ISDIR(c->stat.mode) && c->indexed) {
-		err = ovl_create_index(c->dentry, c->origin_fh, temp);
+		err = ovl_create_index(c->dentry, c->lowerpath.dentry, temp);
 		if (err)
 			goto cleanup;
 	}
@@ -789,21 +751,14 @@ static int ovl_copy_up_workdir(struct ovl_copy_up_ctx *c)
 	if (err)
 		goto cleanup;
 
-	inode = d_inode(c->dentry);
-	if (c->metacopy_digest)
-		ovl_set_flag(OVL_HAS_DIGEST, inode);
-	else
-		ovl_clear_flag(OVL_HAS_DIGEST, inode);
-	ovl_clear_flag(OVL_VERIFIED_DIGEST, inode);
-
 	if (!c->metacopy)
-		ovl_set_upperdata(inode);
+		ovl_set_upperdata(d_inode(c->dentry));
+	inode = d_inode(c->dentry);
 	ovl_inode_update(inode, temp);
 	if (S_ISDIR(inode->i_mode))
 		ovl_set_flag(OVL_WHITEOUTS, inode);
 unlock:
 	unlock_rename(c->workdir, c->destdir);
-	ovl_end_write(c->dentry);
 
 	return err;
 
@@ -827,10 +782,9 @@ static int ovl_copy_up_tmpfile(struct ovl_copy_up_ctx *c)
 	if (err)
 		return err;
 
-	ovl_start_write(c->dentry);
 	tmpfile = ovl_do_tmpfile(ofs, c->workdir, c->stat.mode);
-	ovl_end_write(c->dentry);
 	ovl_revert_cu_creds(&cc);
+
 	if (IS_ERR(tmpfile))
 		return PTR_ERR(tmpfile);
 
@@ -841,11 +795,9 @@ static int ovl_copy_up_tmpfile(struct ovl_copy_up_ctx *c)
 			goto out_fput;
 	}
 
-	ovl_start_write(c->dentry);
-
 	err = ovl_copy_up_metadata(c, temp);
 	if (err)
-		goto out;
+		goto out_fput;
 
 	inode_lock_nested(udir, I_MUTEX_PARENT);
 
@@ -859,20 +811,12 @@ static int ovl_copy_up_tmpfile(struct ovl_copy_up_ctx *c)
 	inode_unlock(udir);
 
 	if (err)
-		goto out;
-
-	if (c->metacopy_digest)
-		ovl_set_flag(OVL_HAS_DIGEST, d_inode(c->dentry));
-	else
-		ovl_clear_flag(OVL_HAS_DIGEST, d_inode(c->dentry));
-	ovl_clear_flag(OVL_VERIFIED_DIGEST, d_inode(c->dentry));
+		goto out_fput;
 
 	if (!c->metacopy)
 		ovl_set_upperdata(d_inode(c->dentry));
 	ovl_inode_update(d_inode(c->dentry), dget(temp));
 
-out:
-	ovl_end_write(c->dentry);
 out_fput:
 	fput(tmpfile);
 	return err;
@@ -891,8 +835,6 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 {
 	int err;
 	struct ovl_fs *ofs = OVL_FS(c->dentry->d_sb);
-	struct dentry *origin = c->lowerpath.dentry;
-	struct ovl_fh *fh = NULL;
 	bool to_index = false;
 
 	/*
@@ -909,35 +851,25 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 			to_index = true;
 	}
 
-	if (S_ISDIR(c->stat.mode) || c->stat.nlink == 1 || to_index) {
-		fh = ovl_get_origin_fh(ofs, origin);
-		if (IS_ERR(fh))
-			return PTR_ERR(fh);
-
-		/* origin_fh may be NULL */
-		c->origin_fh = fh;
+	if (S_ISDIR(c->stat.mode) || c->stat.nlink == 1 || to_index)
 		c->origin = true;
-	}
 
 	if (to_index) {
 		c->destdir = ovl_indexdir(c->dentry->d_sb);
-		err = ovl_get_index_name(ofs, origin, &c->destname);
+		err = ovl_get_index_name(ofs, c->lowerpath.dentry, &c->destname);
 		if (err)
-			goto out_free_fh;
+			return err;
 	} else if (WARN_ON(!c->parent)) {
 		/* Disconnected dentry must be copied up to index dir */
-		err = -EIO;
-		goto out_free_fh;
+		return -EIO;
 	} else {
 		/*
 		 * Mark parent "impure" because it may now contain non-pure
 		 * upper
 		 */
-		ovl_start_write(c->dentry);
 		err = ovl_set_impure(c->parent, c->destdir);
-		ovl_end_write(c->dentry);
 		if (err)
-			goto out_free_fh;
+			return err;
 	}
 
 	/* Should we copyup with O_TMPFILE or with workdir? */
@@ -951,7 +883,6 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 	if (c->indexed)
 		ovl_set_flag(OVL_INDEX, d_inode(c->dentry));
 
-	ovl_start_write(c->dentry);
 	if (to_index) {
 		/* Initialize nlink for copy up of disconnected dentry */
 		err = ovl_set_nlink_upper(c->dentry);
@@ -966,20 +897,17 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 		ovl_dentry_set_upper_alias(c->dentry);
 		ovl_dentry_update_reval(c->dentry, ovl_dentry_upper(c->dentry));
 	}
-	ovl_end_write(c->dentry);
 
 out:
 	if (to_index)
 		kfree(c->destname.name);
-out_free_fh:
-	kfree(fh);
 	return err;
 }
 
 static bool ovl_need_meta_copy_up(struct dentry *dentry, umode_t mode,
 				  int flags)
 {
-	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 
 	if (!ofs->config.metacopy)
 		return false;
@@ -989,19 +917,6 @@ static bool ovl_need_meta_copy_up(struct dentry *dentry, umode_t mode,
 
 	if (flags && ((OPEN_FMODE(flags) & FMODE_WRITE) || (flags & O_TRUNC)))
 		return false;
-
-	/* Fall back to full copy if no fsverity on source data and we require verity */
-	if (ofs->config.verity_mode == OVL_VERITY_REQUIRE) {
-		struct path lowerdata;
-
-		ovl_path_lowerdata(dentry, &lowerdata);
-
-		if (WARN_ON_ONCE(lowerdata.dentry == NULL) ||
-		    ovl_ensure_verity_loaded(&lowerdata) ||
-		    !fsverity_active(d_inode(lowerdata.dentry))) {
-			return false;
-		}
-	}
 
 	return true;
 }
@@ -1057,21 +972,18 @@ static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
 	 * Writing to upper file will clear security.capability xattr. We
 	 * don't want that to happen for normal copy-up operation.
 	 */
-	ovl_start_write(c->dentry);
 	if (capability) {
 		err = ovl_do_setxattr(ofs, upperpath.dentry, XATTR_NAME_CAPS,
 				      capability, cap_size, 0);
+		if (err)
+			goto out_free;
 	}
-	if (!err) {
-		err = ovl_removexattr(ofs, upperpath.dentry,
-				      OVL_XATTR_METACOPY);
-	}
-	ovl_end_write(c->dentry);
+
+
+	err = ovl_removexattr(ofs, upperpath.dentry, OVL_XATTR_METACOPY);
 	if (err)
 		goto out_free;
 
-	ovl_clear_flag(OVL_HAS_DIGEST, d_inode(c->dentry));
-	ovl_clear_flag(OVL_VERIFIED_DIGEST, d_inode(c->dentry));
 	ovl_set_upperdata(d_inode(c->dentry));
 out_free:
 	kfree(capability);
@@ -1166,7 +1078,7 @@ static int ovl_copy_up_flags(struct dentry *dentry, int flags)
 	 * not very important to optimize this case, so do lazy lowerdata lookup
 	 * before any copy up, so we can do it before taking ovl_inode_lock().
 	 */
-	err = ovl_verify_lowerdata(dentry);
+	err = ovl_maybe_lookup_lowerdata(dentry);
 	if (err)
 		return err;
 
@@ -1217,10 +1129,17 @@ static bool ovl_open_need_copy_up(struct dentry *dentry, int flags)
 
 int ovl_maybe_copy_up(struct dentry *dentry, int flags)
 {
-	if (!ovl_open_need_copy_up(dentry, flags))
-		return 0;
+	int err = 0;
 
-	return ovl_copy_up_flags(dentry, flags);
+	if (ovl_open_need_copy_up(dentry, flags)) {
+		err = ovl_want_write(dentry);
+		if (!err) {
+			err = ovl_copy_up_flags(dentry, flags);
+			ovl_drop_write(dentry);
+		}
+	}
+
+	return err;
 }
 
 int ovl_copy_up_with_data(struct dentry *dentry)

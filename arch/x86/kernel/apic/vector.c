@@ -44,18 +44,7 @@ static cpumask_var_t vector_searchmask;
 static struct irq_chip lapic_controller;
 static struct irq_matrix *vector_matrix;
 #ifdef CONFIG_SMP
-
-static void vector_cleanup_callback(struct timer_list *tmr);
-
-struct vector_cleanup {
-	struct hlist_head	head;
-	struct timer_list	timer;
-};
-
-static DEFINE_PER_CPU(struct vector_cleanup, vector_cleanup) = {
-	.head	= HLIST_HEAD_INIT,
-	.timer	= __TIMER_INITIALIZER(vector_cleanup_callback, TIMER_PINNED),
-};
+static DEFINE_PER_CPU(struct hlist_head, cleanup_list);
 #endif
 
 void lock_vector_lock(void)
@@ -547,7 +536,7 @@ static int x86_vector_alloc_irqs(struct irq_domain *domain, unsigned int virq,
 	struct irq_data *irqd;
 	int i, err, node;
 
-	if (apic_is_disabled)
+	if (disable_apic)
 		return -ENXIO;
 
 	/*
@@ -691,7 +680,7 @@ static int x86_vector_select(struct irq_domain *d, struct irq_fwspec *fwspec,
 	 * if IRQ remapping is enabled. APIC IDs above 15 bits are
 	 * only permitted if IRQ remapping is enabled, so check that.
 	 */
-	if (apic_id_valid(32768))
+	if (apic->apic_id_valid(32768))
 		return 0;
 
 	return x86_fwspec_is_ioapic(fwspec) || x86_fwspec_is_hpet(fwspec);
@@ -852,21 +841,10 @@ void lapic_online(void)
 		this_cpu_write(vector_irq[vector], __setup_vector_irq(vector));
 }
 
-static void __vector_cleanup(struct vector_cleanup *cl, bool check_irr);
-
 void lapic_offline(void)
 {
-	struct vector_cleanup *cl = this_cpu_ptr(&vector_cleanup);
-
 	lock_vector_lock();
-
-	/* In case the vector cleanup timer has not expired */
-	__vector_cleanup(cl, false);
-
 	irq_matrix_offline(vector_matrix);
-	WARN_ON_ONCE(try_to_del_timer_sync(&cl->timer) < 0);
-	WARN_ON_ONCE(!hlist_empty(&cl->head));
-
 	unlock_vector_lock();
 }
 
@@ -898,7 +876,7 @@ static int apic_retrigger_irq(struct irq_data *irqd)
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&vector_lock, flags);
-	__apic_send_IPI(apicd->cpu, apicd->vector);
+	apic->send_IPI(apicd->cpu, apicd->vector);
 	raw_spin_unlock_irqrestore(&vector_lock, flags);
 
 	return 1;
@@ -907,7 +885,7 @@ static int apic_retrigger_irq(struct irq_data *irqd)
 void apic_ack_irq(struct irq_data *irqd)
 {
 	irq_move_irq(irqd);
-	apic_eoi();
+	ack_APIC_irq();
 }
 
 void apic_ack_edge(struct irq_data *irqd)
@@ -956,98 +934,62 @@ static void free_moved_vector(struct apic_chip_data *apicd)
 	apicd->move_in_progress = 0;
 }
 
-static void __vector_cleanup(struct vector_cleanup *cl, bool check_irr)
+DEFINE_IDTENTRY_SYSVEC(sysvec_irq_move_cleanup)
 {
+	struct hlist_head *clhead = this_cpu_ptr(&cleanup_list);
 	struct apic_chip_data *apicd;
 	struct hlist_node *tmp;
-	bool rearm = false;
 
-	lockdep_assert_held(&vector_lock);
+	ack_APIC_irq();
+	/* Prevent vectors vanishing under us */
+	raw_spin_lock(&vector_lock);
 
-	hlist_for_each_entry_safe(apicd, tmp, &cl->head, clist) {
+	hlist_for_each_entry_safe(apicd, tmp, clhead, clist) {
 		unsigned int irr, vector = apicd->prev_vector;
 
 		/*
 		 * Paranoia: Check if the vector that needs to be cleaned
-		 * up is registered at the APICs IRR. That's clearly a
-		 * hardware issue if the vector arrived on the old target
-		 * _after_ interrupts were disabled above. Keep @apicd
-		 * on the list and schedule the timer again to give the CPU
-		 * a chance to handle the pending interrupt.
-		 *
-		 * Do not check IRR when called from lapic_offline(), because
-		 * fixup_irqs() was just called to scan IRR for set bits and
-		 * forward them to new destination CPUs via IPIs.
+		 * up is registered at the APICs IRR. If so, then this is
+		 * not the best time to clean it up. Clean it up in the
+		 * next attempt by sending another IRQ_MOVE_CLEANUP_VECTOR
+		 * to this CPU. IRQ_MOVE_CLEANUP_VECTOR is the lowest
+		 * priority external vector, so on return from this
+		 * interrupt the device interrupt will happen first.
 		 */
-		irr = check_irr ? apic_read(APIC_IRR + (vector / 32 * 0x10)) : 0;
+		irr = apic_read(APIC_IRR + (vector / 32 * 0x10));
 		if (irr & (1U << (vector % 32))) {
-			pr_warn_once("Moved interrupt pending in old target APIC %u\n", apicd->irq);
-			rearm = true;
+			apic->send_IPI_self(IRQ_MOVE_CLEANUP_VECTOR);
 			continue;
 		}
 		free_moved_vector(apicd);
 	}
 
-	/*
-	 * Must happen under vector_lock to make the timer_pending() check
-	 * in __vector_schedule_cleanup() race free against the rearm here.
-	 */
-	if (rearm)
-		mod_timer(&cl->timer, jiffies + 1);
+	raw_spin_unlock(&vector_lock);
 }
 
-static void vector_cleanup_callback(struct timer_list *tmr)
+static void __send_cleanup_vector(struct apic_chip_data *apicd)
 {
-	struct vector_cleanup *cl = container_of(tmr, typeof(*cl), timer);
-
-	/* Prevent vectors vanishing under us */
-	raw_spin_lock_irq(&vector_lock);
-	__vector_cleanup(cl, true);
-	raw_spin_unlock_irq(&vector_lock);
-}
-
-static void __vector_schedule_cleanup(struct apic_chip_data *apicd)
-{
-	unsigned int cpu = apicd->prev_cpu;
+	unsigned int cpu;
 
 	raw_spin_lock(&vector_lock);
 	apicd->move_in_progress = 0;
+	cpu = apicd->prev_cpu;
 	if (cpu_online(cpu)) {
-		struct vector_cleanup *cl = per_cpu_ptr(&vector_cleanup, cpu);
-
-		hlist_add_head(&apicd->clist, &cl->head);
-
-		/*
-		 * The lockless timer_pending() check is safe here. If it
-		 * returns true, then the callback will observe this new
-		 * apic data in the hlist as everything is serialized by
-		 * vector lock.
-		 *
-		 * If it returns false then the timer is either not armed
-		 * or the other CPU executes the callback, which again
-		 * would be blocked on vector lock. Rearming it in the
-		 * latter case makes it fire for nothing.
-		 *
-		 * This is also safe against the callback rearming the timer
-		 * because that's serialized via vector lock too.
-		 */
-		if (!timer_pending(&cl->timer)) {
-			cl->timer.expires = jiffies + 1;
-			add_timer_on(&cl->timer, cpu);
-		}
+		hlist_add_head(&apicd->clist, per_cpu_ptr(&cleanup_list, cpu));
+		apic->send_IPI(cpu, IRQ_MOVE_CLEANUP_VECTOR);
 	} else {
 		apicd->prev_vector = 0;
 	}
 	raw_spin_unlock(&vector_lock);
 }
 
-void vector_schedule_cleanup(struct irq_cfg *cfg)
+void send_cleanup_vector(struct irq_cfg *cfg)
 {
 	struct apic_chip_data *apicd;
 
 	apicd = container_of(cfg, struct apic_chip_data, hw_irq_cfg);
 	if (apicd->move_in_progress)
-		__vector_schedule_cleanup(apicd);
+		__send_cleanup_vector(apicd);
 }
 
 void irq_complete_move(struct irq_cfg *cfg)
@@ -1065,7 +1007,7 @@ void irq_complete_move(struct irq_cfg *cfg)
 	 * on the same CPU.
 	 */
 	if (apicd->cpu == smp_processor_id())
-		__vector_schedule_cleanup(apicd);
+		__send_cleanup_vector(apicd);
 }
 
 /*
@@ -1208,7 +1150,7 @@ static void __init print_local_APIC(void *dummy)
 	u64 icr;
 
 	pr_debug("printing local APIC contents on CPU#%d/%d:\n",
-		 smp_processor_id(), read_apic_id());
+		 smp_processor_id(), hard_smp_processor_id());
 	v = apic_read(APIC_ID);
 	pr_info("... APIC ID:      %08x (%01x)\n", v, read_apic_id());
 	v = apic_read(APIC_LVR);

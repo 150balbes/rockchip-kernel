@@ -448,7 +448,7 @@ static const struct drm_driver kmb_driver = {
 	.minor = DRIVER_MINOR,
 };
 
-static void kmb_remove(struct platform_device *pdev)
+static int kmb_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct drm_device *drm = dev_get_drvdata(dev);
@@ -473,6 +473,7 @@ static void kmb_remove(struct platform_device *pdev)
 	/* Unregister DSI host */
 	kmb_dsi_host_unregister(kmb->kmb_dsi);
 	drm_atomic_helper_shutdown(drm);
+	return 0;
 }
 
 static int kmb_probe(struct platform_device *pdev)
@@ -620,7 +621,7 @@ static SIMPLE_DEV_PM_OPS(kmb_pm_ops, kmb_pm_suspend, kmb_pm_resume);
 
 static struct platform_driver kmb_platform_driver = {
 	.probe = kmb_probe,
-	.remove_new = kmb_remove,
+	.remove = kmb_remove,
 	.driver = {
 		.name = "kmb-drm",
 		.pm = &kmb_pm_ops,

@@ -2148,7 +2148,7 @@ out1:
 
 	for (i = 0; i < pages_per_frame; i++) {
 		pg = pages[i];
-		if (i == idx || !pg)
+		if (i == idx)
 			continue;
 		unlock_page(pg);
 		put_page(pg);
@@ -3208,12 +3208,6 @@ static bool ni_update_parent(struct ntfs_inode *ni, struct NTFS_DUP_INFO *dup,
 		if (!fname || !memcmp(&fname->dup, dup, sizeof(fname->dup)))
 			continue;
 
-		/* Check simple case when parent inode equals current inode. */
-		if (ino_get(&fname->home) == ni->vfs_inode.i_ino) {
-			ntfs_set_state(sbi, NTFS_DIRTY_ERROR);
-			continue;
-		}
-
 		/* ntfs_iget5 may sleep. */
 		dir = ntfs_iget5(sb, &fname->home, NULL);
 		if (IS_ERR(dir)) {
@@ -3271,7 +3265,6 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 	if (is_rec_inuse(ni->mi.mrec) &&
 	    !(sbi->flags & NTFS_FLAGS_LOG_REPLAYING) && inode->i_nlink) {
 		bool modified = false;
-		struct timespec64 ts;
 
 		/* Update times in standard attribute. */
 		std = ni_std(ni);
@@ -3281,22 +3274,19 @@ int ni_write_inode(struct inode *inode, int sync, const char *hint)
 		}
 
 		/* Update the access times if they have changed. */
-		ts = inode_get_mtime(inode);
-		dup.m_time = kernel2nt(&ts);
+		dup.m_time = kernel2nt(&inode->i_mtime);
 		if (std->m_time != dup.m_time) {
 			std->m_time = dup.m_time;
 			modified = true;
 		}
 
-		ts = inode_get_mtime(inode);
-		dup.c_time = kernel2nt(&ts);
+		dup.c_time = kernel2nt(&inode->i_ctime);
 		if (std->c_time != dup.c_time) {
 			std->c_time = dup.c_time;
 			modified = true;
 		}
 
-		ts = inode_get_atime(inode);
-		dup.a_time = kernel2nt(&ts);
+		dup.a_time = kernel2nt(&inode->i_atime);
 		if (std->a_time != dup.a_time) {
 			std->a_time = dup.a_time;
 			modified = true;

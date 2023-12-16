@@ -13,7 +13,6 @@
 #include <linux/memblock.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
-#include <linux/console.h>
 #include <linux/screen_info.h>
 #include <linux/initrd.h>
 
@@ -113,19 +112,6 @@ int update_persistent_clock64(struct timespec64 now)
 	}
 }
 
-#ifdef CONFIG_VGA_CONSOLE
-static struct screen_info vgacon_screen_info = {
-	.orig_video_page	= 52,
-	.orig_video_mode	= 3,
-	.orig_video_cols	= 80,
-	.flags			= 12,
-	.orig_video_ega_bx	= 3,
-	.orig_video_lines	= 25,
-	.orig_video_isVGA	= 0x22,
-	.orig_video_points	= 16,
-};
-#endif
-
 void __init plat_mem_setup(void)
 {
 #ifdef CONFIG_SIBYTE_BCM1x80
@@ -143,8 +129,17 @@ void __init plat_mem_setup(void)
 	if (m41t81_probe())
 		swarm_rtc_type = RTC_M41T81;
 
-#ifdef CONFIG_VGA_CONSOLE
-	vgacon_register_screen(&vgacon_screen_info);
+#ifdef CONFIG_VT
+	screen_info = (struct screen_info) {
+		.orig_video_page	= 52,
+		.orig_video_mode	= 3,
+		.orig_video_cols	= 80,
+		.flags			= 12,
+		.orig_video_ega_bx	= 3,
+		.orig_video_lines	= 25,
+		.orig_video_isVGA	= 0x22,
+		.orig_video_points	= 16,
+       };
        /* XXXKW for CFE, get lines/cols from environment */
 #endif
 }

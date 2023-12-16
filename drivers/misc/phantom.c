@@ -35,11 +35,8 @@
 #define PHB_NOT_OH		2
 
 static DEFINE_MUTEX(phantom_mutex);
+static struct class *phantom_class;
 static int phantom_major;
-
-static const struct class phantom_class = {
-	.name = "phantom",
-};
 
 struct phantom_device {
 	unsigned int opened;
@@ -406,7 +403,7 @@ static int phantom_probe(struct pci_dev *pdev,
 		goto err_irq;
 	}
 
-	if (IS_ERR(device_create(&phantom_class, &pdev->dev,
+	if (IS_ERR(device_create(phantom_class, &pdev->dev,
 				 MKDEV(phantom_major, minor), NULL,
 				 "phantom%u", minor)))
 		dev_err(&pdev->dev, "can't create device\n");
@@ -439,7 +436,7 @@ static void phantom_remove(struct pci_dev *pdev)
 	struct phantom_device *pht = pci_get_drvdata(pdev);
 	unsigned int minor = MINOR(pht->cdev.dev);
 
-	device_destroy(&phantom_class, MKDEV(phantom_major, minor));
+	device_destroy(phantom_class, MKDEV(phantom_major, minor));
 
 	cdev_del(&pht->cdev);
 
@@ -506,12 +503,13 @@ static int __init phantom_init(void)
 	int retval;
 	dev_t dev;
 
-	retval = class_register(&phantom_class);
-	if (retval) {
+	phantom_class = class_create("phantom");
+	if (IS_ERR(phantom_class)) {
+		retval = PTR_ERR(phantom_class);
 		printk(KERN_ERR "phantom: can't register phantom class\n");
 		goto err;
 	}
-	retval = class_create_file(&phantom_class, &class_attr_version.attr);
+	retval = class_create_file(phantom_class, &class_attr_version.attr);
 	if (retval) {
 		printk(KERN_ERR "phantom: can't create sysfs version file\n");
 		goto err_class;
@@ -537,9 +535,9 @@ static int __init phantom_init(void)
 err_unchr:
 	unregister_chrdev_region(dev, PHANTOM_MAX_MINORS);
 err_attr:
-	class_remove_file(&phantom_class, &class_attr_version.attr);
+	class_remove_file(phantom_class, &class_attr_version.attr);
 err_class:
-	class_unregister(&phantom_class);
+	class_destroy(phantom_class);
 err:
 	return retval;
 }
@@ -550,8 +548,8 @@ static void __exit phantom_exit(void)
 
 	unregister_chrdev_region(MKDEV(phantom_major, 0), PHANTOM_MAX_MINORS);
 
-	class_remove_file(&phantom_class, &class_attr_version.attr);
-	class_unregister(&phantom_class);
+	class_remove_file(phantom_class, &class_attr_version.attr);
+	class_destroy(phantom_class);
 
 	pr_debug("phantom: module successfully removed\n");
 }

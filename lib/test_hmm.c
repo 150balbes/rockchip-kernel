@@ -368,13 +368,16 @@ static int dmirror_do_read(struct dmirror *dmirror, unsigned long start,
 	for (pfn = start >> PAGE_SHIFT; pfn < (end >> PAGE_SHIFT); pfn++) {
 		void *entry;
 		struct page *page;
+		void *tmp;
 
 		entry = xa_load(&dmirror->pt, pfn);
 		page = xa_untag_pointer(entry);
 		if (!page)
 			return -ENOENT;
 
-		memcpy_from_page(ptr, page, 0, PAGE_SIZE);
+		tmp = kmap(page);
+		memcpy(ptr, tmp, PAGE_SIZE);
+		kunmap(page);
 
 		ptr += PAGE_SIZE;
 		bounce->cpages++;
@@ -434,13 +437,16 @@ static int dmirror_do_write(struct dmirror *dmirror, unsigned long start,
 	for (pfn = start >> PAGE_SHIFT; pfn < (end >> PAGE_SHIFT); pfn++) {
 		void *entry;
 		struct page *page;
+		void *tmp;
 
 		entry = xa_load(&dmirror->pt, pfn);
 		page = xa_untag_pointer(entry);
 		if (!page || xa_pointer_tag(entry) != DPT_XA_TAG_WRITE)
 			return -ENOENT;
 
-		memcpy_to_page(page, 0, ptr, PAGE_SIZE);
+		tmp = kmap(page);
+		memcpy(tmp, ptr, PAGE_SIZE);
+		kunmap(page);
 
 		ptr += PAGE_SIZE;
 		bounce->cpages++;

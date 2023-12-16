@@ -714,18 +714,20 @@ static int lp8788_charger_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void lp8788_charger_remove(struct platform_device *pdev)
+static int lp8788_charger_remove(struct platform_device *pdev)
 {
 	struct lp8788_charger *pchg = platform_get_drvdata(pdev);
 
 	flush_work(&pchg->charger_work);
 	lp8788_irq_unregister(pdev, pchg);
 	lp8788_psy_unregister(pchg);
+
+	return 0;
 }
 
 static struct platform_driver lp8788_charger_driver = {
 	.probe = lp8788_charger_probe,
-	.remove_new = lp8788_charger_remove,
+	.remove = lp8788_charger_remove,
 	.driver = {
 		.name = LP8788_DEV_CHARGER,
 	},

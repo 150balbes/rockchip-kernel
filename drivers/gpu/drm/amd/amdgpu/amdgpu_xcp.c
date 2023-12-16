@@ -163,10 +163,15 @@ int amdgpu_xcp_init(struct amdgpu_xcp_mgr *xcp_mgr, int num_xcps, int mode)
 	return 0;
 }
 
-static int __amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr,
-					      int mode)
+int amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr, int mode)
 {
 	int ret, curr_mode, num_xcps = 0;
+
+	if (!xcp_mgr || mode == AMDGPU_XCP_MODE_NONE)
+		return -EINVAL;
+
+	if (xcp_mgr->mode == mode)
+		return 0;
 
 	if (!xcp_mgr->funcs || !xcp_mgr->funcs->switch_partition_mode)
 		return 0;
@@ -194,25 +199,6 @@ out:
 	mutex_unlock(&xcp_mgr->xcp_lock);
 
 	return ret;
-}
-
-int amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr, int mode)
-{
-	if (!xcp_mgr || mode == AMDGPU_XCP_MODE_NONE)
-		return -EINVAL;
-
-	if (xcp_mgr->mode == mode)
-		return 0;
-
-	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, mode);
-}
-
-int amdgpu_xcp_restore_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr)
-{
-	if (!xcp_mgr || xcp_mgr->mode == AMDGPU_XCP_MODE_NONE)
-		return 0;
-
-	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, xcp_mgr->mode);
 }
 
 int amdgpu_xcp_query_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr, u32 flags)
@@ -253,13 +239,8 @@ static int amdgpu_xcp_dev_alloc(struct amdgpu_device *adev)
 
 	for (i = 1; i < MAX_XCP; i++) {
 		ret = amdgpu_xcp_drm_dev_alloc(&p_ddev);
-		if (ret == -ENOSPC) {
-			dev_warn(adev->dev,
-			"Skip xcp node #%d when out of drm node resource.", i);
-			return 0;
-		} else if (ret) {
+		if (ret)
 			return ret;
-		}
 
 		/* Redirect all IOCTLs to the primary device */
 		adev->xcp_mgr->xcp[i].rdev = p_ddev->render->dev;
@@ -347,9 +328,6 @@ int amdgpu_xcp_dev_register(struct amdgpu_device *adev,
 		return 0;
 
 	for (i = 1; i < MAX_XCP; i++) {
-		if (!adev->xcp_mgr->xcp[i].ddev)
-			break;
-
 		ret = drm_dev_register(adev->xcp_mgr->xcp[i].ddev, ent->driver_data);
 		if (ret)
 			return ret;
@@ -367,9 +345,6 @@ void amdgpu_xcp_dev_unplug(struct amdgpu_device *adev)
 		return;
 
 	for (i = 1; i < MAX_XCP; i++) {
-		if (!adev->xcp_mgr->xcp[i].ddev)
-			break;
-
 		p_ddev = adev->xcp_mgr->xcp[i].ddev;
 		drm_dev_unplug(p_ddev);
 		p_ddev->render->dev = adev->xcp_mgr->xcp[i].rdev;
@@ -388,7 +363,7 @@ int amdgpu_xcp_open_device(struct amdgpu_device *adev,
 	if (!adev->xcp_mgr)
 		return 0;
 
-	fpriv->xcp_id = AMDGPU_XCP_NO_PARTITION;
+	fpriv->xcp_id = ~0;
 	for (i = 0; i < MAX_XCP; ++i) {
 		if (!adev->xcp_mgr->xcp[i].ddev)
 			break;
@@ -406,7 +381,7 @@ int amdgpu_xcp_open_device(struct amdgpu_device *adev,
 		}
 	}
 
-	fpriv->vm.mem_id = fpriv->xcp_id == AMDGPU_XCP_NO_PARTITION ? -1 :
+	fpriv->vm.mem_id = fpriv->xcp_id == ~0 ? -1 :
 				adev->xcp_mgr->xcp[fpriv->xcp_id].mem_id;
 	return 0;
 }

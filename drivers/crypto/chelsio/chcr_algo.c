@@ -1920,9 +1920,6 @@ err:
 	return error;
 }
 
-static int chcr_hmac_init(struct ahash_request *areq);
-static int chcr_sha_init(struct ahash_request *areq);
-
 static int chcr_ahash_digest(struct ahash_request *req)
 {
 	struct chcr_ahash_req_ctx *req_ctx = ahash_request_ctx(req);
@@ -1941,11 +1938,7 @@ static int chcr_ahash_digest(struct ahash_request *req)
 	req_ctx->rxqidx = cpu % ctx->nrxq;
 	put_cpu();
 
-	if (is_hmac(crypto_ahash_tfm(rtfm)))
-		chcr_hmac_init(req);
-	else
-		chcr_sha_init(req);
-
+	rtfm->init(req);
 	bs = crypto_tfm_alg_blocksize(crypto_ahash_tfm(rtfm));
 	error = chcr_inc_wrcount(dev);
 	if (error)
@@ -2223,8 +2216,7 @@ static int chcr_ahash_setkey(struct crypto_ahash *tfm, const u8 *key,
 		memcpy(hmacctx->ipad, key, keylen);
 	}
 	memset(hmacctx->ipad + keylen, 0, bs - keylen);
-	unsafe_memcpy(hmacctx->opad, hmacctx->ipad, bs,
-		      "fortified memcpy causes -Wrestrict warning");
+	memcpy(hmacctx->opad, hmacctx->ipad, bs);
 
 	for (i = 0; i < bs / sizeof(int); i++) {
 		*((unsigned int *)(&hmacctx->ipad) + i) ^= IPAD_DATA;

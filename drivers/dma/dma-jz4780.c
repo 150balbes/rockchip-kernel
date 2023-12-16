@@ -13,6 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -1008,7 +1009,7 @@ err_disable_clk:
 	return ret;
 }
 
-static void jz4780_dma_remove(struct platform_device *pdev)
+static int jz4780_dma_remove(struct platform_device *pdev)
 {
 	struct jz4780_dma_dev *jzdma = platform_get_drvdata(pdev);
 	int i;
@@ -1020,6 +1021,8 @@ static void jz4780_dma_remove(struct platform_device *pdev)
 
 	for (i = 0; i < jzdma->soc_data->nb_channels; i++)
 		tasklet_kill(&jzdma->chan[i].vchan.task);
+
+	return 0;
 }
 
 static const struct jz4780_dma_soc_data jz4740_dma_soc_data = {
@@ -1122,7 +1125,7 @@ MODULE_DEVICE_TABLE(of, jz4780_dma_dt_match);
 
 static struct platform_driver jz4780_dma_driver = {
 	.probe		= jz4780_dma_probe,
-	.remove_new	= jz4780_dma_remove,
+	.remove		= jz4780_dma_remove,
 	.driver	= {
 		.name	= "jz4780-dma",
 		.of_match_table = jz4780_dma_dt_match,

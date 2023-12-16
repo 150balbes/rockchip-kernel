@@ -659,8 +659,8 @@ static int stmfx_pinctrl_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return irq;
+	if (irq <= 0)
+		return -ENXIO;
 
 	mutex_init(&pctl->lock);
 
@@ -734,18 +734,14 @@ static int stmfx_pinctrl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void stmfx_pinctrl_remove(struct platform_device *pdev)
+static int stmfx_pinctrl_remove(struct platform_device *pdev)
 {
 	struct stmfx *stmfx = dev_get_drvdata(pdev->dev.parent);
-	int ret;
 
-	ret = stmfx_function_disable(stmfx,
-				     STMFX_FUNC_GPIO |
-				     STMFX_FUNC_ALTGPIO_LOW |
-				     STMFX_FUNC_ALTGPIO_HIGH);
-	if (ret)
-		dev_err(&pdev->dev, "Failed to disable pins (%pe)\n",
-			ERR_PTR(ret));
+	return stmfx_function_disable(stmfx,
+				      STMFX_FUNC_GPIO |
+				      STMFX_FUNC_ALTGPIO_LOW |
+				      STMFX_FUNC_ALTGPIO_HIGH);
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -854,7 +850,7 @@ static struct platform_driver stmfx_pinctrl_driver = {
 		.pm = &stmfx_pinctrl_dev_pm_ops,
 	},
 	.probe = stmfx_pinctrl_probe,
-	.remove_new = stmfx_pinctrl_remove,
+	.remove = stmfx_pinctrl_remove,
 };
 module_platform_driver(stmfx_pinctrl_driver);
 

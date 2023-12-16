@@ -169,16 +169,23 @@ void dpu_vbif_set_ot_limit(struct dpu_kms *dpu_kms,
 		struct dpu_vbif_set_ot_params *params)
 {
 	struct dpu_hw_vbif *vbif;
+	struct dpu_hw_mdp *mdp;
+	bool forced_on = false;
 	u32 ot_lim;
 	int ret;
 
+	mdp = dpu_kms->hw_mdp;
+
 	vbif = dpu_get_vbif(dpu_kms, params->vbif_idx);
-	if (!vbif) {
-		DRM_DEBUG_ATOMIC("invalid arguments vbif %d\n", vbif != NULL);
+	if (!vbif || !mdp) {
+		DRM_DEBUG_ATOMIC("invalid arguments vbif %d mdp %d\n",
+				vbif != NULL, mdp != NULL);
 		return;
 	}
 
-	if (!vbif->ops.set_limit_conf || !vbif->ops.set_halt_ctrl)
+	if (!mdp->ops.setup_clk_force_ctrl ||
+			!vbif->ops.set_limit_conf ||
+			!vbif->ops.set_halt_ctrl)
 		return;
 
 	/* set write_gather_en for all write clients */
@@ -193,6 +200,8 @@ void dpu_vbif_set_ot_limit(struct dpu_kms *dpu_kms,
 	trace_dpu_perf_set_ot(params->num, params->xin_id, ot_lim,
 		params->vbif_idx);
 
+	forced_on = mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, true);
+
 	vbif->ops.set_limit_conf(vbif, params->xin_id, params->rd, ot_lim);
 
 	vbif->ops.set_halt_ctrl(vbif, params->xin_id, true);
@@ -202,19 +211,25 @@ void dpu_vbif_set_ot_limit(struct dpu_kms *dpu_kms,
 		trace_dpu_vbif_wait_xin_halt_fail(vbif->idx, params->xin_id);
 
 	vbif->ops.set_halt_ctrl(vbif, params->xin_id, false);
+
+	if (forced_on)
+		mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, false);
 }
 
 void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 		struct dpu_vbif_set_qos_params *params)
 {
 	struct dpu_hw_vbif *vbif;
+	struct dpu_hw_mdp *mdp;
+	bool forced_on = false;
 	const struct dpu_vbif_qos_tbl *qos_tbl;
 	int i;
 
-	if (!params) {
+	if (!params || !dpu_kms->hw_mdp) {
 		DPU_ERROR("invalid arguments\n");
 		return;
 	}
+	mdp = dpu_kms->hw_mdp;
 
 	vbif = dpu_get_vbif(dpu_kms, params->vbif_idx);
 
@@ -223,7 +238,7 @@ void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 		return;
 	}
 
-	if (!vbif->ops.set_qos_remap) {
+	if (!vbif->ops.set_qos_remap || !mdp->ops.setup_clk_force_ctrl) {
 		DRM_DEBUG_ATOMIC("qos remap not supported\n");
 		return;
 	}
@@ -236,6 +251,8 @@ void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 		return;
 	}
 
+	forced_on = mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, true);
+
 	for (i = 0; i < qos_tbl->npriority_lvl; i++) {
 		DRM_DEBUG_ATOMIC("%s xin:%d lvl:%d/%d\n",
 				dpu_vbif_name(params->vbif_idx), params->xin_id, i,
@@ -243,6 +260,9 @@ void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 		vbif->ops.set_qos_remap(vbif, params->xin_id, i,
 				qos_tbl->priority_lvl[i]);
 	}
+
+	if (forced_on)
+		mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, false);
 }
 
 void dpu_vbif_clear_errors(struct dpu_kms *dpu_kms)

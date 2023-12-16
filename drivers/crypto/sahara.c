@@ -27,6 +27,7 @@
 #include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 
@@ -1510,7 +1511,7 @@ clk_ipg_disable:
 	return err;
 }
 
-static void sahara_remove(struct platform_device *pdev)
+static int sahara_remove(struct platform_device *pdev)
 {
 	struct sahara_dev *dev = platform_get_drvdata(pdev);
 
@@ -1522,11 +1523,13 @@ static void sahara_remove(struct platform_device *pdev)
 	clk_disable_unprepare(dev->clk_ahb);
 
 	dev_ptr = NULL;
+
+	return 0;
 }
 
 static struct platform_driver sahara_driver = {
 	.probe		= sahara_probe,
-	.remove_new	= sahara_remove,
+	.remove		= sahara_remove,
 	.driver		= {
 		.name	= SAHARA_NAME,
 		.of_match_table = sahara_dt_ids,

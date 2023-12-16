@@ -65,8 +65,7 @@ static void w1_unref_block(struct w1_cb_block *block)
 		u16 len = w1_reply_len(block);
 		if (len) {
 			cn_netlink_send_mult(block->first_cn, len,
-					     block->portid, 0,
-					     GFP_KERNEL, NULL, NULL);
+				block->portid, 0, GFP_KERNEL);
 		}
 		kfree(block);
 	}
@@ -84,8 +83,7 @@ static void w1_reply_make_space(struct w1_cb_block *block, u16 space)
 {
 	u16 len = w1_reply_len(block);
 	if (len + space >= block->maxlen) {
-		cn_netlink_send_mult(block->first_cn, len, block->portid,
-				     0, GFP_KERNEL, NULL, NULL);
+		cn_netlink_send_mult(block->first_cn, len, block->portid, 0, GFP_KERNEL);
 		block->first_cn->len = 0;
 		block->cn = NULL;
 		block->msg = NULL;

@@ -214,18 +214,8 @@ static int rescale_read_raw(struct iio_dev *indio_dev,
 				return ret < 0 ? ret : -EOPNOTSUPP;
 		}
 
-		if (iio_channel_has_info(rescale->source->channel,
-					 IIO_CHAN_INFO_SCALE)) {
-			ret = iio_read_channel_scale(rescale->source, &scale, &scale2);
-			return rescale_process_offset(rescale, ret, scale, scale2,
-						      schan_off, val, val2);
-		}
-
-		/*
-		 * If we get here we have no scale so scale 1:1 but apply
-		 * rescaler and offset, if any.
-		 */
-		return rescale_process_offset(rescale, IIO_VAL_FRACTIONAL, 1, 1,
+		ret = iio_read_channel_scale(rescale->source, &scale, &scale2);
+		return rescale_process_offset(rescale, ret, scale, scale2,
 					      schan_off, val, val2);
 	default:
 		return -EINVAL;
@@ -290,9 +280,8 @@ static int rescale_configure_channel(struct device *dev,
 	chan->type = rescale->cfg->type;
 
 	if (iio_channel_has_info(schan, IIO_CHAN_INFO_RAW) &&
-	    (iio_channel_has_info(schan, IIO_CHAN_INFO_SCALE) ||
-	     iio_channel_has_info(schan, IIO_CHAN_INFO_OFFSET))) {
-		dev_info(dev, "using raw+scale/offset source channel\n");
+	    iio_channel_has_info(schan, IIO_CHAN_INFO_SCALE)) {
+		dev_info(dev, "using raw+scale source channel\n");
 	} else if (iio_channel_has_info(schan, IIO_CHAN_INFO_PROCESSED)) {
 		dev_info(dev, "using processed channel\n");
 		rescale->chan_processed = true;

@@ -311,6 +311,7 @@ unlock_mutex:
 
 static const struct pwm_ops pwm_omap_dmtimer_ops = {
 	.apply = pwm_omap_dmtimer_apply,
+	.owner = THIS_MODULE,
 };
 
 static int pwm_omap_dmtimer_probe(struct platform_device *pdev)
@@ -465,7 +466,7 @@ MODULE_DEVICE_TABLE(of, pwm_omap_dmtimer_of_match);
 static struct platform_driver pwm_omap_dmtimer_driver = {
 	.driver = {
 		.name = "omap-dmtimer-pwm",
-		.of_match_table = pwm_omap_dmtimer_of_match,
+		.of_match_table = of_match_ptr(pwm_omap_dmtimer_of_match),
 	},
 	.probe = pwm_omap_dmtimer_probe,
 	.remove_new = pwm_omap_dmtimer_remove,

@@ -7,7 +7,6 @@
 #include <linux/rcupdate.h>
 #include <asm/errno.h>
 #include <misc/cxl-base.h>
-#include <linux/of.h>
 #include <linux/of_platform.h>
 #include "cxl.h"
 

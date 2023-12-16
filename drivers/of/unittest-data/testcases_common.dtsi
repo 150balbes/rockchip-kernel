@@ -5,7 +5,6 @@
 		changeset {
 			prop-update = "hello";
 			prop-remove = "world";
-
 			node-remove {
 			};
 		};

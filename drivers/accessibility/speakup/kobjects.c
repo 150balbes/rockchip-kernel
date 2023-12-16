@@ -413,24 +413,27 @@ static ssize_t synth_direct_store(struct kobject *kobj,
 				  struct kobj_attribute *attr,
 				  const char *buf, size_t count)
 {
-	char *unescaped;
+	u_char tmp[256];
+	int len;
+	int bytes;
+	const char *ptr = buf;
 	unsigned long flags;
 
 	if (!synth)
 		return -EPERM;
 
-	unescaped = kstrdup(buf, GFP_KERNEL);
-	if (!unescaped)
-		return -ENOMEM;
-
-	string_unescape_any_inplace(unescaped);
-
+	len = strlen(buf);
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
-	synth_write(unescaped, strlen(unescaped));
+	while (len > 0) {
+		bytes = min_t(size_t, len, 250);
+		strncpy(tmp, ptr, bytes);
+		tmp[bytes] = '\0';
+		string_unescape_any_inplace(tmp);
+		synth_printf("%s", tmp);
+		ptr += bytes;
+		len -= bytes;
+	}
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
-
-	kfree(unescaped);
-
 	return count;
 }
 

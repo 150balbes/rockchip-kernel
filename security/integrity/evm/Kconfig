@@ -64,8 +64,7 @@ config EVM_LOAD_X509
 
 	   This option enables X509 certificate loading from the kernel
 	   onto the '.evm' trusted keyring.  A public key can be used to
-	   verify EVM integrity starting from the 'init' process. The
-	   key must have digitalSignature usage set.
+	   verify EVM integrity starting from the 'init' process.
 
 config EVM_X509_PATH
 	string "EVM X509 certificate path"
