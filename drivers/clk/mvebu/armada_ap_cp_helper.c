@@ -16,13 +16,15 @@
 char *ap_cp_unique_name(struct device *dev, struct device_node *np,
 			const char *name)
 {
-	struct resource res;
+	const __be32 *reg;
+	u64 addr;
 
 	/* Do not create a name if there is no clock */
 	if (!name)
 		return NULL;
 
-	of_address_to_resource(np, 0, &res);
+	reg = of_get_property(np, "reg", NULL);
+	addr = of_translate_address(np, reg);
 	return devm_kasprintf(dev, GFP_KERNEL, "%llx-%s",
-			      (unsigned long long)res.start, name);
+			      (unsigned long long)addr, name);
 }

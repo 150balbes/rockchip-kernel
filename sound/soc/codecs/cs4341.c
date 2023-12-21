@@ -189,7 +189,7 @@ static struct snd_soc_dai_driver cs4341_dai = {
 				  SNDRV_PCM_FMTBIT_S24_LE,
 	},
 	.ops			= &cs4341_dai_ops,
-	.symmetric_rate		= 1,
+	.symmetric_rates	= 1,
 };
 
 static const struct snd_soc_component_driver soc_component_cs4341 = {
@@ -202,6 +202,7 @@ static const struct snd_soc_component_driver soc_component_cs4341 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct of_device_id __maybe_unused cs4341_dt_ids[] = {
@@ -224,7 +225,8 @@ static int cs4341_probe(struct device *dev)
 }
 
 #if IS_ENABLED(CONFIG_I2C)
-static int cs4341_i2c_probe(struct i2c_client *i2c)
+static int cs4341_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct cs4341_priv *cs4341;
 
@@ -303,19 +305,12 @@ static int cs4341_spi_probe(struct spi_device *spi)
 	return cs4341_probe(&spi->dev);
 }
 
-static const struct spi_device_id cs4341_spi_ids[] = {
-	{ "cs4341a" },
-	{ }
-};
-MODULE_DEVICE_TABLE(spi, cs4341_spi_ids);
-
 static struct spi_driver cs4341_spi_driver = {
 	.driver = {
 		.name = "cs4341-spi",
 		.of_match_table = of_match_ptr(cs4341_dt_ids),
 	},
 	.probe = cs4341_spi_probe,
-	.id_table = cs4341_spi_ids,
 };
 #endif
 

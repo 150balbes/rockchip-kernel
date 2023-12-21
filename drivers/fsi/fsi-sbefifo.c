@@ -32,8 +32,6 @@
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 
-#include <uapi/linux/fsi.h>
-
 /*
  * The SBEFIFO is a pipe-like FSI device for communicating with
  * the self boot engine on POWER processors.
@@ -126,8 +124,6 @@ struct sbefifo {
 	bool			broken;
 	bool			dead;
 	bool			async_ffdc;
-	bool			timed_out;
-	u32			timeout_start_rsp_ms;
 };
 
 struct sbefifo_user {
@@ -136,19 +132,10 @@ struct sbefifo_user {
 	void			*cmd_page;
 	void			*pending_cmd;
 	size_t			pending_len;
-	u32			read_timeout_ms;
 };
 
 static DEFINE_MUTEX(sbefifo_ffdc_mutex);
 
-static ssize_t timeout_show(struct device *dev, struct device_attribute *attr,
-			    char *buf)
-{
-	struct sbefifo *sbefifo = container_of(dev, struct sbefifo, dev);
-
-	return sysfs_emit(buf, "%d\n", sbefifo->timed_out ? 1 : 0);
-}
-static DEVICE_ATTR_RO(timeout);
 
 static void __sbefifo_dump_ffdc(struct device *dev, const __be32 *ffdc,
 				size_t ffdc_sz, bool internal)
@@ -475,15 +462,11 @@ static int sbefifo_wait(struct sbefifo *sbefifo, bool up,
 			break;
 	}
 	if (!ready) {
-		sysfs_notify(&sbefifo->dev.kobj, NULL, dev_attr_timeout.attr.name);
-		sbefifo->timed_out = true;
-		dev_err(dev, "%s FIFO Timeout (%u ms)! status=%08x\n",
-			up ? "UP" : "DOWN", jiffies_to_msecs(timeout), sts);
+		dev_err(dev, "%s FIFO Timeout ! status=%08x\n", up ? "UP" : "DOWN", sts);
 		return -ETIMEDOUT;
 	}
 	dev_vdbg(dev, "End of wait status: %08x\n", sts);
 
-	sbefifo->timed_out = false;
 	*status = sts;
 
 	return 0;
@@ -498,8 +481,8 @@ static int sbefifo_send_command(struct sbefifo *sbefifo,
 	u32 status;
 	int rc;
 
-	dev_dbg(dev, "sending command (%zd words, cmd=%04x)\n",
-		cmd_len, be32_to_cpu(command[1]));
+	dev_vdbg(dev, "sending command (%zd words, cmd=%04x)\n",
+		 cmd_len, be32_to_cpu(command[1]));
 
 	/* As long as there's something to send */
 	timeout = msecs_to_jiffies(SBEFIFO_TIMEOUT_START_CMD);
@@ -552,23 +535,21 @@ static int sbefifo_read_response(struct sbefifo *sbefifo, struct iov_iter *respo
 	size_t len;
 	int rc;
 
-	dev_dbg(dev, "reading response, buflen = %zd\n", iov_iter_count(response));
+	dev_vdbg(dev, "reading response, buflen = %zd\n", iov_iter_count(response));
 
-	timeout = msecs_to_jiffies(sbefifo->timeout_start_rsp_ms);
+	timeout = msecs_to_jiffies(SBEFIFO_TIMEOUT_START_RSP);
 	for (;;) {
 		/* Grab FIFO status (this will handle parity errors) */
 		rc = sbefifo_wait(sbefifo, false, &status, timeout);
-		if (rc < 0) {
-			dev_dbg(dev, "timeout waiting (%u ms)\n", jiffies_to_msecs(timeout));
+		if (rc < 0)
 			return rc;
-		}
 		timeout = msecs_to_jiffies(SBEFIFO_TIMEOUT_IN_RSP);
 
 		/* Decode status */
 		len = sbefifo_populated(status);
 		eot_set = sbefifo_eot_set(status);
 
-		dev_dbg(dev, "  chunk size %zd eot_set=0x%x\n", len, eot_set);
+		dev_vdbg(dev, "  chunk size %zd eot_set=0x%x\n", len, eot_set);
 
 		/* Go through the chunk */
 		while(len--) {
@@ -659,7 +640,7 @@ static void sbefifo_collect_async_ffdc(struct sbefifo *sbefifo)
 	}
         ffdc_iov.iov_base = ffdc;
 	ffdc_iov.iov_len = SBEFIFO_MAX_FFDC_SIZE;
-        iov_iter_kvec(&ffdc_iter, ITER_DEST, &ffdc_iov, 1, SBEFIFO_MAX_FFDC_SIZE);
+        iov_iter_kvec(&ffdc_iter, WRITE, &ffdc_iov, 1, SBEFIFO_MAX_FFDC_SIZE);
 	cmd[0] = cpu_to_be32(2);
 	cmd[1] = cpu_to_be32(SBEFIFO_CMD_GET_SBE_FFDC);
 	rc = sbefifo_do_command(sbefifo, cmd, 2, &ffdc_iter);
@@ -756,12 +737,10 @@ int sbefifo_submit(struct device *dev, const __be32 *command, size_t cmd_len,
 	rbytes = (*resp_len) * sizeof(__be32);
 	resp_iov.iov_base = response;
 	resp_iov.iov_len = rbytes;
-        iov_iter_kvec(&resp_iter, ITER_DEST, &resp_iov, 1, rbytes);
+        iov_iter_kvec(&resp_iter, WRITE, &resp_iov, 1, rbytes);
 
 	/* Perform the command */
-	rc = mutex_lock_interruptible(&sbefifo->lock);
-	if (rc)
-		return rc;
+	mutex_lock(&sbefifo->lock);
 	rc = __sbefifo_submit(sbefifo, command, cmd_len, &resp_iter);
 	mutex_unlock(&sbefifo->lock);
 
@@ -802,7 +781,6 @@ static int sbefifo_user_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	}
 	mutex_init(&user->file_lock);
-	user->read_timeout_ms = SBEFIFO_TIMEOUT_START_RSP;
 
 	return 0;
 }
@@ -839,15 +817,11 @@ static ssize_t sbefifo_user_read(struct file *file, char __user *buf,
 	/* Prepare iov iterator */
 	resp_iov.iov_base = buf;
 	resp_iov.iov_len = len;
-	iov_iter_init(&resp_iter, ITER_DEST, &resp_iov, 1, len);
+	iov_iter_init(&resp_iter, WRITE, &resp_iov, 1, len);
 
 	/* Perform the command */
-	rc = mutex_lock_interruptible(&sbefifo->lock);
-	if (rc)
-		goto bail;
-	sbefifo->timeout_start_rsp_ms = user->read_timeout_ms;
+	mutex_lock(&sbefifo->lock);
 	rc = __sbefifo_submit(sbefifo, user->pending_cmd, cmd_len, &resp_iter);
-	sbefifo->timeout_start_rsp_ms = SBEFIFO_TIMEOUT_START_RSP;
 	mutex_unlock(&sbefifo->lock);
 	if (rc < 0)
 		goto bail;
@@ -901,9 +875,7 @@ static ssize_t sbefifo_user_write(struct file *file, const char __user *buf,
 		user->pending_len = 0;
 
 		/* Trigger reset request */
-		rc = mutex_lock_interruptible(&sbefifo->lock);
-		if (rc)
-			goto bail;
+		mutex_lock(&sbefifo->lock);
 		rc = sbefifo_request_reset(user->sbefifo);
 		mutex_unlock(&sbefifo->lock);
 		if (rc == 0)
@@ -937,55 +909,12 @@ static int sbefifo_user_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int sbefifo_read_timeout(struct sbefifo_user *user, void __user *argp)
-{
-	struct device *dev = &user->sbefifo->dev;
-	u32 timeout;
-
-	if (get_user(timeout, (__u32 __user *)argp))
-		return -EFAULT;
-
-	if (timeout == 0) {
-		user->read_timeout_ms = SBEFIFO_TIMEOUT_START_RSP;
-		dev_dbg(dev, "Timeout reset to %d\n", user->read_timeout_ms);
-		return 0;
-	}
-
-	if (timeout < 10 || timeout > 120)
-		return -EINVAL;
-
-	user->read_timeout_ms = timeout * 1000; /* user timeout is in sec */
-
-	dev_dbg(dev, "Timeout set to %d\n", user->read_timeout_ms);
-
-	return 0;
-}
-
-static long sbefifo_user_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	struct sbefifo_user *user = file->private_data;
-	int rc = -ENOTTY;
-
-	if (!user)
-		return -EINVAL;
-
-	mutex_lock(&user->file_lock);
-	switch (cmd) {
-	case FSI_SBEFIFO_READ_TIMEOUT_SECONDS:
-		rc = sbefifo_read_timeout(user, (void __user *)arg);
-		break;
-	}
-	mutex_unlock(&user->file_lock);
-	return rc;
-}
-
 static const struct file_operations sbefifo_fops = {
 	.owner		= THIS_MODULE,
 	.open		= sbefifo_user_open,
 	.read		= sbefifo_user_read,
 	.write		= sbefifo_user_write,
 	.release	= sbefifo_user_release,
-	.unlocked_ioctl = sbefifo_user_ioctl,
 };
 
 static void sbefifo_free(struct device *dev)
@@ -1025,7 +954,6 @@ static int sbefifo_probe(struct device *dev)
 	sbefifo->fsi_dev = fsi_dev;
 	dev_set_drvdata(dev, sbefifo);
 	mutex_init(&sbefifo->lock);
-	sbefifo->timeout_start_rsp_ms = SBEFIFO_TIMEOUT_START_RSP;
 
 	/*
 	 * Try cleaning up the FIFO. If this fails, we still register the
@@ -1065,8 +993,6 @@ static int sbefifo_probe(struct device *dev)
 				 child_name);
 	}
 
-	device_create_file(&sbefifo->dev, &dev_attr_timeout);
-
 	return 0;
  err_free_minor:
 	fsi_free_minor(sbefifo->dev.devt);
@@ -1091,8 +1017,6 @@ static int sbefifo_remove(struct device *dev)
 	struct sbefifo *sbefifo = dev_get_drvdata(dev);
 
 	dev_dbg(dev, "Removing sbefifo device...\n");
-
-	device_remove_file(&sbefifo->dev, &dev_attr_timeout);
 
 	mutex_lock(&sbefifo->lock);
 	sbefifo->dead = true;

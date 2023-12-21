@@ -4,7 +4,6 @@
 #include <linux/bpf.h>
 #include <stdint.h>
 #include <bpf/bpf_helpers.h>
-#include "bpf_misc.h"
 
 char _license[] SEC("license") = "GPL";
 
@@ -31,7 +30,7 @@ static __always_inline long get_flags()
 	return sz >= wakeup_data_size ? BPF_RB_FORCE_WAKEUP : BPF_RB_NO_WAKEUP;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_getpgid")
+SEC("fentry/__x64_sys_getpgid")
 int bench_ringbuf(void *ctx)
 {
 	long *sample, flags;

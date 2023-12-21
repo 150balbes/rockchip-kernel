@@ -7,16 +7,14 @@
 #include <linux/pm_runtime.h>
 #include <linux/soundwire/sdw_registers.h>
 #include <linux/soundwire/sdw.h>
-#include <linux/soundwire/sdw_type.h>
 #include "bus.h"
 #include "sysfs_local.h"
 
-static DEFINE_IDA(sdw_bus_ida);
-static DEFINE_IDA(sdw_peripheral_ida);
+static DEFINE_IDA(sdw_ida);
 
 static int sdw_get_id(struct sdw_bus *bus)
 {
-	int rc = ida_alloc(&sdw_bus_ida, GFP_KERNEL);
+	int rc = ida_alloc(&sdw_ida, GFP_KERNEL);
 
 	if (rc < 0)
 		return rc;
@@ -46,13 +44,13 @@ int sdw_bus_master_add(struct sdw_bus *bus, struct device *parent,
 	}
 
 	ret = sdw_get_id(bus);
-	if (ret < 0) {
+	if (ret) {
 		dev_err(parent, "Failed to get bus id\n");
 		return ret;
 	}
 
 	ret = sdw_master_device_add(bus, parent, fwnode);
-	if (ret < 0) {
+	if (ret) {
 		dev_err(parent, "Failed to add master device at link %d\n",
 			bus->link_id);
 		return ret;
@@ -69,22 +67,14 @@ int sdw_bus_master_add(struct sdw_bus *bus, struct device *parent,
 		return -EINVAL;
 	}
 
-	/*
-	 * Give each bus_lock and msg_lock a unique key so that lockdep won't
-	 * trigger a deadlock warning when the locks of several buses are
-	 * grabbed during configuration of a multi-bus stream.
-	 */
-	lockdep_register_key(&bus->msg_lock_key);
-	__mutex_init(&bus->msg_lock, "msg_lock", &bus->msg_lock_key);
-
-	lockdep_register_key(&bus->bus_lock_key);
-	__mutex_init(&bus->bus_lock, "bus_lock", &bus->bus_lock_key);
-
+	mutex_init(&bus->msg_lock);
+	mutex_init(&bus->bus_lock);
 	INIT_LIST_HEAD(&bus->slaves);
 	INIT_LIST_HEAD(&bus->m_rt_list);
 
 	/*
 	 * Initialize multi_link flag
+	 * TODO: populate this flag by reading property from FW node
 	 */
 	bus->multi_link = false;
 	if (bus->ops->read_prop) {
@@ -131,7 +121,7 @@ int sdw_bus_master_add(struct sdw_bus *bus, struct device *parent,
 	else
 		ret = -ENOTSUPP; /* No ACPI/DT so error out */
 
-	if (ret < 0) {
+	if (ret) {
 		dev_err(bus->dev, "Finding slaves failed:%d\n", ret);
 		return ret;
 	}
@@ -166,11 +156,9 @@ static int sdw_delete_slave(struct device *dev, void *data)
 
 	mutex_lock(&bus->bus_lock);
 
-	if (slave->dev_num) { /* clear dev_num if assigned */
+	if (slave->dev_num) /* clear dev_num if assigned */
 		clear_bit(slave->dev_num, bus->assigned);
-		if (bus->dev_num_ida_min)
-			ida_free(&sdw_peripheral_ida, slave->dev_num);
-	}
+
 	list_del_init(&slave->node);
 	mutex_unlock(&bus->bus_lock);
 
@@ -190,9 +178,7 @@ void sdw_bus_master_delete(struct sdw_bus *bus)
 	sdw_master_device_del(bus);
 
 	sdw_bus_debugfs_exit(bus);
-	lockdep_unregister_key(&bus->bus_lock_key);
-	lockdep_unregister_key(&bus->msg_lock_key);
-	ida_free(&sdw_bus_ida, bus->id);
+	ida_free(&sdw_ida, bus->id);
 }
 EXPORT_SYMBOL(sdw_bus_master_delete);
 
@@ -236,9 +222,9 @@ static inline int do_transfer(struct sdw_bus *bus, struct sdw_msg *msg)
 }
 
 static inline int do_transfer_defer(struct sdw_bus *bus,
-				    struct sdw_msg *msg)
+				    struct sdw_msg *msg,
+				    struct sdw_defer *defer)
 {
-	struct sdw_defer *defer = &bus->defer_msg;
 	int retry = bus->prop.err_threshold;
 	enum sdw_command_response resp;
 	int ret = 0, i;
@@ -248,7 +234,24 @@ static inline int do_transfer_defer(struct sdw_bus *bus,
 	init_completion(&defer->complete);
 
 	for (i = 0; i <= retry; i++) {
-		resp = bus->ops->xfer_msg_defer(bus);
+		resp = bus->ops->xfer_msg_defer(bus, msg, defer);
+		ret = find_response_code(resp);
+		/* if cmd is ok or ignored return */
+		if (ret == 0 || ret == -ENODATA)
+			return ret;
+	}
+
+	return ret;
+}
+
+static int sdw_reset_page(struct sdw_bus *bus, u16 dev_num)
+{
+	int retry = bus->prop.err_threshold;
+	enum sdw_command_response resp;
+	int ret = 0, i;
+
+	for (i = 0; i <= retry; i++) {
+		resp = bus->ops->reset_page_addr(bus, dev_num);
 		ret = find_response_code(resp);
 		/* if cmd is ok or ignored return */
 		if (ret == 0 || ret == -ENODATA)
@@ -264,10 +267,11 @@ static int sdw_transfer_unlocked(struct sdw_bus *bus, struct sdw_msg *msg)
 
 	ret = do_transfer(bus, msg);
 	if (ret != 0 && ret != -ENODATA)
-		dev_err(bus->dev, "trf on Slave %d failed:%d %s addr %x count %d\n",
-			msg->dev_num, ret,
-			(msg->flags & SDW_MSG_FLAG_WRITE) ? "write" : "read",
-			msg->addr, msg->len);
+		dev_err(bus->dev, "trf on Slave %d failed:%d\n",
+			msg->dev_num, ret);
+
+	if (msg->page)
+		sdw_reset_page(bus, msg->dev_num);
 
 	return ret;
 }
@@ -291,55 +295,28 @@ int sdw_transfer(struct sdw_bus *bus, struct sdw_msg *msg)
 }
 
 /**
- * sdw_show_ping_status() - Direct report of PING status, to be used by Peripheral drivers
- * @bus: SDW bus
- * @sync_delay: Delay before reading status
- */
-void sdw_show_ping_status(struct sdw_bus *bus, bool sync_delay)
-{
-	u32 status;
-
-	if (!bus->ops->read_ping_status)
-		return;
-
-	/*
-	 * wait for peripheral to sync if desired. 10-15ms should be more than
-	 * enough in most cases.
-	 */
-	if (sync_delay)
-		usleep_range(10000, 15000);
-
-	mutex_lock(&bus->msg_lock);
-
-	status = bus->ops->read_ping_status(bus);
-
-	mutex_unlock(&bus->msg_lock);
-
-	if (!status)
-		dev_warn(bus->dev, "%s: no peripherals attached\n", __func__);
-	else
-		dev_dbg(bus->dev, "PING status: %#x\n", status);
-}
-EXPORT_SYMBOL(sdw_show_ping_status);
-
-/**
  * sdw_transfer_defer() - Asynchronously transfer message to a SDW Slave device
  * @bus: SDW bus
  * @msg: SDW message to be xfered
+ * @defer: Defer block for signal completion
  *
  * Caller needs to hold the msg_lock lock while calling this
  */
-int sdw_transfer_defer(struct sdw_bus *bus, struct sdw_msg *msg)
+int sdw_transfer_defer(struct sdw_bus *bus, struct sdw_msg *msg,
+		       struct sdw_defer *defer)
 {
 	int ret;
 
 	if (!bus->ops->xfer_msg_defer)
 		return -ENOTSUPP;
 
-	ret = do_transfer_defer(bus, msg);
+	ret = do_transfer_defer(bus, msg, defer);
 	if (ret != 0 && ret != -ENODATA)
 		dev_err(bus->dev, "Defer trf on Slave %d failed:%d\n",
 			msg->dev_num, ret);
+
+	if (msg->page)
+		sdw_reset_page(bus, msg->dev_num);
 
 	return ret;
 }
@@ -395,73 +372,39 @@ int sdw_fill_msg(struct sdw_msg *msg, struct sdw_slave *slave,
 
 /*
  * Read/Write IO functions.
+ * no_pm versions can only be called by the bus, e.g. while enumerating or
+ * handling suspend-resume sequences.
+ * all clients need to use the pm versions
  */
 
-static int sdw_ntransfer_no_pm(struct sdw_slave *slave, u32 addr, u8 flags,
-			       size_t count, u8 *val)
+static int
+sdw_nread_no_pm(struct sdw_slave *slave, u32 addr, size_t count, u8 *val)
 {
 	struct sdw_msg msg;
-	size_t size;
 	int ret;
 
-	while (count) {
-		// Only handle bytes up to next page boundary
-		size = min_t(size_t, count, (SDW_REGADDR + 1) - (addr & SDW_REGADDR));
+	ret = sdw_fill_msg(&msg, slave, addr, count,
+			   slave->dev_num, SDW_MSG_FLAG_READ, val);
+	if (ret < 0)
+		return ret;
 
-		ret = sdw_fill_msg(&msg, slave, addr, size, slave->dev_num, flags, val);
-		if (ret < 0)
-			return ret;
-
-		ret = sdw_transfer(slave->bus, &msg);
-		if (ret < 0 && !slave->is_mockup_device)
-			return ret;
-
-		addr += size;
-		val += size;
-		count -= size;
-	}
-
-	return 0;
+	return sdw_transfer(slave->bus, &msg);
 }
 
-/**
- * sdw_nread_no_pm() - Read "n" contiguous SDW Slave registers with no PM
- * @slave: SDW Slave
- * @addr: Register address
- * @count: length
- * @val: Buffer for values to be read
- *
- * Note that if the message crosses a page boundary each page will be
- * transferred under a separate invocation of the msg_lock.
- */
-int sdw_nread_no_pm(struct sdw_slave *slave, u32 addr, size_t count, u8 *val)
+static int
+sdw_nwrite_no_pm(struct sdw_slave *slave, u32 addr, size_t count, u8 *val)
 {
-	return sdw_ntransfer_no_pm(slave, addr, SDW_MSG_FLAG_READ, count, val);
-}
-EXPORT_SYMBOL(sdw_nread_no_pm);
+	struct sdw_msg msg;
+	int ret;
 
-/**
- * sdw_nwrite_no_pm() - Write "n" contiguous SDW Slave registers with no PM
- * @slave: SDW Slave
- * @addr: Register address
- * @count: length
- * @val: Buffer for values to be written
- *
- * Note that if the message crosses a page boundary each page will be
- * transferred under a separate invocation of the msg_lock.
- */
-int sdw_nwrite_no_pm(struct sdw_slave *slave, u32 addr, size_t count, const u8 *val)
-{
-	return sdw_ntransfer_no_pm(slave, addr, SDW_MSG_FLAG_WRITE, count, (u8 *)val);
-}
-EXPORT_SYMBOL(sdw_nwrite_no_pm);
+	ret = sdw_fill_msg(&msg, slave, addr, count,
+			   slave->dev_num, SDW_MSG_FLAG_WRITE, val);
+	if (ret < 0)
+		return ret;
 
-/**
- * sdw_write_no_pm() - Write a SDW Slave register with no PM
- * @slave: SDW Slave
- * @addr: Register address
- * @value: Register value
- */
+	return sdw_transfer(slave->bus, &msg);
+}
+
 int sdw_write_no_pm(struct sdw_slave *slave, u32 addr, u8 value)
 {
 	return sdw_nwrite_no_pm(slave, addr, 1, &value);
@@ -477,7 +420,7 @@ sdw_bread_no_pm(struct sdw_bus *bus, u16 dev_num, u32 addr)
 
 	ret = sdw_fill_msg(&msg, NULL, addr, 1, dev_num,
 			   SDW_MSG_FLAG_READ, &buf);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	ret = sdw_transfer(bus, &msg);
@@ -495,7 +438,7 @@ sdw_bwrite_no_pm(struct sdw_bus *bus, u16 dev_num, u32 addr, u8 value)
 
 	ret = sdw_fill_msg(&msg, NULL, addr, 1, dev_num,
 			   SDW_MSG_FLAG_WRITE, &value);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	return sdw_transfer(bus, &msg);
@@ -509,7 +452,7 @@ int sdw_bread_no_pm_unlocked(struct sdw_bus *bus, u16 dev_num, u32 addr)
 
 	ret = sdw_fill_msg(&msg, NULL, addr, 1, dev_num,
 			   SDW_MSG_FLAG_READ, &buf);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	ret = sdw_transfer_unlocked(bus, &msg);
@@ -527,18 +470,13 @@ int sdw_bwrite_no_pm_unlocked(struct sdw_bus *bus, u16 dev_num, u32 addr, u8 val
 
 	ret = sdw_fill_msg(&msg, NULL, addr, 1, dev_num,
 			   SDW_MSG_FLAG_WRITE, &value);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	return sdw_transfer_unlocked(bus, &msg);
 }
 EXPORT_SYMBOL(sdw_bwrite_no_pm_unlocked);
 
-/**
- * sdw_read_no_pm() - Read a SDW Slave register with no PM
- * @slave: SDW Slave
- * @addr: Register address
- */
 int sdw_read_no_pm(struct sdw_slave *slave, u32 addr)
 {
 	u8 buf;
@@ -552,7 +490,7 @@ int sdw_read_no_pm(struct sdw_slave *slave, u32 addr)
 }
 EXPORT_SYMBOL(sdw_read_no_pm);
 
-int sdw_update_no_pm(struct sdw_slave *slave, u32 addr, u8 mask, u8 val)
+static int sdw_update_no_pm(struct sdw_slave *slave, u32 addr, u8 mask, u8 val)
 {
 	int tmp;
 
@@ -563,21 +501,6 @@ int sdw_update_no_pm(struct sdw_slave *slave, u32 addr, u8 mask, u8 val)
 	tmp = (tmp & ~mask) | val;
 	return sdw_write_no_pm(slave, addr, tmp);
 }
-EXPORT_SYMBOL(sdw_update_no_pm);
-
-/* Read-Modify-Write Slave register */
-int sdw_update(struct sdw_slave *slave, u32 addr, u8 mask, u8 val)
-{
-	int tmp;
-
-	tmp = sdw_read(slave, addr);
-	if (tmp < 0)
-		return tmp;
-
-	tmp = (tmp & ~mask) | val;
-	return sdw_write(slave, addr, tmp);
-}
-EXPORT_SYMBOL(sdw_update);
 
 /**
  * sdw_nread() - Read "n" contiguous SDW Slave registers
@@ -585,11 +508,6 @@ EXPORT_SYMBOL(sdw_update);
  * @addr: Register address
  * @count: length
  * @val: Buffer for values to be read
- *
- * This version of the function will take a PM reference to the slave
- * device.
- * Note that if the message crosses a page boundary each page will be
- * transferred under a separate invocation of the msg_lock.
  */
 int sdw_nread(struct sdw_slave *slave, u32 addr, size_t count, u8 *val)
 {
@@ -615,14 +533,9 @@ EXPORT_SYMBOL(sdw_nread);
  * @slave: SDW Slave
  * @addr: Register address
  * @count: length
- * @val: Buffer for values to be written
- *
- * This version of the function will take a PM reference to the slave
- * device.
- * Note that if the message crosses a page boundary each page will be
- * transferred under a separate invocation of the msg_lock.
+ * @val: Buffer for values to be read
  */
-int sdw_nwrite(struct sdw_slave *slave, u32 addr, size_t count, const u8 *val)
+int sdw_nwrite(struct sdw_slave *slave, u32 addr, size_t count, u8 *val)
 {
 	int ret;
 
@@ -645,9 +558,6 @@ EXPORT_SYMBOL(sdw_nwrite);
  * sdw_read() - Read a SDW Slave register
  * @slave: SDW Slave
  * @addr: Register address
- *
- * This version of the function will take a PM reference to the slave
- * device.
  */
 int sdw_read(struct sdw_slave *slave, u32 addr)
 {
@@ -667,9 +577,6 @@ EXPORT_SYMBOL(sdw_read);
  * @slave: SDW Slave
  * @addr: Register address
  * @value: Register value
- *
- * This version of the function will take a PM reference to the slave
- * device.
  */
 int sdw_write(struct sdw_slave *slave, u32 addr, u8 value)
 {
@@ -684,7 +591,7 @@ EXPORT_SYMBOL(sdw_write);
 /* called with bus_lock held */
 static struct sdw_slave *sdw_get_slave(struct sdw_bus *bus, int i)
 {
-	struct sdw_slave *slave;
+	struct sdw_slave *slave = NULL;
 
 	list_for_each_entry(slave, &bus->slaves, node) {
 		if (slave->dev_num == i)
@@ -694,7 +601,7 @@ static struct sdw_slave *sdw_get_slave(struct sdw_bus *bus, int i)
 	return NULL;
 }
 
-int sdw_compare_devid(struct sdw_slave *slave, struct sdw_slave_id id)
+static int sdw_compare_devid(struct sdw_slave *slave, struct sdw_slave_id id)
 {
 	if (slave->id.mfg_id != id.mfg_id ||
 	    slave->id.part_id != id.part_id ||
@@ -705,25 +612,16 @@ int sdw_compare_devid(struct sdw_slave *slave, struct sdw_slave_id id)
 
 	return 0;
 }
-EXPORT_SYMBOL(sdw_compare_devid);
 
 /* called with bus_lock held */
 static int sdw_get_device_num(struct sdw_slave *slave)
 {
 	int bit;
 
-	if (slave->bus->dev_num_ida_min) {
-		bit = ida_alloc_range(&sdw_peripheral_ida,
-				      slave->bus->dev_num_ida_min, SDW_MAX_DEVICES,
-				      GFP_KERNEL);
-		if (bit < 0)
-			goto err;
-	} else {
-		bit = find_first_zero_bit(slave->bus->assigned, SDW_MAX_DEVICES);
-		if (bit == SDW_MAX_DEVICES) {
-			bit = -ENODEV;
-			goto err;
-		}
+	bit = find_first_zero_bit(slave->bus->assigned, SDW_MAX_DEVICES);
+	if (bit == SDW_MAX_DEVICES) {
+		bit = -ENODEV;
+		goto err;
 	}
 
 	/*
@@ -738,7 +636,6 @@ err:
 
 static int sdw_assign_device_num(struct sdw_slave *slave)
 {
-	struct sdw_bus *bus = slave->bus;
 	int ret, dev_num;
 	bool new_device = false;
 
@@ -749,7 +646,7 @@ static int sdw_assign_device_num(struct sdw_slave *slave)
 			dev_num = sdw_get_device_num(slave);
 			mutex_unlock(&slave->bus->bus_lock);
 			if (dev_num < 0) {
-				dev_err(bus->dev, "Get dev_num failed: %d\n",
+				dev_err(slave->bus->dev, "Get dev_num failed: %d\n",
 					dev_num);
 				return dev_num;
 			}
@@ -762,7 +659,7 @@ static int sdw_assign_device_num(struct sdw_slave *slave)
 	}
 
 	if (!new_device)
-		dev_dbg(bus->dev,
+		dev_dbg(slave->bus->dev,
 			"Slave already registered, reusing dev_num:%d\n",
 			slave->dev_num);
 
@@ -772,16 +669,13 @@ static int sdw_assign_device_num(struct sdw_slave *slave)
 
 	ret = sdw_write_no_pm(slave, SDW_SCP_DEVNUMBER, dev_num);
 	if (ret < 0) {
-		dev_err(bus->dev, "Program device_num %d failed: %d\n",
+		dev_err(&slave->dev, "Program device_num %d failed: %d\n",
 			dev_num, ret);
 		return ret;
 	}
 
 	/* After xfer of msg, restore dev_num */
 	slave->dev_num = slave->dev_num_sticky;
-
-	if (bus->ops && bus->ops->new_peripheral_assigned)
-		bus->ops->new_peripheral_assigned(bus, dev_num);
 
 	return 0;
 }
@@ -798,12 +692,12 @@ void sdw_extract_slave_id(struct sdw_bus *bus,
 	id->class_id = SDW_CLASS_ID(addr);
 
 	dev_dbg(bus->dev,
-		"SDW Slave class_id 0x%02x, mfg_id 0x%04x, part_id 0x%04x, unique_id 0x%x, version 0x%x\n",
-		id->class_id, id->mfg_id, id->part_id, id->unique_id, id->sdw_version);
+		"SDW Slave class_id %x, part_id %x, mfg_id %x, unique_id %x, version %x\n",
+				id->class_id, id->part_id, id->mfg_id,
+				id->unique_id, id->sdw_version);
 }
-EXPORT_SYMBOL(sdw_extract_slave_id);
 
-static int sdw_program_device_num(struct sdw_bus *bus, bool *programmed)
+static int sdw_program_device_num(struct sdw_bus *bus)
 {
 	u8 buf[SDW_NUM_DEV_ID_REGISTERS] = {0};
 	struct sdw_slave *slave, *_s;
@@ -812,8 +706,6 @@ static int sdw_program_device_num(struct sdw_bus *bus, bool *programmed)
 	bool found;
 	int count = 0, ret;
 	u64 addr;
-
-	*programmed = false;
 
 	/* No Slave, so use raw xfer api */
 	ret = sdw_fill_msg(&msg, NULL, SDW_SCP_DEVID_0,
@@ -850,30 +742,18 @@ static int sdw_program_device_num(struct sdw_bus *bus, bool *programmed)
 				found = true;
 
 				/*
-				 * To prevent skipping state-machine stages don't
-				 * program a device until we've seen it UNATTACH.
-				 * Must return here because no other device on #0
-				 * can be detected until this one has been
-				 * assigned a device ID.
-				 */
-				if (slave->status != SDW_SLAVE_UNATTACHED)
-					return 0;
-
-				/*
 				 * Assign a new dev_num to this Slave and
 				 * not mark it present. It will be marked
 				 * present after it reports ATTACHED on new
 				 * dev_num
 				 */
 				ret = sdw_assign_device_num(slave);
-				if (ret < 0) {
-					dev_err(bus->dev,
+				if (ret) {
+					dev_err(slave->bus->dev,
 						"Assign dev_num failed:%d\n",
 						ret);
 					return ret;
 				}
-
-				*programmed = true;
 
 				break;
 			}
@@ -909,18 +789,16 @@ static int sdw_program_device_num(struct sdw_bus *bus, bool *programmed)
 static void sdw_modify_slave_status(struct sdw_slave *slave,
 				    enum sdw_slave_status status)
 {
-	struct sdw_bus *bus = slave->bus;
+	mutex_lock(&slave->bus->bus_lock);
 
-	mutex_lock(&bus->bus_lock);
-
-	dev_vdbg(bus->dev,
-		 "changing status slave %d status %d new status %d\n",
-		 slave->dev_num, slave->status, status);
+	dev_vdbg(&slave->dev,
+		 "%s: changing status slave %d status %d new status %d\n",
+		 __func__, slave->dev_num, slave->status, status);
 
 	if (status == SDW_SLAVE_UNATTACHED) {
 		dev_dbg(&slave->dev,
-			"initializing enumeration and init completion for Slave %d\n",
-			slave->dev_num);
+			"%s: initializing completion for Slave %d\n",
+			__func__, slave->dev_num);
 
 		init_completion(&slave->enumeration_complete);
 		init_completion(&slave->initialization_complete);
@@ -928,34 +806,51 @@ static void sdw_modify_slave_status(struct sdw_slave *slave,
 	} else if ((status == SDW_SLAVE_ATTACHED) &&
 		   (slave->status == SDW_SLAVE_UNATTACHED)) {
 		dev_dbg(&slave->dev,
-			"signaling enumeration completion for Slave %d\n",
-			slave->dev_num);
+			"%s: signaling completion for Slave %d\n",
+			__func__, slave->dev_num);
 
 		complete(&slave->enumeration_complete);
 	}
 	slave->status = status;
-	mutex_unlock(&bus->bus_lock);
+	mutex_unlock(&slave->bus->bus_lock);
+}
+
+static enum sdw_clk_stop_mode sdw_get_clk_stop_mode(struct sdw_slave *slave)
+{
+	enum sdw_clk_stop_mode mode;
+
+	/*
+	 * Query for clock stop mode if Slave implements
+	 * ops->get_clk_stop_mode, else read from property.
+	 */
+	if (slave->ops && slave->ops->get_clk_stop_mode) {
+		mode = slave->ops->get_clk_stop_mode(slave);
+	} else {
+		if (slave->prop.clk_stop_mode1)
+			mode = SDW_CLK_STOP_MODE1;
+		else
+			mode = SDW_CLK_STOP_MODE0;
+	}
+
+	return mode;
 }
 
 static int sdw_slave_clk_stop_callback(struct sdw_slave *slave,
 				       enum sdw_clk_stop_mode mode,
 				       enum sdw_clk_stop_type type)
 {
-	int ret = 0;
+	int ret;
 
-	mutex_lock(&slave->sdw_dev_lock);
-
-	if (slave->probed)  {
-		struct device *dev = &slave->dev;
-		struct sdw_driver *drv = drv_to_sdw_driver(dev->driver);
-
-		if (drv->ops && drv->ops->clk_stop)
-			ret = drv->ops->clk_stop(slave, mode, type);
+	if (slave->ops && slave->ops->clk_stop) {
+		ret = slave->ops->clk_stop(slave, mode, type);
+		if (ret < 0) {
+			dev_err(&slave->dev,
+				"Clk Stop type =%d failed: %d\n", type, ret);
+			return ret;
+		}
 	}
 
-	mutex_unlock(&slave->sdw_dev_lock);
-
-	return ret;
+	return 0;
 }
 
 static int sdw_slave_clk_stop_prepare(struct sdw_slave *slave,
@@ -977,20 +872,16 @@ static int sdw_slave_clk_stop_prepare(struct sdw_slave *slave,
 		if (wake_en)
 			val |= SDW_SCP_SYSTEMCTRL_WAKE_UP_EN;
 	} else {
-		ret = sdw_read_no_pm(slave, SDW_SCP_SYSTEMCTRL);
-		if (ret < 0) {
-			if (ret != -ENODATA)
-				dev_err(&slave->dev, "SDW_SCP_SYSTEMCTRL read failed:%d\n", ret);
-			return ret;
-		}
-		val = ret;
+		val = sdw_read_no_pm(slave, SDW_SCP_SYSTEMCTRL);
+
 		val &= ~(SDW_SCP_SYSTEMCTRL_CLK_STP_PREP);
 	}
 
 	ret = sdw_write_no_pm(slave, SDW_SCP_SYSTEMCTRL, val);
 
-	if (ret < 0 && ret != -ENODATA)
-		dev_err(&slave->dev, "SDW_SCP_SYSTEMCTRL write failed:%d\n", ret);
+	if (ret != 0)
+		dev_err(&slave->dev,
+			"Clock Stop prepare failed for slave: %d", ret);
 
 	return ret;
 }
@@ -1001,16 +892,11 @@ static int sdw_bus_wait_for_clk_prep_deprep(struct sdw_bus *bus, u16 dev_num)
 	int val;
 
 	do {
-		val = sdw_bread_no_pm(bus, dev_num, SDW_SCP_STAT);
-		if (val < 0) {
-			if (val != -ENODATA)
-				dev_err(bus->dev, "SDW_SCP_STAT bread failed:%d\n", val);
-			return val;
-		}
-		val &= SDW_SCP_STAT_CLK_STP_NF;
+		val = sdw_bread_no_pm(bus, dev_num, SDW_SCP_STAT) &
+			SDW_SCP_STAT_CLK_STP_NF;
 		if (!val) {
-			dev_dbg(bus->dev, "clock stop prep/de-prep done slave:%d\n",
-				dev_num);
+			dev_info(bus->dev, "clock stop prep/de-prep done slave:%d",
+				 dev_num);
 			return 0;
 		}
 
@@ -1018,7 +904,7 @@ static int sdw_bus_wait_for_clk_prep_deprep(struct sdw_bus *bus, u16 dev_num)
 		retry--;
 	} while (retry);
 
-	dev_err(bus->dev, "clock stop prep/de-prep failed slave:%d\n",
+	dev_err(bus->dev, "clock stop prep/de-prep failed slave:%d",
 		dev_num);
 
 	return -ETIMEDOUT;
@@ -1033,6 +919,7 @@ static int sdw_bus_wait_for_clk_prep_deprep(struct sdw_bus *bus, u16 dev_num)
  */
 int sdw_bus_prep_clk_stop(struct sdw_bus *bus)
 {
+	enum sdw_clk_stop_mode slave_mode;
 	bool simple_clk_stop = true;
 	struct sdw_slave *slave;
 	bool is_slave = false;
@@ -1042,9 +929,6 @@ int sdw_bus_prep_clk_stop(struct sdw_bus *bus)
 	 * In order to save on transition time, prepare
 	 * each Slave and then wait for all Slave(s) to be
 	 * prepared for clock stop.
-	 * If one of the Slave devices has lost sync and
-	 * replies with Command Ignored/-ENODATA, we continue
-	 * the loop
 	 */
 	list_for_each_entry(slave, &bus->slaves, node) {
 		if (!slave->dev_num)
@@ -1057,48 +941,39 @@ int sdw_bus_prep_clk_stop(struct sdw_bus *bus)
 		/* Identify if Slave(s) are available on Bus */
 		is_slave = true;
 
-		ret = sdw_slave_clk_stop_callback(slave,
-						  SDW_CLK_STOP_MODE0,
+		slave_mode = sdw_get_clk_stop_mode(slave);
+		slave->curr_clk_stop_mode = slave_mode;
+
+		ret = sdw_slave_clk_stop_callback(slave, slave_mode,
 						  SDW_CLK_PRE_PREPARE);
-		if (ret < 0 && ret != -ENODATA) {
-			dev_err(&slave->dev, "clock stop pre-prepare cb failed:%d\n", ret);
+		if (ret < 0) {
+			dev_err(&slave->dev,
+				"pre-prepare failed:%d", ret);
 			return ret;
 		}
 
-		/* Only prepare a Slave device if needed */
-		if (!slave->prop.simple_clk_stop_capable) {
-			simple_clk_stop = false;
-
-			ret = sdw_slave_clk_stop_prepare(slave,
-							 SDW_CLK_STOP_MODE0,
-							 true);
-			if (ret < 0 && ret != -ENODATA) {
-				dev_err(&slave->dev, "clock stop prepare failed:%d\n", ret);
-				return ret;
-			}
+		ret = sdw_slave_clk_stop_prepare(slave,
+						 slave_mode, true);
+		if (ret < 0) {
+			dev_err(&slave->dev,
+				"pre-prepare failed:%d", ret);
+			return ret;
 		}
+
+		if (slave_mode == SDW_CLK_STOP_MODE1)
+			simple_clk_stop = false;
 	}
 
-	/* Skip remaining clock stop preparation if no Slave is attached */
-	if (!is_slave)
-		return 0;
-
-	/*
-	 * Don't wait for all Slaves to be ready if they follow the simple
-	 * state machine
-	 */
-	if (!simple_clk_stop) {
+	if (is_slave && !simple_clk_stop) {
 		ret = sdw_bus_wait_for_clk_prep_deprep(bus,
 						       SDW_BROADCAST_DEV_NUM);
-		/*
-		 * if there are no Slave devices present and the reply is
-		 * Command_Ignored/-ENODATA, we don't need to continue with the
-		 * flow and can just return here. The error code is not modified
-		 * and its handling left as an exercise for the caller.
-		 */
 		if (ret < 0)
 			return ret;
 	}
+
+	/* Don't need to inform slaves if there is no slave attached */
+	if (!is_slave)
+		return ret;
 
 	/* Inform slaves that prep is done */
 	list_for_each_entry(slave, &bus->slaves, node) {
@@ -1109,17 +984,21 @@ int sdw_bus_prep_clk_stop(struct sdw_bus *bus)
 		    slave->status != SDW_SLAVE_ALERT)
 			continue;
 
-		ret = sdw_slave_clk_stop_callback(slave,
-						  SDW_CLK_STOP_MODE0,
-						  SDW_CLK_POST_PREPARE);
+		slave_mode = slave->curr_clk_stop_mode;
 
-		if (ret < 0 && ret != -ENODATA) {
-			dev_err(&slave->dev, "clock stop post-prepare cb failed:%d\n", ret);
-			return ret;
+		if (slave_mode == SDW_CLK_STOP_MODE1) {
+			ret = sdw_slave_clk_stop_callback(slave,
+							  slave_mode,
+							  SDW_CLK_POST_PREPARE);
+
+			if (ret < 0) {
+				dev_err(&slave->dev,
+					"post-prepare failed:%d", ret);
+			}
 		}
 	}
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(sdw_bus_prep_clk_stop);
 
@@ -1142,8 +1021,12 @@ int sdw_bus_clk_stop(struct sdw_bus *bus)
 	ret = sdw_bwrite_no_pm(bus, SDW_BROADCAST_DEV_NUM,
 			       SDW_SCP_CTRL, SDW_SCP_CTRL_CLK_STP_NOW);
 	if (ret < 0) {
-		if (ret != -ENODATA)
-			dev_err(bus->dev, "ClockStopNow Broadcast msg failed %d\n", ret);
+		if (ret == -ENODATA)
+			dev_dbg(bus->dev,
+				"ClockStopNow Broadcast msg ignored %d", ret);
+		else
+			dev_err(bus->dev,
+				"ClockStopNow Broadcast msg failed %d", ret);
 		return ret;
 	}
 
@@ -1162,6 +1045,7 @@ EXPORT_SYMBOL(sdw_bus_clk_stop);
  */
 int sdw_bus_exit_clk_stop(struct sdw_bus *bus)
 {
+	enum sdw_clk_stop_mode mode;
 	bool simple_clk_stop = true;
 	struct sdw_slave *slave;
 	bool is_slave = false;
@@ -1183,36 +1067,36 @@ int sdw_bus_exit_clk_stop(struct sdw_bus *bus)
 		/* Identify if Slave(s) are available on Bus */
 		is_slave = true;
 
-		ret = sdw_slave_clk_stop_callback(slave, SDW_CLK_STOP_MODE0,
+		mode = slave->curr_clk_stop_mode;
+
+		if (mode == SDW_CLK_STOP_MODE1) {
+			simple_clk_stop = false;
+			continue;
+		}
+
+		ret = sdw_slave_clk_stop_callback(slave, mode,
 						  SDW_CLK_PRE_DEPREPARE);
 		if (ret < 0)
-			dev_warn(&slave->dev, "clock stop pre-deprepare cb failed:%d\n", ret);
+			dev_warn(&slave->dev,
+				 "clk stop deprep failed:%d", ret);
 
-		/* Only de-prepare a Slave device if needed */
-		if (!slave->prop.simple_clk_stop_capable) {
-			simple_clk_stop = false;
+		ret = sdw_slave_clk_stop_prepare(slave, mode,
+						 false);
 
-			ret = sdw_slave_clk_stop_prepare(slave, SDW_CLK_STOP_MODE0,
-							 false);
-
-			if (ret < 0)
-				dev_warn(&slave->dev, "clock stop deprepare failed:%d\n", ret);
-		}
+		if (ret < 0)
+			dev_warn(&slave->dev,
+				 "clk stop deprep failed:%d", ret);
 	}
 
-	/* Skip remaining clock stop de-preparation if no Slave is attached */
-	if (!is_slave)
-		return 0;
+	if (is_slave && !simple_clk_stop)
+		sdw_bus_wait_for_clk_prep_deprep(bus, SDW_BROADCAST_DEV_NUM);
 
 	/*
-	 * Don't wait for all Slaves to be ready if they follow the simple
-	 * state machine
+	 * Don't need to call slave callback function if there is no slave
+	 * attached
 	 */
-	if (!simple_clk_stop) {
-		ret = sdw_bus_wait_for_clk_prep_deprep(bus, SDW_BROADCAST_DEV_NUM);
-		if (ret < 0)
-			dev_warn(bus->dev, "clock stop deprepare wait failed:%d\n", ret);
-	}
+	if (!is_slave)
+		return 0;
 
 	list_for_each_entry(slave, &bus->slaves, node) {
 		if (!slave->dev_num)
@@ -1222,10 +1106,9 @@ int sdw_bus_exit_clk_stop(struct sdw_bus *bus)
 		    slave->status != SDW_SLAVE_ALERT)
 			continue;
 
-		ret = sdw_slave_clk_stop_callback(slave, SDW_CLK_STOP_MODE0,
-						  SDW_CLK_POST_DEPREPARE);
-		if (ret < 0)
-			dev_warn(&slave->dev, "clock stop post-deprepare cb failed:%d\n", ret);
+		mode = slave->curr_clk_stop_mode;
+		sdw_slave_clk_stop_callback(slave, mode,
+					    SDW_CLK_POST_DEPREPARE);
 	}
 
 	return 0;
@@ -1256,9 +1139,9 @@ int sdw_configure_dpn_intr(struct sdw_slave *slave,
 		val &= ~SDW_DPN_INT_PORT_READY;
 	}
 
-	ret = sdw_update_no_pm(slave, addr, (mask | SDW_DPN_INT_PORT_READY), val);
+	ret = sdw_update(slave, addr, (mask | SDW_DPN_INT_PORT_READY), val);
 	if (ret < 0)
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_DPN_INTMASK write failed:%d\n", val);
 
 	return ret;
@@ -1275,11 +1158,10 @@ static int sdw_slave_set_frequency(struct sdw_slave *slave)
 
 	/*
 	 * frequency base and scale registers are required for SDCA
-	 * devices. They may also be used for 1.2+/non-SDCA devices.
-	 * Driver can set the property, we will need a DisCo property
-	 * to discover this case from platform firmware.
+	 * devices. They may also be used for 1.2+/non-SDCA devices,
+	 * but we will need a DisCo property to cover this case
 	 */
-	if (!slave->id.class_id && !slave->prop.clock_reg_supported)
+	if (!slave->id.class_id)
 		return 0;
 
 	if (!mclk_freq) {
@@ -1371,51 +1253,12 @@ static int sdw_slave_set_frequency(struct sdw_slave *slave)
 static int sdw_initialize_slave(struct sdw_slave *slave)
 {
 	struct sdw_slave_prop *prop = &slave->prop;
-	int status;
 	int ret;
 	u8 val;
 
 	ret = sdw_slave_set_frequency(slave);
 	if (ret < 0)
 		return ret;
-
-	if (slave->bus->prop.quirks & SDW_MASTER_QUIRKS_CLEAR_INITIAL_CLASH) {
-		/* Clear bus clash interrupt before enabling interrupt mask */
-		status = sdw_read_no_pm(slave, SDW_SCP_INT1);
-		if (status < 0) {
-			dev_err(&slave->dev,
-				"SDW_SCP_INT1 (BUS_CLASH) read failed:%d\n", status);
-			return status;
-		}
-		if (status & SDW_SCP_INT1_BUS_CLASH) {
-			dev_warn(&slave->dev, "Bus clash detected before INT mask is enabled\n");
-			ret = sdw_write_no_pm(slave, SDW_SCP_INT1, SDW_SCP_INT1_BUS_CLASH);
-			if (ret < 0) {
-				dev_err(&slave->dev,
-					"SDW_SCP_INT1 (BUS_CLASH) write failed:%d\n", ret);
-				return ret;
-			}
-		}
-	}
-	if ((slave->bus->prop.quirks & SDW_MASTER_QUIRKS_CLEAR_INITIAL_PARITY) &&
-	    !(slave->prop.quirks & SDW_SLAVE_QUIRKS_INVALID_INITIAL_PARITY)) {
-		/* Clear parity interrupt before enabling interrupt mask */
-		status = sdw_read_no_pm(slave, SDW_SCP_INT1);
-		if (status < 0) {
-			dev_err(&slave->dev,
-				"SDW_SCP_INT1 (PARITY) read failed:%d\n", status);
-			return status;
-		}
-		if (status & SDW_SCP_INT1_PARITY) {
-			dev_warn(&slave->dev, "PARITY error detected before INT mask is enabled\n");
-			ret = sdw_write_no_pm(slave, SDW_SCP_INT1, SDW_SCP_INT1_PARITY);
-			if (ret < 0) {
-				dev_err(&slave->dev,
-					"SDW_SCP_INT1 (PARITY) write failed:%d\n", ret);
-				return ret;
-			}
-		}
-	}
 
 	/*
 	 * Set SCP_INT1_MASK register, typically bus clash and
@@ -1429,7 +1272,7 @@ static int sdw_initialize_slave(struct sdw_slave *slave)
 	/* Enable SCP interrupts */
 	ret = sdw_update_no_pm(slave, SDW_SCP_INTMASK1, val, val);
 	if (ret < 0) {
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_SCP_INTMASK1 write failed:%d\n", ret);
 		return ret;
 	}
@@ -1444,26 +1287,24 @@ static int sdw_initialize_slave(struct sdw_slave *slave)
 
 	ret = sdw_update_no_pm(slave, SDW_DP0_INTMASK, val, val);
 	if (ret < 0)
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_DP0_INTMASK read failed:%d\n", ret);
 	return ret;
 }
 
 static int sdw_handle_dp0_interrupt(struct sdw_slave *slave, u8 *slave_status)
 {
-	u8 clear, impl_int_mask;
+	u8 clear = 0, impl_int_mask;
 	int status, status2, ret, count = 0;
 
-	status = sdw_read_no_pm(slave, SDW_DP0_INT);
+	status = sdw_read(slave, SDW_DP0_INT);
 	if (status < 0) {
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_DP0_INT read failed:%d\n", status);
 		return status;
 	}
 
 	do {
-		clear = status & ~SDW_DP0_INTERRUPTS;
-
 		if (status & SDW_DP0_INT_TEST_FAIL) {
 			dev_err(&slave->dev, "Test fail for port 0\n");
 			clear |= SDW_DP0_INT_TEST_FAIL;
@@ -1492,31 +1333,30 @@ static int sdw_handle_dp0_interrupt(struct sdw_slave *slave, u8 *slave_status)
 			*slave_status = clear;
 		}
 
-		/* clear the interrupts but don't touch reserved and SDCA_CASCADE fields */
-		ret = sdw_write_no_pm(slave, SDW_DP0_INT, clear);
+		/* clear the interrupt */
+		ret = sdw_write(slave, SDW_DP0_INT, clear);
 		if (ret < 0) {
-			dev_err(&slave->dev,
+			dev_err(slave->bus->dev,
 				"SDW_DP0_INT write failed:%d\n", ret);
 			return ret;
 		}
 
 		/* Read DP0 interrupt again */
-		status2 = sdw_read_no_pm(slave, SDW_DP0_INT);
+		status2 = sdw_read(slave, SDW_DP0_INT);
 		if (status2 < 0) {
-			dev_err(&slave->dev,
+			dev_err(slave->bus->dev,
 				"SDW_DP0_INT read failed:%d\n", status2);
 			return status2;
 		}
-		/* filter to limit loop to interrupts identified in the first status read */
 		status &= status2;
 
 		count++;
 
 		/* we can get alerts while processing so keep retrying */
-	} while ((status & SDW_DP0_INTERRUPTS) && (count < SDW_READ_INTR_CLEAR_RETRY));
+	} while (status != 0 && count < SDW_READ_INTR_CLEAR_RETRY);
 
 	if (count == SDW_READ_INTR_CLEAR_RETRY)
-		dev_warn(&slave->dev, "Reached MAX_RETRY on DP0 read\n");
+		dev_warn(slave->bus->dev, "Reached MAX_RETRY on DP0 read\n");
 
 	return ret;
 }
@@ -1524,7 +1364,7 @@ static int sdw_handle_dp0_interrupt(struct sdw_slave *slave, u8 *slave_status)
 static int sdw_handle_port_interrupt(struct sdw_slave *slave,
 				     int port, u8 *slave_status)
 {
-	u8 clear, impl_int_mask;
+	u8 clear = 0, impl_int_mask;
 	int status, status2, ret, count = 0;
 	u32 addr;
 
@@ -1532,17 +1372,15 @@ static int sdw_handle_port_interrupt(struct sdw_slave *slave,
 		return sdw_handle_dp0_interrupt(slave, slave_status);
 
 	addr = SDW_DPN_INT(port);
-	status = sdw_read_no_pm(slave, addr);
+	status = sdw_read(slave, addr);
 	if (status < 0) {
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_DPN_INT read failed:%d\n", status);
 
 		return status;
 	}
 
 	do {
-		clear = status & ~SDW_DPN_INTERRUPTS;
-
 		if (status & SDW_DPN_INT_TEST_FAIL) {
 			dev_err(&slave->dev, "Test fail for port:%d\n", port);
 			clear |= SDW_DPN_INT_TEST_FAIL;
@@ -1565,31 +1403,30 @@ static int sdw_handle_port_interrupt(struct sdw_slave *slave,
 			*slave_status = clear;
 		}
 
-		/* clear the interrupt but don't touch reserved fields */
-		ret = sdw_write_no_pm(slave, addr, clear);
+		/* clear the interrupt */
+		ret = sdw_write(slave, addr, clear);
 		if (ret < 0) {
-			dev_err(&slave->dev,
+			dev_err(slave->bus->dev,
 				"SDW_DPN_INT write failed:%d\n", ret);
 			return ret;
 		}
 
 		/* Read DPN interrupt again */
-		status2 = sdw_read_no_pm(slave, addr);
+		status2 = sdw_read(slave, addr);
 		if (status2 < 0) {
-			dev_err(&slave->dev,
+			dev_err(slave->bus->dev,
 				"SDW_DPN_INT read failed:%d\n", status2);
 			return status2;
 		}
-		/* filter to limit loop to interrupts identified in the first status read */
 		status &= status2;
 
 		count++;
 
 		/* we can get alerts while processing so keep retrying */
-	} while ((status & SDW_DPN_INTERRUPTS) && (count < SDW_READ_INTR_CLEAR_RETRY));
+	} while (status != 0 && count < SDW_READ_INTR_CLEAR_RETRY);
 
 	if (count == SDW_READ_INTR_CLEAR_RETRY)
-		dev_warn(&slave->dev, "Reached MAX_RETRY on port read");
+		dev_warn(slave->bus->dev, "Reached MAX_RETRY on port read");
 
 	return ret;
 }
@@ -1600,9 +1437,8 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 	u8 clear = 0, bit, port_status[15] = {0};
 	int port_num, stat, ret, count = 0;
 	unsigned long port;
-	bool slave_notify;
-	u8 sdca_cascade = 0;
-	u8 buf, buf2[2];
+	bool slave_notify = false;
+	u8 buf, buf2[2], _buf, _buf2[2];
 	bool parity_check;
 	bool parity_quirk;
 
@@ -1616,34 +1452,22 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 	}
 
 	/* Read Intstat 1, Intstat 2 and Intstat 3 registers */
-	ret = sdw_read_no_pm(slave, SDW_SCP_INT1);
+	ret = sdw_read(slave, SDW_SCP_INT1);
 	if (ret < 0) {
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_SCP_INT1 read failed:%d\n", ret);
 		goto io_err;
 	}
 	buf = ret;
 
-	ret = sdw_nread_no_pm(slave, SDW_SCP_INTSTAT2, 2, buf2);
+	ret = sdw_nread(slave, SDW_SCP_INTSTAT2, 2, buf2);
 	if (ret < 0) {
-		dev_err(&slave->dev,
+		dev_err(slave->bus->dev,
 			"SDW_SCP_INT2/3 read failed:%d\n", ret);
 		goto io_err;
 	}
 
-	if (slave->id.class_id) {
-		ret = sdw_read_no_pm(slave, SDW_DP0_INT);
-		if (ret < 0) {
-			dev_err(&slave->dev,
-				"SDW_DP0_INT read failed:%d\n", ret);
-			goto io_err;
-		}
-		sdca_cascade = ret & SDW_DP0_SDCA_CASCADE;
-	}
-
 	do {
-		slave_notify = false;
-
 		/*
 		 * Check parity, bus clash and Slave (impl defined)
 		 * interrupt
@@ -1679,10 +1503,6 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 			clear |= SDW_SCP_INT1_IMPL_DEF;
 		}
 
-		/* the SDCA interrupts are cleared in the codec driver .interrupt_callback() */
-		if (sdca_cascade)
-			slave_notify = true;
-
 		/* Check port 0 - 3 interrupts */
 		port = buf & SDW_SCP_INT1_PORT0_3;
 
@@ -1698,7 +1518,7 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 			port = buf2[0] & SDW_SCP_INTSTAT2_PORT4_10;
 			for_each_set_bit(bit, &port, 8) {
 				/* scp2 ports start from 4 */
-				port_num = bit + 4;
+				port_num = bit + 3;
 				sdw_handle_port_interrupt(slave,
 						port_num,
 						&port_status[port_num]);
@@ -1710,7 +1530,7 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 			port = buf2[1] & SDW_SCP_INTSTAT3_PORT11_14;
 			for_each_set_bit(bit, &port, 8) {
 				/* scp3 ports start from 11 */
-				port_num = bit + 11;
+				port_num = bit + 10;
 				sdw_handle_port_interrupt(slave,
 						port_num,
 						&port_status[port_num]);
@@ -1718,30 +1538,19 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 		}
 
 		/* Update the Slave driver */
-		if (slave_notify) {
-			mutex_lock(&slave->sdw_dev_lock);
+		if (slave_notify && slave->ops &&
+		    slave->ops->interrupt_callback) {
+			slave_intr.control_port = clear;
+			memcpy(slave_intr.port, &port_status,
+			       sizeof(slave_intr.port));
 
-			if (slave->probed) {
-				struct device *dev = &slave->dev;
-				struct sdw_driver *drv = drv_to_sdw_driver(dev->driver);
-
-				if (drv->ops && drv->ops->interrupt_callback) {
-					slave_intr.sdca_cascade = sdca_cascade;
-					slave_intr.control_port = clear;
-					memcpy(slave_intr.port, &port_status,
-					       sizeof(slave_intr.port));
-
-					drv->ops->interrupt_callback(slave, &slave_intr);
-				}
-			}
-
-			mutex_unlock(&slave->sdw_dev_lock);
+			slave->ops->interrupt_callback(slave, &slave_intr);
 		}
 
 		/* Ack interrupt */
-		ret = sdw_write_no_pm(slave, SDW_SCP_INT1, clear);
+		ret = sdw_write(slave, SDW_SCP_INT1, clear);
 		if (ret < 0) {
-			dev_err(&slave->dev,
+			dev_err(slave->bus->dev,
 				"SDW_SCP_INT1 write failed:%d\n", ret);
 			goto io_err;
 		}
@@ -1753,35 +1562,26 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 		 * Read status again to ensure no new interrupts arrived
 		 * while servicing interrupts.
 		 */
-		ret = sdw_read_no_pm(slave, SDW_SCP_INT1);
+		ret = sdw_read(slave, SDW_SCP_INT1);
 		if (ret < 0) {
-			dev_err(&slave->dev,
-				"SDW_SCP_INT1 recheck read failed:%d\n", ret);
+			dev_err(slave->bus->dev,
+				"SDW_SCP_INT1 read failed:%d\n", ret);
 			goto io_err;
 		}
-		buf = ret;
+		_buf = ret;
 
-		ret = sdw_nread_no_pm(slave, SDW_SCP_INTSTAT2, 2, buf2);
+		ret = sdw_nread(slave, SDW_SCP_INTSTAT2, 2, _buf2);
 		if (ret < 0) {
-			dev_err(&slave->dev,
-				"SDW_SCP_INT2/3 recheck read failed:%d\n", ret);
+			dev_err(slave->bus->dev,
+				"SDW_SCP_INT2/3 read failed:%d\n", ret);
 			goto io_err;
 		}
 
-		if (slave->id.class_id) {
-			ret = sdw_read_no_pm(slave, SDW_DP0_INT);
-			if (ret < 0) {
-				dev_err(&slave->dev,
-					"SDW_DP0_INT recheck read failed:%d\n", ret);
-				goto io_err;
-			}
-			sdca_cascade = ret & SDW_DP0_SDCA_CASCADE;
-		}
-
-		/*
-		 * Make sure no interrupts are pending
-		 */
-		stat = buf || buf2[0] || buf2[1] || sdca_cascade;
+		/* Make sure no interrupts are pending */
+		buf &= _buf;
+		buf2[0] &= _buf2[0];
+		buf2[1] &= _buf2[1];
+		stat = buf || buf2[0] || buf2[1];
 
 		/*
 		 * Exit loop if Slave is continuously in ALERT state even
@@ -1793,7 +1593,7 @@ static int sdw_handle_slave_alerts(struct sdw_slave *slave)
 	} while (stat != 0 && count < SDW_READ_INTR_CLEAR_RETRY);
 
 	if (count == SDW_READ_INTR_CLEAR_RETRY)
-		dev_warn(&slave->dev, "Reached MAX_RETRY on alert read\n");
+		dev_warn(slave->bus->dev, "Reached MAX_RETRY on alert read\n");
 
 io_err:
 	pm_runtime_mark_last_busy(&slave->dev);
@@ -1805,21 +1605,29 @@ io_err:
 static int sdw_update_slave_status(struct sdw_slave *slave,
 				   enum sdw_slave_status status)
 {
-	int ret = 0;
+	unsigned long time;
 
-	mutex_lock(&slave->sdw_dev_lock);
-
-	if (slave->probed) {
-		struct device *dev = &slave->dev;
-		struct sdw_driver *drv = drv_to_sdw_driver(dev->driver);
-
-		if (drv->ops && drv->ops->update_status)
-			ret = drv->ops->update_status(slave, status);
+	if (!slave->probed) {
+		/*
+		 * the slave status update is typically handled in an
+		 * interrupt thread, which can race with the driver
+		 * probe, e.g. when a module needs to be loaded.
+		 *
+		 * make sure the probe is complete before updating
+		 * status.
+		 */
+		time = wait_for_completion_timeout(&slave->probe_complete,
+				msecs_to_jiffies(DEFAULT_PROBE_TIMEOUT));
+		if (!time) {
+			dev_err(&slave->dev, "Probe not complete, timed out\n");
+			return -ETIMEDOUT;
+		}
 	}
 
-	mutex_unlock(&slave->sdw_dev_lock);
+	if (!slave->ops || !slave->ops->update_status)
+		return 0;
 
-	return ret;
+	return slave->ops->update_status(slave, status);
 }
 
 /**
@@ -1832,7 +1640,7 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 {
 	enum sdw_slave_status prev_status;
 	struct sdw_slave *slave;
-	bool attached_initializing, id_programmed;
+	bool attached_initializing;
 	int i, ret = 0;
 
 	/* first check if any Slaves fell off the bus */
@@ -1849,37 +1657,20 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 			continue;
 
 		if (status[i] == SDW_SLAVE_UNATTACHED &&
-		    slave->status != SDW_SLAVE_UNATTACHED) {
-			dev_warn(&slave->dev, "Slave %d state check1: UNATTACHED, status was %d\n",
-				 i, slave->status);
+		    slave->status != SDW_SLAVE_UNATTACHED)
 			sdw_modify_slave_status(slave, SDW_SLAVE_UNATTACHED);
-
-			/* Ensure driver knows that peripheral unattached */
-			ret = sdw_update_slave_status(slave, status[i]);
-			if (ret < 0)
-				dev_warn(&slave->dev, "Update Slave status failed:%d\n", ret);
-		}
 	}
 
 	if (status[0] == SDW_SLAVE_ATTACHED) {
 		dev_dbg(bus->dev, "Slave attached, programming device number\n");
-
+		ret = sdw_program_device_num(bus);
+		if (ret)
+			dev_err(bus->dev, "Slave attach failed: %d\n", ret);
 		/*
-		 * Programming a device number will have side effects,
-		 * so we deal with other devices at a later time.
-		 * This relies on those devices reporting ATTACHED, which will
-		 * trigger another call to this function. This will only
-		 * happen if at least one device ID was programmed.
-		 * Error returns from sdw_program_device_num() are currently
-		 * ignored because there's no useful recovery that can be done.
-		 * Returning the error here could result in the current status
-		 * of other devices not being handled, because if no device IDs
-		 * were programmed there's nothing to guarantee a status change
-		 * to trigger another call to this function.
+		 * programming a device number will have side effects,
+		 * so we deal with other devices at a later time
 		 */
-		sdw_program_device_num(bus, &id_programmed);
-		if (id_programmed)
-			return 0;
+		return ret;
 	}
 
 	/* Continue to check other slave statuses */
@@ -1902,16 +1693,13 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 			if (slave->status == SDW_SLAVE_UNATTACHED)
 				break;
 
-			dev_warn(&slave->dev, "Slave %d state check2: UNATTACHED, status was %d\n",
-				 i, slave->status);
-
 			sdw_modify_slave_status(slave, SDW_SLAVE_UNATTACHED);
 			break;
 
 		case SDW_SLAVE_ALERT:
 			ret = sdw_handle_slave_alerts(slave);
-			if (ret < 0)
-				dev_err(&slave->dev,
+			if (ret)
+				dev_err(bus->dev,
 					"Slave %d alert handling failed: %d\n",
 					i, ret);
 			break;
@@ -1929,42 +1717,25 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 			attached_initializing = true;
 
 			ret = sdw_initialize_slave(slave);
-			if (ret < 0)
-				dev_err(&slave->dev,
+			if (ret)
+				dev_err(bus->dev,
 					"Slave %d initialization failed: %d\n",
 					i, ret);
 
 			break;
 
 		default:
-			dev_err(&slave->dev, "Invalid slave %d status:%d\n",
+			dev_err(bus->dev, "Invalid slave %d status:%d\n",
 				i, status[i]);
 			break;
 		}
 
 		ret = sdw_update_slave_status(slave, status[i]);
-		if (ret < 0)
-			dev_err(&slave->dev,
+		if (ret)
+			dev_err(slave->bus->dev,
 				"Update Slave status failed:%d\n", ret);
-		if (attached_initializing) {
-			dev_dbg(&slave->dev,
-				"signaling initialization completion for Slave %d\n",
-				slave->dev_num);
-
+		if (attached_initializing)
 			complete(&slave->initialization_complete);
-
-			/*
-			 * If the manager became pm_runtime active, the peripherals will be
-			 * restarted and attach, but their pm_runtime status may remain
-			 * suspended. If the 'update_slave_status' callback initiates
-			 * any sort of deferred processing, this processing would not be
-			 * cancelled on pm_runtime suspend.
-			 * To avoid such zombie states, we queue a request to resume.
-			 * This would be a no-op in case the peripheral was being resumed
-			 * by e.g. the ALSA/ASoC framework.
-			 */
-			pm_request_resume(&slave->dev);
-		}
 	}
 
 	return ret;
@@ -1992,7 +1763,6 @@ void sdw_clear_slave_status(struct sdw_bus *bus, u32 request)
 		if (slave->status != SDW_SLAVE_UNATTACHED) {
 			sdw_modify_slave_status(slave, SDW_SLAVE_UNATTACHED);
 			slave->first_interrupt_done = false;
-			sdw_update_slave_status(slave, SDW_SLAVE_UNATTACHED);
 		}
 
 		/* keep track of request, used in pm_runtime resume */

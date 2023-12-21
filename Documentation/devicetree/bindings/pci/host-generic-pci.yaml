@@ -106,9 +106,6 @@ properties:
     maxItems: 3
 
   dma-coherent: true
-  iommu-map: true
-  iommu-map-mask: true
-  msi-parent: true
 
 required:
   - compatible

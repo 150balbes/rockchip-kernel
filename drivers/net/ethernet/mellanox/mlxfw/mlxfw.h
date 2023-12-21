@@ -19,7 +19,7 @@ struct mlxfw_dev {
 static inline
 struct device *mlxfw_dev_dev(struct mlxfw_dev *mlxfw_dev)
 {
-	return devlink_to_dev(mlxfw_dev->devlink);
+	return mlxfw_dev->devlink->dev;
 }
 
 #define MLXFW_PRFX "mlxfw: "

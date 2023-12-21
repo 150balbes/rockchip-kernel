@@ -339,7 +339,7 @@ static int xtfpga_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 {
 	if ((fmt & SND_SOC_DAIFMT_INV_MASK) != SND_SOC_DAIFMT_NB_NF)
 		return -EINVAL;
-	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) != SND_SOC_DAIFMT_BP_FP)
+	if ((fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBS_CFS)
 		return -EINVAL;
 	if ((fmt & SND_SOC_DAIFMT_FORMAT_MASK) != SND_SOC_DAIFMT_I2S)
 		return -EINVAL;
@@ -475,20 +475,19 @@ static int xtfpga_pcm_new(struct snd_soc_component *component,
 }
 
 static const struct snd_soc_component_driver xtfpga_i2s_component = {
-	.name			= DRV_NAME,
-	.open			= xtfpga_pcm_open,
-	.close			= xtfpga_pcm_close,
-	.hw_params		= xtfpga_pcm_hw_params,
-	.trigger		= xtfpga_pcm_trigger,
-	.pointer		= xtfpga_pcm_pointer,
-	.pcm_construct		= xtfpga_pcm_new,
-	.legacy_dai_naming	= 1,
+	.name		= DRV_NAME,
+	.open		= xtfpga_pcm_open,
+	.close		= xtfpga_pcm_close,
+	.hw_params	= xtfpga_pcm_hw_params,
+	.trigger	= xtfpga_pcm_trigger,
+	.pointer	= xtfpga_pcm_pointer,
+	.pcm_construct	= xtfpga_pcm_new,
 };
 
 static const struct snd_soc_dai_ops xtfpga_i2s_dai_ops = {
 	.startup	= xtfpga_i2s_startup,
 	.hw_params      = xtfpga_i2s_hw_params,
-	.set_fmt	= xtfpga_i2s_set_fmt,
+	.set_fmt        = xtfpga_i2s_set_fmt,
 };
 
 static struct snd_soc_dai_driver xtfpga_i2s_dai[] = {
@@ -605,7 +604,7 @@ err:
 	return err;
 }
 
-static void xtfpga_i2s_remove(struct platform_device *pdev)
+static int xtfpga_i2s_remove(struct platform_device *pdev)
 {
 	struct xtfpga_i2s *i2s = dev_get_drvdata(&pdev->dev);
 
@@ -618,6 +617,7 @@ static void xtfpga_i2s_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		xtfpga_i2s_runtime_suspend(&pdev->dev);
+	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -635,7 +635,7 @@ static const struct dev_pm_ops xtfpga_i2s_pm_ops = {
 
 static struct platform_driver xtfpga_i2s_driver = {
 	.probe   = xtfpga_i2s_probe,
-	.remove_new = xtfpga_i2s_remove,
+	.remove  = xtfpga_i2s_remove,
 	.driver  = {
 		.name = "xtfpga-i2s",
 		.of_match_table = of_match_ptr(xtfpga_i2s_of_match),

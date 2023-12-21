@@ -107,7 +107,7 @@ struct vmci_ctx *vmci_ctx_create(u32 cid, u32 priv_flags,
 	context = kzalloc(sizeof(*context), GFP_KERNEL);
 	if (!context) {
 		pr_warn("Failed to allocate memory for VMCI context\n");
-		error = -ENOMEM;
+		error = -EINVAL;
 		goto err_out;
 	}
 
@@ -665,8 +665,9 @@ int vmci_ctx_add_notification(u32 context_id, u32 remote_cid)
 int vmci_ctx_remove_notification(u32 context_id, u32 remote_cid)
 {
 	struct vmci_ctx *context;
-	struct vmci_handle_list *notifier = NULL, *iter, *tmp;
+	struct vmci_handle_list *notifier, *tmp;
 	struct vmci_handle handle;
+	bool found = false;
 
 	context = vmci_ctx_get(context_id);
 	if (!context)
@@ -675,23 +676,25 @@ int vmci_ctx_remove_notification(u32 context_id, u32 remote_cid)
 	handle = vmci_make_handle(remote_cid, VMCI_EVENT_HANDLER);
 
 	spin_lock(&context->lock);
-	list_for_each_entry_safe(iter, tmp,
+	list_for_each_entry_safe(notifier, tmp,
 				 &context->notifier_list, node) {
-		if (vmci_handle_is_equal(iter->handle, handle)) {
-			list_del_rcu(&iter->node);
+		if (vmci_handle_is_equal(notifier->handle, handle)) {
+			list_del_rcu(&notifier->node);
 			context->n_notifiers--;
-			notifier = iter;
+			found = true;
 			break;
 		}
 	}
 	spin_unlock(&context->lock);
 
-	if (notifier)
-		kvfree_rcu_mightsleep(notifier);
+	if (found) {
+		synchronize_rcu();
+		kfree(notifier);
+	}
 
 	vmci_ctx_put(context);
 
-	return notifier ? VMCI_SUCCESS : VMCI_ERROR_NOT_FOUND;
+	return found ? VMCI_SUCCESS : VMCI_ERROR_NOT_FOUND;
 }
 
 static int vmci_ctx_get_chkpt_notifiers(struct vmci_ctx *context,

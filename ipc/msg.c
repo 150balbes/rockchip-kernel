@@ -39,7 +39,6 @@
 #include <linux/nsproxy.h>
 #include <linux/ipc_namespace.h>
 #include <linux/rhashtable.h>
-#include <linux/percpu_counter.h>
 
 #include <asm/current.h>
 #include <linux/uaccess.h>
@@ -131,7 +130,7 @@ static void msg_rcu_free(struct rcu_head *head)
 	struct msg_queue *msq = container_of(p, struct msg_queue, q_perm);
 
 	security_msg_queue_free(&msq->q_perm);
-	kfree(msq);
+	kvfree(msq);
 }
 
 /**
@@ -148,7 +147,7 @@ static int newque(struct ipc_namespace *ns, struct ipc_params *params)
 	key_t key = params->key;
 	int msgflg = params->flg;
 
-	msq = kmalloc(sizeof(*msq), GFP_KERNEL_ACCOUNT);
+	msq = kvmalloc(sizeof(*msq), GFP_KERNEL_ACCOUNT);
 	if (unlikely(!msq))
 		return -ENOMEM;
 
@@ -158,7 +157,7 @@ static int newque(struct ipc_namespace *ns, struct ipc_params *params)
 	msq->q_perm.security = NULL;
 	retval = security_msg_queue_alloc(&msq->q_perm);
 	if (retval) {
-		kfree(msq);
+		kvfree(msq);
 		return retval;
 	}
 
@@ -286,10 +285,10 @@ static void freeque(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp)
 	rcu_read_unlock();
 
 	list_for_each_entry_safe(msg, t, &msq->q_messages, m_list) {
-		percpu_counter_sub_local(&ns->percpu_msg_hdrs, 1);
+		atomic_dec(&ns->msg_hdrs);
 		free_msg(msg);
 	}
-	percpu_counter_sub_local(&ns->percpu_msg_bytes, msq->q_cbytes);
+	atomic_sub(msq->q_cbytes, &ns->msg_bytes);
 	ipc_update_pid(&msq->q_lspid, NULL);
 	ipc_update_pid(&msq->q_lrpid, NULL);
 	ipc_rcu_putref(&msq->q_perm, msg_rcu_free);
@@ -496,22 +495,17 @@ static int msgctl_info(struct ipc_namespace *ns, int msqid,
 	msginfo->msgssz = MSGSSZ;
 	msginfo->msgseg = MSGSEG;
 	down_read(&msg_ids(ns).rwsem);
-	if (cmd == MSG_INFO)
-		msginfo->msgpool = msg_ids(ns).in_use;
-	max_idx = ipc_get_maxidx(&msg_ids(ns));
-	up_read(&msg_ids(ns).rwsem);
 	if (cmd == MSG_INFO) {
-		msginfo->msgmap = min_t(int,
-				     percpu_counter_sum(&ns->percpu_msg_hdrs),
-				     INT_MAX);
-		msginfo->msgtql = min_t(int,
-		                     percpu_counter_sum(&ns->percpu_msg_bytes),
-				     INT_MAX);
+		msginfo->msgpool = msg_ids(ns).in_use;
+		msginfo->msgmap = atomic_read(&ns->msg_hdrs);
+		msginfo->msgtql = atomic_read(&ns->msg_bytes);
 	} else {
 		msginfo->msgmap = MSGMAP;
 		msginfo->msgpool = MSGPOOL;
 		msginfo->msgtql = MSGTQL;
 	}
+	max_idx = ipc_get_maxidx(&msg_ids(ns));
+	up_read(&msg_ids(ns).rwsem);
 	return (max_idx < 0) ? 0 : max_idx;
 }
 
@@ -941,8 +935,8 @@ static long do_msgsnd(int msqid, long mtype, void __user *mtext,
 		list_add_tail(&msg->m_list, &msq->q_messages);
 		msq->q_cbytes += msgsz;
 		msq->q_qnum++;
-		percpu_counter_add_local(&ns->percpu_msg_bytes, msgsz);
-		percpu_counter_add_local(&ns->percpu_msg_hdrs, 1);
+		atomic_add(msgsz, &ns->msg_bytes);
+		atomic_inc(&ns->msg_hdrs);
 	}
 
 	err = 0;
@@ -1165,8 +1159,8 @@ static long do_msgrcv(int msqid, void __user *buf, size_t bufsz, long msgtyp, in
 			msq->q_rtime = ktime_get_real_seconds();
 			ipc_update_pid(&msq->q_lrpid, task_tgid(current));
 			msq->q_cbytes -= msg->m_ts;
-			percpu_counter_sub_local(&ns->percpu_msg_bytes, msg->m_ts);
-			percpu_counter_sub_local(&ns->percpu_msg_hdrs, 1);
+			atomic_sub(msg->m_ts, &ns->msg_bytes);
+			atomic_dec(&ns->msg_hdrs);
 			ss_wakeup(msq, &wake_q, false);
 
 			goto out_unlock0;
@@ -1303,27 +1297,15 @@ COMPAT_SYSCALL_DEFINE5(msgrcv, int, msqid, compat_uptr_t, msgp,
 }
 #endif
 
-int msg_init_ns(struct ipc_namespace *ns)
+void msg_init_ns(struct ipc_namespace *ns)
 {
-	int ret;
-
 	ns->msg_ctlmax = MSGMAX;
 	ns->msg_ctlmnb = MSGMNB;
 	ns->msg_ctlmni = MSGMNI;
 
-	ret = percpu_counter_init(&ns->percpu_msg_bytes, 0, GFP_KERNEL);
-	if (ret)
-		goto fail_msg_bytes;
-	ret = percpu_counter_init(&ns->percpu_msg_hdrs, 0, GFP_KERNEL);
-	if (ret)
-		goto fail_msg_hdrs;
+	atomic_set(&ns->msg_bytes, 0);
+	atomic_set(&ns->msg_hdrs, 0);
 	ipc_init_ids(&ns->ids[IPC_MSG_IDS]);
-	return 0;
-
-fail_msg_hdrs:
-	percpu_counter_destroy(&ns->percpu_msg_bytes);
-fail_msg_bytes:
-	return ret;
 }
 
 #ifdef CONFIG_IPC_NS
@@ -1332,8 +1314,6 @@ void msg_exit_ns(struct ipc_namespace *ns)
 	free_ipcs(ns, &msg_ids(ns), freeque);
 	idr_destroy(&ns->ids[IPC_MSG_IDS].ipcs_idr);
 	rhashtable_destroy(&ns->ids[IPC_MSG_IDS].key_ht);
-	percpu_counter_destroy(&ns->percpu_msg_bytes);
-	percpu_counter_destroy(&ns->percpu_msg_hdrs);
 }
 #endif
 

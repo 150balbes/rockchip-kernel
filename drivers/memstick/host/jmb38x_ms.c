@@ -748,7 +748,7 @@ static int jmb38x_ms_set_param(struct memstick_host *msh,
 				      clock_delay);
 		host->ifmode = value;
 		break;
-	}
+	};
 	return 0;
 }
 
@@ -927,7 +927,8 @@ static int jmb38x_ms_probe(struct pci_dev *pdev,
 		goto err_out_int;
 	}
 
-	jm = kzalloc(struct_size(jm, hosts, cnt), GFP_KERNEL);
+	jm = kzalloc(sizeof(struct jmb38x_ms)
+		     + cnt * sizeof(struct memstick_host *), GFP_KERNEL);
 	if (!jm) {
 		rc = -ENOMEM;
 		goto err_out_int;

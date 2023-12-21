@@ -126,13 +126,23 @@ static irqreturn_t sr_interrupt(int irq, void *data)
 
 static void sr_set_clk_length(struct omap_sr *sr)
 {
+	struct clk *fck;
 	u32 fclk_speed;
 
 	/* Try interconnect target module fck first if it already exists */
-	if (IS_ERR(sr->fck))
-		return;
+	fck = clk_get(sr->pdev->dev.parent, "fck");
+	if (IS_ERR(fck)) {
+		fck = clk_get(&sr->pdev->dev, "fck");
+		if (IS_ERR(fck)) {
+			dev_err(&sr->pdev->dev,
+				"%s: unable to get fck for device %s\n",
+				__func__, dev_name(&sr->pdev->dev));
+			return;
+		}
+	}
 
-	fclk_speed = clk_get_rate(sr->fck);
+	fclk_speed = clk_get_rate(fck);
+	clk_put(fck);
 
 	switch (fclk_speed) {
 	case 12000000:
@@ -198,6 +208,7 @@ static void sr_stop_vddautocomp(struct omap_sr *sr)
  */
 static int sr_late_init(struct omap_sr *sr_info)
 {
+	struct omap_sr_data *pdata = sr_info->pdev->dev.platform_data;
 	int ret = 0;
 
 	if (sr_class->notify && sr_class->notify_flags && sr_info->irq) {
@@ -207,6 +218,9 @@ static int sr_late_init(struct omap_sr *sr_info)
 			goto error;
 		disable_irq(sr_info->irq);
 	}
+
+	if (pdata && pdata->enable_on_init)
+		sr_start_vddautocomp(sr_info);
 
 	return ret;
 
@@ -573,25 +587,21 @@ int sr_enable(struct omap_sr *sr, unsigned long volt)
 	/* errminlimit is opp dependent and hence linked to voltage */
 	sr->err_minlimit = nvalue_row->errminlimit;
 
-	clk_enable(sr->fck);
+	pm_runtime_get_sync(&sr->pdev->dev);
 
 	/* Check if SR is already enabled. If yes do nothing */
 	if (sr_read_reg(sr, SRCONFIG) & SRCONFIG_SRENABLE)
-		goto out_enabled;
+		return 0;
 
 	/* Configure SR */
 	ret = sr_class->configure(sr);
 	if (ret)
-		goto out_enabled;
+		return ret;
 
 	sr_write_reg(sr, NVALUERECIPROCAL, nvalue_row->nvalue);
 
 	/* SRCONFIG - enable SR */
 	sr_modify_reg(sr, SRCONFIG, SRCONFIG_SRENABLE, SRCONFIG_SRENABLE);
-
-out_enabled:
-	sr->enabled = 1;
-
 	return 0;
 }
 
@@ -611,7 +621,7 @@ void sr_disable(struct omap_sr *sr)
 	}
 
 	/* Check if SR clocks are already disabled. If yes do nothing */
-	if (!sr->enabled)
+	if (pm_runtime_suspended(&sr->pdev->dev))
 		return;
 
 	/*
@@ -632,8 +642,7 @@ void sr_disable(struct omap_sr *sr)
 		}
 	}
 
-	clk_disable(sr->fck);
-	sr->enabled = 0;
+	pm_runtime_put_sync_suspend(&sr->pdev->dev);
 }
 
 /**
@@ -815,6 +824,7 @@ static int omap_sr_probe(struct platform_device *pdev)
 {
 	struct omap_sr *sr_info;
 	struct omap_sr_data *pdata = pdev->dev.platform_data;
+	struct resource *mem, *irq;
 	struct dentry *nvalue_dir;
 	int i, ret = 0;
 
@@ -834,22 +844,17 @@ static int omap_sr_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	sr_info->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(sr_info->base))
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	sr_info->base = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(sr_info->base)) {
+		dev_err(&pdev->dev, "%s: ioremap fail\n", __func__);
 		return PTR_ERR(sr_info->base);
+	}
 
-	ret = platform_get_irq_optional(pdev, 0);
-	if (ret < 0 && ret != -ENXIO)
-		return dev_err_probe(&pdev->dev, ret, "failed to get IRQ resource\n");
-	if (ret > 0)
-		sr_info->irq = ret;
-
-	sr_info->fck = devm_clk_get(pdev->dev.parent, "fck");
-	if (IS_ERR(sr_info->fck))
-		return PTR_ERR(sr_info->fck);
-	clk_prepare(sr_info->fck);
+	irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 
 	pm_runtime_enable(&pdev->dev);
+	pm_runtime_irq_safe(&pdev->dev);
 
 	snprintf(sr_info->name, SMARTREFLEX_NAME_LEN, "%s", pdata->name);
 
@@ -868,9 +873,18 @@ static int omap_sr_probe(struct platform_device *pdev)
 	sr_info->autocomp_active = false;
 	sr_info->ip_type = pdata->ip_type;
 
+	if (irq)
+		sr_info->irq = irq->start;
+
 	sr_set_clk_length(sr_info);
 
 	list_add(&sr_info->node, &sr_list);
+
+	ret = pm_runtime_get_sync(&pdev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(&pdev->dev);
+		goto err_list_del;
+	}
 
 	/*
 	 * Call into late init to do initializations that require
@@ -921,36 +935,62 @@ static int omap_sr_probe(struct platform_device *pdev)
 
 	}
 
-	return 0;
+	pm_runtime_put_sync(&pdev->dev);
+
+	return ret;
 
 err_debugfs:
 	debugfs_remove_recursive(sr_info->dbg_dir);
 err_list_del:
-	pm_runtime_disable(&pdev->dev);
 	list_del(&sr_info->node);
-	clk_unprepare(sr_info->fck);
+
+	pm_runtime_put_sync(&pdev->dev);
 
 	return ret;
 }
 
 static int omap_sr_remove(struct platform_device *pdev)
 {
-	struct device *dev = &pdev->dev;
-	struct omap_sr *sr_info = platform_get_drvdata(pdev);
+	struct omap_sr_data *pdata = pdev->dev.platform_data;
+	struct omap_sr *sr_info;
+
+	if (!pdata) {
+		dev_err(&pdev->dev, "%s: platform data missing\n", __func__);
+		return -EINVAL;
+	}
+
+	sr_info = _sr_lookup(pdata->voltdm);
+	if (IS_ERR(sr_info)) {
+		dev_warn(&pdev->dev, "%s: omap_sr struct not found\n",
+			__func__);
+		return PTR_ERR(sr_info);
+	}
 
 	if (sr_info->autocomp_active)
 		sr_stop_vddautocomp(sr_info);
 	debugfs_remove_recursive(sr_info->dbg_dir);
 
-	pm_runtime_disable(dev);
-	clk_unprepare(sr_info->fck);
+	pm_runtime_disable(&pdev->dev);
 	list_del(&sr_info->node);
 	return 0;
 }
 
 static void omap_sr_shutdown(struct platform_device *pdev)
 {
-	struct omap_sr *sr_info = platform_get_drvdata(pdev);
+	struct omap_sr_data *pdata = pdev->dev.platform_data;
+	struct omap_sr *sr_info;
+
+	if (!pdata) {
+		dev_err(&pdev->dev, "%s: platform data missing\n", __func__);
+		return;
+	}
+
+	sr_info = _sr_lookup(pdata->voltdm);
+	if (IS_ERR(sr_info)) {
+		dev_warn(&pdev->dev, "%s: omap_sr struct not found\n",
+			__func__);
+		return;
+	}
 
 	if (sr_info->autocomp_active)
 		sr_stop_vddautocomp(sr_info);

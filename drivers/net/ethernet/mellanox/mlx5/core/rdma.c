@@ -30,8 +30,9 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 	struct mlx5_flow_spec *spec;
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
-	struct mlx5_eswitch *esw;
+	void *match_criteria;
 	u32 *flow_group_in;
+	void *misc;
 	int err;
 
 	if (!(MLX5_CAP_FLOWTABLE_RDMA_RX(dev, ft_support) &&
@@ -62,8 +63,12 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		goto free;
 	}
 
-	esw = dev->priv.eswitch;
-	mlx5_esw_set_flow_group_source_port(esw, flow_group_in, 0);
+	MLX5_SET(create_flow_group_in, flow_group_in, match_criteria_enable,
+		 MLX5_MATCH_MISC_PARAMETERS);
+	match_criteria = MLX5_ADDR_OF(create_flow_group_in, flow_group_in,
+				      match_criteria);
+	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
+			 misc_parameters.source_port);
 
 	fg = mlx5_create_flow_group(ft, flow_group_in);
 	if (IS_ERR(fg)) {
@@ -72,7 +77,14 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		goto destroy_flow_table;
 	}
 
-	mlx5_esw_set_spec_source_port(esw, esw->manager_vport, spec);
+	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			    misc_parameters);
+	MLX5_SET(fte_match_set_misc, misc, source_port,
+		 dev->priv.eswitch->manager_vport);
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			    misc_parameters);
+	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
 
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_ALLOW;
 	flow_rule = mlx5_add_flow_rules(ft, spec, &flow_act, NULL, 0);
@@ -103,7 +115,7 @@ free:
 
 static void mlx5_rdma_del_roce_addr(struct mlx5_core_dev *dev)
 {
-	mlx5_core_roce_gid_set(dev, 0, MLX5_ROCE_VERSION_2, 0,
+	mlx5_core_roce_gid_set(dev, 0, 0, 0,
 			       NULL, NULL, false, 0, 1);
 }
 
@@ -123,7 +135,7 @@ static int mlx5_rdma_add_roce_addr(struct mlx5_core_dev *dev)
 
 	mlx5_rdma_make_default_gid(dev, &gid);
 	return mlx5_core_roce_gid_set(dev, 0,
-				      MLX5_ROCE_VERSION_2,
+				      MLX5_ROCE_VERSION_1,
 				      0, gid.raw, mac,
 				      false, 0, 1);
 }
@@ -171,4 +183,5 @@ del_roce_addr:
 	mlx5_rdma_del_roce_addr(dev);
 disable_roce:
 	mlx5_nic_vport_disable_roce(dev);
+	return;
 }

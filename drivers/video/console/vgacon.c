@@ -75,10 +75,11 @@ static void vgacon_scrolldelta(struct vc_data *c, int lines);
 static int vgacon_set_origin(struct vc_data *c);
 static void vgacon_save_screen(struct vc_data *c);
 static void vgacon_invert_region(struct vc_data *c, u16 * p, int count);
-static struct uni_pagedict *vgacon_uni_pagedir;
+static struct uni_pagedir *vgacon_uni_pagedir;
 static int vgacon_refcount;
 
 /* Description of the hardware situation */
+static bool		vga_init_done;
 static unsigned long	vga_vram_base		__read_mostly;	/* Base of video memory */
 static unsigned long	vga_vram_end		__read_mostly;	/* End of video memory */
 static unsigned int	vga_vram_size		__read_mostly;	/* Size of video memory */
@@ -89,16 +90,38 @@ static unsigned int	vga_video_num_lines;			/* Number of text lines */
 static bool		vga_can_do_color;			/* Do we support colors? */
 static unsigned int	vga_default_font_height __read_mostly;	/* Height of default screen font */
 static unsigned char	vga_video_type		__read_mostly;	/* Card type */
+static bool		vga_font_is_default = true;
 static int		vga_vesa_blanked;
 static bool 		vga_palette_blanked;
 static bool 		vga_is_gfx;
 static bool 		vga_512_chars;
 static int 		vga_video_font_height;
 static int 		vga_scan_lines		__read_mostly;
-static unsigned int 	vga_rolled_over; /* last vc_origin offset before wrap */
+static unsigned int 	vga_rolled_over;
 
+static bool vgacon_text_mode_force;
 static bool vga_hardscroll_enabled;
 static bool vga_hardscroll_user_enable = true;
+
+bool vgacon_text_force(void)
+{
+	return vgacon_text_mode_force;
+}
+EXPORT_SYMBOL(vgacon_text_force);
+
+static int __init text_mode(char *str)
+{
+	vgacon_text_mode_force = true;
+
+	pr_warn("You have booted with nomodeset. This means your GPU drivers are DISABLED\n");
+	pr_warn("Any video related functionality will be severely degraded, and you may not even be able to suspend the system properly\n");
+	pr_warn("Unless you actually understand what nomodeset does, you should reboot without enabling it\n");
+
+	return 1;
+}
+
+/* force text mode - used by kernel modesetting */
+__setup("nomodeset", text_mode);
 
 static int __init no_scroll(char *str)
 {
@@ -337,12 +360,14 @@ static const char *vgacon_startup(void)
 	vgacon_xres = screen_info.orig_video_cols * VGA_FONTWIDTH;
 	vgacon_yres = vga_scan_lines;
 
+	vga_init_done = true;
+
 	return display_desc;
 }
 
 static void vgacon_init(struct vc_data *c, int init)
 {
-	struct uni_pagedict *p;
+	struct uni_pagedir *p;
 
 	/*
 	 * We cannot be loaded as a module, therefore init will be 1
@@ -367,10 +392,10 @@ static void vgacon_init(struct vc_data *c, int init)
 	c->vc_complement_mask = 0x7700;
 	if (vga_512_chars)
 		c->vc_hi_font_mask = 0x0800;
-	p = *c->uni_pagedict_loc;
-	if (c->uni_pagedict_loc != &vgacon_uni_pagedir) {
+	p = *c->vc_uni_pagedir_loc;
+	if (c->vc_uni_pagedir_loc != &vgacon_uni_pagedir) {
 		con_free_unimap(c);
-		c->uni_pagedict_loc = &vgacon_uni_pagedir;
+		c->vc_uni_pagedir_loc = &vgacon_uni_pagedir;
 		vgacon_refcount++;
 	}
 	if (!vgacon_uni_pagedir && p)
@@ -392,7 +417,7 @@ static void vgacon_deinit(struct vc_data *c)
 
 	if (!--vgacon_refcount)
 		con_free_unimap(c);
-	c->uni_pagedict_loc = &c->uni_pagedict;
+	c->vc_uni_pagedir_loc = &c->vc_uni_pagedir;
 	con_set_default_unimap(c);
 }
 
@@ -857,6 +882,7 @@ static int vgacon_do_font_op(struct vgastate *state, char *arg, int set,
 		beg = 0x0a;
 	}
 
+#ifdef BROKEN_GRAPHICS_PROGRAMS
 	/*
 	 * All fonts are loaded in slot 0 (0:1 for 512 ch)
 	 */
@@ -864,7 +890,24 @@ static int vgacon_do_font_op(struct vgastate *state, char *arg, int set,
 	if (!arg)
 		return -EINVAL;	/* Return to default font not supported */
 
+	vga_font_is_default = false;
 	font_select = ch512 ? 0x04 : 0x00;
+#else
+	/*
+	 * The default font is kept in slot 0 and is never touched.
+	 * A custom font is loaded in slot 2 (256 ch) or 2:3 (512 ch)
+	 */
+
+	if (set) {
+		vga_font_is_default = !arg;
+		if (!arg)
+			ch512 = false;	/* Default font is always 256 */
+		font_select = arg ? (ch512 ? 0x0e : 0x0a) : 0x00;
+	}
+
+	if (!vga_font_is_default)
+		charmap += 4 * cmapsz;
+#endif
 
 	raw_spin_lock_irq(&vga_lock);
 	/* First, the Sequencer */
@@ -1029,7 +1072,7 @@ static int vgacon_adjust_height(struct vc_data *vc, unsigned fontheight)
 }
 
 static int vgacon_font_set(struct vc_data *c, struct console_font *font,
-			   unsigned int vpitch, unsigned int flags)
+			   unsigned int flags)
 {
 	unsigned charcount = font->charcount;
 	int rc;
@@ -1037,7 +1080,7 @@ static int vgacon_font_set(struct vc_data *c, struct console_font *font,
 	if (vga_video_type < VIDEO_TYPE_EGAM)
 		return -EINVAL;
 
-	if (font->width != VGA_FONTWIDTH || font->height > 32 || vpitch != 32 ||
+	if (font->width != VGA_FONTWIDTH ||
 	    (charcount != 256 && charcount != 512))
 		return -EINVAL;
 
@@ -1050,9 +1093,9 @@ static int vgacon_font_set(struct vc_data *c, struct console_font *font,
 	return rc;
 }
 
-static int vgacon_font_get(struct vc_data *c, struct console_font *font, unsigned int vpitch)
+static int vgacon_font_get(struct vc_data *c, struct console_font *font)
 {
-	if (vga_video_type < VIDEO_TYPE_EGAM || vpitch != 32)
+	if (vga_video_type < VIDEO_TYPE_EGAM)
 		return -EINVAL;
 
 	font->width = VGA_FONTWIDTH;

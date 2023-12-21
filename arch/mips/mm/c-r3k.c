@@ -261,6 +261,10 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 		r3k_flush_icache_range(kaddr, kaddr + PAGE_SIZE);
 }
 
+static void local_r3k_flush_data_cache_page(void *addr)
+{
+}
+
 static void r3k_flush_data_cache_page(unsigned long addr)
 {
 }
@@ -298,6 +302,7 @@ void r3k_cache_init(void)
 
 	__flush_kernel_vmap_range = r3k_flush_kernel_vmap_range;
 
+	local_flush_data_cache_page = local_r3k_flush_data_cache_page;
 	flush_data_cache_page = r3k_flush_data_cache_page;
 
 	_dma_cache_wback_inv = r3k_dma_cache_wback_inv;

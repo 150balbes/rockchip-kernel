@@ -52,45 +52,49 @@ ia_css_output_encode(
 	to->enable_vflip = from->enable_vflip;
 }
 
-int ia_css_output_config(struct sh_css_isp_output_isp_config *to,
-			 const struct ia_css_output_configuration  *from,
-			 unsigned int size)
+void
+ia_css_output_config(
+    struct sh_css_isp_output_isp_config *to,
+    const struct ia_css_output_configuration  *from,
+    unsigned int size)
 {
 	unsigned int elems_a = ISP_VEC_NELEMS;
-	int ret;
 
-	ret = ia_css_dma_configure_from_info(&to->port_b, from->info);
-	if (ret)
-		return ret;
-
+	(void)size;
+	ia_css_dma_configure_from_info(&to->port_b, from->info);
 	to->width_a_over_b = elems_a / to->port_b.elems;
 	to->height = from->info ? from->info->res.height : 0;
 	to->enable = from->info != NULL;
 	ia_css_frame_info_to_frame_sp_info(&to->info, from->info);
 
 	/* Assume divisiblity here, may need to generalize to fixed point. */
-	if (elems_a % to->port_b.elems != 0)
-		return -EINVAL;
-
-	return 0;
+	assert(elems_a % to->port_b.elems == 0);
 }
 
-int ia_css_output0_config(struct sh_css_isp_output_isp_config       *to,
-			  const struct ia_css_output0_configuration *from,
-			  unsigned int size)
+void
+ia_css_output0_config(
+    struct sh_css_isp_output_isp_config       *to,
+    const struct ia_css_output0_configuration *from,
+    unsigned int size)
 {
-	return ia_css_output_config(to, (const struct ia_css_output_configuration *)from, size);
+	ia_css_output_config(
+	    to, (const struct ia_css_output_configuration *)from, size);
 }
 
-int ia_css_output1_config(struct sh_css_isp_output_isp_config       *to,
-		          const struct ia_css_output1_configuration *from,
-			  unsigned int size)
+void
+ia_css_output1_config(
+    struct sh_css_isp_output_isp_config       *to,
+    const struct ia_css_output1_configuration *from,
+    unsigned int size)
 {
-	return ia_css_output_config(to, (const struct ia_css_output_configuration *)from, size);
+	ia_css_output_config(
+	    to, (const struct ia_css_output_configuration *)from, size);
 }
 
-int ia_css_output_configure(const struct ia_css_binary     *binary,
-			    const struct ia_css_frame_info *info)
+void
+ia_css_output_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame_info *info)
 {
 	if (info) {
 		struct ia_css_output_configuration config =
@@ -98,13 +102,14 @@ int ia_css_output_configure(const struct ia_css_binary     *binary,
 
 		config.info = info;
 
-		return ia_css_configure_output(binary, &config);
+		ia_css_configure_output(binary, &config);
 	}
-	return 0;
 }
 
-int ia_css_output0_configure(const struct ia_css_binary    *binary,
-			    const struct ia_css_frame_info *info)
+void
+ia_css_output0_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame_info *info)
 {
 	if (info) {
 		struct ia_css_output0_configuration config =
@@ -112,13 +117,14 @@ int ia_css_output0_configure(const struct ia_css_binary    *binary,
 
 		config.info = info;
 
-		return ia_css_configure_output0(binary, &config);
+		ia_css_configure_output0(binary, &config);
 	}
-	return 0;
 }
 
-int ia_css_output1_configure(const struct ia_css_binary     *binary,
-			     const struct ia_css_frame_info *info)
+void
+ia_css_output1_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame_info *info)
 {
 	if (info) {
 		struct ia_css_output1_configuration config =
@@ -126,9 +132,8 @@ int ia_css_output1_configure(const struct ia_css_binary     *binary,
 
 		config.info = info;
 
-		return ia_css_configure_output1(binary, &config);
+		ia_css_configure_output1(binary, &config);
 	}
-	return 0;
 }
 
 void

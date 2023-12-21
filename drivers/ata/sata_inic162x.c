@@ -242,7 +242,7 @@ struct inic_port_priv {
 	dma_addr_t	cpb_tbl_dma;
 };
 
-static const struct scsi_host_template inic_sht = {
+static struct scsi_host_template inic_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	.sg_tablesize		= LIBATA_MAX_PRD, /* maybe it can be larger? */
 
@@ -488,6 +488,8 @@ static enum ata_completion_errors inic_qc_prep(struct ata_queued_cmd *qc)
 	bool is_data = ata_is_data(qc->tf.protocol);
 	unsigned int cdb_len = 0;
 
+	VPRINTK("ENTER\n");
+
 	if (is_atapi)
 		cdb_len = qc->dev->cdb_len;
 
@@ -557,16 +559,16 @@ static void inic_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 {
 	void __iomem *port_base = inic_port_base(ap);
 
-	tf->error	= readb(port_base + PORT_TF_FEATURE);
+	tf->feature	= readb(port_base + PORT_TF_FEATURE);
 	tf->nsect	= readb(port_base + PORT_TF_NSECT);
 	tf->lbal	= readb(port_base + PORT_TF_LBAL);
 	tf->lbam	= readb(port_base + PORT_TF_LBAM);
 	tf->lbah	= readb(port_base + PORT_TF_LBAH);
 	tf->device	= readb(port_base + PORT_TF_DEVICE);
-	tf->status	= readb(port_base + PORT_TF_COMMAND);
+	tf->command	= readb(port_base + PORT_TF_COMMAND);
 }
 
-static void inic_qc_fill_rtf(struct ata_queued_cmd *qc)
+static bool inic_qc_fill_rtf(struct ata_queued_cmd *qc)
 {
 	struct ata_taskfile *rtf = &qc->result_tf;
 	struct ata_taskfile tf;
@@ -580,10 +582,12 @@ static void inic_qc_fill_rtf(struct ata_queued_cmd *qc)
 	 */
 	inic_tf_read(qc->ap, &tf);
 
-	if (tf.status & ATA_ERR) {
-		rtf->status = tf.status;
-		rtf->error = tf.error;
-	}
+	if (!(tf.command & ATA_ERR))
+		return false;
+
+	rtf->command = tf.command;
+	rtf->feature = tf.feature;
+	return true;
 }
 
 static void inic_freeze(struct ata_port *ap)
@@ -653,7 +657,7 @@ static int inic_hardreset(struct ata_link *link, unsigned int *class,
 		}
 
 		inic_tf_read(ap, &tf);
-		*class = ata_port_classify(ap, &tf);
+		*class = ata_dev_classify(&tf);
 	}
 
 	return 0;
@@ -670,7 +674,7 @@ static void inic_error_handler(struct ata_port *ap)
 static void inic_post_internal_cmd(struct ata_queued_cmd *qc)
 {
 	/* make DMA engine forget about the failed command */
-	if (qc->flags & ATA_QCFLAG_EH)
+	if (qc->flags & ATA_QCFLAG_FAILED)
 		inic_reset_port(inic_port_base(qc->ap));
 }
 

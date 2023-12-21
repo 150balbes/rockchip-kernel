@@ -2,7 +2,7 @@
 /*
  * SCMI Message Protocol driver header
  *
- * Copyright (C) 2018-2021 ARM Ltd.
+ * Copyright (C) 2018 ARM Ltd.
  */
 
 #ifndef _LINUX_SCMI_PROTOCOL_H
@@ -12,10 +12,10 @@
 #include <linux/device.h>
 #include <linux/notifier.h>
 #include <linux/types.h>
+#include <linux/android_kabi.h>
 
-#define SCMI_MAX_STR_SIZE		64
-#define SCMI_SHORT_NAME_MAX_SIZE	16
-#define SCMI_MAX_NUM_RATES		16
+#define SCMI_MAX_STR_SIZE	16
+#define SCMI_MAX_NUM_RATES	16
 
 /**
  * struct scmi_revision_info - version information structure
@@ -37,16 +37,13 @@ struct scmi_revision_info {
 	u8 num_protocols;
 	u8 num_agents;
 	u32 impl_ver;
-	char vendor_id[SCMI_SHORT_NAME_MAX_SIZE];
-	char sub_vendor_id[SCMI_SHORT_NAME_MAX_SIZE];
+	char vendor_id[SCMI_MAX_STR_SIZE];
+	char sub_vendor_id[SCMI_MAX_STR_SIZE];
 };
 
 struct scmi_clock_info {
 	char name[SCMI_MAX_STR_SIZE];
-	unsigned int enable_latency;
 	bool rate_discrete;
-	bool rate_changed_notifications;
-	bool rate_change_requested_notifications;
 	union {
 		struct {
 			int num_rates;
@@ -58,12 +55,6 @@ struct scmi_clock_info {
 			u64 step_size;
 		} range;
 	};
-};
-
-enum scmi_power_scale {
-	SCMI_POWER_BOGOWATTS,
-	SCMI_POWER_MILLIWATTS,
-	SCMI_POWER_MICROWATTS
 };
 
 struct scmi_handle;
@@ -84,7 +75,7 @@ struct scmi_protocol_handle;
 struct scmi_clk_proto_ops {
 	int (*count_get)(const struct scmi_protocol_handle *ph);
 
-	const struct scmi_clock_info __must_check *(*info_get)
+	const struct scmi_clock_info *(*info_get)
 		(const struct scmi_protocol_handle *ph, u32 clk_id);
 	int (*rate_get)(const struct scmi_protocol_handle *ph, u32 clk_id,
 			u64 *rate);
@@ -92,9 +83,8 @@ struct scmi_clk_proto_ops {
 			u64 rate);
 	int (*enable)(const struct scmi_protocol_handle *ph, u32 clk_id);
 	int (*disable)(const struct scmi_protocol_handle *ph, u32 clk_id);
-	int (*enable_atomic)(const struct scmi_protocol_handle *ph, u32 clk_id);
-	int (*disable_atomic)(const struct scmi_protocol_handle *ph,
-			      u32 clk_id);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -114,10 +104,6 @@ struct scmi_clk_proto_ops {
  *	to sustained performance level mapping
  * @est_power_get: gets the estimated power cost for a given performance domain
  *	at a given frequency
- * @fast_switch_possible: indicates if fast DVFS switching is possible or not
- *	for a given device
- * @power_scale_mw_get: indicates if the power values provided are in milliWatts
- *	or in some other (abstract) scale
  */
 struct scmi_perf_proto_ops {
 	int (*limits_set)(const struct scmi_protocol_handle *ph, u32 domain,
@@ -141,7 +127,9 @@ struct scmi_perf_proto_ops {
 			     unsigned long *rate, unsigned long *power);
 	bool (*fast_switch_possible)(const struct scmi_protocol_handle *ph,
 				     struct device *dev);
-	enum scmi_power_scale (*power_scale_get)(const struct scmi_protocol_handle *ph);
+	bool (*power_scale_mw_get)(const struct scmi_protocol_handle *ph);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -155,8 +143,7 @@ struct scmi_perf_proto_ops {
  */
 struct scmi_power_proto_ops {
 	int (*num_domains_get)(const struct scmi_protocol_handle *ph);
-	const char *(*name_get)(const struct scmi_protocol_handle *ph,
-				u32 domain);
+	char *(*name_get)(const struct scmi_protocol_handle *ph, u32 domain);
 #define SCMI_POWER_STATE_TYPE_SHIFT	30
 #define SCMI_POWER_STATE_ID_MASK	(BIT(28) - 1)
 #define SCMI_POWER_STATE_PARAM(type, id) \
@@ -168,10 +155,12 @@ struct scmi_power_proto_ops {
 			 u32 state);
 	int (*state_get)(const struct scmi_protocol_handle *ph, u32 domain,
 			 u32 *state);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
- * struct scmi_sensor_reading  - represent a timestamped read
+ * scmi_sensor_reading  - represent a timestamped read
  *
  * Used by @reading_get_timestamped method.
  *
@@ -185,7 +174,7 @@ struct scmi_sensor_reading {
 };
 
 /**
- * struct scmi_range_attrs  - specifies a sensor or axis values' range
+ * scmi_range_attrs  - specifies a sensor or axis values' range
  * @min_range: The minimum value which can be represented by the sensor/axis.
  * @max_range: The maximum value which can be represented by the sensor/axis.
  */
@@ -195,7 +184,7 @@ struct scmi_range_attrs {
 };
 
 /**
- * struct scmi_sensor_axis_info  - describes one sensor axes
+ * scmi_sensor_axis_info  - describes one sensor axes
  * @id: The axes ID.
  * @type: Axes type. Chosen amongst one of @enum scmi_sensor_class.
  * @scale: Power-of-10 multiplier applied to the axis unit.
@@ -223,8 +212,8 @@ struct scmi_sensor_axis_info {
 };
 
 /**
- * struct scmi_sensor_intervals_info  - describes number and type of available
- *	update intervals
+ * scmi_sensor_intervals_info  - describes number and type of available update
+ * intervals
  * @segmented: Flag for segmented intervals' representation. When True there
  *	       will be exactly 3 intervals in @desc, with each entry
  *	       representing a member of a segment in this order:
@@ -344,6 +333,8 @@ struct scmi_sensor_info {
 	unsigned int resolution;
 	int exponent;
 	struct scmi_range_attrs scalar_attrs;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /*
@@ -466,7 +457,7 @@ enum scmi_sensor_class {
  */
 struct scmi_sensor_proto_ops {
 	int (*count_get)(const struct scmi_protocol_handle *ph);
-	const struct scmi_sensor_info __must_check *(*info_get)
+	const struct scmi_sensor_info *(*info_get)
 		(const struct scmi_protocol_handle *ph, u32 sensor_id);
 	int (*trip_point_config)(const struct scmi_protocol_handle *ph,
 				 u32 sensor_id, u8 trip_id, u64 trip_value);
@@ -479,6 +470,8 @@ struct scmi_sensor_proto_ops {
 			  u32 sensor_id, u32 *sensor_config);
 	int (*config_set)(const struct scmi_protocol_handle *ph,
 			  u32 sensor_id, u32 sensor_config);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -494,17 +487,13 @@ struct scmi_sensor_proto_ops {
  */
 struct scmi_reset_proto_ops {
 	int (*num_domains_get)(const struct scmi_protocol_handle *ph);
-	const char *(*name_get)(const struct scmi_protocol_handle *ph,
-				u32 domain);
+	char *(*name_get)(const struct scmi_protocol_handle *ph, u32 domain);
 	int (*latency_get)(const struct scmi_protocol_handle *ph, u32 domain);
 	int (*reset)(const struct scmi_protocol_handle *ph, u32 domain);
 	int (*assert)(const struct scmi_protocol_handle *ph, u32 domain);
 	int (*deassert)(const struct scmi_protocol_handle *ph, u32 domain);
-};
 
-enum scmi_voltage_level_mode {
-	SCMI_VOLTAGE_LEVEL_SET_AUTO,
-	SCMI_VOLTAGE_LEVEL_SET_SYNC,
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -519,8 +508,7 @@ enum scmi_voltage_level_mode {
  *	         supported voltage level
  * @negative_volts_allowed: True if any of the entries of @levels_uv represent
  *			    a negative voltage.
- * @async_level_set: True when the voltage domain supports asynchronous level
- *		     set commands.
+ * @attributes: represents Voltage Domain advertised attributes
  * @name: name assigned to the Voltage Domain by platform
  * @num_levels: number of total entries in @levels_uv.
  * @levels_uv: array of entries describing the available voltage levels for
@@ -530,7 +518,7 @@ struct scmi_voltage_info {
 	unsigned int id;
 	bool segmented;
 	bool negative_volts_allowed;
-	bool async_level_set;
+	unsigned int attributes;
 	char name[SCMI_MAX_STR_SIZE];
 	unsigned int num_levels;
 #define SCMI_VOLTAGE_SEGMENT_LOW	0
@@ -561,148 +549,20 @@ struct scmi_voltage_proto_ops {
 	int (*config_get)(const struct scmi_protocol_handle *ph, u32 domain_id,
 			  u32 *config);
 	int (*level_set)(const struct scmi_protocol_handle *ph, u32 domain_id,
-			 enum scmi_voltage_level_mode mode, s32 volt_uV);
+			 u32 flags, s32 volt_uV);
 	int (*level_get)(const struct scmi_protocol_handle *ph, u32 domain_id,
 			 s32 *volt_uV);
 };
 
 /**
- * struct scmi_powercap_info  - Describe one available Powercap domain
- *
- * @id: Domain ID as advertised by the platform.
- * @notify_powercap_cap_change: CAP change notification support.
- * @notify_powercap_measurement_change: MEASUREMENTS change notifications
- *				       support.
- * @async_powercap_cap_set: Asynchronous CAP set support.
- * @powercap_cap_config: CAP configuration support.
- * @powercap_monitoring: Monitoring (measurements) support.
- * @powercap_pai_config: PAI configuration support.
- * @powercap_scale_mw: Domain reports power data in milliwatt units.
- * @powercap_scale_uw: Domain reports power data in microwatt units.
- *		       Note that, when both @powercap_scale_mw and
- *		       @powercap_scale_uw are set to false, the domain
- *		       reports power data on an abstract linear scale.
- * @name: name assigned to the Powercap Domain by platform.
- * @min_pai: Minimum configurable PAI.
- * @max_pai: Maximum configurable PAI.
- * @pai_step: Step size between two consecutive PAI values.
- * @min_power_cap: Minimum configurable CAP.
- * @max_power_cap: Maximum configurable CAP.
- * @power_cap_step: Step size between two consecutive CAP values.
- * @sustainable_power: Maximum sustainable power consumption for this domain
- *		       under normal conditions.
- * @accuracy: The accuracy with which the power is measured and reported in
- *	      integral multiples of 0.001 percent.
- * @parent_id: Identifier of the containing parent power capping domain, or the
- *	       value 0xFFFFFFFF if this powercap domain is a root domain not
- *	       contained in any other domain.
- */
-struct scmi_powercap_info {
-	unsigned int id;
-	bool notify_powercap_cap_change;
-	bool notify_powercap_measurement_change;
-	bool async_powercap_cap_set;
-	bool powercap_cap_config;
-	bool powercap_monitoring;
-	bool powercap_pai_config;
-	bool powercap_scale_mw;
-	bool powercap_scale_uw;
-	bool fastchannels;
-	char name[SCMI_MAX_STR_SIZE];
-	unsigned int min_pai;
-	unsigned int max_pai;
-	unsigned int pai_step;
-	unsigned int min_power_cap;
-	unsigned int max_power_cap;
-	unsigned int power_cap_step;
-	unsigned int sustainable_power;
-	unsigned int accuracy;
-#define SCMI_POWERCAP_ROOT_ZONE_ID     0xFFFFFFFFUL
-	unsigned int parent_id;
-	struct scmi_fc_info *fc_info;
-};
-
-/**
- * struct scmi_powercap_proto_ops - represents the various operations provided
- * by SCMI Powercap Protocol
- *
- * @num_domains_get: get the count of powercap domains provided by SCMI.
- * @info_get: get the information for the specified domain.
- * @cap_get: get the current CAP value for the specified domain.
- *	     On SCMI platforms supporting powercap zone disabling, this could
- *	     report a zero value for a zone where powercapping is disabled.
- * @cap_set: set the CAP value for the specified domain to the provided value;
- *	     if the domain supports setting the CAP with an asynchronous command
- *	     this request will finally trigger an asynchronous transfer, but, if
- *	     @ignore_dresp here is set to true, this call will anyway return
- *	     immediately without waiting for the related delayed response.
- *	     Note that the powercap requested value must NOT be zero, even if
- *	     the platform supports disabling a powercap by setting its cap to
- *	     zero (since SCMI v3.2): there are dedicated operations that should
- *	     be used for that. (@cap_enable_set/get)
- * @cap_enable_set: enable or disable the powercapping on the specified domain,
- *		    if supported by the SCMI platform implementation.
- *		    Note that, by the SCMI specification, the platform can
- *		    silently ignore our disable request and decide to enforce
- *		    anyway some other powercap value requested by another agent
- *		    on the system: for this reason @cap_get and @cap_enable_get
- *		    will always report the final platform view of the powercaps.
- * @cap_enable_get: get the current CAP enable status for the specified domain.
- * @pai_get: get the current PAI value for the specified domain.
- * @pai_set: set the PAI value for the specified domain to the provided value.
- * @measurements_get: retrieve the current average power measurements for the
- *		      specified domain and the related PAI upon which is
- *		      calculated.
- * @measurements_threshold_set: set the desired low and high power thresholds
- *				to be used when registering for notification
- *				of type POWERCAP_MEASUREMENTS_NOTIFY with this
- *				powercap domain.
- *				Note that this must be called at least once
- *				before registering any callback with the usual
- *				@scmi_notify_ops; moreover, in case this method
- *				is called with measurement notifications already
- *				enabled it will also trigger, transparently, a
- *				proper update of the power thresholds configured
- *				in the SCMI backend server.
- * @measurements_threshold_get: get the currently configured low and high power
- *				thresholds used when registering callbacks for
- *				notification POWERCAP_MEASUREMENTS_NOTIFY.
- */
-struct scmi_powercap_proto_ops {
-	int (*num_domains_get)(const struct scmi_protocol_handle *ph);
-	const struct scmi_powercap_info __must_check *(*info_get)
-		(const struct scmi_protocol_handle *ph, u32 domain_id);
-	int (*cap_get)(const struct scmi_protocol_handle *ph, u32 domain_id,
-		       u32 *power_cap);
-	int (*cap_set)(const struct scmi_protocol_handle *ph, u32 domain_id,
-		       u32 power_cap, bool ignore_dresp);
-	int (*cap_enable_set)(const struct scmi_protocol_handle *ph,
-			      u32 domain_id, bool enable);
-	int (*cap_enable_get)(const struct scmi_protocol_handle *ph,
-			      u32 domain_id, bool *enable);
-	int (*pai_get)(const struct scmi_protocol_handle *ph, u32 domain_id,
-		       u32 *pai);
-	int (*pai_set)(const struct scmi_protocol_handle *ph, u32 domain_id,
-		       u32 pai);
-	int (*measurements_get)(const struct scmi_protocol_handle *ph,
-				u32 domain_id, u32 *average_power, u32 *pai);
-	int (*measurements_threshold_set)(const struct scmi_protocol_handle *ph,
-					  u32 domain_id, u32 power_thresh_low,
-					  u32 power_thresh_high);
-	int (*measurements_threshold_get)(const struct scmi_protocol_handle *ph,
-					  u32 domain_id, u32 *power_thresh_low,
-					  u32 *power_thresh_high);
-};
-
-/**
  * struct scmi_notify_ops  - represents notifications' operations provided by
  * SCMI core
- * @devm_event_notifier_register: Managed registration of a notifier_block for
+ * @devm_register_event_notifier: Managed registration of a notifier_block for
  *				  the requested event
- * @devm_event_notifier_unregister: Managed unregistration of a notifier_block
+ * @devm_unregister_event_notifier: Managed unregistration of a notifier_block
  *				    for the requested event
- * @event_notifier_register: Register a notifier_block for the requested event
- * @event_notifier_unregister: Unregister a notifier_block for the requested
+ * @register_event_notifier: Register a notifier_block for the requested event
+ * @unregister_event_notifier: Unregister a notifier_block for the requested
  *			       event
  *
  * A user can register/unregister its own notifier_block against the wanted
@@ -735,21 +595,18 @@ struct scmi_powercap_proto_ops {
  * @report: A custom struct describing the specific event delivered
  */
 struct scmi_notify_ops {
-	int (*devm_event_notifier_register)(struct scmi_device *sdev,
-					    u8 proto_id, u8 evt_id,
-					    const u32 *src_id,
+	int (*devm_register_event_notifier)(struct scmi_device *sdev,
+					    u8 proto_id, u8 evt_id, u32 *src_id,
 					    struct notifier_block *nb);
-	int (*devm_event_notifier_unregister)(struct scmi_device *sdev,
+	int (*devm_unregister_event_notifier)(struct scmi_device *sdev,
 					      u8 proto_id, u8 evt_id,
-					      const u32 *src_id,
+					      u32 *src_id,
 					      struct notifier_block *nb);
-	int (*event_notifier_register)(const struct scmi_handle *handle,
-				       u8 proto_id, u8 evt_id,
-				       const u32 *src_id,
+	int (*register_event_notifier)(const struct scmi_handle *handle,
+				       u8 proto_id, u8 evt_id, u32 *src_id,
 				       struct notifier_block *nb);
-	int (*event_notifier_unregister)(const struct scmi_handle *handle,
-					 u8 proto_id, u8 evt_id,
-					 const u32 *src_id,
+	int (*unregister_event_notifier)(const struct scmi_handle *handle,
+					 u8 proto_id, u8 evt_id, u32 *src_id,
 					 struct notifier_block *nb);
 };
 
@@ -758,37 +615,31 @@ struct scmi_notify_ops {
  *
  * @dev: pointer to the SCMI device
  * @version: pointer to the structure containing SCMI version information
- * @devm_protocol_acquire: devres managed method to get hold of a protocol,
+ * @devm_acquire_protocol: devres managed method to get hold of a protocol,
  *			   causing its initialization and related resource
  *			   accounting
- * @devm_protocol_get: devres managed method to acquire a protocol and get specific
- *		       operations and a dedicated protocol handler
- * @devm_protocol_put: devres managed method to release a protocol
- * @is_transport_atomic: method to check if the underlying transport for this
- *			 instance handle is configured to support atomic
- *			 transactions for commands.
- *			 Some users of the SCMI stack in the upper layers could
- *			 be interested to know if they can assume SCMI
- *			 command transactions associated to this handle will
- *			 never sleep and act accordingly.
- *			 An optional atomic threshold value could be returned
- *			 where configured.
+ * @devm_get_protocol: devres managed method to acquire a protocol, causing
+ *		       its initialization and resource accounting, while getting
+ *		       protocol specific operations and a dedicated protocol
+ *		       handler
+ * @devm_put_protocol: devres managed method to release a protocol acquired
+ *		       with devm_acquire/get_protocol
  * @notify_ops: pointer to set of notifications related operations
  */
 struct scmi_handle {
 	struct device *dev;
 	struct scmi_revision_info *version;
 
-	int __must_check (*devm_protocol_acquire)(struct scmi_device *sdev,
+	int __must_check (*devm_acquire_protocol)(struct scmi_device *sdev,
 						  u8 proto);
 	const void __must_check *
-		(*devm_protocol_get)(struct scmi_device *sdev, u8 proto,
+		(*devm_get_protocol)(struct scmi_device *sdev, u8 proto,
 				     struct scmi_protocol_handle **ph);
-	void (*devm_protocol_put)(struct scmi_device *sdev, u8 proto);
-	bool (*is_transport_atomic)(const struct scmi_handle *handle,
-				    unsigned int *atomic_threshold);
+	void (*devm_put_protocol)(struct scmi_device *sdev, u8 proto);
 
 	const struct scmi_notify_ops *notify_ops;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 enum scmi_std_protocol {
@@ -800,7 +651,6 @@ enum scmi_std_protocol {
 	SCMI_PROTOCOL_SENSOR = 0x15,
 	SCMI_PROTOCOL_RESET = 0x16,
 	SCMI_PROTOCOL_VOLTAGE = 0x17,
-	SCMI_PROTOCOL_POWERCAP = 0x18,
 };
 
 enum scmi_system_events {
@@ -818,9 +668,16 @@ struct scmi_device {
 	const char *name;
 	struct device dev;
 	struct scmi_handle *handle;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #define to_scmi_dev(d) container_of(d, struct scmi_device, dev)
+
+struct scmi_device *
+scmi_device_create(struct device_node *np, struct device *parent, int protocol,
+		   const char *name);
+void scmi_device_destroy(struct scmi_device *scmi_dev);
 
 struct scmi_device_id {
 	u8 protocol_id;
@@ -888,8 +745,6 @@ void scmi_protocol_unregister(const struct scmi_protocol *proto);
 /* SCMI Notification API - Custom Event Reports */
 enum scmi_notification_events {
 	SCMI_EVENT_POWER_STATE_CHANGED = 0x0,
-	SCMI_EVENT_CLOCK_RATE_CHANGED = 0x0,
-	SCMI_EVENT_CLOCK_RATE_CHANGE_REQUESTED = 0x1,
 	SCMI_EVENT_PERFORMANCE_LIMITS_CHANGED = 0x0,
 	SCMI_EVENT_PERFORMANCE_LEVEL_CHANGED = 0x1,
 	SCMI_EVENT_SENSOR_TRIP_POINT_EVENT = 0x0,
@@ -897,8 +752,6 @@ enum scmi_notification_events {
 	SCMI_EVENT_RESET_ISSUED = 0x0,
 	SCMI_EVENT_BASE_ERROR_EVENT = 0x0,
 	SCMI_EVENT_SYSTEM_POWER_STATE_NOTIFIER = 0x0,
-	SCMI_EVENT_POWERCAP_CAP_CHANGED = 0x0,
-	SCMI_EVENT_POWERCAP_MEASUREMENTS_CHANGED = 0x1,
 };
 
 struct scmi_power_state_changed_report {
@@ -908,20 +761,11 @@ struct scmi_power_state_changed_report {
 	unsigned int	power_state;
 };
 
-struct scmi_clock_rate_notif_report {
-	ktime_t			timestamp;
-	unsigned int		agent_id;
-	unsigned int		clock_id;
-	unsigned long long	rate;
-};
-
 struct scmi_system_power_state_notifier_report {
 	ktime_t		timestamp;
 	unsigned int	agent_id;
-#define SCMI_SYSPOWER_IS_REQUEST_GRACEFUL(flags)	((flags) & BIT(0))
 	unsigned int	flags;
 	unsigned int	system_state;
-	unsigned int	timeout;
 };
 
 struct scmi_perf_limits_report {
@@ -969,18 +813,4 @@ struct scmi_base_error_report {
 	unsigned long long	reports[];
 };
 
-struct scmi_powercap_cap_changed_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	power_cap;
-	unsigned int	pai;
-};
-
-struct scmi_powercap_meas_changed_report {
-	ktime_t		timestamp;
-	unsigned int	agent_id;
-	unsigned int	domain_id;
-	unsigned int	power;
-};
 #endif /* _LINUX_SCMI_PROTOCOL_H */

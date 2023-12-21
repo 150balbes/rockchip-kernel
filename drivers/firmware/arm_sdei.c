@@ -31,6 +31,7 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
+#include <linux/uaccess.h>
 
 /*
  * The call to use to reach the firmware.
@@ -42,8 +43,6 @@ static asmlinkage void (*sdei_firmware_call)(unsigned long function_id,
 
 /* entry point from firmware to arch asm code */
 static unsigned long sdei_entry_point;
-
-static int sdei_hp_state;
 
 struct sdei_event {
 	/* These three are protected by the sdei_list_lock */
@@ -303,6 +302,8 @@ int sdei_mask_local_cpu(void)
 {
 	int err;
 
+	WARN_ON_ONCE(preemptible());
+
 	err = invoke_sdei_fn(SDEI_1_0_FN_SDEI_PE_MASK, 0, 0, 0, 0, 0, NULL);
 	if (err && err != -EIO) {
 		pr_warn_once("failed to mask CPU[%u]: %d\n",
@@ -315,13 +316,14 @@ int sdei_mask_local_cpu(void)
 
 static void _ipi_mask_cpu(void *ignored)
 {
-	WARN_ON_ONCE(preemptible());
 	sdei_mask_local_cpu();
 }
 
 int sdei_unmask_local_cpu(void)
 {
 	int err;
+
+	WARN_ON_ONCE(preemptible());
 
 	err = invoke_sdei_fn(SDEI_1_0_FN_SDEI_PE_UNMASK, 0, 0, 0, 0, 0, NULL);
 	if (err && err != -EIO) {
@@ -335,15 +337,12 @@ int sdei_unmask_local_cpu(void)
 
 static void _ipi_unmask_cpu(void *ignored)
 {
-	WARN_ON_ONCE(preemptible());
 	sdei_unmask_local_cpu();
 }
 
 static void _ipi_private_reset(void *ignored)
 {
 	int err;
-
-	WARN_ON_ONCE(preemptible());
 
 	err = invoke_sdei_fn(SDEI_1_0_FN_SDEI_PRIVATE_RESET, 0, 0, 0, 0, 0,
 			     NULL);
@@ -390,6 +389,8 @@ static void _local_event_enable(void *data)
 {
 	int err;
 	struct sdei_crosscall_args *arg = data;
+
+	WARN_ON_ONCE(preemptible());
 
 	err = sdei_api_event_enable(arg->event->event_num);
 
@@ -479,6 +480,8 @@ static void _local_event_unregister(void *data)
 	int err;
 	struct sdei_crosscall_args *arg = data;
 
+	WARN_ON_ONCE(preemptible());
+
 	err = sdei_api_event_unregister(arg->event->event_num);
 
 	sdei_cross_call_return(arg, err);
@@ -558,6 +561,8 @@ static void _local_event_register(void *data)
 	int err;
 	struct sdei_registered_event *reg;
 	struct sdei_crosscall_args *arg = data;
+
+	WARN_ON(preemptible());
 
 	reg = per_cpu_ptr(arg->event->private_registered, smp_processor_id());
 	err = sdei_api_event_register(arg->event->event_num, sdei_entry_point,
@@ -713,8 +718,6 @@ static int sdei_pm_notifier(struct notifier_block *nb, unsigned long action,
 {
 	int rv;
 
-	WARN_ON_ONCE(preemptible());
-
 	switch (action) {
 	case CPU_PM_ENTER:
 		rv = sdei_mask_local_cpu();
@@ -763,7 +766,7 @@ static int sdei_device_freeze(struct device *dev)
 	int err;
 
 	/* unregister private events */
-	cpuhp_remove_state(sdei_entry_point);
+	cpuhp_remove_state(CPUHP_AP_ARM_SDEI_STARTING);
 
 	err = sdei_unregister_shared();
 	if (err)
@@ -784,15 +787,12 @@ static int sdei_device_thaw(struct device *dev)
 		return err;
 	}
 
-	err = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "SDEI",
+	err = cpuhp_setup_state(CPUHP_AP_ARM_SDEI_STARTING, "SDEI",
 				&sdei_cpuhp_up, &sdei_cpuhp_down);
-	if (err < 0) {
+	if (err)
 		pr_warn("Failed to re-register CPU hotplug notifier...\n");
-		return err;
-	}
 
-	sdei_hp_state = err;
-	return 0;
+	return err;
 }
 
 static int sdei_device_restore(struct device *dev)
@@ -824,7 +824,7 @@ static int sdei_reboot_notifier(struct notifier_block *nb, unsigned long action,
 	 * We are going to reset the interface, after this there is no point
 	 * doing work when we take CPUs offline.
 	 */
-	cpuhp_remove_state(sdei_hp_state);
+	cpuhp_remove_state(CPUHP_AP_ARM_SDEI_STARTING);
 
 	sdei_platform_reset();
 
@@ -920,6 +920,86 @@ int sdei_unregister_ghes(struct ghes *ghes)
 	return err;
 }
 
+#ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
+int sdei_event_enable_nolock(u32 event_num)
+{
+	return sdei_api_event_enable(event_num);
+}
+
+int sdei_event_disable_nolock(u32 event_num)
+{
+	return sdei_api_event_disable(event_num);
+}
+
+int sdei_event_routing_set_nolock(u32 event_num, unsigned long flags,
+				  unsigned long affinity)
+{
+	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_ROUTING_SET, event_num,
+			      (unsigned long)flags, (unsigned long)affinity,
+			      0, 0, 0);
+}
+
+int sdei_event_routing_set(u32 event_num, unsigned long flags,
+			   unsigned long affinity)
+{
+	int err = -EINVAL;
+	struct sdei_event *event;
+
+	mutex_lock(&sdei_events_lock);
+	event = sdei_event_find(event_num);
+	if (!event) {
+		mutex_unlock(&sdei_events_lock);
+		return -ENOENT;
+	}
+
+	err = sdei_event_routing_set_nolock(event_num, flags, affinity);
+	mutex_unlock(&sdei_events_lock);
+
+	return err;
+}
+
+static int sdei_api_interrupt_bind(u32 intr_num, u64 *result)
+{
+	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_INTERRUPT_BIND, intr_num, 0, 0, 0,
+			      0, result);
+}
+
+int sdei_interrupt_bind(u32 intr_num, u32 *event_num)
+{
+	int err;
+	u64 result;
+
+	err = sdei_api_interrupt_bind(intr_num, &result);
+	if (!err)
+		*event_num = (u32)result;
+
+	return err;
+}
+
+static int sdei_api_interrupt_release(u32 event_num)
+{
+	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_INTERRUPT_RELEASE, event_num, 0, 0, 0,
+			      0, NULL);
+}
+
+int sdei_interrupt_release(u32 event_num)
+{
+	struct sdei_event *event;
+
+	mutex_lock(&sdei_events_lock);
+	event = sdei_event_find(event_num);
+	mutex_unlock(&sdei_events_lock);
+
+	if (event) {
+		pr_err("%s: need unregister event:%d before release\n",
+		       __func__, event_num);
+		return SDEI_DENIED;
+	}
+
+	return sdei_api_interrupt_release(event_num);
+}
+#endif
+
 static int sdei_get_conduit(struct platform_device *pdev)
 {
 	const char *method;
@@ -1004,14 +1084,12 @@ static int sdei_probe(struct platform_device *pdev)
 		goto remove_cpupm;
 	}
 
-	err = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "SDEI",
+	err = cpuhp_setup_state(CPUHP_AP_ARM_SDEI_STARTING, "SDEI",
 				&sdei_cpuhp_up, &sdei_cpuhp_down);
-	if (err < 0) {
+	if (err) {
 		pr_warn("Failed to register CPU hotplug notifier...\n");
 		goto remove_reboot;
 	}
-
-	sdei_hp_state = err;
 
 	return 0;
 
@@ -1062,14 +1140,14 @@ static bool __init sdei_present_acpi(void)
 	return true;
 }
 
-void __init sdei_init(void)
+static int __init sdei_init(void)
 {
 	struct platform_device *pdev;
 	int ret;
 
 	ret = platform_driver_register(&sdei_driver);
 	if (ret || !sdei_present_acpi())
-		return;
+		return ret;
 
 	pdev = platform_device_register_simple(sdei_driver.driver.name,
 					       0, NULL, 0);
@@ -1079,18 +1157,40 @@ void __init sdei_init(void)
 		pr_info("Failed to register ACPI:SDEI platform device %d\n",
 			ret);
 	}
+
+	return ret;
 }
+
+/*
+ * On an ACPI system SDEI needs to be ready before HEST:GHES tries to register
+ * its events. ACPI is initialised from a subsys_initcall(), GHES is initialised
+ * by device_initcall(). We want to be called in the middle.
+ */
+subsys_initcall_sync(sdei_init);
 
 int sdei_event_handler(struct pt_regs *regs,
 		       struct sdei_registered_event *arg)
 {
 	int err;
+	mm_segment_t orig_addr_limit;
 	u32 event_num = arg->event_num;
+
+	/*
+	 * Save restore 'fs'.
+	 * The architecture's entry code save/restores 'fs' when taking an
+	 * exception from the kernel. This ensures addr_limit isn't inherited
+	 * if you interrupted something that allowed the uaccess routines to
+	 * access kernel memory.
+	 * Do the same here because this doesn't come via the same entry code.
+	*/
+	orig_addr_limit = force_uaccess_begin();
 
 	err = arg->callback(event_num, regs, arg->callback_arg);
 	if (err)
 		pr_err_ratelimited("event %u on CPU %u failed with error: %d\n",
 				   event_num, smp_processor_id(), err);
+
+	force_uaccess_end(orig_addr_limit);
 
 	return err;
 }

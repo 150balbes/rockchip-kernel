@@ -123,7 +123,7 @@ struct airspy {
 
 	/* USB control message buffer */
 	#define BUF_SIZE 128
-	u8 *buf;
+	u8 buf[BUF_SIZE];
 
 	/* Current configuration */
 	unsigned int f_adc;
@@ -294,7 +294,7 @@ static void airspy_urb_complete(struct urb *urb)
 		if (unlikely(fbuf == NULL)) {
 			s->vb_full++;
 			dev_notice_ratelimited(s->dev,
-					"video buffer is full, %d packets dropped\n",
+					"videobuf is full, %d packets dropped\n",
 					s->vb_full);
 			goto skip;
 		}
@@ -415,11 +415,8 @@ static int airspy_alloc_urbs(struct airspy *s)
 		dev_dbg(s->dev, "alloc urb=%d\n", i);
 		s->urb_list[i] = usb_alloc_urb(0, GFP_ATOMIC);
 		if (!s->urb_list[i]) {
-			for (j = 0; j < i; j++) {
+			for (j = 0; j < i; j++)
 				usb_free_urb(s->urb_list[j]);
-				s->urb_list[j] = NULL;
-			}
-			s->urbs_initialized = 0;
 			return -ENOMEM;
 		}
 		usb_fill_bulk_urb(s->urb_list[i],
@@ -635,6 +632,7 @@ static int airspy_g_fmt_sdr_cap(struct file *file, void *priv,
 
 	f->fmt.sdr.pixelformat = s->pixelformat;
 	f->fmt.sdr.buffersize = s->buffersize;
+	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 
 	return 0;
 }
@@ -649,6 +647,7 @@ static int airspy_s_fmt_sdr_cap(struct file *file, void *priv,
 	if (vb2_is_busy(q))
 		return -EBUSY;
 
+	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 	for (i = 0; i < NUM_FORMATS; i++) {
 		if (formats[i].pixelformat == f->fmt.sdr.pixelformat) {
 			s->pixelformat = formats[i].pixelformat;
@@ -671,6 +670,7 @@ static int airspy_try_fmt_sdr_cap(struct file *file, void *priv,
 {
 	int i;
 
+	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 	for (i = 0; i < NUM_FORMATS; i++) {
 		if (formats[i].pixelformat == f->fmt.sdr.pixelformat) {
 			f->fmt.sdr.buffersize = formats[i].buffersize;
@@ -856,7 +856,6 @@ static void airspy_video_release(struct v4l2_device *v)
 
 	v4l2_ctrl_handler_free(&s->hdl);
 	v4l2_device_unregister(&s->v4l2_dev);
-	kfree(s->buf);
 	kfree(s);
 }
 
@@ -964,23 +963,13 @@ static int airspy_probe(struct usb_interface *intf,
 {
 	struct airspy *s;
 	int ret;
-	u8 u8tmp, *buf;
-
-	buf = NULL;
-	ret = -ENOMEM;
+	u8 u8tmp, buf[BUF_SIZE];
 
 	s = kzalloc(sizeof(struct airspy), GFP_KERNEL);
 	if (s == NULL) {
 		dev_err(&intf->dev, "Could not allocate memory for state\n");
 		return -ENOMEM;
 	}
-
-	s->buf = kzalloc(BUF_SIZE, GFP_KERNEL);
-	if (!s->buf)
-		goto err_free_mem;
-	buf = kzalloc(BUF_SIZE, GFP_KERNEL);
-	if (!buf)
-		goto err_free_mem;
 
 	mutex_init(&s->v4l2_lock);
 	mutex_init(&s->vb_queue_lock);
@@ -1070,10 +1059,6 @@ static int airspy_probe(struct usb_interface *intf,
 				ret);
 		goto err_free_controls;
 	}
-
-	/* Free buf if success*/
-	kfree(buf);
-
 	dev_info(s->dev, "Registered as %s\n",
 			video_device_node_name(&s->vdev));
 	dev_notice(s->dev, "SDR API is still slightly experimental and functionality changes may follow\n");
@@ -1083,8 +1068,6 @@ err_free_controls:
 	v4l2_ctrl_handler_free(&s->hdl);
 	v4l2_device_unregister(&s->v4l2_dev);
 err_free_mem:
-	kfree(buf);
-	kfree(s->buf);
 	kfree(s);
 	return ret;
 }

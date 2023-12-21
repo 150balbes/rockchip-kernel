@@ -20,23 +20,14 @@ properties:
           - mediatek,mt2701-smi-larb
           - mediatek,mt2712-smi-larb
           - mediatek,mt6779-smi-larb
-          - mediatek,mt6795-smi-larb
           - mediatek,mt8167-smi-larb
           - mediatek,mt8173-smi-larb
           - mediatek,mt8183-smi-larb
-          - mediatek,mt8186-smi-larb
-          - mediatek,mt8188-smi-larb
-          - mediatek,mt8192-smi-larb
-          - mediatek,mt8195-smi-larb
 
       - description: for mt7623
         items:
           - const: mediatek,mt7623-smi-larb
           - const: mediatek,mt2701-smi-larb
-
-      - items:
-          - const: mediatek,mt8365-smi-larb
-          - const: mediatek,mt8186-smi-larb
 
   reg:
     maxItems: 1
@@ -45,6 +36,7 @@ properties:
     description: |
       apb and smi are mandatory. gals(global async local sync) is optional.
     minItems: 2
+    maxItems: 3
     items:
       - description: apb is Advanced Peripheral Bus clock, It's the clock for
           setting the register.
@@ -59,7 +51,7 @@ properties:
     maxItems: 1
 
   mediatek,smi:
-    $ref: /schemas/types.yaml#/definitions/phandle
+    $ref: /schemas/types.yaml#/definitions/phandle-array
     description: a phandle to the smi_common node.
 
   mediatek,larb-id:
@@ -82,9 +74,6 @@ allOf:
         compatible:
           enum:
             - mediatek,mt8183-smi-larb
-            - mediatek,mt8186-smi-larb
-            - mediatek,mt8188-smi-larb
-            - mediatek,mt8195-smi-larb
 
     then:
       properties:
@@ -116,10 +105,6 @@ allOf:
               - mediatek,mt2701-smi-larb
               - mediatek,mt2712-smi-larb
               - mediatek,mt6779-smi-larb
-              - mediatek,mt8186-smi-larb
-              - mediatek,mt8188-smi-larb
-              - mediatek,mt8192-smi-larb
-              - mediatek,mt8195-smi-larb
 
     then:
       required:

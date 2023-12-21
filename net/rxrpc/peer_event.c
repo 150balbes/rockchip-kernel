@@ -18,16 +18,16 @@
 #include <net/ip.h>
 #include "ar-internal.h"
 
-static void rxrpc_store_error(struct rxrpc_peer *, struct sk_buff *);
-static void rxrpc_distribute_error(struct rxrpc_peer *, struct sk_buff *,
-				   enum rxrpc_call_completion, int);
+static void rxrpc_store_error(struct rxrpc_peer *, struct sock_exterr_skb *);
+static void rxrpc_distribute_error(struct rxrpc_peer *, int,
+				   enum rxrpc_call_completion);
 
 /*
- * Find the peer associated with a local error.
+ * Find the peer associated with an ICMP packet.
  */
-static struct rxrpc_peer *rxrpc_lookup_peer_local_rcu(struct rxrpc_local *local,
-						      const struct sk_buff *skb,
-						      struct sockaddr_rxrpc *srx)
+static struct rxrpc_peer *rxrpc_lookup_peer_icmp_rcu(struct rxrpc_local *local,
+						     const struct sk_buff *skb,
+						     struct sockaddr_rxrpc *srx)
 {
 	struct sock_exterr_skb *serr = SKB_EXT_ERR(skb);
 
@@ -48,11 +48,13 @@ static struct rxrpc_peer *rxrpc_lookup_peer_local_rcu(struct rxrpc_local *local,
 		srx->transport.sin.sin_port = serr->port;
 		switch (serr->ee.ee_origin) {
 		case SO_EE_ORIGIN_ICMP:
+			_net("Rx ICMP");
 			memcpy(&srx->transport.sin.sin_addr,
 			       skb_network_header(skb) + serr->addr_offset,
 			       sizeof(struct in_addr));
 			break;
 		case SO_EE_ORIGIN_ICMP6:
+			_net("Rx ICMP6 on v4 sock");
 			memcpy(&srx->transport.sin.sin_addr,
 			       skb_network_header(skb) + serr->addr_offset + 12,
 			       sizeof(struct in_addr));
@@ -68,12 +70,14 @@ static struct rxrpc_peer *rxrpc_lookup_peer_local_rcu(struct rxrpc_local *local,
 	case AF_INET6:
 		switch (serr->ee.ee_origin) {
 		case SO_EE_ORIGIN_ICMP6:
+			_net("Rx ICMP6");
 			srx->transport.sin6.sin6_port = serr->port;
 			memcpy(&srx->transport.sin6.sin6_addr,
 			       skb_network_header(skb) + serr->addr_offset,
 			       sizeof(struct in6_addr));
 			break;
 		case SO_EE_ORIGIN_ICMP:
+			_net("Rx ICMP on v6 sock");
 			srx->transport_len = sizeof(srx->transport.sin);
 			srx->transport.family = AF_INET;
 			srx->transport.sin.sin_port = serr->port;
@@ -100,11 +104,17 @@ static struct rxrpc_peer *rxrpc_lookup_peer_local_rcu(struct rxrpc_local *local,
 /*
  * Handle an MTU/fragmentation problem.
  */
-static void rxrpc_adjust_mtu(struct rxrpc_peer *peer, unsigned int mtu)
+static void rxrpc_adjust_mtu(struct rxrpc_peer *peer, struct sock_exterr_skb *serr)
 {
+	u32 mtu = serr->ee.ee_info;
+
+	_net("Rx ICMP Fragmentation Needed (%d)", mtu);
+
 	/* wind down the local interface MTU */
-	if (mtu > 0 && peer->if_mtu == 65535 && mtu < peer->if_mtu)
+	if (mtu > 0 && peer->if_mtu == 65535 && mtu < peer->if_mtu) {
 		peer->if_mtu = mtu;
+		_net("I/F MTU %u", mtu);
+	}
 
 	if (mtu == 0) {
 		/* they didn't give us a size, estimate one */
@@ -121,66 +131,142 @@ static void rxrpc_adjust_mtu(struct rxrpc_peer *peer, unsigned int mtu)
 	}
 
 	if (mtu < peer->mtu) {
-		spin_lock(&peer->lock);
+		spin_lock_bh(&peer->lock);
 		peer->mtu = mtu;
 		peer->maxdata = peer->mtu - peer->hdrsize;
-		spin_unlock(&peer->lock);
+		spin_unlock_bh(&peer->lock);
+		_net("Net MTU %u (maxdata %u)",
+		     peer->mtu, peer->maxdata);
 	}
 }
 
 /*
  * Handle an error received on the local endpoint.
  */
-void rxrpc_input_error(struct rxrpc_local *local, struct sk_buff *skb)
+void rxrpc_error_report(struct sock *sk)
 {
-	struct sock_exterr_skb *serr = SKB_EXT_ERR(skb);
+	struct sock_exterr_skb *serr;
 	struct sockaddr_rxrpc srx;
-	struct rxrpc_peer *peer = NULL;
+	struct rxrpc_local *local;
+	struct rxrpc_peer *peer;
+	struct sk_buff *skb;
 
-	_enter("L=%x", local->debug_id);
+	rcu_read_lock();
+	local = rcu_dereference_sk_user_data(sk);
+	if (unlikely(!local)) {
+		rcu_read_unlock();
+		return;
+	}
+	_enter("%p{%d}", sk, local->debug_id);
 
+	/* Clear the outstanding error value on the socket so that it doesn't
+	 * cause kernel_sendmsg() to return it later.
+	 */
+	sock_error(sk);
+
+	skb = sock_dequeue_err_skb(sk);
+	if (!skb) {
+		rcu_read_unlock();
+		_leave("UDP socket errqueue empty");
+		return;
+	}
+	rxrpc_new_skb(skb, rxrpc_skb_received);
+	serr = SKB_EXT_ERR(skb);
 	if (!skb->len && serr->ee.ee_origin == SO_EE_ORIGIN_TIMESTAMPING) {
 		_leave("UDP empty message");
+		rcu_read_unlock();
+		rxrpc_free_skb(skb, rxrpc_skb_freed);
 		return;
 	}
 
-	rcu_read_lock();
-	peer = rxrpc_lookup_peer_local_rcu(local, skb, &srx);
-	if (peer && !rxrpc_get_peer_maybe(peer, rxrpc_peer_get_input_error))
+	peer = rxrpc_lookup_peer_icmp_rcu(local, skb, &srx);
+	if (peer && !rxrpc_get_peer_maybe(peer))
 		peer = NULL;
-	rcu_read_unlock();
-	if (!peer)
+	if (!peer) {
+		rcu_read_unlock();
+		rxrpc_free_skb(skb, rxrpc_skb_freed);
+		_leave(" [no peer]");
 		return;
+	}
 
 	trace_rxrpc_rx_icmp(peer, &serr->ee, &srx);
 
 	if ((serr->ee.ee_origin == SO_EE_ORIGIN_ICMP &&
 	     serr->ee.ee_type == ICMP_DEST_UNREACH &&
 	     serr->ee.ee_code == ICMP_FRAG_NEEDED)) {
-		rxrpc_adjust_mtu(peer, serr->ee.ee_info);
-		goto out;
+		rxrpc_adjust_mtu(peer, serr);
+		rcu_read_unlock();
+		rxrpc_free_skb(skb, rxrpc_skb_freed);
+		rxrpc_put_peer(peer);
+		_leave(" [MTU update]");
+		return;
 	}
 
-	rxrpc_store_error(peer, skb);
-out:
-	rxrpc_put_peer(peer, rxrpc_peer_put_input_error);
+	rxrpc_store_error(peer, serr);
+	rcu_read_unlock();
+	rxrpc_free_skb(skb, rxrpc_skb_freed);
+	rxrpc_put_peer(peer);
+
+	_leave("");
 }
 
 /*
  * Map an error report to error codes on the peer record.
  */
-static void rxrpc_store_error(struct rxrpc_peer *peer, struct sk_buff *skb)
+static void rxrpc_store_error(struct rxrpc_peer *peer,
+			      struct sock_exterr_skb *serr)
 {
 	enum rxrpc_call_completion compl = RXRPC_CALL_NETWORK_ERROR;
-	struct sock_exterr_skb *serr = SKB_EXT_ERR(skb);
-	struct sock_extended_err *ee = &serr->ee;
-	int err = ee->ee_errno;
+	struct sock_extended_err *ee;
+	int err;
 
 	_enter("");
 
+	ee = &serr->ee;
+
+	err = ee->ee_errno;
+
 	switch (ee->ee_origin) {
+	case SO_EE_ORIGIN_ICMP:
+		switch (ee->ee_type) {
+		case ICMP_DEST_UNREACH:
+			switch (ee->ee_code) {
+			case ICMP_NET_UNREACH:
+				_net("Rx Received ICMP Network Unreachable");
+				break;
+			case ICMP_HOST_UNREACH:
+				_net("Rx Received ICMP Host Unreachable");
+				break;
+			case ICMP_PORT_UNREACH:
+				_net("Rx Received ICMP Port Unreachable");
+				break;
+			case ICMP_NET_UNKNOWN:
+				_net("Rx Received ICMP Unknown Network");
+				break;
+			case ICMP_HOST_UNKNOWN:
+				_net("Rx Received ICMP Unknown Host");
+				break;
+			default:
+				_net("Rx Received ICMP DestUnreach code=%u",
+				     ee->ee_code);
+				break;
+			}
+			break;
+
+		case ICMP_TIME_EXCEEDED:
+			_net("Rx Received ICMP TTL Exceeded");
+			break;
+
+		default:
+			_proto("Rx Received ICMP error { type=%u code=%u }",
+			       ee->ee_type, ee->ee_code);
+			break;
+		}
+		break;
+
 	case SO_EE_ORIGIN_NONE:
 	case SO_EE_ORIGIN_LOCAL:
+		_proto("Rx Received local error { error=%d }", err);
 		compl = RXRPC_CALL_LOCAL_ERROR;
 		break;
 
@@ -188,40 +274,26 @@ static void rxrpc_store_error(struct rxrpc_peer *peer, struct sk_buff *skb)
 		if (err == EACCES)
 			err = EHOSTUNREACH;
 		fallthrough;
-	case SO_EE_ORIGIN_ICMP:
 	default:
+		_proto("Rx Received error report { orig=%u }", ee->ee_origin);
 		break;
 	}
 
-	rxrpc_distribute_error(peer, skb, compl, err);
+	rxrpc_distribute_error(peer, err, compl);
 }
 
 /*
  * Distribute an error that occurred on a peer.
  */
-static void rxrpc_distribute_error(struct rxrpc_peer *peer, struct sk_buff *skb,
-				   enum rxrpc_call_completion compl, int err)
+static void rxrpc_distribute_error(struct rxrpc_peer *peer, int error,
+				   enum rxrpc_call_completion compl)
 {
 	struct rxrpc_call *call;
-	HLIST_HEAD(error_targets);
 
-	spin_lock(&peer->lock);
-	hlist_move_list(&peer->error_targets, &error_targets);
-
-	while (!hlist_empty(&error_targets)) {
-		call = hlist_entry(error_targets.first,
-				   struct rxrpc_call, error_link);
-		hlist_del_init(&call->error_link);
-		spin_unlock(&peer->lock);
-
-		rxrpc_see_call(call, rxrpc_call_see_distribute_error);
-		rxrpc_set_call_completion(call, compl, 0, -err);
-		rxrpc_input_call_event(call, skb);
-
-		spin_lock(&peer->lock);
+	hlist_for_each_entry_rcu(call, &peer->error_targets, error_link) {
+		rxrpc_see_call(call);
+		rxrpc_set_call_completion(call, compl, 0, -error);
 	}
-
-	spin_unlock(&peer->lock);
 }
 
 /*
@@ -235,23 +307,21 @@ static void rxrpc_peer_keepalive_dispatch(struct rxrpc_net *rxnet,
 	struct rxrpc_peer *peer;
 	const u8 mask = ARRAY_SIZE(rxnet->peer_keepalive) - 1;
 	time64_t keepalive_at;
-	bool use;
 	int slot;
 
-	spin_lock(&rxnet->peer_hash_lock);
+	spin_lock_bh(&rxnet->peer_hash_lock);
 
 	while (!list_empty(collector)) {
 		peer = list_entry(collector->next,
 				  struct rxrpc_peer, keepalive_link);
 
 		list_del_init(&peer->keepalive_link);
-		if (!rxrpc_get_peer_maybe(peer, rxrpc_peer_get_keepalive))
+		if (!rxrpc_get_peer_maybe(peer))
 			continue;
 
-		use = __rxrpc_use_local(peer->local, rxrpc_local_use_peer_keepalive);
-		spin_unlock(&rxnet->peer_hash_lock);
+		if (__rxrpc_use_local(peer->local)) {
+			spin_unlock_bh(&rxnet->peer_hash_lock);
 
-		if (use) {
 			keepalive_at = peer->last_tx_at + RXRPC_KEEPALIVE_TIME;
 			slot = keepalive_at - base;
 			_debug("%02x peer %u t=%d {%pISp}",
@@ -269,17 +339,15 @@ static void rxrpc_peer_keepalive_dispatch(struct rxrpc_net *rxnet,
 			 */
 			slot += cursor;
 			slot &= mask;
-			spin_lock(&rxnet->peer_hash_lock);
+			spin_lock_bh(&rxnet->peer_hash_lock);
 			list_add_tail(&peer->keepalive_link,
 				      &rxnet->peer_keepalive[slot & mask]);
-			spin_unlock(&rxnet->peer_hash_lock);
-			rxrpc_unuse_local(peer->local, rxrpc_local_unuse_peer_keepalive);
+			rxrpc_unuse_local(peer->local);
 		}
-		rxrpc_put_peer(peer, rxrpc_peer_put_keepalive);
-		spin_lock(&rxnet->peer_hash_lock);
+		rxrpc_put_peer_locked(peer);
 	}
 
-	spin_unlock(&rxnet->peer_hash_lock);
+	spin_unlock_bh(&rxnet->peer_hash_lock);
 }
 
 /*
@@ -309,7 +377,7 @@ void rxrpc_peer_keepalive_worker(struct work_struct *work)
 	 * second; the bucket at cursor + 1 goes at now + 1s and so
 	 * on...
 	 */
-	spin_lock(&rxnet->peer_hash_lock);
+	spin_lock_bh(&rxnet->peer_hash_lock);
 	list_splice_init(&rxnet->peer_keepalive_new, &collector);
 
 	stop = cursor + ARRAY_SIZE(rxnet->peer_keepalive);
@@ -321,7 +389,7 @@ void rxrpc_peer_keepalive_worker(struct work_struct *work)
 	}
 
 	base = now;
-	spin_unlock(&rxnet->peer_hash_lock);
+	spin_unlock_bh(&rxnet->peer_hash_lock);
 
 	rxnet->peer_keepalive_base = base;
 	rxnet->peer_keepalive_cursor = cursor;

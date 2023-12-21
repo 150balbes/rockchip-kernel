@@ -302,6 +302,7 @@ static int
 i2c_au1550_probe(struct platform_device *pdev)
 {
 	struct i2c_au1550_data *priv;
+	struct resource *r;
 	int ret;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(struct i2c_au1550_data),
@@ -309,7 +310,8 @@ i2c_au1550_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->psc_base = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
+	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->psc_base = devm_ioremap_resource(&pdev->dev, r);
 	if (IS_ERR(priv->psc_base))
 		return PTR_ERR(priv->psc_base);
 
@@ -319,7 +321,7 @@ i2c_au1550_probe(struct platform_device *pdev)
 	priv->adap.algo = &au1550_algo;
 	priv->adap.algo_data = priv;
 	priv->adap.dev.parent = &pdev->dev;
-	strscpy(priv->adap.name, "Au1xxx PSC I2C", sizeof(priv->adap.name));
+	strlcpy(priv->adap.name, "Au1xxx PSC I2C", sizeof(priv->adap.name));
 
 	/* Now, set up the PSC for SMBus PIO mode. */
 	i2c_au1550_setup(priv);
@@ -334,12 +336,13 @@ i2c_au1550_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void i2c_au1550_remove(struct platform_device *pdev)
+static int i2c_au1550_remove(struct platform_device *pdev)
 {
 	struct i2c_au1550_data *priv = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&priv->adap);
 	i2c_au1550_disable(priv);
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -378,7 +381,7 @@ static struct platform_driver au1xpsc_smbus_driver = {
 		.pm	= AU1XPSC_SMBUS_PMOPS,
 	},
 	.probe		= i2c_au1550_probe,
-	.remove_new	= i2c_au1550_remove,
+	.remove		= i2c_au1550_remove,
 };
 
 module_platform_driver(au1xpsc_smbus_driver);

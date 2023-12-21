@@ -16,8 +16,6 @@
 
 #include "bnx2fc.h"
 
-#include <linux/ethtool.h>
-
 static struct list_head adapter_list;
 static struct list_head if_list;
 static u32 adapter_count;
@@ -273,6 +271,7 @@ static int bnx2fc_xmit(struct fc_lport *lport, struct fc_frame *fp)
 	struct fcoe_port	*port;
 	struct fcoe_hdr		*hp;
 	struct bnx2fc_rport	*tgt;
+	struct fc_stats		*stats;
 	u8			sof, eof;
 	u32			crc;
 	unsigned int		hlen, tlen, elen;
@@ -398,8 +397,10 @@ static int bnx2fc_xmit(struct fc_lport *lport, struct fc_frame *fp)
 	}
 
 	/*update tx stats */
-	this_cpu_inc(lport->stats->TxFrames);
-	this_cpu_add(lport->stats->TxWords, wlen);
+	stats = per_cpu_ptr(lport->stats, get_cpu());
+	stats->TxFrames++;
+	stats->TxWords += wlen;
+	put_cpu();
 
 	/* send down to lld */
 	fr_dev(fp) = lport;
@@ -509,6 +510,7 @@ static void bnx2fc_recv_frame(struct sk_buff *skb)
 	u32 fr_len, fr_crc;
 	struct fc_lport *lport;
 	struct fcoe_rcv_info *fr;
+	struct fc_stats *stats;
 	struct fc_frame_header *fh;
 	struct fcoe_crc_eof crc_eof;
 	struct fc_frame *fp;
@@ -539,8 +541,10 @@ static void bnx2fc_recv_frame(struct sk_buff *skb)
 	skb_pull(skb, sizeof(struct fcoe_hdr));
 	fr_len = skb->len - sizeof(struct fcoe_crc_eof);
 
-	this_cpu_inc(lport->stats->RxFrames);
-	this_cpu_add(lport->stats->RxWords, fr_len / FCOE_WORD_TO_BYTE);
+	stats = per_cpu_ptr(lport->stats, get_cpu());
+	stats->RxFrames++;
+	stats->RxWords += fr_len / FCOE_WORD_TO_BYTE;
+	put_cpu();
 
 	fp = (struct fc_frame *)skb;
 	fc_frame_init(fp);
@@ -627,7 +631,9 @@ static void bnx2fc_recv_frame(struct sk_buff *skb)
 	fr_crc = le32_to_cpu(fr_crc(fp));
 
 	if (unlikely(fr_crc != ~crc32(~0, skb->data, fr_len))) {
-		crc_err = this_cpu_inc_return(lport->stats->InvalidCRCCount);
+		stats = per_cpu_ptr(lport->stats, get_cpu());
+		crc_err = (stats->InvalidCRCCount++);
+		put_cpu();
 		if (crc_err < 5)
 			printk(KERN_WARNING PFX "dropping frame with "
 			       "CRC error\n");
@@ -956,7 +962,9 @@ static void bnx2fc_indicate_netevent(void *context, unsigned long event,
 				mutex_unlock(&lport->lp_mutex);
 				fc_host_port_type(lport->host) =
 					FC_PORTTYPE_UNKNOWN;
-				this_cpu_inc(lport->stats->LinkFailureCount);
+				per_cpu_ptr(lport->stats,
+					    get_cpu())->LinkFailureCount++;
+				put_cpu();
 				fcoe_clean_pending_queue(lport);
 				wait_for_upload = 1;
 			}
@@ -1784,7 +1792,7 @@ static void bnx2fc_unbind_pcidev(struct bnx2fc_hba *hba)
 /**
  * bnx2fc_ulp_get_stats - cnic callback to populate FCoE stats
  *
- * @handle:    transport handle pointing to adapter structure
+ * @handle:    transport handle pointing to adapter struture
  */
 static int bnx2fc_ulp_get_stats(void *handle)
 {
@@ -2076,7 +2084,7 @@ static int __bnx2fc_disable(struct fcoe_ctlr *ctlr)
 {
 	struct bnx2fc_interface *interface = fcoe_ctlr_priv(ctlr);
 
-	if (interface->enabled) {
+	if (interface->enabled == true) {
 		if (!ctlr->lp) {
 			pr_err(PFX "__bnx2fc_disable: lport not found\n");
 			return -ENODEV;
@@ -2174,7 +2182,7 @@ static int __bnx2fc_enable(struct fcoe_ctlr *ctlr)
 	struct cnic_fc_npiv_tbl *npiv_tbl;
 	struct fc_lport *lport;
 
-	if (!interface->enabled) {
+	if (interface->enabled == false) {
 		if (!ctlr->lp) {
 			pr_err(PFX "__bnx2fc_enable: lport not found\n");
 			return -ENODEV;
@@ -2265,7 +2273,7 @@ static int bnx2fc_ctlr_enabled(struct fcoe_ctlr_device *cdev)
 	case FCOE_CTLR_UNUSED:
 	default:
 		return -ENOTSUPP;
-	}
+	};
 }
 
 enum bnx2fc_create_link_state {
@@ -2708,13 +2716,14 @@ static int __init bnx2fc_mod_init(void)
 
 	bg = &bnx2fc_global;
 	skb_queue_head_init(&bg->fcoe_rx_list);
-	l2_thread = kthread_run(bnx2fc_l2_rcv_thread,
-				(void *)bg,
-				"bnx2fc_l2_thread");
+	l2_thread = kthread_create(bnx2fc_l2_rcv_thread,
+				   (void *)bg,
+				   "bnx2fc_l2_thread");
 	if (IS_ERR(l2_thread)) {
 		rc = PTR_ERR(l2_thread);
 		goto free_wq;
 	}
+	wake_up_process(l2_thread);
 	spin_lock_bh(&bg->fcoe_rx_list.lock);
 	bg->kthread = l2_thread;
 	spin_unlock_bh(&bg->fcoe_rx_list.lock);
@@ -2935,12 +2944,10 @@ bnx2fc_tm_timeout_store(struct device *dev,
 static DEVICE_ATTR(tm_timeout, S_IRUGO|S_IWUSR, bnx2fc_tm_timeout_show,
 	bnx2fc_tm_timeout_store);
 
-static struct attribute *bnx2fc_host_attrs[] = {
-	&dev_attr_tm_timeout.attr,
+static struct device_attribute *bnx2fc_host_attrs[] = {
+	&dev_attr_tm_timeout,
 	NULL,
 };
-
-ATTRIBUTE_GROUPS(bnx2fc_host);
 
 /*
  * scsi_host_template structure used while registering with SCSI-ml
@@ -2963,8 +2970,7 @@ static struct scsi_host_template bnx2fc_shost_template = {
 	.max_sectors		= 0x3fbf,
 	.track_queue_depth	= 1,
 	.slave_configure	= bnx2fc_slave_configure,
-	.shost_groups		= bnx2fc_host_groups,
-	.cmd_size		= sizeof(struct bnx2fc_priv),
+	.shost_attrs		= bnx2fc_host_attrs,
 };
 
 static struct libfc_function_template bnx2fc_libfc_fcn_templ = {

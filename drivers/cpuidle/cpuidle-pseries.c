@@ -33,18 +33,17 @@ static struct cpuidle_state *cpuidle_state_table __read_mostly;
 static u64 snooze_timeout __read_mostly;
 static bool snooze_timeout_en __read_mostly;
 
-static __cpuidle
-int snooze_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
-		int index)
+static int snooze_loop(struct cpuidle_device *dev,
+			struct cpuidle_driver *drv,
+			int index)
 {
 	u64 snooze_exit_time;
 
 	set_thread_flag(TIF_POLLING_NRFLAG);
 
 	pseries_idle_prolog();
-	raw_local_irq_enable();
+	local_irq_enable();
 	snooze_exit_time = get_tb() + snooze_timeout;
-	dev->poll_time_limit = false;
 
 	while (!need_resched()) {
 		HMT_low();
@@ -55,7 +54,6 @@ int snooze_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 			 * loop anyway. Require a barrier after polling is
 			 * cleared to order subsequent test of need_resched().
 			 */
-			dev->poll_time_limit = true;
 			clear_thread_flag(TIF_POLLING_NRFLAG);
 			smp_mb();
 			break;
@@ -65,14 +63,14 @@ int snooze_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	HMT_medium();
 	clear_thread_flag(TIF_POLLING_NRFLAG);
 
-	raw_local_irq_disable();
+	local_irq_disable();
 
 	pseries_idle_epilog();
 
 	return index;
 }
 
-static __cpuidle void check_and_cede_processor(void)
+static void check_and_cede_processor(void)
 {
 	/*
 	 * Ensure our interrupt state is properly tracked,
@@ -216,9 +214,9 @@ static int __init parse_cede_parameters(void)
 #define NR_DEDICATED_STATES	2 /* snooze, CEDE */
 static u8 cede_latency_hint[NR_DEDICATED_STATES];
 
-static __cpuidle
-int dedicated_cede_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
-			int index)
+static int dedicated_cede_loop(struct cpuidle_device *dev,
+				struct cpuidle_driver *drv,
+				int index)
 {
 	u8 old_latency_hint;
 
@@ -230,7 +228,7 @@ int dedicated_cede_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	HMT_medium();
 	check_and_cede_processor();
 
-	raw_local_irq_disable();
+	local_irq_disable();
 	get_lppaca()->donate_dedicated_cpu = 0;
 	get_lppaca()->cede_latency_hint = old_latency_hint;
 
@@ -239,9 +237,9 @@ int dedicated_cede_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	return index;
 }
 
-static __cpuidle
-int shared_cede_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
-		     int index)
+static int shared_cede_loop(struct cpuidle_device *dev,
+			struct cpuidle_driver *drv,
+			int index)
 {
 
 	pseries_idle_prolog();
@@ -255,7 +253,7 @@ int shared_cede_loop(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	 */
 	check_and_cede_processor();
 
-	raw_local_irq_disable();
+	local_irq_disable();
 	pseries_idle_epilog();
 
 	return index;
@@ -270,8 +268,7 @@ static struct cpuidle_state dedicated_states[NR_DEDICATED_STATES] = {
 		.desc = "snooze",
 		.exit_latency = 0,
 		.target_residency = 0,
-		.enter = &snooze_loop,
-		.flags = CPUIDLE_FLAG_POLLING },
+		.enter = &snooze_loop },
 	{ /* CEDE */
 		.name = "CEDE",
 		.desc = "CEDE",
@@ -289,8 +286,7 @@ static struct cpuidle_state shared_states[] = {
 		.desc = "snooze",
 		.exit_latency = 0,
 		.target_residency = 0,
-		.enter = &snooze_loop,
-		.flags = CPUIDLE_FLAG_POLLING },
+		.enter = &snooze_loop },
 	{ /* Shared Cede */
 		.name = "Shared Cede",
 		.desc = "Shared Cede",
@@ -350,8 +346,10 @@ static int pseries_cpuidle_driver_init(void)
 static void __init fixup_cede0_latency(void)
 {
 	struct xcede_latency_payload *payload;
-	u64 min_xcede_latency_us = UINT_MAX;
+	u64 min_latency_us;
 	int i;
+
+	min_latency_us = dedicated_states[1].exit_latency; // CEDE latency
 
 	if (parse_cede_parameters())
 		return;
@@ -360,45 +358,42 @@ static void __init fixup_cede0_latency(void)
 		nr_xcede_records);
 
 	payload = &xcede_latency_parameter.payload;
-
-	/*
-	 * The CEDE idle state maps to CEDE(0). While the hypervisor
-	 * does not advertise CEDE(0) exit latency values, it does
-	 * advertise the latency values of the extended CEDE states.
-	 * We use the lowest advertised exit latency value as a proxy
-	 * for the exit latency of CEDE(0).
-	 */
 	for (i = 0; i < nr_xcede_records; i++) {
 		struct xcede_latency_record *record = &payload->records[i];
-		u8 hint = record->hint;
 		u64 latency_tb = be64_to_cpu(record->latency_ticks);
 		u64 latency_us = DIV_ROUND_UP_ULL(tb_to_ns(latency_tb), NSEC_PER_USEC);
 
-		/*
-		 * We expect the exit latency of an extended CEDE
-		 * state to be non-zero, it to since it takes at least
-		 * a few nanoseconds to wakeup the idle CPU and
-		 * dispatch the virtual processor into the Linux
-		 * Guest.
-		 *
-		 * So we consider only non-zero value for performing
-		 * the fixup of CEDE(0) latency.
-		 */
-		if (latency_us == 0) {
-			pr_warn("cpuidle: Skipping xcede record %d [hint=%d]. Exit latency = 0us\n",
-				i, hint);
-			continue;
-		}
+		if (latency_us == 0)
+			pr_warn("cpuidle: xcede record %d has an unrealistic latency of 0us.\n", i);
 
-		if (latency_us < min_xcede_latency_us)
-			min_xcede_latency_us = latency_us;
+		if (latency_us < min_latency_us)
+			min_latency_us = latency_us;
 	}
 
-	if (min_xcede_latency_us != UINT_MAX) {
-		dedicated_states[1].exit_latency = min_xcede_latency_us;
-		dedicated_states[1].target_residency = 10 * (min_xcede_latency_us);
+	/*
+	 * By default, we assume that CEDE(0) has exit latency 10us,
+	 * since there is no way for us to query from the platform.
+	 *
+	 * However, if the wakeup latency of an Extended CEDE state is
+	 * smaller than 10us, then we can be sure that CEDE(0)
+	 * requires no more than that.
+	 *
+	 * Perform the fix-up.
+	 */
+	if (min_latency_us < dedicated_states[1].exit_latency) {
+		/*
+		 * We set a minimum of 1us wakeup latency for cede0 to
+		 * distinguish it from snooze
+		 */
+		u64 cede0_latency = 1;
+
+		if (min_latency_us > cede0_latency)
+			cede0_latency = min_latency_us - 1;
+
+		dedicated_states[1].exit_latency = cede0_latency;
+		dedicated_states[1].target_residency = 10 * (cede0_latency);
 		pr_info("cpuidle: Fixed up CEDE exit latency to %llu us\n",
-			min_xcede_latency_us);
+			cede0_latency);
 	}
 
 }

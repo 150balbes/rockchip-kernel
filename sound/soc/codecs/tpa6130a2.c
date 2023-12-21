@@ -209,20 +209,13 @@ static const struct regmap_config tpa6130a2_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static const struct i2c_device_id tpa6130a2_id[] = {
-	{ "tpa6130a2", TPA6130A2 },
-	{ "tpa6140a2", TPA6140A2 },
-	{ }
-};
-MODULE_DEVICE_TABLE(i2c, tpa6130a2_id);
-
-static int tpa6130a2_probe(struct i2c_client *client)
+static int tpa6130a2_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct device *dev;
 	struct tpa6130a2_data *data;
 	struct tpa6130a2_platform_data *pdata = client->dev.platform_data;
 	struct device_node *np = client->dev.of_node;
-	const struct i2c_device_id *id;
 	const char *regulator;
 	unsigned int version;
 	int ret;
@@ -251,7 +244,6 @@ static int tpa6130a2_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, data);
 
-	id = i2c_match_id(tpa6130a2_id, client);
 	data->id = id->driver_data;
 
 	if (data->power_gpio >= 0) {
@@ -304,6 +296,13 @@ static int tpa6130a2_probe(struct i2c_client *client)
 	return devm_snd_soc_register_component(&client->dev,
 			&tpa6130a2_component_driver, NULL, 0);
 }
+
+static const struct i2c_device_id tpa6130a2_id[] = {
+	{ "tpa6130a2", TPA6130A2 },
+	{ "tpa6140a2", TPA6140A2 },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, tpa6130a2_id);
 
 #if IS_ENABLED(CONFIG_OF)
 static const struct of_device_id tpa6130a2_of_match[] = {

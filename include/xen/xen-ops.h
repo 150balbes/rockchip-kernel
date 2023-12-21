@@ -5,7 +5,6 @@
 #include <linux/percpu.h>
 #include <linux/notifier.h>
 #include <linux/efi.h>
-#include <linux/virtio_anchor.h>
 #include <xen/features.h>
 #include <asm/xen/interface.h>
 #include <xen/interface/vcpu.h>
@@ -43,15 +42,34 @@ int xen_setup_shutdown_event(void);
 
 extern unsigned long *xen_contiguous_bitmap;
 
+#if defined(CONFIG_XEN_PV) || defined(CONFIG_ARM) || defined(CONFIG_ARM64)
+int xen_create_contiguous_region(phys_addr_t pstart, unsigned int order,
+				unsigned int address_bits,
+				dma_addr_t *dma_handle);
+
+void xen_destroy_contiguous_region(phys_addr_t pstart, unsigned int order);
+#else
+static inline int xen_create_contiguous_region(phys_addr_t pstart,
+					       unsigned int order,
+					       unsigned int address_bits,
+					       dma_addr_t *dma_handle)
+{
+	return 0;
+}
+
+static inline void xen_destroy_contiguous_region(phys_addr_t pstart,
+						 unsigned int order) { }
+#endif
+
 #if defined(CONFIG_XEN_PV)
 int xen_remap_pfn(struct vm_area_struct *vma, unsigned long addr,
 		  xen_pfn_t *pfn, int nr, int *err_ptr, pgprot_t prot,
-		  unsigned int domid, bool no_translate);
+		  unsigned int domid, bool no_translate, struct page **pages);
 #else
 static inline int xen_remap_pfn(struct vm_area_struct *vma, unsigned long addr,
 				xen_pfn_t *pfn, int nr, int *err_ptr,
 				pgprot_t prot,  unsigned int domid,
-				bool no_translate)
+				bool no_translate, struct page **pages)
 {
 	BUG();
 	return 0;
@@ -128,7 +146,7 @@ static inline int xen_remap_domain_gfn_array(struct vm_area_struct *vma,
 	 */
 	BUG_ON(err_ptr == NULL);
 	return xen_remap_pfn(vma, addr, gfn, nr, err_ptr, prot, domid,
-			     false);
+			     false, pages);
 }
 
 /*
@@ -140,6 +158,7 @@ static inline int xen_remap_domain_gfn_array(struct vm_area_struct *vma,
  * @err_ptr: Returns per-MFN error status.
  * @prot:    page protection mask
  * @domid:   Domain owning the pages
+ * @pages:   Array of pages if this domain has an auto-translated physmap
  *
  * @mfn and @err_ptr may point to the same buffer, the MFNs will be
  * overwritten by the error codes after they are mapped.
@@ -150,13 +169,14 @@ static inline int xen_remap_domain_gfn_array(struct vm_area_struct *vma,
 static inline int xen_remap_domain_mfn_array(struct vm_area_struct *vma,
 					     unsigned long addr, xen_pfn_t *mfn,
 					     int nr, int *err_ptr,
-					     pgprot_t prot, unsigned int domid)
+					     pgprot_t prot, unsigned int domid,
+					     struct page **pages)
 {
 	if (xen_feature(XENFEAT_auto_translated_physmap))
 		return -EOPNOTSUPP;
 
 	return xen_remap_pfn(vma, addr, mfn, nr, err_ptr, prot, domid,
-			     true);
+			     true, pages);
 }
 
 /* xen_remap_domain_gfn_range() - map a range of foreign frames
@@ -180,7 +200,8 @@ static inline int xen_remap_domain_gfn_range(struct vm_area_struct *vma,
 	if (xen_feature(XENFEAT_auto_translated_physmap))
 		return -EOPNOTSUPP;
 
-	return xen_remap_pfn(vma, addr, &gfn, nr, NULL, prot, domid, false);
+	return xen_remap_pfn(vma, addr, &gfn, nr, NULL, prot, domid, false,
+			     pages);
 }
 
 int xen_unmap_domain_gfn_range(struct vm_area_struct *vma,
@@ -214,16 +235,5 @@ static inline void xen_preemptible_hcall_begin(void) { }
 static inline void xen_preemptible_hcall_end(void) { }
 
 #endif /* CONFIG_XEN_PV && !CONFIG_PREEMPTION */
-
-#ifdef CONFIG_XEN_GRANT_DMA_OPS
-bool xen_virtio_restricted_mem_acc(struct virtio_device *dev);
-#else
-struct virtio_device;
-
-static inline bool xen_virtio_restricted_mem_acc(struct virtio_device *dev)
-{
-	return false;
-}
-#endif /* CONFIG_XEN_GRANT_DMA_OPS */
 
 #endif /* INCLUDE_XEN_OPS_H */

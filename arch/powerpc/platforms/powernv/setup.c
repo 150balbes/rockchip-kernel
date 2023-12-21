@@ -17,7 +17,6 @@
 #include <linux/console.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
-#include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
@@ -41,7 +40,7 @@
 #include "powernv.h"
 
 
-static bool __init fw_feature_is(const char *state, const char *name,
+static bool fw_feature_is(const char *state, const char *name,
 			  struct device_node *fw_features)
 {
 	struct device_node *np;
@@ -56,7 +55,7 @@ static bool __init fw_feature_is(const char *state, const char *name,
 	return rc;
 }
 
-static void __init init_fw_feat_flags(struct device_node *np)
+static void init_fw_feat_flags(struct device_node *np)
 {
 	if (fw_feature_is("enabled", "inst-spec-barrier-ori31,31,0", np))
 		security_ftr_set(SEC_FTR_SPEC_BAR_ORI31);
@@ -97,18 +96,9 @@ static void __init init_fw_feat_flags(struct device_node *np)
 
 	if (fw_feature_is("disabled", "needs-spec-barrier-for-bound-checks", np))
 		security_ftr_clear(SEC_FTR_BNDS_CHK_SPEC_BAR);
-
-	if (fw_feature_is("enabled", "no-need-l1d-flush-msr-pr-1-to-0", np))
-		security_ftr_clear(SEC_FTR_L1D_FLUSH_ENTRY);
-
-	if (fw_feature_is("enabled", "no-need-l1d-flush-kernel-on-user-access", np))
-		security_ftr_clear(SEC_FTR_L1D_FLUSH_UACCESS);
-
-	if (fw_feature_is("enabled", "no-need-store-drain-on-priv-state-switch", np))
-		security_ftr_clear(SEC_FTR_STF_BARRIER);
 }
 
-static void __init pnv_setup_security_mitigations(void)
+static void pnv_setup_security_mitigations(void)
 {
 	struct device_node *np, *fw_features;
 	enum l1d_flush_type type;
@@ -133,14 +123,10 @@ static void __init pnv_setup_security_mitigations(void)
 	}
 
 	/*
-	 * The issues addressed by the entry and uaccess flush don't affect P7
-	 * or P8, so on bare metal disable them explicitly in case firmware does
-	 * not include the features to disable them. POWER9 and newer processors
-	 * should have the appropriate firmware flags.
+	 * If we are non-Power9 bare metal, we don't need to flush on kernel
+	 * entry or after user access: they fix a P9 specific vulnerability.
 	 */
-	if (pvr_version_is(PVR_POWER7) || pvr_version_is(PVR_POWER7p) ||
-	    pvr_version_is(PVR_POWER8E) || pvr_version_is(PVR_POWER8NVL) ||
-	    pvr_version_is(PVR_POWER8)) {
+	if (!pvr_version_is(PVR_POWER9)) {
 		security_ftr_clear(SEC_FTR_L1D_FLUSH_ENTRY);
 		security_ftr_clear(SEC_FTR_L1D_FLUSH_UACCESS);
 	}
@@ -171,7 +157,7 @@ static void __init pnv_check_guarded_cores(void)
 	for_each_node_by_type(dn, "cpu") {
 		if (of_property_match_string(dn, "status", "bad") >= 0)
 			bad_count++;
-	}
+	};
 
 	if (bad_count) {
 		printk("  _     _______________\n");
@@ -194,6 +180,9 @@ static void __init pnv_setup_arch(void)
 	/* Initialize SMP */
 	pnv_smp_init();
 
+	/* Setup PCI */
+	pnv_pci_init();
+
 	/* Setup RTC and NVRAM callbacks */
 	if (firmware_has_feature(FW_FEATURE_OPAL))
 		opal_nvram_init();
@@ -208,29 +197,8 @@ static void __init pnv_setup_arch(void)
 	pnv_rng_init();
 }
 
-static void __init pnv_add_hw_description(void)
-{
-	struct device_node *dn;
-	const char *s;
-
-	dn = of_find_node_by_path("/ibm,opal/firmware");
-	if (!dn)
-		return;
-
-	if (of_property_read_string(dn, "version", &s) == 0 ||
-	    of_property_read_string(dn, "git-id", &s) == 0)
-		seq_buf_printf(&ppc_hw_desc, "opal:%s ", s);
-
-	if (of_property_read_string(dn, "mi-version", &s) == 0)
-		seq_buf_printf(&ppc_hw_desc, "mi:%s ", s);
-
-	of_node_put(dn);
-}
-
 static void __init pnv_init(void)
 {
-	pnv_add_hw_description();
-
 	/*
 	 * Initialize the LPC bus now so that legacy serial
 	 * ports can be found on it
@@ -244,7 +212,6 @@ static void __init pnv_init(void)
 #endif
 		add_preferred_console("hvc", 0, NULL);
 
-#ifdef CONFIG_PPC_64S_HASH_MMU
 	if (!radix_enabled()) {
 		size_t size = sizeof(struct slb_entry) * mmu_slb_size;
 		int i;
@@ -257,7 +224,6 @@ static void __init pnv_init(void)
 						cpu_to_node(i));
 		}
 	}
-#endif
 }
 
 static void __init pnv_init_IRQ(void)
@@ -479,7 +445,7 @@ static void pnv_kexec_cpu_down(int crash_shutdown, int secondary)
 }
 #endif /* CONFIG_KEXEC_CORE */
 
-#ifdef CONFIG_MEMORY_HOTPLUG
+#ifdef CONFIG_MEMORY_HOTPLUG_SPARSE
 static unsigned long pnv_memory_block_size(void)
 {
 	/*
@@ -512,6 +478,9 @@ static void __init pnv_setup_machdep_opal(void)
 
 static int __init pnv_probe(void)
 {
+	if (!of_machine_is_compatible("ibm,powernv"))
+		return 0;
+
 	if (firmware_has_feature(FW_FEATURE_OPAL))
 		pnv_setup_machdep_opal();
 
@@ -575,21 +544,20 @@ static long pnv_machine_check_early(struct pt_regs *regs)
 
 define_machine(powernv) {
 	.name			= "PowerNV",
-	.compatible		= "ibm,powernv",
 	.probe			= pnv_probe,
 	.setup_arch		= pnv_setup_arch,
 	.init_IRQ		= pnv_init_IRQ,
 	.show_cpuinfo		= pnv_show_cpuinfo,
 	.get_proc_freq          = pnv_get_proc_freq,
-	.discover_phbs		= pnv_pci_init,
 	.progress		= pnv_progress,
 	.machine_shutdown	= pnv_shutdown,
 	.power_save             = NULL,
+	.calibrate_decr		= generic_calibrate_decr,
 	.machine_check_early	= pnv_machine_check_early,
 #ifdef CONFIG_KEXEC_CORE
 	.kexec_cpu_down		= pnv_kexec_cpu_down,
 #endif
-#ifdef CONFIG_MEMORY_HOTPLUG
+#ifdef CONFIG_MEMORY_HOTPLUG_SPARSE
 	.memory_block_size	= pnv_memory_block_size,
 #endif
 };

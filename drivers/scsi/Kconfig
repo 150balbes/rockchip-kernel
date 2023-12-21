@@ -2,10 +2,9 @@
 menu "SCSI device support"
 
 config SCSI_MOD
-	tristate
-	default y if SCSI=n || SCSI=y
-	default m if SCSI=m
-	depends on BLOCK
+       tristate
+       default y if SCSI=n || SCSI=y
+       default m if SCSI=m
 
 config RAID_ATTRS
 	tristate "RAID Transport Class"
@@ -15,16 +14,12 @@ config RAID_ATTRS
 	help
 	  Provides RAID
 
-config SCSI_COMMON
-	tristate
-
 config SCSI
 	tristate "SCSI device support"
 	depends on BLOCK
 	select SCSI_DMA if HAS_DMA
 	select SG_POOL
-	select SCSI_COMMON
-	select BLK_DEV_BSG_COMMON if BLK_DEV_BSG
+	select BLK_SCSI_REQUEST
 	help
 	  If you want to use a SCSI hard disk, SCSI tape drive, SCSI CD-ROM or
 	  any other SCSI device under Linux, say Y and make sure that you know
@@ -144,18 +139,6 @@ config CHR_DEV_SG
 	  <file:Documentation/scsi/scsi.rst>. The module will be called sg.
 
 	  If unsure, say N.
-
-config BLK_DEV_BSG
-	bool "/dev/bsg support (SG v4)"
-	depends on SCSI
-	default y
-	help
-	  Saying Y here will enable generic SG (SCSI generic) v4 support
-	  for any SCSI device.
-
-	  This option is required by UDEV to access device serial numbers, etc.
-
-	  If unsure, say Y.
 
 config CHR_DEV_SCH
 	tristate "SCSI media changer support"
@@ -328,13 +311,13 @@ source "drivers/scsi/cxlflash/Kconfig"
 config SGIWD93_SCSI
 	tristate "SGI WD93C93 SCSI Driver"
 	depends on SGI_HAS_WD93 && SCSI
-	help
+  	help
 	  If you have a Western Digital WD93 SCSI controller on
 	  an SGI MIPS system, say Y.  Otherwise, say N.
 
 config BLK_DEV_3W_XXXX_RAID
 	tristate "3ware 5/6/7/8xxx ATA-RAID support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	help
 	  3ware is the only hardware ATA-Raid product in Linux to date.
 	  This card is 2,4, or 8 channel master mode support only.
@@ -381,7 +364,7 @@ config SCSI_3W_SAS
 
 config SCSI_ACARD
 	tristate "ACARD SCSI support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	help
 	  This driver supports the ACARD SCSI host adapter.
 	  Support Chip <ATP870 ATP876 ATP880 ATP885>
@@ -459,10 +442,21 @@ config SCSI_MVUMI
 	  To compile this driver as a module, choose M here: the
 	  module will be called mvumi.
 
+config SCSI_DPT_I2O
+	tristate "Adaptec I2O RAID support "
+	depends on SCSI && PCI && VIRT_TO_BUS
+	help
+	  This driver supports all of Adaptec's I2O based RAID controllers as 
+	  well as the DPT SmartRaid V cards.  This is an Adaptec maintained
+	  driver by Deanna Bonds.  See <file:Documentation/scsi/dpti.rst>.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called dpt_i2o.
+
 config SCSI_ADVANSYS
 	tristate "AdvanSys SCSI support"
 	depends on SCSI
-	depends on (ISA || EISA || PCI) && HAS_IOPORT
+	depends on ISA || EISA || PCI
 	depends on ISA_DMA_API || !ISA
 	help
 	  This is a driver for all SCSI host adapters manufactured by
@@ -488,8 +482,8 @@ config SCSI_ARCMSR
 source "drivers/scsi/esas2r/Kconfig"
 source "drivers/scsi/megaraid/Kconfig.megaraid"
 source "drivers/scsi/mpt3sas/Kconfig"
-source "drivers/scsi/mpi3mr/Kconfig"
 source "drivers/scsi/smartpqi/Kconfig"
+source "drivers/scsi/ufs/Kconfig"
 
 config SCSI_HPTIOP
 	tristate "HighPoint RocketRAID 3xxx/4xxx Controller support"
@@ -503,7 +497,7 @@ config SCSI_HPTIOP
 
 config SCSI_BUSLOGIC
 	tristate "BusLogic SCSI support"
-	depends on SCSI && PCI && HAS_IOPORT
+	depends on (PCI || ISA) && SCSI && ISA_DMA_API && VIRT_TO_BUS
 	help
 	  This is support for BusLogic MultiMaster and FlashPoint SCSI Host
 	  Adapters. Consult the SCSI-HOWTO, available from
@@ -518,7 +512,7 @@ config SCSI_BUSLOGIC
 
 config SCSI_FLASHPOINT
 	bool "FlashPoint support"
-	depends on SCSI_BUSLOGIC && PCI && HAS_IOPORT
+	depends on SCSI_BUSLOGIC && PCI
 	help
 	  This option allows you to add FlashPoint support to the
 	  BusLogic SCSI driver. The FlashPoint SCCB Manager code is
@@ -632,7 +626,7 @@ config SCSI_SNIC_DEBUG_FS
 
 config SCSI_DMX3191D
 	tristate "DMX3191D SCSI support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	select SCSI_SPI_ATTRS
 	help
 	  This is support for Domex DMX3191D SCSI Host Adapters.
@@ -646,7 +640,7 @@ config SCSI_FDOMAIN
 
 config SCSI_FDOMAIN_PCI
 	tristate "Future Domain TMC-3260/AHA-2920A PCI SCSI support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	select SCSI_FDOMAIN
 	help
 	  This is support for Future Domain's PCI SCSI host adapters (TMC-3260)
@@ -675,6 +669,20 @@ config SCSI_FDOMAIN_ISA
 	  To compile this driver as a module, choose M here: the
 	  module will be called fdomain_isa.
 
+config SCSI_GDTH
+	tristate "Intel/ICP (former GDT SCSI Disk Array) RAID Controller support"
+	depends on PCI && SCSI
+	help
+	  Formerly called GDT SCSI Disk Array Controller Support.
+
+	  This is a driver for RAID/SCSI Disk Array Controllers (EISA/ISA/PCI) 
+	  manufactured by Intel Corporation/ICP vortex GmbH. It is documented
+	  in the kernel source in <file:drivers/scsi/gdth.c> and
+	  <file:drivers/scsi/gdth.h>.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called gdth.
+
 config SCSI_ISCI
 	tristate "Intel(R) C600 Series Chipset SAS Controller"
 	depends on PCI && SCSI
@@ -699,7 +707,7 @@ config SCSI_GENERIC_NCR5380
 
 config SCSI_IPS
 	tristate "IBM ServeRAID support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	help
 	  This is support for the IBM ServeRAID hardware RAID controllers.
 	  See <http://www.developer.ibm.com/welcome/netfinity/serveraid.html>
@@ -759,7 +767,7 @@ config SCSI_IBMVFC_TRACE
 
 config SCSI_INITIO
 	tristate "Initio 9100U(W) support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	help
 	  This is support for the Initio 91XXU(W) SCSI host adapter.  Please
 	  read the SCSI-HOWTO, available from
@@ -770,7 +778,7 @@ config SCSI_INITIO
 
 config SCSI_INIA100
 	tristate "Initio INI-A100U2W support"
-	depends on PCI && HAS_IOPORT && SCSI
+	depends on PCI && SCSI
 	help
 	  This is support for the Initio INI-A100U2W SCSI host adapter.
 	  Please read the SCSI-HOWTO, available from
@@ -782,7 +790,6 @@ config SCSI_INIA100
 config SCSI_PPA
 	tristate "IOMEGA parallel port (ppa - older drives)"
 	depends on SCSI && PARPORT_PC
-	depends on HAS_IOPORT
 	help
 	  This driver supports older versions of IOMEGA's parallel port ZIP
 	  drive (a 100 MB removable media device).
@@ -972,7 +979,8 @@ config SCSI_SYM53C8XX_MMIO
 
 config SCSI_IPR
 	tristate "IBM Power Linux RAID adapter support"
-	depends on PCI && SCSI
+	depends on PCI && SCSI && ATA
+	select SATA_HOST
 	select FW_LOADER
 	select IRQ_POLL
 	select SGL_ALLOC
@@ -1151,7 +1159,6 @@ config SCSI_LPFC
 	depends on NVME_TARGET_FC || NVME_TARGET_FC=n
 	depends on NVME_FC || NVME_FC=n
 	select CRC_T10DIF
-	select IRQ_POLL
 	help
           This lpfc driver supports the Emulex LightPulse
           Family of Fibre Channel PCI host adapters.
@@ -1162,8 +1169,6 @@ config SCSI_LPFC_DEBUG_FS
 	help
 	  This makes debugging information from the lpfc driver
 	  available via the debugfs filesystem.
-
-source "drivers/scsi/elx/Kconfig"
 
 config SCSI_SIM710
 	tristate "Simple 53c710 SCSI support (Compaq, NCR machines)"
@@ -1176,8 +1181,7 @@ config SCSI_SIM710
 
 config SCSI_DC395x
 	tristate "Tekram DC395(U/UW/F) and DC315(U) SCSI support"
-	depends on PCI && HAS_IOPORT && SCSI
-	select SCSI_SPI_ATTRS
+	depends on PCI && SCSI
 	help
 	  This driver supports PCI SCSI host adapters based on the ASIC
 	  TRM-S1040 chip, e.g Tekram DC395(U/UW/F) and DC315(U) variants.
@@ -1208,7 +1212,7 @@ config SCSI_AM53C974
 
 config SCSI_NSP32
 	tristate "Workbit NinjaSCSI-32Bi/UDE support"
-	depends on PCI && SCSI && !64BIT && HAS_IOPORT
+	depends on PCI && SCSI && !64BIT
 	help
 	  This is support for the Workbit NinjaSCSI-32Bi/UDE PCI/Cardbus
 	  SCSI host adapter. Please read the SCSI-HOWTO, available from

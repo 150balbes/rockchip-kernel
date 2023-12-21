@@ -2,7 +2,12 @@
 /******************************************************************************
  *
  * Copyright(c) 2007 - 2014 Intel Corporation. All rights reserved.
- * Copyright(c) 2018 - 2020, 2023 Intel Corporation
+ * Copyright(c) 2018 - 2019 Intel Corporation
+ *
+ * Contact Information:
+ *  Intel Linux Wireless <linuxwifi@intel.com>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ *
  *****************************************************************************/
 
 #include <linux/module.h>
@@ -24,11 +29,11 @@
 #define EEPROM_5050_TX_POWER_VERSION	(4)
 #define EEPROM_5050_EEPROM_VERSION	(0x21E)
 
-#define IWL5000_FW_PRE "iwlwifi-5000"
-#define IWL5000_MODULE_FIRMWARE(api) IWL5000_FW_PRE "-" __stringify(api) ".ucode"
+#define IWL5000_FW_PRE "iwlwifi-5000-"
+#define IWL5000_MODULE_FIRMWARE(api) IWL5000_FW_PRE __stringify(api) ".ucode"
 
-#define IWL5150_FW_PRE "iwlwifi-5150"
-#define IWL5150_MODULE_FIRMWARE(api) IWL5150_FW_PRE "-" __stringify(api) ".ucode"
+#define IWL5150_FW_PRE "iwlwifi-5150-"
+#define IWL5150_MODULE_FIRMWARE(api) IWL5150_FW_PRE __stringify(api) ".ucode"
 
 static const struct iwl_base_params iwl5000_base_params = {
 	.eeprom_size = IWLAGN_EEPROM_IMG_SIZE,
@@ -69,7 +74,8 @@ static const struct iwl_eeprom_params iwl5000_eeprom_params = {
 	.nvm_calib_ver = EEPROM_5000_TX_POWER_VERSION,	\
 	.trans.base_params = &iwl5000_base_params,		\
 	.eeprom_params = &iwl5000_eeprom_params,		\
-	.led_mode = IWL_LED_BLINK
+	.led_mode = IWL_LED_BLINK,				\
+	.max_ht_ampdu_exponent = IEEE80211_HT_MAX_AMPDU_64K
 
 const struct iwl_cfg iwl5300_agn_cfg = {
 	.name = "Intel(R) Ultimate N WiFi Link 5300 AGN",
@@ -132,7 +138,8 @@ const struct iwl_cfg iwl5350_agn_cfg = {
 	.trans.base_params = &iwl5000_base_params,		\
 	.eeprom_params = &iwl5000_eeprom_params,		\
 	.led_mode = IWL_LED_BLINK,				\
-	.internal_wimax_coex = true
+	.internal_wimax_coex = true,				\
+	.max_ht_ampdu_exponent = IEEE80211_HT_MAX_AMPDU_64K
 
 const struct iwl_cfg iwl5150_agn_cfg = {
 	.name = "Intel(R) WiMAX/WiFi Link 5150 AGN",

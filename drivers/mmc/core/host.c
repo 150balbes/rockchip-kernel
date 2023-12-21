@@ -105,10 +105,6 @@ void mmc_unregister_host_class(void)
 	class_unregister(&mmc_host_class);
 }
 
-/**
- * mmc_retune_enable() - enter a transfer mode that requires retuning
- * @host: host which should retune now
- */
 void mmc_retune_enable(struct mmc_host *host)
 {
 	host->can_retune = 1;
@@ -140,18 +136,13 @@ void mmc_retune_unpause(struct mmc_host *host)
 }
 EXPORT_SYMBOL(mmc_retune_unpause);
 
-/**
- * mmc_retune_disable() - exit a transfer mode that requires retuning
- * @host: host which should not retune anymore
- *
- * It is not meant for temporarily preventing retuning!
- */
 void mmc_retune_disable(struct mmc_host *host)
 {
 	mmc_retune_unpause(host);
 	host->can_retune = 0;
 	del_timer_sync(&host->retune_timer);
-	mmc_retune_clear(host);
+	host->retune_now = 0;
+	host->need_retune = 0;
 }
 
 void mmc_retune_timer_stop(struct mmc_host *host)
@@ -220,56 +211,12 @@ static void mmc_retune_timer(struct timer_list *t)
 	mmc_retune_needed(host);
 }
 
-static void mmc_of_parse_timing_phase(struct device *dev, const char *prop,
-				      struct mmc_clk_phase *phase)
-{
-	int degrees[2] = {0};
-	int rc;
-
-	rc = device_property_read_u32_array(dev, prop, degrees, 2);
-	phase->valid = !rc;
-	if (phase->valid) {
-		phase->in_deg = degrees[0];
-		phase->out_deg = degrees[1];
-	}
-}
-
-void
-mmc_of_parse_clk_phase(struct mmc_host *host, struct mmc_clk_phase_map *map)
-{
-	struct device *dev = host->parent;
-
-	mmc_of_parse_timing_phase(dev, "clk-phase-legacy",
-				  &map->phase[MMC_TIMING_LEGACY]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-mmc-hs",
-				  &map->phase[MMC_TIMING_MMC_HS]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-sd-hs",
-				  &map->phase[MMC_TIMING_SD_HS]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-uhs-sdr12",
-				  &map->phase[MMC_TIMING_UHS_SDR12]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-uhs-sdr25",
-				  &map->phase[MMC_TIMING_UHS_SDR25]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-uhs-sdr50",
-				  &map->phase[MMC_TIMING_UHS_SDR50]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-uhs-sdr104",
-				  &map->phase[MMC_TIMING_UHS_SDR104]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-uhs-ddr50",
-				  &map->phase[MMC_TIMING_UHS_DDR50]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-mmc-ddr52",
-				  &map->phase[MMC_TIMING_MMC_DDR52]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-mmc-hs200",
-				  &map->phase[MMC_TIMING_MMC_HS200]);
-	mmc_of_parse_timing_phase(dev, "clk-phase-mmc-hs400",
-				  &map->phase[MMC_TIMING_MMC_HS400]);
-}
-EXPORT_SYMBOL(mmc_of_parse_clk_phase);
-
 /**
- * mmc_of_parse() - parse host's device properties
- * @host: host whose properties should be parsed.
+ *	mmc_of_parse() - parse host's device-tree node
+ *	@host: host whose node should be parsed.
  *
  * To keep the rest of the MMC subsystem unaware of whether DT has been
- * used to instantiate and configure this host instance or not, we
+ * used to to instantiate and configure this host instance or not, we
  * parse the properties and set respective generic mmc-host flags and
  * parameters.
  */
@@ -407,9 +354,8 @@ int mmc_of_parse(struct mmc_host *host)
 		host->caps2 |= MMC_CAP2_NO_SD;
 	if (device_property_read_bool(dev, "no-mmc"))
 		host->caps2 |= MMC_CAP2_NO_MMC;
-	if (device_property_read_bool(dev, "no-mmc-hs400"))
-		host->caps2 &= ~(MMC_CAP2_HS400_1_8V | MMC_CAP2_HS400_1_2V |
-				 MMC_CAP2_HS400_ES);
+	if (device_property_read_bool(dev, "no-prescan-powerup"))
+		host->caps2 |= MMC_CAP2_NO_PRESCAN_POWERUP;
 
 	/* Must be after "non-removable" check */
 	if (device_property_read_u32(dev, "fixed-emmc-driver-type", &drv_type) == 0) {
@@ -438,61 +384,43 @@ EXPORT_SYMBOL(mmc_of_parse);
 
 /**
  * mmc_of_parse_voltage - return mask of supported voltages
- * @host: host whose properties should be parsed.
+ * @np: The device node need to be parsed.
  * @mask: mask of voltages available for MMC/SD/SDIO
  *
- * Parse the "voltage-ranges" property, returning zero if it is not
+ * Parse the "voltage-ranges" DT property, returning zero if it is not
  * found, negative errno if the voltage-range specification is invalid,
  * or one if the voltage-range is specified and successfully parsed.
  */
-int mmc_of_parse_voltage(struct mmc_host *host, u32 *mask)
+int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 {
-	const char *prop = "voltage-ranges";
-	struct device *dev = host->parent;
-	u32 *voltage_ranges;
+	const u32 *voltage_ranges;
 	int num_ranges, i;
-	int ret;
 
-	if (!device_property_present(dev, prop)) {
-		dev_dbg(dev, "%s unspecified\n", prop);
+	voltage_ranges = of_get_property(np, "voltage-ranges", &num_ranges);
+	if (!voltage_ranges) {
+		pr_debug("%pOF: voltage-ranges unspecified\n", np);
 		return 0;
 	}
-
-	ret = device_property_count_u32(dev, prop);
-	if (ret < 0)
-		return ret;
-
-	num_ranges = ret / 2;
+	num_ranges = num_ranges / sizeof(*voltage_ranges) / 2;
 	if (!num_ranges) {
-		dev_err(dev, "%s empty\n", prop);
+		pr_err("%pOF: voltage-ranges empty\n", np);
 		return -EINVAL;
-	}
-
-	voltage_ranges = kcalloc(2 * num_ranges, sizeof(*voltage_ranges), GFP_KERNEL);
-	if (!voltage_ranges)
-		return -ENOMEM;
-
-	ret = device_property_read_u32_array(dev, prop, voltage_ranges, 2 * num_ranges);
-	if (ret) {
-		kfree(voltage_ranges);
-		return ret;
 	}
 
 	for (i = 0; i < num_ranges; i++) {
 		const int j = i * 2;
 		u32 ocr_mask;
 
-		ocr_mask = mmc_vddrange_to_ocrmask(voltage_ranges[j + 0],
-						   voltage_ranges[j + 1]);
+		ocr_mask = mmc_vddrange_to_ocrmask(
+				be32_to_cpu(voltage_ranges[j]),
+				be32_to_cpu(voltage_ranges[j + 1]));
 		if (!ocr_mask) {
-			dev_err(dev, "range #%d in %s is invalid\n", i, prop);
-			kfree(voltage_ranges);
+			pr_err("%pOF: voltage-range #%d is invalid\n",
+				np, i);
 			return -EINVAL;
 		}
 		*mask |= ocr_mask;
 	}
-
-	kfree(voltage_ranges);
 
 	return 1;
 }
@@ -565,7 +493,7 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	spin_lock_init(&host->lock);
 	init_waitqueue_head(&host->wq);
 	INIT_DELAYED_WORK(&host->detect, mmc_rescan);
-	INIT_WORK(&host->sdio_irq_work, sdio_irq_work);
+	INIT_DELAYED_WORK(&host->sdio_irq_work, sdio_irq_work);
 	timer_setup(&host->retune_timer, mmc_retune_timer, 0);
 
 	/*
@@ -588,46 +516,11 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 
 EXPORT_SYMBOL(mmc_alloc_host);
 
-static void devm_mmc_host_release(struct device *dev, void *res)
-{
-	mmc_free_host(*(struct mmc_host **)res);
-}
-
-struct mmc_host *devm_mmc_alloc_host(struct device *dev, int extra)
-{
-	struct mmc_host **dr, *host;
-
-	dr = devres_alloc(devm_mmc_host_release, sizeof(*dr), GFP_KERNEL);
-	if (!dr)
-		return NULL;
-
-	host = mmc_alloc_host(extra, dev);
-	if (!host) {
-		devres_free(dr);
-		return NULL;
-	}
-
-	*dr = host;
-	devres_add(dev, dr);
-
-	return host;
-}
-EXPORT_SYMBOL(devm_mmc_alloc_host);
-
 static int mmc_validate_host_caps(struct mmc_host *host)
 {
-	struct device *dev = host->parent;
-	u32 caps = host->caps, caps2 = host->caps2;
-
-	if (caps & MMC_CAP_SDIO_IRQ && !host->ops->enable_sdio_irq) {
-		dev_warn(dev, "missing ->enable_sdio_irq() ops\n");
+	if (host->caps & MMC_CAP_SDIO_IRQ && !host->ops->enable_sdio_irq) {
+		dev_warn(host->parent, "missing ->enable_sdio_irq() ops\n");
 		return -EINVAL;
-	}
-
-	if (caps2 & (MMC_CAP2_HS400_ES | MMC_CAP2_HS400) &&
-	    !(caps & MMC_CAP_8_BIT_DATA) && !(caps2 & MMC_CAP2_NO_MMC)) {
-		dev_warn(dev, "drop HS400 support since no 8-bit bus\n");
-		host->caps2 = caps2 & ~MMC_CAP2_HS400_ES & ~MMC_CAP2_HS400;
 	}
 
 	return 0;
@@ -655,7 +548,9 @@ int mmc_add_host(struct mmc_host *host)
 
 	led_trigger_register_simple(dev_name(&host->class_dev), &host->led);
 
+#ifdef CONFIG_DEBUG_FS
 	mmc_add_host_debugfs(host);
+#endif
 
 	mmc_start_host(host);
 	return 0;
@@ -675,7 +570,9 @@ void mmc_remove_host(struct mmc_host *host)
 {
 	mmc_stop_host(host);
 
+#ifdef CONFIG_DEBUG_FS
 	mmc_remove_host_debugfs(host);
+#endif
 
 	device_del(&host->class_dev);
 

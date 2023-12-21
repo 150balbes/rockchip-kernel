@@ -31,6 +31,7 @@
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/time.h>
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <sysdev/fsl_soc.h>
 #include <mm/mmu_decl.h>
@@ -51,10 +52,18 @@ phys_addr_t get_immrbase(void)
 
 	soc = of_find_node_by_type(NULL, "soc");
 	if (soc) {
-		struct resource res;
+		int size;
+		u32 naddr;
+		const __be32 *prop = of_get_property(soc, "#address-cells", &size);
 
-		if (!of_range_to_resource(soc, 0, &res))
-			immrbase = res.start;
+		if (prop && size == 4)
+			naddr = be32_to_cpup(prop);
+		else
+			naddr = 2;
+
+		prop = of_get_property(soc, "ranges", &size);
+		if (prop)
+			immrbase = of_translate_address(soc, prop + naddr);
 
 		of_node_put(soc);
 	}
@@ -166,7 +175,7 @@ static int __init setup_rstcr(void)
 	};
 
 	for_each_node_by_name(np, "global-utilities") {
-		if (of_property_read_bool(np, "fsl,has-rstcr")) {
+		if ((of_get_property(np, "fsl,has-rstcr", NULL))) {
 			rstcr = of_iomap(np, 0) + 0xb0;
 			if (!rstcr) {
 				printk (KERN_ERR "Error: reset control "

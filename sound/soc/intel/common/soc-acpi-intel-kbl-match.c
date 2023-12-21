@@ -12,32 +12,32 @@
 
 static struct skl_machine_pdata skl_dmic_data;
 
-static const struct snd_soc_acpi_codecs kbl_codecs = {
+static struct snd_soc_acpi_codecs kbl_codecs = {
 	.num_codecs = 1,
 	.codecs = {"10508825"}
 };
 
-static const struct snd_soc_acpi_codecs kbl_poppy_codecs = {
+static struct snd_soc_acpi_codecs kbl_poppy_codecs = {
 	.num_codecs = 1,
 	.codecs = {"10EC5663"}
 };
 
-static const struct snd_soc_acpi_codecs kbl_5663_5514_codecs = {
+static struct snd_soc_acpi_codecs kbl_5663_5514_codecs = {
 	.num_codecs = 2,
 	.codecs = {"10EC5663", "10EC5514"}
 };
 
-static const struct snd_soc_acpi_codecs kbl_7219_98357_codecs = {
+static struct snd_soc_acpi_codecs kbl_7219_98357_codecs = {
 	.num_codecs = 1,
 	.codecs = {"MX98357A"}
 };
 
-static const struct snd_soc_acpi_codecs kbl_7219_98927_codecs = {
+static struct snd_soc_acpi_codecs kbl_7219_98927_codecs = {
 	.num_codecs = 1,
 	.codecs = {"MX98927"}
 };
 
-static const struct snd_soc_acpi_codecs kbl_7219_98373_codecs = {
+static struct snd_soc_acpi_codecs kbl_7219_98373_codecs = {
 	.num_codecs = 1,
 	.codecs = {"MX98373"}
 };
@@ -128,3 +128,6 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_kbl_machines[] = {
 	{},
 };
 EXPORT_SYMBOL_GPL(snd_soc_acpi_intel_kbl_machines);
+
+MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("Intel Common ACPI Match module");

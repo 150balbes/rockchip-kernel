@@ -27,7 +27,6 @@
  *
  */
 
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
@@ -240,7 +239,6 @@ static u32 to3264(u32 timing, int bpp, int is64)
 		fallthrough;
 	case 16:
 		timing >>= 1;
-		fallthrough;
 	case 32:
 		break;
 	}
@@ -1510,10 +1508,12 @@ static const struct fb_ops pm2fb_ops = {
 
 
 /**
- * pm2fb_probe - Initialise and allocate resource for PCI device.
+ * Device initialisation
  *
- * @pdev:	PCI device.
- * @id:		PCI device ID.
+ * Initialise and allocate resource for PCI device.
+ *
+ * @param	pdev	PCI device.
+ * @param	id	PCI device ID.
  */
 static int pm2fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
@@ -1522,10 +1522,6 @@ static int pm2fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	int err;
 	int retval = -ENXIO;
 
-	err = aperture_remove_conflicting_pci_devices(pdev, "pm2fb");
-	if (err)
-		return err;
-
 	err = pci_enable_device(pdev);
 	if (err) {
 		printk(KERN_WARNING "pm2fb: Can't enable pdev: %d\n", err);
@@ -1533,10 +1529,8 @@ static int pm2fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	info = framebuffer_alloc(sizeof(struct pm2fb_par), &pdev->dev);
-	if (!info) {
-		err = -ENOMEM;
-		goto err_exit_disable;
-	}
+	if (!info)
+		return -ENOMEM;
 	default_par = info->par;
 
 	switch (pdev->device) {
@@ -1657,7 +1651,8 @@ static int pm2fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	info->fbops		= &pm2fb_ops;
 	info->fix		= pm2fb_fix;
 	info->pseudo_palette	= default_par->palette;
-	info->flags		= FBINFO_HWACCEL_YPAN |
+	info->flags		= FBINFO_DEFAULT |
+				  FBINFO_HWACCEL_YPAN |
 				  FBINFO_HWACCEL_COPYAREA |
 				  FBINFO_HWACCEL_IMAGEBLIT |
 				  FBINFO_HWACCEL_FILLRECT;
@@ -1716,15 +1711,15 @@ static int pm2fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	release_mem_region(pm2fb_fix.mmio_start, pm2fb_fix.mmio_len);
  err_exit_neither:
 	framebuffer_release(info);
- err_exit_disable:
-	pci_disable_device(pdev);
 	return retval;
 }
 
 /**
- * pm2fb_remove - Release all device resources.
+ * Device removal.
  *
- * @pdev:	PCI device to clean up.
+ * Release all device resources.
+ *
+ * @param	pdev	PCI device to clean up.
  */
 static void pm2fb_remove(struct pci_dev *pdev)
 {
@@ -1742,7 +1737,6 @@ static void pm2fb_remove(struct pci_dev *pdev)
 	fb_dealloc_cmap(&info->cmap);
 	kfree(info->pixmap.addr);
 	framebuffer_release(info);
-	pci_disable_device(pdev);
 }
 
 static const struct pci_device_id pm2fb_id_table[] = {
@@ -1766,7 +1760,7 @@ MODULE_DEVICE_TABLE(pci, pm2fb_id_table);
 
 
 #ifndef MODULE
-/*
+/**
  * Parse user specified options.
  *
  * This is, comma-separated options following `video=pm2fb:'.
@@ -1803,12 +1797,7 @@ static int __init pm2fb_init(void)
 {
 #ifndef MODULE
 	char *option = NULL;
-#endif
 
-	if (fb_modesetting_disabled("pm2fb"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if (fb_get_options("pm2fb", &option))
 		return -ENODEV;
 	pm2fb_setup(option);

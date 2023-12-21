@@ -112,11 +112,13 @@ static void __dwc3_of_simple_teardown(struct dwc3_of_simple *simple)
 	pm_runtime_set_suspended(simple->dev);
 }
 
-static void dwc3_of_simple_remove(struct platform_device *pdev)
+static int dwc3_of_simple_remove(struct platform_device *pdev)
 {
 	struct dwc3_of_simple	*simple = platform_get_drvdata(pdev);
 
 	__dwc3_of_simple_teardown(simple);
+
+	return 0;
 }
 
 static void dwc3_of_simple_shutdown(struct platform_device *pdev)
@@ -170,6 +172,7 @@ static const struct dev_pm_ops dwc3_of_simple_dev_pm_ops = {
 
 static const struct of_device_id of_dwc3_simple_match[] = {
 	{ .compatible = "rockchip,rk3399-dwc3" },
+	{ .compatible = "xlnx,zynqmp-dwc3" },
 	{ .compatible = "cavium,octeon-7130-usb-uctl" },
 	{ .compatible = "sprd,sc9860-dwc3" },
 	{ .compatible = "allwinner,sun50i-h6-dwc3" },
@@ -181,7 +184,7 @@ MODULE_DEVICE_TABLE(of, of_dwc3_simple_match);
 
 static struct platform_driver dwc3_of_simple_driver = {
 	.probe		= dwc3_of_simple_probe,
-	.remove_new	= dwc3_of_simple_remove,
+	.remove		= dwc3_of_simple_remove,
 	.shutdown	= dwc3_of_simple_shutdown,
 	.driver		= {
 		.name	= "dwc3-of-simple",

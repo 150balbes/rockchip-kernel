@@ -91,22 +91,26 @@
 	strb\cond \reg, [\ptr], #1
 	.endm
 
-	.macro enter regs:vararg
+	.macro enter reg1 reg2
 	mov	r3, #0
-UNWIND( .save	{r0, r2, r3, \regs}		)
-	stmdb	sp!, {r0, r2, r3, \regs}
+	stmdb	sp!, {r0, r2, r3, \reg1, \reg2}
 	.endm
 
-	.macro exit regs:vararg
+	.macro usave reg1 reg2
+	UNWIND(	.save {r0, r2, r3, \reg1, \reg2}	)
+	.endm
+
+	.macro exit reg1 reg2
 	add	sp, sp, #8
-	ldmfd	sp!, {r0, \regs}
+	ldmfd	sp!, {r0, \reg1, \reg2}
 	.endm
 
 	.text
 
 ENTRY(arm_copy_from_user)
 #ifdef CONFIG_CPU_SPECTRE
-	ldr	r3, =TASK_SIZE
+	get_thread_info r3
+	ldr	r3, [r3, #TI_ADDR_LIMIT]
 	uaccess_mask_range_ptr r1, r2, r3, ip
 #endif
 

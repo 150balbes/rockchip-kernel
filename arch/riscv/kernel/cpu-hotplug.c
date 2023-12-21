@@ -8,13 +8,17 @@
 #include <linux/sched.h>
 #include <linux/err.h>
 #include <linux/irq.h>
-#include <linux/cpuhotplug.h>
 #include <linux/cpu.h>
 #include <linux/sched/hotplug.h>
 #include <asm/irq.h>
 #include <asm/cpu_ops.h>
-#include <asm/numa.h>
-#include <asm/smp.h>
+#include <asm/sbi.h>
+
+void cpu_stop(void);
+void arch_cpu_idle_dead(void)
+{
+	cpu_stop();
+}
 
 bool cpu_has_hotplug(unsigned int cpu)
 {
@@ -42,23 +46,23 @@ int __cpu_disable(void)
 		return ret;
 
 	remove_cpu_topology(cpu);
-	numa_remove_cpu(cpu);
 	set_cpu_online(cpu, false);
-	riscv_ipi_disable();
 	irq_migrate_all_off_this_cpu();
 
 	return ret;
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
 /*
- * Called on the thread which is asking for a CPU to be shutdown, if the
- * CPU reported dead to the hotplug core.
+ * Called on the thread which is asking for a CPU to be shutdown.
  */
-void arch_cpuhp_cleanup_dead_cpu(unsigned int cpu)
+void __cpu_die(unsigned int cpu)
 {
 	int ret = 0;
 
+	if (!cpu_wait_death(cpu, 5)) {
+		pr_err("CPU %u: didn't die\n", cpu);
+		return;
+	}
 	pr_notice("CPU%u: off\n", cpu);
 
 	/* Verify from the firmware if the cpu is really stopped*/
@@ -71,14 +75,13 @@ void arch_cpuhp_cleanup_dead_cpu(unsigned int cpu)
 /*
  * Called from the idle thread for the CPU which has been shutdown.
  */
-void __noreturn arch_cpu_idle_dead(void)
+void cpu_stop(void)
 {
 	idle_task_exit();
 
-	cpuhp_ap_report_dead();
+	(void)cpu_report_death();
 
 	cpu_ops[smp_processor_id()]->cpu_stop();
 	/* It should never reach here */
 	BUG();
 }
-#endif

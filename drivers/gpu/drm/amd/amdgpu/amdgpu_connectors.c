@@ -24,10 +24,9 @@
  *          Alex Deucher
  */
 
-#include <drm/display/drm_dp_helper.h>
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_dp_helper.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/amdgpu_drm.h>
 #include "amdgpu.h"
@@ -109,7 +108,7 @@ int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector)
 	case DRM_MODE_CONNECTOR_DVII:
 	case DRM_MODE_CONNECTOR_HDMIB:
 		if (amdgpu_connector->use_digital) {
-			if (connector->display_info.is_hdmi) {
+			if (drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 				if (connector->display_info.bpc)
 					bpc = connector->display_info.bpc;
 			}
@@ -117,7 +116,7 @@ int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector)
 		break;
 	case DRM_MODE_CONNECTOR_DVID:
 	case DRM_MODE_CONNECTOR_HDMIA:
-		if (connector->display_info.is_hdmi) {
+		if (drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 			if (connector->display_info.bpc)
 				bpc = connector->display_info.bpc;
 		}
@@ -126,7 +125,7 @@ int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector)
 		dig_connector = amdgpu_connector->con_priv;
 		if ((dig_connector->dp_sink_type == CONNECTOR_OBJECT_ID_DISPLAYPORT) ||
 		    (dig_connector->dp_sink_type == CONNECTOR_OBJECT_ID_eDP) ||
-		    connector->display_info.is_hdmi) {
+		    drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 			if (connector->display_info.bpc)
 				bpc = connector->display_info.bpc;
 		}
@@ -150,7 +149,7 @@ int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector)
 		break;
 	}
 
-	if (connector->display_info.is_hdmi) {
+	if (drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 		/*
 		 * Pre DCE-8 hw can't handle > 12 bpc, and more than 12 bpc doesn't make
 		 * much sense without support for > 12 bpc framebuffers. RGB 4:4:4 at
@@ -176,7 +175,7 @@ int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector)
 
 			/* Check if bpc is within clock limit. Try to degrade gracefully otherwise */
 			if ((bpc == 12) && (mode_clock * 3/2 > max_tmds_clock)) {
-				if ((connector->display_info.edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30) &&
+				if ((connector->display_info.edid_hdmi_dc_modes & DRM_EDID_HDMI_DC_30) &&
 				    (mode_clock * 5/4 <= max_tmds_clock))
 					bpc = 10;
 				else
@@ -593,20 +592,11 @@ static int amdgpu_connector_set_property(struct drm_connector *connector,
 
 		switch (val) {
 		default:
-		case DRM_MODE_SCALE_NONE:
-			rmx_type = RMX_OFF;
-			break;
-		case DRM_MODE_SCALE_CENTER:
-			rmx_type = RMX_CENTER;
-			break;
-		case DRM_MODE_SCALE_ASPECT:
-			rmx_type = RMX_ASPECT;
-			break;
-		case DRM_MODE_SCALE_FULLSCREEN:
-			rmx_type = RMX_FULL;
-			break;
+		case DRM_MODE_SCALE_NONE: rmx_type = RMX_OFF; break;
+		case DRM_MODE_SCALE_CENTER: rmx_type = RMX_CENTER; break;
+		case DRM_MODE_SCALE_ASPECT: rmx_type = RMX_ASPECT; break;
+		case DRM_MODE_SCALE_FULLSCREEN: rmx_type = RMX_FULL; break;
 		}
-
 		if (amdgpu_encoder->rmx_type == rmx_type)
 			return 0;
 
@@ -635,7 +625,7 @@ amdgpu_connector_fixup_lcd_native_mode(struct drm_encoder *encoder,
 		if (mode->type & DRM_MODE_TYPE_PREFERRED) {
 			if (mode->hdisplay != native_mode->hdisplay ||
 			    mode->vdisplay != native_mode->vdisplay)
-				drm_mode_copy(native_mode, mode);
+				memcpy(native_mode, mode, sizeof(*mode));
 		}
 	}
 
@@ -644,7 +634,7 @@ amdgpu_connector_fixup_lcd_native_mode(struct drm_encoder *encoder,
 		list_for_each_entry_safe(mode, t, &connector->probed_modes, head) {
 			if (mode->hdisplay == native_mode->hdisplay &&
 			    mode->vdisplay == native_mode->vdisplay) {
-				drm_mode_copy(native_mode, mode);
+				*native_mode = *mode;
 				drm_mode_set_crtcinfo(native_mode, CRTC_INTERLACE_HALVE_V);
 				DRM_DEBUG_KMS("Determined LVDS native mode details from EDID\n");
 				break;
@@ -808,21 +798,12 @@ static int amdgpu_connector_set_lcd_property(struct drm_connector *connector,
 	}
 
 	switch (value) {
-	case DRM_MODE_SCALE_NONE:
-		rmx_type = RMX_OFF;
-		break;
-	case DRM_MODE_SCALE_CENTER:
-		rmx_type = RMX_CENTER;
-		break;
-	case DRM_MODE_SCALE_ASPECT:
-		rmx_type = RMX_ASPECT;
-		break;
+	case DRM_MODE_SCALE_NONE: rmx_type = RMX_OFF; break;
+	case DRM_MODE_SCALE_CENTER: rmx_type = RMX_CENTER; break;
+	case DRM_MODE_SCALE_ASPECT: rmx_type = RMX_ASPECT; break;
 	default:
-	case DRM_MODE_SCALE_FULLSCREEN:
-		rmx_type = RMX_FULL;
-		break;
+	case DRM_MODE_SCALE_FULLSCREEN: rmx_type = RMX_FULL; break;
 	}
-
 	if (amdgpu_encoder->rmx_type == rmx_type)
 		return 0;
 
@@ -1016,33 +997,13 @@ amdgpu_connector_dvi_detect(struct drm_connector *connector, bool force)
 		}
 	}
 
-	if (amdgpu_connector->detected_hpd_without_ddc) {
-		force = true;
-		amdgpu_connector->detected_hpd_without_ddc = false;
-	}
-
 	if (!force && amdgpu_connector_check_hpd_status_unchanged(connector)) {
 		ret = connector->status;
 		goto exit;
 	}
 
-	if (amdgpu_connector->ddc_bus) {
+	if (amdgpu_connector->ddc_bus)
 		dret = amdgpu_display_ddc_probe(amdgpu_connector, false);
-
-		/* Sometimes the pins required for the DDC probe on DVI
-		 * connectors don't make contact at the same time that the ones
-		 * for HPD do. If the DDC probe fails even though we had an HPD
-		 * signal, try again later
-		 */
-		if (!dret && !force &&
-		    amdgpu_display_hpd_sense(adev, amdgpu_connector->hpd.hpd)) {
-			DRM_DEBUG_KMS("hpd detected without ddc, retrying in 1 second\n");
-			amdgpu_connector->detected_hpd_without_ddc = true;
-			schedule_delayed_work(&adev->hotplug_work,
-					      msecs_to_jiffies(1000));
-			goto exit;
-		}
-	}
 	if (dret) {
 		amdgpu_connector->detected_by_load = false;
 		amdgpu_connector_free_edid(connector);
@@ -1145,8 +1106,7 @@ amdgpu_connector_dvi_detect(struct drm_connector *connector, bool force)
 					/* assume digital unless load detected otherwise */
 					amdgpu_connector->use_digital = true;
 					lret = encoder_funcs->detect(encoder, connector);
-					DRM_DEBUG_KMS("load_detect %x returned: %x\n",
-						      encoder->encoder_type, lret);
+					DRM_DEBUG_KMS("load_detect %x returned: %x\n",encoder->encoder_type,lret);
 					if (lret == connector_status_connected)
 						amdgpu_connector->use_digital = false;
 				}
@@ -1219,7 +1179,7 @@ static enum drm_mode_status amdgpu_connector_dvi_mode_valid(struct drm_connector
 		    (amdgpu_connector->connector_object_id == CONNECTOR_OBJECT_ID_DUAL_LINK_DVI_D) ||
 		    (amdgpu_connector->connector_object_id == CONNECTOR_OBJECT_ID_HDMI_TYPE_B)) {
 			return MODE_OK;
-		} else if (connector->display_info.is_hdmi) {
+		} else if (drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 			/* HDMI 1.3+ supports max clock of 340 Mhz */
 			if (mode->clock > 340000)
 				return MODE_CLOCK_HIGH;
@@ -1511,7 +1471,7 @@ static enum drm_mode_status amdgpu_connector_dp_mode_valid(struct drm_connector 
 		    (amdgpu_dig_connector->dp_sink_type == CONNECTOR_OBJECT_ID_eDP)) {
 			return amdgpu_atombios_dp_mode_valid_helper(connector, mode);
 		} else {
-			if (connector->display_info.is_hdmi) {
+			if (drm_detect_hdmi_monitor(amdgpu_connector_edid(connector))) {
 				/* HDMI 1.3+ supports max clock of 340 Mhz */
 				if (mode->clock > 340000)
 					return MODE_CLOCK_HIGH;
@@ -2010,7 +1970,7 @@ amdgpu_connector_add(struct amdgpu_device *adev,
 	if (amdgpu_connector->hpd.hpd == AMDGPU_HPD_NONE) {
 		if (i2c_bus->valid) {
 			connector->polled = DRM_CONNECTOR_POLL_CONNECT |
-						DRM_CONNECTOR_POLL_DISCONNECT;
+			                    DRM_CONNECTOR_POLL_DISCONNECT;
 		}
 	} else
 		connector->polled = DRM_CONNECTOR_POLL_HPD;

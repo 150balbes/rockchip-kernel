@@ -297,7 +297,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	p4d_t *p4dp;
 	pud_t *pudp;
 	pmd_t *pmdp;
-	pte_t *ptep, *ptemap = NULL;
+	pte_t *ptep;
 	int idx, pid;
 
 	/*
@@ -344,12 +344,7 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	} else
 #endif
 	{
-		ptemap = ptep = pte_offset_map(pmdp, address);
-		/*
-		 * update_mmu_cache() is called between pte_offset_map_lock()
-		 * and pte_unmap_unlock(), so we can assume that ptep is not
-		 * NULL here: and what should be done below if it were NULL?
-		 */
+		ptep = pte_offset_map(pmdp, address);
 
 #if defined(CONFIG_PHYS_ADDR_T_64BIT) && defined(CONFIG_CPU_MIPS32)
 #ifdef CONFIG_XPA
@@ -378,9 +373,6 @@ void __update_tlb(struct vm_area_struct * vma, unsigned long address, pte_t pte)
 	tlbw_use_hazard();
 	htw_start();
 	flush_micro_tlb_vm(vma);
-
-	if (ptemap)
-		pte_unmap(ptemap);
 	local_irq_restore(flags);
 }
 

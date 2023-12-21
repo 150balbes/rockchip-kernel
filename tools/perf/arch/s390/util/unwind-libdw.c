@@ -3,7 +3,6 @@
 #include "../../util/unwind-libdw.h"
 #include "../../util/perf_regs.h"
 #include "../../util/event.h"
-#include "../../util/sample.h"
 #include "dwarf-regs-table.h"
 
 

@@ -52,6 +52,7 @@ MODULE_PARM_DESC(enable, "Enable Sun CS4231 soundcard.");
 MODULE_AUTHOR("Jaroslav Kysela, Derrick J. Brashear and David S. Miller");
 MODULE_DESCRIPTION("Sun CS4231");
 MODULE_LICENSE("GPL");
+MODULE_SUPPORTED_DEVICE("{{Sun,CS4231}}");
 
 #ifdef SBUS_SUPPORT
 struct sbus_dma_info {
@@ -1828,9 +1829,8 @@ static int snd_cs4231_sbus_create(struct snd_card *card,
 	}
 	snd_cs4231_init(chip);
 
-	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL,
-			     chip, &snd_cs4231_sbus_dev_ops);
-	if (err < 0) {
+	if ((err = snd_device_new(card, SNDRV_DEV_LOWLEVEL,
+				  chip, &snd_cs4231_sbus_dev_ops)) < 0) {
 		snd_cs4231_sbus_free(chip);
 		return err;
 	}
@@ -2021,9 +2021,8 @@ static int snd_cs4231_ebus_create(struct snd_card *card,
 	}
 	snd_cs4231_init(chip);
 
-	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL,
-			     chip, &snd_cs4231_ebus_dev_ops);
-	if (err < 0) {
+	if ((err = snd_device_new(card, SNDRV_DEV_LOWLEVEL,
+				  chip, &snd_cs4231_ebus_dev_ops)) < 0) {
 		snd_cs4231_ebus_free(chip);
 		return err;
 	}
@@ -2069,11 +2068,13 @@ static int cs4231_probe(struct platform_device *op)
 	return -ENODEV;
 }
 
-static void cs4231_remove(struct platform_device *op)
+static int cs4231_remove(struct platform_device *op)
 {
 	struct snd_cs4231 *chip = dev_get_drvdata(&op->dev);
 
 	snd_card_free(chip->card);
+
+	return 0;
 }
 
 static const struct of_device_id cs4231_match[] = {
@@ -2095,7 +2096,7 @@ static struct platform_driver cs4231_driver = {
 		.of_match_table = cs4231_match,
 	},
 	.probe		= cs4231_probe,
-	.remove_new	= cs4231_remove,
+	.remove		= cs4231_remove,
 };
 
 module_platform_driver(cs4231_driver);

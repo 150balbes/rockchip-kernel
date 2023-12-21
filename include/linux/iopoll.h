@@ -53,7 +53,6 @@
 		} \
 		if (__sleep_us) \
 			usleep_range((__sleep_us >> 2) + 1, __sleep_us); \
-		cpu_relax(); \
 	} \
 	(cond) ? 0 : -ETIMEDOUT; \
 })
@@ -74,10 +73,6 @@
  * Returns 0 on success and -ETIMEDOUT upon a timeout. In either
  * case, the last read value at @args is stored in @val.
  *
- * This macro does not rely on timekeeping.  Hence it is safe to call even when
- * timekeeping is suspended, at the expense of an underestimation of wall clock
- * time, which is rather minimal with a non-zero delay_us.
- *
  * When available, you'll probably want to use one of the specialized
  * macros defined below rather than this macro directly.
  */
@@ -85,30 +80,21 @@
 					delay_before_read, args...) \
 ({ \
 	u64 __timeout_us = (timeout_us); \
-	s64 __left_ns = __timeout_us * NSEC_PER_USEC; \
 	unsigned long __delay_us = (delay_us); \
-	u64 __delay_ns = __delay_us * NSEC_PER_USEC; \
-	if (delay_before_read && __delay_us) { \
+	ktime_t __timeout = ktime_add_us(ktime_get(), __timeout_us); \
+	if (delay_before_read && __delay_us) \
 		udelay(__delay_us); \
-		if (__timeout_us) \
-			__left_ns -= __delay_ns; \
-	} \
 	for (;;) { \
 		(val) = op(args); \
 		if (cond) \
 			break; \
-		if (__timeout_us && __left_ns < 0) { \
+		if (__timeout_us && \
+		    ktime_compare(ktime_get(), __timeout) > 0) { \
 			(val) = op(args); \
 			break; \
 		} \
-		if (__delay_us) { \
+		if (__delay_us) \
 			udelay(__delay_us); \
-			if (__timeout_us) \
-				__left_ns -= __delay_ns; \
-		} \
-		cpu_relax(); \
-		if (__timeout_us) \
-			__left_ns--; \
 	} \
 	(cond) ? 0 : -ETIMEDOUT; \
 })

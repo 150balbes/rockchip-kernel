@@ -5,6 +5,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/module.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 
 #include "ccu_common.h"
@@ -195,7 +196,7 @@ static int sun50i_a100_r_ccu_probe(struct platform_device *pdev)
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
-	return devm_sunxi_ccu_probe(&pdev->dev, reg, &sun50i_a100_r_ccu_desc);
+	return sunxi_ccu_probe(pdev->dev.of_node, reg, &sun50i_a100_r_ccu_desc);
 }
 
 static const struct of_device_id sun50i_a100_r_ccu_ids[] = {
@@ -207,11 +208,7 @@ static struct platform_driver sun50i_a100_r_ccu_driver = {
 	.probe	= sun50i_a100_r_ccu_probe,
 	.driver	= {
 		.name	= "sun50i-a100-r-ccu",
-		.suppress_bind_attrs = true,
 		.of_match_table	= sun50i_a100_r_ccu_ids,
 	},
 };
 module_platform_driver(sun50i_a100_r_ccu_driver);
-
-MODULE_IMPORT_NS(SUNXI_CCU);
-MODULE_LICENSE("GPL");

@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/crypto.h>
+#include <linux/err.h>
+#include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/tcp.h>
 #include <linux/rcupdate.h>
+#include <linux/rculist.h>
+#include <net/inetpeer.h>
 #include <net/tcp.h>
 
 void tcp_fastopen_init_key_once(struct net *net)
@@ -49,7 +55,12 @@ void tcp_fastopen_ctx_destroy(struct net *net)
 {
 	struct tcp_fastopen_context *ctxt;
 
-	ctxt = xchg((__force struct tcp_fastopen_context **)&net->ipv4.tcp_fastopen_ctx, NULL);
+	spin_lock(&net->ipv4.tcp_fastopen_ctx_lock);
+
+	ctxt = rcu_dereference_protected(net->ipv4.tcp_fastopen_ctx,
+				lockdep_is_held(&net->ipv4.tcp_fastopen_ctx_lock));
+	rcu_assign_pointer(net->ipv4.tcp_fastopen_ctx, NULL);
+	spin_unlock(&net->ipv4.tcp_fastopen_ctx_lock);
 
 	if (ctxt)
 		call_rcu(&ctxt->rcu, tcp_fastopen_ctx_free);
@@ -78,12 +89,18 @@ int tcp_fastopen_reset_cipher(struct net *net, struct sock *sk,
 		ctx->num = 1;
 	}
 
+	spin_lock(&net->ipv4.tcp_fastopen_ctx_lock);
 	if (sk) {
 		q = &inet_csk(sk)->icsk_accept_queue.fastopenq;
-		octx = xchg((__force struct tcp_fastopen_context **)&q->ctx, ctx);
+		octx = rcu_dereference_protected(q->ctx,
+			lockdep_is_held(&net->ipv4.tcp_fastopen_ctx_lock));
+		rcu_assign_pointer(q->ctx, ctx);
 	} else {
-		octx = xchg((__force struct tcp_fastopen_context **)&net->ipv4.tcp_fastopen_ctx, ctx);
+		octx = rcu_dereference_protected(net->ipv4.tcp_fastopen_ctx,
+			lockdep_is_held(&net->ipv4.tcp_fastopen_ctx_lock));
+		rcu_assign_pointer(net->ipv4.tcp_fastopen_ctx, ctx);
 	}
+	spin_unlock(&net->ipv4.tcp_fastopen_ctx_lock);
 
 	if (octx)
 		call_rcu(&octx->rcu, tcp_fastopen_ctx_free);
@@ -272,9 +289,8 @@ static struct sock *tcp_fastopen_create_child(struct sock *sk,
 	 * The request socket is not added to the ehash
 	 * because it's been added to the accept queue directly.
 	 */
-	req->timeout = tcp_timeout_init(child);
 	inet_csk_reset_xmit_timer(child, ICSK_TIME_RETRANS,
-				  req->timeout, TCP_RTO_MAX);
+				  TCP_TIMEOUT_INIT, TCP_RTO_MAX);
 
 	refcount_set(&req->rsk_refcnt, 2);
 
@@ -527,7 +543,7 @@ bool tcp_fastopen_active_should_disable(struct sock *sk)
 	/* Paired with smp_mb__before_atomic() in tcp_fastopen_active_disable() */
 	smp_rmb();
 
-	/* Limit timeout to max: 2^6 * initial timeout */
+	/* Limit timout to max: 2^6 * initial timeout */
 	multiplier = 1 << min(tfo_da_times - 1, 6);
 
 	/* Paired with the WRITE_ONCE() in tcp_fastopen_active_disable(). */

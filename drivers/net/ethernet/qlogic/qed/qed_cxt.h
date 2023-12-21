@@ -28,28 +28,29 @@ struct qed_tid_mem {
 };
 
 /**
- * qed_cxt_get_cid_info(): Returns the context info for a specific cidi.
+ * @brief qedo_cid_get_cxt_info - Returns the context info for a specific cid
  *
- * @p_hwfn: HW device data.
- * @p_info: In/out.
  *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_info in/out
+ *
+ * @return int
  */
 int qed_cxt_get_cid_info(struct qed_hwfn *p_hwfn,
 			 struct qed_cxt_info *p_info);
 
 /**
- * qed_cxt_get_tid_mem_info(): Returns the tid mem info.
+ * @brief qed_cxt_get_tid_mem_info
  *
- * @p_hwfn: HW device data.
- * @p_info: in/out.
+ * @param p_hwfn
+ * @param p_info
  *
- * Return: int.
+ * @return int
  */
 int qed_cxt_get_tid_mem_info(struct qed_hwfn *p_hwfn,
 			     struct qed_tid_mem *p_info);
 
-#define QED_CXT_TCP_ULP_TID_SEG	PROTOCOLID_TCP_ULP
+#define QED_CXT_ISCSI_TID_SEG	PROTOCOLID_ISCSI
 #define QED_CXT_ROCE_TID_SEG	PROTOCOLID_ROCE
 #define QED_CXT_FCOE_TID_SEG	PROTOCOLID_FCOE
 enum qed_cxt_elem_type {
@@ -63,155 +64,142 @@ u32 qed_cxt_get_proto_cid_count(struct qed_hwfn *p_hwfn,
 				enum protocol_type type, u32 *vf_cid);
 
 /**
- * qed_cxt_set_pf_params(): Set the PF params for cxt init.
+ * @brief qed_cxt_set_pf_params - Set the PF params for cxt init
  *
- * @p_hwfn: HW device data.
- * @rdma_tasks: Requested maximum.
- *
- * Return: int.
+ * @param p_hwfn
+ * @param rdma_tasks - requested maximum
+ * @return int
  */
 int qed_cxt_set_pf_params(struct qed_hwfn *p_hwfn, u32 rdma_tasks);
 
 /**
- * qed_cxt_cfg_ilt_compute(): Compute ILT init parameters.
+ * @brief qed_cxt_cfg_ilt_compute - compute ILT init parameters
  *
- * @p_hwfn: HW device data.
- * @last_line: Last_line.
+ * @param p_hwfn
+ * @param last_line
  *
- * Return: Int
+ * @return int
  */
 int qed_cxt_cfg_ilt_compute(struct qed_hwfn *p_hwfn, u32 *last_line);
 
 /**
- * qed_cxt_cfg_ilt_compute_excess(): How many lines can be decreased.
+ * @brief qed_cxt_cfg_ilt_compute_excess - how many lines can be decreased
  *
- * @p_hwfn: HW device data.
- * @used_lines: Used lines.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param used_lines
  */
 u32 qed_cxt_cfg_ilt_compute_excess(struct qed_hwfn *p_hwfn, u32 used_lines);
 
 /**
- * qed_cxt_mngr_alloc(): Allocate and init the context manager struct.
+ * @brief qed_cxt_mngr_alloc - Allocate and init the context manager struct
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Return: Int.
+ * @return int
  */
 int qed_cxt_mngr_alloc(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_cxt_mngr_free() - Context manager free.
+ * @brief qed_cxt_mngr_free
  *
- * @p_hwfn: HW device data.
- *
- * Return: Void.
+ * @param p_hwfn
  */
 void qed_cxt_mngr_free(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_cxt_tables_alloc(): Allocate ILT shadow, Searcher T2, acquired map.
+ * @brief qed_cxt_tables_alloc - Allocate ILT shadow, Searcher T2, acquired map
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Return: Int.
+ * @return int
  */
 int qed_cxt_tables_alloc(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_cxt_mngr_setup(): Reset the acquired CIDs.
+ * @brief qed_cxt_mngr_setup - Reset the acquired CIDs
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  */
 void qed_cxt_mngr_setup(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_cxt_hw_init_common(): Initailze ILT and DQ, common phase, per path.
+ * @brief qed_cxt_hw_init_common - Initailze ILT and DQ, common phase, per path.
  *
- * @p_hwfn: HW device data.
  *
- * Return: Void.
+ *
+ * @param p_hwfn
  */
 void qed_cxt_hw_init_common(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_cxt_hw_init_pf(): Initailze ILT and DQ, PF phase, per path.
+ * @brief qed_cxt_hw_init_pf - Initailze ILT and DQ, PF phase, per path.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param p_ptt
  */
 void qed_cxt_hw_init_pf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_qm_init_pf(): Initailze the QM PF phase, per path.
+ * @brief qed_qm_init_pf - Initailze the QM PF phase, per path
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @is_pf_loading: Is pf pending.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param is_pf_loading
  */
 void qed_qm_init_pf(struct qed_hwfn *p_hwfn,
 		    struct qed_ptt *p_ptt, bool is_pf_loading);
 
 /**
- * qed_qm_reconf(): Reconfigures QM pf on the fly.
+ * @brief Reconfigures QM pf on the fly
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: Int.
+ * @return int
  */
 int qed_qm_reconf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 #define QED_CXT_PF_CID (0xff)
 
 /**
- * qed_cxt_release_cid(): Release a cid.
+ * @brief qed_cxt_release - Release a cid
  *
- * @p_hwfn: HW device data.
- * @cid: Cid.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param cid
  */
 void qed_cxt_release_cid(struct qed_hwfn *p_hwfn, u32 cid);
 
 /**
- * _qed_cxt_release_cid(): Release a cid belonging to a vf-queue.
+ * @brief qed_cxt_release - Release a cid belonging to a vf-queue
  *
- * @p_hwfn: HW device data.
- * @cid: Cid.
- * @vfid: Engine relative index. QED_CXT_PF_CID if belongs to PF.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param cid
+ * @param vfid - engine relative index. QED_CXT_PF_CID if belongs to PF
  */
 void _qed_cxt_release_cid(struct qed_hwfn *p_hwfn, u32 cid, u8 vfid);
 
 /**
- * qed_cxt_acquire_cid(): Acquire a new cid of a specific protocol type.
+ * @brief qed_cxt_acquire - Acquire a new cid of a specific protocol type
  *
- * @p_hwfn: HW device data.
- * @type: Type.
- * @p_cid: Pointer cid.
+ * @param p_hwfn
+ * @param type
+ * @param p_cid
  *
- * Return: Int.
+ * @return int
  */
 int qed_cxt_acquire_cid(struct qed_hwfn *p_hwfn,
 			enum protocol_type type, u32 *p_cid);
 
 /**
- * _qed_cxt_acquire_cid(): Acquire a new cid of a specific protocol type
- *                         for a vf-queue.
+ * @brief _qed_cxt_acquire - Acquire a new cid of a specific protocol type
+ *                           for a vf-queue
  *
- * @p_hwfn: HW device data.
- * @type: Type.
- * @p_cid: Pointer cid.
- * @vfid: Engine relative index. QED_CXT_PF_CID if belongs to PF.
+ * @param p_hwfn
+ * @param type
+ * @param p_cid
+ * @param vfid - engine relative index. QED_CXT_PF_CID if belongs to PF
  *
- * Return: Int.
+ * @return int
  */
 int _qed_cxt_acquire_cid(struct qed_hwfn *p_hwfn,
 			 enum protocol_type type, u32 *p_cid, u8 vfid);
@@ -346,10 +334,7 @@ struct qed_cxt_mngr {
 	/* Maximal number of L2 steering filters */
 	u32 arfs_count;
 
-	u16 iscsi_task_pages;
-	u16 fcoe_task_pages;
-	u16 roce_task_pages;
-	u16 eth_task_pages;
+	u8 task_type_id;
 	u16 task_ctx_size;
 	u16 conn_ctx_size;
 };

@@ -103,9 +103,12 @@ base907c_xlut_set(struct nv50_wndw *wndw, struct nv50_wndw_atom *asyw)
 	return 0;
 }
 
-static void
+static bool
 base907c_ilut(struct nv50_wndw *wndw, struct nv50_wndw_atom *asyw, int size)
 {
+	if (size != 256 && size != 1024)
+		return false;
+
 	if (size == 1024)
 		asyw->xlut.i.mode = NV907C_SET_BASE_LUT_LO_MODE_INTERPOLATE_1025_UNITY_RANGE;
 	else
@@ -113,6 +116,7 @@ base907c_ilut(struct nv50_wndw *wndw, struct nv50_wndw_atom *asyw, int size)
 
 	asyw->xlut.i.enable = NV907C_SET_BASE_LUT_LO_ENABLE_ENABLE;
 	asyw->xlut.i.load = head907d_olut_load;
+	return true;
 }
 
 static inline u32

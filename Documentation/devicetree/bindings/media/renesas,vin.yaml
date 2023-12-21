@@ -46,14 +46,11 @@ properties:
               - renesas,vin-r8a7779  # R-Car H1
               - renesas,vin-r8a7795  # R-Car H3
               - renesas,vin-r8a7796  # R-Car M3-W
-              - renesas,vin-r8a77961 # R-Car M3-W+
               - renesas,vin-r8a77965 # R-Car M3-N
               - renesas,vin-r8a77970 # R-Car V3M
               - renesas,vin-r8a77980 # R-Car V3H
               - renesas,vin-r8a77990 # R-Car E3
               - renesas,vin-r8a77995 # R-Car D3
-              - renesas,vin-r8a779a0 # R-Car V3U
-              - renesas,vin-r8a779g0 # R-Car V4H
 
   reg:
     maxItems: 1
@@ -70,17 +67,17 @@ properties:
   resets:
     maxItems: 1
 
-  # The per-board settings for Gen2 and RZ/G1 platforms:
+  #The per-board settings for Gen2 and RZ/G1 platforms:
   port:
-    $ref: /schemas/graph.yaml#/$defs/port-base
-    unevaluatedProperties: false
+    type: object
     description:
-      A node containing a parallel input
+      A node containing a parallel input with a single endpoint definitions as
+      documented in
+      Documentation/devicetree/bindings/media/video-interfaces.txt
 
     properties:
       endpoint:
-        $ref: video-interfaces.yaml#
-        unevaluatedProperties: false
+        type: object
 
         properties:
           hsync-active:
@@ -109,27 +106,40 @@ properties:
 
           data-active: true
 
-  # The per-board settings for Gen3 and RZ/G2 platforms:
+          remote-endpoint: true
+
+        required:
+          - remote-endpoint
+
+        additionalProperties: false
+
+    additionalProperties: false
+
+  #The per-board settings for Gen3 and RZ/G2 platforms:
   renesas,id:
     description: VIN channel number
     $ref: /schemas/types.yaml#/definitions/uint32
     minimum: 0
-    maximum: 31
+    maximum: 15
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
+    type: object
+    description:
+      A node containing input nodes with endpoint definitions as documented in
+      Documentation/devicetree/bindings/media/video-interfaces.txt
 
     properties:
       port@0:
-        $ref: /schemas/graph.yaml#/$defs/port-base
-        unevaluatedProperties: false
+        type: object
         description:
           Input port node, single endpoint describing a parallel input source.
 
         properties:
+          reg:
+            const: 0
+
           endpoint:
-            $ref: video-interfaces.yaml#
-            unevaluatedProperties: false
+            type: object
 
             properties:
               hsync-active:
@@ -158,28 +168,97 @@ properties:
 
               data-active: true
 
+              remote-endpoint: true
+
+            required:
+              - remote-endpoint
+
+            additionalProperties: false
+
+        required:
+          - endpoint
+
+        additionalProperties: false
+
       port@1:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
         description:
           Input port node, multiple endpoints describing all the R-Car CSI-2
           modules connected the VIN.
 
         properties:
+          '#address-cells':
+            const: 1
+
+          '#size-cells':
+            const: 0
+
+          reg:
+            const: 1
+
           endpoint@0:
-            $ref: /schemas/graph.yaml#/properties/endpoint
+            type: object
             description: Endpoint connected to CSI20.
 
+            properties:
+              reg:
+                const: 0
+
+              remote-endpoint: true
+
+            required:
+              - reg
+              - remote-endpoint
+
+            additionalProperties: false
+
           endpoint@1:
-            $ref: /schemas/graph.yaml#/properties/endpoint
+            type: object
             description: Endpoint connected to CSI21.
 
+            properties:
+              reg:
+                const: 1
+
+              remote-endpoint: true
+
+            required:
+              - reg
+              - remote-endpoint
+
+            additionalProperties: false
+
           endpoint@2:
-            $ref: /schemas/graph.yaml#/properties/endpoint
+            type: object
             description: Endpoint connected to CSI40.
 
+            properties:
+              reg:
+                const: 2
+
+              remote-endpoint: true
+
+            required:
+              - reg
+              - remote-endpoint
+
+            additionalProperties: false
+
           endpoint@3:
-            $ref: /schemas/graph.yaml#/properties/endpoint
+            type: object
             description: Endpoint connected to CSI41.
+
+            properties:
+              reg:
+                const: 3
+
+              remote-endpoint: true
+
+            required:
+              - reg
+              - remote-endpoint
+
+            additionalProperties: false
 
         anyOf:
           - required:
@@ -191,28 +270,7 @@ properties:
           - required:
               - endpoint@3
 
-      port@2:
-        $ref: /schemas/graph.yaml#/properties/port
-        description:
-          Input port node, multiple endpoints describing all the R-Car ISP
-          modules connected the VIN.
-
-        properties:
-          endpoint@0:
-            $ref: /schemas/graph.yaml#/properties/endpoint
-            description: Endpoint connected to ISP0.
-
-          endpoint@1:
-            $ref: /schemas/graph.yaml#/properties/endpoint
-            description: Endpoint connected to ISP1.
-
-          endpoint@2:
-            $ref: /schemas/graph.yaml#/properties/endpoint
-            description: Endpoint connected to ISP2.
-
-          endpoint@3:
-            $ref: /schemas/graph.yaml#/properties/endpoint
-            description: Endpoint connected to ISP3.
+        additionalProperties: false
 
 required:
   - compatible
@@ -303,11 +361,11 @@ examples:
 
                             vin0csi20: endpoint@0 {
                                     reg = <0>;
-                                    remote-endpoint = <&csi20vin0>;
+                                    remote-endpoint= <&csi20vin0>;
                             };
                             vin0csi40: endpoint@2 {
                                     reg = <2>;
-                                    remote-endpoint = <&csi40vin0>;
+                                    remote-endpoint= <&csi40vin0>;
                             };
                     };
             };

@@ -44,8 +44,7 @@ struct udf_inode_info {
 	unsigned		i_use : 1;	/* unallocSpaceEntry */
 	unsigned		i_strat4096 : 1;
 	unsigned		i_streamdir : 1;
-	unsigned		i_hidden : 1;	/* hidden system inode */
-	unsigned		reserved : 24;
+	unsigned		reserved : 25;
 	__u8			*i_data;
 	struct kernel_lb_addr	i_locStreamdir;
 	__u64			i_lenStreams;

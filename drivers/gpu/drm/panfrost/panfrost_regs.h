@@ -46,8 +46,6 @@
 #define   GPU_CMD_SOFT_RESET		0x01
 #define   GPU_CMD_PERFCNT_CLEAR		0x03
 #define   GPU_CMD_PERFCNT_SAMPLE	0x04
-#define   GPU_CMD_CYCLE_COUNT_START	0x05
-#define   GPU_CMD_CYCLE_COUNT_STOP	0x06
 #define   GPU_CMD_CLEAN_CACHES		0x07
 #define   GPU_CMD_CLEAN_INV_CACHES	0x08
 #define GPU_STATUS			0x34
@@ -75,9 +73,6 @@
 #define GPU_PRFCNT_TILER_EN		0x74
 #define GPU_PRFCNT_MMU_L2_EN		0x7c
 
-#define GPU_CYCLE_COUNT_LO		0x90
-#define GPU_CYCLE_COUNT_HI		0x94
-
 #define GPU_THREAD_MAX_THREADS		0x0A0	/* (RO) Maximum number of threads per core */
 #define GPU_THREAD_MAX_WORKGROUP_SIZE	0x0A4	/* (RO) Maximum workgroup size */
 #define GPU_THREAD_MAX_BARRIER_SIZE	0x0A8	/* (RO) Maximum threads waiting at a barrier */
@@ -87,7 +82,6 @@
 
 #define GPU_TEXTURE_FEATURES(n)		(0x0B0 + ((n) * 4))
 #define GPU_JS_FEATURES(n)		(0x0C0 + ((n) * 4))
-#define GPU_AFBC_FEATURES		(0x4C)	/* (RO) AFBC support on Bifrost */
 
 #define GPU_SHADER_PRESENT_LO		0x100	/* (RO) Shader core present bitmap, low word */
 #define GPU_SHADER_PRESENT_HI		0x104	/* (RO) Shader core present bitmap, high word */
@@ -200,7 +194,6 @@
 #define SC_TLS_HASH_ENABLE		BIT(17)
 #define SC_LS_ATTR_CHECK_DISABLE	BIT(18)
 #define SC_ENABLE_TEXGRD_FLAGS		BIT(25)
-#define SC_VAR_ALGORITHM		BIT(29)
 /* End SHADER_CONFIG register */
 
 /* TILER_CONFIG register */
@@ -214,7 +207,6 @@
 #define JM_MAX_JOB_THROTTLE_LIMIT	0x3F
 #define JM_FORCE_COHERENCY_FEATURES_SHIFT 2
 #define JM_IDVS_GROUP_SIZE_SHIFT	16
-#define JM_DEFAULT_IDVS_GROUP_SIZE	0xF
 #define JM_MAX_IDVS_GROUP_SIZE		0x3F
 
 
@@ -231,25 +223,23 @@
 #define JOB_INT_MASK_DONE(j)		BIT(j)
 
 #define JS_BASE				0x1800
-#define JS_SLOT_STRIDE			0x80
-
-#define JS_HEAD_LO(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x00)
-#define JS_HEAD_HI(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x04)
-#define JS_TAIL_LO(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x08)
-#define JS_TAIL_HI(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x0c)
-#define JS_AFFINITY_LO(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x10)
-#define JS_AFFINITY_HI(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x14)
-#define JS_CONFIG(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x18)
-#define JS_XAFFINITY(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x1c)
-#define JS_COMMAND(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x20)
-#define JS_STATUS(n)			(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x24)
-#define JS_HEAD_NEXT_LO(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x40)
-#define JS_HEAD_NEXT_HI(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x44)
-#define JS_AFFINITY_NEXT_LO(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x50)
-#define JS_AFFINITY_NEXT_HI(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x54)
-#define JS_CONFIG_NEXT(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x58)
-#define JS_COMMAND_NEXT(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x60)
-#define JS_FLUSH_ID_NEXT(n)		(JS_BASE + ((n) * JS_SLOT_STRIDE) + 0x70)
+#define JS_HEAD_LO(n)			(JS_BASE + ((n) * 0x80) + 0x00)
+#define JS_HEAD_HI(n)			(JS_BASE + ((n) * 0x80) + 0x04)
+#define JS_TAIL_LO(n)			(JS_BASE + ((n) * 0x80) + 0x08)
+#define JS_TAIL_HI(n)			(JS_BASE + ((n) * 0x80) + 0x0c)
+#define JS_AFFINITY_LO(n)		(JS_BASE + ((n) * 0x80) + 0x10)
+#define JS_AFFINITY_HI(n)		(JS_BASE + ((n) * 0x80) + 0x14)
+#define JS_CONFIG(n)			(JS_BASE + ((n) * 0x80) + 0x18)
+#define JS_XAFFINITY(n)			(JS_BASE + ((n) * 0x80) + 0x1c)
+#define JS_COMMAND(n)			(JS_BASE + ((n) * 0x80) + 0x20)
+#define JS_STATUS(n)			(JS_BASE + ((n) * 0x80) + 0x24)
+#define JS_HEAD_NEXT_LO(n)		(JS_BASE + ((n) * 0x80) + 0x40)
+#define JS_HEAD_NEXT_HI(n)		(JS_BASE + ((n) * 0x80) + 0x44)
+#define JS_AFFINITY_NEXT_LO(n)		(JS_BASE + ((n) * 0x80) + 0x50)
+#define JS_AFFINITY_NEXT_HI(n)		(JS_BASE + ((n) * 0x80) + 0x54)
+#define JS_CONFIG_NEXT(n)		(JS_BASE + ((n) * 0x80) + 0x58)
+#define JS_COMMAND_NEXT(n)		(JS_BASE + ((n) * 0x80) + 0x60)
+#define JS_FLUSH_ID_NEXT(n)		(JS_BASE + ((n) * 0x80) + 0x70)
 
 /* Possible values of JS_CONFIG and JS_CONFIG_NEXT registers */
 #define JS_CONFIG_START_FLUSH_CLEAN		BIT(8)
@@ -271,6 +261,9 @@
 #define JS_COMMAND_SOFT_STOP_1		0x06	/* Execute SOFT_STOP if JOB_CHAIN_FLAG is 1 */
 #define JS_COMMAND_HARD_STOP_1		0x07	/* Execute HARD_STOP if JOB_CHAIN_FLAG is 1 */
 
+#define JS_STATUS_EVENT_ACTIVE		0x08
+
+
 /* MMU regs */
 #define MMU_INT_RAWSTAT			0x2000
 #define MMU_INT_CLEAR			0x2004
@@ -288,9 +281,7 @@
 #define AS_COMMAND_FLUSH_MEM		0x05	/* Wait for memory accesses to complete, flush all the L1s cache then
 						   flush all L2 caches then issue a flush region command to all MMUs */
 
-#define MMU_BASE			0x2400
-#define MMU_AS_SHIFT			0x06
-#define MMU_AS(as)			(MMU_BASE + ((as) << MMU_AS_SHIFT))
+#define MMU_AS(as)			(0x2400 + ((as) << 6))
 
 #define AS_TRANSTAB_LO(as)		(MMU_AS(as) + 0x00) /* (RW) Translation Table Base Address for address space n, low word */
 #define AS_TRANSTAB_HI(as)		(MMU_AS(as) + 0x04) /* (RW) Translation Table Base Address for address space n, high word */
@@ -303,13 +294,11 @@
 #define AS_FAULTADDRESS_LO(as)		(MMU_AS(as) + 0x20) /* (RO) Fault Address for address space n, low word */
 #define AS_FAULTADDRESS_HI(as)		(MMU_AS(as) + 0x24) /* (RO) Fault Address for address space n, high word */
 #define AS_STATUS(as)			(MMU_AS(as) + 0x28) /* (RO) Status flags for address space n */
-/* Additional Bifrost AS registers */
+/* Additional Bifrost AS regsiters */
 #define AS_TRANSCFG_LO(as)		(MMU_AS(as) + 0x30) /* (RW) Translation table configuration for address space n, low word */
 #define AS_TRANSCFG_HI(as)		(MMU_AS(as) + 0x34) /* (RW) Translation table configuration for address space n, high word */
 #define AS_FAULTEXTRA_LO(as)		(MMU_AS(as) + 0x38) /* (RO) Secondary fault address for address space n, low word */
 #define AS_FAULTEXTRA_HI(as)		(MMU_AS(as) + 0x3C) /* (RO) Secondary fault address for address space n, high word */
-
-#define MMU_AS_STRIDE			(1 << MMU_AS_SHIFT)
 
 /*
  * Begin LPAE MMU TRANSTAB register values

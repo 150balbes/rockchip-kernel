@@ -25,19 +25,10 @@
  *
  */
 
-#include <linux/highmem.h>
-
-#include <drm/drm_cache.h>
-
 #include "gt/intel_engine.h"
-#include "gt/intel_engine_regs.h"
-#include "gt/intel_gpu_commands.h"
-#include "gt/intel_gt_regs.h"
 
-#include "i915_cmd_parser.h"
 #include "i915_drv.h"
 #include "i915_memcpy.h"
-#include "i915_reg.h"
 
 /**
  * DOC: batch buffer command parser
@@ -599,10 +590,6 @@ struct drm_i915_reg_descriptor {
 	{ .addr = _reg(idx) }, \
 	{ .addr = _reg ## _UDW(idx) }
 
-#define REG64_BASE_IDX(_reg, base, idx) \
-	{ .addr = _reg(base, idx) }, \
-	{ .addr = _reg ## _UDW(base, idx) }
-
 static const struct drm_i915_reg_descriptor gen7_render_regs[] = {
 	REG64(GPGPU_THREADS_DISPATCHED),
 	REG64(HS_INVOCATION_COUNT),
@@ -617,8 +604,8 @@ static const struct drm_i915_reg_descriptor gen7_render_regs[] = {
 	REG64(PS_INVOCATION_COUNT),
 	REG64(PS_DEPTH_COUNT),
 	REG64_IDX(RING_TIMESTAMP, RENDER_RING_BASE),
-	REG64_IDX(MI_PREDICATE_SRC0, RENDER_RING_BASE),
-	REG64_IDX(MI_PREDICATE_SRC1, RENDER_RING_BASE),
+	REG64(MI_PREDICATE_SRC0),
+	REG64(MI_PREDICATE_SRC1),
 	REG32(GEN7_3DPRIM_END_OFFSET),
 	REG32(GEN7_3DPRIM_START_VERTEX),
 	REG32(GEN7_3DPRIM_VERTEX_COUNT),
@@ -648,22 +635,22 @@ static const struct drm_i915_reg_descriptor gen7_render_regs[] = {
 };
 
 static const struct drm_i915_reg_descriptor hsw_render_regs[] = {
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 0),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 1),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 2),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 3),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 4),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 5),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 6),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 7),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 8),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 9),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 10),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 11),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 12),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 13),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 14),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, RENDER_RING_BASE, 15),
+	REG64_IDX(HSW_CS_GPR, 0),
+	REG64_IDX(HSW_CS_GPR, 1),
+	REG64_IDX(HSW_CS_GPR, 2),
+	REG64_IDX(HSW_CS_GPR, 3),
+	REG64_IDX(HSW_CS_GPR, 4),
+	REG64_IDX(HSW_CS_GPR, 5),
+	REG64_IDX(HSW_CS_GPR, 6),
+	REG64_IDX(HSW_CS_GPR, 7),
+	REG64_IDX(HSW_CS_GPR, 8),
+	REG64_IDX(HSW_CS_GPR, 9),
+	REG64_IDX(HSW_CS_GPR, 10),
+	REG64_IDX(HSW_CS_GPR, 11),
+	REG64_IDX(HSW_CS_GPR, 12),
+	REG64_IDX(HSW_CS_GPR, 13),
+	REG64_IDX(HSW_CS_GPR, 14),
+	REG64_IDX(HSW_CS_GPR, 15),
 	REG32(HSW_SCRATCH1,
 	      .mask = ~HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE,
 	      .value = 0),
@@ -686,22 +673,22 @@ static const struct drm_i915_reg_descriptor gen9_blt_regs[] = {
 	REG32(BCS_SWCTRL),
 	REG64_IDX(RING_TIMESTAMP, BLT_RING_BASE),
 	REG32_IDX(RING_CTX_TIMESTAMP, BLT_RING_BASE),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 0),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 1),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 2),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 3),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 4),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 5),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 6),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 7),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 8),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 9),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 10),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 11),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 12),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 13),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 14),
-	REG64_BASE_IDX(GEN8_RING_CS_GPR, BLT_RING_BASE, 15),
+	REG64_IDX(BCS_GPR, 0),
+	REG64_IDX(BCS_GPR, 1),
+	REG64_IDX(BCS_GPR, 2),
+	REG64_IDX(BCS_GPR, 3),
+	REG64_IDX(BCS_GPR, 4),
+	REG64_IDX(BCS_GPR, 5),
+	REG64_IDX(BCS_GPR, 6),
+	REG64_IDX(BCS_GPR, 7),
+	REG64_IDX(BCS_GPR, 8),
+	REG64_IDX(BCS_GPR, 9),
+	REG64_IDX(BCS_GPR, 10),
+	REG64_IDX(BCS_GPR, 11),
+	REG64_IDX(BCS_GPR, 12),
+	REG64_IDX(BCS_GPR, 13),
+	REG64_IDX(BCS_GPR, 14),
+	REG64_IDX(BCS_GPR, 15),
 };
 
 #undef REG64
@@ -958,8 +945,8 @@ int intel_engine_init_cmd_parser(struct intel_engine_cs *engine)
 	int cmd_table_count;
 	int ret;
 
-	if (GRAPHICS_VER(engine->i915) != 7 && !(GRAPHICS_VER(engine->i915) == 9 &&
-						 engine->class == COPY_ENGINE_CLASS))
+	if (!IS_GEN(engine->i915, 7) && !(IS_GEN(engine->i915, 9) &&
+					  engine->class == COPY_ENGINE_CLASS))
 		return 0;
 
 	switch (engine->class) {
@@ -989,7 +976,7 @@ int intel_engine_init_cmd_parser(struct intel_engine_cs *engine)
 		break;
 	case COPY_ENGINE_CLASS:
 		engine->get_cmd_length_mask = gen7_blt_get_cmd_length_mask;
-		if (GRAPHICS_VER(engine->i915) == 9) {
+		if (IS_GEN(engine->i915, 9)) {
 			cmd_tables = gen9_blt_cmd_table;
 			cmd_table_count = ARRAY_SIZE(gen9_blt_cmd_table);
 			engine->get_cmd_length_mask =
@@ -1005,7 +992,7 @@ int intel_engine_init_cmd_parser(struct intel_engine_cs *engine)
 			cmd_table_count = ARRAY_SIZE(gen7_blt_cmd_table);
 		}
 
-		if (GRAPHICS_VER(engine->i915) == 9) {
+		if (IS_GEN(engine->i915, 9)) {
 			engine->reg_tables = gen9_blt_reg_tables;
 			engine->reg_table_count =
 				ARRAY_SIZE(gen9_blt_reg_tables);
@@ -1156,8 +1143,7 @@ find_reg(const struct intel_engine_cs *engine, u32 addr)
 /* Returns a vmap'd pointer to dst_obj, which the caller must unmap */
 static u32 *copy_batch(struct drm_i915_gem_object *dst_obj,
 		       struct drm_i915_gem_object *src_obj,
-		       unsigned long offset, unsigned long length,
-		       bool *needs_clflush_after)
+		       u32 offset, u32 length)
 {
 	unsigned int src_needs_clflush;
 	unsigned int dst_needs_clflush;
@@ -1168,7 +1154,7 @@ static u32 *copy_batch(struct drm_i915_gem_object *dst_obj,
 	if (ret)
 		return ERR_PTR(ret);
 
-	dst = i915_gem_object_pin_map(dst_obj, I915_MAP_WB);
+	dst = i915_gem_object_pin_map(dst_obj, I915_MAP_FORCE_WB);
 	i915_gem_object_finish_access(dst_obj);
 	if (IS_ERR(dst))
 		return dst;
@@ -1226,9 +1212,6 @@ static u32 *copy_batch(struct drm_i915_gem_object *dst_obj,
 	i915_gem_object_finish_access(src_obj);
 
 	memset32(dst + length, 0, (dst_obj->base.size - length) / sizeof(u32));
-
-	/* dst_obj is returned with vmap pinned */
-	*needs_clflush_after = dst_needs_clflush & CLFLUSH_AFTER;
 
 	return dst;
 }
@@ -1428,7 +1411,7 @@ static unsigned long *alloc_whitelist(u32 batch_length)
  * @batch_offset: byte offset in the batch at which execution starts
  * @batch_length: length of the commands in batch_obj
  * @shadow: validated copy of the batch buffer in question
- * @trampoline: true if we need to trampoline into privileged execution
+ * @trampoline: whether to emit a conditional trampoline at the end of the batch
  *
  * Parses the specified batch buffer looking for privilege violations as
  * described in the overview.
@@ -1447,7 +1430,6 @@ int intel_engine_cmd_parser(struct intel_engine_cs *engine,
 	u32 *cmd, *batch_end, offset = 0;
 	struct drm_i915_cmd_descriptor default_desc = noop_desc;
 	const struct drm_i915_cmd_descriptor *desc = &default_desc;
-	bool needs_clflush_after = false;
 	unsigned long *jump_whitelist;
 	u64 batch_addr, shadow_addr;
 	int ret = 0;
@@ -1459,8 +1441,7 @@ int intel_engine_cmd_parser(struct intel_engine_cs *engine,
 	GEM_BUG_ON(!batch_length);
 
 	cmd = copy_batch(shadow->obj, batch->obj,
-			 batch_offset, batch_length,
-			 &needs_clflush_after);
+			 batch_offset, batch_length);
 	if (IS_ERR(cmd)) {
 		DRM_DEBUG("CMD: Failed to copy batch\n");
 		return PTR_ERR(cmd);
@@ -1471,8 +1452,8 @@ int intel_engine_cmd_parser(struct intel_engine_cs *engine,
 		/* Defer failure until attempted use */
 		jump_whitelist = alloc_whitelist(batch_length);
 
-	shadow_addr = gen8_canonical_addr(i915_vma_offset(shadow));
-	batch_addr = gen8_canonical_addr(i915_vma_offset(batch) + batch_offset);
+	shadow_addr = gen8_canonical_addr(shadow->node.start);
+	batch_addr = gen8_canonical_addr(batch->node.start + batch_offset);
 
 	/*
 	 * We use the batch length as size because the shadow object is as
@@ -1559,7 +1540,7 @@ int intel_engine_cmd_parser(struct intel_engine_cs *engine,
 				if (IS_HASWELL(engine->i915))
 					flags = MI_BATCH_NON_SECURE_HSW;
 
-				GEM_BUG_ON(!IS_GRAPHICS_VER(engine->i915, 6, 7));
+				GEM_BUG_ON(!IS_GEN_RANGE(engine->i915, 6, 7));
 				__gen6_emit_bb_start(batch_end,
 						     batch_addr,
 						     flags);

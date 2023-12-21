@@ -1,6 +1,3 @@
-.. title:: Kernel-doc comments
-
-===========================
 Writing kernel-doc comments
 ===========================
 
@@ -13,9 +10,6 @@ when it is embedded in source files.
    gtk-doc or Doxygen, yet distinctively different, for historical
    reasons. The kernel source contains tens of thousands of kernel-doc
    comments. Please stick to the style described here.
-
-.. note:: kernel-doc does not cover Rust code: please see
-   Documentation/rust/general-information.rst instead.
 
 The kernel-doc structure is extracted from the comments, and proper
 `Sphinx C Domain`_ function and type descriptions with anchors are
@@ -253,12 +247,12 @@ It is possible to document nested structs and unions, like::
           struct {
             int memb1;
             int memb2;
-          };
+        }
           struct {
             void *memb3;
             int memb4;
-          };
-        };
+          }
+        }
         union {
           struct {
             int memb1;
@@ -442,7 +436,6 @@ The title following ``DOC:`` acts as a heading within the source file, but also
 as an identifier for extracting the documentation comment. Thus, the title must
 be unique within the file.
 
-=============================
 Including kernel-doc comments
 =============================
 

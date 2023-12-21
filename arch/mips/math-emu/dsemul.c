@@ -82,8 +82,11 @@ retry:
 
 	/* Ensure we have an allocation bitmap */
 	if (!mm_ctx->bd_emupage_allocmap) {
-		mm_ctx->bd_emupage_allocmap = bitmap_zalloc(emupage_frame_count,
-							    GFP_ATOMIC);
+		mm_ctx->bd_emupage_allocmap =
+			kcalloc(BITS_TO_LONGS(emupage_frame_count),
+					      sizeof(unsigned long),
+				GFP_ATOMIC);
+
 		if (!mm_ctx->bd_emupage_allocmap) {
 			idx = BD_EMUFRAME_NONE;
 			goto out_unlock;
@@ -203,7 +206,7 @@ void dsemul_mm_cleanup(struct mm_struct *mm)
 {
 	mm_context_t *mm_ctx = &mm->context;
 
-	bitmap_free(mm_ctx->bd_emupage_allocmap);
+	kfree(mm_ctx->bd_emupage_allocmap);
 }
 
 int mips_dsemul(struct pt_regs *regs, mips_instruction ir,

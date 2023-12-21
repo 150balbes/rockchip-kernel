@@ -4,13 +4,14 @@
 #include <linux/seq_file.h>
 #include <net/wext.h>
 
-#include "dev.h"
-
 #define BUCKET_SPACE (32 - NETDEV_HASHBITS - 1)
 
 #define get_bucket(x) ((x) >> BUCKET_SPACE)
 #define get_offset(x) ((x) & ((1 << BUCKET_SPACE) - 1))
 #define set_bucket_offset(b, o) ((b) << BUCKET_SPACE | (o))
+
+extern struct list_head ptype_all __read_mostly;
+extern struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
 
 static inline struct net_device *dev_from_same_bucket(struct seq_file *seq, loff_t *pos)
 {
@@ -115,14 +116,10 @@ static int dev_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static u32 softnet_input_pkt_queue_len(struct softnet_data *sd)
+static u32 softnet_backlog_len(struct softnet_data *sd)
 {
-	return skb_queue_len_lockless(&sd->input_pkt_queue);
-}
-
-static u32 softnet_process_queue_len(struct softnet_data *sd)
-{
-	return skb_queue_len_lockless(&sd->process_queue);
+	return skb_queue_len_lockless(&sd->input_pkt_queue) +
+	       skb_queue_len_lockless(&sd->process_queue);
 }
 
 static struct softnet_data *softnet_get_online(loff_t *pos)
@@ -156,8 +153,6 @@ static void softnet_seq_stop(struct seq_file *seq, void *v)
 static int softnet_seq_show(struct seq_file *seq, void *v)
 {
 	struct softnet_data *sd = v;
-	u32 input_qlen = softnet_input_pkt_queue_len(sd);
-	u32 process_qlen = softnet_process_queue_len(sd);
 	unsigned int flow_limit_count = 0;
 
 #ifdef CONFIG_NET_FLOW_LIMIT
@@ -175,14 +170,12 @@ static int softnet_seq_show(struct seq_file *seq, void *v)
 	 * mapping the data a specific CPU
 	 */
 	seq_printf(seq,
-		   "%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x "
-		   "%08x %08x\n",
+		   "%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
 		   sd->processed, sd->dropped, sd->time_squeeze, 0,
 		   0, 0, 0, 0, /* was fastroute */
 		   0,	/* was cpu_collision */
 		   sd->received_rps, flow_limit_count,
-		   input_qlen + process_qlen, (int)seq->index,
-		   input_qlen, process_qlen);
+		   softnet_backlog_len(sd), (int)seq->index);
 	return 0;
 }
 

@@ -61,7 +61,7 @@ static inline int ar934x_spi_clk_div(struct ar934x_spi *sp, unsigned int freq)
 
 static int ar934x_spi_setup(struct spi_device *spi)
 {
-	struct ar934x_spi *sp = spi_controller_get_devdata(spi->controller);
+	struct ar934x_spi *sp = spi_controller_get_devdata(spi->master);
 
 	if ((spi->max_speed_hz == 0) ||
 	    (spi->max_speed_hz > (sp->clk_freq / 2))) {
@@ -74,15 +74,15 @@ static int ar934x_spi_setup(struct spi_device *spi)
 	return 0;
 }
 
-static int ar934x_spi_transfer_one_message(struct spi_controller *ctlr,
+static int ar934x_spi_transfer_one_message(struct spi_controller *master,
 					   struct spi_message *m)
 {
-	struct ar934x_spi *sp = spi_controller_get_devdata(ctlr);
+	struct ar934x_spi *sp = spi_controller_get_devdata(master);
 	struct spi_transfer *t = NULL;
 	struct spi_device *spi = m->spi;
 	unsigned long trx_done, trx_cur;
 	int stat = 0;
-	u8 bpw, term = 0;
+	u8 term = 0;
 	int div, i;
 	u32 reg;
 	const u8 *tx_buf;
@@ -90,11 +90,6 @@ static int ar934x_spi_transfer_one_message(struct spi_controller *ctlr,
 
 	m->actual_length = 0;
 	list_for_each_entry(t, &m->transfers, transfer_list) {
-		if (t->bits_per_word >= 8 && t->bits_per_word < 32)
-			bpw = t->bits_per_word >> 3;
-		else
-			bpw = 4;
-
 		if (t->speed_hz)
 			div = ar934x_spi_clk_div(sp, t->speed_hz);
 		else
@@ -110,10 +105,10 @@ static int ar934x_spi_transfer_one_message(struct spi_controller *ctlr,
 		iowrite32(reg, sp->base + AR934X_SPI_REG_CTRL);
 		iowrite32(0, sp->base + AR934X_SPI_DATAOUT);
 
-		for (trx_done = 0; trx_done < t->len; trx_done += bpw) {
+		for (trx_done = 0; trx_done < t->len; trx_done += 4) {
 			trx_cur = t->len - trx_done;
-			if (trx_cur > bpw)
-				trx_cur = bpw;
+			if (trx_cur > 4)
+				trx_cur = 4;
 			else if (list_is_last(&t->transfer_list, &m->transfers))
 				term = 1;
 
@@ -125,7 +120,7 @@ static int ar934x_spi_transfer_one_message(struct spi_controller *ctlr,
 				iowrite32(reg, sp->base + AR934X_SPI_DATAOUT);
 			}
 
-			reg = AR934X_SPI_SHIFT_VAL(spi_get_chipselect(spi, 0), term,
+			reg = AR934X_SPI_SHIFT_VAL(spi->chip_select, term,
 						   trx_cur * 8);
 			iowrite32(reg, sp->base + AR934X_SPI_REG_SHIFT_CTRL);
 			stat = readl_poll_timeout(
@@ -142,15 +137,13 @@ static int ar934x_spi_transfer_one_message(struct spi_controller *ctlr,
 					reg >>= 8;
 				}
 			}
-			spi_delay_exec(&t->word_delay, t);
 		}
 		m->actual_length += t->len;
-		spi_transfer_delay_exec(t);
 	}
 
 msg_done:
 	m->status = stat;
-	spi_finalize_current_message(ctlr);
+	spi_finalize_current_message(master);
 
 	return 0;
 }
@@ -183,7 +176,7 @@ static int ar934x_spi_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ctlr = devm_spi_alloc_host(&pdev->dev, sizeof(*sp));
+	ctlr = devm_spi_alloc_master(&pdev->dev, sizeof(*sp));
 	if (!ctlr) {
 		dev_info(&pdev->dev, "failed to allocate spi controller\n");
 		ret = -ENOMEM;
@@ -198,8 +191,7 @@ static int ar934x_spi_probe(struct platform_device *pdev)
 	ctlr->mode_bits = SPI_LSB_FIRST;
 	ctlr->setup = ar934x_spi_setup;
 	ctlr->transfer_one_message = ar934x_spi_transfer_one_message;
-	ctlr->bits_per_word_mask = SPI_BPW_MASK(32) | SPI_BPW_MASK(24) |
-				   SPI_BPW_MASK(16) | SPI_BPW_MASK(8);
+	ctlr->bits_per_word_mask = SPI_BPW_MASK(8);
 	ctlr->dev.of_node = pdev->dev.of_node;
 	ctlr->num_chipselect = 3;
 
@@ -220,7 +212,7 @@ err_clk_disable:
 	return ret;
 }
 
-static void ar934x_spi_remove(struct platform_device *pdev)
+static int ar934x_spi_remove(struct platform_device *pdev)
 {
 	struct spi_controller *ctlr;
 	struct ar934x_spi *sp;
@@ -230,6 +222,8 @@ static void ar934x_spi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(ctlr);
 	clk_disable_unprepare(sp->clk);
+
+	return 0;
 }
 
 static struct platform_driver ar934x_spi_driver = {
@@ -238,7 +232,7 @@ static struct platform_driver ar934x_spi_driver = {
 		.of_match_table = ar934x_spi_match,
 	},
 	.probe = ar934x_spi_probe,
-	.remove_new = ar934x_spi_remove,
+	.remove = ar934x_spi_remove,
 };
 
 module_platform_driver(ar934x_spi_driver);

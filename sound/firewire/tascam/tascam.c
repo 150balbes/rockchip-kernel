@@ -9,7 +9,7 @@
 
 MODULE_DESCRIPTION("TASCAM FireWire series Driver");
 MODULE_AUTHOR("Takashi Sakamoto <o-takashi@sakamocchi.jp>");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 
 static const struct snd_tscm_spec model_specs[] = {
 	{
@@ -90,31 +90,19 @@ static void tscm_card_free(struct snd_card *card)
 
 	snd_tscm_transaction_unregister(tscm);
 	snd_tscm_stream_destroy_duplex(tscm);
-
-	mutex_destroy(&tscm->mutex);
-	fw_unit_put(tscm->unit);
 }
 
-static int snd_tscm_probe(struct fw_unit *unit,
-			   const struct ieee1394_device_id *entry)
+static void do_registration(struct work_struct *work)
 {
-	struct snd_card *card;
-	struct snd_tscm *tscm;
+	struct snd_tscm *tscm = container_of(work, struct snd_tscm, dwork.work);
 	int err;
 
-	err = snd_card_new(&unit->device, -1, NULL, THIS_MODULE, sizeof(*tscm), &card);
+	err = snd_card_new(&tscm->unit->device, -1, NULL, THIS_MODULE, 0,
+			   &tscm->card);
 	if (err < 0)
-		return err;
-	card->private_free = tscm_card_free;
-
-	tscm = card->private_data;
-	tscm->unit = fw_unit_get(unit);
-	dev_set_drvdata(&unit->device, tscm);
-	tscm->card = card;
-
-	mutex_init(&tscm->mutex);
-	spin_lock_init(&tscm->lock);
-	init_waitqueue_head(&tscm->hwdep_wait);
+		return;
+	tscm->card->private_free = tscm_card_free;
+	tscm->card->private_data = tscm;
 
 	err = identify_model(tscm);
 	if (err < 0)
@@ -142,33 +130,81 @@ static int snd_tscm_probe(struct fw_unit *unit,
 	if (err < 0)
 		goto error;
 
-	err = snd_card_register(card);
+	err = snd_card_register(tscm->card);
 	if (err < 0)
 		goto error;
 
-	return 0;
+	tscm->registered = true;
+
+	return;
 error:
-	snd_card_free(card);
-	return err;
+	snd_card_free(tscm->card);
+	dev_info(&tscm->unit->device,
+		 "Sound card registration failed: %d\n", err);
+}
+
+static int snd_tscm_probe(struct fw_unit *unit,
+			   const struct ieee1394_device_id *entry)
+{
+	struct snd_tscm *tscm;
+
+	/* Allocate this independent of sound card instance. */
+	tscm = devm_kzalloc(&unit->device, sizeof(struct snd_tscm), GFP_KERNEL);
+	if (!tscm)
+		return -ENOMEM;
+	tscm->unit = fw_unit_get(unit);
+	dev_set_drvdata(&unit->device, tscm);
+
+	mutex_init(&tscm->mutex);
+	spin_lock_init(&tscm->lock);
+	init_waitqueue_head(&tscm->hwdep_wait);
+
+	/* Allocate and register this sound card later. */
+	INIT_DEFERRABLE_WORK(&tscm->dwork, do_registration);
+	snd_fw_schedule_registration(unit, &tscm->dwork);
+
+	return 0;
 }
 
 static void snd_tscm_update(struct fw_unit *unit)
 {
 	struct snd_tscm *tscm = dev_get_drvdata(&unit->device);
 
+	/* Postpone a workqueue for deferred registration. */
+	if (!tscm->registered)
+		snd_fw_schedule_registration(unit, &tscm->dwork);
+
 	snd_tscm_transaction_reregister(tscm);
 
-	mutex_lock(&tscm->mutex);
-	snd_tscm_stream_update_duplex(tscm);
-	mutex_unlock(&tscm->mutex);
+	/*
+	 * After registration, userspace can start packet streaming, then this
+	 * code block works fine.
+	 */
+	if (tscm->registered) {
+		mutex_lock(&tscm->mutex);
+		snd_tscm_stream_update_duplex(tscm);
+		mutex_unlock(&tscm->mutex);
+	}
 }
 
 static void snd_tscm_remove(struct fw_unit *unit)
 {
 	struct snd_tscm *tscm = dev_get_drvdata(&unit->device);
 
-	// Block till all of ALSA character devices are released.
-	snd_card_free(tscm->card);
+	/*
+	 * Confirm to stop the work for registration before the sound card is
+	 * going to be released. The work is not scheduled again because bus
+	 * reset handler is not called anymore.
+	 */
+	cancel_delayed_work_sync(&tscm->dwork);
+
+	if (tscm->registered) {
+		// Block till all of ALSA character devices are released.
+		snd_card_free(tscm->card);
+	}
+
+	mutex_destroy(&tscm->mutex);
+	fw_unit_put(tscm->unit);
 }
 
 static const struct ieee1394_device_id snd_tscm_id_table[] = {

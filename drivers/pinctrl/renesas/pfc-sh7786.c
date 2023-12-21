@@ -10,6 +10,7 @@
  *  Copyright (C) 2008  Magnus Damm
  */
 
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <cpu/sh7786.h>
 
@@ -666,12 +667,15 @@ static const struct pinmux_cfg_reg pinmux_config_regs[] = {
 		PD1_FN, PD1_OUT, PD1_IN, 0,
 		PD0_FN, PD0_OUT, PD0_IN, 0 ))
 	},
-	{ PINMUX_CFG_REG_VAR("PECR", 0xffcc0008, 16,
-			     GROUP(2, 2, -12),
-			     GROUP(
+	{ PINMUX_CFG_REG("PECR", 0xffcc0008, 16, 2, GROUP(
 		PE7_FN, PE7_OUT, PE7_IN, 0,
 		PE6_FN, PE6_OUT, PE6_IN, 0,
-		/* RESERVED [12] */ ))
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0, ))
 	},
 	{ PINMUX_CFG_REG("PFCR", 0xffcc000a, 16, 2, GROUP(
 		PF7_FN, PF7_OUT, PF7_IN, 0,
@@ -683,13 +687,15 @@ static const struct pinmux_cfg_reg pinmux_config_regs[] = {
 		PF1_FN, PF1_OUT, PF1_IN, 0,
 		PF0_FN, PF0_OUT, PF0_IN, 0 ))
 	},
-	{ PINMUX_CFG_REG_VAR("PGCR", 0xffcc000c, 16,
-			     GROUP(2, 2, 2, -10),
-			     GROUP(
+	{ PINMUX_CFG_REG("PGCR", 0xffcc000c, 16, 2, GROUP(
 		PG7_FN, PG7_OUT, PG7_IN, 0,
 		PG6_FN, PG6_OUT, PG6_IN, 0,
 		PG5_FN, PG5_OUT, PG5_IN, 0,
-		/* RESERVED [10] */ ))
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0, ))
 	},
 	{ PINMUX_CFG_REG("PHCR", 0xffcc000e, 16, 2, GROUP(
 		PH7_FN, PH7_OUT, PH7_IN, 0,
@@ -747,7 +753,7 @@ static const struct pinmux_cfg_reg pinmux_config_regs[] = {
 		P2MSEL1_0,  P2MSEL1_1,
 		P2MSEL0_0,  P2MSEL0_1 ))
 	},
-	{ /* sentinel */ }
+	{}
 };
 
 static const struct pinmux_data_reg pinmux_data_regs[] = {
@@ -787,7 +793,7 @@ static const struct pinmux_data_reg pinmux_data_regs[] = {
 		PJ7_DATA, PJ6_DATA, PJ5_DATA, PJ4_DATA,
 		PJ3_DATA, PJ2_DATA, PJ1_DATA, 0 ))
 	},
-	{ /* sentinel */ }
+	{ },
 };
 
 const struct sh_pfc_soc_info sh7786_pinmux_info = {

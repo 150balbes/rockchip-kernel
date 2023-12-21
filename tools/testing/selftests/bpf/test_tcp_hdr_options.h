@@ -50,7 +50,6 @@ struct linum_err {
 
 #define TCPOPT_EOL		0
 #define TCPOPT_NOP		1
-#define TCPOPT_MSS		2
 #define TCPOPT_WINDOW		3
 #define TCPOPT_EXP		254
 

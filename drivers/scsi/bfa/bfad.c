@@ -732,11 +732,17 @@ bfad_pci_init(struct pci_dev *pdev, struct bfad_s *bfad)
 	pci_set_master(pdev);
 
 	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (rc)
+		rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+
 	if (rc) {
 		rc = -ENODEV;
 		printk(KERN_ERR "dma_set_mask_and_coherent fail %p\n", pdev);
 		goto out_release_region;
 	}
+
+	/* Enable PCIE Advanced Error Recovery (AER) if kernel supports */
+	pci_enable_pcie_error_reporting(pdev);
 
 	bfad->pci_bar0_kva = pci_iomap(pdev, 0, pci_resource_len(pdev, 0));
 	bfad->pci_bar2_kva = pci_iomap(pdev, 2, pci_resource_len(pdev, 2));
@@ -798,6 +804,8 @@ bfad_pci_uninit(struct pci_dev *pdev, struct bfad_s *bfad)
 	pci_iounmap(pdev, bfad->pci_bar0_kva);
 	pci_iounmap(pdev, bfad->pci_bar2_kva);
 	pci_release_regions(pdev);
+	/* Disable PCIE Advanced Error Recovery (AER) */
+	pci_disable_pcie_error_reporting(pdev);
 	pci_disable_device(pdev);
 }
 
@@ -965,19 +973,19 @@ bfad_start_ops(struct bfad_s *bfad) {
 
 	/* Fill the driver_info info to fcs*/
 	memset(&driver_info, 0, sizeof(driver_info));
-	strscpy(driver_info.version, BFAD_DRIVER_VERSION,
+	strlcpy(driver_info.version, BFAD_DRIVER_VERSION,
 		sizeof(driver_info.version));
 	if (host_name)
-		strscpy(driver_info.host_machine_name, host_name,
+		strlcpy(driver_info.host_machine_name, host_name,
 			sizeof(driver_info.host_machine_name));
 	if (os_name)
-		strscpy(driver_info.host_os_name, os_name,
+		strlcpy(driver_info.host_os_name, os_name,
 			sizeof(driver_info.host_os_name));
 	if (os_patch)
-		strscpy(driver_info.host_os_patch, os_patch,
+		strlcpy(driver_info.host_os_patch, os_patch,
 			sizeof(driver_info.host_os_patch));
 
-	strscpy(driver_info.os_device_name, bfad->pci_name,
+	strlcpy(driver_info.os_device_name, bfad->pci_name,
 		sizeof(driver_info.os_device_name));
 
 	/* FCS driver info init */
@@ -1552,11 +1560,15 @@ bfad_pci_slot_reset(struct pci_dev *pdev)
 
 	rc = dma_set_mask_and_coherent(&bfad->pcidev->dev, DMA_BIT_MASK(64));
 	if (rc)
+		rc = dma_set_mask_and_coherent(&bfad->pcidev->dev,
+					       DMA_BIT_MASK(32));
+	if (rc)
 		goto out_disable_device;
 
 	if (restart_bfa(bfad) == -1)
 		goto out_disable_device;
 
+	pci_enable_pcie_error_reporting(pdev);
 	dev_printk(KERN_WARNING, &pdev->dev,
 		   "slot_reset completed  flags: 0x%x!\n", bfad->bfad_flags);
 

@@ -5,9 +5,8 @@
 
 .. _it_sphinxdoc:
 
-=============================================
-Usare Sphinx per la documentazione del kernel
-=============================================
+Introduzione
+============
 
 Il kernel Linux usa `Sphinx`_ per la generazione della documentazione a partire
 dai file `reStructuredText`_ che si trovano nella cartella ``Documentation``.
@@ -36,7 +35,7 @@ Installazione Sphinx
 ====================
 
 I marcatori ReST utilizzati nei file in Documentation/ sono pensati per essere
-processati da ``Sphinx`` nella versione 1.7 o superiore.
+processati da ``Sphinx`` nella versione 1.3 o superiore.
 
 Esiste uno script che verifica i requisiti Sphinx. Per ulteriori dettagli
 consultate :ref:`it_sphinx-pre-install`.
@@ -54,6 +53,11 @@ pacchettizzato dalla vostra distribuzione.
 
 .. note::
 
+   #) Le versioni di Sphinx inferiori alla 1.5 non funzionano bene
+      con il pacchetto Python docutils versione 0.13.1 o superiore.
+      Se volete usare queste versioni, allora dovere eseguire
+      ``pip install 'docutils==0.12'``.
+
    #) Viene raccomandato l'uso del tema RTD per la documentazione in HTML.
       A seconda della versione di Sphinx, potrebbe essere necessaria
       l'installazione tramite il comando ``pip install sphinx_rtd_theme``.
@@ -63,13 +67,13 @@ pacchettizzato dalla vostra distribuzione.
       utilizzando LaTeX. Per una corretta interpretazione, è necessario aver
       installato texlive con i pacchetti amdfonts e amsmath.
 
-Riassumendo, se volete installare la versione 2.4.4 di Sphinx dovete eseguire::
+Riassumendo, se volete installare la versione 1.7.9 di Sphinx dovete eseguire::
 
-       $ virtualenv sphinx_2.4.4
-       $ . sphinx_2.4.4/bin/activate
-       (sphinx_2.4.4) $ pip install -r Documentation/sphinx/requirements.txt
+       $ virtualenv sphinx_1.7.9
+       $ . sphinx_1.7.9/bin/activate
+       (sphinx_1.7.9) $ pip install -r Documentation/sphinx/requirements.txt
 
-Dopo aver eseguito ``. sphinx_2.4.4/bin/activate``, il prompt cambierà per
+Dopo aver eseguito ``. sphinx_1.7.9/bin/activate``, il prompt cambierà per
 indicare che state usando il nuovo ambiente. Se aprite un nuova sessione,
 prima di generare la documentazione, dovrete rieseguire questo comando per
 rientrare nell'ambiente virtuale.
@@ -90,7 +94,7 @@ Generazione in PDF e LaTeX
 --------------------------
 
 Al momento, la generazione di questi documenti è supportata solo dalle
-versioni di Sphinx superiori alla 2.4.
+versioni di Sphinx superiori alla 1.4.
 
 Per la generazione di PDF e LaTeX, avrete bisogno anche del pacchetto
 ``XeLaTeX`` nella versione 3.14159265
@@ -115,8 +119,8 @@ l'installazione::
 	You should run:
 
 		sudo dnf install -y texlive-luatex85
-		/usr/bin/virtualenv sphinx_2.4.4
-		. sphinx_2.4.4/bin/activate
+		/usr/bin/virtualenv sphinx_1.7.9
+		. sphinx_1.7.9/bin/activate
 		pip install -r Documentation/sphinx/requirements.txt
 
 	Can't build as 1 mandatory dependency is missing at ./scripts/sphinx-pre-install line 468.
@@ -151,8 +155,7 @@ Ovviamente, per generare la documentazione, Sphinx (``sphinx-build``)
 dev'essere installato. Se disponibile, il tema *Read the Docs* per Sphinx
 verrà utilizzato per ottenere una documentazione HTML più gradevole.
 Per la documentazione in formato PDF, invece, avrete bisogno di ``XeLaTeX`
-e di ``convert(1)`` disponibile in ImageMagick
-(https://www.imagemagick.org). \ [#ink]_
+e di ``convert(1)`` disponibile in ImageMagick (https://www.imagemagick.org).
 Tipicamente, tutti questi pacchetti sono disponibili e pacchettizzati nelle
 distribuzioni Linux.
 
@@ -160,22 +163,8 @@ Per poter passare ulteriori opzioni a Sphinx potete utilizzare la variabile
 make ``SPHINXOPTS``. Per esempio, se volete che Sphinx sia più verboso durante
 la generazione potete usare il seguente comando ``make SPHINXOPTS=-v htmldocs``.
 
-Potete anche personalizzare l'ouptut html passando un livello aggiuntivo
-DOCS_CSS usando la rispettiva variabile d'ambiente ``DOCS_CSS``.
-
-La variable make ``SPHINXDIRS`` è utile quando si vuole generare solo una parte
-della documentazione. Per esempio, si possono generare solo di documenti in
-``Documentation/doc-guide`` eseguendo ``make SPHINXDIRS=doc-guide htmldocs``. La
-sezione dedicata alla documentazione di ``make help`` vi mostrerà quali sotto
-cartelle potete specificare.
-
 Potete eliminare la documentazione generata tramite il comando
 ``make cleandocs``.
-
-.. [#ink] Avere installato anche ``inkscape(1)`` dal progetto Inkscape ()
-          potrebbe aumentare la qualità delle immagini che verranno integrate
-          nel documento PDF, specialmente per quando si usando rilasci del
-          kernel uguali o superiori a 5.18
 
 Scrivere la documentazione
 ==========================
@@ -292,11 +281,11 @@ incrociato quando questa ha una voce nell'indice.  Se trovate degli usi di
 Tabelle a liste
 ---------------
 
-Il formato ``list-table`` può essere utile per tutte quelle tabelle che non
-possono essere facilmente scritte usando il formato ASCII-art di Sphinx. Però,
-questo genere di tabelle sono illeggibili per chi legge direttamente i file di
-testo. Dunque, questo formato dovrebbe essere evitato senza forti argomenti che
-ne giustifichino l'uso.
+Raccomandiamo l'uso delle tabelle in formato lista (*list table*). Le tabelle
+in formato lista sono liste di liste. In confronto all'ASCII-art potrebbero
+non apparire di facile lettura nei file in formato testo. Il loro vantaggio è
+che sono facili da creare o modificare e che la differenza di una modifica è
+molto più significativa perché limitata alle modifiche del contenuto.
 
 La ``flat-table`` è anch'essa una lista di liste simile alle ``list-table``
 ma con delle funzionalità aggiuntive:
@@ -341,17 +330,17 @@ la lista di celle che compongono la *riga* stessa. Fanno eccezione i *commenti*
         - head col 3
         - head col 4
 
-      * - row 1
+      * - column 1
         - field 1.1
         - field 1.2 with autospan
 
-      * - row 2
+      * - column 2
         - field 2.1
         - :rspan:`1` :cspan:`1` field 2.2 - 3.3
 
       * .. _`it last row`:
 
-        - row 3
+        - column 3
 
 Che verrà rappresentata nel seguente modo:
 
@@ -363,46 +352,17 @@ Che verrà rappresentata nel seguente modo:
         - head col 3
         - head col 4
 
-      * - row 1
+      * - column 1
         - field 1.1
         - field 1.2 with autospan
 
-      * - row 2
+      * - column 2
         - field 2.1
         - :rspan:`1` :cspan:`1` field 2.2 - 3.3
 
       * .. _`it last row`:
 
-        - row 3
-
-Riferimenti incrociati
-----------------------
-
-Aggiungere un riferimento incrociato da una pagina della
-documentazione ad un'altra può essere fatto scrivendo il percorso al
-file corrispondende, non serve alcuna sintassi speciale. Si possono
-usare sia percorsi assoluti che relativi. Quelli assoluti iniziano con
-"documentation/". Per esempio, potete fare riferimento a questo
-documento in uno dei seguenti modi (da notare che l'estensione
-``.rst`` è necessaria)::
-
-    Vedere Documentation/doc-guide/sphinx.rst. Questo funziona sempre
-    Guardate pshinx.rst, che si trova nella stessa cartella.
-    Leggete ../sphinx.rst, che si trova nella cartella precedente.
-
-Se volete che il collegamento abbia un testo diverso rispetto al
-titolo del documento, allora dovrete usare la direttiva Sphinx
-``doc``. Per esempio::
-
-    Vedere :doc:`il mio testo per il collegamento <sphinx>`.
-
-Nella maggioranza dei casi si consiglia il primo metodo perché è più
-pulito ed adatto a chi legge dai sorgenti. Se incontrare un ``:doc:``
-che non da alcun valore, sentitevi liberi di convertirlo in un
-percorso al documento.
-
-Per informazioni riguardo ai riferimenti incrociati ai commenti
-kernel-doc per funzioni o tipi, consultate
+        - column 3
 
 .. _it_sphinx_kfigure:
 
@@ -411,7 +371,7 @@ Figure ed immagini
 
 Se volete aggiungere un'immagine, utilizzate le direttive ``kernel-figure``
 e ``kernel-image``. Per esempio, per inserire una figura di un'immagine in
-formato SVG (:ref:`it_svg_image_example`)::
+formato SVG::
 
     .. kernel-figure::  ../../../doc-guide/svg_image.svg
        :alt:    una semplice immagine SVG

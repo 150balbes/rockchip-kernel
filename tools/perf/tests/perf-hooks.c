@@ -26,7 +26,7 @@ static void the_hook(void *_hook_flags)
 	raise(SIGSEGV);
 }
 
-static int test__perf_hooks(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__perf_hooks(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	int hook_flags = 0;
 
@@ -45,5 +45,3 @@ static int test__perf_hooks(struct test_suite *test __maybe_unused, int subtest 
 		return TEST_FAIL;
 	return TEST_OK;
 }
-
-DEFINE_SUITE("perf hooks", perf_hooks);

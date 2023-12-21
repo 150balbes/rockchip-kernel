@@ -4,10 +4,10 @@
 $id: http://devicetree.org/schemas/arm/xilinx.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Xilinx Zynq Platforms
+title: Xilinx Zynq Platforms Device Tree Bindings
 
 maintainers:
-  - Michal Simek <michal.simek@amd.com>
+  - Michal Simek <michal.simek@xilinx.com>
 
 description: |
   Xilinx boards with Zynq-7000 SOC or Zynq UltraScale+ MPSoC
@@ -22,9 +22,6 @@ properties:
               - adapteva,parallella
               - digilent,zynq-zybo
               - digilent,zynq-zybo-z7
-              - ebang,ebaz4205
-              - myir,zynq-zturn-v5
-              - myir,zynq-zturn
               - xlnx,zynq-cc108
               - xlnx,zynq-zc702
               - xlnx,zynq-zc706
@@ -61,10 +58,10 @@ properties:
           - const: xlnx,zynqmp-zc1254
           - const: xlnx,zynqmp
 
-      - description: Xilinx evaluation board zcu1275
+      - description: Xilinx internal board zc1275
         items:
-          - const: xlnx,zynqmp-zcu1275-revA
-          - const: xlnx,zynqmp-zcu1275
+          - const: xlnx,zynqmp-zc1275-revA
+          - const: xlnx,zynqmp-zc1275
           - const: xlnx,zynqmp
 
       - description: Xilinx 96boards compatible board zcu100
@@ -87,7 +84,6 @@ properties:
               - xlnx,zynqmp-zcu102-revA
               - xlnx,zynqmp-zcu102-revB
               - xlnx,zynqmp-zcu102-rev1.0
-              - xlnx,zynqmp-zcu102-rev1.1
           - const: xlnx,zynqmp-zcu102
           - const: xlnx,zynqmp
 
@@ -95,7 +91,6 @@ properties:
         items:
           - enum:
               - xlnx,zynqmp-zcu104-revA
-              - xlnx,zynqmp-zcu104-revC
               - xlnx,zynqmp-zcu104-rev1.0
           - const: xlnx,zynqmp-zcu104
           - const: xlnx,zynqmp
@@ -112,24 +107,8 @@ properties:
         items:
           - enum:
               - xlnx,zynqmp-zcu111-revA
-              - xlnx,zynqmp-zcu111-rev1.0
+              - xlnx,zynqmp-zcu11-rev1.0
           - const: xlnx,zynqmp-zcu111
-          - const: xlnx,zynqmp
-
-      - description: Xilinx Kria SOMs
-        items:
-          - const: xlnx,zynqmp-sm-k26-rev1
-          - const: xlnx,zynqmp-sm-k26-revB
-          - const: xlnx,zynqmp-sm-k26-revA
-          - const: xlnx,zynqmp-sm-k26
-          - const: xlnx,zynqmp
-
-      - description: Xilinx Kria SOMs (starter)
-        items:
-          - const: xlnx,zynqmp-smk-k26-rev1
-          - const: xlnx,zynqmp-smk-k26-revB
-          - const: xlnx,zynqmp-smk-k26-revA
-          - const: xlnx,zynqmp-smk-k26
           - const: xlnx,zynqmp
 
 additionalProperties: true

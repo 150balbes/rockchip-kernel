@@ -14,7 +14,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
-#include <media/v4l2-mc.h>
 
 /* ------------------------------------------------------------------ */
 
@@ -71,7 +70,6 @@ const struct vb2_ops au0828_vbi_qops = {
 	.queue_setup     = vbi_queue_setup,
 	.buf_prepare     = vbi_buffer_prepare,
 	.buf_queue       = vbi_buffer_queue,
-	.prepare_streaming = v4l_vb2q_enable_media_source,
 	.start_streaming = au0828_start_analog_streaming,
 	.stop_streaming  = au0828_stop_vbi_streaming,
 	.wait_prepare    = vb2_ops_wait_prepare,

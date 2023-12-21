@@ -3,6 +3,8 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: usbpipe.h
+ *
  * Purpose:
  *
  * Author: Warren Hsu

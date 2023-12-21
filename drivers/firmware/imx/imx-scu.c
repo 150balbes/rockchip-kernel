@@ -310,8 +310,9 @@ static int imx_scu_probe(struct platform_device *pdev)
 		sc_chan->ch = mbox_request_channel_byname(cl, chan_name);
 		if (IS_ERR(sc_chan->ch)) {
 			ret = PTR_ERR(sc_chan->ch);
-			dev_err_probe(dev, ret, "Failed to request mbox chan %s\n",
-				      chan_name);
+			if (ret != -EPROBE_DEFER)
+				dev_err(dev, "Failed to request mbox chan %s ret %d\n",
+					chan_name, ret);
 			kfree(chan_name);
 			return ret;
 		}

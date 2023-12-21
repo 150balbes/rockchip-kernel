@@ -29,6 +29,7 @@
 static struct kmem_cache *hfs_inode_cachep;
 
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 
 static int hfs_sync_fs(struct super_block *sb, int wait)
 {
@@ -162,7 +163,7 @@ static struct inode *hfs_alloc_inode(struct super_block *sb)
 {
 	struct hfs_inode_info *i;
 
-	i = alloc_inode_sb(sb, hfs_inode_cachep, GFP_KERNEL);
+	i = kmem_cache_alloc(hfs_inode_cachep, GFP_KERNEL);
 	return i ? &i->vfs_inode : NULL;
 }
 

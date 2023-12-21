@@ -11,7 +11,6 @@
 #define INCLUDE__CS_ETM_DECODER_H__
 
 #include <linux/types.h>
-#include <opencsd/ocsd_if_types.h>
 #include <stdio.h>
 
 struct cs_etm_decoder;
@@ -20,8 +19,7 @@ struct cs_etm_packet_queue;
 
 struct cs_etm_queue;
 
-typedef u32 (*cs_etm_mem_cb_type)(struct cs_etm_queue *, u8, u64, size_t, u8 *,
-				  const ocsd_mem_space_acc_t);
+typedef u32 (*cs_etm_mem_cb_type)(struct cs_etm_queue *, u8, u64, size_t, u8 *);
 
 struct cs_etmv3_trace_params {
 	u32 reg_ctrl;
@@ -39,22 +37,11 @@ struct cs_etmv4_trace_params {
 	u32 reg_traceidr;
 };
 
-struct cs_ete_trace_params {
-	u32 reg_idr0;
-	u32 reg_idr1;
-	u32 reg_idr2;
-	u32 reg_idr8;
-	u32 reg_configr;
-	u32 reg_traceidr;
-	u32 reg_devarch;
-};
-
 struct cs_etm_trace_params {
 	int protocol;
 	union {
 		struct cs_etmv3_trace_params etmv3;
 		struct cs_etmv4_trace_params etmv4;
-		struct cs_ete_trace_params ete;
 	};
 };
 
@@ -62,10 +49,10 @@ struct cs_etm_decoder_params {
 	int operation;
 	void (*packet_printer)(const char *msg);
 	cs_etm_mem_cb_type mem_acc_cb;
-	bool formatted;
-	bool fsyncs;
-	bool hsyncs;
-	bool frame_aligned;
+	u8 formatted;
+	u8 fsyncs;
+	u8 hsyncs;
+	u8 frame_aligned;
 	void *data;
 };
 
@@ -78,7 +65,6 @@ enum {
 	CS_ETM_PROTO_ETMV4i,
 	CS_ETM_PROTO_ETMV4d,
 	CS_ETM_PROTO_PTM,
-	CS_ETM_PROTO_ETE
 };
 
 enum cs_etm_decoder_operation {
@@ -106,6 +92,5 @@ int cs_etm_decoder__get_packet(struct cs_etm_packet_queue *packet_queue,
 			       struct cs_etm_packet *packet);
 
 int cs_etm_decoder__reset(struct cs_etm_decoder *decoder);
-const char *cs_etm_decoder__get_name(struct cs_etm_decoder *decoder);
 
 #endif /* INCLUDE__CS_ETM_DECODER_H__ */

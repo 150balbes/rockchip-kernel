@@ -176,7 +176,7 @@ static int vboxsf_fill_super(struct super_block *sb, struct fs_context *fc)
 	}
 	folder_name->size = size;
 	folder_name->length = size - 1;
-	strscpy(folder_name->string.utf8, fc->source, size);
+	strlcpy(folder_name->string.utf8, fc->source, size);
 	err = vboxsf_map_folder(folder_name, &sbi->root);
 	kfree(folder_name);
 	if (err) {
@@ -204,7 +204,7 @@ static int vboxsf_fill_super(struct super_block *sb, struct fs_context *fc)
 		err = -ENOMEM;
 		goto fail_unmap;
 	}
-	vboxsf_init_inode(sbi, iroot, &sbi->root_info, false);
+	vboxsf_init_inode(sbi, iroot, &sbi->root_info);
 	unlock_new_inode(iroot);
 
 	droot = d_make_root(iroot);
@@ -241,7 +241,7 @@ static struct inode *vboxsf_alloc_inode(struct super_block *sb)
 {
 	struct vboxsf_inode *sf_i;
 
-	sf_i = alloc_inode_sb(sb, vboxsf_inode_cachep, GFP_NOFS);
+	sf_i = kmem_cache_alloc(vboxsf_inode_cachep, GFP_NOFS);
 	if (!sf_i)
 		return NULL;
 
@@ -410,7 +410,7 @@ static int vboxsf_reconfigure(struct fs_context *fc)
 
 	/* Apply changed options to the root inode */
 	sbi->o = ctx->o;
-	vboxsf_init_inode(sbi, iroot, &sbi->root_info, true);
+	vboxsf_init_inode(sbi, iroot, &sbi->root_info);
 
 	return 0;
 }
@@ -482,4 +482,5 @@ module_exit(vboxsf_fini);
 MODULE_DESCRIPTION("Oracle VM VirtualBox Module for Host File System Access");
 MODULE_AUTHOR("Oracle Corporation");
 MODULE_LICENSE("GPL v2");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 MODULE_ALIAS_FS("vboxsf");

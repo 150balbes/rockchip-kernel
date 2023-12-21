@@ -192,8 +192,9 @@ void hubp2_vready_at_or_After_vsync(struct hubp *hubp,
 	REG_UPDATE(DCHUBP_CNTL, HUBP_VREADY_AT_OR_AFTER_VSYNC, value);
 }
 
-static void hubp2_program_requestor(struct hubp *hubp,
-				    struct _vcs_dpi_display_rq_regs_st *rq_regs)
+void hubp2_program_requestor(
+		struct hubp *hubp,
+		struct _vcs_dpi_display_rq_regs_st *rq_regs)
 {
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
 
@@ -338,8 +339,10 @@ void hubp2_program_size(
 	 */
 	use_pitch_c = format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN
 		&& format < SURFACE_PIXEL_FORMAT_SUBSAMPLE_END;
+#if defined(CONFIG_DRM_AMD_DC_DCN3_0)
 	use_pitch_c = use_pitch_c
 		|| (format == SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA);
+#endif
 	if (use_pitch_c) {
 		ASSERT(plane_size->chroma_pitch != 0);
 		/* Chroma pitch zero can cause system hang! */
@@ -364,8 +367,10 @@ void hubp2_program_size(
 			PITCH, pitch, META_PITCH, meta_pitch);
 
 	use_pitch_c = format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN;
+#if defined(CONFIG_DRM_AMD_DC_DCN3_0)
 	use_pitch_c = use_pitch_c
 		|| (format == SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA);
+#endif
 	if (use_pitch_c)
 		REG_UPDATE_2(DCSURF_SURFACE_PITCH_C,
 			PITCH_C, pitch_c, META_PITCH_C, meta_pitch_c);
@@ -430,7 +435,6 @@ void hubp2_program_pixel_format(
 	if (format == SURFACE_PIXEL_FORMAT_GRPH_ABGR8888
 			|| format == SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010
 			|| format == SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS
-			|| format == SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616
 			|| format == SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616F) {
 		red_bar = 2;
 		blue_bar = 3;
@@ -463,9 +467,8 @@ void hubp2_program_pixel_format(
 				SURFACE_PIXEL_FORMAT, 10);
 		break;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB16161616:
-	case SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616: /*we use crossbar already*/
 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
-				SURFACE_PIXEL_FORMAT, 26); /* ARGB16161616_UNORM */
+				SURFACE_PIXEL_FORMAT, 22);
 		break;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB16161616F:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616F:/*we use crossbar already*/
@@ -513,6 +516,7 @@ void hubp2_program_pixel_format(
 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
 				SURFACE_PIXEL_FORMAT, 119);
 		break;
+#if defined(CONFIG_DRM_AMD_DC_DCN3_0)
 	case SURFACE_PIXEL_FORMAT_GRPH_RGBE:
 		REG_UPDATE_2(DCSURF_SURFACE_CONFIG,
 				SURFACE_PIXEL_FORMAT, 116,
@@ -523,6 +527,7 @@ void hubp2_program_pixel_format(
 				SURFACE_PIXEL_FORMAT, 116,
 				ALPHA_PLANE_EN, 1);
 		break;
+#endif
 	default:
 		BREAK_TO_DEBUGGER();
 		break;
@@ -617,21 +622,6 @@ void hubp2_cursor_set_attributes(
 			CURSOR0_DST_Y_OFFSET, 0,
 			 /* used to shift the cursor chunk request deadline */
 			CURSOR0_CHUNK_HDL_ADJUST, 3);
-
-	hubp->att.SURFACE_ADDR_HIGH  = attr->address.high_part;
-	hubp->att.SURFACE_ADDR       = attr->address.low_part;
-	hubp->att.size.bits.width    = attr->width;
-	hubp->att.size.bits.height   = attr->height;
-	hubp->att.cur_ctl.bits.mode  = attr->color_format;
-
-	hubp->cur_rect.w = attr->width;
-	hubp->cur_rect.h = attr->height;
-
-	hubp->att.cur_ctl.bits.pitch = hw_pitch;
-	hubp->att.cur_ctl.bits.line_per_chunk = lpc;
-	hubp->att.cur_ctl.bits.cur_2x_magnify = attr->attribute_flags.bits.ENABLE_MAGNIFICATION;
-	hubp->att.settings.bits.dst_y_offset  = 0;
-	hubp->att.settings.bits.chunk_hdl_adjust = 3;
 }
 
 void hubp2_dmdata_set_attributes(
@@ -721,6 +711,17 @@ bool hubp2_program_surface_flip_and_addr(
 	// Program VMID reg
 	REG_UPDATE(VMID_SETTINGS_0,
 			VMID, address->vmid);
+
+	if (address->type == PLN_ADDR_TYPE_GRPH_STEREO) {
+		REG_UPDATE(DCSURF_FLIP_CONTROL, SURFACE_FLIP_MODE_FOR_STEREOSYNC, 0x1);
+		REG_UPDATE(DCSURF_FLIP_CONTROL, SURFACE_FLIP_IN_STEREOSYNC, 0x1);
+
+	} else {
+		// turn off stereo if not in stereo
+		REG_UPDATE(DCSURF_FLIP_CONTROL, SURFACE_FLIP_MODE_FOR_STEREOSYNC, 0x0);
+		REG_UPDATE(DCSURF_FLIP_CONTROL, SURFACE_FLIP_IN_STEREOSYNC, 0x0);
+	}
+
 
 
 	/* HW automatically latch rest of address register on write to
@@ -933,18 +934,12 @@ bool hubp2_is_flip_pending(struct hubp *hubp)
 
 void hubp2_set_blank(struct hubp *hubp, bool blank)
 {
-	hubp2_set_blank_regs(hubp, blank);
-
-	if (blank) {
-		hubp->mpcc_id = 0xf;
-		hubp->opp_id = OPP_ID_INVALID;
-	}
-}
-
-void hubp2_set_blank_regs(struct hubp *hubp, bool blank)
-{
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
 	uint32_t blank_en = blank ? 1 : 0;
+
+	REG_UPDATE_2(DCHUBP_CNTL,
+			HUBP_BLANK_EN, blank_en,
+			HUBP_TTU_DISABLE, blank_en);
 
 	if (blank) {
 		uint32_t reg_val = REG_READ(DCHUBP_CNTL);
@@ -958,13 +953,12 @@ void hubp2_set_blank_regs(struct hubp *hubp, bool blank)
 			 */
 			REG_WAIT(DCHUBP_CNTL,
 					HUBP_NO_OUTSTANDING_REQ, 1,
-					1, 100000);
+					1, 200);
 		}
-	}
 
-	REG_UPDATE_2(DCHUBP_CNTL,
-			HUBP_BLANK_EN, blank_en,
-			HUBP_TTU_DISABLE, 0);
+		hubp->mpcc_id = 0xf;
+		hubp->opp_id = OPP_ID_INVALID;
+	}
 }
 
 void hubp2_cursor_set_position(
@@ -973,18 +967,14 @@ void hubp2_cursor_set_position(
 		const struct dc_cursor_mi_param *param)
 {
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
-	int x_pos = pos->x - param->viewport.x;
-	int y_pos = pos->y - param->viewport.y;
+	int src_x_offset = pos->x - pos->x_hotspot - param->viewport.x;
+	int src_y_offset = pos->y - pos->y_hotspot - param->viewport.y;
 	int x_hotspot = pos->x_hotspot;
 	int y_hotspot = pos->y_hotspot;
-	int src_x_offset = x_pos - pos->x_hotspot;
-	int src_y_offset = y_pos - pos->y_hotspot;
 	int cursor_height = (int)hubp->curs_attr.height;
 	int cursor_width = (int)hubp->curs_attr.width;
 	uint32_t dst_x_offset;
 	uint32_t cur_en = pos->enable ? 1 : 0;
-
-	hubp->curs_pos = *pos;
 
 	/*
 	 * Guard aganst cursor_set_position() from being called with invalid
@@ -996,26 +986,21 @@ void hubp2_cursor_set_position(
 	if (hubp->curs_attr.address.quad_part == 0)
 		return;
 
-	// Transform cursor width / height and hotspots for offset calculations
+	// Rotated cursor width/height and hotspots tweaks for offset calculation
 	if (param->rotation == ROTATION_ANGLE_90 || param->rotation == ROTATION_ANGLE_270) {
 		swap(cursor_height, cursor_width);
-		swap(x_hotspot, y_hotspot);
-
 		if (param->rotation == ROTATION_ANGLE_90) {
-			// hotspot = (-y, x)
-			src_x_offset = x_pos - (cursor_width - x_hotspot);
-			src_y_offset = y_pos - y_hotspot;
-		} else if (param->rotation == ROTATION_ANGLE_270) {
-			// hotspot = (y, -x)
-			src_x_offset = x_pos - x_hotspot;
-			src_y_offset = y_pos - (cursor_height - y_hotspot);
+			src_x_offset = pos->x - pos->y_hotspot - param->viewport.x;
+			src_y_offset = pos->y - pos->x_hotspot - param->viewport.y;
 		}
 	} else if (param->rotation == ROTATION_ANGLE_180) {
-		// hotspot = (-x, -y)
-		if (!param->mirror)
-			src_x_offset = x_pos - (cursor_width - x_hotspot);
+		src_x_offset = pos->x - param->viewport.x;
+		src_y_offset = pos->y - param->viewport.y;
+	}
 
-		src_y_offset = y_pos - (cursor_height - y_hotspot);
+	if (param->mirror) {
+		x_hotspot = param->viewport.width - x_hotspot;
+		src_x_offset = param->viewport.x + param->viewport.width - src_x_offset;
 	}
 
 	dst_x_offset = (src_x_offset >= 0) ? src_x_offset : 0;
@@ -1052,31 +1037,12 @@ void hubp2_cursor_set_position(
 			CURSOR_Y_POSITION, pos->y);
 
 	REG_SET_2(CURSOR_HOT_SPOT, 0,
-			CURSOR_HOT_SPOT_X, pos->x_hotspot,
-			CURSOR_HOT_SPOT_Y, pos->y_hotspot);
+			CURSOR_HOT_SPOT_X, x_hotspot,
+			CURSOR_HOT_SPOT_Y, y_hotspot);
 
 	REG_SET(CURSOR_DST_OFFSET, 0,
 			CURSOR_DST_X_OFFSET, dst_x_offset);
 	/* TODO Handle surface pixel formats other than 4:4:4 */
-	/* Cursor Position Register Config */
-	hubp->pos.cur_ctl.bits.cur_enable = cur_en;
-	hubp->pos.position.bits.x_pos = pos->x;
-	hubp->pos.position.bits.y_pos = pos->y;
-	hubp->pos.hot_spot.bits.x_hot = pos->x_hotspot;
-	hubp->pos.hot_spot.bits.y_hot = pos->y_hotspot;
-	hubp->pos.dst_offset.bits.dst_x_offset = dst_x_offset;
-	/* Cursor Rectangle Cache
-	 * Cursor bitmaps have different hotspot values
-	 * There's a possibility that the above logic returns a negative value,
-	 * so we clamp them to 0
-	 */
-	if (src_x_offset < 0)
-		src_x_offset = 0;
-	if (src_y_offset < 0)
-		src_y_offset = 0;
-	/* Save necessary cursor info x, y position. w, h is saved in attribute func. */
-	hubp->cur_rect.x = src_x_offset + param->viewport.x;
-	hubp->cur_rect.y = src_y_offset + param->viewport.y;
 }
 
 void hubp2_clk_cntl(struct hubp *hubp, bool enable)
@@ -1117,12 +1083,6 @@ void hubp2_read_state_common(struct hubp *hubp)
 			PRQ_EXPANSION_MODE, &rq_regs->prq_expansion_mode,
 			MRQ_EXPANSION_MODE, &rq_regs->mrq_expansion_mode,
 			CRQ_EXPANSION_MODE, &rq_regs->crq_expansion_mode);
-
-	REG_GET(DCN_VM_SYSTEM_APERTURE_HIGH_ADDR,
-			MC_VM_SYSTEM_APERTURE_HIGH_ADDR, &rq_regs->aperture_high_addr);
-
-	REG_GET(DCN_VM_SYSTEM_APERTURE_LOW_ADDR,
-			MC_VM_SYSTEM_APERTURE_LOW_ADDR, &rq_regs->aperture_low_addr);
 
 	/* DLG - Per hubp */
 	REG_GET_2(BLANK_OFFSET_0,
@@ -1280,17 +1240,6 @@ void hubp2_read_state_common(struct hubp *hubp)
 			QoS_LEVEL_LOW_WM, &s->qos_level_low_wm,
 			QoS_LEVEL_HIGH_WM, &s->qos_level_high_wm);
 
-	REG_GET(DCSURF_PRIMARY_SURFACE_ADDRESS,
-			PRIMARY_SURFACE_ADDRESS, &s->primary_surface_addr_lo);
-
-	REG_GET(DCSURF_PRIMARY_SURFACE_ADDRESS_HIGH,
-			PRIMARY_SURFACE_ADDRESS, &s->primary_surface_addr_hi);
-
-	REG_GET(DCSURF_PRIMARY_META_SURFACE_ADDRESS,
-			PRIMARY_META_SURFACE_ADDRESS, &s->primary_meta_addr_lo);
-
-	REG_GET(DCSURF_PRIMARY_META_SURFACE_ADDRESS_HIGH,
-			PRIMARY_META_SURFACE_ADDRESS, &s->primary_meta_addr_hi);
 }
 
 void hubp2_read_state(struct hubp *hubp)
@@ -1323,7 +1272,7 @@ void hubp2_read_state(struct hubp *hubp)
 
 }
 
-static void hubp2_validate_dml_output(struct hubp *hubp,
+void hubp2_validate_dml_output(struct hubp *hubp,
 		struct dc_context *ctx,
 		struct _vcs_dpi_display_rq_regs_st *dml_rq_regs,
 		struct _vcs_dpi_display_dlg_regs_st *dml_dlg_attr,
@@ -1641,7 +1590,6 @@ static struct hubp_funcs dcn20_hubp_funcs = {
 	.hubp_setup_interdependent = hubp2_setup_interdependent,
 	.hubp_set_vm_system_aperture_settings = hubp2_set_vm_system_aperture_settings,
 	.set_blank = hubp2_set_blank,
-	.set_blank_regs = hubp2_set_blank_regs,
 	.dcc_control = hubp2_dcc_control,
 	.mem_program_viewport = min_set_viewport,
 	.set_cursor_attributes	= hubp2_cursor_set_attributes,
@@ -1656,9 +1604,6 @@ static struct hubp_funcs dcn20_hubp_funcs = {
 	.hubp_set_flip_control_surface_gsl = hubp2_set_flip_control_surface_gsl,
 	.hubp_init = hubp1_init,
 	.validate_dml_output = hubp2_validate_dml_output,
-	.hubp_in_blank = hubp1_in_blank,
-	.hubp_soft_reset = hubp1_soft_reset,
-	.hubp_set_flip_int = hubp1_set_flip_int,
 };
 
 

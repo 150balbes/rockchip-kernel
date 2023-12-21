@@ -10,9 +10,6 @@ maintainers:
   - Daniel Drake <drake@endlessm.com>
   - Katsuhiro Suzuki <katsuhiro@katsuster.net>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     const: everest,es8316
@@ -28,10 +25,6 @@ properties:
     items:
       - const: mclk
 
-  port:
-    $ref: audio-graph-port.yaml#
-    unevaluatedProperties: false
-
   "#sound-dai-cells":
     const: 0
 
@@ -40,11 +33,11 @@ required:
   - reg
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
-    i2c {
+    i2c0 {
       #address-cells = <1>;
       #size-cells = <0>;
       es8316: codec@11 {

@@ -7,6 +7,7 @@
 #ifndef __RTL8712_MACSETTING_BITDEF_H__
 #define __RTL8712_MACSETTING_BITDEF_H__
 
+
 /*MACID*/
 /*BSSID*/
 
@@ -26,6 +27,8 @@
 #define _BUILDTIME_MSK			0x3FFFFFFF
 
 /*BUILDUSER*/
+
+
 
 #endif /* __RTL8712_MACSETTING_BITDEF_H__*/
 

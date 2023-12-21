@@ -155,7 +155,7 @@ static int atp867x_get_active_clocks_shifted(struct ata_port *ap,
 	case 1 ... 6:
 		break;
 	default:
-		ata_port_warn(ap, "ATP867X: active %dclk is invalid. "
+		printk(KERN_WARNING "ATP867X: active %dclk is invalid. "
 			"Using 12clk.\n", clk);
 		fallthrough;
 	case 9 ... 12:
@@ -171,8 +171,7 @@ active_clock_shift_done:
 	return clocks << ATP867X_IO_PIOSPD_ACTIVE_SHIFT;
 }
 
-static int atp867x_get_recover_clocks_shifted(struct ata_port *ap,
-					      unsigned int clk)
+static int atp867x_get_recover_clocks_shifted(unsigned int clk)
 {
 	unsigned char clocks = clk;
 
@@ -189,7 +188,7 @@ static int atp867x_get_recover_clocks_shifted(struct ata_port *ap,
 	case 15:
 		break;
 	default:
-		ata_port_warn(ap, "ATP867X: recover %dclk is invalid. "
+		printk(KERN_WARNING "ATP867X: recover %dclk is invalid. "
 			"Using default 12clk.\n", clk);
 		fallthrough;
 	case 12:	/* default 12 clk */
@@ -226,7 +225,7 @@ static void atp867x_set_piomode(struct ata_port *ap, struct ata_device *adev)
 	iowrite8(b, dp->dma_mode);
 
 	b = atp867x_get_active_clocks_shifted(ap, t.active) |
-		atp867x_get_recover_clocks_shifted(ap, t.recover);
+	    atp867x_get_recover_clocks_shifted(t.recover);
 
 	if (adev->devno & 1)
 		iowrite8(b, dp->slave_piospd);
@@ -234,7 +233,7 @@ static void atp867x_set_piomode(struct ata_port *ap, struct ata_device *adev)
 		iowrite8(b, dp->mstr_piospd);
 
 	b = atp867x_get_active_clocks_shifted(ap, t.act8b) |
-		atp867x_get_recover_clocks_shifted(ap, t.rec8b);
+	    atp867x_get_recover_clocks_shifted(t.rec8b);
 
 	iowrite8(b, dp->eightb_piospd);
 }
@@ -259,7 +258,7 @@ static int atp867x_cable_detect(struct ata_port *ap)
 	return ATA_CBL_PATA_UNK;
 }
 
-static const struct scsi_host_template atp867x_sht = {
+static struct scsi_host_template atp867x_sht = {
 	ATA_BMDMA_SHT(DRV_NAME),
 };
 
@@ -271,6 +270,7 @@ static struct ata_port_operations atp867x_ops = {
 };
 
 
+#ifdef	ATP867X_DEBUG
 static void atp867x_check_res(struct pci_dev *pdev)
 {
 	int i;
@@ -280,7 +280,7 @@ static void atp867x_check_res(struct pci_dev *pdev)
 	for (i = 0; i < DEVICE_COUNT_RESOURCE; i++) {
 		start = pci_resource_start(pdev, i);
 		len   = pci_resource_len(pdev, i);
-		dev_dbg(&pdev->dev, "ATP867X: resource start:len=%lx:%lx\n",
+		printk(KERN_DEBUG "ATP867X: resource start:len=%lx:%lx\n",
 			start, len);
 	}
 }
@@ -290,48 +290,49 @@ static void atp867x_check_ports(struct ata_port *ap, int port)
 	struct ata_ioports *ioaddr = &ap->ioaddr;
 	struct atp867x_priv *dp = ap->private_data;
 
-	ata_port_dbg(ap, "ATP867X: port[%d] addresses\n"
-		"  cmd_addr	=0x%lx, 0x%lx\n"
-		"  ctl_addr	=0x%lx, 0x%lx\n"
-		"  bmdma_addr	=0x%lx, 0x%lx\n"
-		"  data_addr	=0x%lx\n"
-		"  error_addr	=0x%lx\n"
-		"  feature_addr	=0x%lx\n"
-		"  nsect_addr	=0x%lx\n"
-		"  lbal_addr	=0x%lx\n"
-		"  lbam_addr	=0x%lx\n"
-		"  lbah_addr	=0x%lx\n"
-		"  device_addr	=0x%lx\n"
-		"  status_addr	=0x%lx\n"
-		"  command_addr	=0x%lx\n"
-		"  dp->dma_mode	=0x%lx\n"
-		"  dp->mstr_piospd	=0x%lx\n"
-		"  dp->slave_piospd	=0x%lx\n"
-		"  dp->eightb_piospd	=0x%lx\n"
+	printk(KERN_DEBUG "ATP867X: port[%d] addresses\n"
+		"  cmd_addr	=0x%llx, 0x%llx\n"
+		"  ctl_addr	=0x%llx, 0x%llx\n"
+		"  bmdma_addr	=0x%llx, 0x%llx\n"
+		"  data_addr	=0x%llx\n"
+		"  error_addr	=0x%llx\n"
+		"  feature_addr	=0x%llx\n"
+		"  nsect_addr	=0x%llx\n"
+		"  lbal_addr	=0x%llx\n"
+		"  lbam_addr	=0x%llx\n"
+		"  lbah_addr	=0x%llx\n"
+		"  device_addr	=0x%llx\n"
+		"  status_addr	=0x%llx\n"
+		"  command_addr	=0x%llx\n"
+		"  dp->dma_mode	=0x%llx\n"
+		"  dp->mstr_piospd	=0x%llx\n"
+		"  dp->slave_piospd	=0x%llx\n"
+		"  dp->eightb_piospd	=0x%llx\n"
 		"  dp->pci66mhz		=0x%lx\n",
 		port,
-		(unsigned long)ioaddr->cmd_addr,
-		(unsigned long)ATP867X_IO_PORTBASE(ap, port),
-		(unsigned long)ioaddr->ctl_addr,
-		(unsigned long)ATP867X_IO_ALTSTATUS(ap, port),
-		(unsigned long)ioaddr->bmdma_addr,
-		(unsigned long)ATP867X_IO_DMABASE(ap, port),
-		(unsigned long)ioaddr->data_addr,
-		(unsigned long)ioaddr->error_addr,
-		(unsigned long)ioaddr->feature_addr,
-		(unsigned long)ioaddr->nsect_addr,
-		(unsigned long)ioaddr->lbal_addr,
-		(unsigned long)ioaddr->lbam_addr,
-		(unsigned long)ioaddr->lbah_addr,
-		(unsigned long)ioaddr->device_addr,
-		(unsigned long)ioaddr->status_addr,
-		(unsigned long)ioaddr->command_addr,
-		(unsigned long)dp->dma_mode,
-		(unsigned long)dp->mstr_piospd,
-		(unsigned long)dp->slave_piospd,
-		(unsigned long)dp->eightb_piospd,
+		(unsigned long long)ioaddr->cmd_addr,
+		(unsigned long long)ATP867X_IO_PORTBASE(ap, port),
+		(unsigned long long)ioaddr->ctl_addr,
+		(unsigned long long)ATP867X_IO_ALTSTATUS(ap, port),
+		(unsigned long long)ioaddr->bmdma_addr,
+		(unsigned long long)ATP867X_IO_DMABASE(ap, port),
+		(unsigned long long)ioaddr->data_addr,
+		(unsigned long long)ioaddr->error_addr,
+		(unsigned long long)ioaddr->feature_addr,
+		(unsigned long long)ioaddr->nsect_addr,
+		(unsigned long long)ioaddr->lbal_addr,
+		(unsigned long long)ioaddr->lbam_addr,
+		(unsigned long long)ioaddr->lbah_addr,
+		(unsigned long long)ioaddr->device_addr,
+		(unsigned long long)ioaddr->status_addr,
+		(unsigned long long)ioaddr->command_addr,
+		(unsigned long long)dp->dma_mode,
+		(unsigned long long)dp->mstr_piospd,
+		(unsigned long long)dp->slave_piospd,
+		(unsigned long long)dp->eightb_piospd,
 		(unsigned long)dp->pci66mhz);
 }
+#endif
 
 static int atp867x_set_priv(struct ata_port *ap)
 {
@@ -369,7 +370,8 @@ static void atp867x_fixup(struct ata_host *host)
 	if (v < 0x80) {
 		v = 0x80;
 		pci_write_config_byte(pdev, PCI_LATENCY_TIMER, v);
-		dev_dbg(&pdev->dev, "ATP867X: set latency timer to %d\n", v);
+		printk(KERN_DEBUG "ATP867X: set latency timer of device %s"
+			" to %d\n", pci_name(pdev), v);
 	}
 
 	/*
@@ -417,11 +419,13 @@ static int atp867x_ata_pci_sff_init_host(struct ata_host *host)
 		return rc;
 	host->iomap = pcim_iomap_table(pdev);
 
+#ifdef	ATP867X_DEBUG
 	atp867x_check_res(pdev);
 
 	for (i = 0; i < PCI_STD_NUM_BARS; i++)
-		dev_dbg(gdev, "ATP867X: iomap[%d]=0x%p\n", i,
-			host->iomap[i]);
+		printk(KERN_DEBUG "ATP867X: iomap[%d]=0x%llx\n", i,
+			(unsigned long long)(host->iomap[i]));
+#endif
 
 	/*
 	 * request, iomap BARs and init port addresses accordingly
@@ -440,8 +444,9 @@ static int atp867x_ata_pci_sff_init_host(struct ata_host *host)
 		if (rc)
 			return rc;
 
+#ifdef	ATP867X_DEBUG
 		atp867x_check_ports(ap, i);
-
+#endif
 		ata_port_desc(ap, "cmd 0x%lx ctl 0x%lx",
 			(unsigned long)ioaddr->cmd_addr,
 			(unsigned long)ioaddr->ctl_addr);
@@ -481,7 +486,7 @@ static int atp867x_init_one(struct pci_dev *pdev,
 	if (rc)
 		return rc;
 
-	dev_info(&pdev->dev, "ATP867X: ATP867 ATA UDMA133 controller (rev %02X)",
+	printk(KERN_INFO "ATP867X: ATP867 ATA UDMA133 controller (rev %02X)",
 		pdev->device);
 
 	host = ata_host_alloc_pinfo(&pdev->dev, ppi, ATP867X_NUM_PORTS);

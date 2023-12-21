@@ -23,7 +23,6 @@
 #include <linux/init.h>
 #include <linux/completion.h>
 #include <linux/kdebug.h>
-#include <linux/kstrtox.h>
 #include <linux/rwsem.h>
 #include <linux/errno.h>
 #include <linux/uaccess.h>
@@ -213,7 +212,8 @@ static int set_param_str(const char *val, const struct kernel_param *kp)
 	char       valcp[16];
 	char       *s;
 
-	strscpy(valcp, val, 16);
+	strncpy(valcp, val, 15);
+	valcp[15] = '\0';
 
 	s = strstrip(valcp);
 
@@ -354,8 +354,12 @@ static void msg_free_recv(struct ipmi_recv_msg *msg)
 			complete(&msg_wait);
 	}
 }
-static struct ipmi_smi_msg smi_msg = INIT_IPMI_SMI_MSG(msg_free_smi);
-static struct ipmi_recv_msg recv_msg = INIT_IPMI_RECV_MSG(msg_free_recv);
+static struct ipmi_smi_msg smi_msg = {
+	.done = msg_free_smi
+};
+static struct ipmi_recv_msg recv_msg = {
+	.done = msg_free_recv
+};
 
 static int __ipmi_set_timeout(struct ipmi_smi_msg  *smi_msg,
 			      struct ipmi_recv_msg *recv_msg,
@@ -471,10 +475,12 @@ static void panic_recv_free(struct ipmi_recv_msg *msg)
 	atomic_dec(&panic_done_count);
 }
 
-static struct ipmi_smi_msg panic_halt_heartbeat_smi_msg =
-	INIT_IPMI_SMI_MSG(panic_smi_free);
-static struct ipmi_recv_msg panic_halt_heartbeat_recv_msg =
-	INIT_IPMI_RECV_MSG(panic_recv_free);
+static struct ipmi_smi_msg panic_halt_heartbeat_smi_msg = {
+	.done = panic_smi_free
+};
+static struct ipmi_recv_msg panic_halt_heartbeat_recv_msg = {
+	.done = panic_recv_free
+};
 
 static void panic_halt_ipmi_heartbeat(void)
 {
@@ -497,7 +503,7 @@ static void panic_halt_ipmi_heartbeat(void)
 	msg.cmd = IPMI_WDOG_RESET_TIMER;
 	msg.data = NULL;
 	msg.data_len = 0;
-	atomic_add(2, &panic_done_count);
+	atomic_add(1, &panic_done_count);
 	rv = ipmi_request_supply_msgs(watchdog_user,
 				      (struct ipmi_addr *) &addr,
 				      0,
@@ -507,13 +513,15 @@ static void panic_halt_ipmi_heartbeat(void)
 				      &panic_halt_heartbeat_recv_msg,
 				      1);
 	if (rv)
-		atomic_sub(2, &panic_done_count);
+		atomic_sub(1, &panic_done_count);
 }
 
-static struct ipmi_smi_msg panic_halt_smi_msg =
-	INIT_IPMI_SMI_MSG(panic_smi_free);
-static struct ipmi_recv_msg panic_halt_recv_msg =
-	INIT_IPMI_RECV_MSG(panic_recv_free);
+static struct ipmi_smi_msg panic_halt_smi_msg = {
+	.done = panic_smi_free
+};
+static struct ipmi_recv_msg panic_halt_recv_msg = {
+	.done = panic_recv_free
+};
 
 /*
  * Special call, doesn't claim any locks.  This is only to be called
@@ -529,12 +537,12 @@ static void panic_halt_ipmi_set_timeout(void)
 	/* Wait for the messages to be free. */
 	while (atomic_read(&panic_done_count) != 0)
 		ipmi_poll_interface(watchdog_user);
-	atomic_add(2, &panic_done_count);
+	atomic_add(1, &panic_done_count);
 	rv = __ipmi_set_timeout(&panic_halt_smi_msg,
 				&panic_halt_recv_msg,
 				&send_heartbeat_now);
 	if (rv) {
-		atomic_sub(2, &panic_done_count);
+		atomic_sub(1, &panic_done_count);
 		pr_warn("Unable to extend the watchdog timeout\n");
 	} else {
 		if (send_heartbeat_now)
@@ -660,7 +668,7 @@ static int ipmi_heartbeat(void)
 	return rv;
 }
 
-static const struct watchdog_info ident = {
+static struct watchdog_info ident = {
 	.options	= 0,	/* WDIOF_SETTIMEOUT, */
 	.firmware_version = 1,
 	.identity	= "IPMI"

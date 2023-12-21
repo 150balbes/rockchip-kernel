@@ -1,4 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/clk.h>
 #include <linux/clkdev.h>
@@ -798,7 +807,7 @@ static int ti_adpll_init_registers(struct ti_adpll_data *d)
 
 static int ti_adpll_init_inputs(struct ti_adpll_data *d)
 {
-	static const char error[] = "need at least %i inputs";
+	const char *error = "need at least %i inputs";
 	struct clk *clock;
 	int nr_inputs;
 
@@ -887,8 +896,11 @@ static int ti_adpll_probe(struct platform_device *pdev)
 	d->pa = res->start;
 
 	d->iobase = devm_ioremap_resource(dev, res);
-	if (IS_ERR(d->iobase))
+	if (IS_ERR(d->iobase)) {
+		dev_err(dev, "could not get IO base: %li\n",
+			PTR_ERR(d->iobase));
 		return PTR_ERR(d->iobase);
+	}
 
 	err = ti_adpll_init_registers(d);
 	if (err)
@@ -931,11 +943,13 @@ free:
 	return err;
 }
 
-static void ti_adpll_remove(struct platform_device *pdev)
+static int ti_adpll_remove(struct platform_device *pdev)
 {
 	struct ti_adpll_data *d = dev_get_drvdata(&pdev->dev);
 
 	ti_adpll_free_resources(d);
+
+	return 0;
 }
 
 static struct platform_driver ti_adpll_driver = {
@@ -944,7 +958,7 @@ static struct platform_driver ti_adpll_driver = {
 		.of_match_table = ti_adpll_match,
 	},
 	.probe = ti_adpll_probe,
-	.remove_new = ti_adpll_remove,
+	.remove = ti_adpll_remove,
 };
 
 static int __init ti_adpll_init(void)

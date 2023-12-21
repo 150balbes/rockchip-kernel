@@ -21,7 +21,6 @@
 #include <linux/regmap.h>
 #include <linux/time.h>
 #include <linux/workqueue.h>
-#include <linux/devm-helpers.h>
 
 #define CW2015_SIZE_BATINFO		64
 
@@ -62,7 +61,7 @@ struct cw_battery {
 	struct delayed_work battery_delay_work;
 	struct regmap *regmap;
 	struct power_supply *rk_bat;
-	struct power_supply_battery_info *battery;
+	struct power_supply_battery_info battery;
 	u8 *bat_profile;
 
 	bool charger_attached;
@@ -76,6 +75,8 @@ struct cw_battery {
 
 	u32 poll_interval_ms;
 	u8 alert_level;
+
+	bool dual_cell;
 
 	unsigned int read_errors;
 	unsigned int charge_stuck_cnt;
@@ -324,6 +325,8 @@ static int cw_get_voltage(struct cw_battery *cw_bat)
 	 * Negligible error of 0.1%
 	 */
 	voltage_mv = avg * 312 / 1024;
+	if (cw_bat->dual_cell)
+		voltage_mv *= 2;
 
 	dev_dbg(cw_bat->dev, "Read voltage: %d mV, raw=0x%04x\n",
 		voltage_mv, reg_val);
@@ -408,13 +411,12 @@ static void cw_update_time_to_empty(struct cw_battery *cw_bat)
 	int time_to_empty;
 
 	time_to_empty = cw_get_time_to_empty(cw_bat);
-	if (time_to_empty < 0)
+	if (time_to_empty < 0) {
 		dev_err(cw_bat->dev, "Failed to get time to empty from gauge: %d\n",
 			time_to_empty);
-	else if (cw_bat->time_to_empty != time_to_empty) {
-		cw_bat->time_to_empty = time_to_empty;
-		cw_bat->battery_changed = true;
+		return;
 	}
+	cw_bat->time_to_empty = time_to_empty;
 }
 
 static void cw_bat_work(struct work_struct *work)
@@ -465,6 +467,20 @@ static bool cw_battery_valid_time_to_empty(struct cw_battery *cw_bat)
 		cw_bat->status == POWER_SUPPLY_STATUS_DISCHARGING;
 }
 
+static int cw_get_capacity_leve(struct cw_battery *cw_bat)
+{
+	if (cw_bat->soc < 1)
+		return POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
+	else if (cw_bat->soc <= 20)
+		return POWER_SUPPLY_CAPACITY_LEVEL_LOW;
+	else if (cw_bat->soc <= 70)
+		return POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+	else if (cw_bat->soc <= 90)
+		return POWER_SUPPLY_CAPACITY_LEVEL_HIGH;
+	else
+		return POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+}
+
 static int cw_battery_get_property(struct power_supply *psy,
 				   enum power_supply_property psp,
 				   union power_supply_propval *val)
@@ -475,6 +491,10 @@ static int cw_battery_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CAPACITY:
 		val->intval = cw_bat->soc;
+		break;
+
+	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
+		val->intval = cw_get_capacity_leve(cw_bat);
 		break;
 
 	case POWER_SUPPLY_PROP_STATUS:
@@ -506,22 +526,17 @@ static int cw_battery_get_property(struct power_supply *psy,
 
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		if (cw_bat->battery->charge_full_design_uah > 0)
-			val->intval = cw_bat->battery->charge_full_design_uah;
+		if (cw_bat->battery.charge_full_design_uah > 0)
+			val->intval = cw_bat->battery.charge_full_design_uah;
 		else
 			val->intval = 0;
 		break;
 
-	case POWER_SUPPLY_PROP_CHARGE_NOW:
-		val->intval = cw_bat->battery->charge_full_design_uah;
-		val->intval = val->intval * cw_bat->soc / 100;
-		break;
-
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		if (cw_battery_valid_time_to_empty(cw_bat) &&
-		    cw_bat->battery->charge_full_design_uah > 0) {
+		    cw_bat->battery.charge_full_design_uah > 0) {
 			/* calculate remaining capacity */
-			val->intval = cw_bat->battery->charge_full_design_uah;
+			val->intval = cw_bat->battery.charge_full_design_uah;
 			val->intval = val->intval * cw_bat->soc / 100;
 
 			/* estimate current based on time to empty */
@@ -540,6 +555,7 @@ static int cw_battery_get_property(struct power_supply *psy,
 
 static enum power_supply_property cw_battery_properties[] = {
 	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
@@ -548,7 +564,6 @@ static enum power_supply_property cw_battery_properties[] = {
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
-	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 };
 
@@ -586,6 +601,8 @@ static int cw2015_parse_properties(struct cw_battery *cw_bat)
 		if (ret)
 			return ret;
 	}
+
+	cw_bat->dual_cell = device_property_read_bool(dev, "cellwise,dual-cell");
 
 	ret = device_property_read_u32(dev, "cellwise,monitor-interval-ms",
 				       &cw_bat->poll_interval_ms);
@@ -688,22 +705,12 @@ static int cw_bat_probe(struct i2c_client *client)
 
 	ret = power_supply_get_battery_info(cw_bat->rk_bat, &cw_bat->battery);
 	if (ret) {
-		/* Allocate an empty battery */
-		cw_bat->battery = devm_kzalloc(&client->dev,
-					       sizeof(*cw_bat->battery),
-					       GFP_KERNEL);
-		if (!cw_bat->battery)
-			return -ENOMEM;
 		dev_warn(cw_bat->dev,
 			 "No monitored battery, some properties will be missing\n");
 	}
 
 	cw_bat->battery_workqueue = create_singlethread_workqueue("rk_battery");
-	if (!cw_bat->battery_workqueue)
-		return -ENOMEM;
-
-	devm_delayed_work_autocancel(&client->dev,
-							  &cw_bat->battery_delay_work, cw_bat_work);
+	INIT_DELAYED_WORK(&cw_bat->battery_delay_work, cw_bat_work);
 	queue_delayed_work(cw_bat->battery_workqueue,
 			   &cw_bat->battery_delay_work, msecs_to_jiffies(10));
 	return 0;
@@ -730,6 +737,15 @@ static int __maybe_unused cw_bat_resume(struct device *dev)
 
 static SIMPLE_DEV_PM_OPS(cw_bat_pm_ops, cw_bat_suspend, cw_bat_resume);
 
+static int cw_bat_remove(struct i2c_client *client)
+{
+	struct cw_battery *cw_bat = i2c_get_clientdata(client);
+
+	cancel_delayed_work_sync(&cw_bat->battery_delay_work);
+	power_supply_put_battery_info(cw_bat->rk_bat, &cw_bat->battery);
+	return 0;
+}
+
 static const struct i2c_device_id cw_bat_id_table[] = {
 	{ "cw2015", 0 },
 	{ }
@@ -747,7 +763,8 @@ static struct i2c_driver cw_bat_driver = {
 		.of_match_table = cw2015_of_match,
 		.pm = &cw_bat_pm_ops,
 	},
-	.probe = cw_bat_probe,
+	.probe_new = cw_bat_probe,
+	.remove = cw_bat_remove,
 	.id_table = cw_bat_id_table,
 };
 

@@ -73,12 +73,12 @@ CPUFREQ_POSTCHANGE.
 The third argument is a struct cpufreq_freqs with the following
 values:
 
-======	======================================
-policy	a pointer to the struct cpufreq_policy
+=====	===========================
+cpu	number of the affected CPU
 old	old frequency
 new	new frequency
 flags	flags of the cpufreq driver
-======	======================================
+=====	===========================
 
 3. CPUFreq Table Generation with Operating Performance Point (OPP)
 ==================================================================

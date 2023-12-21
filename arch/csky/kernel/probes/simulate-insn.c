@@ -274,9 +274,9 @@ void __kprobes
 simulate_bnezad32(u32 opcode, long addr, struct pt_regs *regs)
 {
 	unsigned long tmp = opcode & 0x1f;
-	long val;
+	unsigned long val;
 
-	csky_insn_reg_get_val(regs, tmp, (unsigned long *)&val);
+	csky_insn_reg_get_val(regs, tmp, &val);
 
 	val -= 1;
 
@@ -286,7 +286,7 @@ simulate_bnezad32(u32 opcode, long addr, struct pt_regs *regs)
 	} else
 		instruction_pointer_set(regs, addr + 4);
 
-	csky_insn_reg_set_val(regs, tmp, (unsigned long)val);
+	csky_insn_reg_set_val(regs, tmp, val);
 }
 
 void __kprobes
@@ -297,11 +297,13 @@ simulate_bhsz32(u32 opcode, long addr, struct pt_regs *regs)
 
 	csky_insn_reg_get_val(regs, tmp, &val);
 
-	if ((long) val >= 0) {
+	if (val >= 0) {
 		instruction_pointer_set(regs,
 			addr + sign_extend32((opcode & 0xffff0000) >> 15, 15));
 	} else
 		instruction_pointer_set(regs, addr + 4);
+
+	csky_insn_reg_set_val(regs, tmp, val);
 }
 
 void __kprobes
@@ -312,11 +314,13 @@ simulate_bhz32(u32 opcode, long addr, struct pt_regs *regs)
 
 	csky_insn_reg_get_val(regs, tmp, &val);
 
-	if ((long) val > 0) {
+	if (val > 0) {
 		instruction_pointer_set(regs,
 			addr + sign_extend32((opcode & 0xffff0000) >> 15, 15));
 	} else
 		instruction_pointer_set(regs, addr + 4);
+
+	csky_insn_reg_set_val(regs, tmp, val);
 }
 
 void __kprobes
@@ -327,11 +331,13 @@ simulate_blsz32(u32 opcode, long addr, struct pt_regs *regs)
 
 	csky_insn_reg_get_val(regs, tmp, &val);
 
-	if ((long) val <= 0) {
+	if (val <= 0) {
 		instruction_pointer_set(regs,
 			addr + sign_extend32((opcode & 0xffff0000) >> 15, 15));
 	} else
 		instruction_pointer_set(regs, addr + 4);
+
+	csky_insn_reg_set_val(regs, tmp, val);
 }
 
 void __kprobes
@@ -342,11 +348,13 @@ simulate_blz32(u32 opcode, long addr, struct pt_regs *regs)
 
 	csky_insn_reg_get_val(regs, tmp, &val);
 
-	if ((long) val < 0) {
+	if (val < 0) {
 		instruction_pointer_set(regs,
 			addr + sign_extend32((opcode & 0xffff0000) >> 15, 15));
 	} else
 		instruction_pointer_set(regs, addr + 4);
+
+	csky_insn_reg_set_val(regs, tmp, val);
 }
 
 void __kprobes

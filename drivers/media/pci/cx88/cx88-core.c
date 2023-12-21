@@ -152,8 +152,7 @@ int cx88_risc_buffer(struct pci_dev *pci, struct cx88_riscmem *risc,
 	instructions += 4;
 	risc->size = instructions * 8;
 	risc->dma = 0;
-	risc->cpu = dma_alloc_coherent(&pci->dev, risc->size, &risc->dma,
-				       GFP_KERNEL);
+	risc->cpu = pci_zalloc_consistent(pci, risc->size, &risc->dma);
 	if (!risc->cpu)
 		return -ENOMEM;
 
@@ -191,8 +190,7 @@ int cx88_risc_databuffer(struct pci_dev *pci, struct cx88_riscmem *risc,
 	instructions += 3;
 	risc->size = instructions * 8;
 	risc->dma = 0;
-	risc->cpu = dma_alloc_coherent(&pci->dev, risc->size, &risc->dma,
-				       GFP_KERNEL);
+	risc->cpu = pci_zalloc_consistent(pci, risc->size, &risc->dma);
 	if (!risc->cpu)
 		return -ENOMEM;
 
@@ -618,24 +616,12 @@ EXPORT_SYMBOL(cx88_reset);
 
 static inline unsigned int norm_swidth(v4l2_std_id norm)
 {
-	if (norm & (V4L2_STD_NTSC | V4L2_STD_PAL_M))
-		return 754;
-
-	if (norm & V4L2_STD_PAL_Nc)
-		return 745;
-
-	return 922;
+	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 754 : 922;
 }
 
 static inline unsigned int norm_hdelay(v4l2_std_id norm)
 {
-	if (norm & (V4L2_STD_NTSC | V4L2_STD_PAL_M))
-		return 135;
-
-	if (norm & V4L2_STD_PAL_Nc)
-		return 149;
-
-	return 186;
+	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 135 : 186;
 }
 
 static inline unsigned int norm_vdelay(v4l2_std_id norm)
@@ -648,7 +634,7 @@ static inline unsigned int norm_fsc8(v4l2_std_id norm)
 	if (norm & V4L2_STD_PAL_M)
 		return 28604892;      // 3.575611 MHz
 
-	if (norm & V4L2_STD_PAL_Nc)
+	if (norm & (V4L2_STD_PAL_Nc))
 		return 28656448;      // 3.582056 MHz
 
 	if (norm & V4L2_STD_NTSC) // All NTSC/M and variants
@@ -853,8 +839,8 @@ static int set_tvaudio(struct cx88_core *core)
 	} else if (V4L2_STD_SECAM_DK & norm) {
 		core->tvaudio = WW_DK;
 
-	} else if ((V4L2_STD_NTSC_M | V4L2_STD_PAL_M | V4L2_STD_PAL_Nc) &
-		   norm) {
+	} else if ((V4L2_STD_NTSC_M & norm) ||
+		   (V4L2_STD_PAL_M  & norm)) {
 		core->tvaudio = WW_BTSC;
 
 	} else if (V4L2_STD_NTSC_M_JP & norm) {

@@ -11,7 +11,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/delay.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
+#include <linux/of_device.h>
 #include <linux/regulator/consumer.h>
 
 #define FEIYANG_INIT_CMD_LEN	2
@@ -200,19 +200,22 @@ static int feiyang_dsi_probe(struct mipi_dsi_device *dsi)
 		       DRM_MODE_CONNECTOR_DSI);
 
 	ctx->dvdd = devm_regulator_get(&dsi->dev, "dvdd");
-	if (IS_ERR(ctx->dvdd))
-		return dev_err_probe(&dsi->dev, PTR_ERR(ctx->dvdd),
-				     "Couldn't get dvdd regulator\n");
+	if (IS_ERR(ctx->dvdd)) {
+		dev_err(&dsi->dev, "Couldn't get dvdd regulator\n");
+		return PTR_ERR(ctx->dvdd);
+	}
 
 	ctx->avdd = devm_regulator_get(&dsi->dev, "avdd");
-	if (IS_ERR(ctx->avdd))
-		return dev_err_probe(&dsi->dev, PTR_ERR(ctx->avdd),
-				     "Couldn't get avdd regulator\n");
+	if (IS_ERR(ctx->avdd)) {
+		dev_err(&dsi->dev, "Couldn't get avdd regulator\n");
+		return PTR_ERR(ctx->avdd);
+	}
 
-	ctx->reset = devm_gpiod_get_optional(&dsi->dev, "reset", GPIOD_OUT_LOW);
-	if (IS_ERR(ctx->reset))
-		return dev_err_probe(&dsi->dev, PTR_ERR(ctx->reset),
-				     "Couldn't get our reset GPIO\n");
+	ctx->reset = devm_gpiod_get(&dsi->dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(ctx->reset)) {
+		dev_err(&dsi->dev, "Couldn't get our reset GPIO\n");
+		return PTR_ERR(ctx->reset);
+	}
 
 	ret = drm_panel_of_backlight(&ctx->panel);
 	if (ret)
@@ -224,21 +227,17 @@ static int feiyang_dsi_probe(struct mipi_dsi_device *dsi)
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->lanes = 4;
 
-	ret = mipi_dsi_attach(dsi);
-	if (ret < 0) {
-		drm_panel_remove(&ctx->panel);
-		return ret;
-	}
-
-	return 0;
+	return mipi_dsi_attach(dsi);
 }
 
-static void feiyang_dsi_remove(struct mipi_dsi_device *dsi)
+static int feiyang_dsi_remove(struct mipi_dsi_device *dsi)
 {
 	struct feiyang *ctx = mipi_dsi_get_drvdata(dsi);
 
 	mipi_dsi_detach(dsi);
 	drm_panel_remove(&ctx->panel);
+
+	return 0;
 }
 
 static const struct of_device_id feiyang_of_match[] = {

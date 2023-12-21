@@ -72,16 +72,13 @@ static void __clk_hfpll_enable(struct clk_hw *hw)
 	regmap_update_bits(regmap, hd->mode_reg, PLL_RESET_N, PLL_RESET_N);
 
 	/* Wait for PLL to lock. */
-	if (hd->status_reg)
-		/*
-		 * Busy wait. Should never timeout, we add a timeout to
-		 * prevent any sort of stall.
-		 */
-		regmap_read_poll_timeout(regmap, hd->status_reg, val,
-					 !(val & BIT(hd->lock_bit)), 0,
-					 100 * USEC_PER_MSEC);
-	else
+	if (hd->status_reg) {
+		do {
+			regmap_read(regmap, hd->status_reg, &val);
+		} while (!(val & BIT(hd->lock_bit)));
+	} else {
 		udelay(60);
+	}
 
 	/* Enable PLL output. */
 	regmap_update_bits(regmap, hd->mode_reg, PLL_OUTCTRL, PLL_OUTCTRL);
@@ -128,20 +125,20 @@ static void clk_hfpll_disable(struct clk_hw *hw)
 	spin_unlock_irqrestore(&h->lock, flags);
 }
 
-static int clk_hfpll_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
+static long clk_hfpll_round_rate(struct clk_hw *hw, unsigned long rate,
+				 unsigned long *parent_rate)
 {
 	struct clk_hfpll *h = to_clk_hfpll(hw);
 	struct hfpll_data const *hd = h->d;
 	unsigned long rrate;
 
-	req->rate = clamp(req->rate, hd->min_rate, hd->max_rate);
+	rate = clamp(rate, hd->min_rate, hd->max_rate);
 
-	rrate = DIV_ROUND_UP(req->rate, req->best_parent_rate) * req->best_parent_rate;
+	rrate = DIV_ROUND_UP(rate, *parent_rate) * *parent_rate;
 	if (rrate > hd->max_rate)
-		rrate -= req->best_parent_rate;
+		rrate -= *parent_rate;
 
-	req->rate = rrate;
-	return 0;
+	return rrate;
 }
 
 /*
@@ -241,7 +238,7 @@ const struct clk_ops clk_ops_hfpll = {
 	.enable = clk_hfpll_enable,
 	.disable = clk_hfpll_disable,
 	.is_enabled = hfpll_is_enabled,
-	.determine_rate = clk_hfpll_determine_rate,
+	.round_rate = clk_hfpll_round_rate,
 	.set_rate = clk_hfpll_set_rate,
 	.recalc_rate = clk_hfpll_recalc_rate,
 	.init = clk_hfpll_init,

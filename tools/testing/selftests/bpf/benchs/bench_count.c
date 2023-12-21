@@ -18,6 +18,11 @@ static void *count_global_producer(void *input)
 	return NULL;
 }
 
+static void *count_global_consumer(void *input)
+{
+	return NULL;
+}
+
 static void count_global_measure(struct bench_res *res)
 {
 	struct count_global_ctx *ctx = &count_global_ctx;
@@ -31,11 +36,11 @@ static struct count_local_ctx {
 	struct counter *hits;
 } count_local_ctx;
 
-static void count_local_setup(void)
+static void count_local_setup()
 {
 	struct count_local_ctx *ctx = &count_local_ctx;
 
-	ctx->hits = calloc(env.producer_cnt, sizeof(*ctx->hits));
+	ctx->hits = calloc(env.consumer_cnt, sizeof(*ctx->hits));
 	if (!ctx->hits)
 		exit(1);
 }
@@ -48,6 +53,11 @@ static void *count_local_producer(void *input)
 	while (true) {
 		atomic_inc(&ctx->hits[idx].value);
 	}
+	return NULL;
+}
+
+static void *count_local_consumer(void *input)
+{
 	return NULL;
 }
 
@@ -64,6 +74,7 @@ static void count_local_measure(struct bench_res *res)
 const struct bench bench_count_global = {
 	.name = "count-global",
 	.producer_thread = count_global_producer,
+	.consumer_thread = count_global_consumer,
 	.measure = count_global_measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
@@ -73,6 +84,7 @@ const struct bench bench_count_local = {
 	.name = "count-local",
 	.setup = count_local_setup,
 	.producer_thread = count_local_producer,
+	.consumer_thread = count_local_consumer,
 	.measure = count_local_measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,

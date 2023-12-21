@@ -7,8 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Freescale INTMUX interrupt multiplexer
 
 maintainers:
-  - Shawn Guo <shawnguo@kernel.org>
-  - NXP Linux Team <linux-imx@nxp.com>
+  - Joakim Zhang <qiangqing.zhang@nxp.com>
 
 properties:
   compatible:
@@ -32,7 +31,7 @@ properties:
       The 1st cell is hw interrupt number, the 2nd cell is channel index.
 
   clocks:
-    maxItems: 1
+    description: ipg clock.
 
   clock-names:
     const: ipg

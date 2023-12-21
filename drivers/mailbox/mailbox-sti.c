@@ -36,7 +36,12 @@
 #define MBOX_BASE(mdev, inst)   ((mdev)->base + ((inst) * 4))
 
 /**
- * struct sti_mbox_device - STi Mailbox device data
+ * STi Mailbox device data
+ *
+ * An IP Mailbox is currently composed of 4 instances
+ * Each instance is currently composed of 32 channels
+ * This means that we have 128 channels per Mailbox
+ * A channel an be used for TX or RX
  *
  * @dev:	Device to which it is attached
  * @mbox:	Representation of a communication channel controller
@@ -44,11 +49,6 @@
  * @name:	Name of the mailbox
  * @enabled:	Local copy of enabled channels
  * @lock:	Mutex protecting enabled status
- *
- * An IP Mailbox is currently composed of 4 instances
- * Each instance is currently composed of 32 channels
- * This means that we have 128 channels per Mailbox
- * A channel an be used for TX or RX
  */
 struct sti_mbox_device {
 	struct device		*dev;
@@ -60,7 +60,7 @@ struct sti_mbox_device {
 };
 
 /**
- * struct sti_mbox_pdata - STi Mailbox platform specific configuration
+ * STi Mailbox platform specific configuration
  *
  * @num_inst:	Maximum number of instances in one HW Mailbox
  * @num_chan:	Maximum number of channel per instance
@@ -71,7 +71,7 @@ struct sti_mbox_pdata {
 };
 
 /**
- * struct sti_channel - STi Mailbox allocated channel information
+ * STi Mailbox allocated channel information
  *
  * @mdev:	Pointer to parent Mailbox device
  * @instance:	Instance number channel resides in
@@ -408,6 +408,7 @@ static int sti_mbox_probe(struct platform_device *pdev)
 	struct sti_mbox_device *mdev;
 	struct device_node *np = pdev->dev.of_node;
 	struct mbox_chan *chans;
+	struct resource *res;
 	int irq;
 	int ret;
 
@@ -424,7 +425,8 @@ static int sti_mbox_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mdev);
 
-	mdev->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mdev->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mdev->base))
 		return PTR_ERR(mdev->base);
 

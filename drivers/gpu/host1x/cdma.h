@@ -11,7 +11,6 @@
 #include <linux/sched.h>
 #include <linux/completion.h>
 #include <linux/list.h>
-#include <linux/workqueue.h>
 
 struct host1x_syncpt;
 struct host1x_userctx_timeout;
@@ -70,7 +69,6 @@ struct host1x_cdma {
 	struct buffer_timeout timeout;	/* channel's timeout state/wq */
 	bool running;
 	bool torndown;
-	struct work_struct update_work;
 };
 
 #define cdma_to_channel(cdma) container_of(cdma, struct host1x_channel, cdma)

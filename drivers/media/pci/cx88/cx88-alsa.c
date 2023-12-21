@@ -98,6 +98,7 @@ MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@kernel.org>");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION(CX88_VERSION);
 
+MODULE_SUPPORTED_DEVICE("{{Conexant,23881},{{Conexant,23882},{{Conexant,23883}");
 static unsigned int debug;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "enable debug messages");
@@ -357,8 +358,8 @@ static int dsp_buffer_free(struct cx88_audio_dev *chip)
 	cx88_alsa_dma_unmap(chip);
 	cx88_alsa_dma_free(chip->buf);
 	if (risc->cpu)
-		dma_free_coherent(&chip->pci->dev, risc->size, risc->cpu,
-				  risc->dma);
+		pci_free_consistent(chip->pci, risc->size,
+				    risc->cpu, risc->dma);
 	kfree(chip->buf);
 
 	chip->buf = NULL;
@@ -868,7 +869,7 @@ static int snd_cx88_create(struct snd_card *card, struct pci_dev *pci,
 		return err;
 	}
 
-	err = dma_set_mask(&pci->dev, DMA_BIT_MASK(32));
+	err = pci_set_dma_mask(pci, DMA_BIT_MASK(32));
 	if (err) {
 		dprintk(0, "%s/1: Oops: no 32bit PCI DMA ???\n", core->name);
 		cx88_core_put(core, pci);

@@ -15,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
+#include <asm/prom.h>
 #include <asm/rtas.h>
 #include <asm/firmware.h>
 #include <asm/machdep.h>
@@ -138,7 +139,7 @@ int dlpar_hp_pmem(struct pseries_hp_errorlog *hp_elog)
 	return rc;
 }
 
-static const struct of_device_id drc_pmem_match[] = {
+const struct of_device_id drc_pmem_match[] = {
 	{ .type = "ibm,persistent-memory", },
 	{}
 };

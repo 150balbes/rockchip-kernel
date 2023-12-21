@@ -10,7 +10,6 @@
 #include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/err.h>
-#include <linux/of.h>
 #include <linux/init.h>
 #include <linux/limits.h>
 #include <linux/slab.h>
@@ -74,24 +73,6 @@ static void opp_debug_create_bw(struct dev_pm_opp *opp,
 	}
 }
 
-static void opp_debug_create_clks(struct dev_pm_opp *opp,
-				  struct opp_table *opp_table,
-				  struct dentry *pdentry)
-{
-	char name[12];
-	int i;
-
-	if (opp_table->clk_count == 1) {
-		debugfs_create_ulong("rate_hz", S_IRUGO, pdentry, &opp->rates[0]);
-		return;
-	}
-
-	for (i = 0; i < opp_table->clk_count; i++) {
-		snprintf(name, sizeof(name), "rate_hz_%d", i);
-		debugfs_create_ulong(name, S_IRUGO, pdentry, &opp->rates[i]);
-	}
-}
-
 static void opp_debug_create_supplies(struct dev_pm_opp *opp,
 				      struct opp_table *opp_table,
 				      struct dentry *pdentry)
@@ -118,9 +99,6 @@ static void opp_debug_create_supplies(struct dev_pm_opp *opp,
 
 		debugfs_create_ulong("u_amp", S_IRUGO, d,
 				     &opp->supplies[i].u_amp);
-
-		debugfs_create_ulong("u_watt", S_IRUGO, d,
-				     &opp->supplies[i].u_watt);
 	}
 }
 
@@ -135,11 +113,10 @@ void opp_debug_create_one(struct dev_pm_opp *opp, struct opp_table *opp_table)
 	 * Get directory name for OPP.
 	 *
 	 * - Normally rate is unique to each OPP, use it to get unique opp-name.
-	 * - For some devices rate isn't available or there are multiple, use
-	 *   index instead for them.
+	 * - For some devices rate isn't available, use index instead.
 	 */
-	if (likely(opp_table->clk_count == 1 && opp->rates[0]))
-		id = opp->rates[0];
+	if (likely(opp->rate))
+		id = opp->rate;
 	else
 		id = _get_opp_count(opp_table);
 
@@ -152,14 +129,11 @@ void opp_debug_create_one(struct dev_pm_opp *opp, struct opp_table *opp_table)
 	debugfs_create_bool("dynamic", S_IRUGO, d, &opp->dynamic);
 	debugfs_create_bool("turbo", S_IRUGO, d, &opp->turbo);
 	debugfs_create_bool("suspend", S_IRUGO, d, &opp->suspend);
-	debugfs_create_u32("level", S_IRUGO, d, &opp->level);
+	debugfs_create_u32("performance_state", S_IRUGO, d, &opp->pstate);
+	debugfs_create_ulong("rate_hz", S_IRUGO, d, &opp->rate);
 	debugfs_create_ulong("clock_latency_ns", S_IRUGO, d,
 			     &opp->clock_latency_ns);
 
-	opp->of_name = of_node_full_name(opp->np);
-	debugfs_create_str("of_name", S_IRUGO, d, (char **)&opp->of_name);
-
-	opp_debug_create_clks(opp, opp_table, d);
 	opp_debug_create_supplies(opp, opp_table, d);
 	opp_debug_create_bw(opp, opp_table, d);
 
@@ -213,18 +187,14 @@ void opp_debug_register(struct opp_device *opp_dev, struct opp_table *opp_table)
 static void opp_migrate_dentry(struct opp_device *opp_dev,
 			       struct opp_table *opp_table)
 {
-	struct opp_device *new_dev = NULL, *iter;
+	struct opp_device *new_dev;
 	const struct device *dev;
 	struct dentry *dentry;
 
 	/* Look for next opp-dev */
-	list_for_each_entry(iter, &opp_table->dev_list, node)
-		if (iter != opp_dev) {
-			new_dev = iter;
+	list_for_each_entry(new_dev, &opp_table->dev_list, node)
+		if (new_dev != opp_dev)
 			break;
-		}
-
-	BUG_ON(!new_dev);
 
 	/* new_dev is guaranteed to be valid here */
 	dev = new_dev->dev;
@@ -234,7 +204,7 @@ static void opp_migrate_dentry(struct opp_device *opp_dev,
 
 	dentry = debugfs_rename(rootdir, opp_dev->dentry, rootdir,
 				opp_table->dentry_name);
-	if (IS_ERR(dentry)) {
+	if (!dentry) {
 		dev_err(dev, "%s: Failed to rename link from: %s to %s\n",
 			__func__, dev_name(opp_dev->dev), dev_name(dev));
 		return;
@@ -269,10 +239,61 @@ out:
 	opp_dev->dentry = NULL;
 }
 
+static int opp_summary_show(struct seq_file *s, void *data)
+{
+	struct list_head *lists = (struct list_head *)s->private;
+	struct opp_table *opp_table;
+	struct dev_pm_opp *opp;
+
+	mutex_lock(&opp_table_lock);
+
+	seq_puts(s, " device                rate(Hz)    target(uV)    min(uV)    max(uV)\n");
+	seq_puts(s, "-------------------------------------------------------------------\n");
+
+	list_for_each_entry(opp_table, lists, node) {
+		seq_printf(s, " %s\n", opp_table->dentry_name);
+		mutex_lock(&opp_table->lock);
+		list_for_each_entry(opp, &opp_table->opp_list, node) {
+			if (!opp->available)
+				continue;
+			seq_printf(s, "%31lu %12lu %11lu %11lu\n",
+				   opp->rate,
+				   opp->supplies[0].u_volt,
+				   opp->supplies[0].u_volt_min,
+				   opp->supplies[0].u_volt_max);
+			if (opp_table->regulator_count > 1)
+				seq_printf(s, "%44lu %11lu %11lu\n",
+					   opp->supplies[1].u_volt,
+					   opp->supplies[1].u_volt_min,
+					   opp->supplies[1].u_volt_max);
+		}
+		mutex_unlock(&opp_table->lock);
+	}
+
+	mutex_unlock(&opp_table_lock);
+
+	return 0;
+}
+
+static int opp_summary_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, opp_summary_show, inode->i_private);
+}
+
+static const struct file_operations opp_summary_fops = {
+	.open		= opp_summary_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static int __init opp_debug_init(void)
 {
 	/* Create /sys/kernel/debug/opp directory */
 	rootdir = debugfs_create_dir("opp", NULL);
+
+	debugfs_create_file("opp_summary", 0444, rootdir, &opp_tables,
+			    &opp_summary_fops);
 
 	return 0;
 }

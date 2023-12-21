@@ -66,8 +66,8 @@ static void mthca_free_icm_pages(struct mthca_dev *dev, struct mthca_icm_chunk *
 	int i;
 
 	if (chunk->nsg > 0)
-		dma_unmap_sg(&dev->pdev->dev, chunk->mem, chunk->npages,
-			     DMA_BIDIRECTIONAL);
+		pci_unmap_sg(dev->pdev, chunk->mem, chunk->npages,
+			     PCI_DMA_BIDIRECTIONAL);
 
 	for (i = 0; i < chunk->npages; ++i)
 		__free_pages(sg_page(&chunk->mem[i]),
@@ -184,10 +184,9 @@ struct mthca_icm *mthca_alloc_icm(struct mthca_dev *dev, int npages,
 			if (coherent)
 				++chunk->nsg;
 			else if (chunk->npages == MTHCA_ICM_CHUNK_LEN) {
-				chunk->nsg =
-					dma_map_sg(&dev->pdev->dev, chunk->mem,
-						   chunk->npages,
-						   DMA_BIDIRECTIONAL);
+				chunk->nsg = pci_map_sg(dev->pdev, chunk->mem,
+							chunk->npages,
+							PCI_DMA_BIDIRECTIONAL);
 
 				if (chunk->nsg <= 0)
 					goto fail;
@@ -205,8 +204,9 @@ struct mthca_icm *mthca_alloc_icm(struct mthca_dev *dev, int npages,
 	}
 
 	if (!coherent && chunk) {
-		chunk->nsg = dma_map_sg(&dev->pdev->dev, chunk->mem,
-					chunk->npages, DMA_BIDIRECTIONAL);
+		chunk->nsg = pci_map_sg(dev->pdev, chunk->mem,
+					chunk->npages,
+					PCI_DMA_BIDIRECTIONAL);
 
 		if (chunk->nsg <= 0)
 			goto fail;
@@ -480,8 +480,7 @@ int mthca_map_user_db(struct mthca_dev *dev, struct mthca_uar *uar,
 	sg_set_page(&db_tab->page[i].mem, pages[0], MTHCA_ICM_PAGE_SIZE,
 			uaddr & ~PAGE_MASK);
 
-	ret = dma_map_sg(&dev->pdev->dev, &db_tab->page[i].mem, 1,
-			 DMA_TO_DEVICE);
+	ret = pci_map_sg(dev->pdev, &db_tab->page[i].mem, 1, PCI_DMA_TODEVICE);
 	if (ret < 0) {
 		unpin_user_page(pages[0]);
 		goto out;
@@ -490,8 +489,7 @@ int mthca_map_user_db(struct mthca_dev *dev, struct mthca_uar *uar,
 	ret = mthca_MAP_ICM_page(dev, sg_dma_address(&db_tab->page[i].mem),
 				 mthca_uarc_virt(dev, uar, i));
 	if (ret) {
-		dma_unmap_sg(&dev->pdev->dev, &db_tab->page[i].mem, 1,
-			     DMA_TO_DEVICE);
+		pci_unmap_sg(dev->pdev, &db_tab->page[i].mem, 1, PCI_DMA_TODEVICE);
 		unpin_user_page(sg_page(&db_tab->page[i].mem));
 		goto out;
 	}
@@ -557,8 +555,7 @@ void mthca_cleanup_user_db_tab(struct mthca_dev *dev, struct mthca_uar *uar,
 	for (i = 0; i < dev->uar_table.uarc_size / MTHCA_ICM_PAGE_SIZE; ++i) {
 		if (db_tab->page[i].uvirt) {
 			mthca_UNMAP_ICM(dev, mthca_uarc_virt(dev, uar, i), 1);
-			dma_unmap_sg(&dev->pdev->dev, &db_tab->page[i].mem, 1,
-				     DMA_TO_DEVICE);
+			pci_unmap_sg(dev->pdev, &db_tab->page[i].mem, 1, PCI_DMA_TODEVICE);
 			unpin_user_page(sg_page(&db_tab->page[i].mem));
 		}
 	}

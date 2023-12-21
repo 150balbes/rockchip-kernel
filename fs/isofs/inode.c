@@ -70,7 +70,7 @@ static struct kmem_cache *isofs_inode_cachep;
 static struct inode *isofs_alloc_inode(struct super_block *sb)
 {
 	struct iso_inode_info *ei;
-	ei = alloc_inode_sb(sb, isofs_inode_cachep, GFP_KERNEL);
+	ei = kmem_cache_alloc(isofs_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -338,7 +338,6 @@ static int parse_options(char *options, struct iso9660_options *popt)
 {
 	char *p;
 	int option;
-	unsigned int uv;
 
 	popt->map = 'n';
 	popt->rock = 1;
@@ -436,17 +435,17 @@ static int parse_options(char *options, struct iso9660_options *popt)
 		case Opt_ignore:
 			break;
 		case Opt_uid:
-			if (match_uint(&args[0], &uv))
+			if (match_int(&args[0], &option))
 				return 0;
-			popt->uid = make_kuid(current_user_ns(), uv);
+			popt->uid = make_kuid(current_user_ns(), option);
 			if (!uid_valid(popt->uid))
 				return 0;
 			popt->uid_set = 1;
 			break;
 		case Opt_gid:
-			if (match_uint(&args[0], &uv))
+			if (match_int(&args[0], &option))
 				return 0;
-			popt->gid = make_kgid(current_user_ns(), uv);
+			popt->gid = make_kgid(current_user_ns(), option);
 			if (!gid_valid(popt->gid))
 				return 0;
 			popt->gid_set = 1;
@@ -1174,9 +1173,9 @@ struct buffer_head *isofs_bread(struct inode *inode, sector_t block)
 	return sb_bread(inode->i_sb, blknr);
 }
 
-static int isofs_read_folio(struct file *file, struct folio *folio)
+static int isofs_readpage(struct file *file, struct page *page)
 {
-	return mpage_read_folio(folio, isofs_get_block);
+	return mpage_readpage(page, isofs_get_block);
 }
 
 static void isofs_readahead(struct readahead_control *rac)
@@ -1190,7 +1189,7 @@ static sector_t _isofs_bmap(struct address_space *mapping, sector_t block)
 }
 
 static const struct address_space_operations isofs_aops = {
-	.read_folio = isofs_read_folio,
+	.readpage = isofs_readpage,
 	.readahead = isofs_readahead,
 	.bmap = _isofs_bmap
 };
@@ -1277,11 +1276,13 @@ static int isofs_read_level3_size(struct inode *inode)
 	} while (more_entries);
 out:
 	kfree(tmpde);
-	brelse(bh);
+	if (bh)
+		brelse(bh);
 	return 0;
 
 out_nomem:
-	brelse(bh);
+	if (bh)
+		brelse(bh);
 	return -ENOMEM;
 
 out_noread:
@@ -1484,7 +1485,8 @@ static int isofs_read_inode(struct inode *inode, int relocated)
 	ret = 0;
 out:
 	kfree(tmpde);
-	brelse(bh);
+	if (bh)
+		brelse(bh);
 	return ret;
 
 out_badread:
@@ -1610,3 +1612,4 @@ static void __exit exit_iso9660_fs(void)
 module_init(init_iso9660_fs)
 module_exit(exit_iso9660_fs)
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);

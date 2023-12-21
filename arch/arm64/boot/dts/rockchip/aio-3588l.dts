@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#define WHICHCSI 0 /* csi0 = 0,csi1 = 1*/
+
+#include "aio-3588l.dtsi"
+#include "aio-3588l-cam-8ms1m.dtsi"
+#include "rk3588-firefly-demo.dtsi"
+#include "aio-3588l-cam-2ms2mf.dtsi"
+
+/ {
+	model = "Firefly AIO-3588L HDMI(Linux)";
+	compatible = "rockchip,aio-3588l", "rockchip,rk3588";
+};

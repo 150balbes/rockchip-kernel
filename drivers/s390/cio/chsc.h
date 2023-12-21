@@ -27,8 +27,7 @@ struct channel_path_desc_fmt1 {
 	u8 lsn;
 	u8 desc;
 	u8 chpid;
-	u32:16;
-	u8 esc;
+	u32:24;
 	u8 chpp;
 	u32 unused[2];
 	u16 chid;
@@ -120,7 +119,7 @@ struct chsc_scpd {
 	u32 zeroes1;
 	struct chsc_header response;
 	u32:32;
-	u8 data[];
+	u8 data[0];
 } __packed __aligned(PAGE_SIZE);
 
 struct chsc_sda_area {

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2019 Facebook
-#include "vmlinux.h"
+#include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #define ATTR __always_inline
 #include "test_jhash.h"
 
-SEC("tc")
+SEC("scale90_inline")
 int balancer_ingress(struct __sk_buff *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	void *ptr;
-	int nh_off, i = 0;
+	int ret = 0, nh_off, i = 0;
 
 	nh_off = 14;
 

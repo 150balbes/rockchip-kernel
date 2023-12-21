@@ -5,7 +5,6 @@
  */
 
 #include <linux/freezer.h>
-#include <linux/jiffies.h>
 #include "vivid-core.h"
 #include "vivid-kthread-touch.h"
 #include "vivid-touch-cap.h"
@@ -63,10 +62,6 @@ static int vivid_thread_touch_cap(void *data)
 	dev->touch_cap_seq_count = 0;
 	dev->touch_cap_seq_resync = false;
 	dev->jiffies_touch_cap = jiffies;
-	if (dev->time_wrap)
-		dev->time_wrap_offset = dev->time_wrap - ktime_get_ns();
-	else
-		dev->time_wrap_offset = 0;
 
 	for (;;) {
 		try_to_freeze();
@@ -74,7 +69,7 @@ static int vivid_thread_touch_cap(void *data)
 			break;
 
 		if (!mutex_trylock(&dev->mutex)) {
-			schedule();
+			schedule_timeout_uninterruptible(1);
 			continue;
 		}
 		cur_jiffies = jiffies;
@@ -107,8 +102,6 @@ static int vivid_thread_touch_cap(void *data)
 		}
 		dropped_bufs = buffers_since_start + dev->touch_cap_seq_offset - dev->touch_cap_seq_count;
 		dev->touch_cap_seq_count = buffers_since_start + dev->touch_cap_seq_offset;
-		dev->touch_cap_with_seq_wrap_count =
-			dev->touch_cap_seq_count - dev->touch_cap_seq_start;
 
 		vivid_thread_tch_cap_tick(dev, dropped_bufs);
 
@@ -135,9 +128,7 @@ static int vivid_thread_touch_cap(void *data)
 			next_jiffies_since_start = jiffies_since_start;
 
 		wait_jiffies = next_jiffies_since_start - jiffies_since_start;
-		while (time_is_after_jiffies(cur_jiffies + wait_jiffies) &&
-		       !kthread_should_stop())
-			schedule();
+		schedule_timeout_interruptible(wait_jiffies ? wait_jiffies : 1);
 	}
 	dprintk(dev, 1, "Touch Capture Thread End\n");
 	return 0;
@@ -150,7 +141,6 @@ int vivid_start_generating_touch_cap(struct vivid_dev *dev)
 		return 0;
 	}
 
-	dev->touch_cap_seq_start = dev->seq_wrap * 128;
 	dev->kthread_touch_cap = kthread_run(vivid_thread_touch_cap, dev,
 					     "%s-tch-cap", dev->v4l2_dev.name);
 

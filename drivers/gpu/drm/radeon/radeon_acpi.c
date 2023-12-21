@@ -22,7 +22,6 @@
  */
 
 #include <linux/acpi.h>
-#include <linux/backlight.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/power_supply.h>
@@ -31,12 +30,12 @@
 #include <acpi/acpi_bus.h>
 #include <acpi/video.h>
 
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_probe_helper.h>
 
 #include "atom.h"
 #include "radeon.h"
 #include "radeon_acpi.h"
-#include "radeon_pm.h"
 
 #if defined(CONFIG_VGA_SWITCHEROO)
 bool radeon_atpx_dgpu_req_power_for_displays(void);
@@ -45,6 +44,8 @@ static inline bool radeon_atpx_dgpu_req_power_for_displays(void) { return false;
 #endif
 
 #define ACPI_AC_CLASS           "ac_adapter"
+
+extern void radeon_pm_acpi_event_handler(struct radeon_device *rdev);
 
 struct atif_verify_interface {
 	u16 size;		/* structure size in bytes (includes size field) */
@@ -391,6 +392,7 @@ static int radeon_atif_handler(struct radeon_device *rdev,
 
 			radeon_set_backlight_level(rdev, enc, req.backlight_level);
 
+#if defined(CONFIG_BACKLIGHT_CLASS_DEVICE) || defined(CONFIG_BACKLIGHT_CLASS_DEVICE_MODULE)
 			if (rdev->is_atom_bios) {
 				struct radeon_encoder_atom_dig *dig = enc->enc_priv;
 				backlight_force_update(dig->bl_dev,
@@ -400,6 +402,7 @@ static int radeon_atif_handler(struct radeon_device *rdev,
 				backlight_force_update(dig->bl_dev,
 						       BACKLIGHT_UPDATE_HOTKEY);
 			}
+#endif
 		}
 	}
 	if (req.pending & ATIF_DGPU_DISPLAY_EVENT) {

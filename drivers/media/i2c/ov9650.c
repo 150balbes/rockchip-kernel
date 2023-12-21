@@ -10,6 +10,7 @@
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
@@ -29,6 +30,7 @@
 #include <media/v4l2-image-sizes.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
+#include <media/i2c/ov9650.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -1068,7 +1070,7 @@ static void ov965x_get_default_format(struct v4l2_mbus_framefmt *mf)
 }
 
 static int ov965x_enum_mbus_code(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_mbus_code_enum *code)
 {
 	if (code->index >= ARRAY_SIZE(ov965x_formats))
@@ -1079,7 +1081,7 @@ static int ov965x_enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int ov965x_enum_frame_sizes(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_state *sd_state,
+				   struct v4l2_subdev_pad_config *cfg,
 				   struct v4l2_subdev_frame_size_enum *fse)
 {
 	int i = ARRAY_SIZE(ov965x_formats);
@@ -1106,9 +1108,7 @@ static int ov965x_g_frame_interval(struct v4l2_subdev *sd,
 {
 	struct ov965x *ov965x = to_ov965x(sd);
 
-	mutex_lock(&ov965x->lock);
 	fi->interval = ov965x->fiv->interval;
-	mutex_unlock(&ov965x->lock);
 
 	return 0;
 }
@@ -1165,14 +1165,14 @@ static int ov965x_s_frame_interval(struct v4l2_subdev *sd,
 }
 
 static int ov965x_get_fmt(struct v4l2_subdev *sd,
-			  struct v4l2_subdev_state *sd_state,
+			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *fmt)
 {
 	struct ov965x *ov965x = to_ov965x(sd);
 	struct v4l2_mbus_framefmt *mf;
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-		mf = v4l2_subdev_get_try_format(sd, sd_state, 0);
+		mf = v4l2_subdev_get_try_format(sd, cfg, 0);
 		fmt->format = *mf;
 		return 0;
 	}
@@ -1210,7 +1210,7 @@ static void __ov965x_try_frame_size(struct v4l2_mbus_framefmt *mf,
 }
 
 static int ov965x_set_fmt(struct v4l2_subdev *sd,
-			  struct v4l2_subdev_state *sd_state,
+			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *fmt)
 {
 	unsigned int index = ARRAY_SIZE(ov965x_formats);
@@ -1232,9 +1232,8 @@ static int ov965x_set_fmt(struct v4l2_subdev *sd,
 	mutex_lock(&ov965x->lock);
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-		if (sd_state) {
-			mf = v4l2_subdev_get_try_format(sd, sd_state,
-							fmt->pad);
+		if (cfg) {
+			mf = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 			*mf = fmt->format;
 		}
 	} else {
@@ -1363,7 +1362,7 @@ static int ov965x_s_stream(struct v4l2_subdev *sd, int on)
 static int ov965x_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
 	struct v4l2_mbus_framefmt *mf =
-		v4l2_subdev_get_try_format(sd, fh->state, 0);
+		v4l2_subdev_get_try_format(sd, fh->pad, 0);
 
 	ov965x_get_default_format(mf);
 	return 0;
@@ -1399,6 +1398,38 @@ static const struct v4l2_subdev_ops ov965x_subdev_ops = {
 	.pad = &ov965x_pad_ops,
 	.video = &ov965x_video_ops,
 };
+
+/*
+ * Reset and power down GPIOs configuration
+ */
+static int ov965x_configure_gpios_pdata(struct ov965x *ov965x,
+				const struct ov9650_platform_data *pdata)
+{
+	int ret, i;
+	int gpios[NUM_GPIOS];
+	struct device *dev = regmap_get_device(ov965x->regmap);
+
+	gpios[GPIO_PWDN] = pdata->gpio_pwdn;
+	gpios[GPIO_RST]  = pdata->gpio_reset;
+
+	for (i = 0; i < ARRAY_SIZE(ov965x->gpios); i++) {
+		int gpio = gpios[i];
+
+		if (!gpio_is_valid(gpio))
+			continue;
+		ret = devm_gpio_request_one(dev, gpio,
+					    GPIOF_OUT_INIT_HIGH, "OV965X");
+		if (ret < 0)
+			return ret;
+		v4l2_dbg(1, debug, &ov965x->sd, "set gpio %d to 1\n", gpio);
+
+		gpio_set_value_cansleep(gpio, 1);
+		gpio_export(gpio, 0);
+		ov965x->gpios[i] = gpio_to_desc(gpio);
+	}
+
+	return 0;
+}
 
 static int ov965x_configure_gpios(struct ov965x *ov965x)
 {
@@ -1446,8 +1477,8 @@ static int ov965x_detect_sensor(struct v4l2_subdev *sd)
 		if (ov965x->id == OV9650_ID || ov965x->id == OV9652_ID) {
 			v4l2_info(sd, "Found OV%04X sensor\n", ov965x->id);
 		} else {
-			v4l2_err(sd, "Sensor detection failed (%04X)\n",
-				 ov965x->id);
+			v4l2_err(sd, "Sensor detection failed (%04X, %d)\n",
+				 ov965x->id, ret);
 			ret = -ENODEV;
 		}
 	}
@@ -1459,6 +1490,7 @@ out:
 
 static int ov965x_probe(struct i2c_client *client)
 {
+	const struct ov9650_platform_data *pdata = client->dev.platform_data;
 	struct v4l2_subdev *sd;
 	struct ov965x *ov965x;
 	int ret;
@@ -1478,7 +1510,17 @@ static int ov965x_probe(struct i2c_client *client)
 		return PTR_ERR(ov965x->regmap);
 	}
 
-	if (dev_fwnode(&client->dev)) {
+	if (pdata) {
+		if (pdata->mclk_frequency == 0) {
+			dev_err(&client->dev, "MCLK frequency not specified\n");
+			return -EINVAL;
+		}
+		ov965x->mclk_frequency = pdata->mclk_frequency;
+
+		ret = ov965x_configure_gpios_pdata(ov965x, pdata);
+		if (ret < 0)
+			return ret;
+	} else if (dev_fwnode(&client->dev)) {
 		ov965x->clk = devm_clk_get(&client->dev, NULL);
 		if (IS_ERR(ov965x->clk))
 			return PTR_ERR(ov965x->clk);
@@ -1489,7 +1531,7 @@ static int ov965x_probe(struct i2c_client *client)
 			return ret;
 	} else {
 		dev_err(&client->dev,
-			"No device properties specified\n");
+			"Neither platform data nor device property specified\n");
 
 		return -EINVAL;
 	}
@@ -1539,7 +1581,7 @@ err_mutex:
 	return ret;
 }
 
-static void ov965x_remove(struct i2c_client *client)
+static int ov965x_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ov965x *ov965x = to_ov965x(sd);
@@ -1548,6 +1590,8 @@ static void ov965x_remove(struct i2c_client *client)
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
 	media_entity_cleanup(&sd->entity);
 	mutex_destroy(&ov965x->lock);
+
+	return 0;
 }
 
 static const struct i2c_device_id ov965x_id[] = {
@@ -1571,7 +1615,7 @@ static struct i2c_driver ov965x_i2c_driver = {
 		.name	= DRIVER_NAME,
 		.of_match_table = of_match_ptr(ov965x_of_match),
 	},
-	.probe		= ov965x_probe,
+	.probe_new	= ov965x_probe,
 	.remove		= ov965x_remove,
 	.id_table	= ov965x_id,
 };

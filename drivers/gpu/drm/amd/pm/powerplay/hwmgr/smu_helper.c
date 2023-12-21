@@ -103,7 +103,7 @@ uint32_t phm_set_field_to_u32(u32 offset, u32 original_data, u32 field, u32 size
 	return original_data;
 }
 
-/*
+/**
  * Returns once the part of the register indicated by the mask has
  * reached the given value.
  */
@@ -132,7 +132,7 @@ int phm_wait_on_register(struct pp_hwmgr *hwmgr, uint32_t index,
 }
 
 
-/*
+/**
  * Returns once the part of the register indicated by the mask has
  * reached the given value.The indirect space is described by giving
  * the memory-mapped index of the indirect index register.
@@ -486,18 +486,19 @@ int phm_get_sclk_for_voltage_evv(struct pp_hwmgr *hwmgr,
 }
 
 /**
- * phm_initializa_dynamic_state_adjustment_rule_settings - Initialize Dynamic State Adjustment Rule Settings
+ * Initialize Dynamic State Adjustment Rule Settings
  *
- * @hwmgr:  the address of the powerplay hardware manager.
+ * @param    hwmgr  the address of the powerplay hardware manager.
  */
 int phm_initializa_dynamic_state_adjustment_rule_settings(struct pp_hwmgr *hwmgr)
 {
+	uint32_t table_size;
 	struct phm_clock_voltage_dependency_table *table_clk_vlt;
 	struct phm_ppt_v1_information *pptable_info = (struct phm_ppt_v1_information *)(hwmgr->pptable);
 
 	/* initialize vddc_dep_on_dal_pwrl table */
-	table_clk_vlt = kzalloc(struct_size(table_clk_vlt, entries, 4),
-				GFP_KERNEL);
+	table_size = sizeof(uint32_t) + 4 * sizeof(struct phm_clock_voltage_dependency_record);
+	table_clk_vlt = kzalloc(table_size, GFP_KERNEL);
 
 	if (NULL == table_clk_vlt) {
 		pr_err("Can not allocate space for vddc_dep_on_dal_pwrl! \n");
@@ -505,23 +506,11 @@ int phm_initializa_dynamic_state_adjustment_rule_settings(struct pp_hwmgr *hwmgr
 	} else {
 		table_clk_vlt->count = 4;
 		table_clk_vlt->entries[0].clk = PP_DAL_POWERLEVEL_ULTRALOW;
-		if (hwmgr->chip_id >= CHIP_POLARIS10 &&
-		    hwmgr->chip_id <= CHIP_VEGAM)
-			table_clk_vlt->entries[0].v = 700;
-		else
-			table_clk_vlt->entries[0].v = 0;
+		table_clk_vlt->entries[0].v = 0;
 		table_clk_vlt->entries[1].clk = PP_DAL_POWERLEVEL_LOW;
-		if (hwmgr->chip_id >= CHIP_POLARIS10 &&
-		    hwmgr->chip_id <= CHIP_VEGAM)
-			table_clk_vlt->entries[1].v = 740;
-		else
-			table_clk_vlt->entries[1].v = 720;
+		table_clk_vlt->entries[1].v = 720;
 		table_clk_vlt->entries[2].clk = PP_DAL_POWERLEVEL_NOMINAL;
-		if (hwmgr->chip_id >= CHIP_POLARIS10 &&
-		    hwmgr->chip_id <= CHIP_VEGAM)
-			table_clk_vlt->entries[2].v = 800;
-		else
-			table_clk_vlt->entries[2].v = 810;
+		table_clk_vlt->entries[2].v = 810;
 		table_clk_vlt->entries[3].clk = PP_DAL_POWERLEVEL_PERFORMANCE;
 		table_clk_vlt->entries[3].v = 900;
 		if (pptable_info != NULL)
@@ -603,17 +592,21 @@ int phm_irq_process(struct amdgpu_device *adev,
 			   struct amdgpu_irq_src *source,
 			   struct amdgpu_iv_entry *entry)
 {
-	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 	uint32_t client_id = entry->client_id;
 	uint32_t src_id = entry->src_id;
 
 	if (client_id == AMDGPU_IRQ_CLIENTID_LEGACY) {
 		if (src_id == VISLANDS30_IV_SRCID_CG_TSS_THERMAL_LOW_TO_HIGH) {
-			schedule_delayed_work(&hwmgr->swctf_delayed_work,
-					      msecs_to_jiffies(AMDGPU_SWCTF_EXTRA_DELAY));
-		} else if (src_id == VISLANDS30_IV_SRCID_CG_TSS_THERMAL_HIGH_TO_LOW) {
+			dev_emerg(adev->dev, "ERROR: GPU over temperature range(SW CTF) detected!\n");
+			/*
+			 * SW CTF just occurred.
+			 * Try to do a graceful shutdown to prevent further damage.
+			 */
+			dev_emerg(adev->dev, "ERROR: System is going to shutdown due to GPU SW CTF!\n");
+			orderly_poweroff(true);
+		} else if (src_id == VISLANDS30_IV_SRCID_CG_TSS_THERMAL_HIGH_TO_LOW)
 			dev_emerg(adev->dev, "ERROR: GPU under temperature range detected!\n");
-		} else if (src_id == VISLANDS30_IV_SRCID_GPIO_19) {
+		else if (src_id == VISLANDS30_IV_SRCID_GPIO_19) {
 			dev_emerg(adev->dev, "ERROR: GPU HW Critical Temperature Fault(aka CTF) detected!\n");
 			/*
 			 * HW CTF just occurred. Shutdown to prevent further damage.
@@ -622,10 +615,15 @@ int phm_irq_process(struct amdgpu_device *adev,
 			orderly_poweroff(true);
 		}
 	} else if (client_id == SOC15_IH_CLIENTID_THM) {
-		if (src_id == 0)
-			schedule_delayed_work(&hwmgr->swctf_delayed_work,
-					      msecs_to_jiffies(AMDGPU_SWCTF_EXTRA_DELAY));
-		else
+		if (src_id == 0) {
+			dev_emerg(adev->dev, "ERROR: GPU over temperature range(SW CTF) detected!\n");
+			/*
+			 * SW CTF just occurred.
+			 * Try to do a graceful shutdown to prevent further damage.
+			 */
+			dev_emerg(adev->dev, "ERROR: System is going to shutdown due to GPU SW CTF!\n");
+			orderly_poweroff(true);
+		} else
 			dev_emerg(adev->dev, "ERROR: GPU under temperature range detected!\n");
 	} else if (client_id == SOC15_IH_CLIENTID_ROM_SMUIO) {
 		dev_emerg(adev->dev, "ERROR: GPU HW Critical Temperature Fault(aka CTF) detected!\n");

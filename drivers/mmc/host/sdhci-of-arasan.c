@@ -21,7 +21,6 @@
 #include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/regmap.h>
-#include <linux/reset.h>
 #include <linux/of.h>
 #include <linux/firmware/xlnx-zynqmp.h>
 
@@ -41,40 +40,10 @@
 #define VENDOR_ENHANCED_STROBE		BIT(0)
 
 #define PHY_CLK_TOO_SLOW_HZ		400000
-#define MIN_PHY_CLK_HZ			50000000
 
 #define SDHCI_ITAPDLY_CHGWIN		0x200
 #define SDHCI_ITAPDLY_ENABLE		0x100
 #define SDHCI_OTAPDLY_ENABLE		0x40
-
-#define PHY_CTRL_REG1			0x270
-#define PHY_CTRL_ITAPDLY_ENA_MASK	BIT(0)
-#define PHY_CTRL_ITAPDLY_SEL_MASK	GENMASK(5, 1)
-#define PHY_CTRL_ITAPDLY_SEL_SHIFT	1
-#define PHY_CTRL_ITAP_CHG_WIN_MASK	BIT(6)
-#define PHY_CTRL_OTAPDLY_ENA_MASK	BIT(8)
-#define PHY_CTRL_OTAPDLY_SEL_MASK	GENMASK(15, 12)
-#define PHY_CTRL_OTAPDLY_SEL_SHIFT	12
-#define PHY_CTRL_STRB_SEL_MASK		GENMASK(23, 16)
-#define PHY_CTRL_STRB_SEL_SHIFT		16
-#define PHY_CTRL_TEST_CTRL_MASK		GENMASK(31, 24)
-
-#define PHY_CTRL_REG2			0x274
-#define PHY_CTRL_EN_DLL_MASK		BIT(0)
-#define PHY_CTRL_DLL_RDY_MASK		BIT(1)
-#define PHY_CTRL_FREQ_SEL_MASK		GENMASK(6, 4)
-#define PHY_CTRL_FREQ_SEL_SHIFT		4
-#define PHY_CTRL_SEL_DLY_TX_MASK	BIT(16)
-#define PHY_CTRL_SEL_DLY_RX_MASK	BIT(17)
-#define FREQSEL_200M_170M		0x0
-#define FREQSEL_170M_140M	        0x1
-#define FREQSEL_140M_110M	        0x2
-#define FREQSEL_110M_80M	        0x3
-#define FREQSEL_80M_50M			0x4
-#define FREQSEL_275M_250M		0x5
-#define FREQSEL_250M_225M		0x6
-#define FREQSEL_225M_200M		0x7
-#define PHY_DLL_TIMEOUT_MS		100
 
 /* Default settings for ZynqMP Clock Phases */
 #define ZYNQMP_ICLK_PHASE {0, 63, 63, 0, 63,  0,   0, 183, 54,  0, 0}
@@ -82,11 +51,6 @@
 
 #define VERSAL_ICLK_PHASE {0, 132, 132, 0, 132, 0, 0, 162, 90, 0, 0}
 #define VERSAL_OCLK_PHASE {0,  60, 48, 0, 48, 72, 90, 36, 60, 90, 0}
-
-#define VERSAL_NET_EMMC_ICLK_PHASE {0, 0, 0, 0, 0, 0, 0, 0, 39, 0, 0}
-#define VERSAL_NET_EMMC_OCLK_PHASE {0, 113, 0, 0, 0, 0, 0, 0, 113, 79, 45}
-
-#define VERSAL_NET_PHY_CTRL_STRB90_STRB180_VAL		0X77
 
 /*
  * On some SoCs the syscon area has a feature where the upper 16-bits of
@@ -170,7 +134,6 @@ struct sdhci_arasan_clk_data {
  * @clk_ahb:		Pointer to the AHB clock
  * @phy:		Pointer to the generic phy
  * @is_phy_on:		True if the PHY is on; false if not.
- * @internal_phy_reg:	True if the PHY is within the Host controller.
  * @has_cqe:		True if controller has command queuing engine.
  * @clk_data:		Struct for the Arasan Controller Clock Data.
  * @clk_ops:		Struct for the Arasan Controller Clock Operations.
@@ -183,7 +146,6 @@ struct sdhci_arasan_data {
 	struct clk	*clk_ahb;
 	struct phy	*phy;
 	bool		is_phy_on;
-	bool		internal_phy_reg;
 
 	bool		has_cqe;
 	struct sdhci_arasan_clk_data clk_data;
@@ -236,61 +198,6 @@ static const struct sdhci_arasan_soc_ctl_map intel_keembay_soc_ctl_map = {
 	.support64b = { .reg = 0x4, .width = 1, .shift = 24 },
 	.hiword_update = false,
 };
-
-static void sdhci_arasan_phy_set_delaychain(struct sdhci_host *host, bool enable)
-{
-	u32 reg;
-
-	reg = readl(host->ioaddr + PHY_CTRL_REG2);
-	if (enable)
-		reg |= (PHY_CTRL_SEL_DLY_TX_MASK | PHY_CTRL_SEL_DLY_RX_MASK);
-	else
-		reg &= ~(PHY_CTRL_SEL_DLY_TX_MASK | PHY_CTRL_SEL_DLY_RX_MASK);
-
-	writel(reg, host->ioaddr + PHY_CTRL_REG2);
-}
-
-static int sdhci_arasan_phy_set_dll(struct sdhci_host *host, bool enable)
-{
-	u32 reg;
-
-	reg = readl(host->ioaddr + PHY_CTRL_REG2);
-	if (enable)
-		reg |= PHY_CTRL_EN_DLL_MASK;
-	else
-		reg &= ~PHY_CTRL_EN_DLL_MASK;
-
-	writel(reg, host->ioaddr + PHY_CTRL_REG2);
-
-	if (!enable)
-		return 0;
-
-	return readl_relaxed_poll_timeout(host->ioaddr + PHY_CTRL_REG2, reg,
-					  (reg & PHY_CTRL_DLL_RDY_MASK), 10,
-					  1000 * PHY_DLL_TIMEOUT_MS);
-}
-
-static void sdhci_arasan_phy_dll_set_freq(struct sdhci_host *host, int clock)
-{
-	u32 reg, freq_sel, freq;
-
-	freq = DIV_ROUND_CLOSEST(clock, 1000000);
-	if (freq <= 200 && freq > 170)
-		freq_sel = FREQSEL_200M_170M;
-	else if (freq <= 170 && freq > 140)
-		freq_sel = FREQSEL_170M_140M;
-	else if (freq <= 140 && freq > 110)
-		freq_sel = FREQSEL_140M_110M;
-	else if (freq <= 110 && freq > 80)
-		freq_sel = FREQSEL_110M_80M;
-	else
-		freq_sel = FREQSEL_80M_50M;
-
-	reg = readl(host->ioaddr + PHY_CTRL_REG2);
-	reg &= ~PHY_CTRL_FREQ_SEL_MASK;
-	reg |= (freq_sel << PHY_CTRL_FREQ_SEL_SHIFT);
-	writel(reg, host->ioaddr + PHY_CTRL_REG2);
-}
 
 /**
  * sdhci_arasan_syscon_write - Write to a field in soc_ctl registers
@@ -406,23 +313,10 @@ static void sdhci_arasan_set_clock(struct sdhci_host *host, unsigned int clock)
 	}
 
 	/* Set the Input and Output Clock Phase Delays */
-	if (clk_data->set_clk_delays && clock > PHY_CLK_TOO_SLOW_HZ)
+	if (clk_data->set_clk_delays)
 		clk_data->set_clk_delays(host);
 
-	if (sdhci_arasan->internal_phy_reg && clock >= MIN_PHY_CLK_HZ) {
-		sdhci_writew(host, 0, SDHCI_CLOCK_CONTROL);
-		sdhci_arasan_phy_set_dll(host, 0);
-		sdhci_arasan_phy_set_delaychain(host, 0);
-		sdhci_arasan_phy_dll_set_freq(host, clock);
-	} else if (sdhci_arasan->internal_phy_reg) {
-		sdhci_writew(host, 0, SDHCI_CLOCK_CONTROL);
-		sdhci_arasan_phy_set_delaychain(host, 1);
-	}
-
 	sdhci_set_clock(host, clock);
-
-	if (sdhci_arasan->internal_phy_reg && clock >= MIN_PHY_CLK_HZ)
-		sdhci_arasan_phy_set_dll(host, 1);
 
 	if (sdhci_arasan->quirks & SDHCI_ARASAN_QUIRK_CLOCK_UNSTABLE)
 		/*
@@ -759,7 +653,6 @@ static int sdhci_zynqmp_sdcardclk_set_phase(struct clk_hw *hw, int degrees)
 	case MMC_TIMING_MMC_HS200:
 		/* For 200MHz clock, 8 Taps are available */
 		tap_max = 8;
-		break;
 	default:
 		break;
 	}
@@ -828,7 +721,6 @@ static int sdhci_zynqmp_sampleclk_set_phase(struct clk_hw *hw, int degrees)
 	case MMC_TIMING_MMC_HS200:
 		/* For 200MHz clock, 30 Taps are available */
 		tap_max = 30;
-		break;
 	default:
 		break;
 	}
@@ -888,7 +780,6 @@ static int sdhci_versal_sdcardclk_set_phase(struct clk_hw *hw, int degrees)
 	case MMC_TIMING_MMC_HS200:
 		/* For 200MHz clock, 8 Taps are available */
 		tap_max = 8;
-		break;
 	default:
 		break;
 	}
@@ -955,7 +846,6 @@ static int sdhci_versal_sampleclk_set_phase(struct clk_hw *hw, int degrees)
 	case MMC_TIMING_MMC_HS200:
 		/* For 200MHz clock, 30 Taps are available */
 		tap_max = 30;
-		break;
 	default:
 		break;
 	}
@@ -986,101 +876,6 @@ static const struct clk_ops versal_sampleclk_ops = {
 	.set_phase = sdhci_versal_sampleclk_set_phase,
 };
 
-static int sdhci_versal_net_emmc_sdcardclk_set_phase(struct clk_hw *hw, int degrees)
-{
-	struct sdhci_arasan_clk_data *clk_data =
-		container_of(hw, struct sdhci_arasan_clk_data, sdcardclk_hw);
-	struct sdhci_arasan_data *sdhci_arasan =
-		container_of(clk_data, struct sdhci_arasan_data, clk_data);
-	struct sdhci_host *host = sdhci_arasan->host;
-	u8 tap_delay, tap_max = 0;
-
-	switch (host->timing) {
-	case MMC_TIMING_MMC_HS:
-	case MMC_TIMING_MMC_DDR52:
-		tap_max = 16;
-		break;
-	case MMC_TIMING_MMC_HS200:
-	case MMC_TIMING_MMC_HS400:
-		 /* For 200MHz clock, 32 Taps are available */
-		tap_max = 32;
-		break;
-	default:
-		break;
-	}
-
-	tap_delay = (degrees * tap_max) / 360;
-
-	/* Set the Clock Phase */
-	if (tap_delay) {
-		u32 regval;
-
-		regval = sdhci_readl(host, PHY_CTRL_REG1);
-		regval |= PHY_CTRL_OTAPDLY_ENA_MASK;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-		regval &= ~PHY_CTRL_OTAPDLY_SEL_MASK;
-		regval |= tap_delay << PHY_CTRL_OTAPDLY_SEL_SHIFT;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-	}
-
-	return 0;
-}
-
-static const struct clk_ops versal_net_sdcardclk_ops = {
-	.recalc_rate = sdhci_arasan_sdcardclk_recalc_rate,
-	.set_phase = sdhci_versal_net_emmc_sdcardclk_set_phase,
-};
-
-static int sdhci_versal_net_emmc_sampleclk_set_phase(struct clk_hw *hw, int degrees)
-{
-	struct sdhci_arasan_clk_data *clk_data =
-		container_of(hw, struct sdhci_arasan_clk_data, sampleclk_hw);
-	struct sdhci_arasan_data *sdhci_arasan =
-		container_of(clk_data, struct sdhci_arasan_data, clk_data);
-	struct sdhci_host *host = sdhci_arasan->host;
-	u8 tap_delay, tap_max = 0;
-	u32 regval;
-
-	switch (host->timing) {
-	case MMC_TIMING_MMC_HS:
-	case MMC_TIMING_MMC_DDR52:
-		tap_max = 32;
-		break;
-	case MMC_TIMING_MMC_HS400:
-		/* Strobe select tap point for strb90 and strb180 */
-		regval = sdhci_readl(host, PHY_CTRL_REG1);
-		regval &= ~PHY_CTRL_STRB_SEL_MASK;
-		regval |= VERSAL_NET_PHY_CTRL_STRB90_STRB180_VAL << PHY_CTRL_STRB_SEL_SHIFT;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-		break;
-	default:
-		break;
-	}
-
-	tap_delay = (degrees * tap_max) / 360;
-
-	/* Set the Clock Phase */
-	if (tap_delay) {
-		regval = sdhci_readl(host, PHY_CTRL_REG1);
-		regval |= PHY_CTRL_ITAP_CHG_WIN_MASK;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-		regval |= PHY_CTRL_ITAPDLY_ENA_MASK;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-		regval &= ~PHY_CTRL_ITAPDLY_SEL_MASK;
-		regval |= tap_delay << PHY_CTRL_ITAPDLY_SEL_SHIFT;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-		regval &= ~PHY_CTRL_ITAP_CHG_WIN_MASK;
-		sdhci_writel(host, regval, PHY_CTRL_REG1);
-	}
-
-	return 0;
-}
-
-static const struct clk_ops versal_net_sampleclk_ops = {
-	.recalc_rate = sdhci_arasan_sampleclk_recalc_rate,
-	.set_phase = sdhci_versal_net_emmc_sampleclk_set_phase,
-};
-
 static void arasan_zynqmp_dll_reset(struct sdhci_host *host, u32 deviceid)
 {
 	u16 clk;
@@ -1107,10 +902,6 @@ static int arasan_zynqmp_execute_tuning(struct mmc_host *mmc, u32 opcode)
 	u32 device_id = !strcmp(clk_name, "clk_out_sd0") ? NODE_SD_0 :
 							   NODE_SD_1;
 	int err;
-
-	/* ZynqMP SD controller does not perform auto tuning in DDR50 mode */
-	if (mmc->ios.timing == MMC_TIMING_UHS_DDR50)
-		return 0;
 
 	arasan_zynqmp_dll_reset(host, device_id);
 
@@ -1186,7 +977,7 @@ static void sdhci_arasan_update_baseclkfreq(struct sdhci_host *host)
 	struct sdhci_arasan_data *sdhci_arasan = sdhci_pltfm_priv(pltfm_host);
 	const struct sdhci_arasan_soc_ctl_map *soc_ctl_map =
 		sdhci_arasan->soc_ctl_map;
-	u32 mhz = DIV_ROUND_CLOSEST_ULL(clk_get_rate(pltfm_host->clk), 1000000);
+	u32 mhz = DIV_ROUND_CLOSEST(clk_get_rate(pltfm_host->clk), 1000000);
 
 	/* Having a map is optional */
 	if (!soc_ctl_map)
@@ -1220,16 +1011,14 @@ static void arasan_dt_read_clk_phase(struct device *dev,
 {
 	struct device_node *np = dev->of_node;
 
-	u32 clk_phase[2] = {0};
-	int ret;
+	int clk_phase[2] = {0};
 
 	/*
 	 * Read Tap Delay values from DT, if the DT does not contain the
 	 * Tap Values then use the pre-defined values.
 	 */
-	ret = of_property_read_variable_u32_array(np, prop, &clk_phase[0],
-						  2, 0);
-	if (ret < 0) {
+	if (of_property_read_variable_u32_array(np, prop, &clk_phase[0],
+						2, 0)) {
 		dev_dbg(dev, "Using predefined clock phase for %s = %d %d\n",
 			prop, clk_data->clk_phase_in[timing],
 			clk_data->clk_phase_out[timing]);
@@ -1291,17 +1080,7 @@ static void arasan_dt_parse_clk_phases(struct device *dev,
 			clk_data->clk_phase_out[i] = versal_oclk_phase[i];
 		}
 	}
-	if (of_device_is_compatible(dev->of_node, "xlnx,versal-net-emmc")) {
-		u32 versal_net_iclk_phase[MMC_TIMING_MMC_HS400 + 1] =
-			VERSAL_NET_EMMC_ICLK_PHASE;
-		u32 versal_net_oclk_phase[MMC_TIMING_MMC_HS400 + 1] =
-			VERSAL_NET_EMMC_OCLK_PHASE;
 
-		for (i = 0; i <= MMC_TIMING_MMC_HS400; i++) {
-			clk_data->clk_phase_in[i] = versal_net_iclk_phase[i];
-			clk_data->clk_phase_out[i] = versal_net_oclk_phase[i];
-		}
-	}
 	arasan_dt_read_clk_phase(dev, clk_data, MMC_TIMING_LEGACY,
 				 "clk-phase-legacy");
 	arasan_dt_read_clk_phase(dev, clk_data, MMC_TIMING_MMC_HS,
@@ -1413,14 +1192,6 @@ static const struct sdhci_pltfm_data sdhci_arasan_zynqmp_pdata = {
 			SDHCI_QUIRK2_STOP_WITH_TC,
 };
 
-static const struct sdhci_pltfm_data sdhci_arasan_versal_net_pdata = {
-	.ops = &sdhci_arasan_ops,
-	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
-			SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN |
-			SDHCI_QUIRK2_STOP_WITH_TC |
-			SDHCI_QUIRK2_CAPS_BIT63_FOR_HS400,
-};
-
 static const struct sdhci_arasan_clk_ops zynqmp_clk_ops = {
 	.sdcardclk_ops = &zynqmp_sdcardclk_ops,
 	.sampleclk_ops = &zynqmp_sampleclk_ops,
@@ -1439,16 +1210,6 @@ static const struct sdhci_arasan_clk_ops versal_clk_ops = {
 static struct sdhci_arasan_of_data sdhci_arasan_versal_data = {
 	.pdata = &sdhci_arasan_zynqmp_pdata,
 	.clk_ops = &versal_clk_ops,
-};
-
-static const struct sdhci_arasan_clk_ops versal_net_clk_ops = {
-	.sdcardclk_ops = &versal_net_sdcardclk_ops,
-	.sampleclk_ops = &versal_net_sampleclk_ops,
-};
-
-static struct sdhci_arasan_of_data sdhci_arasan_versal_net_data = {
-	.pdata = &sdhci_arasan_versal_net_pdata,
-	.clk_ops = &versal_net_clk_ops,
 };
 
 static struct sdhci_arasan_of_data intel_keembay_emmc_data = {
@@ -1515,10 +1276,6 @@ static const struct of_device_id sdhci_arasan_of_match[] = {
 	{
 		.compatible = "xlnx,versal-8.9a",
 		.data = &sdhci_arasan_versal_data,
-	},
-	{
-		.compatible = "xlnx,versal-net-emmc",
-		.data = &sdhci_arasan_versal_net_data,
 	},
 	{ /* sentinel */ }
 };
@@ -1640,7 +1397,7 @@ static void sdhci_arasan_unregister_sdclk(struct device *dev)
 {
 	struct device_node *np = dev->of_node;
 
-	if (!of_property_present(np, "#clock-cells"))
+	if (!of_find_property(np, "#clock-cells", NULL))
 		return;
 
 	of_clk_del_provider(dev->of_node);
@@ -1648,25 +1405,26 @@ static void sdhci_arasan_unregister_sdclk(struct device *dev)
 
 /**
  * sdhci_arasan_update_support64b - Set SUPPORT_64B (64-bit System Bus Support)
- * @host:		The sdhci_host
- * @value:		The value to write
  *
  * This should be set based on the System Address Bus.
  * 0: the Core supports only 32-bit System Address Bus.
  * 1: the Core supports 64-bit System Address Bus.
  *
- * NOTE:
- * For Keem Bay, it is required to clear this bit. Its default value is 1'b1.
- * Keem Bay does not support 64-bit access.
+ * NOTES:
+ * - For Keem Bay, it is required to clear this bit. Its default value is 1'b1.
+ *   Keem Bay does not support 64-bit access.
+ *
+ * @host:		The sdhci_host
+ * @value:		The value to write
  */
 static void sdhci_arasan_update_support64b(struct sdhci_host *host, u32 value)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_arasan_data *sdhci_arasan = sdhci_pltfm_priv(pltfm_host);
-	const struct sdhci_arasan_soc_ctl_map *soc_ctl_map;
+	const struct sdhci_arasan_soc_ctl_map *soc_ctl_map =
+		sdhci_arasan->soc_ctl_map;
 
 	/* Having a map is optional */
-	soc_ctl_map = sdhci_arasan->soc_ctl_map;
 	if (!soc_ctl_map)
 		return;
 
@@ -1729,65 +1487,6 @@ static int sdhci_arasan_register_sdclk(struct sdhci_arasan_data *sdhci_arasan,
 	return 0;
 }
 
-static int sdhci_zynqmp_set_dynamic_config(struct device *dev,
-					   struct sdhci_arasan_data *sdhci_arasan)
-{
-	struct sdhci_host *host = sdhci_arasan->host;
-	struct clk_hw *hw = &sdhci_arasan->clk_data.sdcardclk_hw;
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	const char *clk_name = clk_hw_get_name(hw);
-	u32 mhz, node_id = !strcmp(clk_name, "clk_out_sd0") ? NODE_SD_0 : NODE_SD_1;
-	struct reset_control *rstc;
-	int ret;
-
-	/* Obtain SDHC reset control */
-	rstc = devm_reset_control_get_optional_exclusive(dev, NULL);
-	if (IS_ERR(rstc)) {
-		dev_err(dev, "Cannot get SDHC reset.\n");
-		return PTR_ERR(rstc);
-	}
-
-	ret = reset_control_assert(rstc);
-	if (ret)
-		return ret;
-
-	ret = zynqmp_pm_set_sd_config(node_id, SD_CONFIG_FIXED, 0);
-	if (ret)
-		return ret;
-
-	ret = zynqmp_pm_set_sd_config(node_id, SD_CONFIG_EMMC_SEL,
-				      !!(host->mmc->caps & MMC_CAP_NONREMOVABLE));
-	if (ret)
-		return ret;
-
-	mhz = DIV_ROUND_CLOSEST_ULL(clk_get_rate(pltfm_host->clk), 1000000);
-	if (mhz > 100 && mhz <= 200)
-		mhz = 200;
-	else if (mhz > 50 && mhz <= 100)
-		mhz = 100;
-	else if (mhz > 25 && mhz <= 50)
-		mhz = 50;
-	else
-		mhz = 25;
-
-	ret = zynqmp_pm_set_sd_config(node_id, SD_CONFIG_BASECLK, mhz);
-	if (ret)
-		return ret;
-
-	ret = zynqmp_pm_set_sd_config(node_id, SD_CONFIG_8BIT,
-				      !!(host->mmc->caps & MMC_CAP_8_BIT_DATA));
-	if (ret)
-		return ret;
-
-	ret = reset_control_deassert(rstc);
-	if (ret)
-		return ret;
-
-	usleep_range(1000, 1500);
-
-	return 0;
-}
-
 static int sdhci_arasan_add_host(struct sdhci_arasan_data *sdhci_arasan)
 {
 	struct sdhci_host *host = sdhci_arasan->host;
@@ -1834,20 +1533,17 @@ cleanup:
 static int sdhci_arasan_probe(struct platform_device *pdev)
 {
 	int ret;
+	const struct of_device_id *match;
 	struct device_node *node;
 	struct clk *clk_xin;
-	struct clk *clk_dll;
 	struct sdhci_host *host;
 	struct sdhci_pltfm_host *pltfm_host;
-	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
 	struct sdhci_arasan_data *sdhci_arasan;
+	struct device_node *np = pdev->dev.of_node;
 	const struct sdhci_arasan_of_data *data;
 
-	data = of_device_get_match_data(dev);
-	if (!data)
-		return -EINVAL;
-
+	match = of_match_node(sdhci_arasan_of_match, pdev->dev.of_node);
+	data = match->data;
 	host = sdhci_pltfm_init(pdev, data->pdata, sizeof(*sdhci_arasan));
 
 	if (IS_ERR(host))
@@ -1860,61 +1556,46 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 	sdhci_arasan->soc_ctl_map = data->soc_ctl_map;
 	sdhci_arasan->clk_ops = data->clk_ops;
 
-	node = of_parse_phandle(np, "arasan,soc-ctl-syscon", 0);
+	node = of_parse_phandle(pdev->dev.of_node, "arasan,soc-ctl-syscon", 0);
 	if (node) {
 		sdhci_arasan->soc_ctl_base = syscon_node_to_regmap(node);
 		of_node_put(node);
 
 		if (IS_ERR(sdhci_arasan->soc_ctl_base)) {
-			ret = dev_err_probe(dev,
+			ret = dev_err_probe(&pdev->dev,
 					    PTR_ERR(sdhci_arasan->soc_ctl_base),
 					    "Can't get syscon\n");
 			goto err_pltfm_free;
 		}
 	}
 
-	sdhci_get_of_property(pdev);
-
-	sdhci_arasan->clk_ahb = devm_clk_get(dev, "clk_ahb");
+	sdhci_arasan->clk_ahb = devm_clk_get(&pdev->dev, "clk_ahb");
 	if (IS_ERR(sdhci_arasan->clk_ahb)) {
-		ret = dev_err_probe(dev, PTR_ERR(sdhci_arasan->clk_ahb),
-				    "clk_ahb clock not found.\n");
+		dev_err(&pdev->dev, "clk_ahb clock not found.\n");
+		ret = PTR_ERR(sdhci_arasan->clk_ahb);
 		goto err_pltfm_free;
 	}
 
-	clk_xin = devm_clk_get(dev, "clk_xin");
+	clk_xin = devm_clk_get(&pdev->dev, "clk_xin");
 	if (IS_ERR(clk_xin)) {
-		ret = dev_err_probe(dev, PTR_ERR(clk_xin), "clk_xin clock not found.\n");
+		dev_err(&pdev->dev, "clk_xin clock not found.\n");
+		ret = PTR_ERR(clk_xin);
 		goto err_pltfm_free;
 	}
 
 	ret = clk_prepare_enable(sdhci_arasan->clk_ahb);
 	if (ret) {
-		dev_err(dev, "Unable to enable AHB clock.\n");
+		dev_err(&pdev->dev, "Unable to enable AHB clock.\n");
 		goto err_pltfm_free;
-	}
-
-	/* If clock-frequency property is set, use the provided value */
-	if (pltfm_host->clock &&
-	    pltfm_host->clock != clk_get_rate(clk_xin)) {
-		ret = clk_set_rate(clk_xin, pltfm_host->clock);
-		if (ret) {
-			dev_err(&pdev->dev, "Failed to set SD clock rate\n");
-			goto clk_dis_ahb;
-		}
 	}
 
 	ret = clk_prepare_enable(clk_xin);
 	if (ret) {
-		dev_err(dev, "Unable to enable SD clock.\n");
+		dev_err(&pdev->dev, "Unable to enable SD clock.\n");
 		goto clk_dis_ahb;
 	}
 
-	clk_dll = devm_clk_get_optional_enabled(dev, "gate");
-	if (IS_ERR(clk_dll)) {
-		ret = dev_err_probe(dev, PTR_ERR(clk_dll), "failed to get dll clk\n");
-		goto clk_disable_all;
-	}
+	sdhci_get_of_property(pdev);
 
 	if (of_property_read_bool(np, "xlnx,fails-without-test-cd"))
 		sdhci_arasan->quirks |= SDHCI_ARASAN_QUIRK_FORCE_CDTEST;
@@ -1924,7 +1605,8 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 
 	pltfm_host->clk = clk_xin;
 
-	if (of_device_is_compatible(np, "rockchip,rk3399-sdhci-5.1"))
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "rockchip,rk3399-sdhci-5.1"))
 		sdhci_arasan_update_clockmultiplier(host, 0x0);
 
 	if (of_device_is_compatible(np, "intel,keembay-sdhci-5.1-emmc") ||
@@ -1938,7 +1620,7 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 
 	sdhci_arasan_update_baseclkfreq(host);
 
-	ret = sdhci_arasan_register_sdclk(sdhci_arasan, clk_xin, dev);
+	ret = sdhci_arasan_register_sdclk(sdhci_arasan, clk_xin, &pdev->dev);
 	if (ret)
 		goto clk_disable_all;
 
@@ -1947,38 +1629,31 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 			arasan_zynqmp_execute_tuning;
 
 		sdhci_arasan->quirks |= SDHCI_ARASAN_QUIRK_CLOCK_25_BROKEN;
-		host->quirks |= SDHCI_QUIRK_MULTIBLOCK_READ_ACMD12;
 	}
 
-	arasan_dt_parse_clk_phases(dev, &sdhci_arasan->clk_data);
+	arasan_dt_parse_clk_phases(&pdev->dev, &sdhci_arasan->clk_data);
 
 	ret = mmc_of_parse(host->mmc);
 	if (ret) {
-		ret = dev_err_probe(dev, ret, "parsing dt failed.\n");
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "parsing dt failed (%d)\n", ret);
 		goto unreg_clk;
 	}
 
-	if (of_device_is_compatible(np, "xlnx,zynqmp-8.9a")) {
-		ret = zynqmp_pm_is_function_supported(PM_IOCTL, IOCTL_SET_SD_CONFIG);
-		if (!ret) {
-			ret = sdhci_zynqmp_set_dynamic_config(dev, sdhci_arasan);
-			if (ret)
-				goto unreg_clk;
-		}
-	}
-
 	sdhci_arasan->phy = ERR_PTR(-ENODEV);
-	if (of_device_is_compatible(np, "arasan,sdhci-5.1")) {
-		sdhci_arasan->phy = devm_phy_get(dev, "phy_arasan");
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "arasan,sdhci-5.1")) {
+		sdhci_arasan->phy = devm_phy_get(&pdev->dev,
+						 "phy_arasan");
 		if (IS_ERR(sdhci_arasan->phy)) {
-			ret = dev_err_probe(dev, PTR_ERR(sdhci_arasan->phy),
-					    "No phy for arasan,sdhci-5.1.\n");
+			ret = PTR_ERR(sdhci_arasan->phy);
+			dev_err(&pdev->dev, "No phy for arasan,sdhci-5.1.\n");
 			goto unreg_clk;
 		}
 
 		ret = phy_init(sdhci_arasan->phy);
 		if (ret < 0) {
-			dev_err(dev, "phy_init err.\n");
+			dev_err(&pdev->dev, "phy_init err.\n");
 			goto unreg_clk;
 		}
 
@@ -1986,19 +1661,21 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 					sdhci_arasan_hs400_enhanced_strobe;
 		host->mmc_host_ops.start_signal_voltage_switch =
 					sdhci_arasan_voltage_switch;
-		sdhci_arasan->has_cqe = true;
-		host->mmc->caps2 |= MMC_CAP2_CQE;
+
+		if (!of_property_read_bool(np, "disable-cqe")) {
+			sdhci_arasan->has_cqe = true;
+			host->mmc->caps2 |= MMC_CAP2_CQE;
+		}
 
 		if (!of_property_read_bool(np, "disable-cqe-dcmd"))
 			host->mmc->caps2 |= MMC_CAP2_CQE_DCMD;
 	}
 
-	if (of_device_is_compatible(np, "xlnx,versal-net-emmc"))
-		sdhci_arasan->internal_phy_reg = true;
-
 	ret = sdhci_arasan_add_host(sdhci_arasan);
 	if (ret)
 		goto err_add_host;
+
+	device_init_wakeup(&pdev->dev, 1);
 
 	return 0;
 
@@ -2006,7 +1683,7 @@ err_add_host:
 	if (!IS_ERR(sdhci_arasan->phy))
 		phy_exit(sdhci_arasan->phy);
 unreg_clk:
-	sdhci_arasan_unregister_sdclk(dev);
+	sdhci_arasan_unregister_sdclk(&pdev->dev);
 clk_disable_all:
 	clk_disable_unprepare(clk_xin);
 clk_dis_ahb:
@@ -2018,6 +1695,7 @@ err_pltfm_free:
 
 static int sdhci_arasan_remove(struct platform_device *pdev)
 {
+	int ret;
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_arasan_data *sdhci_arasan = sdhci_pltfm_priv(pltfm_host);
@@ -2031,11 +1709,11 @@ static int sdhci_arasan_remove(struct platform_device *pdev)
 
 	sdhci_arasan_unregister_sdclk(&pdev->dev);
 
-	sdhci_pltfm_unregister(pdev);
+	ret = sdhci_pltfm_unregister(pdev);
 
 	clk_disable_unprepare(clk_ahb);
 
-	return 0;
+	return ret;
 }
 
 static struct platform_driver sdhci_arasan_driver = {

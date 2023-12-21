@@ -14,7 +14,6 @@
 #include <linux/mfd/altera-a10sr.h>
 #include <linux/mfd/core.h>
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/spi/spi.h>
 
@@ -151,13 +150,6 @@ static const struct of_device_id altr_a10sr_spi_of_match[] = {
 	{ .compatible = "altr,a10sr" },
 	{ },
 };
-MODULE_DEVICE_TABLE(of, altr_a10sr_spi_of_match);
-
-static const struct spi_device_id altr_a10sr_spi_ids[] = {
-	{ .name = "a10sr" },
-	{ },
-};
-MODULE_DEVICE_TABLE(spi, altr_a10sr_spi_ids);
 
 static struct spi_driver altr_a10sr_spi_driver = {
 	.probe = altr_a10sr_spi_probe,
@@ -165,6 +157,5 @@ static struct spi_driver altr_a10sr_spi_driver = {
 		.name = "altr_a10sr",
 		.of_match_table = of_match_ptr(altr_a10sr_spi_of_match),
 	},
-	.id_table = altr_a10sr_spi_ids,
 };
 builtin_driver(altr_a10sr_spi_driver, spi_register_driver)

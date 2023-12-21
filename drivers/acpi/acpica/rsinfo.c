@@ -49,7 +49,6 @@ struct acpi_rsconvert_info *acpi_gbl_set_resource_dispatch[] = {
 	acpi_rs_convert_pin_group,	/* 0x16, ACPI_RESOURCE_TYPE_PIN_GROUP */
 	acpi_rs_convert_pin_group_function,	/* 0x17, ACPI_RESOURCE_TYPE_PIN_GROUP_FUNCTION */
 	acpi_rs_convert_pin_group_config,	/* 0x18, ACPI_RESOURCE_TYPE_PIN_GROUP_CONFIG */
-	acpi_rs_convert_clock_input,	/* 0x19, ACPI_RESOURCE_TYPE_CLOCK_INPUT */
 };
 
 /* Dispatch tables for AML-to-resource (Get Resource) conversion functions */
@@ -95,17 +94,15 @@ struct acpi_rsconvert_info *acpi_gbl_get_resource_dispatch[] = {
 	acpi_rs_convert_pin_group,	/* 0x10, ACPI_RESOURCE_NAME_PIN_GROUP */
 	acpi_rs_convert_pin_group_function,	/* 0x11, ACPI_RESOURCE_NAME_PIN_GROUP_FUNCTION */
 	acpi_rs_convert_pin_group_config,	/* 0x12, ACPI_RESOURCE_NAME_PIN_GROUP_CONFIG */
-	acpi_rs_convert_clock_input,	/* 0x13, ACPI_RESOURCE_NAME_CLOCK_INPUT */
 };
 
-/* Subtype table for serial_bus -- I2C, SPI, UART, and CSI2 */
+/* Subtype table for serial_bus -- I2C, SPI, and UART */
 
 struct acpi_rsconvert_info *acpi_gbl_convert_resource_serial_bus_dispatch[] = {
 	NULL,
 	acpi_rs_convert_i2c_serial_bus,
 	acpi_rs_convert_spi_serial_bus,
 	acpi_rs_convert_uart_serial_bus,
-	acpi_rs_convert_csi2_serial_bus
 };
 
 #if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DISASSEMBLER) || defined(ACPI_DEBUGGER)
@@ -138,7 +135,6 @@ struct acpi_rsdump_info *acpi_gbl_dump_resource_dispatch[] = {
 	acpi_rs_dump_pin_group,	/* ACPI_RESOURCE_TYPE_PIN_GROUP */
 	acpi_rs_dump_pin_group_function,	/* ACPI_RESOURCE_TYPE_PIN_GROUP_FUNCTION */
 	acpi_rs_dump_pin_group_config,	/* ACPI_RESOURCE_TYPE_PIN_GROUP_CONFIG */
-	acpi_rs_dump_clock_input,	/* ACPI_RESOURCE_TYPE_CLOCK_INPUT */
 };
 
 struct acpi_rsdump_info *acpi_gbl_dump_serial_bus_dispatch[] = {
@@ -146,7 +142,6 @@ struct acpi_rsdump_info *acpi_gbl_dump_serial_bus_dispatch[] = {
 	acpi_rs_dump_i2c_serial_bus,	/* AML_RESOURCE_I2C_BUS_TYPE */
 	acpi_rs_dump_spi_serial_bus,	/* AML_RESOURCE_SPI_BUS_TYPE */
 	acpi_rs_dump_uart_serial_bus,	/* AML_RESOURCE_UART_BUS_TYPE */
-	acpi_rs_dump_csi2_serial_bus,	/* AML_RESOURCE_CSI2_BUS_TYPE */
 };
 #endif
 
@@ -181,7 +176,6 @@ const u8 acpi_gbl_aml_resource_sizes[] = {
 	sizeof(struct aml_resource_pin_group),	/* ACPI_RESOURCE_TYPE_PIN_GROUP */
 	sizeof(struct aml_resource_pin_group_function),	/* ACPI_RESOURCE_TYPE_PIN_GROUP_FUNCTION */
 	sizeof(struct aml_resource_pin_group_config),	/* ACPI_RESOURCE_TYPE_PIN_GROUP_CONFIG */
-	sizeof(struct aml_resource_clock_input),	/* ACPI_RESOURCE_TYPE_CLOCK_INPUT */
 };
 
 const u8 acpi_gbl_resource_struct_sizes[] = {
@@ -225,7 +219,6 @@ const u8 acpi_gbl_resource_struct_sizes[] = {
 	ACPI_RS_SIZE(struct acpi_resource_pin_group),
 	ACPI_RS_SIZE(struct acpi_resource_pin_group_function),
 	ACPI_RS_SIZE(struct acpi_resource_pin_group_config),
-	ACPI_RS_SIZE(struct acpi_resource_clock_input),
 };
 
 const u8 acpi_gbl_aml_resource_serial_bus_sizes[] = {
@@ -233,7 +226,6 @@ const u8 acpi_gbl_aml_resource_serial_bus_sizes[] = {
 	sizeof(struct aml_resource_i2c_serialbus),
 	sizeof(struct aml_resource_spi_serialbus),
 	sizeof(struct aml_resource_uart_serialbus),
-	sizeof(struct aml_resource_csi2_serialbus),
 };
 
 const u8 acpi_gbl_resource_struct_serial_bus_sizes[] = {
@@ -241,5 +233,4 @@ const u8 acpi_gbl_resource_struct_serial_bus_sizes[] = {
 	ACPI_RS_SIZE(struct acpi_resource_i2c_serialbus),
 	ACPI_RS_SIZE(struct acpi_resource_spi_serialbus),
 	ACPI_RS_SIZE(struct acpi_resource_uart_serialbus),
-	ACPI_RS_SIZE(struct acpi_resource_csi2_serialbus),
 };

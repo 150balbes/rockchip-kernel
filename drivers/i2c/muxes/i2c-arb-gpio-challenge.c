@@ -34,7 +34,7 @@ struct i2c_arbitrator_data {
 };
 
 
-/*
+/**
  * i2c_arbitrator_select - claim the I2C bus
  *
  * Use the GPIO-based signalling protocol; return -EBUSY if we fail.
@@ -77,7 +77,7 @@ static int i2c_arbitrator_select(struct i2c_mux_core *muxc, u32 chan)
 	return -EBUSY;
 }
 
-/*
+/**
  * i2c_arbitrator_deselect - release the I2C bus
  *
  * Release the I2C bus using the GPIO-based signalling protocol.
@@ -174,12 +174,13 @@ static int i2c_arbitrator_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void i2c_arbitrator_remove(struct platform_device *pdev)
+static int i2c_arbitrator_remove(struct platform_device *pdev)
 {
 	struct i2c_mux_core *muxc = platform_get_drvdata(pdev);
 
 	i2c_mux_del_adapters(muxc);
 	i2c_put_adapter(muxc->parent);
+	return 0;
 }
 
 static const struct of_device_id i2c_arbitrator_of_match[] = {
@@ -190,7 +191,7 @@ MODULE_DEVICE_TABLE(of, i2c_arbitrator_of_match);
 
 static struct platform_driver i2c_arbitrator_driver = {
 	.probe	= i2c_arbitrator_probe,
-	.remove_new = i2c_arbitrator_remove,
+	.remove	= i2c_arbitrator_remove,
 	.driver	= {
 		.name	= "i2c-arb-gpio-challenge",
 		.of_match_table = i2c_arbitrator_of_match,

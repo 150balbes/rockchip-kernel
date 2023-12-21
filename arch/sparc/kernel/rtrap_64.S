@@ -15,7 +15,7 @@
 #include <asm/visasm.h>
 #include <asm/processor.h>
 
-#ifdef CONFIG_CONTEXT_TRACKING_USER
+#ifdef CONFIG_CONTEXT_TRACKING
 # define SCHEDULE_USER schedule_user
 #else
 # define SCHEDULE_USER schedule

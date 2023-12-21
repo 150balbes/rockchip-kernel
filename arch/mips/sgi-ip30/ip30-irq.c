@@ -6,7 +6,6 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
-#include <linux/irqdomain.h>
 #include <linux/percpu.h>
 #include <linux/spinlock.h>
 #include <linux/tick.h>
@@ -99,7 +98,7 @@ static void ip30_normal_irq(struct irq_desc *desc)
 	int cpu = smp_processor_id();
 	struct irq_domain *domain;
 	u64 pend, mask;
-	int ret;
+	int irq;
 
 	pend = heart_read(&heart_regs->isr);
 	mask = (heart_read(&heart_regs->imr[cpu]) &
@@ -130,8 +129,10 @@ static void ip30_normal_irq(struct irq_desc *desc)
 #endif
 	{
 		domain = irq_desc_get_handler_data(desc);
-		ret = generic_handle_domain_irq(domain, __ffs(pend));
-		if (ret)
+		irq = irq_linear_revmap(domain, __ffs(pend));
+		if (irq)
+			generic_handle_irq(irq);
+		else
 			spurious_interrupt();
 	}
 }

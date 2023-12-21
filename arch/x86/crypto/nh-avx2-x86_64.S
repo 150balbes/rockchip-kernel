@@ -8,7 +8,6 @@
  */
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 
 #define		PASS0_SUMS	%ymm0
 #define		PASS1_SUMS	%ymm1
@@ -66,11 +65,11 @@
 
 /*
  * void nh_avx2(const u32 *key, const u8 *message, size_t message_len,
- *		__le64 hash[NH_NUM_PASSES])
+ *		u8 hash[NH_HASH_BYTES])
  *
  * It's guaranteed that message_len % 16 == 0.
  */
-SYM_TYPED_FUNC_START(nh_avx2)
+SYM_FUNC_START(nh_avx2)
 
 	vmovdqu		0x00(KEY), K0
 	vmovdqu		0x10(KEY), K1

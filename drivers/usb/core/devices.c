@@ -228,6 +228,8 @@ static char *usb_dump_interface(int speed, char *start, char *end,
 
 	start = usb_dump_interface_descriptor(start, end, intfc, iface, setno);
 	for (i = 0; i < desc->desc.bNumEndpoints; i++) {
+		if (start > end)
+			return start;
 		start = usb_dump_endpoint_descriptor(speed,
 				start, end, &desc->endpoint[i].desc);
 	}
@@ -300,6 +302,8 @@ static char *usb_dump_config(int speed, char *start, char *end,
 		intfc = config->intf_cache[i];
 		interface = config->interface[i];
 		for (j = 0; j < intfc->num_altsetting; j++) {
+			if (start > end)
+				return start;
 			start = usb_dump_interface(speed,
 				start, end, intfc, interface, j);
 		}
@@ -365,11 +369,19 @@ static char *usb_dump_desc(char *start, char *end, struct usb_device *dev)
 {
 	int i;
 
+	if (start > end)
+		return start;
+
 	start = usb_dump_device_descriptor(start, end, &dev->descriptor);
+
+	if (start > end)
+		return start;
 
 	start = usb_dump_device_strings(start, end, dev);
 
 	for (i = 0; i < dev->descriptor.bNumConfigurations; i++) {
+		if (start > end)
+			return start;
 		start = usb_dump_config(dev->speed,
 				start, end, dev->config + i,
 				/* active ? */
@@ -377,6 +389,41 @@ static char *usb_dump_desc(char *start, char *end, struct usb_device *dev)
 	}
 	return start;
 }
+
+
+#ifdef PROC_EXTRA /* TBD: may want to add this code later */
+
+static char *usb_dump_hub_descriptor(char *start, char *end,
+				     const struct usb_hub_descriptor *desc)
+{
+	int leng = USB_DT_HUB_NONVAR_SIZE;
+	unsigned char *ptr = (unsigned char *)desc;
+
+	if (start > end)
+		return start;
+	start += sprintf(start, "Interface:");
+	while (leng && start <= end) {
+		start += sprintf(start, " %02x", *ptr);
+		ptr++; leng--;
+	}
+	*start++ = '\n';
+	return start;
+}
+
+static char *usb_dump_string(char *start, char *end,
+			     const struct usb_device *dev, char *id, int index)
+{
+	if (start > end)
+		return start;
+	start += sprintf(start, "Interface:");
+	if (index <= dev->maxstring && dev->stringindex &&
+	    dev->stringindex[index])
+		start += sprintf(start, "%s: %.100s ", id,
+				 dev->stringindex[index]);
+	return start;
+}
+
+#endif /* PROC_EXTRA */
 
 /*****************************************************************/
 

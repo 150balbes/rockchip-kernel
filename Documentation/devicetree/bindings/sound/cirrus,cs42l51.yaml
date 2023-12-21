@@ -4,13 +4,10 @@
 $id: http://devicetree.org/schemas/sound/cirrus,cs42l51.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: CS42L51 audio codec
+title: CS42L51 audio codec DT bindings
 
 maintainers:
-  - Olivier Moysan <olivier.moysan@foss.st.com>
-
-allOf:
-  - $ref: dai-common.yaml#
+  - Olivier Moysan <olivier.moysan@st.com>
 
 properties:
   compatible:
@@ -44,16 +41,12 @@ properties:
   VAHP-supply:
     description: phandle to voltage regulator of headphone
 
-  port:
-    $ref: audio-graph-port.yaml#
-    unevaluatedProperties: false
-
 required:
   - compatible
   - reg
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
@@ -73,13 +66,6 @@ examples:
         VA-supply = <&reg_audio>;
         VAHP-supply = <&reg_audio>;
         reset-gpios = <&gpiog 9 GPIO_ACTIVE_LOW>;
-
-        /* assume audio-graph */
-        port {
-          cpu_endpoint: endpoint {
-            remote-endpoint = <&cpu_endpoint>;
-          };
-        };
       };
     };
 ...

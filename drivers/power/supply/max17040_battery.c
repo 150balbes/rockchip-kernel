@@ -16,6 +16,7 @@
 #include <linux/interrupt.h>
 #include <linux/power_supply.h>
 #include <linux/of_device.h>
+#include <linux/max17040_battery.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 
@@ -141,10 +142,13 @@ struct max17040_chip {
 	struct regmap			*regmap;
 	struct delayed_work		work;
 	struct power_supply		*battery;
+	struct max17040_platform_data	*pdata;
 	struct chip_data		data;
 
 	/* battery capacity */
 	int soc;
+	/* State Of Charge */
+	int status;
 	/* Low alert threshold from 32% to 1% of the State of Charge */
 	u32 low_soc_alert;
 	/* some devices return twice the capacity */
@@ -217,7 +221,26 @@ static int max17040_get_version(struct max17040_chip *chip)
 
 static int max17040_get_online(struct max17040_chip *chip)
 {
-	return 1;
+	return chip->pdata && chip->pdata->battery_online ?
+		chip->pdata->battery_online() : 1;
+}
+
+static int max17040_get_status(struct max17040_chip *chip)
+{
+	if (!chip->pdata || !chip->pdata->charger_online
+			|| !chip->pdata->charger_enable)
+		return POWER_SUPPLY_STATUS_UNKNOWN;
+
+	if (max17040_get_soc(chip) > MAX17040_BATTERY_FULL)
+		return POWER_SUPPLY_STATUS_FULL;
+
+	if (chip->pdata->charger_online())
+		if (chip->pdata->charger_enable())
+			return POWER_SUPPLY_STATUS_CHARGING;
+		else
+			return POWER_SUPPLY_STATUS_NOT_CHARGING;
+	else
+		return POWER_SUPPLY_STATUS_DISCHARGING;
 }
 
 static int max17040_get_of_data(struct max17040_chip *chip)
@@ -245,10 +268,11 @@ static int max17040_get_of_data(struct max17040_chip *chip)
 	rcomp_len = device_property_count_u8(dev, "maxim,rcomp");
 	chip->rcomp = MAX17040_RCOMP_DEFAULT;
 	if (rcomp_len == data->rcomp_bytes) {
-		if (!device_property_read_u8_array(dev, "maxim,rcomp",
-						   rcomp, rcomp_len))
-			chip->rcomp = rcomp_len == 2 ? rcomp[0] << 8 | rcomp[1] :
-				      rcomp[0] << 8;
+		device_property_read_u8_array(dev, "maxim,rcomp",
+					      rcomp, rcomp_len);
+		chip->rcomp = rcomp_len == 2 ?
+			rcomp[0] << 8 | rcomp[1] :
+			rcomp[0] << 8;
 	} else if (rcomp_len > 0) {
 		dev_err(dev, "maxim,rcomp has incorrect length\n");
 		return -EINVAL;
@@ -260,6 +284,7 @@ static int max17040_get_of_data(struct max17040_chip *chip)
 static void max17040_check_changes(struct max17040_chip *chip)
 {
 	chip->soc = max17040_get_soc(chip);
+	chip->status = max17040_get_status(chip);
 }
 
 static void max17040_queue_work(struct max17040_chip *chip)
@@ -278,16 +303,17 @@ static void max17040_stop_work(void *data)
 static void max17040_work(struct work_struct *work)
 {
 	struct max17040_chip *chip;
-	int last_soc;
+	int last_soc, last_status;
 
 	chip = container_of(work, struct max17040_chip, work.work);
 
-	/* store SOC to check changes */
+	/* store SOC and status to check changes */
 	last_soc = chip->soc;
+	last_status = chip->status;
 	max17040_check_changes(chip);
 
 	/* check changes and send uevent */
-	if (last_soc != chip->soc)
+	if (last_soc != chip->soc || last_status != chip->status)
 		power_supply_changed(chip->battery);
 
 	max17040_queue_work(chip);
@@ -336,10 +362,12 @@ static irqreturn_t max17040_thread_handler(int id, void *dev)
 static int max17040_enable_alert_irq(struct max17040_chip *chip)
 {
 	struct i2c_client *client = chip->client;
+	unsigned int flags;
 	int ret;
 
+	flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
 	ret = devm_request_threaded_irq(&client->dev, client->irq, NULL,
-					max17040_thread_handler, IRQF_ONESHOT,
+					max17040_thread_handler, flags,
 					chip->battery->desc->name, chip);
 
 	return ret;
@@ -388,6 +416,9 @@ static int max17040_get_property(struct power_supply *psy,
 	struct max17040_chip *chip = power_supply_get_drvdata(psy);
 
 	switch (psp) {
+	case POWER_SUPPLY_PROP_STATUS:
+		val->intval = max17040_get_status(chip);
+		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = max17040_get_online(chip);
 		break;
@@ -414,6 +445,7 @@ static const struct regmap_config max17040_regmap = {
 };
 
 static enum power_supply_property max17040_battery_props[] = {
+	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_CAPACITY,
@@ -430,9 +462,9 @@ static const struct power_supply_desc max17040_battery_desc = {
 	.num_properties		= ARRAY_SIZE(max17040_battery_props),
 };
 
-static int max17040_probe(struct i2c_client *client)
+static int max17040_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct i2c_adapter *adapter = client->adapter;
 	struct power_supply_config psy_cfg = {};
 	struct max17040_chip *chip;
@@ -449,6 +481,7 @@ static int max17040_probe(struct i2c_client *client)
 
 	chip->client = client;
 	chip->regmap = devm_regmap_init_i2c(client, &max17040_regmap);
+	chip->pdata = client->dev.platform_data;
 	if (IS_ERR(chip->regmap))
 		return PTR_ERR(chip->regmap);
 	chip_id = (enum chip_id) id->driver_data;
@@ -456,7 +489,8 @@ static int max17040_probe(struct i2c_client *client)
 		ret = max17040_get_of_data(chip);
 		if (ret)
 			return ret;
-		chip_id = (uintptr_t)of_device_get_match_data(&client->dev);
+		chip_id = (enum chip_id) (uintptr_t)
+			of_device_get_match_data(&client->dev);
 	}
 	chip->data = max17040_family[chip_id];
 

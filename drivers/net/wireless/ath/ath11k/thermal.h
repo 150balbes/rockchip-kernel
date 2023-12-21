@@ -19,7 +19,7 @@ struct ath11k_thermal {
 
 	/* protected by conf_mutex */
 	u32 throttle_state;
-	/* temperature value in Celsius degree
+	/* temperature value in Celcius degree
 	 * protected by data_lock
 	 */
 	int temperature;

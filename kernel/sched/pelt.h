@@ -61,24 +61,7 @@ static inline void cfs_se_util_change(struct sched_avg *avg)
 	WRITE_ONCE(avg->util_est.enqueued, enqueued);
 }
 
-static inline u64 rq_clock_pelt(struct rq *rq)
-{
-	lockdep_assert_rq_held(rq);
-	assert_clock_updated(rq);
-
-	return rq->clock_pelt - rq->lost_idle_time;
-}
-
-/* The rq is idle, we can sync to clock_task */
-static inline void _update_idle_rq_clock_pelt(struct rq *rq)
-{
-	rq->clock_pelt  = rq_clock_task(rq);
-
-	u64_u32_store(rq->clock_idle, rq_clock(rq));
-	/* Paired with smp_rmb in migrate_se_pelt_lag() */
-	smp_wmb();
-	u64_u32_store(rq->clock_pelt_idle, rq_clock_pelt(rq));
-}
+extern unsigned int sched_pelt_lshift;
 
 /*
  * The clock_pelt scales the time to reflect the effective amount of
@@ -94,8 +77,13 @@ static inline void _update_idle_rq_clock_pelt(struct rq *rq)
  */
 static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
 {
+	delta <<= READ_ONCE(sched_pelt_lshift);
+
+	per_cpu(clock_task_mult, rq->cpu) += delta;
+
 	if (unlikely(is_idle_task(rq->curr))) {
-		_update_idle_rq_clock_pelt(rq);
+		/* The rq is idle, we can sync to clock_task */
+		rq->clock_pelt = rq_clock_task_mult(rq);
 		return;
 	}
 
@@ -141,30 +129,25 @@ static inline void update_idle_rq_clock_pelt(struct rq *rq)
 	 * Reflecting stolen time makes sense only if the idle
 	 * phase would be present at max capacity. As soon as the
 	 * utilization of a rq has reached the maximum value, it is
-	 * considered as an always running rq without idle time to
+	 * considered as an always runnig rq without idle time to
 	 * steal. This potential idle time is considered as lost in
 	 * this case. We keep track of this lost idle time compare to
 	 * rq's clock_task.
 	 */
 	if (util_sum >= divider)
-		rq->lost_idle_time += rq_clock_task(rq) - rq->clock_pelt;
+		rq->lost_idle_time += rq_clock_task_mult(rq) -
+				      rq->clock_pelt;
+}
 
-	_update_idle_rq_clock_pelt(rq);
+static inline u64 rq_clock_pelt(struct rq *rq)
+{
+	lockdep_assert_held(&rq->lock);
+	assert_clock_updated(rq);
+
+	return rq->clock_pelt - rq->lost_idle_time;
 }
 
 #ifdef CONFIG_CFS_BANDWIDTH
-static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
-{
-	u64 throttled;
-
-	if (unlikely(cfs_rq->throttle_count))
-		throttled = U64_MAX;
-	else
-		throttled = cfs_rq->throttled_clock_pelt_time;
-
-	u64_u32_store(cfs_rq->throttled_pelt_idle, throttled);
-}
-
 /* rq->task_clock normalized against any time this cfs_rq has spent throttled */
 static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 {
@@ -174,7 +157,6 @@ static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 	return rq_clock_pelt(rq_of(cfs_rq)) - cfs_rq->throttled_clock_pelt_time;
 }
 #else
-static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq) { }
 static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 {
 	return rq_clock_pelt(rq_of(cfs_rq));
@@ -229,7 +211,6 @@ update_rq_clock_pelt(struct rq *rq, s64 delta) { }
 static inline void
 update_idle_rq_clock_pelt(struct rq *rq) { }
 
-static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq) { }
 #endif
 
 

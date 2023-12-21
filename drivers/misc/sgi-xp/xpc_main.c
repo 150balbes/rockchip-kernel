@@ -93,7 +93,7 @@ int xpc_disengage_timelimit = XPC_DISENGAGE_DEFAULT_TIMELIMIT;
 static int xpc_disengage_min_timelimit;	/* = 0 */
 static int xpc_disengage_max_timelimit = 120;
 
-static struct ctl_table xpc_sys_xpc_hb[] = {
+static struct ctl_table xpc_sys_xpc_hb_dir[] = {
 	{
 	 .procname = "hb_interval",
 	 .data = &xpc_hb_interval,
@@ -112,7 +112,11 @@ static struct ctl_table xpc_sys_xpc_hb[] = {
 	 .extra2 = &xpc_hb_check_max_interval},
 	{}
 };
-static struct ctl_table xpc_sys_xpc[] = {
+static struct ctl_table xpc_sys_xpc_dir[] = {
+	{
+	 .procname = "hb",
+	 .mode = 0555,
+	 .child = xpc_sys_xpc_hb_dir},
 	{
 	 .procname = "disengage_timelimit",
 	 .data = &xpc_disengage_timelimit,
@@ -123,9 +127,14 @@ static struct ctl_table xpc_sys_xpc[] = {
 	 .extra2 = &xpc_disengage_max_timelimit},
 	{}
 };
-
+static struct ctl_table xpc_sys_dir[] = {
+	{
+	 .procname = "xpc",
+	 .mode = 0555,
+	 .child = xpc_sys_xpc_dir},
+	{}
+};
 static struct ctl_table_header *xpc_sysctl;
-static struct ctl_table_header *xpc_sysctl_hb;
 
 /* non-zero if any remote partition disengage was timed out */
 int xpc_disengage_timedout;
@@ -170,7 +179,7 @@ xpc_timeout_partition_disengage(struct timer_list *t)
 
 	DBUG_ON(time_is_after_jiffies(part->disengage_timeout));
 
-	xpc_partition_disengaged_from_timer(part);
+	(void)xpc_partition_disengaged(part);
 
 	DBUG_ON(part->disengage_timeout != 0);
 	DBUG_ON(xpc_arch_ops.partition_engaged(XPC_PARTID(part)));
@@ -198,7 +207,7 @@ xpc_start_hb_beater(void)
 {
 	xpc_arch_ops.heartbeat_init();
 	timer_setup(&xpc_hb_timer, xpc_hb_beater, 0);
-	xpc_hb_beater(NULL);
+	xpc_hb_beater(0);
 }
 
 static void
@@ -1032,8 +1041,6 @@ xpc_do_exit(enum xp_retval reason)
 
 	if (xpc_sysctl)
 		unregister_sysctl_table(xpc_sysctl);
-	if (xpc_sysctl_hb)
-		unregister_sysctl_table(xpc_sysctl_hb);
 
 	xpc_teardown_partitions();
 
@@ -1236,8 +1243,7 @@ xpc_init(void)
 		goto out_1;
 	}
 
-	xpc_sysctl = register_sysctl("xpc", xpc_sys_xpc);
-	xpc_sysctl_hb = register_sysctl("xpc/hb", xpc_sys_xpc_hb);
+	xpc_sysctl = register_sysctl_table(xpc_sys_dir);
 
 	/*
 	 * Fill the partition reserved page with the information needed by
@@ -1302,8 +1308,6 @@ out_3:
 	(void)unregister_die_notifier(&xpc_die_notifier);
 	(void)unregister_reboot_notifier(&xpc_reboot_notifier);
 out_2:
-	if (xpc_sysctl_hb)
-		unregister_sysctl_table(xpc_sysctl_hb);
 	if (xpc_sysctl)
 		unregister_sysctl_table(xpc_sysctl);
 

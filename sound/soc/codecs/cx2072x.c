@@ -710,19 +710,22 @@ static int cx2072x_config_i2spcm(struct cx2072x_priv *cx2072x)
 
 	regdbt2.ulval = 0xac;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	/* set master/slave */
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		reg2.r.tx_master = 1;
 		reg3.r.rx_master = 1;
+		dev_dbg(dev, "Sets Master mode\n");
 		break;
 
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		reg2.r.tx_master = 0;
 		reg3.r.rx_master = 0;
+		dev_dbg(dev, "Sets Slave mode\n");
 		break;
 
 	default:
-		dev_err(dev, "Unsupported DAI clocking mode\n");
+		dev_err(dev, "Unsupported DAI master mode\n");
 		return -EINVAL;
 	}
 
@@ -823,6 +826,9 @@ static int cx2072x_config_i2spcm(struct cx2072x_priv *cx2072x)
 		return -EINVAL;
 	}
 	regdbt2.r.i2s_bclk_invert = is_bclk_inv;
+
+	reg1.r.rx_data_one_line = 1;
+	reg1.r.tx_data_one_line = 1;
 
 	/* Configures the BCLK output */
 	bclk_rate = cx2072x->sample_rate * frame_len;
@@ -1006,9 +1012,9 @@ static int cx2072x_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 
 	dev_dbg(dev, "set_dai_fmt- %08x\n", fmt);
 	/* set master/slave */
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
-	case SND_SOC_DAIFMT_CBC_CFC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 
 	default:
@@ -1427,11 +1433,11 @@ static int cx2072x_jack_status_check(void *data)
 			state |= SND_JACK_HEADSET;
 			if (type & 0x2)
 				state |= SND_JACK_BTN_0;
+		} else if (type & 0x4) {
+			/* Nokia headset */
+			state |= SND_JACK_HEADPHONE;
 		} else {
-			/*
-			 * Nokia headset (type & 0x4) and
-			 * regular Headphone
-			 */
+			/* Headphone */
 			state |= SND_JACK_HEADPHONE;
 		}
 	}
@@ -1524,13 +1530,12 @@ static const struct snd_soc_component_driver soc_codec_driver_cx2072x = {
 	.num_dapm_widgets = ARRAY_SIZE(cx2072x_dapm_widgets),
 	.dapm_routes = cx2072x_intercon,
 	.num_dapm_routes = ARRAY_SIZE(cx2072x_intercon),
-	.endianness = 1,
 };
 
 /*
  * DAI ops
  */
-static const struct snd_soc_dai_ops cx2072x_dai_ops = {
+static struct snd_soc_dai_ops cx2072x_dai_ops = {
 	.set_sysclk = cx2072x_set_dai_sysclk,
 	.set_fmt = cx2072x_set_dai_fmt,
 	.hw_params = cx2072x_hw_params,
@@ -1567,7 +1572,7 @@ static struct snd_soc_dai_driver soc_codec_cx2072x_dai[] = {
 			.formats = CX2072X_FORMATS,
 		},
 		.ops = &cx2072x_dai_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 	},
 	{ /* plabayck only, return echo reference to Conexant DSP chip */
 		.name = "cx2072x-dsp",
@@ -1624,7 +1629,8 @@ static int __maybe_unused cx2072x_runtime_resume(struct device *dev)
 	return clk_prepare_enable(cx2072x->mclk);
 }
 
-static int cx2072x_i2c_probe(struct i2c_client *i2c)
+static int cx2072x_i2c_probe(struct i2c_client *i2c,
+			     const struct i2c_device_id *id)
 {
 	struct cx2072x_priv *cx2072x;
 	unsigned int ven_id, rev_id;
@@ -1673,9 +1679,10 @@ static int cx2072x_i2c_probe(struct i2c_client *i2c)
 	return 0;
 }
 
-static void cx2072x_i2c_remove(struct i2c_client *i2c)
+static int cx2072x_i2c_remove(struct i2c_client *i2c)
 {
 	pm_runtime_disable(&i2c->dev);
+	return 0;
 }
 
 static const struct i2c_device_id cx2072x_i2c_id[] = {

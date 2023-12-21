@@ -21,7 +21,6 @@
 #include <linux/workqueue.h>
 #include <linux/netlink.h>
 #include <linux/net_dropmon.h>
-#include <linux/bitfield.h>
 #include <linux/percpu.h>
 #include <linux/timer.h>
 #include <linux/bitops.h>
@@ -30,7 +29,6 @@
 #include <net/genetlink.h>
 #include <net/netevent.h>
 #include <net/flow_offload.h>
-#include <net/dropreason.h>
 #include <net/devlink.h>
 
 #include <trace/events/skb.h>
@@ -53,11 +51,12 @@ static bool monitor_hw;
 /* net_dm_mutex
  *
  * An overall lock guarding every operation coming from userspace.
+ * It also guards the global 'hw_stats_list' list.
  */
 static DEFINE_MUTEX(net_dm_mutex);
 
 struct net_dm_stats {
-	u64_stats_t dropped;
+	u64 dropped;
 	struct u64_stats_sync syncp;
 };
 
@@ -88,9 +87,11 @@ struct per_cpu_dm_data {
 };
 
 struct dm_hw_stat_delta {
+	struct net_device *dev;
 	unsigned long last_rx;
-	unsigned long last_drop_val;
+	struct list_head list;
 	struct rcu_head rcu;
+	unsigned long last_drop_val;
 };
 
 static struct genl_family net_drop_monitor_family;
@@ -101,6 +102,7 @@ static DEFINE_PER_CPU(struct per_cpu_dm_data, dm_hw_cpu_data);
 static int dm_hit_limit = 64;
 static int dm_delay = 1;
 static unsigned long dm_hw_check_delta = 2*HZ;
+static LIST_HEAD(hw_stats_list);
 
 static enum net_dm_alert_mode net_dm_alert_mode = NET_DM_ALERT_MODE_SUMMARY;
 static u32 net_dm_trunc_len;
@@ -108,8 +110,7 @@ static u32 net_dm_queue_len = 1000;
 
 struct net_dm_alert_ops {
 	void (*kfree_skb_probe)(void *ignore, struct sk_buff *skb,
-				void *location,
-				enum skb_drop_reason reason);
+				void *location);
 	void (*napi_poll_probe)(void *ignore, struct napi_struct *napi,
 				int work, int budget);
 	void (*work_item_func)(struct work_struct *work);
@@ -124,7 +125,6 @@ struct net_dm_skb_cb {
 		struct devlink_trap_metadata *hw_metadata;
 		void *pc;
 	};
-	enum skb_drop_reason reason;
 };
 
 #define NET_DM_SKB_CB(__skb) ((struct net_dm_skb_cb *)&((__skb)->cb[0]))
@@ -262,9 +262,7 @@ out:
 	spin_unlock_irqrestore(&data->lock, flags);
 }
 
-static void trace_kfree_skb_hit(void *ignore, struct sk_buff *skb,
-				void *location,
-				enum skb_drop_reason reason)
+static void trace_kfree_skb_hit(void *ignore, struct sk_buff *skb, void *location)
 {
 	trace_drop_common(skb, location);
 }
@@ -272,27 +270,33 @@ static void trace_kfree_skb_hit(void *ignore, struct sk_buff *skb,
 static void trace_napi_poll_hit(void *ignore, struct napi_struct *napi,
 				int work, int budget)
 {
-	struct net_device *dev = napi->dev;
-	struct dm_hw_stat_delta *stat;
+	struct dm_hw_stat_delta *new_stat;
+
 	/*
 	 * Don't check napi structures with no associated device
 	 */
-	if (!dev)
+	if (!napi->dev)
 		return;
 
 	rcu_read_lock();
-	stat = rcu_dereference(dev->dm_private);
-	if (stat) {
+	list_for_each_entry_rcu(new_stat, &hw_stats_list, list) {
+		struct net_device *dev;
+
 		/*
 		 * only add a note to our monitor buffer if:
-		 * 1) its after the last_rx delta
-		 * 2) our rx_dropped count has gone up
+		 * 1) this is the dev we received on
+		 * 2) its after the last_rx delta
+		 * 3) our rx_dropped count has gone up
 		 */
-		if (time_after(jiffies, stat->last_rx + dm_hw_check_delta) &&
-		    (dev->stats.rx_dropped != stat->last_drop_val)) {
+		/* Paired with WRITE_ONCE() in dropmon_net_event() */
+		dev = READ_ONCE(new_stat->dev);
+		if ((dev == napi->dev)  &&
+		    (time_after(jiffies, new_stat->last_rx + dm_hw_check_delta)) &&
+		    (napi->dev->stats.rx_dropped != new_stat->last_drop_val)) {
 			trace_drop_common(NULL, NULL);
-			stat->last_drop_val = dev->stats.rx_dropped;
-			stat->last_rx = jiffies;
+			new_stat->last_drop_val = napi->dev->stats.rx_dropped;
+			new_stat->last_rx = jiffies;
+			break;
 		}
 	}
 	rcu_read_unlock();
@@ -466,7 +470,7 @@ net_dm_hw_trap_summary_probe(void *ignore, const struct devlink *devlink,
 		goto out;
 
 	hw_entry = &hw_entries->entries[hw_entries->num_entries];
-	strscpy(hw_entry->trap_name, metadata->trap_name,
+	strlcpy(hw_entry->trap_name, metadata->trap_name,
 		NET_DM_MAX_HW_TRAP_NAME_LEN - 1);
 	hw_entry->count = 1;
 	hw_entries->num_entries++;
@@ -490,12 +494,10 @@ static const struct net_dm_alert_ops net_dm_alert_summary_ops = {
 
 static void net_dm_packet_trace_kfree_skb_hit(void *ignore,
 					      struct sk_buff *skb,
-					      void *location,
-					      enum skb_drop_reason reason)
+					      void *location)
 {
 	ktime_t tstamp = ktime_get_real();
 	struct per_cpu_dm_data *data;
-	struct net_dm_skb_cb *cb;
 	struct sk_buff *nskb;
 	unsigned long flags;
 
@@ -506,9 +508,7 @@ static void net_dm_packet_trace_kfree_skb_hit(void *ignore,
 	if (!nskb)
 		return;
 
-	cb = NET_DM_SKB_CB(nskb);
-	cb->reason = reason;
-	cb->pc = location;
+	NET_DM_SKB_CB(nskb)->pc = location;
 	/* Override the timestamp because we care about the time when the
 	 * packet was dropped.
 	 */
@@ -530,7 +530,7 @@ static void net_dm_packet_trace_kfree_skb_hit(void *ignore,
 unlock_free:
 	spin_unlock_irqrestore(&data->drop_queue.lock, flags);
 	u64_stats_update_begin(&data->stats.syncp);
-	u64_stats_inc(&data->stats.dropped);
+	data->stats.dropped++;
 	u64_stats_update_end(&data->stats.syncp);
 	consume_skb(nskb);
 }
@@ -552,7 +552,6 @@ static size_t net_dm_in_port_size(void)
 }
 
 #define NET_DM_MAX_SYMBOL_LEN 40
-#define NET_DM_MAX_REASON_LEN 50
 
 static size_t net_dm_packet_report_size(size_t payload_len)
 {
@@ -575,8 +574,6 @@ static size_t net_dm_packet_report_size(size_t payload_len)
 	       nla_total_size(sizeof(u32)) +
 	       /* NET_DM_ATTR_PROTO */
 	       nla_total_size(sizeof(u16)) +
-	       /* NET_DM_ATTR_REASON */
-	       nla_total_size(NET_DM_MAX_REASON_LEN + 1) +
 	       /* NET_DM_ATTR_PAYLOAD */
 	       nla_total_size(payload_len);
 }
@@ -609,9 +606,7 @@ nla_put_failure:
 static int net_dm_packet_report_fill(struct sk_buff *msg, struct sk_buff *skb,
 				     size_t payload_len)
 {
-	struct net_dm_skb_cb *cb = NET_DM_SKB_CB(skb);
-	const struct drop_reason_list *list = NULL;
-	unsigned int subsys, subsys_reason;
+	u64 pc = (u64)(uintptr_t) NET_DM_SKB_CB(skb)->pc;
 	char buf[NET_DM_MAX_SYMBOL_LEN];
 	struct nlattr *attr;
 	void *hdr;
@@ -625,30 +620,10 @@ static int net_dm_packet_report_fill(struct sk_buff *msg, struct sk_buff *skb,
 	if (nla_put_u16(msg, NET_DM_ATTR_ORIGIN, NET_DM_ORIGIN_SW))
 		goto nla_put_failure;
 
-	if (nla_put_u64_64bit(msg, NET_DM_ATTR_PC, (u64)(uintptr_t)cb->pc,
-			      NET_DM_ATTR_PAD))
+	if (nla_put_u64_64bit(msg, NET_DM_ATTR_PC, pc, NET_DM_ATTR_PAD))
 		goto nla_put_failure;
 
-	rcu_read_lock();
-	subsys = u32_get_bits(cb->reason, SKB_DROP_REASON_SUBSYS_MASK);
-	if (subsys < SKB_DROP_REASON_SUBSYS_NUM)
-		list = rcu_dereference(drop_reasons_by_subsys[subsys]);
-	subsys_reason = cb->reason & ~SKB_DROP_REASON_SUBSYS_MASK;
-	if (!list ||
-	    subsys_reason >= list->n_reasons ||
-	    !list->reasons[subsys_reason] ||
-	    strlen(list->reasons[subsys_reason]) > NET_DM_MAX_REASON_LEN) {
-		list = rcu_dereference(drop_reasons_by_subsys[SKB_DROP_REASON_SUBSYS_CORE]);
-		subsys_reason = SKB_DROP_REASON_NOT_SPECIFIED;
-	}
-	if (nla_put_string(msg, NET_DM_ATTR_REASON,
-			   list->reasons[subsys_reason])) {
-		rcu_read_unlock();
-		goto nla_put_failure;
-	}
-	rcu_read_unlock();
-
-	snprintf(buf, sizeof(buf), "%pS", cb->pc);
+	snprintf(buf, sizeof(buf), "%pS", NET_DM_SKB_CB(skb)->pc);
 	if (nla_put_string(msg, NET_DM_ATTR_SYMBOL, buf))
 		goto nla_put_failure;
 
@@ -879,8 +854,8 @@ net_dm_hw_metadata_copy(const struct devlink_trap_metadata *metadata)
 	}
 
 	hw_metadata->input_dev = metadata->input_dev;
-	netdev_hold(hw_metadata->input_dev, &hw_metadata->dev_tracker,
-		    GFP_ATOMIC);
+	if (hw_metadata->input_dev)
+		dev_hold(hw_metadata->input_dev);
 
 	return hw_metadata;
 
@@ -894,9 +869,10 @@ free_hw_metadata:
 }
 
 static void
-net_dm_hw_metadata_free(struct devlink_trap_metadata *hw_metadata)
+net_dm_hw_metadata_free(const struct devlink_trap_metadata *hw_metadata)
 {
-	netdev_put(hw_metadata->input_dev, &hw_metadata->dev_tracker);
+	if (hw_metadata->input_dev)
+		dev_put(hw_metadata->input_dev);
 	kfree(hw_metadata->fa_cookie);
 	kfree(hw_metadata->trap_name);
 	kfree(hw_metadata->trap_group_name);
@@ -1001,7 +977,7 @@ net_dm_hw_trap_packet_probe(void *ignore, const struct devlink *devlink,
 unlock_free:
 	spin_unlock_irqrestore(&hw_data->drop_queue.lock, flags);
 	u64_stats_update_begin(&hw_data->stats.syncp);
-	u64_stats_inc(&hw_data->stats.dropped);
+	hw_data->stats.dropped++;
 	u64_stats_update_end(&hw_data->stats.syncp);
 	net_dm_hw_metadata_free(n_hw_metadata);
 free:
@@ -1191,6 +1167,7 @@ err_module_put:
 
 static void net_dm_trace_off_set(void)
 {
+	struct dm_hw_stat_delta *new_stat, *temp;
 	const struct net_dm_alert_ops *ops;
 	int cpu;
 
@@ -1212,6 +1189,13 @@ static void net_dm_trace_off_set(void)
 		cancel_work_sync(&data->dm_alert_work);
 		while ((skb = __skb_dequeue(&data->drop_queue)))
 			consume_skb(skb);
+	}
+
+	list_for_each_entry_safe(new_stat, temp, &hw_stats_list, list) {
+		if (new_stat->dev == NULL) {
+			list_del_rcu(&new_stat->list);
+			kfree_rcu(new_stat, rcu);
+		}
 	}
 
 	module_put(THIS_MODULE);
@@ -1447,11 +1431,11 @@ static void net_dm_stats_read(struct net_dm_stats *stats)
 		u64 dropped;
 
 		do {
-			start = u64_stats_fetch_begin(&cpu_stats->syncp);
-			dropped = u64_stats_read(&cpu_stats->dropped);
-		} while (u64_stats_fetch_retry(&cpu_stats->syncp, start));
+			start = u64_stats_fetch_begin_irq(&cpu_stats->syncp);
+			dropped = cpu_stats->dropped;
+		} while (u64_stats_fetch_retry_irq(&cpu_stats->syncp, start));
 
-		u64_stats_add(&stats->dropped, dropped);
+		stats->dropped += dropped;
 	}
 }
 
@@ -1467,7 +1451,7 @@ static int net_dm_stats_put(struct sk_buff *msg)
 		return -EMSGSIZE;
 
 	if (nla_put_u64_64bit(msg, NET_DM_ATTR_STATS_DROPPED,
-			      u64_stats_read(&stats.dropped), NET_DM_ATTR_PAD))
+			      stats.dropped, NET_DM_ATTR_PAD))
 		goto nla_put_failure;
 
 	nla_nest_end(msg, attr);
@@ -1491,11 +1475,11 @@ static void net_dm_hw_stats_read(struct net_dm_stats *stats)
 		u64 dropped;
 
 		do {
-			start = u64_stats_fetch_begin(&cpu_stats->syncp);
-			dropped = u64_stats_read(&cpu_stats->dropped);
-		} while (u64_stats_fetch_retry(&cpu_stats->syncp, start));
+			start = u64_stats_fetch_begin_irq(&cpu_stats->syncp);
+			dropped = cpu_stats->dropped;
+		} while (u64_stats_fetch_retry_irq(&cpu_stats->syncp, start));
 
-		u64_stats_add(&stats->dropped, dropped);
+		stats->dropped += dropped;
 	}
 }
 
@@ -1511,7 +1495,7 @@ static int net_dm_hw_stats_put(struct sk_buff *msg)
 		return -EMSGSIZE;
 
 	if (nla_put_u64_64bit(msg, NET_DM_ATTR_STATS_DROPPED,
-			      u64_stats_read(&stats.dropped), NET_DM_ATTR_PAD))
+			      stats.dropped, NET_DM_ATTR_PAD))
 		goto nla_put_failure;
 
 	nla_nest_end(msg, attr);
@@ -1574,28 +1558,41 @@ static int dropmon_net_event(struct notifier_block *ev_block,
 			     unsigned long event, void *ptr)
 {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
-	struct dm_hw_stat_delta *stat;
+	struct dm_hw_stat_delta *new_stat = NULL;
+	struct dm_hw_stat_delta *tmp;
 
 	switch (event) {
 	case NETDEV_REGISTER:
-		if (WARN_ON_ONCE(rtnl_dereference(dev->dm_private)))
-			break;
-		stat = kzalloc(sizeof(*stat), GFP_KERNEL);
-		if (!stat)
-			break;
+		new_stat = kzalloc(sizeof(struct dm_hw_stat_delta), GFP_KERNEL);
 
-		stat->last_rx = jiffies;
-		rcu_assign_pointer(dev->dm_private, stat);
+		if (!new_stat)
+			goto out;
 
+		new_stat->dev = dev;
+		new_stat->last_rx = jiffies;
+		mutex_lock(&net_dm_mutex);
+		list_add_rcu(&new_stat->list, &hw_stats_list);
+		mutex_unlock(&net_dm_mutex);
 		break;
 	case NETDEV_UNREGISTER:
-		stat = rtnl_dereference(dev->dm_private);
-		if (stat) {
-			rcu_assign_pointer(dev->dm_private, NULL);
-			kfree_rcu(stat, rcu);
+		mutex_lock(&net_dm_mutex);
+		list_for_each_entry_safe(new_stat, tmp, &hw_stats_list, list) {
+			if (new_stat->dev == dev) {
+
+				/* Paired with READ_ONCE() in trace_napi_poll_hit() */
+				WRITE_ONCE(new_stat->dev, NULL);
+
+				if (trace_state == TRACE_OFF) {
+					list_del_rcu(&new_stat->list);
+					kfree_rcu(new_stat, rcu);
+					break;
+				}
+			}
 		}
+		mutex_unlock(&net_dm_mutex);
 		break;
 	}
+out:
 	return NOTIFY_DONE;
 }
 
@@ -1635,7 +1632,7 @@ static const struct genl_small_ops dropmon_ops[] = {
 	},
 };
 
-static int net_dm_nl_pre_doit(const struct genl_split_ops *ops,
+static int net_dm_nl_pre_doit(const struct genl_ops *ops,
 			      struct sk_buff *skb, struct genl_info *info)
 {
 	mutex_lock(&net_dm_mutex);
@@ -1643,7 +1640,7 @@ static int net_dm_nl_pre_doit(const struct genl_split_ops *ops,
 	return 0;
 }
 
-static void net_dm_nl_post_doit(const struct genl_split_ops *ops,
+static void net_dm_nl_post_doit(const struct genl_ops *ops,
 				struct sk_buff *skb, struct genl_info *info)
 {
 	mutex_unlock(&net_dm_mutex);
@@ -1660,7 +1657,6 @@ static struct genl_family net_drop_monitor_family __ro_after_init = {
 	.module		= THIS_MODULE,
 	.small_ops	= dropmon_ops,
 	.n_small_ops	= ARRAY_SIZE(dropmon_ops),
-	.resv_start_op	= NET_DM_CMD_STATS_GET + 1,
 	.mcgrps		= dropmon_mcgrps,
 	.n_mcgrps	= ARRAY_SIZE(dropmon_mcgrps),
 };
@@ -1765,7 +1761,7 @@ static void exit_net_drop_monitor(void)
 
 	/*
 	 * Because of the module_get/put we do in the trace state change path
-	 * we are guaranteed not to have any current users when we get here
+	 * we are guarnateed not to have any current users when we get here
 	 */
 
 	for_each_possible_cpu(cpu) {

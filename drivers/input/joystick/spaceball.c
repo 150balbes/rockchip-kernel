@@ -11,6 +11,9 @@
  * SpaceTec SpaceBall 2003/3003/4000 FLX driver for Linux
  */
 
+/*
+ */
+
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>

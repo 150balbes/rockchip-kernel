@@ -130,7 +130,7 @@ struct smsm_host {
 /**
  * smsm_update_bits() - change bit in outgoing entry and inform subscribers
  * @data:	smsm context pointer
- * @mask:	value mask
+ * @offset:	bit in the entry
  * @value:	new value
  *
  * Used to set and clear the bits in the outgoing/local entry and inform
@@ -253,8 +253,10 @@ static void smsm_mask_irq(struct irq_data *irqd)
  * smsm_unmask_irq() - subscribe to cascades of IRQs of a certain status bit
  * @irqd:	IRQ handle to be unmasked
  *
+
  * This subscribes the local CPU to interrupts upon changes to the defined
  * status bit. The bit is also marked for cascading.
+
  */
 static void smsm_unmask_irq(struct irq_data *irqd)
 {
@@ -304,28 +306,11 @@ static int smsm_set_irq_type(struct irq_data *irqd, unsigned int type)
 	return 0;
 }
 
-static int smsm_get_irqchip_state(struct irq_data *irqd,
-				  enum irqchip_irq_state which, bool *state)
-{
-	struct smsm_entry *entry = irq_data_get_irq_chip_data(irqd);
-	irq_hw_number_t irq = irqd_to_hwirq(irqd);
-	u32 val;
-
-	if (which != IRQCHIP_STATE_LINE_LEVEL)
-		return -EINVAL;
-
-	val = readl(entry->remote_state);
-	*state = !!(val & BIT(irq));
-
-	return 0;
-}
-
 static struct irq_chip smsm_irq_chip = {
 	.name           = "smsm",
 	.irq_mask       = smsm_mask_irq,
 	.irq_unmask     = smsm_unmask_irq,
 	.irq_set_type	= smsm_set_irq_type,
-	.irq_get_irqchip_state = smsm_get_irqchip_state,
 };
 
 /**
@@ -452,10 +437,11 @@ static int smsm_get_size_info(struct qcom_smsm *smsm)
 	} *info;
 
 	info = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_SMSM_SIZE_INFO, &size);
-	if (IS_ERR(info) && PTR_ERR(info) != -ENOENT)
-		return dev_err_probe(smsm->dev, PTR_ERR(info),
-				     "unable to retrieve smsm size info\n");
-	else if (IS_ERR(info) || size != sizeof(*info)) {
+	if (IS_ERR(info) && PTR_ERR(info) != -ENOENT) {
+		if (PTR_ERR(info) != -EPROBE_DEFER)
+			dev_err(smsm->dev, "unable to retrieve smsm size info\n");
+		return PTR_ERR(info);
+	} else if (IS_ERR(info) || size != sizeof(*info)) {
 		dev_warn(smsm->dev, "no smsm size info, using defaults\n");
 		smsm->num_entries = SMSM_DEFAULT_NUM_ENTRIES;
 		smsm->num_hosts = SMSM_DEFAULT_NUM_HOSTS;
@@ -509,7 +495,7 @@ static int qcom_smsm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	for_each_child_of_node(pdev->dev.of_node, local_node) {
-		if (of_property_present(local_node, "#qcom,smem-state-cells"))
+		if (of_find_property(local_node, "#qcom,smem-state-cells", NULL))
 			break;
 	}
 	if (!local_node) {

@@ -17,6 +17,7 @@
 #include <linux/vmalloc.h>
 
 #include <asm/setup.h>
+#include <asm/segment.h>
 #include <asm/page.h>
 #include <asm/io.h>
 #include <asm/tlbflush.h>
@@ -179,12 +180,6 @@ void __iomem *__ioremap(unsigned long physaddr, unsigned long size, int cachefla
 			return (void __iomem *)physaddr;
 	}
 #endif
-#ifdef CONFIG_VIRT
-	if (MACH_IS_VIRT) {
-		if (physaddr >= 0xff000000 && cacheflag == IOMAP_NOCACHE_SER)
-			return (void __iomem *)physaddr;
-	}
-#endif
 #ifdef CONFIG_COLDFIRE
 	if (__cf_internalio(physaddr))
 		return (void __iomem *) physaddr;
@@ -299,20 +294,17 @@ EXPORT_SYMBOL(__ioremap);
 void iounmap(void __iomem *addr)
 {
 #ifdef CONFIG_AMIGA
-	if (MACH_IS_AMIGA &&
-	    ((unsigned long)addr >= 0x40000000) &&
-	    ((unsigned long)addr < 0x60000000))
-		return;
-#endif
-#ifdef CONFIG_VIRT
-	if (MACH_IS_VIRT && (unsigned long)addr >= 0xff000000)
-		return;
-#endif
+	if ((!MACH_IS_AMIGA) ||
+	    (((unsigned long)addr < 0x40000000) ||
+	     ((unsigned long)addr > 0x60000000)))
+			free_io_area((__force void *)addr);
+#else
 #ifdef CONFIG_COLDFIRE
 	if (cf_internalio(addr))
 		return;
 #endif
 	free_io_area((__force void *)addr);
+#endif
 }
 EXPORT_SYMBOL(iounmap);
 

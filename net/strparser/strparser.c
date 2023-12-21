@@ -50,7 +50,7 @@ static void strp_abort_strp(struct strparser *strp, int err)
 
 		/* Report an error on the lower socket */
 		sk->sk_err = -err;
-		sk_error_report(sk);
+		sk->sk_error_report(sk);
 	}
 }
 
@@ -533,9 +533,6 @@ EXPORT_SYMBOL_GPL(strp_check_rcv);
 
 static int __init strp_dev_init(void)
 {
-	BUILD_BUG_ON(sizeof(struct sk_skb_cb) >
-		     sizeof_field(struct sk_buff, cb));
-
 	strp_wq = create_singlethread_workqueue("kstrp");
 	if (unlikely(!strp_wq))
 		return -ENOMEM;

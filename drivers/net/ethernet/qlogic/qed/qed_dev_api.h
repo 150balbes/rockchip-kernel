@@ -15,52 +15,44 @@
 #include "qed_int.h"
 
 /**
- * qed_init_dp(): Initialize the debug level.
+ * @brief qed_init_dp - initialize the debug level
  *
- * @cdev: Qed dev pointer.
- * @dp_module: Module debug parameter.
- * @dp_level: Module debug level.
- *
- * Return: Void.
+ * @param cdev
+ * @param dp_module
+ * @param dp_level
  */
 void qed_init_dp(struct qed_dev *cdev,
 		 u32 dp_module,
 		 u8 dp_level);
 
 /**
- * qed_init_struct(): Initialize the device structure to
- *                    its defaults.
+ * @brief qed_init_struct - initialize the device structure to
+ *        its defaults
  *
- * @cdev: Qed dev pointer.
- *
- * Return: Void.
+ * @param cdev
  */
 void qed_init_struct(struct qed_dev *cdev);
 
 /**
- * qed_resc_free: Free device resources.
+ * @brief qed_resc_free -
  *
- * @cdev: Qed dev pointer.
- *
- * Return: Void.
+ * @param cdev
  */
 void qed_resc_free(struct qed_dev *cdev);
 
 /**
- * qed_resc_alloc(): Alloc device resources.
+ * @brief qed_resc_alloc -
  *
- * @cdev: Qed dev pointer.
+ * @param cdev
  *
- * Return: Int.
+ * @return int
  */
 int qed_resc_alloc(struct qed_dev *cdev);
 
 /**
- * qed_resc_setup(): Setup device resources.
+ * @brief qed_resc_setup -
  *
- * @cdev: Qed dev pointer.
- *
- * Return: Void.
+ * @param cdev
  */
 void qed_resc_setup(struct qed_dev *cdev);
 
@@ -113,96 +105,94 @@ struct qed_hw_init_params {
 };
 
 /**
- * qed_hw_init(): Init Qed hardware.
+ * @brief qed_hw_init -
  *
- * @cdev: Qed dev pointer.
- * @p_params: Pointers to params.
+ * @param cdev
+ * @param p_params
  *
- * Return: Int.
+ * @return int
  */
 int qed_hw_init(struct qed_dev *cdev, struct qed_hw_init_params *p_params);
 
 /**
- * qed_hw_timers_stop_all(): Stop the timers HW block.
+ * @brief qed_hw_timers_stop_all - stop the timers HW block
  *
- * @cdev: Qed dev pointer.
+ * @param cdev
  *
- * Return: void.
+ * @return void
  */
 void qed_hw_timers_stop_all(struct qed_dev *cdev);
 
 /**
- * qed_hw_stop(): Stop Qed hardware.
+ * @brief qed_hw_stop -
  *
- * @cdev: Qed dev pointer.
+ * @param cdev
  *
- * Return: int.
+ * @return int
  */
 int qed_hw_stop(struct qed_dev *cdev);
 
 /**
- * qed_hw_stop_fastpath(): Should be called incase
- *		           slowpath is still required for the device,
- *		           but fastpath is not.
+ * @brief qed_hw_stop_fastpath -should be called incase
+ *		slowpath is still required for the device,
+ *		but fastpath is not.
  *
- * @cdev: Qed dev pointer.
+ * @param cdev
  *
- * Return: Int.
+ * @return int
  */
 int qed_hw_stop_fastpath(struct qed_dev *cdev);
 
 /**
- * qed_hw_start_fastpath(): Restart fastpath traffic,
- *		            only if hw_stop_fastpath was called.
+ * @brief qed_hw_start_fastpath -restart fastpath traffic,
+ *		only if hw_stop_fastpath was called
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Return: Int.
+ * @return int
  */
 int qed_hw_start_fastpath(struct qed_hwfn *p_hwfn);
 
+
 /**
- * qed_hw_prepare(): Prepare Qed hardware.
+ * @brief qed_hw_prepare -
  *
- * @cdev: Qed dev pointer.
- * @personality: Personality to initialize.
+ * @param cdev
+ * @param personality - personality to initialize
  *
- * Return: Int.
+ * @return int
  */
 int qed_hw_prepare(struct qed_dev *cdev,
 		   int personality);
 
 /**
- * qed_hw_remove(): Remove Qed hardware.
+ * @brief qed_hw_remove -
  *
- * @cdev: Qed dev pointer.
- *
- * Return: Void.
+ * @param cdev
  */
 void qed_hw_remove(struct qed_dev *cdev);
 
 /**
- * qed_ptt_acquire(): Allocate a PTT window.
- *
- * @p_hwfn: HW device data.
- *
- * Return: struct qed_ptt.
+ * @brief qed_ptt_acquire - Allocate a PTT window
  *
  * Should be called at the entry point to the driver (at the beginning of an
- * exported function).
+ * exported function)
+ *
+ * @param p_hwfn
+ *
+ * @return struct qed_ptt
  */
 struct qed_ptt *qed_ptt_acquire(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_ptt_release(): Release PTT Window.
- *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Void.
+ * @brief qed_ptt_release - Release PTT Window
  *
  * Should be called at the end of a flow - at the end of the function that
  * acquired the PTT.
+ *
+ *
+ * @param p_hwfn
+ * @param p_ptt
  */
 void qed_ptt_release(struct qed_hwfn *p_hwfn,
 		     struct qed_ptt *p_ptt);
@@ -215,17 +205,15 @@ enum qed_dmae_address_type_t {
 };
 
 /**
- * qed_dmae_host2grc(): Copy data from source addr to
- *                      dmae registers using the given ptt.
+ * @brief qed_dmae_host2grc - copy data from source addr to
+ * dmae registers using the given ptt
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @source_addr: Source address.
- * @grc_addr: GRC address (dmae_data_offset).
- * @size_in_dwords: Size.
- * @p_params: (default parameters will be used in case of NULL).
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param source_addr
+ * @param grc_addr (dmae_data_offset)
+ * @param size_in_dwords
+ * @param p_params (default parameters will be used in case of NULL)
  */
 int
 qed_dmae_host2grc(struct qed_hwfn *p_hwfn,
@@ -236,34 +224,29 @@ qed_dmae_host2grc(struct qed_hwfn *p_hwfn,
 		  struct qed_dmae_params *p_params);
 
  /**
- * qed_dmae_grc2host(): Read data from dmae data offset
- *                      to source address using the given ptt.
+ * @brief qed_dmae_grc2host - Read data from dmae data offset
+ * to source address using the given ptt
  *
- * @p_ptt: P_ptt.
- * @grc_addr: GRC address (dmae_data_offset).
- * @dest_addr: Destination Address.
- * @size_in_dwords: Size.
- * @p_params: (default parameters will be used in case of NULL).
- *
- * Return: Int.
+ * @param p_ptt
+ * @param grc_addr (dmae_data_offset)
+ * @param dest_addr
+ * @param size_in_dwords
+ * @param p_params (default parameters will be used in case of NULL)
  */
 int qed_dmae_grc2host(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 		      u32 grc_addr, dma_addr_t dest_addr, u32 size_in_dwords,
 		      struct qed_dmae_params *p_params);
 
 /**
- * qed_dmae_host2host(): Copy data from to source address
- *                       to a destination adrress (for SRIOV) using the given
- *                       ptt.
+ * @brief qed_dmae_host2host - copy data from to source address
+ * to a destination adress (for SRIOV) using the given ptt
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @source_addr: Source address.
- * @dest_addr: Destination address.
- * @size_in_dwords: size.
- * @p_params: (default parameters will be used in case of NULL).
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param source_addr
+ * @param dest_addr
+ * @param size_in_dwords
+ * @param p_params (default parameters will be used in case of NULL)
  */
 int qed_dmae_host2host(struct qed_hwfn *p_hwfn,
 		       struct qed_ptt *p_ptt,
@@ -276,51 +259,51 @@ int qed_chain_alloc(struct qed_dev *cdev, struct qed_chain *chain,
 void qed_chain_free(struct qed_dev *cdev, struct qed_chain *chain);
 
 /**
- * qed_fw_l2_queue(): Get absolute L2 queue ID.
+ * @@brief qed_fw_l2_queue - Get absolute L2 queue ID
  *
- * @p_hwfn: HW device data.
- * @src_id: Relative to p_hwfn.
- * @dst_id: Absolute per engine.
+ *  @param p_hwfn
+ *  @param src_id - relative to p_hwfn
+ *  @param dst_id - absolute per engine
  *
- * Return: Int.
+ *  @return int
  */
 int qed_fw_l2_queue(struct qed_hwfn *p_hwfn,
 		    u16 src_id,
 		    u16 *dst_id);
 
 /**
- * qed_fw_vport(): Get absolute vport ID.
+ * @@brief qed_fw_vport - Get absolute vport ID
  *
- * @p_hwfn: HW device data.
- * @src_id: Relative to p_hwfn.
- * @dst_id: Absolute per engine.
+ *  @param p_hwfn
+ *  @param src_id - relative to p_hwfn
+ *  @param dst_id - absolute per engine
  *
- * Return: Int.
+ *  @return int
  */
 int qed_fw_vport(struct qed_hwfn *p_hwfn,
 		 u8 src_id,
 		 u8 *dst_id);
 
 /**
- * qed_fw_rss_eng(): Get absolute RSS engine ID.
+ * @@brief qed_fw_rss_eng - Get absolute RSS engine ID
  *
- * @p_hwfn: HW device data.
- * @src_id: Relative to p_hwfn.
- * @dst_id: Absolute per engine.
+ *  @param p_hwfn
+ *  @param src_id - relative to p_hwfn
+ *  @param dst_id - absolute per engine
  *
- * Return: Int.
+ *  @return int
  */
 int qed_fw_rss_eng(struct qed_hwfn *p_hwfn,
 		   u8 src_id,
 		   u8 *dst_id);
 
 /**
- * qed_llh_get_num_ppfid(): Return the allocated number of LLH filter
- *	                    banks that are allocated to the PF.
+ * @brief qed_llh_get_num_ppfid - Return the allocated number of LLH filter
+ *	banks that are allocated to the PF.
  *
- * @cdev: Qed dev pointer.
+ * @param cdev
  *
- * Return: u8 Number of LLH filter banks.
+ * @return u8 - Number of LLH filter banks
  */
 u8 qed_llh_get_num_ppfid(struct qed_dev *cdev);
 
@@ -331,50 +314,45 @@ enum qed_eng {
 };
 
 /**
- * qed_llh_set_ppfid_affinity(): Set the engine affinity for the given
- *	                         LLH filter bank.
+ * @brief qed_llh_set_ppfid_affinity - Set the engine affinity for the given
+ *	LLH filter bank.
  *
- * @cdev: Qed dev pointer.
- * @ppfid: Relative within the allocated ppfids ('0' is the default one).
- * @eng: Engine.
+ * @param cdev
+ * @param ppfid - relative within the allocated ppfids ('0' is the default one).
+ * @param eng
  *
- * Return: Int.
+ * @return int
  */
 int qed_llh_set_ppfid_affinity(struct qed_dev *cdev,
 			       u8 ppfid, enum qed_eng eng);
 
 /**
- * qed_llh_set_roce_affinity(): Set the RoCE engine affinity.
+ * @brief qed_llh_set_roce_affinity - Set the RoCE engine affinity
  *
- * @cdev: Qed dev pointer.
- * @eng: Engine.
+ * @param cdev
+ * @param eng
  *
- * Return: Int.
+ * @return int
  */
 int qed_llh_set_roce_affinity(struct qed_dev *cdev, enum qed_eng eng);
 
 /**
- * qed_llh_add_mac_filter(): Add a LLH MAC filter into the given filter
- *	                     bank.
+ * @brief qed_llh_add_mac_filter - Add a LLH MAC filter into the given filter
+ *	bank.
  *
- * @cdev: Qed dev pointer.
- * @ppfid: Relative within the allocated ppfids ('0' is the default one).
- * @mac_addr: MAC to add.
- *
- * Return: Int.
+ * @param cdev
+ * @param ppfid - relative within the allocated ppfids ('0' is the default one).
+ * @param mac_addr - MAC to add
  */
 int qed_llh_add_mac_filter(struct qed_dev *cdev,
-			   u8 ppfid, const u8 mac_addr[ETH_ALEN]);
+			   u8 ppfid, u8 mac_addr[ETH_ALEN]);
 
 /**
- * qed_llh_remove_mac_filter(): Remove a LLH MAC filter from the given
- *	                        filter bank.
+ * @brief qed_llh_remove_mac_filter - Remove a LLH MAC filter from the given
+ *	filter bank.
  *
- * @cdev: Qed dev pointer.
- * @ppfid: Ppfid.
- * @mac_addr: MAC to remove
- *
- * Return: Void.
+ * @param p_ptt
+ * @param p_filter - MAC to remove
  */
 void qed_llh_remove_mac_filter(struct qed_dev *cdev,
 			       u8 ppfid, u8 mac_addr[ETH_ALEN]);
@@ -390,16 +368,15 @@ enum qed_llh_prot_filter_type_t {
 };
 
 /**
- * qed_llh_add_protocol_filter(): Add a LLH protocol filter into the
- *	                          given filter bank.
+ * @brief qed_llh_add_protocol_filter - Add a LLH protocol filter into the
+ *	given filter bank.
  *
- * @cdev: Qed dev pointer.
- * @ppfid: Relative within the allocated ppfids ('0' is the default one).
- * @type: Type of filters and comparing.
- * @source_port_or_eth_type: Source port or ethertype to add.
- * @dest_port: Destination port to add.
- *
- * Return: Int.
+ * @param cdev
+ * @param ppfid - relative within the allocated ppfids ('0' is the default one).
+ * @param type - type of filters and comparing
+ * @param source_port_or_eth_type - source port or ethertype to add
+ * @param dest_port - destination port to add
+ * @param type - type of filters and comparing
  */
 int
 qed_llh_add_protocol_filter(struct qed_dev *cdev,
@@ -408,14 +385,14 @@ qed_llh_add_protocol_filter(struct qed_dev *cdev,
 			    u16 source_port_or_eth_type, u16 dest_port);
 
 /**
- * qed_llh_remove_protocol_filter(): Remove a LLH protocol filter from
- *	                             the given filter bank.
+ * @brief qed_llh_remove_protocol_filter - Remove a LLH protocol filter from
+ *	the given filter bank.
  *
- * @cdev: Qed dev pointer.
- * @ppfid: Relative within the allocated ppfids ('0' is the default one).
- * @type: Type of filters and comparing.
- * @source_port_or_eth_type: Source port or ethertype to add.
- * @dest_port: Destination port to add.
+ * @param cdev
+ * @param ppfid - relative within the allocated ppfids ('0' is the default one).
+ * @param type - type of filters and comparing
+ * @param source_port_or_eth_type - source port or ethertype to add
+ * @param dest_port - destination port to add
  */
 void
 qed_llh_remove_protocol_filter(struct qed_dev *cdev,
@@ -424,31 +401,31 @@ qed_llh_remove_protocol_filter(struct qed_dev *cdev,
 			       u16 source_port_or_eth_type, u16 dest_port);
 
 /**
- * qed_final_cleanup(): Cleanup of previous driver remains prior to load.
+ * *@brief Cleanup of previous driver remains prior to load
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @id: For PF, engine-relative. For VF, PF-relative.
- * @is_vf: True iff cleanup is made for a VF.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param id - For PF, engine-relative. For VF, PF-relative.
+ * @param is_vf - true iff cleanup is made for a VF.
  *
- * Return: Int.
+ * @return int
  */
 int qed_final_cleanup(struct qed_hwfn *p_hwfn,
 		      struct qed_ptt *p_ptt, u16 id, bool is_vf);
 
 /**
- * qed_get_queue_coalesce(): Retrieve coalesce value for a given queue.
+ * @brief qed_get_queue_coalesce - Retrieve coalesce value for a given queue.
  *
- * @p_hwfn: HW device data.
- * @coal: Store coalesce value read from the hardware.
- * @handle: P_handle.
+ * @param p_hwfn
+ * @param p_coal - store coalesce value read from the hardware.
+ * @param p_handle
  *
- * Return: Int.
+ * @return int
  **/
 int qed_get_queue_coalesce(struct qed_hwfn *p_hwfn, u16 *coal, void *handle);
 
 /**
- * qed_set_queue_coalesce(): Configure coalesce parameters for Rx and
+ * @brief qed_set_queue_coalesce - Configure coalesce parameters for Rx and
  *    Tx queue. The fact that we can configure coalescing to up to 511, but on
  *    varying accuracy [the bigger the value the less accurate] up to a mistake
  *    of 3usec for the highest values.
@@ -456,38 +433,37 @@ int qed_get_queue_coalesce(struct qed_hwfn *p_hwfn, u16 *coal, void *handle);
  *    should be in same range [i.e., either 0-0x7f, 0x80-0xff or 0x100-0x1ff]
  *    otherwise configuration would break.
  *
- * @rx_coal: Rx Coalesce value in micro seconds.
- * @tx_coal: TX Coalesce value in micro seconds.
- * @p_handle: P_handle.
  *
- * Return: Int.
+ * @param rx_coal - Rx Coalesce value in micro seconds.
+ * @param tx_coal - TX Coalesce value in micro seconds.
+ * @param p_handle
+ *
+ * @return int
  **/
 int
 qed_set_queue_coalesce(u16 rx_coal, u16 tx_coal, void *p_handle);
 
 /**
- * qed_pglueb_set_pfid_enable(): Enable or disable PCI BUS MASTER.
+ * @brief qed_pglueb_set_pfid_enable - Enable or disable PCI BUS MASTER
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @b_enable: True/False.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param b_enable - true/false
  *
- * Return: Int.
+ * @return int
  */
 int qed_pglueb_set_pfid_enable(struct qed_hwfn *p_hwfn,
 			       struct qed_ptt *p_ptt, bool b_enable);
 
 /**
- * qed_db_recovery_add(): add doorbell information to the doorbell
- *                    recovery mechanism.
+ * @brief db_recovery_add - add doorbell information to the doorbell
+ * recovery mechanism.
  *
- * @cdev: Qed dev pointer.
- * @db_addr: Doorbell address.
- * @db_data: Address of where db_data is stored.
- * @db_width: Doorbell is 32b pr 64b.
- * @db_space: Doorbell recovery addresses are user or kernel space.
- *
- * Return: Int.
+ * @param cdev
+ * @param db_addr - doorbell address
+ * @param db_data - address of where db_data is stored
+ * @param db_width - doorbell is 32b pr 64b
+ * @param db_space - doorbell recovery addresses are user or kernel space
  */
 int qed_db_recovery_add(struct qed_dev *cdev,
 			void __iomem *db_addr,
@@ -496,18 +472,17 @@ int qed_db_recovery_add(struct qed_dev *cdev,
 			enum qed_db_rec_space db_space);
 
 /**
- * qed_db_recovery_del() - remove doorbell information from the doorbell
+ * @brief db_recovery_del - remove doorbell information from the doorbell
  * recovery mechanism. db_data serves as key (db_addr is not unique).
  *
- * @cdev: Qed dev pointer.
- * @db_addr: doorbell address.
- * @db_data: address where db_data is stored. Serves as key for the
+ * @param cdev
+ * @param db_addr - doorbell address
+ * @param db_data - address where db_data is stored. Serves as key for the
  *                  entry to delete.
- *
- * Return: Int.
  */
 int qed_db_recovery_del(struct qed_dev *cdev,
 			void __iomem *db_addr, void *db_data);
+
 
 const char *qed_hw_get_resc_name(enum qed_resources res_id);
 #endif

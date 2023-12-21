@@ -30,6 +30,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/sched/signal.h>
 
 #include <linux/init.h>
@@ -39,15 +40,15 @@
 
 #include "ipoib.h"
 
-static ssize_t parent_show(struct device *d, struct device_attribute *attr,
+static ssize_t show_parent(struct device *d, struct device_attribute *attr,
 			   char *buf)
 {
 	struct net_device *dev = to_net_dev(d);
 	struct ipoib_dev_priv *priv = ipoib_priv(dev);
 
-	return sysfs_emit(buf, "%s\n", priv->parent->name);
+	return sprintf(buf, "%s\n", priv->parent->name);
 }
-static DEVICE_ATTR_RO(parent);
+static DEVICE_ATTR(parent, S_IRUGO, show_parent, NULL);
 
 static bool is_child_unique(struct ipoib_dev_priv *ppriv,
 			    struct ipoib_dev_priv *priv)

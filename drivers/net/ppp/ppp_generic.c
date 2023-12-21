@@ -175,10 +175,8 @@ struct channel {
 	spinlock_t	downl;		/* protects `chan', file.xq dequeue */
 	struct ppp	*ppp;		/* ppp unit we're connected to */
 	struct net	*chan_net;	/* the net channel belongs to */
-	netns_tracker	ns_tracker;
 	struct list_head clist;		/* link in list of channels per unit */
-	rwlock_t	upl;		/* protects `ppp' and 'bridge' */
-	struct channel __rcu *bridge;	/* "bridged" ppp channel */
+	rwlock_t	upl;		/* protects `ppp' */
 #ifdef CONFIG_PPP_MULTILINK
 	u8		avail;		/* flag used in multilink stuff */
 	u8		had_frag;	/* >= 1 fragments have been sent */
@@ -480,7 +478,7 @@ static ssize_t ppp_read(struct file *file, char __user *buf,
 	ret = -EFAULT;
 	iov.iov_base = buf;
 	iov.iov_len = count;
-	iov_iter_init(&to, ITER_DEST, &iov, 1, count);
+	iov_iter_init(&to, READ, &iov, 1, count);
 	if (skb_copy_datagram_iter(skb, 0, &to, skb->len))
 		goto outf;
 	ret = skb->len;
@@ -613,89 +611,6 @@ static struct bpf_prog *compat_ppp_get_filter(struct sock_fprog32 __user *p)
 #endif
 #endif
 
-/* Bridge one PPP channel to another.
- * When two channels are bridged, ppp_input on one channel is redirected to
- * the other's ops->start_xmit handler.
- * In order to safely bridge channels we must reject channels which are already
- * part of a bridge instance, or which form part of an existing unit.
- * Once successfully bridged, each channel holds a reference on the other
- * to prevent it being freed while the bridge is extant.
- */
-static int ppp_bridge_channels(struct channel *pch, struct channel *pchb)
-{
-	write_lock_bh(&pch->upl);
-	if (pch->ppp ||
-	    rcu_dereference_protected(pch->bridge, lockdep_is_held(&pch->upl))) {
-		write_unlock_bh(&pch->upl);
-		return -EALREADY;
-	}
-	refcount_inc(&pchb->file.refcnt);
-	rcu_assign_pointer(pch->bridge, pchb);
-	write_unlock_bh(&pch->upl);
-
-	write_lock_bh(&pchb->upl);
-	if (pchb->ppp ||
-	    rcu_dereference_protected(pchb->bridge, lockdep_is_held(&pchb->upl))) {
-		write_unlock_bh(&pchb->upl);
-		goto err_unset;
-	}
-	refcount_inc(&pch->file.refcnt);
-	rcu_assign_pointer(pchb->bridge, pch);
-	write_unlock_bh(&pchb->upl);
-
-	return 0;
-
-err_unset:
-	write_lock_bh(&pch->upl);
-	/* Re-read pch->bridge with upl held in case it was modified concurrently */
-	pchb = rcu_dereference_protected(pch->bridge, lockdep_is_held(&pch->upl));
-	RCU_INIT_POINTER(pch->bridge, NULL);
-	write_unlock_bh(&pch->upl);
-	synchronize_rcu();
-
-	if (pchb)
-		if (refcount_dec_and_test(&pchb->file.refcnt))
-			ppp_destroy_channel(pchb);
-
-	return -EALREADY;
-}
-
-static int ppp_unbridge_channels(struct channel *pch)
-{
-	struct channel *pchb, *pchbb;
-
-	write_lock_bh(&pch->upl);
-	pchb = rcu_dereference_protected(pch->bridge, lockdep_is_held(&pch->upl));
-	if (!pchb) {
-		write_unlock_bh(&pch->upl);
-		return -EINVAL;
-	}
-	RCU_INIT_POINTER(pch->bridge, NULL);
-	write_unlock_bh(&pch->upl);
-
-	/* Only modify pchb if phcb->bridge points back to pch.
-	 * If not, it implies that there has been a race unbridging (and possibly
-	 * even rebridging) pchb.  We should leave pchb alone to avoid either a
-	 * refcount underflow, or breaking another established bridge instance.
-	 */
-	write_lock_bh(&pchb->upl);
-	pchbb = rcu_dereference_protected(pchb->bridge, lockdep_is_held(&pchb->upl));
-	if (pchbb == pch)
-		RCU_INIT_POINTER(pchb->bridge, NULL);
-	write_unlock_bh(&pchb->upl);
-
-	synchronize_rcu();
-
-	if (pchbb == pch)
-		if (refcount_dec_and_test(&pch->file.refcnt))
-			ppp_destroy_channel(pch);
-
-	if (refcount_dec_and_test(&pchb->file.refcnt))
-		ppp_destroy_channel(pchb);
-
-	return 0;
-}
-
 static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct ppp_file *pf;
@@ -731,9 +646,8 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 
 	if (pf->kind == CHANNEL) {
-		struct channel *pch, *pchb;
+		struct channel *pch;
 		struct ppp_channel *chan;
-		struct ppp_net *pn;
 
 		pch = PF_TO_CHANNEL(pf);
 
@@ -746,31 +660,6 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		case PPPIOCDISCONN:
 			err = ppp_disconnect_channel(pch);
-			break;
-
-		case PPPIOCBRIDGECHAN:
-			if (get_user(unit, p))
-				break;
-			err = -ENXIO;
-			pn = ppp_pernet(current->nsproxy->net_ns);
-			spin_lock_bh(&pn->all_channels_lock);
-			pchb = ppp_find_channel(pn, unit);
-			/* Hold a reference to prevent pchb being freed while
-			 * we establish the bridge.
-			 */
-			if (pchb)
-				refcount_inc(&pchb->file.refcnt);
-			spin_unlock_bh(&pn->all_channels_lock);
-			if (!pchb)
-				break;
-			err = ppp_bridge_channels(pch, pchb);
-			/* Drop earlier refcount now bridge establishment is complete */
-			if (refcount_dec_and_test(&pchb->file.refcnt))
-				ppp_destroy_channel(pchb);
-			break;
-
-		case PPPIOCUNBRIDGECHAN:
-			err = ppp_unbridge_channels(pch);
 			break;
 
 		default:
@@ -1167,7 +1056,7 @@ static int ppp_unit_register(struct ppp *ppp, int unit, bool ifname_is_set)
 		if (!ifname_is_set) {
 			while (1) {
 				snprintf(ppp->dev->name, IFNAMSIZ, "ppp%i", ret);
-				if (!netdev_name_in_use(ppp->ppp_net, ppp->dev->name))
+				if (!__dev_get_by_name(ppp->ppp_net, ppp->dev->name))
 					break;
 				unit_put(&pn->units_idr, ret);
 				ret = unit_get(&pn->units_idr, ppp, ret + 1);
@@ -1394,7 +1283,7 @@ static int __init ppp_init(void)
 		goto out_net;
 	}
 
-	ppp_class = class_create("ppp");
+	ppp_class = class_create(THIS_MODULE, "ppp");
 	if (IS_ERR(ppp_class)) {
 		err = PTR_ERR(ppp_class);
 		goto out_chrdev;
@@ -1469,11 +1358,11 @@ ppp_start_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 
 static int
-ppp_net_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
-		       void __user *addr, int cmd)
+ppp_net_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct ppp *ppp = netdev_priv(dev);
 	int err = -EFAULT;
+	void __user *addr = (void __user *) ifr->ifr_ifru.ifru_data;
 	struct ppp_stats stats;
 	struct ppp_comp_stats cstats;
 	char *vers;
@@ -1577,34 +1466,12 @@ static void ppp_dev_priv_destructor(struct net_device *dev)
 		ppp_destroy_interface(ppp);
 }
 
-static int ppp_fill_forward_path(struct net_device_path_ctx *ctx,
-				 struct net_device_path *path)
-{
-	struct ppp *ppp = netdev_priv(ctx->dev);
-	struct ppp_channel *chan;
-	struct channel *pch;
-
-	if (ppp->flags & SC_MULTILINK)
-		return -EOPNOTSUPP;
-
-	if (list_empty(&ppp->channels))
-		return -ENODEV;
-
-	pch = list_first_entry(&ppp->channels, struct channel, clist);
-	chan = pch->chan;
-	if (!chan->ops->fill_forward_path)
-		return -EOPNOTSUPP;
-
-	return chan->ops->fill_forward_path(ctx, path, chan);
-}
-
 static const struct net_device_ops ppp_netdev_ops = {
 	.ndo_init	 = ppp_dev_init,
 	.ndo_uninit      = ppp_dev_uninit,
 	.ndo_start_xmit  = ppp_start_xmit,
-	.ndo_siocdevprivate = ppp_net_siocdevprivate,
+	.ndo_do_ioctl    = ppp_net_ioctl,
 	.ndo_get_stats64 = ppp_get_stats64,
-	.ndo_fill_forward_path = ppp_fill_forward_path,
 };
 
 static struct device_type ppp_type = {
@@ -1743,8 +1610,6 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 	int len;
 	unsigned char *cp;
 
-	skb->dev = ppp->dev;
-
 	if (proto < 0x8000) {
 #ifdef CONFIG_PPP_FILTER
 		/* check if we should pass this packet */
@@ -1752,7 +1617,7 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 		   a four-byte PPP header on each packet */
 		*(u8 *)skb_push(skb, 2) = 1;
 		if (ppp->pass_filter &&
-		    bpf_prog_run(ppp->pass_filter, skb) == 0) {
+		    BPF_PROG_RUN(ppp->pass_filter, skb) == 0) {
 			if (ppp->debug & 1)
 				netdev_printk(KERN_DEBUG, ppp->dev,
 					      "PPP: outbound frame "
@@ -1762,7 +1627,7 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 		}
 		/* if this packet passes the active filter, record the time */
 		if (!(ppp->active_filter &&
-		      bpf_prog_run(ppp->active_filter, skb) == 0))
+		      BPF_PROG_RUN(ppp->active_filter, skb) == 0))
 			ppp->last_xmit = jiffies;
 		skb_pull(skb, 2);
 #else
@@ -2240,40 +2105,6 @@ static bool ppp_decompress_proto(struct sk_buff *skb)
 	return pskb_may_pull(skb, 2);
 }
 
-/* Attempt to handle a frame via. a bridged channel, if one exists.
- * If the channel is bridged, the frame is consumed by the bridge.
- * If not, the caller must handle the frame by normal recv mechanisms.
- * Returns true if the frame is consumed, false otherwise.
- */
-static bool ppp_channel_bridge_input(struct channel *pch, struct sk_buff *skb)
-{
-	struct channel *pchb;
-
-	rcu_read_lock();
-	pchb = rcu_dereference(pch->bridge);
-	if (!pchb)
-		goto out_rcu;
-
-	spin_lock(&pchb->downl);
-	if (!pchb->chan) {
-		/* channel got unregistered */
-		kfree_skb(skb);
-		goto outl;
-	}
-
-	skb_scrub_packet(skb, !net_eq(pch->chan_net, pchb->chan_net));
-	if (!pchb->chan->ops->start_xmit(pchb->chan, skb))
-		kfree_skb(skb);
-
-outl:
-	spin_unlock(&pchb->downl);
-out_rcu:
-	rcu_read_unlock();
-
-	/* If pchb is set then we've consumed the packet */
-	return !!pchb;
-}
-
 void
 ppp_input(struct ppp_channel *chan, struct sk_buff *skb)
 {
@@ -2284,10 +2115,6 @@ ppp_input(struct ppp_channel *chan, struct sk_buff *skb)
 		kfree_skb(skb);
 		return;
 	}
-
-	/* If the channel is bridged, transmit via. bridge */
-	if (ppp_channel_bridge_input(pch, skb))
-		return;
 
 	read_lock_bh(&pch->upl);
 	if (!ppp_decompress_proto(skb)) {
@@ -2476,7 +2303,7 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 
 			*(u8 *)skb_push(skb, 2) = 0;
 			if (ppp->pass_filter &&
-			    bpf_prog_run(ppp->pass_filter, skb) == 0) {
+			    BPF_PROG_RUN(ppp->pass_filter, skb) == 0) {
 				if (ppp->debug & 1)
 					netdev_printk(KERN_DEBUG, ppp->dev,
 						      "PPP: inbound frame "
@@ -2485,7 +2312,7 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 				return;
 			}
 			if (!(ppp->active_filter &&
-			      bpf_prog_run(ppp->active_filter, skb) == 0))
+			      BPF_PROG_RUN(ppp->active_filter, skb) == 0))
 				ppp->last_recv = jiffies;
 			__skb_pull(skb, 2);
 		} else
@@ -2887,7 +2714,7 @@ int ppp_register_net_channel(struct net *net, struct ppp_channel *chan)
 
 	pch->ppp = NULL;
 	pch->chan = chan;
-	pch->chan_net = get_net_track(net, &pch->ns_tracker, GFP_KERNEL);
+	pch->chan_net = get_net(net);
 	chan->ppp = pch;
 	init_ppp_file(&pch->file, CHANNEL);
 	pch->file.hdrlen = chan->hdrlen;
@@ -2970,7 +2797,7 @@ ppp_unregister_channel(struct ppp_channel *chan)
 	chan->ppp = NULL;
 
 	/*
-	 * This ensures that we have returned from any calls into
+	 * This ensures that we have returned from any calls into the
 	 * the channel's start_xmit or ioctl routine before we proceed.
 	 */
 	down_write(&pch->chan_sem);
@@ -2985,11 +2812,8 @@ ppp_unregister_channel(struct ppp_channel *chan)
 	list_del(&pch->list);
 	spin_unlock_bh(&pn->all_channels_lock);
 
-	ppp_unbridge_channels(pch);
-
 	pch->file.dead = 1;
 	wake_up_interruptible(&pch->file.rwait);
-
 	if (refcount_dec_and_test(&pch->file.refcnt))
 		ppp_destroy_channel(pch);
 }
@@ -3462,8 +3286,7 @@ ppp_connect_channel(struct channel *pch, int unit)
 		goto out;
 	write_lock_bh(&pch->upl);
 	ret = -EINVAL;
-	if (pch->ppp ||
-	    rcu_dereference_protected(pch->bridge, lockdep_is_held(&pch->upl)))
+	if (pch->ppp)
 		goto outl;
 
 	ppp_lock(ppp);
@@ -3527,7 +3350,7 @@ ppp_disconnect_channel(struct channel *pch)
  */
 static void ppp_destroy_channel(struct channel *pch)
 {
-	put_net_track(pch->chan_net, &pch->ns_tracker);
+	put_net(pch->chan_net);
 	pch->chan_net = NULL;
 
 	atomic_dec(&channel_count);

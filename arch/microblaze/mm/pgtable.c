@@ -33,8 +33,6 @@
 #include <linux/init.h>
 #include <linux/mm_types.h>
 #include <linux/pgtable.h>
-#include <linux/memblock.h>
-#include <linux/kallsyms.h>
 
 #include <asm/pgalloc.h>
 #include <linux/io.h>
@@ -172,7 +170,7 @@ void __init mapin_ram(void)
 	for (s = 0; s < lowmem_size; s += PAGE_SIZE) {
 		f = _PAGE_PRESENT | _PAGE_ACCESSED |
 				_PAGE_SHARED | _PAGE_HWEXEC;
-		if (!is_kernel_text(v))
+		if ((char *) v < _stext || (char *) v >= _etext)
 			f |= _PAGE_WRENABLE;
 		else
 			/* On the MicroBlaze, no user access
@@ -244,13 +242,15 @@ unsigned long iopa(unsigned long addr)
 
 __ref pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
 {
-	if (mem_init_done)
-		return (pte_t *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
-	else
-		return memblock_alloc_try_nid(PAGE_SIZE, PAGE_SIZE,
-					      MEMBLOCK_LOW_LIMIT,
-					      memory_start + kernel_tlb,
-					      NUMA_NO_NODE);
+	pte_t *pte;
+	if (mem_init_done) {
+		pte = (pte_t *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
+	} else {
+		pte = (pte_t *)early_get_page();
+		if (pte)
+			clear_page(pte);
+	}
+	return pte;
 }
 
 void __set_fixmap(enum fixed_addresses idx, phys_addr_t phys, pgprot_t flags)

@@ -39,9 +39,11 @@ static int uverbs_free_dm(struct ib_uobject *uobject,
 			  struct uverbs_attr_bundle *attrs)
 {
 	struct ib_dm *dm = uobject->object;
+	int ret;
 
-	if (atomic_read(&dm->usecnt))
-		return -EBUSY;
+	ret = ib_destroy_usecnt(&dm->usecnt, why, uobject);
+	if (ret)
+		return ret;
 
 	return dm->device->ops.dealloc_dm(dm, attrs);
 }

@@ -43,6 +43,7 @@ Driver                  Name
 airspy                  AirSpy
 au0828                  Auvitek AU0828
 b2c2-flexcop-usb        Technisat/B2C2 Air/Sky/Cable2PC USB
+cpia2                   CPiA2 Video For Linux
 cx231xx                 Conexant cx231xx USB video capture
 dvb-as102               Abilis AS102 DVB receiver
 dvb-ttusb-budget        Technotrend/Hauppauge Nova - USB devices
@@ -92,10 +93,15 @@ pwc                     USB Philips Cameras
 s2250                   Sensoray 2250/2251
 s2255drv                USB Sensoray 2255 video capture device
 smsusb                  Siano SMS1xxx based MDTV receiver
+stkwebcam               USB Syntek DC1125 Camera
+tm6000-alsa             TV Master TM5600/6000/6010 audio
+tm6000-dvb              DVB Support for tm6000 based TV cards
+tm6000                  TV Master TM5600/6000/6010 driver
 ttusb_dec               Technotrend/Hauppauge USB DEC devices
 usbtv                   USBTV007 video capture
 uvcvideo                USB Video Class (UVC)
 zd1301                  ZyDAS ZD1301
+zr364xx                 USB ZR364XX Camera
 ======================  =========================================================
 
 .. toctree::
@@ -104,6 +110,7 @@ zd1301                  ZyDAS ZD1301
 	au0828-cardlist
 	cx231xx-cardlist
 	em28xx-cardlist
+	tm6000-cardlist
 	siano-cardlist
 
 	gspca-cardlist

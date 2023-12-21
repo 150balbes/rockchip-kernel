@@ -1311,6 +1311,7 @@ static int fusb300_udc_start(struct usb_gadget *g,
 	struct fusb300 *fusb300 = to_fusb300(g);
 
 	/* hook up the driver */
+	driver->driver.bus = NULL;
 	fusb300->driver = driver;
 
 	return 0;
@@ -1338,7 +1339,7 @@ static const struct usb_gadget_ops fusb300_gadget_ops = {
 	.udc_stop	= fusb300_udc_stop,
 };
 
-static void fusb300_remove(struct platform_device *pdev)
+static int fusb300_remove(struct platform_device *pdev)
 {
 	struct fusb300 *fusb300 = platform_get_drvdata(pdev);
 	int i;
@@ -1346,12 +1347,13 @@ static void fusb300_remove(struct platform_device *pdev)
 	usb_del_gadget_udc(&fusb300->gadget);
 	iounmap(fusb300->reg);
 	free_irq(platform_get_irq(pdev, 0), fusb300);
-	free_irq(platform_get_irq(pdev, 1), fusb300);
 
 	fusb300_free_request(&fusb300->ep[0]->ep, fusb300->ep0_req);
 	for (i = 0; i < FUSB300_MAX_NUM_EP; i++)
 		kfree(fusb300->ep[i]);
 	kfree(fusb300);
+
+	return 0;
 }
 
 static int fusb300_probe(struct platform_device *pdev)
@@ -1430,7 +1432,7 @@ static int fusb300_probe(struct platform_device *pdev)
 			IRQF_SHARED, udc_name, fusb300);
 	if (ret < 0) {
 		pr_err("request_irq1 error (%d)\n", ret);
-		goto err_request_irq1;
+		goto clean_up;
 	}
 
 	INIT_LIST_HEAD(&fusb300->gadget.ep_list);
@@ -1469,7 +1471,7 @@ static int fusb300_probe(struct platform_device *pdev)
 				GFP_KERNEL);
 	if (fusb300->ep0_req == NULL) {
 		ret = -ENOMEM;
-		goto err_alloc_request;
+		goto clean_up3;
 	}
 
 	init_controller(fusb300);
@@ -1484,10 +1486,7 @@ static int fusb300_probe(struct platform_device *pdev)
 err_add_udc:
 	fusb300_free_request(&fusb300->ep[0]->ep, fusb300->ep0_req);
 
-err_alloc_request:
-	free_irq(ires1->start, fusb300);
-
-err_request_irq1:
+clean_up3:
 	free_irq(ires->start, fusb300);
 
 clean_up:
@@ -1506,7 +1505,7 @@ clean_up:
 }
 
 static struct platform_driver fusb300_driver = {
-	.remove_new =	fusb300_remove,
+	.remove =	fusb300_remove,
 	.driver		= {
 		.name =	udc_name,
 	},

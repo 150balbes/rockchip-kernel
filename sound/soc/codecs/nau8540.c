@@ -357,32 +357,17 @@ static const struct snd_soc_dapm_route nau8540_dapm_routes[] = {
 	{"AIFTX", NULL, "Digital CH4 Mux"},
 };
 
-static const struct nau8540_osr_attr *
-nau8540_get_osr(struct nau8540 *nau8540)
+static int nau8540_clock_check(struct nau8540 *nau8540, int rate, int osr)
 {
-	unsigned int osr;
-
-	regmap_read(nau8540->regmap, NAU8540_REG_ADC_SAMPLE_RATE, &osr);
-	osr &= NAU8540_ADC_OSR_MASK;
 	if (osr >= ARRAY_SIZE(osr_adc_sel))
-		return NULL;
-	return &osr_adc_sel[osr];
-}
-
-static int nau8540_dai_startup(struct snd_pcm_substream *substream,
-			       struct snd_soc_dai *dai)
-{
-	struct snd_soc_component *component = dai->component;
-	struct nau8540 *nau8540 = snd_soc_component_get_drvdata(component);
-	const struct nau8540_osr_attr *osr;
-
-	osr = nau8540_get_osr(nau8540);
-	if (!osr || !osr->osr)
 		return -EINVAL;
 
-	return snd_pcm_hw_constraint_minmax(substream->runtime,
-					    SNDRV_PCM_HW_PARAM_RATE,
-					    0, CLK_ADC_MAX / osr->osr);
+	if (rate * osr > CLK_ADC_MAX) {
+		dev_err(nau8540->dev, "exceed the maximum frequency of CLK_ADC\n");
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 static int nau8540_hw_params(struct snd_pcm_substream *substream,
@@ -390,8 +375,7 @@ static int nau8540_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct nau8540 *nau8540 = snd_soc_component_get_drvdata(component);
-	unsigned int val_len = 0;
-	const struct nau8540_osr_attr *osr;
+	unsigned int val_len = 0, osr;
 
 	/* CLK_ADC = OSR * FS
 	 * ADC clock frequency is defined as Over Sampling Rate (OSR)
@@ -399,14 +383,13 @@ static int nau8540_hw_params(struct snd_pcm_substream *substream,
 	 * values must be selected such that the maximum frequency is less
 	 * than 6.144 MHz.
 	 */
-	osr = nau8540_get_osr(nau8540);
-	if (!osr || !osr->osr)
-		return -EINVAL;
-	if (params_rate(params) * osr->osr > CLK_ADC_MAX)
+	regmap_read(nau8540->regmap, NAU8540_REG_ADC_SAMPLE_RATE, &osr);
+	osr &= NAU8540_ADC_OSR_MASK;
+	if (nau8540_clock_check(nau8540, params_rate(params), osr))
 		return -EINVAL;
 	regmap_update_bits(nau8540->regmap, NAU8540_REG_CLOCK_SRC,
 		NAU8540_CLK_ADC_SRC_MASK,
-		osr->clk_src << NAU8540_CLK_ADC_SRC_SFT);
+		osr_adc_sel[osr].clk_src << NAU8540_CLK_ADC_SRC_SFT);
 
 	switch (params_width(params)) {
 	case 16:
@@ -532,7 +515,6 @@ static int nau8540_set_tdm_slot(struct snd_soc_dai *dai,
 
 
 static const struct snd_soc_dai_ops nau8540_dai_ops = {
-	.startup = nau8540_dai_startup,
 	.hw_params = nau8540_hw_params,
 	.set_fmt = nau8540_set_fmt,
 	.set_tdm_slot = nau8540_set_tdm_slot,
@@ -824,6 +806,7 @@ static const struct snd_soc_component_driver nau8540_component_driver = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config nau8540_regmap_config = {
@@ -840,7 +823,8 @@ static const struct regmap_config nau8540_regmap_config = {
 	.num_reg_defaults = ARRAY_SIZE(nau8540_reg_defaults),
 };
 
-static int nau8540_i2c_probe(struct i2c_client *i2c)
+static int nau8540_i2c_probe(struct i2c_client *i2c,
+	const struct i2c_device_id *id)
 {
 	struct device *dev = &i2c->dev;
 	struct nau8540 *nau8540 = dev_get_platdata(dev);

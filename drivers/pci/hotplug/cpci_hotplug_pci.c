@@ -19,6 +19,8 @@
 
 #define MY_NAME	"cpci_hotplug"
 
+extern int cpci_debug;
+
 #define dbg(format, arg...)					\
 	do {							\
 		if (cpci_debug)					\

@@ -16,9 +16,9 @@
 
 #include "bmc150_magn.h"
 
-static int bmc150_magn_i2c_probe(struct i2c_client *client)
+static int bmc150_magn_i2c_probe(struct i2c_client *client,
+				 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct regmap *regmap;
 	const char *name = NULL;
 
@@ -34,9 +34,9 @@ static int bmc150_magn_i2c_probe(struct i2c_client *client)
 	return bmc150_magn_probe(&client->dev, regmap, client->irq, name);
 }
 
-static void bmc150_magn_i2c_remove(struct i2c_client *client)
+static int bmc150_magn_i2c_remove(struct i2c_client *client)
 {
-	bmc150_magn_remove(&client->dev);
+	return bmc150_magn_remove(&client->dev);
 }
 
 static const struct acpi_device_id bmc150_magn_acpi_match[] = {
@@ -80,4 +80,3 @@ module_i2c_driver(bmc150_magn_driver);
 MODULE_AUTHOR("Daniel Baluta <daniel.baluta@intel.com");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("BMC150 I2C magnetometer driver");
-MODULE_IMPORT_NS(IIO_BMC150_MAGN);

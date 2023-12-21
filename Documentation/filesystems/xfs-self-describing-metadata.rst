@@ -1,5 +1,4 @@
 .. SPDX-License-Identifier: GPL-2.0
-.. _xfs_self_describing_metadata:
 
 ============================
 XFS Self Describing Metadata

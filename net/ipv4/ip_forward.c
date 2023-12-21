@@ -79,7 +79,7 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 	if (unlikely(opt->optlen))
 		ip_forward_options(skb);
 
-	skb_clear_tstamp(skb);
+	skb->tstamp = 0;
 	return dst_output(net, sk, skb);
 }
 
@@ -90,7 +90,6 @@ int ip_forward(struct sk_buff *skb)
 	struct rtable *rt;	/* Route we use */
 	struct ip_options *opt	= &(IPCB(skb)->opt);
 	struct net *net;
-	SKB_DR(reason);
 
 	/* that should never happen */
 	if (skb->pkt_type != PACKET_HOST)
@@ -102,10 +101,8 @@ int ip_forward(struct sk_buff *skb)
 	if (skb_warn_if_lro(skb))
 		goto drop;
 
-	if (!xfrm4_policy_check(NULL, XFRM_POLICY_FWD, skb)) {
-		SKB_DR_SET(reason, XFRM_POLICY);
+	if (!xfrm4_policy_check(NULL, XFRM_POLICY_FWD, skb))
 		goto drop;
-	}
 
 	if (IPCB(skb)->opt.router_alert && ip_call_ra_chain(skb))
 		return NET_RX_SUCCESS;
@@ -121,10 +118,8 @@ int ip_forward(struct sk_buff *skb)
 	if (ip_hdr(skb)->ttl <= 1)
 		goto too_many_hops;
 
-	if (!xfrm4_route_forward(skb)) {
-		SKB_DR_SET(reason, XFRM_POLICY);
+	if (!xfrm4_route_forward(skb))
 		goto drop;
-	}
 
 	rt = skb_rtable(skb);
 
@@ -137,7 +132,6 @@ int ip_forward(struct sk_buff *skb)
 		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
 		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
 			  htonl(mtu));
-		SKB_DR_SET(reason, PKT_TOO_BIG);
 		goto drop;
 	}
 
@@ -175,8 +169,7 @@ too_many_hops:
 	/* Tell the sender its packet died... */
 	__IP_INC_STATS(net, IPSTATS_MIB_INHDRERRORS);
 	icmp_send(skb, ICMP_TIME_EXCEEDED, ICMP_EXC_TTL, 0);
-	SKB_DR_SET(reason, IP_INHDR);
 drop:
-	kfree_skb_reason(skb, reason);
+	kfree_skb(skb);
 	return NET_RX_DROP;
 }

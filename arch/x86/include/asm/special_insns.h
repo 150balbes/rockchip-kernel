@@ -104,20 +104,43 @@ static inline void wrpkru(u32 pkru)
 		     : : "a" (pkru), "c"(ecx), "d"(edx));
 }
 
+static inline void __write_pkru(u32 pkru)
+{
+	/*
+	 * WRPKRU is relatively expensive compared to RDPKRU.
+	 * Avoid WRPKRU when it would not change the value.
+	 */
+	if (pkru == rdpkru())
+		return;
+
+	wrpkru(pkru);
+}
+
 #else
 static inline u32 rdpkru(void)
 {
 	return 0;
 }
 
-static inline void wrpkru(u32 pkru)
+static inline void __write_pkru(u32 pkru)
 {
 }
 #endif
 
-static __always_inline void native_wbinvd(void)
+static inline void native_wbinvd(void)
 {
 	asm volatile("wbinvd": : :"memory");
+}
+
+extern asmlinkage void asm_load_gs_index(unsigned int selector);
+
+static inline void native_load_gs_index(unsigned int selector)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	asm_load_gs_index(selector);
+	local_irq_restore(flags);
 }
 
 static inline unsigned long __read_cr4(void)
@@ -168,21 +191,30 @@ static inline void __write_cr4(unsigned long x)
 	native_write_cr4(x);
 }
 
-static __always_inline void wbinvd(void)
+static inline void wbinvd(void)
 {
 	native_wbinvd();
 }
 
+#ifdef CONFIG_X86_64
+
+static inline void load_gs_index(unsigned int selector)
+{
+	native_load_gs_index(selector);
+}
+
+#endif
+
 #endif /* CONFIG_PARAVIRT_XXL */
 
-static __always_inline void clflush(volatile void *__p)
+static inline void clflush(volatile void *__p)
 {
 	asm volatile("clflush %0" : "+m" (*(volatile char __force *)__p));
 }
 
 static inline void clflushopt(volatile void *__p)
 {
-	alternative_io(".byte 0x3e; clflush %P0",
+	alternative_io(".byte " __stringify(NOP_DS_PREFIX) "; clflush %P0",
 		       ".byte 0x66; clflush %P0",
 		       X86_FEATURE_CLFLUSHOPT,
 		       "+m" (*(volatile char __force *)__p));
@@ -193,7 +225,7 @@ static inline void clwb(volatile void *__p)
 	volatile struct { char x[64]; } *p = __p;
 
 	asm volatile(ALTERNATIVE_2(
-		".byte 0x3e; clflush (%[pax])",
+		".byte " __stringify(NOP_DS_PREFIX) "; clflush (%[pax])",
 		".byte 0x66; clflush (%[pax])", /* clflushopt (%%rax) */
 		X86_FEATURE_CLFLUSHOPT,
 		".byte 0x66, 0x0f, 0xae, 0x30",  /* clwb (%%rax) */
@@ -211,10 +243,10 @@ static inline void serialize(void)
 }
 
 /* The dst parameter must be 64-bytes aligned */
-static inline void movdir64b(void __iomem *dst, const void *src)
+static inline void movdir64b(void *dst, const void *src)
 {
 	const struct { char _[64]; } *__src = src;
-	struct { char _[64]; } __iomem *__dst = dst;
+	struct { char _[64]; } *__dst = dst;
 
 	/*
 	 * MOVDIR64B %(rdx), rax.
@@ -272,15 +304,6 @@ static inline int enqcmds(void __iomem *dst, const void *src)
 		return -EAGAIN;
 
 	return 0;
-}
-
-static __always_inline void tile_release(void)
-{
-	/*
-	 * Instruction opcode for TILERELEASE; supported in binutils
-	 * version >= 2.36.
-	 */
-	asm volatile(".byte 0xc4, 0xe2, 0x78, 0x49, 0xc0");
 }
 
 #endif /* __KERNEL__ */

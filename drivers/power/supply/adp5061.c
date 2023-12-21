@@ -493,9 +493,6 @@ static int adp5061_get_battery_status(struct adp5061_state *st,
 	case 0x4: /* VBAT_SNS > VWEAK */
 		val->intval = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
 		break;
-	default:
-		val->intval = POWER_SUPPLY_CAPACITY_LEVEL_UNKNOWN;
-		break;
 	}
 
 	return ret;
@@ -694,7 +691,8 @@ static const struct power_supply_desc adp5061_desc = {
 	.num_properties		= ARRAY_SIZE(adp5061_props),
 };
 
-static int adp5061_probe(struct i2c_client *client)
+static int adp5061_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct power_supply_config psy_cfg = {};
 	struct adp5061_state *st;

@@ -254,27 +254,32 @@ static int tw5864_initdev(struct pci_dev *pci_dev,
 
 	/* pci init */
 	dev->pci = pci_dev;
-	err = pcim_enable_device(pci_dev);
+	err = pci_enable_device(pci_dev);
 	if (err) {
-		dev_err(&dev->pci->dev, "pcim_enable_device() failed\n");
+		dev_err(&dev->pci->dev, "pci_enable_device() failed\n");
 		goto unreg_v4l2;
 	}
 
 	pci_set_master(pci_dev);
 
-	err = dma_set_mask(&pci_dev->dev, DMA_BIT_MASK(32));
+	err = pci_set_dma_mask(pci_dev, DMA_BIT_MASK(32));
 	if (err) {
 		dev_err(&dev->pci->dev, "32 bit PCI DMA is not supported\n");
-		goto unreg_v4l2;
+		goto disable_pci;
 	}
 
 	/* get mmio */
-	err = pcim_iomap_regions(pci_dev, BIT(0), dev->name);
+	err = pci_request_regions(pci_dev, dev->name);
 	if (err) {
 		dev_err(&dev->pci->dev, "Cannot request regions for MMIO\n");
-		goto unreg_v4l2;
+		goto disable_pci;
 	}
-	dev->mmio = pcim_iomap_table(pci_dev)[0];
+	dev->mmio = pci_ioremap_bar(pci_dev, 0);
+	if (!dev->mmio) {
+		err = -EIO;
+		dev_err(&dev->pci->dev, "can't ioremap() MMIO memory\n");
+		goto release_mmio;
+	}
 
 	spin_lock_init(&dev->slock);
 
@@ -286,7 +291,7 @@ static int tw5864_initdev(struct pci_dev *pci_dev,
 
 	err = tw5864_video_init(dev, video_nr);
 	if (err)
-		goto unreg_v4l2;
+		goto unmap_mmio;
 
 	/* get irq */
 	err = devm_request_irq(&pci_dev->dev, pci_dev->irq, tw5864_isr,
@@ -303,6 +308,12 @@ static int tw5864_initdev(struct pci_dev *pci_dev,
 
 fini_video:
 	tw5864_video_fini(dev);
+unmap_mmio:
+	iounmap(dev->mmio);
+release_mmio:
+	pci_release_regions(pci_dev);
+disable_pci:
+	pci_disable_device(pci_dev);
 unreg_v4l2:
 	v4l2_device_unregister(&dev->v4l2_dev);
 	return err;
@@ -320,7 +331,13 @@ static void tw5864_finidev(struct pci_dev *pci_dev)
 	/* unregister */
 	tw5864_video_fini(dev);
 
+	/* release resources */
+	iounmap(dev->mmio);
+	release_mem_region(pci_resource_start(pci_dev, 0),
+			   pci_resource_len(pci_dev, 0));
+
 	v4l2_device_unregister(&dev->v4l2_dev);
+	devm_kfree(&pci_dev->dev, dev);
 }
 
 static struct pci_driver tw5864_pci_driver = {

@@ -13,9 +13,6 @@ description: |
   The TPM counter and period counter are shared between multiple
   channels, so all channels should use same period setting.
 
-allOf:
-  - $ref: pwm.yaml#
-
 properties:
   "#pwm-cells":
     const: 3
@@ -37,6 +34,7 @@ properties:
     maxItems: 1
 
 required:
+  - "#pwm-cells"
   - compatible
   - reg
   - clocks

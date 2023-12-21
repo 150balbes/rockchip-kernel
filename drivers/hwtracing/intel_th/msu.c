@@ -658,11 +658,13 @@ static void msc_buffer_clear_hw_header(struct msc *msc)
 
 	list_for_each_entry(win, &msc->win_list, entry) {
 		unsigned int blk;
+		size_t hw_sz = sizeof(struct msc_block_desc) -
+			offsetof(struct msc_block_desc, hw_tag);
 
 		for_each_sg(win->sgt->sgl, sg, win->nr_segs, blk) {
 			struct msc_block_desc *bdesc = sg_virt(sg);
 
-			memset_startat(bdesc, 0, hw_tag);
+			memset(&bdesc->hw_tag, 0, hw_sz);
 		}
 	}
 }
@@ -1022,49 +1024,33 @@ err_nomem:
 }
 
 #ifdef CONFIG_X86
-static void msc_buffer_set_uc(struct msc *msc)
+static void msc_buffer_set_uc(struct msc_window *win, unsigned int nr_segs)
 {
 	struct scatterlist *sg_ptr;
-	struct msc_window *win;
 	int i;
 
-	if (msc->mode == MSC_MODE_SINGLE) {
-		set_memory_uc((unsigned long)msc->base, msc->nr_pages);
-		return;
-	}
-
-	list_for_each_entry(win, &msc->win_list, entry) {
-		for_each_sg(win->sgt->sgl, sg_ptr, win->nr_segs, i) {
-			/* Set the page as uncached */
-			set_memory_uc((unsigned long)sg_virt(sg_ptr),
-					PFN_DOWN(sg_ptr->length));
-		}
+	for_each_sg(win->sgt->sgl, sg_ptr, nr_segs, i) {
+		/* Set the page as uncached */
+		set_memory_uc((unsigned long)sg_virt(sg_ptr),
+			      PFN_DOWN(sg_ptr->length));
 	}
 }
 
-static void msc_buffer_set_wb(struct msc *msc)
+static void msc_buffer_set_wb(struct msc_window *win)
 {
 	struct scatterlist *sg_ptr;
-	struct msc_window *win;
 	int i;
 
-	if (msc->mode == MSC_MODE_SINGLE) {
-		set_memory_wb((unsigned long)msc->base, msc->nr_pages);
-		return;
-	}
-
-	list_for_each_entry(win, &msc->win_list, entry) {
-		for_each_sg(win->sgt->sgl, sg_ptr, win->nr_segs, i) {
-			/* Reset the page to write-back */
-			set_memory_wb((unsigned long)sg_virt(sg_ptr),
-					PFN_DOWN(sg_ptr->length));
-		}
+	for_each_sg(win->sgt->sgl, sg_ptr, win->nr_segs, i) {
+		/* Reset the page to write-back */
+		set_memory_wb((unsigned long)sg_virt(sg_ptr),
+			      PFN_DOWN(sg_ptr->length));
 	}
 }
 #else /* !X86 */
 static inline void
-msc_buffer_set_uc(struct msc *msc) {}
-static inline void msc_buffer_set_wb(struct msc *msc) {}
+msc_buffer_set_uc(struct msc_window *win, unsigned int nr_segs) {}
+static inline void msc_buffer_set_wb(struct msc_window *win) {}
 #endif /* CONFIG_X86 */
 
 static struct page *msc_sg_page(struct scatterlist *sg)
@@ -1121,6 +1107,8 @@ static int msc_buffer_win_alloc(struct msc *msc, unsigned int nr_blocks)
 	if (ret <= 0)
 		goto err_nomem;
 
+	msc_buffer_set_uc(win, ret);
+
 	win->nr_segs = ret;
 	win->nr_blocks = nr_blocks;
 
@@ -1173,6 +1161,8 @@ static void msc_buffer_win_free(struct msc *msc, struct msc_window *win)
 		msc->base = NULL;
 		msc->base_addr = 0;
 	}
+
+	msc_buffer_set_wb(win);
 
 	if (msc->mbuf && msc->mbuf->free_window)
 		msc->mbuf->free_window(msc->mbuf_priv, win->sgt);
@@ -1280,8 +1270,6 @@ static int msc_buffer_multi_alloc(struct msc *msc, unsigned long *nr_pages,
  */
 static void msc_buffer_free(struct msc *msc)
 {
-	msc_buffer_set_wb(msc);
-
 	if (msc->mode == MSC_MODE_SINGLE)
 		msc_buffer_contig_free(msc);
 	else if (msc->mode == MSC_MODE_MULTI)
@@ -1325,8 +1313,6 @@ static int msc_buffer_alloc(struct msc *msc, unsigned long *nr_pages,
 	}
 
 	if (!ret) {
-		msc_buffer_set_uc(msc);
-
 		/* allocation should be visible before the counter goes to 0 */
 		smp_mb__before_atomic();
 
@@ -1659,7 +1645,7 @@ out:
 		atomic_dec(&msc->user_count);
 
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY);
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTCOPY;
 	vma->vm_ops = &msc_mmap_ops;
 	return ret;
 }
@@ -2026,7 +2012,7 @@ nr_pages_store(struct device *dev, struct device_attribute *attr,
 		}
 
 		nr_wins++;
-		rewin = krealloc_array(win, nr_wins, sizeof(*win), GFP_KERNEL);
+		rewin = krealloc(win, sizeof(*win) * nr_wins, GFP_KERNEL);
 		if (!rewin) {
 			kfree(win);
 			return -ENOMEM;
@@ -2119,7 +2105,7 @@ static struct attribute *msc_output_attrs[] = {
 	NULL,
 };
 
-static const struct attribute_group msc_output_group = {
+static struct attribute_group msc_output_group = {
 	.attrs	= msc_output_attrs,
 };
 

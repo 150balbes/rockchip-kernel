@@ -4,7 +4,6 @@
  * Author: Wendell Lin <wendell.lin@mediatek.com>
  */
 
-#include <linux/module.h>
 #include <linux/clk-provider.h>
 #include <linux/platform_device.h>
 #include <dt-bindings/clock/mt6779-clk.h>
@@ -30,29 +29,30 @@ static const struct mtk_gate img_clks[] = {
 	GATE_IMG(CLK_IMG_WPE_A, "imgsys_wpe_a", "img_sel", 7),
 };
 
-static const struct mtk_clk_desc img_desc = {
-	.clks = img_clks,
-	.num_clks = ARRAY_SIZE(img_clks),
+static const struct of_device_id of_match_clk_mt6779_img[] = {
+	{ .compatible = "mediatek,mt6779-imgsys", },
+	{}
 };
 
-static const struct of_device_id of_match_clk_mt6779_img[] = {
-	{
-		.compatible = "mediatek,mt6779-imgsys",
-		.data = &img_desc,
-	}, {
-		/* sentinel */
-	}
-};
-MODULE_DEVICE_TABLE(of, of_match_clk_mt6779_img);
+static int clk_mt6779_img_probe(struct platform_device *pdev)
+{
+	struct clk_onecell_data *clk_data;
+	struct device_node *node = pdev->dev.of_node;
+
+	clk_data = mtk_alloc_clk_data(CLK_IMG_NR_CLK);
+
+	mtk_clk_register_gates(node, img_clks, ARRAY_SIZE(img_clks),
+			       clk_data);
+
+	return of_clk_add_provider(node, of_clk_src_onecell_get, clk_data);
+}
 
 static struct platform_driver clk_mt6779_img_drv = {
-	.probe = mtk_clk_simple_probe,
-	.remove_new = mtk_clk_simple_remove,
+	.probe = clk_mt6779_img_probe,
 	.driver = {
 		.name = "clk-mt6779-img",
 		.of_match_table = of_match_clk_mt6779_img,
 	},
 };
 
-module_platform_driver(clk_mt6779_img_drv);
-MODULE_LICENSE("GPL");
+builtin_platform_driver(clk_mt6779_img_drv);

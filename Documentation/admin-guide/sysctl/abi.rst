@@ -11,7 +11,7 @@ Documentation for /proc/sys/abi/
 
 Copyright (c) 2020, Stephen Kitt
 
-For general info, see Documentation/admin-guide/sysctl/index.rst.
+For general info, see :doc:`index`.
 
 ------------------------------------------------------------------------------
 
@@ -28,7 +28,7 @@ vsyscall32 (x86)
 
 Determines whether the kernels maps a vDSO page into 32-bit processes;
 can be set to 1 to enable, or 0 to disable. Defaults to enabled if
-``CONFIG_COMPAT_VDSO`` is set, disabled otherwise.
+``CONFIG_COMPAT_VDSO`` is set, disabled otherwide.
 
 This controls the same setting as the ``vdso32`` kernel boot
 parameter.

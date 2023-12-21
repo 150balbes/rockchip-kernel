@@ -30,10 +30,6 @@ struct user_regs_struct {
 	unsigned long pc;
 	unsigned long sr;
 };
-
-struct __or1k_fpu_state {
-	unsigned long fpcsr;
-};
 #endif
 
 

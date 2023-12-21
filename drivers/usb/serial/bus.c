@@ -16,13 +16,19 @@
 static int usb_serial_device_match(struct device *dev,
 						struct device_driver *drv)
 {
-	const struct usb_serial_port *port = to_usb_serial_port(dev);
-	struct usb_serial_driver *driver = to_usb_serial_driver(drv);
+	struct usb_serial_driver *driver;
+	const struct usb_serial_port *port;
 
 	/*
 	 * drivers are already assigned to ports in serial_probe so it's
 	 * a simple check here.
 	 */
+	port = to_usb_serial_port(dev);
+	if (!port)
+		return 0;
+
+	driver = to_usb_serial_driver(drv);
+
 	if (driver == port->serial->type)
 		return 1;
 
@@ -31,11 +37,15 @@ static int usb_serial_device_match(struct device *dev,
 
 static int usb_serial_device_probe(struct device *dev)
 {
-	struct usb_serial_port *port = to_usb_serial_port(dev);
 	struct usb_serial_driver *driver;
+	struct usb_serial_port *port;
 	struct device *tty_dev;
 	int retval = 0;
 	int minor;
+
+	port = to_usb_serial_port(dev);
+	if (!port)
+		return -ENODEV;
 
 	/* make sure suspend/resume doesn't race against port_probe */
 	retval = usb_autopm_get_interface(port->serial->interface);
@@ -74,12 +84,17 @@ err_autopm_put:
 	return retval;
 }
 
-static void usb_serial_device_remove(struct device *dev)
+static int usb_serial_device_remove(struct device *dev)
 {
-	struct usb_serial_port *port = to_usb_serial_port(dev);
 	struct usb_serial_driver *driver;
+	struct usb_serial_port *port;
+	int retval = 0;
 	int minor;
 	int autopm_err;
+
+	port = to_usb_serial_port(dev);
+	if (!port)
+		return -ENODEV;
 
 	/*
 	 * Make sure suspend/resume doesn't race against port_remove.
@@ -94,13 +109,15 @@ static void usb_serial_device_remove(struct device *dev)
 
 	driver = port->serial->type;
 	if (driver->port_remove)
-		driver->port_remove(port);
+		retval = driver->port_remove(port);
 
 	dev_info(dev, "%s converter now disconnected from ttyUSB%d\n",
 		 driver->description, minor);
 
 	if (!autopm_err)
 		usb_autopm_put_interface(port->serial->interface);
+
+	return retval;
 }
 
 static ssize_t new_id_store(struct device_driver *driver,
@@ -144,7 +161,7 @@ static void free_dynids(struct usb_serial_driver *drv)
 	spin_unlock(&drv->dynids.lock);
 }
 
-const struct bus_type usb_serial_bus_type = {
+struct bus_type usb_serial_bus_type = {
 	.name =		"usb-serial",
 	.match =	usb_serial_device_match,
 	.probe =	usb_serial_device_probe,

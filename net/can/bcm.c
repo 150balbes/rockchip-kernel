@@ -194,7 +194,7 @@ static int bcm_proc_show(struct seq_file *m, void *v)
 {
 	char ifname[IFNAMSIZ];
 	struct net *net = m->private;
-	struct sock *sk = (struct sock *)pde_data(m->file->f_inode);
+	struct sock *sk = (struct sock *)PDE_DATA(m->file->f_inode);
 	struct bcm_sock *bo = bcm_sk(sk);
 	struct bcm_op *op;
 
@@ -627,7 +627,7 @@ static enum hrtimer_restart bcm_rx_thr_handler(struct hrtimer *hrtimer)
 	struct bcm_op *op = container_of(hrtimer, struct bcm_op, thrtimer);
 
 	if (bcm_rx_thr_flush(op)) {
-		hrtimer_forward_now(hrtimer, op->kt_ival2);
+		hrtimer_forward(hrtimer, ktime_get(), op->kt_ival2);
 		return HRTIMER_RESTART;
 	} else {
 		/* rearm throttle handling */
@@ -649,13 +649,8 @@ static void bcm_rx_handler(struct sk_buff *skb, void *data)
 		return;
 
 	/* make sure to handle the correct frame type (CAN / CAN FD) */
-	if (op->flags & CAN_FD_FRAME) {
-		if (!can_is_canfd_skb(skb))
-			return;
-	} else {
-		if (!can_is_can_skb(skb))
-			return;
-	}
+	if (skb->len != op->cfsiz)
+		return;
 
 	/* disable timeout */
 	hrtimer_cancel(&op->timer);
@@ -941,8 +936,6 @@ static int bcm_tx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 
 			cf = op->frames + op->cfsiz * i;
 			err = memcpy_from_msg((u8 *)cf, msg, op->cfsiz);
-			if (err < 0)
-				goto free_op;
 
 			if (op->flags & CAN_FD_FRAME) {
 				if (cf->len > 64)
@@ -952,8 +945,12 @@ static int bcm_tx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 					err = -EINVAL;
 			}
 
-			if (err < 0)
-				goto free_op;
+			if (err < 0) {
+				if (op->frames != &op->sframe)
+					kfree(op->frames);
+				kfree(op);
+				return err;
+			}
 
 			if (msg_head->flags & TX_CP_CAN_ID) {
 				/* copy can_id into frame */
@@ -1024,12 +1021,6 @@ static int bcm_tx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 		bcm_tx_start_timer(op);
 
 	return msg_head->nframes * op->cfsiz + MHSIZ;
-
-free_op:
-	if (op->frames != &op->sframe)
-		kfree(op->frames);
-	kfree(op);
-	return err;
 }
 
 /*
@@ -1438,7 +1429,7 @@ static void bcm_notify(struct bcm_sock *bo, unsigned long msg,
 		if (notify_enodev) {
 			sk->sk_err = ENODEV;
 			if (!sock_flag(sk, SOCK_DEAD))
-				sk_error_report(sk);
+				sk->sk_error_report(sk);
 		}
 		break;
 
@@ -1446,7 +1437,7 @@ static void bcm_notify(struct bcm_sock *bo, unsigned long msg,
 		if (bo->bound && bo->ifindex == dev->ifindex) {
 			sk->sk_err = ENETDOWN;
 			if (!sock_flag(sk, SOCK_DEAD))
-				sk_error_report(sk);
+				sk->sk_error_report(sk);
 		}
 	}
 }
@@ -1652,9 +1643,12 @@ static int bcm_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
 	int error = 0;
+	int noblock;
 	int err;
 
-	skb = skb_recv_datagram(sk, flags, &error);
+	noblock =  flags & MSG_DONTWAIT;
+	flags   &= ~MSG_DONTWAIT;
+	skb = skb_recv_datagram(sk, flags, noblock, &error);
 	if (!skb)
 		return error;
 
@@ -1667,7 +1661,7 @@ static int bcm_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		return err;
 	}
 
-	sock_recv_cmsgs(msg, sk, skb);
+	sock_recv_ts_and_drops(msg, sk, skb);
 
 	if (msg->msg_name) {
 		__sockaddr_check_size(BCM_MIN_NAMELEN);
@@ -1703,6 +1697,7 @@ static const struct proto_ops bcm_ops = {
 	.sendmsg       = bcm_sendmsg,
 	.recvmsg       = bcm_recvmsg,
 	.mmap          = sock_no_mmap,
+	.sendpage      = sock_no_sendpage,
 };
 
 static struct proto bcm_proto __read_mostly = {
@@ -1753,27 +1748,15 @@ static int __init bcm_module_init(void)
 
 	pr_info("can: broadcast manager protocol\n");
 
-	err = register_pernet_subsys(&canbcm_pernet_ops);
-	if (err)
-		return err;
-
-	err = register_netdevice_notifier(&canbcm_notifier);
-	if (err)
-		goto register_notifier_failed;
-
 	err = can_proto_register(&bcm_can_proto);
 	if (err < 0) {
 		printk(KERN_ERR "can: registration of bcm protocol failed\n");
-		goto register_proto_failed;
+		return err;
 	}
 
+	register_pernet_subsys(&canbcm_pernet_ops);
+	register_netdevice_notifier(&canbcm_notifier);
 	return 0;
-
-register_proto_failed:
-	unregister_netdevice_notifier(&canbcm_notifier);
-register_notifier_failed:
-	unregister_pernet_subsys(&canbcm_pernet_ops);
-	return err;
 }
 
 static void __exit bcm_module_exit(void)

@@ -394,7 +394,6 @@ void __init s3c64xx_clk_init(struct device_node *np, unsigned long xtal_f,
 			     void __iomem *base)
 {
 	struct samsung_clk_provider *ctx;
-	struct clk_hw **hws;
 
 	reg_base = base;
 	is_s3c6400 = s3c6400;
@@ -405,8 +404,7 @@ void __init s3c64xx_clk_init(struct device_node *np, unsigned long xtal_f,
 			panic("%s: failed to map registers\n", __func__);
 	}
 
-	ctx = samsung_clk_init(NULL, reg_base, NR_CLKS);
-	hws = ctx->clk_data.hws;
+	ctx = samsung_clk_init(np, reg_base, NR_CLKS);
 
 	/* Register external clocks. */
 	if (!np)
@@ -414,7 +412,7 @@ void __init s3c64xx_clk_init(struct device_node *np, unsigned long xtal_f,
 
 	/* Register PLLs. */
 	samsung_clk_register_pll(ctx, s3c64xx_pll_clks,
-				ARRAY_SIZE(s3c64xx_pll_clks));
+				ARRAY_SIZE(s3c64xx_pll_clks), reg_base);
 
 	/* Register common internal clocks. */
 	samsung_clk_register_fixed_rate(ctx, s3c64xx_fixed_rate_clks,
@@ -461,10 +459,8 @@ void __init s3c64xx_clk_init(struct device_node *np, unsigned long xtal_f,
 	pr_info("%s clocks: apll = %lu, mpll = %lu\n"
 		"\tepll = %lu, arm_clk = %lu\n",
 		is_s3c6400 ? "S3C6400" : "S3C6410",
-		clk_hw_get_rate(hws[MOUT_APLL]),
-		clk_hw_get_rate(hws[MOUT_MPLL]),
-		clk_hw_get_rate(hws[MOUT_EPLL]),
-		clk_hw_get_rate(hws[ARMCLK]));
+		_get_rate("fout_apll"),	_get_rate("fout_mpll"),
+		_get_rate("fout_epll"), _get_rate("armclk"));
 }
 
 static void __init s3c6400_clk_init(struct device_node *np)

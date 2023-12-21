@@ -7,10 +7,8 @@
 #include <linux/linkage.h>
 
 #include <asm/assembler.h>
-#include <asm/kvm_arm.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_mmu.h>
-#include <asm/kvm_ptrauth.h>
 
 	.text
 
@@ -38,43 +36,10 @@ SYM_FUNC_START(__host_exit)
 
 	/* Save the host context pointer in x29 across the function call */
 	mov	x29, x0
-
-#ifdef CONFIG_ARM64_PTR_AUTH_KERNEL
-alternative_if_not ARM64_HAS_ADDRESS_AUTH
-b __skip_pauth_save
-alternative_else_nop_endif
-
-alternative_if ARM64_KVM_PROTECTED_MODE
-	/* Save kernel ptrauth keys. */
-	add x18, x29, #CPU_APIAKEYLO_EL1
-	ptrauth_save_state x18, x19, x20
-
-	/* Use hyp keys. */
-	adr_this_cpu x18, kvm_hyp_ctxt, x19
-	add x18, x18, #CPU_APIAKEYLO_EL1
-	ptrauth_restore_state x18, x19, x20
-	isb
-alternative_else_nop_endif
-__skip_pauth_save:
-#endif /* CONFIG_ARM64_PTR_AUTH_KERNEL */
-
 	bl	handle_trap
 
-__host_enter_restore_full:
-	/* Restore kernel keys. */
-#ifdef CONFIG_ARM64_PTR_AUTH_KERNEL
-alternative_if_not ARM64_HAS_ADDRESS_AUTH
-b __skip_pauth_restore
-alternative_else_nop_endif
-
-alternative_if ARM64_KVM_PROTECTED_MODE
-	add x18, x29, #CPU_APIAKEYLO_EL1
-	ptrauth_restore_state x18, x19, x20
-alternative_else_nop_endif
-__skip_pauth_restore:
-#endif /* CONFIG_ARM64_PTR_AUTH_KERNEL */
-
 	/* Restore host regs x0-x17 */
+__host_enter_restore_full:
 	ldp	x0, x1,   [x29, #CPU_XREG_OFFSET(0)]
 	ldp	x2, x3,   [x29, #CPU_XREG_OFFSET(2)]
 	ldp	x4, x5,   [x29, #CPU_XREG_OFFSET(4)]
@@ -114,59 +79,27 @@ SYM_FUNC_START(__hyp_do_panic)
 	mov	lr, #(PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT |\
 		      PSR_MODE_EL1h)
 	msr	spsr_el2, lr
-	adr_l	lr, nvhe_hyp_panic_handler
+	ldr	lr, =panic
 	hyp_kimg_va lr, x6
 	msr	elr_el2, lr
 
 	mov	x29, x0
 
-#ifdef CONFIG_NVHE_EL2_DEBUG
-	/* Ensure host stage-2 is disabled */
-	mrs	x0, hcr_el2
-	bic	x0, x0, #HCR_VM
-	msr	hcr_el2, x0
-	isb
-	tlbi	vmalls12e1
-	dsb	nsh
-#endif
+	/* Load the format string into x0 and arguments into x1-7 */
+	ldr	x0, =__hyp_panic_string
+	hyp_kimg_va x0, x6
 
-	/* Load the panic arguments into x0-7 */
-	mrs	x0, esr_el2
-	mov	x4, x3
-	mov	x3, x2
-	hyp_pa	x3, x6
-	get_vcpu_ptr x5, x6
-	mrs	x6, far_el2
-	mrs	x7, hpfar_el2
+	/* Load the format arguments into x1-7. */
+	mov	x6, x3
+	get_vcpu_ptr x7, x3
+	mrs	x3, esr_el2
+	mrs	x4, far_el2
+	mrs	x5, hpfar_el2
 
 	/* Enter the host, conditionally restoring the host context. */
 	cbz	x29, __host_enter_without_restoring
 	b	__host_enter_for_panic
 SYM_FUNC_END(__hyp_do_panic)
-
-SYM_FUNC_START(__host_hvc)
-	ldp	x0, x1, [sp]		// Don't fixup the stack yet
-
-	/* No stub for you, sonny Jim */
-alternative_if ARM64_KVM_PROTECTED_MODE
-	b	__host_exit
-alternative_else_nop_endif
-
-	/* Check for a stub HVC call */
-	cmp	x0, #HVC_STUB_HCALL_NR
-	b.hs	__host_exit
-
-	add	sp, sp, #16
-	/*
-	 * Compute the idmap address of __kvm_handle_stub_hvc and
-	 * jump there.
-	 *
-	 * Preserve x0-x4, which may contain stub parameters.
-	 */
-	adr_l	x5, __kvm_handle_stub_hvc
-	hyp_pa	x5, x6
-	br	x5
-SYM_FUNC_END(__host_hvc)
 
 .macro host_el1_sync_vect
 	.align 7
@@ -175,8 +108,26 @@ SYM_FUNC_END(__host_hvc)
 	mrs	x0, esr_el2
 	ubfx	x0, x0, #ESR_ELx_EC_SHIFT, #ESR_ELx_EC_WIDTH
 	cmp	x0, #ESR_ELx_EC_HVC64
-	b.eq	__host_hvc
-	b	__host_exit
+	b.ne	__host_exit
+
+	ldp	x0, x1, [sp]		// Don't fixup the stack yet
+
+	/* Check for a stub HVC call */
+	cmp	x0, #HVC_STUB_HCALL_NR
+	b.hs	__host_exit
+
+	add	sp, sp, #16
+	/*
+	 * Compute the idmap address of __kvm_handle_stub_hvc and
+	 * jump there. Since we use kimage_voffset, do not use the
+	 * HYP VA for __kvm_handle_stub_hvc, but the kernel VA instead
+	 * (by loading it from the constant pool).
+	 *
+	 * Preserve x0-x4, which may contain stub parameters.
+	 */
+	ldr	x5, =__kvm_handle_stub_hvc
+	hyp_pa	x5, x6
+	br	x5
 .L__vect_end\@:
 .if ((.L__vect_end\@ - .L__vect_start\@) > 0x80)
 	.error "host_el1_sync_vect larger than vector entry"
@@ -185,18 +136,6 @@ SYM_FUNC_END(__host_hvc)
 
 .macro invalid_host_el2_vect
 	.align 7
-
-	/*
-	 * Test whether the SP has overflowed, without corrupting a GPR.
-	 * nVHE hypervisor stacks are aligned so that the PAGE_SHIFT bit
-	 * of SP should always be 1.
-	 */
-	add	sp, sp, x0			// sp' = sp + x0
-	sub	x0, sp, x0			// x0' = sp' - x0 = (sp + x0) - x0 = sp
-	tbz	x0, #PAGE_SHIFT, .L__hyp_sp_overflow\@
-	sub	x0, sp, x0			// x0'' = sp' - x0' = (sp + x0) - sp = x0
-	sub	sp, sp, x0			// sp'' = sp' - x0 = (sp + x0) - x0 = sp
-
 	/* If a guest is loaded, panic out of it. */
 	stp	x0, x1, [sp, #-16]!
 	get_loaded_vcpu x0, x1
@@ -209,18 +148,11 @@ SYM_FUNC_END(__host_hvc)
 	 * been partially clobbered by __host_enter.
 	 */
 	b	hyp_panic
-
-.L__hyp_sp_overflow\@:
-	/* Switch to the overflow stack */
-	adr_this_cpu sp, overflow_stack + OVERFLOW_STACK_SIZE, x0
-
-	b	hyp_panic_bad_stack
-	ASM_BUG()
 .endm
 
 .macro invalid_host_el1_vect
 	.align 7
-	mov	x0, xzr		/* restore_host = false */
+	mov	x0, xzr		/* host_ctxt = NULL */
 	mrs	x1, spsr_el2
 	mrs	x2, elr_el2
 	mrs	x3, par_el1
@@ -249,15 +181,15 @@ SYM_CODE_START(__kvm_hyp_host_vector)
 	invalid_host_el2_vect			// FIQ EL2h
 	invalid_host_el2_vect			// Error EL2h
 
-	host_el1_sync_vect			// Synchronous 64-bit EL1/EL0
-	invalid_host_el1_vect			// IRQ 64-bit EL1/EL0
-	invalid_host_el1_vect			// FIQ 64-bit EL1/EL0
-	invalid_host_el1_vect			// Error 64-bit EL1/EL0
+	host_el1_sync_vect			// Synchronous 64-bit EL1
+	invalid_host_el1_vect			// IRQ 64-bit EL1
+	invalid_host_el1_vect			// FIQ 64-bit EL1
+	invalid_host_el1_vect			// Error 64-bit EL1
 
-	host_el1_sync_vect			// Synchronous 32-bit EL1/EL0
-	invalid_host_el1_vect			// IRQ 32-bit EL1/EL0
-	invalid_host_el1_vect			// FIQ 32-bit EL1/EL0
-	invalid_host_el1_vect			// Error 32-bit EL1/EL0
+	invalid_host_el1_vect			// Synchronous 32-bit EL1
+	invalid_host_el1_vect			// IRQ 32-bit EL1
+	invalid_host_el1_vect			// FIQ 32-bit EL1
+	invalid_host_el1_vect			// Error 32-bit EL1
 SYM_CODE_END(__kvm_hyp_host_vector)
 
 /*

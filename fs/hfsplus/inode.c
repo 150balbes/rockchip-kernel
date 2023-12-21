@@ -17,15 +17,14 @@
 #include <linux/sched.h>
 #include <linux/cred.h>
 #include <linux/uio.h>
-#include <linux/fileattr.h>
 
 #include "hfsplus_fs.h"
 #include "hfsplus_raw.h"
 #include "xattr.h"
 
-static int hfsplus_read_folio(struct file *file, struct folio *folio)
+static int hfsplus_readpage(struct file *file, struct page *page)
 {
-	return block_read_full_folio(folio, hfsplus_get_block);
+	return block_read_full_page(page, hfsplus_get_block);
 }
 
 static int hfsplus_writepage(struct page *page, struct writeback_control *wbc)
@@ -43,13 +42,14 @@ static void hfsplus_write_failed(struct address_space *mapping, loff_t to)
 	}
 }
 
-int hfsplus_write_begin(struct file *file, struct address_space *mapping,
-		loff_t pos, unsigned len, struct page **pagep, void **fsdata)
+static int hfsplus_write_begin(struct file *file, struct address_space *mapping,
+			loff_t pos, unsigned len, unsigned flags,
+			struct page **pagep, void **fsdata)
 {
 	int ret;
 
 	*pagep = NULL;
-	ret = cont_write_begin(file, mapping, pos, len, pagep, fsdata,
+	ret = cont_write_begin(file, mapping, pos, len, flags, pagep, fsdata,
 				hfsplus_get_block,
 				&HFSPLUS_I(mapping->host)->phys_size);
 	if (unlikely(ret))
@@ -63,15 +63,14 @@ static sector_t hfsplus_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping, block, hfsplus_get_block);
 }
 
-static bool hfsplus_release_folio(struct folio *folio, gfp_t mask)
+static int hfsplus_releasepage(struct page *page, gfp_t mask)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = page->mapping->host;
 	struct super_block *sb = inode->i_sb;
 	struct hfs_btree *tree;
 	struct hfs_bnode *node;
 	u32 nidx;
-	int i;
-	bool res = true;
+	int i, res = 1;
 
 	switch (inode->i_ino) {
 	case HFSPLUS_EXT_CNID:
@@ -85,26 +84,26 @@ static bool hfsplus_release_folio(struct folio *folio, gfp_t mask)
 		break;
 	default:
 		BUG();
-		return false;
+		return 0;
 	}
 	if (!tree)
-		return false;
+		return 0;
 	if (tree->node_size >= PAGE_SIZE) {
-		nidx = folio->index >>
+		nidx = page->index >>
 			(tree->node_size_shift - PAGE_SHIFT);
 		spin_lock(&tree->hash_lock);
 		node = hfs_bnode_findhash(tree, nidx);
 		if (!node)
 			;
 		else if (atomic_read(&node->refcnt))
-			res = false;
+			res = 0;
 		if (res && node) {
 			hfs_bnode_unhash(node);
 			hfs_bnode_free(node);
 		}
 		spin_unlock(&tree->hash_lock);
 	} else {
-		nidx = folio->index <<
+		nidx = page->index <<
 			(PAGE_SHIFT - tree->node_size_shift);
 		i = 1 << (PAGE_SHIFT - tree->node_size_shift);
 		spin_lock(&tree->hash_lock);
@@ -113,7 +112,7 @@ static bool hfsplus_release_folio(struct folio *folio, gfp_t mask)
 			if (!node)
 				continue;
 			if (atomic_read(&node->refcnt)) {
-				res = false;
+				res = 0;
 				break;
 			}
 			hfs_bnode_unhash(node);
@@ -121,7 +120,7 @@ static bool hfsplus_release_folio(struct folio *folio, gfp_t mask)
 		} while (--i && nidx < tree->node_count);
 		spin_unlock(&tree->hash_lock);
 	}
-	return res ? try_to_free_buffers(folio) : false;
+	return res ? try_to_free_buffers(page) : 0;
 }
 
 static ssize_t hfsplus_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
@@ -156,26 +155,22 @@ static int hfsplus_writepages(struct address_space *mapping,
 }
 
 const struct address_space_operations hfsplus_btree_aops = {
-	.dirty_folio	= block_dirty_folio,
-	.invalidate_folio = block_invalidate_folio,
-	.read_folio	= hfsplus_read_folio,
+	.readpage	= hfsplus_readpage,
 	.writepage	= hfsplus_writepage,
 	.write_begin	= hfsplus_write_begin,
 	.write_end	= generic_write_end,
 	.bmap		= hfsplus_bmap,
-	.release_folio	= hfsplus_release_folio,
+	.releasepage	= hfsplus_releasepage,
 };
 
 const struct address_space_operations hfsplus_aops = {
-	.dirty_folio	= block_dirty_folio,
-	.invalidate_folio = block_invalidate_folio,
-	.read_folio	= hfsplus_read_folio,
+	.readpage	= hfsplus_readpage,
+	.writepage	= hfsplus_writepage,
 	.write_begin	= hfsplus_write_begin,
 	.write_end	= generic_write_end,
 	.bmap		= hfsplus_bmap,
 	.direct_IO	= hfsplus_direct_IO,
 	.writepages	= hfsplus_writepages,
-	.migrate_folio	= buffer_migrate_folio,
 };
 
 const struct dentry_operations hfsplus_dentry_operations = {
@@ -192,11 +187,11 @@ static void hfsplus_get_perms(struct inode *inode,
 	mode = be16_to_cpu(perms->mode);
 
 	i_uid_write(inode, be32_to_cpu(perms->owner));
-	if ((test_bit(HFSPLUS_SB_UID, &sbi->flags)) || (!i_uid_read(inode) && !mode))
+	if (!i_uid_read(inode) && !mode)
 		inode->i_uid = sbi->uid;
 
 	i_gid_write(inode, be32_to_cpu(perms->group));
-	if ((test_bit(HFSPLUS_SB_GID, &sbi->flags)) || (!i_gid_read(inode) && !mode))
+	if (!i_gid_read(inode) && !mode)
 		inode->i_gid = sbi->gid;
 
 	if (dir) {
@@ -246,13 +241,12 @@ static int hfsplus_file_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int hfsplus_setattr(struct mnt_idmap *idmap,
-			   struct dentry *dentry, struct iattr *attr)
+static int hfsplus_setattr(struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = d_inode(dentry);
 	int error;
 
-	error = setattr_prepare(&nop_mnt_idmap, dentry, attr);
+	error = setattr_prepare(dentry, attr);
 	if (error)
 		return error;
 
@@ -270,23 +264,17 @@ static int hfsplus_setattr(struct mnt_idmap *idmap,
 		inode->i_mtime = inode->i_ctime = current_time(inode);
 	}
 
-	setattr_copy(&nop_mnt_idmap, inode, attr);
+	setattr_copy(inode, attr);
 	mark_inode_dirty(inode);
 
 	return 0;
 }
 
-int hfsplus_getattr(struct mnt_idmap *idmap, const struct path *path,
-		    struct kstat *stat, u32 request_mask,
-		    unsigned int query_flags)
+int hfsplus_getattr(const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_inode(path->dentry);
 	struct hfsplus_inode_info *hip = HFSPLUS_I(inode);
-
-	if (request_mask & STATX_BTIME) {
-		stat->result_mask |= STATX_BTIME;
-		stat->btime = hfsp_mt2ut(hip->create_date);
-	}
 
 	if (inode->i_flags & S_APPEND)
 		stat->attributes |= STATX_ATTR_APPEND;
@@ -298,7 +286,7 @@ int hfsplus_getattr(struct mnt_idmap *idmap, const struct path *path,
 	stat->attributes_mask |= STATX_ATTR_APPEND | STATX_ATTR_IMMUTABLE |
 				 STATX_ATTR_NODUMP;
 
-	generic_fillattr(&nop_mnt_idmap, inode, stat);
+	generic_fillattr(inode, stat);
 	return 0;
 }
 
@@ -352,7 +340,7 @@ int hfsplus_file_fsync(struct file *file, loff_t start, loff_t end,
 	}
 
 	if (!test_bit(HFSPLUS_SB_NOBARRIER, &sbi->flags))
-		blkdev_issue_flush(inode->i_sb->s_bdev);
+		blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL);
 
 	inode_unlock(inode);
 
@@ -363,8 +351,6 @@ static const struct inode_operations hfsplus_file_inode_operations = {
 	.setattr	= hfsplus_setattr,
 	.getattr	= hfsplus_getattr,
 	.listxattr	= hfsplus_listxattr,
-	.fileattr_get	= hfsplus_fileattr_get,
-	.fileattr_set	= hfsplus_fileattr_set,
 };
 
 static const struct file_operations hfsplus_file_operations = {
@@ -372,7 +358,7 @@ static const struct file_operations hfsplus_file_operations = {
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= generic_file_write_iter,
 	.mmap		= generic_file_mmap,
-	.splice_read	= filemap_splice_read,
+	.splice_read	= generic_file_splice_read,
 	.fsync		= hfsplus_file_fsync,
 	.open		= hfsplus_file_open,
 	.release	= hfsplus_file_release,
@@ -390,7 +376,7 @@ struct inode *hfsplus_new_inode(struct super_block *sb, struct inode *dir,
 		return NULL;
 
 	inode->i_ino = sbi->next_cnid++;
-	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+	inode_init_owner(inode, dir, mode);
 	set_nlink(inode, 1);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 
@@ -511,11 +497,8 @@ int hfsplus_cat_read_inode(struct inode *inode, struct hfs_find_data *fd)
 	if (type == HFSPLUS_FOLDER) {
 		struct hfsplus_cat_folder *folder = &entry.folder;
 
-		if (fd->entrylength < sizeof(struct hfsplus_cat_folder)) {
-			pr_err("bad catalog folder entry\n");
-			res = -EIO;
-			goto out;
-		}
+		if (fd->entrylength < sizeof(struct hfsplus_cat_folder))
+			/* panic? */;
 		hfs_bnode_read(fd->bnode, &entry, fd->entryoffset,
 					sizeof(struct hfsplus_cat_folder));
 		hfsplus_get_perms(inode, &folder->permissions, 1);
@@ -535,11 +518,8 @@ int hfsplus_cat_read_inode(struct inode *inode, struct hfs_find_data *fd)
 	} else if (type == HFSPLUS_FILE) {
 		struct hfsplus_cat_file *file = &entry.file;
 
-		if (fd->entrylength < sizeof(struct hfsplus_cat_file)) {
-			pr_err("bad catalog file entry\n");
-			res = -EIO;
-			goto out;
-		}
+		if (fd->entrylength < sizeof(struct hfsplus_cat_file))
+			/* panic? */;
 		hfs_bnode_read(fd->bnode, &entry, fd->entryoffset,
 					sizeof(struct hfsplus_cat_file));
 
@@ -570,7 +550,6 @@ int hfsplus_cat_read_inode(struct inode *inode, struct hfs_find_data *fd)
 		pr_err("bad catalog entry used to create inode\n");
 		res = -EIO;
 	}
-out:
 	return res;
 }
 
@@ -579,7 +558,6 @@ int hfsplus_cat_write_inode(struct inode *inode)
 	struct inode *main_inode = inode;
 	struct hfs_find_data fd;
 	hfsplus_cat_entry entry;
-	int res = 0;
 
 	if (HFSPLUS_IS_RSRC(inode))
 		main_inode = HFSPLUS_I(inode)->rsrc_inode;
@@ -598,11 +576,8 @@ int hfsplus_cat_write_inode(struct inode *inode)
 	if (S_ISDIR(main_inode->i_mode)) {
 		struct hfsplus_cat_folder *folder = &entry.folder;
 
-		if (fd.entrylength < sizeof(struct hfsplus_cat_folder)) {
-			pr_err("bad catalog folder entry\n");
-			res = -EIO;
-			goto out;
-		}
+		if (fd.entrylength < sizeof(struct hfsplus_cat_folder))
+			/* panic? */;
 		hfs_bnode_read(fd.bnode, &entry, fd.entryoffset,
 					sizeof(struct hfsplus_cat_folder));
 		/* simple node checks? */
@@ -627,11 +602,8 @@ int hfsplus_cat_write_inode(struct inode *inode)
 	} else {
 		struct hfsplus_cat_file *file = &entry.file;
 
-		if (fd.entrylength < sizeof(struct hfsplus_cat_file)) {
-			pr_err("bad catalog file entry\n");
-			res = -EIO;
-			goto out;
-		}
+		if (fd.entrylength < sizeof(struct hfsplus_cat_file))
+			/* panic? */;
 		hfs_bnode_read(fd.bnode, &entry, fd.entryoffset,
 					sizeof(struct hfsplus_cat_file));
 		hfsplus_inode_write_fork(inode, &file->data_fork);
@@ -652,56 +624,5 @@ int hfsplus_cat_write_inode(struct inode *inode)
 	set_bit(HFSPLUS_I_CAT_DIRTY, &HFSPLUS_I(inode)->flags);
 out:
 	hfs_find_exit(&fd);
-	return res;
-}
-
-int hfsplus_fileattr_get(struct dentry *dentry, struct fileattr *fa)
-{
-	struct inode *inode = d_inode(dentry);
-	struct hfsplus_inode_info *hip = HFSPLUS_I(inode);
-	unsigned int flags = 0;
-
-	if (inode->i_flags & S_IMMUTABLE)
-		flags |= FS_IMMUTABLE_FL;
-	if (inode->i_flags & S_APPEND)
-		flags |= FS_APPEND_FL;
-	if (hip->userflags & HFSPLUS_FLG_NODUMP)
-		flags |= FS_NODUMP_FL;
-
-	fileattr_fill_flags(fa, flags);
-
-	return 0;
-}
-
-int hfsplus_fileattr_set(struct mnt_idmap *idmap,
-			 struct dentry *dentry, struct fileattr *fa)
-{
-	struct inode *inode = d_inode(dentry);
-	struct hfsplus_inode_info *hip = HFSPLUS_I(inode);
-	unsigned int new_fl = 0;
-
-	if (fileattr_has_fsx(fa))
-		return -EOPNOTSUPP;
-
-	/* don't silently ignore unsupported ext2 flags */
-	if (fa->flags & ~(FS_IMMUTABLE_FL|FS_APPEND_FL|FS_NODUMP_FL))
-		return -EOPNOTSUPP;
-
-	if (fa->flags & FS_IMMUTABLE_FL)
-		new_fl |= S_IMMUTABLE;
-
-	if (fa->flags & FS_APPEND_FL)
-		new_fl |= S_APPEND;
-
-	inode_set_flags(inode, new_fl, S_IMMUTABLE | S_APPEND);
-
-	if (fa->flags & FS_NODUMP_FL)
-		hip->userflags |= HFSPLUS_FLG_NODUMP;
-	else
-		hip->userflags &= ~HFSPLUS_FLG_NODUMP;
-
-	inode->i_ctime = current_time(inode);
-	mark_inode_dirty(inode);
-
 	return 0;
 }

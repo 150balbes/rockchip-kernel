@@ -220,7 +220,7 @@ static inline void print_err_status(struct cx231xx *dev, int packet, int status)
 }
 
 /*
- * generic routine to get the next available buffer
+ * video-buf generic routine to get the next available buffer
  */
 static inline void get_next_buf(struct cx231xx_dmaqueue *dma_q,
 				struct cx231xx_buffer **buf)

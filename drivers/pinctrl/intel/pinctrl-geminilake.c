@@ -20,8 +20,17 @@
 #define GLK_GPI_IS	0x100
 #define GLK_GPI_IE	0x110
 
-#define GLK_COMMUNITY(b, s, e)				\
-	INTEL_COMMUNITY_SIZE(b, s, e, 32, 4, GLK)
+#define GLK_COMMUNITY(s, e)				\
+	{						\
+		.padown_offset = GLK_PAD_OWN,		\
+		.padcfglock_offset = GLK_PADCFGLOCK,	\
+		.hostown_offset = GLK_HOSTSW_OWN,	\
+		.is_offset = GLK_GPI_IS,		\
+		.ie_offset = GLK_GPI_IE,		\
+		.gpp_size = 32,                         \
+		.pin_base = (s),			\
+		.npins = ((e) - (s) + 1),		\
+	}
 
 /* GLK */
 static const struct pinctrl_pin_desc glk_northwest_pins[] = {
@@ -164,7 +173,7 @@ static const struct intel_function glk_northwest_functions[] = {
 };
 
 static const struct intel_community glk_northwest_communities[] = {
-	GLK_COMMUNITY(0, 0, 79),
+	GLK_COMMUNITY(0, 79),
 };
 
 static const struct intel_pinctrl_soc_data glk_northwest_soc_data = {
@@ -297,7 +306,7 @@ static const struct intel_function glk_north_functions[] = {
 };
 
 static const struct intel_community glk_north_communities[] = {
-	GLK_COMMUNITY(0, 0, 79),
+	GLK_COMMUNITY(0, 79),
 };
 
 static const struct intel_pinctrl_soc_data glk_north_soc_data = {
@@ -336,7 +345,7 @@ static const struct pinctrl_pin_desc glk_audio_pins[] = {
 };
 
 static const struct intel_community glk_audio_communities[] = {
-	GLK_COMMUNITY(0, 0, 19),
+	GLK_COMMUNITY(0, 19),
 };
 
 static const struct intel_pinctrl_soc_data glk_audio_soc_data = {
@@ -418,7 +427,7 @@ static const struct intel_function glk_scc_functions[] = {
 };
 
 static const struct intel_community glk_scc_communities[] = {
-	GLK_COMMUNITY(0, 0, 34),
+	GLK_COMMUNITY(0, 34),
 };
 
 static const struct intel_pinctrl_soc_data glk_scc_soc_data = {

@@ -719,9 +719,11 @@ static int cn23xx_setup_pf_mbox(struct octeon_device *oct)
 	for (i = 0; i < oct->sriov_info.max_vfs; i++) {
 		q_no = i * oct->sriov_info.rings_per_vf;
 
-		mbox = vzalloc(sizeof(*mbox));
+		mbox = vmalloc(sizeof(*mbox));
 		if (!mbox)
 			goto free_mbox;
+
+		memset(mbox, 0, sizeof(struct octeon_mbox));
 
 		spin_lock_init(&mbox->lock);
 
@@ -1375,7 +1377,6 @@ int setup_cn23xx_octeon_pf_device(struct octeon_device *oct)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(setup_cn23xx_octeon_pf_device);
 
 int validate_cn23xx_pf_config_info(struct octeon_device *oct,
 				   struct octeon_config *conf23xx)
@@ -1434,7 +1435,6 @@ int cn23xx_fw_loaded(struct octeon_device *oct)
 	val = octeon_read_csr64(oct, CN23XX_SLI_SCRATCH2);
 	return (val >> SCR2_BIT_FW_LOADED) & 1ULL;
 }
-EXPORT_SYMBOL_GPL(cn23xx_fw_loaded);
 
 void cn23xx_tell_vf_its_macaddr_changed(struct octeon_device *oct, int vfidx,
 					u8 *mac)
@@ -1456,7 +1456,6 @@ void cn23xx_tell_vf_its_macaddr_changed(struct octeon_device *oct, int vfidx,
 		octeon_mbox_write(oct, &mbox_cmd);
 	}
 }
-EXPORT_SYMBOL_GPL(cn23xx_tell_vf_its_macaddr_changed);
 
 static void
 cn23xx_get_vf_stats_callback(struct octeon_device *oct,
@@ -1511,4 +1510,3 @@ int cn23xx_get_vf_stats(struct octeon_device *oct, int vfidx,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(cn23xx_get_vf_stats);

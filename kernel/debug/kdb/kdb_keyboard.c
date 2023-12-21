@@ -11,9 +11,8 @@
 #include <linux/kdb.h>
 #include <linux/keyboard.h>
 #include <linux/ctype.h>
+#include <linux/module.h>
 #include <linux/io.h>
-
-#include "kdb_private.h"
 
 /* Keyboard Controller Registers on normal PCs. */
 

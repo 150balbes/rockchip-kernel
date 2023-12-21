@@ -2,9 +2,6 @@
 #ifndef __NETNS_SCTP_H__
 #define __NETNS_SCTP_H__
 
-#include <linux/timer.h>
-#include <net/snmp.h>
-
 struct sock;
 struct proc_dir_entry;
 struct sctp_mib;
@@ -24,14 +21,6 @@ struct netns_sctp {
 	 * for this socket at the initialization time.
 	 */
 	struct sock *ctl_sock;
-
-	/* UDP tunneling listening sock. */
-	struct sock *udp4_sock;
-	struct sock *udp6_sock;
-	/* UDP tunneling listening port. */
-	int udp_port;
-	/* UDP tunneling remote encap port. */
-	int encap_port;
 
 	/* This is the global local address list.
 	 * We actively maintain this complete list of addresses on
@@ -86,9 +75,6 @@ struct netns_sctp {
 
 	/* HB.interval		    - 30 seconds  */
 	unsigned int hb_interval;
-
-	/* The interval for PLPMTUD probe timer */
-	unsigned int probe_interval;
 
 	/* Association.Max.Retrans  - 10 attempts
 	 * Path.Max.Retrans	    - 5	 attempts (per destination address)
@@ -175,10 +161,6 @@ struct netns_sctp {
 
 	/* Threshold for autoclose timeout, in seconds. */
 	unsigned long max_autoclose;
-
-#ifdef CONFIG_NET_L3_MASTER_DEV
-	int l3mdev_accept;
-#endif
 };
 
 #endif /* __NETNS_SCTP_H__ */

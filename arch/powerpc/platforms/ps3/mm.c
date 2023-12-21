@@ -14,6 +14,7 @@
 
 #include <asm/cell-regs.h>
 #include <asm/firmware.h>
+#include <asm/prom.h>
 #include <asm/udbg.h>
 #include <asm/lv1call.h>
 #include <asm/setup.h>
@@ -40,7 +41,7 @@ enum {
 	PAGE_SHIFT_16M = 24U,
 };
 
-static unsigned long __init make_page_sizes(unsigned long a, unsigned long b)
+static unsigned long make_page_sizes(unsigned long a, unsigned long b)
 {
 	return (a << 56) | (b << 48);
 }
@@ -194,11 +195,9 @@ fail:
 
 /**
  * ps3_mm_vas_destroy -
- *
- * called during kexec sequence with MMU off.
  */
 
-notrace void ps3_mm_vas_destroy(void)
+void ps3_mm_vas_destroy(void)
 {
 	int result;
 
@@ -214,7 +213,7 @@ notrace void ps3_mm_vas_destroy(void)
 	}
 }
 
-static int __init ps3_mm_get_repository_highmem(struct mem_region *r)
+static int ps3_mm_get_repository_highmem(struct mem_region *r)
 {
 	int result;
 
@@ -363,7 +362,7 @@ static void  __maybe_unused _dma_dump_region(const struct ps3_dma_region *r,
  * @bus_addr: Starting ioc bus address of the area to map.
  * @len: Length in bytes of the area to map.
  * @link: A struct list_head used with struct ps3_dma_region.chunk_list, the
- * list of all chunks owned by the region.
+ * list of all chuncks owned by the region.
  *
  * This implementation uses a very simple dma page manager
  * based on the dma_chunk structure.  This scheme assumes
@@ -1244,11 +1243,9 @@ void __init ps3_mm_init(void)
 
 /**
  * ps3_mm_shutdown - final cleanup of address space
- *
- * called during kexec sequence with MMU off.
  */
 
-notrace void ps3_mm_shutdown(void)
+void ps3_mm_shutdown(void)
 {
 	ps3_mm_region_destroy(&map.r1);
 }

@@ -4,42 +4,29 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 
-#include "map_ptr_kern.lskel.h"
+#include "map_ptr_kern.skel.h"
 
 void test_map_ptr(void)
 {
-	struct map_ptr_kern_lskel *skel;
+	struct map_ptr_kern *skel;
+	__u32 duration = 0, retval;
 	char buf[128];
 	int err;
-	int page_size = getpagesize();
-	LIBBPF_OPTS(bpf_test_run_opts, topts,
-		.data_in = &pkt_v4,
-		.data_size_in = sizeof(pkt_v4),
-		.data_out = buf,
-		.data_size_out = sizeof(buf),
-		.repeat = 1,
-	);
 
-	skel = map_ptr_kern_lskel__open();
-	if (!ASSERT_OK_PTR(skel, "skel_open"))
+	skel = map_ptr_kern__open_and_load();
+	if (CHECK(!skel, "skel_open_load", "open_load failed\n"))
 		return;
 
-	skel->maps.m_ringbuf.max_entries = page_size;
+	err = bpf_prog_test_run(bpf_program__fd(skel->progs.cg_skb), 1, &pkt_v4,
+				sizeof(pkt_v4), buf, NULL, &retval, NULL);
 
-	err = map_ptr_kern_lskel__load(skel);
-	if (!ASSERT_OK(err, "skel_load"))
+	if (CHECK(err, "test_run", "err=%d errno=%d\n", err, errno))
 		goto cleanup;
 
-	skel->bss->page_size = page_size;
-
-	err = bpf_prog_test_run_opts(skel->progs.cg_skb.prog_fd, &topts);
-
-	if (!ASSERT_OK(err, "test_run"))
-		goto cleanup;
-
-	if (!ASSERT_NEQ(topts.retval, 0, "test_run retval"))
+	if (CHECK(!retval, "retval", "retval=%d map_type=%u line=%u\n", retval,
+		  skel->bss->g_map_type, skel->bss->g_line))
 		goto cleanup;
 
 cleanup:
-	map_ptr_kern_lskel__destroy(skel);
+	map_ptr_kern__destroy(skel);
 }

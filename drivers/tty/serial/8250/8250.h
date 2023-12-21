@@ -7,7 +7,6 @@
  *  Copyright (C) 2001 Russell King.
  */
 
-#include <linux/bits.h>
 #include <linux/serial_8250.h>
 #include <linux/serial_reg.h>
 #include <linux/dmaengine.h>
@@ -17,8 +16,6 @@
 struct uart_8250_dma {
 	int (*tx_dma)(struct uart_8250_port *p);
 	int (*rx_dma)(struct uart_8250_port *p);
-	void (*prepare_tx_dma)(struct uart_8250_port *p);
-	void (*prepare_rx_dma)(struct uart_8250_port *p);
 
 	/* Filter function */
 	dma_filter_fn		fn;
@@ -51,6 +48,9 @@ struct uart_8250_dma {
 	unsigned char		tx_running;
 	unsigned char		tx_err;
 	unsigned char		rx_running;
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	size_t			rx_index;
+#endif
 };
 
 struct old_serial_port {
@@ -73,25 +73,25 @@ struct serial8250_config {
 	unsigned int	flags;
 };
 
-#define UART_CAP_FIFO	BIT(8)	/* UART has FIFO */
-#define UART_CAP_EFR	BIT(9)	/* UART has EFR */
-#define UART_CAP_SLEEP	BIT(10)	/* UART has IER sleep */
-#define UART_CAP_AFE	BIT(11)	/* MCR-based hw flow control */
-#define UART_CAP_UUE	BIT(12)	/* UART needs IER bit 6 set (Xscale) */
-#define UART_CAP_RTOIE	BIT(13)	/* UART needs IER bit 4 set (Xscale, Tegra) */
-#define UART_CAP_HFIFO	BIT(14)	/* UART has a "hidden" FIFO */
-#define UART_CAP_RPM	BIT(15)	/* Runtime PM is active while idle */
-#define UART_CAP_IRDA	BIT(16)	/* UART supports IrDA line discipline */
-#define UART_CAP_MINI	BIT(17)	/* Mini UART on BCM283X family lacks:
+#define UART_CAP_FIFO	(1 << 8)	/* UART has FIFO */
+#define UART_CAP_EFR	(1 << 9)	/* UART has EFR */
+#define UART_CAP_SLEEP	(1 << 10)	/* UART has IER sleep */
+#define UART_CAP_AFE	(1 << 11)	/* MCR-based hw flow control */
+#define UART_CAP_UUE	(1 << 12)	/* UART needs IER bit 6 set (Xscale) */
+#define UART_CAP_RTOIE	(1 << 13)	/* UART needs IER bit 4 set (Xscale, Tegra) */
+#define UART_CAP_HFIFO	(1 << 14)	/* UART has a "hidden" FIFO */
+#define UART_CAP_RPM	(1 << 15)	/* Runtime PM is active while idle */
+#define UART_CAP_IRDA	(1 << 16)	/* UART supports IrDA line discipline */
+#define UART_CAP_MINI	(1 << 17)	/* Mini UART on BCM283X family lacks:
 					 * STOP PARITY EPAR SPAR WLEN5 WLEN6
 					 */
-#define UART_CAP_NOTEMT	BIT(18)	/* UART without interrupt on TEMT available */
 
-#define UART_BUG_QUOT	BIT(0)	/* UART has buggy quot LSB */
-#define UART_BUG_TXEN	BIT(1)	/* UART has buggy TX IIR status */
-#define UART_BUG_NOMSR	BIT(2)	/* UART has buggy MSR status bits (Au1x00) */
-#define UART_BUG_THRE	BIT(3)	/* UART has buggy THRE reassertion */
-#define UART_BUG_TXRACE	BIT(5)	/* UART Tx fails to set remote DR */
+#define UART_BUG_QUOT	(1 << 0)	/* UART has buggy quot LSB */
+#define UART_BUG_TXEN	(1 << 1)	/* UART has buggy TX IIR status */
+#define UART_BUG_NOMSR	(1 << 2)	/* UART has buggy MSR status bits (Au1x00) */
+#define UART_BUG_THRE	(1 << 3)	/* UART has buggy THRE reassertion */
+#define UART_BUG_PARITY	(1 << 4)	/* UART mishandles parity if FIFO enabled */
+#define UART_BUG_TXRACE	(1 << 5)	/* UART Tx fails to set remote DR */
 
 
 #ifdef CONFIG_SERIAL_8250_SHARE_IRQ
@@ -122,26 +122,6 @@ static inline void serial_out(struct uart_8250_port *up, int offset, int value)
 	up->port.serial_out(&up->port, offset, value);
 }
 
-/**
- *	serial_lsr_in - Read LSR register and preserve flags across reads
- *	@up:	uart 8250 port
- *
- *	Read LSR register and handle saving non-preserved flags across reads.
- *	The flags that are not preserved across reads are stored into
- *	up->lsr_saved_flags.
- *
- *	Returns LSR value or'ed with the preserved flags (if any).
- */
-static inline u16 serial_lsr_in(struct uart_8250_port *up)
-{
-	u16 lsr = up->lsr_saved_flags;
-
-	lsr |= serial_in(up, UART_LSR);
-	up->lsr_saved_flags = lsr & up->lsr_save_mask;
-
-	return lsr;
-}
-
 /*
  * For the 16C950
  */
@@ -166,36 +146,36 @@ static unsigned int __maybe_unused serial_icr_read(struct uart_8250_port *up,
 
 void serial8250_clear_and_reinit_fifos(struct uart_8250_port *p);
 
-static inline u32 serial_dl_read(struct uart_8250_port *up)
+static inline int serial_dl_read(struct uart_8250_port *up)
 {
 	return up->dl_read(up);
 }
 
-static inline void serial_dl_write(struct uart_8250_port *up, u32 value)
+static inline void serial_dl_write(struct uart_8250_port *up, int value)
 {
 	up->dl_write(up, value);
 }
 
 static inline bool serial8250_set_THRI(struct uart_8250_port *up)
 {
-	/* Port locked to synchronize UART_IER access against the console. */
-	lockdep_assert_held_once(&up->port.lock);
-
 	if (up->ier & UART_IER_THRI)
 		return false;
 	up->ier |= UART_IER_THRI;
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	up->ier |= UART_IER_PTIME;
+#endif
 	serial_out(up, UART_IER, up->ier);
 	return true;
 }
 
 static inline bool serial8250_clear_THRI(struct uart_8250_port *up)
 {
-	/* Port locked to synchronize UART_IER access against the console. */
-	lockdep_assert_held_once(&up->port.lock);
-
 	if (!(up->ier & UART_IER_THRI))
 		return false;
 	up->ier &= ~UART_IER_THRI;
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	up->ier &= ~UART_IER_PTIME;
+#endif
 	serial_out(up, UART_IER, up->ier);
 	return true;
 }
@@ -208,12 +188,10 @@ void serial8250_rpm_put(struct uart_8250_port *p);
 void serial8250_rpm_get_tx(struct uart_8250_port *p);
 void serial8250_rpm_put_tx(struct uart_8250_port *p);
 
-int serial8250_em485_config(struct uart_port *port, struct ktermios *termios,
-			    struct serial_rs485 *rs485);
+int serial8250_em485_config(struct uart_port *port, struct serial_rs485 *rs485);
 void serial8250_em485_start_tx(struct uart_8250_port *p);
 void serial8250_em485_stop_tx(struct uart_8250_port *p);
 void serial8250_em485_destroy(struct uart_8250_port *p);
-extern struct serial_rs485 serial8250_em485_supported;
 
 /* MCR <-> TIOCM conversion */
 static inline int serial8250_TIOCM_to_MCR(int tiocm)
@@ -293,8 +271,16 @@ static inline int serial8250_in_MCR(struct uart_8250_port *up)
 	return mctrl;
 }
 
-bool alpha_jensen(void);
-void alpha_jensen_set_mctrl(struct uart_port *port, unsigned int mctrl);
+#if defined(__alpha__) && !defined(CONFIG_PCI)
+/*
+ * Digital did something really horribly wrong with the OUT1 and OUT2
+ * lines on at least some ALPHA's.  The failure mode is that if either
+ * is cleared, the machine locks up with endless interrupts.
+ */
+#define ALPHA_KLUDGE_MCR  (UART_MCR_OUT2 | UART_MCR_OUT1)
+#else
+#define ALPHA_KLUDGE_MCR 0
+#endif
 
 #ifdef CONFIG_SERIAL_8250_PNP
 int serial8250_pnp_init(void);
@@ -311,7 +297,6 @@ static inline int fintek_8250_probe(struct uart_8250_port *uart) { return 0; }
 #endif
 
 #ifdef CONFIG_ARCH_OMAP1
-#include <linux/soc/ti/omap1-soc.h>
 static inline int is_omap1_8250(struct uart_8250_port *pt)
 {
 	int res;
@@ -351,32 +336,12 @@ static inline int is_omap1510_8250(struct uart_8250_port *pt)
 #ifdef CONFIG_SERIAL_8250_DMA
 extern int serial8250_tx_dma(struct uart_8250_port *);
 extern int serial8250_rx_dma(struct uart_8250_port *);
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+extern int serial8250_start_rx_dma(struct uart_8250_port *);
+#endif
 extern void serial8250_rx_dma_flush(struct uart_8250_port *);
 extern int serial8250_request_dma(struct uart_8250_port *);
 extern void serial8250_release_dma(struct uart_8250_port *);
-
-static inline void serial8250_do_prepare_tx_dma(struct uart_8250_port *p)
-{
-	struct uart_8250_dma *dma = p->dma;
-
-	if (dma->prepare_tx_dma)
-		dma->prepare_tx_dma(p);
-}
-
-static inline void serial8250_do_prepare_rx_dma(struct uart_8250_port *p)
-{
-	struct uart_8250_dma *dma = p->dma;
-
-	if (dma->prepare_rx_dma)
-		dma->prepare_rx_dma(p);
-}
-
-static inline bool serial8250_tx_dma_running(struct uart_8250_port *p)
-{
-	struct uart_8250_dma *dma = p->dma;
-
-	return dma && dma->tx_running;
-}
 #else
 static inline int serial8250_tx_dma(struct uart_8250_port *p)
 {
@@ -386,17 +351,18 @@ static inline int serial8250_rx_dma(struct uart_8250_port *p)
 {
 	return -1;
 }
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+static inline int serial8250_start_rx_dma(struct uart_8250_port *p)
+{
+	return -1;
+}
+#endif
 static inline void serial8250_rx_dma_flush(struct uart_8250_port *p) { }
 static inline int serial8250_request_dma(struct uart_8250_port *p)
 {
 	return -1;
 }
 static inline void serial8250_release_dma(struct uart_8250_port *p) { }
-
-static inline bool serial8250_tx_dma_running(struct uart_8250_port *p)
-{
-	return false;
-}
 #endif
 
 static inline int ns16550a_goto_highspeed(struct uart_8250_port *up)

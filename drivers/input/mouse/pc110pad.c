@@ -10,6 +10,9 @@
  * IBM PC110 touchpad driver for Linux
  */
 
+/*
+ */
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>

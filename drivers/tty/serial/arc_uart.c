@@ -149,7 +149,7 @@ static unsigned int arc_serial_tx_empty(struct uart_port *port)
 /*
  * Driver internal routine, used by both tty(serial core) as well as tx-isr
  *  -Called under spinlock in either cases
- *  -also tty->flow.stopped has already been checked
+ *  -also tty->stopped has already been checked
  *     = by uart_start( ) before calling us
  *     = tx_ist checks that too before calling
  */
@@ -166,7 +166,8 @@ static void arc_serial_tx_chars(struct uart_port *port)
 		sent = 1;
 	} else if (!uart_circ_empty(xmit)) {
 		ch = xmit->buf[xmit->tail];
-		uart_xmit_advance(port, 1);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
 		while (!(UART_GET_STATUS(port) & TXEMPTY))
 			cpu_relax();
 		UART_SET_DATA(port, ch);
@@ -235,7 +236,9 @@ static void arc_serial_rx_chars(struct uart_port *port, unsigned int status)
 		if (!(uart_handle_sysrq_char(port, ch)))
 			uart_insert_char(port, status, RXOERR, ch, flg);
 
+		spin_unlock(&port->lock);
 		tty_flip_buffer_push(&port->state->port);
+		spin_lock(&port->lock);
 	} while (!((status = UART_GET_STATUS(port)) & RXEMPTY));
 }
 
@@ -350,7 +353,7 @@ static void arc_serial_shutdown(struct uart_port *port)
 
 static void
 arc_serial_set_termios(struct uart_port *port, struct ktermios *new,
-		       const struct ktermios *old)
+		       struct ktermios *old)
 {
 	struct arc_uart_port *uart = to_arc_port(port);
 	unsigned int baud, uartl, uarth, hw_val;
@@ -507,7 +510,7 @@ static int arc_serial_console_setup(struct console *co, char *options)
 	return uart_set_options(port, co, baud, parity, bits, flow);
 }
 
-static void arc_serial_console_putchar(struct uart_port *port, unsigned char ch)
+static void arc_serial_console_putchar(struct uart_port *port, int ch)
 {
 	while (!(UART_GET_STATUS(port) & TXEMPTY))
 		cpu_relax();
@@ -606,11 +609,10 @@ static int arc_serial_probe(struct platform_device *pdev)
 	}
 	uart->baud = val;
 
-	port->membase = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(port->membase)) {
+	port->membase = of_iomap(np, 0);
+	if (!port->membase)
 		/* No point of dev_err since UART itself is hosed here */
-		return PTR_ERR(port->membase);
-	}
+		return -ENXIO;
 
 	port->irq = irq_of_parse_and_map(np, 0);
 
@@ -632,6 +634,12 @@ static int arc_serial_probe(struct platform_device *pdev)
 	return uart_add_one_port(&arc_uart_driver, &arc_uart_ports[dev_id].port);
 }
 
+static int arc_serial_remove(struct platform_device *pdev)
+{
+	/* This will never be called */
+	return 0;
+}
+
 static const struct of_device_id arc_uart_dt_ids[] = {
 	{ .compatible = "snps,arc-uart" },
 	{ /* Sentinel */ }
@@ -640,6 +648,7 @@ MODULE_DEVICE_TABLE(of, arc_uart_dt_ids);
 
 static struct platform_driver arc_platform_driver = {
 	.probe = arc_serial_probe,
+	.remove = arc_serial_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table  = arc_uart_dt_ids,

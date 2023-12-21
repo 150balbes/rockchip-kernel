@@ -29,8 +29,6 @@
 #include <linux/platform_device.h>
 #include <sound/designware_i2s.h>
 #include <sound/pcm.h>
-#include <linux/acpi.h>
-#include <linux/dmi.h>
 
 #include "amdgpu.h"
 #include "atom.h"
@@ -38,18 +36,17 @@
 
 #include "acp_gfx_if.h"
 
-#define ST_JADEITE 1
-#define ACP_TILE_ON_MASK			0x03
-#define ACP_TILE_OFF_MASK			0x02
-#define ACP_TILE_ON_RETAIN_REG_MASK		0x1f
-#define ACP_TILE_OFF_RETAIN_REG_MASK		0x20
+#define ACP_TILE_ON_MASK                	0x03
+#define ACP_TILE_OFF_MASK               	0x02
+#define ACP_TILE_ON_RETAIN_REG_MASK     	0x1f
+#define ACP_TILE_OFF_RETAIN_REG_MASK    	0x20
 
-#define ACP_TILE_P1_MASK			0x3e
-#define ACP_TILE_P2_MASK			0x3d
-#define ACP_TILE_DSP0_MASK			0x3b
-#define ACP_TILE_DSP1_MASK			0x37
+#define ACP_TILE_P1_MASK                	0x3e
+#define ACP_TILE_P2_MASK                	0x3d
+#define ACP_TILE_DSP0_MASK              	0x3b
+#define ACP_TILE_DSP1_MASK              	0x37
 
-#define ACP_TILE_DSP2_MASK			0x2f
+#define ACP_TILE_DSP2_MASK              	0x2f
 
 #define ACP_DMA_REGS_END			0x146c0
 #define ACP_I2S_PLAY_REGS_START			0x14840
@@ -78,8 +75,8 @@
 #define mmACP_CONTROL				0x5131
 #define mmACP_STATUS				0x5133
 #define mmACP_SOFT_RESET			0x5134
-#define ACP_CONTROL__ClkEn_MASK			0x1
-#define ACP_SOFT_RESET__SoftResetAud_MASK	0x100
+#define ACP_CONTROL__ClkEn_MASK 		0x1
+#define ACP_SOFT_RESET__SoftResetAud_MASK 	0x100
 #define ACP_SOFT_RESET__SoftResetAudDone_MASK	0x1000000
 #define ACP_CLOCK_EN_TIME_OUT_VALUE		0x000000FF
 #define ACP_SOFT_RESET_DONE_TIME_OUT_VALUE	0x000000FF
@@ -87,8 +84,6 @@
 #define ACP_TIMEOUT_LOOP			0x000000FF
 #define ACP_DEVS				4
 #define ACP_SRC_ID				162
-
-static unsigned long acp_machine_id;
 
 enum {
 	ACP_TILE_P1 = 0,
@@ -133,14 +128,16 @@ static int acp_poweroff(struct generic_pm_domain *genpd)
 	struct amdgpu_device *adev;
 
 	apd = container_of(genpd, struct acp_pm_domain, gpd);
-	adev = apd->adev;
+	if (apd != NULL) {
+		adev = apd->adev;
 	/* call smu to POWER GATE ACP block
 	 * smu will
 	 * 1. turn off the acp clock
 	 * 2. power off the acp tiles
 	 * 3. check and enter ulv state
 	 */
-	amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_ACP, true);
+		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_ACP, true);
+	}
 	return 0;
 }
 
@@ -150,14 +147,16 @@ static int acp_poweron(struct generic_pm_domain *genpd)
 	struct amdgpu_device *adev;
 
 	apd = container_of(genpd, struct acp_pm_domain, gpd);
-	adev = apd->adev;
+	if (apd != NULL) {
+		adev = apd->adev;
 	/* call smu to UNGATE ACP block
 	 * smu will
 	 * 1. exit ulv
 	 * 2. turn on acp clock
 	 * 3. power on acp tiles
 	 */
-	amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_ACP, false);
+		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_ACP, false);
+	}
 	return 0;
 }
 
@@ -185,47 +184,16 @@ static int acp_genpd_remove_device(struct device *dev, void *data)
 	return 0;
 }
 
-static int acp_quirk_cb(const struct dmi_system_id *id)
-{
-	acp_machine_id = ST_JADEITE;
-	return 1;
-}
-
-static const struct dmi_system_id acp_quirk_table[] = {
-	{
-		.callback = acp_quirk_cb,
-		.matches = {
-			DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "AMD"),
-			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Jadeite"),
-		}
-	},
-	{
-		.callback = acp_quirk_cb,
-		.matches = {
-			DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "IP3 Technology CO.,Ltd."),
-			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "ASN1D"),
-		},
-	},
-	{
-		.callback = acp_quirk_cb,
-		.matches = {
-			DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "Standard"),
-			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "ASN10"),
-		},
-	},
-	{}
-};
-
 /**
  * acp_hw_init - start and test ACP block
  *
- * @handle: handle used to pass amdgpu_device pointer
+ * @adev: amdgpu_device pointer
  *
  */
 static int acp_hw_init(void *handle)
 {
 	int r;
-	u64 acp_base;
+	uint64_t acp_base;
 	u32 val = 0;
 	u32 count = 0;
 	struct i2s_platform_data *i2s_pdata = NULL;
@@ -252,202 +220,141 @@ static int acp_hw_init(void *handle)
 		return -EINVAL;
 
 	acp_base = adev->rmmio_base;
+
+
 	adev->acp.acp_genpd = kzalloc(sizeof(struct acp_pm_domain), GFP_KERNEL);
-	if (!adev->acp.acp_genpd)
+	if (adev->acp.acp_genpd == NULL)
 		return -ENOMEM;
 
 	adev->acp.acp_genpd->gpd.name = "ACP_AUDIO";
 	adev->acp.acp_genpd->gpd.power_off = acp_poweroff;
 	adev->acp.acp_genpd->gpd.power_on = acp_poweron;
+
+
 	adev->acp.acp_genpd->adev = adev;
 
 	pm_genpd_init(&adev->acp.acp_genpd->gpd, NULL, false);
-	dmi_check_system(acp_quirk_table);
-	switch (acp_machine_id) {
-	case ST_JADEITE:
-	{
-		adev->acp.acp_cell = kcalloc(2, sizeof(struct mfd_cell),
-					     GFP_KERNEL);
-		if (!adev->acp.acp_cell) {
-			r = -ENOMEM;
-			goto failure;
-		}
 
-		adev->acp.acp_res = kcalloc(3, sizeof(struct resource), GFP_KERNEL);
-		if (!adev->acp.acp_res) {
-			r = -ENOMEM;
-			goto failure;
-		}
+	adev->acp.acp_cell = kcalloc(ACP_DEVS, sizeof(struct mfd_cell),
+							GFP_KERNEL);
 
-		i2s_pdata = kcalloc(1, sizeof(struct i2s_platform_data), GFP_KERNEL);
-		if (!i2s_pdata) {
-			r = -ENOMEM;
-			goto failure;
-		}
+	if (adev->acp.acp_cell == NULL) {
+		r = -ENOMEM;
+		goto failure;
+	}
 
+	adev->acp.acp_res = kcalloc(5, sizeof(struct resource), GFP_KERNEL);
+	if (adev->acp.acp_res == NULL) {
+		r = -ENOMEM;
+		goto failure;
+	}
+
+	i2s_pdata = kcalloc(3, sizeof(struct i2s_platform_data), GFP_KERNEL);
+	if (i2s_pdata == NULL) {
+		r = -ENOMEM;
+		goto failure;
+	}
+
+	switch (adev->asic_type) {
+	case CHIP_STONEY:
 		i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
-				      DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-		i2s_pdata[0].cap = DWC_I2S_PLAY | DWC_I2S_RECORD;
-		i2s_pdata[0].snd_rates = SNDRV_PCM_RATE_8000_96000;
-		i2s_pdata[0].i2s_reg_comp1 = ACP_I2S_COMP1_CAP_REG_OFFSET;
-		i2s_pdata[0].i2s_reg_comp2 = ACP_I2S_COMP2_CAP_REG_OFFSET;
+			DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
+		break;
+	default:
+		i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET;
+	}
+	i2s_pdata[0].cap = DWC_I2S_PLAY;
+	i2s_pdata[0].snd_rates = SNDRV_PCM_RATE_8000_96000;
+	i2s_pdata[0].i2s_reg_comp1 = ACP_I2S_COMP1_PLAY_REG_OFFSET;
+	i2s_pdata[0].i2s_reg_comp2 = ACP_I2S_COMP2_PLAY_REG_OFFSET;
+	switch (adev->asic_type) {
+	case CHIP_STONEY:
+		i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
+			DW_I2S_QUIRK_COMP_PARAM1 |
+			DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
+		break;
+	default:
+		i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
+			DW_I2S_QUIRK_COMP_PARAM1;
+	}
 
-		adev->acp.acp_res[0].name = "acp2x_dma";
-		adev->acp.acp_res[0].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[0].start = acp_base;
-		adev->acp.acp_res[0].end = acp_base + ACP_DMA_REGS_END;
+	i2s_pdata[1].cap = DWC_I2S_RECORD;
+	i2s_pdata[1].snd_rates = SNDRV_PCM_RATE_8000_96000;
+	i2s_pdata[1].i2s_reg_comp1 = ACP_I2S_COMP1_CAP_REG_OFFSET;
+	i2s_pdata[1].i2s_reg_comp2 = ACP_I2S_COMP2_CAP_REG_OFFSET;
 
-		adev->acp.acp_res[1].name = "acp2x_dw_i2s_play_cap";
-		adev->acp.acp_res[1].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[1].start = acp_base + ACP_I2S_CAP_REGS_START;
-		adev->acp.acp_res[1].end = acp_base + ACP_I2S_CAP_REGS_END;
-
-		adev->acp.acp_res[2].name = "acp2x_dma_irq";
-		adev->acp.acp_res[2].flags = IORESOURCE_IRQ;
-		adev->acp.acp_res[2].start = amdgpu_irq_create_mapping(adev, 162);
-		adev->acp.acp_res[2].end = adev->acp.acp_res[2].start;
-
-		adev->acp.acp_cell[0].name = "acp_audio_dma";
-		adev->acp.acp_cell[0].num_resources = 3;
-		adev->acp.acp_cell[0].resources = &adev->acp.acp_res[0];
-		adev->acp.acp_cell[0].platform_data = &adev->asic_type;
-		adev->acp.acp_cell[0].pdata_size = sizeof(adev->asic_type);
-
-		adev->acp.acp_cell[1].name = "designware-i2s";
-		adev->acp.acp_cell[1].num_resources = 1;
-		adev->acp.acp_cell[1].resources = &adev->acp.acp_res[1];
-		adev->acp.acp_cell[1].platform_data = &i2s_pdata[0];
-		adev->acp.acp_cell[1].pdata_size = sizeof(struct i2s_platform_data);
-		r = mfd_add_hotplug_devices(adev->acp.parent, adev->acp.acp_cell, 2);
-		if (r)
-			goto failure;
-		r = device_for_each_child(adev->acp.parent, &adev->acp.acp_genpd->gpd,
-					  acp_genpd_add_device);
-		if (r)
-			goto failure;
+	i2s_pdata[2].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET;
+	switch (adev->asic_type) {
+	case CHIP_STONEY:
+		i2s_pdata[2].quirks |= DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
+		break;
+	default:
 		break;
 	}
-	default:
-		adev->acp.acp_cell = kcalloc(ACP_DEVS, sizeof(struct mfd_cell),
-					     GFP_KERNEL);
 
-		if (!adev->acp.acp_cell) {
-			r = -ENOMEM;
-			goto failure;
-		}
+	i2s_pdata[2].cap = DWC_I2S_PLAY | DWC_I2S_RECORD;
+	i2s_pdata[2].snd_rates = SNDRV_PCM_RATE_8000_96000;
+	i2s_pdata[2].i2s_reg_comp1 = ACP_BT_COMP1_REG_OFFSET;
+	i2s_pdata[2].i2s_reg_comp2 = ACP_BT_COMP2_REG_OFFSET;
 
-		adev->acp.acp_res = kcalloc(5, sizeof(struct resource), GFP_KERNEL);
-		if (!adev->acp.acp_res) {
-			r = -ENOMEM;
-			goto failure;
-		}
+	adev->acp.acp_res[0].name = "acp2x_dma";
+	adev->acp.acp_res[0].flags = IORESOURCE_MEM;
+	adev->acp.acp_res[0].start = acp_base;
+	adev->acp.acp_res[0].end = acp_base + ACP_DMA_REGS_END;
 
-		i2s_pdata = kcalloc(3, sizeof(struct i2s_platform_data), GFP_KERNEL);
-		if (!i2s_pdata) {
-			r = -ENOMEM;
-			goto failure;
-		}
+	adev->acp.acp_res[1].name = "acp2x_dw_i2s_play";
+	adev->acp.acp_res[1].flags = IORESOURCE_MEM;
+	adev->acp.acp_res[1].start = acp_base + ACP_I2S_PLAY_REGS_START;
+	adev->acp.acp_res[1].end = acp_base + ACP_I2S_PLAY_REGS_END;
 
-		switch (adev->asic_type) {
-		case CHIP_STONEY:
-			i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
-				DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-			break;
-		default:
-			i2s_pdata[0].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET;
-		}
-		i2s_pdata[0].cap = DWC_I2S_PLAY;
-		i2s_pdata[0].snd_rates = SNDRV_PCM_RATE_8000_96000;
-		i2s_pdata[0].i2s_reg_comp1 = ACP_I2S_COMP1_PLAY_REG_OFFSET;
-		i2s_pdata[0].i2s_reg_comp2 = ACP_I2S_COMP2_PLAY_REG_OFFSET;
-		switch (adev->asic_type) {
-		case CHIP_STONEY:
-			i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
-				DW_I2S_QUIRK_COMP_PARAM1 |
-				DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-			break;
-		default:
-			i2s_pdata[1].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET |
-				DW_I2S_QUIRK_COMP_PARAM1;
-		}
+	adev->acp.acp_res[2].name = "acp2x_dw_i2s_cap";
+	adev->acp.acp_res[2].flags = IORESOURCE_MEM;
+	adev->acp.acp_res[2].start = acp_base + ACP_I2S_CAP_REGS_START;
+	adev->acp.acp_res[2].end = acp_base + ACP_I2S_CAP_REGS_END;
 
-		i2s_pdata[1].cap = DWC_I2S_RECORD;
-		i2s_pdata[1].snd_rates = SNDRV_PCM_RATE_8000_96000;
-		i2s_pdata[1].i2s_reg_comp1 = ACP_I2S_COMP1_CAP_REG_OFFSET;
-		i2s_pdata[1].i2s_reg_comp2 = ACP_I2S_COMP2_CAP_REG_OFFSET;
+	adev->acp.acp_res[3].name = "acp2x_dw_bt_i2s_play_cap";
+	adev->acp.acp_res[3].flags = IORESOURCE_MEM;
+	adev->acp.acp_res[3].start = acp_base + ACP_BT_PLAY_REGS_START;
+	adev->acp.acp_res[3].end = acp_base + ACP_BT_PLAY_REGS_END;
 
-		i2s_pdata[2].quirks = DW_I2S_QUIRK_COMP_REG_OFFSET;
-		switch (adev->asic_type) {
-		case CHIP_STONEY:
-			i2s_pdata[2].quirks |= DW_I2S_QUIRK_16BIT_IDX_OVERRIDE;
-			break;
-		default:
-			break;
-		}
+	adev->acp.acp_res[4].name = "acp2x_dma_irq";
+	adev->acp.acp_res[4].flags = IORESOURCE_IRQ;
+	adev->acp.acp_res[4].start = amdgpu_irq_create_mapping(adev, 162);
+	adev->acp.acp_res[4].end = adev->acp.acp_res[4].start;
 
-		i2s_pdata[2].cap = DWC_I2S_PLAY | DWC_I2S_RECORD;
-		i2s_pdata[2].snd_rates = SNDRV_PCM_RATE_8000_96000;
-		i2s_pdata[2].i2s_reg_comp1 = ACP_BT_COMP1_REG_OFFSET;
-		i2s_pdata[2].i2s_reg_comp2 = ACP_BT_COMP2_REG_OFFSET;
+	adev->acp.acp_cell[0].name = "acp_audio_dma";
+	adev->acp.acp_cell[0].num_resources = 5;
+	adev->acp.acp_cell[0].resources = &adev->acp.acp_res[0];
+	adev->acp.acp_cell[0].platform_data = &adev->asic_type;
+	adev->acp.acp_cell[0].pdata_size = sizeof(adev->asic_type);
 
-		adev->acp.acp_res[0].name = "acp2x_dma";
-		adev->acp.acp_res[0].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[0].start = acp_base;
-		adev->acp.acp_res[0].end = acp_base + ACP_DMA_REGS_END;
+	adev->acp.acp_cell[1].name = "designware-i2s";
+	adev->acp.acp_cell[1].num_resources = 1;
+	adev->acp.acp_cell[1].resources = &adev->acp.acp_res[1];
+	adev->acp.acp_cell[1].platform_data = &i2s_pdata[0];
+	adev->acp.acp_cell[1].pdata_size = sizeof(struct i2s_platform_data);
 
-		adev->acp.acp_res[1].name = "acp2x_dw_i2s_play";
-		adev->acp.acp_res[1].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[1].start = acp_base + ACP_I2S_PLAY_REGS_START;
-		adev->acp.acp_res[1].end = acp_base + ACP_I2S_PLAY_REGS_END;
+	adev->acp.acp_cell[2].name = "designware-i2s";
+	adev->acp.acp_cell[2].num_resources = 1;
+	adev->acp.acp_cell[2].resources = &adev->acp.acp_res[2];
+	adev->acp.acp_cell[2].platform_data = &i2s_pdata[1];
+	adev->acp.acp_cell[2].pdata_size = sizeof(struct i2s_platform_data);
 
-		adev->acp.acp_res[2].name = "acp2x_dw_i2s_cap";
-		adev->acp.acp_res[2].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[2].start = acp_base + ACP_I2S_CAP_REGS_START;
-		adev->acp.acp_res[2].end = acp_base + ACP_I2S_CAP_REGS_END;
+	adev->acp.acp_cell[3].name = "designware-i2s";
+	adev->acp.acp_cell[3].num_resources = 1;
+	adev->acp.acp_cell[3].resources = &adev->acp.acp_res[3];
+	adev->acp.acp_cell[3].platform_data = &i2s_pdata[2];
+	adev->acp.acp_cell[3].pdata_size = sizeof(struct i2s_platform_data);
 
-		adev->acp.acp_res[3].name = "acp2x_dw_bt_i2s_play_cap";
-		adev->acp.acp_res[3].flags = IORESOURCE_MEM;
-		adev->acp.acp_res[3].start = acp_base + ACP_BT_PLAY_REGS_START;
-		adev->acp.acp_res[3].end = acp_base + ACP_BT_PLAY_REGS_END;
+	r = mfd_add_hotplug_devices(adev->acp.parent, adev->acp.acp_cell,
+								ACP_DEVS);
+	if (r)
+		goto failure;
 
-		adev->acp.acp_res[4].name = "acp2x_dma_irq";
-		adev->acp.acp_res[4].flags = IORESOURCE_IRQ;
-		adev->acp.acp_res[4].start = amdgpu_irq_create_mapping(adev, 162);
-		adev->acp.acp_res[4].end = adev->acp.acp_res[4].start;
-
-		adev->acp.acp_cell[0].name = "acp_audio_dma";
-		adev->acp.acp_cell[0].num_resources = 5;
-		adev->acp.acp_cell[0].resources = &adev->acp.acp_res[0];
-		adev->acp.acp_cell[0].platform_data = &adev->asic_type;
-		adev->acp.acp_cell[0].pdata_size = sizeof(adev->asic_type);
-
-		adev->acp.acp_cell[1].name = "designware-i2s";
-		adev->acp.acp_cell[1].num_resources = 1;
-		adev->acp.acp_cell[1].resources = &adev->acp.acp_res[1];
-		adev->acp.acp_cell[1].platform_data = &i2s_pdata[0];
-		adev->acp.acp_cell[1].pdata_size = sizeof(struct i2s_platform_data);
-
-		adev->acp.acp_cell[2].name = "designware-i2s";
-		adev->acp.acp_cell[2].num_resources = 1;
-		adev->acp.acp_cell[2].resources = &adev->acp.acp_res[2];
-		adev->acp.acp_cell[2].platform_data = &i2s_pdata[1];
-		adev->acp.acp_cell[2].pdata_size = sizeof(struct i2s_platform_data);
-
-		adev->acp.acp_cell[3].name = "designware-i2s";
-		adev->acp.acp_cell[3].num_resources = 1;
-		adev->acp.acp_cell[3].resources = &adev->acp.acp_res[3];
-		adev->acp.acp_cell[3].platform_data = &i2s_pdata[2];
-		adev->acp.acp_cell[3].pdata_size = sizeof(struct i2s_platform_data);
-
-		r = mfd_add_hotplug_devices(adev->acp.parent, adev->acp.acp_cell, ACP_DEVS);
-		if (r)
-			goto failure;
-
-		r = device_for_each_child(adev->acp.parent, &adev->acp.acp_genpd->gpd,
-					  acp_genpd_add_device);
-		if (r)
-			goto failure;
-	}
+	r = device_for_each_child(adev->acp.parent, &adev->acp.acp_genpd->gpd,
+				  acp_genpd_add_device);
+	if (r)
+		goto failure;
 
 	/* Assert Soft reset of ACP */
 	val = cgs_read_register(adev->acp.cgs_device, mmACP_SOFT_RESET);
@@ -503,7 +410,7 @@ failure:
 /**
  * acp_hw_fini - stop the hardware block
  *
- * @handle: handle used to pass amdgpu_device pointer
+ * @adev: amdgpu_device pointer
  *
  */
 static int acp_hw_fini(void *handle)
@@ -639,7 +546,8 @@ static const struct amd_ip_funcs acp_ip_funcs = {
 	.set_powergating_state = acp_set_powergating_state,
 };
 
-const struct amdgpu_ip_block_version acp_ip_block = {
+const struct amdgpu_ip_block_version acp_ip_block =
+{
 	.type = AMD_IP_BLOCK_TYPE_ACP,
 	.major = 2,
 	.minor = 2,

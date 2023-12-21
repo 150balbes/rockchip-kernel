@@ -202,7 +202,8 @@ static const struct drm_panel_funcs lcd_olinuxino_funcs = {
 	.get_modes = lcd_olinuxino_get_modes,
 };
 
-static int lcd_olinuxino_probe(struct i2c_client *client)
+static int lcd_olinuxino_probe(struct i2c_client *client,
+			       const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct lcd_olinuxino *lcd;
@@ -287,7 +288,7 @@ static int lcd_olinuxino_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void lcd_olinuxino_remove(struct i2c_client *client)
+static int lcd_olinuxino_remove(struct i2c_client *client)
 {
 	struct lcd_olinuxino *panel = i2c_get_clientdata(client);
 
@@ -295,6 +296,8 @@ static void lcd_olinuxino_remove(struct i2c_client *client)
 
 	drm_panel_disable(&panel->panel);
 	drm_panel_unprepare(&panel->panel);
+
+	return 0;
 }
 
 static const struct of_device_id lcd_olinuxino_of_ids[] = {

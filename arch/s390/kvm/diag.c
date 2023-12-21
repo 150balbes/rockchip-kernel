@@ -24,7 +24,7 @@ static int diag_release_pages(struct kvm_vcpu *vcpu)
 
 	start = vcpu->run->s.regs.gprs[(vcpu->arch.sie_block->ipa & 0xf0) >> 4];
 	end = vcpu->run->s.regs.gprs[vcpu->arch.sie_block->ipa & 0xf] + PAGE_SIZE;
-	vcpu->stat.instruction_diagnose_10++;
+	vcpu->stat.diagnose_10++;
 
 	if (start & ~PAGE_MASK || end & ~PAGE_MASK || start >= end
 	    || start < 2 * PAGE_SIZE)
@@ -74,7 +74,7 @@ static int __diag_page_ref_service(struct kvm_vcpu *vcpu)
 
 	VCPU_EVENT(vcpu, 3, "diag page reference parameter block at 0x%llx",
 		   vcpu->run->s.regs.gprs[rx]);
-	vcpu->stat.instruction_diagnose_258++;
+	vcpu->stat.diagnose_258++;
 	if (vcpu->run->s.regs.gprs[rx] & 7)
 		return kvm_s390_inject_program_int(vcpu, PGM_SPECIFICATION);
 	rc = read_guest(vcpu, vcpu->run->s.regs.gprs[rx], rx, &parm, sizeof(parm));
@@ -145,32 +145,18 @@ static int __diag_page_ref_service(struct kvm_vcpu *vcpu)
 static int __diag_time_slice_end(struct kvm_vcpu *vcpu)
 {
 	VCPU_EVENT(vcpu, 5, "%s", "diag time slice end");
-	vcpu->stat.instruction_diagnose_44++;
+	vcpu->stat.diagnose_44++;
 	kvm_vcpu_on_spin(vcpu, true);
 	return 0;
-}
-
-static int forward_cnt;
-static unsigned long cur_slice;
-
-static int diag9c_forwarding_overrun(void)
-{
-	/* Reset the count on a new slice */
-	if (time_after(jiffies, cur_slice)) {
-		cur_slice = jiffies;
-		forward_cnt = diag9c_forwarding_hz / HZ;
-	}
-	return forward_cnt-- <= 0 ? 1 : 0;
 }
 
 static int __diag_time_slice_end_directed(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu *tcpu;
-	int tcpu_cpu;
 	int tid;
 
 	tid = vcpu->run->s.regs.gprs[(vcpu->arch.sie_block->ipa & 0xf0) >> 4];
-	vcpu->stat.instruction_diagnose_9c++;
+	vcpu->stat.diagnose_9c++;
 
 	/* yield to self */
 	if (tid == vcpu->vcpu_id)
@@ -181,22 +167,9 @@ static int __diag_time_slice_end_directed(struct kvm_vcpu *vcpu)
 	if (!tcpu)
 		goto no_yield;
 
-	/* target guest VCPU already running */
-	tcpu_cpu = READ_ONCE(tcpu->cpu);
-	if (tcpu_cpu >= 0) {
-		if (!diag9c_forwarding_hz || diag9c_forwarding_overrun())
-			goto no_yield;
-
-		/* target host CPU already running */
-		if (!vcpu_is_preempted(tcpu_cpu))
-			goto no_yield;
-		smp_yield_cpu(tcpu_cpu);
-		VCPU_EVENT(vcpu, 5,
-			   "diag time slice end directed to %d: yield forwarded",
-			   tid);
-		vcpu->stat.diag_9c_forward++;
-		return 0;
-	}
+	/* target already running */
+	if (READ_ONCE(tcpu->cpu) >= 0)
+		goto no_yield;
 
 	if (kvm_vcpu_yield_to(tcpu) <= 0)
 		goto no_yield;
@@ -205,7 +178,7 @@ static int __diag_time_slice_end_directed(struct kvm_vcpu *vcpu)
 	return 0;
 no_yield:
 	VCPU_EVENT(vcpu, 5, "diag time slice end directed to %d: ignored", tid);
-	vcpu->stat.diag_9c_ignored++;
+	vcpu->stat.diagnose_9c_ignored++;
 	return 0;
 }
 
@@ -215,7 +188,7 @@ static int __diag_ipl_functions(struct kvm_vcpu *vcpu)
 	unsigned long subcode = vcpu->run->s.regs.gprs[reg] & 0xffff;
 
 	VCPU_EVENT(vcpu, 3, "diag ipl functions, subcode %lx", subcode);
-	vcpu->stat.instruction_diagnose_308++;
+	vcpu->stat.diagnose_308++;
 	switch (subcode) {
 	case 3:
 		vcpu->run->s390_reset_flags = KVM_S390_RESET_CLEAR;
@@ -247,7 +220,7 @@ static int __diag_virtio_hypercall(struct kvm_vcpu *vcpu)
 {
 	int ret;
 
-	vcpu->stat.instruction_diagnose_500++;
+	vcpu->stat.diagnose_500++;
 	/* No virtio-ccw notification? Get out quickly. */
 	if (!vcpu->kvm->arch.css_support ||
 	    (vcpu->run->s.regs.gprs[1] != KVM_S390_VIRTIO_CCW_NOTIFY))
@@ -301,7 +274,7 @@ int kvm_s390_handle_diag(struct kvm_vcpu *vcpu)
 	case 0x500:
 		return __diag_virtio_hypercall(vcpu);
 	default:
-		vcpu->stat.instruction_diagnose_other++;
+		vcpu->stat.diagnose_other++;
 		return -EOPNOTSUPP;
 	}
 }

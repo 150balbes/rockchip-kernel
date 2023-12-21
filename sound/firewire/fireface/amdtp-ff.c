@@ -24,7 +24,7 @@ int amdtp_ff_set_parameters(struct amdtp_stream *s, unsigned int rate,
 	p->pcm_channels = pcm_channels;
 	data_channels = pcm_channels;
 
-	return amdtp_stream_set_parameters(s, rate, data_channels, 1);
+	return amdtp_stream_set_parameters(s, rate, data_channels);
 }
 
 static void write_pcm_s32(struct amdtp_stream *s, struct snd_pcm_substream *pcm,
@@ -112,13 +112,16 @@ int amdtp_ff_add_pcm_hw_constraints(struct amdtp_stream *s,
 	return amdtp_stream_add_pcm_hw_constraints(s, runtime);
 }
 
-static void process_it_ctx_payloads(struct amdtp_stream *s, const struct pkt_desc *desc,
-				    unsigned int count, struct snd_pcm_substream *pcm)
+static unsigned int process_it_ctx_payloads(struct amdtp_stream *s,
+					   const struct pkt_desc *descs,
+					   unsigned int packets,
+					   struct snd_pcm_substream *pcm)
 {
 	unsigned int pcm_frames = 0;
 	int i;
 
-	for (i = 0; i < count; ++i) {
+	for (i = 0; i < packets; ++i) {
+		const struct pkt_desc *desc = descs + i;
 		__le32 *buf = (__le32 *)desc->ctx_payload;
 		unsigned int data_blocks = desc->data_blocks;
 
@@ -128,18 +131,21 @@ static void process_it_ctx_payloads(struct amdtp_stream *s, const struct pkt_des
 		} else {
 			write_pcm_silence(s, buf, data_blocks);
 		}
-
-		desc = amdtp_stream_next_packet_desc(s, desc);
 	}
+
+	return pcm_frames;
 }
 
-static void process_ir_ctx_payloads(struct amdtp_stream *s, const struct pkt_desc *desc,
-				    unsigned int count, struct snd_pcm_substream *pcm)
+static unsigned int process_ir_ctx_payloads(struct amdtp_stream *s,
+					    const struct pkt_desc *descs,
+					    unsigned int packets,
+					    struct snd_pcm_substream *pcm)
 {
 	unsigned int pcm_frames = 0;
 	int i;
 
-	for (i = 0; i < count; ++i) {
+	for (i = 0; i < packets; ++i) {
+		const struct pkt_desc *desc = descs + i;
 		__le32 *buf = (__le32 *)desc->ctx_payload;
 		unsigned int data_blocks = desc->data_blocks;
 
@@ -147,9 +153,9 @@ static void process_ir_ctx_payloads(struct amdtp_stream *s, const struct pkt_des
 			read_pcm_s32(s, pcm, buf, data_blocks, pcm_frames);
 			pcm_frames += data_blocks;
 		}
-
-		desc = amdtp_stream_next_packet_desc(s, desc);
 	}
+
+	return pcm_frames;
 }
 
 int amdtp_ff_init(struct amdtp_stream *s, struct fw_unit *unit,
@@ -162,6 +168,6 @@ int amdtp_ff_init(struct amdtp_stream *s, struct fw_unit *unit,
 	else
 		process_ctx_payloads = process_it_ctx_payloads;
 
-	return amdtp_stream_init(s, unit, dir, CIP_BLOCKING | CIP_UNAWARE_SYT | CIP_NO_HEADER, 0,
+	return amdtp_stream_init(s, unit, dir, CIP_NO_HEADER, 0,
 				 process_ctx_payloads, sizeof(struct amdtp_ff));
 }

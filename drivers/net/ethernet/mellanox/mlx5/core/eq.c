@@ -1,10 +1,38 @@
-// SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 /*
- * Copyright (c) 2013-2021, Mellanox Technologies inc.  All rights reserved.
+ * Copyright (c) 2013-2015, Mellanox Technologies. All rights reserved.
+ *
+ * This software is available to you under a choice of one of two
+ * licenses.  You may choose to be licensed under the terms of the GNU
+ * General Public License (GPL) Version 2, available from the file
+ * COPYING in the main directory of this source tree, or the
+ * OpenIB.org BSD license below:
+ *
+ *     Redistribution and use in source and binary forms, with or
+ *     without modification, are permitted provided that the following
+ *     conditions are met:
+ *
+ *      - Redistributions of source code must retain the above
+ *        copyright notice, this list of conditions and the following
+ *        disclaimer.
+ *
+ *      - Redistributions in binary form must reproduce the above
+ *        copyright notice, this list of conditions and the following
+ *        disclaimer in the documentation and/or other materials
+ *        provided with the distribution.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
+#include <linux/module.h>
 #include <linux/mlx5/driver.h>
 #include <linux/mlx5/vport.h>
 #include <linux/mlx5/eq.h>
@@ -17,10 +45,6 @@
 #include "eswitch.h"
 #include "lib/clock.h"
 #include "diag/fw_tracer.h"
-#include "mlx5_irq.h"
-#include "pci_irq.h"
-#include "devlink.h"
-#include "en_accel/ipsec.h"
 
 enum {
 	MLX5_EQE_OWNER_INIT_VAL	= 0x1,
@@ -60,9 +84,6 @@ struct mlx5_eq_table {
 	struct mutex            lock; /* sync async eqs creations */
 	int			num_comp_eqs;
 	struct mlx5_irq_table	*irq_table;
-	struct mlx5_irq         **comp_irqs;
-	struct mlx5_irq         *ctrl_irq;
-	struct cpu_rmap		*rmap;
 };
 
 #define MLX5_ASYNC_EVENT_MASK ((1ull << MLX5_EVENT_TYPE_PATH_MIG)	    | \
@@ -168,21 +189,19 @@ u32 mlx5_eq_poll_irq_disabled(struct mlx5_eq_comp *eq)
 	return count_eqe;
 }
 
-static void mlx5_eq_async_int_lock(struct mlx5_eq_async *eq, bool recovery,
-				   unsigned long *flags)
+static void mlx5_eq_async_int_lock(struct mlx5_eq_async *eq, unsigned long *flags)
 	__acquires(&eq->lock)
 {
-	if (!recovery)
+	if (in_irq())
 		spin_lock(&eq->lock);
 	else
 		spin_lock_irqsave(&eq->lock, *flags);
 }
 
-static void mlx5_eq_async_int_unlock(struct mlx5_eq_async *eq, bool recovery,
-				     unsigned long *flags)
+static void mlx5_eq_async_int_unlock(struct mlx5_eq_async *eq, unsigned long *flags)
 	__releases(&eq->lock)
 {
-	if (!recovery)
+	if (in_irq())
 		spin_unlock(&eq->lock);
 	else
 		spin_unlock_irqrestore(&eq->lock, *flags);
@@ -204,13 +223,11 @@ static int mlx5_eq_async_int(struct notifier_block *nb,
 	struct mlx5_eqe *eqe;
 	unsigned long flags;
 	int num_eqes = 0;
-	bool recovery;
 
 	dev = eq->dev;
 	eqt = dev->priv.eq_table;
 
-	recovery = action == ASYNC_EQ_RECOVER;
-	mlx5_eq_async_int_lock(eq_async, recovery, &flags);
+	mlx5_eq_async_int_lock(eq_async, &flags);
 
 	eqe = next_eqe_sw(eq);
 	if (!eqe)
@@ -232,9 +249,9 @@ static int mlx5_eq_async_int(struct notifier_block *nb,
 
 out:
 	eq_update_ci(eq, 1);
-	mlx5_eq_async_int_unlock(eq_async, recovery, &flags);
+	mlx5_eq_async_int_unlock(eq_async, &flags);
 
-	return unlikely(recovery) ? num_eqes : 0;
+	return unlikely(action == ASYNC_EQ_RECOVER) ? num_eqes : 0;
 }
 
 void mlx5_cmd_eq_recover(struct mlx5_core_dev *dev)
@@ -252,7 +269,7 @@ static void init_eq_buf(struct mlx5_eq *eq)
 	struct mlx5_eqe *eqe;
 	int i;
 
-	for (i = 0; i < eq_get_size(eq); i++) {
+	for (i = 0; i < eq->nent; i++) {
 		eqe = get_eqe(eq, i);
 		eqe->owner = MLX5_EQE_OWNER_INIT_VAL;
 	}
@@ -262,13 +279,11 @@ static int
 create_map_eq(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 	      struct mlx5_eq_param *param)
 {
-	u8 log_eq_size = order_base_2(param->nent + MLX5_NUM_SPARE_EQE);
 	struct mlx5_cq_table *cq_table = &eq->cq_table;
 	u32 out[MLX5_ST_SZ_DW(create_eq_out)] = {0};
-	u8 log_eq_stride = ilog2(MLX5_EQE_SIZE);
 	struct mlx5_priv *priv = &dev->priv;
+	u8 vecidx = param->irq_index;
 	__be64 *pas;
-	u16 vecidx;
 	void *eqc;
 	int inlen;
 	u32 *in;
@@ -280,21 +295,16 @@ create_map_eq(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 	spin_lock_init(&cq_table->lock);
 	INIT_RADIX_TREE(&cq_table->tree, GFP_ATOMIC);
 
+	eq->nent = roundup_pow_of_two(param->nent + MLX5_NUM_SPARE_EQE);
 	eq->cons_index = 0;
-
-	err = mlx5_frag_buf_alloc_node(dev, wq_get_byte_sz(log_eq_size, log_eq_stride),
-				       &eq->frag_buf, dev->priv.numa_node);
+	err = mlx5_buf_alloc(dev, eq->nent * MLX5_EQE_SIZE, &eq->buf);
 	if (err)
 		return err;
 
-	mlx5_init_fbc(eq->frag_buf.frags, log_eq_stride, log_eq_size, &eq->fbc);
 	init_eq_buf(eq);
 
-	eq->irq = param->irq;
-	vecidx = mlx5_irq_get_index(eq->irq);
-
 	inlen = MLX5_ST_SZ_BYTES(create_eq_in) +
-		MLX5_FLD_SZ_BYTES(create_eq_in, pas[0]) * eq->frag_buf.npages;
+		MLX5_FLD_SZ_BYTES(create_eq_in, pas[0]) * eq->buf.npages;
 
 	in = kvzalloc(inlen, GFP_KERNEL);
 	if (!in) {
@@ -303,7 +313,7 @@ create_map_eq(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 	}
 
 	pas = (__be64 *)MLX5_ADDR_OF(create_eq_in, in, pas);
-	mlx5_fill_page_frag_array(&eq->frag_buf, pas);
+	mlx5_fill_page_array(&eq->buf, pas);
 
 	MLX5_SET(create_eq_in, in, opcode, MLX5_CMD_OP_CREATE_EQ);
 	if (!param->mask[0] && MLX5_CAP_GEN(dev, log_max_uctx))
@@ -314,11 +324,11 @@ create_map_eq(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 				 param->mask[i]);
 
 	eqc = MLX5_ADDR_OF(create_eq_in, in, eq_context_entry);
-	MLX5_SET(eqc, eqc, log_eq_size, eq->fbc.log_sz);
+	MLX5_SET(eqc, eqc, log_eq_size, ilog2(eq->nent));
 	MLX5_SET(eqc, eqc, uar_page, priv->uar->index);
 	MLX5_SET(eqc, eqc, intr, vecidx);
 	MLX5_SET(eqc, eqc, log_page_size,
-		 eq->frag_buf.page_shift - MLX5_ADAPTER_PAGE_SHIFT);
+		 eq->buf.page_shift - MLX5_ADAPTER_PAGE_SHIFT);
 
 	err = mlx5_cmd_exec(dev, in, inlen, out, sizeof(out));
 	if (err)
@@ -344,7 +354,7 @@ err_in:
 	kvfree(in);
 
 err_buf:
-	mlx5_frag_buf_free(dev, &eq->frag_buf);
+	mlx5_buf_free(dev, &eq->buf);
 	return err;
 }
 
@@ -361,9 +371,10 @@ err_buf:
 int mlx5_eq_enable(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 		   struct notifier_block *nb)
 {
+	struct mlx5_eq_table *eq_table = dev->priv.eq_table;
 	int err;
 
-	err = mlx5_irq_attach_nb(eq->irq, nb);
+	err = mlx5_irq_attach_nb(eq_table->irq_table, eq->vecidx, nb);
 	if (!err)
 		eq_update_ci(eq, 1);
 
@@ -382,7 +393,9 @@ EXPORT_SYMBOL(mlx5_eq_enable);
 void mlx5_eq_disable(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 		     struct notifier_block *nb)
 {
-	mlx5_irq_detach_nb(eq->irq, nb);
+	struct mlx5_eq_table *eq_table = dev->priv.eq_table;
+
+	mlx5_irq_detach_nb(eq_table->irq_table, eq->vecidx, nb);
 }
 EXPORT_SYMBOL(mlx5_eq_disable);
 
@@ -396,8 +409,10 @@ static int destroy_unmap_eq(struct mlx5_core_dev *dev, struct mlx5_eq *eq)
 	if (err)
 		mlx5_core_warn(dev, "failed to destroy a previously created eq: eqn %d\n",
 			       eq->eqn);
+	synchronize_irq(eq->irqn);
 
-	mlx5_frag_buf_free(dev, &eq->frag_buf);
+	mlx5_buf_free(dev, &eq->buf);
+
 	return err;
 }
 
@@ -438,8 +453,7 @@ int mlx5_eq_table_init(struct mlx5_core_dev *dev)
 	struct mlx5_eq_table *eq_table;
 	int i;
 
-	eq_table = kvzalloc_node(sizeof(*eq_table), GFP_KERNEL,
-				 dev->priv.numa_node);
+	eq_table = kvzalloc(sizeof(*eq_table), GFP_KERNEL);
 	if (!eq_table)
 		return -ENOMEM;
 
@@ -451,7 +465,7 @@ int mlx5_eq_table_init(struct mlx5_core_dev *dev)
 	for (i = 0; i < MLX5_EVENT_TYPE_MAX; i++)
 		ATOMIC_INIT_NOTIFIER_HEAD(&eq_table->nh[i]);
 
-	eq_table->irq_table = mlx5_irq_table_get(dev);
+	eq_table->irq_table = dev->priv.irq_table;
 	return 0;
 }
 
@@ -470,7 +484,14 @@ static int create_async_eq(struct mlx5_core_dev *dev,
 	int err;
 
 	mutex_lock(&eq_table->lock);
+	/* Async EQs must share irq index 0 */
+	if (param->irq_index != 0) {
+		err = -EINVAL;
+		goto unlock;
+	}
+
 	err = create_map_eq(dev, eq, param);
+unlock:
 	mutex_unlock(&eq_table->lock);
 	return err;
 }
@@ -572,16 +593,6 @@ static void gather_async_events_mask(struct mlx5_core_dev *dev, u64 mask[4])
 		async_event_mask |=
 			(1ull << MLX5_EVENT_TYPE_ESW_FUNCTIONS_CHANGED);
 
-	if (MLX5_CAP_GEN_MAX(dev, vhca_state))
-		async_event_mask |= (1ull << MLX5_EVENT_TYPE_VHCA_STATE_CHANGE);
-
-	if (MLX5_CAP_MACSEC(dev, log_max_macsec_offload))
-		async_event_mask |= (1ull << MLX5_EVENT_TYPE_OBJECT_CHANGE);
-
-	if (mlx5_ipsec_device_caps(dev) & MLX5_IPSEC_CAP_PACKET_OFFLOAD)
-		async_event_mask |=
-			(1ull << MLX5_EVENT_TYPE_OBJECT_CHANGE);
-
 	mask[0] = async_event_mask;
 
 	if (MLX5_CAP_GEN(dev, event_cap))
@@ -622,39 +633,17 @@ static void cleanup_async_eq(struct mlx5_core_dev *dev,
 			      name, err);
 }
 
-static u16 async_eq_depth_devlink_param_get(struct mlx5_core_dev *dev)
-{
-	struct devlink *devlink = priv_to_devlink(dev);
-	union devlink_param_value val;
-	int err;
-
-	err = devl_param_driverinit_value_get(devlink,
-					      DEVLINK_PARAM_GENERIC_ID_EVENT_EQ_SIZE,
-					      &val);
-	if (!err)
-		return val.vu32;
-	mlx5_core_dbg(dev, "Failed to get param. using default. err = %d\n", err);
-	return MLX5_NUM_ASYNC_EQE;
-}
-
 static int create_async_eqs(struct mlx5_core_dev *dev)
 {
 	struct mlx5_eq_table *table = dev->priv.eq_table;
 	struct mlx5_eq_param param = {};
 	int err;
 
-	/* All the async_eqs are using single IRQ, request one IRQ and share its
-	 * index among all the async_eqs of this device.
-	 */
-	table->ctrl_irq = mlx5_ctrl_irq_request(dev);
-	if (IS_ERR(table->ctrl_irq))
-		return PTR_ERR(table->ctrl_irq);
-
 	MLX5_NB_INIT(&table->cq_err_nb, cq_err_event_notifier, CQ_ERROR);
 	mlx5_eq_notifier_register(dev, &table->cq_err_nb);
 
 	param = (struct mlx5_eq_param) {
-		.irq = table->ctrl_irq,
+		.irq_index = 0,
 		.nent = MLX5_NUM_CMD_EQE,
 		.mask[0] = 1ull << MLX5_EVENT_TYPE_CMD,
 	};
@@ -667,8 +656,8 @@ static int create_async_eqs(struct mlx5_core_dev *dev)
 	mlx5_cmd_allowed_opcode(dev, CMD_ALLOWED_OPCODE_ALL);
 
 	param = (struct mlx5_eq_param) {
-		.irq = table->ctrl_irq,
-		.nent = async_eq_depth_devlink_param_get(dev),
+		.irq_index = 0,
+		.nent = MLX5_NUM_ASYNC_EQE,
 	};
 
 	gather_async_events_mask(dev, param.mask);
@@ -677,7 +666,7 @@ static int create_async_eqs(struct mlx5_core_dev *dev)
 		goto err2;
 
 	param = (struct mlx5_eq_param) {
-		.irq = table->ctrl_irq,
+		.irq_index = 0,
 		.nent = /* TODO: sriov max_vf + */ 1,
 		.mask[0] = 1ull << MLX5_EVENT_TYPE_PAGE_REQUEST,
 	};
@@ -696,7 +685,6 @@ err2:
 err1:
 	mlx5_cmd_allowed_opcode(dev, CMD_ALLOWED_OPCODE_ALL);
 	mlx5_eq_notifier_unregister(dev, &table->cq_err_nb);
-	mlx5_ctrl_irq_release(table->ctrl_irq);
 	return err;
 }
 
@@ -711,7 +699,6 @@ static void destroy_async_eqs(struct mlx5_core_dev *dev)
 	cleanup_async_eq(dev, &table->cmd_eq, "cmd");
 	mlx5_cmd_allowed_opcode(dev, CMD_ALLOWED_OPCODE_ALL);
 	mlx5_eq_notifier_unregister(dev, &table->cq_err_nb);
-	mlx5_ctrl_irq_release(table->ctrl_irq);
 }
 
 struct mlx5_eq *mlx5_get_async_eq(struct mlx5_core_dev *dev)
@@ -736,14 +723,12 @@ struct mlx5_eq *
 mlx5_eq_create_generic(struct mlx5_core_dev *dev,
 		       struct mlx5_eq_param *param)
 {
-	struct mlx5_eq *eq = kvzalloc_node(sizeof(*eq), GFP_KERNEL,
-					   dev->priv.numa_node);
+	struct mlx5_eq *eq = kvzalloc(sizeof(*eq), GFP_KERNEL);
 	int err;
 
 	if (!eq)
 		return ERR_PTR(-ENOMEM);
 
-	param->irq = dev->priv.eq_table->ctrl_irq;
 	err = create_async_eq(dev, eq, param);
 	if (err) {
 		kvfree(eq);
@@ -774,11 +759,10 @@ EXPORT_SYMBOL(mlx5_eq_destroy_generic);
 struct mlx5_eqe *mlx5_eq_get_eqe(struct mlx5_eq *eq, u32 cc)
 {
 	u32 ci = eq->cons_index + cc;
-	u32 nent = eq_get_size(eq);
 	struct mlx5_eqe *eqe;
 
-	eqe = get_eqe(eq, ci & (nent - 1));
-	eqe = ((eqe->owner & 1) ^ !!(ci & nent)) ? NULL : eqe;
+	eqe = get_eqe(eq, ci & (eq->nent - 1));
+	eqe = ((eqe->owner & 1) ^ !!(ci & eq->nent)) ? NULL : eqe;
 	/* Make sure we read EQ entry contents after we've
 	 * checked the ownership bit.
 	 */
@@ -803,124 +787,6 @@ void mlx5_eq_update_ci(struct mlx5_eq *eq, u32 cc, bool arm)
 }
 EXPORT_SYMBOL(mlx5_eq_update_ci);
 
-static void comp_irqs_release_pci(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-
-	mlx5_irqs_release_vectors(table->comp_irqs, table->num_comp_eqs);
-}
-
-static int comp_irqs_request_pci(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-	const struct cpumask *prev = cpu_none_mask;
-	const struct cpumask *mask;
-	int ncomp_eqs;
-	u16 *cpus;
-	int ret;
-	int cpu;
-	int i;
-
-	ncomp_eqs = table->num_comp_eqs;
-	cpus = kcalloc(ncomp_eqs, sizeof(*cpus), GFP_KERNEL);
-	if (!cpus)
-		return -ENOMEM;
-
-	i = 0;
-	rcu_read_lock();
-	for_each_numa_hop_mask(mask, dev->priv.numa_node) {
-		for_each_cpu_andnot(cpu, mask, prev) {
-			cpus[i] = cpu;
-			if (++i == ncomp_eqs)
-				goto spread_done;
-		}
-		prev = mask;
-	}
-spread_done:
-	rcu_read_unlock();
-	ret = mlx5_irqs_request_vectors(dev, cpus, ncomp_eqs, table->comp_irqs, &table->rmap);
-	kfree(cpus);
-	return ret;
-}
-
-static void comp_irqs_release_sf(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-
-	mlx5_irq_affinity_irqs_release(dev, table->comp_irqs, table->num_comp_eqs);
-}
-
-static int comp_irqs_request_sf(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-	int ncomp_eqs = table->num_comp_eqs;
-
-	return mlx5_irq_affinity_irqs_request_auto(dev, ncomp_eqs, table->comp_irqs);
-}
-
-static void comp_irqs_release(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-
-	mlx5_core_is_sf(dev) ? comp_irqs_release_sf(dev) :
-			       comp_irqs_release_pci(dev);
-
-	kfree(table->comp_irqs);
-}
-
-static int comp_irqs_request(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-	int ncomp_eqs;
-	int ret;
-
-	ncomp_eqs = table->num_comp_eqs;
-	table->comp_irqs = kcalloc(ncomp_eqs, sizeof(*table->comp_irqs), GFP_KERNEL);
-	if (!table->comp_irqs)
-		return -ENOMEM;
-
-	ret = mlx5_core_is_sf(dev) ? comp_irqs_request_sf(dev) :
-				     comp_irqs_request_pci(dev);
-	if (ret < 0)
-		kfree(table->comp_irqs);
-
-	return ret;
-}
-
-#ifdef CONFIG_RFS_ACCEL
-static int alloc_rmap(struct mlx5_core_dev *mdev)
-{
-	struct mlx5_eq_table *eq_table = mdev->priv.eq_table;
-
-	/* rmap is a mapping between irq number and queue number.
-	 * Each irq can be assigned only to a single rmap.
-	 * Since SFs share IRQs, rmap mapping cannot function correctly
-	 * for irqs that are shared between different core/netdev RX rings.
-	 * Hence we don't allow netdev rmap for SFs.
-	 */
-	if (mlx5_core_is_sf(mdev))
-		return 0;
-
-	eq_table->rmap = alloc_irq_cpu_rmap(eq_table->num_comp_eqs);
-	if (!eq_table->rmap)
-		return -ENOMEM;
-	return 0;
-}
-
-static void free_rmap(struct mlx5_core_dev *mdev)
-{
-	struct mlx5_eq_table *eq_table = mdev->priv.eq_table;
-
-	if (eq_table->rmap) {
-		free_irq_cpu_rmap(eq_table->rmap);
-		eq_table->rmap = NULL;
-	}
-}
-#else
-static int alloc_rmap(struct mlx5_core_dev *mdev) { return 0; }
-static void free_rmap(struct mlx5_core_dev *mdev) {}
-#endif
-
 static void destroy_comp_eqs(struct mlx5_core_dev *dev)
 {
 	struct mlx5_eq_table *table = dev->priv.eq_table;
@@ -935,23 +801,6 @@ static void destroy_comp_eqs(struct mlx5_core_dev *dev)
 		tasklet_disable(&eq->tasklet_ctx.task);
 		kfree(eq);
 	}
-	comp_irqs_release(dev);
-	free_rmap(dev);
-}
-
-static u16 comp_eq_depth_devlink_param_get(struct mlx5_core_dev *dev)
-{
-	struct devlink *devlink = priv_to_devlink(dev);
-	union devlink_param_value val;
-	int err;
-
-	err = devl_param_driverinit_value_get(devlink,
-					      DEVLINK_PARAM_GENERIC_ID_IO_EQ_SIZE,
-					      &val);
-	if (!err)
-		return val.vu32;
-	mlx5_core_dbg(dev, "Failed to get param. using default. err = %d\n", err);
-	return MLX5_COMP_EQ_SIZE;
 }
 
 static int create_comp_eqs(struct mlx5_core_dev *dev)
@@ -963,23 +812,14 @@ static int create_comp_eqs(struct mlx5_core_dev *dev)
 	int err;
 	int i;
 
-	err = alloc_rmap(dev);
-	if (err)
-		return err;
-
-	ncomp_eqs = comp_irqs_request(dev);
-	if (ncomp_eqs < 0) {
-		err = ncomp_eqs;
-		goto err_irqs_req;
-	}
-
 	INIT_LIST_HEAD(&table->comp_eqs_list);
-	nent = comp_eq_depth_devlink_param_get(dev);
-
+	ncomp_eqs = table->num_comp_eqs;
+	nent = MLX5_COMP_EQ_SIZE;
 	for (i = 0; i < ncomp_eqs; i++) {
+		int vecidx = i + MLX5_IRQ_VEC_COMP_BASE;
 		struct mlx5_eq_param param = {};
 
-		eq = kzalloc_node(sizeof(*eq), GFP_KERNEL, dev->priv.numa_node);
+		eq = kzalloc(sizeof(*eq), GFP_KERNEL);
 		if (!eq) {
 			err = -ENOMEM;
 			goto clean;
@@ -992,17 +832,19 @@ static int create_comp_eqs(struct mlx5_core_dev *dev)
 
 		eq->irq_nb.notifier_call = mlx5_eq_comp_int;
 		param = (struct mlx5_eq_param) {
-			.irq = table->comp_irqs[i],
+			.irq_index = vecidx,
 			.nent = nent,
 		};
-
 		err = create_map_eq(dev, &eq->core, &param);
-		if (err)
-			goto clean_eq;
+		if (err) {
+			kfree(eq);
+			goto clean;
+		}
 		err = mlx5_eq_enable(dev, &eq->core, &eq->irq_nb);
 		if (err) {
 			destroy_unmap_eq(dev, &eq->core);
-			goto clean_eq;
+			kfree(eq);
+			goto clean;
 		}
 
 		mlx5_core_dbg(dev, "allocated completion EQN %d\n", eq->core.eqn);
@@ -1010,15 +852,10 @@ static int create_comp_eqs(struct mlx5_core_dev *dev)
 		list_add_tail(&eq->list, &table->comp_eqs_list);
 	}
 
-	table->num_comp_eqs = ncomp_eqs;
 	return 0;
 
-clean_eq:
-	kfree(eq);
 clean:
 	destroy_comp_eqs(dev);
-err_irqs_req:
-	free_rmap(dev);
 	return err;
 }
 
@@ -1026,11 +863,11 @@ static int vector2eqnirqn(struct mlx5_core_dev *dev, int vector, int *eqn,
 			  unsigned int *irqn)
 {
 	struct mlx5_eq_table *table = dev->priv.eq_table;
-	struct mlx5_eq_comp *eq;
+	struct mlx5_eq_comp *eq, *n;
 	int err = -ENOENT;
 	int i = 0;
 
-	list_for_each_entry(eq, &table->comp_eqs_list, list) {
+	list_for_each_entry_safe(eq, n, &table->comp_eqs_list, list) {
 		if (i++ == vector) {
 			if (irqn)
 				*irqn = eq->core.irqn;
@@ -1064,24 +901,17 @@ EXPORT_SYMBOL(mlx5_comp_vectors_count);
 struct cpumask *
 mlx5_comp_irq_get_affinity_mask(struct mlx5_core_dev *dev, int vector)
 {
-	struct mlx5_eq_table *table = dev->priv.eq_table;
-	struct mlx5_eq_comp *eq;
-	int i = 0;
+	int vecidx = vector + MLX5_IRQ_VEC_COMP_BASE;
 
-	list_for_each_entry(eq, &table->comp_eqs_list, list) {
-		if (i++ == vector)
-			return mlx5_irq_get_affinity_mask(eq->core.irq);
-	}
-
-	WARN_ON_ONCE(1);
-	return NULL;
+	return mlx5_irq_get_affinity_mask(dev->priv.eq_table->irq_table,
+					  vecidx);
 }
 EXPORT_SYMBOL(mlx5_comp_irq_get_affinity_mask);
 
 #ifdef CONFIG_RFS_ACCEL
 struct cpu_rmap *mlx5_eq_table_get_rmap(struct mlx5_core_dev *dev)
 {
-	return dev->priv.eq_table->rmap;
+	return mlx5_irq_get_rmap(dev->priv.eq_table->irq_table);
 }
 #endif
 
@@ -1104,7 +934,7 @@ void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev)
 	struct mlx5_eq_table *table = dev->priv.eq_table;
 
 	mutex_lock(&table->lock); /* sync with create/destroy_async_eq */
-	mlx5_irq_table_free_irqs(dev);
+	mlx5_irq_table_destroy(dev);
 	mutex_unlock(&table->lock);
 }
 
@@ -1114,41 +944,19 @@ void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev)
 #define MLX5_MAX_ASYNC_EQS 3
 #endif
 
-static int get_num_eqs(struct mlx5_core_dev *dev)
-{
-	struct mlx5_eq_table *eq_table = dev->priv.eq_table;
-	int max_dev_eqs;
-	int max_eqs_sf;
-	int num_eqs;
-
-	/* If ethernet is disabled we use just a single completion vector to
-	 * have the other vectors available for other drivers using mlx5_core. For
-	 * example, mlx5_vdpa
-	 */
-	if (!mlx5_core_is_eth_enabled(dev) && mlx5_eth_supported(dev))
-		return 1;
-
-	max_dev_eqs = MLX5_CAP_GEN(dev, max_num_eqs) ?
-		      MLX5_CAP_GEN(dev, max_num_eqs) :
-		      1 << MLX5_CAP_GEN(dev, log_max_eq);
-
-	num_eqs = min_t(int, mlx5_irq_table_get_num_comp(eq_table->irq_table),
-			max_dev_eqs - MLX5_MAX_ASYNC_EQS);
-	if (mlx5_core_is_sf(dev)) {
-		max_eqs_sf = min_t(int, MLX5_COMP_EQS_PER_SF,
-				   mlx5_irq_table_get_sfs_vec(eq_table->irq_table));
-		num_eqs = min_t(int, num_eqs, max_eqs_sf);
-	}
-
-	return num_eqs;
-}
-
 int mlx5_eq_table_create(struct mlx5_core_dev *dev)
 {
 	struct mlx5_eq_table *eq_table = dev->priv.eq_table;
+	int num_eqs = MLX5_CAP_GEN(dev, max_num_eqs) ?
+		      MLX5_CAP_GEN(dev, max_num_eqs) :
+		      1 << MLX5_CAP_GEN(dev, log_max_eq);
 	int err;
 
-	eq_table->num_comp_eqs = get_num_eqs(dev);
+	eq_table->num_comp_eqs =
+		min_t(int,
+		      mlx5_irq_get_num_comp(eq_table->irq_table),
+		      num_eqs - MLX5_MAX_ASYNC_EQS);
+
 	err = create_async_eqs(dev);
 	if (err) {
 		mlx5_core_err(dev, "Failed to create async EQs\n");
@@ -1162,7 +970,6 @@ int mlx5_eq_table_create(struct mlx5_core_dev *dev)
 	}
 
 	return 0;
-
 err_comp_eqs:
 	destroy_async_eqs(dev);
 err_async_eqs:

@@ -19,12 +19,11 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <drm/ttm/ttm_tt.h>
-
 #include "nouveau_mem.h"
 #include "nouveau_drv.h"
 #include "nouveau_bo.h"
 
+#include <drm/ttm/ttm_bo_driver.h>
 
 #include <nvif/class.h>
 #include <nvif/if000a.h>
@@ -42,6 +41,8 @@ nouveau_mem_map(struct nouveau_mem *mem,
 		struct gf100_vmm_map_v0 gf100;
 	} args;
 	u32 argc = 0;
+	bool super;
+	int ret;
 
 	switch (vmm->object.oclass) {
 	case NVIF_CLASS_VMM_NV04:
@@ -72,7 +73,12 @@ nouveau_mem_map(struct nouveau_mem *mem,
 		return -ENOSYS;
 	}
 
-	return nvif_vmm_map(vmm, vma->addr, mem->mem.size, &args, argc, &mem->mem, 0);
+	super = vmm->object.client->super;
+	vmm->object.client->super = true;
+	ret = nvif_vmm_map(vmm, vma->addr, mem->mem.size, &args, argc,
+			   &mem->mem, 0);
+	vmm->object.client->super = super;
+	return ret;
 }
 
 void
@@ -86,13 +92,14 @@ nouveau_mem_fini(struct nouveau_mem *mem)
 }
 
 int
-nouveau_mem_host(struct ttm_resource *reg, struct ttm_tt *tt)
+nouveau_mem_host(struct ttm_resource *reg, struct ttm_dma_tt *tt)
 {
 	struct nouveau_mem *mem = nouveau_mem(reg);
 	struct nouveau_cli *cli = mem->cli;
 	struct nouveau_drm *drm = cli->drm;
 	struct nvif_mmu *mmu = &cli->mmu;
 	struct nvif_mem_ram_v0 args = {};
+	bool super = cli->base.super;
 	u8 type;
 	int ret;
 
@@ -109,15 +116,15 @@ nouveau_mem_host(struct ttm_resource *reg, struct ttm_tt *tt)
 		mem->comp = 0;
 	}
 
-	if (tt->sg)
-		args.sgl = tt->sg->sgl;
-	else
-		args.dma = tt->dma_address;
+	if (tt->ttm.sg) args.sgl = tt->ttm.sg->sgl;
+	else            args.dma = tt->dma_address;
 
 	mutex_lock(&drm->master.lock);
+	cli->base.super = true;
 	ret = nvif_mem_ctor_type(mmu, "ttmHostMem", cli->mem->oclass, type, PAGE_SHIFT,
-				 reg->size,
+				 reg->num_pages << PAGE_SHIFT,
 				 &args, sizeof(args), &mem->mem);
+	cli->base.super = super;
 	mutex_unlock(&drm->master.lock);
 	return ret;
 }
@@ -129,10 +136,12 @@ nouveau_mem_vram(struct ttm_resource *reg, bool contig, u8 page)
 	struct nouveau_cli *cli = mem->cli;
 	struct nouveau_drm *drm = cli->drm;
 	struct nvif_mmu *mmu = &cli->mmu;
-	u64 size = ALIGN(reg->size, 1 << page);
+	bool super = cli->base.super;
+	u64 size = ALIGN(reg->num_pages << PAGE_SHIFT, 1 << page);
 	int ret;
 
 	mutex_lock(&drm->master.lock);
+	cli->base.super = true;
 	switch (cli->mem->oclass) {
 	case NVIF_CLASS_MEM_GF100:
 		ret = nvif_mem_ctor_type(mmu, "ttmVram", cli->mem->oclass,
@@ -156,6 +165,7 @@ nouveau_mem_vram(struct ttm_resource *reg, bool contig, u8 page)
 		WARN_ON(1);
 		break;
 	}
+	cli->base.super = super;
 	mutex_unlock(&drm->master.lock);
 
 	reg->start = mem->mem.addr >> PAGE_SHIFT;
@@ -163,57 +173,28 @@ nouveau_mem_vram(struct ttm_resource *reg, bool contig, u8 page)
 }
 
 void
-nouveau_mem_del(struct ttm_resource_manager *man, struct ttm_resource *reg)
+nouveau_mem_del(struct ttm_resource *reg)
 {
 	struct nouveau_mem *mem = nouveau_mem(reg);
-
+	if (!mem)
+		return;
 	nouveau_mem_fini(mem);
-	ttm_resource_fini(man, reg);
-	kfree(mem);
+	kfree(reg->mm_node);
+	reg->mm_node = NULL;
 }
 
 int
 nouveau_mem_new(struct nouveau_cli *cli, u8 kind, u8 comp,
-		struct ttm_resource **res)
+		struct ttm_resource *reg)
 {
 	struct nouveau_mem *mem;
 
 	if (!(mem = kzalloc(sizeof(*mem), GFP_KERNEL)))
 		return -ENOMEM;
-
 	mem->cli = cli;
 	mem->kind = kind;
 	mem->comp = comp;
 
-	*res = &mem->base;
+	reg->mm_node = mem;
 	return 0;
-}
-
-bool
-nouveau_mem_intersects(struct ttm_resource *res,
-		       const struct ttm_place *place,
-		       size_t size)
-{
-	u32 num_pages = PFN_UP(size);
-
-	/* Don't evict BOs outside of the requested placement range */
-	if (place->fpfn >= (res->start + num_pages) ||
-	    (place->lpfn && place->lpfn <= res->start))
-		return false;
-
-	return true;
-}
-
-bool
-nouveau_mem_compatible(struct ttm_resource *res,
-		       const struct ttm_place *place,
-		       size_t size)
-{
-	u32 num_pages = PFN_UP(size);
-
-	if (res->start < place->fpfn ||
-	    (place->lpfn && (res->start + num_pages) > place->lpfn))
-		return false;
-
-	return true;
 }

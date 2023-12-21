@@ -132,7 +132,6 @@ struct genl_family nl802154_family __ro_after_init = {
 	.module		= THIS_MODULE,
 	.small_ops	= ieee802154_ops,
 	.n_small_ops	= ARRAY_SIZE(ieee802154_ops),
-	.resv_start_op	= IEEE802154_LLSEC_DEL_SECLEVEL + 1,
 	.mcgrps		= ieee802154_mcgrps,
 	.n_mcgrps	= ARRAY_SIZE(ieee802154_mcgrps),
 };

@@ -13,7 +13,6 @@
 #define V7M_SCB_ICSR_PENDSVSET			(1 << 28)
 #define V7M_SCB_ICSR_PENDSVCLR			(1 << 27)
 #define V7M_SCB_ICSR_RETTOBASE			(1 << 11)
-#define V7M_SCB_ICSR_VECTACTIVE			0x000001ff
 
 #define V7M_SCB_VTOR			0x08
 
@@ -39,7 +38,7 @@
 #define V7M_SCB_SHCSR_MEMFAULTENA		(1 << 16)
 
 #define V7M_xPSR_FRAMEPTRALIGN			0x00000200
-#define V7M_xPSR_EXCEPTIONNO			V7M_SCB_ICSR_VECTACTIVE
+#define V7M_xPSR_EXCEPTIONNO			0x000001ff
 
 /*
  * When branching to an address that has bits [31:28] == 0xf an exception return

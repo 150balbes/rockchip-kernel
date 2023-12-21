@@ -70,7 +70,7 @@ dsp_map
     PCM device number maps assigned to the 1st OSS device;
     Default: 0
 adsp_map
-    PCM device number maps assigned to the 2nd OSS device;
+    PCM device number maps assigned to the 2st OSS device;
     Default: 1
 nonblock_open
     Don't block opening busy PCM devices;
@@ -97,7 +97,7 @@ midi_map
     MIDI device number maps assigned to the 1st OSS device;
     Default: 0
 amidi_map
-    MIDI device number maps assigned to the 2nd OSS device;
+    MIDI device number maps assigned to the 2st OSS device;
     Default: 1
 
 Module snd-soc-core
@@ -132,19 +132,6 @@ id
 enable
     enable card;
     Default: enabled, for PCI and ISA PnP cards
-
-These options are used for either specifying the order of instances or
-controlling enabling and disabling of each one of the devices if there
-are multiple devices bound with the same driver. For example, there are
-many machines which have two HD-audio controllers (one for HDMI/DP
-audio and another for onboard analog). In most cases, the second one is
-in primary usage, and people would like to assign it as the first
-appearing card. They can do it by specifying "index=1,0" module
-parameter, which will swap the assignment slots.
-
-Today, with the sound backend like PulseAudio and PipeWire which
-supports dynamic configuration, it's of little use, but that was a
-help for static configuration in the past.
 
 Module snd-adlib
 ----------------
@@ -736,14 +723,13 @@ Module for EMU10K1/EMU10k2 based PCI sound cards.
 
 * Sound Blaster Live!
 * Sound Blaster PCI 512
+* Emu APS (partially supported)
 * Sound Blaster Audigy
-* E-MU APS (partially supported)
-* E-MU DAS
-
+	
 extin
-    bitmap of available external inputs for FX8010 (see below)
+    bitmap of available external inputs for FX8010 (see bellow)
 extout
-    bitmap of available external outputs for FX8010 (see below)
+    bitmap of available external outputs for FX8010 (see bellow)
 seq_ports
     allocated sequencer ports (4 by default)
 max_synth_voices
@@ -1081,12 +1067,6 @@ is found in hd-audio/models.rst.
 The model name ``generic`` is treated as a special case.  When this
 model is given, the driver uses the generic codec parser without
 "codec-patch".  It's sometimes good for testing and debugging.
-
-The model option can be used also for aliasing to another PCI or codec
-SSID.  When it's passed in the form of ``model=XXXX:YYYY`` where XXXX
-and YYYY are the sub-vendor and sub-device IDs in hex numbers,
-respectively, the driver will refer to that SSID as a reference to the
-quirk table.
 
 If the default configuration doesn't work and one of the above
 matches with your device, report it together with alsa-info.sh
@@ -2256,11 +2236,6 @@ quirk_alias
     Quirk alias list, pass strings like ``0123abcd:5678beef``, which
     applies the existing quirk for the device 5678:beef to a new
     device 0123:abcd.
-implicit_fb
-    Apply the generic implicit feedback sync mode.  When this is set
-    and the playback stream sync mode is ASYNC, the driver tries to
-    tie an adjacent ASYNC capture stream as the implicit feedback
-    source.  This is equivalent with quirk_flags bit 17.
 use_vmalloc
     Use vmalloc() for allocations of the PCM buffers (default: yes).
     For architectures with non-coherent memory like ARM or MIPS, the
@@ -2281,29 +2256,6 @@ delayed_register
     The driver prints a message like "Found post-registration device
     assignment: 1234abcd:04" for such a device, so that user can
     notice the need.
-quirk_flags
-    Contains the bit flags for various device specific workarounds.
-    Applied to the corresponding card index.
-
-        * bit 0: Skip reading sample rate for devices
-        * bit 1: Create Media Controller API entries
-        * bit 2: Allow alignment on audio sub-slot at transfer
-        * bit 3: Add length specifier to transfers
-        * bit 4: Start playback stream at first in implement feedback mode
-        * bit 5: Skip clock selector setup
-        * bit 6: Ignore errors from clock source search
-        * bit 7: Indicates ITF-USB DSD based DACs
-        * bit 8: Add a delay of 20ms at each control message handling
-        * bit 9: Add a delay of 1-2ms at each control message handling
-        * bit 10: Add a delay of 5-6ms at each control message handling
-        * bit 11: Add a delay of 50ms at each interface setup
-        * bit 12: Perform sample rate validations at probe
-        * bit 13: Disable runtime PM autosuspend
-        * bit 14: Ignore errors for mixer access
-        * bit 15: Support generic DSD raw U32_BE format
-        * bit 16: Set up the interface at first like UAC1
-        * bit 17: Apply the generic implicit feedback sync mode
-        * bit 18: Don't apply implicit feedback sync mode
 
 This module supports multiple devices, autoprobe and hotplugging.
 
@@ -2313,14 +2265,11 @@ check.
 
 NB: ``ignore_ctl_error=1`` may help when you get an error at accessing
 the mixer element such as URB error -22.  This happens on some
-buggy USB device or the controller.  This workaround corresponds to
-the ``quirk_flags`` bit 14, too.
+buggy USB device or the controller.
 
-NB: ``quirk_alias`` option is provided only for testing / development.
+NB: quirk_alias option is provided only for testing / development.
 If you want to have a proper support, contact to upstream for
 adding the matching quirk in the driver code statically.
-Ditto for ``quirk_flags``.  If a device is known to require specific
-workarounds, please report to the upstream.
 
 Module snd-usb-caiaq
 --------------------

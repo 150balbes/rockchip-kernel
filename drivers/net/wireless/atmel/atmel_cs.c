@@ -57,6 +57,7 @@
 MODULE_AUTHOR("Simon Kelley");
 MODULE_DESCRIPTION("Support for Atmel at76c50x 802.11 wireless ethernet cards.");
 MODULE_LICENSE("GPL");
+MODULE_SUPPORTED_DEVICE("Atmel at76c50x PCMCIA cards");
 
 /*====================================================================*/
 
@@ -72,7 +73,6 @@ struct local_info {
 static int atmel_probe(struct pcmcia_device *p_dev)
 {
 	struct local_info *local;
-	int ret;
 
 	dev_dbg(&p_dev->dev, "atmel_attach()\n");
 
@@ -83,16 +83,8 @@ static int atmel_probe(struct pcmcia_device *p_dev)
 
 	p_dev->priv = local;
 
-	ret = atmel_config(p_dev);
-	if (ret)
-		goto err_free_priv;
-
-	return 0;
-
-err_free_priv:
-	kfree(p_dev->priv);
-	return ret;
-}
+	return atmel_config(p_dev);
+} /* atmel_attach */
 
 static void atmel_detach(struct pcmcia_device *link)
 {

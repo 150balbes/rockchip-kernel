@@ -173,7 +173,8 @@ static const struct v4l2_subdev_ops bt866_ops = {
 	.video = &bt866_video_ops,
 };
 
-static int bt866_probe(struct i2c_client *client)
+static int bt866_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct bt866 *encoder;
 	struct v4l2_subdev *sd;
@@ -189,11 +190,12 @@ static int bt866_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void bt866_remove(struct i2c_client *client)
+static int bt866_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 
 	v4l2_device_unregister_subdev(sd);
+	return 0;
 }
 
 static const struct i2c_device_id bt866_id[] = {

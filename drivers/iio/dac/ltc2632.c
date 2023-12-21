@@ -10,7 +10,6 @@
 #include <linux/spi/spi.h>
 #include <linux/module.h>
 #include <linux/iio/iio.h>
-#include <linux/property.h>
 #include <linux/regulator/consumer.h>
 
 #include <asm/unaligned.h>
@@ -136,8 +135,8 @@ static ssize_t ltc2632_read_dac_powerdown(struct iio_dev *indio_dev,
 {
 	struct ltc2632_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n",
-			  !!(st->powerdown_cache_mask & (1 << chan->channel)));
+	return sprintf(buf, "%d\n",
+		       !!(st->powerdown_cache_mask & (1 << chan->channel)));
 }
 
 static ssize_t ltc2632_write_dac_powerdown(struct iio_dev *indio_dev,
@@ -150,7 +149,7 @@ static ssize_t ltc2632_write_dac_powerdown(struct iio_dev *indio_dev,
 	int ret;
 	struct ltc2632_state *st = iio_priv(indio_dev);
 
-	ret = kstrtobool(buf, &pwr_down);
+	ret = strtobool(buf, &pwr_down);
 	if (ret)
 		return ret;
 
@@ -363,7 +362,8 @@ static int ltc2632_probe(struct spi_device *spi)
 		}
 	}
 
-	indio_dev->name = fwnode_get_name(dev_fwnode(&spi->dev)) ?: spi_get_device_id(spi)->name;
+	indio_dev->name = dev_of_node(&spi->dev) ? dev_of_node(&spi->dev)->name
+						 : spi_get_device_id(spi)->name;
 	indio_dev->info = &ltc2632_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = chip_info->channels;
@@ -372,7 +372,7 @@ static int ltc2632_probe(struct spi_device *spi)
 	return iio_device_register(indio_dev);
 }
 
-static void ltc2632_remove(struct spi_device *spi)
+static int ltc2632_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ltc2632_state *st = iio_priv(indio_dev);
@@ -381,6 +381,8 @@ static void ltc2632_remove(struct spi_device *spi)
 
 	if (st->vref_reg)
 		regulator_disable(st->vref_reg);
+
+	return 0;
 }
 
 static const struct spi_device_id ltc2632_id[] = {
@@ -469,7 +471,7 @@ MODULE_DEVICE_TABLE(of, ltc2632_of_match);
 static struct spi_driver ltc2632_driver = {
 	.driver		= {
 		.name	= "ltc2632",
-		.of_match_table = ltc2632_of_match,
+		.of_match_table = of_match_ptr(ltc2632_of_match),
 	},
 	.probe		= ltc2632_probe,
 	.remove		= ltc2632_remove,

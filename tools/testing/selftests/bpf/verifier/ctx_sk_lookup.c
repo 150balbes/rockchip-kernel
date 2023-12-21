@@ -229,24 +229,6 @@
 		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
 			    offsetof(struct bpf_sk_lookup, local_port)),
 
-		/* 1-byte read from ingress_ifindex field */
-		BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex)),
-		BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex) + 1),
-		BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex) + 2),
-		BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex) + 3),
-		/* 2-byte read from ingress_ifindex field */
-		BPF_LDX_MEM(BPF_H, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex)),
-		BPF_LDX_MEM(BPF_H, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex) + 2),
-		/* 4-byte read from ingress_ifindex field */
-		BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex)),
-
 		/* 8-byte read from sk field */
 		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1,
 			    offsetof(struct bpf_sk_lookup, sk)),
@@ -285,7 +267,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"invalid 8-byte read from bpf_sk_lookup remote_ip4 field",
@@ -312,7 +293,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"invalid 8-byte read from bpf_sk_lookup remote_port field",
@@ -326,7 +306,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"invalid 8-byte read from bpf_sk_lookup local_ip4 field",
@@ -353,7 +332,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"invalid 8-byte read from bpf_sk_lookup local_port field",
@@ -367,21 +345,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
-},
-{
-	"invalid 8-byte read from bpf_sk_lookup ingress_ifindex field",
-	.insns = {
-		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1,
-			    offsetof(struct bpf_sk_lookup, ingress_ifindex)),
-		BPF_MOV32_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-	},
-	.errstr = "invalid bpf_context access",
-	.result = REJECT,
-	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
-	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 /* invalid 1,2,4-byte reads from 8-byte fields in bpf_sk_lookup */
 {
@@ -448,7 +411,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"invalid 4-byte unaligned read from bpf_sk_lookup at even offset",
@@ -461,7 +423,6 @@
 	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_SK_LOOKUP,
 	.expected_attach_type = BPF_SK_LOOKUP,
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 /* in-bound and out-of-bound writes to bpf_sk_lookup */
 {

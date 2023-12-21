@@ -17,7 +17,17 @@
 
 struct completion;
 struct dma_resv;
-struct i915_sw_fence;
+
+struct i915_sw_fence {
+	wait_queue_head_t wait;
+	unsigned long flags;
+	atomic_t pending;
+	int error;
+};
+
+#define I915_SW_FENCE_CHECKED_BIT	0 /* used internally for DAG checking */
+#define I915_SW_FENCE_PRIVATE_BIT	1 /* available for use by owner */
+#define I915_SW_FENCE_MASK		(~3)
 
 enum i915_sw_fence_notify {
 	FENCE_COMPLETE,
@@ -26,18 +36,7 @@ enum i915_sw_fence_notify {
 
 typedef int (*i915_sw_fence_notify_t)(struct i915_sw_fence *,
 				      enum i915_sw_fence_notify state);
-
-struct i915_sw_fence {
-	wait_queue_head_t wait;
-	i915_sw_fence_notify_t fn;
-#ifdef CONFIG_DRM_I915_SW_FENCE_CHECK_DAG
-	unsigned long flags;
-#endif
-	atomic_t pending;
-	int error;
-};
-
-#define I915_SW_FENCE_CHECKED_BIT	0 /* used internally for DAG checking */
+#define __i915_sw_fence_call __aligned(4)
 
 void __i915_sw_fence_init(struct i915_sw_fence *fence,
 			  i915_sw_fence_notify_t fn,
@@ -48,15 +47,11 @@ void __i915_sw_fence_init(struct i915_sw_fence *fence,
 do {								\
 	static struct lock_class_key __key;			\
 								\
-	BUILD_BUG_ON((fn) == NULL);				\
 	__i915_sw_fence_init((fence), (fn), #fence, &__key);	\
 } while (0)
 #else
 #define i915_sw_fence_init(fence, fn)				\
-do {								\
-	BUILD_BUG_ON((fn) == NULL);				\
-	__i915_sw_fence_init((fence), (fn), NULL, NULL);	\
-} while (0)
+	__i915_sw_fence_init((fence), (fn), NULL, NULL)
 #endif
 
 void i915_sw_fence_reinit(struct i915_sw_fence *fence);
@@ -91,6 +86,7 @@ int i915_sw_fence_await_dma_fence(struct i915_sw_fence *fence,
 
 int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 				    struct dma_resv *resv,
+				    const struct dma_fence_ops *exclude,
 				    bool write,
 				    unsigned long timeout,
 				    gfp_t gfp);

@@ -39,7 +39,8 @@ int meson_card_reallocate_links(struct snd_soc_card *card,
 				unsigned int num_links);
 int meson_card_parse_dai(struct snd_soc_card *card,
 			 struct device_node *node,
-			 struct snd_soc_dai_link_component *dlc);
+			 struct device_node **dai_of_node,
+			 const char **dai_name);
 int meson_card_set_be_link(struct snd_soc_card *card,
 			   struct snd_soc_dai_link *link,
 			   struct device_node *node);

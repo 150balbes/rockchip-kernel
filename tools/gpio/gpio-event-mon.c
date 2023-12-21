@@ -86,7 +86,6 @@ int monitor_device(const char *device_name,
 			gpiotools_test_bit(values.bits, i));
 	}
 
-	i = 0;
 	while (1) {
 		struct gpio_v2_line_event event;
 
@@ -149,8 +148,6 @@ void print_usage(void)
 		"  -s         Set line as open source\n"
 		"  -r         Listen for rising edges\n"
 		"  -f         Listen for falling edges\n"
-		"  -w         Report the wall-clock time for events\n"
-		"  -t         Report the hardware timestamp for events\n"
 		"  -b <n>     Debounce the line with period n microseconds\n"
 		" [-c <n>]    Do <n> loops (optional, infinite loop if not stated)\n"
 		"  -?         This helptext\n"
@@ -176,7 +173,7 @@ int main(int argc, char **argv)
 
 	memset(&config, 0, sizeof(config));
 	config.flags = GPIO_V2_LINE_FLAG_INPUT;
-	while ((c = getopt(argc, argv, "c:n:o:b:dsrfwt?")) != -1) {
+	while ((c = getopt(argc, argv, "c:n:o:b:dsrf?")) != -1) {
 		switch (c) {
 		case 'c':
 			loops = strtoul(optarg, NULL, 10);
@@ -206,12 +203,6 @@ int main(int argc, char **argv)
 			break;
 		case 'f':
 			config.flags |= GPIO_V2_LINE_FLAG_EDGE_FALLING;
-			break;
-		case 'w':
-			config.flags |= GPIO_V2_LINE_FLAG_EVENT_CLOCK_REALTIME;
-			break;
-		case 't':
-			config.flags |= GPIO_V2_LINE_FLAG_EVENT_CLOCK_HTE;
 			break;
 		case '?':
 			print_usage();

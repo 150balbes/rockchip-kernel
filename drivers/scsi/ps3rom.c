@@ -200,7 +200,8 @@ static int ps3rom_write_request(struct ps3_storage_device *dev,
 	return 0;
 }
 
-static int ps3rom_queuecommand_lck(struct scsi_cmnd *cmd)
+static int ps3rom_queuecommand_lck(struct scsi_cmnd *cmd,
+			       void (*done)(struct scsi_cmnd *))
 {
 	struct ps3rom_private *priv = shost_priv(cmd->device->host);
 	struct ps3_storage_device *dev = priv->dev;
@@ -208,6 +209,7 @@ static int ps3rom_queuecommand_lck(struct scsi_cmnd *cmd)
 	int res;
 
 	priv->curr_cmd = cmd;
+	cmd->scsi_done = done;
 
 	opcode = cmd->cmnd[0];
 	/*
@@ -232,10 +234,12 @@ static int ps3rom_queuecommand_lck(struct scsi_cmnd *cmd)
 	}
 
 	if (res) {
-		scsi_build_sense(cmd, 0, ILLEGAL_REQUEST, 0, 0);
+		memset(cmd->sense_buffer, 0, SCSI_SENSE_BUFFERSIZE);
 		cmd->result = res;
+		cmd->sense_buffer[0] = 0x70;
+		cmd->sense_buffer[2] = ILLEGAL_REQUEST;
 		priv->curr_cmd = NULL;
-		scsi_done(cmd);
+		cmd->scsi_done(cmd);
 	}
 
 	return 0;
@@ -315,15 +319,16 @@ static irqreturn_t ps3rom_interrupt(int irq, void *data)
 		goto done;
 	}
 
-	scsi_build_sense(cmd, 0, sense_key, asc, ascq);
+	scsi_build_sense_buffer(0, cmd->sense_buffer, sense_key, asc, ascq);
+	cmd->result = SAM_STAT_CHECK_CONDITION;
 
 done:
 	priv->curr_cmd = NULL;
-	scsi_done(cmd);
+	cmd->scsi_done(cmd);
 	return IRQ_HANDLED;
 }
 
-static const struct scsi_host_template ps3rom_host_template = {
+static struct scsi_host_template ps3rom_host_template = {
 	.name =			DEVICE_NAME,
 	.slave_configure =	ps3rom_slave_configure,
 	.queuecommand =		ps3rom_queuecommand,
@@ -397,7 +402,7 @@ fail_free_bounce:
 	return error;
 }
 
-static void ps3rom_remove(struct ps3_system_bus_device *_dev)
+static int ps3rom_remove(struct ps3_system_bus_device *_dev)
 {
 	struct ps3_storage_device *dev = to_ps3_storage_device(&_dev->core);
 	struct Scsi_Host *host = ps3_system_bus_get_drvdata(&dev->sbd);
@@ -407,6 +412,7 @@ static void ps3rom_remove(struct ps3_system_bus_device *_dev)
 	scsi_host_put(host);
 	ps3_system_bus_set_drvdata(&dev->sbd, NULL);
 	kfree(dev->bounce_buf);
+	return 0;
 }
 
 static struct ps3_system_bus_driver ps3rom = {

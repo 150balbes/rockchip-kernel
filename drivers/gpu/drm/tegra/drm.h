@@ -15,6 +15,7 @@
 #include <drm/drm_bridge.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_encoder.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_fixed.h>
 #include <drm/drm_probe_helper.h>
 #include <uapi/drm/tegra_drm.h>
@@ -23,10 +24,14 @@
 #include "hub.h"
 #include "trace.h"
 
-/* XXX move to include/uapi/drm/drm_fourcc.h? */
-#define DRM_FORMAT_MOD_NVIDIA_SECTOR_LAYOUT BIT_ULL(22)
-
 struct reset_control;
+
+#ifdef CONFIG_DRM_FBDEV_EMULATION
+struct tegra_fbdev {
+	struct drm_fb_helper base;
+	struct drm_framebuffer *fb;
+};
+#endif
 
 struct tegra_drm {
 	struct drm_device *drm;
@@ -45,30 +50,21 @@ struct tegra_drm {
 	struct mutex clients_lock;
 	struct list_head clients;
 
-	unsigned int hmask, vmask;
+#ifdef CONFIG_DRM_FBDEV_EMULATION
+	struct tegra_fbdev *fbdev;
+#endif
+
 	unsigned int pitch_align;
-	unsigned int num_crtcs;
 
 	struct tegra_display_hub *hub;
 };
-
-static inline struct host1x *tegra_drm_to_host1x(struct tegra_drm *tegra)
-{
-	return dev_get_drvdata(tegra->drm->dev->parent);
-}
 
 struct tegra_drm_client;
 
 struct tegra_drm_context {
 	struct tegra_drm_client *client;
 	struct host1x_channel *channel;
-
-	/* Only used by legacy UAPI. */
 	unsigned int id;
-
-	/* Only used by new UAPI. */
-	struct xarray mappings;
-	struct host1x_memory_context *memory_context;
 };
 
 struct tegra_drm_client_ops {
@@ -80,29 +76,17 @@ struct tegra_drm_client_ops {
 	int (*submit)(struct tegra_drm_context *context,
 		      struct drm_tegra_submit *args, struct drm_device *drm,
 		      struct drm_file *file);
-	int (*get_streamid_offset)(struct tegra_drm_client *client, u32 *offset);
-	int (*can_use_memory_ctx)(struct tegra_drm_client *client, bool *supported);
 };
 
 int tegra_drm_submit(struct tegra_drm_context *context,
 		     struct drm_tegra_submit *args, struct drm_device *drm,
 		     struct drm_file *file);
 
-static inline int
-tegra_drm_get_streamid_offset_thi(struct tegra_drm_client *client, u32 *offset)
-{
-	*offset = 0x30;
-
-	return 0;
-}
-
 struct tegra_drm_client {
 	struct host1x_client base;
 	struct list_head list;
 	struct tegra_drm *drm;
-	struct host1x_channel *shared_channel;
 
-	/* Set by driver */
 	unsigned int version;
 	const struct tegra_drm_client_ops *ops;
 };
@@ -184,20 +168,13 @@ struct tegra_bo *tegra_fb_get_plane(struct drm_framebuffer *framebuffer,
 bool tegra_fb_is_bottom_up(struct drm_framebuffer *framebuffer);
 int tegra_fb_get_tiling(struct drm_framebuffer *framebuffer,
 			struct tegra_bo_tiling *tiling);
-struct drm_framebuffer *tegra_fb_alloc(struct drm_device *drm,
-				       const struct drm_mode_fb_cmd2 *mode_cmd,
-				       struct tegra_bo **planes,
-				       unsigned int num_planes);
 struct drm_framebuffer *tegra_fb_create(struct drm_device *drm,
 					struct drm_file *file,
 					const struct drm_mode_fb_cmd2 *cmd);
-
-#ifdef CONFIG_DRM_FBDEV_EMULATION
-void tegra_fbdev_setup(struct drm_device *drm);
-#else
-static inline void tegra_fbdev_setup(struct drm_device *drm)
-{ }
-#endif
+int tegra_drm_fb_prepare(struct drm_device *drm);
+void tegra_drm_fb_free(struct drm_device *drm);
+int tegra_drm_fb_init(struct drm_device *drm);
+void tegra_drm_fb_exit(struct drm_device *drm);
 
 extern struct platform_driver tegra_display_hub_driver;
 extern struct platform_driver tegra_dc_driver;
@@ -208,6 +185,5 @@ extern struct platform_driver tegra_sor_driver;
 extern struct platform_driver tegra_gr2d_driver;
 extern struct platform_driver tegra_gr3d_driver;
 extern struct platform_driver tegra_vic_driver;
-extern struct platform_driver tegra_nvdec_driver;
 
 #endif /* HOST1X_DRM_H */

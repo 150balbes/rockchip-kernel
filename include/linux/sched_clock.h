@@ -5,8 +5,6 @@
 #ifndef LINUX_SCHED_CLOCK
 #define LINUX_SCHED_CLOCK
 
-#include <linux/types.h>
-
 #ifdef CONFIG_GENERIC_SCHED_CLOCK
 /**
  * struct clock_read_data - data required to read from sched_clock()
@@ -16,7 +14,7 @@
  * @sched_clock_mask:   Bitmask for two's complement subtraction of non 64bit
  *			clocks.
  * @read_sched_clock:	Current clock source (or dummy source when suspended).
- * @mult:		Multiplier for scaled math conversion.
+ * @mult:		Multipler for scaled math conversion.
  * @shift:		Shift value for scaled math conversion.
  *
  * Care must be taken when updating this structure; it is read by

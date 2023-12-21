@@ -276,8 +276,7 @@ int ca_midi_init(void *dev_id, struct snd_ca_midi *midi, int device, char *name)
 	struct snd_rawmidi *rmidi;
 	int err;
 
-	err = snd_rawmidi_new(midi->get_dev_id_card(midi->dev_id), name, device, 1, 1, &rmidi);
-	if (err < 0)
+	if ((err = snd_rawmidi_new(midi->get_dev_id_card(midi->dev_id), name, device, 1, 1, &rmidi)) < 0)
 		return err;
 
 	midi->dev_id = dev_id;

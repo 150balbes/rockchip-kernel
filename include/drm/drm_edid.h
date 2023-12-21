@@ -28,7 +28,6 @@
 #include <drm/drm_mode.h>
 
 struct drm_device;
-struct drm_edid;
 struct i2c_adapter;
 
 #define EDID_LENGTH 128
@@ -61,15 +60,9 @@ struct std_timing {
 	u8 vfreq_aspect;
 } __attribute__((packed));
 
-#define DRM_EDID_PT_SYNC_MASK              (3 << 3)
-# define DRM_EDID_PT_ANALOG_CSYNC          (0 << 3)
-# define DRM_EDID_PT_BIPOLAR_ANALOG_CSYNC  (1 << 3)
-# define DRM_EDID_PT_DIGITAL_CSYNC         (2 << 3)
-#  define DRM_EDID_PT_CSYNC_ON_RGB         (1 << 1) /* analog csync only */
-#  define DRM_EDID_PT_CSYNC_SERRATE        (1 << 2)
-# define DRM_EDID_PT_DIGITAL_SEPARATE_SYNC (3 << 3)
-#  define DRM_EDID_PT_HSYNC_POSITIVE       (1 << 1) /* also digital csync */
-#  define DRM_EDID_PT_VSYNC_POSITIVE       (1 << 2)
+#define DRM_EDID_PT_HSYNC_POSITIVE (1 << 1)
+#define DRM_EDID_PT_VSYNC_POSITIVE (1 << 2)
+#define DRM_EDID_PT_SEPARATE_SYNC  (3 << 3)
 #define DRM_EDID_PT_STEREO         (1 << 5)
 #define DRM_EDID_PT_INTERLACED     (1 << 7)
 
@@ -98,18 +91,10 @@ struct detailed_data_string {
 	u8 str[13];
 } __attribute__((packed));
 
-#define DRM_EDID_RANGE_OFFSET_MIN_VFREQ (1 << 0) /* 1.4 */
-#define DRM_EDID_RANGE_OFFSET_MAX_VFREQ (1 << 1) /* 1.4 */
-#define DRM_EDID_RANGE_OFFSET_MIN_HFREQ (1 << 2) /* 1.4 */
-#define DRM_EDID_RANGE_OFFSET_MAX_HFREQ (1 << 3) /* 1.4 */
-
-#define DRM_EDID_DEFAULT_GTF_SUPPORT_FLAG   0x00 /* 1.3 */
-#define DRM_EDID_RANGE_LIMITS_ONLY_FLAG     0x01 /* 1.4 */
-#define DRM_EDID_SECONDARY_GTF_SUPPORT_FLAG 0x02 /* 1.3 */
-#define DRM_EDID_CVT_SUPPORT_FLAG           0x04 /* 1.4 */
-
-#define DRM_EDID_CVT_FLAGS_STANDARD_BLANKING (1 << 3)
-#define DRM_EDID_CVT_FLAGS_REDUCED_BLANKING  (1 << 4)
+#define DRM_EDID_DEFAULT_GTF_SUPPORT_FLAG   0x00
+#define DRM_EDID_RANGE_LIMITS_ONLY_FLAG     0x01
+#define DRM_EDID_SECONDARY_GTF_SUPPORT_FLAG 0x02
+#define DRM_EDID_CVT_SUPPORT_FLAG           0x04
 
 struct detailed_data_monitor_range {
 	u8 min_vfreq;
@@ -136,7 +121,7 @@ struct detailed_data_monitor_range {
 			u8 supported_scalings;
 			u8 preferred_refresh;
 		} __attribute__((packed)) cvt;
-	} __attribute__((packed)) formula;
+	} formula;
 } __attribute__((packed));
 
 struct detailed_data_wpindex {
@@ -169,7 +154,7 @@ struct detailed_non_pixel {
 		struct detailed_data_wpindex color;
 		struct std_timing timings[6];
 		struct cvt_timing cvt[4];
-	} __attribute__((packed)) data;
+	} data;
 } __attribute__((packed));
 
 #define EDID_DETAIL_EST_TIMINGS 0xf7
@@ -187,7 +172,7 @@ struct detailed_timing {
 	union {
 		struct detailed_pixel_timing pixel_data;
 		struct detailed_non_pixel other_data;
-	} __attribute__((packed)) data;
+	} data;
 } __attribute__((packed));
 
 #define DRM_EDID_INPUT_SERRATION_VSYNC (1 << 0)
@@ -215,8 +200,7 @@ struct detailed_timing {
 #define DRM_EDID_DIGITAL_TYPE_DP       (5 << 0) /* 1.4 */
 #define DRM_EDID_DIGITAL_DFP_1_X       (1 << 0) /* 1.3 */
 
-#define DRM_EDID_FEATURE_DEFAULT_GTF      (1 << 0) /* 1.2 */
-#define DRM_EDID_FEATURE_CONTINUOUS_FREQ  (1 << 0) /* 1.4 */
+#define DRM_EDID_FEATURE_DEFAULT_GTF      (1 << 0)
 #define DRM_EDID_FEATURE_PREFERRED_TIMING (1 << 1)
 #define DRM_EDID_FEATURE_STANDARD_COLOR   (1 << 2)
 /* If analog */
@@ -245,6 +229,7 @@ struct detailed_timing {
 				    DRM_EDID_YCBCR420_DC_36 | \
 				    DRM_EDID_YCBCR420_DC_30)
 
+#ifdef CONFIG_NO_GKI
 /* HDMI 2.1 additional fields */
 #define DRM_EDID_MAX_FRL_RATE_MASK		0xf0
 #define DRM_EDID_FAPA_START_LOCATION		(1 << 0)
@@ -274,6 +259,7 @@ struct detailed_timing {
 #define DRM_EDID_DSC_MAX_FRL_RATE_MASK		0xf0
 #define DRM_EDID_DSC_MAX_SLICES			0xf
 #define DRM_EDID_DSC_TOTAL_CHUNK_KBYTES		0x3f
+#endif
 
 /* ELD Header Block */
 #define DRM_ELD_HEADER_BLOCK_SIZE	4
@@ -352,7 +338,7 @@ struct edid {
 	u8 features;
 	/* Color characteristics */
 	u8 red_green_lo;
-	u8 blue_white_lo;
+	u8 black_white_lo;
 	u8 red_x;
 	u8 red_y;
 	u8 green_x;
@@ -388,17 +374,22 @@ struct drm_connector;
 struct drm_connector_state;
 struct drm_display_mode;
 
-int drm_edid_to_sad(const struct edid *edid, struct cea_sad **sads);
-int drm_edid_to_speaker_allocation(const struct edid *edid, u8 **sadb);
+int drm_edid_to_sad(struct edid *edid, struct cea_sad **sads);
+int drm_edid_to_speaker_allocation(struct edid *edid, u8 **sadb);
 int drm_av_sync_delay(struct drm_connector *connector,
 		      const struct drm_display_mode *mode);
 
 #ifdef CONFIG_DRM_LOAD_EDID_FIRMWARE
+struct edid *drm_load_edid_firmware(struct drm_connector *connector);
 int __drm_set_edid_firmware_path(const char *path);
 int __drm_get_edid_firmware_path(char *buf, size_t bufsize);
+#else
+static inline struct edid *
+drm_load_edid_firmware(struct drm_connector *connector)
+{
+	return ERR_PTR(-ENOENT);
+}
 #endif
-
-bool drm_edid_are_equal(const struct edid *edid1, const struct edid *edid2);
 
 int
 drm_hdmi_avi_infoframe_from_display_mode(struct hdmi_avi_infoframe *frame,
@@ -410,10 +401,22 @@ drm_hdmi_vendor_infoframe_from_display_mode(struct hdmi_vendor_infoframe *frame,
 					    const struct drm_display_mode *mode);
 
 void
+drm_hdmi_avi_infoframe_colorspace(struct hdmi_avi_infoframe *frame,
+				  const struct drm_connector_state *conn_state);
+
+void
+drm_hdmi_avi_infoframe_bars(struct hdmi_avi_infoframe *frame,
+			    const struct drm_connector_state *conn_state);
+
+void
 drm_hdmi_avi_infoframe_quant_range(struct hdmi_avi_infoframe *frame,
 				   const struct drm_connector *connector,
 				   const struct drm_display_mode *mode,
 				   enum hdmi_quantization_range rgb_quant_range);
+
+int
+drm_hdmi_infoframe_set_hdr_metadata(struct hdmi_drm_infoframe *frame,
+				    const struct drm_connector_state *conn_state);
 
 /**
  * drm_eld_mnl - Get ELD monitor name length in bytes.
@@ -505,121 +508,104 @@ static inline u8 drm_eld_get_conn_type(const uint8_t *eld)
 	return eld[DRM_ELD_SAD_COUNT_CONN_TYPE] & DRM_ELD_CONN_TYPE_MASK;
 }
 
-/**
- * drm_edid_decode_mfg_id - Decode the manufacturer ID
- * @mfg_id: The manufacturer ID
- * @vend: A 4-byte buffer to store the 3-letter vendor string plus a '\0'
- *	  termination
- */
-static inline const char *drm_edid_decode_mfg_id(u16 mfg_id, char vend[4])
-{
-	vend[0] = '@' + ((mfg_id >> 10) & 0x1f);
-	vend[1] = '@' + ((mfg_id >> 5) & 0x1f);
-	vend[2] = '@' + ((mfg_id >> 0) & 0x1f);
-	vend[3] = '\0';
-
-	return vend;
-}
-
-/**
- * drm_edid_encode_panel_id - Encode an ID for matching against drm_edid_get_panel_id()
- * @vend_chr_0: First character of the vendor string.
- * @vend_chr_1: Second character of the vendor string.
- * @vend_chr_2: Third character of the vendor string.
- * @product_id: The 16-bit product ID.
- *
- * This is a macro so that it can be calculated at compile time and used
- * as an initializer.
- *
- * For instance:
- *   drm_edid_encode_panel_id('B', 'O', 'E', 0x2d08) => 0x09e52d08
- *
- * Return: a 32-bit ID per panel.
- */
-#define drm_edid_encode_panel_id(vend_chr_0, vend_chr_1, vend_chr_2, product_id) \
-	((((u32)(vend_chr_0) - '@') & 0x1f) << 26 | \
-	 (((u32)(vend_chr_1) - '@') & 0x1f) << 21 | \
-	 (((u32)(vend_chr_2) - '@') & 0x1f) << 16 | \
-	 ((product_id) & 0xffff))
-
-/**
- * drm_edid_decode_panel_id - Decode a panel ID from drm_edid_encode_panel_id()
- * @panel_id: The panel ID to decode.
- * @vend: A 4-byte buffer to store the 3-letter vendor string plus a '\0'
- *	  termination
- * @product_id: The product ID will be returned here.
- *
- * For instance, after:
- *   drm_edid_decode_panel_id(0x09e52d08, vend, &product_id)
- * These will be true:
- *   vend[0] = 'B'
- *   vend[1] = 'O'
- *   vend[2] = 'E'
- *   vend[3] = '\0'
- *   product_id = 0x2d08
- */
-static inline void drm_edid_decode_panel_id(u32 panel_id, char vend[4], u16 *product_id)
-{
-	*product_id = (u16)(panel_id & 0xffff);
-	drm_edid_decode_mfg_id(panel_id >> 16, vend);
-}
-
 bool drm_probe_ddc(struct i2c_adapter *adapter);
 struct edid *drm_do_get_edid(struct drm_connector *connector,
 	int (*get_edid_block)(void *data, u8 *buf, unsigned int block,
 			      size_t len),
 	void *data);
-struct edid *drm_get_edid(struct drm_connector *connector,
-			  struct i2c_adapter *adapter);
-u32 drm_edid_get_panel_id(struct i2c_adapter *adapter);
 struct edid *drm_get_edid_switcheroo(struct drm_connector *connector,
 				     struct i2c_adapter *adapter);
-struct edid *drm_edid_duplicate(const struct edid *edid);
-int drm_add_edid_modes(struct drm_connector *connector, struct edid *edid);
-int drm_edid_override_connector_update(struct drm_connector *connector);
 
-u8 drm_match_cea_mode(const struct drm_display_mode *to_match);
-bool drm_detect_hdmi_monitor(const struct edid *edid);
-bool drm_detect_monitor_audio(const struct edid *edid);
+bool drm_detect_hdmi_monitor(struct edid *edid);
 enum hdmi_quantization_range
 drm_default_rgb_quant_range(const struct drm_display_mode *mode);
-int drm_add_modes_noedid(struct drm_connector *connector,
-			 int hdisplay, int vdisplay);
 void drm_set_preferred_mode(struct drm_connector *connector,
 			    int hpref, int vpref);
 
-int drm_edid_header_is_valid(const void *edid);
+int drm_edid_header_is_valid(const u8 *raw_edid);
 bool drm_edid_block_valid(u8 *raw_edid, int block, bool print_bad_edid,
 			  bool *edid_corrupt);
-bool drm_edid_is_valid(struct edid *edid);
-void drm_edid_get_monitor_name(const struct edid *edid, char *name,
-			       int buflen);
-struct drm_display_mode *drm_mode_find_dmt(struct drm_device *dev,
-					   int hsize, int vsize, int fresh,
-					   bool rb);
 struct drm_display_mode *
 drm_display_mode_from_cea_vic(struct drm_device *dev,
 			      u8 video_code);
 
-/* Interface based on struct drm_edid */
-const struct drm_edid *drm_edid_alloc(const void *edid, size_t size);
-const struct drm_edid *drm_edid_dup(const struct drm_edid *drm_edid);
-void drm_edid_free(const struct drm_edid *drm_edid);
-bool drm_edid_valid(const struct drm_edid *drm_edid);
-const struct edid *drm_edid_raw(const struct drm_edid *drm_edid);
-const struct drm_edid *drm_edid_read(struct drm_connector *connector);
-const struct drm_edid *drm_edid_read_ddc(struct drm_connector *connector,
-					 struct i2c_adapter *adapter);
-const struct drm_edid *drm_edid_read_custom(struct drm_connector *connector,
-					    int (*read_block)(void *context, u8 *buf, unsigned int block, size_t len),
-					    void *context);
-const struct drm_edid *drm_edid_read_switcheroo(struct drm_connector *connector,
-						struct i2c_adapter *adapter);
-int drm_edid_connector_update(struct drm_connector *connector,
-			      const struct drm_edid *edid);
-int drm_edid_connector_add_modes(struct drm_connector *connector);
+#ifdef CONFIG_DRM_EDID
+struct edid *drm_get_edid(struct drm_connector *connector,
+			  struct i2c_adapter *adapter);
+struct edid *drm_edid_duplicate(const struct edid *edid);
+int drm_add_edid_modes(struct drm_connector *connector, struct edid *edid);
+int drm_add_override_edid_modes(struct drm_connector *connector);
+u8 drm_match_cea_mode(const struct drm_display_mode *to_match);
+int drm_add_modes_noedid(struct drm_connector *connector,
+			 int hdisplay, int vdisplay);
+bool drm_detect_monitor_audio(struct edid *edid);
+void drm_edid_get_monitor_name(struct edid *edid, char *name,
+			       int buflen);
+bool drm_edid_is_valid(struct edid *edid);
+bool drm_edid_are_equal(const struct edid *edid1, const struct edid *edid2);
+struct drm_display_mode *drm_mode_find_dmt(struct drm_device *dev,
+					   int hsize, int vsize, int fresh,
+					   bool rb);
+#else
+static inline struct edid *drm_get_edid(struct drm_connector *connector,
+					struct i2c_adapter *adapter)
+{
+	return NULL;
+}
 
-const u8 *drm_find_edid_extension(const struct drm_edid *drm_edid,
-				  int ext_id, int *ext_index);
+static inline struct edid *drm_edid_duplicate(const struct edid *edid)
+{
+	return NULL;
+}
+
+static inline int drm_add_edid_modes(struct drm_connector *connector,
+				     struct edid *edid)
+{
+	return 0;
+}
+
+static inline int drm_add_override_edid_modes(struct drm_connector *connector)
+{
+	return 0;
+}
+
+static inline u8 drm_match_cea_mode(const struct drm_display_mode *to_match)
+{
+	return 0;
+}
+
+static inline int drm_add_modes_noedid(struct drm_connector *connector,
+				       int hdisplay, int vdisplay)
+{
+	return 0;
+}
+
+static inline bool drm_detect_monitor_audio(struct edid *edid)
+{
+	return false;
+}
+
+static inline void drm_edid_get_monitor_name(struct edid *edid, char *name,
+					     int buflen)
+{
+}
+
+static inline bool drm_edid_is_valid(struct edid *edid)
+{
+	return false;
+}
+
+static inline bool drm_edid_are_equal(const struct edid *edid1, const struct edid *edid2)
+{
+	return false;
+}
+
+static inline struct drm_display_mode *drm_mode_find_dmt(struct drm_device *dev,
+					   int hsize, int vsize, int fresh,
+					   bool rb)
+{
+	return NULL;
+}
+#endif
 
 #endif /* __DRM_EDID_H__ */

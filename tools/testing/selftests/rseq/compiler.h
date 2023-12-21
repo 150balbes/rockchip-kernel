@@ -27,10 +27,4 @@
  */
 #define rseq_after_asm_goto()	asm volatile ("" : : : "memory")
 
-/* Combine two tokens. */
-#define RSEQ__COMBINE_TOKENS(_tokena, _tokenb)	\
-	_tokena##_tokenb
-#define RSEQ_COMBINE_TOKENS(_tokena, _tokenb)	\
-	RSEQ__COMBINE_TOKENS(_tokena, _tokenb)
-
 #endif  /* RSEQ_COMPILER_H_ */

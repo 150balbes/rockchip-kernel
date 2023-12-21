@@ -242,44 +242,50 @@ static size_t inet_assoc_attr_size(struct sctp_association *asoc)
 		+ 64;
 }
 
-static int sctp_sock_dump_one(struct sctp_endpoint *ep, struct sctp_transport *tsp, void *p)
+static int sctp_tsp_dump_one(struct sctp_transport *tsp, void *p)
 {
 	struct sctp_association *assoc = tsp->asoc;
+	struct sock *sk = tsp->asoc->base.sk;
 	struct sctp_comm_param *commp = p;
-	struct sock *sk = ep->base.sk;
+	struct sk_buff *in_skb = commp->skb;
 	const struct inet_diag_req_v2 *req = commp->r;
-	struct sk_buff *skb = commp->skb;
+	const struct nlmsghdr *nlh = commp->nlh;
+	struct net *net = sock_net(in_skb->sk);
 	struct sk_buff *rep;
 	int err;
 
 	err = sock_diag_check_cookie(sk, req->id.idiag_cookie);
 	if (err)
-		return err;
+		goto out;
 
+	err = -ENOMEM;
 	rep = nlmsg_new(inet_assoc_attr_size(assoc), GFP_KERNEL);
 	if (!rep)
-		return -ENOMEM;
+		goto out;
 
 	lock_sock(sk);
-	if (ep != assoc->ep) {
-		err = -EAGAIN;
-		goto out;
+	if (sk != assoc->base.sk) {
+		release_sock(sk);
+		sk = assoc->base.sk;
+		lock_sock(sk);
 	}
-
-	err = inet_sctp_diag_fill(sk, assoc, rep, req, sk_user_ns(NETLINK_CB(skb).sk),
-				  NETLINK_CB(skb).portid, commp->nlh->nlmsg_seq, 0,
-				  commp->nlh, commp->net_admin);
+	err = inet_sctp_diag_fill(sk, assoc, rep, req,
+				  sk_user_ns(NETLINK_CB(in_skb).sk),
+				  NETLINK_CB(in_skb).portid,
+				  nlh->nlmsg_seq, 0, nlh,
+				  commp->net_admin);
+	release_sock(sk);
 	if (err < 0) {
 		WARN_ON(err == -EMSGSIZE);
+		kfree_skb(rep);
 		goto out;
 	}
-	release_sock(sk);
 
-	return nlmsg_unicast(sock_net(skb->sk)->diag_nlsk, rep, NETLINK_CB(skb).portid);
-
+	err = netlink_unicast(net->diag_nlsk, rep, NETLINK_CB(in_skb).portid,
+			      MSG_DONTWAIT);
+	if (err > 0)
+		err = 0;
 out:
-	release_sock(sk);
-	kfree_skb(rep);
 	return err;
 }
 
@@ -343,9 +349,11 @@ static int sctp_sock_filter(struct sctp_endpoint *ep, struct sctp_transport *tsp
 	struct sctp_comm_param *commp = p;
 	struct sock *sk = ep->base.sk;
 	const struct inet_diag_req_v2 *r = commp->r;
+	struct sctp_association *assoc =
+		list_entry(ep->asocs.next, struct sctp_association, asocs);
 
 	/* find the ep only once through the transports by this condition */
-	if (!list_is_first(&tsp->asoc->asocs, &ep->asocs))
+	if (tsp->asoc != assoc)
 		return 0;
 
 	if (r->sdiag_family != AF_UNSPEC && sk->sk_family != r->sdiag_family)
@@ -420,16 +428,15 @@ static void sctp_diag_get_info(struct sock *sk, struct inet_diag_msg *r,
 static int sctp_diag_dump_one(struct netlink_callback *cb,
 			      const struct inet_diag_req_v2 *req)
 {
-	struct sk_buff *skb = cb->skb;
-	struct net *net = sock_net(skb->sk);
+	struct sk_buff *in_skb = cb->skb;
+	struct net *net = sock_net(in_skb->sk);
 	const struct nlmsghdr *nlh = cb->nlh;
 	union sctp_addr laddr, paddr;
-	int dif = req->id.idiag_if;
 	struct sctp_comm_param commp = {
-		.skb = skb,
+		.skb = in_skb,
 		.r = req,
 		.nlh = nlh,
-		.net_admin = netlink_net_capable(skb, CAP_NET_ADMIN),
+		.net_admin = netlink_net_capable(in_skb, CAP_NET_ADMIN),
 	};
 
 	if (req->sdiag_family == AF_INET) {
@@ -452,8 +459,8 @@ static int sctp_diag_dump_one(struct netlink_callback *cb,
 		paddr.v6.sin6_family = AF_INET6;
 	}
 
-	return sctp_transport_lookup_process(sctp_sock_dump_one,
-					     net, &laddr, &paddr, &commp, dif);
+	return sctp_transport_lookup_process(sctp_tsp_dump_one,
+					     net, &laddr, &paddr, &commp);
 }
 
 static void sctp_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,

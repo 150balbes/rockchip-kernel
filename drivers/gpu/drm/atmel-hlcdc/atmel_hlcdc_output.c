@@ -9,7 +9,6 @@
  */
 
 #include <linux/media-bus-format.h>
-#include <linux/of.h>
 #include <linux/of_graph.h>
 
 #include <drm/drm_bridge.h>

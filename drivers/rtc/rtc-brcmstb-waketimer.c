@@ -27,17 +27,13 @@ struct brcmstb_waketmr {
 	struct rtc_device *rtc;
 	struct device *dev;
 	void __iomem *base;
-	unsigned int wake_irq;
-	unsigned int alarm_irq;
+	int irq;
 	struct notifier_block reboot_notifier;
 	struct clk *clk;
 	u32 rate;
-	unsigned long rtc_alarm;
-	bool alarm_en;
 };
 
 #define BRCMSTB_WKTMR_EVENT		0x00
-#define  WKTMR_ALARM_EVENT		BIT(0)
 #define BRCMSTB_WKTMR_COUNTER		0x04
 #define BRCMSTB_WKTMR_ALARM		0x08
 #define BRCMSTB_WKTMR_PRESCALER		0x0C
@@ -45,71 +41,28 @@ struct brcmstb_waketmr {
 
 #define BRCMSTB_WKTMR_DEFAULT_FREQ	27000000
 
-static inline bool brcmstb_waketmr_is_pending(struct brcmstb_waketmr *timer)
-{
-	u32 reg;
-
-	reg = readl_relaxed(timer->base + BRCMSTB_WKTMR_EVENT);
-	return !!(reg & WKTMR_ALARM_EVENT);
-}
-
 static inline void brcmstb_waketmr_clear_alarm(struct brcmstb_waketmr *timer)
 {
-	u32 reg;
-
-	if (timer->alarm_en && timer->alarm_irq)
-		disable_irq(timer->alarm_irq);
-	timer->alarm_en = false;
-	reg = readl_relaxed(timer->base + BRCMSTB_WKTMR_COUNTER);
-	writel_relaxed(reg - 1, timer->base + BRCMSTB_WKTMR_ALARM);
-	writel_relaxed(WKTMR_ALARM_EVENT, timer->base + BRCMSTB_WKTMR_EVENT);
+	writel_relaxed(1, timer->base + BRCMSTB_WKTMR_EVENT);
 	(void)readl_relaxed(timer->base + BRCMSTB_WKTMR_EVENT);
 }
 
 static void brcmstb_waketmr_set_alarm(struct brcmstb_waketmr *timer,
 				      unsigned int secs)
 {
-	unsigned int now;
-
 	brcmstb_waketmr_clear_alarm(timer);
 
 	/* Make sure we are actually counting in seconds */
 	writel_relaxed(timer->rate, timer->base + BRCMSTB_WKTMR_PRESCALER);
 
-	writel_relaxed(secs, timer->base + BRCMSTB_WKTMR_ALARM);
-	now = readl_relaxed(timer->base + BRCMSTB_WKTMR_COUNTER);
-
-	while ((int)(secs - now) <= 0 &&
-		!brcmstb_waketmr_is_pending(timer)) {
-		secs = now + 1;
-		writel_relaxed(secs, timer->base + BRCMSTB_WKTMR_ALARM);
-		now = readl_relaxed(timer->base + BRCMSTB_WKTMR_COUNTER);
-	}
+	writel_relaxed(secs + 1, timer->base + BRCMSTB_WKTMR_ALARM);
 }
 
 static irqreturn_t brcmstb_waketmr_irq(int irq, void *data)
 {
 	struct brcmstb_waketmr *timer = data;
 
-	if (!timer->alarm_irq)
-		pm_wakeup_event(timer->dev, 0);
-	return IRQ_HANDLED;
-}
-
-static irqreturn_t brcmstb_alarm_irq(int irq, void *data)
-{
-	struct brcmstb_waketmr *timer = data;
-
-	/* Ignore spurious interrupts */
-	if (!brcmstb_waketmr_is_pending(timer))
-		return IRQ_HANDLED;
-
-	if (timer->alarm_en) {
-		if (!device_may_wakeup(timer->dev))
-			writel_relaxed(WKTMR_ALARM_EVENT,
-				       timer->base + BRCMSTB_WKTMR_EVENT);
-		rtc_update_irq(timer->rtc, 1, RTC_IRQF | RTC_AF);
-	}
+	pm_wakeup_event(timer->dev, 0);
 
 	return IRQ_HANDLED;
 }
@@ -135,25 +88,17 @@ static void wktmr_read(struct brcmstb_waketmr *timer,
 static int brcmstb_waketmr_prepare_suspend(struct brcmstb_waketmr *timer)
 {
 	struct device *dev = timer->dev;
-	int ret;
+	int ret = 0;
 
 	if (device_may_wakeup(dev)) {
-		ret = enable_irq_wake(timer->wake_irq);
+		ret = enable_irq_wake(timer->irq);
 		if (ret) {
 			dev_err(dev, "failed to enable wake-up interrupt\n");
 			return ret;
 		}
-		if (timer->alarm_en && timer->alarm_irq) {
-			ret = enable_irq_wake(timer->alarm_irq);
-			if (ret) {
-				dev_err(dev, "failed to enable rtc interrupt\n");
-				disable_irq_wake(timer->wake_irq);
-				return ret;
-			}
-		}
 	}
 
-	return 0;
+	return ret;
 }
 
 /* If enabled as a wakeup-source, arm the timer when powering off */
@@ -201,33 +146,18 @@ static int brcmstb_waketmr_getalarm(struct device *dev,
 				    struct rtc_wkalrm *alarm)
 {
 	struct brcmstb_waketmr *timer = dev_get_drvdata(dev);
+	time64_t sec;
+	u32 reg;
 
-	alarm->enabled = timer->alarm_en;
-	rtc_time64_to_tm(timer->rtc_alarm, &alarm->time);
-
-	alarm->pending = brcmstb_waketmr_is_pending(timer);
-
-	return 0;
-}
-
-static int brcmstb_waketmr_alarm_enable(struct device *dev,
-					unsigned int enabled)
-{
-	struct brcmstb_waketmr *timer = dev_get_drvdata(dev);
-
-	if (enabled && !timer->alarm_en) {
-		if ((int)(readl_relaxed(timer->base + BRCMSTB_WKTMR_COUNTER) -
-		    readl_relaxed(timer->base + BRCMSTB_WKTMR_ALARM)) >= 0 &&
-		    !brcmstb_waketmr_is_pending(timer))
-			return -EINVAL;
-		timer->alarm_en = true;
-		if (timer->alarm_irq)
-			enable_irq(timer->alarm_irq);
-	} else if (!enabled && timer->alarm_en) {
-		if (timer->alarm_irq)
-			disable_irq(timer->alarm_irq);
-		timer->alarm_en = false;
+	sec = readl_relaxed(timer->base + BRCMSTB_WKTMR_ALARM);
+	if (sec != 0) {
+		/* Alarm is enabled */
+		alarm->enabled = 1;
+		rtc_time64_to_tm(sec, &alarm->time);
 	}
+
+	reg = readl_relaxed(timer->base + BRCMSTB_WKTMR_EVENT);
+	alarm->pending = !!(reg & 1);
 
 	return 0;
 }
@@ -236,12 +166,26 @@ static int brcmstb_waketmr_setalarm(struct device *dev,
 				     struct rtc_wkalrm *alarm)
 {
 	struct brcmstb_waketmr *timer = dev_get_drvdata(dev);
+	time64_t sec;
 
-	timer->rtc_alarm = rtc_tm_to_time64(&alarm->time);
+	if (alarm->enabled)
+		sec = rtc_tm_to_time64(&alarm->time);
+	else
+		sec = 0;
 
-	brcmstb_waketmr_set_alarm(timer, timer->rtc_alarm);
+	brcmstb_waketmr_set_alarm(timer, sec);
 
-	return brcmstb_waketmr_alarm_enable(dev, alarm->enabled);
+	return 0;
+}
+
+/*
+ * Does not do much but keep the RTC class happy. We always support
+ * alarms.
+ */
+static int brcmstb_waketmr_alarm_enable(struct device *dev,
+					unsigned int enabled)
+{
+	return 0;
 }
 
 static const struct rtc_class_ops brcmstb_waketmr_ops = {
@@ -277,12 +221,12 @@ static int brcmstb_waketmr_probe(struct platform_device *pdev)
 	 * Set wakeup capability before requesting wakeup interrupt, so we can
 	 * process boot-time "wakeups" (e.g., from S5 soft-off)
 	 */
-	device_init_wakeup(dev, true);
+	device_set_wakeup_capable(dev, true);
+	device_wakeup_enable(dev);
 
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
+	timer->irq = platform_get_irq(pdev, 0);
+	if (timer->irq < 0)
 		return -ENODEV;
-	timer->wake_irq = (unsigned int)ret;
 
 	timer->clk = devm_clk_get(dev, NULL);
 	if (!IS_ERR(timer->clk)) {
@@ -297,23 +241,10 @@ static int brcmstb_waketmr_probe(struct platform_device *pdev)
 		timer->clk = NULL;
 	}
 
-	ret = devm_request_irq(dev, timer->wake_irq, brcmstb_waketmr_irq, 0,
+	ret = devm_request_irq(dev, timer->irq, brcmstb_waketmr_irq, 0,
 			       "brcmstb-waketimer", timer);
 	if (ret < 0)
 		goto err_clk;
-
-	brcmstb_waketmr_clear_alarm(timer);
-
-	/* Attempt to initialize non-wake irq */
-	ret = platform_get_irq(pdev, 1);
-	if (ret > 0) {
-		timer->alarm_irq = (unsigned int)ret;
-		ret = devm_request_irq(dev, timer->alarm_irq, brcmstb_alarm_irq,
-				       IRQF_NO_AUTOEN, "brcmstb-waketimer-rtc",
-				       timer);
-		if (ret < 0)
-			timer->alarm_irq = 0;
-	}
 
 	timer->reboot_notifier.notifier_call = brcmstb_waketmr_reboot;
 	register_reboot_notifier(&timer->reboot_notifier);
@@ -321,9 +252,11 @@ static int brcmstb_waketmr_probe(struct platform_device *pdev)
 	timer->rtc->ops = &brcmstb_waketmr_ops;
 	timer->rtc->range_max = U32_MAX;
 
-	ret = devm_rtc_register_device(timer->rtc);
+	ret = rtc_register_device(timer->rtc);
 	if (ret)
 		goto err_notifier;
+
+	dev_info(dev, "registered, with irq %d\n", timer->irq);
 
 	return 0;
 
@@ -331,17 +264,20 @@ err_notifier:
 	unregister_reboot_notifier(&timer->reboot_notifier);
 
 err_clk:
-	clk_disable_unprepare(timer->clk);
+	if (timer->clk)
+		clk_disable_unprepare(timer->clk);
 
 	return ret;
 }
 
-static void brcmstb_waketmr_remove(struct platform_device *pdev)
+static int brcmstb_waketmr_remove(struct platform_device *pdev)
 {
 	struct brcmstb_waketmr *timer = dev_get_drvdata(&pdev->dev);
 
 	unregister_reboot_notifier(&timer->reboot_notifier);
 	clk_disable_unprepare(timer->clk);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -360,9 +296,7 @@ static int brcmstb_waketmr_resume(struct device *dev)
 	if (!device_may_wakeup(dev))
 		return 0;
 
-	ret = disable_irq_wake(timer->wake_irq);
-	if (timer->alarm_en && timer->alarm_irq)
-		disable_irq_wake(timer->alarm_irq);
+	ret = disable_irq_wake(timer->irq);
 
 	brcmstb_waketmr_clear_alarm(timer);
 
@@ -373,14 +307,14 @@ static int brcmstb_waketmr_resume(struct device *dev)
 static SIMPLE_DEV_PM_OPS(brcmstb_waketmr_pm_ops,
 			 brcmstb_waketmr_suspend, brcmstb_waketmr_resume);
 
-static const __maybe_unused struct of_device_id brcmstb_waketmr_of_match[] = {
+static const struct of_device_id brcmstb_waketmr_of_match[] = {
 	{ .compatible = "brcm,brcmstb-waketimer" },
 	{ /* sentinel */ },
 };
 
 static struct platform_driver brcmstb_waketmr_driver = {
 	.probe			= brcmstb_waketmr_probe,
-	.remove_new		= brcmstb_waketmr_remove,
+	.remove			= brcmstb_waketmr_remove,
 	.driver = {
 		.name		= "brcmstb-waketimer",
 		.pm		= &brcmstb_waketmr_pm_ops,
@@ -392,5 +326,4 @@ module_platform_driver(brcmstb_waketmr_driver);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Brian Norris");
 MODULE_AUTHOR("Markus Mayer");
-MODULE_AUTHOR("Doug Berger");
 MODULE_DESCRIPTION("Wake-up timer driver for STB chips");

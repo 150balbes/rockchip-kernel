@@ -421,7 +421,7 @@ static s32 nps_enet_set_mac_address(struct net_device *ndev, void *p)
 
 	res = eth_mac_addr(ndev, p);
 	if (!res) {
-		eth_hw_addr_set(ndev, addr->sa_data);
+		ether_addr_copy(ndev->dev_addr, addr->sa_data);
 		nps_enet_set_hw_mac_address(ndev);
 	}
 
@@ -575,6 +575,7 @@ static s32 nps_enet_probe(struct platform_device *pdev)
 	struct net_device *ndev;
 	struct nps_enet_priv *priv;
 	s32 err = 0;
+	const char *mac_addr;
 
 	if (!dev->of_node)
 		return -ENODEV;
@@ -601,19 +602,22 @@ static s32 nps_enet_probe(struct platform_device *pdev)
 	dev_dbg(dev, "Registers base address is 0x%p\n", priv->regs_base);
 
 	/* set kernel MAC address to dev */
-	err = of_get_ethdev_address(dev->of_node, ndev);
-	if (err)
+	mac_addr = of_get_mac_address(dev->of_node);
+	if (!IS_ERR(mac_addr))
+		ether_addr_copy(ndev->dev_addr, mac_addr);
+	else
 		eth_hw_addr_random(ndev);
 
 	/* Get IRQ number */
 	priv->irq = platform_get_irq(pdev, 0);
 	if (priv->irq < 0) {
+		dev_err(dev, "failed to retrieve <irq Rx-Tx> value from device tree\n");
 		err = -ENODEV;
 		goto out_netdev;
 	}
 
-	netif_napi_add_weight(ndev, &priv->napi, nps_enet_poll,
-			      NPS_ENET_NAPI_POLL_WEIGHT);
+	netif_napi_add(ndev, &priv->napi, nps_enet_poll,
+		       NPS_ENET_NAPI_POLL_WEIGHT);
 
 	/* Register the driver. Should be the last thing in probe */
 	err = register_netdev(ndev);
@@ -629,7 +633,8 @@ static s32 nps_enet_probe(struct platform_device *pdev)
 out_netif_api:
 	netif_napi_del(&priv->napi);
 out_netdev:
-	free_netdev(ndev);
+	if (err)
+		free_netdev(ndev);
 
 	return err;
 }

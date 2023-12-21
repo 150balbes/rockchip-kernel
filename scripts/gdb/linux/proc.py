@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # gdb helper commands and functions for Linux kernel debugging
 #
@@ -17,7 +16,6 @@ from linux import constants
 from linux import utils
 from linux import tasks
 from linux import lists
-from linux import vfs
 from struct import *
 
 
@@ -172,16 +170,16 @@ values of that process namespace"""
         gdb.write("{:^18} {:^15} {:>9} {} {} options\n".format(
                   "mount", "super_block", "devname", "pathname", "fstype"))
 
-        for mnt in lists.list_for_each_entry(namespace['list'],
+        for vfs in lists.list_for_each_entry(namespace['list'],
                                              mount_ptr_type, "mnt_list"):
-            devname = mnt['mnt_devname'].string()
+            devname = vfs['mnt_devname'].string()
             devname = devname if devname else "none"
 
             pathname = ""
-            parent = mnt
+            parent = vfs
             while True:
                 mntpoint = parent['mnt_mountpoint']
-                pathname = vfs.dentry_name(mntpoint) + pathname
+                pathname = utils.dentry_name(mntpoint) + pathname
                 if (parent == parent['mnt_parent']):
                     break
                 parent = parent['mnt_parent']
@@ -189,14 +187,14 @@ values of that process namespace"""
             if (pathname == ""):
                 pathname = "/"
 
-            superblock = mnt['mnt']['mnt_sb']
+            superblock = vfs['mnt']['mnt_sb']
             fstype = superblock['s_type']['name'].string()
             s_flags = int(superblock['s_flags'])
-            m_flags = int(mnt['mnt']['mnt_flags'])
+            m_flags = int(vfs['mnt']['mnt_flags'])
             rd = "ro" if (s_flags & constants.LX_SB_RDONLY) else "rw"
 
             gdb.write("{} {} {} {} {} {}{}{} 0 0\n".format(
-                      mnt.format_string(), superblock.format_string(), devname,
+                      vfs.format_string(), superblock.format_string(), devname,
                       pathname, fstype, rd, info_opts(FS_INFO, s_flags),
                       info_opts(MNT_INFO, m_flags)))
 

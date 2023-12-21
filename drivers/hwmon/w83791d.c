@@ -270,7 +270,7 @@ struct w83791d_data {
 	struct device *hwmon_dev;
 	struct mutex update_lock;
 
-	bool valid;			/* true if following fields are valid */
+	char valid;			/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	/* volts */
@@ -315,7 +315,7 @@ struct w83791d_data {
 static int w83791d_probe(struct i2c_client *client);
 static int w83791d_detect(struct i2c_client *client,
 			  struct i2c_board_info *info);
-static void w83791d_remove(struct i2c_client *client);
+static int w83791d_remove(struct i2c_client *client);
 
 static int w83791d_read(struct i2c_client *client, u8 reg);
 static int w83791d_write(struct i2c_client *client, u8 reg, u8 value);
@@ -338,7 +338,7 @@ static struct i2c_driver w83791d_driver = {
 	.driver = {
 		.name = "w83791d",
 	},
-	.probe		= w83791d_probe,
+	.probe_new	= w83791d_probe,
 	.remove		= w83791d_remove,
 	.id_table	= w83791d_id,
 	.detect		= w83791d_detect,
@@ -1333,7 +1333,7 @@ static int w83791d_detect(struct i2c_client *client,
 	if (val1 != 0x71 || val2 != 0x5c)
 		return -ENODEV;
 
-	strscpy(info->type, "w83791d", I2C_NAME_SIZE);
+	strlcpy(info->type, "w83791d", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -1405,12 +1405,14 @@ error4:
 	return err;
 }
 
-static void w83791d_remove(struct i2c_client *client)
+static int w83791d_remove(struct i2c_client *client)
 {
 	struct w83791d_data *data = i2c_get_clientdata(client);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &w83791d_group);
+
+	return 0;
 }
 
 static void w83791d_init_client(struct i2c_client *client)
@@ -1594,7 +1596,7 @@ static struct w83791d_data *w83791d_update_device(struct device *dev)
 				<< 4;
 
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->update_lock);

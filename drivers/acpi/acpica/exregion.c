@@ -3,7 +3,7 @@
  *
  * Module Name: exregion - ACPI default op_region (address space) handlers
  *
- * Copyright (C) 2000 - 2023, Intel Corp.
+ * Copyright (C) 2000 - 2020, Intel Corp.
  *
  *****************************************************************************/
 
@@ -509,14 +509,7 @@ acpi_ex_data_table_space_handler(u32 function,
 				 u64 *value,
 				 void *handler_context, void *region_context)
 {
-	struct acpi_data_table_mapping *mapping;
-	char *pointer;
-
 	ACPI_FUNCTION_TRACE(ex_data_table_space_handler);
-
-	mapping = (struct acpi_data_table_mapping *) region_context;
-	pointer = ACPI_CAST_PTR(char, mapping->pointer) +
-	    (address - ACPI_PTR_TO_PHYSADDR(mapping->pointer));
 
 	/*
 	 * Perform the memory read or write. The bit_width was already
@@ -525,14 +518,14 @@ acpi_ex_data_table_space_handler(u32 function,
 	switch (function) {
 	case ACPI_READ:
 
-		memcpy(ACPI_CAST_PTR(char, value), pointer,
-		       ACPI_DIV_8(bit_width));
+		memcpy(ACPI_CAST_PTR(char, value),
+		       ACPI_PHYSADDR_TO_PTR(address), ACPI_DIV_8(bit_width));
 		break;
 
 	case ACPI_WRITE:
 
-		memcpy(pointer, ACPI_CAST_PTR(char, value),
-		       ACPI_DIV_8(bit_width));
+		memcpy(ACPI_PHYSADDR_TO_PTR(address),
+		       ACPI_CAST_PTR(char, value), ACPI_DIV_8(bit_width));
 		break;
 
 	default:

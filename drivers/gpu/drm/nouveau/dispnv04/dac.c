@@ -24,7 +24,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_crtc_helper.h>
 
 #include "nouveau_drv.h"
 #include "nouveau_encoder.h"

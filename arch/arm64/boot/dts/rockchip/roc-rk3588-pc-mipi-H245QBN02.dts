@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "roc-rk3588-pc.dtsi"
+//#include "rk3588-firefly-demo.dtsi"
+#include "roc-rk3588-pc-mipi-H245QBN02.dtsi"
+
+/ {
+	model = "Firefly ROC-RK3588-PC MIPI(2.4)(Linux)";
+	compatible = "rockchip,roc-rk3588-pc", "rockchip,rk3588";
+};
+
+&check_version {
+	dtb-name = "roc-rk3588-pc-mipi-H245QBN02";
+};

@@ -28,31 +28,14 @@
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/mm.h>
-#include <linux/dma-map-ops.h> /* for dma_default_coherent */
 
+#include <asm/dma-coherence.h>
 #include <asm/mipsregs.h>
 
 #include <au1000.h>
 
 extern void __init board_setup(void);
 extern void __init alchemy_set_lpj(void);
-
-static bool alchemy_dma_coherent(void)
-{
-	switch (alchemy_get_cputype()) {
-	case ALCHEMY_CPU_AU1000:
-	case ALCHEMY_CPU_AU1500:
-	case ALCHEMY_CPU_AU1100:
-		return false;
-	case ALCHEMY_CPU_AU1200:
-		/* Au1200 AB USB does not support coherent memory */
-		if ((read_c0_prid() & PRID_REV_MASK) == 0)
-			return false;
-		return true;
-	default:
-		return true;
-	}
-}
 
 void __init plat_mem_setup(void)
 {
@@ -65,7 +48,20 @@ void __init plat_mem_setup(void)
 		/* Clear to obtain best system bus performance */
 		clear_c0_config(1 << 19); /* Clear Config[OD] */
 
-	dma_default_coherent = alchemy_dma_coherent();
+	hw_coherentio = 0;
+	coherentio = IO_COHERENCE_ENABLED;
+	switch (alchemy_get_cputype()) {
+	case ALCHEMY_CPU_AU1000:
+	case ALCHEMY_CPU_AU1500:
+	case ALCHEMY_CPU_AU1100:
+		coherentio = IO_COHERENCE_DISABLED;
+		break;
+	case ALCHEMY_CPU_AU1200:
+		/* Au1200 AB USB does not support coherent memory */
+		if (0 == (read_c0_prid() & PRID_REV_MASK))
+			coherentio = IO_COHERENCE_DISABLED;
+		break;
+	}
 
 	board_setup();	/* board specific setup */
 

@@ -17,7 +17,7 @@
 #include "../../../util/evlist.h"
 #include "../../../util/mmap.h"
 #include "../../../util/session.h"
-#include "../../../util/pmus.h"
+#include "../../../util/pmu.h"
 #include "../../../util/debug.h"
 #include "../../../util/record.h"
 #include "../../../util/tsc.h"
@@ -110,7 +110,7 @@ static int intel_bts_recording_options(struct auxtrace_record *itr,
 			container_of(itr, struct intel_bts_recording, itr);
 	struct perf_pmu *intel_bts_pmu = btsr->intel_bts_pmu;
 	struct evsel *evsel, *intel_bts_evsel = NULL;
-	const struct perf_cpu_map *cpus = evlist->core.user_requested_cpus;
+	const struct perf_cpu_map *cpus = evlist->core.cpus;
 	bool privileged = perf_event_paranoid_check(-1);
 
 	if (opts->auxtrace_sample_mode) {
@@ -129,7 +129,6 @@ static int intel_bts_recording_options(struct auxtrace_record *itr,
 			}
 			evsel->core.attr.freq = 0;
 			evsel->core.attr.sample_period = 1;
-			evsel->needs_auxtrace_mmap = true;
 			intel_bts_evsel = evsel;
 			opts->full_auxtrace = true;
 		}
@@ -219,7 +218,7 @@ static int intel_bts_recording_options(struct auxtrace_record *itr,
 		 * To obtain the auxtrace buffer file descriptor, the auxtrace event
 		 * must come first.
 		 */
-		evlist__to_front(evlist, intel_bts_evsel);
+		perf_evlist__to_front(evlist, intel_bts_evsel);
 		/*
 		 * In the case of per-cpu mmaps, we need the CPU on the
 		 * AUX event.
@@ -233,13 +232,13 @@ static int intel_bts_recording_options(struct auxtrace_record *itr,
 		struct evsel *tracking_evsel;
 		int err;
 
-		err = parse_event(evlist, "dummy:u");
+		err = parse_events(evlist, "dummy:u", NULL);
 		if (err)
 			return err;
 
 		tracking_evsel = evlist__last(evlist);
 
-		evlist__set_tracking_event(evlist, tracking_evsel);
+		perf_evlist__set_tracking_event(evlist, tracking_evsel);
 
 		tracking_evsel->core.attr.freq = 0;
 		tracking_evsel->core.attr.sample_period = 1;
@@ -416,7 +415,7 @@ out_err:
 
 struct auxtrace_record *intel_bts_recording_init(int *err)
 {
-	struct perf_pmu *intel_bts_pmu = perf_pmus__find(INTEL_BTS_PMU_NAME);
+	struct perf_pmu *intel_bts_pmu = perf_pmu__find(INTEL_BTS_PMU_NAME);
 	struct intel_bts_recording *btsr;
 
 	if (!intel_bts_pmu)

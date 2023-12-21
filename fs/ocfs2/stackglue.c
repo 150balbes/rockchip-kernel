@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * stackglue.c
  *
  * Code which implements an OCFS2 specific interface to underlying
@@ -334,10 +336,10 @@ int ocfs2_cluster_connect(const char *stack_name,
 		goto out;
 	}
 
-	strscpy(new_conn->cc_name, group, GROUP_NAME_MAX + 1);
+	strlcpy(new_conn->cc_name, group, GROUP_NAME_MAX + 1);
 	new_conn->cc_namelen = grouplen;
 	if (cluster_name_len)
-		strscpy(new_conn->cc_cluster_name, cluster_name,
+		strlcpy(new_conn->cc_cluster_name, cluster_name,
 			CLUSTER_NAME_MAX + 1);
 	new_conn->cc_cluster_name_len = cluster_name_len;
 	new_conn->cc_recovery_handler = recovery_handler;
@@ -661,7 +663,41 @@ static struct ctl_table ocfs2_nm_table[] = {
 	{ }
 };
 
+static struct ctl_table ocfs2_mod_table[] = {
+	{
+		.procname	= "nm",
+		.data		= NULL,
+		.maxlen		= 0,
+		.mode		= 0555,
+		.child		= ocfs2_nm_table
+	},
+	{ }
+};
+
+static struct ctl_table ocfs2_kern_table[] = {
+	{
+		.procname	= "ocfs2",
+		.data		= NULL,
+		.maxlen		= 0,
+		.mode		= 0555,
+		.child		= ocfs2_mod_table
+	},
+	{ }
+};
+
+static struct ctl_table ocfs2_root_table[] = {
+	{
+		.procname	= "fs",
+		.data		= NULL,
+		.maxlen		= 0,
+		.mode		= 0555,
+		.child		= ocfs2_kern_table
+	},
+	{ }
+};
+
 static struct ctl_table_header *ocfs2_table_header;
+
 
 /*
  * Initialization
@@ -669,22 +705,16 @@ static struct ctl_table_header *ocfs2_table_header;
 
 static int __init ocfs2_stack_glue_init(void)
 {
-	int ret;
-
 	strcpy(cluster_stack_name, OCFS2_STACK_PLUGIN_O2CB);
 
-	ocfs2_table_header = register_sysctl("fs/ocfs2/nm", ocfs2_nm_table);
+	ocfs2_table_header = register_sysctl_table(ocfs2_root_table);
 	if (!ocfs2_table_header) {
 		printk(KERN_ERR
 		       "ocfs2 stack glue: unable to register sysctl\n");
 		return -ENOMEM; /* or something. */
 	}
 
-	ret = ocfs2_sysfs_init();
-	if (ret)
-		unregister_sysctl_table(ocfs2_table_header);
-
-	return ret;
+	return ocfs2_sysfs_init();
 }
 
 static void __exit ocfs2_stack_glue_exit(void)
@@ -697,7 +727,7 @@ static void __exit ocfs2_stack_glue_exit(void)
 }
 
 MODULE_AUTHOR("Oracle");
-MODULE_DESCRIPTION("ocfs2 cluster stack glue layer");
+MODULE_DESCRIPTION("ocfs2 cluter stack glue layer");
 MODULE_LICENSE("GPL");
 module_init(ocfs2_stack_glue_init);
 module_exit(ocfs2_stack_glue_exit);

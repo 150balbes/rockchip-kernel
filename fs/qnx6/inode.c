@@ -94,9 +94,9 @@ static int qnx6_check_blockptr(__fs32 ptr)
 	return 1;
 }
 
-static int qnx6_read_folio(struct file *file, struct folio *folio)
+static int qnx6_readpage(struct file *file, struct page *page)
 {
-	return mpage_read_folio(folio, qnx6_get_block);
+	return mpage_readpage(page, qnx6_get_block);
 }
 
 static void qnx6_readahead(struct readahead_control *rac)
@@ -470,8 +470,10 @@ out2:
 out1:
 	iput(sbi->inodes);
 out:
-	brelse(bh1);
-	brelse(bh2);
+	if (bh1)
+		brelse(bh1);
+	if (bh2)
+		brelse(bh2);
 outnobh:
 	kfree(qs);
 	s->s_fs_info = NULL;
@@ -494,7 +496,7 @@ static sector_t qnx6_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping, block, qnx6_get_block);
 }
 static const struct address_space_operations qnx6_aops = {
-	.read_folio	= qnx6_read_folio,
+	.readpage	= qnx6_readpage,
 	.readahead	= qnx6_readahead,
 	.bmap		= qnx6_bmap
 };
@@ -595,7 +597,7 @@ static struct kmem_cache *qnx6_inode_cachep;
 static struct inode *qnx6_alloc_inode(struct super_block *sb)
 {
 	struct qnx6_inode_info *ei;
-	ei = alloc_inode_sb(sb, qnx6_inode_cachep, GFP_KERNEL);
+	ei = kmem_cache_alloc(qnx6_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -677,3 +679,4 @@ static void __exit exit_qnx6_fs(void)
 module_init(init_qnx6_fs)
 module_exit(exit_qnx6_fs)
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);

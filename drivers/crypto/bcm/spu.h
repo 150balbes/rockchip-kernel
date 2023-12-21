@@ -17,8 +17,7 @@
 
 #include <linux/types.h>
 #include <linux/scatterlist.h>
-#include <crypto/sha1.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 
 enum spu_cipher_alg {
 	CIPHER_ALG_NONE = 0x0,

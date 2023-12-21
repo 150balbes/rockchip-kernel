@@ -13,7 +13,7 @@
 ///
 // Confidence: Average
 // Copyright: (C) 2015 Andrzej Hajda, Samsung Electronics Co., Ltd.
-// URL: https://coccinelle.gitlabpages.inria.fr/website
+// URL: http://coccinelle.lip6.fr/
 // Options: --all-includes
 
 virtual context

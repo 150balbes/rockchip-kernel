@@ -44,7 +44,7 @@ MLXFW_MFA2_TLV(multi, struct mlxfw_mfa2_tlv_multi,
 	       MLXFW_MFA2_TLV_MULTI_PART);
 
 struct mlxfw_mfa2_tlv_psid {
-	DECLARE_FLEX_ARRAY(u8, psid);
+	u8 psid[0];
 } __packed;
 
 MLXFW_MFA2_TLV_VARSIZE(psid, struct mlxfw_mfa2_tlv_psid,

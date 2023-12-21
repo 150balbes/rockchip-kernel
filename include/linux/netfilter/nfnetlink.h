@@ -4,30 +4,27 @@
 
 #include <linux/netlink.h>
 #include <linux/capability.h>
+#include <linux/android_kabi.h>
 #include <net/netlink.h>
 #include <uapi/linux/netfilter/nfnetlink.h>
 
-struct nfnl_info {
-	struct net		*net;
-	struct sock		*sk;
-	const struct nlmsghdr	*nlh;
-	const struct nfgenmsg	*nfmsg;
-	struct netlink_ext_ack	*extack;
-};
-
-enum nfnl_callback_type {
-	NFNL_CB_UNSPEC	= 0,
-	NFNL_CB_MUTEX,
-	NFNL_CB_RCU,
-	NFNL_CB_BATCH,
-};
-
 struct nfnl_callback {
-	int (*call)(struct sk_buff *skb, const struct nfnl_info *info,
-		    const struct nlattr * const cda[]);
-	const struct nla_policy	*policy;
-	enum nfnl_callback_type	type;
-	__u16			attr_count;
+	int (*call)(struct net *net, struct sock *nl, struct sk_buff *skb,
+		    const struct nlmsghdr *nlh,
+		    const struct nlattr * const cda[],
+		    struct netlink_ext_ack *extack);
+	int (*call_rcu)(struct net *net, struct sock *nl, struct sk_buff *skb,
+			const struct nlmsghdr *nlh,
+			const struct nlattr * const cda[],
+			struct netlink_ext_ack *extack);
+	int (*call_batch)(struct net *net, struct sock *nl, struct sk_buff *skb,
+			  const struct nlmsghdr *nlh,
+			  const struct nlattr * const cda[],
+			  struct netlink_ext_ack *extack);
+	const struct nla_policy *policy;	/* netlink attribute policy */
+	const u_int16_t attr_count;		/* number of nlattr's */
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 enum nfnl_abort_action {
@@ -45,7 +42,10 @@ struct nfnetlink_subsystem {
 	int (*commit)(struct net *net, struct sk_buff *skb);
 	int (*abort)(struct net *net, struct sk_buff *skb,
 		     enum nfnl_abort_action action);
+	void (*cleanup)(struct net *net);
 	bool (*valid_genid)(struct net *net, u32 genid);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 int nfnetlink_subsys_register(const struct nfnetlink_subsystem *n);
@@ -56,8 +56,6 @@ int nfnetlink_send(struct sk_buff *skb, struct net *net, u32 portid,
 		   unsigned int group, int echo, gfp_t flags);
 int nfnetlink_set_err(struct net *net, u32 portid, u32 group, int error);
 int nfnetlink_unicast(struct sk_buff *skb, struct net *net, u32 portid);
-void nfnetlink_broadcast(struct net *net, struct sk_buff *skb, __u32 portid,
-			 __u32 group, gfp_t allocation);
 
 static inline u16 nfnl_msg_type(u8 subsys, u8 msg_type)
 {

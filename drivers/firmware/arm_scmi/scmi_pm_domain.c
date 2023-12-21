@@ -2,7 +2,7 @@
 /*
  * SCMI Generic power domain support.
  *
- * Copyright (C) 2018-2021 ARM Ltd.
+ * Copyright (C) 2018-2020 ARM Ltd.
  */
 
 #include <linux/err.h>
@@ -66,7 +66,7 @@ static int scmi_pm_domain_probe(struct scmi_device *sdev)
 	if (!handle)
 		return -ENODEV;
 
-	power_ops = handle->devm_protocol_get(sdev, SCMI_PROTOCOL_POWER, &ph);
+	power_ops = handle->devm_get_protocol(sdev, SCMI_PROTOCOL_POWER, &ph);
 	if (IS_ERR(power_ops))
 		return PTR_ERR(power_ops);
 

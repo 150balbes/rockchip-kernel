@@ -7,20 +7,6 @@
 / {
 	model = "Samsung Galaxy A5U (EUR)";
 	compatible = "samsung,a5u-eur", "qcom,msm8916";
-	chassis-type = "handset";
-
-	reg_touch_key: regulator-touch-key {
-		compatible = "regulator-fixed";
-		regulator-name = "touch_key";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-
-		gpio = <&tlmm 97 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-
-		pinctrl-names = "default";
-		pinctrl-0 = <&tkey_en_default>;
-	};
 };
 
 &accelerometer {
@@ -36,13 +22,13 @@
 		compatible = "melfas,mms345l";
 
 		reg = <0x48>;
-		interrupt-parent = <&tlmm>;
+		interrupt-parent = <&msmgpio>;
 		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
 
 		touchscreen-size-x = <720>;
 		touchscreen-size-y = <1280>;
 
-		avdd-supply = <&reg_vdd_tsp_a>;
+		avdd-supply = <&reg_vdd_tsp>;
 		vdd-supply = <&pm8916_l6>;
 
 		pinctrl-names = "default";
@@ -50,30 +36,15 @@
 	};
 };
 
-&clk_pwm {
-	status = "okay";
+&pronto {
+	iris {
+		compatible = "qcom,wcn3660b";
+	};
 };
 
-&touchkey {
-	vcc-supply = <&reg_touch_key>;
-	vdd-supply = <&reg_touch_key>;
-};
-
-&vibrator {
-	status = "okay";
-};
-
-&wcnss {
-	status = "okay";
-};
-
-&wcnss_iris {
-	compatible = "qcom,wcn3660b";
-};
-
-&tlmm {
-	tkey_en_default: tkey-en-default-state {
-		pins = "gpio97";
+&msmgpio {
+	ts_int_default: ts-int-default {
+		pins = "gpio13";
 		function = "gpio";
 
 		drive-strength = <2>;

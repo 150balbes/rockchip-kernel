@@ -279,8 +279,7 @@ static inline int from_nf_ferr(unsigned int mask)
 #define FERR_NF_RECOVERABLE	to_nf_mask(ERROR_NF_RECOVERABLE)
 #define FERR_NF_UNCORRECTABLE	to_nf_mask(ERROR_NF_UNCORRECTABLE)
 
-/*
- * Defines to extract the various fields from the
+/* Defines to extract the vaious fields from the
  *	MTRx - Memory Technology Registers
  */
 #define MTR_DIMMS_PRESENT(mtr)		((mtr) & (1 << 10))
@@ -687,7 +686,7 @@ static void i5400_clear_error(struct mem_ctl_info *mci)
 static void i5400_check_error(struct mem_ctl_info *mci)
 {
 	struct i5400_error_info info;
-
+	edac_dbg(4, "MC%d\n", mci->mc_idx);
 	i5400_get_error_info(mci, &info);
 	i5400_process_error_info(mci, &info);
 }

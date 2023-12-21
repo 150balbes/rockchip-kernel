@@ -8,6 +8,7 @@
 
 #include <linux/bitmap.h>
 #include <linux/delay.h>
+#include <linux/dma-iommu.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/export.h>
@@ -18,6 +19,7 @@
 #include <linux/iommu.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/of_iommu.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/sizes.h>
@@ -30,12 +32,13 @@
 #define arm_iommu_create_mapping(...)	NULL
 #define arm_iommu_attach_device(...)	-ENODEV
 #define arm_iommu_release_mapping(...)	do {} while (0)
+#define arm_iommu_detach_device(...)	do {} while (0)
 #endif
 
-#define IPMMU_CTX_MAX		16U
+#define IPMMU_CTX_MAX		8U
 #define IPMMU_CTX_INVALID	-1
 
-#define IPMMU_UTLB_MAX		64U
+#define IPMMU_UTLB_MAX		48U
 
 struct ipmmu_features {
 	bool use_ns_alias_offset;
@@ -188,12 +191,8 @@ static void ipmmu_write(struct ipmmu_vmsa_device *mmu, unsigned int offset,
 static unsigned int ipmmu_ctx_reg(struct ipmmu_vmsa_device *mmu,
 				  unsigned int context_id, unsigned int reg)
 {
-	unsigned int base = mmu->features->ctx_offset_base;
-
-	if (context_id > 7)
-		base += 0x800 - 8 * 0x40;
-
-	return base + context_id * mmu->features->ctx_offset_stride + reg;
+	return mmu->features->ctx_offset_base +
+	       context_id * mmu->features->ctx_offset_stride + reg;
 }
 
 static u32 ipmmu_ctx_read(struct ipmmu_vmsa_device *mmu,
@@ -296,6 +295,18 @@ static void ipmmu_utlb_enable(struct ipmmu_vmsa_domain *domain,
 	ipmmu_imuctr_write(mmu, utlb, IMUCTR_TTSEL_MMU(domain->context_id) |
 				      IMUCTR_FLUSH | IMUCTR_MMUEN);
 	mmu->utlb_ctx[utlb] = domain->context_id;
+}
+
+/*
+ * Disable MMU translation for the microTLB.
+ */
+static void ipmmu_utlb_disable(struct ipmmu_vmsa_domain *domain,
+			       unsigned int utlb)
+{
+	struct ipmmu_vmsa_device *mmu = domain->mmu;
+
+	ipmmu_imuctr_write(mmu, utlb, 0);
+	mmu->utlb_ctx[utlb] = IPMMU_CTX_INVALID;
 }
 
 static void ipmmu_tlb_flush_all(void *cookie)
@@ -554,12 +565,9 @@ static irqreturn_t ipmmu_irq(int irq, void *dev)
  * IOMMU Operations
  */
 
-static struct iommu_domain *ipmmu_domain_alloc(unsigned type)
+static struct iommu_domain *__ipmmu_domain_alloc(unsigned type)
 {
 	struct ipmmu_vmsa_domain *domain;
-
-	if (type != IOMMU_DOMAIN_UNMANAGED && type != IOMMU_DOMAIN_DMA)
-		return NULL;
 
 	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
 	if (!domain)
@@ -570,6 +578,27 @@ static struct iommu_domain *ipmmu_domain_alloc(unsigned type)
 	return &domain->io_domain;
 }
 
+static struct iommu_domain *ipmmu_domain_alloc(unsigned type)
+{
+	struct iommu_domain *io_domain = NULL;
+
+	switch (type) {
+	case IOMMU_DOMAIN_UNMANAGED:
+		io_domain = __ipmmu_domain_alloc(type);
+		break;
+
+	case IOMMU_DOMAIN_DMA:
+		io_domain = __ipmmu_domain_alloc(type);
+		if (io_domain && iommu_get_dma_cookie(io_domain)) {
+			kfree(io_domain);
+			io_domain = NULL;
+		}
+		break;
+	}
+
+	return io_domain;
+}
+
 static void ipmmu_domain_free(struct iommu_domain *io_domain)
 {
 	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
@@ -578,6 +607,7 @@ static void ipmmu_domain_free(struct iommu_domain *io_domain)
 	 * Free the domain resources. We assume that all devices have already
 	 * been detached.
 	 */
+	iommu_put_dma_cookie(io_domain);
 	ipmmu_domain_destroy_context(domain);
 	free_io_pgtable_ops(domain->iop);
 	kfree(domain);
@@ -615,6 +645,8 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 		 * Something is wrong, we can't attach two devices using
 		 * different IOMMUs to the same domain.
 		 */
+		dev_err(dev, "Can't attach IPMMU %s to domain on IPMMU %s\n",
+			dev_name(mmu->dev), dev_name(domain->mmu->dev));
 		ret = -EINVAL;
 	} else
 		dev_info(dev, "Reusing IPMMU context %u\n", domain->context_id);
@@ -630,23 +662,38 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 	return 0;
 }
 
+static void ipmmu_detach_device(struct iommu_domain *io_domain,
+				struct device *dev)
+{
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
+	unsigned int i;
+
+	for (i = 0; i < fwspec->num_ids; ++i)
+		ipmmu_utlb_disable(domain, fwspec->ids[i]);
+
+	/*
+	 * TODO: Optimize by disabling the context when no device is attached.
+	 */
+}
+
 static int ipmmu_map(struct iommu_domain *io_domain, unsigned long iova,
-		     phys_addr_t paddr, size_t pgsize, size_t pgcount,
-		     int prot, gfp_t gfp, size_t *mapped)
+		     phys_addr_t paddr, size_t size, int prot, gfp_t gfp)
 {
 	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
 
-	return domain->iop->map_pages(domain->iop, iova, paddr, pgsize, pgcount,
-				      prot, gfp, mapped);
+	if (!domain)
+		return -ENODEV;
+
+	return domain->iop->map(domain->iop, iova, paddr, size, prot, gfp);
 }
 
 static size_t ipmmu_unmap(struct iommu_domain *io_domain, unsigned long iova,
-			  size_t pgsize, size_t pgcount,
-			  struct iommu_iotlb_gather *gather)
+			  size_t size, struct iommu_iotlb_gather *gather)
 {
 	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
 
-	return domain->iop->unmap_pages(domain->iop, iova, pgsize, pgcount, gather);
+	return domain->iop->unmap(domain->iop, iova, size, gather);
 }
 
 static void ipmmu_flush_iotlb_all(struct iommu_domain *io_domain)
@@ -687,45 +734,54 @@ static int ipmmu_init_platform_device(struct device *dev,
 	return 0;
 }
 
-static const struct soc_device_attribute soc_needs_opt_in[] = {
-	{ .family = "R-Car Gen3", },
-	{ .family = "R-Car Gen4", },
-	{ .family = "RZ/G2", },
-	{ /* sentinel */ }
-};
-
-static const struct soc_device_attribute soc_denylist[] = {
+static const struct soc_device_attribute soc_rcar_gen3[] = {
 	{ .soc_id = "r8a774a1", },
-	{ .soc_id = "r8a7795", .revision = "ES2.*" },
+	{ .soc_id = "r8a774b1", },
+	{ .soc_id = "r8a774c0", },
+	{ .soc_id = "r8a774e1", },
+	{ .soc_id = "r8a7795", },
+	{ .soc_id = "r8a77961", },
 	{ .soc_id = "r8a7796", },
+	{ .soc_id = "r8a77965", },
+	{ .soc_id = "r8a77970", },
+	{ .soc_id = "r8a77990", },
+	{ .soc_id = "r8a77995", },
 	{ /* sentinel */ }
 };
 
-static const char * const devices_allowlist[] = {
-	"ee100000.mmc",
-	"ee120000.mmc",
-	"ee140000.mmc",
-	"ee160000.mmc"
+static const struct soc_device_attribute soc_rcar_gen3_whitelist[] = {
+	{ .soc_id = "r8a774b1", },
+	{ .soc_id = "r8a774c0", },
+	{ .soc_id = "r8a774e1", },
+	{ .soc_id = "r8a7795", .revision = "ES3.*" },
+	{ .soc_id = "r8a77961", },
+	{ .soc_id = "r8a77965", },
+	{ .soc_id = "r8a77990", },
+	{ .soc_id = "r8a77995", },
+	{ /* sentinel */ }
 };
 
-static bool ipmmu_device_is_allowed(struct device *dev)
+static const char * const rcar_gen3_slave_whitelist[] = {
+};
+
+static bool ipmmu_slave_whitelist(struct device *dev)
 {
 	unsigned int i;
 
 	/*
-	 * R-Car Gen3/4 and RZ/G2 use the allow list to opt-in devices.
+	 * For R-Car Gen3 use a white list to opt-in slave devices.
 	 * For Other SoCs, this returns true anyway.
 	 */
-	if (!soc_device_match(soc_needs_opt_in))
+	if (!soc_device_match(soc_rcar_gen3))
 		return true;
 
-	/* Check whether this SoC can use the IPMMU correctly or not */
-	if (soc_device_match(soc_denylist))
+	/* Check whether this R-Car Gen3 can use the IPMMU correctly or not */
+	if (!soc_device_match(soc_rcar_gen3_whitelist))
 		return false;
 
-	/* Check whether this device can work with the IPMMU */
-	for (i = 0; i < ARRAY_SIZE(devices_allowlist); i++) {
-		if (!strcmp(dev_name(dev), devices_allowlist[i]))
+	/* Check whether this slave device can work with the IPMMU */
+	for (i = 0; i < ARRAY_SIZE(rcar_gen3_slave_whitelist); i++) {
+		if (!strcmp(dev_name(dev), rcar_gen3_slave_whitelist[i]))
 			return true;
 	}
 
@@ -736,7 +792,7 @@ static bool ipmmu_device_is_allowed(struct device *dev)
 static int ipmmu_of_xlate(struct device *dev,
 			  struct of_phandle_args *spec)
 {
-	if (!ipmmu_device_is_allowed(dev))
+	if (!ipmmu_slave_whitelist(dev))
 		return -ENODEV;
 
 	iommu_fwspec_add_ids(dev, spec->args, 1);
@@ -818,18 +874,7 @@ static void ipmmu_probe_finalize(struct device *dev)
 
 static void ipmmu_release_device(struct device *dev)
 {
-	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-	struct ipmmu_vmsa_device *mmu = to_ipmmu(dev);
-	unsigned int i;
-
-	for (i = 0; i < fwspec->num_ids; ++i) {
-		unsigned int utlb = fwspec->ids[i];
-
-		ipmmu_imuctr_write(mmu, utlb, 0);
-		mmu->utlb_ctx[utlb] = IPMMU_CTX_INVALID;
-	}
-
-	arm_iommu_release_mapping(mmu->mapping);
+	arm_iommu_detach_device(dev);
 }
 
 static struct iommu_group *ipmmu_find_group(struct device *dev)
@@ -849,6 +894,14 @@ static struct iommu_group *ipmmu_find_group(struct device *dev)
 
 static const struct iommu_ops ipmmu_ops = {
 	.domain_alloc = ipmmu_domain_alloc,
+	.domain_free = ipmmu_domain_free,
+	.attach_dev = ipmmu_attach_device,
+	.detach_dev = ipmmu_detach_device,
+	.map = ipmmu_map,
+	.unmap = ipmmu_unmap,
+	.flush_iotlb_all = ipmmu_flush_iotlb_all,
+	.iotlb_sync = ipmmu_iotlb_sync,
+	.iova_to_phys = ipmmu_iova_to_phys,
 	.probe_device = ipmmu_probe_device,
 	.release_device = ipmmu_release_device,
 	.probe_finalize = ipmmu_probe_finalize,
@@ -856,15 +909,6 @@ static const struct iommu_ops ipmmu_ops = {
 			? generic_device_group : ipmmu_find_group,
 	.pgsize_bitmap = SZ_1G | SZ_2M | SZ_4K,
 	.of_xlate = ipmmu_of_xlate,
-	.default_domain_ops = &(const struct iommu_domain_ops) {
-		.attach_dev	= ipmmu_attach_device,
-		.map_pages	= ipmmu_map,
-		.unmap_pages	= ipmmu_unmap,
-		.flush_iotlb_all = ipmmu_flush_iotlb_all,
-		.iotlb_sync	= ipmmu_iotlb_sync,
-		.iova_to_phys	= ipmmu_iova_to_phys,
-		.free		= ipmmu_domain_free,
-	}
 };
 
 /* -----------------------------------------------------------------------------
@@ -908,20 +952,6 @@ static const struct ipmmu_features ipmmu_features_rcar_gen3 = {
 	.utlb_offset_base = 0,
 };
 
-static const struct ipmmu_features ipmmu_features_rcar_gen4 = {
-	.use_ns_alias_offset = false,
-	.has_cache_leaf_nodes = true,
-	.number_of_contexts = 16,
-	.num_utlbs = 64,
-	.setup_imbuscr = false,
-	.twobit_imttbcr_sl0 = true,
-	.reserved_context = true,
-	.cache_snoop = false,
-	.ctx_offset_base = 0x10000,
-	.ctx_offset_stride = 0x1040,
-	.utlb_offset_base = 0x3000,
-};
-
 static const struct of_device_id ipmmu_of_ids[] = {
 	{
 		.compatible = "renesas,ipmmu-vmsa",
@@ -954,20 +984,11 @@ static const struct of_device_id ipmmu_of_ids[] = {
 		.compatible = "renesas,ipmmu-r8a77970",
 		.data = &ipmmu_features_rcar_gen3,
 	}, {
-		.compatible = "renesas,ipmmu-r8a77980",
-		.data = &ipmmu_features_rcar_gen3,
-	}, {
 		.compatible = "renesas,ipmmu-r8a77990",
 		.data = &ipmmu_features_rcar_gen3,
 	}, {
 		.compatible = "renesas,ipmmu-r8a77995",
 		.data = &ipmmu_features_rcar_gen3,
-	}, {
-		.compatible = "renesas,ipmmu-r8a779a0",
-		.data = &ipmmu_features_rcar_gen4,
-	}, {
-		.compatible = "renesas,rcar-gen4-ipmmu-vmsa",
-		.data = &ipmmu_features_rcar_gen4,
 	}, {
 		/* Terminator */
 	},
@@ -1023,7 +1044,7 @@ static int ipmmu_probe(struct platform_device *pdev)
 	 * the lack of has_cache_leaf_nodes flag or renesas,ipmmu-main property.
 	 */
 	if (!mmu->features->has_cache_leaf_nodes ||
-	    !of_property_present(pdev->dev.of_node, "renesas,ipmmu-main"))
+	    !of_find_property(pdev->dev.of_node, "renesas,ipmmu-main", NULL))
 		mmu->root = mmu;
 	else
 		mmu->root = ipmmu_find_root();
@@ -1066,9 +1087,18 @@ static int ipmmu_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 
-		ret = iommu_device_register(&mmu->iommu, &ipmmu_ops, &pdev->dev);
+		iommu_device_set_ops(&mmu->iommu, &ipmmu_ops);
+		iommu_device_set_fwnode(&mmu->iommu,
+					&pdev->dev.of_node->fwnode);
+
+		ret = iommu_device_register(&mmu->iommu);
 		if (ret)
 			return ret;
+
+#if defined(CONFIG_IOMMU_DMA)
+		if (!iommu_present(&platform_bus_type))
+			bus_set_iommu(&platform_bus_type, &ipmmu_ops);
+#endif
 	}
 
 	/*
@@ -1082,7 +1112,7 @@ static int ipmmu_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ipmmu_remove(struct platform_device *pdev)
+static int ipmmu_remove(struct platform_device *pdev)
 {
 	struct ipmmu_vmsa_device *mmu = platform_get_drvdata(pdev);
 
@@ -1092,6 +1122,8 @@ static void ipmmu_remove(struct platform_device *pdev)
 	arm_iommu_release_mapping(mmu->mapping);
 
 	ipmmu_device_reset(mmu);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1138,6 +1170,34 @@ static struct platform_driver ipmmu_driver = {
 		.pm = DEV_PM_OPS,
 	},
 	.probe = ipmmu_probe,
-	.remove_new = ipmmu_remove,
+	.remove	= ipmmu_remove,
 };
-builtin_platform_driver(ipmmu_driver);
+
+static int __init ipmmu_init(void)
+{
+	struct device_node *np;
+	static bool setup_done;
+	int ret;
+
+	if (setup_done)
+		return 0;
+
+	np = of_find_matching_node(NULL, ipmmu_of_ids);
+	if (!np)
+		return 0;
+
+	of_node_put(np);
+
+	ret = platform_driver_register(&ipmmu_driver);
+	if (ret < 0)
+		return ret;
+
+#if defined(CONFIG_ARM) && !defined(CONFIG_IOMMU_DMA)
+	if (!iommu_present(&platform_bus_type))
+		bus_set_iommu(&platform_bus_type, &ipmmu_ops);
+#endif
+
+	setup_done = true;
+	return 0;
+}
+subsys_initcall(ipmmu_init);

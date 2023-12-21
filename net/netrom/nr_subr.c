@@ -123,7 +123,7 @@ void nr_write_internal(struct sock *sk, int frametype)
 	unsigned char  *dptr;
 	int len, timeout;
 
-	len = NR_TRANSPORT_LEN;
+	len = NR_NETWORK_LEN + NR_TRANSPORT_LEN;
 
 	switch (frametype & 0x0F) {
 	case NR_CONNREQ:
@@ -141,8 +141,7 @@ void nr_write_internal(struct sock *sk, int frametype)
 		return;
 	}
 
-	skb = alloc_skb(NR_NETWORK_LEN + len, GFP_ATOMIC);
-	if (!skb)
+	if ((skb = alloc_skb(len, GFP_ATOMIC)) == NULL)
 		return;
 
 	/*
@@ -150,7 +149,7 @@ void nr_write_internal(struct sock *sk, int frametype)
 	 */
 	skb_reserve(skb, NR_NETWORK_LEN);
 
-	dptr = skb_put(skb, len);
+	dptr = skb_put(skb, skb_tailroom(skb));
 
 	switch (frametype & 0x0F) {
 	case NR_CONNREQ:

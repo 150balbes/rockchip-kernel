@@ -3,7 +3,6 @@
 
 #include "nitrox_dev.h"
 #include "nitrox_csr.h"
-#include "nitrox_hal.h"
 
 #define PLL_REF_CLK 50
 #define MAX_CSR_RETRIES 10

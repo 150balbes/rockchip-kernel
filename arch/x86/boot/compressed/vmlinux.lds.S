@@ -34,7 +34,6 @@ SECTIONS
 		_text = .; 	/* Text */
 		*(.text)
 		*(.text.*)
-		*(.noinstr.text)
 		_etext = . ;
 	}
 	.rodata : {

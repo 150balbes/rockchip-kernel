@@ -2,38 +2,29 @@
 #ifndef __ASM_ALTERNATIVE_MACROS_H
 #define __ASM_ALTERNATIVE_MACROS_H
 
-#include <linux/const.h>
-#include <vdso/bits.h>
-
 #include <asm/cpucaps.h>
-#include <asm/insn-def.h>
 
-/*
- * Binutils 2.27.0 can't handle a 'UL' suffix on constants, so for the assembly
- * macros below we must use we must use `(1 << ARM64_CB_SHIFT)`.
- */
-#define ARM64_CB_SHIFT	15
-#define ARM64_CB_BIT	BIT(ARM64_CB_SHIFT)
+#define ARM64_CB_PATCH ARM64_NCAPS
 
-#if ARM64_NCAPS >= ARM64_CB_BIT
-#error "cpucaps have overflown ARM64_CB_BIT"
-#endif
+/* A64 instructions are always 32 bits. */
+#define	AARCH64_INSN_SIZE		4
 
+#ifndef BUILD_FIPS140_KO
 #ifndef __ASSEMBLY__
 
 #include <linux/stringify.h>
 
-#define ALTINSTR_ENTRY(cpucap)					              \
+#define ALTINSTR_ENTRY(feature)					              \
 	" .word 661b - .\n"				/* label           */ \
 	" .word 663f - .\n"				/* new instruction */ \
-	" .hword " __stringify(cpucap) "\n"		/* cpucap          */ \
+	" .hword " __stringify(feature) "\n"		/* feature bit     */ \
 	" .byte 662b-661b\n"				/* source len      */ \
 	" .byte 664f-663f\n"				/* replacement len */
 
-#define ALTINSTR_ENTRY_CB(cpucap, cb)					      \
+#define ALTINSTR_ENTRY_CB(feature, cb)					      \
 	" .word 661b - .\n"				/* label           */ \
-	" .word " __stringify(cb) "- .\n"		/* callback        */ \
-	" .hword " __stringify(cpucap) "\n"		/* cpucap          */ \
+	" .word " __stringify(cb) "- .\n"		/* callback */	      \
+	" .hword " __stringify(feature) "\n"		/* feature bit     */ \
 	" .byte 662b-661b\n"				/* source len      */ \
 	" .byte 664f-663f\n"				/* replacement len */
 
@@ -53,13 +44,13 @@
  *
  * Alternatives with callbacks do not generate replacement instructions.
  */
-#define __ALTERNATIVE_CFG(oldinstr, newinstr, cpucap, cfg_enabled)	\
+#define __ALTERNATIVE_CFG(oldinstr, newinstr, feature, cfg_enabled)	\
 	".if "__stringify(cfg_enabled)" == 1\n"				\
 	"661:\n\t"							\
 	oldinstr "\n"							\
 	"662:\n"							\
 	".pushsection .altinstructions,\"a\"\n"				\
-	ALTINSTR_ENTRY(cpucap)						\
+	ALTINSTR_ENTRY(feature)						\
 	".popsection\n"							\
 	".subsection 1\n"						\
 	"663:\n\t"							\
@@ -70,31 +61,31 @@
 	".previous\n"							\
 	".endif\n"
 
-#define __ALTERNATIVE_CFG_CB(oldinstr, cpucap, cfg_enabled, cb)	\
+#define __ALTERNATIVE_CFG_CB(oldinstr, feature, cfg_enabled, cb)	\
 	".if "__stringify(cfg_enabled)" == 1\n"				\
 	"661:\n\t"							\
 	oldinstr "\n"							\
 	"662:\n"							\
 	".pushsection .altinstructions,\"a\"\n"				\
-	ALTINSTR_ENTRY_CB(cpucap, cb)					\
+	ALTINSTR_ENTRY_CB(feature, cb)					\
 	".popsection\n"							\
 	"663:\n\t"							\
 	"664:\n\t"							\
 	".endif\n"
 
-#define _ALTERNATIVE_CFG(oldinstr, newinstr, cpucap, cfg, ...)	\
-	__ALTERNATIVE_CFG(oldinstr, newinstr, cpucap, IS_ENABLED(cfg))
+#define _ALTERNATIVE_CFG(oldinstr, newinstr, feature, cfg, ...)	\
+	__ALTERNATIVE_CFG(oldinstr, newinstr, feature, IS_ENABLED(cfg))
 
-#define ALTERNATIVE_CB(oldinstr, cpucap, cb) \
-	__ALTERNATIVE_CFG_CB(oldinstr, (1 << ARM64_CB_SHIFT) | (cpucap), 1, cb)
+#define ALTERNATIVE_CB(oldinstr, cb) \
+	__ALTERNATIVE_CFG_CB(oldinstr, ARM64_CB_PATCH, 1, cb)
 #else
 
 #include <asm/assembler.h>
 
-.macro altinstruction_entry orig_offset alt_offset cpucap orig_len alt_len
+.macro altinstruction_entry orig_offset alt_offset feature orig_len alt_len
 	.word \orig_offset - .
 	.word \alt_offset - .
-	.hword (\cpucap)
+	.hword \feature
 	.byte \orig_len
 	.byte \alt_len
 .endm
@@ -153,10 +144,10 @@
 661:
 .endm
 
-.macro alternative_cb cap, cb
+.macro alternative_cb cb
 	.set .Lasm_alt_mode, 0
 	.pushsection .altinstructions, "a"
-	altinstruction_entry 661f, \cb, (1 << ARM64_CB_SHIFT) | \cap, 662f-661f, 0
+	altinstruction_entry 661f, \cb, ARM64_CB_PATCH, 662f-661f, 0
 	.popsection
 661:
 .endm
@@ -207,58 +198,50 @@ alternative_endif
 #define _ALTERNATIVE_CFG(insn1, insn2, cap, cfg, ...)	\
 	alternative_insn insn1, insn2, cap, IS_ENABLED(cfg)
 
+.macro user_alt, label, oldinstr, newinstr, cond
+9999:	alternative_insn "\oldinstr", "\newinstr", \cond
+	_asm_extable 9999b, \label
+.endm
+
 #endif  /*  __ASSEMBLY__  */
 
 /*
- * Usage: asm(ALTERNATIVE(oldinstr, newinstr, cpucap));
+ * Usage: asm(ALTERNATIVE(oldinstr, newinstr, feature));
  *
- * Usage: asm(ALTERNATIVE(oldinstr, newinstr, cpucap, CONFIG_FOO));
+ * Usage: asm(ALTERNATIVE(oldinstr, newinstr, feature, CONFIG_FOO));
  * N.B. If CONFIG_FOO is specified, but not selected, the whole block
  *      will be omitted, including oldinstr.
  */
 #define ALTERNATIVE(oldinstr, newinstr, ...)   \
 	_ALTERNATIVE_CFG(oldinstr, newinstr, __VA_ARGS__, 1)
 
-#ifndef __ASSEMBLY__
+#else
 
-#include <linux/types.h>
+/*
+ * The FIPS140 module does not support alternatives patching, as this
+ * invalidates the HMAC digest of the .text section. However, some alternatives
+ * are known to be irrelevant so we can tolerate them in the FIPS140 module, as
+ * they will never be applied in the first place in the use cases that the
+ * FIPS140 module targets (Android running on a production phone). Any other
+ * uses of alternatives should be avoided, as it is not safe in the general
+ * case to simply use the default sequence in one place (the fips module) and
+ * the alternative sequence everywhere else.
+ *
+ * Below is an allowlist of features that we can ignore, by simply taking the
+ * safe default instruction sequence. Note that this implies that the FIPS140
+ * module is not compatible with VHE, or with pseudo-NMI support.
+ */
 
-static __always_inline bool
-alternative_has_cap_likely(const unsigned long cpucap)
-{
-	compiletime_assert(cpucap < ARM64_NCAPS,
-			   "cpucap must be < ARM64_NCAPS");
+#define __ALT_ARM64_HAS_LDAPR			0,
+#define __ALT_ARM64_HAS_VIRT_HOST_EXTN		0,
+#define __ALT_ARM64_HAS_IRQ_PRIO_MASKING	0,
 
-	asm_volatile_goto(
-	ALTERNATIVE_CB("b	%l[l_no]", %[cpucap], alt_cb_patch_nops)
-	:
-	: [cpucap] "i" (cpucap)
-	:
-	: l_no);
+#define ALTERNATIVE(oldinstr, newinstr, feature, ...)   \
+	_ALTERNATIVE(oldinstr, __ALT_ ## feature, #feature)
 
-	return true;
-l_no:
-	return false;
-}
+#define _ALTERNATIVE(oldinstr, feature, feature_str)   \
+	__take_second_arg(feature oldinstr, \
+		".err Feature " feature_str " not supported in fips140 module")
 
-static __always_inline bool
-alternative_has_cap_unlikely(const unsigned long cpucap)
-{
-	compiletime_assert(cpucap < ARM64_NCAPS,
-			   "cpucap must be < ARM64_NCAPS");
-
-	asm_volatile_goto(
-	ALTERNATIVE("nop", "b	%l[l_yes]", %[cpucap])
-	:
-	: [cpucap] "i" (cpucap)
-	:
-	: l_yes);
-
-	return false;
-l_yes:
-	return true;
-}
-
-#endif /* __ASSEMBLY__ */
-
+#endif /* BUILD_FIPS140_KO */
 #endif /* __ASM_ALTERNATIVE_MACROS_H */

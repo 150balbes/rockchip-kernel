@@ -25,7 +25,6 @@
 
 
 #include "dc_bios_types.h"
-#include "hw_shared.h"
 #include "dcn30_afmt.h"
 #include "reg_helper.h"
 
@@ -44,13 +43,10 @@
 	afmt3->base.ctx
 
 
-void afmt3_setup_hdmi_audio(
+static void afmt3_setup_hdmi_audio(
 	struct afmt *afmt)
 {
 	struct dcn30_afmt *afmt3 = DCN30_AFMT_FROM_AFMT(afmt);
-
-	if (afmt->funcs->afmt_poweron)
-		afmt->funcs->afmt_poweron(afmt);
 
 	/* AFMT_AUDIO_PACKET_CONTROL */
 	REG_UPDATE(AFMT_AUDIO_PACKET_CONTROL, AFMT_60958_CS_UPDATE, 1);
@@ -116,13 +112,14 @@ static union audio_cea_channels speakers_to_channels(
 	return cea_channels;
 }
 
-void afmt3_se_audio_setup(
+static void afmt3_se_audio_setup(
 	struct afmt *afmt,
 	unsigned int az_inst,
 	struct audio_info *audio_info)
 {
 	struct dcn30_afmt *afmt3 = DCN30_AFMT_FROM_AFMT(afmt);
 
+	uint32_t speakers = 0;
 	uint32_t channels = 0;
 
 	ASSERT(audio_info);
@@ -130,6 +127,7 @@ void afmt3_se_audio_setup(
 	if (audio_info == NULL)
 		return;
 
+	speakers = audio_info->flags.info.ALLSPEAKERS;
 	channels = speakers_to_channels(audio_info->flags.speaker_flags).all;
 
 	/* setup the audio stream source select (audio -> dig mapping) */
@@ -139,24 +137,20 @@ void afmt3_se_audio_setup(
 	REG_UPDATE(AFMT_AUDIO_PACKET_CONTROL2, AFMT_AUDIO_CHANNEL_ENABLE, channels);
 
 	/* Disable forced mem power off */
-	if (afmt->funcs->afmt_poweron == NULL)
-		REG_UPDATE(AFMT_MEM_PWR, AFMT_MEM_PWR_FORCE, 0);
+	REG_UPDATE(AFMT_MEM_PWR, AFMT_MEM_PWR_FORCE, 0);
 }
 
-void afmt3_audio_mute_control(
+static void afmt3_audio_mute_control(
 	struct afmt *afmt,
 	bool mute)
 {
 	struct dcn30_afmt *afmt3 = DCN30_AFMT_FROM_AFMT(afmt);
-	if (mute && afmt->funcs->afmt_powerdown)
-		afmt->funcs->afmt_powerdown(afmt);
-	if (!mute && afmt->funcs->afmt_poweron)
-		afmt->funcs->afmt_poweron(afmt);
+
 	/* enable/disable transmission of audio packets */
 	REG_UPDATE(AFMT_AUDIO_PACKET_CONTROL, AFMT_AUDIO_SAMPLE_SEND, !mute);
 }
 
-void afmt3_audio_info_immediate_update(
+static void afmt3_audio_info_immediate_update(
 	struct afmt *afmt)
 {
 	struct dcn30_afmt *afmt3 = DCN30_AFMT_FROM_AFMT(afmt);
@@ -165,13 +159,10 @@ void afmt3_audio_info_immediate_update(
 	REG_UPDATE(AFMT_INFOFRAME_CONTROL0, AFMT_AUDIO_INFO_UPDATE, 1);
 }
 
-void afmt3_setup_dp_audio(
+static void afmt3_setup_dp_audio(
 		struct afmt *afmt)
 {
 	struct dcn30_afmt *afmt3 = DCN30_AFMT_FROM_AFMT(afmt);
-
-	if (afmt->funcs->afmt_poweron)
-		afmt->funcs->afmt_poweron(afmt);
 
 	/* AFMT_AUDIO_PACKET_CONTROL */
 	REG_UPDATE(AFMT_AUDIO_PACKET_CONTROL, AFMT_60958_CS_UPDATE, 1);

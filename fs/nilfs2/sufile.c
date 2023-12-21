@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * NILFS segment usage file.
+ * sufile.c - NILFS segment usage file.
  *
  * Copyright (C) 2006-2008 Nippon Telegraph and Telephone Corporation.
  *
@@ -779,15 +779,6 @@ int nilfs_sufile_resize(struct inode *sufile, __u64 newnsegs)
 			goto out_header;
 
 		sui->ncleansegs -= nsegs - newnsegs;
-
-		/*
-		 * If the sufile is successfully truncated, immediately adjust
-		 * the segment allocation space while locking the semaphore
-		 * "mi_sem" so that nilfs_sufile_alloc() never allocates
-		 * segments in the truncated space.
-		 */
-		sui->allocmax = newnsegs - 1;
-		sui->allocmin = 0;
 	}
 
 	kaddr = kmap_atomic(header_bh->b_page);
@@ -1117,7 +1108,7 @@ int nilfs_sufile_trim_fs(struct inode *sufile, struct fstrim_range *range)
 				ret = blkdev_issue_discard(nilfs->ns_bdev,
 						start * sects_per_block,
 						nblocks * sects_per_block,
-						GFP_NOFS);
+						GFP_NOFS, 0);
 				if (ret < 0) {
 					put_bh(su_bh);
 					goto out_sem;
@@ -1151,7 +1142,7 @@ int nilfs_sufile_trim_fs(struct inode *sufile, struct fstrim_range *range)
 			ret = blkdev_issue_discard(nilfs->ns_bdev,
 					start * sects_per_block,
 					nblocks * sects_per_block,
-					GFP_NOFS);
+					GFP_NOFS, 0);
 			if (!ret)
 				ndiscarded += nblocks;
 		}

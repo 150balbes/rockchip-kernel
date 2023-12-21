@@ -923,7 +923,7 @@ static int ofdpa_flow_tbl_bridge(struct ofdpa_port *ofdpa_port,
 	struct ofdpa_flow_tbl_entry *entry;
 	u32 priority;
 	bool vlan_bridging = !!vlan_id;
-	bool dflt = !eth_dst || eth_dst_mask;
+	bool dflt = !eth_dst || (eth_dst && eth_dst_mask);
 	bool wild = false;
 
 	entry = kzalloc(sizeof(*entry), GFP_ATOMIC);
@@ -1821,17 +1821,19 @@ static void ofdpa_port_fdb_learn_work(struct work_struct *work)
 	const struct ofdpa_fdb_learn_work *lw =
 		container_of(work, struct ofdpa_fdb_learn_work, work);
 	bool removing = (lw->flags & OFDPA_OP_FLAG_REMOVE);
-	struct switchdev_notifier_fdb_info info = {};
-	enum switchdev_notifier_type event;
+	bool learned = (lw->flags & OFDPA_OP_FLAG_LEARNED);
+	struct switchdev_notifier_fdb_info info;
 
 	info.addr = lw->addr;
 	info.vid = lw->vid;
-	info.offloaded = !removing;
-	event = removing ? SWITCHDEV_FDB_DEL_TO_BRIDGE :
-			   SWITCHDEV_FDB_ADD_TO_BRIDGE;
 
 	rtnl_lock();
-	call_switchdev_notifiers(event, lw->ofdpa_port->dev, &info.info, NULL);
+	if (learned && removing)
+		call_switchdev_notifiers(SWITCHDEV_FDB_DEL_TO_BRIDGE,
+					 lw->ofdpa_port->dev, &info.info, NULL);
+	else if (learned && !removing)
+		call_switchdev_notifiers(SWITCHDEV_FDB_ADD_TO_BRIDGE,
+					 lw->ofdpa_port->dev, &info.info, NULL);
 	rtnl_unlock();
 
 	kfree(work);
@@ -1861,9 +1863,6 @@ static int ofdpa_port_fdb_learn(struct ofdpa_port *ofdpa_port,
 	}
 
 	if (!ofdpa_port_is_bridged(ofdpa_port))
-		return 0;
-
-	if (!(flags & OFDPA_OP_FLAG_LEARNED))
 		return 0;
 
 	lw = kzalloc(sizeof(*lw), GFP_ATOMIC);
@@ -2489,7 +2488,8 @@ static int ofdpa_port_attr_stp_state_set(struct rocker_port *rocker_port,
 }
 
 static int ofdpa_port_attr_bridge_flags_set(struct rocker_port *rocker_port,
-					    unsigned long brport_flags)
+					    unsigned long brport_flags,
+					    struct switchdev_trans *trans)
 {
 	struct ofdpa_port *ofdpa_port = rocker_port->wpriv;
 	unsigned long orig_flags;
@@ -2497,10 +2497,13 @@ static int ofdpa_port_attr_bridge_flags_set(struct rocker_port *rocker_port,
 
 	orig_flags = ofdpa_port->brport_flags;
 	ofdpa_port->brport_flags = brport_flags;
-
-	if ((orig_flags ^ ofdpa_port->brport_flags) & BR_LEARNING)
+	if ((orig_flags ^ ofdpa_port->brport_flags) & BR_LEARNING &&
+	    !switchdev_trans_ph_prepare(trans))
 		err = rocker_port_set_learning(ofdpa_port->rocker_port,
 					       !!(ofdpa_port->brport_flags & BR_LEARNING));
+
+	if (switchdev_trans_ph_prepare(trans))
+		ofdpa_port->brport_flags = orig_flags;
 
 	return err;
 }
@@ -2517,15 +2520,18 @@ ofdpa_port_attr_bridge_flags_support_get(const struct rocker_port *
 
 static int
 ofdpa_port_attr_bridge_ageing_time_set(struct rocker_port *rocker_port,
-				       u32 ageing_time)
+				       u32 ageing_time,
+				       struct switchdev_trans *trans)
 {
 	struct ofdpa_port *ofdpa_port = rocker_port->wpriv;
 	struct ofdpa *ofdpa = ofdpa_port->ofdpa;
 
-	ofdpa_port->ageing_time = clock_t_to_jiffies(ageing_time);
-	if (ofdpa_port->ageing_time < ofdpa->ageing_time)
-		ofdpa->ageing_time = ofdpa_port->ageing_time;
-	mod_timer(&ofdpa_port->ofdpa->fdb_cleanup_timer, jiffies);
+	if (!switchdev_trans_ph_prepare(trans)) {
+		ofdpa_port->ageing_time = clock_t_to_jiffies(ageing_time);
+		if (ofdpa_port->ageing_time < ofdpa->ageing_time)
+			ofdpa->ageing_time = ofdpa_port->ageing_time;
+		mod_timer(&ofdpa_port->ofdpa->fdb_cleanup_timer, jiffies);
+	}
 
 	return 0;
 }
@@ -2534,16 +2540,32 @@ static int ofdpa_port_obj_vlan_add(struct rocker_port *rocker_port,
 				   const struct switchdev_obj_port_vlan *vlan)
 {
 	struct ofdpa_port *ofdpa_port = rocker_port->wpriv;
+	u16 vid;
+	int err;
 
-	return ofdpa_port_vlan_add(ofdpa_port, vlan->vid, vlan->flags);
+	for (vid = vlan->vid_begin; vid <= vlan->vid_end; vid++) {
+		err = ofdpa_port_vlan_add(ofdpa_port, vid, vlan->flags);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int ofdpa_port_obj_vlan_del(struct rocker_port *rocker_port,
 				   const struct switchdev_obj_port_vlan *vlan)
 {
 	struct ofdpa_port *ofdpa_port = rocker_port->wpriv;
+	u16 vid;
+	int err;
 
-	return ofdpa_port_vlan_del(ofdpa_port, vlan->vid, vlan->flags);
+	for (vid = vlan->vid_begin; vid <= vlan->vid_end; vid++) {
+		err = ofdpa_port_vlan_del(ofdpa_port, vid, vlan->flags);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int ofdpa_port_obj_fdb_add(struct rocker_port *rocker_port,
@@ -2572,10 +2594,8 @@ static int ofdpa_port_obj_fdb_del(struct rocker_port *rocker_port,
 }
 
 static int ofdpa_port_bridge_join(struct ofdpa_port *ofdpa_port,
-				  struct net_device *bridge,
-				  struct netlink_ext_ack *extack)
+				  struct net_device *bridge)
 {
-	struct net_device *dev = ofdpa_port->dev;
 	int err;
 
 	/* Port is joining bridge, so the internal VLAN for the
@@ -2595,20 +2615,12 @@ static int ofdpa_port_bridge_join(struct ofdpa_port *ofdpa_port,
 
 	ofdpa_port->bridge_dev = bridge;
 
-	err = ofdpa_port_vlan_add(ofdpa_port, OFDPA_UNTAGGED_VID, 0);
-	if (err)
-		return err;
-
-	return switchdev_bridge_port_offload(dev, dev, NULL, NULL, NULL,
-					     false, extack);
+	return ofdpa_port_vlan_add(ofdpa_port, OFDPA_UNTAGGED_VID, 0);
 }
 
 static int ofdpa_port_bridge_leave(struct ofdpa_port *ofdpa_port)
 {
-	struct net_device *dev = ofdpa_port->dev;
 	int err;
-
-	switchdev_bridge_port_unoffload(dev, NULL, NULL, NULL);
 
 	err = ofdpa_port_vlan_del(ofdpa_port, OFDPA_UNTAGGED_VID, 0);
 	if (err)
@@ -2648,14 +2660,13 @@ static int ofdpa_port_ovs_changed(struct ofdpa_port *ofdpa_port,
 }
 
 static int ofdpa_port_master_linked(struct rocker_port *rocker_port,
-				    struct net_device *master,
-				    struct netlink_ext_ack *extack)
+				    struct net_device *master)
 {
 	struct ofdpa_port *ofdpa_port = rocker_port->wpriv;
 	int err = 0;
 
 	if (netif_is_bridge_master(master))
-		err = ofdpa_port_bridge_join(ofdpa_port, master, extack);
+		err = ofdpa_port_bridge_join(ofdpa_port, master);
 	else if (netif_is_ovs_master(master))
 		err = ofdpa_port_ovs_changed(ofdpa_port, master);
 	return err;

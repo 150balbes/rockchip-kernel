@@ -342,8 +342,8 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	switch (dev->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BP_FP:
+	switch (dev->fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		/* codec is slave, so cpu is master */
 		mr |= ATMEL_I2SC_MR_MODE_MASTER;
 		ret = atmel_i2s_get_gck_param(dev, params_rate(params));
@@ -351,7 +351,7 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 		break;
 
-	case SND_SOC_DAIFMT_BC_FC:
+	case SND_SOC_DAIFMT_CBM_CFM:
 		/* codec is master, so cpu is slave */
 		mr |= ATMEL_I2SC_MR_MODE_SLAVE;
 		dev->gck_param = NULL;
@@ -559,13 +559,11 @@ static struct snd_soc_dai_driver atmel_i2s_dai = {
 		.formats = ATMEL_I2S_FORMATS,
 	},
 	.ops = &atmel_i2s_dai_ops,
-	.symmetric_rate = 1,
-	.symmetric_sample_bits = 1,
+	.symmetric_rates = 1,
 };
 
 static const struct snd_soc_component_driver atmel_i2s_component = {
-	.name			= "atmel-i2s",
-	.legacy_dai_naming	= 1,
+	.name	= "atmel-i2s",
 };
 
 static int atmel_i2s_sama5d2_mck_init(struct atmel_i2s_dev *dev,
@@ -583,8 +581,8 @@ static int atmel_i2s_sama5d2_mck_init(struct atmel_i2s_dev *dev,
 		err = PTR_ERR(muxclk);
 		if (err == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		dev_dbg(dev->dev,
-			"failed to get the I2S clock control: %d\n", err);
+		dev_warn(dev->dev,
+			 "failed to get the I2S clock control: %d\n", err);
 		return 0;
 	}
 
@@ -615,7 +613,7 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	void __iomem *base;
 	int irq;
-	int err;
+	int err = -ENXIO;
 	unsigned int pcm_flags = 0;
 	unsigned int version;
 
@@ -630,7 +628,8 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 		dev->caps = match->data;
 
 	/* Map I/O registers. */
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &mem);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -717,11 +716,13 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void atmel_i2s_remove(struct platform_device *pdev)
+static int atmel_i2s_remove(struct platform_device *pdev)
 {
 	struct atmel_i2s_dev *dev = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(dev->pclk);
+
+	return 0;
 }
 
 static struct platform_driver atmel_i2s_driver = {
@@ -730,7 +731,7 @@ static struct platform_driver atmel_i2s_driver = {
 		.of_match_table	= of_match_ptr(atmel_i2s_dt_ids),
 	},
 	.probe		= atmel_i2s_probe,
-	.remove_new	= atmel_i2s_remove,
+	.remove		= atmel_i2s_remove,
 };
 module_platform_driver(atmel_i2s_driver);
 

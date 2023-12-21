@@ -40,15 +40,12 @@ static void bridge_platform_create(int widget, int masterwid)
 {
 	struct xtalk_bridge_platform_data *bd;
 	struct sgi_w1_platform_data *wd;
-	struct platform_device *pdev_wd;
-	struct platform_device *pdev_bd;
+	struct platform_device *pdev;
 	struct resource w1_res;
 
 	wd = kzalloc(sizeof(*wd), GFP_KERNEL);
-	if (!wd) {
-		pr_warn("xtalk:%x bridge create out of memory\n", widget);
-		return;
-	}
+	if (!wd)
+		goto no_mem;
 
 	snprintf(wd->dev_id, sizeof(wd->dev_id), "bridge-%012lx",
 		 IP30_SWIN_BASE(widget));
@@ -59,35 +56,22 @@ static void bridge_platform_create(int widget, int masterwid)
 	w1_res.end = w1_res.start + 3;
 	w1_res.flags = IORESOURCE_MEM;
 
-	pdev_wd = platform_device_alloc("sgi_w1", PLATFORM_DEVID_AUTO);
-	if (!pdev_wd) {
-		pr_warn("xtalk:%x bridge create out of memory\n", widget);
-		goto err_kfree_wd;
+	pdev = platform_device_alloc("sgi_w1", PLATFORM_DEVID_AUTO);
+	if (!pdev) {
+		kfree(wd);
+		goto no_mem;
 	}
-	if (platform_device_add_resources(pdev_wd, &w1_res, 1)) {
-		pr_warn("xtalk:%x bridge failed to add platform resources.\n", widget);
-		goto err_put_pdev_wd;
-	}
-	if (platform_device_add_data(pdev_wd, wd, sizeof(*wd))) {
-		pr_warn("xtalk:%x bridge failed to add platform data.\n", widget);
-		goto err_put_pdev_wd;
-	}
-	if (platform_device_add(pdev_wd)) {
-		pr_warn("xtalk:%x bridge failed to add platform device.\n", widget);
-		goto err_put_pdev_wd;
-	}
-	/* platform_device_add_data() duplicates the data */
-	kfree(wd);
+	platform_device_add_resources(pdev, &w1_res, 1);
+	platform_device_add_data(pdev, wd, sizeof(*wd));
+	platform_device_add(pdev);
 
 	bd = kzalloc(sizeof(*bd), GFP_KERNEL);
-	if (!bd) {
-		pr_warn("xtalk:%x bridge create out of memory\n", widget);
-		goto err_unregister_pdev_wd;
-	}
-	pdev_bd = platform_device_alloc("xtalk-bridge", PLATFORM_DEVID_AUTO);
-	if (!pdev_bd) {
-		pr_warn("xtalk:%x bridge create out of memory\n", widget);
-		goto err_kfree_bd;
+	if (!bd)
+		goto no_mem;
+	pdev = platform_device_alloc("xtalk-bridge", PLATFORM_DEVID_AUTO);
+	if (!pdev) {
+		kfree(bd);
+		goto no_mem;
 	}
 
 	bd->bridge_addr	= IP30_RAW_SWIN_BASE(widget);
@@ -107,31 +91,13 @@ static void bridge_platform_create(int widget, int masterwid)
 	bd->io.flags	= IORESOURCE_IO;
 	bd->io_offset	= IP30_SWIN_BASE(widget);
 
-	if (platform_device_add_data(pdev_bd, bd, sizeof(*bd))) {
-		pr_warn("xtalk:%x bridge failed to add platform data.\n", widget);
-		goto err_put_pdev_bd;
-	}
-	if (platform_device_add(pdev_bd)) {
-		pr_warn("xtalk:%x bridge failed to add platform device.\n", widget);
-		goto err_put_pdev_bd;
-	}
-	/* platform_device_add_data() duplicates the data */
-	kfree(bd);
+	platform_device_add_data(pdev, bd, sizeof(*bd));
+	platform_device_add(pdev);
 	pr_info("xtalk:%x bridge widget\n", widget);
 	return;
 
-err_put_pdev_bd:
-	platform_device_put(pdev_bd);
-err_kfree_bd:
-	kfree(bd);
-err_unregister_pdev_wd:
-	platform_device_unregister(pdev_wd);
-	return;
-err_put_pdev_wd:
-	platform_device_put(pdev_wd);
-err_kfree_wd:
-	kfree(wd);
-	return;
+no_mem:
+	pr_warn("xtalk:%x bridge create out of memory\n", widget);
 }
 
 static unsigned int __init xbow_widget_active(s8 wid)

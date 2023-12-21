@@ -31,11 +31,9 @@
 /* control total # of nats */
 #define DEF_NAT_CACHE_THRESHOLD			100000
 
-/* control total # of node writes used for roll-fowrad recovery */
-#define DEF_RF_NODE_BLOCKS			0
-
 /* vector size for gang look-up from nat cache that consists of radix tree */
-#define NAT_VEC_SIZE	32
+#define NATVEC_SIZE	64
+#define SETVEC_SIZE	32
 
 /* return value for read_node_page */
 #define LOCKED_PAGE	1
@@ -92,15 +90,17 @@ static inline void copy_node_info(struct node_info *dst,
 static inline void set_nat_flag(struct nat_entry *ne,
 				unsigned int type, bool set)
 {
+	unsigned char mask = 0x01 << type;
 	if (set)
-		ne->ni.flag |= BIT(type);
+		ne->ni.flag |= mask;
 	else
-		ne->ni.flag &= ~BIT(type);
+		ne->ni.flag &= ~mask;
 }
 
 static inline bool get_nat_flag(struct nat_entry *ne, unsigned int type)
 {
-	return ne->ni.flag & BIT(type);
+	unsigned char mask = 0x01 << type;
+	return ne->ni.flag & mask;
 }
 
 static inline void nat_reset_flag(struct nat_entry *ne)
@@ -138,6 +138,11 @@ static inline bool excess_cached_nats(struct f2fs_sb_info *sbi)
 	return NM_I(sbi)->nat_cnt[TOTAL_NAT] >= DEF_NAT_CACHE_THRESHOLD;
 }
 
+static inline bool excess_dirty_nodes(struct f2fs_sb_info *sbi)
+{
+	return get_pages(sbi, F2FS_DIRTY_NODES) >= sbi->blocks_per_seg * 8;
+}
+
 enum mem_type {
 	FREE_NIDS,	/* indicates the free nid list */
 	NAT_ENTRIES,	/* indicates the cached nat entry */
@@ -145,6 +150,7 @@ enum mem_type {
 	INO_ENTRIES,	/* indicates inode entries */
 	READ_EXTENT_CACHE,	/* indicates read extent cache */
 	AGE_EXTENT_CACHE,	/* indicates age extent cache */
+	INMEM_PAGES,	/* indicates inmemory pages */
 	DISCARD_CACHE,	/* indicates memory of cached discard cmds */
 	COMPRESS_PAGE,	/* indicates memory of cached compressed pages */
 	BASE_CHECK,	/* check kernel status */
@@ -222,7 +228,7 @@ static inline pgoff_t next_nat_addr(struct f2fs_sb_info *sbi,
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 
 	block_addr -= nm_i->nat_blkaddr;
-	block_addr ^= BIT(sbi->log_blocks_per_seg);
+	block_addr ^= 1 << sbi->log_blocks_per_seg;
 	return block_addr + nm_i->nat_blkaddr;
 }
 
@@ -392,7 +398,7 @@ static inline nid_t get_nid(struct page *p, int off, bool i)
 static inline int is_node(struct page *page, int type)
 {
 	struct f2fs_node *rn = F2FS_NODE(page);
-	return le32_to_cpu(rn->footer.flag) & BIT(type);
+	return le32_to_cpu(rn->footer.flag) & (1 << type);
 }
 
 #define is_cold_node(page)	is_node(page, COLD_BIT_SHIFT)
@@ -405,9 +411,9 @@ static inline void set_cold_node(struct page *page, bool is_dir)
 	unsigned int flag = le32_to_cpu(rn->footer.flag);
 
 	if (is_dir)
-		flag &= ~BIT(COLD_BIT_SHIFT);
+		flag &= ~(0x1 << COLD_BIT_SHIFT);
 	else
-		flag |= BIT(COLD_BIT_SHIFT);
+		flag |= (0x1 << COLD_BIT_SHIFT);
 	rn->footer.flag = cpu_to_le32(flag);
 }
 
@@ -416,9 +422,9 @@ static inline void set_mark(struct page *page, int mark, int type)
 	struct f2fs_node *rn = F2FS_NODE(page);
 	unsigned int flag = le32_to_cpu(rn->footer.flag);
 	if (mark)
-		flag |= BIT(type);
+		flag |= (0x1 << type);
 	else
-		flag &= ~BIT(type);
+		flag &= ~(0x1 << type);
 	rn->footer.flag = cpu_to_le32(flag);
 
 #ifdef CONFIG_F2FS_CHECK_FS

@@ -559,7 +559,7 @@ static int xlp9xx_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void xlp9xx_i2c_remove(struct platform_device *pdev)
+static int xlp9xx_i2c_remove(struct platform_device *pdev)
 {
 	struct xlp9xx_i2c_dev *priv;
 
@@ -568,7 +568,15 @@ static void xlp9xx_i2c_remove(struct platform_device *pdev)
 	synchronize_irq(priv->irq);
 	i2c_del_adapter(&priv->adapter);
 	xlp9xx_write_i2c_reg(priv, XLP9XX_I2C_CTRL, 0);
+
+	return 0;
 }
+
+static const struct of_device_id xlp9xx_i2c_of_match[] = {
+	{ .compatible = "netlogic,xlp980-i2c", },
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, xlp9xx_i2c_of_match);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id xlp9xx_i2c_acpi_ids[] = {
@@ -581,9 +589,10 @@ MODULE_DEVICE_TABLE(acpi, xlp9xx_i2c_acpi_ids);
 
 static struct platform_driver xlp9xx_i2c_driver = {
 	.probe = xlp9xx_i2c_probe,
-	.remove_new = xlp9xx_i2c_remove,
+	.remove = xlp9xx_i2c_remove,
 	.driver = {
 		.name = "xlp9xx-i2c",
+		.of_match_table = xlp9xx_i2c_of_match,
 		.acpi_match_table = ACPI_PTR(xlp9xx_i2c_acpi_ids),
 	},
 };

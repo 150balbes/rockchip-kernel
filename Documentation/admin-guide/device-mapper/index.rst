@@ -13,7 +13,6 @@ Device Mapper
     dm-dust
     dm-ebs
     dm-flakey
-    dm-ima
     dm-init
     dm-integrity
     dm-io

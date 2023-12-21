@@ -13,6 +13,8 @@ MODULE_AUTHOR("Bob Pearson, Frank Zago, John Groves, Kamal Heib");
 MODULE_DESCRIPTION("Soft RDMA transport");
 MODULE_LICENSE("Dual BSD/GPL");
 
+bool rxe_initialized;
+
 /* free resources for a rxe device all objects created for this device must
  * have been destroyed
  */
@@ -28,8 +30,8 @@ void rxe_dealloc(struct ib_device *ib_dev)
 	rxe_pool_cleanup(&rxe->cq_pool);
 	rxe_pool_cleanup(&rxe->mr_pool);
 	rxe_pool_cleanup(&rxe->mw_pool);
-
-	WARN_ON(!RB_EMPTY_ROOT(&rxe->mcg_tree));
+	rxe_pool_cleanup(&rxe->mc_grp_pool);
+	rxe_pool_cleanup(&rxe->mc_elem_pool);
 
 	if (rxe->tfm)
 		crypto_free_shash(rxe->tfm);
@@ -46,14 +48,12 @@ static void rxe_init_device_param(struct rxe_dev *rxe)
 	rxe->attr.max_qp			= RXE_MAX_QP;
 	rxe->attr.max_qp_wr			= RXE_MAX_QP_WR;
 	rxe->attr.device_cap_flags		= RXE_DEVICE_CAP_FLAGS;
-	rxe->attr.kernel_cap_flags		= IBK_ALLOW_USER_UNREG;
 	rxe->attr.max_send_sge			= RXE_MAX_SGE;
 	rxe->attr.max_recv_sge			= RXE_MAX_SGE;
 	rxe->attr.max_sge_rd			= RXE_MAX_SGE_RD;
 	rxe->attr.max_cq			= RXE_MAX_CQ;
 	rxe->attr.max_cqe			= (1 << RXE_MAX_LOG_CQE) - 1;
 	rxe->attr.max_mr			= RXE_MAX_MR;
-	rxe->attr.max_mw			= RXE_MAX_MW;
 	rxe->attr.max_pd			= RXE_MAX_PD;
 	rxe->attr.max_qp_rd_atom		= RXE_MAX_QP_RD_ATOM;
 	rxe->attr.max_res_rd_atom		= RXE_MAX_RES_RD_ATOM;
@@ -115,37 +115,106 @@ static void rxe_init_ports(struct rxe_dev *rxe)
 }
 
 /* init pools of managed objects */
-static void rxe_init_pools(struct rxe_dev *rxe)
+static int rxe_init_pools(struct rxe_dev *rxe)
 {
-	rxe_pool_init(rxe, &rxe->uc_pool, RXE_TYPE_UC);
-	rxe_pool_init(rxe, &rxe->pd_pool, RXE_TYPE_PD);
-	rxe_pool_init(rxe, &rxe->ah_pool, RXE_TYPE_AH);
-	rxe_pool_init(rxe, &rxe->srq_pool, RXE_TYPE_SRQ);
-	rxe_pool_init(rxe, &rxe->qp_pool, RXE_TYPE_QP);
-	rxe_pool_init(rxe, &rxe->cq_pool, RXE_TYPE_CQ);
-	rxe_pool_init(rxe, &rxe->mr_pool, RXE_TYPE_MR);
-	rxe_pool_init(rxe, &rxe->mw_pool, RXE_TYPE_MW);
+	int err;
+
+	err = rxe_pool_init(rxe, &rxe->uc_pool, RXE_TYPE_UC,
+			    rxe->max_ucontext);
+	if (err)
+		goto err1;
+
+	err = rxe_pool_init(rxe, &rxe->pd_pool, RXE_TYPE_PD,
+			    rxe->attr.max_pd);
+	if (err)
+		goto err2;
+
+	err = rxe_pool_init(rxe, &rxe->ah_pool, RXE_TYPE_AH,
+			    rxe->attr.max_ah);
+	if (err)
+		goto err3;
+
+	err = rxe_pool_init(rxe, &rxe->srq_pool, RXE_TYPE_SRQ,
+			    rxe->attr.max_srq);
+	if (err)
+		goto err4;
+
+	err = rxe_pool_init(rxe, &rxe->qp_pool, RXE_TYPE_QP,
+			    rxe->attr.max_qp);
+	if (err)
+		goto err5;
+
+	err = rxe_pool_init(rxe, &rxe->cq_pool, RXE_TYPE_CQ,
+			    rxe->attr.max_cq);
+	if (err)
+		goto err6;
+
+	err = rxe_pool_init(rxe, &rxe->mr_pool, RXE_TYPE_MR,
+			    rxe->attr.max_mr);
+	if (err)
+		goto err7;
+
+	err = rxe_pool_init(rxe, &rxe->mw_pool, RXE_TYPE_MW,
+			    rxe->attr.max_mw);
+	if (err)
+		goto err8;
+
+	err = rxe_pool_init(rxe, &rxe->mc_grp_pool, RXE_TYPE_MC_GRP,
+			    rxe->attr.max_mcast_grp);
+	if (err)
+		goto err9;
+
+	err = rxe_pool_init(rxe, &rxe->mc_elem_pool, RXE_TYPE_MC_ELEM,
+			    rxe->attr.max_total_mcast_qp_attach);
+	if (err)
+		goto err10;
+
+	return 0;
+
+err10:
+	rxe_pool_cleanup(&rxe->mc_grp_pool);
+err9:
+	rxe_pool_cleanup(&rxe->mw_pool);
+err8:
+	rxe_pool_cleanup(&rxe->mr_pool);
+err7:
+	rxe_pool_cleanup(&rxe->cq_pool);
+err6:
+	rxe_pool_cleanup(&rxe->qp_pool);
+err5:
+	rxe_pool_cleanup(&rxe->srq_pool);
+err4:
+	rxe_pool_cleanup(&rxe->ah_pool);
+err3:
+	rxe_pool_cleanup(&rxe->pd_pool);
+err2:
+	rxe_pool_cleanup(&rxe->uc_pool);
+err1:
+	return err;
 }
 
 /* initialize rxe device state */
-static void rxe_init(struct rxe_dev *rxe)
+static int rxe_init(struct rxe_dev *rxe)
 {
+	int err;
+
 	/* init default device parameters */
 	rxe_init_device_param(rxe);
 
 	rxe_init_ports(rxe);
-	rxe_init_pools(rxe);
+
+	err = rxe_init_pools(rxe);
+	if (err)
+		return err;
 
 	/* init pending mmap list */
 	spin_lock_init(&rxe->mmap_offset_lock);
 	spin_lock_init(&rxe->pending_lock);
 	INIT_LIST_HEAD(&rxe->pending_mmaps);
 
-	/* init multicast support */
-	spin_lock_init(&rxe->mcg_lock);
-	rxe->mcg_tree = RB_ROOT;
-
 	mutex_init(&rxe->usdev_lock);
+
+	return 0;
 }
 
 void rxe_set_mtu(struct rxe_dev *rxe, unsigned int ndev_mtu)
@@ -160,8 +229,6 @@ void rxe_set_mtu(struct rxe_dev *rxe, unsigned int ndev_mtu)
 
 	port->attr.active_mtu = mtu;
 	port->mtu_cap = ib_mtu_enum_to_int(mtu);
-
-	rxe_info_dev(rxe, "Set mtu to %d", port->mtu_cap);
 }
 
 /* called by ifc layer to create new rxe device.
@@ -169,7 +236,12 @@ void rxe_set_mtu(struct rxe_dev *rxe, unsigned int ndev_mtu)
  */
 int rxe_add(struct rxe_dev *rxe, unsigned int mtu, const char *ibdev_name)
 {
-	rxe_init(rxe);
+	int err;
+
+	err = rxe_init(rxe);
+	if (err)
+		return err;
+
 	rxe_set_mtu(rxe, mtu);
 
 	return rxe_register_device(rxe, ibdev_name);
@@ -177,26 +249,26 @@ int rxe_add(struct rxe_dev *rxe, unsigned int mtu, const char *ibdev_name)
 
 static int rxe_newlink(const char *ibdev_name, struct net_device *ndev)
 {
-	struct rxe_dev *rxe;
+	struct rxe_dev *exists;
 	int err = 0;
 
 	if (is_vlan_dev(ndev)) {
-		rxe_err("rxe creation allowed on top of a real device only");
+		pr_err("rxe creation allowed on top of a real device only\n");
 		err = -EPERM;
 		goto err;
 	}
 
-	rxe = rxe_get_dev_from_net(ndev);
-	if (rxe) {
-		ib_device_put(&rxe->ib_dev);
-		rxe_err_dev(rxe, "already configured on %s", ndev->name);
+	exists = rxe_get_dev_from_net(ndev);
+	if (exists) {
+		ib_device_put(&exists->ib_dev);
+		pr_err("already configured on %s\n", ndev->name);
 		err = -EEXIST;
 		goto err;
 	}
 
 	err = rxe_net_add(ibdev_name, ndev);
 	if (err) {
-		rxe_err("failed to add %s\n", ndev->name);
+		pr_err("failed to add %s\n", ndev->name);
 		goto err;
 	}
 err:
@@ -212,17 +284,12 @@ static int __init rxe_module_init(void)
 {
 	int err;
 
-	err = rxe_alloc_wq();
+	err = rxe_net_init();
 	if (err)
 		return err;
 
-	err = rxe_net_init();
-	if (err) {
-		rxe_destroy_wq();
-		return err;
-	}
-
 	rdma_link_register(&rxe_link_ops);
+	rxe_initialized = true;
 	pr_info("loaded\n");
 	return 0;
 }
@@ -232,8 +299,8 @@ static void __exit rxe_module_exit(void)
 	rdma_link_unregister(&rxe_link_ops);
 	ib_unregister_driver(RDMA_DRIVER_RXE);
 	rxe_net_exit();
-	rxe_destroy_wq();
 
+	rxe_initialized = false;
 	pr_info("unloaded\n");
 }
 

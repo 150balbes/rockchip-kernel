@@ -110,7 +110,7 @@ static void pdr_locator_del_server(struct qmi_handle *qmi,
 	pdr->locator_addr.sq_port = 0;
 }
 
-static const struct qmi_ops pdr_locator_ops = {
+static struct qmi_ops pdr_locator_ops = {
 	.new_server = pdr_locator_new_server,
 	.del_server = pdr_locator_del_server,
 };
@@ -131,7 +131,7 @@ static int pdr_register_listener(struct pdr_handle *pdr,
 		return ret;
 
 	req.enable = enable;
-	strscpy(req.service_path, pds->service_path, sizeof(req.service_path));
+	strcpy(req.service_path, pds->service_path);
 
 	ret = qmi_send_request(&pdr->notifier_hdl, &pds->addr,
 			       &txn, SERVREG_REGISTER_LISTENER_REQ,
@@ -238,7 +238,7 @@ static void pdr_notifier_del_server(struct qmi_handle *qmi,
 	mutex_unlock(&pdr->list_lock);
 }
 
-static const struct qmi_ops pdr_notifier_ops = {
+static struct qmi_ops pdr_notifier_ops = {
 	.new_server = pdr_notifier_new_server,
 	.del_server = pdr_notifier_del_server,
 };
@@ -257,7 +257,7 @@ static int pdr_send_indack_msg(struct pdr_handle *pdr, struct pdr_service *pds,
 		return ret;
 
 	req.transaction_id = tid;
-	strscpy(req.service_path, pds->service_path, sizeof(req.service_path));
+	strcpy(req.service_path, pds->service_path);
 
 	ret = qmi_send_request(&pdr->notifier_hdl, &pds->addr,
 			       &txn, SERVREG_SET_ACK_REQ,
@@ -304,23 +304,24 @@ static void pdr_indication_cb(struct qmi_handle *qmi,
 					      notifier_hdl);
 	const struct servreg_state_updated_ind *ind_msg = data;
 	struct pdr_list_node *ind;
-	struct pdr_service *pds = NULL, *iter;
+	struct pdr_service *pds;
+	bool found = false;
 
 	if (!ind_msg || !ind_msg->service_path[0] ||
 	    strlen(ind_msg->service_path) > SERVREG_NAME_LENGTH)
 		return;
 
 	mutex_lock(&pdr->list_lock);
-	list_for_each_entry(iter, &pdr->lookups, node) {
-		if (strcmp(iter->service_path, ind_msg->service_path))
+	list_for_each_entry(pds, &pdr->lookups, node) {
+		if (strcmp(pds->service_path, ind_msg->service_path))
 			continue;
 
-		pds = iter;
+		found = true;
 		break;
 	}
 	mutex_unlock(&pdr->list_lock);
 
-	if (!pds)
+	if (!found)
 		return;
 
 	pr_info("PDR: Indication received from %s, state: 0x%x, trans-id: %d\n",
@@ -342,7 +343,7 @@ static void pdr_indication_cb(struct qmi_handle *qmi,
 	queue_work(pdr->indack_wq, &pdr->indack_work);
 }
 
-static const struct qmi_msg_handler qmi_indication_handler[] = {
+static struct qmi_msg_handler qmi_indication_handler[] = {
 	{
 		.type = QMI_INDICATION,
 		.msg_id = SERVREG_STATE_UPDATED_IND_ID,
@@ -405,7 +406,7 @@ static int pdr_locate_service(struct pdr_handle *pdr, struct pdr_service *pds)
 		return -ENOMEM;
 
 	/* Prepare req message */
-	strscpy(req.service_name, pds->service_name, sizeof(req.service_name));
+	strcpy(req.service_name, pds->service_name);
 	req.domain_offset_valid = true;
 	req.domain_offset = 0;
 
@@ -530,8 +531,8 @@ struct pdr_service *pdr_add_lookup(struct pdr_handle *pdr,
 		return ERR_PTR(-ENOMEM);
 
 	pds->service = SERVREG_NOTIFIER_SERVICE;
-	strscpy(pds->service_name, service_name, sizeof(pds->service_name));
-	strscpy(pds->service_path, service_path, sizeof(pds->service_path));
+	strcpy(pds->service_name, service_name);
+	strcpy(pds->service_path, service_path);
 	pds->need_locator_lookup = true;
 
 	mutex_lock(&pdr->list_lock);
@@ -586,7 +587,7 @@ int pdr_restart_pd(struct pdr_handle *pdr, struct pdr_service *pds)
 			break;
 
 		/* Prepare req message */
-		strscpy(req.service_path, pds->service_path, sizeof(req.service_path));
+		strcpy(req.service_path, pds->service_path);
 		addr = pds->addr;
 		break;
 	}

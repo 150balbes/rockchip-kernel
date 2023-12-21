@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Sensortek STK3310/STK3311 Ambient Light and Proximity Sensor
  *
  * Copyright (c) 2015, Intel Corporation.
@@ -106,7 +106,6 @@ struct stk3310_data {
 	struct mutex lock;
 	bool als_enabled;
 	bool ps_enabled;
-	uint32_t ps_near_level;
 	u64 timestamp;
 	struct regmap *regmap;
 	struct regmap_field *reg_state;
@@ -136,25 +135,6 @@ static const struct iio_event_spec stk3310_events[] = {
 	},
 };
 
-static ssize_t stk3310_read_near_level(struct iio_dev *indio_dev,
-				       uintptr_t priv,
-				       const struct iio_chan_spec *chan,
-				       char *buf)
-{
-	struct stk3310_data *data = iio_priv(indio_dev);
-
-	return sprintf(buf, "%u\n", data->ps_near_level);
-}
-
-static const struct iio_chan_spec_ext_info stk3310_ext_info[] = {
-	{
-		.name = "nearlevel",
-		.shared = IIO_SEPARATE,
-		.read = stk3310_read_near_level,
-	},
-	{ /* sentinel */ }
-};
-
 static const struct iio_chan_spec stk3310_channels[] = {
 	{
 		.type = IIO_LIGHT,
@@ -171,7 +151,6 @@ static const struct iio_chan_spec stk3310_channels[] = {
 			BIT(IIO_CHAN_INFO_INT_TIME),
 		.event_spec = stk3310_events,
 		.num_event_specs = ARRAY_SIZE(stk3310_events),
-		.ext_info = stk3310_ext_info,
 	}
 };
 
@@ -586,7 +565,8 @@ out:
 	return IRQ_HANDLED;
 }
 
-static int stk3310_probe(struct i2c_client *client)
+static int stk3310_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -601,10 +581,6 @@ static int stk3310_probe(struct i2c_client *client)
 	data = iio_priv(indio_dev);
 	data->client = client;
 	i2c_set_clientdata(client, indio_dev);
-
-	device_property_read_u32(&client->dev, "proximity-near-level",
-				 &data->ps_near_level);
-
 	mutex_init(&data->lock);
 
 	ret = stk3310_regmap_init(data);
@@ -648,14 +624,15 @@ err_standby:
 	return ret;
 }
 
-static void stk3310_remove(struct i2c_client *client)
+static int stk3310_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
 	iio_device_unregister(indio_dev);
-	stk3310_set_state(iio_priv(indio_dev), STK3310_STATE_STANDBY);
+	return stk3310_set_state(iio_priv(indio_dev), STK3310_STATE_STANDBY);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int stk3310_suspend(struct device *dev)
 {
 	struct stk3310_data *data;
@@ -679,8 +656,12 @@ static int stk3310_resume(struct device *dev)
 	return stk3310_set_state(data, state);
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(stk3310_pm_ops, stk3310_suspend,
-				stk3310_resume);
+static SIMPLE_DEV_PM_OPS(stk3310_pm_ops, stk3310_suspend, stk3310_resume);
+
+#define STK3310_PM_OPS (&stk3310_pm_ops)
+#else
+#define STK3310_PM_OPS NULL
+#endif
 
 static const struct i2c_device_id stk3310_i2c_id[] = {
 	{"STK3310", 0},
@@ -711,10 +692,10 @@ static struct i2c_driver stk3310_driver = {
 	.driver = {
 		.name = "stk3310",
 		.of_match_table = stk3310_of_match,
-		.pm = pm_sleep_ptr(&stk3310_pm_ops),
+		.pm = STK3310_PM_OPS,
 		.acpi_match_table = ACPI_PTR(stk3310_acpi_id),
 	},
-	.probe =        stk3310_probe,
+	.probe =            stk3310_probe,
 	.remove =           stk3310_remove,
 	.id_table =         stk3310_i2c_id,
 };

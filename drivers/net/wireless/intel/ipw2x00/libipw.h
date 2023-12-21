@@ -405,7 +405,7 @@ struct libipw_auth {
 	__le16 transaction;
 	__le16 status;
 	/* challenge */
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 struct libipw_channel_switch {
@@ -423,6 +423,7 @@ struct libipw_action {
 	union {
 		struct libipw_action_exchange {
 			u8 token;
+			struct libipw_info_element info_element[0];
 		} exchange;
 		struct libipw_channel_switch channel_switch;
 
@@ -440,7 +441,7 @@ struct libipw_disassoc {
 struct libipw_probe_request {
 	struct libipw_hdr_3addr header;
 	/* SSID, supported rates */
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 struct libipw_probe_response {
@@ -450,7 +451,7 @@ struct libipw_probe_response {
 	__le16 capability;
 	/* SSID, supported rates, FH params, DS params,
 	 * CF params, IBSS params, TIM (if beacon), RSN */
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 /* Alias beacon for probe_response */
@@ -461,7 +462,7 @@ struct libipw_assoc_request {
 	__le16 capability;
 	__le16 listen_interval;
 	/* SSID, supported rates, RSN */
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 struct libipw_reassoc_request {
@@ -469,7 +470,7 @@ struct libipw_reassoc_request {
 	__le16 capability;
 	__le16 listen_interval;
 	u8 current_ap[ETH_ALEN];
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 struct libipw_assoc_response {
@@ -478,7 +479,7 @@ struct libipw_assoc_response {
 	__le16 status;
 	__le16 aid;
 	/* supported rates */
-	u8 variable[];
+	struct libipw_info_element info_element[];
 } __packed;
 
 struct libipw_txb {

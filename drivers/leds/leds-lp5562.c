@@ -511,7 +511,8 @@ static struct lp55xx_device_config lp5562_cfg = {
 	.dev_attr_group     = &lp5562_group,
 };
 
-static int lp5562_probe(struct i2c_client *client)
+static int lp5562_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct lp55xx_chip *chip;
@@ -572,7 +573,7 @@ err_init:
 	return ret;
 }
 
-static void lp5562_remove(struct i2c_client *client)
+static int lp5562_remove(struct i2c_client *client)
 {
 	struct lp55xx_led *led = i2c_get_clientdata(client);
 	struct lp55xx_chip *chip = led->chip;
@@ -581,6 +582,8 @@ static void lp5562_remove(struct i2c_client *client)
 
 	lp55xx_unregister_sysfs(chip);
 	lp55xx_deinit_device(chip);
+
+	return 0;
 }
 
 static const struct i2c_device_id lp5562_id[] = {

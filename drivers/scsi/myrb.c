@@ -82,7 +82,7 @@ static const char *myrb_raidlevel_name(enum myrb_raidlevel level)
 	return NULL;
 }
 
-/*
+/**
  * myrb_create_mempools - allocates auxiliary data structures
  *
  * Return: true on success, false otherwise.
@@ -134,7 +134,7 @@ static bool myrb_create_mempools(struct pci_dev *pdev, struct myrb_hba *cb)
 	return true;
 }
 
-/*
+/**
  * myrb_destroy_mempools - tears down the memory pools for the controller
  */
 static void myrb_destroy_mempools(struct myrb_hba *cb)
@@ -146,7 +146,7 @@ static void myrb_destroy_mempools(struct myrb_hba *cb)
 	dma_pool_destroy(cb->dcdb_pool);
 }
 
-/*
+/**
  * myrb_reset_cmd - reset command block
  */
 static inline void myrb_reset_cmd(struct myrb_cmdblk *cmd_blk)
@@ -157,7 +157,7 @@ static inline void myrb_reset_cmd(struct myrb_cmdblk *cmd_blk)
 	cmd_blk->status = 0;
 }
 
-/*
+/**
  * myrb_qcmd - queues command block for execution
  */
 static void myrb_qcmd(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk)
@@ -177,7 +177,7 @@ static void myrb_qcmd(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk)
 	cb->next_cmd_mbox = next_mbox;
 }
 
-/*
+/**
  * myrb_exec_cmd - executes command block and waits for completion.
  *
  * Return: command status
@@ -194,11 +194,12 @@ static unsigned short myrb_exec_cmd(struct myrb_hba *cb,
 	cb->qcmd(cb, cmd_blk);
 	spin_unlock_irqrestore(&cb->queue_lock, flags);
 
+	WARN_ON(in_interrupt());
 	wait_for_completion(&cmpl);
 	return cmd_blk->status;
 }
 
-/*
+/**
  * myrb_exec_type3 - executes a type 3 command and waits for completion.
  *
  * Return: command status
@@ -220,7 +221,7 @@ static unsigned short myrb_exec_type3(struct myrb_hba *cb,
 	return status;
 }
 
-/*
+/**
  * myrb_exec_type3D - executes a type 3D command and waits for completion.
  *
  * Return: command status
@@ -332,7 +333,7 @@ static void myrb_get_event(struct myrb_hba *cb, unsigned int event)
 			  ev_buf, ev_addr);
 }
 
-/*
+/**
  * myrb_get_errtable - retrieves the error table from the controller
  *
  * Executes a type 3 command and logs the error table from the controller.
@@ -377,7 +378,7 @@ static void myrb_get_errtable(struct myrb_hba *cb)
 	}
 }
 
-/*
+/**
  * myrb_get_ldev_info - retrieves the logical device table from the controller
  *
  * Executes a type 3 command and updates the logical device table.
@@ -427,7 +428,7 @@ static unsigned short myrb_get_ldev_info(struct myrb_hba *cb)
 	return status;
 }
 
-/*
+/**
  * myrb_get_rbld_progress - get rebuild progress information
  *
  * Executes a type 3 command and returns the rebuild progress
@@ -462,10 +463,11 @@ static unsigned short myrb_get_rbld_progress(struct myrb_hba *cb,
 	return status;
 }
 
-/*
+/**
  * myrb_update_rbld_progress - updates the rebuild status
  *
  * Updates the rebuild status for the attached logical devices.
+ *
  */
 static void myrb_update_rbld_progress(struct myrb_hba *cb)
 {
@@ -522,7 +524,7 @@ static void myrb_update_rbld_progress(struct myrb_hba *cb)
 	cb->last_rbld_status = status;
 }
 
-/*
+/**
  * myrb_get_cc_progress - retrieve the rebuild status
  *
  * Execute a type 3 Command and fetch the rebuild / consistency check
@@ -570,7 +572,7 @@ static void myrb_get_cc_progress(struct myrb_hba *cb)
 			  rbld_buf, rbld_addr);
 }
 
-/*
+/**
  * myrb_bgi_control - updates background initialisation status
  *
  * Executes a type 3B command and updates the background initialisation status
@@ -659,7 +661,7 @@ static void myrb_bgi_control(struct myrb_hba *cb)
 			  bgi, bgi_addr);
 }
 
-/*
+/**
  * myrb_hba_enquiry - updates the controller status
  *
  * Executes a DAC_V1_Enquiry command and updates the controller status.
@@ -771,7 +773,7 @@ static unsigned short myrb_hba_enquiry(struct myrb_hba *cb)
 	return MYRB_STATUS_SUCCESS;
 }
 
-/*
+/**
  * myrb_set_pdev_state - sets the device state for a physical device
  *
  * Return: command status
@@ -795,7 +797,7 @@ static unsigned short myrb_set_pdev_state(struct myrb_hba *cb,
 	return status;
 }
 
-/*
+/**
  * myrb_enable_mmio - enables the Memory Mailbox Interface
  *
  * PD and P controller types have no memory mailbox, but still need the
@@ -900,7 +902,7 @@ static bool myrb_enable_mmio(struct myrb_hba *cb, mbox_mmio_init_t mmio_init_fn)
 	return true;
 }
 
-/*
+/**
  * myrb_get_hba_config - reads the configuration information
  *
  * Reads the configuration information from the controller and
@@ -1192,7 +1194,7 @@ out_free:
 	return ret;
 }
 
-/*
+/**
  * myrb_unmap - unmaps controller structures
  */
 static void myrb_unmap(struct myrb_hba *cb)
@@ -1228,7 +1230,7 @@ static void myrb_unmap(struct myrb_hba *cb)
 	}
 }
 
-/*
+/**
  * myrb_cleanup - cleanup controller structures
  */
 static void myrb_cleanup(struct myrb_hba *cb)
@@ -1264,7 +1266,6 @@ static int myrb_host_reset(struct scsi_cmnd *scmd)
 static int myrb_pthru_queuecommand(struct Scsi_Host *shost,
 		struct scsi_cmnd *scmd)
 {
-	struct request *rq = scsi_cmd_to_rq(scmd);
 	struct myrb_hba *cb = shost_priv(shost);
 	struct myrb_cmdblk *cmd_blk = scsi_cmd_priv(scmd);
 	union myrb_cmd_mbox *mbox = &cmd_blk->mbox;
@@ -1283,12 +1284,12 @@ static int myrb_pthru_queuecommand(struct Scsi_Host *shost,
 	if (nsge > 1) {
 		dma_pool_free(cb->dcdb_pool, dcdb, dcdb_addr);
 		scmd->result = (DID_ERROR << 16);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	}
 
 	mbox->type3.opcode = MYRB_CMD_DCDB;
-	mbox->type3.id = rq->tag + 3;
+	mbox->type3.id = scmd->request->tag + 3;
 	mbox->type3.addr = dcdb_addr;
 	dcdb->channel = sdev->channel;
 	dcdb->target = sdev->id;
@@ -1307,11 +1308,11 @@ static int myrb_pthru_queuecommand(struct Scsi_Host *shost,
 		break;
 	}
 	dcdb->early_status = false;
-	if (rq->timeout <= 10)
+	if (scmd->request->timeout <= 10)
 		dcdb->timeout = MYRB_DCDB_TMO_10_SECS;
-	else if (rq->timeout <= 60)
+	else if (scmd->request->timeout <= 60)
 		dcdb->timeout = MYRB_DCDB_TMO_60_SECS;
-	else if (rq->timeout <= 600)
+	else if (scmd->request->timeout <= 600)
 		dcdb->timeout = MYRB_DCDB_TMO_10_MINS;
 	else
 		dcdb->timeout = MYRB_DCDB_TMO_24_HRS;
@@ -1399,7 +1400,8 @@ myrb_mode_sense(struct myrb_hba *cb, struct scsi_cmnd *scmd,
 static void myrb_request_sense(struct myrb_hba *cb,
 		struct scsi_cmnd *scmd)
 {
-	scsi_build_sense(scmd, 0, NO_SENSE, 0, 0);
+	scsi_build_sense_buffer(0, scmd->sense_buffer,
+				NO_SENSE, 0, 0);
 	scsi_sg_copy_from_buffer(scmd, scmd->sense_buffer,
 				 SCSI_SENSE_BUFFERSIZE);
 }
@@ -1437,56 +1439,68 @@ static int myrb_ldev_queuecommand(struct Scsi_Host *shost,
 		dev_dbg(&shost->shost_gendev, "ldev %u in state %x, skip\n",
 			sdev->id, ldev_info ? ldev_info->state : 0xff);
 		scmd->result = (DID_BAD_TARGET << 16);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	}
 	switch (scmd->cmnd[0]) {
 	case TEST_UNIT_READY:
 		scmd->result = (DID_OK << 16);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case INQUIRY:
 		if (scmd->cmnd[1] & 1) {
 			/* Illegal request, invalid field in CDB */
-			scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x24, 0);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						ILLEGAL_REQUEST, 0x24, 0);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
 		} else {
 			myrb_inquiry(cb, scmd);
 			scmd->result = (DID_OK << 16);
 		}
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case SYNCHRONIZE_CACHE:
 		scmd->result = (DID_OK << 16);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case MODE_SENSE:
 		if ((scmd->cmnd[2] & 0x3F) != 0x3F &&
 		    (scmd->cmnd[2] & 0x3F) != 0x08) {
 			/* Illegal request, invalid field in CDB */
-			scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x24, 0);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						ILLEGAL_REQUEST, 0x24, 0);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
 		} else {
 			myrb_mode_sense(cb, scmd, ldev_info);
 			scmd->result = (DID_OK << 16);
 		}
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case READ_CAPACITY:
 		if ((scmd->cmnd[1] & 1) ||
 		    (scmd->cmnd[8] & 1)) {
 			/* Illegal request, invalid field in CDB */
-			scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x24, 0);
-			scsi_done(scmd);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						ILLEGAL_REQUEST, 0x24, 0);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
+			scmd->scsi_done(scmd);
 			return 0;
 		}
 		lba = get_unaligned_be32(&scmd->cmnd[2]);
 		if (lba) {
 			/* Illegal request, invalid field in CDB */
-			scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x24, 0);
-			scsi_done(scmd);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						ILLEGAL_REQUEST, 0x24, 0);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
+			scmd->scsi_done(scmd);
 			return 0;
 		}
 		myrb_read_capacity(cb, scmd, ldev_info);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case REQUEST_SENSE:
 		myrb_request_sense(cb, scmd);
@@ -1495,18 +1509,24 @@ static int myrb_ldev_queuecommand(struct Scsi_Host *shost,
 	case SEND_DIAGNOSTIC:
 		if (scmd->cmnd[1] != 0x04) {
 			/* Illegal request, invalid field in CDB */
-			scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x24, 0);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						ILLEGAL_REQUEST, 0x24, 0);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
 		} else {
 			/* Assume good status */
 			scmd->result = (DID_OK << 16);
 		}
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	case READ_6:
 		if (ldev_info->state == MYRB_DEVICE_WO) {
 			/* Data protect, attempt to read invalid data */
-			scsi_build_sense(scmd, 0, DATA_PROTECT, 0x21, 0x06);
-			scsi_done(scmd);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						DATA_PROTECT, 0x21, 0x06);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
+			scmd->scsi_done(scmd);
 			return 0;
 		}
 		fallthrough;
@@ -1519,8 +1539,11 @@ static int myrb_ldev_queuecommand(struct Scsi_Host *shost,
 	case READ_10:
 		if (ldev_info->state == MYRB_DEVICE_WO) {
 			/* Data protect, attempt to read invalid data */
-			scsi_build_sense(scmd, 0, DATA_PROTECT, 0x21, 0x06);
-			scsi_done(scmd);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						DATA_PROTECT, 0x21, 0x06);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
+			scmd->scsi_done(scmd);
 			return 0;
 		}
 		fallthrough;
@@ -1533,8 +1556,11 @@ static int myrb_ldev_queuecommand(struct Scsi_Host *shost,
 	case READ_12:
 		if (ldev_info->state == MYRB_DEVICE_WO) {
 			/* Data protect, attempt to read invalid data */
-			scsi_build_sense(scmd, 0, DATA_PROTECT, 0x21, 0x06);
-			scsi_done(scmd);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						DATA_PROTECT, 0x21, 0x06);
+			scmd->result = (DRIVER_SENSE << 24) |
+				SAM_STAT_CHECK_CONDITION;
+			scmd->scsi_done(scmd);
 			return 0;
 		}
 		fallthrough;
@@ -1546,13 +1572,15 @@ static int myrb_ldev_queuecommand(struct Scsi_Host *shost,
 		break;
 	default:
 		/* Illegal request, invalid opcode */
-		scsi_build_sense(scmd, 0, ILLEGAL_REQUEST, 0x20, 0);
-		scsi_done(scmd);
+		scsi_build_sense_buffer(0, scmd->sense_buffer,
+					ILLEGAL_REQUEST, 0x20, 0);
+		scmd->result = (DRIVER_SENSE << 24) | SAM_STAT_CHECK_CONDITION;
+		scmd->scsi_done(scmd);
 		return 0;
 	}
 
 	myrb_reset_cmd(cmd_blk);
-	mbox->type5.id = scsi_cmd_to_rq(scmd)->tag + 3;
+	mbox->type5.id = scmd->request->tag + 3;
 	if (scmd->sc_data_direction == DMA_NONE)
 		goto submit;
 	nsge = scsi_dma_map(scmd);
@@ -1611,7 +1639,7 @@ static int myrb_queuecommand(struct Scsi_Host *shost,
 
 	if (sdev->channel > myrb_logical_channel(shost)) {
 		scmd->result = (DID_BAD_TARGET << 16);
-		scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		return 0;
 	}
 	if (sdev->channel == myrb_logical_channel(shost))
@@ -1675,7 +1703,7 @@ static int myrb_pdev_slave_alloc(struct scsi_device *sdev)
 	if (sdev->id > MYRB_MAX_TARGETS)
 		return -ENXIO;
 
-	pdev_info = kzalloc(sizeof(*pdev_info), GFP_KERNEL);
+	pdev_info = kzalloc(sizeof(*pdev_info), GFP_KERNEL|GFP_DMA);
 	if (!pdev_info)
 		return -ENOMEM;
 
@@ -2183,27 +2211,23 @@ static ssize_t flush_cache_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(flush_cache);
 
-static struct attribute *myrb_sdev_attrs[] = {
-	&dev_attr_rebuild.attr,
-	&dev_attr_consistency_check.attr,
-	&dev_attr_raid_state.attr,
-	&dev_attr_raid_level.attr,
+static struct device_attribute *myrb_sdev_attrs[] = {
+	&dev_attr_rebuild,
+	&dev_attr_consistency_check,
+	&dev_attr_raid_state,
+	&dev_attr_raid_level,
 	NULL,
 };
 
-ATTRIBUTE_GROUPS(myrb_sdev);
-
-static struct attribute *myrb_shost_attrs[] = {
-	&dev_attr_ctlr_num.attr,
-	&dev_attr_model.attr,
-	&dev_attr_firmware.attr,
-	&dev_attr_flush_cache.attr,
+static struct device_attribute *myrb_shost_attrs[] = {
+	&dev_attr_ctlr_num,
+	&dev_attr_model,
+	&dev_attr_firmware,
+	&dev_attr_flush_cache,
 	NULL,
 };
 
-ATTRIBUTE_GROUPS(myrb_shost);
-
-static const struct scsi_host_template myrb_template = {
+static struct scsi_host_template myrb_template = {
 	.module			= THIS_MODULE,
 	.name			= "DAC960",
 	.proc_name		= "myrb",
@@ -2214,14 +2238,14 @@ static const struct scsi_host_template myrb_template = {
 	.slave_destroy		= myrb_slave_destroy,
 	.bios_param		= myrb_biosparam,
 	.cmd_size		= sizeof(struct myrb_cmdblk),
-	.shost_groups		= myrb_shost_groups,
-	.sdev_groups		= myrb_sdev_groups,
+	.shost_attrs		= myrb_shost_attrs,
+	.sdev_attrs		= myrb_sdev_attrs,
 	.this_id		= -1,
 };
 
 /**
  * myrb_is_raid - return boolean indicating device is raid volume
- * @dev: the device struct object
+ * @dev the device struct object
  */
 static int myrb_is_raid(struct device *dev)
 {
@@ -2232,7 +2256,7 @@ static int myrb_is_raid(struct device *dev)
 
 /**
  * myrb_get_resync - get raid volume resync percent complete
- * @dev: the device struct object
+ * @dev the device struct object
  */
 static void myrb_get_resync(struct device *dev)
 {
@@ -2259,7 +2283,7 @@ static void myrb_get_resync(struct device *dev)
 
 /**
  * myrb_get_state - get raid volume status
- * @dev: the device struct object
+ * @dev the device struct object
  */
 static void myrb_get_state(struct device *dev)
 {
@@ -2331,19 +2355,25 @@ static void myrb_handle_scsi(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk,
 			"Bad Data Encountered\n");
 		if (scmd->sc_data_direction == DMA_FROM_DEVICE)
 			/* Unrecovered read error */
-			scsi_build_sense(scmd, 0, MEDIUM_ERROR, 0x11, 0);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						MEDIUM_ERROR, 0x11, 0);
 		else
 			/* Write error */
-			scsi_build_sense(scmd, 0, MEDIUM_ERROR, 0x0C, 0);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						MEDIUM_ERROR, 0x0C, 0);
+		scmd->result = (DID_OK << 16) | SAM_STAT_CHECK_CONDITION;
 		break;
 	case MYRB_STATUS_IRRECOVERABLE_DATA_ERROR:
 		scmd_printk(KERN_ERR, scmd, "Irrecoverable Data Error\n");
 		if (scmd->sc_data_direction == DMA_FROM_DEVICE)
 			/* Unrecovered read error, auto-reallocation failed */
-			scsi_build_sense(scmd, 0, MEDIUM_ERROR, 0x11, 0x04);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						MEDIUM_ERROR, 0x11, 0x04);
 		else
 			/* Write error, auto-reallocation failed */
-			scsi_build_sense(scmd, 0, MEDIUM_ERROR, 0x0C, 0x02);
+			scsi_build_sense_buffer(0, scmd->sense_buffer,
+						MEDIUM_ERROR, 0x0C, 0x02);
+		scmd->result = (DID_OK << 16) | SAM_STAT_CHECK_CONDITION;
 		break;
 	case MYRB_STATUS_LDRV_NONEXISTENT_OR_OFFLINE:
 		dev_dbg(&scmd->device->sdev_gendev,
@@ -2354,7 +2384,8 @@ static void myrb_handle_scsi(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk,
 		dev_dbg(&scmd->device->sdev_gendev,
 			    "Attempt to Access Beyond End of Logical Drive");
 		/* Logical block address out of range */
-		scsi_build_sense(scmd, 0, NOT_READY, 0x21, 0);
+		scsi_build_sense_buffer(0, scmd->sense_buffer,
+					NOT_READY, 0x21, 0);
 		break;
 	case MYRB_STATUS_DEVICE_NONRESPONSIVE:
 		dev_dbg(&scmd->device->sdev_gendev, "Device nonresponsive\n");
@@ -2366,7 +2397,7 @@ static void myrb_handle_scsi(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk,
 		scmd->result = (DID_ERROR << 16);
 		break;
 	}
-	scsi_done(scmd);
+	scmd->scsi_done(scmd);
 }
 
 static void myrb_handle_cmdblk(struct myrb_hba *cb, struct myrb_cmdblk *cmd_blk)
@@ -2451,7 +2482,7 @@ static void myrb_monitor(struct work_struct *work)
 	queue_delayed_work(cb->work_q, &cb->monitor_work, interval);
 }
 
-/*
+/**
  * myrb_err_status - reports controller BIOS messages
  *
  * Controller BIOS messages are passed through the Error Status Register
@@ -2524,6 +2555,11 @@ static inline void DAC960_LA_ack_hw_mbox_status(void __iomem *base)
 	writeb(DAC960_LA_IDB_HWMBOX_ACK_STS, base + DAC960_LA_IDB_OFFSET);
 }
 
+static inline void DAC960_LA_gen_intr(void __iomem *base)
+{
+	writeb(DAC960_LA_IDB_GEN_IRQ, base + DAC960_LA_IDB_OFFSET);
+}
+
 static inline void DAC960_LA_reset_ctrl(void __iomem *base)
 {
 	writeb(DAC960_LA_IDB_CTRL_RESET, base + DAC960_LA_IDB_OFFSET);
@@ -2553,6 +2589,11 @@ static inline void DAC960_LA_ack_hw_mbox_intr(void __iomem *base)
 	writeb(DAC960_LA_ODB_HWMBOX_ACK_IRQ, base + DAC960_LA_ODB_OFFSET);
 }
 
+static inline void DAC960_LA_ack_mem_mbox_intr(void __iomem *base)
+{
+	writeb(DAC960_LA_ODB_MMBOX_ACK_IRQ, base + DAC960_LA_ODB_OFFSET);
+}
+
 static inline void DAC960_LA_ack_intr(void __iomem *base)
 {
 	writeb(DAC960_LA_ODB_HWMBOX_ACK_IRQ | DAC960_LA_ODB_MMBOX_ACK_IRQ,
@@ -2564,6 +2605,13 @@ static inline bool DAC960_LA_hw_mbox_status_available(void __iomem *base)
 	unsigned char odb = readb(base + DAC960_LA_ODB_OFFSET);
 
 	return odb & DAC960_LA_ODB_HWMBOX_STS_AVAIL;
+}
+
+static inline bool DAC960_LA_mem_mbox_status_available(void __iomem *base)
+{
+	unsigned char odb = readb(base + DAC960_LA_ODB_OFFSET);
+
+	return odb & DAC960_LA_ODB_MMBOX_STS_AVAIL;
 }
 
 static inline void DAC960_LA_enable_intr(void __iomem *base)
@@ -2580,6 +2628,13 @@ static inline void DAC960_LA_disable_intr(void __iomem *base)
 
 	odb |= DAC960_LA_IRQMASK_DISABLE_IRQ;
 	writeb(odb, base + DAC960_LA_IRQMASK_OFFSET);
+}
+
+static inline bool DAC960_LA_intr_enabled(void __iomem *base)
+{
+	unsigned char imask = readb(base + DAC960_LA_IRQMASK_OFFSET);
+
+	return !(imask & DAC960_LA_IRQMASK_DISABLE_IRQ);
 }
 
 static inline void DAC960_LA_write_cmd_mbox(union myrb_cmd_mbox *mem_mbox,
@@ -2602,6 +2657,11 @@ static inline void DAC960_LA_write_hw_mbox(void __iomem *base,
 	writel(mbox->words[1], base + DAC960_LA_MBOX4_OFFSET);
 	writel(mbox->words[2], base + DAC960_LA_MBOX8_OFFSET);
 	writeb(mbox->bytes[12], base + DAC960_LA_MBOX12_OFFSET);
+}
+
+static inline unsigned char DAC960_LA_read_status_cmd_ident(void __iomem *base)
+{
+	return readb(base + DAC960_LA_STSID_OFFSET);
 }
 
 static inline unsigned short DAC960_LA_read_status(void __iomem *base)
@@ -2752,7 +2812,7 @@ static irqreturn_t DAC960_LA_intr_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static struct myrb_privdata DAC960_LA_privdata = {
+struct myrb_privdata DAC960_LA_privdata = {
 	.hw_init =	DAC960_LA_hw_init,
 	.irq_handler =	DAC960_LA_intr_handler,
 	.mmio_size =	DAC960_LA_mmio_size,
@@ -2769,6 +2829,11 @@ static inline void DAC960_PG_hw_mbox_new_cmd(void __iomem *base)
 static inline void DAC960_PG_ack_hw_mbox_status(void __iomem *base)
 {
 	writel(DAC960_PG_IDB_HWMBOX_ACK_STS, base + DAC960_PG_IDB_OFFSET);
+}
+
+static inline void DAC960_PG_gen_intr(void __iomem *base)
+{
+	writel(DAC960_PG_IDB_GEN_IRQ, base + DAC960_PG_IDB_OFFSET);
 }
 
 static inline void DAC960_PG_reset_ctrl(void __iomem *base)
@@ -2800,6 +2865,11 @@ static inline void DAC960_PG_ack_hw_mbox_intr(void __iomem *base)
 	writel(DAC960_PG_ODB_HWMBOX_ACK_IRQ, base + DAC960_PG_ODB_OFFSET);
 }
 
+static inline void DAC960_PG_ack_mem_mbox_intr(void __iomem *base)
+{
+	writel(DAC960_PG_ODB_MMBOX_ACK_IRQ, base + DAC960_PG_ODB_OFFSET);
+}
+
 static inline void DAC960_PG_ack_intr(void __iomem *base)
 {
 	writel(DAC960_PG_ODB_HWMBOX_ACK_IRQ | DAC960_PG_ODB_MMBOX_ACK_IRQ,
@@ -2811,6 +2881,13 @@ static inline bool DAC960_PG_hw_mbox_status_available(void __iomem *base)
 	unsigned char odb = readl(base + DAC960_PG_ODB_OFFSET);
 
 	return odb & DAC960_PG_ODB_HWMBOX_STS_AVAIL;
+}
+
+static inline bool DAC960_PG_mem_mbox_status_available(void __iomem *base)
+{
+	unsigned char odb = readl(base + DAC960_PG_ODB_OFFSET);
+
+	return odb & DAC960_PG_ODB_MMBOX_STS_AVAIL;
 }
 
 static inline void DAC960_PG_enable_intr(void __iomem *base)
@@ -2826,6 +2903,13 @@ static inline void DAC960_PG_disable_intr(void __iomem *base)
 	unsigned int imask = (unsigned int)-1;
 
 	writel(imask, base + DAC960_PG_IRQMASK_OFFSET);
+}
+
+static inline bool DAC960_PG_intr_enabled(void __iomem *base)
+{
+	unsigned int imask = readl(base + DAC960_PG_IRQMASK_OFFSET);
+
+	return !(imask & DAC960_PG_IRQMASK_DISABLE_IRQ);
 }
 
 static inline void DAC960_PG_write_cmd_mbox(union myrb_cmd_mbox *mem_mbox,
@@ -2848,6 +2932,12 @@ static inline void DAC960_PG_write_hw_mbox(void __iomem *base,
 	writel(mbox->words[1], base + DAC960_PG_MBOX4_OFFSET);
 	writel(mbox->words[2], base + DAC960_PG_MBOX8_OFFSET);
 	writeb(mbox->bytes[12], base + DAC960_PG_MBOX12_OFFSET);
+}
+
+static inline unsigned char
+DAC960_PG_read_status_cmd_ident(void __iomem *base)
+{
+	return readb(base + DAC960_PG_STSID_OFFSET);
 }
 
 static inline unsigned short
@@ -2998,7 +3088,7 @@ static irqreturn_t DAC960_PG_intr_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static struct myrb_privdata DAC960_PG_privdata = {
+struct myrb_privdata DAC960_PG_privdata = {
 	.hw_init =	DAC960_PG_hw_init,
 	.irq_handler =	DAC960_PG_intr_handler,
 	.mmio_size =	DAC960_PG_mmio_size,
@@ -3017,6 +3107,11 @@ static inline void DAC960_PD_hw_mbox_new_cmd(void __iomem *base)
 static inline void DAC960_PD_ack_hw_mbox_status(void __iomem *base)
 {
 	writeb(DAC960_PD_IDB_HWMBOX_ACK_STS, base + DAC960_PD_IDB_OFFSET);
+}
+
+static inline void DAC960_PD_gen_intr(void __iomem *base)
+{
+	writeb(DAC960_PD_IDB_GEN_IRQ, base + DAC960_PD_IDB_OFFSET);
 }
 
 static inline void DAC960_PD_reset_ctrl(void __iomem *base)
@@ -3058,6 +3153,13 @@ static inline void DAC960_PD_enable_intr(void __iomem *base)
 static inline void DAC960_PD_disable_intr(void __iomem *base)
 {
 	writeb(0, base + DAC960_PD_IRQEN_OFFSET);
+}
+
+static inline bool DAC960_PD_intr_enabled(void __iomem *base)
+{
+	unsigned char imask = readb(base + DAC960_PD_IRQEN_OFFSET);
+
+	return imask & DAC960_PD_IRQMASK_ENABLE_IRQ;
 }
 
 static inline void DAC960_PD_write_cmd_mbox(void __iomem *base,
@@ -3189,7 +3291,7 @@ static irqreturn_t DAC960_PD_intr_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static struct myrb_privdata DAC960_PD_privdata = {
+struct myrb_privdata DAC960_PD_privdata = {
 	.hw_init =	DAC960_PD_hw_init,
 	.irq_handler =	DAC960_PD_intr_handler,
 	.mmio_size =	DAC960_PD_mmio_size,
@@ -3387,7 +3489,7 @@ static irqreturn_t DAC960_P_intr_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static struct myrb_privdata DAC960_P_privdata = {
+struct myrb_privdata DAC960_P_privdata = {
 	.hw_init =	DAC960_P_hw_init,
 	.irq_handler =	DAC960_P_intr_handler,
 	.mmio_size =	DAC960_PD_mmio_size,

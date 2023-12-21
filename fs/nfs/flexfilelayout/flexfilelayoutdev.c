@@ -69,7 +69,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 	INIT_LIST_HEAD(&dsaddrs);
 
 	xdr_init_decode_pages(&stream, &buf, pdev->pages, pdev->pglen);
-	xdr_set_scratch_page(&stream, scratch);
+	xdr_set_scratch_buffer(&stream, page_address(scratch), PAGE_SIZE);
 
 	/* multipath count */
 	p = xdr_inline_decode(&stream, 4);
@@ -113,10 +113,8 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 			goto out_err_drain_dsaddrs;
 		ds_versions[i].version = be32_to_cpup(p++);
 		ds_versions[i].minor_version = be32_to_cpup(p++);
-		ds_versions[i].rsize = nfs_io_size(be32_to_cpup(p++),
-						   server->nfs_client->cl_proto);
-		ds_versions[i].wsize = nfs_io_size(be32_to_cpup(p++),
-						   server->nfs_client->cl_proto);
+		ds_versions[i].rsize = nfs_block_size(be32_to_cpup(p++), NULL);
+		ds_versions[i].wsize = nfs_block_size(be32_to_cpup(p++), NULL);
 		ds_versions[i].tightly_coupled = be32_to_cpup(p);
 
 		if (ds_versions[i].rsize > NFS_MAX_FILE_IO_SIZE)

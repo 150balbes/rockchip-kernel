@@ -48,7 +48,7 @@ TRACE_EVENT(rcu_utilization,
  * RCU flavor, the grace-period number, and a string identifying the
  * grace-period-related event as follows:
  *
- *	"AccReadyCB": CPU accelerates new callbacks to RCU_NEXT_READY_TAIL.
+ *	"AccReadyCB": CPU acclerates new callbacks to RCU_NEXT_READY_TAIL.
  *	"AccWaitCB": CPU accelerates new callbacks to RCU_WAIT_TAIL.
  *	"newreq": Request a new grace period.
  *	"start": Start a grace period.
@@ -278,7 +278,6 @@ TRACE_EVENT_RCU(rcu_exp_funnel_lock,
  * "WakeNot": Don't wake rcuo kthread.
  * "WakeNotPoll": Don't wake rcuo kthread because it is polling.
  * "WakeOvfIsDeferred": Wake rcuo kthread later, CB list is huge.
- * "WakeBypassIsDeferred": Wake rcuo kthread later, bypass list is contended.
  * "WokeEmpty": rcuo CB kthread woke to find empty list.
  */
 TRACE_EVENT_RCU(rcu_nocb_wake,
@@ -534,32 +533,6 @@ TRACE_EVENT_RCU(rcu_callback,
 		  __entry->qlen)
 );
 
-TRACE_EVENT_RCU(rcu_segcb_stats,
-
-		TP_PROTO(struct rcu_segcblist *rs, const char *ctx),
-
-		TP_ARGS(rs, ctx),
-
-		TP_STRUCT__entry(
-			__field(const char *, ctx)
-			__array(unsigned long, gp_seq, RCU_CBLIST_NSEGS)
-			__array(long, seglen, RCU_CBLIST_NSEGS)
-		),
-
-		TP_fast_assign(
-			__entry->ctx = ctx;
-			memcpy(__entry->seglen, rs->seglen, RCU_CBLIST_NSEGS * sizeof(long));
-			memcpy(__entry->gp_seq, rs->gp_seq, RCU_CBLIST_NSEGS * sizeof(unsigned long));
-
-		),
-
-		TP_printk("%s seglen: (DONE=%ld, WAIT=%ld, NEXT_READY=%ld, NEXT=%ld) "
-			  "gp_seq: (DONE=%lu, WAIT=%lu, NEXT_READY=%lu, NEXT=%lu)", __entry->ctx,
-			  __entry->seglen[0], __entry->seglen[1], __entry->seglen[2], __entry->seglen[3],
-			  __entry->gp_seq[0], __entry->gp_seq[1], __entry->gp_seq[2], __entry->gp_seq[3])
-
-);
-
 /*
  * Tracepoint for the registration of a single RCU callback of the special
  * kvfree() form.  The first argument is the RCU type, the second argument
@@ -768,7 +741,7 @@ TRACE_EVENT_RCU(rcu_torture_read,
 	TP_ARGS(rcutorturename, rhp, secs, c_old, c),
 
 	TP_STRUCT__entry(
-		__array(char, rcutorturename, RCUTORTURENAME_LEN)
+		__field(char, rcutorturename[RCUTORTURENAME_LEN])
 		__field(struct rcu_head *, rhp)
 		__field(unsigned long, secs)
 		__field(unsigned long, c_old)
@@ -776,7 +749,9 @@ TRACE_EVENT_RCU(rcu_torture_read,
 	),
 
 	TP_fast_assign(
-		strscpy(__entry->rcutorturename, rcutorturename, RCUTORTURENAME_LEN);
+		strncpy(__entry->rcutorturename, rcutorturename,
+			RCUTORTURENAME_LEN);
+		__entry->rcutorturename[RCUTORTURENAME_LEN - 1] = 0;
 		__entry->rhp = rhp;
 		__entry->secs = secs;
 		__entry->c_old = c_old;
@@ -792,15 +767,16 @@ TRACE_EVENT_RCU(rcu_torture_read,
  * Tracepoint for rcu_barrier() execution.  The string "s" describes
  * the rcu_barrier phase:
  *	"Begin": rcu_barrier() started.
- *	"CB": An rcu_barrier_callback() invoked a callback, not the last.
  *	"EarlyExit": rcu_barrier() piggybacked, thus early exit.
  *	"Inc1": rcu_barrier() piggyback check counter incremented.
- *	"Inc2": rcu_barrier() piggyback check counter incremented.
+ *	"OfflineNoCBQ": rcu_barrier() found offline no-CBs CPU with callbacks.
+ *	"OnlineQ": rcu_barrier() found online CPU with callbacks.
+ *	"OnlineNQ": rcu_barrier() found online CPU, no callbacks.
  *	"IRQ": An rcu_barrier_callback() callback posted on remote CPU.
  *	"IRQNQ": An rcu_barrier_callback() callback found no callbacks.
+ *	"CB": An rcu_barrier_callback() invoked a callback, not the last.
  *	"LastCB": An rcu_barrier_callback() invoked the last callback.
- *	"NQ": rcu_barrier() found a CPU with no callbacks.
- *	"OnlineQ": rcu_barrier() found online CPU with callbacks.
+ *	"Inc2": rcu_barrier() piggyback check counter incremented.
  * The "cpu" argument is the CPU or -1 if meaningless, the "cnt" argument
  * is the count of remaining callbacks, and "done" is the piggybacking count.
  */

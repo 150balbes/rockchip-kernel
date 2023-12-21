@@ -149,7 +149,6 @@ struct auth_keys {
 
 union fc_ctx_flags {
 	__be64 f;
-	u64 fu;
 	struct {
 #if defined(__BIG_ENDIAN_BITFIELD)
 		u64 cipher_type	: 4;
@@ -281,7 +280,6 @@ struct nitrox_rfc4106_rctx {
  *   - packet payload bytes
  */
 union pkt_instr_hdr {
-	__be64 bev;
 	u64 value;
 	struct {
 #if defined(__BIG_ENDIAN_BITFIELD)
@@ -326,7 +324,6 @@ union pkt_instr_hdr {
  * @ctxp: Context pointer. CTXP<63,2:0> must be zero in all cases.
  */
 union pkt_hdr {
-	__be64 bev[2];
 	u64 value[2];
 	struct {
 #if defined(__BIG_ENDIAN_BITFIELD)
@@ -373,7 +370,6 @@ union pkt_hdr {
  *        sglist components at [RPTR] on the remote host.
  */
 union slc_store_info {
-	__be64 bev[2];
 	u64 value[2];
 	struct {
 #if defined(__BIG_ENDIAN_BITFIELD)
@@ -440,7 +436,7 @@ struct aqmq_command_s {
 /**
  * struct ctx_hdr - Book keeping data about the crypto context
  * @pool: Pool used to allocate crypto context
- * @dma: Base DMA address of the crypto context
+ * @dma: Base DMA address of the cypto context
  * @ctx_dma: Actual usable crypto context for NITROX
  */
 struct ctx_hdr {

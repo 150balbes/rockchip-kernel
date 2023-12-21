@@ -280,7 +280,7 @@ nvkm_vmm_unref_ptes(struct nvkm_vmm_iter *it, bool pfn, u32 ptei, u32 ptes)
 	if (desc->type == SPT && (pgt->refs[0] || pgt->refs[1]))
 		nvkm_vmm_unref_sptes(it, pgt, desc, ptei, ptes);
 
-	/* PT no longer needed? Destroy it. */
+	/* PT no longer neeed?  Destroy it. */
 	if (!pgt->refs[type]) {
 		it->lvl++;
 		TRA(it, "%s empty", nvkm_vmm_desc_type(desc));
@@ -677,94 +677,20 @@ nvkm_vmm_ptes_sparse(struct nvkm_vmm *vmm, u64 addr, u64 size, bool ref)
 }
 
 static void
-nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-		    u64 addr, u64 size, bool sparse, bool pfn)
+nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+			u64 addr, u64 size, bool sparse, bool pfn)
 {
 	const struct nvkm_vmm_desc_func *func = page->desc->func;
-
-	mutex_lock(&vmm->mutex.map);
-	nvkm_vmm_iter(vmm, page, addr, size, "unmap", false, pfn,
-		      NULL, NULL, NULL,
-		      sparse ? func->sparse : func->invalid ? func->invalid :
-							      func->unmap);
-	mutex_unlock(&vmm->mutex.map);
-}
-
-static void
-nvkm_vmm_ptes_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-		  u64 addr, u64 size, struct nvkm_vmm_map *map,
-		  nvkm_vmm_pte_func func)
-{
-	mutex_lock(&vmm->mutex.map);
-	nvkm_vmm_iter(vmm, page, addr, size, "map", false, false,
-		      NULL, func, map, NULL);
-	mutex_unlock(&vmm->mutex.map);
-}
-
-static void
-nvkm_vmm_ptes_put_locked(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-			 u64 addr, u64 size)
-{
-	nvkm_vmm_iter(vmm, page, addr, size, "unref", false, false,
-		      nvkm_vmm_unref_ptes, NULL, NULL, NULL);
-}
-
-static void
-nvkm_vmm_ptes_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-		  u64 addr, u64 size)
-{
-	mutex_lock(&vmm->mutex.ref);
-	nvkm_vmm_ptes_put_locked(vmm, page, addr, size);
-	mutex_unlock(&vmm->mutex.ref);
-}
-
-static int
-nvkm_vmm_ptes_get(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-		  u64 addr, u64 size)
-{
-	u64 fail;
-
-	mutex_lock(&vmm->mutex.ref);
-	fail = nvkm_vmm_iter(vmm, page, addr, size, "ref", true, false,
-			     nvkm_vmm_ref_ptes, NULL, NULL, NULL);
-	if (fail != ~0ULL) {
-		if (fail != addr)
-			nvkm_vmm_ptes_put_locked(vmm, page, addr, fail - addr);
-		mutex_unlock(&vmm->mutex.ref);
-		return -ENOMEM;
-	}
-	mutex_unlock(&vmm->mutex.ref);
-	return 0;
-}
-
-static void
-__nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-			  u64 addr, u64 size, bool sparse, bool pfn)
-{
-	const struct nvkm_vmm_desc_func *func = page->desc->func;
-
 	nvkm_vmm_iter(vmm, page, addr, size, "unmap + unref",
 		      false, pfn, nvkm_vmm_unref_ptes, NULL, NULL,
 		      sparse ? func->sparse : func->invalid ? func->invalid :
 							      func->unmap);
 }
 
-static void
-nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-			u64 addr, u64 size, bool sparse, bool pfn)
-{
-	if (vmm->managed.raw) {
-		nvkm_vmm_ptes_unmap(vmm, page, addr, size, sparse, pfn);
-		nvkm_vmm_ptes_put(vmm, page, addr, size);
-	} else {
-		__nvkm_vmm_ptes_unmap_put(vmm, page, addr, size, sparse, pfn);
-	}
-}
-
 static int
-__nvkm_vmm_ptes_get_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-			u64 addr, u64 size, struct nvkm_vmm_map *map,
-			nvkm_vmm_pte_func func)
+nvkm_vmm_ptes_get_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+		      u64 addr, u64 size, struct nvkm_vmm_map *map,
+		      nvkm_vmm_pte_func func)
 {
 	u64 fail = nvkm_vmm_iter(vmm, page, addr, size, "ref + map", true,
 				 false, nvkm_vmm_ref_ptes, func, map, NULL);
@@ -776,27 +702,49 @@ __nvkm_vmm_ptes_get_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
 	return 0;
 }
 
-static int
-nvkm_vmm_ptes_get_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
-		      u64 addr, u64 size, struct nvkm_vmm_map *map,
-		      nvkm_vmm_pte_func func)
+static void
+nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+		    u64 addr, u64 size, bool sparse, bool pfn)
 {
-	int ret;
-
-	if (vmm->managed.raw) {
-		ret = nvkm_vmm_ptes_get(vmm, page, addr, size);
-		if (ret)
-			return ret;
-
-		nvkm_vmm_ptes_map(vmm, page, addr, size, map, func);
-
-		return 0;
-	} else {
-		return __nvkm_vmm_ptes_get_map(vmm, page, addr, size, map, func);
-	}
+	const struct nvkm_vmm_desc_func *func = page->desc->func;
+	nvkm_vmm_iter(vmm, page, addr, size, "unmap", false, pfn,
+		      NULL, NULL, NULL,
+		      sparse ? func->sparse : func->invalid ? func->invalid :
+							      func->unmap);
 }
 
-struct nvkm_vma *
+static void
+nvkm_vmm_ptes_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+		  u64 addr, u64 size, struct nvkm_vmm_map *map,
+		  nvkm_vmm_pte_func func)
+{
+	nvkm_vmm_iter(vmm, page, addr, size, "map", false, false,
+		      NULL, func, map, NULL);
+}
+
+static void
+nvkm_vmm_ptes_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+		  u64 addr, u64 size)
+{
+	nvkm_vmm_iter(vmm, page, addr, size, "unref", false, false,
+		      nvkm_vmm_unref_ptes, NULL, NULL, NULL);
+}
+
+static int
+nvkm_vmm_ptes_get(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+		  u64 addr, u64 size)
+{
+	u64 fail = nvkm_vmm_iter(vmm, page, addr, size, "ref", true, false,
+				 nvkm_vmm_ref_ptes, NULL, NULL, NULL);
+	if (fail != ~0ULL) {
+		if (fail != addr)
+			nvkm_vmm_ptes_put(vmm, page, addr, fail - addr);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+static inline struct nvkm_vma *
 nvkm_vma_new(u64 addr, u64 size)
 {
 	struct nvkm_vma *vma = kzalloc(sizeof(*vma), GFP_KERNEL);
@@ -826,6 +774,7 @@ nvkm_vma_tail(struct nvkm_vma *vma, u64 tail)
 	new->refd = vma->refd;
 	new->used = vma->used;
 	new->part = vma->part;
+	new->user = vma->user;
 	new->busy = vma->busy;
 	new->mapped = vma->mapped;
 	list_add(&new->head, &vma->head);
@@ -1002,7 +951,7 @@ nvkm_vmm_node_split(struct nvkm_vmm *vmm,
 static void
 nvkm_vma_dump(struct nvkm_vma *vma)
 {
-	printk(KERN_ERR "%016llx %016llx %c%c%c%c%c%c%c%c %p\n",
+	printk(KERN_ERR "%016llx %016llx %c%c%c%c%c%c%c%c%c %p\n",
 	       vma->addr, (u64)vma->size,
 	       vma->used ? '-' : 'F',
 	       vma->mapref ? 'R' : '-',
@@ -1010,6 +959,7 @@ nvkm_vma_dump(struct nvkm_vma *vma)
 	       vma->page != NVKM_VMA_PAGE_NONE ? '0' + vma->page : '-',
 	       vma->refd != NVKM_VMA_PAGE_NONE ? '0' + vma->refd : '-',
 	       vma->part ? 'P' : '-',
+	       vma->user ? 'U' : '-',
 	       vma->busy ? 'B' : '-',
 	       vma->mapped ? 'M' : '-',
 	       vma->memory);
@@ -1074,6 +1024,7 @@ nvkm_vmm_ctor_managed(struct nvkm_vmm *vmm, u64 addr, u64 size)
 	vma->mapref = true;
 	vma->sparse = false;
 	vma->used = true;
+	vma->user = true;
 	nvkm_vmm_node_insert(vmm, vma);
 	list_add_tail(&vma->head, &vmm->list);
 	return 0;
@@ -1097,12 +1048,10 @@ nvkm_vmm_ctor(const struct nvkm_vmm_func *func, struct nvkm_mmu *mmu,
 	vmm->debug = mmu->subdev.debug;
 	kref_init(&vmm->kref);
 
-	__mutex_init(&vmm->mutex.vmm, "&vmm->mutex.vmm", key ? key : &_key);
-	mutex_init(&vmm->mutex.ref);
-	mutex_init(&vmm->mutex.map);
+	__mutex_init(&vmm->mutex, "&vmm->mutex", key ? key : &_key);
 
 	/* Locate the smallest page size supported by the backend, it will
-	 * have the deepest nesting of page tables.
+	 * have the the deepest nesting of page tables.
 	 */
 	while (page[1].shift)
 		page++;
@@ -1155,9 +1104,6 @@ nvkm_vmm_ctor(const struct nvkm_vmm_func *func, struct nvkm_mmu *mmu,
 		if (addr && (ret = nvkm_vmm_ctor_managed(vmm, 0, addr)))
 			return ret;
 
-		vmm->managed.p.addr = 0;
-		vmm->managed.p.size = addr;
-
 		/* NVKM-managed area. */
 		if (size) {
 			if (!(vma = nvkm_vma_new(addr, size)))
@@ -1171,9 +1117,6 @@ nvkm_vmm_ctor(const struct nvkm_vmm_func *func, struct nvkm_mmu *mmu,
 		size = vmm->limit - addr;
 		if (size && (ret = nvkm_vmm_ctor_managed(vmm, addr, size)))
 			return ret;
-
-		vmm->managed.n.addr = addr;
-		vmm->managed.n.size = size;
 	} else {
 		/* Address-space fully managed by NVKM, requiring calls to
 		 * nvkm_vmm_get()/nvkm_vmm_put() to allocate address-space.
@@ -1422,9 +1365,9 @@ void
 nvkm_vmm_unmap(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
 {
 	if (vma->memory) {
-		mutex_lock(&vmm->mutex.vmm);
+		mutex_lock(&vmm->mutex);
 		nvkm_vmm_unmap_locked(vmm, vma, false);
-		mutex_unlock(&vmm->mutex.vmm);
+		mutex_unlock(&vmm->mutex);
 	}
 }
 
@@ -1482,8 +1425,6 @@ nvkm_vmm_map_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma,
 {
 	nvkm_vmm_pte_func func;
 	int ret;
-
-	map->no_comp = vma->no_comp;
 
 	/* Make sure we won't overrun the end of the memory object. */
 	if (unlikely(nvkm_memory_size(map->memory) < map->offset + vma->size)) {
@@ -1569,15 +1510,10 @@ nvkm_vmm_map(struct nvkm_vmm *vmm, struct nvkm_vma *vma, void *argv, u32 argc,
 	     struct nvkm_vmm_map *map)
 {
 	int ret;
-
-	if (nvkm_vmm_in_managed_range(vmm, vma->addr, vma->size) &&
-	    vmm->managed.raw)
-		return nvkm_vmm_map_locked(vmm, vma, argv, argc, map);
-
-	mutex_lock(&vmm->mutex.vmm);
+	mutex_lock(&vmm->mutex);
 	ret = nvkm_vmm_map_locked(vmm, vma, argv, argc, map);
 	vma->busy = false;
-	mutex_unlock(&vmm->mutex.vmm);
+	mutex_unlock(&vmm->mutex);
 	return ret;
 }
 
@@ -1679,6 +1615,7 @@ nvkm_vmm_put_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
 	vma->page = NVKM_VMA_PAGE_NONE;
 	vma->refd = NVKM_VMA_PAGE_NONE;
 	vma->used = false;
+	vma->user = false;
 	nvkm_vmm_put_region(vmm, vma);
 }
 
@@ -1687,9 +1624,9 @@ nvkm_vmm_put(struct nvkm_vmm *vmm, struct nvkm_vma **pvma)
 {
 	struct nvkm_vma *vma = *pvma;
 	if (vma) {
-		mutex_lock(&vmm->mutex.vmm);
+		mutex_lock(&vmm->mutex);
 		nvkm_vmm_put_locked(vmm, vma);
-		mutex_unlock(&vmm->mutex.vmm);
+		mutex_unlock(&vmm->mutex);
 		*pvma = NULL;
 	}
 }
@@ -1836,49 +1773,9 @@ int
 nvkm_vmm_get(struct nvkm_vmm *vmm, u8 page, u64 size, struct nvkm_vma **pvma)
 {
 	int ret;
-	mutex_lock(&vmm->mutex.vmm);
+	mutex_lock(&vmm->mutex);
 	ret = nvkm_vmm_get_locked(vmm, false, true, false, page, 0, size, pvma);
-	mutex_unlock(&vmm->mutex.vmm);
-	return ret;
-}
-
-void
-nvkm_vmm_raw_unmap(struct nvkm_vmm *vmm, u64 addr, u64 size,
-		   bool sparse, u8 refd)
-{
-	const struct nvkm_vmm_page *page = &vmm->func->page[refd];
-
-	nvkm_vmm_ptes_unmap(vmm, page, addr, size, sparse, false);
-}
-
-void
-nvkm_vmm_raw_put(struct nvkm_vmm *vmm, u64 addr, u64 size, u8 refd)
-{
-	const struct nvkm_vmm_page *page = vmm->func->page;
-
-	nvkm_vmm_ptes_put(vmm, &page[refd], addr, size);
-}
-
-int
-nvkm_vmm_raw_get(struct nvkm_vmm *vmm, u64 addr, u64 size, u8 refd)
-{
-	const struct nvkm_vmm_page *page = vmm->func->page;
-
-	if (unlikely(!size))
-		return -EINVAL;
-
-	return nvkm_vmm_ptes_get(vmm, &page[refd], addr, size);
-}
-
-int
-nvkm_vmm_raw_sparse(struct nvkm_vmm *vmm, u64 addr, u64 size, bool ref)
-{
-	int ret;
-
-	mutex_lock(&vmm->mutex.ref);
-	ret = nvkm_vmm_ptes_sparse(vmm, addr, size, ref);
-	mutex_unlock(&vmm->mutex.ref);
-
+	mutex_unlock(&vmm->mutex);
 	return ret;
 }
 
@@ -1886,9 +1783,9 @@ void
 nvkm_vmm_part(struct nvkm_vmm *vmm, struct nvkm_memory *inst)
 {
 	if (inst && vmm && vmm->func->part) {
-		mutex_lock(&vmm->mutex.vmm);
+		mutex_lock(&vmm->mutex);
 		vmm->func->part(vmm, inst);
-		mutex_unlock(&vmm->mutex.vmm);
+		mutex_unlock(&vmm->mutex);
 	}
 }
 
@@ -1897,9 +1794,9 @@ nvkm_vmm_join(struct nvkm_vmm *vmm, struct nvkm_memory *inst)
 {
 	int ret = 0;
 	if (vmm->func->join) {
-		mutex_lock(&vmm->mutex.vmm);
+		mutex_lock(&vmm->mutex);
 		ret = vmm->func->join(vmm, inst);
-		mutex_unlock(&vmm->mutex.vmm);
+		mutex_unlock(&vmm->mutex);
 	}
 	return ret;
 }

@@ -27,7 +27,11 @@
  **************************************************************************/
 
 #include <drm/ttm/ttm_execbuf_util.h>
-#include <drm/ttm/ttm_bo.h>
+#include <drm/ttm/ttm_bo_driver.h>
+#include <drm/ttm/ttm_placement.h>
+#include <linux/wait.h>
+#include <linux/sched.h>
+#include <linux/module.h>
 
 static void ttm_eu_backoff_reservation_reverse(struct list_head *list,
 					      struct ttm_validate_buffer *entry)
@@ -47,12 +51,14 @@ void ttm_eu_backoff_reservation(struct ww_acquire_ctx *ticket,
 	if (list_empty(list))
 		return;
 
+	spin_lock(&ttm_bo_glob.lru_lock);
 	list_for_each_entry(entry, list, head) {
 		struct ttm_buffer_object *bo = entry->bo;
 
-		ttm_bo_move_to_lru_tail_unlocked(bo);
+		ttm_bo_move_to_lru_tail(bo, NULL);
 		dma_resv_unlock(bo->base.resv);
 	}
+	spin_unlock(&ttm_bo_glob.lru_lock);
 
 	if (ticket)
 		ww_acquire_fini(ticket);
@@ -86,7 +92,6 @@ int ttm_eu_reserve_buffers(struct ww_acquire_ctx *ticket,
 
 	list_for_each_entry(entry, list, head) {
 		struct ttm_buffer_object *bo = entry->bo;
-		unsigned int num_fences;
 
 		ret = ttm_bo_reserve(bo, intr, (ticket == NULL), ticket);
 		if (ret == -EALREADY && dups) {
@@ -97,10 +102,12 @@ int ttm_eu_reserve_buffers(struct ww_acquire_ctx *ticket,
 			continue;
 		}
 
-		num_fences = max(entry->num_shared, 1u);
 		if (!ret) {
-			ret = dma_resv_reserve_fences(bo->base.resv,
-						      num_fences);
+			if (!entry->num_shared)
+				continue;
+
+			ret = dma_resv_reserve_shared(bo->base.resv,
+								entry->num_shared);
 			if (!ret)
 				continue;
 		}
@@ -115,9 +122,9 @@ int ttm_eu_reserve_buffers(struct ww_acquire_ctx *ticket,
 			ret = ttm_bo_reserve_slowpath(bo, intr, ticket);
 		}
 
-		if (!ret)
-			ret = dma_resv_reserve_fences(bo->base.resv,
-						      num_fences);
+		if (!ret && entry->num_shared)
+			ret = dma_resv_reserve_shared(bo->base.resv,
+								entry->num_shared);
 
 		if (unlikely(ret != 0)) {
 			if (ticket) {
@@ -147,14 +154,18 @@ void ttm_eu_fence_buffer_objects(struct ww_acquire_ctx *ticket,
 	if (list_empty(list))
 		return;
 
+	spin_lock(&ttm_bo_glob.lru_lock);
 	list_for_each_entry(entry, list, head) {
 		struct ttm_buffer_object *bo = entry->bo;
 
-		dma_resv_add_fence(bo->base.resv, fence, entry->num_shared ?
-				   DMA_RESV_USAGE_READ : DMA_RESV_USAGE_WRITE);
-		ttm_bo_move_to_lru_tail_unlocked(bo);
+		if (entry->num_shared)
+			dma_resv_add_shared_fence(bo->base.resv, fence);
+		else
+			dma_resv_add_excl_fence(bo->base.resv, fence);
+		ttm_bo_move_to_lru_tail(bo, NULL);
 		dma_resv_unlock(bo->base.resv);
 	}
+	spin_unlock(&ttm_bo_glob.lru_lock);
 	if (ticket)
 		ww_acquire_fini(ticket);
 }

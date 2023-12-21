@@ -341,12 +341,10 @@ static int vx_toggle_pipe(struct vx_core *chip, struct vx_pipe *pipe, int state)
 		}
 	}
     
-	err = vx_conf_pipe(chip, pipe);
-	if (err < 0)
+	if ((err = vx_conf_pipe(chip, pipe)) < 0)
 		return err;
 
-	err = vx_send_irqa(chip);
-	if (err < 0)
+	if ((err = vx_send_irqa(chip)) < 0)
 		return err;
     
 	/* If it completes successfully, wait for the pipes
@@ -682,9 +680,8 @@ static void vx_pcm_playback_transfer(struct vx_core *chip,
 	if (! pipe->prepared || (chip->chip_status & VX_STAT_IS_STALE))
 		return;
 	for (i = 0; i < nchunks; i++) {
-		err = vx_pcm_playback_transfer_chunk(chip, runtime, pipe,
-						     chip->ibl.size);
-		if (err < 0)
+		if ((err = vx_pcm_playback_transfer_chunk(chip, runtime, pipe,
+							  chip->ibl.size)) < 0)
 			return;
 	}
 }
@@ -701,8 +698,7 @@ static void vx_pcm_playback_update(struct vx_core *chip,
 	struct snd_pcm_runtime *runtime = subs->runtime;
 
 	if (pipe->running && ! (chip->chip_status & VX_STAT_IS_STALE)) {
-		err = vx_update_pipe_position(chip, runtime, pipe);
-		if (err < 0)
+		if ((err = vx_update_pipe_position(chip, runtime, pipe)) < 0)
 			return;
 		if (pipe->transferred >= (int)runtime->period_size) {
 			pipe->transferred %= runtime->period_size;
@@ -751,13 +747,11 @@ static int vx_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		pipe->running = 0;
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		err = vx_toggle_pipe(chip, pipe, 0);
-		if (err < 0)
+		if ((err = vx_toggle_pipe(chip, pipe, 0)) < 0)
 			return err;
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		err = vx_toggle_pipe(chip, pipe, 1);
-		if (err < 0)
+		if ((err = vx_toggle_pipe(chip, pipe, 1)) < 0)
 			return err;
 		break;
 	default:
@@ -798,15 +792,13 @@ static int vx_pcm_prepare(struct snd_pcm_substream *subs)
 		snd_printdd(KERN_DEBUG "reopen the pipe with data_mode = %d\n", data_mode);
 		vx_init_rmh(&rmh, CMD_FREE_PIPE);
 		vx_set_pipe_cmd_params(&rmh, 0, pipe->number, 0);
-		err = vx_send_msg(chip, &rmh);
-		if (err < 0)
+		if ((err = vx_send_msg(chip, &rmh)) < 0)
 			return err;
 		vx_init_rmh(&rmh, CMD_RES_PIPE);
 		vx_set_pipe_cmd_params(&rmh, 0, pipe->number, pipe->channels);
 		if (data_mode)
 			rmh.Cmd[0] |= BIT_DATA_MODE;
-		err = vx_send_msg(chip, &rmh);
-		if (err < 0)
+		if ((err = vx_send_msg(chip, &rmh)) < 0)
 			return err;
 		pipe->data_mode = data_mode;
 	}
@@ -818,8 +810,7 @@ static int vx_pcm_prepare(struct snd_pcm_substream *subs)
 	}
 	vx_set_clock(chip, runtime->rate);
 
-	err = vx_set_format(chip, pipe, runtime);
-	if (err < 0)
+	if ((err = vx_set_format(chip, pipe, runtime)) < 0)
 		return err;
 
 	if (vx_is_pcmcia(chip)) {
@@ -1163,7 +1154,8 @@ static int vx_init_audio_io(struct vx_core *chip)
 	chip->ibl.size = 0;
 	vx_set_ibl(chip, &chip->ibl); /* query the info */
 	if (preferred > 0) {
-		chip->ibl.size = roundup(preferred, chip->ibl.granularity);
+		chip->ibl.size = ((preferred + chip->ibl.granularity - 1) /
+				  chip->ibl.granularity) * chip->ibl.granularity;
 		if (chip->ibl.size > chip->ibl.max_size)
 			chip->ibl.size = chip->ibl.max_size;
 	} else
@@ -1196,8 +1188,7 @@ int snd_vx_pcm_new(struct vx_core *chip)
 	unsigned int i;
 	int err;
 
-	err = vx_init_audio_io(chip);
-	if (err < 0)
+	if ((err = vx_init_audio_io(chip)) < 0)
 		return err;
 
 	for (i = 0; i < chip->hw->num_codecs; i++) {
@@ -1215,7 +1206,8 @@ int snd_vx_pcm_new(struct vx_core *chip)
 		if (ins)
 			snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &vx_pcm_capture_ops);
 		snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC,
-					       NULL, 0, 0);
+					       snd_dma_continuous_data(GFP_KERNEL | GFP_DMA32),
+					       0, 0);
 
 		pcm->private_data = chip;
 		pcm->private_free = snd_vx_pcm_free;

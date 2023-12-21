@@ -140,9 +140,9 @@ static int xts_xor_tweak_post(struct skcipher_request *req, bool enc)
 	return xts_xor_tweak(req, true, enc);
 }
 
-static void xts_cts_done(void *data, int err)
+static void xts_cts_done(struct crypto_async_request *areq, int err)
 {
-	struct skcipher_request *req = data;
+	struct skcipher_request *req = areq->data;
 	le128 b;
 
 	if (!err) {
@@ -196,19 +196,19 @@ static int xts_cts_final(struct skcipher_request *req,
 	return 0;
 }
 
-static void xts_encrypt_done(void *data, int err)
+static void xts_encrypt_done(struct crypto_async_request *areq, int err)
 {
-	struct skcipher_request *req = data;
+	struct skcipher_request *req = areq->data;
 
 	if (!err) {
 		struct xts_request_ctx *rctx = skcipher_request_ctx(req);
 
-		rctx->subreq.base.flags &= CRYPTO_TFM_REQ_MAY_BACKLOG;
+		rctx->subreq.base.flags &= ~CRYPTO_TFM_REQ_MAY_SLEEP;
 		err = xts_xor_tweak_post(req, true);
 
 		if (!err && unlikely(req->cryptlen % XTS_BLOCK_SIZE)) {
 			err = xts_cts_final(req, crypto_skcipher_encrypt);
-			if (err == -EINPROGRESS || err == -EBUSY)
+			if (err == -EINPROGRESS)
 				return;
 		}
 	}
@@ -216,19 +216,19 @@ static void xts_encrypt_done(void *data, int err)
 	skcipher_request_complete(req, err);
 }
 
-static void xts_decrypt_done(void *data, int err)
+static void xts_decrypt_done(struct crypto_async_request *areq, int err)
 {
-	struct skcipher_request *req = data;
+	struct skcipher_request *req = areq->data;
 
 	if (!err) {
 		struct xts_request_ctx *rctx = skcipher_request_ctx(req);
 
-		rctx->subreq.base.flags &= CRYPTO_TFM_REQ_MAY_BACKLOG;
+		rctx->subreq.base.flags &= ~CRYPTO_TFM_REQ_MAY_SLEEP;
 		err = xts_xor_tweak_post(req, false);
 
 		if (!err && unlikely(req->cryptlen % XTS_BLOCK_SIZE)) {
 			err = xts_cts_final(req, crypto_skcipher_decrypt);
-			if (err == -EINPROGRESS || err == -EBUSY)
+			if (err == -EINPROGRESS)
 				return;
 		}
 	}
@@ -466,4 +466,3 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("XTS block cipher mode");
 MODULE_ALIAS_CRYPTO("xts");
 MODULE_IMPORT_NS(CRYPTO_INTERNAL);
-MODULE_SOFTDEP("pre: ecb");

@@ -320,6 +320,7 @@ static int qib_user_sdma_page_to_frags(const struct qib_devdata *dd,
 			unpin_user_page(page);
 		} else {
 			/* coalesce case */
+			kunmap(page);
 			__free_page(page);
 		}
 		ret = -ENOMEM;
@@ -571,7 +572,7 @@ static int qib_user_sdma_coalesce(const struct qib_devdata *dd,
 		goto done;
 	}
 
-	mpage = page_address(page);
+	mpage = kmap(page);
 	mpage_save = mpage;
 	for (i = 0; i < niov; i++) {
 		int cfur;
@@ -580,7 +581,7 @@ static int qib_user_sdma_coalesce(const struct qib_devdata *dd,
 				      iov[i].iov_base, iov[i].iov_len);
 		if (cfur) {
 			ret = -EFAULT;
-			goto page_free;
+			goto free_unmap;
 		}
 
 		mpage += iov[i].iov_len;
@@ -591,7 +592,8 @@ static int qib_user_sdma_coalesce(const struct qib_devdata *dd,
 			page, 0, 0, len, mpage_save);
 	goto done;
 
-page_free:
+free_unmap:
+	kunmap(page);
 	__free_page(page);
 done:
 	return ret;
@@ -624,6 +626,9 @@ static void qib_user_sdma_free_pkt_frag(struct device *dev,
 				       pkt->addr[i].addr,
 				       pkt->addr[i].dma_length,
 				       DMA_TO_DEVICE);
+
+		if (pkt->addr[i].kvaddr)
+			kunmap(pkt->addr[i].page);
 
 		if (pkt->addr[i].put_page)
 			unpin_user_page(pkt->addr[i].page);
@@ -846,7 +851,7 @@ static int qib_user_sdma_queue_pkts(const struct qib_devdata *dd,
 		}
 
 		/*
-		 * This assignment is a bit strange.  it's because
+		 * This assignment is a bit strange.  it's because the
 		 * the pbc counts the number of 32 bit words in the full
 		 * packet _except_ the first word of the pbc itself...
 		 */

@@ -14,14 +14,14 @@
 int main(int argc, char **argv)
 {
 	pid_t remote_pid, local_pid = getpid();
-	int cg2 = -1, idx = 0, rc = 1;
 	struct bpf_link *link = NULL;
 	struct bpf_program *prog;
+	int cg2, idx = 0, rc = 1;
 	struct bpf_object *obj;
 	char filename[256];
 	int map_fd[2];
 
-	snprintf(filename, sizeof(filename), "%s.bpf.o", argv[0]);
+	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 	obj = bpf_object__open_file(filename, NULL);
 	if (libbpf_get_error(obj)) {
 		fprintf(stderr, "ERROR: opening BPF object file failed\n");
@@ -103,9 +103,7 @@ int main(int argc, char **argv)
 	rc = 0;
 
 err:
-	if (cg2 != -1)
-		close(cg2);
-
+	close(cg2);
 	cleanup_cgroup_environment();
 
 cleanup:

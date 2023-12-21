@@ -13,6 +13,8 @@
 #include <linux/in.h>
 #include <linux/in6.h>
 
+#define IPPROTO_L2TP		115
+
 /**
  * struct sockaddr_l2tpip - the sockaddr structure for L2TP-over-IP sockets
  * @l2tp_family:  address family number AF_L2TPIP.

@@ -153,7 +153,7 @@ static int qib_get_base_info(struct file *fp, void __user *ubase,
 		kinfo->spi_tidcnt += dd->rcvtidcnt % subctxt_cnt;
 	/*
 	 * for this use, may be cfgctxts summed over all chips that
-	 * are configured and present
+	 * are are configured and present
 	 */
 	kinfo->spi_nctxts = dd->cfgctxts;
 	/* unit (chip/board) our context is on */
@@ -429,8 +429,8 @@ cleanup:
 				dd->f_put_tid(dd, &tidbase[tid],
 					      RCVHQ_RCV_TYPE_EXPECTED,
 					      dd->tidinvalid);
-				dma_unmap_page(&dd->pcidev->dev, phys,
-					       PAGE_SIZE, DMA_FROM_DEVICE);
+				pci_unmap_page(dd->pcidev, phys, PAGE_SIZE,
+					       PCI_DMA_FROMDEVICE);
 				dd->pageshadow[ctxttid + tid] = NULL;
 			}
 		}
@@ -484,7 +484,7 @@ static int qib_tid_free(struct qib_ctxtdata *rcd, unsigned subctxt,
 			const struct qib_tid_info *ti)
 {
 	int ret = 0;
-	u32 tid, ctxttid, limit, tidcnt;
+	u32 tid, ctxttid, cnt, limit, tidcnt;
 	struct qib_devdata *dd = rcd->dd;
 	u64 __iomem *tidbase;
 	unsigned long tidmap[8];
@@ -520,7 +520,7 @@ static int qib_tid_free(struct qib_ctxtdata *rcd, unsigned subctxt,
 		/* just in case size changes in future */
 		limit = tidcnt;
 	tid = find_first_bit(tidmap, limit);
-	for (; tid < limit; tid++) {
+	for (cnt = 0; tid < limit; tid++) {
 		/*
 		 * small optimization; if we detect a run of 3 or so without
 		 * any set, use find_first_bit again.  That's mainly to
@@ -530,7 +530,7 @@ static int qib_tid_free(struct qib_ctxtdata *rcd, unsigned subctxt,
 		 */
 		if (!test_bit(tid, tidmap))
 			continue;
-
+		cnt++;
 		if (dd->pageshadow[ctxttid + tid]) {
 			struct page *p;
 			dma_addr_t phys;
@@ -544,8 +544,8 @@ static int qib_tid_free(struct qib_ctxtdata *rcd, unsigned subctxt,
 			 */
 			dd->f_put_tid(dd, &tidbase[tid],
 				      RCVHQ_RCV_TYPE_EXPECTED, dd->tidinvalid);
-			dma_unmap_page(&dd->pcidev->dev, phys, PAGE_SIZE,
-				       DMA_FROM_DEVICE);
+			pci_unmap_page(dd->pcidev, phys, PAGE_SIZE,
+				       PCI_DMA_FROMDEVICE);
 			qib_release_user_pages(&p, 1);
 		}
 	}
@@ -733,7 +733,7 @@ static int qib_mmap_mem(struct vm_area_struct *vma, struct qib_ctxtdata *rcd,
 		}
 
 		/* don't allow them to later change with mprotect */
-		vm_flags_clear(vma, VM_MAYWRITE);
+		vma->vm_flags &= ~VM_MAYWRITE;
 	}
 
 	pfn = virt_to_phys(kvaddr) >> PAGE_SHIFT;
@@ -769,7 +769,7 @@ static int mmap_ureg(struct vm_area_struct *vma, struct qib_devdata *dd,
 		phys = dd->physaddr + ureg;
 		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
-		vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND);
+		vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 		ret = io_remap_pfn_range(vma, vma->vm_start,
 					 phys >> PAGE_SHIFT,
 					 vma->vm_end - vma->vm_start,
@@ -810,7 +810,8 @@ static int mmap_piobufs(struct vm_area_struct *vma,
 	 * don't allow them to later change to readable with mprotect (for when
 	 * not initially mapped readable, as is normally the case)
 	 */
-	vm_flags_mod(vma, VM_DONTCOPY | VM_DONTEXPAND, VM_MAYREAD);
+	vma->vm_flags &= ~VM_MAYREAD;
+	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 
 	/* We used PAT if wc_cookie == 0 */
 	if (!dd->wc_cookie)
@@ -850,8 +851,8 @@ static int mmap_rcvegrbufs(struct vm_area_struct *vma,
 		ret = -EPERM;
 		goto bail;
 	}
-	/* don't allow them to later change to writable with mprotect */
-	vm_flags_clear(vma, VM_MAYWRITE);
+	/* don't allow them to later change to writeable with mprotect */
+	vma->vm_flags &= ~VM_MAYWRITE;
 
 	start = vma->vm_start;
 
@@ -940,10 +941,10 @@ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
 			goto bail;
 		}
 		/*
-		 * Don't allow permission to later change to writable
+		 * Don't allow permission to later change to writeable
 		 * with mprotect.
 		 */
-		vm_flags_clear(vma, VM_MAYWRITE);
+		vma->vm_flags &= ~VM_MAYWRITE;
 	} else
 		goto bail;
 	len = vma->vm_end - vma->vm_start;
@@ -954,7 +955,7 @@ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
 
 	vma->vm_pgoff = (unsigned long) addr >> PAGE_SHIFT;
 	vma->vm_ops = &qib_file_vm_ops;
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
 	ret = 1;
 
 bail:
@@ -1320,7 +1321,7 @@ static int setup_ctxt(struct qib_pportdata *ppd, int ctxt,
 	rcd->tid_pg_list = ptmp;
 	rcd->pid = current->pid;
 	init_waitqueue_head(&dd->rcd[ctxt]->wait);
-	get_task_comm(rcd->comm, current);
+	strlcpy(rcd->comm, current->comm, sizeof(rcd->comm));
 	ctxt_fp(fp) = rcd;
 	qib_stats.sps_ctxts++;
 	dd->freectxts--;
@@ -1757,8 +1758,7 @@ bail:
 }
 
 /**
- * unlock_expected_tids - unlock any expected TID entries context still had
- * in use
+ * unlock_exptid - unlock any expected TID entries context still had in use
  * @rcd: ctxt
  *
  * We don't actually update the chip here, because we do a bulk update
@@ -1768,7 +1768,7 @@ static void unlock_expected_tids(struct qib_ctxtdata *rcd)
 {
 	struct qib_devdata *dd = rcd->dd;
 	int ctxt_tidbase = rcd->ctxt * dd->rcvtidcnt;
-	int i, maxtid = ctxt_tidbase + dd->rcvtidcnt;
+	int i, cnt = 0, maxtid = ctxt_tidbase + dd->rcvtidcnt;
 
 	for (i = ctxt_tidbase; i < maxtid; i++) {
 		struct page *p = dd->pageshadow[i];
@@ -1780,9 +1780,10 @@ static void unlock_expected_tids(struct qib_ctxtdata *rcd)
 		phys = dd->physshadow[i];
 		dd->physshadow[i] = dd->tidinvalid;
 		dd->pageshadow[i] = NULL;
-		dma_unmap_page(&dd->pcidev->dev, phys, PAGE_SIZE,
-			       DMA_FROM_DEVICE);
+		pci_unmap_page(dd->pcidev, phys, PAGE_SIZE,
+			       PCI_DMA_FROMDEVICE);
 		qib_release_user_pages(&p, 1);
+		cnt++;
 	}
 }
 
@@ -2244,10 +2245,10 @@ static ssize_t qib_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct qib_ctxtdata *rcd = ctxt_fp(iocb->ki_filp);
 	struct qib_user_sdma_queue *pq = fp->pq;
 
-	if (!from->user_backed || !from->nr_segs || !pq)
+	if (!iter_is_iovec(from) || !from->nr_segs || !pq)
 		return -EINVAL;
-
-	return qib_user_sdma_writev(rcd, pq, iter_iov(from), from->nr_segs);
+			 
+	return qib_user_sdma_writev(rcd, pq, from->iov, from->nr_segs);
 }
 
 static struct class *qib_class;
@@ -2325,7 +2326,7 @@ int __init qib_dev_init(void)
 		goto done;
 	}
 
-	qib_class = class_create("ipath");
+	qib_class = class_create(THIS_MODULE, "ipath");
 	if (IS_ERR(qib_class)) {
 		ret = PTR_ERR(qib_class);
 		pr_err("Could not create device class (err %d)\n", -ret);

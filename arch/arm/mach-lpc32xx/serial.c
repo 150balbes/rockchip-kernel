@@ -15,7 +15,6 @@
 #include <linux/serial_8250.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/soc/nxp/lpc32xx-misc.h>
 
 #include "lpc32xx.h"
 #include "common.h"

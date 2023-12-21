@@ -20,10 +20,9 @@
 #include <linux/export.h>
 #include <linux/nvram.h>
 #include <linux/pgtable.h>
-#include <linux/of_fdt.h>
-#include <linux/irq.h>
 
 #include <asm/io.h>
+#include <asm/prom.h>
 #include <asm/processor.h>
 #include <asm/setup.h>
 #include <asm/smp.h>
@@ -75,8 +74,8 @@ EXPORT_SYMBOL(DMA_MODE_WRITE);
  */
 notrace void __init machine_init(u64 dt_ptr)
 {
-	u32 *addr = (u32 *)patch_site_addr(&patch__memset_nocache);
-	ppc_inst_t insn;
+	struct ppc_inst *addr = (struct ppc_inst *)patch_site_addr(&patch__memset_nocache);
+	struct ppc_inst insn;
 
 	/* Configure static keys first, now that we're relocated. */
 	setup_feature_keys();
@@ -86,7 +85,7 @@ notrace void __init machine_init(u64 dt_ptr)
 	/* Enable early debugging if any specified (see udbg.h) */
 	udbg_early_init();
 
-	patch_instruction_site(&patch__memcpy_nocache, ppc_inst(PPC_RAW_NOP()));
+	patch_instruction_site(&patch__memcpy_nocache, ppc_inst(PPC_INST_NOP));
 
 	create_cond_branch(&insn, addr, branch_target(addr), 0x820000);
 	patch_instruction(addr, insn);	/* replace b by bne cr0 */
@@ -176,7 +175,7 @@ void __init emergency_stack_init(void)
 }
 #endif
 
-#ifdef CONFIG_BOOKE_OR_40x
+#if defined(CONFIG_BOOKE) || defined(CONFIG_40x)
 void __init exc_lvl_early_init(void)
 {
 	unsigned int i, hw_cpu;
@@ -207,7 +206,7 @@ void __init setup_power_save(void)
 		ppc_md.power_save = ppc6xx_idle;
 #endif
 
-#ifdef CONFIG_PPC_E500
+#ifdef CONFIG_E500
 	if (cpu_has_feature(CPU_FTR_CAN_DOZE) ||
 	    cpu_has_feature(CPU_FTR_CAN_NAP))
 		ppc_md.power_save = e500_idle;
@@ -223,4 +222,7 @@ __init void initialize_cache_info(void)
 	 */
 	dcache_bsize = cur_cpu_spec->dcache_bsize;
 	icache_bsize = cur_cpu_spec->icache_bsize;
+	ucache_bsize = 0;
+	if (IS_ENABLED(CONFIG_E200))
+		ucache_bsize = icache_bsize = dcache_bsize;
 }

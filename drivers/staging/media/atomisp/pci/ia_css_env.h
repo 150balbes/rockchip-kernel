@@ -17,8 +17,7 @@
 #define __IA_CSS_ENV_H
 
 #include <type_support.h>
-#include <linux/stdarg.h> /* va_list */
-#include <linux/bits.h>
+#include <stdarg.h> /* va_list */
 #include "ia_css_types.h"
 #include "ia_css_acc_types.h"
 
@@ -29,10 +28,10 @@
 
 /* Memory allocation attributes, for use in ia_css_css_mem_env. */
 enum ia_css_mem_attr {
-	IA_CSS_MEM_ATTR_CACHED     = BIT(0),
-	IA_CSS_MEM_ATTR_ZEROED     = BIT(1),
-	IA_CSS_MEM_ATTR_PAGEALIGN  = BIT(2),
-	IA_CSS_MEM_ATTR_CONTIGUOUS = BIT(3),
+	IA_CSS_MEM_ATTR_CACHED = 1 << 0,
+	IA_CSS_MEM_ATTR_ZEROED = 1 << 1,
+	IA_CSS_MEM_ATTR_PAGEALIGN = 1 << 2,
+	IA_CSS_MEM_ATTR_CONTIGUOUS = 1 << 3,
 };
 
 /* Environment with function pointers for local IA memory allocation.

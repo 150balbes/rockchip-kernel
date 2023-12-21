@@ -272,17 +272,13 @@ __rate_test()
 
 rate_test()
 {
-	local last_policer=$(devlink -j -p trap policer show |
-			     jq '[.[]["'$DEVLINK_DEV'"][].policer] | max')
+	local id
 
-	log_info "Running rate test for policer 1"
-	__rate_test 1
-
-	log_info "Running rate test for policer $((last_policer / 2))"
-	__rate_test $((last_policer / 2))
-
-	log_info "Running rate test for policer $last_policer"
-	__rate_test $last_policer
+	for id in $(devlink_trap_policer_ids_get); do
+		echo
+		log_info "Running rate test for policer $id"
+		__rate_test $id
+	done
 }
 
 __burst_test()
@@ -346,17 +342,13 @@ __burst_test()
 
 burst_test()
 {
-	local last_policer=$(devlink -j -p trap policer show |
-			     jq '[.[]["'$DEVLINK_DEV'"][].policer] | max')
+	local id
 
-	log_info "Running burst test for policer 1"
-	__burst_test 1
-
-	log_info "Running burst test for policer $((last_policer / 2))"
-	__burst_test $((last_policer / 2))
-
-	log_info "Running burst test for policer $last_policer"
-	__burst_test $last_policer
+	for id in $(devlink_trap_policer_ids_get); do
+		echo
+		log_info "Running burst size test for policer $id"
+		__burst_test $id
+	done
 }
 
 trap cleanup EXIT

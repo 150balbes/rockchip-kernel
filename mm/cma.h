@@ -4,6 +4,7 @@
 
 #include <linux/debugfs.h>
 #include <linux/kobject.h>
+#include <linux/android_vendor.h>
 
 struct cma_kobject {
 	struct kobject kobj;
@@ -15,7 +16,7 @@ struct cma {
 	unsigned long   count;
 	unsigned long   *bitmap;
 	unsigned int order_per_bit; /* Order of pages represented by one bit */
-	spinlock_t	lock;
+	struct mutex    lock;
 #ifdef CONFIG_CMA_DEBUGFS
 	struct hlist_head mem_head;
 	spinlock_t mem_head_lock;
@@ -30,7 +31,7 @@ struct cma {
 	/* kobject requires dynamic object */
 	struct cma_kobject *cma_kobj;
 #endif
-	bool reserve_pages_on_error;
+	ANDROID_OEM_DATA_ARRAY(1, 4);
 };
 
 extern struct cma cma_areas[MAX_CMA_AREAS];

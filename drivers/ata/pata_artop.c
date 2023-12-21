@@ -28,7 +28,7 @@
 #include <linux/ata.h>
 
 #define DRV_NAME	"pata_artop"
-#define DRV_VERSION	"0.4.8"
+#define DRV_VERSION	"0.4.6"
 
 /*
  *	The ARTOP has 33 Mhz and "over clocked" timing tables. Until we
@@ -268,7 +268,7 @@ static void artop6260_set_dmamode (struct ata_port *ap, struct ata_device *adev)
 }
 
 /**
- *	artop6210_qc_defer	-	implement serialization
+ *	artop_6210_qc_defer	-	implement serialization
  *	@qc: command
  *
  *	Issue commands per host on this chip.
@@ -292,7 +292,7 @@ static int artop6210_qc_defer(struct ata_queued_cmd *qc)
 	return 0;
 }
 
-static const struct scsi_host_template artop_sht = {
+static struct scsi_host_template artop_sht = {
 	ATA_BMDMA_SHT(DRV_NAME),
 };
 
@@ -315,15 +315,12 @@ static struct ata_port_operations artop6260_ops = {
 
 static void atp8xx_fixup(struct pci_dev *pdev)
 {
-	u8 reg;
-
-	switch (pdev->device) {
-	case 0x0005:
+	if (pdev->device == 0x0005)
 		/* BIOS may have left us in UDMA, clear it before libata probe */
 		pci_write_config_byte(pdev, 0x54, 0);
-		break;
-	case 0x0008:
-	case 0x0009:
+	else if (pdev->device == 0x0008 || pdev->device == 0x0009) {
+		u8 reg;
+
 		/* Mac systems come up with some registers not set as we
 		   will need them */
 
@@ -341,14 +338,13 @@ static void atp8xx_fixup(struct pci_dev *pdev)
 		/* Enable IRQ output and burst mode */
 		pci_read_config_byte(pdev, 0x4a, &reg);
 		pci_write_config_byte(pdev, 0x4a, (reg & ~0x01) | 0x80);
-		break;
 	}
 }
 
 /**
  *	artop_init_one - Register ARTOP ATA PCI device with kernel services
  *	@pdev: PCI device to register
- *	@id: PCI device ID
+ *	@ent: Entry in artop_pci_tbl matching with @pdev
  *
  *	Called from kernel PCI layer.
  *
@@ -398,19 +394,16 @@ static int artop_init_one (struct pci_dev *pdev, const struct pci_device_id *id)
 	if (rc)
 		return rc;
 
-	switch (id->driver_data) {
-	case 0:		/* 6210 variant */
+	if (id->driver_data == 0)	/* 6210 variant */
 		ppi[0] = &info_6210;
-		break;
-	case 1:		/* 6260 */
+	else if (id->driver_data == 1)	/* 6260 */
 		ppi[0] = &info_626x;
-		break;
-	case 2:		/* 6280 or 6280 + fast */
-		if (inb(pci_resource_start(pdev, 4)) & 0x10)
+	else if (id->driver_data == 2)	{ /* 6280 or 6280 + fast */
+		unsigned long io = pci_resource_start(pdev, 4);
+
+		ppi[0] = &info_628x;
+		if (inb(io) & 0x10)
 			ppi[0] = &info_628x_fast;
-		else
-			ppi[0] = &info_628x;
-		break;
 	}
 
 	BUG_ON(ppi[0] == NULL);

@@ -52,7 +52,7 @@ struct comp_fh {
 	u32 offs;
 };
 
-static LIST_HEAD(video_devices);
+static struct list_head video_devices = LIST_HEAD_INIT(video_devices);
 static DEFINE_SPINLOCK(list_lock);
 
 static inline bool data_ready(struct most_video_dev *mdev)
@@ -245,8 +245,8 @@ static int vidioc_querycap(struct file *file, void *priv,
 	struct comp_fh *fh = priv;
 	struct most_video_dev *mdev = fh->mdev;
 
-	strscpy(cap->driver, "v4l2_component", sizeof(cap->driver));
-	strscpy(cap->card, "MOST", sizeof(cap->card));
+	strlcpy(cap->driver, "v4l2_component", sizeof(cap->driver));
+	strlcpy(cap->card, "MOST", sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info),
 		 "%s", mdev->iface->description);
 	return 0;
@@ -258,7 +258,7 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 	if (f->index)
 		return -EINVAL;
 
-	strscpy(f->description, "MPEG", sizeof(f->description));
+	strcpy(f->description, "MPEG");
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	f->flags = V4L2_FMT_FLAG_COMPRESSED;
 	f->pixelformat = V4L2_PIX_FMT_MPEG;
@@ -306,7 +306,7 @@ static int vidioc_enum_input(struct file *file, void *priv,
 	if (input->index >= V4L2_CMP_MAX_INPUT)
 		return -EINVAL;
 
-	strscpy(input->name, "MOST Video", sizeof(input->name));
+	strcpy(input->name, "MOST Video");
 	input->type |= V4L2_INPUT_TYPE_CAMERA;
 	input->audioset = 0;
 
@@ -365,7 +365,8 @@ static const struct video_device comp_videodev_template = {
 
 /**************************************************************************/
 
-static struct most_video_dev *get_comp_dev(struct most_interface *iface, int channel_idx)
+static struct most_video_dev *get_comp_dev(
+	struct most_interface *iface, int channel_idx)
 {
 	struct most_video_dev *mdev;
 	unsigned long flags;
@@ -482,7 +483,7 @@ static int comp_probe_channel(struct most_interface *iface, int channel_idx,
 	mdev->v4l2_dev.release = comp_v4l2_dev_release;
 
 	/* Create the v4l2_device */
-	strscpy(mdev->v4l2_dev.name, name, sizeof(mdev->v4l2_dev.name));
+	strlcpy(mdev->v4l2_dev.name, name, sizeof(mdev->v4l2_dev.name));
 	ret = v4l2_device_register(NULL, &mdev->v4l2_dev);
 	if (ret) {
 		pr_err("v4l2_device_register() failed\n");

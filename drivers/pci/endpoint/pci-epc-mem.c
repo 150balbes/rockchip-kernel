@@ -260,3 +260,4 @@ EXPORT_SYMBOL_GPL(pci_epc_mem_free_addr);
 
 MODULE_DESCRIPTION("PCI EPC Address Space Management");
 MODULE_AUTHOR("Kishon Vijay Abraham I <kishon@ti.com>");
+MODULE_LICENSE("GPL v2");

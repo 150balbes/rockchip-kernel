@@ -3,15 +3,12 @@
  * Copyright © 2020 Intel Corporation
  */
 
-#include <linux/kernel.h>
-
-#include "i915_config.h"
-#include "i915_utils.h"
+#include "i915_drv.h"
 
 unsigned long
 i915_fence_context_timeout(const struct drm_i915_private *i915, u64 context)
 {
-	if (CONFIG_DRM_I915_FENCE_TIMEOUT && context)
+	if (context && IS_ACTIVE(CONFIG_DRM_I915_FENCE_TIMEOUT))
 		return msecs_to_jiffies_timeout(CONFIG_DRM_I915_FENCE_TIMEOUT);
 
 	return 0;

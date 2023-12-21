@@ -22,7 +22,6 @@
 #include <linux/screen_info.h>
 #include <linux/kernel.h>
 #include <linux/percpu.h>
-#include <linux/reboot.h>
 #include <linux/cpu.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
@@ -38,16 +37,14 @@
 #include <asm/bootparam.h>
 #include <asm/kasan.h>
 #include <asm/mmu_context.h>
-#include <asm/page.h>
-#include <asm/param.h>
-#include <asm/platform.h>
 #include <asm/processor.h>
-#include <asm/sections.h>
+#include <asm/timex.h>
+#include <asm/platform.h>
+#include <asm/page.h>
 #include <asm/setup.h>
+#include <asm/param.h>
 #include <asm/smp.h>
 #include <asm/sysmem.h>
-#include <asm/timex.h>
-#include <asm/traps.h>
 
 #if defined(CONFIG_VGA_CONSOLE) || defined(CONFIG_DUMMY_CONSOLE)
 struct screen_info screen_info = {
@@ -142,7 +139,7 @@ __tagtable(BP_TAG_FDT, parse_tag_fdt);
 
 static int __init parse_tag_cmdline(const bp_tag_t* tag)
 {
-	strscpy(command_line, (char *)(tag->data), COMMAND_LINE_SIZE);
+	strlcpy(command_line, (char *)(tag->data), COMMAND_LINE_SIZE);
 	return 0;
 }
 
@@ -232,7 +229,7 @@ void __init early_init_devtree(void *params)
 	of_scan_flat_dt(xtensa_dt_io_area, NULL);
 
 	if (!command_line[0])
-		strscpy(command_line, boot_command_line, COMMAND_LINE_SIZE);
+		strlcpy(command_line, boot_command_line, COMMAND_LINE_SIZE);
 }
 
 #endif /* CONFIG_USE_OF */
@@ -243,12 +240,6 @@ void __init early_init_devtree(void *params)
 
 void __init init_arch(bp_tag_t *bp_start)
 {
-	/* Initialize basic exception handling if configuration may need it */
-
-	if (IS_ENABLED(CONFIG_KASAN) ||
-	    IS_ENABLED(CONFIG_XTENSA_LOAD_STORE))
-		early_trap_init();
-
 	/* Initialize MMU. */
 
 	init_mmu();
@@ -268,7 +259,7 @@ void __init init_arch(bp_tag_t *bp_start)
 
 #ifdef CONFIG_CMDLINE_BOOL
 	if (!command_line[0])
-		strscpy(command_line, default_command_line, COMMAND_LINE_SIZE);
+		strlcpy(command_line, default_command_line, COMMAND_LINE_SIZE);
 #endif
 
 	/* Early hook for platforms */
@@ -279,6 +270,49 @@ void __init init_arch(bp_tag_t *bp_start)
 /*
  * Initialize system. Setup memory and reserve regions.
  */
+
+extern char _end[];
+extern char _stext[];
+extern char _WindowVectors_text_start;
+extern char _WindowVectors_text_end;
+extern char _DebugInterruptVector_text_start;
+extern char _DebugInterruptVector_text_end;
+extern char _KernelExceptionVector_text_start;
+extern char _KernelExceptionVector_text_end;
+extern char _UserExceptionVector_text_start;
+extern char _UserExceptionVector_text_end;
+extern char _DoubleExceptionVector_text_start;
+extern char _DoubleExceptionVector_text_end;
+extern char _exception_text_start;
+extern char _exception_text_end;
+#if XCHAL_EXCM_LEVEL >= 2
+extern char _Level2InterruptVector_text_start;
+extern char _Level2InterruptVector_text_end;
+#endif
+#if XCHAL_EXCM_LEVEL >= 3
+extern char _Level3InterruptVector_text_start;
+extern char _Level3InterruptVector_text_end;
+#endif
+#if XCHAL_EXCM_LEVEL >= 4
+extern char _Level4InterruptVector_text_start;
+extern char _Level4InterruptVector_text_end;
+#endif
+#if XCHAL_EXCM_LEVEL >= 5
+extern char _Level5InterruptVector_text_start;
+extern char _Level5InterruptVector_text_end;
+#endif
+#if XCHAL_EXCM_LEVEL >= 6
+extern char _Level6InterruptVector_text_start;
+extern char _Level6InterruptVector_text_end;
+#endif
+#ifdef CONFIG_SMP
+extern char _SecondaryResetVector_text_start;
+extern char _SecondaryResetVector_text_end;
+#endif
+#ifdef CONFIG_XIP_KERNEL
+extern char _xip_start[];
+extern char _xip_end[];
+#endif
 
 static inline int __init_memblock mem_reserve(unsigned long start,
 					      unsigned long end)
@@ -297,7 +331,7 @@ void __init setup_arch(char **cmdline_p)
 
 	*cmdline_p = command_line;
 	platform_setup(cmdline_p);
-	strscpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
+	strlcpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
 
 	/* Reserve some memory regions */
 
@@ -315,51 +349,49 @@ void __init setup_arch(char **cmdline_p)
 #endif
 
 #ifdef CONFIG_VECTORS_ADDR
-#ifdef SUPPORT_WINDOWED
-	mem_reserve(__pa(_WindowVectors_text_start),
-		    __pa(_WindowVectors_text_end));
-#endif
+	mem_reserve(__pa(&_WindowVectors_text_start),
+		    __pa(&_WindowVectors_text_end));
 
-	mem_reserve(__pa(_DebugInterruptVector_text_start),
-		    __pa(_DebugInterruptVector_text_end));
+	mem_reserve(__pa(&_DebugInterruptVector_text_start),
+		    __pa(&_DebugInterruptVector_text_end));
 
-	mem_reserve(__pa(_KernelExceptionVector_text_start),
-		    __pa(_KernelExceptionVector_text_end));
+	mem_reserve(__pa(&_KernelExceptionVector_text_start),
+		    __pa(&_KernelExceptionVector_text_end));
 
-	mem_reserve(__pa(_UserExceptionVector_text_start),
-		    __pa(_UserExceptionVector_text_end));
+	mem_reserve(__pa(&_UserExceptionVector_text_start),
+		    __pa(&_UserExceptionVector_text_end));
 
-	mem_reserve(__pa(_DoubleExceptionVector_text_start),
-		    __pa(_DoubleExceptionVector_text_end));
+	mem_reserve(__pa(&_DoubleExceptionVector_text_start),
+		    __pa(&_DoubleExceptionVector_text_end));
 
-	mem_reserve(__pa(_exception_text_start),
-		    __pa(_exception_text_end));
+	mem_reserve(__pa(&_exception_text_start),
+		    __pa(&_exception_text_end));
 #if XCHAL_EXCM_LEVEL >= 2
-	mem_reserve(__pa(_Level2InterruptVector_text_start),
-		    __pa(_Level2InterruptVector_text_end));
+	mem_reserve(__pa(&_Level2InterruptVector_text_start),
+		    __pa(&_Level2InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 3
-	mem_reserve(__pa(_Level3InterruptVector_text_start),
-		    __pa(_Level3InterruptVector_text_end));
+	mem_reserve(__pa(&_Level3InterruptVector_text_start),
+		    __pa(&_Level3InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 4
-	mem_reserve(__pa(_Level4InterruptVector_text_start),
-		    __pa(_Level4InterruptVector_text_end));
+	mem_reserve(__pa(&_Level4InterruptVector_text_start),
+		    __pa(&_Level4InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 5
-	mem_reserve(__pa(_Level5InterruptVector_text_start),
-		    __pa(_Level5InterruptVector_text_end));
+	mem_reserve(__pa(&_Level5InterruptVector_text_start),
+		    __pa(&_Level5InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 6
-	mem_reserve(__pa(_Level6InterruptVector_text_start),
-		    __pa(_Level6InterruptVector_text_end));
+	mem_reserve(__pa(&_Level6InterruptVector_text_start),
+		    __pa(&_Level6InterruptVector_text_end));
 #endif
 
 #endif /* CONFIG_VECTORS_ADDR */
 
-#ifdef CONFIG_SECONDARY_RESET_VECTOR
-	mem_reserve(__pa(_SecondaryResetVector_text_start),
-		    __pa(_SecondaryResetVector_text_end));
+#ifdef CONFIG_SMP
+	mem_reserve(__pa(&_SecondaryResetVector_text_start),
+		    __pa(&_SecondaryResetVector_text_end));
 #endif
 	parse_early_param();
 	bootmem_init();
@@ -530,30 +562,19 @@ void cpu_reset(void)
 
 void machine_restart(char * cmd)
 {
-	local_irq_disable();
-	smp_send_stop();
-	do_kernel_restart(cmd);
-	pr_err("Reboot failed -- System halted\n");
-	while (1)
-		cpu_relax();
+	platform_restart();
 }
 
 void machine_halt(void)
 {
-	local_irq_disable();
-	smp_send_stop();
-	do_kernel_power_off();
-	while (1)
-		cpu_relax();
+	platform_halt();
+	while (1);
 }
 
 void machine_power_off(void)
 {
-	local_irq_disable();
-	smp_send_stop();
-	do_kernel_power_off();
-	while (1)
-		cpu_relax();
+	platform_power_off();
+	while (1);
 }
 #ifdef CONFIG_PROC_FS
 
@@ -593,12 +614,6 @@ c_show(struct seq_file *f, void *slot)
 # if XCHAL_HAVE_OCD
 		     "ocd "
 # endif
-#if XCHAL_HAVE_TRAX
-		     "trax "
-#endif
-#if XCHAL_NUM_PERF_COUNTERS
-		     "perf "
-#endif
 #endif
 #if XCHAL_HAVE_DENSITY
 	    	     "density "
@@ -648,13 +663,11 @@ c_show(struct seq_file *f, void *slot)
 	seq_printf(f,"physical aregs\t: %d\n"
 		     "misc regs\t: %d\n"
 		     "ibreak\t\t: %d\n"
-		     "dbreak\t\t: %d\n"
-		     "perf counters\t: %d\n",
+		     "dbreak\t\t: %d\n",
 		     XCHAL_NUM_AREGS,
 		     XCHAL_NUM_MISC_REGS,
 		     XCHAL_NUM_IBREAK,
-		     XCHAL_NUM_DBREAK,
-		     XCHAL_NUM_PERF_COUNTERS);
+		     XCHAL_NUM_DBREAK);
 
 
 	/* Interrupt. */

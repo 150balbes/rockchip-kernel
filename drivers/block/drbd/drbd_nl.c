@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
    drbd_nl.c
 
@@ -770,7 +770,6 @@ int drbd_adm_set_role(struct sk_buff *skb, struct genl_info *info)
 	struct set_role_parms parms;
 	int err;
 	enum drbd_ret_code retcode;
-	enum drbd_state_rv rv;
 
 	retcode = drbd_adm_prepare(&adm_ctx, skb, info, DRBD_ADM_NEED_MINOR);
 	if (!adm_ctx.reply_skb)
@@ -791,14 +790,14 @@ int drbd_adm_set_role(struct sk_buff *skb, struct genl_info *info)
 	mutex_lock(&adm_ctx.resource->adm_mutex);
 
 	if (info->genlhdr->cmd == DRBD_ADM_PRIMARY)
-		rv = drbd_set_role(adm_ctx.device, R_PRIMARY, parms.assume_uptodate);
+		retcode = (enum drbd_ret_code)drbd_set_role(adm_ctx.device,
+						R_PRIMARY, parms.assume_uptodate);
 	else
-		rv = drbd_set_role(adm_ctx.device, R_SECONDARY, 0);
+		retcode = (enum drbd_ret_code)drbd_set_role(adm_ctx.device,
+						R_SECONDARY, 0);
 
 	mutex_unlock(&adm_ctx.resource->adm_mutex);
 	genl_lock();
-	drbd_adm_finish(&adm_ctx, info, rv);
-	return 0;
 out:
 	drbd_adm_finish(&adm_ctx, info, retcode);
 	return 0;
@@ -919,7 +918,7 @@ void drbd_resume_io(struct drbd_device *device)
 		wake_up(&device->misc_wait);
 }
 
-/*
+/**
  * drbd_determine_dev_size() -  Sets the right device size obeying all constraints
  * @device:	DRBD device.
  *
@@ -1053,7 +1052,7 @@ drbd_determine_dev_size(struct drbd_device *device, enum dds_flags flags, struct
 			 la_size_changed ? "size changed" : "md moved");
 		/* next line implicitly does drbd_suspend_io()+drbd_resume_io() */
 		drbd_bitmap_io(device, md_moved ? &drbd_bm_write_all : &drbd_bm_write,
-			       "size changed", BM_LOCKED_MASK, NULL);
+			       "size changed", BM_LOCKED_MASK);
 
 		/* on-disk bitmap and activity log is authoritative again
 		 * (unless there was an IO error meanwhile...) */
@@ -1137,7 +1136,7 @@ drbd_new_dev_size(struct drbd_device *device, struct drbd_backing_dev *bdev,
 	return size;
 }
 
-/*
+/**
  * drbd_check_al_size() - Ensures that the AL is of the right size
  * @device:	DRBD device.
  *
@@ -1205,40 +1204,50 @@ static unsigned int drbd_max_discard_sectors(struct drbd_connection *connection)
 }
 
 static void decide_on_discard_support(struct drbd_device *device,
-		struct drbd_backing_dev *bdev)
+			struct request_queue *q,
+			struct request_queue *b,
+			bool discard_zeroes_if_aligned)
 {
-	struct drbd_connection *connection =
-		first_peer_device(device)->connection;
-	struct request_queue *q = device->rq_queue;
-	unsigned int max_discard_sectors;
-
-	if (bdev && !bdev_max_discard_sectors(bdev->backing_bdev))
-		goto not_supported;
-
-	if (connection->cstate >= C_CONNECTED &&
-	    !(connection->agreed_features & DRBD_FF_TRIM)) {
-		drbd_info(connection,
-			"peer DRBD too old, does not support TRIM: disabling discards\n");
-		goto not_supported;
-	}
-
-	/*
-	 * We don't care for the granularity, really.
-	 *
-	 * Stacking limits below should fix it for the local device.  Whether or
-	 * not it is a suitable granularity on the remote device is not our
-	 * problem, really. If you care, you need to use devices with similar
-	 * topology on all peers.
+	/* q = drbd device queue (device->rq_queue)
+	 * b = backing device queue (device->ldev->backing_bdev->bd_disk->queue),
+	 *     or NULL if diskless
 	 */
-	blk_queue_discard_granularity(q, 512);
-	max_discard_sectors = drbd_max_discard_sectors(connection);
-	blk_queue_max_discard_sectors(q, max_discard_sectors);
-	blk_queue_max_write_zeroes_sectors(q, max_discard_sectors);
-	return;
+	struct drbd_connection *connection = first_peer_device(device)->connection;
+	bool can_do = b ? blk_queue_discard(b) : true;
 
-not_supported:
-	blk_queue_discard_granularity(q, 0);
-	blk_queue_max_discard_sectors(q, 0);
+	if (can_do && connection->cstate >= C_CONNECTED && !(connection->agreed_features & DRBD_FF_TRIM)) {
+		can_do = false;
+		drbd_info(connection, "peer DRBD too old, does not support TRIM: disabling discards\n");
+	}
+	if (can_do) {
+		/* We don't care for the granularity, really.
+		 * Stacking limits below should fix it for the local
+		 * device.  Whether or not it is a suitable granularity
+		 * on the remote device is not our problem, really. If
+		 * you care, you need to use devices with similar
+		 * topology on all peers. */
+		blk_queue_discard_granularity(q, 512);
+		q->limits.max_discard_sectors = drbd_max_discard_sectors(connection);
+		blk_queue_flag_set(QUEUE_FLAG_DISCARD, q);
+		q->limits.max_write_zeroes_sectors = drbd_max_discard_sectors(connection);
+	} else {
+		blk_queue_flag_clear(QUEUE_FLAG_DISCARD, q);
+		blk_queue_discard_granularity(q, 0);
+		q->limits.max_discard_sectors = 0;
+		q->limits.max_write_zeroes_sectors = 0;
+	}
+}
+
+static void fixup_discard_if_not_supported(struct request_queue *q)
+{
+	/* To avoid confusion, if this queue does not support discard, clear
+	 * max_discard_sectors, which is what lsblk -D reports to the user.
+	 * Older kernels got this wrong in "stack limits".
+	 * */
+	if (!blk_queue_discard(q)) {
+		blk_queue_max_discard_sectors(q, 0);
+		blk_queue_discard_granularity(q, 0);
+	}
 }
 
 static void fixup_write_zeroes(struct drbd_device *device, struct request_queue *q)
@@ -1256,16 +1265,69 @@ static void fixup_write_zeroes(struct drbd_device *device, struct request_queue 
 		q->limits.max_write_zeroes_sectors = 0;
 }
 
-static void fixup_discard_support(struct drbd_device *device, struct request_queue *q)
+static void decide_on_write_same_support(struct drbd_device *device,
+			struct request_queue *q,
+			struct request_queue *b, struct o_qlim *o,
+			bool disable_write_same)
 {
-	unsigned int max_discard = device->rq_queue->limits.max_discard_sectors;
-	unsigned int discard_granularity =
-		device->rq_queue->limits.discard_granularity >> SECTOR_SHIFT;
+	struct drbd_peer_device *peer_device = first_peer_device(device);
+	struct drbd_connection *connection = peer_device->connection;
+	bool can_do = b ? b->limits.max_write_same_sectors : true;
 
-	if (discard_granularity > max_discard) {
-		blk_queue_discard_granularity(q, 0);
-		blk_queue_max_discard_sectors(q, 0);
+	if (can_do && disable_write_same) {
+		can_do = false;
+		drbd_info(peer_device, "WRITE_SAME disabled by config\n");
 	}
+
+	if (can_do && connection->cstate >= C_CONNECTED && !(connection->agreed_features & DRBD_FF_WSAME)) {
+		can_do = false;
+		drbd_info(peer_device, "peer does not support WRITE_SAME\n");
+	}
+
+	if (o) {
+		/* logical block size; queue_logical_block_size(NULL) is 512 */
+		unsigned int peer_lbs = be32_to_cpu(o->logical_block_size);
+		unsigned int me_lbs_b = queue_logical_block_size(b);
+		unsigned int me_lbs = queue_logical_block_size(q);
+
+		if (me_lbs_b != me_lbs) {
+			drbd_warn(device,
+				"logical block size of local backend does not match (drbd:%u, backend:%u); was this a late attach?\n",
+				me_lbs, me_lbs_b);
+			/* rather disable write same than trigger some BUG_ON later in the scsi layer. */
+			can_do = false;
+		}
+		if (me_lbs_b != peer_lbs) {
+			drbd_warn(peer_device, "logical block sizes do not match (me:%u, peer:%u); this may cause problems.\n",
+				me_lbs, peer_lbs);
+			if (can_do) {
+				drbd_dbg(peer_device, "logical block size mismatch: WRITE_SAME disabled.\n");
+				can_do = false;
+			}
+			me_lbs = max(me_lbs, me_lbs_b);
+			/* We cannot change the logical block size of an in-use queue.
+			 * We can only hope that access happens to be properly aligned.
+			 * If not, the peer will likely produce an IO error, and detach. */
+			if (peer_lbs > me_lbs) {
+				if (device->state.role != R_PRIMARY) {
+					blk_queue_logical_block_size(q, peer_lbs);
+					drbd_warn(peer_device, "logical block size set to %u\n", peer_lbs);
+				} else {
+					drbd_warn(peer_device,
+						"current Primary must NOT adjust logical block size (%u -> %u); hope for the best.\n",
+						me_lbs, peer_lbs);
+				}
+			}
+		}
+		if (can_do && !o->write_same_capable) {
+			/* If we introduce an open-coded write-same loop on the receiving side,
+			 * the peer would present itself as "capable". */
+			drbd_dbg(peer_device, "WRITE_SAME disabled (peer device not capable)\n");
+			can_do = false;
+		}
+	}
+
+	blk_queue_max_write_same_sectors(q, can_do ? DRBD_MAX_BBIO_SECTORS : 0);
 }
 
 static void drbd_setup_queue_param(struct drbd_device *device, struct drbd_backing_dev *bdev,
@@ -1276,6 +1338,8 @@ static void drbd_setup_queue_param(struct drbd_device *device, struct drbd_backi
 	unsigned int max_segments = 0;
 	struct request_queue *b = NULL;
 	struct disk_conf *dc;
+	bool discard_zeroes_if_aligned = true;
+	bool disable_write_same = false;
 
 	if (bdev) {
 		b = bdev->backing_bdev->bd_disk->queue;
@@ -1284,6 +1348,8 @@ static void drbd_setup_queue_param(struct drbd_device *device, struct drbd_backi
 		rcu_read_lock();
 		dc = rcu_dereference(device->ldev->disk_conf);
 		max_segments = dc->max_bio_bvecs;
+		discard_zeroes_if_aligned = dc->discard_zeroes_if_aligned;
+		disable_write_same = dc->disable_write_same;
 		rcu_read_unlock();
 
 		blk_set_stacking_limits(&q->limits);
@@ -1293,14 +1359,15 @@ static void drbd_setup_queue_param(struct drbd_device *device, struct drbd_backi
 	/* This is the workaround for "bio would need to, but cannot, be split" */
 	blk_queue_max_segments(q, max_segments ? max_segments : BLK_MAX_SEGMENTS);
 	blk_queue_segment_boundary(q, PAGE_SIZE-1);
-	decide_on_discard_support(device, bdev);
+	decide_on_discard_support(device, q, b, discard_zeroes_if_aligned);
+	decide_on_write_same_support(device, q, b, o, disable_write_same);
 
 	if (b) {
 		blk_stack_limits(&q->limits, &b->limits, 0);
-		disk_update_readahead(device->vdisk);
+		blk_queue_update_readahead(q);
 	}
+	fixup_discard_if_not_supported(q);
 	fixup_write_zeroes(device, q);
-	fixup_discard_support(device, q);
 }
 
 void drbd_reconsider_queue_parameters(struct drbd_device *device, struct drbd_backing_dev *bdev, struct o_qlim *o)
@@ -1438,14 +1505,14 @@ static bool write_ordering_changed(struct disk_conf *a, struct disk_conf *b)
 static void sanitize_disk_conf(struct drbd_device *device, struct disk_conf *disk_conf,
 			       struct drbd_backing_dev *nbc)
 {
-	struct block_device *bdev = nbc->backing_bdev;
+	struct request_queue * const q = nbc->backing_bdev->bd_disk->queue;
 
 	if (disk_conf->al_extents < DRBD_AL_EXTENTS_MIN)
 		disk_conf->al_extents = DRBD_AL_EXTENTS_MIN;
 	if (disk_conf->al_extents > drbd_al_extents_max(nbc))
 		disk_conf->al_extents = drbd_al_extents_max(nbc);
 
-	if (!bdev_max_discard_sectors(bdev)) {
+	if (!blk_queue_discard(q)) {
 		if (disk_conf->rs_discard_granularity) {
 			disk_conf->rs_discard_granularity = 0; /* disable feature */
 			drbd_info(device, "rs_discard_granularity feature disabled\n");
@@ -1454,19 +1521,16 @@ static void sanitize_disk_conf(struct drbd_device *device, struct disk_conf *dis
 
 	if (disk_conf->rs_discard_granularity) {
 		int orig_value = disk_conf->rs_discard_granularity;
-		sector_t discard_size = bdev_max_discard_sectors(bdev) << 9;
-		unsigned int discard_granularity = bdev_discard_granularity(bdev);
 		int remainder;
 
-		if (discard_granularity > disk_conf->rs_discard_granularity)
-			disk_conf->rs_discard_granularity = discard_granularity;
+		if (q->limits.discard_granularity > disk_conf->rs_discard_granularity)
+			disk_conf->rs_discard_granularity = q->limits.discard_granularity;
 
-		remainder = disk_conf->rs_discard_granularity %
-				discard_granularity;
+		remainder = disk_conf->rs_discard_granularity % q->limits.discard_granularity;
 		disk_conf->rs_discard_granularity += remainder;
 
-		if (disk_conf->rs_discard_granularity > discard_size)
-			disk_conf->rs_discard_granularity = discard_size;
+		if (disk_conf->rs_discard_granularity > q->limits.max_discard_sectors << 9)
+			disk_conf->rs_discard_granularity = q->limits.max_discard_sectors << 9;
 
 		if (disk_conf->rs_discard_granularity != orig_value)
 			drbd_info(device, "rs_discard_granularity changed to %d\n",
@@ -1543,7 +1607,7 @@ int drbd_adm_disk_opts(struct sk_buff *skb, struct genl_info *info)
 		goto fail_unlock;
 	}
 
-	if (!expect(device, new_disk_conf->resync_rate >= 1))
+	if (!expect(new_disk_conf->resync_rate >= 1))
 		new_disk_conf->resync_rate = 1;
 
 	sanitize_disk_conf(device, new_disk_conf, device->ldev);
@@ -1602,8 +1666,8 @@ int drbd_adm_disk_opts(struct sk_buff *skb, struct genl_info *info)
 	if (write_ordering_changed(old_disk_conf, new_disk_conf))
 		drbd_bump_write_ordering(device->resource, NULL, WO_BDEV_FLUSH);
 
-	if (old_disk_conf->discard_zeroes_if_aligned !=
-	    new_disk_conf->discard_zeroes_if_aligned)
+	if (old_disk_conf->discard_zeroes_if_aligned != new_disk_conf->discard_zeroes_if_aligned
+	||  old_disk_conf->disable_write_same != new_disk_conf->disable_write_same)
 		drbd_reconsider_queue_parameters(device, device->ldev, NULL);
 
 	drbd_md_sync(device);
@@ -1615,7 +1679,8 @@ int drbd_adm_disk_opts(struct sk_buff *skb, struct genl_info *info)
 			drbd_send_sync_param(peer_device);
 	}
 
-	kvfree_rcu_mightsleep(old_disk_conf);
+	synchronize_rcu();
+	kfree(old_disk_conf);
 	kfree(old_plan);
 	mod_timer(&device->request_timer, jiffies + HZ);
 	goto success;
@@ -1640,8 +1705,8 @@ static struct block_device *open_backing_dev(struct drbd_device *device,
 	struct block_device *bdev;
 	int err = 0;
 
-	bdev = blkdev_get_by_path(bdev_path, BLK_OPEN_READ | BLK_OPEN_WRITE,
-				  claim_ptr, NULL);
+	bdev = blkdev_get_by_path(bdev_path,
+				  FMODE_READ | FMODE_WRITE | FMODE_EXCL, claim_ptr);
 	if (IS_ERR(bdev)) {
 		drbd_err(device, "open(\"%s\") failed with %ld\n",
 				bdev_path, PTR_ERR(bdev));
@@ -1653,7 +1718,7 @@ static struct block_device *open_backing_dev(struct drbd_device *device,
 
 	err = bd_link_disk_holder(bdev, device->vdisk);
 	if (err) {
-		blkdev_put(bdev, claim_ptr);
+		blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
 		drbd_err(device, "bd_link_disk_holder(\"%s\", ...) failed with %d\n",
 				bdev_path, err);
 		bdev = ERR_PTR(err);
@@ -1695,13 +1760,13 @@ static int open_backing_devices(struct drbd_device *device,
 }
 
 static void close_backing_dev(struct drbd_device *device, struct block_device *bdev,
-		void *claim_ptr, bool do_bd_unlink)
+	bool do_bd_unlink)
 {
 	if (!bdev)
 		return;
 	if (do_bd_unlink)
 		bd_unlink_disk_holder(bdev, device->vdisk);
-	blkdev_put(bdev, claim_ptr);
+	blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
 }
 
 void drbd_backing_dev_free(struct drbd_device *device, struct drbd_backing_dev *ldev)
@@ -1709,11 +1774,8 @@ void drbd_backing_dev_free(struct drbd_device *device, struct drbd_backing_dev *
 	if (ldev == NULL)
 		return;
 
-	close_backing_dev(device, ldev->md_bdev,
-			  ldev->md.meta_dev_idx < 0 ?
-				(void *)device : (void *)drbd_m_holder,
-			  ldev->md_bdev != ldev->backing_bdev);
-	close_backing_dev(device, ldev->backing_bdev, device, true);
+	close_backing_dev(device, ldev->md_bdev, ldev->md_bdev != ldev->backing_bdev);
+	close_backing_dev(device, ldev->backing_bdev, true);
 
 	kfree(ldev->disk_conf);
 	kfree(ldev);
@@ -2030,15 +2092,13 @@ int drbd_adm_attach(struct sk_buff *skb, struct genl_info *info)
 		drbd_info(device, "Assuming that all blocks are out of sync "
 		     "(aka FullSync)\n");
 		if (drbd_bitmap_io(device, &drbd_bmio_set_n_write,
-			"set_n_write from attaching", BM_LOCKED_MASK,
-			NULL)) {
+			"set_n_write from attaching", BM_LOCKED_MASK)) {
 			retcode = ERR_IO_MD_DISK;
 			goto force_diskless_dec;
 		}
 	} else {
 		if (drbd_bitmap_io(device, &drbd_bm_read,
-			"read from attaching", BM_LOCKED_MASK,
-			NULL)) {
+			"read from attaching", BM_LOCKED_MASK)) {
 			retcode = ERR_IO_MD_DISK;
 			goto force_diskless_dec;
 		}
@@ -2129,11 +2189,8 @@ int drbd_adm_attach(struct sk_buff *skb, struct genl_info *info)
  fail:
 	conn_reconfig_done(connection);
 	if (nbc) {
-		close_backing_dev(device, nbc->md_bdev,
-			  nbc->disk_conf->meta_dev_idx < 0 ?
-				(void *)device : (void *)drbd_m_holder,
-			  nbc->md_bdev != nbc->backing_bdev);
-		close_backing_dev(device, nbc->backing_bdev, device, true);
+		close_backing_dev(device, nbc->md_bdev, nbc->md_bdev != nbc->backing_bdev);
+		close_backing_dev(device, nbc->backing_bdev, true);
 		kfree(nbc);
 	}
 	kfree(new_disk_conf);
@@ -2454,7 +2511,8 @@ int drbd_adm_net_opts(struct sk_buff *skb, struct genl_info *info)
 
 	mutex_unlock(&connection->resource->conf_update);
 	mutex_unlock(&connection->data.mutex);
-	kvfree_rcu_mightsleep(old_net_conf);
+	synchronize_rcu();
+	kfree(old_net_conf);
 
 	if (connection->cstate >= C_WF_REPORT_PARAMS) {
 		struct drbd_peer_device *peer_device;
@@ -2512,7 +2570,6 @@ int drbd_adm_connect(struct sk_buff *skb, struct genl_info *info)
 	struct drbd_resource *resource;
 	struct drbd_connection *connection;
 	enum drbd_ret_code retcode;
-	enum drbd_state_rv rv;
 	int i;
 	int err;
 
@@ -2632,11 +2689,12 @@ int drbd_adm_connect(struct sk_buff *skb, struct genl_info *info)
 	}
 	rcu_read_unlock();
 
-	rv = conn_request_state(connection, NS(conn, C_UNCONNECTED), CS_VERBOSE);
+	retcode = (enum drbd_ret_code)conn_request_state(connection,
+					NS(conn, C_UNCONNECTED), CS_VERBOSE);
 
 	conn_reconfig_done(connection);
 	mutex_unlock(&adm_ctx.resource->adm_mutex);
-	drbd_adm_finish(&adm_ctx, info, rv);
+	drbd_adm_finish(&adm_ctx, info, retcode);
 	return 0;
 
 fail:
@@ -2744,12 +2802,11 @@ int drbd_adm_disconnect(struct sk_buff *skb, struct genl_info *info)
 
 	mutex_lock(&adm_ctx.resource->adm_mutex);
 	rv = conn_try_disconnect(connection, parms.force_disconnect);
+	if (rv < SS_SUCCESS)
+		retcode = (enum drbd_ret_code)rv;
+	else
+		retcode = NO_ERROR;
 	mutex_unlock(&adm_ctx.resource->adm_mutex);
-	if (rv < SS_SUCCESS) {
-		drbd_adm_finish(&adm_ctx, info, rv);
-		return 0;
-	}
-	retcode = NO_ERROR;
  fail:
 	drbd_adm_finish(&adm_ctx, info, retcode);
 	return 0;
@@ -2868,7 +2925,8 @@ int drbd_adm_resize(struct sk_buff *skb, struct genl_info *info)
 		new_disk_conf->disk_size = (sector_t)rs.resize_size;
 		rcu_assign_pointer(device->ldev->disk_conf, new_disk_conf);
 		mutex_unlock(&device->resource->conf_update);
-		kvfree_rcu_mightsleep(old_disk_conf);
+		synchronize_rcu();
+		kfree(old_disk_conf);
 		new_disk_conf = NULL;
 	}
 
@@ -2980,7 +3038,7 @@ int drbd_adm_invalidate(struct sk_buff *skb, struct genl_info *info)
 		retcode = drbd_request_state(device, NS(disk, D_INCONSISTENT));
 		if (retcode >= SS_SUCCESS) {
 			if (drbd_bitmap_io(device, &drbd_bmio_set_n_write,
-				"set_n_write from invalidate", BM_LOCKED_MASK, NULL))
+				"set_n_write from invalidate", BM_LOCKED_MASK))
 				retcode = ERR_IO_MD_DISK;
 		}
 	} else
@@ -3013,12 +3071,11 @@ out:
 	return 0;
 }
 
-static int drbd_bmio_set_susp_al(struct drbd_device *device,
-		struct drbd_peer_device *peer_device) __must_hold(local)
+static int drbd_bmio_set_susp_al(struct drbd_device *device) __must_hold(local)
 {
 	int rv;
 
-	rv = drbd_bmio_set_n_write(device, peer_device);
+	rv = drbd_bmio_set_n_write(device);
 	drbd_suspend_al(device);
 	return rv;
 }
@@ -3061,7 +3118,7 @@ int drbd_adm_invalidate_peer(struct sk_buff *skb, struct genl_info *info)
 		if (retcode >= SS_SUCCESS) {
 			if (drbd_bitmap_io(device, &drbd_bmio_set_susp_al,
 				"set_n_write from invalidate_peer",
-				BM_LOCKED_SET_ALLOWED, NULL))
+				BM_LOCKED_SET_ALLOWED))
 				retcode = ERR_IO_MD_DISK;
 		}
 	} else
@@ -4157,7 +4214,7 @@ int drbd_adm_new_c_uuid(struct sk_buff *skb, struct genl_info *info)
 
 	if (args.clear_bm) {
 		err = drbd_bitmap_io(device, &drbd_bmio_clear_n_write,
-			"clear_n_write from new_c_uuid", BM_LOCKED_MASK, NULL);
+			"clear_n_write from new_c_uuid", BM_LOCKED_MASK);
 		if (err) {
 			drbd_err(device, "Writing bitmap failed with %d\n", err);
 			retcode = ERR_IO_MD_DISK;
@@ -4774,7 +4831,7 @@ void notify_helper(enum drbd_notification_type type,
 	struct drbd_genlmsghdr *dh;
 	int err;
 
-	strscpy(helper_info.helper_name, name, sizeof(helper_info.helper_name));
+	strlcpy(helper_info.helper_name, name, sizeof(helper_info.helper_name));
 	helper_info.helper_name_len = min(strlen(name), sizeof(helper_info.helper_name));
 	helper_info.helper_status = status;
 

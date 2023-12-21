@@ -25,6 +25,7 @@
 #include <linux/audit.h>
 #include <linux/signal.h>
 #include <linux/regset.h>
+#include <linux/tracehook.h>
 #include <trace/syscall.h>
 #include <linux/compat.h>
 #include <linux/elf.h>
@@ -332,8 +333,8 @@ static int genregs64_set(struct task_struct *target,
 	}
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  36 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						36 * sizeof(u64), -1);
 
 	return ret;
 }
@@ -406,8 +407,8 @@ static int fpregs64_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  35 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						35 * sizeof(u64), -1);
 	return ret;
 }
 
@@ -473,8 +474,10 @@ static int setregs64_set(struct task_struct *target,
 				 15 * sizeof(u64));
 	if (ret)
 		return ret;
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  15 * sizeof(u64), 16 * sizeof(u64));
+	ret =user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+				 15 * sizeof(u64), 16 * sizeof(u64));
+	if (ret)
+		return ret;
 	/* TSTATE */
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				 &tstate,
@@ -668,9 +671,8 @@ finish:
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
 
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  38 * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 38 * sizeof(reg), -1);
 }
 
 static int fpregs32_get(struct task_struct *target,
@@ -736,8 +738,8 @@ static int fpregs32_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  34 * sizeof(u32), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						34 * sizeof(u32), -1);
 	return ret;
 }
 
@@ -1093,7 +1095,7 @@ asmlinkage int syscall_trace_enter(struct pt_regs *regs)
 		user_exit();
 
 	if (test_thread_flag(TIF_SYSCALL_TRACE))
-		ret = ptrace_report_syscall_entry(regs);
+		ret = tracehook_report_syscall_entry(regs);
 
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 		trace_sys_enter(regs, regs->u_regs[UREG_G1]);
@@ -1116,7 +1118,7 @@ asmlinkage void syscall_trace_leave(struct pt_regs *regs)
 		trace_sys_exit(regs, regs->u_regs[UREG_I0]);
 
 	if (test_thread_flag(TIF_SYSCALL_TRACE))
-		ptrace_report_syscall_exit(regs, 0);
+		tracehook_report_syscall_exit(regs, 0);
 
 	if (test_thread_flag(TIF_NOHZ))
 		user_enter();

@@ -12,16 +12,7 @@
  *
  * Please use one of the three interfaces below.
  */
-extern u64 sched_clock(void);
-
-#if defined(CONFIG_ARCH_WANTS_NO_INSTR) || defined(CONFIG_GENERIC_SCHED_CLOCK)
-extern u64 sched_clock_noinstr(void);
-#else
-static __always_inline u64 sched_clock_noinstr(void)
-{
-	return sched_clock();
-}
-#endif
+extern unsigned long long notrace sched_clock(void);
 
 /*
  * See the comment in kernel/sched/clock.c
@@ -54,12 +45,7 @@ static inline u64 cpu_clock(int cpu)
 	return sched_clock();
 }
 
-static __always_inline u64 local_clock_noinstr(void)
-{
-	return sched_clock_noinstr();
-}
-
-static __always_inline u64 local_clock(void)
+static inline u64 local_clock(void)
 {
 	return sched_clock();
 }
@@ -93,9 +79,10 @@ static inline u64 cpu_clock(int cpu)
 	return sched_clock_cpu(cpu);
 }
 
-extern u64 local_clock_noinstr(void);
-extern u64 local_clock(void);
-
+static inline u64 local_clock(void)
+{
+	return sched_clock_cpu(raw_smp_processor_id());
+}
 #endif
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING

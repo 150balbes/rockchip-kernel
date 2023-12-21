@@ -4,10 +4,7 @@
 
 #include <asm/vmx.h>
 
-#include "../lapic.h"
-#include "../x86.h"
-#include "../pmu.h"
-#include "../cpuid.h"
+#include "lapic.h"
 
 extern bool __read_mostly enable_vpid;
 extern bool __read_mostly flexpriority_enabled;
@@ -15,14 +12,13 @@ extern bool __read_mostly enable_ept;
 extern bool __read_mostly enable_unrestricted_guest;
 extern bool __read_mostly enable_ept_ad_bits;
 extern bool __read_mostly enable_pml;
-extern bool __read_mostly enable_ipiv;
+extern bool __read_mostly enable_apicv;
 extern int __read_mostly pt_mode;
 
 #define PT_MODE_SYSTEM		0
 #define PT_MODE_HOST_GUEST	1
 
 #define PMU_CAP_FW_WRITES	(1ULL << 13)
-#define PMU_CAP_LBR_FMT		0x3f
 
 struct nested_vmx_msrs {
 	/*
@@ -55,24 +51,23 @@ struct nested_vmx_msrs {
 
 struct vmcs_config {
 	int size;
+	int order;
 	u32 basic_cap;
 	u32 revision_id;
 	u32 pin_based_exec_ctrl;
 	u32 cpu_based_exec_ctrl;
 	u32 cpu_based_2nd_exec_ctrl;
-	u64 cpu_based_3rd_exec_ctrl;
 	u32 vmexit_ctrl;
 	u32 vmentry_ctrl;
-	u64 misc;
 	struct nested_vmx_msrs nested;
 };
-extern struct vmcs_config vmcs_config __ro_after_init;
+extern struct vmcs_config vmcs_config;
 
 struct vmx_capability {
 	u32 ept;
 	u32 vpid;
 };
-extern struct vmx_capability vmx_capability __ro_after_init;
+extern struct vmx_capability vmx_capability;
 
 static inline bool cpu_has_vmx_basic_inout(void)
 {
@@ -81,8 +76,7 @@ static inline bool cpu_has_vmx_basic_inout(void)
 
 static inline bool cpu_has_virtual_nmis(void)
 {
-	return vmcs_config.pin_based_exec_ctrl & PIN_BASED_VIRTUAL_NMIS &&
-	       vmcs_config.cpu_based_exec_ctrl & CPU_BASED_NMI_WINDOW_EXITING;
+	return vmcs_config.pin_based_exec_ctrl & PIN_BASED_VIRTUAL_NMIS;
 }
 
 static inline bool cpu_has_vmx_preemption_timer(void)
@@ -93,22 +87,26 @@ static inline bool cpu_has_vmx_preemption_timer(void)
 
 static inline bool cpu_has_vmx_posted_intr(void)
 {
-	return vmcs_config.pin_based_exec_ctrl & PIN_BASED_POSTED_INTR;
+	return IS_ENABLED(CONFIG_X86_LOCAL_APIC) &&
+		vmcs_config.pin_based_exec_ctrl & PIN_BASED_POSTED_INTR;
 }
 
 static inline bool cpu_has_load_ia32_efer(void)
 {
-	return vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_EFER;
+	return (vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_EFER) &&
+	       (vmcs_config.vmexit_ctrl & VM_EXIT_LOAD_IA32_EFER);
 }
 
 static inline bool cpu_has_load_perf_global_ctrl(void)
 {
-	return vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_PERF_GLOBAL_CTRL;
+	return (vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_PERF_GLOBAL_CTRL) &&
+	       (vmcs_config.vmexit_ctrl & VM_EXIT_LOAD_IA32_PERF_GLOBAL_CTRL);
 }
 
 static inline bool cpu_has_vmx_mpx(void)
 {
-	return vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_BNDCFGS;
+	return (vmcs_config.vmexit_ctrl & VM_EXIT_CLEAR_BNDCFGS) &&
+		(vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_BNDCFGS);
 }
 
 static inline bool cpu_has_vmx_tpr_shadow(void)
@@ -132,12 +130,6 @@ static inline bool cpu_has_secondary_exec_ctrls(void)
 		CPU_BASED_ACTIVATE_SECONDARY_CONTROLS;
 }
 
-static inline bool cpu_has_tertiary_exec_ctrls(void)
-{
-	return vmcs_config.cpu_based_exec_ctrl &
-		CPU_BASED_ACTIVATE_TERTIARY_CONTROLS;
-}
-
 static inline bool cpu_has_vmx_virtualize_apic_accesses(void)
 {
 	return vmcs_config.cpu_based_2nd_exec_ctrl &
@@ -152,8 +144,8 @@ static inline bool cpu_has_vmx_ept(void)
 
 static inline bool vmx_umip_emulated(void)
 {
-	return !boot_cpu_has(X86_FEATURE_UMIP) &&
-	       (vmcs_config.cpu_based_2nd_exec_ctrl & SECONDARY_EXEC_DESC);
+	return vmcs_config.cpu_based_2nd_exec_ctrl &
+		SECONDARY_EXEC_DESC;
 }
 
 static inline bool cpu_has_vmx_rdtscp(void)
@@ -224,8 +216,11 @@ static inline bool cpu_has_vmx_vmfunc(void)
 
 static inline bool cpu_has_vmx_shadow_vmcs(void)
 {
+	u64 vmx_msr;
+
 	/* check if the cpu supports writing r/o exit information fields */
-	if (!(vmcs_config.misc & MSR_IA32_VMX_MISC_VMWRITE_SHADOW_RO_FIELDS))
+	rdmsrl(MSR_IA32_VMX_MISC, vmx_msr);
+	if (!(vmx_msr & MSR_IA32_VMX_MISC_VMWRITE_SHADOW_RO_FIELDS))
 		return false;
 
 	return vmcs_config.cpu_based_2nd_exec_ctrl &
@@ -267,22 +262,11 @@ static inline bool cpu_has_vmx_tsc_scaling(void)
 		SECONDARY_EXEC_TSC_SCALING;
 }
 
-static inline bool cpu_has_vmx_bus_lock_detection(void)
-{
-	return vmcs_config.cpu_based_2nd_exec_ctrl &
-	    SECONDARY_EXEC_BUS_LOCK_DETECTION;
-}
-
 static inline bool cpu_has_vmx_apicv(void)
 {
 	return cpu_has_vmx_apic_register_virt() &&
 		cpu_has_vmx_virtual_intr_delivery() &&
 		cpu_has_vmx_posted_intr();
-}
-
-static inline bool cpu_has_vmx_ipiv(void)
-{
-	return vmcs_config.cpu_based_3rd_exec_ctrl & TERTIARY_EXEC_IPI_VIRT;
 }
 
 static inline bool cpu_has_vmx_flexpriority(void)
@@ -319,15 +303,6 @@ static inline bool cpu_has_vmx_ept_2m_page(void)
 static inline bool cpu_has_vmx_ept_1g_page(void)
 {
 	return vmx_capability.ept & VMX_EPT_1GB_PAGE_BIT;
-}
-
-static inline int ept_caps_to_lpage_level(u32 ept_caps)
-{
-	if (ept_caps & VMX_EPT_1GB_PAGE_BIT)
-		return PG_LEVEL_1G;
-	if (ept_caps & VMX_EPT_2MB_PAGE_BIT)
-		return PG_LEVEL_2M;
-	return PG_LEVEL_4K;
 }
 
 static inline bool cpu_has_vmx_ept_ad_bits(void)
@@ -367,8 +342,12 @@ static inline bool cpu_has_vmx_invvpid_global(void)
 
 static inline bool cpu_has_vmx_intel_pt(void)
 {
-	return (vmcs_config.misc & MSR_IA32_VMX_MISC_INTEL_PT) &&
+	u64 vmx_msr;
+
+	rdmsrl(MSR_IA32_VMX_MISC, vmx_msr);
+	return (vmx_msr & MSR_IA32_VMX_MISC_INTEL_PT) &&
 		(vmcs_config.cpu_based_2nd_exec_ctrl & SECONDARY_EXEC_PT_USE_GPA) &&
+		(vmcs_config.vmexit_ctrl & VM_EXIT_CLEAR_IA32_RTIT_CTL) &&
 		(vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_RTIT_CTL);
 }
 
@@ -390,15 +369,13 @@ static inline bool vmx_pt_mode_is_host_guest(void)
 	return pt_mode == PT_MODE_HOST_GUEST;
 }
 
-static inline bool vmx_pebs_supported(void)
+static inline u64 vmx_get_perf_capabilities(void)
 {
-	return boot_cpu_has(X86_FEATURE_PEBS) && kvm_pmu_cap.pebs_ept;
-}
-
-static inline bool cpu_has_notify_vmexit(void)
-{
-	return vmcs_config.cpu_based_2nd_exec_ctrl &
-		SECONDARY_EXEC_NOTIFY_VM_EXITING;
+	/*
+	 * Since counters are virtualized, KVM would support full
+	 * width counting unconditionally, even if the host lacks it.
+	 */
+	return PMU_CAP_FW_WRITES;
 }
 
 #endif /* __KVM_X86_VMX_CAPS_H */

@@ -156,7 +156,8 @@ static int wl1273_fm_set_volume(struct wl1273_core *core, unsigned int volume)
 	return 0;
 }
 
-static int wl1273_core_probe(struct i2c_client *client)
+static int wl1273_core_probe(struct i2c_client *client,
+				       const struct i2c_device_id *id)
 {
 	struct wl1273_fm_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct wl1273_core *core;

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2017, Microchip Technology Inc.
- * Author: Tudor Ambarus
+ * Author: Tudor Ambarus <tudor.ambarus@microchip.com>
  */
 
 #ifndef __ATMEL_I2C_H__
@@ -63,7 +63,7 @@ struct atmel_i2c_cmd {
 #define STATUS_WAKE_SUCCESSFUL		0x11
 
 /* Definitions for eeprom organization */
-#define CONFIGURATION_ZONE		0
+#define CONFIG_ZONE			0
 
 /* Definitions for Indexes common to all commands */
 #define RSP_DATA_IDX			1 /* buffer index of data in response */
@@ -167,13 +167,12 @@ struct atmel_i2c_work_data {
 	struct atmel_i2c_cmd cmd;
 };
 
-int atmel_i2c_probe(struct i2c_client *client);
+int atmel_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id);
 
 void atmel_i2c_enqueue(struct atmel_i2c_work_data *work_data,
 		       void (*cbk)(struct atmel_i2c_work_data *work_data,
 				   void *areq, int status),
 		       void *areq);
-void atmel_i2c_flush_queue(void);
 
 int atmel_i2c_send_receive(struct i2c_client *client, struct atmel_i2c_cmd *cmd);
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
-/*
+/* src/p80211/p80211knetdev.c
  *
  * Linux Kernel net device interface
  *
@@ -7,6 +7,27 @@
  * --------------------------------------------------------------------
  *
  * linux-wlan
+ *
+ *   The contents of this file are subject to the Mozilla Public
+ *   License Version 1.1 (the "License"); you may not use this file
+ *   except in compliance with the License. You may obtain a copy of
+ *   the License at http://www.mozilla.org/MPL/
+ *
+ *   Software distributed under the License is distributed on an "AS
+ *   IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+ *   implied. See the License for the specific language governing
+ *   rights and limitations under the License.
+ *
+ *   Alternatively, the contents of this file may be used under the
+ *   terms of the GNU Public License version 2 (the "GPL"), in which
+ *   case the provisions of the GPL are applicable instead of the
+ *   above.  If you wish to allow the use of your version of this file
+ *   only under the terms of the GPL and not to allow others to use
+ *   your version of this file under the MPL, indicate your decision
+ *   by deleting the provisions above and replace them with the notice
+ *   and other provisions required by the GPL.  If you do not delete
+ *   the provisions above, a recipient may use your version of this
+ *   file under either the MPL or the GPL.
  *
  * --------------------------------------------------------------------
  *
@@ -77,8 +98,8 @@ static int p80211knetdev_stop(struct net_device *netdev);
 static netdev_tx_t p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 						 struct net_device *netdev);
 static void p80211knetdev_set_multicast_list(struct net_device *dev);
-static int p80211knetdev_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
-					void __user *data, int cmd);
+static int p80211knetdev_do_ioctl(struct net_device *dev, struct ifreq *ifr,
+				  int cmd);
 static int p80211knetdev_set_mac_address(struct net_device *dev, void *addr);
 static void p80211knetdev_tx_timeout(struct net_device *netdev, unsigned int txqueue);
 static int p80211_rx_typedrop(struct wlandevice *wlandev, u16 fc);
@@ -214,10 +235,10 @@ void p80211netdev_rx(struct wlandevice *wlandev, struct sk_buff *skb)
 static int p80211_convert_to_ether(struct wlandevice *wlandev,
 				   struct sk_buff *skb)
 {
-	struct p80211_hdr *hdr;
+	struct p80211_hdr_a3 *hdr;
 
-	hdr = (struct p80211_hdr *)skb->data;
-	if (p80211_rx_typedrop(wlandev, le16_to_cpu(hdr->frame_control)))
+	hdr = (struct p80211_hdr_a3 *)skb->data;
+	if (p80211_rx_typedrop(wlandev, le16_to_cpu(hdr->fc)))
 		return CONV_TO_ETHER_SKIPPED;
 
 	/* perform mcast filtering: allow my local address through but reject
@@ -225,8 +246,8 @@ static int p80211_convert_to_ether(struct wlandevice *wlandev,
 	 */
 	if (wlandev->netdev->flags & IFF_ALLMULTI) {
 		if (!ether_addr_equal_unaligned(wlandev->netdev->dev_addr,
-						hdr->address1)) {
-			if (!is_multicast_ether_addr(hdr->address1))
+						hdr->a1)) {
+			if (!is_multicast_ether_addr(hdr->a1))
 				return CONV_TO_ETHER_SKIPPED;
 		}
 	}
@@ -234,7 +255,7 @@ static int p80211_convert_to_ether(struct wlandevice *wlandev,
 	if (skb_p80211_to_ether(wlandev, wlandev->ethconv, skb) == 0) {
 		wlandev->netdev->stats.rx_packets++;
 		wlandev->netdev->stats.rx_bytes += skb->len;
-		netif_rx(skb);
+		netif_rx_ni(skb);
 		return 0;
 	}
 
@@ -269,7 +290,7 @@ static void p80211netdev_rx_bh(struct tasklet_struct *t)
 
 				dev->stats.rx_packets++;
 				dev->stats.rx_bytes += skb->len;
-				netif_rx(skb);
+				netif_rx_ni(skb);
 				continue;
 			} else {
 				if (!p80211_convert_to_ether(wlandev, skb))
@@ -304,9 +325,9 @@ static netdev_tx_t p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 						 struct net_device *netdev)
 {
 	int result = 0;
-	int txresult;
+	int txresult = -1;
 	struct wlandevice *wlandev = netdev->ml_priv;
-	struct p80211_hdr p80211_hdr;
+	union p80211_hdr p80211_hdr;
 	struct p80211_metawep p80211_wep;
 
 	p80211_wep.data = NULL;
@@ -440,8 +461,56 @@ static void p80211knetdev_set_multicast_list(struct net_device *dev)
 		wlandev->set_multicast_list(wlandev, dev);
 }
 
+#ifdef SIOCETHTOOL
+
+static int p80211netdev_ethtool(struct wlandevice *wlandev,
+				void __user *useraddr)
+{
+	u32 ethcmd;
+	struct ethtool_drvinfo info;
+	struct ethtool_value edata;
+
+	memset(&info, 0, sizeof(info));
+	memset(&edata, 0, sizeof(edata));
+
+	if (copy_from_user(&ethcmd, useraddr, sizeof(ethcmd)))
+		return -EFAULT;
+
+	switch (ethcmd) {
+	case ETHTOOL_GDRVINFO:
+		info.cmd = ethcmd;
+		snprintf(info.driver, sizeof(info.driver), "p80211_%s",
+			 wlandev->nsdname);
+		snprintf(info.version, sizeof(info.version), "%s",
+			 WLAN_RELEASE);
+
+		if (copy_to_user(useraddr, &info, sizeof(info)))
+			return -EFAULT;
+		return 0;
+#ifdef ETHTOOL_GLINK
+	case ETHTOOL_GLINK:
+		edata.cmd = ethcmd;
+
+		if (wlandev->linkstatus &&
+		    (wlandev->macmode != WLAN_MACMODE_NONE)) {
+			edata.data = 1;
+		} else {
+			edata.data = 0;
+		}
+
+		if (copy_to_user(useraddr, &edata, sizeof(edata)))
+			return -EFAULT;
+		return 0;
+#endif
+	}
+
+	return -EOPNOTSUPP;
+}
+
+#endif
+
 /*----------------------------------------------------------------
- * p80211knetdev_siocdevprivate
+ * p80211knetdev_do_ioctl
  *
  * Handle an ioctl call on one of our devices.  Everything Linux
  * ioctl specific is done here.  Then we pass the contents of the
@@ -468,9 +537,8 @@ static void p80211knetdev_set_multicast_list(struct net_device *dev)
  *	locks.
  *----------------------------------------------------------------
  */
-static int p80211knetdev_siocdevprivate(struct net_device *dev,
-					struct ifreq *ifr,
-					void __user *data, int cmd)
+static int p80211knetdev_do_ioctl(struct net_device *dev,
+				  struct ifreq *ifr, int cmd)
 {
 	int result = 0;
 	struct p80211ioctl_req *req = (struct p80211ioctl_req *)ifr;
@@ -479,8 +547,13 @@ static int p80211knetdev_siocdevprivate(struct net_device *dev,
 
 	netdev_dbg(dev, "rx'd ioctl, cmd=%d, len=%d\n", cmd, req->len);
 
-	if (in_compat_syscall())
-		return -EOPNOTSUPP;
+#ifdef SIOCETHTOOL
+	if (cmd == SIOCETHTOOL) {
+		result =
+		    p80211netdev_ethtool(wlandev, (void __user *)ifr->ifr_data);
+		goto bail;
+	}
+#endif
 
 	/* Test the magic, assume ifr is good if it's there */
 	if (req->magic != P80211_IOCTL_MAGIC) {
@@ -496,20 +569,24 @@ static int p80211knetdev_siocdevprivate(struct net_device *dev,
 		goto bail;
 	}
 
-	msgbuf = memdup_user(data, req->len);
-	if (IS_ERR(msgbuf)) {
-		result = PTR_ERR(msgbuf);
-		goto bail;
-	}
-
-	result = p80211req_dorequest(wlandev, msgbuf);
-
-	if (result == 0) {
-		if (copy_to_user(data, msgbuf, req->len))
+	/* Allocate a buf of size req->len */
+	msgbuf = kmalloc(req->len, GFP_KERNEL);
+	if (msgbuf) {
+		if (copy_from_user(msgbuf, (void __user *)req->data, req->len))
 			result = -EFAULT;
-	}
-	kfree(msgbuf);
+		else
+			result = p80211req_dorequest(wlandev, msgbuf);
 
+		if (result == 0) {
+			if (copy_to_user
+			    ((void __user *)req->data, msgbuf, req->len)) {
+				result = -EFAULT;
+			}
+		}
+		kfree(msgbuf);
+	} else {
+		result = -ENOMEM;
+	}
 bail:
 	/* If allocate,copyfrom or copyto fails, return errno */
 	return result;
@@ -595,7 +672,7 @@ static int p80211knetdev_set_mac_address(struct net_device *dev, void *addr)
 		result = -EADDRNOTAVAIL;
 	} else {
 		/* everything's ok, change the addr in netdev */
-		eth_hw_addr_set(dev, new_addr->sa_data);
+		memcpy(dev->dev_addr, new_addr->sa_data, dev->addr_len);
 	}
 
 	return result;
@@ -607,7 +684,7 @@ static const struct net_device_ops p80211_netdev_ops = {
 	.ndo_stop = p80211knetdev_stop,
 	.ndo_start_xmit = p80211knetdev_hard_start_xmit,
 	.ndo_set_rx_mode = p80211knetdev_set_multicast_list,
-	.ndo_siocdevprivate = p80211knetdev_siocdevprivate,
+	.ndo_do_ioctl = p80211knetdev_do_ioctl,
 	.ndo_set_mac_address = p80211knetdev_set_mac_address,
 	.ndo_tx_timeout = p80211knetdev_tx_timeout,
 	.ndo_validate_addr = eth_validate_addr,
@@ -860,42 +937,55 @@ static int p80211_rx_typedrop(struct wlandevice *wlandev, u16 fc)
 		wlandev->rx.mgmt++;
 		switch (fstype) {
 		case WLAN_FSTYPE_ASSOCREQ:
+			/* printk("assocreq"); */
 			wlandev->rx.assocreq++;
 			break;
 		case WLAN_FSTYPE_ASSOCRESP:
+			/* printk("assocresp"); */
 			wlandev->rx.assocresp++;
 			break;
 		case WLAN_FSTYPE_REASSOCREQ:
+			/* printk("reassocreq"); */
 			wlandev->rx.reassocreq++;
 			break;
 		case WLAN_FSTYPE_REASSOCRESP:
+			/* printk("reassocresp"); */
 			wlandev->rx.reassocresp++;
 			break;
 		case WLAN_FSTYPE_PROBEREQ:
+			/* printk("probereq"); */
 			wlandev->rx.probereq++;
 			break;
 		case WLAN_FSTYPE_PROBERESP:
+			/* printk("proberesp"); */
 			wlandev->rx.proberesp++;
 			break;
 		case WLAN_FSTYPE_BEACON:
+			/* printk("beacon"); */
 			wlandev->rx.beacon++;
 			break;
 		case WLAN_FSTYPE_ATIM:
+			/* printk("atim"); */
 			wlandev->rx.atim++;
 			break;
 		case WLAN_FSTYPE_DISASSOC:
+			/* printk("disassoc"); */
 			wlandev->rx.disassoc++;
 			break;
 		case WLAN_FSTYPE_AUTHEN:
+			/* printk("authen"); */
 			wlandev->rx.authen++;
 			break;
 		case WLAN_FSTYPE_DEAUTHEN:
+			/* printk("deauthen"); */
 			wlandev->rx.deauthen++;
 			break;
 		default:
+			/* printk("unknown"); */
 			wlandev->rx.mgmt_unknown++;
 			break;
 		}
+		/* printk("\n"); */
 		drop = 2;
 		break;
 
@@ -909,27 +999,35 @@ static int p80211_rx_typedrop(struct wlandevice *wlandev, u16 fc)
 		wlandev->rx.ctl++;
 		switch (fstype) {
 		case WLAN_FSTYPE_PSPOLL:
+			/* printk("pspoll"); */
 			wlandev->rx.pspoll++;
 			break;
 		case WLAN_FSTYPE_RTS:
+			/* printk("rts"); */
 			wlandev->rx.rts++;
 			break;
 		case WLAN_FSTYPE_CTS:
+			/* printk("cts"); */
 			wlandev->rx.cts++;
 			break;
 		case WLAN_FSTYPE_ACK:
+			/* printk("ack"); */
 			wlandev->rx.ack++;
 			break;
 		case WLAN_FSTYPE_CFEND:
+			/* printk("cfend"); */
 			wlandev->rx.cfend++;
 			break;
 		case WLAN_FSTYPE_CFENDCFACK:
+			/* printk("cfendcfack"); */
 			wlandev->rx.cfendcfack++;
 			break;
 		default:
+			/* printk("unknown"); */
 			wlandev->rx.ctl_unknown++;
 			break;
 		}
+		/* printk("\n"); */
 		drop = 2;
 		break;
 
@@ -965,6 +1063,7 @@ static int p80211_rx_typedrop(struct wlandevice *wlandev, u16 fc)
 			wlandev->rx.cfack_cfpoll++;
 			break;
 		default:
+			/* printk("unknown"); */
 			wlandev->rx.data_unknown++;
 			break;
 		}

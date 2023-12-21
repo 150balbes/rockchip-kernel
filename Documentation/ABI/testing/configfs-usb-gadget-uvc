@@ -15,14 +15,12 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Control descriptors
 
-		All attributes read only except enable_interrupt_ep:
+		All attributes read only:
 
-		===================	=============================
+		================	=============================
 		bInterfaceNumber	USB interface number for this
 					streaming interface
-		enable_interrupt_ep	flag to enable the interrupt
-					endpoint for the VC interface
-		===================	=============================
+		================	=============================
 
 What:		/config/usb-gadget/gadget/functions/uvc.name/control/class
 Date:		Dec 2014
@@ -54,7 +52,7 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Default output terminal descriptors
 
-		All attributes read only except bSourceID:
+		All attributes read only:
 
 		==============	=============================================
 		iTerminal	index of string descriptor
@@ -76,7 +74,7 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Default camera terminal descriptors
 
-		All attributes read only except bmControls, which is read/write:
+		All attributes read only:
 
 		========================  ====================================
 		bmControls		  bitmap specifying which controls are
@@ -101,7 +99,7 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Default processing unit descriptors
 
-		All attributes read only except bmControls, which is read/write:
+		All attributes read only:
 
 		===============	========================================
 		iProcessing	index of string descriptor
@@ -112,34 +110,6 @@ Description:	Default processing unit descriptors
 				connected
 		bUnitID		a non-zero id of this unit
 		===============	========================================
-
-What:		/config/usb-gadget/gadget/functions/uvc.name/control/extensions
-Date:		Nov 2022
-KernelVersion:	6.1
-Description:	Extension unit descriptors
-
-What:		/config/usb-gadget/gadget/functions/uvc.name/control/extensions/name
-Date:		Nov 2022
-KernelVersion:	6.1
-Description:	Extension Unit (XU) Descriptor
-
-		bLength, bUnitID and iExtension are read-only. All others are
-		read-write.
-
-		=================	========================================
-		bLength			size of the descriptor in bytes
-		bUnitID			non-zero ID of this unit
-		guidExtensionCode	Vendor-specific code identifying the XU
-		bNumControls		number of controls in this XU
-		bNrInPins		number of input pins for this unit
-		baSourceID		list of the IDs of the units or terminals
-					to which this XU is connected
-		bControlSize		size of the bmControls field in bytes
-		bmControls		list of bitmaps detailing which vendor
-					specific controls are supported
-		iExtension		index of a string descriptor that describes
-					this extension unit
-		=================	========================================
 
 What:		/config/usb-gadget/gadget/functions/uvc.name/control/header
 Date:		Dec 2014
@@ -195,30 +165,13 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Default color matching descriptors
 
-		All attributes read/write:
+		All attributes read only:
 
 		========================  ======================================
 		bMatrixCoefficients	  matrix used to compute luma and
 					  chroma values from the color primaries
 		bTransferCharacteristics  optoelectronic transfer
-					  characteristic of the source picture,
-					  also called the gamma function
-		bColorPrimaries		  color primaries and the reference
-					  white
-		========================  ======================================
-
-What:		/config/usb-gadget/gadget/functions/uvc.name/streaming/color_matching/name
-Date:		Dec 2022
-KernelVersion:	6.3
-Description:	Additional color matching descriptors
-
-		All attributes read/write:
-
-		========================  ======================================
-		bMatrixCoefficients	  matrix used to compute luma and
-					  chroma values from the color primaries
-		bTransferCharacteristics  optoelectronic transfer
-					  characteristic of the source picture,
+					  characteristic of the source picutre,
 					  also called the gamma function
 		bColorPrimaries		  color primaries and the reference
 					  white
@@ -244,7 +197,7 @@ Description:	Specific MJPEG format descriptors
 					read-only
 		bmaControls		this format's data for bmaControls in
 					the streaming header
-		bmInterlaceFlags	specifies interlace information,
+		bmInterfaceFlags	specifies interlace information,
 					read-only
 		bAspectRatioY		the X dimension of the picture aspect
 					ratio, read-only
@@ -300,7 +253,7 @@ Description:	Specific uncompressed format descriptors
 					read-only
 		bmaControls		this format's data for bmaControls in
 					the streaming header
-		bmInterlaceFlags	specifies interlace information,
+		bmInterfaceFlags	specifies interlace information,
 					read-only
 		bAspectRatioY		the X dimension of the picture aspect
 					ratio, read-only
@@ -359,7 +312,7 @@ Description:	Specific streaming header descriptors
 					a hardware trigger interrupt event
 		bTriggerSupport		flag specifying if hardware
 					triggering is supported
-		bStillCaptureMethod	method of still image capture
+		bStillCaptureMethod	method of still image caputre
 					supported
 		bTerminalLink		id of the output terminal to which
 					the video endpoint of this interface

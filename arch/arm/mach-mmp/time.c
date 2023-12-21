@@ -29,30 +29,32 @@
 #include <linux/sched_clock.h>
 #include <asm/mach/time.h>
 
+#include "addr-map.h"
 #include "regs-timers.h"
+#include "regs-apbc.h"
+#include "irqs.h"
 #include <linux/soc/mmp/cputype.h>
+
+#define TIMERS_VIRT_BASE	TIMERS1_VIRT_BASE
 
 #define MAX_DELTA		(0xfffffffe)
 #define MIN_DELTA		(16)
 
-static void __iomem *mmp_timer_base;
+static void __iomem *mmp_timer_base = TIMERS_VIRT_BASE;
 
 /*
- * Read the timer through the CVWR register. Delay is required after requesting
- * a read. The CR register cannot be directly read due to metastability issues
- * documented in the PXA168 software manual.
+ * FIXME: the timer needs some delay to stablize the counter capture
  */
 static inline uint32_t timer_read(void)
 {
-	uint32_t val;
-	int delay = 3;
+	int delay = 100;
 
 	__raw_writel(1, mmp_timer_base + TMR_CVWR(1));
 
 	while (delay--)
-		val = __raw_readl(mmp_timer_base + TMR_CVWR(1));
+		cpu_relax();
 
-	return val;
+	return __raw_readl(mmp_timer_base + TMR_CVWR(1));
 }
 
 static u64 notrace mmp_read_sched_clock(void)
@@ -172,7 +174,7 @@ static void __init timer_config(void)
 	__raw_writel(0x2, mmp_timer_base + TMR_CER);
 }
 
-static void __init mmp_timer_init(int irq, unsigned long rate)
+void __init mmp_timer_init(int irq, unsigned long rate)
 {
 	timer_config();
 

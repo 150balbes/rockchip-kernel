@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Routines supporting VMX instructions on the Power 8
  *
  * Copyright (C) 2015 International Business Machines Inc.
@@ -17,7 +17,11 @@
 #include <crypto/internal/hash.h>
 #include <crypto/internal/skcipher.h>
 
-#include "aesp8-ppc.h"
+extern struct shash_alg p8_ghash_alg;
+extern struct crypto_alg p8_aes_alg;
+extern struct skcipher_alg p8_aes_cbc_alg;
+extern struct skcipher_alg p8_aes_ctr_alg;
+extern struct skcipher_alg p8_aes_xts_alg;
 
 static int __init p8_init(void)
 {

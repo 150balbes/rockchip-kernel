@@ -3,7 +3,6 @@
  *  Copyright (C) 2004 Embedded Edge, LLC
  */
 
-#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
@@ -337,7 +336,7 @@ out1:
 	return ret;
 }
 
-static void au1550nd_remove(struct platform_device *pdev)
+static int au1550nd_remove(struct platform_device *pdev)
 {
 	struct au1550nd_ctx *ctx = platform_get_drvdata(pdev);
 	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -350,6 +349,7 @@ static void au1550nd_remove(struct platform_device *pdev)
 	iounmap(ctx->base);
 	release_mem_region(r->start, 0x1000);
 	kfree(ctx);
+	return 0;
 }
 
 static struct platform_driver au1550nd_driver = {
@@ -357,7 +357,7 @@ static struct platform_driver au1550nd_driver = {
 		.name	= "au1550-nand",
 	},
 	.probe		= au1550nd_probe,
-	.remove_new	= au1550nd_remove,
+	.remove		= au1550nd_remove,
 };
 
 module_platform_driver(au1550nd_driver);

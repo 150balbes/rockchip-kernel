@@ -12,6 +12,7 @@
 #include <net/ip.h>
 #include <linux/ipv6.h>
 #include <linux/inetdevice.h>
+#include <linux/aer.h>
 #include <linux/log2.h>
 #include <linux/pci.h>
 #include <net/vxlan.h>
@@ -303,7 +304,7 @@ int qlcnic_read_mac_addr(struct qlcnic_adapter *adapter)
 	if (ret)
 		return ret;
 
-	eth_hw_addr_set(netdev, mac_addr);
+	memcpy(netdev->dev_addr, mac_addr, ETH_ALEN);
 	memcpy(adapter->mac_addr, netdev->dev_addr, netdev->addr_len);
 
 	/* set station address */
@@ -318,8 +319,10 @@ int qlcnic_read_mac_addr(struct qlcnic_adapter *adapter)
 static void qlcnic_delete_adapter_mac(struct qlcnic_adapter *adapter)
 {
 	struct qlcnic_mac_vlan_list *cur;
+	struct list_head *head;
 
-	list_for_each_entry(cur, &adapter->mac_list, list) {
+	list_for_each(head, &adapter->mac_list) {
+		cur = list_entry(head, struct qlcnic_mac_vlan_list, list);
 		if (ether_addr_equal_unaligned(adapter->mac_addr, cur->mac_addr)) {
 			qlcnic_sre_macaddr_change(adapter, cur->mac_addr,
 						  0, QLCNIC_MAC_DEL);
@@ -355,7 +358,7 @@ static int qlcnic_set_mac(struct net_device *netdev, void *p)
 
 	qlcnic_delete_adapter_mac(adapter);
 	memcpy(adapter->mac_addr, addr->sa_data, netdev->addr_len);
-	eth_hw_addr_set(netdev, addr->sa_data);
+	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
 	qlcnic_set_multi(adapter->netdev);
 
 	if (test_bit(__QLCNIC_DEV_UP, &adapter->state)) {
@@ -367,8 +370,7 @@ static int qlcnic_set_mac(struct net_device *netdev, void *p)
 
 static int qlcnic_fdb_del(struct ndmsg *ndm, struct nlattr *tb[],
 			struct net_device *netdev,
-			const unsigned char *addr, u16 vid,
-			struct netlink_ext_ack *extack)
+			const unsigned char *addr, u16 vid)
 {
 	struct qlcnic_adapter *adapter = netdev_priv(netdev);
 	int err = -EOPNOTSUPP;
@@ -518,6 +520,8 @@ static const struct net_device_ops qlcnic_netdev_ops = {
 	.ndo_fdb_del		= qlcnic_fdb_del,
 	.ndo_fdb_dump		= qlcnic_fdb_dump,
 	.ndo_get_phys_port_id	= qlcnic_get_phys_port_id,
+	.ndo_udp_tunnel_add	= udp_tunnel_nic_add_port,
+	.ndo_udp_tunnel_del	= udp_tunnel_nic_del_port,
 	.ndo_features_check	= qlcnic_features_check,
 #ifdef CONFIG_QLCNIC_SRIOV
 	.ndo_set_vf_mac		= qlcnic_sriov_set_vf_mac,
@@ -2258,7 +2262,8 @@ static int qlcnic_set_real_num_queues(struct qlcnic_adapter *adapter,
 }
 
 int
-qlcnic_setup_netdev(struct qlcnic_adapter *adapter, struct net_device *netdev)
+qlcnic_setup_netdev(struct qlcnic_adapter *adapter, struct net_device *netdev,
+		    int pci_using_dac)
 {
 	int err;
 	struct pci_dev *pdev = adapter->pdev;
@@ -2277,13 +2282,18 @@ qlcnic_setup_netdev(struct qlcnic_adapter *adapter, struct net_device *netdev)
 
 	netdev->features |= (NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_RXCSUM |
 			     NETIF_F_IPV6_CSUM | NETIF_F_GRO |
-			     NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HIGHDMA);
+			     NETIF_F_HW_VLAN_CTAG_RX);
 	netdev->vlan_features |= (NETIF_F_SG | NETIF_F_IP_CSUM |
-				  NETIF_F_IPV6_CSUM | NETIF_F_HIGHDMA);
+				  NETIF_F_IPV6_CSUM);
 
 	if (QLCNIC_IS_TSO_CAPABLE(adapter)) {
 		netdev->features |= (NETIF_F_TSO | NETIF_F_TSO6);
 		netdev->vlan_features |= (NETIF_F_TSO | NETIF_F_TSO6);
+	}
+
+	if (pci_using_dac) {
+		netdev->features |= NETIF_F_HIGHDMA;
+		netdev->vlan_features |= NETIF_F_HIGHDMA;
 	}
 
 	if (qlcnic_vlan_tx_check(adapter))
@@ -2330,6 +2340,22 @@ qlcnic_setup_netdev(struct qlcnic_adapter *adapter, struct net_device *netdev)
 	if (err) {
 		dev_err(&pdev->dev, "failed to register net device\n");
 		return err;
+	}
+
+	return 0;
+}
+
+static int qlcnic_set_dma_mask(struct pci_dev *pdev, int *pci_using_dac)
+{
+	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(64)) &&
+			!pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64)))
+		*pci_using_dac = 1;
+	else if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(32)) &&
+			!pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32)))
+		*pci_using_dac = 0;
+	else {
+		dev_err(&pdev->dev, "Unable to set DMA mask, aborting\n");
+		return -EIO;
 	}
 
 	return 0;
@@ -2421,8 +2447,8 @@ qlcnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct net_device *netdev = NULL;
 	struct qlcnic_adapter *adapter = NULL;
 	struct qlcnic_hardware_context *ahw;
+	int err, pci_using_dac = -1;
 	char board_name[QLCNIC_MAX_BOARD_NAME_LEN + 19]; /* MAC + ": " + name */
-	int err;
 
 	err = pci_enable_device(pdev);
 	if (err)
@@ -2433,17 +2459,16 @@ qlcnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_out_disable_pdev;
 	}
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (err) {
-		dev_err(&pdev->dev, "Unable to set DMA mask, aborting\n");
+	err = qlcnic_set_dma_mask(pdev, &pci_using_dac);
+	if (err)
 		goto err_out_disable_pdev;
-	}
 
 	err = pci_request_regions(pdev, qlcnic_driver_name);
 	if (err)
 		goto err_out_disable_pdev;
 
 	pci_set_master(pdev);
+	pci_enable_pcie_error_reporting(pdev);
 
 	ahw = kzalloc(sizeof(struct qlcnic_hardware_context), GFP_KERNEL);
 	if (!ahw) {
@@ -2550,7 +2575,7 @@ qlcnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	} else if (qlcnic_83xx_check(adapter)) {
 		qlcnic_83xx_check_vf(adapter, ent);
 		adapter->portnum = adapter->ahw->pci_func;
-		err = qlcnic_83xx_init(adapter);
+		err = qlcnic_83xx_init(adapter, pci_using_dac);
 		if (err) {
 			switch (err) {
 			case -ENOTRECOVERABLE:
@@ -2597,13 +2622,7 @@ qlcnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			 "Device does not support MSI interrupts\n");
 
 	if (qlcnic_82xx_check(adapter)) {
-		err = qlcnic_dcb_enable(adapter->dcb);
-		if (err) {
-			qlcnic_dcb_free(adapter->dcb);
-			dev_err(&pdev->dev, "Failed to enable DCB\n");
-			goto err_out_free_hw;
-		}
-
+		qlcnic_dcb_enable(adapter->dcb);
 		qlcnic_dcb_get_info(adapter->dcb);
 		err = qlcnic_setup_intr(adapter);
 
@@ -2620,7 +2639,7 @@ qlcnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (adapter->portnum == 0)
 		qlcnic_set_drv_version(adapter);
 
-	err = qlcnic_setup_netdev(adapter, netdev);
+	err = qlcnic_setup_netdev(adapter, netdev, pci_using_dac);
 	if (err)
 		goto err_out_disable_mbx_intr;
 
@@ -2673,6 +2692,7 @@ err_out_free_hw_res:
 	kfree(ahw);
 
 err_out_free_res:
+	pci_disable_pcie_error_reporting(pdev);
 	pci_release_regions(pdev);
 
 err_out_disable_pdev:
@@ -2754,6 +2774,7 @@ static void qlcnic_remove(struct pci_dev *pdev)
 
 	qlcnic_release_firmware(adapter);
 
+	pci_disable_pcie_error_reporting(pdev);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 
@@ -3325,6 +3346,9 @@ qlcnic_can_start_firmware(struct qlcnic_adapter *adapter)
 	do {
 		msleep(1000);
 		prev_state = QLC_SHARED_REG_RD32(adapter, QLCNIC_CRB_DEV_STATE);
+
+		if (prev_state == QLCNIC_DEV_QUISCENT)
+			continue;
 	} while ((prev_state != QLCNIC_DEV_READY) && --dev_init_timeo);
 
 	if (!dev_init_timeo) {
@@ -3434,7 +3458,6 @@ wait_npar:
 			adapter->fw_wait_cnt = 0;
 			return;
 		}
-		break;
 	case QLCNIC_DEV_FAILED:
 		break;
 	default:

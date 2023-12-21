@@ -30,7 +30,6 @@
 /*****************************************************************************/
 
 #include <linux/capability.h>
-#include <linux/compat.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/net.h>
@@ -75,7 +74,7 @@
 
 static inline void append_crc_ccitt(unsigned char *buffer, int len)
 {
-	unsigned int crc = crc_ccitt(0xffff, buffer, len) ^ 0xffff;
+ 	unsigned int crc = crc_ccitt(0xffff, buffer, len) ^ 0xffff;
 	buffer += len;
 	*buffer++ = crc;
 	*buffer++ = crc >> 8;
@@ -377,7 +376,7 @@ void hdlcdrv_arbitrate(struct net_device *dev, struct hdlcdrv_state *s)
 	if ((--s->hdlctx.slotcnt) > 0)
 		return;
 	s->hdlctx.slotcnt = s->ch_params.slottime;
-	if (get_random_u8() > s->ch_params.ppersist)
+	if ((prandom_u32() % 256) > s->ch_params.ppersist)
 		return;
 	start_tx(dev, s);
 }
@@ -416,7 +415,7 @@ static int hdlcdrv_set_mac_address(struct net_device *dev, void *addr)
 	struct sockaddr *sa = (struct sockaddr *)addr;
 
 	/* addr is an AX.25 shifted ASCII mac address */
-	dev_addr_set(dev, sa->sa_data);
+	memcpy(dev->dev_addr, sa->sa_data, dev->addr_len); 
 	return 0;                                         
 }
 
@@ -484,25 +483,23 @@ static int hdlcdrv_close(struct net_device *dev)
 
 /* --------------------------------------------------------------------- */
 
-static int hdlcdrv_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
-				  void __user *data, int cmd)
+static int hdlcdrv_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct hdlcdrv_state *s = netdev_priv(dev);
 	struct hdlcdrv_ioctl bi;
 
-	if (cmd != SIOCDEVPRIVATE)
+	if (cmd != SIOCDEVPRIVATE) {
+		if (s->ops && s->ops->ioctl)
+			return s->ops->ioctl(dev, ifr, &bi, cmd);
 		return -ENOIOCTLCMD;
-
-	if (in_compat_syscall()) /* to be implemented */
-		return -ENOIOCTLCMD;
-
-	if (copy_from_user(&bi, data, sizeof(bi)))
+	}
+	if (copy_from_user(&bi, ifr->ifr_data, sizeof(bi)))
 		return -EFAULT;
 
 	switch (bi.cmd) {
 	default:
 		if (s->ops && s->ops->ioctl)
-			return s->ops->ioctl(dev, data, &bi, cmd);
+			return s->ops->ioctl(dev, ifr, &bi, cmd);
 		return -ENOIOCTLCMD;
 
 	case HDLCDRVCTL_GETCHANNELPAR:
@@ -600,7 +597,7 @@ static int hdlcdrv_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
 
 	case HDLCDRVCTL_DRIVERNAME:
 		if (s->ops && s->ops->drvname) {
-			strscpy(bi.data.drivername, s->ops->drvname,
+			strncpy(bi.data.drivername, s->ops->drvname, 
 				sizeof(bi.data.drivername));
 			break;
 		}
@@ -608,7 +605,7 @@ static int hdlcdrv_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
 		break;
 		
 	}
-	if (copy_to_user(data, &bi, sizeof(bi)))
+	if (copy_to_user(ifr->ifr_data, &bi, sizeof(bi)))
 		return -EFAULT;
 	return 0;
 
@@ -620,7 +617,7 @@ static const struct net_device_ops hdlcdrv_netdev = {
 	.ndo_open	= hdlcdrv_open,
 	.ndo_stop	= hdlcdrv_close,
 	.ndo_start_xmit = hdlcdrv_send_packet,
-	.ndo_siocdevprivate  = hdlcdrv_siocdevprivate,
+	.ndo_do_ioctl	= hdlcdrv_ioctl,
 	.ndo_set_mac_address = hdlcdrv_set_mac_address,
 };
 
@@ -676,7 +673,7 @@ static void hdlcdrv_setup(struct net_device *dev)
 	dev->mtu = AX25_DEF_PACLEN;        /* eth_mtu is the default */
 	dev->addr_len = AX25_ADDR_LEN;     /* sizeof an ax.25 address */
 	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
-	dev_addr_set(dev, (u8 *)&ax25_defaddr);
+	memcpy(dev->dev_addr, &ax25_defaddr, AX25_ADDR_LEN);
 	dev->tx_queue_len = 16;
 }
 

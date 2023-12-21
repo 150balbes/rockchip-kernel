@@ -11,7 +11,6 @@
 #include <linux/list.h>
 #include <linux/nodemask.h>
 #include <linux/shrinker.h>
-#include <linux/xarray.h>
 
 struct mem_cgroup;
 
@@ -34,8 +33,8 @@ struct list_lru_one {
 
 struct list_lru_memcg {
 	struct rcu_head		rcu;
-	/* array of per cgroup per node lists, indexed by node id */
-	struct list_lru_one	node[];
+	/* array of per cgroup lists, indexed by memcg_cache_id */
+	struct list_lru_one	*lru[];
 };
 
 struct list_lru_node {
@@ -43,7 +42,11 @@ struct list_lru_node {
 	spinlock_t		lock;
 	/* global list, used for the root cgroup in cgroup aware lrus */
 	struct list_lru_one	lru;
-	long			nr_items;
+#ifdef CONFIG_MEMCG_KMEM
+	/* for cgroup aware lrus points to per cgroup lists, otherwise NULL */
+	struct list_lru_memcg	__rcu *memcg_lrus;
+#endif
+	long nr_items;
 } ____cacheline_aligned_in_smp;
 
 struct list_lru {
@@ -52,7 +55,6 @@ struct list_lru {
 	struct list_head	list;
 	int			shrinker_id;
 	bool			memcg_aware;
-	struct xarray		xa;
 #endif
 };
 
@@ -67,9 +69,8 @@ int __list_lru_init(struct list_lru *lru, bool memcg_aware,
 #define list_lru_init_memcg(lru, shrinker)		\
 	__list_lru_init((lru), true, NULL, shrinker)
 
-int memcg_list_lru_alloc(struct mem_cgroup *memcg, struct list_lru *lru,
-			 gfp_t gfp);
-void memcg_reparent_list_lrus(struct mem_cgroup *memcg, struct mem_cgroup *parent);
+int memcg_update_all_list_lrus(int num_memcgs);
+void memcg_drain_all_list_lrus(int src_idx, struct mem_cgroup *dst_memcg);
 
 /**
  * list_lru_add: add an element to the lru list's tail
@@ -145,7 +146,7 @@ typedef enum lru_status (*list_lru_walk_cb)(struct list_head *item,
  * @lru: the lru pointer.
  * @nid: the node id to scan from.
  * @memcg: the cgroup to scan from.
- * @isolate: callback function that is responsible for deciding what to do with
+ * @isolate: callback function that is resposible for deciding what to do with
  *  the item currently being scanned
  * @cb_arg: opaque type that will be passed to @isolate
  * @nr_to_walk: how many items to scan.
@@ -171,7 +172,7 @@ unsigned long list_lru_walk_one(struct list_lru *lru,
  * @lru: the lru pointer.
  * @nid: the node id to scan from.
  * @memcg: the cgroup to scan from.
- * @isolate: callback function that is responsible for deciding what to do with
+ * @isolate: callback function that is resposible for deciding what to do with
  *  the item currently being scanned
  * @cb_arg: opaque type that will be passed to @isolate
  * @nr_to_walk: how many items to scan.

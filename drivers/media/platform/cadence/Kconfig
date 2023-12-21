@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-only
+config VIDEO_CADENCE
+	bool "Cadence Video Devices"
+	help
+	  If you have a media device designed by Cadence, say Y.
 
-comment "Cadence media platform drivers"
+	  Note that this option doesn't include new drivers in the kernel:
+	  saying N will just cause Kconfig to skip all the questions about
+	  Cadence media devices.
+
+if VIDEO_CADENCE
 
 config VIDEO_CADENCE_CSI2RX
 	tristate "Cadence MIPI-CSI2 RX Controller"
-	depends on VIDEO_DEV
+	depends on VIDEO_V4L2
 	select MEDIA_CONTROLLER
 	select VIDEO_V4L2_SUBDEV_API
 	select V4L2_FWNODE
@@ -16,7 +24,7 @@ config VIDEO_CADENCE_CSI2RX
 
 config VIDEO_CADENCE_CSI2TX
 	tristate "Cadence MIPI-CSI2 TX Controller"
-	depends on VIDEO_DEV
+	depends on VIDEO_V4L2
 	select MEDIA_CONTROLLER
 	select VIDEO_V4L2_SUBDEV_API
 	select V4L2_FWNODE
@@ -25,3 +33,5 @@ config VIDEO_CADENCE_CSI2TX
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called cdns-csi2tx.
+
+endif

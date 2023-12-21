@@ -17,6 +17,8 @@ struct mmc_request;
 
 #define MMC_CMD_RETRIES        3
 
+static const unsigned int freqs[] = { 400000, 300000, 200000, 100000 };
+
 struct mmc_bus_ops {
 	void (*remove)(struct mmc_host *);
 	void (*detect)(struct mmc_host *);
@@ -30,7 +32,8 @@ struct mmc_bus_ops {
 	int (*hw_reset)(struct mmc_host *);
 	int (*sw_reset)(struct mmc_host *);
 	bool (*cache_enabled)(struct mmc_host *);
-	int (*flush_cache)(struct mmc_host *);
+
+	ANDROID_VENDOR_DATA_ARRAY(1, 2);
 };
 
 void mmc_attach_bus(struct mmc_host *host, const struct mmc_bus_ops *ops);
@@ -42,7 +45,7 @@ struct device_node *mmc_of_find_child_device(struct mmc_host *host,
 void mmc_init_erase(struct mmc_card *card);
 
 void mmc_set_chip_select(struct mmc_host *host, int mode);
-void mmc_set_clock(struct mmc_host *host, unsigned int hz);
+extern void mmc_set_clock(struct mmc_host *host, unsigned int hz);
 void mmc_set_bus_mode(struct mmc_host *host, unsigned int mode);
 void mmc_set_bus_width(struct mmc_host *host, unsigned int width);
 u32 mmc_select_voltage(struct mmc_host *host, u32 ocr);
@@ -86,26 +89,11 @@ int mmc_attach_sdio(struct mmc_host *host);
 extern bool use_spi_crc;
 
 /* Debugfs information for hosts and cards */
-#ifdef CONFIG_DEBUG_FS
 void mmc_add_host_debugfs(struct mmc_host *host);
 void mmc_remove_host_debugfs(struct mmc_host *host);
 
 void mmc_add_card_debugfs(struct mmc_card *card);
 void mmc_remove_card_debugfs(struct mmc_card *card);
-#else
-static inline void mmc_add_host_debugfs(struct mmc_host *host)
-{
-}
-static inline void mmc_remove_host_debugfs(struct mmc_host *host)
-{
-}
-static inline void mmc_add_card_debugfs(struct mmc_card *card)
-{
-}
-static inline void mmc_remove_card_debugfs(struct mmc_card *card)
-{
-}
-#endif
 
 int mmc_execute_tuning(struct mmc_card *card);
 int mmc_hs200_to_hs400(struct mmc_card *card);
@@ -134,8 +122,6 @@ int __mmc_claim_host(struct mmc_host *host, struct mmc_ctx *ctx,
 void mmc_release_host(struct mmc_host *host);
 void mmc_get_card(struct mmc_card *card, struct mmc_ctx *ctx);
 void mmc_put_card(struct mmc_card *card, struct mmc_ctx *ctx);
-
-int mmc_card_alternative_gpt_sector(struct mmc_card *card, sector_t *sector);
 
 /**
  *	mmc_claim_host - exclusively claim a host
@@ -189,14 +175,6 @@ static inline bool mmc_cache_enabled(struct mmc_host *host)
 		return host->bus_ops->cache_enabled(host);
 
 	return false;
-}
-
-static inline int mmc_flush_cache(struct mmc_host *host)
-{
-	if (host->bus_ops->flush_cache)
-		return host->bus_ops->flush_cache(host);
-
-	return 0;
 }
 
 #endif

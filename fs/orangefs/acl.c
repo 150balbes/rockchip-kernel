@@ -10,14 +10,11 @@
 #include "orangefs-bufmap.h"
 #include <linux/posix_acl_xattr.h>
 
-struct posix_acl *orangefs_get_acl(struct inode *inode, int type, bool rcu)
+struct posix_acl *orangefs_get_acl(struct inode *inode, int type)
 {
 	struct posix_acl *acl;
 	int ret;
 	char *key = NULL, *value = NULL;
-
-	if (rcu)
-		return ERR_PTR(-ECHILD);
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
@@ -64,7 +61,8 @@ struct posix_acl *orangefs_get_acl(struct inode *inode, int type, bool rcu)
 	return acl;
 }
 
-int __orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+static int __orangefs_set_acl(struct inode *inode, struct posix_acl *acl,
+			      int type)
 {
 	int error = 0;
 	void *value = NULL;
@@ -118,13 +116,11 @@ out:
 	return error;
 }
 
-int orangefs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
-		     struct posix_acl *acl, int type)
+int orangefs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 {
 	int error;
 	struct iattr iattr;
 	int rc;
-	struct inode *inode = d_inode(dentry);
 
 	memset(&iattr, 0, sizeof iattr);
 
@@ -136,8 +132,7 @@ int orangefs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
 		 * and "mode" to the new desired value. It is up to
 		 * us to propagate the new mode back to the server...
 		 */
-		error = posix_acl_update_mode(&nop_mnt_idmap, inode,
-					      &iattr.ia_mode, &acl);
+		error = posix_acl_update_mode(inode, &iattr.ia_mode, &acl);
 		if (error) {
 			gossip_err("%s: posix_acl_update_mode err: %d\n",
 				   __func__,
@@ -153,7 +148,46 @@ int orangefs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
 	rc = __orangefs_set_acl(inode, acl, type);
 
 	if (!rc && (iattr.ia_valid == ATTR_MODE))
-		rc = __orangefs_setattr_mode(dentry, &iattr);
+		rc = __orangefs_setattr(inode, &iattr);
 
 	return rc;
+}
+
+int orangefs_init_acl(struct inode *inode, struct inode *dir)
+{
+	struct posix_acl *default_acl, *acl;
+	umode_t mode = inode->i_mode;
+	struct iattr iattr;
+	int error = 0;
+
+	error = posix_acl_create(dir, &mode, &default_acl, &acl);
+	if (error)
+		return error;
+
+	if (default_acl) {
+		error = __orangefs_set_acl(inode, default_acl,
+					   ACL_TYPE_DEFAULT);
+		posix_acl_release(default_acl);
+	} else {
+		inode->i_default_acl = NULL;
+	}
+
+	if (acl) {
+		if (!error)
+			error = __orangefs_set_acl(inode, acl, ACL_TYPE_ACCESS);
+		posix_acl_release(acl);
+	} else {
+		inode->i_acl = NULL;
+	}
+
+	/* If mode of the inode was changed, then do a forcible ->setattr */
+	if (mode != inode->i_mode) {
+		memset(&iattr, 0, sizeof iattr);
+		inode->i_mode = mode;
+		iattr.ia_mode = mode;
+		iattr.ia_valid |= ATTR_MODE;
+		__orangefs_setattr(inode, &iattr);
+	}
+
+	return error;
 }

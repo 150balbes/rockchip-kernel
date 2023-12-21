@@ -17,6 +17,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/pm_runtime.h>
 #include <linux/spi/spi.h>
@@ -170,6 +171,11 @@ static int spi_st_transfer_one(struct spi_master *master,
 	return t->len;
 }
 
+static void spi_st_cleanup(struct spi_device *spi)
+{
+	gpio_free(spi->cs_gpio);
+}
+
 /* the spi->mode bits understood by this driver: */
 #define MODEBITS  (SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST | SPI_LOOP | SPI_CS_HIGH)
 static int spi_st_setup(struct spi_device *spi)
@@ -177,16 +183,28 @@ static int spi_st_setup(struct spi_device *spi)
 	struct spi_st *spi_st = spi_master_get_devdata(spi->master);
 	u32 spi_st_clk, sscbrg, var;
 	u32 hz = spi->max_speed_hz;
+	int cs = spi->cs_gpio;
+	int ret;
 
 	if (!hz)  {
 		dev_err(&spi->dev, "max_speed_hz unspecified\n");
 		return -EINVAL;
 	}
 
-	if (!spi_get_csgpiod(spi, 0)) {
-		dev_err(&spi->dev, "no valid gpio assigned\n");
+	if (!gpio_is_valid(cs)) {
+		dev_err(&spi->dev, "%d is not a valid gpio\n", cs);
 		return -EINVAL;
 	}
+
+	ret = gpio_request(cs, dev_name(&spi->dev));
+	if (ret) {
+		dev_err(&spi->dev, "could not request gpio:%d\n", cs);
+		return ret;
+	}
+
+	ret = gpio_direction_output(cs, spi->mode & SPI_CS_HIGH);
+	if (ret)
+		goto out_free_gpio;
 
 	spi_st_clk = clk_get_rate(spi_st->clk);
 
@@ -195,7 +213,8 @@ static int spi_st_setup(struct spi_device *spi)
 	if (sscbrg < 0x07 || sscbrg > BIT(16)) {
 		dev_err(&spi->dev,
 			"baudrate %d outside valid range %d\n", sscbrg, hz);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_free_gpio;
 	}
 
 	spi_st->baud = spi_st_clk / (2 * sscbrg);
@@ -244,6 +263,10 @@ static int spi_st_setup(struct spi_device *spi)
 	readl_relaxed(spi_st->base + SSC_RBUF);
 
 	return 0;
+
+out_free_gpio:
+	gpio_free(cs);
+	return ret;
 }
 
 /* Interrupt fired when TX shift register becomes empty */
@@ -286,11 +309,11 @@ static int spi_st_probe(struct platform_device *pdev)
 	master->dev.of_node		= np;
 	master->mode_bits		= MODEBITS;
 	master->setup			= spi_st_setup;
+	master->cleanup			= spi_st_cleanup;
 	master->transfer_one		= spi_st_transfer_one;
 	master->bits_per_word_mask	= SPI_BPW_MASK(8) | SPI_BPW_MASK(16);
 	master->auto_runtime_pm		= true;
 	master->bus_num			= pdev->id;
-	master->use_gpio_descriptors	= true;
 	spi_st				= spi_master_get_devdata(master);
 
 	spi_st->clk = devm_clk_get(&pdev->dev, "ssc");
@@ -366,7 +389,7 @@ put_master:
 	return ret;
 }
 
-static void spi_st_remove(struct platform_device *pdev)
+static int spi_st_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct spi_st *spi_st = spi_master_get_devdata(master);
@@ -376,6 +399,8 @@ static void spi_st_remove(struct platform_device *pdev)
 	clk_disable_unprepare(spi_st->clk);
 
 	pinctrl_pm_select_sleep_state(&pdev->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -449,7 +474,7 @@ static struct platform_driver spi_st_driver = {
 		.of_match_table = of_match_ptr(stm_spi_match),
 	},
 	.probe = spi_st_probe,
-	.remove_new = spi_st_remove,
+	.remove = spi_st_remove,
 };
 module_platform_driver(spi_st_driver);
 

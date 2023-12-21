@@ -681,8 +681,10 @@ static int si470x_usb_driver_probe(struct usb_interface *intf,
 			radio->registers[DEVICEID], radio->registers[SI_CHIPID]);
 	if ((radio->registers[SI_CHIPID] & SI_CHIPID_FIRMWARE) < RADIO_FW_VERSION) {
 		dev_warn(&intf->dev,
-			"This driver is known to work with firmware version %u, but the device has firmware version %u.\n",
-			RADIO_FW_VERSION,
+			"This driver is known to work with firmware version %hu,\n",
+			RADIO_FW_VERSION);
+		dev_warn(&intf->dev,
+			"but the device has firmware version %hu.\n",
 			radio->registers[SI_CHIPID] & SI_CHIPID_FIRMWARE);
 		version_warning = 1;
 	}
@@ -696,8 +698,10 @@ static int si470x_usb_driver_probe(struct usb_interface *intf,
 			radio->software_version, radio->hardware_version);
 	if (radio->hardware_version < RADIO_HW_VERSION) {
 		dev_warn(&intf->dev,
-			"This driver is known to work with hardware version %u, but the device has hardware version %u.\n",
-			RADIO_HW_VERSION,
+			"This driver is known to work with hardware version %hu,\n",
+			RADIO_HW_VERSION);
+		dev_warn(&intf->dev,
+			"but the device has hardware version %hu.\n",
 			radio->hardware_version);
 		version_warning = 1;
 	}
@@ -705,7 +709,9 @@ static int si470x_usb_driver_probe(struct usb_interface *intf,
 	/* give out version warning */
 	if (version_warning == 1) {
 		dev_warn(&intf->dev,
-			"If you have some trouble using this driver, please report to V4L ML at linux-media@vger.kernel.org\n");
+			"If you have some trouble using this driver,\n");
+		dev_warn(&intf->dev,
+			"please report to V4L ML at linux-media@vger.kernel.org\n");
 	}
 
 	/* set led to connect state */
@@ -727,10 +733,8 @@ static int si470x_usb_driver_probe(struct usb_interface *intf,
 
 	/* start radio */
 	retval = si470x_start_usb(radio);
-	if (retval < 0 && !radio->int_in_running)
+	if (retval < 0)
 		goto err_buf;
-	else if (retval < 0)	/* in case of radio->int_in_running == 1 */
-		goto err_all;
 
 	/* set initial frequency */
 	si470x_set_freq(radio, 87.5 * FREQ_MUL); /* available in all regions */

@@ -42,10 +42,11 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	struct dw_hdmi *hdmi = audio->hdmi;
 	u8 conf0 = 0;
 	u8 conf1 = 0;
+	u8 conf2 = 0;
 	u8 inputclkfs = 0;
 
 	/* it cares I2S only */
-	if (fmt->bit_clk_provider | fmt->frame_clk_provider) {
+	if (fmt->bit_clk_master | fmt->frame_clk_master) {
 		dev_err(dev, "unsupported clock settings\n");
 		return -EINVAL;
 	}
@@ -101,6 +102,23 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 		return -EINVAL;
 	}
 
+	switch (fmt->bit_fmt) {
+	case SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE:
+		conf1 = HDMI_AUD_CONF1_WIDTH_21;
+		conf2 = (hparms->channels == 8) ? HDMI_AUD_CONF2_HBR : HDMI_AUD_CONF2_NLPCM;
+		break;
+	default:
+		/*
+		 * dw-hdmi introduced insert_pcuv bit in version 2.10a.
+		 * When set (1'b1), this bit enables the insertion of the PCUV
+		 * (Parity, Channel Status, User bit and Validity) bits on the
+		 * incoming audio stream (support limited to Linear PCM audio)
+		 */
+		if (hdmi_read(audio, HDMI_DESIGN_ID) >= 0x21)
+			conf2 = HDMI_AUD_CONF2_INSERT_PCUV;
+		break;
+	}
+
 	dw_hdmi_set_sample_rate(hdmi, hparms->sample_rate);
 	dw_hdmi_set_channel_status(hdmi, hparms->iec.status);
 	dw_hdmi_set_channel_count(hdmi, hparms->channels);
@@ -109,6 +127,7 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	hdmi_write(audio, inputclkfs, HDMI_AUD_INPUTCLKFS);
 	hdmi_write(audio, conf0, HDMI_AUD_CONF0);
 	hdmi_write(audio, conf1, HDMI_AUD_CONF1);
+	hdmi_write(audio, conf2, HDMI_AUD_CONF2);
 
 	return 0;
 }
@@ -135,8 +154,15 @@ static int dw_hdmi_i2s_get_eld(struct device *dev, void *data, uint8_t *buf,
 			       size_t len)
 {
 	struct dw_hdmi_i2s_audio_data *audio = data;
+	u8 *eld;
 
-	memcpy(buf, audio->eld, min_t(size_t, MAX_ELD_BYTES, len));
+	eld = audio->get_eld(audio->hdmi);
+	if (eld)
+		memcpy(buf, eld, min_t(size_t, MAX_ELD_BYTES, len));
+	else
+		/* Pass en empty ELD if connector not available */
+		memset(buf, 0, len);
+
 	return 0;
 }
 
@@ -186,7 +212,6 @@ static int snd_dw_hdmi_probe(struct platform_device *pdev)
 	struct hdmi_codec_pdata pdata;
 	struct platform_device *platform;
 
-	memset(&pdata, 0, sizeof(pdata));
 	pdata.ops		= &dw_hdmi_i2s_ops;
 	pdata.i2s		= 1;
 	pdata.max_i2s_channels	= 8;
@@ -209,16 +234,18 @@ static int snd_dw_hdmi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void snd_dw_hdmi_remove(struct platform_device *pdev)
+static int snd_dw_hdmi_remove(struct platform_device *pdev)
 {
 	struct platform_device *platform = dev_get_drvdata(&pdev->dev);
 
 	platform_device_unregister(platform);
+
+	return 0;
 }
 
 static struct platform_driver snd_dw_hdmi_driver = {
 	.probe	= snd_dw_hdmi_probe,
-	.remove_new = snd_dw_hdmi_remove,
+	.remove	= snd_dw_hdmi_remove,
 	.driver	= {
 		.name = DRIVER_NAME,
 	},

@@ -53,7 +53,7 @@ static void __exception_irq_entry rda_handle_irq(struct pt_regs *regs)
 
 	while (stat) {
 		hwirq = __fls(stat);
-		generic_handle_domain_irq(rda_irq_domain, hwirq);
+		handle_domain_irq(rda_irq_domain, hwirq, regs);
 		stat &= ~BIT(hwirq);
 	}
 }

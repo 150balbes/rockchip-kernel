@@ -26,9 +26,9 @@
 
 #include <linux/types.h>
 
-struct amdgpu_device;
+struct i2c_adapter;
 
-int smu_v11_0_i2c_control_init(struct amdgpu_device *adev);
-void smu_v11_0_i2c_control_fini(struct amdgpu_device *adev);
+int smu_v11_0_i2c_control_init(struct i2c_adapter *control);
+void smu_v11_0_i2c_control_fini(struct i2c_adapter *control);
 
 #endif

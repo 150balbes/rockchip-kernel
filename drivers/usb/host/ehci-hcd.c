@@ -26,7 +26,6 @@
 #include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
 #include <linux/debugfs.h>
-#include <linux/platform_device.h>
 #include <linux/slab.h>
 
 #include <asm/byteorder.h>
@@ -77,12 +76,12 @@ static const char	hcd_name [] = "ehci_hcd";
 #define	EHCI_TUNE_FLS		1	/* (medium) 512-frame schedule */
 
 /* Initial IRQ latency:  faster than hw default */
-static int log2_irq_thresh;		// 0 to 6
+static int log2_irq_thresh = 0;		// 0 to 6
 module_param (log2_irq_thresh, int, S_IRUGO);
 MODULE_PARM_DESC (log2_irq_thresh, "log2 IRQ latency, 1-64 microframes");
 
 /* initial park setting:  slower than hw default */
-static unsigned park;
+static unsigned park = 0;
 module_param (park, uint, S_IRUGO);
 MODULE_PARM_DESC (park, "park setting; 1-3 back-to-back async packets");
 
@@ -588,7 +587,7 @@ static int ehci_run (struct usb_hcd *hcd)
 	 * hcc_params controls whether ehci->regs->segment must (!!!)
 	 * be used; it constrains QH/ITD/SITD and QTD locations.
 	 * dma_pool consistent memory always uses segment zero.
-	 * streaming mappings for I/O buffers, like dma_map_single(),
+	 * streaming mappings for I/O buffers, like pci_map_single(),
 	 * can return segments above 4GB, if the device allows.
 	 *
 	 * NOTE:  the dma mask is visible through dev->dma_mask, so
@@ -661,7 +660,7 @@ static int ehci_run (struct usb_hcd *hcd)
 		"USB %x.%x started, EHCI %x.%02x%s\n",
 		((ehci->sbrn & 0xf0)>>4), (ehci->sbrn & 0x0f),
 		temp >> 8, temp & 0xff,
-		(ignore_oc || ehci->spurious_oc) ? ", overcurrent ignored" : "");
+		ignore_oc ? ", overcurrent ignored" : "");
 
 	ehci_writel(ehci, INTR_MASK,
 		    &ehci->regs->intr_enable); /* Turn On Interrupts */
@@ -716,8 +715,15 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 	u32			status, current_status, masked_status, pcd_status = 0;
 	u32			cmd;
 	int			bh;
+	unsigned long		flags;
 
-	spin_lock(&ehci->lock);
+	/*
+	 * For threadirqs option we use spin_lock_irqsave() variant to prevent
+	 * deadlock with ehci hrtimer callback, because hrtimer callbacks run
+	 * in interrupt context even when threadirqs is specified. We can go
+	 * back to spin_lock() variant when hrtimer callbacks become threaded.
+	 */
+	spin_lock_irqsave(&ehci->lock, flags);
 
 	status = 0;
 	current_status = ehci_readl(ehci, &ehci->regs->status);
@@ -738,7 +744,9 @@ restart:
 
 	/* Shared IRQ? */
 	if (!masked_status || unlikely(ehci->rh_state == EHCI_RH_HALTED)) {
-		spin_unlock(&ehci->lock);
+		if (masked_status)
+			ehci_writel(ehci, masked_status, &ehci->regs->status);
+		spin_unlock_irqrestore(&ehci->lock, flags);
 		return IRQ_NONE;
 	}
 
@@ -855,7 +863,7 @@ dead:
 
 	if (bh)
 		ehci_work (ehci);
-	spin_unlock(&ehci->lock);
+	spin_unlock_irqrestore(&ehci->lock, flags);
 	if (pcd_status)
 		usb_hcd_poll_rh_status(hcd);
 	return IRQ_HANDLED;
@@ -892,7 +900,7 @@ static int ehci_urb_enqueue (
 		 */
 		if (urb->transfer_buffer_length > (16 * 1024))
 			return -EMSGSIZE;
-		fallthrough;
+		/* FALLTHROUGH */
 	/* case PIPE_BULK: */
 	default:
 		if (!qh_urb_transaction (ehci, urb, &qtd_list, mem_flags))
@@ -1103,26 +1111,6 @@ static void ehci_remove_device(struct usb_hcd *hcd, struct usb_device *udev)
 
 #ifdef	CONFIG_PM
 
-/* Clear wakeup signal locked in zhaoxin platform when device plug in. */
-static void ehci_zx_wakeup_clear(struct ehci_hcd *ehci)
-{
-	u32 __iomem	*reg = &ehci->regs->port_status[4];
-	u32 		t1 = ehci_readl(ehci, reg);
-
-	t1 &= (u32)~0xf0000;
-	t1 |= PORT_TEST_FORCE;
-	ehci_writel(ehci, t1, reg);
-	t1 = ehci_readl(ehci, reg);
-	msleep(1);
-	t1 &= (u32)~0xf0000;
-	ehci_writel(ehci, t1, reg);
-	ehci_readl(ehci, reg);
-	msleep(1);
-	t1 = ehci_readl(ehci, reg);
-	ehci_writel(ehci, t1 | PORT_CSC, reg);
-	ehci_readl(ehci, reg);
-}
-
 /* suspend/resume, section 4.3 */
 
 /* These routines handle the generic parts of controller suspend/resume */
@@ -1141,12 +1129,14 @@ int ehci_suspend(struct usb_hcd *hcd, bool do_wakeup)
 	 */
 	ehci_prepare_ports_for_controller_suspend(ehci, do_wakeup);
 
-	spin_lock_irq(&ehci->lock);
-	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
-	(void) ehci_readl(ehci, &ehci->regs->intr_enable);
+	if (!do_wakeup) {
+		spin_lock_irq(&ehci->lock);
+		ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+		(void) ehci_readl(ehci, &ehci->regs->intr_enable);
 
-	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
-	spin_unlock_irq(&ehci->lock);
+		clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		spin_unlock_irq(&ehci->lock);
+	}
 
 	synchronize_irq(hcd->irq);
 
@@ -1173,9 +1163,6 @@ int ehci_resume(struct usb_hcd *hcd, bool force_reset)
 
 	if (ehci->shutdown)
 		return 0;		/* Controller is dead */
-
-	if (ehci->zx_wakeup_clear_needed)
-		ehci_zx_wakeup_clear(ehci);
 
 	/*
 	 * If CF is still set and reset isn't forced
@@ -1281,10 +1268,6 @@ static const struct hc_driver ehci_hc_driver = {
 	 * device support
 	 */
 	.free_dev =		ehci_remove_device,
-#ifdef CONFIG_USB_HCD_TEST_MODE
-	/* EH SINGLE_STEP_SET_FEATURE test support */
-	.submit_single_step_set_feature	= ehci_submit_single_step_set_feature,
-#endif
 };
 
 void ehci_init_driver(struct hc_driver *drv,
@@ -1311,38 +1294,33 @@ MODULE_LICENSE ("GPL");
 
 #ifdef CONFIG_USB_EHCI_SH
 #include "ehci-sh.c"
+#define PLATFORM_DRIVER		ehci_hcd_sh_driver
 #endif
 
 #ifdef CONFIG_PPC_PS3
 #include "ehci-ps3.c"
+#define	PS3_SYSTEM_BUS_DRIVER	ps3_ehci_driver
 #endif
 
 #ifdef CONFIG_USB_EHCI_HCD_PPC_OF
 #include "ehci-ppc-of.c"
+#define OF_PLATFORM_DRIVER	ehci_hcd_ppc_of_driver
 #endif
 
 #ifdef CONFIG_XPS_USB_HCD_XILINX
 #include "ehci-xilinx-of.c"
+#define XILINX_OF_PLATFORM_DRIVER	ehci_hcd_xilinx_of_driver
+#endif
+
+#ifdef CONFIG_USB_EHCI_HCD_PMC_MSP
+#include "ehci-pmcmsp.c"
+#define	PLATFORM_DRIVER		ehci_hcd_msp_driver
 #endif
 
 #ifdef CONFIG_SPARC_LEON
 #include "ehci-grlib.c"
+#define PLATFORM_DRIVER		ehci_grlib_driver
 #endif
-
-static struct platform_driver * const platform_drivers[] = {
-#ifdef CONFIG_USB_EHCI_SH
-	&ehci_hcd_sh_driver,
-#endif
-#ifdef CONFIG_USB_EHCI_HCD_PPC_OF
-	&ehci_hcd_ppc_of_driver,
-#endif
-#ifdef CONFIG_XPS_USB_HCD_XILINX
-	&ehci_hcd_xilinx_of_driver,
-#endif
-#ifdef CONFIG_SPARC_LEON
-	&ehci_grlib_driver,
-#endif
-};
 
 static int __init ehci_hcd_init(void)
 {
@@ -1351,6 +1329,7 @@ static int __init ehci_hcd_init(void)
 	if (usb_disabled())
 		return -ENODEV;
 
+	printk(KERN_INFO "%s: " DRIVER_DESC "\n", hcd_name);
 	set_bit(USB_EHCI_LOADED, &usb_hcds_loaded);
 	if (test_bit(USB_UHCI_LOADED, &usb_hcds_loaded) ||
 			test_bit(USB_OHCI_LOADED, &usb_hcds_loaded))
@@ -1366,23 +1345,47 @@ static int __init ehci_hcd_init(void)
 	ehci_debug_root = debugfs_create_dir("ehci", usb_debug_root);
 #endif
 
-	retval = platform_register_drivers(platform_drivers, ARRAY_SIZE(platform_drivers));
+#ifdef PLATFORM_DRIVER
+	retval = platform_driver_register(&PLATFORM_DRIVER);
 	if (retval < 0)
 		goto clean0;
+#endif
 
-#ifdef CONFIG_PPC_PS3
-	retval = ps3_ehci_driver_register(&ps3_ehci_driver);
+#ifdef PS3_SYSTEM_BUS_DRIVER
+	retval = ps3_ehci_driver_register(&PS3_SYSTEM_BUS_DRIVER);
 	if (retval < 0)
-		goto clean1;
+		goto clean2;
 #endif
 
-	return 0;
-
-#ifdef CONFIG_PPC_PS3
-clean1:
+#ifdef OF_PLATFORM_DRIVER
+	retval = platform_driver_register(&OF_PLATFORM_DRIVER);
+	if (retval < 0)
+		goto clean3;
 #endif
-	platform_unregister_drivers(platform_drivers, ARRAY_SIZE(platform_drivers));
+
+#ifdef XILINX_OF_PLATFORM_DRIVER
+	retval = platform_driver_register(&XILINX_OF_PLATFORM_DRIVER);
+	if (retval < 0)
+		goto clean4;
+#endif
+	return retval;
+
+#ifdef XILINX_OF_PLATFORM_DRIVER
+	/* platform_driver_unregister(&XILINX_OF_PLATFORM_DRIVER); */
+clean4:
+#endif
+#ifdef OF_PLATFORM_DRIVER
+	platform_driver_unregister(&OF_PLATFORM_DRIVER);
+clean3:
+#endif
+#ifdef PS3_SYSTEM_BUS_DRIVER
+	ps3_ehci_driver_unregister(&PS3_SYSTEM_BUS_DRIVER);
+clean2:
+#endif
+#ifdef PLATFORM_DRIVER
+	platform_driver_unregister(&PLATFORM_DRIVER);
 clean0:
+#endif
 #ifdef CONFIG_DYNAMIC_DEBUG
 	debugfs_remove(ehci_debug_root);
 	ehci_debug_root = NULL;
@@ -1394,10 +1397,18 @@ module_init(ehci_hcd_init);
 
 static void __exit ehci_hcd_cleanup(void)
 {
-#ifdef CONFIG_PPC_PS3
-	ps3_ehci_driver_unregister(&ps3_ehci_driver);
+#ifdef XILINX_OF_PLATFORM_DRIVER
+	platform_driver_unregister(&XILINX_OF_PLATFORM_DRIVER);
 #endif
-	platform_unregister_drivers(platform_drivers, ARRAY_SIZE(platform_drivers));
+#ifdef OF_PLATFORM_DRIVER
+	platform_driver_unregister(&OF_PLATFORM_DRIVER);
+#endif
+#ifdef PLATFORM_DRIVER
+	platform_driver_unregister(&PLATFORM_DRIVER);
+#endif
+#ifdef PS3_SYSTEM_BUS_DRIVER
+	ps3_ehci_driver_unregister(&PS3_SYSTEM_BUS_DRIVER);
+#endif
 #ifdef CONFIG_DYNAMIC_DEBUG
 	debugfs_remove(ehci_debug_root);
 #endif

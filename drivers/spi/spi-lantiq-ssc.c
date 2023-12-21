@@ -388,11 +388,11 @@ static int lantiq_ssc_setup(struct spi_device *spidev)
 {
 	struct spi_master *master = spidev->master;
 	struct lantiq_ssc_spi *spi = spi_master_get_devdata(master);
-	unsigned int cs = spi_get_chipselect(spidev, 0);
+	unsigned int cs = spidev->chip_select;
 	u32 gpocon;
 
 	/* GPIOs are used for CS */
-	if (spi_get_csgpiod(spidev, 0))
+	if (spidev->cs_gpiod)
 		return 0;
 
 	dev_dbg(spi->dev, "using internal chipselect %u\n", cs);
@@ -796,7 +796,7 @@ static void lantiq_ssc_handle_err(struct spi_master *master,
 static void lantiq_ssc_set_cs(struct spi_device *spidev, bool enable)
 {
 	struct lantiq_ssc_spi *spi = spi_master_get_devdata(spidev->master);
-	unsigned int cs = spi_get_chipselect(spidev, 0);
+	unsigned int cs = spidev->chip_select;
 	u32 fgpo;
 
 	if (!!(spidev->mode & SPI_CS_HIGH) == enable)
@@ -906,11 +906,17 @@ static int lantiq_ssc_probe(struct platform_device *pdev)
 	struct spi_master *master;
 	struct lantiq_ssc_spi *spi;
 	const struct lantiq_ssc_hwcfg *hwcfg;
+	const struct of_device_id *match;
 	u32 id, supports_dma, revision;
 	unsigned int num_cs;
 	int err;
 
-	hwcfg = of_device_get_match_data(dev);
+	match = of_match_device(lantiq_ssc_match, dev);
+	if (!match) {
+		dev_err(dev, "no device match\n");
+		return -EINVAL;
+	}
+	hwcfg = match->data;
 
 	master = spi_alloc_master(dev, sizeof(struct lantiq_ssc_spi));
 	if (!master)
@@ -1017,7 +1023,7 @@ err_master_put:
 	return err;
 }
 
-static void lantiq_ssc_remove(struct platform_device *pdev)
+static int lantiq_ssc_remove(struct platform_device *pdev)
 {
 	struct lantiq_ssc_spi *spi = platform_get_drvdata(pdev);
 
@@ -1030,11 +1036,13 @@ static void lantiq_ssc_remove(struct platform_device *pdev)
 	destroy_workqueue(spi->wq);
 	clk_disable_unprepare(spi->spi_clk);
 	clk_put(spi->fpi_clk);
+
+	return 0;
 }
 
 static struct platform_driver lantiq_ssc_driver = {
 	.probe = lantiq_ssc_probe,
-	.remove_new = lantiq_ssc_remove,
+	.remove = lantiq_ssc_remove,
 	.driver = {
 		.name = "spi-lantiq-ssc",
 		.of_match_table = lantiq_ssc_match,

@@ -74,6 +74,8 @@ MODULE_DEVICE_TABLE(of, intel_eth_plat_match);
 
 static int intel_eth_plat_probe(struct platform_device *pdev)
 {
+	struct net_device *ndev = platform_get_drvdata(pdev);
+	struct stmmac_priv *priv = netdev_priv(ndev);
 	struct plat_stmmacenet_data *plat_dat;
 	struct stmmac_resources stmmac_res;
 	const struct of_device_id *match;
@@ -81,11 +83,12 @@ static int intel_eth_plat_probe(struct platform_device *pdev)
 	unsigned long rate;
 	int ret;
 
+	plat_dat = priv->plat;
 	ret = stmmac_get_platform_resources(pdev, &stmmac_res);
 	if (ret)
 		return ret;
 
-	plat_dat = stmmac_probe_config_dt(pdev, stmmac_res.mac);
+	plat_dat = stmmac_probe_config_dt(pdev, &stmmac_res.mac);
 	if (IS_ERR(plat_dat)) {
 		dev_err(&pdev->dev, "dt configuration failed\n");
 		return PTR_ERR(plat_dat);
@@ -169,17 +172,20 @@ err_remove_config_dt:
 	return ret;
 }
 
-static void intel_eth_plat_remove(struct platform_device *pdev)
+static int intel_eth_plat_remove(struct platform_device *pdev)
 {
 	struct intel_dwmac *dwmac = get_stmmac_bsp_priv(&pdev->dev);
+	int ret;
 
-	stmmac_pltfr_remove(pdev);
+	ret = stmmac_pltfr_remove(pdev);
 	clk_disable_unprepare(dwmac->tx_clk);
+
+	return ret;
 }
 
 static struct platform_driver intel_eth_plat_driver = {
 	.probe  = intel_eth_plat_probe,
-	.remove_new = intel_eth_plat_remove,
+	.remove = intel_eth_plat_remove,
 	.driver = {
 		.name		= "intel-eth-plat",
 		.pm		= &stmmac_pltfr_pm_ops,

@@ -120,7 +120,6 @@ struct inode_smack {
 struct task_smack {
 	struct smack_known	*smk_task;	/* label for access control */
 	struct smack_known	*smk_forked;	/* label when forked */
-	struct smack_known	*smk_transmuted;/* label when transmuted */
 	struct list_head	smk_rules;	/* per task access rules */
 	struct mutex		smk_rules_lock;	/* lock for the rules */
 	struct list_head	smk_relabel;	/* transit allowed labels */
@@ -180,6 +179,15 @@ struct smack_known_list_elem {
 	struct list_head	list;
 	struct smack_known	*smk_label;
 };
+
+/* Super block security struct flags for mount options */
+#define FSDEFAULT_MNT	0x01
+#define FSFLOOR_MNT	0x02
+#define FSHAT_MNT	0x04
+#define FSROOT_MNT	0x08
+#define FSTRANS_MNT	0x10
+
+#define NUM_SMK_MNT_OPTS	5
 
 enum {
 	Opt_error = -1,
@@ -294,7 +302,7 @@ int smack_populate_secattr(struct smack_known *skp);
 /*
  * Shared data.
  */
-extern int smack_enabled __initdata;
+extern int smack_enabled;
 extern int smack_cipso_direct;
 extern int smack_cipso_mapped;
 extern struct smack_known *smack_net_ambient;
@@ -349,12 +357,6 @@ static inline struct smack_known **smack_ipc(const struct kern_ipc_perm *ipc)
 	return ipc->security + smack_blob_sizes.lbs_ipc;
 }
 
-static inline struct superblock_smack *smack_superblock(
-					const struct super_block *superblock)
-{
-	return superblock->s_security + smack_blob_sizes.lbs_superblock;
-}
-
 /*
  * Is the directory transmuting?
  */
@@ -381,7 +383,7 @@ static inline struct smack_known *smk_of_task(const struct task_smack *tsp)
 	return tsp->smk_task;
 }
 
-static inline struct smack_known *smk_of_task_struct_obj(
+static inline struct smack_known *smk_of_task_struct(
 						const struct task_struct *t)
 {
 	struct smack_known *skp;

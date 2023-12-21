@@ -11,18 +11,12 @@
 
 #include <linux/kasan-checks.h>
 
-#include <asm/alternative-macros.h>
-
 #define __nops(n)	".rept	" #n "\nnop\n.endr\n"
 #define nops(n)		asm volatile(__nops(n))
 
 #define sev()		asm volatile("sev" : : : "memory")
 #define wfe()		asm volatile("wfe" : : : "memory")
-#define wfet(val)	asm volatile("msr s0_3_c1_c0_0, %0"	\
-				     : : "r" (val) : "memory")
 #define wfi()		asm volatile("wfi" : : : "memory")
-#define wfit(val)	asm volatile("msr s0_3_c1_c0_1, %0"	\
-				     : : "r" (val) : "memory")
 
 #define isb()		asm volatile("isb" : : : "memory")
 #define dmb(opt)	asm volatile("dmb " #opt : : : "memory")
@@ -32,36 +26,30 @@
 #define __tsb_csync()	asm volatile("hint #18" : : : "memory")
 #define csdb()		asm volatile("hint #20" : : : "memory")
 
-/*
- * Data Gathering Hint:
- * This instruction prevents merging memory accesses with Normal-NC or
- * Device-GRE attributes before the hint instruction with any memory accesses
- * appearing after the hint instruction.
- */
-#define dgh()		asm volatile("hint #6" : : : "memory")
+#define spec_bar()	asm volatile(ALTERNATIVE("dsb nsh\nisb\n",		\
+						 SB_BARRIER_INSN"nop\n",	\
+						 ARM64_HAS_SB))
 
 #ifdef CONFIG_ARM64_PSEUDO_NMI
 #define pmr_sync()						\
 	do {							\
-		asm volatile(					\
-		ALTERNATIVE_CB("dsb sy",			\
-			       ARM64_HAS_GIC_PRIO_RELAXED_SYNC,	\
-			       alt_cb_patch_nops)		\
-		);						\
+		extern struct static_key_false gic_pmr_sync;	\
+								\
+		if (static_branch_unlikely(&gic_pmr_sync))	\
+			dsb(sy);				\
 	} while(0)
 #else
 #define pmr_sync()	do {} while (0)
 #endif
 
-#define __mb()		dsb(sy)
-#define __rmb()		dsb(ld)
-#define __wmb()		dsb(st)
+#define mb()		dsb(sy)
+#define rmb()		dsb(ld)
+#define wmb()		dsb(st)
 
-#define __dma_mb()	dmb(osh)
-#define __dma_rmb()	dmb(oshld)
-#define __dma_wmb()	dmb(oshst)
+#define dma_mb()	dmb(osh)
+#define dma_rmb()	dmb(oshld)
+#define dma_wmb()	dmb(oshst)
 
-#define io_stop_wc()	dgh()
 
 #define tsb_csync()								\
 	do {									\
@@ -104,7 +92,7 @@ static inline unsigned long array_index_mask_nospec(unsigned long idx,
  * This insanity brought to you by speculative system register reads,
  * out-of-order memory accesses, sequence locks and Thomas Gleixner.
  *
- * https://lore.kernel.org/r/alpine.DEB.2.21.1902081950260.1662@nanos.tec.linutronix.de/
+ * http://lists.infradead.org/pipermail/linux-arm-kernel/2019-February/631195.html
  */
 #define arch_counter_enforce_ordering(val) do {				\
 	u64 tmp, _val = (val);						\
@@ -131,25 +119,25 @@ do {									\
 	case 1:								\
 		asm volatile ("stlrb %w1, %0"				\
 				: "=Q" (*__p)				\
-				: "rZ" (*(__u8 *)__u.__c)		\
+				: "r" (*(__u8 *)__u.__c)		\
 				: "memory");				\
 		break;							\
 	case 2:								\
 		asm volatile ("stlrh %w1, %0"				\
 				: "=Q" (*__p)				\
-				: "rZ" (*(__u16 *)__u.__c)		\
+				: "r" (*(__u16 *)__u.__c)		\
 				: "memory");				\
 		break;							\
 	case 4:								\
 		asm volatile ("stlr %w1, %0"				\
 				: "=Q" (*__p)				\
-				: "rZ" (*(__u32 *)__u.__c)		\
+				: "r" (*(__u32 *)__u.__c)		\
 				: "memory");				\
 		break;							\
 	case 8:								\
-		asm volatile ("stlr %x1, %0"				\
+		asm volatile ("stlr %1, %0"				\
 				: "=Q" (*__p)				\
-				: "rZ" (*(__u64 *)__u.__c)		\
+				: "r" (*(__u64 *)__u.__c)		\
 				: "memory");				\
 		break;							\
 	}								\

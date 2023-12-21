@@ -10,11 +10,12 @@
 int nvme_revalidate_zones(struct nvme_ns *ns)
 {
 	struct request_queue *q = ns->queue;
+	int ret;
 
-	blk_queue_chunk_sectors(q, ns->zsze);
-	blk_queue_max_zone_append_sectors(q, ns->ctrl->max_zone_append);
-
-	return blk_revalidate_disk_zones(ns->disk, NULL);
+	ret = blk_revalidate_disk_zones(ns->disk, NULL);
+	if (!ret)
+		blk_queue_max_zone_append_sectors(q, ns->ctrl->max_zone_append);
+	return ret;
 }
 
 static int nvme_set_max_append(struct nvme_ctrl *ctrl)
@@ -54,17 +55,12 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 	int status;
 
 	/* Driver requires zone append support */
-	if ((le32_to_cpu(log->iocs[nvme_cmd_zone_append]) &
+	if (!(le32_to_cpu(log->iocs[nvme_cmd_zone_append]) &
 			NVME_CMD_EFFECTS_CSUPP)) {
-		if (test_and_clear_bit(NVME_NS_FORCE_RO, &ns->flags))
-			dev_warn(ns->ctrl->device,
-				 "Zone Append supported for zoned namespace:%d. Remove read-only mode\n",
-				 ns->head->ns_id);
-	} else {
-		set_bit(NVME_NS_FORCE_RO, &ns->flags);
 		dev_warn(ns->ctrl->device,
-			 "Zone Append not supported for zoned namespace:%d. Forcing to read-only mode\n",
-			 ns->head->ns_id);
+			"append not supported for zoned namespace:%d\n",
+			ns->head->ns_id);
+		return -EINVAL;
 	}
 
 	/* Lazily query controller append limit for the first zoned namespace */
@@ -95,7 +91,7 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 		dev_warn(ns->ctrl->device,
 			"zone operations:%x not supported for namespace:%u\n",
 			le16_to_cpu(id->zoc), ns->head->ns_id);
-		status = -ENODEV;
+		status = -EINVAL;
 		goto free_data;
 	}
 
@@ -104,14 +100,14 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 		dev_warn(ns->ctrl->device,
 			"invalid zone size:%llu for namespace:%u\n",
 			ns->zsze, ns->head->ns_id);
-		status = -ENODEV;
+		status = -EINVAL;
 		goto free_data;
 	}
 
-	disk_set_zoned(ns->disk, BLK_ZONED_HM);
+	q->limits.zoned = BLK_ZONED_HM;
 	blk_queue_flag_set(QUEUE_FLAG_ZONE_RESETALL, q);
-	disk_set_max_open_zones(ns->disk, le32_to_cpu(id->mor) + 1);
-	disk_set_max_active_zones(ns->disk, le32_to_cpu(id->mar) + 1);
+	blk_queue_max_open_zones(q, le32_to_cpu(id->mor) + 1);
+	blk_queue_max_active_zones(q, le32_to_cpu(id->mar) + 1);
 free_data:
 	kfree(id);
 	return status;
@@ -165,25 +161,19 @@ static int nvme_zone_parse_entry(struct nvme_ns *ns,
 	zone.len = ns->zsze;
 	zone.capacity = nvme_lba_to_sect(ns, le64_to_cpu(entry->zcap));
 	zone.start = nvme_lba_to_sect(ns, le64_to_cpu(entry->zslba));
-	if (zone.cond == BLK_ZONE_COND_FULL)
-		zone.wp = zone.start + zone.len;
-	else
-		zone.wp = nvme_lba_to_sect(ns, le64_to_cpu(entry->wp));
+	zone.wp = nvme_lba_to_sect(ns, le64_to_cpu(entry->wp));
 
 	return cb(&zone, idx, data);
 }
 
-int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
-		unsigned int nr_zones, report_zones_cb cb, void *data)
+static int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
+			unsigned int nr_zones, report_zones_cb cb, void *data)
 {
 	struct nvme_zone_report *report;
 	struct nvme_command c = { };
 	int ret, zone_idx = 0;
 	unsigned int nz, i;
 	size_t buflen;
-
-	if (ns->head->ids.csi != NVME_CSI_ZNS)
-		return -EINVAL;
 
 	report = nvme_zns_alloc_report_buffer(ns, nr_zones, &buflen);
 	if (!report)
@@ -232,11 +222,29 @@ out_free:
 	return ret;
 }
 
+int nvme_report_zones(struct gendisk *disk, sector_t sector,
+		      unsigned int nr_zones, report_zones_cb cb, void *data)
+{
+	struct nvme_ns_head *head = NULL;
+	struct nvme_ns *ns;
+	int srcu_idx, ret;
+
+	ns = nvme_get_ns_from_disk(disk, &head, &srcu_idx);
+	if (unlikely(!ns))
+		return -EWOULDBLOCK;
+
+	if (ns->head->ids.csi == NVME_CSI_ZNS)
+		ret = nvme_ns_report_zones(ns, sector, nr_zones, cb, data);
+	else
+		ret = -EINVAL;
+	nvme_put_ns_from_disk(head, srcu_idx);
+
+	return ret;
+}
+
 blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 		struct nvme_command *c, enum nvme_zone_mgmt_action action)
 {
-	memset(c, 0, sizeof(*c));
-
 	c->zms.opcode = nvme_cmd_zone_mgmt_send;
 	c->zms.nsid = cpu_to_le32(ns->head->ns_id);
 	c->zms.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));

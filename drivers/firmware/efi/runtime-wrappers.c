@@ -62,7 +62,6 @@ struct efi_runtime_work efi_rts_work;
 									\
 	if (!efi_enabled(EFI_RUNTIME_SERVICES)) {			\
 		pr_warn_once("EFI Runtime Services are disabled!\n");	\
-		efi_rts_work.status = EFI_DEVICE_ERROR;			\
 		goto exit;						\
 	}								\
 									\
@@ -84,7 +83,6 @@ struct efi_runtime_work efi_rts_work;
 	else								\
 		pr_err("Failed to queue work to efi_rts_wq.\n");	\
 									\
-	WARN_ON_ONCE(efi_rts_work.status == EFI_ABORTED);		\
 exit:									\
 	efi_rts_work.efi_rts_id = EFI_NONE;				\
 	efi_rts_work.status;						\
@@ -158,7 +156,7 @@ void efi_call_virt_check_flags(unsigned long flags, const char *call)
  * none of the remaining functions are actually ever called at runtime.
  * So let's just use a single lock to serialize all Runtime Services calls.
  */
-static DEFINE_SEMAPHORE(efi_runtime_lock, 1);
+static DEFINE_SEMAPHORE(efi_runtime_lock);
 
 /*
  * Expose the EFI runtime lock to the UV platform

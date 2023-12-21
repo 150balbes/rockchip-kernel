@@ -96,16 +96,6 @@ config TMP007
 	  This driver can also be built as a module. If so, the module will
 	  be called tmp007.
 
-config TMP117
-	tristate "TMP117 Digital temperature sensor with integrated NV memory"
-	depends on I2C
-	help
-	  If you say yes here you get support for the Texas Instruments
-	  TMP117 Digital temperature sensor with integrated NV memory.
-
-	  This driver can also be built as a module. If so, the module will
-	  be called tmp117.
-
 config TSYS01
 	tristate "Measurement Specialties TSYS01 temperature sensor using I2C bus connection"
 	depends on I2C
@@ -128,16 +118,6 @@ config TSYS02D
 	  This driver can also be built as a module. If so, the module will
 	  be called tsys02d.
 
-config MAX30208
-	tristate "Maxim MAX30208 digital temperature sensor"
-	depends on I2C
-	help
-	  If you say yes here you get support for Maxim MAX30208
-	  digital temperature sensor connected via I2C.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called max30208.
-
 config MAX31856
 	tristate "MAX31856 thermocouple sensor"
 	depends on SPI
@@ -147,15 +127,5 @@ config MAX31856
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called max31856.
-
-config MAX31865
-	tristate "MAX31865 RTD to Digital converter"
-	depends on SPI
-	help
-	  If you say yes here you get support for MAX31865
-	  thermocouple sensor chip connected via SPI.
-
-	  This driver can also be build as a module. If so, the module
-	  will be called max31865.
 
 endmenu

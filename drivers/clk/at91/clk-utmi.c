@@ -23,7 +23,6 @@ struct clk_utmi {
 	struct clk_hw hw;
 	struct regmap *regmap_pmc;
 	struct regmap *regmap_sfr;
-	struct at91_clk_pms pms;
 };
 
 #define to_clk_utmi(hw) container_of(hw, struct clk_utmi, hw)
@@ -114,46 +113,23 @@ static unsigned long clk_utmi_recalc_rate(struct clk_hw *hw,
 	return UTMI_RATE;
 }
 
-static int clk_utmi_save_context(struct clk_hw *hw)
-{
-	struct clk_utmi *utmi = to_clk_utmi(hw);
-
-	utmi->pms.status = clk_utmi_is_prepared(hw);
-
-	return 0;
-}
-
-static void clk_utmi_restore_context(struct clk_hw *hw)
-{
-	struct clk_utmi *utmi = to_clk_utmi(hw);
-
-	if (utmi->pms.status)
-		clk_utmi_prepare(hw);
-}
-
 static const struct clk_ops utmi_ops = {
 	.prepare = clk_utmi_prepare,
 	.unprepare = clk_utmi_unprepare,
 	.is_prepared = clk_utmi_is_prepared,
 	.recalc_rate = clk_utmi_recalc_rate,
-	.save_context = clk_utmi_save_context,
-	.restore_context = clk_utmi_restore_context,
 };
 
 static struct clk_hw * __init
 at91_clk_register_utmi_internal(struct regmap *regmap_pmc,
 				struct regmap *regmap_sfr,
 				const char *name, const char *parent_name,
-				struct clk_hw *parent_hw,
 				const struct clk_ops *ops, unsigned long flags)
 {
 	struct clk_utmi *utmi;
 	struct clk_hw *hw;
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	int ret;
-
-	if (!(parent_name || parent_hw))
-		return ERR_PTR(-EINVAL);
 
 	utmi = kzalloc(sizeof(*utmi), GFP_KERNEL);
 	if (!utmi)
@@ -161,13 +137,8 @@ at91_clk_register_utmi_internal(struct regmap *regmap_pmc,
 
 	init.name = name;
 	init.ops = ops;
-	if (parent_hw) {
-		init.parent_hws = parent_hw ? (const struct clk_hw **)&parent_hw : NULL;
-		init.num_parents = parent_hw ? 1 : 0;
-	} else {
-		init.parent_names = parent_name ? &parent_name : NULL;
-		init.num_parents = parent_name ? 1 : 0;
-	}
+	init.parent_names = parent_name ? &parent_name : NULL;
+	init.num_parents = parent_name ? 1 : 0;
 	init.flags = flags;
 
 	utmi->hw.init = &init;
@@ -186,11 +157,10 @@ at91_clk_register_utmi_internal(struct regmap *regmap_pmc,
 
 struct clk_hw * __init
 at91_clk_register_utmi(struct regmap *regmap_pmc, struct regmap *regmap_sfr,
-		       const char *name, const char *parent_name,
-		       struct clk_hw *parent_hw)
+		       const char *name, const char *parent_name)
 {
 	return at91_clk_register_utmi_internal(regmap_pmc, regmap_sfr, name,
-			parent_name, parent_hw, &utmi_ops, CLK_SET_RATE_GATE);
+			parent_name, &utmi_ops, CLK_SET_RATE_GATE);
 }
 
 static int clk_utmi_sama7g5_prepare(struct clk_hw *hw)
@@ -262,35 +232,16 @@ static int clk_utmi_sama7g5_is_prepared(struct clk_hw *hw)
 	return 0;
 }
 
-static int clk_utmi_sama7g5_save_context(struct clk_hw *hw)
-{
-	struct clk_utmi *utmi = to_clk_utmi(hw);
-
-	utmi->pms.status = clk_utmi_sama7g5_is_prepared(hw);
-
-	return 0;
-}
-
-static void clk_utmi_sama7g5_restore_context(struct clk_hw *hw)
-{
-	struct clk_utmi *utmi = to_clk_utmi(hw);
-
-	if (utmi->pms.status)
-		clk_utmi_sama7g5_prepare(hw);
-}
-
 static const struct clk_ops sama7g5_utmi_ops = {
 	.prepare = clk_utmi_sama7g5_prepare,
 	.is_prepared = clk_utmi_sama7g5_is_prepared,
 	.recalc_rate = clk_utmi_recalc_rate,
-	.save_context = clk_utmi_sama7g5_save_context,
-	.restore_context = clk_utmi_sama7g5_restore_context,
 };
 
 struct clk_hw * __init
 at91_clk_sama7g5_register_utmi(struct regmap *regmap_pmc, const char *name,
-			       const char *parent_name, struct clk_hw *parent_hw)
+			       const char *parent_name)
 {
 	return at91_clk_register_utmi_internal(regmap_pmc, NULL, name,
-			parent_name, parent_hw, &sama7g5_utmi_ops, 0);
+			parent_name, &sama7g5_utmi_ops, 0);
 }

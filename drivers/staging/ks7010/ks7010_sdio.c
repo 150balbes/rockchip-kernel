@@ -1029,12 +1029,10 @@ static int ks7010_sdio_probe(struct sdio_func *func,
 
 	ret = register_netdev(priv->net_dev);
 	if (ret)
-		goto err_destroy_wq;
+		goto err_free_netdev;
 
 	return 0;
 
- err_destroy_wq:
-	destroy_workqueue(priv->wq);
  err_free_netdev:
 	free_netdev(netdev);
  err_release_irq:
@@ -1102,8 +1100,10 @@ static void ks7010_sdio_remove(struct sdio_func *func)
 	if (ret)	/* memory allocation failure */
 		goto err_free_card;
 
-	if (priv->wq)
+	if (priv->wq) {
+		flush_workqueue(priv->wq);
 		destroy_workqueue(priv->wq);
+	}
 
 	hostif_exit(priv);
 

@@ -105,7 +105,8 @@ static ssize_t set_trigger(struct device *s, struct device_attribute *attr,
 {
 	char *p;
 
-	strscpy(mce_helper, buf, sizeof(mce_helper));
+	strncpy(mce_helper, buf, sizeof(mce_helper));
+	mce_helper[sizeof(mce_helper)-1] = 0;
 	p = strchr(mce_helper, '\n');
 
 	if (p)

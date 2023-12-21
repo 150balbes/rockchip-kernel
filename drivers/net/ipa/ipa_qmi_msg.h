@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
 /* Copyright (c) 2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2018-2022 Linaro Ltd.
+ * Copyright (C) 2018-2020 Linaro Ltd.
  */
 #ifndef _IPA_QMI_MSG_H_
 #define _IPA_QMI_MSG_H_
@@ -24,7 +24,7 @@
  * information for each field.  The qmi_send_*() interfaces require
  * the message size to be provided.
  */
-#define IPA_QMI_INDICATION_REGISTER_REQ_SZ	20	/* -> server handle */
+#define IPA_QMI_INDICATION_REGISTER_REQ_SZ	12	/* -> server handle */
 #define IPA_QMI_INDICATION_REGISTER_RSP_SZ	7	/* <- server handle */
 #define IPA_QMI_INIT_DRIVER_REQ_SZ		162	/* client handle -> */
 #define IPA_QMI_INIT_DRIVER_RSP_SZ		25	/* client handle <- */
@@ -44,10 +44,6 @@ struct ipa_indication_register_req {
 	u8 data_usage_quota_reached;
 	u8 ipa_mhi_ready_ind_valid;
 	u8 ipa_mhi_ready_ind;
-	u8 endpoint_desc_ind_valid;
-	u8 endpoint_desc_ind;
-	u8 bw_change_ind_valid;
-	u8 bw_change_ind;
 };
 
 /* The response to a IPA_QMI_INDICATION_REGISTER request consists only of
@@ -78,12 +74,12 @@ struct ipa_init_complete_ind {
 
 /* The AP tells the modem its platform type.  We assume Android. */
 enum ipa_platform_type {
-	IPA_QMI_PLATFORM_TYPE_INVALID		= 0x0,	/* Invalid */
-	IPA_QMI_PLATFORM_TYPE_TN		= 0x1,	/* Data card */
-	IPA_QMI_PLATFORM_TYPE_LE		= 0x2,	/* Data router */
-	IPA_QMI_PLATFORM_TYPE_MSM_ANDROID	= 0x3,	/* Android MSM */
-	IPA_QMI_PLATFORM_TYPE_MSM_WINDOWS	= 0x4,	/* Windows MSM */
-	IPA_QMI_PLATFORM_TYPE_MSM_QNX_V01	= 0x5,	/* QNX MSM */
+	IPA_QMI_PLATFORM_TYPE_INVALID		= 0,	/* Invalid */
+	IPA_QMI_PLATFORM_TYPE_TN		= 1,	/* Data card */
+	IPA_QMI_PLATFORM_TYPE_LE		= 2,	/* Data router */
+	IPA_QMI_PLATFORM_TYPE_MSM_ANDROID	= 3,	/* Android MSM */
+	IPA_QMI_PLATFORM_TYPE_MSM_WINDOWS	= 4,	/* Windows MSM */
+	IPA_QMI_PLATFORM_TYPE_MSM_QNX_V01	= 5,	/* QNX MSM */
 };
 
 /* This defines the start and end offset of a range of memory.  The start
@@ -219,7 +215,7 @@ struct ipa_init_modem_driver_req {
 
 /* The response to a IPA_QMI_INIT_DRIVER request begins with a standard
  * QMI response, but contains other information as well.  Currently we
- * simply wait for the INIT_DRIVER transaction to complete and
+ * simply wait for the the INIT_DRIVER transaction to complete and
  * ignore any other data that might be returned.
  */
 struct ipa_init_modem_driver_rsp {
@@ -247,15 +243,15 @@ struct ipa_init_modem_driver_rsp {
 };
 
 /* Message structure definitions defined in "ipa_qmi_msg.c" */
-extern const struct qmi_elem_info ipa_indication_register_req_ei[];
-extern const struct qmi_elem_info ipa_indication_register_rsp_ei[];
-extern const struct qmi_elem_info ipa_driver_init_complete_req_ei[];
-extern const struct qmi_elem_info ipa_driver_init_complete_rsp_ei[];
-extern const struct qmi_elem_info ipa_init_complete_ind_ei[];
-extern const struct qmi_elem_info ipa_mem_bounds_ei[];
-extern const struct qmi_elem_info ipa_mem_array_ei[];
-extern const struct qmi_elem_info ipa_mem_range_ei[];
-extern const struct qmi_elem_info ipa_init_modem_driver_req_ei[];
-extern const struct qmi_elem_info ipa_init_modem_driver_rsp_ei[];
+extern struct qmi_elem_info ipa_indication_register_req_ei[];
+extern struct qmi_elem_info ipa_indication_register_rsp_ei[];
+extern struct qmi_elem_info ipa_driver_init_complete_req_ei[];
+extern struct qmi_elem_info ipa_driver_init_complete_rsp_ei[];
+extern struct qmi_elem_info ipa_init_complete_ind_ei[];
+extern struct qmi_elem_info ipa_mem_bounds_ei[];
+extern struct qmi_elem_info ipa_mem_array_ei[];
+extern struct qmi_elem_info ipa_mem_range_ei[];
+extern struct qmi_elem_info ipa_init_modem_driver_req_ei[];
+extern struct qmi_elem_info ipa_init_modem_driver_rsp_ei[];
 
 #endif /* !_IPA_QMI_MSG_H_ */

@@ -61,8 +61,9 @@ static int check_anonymous_memory_mapping(int mem_type, int mode, int mapping, i
 {
 	char *ptr, *map_ptr;
 	int run, result, map_size;
-	int item = ARRAY_SIZE(sizes);
+	int item = sizeof(sizes)/sizeof(int);
 
+	item = sizeof(sizes)/sizeof(int);
 	mte_switch_mode(mode, MTE_ALLOW_NON_ZERO_TAG);
 	for (run = 0; run < item; run++) {
 		map_size = sizes[run] + OVERFLOW + UNDERFLOW;
@@ -92,7 +93,7 @@ static int check_file_memory_mapping(int mem_type, int mode, int mapping, int ta
 {
 	char *ptr, *map_ptr;
 	int run, fd, map_size;
-	int total = ARRAY_SIZE(sizes);
+	int total = sizeof(sizes)/sizeof(int);
 	int result = KSFT_PASS;
 
 	mte_switch_mode(mode, MTE_ALLOW_NON_ZERO_TAG);
@@ -131,7 +132,7 @@ static int check_clear_prot_mte_flag(int mem_type, int mode, int mapping)
 {
 	char *ptr, *map_ptr;
 	int run, prot_flag, result, fd, map_size;
-	int total = ARRAY_SIZE(sizes);
+	int total = sizeof(sizes)/sizeof(int);
 
 	prot_flag = PROT_READ | PROT_WRITE;
 	mte_switch_mode(mode, MTE_ALLOW_NON_ZERO_TAG);
@@ -186,7 +187,7 @@ static int check_clear_prot_mte_flag(int mem_type, int mode, int mapping)
 int main(int argc, char *argv[])
 {
 	int err;
-	int item = ARRAY_SIZE(sizes);
+	int item = sizeof(sizes)/sizeof(int);
 
 	err = mte_default_setup();
 	if (err)

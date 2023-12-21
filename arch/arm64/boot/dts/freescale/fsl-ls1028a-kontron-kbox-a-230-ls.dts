@@ -59,10 +59,6 @@
 	status = "okay";
 };
 
-&enetc_port3 {
-	status = "okay";
-};
-
 &i2c3 {
 	eeprom@57 {
 		compatible = "atmel,24c32";
@@ -108,13 +104,6 @@
 };
 
 &mscc_felix_port4 {
-	status = "okay";
-};
-
-&mscc_felix_port5 {
-	status = "okay";
-};
-
-&sata {
+	ethernet = <&enetc_port2>;
 	status = "okay";
 };

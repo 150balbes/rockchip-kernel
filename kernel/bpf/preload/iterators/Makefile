@@ -1,26 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0
 OUTPUT := .output
-abs_out := $(abspath $(OUTPUT))
-
 CLANG ?= clang
 LLC ?= llc
 LLVM_STRIP ?= llvm-strip
-
-TOOLS_PATH := $(abspath ../../../../tools)
-BPFTOOL_SRC := $(TOOLS_PATH)/bpf/bpftool
-BPFTOOL_OUTPUT := $(abs_out)/bpftool
-DEFAULT_BPFTOOL := $(BPFTOOL_OUTPUT)/bootstrap/bpftool
+DEFAULT_BPFTOOL := $(OUTPUT)/sbin/bpftool
 BPFTOOL ?= $(DEFAULT_BPFTOOL)
-
-LIBBPF_SRC := $(TOOLS_PATH)/lib/bpf
-LIBBPF_OUTPUT := $(abs_out)/libbpf
-LIBBPF_DESTDIR := $(LIBBPF_OUTPUT)
-LIBBPF_INCLUDE := $(LIBBPF_DESTDIR)/include
-BPFOBJ := $(LIBBPF_OUTPUT)/libbpf.a
-
-INCLUDES := -I$(OUTPUT) -I$(LIBBPF_INCLUDE) -I$(TOOLS_PATH)/include/uapi
+LIBBPF_SRC := $(abspath ../../../../tools/lib/bpf)
+BPFOBJ := $(OUTPUT)/libbpf.a
+BPF_INCLUDE := $(OUTPUT)
+INCLUDES := -I$(OUTPUT) -I$(BPF_INCLUDE) -I$(abspath ../../../../tools/lib)        \
+       -I$(abspath ../../../../tools/include/uapi)
 CFLAGS := -g -Wall
 
+abs_out := $(abspath $(OUTPUT))
 ifeq ($(V),1)
 Q =
 msg =
@@ -35,33 +27,31 @@ endif
 
 .PHONY: all clean
 
-all: iterators.lskel-little-endian.h
-
-big: iterators.lskel-big-endian.h
+all: iterators.skel.h
 
 clean:
 	$(call msg,CLEAN)
 	$(Q)rm -rf $(OUTPUT) iterators
 
-iterators.lskel-%.h: $(OUTPUT)/%/iterators.bpf.o | $(BPFTOOL)
+iterators.skel.h: $(OUTPUT)/iterators.bpf.o | $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
-	$(Q)$(BPFTOOL) gen skeleton -L $< > $@
+	$(Q)$(BPFTOOL) gen skeleton $< > $@
 
-$(OUTPUT)/%/iterators.bpf.o: iterators.bpf.c $(BPFOBJ) | $(OUTPUT)
+
+$(OUTPUT)/iterators.bpf.o: iterators.bpf.c $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BPF,$@)
-	$(Q)mkdir -p $(@D)
-	$(Q)$(CLANG) -g -O2 -target bpf -m$* $(INCLUDES)		      \
+	$(Q)$(CLANG) -g -O2 -target bpf $(INCLUDES)			      \
 		 -c $(filter %.c,$^) -o $@ &&				      \
 	$(LLVM_STRIP) -g $@
 
-$(OUTPUT) $(LIBBPF_OUTPUT) $(BPFTOOL_OUTPUT):
+$(OUTPUT):
 	$(call msg,MKDIR,$@)
-	$(Q)mkdir -p $@
+	$(Q)mkdir -p $(OUTPUT)
 
-$(BPFOBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(LIBBPF_OUTPUT)
+$(BPFOBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPUT)
 	$(Q)$(MAKE) $(submake_extras) -C $(LIBBPF_SRC)			       \
-		    OUTPUT=$(abspath $(dir $@))/ prefix=		       \
-		    DESTDIR=$(LIBBPF_DESTDIR) $(abspath $@) install_headers
+		    OUTPUT=$(abspath $(dir $@))/ $(abspath $@)
 
-$(DEFAULT_BPFTOOL): | $(BPFTOOL_OUTPUT)
-	$(Q)$(MAKE) $(submake_extras) -C $(BPFTOOL_SRC)	OUTPUT=$(BPFTOOL_OUTPUT)/ bootstrap
+$(DEFAULT_BPFTOOL):
+	$(Q)$(MAKE) $(submake_extras) -C ../../../../tools/bpf/bpftool			      \
+		    prefix= OUTPUT=$(abs_out)/ DESTDIR=$(abs_out) install

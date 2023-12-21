@@ -11,15 +11,9 @@ maintainers:
 
 properties:
   compatible:
-    oneOf:
-      - enum:
-          - fsl,imx23-dcp
-          - fsl,imx28-dcp
-      - items:
-          - enum:
-              - fsl,imx6sl-dcp
-              - fsl,imx6ull-dcp
-          - const: fsl,imx28-dcp
+    enum:
+      - fsl,imx23-dcp
+      - fsl,imx28-dcp
 
   reg:
     maxItems: 1
@@ -33,6 +27,7 @@ properties:
       - description: MXS DCP DCP interrupt
       - description: MXS DCP secure interrupt
     minItems: 2
+    maxItems: 3
 
   clocks:
     maxItems: 1

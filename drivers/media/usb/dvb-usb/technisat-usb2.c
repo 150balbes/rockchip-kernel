@@ -689,15 +689,10 @@ static int technisat_usb2_rc_query(struct dvb_usb_device *d)
 }
 
 /* DVB-USB and USB stuff follows */
-enum {
-	TECHNISAT_USB2_DVB_S2,
-};
-
 static struct usb_device_id technisat_usb2_id_table[] = {
-	DVB_USB_DEV(TECHNISAT, TECHNISAT_USB2_DVB_S2),
-	{ }
+	{ USB_DEVICE(USB_VID_TECHNISAT, USB_PID_TECHNISAT_USB2_DVB_S2) },
+	{ 0 }		/* Terminating entry */
 };
-
 MODULE_DEVICE_TABLE(usb, technisat_usb2_id_table);
 
 /* device description */
@@ -743,7 +738,7 @@ static struct dvb_usb_device_properties technisat_usb2_devices = {
 	.num_device_descs = 1,
 	.devices = {
 		{   "Technisat SkyStar USB HD (DVB-S/S2)",
-			{ &technisat_usb2_id_table[TECHNISAT_USB2_DVB_S2], NULL },
+			{ &technisat_usb2_id_table[0], NULL },
 			{ NULL },
 		},
 	},
@@ -786,7 +781,7 @@ static void technisat_usb2_disconnect(struct usb_interface *intf)
 {
 	struct dvb_usb_device *dev = usb_get_intfdata(intf);
 
-	/* work and stuff was only created when the device is hot-state */
+	/* work and stuff was only created when the device is is hot-state */
 	if (dev != NULL) {
 		struct technisat_usb2_state *state = dev->priv;
 		if (state != NULL)

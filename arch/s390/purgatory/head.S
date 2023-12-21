@@ -44,14 +44,11 @@
 .endm
 
 .macro MEMSWAP dst,src,buf,len
-10:	larl	%r0,purgatory_end
-	larl	%r1,stack
-	slgr	%r0,%r1
-	cgr	\len,%r0
+10:	cghi	\len,bufsz
 	jh	11f
 	lgr	%r4,\len
 	j	12f
-11:	lgr	%r4,%r0
+11:	lghi	%r4,bufsz
 
 12:	MEMCPY	\buf,\dst,%r4
 	MEMCPY	\dst,\src,%r4
@@ -76,9 +73,9 @@
 	diag	%r0,%r1,0x308
 .endm
 
-	.text
-	.balign PAGE_SIZE
-SYM_CODE_START(purgatory_start)
+.text
+.align PAGE_SIZE
+ENTRY(purgatory_start)
 	/* The purgatory might be called after a diag308 so better set
 	 * architecture and addressing mode.
 	 */
@@ -100,7 +97,7 @@ SYM_CODE_START(purgatory_start)
 	 * checksum verification only (%r2 = 0 -> verification only).
 	 *
 	 * Check now and preserve over C function call by storing in
-	 * %r10 with
+	 * %r10 whith
 	 *	1 -> checksum verification only
 	 *	0 -> load new kernel
 	 */
@@ -138,18 +135,12 @@ SYM_CODE_START(purgatory_start)
 
 .start_crash_kernel:
 	/* Location of purgatory_start in crash memory */
-	larl	%r0,.base_crash
-	larl	%r1,purgatory_start
-	slgr	%r0,%r1
 	lgr	%r8,%r13
-	sgr	%r8,%r0
+	aghi	%r8,-(.base_crash-purgatory_start)
 
 	/* Destination for this code i.e. end of memory to be swapped. */
-	larl	%r0,purgatory_end
-	larl	%r1,purgatory_start
-	slgr	%r0,%r1
 	lg	%r9,crash_size-.base_crash(%r13)
-	sgr	%r9,%r0
+	aghi	%r9,-(purgatory_end-purgatory_start)
 
 	/* Destination in crash memory, i.e. same as r9 but in crash memory. */
 	lg	%r10,crash_start-.base_crash(%r13)
@@ -158,19 +149,15 @@ SYM_CODE_START(purgatory_start)
 	/* Buffer location (in crash memory) and size. As the purgatory is
 	 * behind the point of no return it can re-use the stack as buffer.
 	 */
-	larl	%r11,purgatory_end
+	lghi	%r11,bufsz
 	larl	%r12,stack
-	slgr	%r11,%r12
 
 	MEMCPY	%r12,%r9,%r11	/* dst	-> (crash) buf */
 	MEMCPY	%r9,%r8,%r11	/* self -> dst */
 
 	/* Jump to new location. */
 	lgr	%r7,%r9
-	larl	%r0,.jump_to_dst
-	larl	%r1,purgatory_start
-	slgr	%r0,%r1
-	agr	%r7,%r0
+	aghi	%r7,.jump_to_dst-purgatory_start
 	br	%r7
 
 .jump_to_dst:
@@ -182,10 +169,7 @@ SYM_CODE_START(purgatory_start)
 
 	/* Load new buffer location after jump */
 	larl	%r7,stack
-	lgr	%r0,%r7
-	larl	%r1,purgatory_start
-	slgr	%r0,%r1
-	agr	%r10,%r0
+	aghi	%r10,stack-purgatory_start
 	MEMCPY	%r10,%r7,%r11	/* (new) buf -> (crash) buf */
 
 	/* Now the code is set up to run from its designated location. Start
@@ -245,21 +229,45 @@ SYM_CODE_START(purgatory_start)
 
 	/* start crash kernel */
 	START_NEXT_KERNEL .base_dst 1
-SYM_CODE_END(purgatory_start)
 
-SYM_DATA_LOCAL(load_psw_mask,		.long 0x00080000,0x80000000)
-	.balign	8
-SYM_DATA_LOCAL(disabled_wait_psw,	.quad 0x0002000180000000,.do_checksum_verification)
-SYM_DATA_LOCAL(gprregs,			.fill 10,8,0)
-SYM_DATA(purgatory_sha256_digest,	.skip 32)
-SYM_DATA(purgatory_sha_regions,		.skip 16*__KEXEC_SHA_REGION_SIZE)
-SYM_DATA(kernel_entry,			.skip 8)
-SYM_DATA(kernel_type,			.skip 8)
-SYM_DATA(crash_start,			.skip 8)
-SYM_DATA(crash_size,			.skip 8)
-	.balign	PAGE_SIZE
-SYM_DATA_START_LOCAL(stack)
+
+load_psw_mask:
+	.long	0x00080000,0x80000000
+
+	.align	8
+disabled_wait_psw:
+	.quad	0x0002000180000000
+	.quad	0x0000000000000000 + .do_checksum_verification
+
+gprregs:
+	.rept	10
+	.quad	0
+	.endr
+
+/* Macro to define a global variable with name and size (in bytes) to be
+ * shared with C code.
+ *
+ * Add the .size and .type attribute to satisfy checks on the Elf_Sym during
+ * purgatory load.
+ */
+.macro GLOBAL_VARIABLE name,size
+\name:
+	.global \name
+	.size	\name,\size
+	.type	\name,object
+	.skip	\size,0
+.endm
+
+GLOBAL_VARIABLE purgatory_sha256_digest,32
+GLOBAL_VARIABLE purgatory_sha_regions,16*__KEXEC_SHA_REGION_SIZE
+GLOBAL_VARIABLE kernel_entry,8
+GLOBAL_VARIABLE kernel_type,8
+GLOBAL_VARIABLE crash_start,8
+GLOBAL_VARIABLE crash_size,8
+
+	.align	PAGE_SIZE
+stack:
 	/* The buffer to move this code must be as big as the code. */
 	.skip	stack-purgatory_start
-	.balign	PAGE_SIZE
-SYM_DATA_END_LABEL(stack, SYM_L_LOCAL, purgatory_end)
+	.align	PAGE_SIZE
+purgatory_end:

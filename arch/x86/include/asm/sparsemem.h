@@ -2,8 +2,6 @@
 #ifndef _ASM_X86_SPARSEMEM_H
 #define _ASM_X86_SPARSEMEM_H
 
-#include <linux/types.h>
-
 #ifdef CONFIG_SPARSEMEM
 /*
  * generic non-linear memory support:

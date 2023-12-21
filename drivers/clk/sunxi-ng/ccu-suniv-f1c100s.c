@@ -6,8 +6,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/io.h>
-#include <linux/module.h>
-#include <linux/platform_device.h>
+#include <linux/of_address.h>
 
 #include "ccu_common.h"
 #include "ccu_reset.h"
@@ -239,14 +238,7 @@ static SUNXI_CCU_MUX_WITH_GATE(i2s_clk, "i2s", i2s_spdif_parents,
 static SUNXI_CCU_MUX_WITH_GATE(spdif_clk, "spdif", i2s_spdif_parents,
 			       0x0b4, 16, 2, BIT(31), 0);
 
-static const char * const ir_parents[] = { "osc32k", "osc24M" };
-static SUNXI_CCU_MP_WITH_MUX_GATE(ir_clk, "ir",
-				  ir_parents, 0x0b8,
-				  0, 4,		/* M */
-				  16, 2,	/* P */
-				  24, 2,        /* mux */
-				  BIT(31),      /* gate */
-				  0);
+/* The BSP header file has a CIR_CFG, but no mod clock uses this definition */
 
 static SUNXI_CCU_GATE(usb_phy0_clk,	"usb-phy0",	"osc24M",
 		      0x0cc, BIT(1), 0);
@@ -362,7 +354,6 @@ static struct ccu_common *suniv_ccu_clks[] = {
 	&mmc1_output_clk.common,
 	&i2s_clk.common,
 	&spdif_clk.common,
-	&ir_clk.common,
 	&usb_phy0_clk.common,
 	&dram_ve_clk.common,
 	&dram_csi_clk.common,
@@ -454,7 +445,6 @@ static struct clk_hw_onecell_data suniv_hw_clks = {
 		[CLK_MMC1_OUTPUT]	= &mmc1_output_clk.common.hw,
 		[CLK_I2S]		= &i2s_clk.common.hw,
 		[CLK_SPDIF]		= &spdif_clk.common.hw,
-		[CLK_IR]		= &ir_clk.common.hw,
 		[CLK_USB_PHY0]		= &usb_phy0_clk.common.hw,
 		[CLK_DRAM_VE]		= &dram_ve_clk.common.hw,
 		[CLK_DRAM_CSI]		= &dram_csi_clk.common.hw,
@@ -532,24 +522,23 @@ static struct ccu_mux_nb suniv_cpu_nb = {
 	.bypass_index	= 1, /* index of 24 MHz oscillator */
 };
 
-static int suniv_f1c100s_ccu_probe(struct platform_device *pdev)
+static void __init suniv_f1c100s_ccu_setup(struct device_node *node)
 {
 	void __iomem *reg;
-	int ret;
 	u32 val;
 
-	reg = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(reg))
-		return PTR_ERR(reg);
+	reg = of_io_request_and_map(node, 0, of_node_full_name(node));
+	if (IS_ERR(reg)) {
+		pr_err("%pOF: Could not map the clock registers\n", node);
+		return;
+	}
 
 	/* Force the PLL-Audio-1x divider to 4 */
 	val = readl(reg + SUNIV_PLL_AUDIO_REG);
 	val &= ~GENMASK(19, 16);
 	writel(val | (3 << 16), reg + SUNIV_PLL_AUDIO_REG);
 
-	ret = devm_sunxi_ccu_probe(&pdev->dev, reg, &suniv_ccu_desc);
-	if (ret)
-		return ret;
+	sunxi_ccu_probe(node, reg, &suniv_ccu_desc);
 
 	/* Gate then ungate PLL CPU after any rate changes */
 	ccu_pll_notifier_register(&suniv_pll_cpu_nb);
@@ -557,24 +546,6 @@ static int suniv_f1c100s_ccu_probe(struct platform_device *pdev)
 	/* Reparent CPU during PLL CPU rate changes */
 	ccu_mux_notifier_register(pll_cpu_clk.common.hw.clk,
 				  &suniv_cpu_nb);
-
-	return 0;
 }
-
-static const struct of_device_id suniv_f1c100s_ccu_ids[] = {
-	{ .compatible = "allwinner,suniv-f1c100s-ccu" },
-	{ }
-};
-
-static struct platform_driver suniv_f1c100s_ccu_driver = {
-	.probe	= suniv_f1c100s_ccu_probe,
-	.driver	= {
-		.name			= "suniv-f1c100s-ccu",
-		.suppress_bind_attrs	= true,
-		.of_match_table		= suniv_f1c100s_ccu_ids,
-	},
-};
-module_platform_driver(suniv_f1c100s_ccu_driver);
-
-MODULE_IMPORT_NS(SUNXI_CCU);
-MODULE_LICENSE("GPL");
+CLK_OF_DECLARE(suniv_f1c100s_ccu, "allwinner,suniv-f1c100s-ccu",
+	       suniv_f1c100s_ccu_setup);

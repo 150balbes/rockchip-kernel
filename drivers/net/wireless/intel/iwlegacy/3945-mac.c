@@ -571,18 +571,20 @@ il3945_tx_skb(struct il_priv *il,
 
 	/* Physical address of this Tx command's header (not MAC header!),
 	 * within command buffer array. */
-	txcmd_phys = dma_map_single(&il->pci_dev->dev, &out_cmd->hdr, firstlen,
-				    DMA_TO_DEVICE);
-	if (unlikely(dma_mapping_error(&il->pci_dev->dev, txcmd_phys)))
+	txcmd_phys =
+	    pci_map_single(il->pci_dev, &out_cmd->hdr, firstlen,
+			   PCI_DMA_TODEVICE);
+	if (unlikely(pci_dma_mapping_error(il->pci_dev, txcmd_phys)))
 		goto drop_unlock;
 
 	/* Set up TFD's 2nd entry to point directly to remainder of skb,
 	 * if any (802.11 null frames have no payload). */
 	secondlen = skb->len - hdr_len;
 	if (secondlen > 0) {
-		phys_addr = dma_map_single(&il->pci_dev->dev, skb->data + hdr_len,
-					   secondlen, DMA_TO_DEVICE);
-		if (unlikely(dma_mapping_error(&il->pci_dev->dev, phys_addr)))
+		phys_addr =
+		    pci_map_single(il->pci_dev, skb->data + hdr_len, secondlen,
+				   PCI_DMA_TODEVICE);
+		if (unlikely(pci_dma_mapping_error(il->pci_dev, phys_addr)))
 			goto drop_unlock;
 	}
 
@@ -749,7 +751,9 @@ il3945_hdl_alive(struct il_priv *il, struct il_rx_buf *rxb)
 static void
 il3945_hdl_add_sta(struct il_priv *il, struct il_rx_buf *rxb)
 {
+#ifdef CONFIG_IWLEGACY_DEBUG
 	struct il_rx_pkt *pkt = rxb_addr(rxb);
+#endif
 
 	D_RX("Received C_ADD_STA: 0x%02X\n", pkt->u.status);
 }
@@ -1013,11 +1017,11 @@ il3945_rx_allocate(struct il_priv *il, gfp_t priority)
 
 		/* Get physical address of RB/SKB */
 		page_dma =
-		    dma_map_page(&il->pci_dev->dev, page, 0,
+		    pci_map_page(il->pci_dev, page, 0,
 				 PAGE_SIZE << il->hw_params.rx_page_order,
-				 DMA_FROM_DEVICE);
+				 PCI_DMA_FROMDEVICE);
 
-		if (unlikely(dma_mapping_error(&il->pci_dev->dev, page_dma))) {
+		if (unlikely(pci_dma_mapping_error(il->pci_dev, page_dma))) {
 			__free_pages(page, il->hw_params.rx_page_order);
 			break;
 		}
@@ -1026,9 +1030,9 @@ il3945_rx_allocate(struct il_priv *il, gfp_t priority)
 
 		if (list_empty(&rxq->rx_used)) {
 			spin_unlock_irqrestore(&rxq->lock, flags);
-			dma_unmap_page(&il->pci_dev->dev, page_dma,
+			pci_unmap_page(il->pci_dev, page_dma,
 				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       DMA_FROM_DEVICE);
+				       PCI_DMA_FROMDEVICE);
 			__free_pages(page, il->hw_params.rx_page_order);
 			return;
 		}
@@ -1060,10 +1064,9 @@ il3945_rx_queue_reset(struct il_priv *il, struct il_rx_queue *rxq)
 		/* In the reset function, these buffers may have been allocated
 		 * to an SKB, so we need to unmap and free potential storage */
 		if (rxq->pool[i].page != NULL) {
-			dma_unmap_page(&il->pci_dev->dev,
-				       rxq->pool[i].page_dma,
+			pci_unmap_page(il->pci_dev, rxq->pool[i].page_dma,
 				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       DMA_FROM_DEVICE);
+				       PCI_DMA_FROMDEVICE);
 			__il_free_pages(il, rxq->pool[i].page);
 			rxq->pool[i].page = NULL;
 		}
@@ -1110,10 +1113,9 @@ il3945_rx_queue_free(struct il_priv *il, struct il_rx_queue *rxq)
 	int i;
 	for (i = 0; i < RX_QUEUE_SIZE + RX_FREE_BUFFERS; i++) {
 		if (rxq->pool[i].page != NULL) {
-			dma_unmap_page(&il->pci_dev->dev,
-				       rxq->pool[i].page_dma,
+			pci_unmap_page(il->pci_dev, rxq->pool[i].page_dma,
 				       PAGE_SIZE << il->hw_params.rx_page_order,
-				       DMA_FROM_DEVICE);
+				       PCI_DMA_FROMDEVICE);
 			__il_free_pages(il, rxq->pool[i].page);
 			rxq->pool[i].page = NULL;
 		}
@@ -1202,6 +1204,8 @@ il3945_rx_handle(struct il_priv *il)
 		D_RX("r = %d, i = %d\n", r, i);
 
 	while (i != r) {
+		int len;
+
 		rxb = rxq->queue[i];
 
 		/* If an RXB doesn't have a Rx queue slot associated with it,
@@ -1211,10 +1215,14 @@ il3945_rx_handle(struct il_priv *il)
 
 		rxq->queue[i] = NULL;
 
-		dma_unmap_page(&il->pci_dev->dev, rxb->page_dma,
+		pci_unmap_page(il->pci_dev, rxb->page_dma,
 			       PAGE_SIZE << il->hw_params.rx_page_order,
-			       DMA_FROM_DEVICE);
+			       PCI_DMA_FROMDEVICE);
 		pkt = rxb_addr(rxb);
+
+		len = le32_to_cpu(pkt->len_n_flags) & IL_RX_FRAME_SIZE_MSK;
+		len += sizeof(u32);	/* account for status word */
+
 		reclaim = il_need_reclaim(il, pkt);
 
 		/* Based on type of command response or notification,
@@ -1254,11 +1262,11 @@ il3945_rx_handle(struct il_priv *il)
 		spin_lock_irqsave(&rxq->lock, flags);
 		if (rxb->page != NULL) {
 			rxb->page_dma =
-			    dma_map_page(&il->pci_dev->dev, rxb->page, 0,
-					 PAGE_SIZE << il->hw_params.rx_page_order,
-					 DMA_FROM_DEVICE);
-			if (unlikely(dma_mapping_error(&il->pci_dev->dev,
-						       rxb->page_dma))) {
+			    pci_map_page(il->pci_dev, rxb->page, 0,
+					 PAGE_SIZE << il->hw_params.
+					 rx_page_order, PCI_DMA_FROMDEVICE);
+			if (unlikely(pci_dma_mapping_error(il->pci_dev,
+							   rxb->page_dma))) {
 				__il_free_pages(il, rxb->page);
 				rxb->page = NULL;
 				list_add_tail(&rxb->list, &rxq->rx_used);
@@ -2695,7 +2703,7 @@ il3945_post_associate(struct il_priv *il)
 	if (!il->vif || !il->is_open)
 		return;
 
-	D_ASSOC("Associated as %d to: %pM\n", il->vif->cfg.aid,
+	D_ASSOC("Associated as %d to: %pM\n", il->vif->bss_conf.aid,
 		il->active.bssid_addr);
 
 	if (test_bit(S_EXIT_PENDING, &il->status))
@@ -2712,9 +2720,9 @@ il3945_post_associate(struct il_priv *il)
 
 	il->staging.filter_flags |= RXON_FILTER_ASSOC_MSK;
 
-	il->staging.assoc_id = cpu_to_le16(il->vif->cfg.aid);
+	il->staging.assoc_id = cpu_to_le16(il->vif->bss_conf.aid);
 
-	D_ASSOC("assoc id %d beacon interval %d\n", il->vif->cfg.aid,
+	D_ASSOC("assoc id %d beacon interval %d\n", il->vif->bss_conf.aid,
 		il->vif->bss_conf.beacon_int);
 
 	if (il->vif->bss_conf.use_short_preamble)
@@ -3248,7 +3256,7 @@ il3945_store_measurement(struct device *d, struct device_attribute *attr,
 
 	if (count) {
 		char *p = buffer;
-		strscpy(buffer, buf, sizeof(buffer));
+		strlcpy(buffer, buf, sizeof(buffer));
 		channel = simple_strtoul(p, NULL, 0);
 		if (channel)
 			params.channel = channel;
@@ -3372,12 +3380,10 @@ static DEVICE_ATTR(dump_errors, 0200, NULL, il3945_dump_error_log);
  *
  *****************************************************************************/
 
-static int
+static void
 il3945_setup_deferred_work(struct il_priv *il)
 {
 	il->workqueue = create_singlethread_workqueue(DRV_NAME);
-	if (!il->workqueue)
-		return -ENOMEM;
 
 	init_waitqueue_head(&il->wait_command_queue);
 
@@ -3394,8 +3400,6 @@ il3945_setup_deferred_work(struct il_priv *il)
 	timer_setup(&il->watchdog, il_bg_watchdog, 0);
 
 	tasklet_setup(&il->irq_tasklet, il3945_irq_tasklet);
-
-	return 0;
 }
 
 static void
@@ -3433,7 +3437,6 @@ static const struct attribute_group il3945_attribute_group = {
 
 static struct ieee80211_ops il3945_mac_ops __ro_after_init = {
 	.tx = il3945_mac_tx,
-	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
 	.start = il3945_mac_start,
 	.stop = il3945_mac_stop,
 	.add_interface = il_mac_add_interface,
@@ -3615,7 +3618,9 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	pci_set_master(pdev);
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (!err)
+		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (err) {
 		IL_WARN("No suitable DMA available.\n");
 		goto out_pci_disable_device;
@@ -3716,10 +3721,7 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	il_set_rxon_channel(il, &il->bands[NL80211_BAND_2GHZ].channels[5]);
-	err = il3945_setup_deferred_work(il);
-	if (err)
-		goto out_remove_sysfs;
-
+	il3945_setup_deferred_work(il);
 	il3945_setup_handlers(il);
 	il_power_initialize(il);
 
@@ -3731,7 +3733,7 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = il3945_setup_mac(il);
 	if (err)
-		goto out_destroy_workqueue;
+		goto out_remove_sysfs;
 
 	il_dbgfs_register(il, DRV_NAME);
 
@@ -3740,10 +3742,9 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	return 0;
 
-out_destroy_workqueue:
+out_remove_sysfs:
 	destroy_workqueue(il->workqueue);
 	il->workqueue = NULL;
-out_remove_sysfs:
 	sysfs_remove_group(&pdev->dev.kobj, &il3945_attribute_group);
 out_release_irq:
 	free_irq(il->pci_dev->irq, il);
@@ -3822,6 +3823,7 @@ il3945_pci_remove(struct pci_dev *pdev)
 	il3945_unset_hw_params(il);
 
 	/*netif_stop_queue(dev); */
+	flush_workqueue(il->workqueue);
 
 	/* ieee80211_unregister_hw calls il3945_mac_stop, which flushes
 	 * il->workqueue... so we can't take down the workqueue

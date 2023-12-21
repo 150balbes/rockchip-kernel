@@ -26728,14 +26728,6 @@
 //VMSHAREDPF0_MC_VM_CACHEABLE_DRAM_CNTL
 #define VMSHAREDPF0_MC_VM_CACHEABLE_DRAM_CNTL__ENABLE_CACHEABLE_DRAM_ADDRESS_APERTURE__SHIFT                  0x0
 #define VMSHAREDPF0_MC_VM_CACHEABLE_DRAM_CNTL__ENABLE_CACHEABLE_DRAM_ADDRESS_APERTURE_MASK                    0x00000001L
-//MC_VM_XGMI_LFB_CNTL
-#define MC_VM_XGMI_LFB_CNTL__PF_LFB_REGION__SHIFT                                                             0x0
-#define MC_VM_XGMI_LFB_CNTL__PF_MAX_REGION__SHIFT                                                             0x3
-#define MC_VM_XGMI_LFB_CNTL__PF_LFB_REGION_MASK                                                               0x00000007L
-#define MC_VM_XGMI_LFB_CNTL__PF_MAX_REGION_MASK                                                               0x00000038L
-//MC_VM_XGMI_LFB_SIZE
-#define MC_VM_XGMI_LFB_SIZE__PF_LFB_SIZE__SHIFT                                                               0x0
-#define MC_VM_XGMI_LFB_SIZE__PF_LFB_SIZE_MASK                                                                 0x0000FFFFL
 
 
 // addressBlock: mmhub_utcl2_vmsharedvcdec

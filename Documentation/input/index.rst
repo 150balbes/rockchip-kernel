@@ -1,6 +1,6 @@
-===================
-Input Documentation
-===================
+=============================
+The Linux Input Documentation
+=============================
 
 Contents:
 

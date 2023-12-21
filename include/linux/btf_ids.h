@@ -8,19 +8,9 @@ struct btf_id_set {
 	u32 ids[];
 };
 
-struct btf_id_set8 {
-	u32 cnt;
-	u32 flags;
-	struct {
-		u32 id;
-		u32 flags;
-	} pairs[];
-};
-
 #ifdef CONFIG_DEBUG_INFO_BTF
 
 #include <linux/compiler.h> /* for __PASTE */
-#include <linux/compiler_attributes.h> /* for __maybe_unused */
 
 /*
  * Following macros help to define lists of BTF IDs placed
@@ -34,7 +24,7 @@ struct btf_id_set8 {
 
 #define BTF_IDS_SECTION ".BTF_ids"
 
-#define ____BTF_ID(symbol, word)			\
+#define ____BTF_ID(symbol)				\
 asm(							\
 ".pushsection " BTF_IDS_SECTION ",\"a\";       \n"	\
 ".local " #symbol " ;                          \n"	\
@@ -42,11 +32,10 @@ asm(							\
 ".size  " #symbol ", 4;                        \n"	\
 #symbol ":                                     \n"	\
 ".zero 4                                       \n"	\
-word							\
 ".popsection;                                  \n");
 
-#define __BTF_ID(symbol, word) \
-	____BTF_ID(symbol, word)
+#define __BTF_ID(symbol) \
+	____BTF_ID(symbol)
 
 #define __ID(prefix) \
 	__PASTE(prefix, __COUNTER__)
@@ -56,14 +45,7 @@ word							\
  * to 4 zero bytes.
  */
 #define BTF_ID(prefix, name) \
-	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), "")
-
-#define ____BTF_ID_FLAGS(prefix, name, flags) \
-	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), ".long " #flags "\n")
-#define __BTF_ID_FLAGS(prefix, name, flags, ...) \
-	____BTF_ID_FLAGS(prefix, name, flags)
-#define BTF_ID_FLAGS(prefix, name, ...) \
-	__BTF_ID_FLAGS(prefix, name, ##__VA_ARGS__, 0)
+	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__))
 
 /*
  * The BTF_ID_LIST macro defines pure (unsorted) list
@@ -91,7 +73,7 @@ asm(							\
 __BTF_ID_LIST(name, local)				\
 extern u32 name[];
 
-#define BTF_ID_LIST_GLOBAL(name, n)			\
+#define BTF_ID_LIST_GLOBAL(name)			\
 __BTF_ID_LIST(name, globl)
 
 /* The BTF_ID_LIST_SINGLE macro defines a BTF_ID_LIST with
@@ -99,9 +81,6 @@ __BTF_ID_LIST(name, globl)
  */
 #define BTF_ID_LIST_SINGLE(name, prefix, typename)	\
 	BTF_ID_LIST(name) \
-	BTF_ID(prefix, typename)
-#define BTF_ID_LIST_GLOBAL_SINGLE(name, prefix, typename) \
-	BTF_ID_LIST_GLOBAL(name, 1)			  \
 	BTF_ID(prefix, typename)
 
 /*
@@ -162,60 +141,16 @@ asm(							\
 ".popsection;                                 \n");	\
 extern struct btf_id_set name;
 
-/*
- * The BTF_SET8_START/END macros pair defines sorted list of
- * BTF IDs and their flags plus its members count, with the
- * following layout:
- *
- * BTF_SET8_START(list)
- * BTF_ID_FLAGS(type1, name1, flags)
- * BTF_ID_FLAGS(type2, name2, flags)
- * BTF_SET8_END(list)
- *
- * __BTF_ID__set8__list:
- * .zero 8
- * list:
- * __BTF_ID__type1__name1__3:
- * .zero 4
- * .word (1 << 0) | (1 << 2)
- * __BTF_ID__type2__name2__5:
- * .zero 4
- * .word (1 << 3) | (1 << 1) | (1 << 2)
- *
- */
-#define __BTF_SET8_START(name, scope)			\
-asm(							\
-".pushsection " BTF_IDS_SECTION ",\"a\";       \n"	\
-"." #scope " __BTF_ID__set8__" #name ";        \n"	\
-"__BTF_ID__set8__" #name ":;                   \n"	\
-".zero 8                                       \n"	\
-".popsection;                                  \n");
-
-#define BTF_SET8_START(name)				\
-__BTF_ID_LIST(name, local)				\
-__BTF_SET8_START(name, local)
-
-#define BTF_SET8_END(name)				\
-asm(							\
-".pushsection " BTF_IDS_SECTION ",\"a\";      \n"	\
-".size __BTF_ID__set8__" #name ", .-" #name "  \n"	\
-".popsection;                                 \n");	\
-extern struct btf_id_set8 name;
-
 #else
 
-#define BTF_ID_LIST(name) static u32 __maybe_unused name[64];
+#define BTF_ID_LIST(name) static u32 name[5];
 #define BTF_ID(prefix, name)
-#define BTF_ID_FLAGS(prefix, name, ...)
 #define BTF_ID_UNUSED
-#define BTF_ID_LIST_GLOBAL(name, n) u32 __maybe_unused name[n];
-#define BTF_ID_LIST_SINGLE(name, prefix, typename) static u32 __maybe_unused name[1];
-#define BTF_ID_LIST_GLOBAL_SINGLE(name, prefix, typename) u32 __maybe_unused name[1];
-#define BTF_SET_START(name) static struct btf_id_set __maybe_unused name = { 0 };
-#define BTF_SET_START_GLOBAL(name) static struct btf_id_set __maybe_unused name = { 0 };
+#define BTF_ID_LIST_GLOBAL(name) u32 name[1];
+#define BTF_ID_LIST_SINGLE(name, prefix, typename) static u32 name[1];
+#define BTF_SET_START(name) static struct btf_id_set name = { 0 };
+#define BTF_SET_START_GLOBAL(name) static struct btf_id_set name = { 0 };
 #define BTF_SET_END(name)
-#define BTF_SET8_START(name) static struct btf_id_set8 __maybe_unused name = { 0 };
-#define BTF_SET8_END(name)
 
 #endif /* CONFIG_DEBUG_INFO_BTF */
 
@@ -237,10 +172,7 @@ extern struct btf_id_set8 name;
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP_TW, tcp_timewait_sock)		\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP6, tcp6_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UDP, udp_sock)			\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UDP6, udp6_sock)			\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UNIX, unix_sock)			\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_MPTCP, mptcp_sock)			\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_SOCKET, socket)
+	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UDP6, udp6_sock)
 
 enum {
 #define BTF_SOCK_TYPE(name, str) name,
@@ -251,21 +183,5 @@ MAX_BTF_SOCK_TYPE,
 
 extern u32 btf_sock_ids[];
 #endif
-
-#define BTF_TRACING_TYPE_xxx	\
-	BTF_TRACING_TYPE(BTF_TRACING_TYPE_TASK, task_struct)	\
-	BTF_TRACING_TYPE(BTF_TRACING_TYPE_FILE, file)		\
-	BTF_TRACING_TYPE(BTF_TRACING_TYPE_VMA, vm_area_struct)
-
-enum {
-#define BTF_TRACING_TYPE(name, type) name,
-BTF_TRACING_TYPE_xxx
-#undef BTF_TRACING_TYPE
-MAX_BTF_TRACING_TYPE,
-};
-
-extern u32 btf_tracing_ids[];
-extern u32 bpf_cgroup_btf_id[];
-extern u32 bpf_local_storage_map_btf_id[];
 
 #endif

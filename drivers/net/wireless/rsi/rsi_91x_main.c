@@ -264,7 +264,7 @@ static void rsi_tx_scheduler_thread(struct rsi_common *common)
 		if (common->init_done)
 			rsi_core_qos_processor(common);
 	} while (atomic_read(&common->tx_thread.thread_done) == 0);
-	kthread_complete_and_exit(&common->tx_thread.completion, 0);
+	complete_and_exit(&common->tx_thread.completion, 0);
 }
 
 #ifdef CONFIG_RSI_COEX
@@ -456,5 +456,6 @@ module_init(rsi_91x_hal_module_init);
 module_exit(rsi_91x_hal_module_exit);
 MODULE_AUTHOR("Redpine Signals Inc");
 MODULE_DESCRIPTION("Station driver for RSI 91x devices");
+MODULE_SUPPORTED_DEVICE("RSI-91x");
 MODULE_VERSION("0.1");
 MODULE_LICENSE("Dual BSD/GPL");

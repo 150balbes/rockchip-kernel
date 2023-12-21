@@ -10,7 +10,6 @@
 #ifndef __RENESAS_RPC_IF_H
 #define __RENESAS_RPC_IF_H
 
-#include <linux/pm_runtime.h>
 #include <linux/types.h>
 
 enum rpcif_data_dir {
@@ -19,7 +18,7 @@ enum rpcif_data_dir {
 	RPCIF_DATA_OUT,
 };
 
-struct rpcif_op {
+struct	rpcif_op {
 	struct {
 		u8 buswidth;
 		u8 opcode;
@@ -57,23 +56,34 @@ struct rpcif_op {
 	} data;
 };
 
-enum rpcif_type {
-	RPCIF_RCAR_GEN3,
-	RPCIF_RCAR_GEN4,
-	RPCIF_RZ_G2L,
-};
-
-struct rpcif {
+struct	rpcif {
 	struct device *dev;
+	void __iomem *base;
 	void __iomem *dirmap;
+	struct regmap *regmap;
+	struct reset_control *rstc;
 	size_t size;
+	enum rpcif_data_dir dir;
+	u8 bus_size;
+	u8 xfer_size;
+	void *buffer;
+	u32 xferlen;
+	u32 smcr;
+	u32 smadr;
+	u32 command;		/* DRCMR or SMCMR */
+	u32 option;		/* DROPR or SMOPR */
+	u32 enable;		/* DRENR or SMENR */
+	u32 dummy;		/* DRDMCR or SMDMCR */
+	u32 ddr;		/* DRDRENR or SMDRENR */
 };
 
-int rpcif_sw_init(struct rpcif *rpc, struct device *dev);
-int rpcif_hw_init(struct device *dev, bool hyperflash);
-void rpcif_prepare(struct device *dev, const struct rpcif_op *op, u64 *offs,
+int  rpcif_sw_init(struct rpcif *rpc, struct device *dev);
+void rpcif_hw_init(struct rpcif *rpc, bool hyperflash);
+void rpcif_enable_rpm(struct rpcif *rpc);
+void rpcif_disable_rpm(struct rpcif *rpc);
+void rpcif_prepare(struct rpcif *rpc, const struct rpcif_op *op, u64 *offs,
 		   size_t *len);
-int rpcif_manual_xfer(struct device *dev);
-ssize_t rpcif_dirmap_read(struct device *dev, u64 offs, size_t len, void *buf);
+int rpcif_manual_xfer(struct rpcif *rpc);
+ssize_t rpcif_dirmap_read(struct rpcif *rpc, u64 offs, size_t len, void *buf);
 
 #endif // __RENESAS_RPC_IF_H

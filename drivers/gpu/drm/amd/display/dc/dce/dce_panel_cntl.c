@@ -49,16 +49,17 @@
 static unsigned int dce_get_16_bit_backlight_from_pwm(struct panel_cntl *panel_cntl)
 {
 	uint64_t current_backlight;
-	uint32_t bl_period, bl_int_count;
-	uint32_t bl_pwm, fractional_duty_cycle_en;
+	uint32_t round_result;
+	uint32_t pwm_period_cntl, bl_period, bl_int_count;
+	uint32_t bl_pwm_cntl, bl_pwm, fractional_duty_cycle_en;
 	uint32_t bl_period_mask, bl_pwm_mask;
 	struct dce_panel_cntl *dce_panel_cntl = TO_DCE_PANEL_CNTL(panel_cntl);
 
-	REG_READ(BL_PWM_PERIOD_CNTL);
+	pwm_period_cntl = REG_READ(BL_PWM_PERIOD_CNTL);
 	REG_GET(BL_PWM_PERIOD_CNTL, BL_PWM_PERIOD, &bl_period);
 	REG_GET(BL_PWM_PERIOD_CNTL, BL_PWM_PERIOD_BITCNT, &bl_int_count);
 
-	REG_READ(BL_PWM_CNTL);
+	bl_pwm_cntl = REG_READ(BL_PWM_CNTL);
 	REG_GET(BL_PWM_CNTL, BL_ACTIVE_INT_FRAC_CNT, (uint32_t *)(&bl_pwm));
 	REG_GET(BL_PWM_CNTL, BL_PWM_FRACTIONAL_EN, &fractional_duty_cycle_en);
 
@@ -83,6 +84,15 @@ static unsigned int dce_get_16_bit_backlight_from_pwm(struct panel_cntl *panel_c
 	current_backlight = div_u64(current_backlight, bl_period);
 	current_backlight = (current_backlight + 1) >> 1;
 
+	current_backlight = (uint64_t)(current_backlight) * bl_period;
+
+	round_result = (uint32_t)(current_backlight & 0xFFFFFFFF);
+
+	round_result = (round_result >> (bl_int_count-1)) & 1;
+
+	current_backlight >>= bl_int_count;
+	current_backlight += round_result;
+
 	return (uint32_t)(current_backlight);
 }
 
@@ -98,17 +108,25 @@ static uint32_t dce_panel_cntl_hw_init(struct panel_cntl *panel_cntl)
 	 */
 	REG_GET(BL_PWM_CNTL, BL_ACTIVE_INT_FRAC_CNT, &value);
 
-	if (panel_cntl->stored_backlight_registers.BL_PWM_CNTL != 0) {
-		REG_WRITE(BL_PWM_CNTL,
-				panel_cntl->stored_backlight_registers.BL_PWM_CNTL);
-		REG_WRITE(BL_PWM_CNTL2,
-				panel_cntl->stored_backlight_registers.BL_PWM_CNTL2);
-		REG_WRITE(BL_PWM_PERIOD_CNTL,
-				panel_cntl->stored_backlight_registers.BL_PWM_PERIOD_CNTL);
-		REG_UPDATE(PWRSEQ_REF_DIV,
-			BL_PWM_REF_DIV,
-			panel_cntl->stored_backlight_registers.LVTMA_PWRSEQ_REF_DIV_BL_PWM_REF_DIV);
-	} else if ((value != 0) && (value != 1)) {
+	if (value == 0 || value == 1) {
+		if (panel_cntl->stored_backlight_registers.BL_PWM_CNTL != 0) {
+			REG_WRITE(BL_PWM_CNTL,
+					panel_cntl->stored_backlight_registers.BL_PWM_CNTL);
+			REG_WRITE(BL_PWM_CNTL2,
+					panel_cntl->stored_backlight_registers.BL_PWM_CNTL2);
+			REG_WRITE(BL_PWM_PERIOD_CNTL,
+					panel_cntl->stored_backlight_registers.BL_PWM_PERIOD_CNTL);
+			REG_UPDATE(PWRSEQ_REF_DIV,
+				BL_PWM_REF_DIV,
+				panel_cntl->stored_backlight_registers.LVTMA_PWRSEQ_REF_DIV_BL_PWM_REF_DIV);
+		} else {
+			/* TODO: Note: This should not really happen since VBIOS
+			 * should have initialized PWM registers on boot.
+			 */
+			REG_WRITE(BL_PWM_CNTL, 0xC000FA00);
+			REG_WRITE(BL_PWM_PERIOD_CNTL, 0x000C0FA0);
+		}
+	} else {
 		panel_cntl->stored_backlight_registers.BL_PWM_CNTL =
 				REG_READ(BL_PWM_CNTL);
 		panel_cntl->stored_backlight_registers.BL_PWM_CNTL2 =
@@ -118,12 +136,6 @@ static uint32_t dce_panel_cntl_hw_init(struct panel_cntl *panel_cntl)
 
 		REG_GET(PWRSEQ_REF_DIV, BL_PWM_REF_DIV,
 				&panel_cntl->stored_backlight_registers.LVTMA_PWRSEQ_REF_DIV_BL_PWM_REF_DIV);
-	} else {
-		/* TODO: Note: This should not really happen since VBIOS
-		 * should have initialized PWM registers on boot.
-		 */
-		REG_WRITE(BL_PWM_CNTL, 0x8000FA00);
-		REG_WRITE(BL_PWM_PERIOD_CNTL, 0x000C0FA0);
 	}
 
 	// Have driver take backlight control

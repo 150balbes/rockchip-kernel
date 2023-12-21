@@ -14,6 +14,7 @@
 #include <asm/traps.h>
 #include <asm/sun3xprom.h>
 #include <asm/idprom.h>
+#include <asm/segment.h>
 #include <asm/sun3ints.h>
 #include <asm/openprom.h>
 #include <asm/machines.h>

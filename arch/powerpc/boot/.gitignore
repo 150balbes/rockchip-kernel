@@ -16,7 +16,6 @@ kernel-vmlinux.strip.c
 kernel-vmlinux.strip.gz
 mktree
 otheros.bld
-otheros-too-big.bld
 uImage
 cuImage.*
 dtbImage.*

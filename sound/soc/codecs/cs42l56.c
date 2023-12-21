@@ -1008,7 +1008,6 @@ static int cs42l56_beep_event(struct input_dev *dev, unsigned int type,
 	case SND_BELL:
 		if (hz)
 			hz = 261;
-		break;
 	case SND_TONE:
 		break;
 	default:
@@ -1021,8 +1020,9 @@ static int cs42l56_beep_event(struct input_dev *dev, unsigned int type,
 	return 0;
 }
 
-static ssize_t beep_store(struct device *dev, struct device_attribute *attr,
-			  const char *buf, size_t count)
+static ssize_t cs42l56_beep_set(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
 {
 	struct cs42l56_private *cs42l56 = dev_get_drvdata(dev);
 	long int time;
@@ -1037,7 +1037,7 @@ static ssize_t beep_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static DEVICE_ATTR_WO(beep);
+static DEVICE_ATTR(beep, 0200, NULL, cs42l56_beep_set);
 
 static void cs42l56_init_beep(struct snd_soc_component *component)
 {
@@ -1114,6 +1114,7 @@ static const struct snd_soc_component_driver soc_component_dev_cs42l56 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config cs42l56_regmap = {
@@ -1166,13 +1167,14 @@ static int cs42l56_handle_of_data(struct i2c_client *i2c_client,
 	return 0;
 }
 
-static int cs42l56_i2c_probe(struct i2c_client *i2c_client)
+static int cs42l56_i2c_probe(struct i2c_client *i2c_client,
+			     const struct i2c_device_id *id)
 {
 	struct cs42l56_private *cs42l56;
 	struct cs42l56_platform_data *pdata =
 		dev_get_platdata(&i2c_client->dev);
 	int ret, i;
-	unsigned int devid;
+	unsigned int devid = 0;
 	unsigned int alpha_rev, metal_rev;
 	unsigned int reg;
 
@@ -1191,12 +1193,18 @@ static int cs42l56_i2c_probe(struct i2c_client *i2c_client)
 	if (pdata) {
 		cs42l56->pdata = *pdata;
 	} else {
+		pdata = devm_kzalloc(&i2c_client->dev, sizeof(*pdata),
+				     GFP_KERNEL);
+		if (!pdata)
+			return -ENOMEM;
+
 		if (i2c_client->dev.of_node) {
 			ret = cs42l56_handle_of_data(i2c_client,
 						     &cs42l56->pdata);
 			if (ret != 0)
 				return ret;
 		}
+		cs42l56->pdata = *pdata;
 	}
 
 	if (cs42l56->pdata.gpio_nreset) {
@@ -1236,11 +1244,6 @@ static int cs42l56_i2c_probe(struct i2c_client *i2c_client)
 	}
 
 	ret = regmap_read(cs42l56->regmap, CS42L56_CHIP_ID_1, &reg);
-	if (ret) {
-		dev_err(&i2c_client->dev, "Failed to read chip ID: %d\n", ret);
-		goto err_enable;
-	}
-
 	devid = reg & CS42L56_CHIP_ID_MASK;
 	if (devid != CS42L56_DEVID) {
 		dev_err(&i2c_client->dev,
@@ -1314,12 +1317,13 @@ err_enable:
 	return ret;
 }
 
-static void cs42l56_i2c_remove(struct i2c_client *client)
+static int cs42l56_i2c_remove(struct i2c_client *client)
 {
 	struct cs42l56_private *cs42l56 = i2c_get_clientdata(client);
 
 	regulator_bulk_disable(ARRAY_SIZE(cs42l56->supplies),
 			       cs42l56->supplies);
+	return 0;
 }
 
 static const struct of_device_id cs42l56_of_match[] = {

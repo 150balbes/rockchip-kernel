@@ -335,16 +335,21 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	priv->clk = devm_clk_get_enabled(dev, NULL);
+	priv->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(priv->clk)) {
-		dev_err(dev, "failed to enable clock\n");
+		dev_err(dev, "failed to get clock\n");
 		return PTR_ERR(priv->clk);
 	}
+
+	ret = clk_prepare_enable(priv->clk);
+	if (ret)
+		return ret;
 
 	clk_rate = clk_get_rate(priv->clk);
 	if (!clk_rate) {
 		dev_err(dev, "input clock rate should not be zero\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto disable_clk;
 	}
 
 	priv->clk_cycle = clk_rate / bus_speed;
@@ -353,7 +358,7 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 	priv->adap.algo = &uniphier_i2c_algo;
 	priv->adap.dev.parent = dev;
 	priv->adap.dev.of_node = dev->of_node;
-	strscpy(priv->adap.name, "UniPhier I2C", sizeof(priv->adap.name));
+	strlcpy(priv->adap.name, "UniPhier I2C", sizeof(priv->adap.name));
 	priv->adap.bus_recovery_info = &uniphier_i2c_bus_recovery_info;
 	i2c_set_adapdata(&priv->adap, priv);
 	platform_set_drvdata(pdev, priv);
@@ -364,17 +369,25 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 			       priv);
 	if (ret) {
 		dev_err(dev, "failed to request irq %d\n", irq);
-		return ret;
+		goto disable_clk;
 	}
 
-	return i2c_add_adapter(&priv->adap);
+	ret = i2c_add_adapter(&priv->adap);
+disable_clk:
+	if (ret)
+		clk_disable_unprepare(priv->clk);
+
+	return ret;
 }
 
-static void uniphier_i2c_remove(struct platform_device *pdev)
+static int uniphier_i2c_remove(struct platform_device *pdev)
 {
 	struct uniphier_i2c_priv *priv = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&priv->adap);
+	clk_disable_unprepare(priv->clk);
+
+	return 0;
 }
 
 static int __maybe_unused uniphier_i2c_suspend(struct device *dev)
@@ -412,7 +425,7 @@ MODULE_DEVICE_TABLE(of, uniphier_i2c_match);
 
 static struct platform_driver uniphier_i2c_drv = {
 	.probe  = uniphier_i2c_probe,
-	.remove_new = uniphier_i2c_remove,
+	.remove = uniphier_i2c_remove,
 	.driver = {
 		.name  = "uniphier-i2c",
 		.of_match_table = uniphier_i2c_match,

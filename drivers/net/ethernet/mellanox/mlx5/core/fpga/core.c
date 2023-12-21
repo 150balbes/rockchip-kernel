@@ -30,6 +30,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/etherdevice.h>
 #include <linux/mlx5/driver.h>
 

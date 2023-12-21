@@ -32,7 +32,7 @@ struct pt_regs;
  * @last_unhandled:	aging timer for unhandled count
  * @irqs_unhandled:	stats field for spurious unhandled interrupts
  * @threads_handled:	stats field for deferred spurious detection of threaded handlers
- * @threads_handled_last: comparator field for deferred spurious detection of threaded handlers
+ * @threads_handled_last: comparator field for deferred spurious detection of theraded handlers
  * @lock:		locking for SMP
  * @affinity_hint:	hint to user space for preferred irq affinity
  * @affinity_notify:	context for notification of affinity changes
@@ -102,9 +102,6 @@ struct irq_desc {
 	int			parent_irq;
 	struct module		*owner;
 	const char		*name;
-#ifdef CONFIG_HARDIRQS_SW_RESEND
-	struct hlist_node	resend_node;
-#endif
 } ____cacheline_internodealigned_in_smp;
 
 #ifdef CONFIG_SPARSE_IRQ
@@ -115,12 +112,6 @@ static inline void irq_lock_sparse(void) { }
 static inline void irq_unlock_sparse(void) { }
 extern struct irq_desc irq_desc[NR_IRQS];
 #endif
-
-static inline unsigned int irq_desc_kstat_cpu(struct irq_desc *desc,
-					      unsigned int cpu)
-{
-	return desc->kstat_irqs ? *per_cpu_ptr(desc->kstat_irqs, cpu) : 0;
-}
 
 static inline struct irq_desc *irq_data_to_desc(struct irq_data *data)
 {
@@ -161,25 +152,39 @@ static inline void generic_handle_irq_desc(struct irq_desc *desc)
 	desc->handle_irq(desc);
 }
 
-int handle_irq_desc(struct irq_desc *desc);
 int generic_handle_irq(unsigned int irq);
-int generic_handle_irq_safe(unsigned int irq);
 
-#ifdef CONFIG_IRQ_DOMAIN
+#ifdef CONFIG_HANDLE_DOMAIN_IRQ
 /*
  * Convert a HW interrupt number to a logical one using a IRQ domain,
  * and handle the result interrupt number. Return -EINVAL if
- * conversion failed.
+ * conversion failed. Providing a NULL domain indicates that the
+ * conversion has already been done.
  */
-int generic_handle_domain_irq(struct irq_domain *domain, unsigned int hwirq);
-int generic_handle_domain_irq_safe(struct irq_domain *domain, unsigned int hwirq);
-int generic_handle_domain_nmi(struct irq_domain *domain, unsigned int hwirq);
+int __handle_domain_irq(struct irq_domain *domain, unsigned int hwirq,
+			bool lookup, struct pt_regs *regs);
+
+static inline int handle_domain_irq(struct irq_domain *domain,
+				    unsigned int hwirq, struct pt_regs *regs)
+{
+	return __handle_domain_irq(domain, hwirq, true, regs);
+}
+
+#ifdef CONFIG_IRQ_DOMAIN
+int handle_domain_nmi(struct irq_domain *domain, unsigned int hwirq,
+		      struct pt_regs *regs);
+#endif
 #endif
 
 /* Test to see if a driver has successfully requested an irq */
 static inline int irq_desc_has_action(struct irq_desc *desc)
 {
-	return desc && desc->action != NULL;
+	return desc->action != NULL;
+}
+
+static inline int irq_has_action(unsigned int irq)
+{
+	return irq_desc_has_action(irq_to_desc(irq));
 }
 
 /**
@@ -213,42 +218,50 @@ static inline void irq_set_handler_locked(struct irq_data *data,
  * Must be called with irq_desc locked and valid parameters.
  */
 static inline void
-irq_set_chip_handler_name_locked(struct irq_data *data,
-				 const struct irq_chip *chip,
+irq_set_chip_handler_name_locked(struct irq_data *data, struct irq_chip *chip,
 				 irq_flow_handler_t handler, const char *name)
 {
 	struct irq_desc *desc = irq_data_to_desc(data);
 
 	desc->handle_irq = handler;
 	desc->name = name;
-	data->chip = (struct irq_chip *)chip;
+	data->chip = chip;
 }
-
-bool irq_check_status_bit(unsigned int irq, unsigned int bitmask);
 
 static inline bool irq_balancing_disabled(unsigned int irq)
 {
-	return irq_check_status_bit(irq, IRQ_NO_BALANCING_MASK);
+	struct irq_desc *desc;
+
+	desc = irq_to_desc(irq);
+	return desc->status_use_accessors & IRQ_NO_BALANCING_MASK;
 }
 
 static inline bool irq_is_percpu(unsigned int irq)
 {
-	return irq_check_status_bit(irq, IRQ_PER_CPU);
+	struct irq_desc *desc;
+
+	desc = irq_to_desc(irq);
+	return desc->status_use_accessors & IRQ_PER_CPU;
 }
 
 static inline bool irq_is_percpu_devid(unsigned int irq)
 {
-	return irq_check_status_bit(irq, IRQ_PER_CPU_DEVID);
+	struct irq_desc *desc;
+
+	desc = irq_to_desc(irq);
+	return desc->status_use_accessors & IRQ_PER_CPU_DEVID;
 }
 
-void __irq_set_lockdep_class(unsigned int irq, struct lock_class_key *lock_class,
-			     struct lock_class_key *request_class);
 static inline void
 irq_set_lockdep_class(unsigned int irq, struct lock_class_key *lock_class,
 		      struct lock_class_key *request_class)
 {
-	if (IS_ENABLED(CONFIG_LOCKDEP))
-		__irq_set_lockdep_class(irq, lock_class, request_class);
+	struct irq_desc *desc = irq_to_desc(irq);
+
+	if (desc) {
+		lockdep_set_class(&desc->lock, lock_class);
+		lockdep_set_class(&desc->request_mutex, request_class);
+	}
 }
 
 #endif

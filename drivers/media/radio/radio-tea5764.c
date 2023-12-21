@@ -411,7 +411,8 @@ static const struct video_device tea5764_radio_template = {
 };
 
 /* I2C probe: check if the device exists and register with v4l if it is */
-static int tea5764_i2c_probe(struct i2c_client *client)
+static int tea5764_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct tea5764_device *radio;
 	struct v4l2_device *v4l2_dev;
@@ -486,7 +487,7 @@ errfr:
 	return ret;
 }
 
-static void tea5764_i2c_remove(struct i2c_client *client)
+static int tea5764_i2c_remove(struct i2c_client *client)
 {
 	struct tea5764_device *radio = i2c_get_clientdata(client);
 
@@ -498,6 +499,7 @@ static void tea5764_i2c_remove(struct i2c_client *client)
 		v4l2_device_unregister(&radio->v4l2_dev);
 		kfree(radio);
 	}
+	return 0;
 }
 
 /* I2C subsystem interface */

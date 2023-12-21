@@ -9,17 +9,18 @@
 
 #include "../../../util/debug.h"
 #include "../../../util/header.h"
-#include "cpuid.h"
 
-void get_cpuid_0(char *vendor, unsigned int *lvl)
+static inline void
+cpuid(unsigned int op, unsigned int *a, unsigned int *b, unsigned int *c,
+      unsigned int *d)
 {
-	unsigned int b, c, d;
-
-	cpuid(0, 0, lvl, &b, &c, &d);
-	strncpy(&vendor[0], (char *)(&b), 4);
-	strncpy(&vendor[4], (char *)(&d), 4);
-	strncpy(&vendor[8], (char *)(&c), 4);
-	vendor[12] = '\0';
+	__asm__ __volatile__ (".byte 0x53\n\tcpuid\n\t"
+			      "movl %%ebx, %%esi\n\t.byte 0x5b"
+			: "=a" (*a),
+			"=S" (*b),
+			"=c" (*c),
+			"=d" (*d)
+			: "a" (op));
 }
 
 static int
@@ -30,10 +31,14 @@ __get_cpuid(char *buffer, size_t sz, const char *fmt)
 	int nb;
 	char vendor[16];
 
-	get_cpuid_0(vendor, &lvl);
+	cpuid(0, &lvl, &b, &c, &d);
+	strncpy(&vendor[0], (char *)(&b), 4);
+	strncpy(&vendor[4], (char *)(&d), 4);
+	strncpy(&vendor[8], (char *)(&c), 4);
+	vendor[12] = '\0';
 
 	if (lvl >= 1) {
-		cpuid(1, 0, &a, &b, &c, &d);
+		cpuid(1, &a, &b, &c, &d);
 
 		family = (a >> 8) & 0xf;  /* bits 11 - 8 */
 		model  = (a >> 4) & 0xf;  /* Bits  7 - 4 */

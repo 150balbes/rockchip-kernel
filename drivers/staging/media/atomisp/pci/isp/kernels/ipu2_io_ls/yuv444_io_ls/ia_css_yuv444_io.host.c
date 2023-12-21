@@ -22,19 +22,22 @@ more details.
 #include "ia_css_isp_params.h"
 #include "ia_css_frame.h"
 
-int ia_css_yuv444_io_config(const struct ia_css_binary      *binary,
-			    const struct sh_css_binary_args *args)
+void
+ia_css_yuv444_io_config(
+    const struct ia_css_binary      *binary,
+    const struct sh_css_binary_args *args)
 {
 	const struct ia_css_frame *in_frame = args->in_frame;
 	const struct ia_css_frame **out_frames = (const struct ia_css_frame **)
 		&args->out_frame;
-	const struct ia_css_frame_info *in_frame_info = ia_css_frame_get_info(in_frame);
+	const struct ia_css_frame_info *in_frame_info = (in_frame) ? &in_frame->info :
+		&binary->in_frame_info;
+
 	const unsigned int ddr_bits_per_element = sizeof(short) * 8;
 	const unsigned int ddr_elems_per_word = ceil_div(HIVE_ISP_DDR_WORD_BITS,
 						ddr_bits_per_element);
 	unsigned int size_get = 0, size_put = 0;
 	unsigned int offset = 0;
-	int ret;
 
 	if (binary->info->mem_offsets.offsets.param) {
 		size_get = binary->info->mem_offsets.offsets.param->dmem.get.size;
@@ -50,10 +53,7 @@ int ia_css_yuv444_io_config(const struct ia_css_binary      *binary,
 				    "ia_css_yuv444_io_config() get part enter:\n");
 #endif
 
-		ret = ia_css_dma_configure_from_info(&config, in_frame_info);
-		if (ret)
-			return ret;
-
+		ia_css_dma_configure_from_info(&config, in_frame_info);
 		// The base_address of the input frame will be set in the ISP
 		to->width = in_frame_info->res.width;
 		to->height = in_frame_info->res.height;
@@ -79,13 +79,10 @@ int ia_css_yuv444_io_config(const struct ia_css_binary      *binary,
 				    "ia_css_yuv444_io_config() put part enter:\n");
 #endif
 
-		ret = ia_css_dma_configure_from_info(&config, &out_frames[0]->frame_info);
-		if (ret)
-			return ret;
-
+		ia_css_dma_configure_from_info(&config, &out_frames[0]->info);
 		to->base_address = out_frames[0]->data;
-		to->width = out_frames[0]->frame_info.res.width;
-		to->height = out_frames[0]->frame_info.res.height;
+		to->width = out_frames[0]->info.res.width;
+		to->height = out_frames[0]->info.res.height;
 		to->stride = config.stride;
 		to->ddr_elems_per_word = ddr_elems_per_word;
 
@@ -94,5 +91,4 @@ int ia_css_yuv444_io_config(const struct ia_css_binary      *binary,
 				    "ia_css_yuv444_io_config() put part leave:\n");
 #endif
 	}
-	return 0;
 }

@@ -149,7 +149,8 @@ static const struct v4l2_subdev_ops tda9840_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int tda9840_probe(struct i2c_client *client)
+static int tda9840_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct v4l2_subdev *sd;
 
@@ -174,11 +175,12 @@ static int tda9840_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void tda9840_remove(struct i2c_client *client)
+static int tda9840_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 
 	v4l2_device_unregister_subdev(sd);
+	return 0;
 }
 
 static const struct i2c_device_id tda9840_id[] = {

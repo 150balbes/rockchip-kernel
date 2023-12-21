@@ -653,6 +653,7 @@ static const struct proto_ops rds_proto_ops = {
 	.sendmsg =	rds_sendmsg,
 	.recvmsg =	rds_recvmsg,
 	.mmap =		sock_no_mmap,
+	.sendpage =	sock_no_sendpage,
 };
 
 static void rds_sock_destruct(struct sock *sk)
@@ -893,7 +894,7 @@ module_exit(rds_exit);
 
 u32 rds_gen_num;
 
-static int __init rds_init(void)
+static int rds_init(void)
 {
 	int ret;
 

@@ -179,7 +179,7 @@ static int cavium_map_pf_regs(struct cavium_rng *rng)
 	pdev = pci_get_device(PCI_VENDOR_ID_CAVIUM,
 			      PCI_DEVID_CAVIUM_RNG_PF, NULL);
 	if (!pdev) {
-		pr_err("Cannot find RNG PF device\n");
+		dev_err(&pdev->dev, "Cannot find RNG PF device\n");
 		return -EIO;
 	}
 
@@ -225,6 +225,7 @@ static int cavium_rng_probe_vf(struct	pci_dev		*pdev,
 		return -ENOMEM;
 
 	rng->ops.read    = cavium_rng_read;
+	rng->ops.quality = 1000;
 
 	pci_set_drvdata(pdev, rng);
 

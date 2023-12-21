@@ -21,7 +21,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/of_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/reset.h>
 #include <linux/sh_dma.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/rspi.h>
@@ -623,9 +622,9 @@ static int rspi_dma_transfer(struct rspi_data *rspi, struct sg_table *tx,
 			ret = -ETIMEDOUT;
 		}
 		if (tx)
-			dmaengine_terminate_sync(rspi->ctlr->dma_tx);
+			dmaengine_terminate_all(rspi->ctlr->dma_tx);
 		if (rx)
-			dmaengine_terminate_sync(rspi->ctlr->dma_rx);
+			dmaengine_terminate_all(rspi->ctlr->dma_rx);
 	}
 
 	rspi_disable_irq(rspi, irq_mask);
@@ -639,7 +638,7 @@ static int rspi_dma_transfer(struct rspi_data *rspi, struct sg_table *tx,
 
 no_dma_tx:
 	if (rx)
-		dmaengine_terminate_sync(rspi->ctlr->dma_rx);
+		dmaengine_terminate_all(rspi->ctlr->dma_rx);
 no_dma_rx:
 	if (ret == -EAGAIN) {
 		dev_warn_once(&rspi->ctlr->dev,
@@ -839,7 +838,7 @@ static int qspi_transfer_in(struct rspi_data *rspi, struct spi_transfer *xfer)
 	int ret;
 
 	if (rspi->ctlr->can_dma && __rspi_can_dma(rspi, xfer)) {
-		ret = rspi_dma_transfer(rspi, NULL, &xfer->rx_sg);
+		int ret = rspi_dma_transfer(rspi, NULL, &xfer->rx_sg);
 		if (ret != -EAGAIN)
 			return ret;
 	}
@@ -950,7 +949,7 @@ static int rspi_setup(struct spi_device *spi)
 	struct rspi_data *rspi = spi_controller_get_devdata(spi->controller);
 	u8 sslp;
 
-	if (spi_get_csgpiod(spi, 0))
+	if (spi->cs_gpiod)
 		return 0;
 
 	pm_runtime_get_sync(&rspi->pdev->dev);
@@ -958,9 +957,9 @@ static int rspi_setup(struct spi_device *spi)
 
 	sslp = rspi_read8(rspi, RSPI_SSLP);
 	if (spi->mode & SPI_CS_HIGH)
-		sslp |= SSLP_SSLP(spi_get_chipselect(spi, 0));
+		sslp |= SSLP_SSLP(spi->chip_select);
 	else
-		sslp &= ~SSLP_SSLP(spi_get_chipselect(spi, 0));
+		sslp &= ~SSLP_SSLP(spi->chip_select);
 	rspi_write8(rspi, sslp, RSPI_SSLP);
 
 	spin_unlock_irq(&rspi->lock);
@@ -1001,8 +1000,8 @@ static int rspi_prepare_message(struct spi_controller *ctlr,
 		rspi->spcmd |= SPCMD_LSBF;
 
 	/* Configure slave signal to assert */
-	rspi->spcmd |= SPCMD_SSLA(spi_get_csgpiod(spi, 0) ? rspi->ctlr->unused_native_cs
-						: spi_get_chipselect(spi, 0));
+	rspi->spcmd |= SPCMD_SSLA(spi->cs_gpiod ? rspi->ctlr->unused_native_cs
+						: spi->chip_select);
 
 	/* CMOS output mode and MOSI signal from previous transfer */
 	rspi->sppcr = 0;
@@ -1172,12 +1171,14 @@ static void rspi_release_dma(struct spi_controller *ctlr)
 		dma_release_channel(ctlr->dma_rx);
 }
 
-static void rspi_remove(struct platform_device *pdev)
+static int rspi_remove(struct platform_device *pdev)
 {
 	struct rspi_data *rspi = platform_get_drvdata(pdev);
 
 	rspi_release_dma(rspi->ctlr);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct spi_ops rspi_ops = {
@@ -1190,7 +1191,7 @@ static const struct spi_ops rspi_ops = {
 	.num_hw_ss =		2,
 };
 
-static const struct spi_ops rspi_rz_ops __maybe_unused = {
+static const struct spi_ops rspi_rz_ops = {
 	.set_config_register =	rspi_rz_set_config_register,
 	.transfer_one =		rspi_rz_transfer_one,
 	.min_div =		2,
@@ -1200,7 +1201,7 @@ static const struct spi_ops rspi_rz_ops __maybe_unused = {
 	.num_hw_ss =		1,
 };
 
-static const struct spi_ops qspi_ops __maybe_unused = {
+static const struct spi_ops qspi_ops = {
 	.set_config_register =	qspi_set_config_register,
 	.transfer_one =		qspi_transfer_one,
 	.extra_mode_bits =	SPI_TX_DUAL | SPI_TX_QUAD |
@@ -1212,7 +1213,8 @@ static const struct spi_ops qspi_ops __maybe_unused = {
 	.num_hw_ss =		1,
 };
 
-static const struct of_device_id rspi_of_match[] __maybe_unused = {
+#ifdef CONFIG_OF
+static const struct of_device_id rspi_of_match[] = {
 	/* RSPI on legacy SH */
 	{ .compatible = "renesas,rspi", .data = &rspi_ops },
 	/* RSPI on RZ/A1H */
@@ -1224,15 +1226,8 @@ static const struct of_device_id rspi_of_match[] __maybe_unused = {
 
 MODULE_DEVICE_TABLE(of, rspi_of_match);
 
-#ifdef CONFIG_OF
-static void rspi_reset_control_assert(void *data)
-{
-	reset_control_assert(data);
-}
-
 static int rspi_parse_dt(struct device *dev, struct spi_controller *ctlr)
 {
-	struct reset_control *rstc;
 	u32 num_cs;
 	int error;
 
@@ -1244,24 +1239,6 @@ static int rspi_parse_dt(struct device *dev, struct spi_controller *ctlr)
 	}
 
 	ctlr->num_chipselect = num_cs;
-
-	rstc = devm_reset_control_get_optional_exclusive(dev, NULL);
-	if (IS_ERR(rstc))
-		return dev_err_probe(dev, PTR_ERR(rstc),
-					     "failed to get reset ctrl\n");
-
-	error = reset_control_deassert(rstc);
-	if (error) {
-		dev_err(dev, "failed to deassert reset %d\n", error);
-		return error;
-	}
-
-	error = devm_add_action_or_reset(dev, rspi_reset_control_assert, rstc);
-	if (error) {
-		dev_err(dev, "failed to register assert devm action, %d\n", error);
-		return error;
-	}
-
 	return 0;
 }
 #else
@@ -1438,7 +1415,7 @@ static SIMPLE_DEV_PM_OPS(rspi_pm_ops, rspi_suspend, rspi_resume);
 
 static struct platform_driver rspi_driver = {
 	.probe =	rspi_probe,
-	.remove_new =	rspi_remove,
+	.remove =	rspi_remove,
 	.id_table =	spi_driver_ids,
 	.driver		= {
 		.name = "renesas_spi",
@@ -1451,3 +1428,4 @@ module_platform_driver(rspi_driver);
 MODULE_DESCRIPTION("Renesas RSPI bus driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Yoshihiro Shimoda");
+MODULE_ALIAS("platform:rspi");

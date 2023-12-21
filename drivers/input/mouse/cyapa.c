@@ -119,7 +119,7 @@ static ssize_t cyapa_i2c_read(struct cyapa *cyapa, u8 reg, size_t len,
 /**
  * cyapa_i2c_write - Execute i2c block data write operation
  * @cyapa: Handle to this driver
- * @reg: Offset of the data to written in the register map
+ * @ret: Offset of the data to written in the register map
  * @len: number of bytes to write
  * @values: Data to be written
  *
@@ -526,7 +526,7 @@ static void cyapa_enable_irq_for_cmd(struct cyapa *cyapa)
 {
 	struct input_dev *input = cyapa->input;
 
-	if (!input || !input_device_enabled(input)) {
+	if (!input || !input->users) {
 		/*
 		 * When input is NULL, TP must be in deep sleep mode.
 		 * In this mode, later non-power I2C command will always failed
@@ -546,7 +546,7 @@ static void cyapa_disable_irq_for_cmd(struct cyapa *cyapa)
 {
 	struct input_dev *input = cyapa->input;
 
-	if (!input || !input_device_enabled(input)) {
+	if (!input || !input->users) {
 		if (cyapa->gen >= CYAPA_GEN5)
 			disable_irq(cyapa->client->irq);
 		if (!input || cyapa->operational)
@@ -652,7 +652,7 @@ static int cyapa_reinitialize(struct cyapa *cyapa)
 	}
 
 out:
-	if (!input || !input_device_enabled(input)) {
+	if (!input || !input->users) {
 		/* Reset to power OFF state to save power when no user open. */
 		if (cyapa->operational)
 			cyapa->ops->set_power_mode(cyapa,
@@ -840,9 +840,10 @@ static int cyapa_prepare_wakeup_controls(struct cyapa *cyapa)
 			return error;
 		}
 
-		error = devm_add_action_or_reset(dev,
+		error = devm_add_action(dev,
 				cyapa_remove_power_wakeup_group, cyapa);
 		if (error) {
+			cyapa_remove_power_wakeup_group(cyapa);
 			dev_err(dev, "failed to add power cleanup action: %d\n",
 				error);
 			return error;
@@ -956,9 +957,9 @@ static int cyapa_start_runtime(struct cyapa *cyapa)
 		return error;
 	}
 
-	error = devm_add_action_or_reset(dev, cyapa_remove_power_runtime_group,
-					 cyapa);
+	error = devm_add_action(dev, cyapa_remove_power_runtime_group, cyapa);
 	if (error) {
+		cyapa_remove_power_runtime_group(cyapa);
 		dev_err(dev,
 			"failed to add power runtime cleanup action: %d\n",
 			error);
@@ -1244,7 +1245,8 @@ static void cyapa_disable_regulator(void *data)
 	regulator_disable(cyapa->vcc);
 }
 
-static int cyapa_probe(struct i2c_client *client)
+static int cyapa_probe(struct i2c_client *client,
+		       const struct i2c_device_id *dev_id)
 {
 	struct device *dev = &client->dev;
 	struct cyapa *cyapa;
@@ -1289,8 +1291,9 @@ static int cyapa_probe(struct i2c_client *client)
 		return error;
 	}
 
-	error = devm_add_action_or_reset(dev, cyapa_disable_regulator, cyapa);
+	error = devm_add_action(dev, cyapa_disable_regulator, cyapa);
 	if (error) {
+		cyapa_disable_regulator(cyapa);
 		dev_err(dev, "failed to add disable regulator action: %d\n",
 			error);
 		return error;
@@ -1349,7 +1352,7 @@ static int cyapa_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int cyapa_suspend(struct device *dev)
+static int __maybe_unused cyapa_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cyapa *cyapa = i2c_get_clientdata(client);
@@ -1397,7 +1400,7 @@ static int cyapa_suspend(struct device *dev)
 	return 0;
 }
 
-static int cyapa_resume(struct device *dev)
+static int __maybe_unused cyapa_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cyapa *cyapa = i2c_get_clientdata(client);
@@ -1424,7 +1427,7 @@ static int cyapa_resume(struct device *dev)
 	return 0;
 }
 
-static int cyapa_runtime_suspend(struct device *dev)
+static int __maybe_unused cyapa_runtime_suspend(struct device *dev)
 {
 	struct cyapa *cyapa = dev_get_drvdata(dev);
 	int error;
@@ -1439,7 +1442,7 @@ static int cyapa_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int cyapa_runtime_resume(struct device *dev)
+static int __maybe_unused cyapa_runtime_resume(struct device *dev)
 {
 	struct cyapa *cyapa = dev_get_drvdata(dev);
 	int error;
@@ -1453,8 +1456,8 @@ static int cyapa_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops cyapa_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(cyapa_suspend, cyapa_resume)
-	RUNTIME_PM_OPS(cyapa_runtime_suspend, cyapa_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(cyapa_suspend, cyapa_resume)
+	SET_RUNTIME_PM_OPS(cyapa_runtime_suspend, cyapa_runtime_resume, NULL)
 };
 
 static const struct i2c_device_id cyapa_id_table[] = {
@@ -1484,7 +1487,7 @@ MODULE_DEVICE_TABLE(of, cyapa_of_match);
 static struct i2c_driver cyapa_driver = {
 	.driver = {
 		.name = "cyapa",
-		.pm = pm_ptr(&cyapa_pm_ops),
+		.pm = &cyapa_pm_ops,
 		.acpi_match_table = ACPI_PTR(cyapa_acpi_id),
 		.of_match_table = of_match_ptr(cyapa_of_match),
 	},

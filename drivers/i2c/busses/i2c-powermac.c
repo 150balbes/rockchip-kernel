@@ -15,7 +15,7 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/of_irq.h>
-
+#include <asm/prom.h>
 #include <asm/pmac_low_i2c.h>
 
 MODULE_AUTHOR("Benjamin Herrenschmidt <benh@kernel.crashing.org>");
@@ -76,6 +76,11 @@ static s32 i2c_powermac_smbus_xfer(	struct i2c_adapter*	adap,
 	 * but I think the current API makes no sense and I don't want
 	 * any driver that I haven't verified for correctness to go
 	 * anywhere near a pmac i2c bus anyway ...
+	 *
+	 * I'm also not completely sure what kind of phases to do between
+	 * the actual command and the data (what I am _supposed_ to do that
+	 * is). For now, I assume writes are a single stream and reads have
+	 * a repeat start/addr phase (but not stop in between)
 	 */
         case I2C_SMBUS_BLOCK_DATA:
 		buf = data->block;
@@ -188,12 +193,14 @@ static const struct i2c_adapter_quirks i2c_powermac_quirks = {
 	.max_num_msgs = 1,
 };
 
-static void i2c_powermac_remove(struct platform_device *dev)
+static int i2c_powermac_remove(struct platform_device *dev)
 {
 	struct i2c_adapter	*adapter = platform_get_drvdata(dev);
 
 	i2c_del_adapter(adapter);
 	memset(adapter, 0, sizeof(*adapter));
+
+	return 0;
 }
 
 static u32 i2c_powermac_get_addr(struct i2c_adapter *adap,
@@ -282,7 +289,7 @@ static bool i2c_powermac_get_type(struct i2c_adapter *adap,
 	 */
 
 	/* First try proper modalias */
-	if (of_alias_from_compatible(node, tmp, sizeof(tmp)) >= 0) {
+	if (of_modalias_node(node, tmp, sizeof(tmp)) >= 0) {
 		snprintf(type, type_size, "MAC,%s", tmp);
 		return true;
 	}
@@ -437,7 +444,7 @@ static int i2c_powermac_probe(struct platform_device *dev)
 
 static struct platform_driver i2c_powermac_driver = {
 	.probe = i2c_powermac_probe,
-	.remove_new = i2c_powermac_remove,
+	.remove = i2c_powermac_remove,
 	.driver = {
 		.name = "i2c-powermac",
 		.bus = &platform_bus_type,

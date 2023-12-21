@@ -1,10 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Global definition of all the bootwrapper operations.
  *
  * Author: Mark A. Greer <mgreer@mvista.com>
  *
- * 2006 (c) MontaVista Software, Inc.
+ * 2006 (c) MontaVista Software, Inc.  This file is licensed under
+ * the terms of the GNU General Public License version 2.  This program
+ * is licensed "as is" without any warranty of any kind, whether express
+ * or implied.
  */
 #ifndef _PPC_BOOT_OPS_H_
 #define _PPC_BOOT_OPS_H_
@@ -197,6 +199,12 @@ void __dt_fixup_mac_addresses(u32 startindex, ...);
 #define dt_fixup_mac_addresses(...) \
 	__dt_fixup_mac_addresses(0, __VA_ARGS__, NULL)
 
+
+static inline void *find_node_by_linuxphandle(const u32 linuxphandle)
+{
+	return find_node_by_prop_value(NULL, "linux,phandle",
+			(char *)&linuxphandle, sizeof(u32));
+}
 
 static inline char *get_path(const void *phandle, char *buf, int len)
 {

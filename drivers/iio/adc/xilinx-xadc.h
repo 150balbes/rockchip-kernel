@@ -67,11 +67,7 @@ struct xadc {
 	spinlock_t lock;
 
 	struct completion completion;
-};
-
-enum xadc_type {
-	XADC_TYPE_S7, /* Series 7 */
-	XADC_TYPE_US, /* UltraScale and UltraScale+ */
+	int irq;
 };
 
 struct xadc_ops {
@@ -84,7 +80,6 @@ struct xadc_ops {
 	irqreturn_t (*interrupt_handler)(int irq, void *devid);
 
 	unsigned int flags;
-	enum xadc_type type;
 };
 
 static inline int _xadc_read_adc_reg(struct xadc *xadc, unsigned int reg,

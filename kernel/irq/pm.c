@@ -147,6 +147,7 @@ void suspend_device_irqs(void)
 			synchronize_irq(irq);
 	}
 }
+EXPORT_SYMBOL_GPL(suspend_device_irqs);
 
 static void resume_irq(struct irq_desc *desc)
 {
@@ -226,7 +227,7 @@ unlock:
 }
 
 /**
- * irq_pm_syscore_resume - enable interrupt lines early
+ * irq_pm_syscore_ops - enable interrupt lines early
  *
  * Enable all interrupt lines with %IRQF_EARLY_RESUME set.
  */
@@ -258,3 +259,4 @@ void resume_device_irqs(void)
 {
 	resume_irqs(false);
 }
+EXPORT_SYMBOL_GPL(resume_device_irqs);

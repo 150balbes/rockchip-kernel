@@ -137,6 +137,7 @@ int usbip_init_eh(void)
 
 void usbip_finish_eh(void)
 {
+	flush_workqueue(usbip_queue);
 	destroy_workqueue(usbip_queue);
 	usbip_queue = NULL;
 }

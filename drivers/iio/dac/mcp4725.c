@@ -42,46 +42,33 @@ struct mcp4725_data {
 	struct regulator *vref_reg;
 };
 
-static int mcp4725_suspend(struct device *dev)
+static int __maybe_unused mcp4725_suspend(struct device *dev)
 {
 	struct mcp4725_data *data = iio_priv(i2c_get_clientdata(
 		to_i2c_client(dev)));
 	u8 outbuf[2];
-	int ret;
 
 	outbuf[0] = (data->powerdown_mode + 1) << 4;
 	outbuf[1] = 0;
 	data->powerdown = true;
 
-	ret = i2c_master_send(data->client, outbuf, 2);
-	if (ret < 0)
-		return ret;
-	else if (ret != 2)
-		return -EIO;
-	return 0;
+	return i2c_master_send(data->client, outbuf, 2);
 }
 
-static int mcp4725_resume(struct device *dev)
+static int __maybe_unused mcp4725_resume(struct device *dev)
 {
 	struct mcp4725_data *data = iio_priv(i2c_get_clientdata(
 		to_i2c_client(dev)));
 	u8 outbuf[2];
-	int ret;
 
 	/* restore previous DAC value */
 	outbuf[0] = (data->dac_value >> 8) & 0xf;
 	outbuf[1] = data->dac_value & 0xff;
 	data->powerdown = false;
 
-	ret = i2c_master_send(data->client, outbuf, 2);
-	if (ret < 0)
-		return ret;
-	else if (ret != 2)
-		return -EIO;
-	return 0;
+	return i2c_master_send(data->client, outbuf, 2);
 }
-static DEFINE_SIMPLE_DEV_PM_OPS(mcp4725_pm_ops, mcp4725_suspend,
-				mcp4725_resume);
+static SIMPLE_DEV_PM_OPS(mcp4725_pm_ops, mcp4725_suspend, mcp4725_resume);
 
 static ssize_t mcp4725_store_eeprom(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t len)
@@ -93,7 +80,7 @@ static ssize_t mcp4725_store_eeprom(struct device *dev,
 	bool state;
 	int ret;
 
-	ret = kstrtobool(buf, &state);
+	ret = strtobool(buf, &state);
 	if (ret < 0)
 		return ret;
 
@@ -180,7 +167,7 @@ static ssize_t mcp4725_read_powerdown(struct iio_dev *indio_dev,
 {
 	struct mcp4725_data *data = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", data->powerdown);
+	return sprintf(buf, "%d\n", data->powerdown);
 }
 
 static ssize_t mcp4725_write_powerdown(struct iio_dev *indio_dev,
@@ -191,7 +178,7 @@ static ssize_t mcp4725_write_powerdown(struct iio_dev *indio_dev,
 	bool state;
 	int ret;
 
-	ret = kstrtobool(buf, &state);
+	ret = strtobool(buf, &state);
 	if (ret)
 		return ret;
 
@@ -234,8 +221,8 @@ static const struct iio_chan_spec_ext_info mcp4725_ext_info[] = {
 	},
 	IIO_ENUM("powerdown_mode", IIO_SEPARATE,
 			&mcp472x_powerdown_mode_enum[MCP4725]),
-	IIO_ENUM_AVAILABLE("powerdown_mode", IIO_SHARED_BY_TYPE,
-			   &mcp472x_powerdown_mode_enum[MCP4725]),
+	IIO_ENUM_AVAILABLE("powerdown_mode",
+			&mcp472x_powerdown_mode_enum[MCP4725]),
 	{ },
 };
 
@@ -248,8 +235,8 @@ static const struct iio_chan_spec_ext_info mcp4726_ext_info[] = {
 	},
 	IIO_ENUM("powerdown_mode", IIO_SEPARATE,
 			&mcp472x_powerdown_mode_enum[MCP4726]),
-	IIO_ENUM_AVAILABLE("powerdown_mode", IIO_SHARED_BY_TYPE,
-			   &mcp472x_powerdown_mode_enum[MCP4726]),
+	IIO_ENUM_AVAILABLE("powerdown_mode",
+			&mcp472x_powerdown_mode_enum[MCP4726]),
 	{ },
 };
 
@@ -381,9 +368,9 @@ static int mcp4725_probe_dt(struct device *dev,
 	return 0;
 }
 
-static int mcp4725_probe(struct i2c_client *client)
+static int mcp4725_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct mcp4725_data *data;
 	struct iio_dev *indio_dev;
 	struct mcp4725_platform_data *pdata, pdata_dt;
@@ -399,7 +386,7 @@ static int mcp4725_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
 	if (dev_fwnode(&client->dev))
-		data->id = (uintptr_t)device_get_match_data(&client->dev);
+		data->id = (enum chip_id)device_get_match_data(&client->dev);
 	else
 		data->id = id->driver_data;
 	pdata = dev_get_platdata(&client->dev);
@@ -498,7 +485,7 @@ err_disable_vdd_reg:
 	return err;
 }
 
-static void mcp4725_remove(struct i2c_client *client)
+static int mcp4725_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct mcp4725_data *data = iio_priv(indio_dev);
@@ -508,6 +495,8 @@ static void mcp4725_remove(struct i2c_client *client)
 	if (data->vref_reg)
 		regulator_disable(data->vref_reg);
 	regulator_disable(data->vdd_reg);
+
+	return 0;
 }
 
 static const struct i2c_device_id mcp4725_id[] = {
@@ -534,7 +523,7 @@ static struct i2c_driver mcp4725_driver = {
 	.driver = {
 		.name	= MCP4725_DRV_NAME,
 		.of_match_table = mcp4725_of_match,
-		.pm	= pm_sleep_ptr(&mcp4725_pm_ops),
+		.pm	= &mcp4725_pm_ops,
 	},
 	.probe		= mcp4725_probe,
 	.remove		= mcp4725_remove,

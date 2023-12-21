@@ -48,7 +48,8 @@ static const struct regmap_config adau7118_regmap_config = {
 	.volatile_reg = adau7118_volatile,
 };
 
-static int adau7118_probe_i2c(struct i2c_client *i2c)
+static int adau7118_probe_i2c(struct i2c_client *i2c,
+			      const struct i2c_device_id *id)
 {
 	struct regmap *map;
 

@@ -20,10 +20,8 @@
 #include <linux/clockchips.h>
 #include <linux/irq.h>
 #include <linux/io.h>
-#include <linux/of_clk.h>
 
 #include <asm/cpuinfo.h>
-#include <asm/time.h>
 
 /* Test the timer ticks to count, used in sync routine */
 inline void openrisc_timer_set(unsigned long count)
@@ -62,7 +60,7 @@ static int openrisc_timer_set_next_event(unsigned long delta,
  * timers) we cannot enable the PERIODIC feature.  The tick timer can run using
  * one-shot events, so no problem.
  */
-static DEFINE_PER_CPU(struct clock_event_device, clockevent_openrisc_timer);
+DEFINE_PER_CPU(struct clock_event_device, clockevent_openrisc_timer);
 
 void openrisc_clockevent_init(void)
 {
@@ -129,7 +127,7 @@ irqreturn_t __irq_entry timer_interrupt(struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-/*
+/**
  * Clocksource: Based on OpenRISC timer/counter
  *
  * This sets up the OpenRISC Tick Timer as a clock source.  The tick timer
@@ -171,7 +169,4 @@ void __init time_init(void)
 
 	openrisc_timer_init();
 	openrisc_clockevent_init();
-
-	of_clk_init(NULL);
-	timer_probe();
 }

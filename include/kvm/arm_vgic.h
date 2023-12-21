@@ -5,11 +5,9 @@
 #ifndef __KVM_ARM_VGIC_H
 #define __KVM_ARM_VGIC_H
 
-#include <linux/bits.h>
+#include <linux/kernel.h>
 #include <linux/kvm.h>
 #include <linux/irqreturn.h>
-#include <linux/kref.h>
-#include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/static_key.h>
 #include <linux/types.h>
@@ -74,9 +72,6 @@ struct vgic_global {
 	bool			has_gicv4;
 	bool			has_gicv4_1;
 
-	/* Pseudo GICv3 from outer space */
-	bool			no_hw_deactivation;
-
 	/* GIC system register CPU interface */
 	struct static_key_false gicv3_cpuif;
 
@@ -92,26 +87,6 @@ extern struct vgic_global kvm_vgic_global_state;
 enum vgic_irq_config {
 	VGIC_CONFIG_EDGE = 0,
 	VGIC_CONFIG_LEVEL
-};
-
-/*
- * Per-irq ops overriding some common behavious.
- *
- * Always called in non-preemptible section and the functions can use
- * kvm_arm_get_running_vcpu() to get the vcpu pointer for private IRQs.
- */
-struct irq_ops {
-	/* Per interrupt flags for special-cased interrupts */
-	unsigned long flags;
-
-#define VGIC_IRQ_SW_RESAMPLE	BIT(0)	/* Clear the active state for resampling */
-
-	/*
-	 * Callback function pointer to in-kernel devices that can tell us the
-	 * state of the input level of mapped level-triggered IRQ faster than
-	 * peaking into the physical GIC.
-	 */
-	bool (*get_input_level)(int vintid);
 };
 
 struct vgic_irq {
@@ -151,16 +126,20 @@ struct vgic_irq {
 	u8 group;			/* 0 == group 0, 1 == group 1 */
 	enum vgic_irq_config config;	/* Level or edge */
 
-	struct irq_ops *ops;
+	/*
+	 * Callback function pointer to in-kernel devices that can tell us the
+	 * state of the input level of mapped level-triggered IRQ faster than
+	 * peaking into the physical GIC.
+	 *
+	 * Always called in non-preemptible section and the functions can use
+	 * kvm_arm_get_running_vcpu() to get the vcpu pointer for private
+	 * IRQs.
+	 */
+	bool (*get_input_level)(int vintid);
 
 	void *owner;			/* Opaque pointer to reserve an interrupt
 					   for in-kernel devices. */
 };
-
-static inline bool vgic_irq_needs_resampling(struct vgic_irq *irq)
-{
-	return irq->ops && (irq->ops->flags & VGIC_IRQ_SW_RESAMPLE);
-}
 
 struct vgic_register_region;
 struct vgic_its;
@@ -231,9 +210,6 @@ struct vgic_dist {
 
 	/* Implementation revision as reported in the GICD_IIDR */
 	u32			implementation_rev;
-#define KVM_VGIC_IMP_REV_2	2 /* GICv2 restorable groups */
-#define KVM_VGIC_IMP_REV_3	3 /* GICv3 GICR_CTLR.{IW,CES,RWP} */
-#define KVM_VGIC_IMP_REV_LATEST	KVM_VGIC_IMP_REV_3
 
 	/* Userspace can write to GICv2 IGROUPR */
 	bool			v2_groups_user_writable;
@@ -263,7 +239,6 @@ struct vgic_dist {
 	struct vgic_io_device	dist_iodev;
 
 	bool			has_its;
-	bool			table_write_in_progress;
 
 	/*
 	 * Contains the attributes and gpa of the LPI configuration table.
@@ -347,13 +322,11 @@ struct vgic_cpu {
 	 */
 	struct vgic_io_device	rd_iodev;
 	struct vgic_redist_region *rdreg;
-	u32 rdreg_index;
-	atomic_t syncr_busy;
 
 	/* Contains the attributes and gpa of the LPI pending tables. */
 	u64 pendbaser;
-	/* GICR_CTLR.{ENABLE_LPIS,RWP} */
-	atomic_t ctlr;
+
+	bool lpis_enabled;
 
 	/* Cache guest priority bits */
 	u32 num_pri_bits;
@@ -365,7 +338,7 @@ struct vgic_cpu {
 extern struct static_key_false vgic_v2_cpuif_trap;
 extern struct static_key_false vgic_v3_cpuif_trap;
 
-int kvm_set_legacy_vgic_v2_addr(struct kvm *kvm, struct kvm_arm_device_addr *dev_addr);
+int kvm_vgic_addr(struct kvm *kvm, unsigned long type, u64 *addr, bool write);
 void kvm_vgic_early_init(struct kvm *kvm);
 int kvm_vgic_vcpu_init(struct kvm_vcpu *vcpu);
 int kvm_vgic_create(struct kvm *kvm, u32 type);
@@ -378,9 +351,8 @@ void kvm_vgic_init_cpu_hardware(void);
 int kvm_vgic_inject_irq(struct kvm *kvm, int cpuid, unsigned int intid,
 			bool level, void *owner);
 int kvm_vgic_map_phys_irq(struct kvm_vcpu *vcpu, unsigned int host_irq,
-			  u32 vintid, struct irq_ops *ops);
+			  u32 vintid, bool (*get_input_level)(int vindid));
 int kvm_vgic_unmap_phys_irq(struct kvm_vcpu *vcpu, unsigned int vintid);
-int kvm_vgic_get_map(struct kvm_vcpu *vcpu, unsigned int vintid);
 bool kvm_vgic_map_is_active(struct kvm_vcpu *vcpu, unsigned int vintid);
 
 int kvm_vgic_vcpu_pending_irq(struct kvm_vcpu *vcpu);
@@ -432,9 +404,5 @@ int kvm_vgic_v4_unset_forwarding(struct kvm *kvm, int irq,
 int vgic_v4_load(struct kvm_vcpu *vcpu);
 void vgic_v4_commit(struct kvm_vcpu *vcpu);
 int vgic_v4_put(struct kvm_vcpu *vcpu, bool need_db);
-
-/* CPU HP callbacks */
-void kvm_vgic_cpu_up(void);
-void kvm_vgic_cpu_down(void);
 
 #endif /* __KVM_ARM_VGIC_H */

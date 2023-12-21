@@ -59,7 +59,6 @@
 #include <asm/unwind.h>
 #include <asm/memblock.h>
 #include <asm/virt.h>
-#include <asm/kasan.h>
 
 #include "atags.h"
 
@@ -75,6 +74,13 @@ static int __init fpe_setup(char *line)
 
 __setup("fpe=", fpe_setup);
 #endif
+
+extern void init_default_cache_policy(unsigned long);
+extern void paging_init(const struct machine_desc *desc);
+extern void early_mm_init(const struct machine_desc *);
+extern void adjust_lowmem_bounds(void);
+extern enum reboot_mode reboot_mode;
+extern void setup_dma_zone(const struct machine_desc *desc);
 
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
@@ -134,10 +140,10 @@ EXPORT_SYMBOL(outer_cache);
 int __cpu_architecture __read_mostly = CPU_ARCH_UNKNOWN;
 
 struct stack {
-	u32 irq[4];
-	u32 abt[4];
-	u32 und[4];
-	u32 fiq[4];
+	u32 irq[3];
+	u32 abt[3];
+	u32 und[3];
+	u32 fiq[3];
 } ____cacheline_aligned;
 
 #ifndef CONFIG_CPU_V7M
@@ -443,8 +449,6 @@ static void __init cpuid_init_hwcaps(void)
 {
 	int block;
 	u32 isar5;
-	u32 isar6;
-	u32 pfr2;
 
 	if (cpu_architecture() < CPU_ARCH_ARMv7)
 		return;
@@ -480,18 +484,6 @@ static void __init cpuid_init_hwcaps(void)
 	block = cpuid_feature_extract_field(isar5, 16);
 	if (block >= 1)
 		elf_hwcap2 |= HWCAP2_CRC32;
-
-	/* Check for Speculation barrier instruction */
-	isar6 = read_cpuid_ext(CPUID_EXT_ISAR6);
-	block = cpuid_feature_extract_field(isar6, 12);
-	if (block >= 1)
-		elf_hwcap2 |= HWCAP2_SB;
-
-	/* Check for Speculative Store Bypassing control */
-	pfr2 = read_cpuid_ext(CPUID_EXT_PFR2);
-	block = cpuid_feature_extract_field(pfr2, 4);
-	if (block >= 1)
-		elf_hwcap2 |= HWCAP2_SSBS;
 }
 
 static void __init elf_hwcap_fixup(void)
@@ -774,7 +766,7 @@ int __init arm_add_memory(u64 start, u64 size)
 #ifndef CONFIG_PHYS_ADDR_T_64BIT
 	if (aligned_start > ULONG_MAX) {
 		pr_crit("Ignoring memory at 0x%08llx outside 32-bit physical address space\n",
-			start);
+			(long long)start);
 		return -EINVAL;
 	}
 
@@ -1011,8 +1003,7 @@ static void __init reserve_crashkernel(void)
 	total_mem = get_total_mem();
 	ret = parse_crashkernel(boot_command_line, total_mem,
 				&crash_size, &crash_base);
-	/* invalid value specified or crashkernel=0 */
-	if (ret || !crash_size)
+	if (ret)
 		return;
 
 	if (crash_base <= 0) {
@@ -1020,23 +1011,29 @@ static void __init reserve_crashkernel(void)
 		unsigned long long lowmem_max = __pa(high_memory - 1) + 1;
 		if (crash_max > lowmem_max)
 			crash_max = lowmem_max;
-
-		crash_base = memblock_phys_alloc_range(crash_size, CRASH_ALIGN,
-						       CRASH_ALIGN, crash_max);
+		crash_base = memblock_find_in_range(CRASH_ALIGN, crash_max,
+						    crash_size, CRASH_ALIGN);
 		if (!crash_base) {
 			pr_err("crashkernel reservation failed - No suitable area found.\n");
 			return;
 		}
 	} else {
-		unsigned long long crash_max = crash_base + crash_size;
 		unsigned long long start;
 
-		start = memblock_phys_alloc_range(crash_size, SECTION_SIZE,
-						  crash_base, crash_max);
-		if (!start) {
+		start = memblock_find_in_range(crash_base,
+					       crash_base + crash_size,
+					       crash_size, SECTION_SIZE);
+		if (start != crash_base) {
 			pr_err("crashkernel reservation failed - memory is in use.\n");
 			return;
 		}
+	}
+
+	ret = memblock_reserve(crash_base, crash_size);
+	if (ret < 0) {
+		pr_warn("crashkernel reservation failed - memory is in use (0x%lx)\n",
+			(unsigned long)crash_base);
+		return;
 	}
 
 	pr_info("Reserving %ldMB of memory at %ldMB for crashkernel (System RAM: %ldMB)\n",
@@ -1132,10 +1129,13 @@ void __init setup_arch(char **cmdline_p)
 	if (mdesc->reboot_mode != REBOOT_HARD)
 		reboot_mode = mdesc->reboot_mode;
 
-	setup_initial_init_mm(_text, _etext, _edata, _end);
+	init_mm.start_code = (unsigned long) _text;
+	init_mm.end_code   = (unsigned long) _etext;
+	init_mm.end_data   = (unsigned long) _edata;
+	init_mm.brk	   = (unsigned long) _end;
 
 	/* populate cmd_line too for later use, preserving boot_command_line */
-	strscpy(cmd_line, boot_command_line, COMMAND_LINE_SIZE);
+	strlcpy(cmd_line, boot_command_line, COMMAND_LINE_SIZE);
 	*cmdline_p = cmd_line;
 
 	early_fixmap_init();
@@ -1148,10 +1148,10 @@ void __init setup_arch(char **cmdline_p)
 #endif
 	setup_dma_zone(mdesc);
 	xen_early_init();
-	arm_efi_init();
+	efi_init();
 	/*
 	 * Make sure the calculation for lowmem/highmem is set appropriately
-	 * before reserving/allocating any memory
+	 * before reserving/allocating any mmeory
 	 */
 	adjust_lowmem_bounds();
 	arm_memblock_init(mdesc);
@@ -1161,7 +1161,6 @@ void __init setup_arch(char **cmdline_p)
 	early_ioremap_reset();
 
 	paging_init(mdesc);
-	kasan_init();
 	request_standard_resources(mdesc);
 
 	if (mdesc->restart) {
@@ -1190,6 +1189,10 @@ void __init setup_arch(char **cmdline_p)
 		hyp_mode_check();
 
 	reserve_crashkernel();
+
+#ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
+	handle_arch_irq = mdesc->handle_irq;
+#endif
 
 #ifdef CONFIG_VT
 #if defined(CONFIG_VGA_CONSOLE)
@@ -1252,12 +1255,6 @@ static const char *hwcap_str[] = {
 	"vfpd32",
 	"lpae",
 	"evtstrm",
-	"fphp",
-	"asimdhp",
-	"asimddp",
-	"asimdfhm",
-	"asimdbf16",
-	"i8mm",
 	NULL
 };
 
@@ -1267,8 +1264,6 @@ static const char *hwcap2_str[] = {
 	"sha1",
 	"sha2",
 	"crc32",
-	"sb",
-	"ssbs",
 	NULL
 };
 

@@ -176,10 +176,6 @@ static int rtl28xxu_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 			ret = -EOPNOTSUPP;
 			goto err_mutex_unlock;
 		} else if (msg[0].addr == 0x10) {
-			if (msg[0].len < 1 || msg[1].len < 1) {
-				ret = -EOPNOTSUPP;
-				goto err_mutex_unlock;
-			}
 			/* method 1 - integrated demod */
 			if (msg[0].buf[0] == 0x00) {
 				/* return demod page from driver cache */
@@ -193,10 +189,6 @@ static int rtl28xxu_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 				ret = rtl28xxu_ctrl_msg(d, &req);
 			}
 		} else if (msg[0].len < 2) {
-			if (msg[0].len < 1) {
-				ret = -EOPNOTSUPP;
-				goto err_mutex_unlock;
-			}
 			/* method 2 - old I2C */
 			req.value = (msg[0].buf[0] << 8) | (msg[0].addr << 1);
 			req.index = CMD_I2C_RD;
@@ -225,16 +217,8 @@ static int rtl28xxu_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 			ret = -EOPNOTSUPP;
 			goto err_mutex_unlock;
 		} else if (msg[0].addr == 0x10) {
-			if (msg[0].len < 1) {
-				ret = -EOPNOTSUPP;
-				goto err_mutex_unlock;
-			}
 			/* method 1 - integrated demod */
 			if (msg[0].buf[0] == 0x00) {
-				if (msg[0].len < 2) {
-					ret = -EOPNOTSUPP;
-					goto err_mutex_unlock;
-				}
 				/* save demod page for later demod access */
 				dev->page = msg[0].buf[1];
 				ret = 0;
@@ -247,10 +231,6 @@ static int rtl28xxu_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 				ret = rtl28xxu_ctrl_msg(d, &req);
 			}
 		} else if ((msg[0].len < 23) && (!dev->new_i2c_write)) {
-			if (msg[0].len < 1) {
-				ret = -EOPNOTSUPP;
-				goto err_mutex_unlock;
-			}
 			/* method 2 - old I2C */
 			req.value = (msg[0].buf[0] << 8) | (msg[0].addr << 1);
 			req.index = CMD_I2C_WR;
@@ -973,12 +953,18 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 	if (dev->slave_demod) {
 		struct i2c_board_info info = {};
 
+		/*
+		 * We continue on reduced mode, without DVB-T2/C, using master
+		 * demod, when slave demod fails.
+		 */
+		ret = 0;
+
 		/* attach slave demodulator */
 		if (dev->slave_demod == SLAVE_DEMOD_MN88472) {
 			struct mn88472_config mn88472_config = {};
 
 			mn88472_config.fe = &adap->fe[1];
-			mn88472_config.i2c_wr_max = 22;
+			mn88472_config.i2c_wr_max = 22,
 			strscpy(info.type, "mn88472", I2C_NAME_SIZE);
 			mn88472_config.xtal = 20500000;
 			mn88472_config.ts_mode = SERIAL_TS_MODE;
@@ -987,11 +973,14 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 			info.platform_data = &mn88472_config;
 			request_module(info.type);
 			client = i2c_new_client_device(&d->i2c_adap, &info);
-			if (!i2c_client_has_driver(client))
+			if (!i2c_client_has_driver(client)) {
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
+			}
 
 			if (!try_module_get(client->dev.driver->owner)) {
 				i2c_unregister_device(client);
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
 			}
 
@@ -1000,17 +989,20 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 			struct mn88473_config mn88473_config = {};
 
 			mn88473_config.fe = &adap->fe[1];
-			mn88473_config.i2c_wr_max = 22;
+			mn88473_config.i2c_wr_max = 22,
 			strscpy(info.type, "mn88473", I2C_NAME_SIZE);
 			info.addr = 0x18;
 			info.platform_data = &mn88473_config;
 			request_module(info.type);
 			client = i2c_new_client_device(&d->i2c_adap, &info);
-			if (!i2c_client_has_driver(client))
+			if (!i2c_client_has_driver(client)) {
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
+			}
 
 			if (!try_module_get(client->dev.driver->owner)) {
 				i2c_unregister_device(client);
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
 			}
 
@@ -1026,8 +1018,10 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 			adap->fe[1] = dvb_attach(cxd2841er_attach_t_c,
 						 &cxd2837er_config,
 						 &d->i2c_adap);
-			if (!adap->fe[1])
+			if (!adap->fe[1]) {
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
+			}
 			adap->fe[1]->id = 1;
 			dev->i2c_client_slave_demod = NULL;
 		} else {
@@ -1044,11 +1038,14 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 			info.platform_data = &si2168_config;
 			request_module(info.type);
 			client = i2c_new_client_device(&d->i2c_adap, &info);
-			if (!i2c_client_has_driver(client))
+			if (!i2c_client_has_driver(client)) {
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
+			}
 
 			if (!try_module_get(client->dev.driver->owner)) {
 				i2c_unregister_device(client);
+				dev->slave_demod = SLAVE_DEMOD_NONE;
 				goto err_slave_demod_failed;
 			}
 
@@ -1059,18 +1056,10 @@ static int rtl2832u_frontend_attach(struct dvb_usb_adapter *adap)
 		}
 	}
 	return 0;
-
+err_slave_demod_failed:
 err:
 	dev_dbg(&d->intf->dev, "failed=%d\n", ret);
 	return ret;
-
-err_slave_demod_failed:
-	/*
-	 * We continue on reduced mode, without DVB-T2/C, using master
-	 * demod, when slave demod fails.
-	 */
-	dev->slave_demod = SLAVE_DEMOD_NONE;
-	return 0;
 }
 
 static int rtl28xxu_frontend_attach(struct dvb_usb_adapter *adap)
@@ -1805,7 +1794,7 @@ static int rtl2832u_rc_query(struct dvb_usb_device *d)
 		ir_raw_event_store_with_filter(d->rc_dev, &ev);
 	}
 
-	/* 'flush' ir_raw_event_store_with_filter() */
+	/* 'flush' ir_raw_event_store_with_filter() */
 	ir_raw_event_handle(d->rc_dev);
 exit:
 	return ret;

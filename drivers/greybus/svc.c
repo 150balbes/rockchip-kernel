@@ -7,7 +7,6 @@
  */
 
 #include <linux/debugfs.h>
-#include <linux/kstrtox.h>
 #include <linux/workqueue.h>
 #include <linux/greybus.h>
 
@@ -84,7 +83,7 @@ static ssize_t watchdog_store(struct device *dev,
 	int retval;
 	bool user_request;
 
-	retval = kstrtobool(buf, &user_request);
+	retval = strtobool(buf, &user_request);
 	if (retval)
 		return retval;
 
@@ -862,26 +861,22 @@ static int gb_svc_hello(struct gb_operation *op)
 	ret = gb_svc_watchdog_create(svc);
 	if (ret) {
 		dev_err(&svc->dev, "failed to create watchdog: %d\n", ret);
-		goto err_deregister_svc;
+		goto err_unregister_device;
 	}
-
-	/*
-	 * FIXME: This is a temporary hack to reconfigure the link at HELLO
-	 * (which abuses the deferred request processing mechanism).
-	 */
-	ret = gb_svc_queue_deferred_request(op);
-	if (ret)
-		goto err_destroy_watchdog;
 
 	gb_svc_debugfs_init(svc);
 
+	ret = gb_svc_queue_deferred_request(op);
+	if (ret)
+		goto err_remove_debugfs;
+
 	return 0;
 
-err_destroy_watchdog:
+err_remove_debugfs:
+	gb_svc_debugfs_exit(svc);
+err_unregister_device:
 	gb_svc_watchdog_destroy(svc);
-err_deregister_svc:
 	device_del(&svc->dev);
-
 	return ret;
 }
 
@@ -1318,7 +1313,7 @@ struct gb_svc *gb_svc_create(struct gb_host_device *hd)
 	if (!svc)
 		return NULL;
 
-	svc->wq = alloc_ordered_workqueue("%s:svc", 0, dev_name(&hd->dev));
+	svc->wq = alloc_workqueue("%s:svc", WQ_UNBOUND, 1, dev_name(&hd->dev));
 	if (!svc->wq) {
 		kfree(svc);
 		return NULL;

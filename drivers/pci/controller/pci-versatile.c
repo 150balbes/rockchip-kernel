@@ -31,9 +31,10 @@ static u32 pci_slot_ignore;
 
 static int __init versatile_pci_slot_ignore(char *str)
 {
+	int retval;
 	int slot;
 
-	while (get_option(&str, &slot)) {
+	while ((retval = get_option(&str, &slot))) {
 		if ((slot < 0) || (slot > 31))
 			pr_err("Illegal slot value: %d\n", slot);
 		else
@@ -169,3 +170,4 @@ static struct platform_driver versatile_pci_driver = {
 module_platform_driver(versatile_pci_driver);
 
 MODULE_DESCRIPTION("Versatile PCI driver");
+MODULE_LICENSE("GPL v2");

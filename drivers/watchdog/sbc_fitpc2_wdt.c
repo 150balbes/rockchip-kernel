@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Watchdog driver for SBC-FITPC2 board
  *
@@ -6,6 +5,9 @@
  *
  * Adapted from the IXP2000 watchdog driver by Deepak Saxena.
  *
+ * This file is licensed under  the terms of the GNU General Public
+ * License version 2. This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME " WATCHDOG: " fmt
@@ -76,7 +78,7 @@ static int fitpc2_wdt_open(struct inode *inode, struct file *file)
 	return stream_open(inode, file);
 }
 
-static ssize_t fitpc2_wdt_write(struct file *file, const char __user *data,
+static ssize_t fitpc2_wdt_write(struct file *file, const char *data,
 						size_t len, loff_t *ppos)
 {
 	size_t i;
@@ -123,16 +125,16 @@ static long fitpc2_wdt_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case WDIOC_GETSUPPORT:
-		ret = copy_to_user((struct watchdog_info __user *)arg, &ident,
+		ret = copy_to_user((struct watchdog_info *)arg, &ident,
 				   sizeof(ident)) ? -EFAULT : 0;
 		break;
 
 	case WDIOC_GETSTATUS:
-		ret = put_user(0, (int __user *)arg);
+		ret = put_user(0, (int *)arg);
 		break;
 
 	case WDIOC_GETBOOTSTATUS:
-		ret = put_user(0, (int __user *)arg);
+		ret = put_user(0, (int *)arg);
 		break;
 
 	case WDIOC_KEEPALIVE:
@@ -141,7 +143,7 @@ static long fitpc2_wdt_ioctl(struct file *file, unsigned int cmd,
 		break;
 
 	case WDIOC_SETTIMEOUT:
-		ret = get_user(time, (int __user *)arg);
+		ret = get_user(time, (int *)arg);
 		if (ret)
 			break;
 
@@ -155,7 +157,7 @@ static long fitpc2_wdt_ioctl(struct file *file, unsigned int cmd,
 		fallthrough;
 
 	case WDIOC_GETTIMEOUT:
-		ret = put_user(margin, (int __user *)arg);
+		ret = put_user(margin, (int *)arg);
 		break;
 	}
 

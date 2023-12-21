@@ -26,8 +26,9 @@
 #include <linux/clk.h>
 
 #include <asm/setup.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 #include <asm/mach-types.h>
+#include <mach/hardware.h>
 #include <asm/irq.h>
 #include <linux/sizes.h>
 
@@ -233,6 +234,7 @@ MACHINE_START(GUMSTIX, "Gumstix")
 	.map_io		= pxa25x_map_io,
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa25x_init_irq,
+	.handle_irq	= pxa25x_handle_irq,
 	.init_time	= pxa_timer_init,
 	.init_machine	= gumstix_init,
 	.restart	= pxa_restart,

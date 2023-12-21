@@ -13,9 +13,8 @@
 	.text
 	.align	5
 
-ENTRY(__memset)
 ENTRY(mmioset)
-WEAK(memset)
+ENTRY(memset)
 UNWIND( .fnstart         )
 	ands	r3, r0, #3		@ 1 unaligned?
 	mov	ip, r0			@ preserve r0 as return value
@@ -28,16 +27,16 @@ UNWIND( .fnstart         )
 	mov	r3, r1
 7:	cmp	r2, #16
 	blt	4f
-UNWIND( .fnend              )
 
 #if ! CALGN(1)+0
 
 /*
  * We need 2 extra registers for this loop - use r8 and the LR
  */
+	stmfd	sp!, {r8, lr}
+UNWIND( .fnend              )
 UNWIND( .fnstart            )
 UNWIND( .save {r8, lr}      )
-	stmfd	sp!, {r8, lr}
 	mov	r8, r1
 	mov	lr, r3
 
@@ -66,9 +65,10 @@ UNWIND( .fnend              )
  * whole cache lines at once.
  */
 
+	stmfd	sp!, {r4-r8, lr}
+UNWIND( .fnend                 )
 UNWIND( .fnstart               )
 UNWIND( .save {r4-r8, lr}      )
-	stmfd	sp!, {r4-r8, lr}
 	mov	r4, r1
 	mov	r5, r3
 	mov	r6, r1
@@ -132,7 +132,6 @@ UNWIND( .fnstart            )
 UNWIND( .fnend   )
 ENDPROC(memset)
 ENDPROC(mmioset)
-ENDPROC(__memset)
 
 ENTRY(__memset32)
 UNWIND( .fnstart         )

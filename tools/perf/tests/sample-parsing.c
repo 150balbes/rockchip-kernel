@@ -13,7 +13,6 @@
 #include "evsel.h"
 #include "debug.h"
 #include "util/synthetic-events.h"
-#include "util/util.h"
 
 #include "tests.h"
 
@@ -31,18 +30,9 @@
 	}						\
 } while (0)
 
-/*
- * Hardcode the expected values for branch_entry flags.
- * These are based on the input value (213) specified
- * in branch_stack variable.
- */
-#define BS_EXPECTED_BE	0xa000d00000000000
-#define BS_EXPECTED_LE	0x1aa00000000
-#define FLAG(s)	s->branch_stack->entries[i].flags
-
 static bool samples_same(const struct perf_sample *s1,
 			 const struct perf_sample *s2,
-			 u64 type, u64 read_format, bool needs_swap)
+			 u64 type, u64 read_format)
 {
 	size_t i;
 
@@ -86,15 +76,10 @@ static bool samples_same(const struct perf_sample *s1,
 			COMP(read.time_running);
 		/* PERF_FORMAT_ID is forced for PERF_SAMPLE_READ */
 		if (read_format & PERF_FORMAT_GROUP) {
-			for (i = 0; i < s1->read.group.nr; i++) {
-				/* FIXME: check values without LOST */
-				if (read_format & PERF_FORMAT_LOST)
-					MCOMP(read.group.values[i]);
-			}
+			for (i = 0; i < s1->read.group.nr; i++)
+				MCOMP(read.group.values[i]);
 		} else {
 			COMP(read.one.id);
-			if (read_format & PERF_FORMAT_LOST)
-				COMP(read.one.lost);
 		}
 	}
 
@@ -115,14 +100,8 @@ static bool samples_same(const struct perf_sample *s1,
 	if (type & PERF_SAMPLE_BRANCH_STACK) {
 		COMP(branch_stack->nr);
 		COMP(branch_stack->hw_idx);
-		for (i = 0; i < s1->branch_stack->nr; i++) {
-			if (needs_swap)
-				return ((host_is_bigendian()) ?
-					(FLAG(s2).value == BS_EXPECTED_BE) :
-					(FLAG(s2).value == BS_EXPECTED_LE));
-			else
-				MCOMP(branch_stack->entries[i]);
-		}
+		for (i = 0; i < s1->branch_stack->nr; i++)
+			MCOMP(branch_stack->entries[i]);
 	}
 
 	if (type & PERF_SAMPLE_REGS_USER) {
@@ -174,12 +153,6 @@ static bool samples_same(const struct perf_sample *s1,
 
 	if (type & PERF_SAMPLE_CGROUP)
 		COMP(cgroup);
-
-	if (type & PERF_SAMPLE_DATA_PAGE_SIZE)
-		COMP(data_page_size);
-
-	if (type & PERF_SAMPLE_CODE_PAGE_SIZE)
-		COMP(code_page_size);
 
 	if (type & PERF_SAMPLE_AUX) {
 		COMP(aux_sample.size);
@@ -261,15 +234,13 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 		},
 		.phys_addr	= 113,
 		.cgroup		= 114,
-		.data_page_size = 115,
-		.code_page_size = 116,
 		.aux_sample	= {
 			.size	= sizeof(aux_data),
 			.data	= (void *)aux_data,
 		},
 	};
-	struct sample_read_value values[] = {{1, 5, 0}, {9, 3, 0}, {2, 7, 0}, {6, 4, 1},};
-	struct perf_sample sample_out, sample_out_endian;
+	struct sample_read_value values[] = {{1, 5}, {9, 3}, {2, 7}, {6, 4},};
+	struct perf_sample sample_out;
 	size_t i, sz, bufsz;
 	int err, ret = -1;
 
@@ -291,7 +262,6 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 	} else {
 		sample.read.one.value = 0x08789faeb786aa87ULL;
 		sample.read.one.id    = 99;
-		sample.read.one.lost  = 1;
 	}
 
 	sz = perf_event__sample_event_size(&sample, sample_type, read_format);
@@ -335,27 +305,10 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 		goto out_free;
 	}
 
-	if (!samples_same(&sample, &sample_out, sample_type, read_format, evsel.needs_swap)) {
+	if (!samples_same(&sample, &sample_out, sample_type, read_format)) {
 		pr_debug("parsing failed for sample_type %#"PRIx64"\n",
 			 sample_type);
 		goto out_free;
-	}
-
-	if (sample_type == PERF_SAMPLE_BRANCH_STACK) {
-		evsel.needs_swap = true;
-		evsel.sample_size = __evsel__sample_size(sample_type);
-		err = evsel__parse_sample(&evsel, event, &sample_out_endian);
-		if (err) {
-			pr_debug("%s failed for sample_type %#"PRIx64", error %d\n",
-				 "evsel__parse_sample", sample_type, err);
-			goto out_free;
-		}
-
-		if (!samples_same(&sample, &sample_out_endian, sample_type, read_format, evsel.needs_swap)) {
-			pr_debug("parsing failed for sample_type %#"PRIx64"\n",
-				 sample_type);
-			goto out_free;
-		}
 	}
 
 	ret = 0;
@@ -374,9 +327,9 @@ out_free:
  * checks sample format bits separately and together.  If the test passes %0 is
  * returned, otherwise %-1 is returned.
  */
-static int test__sample_parsing(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__sample_parsing(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
-	const u64 rf[] = {4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 28, 29, 30, 31};
+	const u64 rf[] = {4, 5, 6, 7, 12, 13, 14, 15};
 	u64 sample_type;
 	u64 sample_regs;
 	size_t i;
@@ -387,7 +340,7 @@ static int test__sample_parsing(struct test_suite *test __maybe_unused, int subt
 	 * were added.  Please actually update the test rather than just change
 	 * the condition below.
 	 */
-	if (PERF_SAMPLE_MAX > PERF_SAMPLE_WEIGHT_STRUCT << 1) {
+	if (PERF_SAMPLE_MAX > PERF_SAMPLE_CGROUP << 1) {
 		pr_debug("sample format has changed, some new PERF_SAMPLE_ bit was introduced - test needs updating\n");
 		return -1;
 	}
@@ -417,12 +370,8 @@ static int test__sample_parsing(struct test_suite *test __maybe_unused, int subt
 			return err;
 	}
 
-	/*
-	 * Test all sample format bits together
-	 * Note: PERF_SAMPLE_WEIGHT and PERF_SAMPLE_WEIGHT_STRUCT cannot
-	 *       be set simultaneously.
-	 */
-	sample_type = (PERF_SAMPLE_MAX - 1) & ~PERF_SAMPLE_WEIGHT;
+	/* Test all sample format bits together */
+	sample_type = PERF_SAMPLE_MAX - 1;
 	sample_regs = 0x3fff; /* shared yb intr and user regs */
 	for (i = 0; i < ARRAY_SIZE(rf); i++) {
 		err = do_test(sample_type, sample_regs, rf[i]);
@@ -432,5 +381,3 @@ static int test__sample_parsing(struct test_suite *test __maybe_unused, int subt
 
 	return 0;
 }
-
-DEFINE_SUITE("Sample parsing", sample_parsing);

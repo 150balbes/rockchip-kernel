@@ -62,12 +62,8 @@ static int ehci_brcm_hub_control(
 	u32 __iomem	*status_reg;
 	unsigned long flags;
 	int retval, irq_disabled = 0;
-	u32 temp;
 
-	temp = (wIndex & 0xff) - 1;
-	if (temp >= HCS_N_PORTS_MAX)	/* Avoid index-out-of-bounds warning */
-		temp = 0;
-	status_reg = &ehci->regs->port_status[temp];
+	status_reg = &ehci->regs->port_status[(wIndex & 0xff) - 1];
 
 	/*
 	 * RESUME is cleared when GetPortStatus() is called 20ms after start
@@ -112,9 +108,10 @@ static int ehci_brcm_reset(struct usb_hcd *hcd)
 	/*
 	 * SWLINUX-1705: Avoid OUT packet underflows during high memory
 	 *   bus usage
+	 * port_status[0x0f] = Broadcom-proprietary USB_EHCI_INSNREG00 @ 0x90
 	 */
-	ehci_writel(ehci, 0x00800040, &ehci->regs->brcm_insnreg[1]);
-	ehci_writel(ehci, 0x00000001, &ehci->regs->brcm_insnreg[3]);
+	ehci_writel(ehci, 0x00800040, &ehci->regs->port_status[0x10]);
+	ehci_writel(ehci, 0x00000001, &ehci->regs->port_status[0x12]);
 
 	return ehci_setup(hcd);
 }
@@ -188,7 +185,7 @@ err_hcd:
 	return err;
 }
 
-static void ehci_brcm_remove(struct platform_device *dev)
+static int ehci_brcm_remove(struct platform_device *dev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(dev);
 	struct brcm_priv *priv = hcd_to_ehci_priv(hcd);
@@ -196,6 +193,7 @@ static void ehci_brcm_remove(struct platform_device *dev)
 	usb_remove_hcd(hcd);
 	clk_disable_unprepare(priv->clk);
 	usb_put_hcd(hcd);
+	return 0;
 }
 
 static int __maybe_unused ehci_brcm_suspend(struct device *dev)
@@ -225,9 +223,11 @@ static int __maybe_unused ehci_brcm_resume(struct device *dev)
 	/*
 	 * SWLINUX-1705: Avoid OUT packet underflows during high memory
 	 *   bus usage
+	 * port_status[0x0f] = Broadcom-proprietary USB_EHCI_INSNREG00
+	 * @ 0x90
 	 */
-	ehci_writel(ehci, 0x00800040, &ehci->regs->brcm_insnreg[1]);
-	ehci_writel(ehci, 0x00000001, &ehci->regs->brcm_insnreg[3]);
+	ehci_writel(ehci, 0x00800040, &ehci->regs->port_status[0x10]);
+	ehci_writel(ehci, 0x00000001, &ehci->regs->port_status[0x12]);
 
 	ehci_resume(hcd, false);
 
@@ -249,7 +249,7 @@ static const struct of_device_id brcm_ehci_of_match[] = {
 
 static struct platform_driver ehci_brcm_driver = {
 	.probe		= ehci_brcm_probe,
-	.remove_new	= ehci_brcm_remove,
+	.remove		= ehci_brcm_remove,
 	.shutdown	= usb_hcd_platform_shutdown,
 	.driver		= {
 		.name	= "ehci-brcm",

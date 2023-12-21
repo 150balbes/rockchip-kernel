@@ -703,8 +703,7 @@ static int snd_sb16_dma_control_put(struct snd_kcontrol *kcontrol, struct snd_ct
 	unsigned char nval, oval;
 	int change;
 	
-	nval = ucontrol->value.enumerated.item[0];
-	if (nval > 2)
+	if ((nval = ucontrol->value.enumerated.item[0]) > 2)
 		return -EINVAL;
 	spin_lock_irqsave(&chip->reg_lock, flags);
 	oval = snd_sb16_get_dma_mode(chip);
@@ -837,8 +836,7 @@ int snd_sb16dsp_pcm(struct snd_sb *chip, int device)
 	struct snd_pcm *pcm;
 	int err;
 
-	err = snd_pcm_new(card, "SB16 DSP", device, 1, 1, &pcm);
-	if (err < 0)
+	if ((err = snd_pcm_new(card, "SB16 DSP", device, 1, 1, &pcm)) < 0)
 		return err;
 	sprintf(pcm->name, "DSP v%i.%i", chip->version >> 8, chip->version & 0xff);
 	pcm->info_flags = SNDRV_PCM_INFO_JOINT_DUPLEX;

@@ -23,6 +23,8 @@
  *
  */
 
+#include <linux/slab.h>
+
 #include "dm_services.h"
 
 #include "include/logger_interface.h"
@@ -183,18 +185,16 @@ bool dal_irq_service_dummy_set(struct irq_service *irq_service,
 			       const struct irq_source_info *info,
 			       bool enable)
 {
-	DC_LOG_ERROR("%s: called for non-implemented irq source, src_id=%u, ext_id=%u\n",
-		     __func__, info->src_id, info->ext_id);
-
+	DC_LOG_ERROR("%s: called for non-implemented irq source\n",
+		     __func__);
 	return false;
 }
 
 bool dal_irq_service_dummy_ack(struct irq_service *irq_service,
 			       const struct irq_source_info *info)
 {
-	DC_LOG_ERROR("%s: called for non-implemented irq source, src_id=%u, ext_id=%u\n",
-		     __func__, info->src_id, info->ext_id);
-
+	DC_LOG_ERROR("%s: called for non-implemented irq source\n",
+		     __func__);
 	return false;
 }
 

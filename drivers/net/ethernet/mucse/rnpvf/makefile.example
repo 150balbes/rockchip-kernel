@@ -1,0 +1,9 @@
+obj-$(CONFIG_MXGBEVF) += rnpvf.o
+rnpvf-objs :=   \
+		vf.o \
+                mbx.o \
+                ethtool.o \
+                sysfs.o \
+		rnpvf_compat.o\
+                rnpvf_main.o
+

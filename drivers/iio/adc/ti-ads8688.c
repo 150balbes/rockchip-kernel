@@ -71,7 +71,7 @@ struct ads8688_state {
 	union {
 		__be32 d32;
 		u8 d8[4];
-	} data[2] __aligned(IIO_DMA_MINALIGN);
+	} data[2] ____cacheline_aligned;
 };
 
 enum ads8688_id {
@@ -281,10 +281,12 @@ static int ads8688_write_reg_range(struct iio_dev *indio_dev,
 				   enum ads8688_range range)
 {
 	unsigned int tmp;
+	int ret;
 
 	tmp = ADS8688_PROG_REG_RANGE_CH(chan->channel);
+	ret = ads8688_prog_write(indio_dev, tmp, range);
 
-	return ads8688_prog_write(indio_dev, tmp, range);
+	return ret;
 }
 
 static int ads8688_write_raw(struct iio_dev *indio_dev,
@@ -479,7 +481,7 @@ err_regulator_disable:
 	return ret;
 }
 
-static void ads8688_remove(struct spi_device *spi)
+static int ads8688_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ads8688_state *st = iio_priv(indio_dev);
@@ -489,6 +491,8 @@ static void ads8688_remove(struct spi_device *spi)
 
 	if (!IS_ERR(st->reg))
 		regulator_disable(st->reg);
+
+	return 0;
 }
 
 static const struct spi_device_id ads8688_id[] = {
@@ -508,7 +512,6 @@ MODULE_DEVICE_TABLE(of, ads8688_of_match);
 static struct spi_driver ads8688_driver = {
 	.driver = {
 		.name	= "ads8688",
-		.of_match_table = ads8688_of_match,
 	},
 	.probe		= ads8688_probe,
 	.remove		= ads8688_remove,

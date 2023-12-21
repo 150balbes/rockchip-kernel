@@ -14,7 +14,6 @@
 #include "prestera.h"
 #include "prestera_hw.h"
 #include "prestera_rxtx.h"
-#include "prestera_devlink.h"
 
 #define PRESTERA_SDMA_WAIT_MUL		10
 
@@ -102,7 +101,7 @@ struct prestera_sdma {
 	struct net_device napi_dev;
 	u32 map_addr;
 	u64 dma_mask;
-	/* protect SDMA with concurrent access from multiple CPUs */
+	/* protect SDMA with concurrrent access from multiple CPUs */
 	spinlock_t tx_lock;
 };
 
@@ -215,10 +214,9 @@ static struct sk_buff *prestera_sdma_rx_skb_get(struct prestera_sdma *sdma,
 static int prestera_rxtx_process_skb(struct prestera_sdma *sdma,
 				     struct sk_buff *skb)
 {
-	struct prestera_port *port;
+	const struct prestera_port *port;
 	struct prestera_dsa dsa;
 	u32 hw_port, dev_id;
-	u8 cpu_code;
 	int err;
 
 	skb_pull(skb, ETH_HLEN);
@@ -260,9 +258,6 @@ static int prestera_rxtx_process_skb(struct prestera_sdma *sdma,
 
 		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), tci);
 	}
-
-	cpu_code = dsa.cpu_code;
-	prestera_devlink_trap_report(port, skb, cpu_code);
 
 	return 0;
 }
@@ -659,7 +654,7 @@ static int prestera_sdma_switch_init(struct prestera_switch *sw)
 
 	init_dummy_netdev(&sdma->napi_dev);
 
-	netif_napi_add(&sdma->napi_dev, &sdma->rx_napi, prestera_sdma_rx_poll);
+	netif_napi_add(&sdma->napi_dev, &sdma->rx_napi, prestera_sdma_rx_poll, 64);
 	napi_enable(&sdma->rx_napi);
 
 	return 0;
@@ -799,7 +794,14 @@ void prestera_rxtx_switch_fini(struct prestera_switch *sw)
 
 int prestera_rxtx_port_init(struct prestera_port *port)
 {
+	int err;
+
+	err = prestera_hw_rxtx_port_init(port);
+	if (err)
+		return err;
+
 	port->dev->needed_headroom = PRESTERA_DSA_HLEN;
+
 	return 0;
 }
 

@@ -52,8 +52,6 @@ else
   Q = @
 endif
 
-TEST_ARGS := $(if $(V),-v)
-
 # Set compile option CFLAGS
 ifdef EXTRA_CFLAGS
   CFLAGS := $(EXTRA_CFLAGS)
@@ -138,30 +136,12 @@ all: fixdep
 
 clean: $(LIBAPI)-clean
 	$(call QUIET_CLEAN, libperf) $(RM) $(LIBPERF_A) \
-                *.o *~ *.a *.so *.so.$(VERSION) *.so.$(LIBPERF_VERSION) .*.d .*.cmd tests/*.o LIBPERF-CFLAGS $(LIBPERF_PC) \
-                $(TESTS_STATIC) $(TESTS_SHARED)
+                *.o *~ *.a *.so *.so.$(VERSION) *.so.$(LIBPERF_VERSION) .*.d .*.cmd LIBPERF-CFLAGS $(LIBPERF_PC)
+	$(Q)$(MAKE) -C tests clean
 
-TESTS_IN = tests-in.o
-
-TESTS_STATIC = $(OUTPUT)tests-static
-TESTS_SHARED = $(OUTPUT)tests-shared
-
-$(TESTS_IN): FORCE
-	$(Q)$(MAKE) $(build)=tests
-
-$(TESTS_STATIC): $(TESTS_IN) $(LIBPERF_A) $(LIBAPI)
-	$(QUIET_LINK)$(CC) -o $@ $^
-
-$(TESTS_SHARED): $(TESTS_IN) $(LIBAPI)
-	$(QUIET_LINK)$(CC) -o $@ -L$(or $(OUTPUT),.) $^ -lperf
-
-make-tests: libs $(TESTS_SHARED) $(TESTS_STATIC)
-
-tests: make-tests
-	@echo "running static:"
-	@./$(TESTS_STATIC) $(TEST_ARGS)
-	@echo "running dynamic:"
-	@LD_LIBRARY_PATH=. ./$(TESTS_SHARED) $(TEST_ARGS)
+tests: libs
+	$(Q)$(MAKE) -C tests
+	$(Q)$(MAKE) -C tests run
 
 $(LIBPERF_PC):
 	$(QUIET_GEN)sed -e "s|@PREFIX@|$(prefix)|" \
@@ -176,10 +156,10 @@ define do_install_mkdir
 endef
 
 define do_install
-	if [ ! -d '$2' ]; then             \
-		$(INSTALL) -d -m 755 '$2'; \
-	fi;                                \
-	$(INSTALL) $1 $(if $3,-m $3,) '$2'
+	if [ ! -d '$(DESTDIR_SQ)$2' ]; then             \
+		$(INSTALL) -d -m 755 '$(DESTDIR_SQ)$2'; \
+	fi;                                             \
+	$(INSTALL) $1 $(if $3,-m $3,) '$(DESTDIR_SQ)$2'
 endef
 
 install_lib: libs
@@ -187,28 +167,19 @@ install_lib: libs
 		$(call do_install_mkdir,$(libdir_SQ)); \
 		cp -fpR $(LIBPERF_ALL) $(DESTDIR)$(libdir_SQ)
 
-HDRS := bpf_perf.h core.h cpumap.h threadmap.h evlist.h evsel.h event.h mmap.h
-INTERNAL_HDRS := cpumap.h evlist.h evsel.h lib.h mmap.h rc_check.h threadmap.h xyarray.h
-
-INSTALL_HDRS_PFX := $(DESTDIR)$(prefix)/include/perf
-INSTALL_HDRS := $(addprefix $(INSTALL_HDRS_PFX)/, $(HDRS))
-INSTALL_INTERNAL_HDRS_PFX := $(DESTDIR)$(prefix)/include/internal
-INSTALL_INTERNAL_HDRS := $(addprefix $(INSTALL_INTERNAL_HDRS_PFX)/, $(INTERNAL_HDRS))
-
-$(INSTALL_HDRS): $(INSTALL_HDRS_PFX)/%.h: include/perf/%.h
-	$(call QUIET_INSTALL, $@) \
-		$(call do_install,$<,$(INSTALL_HDRS_PFX)/,644)
-
-$(INSTALL_INTERNAL_HDRS): $(INSTALL_INTERNAL_HDRS_PFX)/%.h: include/internal/%.h
-	$(call QUIET_INSTALL, $@) \
-		$(call do_install,$<,$(INSTALL_INTERNAL_HDRS_PFX)/,644)
-
-install_headers: $(INSTALL_HDRS) $(INSTALL_INTERNAL_HDRS)
-	$(call QUIET_INSTALL, libperf_headers)
+install_headers:
+	$(call QUIET_INSTALL, headers) \
+		$(call do_install,include/perf/core.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/cpumap.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/threadmap.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/evlist.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/evsel.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/event.h,$(prefix)/include/perf,644); \
+		$(call do_install,include/perf/mmap.h,$(prefix)/include/perf,644);
 
 install_pkgconfig: $(LIBPERF_PC)
 	$(call QUIET_INSTALL, $(LIBPERF_PC)) \
-		$(call do_install,$(LIBPERF_PC),$(DESTDIR_SQ)$(libdir_SQ)/pkgconfig,644)
+		$(call do_install,$(LIBPERF_PC),$(libdir_SQ)/pkgconfig,644)
 
 install_doc:
 	$(Q)$(MAKE) -C Documentation install-man install-html install-examples

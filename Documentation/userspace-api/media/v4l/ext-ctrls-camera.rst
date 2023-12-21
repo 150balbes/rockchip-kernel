@@ -32,7 +32,6 @@ enum v4l2_exposure_auto_type -
     should ignore such requests. Possible values are:
 
 
-.. tabularcolumns:: |p{7.1cm}|p{10.4cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -82,7 +81,7 @@ enum v4l2_exposure_metering -
     Determines how the camera measures the amount of light available for
     the frame exposure. Possible values are:
 
-.. tabularcolumns:: |p{8.7cm}|p{8.7cm}|
+.. tabularcolumns:: |p{8.7cm}|p{8.8cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -174,7 +173,7 @@ enum v4l2_exposure_metering -
     control may stop updates of the ``V4L2_CID_AUTO_FOCUS_STATUS``
     control value.
 
-.. tabularcolumns:: |p{6.8cm}|p{10.7cm}|
+.. tabularcolumns:: |p{6.7cm}|p{10.8cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -200,7 +199,7 @@ enum v4l2_exposure_metering -
 enum v4l2_auto_focus_range -
     Determines auto focus distance range for which lens may be adjusted.
 
-.. tabularcolumns:: |p{6.9cm}|p{10.6cm}|
+.. tabularcolumns:: |p{6.8cm}|p{10.7cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -275,7 +274,7 @@ enum v4l2_auto_n_preset_white_balance -
     representation. The following white balance presets are listed in
     order of increasing color temperature.
 
-.. tabularcolumns:: |p{7.4cm}|p{10.1cm}|
+.. tabularcolumns:: |p{7.2 cm}|p{10.3cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -385,9 +384,7 @@ enum v4l2_scene_mode -
 
     \small
 
-.. tabularcolumns:: |p{5.9cm}|p{11.6cm}|
-
-.. cssclass:: longtable
+.. tabularcolumns:: |p{5.9cm}|p{11.5cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -506,8 +503,6 @@ enum v4l2_scene_mode -
     value down. A value of zero stops the motion if one is in progress
     and has no effect otherwise.
 
-.. _v4l2-camera-sensor-orientation:
-
 ``V4L2_CID_CAMERA_ORIENTATION (menu)``
     This read-only control describes the camera orientation by reporting its
     mounting position on the device where the camera is installed. The control
@@ -524,7 +519,6 @@ enum v4l2_scene_mode -
     have the ``V4L2_CAMERA_ORIENTATION_EXTERNAL`` orientation.
 
 
-.. tabularcolumns:: |p{7.7cm}|p{9.8cm}|
 
 .. flat-table::
     :header-rows:  0
@@ -538,7 +532,6 @@ enum v4l2_scene_mode -
       - The camera is not directly attached to the device and is freely movable.
 
 
-.. _v4l2-camera-sensor-rotation:
 
 ``V4L2_CID_CAMERA_SENSOR_ROTATION (integer)``
     This read-only control describes the rotation correction in degrees in the
@@ -664,11 +657,3 @@ enum v4l2_scene_mode -
 .. [#f1]
    This control may be changed to a menu control in the future, if more
    options are required.
-
-``V4L2_CID_HDR_SENSOR_MODE (menu)``
-    Change the sensor HDR mode. A HDR picture is obtained by merging two
-    captures of the same scene using two different exposure periods. HDR mode
-    describes the way these two captures are merged in the sensor.
-
-    As modes differ for each sensor, menu items are not standardized by this
-    control and are left to the programmer.

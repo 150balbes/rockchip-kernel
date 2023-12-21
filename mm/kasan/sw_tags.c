@@ -42,10 +42,7 @@ void __init kasan_init_sw_tags(void)
 	for_each_possible_cpu(cpu)
 		per_cpu(prng_state, cpu) = (u32)get_cycles();
 
-	kasan_init_tags();
-
-	pr_info("KernelAddressSanitizer initialized (sw-tags, stacktrace=%s)\n",
-		kasan_stack_collection_enabled() ? "on" : "off");
+	pr_info("KernelAddressSanitizer initialized\n");
 }
 
 /*
@@ -70,8 +67,8 @@ u8 kasan_random_tag(void)
 	return (u8)(state % (KASAN_TAG_MAX + 1));
 }
 
-bool kasan_check_range(const void *addr, size_t size, bool write,
-			unsigned long ret_ip)
+bool kasan_check_range(unsigned long addr, size_t size, bool write,
+				unsigned long ret_ip)
 {
 	u8 tag;
 	u8 *shadow_first, *shadow_last, *shadow;
@@ -106,8 +103,10 @@ bool kasan_check_range(const void *addr, size_t size, bool write,
 		return true;
 
 	untagged_addr = kasan_reset_tag((const void *)addr);
-	if (unlikely(!addr_has_metadata(untagged_addr)))
+	if (unlikely(untagged_addr <
+			kasan_shadow_to_mem((void *)KASAN_SHADOW_START))) {
 		return !kasan_report(addr, size, write, ret_ip);
+	}
 	shadow_first = kasan_mem_to_shadow(untagged_addr);
 	shadow_last = kasan_mem_to_shadow(untagged_addr + size - 1);
 	for (shadow = shadow_first; shadow <= shadow_last; shadow++) {
@@ -125,7 +124,7 @@ bool kasan_byte_accessible(const void *addr)
 	void *untagged_addr = kasan_reset_tag(addr);
 	u8 shadow_byte;
 
-	if (!addr_has_metadata(untagged_addr))
+	if (untagged_addr < kasan_shadow_to_mem((void *)KASAN_SHADOW_START))
 		return false;
 
 	shadow_byte = READ_ONCE(*(u8 *)kasan_mem_to_shadow(untagged_addr));
@@ -133,12 +132,12 @@ bool kasan_byte_accessible(const void *addr)
 }
 
 #define DEFINE_HWASAN_LOAD_STORE(size)					\
-	void __hwasan_load##size##_noabort(void *addr)			\
+	void __hwasan_load##size##_noabort(unsigned long addr)		\
 	{								\
-		kasan_check_range(addr, size, false, _RET_IP_);		\
+		kasan_check_range(addr, size, false, _RET_IP_);	\
 	}								\
 	EXPORT_SYMBOL(__hwasan_load##size##_noabort);			\
-	void __hwasan_store##size##_noabort(void *addr)			\
+	void __hwasan_store##size##_noabort(unsigned long addr)		\
 	{								\
 		kasan_check_range(addr, size, true, _RET_IP_);		\
 	}								\
@@ -150,27 +149,61 @@ DEFINE_HWASAN_LOAD_STORE(4);
 DEFINE_HWASAN_LOAD_STORE(8);
 DEFINE_HWASAN_LOAD_STORE(16);
 
-void __hwasan_loadN_noabort(void *addr, ssize_t size)
+void __hwasan_loadN_noabort(unsigned long addr, unsigned long size)
 {
 	kasan_check_range(addr, size, false, _RET_IP_);
 }
 EXPORT_SYMBOL(__hwasan_loadN_noabort);
 
-void __hwasan_storeN_noabort(void *addr, ssize_t size)
+void __hwasan_storeN_noabort(unsigned long addr, unsigned long size)
 {
 	kasan_check_range(addr, size, true, _RET_IP_);
 }
 EXPORT_SYMBOL(__hwasan_storeN_noabort);
 
-void __hwasan_tag_memory(void *addr, u8 tag, ssize_t size)
+void __hwasan_tag_memory(unsigned long addr, u8 tag, unsigned long size)
 {
-	kasan_poison(addr, size, tag, false);
+	kasan_poison((void *)addr, size, tag, false);
 }
 EXPORT_SYMBOL(__hwasan_tag_memory);
 
-void kasan_tag_mismatch(void *addr, unsigned long access_info,
-			unsigned long ret_ip)
+void kasan_set_free_info(struct kmem_cache *cache,
+				void *object, u8 tag)
 {
-	kasan_report(addr, 1 << (access_info & 0xf), access_info & 0x10,
-		     ret_ip);
+	struct kasan_alloc_meta *alloc_meta;
+	u8 idx = 0;
+
+	alloc_meta = kasan_get_alloc_meta(cache, object);
+	if (!alloc_meta)
+		return;
+
+#ifdef CONFIG_KASAN_SW_TAGS_IDENTIFY
+	idx = alloc_meta->free_track_idx;
+	alloc_meta->free_pointer_tag[idx] = tag;
+	alloc_meta->free_track_idx = (idx + 1) % KASAN_NR_FREE_STACKS;
+#endif
+
+	kasan_set_track(&alloc_meta->free_track[idx], GFP_NOWAIT);
+}
+
+struct kasan_track *kasan_get_free_track(struct kmem_cache *cache,
+				void *object, u8 tag)
+{
+	struct kasan_alloc_meta *alloc_meta;
+	int i = 0;
+
+	alloc_meta = kasan_get_alloc_meta(cache, object);
+	if (!alloc_meta)
+		return NULL;
+
+#ifdef CONFIG_KASAN_SW_TAGS_IDENTIFY
+	for (i = 0; i < KASAN_NR_FREE_STACKS; i++) {
+		if (alloc_meta->free_pointer_tag[i] == tag)
+			break;
+	}
+	if (i == KASAN_NR_FREE_STACKS)
+		i = alloc_meta->free_track_idx;
+#endif
+
+	return &alloc_meta->free_track[i];
 }

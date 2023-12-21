@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * lowlevel.c
  *
@@ -6,6 +5,11 @@
  *  Low Level Device Routines for the UDF filesystem
  *
  * COPYRIGHT
+ *	This file is distributed under the terms of the GNU General Public
+ *	License (GPL). Copies of the GPL can be obtained from:
+ *		ftp://prep.ai.mit.edu/pub/gnu/GPL
+ *	Each contributing author retains all rights to their own work.
+ *
  *  (C) 1999-2001 Ben Fennema
  *
  * HISTORY
@@ -41,20 +45,18 @@ unsigned int udf_get_last_session(struct super_block *sb)
 	return 0;
 }
 
-udf_pblk_t udf_get_last_block(struct super_block *sb)
+unsigned long udf_get_last_block(struct super_block *sb)
 {
-	struct cdrom_device_info *cdi = disk_to_cdi(sb->s_bdev->bd_disk);
+	struct block_device *bdev = sb->s_bdev;
+	struct cdrom_device_info *cdi = disk_to_cdi(bdev->bd_disk);
 	unsigned long lblock = 0;
 
 	/*
 	 * The cdrom layer call failed or returned obviously bogus value?
 	 * Try using the device size...
 	 */
-	if (!cdi || cdrom_get_last_written(cdi, &lblock) || lblock == 0) {
-		if (sb_bdev_nr_blocks(sb) > ~(udf_pblk_t)0)
-			return 0;
-		lblock = sb_bdev_nr_blocks(sb);
-	}
+	if (!cdi || cdrom_get_last_written(cdi, &lblock) || lblock == 0)
+		lblock = i_size_read(bdev->bd_inode) >> sb->s_blocksize_bits;
 
 	if (lblock)
 		return lblock - 1;

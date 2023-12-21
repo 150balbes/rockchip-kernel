@@ -47,13 +47,12 @@ int is_hibernate_resume_dev(dev_t dev)
 static int snapshot_open(struct inode *inode, struct file *filp)
 {
 	struct snapshot_data *data;
-	unsigned int sleep_flags;
 	int error;
 
 	if (!hibernation_available())
 		return -EPERM;
 
-	sleep_flags = lock_system_sleep();
+	lock_system_sleep();
 
 	if (!hibernate_acquire()) {
 		error = -EBUSY;
@@ -99,7 +98,7 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 	data->dev = 0;
 
  Unlock:
-	unlock_system_sleep(sleep_flags);
+	unlock_system_sleep();
 
 	return error;
 }
@@ -107,9 +106,8 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 static int snapshot_release(struct inode *inode, struct file *filp)
 {
 	struct snapshot_data *data;
-	unsigned int sleep_flags;
 
-	sleep_flags = lock_system_sleep();
+	lock_system_sleep();
 
 	swsusp_free();
 	data = filp->private_data;
@@ -126,7 +124,7 @@ static int snapshot_release(struct inode *inode, struct file *filp)
 			PM_POST_HIBERNATION : PM_POST_RESTORE);
 	hibernate_release();
 
-	unlock_system_sleep(sleep_flags);
+	unlock_system_sleep();
 
 	return 0;
 }
@@ -134,12 +132,11 @@ static int snapshot_release(struct inode *inode, struct file *filp)
 static ssize_t snapshot_read(struct file *filp, char __user *buf,
                              size_t count, loff_t *offp)
 {
-	loff_t pg_offp = *offp & ~PAGE_MASK;
 	struct snapshot_data *data;
-	unsigned int sleep_flags;
 	ssize_t res;
+	loff_t pg_offp = *offp & ~PAGE_MASK;
 
-	sleep_flags = lock_system_sleep();
+	lock_system_sleep();
 
 	data = filp->private_data;
 	if (!data->ready) {
@@ -160,7 +157,7 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 		*offp += res;
 
  Unlock:
-	unlock_system_sleep(sleep_flags);
+	unlock_system_sleep();
 
 	return res;
 }
@@ -168,17 +165,16 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 static ssize_t snapshot_write(struct file *filp, const char __user *buf,
                               size_t count, loff_t *offp)
 {
-	loff_t pg_offp = *offp & ~PAGE_MASK;
 	struct snapshot_data *data;
-	unsigned long sleep_flags;
 	ssize_t res;
+	loff_t pg_offp = *offp & ~PAGE_MASK;
 
 	if (need_wait) {
 		wait_for_device_probe();
 		need_wait = false;
 	}
 
-	sleep_flags = lock_system_sleep();
+	lock_system_sleep();
 
 	data = filp->private_data;
 
@@ -187,7 +183,7 @@ static ssize_t snapshot_write(struct file *filp, const char __user *buf,
 		if (res <= 0)
 			goto unlock;
 	} else {
-		res = PAGE_SIZE;
+		res = PAGE_SIZE - pg_offp;
 	}
 
 	if (!data_of(data->handle)) {
@@ -200,7 +196,7 @@ static ssize_t snapshot_write(struct file *filp, const char __user *buf,
 	if (res > 0)
 		*offp += res;
 unlock:
-	unlock_system_sleep(sleep_flags);
+	unlock_system_sleep();
 
 	return res;
 }

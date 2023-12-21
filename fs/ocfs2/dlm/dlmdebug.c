@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * dlmdebug.c
  *
  * debug functionality for the dlm
@@ -541,7 +543,7 @@ static void *lockres_seq_start(struct seq_file *m, loff_t *pos)
 	struct debug_lockres *dl = m->private;
 	struct dlm_ctxt *dlm = dl->dl_ctxt;
 	struct dlm_lock_resource *oldres = dl->dl_res;
-	struct dlm_lock_resource *res = NULL, *iter;
+	struct dlm_lock_resource *res = NULL;
 	struct list_head *track_list;
 
 	spin_lock(&dlm->track_lock);
@@ -556,11 +558,11 @@ static void *lockres_seq_start(struct seq_file *m, loff_t *pos)
 		}
 	}
 
-	list_for_each_entry(iter, track_list, tracking) {
-		if (&iter->tracking != &dlm->tracking_list) {
-			dlm_lockres_get(iter);
-			res = iter;
-		}
+	list_for_each_entry(res, track_list, tracking) {
+		if (&res->tracking == &dlm->tracking_list)
+			res = NULL;
+		else
+			dlm_lockres_get(res);
 		break;
 	}
 	spin_unlock(&dlm->track_lock);

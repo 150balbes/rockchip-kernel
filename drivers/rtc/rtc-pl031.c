@@ -350,6 +350,13 @@ static int pl031_probe(struct amba_device *adev, const struct amba_id *id)
 		}
 	}
 
+	if (!adev->irq[0]) {
+		/* When there's no interrupt, no point in exposing the alarm */
+		ops->read_alarm = NULL;
+		ops->set_alarm = NULL;
+		ops->alarm_irq_enable = NULL;
+	}
+
 	device_init_wakeup(&adev->dev, true);
 	ldata->rtc = devm_rtc_allocate_device(&adev->dev);
 	if (IS_ERR(ldata->rtc)) {
@@ -357,14 +364,11 @@ static int pl031_probe(struct amba_device *adev, const struct amba_id *id)
 		goto out;
 	}
 
-	if (!adev->irq[0])
-		clear_bit(RTC_FEATURE_ALARM, ldata->rtc->features);
-
 	ldata->rtc->ops = ops;
 	ldata->rtc->range_min = vendor->range_min;
 	ldata->rtc->range_max = vendor->range_max;
 
-	ret = devm_rtc_register_device(ldata->rtc);
+	ret = rtc_register_device(ldata->rtc);
 	if (ret)
 		goto out;
 

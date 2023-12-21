@@ -165,19 +165,16 @@ static int of_platform_serial_setup(struct platform_device *ofdev,
 
 	port->dev = &ofdev->dev;
 	port->rs485_config = serial8250_em485_config;
-	port->rs485_supported = serial8250_em485_supported;
 	up->rs485_start_tx = serial8250_em485_start_tx;
 	up->rs485_stop_tx = serial8250_em485_stop_tx;
 
 	switch (type) {
 	case PORT_RT2880:
-		ret = rt288x_setup(port);
-		if (ret)
-			goto err_unprepare;
+		port->iotype = UPIO_AU;
 		break;
 	}
 
-	if (IS_REACHABLE(CONFIG_SERIAL_8250_FSL) &&
+	if (IS_ENABLED(CONFIG_SERIAL_8250_FSL) &&
 	    (of_device_is_compatible(np, "fsl,ns16550") ||
 	     of_device_is_compatible(np, "fsl,16550-FIFO64"))) {
 		port->handle_irq = fsl8250_handle_irq;
@@ -203,10 +200,6 @@ static int of_platform_serial_probe(struct platform_device *ofdev)
 	unsigned int port_type;
 	u32 tx_threshold;
 	int ret;
-
-	if (IS_ENABLED(CONFIG_SERIAL_8250_BCM7271) &&
-	    of_device_is_compatible(ofdev->dev.of_node, "brcm,bcm7271-uart"))
-		return -ENODEV;
 
 	port_type = (unsigned long)of_device_get_match_data(&ofdev->dev);
 	if (port_type == PORT_UNKNOWN)
@@ -329,14 +322,11 @@ static const struct of_device_id of_platform_serial_table[] = {
 		.data = (void *)PORT_ALTR_16550_F64, },
 	{ .compatible = "altr,16550-FIFO128",
 		.data = (void *)PORT_ALTR_16550_F128, },
-	{ .compatible = "fsl,16550-FIFO64",
-		.data = (void *)PORT_16550A_FSL64, },
 	{ .compatible = "mediatek,mtk-btif",
 		.data = (void *)PORT_MTK_BTIF, },
 	{ .compatible = "mrvl,mmp-uart",
 		.data = (void *)PORT_XSCALE, },
 	{ .compatible = "ti,da830-uart", .data = (void *)PORT_DA830, },
-	{ .compatible = "nuvoton,wpcm450-uart", .data = (void *)PORT_NPCM, },
 	{ .compatible = "nuvoton,npcm750-uart", .data = (void *)PORT_NPCM, },
 	{ /* end of list */ },
 };

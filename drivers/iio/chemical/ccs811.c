@@ -401,9 +401,9 @@ static int ccs811_reset(struct i2c_client *client)
 	return 0;
 }
 
-static int ccs811_probe(struct i2c_client *client)
+static int ccs811_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct iio_dev *indio_dev;
 	struct ccs811_data *data;
 	int ret;
@@ -491,12 +491,13 @@ static int ccs811_probe(struct i2c_client *client)
 		data->drdy_trig = devm_iio_trigger_alloc(&client->dev,
 							 "%s-dev%d",
 							 indio_dev->name,
-							 iio_device_id(indio_dev));
+							 indio_dev->id);
 		if (!data->drdy_trig) {
 			ret = -ENOMEM;
 			goto err_poweroff;
 		}
 
+		data->drdy_trig->dev.parent = &client->dev;
 		data->drdy_trig->ops = &ccs811_trigger_ops;
 		iio_trigger_set_drvdata(data->drdy_trig, indio_dev);
 		ret = iio_trigger_register(data->drdy_trig);
@@ -532,22 +533,18 @@ err_poweroff:
 	return ret;
 }
 
-static void ccs811_remove(struct i2c_client *client)
+static int ccs811_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ccs811_data *data = iio_priv(indio_dev);
-	int ret;
 
 	iio_device_unregister(indio_dev);
 	iio_triggered_buffer_cleanup(indio_dev);
 	if (data->drdy_trig)
 		iio_trigger_unregister(data->drdy_trig);
 
-	ret = i2c_smbus_write_byte_data(client, CCS811_MEAS_MODE,
-					CCS811_MODE_IDLE);
-	if (ret)
-		dev_warn(&client->dev, "Failed to power down device (%pe)\n",
-			 ERR_PTR(ret));
+	return i2c_smbus_write_byte_data(client, CCS811_MEAS_MODE,
+					 CCS811_MODE_IDLE);
 }
 
 static const struct i2c_device_id ccs811_id[] = {

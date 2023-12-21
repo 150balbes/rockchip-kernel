@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2009-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  */
@@ -11,6 +11,7 @@
 
 #include <linux/kref.h>
 #include <linux/netlink.h>
+#include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
 #include <uapi/linux/batadv_packet.h>
@@ -31,6 +32,7 @@ void batadv_gw_node_free(struct batadv_priv *bat_priv);
 void batadv_gw_node_release(struct kref *ref);
 struct batadv_gw_node *
 batadv_gw_get_selected_gw_node(struct batadv_priv *bat_priv);
+int batadv_gw_client_seq_print_text(struct seq_file *seq, void *offset);
 int batadv_gw_dump(struct sk_buff *msg, struct netlink_callback *cb);
 bool batadv_gw_out_of_range(struct batadv_priv *bat_priv, struct sk_buff *skb);
 enum batadv_dhcp_recipient

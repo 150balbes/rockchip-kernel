@@ -6,6 +6,8 @@
 
 #ifndef _QEDE_H_
 #define _QEDE_H_
+#include <linux/compiler.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/netdevice.h>
 #include <linux/interrupt.h>
@@ -27,6 +29,15 @@
 
 #include <net/pkt_cls.h>
 #include <net/tc_act/tc_gact.h>
+
+#define QEDE_MAJOR_VERSION		8
+#define QEDE_MINOR_VERSION		37
+#define QEDE_REVISION_VERSION		0
+#define QEDE_ENGINEERING_VERSION	20
+#define DRV_MODULE_VERSION __stringify(QEDE_MAJOR_VERSION) "."	\
+		__stringify(QEDE_MINOR_VERSION) "."		\
+		__stringify(QEDE_REVISION_VERSION) "."		\
+		__stringify(QEDE_ENGINEERING_VERSION)
 
 #define DRV_MODULE_SYM		qede
 
@@ -157,12 +168,6 @@ struct qede_dump_info {
 	u32 args[QEDE_DUMP_MAX_ARGS];
 };
 
-struct qede_coalesce {
-	bool isvalid;
-	u16 rxc;
-	u16 txc;
-};
-
 struct qede_dev {
 	struct qed_dev			*cdev;
 	struct net_device		*ndev;
@@ -189,7 +194,6 @@ struct qede_dev {
 	((edev)->dev_info.common.dev_type == QED_DEV_TYPE_AH)
 
 	struct qede_fastpath		*fp_array;
-	struct qede_coalesce            *coal_entry;
 	u8				req_num_tx;
 	u8				fp_num_tx;
 	u8				req_num_rx;
@@ -269,10 +273,6 @@ struct qede_dev {
 #define QEDE_ERR_WARN			3
 
 	struct qede_dump_info		dump_info;
-	struct delayed_work		periodic_task;
-	unsigned long			stats_coal_ticks;
-	u32				stats_coal_usecs;
-	spinlock_t			stats_lock; /* lock for vport stats access */
 };
 
 enum QEDE_STATE {
@@ -582,11 +582,6 @@ int qede_add_tc_flower_fltr(struct qede_dev *edev, __be16 proto,
 			    struct flow_cls_offload *f);
 
 void qede_forced_speed_maps_init(void);
-int qede_set_coalesce(struct net_device *dev, struct ethtool_coalesce *coal,
-		      struct kernel_ethtool_coalesce *kernel_coal,
-		      struct netlink_ext_ack *extack);
-int qede_set_per_coalesce(struct net_device *dev, u32 queue,
-			  struct ethtool_coalesce *coal);
 
 #define RX_RING_SIZE_POW	13
 #define RX_RING_SIZE		((u16)BIT(RX_RING_SIZE_POW))

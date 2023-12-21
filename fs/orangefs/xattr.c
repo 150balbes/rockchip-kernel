@@ -526,7 +526,6 @@ out_unlock:
 }
 
 static int orangefs_xattr_set_default(const struct xattr_handler *handler,
-				      struct mnt_idmap *idmap,
 				      struct dentry *unused,
 				      struct inode *inode,
 				      const char *name,
@@ -542,7 +541,8 @@ static int orangefs_xattr_get_default(const struct xattr_handler *handler,
 				      struct inode *inode,
 				      const char *name,
 				      void *buffer,
-				      size_t size)
+				      size_t size,
+				      int flags)
 {
 	return orangefs_inode_getxattr(inode, name, buffer, size);
 
@@ -555,6 +555,8 @@ static const struct xattr_handler orangefs_xattr_default_handler = {
 };
 
 const struct xattr_handler *orangefs_xattr_handlers[] = {
+	&posix_acl_access_xattr_handler,
+	&posix_acl_default_xattr_handler,
 	&orangefs_xattr_default_handler,
 	NULL
 };

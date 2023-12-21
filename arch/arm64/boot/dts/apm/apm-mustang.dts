@@ -22,7 +22,7 @@
 
 	gpio-keys {
 		compatible = "gpio-keys";
-		button {
+		button@1 {
 			label = "POWER";
 			linux,code = <116>;
 			linux,input-type = <0x1>;
@@ -45,36 +45,36 @@
 };
 
 &pcie0clk {
-	status = "okay";
+	status = "ok";
 };
 
 &pcie0 {
-	status = "okay";
+	status = "ok";
 };
 
 &serial0 {
-	status = "okay";
+	status = "ok";
 };
 
 &menet {
-	status = "okay";
+	status = "ok";
 };
 
 &sgenet0 {
-	status = "okay";
+	status = "ok";
 };
 
 &sgenet1 {
-	status = "okay";
+	status = "ok";
 };
 
 &xgenet {
-	status = "okay";
+	status = "ok";
 	rxlos-gpios = <&sbgpio 12 1>;
 };
 
 &mmc0 {
-	status = "okay";
+	status = "ok";
 };
 
 &mdio {

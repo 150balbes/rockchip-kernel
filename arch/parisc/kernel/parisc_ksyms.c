@@ -32,6 +32,7 @@ EXPORT_SYMBOL(__xchg64);
 
 #include <linux/uaccess.h>
 EXPORT_SYMBOL(lclear_user);
+EXPORT_SYMBOL(lstrnlen_user);
 
 #ifndef CONFIG_64BIT
 /* Needed so insmod can set dp value */

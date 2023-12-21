@@ -13,7 +13,6 @@
 
 #include <linux/compiler.h>
 
-struct clk;
 struct device;
 struct ata_port_info;
 struct ahci_host_priv;
@@ -22,12 +21,8 @@ struct scsi_host_template;
 
 int ahci_platform_enable_phys(struct ahci_host_priv *hpriv);
 void ahci_platform_disable_phys(struct ahci_host_priv *hpriv);
-struct clk *ahci_platform_find_clk(struct ahci_host_priv *hpriv,
-				   const char *con_id);
 int ahci_platform_enable_clks(struct ahci_host_priv *hpriv);
 void ahci_platform_disable_clks(struct ahci_host_priv *hpriv);
-int ahci_platform_deassert_rsts(struct ahci_host_priv *hpriv);
-int ahci_platform_assert_rsts(struct ahci_host_priv *hpriv);
 int ahci_platform_enable_regulators(struct ahci_host_priv *hpriv);
 void ahci_platform_disable_regulators(struct ahci_host_priv *hpriv);
 int ahci_platform_enable_resources(struct ahci_host_priv *hpriv);
@@ -37,7 +32,7 @@ struct ahci_host_priv *ahci_platform_get_resources(
 int ahci_platform_init_host(struct platform_device *pdev,
 			    struct ahci_host_priv *hpriv,
 			    const struct ata_port_info *pi_template,
-			    const struct scsi_host_template *sht);
+			    struct scsi_host_template *sht);
 
 void ahci_platform_shutdown(struct platform_device *pdev);
 
@@ -46,7 +41,6 @@ int ahci_platform_resume_host(struct device *dev);
 int ahci_platform_suspend(struct device *dev);
 int ahci_platform_resume(struct device *dev);
 
-#define AHCI_PLATFORM_GET_RESETS	BIT(0)
-#define AHCI_PLATFORM_RST_TRIGGER	BIT(1)
+#define AHCI_PLATFORM_GET_RESETS	0x01
 
 #endif /* _AHCI_PLATFORM_H */

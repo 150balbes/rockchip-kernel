@@ -10,14 +10,14 @@
 #include <linux/slab.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
-#include <linux/idr.h>
 
 #include "xhci.h"
 #include "xhci-dbgcap.h"
 
+static int dbc_tty_init(void);
+static void dbc_tty_exit(void);
+
 static struct tty_driver *dbc_tty_driver;
-static struct idr dbc_tty_minors;
-static DEFINE_MUTEX(dbc_tty_minors_lock);
 
 static inline struct dbc_port *dbc_to_port(struct xhci_dbc *dbc)
 {
@@ -180,14 +180,7 @@ xhci_dbc_free_requests(struct list_head *head)
 
 static int dbc_tty_install(struct tty_driver *driver, struct tty_struct *tty)
 {
-	struct dbc_port		*port;
-
-	mutex_lock(&dbc_tty_minors_lock);
-	port = idr_find(&dbc_tty_minors, tty->index);
-	mutex_unlock(&dbc_tty_minors_lock);
-
-	if (!port)
-		return -ENXIO;
+	struct dbc_port		*port = driver->driver_state;
 
 	tty->driver_data = port;
 
@@ -247,11 +240,11 @@ static void dbc_tty_flush_chars(struct tty_struct *tty)
 	spin_unlock_irqrestore(&port->port_lock, flags);
 }
 
-static unsigned int dbc_tty_write_room(struct tty_struct *tty)
+static int dbc_tty_write_room(struct tty_struct *tty)
 {
 	struct dbc_port		*port = tty->driver_data;
 	unsigned long		flags;
-	unsigned int		room;
+	int			room = 0;
 
 	spin_lock_irqsave(&port->port_lock, flags);
 	room = kfifo_avail(&port->write_fifo);
@@ -260,11 +253,11 @@ static unsigned int dbc_tty_write_room(struct tty_struct *tty)
 	return room;
 }
 
-static unsigned int dbc_tty_chars_in_buffer(struct tty_struct *tty)
+static int dbc_tty_chars_in_buffer(struct tty_struct *tty)
 {
 	struct dbc_port		*port = tty->driver_data;
 	unsigned long		flags;
-	unsigned int		chars;
+	int			chars = 0;
 
 	spin_lock_irqsave(&port->port_lock, flags);
 	chars = kfifo_len(&port->write_fifo);
@@ -416,15 +409,6 @@ static int xhci_dbc_tty_register_device(struct xhci_dbc *dbc)
 
 	xhci_dbc_tty_init_port(dbc, port);
 
-	mutex_lock(&dbc_tty_minors_lock);
-	port->minor = idr_alloc(&dbc_tty_minors, port, 0, 64, GFP_KERNEL);
-	mutex_unlock(&dbc_tty_minors_lock);
-
-	if (port->minor < 0) {
-		ret = port->minor;
-		goto err_idr;
-	}
-
 	ret = kfifo_alloc(&port->write_fifo, DBC_WRITE_BUF_SIZE, GFP_KERNEL);
 	if (ret)
 		goto err_exit_port;
@@ -440,7 +424,7 @@ static int xhci_dbc_tty_register_device(struct xhci_dbc *dbc)
 		goto err_free_requests;
 
 	tty_dev = tty_port_register_device(&port->port,
-					   dbc_tty_driver, port->minor, NULL);
+					   dbc_tty_driver, 0, NULL);
 	if (IS_ERR(tty_dev)) {
 		ret = PTR_ERR(tty_dev);
 		goto err_free_requests;
@@ -456,8 +440,6 @@ err_free_requests:
 err_free_fifo:
 	kfifo_free(&port->write_fifo);
 err_exit_port:
-	idr_remove(&dbc_tty_minors, port->minor);
-err_idr:
 	xhci_dbc_tty_exit_port(port);
 
 	dev_err(dbc->dev, "can't register tty port, err %d\n", ret);
@@ -471,13 +453,9 @@ static void xhci_dbc_tty_unregister_device(struct xhci_dbc *dbc)
 
 	if (!port->registered)
 		return;
-	tty_unregister_device(dbc_tty_driver, port->minor);
+	tty_unregister_device(dbc_tty_driver, 0);
 	xhci_dbc_tty_exit_port(port);
 	port->registered = false;
-
-	mutex_lock(&dbc_tty_minors_lock);
-	idr_remove(&dbc_tty_minors, port->minor);
-	mutex_unlock(&dbc_tty_minors_lock);
 
 	kfifo_free(&port->write_fifo);
 	xhci_dbc_free_requests(&port->read_pool);
@@ -490,35 +468,33 @@ static const struct dbc_driver dbc_driver = {
 	.disconnect		= xhci_dbc_tty_unregister_device,
 };
 
-int xhci_dbc_tty_probe(struct device *dev, void __iomem *base, struct xhci_hcd *xhci)
+int xhci_dbc_tty_probe(struct xhci_hcd *xhci)
 {
-	struct xhci_dbc		*dbc;
+	struct xhci_dbc		*dbc = xhci->dbc;
 	struct dbc_port		*port;
 	int			status;
 
-	if (!dbc_tty_driver)
-		return -ENODEV;
+	/* dbc_tty_init will be called by module init() in the future */
+	status = dbc_tty_init();
+	if (status)
+		return status;
 
 	port = kzalloc(sizeof(*port), GFP_KERNEL);
-	if (!port)
-		return -ENOMEM;
-
-	dbc = xhci_alloc_dbc(dev, base, &dbc_driver);
-
-	if (!dbc) {
+	if (!port) {
 		status = -ENOMEM;
-		goto out2;
+		goto out;
 	}
 
+	dbc->driver = &dbc_driver;
 	dbc->priv = port;
 
-	/* get rid of xhci once this is a real driver binding to a device */
-	xhci->dbc = dbc;
+
+	dbc_tty_driver->driver_state = port;
 
 	return 0;
-out2:
-	kfree(port);
-
+out:
+	/* dbc_tty_exit will be called by module_exit() in the future */
+	dbc_tty_exit();
 	return status;
 }
 
@@ -530,22 +506,22 @@ void xhci_dbc_tty_remove(struct xhci_dbc *dbc)
 {
 	struct dbc_port         *port = dbc_to_port(dbc);
 
-	xhci_dbc_remove(dbc);
+	dbc->driver = NULL;
+	dbc->priv = NULL;
 	kfree(port);
+
+	/* dbc_tty_exit will be called by  module_exit() in the future */
+	dbc_tty_exit();
 }
 
-int dbc_tty_init(void)
+static int dbc_tty_init(void)
 {
 	int		ret;
 
-	idr_init(&dbc_tty_minors);
-
-	dbc_tty_driver = tty_alloc_driver(64, TTY_DRIVER_REAL_RAW |
+	dbc_tty_driver = tty_alloc_driver(1, TTY_DRIVER_REAL_RAW |
 					  TTY_DRIVER_DYNAMIC_DEV);
-	if (IS_ERR(dbc_tty_driver)) {
-		idr_destroy(&dbc_tty_minors);
+	if (IS_ERR(dbc_tty_driver))
 		return PTR_ERR(dbc_tty_driver);
-	}
 
 	dbc_tty_driver->driver_name = "dbc_serial";
 	dbc_tty_driver->name = "ttyDBC";
@@ -563,20 +539,16 @@ int dbc_tty_init(void)
 	ret = tty_register_driver(dbc_tty_driver);
 	if (ret) {
 		pr_err("Can't register dbc tty driver\n");
-		tty_driver_kref_put(dbc_tty_driver);
-		idr_destroy(&dbc_tty_minors);
+		put_tty_driver(dbc_tty_driver);
 	}
-
 	return ret;
 }
 
-void dbc_tty_exit(void)
+static void dbc_tty_exit(void)
 {
 	if (dbc_tty_driver) {
 		tty_unregister_driver(dbc_tty_driver);
-		tty_driver_kref_put(dbc_tty_driver);
+		put_tty_driver(dbc_tty_driver);
 		dbc_tty_driver = NULL;
 	}
-
-	idr_destroy(&dbc_tty_minors);
 }

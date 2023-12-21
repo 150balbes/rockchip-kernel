@@ -19,6 +19,7 @@
 #include <linux/ratelimit.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/string.h>
 #include <linux/time.h>
 #include <linux/types.h>
 
@@ -94,28 +95,34 @@ static void vidtv_psi_update_version_num(struct vidtv_psi_table_header *h)
 static u16 vidtv_psi_get_sec_len(struct vidtv_psi_table_header *h)
 {
 	u16 mask;
+	u16 ret;
 
 	mask = GENMASK(11, 0);
 
-	return be16_to_cpu(h->bitfield) & mask;
+	ret = be16_to_cpu(h->bitfield) & mask;
+	return ret;
 }
 
 u16 vidtv_psi_get_pat_program_pid(struct vidtv_psi_table_pat_program *p)
 {
 	u16 mask;
+	u16 ret;
 
 	mask = GENMASK(12, 0);
 
-	return be16_to_cpu(p->bitfield) & mask;
+	ret = be16_to_cpu(p->bitfield) & mask;
+	return ret;
 }
 
 u16 vidtv_psi_pmt_stream_get_elem_pid(struct vidtv_psi_table_pmt_stream *s)
 {
 	u16 mask;
+	u16 ret;
 
 	mask = GENMASK(12, 0);
 
-	return be16_to_cpu(s->bitfield) & mask;
+	ret = be16_to_cpu(s->bitfield) & mask;
+	return ret;
 }
 
 static void vidtv_psi_set_desc_loop_len(__be16 *bitfield, u16 new_len,
@@ -499,9 +506,10 @@ struct vidtv_psi_desc *vidtv_psi_desc_clone(struct vidtv_psi_desc *desc)
 
 		case REGISTRATION_DESCRIPTOR:
 		default:
-			curr = kmemdup(desc, sizeof(*desc) + desc->length, GFP_KERNEL);
+			curr = kzalloc(sizeof(*desc) + desc->length, GFP_KERNEL);
 			if (!curr)
 				return NULL;
+			memcpy(curr, desc, sizeof(*desc) + desc->length);
 		}
 
 		if (!curr)
@@ -1940,7 +1948,7 @@ u32 vidtv_psi_eit_write_into(struct vidtv_psi_eit_write_args *args)
 struct vidtv_psi_table_eit_event
 *vidtv_psi_eit_event_init(struct vidtv_psi_table_eit_event *head, u16 event_id)
 {
-	static const u8 DURATION[] = {0x23, 0x59, 0x59}; /* BCD encoded */
+	const u8 DURATION[] = {0x23, 0x59, 0x59}; /* BCD encoded */
 	struct vidtv_psi_table_eit_event *e;
 	struct timespec64 ts;
 	struct tm time;

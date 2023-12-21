@@ -10,7 +10,8 @@
 
 static int
 trusted_get(const struct xattr_handler *handler, struct dentry *unused,
-	    struct inode *inode, const char *name, void *buffer, size_t size)
+	    struct inode *inode, const char *name, void *buffer, size_t size,
+	    int flags)
 {
 	if (!capable(CAP_SYS_ADMIN) || IS_PRIVATE(inode))
 		return -EPERM;
@@ -20,8 +21,7 @@ trusted_get(const struct xattr_handler *handler, struct dentry *unused,
 }
 
 static int
-trusted_set(const struct xattr_handler *handler,
-	    struct mnt_idmap *idmap, struct dentry *unused,
+trusted_set(const struct xattr_handler *handler, struct dentry *unused,
 	    struct inode *inode, const char *name, const void *buffer,
 	    size_t size, int flags)
 {

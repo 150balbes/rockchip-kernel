@@ -11,8 +11,6 @@
  *   interface.
  */
 
-#include <linux/gpio/consumer.h>
-#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -32,8 +30,6 @@ struct tusb6010_glue {
 	struct device		*dev;
 	struct platform_device	*musb;
 	struct platform_device	*phy;
-	struct gpio_desc	*enable;
-	struct gpio_desc	*intpin;
 };
 
 static void tusb_musb_set_vbus(struct musb *musb, int is_on);
@@ -472,7 +468,6 @@ static void musb_do_idle(struct timer_list *t)
 		fallthrough;
 	case OTG_STATE_A_IDLE:
 		tusb_musb_set_vbus(musb, 0);
-		break;
 	default:
 		break;
 	}
@@ -499,7 +494,7 @@ done:
 }
 
 /*
- * Maybe put TUSB6010 into idle mode depending on USB link status,
+ * Maybe put TUSB6010 into idle mode mode depending on USB link status,
  * like "disconnected" or "suspended".  We'll be woken out of it by
  * connect, resume, or disconnect.
  *
@@ -1025,29 +1020,16 @@ static void tusb_setup_cpu_interface(struct musb *musb)
 
 static int tusb_musb_start(struct musb *musb)
 {
-	struct tusb6010_glue *glue = dev_get_drvdata(musb->controller->parent);
 	void __iomem	*tbase = musb->ctrl_base;
+	int		ret = 0;
 	unsigned long	flags;
 	u32		reg;
-	int		i;
 
-	/*
-	 * Enable or disable power to TUSB6010. When enabling, turn on 3.3 V and
-	 * 1.5 V voltage regulators of PM companion chip. Companion chip will then
-	 * provide then PGOOD signal to TUSB6010 which will release it from reset.
-	 */
-	gpiod_set_value(glue->enable, 1);
-	msleep(1);
-
-	/* Wait for 100ms until TUSB6010 pulls INT pin down */
-	i = 100;
-	while (i && gpiod_get_value(glue->intpin)) {
-		msleep(1);
-		i--;
-	}
-	if (!i) {
-		pr_err("tusb: Powerup respones failed\n");
-		return -ENODEV;
+	if (musb->board_set_power)
+		ret = musb->board_set_power(1);
+	if (ret != 0) {
+		printk(KERN_ERR "tusb: Cannot enable TUSB6010\n");
+		return ret;
 	}
 
 	spin_lock_irqsave(&musb->lock, flags);
@@ -1100,8 +1082,8 @@ static int tusb_musb_start(struct musb *musb)
 err:
 	spin_unlock_irqrestore(&musb->lock, flags);
 
-	gpiod_set_value(glue->enable, 0);
-	msleep(10);
+	if (musb->board_set_power)
+		musb->board_set_power(0);
 
 	return -ENODEV;
 }
@@ -1175,13 +1157,11 @@ done:
 
 static int tusb_musb_exit(struct musb *musb)
 {
-	struct tusb6010_glue *glue = dev_get_drvdata(musb->controller->parent);
-
 	del_timer_sync(&musb->dev_timer);
 	the_musb = NULL;
 
-	gpiod_set_value(glue->enable, 0);
-	msleep(10);
+	if (musb->board_set_power)
+		musb->board_set_power(0);
 
 	iounmap(musb->sync_va);
 
@@ -1237,15 +1217,6 @@ static int tusb_probe(struct platform_device *pdev)
 
 	glue->dev			= &pdev->dev;
 
-	glue->enable = devm_gpiod_get(glue->dev, "enable", GPIOD_OUT_LOW);
-	if (IS_ERR(glue->enable))
-		return dev_err_probe(glue->dev, PTR_ERR(glue->enable),
-				     "could not obtain power on/off GPIO\n");
-	glue->intpin = devm_gpiod_get(glue->dev, "int", GPIOD_IN);
-	if (IS_ERR(glue->intpin))
-		return dev_err_probe(glue->dev, PTR_ERR(glue->intpin),
-				     "could not obtain INT GPIO\n");
-
 	pdata->platform_ops		= &tusb_ops;
 
 	usb_phy_generic_register();
@@ -1264,7 +1235,10 @@ static int tusb_probe(struct platform_device *pdev)
 	musb_resources[1].end = pdev->resource[1].end;
 	musb_resources[1].flags = pdev->resource[1].flags;
 
-	musb_resources[2] = DEFINE_RES_IRQ_NAMED(gpiod_to_irq(glue->intpin), "mc");
+	musb_resources[2].name = pdev->resource[2].name;
+	musb_resources[2].start = pdev->resource[2].start;
+	musb_resources[2].end = pdev->resource[2].end;
+	musb_resources[2].flags = pdev->resource[2].flags;
 
 	pinfo = tusb_dev_info;
 	pinfo.parent = &pdev->dev;
@@ -1283,17 +1257,19 @@ static int tusb_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void tusb_remove(struct platform_device *pdev)
+static int tusb_remove(struct platform_device *pdev)
 {
 	struct tusb6010_glue		*glue = platform_get_drvdata(pdev);
 
 	platform_device_unregister(glue->musb);
 	usb_phy_generic_unregister(glue->phy);
+
+	return 0;
 }
 
 static struct platform_driver tusb_driver = {
 	.probe		= tusb_probe,
-	.remove_new	= tusb_remove,
+	.remove		= tusb_remove,
 	.driver		= {
 		.name	= "musb-tusb",
 	},

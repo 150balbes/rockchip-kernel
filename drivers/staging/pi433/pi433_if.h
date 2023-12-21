@@ -1,15 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
+ * include/linux/TODO
+ *
  * userspace interface for pi433 radio module
  *
  * Pi433 is a 433MHz radio module for the Raspberry Pi.
- * It is based on the HopeRf Module RFM69CW. Therefore, inside of this
- * driver you'll find an abstraction of the rf69 chip.
+ * It is based on the HopeRf Module RFM69CW. Therefore inside of this
+ * driver, you'll find an abstraction of the rf69 chip.
  *
- * If needed this driver could also be extended to support other
- * devices based on HopeRf rf69 as well as HopeRf modules with a similar
- * interface such as RFM69HCW, RFM12, RFM95 and so on.
+ * If needed, this driver could be extended, to also support other
+ * devices, basing on HopeRfs rf69.
  *
+ * The driver can also be extended, to support other modules of
+ * HopeRf with a similar interace - e. g. RFM69HCW, RFM12, RFM95, ...
  * Copyright (C) 2016 Wolf-Entwicklungen
  *	Marcus Wolf <linux@wolf-entwicklungen.de>
  */
@@ -30,8 +33,8 @@ enum option_on_off {
 /* IOCTL structs and commands */
 
 /**
- * struct pi433_tx_cfg
- * describes the configuration of the radio module for sending data
+ * struct pi433_tx_config
+ * describes the configuration of the radio module for sending
  * @frequency:
  * @bit_rate:
  * @modulation:
@@ -43,7 +46,7 @@ enum option_on_off {
  * @repetitions:
  *
  * ATTENTION:
- * If the contents of 'pi433_tx_cfg' ever change
+ * If the contents of 'pi433_tx_config' ever change
  * incompatibly, then the ioctl number (see define below) must change.
  *
  * NOTE: struct layout is the same in 64bit and 32bit userspace.
@@ -78,8 +81,8 @@ struct pi433_tx_cfg {
 };
 
 /**
- * struct pi433_rx_cfg
- * describes the configuration of the radio module for receiving data
+ * struct pi433_rx_config
+ * describes the configuration of the radio module for sending
  * @frequency:
  * @bit_rate:
  * @modulation:
@@ -91,7 +94,7 @@ struct pi433_tx_cfg {
  * @repetitions:
  *
  * ATTENTION:
- * If the contents of 'pi433_rx_cfg' ever change
+ * If the contents of 'pi433_rx_config' ever change
  * incompatibly, then the ioctl number (see define below) must change
  *
  * NOTE: struct layout is the same in 64bit and 32bit userspace.

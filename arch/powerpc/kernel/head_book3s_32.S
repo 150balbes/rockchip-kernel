@@ -18,8 +18,6 @@
 
 #include <linux/init.h>
 #include <linux/pgtable.h>
-#include <linux/linkage.h>
-
 #include <asm/reg.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -33,7 +31,6 @@
 #include <asm/kvm_book3s_asm.h>
 #include <asm/export.h>
 #include <asm/feature-fixups.h>
-#include <asm/interrupt.h>
 
 #include "head_32.h"
 
@@ -52,13 +49,16 @@
 	mtspr	SPRN_DBAT##n##L,RB
 
 	__HEAD
-_GLOBAL(_stext);
+	.stabs	"arch/powerpc/kernel/",N_SO,0,0,0f
+	.stabs	"head_book3s_32.S",N_SO,0,0,0f
+0:
+_ENTRY(_stext);
 
 /*
  * _start is defined this way because the XCOFF loader in the OpenFirmware
  * on the powermac expects the entry point to be a procedure descriptor.
  */
-_GLOBAL(_start);
+_ENTRY(_start);
 	/*
 	 * These are here for legacy reasons, the kernel used to
 	 * need to look like a coff function entry for the pmac
@@ -155,8 +155,10 @@ __after_mmu_off:
 
 	bl	initial_bats
 	bl	load_segment_registers
+BEGIN_MMU_FTR_SECTION
 	bl	reloc_offset
 	bl	early_hash_table
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
 #if defined(CONFIG_BOOTX_TEXT)
 	bl	setup_disp_bat
 #endif
@@ -205,7 +207,7 @@ turn_on_mmu:
 	lis	r0,start_here@h
 	ori	r0,r0,start_here@l
 	mtspr	SPRN_SRR0,r0
-	rfi				/* enables MMU */
+	RFI				/* enables MMU */
 
 /*
  * We need __secondary_hold as a place to hold the other cpus on
@@ -238,8 +240,8 @@ __secondary_hold_acknowledge:
 
 /* System reset */
 /* core99 pmac starts the seconary here by changing the vector, and
-   putting it back to what it was (unknown_async_exception) when done.  */
-	EXCEPTION(INTERRUPT_SYSTEM_RESET, Reset, unknown_async_exception)
+   putting it back to what it was (unknown_exception) when done.  */
+	EXCEPTION(0x100, Reset, unknown_exception, EXC_XFER_STD)
 
 /* Machine check */
 /*
@@ -255,62 +257,94 @@ __secondary_hold_acknowledge:
  * pointer when we take an exception from supervisor mode.)
  *	-- paulus.
  */
-	START_EXCEPTION(INTERRUPT_MACHINE_CHECK, MachineCheck)
+	. = 0x200
+	DO_KVM  0x200
+MachineCheck:
 	EXCEPTION_PROLOG_0
 #ifdef CONFIG_PPC_CHRP
-	mtspr	SPRN_SPRG_SCRATCH2,r1
+#ifdef CONFIG_VMAP_STACK
+	mr	r11, r1
 	mfspr	r1, SPRN_SPRG_THREAD
 	lwz	r1, RTAS_SP(r1)
 	cmpwi	cr1, r1, 0
 	bne	cr1, 7f
-	mfspr	r1, SPRN_SPRG_SCRATCH2
-#endif /* CONFIG_PPC_CHRP */
-	EXCEPTION_PROLOG_1
-7:	EXCEPTION_PROLOG_2 0x200 MachineCheck
-#ifdef CONFIG_PPC_CHRP
-	beq	cr1, 1f
-	twi	31, 0, 0
+	mr	r1, r11
+#else
+	mfspr	r11, SPRN_SPRG_THREAD
+	lwz	r11, RTAS_SP(r11)
+	cmpwi	cr1, r11, 0
+	bne	cr1, 7f
 #endif
-1:	prepare_transfer_to_handler
-	bl	machine_check_exception
-	b	interrupt_return
+#endif /* CONFIG_PPC_CHRP */
+	EXCEPTION_PROLOG_1 for_rtas=1
+7:	EXCEPTION_PROLOG_2
+	addi	r3,r1,STACK_FRAME_OVERHEAD
+#ifdef CONFIG_PPC_CHRP
+	beq	cr1, machine_check_tramp
+	twi	31, 0, 0
+#else
+	b	machine_check_tramp
+#endif
 
 /* Data access exception. */
-	START_EXCEPTION(INTERRUPT_DATA_STORAGE, DataAccess)
-#ifdef CONFIG_PPC_BOOK3S_604
-BEGIN_MMU_FTR_SECTION
-	mtspr	SPRN_SPRG_SCRATCH2,r10
+	. = 0x300
+	DO_KVM  0x300
+DataAccess:
+#ifdef CONFIG_VMAP_STACK
+	mtspr	SPRN_SPRG_SCRATCH0,r10
 	mfspr	r10, SPRN_SPRG_THREAD
+BEGIN_MMU_FTR_SECTION
 	stw	r11, THR11(r10)
 	mfspr	r10, SPRN_DSISR
 	mfcr	r11
+#ifdef CONFIG_PPC_KUAP
+	andis.	r10, r10, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH | DSISR_PROTFAULT)@h
+#else
 	andis.	r10, r10, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH)@h
+#endif
 	mfspr	r10, SPRN_SPRG_THREAD
 	beq	hash_page_dsi
 .Lhash_page_dsi_cont:
 	mtcr	r11
 	lwz	r11, THR11(r10)
-	mfspr	r10, SPRN_SPRG_SCRATCH2
-MMU_FTR_SECTION_ELSE
-	b	1f
-ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_HPTE_TABLE)
-#endif
-1:	EXCEPTION_PROLOG_0 handle_dar_dsisr=1
-	EXCEPTION_PROLOG_1
-	EXCEPTION_PROLOG_2 INTERRUPT_DATA_STORAGE DataAccess handle_dar_dsisr=1
-	prepare_transfer_to_handler
-	lwz	r5, _DSISR(r1)
-	andis.	r0, r5, DSISR_DABRMATCH@h
-	bne-	1f
-	bl	do_page_fault
-	b	interrupt_return
-1:	bl	do_break
-	REST_NVGPRS(r1)
-	b	interrupt_return
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
+	mtspr	SPRN_SPRG_SCRATCH1,r11
+	mfspr	r11, SPRN_DAR
+	stw	r11, DAR(r10)
+	mfspr	r11, SPRN_DSISR
+	stw	r11, DSISR(r10)
+	mfspr	r11, SPRN_SRR0
+	stw	r11, SRR0(r10)
+	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
+	stw	r11, SRR1(r10)
+	mfcr	r10
+	andi.	r11, r11, MSR_PR
 
+	EXCEPTION_PROLOG_1
+	b	handle_page_fault_tramp_1
+#else	/* CONFIG_VMAP_STACK */
+	EXCEPTION_PROLOG handle_dar_dsisr=1
+	get_and_save_dar_dsisr_on_stack	r4, r5, r11
+BEGIN_MMU_FTR_SECTION
+#ifdef CONFIG_PPC_KUAP
+	andis.	r0, r5, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH | DSISR_PROTFAULT)@h
+#else
+	andis.	r0, r5, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH)@h
+#endif
+	bne	handle_page_fault_tramp_2	/* if not, try to put a PTE */
+	rlwinm	r3, r5, 32 - 15, 21, 21		/* DSISR_STORE -> _PAGE_RW */
+	bl	hash_page
+	b	handle_page_fault_tramp_1
+FTR_SECTION_ELSE
+	b	handle_page_fault_tramp_2
+ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_HPTE_TABLE)
+#endif	/* CONFIG_VMAP_STACK */
 
 /* Instruction access exception. */
-	START_EXCEPTION(INTERRUPT_INST_STORAGE, InstructionAccess)
+	. = 0x400
+	DO_KVM  0x400
+InstructionAccess:
+#ifdef CONFIG_VMAP_STACK
 	mtspr	SPRN_SPRG_SCRATCH0,r10
 	mtspr	SPRN_SPRG_SCRATCH1,r11
 	mfspr	r10, SPRN_SPRG_THREAD
@@ -319,47 +353,50 @@ ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_HPTE_TABLE)
 	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
 	stw	r11, SRR1(r10)
 	mfcr	r10
-#ifdef CONFIG_PPC_BOOK3S_604
 BEGIN_MMU_FTR_SECTION
 	andis.	r11, r11, SRR1_ISI_NOPT@h	/* no pte found? */
 	bne	hash_page_isi
 .Lhash_page_isi_cont:
 	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
-#endif
 	andi.	r11, r11, MSR_PR
 
 	EXCEPTION_PROLOG_1
-	EXCEPTION_PROLOG_2 INTERRUPT_INST_STORAGE InstructionAccess
+	EXCEPTION_PROLOG_2
+#else	/* CONFIG_VMAP_STACK */
+	EXCEPTION_PROLOG
+	andis.	r0,r9,SRR1_ISI_NOPT@h	/* no pte found? */
+	beq	1f			/* if so, try to put a PTE */
+	li	r3,0			/* into the hash table */
+	mr	r4,r12			/* SRR0 is fault address */
+BEGIN_MMU_FTR_SECTION
+	bl	hash_page
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
+#endif	/* CONFIG_VMAP_STACK */
+1:	mr	r4,r12
 	andis.	r5,r9,DSISR_SRR1_MATCH_32S@h /* Filter relevant SRR1 bits */
-	stw	r5, _DSISR(r11)
-	stw	r12, _DAR(r11)
-	prepare_transfer_to_handler
-	bl	do_page_fault
-	b	interrupt_return
+	stw	r4, _DAR(r11)
+	EXC_XFER_LITE(0x400, handle_page_fault)
 
 /* External interrupt */
-	EXCEPTION(INTERRUPT_EXTERNAL, HardwareInterrupt, do_IRQ)
+	EXCEPTION(0x500, HardwareInterrupt, do_IRQ, EXC_XFER_LITE)
 
 /* Alignment exception */
-	START_EXCEPTION(INTERRUPT_ALIGNMENT, Alignment)
-	EXCEPTION_PROLOG INTERRUPT_ALIGNMENT Alignment handle_dar_dsisr=1
-	prepare_transfer_to_handler
-	bl	alignment_exception
-	REST_NVGPRS(r1)
-	b	interrupt_return
+	. = 0x600
+	DO_KVM  0x600
+Alignment:
+	EXCEPTION_PROLOG handle_dar_dsisr=1
+	save_dar_dsisr_on_stack r4, r5, r11
+	addi	r3,r1,STACK_FRAME_OVERHEAD
+	b	alignment_exception_tramp
 
 /* Program check exception */
-	START_EXCEPTION(INTERRUPT_PROGRAM, ProgramCheck)
-	EXCEPTION_PROLOG INTERRUPT_PROGRAM ProgramCheck
-	prepare_transfer_to_handler
-	bl	program_check_exception
-	REST_NVGPRS(r1)
-	b	interrupt_return
+	EXCEPTION(0x700, ProgramCheck, program_check_exception, EXC_XFER_STD)
 
 /* Floating-point unavailable */
-	START_EXCEPTION(0x800, FPUnavailable)
-#ifdef CONFIG_PPC_FPU
+	. = 0x800
+	DO_KVM  0x800
+FPUnavailable:
 BEGIN_FTR_SECTION
 /*
  * Certain Freescale cores don't have a FPU and treat fp instructions
@@ -367,29 +404,27 @@ BEGIN_FTR_SECTION
  */
 	b 	ProgramCheck
 END_FTR_SECTION_IFSET(CPU_FTR_FPU_UNAVAILABLE)
-	EXCEPTION_PROLOG INTERRUPT_FP_UNAVAIL FPUnavailable
+	EXCEPTION_PROLOG
 	beq	1f
 	bl	load_up_fpu		/* if from user, just load it up */
 	b	fast_exception_return
-1:	prepare_transfer_to_handler
-	bl	kernel_fp_unavailable_exception
-	b	interrupt_return
-#else
-	b 	ProgramCheck
-#endif
+1:	addi	r3,r1,STACK_FRAME_OVERHEAD
+	EXC_XFER_LITE(0x800, kernel_fp_unavailable_exception)
 
 /* Decrementer */
-	EXCEPTION(INTERRUPT_DECREMENTER, Decrementer, timer_interrupt)
+	EXCEPTION(0x900, Decrementer, timer_interrupt, EXC_XFER_LITE)
 
-	EXCEPTION(0xa00, Trap_0a, unknown_exception)
-	EXCEPTION(0xb00, Trap_0b, unknown_exception)
+	EXCEPTION(0xa00, Trap_0a, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0xb00, Trap_0b, unknown_exception, EXC_XFER_STD)
 
 /* System call */
-	START_EXCEPTION(INTERRUPT_SYSCALL, SystemCall)
-	SYSCALL_ENTRY	INTERRUPT_SYSCALL
+	. = 0xc00
+	DO_KVM  0xc00
+SystemCall:
+	SYSCALL_ENTRY	0xc00
 
-	EXCEPTION(INTERRUPT_TRACE, SingleStep, single_step_exception)
-	EXCEPTION(0xe00, Trap_0e, unknown_exception)
+	EXCEPTION(0xd00, SingleStep, single_step_exception, EXC_XFER_STD)
+	EXCEPTION(0xe00, Trap_0e, unknown_exception, EXC_XFER_STD)
 
 /*
  * The Altivec unavailable trap is at 0x0f20.  Foo.
@@ -399,18 +434,19 @@ END_FTR_SECTION_IFSET(CPU_FTR_FPU_UNAVAILABLE)
  * non-altivec kernel running on a machine with altivec just
  * by executing an altivec instruction.
  */
-	START_EXCEPTION(INTERRUPT_PERFMON, PerformanceMonitorTrap)
+	. = 0xf00
+	DO_KVM  0xf00
 	b	PerformanceMonitor
 
-	START_EXCEPTION(INTERRUPT_ALTIVEC_UNAVAIL, AltiVecUnavailableTrap)
+	. = 0xf20
+	DO_KVM  0xf20
 	b	AltiVecUnavailable
 
-	__HEAD
 /*
  * Handle TLB miss for instruction on 603/603e.
  * Note: we get an alternate set of r0 - r3 to use automatically.
  */
-	. = INTERRUPT_INST_TLB_MISS_603
+	. = 0x1000
 InstructionTLBMiss:
 /*
  * r0:	scratch
@@ -420,14 +456,13 @@ InstructionTLBMiss:
  */
 	/* Get PTE (linux-style) and check access */
 	mfspr	r3,SPRN_IMISS
-#ifdef CONFIG_MODULES
+#if defined(CONFIG_MODULES) || defined(CONFIG_DEBUG_PAGEALLOC)
 	lis	r1, TASK_SIZE@h		/* check if kernel address */
 	cmplw	0,r1,r3
 #endif
-	mfspr	r2, SPRN_SDR1
+	mfspr	r2, SPRN_SPRG_PGDIR
 	li	r1,_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_EXEC | _PAGE_USER
-	rlwinm	r2, r2, 28, 0xfffff000
-#ifdef CONFIG_MODULES
+#if defined(CONFIG_MODULES) || defined(CONFIG_DEBUG_PAGEALLOC)
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
 	li	r1,_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_EXEC
@@ -476,7 +511,7 @@ InstructionAddressInvalid:
 /*
  * Handle TLB miss for DATA Load operation on 603/603e
  */
-	. = INTERRUPT_DATA_LOAD_TLB_MISS_603
+	. = 0x1100
 DataLoadTLBMiss:
 /*
  * r0:	scratch
@@ -488,9 +523,8 @@ DataLoadTLBMiss:
 	mfspr	r3,SPRN_DMISS
 	lis	r1, TASK_SIZE@h		/* check if kernel address */
 	cmplw	0,r1,r3
-	mfspr	r2, SPRN_SDR1
+	mfspr	r2, SPRN_SPRG_PGDIR
 	li	r1, _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_USER
-	rlwinm	r2, r2, 28, 0xfffff000
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
 	li	r1, _PAGE_PRESENT | _PAGE_ACCESSED
@@ -503,18 +537,22 @@ DataLoadTLBMiss:
 	lwz	r0,0(r2)		/* get linux-style pte */
 	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	DataAddressInvalid	/* return if access not permitted */
+	/*
+	 * NOTE! We are assuming this is not an SMP system, otherwise
+	 * we would need to update the pte atomically with lwarx/stwcx.
+	 */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
 	rlwinm	r1,r0,32-9,30,30	/* _PAGE_RW -> PP msb */
 	rlwimi	r0,r0,32-1,30,30	/* _PAGE_USER -> PP msb */
-	rlwimi	r1,r0,32-3,24,24	/* _PAGE_RW -> _PAGE_DIRTY */
 	rlwimi	r0,r0,32-1,31,31	/* _PAGE_USER -> PP lsb */
-	xori	r1,r1,_PAGE_DIRTY	/* clear dirty when not rw */
 	ori	r1,r1,0xe04		/* clear out reserved bits */
 	andc	r1,r0,r1		/* PP = user? rw? 1: 3: 0 */
 BEGIN_FTR_SECTION
 	rlwinm	r1,r1,0,~_PAGE_COHERENT	/* clear M (coherence not required) */
 END_FTR_SECTION_IFCLR(CPU_FTR_NEED_COHERENT)
 	mtspr	SPRN_RPA,r1
+	mfspr	r2,SPRN_SRR1		/* Need to restore CR0 */
+	mtcrf	0x80,r2
 BEGIN_MMU_FTR_SECTION
 	li	r0,1
 	mfspr	r1,SPRN_SPRG_603_LRU
@@ -526,15 +564,9 @@ BEGIN_MMU_FTR_SECTION
 	mfspr	r2,SPRN_SRR1
 	rlwimi	r2,r0,31-14,14,14
 	mtspr   SPRN_SRR1,r2
-	mtcrf	0x80,r2
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
 	tlbld	r3
 	rfi
-MMU_FTR_SECTION_ELSE
-	mfspr	r2,SPRN_SRR1		/* Need to restore CR0 */
-	mtcrf	0x80,r2
-	tlbld	r3
-	rfi
-ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
 DataAddressInvalid:
 	mfspr	r3,SPRN_SRR1
 	rlwinm	r1,r3,9,6,6	/* Get load/store bit */
@@ -556,7 +588,7 @@ DataAddressInvalid:
 /*
  * Handle TLB miss for DATA Store on 603/603e
  */
-	. = INTERRUPT_DATA_STORE_TLB_MISS_603
+	. = 0x1200
 DataStoreTLBMiss:
 /*
  * r0:	scratch
@@ -568,9 +600,8 @@ DataStoreTLBMiss:
 	mfspr	r3,SPRN_DMISS
 	lis	r1, TASK_SIZE@h		/* check if kernel address */
 	cmplw	0,r1,r3
-	mfspr	r2, SPRN_SDR1
+	mfspr	r2, SPRN_SPRG_PGDIR
 	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_USER
-	rlwinm	r2, r2, 28, 0xfffff000
 	bgt-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
 	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED
@@ -583,6 +614,10 @@ DataStoreTLBMiss:
 	lwz	r0,0(r2)		/* get linux-style pte */
 	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	DataAddressInvalid	/* return if access not permitted */
+	/*
+	 * NOTE! We are assuming this is not an SMP system, otherwise
+	 * we would need to update the pte atomically with lwarx/stwcx.
+	 */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
 	rlwimi	r0,r0,32-2,31,31	/* _PAGE_USER -> PP lsb */
 	li	r1,0xe06		/* clear out reserved bits & PP msb */
@@ -604,58 +639,67 @@ BEGIN_MMU_FTR_SECTION
 	mfspr	r2,SPRN_SRR1
 	rlwimi	r2,r0,31-14,14,14
 	mtspr   SPRN_SRR1,r2
-	mtcrf	0x80,r2
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
 	tlbld	r3
 	rfi
-MMU_FTR_SECTION_ELSE
-	mfspr	r2,SPRN_SRR1		/* Need to restore CR0 */
-	mtcrf	0x80,r2
-	tlbld	r3
-	rfi
-ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
 
 #ifndef CONFIG_ALTIVEC
 #define altivec_assist_exception	unknown_exception
 #endif
 
 #ifndef CONFIG_TAU_INT
-#define TAUException	unknown_async_exception
+#define TAUException	unknown_exception
 #endif
 
-	EXCEPTION(0x1300, Trap_13, instruction_breakpoint_exception)
-	EXCEPTION(0x1400, SMI, SMIException)
-	EXCEPTION(0x1500, Trap_15, unknown_exception)
-	EXCEPTION(0x1600, Trap_16, altivec_assist_exception)
-	EXCEPTION(0x1700, Trap_17, TAUException)
-	EXCEPTION(0x1800, Trap_18, unknown_exception)
-	EXCEPTION(0x1900, Trap_19, unknown_exception)
-	EXCEPTION(0x1a00, Trap_1a, unknown_exception)
-	EXCEPTION(0x1b00, Trap_1b, unknown_exception)
-	EXCEPTION(0x1c00, Trap_1c, unknown_exception)
-	EXCEPTION(0x1d00, Trap_1d, unknown_exception)
-	EXCEPTION(0x1e00, Trap_1e, unknown_exception)
-	EXCEPTION(0x1f00, Trap_1f, unknown_exception)
-	EXCEPTION(0x2000, RunMode, RunModeException)
-	EXCEPTION(0x2100, Trap_21, unknown_exception)
-	EXCEPTION(0x2200, Trap_22, unknown_exception)
-	EXCEPTION(0x2300, Trap_23, unknown_exception)
-	EXCEPTION(0x2400, Trap_24, unknown_exception)
-	EXCEPTION(0x2500, Trap_25, unknown_exception)
-	EXCEPTION(0x2600, Trap_26, unknown_exception)
-	EXCEPTION(0x2700, Trap_27, unknown_exception)
-	EXCEPTION(0x2800, Trap_28, unknown_exception)
-	EXCEPTION(0x2900, Trap_29, unknown_exception)
-	EXCEPTION(0x2a00, Trap_2a, unknown_exception)
-	EXCEPTION(0x2b00, Trap_2b, unknown_exception)
-	EXCEPTION(0x2c00, Trap_2c, unknown_exception)
-	EXCEPTION(0x2d00, Trap_2d, unknown_exception)
-	EXCEPTION(0x2e00, Trap_2e, unknown_exception)
-	EXCEPTION(0x2f00, Trap_2f, unknown_exception)
+	EXCEPTION(0x1300, Trap_13, instruction_breakpoint_exception, EXC_XFER_STD)
+	EXCEPTION(0x1400, SMI, SMIException, EXC_XFER_STD)
+	EXCEPTION(0x1500, Trap_15, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1600, Trap_16, altivec_assist_exception, EXC_XFER_STD)
+	EXCEPTION(0x1700, Trap_17, TAUException, EXC_XFER_STD)
+	EXCEPTION(0x1800, Trap_18, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1900, Trap_19, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1a00, Trap_1a, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1b00, Trap_1b, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1c00, Trap_1c, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1d00, Trap_1d, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1e00, Trap_1e, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x1f00, Trap_1f, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2000, RunMode, RunModeException, EXC_XFER_STD)
+	EXCEPTION(0x2100, Trap_21, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2200, Trap_22, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2300, Trap_23, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2400, Trap_24, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2500, Trap_25, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2600, Trap_26, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2700, Trap_27, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2800, Trap_28, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2900, Trap_29, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2a00, Trap_2a, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2b00, Trap_2b, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2c00, Trap_2c, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2d00, Trap_2d, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2e00, Trap_2e, unknown_exception, EXC_XFER_STD)
+	EXCEPTION(0x2f00, Trap_2f, unknown_exception, EXC_XFER_STD)
 
-	__HEAD
 	. = 0x3000
 
-#ifdef CONFIG_PPC_BOOK3S_604
+machine_check_tramp:
+	EXC_XFER_STD(0x200, machine_check_exception)
+
+alignment_exception_tramp:
+	EXC_XFER_STD(0x600, alignment_exception)
+
+handle_page_fault_tramp_1:
+#ifdef CONFIG_VMAP_STACK
+	EXCEPTION_PROLOG_2 handle_dar_dsisr=1
+#endif
+	lwz	r4, _DAR(r11)
+	lwz	r5, _DSISR(r11)
+	/* fall through */
+handle_page_fault_tramp_2:
+	EXC_XFER_LITE(0x300, handle_page_fault)
+
+#ifdef CONFIG_VMAP_STACK
 .macro save_regs_thread		thread
 	stw	r0, THR0(\thread)
 	stw	r3, THR3(\thread)
@@ -719,46 +763,43 @@ fast_hash_page_return:
 	/* DSI */
 	mtcr	r11
 	lwz	r11, THR11(r10)
-	mfspr	r10, SPRN_SPRG_SCRATCH2
-	rfi
+	mfspr	r10, SPRN_SPRG_SCRATCH0
+	RFI
 
 1:	/* ISI */
 	mtcr	r11
 	mfspr	r11, SPRN_SPRG_SCRATCH1
 	mfspr	r10, SPRN_SPRG_SCRATCH0
-	rfi
-#endif /* CONFIG_PPC_BOOK3S_604 */
+	RFI
 
-#ifdef CONFIG_VMAP_STACK
+stack_overflow:
 	vmap_stack_overflow_exception
 #endif
 
-	__HEAD
 AltiVecUnavailable:
-	EXCEPTION_PROLOG 0xf20 AltiVecUnavailable
+	EXCEPTION_PROLOG
 #ifdef CONFIG_ALTIVEC
 	beq	1f
 	bl	load_up_altivec		/* if from user, just load it up */
 	b	fast_exception_return
 #endif /* CONFIG_ALTIVEC */
-1:	prepare_transfer_to_handler
-	bl	altivec_unavailable_exception
-	b	interrupt_return
+1:	addi	r3,r1,STACK_FRAME_OVERHEAD
+	EXC_XFER_LITE(0xf20, altivec_unavailable_exception)
 
-	__HEAD
 PerformanceMonitor:
-	EXCEPTION_PROLOG 0xf00 PerformanceMonitor
-	prepare_transfer_to_handler
-	bl	performance_monitor_exception
-	b	interrupt_return
+	EXCEPTION_PROLOG
+	addi	r3,r1,STACK_FRAME_OVERHEAD
+	EXC_XFER_STD(0xf00, performance_monitor_exception)
 
 
-	__HEAD
 /*
  * This code is jumped to from the startup code to copy
  * the kernel image to physical address PHYSICAL_START.
  */
 relocate_kernel:
+	addis	r9,r26,klimit@ha	/* fetch klimit */
+	lwz	r25,klimit@l(r9)
+	addis	r25,r25,-KERNELBASE@h
 	lis	r3,PHYSICAL_START@h	/* Destination base address */
 	li	r6,0			/* Destination offset */
 	li	r5,0x4000		/* # bytes of memory to copy */
@@ -766,8 +807,7 @@ relocate_kernel:
 	addi	r0,r3,4f@l		/* jump to the address of 4f */
 	mtctr	r0			/* in copy and do the rest. */
 	bctr				/* jump to the copy */
-4:	lis	r5,_end-KERNELBASE@h
-	ori	r5,r5,_end-KERNELBASE@l
+4:	mr	r5,r25
 	bl	copy_and_flush		/* copy the rest */
 	b	turn_on_mmu
 
@@ -777,7 +817,7 @@ relocate_kernel:
  * r3 = dest addr, r4 = source addr, r5 = copy limit, r6 = start offset
  * on exit, r3, r4, r5 are unchanged, r6 is updated to be >= r5.
  */
-_GLOBAL(copy_and_flush)
+_ENTRY(copy_and_flush)
 	addi	r5,r5,-4
 	addi	r6,r6,-4
 4:	li	r0,L1_CACHE_BYTES/4
@@ -842,7 +882,7 @@ __secondary_start:
 	lwz	r1,TASK_STACK(r1)
 
 	/* stack */
-	addi	r1,r1,THREAD_SIZE-STACK_FRAME_MIN_SIZE
+	addi	r1,r1,THREAD_SIZE-STACK_FRAME_OVERHEAD
 	li	r0,0
 	tophys(r3,r1)
 	stw	r0,0(r3)
@@ -855,12 +895,9 @@ __secondary_start:
 	tophys(r4,r2)
 	addi	r4,r4,THREAD	/* phys address of our thread_struct */
 	mtspr	SPRN_SPRG_THREAD,r4
-BEGIN_MMU_FTR_SECTION
 	lis	r4, (swapper_pg_dir - PAGE_OFFSET)@h
 	ori	r4, r4, (swapper_pg_dir - PAGE_OFFSET)@l
-	rlwinm	r4, r4, 4, 0xffff01ff
-	mtspr	SPRN_SDR1, r4
-END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
+	mtspr	SPRN_SPRG_PGDIR, r4
 
 	/* enable MMU and jump to start_secondary */
 	li	r4,MSR_KERNEL
@@ -868,7 +905,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
 	ori	r3,r3,start_secondary@l
 	mtspr	SPRN_SRR0,r3
 	mtspr	SPRN_SRR1,r4
-	rfi
+	RFI
 #endif /* CONFIG_SMP */
 
 #ifdef CONFIG_KVM_BOOK3S_HANDLER
@@ -879,7 +916,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
  * Load stuff into the MMU.  Intended to be called with
  * IR=0 and DR=0.
  */
-SYM_FUNC_START_LOCAL(early_hash_table)
+early_hash_table:
 	sync			/* Force all PTE updates to finish */
 	isync
 	tlbia			/* Clear all TLB entries */
@@ -889,22 +926,22 @@ SYM_FUNC_START_LOCAL(early_hash_table)
 	lis	r6, early_hash - PAGE_OFFSET@h
 	ori	r6, r6, 3	/* 256kB table */
 	mtspr	SPRN_SDR1, r6
+	lis	r6, early_hash@h
+	addis	r3, r3, Hash@ha
+	stw	r6, Hash@l(r3)
 	blr
-SYM_FUNC_END(early_hash_table)
 
-SYM_FUNC_START_LOCAL(load_up_mmu)
+load_up_mmu:
 	sync			/* Force all PTE updates to finish */
 	isync
 	tlbia			/* Clear all TLB entries */
 	sync			/* wait for tlbia/tlbie to finish */
 	TLBSYNC			/* ... on all CPUs */
-BEGIN_MMU_FTR_SECTION
 	/* Load the SDR1 register (hash table base & size) */
 	lis	r6,_SDR1@ha
 	tophys(r6,r6)
 	lwz	r6,_SDR1@l(r6)
 	mtspr	SPRN_SDR1,r6
-END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
 
 /* Load the BAT registers with the values set up by MMU_init. */
 	lis	r3,BATS@ha
@@ -921,15 +958,16 @@ BEGIN_MMU_FTR_SECTION
 	LOAD_BAT(7,r3,r4,r5)
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	blr
-SYM_FUNC_END(load_up_mmu)
 
 _GLOBAL(load_segment_registers)
 	li	r0, NUM_USER_SEGMENTS /* load up user segment register values */
 	mtctr	r0		/* for context 0 */
-#ifdef CONFIG_PPC_KUEP
-	lis	r3, SR_NX@h	/* Kp = 0, Ks = 0, VSID = 0 */
-#else
 	li	r3, 0		/* Kp = 0, Ks = 0, VSID = 0 */
+#ifdef CONFIG_PPC_KUEP
+	oris	r3, r3, SR_NX@h	/* Set Nx */
+#endif
+#ifdef CONFIG_PPC_KUAP
+	oris	r3, r3, SR_KS@h	/* Set Ks */
 #endif
 	li	r4, 0
 3:	mtsrin	r3, r4
@@ -959,18 +997,15 @@ start_here:
 	tophys(r4,r2)
 	addi	r4,r4,THREAD	/* init task's THREAD */
 	mtspr	SPRN_SPRG_THREAD,r4
-BEGIN_MMU_FTR_SECTION
 	lis	r4, (swapper_pg_dir - PAGE_OFFSET)@h
 	ori	r4, r4, (swapper_pg_dir - PAGE_OFFSET)@l
-	rlwinm	r4, r4, 4, 0xffff01ff
-	mtspr	SPRN_SDR1, r4
-END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
+	mtspr	SPRN_SPRG_PGDIR, r4
 
 	/* stack */
 	lis	r1,init_thread_union@ha
 	addi	r1,r1,init_thread_union@l
 	li	r0,0
-	stwu	r0,THREAD_SIZE-STACK_FRAME_MIN_SIZE(r1)
+	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
 /*
  * Do early platform-specific initialization,
  * and set up the MMU.
@@ -998,7 +1033,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
 	.align	4
 	mtspr	SPRN_SRR0,r4
 	mtspr	SPRN_SRR1,r3
-	rfi
+	RFI
 /* Load up the kernel context */
 2:	bl	load_up_mmu
 
@@ -1022,7 +1057,53 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
 	ori	r3,r3,start_kernel@l
 	mtspr	SPRN_SRR0,r3
 	mtspr	SPRN_SRR1,r4
-	rfi
+	RFI
+
+/*
+ * void switch_mmu_context(struct mm_struct *prev, struct mm_struct *next);
+ *
+ * Set up the segment registers for a new context.
+ */
+_ENTRY(switch_mmu_context)
+	lwz	r3,MMCONTEXTID(r4)
+	cmpwi	cr0,r3,0
+	blt-	4f
+	mulli	r3,r3,897	/* multiply context by skew factor */
+	rlwinm	r3,r3,4,8,27	/* VSID = (context & 0xfffff) << 4 */
+#ifdef CONFIG_PPC_KUEP
+	oris	r3, r3, SR_NX@h	/* Set Nx */
+#endif
+#ifdef CONFIG_PPC_KUAP
+	oris	r3, r3, SR_KS@h	/* Set Ks */
+#endif
+	li	r0,NUM_USER_SEGMENTS
+	mtctr	r0
+
+	lwz	r4, MM_PGD(r4)
+#ifdef CONFIG_BDI_SWITCH
+	/* Context switch the PTE pointer for the Abatron BDI2000.
+	 * The PGDIR is passed as second argument.
+	 */
+	lis	r5, abatron_pteptrs@ha
+	stw	r4, abatron_pteptrs@l + 0x4(r5)
+#endif
+	tophys(r4, r4)
+	mtspr	SPRN_SPRG_PGDIR, r4
+	li	r4,0
+	isync
+3:
+	mtsrin	r3,r4
+	addi	r3,r3,0x111	/* next VSID */
+	rlwinm	r3,r3,0,8,3	/* clear out any overflow from VSID field */
+	addis	r4,r4,0x1000	/* address of next segment */
+	bdnz	3b
+	sync
+	isync
+	blr
+4:	trap
+	EMIT_BUG_ENTRY 4b,__FILE__,__LINE__,0
+	blr
+EXPORT_SYMBOL(switch_mmu_context)
 
 /*
  * An undocumented "feature" of 604e requires that the v bit
@@ -1032,7 +1113,7 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_HPTE_TABLE)
  * this makes sure it's done.
  *  -- Cort
  */
-SYM_FUNC_START_LOCAL(clear_bats)
+clear_bats:
 	li	r10,0
 
 	mtspr	SPRN_DBAT0U,r10
@@ -1076,9 +1157,8 @@ BEGIN_MMU_FTR_SECTION
 	mtspr	SPRN_IBAT7L,r10
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	blr
-SYM_FUNC_END(clear_bats)
 
-_GLOBAL(update_bats)
+_ENTRY(update_bats)
 	lis	r4, 1f@h
 	ori	r4, r4, 1f@l
 	tophys(r4, r4)
@@ -1092,7 +1172,7 @@ _GLOBAL(update_bats)
 	.align	4
 	mtspr	SPRN_SRR0, r4
 	mtspr	SPRN_SRR1, r3
-	rfi
+	RFI
 1:	bl	clear_bats
 	lis	r3, BATS@ha
 	addi	r3, r3, BATS@l
@@ -1111,18 +1191,17 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 	mtmsr	r3
 	mtspr	SPRN_SRR0, r7
 	mtspr	SPRN_SRR1, r6
-	rfi
+	RFI
 
-SYM_FUNC_START_LOCAL(flush_tlbs)
+flush_tlbs:
 	lis	r10, 0x40
 1:	addic.	r10, r10, -0x1000
 	tlbie	r10
 	bgt	1b
 	sync
 	blr
-SYM_FUNC_END(flush_tlbs)
 
-SYM_FUNC_START_LOCAL(mmu_off)
+mmu_off:
  	addi	r4, r3, __after_mmu_off - _start
 	mfmsr	r3
 	andi.	r0,r3,MSR_DR|MSR_IR		/* MMU enabled? */
@@ -1133,11 +1212,10 @@ SYM_FUNC_START_LOCAL(mmu_off)
 	mtspr	SPRN_SRR0,r4
 	mtspr	SPRN_SRR1,r3
 	sync
-	rfi
-SYM_FUNC_END(mmu_off)
+	RFI
 
 /* We use one BAT to map up to 256M of RAM at _PAGE_OFFSET */
-SYM_FUNC_START_LOCAL(initial_bats)
+initial_bats:
 	lis	r11,PAGE_OFFSET@h
 	tophys(r8,r11)
 #ifdef CONFIG_SMP
@@ -1153,10 +1231,9 @@ SYM_FUNC_START_LOCAL(initial_bats)
 	mtspr	SPRN_IBAT0U,r11
 	isync
 	blr
-SYM_FUNC_END(initial_bats)
 
 #ifdef CONFIG_BOOTX_TEXT
-SYM_FUNC_START_LOCAL(setup_disp_bat)
+setup_disp_bat:
 	/*
 	 * setup the display bat prepared for us in prom.c
 	 */
@@ -1172,11 +1249,10 @@ SYM_FUNC_START_LOCAL(setup_disp_bat)
 	mtspr	SPRN_DBAT3L,r8
 	mtspr	SPRN_DBAT3U,r11
 	blr
-SYM_FUNC_END(setup_disp_bat)
 #endif /* CONFIG_BOOTX_TEXT */
 
 #ifdef CONFIG_PPC_EARLY_DEBUG_CPM
-SYM_FUNC_START_LOCAL(setup_cpm_bat)
+setup_cpm_bat:
 	lis	r8, 0xf000
 	ori	r8, r8,	0x002a
 	mtspr	SPRN_DBAT1L, r8
@@ -1186,11 +1262,10 @@ SYM_FUNC_START_LOCAL(setup_cpm_bat)
 	mtspr	SPRN_DBAT1U, r11
 
 	blr
-SYM_FUNC_END(setup_cpm_bat)
 #endif
 
 #ifdef CONFIG_PPC_EARLY_DEBUG_USBGECKO
-SYM_FUNC_START_LOCAL(setup_usbgecko_bat)
+setup_usbgecko_bat:
 	/* prepare a BAT for early io */
 #if defined(CONFIG_GAMECUBE)
 	lis	r8, 0x0c00
@@ -1209,7 +1284,63 @@ SYM_FUNC_START_LOCAL(setup_usbgecko_bat)
 	mtspr	SPRN_DBAT1L, r8
 	mtspr	SPRN_DBAT1U, r11
 	blr
-SYM_FUNC_END(setup_usbgecko_bat)
 #endif
 
+#ifdef CONFIG_8260
+/* Jump into the system reset for the rom.
+ * We first disable the MMU, and then jump to the ROM reset address.
+ *
+ * r3 is the board info structure, r4 is the location for starting.
+ * I use this for building a small kernel that can load other kernels,
+ * rather than trying to write or rely on a rom monitor that can tftp load.
+ */
+       .globl  m8260_gorom
+m8260_gorom:
+	mfmsr	r0
+	rlwinm	r0,r0,0,17,15	/* clear MSR_EE in r0 */
+	sync
+	mtmsr	r0
+	sync
+	mfspr	r11, SPRN_HID0
+	lis	r10, 0
+	ori	r10,r10,HID0_ICE|HID0_DCE
+	andc	r11, r11, r10
+	mtspr	SPRN_HID0, r11
+	isync
+	li	r5, MSR_ME|MSR_RI
+	lis	r6,2f@h
+	addis	r6,r6,-KERNELBASE@h
+	ori	r6,r6,2f@l
+	mtspr	SPRN_SRR0,r6
+	mtspr	SPRN_SRR1,r5
+	isync
+	sync
+	rfi
+2:
+	mtlr	r4
+	blr
+#endif
+
+
+/*
+ * We put a few things here that have to be page-aligned.
+ * This stuff goes at the beginning of the data segment,
+ * which is page-aligned.
+ */
 	.data
+	.globl	sdata
+sdata:
+	.globl	empty_zero_page
+empty_zero_page:
+	.space	4096
+EXPORT_SYMBOL(empty_zero_page)
+
+	.globl	swapper_pg_dir
+swapper_pg_dir:
+	.space	PGD_TABLE_SIZE
+
+/* Room for two PTE pointers, usually the kernel and current user pointers
+ * to their respective root page table.
+ */
+abatron_pteptrs:
+	.space	8

@@ -28,7 +28,7 @@
 
 #include "../i915_selftest.h"
 
-static int
+static int __i915_sw_fence_call
 fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 {
 	switch (state) {
@@ -523,19 +523,12 @@ static void task_ipc(struct work_struct *work)
 static int test_ipc(void *arg)
 {
 	struct task_ipc ipc;
-	struct workqueue_struct *wq;
 	int ret = 0;
-
-	wq = alloc_workqueue("i1915-selftest", 0, 0);
-	if (wq == NULL)
-		return -ENOMEM;
 
 	/* Test use of i915_sw_fence as an interprocess signaling mechanism */
 	ipc.in = alloc_fence();
-	if (!ipc.in) {
-		ret = -ENOMEM;
-		goto err_work;
-	}
+	if (!ipc.in)
+		return -ENOMEM;
 	ipc.out = alloc_fence();
 	if (!ipc.out) {
 		ret = -ENOMEM;
@@ -547,7 +540,7 @@ static int test_ipc(void *arg)
 
 	ipc.value = 0;
 	INIT_WORK_ONSTACK(&ipc.work, task_ipc);
-	queue_work(wq, &ipc.work);
+	schedule_work(&ipc.work);
 
 	wait_for_completion(&ipc.started);
 
@@ -570,9 +563,6 @@ static int test_ipc(void *arg)
 	free_fence(ipc.out);
 err_in:
 	free_fence(ipc.in);
-err_work:
-	destroy_workqueue(wq);
-
 	return ret;
 }
 

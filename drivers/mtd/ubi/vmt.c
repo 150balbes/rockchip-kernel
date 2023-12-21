@@ -464,7 +464,7 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 		for (i = 0; i < -pebs; i++) {
 			err = ubi_eba_unmap_leb(ubi, vol, reserved_pebs + i);
 			if (err)
-				goto out_free;
+				goto out_acc;
 		}
 		spin_lock(&ubi->volumes_lock);
 		ubi->rsvd_pebs += pebs;
@@ -512,10 +512,8 @@ out_acc:
 		ubi->avail_pebs += pebs;
 		spin_unlock(&ubi->volumes_lock);
 	}
-	return err;
-
 out_free:
-	ubi_eba_destroy_table(new_eba_tbl);
+	kfree(new_eba_tbl);
 	return err;
 }
 
@@ -582,7 +580,6 @@ int ubi_add_volume(struct ubi_device *ubi, struct ubi_volume *vol)
 	if (err) {
 		ubi_err(ubi, "cannot add character device for volume %d, error %d",
 			vol_id, err);
-		vol_release(&vol->dev);
 		return err;
 	}
 
@@ -593,13 +590,14 @@ int ubi_add_volume(struct ubi_device *ubi, struct ubi_volume *vol)
 	vol->dev.groups = volume_dev_groups;
 	dev_set_name(&vol->dev, "%s_%d", ubi->ubi_name, vol->vol_id);
 	err = device_register(&vol->dev);
-	if (err) {
-		cdev_del(&vol->cdev);
-		put_device(&vol->dev);
-		return err;
-	}
+	if (err)
+		goto out_cdev;
 
 	self_check_volumes(ubi);
+	return err;
+
+out_cdev:
+	cdev_del(&vol->cdev);
 	return err;
 }
 
@@ -625,7 +623,7 @@ void ubi_free_volume(struct ubi_device *ubi, struct ubi_volume *vol)
  * @ubi: UBI device description object
  * @vol_id: volume ID
  *
- * Returns zero if volume is all right and a negative error code if not.
+ * Returns zero if volume is all right and a a negative error code if not.
  */
 static int self_check_volume(struct ubi_device *ubi, int vol_id)
 {
@@ -778,7 +776,7 @@ fail:
  * self_check_volumes - check information about all volumes.
  * @ubi: UBI device description object
  *
- * Returns zero if volumes are all right and a negative error code if not.
+ * Returns zero if volumes are all right and a a negative error code if not.
  */
 static int self_check_volumes(struct ubi_device *ubi)
 {

@@ -605,9 +605,8 @@ mwl8k_send_fw_load_cmd(struct mwl8k_priv *priv, void *data, int length)
 	dma_addr_t dma_addr;
 	int loops;
 
-	dma_addr = dma_map_single(&priv->pdev->dev, data, length,
-				  DMA_TO_DEVICE);
-	if (dma_mapping_error(&priv->pdev->dev, dma_addr))
+	dma_addr = pci_map_single(priv->pdev, data, length, PCI_DMA_TODEVICE);
+	if (pci_dma_mapping_error(priv->pdev, dma_addr))
 		return -ENOMEM;
 
 	iowrite32(dma_addr, regs + MWL8K_HIU_GEN_PTR);
@@ -636,7 +635,7 @@ mwl8k_send_fw_load_cmd(struct mwl8k_priv *priv, void *data, int length)
 		udelay(1);
 	} while (--loops);
 
-	dma_unmap_single(&priv->pdev->dev, dma_addr, length, DMA_TO_DEVICE);
+	pci_unmap_single(priv->pdev, dma_addr, length, PCI_DMA_TODEVICE);
 
 	return loops ? 0 : -ETIMEDOUT;
 }
@@ -808,7 +807,7 @@ struct mwl8k_dma_data {
 	__le16 fwlen;
 	struct ieee80211_hdr wh;
 	char data[];
-} __packed __aligned(2);
+} __packed;
 
 /* Routines to add/remove DMA header from skb.  */
 static inline void mwl8k_remove_dma_header(struct sk_buff *skb, __le16 qos)
@@ -1170,8 +1169,7 @@ static int mwl8k_rxq_init(struct ieee80211_hw *hw, int index)
 
 	size = MWL8K_RX_DESCS * priv->rxd_ops->rxd_size;
 
-	rxq->rxd = dma_alloc_coherent(&priv->pdev->dev, size, &rxq->rxd_dma,
-				      GFP_KERNEL);
+	rxq->rxd = pci_zalloc_consistent(priv->pdev, size, &rxq->rxd_dma);
 	if (rxq->rxd == NULL) {
 		wiphy_err(hw->wiphy, "failed to alloc RX descriptors\n");
 		return -ENOMEM;
@@ -1179,8 +1177,7 @@ static int mwl8k_rxq_init(struct ieee80211_hw *hw, int index)
 
 	rxq->buf = kcalloc(MWL8K_RX_DESCS, sizeof(*rxq->buf), GFP_KERNEL);
 	if (rxq->buf == NULL) {
-		dma_free_coherent(&priv->pdev->dev, size, rxq->rxd,
-				  rxq->rxd_dma);
+		pci_free_consistent(priv->pdev, size, rxq->rxd, rxq->rxd_dma);
 		return -ENOMEM;
 	}
 
@@ -1208,8 +1205,9 @@ static int rxq_refill(struct ieee80211_hw *hw, int index, int limit)
 {
 	struct mwl8k_priv *priv = hw->priv;
 	struct mwl8k_rx_queue *rxq = priv->rxq + index;
-	int refilled = 0;
+	int refilled;
 
+	refilled = 0;
 	while (rxq->rxd_count < MWL8K_RX_DESCS && limit--) {
 		struct sk_buff *skb;
 		dma_addr_t addr;
@@ -1220,7 +1218,7 @@ static int rxq_refill(struct ieee80211_hw *hw, int index, int limit)
 		if (skb == NULL)
 			break;
 
-		addr = dma_map_single(&priv->pdev->dev, skb->data,
+		addr = pci_map_single(priv->pdev, skb->data,
 				      MWL8K_RX_MAXSZ, DMA_FROM_DEVICE);
 
 		rxq->rxd_count++;
@@ -1251,9 +1249,9 @@ static void mwl8k_rxq_deinit(struct ieee80211_hw *hw, int index)
 
 	for (i = 0; i < MWL8K_RX_DESCS; i++) {
 		if (rxq->buf[i].skb != NULL) {
-			dma_unmap_single(&priv->pdev->dev,
+			pci_unmap_single(priv->pdev,
 					 dma_unmap_addr(&rxq->buf[i], dma),
-					 MWL8K_RX_MAXSZ, DMA_FROM_DEVICE);
+					 MWL8K_RX_MAXSZ, PCI_DMA_FROMDEVICE);
 			dma_unmap_addr_set(&rxq->buf[i], dma, 0);
 
 			kfree_skb(rxq->buf[i].skb);
@@ -1264,9 +1262,9 @@ static void mwl8k_rxq_deinit(struct ieee80211_hw *hw, int index)
 	kfree(rxq->buf);
 	rxq->buf = NULL;
 
-	dma_free_coherent(&priv->pdev->dev,
-			  MWL8K_RX_DESCS * priv->rxd_ops->rxd_size, rxq->rxd,
-			  rxq->rxd_dma);
+	pci_free_consistent(priv->pdev,
+			    MWL8K_RX_DESCS * priv->rxd_ops->rxd_size,
+			    rxq->rxd, rxq->rxd_dma);
 	rxq->rxd = NULL;
 }
 
@@ -1345,9 +1343,9 @@ static int rxq_process(struct ieee80211_hw *hw, int index, int limit)
 
 		rxq->buf[rxq->head].skb = NULL;
 
-		dma_unmap_single(&priv->pdev->dev,
+		pci_unmap_single(priv->pdev,
 				 dma_unmap_addr(&rxq->buf[rxq->head], dma),
-				 MWL8K_RX_MAXSZ, DMA_FROM_DEVICE);
+				 MWL8K_RX_MAXSZ, PCI_DMA_FROMDEVICE);
 		dma_unmap_addr_set(&rxq->buf[rxq->head], dma, 0);
 
 		rxq->head++;
@@ -1462,8 +1460,7 @@ static int mwl8k_txq_init(struct ieee80211_hw *hw, int index)
 
 	size = MWL8K_TX_DESCS * sizeof(struct mwl8k_tx_desc);
 
-	txq->txd = dma_alloc_coherent(&priv->pdev->dev, size, &txq->txd_dma,
-				      GFP_KERNEL);
+	txq->txd = pci_zalloc_consistent(priv->pdev, size, &txq->txd_dma);
 	if (txq->txd == NULL) {
 		wiphy_err(hw->wiphy, "failed to alloc TX descriptors\n");
 		return -ENOMEM;
@@ -1471,8 +1468,7 @@ static int mwl8k_txq_init(struct ieee80211_hw *hw, int index)
 
 	txq->skb = kcalloc(MWL8K_TX_DESCS, sizeof(*txq->skb), GFP_KERNEL);
 	if (txq->skb == NULL) {
-		dma_free_coherent(&priv->pdev->dev, size, txq->txd,
-				  txq->txd_dma);
+		pci_free_consistent(priv->pdev, size, txq->txd, txq->txd_dma);
 		txq->txd = NULL;
 		return -ENOMEM;
 	}
@@ -1712,7 +1708,7 @@ mwl8k_txq_reclaim(struct ieee80211_hw *hw, int index, int limit, int force)
 		txq->skb[tx] = NULL;
 
 		BUG_ON(skb == NULL);
-		dma_unmap_single(&priv->pdev->dev, addr, size, DMA_TO_DEVICE);
+		pci_unmap_single(priv->pdev, addr, size, PCI_DMA_TODEVICE);
 
 		mwl8k_remove_dma_header(skb, tx_desc->qos_control);
 
@@ -1779,9 +1775,9 @@ static void mwl8k_txq_deinit(struct ieee80211_hw *hw, int index)
 	kfree(txq->skb);
 	txq->skb = NULL;
 
-	dma_free_coherent(&priv->pdev->dev,
-			  MWL8K_TX_DESCS * sizeof(struct mwl8k_tx_desc),
-			  txq->txd, txq->txd_dma);
+	pci_free_consistent(priv->pdev,
+			    MWL8K_TX_DESCS * sizeof(struct mwl8k_tx_desc),
+			    txq->txd, txq->txd_dma);
 	txq->txd = NULL;
 }
 
@@ -1880,7 +1876,7 @@ static inline void mwl8k_tx_count_packet(struct ieee80211_sta *sta, u8 tid)
 	 * packets ever exceeds the ampdu_min_traffic threshold, we will allow
 	 * an ampdu stream to be started.
 	 */
-	if (time_after(jiffies, (unsigned long)tx_stats->start_time + HZ)) {
+	if (jiffies - tx_stats->start_time > HZ) {
 		tx_stats->pkts = 0;
 		tx_stats->start_time = 0;
 	} else
@@ -1985,7 +1981,7 @@ mwl8k_txq_xmit(struct ieee80211_hw *hw,
 
 	txpriority = index;
 
-	if (priv->ap_fw && sta && sta->deflink.ht_cap.ht_supported && !eapol_frame &&
+	if (priv->ap_fw && sta && sta->ht_cap.ht_supported && !eapol_frame &&
 	    ieee80211_is_data_qos(wh->frame_control)) {
 		tid = qos & 0xf;
 		mwl8k_tx_count_packet(sta, tid);
@@ -2046,10 +2042,10 @@ mwl8k_txq_xmit(struct ieee80211_hw *hw,
 		qos |= MWL8K_QOS_ACK_POLICY_NORMAL;
 	}
 
-	dma = dma_map_single(&priv->pdev->dev, skb->data, skb->len,
-			     DMA_TO_DEVICE);
+	dma = pci_map_single(priv->pdev, skb->data,
+				skb->len, PCI_DMA_TODEVICE);
 
-	if (dma_mapping_error(&priv->pdev->dev, dma)) {
+	if (pci_dma_mapping_error(priv->pdev, dma)) {
 		wiphy_debug(hw->wiphy,
 			    "failed to dma map skb, dropping TX frame.\n");
 		if (start_ba_session) {
@@ -2082,8 +2078,8 @@ mwl8k_txq_xmit(struct ieee80211_hw *hw,
 			}
 			mwl8k_tx_start(priv);
 			spin_unlock_bh(&priv->tx_lock);
-			dma_unmap_single(&priv->pdev->dev, dma, skb->len,
-					 DMA_TO_DEVICE);
+			pci_unmap_single(priv->pdev, dma, skb->len,
+					 PCI_DMA_TODEVICE);
 			dev_kfree_skb(skb);
 			return;
 		}
@@ -2242,9 +2238,9 @@ static int mwl8k_post_cmd(struct ieee80211_hw *hw, struct mwl8k_cmd_pkt *cmd)
 
 	cmd->result = (__force __le16) 0xffff;
 	dma_size = le16_to_cpu(cmd->length);
-	dma_addr = dma_map_single(&priv->pdev->dev, cmd, dma_size,
-				  DMA_BIDIRECTIONAL);
-	if (dma_mapping_error(&priv->pdev->dev, dma_addr)) {
+	dma_addr = pci_map_single(priv->pdev, cmd, dma_size,
+				  PCI_DMA_BIDIRECTIONAL);
+	if (pci_dma_mapping_error(priv->pdev, dma_addr)) {
 		rc = -ENOMEM;
 		goto exit;
 	}
@@ -2262,8 +2258,8 @@ static int mwl8k_post_cmd(struct ieee80211_hw *hw, struct mwl8k_cmd_pkt *cmd)
 	priv->hostcmd_wait = NULL;
 
 
-	dma_unmap_single(&priv->pdev->dev, dma_addr, dma_size,
-			 DMA_BIDIRECTIONAL);
+	pci_unmap_single(priv->pdev, dma_addr, dma_size,
+					PCI_DMA_BIDIRECTIONAL);
 
 	if (!timeout) {
 		wiphy_err(hw->wiphy, "Command %s timeout after %u ms\n",
@@ -3250,7 +3246,7 @@ mwl8k_cmd_set_aid(struct ieee80211_hw *hw,
 
 	cmd->header.code = cpu_to_le16(MWL8K_CMD_SET_AID);
 	cmd->header.length = cpu_to_le16(sizeof(*cmd));
-	cmd->aid = cpu_to_le16(vif->cfg.aid);
+	cmd->aid = cpu_to_le16(vif->bss_conf.aid);
 	memcpy(cmd->bssid, vif->bss_conf.bssid, ETH_ALEN);
 
 	if (vif->bss_conf.use_cts_prot) {
@@ -4027,9 +4023,9 @@ mwl8k_create_ba(struct ieee80211_hw *hw, struct mwl8k_ampdu_stream *stream,
 	cmd->create_params.reset_seq_no_flag = 1;
 
 	cmd->create_params.param_info =
-		(stream->sta->deflink.ht_cap.ampdu_factor &
+		(stream->sta->ht_cap.ampdu_factor &
 		 IEEE80211_HT_AMPDU_PARM_FACTOR) |
-		((stream->sta->deflink.ht_cap.ampdu_density << 2) &
+		((stream->sta->ht_cap.ampdu_density << 2) &
 		 IEEE80211_HT_AMPDU_PARM_DENSITY);
 
 	cmd->create_params.flags =
@@ -4113,18 +4109,18 @@ static int mwl8k_cmd_set_new_stn_add(struct ieee80211_hw *hw,
 	cmd->stn_id = cpu_to_le16(sta->aid);
 	cmd->action = cpu_to_le16(MWL8K_STA_ACTION_ADD);
 	if (hw->conf.chandef.chan->band == NL80211_BAND_2GHZ)
-		rates = sta->deflink.supp_rates[NL80211_BAND_2GHZ];
+		rates = sta->supp_rates[NL80211_BAND_2GHZ];
 	else
-		rates = sta->deflink.supp_rates[NL80211_BAND_5GHZ] << 5;
+		rates = sta->supp_rates[NL80211_BAND_5GHZ] << 5;
 	cmd->legacy_rates = cpu_to_le32(rates);
-	if (sta->deflink.ht_cap.ht_supported) {
-		cmd->ht_rates[0] = sta->deflink.ht_cap.mcs.rx_mask[0];
-		cmd->ht_rates[1] = sta->deflink.ht_cap.mcs.rx_mask[1];
-		cmd->ht_rates[2] = sta->deflink.ht_cap.mcs.rx_mask[2];
-		cmd->ht_rates[3] = sta->deflink.ht_cap.mcs.rx_mask[3];
-		cmd->ht_capabilities_info = cpu_to_le16(sta->deflink.ht_cap.cap);
-		cmd->mac_ht_param_info = (sta->deflink.ht_cap.ampdu_factor & 3) |
-			((sta->deflink.ht_cap.ampdu_density & 7) << 2);
+	if (sta->ht_cap.ht_supported) {
+		cmd->ht_rates[0] = sta->ht_cap.mcs.rx_mask[0];
+		cmd->ht_rates[1] = sta->ht_cap.mcs.rx_mask[1];
+		cmd->ht_rates[2] = sta->ht_cap.mcs.rx_mask[2];
+		cmd->ht_rates[3] = sta->ht_cap.mcs.rx_mask[3];
+		cmd->ht_capabilities_info = cpu_to_le16(sta->ht_cap.cap);
+		cmd->mac_ht_param_info = (sta->ht_cap.ampdu_factor & 3) |
+			((sta->ht_cap.ampdu_density & 7) << 2);
 		cmd->is_qos_sta = 1;
 	}
 
@@ -4225,11 +4221,9 @@ struct mwl8k_cmd_set_key {
 	__le32 key_info;
 	__le32 key_id;
 	__le16 key_len;
-	struct {
-		__u8 key_material[MAX_ENCR_KEY_LENGTH];
-		__u8 tkip_tx_mic_key[MIC_KEY_LENGTH];
-		__u8 tkip_rx_mic_key[MIC_KEY_LENGTH];
-	} tkip;
+	__u8 key_material[MAX_ENCR_KEY_LENGTH];
+	__u8 tkip_tx_mic_key[MIC_KEY_LENGTH];
+	__u8 tkip_rx_mic_key[MIC_KEY_LENGTH];
 	__le16 tkip_rsc_low;
 	__le32 tkip_rsc_high;
 	__le16 tkip_tsc_low;
@@ -4377,7 +4371,7 @@ static int mwl8k_cmd_encryption_set_key(struct ieee80211_hw *hw,
 		goto done;
 	}
 
-	memcpy(&cmd->tkip, key->key, keymlen);
+	memcpy(cmd->key_material, key->key, keymlen);
 	cmd->action = cpu_to_le32(action);
 
 	rc = mwl8k_post_pervif_cmd(hw, vif, &cmd->header);
@@ -4545,16 +4539,16 @@ static int mwl8k_cmd_update_stadb_add(struct ieee80211_hw *hw,
 	p = &cmd->peer_info;
 	p->peer_type = MWL8K_PEER_TYPE_ACCESSPOINT;
 	p->basic_caps = cpu_to_le16(vif->bss_conf.assoc_capability);
-	p->ht_support = sta->deflink.ht_cap.ht_supported;
-	p->ht_caps = cpu_to_le16(sta->deflink.ht_cap.cap);
-	p->extended_ht_caps = (sta->deflink.ht_cap.ampdu_factor & 3) |
-		((sta->deflink.ht_cap.ampdu_density & 7) << 2);
+	p->ht_support = sta->ht_cap.ht_supported;
+	p->ht_caps = cpu_to_le16(sta->ht_cap.cap);
+	p->extended_ht_caps = (sta->ht_cap.ampdu_factor & 3) |
+		((sta->ht_cap.ampdu_density & 7) << 2);
 	if (hw->conf.chandef.chan->band == NL80211_BAND_2GHZ)
-		rates = sta->deflink.supp_rates[NL80211_BAND_2GHZ];
+		rates = sta->supp_rates[NL80211_BAND_2GHZ];
 	else
-		rates = sta->deflink.supp_rates[NL80211_BAND_5GHZ] << 5;
+		rates = sta->supp_rates[NL80211_BAND_5GHZ] << 5;
 	legacy_rate_mask_to_array(p->legacy_rates, rates);
-	memcpy(p->ht_rates, &sta->deflink.ht_cap.mcs, 16);
+	memcpy(p->ht_rates, sta->ht_cap.mcs.rx_mask, 16);
 	p->interop = 1;
 	p->amsdu_enabled = 0;
 
@@ -5013,13 +5007,13 @@ mwl8k_bss_info_changed_sta(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	/*
 	 * No need to capture a beacon if we're no longer associated.
 	 */
-	if ((changed & BSS_CHANGED_ASSOC) && !vif->cfg.assoc)
+	if ((changed & BSS_CHANGED_ASSOC) && !vif->bss_conf.assoc)
 		priv->capture_beacon = false;
 
 	/*
 	 * Get the AP's legacy and MCS rates.
 	 */
-	if (vif->cfg.assoc) {
+	if (vif->bss_conf.assoc) {
 		struct ieee80211_sta *ap;
 
 		rcu_read_lock();
@@ -5031,12 +5025,12 @@ mwl8k_bss_info_changed_sta(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		}
 
 		if (hw->conf.chandef.chan->band == NL80211_BAND_2GHZ) {
-			ap_legacy_rates = ap->deflink.supp_rates[NL80211_BAND_2GHZ];
+			ap_legacy_rates = ap->supp_rates[NL80211_BAND_2GHZ];
 		} else {
 			ap_legacy_rates =
-				ap->deflink.supp_rates[NL80211_BAND_5GHZ] << 5;
+				ap->supp_rates[NL80211_BAND_5GHZ] << 5;
 		}
-		memcpy(ap_mcs_rates, &ap->deflink.ht_cap.mcs, 16);
+		memcpy(ap_mcs_rates, ap->ht_cap.mcs.rx_mask, 16);
 
 		rcu_read_unlock();
 
@@ -5085,7 +5079,7 @@ mwl8k_bss_info_changed_sta(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			goto out;
 	}
 
-	if (vif->cfg.assoc && !priv->ap_fw &&
+	if (vif->bss_conf.assoc && !priv->ap_fw &&
 	    (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_ERP_CTS_PROT |
 			BSS_CHANGED_HT))) {
 		rc = mwl8k_cmd_set_aid(hw, vif, ap_legacy_rates);
@@ -5093,7 +5087,7 @@ mwl8k_bss_info_changed_sta(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			goto out;
 	}
 
-	if (vif->cfg.assoc &&
+	if (vif->bss_conf.assoc &&
 	    (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_BEACON_INT))) {
 		/*
 		 * Finalize the join.  Tell rx handler to process
@@ -5147,7 +5141,7 @@ mwl8k_bss_info_changed_ap(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (changed & (BSS_CHANGED_BEACON_INT | BSS_CHANGED_BEACON)) {
 		struct sk_buff *skb;
 
-		skb = ieee80211_beacon_get(hw, vif, 0);
+		skb = ieee80211_beacon_get(hw, vif);
 		if (skb != NULL) {
 			mwl8k_cmd_set_beacon(hw, vif, skb->data, skb->len);
 			kfree_skb(skb);
@@ -5163,7 +5157,7 @@ out:
 
 static void
 mwl8k_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-		       struct ieee80211_bss_conf *info, u64 changed)
+		       struct ieee80211_bss_conf *info, u32 changed)
 {
 	if (vif->type == NL80211_IFTYPE_STATION)
 		mwl8k_bss_info_changed_sta(hw, vif, info, changed);
@@ -5347,7 +5341,7 @@ static int mwl8k_sta_add(struct ieee80211_hw *hw,
 		ret = mwl8k_cmd_update_stadb_add(hw, vif, sta);
 		if (ret >= 0) {
 			MWL8K_STA(sta)->peer_id = ret;
-			if (sta->deflink.ht_cap.ht_supported)
+			if (sta->ht_cap.ht_supported)
 				MWL8K_STA(sta)->is_ampdu_allowed = true;
 			ret = 0;
 		}
@@ -5365,8 +5359,7 @@ static int mwl8k_sta_add(struct ieee80211_hw *hw,
 }
 
 static int mwl8k_conf_tx(struct ieee80211_hw *hw,
-			 struct ieee80211_vif *vif,
-			 unsigned int link_id, u16 queue,
+			 struct ieee80211_vif *vif, u16 queue,
 			 const struct ieee80211_tx_queue_params *params)
 {
 	struct mwl8k_priv *priv = hw->priv;
@@ -5611,7 +5604,6 @@ static void mwl8k_sw_scan_complete(struct ieee80211_hw *hw,
 
 static const struct ieee80211_ops mwl8k_ops = {
 	.tx			= mwl8k_tx,
-	.wake_tx_queue		= ieee80211_handle_wake_tx_queue,
 	.start			= mwl8k_start,
 	.stop			= mwl8k_stop,
 	.add_interface		= mwl8k_add_interface,
@@ -6052,7 +6044,7 @@ static int mwl8k_reload_firmware(struct ieee80211_hw *hw, char *fw_image)
 		goto fail;
 
 	for (i = 0; i < MWL8K_TX_WMM_QUEUES; i++) {
-		rc = mwl8k_conf_tx(hw, NULL, 0, i, &priv->wmm_params[i]);
+		rc = mwl8k_conf_tx(hw, NULL, i, &priv->wmm_params[i]);
 		if (rc)
 			goto fail;
 	}
@@ -6135,8 +6127,7 @@ static int mwl8k_firmware_load_success(struct mwl8k_priv *priv)
 	tasklet_disable(&priv->poll_rx_task);
 
 	/* Power management cookie */
-	priv->cookie = dma_alloc_coherent(&priv->pdev->dev, 4,
-					  &priv->cookie_dma, GFP_KERNEL);
+	priv->cookie = pci_alloc_consistent(priv->pdev, 4, &priv->cookie_dma);
 	if (priv->cookie == NULL)
 		return -ENOMEM;
 
@@ -6184,8 +6175,8 @@ err_unprobe_hw:
 
 err_free_cookie:
 	if (priv->cookie != NULL)
-		dma_free_coherent(&priv->pdev->dev, 4, priv->cookie,
-				  priv->cookie_dma);
+		pci_free_consistent(priv->pdev, 4,
+				priv->cookie, priv->cookie_dma);
 
 	return rc;
 }
@@ -6348,7 +6339,7 @@ static void mwl8k_remove(struct pci_dev *pdev)
 
 	mwl8k_rxq_deinit(hw, 0);
 
-	dma_free_coherent(&priv->pdev->dev, 4, priv->cookie, priv->cookie_dma);
+	pci_free_consistent(priv->pdev, 4, priv->cookie, priv->cookie_dma);
 
 unmap:
 	pci_iounmap(pdev, priv->regs);

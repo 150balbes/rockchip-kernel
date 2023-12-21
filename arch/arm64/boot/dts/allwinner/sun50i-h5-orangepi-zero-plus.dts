@@ -33,13 +33,13 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-0 {
+		pwr {
 			label = "orangepi:green:pwr";
 			gpios = <&r_pio 0 10 GPIO_ACTIVE_HIGH>; /* PA10 */
 			default-state = "on";
 		};
 
-		led-1 {
+		status {
 			label = "orangepi:red:status";
 			gpios = <&pio 0 17 GPIO_ACTIVE_HIGH>; /* PA17 */
 		};

@@ -29,21 +29,19 @@
 #include <linux/slab.h>
 #include <linux/vgaarb.h>
 #include <linux/numa.h>
-#include <linux/msi.h>
-#include <linux/irqdomain.h>
 
 #include <asm/processor.h>
 #include <asm/io.h>
+#include <asm/prom.h>
 #include <asm/pci-bridge.h>
 #include <asm/byteorder.h>
 #include <asm/machdep.h>
 #include <asm/ppc-pci.h>
 #include <asm/eeh.h>
-#include <asm/setup.h>
 
 #include "../../../drivers/pci/pci.h"
 
-/* hose_spinlock protects accesses to the phb_bitmap. */
+/* hose_spinlock protects accesses to the the phb_bitmap. */
 static DEFINE_SPINLOCK(hose_spinlock);
 LIST_HEAD(hose_list);
 
@@ -63,7 +61,7 @@ EXPORT_SYMBOL(isa_mem_base);
 
 static const struct dma_map_ops *pci_dma_ops;
 
-void __init set_pci_dma_ops(const struct dma_map_ops *dma_ops)
+void set_pci_dma_ops(const struct dma_map_ops *dma_ops)
 {
 	pci_dma_ops = dma_ops;
 }
@@ -135,7 +133,7 @@ struct pci_controller *pcibios_alloc_controller(struct device_node *dev)
 	list_add_tail(&phb->list_node, &hose_list);
 	spin_unlock(&hose_spinlock);
 
-	phb->dn = of_node_get(dev);
+	phb->dn = dev;
 	phb->is_dynamic = slab_is_available();
 #ifdef CONFIG_PPC64
 	if (dev) {
@@ -158,7 +156,7 @@ void pcibios_free_controller(struct pci_controller *phb)
 	/* Clear bit of phb_bitmap to allow reuse of this PHB number. */
 	if (phb->global_number < MAX_PHBS)
 		clear_bit(phb->global_number, phb_bitmap);
-	of_node_put(phb->dn);
+
 	list_del(&phb->list_node);
 	spin_unlock(&hose_spinlock);
 
@@ -372,55 +370,6 @@ struct pci_controller *pci_find_controller_for_domain(int domain_nr)
 	return NULL;
 }
 
-struct pci_intx_virq {
-	int virq;
-	struct kref kref;
-	struct list_head list_node;
-};
-
-static LIST_HEAD(intx_list);
-static DEFINE_MUTEX(intx_mutex);
-
-static void ppc_pci_intx_release(struct kref *kref)
-{
-	struct pci_intx_virq *vi = container_of(kref, struct pci_intx_virq, kref);
-
-	list_del(&vi->list_node);
-	irq_dispose_mapping(vi->virq);
-	kfree(vi);
-}
-
-static int ppc_pci_unmap_irq_line(struct notifier_block *nb,
-			       unsigned long action, void *data)
-{
-	struct pci_dev *pdev = to_pci_dev(data);
-
-	if (action == BUS_NOTIFY_DEL_DEVICE) {
-		struct pci_intx_virq *vi;
-
-		mutex_lock(&intx_mutex);
-		list_for_each_entry(vi, &intx_list, list_node) {
-			if (vi->virq == pdev->irq) {
-				kref_put(&vi->kref, ppc_pci_intx_release);
-				break;
-			}
-		}
-		mutex_unlock(&intx_mutex);
-	}
-
-	return NOTIFY_DONE;
-}
-
-static struct notifier_block ppc_pci_unmap_irq_notifier = {
-	.notifier_call = ppc_pci_unmap_irq_line,
-};
-
-static int ppc_pci_register_irq_notifier(void)
-{
-	return bus_register_notifier(&pci_bus_type, &ppc_pci_unmap_irq_notifier);
-}
-arch_initcall(ppc_pci_register_irq_notifier);
-
 /*
  * Reads the interrupt pin to determine if interrupt is use by card.
  * If the interrupt is used, then gets the interrupt line from the
@@ -429,12 +378,6 @@ arch_initcall(ppc_pci_register_irq_notifier);
 static int pci_read_irq_line(struct pci_dev *pci_dev)
 {
 	int virq;
-	struct pci_intx_virq *vi, *vitmp;
-
-	/* Preallocate vi as rewind is complex if this fails after mapping */
-	vi = kzalloc(sizeof(struct pci_intx_virq), GFP_KERNEL);
-	if (!vi)
-		return -1;
 
 	pr_debug("PCI: Try to map irq for %s...\n", pci_name(pci_dev));
 
@@ -451,12 +394,12 @@ static int pci_read_irq_line(struct pci_dev *pci_dev)
 		 * function.
 		 */
 		if (pci_read_config_byte(pci_dev, PCI_INTERRUPT_PIN, &pin))
-			goto error_exit;
+			return -1;
 		if (pin == 0)
-			goto error_exit;
+			return -1;
 		if (pci_read_config_byte(pci_dev, PCI_INTERRUPT_LINE, &line) ||
 		    line == 0xff || line == 0) {
-			goto error_exit;
+			return -1;
 		}
 		pr_debug(" No map ! Using line %d (pin %d) from PCI config\n",
 			 line, pin);
@@ -468,33 +411,14 @@ static int pci_read_irq_line(struct pci_dev *pci_dev)
 
 	if (!virq) {
 		pr_debug(" Failed to map !\n");
-		goto error_exit;
+		return -1;
 	}
 
 	pr_debug(" Mapped to linux irq %d\n", virq);
 
 	pci_dev->irq = virq;
 
-	mutex_lock(&intx_mutex);
-	list_for_each_entry(vitmp, &intx_list, list_node) {
-		if (vitmp->virq == virq) {
-			kref_get(&vitmp->kref);
-			kfree(vi);
-			vi = NULL;
-			break;
-		}
-	}
-	if (vi) {
-		vi->virq = virq;
-		kref_init(&vi->kref);
-		list_add_tail(&vi->list_node, &intx_list);
-	}
-	mutex_unlock(&intx_mutex);
-
 	return 0;
-error_exit:
-	kfree(vi);
-	return -1;
 }
 
 /*
@@ -880,7 +804,6 @@ int pcibios_root_bridge_prepare(struct pci_host_bridge *bridge)
 static void pcibios_fixup_resources(struct pci_dev *dev)
 {
 	struct pci_controller *hose = pci_bus_to_host(dev->bus);
-	struct resource *res;
 	int i;
 
 	if (!hose) {
@@ -892,9 +815,9 @@ static void pcibios_fixup_resources(struct pci_dev *dev)
 	if (dev->is_virtfn)
 		return;
 
-	pci_dev_for_each_resource(dev, res, i) {
+	for (i = 0; i < DEVICE_COUNT_RESOURCE; i++) {
+		struct resource *res = dev->resource + i;
 		struct pci_bus_region reg;
-
 		if (!res->flags)
 			continue;
 
@@ -1078,18 +1001,13 @@ void pcibios_bus_add_device(struct pci_dev *dev)
 		ppc_md.pcibios_bus_add_device(dev);
 }
 
-int pcibios_device_add(struct pci_dev *dev)
+int pcibios_add_device(struct pci_dev *dev)
 {
-	struct irq_domain *d;
-
 #ifdef CONFIG_PCI_IOV
 	if (ppc_md.pcibios_fixup_sriov)
 		ppc_md.pcibios_fixup_sriov(dev);
 #endif /* CONFIG_PCI_IOV */
 
-	d = dev_get_msi_domain(&dev->bus->dev);
-	if (d)
-		dev_set_msi_domain(&dev->dev, d);
 	return 0;
 }
 
@@ -1106,7 +1024,7 @@ void pcibios_fixup_bus(struct pci_bus *bus)
 	 */
 	pci_read_bridge_bases(bus);
 
-	/* Now fixup the bus */
+	/* Now fixup the bus bus */
 	pcibios_setup_bus_self(bus);
 }
 EXPORT_SYMBOL(pcibios_fixup_bus);
@@ -1453,10 +1371,11 @@ void pcibios_claim_one_bus(struct pci_bus *bus)
 	struct pci_bus *child_bus;
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
-		struct resource *r;
 		int i;
 
-		pci_dev_for_each_resource(dev, r, i) {
+		for (i = 0; i < PCI_NUM_RESOURCES; i++) {
+			struct resource *r = &dev->resource[i];
+
 			if (r->parent || !r->start || !r->flags)
 				continue;
 
@@ -1705,20 +1624,19 @@ EXPORT_SYMBOL_GPL(pcibios_scan_phb);
 
 static void fixup_hide_host_resource_fsl(struct pci_dev *dev)
 {
-	int class = dev->class >> 8;
-	/* When configured as agent, programming interface = 1 */
+	int i, class = dev->class >> 8;
+	/* When configured as agent, programing interface = 1 */
 	int prog_if = dev->class & 0xf;
-	struct resource *r;
 
 	if ((class == PCI_CLASS_PROCESSOR_POWERPC ||
 	     class == PCI_CLASS_BRIDGE_OTHER) &&
 		(dev->hdr_type == PCI_HEADER_TYPE_NORMAL) &&
 		(prog_if == 0) &&
 		(dev->bus->parent == NULL)) {
-		pci_dev_for_each_resource(dev, r) {
-			r->start = 0;
-			r->end = 0;
-			r->flags = 0;
+		for (i = 0; i < DEVICE_COUNT_RESOURCE; i++) {
+			dev->resource[i].start = 0;
+			dev->resource[i].end = 0;
+			dev->resource[i].flags = 0;
 		}
 	}
 }

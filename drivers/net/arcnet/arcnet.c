@@ -196,10 +196,13 @@ static void arcnet_dump_packet(struct net_device *dev, int bufnum,
 void arcnet_led_event(struct net_device *dev, enum arcnet_led_event event)
 {
 	struct arcnet_local *lp = netdev_priv(dev);
+	unsigned long led_delay = 350;
+	unsigned long tx_delay = 50;
 
 	switch (event) {
 	case ARCNET_LED_EVENT_RECON:
-		led_trigger_blink_oneshot(lp->recon_led_trig, 350, 350, 0);
+		led_trigger_blink_oneshot(lp->recon_led_trig,
+					  &led_delay, &led_delay, 0);
 		break;
 	case ARCNET_LED_EVENT_OPEN:
 		led_trigger_event(lp->tx_led_trig, LED_OFF);
@@ -210,7 +213,8 @@ void arcnet_led_event(struct net_device *dev, enum arcnet_led_event event)
 		led_trigger_event(lp->recon_led_trig, LED_OFF);
 		break;
 	case ARCNET_LED_EVENT_TX:
-		led_trigger_blink_oneshot(lp->tx_led_trig, 50, 50, 0);
+		led_trigger_blink_oneshot(lp->tx_led_trig,
+					  &tx_delay, &tx_delay, 0);
 		break;
 	}
 }
@@ -423,9 +427,9 @@ out:
 	rtnl_unlock();
 }
 
-static void arcnet_reply_tasklet(struct tasklet_struct *t)
+static void arcnet_reply_tasklet(unsigned long data)
 {
-	struct arcnet_local *lp = from_tasklet(lp, t, reply_tasklet);
+	struct arcnet_local *lp = (struct arcnet_local *)data;
 
 	struct sk_buff *ackskb, *skb;
 	struct sock_exterr_skb *serr;
@@ -526,7 +530,8 @@ int arcnet_open(struct net_device *dev)
 		arc_cont(D_PROTO, "\n");
 	}
 
-	tasklet_setup(&lp->reply_tasklet, arcnet_reply_tasklet);
+	tasklet_init(&lp->reply_tasklet, arcnet_reply_tasklet,
+		     (unsigned long)lp);
 
 	arc_printk(D_INIT, dev, "arcnet_open: resetting card.\n");
 

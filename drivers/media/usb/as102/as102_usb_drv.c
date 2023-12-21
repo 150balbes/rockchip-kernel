@@ -303,8 +303,10 @@ static void as102_usb_release(struct kref *kref)
 	struct as102_dev_t *as102_dev;
 
 	as102_dev = container_of(kref, struct as102_dev_t, kref);
-	usb_put_dev(as102_dev->bus_adap.usb_dev);
-	kfree(as102_dev);
+	if (as102_dev != NULL) {
+		usb_put_dev(as102_dev->bus_adap.usb_dev);
+		kfree(as102_dev);
+	}
 }
 
 static void as102_usb_disconnect(struct usb_interface *intf)

@@ -1024,12 +1024,12 @@ int cxd2880_tnrdmd_dvbt2_check_demod_lock(struct cxd2880_tnrdmd
 		else
 			*lock = CXD2880_TNRDMD_LOCK_RESULT_NOTDETECT;
 
-		return 0;
+		return ret;
 	}
 
 	if (sync_stat == 6) {
 		*lock = CXD2880_TNRDMD_LOCK_RESULT_LOCKED;
-		return 0;
+		return ret;
 	}
 
 	ret =
@@ -1045,7 +1045,7 @@ int cxd2880_tnrdmd_dvbt2_check_demod_lock(struct cxd2880_tnrdmd
 	else
 		*lock = CXD2880_TNRDMD_LOCK_RESULT_NOTDETECT;
 
-	return 0;
+	return ret;
 }
 
 int cxd2880_tnrdmd_dvbt2_check_ts_lock(struct cxd2880_tnrdmd
@@ -1084,15 +1084,15 @@ int cxd2880_tnrdmd_dvbt2_check_ts_lock(struct cxd2880_tnrdmd
 		else
 			*lock = CXD2880_TNRDMD_LOCK_RESULT_NOTDETECT;
 
-		return 0;
+		return ret;
 	}
 
 	if (ts_lock) {
 		*lock = CXD2880_TNRDMD_LOCK_RESULT_LOCKED;
-		return 0;
+		return ret;
 	} else if (!unlock_detected) {
 		*lock = CXD2880_TNRDMD_LOCK_RESULT_NOTDETECT;
-		return 0;
+		return ret;
 	}
 
 	ret =
@@ -1106,7 +1106,7 @@ int cxd2880_tnrdmd_dvbt2_check_ts_lock(struct cxd2880_tnrdmd
 	else
 		*lock = CXD2880_TNRDMD_LOCK_RESULT_NOTDETECT;
 
-	return 0;
+	return ret;
 }
 
 int cxd2880_tnrdmd_dvbt2_set_plp_cfg(struct cxd2880_tnrdmd

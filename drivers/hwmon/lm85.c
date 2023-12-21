@@ -294,7 +294,7 @@ struct lm85_data {
 	bool has_vid5;	/* true if VID5 is configured for ADT7463 or ADT7468 */
 
 	struct mutex update_lock;
-	bool valid;		/* true if following fields are valid */
+	int valid;		/* !=0 if following fields are valid */
 	unsigned long last_reading;	/* In jiffies */
 	unsigned long last_config;	/* In jiffies */
 
@@ -541,7 +541,7 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 		data->last_config = jiffies;
 	}  /* last_config */
 
-	data->valid = true;
+	data->valid = 1;
 
 	mutex_unlock(&data->update_lock);
 
@@ -1539,7 +1539,7 @@ static int lm85_detect(struct i2c_client *client, struct i2c_board_info *info)
 	if (!type_name)
 		return -ENODEV;
 
-	strscpy(info->type, type_name, I2C_NAME_SIZE);
+	strlcpy(info->type, type_name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -1698,7 +1698,7 @@ static struct i2c_driver lm85_driver = {
 		.name   = "lm85",
 		.of_match_table = of_match_ptr(lm85_of_match),
 	},
-	.probe		= lm85_probe,
+	.probe_new	= lm85_probe,
 	.id_table	= lm85_id,
 	.detect		= lm85_detect,
 	.address_list	= normal_i2c,

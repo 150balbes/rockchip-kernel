@@ -225,16 +225,6 @@ ipv6_local_replace()
 	ip -n $ns link del dev dummy1
 }
 
-fib_notify_on_flag_change_set()
-{
-	local notify=$1; shift
-
-	ip netns exec testns1 sysctl -qw net.ipv4.fib_notify_on_flag_change=$notify
-	ip netns exec testns1 sysctl -qw net.ipv6.fib_notify_on_flag_change=$notify
-
-	log_info "Set fib_notify_on_flag_change to $notify"
-}
-
 setup_prepare()
 {
 	ip netns add testns1
@@ -261,10 +251,6 @@ trap cleanup EXIT
 
 setup_prepare
 
-fib_notify_on_flag_change_set 1
-tests_run
-
-fib_notify_on_flag_change_set 0
 tests_run
 
 exit $EXIT_STATUS

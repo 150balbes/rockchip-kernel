@@ -17,13 +17,6 @@
 #include "csi.h"
 #include "vi.h"
 
-#define TEGRA210_MIN_WIDTH	32U
-#define TEGRA210_MAX_WIDTH	32768U
-#define TEGRA210_MIN_HEIGHT	32U
-#define TEGRA210_MAX_HEIGHT	32768U
-
-#define SURFACE_ALIGN_BYTES	64
-
 #define TEGRA_VI_SYNCPT_WAIT_TIMEOUT			msecs_to_jiffies(200)
 
 /* Tegra210 VI registers */
@@ -156,22 +149,21 @@ static u32 tegra_vi_read(struct tegra_vi_channel *chan, unsigned int addr)
 }
 
 /* Tegra210 VI_CSI registers accessors */
-static void vi_csi_write(struct tegra_vi_channel *chan, u8 portno,
-			 unsigned int addr, u32 val)
+static void vi_csi_write(struct tegra_vi_channel *chan, unsigned int addr,
+			 u32 val)
 {
 	void __iomem *vi_csi_base;
 
-	vi_csi_base = chan->vi->iomem + TEGRA210_VI_CSI_BASE(portno);
+	vi_csi_base = chan->vi->iomem + TEGRA210_VI_CSI_BASE(chan->portno);
 
 	writel_relaxed(val, vi_csi_base + addr);
 }
 
-static u32 vi_csi_read(struct tegra_vi_channel *chan, u8 portno,
-		       unsigned int addr)
+static u32 vi_csi_read(struct tegra_vi_channel *chan, unsigned int addr)
 {
 	void __iomem *vi_csi_base;
 
-	vi_csi_base = chan->vi->iomem + TEGRA210_VI_CSI_BASE(portno);
+	vi_csi_base = chan->vi->iomem + TEGRA210_VI_CSI_BASE(chan->portno);
 
 	return readl_relaxed(vi_csi_base + addr);
 }
@@ -179,130 +171,27 @@ static u32 vi_csi_read(struct tegra_vi_channel *chan, u8 portno,
 /*
  * Tegra210 VI channel capture operations
  */
-
-static int tegra210_channel_host1x_syncpt_init(struct tegra_vi_channel *chan)
-{
-	struct tegra_vi *vi = chan->vi;
-	unsigned long flags = HOST1X_SYNCPT_CLIENT_MANAGED;
-	struct host1x_syncpt *fs_sp;
-	struct host1x_syncpt *mw_sp;
-	int ret, i;
-
-	for (i = 0; i < chan->numgangports; i++) {
-		fs_sp = host1x_syncpt_request(&vi->client, flags);
-		if (!fs_sp) {
-			dev_err(vi->dev, "failed to request frame start syncpoint\n");
-			ret = -ENOMEM;
-			goto free_syncpts;
-		}
-
-		mw_sp = host1x_syncpt_request(&vi->client, flags);
-		if (!mw_sp) {
-			dev_err(vi->dev, "failed to request memory ack syncpoint\n");
-			host1x_syncpt_put(fs_sp);
-			ret = -ENOMEM;
-			goto free_syncpts;
-		}
-
-		chan->frame_start_sp[i] = fs_sp;
-		chan->mw_ack_sp[i] = mw_sp;
-		spin_lock_init(&chan->sp_incr_lock[i]);
-	}
-
-	return 0;
-
-free_syncpts:
-	for (i = 0; i < chan->numgangports; i++) {
-		host1x_syncpt_put(chan->mw_ack_sp[i]);
-		host1x_syncpt_put(chan->frame_start_sp[i]);
-	}
-	return ret;
-}
-
-static void tegra210_channel_host1x_syncpt_free(struct tegra_vi_channel *chan)
-{
-	int i;
-
-	for (i = 0; i < chan->numgangports; i++) {
-		host1x_syncpt_put(chan->mw_ack_sp[i]);
-		host1x_syncpt_put(chan->frame_start_sp[i]);
-	}
-}
-
-static void tegra210_fmt_align(struct v4l2_pix_format *pix, unsigned int bpp)
-{
-	unsigned int min_bpl;
-	unsigned int max_bpl;
-	unsigned int bpl;
-
-	/*
-	 * The transfer alignment requirements are expressed in bytes.
-	 * Clamp the requested width and height to the limits.
-	 */
-	pix->width = clamp(pix->width, TEGRA210_MIN_WIDTH, TEGRA210_MAX_WIDTH);
-	pix->height = clamp(pix->height, TEGRA210_MIN_HEIGHT, TEGRA210_MAX_HEIGHT);
-
-	/* Clamp the requested bytes per line value. If the maximum bytes per
-	 * line value is zero, the module doesn't support user configurable
-	 * line sizes. Override the requested value with the minimum in that
-	 * case.
-	 */
-	min_bpl = pix->width * bpp;
-	max_bpl = rounddown(TEGRA210_MAX_WIDTH, SURFACE_ALIGN_BYTES);
-	bpl = roundup(pix->bytesperline, SURFACE_ALIGN_BYTES);
-
-	pix->bytesperline = clamp(bpl, min_bpl, max_bpl);
-	pix->sizeimage = pix->bytesperline * pix->height;
-	if (pix->pixelformat == V4L2_PIX_FMT_NV16)
-		pix->sizeimage *= 2;
-}
-
-static int tegra_channel_capture_setup(struct tegra_vi_channel *chan,
-				       u8 portno)
+static int tegra_channel_capture_setup(struct tegra_vi_channel *chan)
 {
 	u32 height = chan->format.height;
 	u32 width = chan->format.width;
 	u32 format = chan->fmtinfo->img_fmt;
 	u32 data_type = chan->fmtinfo->img_dt;
 	u32 word_count = (width * chan->fmtinfo->bit_width) / 8;
-	u32 bypass_pixel_transform = BIT(BYPASS_PXL_TRANSFORM_OFFSET);
 
-	/*
-	 * VI Pixel transformation unit converts source pixels data format
-	 * into selected destination pixel format and aligns properly while
-	 * interfacing with memory packer.
-	 * This pixel transformation should be enabled for YUV and RGB
-	 * formats and should be bypassed for RAW formats as RAW formats
-	 * only support direct to memory.
-	 */
-	if (chan->pg_mode || data_type == TEGRA_IMAGE_DT_YUV422_8 ||
-	    data_type == TEGRA_IMAGE_DT_RGB888)
-		bypass_pixel_transform = 0;
-
-	/*
-	 * For x8 source streaming, the source image is split onto two x4 ports
-	 * with left half to first x4 port and right half to second x4 port.
-	 * So, use split width and corresponding word count for each x4 port.
-	 */
-	if (chan->numgangports > 1) {
-		width = width >> 1;
-		word_count = (width * chan->fmtinfo->bit_width) / 8;
-	}
-
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_ERROR_STATUS, 0xffffffff);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_IMAGE_DEF,
-		     bypass_pixel_transform |
+	vi_csi_write(chan, TEGRA_VI_CSI_ERROR_STATUS, 0xffffffff);
+	vi_csi_write(chan, TEGRA_VI_CSI_IMAGE_DEF,
+		     ((chan->pg_mode ? 0 : 1) << BYPASS_PXL_TRANSFORM_OFFSET) |
 		     (format << IMAGE_DEF_FORMAT_OFFSET) |
 		     IMAGE_DEF_DEST_MEM);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_IMAGE_DT, data_type);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_IMAGE_SIZE_WC, word_count);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_IMAGE_SIZE,
+	vi_csi_write(chan, TEGRA_VI_CSI_IMAGE_DT, data_type);
+	vi_csi_write(chan, TEGRA_VI_CSI_IMAGE_SIZE_WC, word_count);
+	vi_csi_write(chan, TEGRA_VI_CSI_IMAGE_SIZE,
 		     (height << IMAGE_SIZE_HEIGHT_OFFSET) | width);
 	return 0;
 }
 
-static void tegra_channel_vi_soft_reset(struct tegra_vi_channel *chan,
-					u8 portno)
+static void tegra_channel_vi_soft_reset(struct tegra_vi_channel *chan)
 {
 	/* disable clock gating to enable continuous clock */
 	tegra_vi_write(chan, TEGRA_VI_CFG_CG_CTRL, 0);
@@ -310,16 +199,15 @@ static void tegra_channel_vi_soft_reset(struct tegra_vi_channel *chan,
 	 * Soft reset memory client interface, pixel format logic, sensor
 	 * control logic, and a shadow copy logic to bring VI to clean state.
 	 */
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SW_RESET, 0xf);
+	vi_csi_write(chan, TEGRA_VI_CSI_SW_RESET, 0xf);
 	usleep_range(100, 200);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SW_RESET, 0x0);
+	vi_csi_write(chan, TEGRA_VI_CSI_SW_RESET, 0x0);
 
 	/* enable back VI clock gating */
 	tegra_vi_write(chan, TEGRA_VI_CFG_CG_CTRL, VI_CG_2ND_LEVEL_EN);
 }
 
-static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan,
-						u8 portno)
+static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan)
 {
 	struct v4l2_subdev *subdev;
 	u32 val;
@@ -331,9 +219,9 @@ static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan,
 	 * events which can cause CSI and VI hardware hang.
 	 * This helps to have a clean capture for next frame.
 	 */
-	val = vi_csi_read(chan, portno, TEGRA_VI_CSI_ERROR_STATUS);
+	val = vi_csi_read(chan, TEGRA_VI_CSI_ERROR_STATUS);
 	dev_dbg(&chan->video.dev, "TEGRA_VI_CSI_ERROR_STATUS 0x%08x\n", val);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_ERROR_STATUS, val);
+	vi_csi_write(chan, TEGRA_VI_CSI_ERROR_STATUS, val);
 
 	val = tegra_vi_read(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR);
 	dev_dbg(&chan->video.dev,
@@ -341,8 +229,8 @@ static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan,
 	tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR, val);
 
 	/* recover VI by issuing software reset and re-setup for capture */
-	tegra_channel_vi_soft_reset(chan, portno);
-	tegra_channel_capture_setup(chan, portno);
+	tegra_channel_vi_soft_reset(chan);
+	tegra_channel_capture_setup(chan);
 
 	/* recover CSI block */
 	subdev = tegra_channel_get_remote_csi_subdev(chan);
@@ -381,114 +269,67 @@ static void release_buffer(struct tegra_vi_channel *chan,
 	vb2_buffer_done(&vb->vb2_buf, state);
 }
 
-static void tegra_channel_vi_buffer_setup(struct tegra_vi_channel *chan,
-					  u8 portno, u32 buf_offset,
-					  struct tegra_channel_buffer *buf)
-{
-	int bytesperline = chan->format.bytesperline;
-	u32 sizeimage = chan->format.sizeimage;
-
-	/* program buffer address by using surface 0 */
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE0_OFFSET_MSB,
-		     ((u64)buf->addr + buf_offset) >> 32);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE0_OFFSET_LSB,
-		     buf->addr + buf_offset);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE0_STRIDE, bytesperline);
-
-	if (chan->fmtinfo->fourcc != V4L2_PIX_FMT_NV16)
-		return;
-	/*
-	 * Program surface 1 for UV plane with offset sizeimage from Y plane.
-	 */
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE1_OFFSET_MSB,
-		     (((u64)buf->addr + sizeimage / 2) + buf_offset) >> 32);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE1_OFFSET_LSB,
-		     buf->addr + sizeimage / 2 + buf_offset);
-	vi_csi_write(chan, portno, TEGRA_VI_CSI_SURFACE1_STRIDE, bytesperline);
-}
-
 static int tegra_channel_capture_frame(struct tegra_vi_channel *chan,
 				       struct tegra_channel_buffer *buf)
 {
 	u32 thresh, value, frame_start, mw_ack_done;
-	u32 fs_thresh[GANG_PORTS_MAX];
-	u8 *portnos = chan->portnos;
-	int gang_bpl = (chan->format.width >> 1) * chan->fmtinfo->bpp;
-	u32 buf_offset;
-	bool capture_timedout = false;
-	int err, i;
+	int bytes_per_line = chan->format.bytesperline;
+	int err;
 
-	for (i = 0; i < chan->numgangports; i++) {
-		/*
-		 * Align buffers side-by-side for all consecutive x4 ports
-		 * in gang ports using bytes per line based on source split
-		 * width.
-		 */
-		buf_offset = i * roundup(gang_bpl, SURFACE_ALIGN_BYTES);
-		tegra_channel_vi_buffer_setup(chan, portnos[i], buf_offset,
-					      buf);
+	/* program buffer address by using surface 0 */
+	vi_csi_write(chan, TEGRA_VI_CSI_SURFACE0_OFFSET_MSB,
+		     (u64)buf->addr >> 32);
+	vi_csi_write(chan, TEGRA_VI_CSI_SURFACE0_OFFSET_LSB, buf->addr);
+	vi_csi_write(chan, TEGRA_VI_CSI_SURFACE0_STRIDE, bytes_per_line);
 
-		/*
-		 * Tegra VI block interacts with host1x syncpt to synchronize
-		 * programmed condition and hardware operation for capture.
-		 * Frame start and Memory write acknowledge syncpts has their
-		 * own FIFO of depth 2.
-		 *
-		 * Syncpoint trigger conditions set through VI_INCR_SYNCPT
-		 * register are added to HW syncpt FIFO and when HW triggers,
-		 * syncpt condition is removed from the FIFO and counter at
-		 * syncpoint index will be incremented by the hardware and
-		 * software can wait for counter to reach threshold to
-		 * synchronize capturing frame with hardware capture events.
-		 */
+	/*
+	 * Tegra VI block interacts with host1x syncpt for synchronizing
+	 * programmed condition of capture state and hardware operation.
+	 * Frame start and Memory write acknowledge syncpts has their own
+	 * FIFO of depth 2.
+	 *
+	 * Syncpoint trigger conditions set through VI_INCR_SYNCPT register
+	 * are added to HW syncpt FIFO and when the HW triggers, syncpt
+	 * condition is removed from the FIFO and counter at syncpoint index
+	 * will be incremented by the hardware and software can wait for
+	 * counter to reach threshold to synchronize capturing frame with the
+	 * hardware capture events.
+	 */
 
-		/* increase channel syncpoint threshold for FRAME_START */
-		thresh = host1x_syncpt_incr_max(chan->frame_start_sp[i], 1);
-		fs_thresh[i] = thresh;
+	/* increase channel syncpoint threshold for FRAME_START */
+	thresh = host1x_syncpt_incr_max(chan->frame_start_sp, 1);
 
-		/* Program FRAME_START trigger condition syncpt request */
-		frame_start = VI_CSI_PP_FRAME_START(portnos[i]);
-		value = VI_CFG_VI_INCR_SYNCPT_COND(frame_start) |
-			host1x_syncpt_id(chan->frame_start_sp[i]);
-		tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT, value);
+	/* Program FRAME_START trigger condition syncpt request */
+	frame_start = VI_CSI_PP_FRAME_START(chan->portno);
+	value = VI_CFG_VI_INCR_SYNCPT_COND(frame_start) |
+		host1x_syncpt_id(chan->frame_start_sp);
+	tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT, value);
 
-		/* increase channel syncpoint threshold for MW_ACK_DONE */
-		thresh = host1x_syncpt_incr_max(chan->mw_ack_sp[i], 1);
-		buf->mw_ack_sp_thresh[i] = thresh;
+	/* increase channel syncpoint threshold for MW_ACK_DONE */
+	buf->mw_ack_sp_thresh = host1x_syncpt_incr_max(chan->mw_ack_sp, 1);
 
-		/* Program MW_ACK_DONE trigger condition syncpt request */
-		mw_ack_done = VI_CSI_MW_ACK_DONE(portnos[i]);
-		value = VI_CFG_VI_INCR_SYNCPT_COND(mw_ack_done) |
-			host1x_syncpt_id(chan->mw_ack_sp[i]);
-		tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT, value);
-	}
+	/* Program MW_ACK_DONE trigger condition syncpt request */
+	mw_ack_done = VI_CSI_MW_ACK_DONE(chan->portno);
+	value = VI_CFG_VI_INCR_SYNCPT_COND(mw_ack_done) |
+		host1x_syncpt_id(chan->mw_ack_sp);
+	tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT, value);
 
-	/* enable single shot capture after all ganged ports are ready */
-	for (i = 0; i < chan->numgangports; i++)
-		vi_csi_write(chan, portnos[i], TEGRA_VI_CSI_SINGLE_SHOT,
-			     SINGLE_SHOT_CAPTURE);
+	/* enable single shot capture */
+	vi_csi_write(chan, TEGRA_VI_CSI_SINGLE_SHOT, SINGLE_SHOT_CAPTURE);
 
-	for (i = 0; i < chan->numgangports; i++) {
-		/*
-		 * Wait for syncpt counter to reach frame start event threshold
-		 */
-		err = host1x_syncpt_wait(chan->frame_start_sp[i], fs_thresh[i],
-					 TEGRA_VI_SYNCPT_WAIT_TIMEOUT, &value);
-		if (err) {
-			capture_timedout = true;
-			/* increment syncpoint counter for timedout events */
-			host1x_syncpt_incr(chan->frame_start_sp[i]);
-			spin_lock(&chan->sp_incr_lock[i]);
-			host1x_syncpt_incr(chan->mw_ack_sp[i]);
-			spin_unlock(&chan->sp_incr_lock[i]);
-			/* clear errors and recover */
-			tegra_channel_capture_error_recover(chan, portnos[i]);
-		}
-	}
-
-	if (capture_timedout) {
+	/* wait for syncpt counter to reach frame start event threshold */
+	err = host1x_syncpt_wait(chan->frame_start_sp, thresh,
+				 TEGRA_VI_SYNCPT_WAIT_TIMEOUT, &value);
+	if (err) {
 		dev_err_ratelimited(&chan->video.dev,
 				    "frame start syncpt timeout: %d\n", err);
+		/* increment syncpoint counter for timedout events */
+		host1x_syncpt_incr(chan->frame_start_sp);
+		spin_lock(&chan->sp_incr_lock);
+		host1x_syncpt_incr(chan->mw_ack_sp);
+		spin_unlock(&chan->sp_incr_lock);
+		/* clear errors and recover */
+		tegra_channel_capture_error_recover(chan);
 		release_buffer(chan, buf, VB2_BUF_STATE_ERROR);
 		return err;
 	}
@@ -509,29 +350,21 @@ static void tegra_channel_capture_done(struct tegra_vi_channel *chan,
 {
 	enum vb2_buffer_state state = VB2_BUF_STATE_DONE;
 	u32 value;
-	bool capture_timedout = false;
-	int ret, i;
+	int ret;
 
-	for (i = 0; i < chan->numgangports; i++) {
-		/*
-		 * Wait for syncpt counter to reach MW_ACK_DONE event threshold
-		 */
-		ret = host1x_syncpt_wait(chan->mw_ack_sp[i],
-					 buf->mw_ack_sp_thresh[i],
-					 TEGRA_VI_SYNCPT_WAIT_TIMEOUT, &value);
-		if (ret) {
-			capture_timedout = true;
-			state = VB2_BUF_STATE_ERROR;
-			/* increment syncpoint counter for timedout event */
-			spin_lock(&chan->sp_incr_lock[i]);
-			host1x_syncpt_incr(chan->mw_ack_sp[i]);
-			spin_unlock(&chan->sp_incr_lock[i]);
-		}
-	}
-
-	if (capture_timedout)
+	/* wait for syncpt counter to reach MW_ACK_DONE event threshold */
+	ret = host1x_syncpt_wait(chan->mw_ack_sp, buf->mw_ack_sp_thresh,
+				 TEGRA_VI_SYNCPT_WAIT_TIMEOUT, &value);
+	if (ret) {
 		dev_err_ratelimited(&chan->video.dev,
 				    "MW_ACK_DONE syncpt timeout: %d\n", ret);
+		state = VB2_BUF_STATE_ERROR;
+		/* increment syncpoint counter for timedout event */
+		spin_lock(&chan->sp_incr_lock);
+		host1x_syncpt_incr(chan->mw_ack_sp);
+		spin_unlock(&chan->sp_incr_lock);
+	}
+
 	release_buffer(chan, buf, state);
 }
 
@@ -539,7 +372,6 @@ static int chan_capture_kthread_start(void *data)
 {
 	struct tegra_vi_channel *chan = data;
 	struct tegra_channel_buffer *buf;
-	unsigned int retries = 0;
 	int err = 0;
 
 	while (1) {
@@ -569,15 +401,8 @@ static int chan_capture_kthread_start(void *data)
 		spin_unlock(&chan->start_lock);
 
 		err = tegra_channel_capture_frame(chan, buf);
-		if (!err) {
-			retries = 0;
-			continue;
-		}
-
-		if (retries++ > chan->syncpt_timeout_retry)
+		if (err)
 			vb2_queue_error(&chan->queue);
-		else
-			err = 0;
 	}
 
 	return 0;
@@ -612,12 +437,14 @@ static int tegra210_vi_start_streaming(struct vb2_queue *vq, u32 count)
 	struct tegra_vi_channel *chan = vb2_get_drv_priv(vq);
 	struct media_pipeline *pipe = &chan->video.pipe;
 	u32 val;
-	u8 *portnos = chan->portnos;
-	int ret, i;
+	int ret;
 
 	tegra_vi_write(chan, TEGRA_VI_CFG_CG_CTRL, VI_CG_2ND_LEVEL_EN);
 
-	/* clear syncpt errors */
+	/* clear errors */
+	val = vi_csi_read(chan, TEGRA_VI_CSI_ERROR_STATUS);
+	vi_csi_write(chan, TEGRA_VI_CSI_ERROR_STATUS, val);
+
 	val = tegra_vi_read(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR);
 	tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR, val);
 
@@ -632,18 +459,11 @@ static int tegra210_vi_start_streaming(struct vb2_queue *vq, u32 count)
 		       VI_INCR_SYNCPT_NO_STALL);
 
 	/* start the pipeline */
-	ret = video_device_pipeline_start(&chan->video, pipe);
+	ret = media_pipeline_start(&chan->video.entity, pipe);
 	if (ret < 0)
 		goto error_pipeline_start;
 
-	/* clear csi errors and do capture setup for all ports in gang mode */
-	for (i = 0; i < chan->numgangports; i++) {
-		val = vi_csi_read(chan, portnos[i], TEGRA_VI_CSI_ERROR_STATUS);
-		vi_csi_write(chan, portnos[i], TEGRA_VI_CSI_ERROR_STATUS, val);
-
-		tegra_channel_capture_setup(chan, portnos[i]);
-	}
-
+	tegra_channel_capture_setup(chan);
 	ret = tegra_channel_set_stream(chan, true);
 	if (ret < 0)
 		goto error_set_stream;
@@ -680,7 +500,7 @@ error_kthread_done:
 error_kthread_start:
 	tegra_channel_set_stream(chan, false);
 error_set_stream:
-	video_device_pipeline_stop(&chan->video);
+	media_pipeline_stop(&chan->video.entity);
 error_pipeline_start:
 	tegra_channel_release_buffers(chan, VB2_BUF_STATE_QUEUED);
 	return ret;
@@ -702,7 +522,7 @@ static void tegra210_vi_stop_streaming(struct vb2_queue *vq)
 
 	tegra_channel_release_buffers(chan, VB2_BUF_STATE_ERROR);
 	tegra_channel_set_stream(chan, false);
-	video_device_pipeline_stop(&chan->video);
+	media_pipeline_stop(&chan->video.entity);
 }
 
 /*
@@ -786,26 +606,23 @@ static const struct tegra_video_format tegra210_video_formats[] = {
 	TEGRA210_VIDEO_FMT(RAW12, 12, SGBRG12_1X12, 2, T_R16_I, SGBRG12),
 	TEGRA210_VIDEO_FMT(RAW12, 12, SBGGR12_1X12, 2, T_R16_I, SBGGR12),
 	/* RGB888 */
-	TEGRA210_VIDEO_FMT(RGB888, 24, RGB888_1X24, 4, T_A8R8G8B8, XBGR32),
+	TEGRA210_VIDEO_FMT(RGB888, 24, RGB888_1X24, 4, T_A8R8G8B8, RGB24),
 	TEGRA210_VIDEO_FMT(RGB888, 24, RGB888_1X32_PADHI, 4, T_A8B8G8R8,
-			   RGBX32),
+			   XBGR32),
 	/* YUV422 */
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, UYVY8_1X16, 2, T_U8_Y8__V8_Y8, YVYU),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, VYUY8_1X16, 2, T_V8_Y8__U8_Y8, YUYV),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, YUYV8_1X16, 2, T_Y8_U8__Y8_V8, VYUY),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, YVYU8_1X16, 2, T_Y8_V8__Y8_U8, UYVY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, UYVY8_1X16, 2, T_U8_Y8__V8_Y8, UYVY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, VYUY8_1X16, 2, T_V8_Y8__U8_Y8, VYUY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, YUYV8_1X16, 2, T_Y8_U8__Y8_V8, YUYV),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, YVYU8_1X16, 2, T_Y8_V8__Y8_U8, YVYU),
 	TEGRA210_VIDEO_FMT(YUV422_8, 16, UYVY8_1X16, 1, T_Y8__V8U8_N422, NV16),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, UYVY8_2X8, 2, T_U8_Y8__V8_Y8, YVYU),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, VYUY8_2X8, 2, T_V8_Y8__U8_Y8, YUYV),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, YUYV8_2X8, 2, T_Y8_U8__Y8_V8, VYUY),
-	TEGRA210_VIDEO_FMT(YUV422_8, 16, YVYU8_2X8, 2, T_Y8_V8__Y8_U8, UYVY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, UYVY8_2X8, 2, T_U8_Y8__V8_Y8, UYVY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, VYUY8_2X8, 2, T_V8_Y8__U8_Y8, VYUY),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, YUYV8_2X8, 2, T_Y8_U8__Y8_V8, YUYV),
+	TEGRA210_VIDEO_FMT(YUV422_8, 16, YVYU8_2X8, 2, T_Y8_V8__Y8_U8, YVYU),
 };
 
 /* Tegra210 VI operations */
 static const struct tegra_vi_ops tegra210_vi_ops = {
-	.channel_host1x_syncpt_init = tegra210_channel_host1x_syncpt_init,
-	.channel_host1x_syncpt_free = tegra210_channel_host1x_syncpt_free,
-	.vi_fmt_align = tegra210_fmt_align,
 	.vi_start_streaming = tegra210_vi_start_streaming,
 	.vi_stop_streaming = tegra210_vi_stop_streaming,
 };
@@ -818,10 +635,8 @@ const struct tegra_vi_soc tegra210_vi_soc = {
 	.hw_revision = 3,
 	.vi_max_channels = 6,
 #if IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG)
-	.default_video_format = &tegra210_video_formats[0],
 	.vi_max_clk_hz = 499200000,
 #else
-	.default_video_format = &tegra210_video_formats[4],
 	.vi_max_clk_hz = 998400000,
 #endif
 };
@@ -902,10 +717,10 @@ static void tpg_write(struct tegra_csi *csi, u8 portno, unsigned int addr,
 /*
  * Tegra210 CSI operations
  */
-static void tegra210_csi_port_recover(struct tegra_csi_channel *csi_chan,
-				      u8 portno)
+static void tegra210_csi_error_recover(struct tegra_csi_channel *csi_chan)
 {
 	struct tegra_csi *csi = csi_chan->csi;
+	unsigned int portno = csi_chan->csi_port_num;
 	u32 val;
 
 	/*
@@ -954,26 +769,16 @@ static void tegra210_csi_port_recover(struct tegra_csi_channel *csi_chan,
 	}
 }
 
-static void tegra210_csi_error_recover(struct tegra_csi_channel *csi_chan)
-{
-	u8 *portnos = csi_chan->csi_port_nums;
-	int i;
-
-	for (i = 0; i < csi_chan->numgangports; i++)
-		tegra210_csi_port_recover(csi_chan, portnos[i]);
-}
-
-static int
-tegra210_csi_port_start_streaming(struct tegra_csi_channel *csi_chan,
-				  u8 portno)
+static int tegra210_csi_start_streaming(struct tegra_csi_channel *csi_chan)
 {
 	struct tegra_csi *csi = csi_chan->csi;
+	unsigned int portno = csi_chan->csi_port_num;
 	u8 clk_settle_time = 0;
 	u8 ths_settle_time = 10;
 	u32 val;
 
 	if (!csi_chan->pg_mode)
-		tegra_csi_calc_settle_time(csi_chan, portno, &clk_settle_time,
+		tegra_csi_calc_settle_time(csi_chan, &clk_settle_time,
 					   &ths_settle_time);
 
 	csi_write(csi, portno, TEGRA_CSI_CLKEN_OVERRIDE, 0);
@@ -1072,10 +877,10 @@ tegra210_csi_port_start_streaming(struct tegra_csi_channel *csi_chan,
 	return 0;
 }
 
-static void
-tegra210_csi_port_stop_streaming(struct tegra_csi_channel *csi_chan, u8 portno)
+static void tegra210_csi_stop_streaming(struct tegra_csi_channel *csi_chan)
 {
 	struct tegra_csi *csi = csi_chan->csi;
+	unsigned int portno = csi_chan->csi_port_num;
 	u32 val;
 
 	val = pp_read(csi, portno, TEGRA_CSI_PIXEL_PARSER_STATUS);
@@ -1111,35 +916,6 @@ tegra210_csi_port_stop_streaming(struct tegra_csi_channel *csi_chan, u8 portno)
 		      CSI_B_PHY_CIL_DISABLE | CSI_A_PHY_CIL_NOP;
 		csi_write(csi, portno, TEGRA_CSI_PHY_CIL_COMMAND, val);
 	}
-}
-
-static int tegra210_csi_start_streaming(struct tegra_csi_channel *csi_chan)
-{
-	u8 *portnos = csi_chan->csi_port_nums;
-	int ret, i;
-
-	for (i = 0; i < csi_chan->numgangports; i++) {
-		ret = tegra210_csi_port_start_streaming(csi_chan, portnos[i]);
-		if (ret)
-			goto stream_start_fail;
-	}
-
-	return 0;
-
-stream_start_fail:
-	for (i = i - 1; i >= 0; i--)
-		tegra210_csi_port_stop_streaming(csi_chan, portnos[i]);
-
-	return ret;
-}
-
-static void tegra210_csi_stop_streaming(struct tegra_csi_channel *csi_chan)
-{
-	u8 *portnos = csi_chan->csi_port_nums;
-	int i;
-
-	for (i = 0; i < csi_chan->numgangports; i++)
-		tegra210_csi_port_stop_streaming(csi_chan, portnos[i]);
 }
 
 /*

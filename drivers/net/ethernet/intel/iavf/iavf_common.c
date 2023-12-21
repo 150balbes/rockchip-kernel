@@ -35,6 +35,7 @@ enum iavf_status iavf_set_mac_type(struct iavf_hw *hw)
 		status = IAVF_ERR_DEVICE_NOT_SUPPORTED;
 	}
 
+	hw_dbg(hw, "found mac: %d, returns: %d\n", hw->mac.type, status);
 	return status;
 }
 
@@ -130,8 +131,8 @@ const char *iavf_stat_str(struct iavf_hw *hw, enum iavf_status stat_err)
 		return "IAVF_ERR_INVALID_MAC_ADDR";
 	case IAVF_ERR_DEVICE_NOT_SUPPORTED:
 		return "IAVF_ERR_DEVICE_NOT_SUPPORTED";
-	case IAVF_ERR_PRIMARY_REQUESTS_PENDING:
-		return "IAVF_ERR_PRIMARY_REQUESTS_PENDING";
+	case IAVF_ERR_MASTER_REQUESTS_PENDING:
+		return "IAVF_ERR_MASTER_REQUESTS_PENDING";
 	case IAVF_ERR_INVALID_LINK_SETTINGS:
 		return "IAVF_ERR_INVALID_LINK_SETTINGS";
 	case IAVF_ERR_AUTONEG_NOT_COMPLETE:
@@ -222,8 +223,8 @@ const char *iavf_stat_str(struct iavf_hw *hw, enum iavf_status stat_err)
 		return "IAVF_ERR_ADMIN_QUEUE_FULL";
 	case IAVF_ERR_ADMIN_QUEUE_NO_WORK:
 		return "IAVF_ERR_ADMIN_QUEUE_NO_WORK";
-	case IAVF_ERR_BAD_RDMA_CQE:
-		return "IAVF_ERR_BAD_RDMA_CQE";
+	case IAVF_ERR_BAD_IWARP_CQE:
+		return "IAVF_ERR_BAD_IWARP_CQE";
 	case IAVF_ERR_NVM_BLANK_MODE:
 		return "IAVF_ERR_NVM_BLANK_MODE";
 	case IAVF_ERR_NOT_IMPLEMENTED:
@@ -397,6 +398,23 @@ static enum iavf_status iavf_aq_get_set_rss_lut(struct iavf_hw *hw,
 }
 
 /**
+ * iavf_aq_get_rss_lut
+ * @hw: pointer to the hardware structure
+ * @vsi_id: vsi fw index
+ * @pf_lut: for PF table set true, for VSI table set false
+ * @lut: pointer to the lut buffer provided by the caller
+ * @lut_size: size of the lut buffer
+ *
+ * get the RSS lookup table, PF or VSI type
+ **/
+enum iavf_status iavf_aq_get_rss_lut(struct iavf_hw *hw, u16 vsi_id,
+				     bool pf_lut, u8 *lut, u16 lut_size)
+{
+	return iavf_aq_get_set_rss_lut(hw, vsi_id, pf_lut, lut, lut_size,
+				       false);
+}
+
+/**
  * iavf_aq_set_rss_lut
  * @hw: pointer to the hardware structure
  * @vsi_id: vsi fw index
@@ -455,6 +473,19 @@ iavf_status iavf_aq_get_set_rss_key(struct iavf_hw *hw, u16 vsi_id,
 }
 
 /**
+ * iavf_aq_get_rss_key
+ * @hw: pointer to the hw struct
+ * @vsi_id: vsi fw index
+ * @key: pointer to key info struct
+ *
+ **/
+enum iavf_status iavf_aq_get_rss_key(struct iavf_hw *hw, u16 vsi_id,
+				     struct iavf_aqc_get_set_rss_key_data *key)
+{
+	return iavf_aq_get_set_rss_key(hw, vsi_id, key, false);
+}
+
+/**
  * iavf_aq_set_rss_key
  * @hw: pointer to the hw struct
  * @vsi_id: vsi fw index
@@ -491,9 +522,9 @@ enum iavf_status iavf_aq_set_rss_key(struct iavf_hw *hw, u16 vsi_id,
  * ENDIF
  */
 
-/* macro to make the table lines short, use explicit indexing with [PTYPE] */
+/* macro to make the table lines short */
 #define IAVF_PTT(PTYPE, OUTER_IP, OUTER_IP_VER, OUTER_FRAG, T, TE, TEF, I, PL)\
-	[PTYPE] = { \
+	{	PTYPE, \
 		1, \
 		IAVF_RX_PTYPE_OUTER_##OUTER_IP, \
 		IAVF_RX_PTYPE_OUTER_##OUTER_IP_VER, \
@@ -504,15 +535,16 @@ enum iavf_status iavf_aq_set_rss_key(struct iavf_hw *hw, u16 vsi_id,
 		IAVF_RX_PTYPE_INNER_PROT_##I, \
 		IAVF_RX_PTYPE_PAYLOAD_LAYER_##PL }
 
-#define IAVF_PTT_UNUSED_ENTRY(PTYPE) [PTYPE] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+#define IAVF_PTT_UNUSED_ENTRY(PTYPE) \
+		{ PTYPE, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 /* shorter macros makes the table fit but are terse */
 #define IAVF_RX_PTYPE_NOF		IAVF_RX_PTYPE_NOT_FRAG
 #define IAVF_RX_PTYPE_FRG		IAVF_RX_PTYPE_FRAG
 #define IAVF_RX_PTYPE_INNER_PROT_TS	IAVF_RX_PTYPE_INNER_PROT_TIMESYNC
 
-/* Lookup table mapping the 8-bit HW PTYPE to the bit field for decoding */
-struct iavf_rx_ptype_decoded iavf_ptype_lookup[BIT(8)] = {
+/* Lookup table mapping the HW PTYPE to the bit field for decoding */
+struct iavf_rx_ptype_decoded iavf_ptype_lookup[] = {
 	/* L2 Packet types */
 	IAVF_PTT_UNUSED_ENTRY(0),
 	IAVF_PTT(1,  L2, NONE, NOF, NONE, NONE, NOF, NONE, PAY2),
@@ -630,7 +662,7 @@ struct iavf_rx_ptype_decoded iavf_ptype_lookup[BIT(8)] = {
 	/* Non Tunneled IPv6 */
 	IAVF_PTT(88, IP, IPV6, FRG, NONE, NONE, NOF, NONE, PAY3),
 	IAVF_PTT(89, IP, IPV6, NOF, NONE, NONE, NOF, NONE, PAY3),
-	IAVF_PTT(90, IP, IPV6, NOF, NONE, NONE, NOF, UDP,  PAY4),
+	IAVF_PTT(90, IP, IPV6, NOF, NONE, NONE, NOF, UDP,  PAY3),
 	IAVF_PTT_UNUSED_ENTRY(91),
 	IAVF_PTT(92, IP, IPV6, NOF, NONE, NONE, NOF, TCP,  PAY4),
 	IAVF_PTT(93, IP, IPV6, NOF, NONE, NONE, NOF, SCTP, PAY4),
@@ -718,7 +750,118 @@ struct iavf_rx_ptype_decoded iavf_ptype_lookup[BIT(8)] = {
 	IAVF_PTT(153, IP, IPV6, NOF, IP_GRENAT_MAC_VLAN, IPV6, NOF, ICMP, PAY4),
 
 	/* unused entries */
-	[154 ... 255] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+	IAVF_PTT_UNUSED_ENTRY(154),
+	IAVF_PTT_UNUSED_ENTRY(155),
+	IAVF_PTT_UNUSED_ENTRY(156),
+	IAVF_PTT_UNUSED_ENTRY(157),
+	IAVF_PTT_UNUSED_ENTRY(158),
+	IAVF_PTT_UNUSED_ENTRY(159),
+
+	IAVF_PTT_UNUSED_ENTRY(160),
+	IAVF_PTT_UNUSED_ENTRY(161),
+	IAVF_PTT_UNUSED_ENTRY(162),
+	IAVF_PTT_UNUSED_ENTRY(163),
+	IAVF_PTT_UNUSED_ENTRY(164),
+	IAVF_PTT_UNUSED_ENTRY(165),
+	IAVF_PTT_UNUSED_ENTRY(166),
+	IAVF_PTT_UNUSED_ENTRY(167),
+	IAVF_PTT_UNUSED_ENTRY(168),
+	IAVF_PTT_UNUSED_ENTRY(169),
+
+	IAVF_PTT_UNUSED_ENTRY(170),
+	IAVF_PTT_UNUSED_ENTRY(171),
+	IAVF_PTT_UNUSED_ENTRY(172),
+	IAVF_PTT_UNUSED_ENTRY(173),
+	IAVF_PTT_UNUSED_ENTRY(174),
+	IAVF_PTT_UNUSED_ENTRY(175),
+	IAVF_PTT_UNUSED_ENTRY(176),
+	IAVF_PTT_UNUSED_ENTRY(177),
+	IAVF_PTT_UNUSED_ENTRY(178),
+	IAVF_PTT_UNUSED_ENTRY(179),
+
+	IAVF_PTT_UNUSED_ENTRY(180),
+	IAVF_PTT_UNUSED_ENTRY(181),
+	IAVF_PTT_UNUSED_ENTRY(182),
+	IAVF_PTT_UNUSED_ENTRY(183),
+	IAVF_PTT_UNUSED_ENTRY(184),
+	IAVF_PTT_UNUSED_ENTRY(185),
+	IAVF_PTT_UNUSED_ENTRY(186),
+	IAVF_PTT_UNUSED_ENTRY(187),
+	IAVF_PTT_UNUSED_ENTRY(188),
+	IAVF_PTT_UNUSED_ENTRY(189),
+
+	IAVF_PTT_UNUSED_ENTRY(190),
+	IAVF_PTT_UNUSED_ENTRY(191),
+	IAVF_PTT_UNUSED_ENTRY(192),
+	IAVF_PTT_UNUSED_ENTRY(193),
+	IAVF_PTT_UNUSED_ENTRY(194),
+	IAVF_PTT_UNUSED_ENTRY(195),
+	IAVF_PTT_UNUSED_ENTRY(196),
+	IAVF_PTT_UNUSED_ENTRY(197),
+	IAVF_PTT_UNUSED_ENTRY(198),
+	IAVF_PTT_UNUSED_ENTRY(199),
+
+	IAVF_PTT_UNUSED_ENTRY(200),
+	IAVF_PTT_UNUSED_ENTRY(201),
+	IAVF_PTT_UNUSED_ENTRY(202),
+	IAVF_PTT_UNUSED_ENTRY(203),
+	IAVF_PTT_UNUSED_ENTRY(204),
+	IAVF_PTT_UNUSED_ENTRY(205),
+	IAVF_PTT_UNUSED_ENTRY(206),
+	IAVF_PTT_UNUSED_ENTRY(207),
+	IAVF_PTT_UNUSED_ENTRY(208),
+	IAVF_PTT_UNUSED_ENTRY(209),
+
+	IAVF_PTT_UNUSED_ENTRY(210),
+	IAVF_PTT_UNUSED_ENTRY(211),
+	IAVF_PTT_UNUSED_ENTRY(212),
+	IAVF_PTT_UNUSED_ENTRY(213),
+	IAVF_PTT_UNUSED_ENTRY(214),
+	IAVF_PTT_UNUSED_ENTRY(215),
+	IAVF_PTT_UNUSED_ENTRY(216),
+	IAVF_PTT_UNUSED_ENTRY(217),
+	IAVF_PTT_UNUSED_ENTRY(218),
+	IAVF_PTT_UNUSED_ENTRY(219),
+
+	IAVF_PTT_UNUSED_ENTRY(220),
+	IAVF_PTT_UNUSED_ENTRY(221),
+	IAVF_PTT_UNUSED_ENTRY(222),
+	IAVF_PTT_UNUSED_ENTRY(223),
+	IAVF_PTT_UNUSED_ENTRY(224),
+	IAVF_PTT_UNUSED_ENTRY(225),
+	IAVF_PTT_UNUSED_ENTRY(226),
+	IAVF_PTT_UNUSED_ENTRY(227),
+	IAVF_PTT_UNUSED_ENTRY(228),
+	IAVF_PTT_UNUSED_ENTRY(229),
+
+	IAVF_PTT_UNUSED_ENTRY(230),
+	IAVF_PTT_UNUSED_ENTRY(231),
+	IAVF_PTT_UNUSED_ENTRY(232),
+	IAVF_PTT_UNUSED_ENTRY(233),
+	IAVF_PTT_UNUSED_ENTRY(234),
+	IAVF_PTT_UNUSED_ENTRY(235),
+	IAVF_PTT_UNUSED_ENTRY(236),
+	IAVF_PTT_UNUSED_ENTRY(237),
+	IAVF_PTT_UNUSED_ENTRY(238),
+	IAVF_PTT_UNUSED_ENTRY(239),
+
+	IAVF_PTT_UNUSED_ENTRY(240),
+	IAVF_PTT_UNUSED_ENTRY(241),
+	IAVF_PTT_UNUSED_ENTRY(242),
+	IAVF_PTT_UNUSED_ENTRY(243),
+	IAVF_PTT_UNUSED_ENTRY(244),
+	IAVF_PTT_UNUSED_ENTRY(245),
+	IAVF_PTT_UNUSED_ENTRY(246),
+	IAVF_PTT_UNUSED_ENTRY(247),
+	IAVF_PTT_UNUSED_ENTRY(248),
+	IAVF_PTT_UNUSED_ENTRY(249),
+
+	IAVF_PTT_UNUSED_ENTRY(250),
+	IAVF_PTT_UNUSED_ENTRY(251),
+	IAVF_PTT_UNUSED_ENTRY(252),
+	IAVF_PTT_UNUSED_ENTRY(253),
+	IAVF_PTT_UNUSED_ENTRY(254),
+	IAVF_PTT_UNUSED_ENTRY(255)
 };
 
 /**
@@ -796,4 +939,18 @@ void iavf_vf_parse_hw_config(struct iavf_hw *hw,
 		}
 		vsi_res++;
 	}
+}
+
+/**
+ * iavf_vf_reset
+ * @hw: pointer to the hardware structure
+ *
+ * Send a VF_RESET message to the PF. Does not wait for response from PF
+ * as none will be forthcoming. Immediately after calling this function,
+ * the admin queue should be shut down and (optionally) reinitialized.
+ **/
+enum iavf_status iavf_vf_reset(struct iavf_hw *hw)
+{
+	return iavf_aq_send_msg_to_pf(hw, VIRTCHNL_OP_RESET_VF,
+				      0, NULL, 0, NULL);
 }

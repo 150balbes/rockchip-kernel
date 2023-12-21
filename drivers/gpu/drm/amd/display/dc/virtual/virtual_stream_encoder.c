@@ -23,6 +23,8 @@
  *
  */
 
+#include <linux/slab.h>
+
 #include "dm_services.h"
 #include "virtual_stream_encoder.h"
 
@@ -67,11 +69,9 @@ static void virtual_stream_encoder_stop_dp_info_packets(
 	struct stream_encoder *enc) {}
 
 static void virtual_stream_encoder_dp_blank(
-	struct dc_link *link,
 	struct stream_encoder *enc) {}
 
 static void virtual_stream_encoder_dp_unblank(
-	struct dc_link *link,
 	struct stream_encoder *enc,
 	const struct encoder_unblank_param *param) {}
 
@@ -102,8 +102,7 @@ static void virtual_setup_stereo_sync(
 static void virtual_stream_encoder_set_dsc_pps_info_packet(
 		struct stream_encoder *enc,
 		bool enable,
-		uint8_t *dsc_packed_pps,
-		bool immediate_update)
+		uint8_t *dsc_packed_pps)
 {}
 
 static const struct stream_encoder_funcs virtual_str_enc_funcs = {

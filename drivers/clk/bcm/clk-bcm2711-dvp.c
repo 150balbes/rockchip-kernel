@@ -25,6 +25,7 @@ static const struct clk_parent_data clk_dvp_parent = {
 static int clk_dvp_probe(struct platform_device *pdev)
 {
 	struct clk_hw_onecell_data *data;
+	struct resource *res;
 	struct clk_dvp *dvp;
 	void __iomem *base;
 	int ret;
@@ -41,7 +42,7 @@ static int clk_dvp_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	data = dvp->data;
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -92,13 +93,15 @@ unregister_clk0:
 	return ret;
 };
 
-static void clk_dvp_remove(struct platform_device *pdev)
+static int clk_dvp_remove(struct platform_device *pdev)
 {
 	struct clk_dvp *dvp = platform_get_drvdata(pdev);
 	struct clk_hw_onecell_data *data = dvp->data;
 
 	clk_hw_unregister_gate(data->hws[1]);
 	clk_hw_unregister_gate(data->hws[0]);
+
+	return 0;
 }
 
 static const struct of_device_id clk_dvp_dt_ids[] = {
@@ -109,7 +112,7 @@ MODULE_DEVICE_TABLE(of, clk_dvp_dt_ids);
 
 static struct platform_driver clk_dvp_driver = {
 	.probe	= clk_dvp_probe,
-	.remove_new = clk_dvp_remove,
+	.remove	= clk_dvp_remove,
 	.driver	= {
 		.name		= "brcm2711-dvp",
 		.of_match_table	= clk_dvp_dt_ids,

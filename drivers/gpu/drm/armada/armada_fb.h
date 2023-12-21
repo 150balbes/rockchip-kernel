@@ -5,8 +5,6 @@
 #ifndef ARMADA_FB_H
 #define ARMADA_FB_H
 
-#include <drm/drm_framebuffer.h>
-
 struct armada_framebuffer {
 	struct drm_framebuffer	fb;
 	uint8_t			fmt;

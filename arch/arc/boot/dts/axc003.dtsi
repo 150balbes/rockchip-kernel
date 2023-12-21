@@ -103,11 +103,11 @@
 			dma-coherent;
 		};
 
-		usb@40000 {
+		ehci@40000 {
 			dma-coherent;
 		};
 
-		usb@60000 {
+		ohci@60000 {
 			dma-coherent;
 		};
 

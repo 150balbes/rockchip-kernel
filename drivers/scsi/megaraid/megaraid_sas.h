@@ -18,13 +18,11 @@
 #ifndef LSI_MEGARAID_SAS_H
 #define LSI_MEGARAID_SAS_H
 
-#include <scsi/scsi_cmnd.h>
-
 /*
  * MegaRAID SAS Driver meta data
  */
-#define MEGASAS_VERSION				"07.725.01.00-rc1"
-#define MEGASAS_RELDATE				"Mar 2, 2023"
+#define MEGASAS_VERSION				"07.714.04.00-rc1"
+#define MEGASAS_RELDATE				"Apr 14, 2020"
 
 #define MEGASAS_MSIX_NAME_LEN			32
 
@@ -1519,8 +1517,6 @@ struct megasas_ctrl_info {
 #define MEGASAS_MAX_LD_IDS			(MEGASAS_MAX_LD_CHANNELS * \
 						MEGASAS_MAX_DEV_PER_CHANNEL)
 
-#define MEGASAS_MAX_SUPPORTED_LD_IDS		240
-
 #define MEGASAS_MAX_SECTORS                    (2*1024)
 #define MEGASAS_MAX_SECTORS_IEEE		(2*128)
 #define MEGASAS_DBG_LVL				1
@@ -1722,9 +1718,11 @@ struct megasas_sge_skinny {
 } __packed;
 
 union megasas_sgl {
-	DECLARE_FLEX_ARRAY(struct megasas_sge32, sge32);
-	DECLARE_FLEX_ARRAY(struct megasas_sge64, sge64);
-	DECLARE_FLEX_ARRAY(struct megasas_sge_skinny, sge_skinny);
+
+	struct megasas_sge32 sge32[1];
+	struct megasas_sge64 sge64[1];
+	struct megasas_sge_skinny sge_skinny[1];
+
 } __attribute__ ((packed));
 
 struct megasas_header {
@@ -1758,8 +1756,7 @@ union megasas_sgl_frame {
 typedef union _MFI_CAPABILITIES {
 	struct {
 #if   defined(__BIG_ENDIAN_BITFIELD)
-	u32     reserved:15;
-	u32	support_memdump:1;
+	u32     reserved:16;
 	u32	support_fw_exposed_dev_list:1;
 	u32	support_nvme_passthru:1;
 	u32     support_64bit_mode:1;
@@ -1793,8 +1790,7 @@ typedef union _MFI_CAPABILITIES {
 	u32     support_64bit_mode:1;
 	u32	support_nvme_passthru:1;
 	u32	support_fw_exposed_dev_list:1;
-	u32	support_memdump:1;
-	u32     reserved:15;
+	u32     reserved:16;
 #endif
 	} mfi_capabilities;
 	__le32		reg;
@@ -2023,12 +2019,10 @@ union megasas_frame {
  * struct MR_PRIV_DEVICE - sdev private hostdata
  * @is_tm_capable: firmware managed tm_capable flag
  * @tm_busy: TM request is in progress
- * @sdev_priv_busy: pending command per sdev
  */
 struct MR_PRIV_DEVICE {
 	bool is_tm_capable;
 	bool tm_busy;
-	atomic_t sdev_priv_busy;
 	atomic_t r1_ldio_hint;
 	u8 interface_type;
 	u8 task_abort_tmo;
@@ -2218,7 +2212,6 @@ struct megasas_irq_context {
 	struct irq_poll irqpoll;
 	bool irq_poll_scheduled;
 	bool irq_line_enable;
-	atomic_t   in_used;
 };
 
 struct MR_DRV_SYSTEM_INFO {
@@ -2465,7 +2458,6 @@ struct megasas_instance {
 	bool support_pci_lane_margining;
 	u8  low_latency_index_start;
 	int perf_mode;
-	int iopoll_q_count;
 };
 
 struct MR_LD_VF_MAP {
@@ -2601,16 +2593,6 @@ struct megasas_cmd {
 	};
 };
 
-struct megasas_cmd_priv {
-	void	*cmd_priv;
-	u8	status;
-};
-
-static inline struct megasas_cmd_priv *megasas_priv(struct scsi_cmnd *cmd)
-{
-	return scsi_cmd_priv(cmd);
-}
-
 #define MAX_MGMT_ADAPTERS		1024
 #define MAX_IOCTL_SGE			16
 
@@ -2638,6 +2620,7 @@ struct megasas_aen {
 	u32 class_locale_word;
 } __attribute__ ((packed));
 
+#ifdef CONFIG_COMPAT
 struct compat_megasas_iocpacket {
 	u16 host_no;
 	u16 __pad1;
@@ -2653,6 +2636,7 @@ struct compat_megasas_iocpacket {
 } __attribute__ ((packed));
 
 #define MEGASAS_IOC_FIRMWARE32	_IOWR('M', 1, struct compat_megasas_iocpacket)
+#endif
 
 #define MEGASAS_IOC_FIRMWARE	_IOWR('M', 1, struct megasas_iocpacket)
 #define MEGASAS_IOC_GET_AEN	_IOW('M', 3, struct megasas_aen)
@@ -2759,6 +2743,5 @@ void megasas_init_debugfs(void);
 void megasas_exit_debugfs(void);
 void megasas_setup_debugfs(struct megasas_instance *instance);
 void megasas_destroy_debugfs(struct megasas_instance *instance);
-int megasas_blk_mq_poll(struct Scsi_Host *shost, unsigned int queue_num);
 
 #endif				/*LSI_MEGARAID_SAS_H */

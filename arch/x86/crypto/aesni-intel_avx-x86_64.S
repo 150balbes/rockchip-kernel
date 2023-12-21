@@ -154,6 +154,30 @@ SHIFT_MASK:      .octa     0x0f0e0d0c0b0a09080706050403020100
 ALL_F:           .octa     0xffffffffffffffffffffffffffffffff
                  .octa     0x00000000000000000000000000000000
 
+.section .rodata
+.align 16
+.type aad_shift_arr, @object
+.size aad_shift_arr, 272
+aad_shift_arr:
+        .octa     0xffffffffffffffffffffffffffffffff
+        .octa     0xffffffffffffffffffffffffffffff0C
+        .octa     0xffffffffffffffffffffffffffff0D0C
+        .octa     0xffffffffffffffffffffffffff0E0D0C
+        .octa     0xffffffffffffffffffffffff0F0E0D0C
+        .octa     0xffffffffffffffffffffff0C0B0A0908
+        .octa     0xffffffffffffffffffff0D0C0B0A0908
+        .octa     0xffffffffffffffffff0E0D0C0B0A0908
+        .octa     0xffffffffffffffff0F0E0D0C0B0A0908
+        .octa     0xffffffffffffff0C0B0A090807060504
+        .octa     0xffffffffffff0D0C0B0A090807060504
+        .octa     0xffffffffff0E0D0C0B0A090807060504
+        .octa     0xffffffff0F0E0D0C0B0A090807060504
+        .octa     0xffffff0C0B0A09080706050403020100
+        .octa     0xffff0D0C0B0A09080706050403020100
+        .octa     0xff0E0D0C0B0A09080706050403020100
+        .octa     0x0F0E0D0C0B0A09080706050403020100
+
+
 .text
 
 
@@ -188,6 +212,10 @@ HashKey_8_k    = 16*21   # store XOR of HashKey^8 <<1 mod poly here (for Karatsu
 #define arg4 %rcx
 #define arg5 %r8
 #define arg6 %r9
+#define arg7 STACK_OFFSET+8*1(%r14)
+#define arg8 STACK_OFFSET+8*2(%r14)
+#define arg9 STACK_OFFSET+8*3(%r14)
+#define arg10 STACK_OFFSET+8*4(%r14)
 #define keysize 2*15*16(arg1)
 
 i = 0
@@ -209,6 +237,9 @@ define_reg j %j
 .noaltmacro
 .endm
 
+# need to push 4 registers into stack to maintain
+STACK_OFFSET = 8*4
+
 TMP1 =   16*0    # Temporary storage for AAD
 TMP2 =   16*1    # Temporary storage for AES State 2 (State 1 is stored in an XMM register)
 TMP3 =   16*2    # Temporary storage for AES State 3
@@ -225,22 +256,25 @@ VARIABLE_OFFSET = 16*8
 ################################
 
 .macro FUNC_SAVE
+        #the number of pushes must equal STACK_OFFSET
         push    %r12
         push    %r13
+        push    %r14
         push    %r15
 
-	push	%rbp
-	mov	%rsp, %rbp
+        mov     %rsp, %r14
+
+
 
         sub     $VARIABLE_OFFSET, %rsp
         and     $~63, %rsp                    # align rsp to 64 bytes
 .endm
 
 .macro FUNC_RESTORE
-        mov     %rbp, %rsp
-	pop	%rbp
+        mov     %r14, %rsp
 
         pop     %r15
+        pop     %r14
         pop     %r13
         pop     %r12
 .endm
@@ -260,7 +294,7 @@ VARIABLE_OFFSET = 16*8
 
 # combined for GCM encrypt and decrypt functions
 # clobbering all xmm registers
-# clobbering r10, r11, r12, r13, r15, rax
+# clobbering r10, r11, r12, r13, r14, r15
 .macro  GCM_ENC_DEC INITIAL_BLOCKS GHASH_8_ENCRYPT_8_PARALLEL GHASH_LAST_8 GHASH_MUL ENC_DEC REP
         vmovdqu AadHash(arg2), %xmm8
         vmovdqu  HashKey(arg2), %xmm13      # xmm13 = HashKey
@@ -278,68 +312,68 @@ VARIABLE_OFFSET = 16*8
         mov     %r13, %r12
         shr     $4, %r12
         and     $7, %r12
-        jz      .L_initial_num_blocks_is_0\@
+        jz      _initial_num_blocks_is_0\@
 
         cmp     $7, %r12
-        je      .L_initial_num_blocks_is_7\@
+        je      _initial_num_blocks_is_7\@
         cmp     $6, %r12
-        je      .L_initial_num_blocks_is_6\@
+        je      _initial_num_blocks_is_6\@
         cmp     $5, %r12
-        je      .L_initial_num_blocks_is_5\@
+        je      _initial_num_blocks_is_5\@
         cmp     $4, %r12
-        je      .L_initial_num_blocks_is_4\@
+        je      _initial_num_blocks_is_4\@
         cmp     $3, %r12
-        je      .L_initial_num_blocks_is_3\@
+        je      _initial_num_blocks_is_3\@
         cmp     $2, %r12
-        je      .L_initial_num_blocks_is_2\@
+        je      _initial_num_blocks_is_2\@
 
-        jmp     .L_initial_num_blocks_is_1\@
+        jmp     _initial_num_blocks_is_1\@
 
-.L_initial_num_blocks_is_7\@:
+_initial_num_blocks_is_7\@:
         \INITIAL_BLOCKS  \REP, 7, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*7, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_6\@:
+_initial_num_blocks_is_6\@:
         \INITIAL_BLOCKS  \REP, 6, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*6, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_5\@:
+_initial_num_blocks_is_5\@:
         \INITIAL_BLOCKS  \REP, 5, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*5, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_4\@:
+_initial_num_blocks_is_4\@:
         \INITIAL_BLOCKS  \REP, 4, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*4, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_3\@:
+_initial_num_blocks_is_3\@:
         \INITIAL_BLOCKS  \REP, 3, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*3, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_2\@:
+_initial_num_blocks_is_2\@:
         \INITIAL_BLOCKS  \REP, 2, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*2, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_1\@:
+_initial_num_blocks_is_1\@:
         \INITIAL_BLOCKS  \REP, 1, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
         sub     $16*1, %r13
-        jmp     .L_initial_blocks_encrypted\@
+        jmp     _initial_blocks_encrypted\@
 
-.L_initial_num_blocks_is_0\@:
+_initial_num_blocks_is_0\@:
         \INITIAL_BLOCKS  \REP, 0, %xmm12, %xmm13, %xmm14, %xmm15, %xmm11, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm10, %xmm0, \ENC_DEC
 
 
-.L_initial_blocks_encrypted\@:
+_initial_blocks_encrypted\@:
         test    %r13, %r13
-        je      .L_zero_cipher_left\@
+        je      _zero_cipher_left\@
 
         sub     $128, %r13
-        je      .L_eight_cipher_left\@
+        je      _eight_cipher_left\@
 
 
 
@@ -349,9 +383,9 @@ VARIABLE_OFFSET = 16*8
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
 
 
-.L_encrypt_by_8_new\@:
+_encrypt_by_8_new\@:
         cmp     $(255-8), %r15d
-        jg      .L_encrypt_by_8\@
+        jg      _encrypt_by_8\@
 
 
 
@@ -359,30 +393,30 @@ VARIABLE_OFFSET = 16*8
         \GHASH_8_ENCRYPT_8_PARALLEL      \REP, %xmm0, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm15, out_order, \ENC_DEC
         add     $128, %r11
         sub     $128, %r13
-        jne     .L_encrypt_by_8_new\@
+        jne     _encrypt_by_8_new\@
 
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
-        jmp     .L_eight_cipher_left\@
+        jmp     _eight_cipher_left\@
 
-.L_encrypt_by_8\@:
+_encrypt_by_8\@:
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
         add     $8, %r15b
         \GHASH_8_ENCRYPT_8_PARALLEL      \REP, %xmm0, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, %xmm9, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, %xmm15, in_order, \ENC_DEC
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
         add     $128, %r11
         sub     $128, %r13
-        jne     .L_encrypt_by_8_new\@
+        jne     _encrypt_by_8_new\@
 
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
 
 
 
 
-.L_eight_cipher_left\@:
+_eight_cipher_left\@:
         \GHASH_LAST_8    %xmm0, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, %xmm15, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8
 
 
-.L_zero_cipher_left\@:
+_zero_cipher_left\@:
         vmovdqu %xmm14, AadHash(arg2)
         vmovdqu %xmm9, CurCount(arg2)
 
@@ -390,7 +424,7 @@ VARIABLE_OFFSET = 16*8
         mov     arg5, %r13
         and     $15, %r13                            # r13 = (arg5 mod 16)
 
-        je      .L_multiple_of_16_bytes\@
+        je      _multiple_of_16_bytes\@
 
         # handle the last <16 Byte block separately
 
@@ -404,7 +438,7 @@ VARIABLE_OFFSET = 16*8
         vmovdqu %xmm9, PBlockEncKey(arg2)
 
         cmp $16, arg5
-        jge .L_large_enough_update\@
+        jge _large_enough_update\@
 
         lea (arg4,%r11,1), %r10
         mov %r13, %r12
@@ -416,9 +450,9 @@ VARIABLE_OFFSET = 16*8
 						     # able to shift 16-r13 bytes (r13 is the
 	# number of bytes in plaintext mod 16)
 
-        jmp .L_final_ghash_mul\@
+        jmp _final_ghash_mul\@
 
-.L_large_enough_update\@:
+_large_enough_update\@:
         sub $16, %r11
         add %r13, %r11
 
@@ -437,7 +471,7 @@ VARIABLE_OFFSET = 16*8
         # shift right 16-r13 bytes
         vpshufb  %xmm2, %xmm1, %xmm1
 
-.L_final_ghash_mul\@:
+_final_ghash_mul\@:
         .if  \ENC_DEC ==  DEC
         vmovdqa %xmm1, %xmm2
         vpxor   %xmm1, %xmm9, %xmm9                  # Plaintext XOR E(K, Yn)
@@ -466,7 +500,7 @@ VARIABLE_OFFSET = 16*8
         # output r13 Bytes
         vmovq   %xmm9, %rax
         cmp     $8, %r13
-        jle     .L_less_than_8_bytes_left\@
+        jle     _less_than_8_bytes_left\@
 
         mov     %rax, (arg3 , %r11)
         add     $8, %r11
@@ -474,15 +508,15 @@ VARIABLE_OFFSET = 16*8
         vmovq   %xmm9, %rax
         sub     $8, %r13
 
-.L_less_than_8_bytes_left\@:
+_less_than_8_bytes_left\@:
         movb    %al, (arg3 , %r11)
         add     $1, %r11
         shr     $8, %rax
         sub     $1, %r13
-        jne     .L_less_than_8_bytes_left\@
+        jne     _less_than_8_bytes_left\@
         #############################
 
-.L_multiple_of_16_bytes\@:
+_multiple_of_16_bytes\@:
 .endm
 
 
@@ -495,12 +529,12 @@ VARIABLE_OFFSET = 16*8
 
         mov PBlockLen(arg2), %r12
         test %r12, %r12
-        je .L_partial_done\@
+        je _partial_done\@
 
 	#GHASH computation for the last <16 Byte block
         \GHASH_MUL       %xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
 
-.L_partial_done\@:
+_partial_done\@:
         mov AadLen(arg2), %r12                          # r12 = aadLen (number of bytes)
         shl     $3, %r12                             # convert into number of bits
         vmovd   %r12d, %xmm15                        # len(A) in xmm15
@@ -523,49 +557,49 @@ VARIABLE_OFFSET = 16*8
 
 
 
-.L_return_T\@:
+_return_T\@:
         mov     \AUTH_TAG, %r10              # r10 = authTag
         mov     \AUTH_TAG_LEN, %r11              # r11 = auth_tag_len
 
         cmp     $16, %r11
-        je      .L_T_16\@
+        je      _T_16\@
 
         cmp     $8, %r11
-        jl      .L_T_4\@
+        jl      _T_4\@
 
-.L_T_8\@:
+_T_8\@:
         vmovq   %xmm9, %rax
         mov     %rax, (%r10)
         add     $8, %r10
         sub     $8, %r11
         vpsrldq $8, %xmm9, %xmm9
         test    %r11, %r11
-        je     .L_return_T_done\@
-.L_T_4\@:
+        je     _return_T_done\@
+_T_4\@:
         vmovd   %xmm9, %eax
         mov     %eax, (%r10)
         add     $4, %r10
         sub     $4, %r11
         vpsrldq     $4, %xmm9, %xmm9
         test    %r11, %r11
-        je     .L_return_T_done\@
-.L_T_123\@:
+        je     _return_T_done\@
+_T_123\@:
         vmovd     %xmm9, %eax
         cmp     $2, %r11
-        jl     .L_T_1\@
+        jl     _T_1\@
         mov     %ax, (%r10)
         cmp     $2, %r11
-        je     .L_return_T_done\@
+        je     _return_T_done\@
         add     $2, %r10
         sar     $16, %eax
-.L_T_1\@:
+_T_1\@:
         mov     %al, (%r10)
-        jmp     .L_return_T_done\@
+        jmp     _return_T_done\@
 
-.L_T_16\@:
+_T_16\@:
         vmovdqu %xmm9, (%r10)
 
-.L_return_T_done\@:
+_return_T_done\@:
 .endm
 
 .macro CALC_AAD_HASH GHASH_MUL AAD AADLEN T1 T2 T3 T4 T5 T6 T7 T8
@@ -579,8 +613,8 @@ VARIABLE_OFFSET = 16*8
 	vpxor   \T8, \T8, \T8
 	vpxor   \T7, \T7, \T7
 	cmp     $16, %r11
-	jl      .L_get_AAD_rest8\@
-.L_get_AAD_blocks\@:
+	jl      _get_AAD_rest8\@
+_get_AAD_blocks\@:
 	vmovdqu (%r10), \T7
 	vpshufb SHUF_MASK(%rip), \T7, \T7
 	vpxor   \T7, \T8, \T8
@@ -589,29 +623,29 @@ VARIABLE_OFFSET = 16*8
 	sub     $16, %r12
 	sub     $16, %r11
 	cmp     $16, %r11
-	jge     .L_get_AAD_blocks\@
+	jge     _get_AAD_blocks\@
 	vmovdqu \T8, \T7
 	test    %r11, %r11
-	je      .L_get_AAD_done\@
+	je      _get_AAD_done\@
 
 	vpxor   \T7, \T7, \T7
 
 	/* read the last <16B of AAD. since we have at least 4B of
 	data right after the AAD (the ICV, and maybe some CT), we can
 	read 4B/8B blocks safely, and then get rid of the extra stuff */
-.L_get_AAD_rest8\@:
+_get_AAD_rest8\@:
 	cmp     $4, %r11
-	jle     .L_get_AAD_rest4\@
+	jle     _get_AAD_rest4\@
 	movq    (%r10), \T1
 	add     $8, %r10
 	sub     $8, %r11
 	vpslldq $8, \T1, \T1
 	vpsrldq $8, \T7, \T7
 	vpxor   \T1, \T7, \T7
-	jmp     .L_get_AAD_rest8\@
-.L_get_AAD_rest4\@:
+	jmp     _get_AAD_rest8\@
+_get_AAD_rest4\@:
 	test    %r11, %r11
-	jle     .L_get_AAD_rest0\@
+	jle      _get_AAD_rest0\@
 	mov     (%r10), %eax
 	movq    %rax, \T1
 	add     $4, %r10
@@ -619,22 +653,20 @@ VARIABLE_OFFSET = 16*8
 	vpslldq $12, \T1, \T1
 	vpsrldq $4, \T7, \T7
 	vpxor   \T1, \T7, \T7
-.L_get_AAD_rest0\@:
+_get_AAD_rest0\@:
 	/* finalize: shift out the extra bytes we read, and align
 	left. since pslldq can only shift by an immediate, we use
-	vpshufb and a pair of shuffle masks */
-	leaq	ALL_F(%rip), %r11
-	subq	%r12, %r11
-	vmovdqu	16(%r11), \T1
-	andq	$~3, %r11
-	vpshufb (%r11), \T7, \T7
-	vpand	\T1, \T7, \T7
-.L_get_AAD_rest_final\@:
+	vpshufb and an array of shuffle masks */
+	movq    %r12, %r11
+	salq    $4, %r11
+	vmovdqu  aad_shift_arr(%r11), \T1
+	vpshufb \T1, \T7, \T7
+_get_AAD_rest_final\@:
 	vpshufb SHUF_MASK(%rip), \T7, \T7
 	vpxor   \T8, \T7, \T7
 	\GHASH_MUL       \T7, \T2, \T1, \T3, \T4, \T5, \T6
 
-.L_get_AAD_done\@:
+_get_AAD_done\@:
         vmovdqu \T7, AadHash(arg2)
 .endm
 
@@ -685,28 +717,28 @@ VARIABLE_OFFSET = 16*8
         vpxor \XMMDst, \XMMDst, \XMMDst
 
         cmp $8, \DLEN
-        jl .L_read_lt8_\@
+        jl _read_lt8_\@
         mov (\DPTR), %rax
         vpinsrq $0, %rax, \XMMDst, \XMMDst
         sub $8, \DLEN
-        jz .L_done_read_partial_block_\@
+        jz _done_read_partial_block_\@
         xor %eax, %eax
-.L_read_next_byte_\@:
+_read_next_byte_\@:
         shl $8, %rax
         mov 7(\DPTR, \DLEN, 1), %al
         dec \DLEN
-        jnz .L_read_next_byte_\@
+        jnz _read_next_byte_\@
         vpinsrq $1, %rax, \XMMDst, \XMMDst
-        jmp .L_done_read_partial_block_\@
-.L_read_lt8_\@:
+        jmp _done_read_partial_block_\@
+_read_lt8_\@:
         xor %eax, %eax
-.L_read_next_byte_lt8_\@:
+_read_next_byte_lt8_\@:
         shl $8, %rax
         mov -1(\DPTR, \DLEN, 1), %al
         dec \DLEN
-        jnz .L_read_next_byte_lt8_\@
+        jnz _read_next_byte_lt8_\@
         vpinsrq $0, %rax, \XMMDst, \XMMDst
-.L_done_read_partial_block_\@:
+_done_read_partial_block_\@:
 .endm
 
 # PARTIAL_BLOCK: Handles encryption/decryption and the tag partial blocks
@@ -718,21 +750,21 @@ VARIABLE_OFFSET = 16*8
         AAD_HASH ENC_DEC
         mov 	PBlockLen(arg2), %r13
         test	%r13, %r13
-        je	.L_partial_block_done_\@	# Leave Macro if no partial blocks
+        je	_partial_block_done_\@	# Leave Macro if no partial blocks
         # Read in input data without over reading
         cmp	$16, \PLAIN_CYPH_LEN
-        jl	.L_fewer_than_16_bytes_\@
+        jl	_fewer_than_16_bytes_\@
         vmovdqu	(\PLAIN_CYPH_IN), %xmm1	# If more than 16 bytes, just fill xmm
-        jmp	.L_data_read_\@
+        jmp	_data_read_\@
 
-.L_fewer_than_16_bytes_\@:
+_fewer_than_16_bytes_\@:
         lea	(\PLAIN_CYPH_IN, \DATA_OFFSET, 1), %r10
         mov	\PLAIN_CYPH_LEN, %r12
         READ_PARTIAL_BLOCK %r10 %r12 %xmm1
 
         mov PBlockLen(arg2), %r13
 
-.L_data_read_\@:				# Finished reading in data
+_data_read_\@:				# Finished reading in data
 
         vmovdqu	PBlockEncKey(arg2), %xmm9
         vmovdqu	HashKey(arg2), %xmm13
@@ -755,9 +787,9 @@ VARIABLE_OFFSET = 16*8
         sub	$16, %r10
         # Determine if if partial block is not being filled and
         # shift mask accordingly
-        jge	.L_no_extra_mask_1_\@
+        jge	_no_extra_mask_1_\@
         sub	%r10, %r12
-.L_no_extra_mask_1_\@:
+_no_extra_mask_1_\@:
 
         vmovdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
         # get the appropriate mask to mask out bottom r13 bytes of xmm9
@@ -770,17 +802,17 @@ VARIABLE_OFFSET = 16*8
         vpxor	%xmm3, \AAD_HASH, \AAD_HASH
 
         test	%r10, %r10
-        jl	.L_partial_incomplete_1_\@
+        jl	_partial_incomplete_1_\@
 
         # GHASH computation for the last <16 Byte block
         \GHASH_MUL \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
         xor	%eax,%eax
 
         mov	%rax, PBlockLen(arg2)
-        jmp	.L_dec_done_\@
-.L_partial_incomplete_1_\@:
+        jmp	_dec_done_\@
+_partial_incomplete_1_\@:
         add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
-.L_dec_done_\@:
+_dec_done_\@:
         vmovdqu	\AAD_HASH, AadHash(arg2)
 .else
         vpxor	%xmm1, %xmm9, %xmm9			# Plaintext XOR E(K, Yn)
@@ -791,9 +823,9 @@ VARIABLE_OFFSET = 16*8
         sub	$16, %r10
         # Determine if if partial block is not being filled and
         # shift mask accordingly
-        jge	.L_no_extra_mask_2_\@
+        jge	_no_extra_mask_2_\@
         sub	%r10, %r12
-.L_no_extra_mask_2_\@:
+_no_extra_mask_2_\@:
 
         vmovdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
         # get the appropriate mask to mask out bottom r13 bytes of xmm9
@@ -805,17 +837,17 @@ VARIABLE_OFFSET = 16*8
         vpxor	%xmm9, \AAD_HASH, \AAD_HASH
 
         test	%r10, %r10
-        jl	.L_partial_incomplete_2_\@
+        jl	_partial_incomplete_2_\@
 
         # GHASH computation for the last <16 Byte block
         \GHASH_MUL \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
         xor	%eax,%eax
 
         mov	%rax, PBlockLen(arg2)
-        jmp	.L_encode_done_\@
-.L_partial_incomplete_2_\@:
+        jmp	_encode_done_\@
+_partial_incomplete_2_\@:
         add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
-.L_encode_done_\@:
+_encode_done_\@:
         vmovdqu	\AAD_HASH, AadHash(arg2)
 
         vmovdqa	SHUF_MASK(%rip), %xmm10
@@ -825,32 +857,32 @@ VARIABLE_OFFSET = 16*8
 .endif
         # output encrypted Bytes
         test	%r10, %r10
-        jl	.L_partial_fill_\@
+        jl	_partial_fill_\@
         mov	%r13, %r12
         mov	$16, %r13
         # Set r13 to be the number of bytes to write out
         sub	%r12, %r13
-        jmp	.L_count_set_\@
-.L_partial_fill_\@:
+        jmp	_count_set_\@
+_partial_fill_\@:
         mov	\PLAIN_CYPH_LEN, %r13
-.L_count_set_\@:
+_count_set_\@:
         vmovdqa	%xmm9, %xmm0
         vmovq	%xmm0, %rax
         cmp	$8, %r13
-        jle	.L_less_than_8_bytes_left_\@
+        jle	_less_than_8_bytes_left_\@
 
         mov	%rax, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
         add	$8, \DATA_OFFSET
         psrldq	$8, %xmm0
         vmovq	%xmm0, %rax
         sub	$8, %r13
-.L_less_than_8_bytes_left_\@:
+_less_than_8_bytes_left_\@:
         movb	%al, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
         add	$1, \DATA_OFFSET
         shr	$8, %rax
         sub	$1, %r13
-        jne	.L_less_than_8_bytes_left_\@
-.L_partial_block_done_\@:
+        jne	_less_than_8_bytes_left_\@
+_partial_block_done_\@:
 .endm # PARTIAL_BLOCK
 
 ###############################################################################
@@ -964,7 +996,7 @@ VARIABLE_OFFSET = 16*8
 ## num_initial_blocks = b mod 4#
 ## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
 ## r10, r11, r12, rax are clobbered
-## arg1, arg2, arg3, arg4 are used as pointers only, not modified
+## arg1, arg3, arg4, r14 are used as a pointer only, not modified
 
 .macro INITIAL_BLOCKS_AVX REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC
 	i = (8-\num_initial_blocks)
@@ -1051,7 +1083,7 @@ VARIABLE_OFFSET = 16*8
         vmovdqa  \XMM8, \T3
 
         cmp     $128, %r13
-        jl      .L_initial_blocks_done\@                  # no need for precomputed constants
+        jl      _initial_blocks_done\@                  # no need for precomputed constants
 
 ###############################################################################
 # Haskey_i_k holds XORed values of the low and high parts of the Haskey_i
@@ -1193,13 +1225,13 @@ VARIABLE_OFFSET = 16*8
 
 ###############################################################################
 
-.L_initial_blocks_done\@:
+_initial_blocks_done\@:
 
 .endm
 
 # encrypt 8 blocks at a time
 # ghash the 8 previously encrypted ciphertext blocks
-# arg1, arg2, arg3, arg4 are used as pointers only, not modified
+# arg1, arg3, arg4 are used as pointers only, not modified
 # r11 is the data offset value
 .macro GHASH_8_ENCRYPT_8_PARALLEL_AVX REP T1 T2 T3 T4 T5 T6 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T7 loop_idx ENC_DEC
 
@@ -1912,7 +1944,7 @@ SYM_FUNC_END(aesni_gcm_finalize_avx_gen2)
 ## num_initial_blocks = b mod 4#
 ## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
 ## r10, r11, r12, rax are clobbered
-## arg1, arg2, arg3, arg4 are used as pointers only, not modified
+## arg1, arg3, arg4, r14 are used as a pointer only, not modified
 
 .macro INITIAL_BLOCKS_AVX2 REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC VER
 	i = (8-\num_initial_blocks)
@@ -2001,7 +2033,7 @@ SYM_FUNC_END(aesni_gcm_finalize_avx_gen2)
         vmovdqa  \XMM8, \T3
 
         cmp     $128, %r13
-        jl      .L_initial_blocks_done\@                  # no need for precomputed constants
+        jl      _initial_blocks_done\@                  # no need for precomputed constants
 
 ###############################################################################
 # Haskey_i_k holds XORed values of the low and high parts of the Haskey_i
@@ -2145,7 +2177,7 @@ SYM_FUNC_END(aesni_gcm_finalize_avx_gen2)
 
 ###############################################################################
 
-.L_initial_blocks_done\@:
+_initial_blocks_done\@:
 
 
 .endm
@@ -2154,7 +2186,7 @@ SYM_FUNC_END(aesni_gcm_finalize_avx_gen2)
 
 # encrypt 8 blocks at a time
 # ghash the 8 previously encrypted ciphertext blocks
-# arg1, arg2, arg3, arg4 are used as pointers only, not modified
+# arg1, arg3, arg4 are used as pointers only, not modified
 # r11 is the data offset value
 .macro GHASH_8_ENCRYPT_8_PARALLEL_AVX2 REP T1 T2 T3 T4 T5 T6 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T7 loop_idx ENC_DEC
 

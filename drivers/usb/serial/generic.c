@@ -230,11 +230,11 @@ int usb_serial_generic_write(struct tty_struct *tty,
 }
 EXPORT_SYMBOL_GPL(usb_serial_generic_write);
 
-unsigned int usb_serial_generic_write_room(struct tty_struct *tty)
+int usb_serial_generic_write_room(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	unsigned long flags;
-	unsigned int room;
+	int room;
 
 	if (!port->bulk_out_size)
 		return 0;
@@ -243,15 +243,15 @@ unsigned int usb_serial_generic_write_room(struct tty_struct *tty)
 	room = kfifo_avail(&port->write_fifo);
 	spin_unlock_irqrestore(&port->lock, flags);
 
-	dev_dbg(&port->dev, "%s - returns %u\n", __func__, room);
+	dev_dbg(&port->dev, "%s - returns %d\n", __func__, room);
 	return room;
 }
 
-unsigned int usb_serial_generic_chars_in_buffer(struct tty_struct *tty)
+int usb_serial_generic_chars_in_buffer(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	unsigned long flags;
-	unsigned int chars;
+	int chars;
 
 	if (!port->bulk_out_size)
 		return 0;
@@ -260,7 +260,7 @@ unsigned int usb_serial_generic_chars_in_buffer(struct tty_struct *tty)
 	chars = kfifo_len(&port->write_fifo) + port->tx_bytes;
 	spin_unlock_irqrestore(&port->lock, flags);
 
-	dev_dbg(&port->dev, "%s - returns %u\n", __func__, chars);
+	dev_dbg(&port->dev, "%s - returns %d\n", __func__, chars);
 	return chars;
 }
 EXPORT_SYMBOL_GPL(usb_serial_generic_chars_in_buffer);

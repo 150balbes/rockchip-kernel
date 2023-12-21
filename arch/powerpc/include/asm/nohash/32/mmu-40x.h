@@ -57,7 +57,7 @@
 typedef struct {
 	unsigned int	id;
 	unsigned int	active;
-	void __user	*vdso;
+	unsigned long	vdso_base;
 } mm_context_t;
 
 #endif /* !__ASSEMBLY__ */

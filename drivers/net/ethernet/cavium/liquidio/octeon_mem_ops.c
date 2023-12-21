@@ -164,7 +164,6 @@ octeon_pci_read_core_mem(struct octeon_device *oct,
 {
 	__octeon_pci_rw_core_mem(oct, coreaddr, buf, len, 1);
 }
-EXPORT_SYMBOL_GPL(octeon_pci_read_core_mem);
 
 void
 octeon_pci_write_core_mem(struct octeon_device *oct,
@@ -174,7 +173,6 @@ octeon_pci_write_core_mem(struct octeon_device *oct,
 {
 	__octeon_pci_rw_core_mem(oct, coreaddr, (u8 *)buf, len, 0);
 }
-EXPORT_SYMBOL_GPL(octeon_pci_write_core_mem);
 
 u64 octeon_read_device_mem64(struct octeon_device *oct, u64 coreaddr)
 {
@@ -184,7 +182,6 @@ u64 octeon_read_device_mem64(struct octeon_device *oct, u64 coreaddr)
 
 	return be64_to_cpu(ret);
 }
-EXPORT_SYMBOL_GPL(octeon_read_device_mem64);
 
 u32 octeon_read_device_mem32(struct octeon_device *oct, u64 coreaddr)
 {
@@ -194,7 +191,6 @@ u32 octeon_read_device_mem32(struct octeon_device *oct, u64 coreaddr)
 
 	return be32_to_cpu(ret);
 }
-EXPORT_SYMBOL_GPL(octeon_read_device_mem32);
 
 void octeon_write_device_mem32(struct octeon_device *oct, u64 coreaddr,
 			       u32 val)
@@ -203,4 +199,3 @@ void octeon_write_device_mem32(struct octeon_device *oct, u64 coreaddr,
 
 	__octeon_pci_rw_core_mem(oct, coreaddr, (u8 *)&t, 4, 0);
 }
-EXPORT_SYMBOL_GPL(octeon_write_device_mem32);

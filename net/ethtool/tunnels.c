@@ -136,8 +136,6 @@ ethnl_tunnel_info_fill_reply(const struct ethnl_req_info *req_base,
 			goto err_cancel_table;
 
 		entry = nla_nest_start(skb, ETHTOOL_A_TUNNEL_UDP_TABLE_ENTRY);
-		if (!entry)
-			goto err_cancel_entry;
 
 		if (nla_put_be16(skb, ETHTOOL_A_TUNNEL_UDP_ENTRY_PORT,
 				 htons(IANA_VXLAN_UDP_PORT)) ||
@@ -197,7 +195,7 @@ int ethnl_tunnel_info_doit(struct sk_buff *skb, struct genl_info *info)
 	if (ret)
 		goto err_free_msg;
 	rtnl_unlock();
-	ethnl_parse_header_dev_put(&req_info);
+	dev_put(req_info.dev);
 	genlmsg_end(rskb, reply_payload);
 
 	return genlmsg_reply(rskb, info);
@@ -206,7 +204,7 @@ err_free_msg:
 	nlmsg_free(rskb);
 err_unlock_rtnl:
 	rtnl_unlock();
-	ethnl_parse_header_dev_put(&req_info);
+	dev_put(req_info.dev);
 	return ret;
 }
 
@@ -232,7 +230,7 @@ int ethnl_tunnel_info_start(struct netlink_callback *cb)
 					 sock_net(cb->skb->sk), cb->extack,
 					 false);
 	if (ctx->req_info.dev) {
-		ethnl_parse_header_dev_put(&ctx->req_info);
+		dev_put(ctx->req_info.dev);
 		ctx->req_info.dev = NULL;
 	}
 

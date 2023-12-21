@@ -1,7 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Common code to handle map devices which are simple ROM
- * (C) 2000 Red Hat.
+ * (C) 2000 Red Hat. GPL'd.
  */
 
 #include <linux/module.h>

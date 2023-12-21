@@ -95,6 +95,10 @@ static ssize_t esre_attr_show(struct kobject *kobj,
 	struct esre_entry *entry = to_entry(kobj);
 	struct esre_attribute *attr = to_attr(_attr);
 
+	/* Don't tell normal users what firmware versions we've got... */
+	if (!capable(CAP_SYS_ADMIN))
+		return -EACCES;
+
 	return attr->show(entry, buf);
 }
 
@@ -142,8 +146,6 @@ static struct attribute *esre1_attrs[] = {
 	&esre_last_attempt_status.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(esre1);
-
 static void esre_release(struct kobject *kobj)
 {
 	struct esre_entry *entry = to_entry(kobj);
@@ -152,10 +154,10 @@ static void esre_release(struct kobject *kobj)
 	kfree(entry);
 }
 
-static const struct kobj_type esre1_ktype = {
+static struct kobj_type esre1_ktype = {
 	.release = esre_release,
 	.sysfs_ops = &esre_attr_ops,
-	.default_groups = esre1_groups,
+	.default_attrs = esre1_attrs,
 };
 
 
@@ -243,7 +245,7 @@ void __init efi_esrt_init(void)
 	int rc;
 	phys_addr_t end;
 
-	if (!efi_enabled(EFI_MEMMAP) && !efi_enabled(EFI_PARAVIRT))
+	if (!efi_enabled(EFI_MEMMAP))
 		return;
 
 	pr_debug("esrt-init: loading.\n");
@@ -254,15 +256,20 @@ void __init efi_esrt_init(void)
 	if (rc < 0 ||
 	    (!(md.attribute & EFI_MEMORY_RUNTIME) &&
 	     md.type != EFI_BOOT_SERVICES_DATA &&
-	     md.type != EFI_RUNTIME_SERVICES_DATA &&
-	     md.type != EFI_ACPI_RECLAIM_MEMORY &&
-	     md.type != EFI_ACPI_MEMORY_NVS)) {
+	     md.type != EFI_RUNTIME_SERVICES_DATA)) {
 		pr_warn("ESRT header is not in the memory map.\n");
 		return;
 	}
 
-	max = efi_mem_desc_end(&md) - efi.esrt;
+	max = efi_mem_desc_end(&md);
+	if (max < efi.esrt) {
+		pr_err("EFI memory descriptor is invalid. (esrt: %p max: %p)\n",
+		       (void *)efi.esrt, (void *)max);
+		return;
+	}
+
 	size = sizeof(*esrt);
+	max -= efi.esrt;
 
 	if (max < size) {
 		pr_err("ESRT header doesn't fit on single memory map entry. (size: %zu max: %zu)\n",

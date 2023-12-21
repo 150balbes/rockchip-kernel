@@ -453,8 +453,7 @@ static struct snd_soc_dai_driver omap_dmic_dai = {
 };
 
 static const struct snd_soc_component_driver omap_dmic_component = {
-	.name			= "omap-dmic",
-	.legacy_dai_naming	= 1,
+	.name		= "omap-dmic",
 };
 
 static int asoc_dmic_probe(struct platform_device *pdev)
@@ -475,7 +474,7 @@ static int asoc_dmic_probe(struct platform_device *pdev)
 
 	dmic->fclk = devm_clk_get(dmic->dev, "fck");
 	if (IS_ERR(dmic->fclk)) {
-		dev_err(dmic->dev, "can't get fck\n");
+		dev_err(dmic->dev, "cant get fck\n");
 		return -ENODEV;
 	}
 

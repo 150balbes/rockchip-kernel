@@ -23,12 +23,16 @@
  *
  */
 
+#include <linux/delay.h>
+#include <linux/slab.h>
+
 #include "reg_helper.h"
 
 #include "core_types.h"
 #include "link_encoder.h"
 #include "dce_link_encoder.h"
 #include "stream_encoder.h"
+#include "i2caux_interface.h"
 #include "dc_bios_types.h"
 
 #include "gpio_service_interface.h"
@@ -784,9 +788,8 @@ static bool dce110_link_encoder_validate_hdmi_output(
 			crtc_timing->pixel_encoding == PIXEL_ENCODING_YCBCR420)
 		return false;
 
-	if ((!enc110->base.features.flags.bits.HDMI_6GB_EN ||
-			enc110->base.ctx->dc->debug.hdmi20_disable) &&
-			adjusted_pix_clk_khz >= 300000)
+	if (!enc110->base.features.flags.bits.HDMI_6GB_EN &&
+		adjusted_pix_clk_khz >= 300000)
 		return false;
 	if (enc110->base.ctx->dc->debug.hdmi20_disable &&
 		crtc_timing->pixel_encoding == PIXEL_ENCODING_YCBCR420)
@@ -1194,7 +1197,7 @@ void dce110_link_encoder_enable_dp_mst_output(
 
 #if defined(CONFIG_DRM_AMD_DC_SI)
 /* enables DP PHY output */
-static void dce60_link_encoder_enable_dp_output(
+void dce60_link_encoder_enable_dp_output(
 	struct link_encoder *enc,
 	const struct dc_link_settings *link_settings,
 	enum clock_source_id clock_source)
@@ -1233,7 +1236,7 @@ static void dce60_link_encoder_enable_dp_output(
 }
 
 /* enables DP PHY output in MST mode */
-static void dce60_link_encoder_enable_dp_mst_output(
+void dce60_link_encoder_enable_dp_mst_output(
 	struct link_encoder *enc,
 	const struct dc_link_settings *link_settings,
 	enum clock_source_id clock_source)
@@ -1321,8 +1324,7 @@ void dce110_link_encoder_disable_output(
 
 void dce110_link_encoder_dp_set_lane_settings(
 	struct link_encoder *enc,
-	const struct dc_link_settings *link_settings,
-	const struct dc_lane_settings lane_settings[LANE_COUNT_DP_MAX])
+	const struct link_training_settings *link_settings)
 {
 	struct dce110_link_encoder *enc110 = TO_DCE110_LINK_ENC(enc);
 	union dpcd_training_lane_set training_lane_set = { { 0 } };
@@ -1337,26 +1339,26 @@ void dce110_link_encoder_dp_set_lane_settings(
 	cntl.action = TRANSMITTER_CONTROL_SET_VOLTAGE_AND_PREEMPASIS;
 	cntl.transmitter = enc110->base.transmitter;
 	cntl.connector_obj_id = enc110->base.connector;
-	cntl.lanes_number = link_settings->lane_count;
+	cntl.lanes_number = link_settings->link_settings.lane_count;
 	cntl.hpd_sel = enc110->base.hpd_source;
-	cntl.pixel_clock = link_settings->link_rate *
+	cntl.pixel_clock = link_settings->link_settings.link_rate *
 						LINK_RATE_REF_FREQ_IN_KHZ;
 
-	for (lane = 0; lane < link_settings->lane_count; lane++) {
+	for (lane = 0; lane < link_settings->link_settings.lane_count; lane++) {
 		/* translate lane settings */
 
 		training_lane_set.bits.VOLTAGE_SWING_SET =
-				lane_settings[lane].VOLTAGE_SWING;
+			link_settings->lane_settings[lane].VOLTAGE_SWING;
 		training_lane_set.bits.PRE_EMPHASIS_SET =
-				lane_settings[lane].PRE_EMPHASIS;
+			link_settings->lane_settings[lane].PRE_EMPHASIS;
 
 		/* post cursor 2 setting only applies to HBR2 link rate */
-		if (link_settings->link_rate == LINK_RATE_HIGH2) {
+		if (link_settings->link_settings.link_rate == LINK_RATE_HIGH2) {
 			/* this is passed to VBIOS
 			 * to program post cursor 2 level */
 
 			training_lane_set.bits.POST_CURSOR2_SET =
-					lane_settings[lane].POST_CURSOR2;
+				link_settings->lane_settings[lane].POST_CURSOR2;
 		}
 
 		cntl.lane_select = lane;
@@ -1424,7 +1426,7 @@ void dce110_link_encoder_dp_set_phy_pattern(
 
 #if defined(CONFIG_DRM_AMD_DC_SI)
 /* set DP PHY test and training patterns */
-static void dce60_link_encoder_dp_set_phy_pattern(
+void dce60_link_encoder_dp_set_phy_pattern(
 	struct link_encoder *enc,
 	const struct encoder_set_dp_phy_pattern_param *param)
 {
@@ -1501,6 +1503,7 @@ void dce110_link_encoder_update_mst_stream_allocation_table(
 	const struct link_mst_stream_allocation_table *table)
 {
 	struct dce110_link_encoder *enc110 = TO_DCE110_LINK_ENC(enc);
+	uint32_t value0 = 0;
 	uint32_t value1 = 0;
 	uint32_t value2 = 0;
 	uint32_t slots = 0;
@@ -1601,7 +1604,7 @@ void dce110_link_encoder_update_mst_stream_allocation_table(
 	do {
 		udelay(10);
 
-		REG_READ(DP_MSE_SAT_UPDATE);
+		value0 = REG_READ(DP_MSE_SAT_UPDATE);
 
 		REG_GET(DP_MSE_SAT_UPDATE,
 				DP_MSE_SAT_UPDATE, &value1);

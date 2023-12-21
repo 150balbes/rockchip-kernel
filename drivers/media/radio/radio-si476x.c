@@ -152,7 +152,7 @@ static struct v4l2_ctrl_config si476x_ctrls[] = {
 
 	/*
 	 * SI476X during its station seeking(or tuning) process uses several
-	 * parameters to determine if "the station" is valid:
+	 * parameters to detrmine if "the station" is valid:
 	 *
 	 *	- Signal's SNR(in dBuV) must be lower than
 	 *	#V4L2_CID_SI476X_SNR_THRESHOLD
@@ -255,7 +255,7 @@ struct si476x_radio;
  *
  * This table holds pointers to functions implementing particular
  * operations depending on the mode in which the tuner chip was
- * configured to start. If the function is not supported
+ * configured to start in. If the function is not supported
  * corresponding element is set to #NULL.
  *
  * @tune_freq: Tune chip to a specific frequency
@@ -311,6 +311,12 @@ struct si476x_radio {
 	struct dentry	*debugfs;
 	u32 audmode;
 };
+
+static inline struct si476x_radio *
+v4l2_dev_to_radio(struct v4l2_device *d)
+{
+	return container_of(d, struct si476x_radio, v4l2dev);
+}
 
 static inline struct si476x_radio *
 v4l2_ctrl_handler_to_radio(struct v4l2_ctrl_handler *d)
@@ -911,7 +917,7 @@ static int si476x_radio_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_RDS_RECEPTION:
 		/*
 		 * It looks like RDS related properties are
-		 * inaccessible when tuner is in AM mode, so cache the
+		 * inaccesable when tuner is in AM mode, so cache the
 		 * changes
 		 */
 		if (si476x_core_is_in_am_receiver_mode(radio->core))
@@ -1072,6 +1078,7 @@ done:
 
 static int si476x_radio_fops_release(struct file *file)
 {
+	int err;
 	struct si476x_radio *radio = video_drvdata(file);
 
 	if (v4l2_fh_is_singular_file(file) &&
@@ -1079,7 +1086,9 @@ static int si476x_radio_fops_release(struct file *file)
 		si476x_core_set_power_state(radio->core,
 					    SI476X_POWER_DOWN);
 
-	return v4l2_fh_release(file);
+	err = v4l2_fh_release(file);
+
+	return err;
 }
 
 static ssize_t si476x_radio_fops_read(struct file *file, char __user *buf,
@@ -1498,7 +1507,7 @@ exit:
 	return rval;
 }
 
-static void si476x_radio_remove(struct platform_device *pdev)
+static int si476x_radio_remove(struct platform_device *pdev)
 {
 	struct si476x_radio *radio = platform_get_drvdata(pdev);
 
@@ -1506,6 +1515,8 @@ static void si476x_radio_remove(struct platform_device *pdev)
 	video_unregister_device(&radio->videodev);
 	v4l2_device_unregister(&radio->v4l2dev);
 	debugfs_remove_recursive(radio->debugfs);
+
+	return 0;
 }
 
 MODULE_ALIAS("platform:si476x-radio");
@@ -1515,7 +1526,7 @@ static struct platform_driver si476x_radio_driver = {
 		.name	= DRIVER_NAME,
 	},
 	.probe		= si476x_radio_probe,
-	.remove_new	= si476x_radio_remove,
+	.remove		= si476x_radio_remove,
 };
 module_platform_driver(si476x_radio_driver);
 

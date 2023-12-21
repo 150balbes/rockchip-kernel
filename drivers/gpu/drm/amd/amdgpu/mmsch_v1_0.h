@@ -24,7 +24,9 @@
 #ifndef __MMSCH_V1_0_H__
 #define __MMSCH_V1_0_H__
 
-#define MMSCH_VERSION	0x1
+#define MMSCH_VERSION_MAJOR	1
+#define MMSCH_VERSION_MINOR	0
+#define MMSCH_VERSION	(MMSCH_VERSION_MAJOR << 16 | MMSCH_VERSION_MINOR)
 
 enum mmsch_v1_0_command_type {
 	MMSCH_COMMAND__DIRECT_REG_WRITE = 0,

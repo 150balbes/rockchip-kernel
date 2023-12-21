@@ -270,6 +270,7 @@ static struct mem_access trapped_io_access = {
 
 int handle_trapped_io(struct pt_regs *regs, unsigned long address)
 {
+	mm_segment_t oldfs;
 	insn_size_t instruction;
 	int tmp;
 
@@ -280,12 +281,16 @@ int handle_trapped_io(struct pt_regs *regs, unsigned long address)
 
 	WARN_ON(user_mode(regs));
 
-	if (copy_from_kernel_nofault(&instruction, (void *)(regs->pc),
-				     sizeof(instruction))) {
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
+	if (copy_from_user(&instruction, (void *)(regs->pc),
+			   sizeof(instruction))) {
+		set_fs(oldfs);
 		return 0;
 	}
 
 	tmp = handle_unaligned_access(instruction, regs,
 				      &trapped_io_access, 1, address);
+	set_fs(oldfs);
 	return tmp == 0;
 }

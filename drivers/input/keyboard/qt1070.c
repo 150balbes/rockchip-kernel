@@ -126,7 +126,8 @@ static irqreturn_t qt1070_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int qt1070_probe(struct i2c_client *client)
+static int qt1070_probe(struct i2c_client *client,
+				const struct i2c_device_id *id)
 {
 	struct qt1070_data *data;
 	struct input_dev *input;
@@ -215,7 +216,7 @@ err_free_mem:
 	return err;
 }
 
-static void qt1070_remove(struct i2c_client *client)
+static int qt1070_remove(struct i2c_client *client)
 {
 	struct qt1070_data *data = i2c_get_clientdata(client);
 
@@ -224,8 +225,11 @@ static void qt1070_remove(struct i2c_client *client)
 
 	input_unregister_device(data->input);
 	kfree(data);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int qt1070_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -247,8 +251,9 @@ static int qt1070_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(qt1070_pm_ops, qt1070_suspend, qt1070_resume);
+static SIMPLE_DEV_PM_OPS(qt1070_pm_ops, qt1070_suspend, qt1070_resume);
 
 static const struct i2c_device_id qt1070_id[] = {
 	{ "qt1070", 0 },
@@ -268,7 +273,7 @@ static struct i2c_driver qt1070_driver = {
 	.driver	= {
 		.name	= "qt1070",
 		.of_match_table = of_match_ptr(qt1070_of_match),
-		.pm	= pm_sleep_ptr(&qt1070_pm_ops),
+		.pm	= &qt1070_pm_ops,
 	},
 	.id_table	= qt1070_id,
 	.probe		= qt1070_probe,

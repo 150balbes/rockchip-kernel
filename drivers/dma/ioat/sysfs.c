@@ -158,9 +158,8 @@ static struct attribute *ioat_attrs[] = {
 	&intr_coalesce_attr.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(ioat);
 
 struct kobj_type ioat_ktype = {
 	.sysfs_ops = &ioat_sysfs_ops,
-	.default_groups = ioat_groups,
+	.default_attrs = ioat_attrs,
 };

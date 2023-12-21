@@ -7,9 +7,23 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
-#include <linux/sched/debug.h>
+#include <linux/slab.h>
 #include <linux/errno.h>
-#include <trace/events/lock.h>
+
+#include <trace/hooks/dtask.h>
+
+/*
+ * trace_android_vh_record_pcpu_rwsem_starttime  is called in
+ * include/linux/percpu-rwsem.h by including include/hooks/dtask.h, which
+ * will result to build-err. So we create
+ * func:_trace_android_vh_record_pcpu_rwsem_starttime for percpu-rwsem.h to call.
+ */
+void _trace_android_vh_record_pcpu_rwsem_starttime(struct task_struct *tsk,
+		unsigned long settime)
+{
+	trace_android_vh_record_pcpu_rwsem_starttime(tsk, settime);
+}
+EXPORT_SYMBOL_GPL(_trace_android_vh_record_pcpu_rwsem_starttime);
 
 int __percpu_init_rwsem(struct percpu_rw_semaphore *sem,
 			const char *name, struct lock_class_key *key)
@@ -164,7 +178,7 @@ static void percpu_rwsem_wait(struct percpu_rw_semaphore *sem, bool reader)
 	__set_current_state(TASK_RUNNING);
 }
 
-bool __sched __percpu_down_read(struct percpu_rw_semaphore *sem, bool try)
+bool __percpu_down_read(struct percpu_rw_semaphore *sem, bool try)
 {
 	if (__percpu_down_read_trylock(sem))
 		return true;
@@ -172,11 +186,9 @@ bool __sched __percpu_down_read(struct percpu_rw_semaphore *sem, bool try)
 	if (try)
 		return false;
 
-	trace_contention_begin(sem, LCB_F_PERCPU | LCB_F_READ);
 	preempt_enable();
 	percpu_rwsem_wait(sem, /* .reader = */ true);
 	preempt_disable();
-	trace_contention_end(sem, 0);
 
 	return true;
 }
@@ -191,12 +203,6 @@ EXPORT_SYMBOL_GPL(__percpu_down_read);
 		__sum += per_cpu(var, cpu);				\
 	__sum;								\
 })
-
-bool percpu_is_read_locked(struct percpu_rw_semaphore *sem)
-{
-	return per_cpu_sum(*sem->read_count) != 0 && !atomic_read(&sem->block);
-}
-EXPORT_SYMBOL_GPL(percpu_is_read_locked);
 
 /*
  * Return true if the modular sum of the sem->read_count per-CPU variable is
@@ -221,11 +227,10 @@ static bool readers_active_check(struct percpu_rw_semaphore *sem)
 	return true;
 }
 
-void __sched percpu_down_write(struct percpu_rw_semaphore *sem)
+void percpu_down_write(struct percpu_rw_semaphore *sem)
 {
 	might_sleep();
 	rwsem_acquire(&sem->dep_map, 0, 0, _RET_IP_);
-	trace_contention_begin(sem, LCB_F_PERCPU | LCB_F_WRITE);
 
 	/* Notify readers to take the slow path. */
 	rcu_sync_enter(&sem->rss);
@@ -247,12 +252,13 @@ void __sched percpu_down_write(struct percpu_rw_semaphore *sem)
 
 	/* Wait for all active readers to complete. */
 	rcuwait_wait_event(&sem->writer, readers_active_check(sem), TASK_UNINTERRUPTIBLE);
-	trace_contention_end(sem, 0);
+	trace_android_vh_record_pcpu_rwsem_starttime(current, jiffies);
 }
 EXPORT_SYMBOL_GPL(percpu_down_write);
 
 void percpu_up_write(struct percpu_rw_semaphore *sem)
 {
+	trace_android_vh_record_pcpu_rwsem_starttime(current, 0);
 	rwsem_release(&sem->dep_map, _RET_IP_);
 
 	/*
@@ -280,3 +286,34 @@ void percpu_up_write(struct percpu_rw_semaphore *sem)
 	rcu_sync_exit(&sem->rss);
 }
 EXPORT_SYMBOL_GPL(percpu_up_write);
+
+static LIST_HEAD(destroy_list);
+static DEFINE_SPINLOCK(destroy_list_lock);
+
+static void destroy_list_workfn(struct work_struct *work)
+{
+	struct percpu_rw_semaphore_atomic *sem, *sem2;
+	LIST_HEAD(to_destroy);
+
+	spin_lock(&destroy_list_lock);
+	list_splice_init(&destroy_list, &to_destroy);
+	spin_unlock(&destroy_list_lock);
+
+	if (list_empty(&to_destroy))
+		return;
+
+	list_for_each_entry_safe(sem, sem2, &to_destroy, destroy_list_entry) {
+		percpu_free_rwsem(&sem->rw_sem);
+		kfree(sem);
+	}
+}
+
+static DECLARE_WORK(destroy_list_work, destroy_list_workfn);
+
+void percpu_rwsem_async_destroy(struct percpu_rw_semaphore_atomic *sem)
+{
+	spin_lock(&destroy_list_lock);
+	list_add_tail(&sem->destroy_list_entry, &destroy_list);
+	spin_unlock(&destroy_list_lock);
+	schedule_work(&destroy_list_work);
+}

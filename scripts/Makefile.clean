@@ -8,8 +8,11 @@ src := $(obj)
 PHONY := __clean
 __clean:
 
-include $(srctree)/scripts/Kbuild.include
-include $(kbuild-file)
+include scripts/Kbuild.include
+
+# The filename Kbuild has precedence over Makefile
+kbuild-dir := $(if $(filter /%,$(src)),$(src),$(srctree)/$(src))
+include $(if $(wildcard $(kbuild-dir)/Kbuild), $(kbuild-dir)/Kbuild, $(kbuild-dir)/Makefile)
 
 # Figure out what we need to build from the various variables
 # ==========================================================================
@@ -31,16 +34,23 @@ __clean-files	:= \
 	$(hostprogs-always-y) $(hostprogs-always-m) $(hostprogs-always-) \
 	$(userprogs-always-y) $(userprogs-always-m) $(userprogs-always-)
 
+# deprecated
+__clean-files	+= $(always) $(hostprogs-y) $(hostprogs-m) $(hostprogs-)
+
 __clean-files   := $(filter-out $(no-clean-files), $(__clean-files))
 
-__clean-files   := $(wildcard $(addprefix $(obj)/, $(__clean-files)))
+# clean-files is given relative to the current directory, unless it
+# starts with $(objtree)/ (which means "./", so do not add "./" unless
+# you want to delete a file from the toplevel object directory).
+
+__clean-files   := $(wildcard                                               \
+		   $(addprefix $(obj)/, $(filter-out $(objtree)/%, $(__clean-files))) \
+		   $(filter $(objtree)/%, $(__clean-files)))
 
 # ==========================================================================
 
-# To make this rule robust against "Argument list too long" error,
-# remove $(obj)/ prefix, and restore it by a shell command.
 quiet_cmd_clean = CLEAN   $(obj)
-      cmd_clean = printf '$(obj)/%s ' $(patsubst $(obj)/%,%,$(__clean-files)) | xargs rm -rf
+      cmd_clean = rm -rf $(__clean-files)
 
 __clean: $(subdir-ymn)
 ifneq ($(strip $(__clean-files)),)

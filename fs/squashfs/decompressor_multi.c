@@ -29,10 +29,11 @@
 #define MAX_DECOMPRESSOR	(num_online_cpus() * 2)
 
 
-static int squashfs_max_decompressors(void)
+int squashfs_max_decompressors(void)
 {
 	return MAX_DECOMPRESSOR;
 }
+
 
 struct squashfs_stream {
 	void			*comp_opts;
@@ -58,7 +59,7 @@ static void put_decomp_stream(struct decomp_stream *decomp_strm,
 	wake_up(&stream->wait);
 }
 
-static void *squashfs_decompressor_create(struct squashfs_sb_info *msblk,
+void *squashfs_decompressor_create(struct squashfs_sb_info *msblk,
 				void *comp_opts)
 {
 	struct squashfs_stream *stream;
@@ -102,7 +103,7 @@ out:
 }
 
 
-static void squashfs_decompressor_destroy(struct squashfs_sb_info *msblk)
+void squashfs_decompressor_destroy(struct squashfs_sb_info *msblk)
 {
 	struct squashfs_stream *stream = msblk->stream;
 	if (stream) {
@@ -144,7 +145,7 @@ static struct decomp_stream *get_decomp_stream(struct squashfs_sb_info *msblk,
 		 * If there is no available decomp and already full,
 		 * let's wait for releasing decomp from other users.
 		 */
-		if (stream->avail_decomp >= msblk->max_thread_num)
+		if (stream->avail_decomp >= MAX_DECOMPRESSOR)
 			goto wait;
 
 		/* Let's allocate new decomp */
@@ -160,7 +161,7 @@ static struct decomp_stream *get_decomp_stream(struct squashfs_sb_info *msblk,
 		}
 
 		stream->avail_decomp++;
-		WARN_ON(stream->avail_decomp > msblk->max_thread_num);
+		WARN_ON(stream->avail_decomp > MAX_DECOMPRESSOR);
 
 		mutex_unlock(&stream->mutex);
 		break;
@@ -179,7 +180,7 @@ wait:
 }
 
 
-static int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
+int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
 			int offset, int length,
 			struct squashfs_page_actor *output)
 {
@@ -194,10 +195,3 @@ static int squashfs_decompress(struct squashfs_sb_info *msblk, struct bio *bio,
 			msblk->decompressor->name);
 	return res;
 }
-
-const struct squashfs_decompressor_thread_ops squashfs_decompressor_multi = {
-	.create = squashfs_decompressor_create,
-	.destroy = squashfs_decompressor_destroy,
-	.decompress = squashfs_decompress,
-	.max_decompressors = squashfs_max_decompressors,
-};

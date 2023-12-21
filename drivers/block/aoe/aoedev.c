@@ -279,6 +279,7 @@ freedev(struct aoedev *d)
 		del_gendisk(d->gd);
 		put_disk(d->gd);
 		blk_mq_free_tag_set(&d->tag_set);
+		blk_cleanup_queue(d->blkq);
 	}
 	t = d->targets;
 	e = t + d->ntargets;
@@ -321,7 +322,7 @@ flush(const char __user *str, size_t cnt, int exiting)
 			specified = 1;
 	}
 
-	flush_workqueue(aoe_wq);
+	flush_scheduled_work();
 	/* pass one: do aoedev_downdev, which might sleep */
 restart1:
 	spin_lock_irqsave(&devlist_lock, flags);
@@ -520,7 +521,7 @@ freetgt(struct aoedev *d, struct aoetgt *t)
 void
 aoedev_exit(void)
 {
-	flush_workqueue(aoe_wq);
+	flush_scheduled_work();
 	flush(NULL, 0, EXITING);
 }
 

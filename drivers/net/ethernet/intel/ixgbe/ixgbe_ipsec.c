@@ -511,14 +511,14 @@ static int ixgbe_ipsec_check_mgmt_ip(struct xfrm_state *xs)
 					continue;
 
 				reg = IXGBE_READ_REG(hw, MIPAF_ARR(3, i));
-				if (reg == (__force u32)xs->id.daddr.a4)
+				if (reg == xs->id.daddr.a4)
 					return 1;
 			}
 		}
 
 		if ((bmcipval & BMCIP_MASK) == BMCIP_V4) {
 			reg = IXGBE_READ_REG(hw, IXGBE_BMCIP(3));
-			if (reg == (__force u32)xs->id.daddr.a4)
+			if (reg == xs->id.daddr.a4)
 				return 1;
 		}
 
@@ -533,7 +533,7 @@ static int ixgbe_ipsec_check_mgmt_ip(struct xfrm_state *xs)
 
 			for (j = 0; j < 4; j++) {
 				reg = IXGBE_READ_REG(hw, MIPAF_ARR(i, j));
-				if (reg != (__force u32)xs->id.daddr.a6[j])
+				if (reg != xs->id.daddr.a6[j])
 					break;
 			}
 			if (j == 4)   /* did we match all 4 words? */
@@ -543,7 +543,7 @@ static int ixgbe_ipsec_check_mgmt_ip(struct xfrm_state *xs)
 		if ((bmcipval & BMCIP_MASK) == BMCIP_V6) {
 			for (j = 0; j < 4; j++) {
 				reg = IXGBE_READ_REG(hw, IXGBE_BMCIP(j));
-				if (reg != (__force u32)xs->id.daddr.a6[j])
+				if (reg != xs->id.daddr.a6[j])
 					break;
 			}
 			if (j == 4)   /* did we match all 4 words? */
@@ -557,10 +557,8 @@ static int ixgbe_ipsec_check_mgmt_ip(struct xfrm_state *xs)
 /**
  * ixgbe_ipsec_add_sa - program device with a security association
  * @xs: pointer to transformer state struct
- * @extack: extack point to fill failure reason
  **/
-static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
-			      struct netlink_ext_ack *extack)
+static int ixgbe_ipsec_add_sa(struct xfrm_state *xs)
 {
 	struct net_device *dev = xs->xso.real_dev;
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
@@ -572,37 +570,33 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
 	int i;
 
 	if (xs->id.proto != IPPROTO_ESP && xs->id.proto != IPPROTO_AH) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported protocol for ipsec offload");
+		netdev_err(dev, "Unsupported protocol 0x%04x for ipsec offload\n",
+			   xs->id.proto);
 		return -EINVAL;
 	}
 
 	if (xs->props.mode != XFRM_MODE_TRANSPORT) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported mode for ipsec offload");
+		netdev_err(dev, "Unsupported mode for ipsec offload\n");
 		return -EINVAL;
 	}
 
 	if (ixgbe_ipsec_check_mgmt_ip(xs)) {
-		NL_SET_ERR_MSG_MOD(extack, "IPsec IP addr clash with mgmt filters");
+		netdev_err(dev, "IPsec IP addr clash with mgmt filters\n");
 		return -EINVAL;
 	}
 
-	if (xs->xso.type != XFRM_DEV_OFFLOAD_CRYPTO) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported ipsec offload type");
-		return -EINVAL;
-	}
-
-	if (xs->xso.dir == XFRM_DEV_OFFLOAD_IN) {
+	if (xs->xso.flags & XFRM_OFFLOAD_INBOUND) {
 		struct rx_sa rsa;
 
 		if (xs->calg) {
-			NL_SET_ERR_MSG_MOD(extack, "Compression offload not supported");
+			netdev_err(dev, "Compression offload not supported\n");
 			return -EINVAL;
 		}
 
 		/* find the first unused index */
 		ret = ixgbe_ipsec_find_empty_idx(ipsec, true);
 		if (ret < 0) {
-			NL_SET_ERR_MSG_MOD(extack, "No space for SA in Rx table!");
+			netdev_err(dev, "No space for SA in Rx table!\n");
 			return ret;
 		}
 		sa_idx = (u16)ret;
@@ -617,7 +611,7 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
 		/* get the key and salt */
 		ret = ixgbe_ipsec_parse_proto_keys(xs, rsa.key, &rsa.salt);
 		if (ret) {
-			NL_SET_ERR_MSG_MOD(extack, "Failed to get key data for Rx SA table");
+			netdev_err(dev, "Failed to get key data for Rx SA table\n");
 			return ret;
 		}
 
@@ -677,7 +671,7 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
 
 		} else {
 			/* no match and no empty slot */
-			NL_SET_ERR_MSG_MOD(extack, "No space for SA in Rx IP SA table");
+			netdev_err(dev, "No space for SA in Rx IP SA table\n");
 			memset(&rsa, 0, sizeof(rsa));
 			return -ENOSPC;
 		}
@@ -712,7 +706,7 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
 		/* find the first unused index */
 		ret = ixgbe_ipsec_find_empty_idx(ipsec, false);
 		if (ret < 0) {
-			NL_SET_ERR_MSG_MOD(extack, "No space for SA in Tx table");
+			netdev_err(dev, "No space for SA in Tx table\n");
 			return ret;
 		}
 		sa_idx = (u16)ret;
@@ -726,7 +720,7 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs,
 
 		ret = ixgbe_ipsec_parse_proto_keys(xs, tsa.key, &tsa.salt);
 		if (ret) {
-			NL_SET_ERR_MSG_MOD(extack, "Failed to get key data for Tx SA table");
+			netdev_err(dev, "Failed to get key data for Tx SA table\n");
 			memset(&tsa, 0, sizeof(tsa));
 			return ret;
 		}
@@ -763,7 +757,7 @@ static void ixgbe_ipsec_del_sa(struct xfrm_state *xs)
 	u32 zerobuf[4] = {0, 0, 0, 0};
 	u16 sa_idx;
 
-	if (xs->xso.dir == XFRM_DEV_OFFLOAD_IN) {
+	if (xs->xso.flags & XFRM_OFFLOAD_INBOUND) {
 		struct rx_sa *rsa;
 		u8 ipi;
 
@@ -909,7 +903,8 @@ int ixgbe_ipsec_vf_add_sa(struct ixgbe_adapter *adapter, u32 *msgbuf, u32 vf)
 	/* Tx IPsec offload doesn't seem to work on this
 	 * device, so block these requests for now.
 	 */
-	if (sam->dir != XFRM_DEV_OFFLOAD_IN) {
+	sam->flags = sam->flags & ~XFRM_OFFLOAD_IPV6;
+	if (sam->flags != XFRM_OFFLOAD_INBOUND) {
 		err = -EOPNOTSUPP;
 		goto err_out;
 	}
@@ -920,7 +915,7 @@ int ixgbe_ipsec_vf_add_sa(struct ixgbe_adapter *adapter, u32 *msgbuf, u32 vf)
 		goto err_out;
 	}
 
-	xs->xso.dir = sam->dir;
+	xs->xso.flags = sam->flags;
 	xs->id.spi = sam->spi;
 	xs->id.proto = sam->proto;
 	xs->props.family = sam->family;
@@ -951,7 +946,7 @@ int ixgbe_ipsec_vf_add_sa(struct ixgbe_adapter *adapter, u32 *msgbuf, u32 vf)
 	memcpy(xs->aead->alg_name, aes_gcm_name, sizeof(aes_gcm_name));
 
 	/* set up the HW offload */
-	err = ixgbe_ipsec_add_sa(xs, NULL);
+	err = ixgbe_ipsec_add_sa(xs);
 	if (err)
 		goto err_aead;
 

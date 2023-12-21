@@ -15,9 +15,10 @@ static int sun50i_de2_bus_probe(struct platform_device *pdev)
 	int ret;
 
 	ret = sunxi_sram_claim(&pdev->dev);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret,
-				     "Couldn't map SRAM to device\n");
+	if (ret) {
+		dev_err(&pdev->dev, "Error couldn't map SRAM to device\n");
+		return ret;
+	}
 
 	of_platform_populate(np, NULL, NULL, &pdev->dev);
 

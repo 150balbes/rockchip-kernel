@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-// Melfas MMS114/MMS136/MMS152 touchscreen device driver
+// Melfas MMS114/MMS152 touchscreen device driver
 //
 // Copyright (c) 2012 Samsung Electronics Co., Ltd.
 // Author: Joonyoung Shim <jy0922.shim@samsung.com>
@@ -44,8 +44,7 @@
 #define MMS114_MAX_AREA			0xff
 
 #define MMS114_MAX_TOUCH		10
-#define MMS114_EVENT_SIZE		8
-#define MMS136_EVENT_SIZE		6
+#define MMS114_PACKET_NUM		8
 
 /* Touch type */
 #define MMS114_TYPE_NONE		0
@@ -54,8 +53,6 @@
 
 enum mms_type {
 	TYPE_MMS114	= 114,
-	TYPE_MMS134S	= 134,
-	TYPE_MMS136	= 136,
 	TYPE_MMS152	= 152,
 	TYPE_MMS345L	= 345,
 };
@@ -202,7 +199,7 @@ static irqreturn_t mms114_interrupt(int irq, void *dev_id)
 	int error;
 
 	mutex_lock(&input_dev->mutex);
-	if (!input_device_enabled(input_dev)) {
+	if (!input_dev->users) {
 		mutex_unlock(&input_dev->mutex);
 		goto out;
 	}
@@ -212,11 +209,7 @@ static irqreturn_t mms114_interrupt(int irq, void *dev_id)
 	if (packet_size <= 0)
 		goto out;
 
-	/* MMS136 has slightly different event size */
-	if (data->type == TYPE_MMS134S || data->type == TYPE_MMS136)
-		touch_size = packet_size / MMS136_EVENT_SIZE;
-	else
-		touch_size = packet_size / MMS114_EVENT_SIZE;
+	touch_size = packet_size / MMS114_PACKET_NUM;
 
 	error = __mms114_read_reg(data, MMS114_INFORMATION, packet_size,
 			(u8 *)touch);
@@ -282,8 +275,6 @@ static int mms114_get_version(struct mms114_data *data)
 		break;
 
 	case TYPE_MMS114:
-	case TYPE_MMS134S:
-	case TYPE_MMS136:
 		error = __mms114_read_reg(data, MMS114_TSP_REV, 6, buf);
 		if (error)
 			return error;
@@ -306,9 +297,8 @@ static int mms114_setup_regs(struct mms114_data *data)
 	if (error < 0)
 		return error;
 
-	/* MMS114, MMS134S and MMS136 have configuration and power on registers */
-	if (data->type != TYPE_MMS114 && data->type != TYPE_MMS134S &&
-	    data->type != TYPE_MMS136)
+	/* Only MMS114 has configuration and power on registers */
+	if (data->type != TYPE_MMS114)
 		return 0;
 
 	error = mms114_set_active(data, true);
@@ -440,7 +430,8 @@ static int mms114_parse_legacy_bindings(struct mms114_data *data)
 	return 0;
 }
 
-static int mms114_probe(struct i2c_client *client)
+static int mms114_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct mms114_data *data;
 	struct input_dev *input_dev;
@@ -489,8 +480,7 @@ static int mms114_probe(struct i2c_client *client)
 				     0, data->props.max_y, 0, 0);
 	}
 
-	if (data->type == TYPE_MMS114 || data->type == TYPE_MMS134S ||
-	    data->type == TYPE_MMS136) {
+	if (data->type == TYPE_MMS114) {
 		/*
 		 * The firmware handles movement and pressure fuzz, so
 		 * don't duplicate that in software.
@@ -540,13 +530,13 @@ static int mms114_probe(struct i2c_client *client)
 	}
 
 	error = devm_request_threaded_irq(&client->dev, client->irq,
-					  NULL, mms114_interrupt,
-					  IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					  NULL, mms114_interrupt, IRQF_ONESHOT,
 					  dev_name(&client->dev), data);
 	if (error) {
 		dev_err(&client->dev, "Failed to register interrupt\n");
 		return error;
 	}
+	disable_irq(client->irq);
 
 	error = input_register_device(data->input_dev);
 	if (error) {
@@ -557,7 +547,7 @@ static int mms114_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int mms114_suspend(struct device *dev)
+static int __maybe_unused mms114_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct mms114_data *data = i2c_get_clientdata(client);
@@ -574,14 +564,14 @@ static int mms114_suspend(struct device *dev)
 	input_sync(input_dev);
 
 	mutex_lock(&input_dev->mutex);
-	if (input_device_enabled(input_dev))
+	if (input_dev->users)
 		mms114_stop(data);
 	mutex_unlock(&input_dev->mutex);
 
 	return 0;
 }
 
-static int mms114_resume(struct device *dev)
+static int __maybe_unused mms114_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct mms114_data *data = i2c_get_clientdata(client);
@@ -589,7 +579,7 @@ static int mms114_resume(struct device *dev)
 	int error;
 
 	mutex_lock(&input_dev->mutex);
-	if (input_device_enabled(input_dev)) {
+	if (input_dev->users) {
 		error = mms114_start(data);
 		if (error < 0) {
 			mutex_unlock(&input_dev->mutex);
@@ -601,7 +591,7 @@ static int mms114_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(mms114_pm_ops, mms114_suspend, mms114_resume);
+static SIMPLE_DEV_PM_OPS(mms114_pm_ops, mms114_suspend, mms114_resume);
 
 static const struct i2c_device_id mms114_id[] = {
 	{ "mms114", 0 },
@@ -614,12 +604,6 @@ static const struct of_device_id mms114_dt_match[] = {
 	{
 		.compatible = "melfas,mms114",
 		.data = (void *)TYPE_MMS114,
-	}, {
-		.compatible = "melfas,mms134s",
-		.data = (void *)TYPE_MMS134S,
-	}, {
-		.compatible = "melfas,mms136",
-		.data = (void *)TYPE_MMS136,
 	}, {
 		.compatible = "melfas,mms152",
 		.data = (void *)TYPE_MMS152,
@@ -635,7 +619,7 @@ MODULE_DEVICE_TABLE(of, mms114_dt_match);
 static struct i2c_driver mms114_driver = {
 	.driver = {
 		.name	= "mms114",
-		.pm	= pm_sleep_ptr(&mms114_pm_ops),
+		.pm	= &mms114_pm_ops,
 		.of_match_table = of_match_ptr(mms114_dt_match),
 	},
 	.probe		= mms114_probe,

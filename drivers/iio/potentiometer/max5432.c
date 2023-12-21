@@ -85,7 +85,8 @@ static const struct iio_info max5432_info = {
 	.write_raw = max5432_write_raw,
 };
 
-static int max5432_probe(struct i2c_client *client)
+static int max5432_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct iio_dev *indio_dev;

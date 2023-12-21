@@ -305,8 +305,10 @@ struct dccp_sock {
 	struct timer_list		dccps_xmit_timer;
 };
 
-#define dccp_sk(ptr)	container_of_const(ptr, struct dccp_sock, \
-					   dccps_inet_connection.icsk_inet.sk)
+static inline struct dccp_sock *dccp_sk(const struct sock *sk)
+{
+	return (struct dccp_sock *)sk;
+}
 
 static inline const char *dccp_role(const struct sock *sk)
 {

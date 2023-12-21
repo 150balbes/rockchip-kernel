@@ -63,8 +63,8 @@ static u16 bulk_read_device_counter; /* =0 as per C standard */
 #define EEPROM_CMD_READ     "restore"	/* cmd for read eeprom sysfs */
 #define BULK_TRIGGER_CMD    "trigger"	/* cmd to trigger a bulk read */
 
-#define MIN_TEMP	-55	/* min temperature that can be measured */
-#define MAX_TEMP	125	/* max temperature that can be measured */
+#define MIN_TEMP	-55	/* min temperature that can be mesured */
+#define MAX_TEMP	125	/* max temperature that can be mesured */
 
 /* Allowed values for sysfs conv_time attribute */
 #define CONV_TIME_DEFAULT 0
@@ -284,7 +284,7 @@ static int read_powermode(struct w1_slave *sl);
  * trigger_bulk_read() - function to trigger a bulk read on the bus
  * @dev_master: the device master of the bus
  *
- * Send a SKIP ROM follow by a CONVERT T command on the bus.
+ * Send a SKIP ROM follow by a CONVERT T commmand on the bus.
  * It also set the status flag in each slave &struct w1_therm_family_data
  * to signal that a conversion is in progress.
  *
@@ -315,7 +315,7 @@ static ssize_t resolution_show(struct device *device,
 static ssize_t resolution_store(struct device *device,
 	struct device_attribute *attr, const char *buf, size_t size);
 
-static ssize_t eeprom_cmd_store(struct device *device,
+static ssize_t eeprom_store(struct device *device,
 	struct device_attribute *attr, const char *buf, size_t size);
 
 static ssize_t alarms_store(struct device *device,
@@ -350,7 +350,7 @@ static DEVICE_ATTR_RO(w1_seq);
 static DEVICE_ATTR_RO(temperature);
 static DEVICE_ATTR_RO(ext_power);
 static DEVICE_ATTR_RW(resolution);
-static DEVICE_ATTR_WO(eeprom_cmd);
+static DEVICE_ATTR_WO(eeprom);
 static DEVICE_ATTR_RW(alarms);
 static DEVICE_ATTR_RW(conv_time);
 static DEVICE_ATTR_RW(features);
@@ -386,7 +386,7 @@ static struct attribute *w1_therm_attrs[] = {
 	&dev_attr_temperature.attr,
 	&dev_attr_ext_power.attr,
 	&dev_attr_resolution.attr,
-	&dev_attr_eeprom_cmd.attr,
+	&dev_attr_eeprom.attr,
 	&dev_attr_alarms.attr,
 	&dev_attr_conv_time.attr,
 	&dev_attr_features.attr,
@@ -397,7 +397,7 @@ static struct attribute *w1_ds18s20_attrs[] = {
 	&dev_attr_w1_slave.attr,
 	&dev_attr_temperature.attr,
 	&dev_attr_ext_power.attr,
-	&dev_attr_eeprom_cmd.attr,
+	&dev_attr_eeprom.attr,
 	&dev_attr_alarms.attr,
 	&dev_attr_conv_time.attr,
 	&dev_attr_features.attr,
@@ -410,7 +410,7 @@ static struct attribute *w1_ds28ea00_attrs[] = {
 	&dev_attr_temperature.attr,
 	&dev_attr_ext_power.attr,
 	&dev_attr_resolution.attr,
-	&dev_attr_eeprom_cmd.attr,
+	&dev_attr_eeprom.attr,
 	&dev_attr_alarms.attr,
 	&dev_attr_conv_time.attr,
 	&dev_attr_features.attr,
@@ -454,7 +454,7 @@ static const struct hwmon_channel_info w1_temp = {
 	.config = w1_temp_config,
 };
 
-static const struct hwmon_channel_info * const w1_info[] = {
+static const struct hwmon_channel_info *w1_info[] = {
 	&w1_temp,
 	NULL
 };
@@ -574,41 +574,6 @@ static inline int w1_DS18S20_convert_time(struct w1_slave *sl)
 		return SLAVE_CONV_TIME_OVERRIDE(sl);
 }
 
-static inline int w1_DS1825_convert_time(struct w1_slave *sl)
-{
-	int ret;
-
-	if (!sl->family_data)
-		return -ENODEV;	/* device unknown */
-
-	if (SLAVE_CONV_TIME_OVERRIDE(sl) != CONV_TIME_DEFAULT)
-		return SLAVE_CONV_TIME_OVERRIDE(sl);
-
-	/* Return the conversion time, depending on resolution,
-	 * select maximum conversion time among all compatible devices
-	 */
-	switch (SLAVE_RESOLUTION(sl)) {
-	case 9:
-		ret = 95;
-		break;
-	case 10:
-		ret = 190;
-		break;
-	case 11:
-		ret = 375;
-		break;
-	case 12:
-		ret = 750;
-		break;
-	case 14:
-		ret = 100; /* MAX31850 only. Datasheet says 100ms  */
-		break;
-	default:
-		ret = 750;
-	}
-	return ret;
-}
-
 static inline int w1_DS18B20_write_data(struct w1_slave *sl,
 				const u8 *data)
 {
@@ -629,7 +594,6 @@ static inline int w1_DS18B20_set_resolution(struct w1_slave *sl, int val)
 
 	/* DS18B20 resolution is 9 to 12 bits */
 	/* GX20MH01 resolution is 9 to 14 bits */
-	/* MAX31850 resolution is fixed 14 bits */
 	if (val < W1_THERM_RESOLUTION_MIN || val > W1_THERM_RESOLUTION_MAX)
 		return -EINVAL;
 
@@ -685,7 +649,6 @@ static inline int w1_DS18B20_get_resolution(struct w1_slave *sl)
 		+ W1_THERM_RESOLUTION_MIN;
 	/* GX20MH01 has one special case:
 	 *   >=14 means 14 bits when getting resolution from bit value.
-	 * MAX31850 delivers fixed 15 and has 14 bits.
 	 * Other devices have no more then 12 bits.
 	 */
 	if (resolution > W1_THERM_RESOLUTION_MAX)
@@ -752,34 +715,6 @@ static inline int w1_DS18S20_convert_temp(u8 rom[9])
 	return t;
 }
 
-/**
- * w1_DS1825_convert_temp() - temperature computation for DS1825
- * @rom: data read from device RAM (8 data bytes + 1 CRC byte)
- *
- * Can be called for any DS1825 compliant device.
- * Is used by MAX31850, too
- *
- * Return: value in millidegrees Celsius.
- */
-
-static inline int w1_DS1825_convert_temp(u8 rom[9])
-{
-	u16 bv;
-	s16 t;
-
-	/* Signed 16-bit value to unsigned, cpu order */
-	bv = le16_to_cpup((__le16 *)rom);
-
-	/* Config register bit 7 = 1 - MA31850 found, 14 bit resolution */
-	if (rom[4] & 0x80) {
-		/* Mask out bits 0 (Fault) and 1 (Reserved) */
-		/* Avoid arithmetic shift of signed value */
-		bv = (bv & 0xFFFC); /* Degrees, lowest 4 bits are 2^-1, 2^-2 and 2 zero bits */
-	}
-	t = (s16)bv;	/* Degrees, lowest bit is 2^-4 */
-	return (int)t * 1000 / 16;	/* Sign-extend to int; millidegrees */
-}
-
 /* Device capability description */
 /* GX20MH01 device shares family number and structure with DS18B20 */
 
@@ -822,10 +757,9 @@ static struct w1_therm_family_converter w1_therm_families[] = {
 		.bulk_read			= false
 	},
 	{
-		/* Also used for MAX31850 */
 		.f				= &w1_therm_family_DS1825,
-		.convert			= w1_DS1825_convert_temp,
-		.get_conversion_time	= w1_DS1825_convert_time,
+		.convert			= w1_DS18B20_convert_temp,
+		.get_conversion_time	= w1_DS18B20_convert_time,
 		.set_resolution		= w1_DS18B20_set_resolution,
 		.get_resolution		= w1_DS18B20_get_resolution,
 		.write_data			= w1_DS18B20_write_data,
@@ -900,7 +834,7 @@ static int check_family_data(struct w1_slave *sl)
 }
 
 /**
- * bulk_read_support() - check if slave support bulk read
+ * support_bulk_read() - check if slave support bulk read
  * @sl: device to check the ability
  *
  * Return: true if bulk read is supported, false if not or error
@@ -972,7 +906,8 @@ static inline int temperature_from_RAM(struct w1_slave *sl, u8 rom[9])
 static inline s8 int_to_short(int i)
 {
 	/* Prepare to cast to short by eliminating out of range values */
-	i = clamp(i, MIN_TEMP, MAX_TEMP);
+	i = i > MAX_TEMP ? MAX_TEMP : i;
+	i = i < MIN_TEMP ? MIN_TEMP : i;
 	return (s8) i;
 }
 
@@ -1159,26 +1094,29 @@ static int convert_t(struct w1_slave *sl, struct therm_info *info)
 
 			w1_write_8(dev_master, W1_CONVERT_TEMP);
 
-			if (SLAVE_FEATURES(sl) & W1_THERM_POLL_COMPLETION) {
-				ret = w1_poll_completion(dev_master, W1_POLL_CONVERT_TEMP);
-				if (ret) {
-					dev_dbg(&sl->dev, "%s: Timeout\n", __func__);
-					goto mt_unlock;
-				}
-				mutex_unlock(&dev_master->bus_mutex);
-			} else if (!strong_pullup) { /*no device need pullup */
+			if (strong_pullup) { /*some device need pullup */
 				sleep_rem = msleep_interruptible(t_conv);
 				if (sleep_rem != 0) {
 					ret = -EINTR;
 					goto mt_unlock;
 				}
 				mutex_unlock(&dev_master->bus_mutex);
-			} else { /*some device need pullup */
-				mutex_unlock(&dev_master->bus_mutex);
-				sleep_rem = msleep_interruptible(t_conv);
-				if (sleep_rem != 0) {
-					ret = -EINTR;
-					goto dec_refcnt;
+			} else { /*no device need pullup */
+				if (SLAVE_FEATURES(sl) & W1_THERM_POLL_COMPLETION) {
+					ret = w1_poll_completion(dev_master, W1_POLL_CONVERT_TEMP);
+					if (ret) {
+						dev_dbg(&sl->dev, "%s: Timeout\n", __func__);
+						goto mt_unlock;
+					}
+					mutex_unlock(&dev_master->bus_mutex);
+				} else {
+					/* Fixed delay */
+					mutex_unlock(&dev_master->bus_mutex);
+					sleep_rem = msleep_interruptible(t_conv);
+					if (sleep_rem != 0) {
+						ret = -EINTR;
+						goto dec_refcnt;
+					}
 				}
 			}
 			ret = read_scratchpad(sl, info);
@@ -1512,7 +1450,7 @@ static int trigger_bulk_read(struct w1_master *dev_master)
 		if (bulk_read_support(sl)) {
 			int t_cur = conversion_time(sl);
 
-			t_conv = max(t_cur, t_conv);
+			t_conv = t_cur > t_conv ? t_cur : t_conv;
 			strong_pullup = strong_pullup ||
 					(w1_strong_pullup == 2 ||
 					(!SLAVE_POWERMODE(sl) &&
@@ -1798,7 +1736,7 @@ static ssize_t resolution_store(struct device *device,
 	return size;
 }
 
-static ssize_t eeprom_cmd_store(struct device *device,
+static ssize_t eeprom_store(struct device *device,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	struct w1_slave *sl = dev_to_w1_slave(device);
@@ -1848,7 +1786,7 @@ static ssize_t alarms_store(struct device *device,
 	u8 new_config_register[3];	/* array of data to be written */
 	int temp, ret;
 	char *token = NULL;
-	s8 tl, th;	/* 1 byte per value + temp ring order */
+	s8 tl, th, tt;	/* 1 byte per value + temp ring order */
 	char *p_args, *orig;
 
 	p_args = orig = kmalloc(size, GFP_KERNEL);
@@ -1899,8 +1837,9 @@ static ssize_t alarms_store(struct device *device,
 	th = int_to_short(temp);
 
 	/* Reorder if required th and tl */
-	if (tl > th)
-		swap(tl, th);
+	if (tl > th) {
+		tt = tl; tl = th; th = tt;
+	}
 
 	/*
 	 * Read the scratchpad to change only the required bits
@@ -2118,6 +2057,7 @@ static ssize_t w1_seq_show(struct device *device,
 {
 	struct w1_slave *sl = dev_to_w1_slave(device);
 	ssize_t c = PAGE_SIZE;
+	int rv;
 	int i;
 	u8 ack;
 	u64 rn;
@@ -2145,7 +2085,7 @@ static ssize_t w1_seq_show(struct device *device,
 			goto error;
 
 		w1_write_8(sl->master, W1_42_COND_READ);
-		w1_read_block(sl->master, (u8 *)&rn, 8);
+		rv = w1_read_block(sl->master, (u8 *)&rn, 8);
 		reg_num = (struct w1_reg_num *) &rn;
 		if (reg_num->family == W1_42_FINISHED_BYTE)
 			break;

@@ -22,17 +22,12 @@
 #include <net/sctp/sctp.h>
 #include <net/sctp/checksum.h>
 #include <net/protocol.h>
-#include <net/gso.h>
 
 static __le32 sctp_gso_make_checksum(struct sk_buff *skb)
 {
 	skb->ip_summed = CHECKSUM_NONE;
 	skb->csum_not_inet = 0;
-	/* csum and csum_start in GSO CB may be needed to do the UDP
-	 * checksum when it's a UDP tunneling packet.
-	 */
-	SKB_GSO_CB(skb)->csum = (__force __wsum)~0;
-	SKB_GSO_CB(skb)->csum_start = skb_headroom(skb) + skb->len;
+	gso_reset_checksum(skb, ~0);
 	return sctp_compute_cksum(skb, skb_transport_offset(skb));
 }
 
@@ -69,7 +64,7 @@ static struct sk_buff *sctp_gso_segment(struct sk_buff *skb,
 		goto out;
 	}
 
-	segs = skb_segment(skb, (features | NETIF_F_HW_CSUM) & ~NETIF_F_SG);
+	segs = skb_segment(skb, features | NETIF_F_HW_CSUM | NETIF_F_SG);
 	if (IS_ERR(segs))
 		goto out;
 

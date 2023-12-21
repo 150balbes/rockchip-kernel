@@ -1100,7 +1100,7 @@ static struct snd_soc_dai_driver wm8985_dai = {
 		.formats = WM8985_FORMATS,
 	},
 	.ops = &wm8985_dai_ops,
-	.symmetric_rate = 1
+	.symmetric_rates = 1
 };
 
 static const struct snd_soc_component_driver soc_component_dev_wm8985 = {
@@ -1116,6 +1116,7 @@ static const struct snd_soc_component_driver soc_component_dev_wm8985 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config wm8985_regmap = {
@@ -1166,12 +1167,10 @@ static struct spi_driver wm8985_spi_driver = {
 #endif
 
 #if IS_ENABLED(CONFIG_I2C)
-static const struct i2c_device_id wm8985_i2c_id[];
-
-static int wm8985_i2c_probe(struct i2c_client *i2c)
+static int wm8985_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8985_priv *wm8985;
-	const struct i2c_device_id *id = i2c_match_id(wm8985_i2c_id, i2c);
 	int ret;
 
 	wm8985 = devm_kzalloc(&i2c->dev, sizeof *wm8985, GFP_KERNEL);

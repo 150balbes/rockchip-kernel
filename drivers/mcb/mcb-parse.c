@@ -108,7 +108,7 @@ static int chameleon_parse_gdd(struct mcb_bus *bus,
 	return 0;
 
 err:
-	put_device(&mdev->dev);
+	mcb_free_dev(mdev);
 
 	return ret;
 }
@@ -130,7 +130,7 @@ static void chameleon_parse_bar(void __iomem *base,
 	}
 }
 
-static int chameleon_get_bar(void __iomem **base, phys_addr_t mapbase,
+static int chameleon_get_bar(char __iomem **base, phys_addr_t mapbase,
 			     struct chameleon_bar **cb)
 {
 	struct chameleon_bar *c;
@@ -179,13 +179,12 @@ int chameleon_parse_cells(struct mcb_bus *bus, phys_addr_t mapbase,
 {
 	struct chameleon_fpga_header *header;
 	struct chameleon_bar *cb;
-	void __iomem *p = base;
+	char __iomem *p = base;
 	int num_cells = 0;
 	uint32_t dtype;
 	int bar_count;
 	int ret;
 	u32 hsize;
-	u32 table_size;
 
 	hsize = sizeof(struct chameleon_fpga_header);
 
@@ -240,16 +239,12 @@ int chameleon_parse_cells(struct mcb_bus *bus, phys_addr_t mapbase,
 		num_cells++;
 	}
 
-	if (num_cells == 0) {
-		ret = -EINVAL;
-		goto free_bar;
-	}
+	if (num_cells == 0)
+		num_cells = -EINVAL;
 
-	table_size = p - base;
-	pr_debug("%d cell(s) found. Chameleon table size: 0x%04x bytes\n", num_cells, table_size);
 	kfree(cb);
 	kfree(header);
-	return table_size;
+	return num_cells;
 
 free_bar:
 	kfree(cb);

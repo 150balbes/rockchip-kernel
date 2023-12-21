@@ -170,10 +170,14 @@ static void spi_engine_gen_sleep(struct spi_engine_program *p, bool dry,
 	unsigned int t;
 	int delay;
 
-	delay = spi_delay_to_ns(&xfer->delay, xfer);
-	if (delay < 0)
-		return;
-	delay /= 1000;
+	if (xfer->delay_usecs) {
+		delay = xfer->delay_usecs;
+	} else {
+		delay = spi_delay_to_ns(&xfer->delay, xfer);
+		if (delay < 0)
+			return;
+		delay /= 1000;
+	}
 
 	if (delay == 0)
 		return;
@@ -193,7 +197,7 @@ static void spi_engine_gen_cs(struct spi_engine_program *p, bool dry,
 	unsigned int mask = 0xff;
 
 	if (assert)
-		mask ^= BIT(spi_get_chipselect(spi, 0));
+		mask ^= BIT(spi->chip_select);
 
 	spi_engine_program_add_cmd(p, dry, SPI_ENGINE_CMD_ASSERT(1, mask));
 }
@@ -554,7 +558,7 @@ err_put_master:
 	return ret;
 }
 
-static void spi_engine_remove(struct platform_device *pdev)
+static int spi_engine_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = spi_master_get(platform_get_drvdata(pdev));
 	struct spi_engine *spi_engine = spi_master_get_devdata(master);
@@ -572,6 +576,8 @@ static void spi_engine_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(spi_engine->ref_clk);
 	clk_disable_unprepare(spi_engine->clk);
+
+	return 0;
 }
 
 static const struct of_device_id spi_engine_match_table[] = {
@@ -582,7 +588,7 @@ MODULE_DEVICE_TABLE(of, spi_engine_match_table);
 
 static struct platform_driver spi_engine_driver = {
 	.probe = spi_engine_probe,
-	.remove_new = spi_engine_remove,
+	.remove = spi_engine_remove,
 	.driver = {
 		.name = "spi-engine",
 		.of_match_table = spi_engine_match_table,

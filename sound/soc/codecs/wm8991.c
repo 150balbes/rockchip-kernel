@@ -1243,6 +1243,7 @@ static const struct snd_soc_component_driver soc_component_dev_wm8991 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config wm8991_regmap = {
@@ -1256,7 +1257,8 @@ static const struct regmap_config wm8991_regmap = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int wm8991_i2c_probe(struct i2c_client *i2c)
+static int wm8991_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8991_priv *wm8991;
 	unsigned int val;

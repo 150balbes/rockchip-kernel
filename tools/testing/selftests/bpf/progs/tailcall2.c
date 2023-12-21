@@ -10,41 +10,41 @@ struct {
 	__uint(value_size, sizeof(__u32));
 } jmp_table SEC(".maps");
 
-SEC("tc")
-int classifier_0(struct __sk_buff *skb)
+SEC("classifier/0")
+int bpf_func_0(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 1);
 	return 0;
 }
 
-SEC("tc")
-int classifier_1(struct __sk_buff *skb)
+SEC("classifier/1")
+int bpf_func_1(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 2);
 	return 1;
 }
 
-SEC("tc")
-int classifier_2(struct __sk_buff *skb)
+SEC("classifier/2")
+int bpf_func_2(struct __sk_buff *skb)
 {
 	return 2;
 }
 
-SEC("tc")
-int classifier_3(struct __sk_buff *skb)
+SEC("classifier/3")
+int bpf_func_3(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 4);
 	return 3;
 }
 
-SEC("tc")
-int classifier_4(struct __sk_buff *skb)
+SEC("classifier/4")
+int bpf_func_4(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 3);
 	return 4;
 }
 
-SEC("tc")
+SEC("classifier")
 int entry(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 0);
@@ -56,3 +56,4 @@ int entry(struct __sk_buff *skb)
 }
 
 char __license[] SEC("license") = "GPL";
+int _version SEC("version") = 1;

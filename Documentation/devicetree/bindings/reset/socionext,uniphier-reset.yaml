@@ -23,7 +23,6 @@ properties:
           - socionext,uniphier-ld11-reset
           - socionext,uniphier-ld20-reset
           - socionext,uniphier-pxs3-reset
-          - socionext,uniphier-nx1-reset
       - description: Media I/O (MIO) reset, SD reset
         enum:
           - socionext,uniphier-ld4-mio-reset
@@ -35,7 +34,6 @@ properties:
           - socionext,uniphier-ld11-sd-reset
           - socionext,uniphier-ld20-sd-reset
           - socionext,uniphier-pxs3-sd-reset
-          - socionext,uniphier-nx1-sd-reset
       - description: Peripheral reset
         enum:
           - socionext,uniphier-ld4-peri-reset
@@ -46,7 +44,6 @@ properties:
           - socionext,uniphier-ld11-peri-reset
           - socionext,uniphier-ld20-peri-reset
           - socionext,uniphier-pxs3-peri-reset
-          - socionext,uniphier-nx1-peri-reset
       - description: Analog signal amplifier reset
         enum:
           - socionext,uniphier-ld11-adamv-reset
@@ -54,9 +51,6 @@ properties:
 
   "#reset-cells":
     const: 1
-
-  resets:
-    maxItems: 1
 
 additionalProperties: false
 
@@ -66,7 +60,53 @@ required:
 
 examples:
   - |
-    reset-controller {
-        compatible = "socionext,uniphier-ld11-reset";
-        #reset-cells = <1>;
+    sysctrl@61840000 {
+        compatible = "socionext,uniphier-sysctrl", "simple-mfd", "syscon";
+        reg = <0x61840000 0x4000>;
+
+        reset {
+            compatible = "socionext,uniphier-ld11-reset";
+            #reset-cells = <1>;
+        };
+
+        // other nodes ...
+    };
+
+  - |
+    mioctrl@59810000 {
+        compatible = "socionext,uniphier-mioctrl", "simple-mfd", "syscon";
+        reg = <0x59810000 0x800>;
+
+        reset {
+            compatible = "socionext,uniphier-ld11-mio-reset";
+            #reset-cells = <1>;
+        };
+
+        // other nodes ...
+    };
+
+  - |
+    perictrl@59820000 {
+        compatible = "socionext,uniphier-perictrl", "simple-mfd", "syscon";
+        reg = <0x59820000 0x200>;
+
+        reset {
+            compatible = "socionext,uniphier-ld11-peri-reset";
+            #reset-cells = <1>;
+        };
+
+        // other nodes ...
+    };
+
+  - |
+    adamv@57920000 {
+        compatible = "socionext,uniphier-ld11-adamv", "simple-mfd", "syscon";
+        reg = <0x57920000 0x1000>;
+
+        reset {
+            compatible = "socionext,uniphier-ld11-adamv-reset";
+            #reset-cells = <1>;
+        };
+
+        // other nodes ...
     };

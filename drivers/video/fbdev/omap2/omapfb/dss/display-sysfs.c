@@ -10,7 +10,6 @@
 #define DSS_SUBSYS_NAME "DISPLAY"
 
 #include <linux/kernel.h>
-#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/sysfs.h>
@@ -20,14 +19,14 @@
 
 static ssize_t display_name_show(struct omap_dss_device *dssdev, char *buf)
 {
-	return sysfs_emit(buf, "%s\n",
+	return snprintf(buf, PAGE_SIZE, "%s\n",
 			dssdev->name ?
 			dssdev->name : "");
 }
 
 static ssize_t display_enabled_show(struct omap_dss_device *dssdev, char *buf)
 {
-	return sysfs_emit(buf, "%d\n",
+	return snprintf(buf, PAGE_SIZE, "%d\n",
 			omapdss_device_is_enabled(dssdev));
 }
 
@@ -37,7 +36,7 @@ static ssize_t display_enabled_store(struct omap_dss_device *dssdev,
 	int r;
 	bool enable;
 
-	r = kstrtobool(buf, &enable);
+	r = strtobool(buf, &enable);
 	if (r)
 		return r;
 
@@ -60,7 +59,7 @@ static ssize_t display_enabled_store(struct omap_dss_device *dssdev,
 
 static ssize_t display_tear_show(struct omap_dss_device *dssdev, char *buf)
 {
-	return sysfs_emit(buf, "%d\n",
+	return snprintf(buf, PAGE_SIZE, "%d\n",
 			dssdev->driver->get_te ?
 			dssdev->driver->get_te(dssdev) : 0);
 }
@@ -74,7 +73,7 @@ static ssize_t display_tear_store(struct omap_dss_device *dssdev,
 	if (!dssdev->driver->enable_te || !dssdev->driver->get_te)
 		return -ENOENT;
 
-	r = kstrtobool(buf, &te);
+	r = strtobool(buf, &te);
 	if (r)
 		return r;
 
@@ -94,7 +93,7 @@ static ssize_t display_timings_show(struct omap_dss_device *dssdev, char *buf)
 
 	dssdev->driver->get_timings(dssdev, &t);
 
-	return sysfs_emit(buf, "%u,%u/%u/%u/%u,%u/%u/%u/%u\n",
+	return snprintf(buf, PAGE_SIZE, "%u,%u/%u/%u/%u,%u/%u/%u/%u\n",
 			t.pixelclock,
 			t.x_res, t.hfp, t.hbp, t.hsw,
 			t.y_res, t.vfp, t.vbp, t.vsw);
@@ -144,7 +143,7 @@ static ssize_t display_rotate_show(struct omap_dss_device *dssdev, char *buf)
 	if (!dssdev->driver->get_rotate)
 		return -ENOENT;
 	rotate = dssdev->driver->get_rotate(dssdev);
-	return sysfs_emit(buf, "%u\n", rotate);
+	return snprintf(buf, PAGE_SIZE, "%u\n", rotate);
 }
 
 static ssize_t display_rotate_store(struct omap_dss_device *dssdev,
@@ -172,7 +171,7 @@ static ssize_t display_mirror_show(struct omap_dss_device *dssdev, char *buf)
 	if (!dssdev->driver->get_mirror)
 		return -ENOENT;
 	mirror = dssdev->driver->get_mirror(dssdev);
-	return sysfs_emit(buf, "%u\n", mirror);
+	return snprintf(buf, PAGE_SIZE, "%u\n", mirror);
 }
 
 static ssize_t display_mirror_store(struct omap_dss_device *dssdev,
@@ -184,7 +183,7 @@ static ssize_t display_mirror_store(struct omap_dss_device *dssdev,
 	if (!dssdev->driver->set_mirror || !dssdev->driver->get_mirror)
 		return -ENOENT;
 
-	r = kstrtobool(buf, &mirror);
+	r = strtobool(buf, &mirror);
 	if (r)
 		return r;
 
@@ -204,7 +203,7 @@ static ssize_t display_wss_show(struct omap_dss_device *dssdev, char *buf)
 
 	wss = dssdev->driver->get_wss(dssdev);
 
-	return sysfs_emit(buf, "0x%05x\n", wss);
+	return snprintf(buf, PAGE_SIZE, "0x%05x\n", wss);
 }
 
 static ssize_t display_wss_store(struct omap_dss_device *dssdev,
@@ -266,7 +265,6 @@ static struct attribute *display_sysfs_attrs[] = {
 	&display_attr_wss.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(display_sysfs);
 
 static ssize_t display_attr_show(struct kobject *kobj, struct attribute *attr,
 		char *buf)
@@ -305,7 +303,7 @@ static const struct sysfs_ops display_sysfs_ops = {
 
 static struct kobj_type display_ktype = {
 	.sysfs_ops = &display_sysfs_ops,
-	.default_groups = display_sysfs_groups,
+	.default_attrs = display_sysfs_attrs,
 };
 
 int display_init_sysfs(struct platform_device *pdev)

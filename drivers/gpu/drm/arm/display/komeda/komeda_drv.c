@@ -6,11 +6,9 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/component.h>
 #include <linux/pm_runtime.h>
-#include <drm/drm_fbdev_generic.h>
-#include <drm/drm_module.h>
 #include <drm/drm_of.h>
 #include "komeda_dev.h"
 #include "komeda_kms.h"
@@ -27,10 +25,12 @@ struct komeda_dev *dev_to_mdev(struct device *dev)
 	return mdrv ? mdrv->mdev : NULL;
 }
 
-static void komeda_platform_remove(struct platform_device *pdev)
+static void komeda_unbind(struct device *dev)
 {
-	struct device *dev = &pdev->dev;
 	struct komeda_drv *mdrv = dev_get_drvdata(dev);
+
+	if (!mdrv)
+		return;
 
 	komeda_kms_detach(mdrv->kms);
 
@@ -45,17 +45,8 @@ static void komeda_platform_remove(struct platform_device *pdev)
 	devm_kfree(dev, mdrv);
 }
 
-static void komeda_platform_shutdown(struct platform_device *pdev)
+static int komeda_bind(struct device *dev)
 {
-	struct device *dev = &pdev->dev;
-	struct komeda_drv *mdrv = dev_get_drvdata(dev);
-
-	komeda_kms_shutdown(mdrv->kms);
-}
-
-static int komeda_platform_probe(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
 	struct komeda_drv *mdrv;
 	int err;
 
@@ -80,7 +71,6 @@ static int komeda_platform_probe(struct platform_device *pdev)
 	}
 
 	dev_set_drvdata(dev, mdrv);
-	drm_fbdev_generic_setup(&mdrv->kms->base, 32);
 
 	return 0;
 
@@ -95,6 +85,57 @@ destroy_mdev:
 free_mdrv:
 	devm_kfree(dev, mdrv);
 	return err;
+}
+
+static const struct component_master_ops komeda_master_ops = {
+	.bind	= komeda_bind,
+	.unbind	= komeda_unbind,
+};
+
+static int compare_of(struct device *dev, void *data)
+{
+	return dev->of_node == data;
+}
+
+static void komeda_add_slave(struct device *master,
+			     struct component_match **match,
+			     struct device_node *np,
+			     u32 port, u32 endpoint)
+{
+	struct device_node *remote;
+
+	remote = of_graph_get_remote_node(np, port, endpoint);
+	if (remote) {
+		drm_of_component_match_add(master, match, compare_of, remote);
+		of_node_put(remote);
+	}
+}
+
+static int komeda_platform_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct component_match *match = NULL;
+	struct device_node *child;
+
+	if (!dev->of_node)
+		return -ENODEV;
+
+	for_each_available_child_of_node(dev->of_node, child) {
+		if (of_node_cmp(child->name, "pipeline") != 0)
+			continue;
+
+		/* add connector */
+		komeda_add_slave(dev, &match, child, KOMEDA_OF_PORT_OUTPUT, 0);
+		komeda_add_slave(dev, &match, child, KOMEDA_OF_PORT_OUTPUT, 1);
+	}
+
+	return component_master_add_with_match(dev, &komeda_master_ops, match);
+}
+
+static int komeda_platform_remove(struct platform_device *pdev)
+{
+	component_master_del(&pdev->dev, &komeda_master_ops);
+	return 0;
 }
 
 static const struct of_device_id komeda_of_match[] = {
@@ -149,8 +190,7 @@ static const struct dev_pm_ops komeda_pm_ops = {
 
 static struct platform_driver komeda_platform_driver = {
 	.probe	= komeda_platform_probe,
-	.remove_new = komeda_platform_remove,
-	.shutdown = komeda_platform_shutdown,
+	.remove	= komeda_platform_remove,
 	.driver	= {
 		.name = "komeda",
 		.of_match_table	= komeda_of_match,
@@ -158,7 +198,7 @@ static struct platform_driver komeda_platform_driver = {
 	},
 };
 
-drm_module_platform_driver(komeda_platform_driver);
+module_platform_driver(komeda_platform_driver);
 
 MODULE_AUTHOR("James.Qian.Wang <james.qian.wang@arm.com>");
 MODULE_DESCRIPTION("Komeda KMS driver");

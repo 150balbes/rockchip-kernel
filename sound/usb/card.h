@@ -2,6 +2,8 @@
 #ifndef __USBAUDIO_CARD_H
 #define __USBAUDIO_CARD_H
 
+#include <linux/android_kabi.h>
+
 #define MAX_NR_RATES	1024
 #define MAX_PACKS	6		/* per URB */
 #define MAX_PACKS_HS	(MAX_PACKS * 8)	/* in high speed mode */
@@ -16,18 +18,12 @@ struct audioformat {
 	unsigned int fmt_type;		/* USB audio format type (1-3) */
 	unsigned int fmt_bits;		/* number of significant bits */
 	unsigned int frame_size;	/* samples per frame for non-audio */
-	unsigned char iface;		/* interface number */
+	int iface;			/* interface number */
 	unsigned char altsetting;	/* corresponding alternate setting */
-	unsigned char ep_idx;		/* endpoint array index */
-	unsigned char altset_idx;	/* array index of alternate setting */
+	unsigned char altset_idx;	/* array index of altenate setting */
 	unsigned char attributes;	/* corresponding attributes of cs endpoint */
 	unsigned char endpoint;		/* endpoint */
 	unsigned char ep_attr;		/* endpoint attributes */
-	bool implicit_fb;		/* implicit feedback endpoint */
-	unsigned char sync_ep;		/* sync endpoint number */
-	unsigned char sync_iface;	/* sync EP interface */
-	unsigned char sync_altsetting;	/* sync EP alternate setting */
-	unsigned char sync_ep_idx;	/* sync EP array index */
 	unsigned char datainterval;	/* log_2 of data packet interval */
 	unsigned char protocol;		/* UAC_VERSION_1/2/3 */
 	unsigned int maxpacksize;	/* max. packet size */
@@ -43,8 +39,6 @@ struct audioformat {
 };
 
 struct snd_usb_substream;
-struct snd_usb_iface_ref;
-struct snd_usb_clock_ref;
 struct snd_usb_endpoint;
 struct snd_usb_power_domain;
 
@@ -55,36 +49,26 @@ struct snd_urb_ctx {
 	struct snd_usb_endpoint *ep;
 	int index;	/* index for urb array */
 	int packets;	/* number of packets per urb */
-	int queued;	/* queued data bytes by this urb */
 	int packet_size[MAX_PACKS_HS]; /* size of packets for next submission */
 	struct list_head ready_list;
 };
 
 struct snd_usb_endpoint {
 	struct snd_usb_audio *chip;
-	struct snd_usb_iface_ref *iface_ref;
-	struct snd_usb_clock_ref *clock_ref;
 
-	int opened;		/* open refcount; protect with chip->mutex */
-	atomic_t running;	/* running status */
+	int use_count;
 	int ep_num;		/* the referenced endpoint number */
 	int type;		/* SND_USB_ENDPOINT_TYPE_* */
+	unsigned long flags;
 
-	unsigned char iface;		/* interface number */
-	unsigned char altsetting;	/* corresponding alternate setting */
-	unsigned char ep_idx;		/* endpoint array index */
-
-	atomic_t state;		/* running state */
-
-	int (*prepare_data_urb) (struct snd_usb_substream *subs,
-				 struct urb *urb,
-				 bool in_stream_lock);
+	void (*prepare_data_urb) (struct snd_usb_substream *subs,
+				  struct urb *urb);
 	void (*retire_data_urb) (struct snd_usb_substream *subs,
 				 struct urb *urb);
 
 	struct snd_usb_substream *data_subs;
-	struct snd_usb_endpoint *sync_source;
-	struct snd_usb_endpoint *sync_sink;
+	struct snd_usb_endpoint *sync_master;
+	struct snd_usb_endpoint *sync_slave;
 
 	struct snd_urb_ctx urb[MAX_URBS];
 
@@ -92,14 +76,12 @@ struct snd_usb_endpoint {
 		uint32_t packet_size[MAX_PACKS_HS];
 		int packets;
 	} next_packet[MAX_URBS];
-	unsigned int next_packet_head;	/* ring buffer offset to read */
-	unsigned int next_packet_queued; /* queued items in the ring buffer */
-	struct list_head ready_playback_urbs; /* playback URB FIFO for implicit fb */
+	int next_packet_read_pos, next_packet_write_pos;
+	struct list_head ready_playback_urbs;
 
 	unsigned int nurbs;		/* # urbs */
 	unsigned long active_mask;	/* bitmask of active urbs */
 	unsigned long unlink_mask;	/* bitmask of unlinked urbs */
-	atomic_t submitted_urbs;	/* currently submitted urbs */
 	char *syncbuf;			/* sync buffer for all sync URBs */
 	dma_addr_t sync_dma;		/* DMA address of syncbuf */
 
@@ -125,26 +107,18 @@ struct snd_usb_endpoint {
 	unsigned int syncinterval;	/* P for adaptive mode, 0 otherwise */
 	unsigned char silence_value;
 	unsigned int stride;
+	int iface, altsetting;
 	int skip_packets;		/* quirks for devices to ignore the first n packets
 					   in a stream */
-	bool implicit_fb_sync;		/* syncs with implicit feedback */
-	bool lowlatency_playback;	/* low-latency playback mode */
-	bool need_setup;		/* (re-)need for hw_params? */
-	bool need_prepare;		/* (re-)need for prepare? */
-	bool fixed_rate;		/* skip rate setup */
-
-	/* for hw constraints */
-	const struct audioformat *cur_audiofmt;
-	unsigned int cur_rate;
-	snd_pcm_format_t cur_format;
-	unsigned int cur_channels;
-	unsigned int cur_frame_bytes;
-	unsigned int cur_period_frames;
-	unsigned int cur_period_bytes;
-	unsigned int cur_buffer_periods;
+	bool is_implicit_feedback;      /* This endpoint is used as implicit feedback */
 
 	spinlock_t lock;
 	struct list_head list;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct media_ctl;
@@ -154,10 +128,18 @@ struct snd_usb_substream {
 	struct usb_device *dev;
 	struct snd_pcm_substream *pcm_substream;
 	int direction;	/* playback or capture */
+	int interface;	/* current interface */
 	int endpoint;	/* assigned endpoint */
-	const struct audioformat *cur_audiofmt;	/* current audioformat pointer (for hw_params callback) */
+	struct audioformat *cur_audiofmt;	/* current audioformat pointer (for hw_params callback) */
 	struct snd_usb_power_domain *str_pd;	/* UAC3 Power Domain for streaming path */
+	snd_pcm_format_t pcm_format;	/* current audio format (for hw_params callback) */
+	unsigned int channels;		/* current number of channels (for hw_params callback) */
 	unsigned int channels_max;	/* max channels in the all audiofmts */
+	unsigned int cur_rate;		/* current rate (for hw_params callback) */
+	unsigned int period_bytes;	/* current period bytes (for hw_params callback) */
+	unsigned int period_frames;	/* current frames per period */
+	unsigned int buffer_periods;	/* current periods per buffer */
+	unsigned int altset_idx;     /* USB data format: index of alternate setting */
 	unsigned int txfr_quirk:1;	/* allow sub-frame alignment */
 	unsigned int tx_length_quirk:1;	/* add length specifier to transfers */
 	unsigned int fmt_type;		/* USB audio format type (1-3) */
@@ -165,12 +147,9 @@ struct snd_usb_substream {
 	unsigned int stream_offset_adj;	/* Bytes to drop from beginning of stream (for non-compliant devices) */
 
 	unsigned int running: 1;	/* running status */
-	unsigned int period_elapsed_pending;	/* delay period handling */
 
-	unsigned int buffer_bytes;	/* buffer size in bytes */
-	unsigned int inflight_bytes;	/* in-flight data bytes on buffer (for playback) */
 	unsigned int hwptr_done;	/* processed byte position in the buffer */
-	unsigned int transfer_done;	/* processed frames since last period update */
+	unsigned int transfer_done;		/* processed frames since last period update */
 	unsigned int frame_limit;	/* limits number of packets in URB */
 
 	/* data and sync endpoints for this stream */
@@ -178,14 +157,18 @@ struct snd_usb_substream {
 	struct snd_usb_endpoint *data_endpoint;
 	struct snd_usb_endpoint *sync_endpoint;
 	unsigned long flags;
+	bool need_setup_ep;		/* (re)configure EP at prepare? */
+	bool need_setup_fmt;		/* (re)configure fmt after resume? */
 	unsigned int speed;		/* USB_SPEED_XXX */
 
 	u64 formats;			/* format bitmasks (all or'ed) */
 	unsigned int num_formats;		/* number of supported audio formats (list) */
 	struct list_head fmt_list;	/* format list */
+	struct snd_pcm_hw_constraint_list rate_list;	/* limited rates */
 	spinlock_t lock;
 
-	unsigned int last_frame_number;	/* stored frame number */
+	int last_frame_number;          /* stored frame number */
+	int last_delay;                 /* stored delay */
 
 	struct {
 		int marker;
@@ -194,8 +177,9 @@ struct snd_usb_substream {
 	} dsd_dop;
 
 	bool trigger_tstamp_pending_update; /* trigger timestamp being updated from initial estimate */
-	bool lowlatency_playback;	/* low-latency playback mode */
 	struct media_ctl *media_ctl;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct snd_usb_stream {
@@ -206,5 +190,26 @@ struct snd_usb_stream {
 	struct snd_usb_substream substream[2];
 	struct list_head list;
 };
+
+struct snd_usb_substream *find_snd_usb_substream(unsigned int card_num,
+	unsigned int pcm_idx, unsigned int direction, struct snd_usb_audio
+	**uchip, void (*disconnect_cb)(struct snd_usb_audio *chip));
+
+int snd_vendor_set_ops(struct snd_usb_audio_vendor_ops *vendor_ops);
+struct snd_usb_audio_vendor_ops *snd_vendor_get_ops(void);
+int snd_vendor_set_interface(struct usb_device *udev,
+			     struct usb_host_interface *alts,
+			     int iface, int alt);
+int snd_vendor_set_rate(struct usb_interface *intf, int iface, int rate,
+			int alt);
+int snd_vendor_set_pcm_buf(struct usb_device *udev, int iface);
+int snd_vendor_set_pcm_intf(struct usb_interface *intf, int iface, int alt,
+			    int direction);
+int snd_vendor_set_pcm_connection(struct usb_device *udev,
+				  enum snd_vendor_pcm_open_close onoff,
+				  int direction);
+int snd_vendor_set_pcm_binterval(struct audioformat *fp,
+				 struct audioformat *found,
+				 int *cur_attr, int *attr);
 
 #endif /* __USBAUDIO_CARD_H */

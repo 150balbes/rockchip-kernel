@@ -116,7 +116,7 @@ Glossary
 	  - :term:`RC API`; and
 	  - :term:`V4L2 API`.
 
-	See Documentation/userspace-api/media/index.rst.
+	See :doc:`index`.
 
     MC API
 	**Media Controller API**

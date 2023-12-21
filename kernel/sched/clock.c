@@ -41,7 +41,7 @@
  * Otherwise it tries to create a semi stable clock from a mixture of other
  * clocks, including:
  *
- *  - GTOD (clock monotonic)
+ *  - GTOD (clock monotomic)
  *  - sched_clock()
  *  - explicit idle events
  *
@@ -53,13 +53,15 @@
  * that is otherwise invisible (TSC gets stopped).
  *
  */
+#include "sched.h"
+#include <linux/sched_clock.h>
 
 /*
  * Scheduler clock - returns current time in nanosec units.
  * This is default implementation.
  * Architectures and sub-architectures can override this.
  */
-notrace unsigned long long __weak sched_clock(void)
+unsigned long long __weak sched_clock(void)
 {
 	return (unsigned long long)(jiffies - INITIAL_JIFFIES)
 					* (NSEC_PER_SEC / HZ);
@@ -93,28 +95,28 @@ struct sched_clock_data {
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct sched_clock_data, sched_clock_data);
 
-static __always_inline struct sched_clock_data *this_scd(void)
+static inline struct sched_clock_data *this_scd(void)
 {
 	return this_cpu_ptr(&sched_clock_data);
 }
 
-notrace static inline struct sched_clock_data *cpu_sdc(int cpu)
+static inline struct sched_clock_data *cpu_sdc(int cpu)
 {
 	return &per_cpu(sched_clock_data, cpu);
 }
 
-notrace int sched_clock_stable(void)
+int sched_clock_stable(void)
 {
 	return static_branch_likely(&__sched_clock_stable);
 }
 
-notrace static void __scd_stamp(struct sched_clock_data *scd)
+static void __scd_stamp(struct sched_clock_data *scd)
 {
 	scd->tick_gtod = ktime_get_ns();
 	scd->tick_raw = sched_clock();
 }
 
-notrace static void __set_sched_clock_stable(void)
+static void __set_sched_clock_stable(void)
 {
 	struct sched_clock_data *scd;
 
@@ -149,7 +151,7 @@ notrace static void __set_sched_clock_stable(void)
  * The only way to fully avoid random clock jumps is to boot with:
  * "tsc=unstable".
  */
-notrace static void __sched_clock_work(struct work_struct *work)
+static void __sched_clock_work(struct work_struct *work)
 {
 	struct sched_clock_data *scd;
 	int cpu;
@@ -175,7 +177,7 @@ notrace static void __sched_clock_work(struct work_struct *work)
 
 static DECLARE_WORK(sched_clock_work, __sched_clock_work);
 
-notrace static void __clear_sched_clock_stable(void)
+static void __clear_sched_clock_stable(void)
 {
 	if (!sched_clock_stable())
 		return;
@@ -184,7 +186,7 @@ notrace static void __clear_sched_clock_stable(void)
 	schedule_work(&sched_clock_work);
 }
 
-notrace void clear_sched_clock_stable(void)
+void clear_sched_clock_stable(void)
 {
 	__sched_clock_stable_early = 0;
 
@@ -194,7 +196,7 @@ notrace void clear_sched_clock_stable(void)
 		__clear_sched_clock_stable();
 }
 
-notrace static void __sched_clock_gtod_offset(void)
+static void __sched_clock_gtod_offset(void)
 {
 	struct sched_clock_data *scd = this_scd();
 
@@ -244,12 +246,12 @@ late_initcall(sched_clock_init_late);
  * min, max except they take wrapping into account
  */
 
-static __always_inline u64 wrap_min(u64 x, u64 y)
+static inline u64 wrap_min(u64 x, u64 y)
 {
 	return (s64)(x - y) < 0 ? x : y;
 }
 
-static __always_inline u64 wrap_max(u64 x, u64 y)
+static inline u64 wrap_max(u64 x, u64 y)
 {
 	return (s64)(x - y) > 0 ? x : y;
 }
@@ -260,13 +262,13 @@ static __always_inline u64 wrap_max(u64 x, u64 y)
  *  - filter out backward motion
  *  - use the GTOD tick value to create a window to filter crazy TSC values
  */
-static __always_inline u64 sched_clock_local(struct sched_clock_data *scd)
+static u64 sched_clock_local(struct sched_clock_data *scd)
 {
 	u64 now, clock, old_clock, min_clock, max_clock, gtod;
 	s64 delta;
 
 again:
-	now = sched_clock_noinstr();
+	now = sched_clock();
 	delta = now - scd->tick_raw;
 	if (unlikely(delta < 0))
 		delta = 0;
@@ -287,38 +289,13 @@ again:
 	clock = wrap_max(clock, min_clock);
 	clock = wrap_min(clock, max_clock);
 
-	if (!raw_try_cmpxchg64(&scd->clock, &old_clock, clock))
+	if (cmpxchg64(&scd->clock, old_clock, clock) != old_clock)
 		goto again;
 
 	return clock;
 }
 
-noinstr u64 local_clock_noinstr(void)
-{
-	u64 clock;
-
-	if (static_branch_likely(&__sched_clock_stable))
-		return sched_clock_noinstr() + __sched_clock_offset;
-
-	if (!static_branch_likely(&sched_clock_running))
-		return sched_clock_noinstr();
-
-	clock = sched_clock_local(this_scd());
-
-	return clock;
-}
-
-u64 local_clock(void)
-{
-	u64 now;
-	preempt_disable_notrace();
-	now = local_clock_noinstr();
-	preempt_enable_notrace();
-	return now;
-}
-EXPORT_SYMBOL_GPL(local_clock);
-
-static notrace u64 sched_clock_remote(struct sched_clock_data *scd)
+static u64 sched_clock_remote(struct sched_clock_data *scd)
 {
 	struct sched_clock_data *my_scd = this_scd();
 	u64 this_clock, remote_clock;
@@ -374,7 +351,7 @@ again:
 		val = remote_clock;
 	}
 
-	if (!try_cmpxchg64(ptr, &old_val, val))
+	if (cmpxchg64(ptr, old_val, val) != old_val)
 		goto again;
 
 	return val;
@@ -385,7 +362,7 @@ again:
  *
  * See cpu_clock().
  */
-notrace u64 sched_clock_cpu(int cpu)
+u64 sched_clock_cpu(int cpu)
 {
 	struct sched_clock_data *scd;
 	u64 clock;
@@ -409,7 +386,7 @@ notrace u64 sched_clock_cpu(int cpu)
 }
 EXPORT_SYMBOL_GPL(sched_clock_cpu);
 
-notrace void sched_clock_tick(void)
+void sched_clock_tick(void)
 {
 	struct sched_clock_data *scd;
 
@@ -426,7 +403,7 @@ notrace void sched_clock_tick(void)
 	sched_clock_local(scd);
 }
 
-notrace void sched_clock_tick_stable(void)
+void sched_clock_tick_stable(void)
 {
 	if (!sched_clock_stable())
 		return;
@@ -446,7 +423,7 @@ notrace void sched_clock_tick_stable(void)
 /*
  * We are going deep-idle (irqs are disabled):
  */
-notrace void sched_clock_idle_sleep_event(void)
+void sched_clock_idle_sleep_event(void)
 {
 	sched_clock_cpu(smp_processor_id());
 }
@@ -455,7 +432,7 @@ EXPORT_SYMBOL_GPL(sched_clock_idle_sleep_event);
 /*
  * We just idled; resync with ktime.
  */
-notrace void sched_clock_idle_wakeup_event(void)
+void sched_clock_idle_wakeup_event(void)
 {
 	unsigned long flags;
 
@@ -481,7 +458,7 @@ void __init sched_clock_init(void)
 	local_irq_enable();
 }
 
-notrace u64 sched_clock_cpu(int cpu)
+u64 sched_clock_cpu(int cpu)
 {
 	if (!static_branch_likely(&sched_clock_running))
 		return 0;
@@ -499,7 +476,7 @@ notrace u64 sched_clock_cpu(int cpu)
  * On bare metal this function should return the same as local_clock.
  * Architectures and sub-architectures can override this.
  */
-notrace u64 __weak running_clock(void)
+u64 __weak running_clock(void)
 {
 	return local_clock();
 }

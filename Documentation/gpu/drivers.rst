@@ -4,7 +4,8 @@ GPU Driver Documentation
 
 .. toctree::
 
-   amdgpu/index
+   amdgpu
+   amdgpu-dc
    i915
    mcde
    meson
@@ -18,7 +19,6 @@ GPU Driver Documentation
    xen-front
    afbc
    komeda-kms
-   panfrost
 
 .. only::  subproject and html
 

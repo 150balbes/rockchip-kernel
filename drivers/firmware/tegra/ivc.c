@@ -68,12 +68,6 @@ struct tegra_ivc_header {
 	} rx;
 };
 
-#define tegra_ivc_header_read_field(hdr, field) \
-	iosys_map_rd_field(hdr, 0, struct tegra_ivc_header, field)
-
-#define tegra_ivc_header_write_field(hdr, field, value) \
-	iosys_map_wr_field(hdr, 0, struct tegra_ivc_header, field, value)
-
 static inline void tegra_ivc_invalidate(struct tegra_ivc *ivc, dma_addr_t phys)
 {
 	if (!ivc->peer)
@@ -92,15 +86,16 @@ static inline void tegra_ivc_flush(struct tegra_ivc *ivc, dma_addr_t phys)
 				   DMA_TO_DEVICE);
 }
 
-static inline bool tegra_ivc_empty(struct tegra_ivc *ivc, struct iosys_map *map)
+static inline bool tegra_ivc_empty(struct tegra_ivc *ivc,
+				   struct tegra_ivc_header *header)
 {
 	/*
 	 * This function performs multiple checks on the same values with
 	 * security implications, so create snapshots with READ_ONCE() to
 	 * ensure that these checks use the same values.
 	 */
-	u32 tx = tegra_ivc_header_read_field(map, tx.count);
-	u32 rx = tegra_ivc_header_read_field(map, rx.count);
+	u32 tx = READ_ONCE(header->tx.count);
+	u32 rx = READ_ONCE(header->rx.count);
 
 	/*
 	 * Perform an over-full check to prevent denial of service attacks
@@ -118,10 +113,11 @@ static inline bool tegra_ivc_empty(struct tegra_ivc *ivc, struct iosys_map *map)
 	return tx == rx;
 }
 
-static inline bool tegra_ivc_full(struct tegra_ivc *ivc, struct iosys_map *map)
+static inline bool tegra_ivc_full(struct tegra_ivc *ivc,
+				  struct tegra_ivc_header *header)
 {
-	u32 tx = tegra_ivc_header_read_field(map, tx.count);
-	u32 rx = tegra_ivc_header_read_field(map, rx.count);
+	u32 tx = READ_ONCE(header->tx.count);
+	u32 rx = READ_ONCE(header->rx.count);
 
 	/*
 	 * Invalid cases where the counters indicate that the queue is over
@@ -130,10 +126,11 @@ static inline bool tegra_ivc_full(struct tegra_ivc *ivc, struct iosys_map *map)
 	return tx - rx >= ivc->num_frames;
 }
 
-static inline u32 tegra_ivc_available(struct tegra_ivc *ivc, struct iosys_map *map)
+static inline u32 tegra_ivc_available(struct tegra_ivc *ivc,
+				      struct tegra_ivc_header *header)
 {
-	u32 tx = tegra_ivc_header_read_field(map, tx.count);
-	u32 rx = tegra_ivc_header_read_field(map, rx.count);
+	u32 tx = READ_ONCE(header->tx.count);
+	u32 rx = READ_ONCE(header->rx.count);
 
 	/*
 	 * This function isn't expected to be used in scenarios where an
@@ -146,9 +143,8 @@ static inline u32 tegra_ivc_available(struct tegra_ivc *ivc, struct iosys_map *m
 
 static inline void tegra_ivc_advance_tx(struct tegra_ivc *ivc)
 {
-	unsigned int count = tegra_ivc_header_read_field(&ivc->tx.map, tx.count);
-
-	tegra_ivc_header_write_field(&ivc->tx.map, tx.count, count + 1);
+	WRITE_ONCE(ivc->tx.channel->tx.count,
+		   READ_ONCE(ivc->tx.channel->tx.count) + 1);
 
 	if (ivc->tx.position == ivc->num_frames - 1)
 		ivc->tx.position = 0;
@@ -158,9 +154,8 @@ static inline void tegra_ivc_advance_tx(struct tegra_ivc *ivc)
 
 static inline void tegra_ivc_advance_rx(struct tegra_ivc *ivc)
 {
-	unsigned int count = tegra_ivc_header_read_field(&ivc->rx.map, rx.count);
-
-	tegra_ivc_header_write_field(&ivc->rx.map, rx.count, count + 1);
+	WRITE_ONCE(ivc->rx.channel->rx.count,
+		   READ_ONCE(ivc->rx.channel->rx.count) + 1);
 
 	if (ivc->rx.position == ivc->num_frames - 1)
 		ivc->rx.position = 0;
@@ -171,7 +166,6 @@ static inline void tegra_ivc_advance_rx(struct tegra_ivc *ivc)
 static inline int tegra_ivc_check_read(struct tegra_ivc *ivc)
 {
 	unsigned int offset = offsetof(struct tegra_ivc_header, tx.count);
-	unsigned int state;
 
 	/*
 	 * tx.channel->state is set locally, so it is not synchronized with
@@ -181,8 +175,7 @@ static inline int tegra_ivc_check_read(struct tegra_ivc *ivc)
 	 * asynchronous transition of rx.channel->state to
 	 * TEGRA_IVC_STATE_ACK is not allowed.
 	 */
-	state = tegra_ivc_header_read_field(&ivc->tx.map, tx.state);
-	if (state != TEGRA_IVC_STATE_ESTABLISHED)
+	if (ivc->tx.channel->tx.state != TEGRA_IVC_STATE_ESTABLISHED)
 		return -ECONNRESET;
 
 	/*
@@ -192,12 +185,12 @@ static inline int tegra_ivc_check_read(struct tegra_ivc *ivc)
 	 * Synchronization is only necessary when these pointers indicate
 	 * empty or full.
 	 */
-	if (!tegra_ivc_empty(ivc, &ivc->rx.map))
+	if (!tegra_ivc_empty(ivc, ivc->rx.channel))
 		return 0;
 
 	tegra_ivc_invalidate(ivc, ivc->rx.phys + offset);
 
-	if (tegra_ivc_empty(ivc, &ivc->rx.map))
+	if (tegra_ivc_empty(ivc, ivc->rx.channel))
 		return -ENOSPC;
 
 	return 0;
@@ -206,34 +199,29 @@ static inline int tegra_ivc_check_read(struct tegra_ivc *ivc)
 static inline int tegra_ivc_check_write(struct tegra_ivc *ivc)
 {
 	unsigned int offset = offsetof(struct tegra_ivc_header, rx.count);
-	unsigned int state;
 
-	state = tegra_ivc_header_read_field(&ivc->tx.map, tx.state);
-	if (state != TEGRA_IVC_STATE_ESTABLISHED)
+	if (ivc->tx.channel->tx.state != TEGRA_IVC_STATE_ESTABLISHED)
 		return -ECONNRESET;
 
-	if (!tegra_ivc_full(ivc, &ivc->tx.map))
+	if (!tegra_ivc_full(ivc, ivc->tx.channel))
 		return 0;
 
 	tegra_ivc_invalidate(ivc, ivc->tx.phys + offset);
 
-	if (tegra_ivc_full(ivc, &ivc->tx.map))
+	if (tegra_ivc_full(ivc, ivc->tx.channel))
 		return -ENOSPC;
 
 	return 0;
 }
 
-static int tegra_ivc_frame_virt(struct tegra_ivc *ivc, const struct iosys_map *header,
-				unsigned int frame, struct iosys_map *map)
+static void *tegra_ivc_frame_virt(struct tegra_ivc *ivc,
+				  struct tegra_ivc_header *header,
+				  unsigned int frame)
 {
-	size_t offset = sizeof(struct tegra_ivc_header) + ivc->frame_size * frame;
-
 	if (WARN_ON(frame >= ivc->num_frames))
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 
-	*map = IOSYS_MAP_INIT_OFFSET(header, offset);
-
-	return 0;
+	return (void *)(header + 1) + ivc->frame_size * frame;
 }
 
 static inline dma_addr_t tegra_ivc_frame_phys(struct tegra_ivc *ivc,
@@ -276,16 +264,16 @@ static inline void tegra_ivc_flush_frame(struct tegra_ivc *ivc,
 }
 
 /* directly peek at the next frame rx'ed */
-int tegra_ivc_read_get_next_frame(struct tegra_ivc *ivc, struct iosys_map *map)
+void *tegra_ivc_read_get_next_frame(struct tegra_ivc *ivc)
 {
 	int err;
 
 	if (WARN_ON(ivc == NULL))
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 
 	err = tegra_ivc_check_read(ivc);
 	if (err < 0)
-		return err;
+		return ERR_PTR(err);
 
 	/*
 	 * Order observation of ivc->rx.position potentially indicating new
@@ -296,7 +284,7 @@ int tegra_ivc_read_get_next_frame(struct tegra_ivc *ivc, struct iosys_map *map)
 	tegra_ivc_invalidate_frame(ivc, ivc->rx.phys, ivc->rx.position, 0,
 				   ivc->frame_size);
 
-	return tegra_ivc_frame_virt(ivc, &ivc->rx.map, ivc->rx.position, map);
+	return tegra_ivc_frame_virt(ivc, ivc->rx.channel, ivc->rx.position);
 }
 EXPORT_SYMBOL(tegra_ivc_read_get_next_frame);
 
@@ -332,7 +320,7 @@ int tegra_ivc_read_advance(struct tegra_ivc *ivc)
 	 */
 	tegra_ivc_invalidate(ivc, ivc->rx.phys + tx);
 
-	if (tegra_ivc_available(ivc, &ivc->rx.map) == ivc->num_frames - 1)
+	if (tegra_ivc_available(ivc, ivc->rx.channel) == ivc->num_frames - 1)
 		ivc->notify(ivc, ivc->notify_data);
 
 	return 0;
@@ -340,15 +328,15 @@ int tegra_ivc_read_advance(struct tegra_ivc *ivc)
 EXPORT_SYMBOL(tegra_ivc_read_advance);
 
 /* directly poke at the next frame to be tx'ed */
-int tegra_ivc_write_get_next_frame(struct tegra_ivc *ivc, struct iosys_map *map)
+void *tegra_ivc_write_get_next_frame(struct tegra_ivc *ivc)
 {
 	int err;
 
 	err = tegra_ivc_check_write(ivc);
 	if (err < 0)
-		return err;
+		return ERR_PTR(err);
 
-	return tegra_ivc_frame_virt(ivc, &ivc->tx.map, ivc->tx.position, map);
+	return tegra_ivc_frame_virt(ivc, ivc->tx.channel, ivc->tx.position);
 }
 EXPORT_SYMBOL(tegra_ivc_write_get_next_frame);
 
@@ -388,7 +376,7 @@ int tegra_ivc_write_advance(struct tegra_ivc *ivc)
 	 */
 	tegra_ivc_invalidate(ivc, ivc->tx.phys + rx);
 
-	if (tegra_ivc_available(ivc, &ivc->tx.map) == 1)
+	if (tegra_ivc_available(ivc, ivc->tx.channel) == 1)
 		ivc->notify(ivc, ivc->notify_data);
 
 	return 0;
@@ -399,7 +387,7 @@ void tegra_ivc_reset(struct tegra_ivc *ivc)
 {
 	unsigned int offset = offsetof(struct tegra_ivc_header, tx.count);
 
-	tegra_ivc_header_write_field(&ivc->tx.map, tx.state, TEGRA_IVC_STATE_SYNC);
+	ivc->tx.channel->tx.state = TEGRA_IVC_STATE_SYNC;
 	tegra_ivc_flush(ivc, ivc->tx.phys + offset);
 	ivc->notify(ivc, ivc->notify_data);
 }
@@ -428,14 +416,13 @@ EXPORT_SYMBOL(tegra_ivc_reset);
 int tegra_ivc_notified(struct tegra_ivc *ivc)
 {
 	unsigned int offset = offsetof(struct tegra_ivc_header, tx.count);
-	enum tegra_ivc_state rx_state, tx_state;
+	enum tegra_ivc_state state;
 
 	/* Copy the receiver's state out of shared memory. */
 	tegra_ivc_invalidate(ivc, ivc->rx.phys + offset);
-	rx_state = tegra_ivc_header_read_field(&ivc->rx.map, tx.state);
-	tx_state = tegra_ivc_header_read_field(&ivc->tx.map, tx.state);
+	state = READ_ONCE(ivc->rx.channel->tx.state);
 
-	if (rx_state == TEGRA_IVC_STATE_SYNC) {
+	if (state == TEGRA_IVC_STATE_SYNC) {
 		offset = offsetof(struct tegra_ivc_header, tx.count);
 
 		/*
@@ -449,8 +436,8 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 * state and won't make progress until we change our state,
 		 * so the counters are not in use at this time.
 		 */
-		tegra_ivc_header_write_field(&ivc->tx.map, tx.count, 0);
-		tegra_ivc_header_write_field(&ivc->rx.map, rx.count, 0);
+		ivc->tx.channel->tx.count = 0;
+		ivc->rx.channel->rx.count = 0;
 
 		ivc->tx.position = 0;
 		ivc->rx.position = 0;
@@ -465,7 +452,7 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 * Move to ACK state. We have just cleared our counters, so it
 		 * is now safe for the remote end to start using these values.
 		 */
-		tegra_ivc_header_write_field(&ivc->tx.map, tx.state, TEGRA_IVC_STATE_ACK);
+		ivc->tx.channel->tx.state = TEGRA_IVC_STATE_ACK;
 		tegra_ivc_flush(ivc, ivc->tx.phys + offset);
 
 		/*
@@ -473,8 +460,8 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 */
 		ivc->notify(ivc, ivc->notify_data);
 
-	} else if (tx_state == TEGRA_IVC_STATE_SYNC &&
-		   rx_state == TEGRA_IVC_STATE_ACK) {
+	} else if (ivc->tx.channel->tx.state == TEGRA_IVC_STATE_SYNC &&
+		   state == TEGRA_IVC_STATE_ACK) {
 		offset = offsetof(struct tegra_ivc_header, tx.count);
 
 		/*
@@ -488,8 +475,8 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 * state and won't make progress until we change our state,
 		 * so the counters are not in use at this time.
 		 */
-		tegra_ivc_header_write_field(&ivc->tx.map, tx.count, 0);
-		tegra_ivc_header_write_field(&ivc->rx.map, rx.count, 0);
+		ivc->tx.channel->tx.count = 0;
+		ivc->rx.channel->rx.count = 0;
 
 		ivc->tx.position = 0;
 		ivc->rx.position = 0;
@@ -505,7 +492,7 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 * already cleared its counters, so it is safe to start
 		 * writing/reading on this channel.
 		 */
-		tegra_ivc_header_write_field(&ivc->tx.map, tx.state, TEGRA_IVC_STATE_ESTABLISHED);
+		ivc->tx.channel->tx.state = TEGRA_IVC_STATE_ESTABLISHED;
 		tegra_ivc_flush(ivc, ivc->tx.phys + offset);
 
 		/*
@@ -513,7 +500,7 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 */
 		ivc->notify(ivc, ivc->notify_data);
 
-	} else if (tx_state == TEGRA_IVC_STATE_ACK) {
+	} else if (ivc->tx.channel->tx.state == TEGRA_IVC_STATE_ACK) {
 		offset = offsetof(struct tegra_ivc_header, tx.count);
 
 		/*
@@ -529,7 +516,7 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 * cleared its counters, so it is safe to start writing/reading
 		 * on this channel.
 		 */
-		tegra_ivc_header_write_field(&ivc->tx.map, tx.state, TEGRA_IVC_STATE_ESTABLISHED);
+		ivc->tx.channel->tx.state = TEGRA_IVC_STATE_ESTABLISHED;
 		tegra_ivc_flush(ivc, ivc->tx.phys + offset);
 
 		/*
@@ -546,7 +533,7 @@ int tegra_ivc_notified(struct tegra_ivc *ivc)
 		 */
 	}
 
-	if (tx_state != TEGRA_IVC_STATE_ESTABLISHED)
+	if (ivc->tx.channel->tx.state != TEGRA_IVC_STATE_ESTABLISHED)
 		return -EAGAIN;
 
 	return 0;
@@ -622,29 +609,8 @@ static int tegra_ivc_check_params(unsigned long rx, unsigned long tx,
 	return 0;
 }
 
-static inline void iosys_map_copy(struct iosys_map *dst, const struct iosys_map *src)
-{
-	*dst = *src;
-}
-
-static inline unsigned long iosys_map_get_address(const struct iosys_map *map)
-{
-	if (map->is_iomem)
-		return (unsigned long)map->vaddr_iomem;
-
-	return (unsigned long)map->vaddr;
-}
-
-static inline void *iosys_map_get_vaddr(const struct iosys_map *map)
-{
-	if (WARN_ON(map->is_iomem))
-		return NULL;
-
-	return map->vaddr;
-}
-
-int tegra_ivc_init(struct tegra_ivc *ivc, struct device *peer, const struct iosys_map *rx,
-		   dma_addr_t rx_phys, const struct iosys_map *tx, dma_addr_t tx_phys,
+int tegra_ivc_init(struct tegra_ivc *ivc, struct device *peer, void *rx,
+		   dma_addr_t rx_phys, void *tx, dma_addr_t tx_phys,
 		   unsigned int num_frames, size_t frame_size,
 		   void (*notify)(struct tegra_ivc *ivc, void *data),
 		   void *data)
@@ -662,7 +628,7 @@ int tegra_ivc_init(struct tegra_ivc *ivc, struct device *peer, const struct iosy
 	if (frame_size > INT_MAX)
 		return -E2BIG;
 
-	err = tegra_ivc_check_params(iosys_map_get_address(rx), iosys_map_get_address(tx),
+	err = tegra_ivc_check_params((unsigned long)rx, (unsigned long)tx,
 				     num_frames, frame_size);
 	if (err < 0)
 		return err;
@@ -670,12 +636,12 @@ int tegra_ivc_init(struct tegra_ivc *ivc, struct device *peer, const struct iosy
 	queue_size = tegra_ivc_total_queue_size(num_frames * frame_size);
 
 	if (peer) {
-		ivc->rx.phys = dma_map_single(peer, iosys_map_get_vaddr(rx), queue_size,
+		ivc->rx.phys = dma_map_single(peer, rx, queue_size,
 					      DMA_BIDIRECTIONAL);
 		if (dma_mapping_error(peer, ivc->rx.phys))
 			return -ENOMEM;
 
-		ivc->tx.phys = dma_map_single(peer, iosys_map_get_vaddr(tx), queue_size,
+		ivc->tx.phys = dma_map_single(peer, tx, queue_size,
 					      DMA_BIDIRECTIONAL);
 		if (dma_mapping_error(peer, ivc->tx.phys)) {
 			dma_unmap_single(peer, ivc->rx.phys, queue_size,
@@ -687,8 +653,8 @@ int tegra_ivc_init(struct tegra_ivc *ivc, struct device *peer, const struct iosy
 		ivc->tx.phys = tx_phys;
 	}
 
-	iosys_map_copy(&ivc->rx.map, rx);
-	iosys_map_copy(&ivc->tx.map, tx);
+	ivc->rx.channel = rx;
+	ivc->tx.channel = tx;
 	ivc->peer = peer;
 	ivc->notify = notify;
 	ivc->notify_data = data;

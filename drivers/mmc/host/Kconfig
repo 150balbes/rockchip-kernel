@@ -14,15 +14,6 @@ config MMC_DEBUG
 	  added host drivers please don't invent their private macro for
 	  debugging.
 
-config MMC_SUNPLUS
-	tristate "Sunplus SP7021 MMC Controller"
-	depends on ARCH_SUNPLUS || COMPILE_TEST
-	help
-	  If you say yes here, you will get support for eMMC host interface
-	  on Sunplus SoCs.
-
-	  If unsure, say N
-
 config MMC_ARMMMCI
 	tristate "ARM AMBA Multimedia Card Interface support"
 	depends on ARM_AMBA
@@ -166,7 +157,6 @@ config MMC_SDHCI_OF_ARASAN
 
 config MMC_SDHCI_OF_ASPEED
 	tristate "SDHCI OF support for the ASPEED SDHCI controller"
-	depends on ARCH_ASPEED || COMPILE_TEST
 	depends on MMC_SDHCI_PLTFM
 	depends on OF && OF_ADDRESS
 	select MMC_SDHCI_IO_ACCESSORS
@@ -175,22 +165,6 @@ config MMC_SDHCI_OF_ASPEED
 
 	  If you have a controller with this interface, say Y or M here. You
 	  also need to enable an appropriate bus interface.
-
-	  If unsure, say N.
-
-config MMC_SDHCI_OF_ASPEED_TEST
-	bool "Tests for the ASPEED SDHCI driver" if !KUNIT_ALL_TESTS
-	depends on MMC_SDHCI_OF_ASPEED && KUNIT
-	depends on (MMC_SDHCI_OF_ASPEED=m || KUNIT=y)
-	default KUNIT_ALL_TESTS
-	help
-	  Enable KUnit tests for the ASPEED SDHCI driver. Select this
-	  option only if you will boot the kernel for the purpose of running
-	  unit tests (e.g. under UML or qemu).
-
-	  The KUnit tests generally exercise parts of the driver that do not
-	  directly touch the hardware, for example, the phase correction
-	  calculations.
 
 	  If unsure, say N.
 
@@ -233,6 +207,7 @@ config MMC_SDHCI_OF_DWCMSHC
 	depends on MMC_SDHCI_PLTFM
 	depends on OF
 	depends on COMMON_CLK
+	select MMC_HSQ
 	help
 	  This selects Synopsys DesignWare Cores Mobile Storage Controller
 	  support.
@@ -255,9 +230,19 @@ config MMC_SDHCI_CADENCE
 	tristate "SDHCI support for the Cadence SD/SDIO/eMMC controller"
 	depends on MMC_SDHCI_PLTFM
 	depends on OF
-	select MMC_SDHCI_IO_ACCESSORS
 	help
 	  This selects the Cadence SD/SDIO/eMMC driver.
+
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_SDHCI_CNS3XXX
+	tristate "SDHCI support on the Cavium Networks CNS3xxx SoC"
+	depends on ARCH_CNS3XXX || COMPILE_TEST
+	depends on MMC_SDHCI_PLTFM
+	help
+	  This selects the SDHCI support for CNS3xxx System-on-Chip devices.
 
 	  If you have a controller with this interface, say Y or M here.
 
@@ -280,7 +265,6 @@ config MMC_SDHCI_ESDHC_IMX
 	tristate "SDHCI support for the Freescale eSDHC/uSDHC i.MX controller"
 	depends on ARCH_MXC || COMPILE_TEST
 	depends on MMC_SDHCI_PLTFM
-	depends on OF
 	select MMC_SDHCI_IO_ACCESSORS
 	select MMC_CQHCI
 	help
@@ -317,22 +301,33 @@ config MMC_SDHCI_TEGRA
 	  If unsure, say N.
 
 config MMC_SDHCI_S3C
-	tristate "SDHCI support on Samsung S3C/S5P/Exynos SoC"
+	tristate "SDHCI support on Samsung S3C SoC"
 	depends on MMC_SDHCI
 	depends on PLAT_SAMSUNG || ARCH_S5PV210 || ARCH_EXYNOS || COMPILE_TEST
 	help
 	  This selects the Secure Digital Host Controller Interface (SDHCI)
-	  often referrered to as the HSMMC block in some of the Samsung
-	  S3C6410, S5Pv210 and Exynos (Exynso4210, Exynos4412) SoCs.
+	  often referrered to as the HSMMC block in some of the Samsung S3C
+	  range of SoC.
 
-	  If you have a controller with this interface (thereforeyou build for
-	  such Samsung SoC), say Y or M here.
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_SDHCI_SIRF
+	tristate "SDHCI support on CSR SiRFprimaII and SiRFmarco SoCs"
+	depends on ARCH_SIRF || COMPILE_TEST
+	depends on MMC_SDHCI_PLTFM
+	select MMC_SDHCI_IO_ACCESSORS
+	help
+	  This selects the SDHCI support for SiRF System-on-Chip devices.
+
+	  If you have a controller with this interface, say Y or M here.
 
 	  If unsure, say N.
 
 config MMC_SDHCI_PXAV3
 	tristate "Marvell MMP2 SD Host Controller support (PXAV3)"
-	depends on HAVE_CLK
+	depends on CLKDEV_LOOKUP
 	depends on MMC_SDHCI_PLTFM
 	depends on ARCH_BERLIN || ARCH_MMP || ARCH_MVEBU || COMPILE_TEST
 	default CPU_MMP2
@@ -345,11 +340,10 @@ config MMC_SDHCI_PXAV3
 
 config MMC_SDHCI_PXAV2
 	tristate "Marvell PXA9XX SD Host Controller support (PXAV2)"
-	depends on HAVE_CLK
+	depends on CLKDEV_LOOKUP
 	depends on MMC_SDHCI_PLTFM
 	depends on ARCH_MMP || COMPILE_TEST
 	default CPU_PXA910
-	select MMC_SDHCI_IO_ACCESSORS
 	help
 	  This selects the Marvell(R) PXAV2 SD Host Controller.
 	  If you have a PXA9XX platform with SD Host Controller
@@ -416,7 +410,7 @@ config MMC_SDHCI_MILBEAUT
 
 config MMC_SDHCI_IPROC
 	tristate "SDHCI support for the BCM2835 & iProc SD/MMC Controller"
-	depends on ARCH_BCM2835 || ARCH_BCM_IPROC || ARCH_BRCMSTB || COMPILE_TEST
+	depends on ARCH_BCM2835 || ARCH_BCM_IPROC || COMPILE_TEST
 	depends on MMC_SDHCI_PLTFM
 	depends on OF || ACPI
 	default ARCH_BCM_IPROC
@@ -490,6 +484,7 @@ config MMC_SDHCI_ST
 config MMC_OMAP
 	tristate "TI OMAP Multimedia Card Interface support"
 	depends on ARCH_OMAP
+	depends on TPS65010 || !MACH_OMAP_H2
 	help
 	  This selects the TI OMAP Multimedia card Interface.
 	  If you have an OMAP board with a Multimedia Card slot,
@@ -509,7 +504,7 @@ config MMC_OMAP_HS
 
 config MMC_WBSD
 	tristate "Winbond W83L51xD SD/MMC Card Interface support"
-	depends on ISA_DMA_API
+	depends on ISA_DMA_API && !M68K
 	help
 	  This selects the Winbond(R) W83L51xD Secure digital and
 	  Multimedia card Interface.
@@ -550,7 +545,7 @@ config MMC_SDHCI_MSM
 	depends on MMC_SDHCI_PLTFM
 	select MMC_SDHCI_IO_ACCESSORS
 	select MMC_CQHCI
-	select QCOM_INLINE_CRYPTO_ENGINE if MMC_CRYPTO
+	select QCOM_SCM if MMC_CRYPTO && ARCH_QCOM
 	help
 	  This selects the Secure Digital Host Controller Interface (SDHCI)
 	  support present in Qualcomm SOCs. The controller supports
@@ -615,6 +610,13 @@ config MMC_DAVINCI
 	  If you have an DAVINCI board with a Multimedia Card slot,
 	  say Y or M here.  If unsure, say N.
 
+config MMC_GOLDFISH
+	tristate "goldfish qemu Multimedia Card Interface support"
+	depends on GOLDFISH || COMPILE_TEST
+	help
+	  This selects the Goldfish Multimedia card Interface emulation
+	  found on the Goldfish Android virtual device emulation.
+
 config MMC_SPI
 	tristate "MMC/SD/SDIO over SPI"
 	depends on SPI_MASTER
@@ -628,6 +630,49 @@ config MMC_SPI
 	  controllers.
 
 	  If unsure, or if your system has no SPI master driver, say N.
+
+config MMC_S3C
+	tristate "Samsung S3C SD/MMC Card Interface support"
+	depends on ARCH_S3C24XX
+	depends on S3C24XX_DMAC
+	help
+	  This selects a driver for the MCI interface found in
+	  Samsung's S3C2410, S3C2412, S3C2440, S3C2442 CPUs.
+	  If you have a board based on one of those and a MMC/SD
+	  slot, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_S3C_HW_SDIO_IRQ
+	bool "Hardware support for SDIO IRQ"
+	depends on MMC_S3C
+	help
+	  Enable the hardware support for SDIO interrupts instead of using
+	  the generic polling code.
+
+choice
+	prompt "Samsung S3C SD/MMC transfer code"
+	depends on MMC_S3C
+
+config MMC_S3C_PIO
+	bool "Use PIO transfers only"
+	help
+	  Use PIO to transfer data between memory and the hardware.
+
+	  PIO is slower than DMA as it requires CPU instructions to
+	  move the data. This has been the traditional default for
+	  the S3C MCI driver.
+
+config MMC_S3C_DMA
+	bool "Use DMA transfers only"
+	help
+	  Use DMA to transfer data between memory and the hardare.
+
+	  Currently, the DMA support in this driver seems to not be
+	  working properly and needs to be debugged before this
+	  option is useful.
+
+endchoice
 
 config MMC_SDRICOH_CS
 	tristate "MMC/SD driver for Ricoh Bay1Controllers"
@@ -656,11 +701,18 @@ config MMC_SDHCI_SPRD
 config MMC_TMIO_CORE
 	tristate
 
+config MMC_TMIO
+	tristate "Toshiba Mobile IO Controller (TMIO) MMC/SD function support"
+	depends on MFD_TMIO || MFD_ASIC3 || COMPILE_TEST
+	select MMC_TMIO_CORE
+	help
+	  This provides support for the SD/MMC cell found in TC6393XB,
+	  T7L66XB and also HTC ASIC3
+
 config MMC_SDHI
 	tristate "Renesas SDHI SD/SDIO controller support"
 	depends on SUPERH || ARCH_RENESAS || COMPILE_TEST
 	select MMC_TMIO_CORE
-	select RESET_CONTROLLER if ARCH_RENESAS
 	help
 	  This provides support for the SDHI SD/SDIO controller found in
 	  Renesas SuperH, ARM and ARM64 based SoCs
@@ -818,15 +870,14 @@ config MMC_DW_ROCKCHIP
 	  Synopsys DesignWare Memory Card Interface driver. Select this option
 	  for platforms based on RK3066, RK3188 and RK3288 SoC's.
 
-config MMC_DW_STARFIVE
-	tristate "StarFive specific extensions for Synopsys DW Memory Card Interface"
-	depends on SOC_STARFIVE
-	depends on MMC_DW
+config MMC_DW_ZX
+	tristate "ZTE specific extensions for Synopsys DW Memory Card Interface"
+	depends on MMC_DW && ARCH_ZX
 	select MMC_DW_PLTFM
 	help
-	  This selects support for StarFive JH7110 SoC specific extensions to the
+	  This selects support for ZTE SoC specific extensions to the
 	  Synopsys DesignWare Memory Card Interface driver. Select this option
-	  for platforms based on StarFive JH7110 SoC.
+	  for platforms based on ZX296718 SoC's.
 
 config MMC_SH_MMCIF
 	tristate "SuperH Internal MMCIF support"
@@ -926,7 +977,6 @@ config MMC_REALTEK_USB
 config MMC_SUNXI
 	tristate "Allwinner sunxi SD/MMC Host Controller support"
 	depends on ARCH_SUNXI || COMPILE_TEST
-	depends on SUNXI_CCU
 	help
 	  This selects support for the SD/MMC Host Controller on
 	  Allwinner sunxi SoCs.
@@ -975,7 +1025,6 @@ config MMC_BCM2835
 config MMC_MTK
 	tristate "MediaTek SD/MMC Card Interface support"
 	depends on HAS_DMA
-	depends on COMMON_CLK
 	select REGULATOR
 	select MMC_CQHCI
 	help
@@ -997,10 +1046,10 @@ config MMC_SDHCI_MICROCHIP_PIC32
 
 config MMC_SDHCI_BRCMSTB
 	tristate "Broadcom SDIO/SD/MMC support"
-	depends on ARCH_BRCMSTB || BMIPS_GENERIC || COMPILE_TEST
+	depends on ARCH_BRCMSTB || BMIPS_GENERIC
 	depends on MMC_SDHCI_PLTFM
 	select MMC_CQHCI
-	default ARCH_BRCMSTB || BMIPS_GENERIC
+	default y
 	help
 	  This selects support for the SDIO/SD/MMC Host Controller on
 	  Broadcom STB SoCs.
@@ -1055,16 +1104,3 @@ config MMC_OWL
 
 config MMC_SDHCI_EXTERNAL_DMA
 	bool
-
-config MMC_LITEX
-	tristate "LiteX MMC Host Controller support"
-	depends on ((PPC_MICROWATT || LITEX) && OF && HAVE_CLK) || COMPILE_TEST
-	select REGULATOR
-	select REGULATOR_FIXED_VOLTAGE
-	help
-	  This selects support for the MMC Host Controller found in LiteX SoCs.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called litex_mmc.
-
-	  If unsure, say N.

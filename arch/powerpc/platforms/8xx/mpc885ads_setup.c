@@ -42,7 +42,6 @@
 
 #include "mpc885ads.h"
 #include "mpc8xx.h"
-#include "pic.h"
 
 static u32 __iomem *bcsr, *bcsr5;
 
@@ -192,6 +191,11 @@ static void __init mpc885ads_setup_arch(void)
 	}
 }
 
+static int __init mpc885ads_probe(void)
+{
+	return of_machine_is_compatible("fsl,mpc885ads");
+}
+
 static const struct of_device_id of_bus_ids[] __initconst = {
 	{ .name = "soc", },
 	{ .name = "cpm", },
@@ -210,9 +214,9 @@ machine_device_initcall(mpc885_ads, declare_of_platform_devices);
 
 define_machine(mpc885_ads) {
 	.name			= "Freescale MPC885 ADS",
-	.compatible		= "fsl,mpc885ads",
+	.probe			= mpc885ads_probe,
 	.setup_arch		= mpc885ads_setup_arch,
-	.init_IRQ		= mpc8xx_pic_init,
+	.init_IRQ		= mpc8xx_pics_init,
 	.get_irq		= mpc8xx_get_irq,
 	.restart		= mpc8xx_restart,
 	.calibrate_decr		= mpc8xx_calibrate_decr,

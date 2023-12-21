@@ -2,7 +2,6 @@
 #ifndef _TSO_H
 #define _TSO_H
 
-#include <linux/skbuff.h>
 #include <net/ip.h>
 
 #define TSO_HEADER_SIZE		256
@@ -17,12 +16,7 @@ struct tso_t {
 	u32	tcp_seq;
 };
 
-/* Calculate the worst case buffer count */
-static inline int tso_count_descs(const struct sk_buff *skb)
-{
-	return skb_shinfo(skb)->gso_segs * 2 + skb_shinfo(skb)->nr_frags;
-}
-
+int tso_count_descs(const struct sk_buff *skb);
 void tso_build_hdr(const struct sk_buff *skb, char *hdr, struct tso_t *tso,
 		   int size, bool is_last);
 void tso_build_data(const struct sk_buff *skb, struct tso_t *tso, int size);

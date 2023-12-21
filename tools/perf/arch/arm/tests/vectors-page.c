@@ -9,7 +9,8 @@
 
 #define VECTORS__MAP_NAME "[vectors]"
 
-static int test__vectors_page(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__vectors_page(struct test *test __maybe_unused,
+		       int subtest __maybe_unused)
 {
 	void *start, *end;
 
@@ -21,5 +22,3 @@ static int test__vectors_page(struct test_suite *test __maybe_unused, int subtes
 
 	return TEST_OK;
 }
-
-DEFINE_SUITE("Vectors page", vectors_page);

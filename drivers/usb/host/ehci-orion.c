@@ -65,6 +65,8 @@ struct orion_ehci_hcd {
 	struct phy *phy;
 };
 
+static const char hcd_name[] = "ehci-orion";
+
 static struct hc_driver __read_mostly ehci_orion_hc_driver;
 
 /*
@@ -321,7 +323,7 @@ err:
 	return err;
 }
 
-static void ehci_orion_drv_remove(struct platform_device *pdev)
+static int ehci_orion_drv_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct orion_ehci_hcd *priv = hcd_to_orion_priv(hcd);
@@ -332,6 +334,8 @@ static void ehci_orion_drv_remove(struct platform_device *pdev)
 		clk_disable_unprepare(priv->clk);
 
 	usb_put_hcd(hcd);
+
+	return 0;
 }
 
 static const struct of_device_id ehci_orion_dt_ids[] = {
@@ -343,7 +347,7 @@ MODULE_DEVICE_TABLE(of, ehci_orion_dt_ids);
 
 static struct platform_driver ehci_orion_driver = {
 	.probe		= ehci_orion_drv_probe,
-	.remove_new	= ehci_orion_drv_remove,
+	.remove		= ehci_orion_drv_remove,
 	.shutdown	= usb_hcd_platform_shutdown,
 	.driver = {
 		.name	= "orion-ehci",
@@ -356,6 +360,8 @@ static int __init ehci_orion_init(void)
 {
 	if (usb_disabled())
 		return -ENODEV;
+
+	pr_info("%s: " DRIVER_DESC "\n", hcd_name);
 
 	ehci_init_driver(&ehci_orion_hc_driver, &orion_overrides);
 	return platform_driver_register(&ehci_orion_driver);

@@ -7,8 +7,6 @@
  *
  */
 
-#define pr_fmt(fmt) "ACPI: " fmt
-
 #include <linux/spinlock.h>
 #include <linux/export.h>
 #include <linux/proc_fs.h>
@@ -167,7 +165,7 @@ static int acpi_event_genetlink_init(void)
 
 static int __init acpi_event_init(void)
 {
-	int error;
+	int error = 0;
 
 	if (acpi_disabled)
 		return 0;
@@ -175,8 +173,8 @@ static int __init acpi_event_init(void)
 	/* create genetlink for acpi event */
 	error = acpi_event_genetlink_init();
 	if (error)
-		pr_warn("Failed to create genetlink family for ACPI event\n");
-
+		printk(KERN_WARNING PREFIX
+		       "Failed to create genetlink family for ACPI event\n");
 	return 0;
 }
 

@@ -8,13 +8,12 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include "hashtab.h"
-#include "security.h"
 
-static struct kmem_cache *hashtab_node_cachep __ro_after_init;
+static struct kmem_cache *hashtab_node_cachep;
 
 /*
  * Here we simply round the number of elements up to the nearest power of two.
- * I tried also other options like rounding down or rounding to the closest
+ * I tried also other options like rouding down or rounding to the closest
  * power of two (up or down based on which is closer), but I was unable to
  * find any significant difference in lookup/insert performance that would
  * justify switching to a different (less intuitive) formula. It could be that

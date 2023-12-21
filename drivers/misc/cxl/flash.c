@@ -4,7 +4,6 @@
 #include <linux/semaphore.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/of.h>
 #include <asm/rtas.h>
 
 #include "cxl.h"

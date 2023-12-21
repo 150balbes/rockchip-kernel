@@ -187,11 +187,12 @@ gf100_vmm_invalidate_pdb(struct nvkm_vmm *vmm, u64 addr)
 void
 gf100_vmm_invalidate(struct nvkm_vmm *vmm, u32 type)
 {
-	struct nvkm_device *device = vmm->mmu->subdev.device;
+	struct nvkm_subdev *subdev = &vmm->mmu->subdev;
+	struct nvkm_device *device = subdev->device;
 	struct nvkm_mmu_pt *pd = vmm->pd->pt[0];
 	u64 addr = 0;
 
-	mutex_lock(&vmm->mmu->mutex);
+	mutex_lock(&subdev->mutex);
 	/* Looks like maybe a "free flush slots" counter, the
 	 * faster you write to 0x100cbc to more it decreases.
 	 */
@@ -221,7 +222,7 @@ gf100_vmm_invalidate(struct nvkm_vmm *vmm, u32 type)
 		if (nvkm_rd32(device, 0x100c80) & 0x00008000)
 			break;
 	);
-	mutex_unlock(&vmm->mmu->mutex);
+	mutex_unlock(&subdev->mutex);
 }
 
 void
@@ -287,17 +288,15 @@ gf100_vmm_valid(struct nvkm_vmm *vmm, void *argv, u32 argc,
 			return -EINVAL;
 		}
 
-		if (!map->no_comp) {
-			ret = nvkm_memory_tags_get(memory, device, tags,
-						   nvkm_ltc_tags_clear,
-						   &map->tags);
-			if (ret) {
-				VMM_DEBUG(vmm, "comp %d", ret);
-				return ret;
-			}
+		ret = nvkm_memory_tags_get(memory, device, tags,
+					   nvkm_ltc_tags_clear,
+					   &map->tags);
+		if (ret) {
+			VMM_DEBUG(vmm, "comp %d", ret);
+			return ret;
 		}
 
-		if (!map->no_comp && map->tags->mn) {
+		if (map->tags->mn) {
 			u64 tags = map->tags->mn->offset + (map->offset >> 17);
 			if (page->shift == 17 || !gm20x) {
 				map->type |= tags << 44;

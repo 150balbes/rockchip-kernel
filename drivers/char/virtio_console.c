@@ -13,7 +13,6 @@
 #include <linux/fs.h>
 #include <linux/splice.h>
 #include <linux/pagemap.h>
-#include <linux/idr.h>
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/poll.h>
@@ -29,7 +28,6 @@
 #include "../tty/hvc/hvc_console.h"
 
 #define is_rproc_enabled IS_ENABLED(CONFIG_REMOTEPROC)
-#define VIRTCONS_MAX_PORTS 0x8000
 
 /*
  * This is a global struct for storing common data for all the devices
@@ -40,21 +38,31 @@
  * across multiple devices and multiple ports per device.
  */
 struct ports_driver_data {
+	/* Used for registering chardevs */
+	struct class *class;
+
 	/* Used for exporting per-port information to debugfs */
 	struct dentry *debugfs_dir;
 
 	/* List of all the devices we're handling */
 	struct list_head portdevs;
 
+	/*
+	 * This is used to keep track of the number of hvc consoles
+	 * spawned by this driver.  This number is given as the first
+	 * argument to hvc_alloc().  To correctly map an initial
+	 * console spawned via hvc_instantiate to the console being
+	 * hooked up via hvc_alloc, we need to pass the same vtermno.
+	 *
+	 * We also just assume the first console being initialised was
+	 * the first one that got used as the initial console.
+	 */
+	unsigned int next_vtermno;
+
 	/* All the console devices handled by this driver */
 	struct list_head consoles;
 };
-
-static struct ports_driver_data pdrvdata;
-
-static const struct class port_class = {
-	.name = "virtio-ports",
-};
+static struct ports_driver_data pdrvdata = { .next_vtermno = 1};
 
 static DEFINE_SPINLOCK(pdrvdata_lock);
 static DECLARE_COMPLETION(early_console_added);
@@ -79,8 +87,6 @@ struct console {
 	 */
 	u32 vtermno;
 };
-
-static DEFINE_IDA(vtermno_ida);
 
 struct port_buffer {
 	char *buf;
@@ -1237,21 +1243,18 @@ static int init_port_console(struct port *port)
 	 * pointers.  The final argument is the output buffer size: we
 	 * can do any size, so we put PAGE_SIZE here.
 	 */
-	ret = ida_alloc_min(&vtermno_ida, 1, GFP_KERNEL);
-	if (ret < 0)
-		return ret;
+	port->cons.vtermno = pdrvdata.next_vtermno;
 
-	port->cons.vtermno = ret;
 	port->cons.hvc = hvc_alloc(port->cons.vtermno, 0, &hv_ops, PAGE_SIZE);
 	if (IS_ERR(port->cons.hvc)) {
 		ret = PTR_ERR(port->cons.hvc);
 		dev_err(port->dev,
 			"error %d allocating hvc for port\n", ret);
 		port->cons.hvc = NULL;
-		ida_free(&vtermno_ida, port->cons.vtermno);
 		return ret;
 	}
 	spin_lock_irq(&pdrvdata_lock);
+	pdrvdata.next_vtermno++;
 	list_add_tail(&port->cons.list, &pdrvdata.consoles);
 	spin_unlock_irq(&pdrvdata_lock);
 	port->guest_connected = true;
@@ -1400,7 +1403,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 			"Error %d adding cdev for port %u\n", err, id);
 		goto free_cdev;
 	}
-	port->dev = device_create(&port_class, &port->portdev->vdev->dev,
+	port->dev = device_create(pdrvdata.class, &port->portdev->vdev->dev,
 				  devt, port, "vport%up%u",
 				  port->portdev->vdev->index, id);
 	if (IS_ERR(port->dev)) {
@@ -1453,20 +1456,23 @@ static int add_port(struct ports_device *portdev, u32 id)
 	 */
 	send_control_msg(port, VIRTIO_CONSOLE_PORT_READY, 1);
 
-	/*
-	 * Finally, create the debugfs file that we can use to
-	 * inspect a port's state at any time
-	 */
-	snprintf(debugfs_name, sizeof(debugfs_name), "vport%up%u",
-		 port->portdev->vdev->index, id);
-	port->debugfs_file = debugfs_create_file(debugfs_name, 0444,
-						 pdrvdata.debugfs_dir,
-						 port, &port_debugfs_fops);
+	if (pdrvdata.debugfs_dir) {
+		/*
+		 * Finally, create the debugfs file that we can use to
+		 * inspect a port's state at any time
+		 */
+		snprintf(debugfs_name, sizeof(debugfs_name), "vport%up%u",
+			 port->portdev->vdev->index, id);
+		port->debugfs_file = debugfs_create_file(debugfs_name, 0444,
+							 pdrvdata.debugfs_dir,
+							 port,
+							 &port_debugfs_fops);
+	}
 	return 0;
 
 free_inbufs:
 free_device:
-	device_destroy(&port_class, port->dev->devt);
+	device_destroy(pdrvdata.class, port->dev->devt);
 free_cdev:
 	cdev_del(port->cdev);
 free_port:
@@ -1528,7 +1534,6 @@ static void unplug_port(struct port *port)
 		list_del(&port->cons.list);
 		spin_unlock_irq(&pdrvdata_lock);
 		hvc_remove(port->cons.hvc);
-		ida_free(&vtermno_ida, port->cons.vtermno);
 	}
 
 	remove_port_data(port);
@@ -1541,7 +1546,7 @@ static void unplug_port(struct port *port)
 	port->portdev = NULL;
 
 	sysfs_remove_group(&port->dev->kobj, &port_attribute_group);
-	device_destroy(&port_class, port->dev->devt);
+	device_destroy(pdrvdata.class, port->dev->devt);
 	cdev_del(port->cdev);
 
 	debugfs_remove(port->debugfs_file);
@@ -1667,8 +1672,9 @@ static void handle_control_message(struct virtio_device *vdev,
 				"Not enough space to store port name\n");
 			break;
 		}
-		strscpy(port->name, buf->buf + buf->offset + sizeof(*cpkt),
-			name_size);
+		strncpy(port->name, buf->buf + buf->offset + sizeof(*cpkt),
+			name_size - 1);
+		port->name[name_size - 1] = 0;
 
 		/*
 		 * Since we only have one sysfs attribute, 'name',
@@ -1936,7 +1942,6 @@ static void remove_vqs(struct ports_device *portdev)
 		flush_bufs(vq, true);
 		while ((buf = virtqueue_detach_unused_buf(vq)))
 			free_buf(buf, true);
-		cond_resched();
 	}
 	portdev->vdev->config->del_vqs(portdev->vdev);
 	kfree(portdev->in_vqs);
@@ -1962,7 +1967,7 @@ static void virtcons_remove(struct virtio_device *vdev)
 		flush_work(&portdev->config_work);
 
 	/* Disable interrupts for vqs */
-	virtio_reset_device(vdev);
+	vdev->config->reset(vdev);
 	/* Finish up work that's lined up */
 	if (use_multiport(portdev))
 		cancel_work_sync(&portdev->control_work);
@@ -2041,14 +2046,6 @@ static int virtcons_probe(struct virtio_device *vdev)
 	    virtio_cread_feature(vdev, VIRTIO_CONSOLE_F_MULTIPORT,
 				 struct virtio_console_config, max_nr_ports,
 				 &portdev->max_nr_ports) == 0) {
-		if (portdev->max_nr_ports == 0 ||
-		    portdev->max_nr_ports > VIRTCONS_MAX_PORTS) {
-			dev_err(&vdev->dev,
-				"Invalidate max_nr_ports %d",
-				portdev->max_nr_ports);
-			err = -EINVAL;
-			goto free;
-		}
 		multiport = true;
 	}
 
@@ -2152,7 +2149,7 @@ static int virtcons_freeze(struct virtio_device *vdev)
 
 	portdev = vdev->priv;
 
-	virtio_reset_device(vdev);
+	vdev->config->reset(vdev);
 
 	if (use_multiport(portdev))
 		virtqueue_disable_cb(portdev->c_ivq);
@@ -2246,11 +2243,16 @@ static int __init virtio_console_init(void)
 {
 	int err;
 
-	err = class_register(&port_class);
-	if (err)
+	pdrvdata.class = class_create(THIS_MODULE, "virtio-ports");
+	if (IS_ERR(pdrvdata.class)) {
+		err = PTR_ERR(pdrvdata.class);
+		pr_err("Error %d creating virtio-ports class\n", err);
 		return err;
+	}
 
 	pdrvdata.debugfs_dir = debugfs_create_dir("virtio-ports", NULL);
+	if (!pdrvdata.debugfs_dir)
+		pr_warn("Error creating debugfs dir for virtio-ports\n");
 	INIT_LIST_HEAD(&pdrvdata.consoles);
 	INIT_LIST_HEAD(&pdrvdata.portdevs);
 
@@ -2270,7 +2272,7 @@ unregister:
 	unregister_virtio_driver(&virtio_console);
 free:
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
-	class_unregister(&port_class);
+	class_destroy(pdrvdata.class);
 	return err;
 }
 
@@ -2281,7 +2283,7 @@ static void __exit virtio_console_fini(void)
 	unregister_virtio_driver(&virtio_console);
 	unregister_virtio_driver(&virtio_rproc_serial);
 
-	class_unregister(&port_class);
+	class_destroy(pdrvdata.class);
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
 }
 module_init(virtio_console_init);

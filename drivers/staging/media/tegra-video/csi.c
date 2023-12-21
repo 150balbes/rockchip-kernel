@@ -64,7 +64,7 @@ static const struct v4l2_frmsize_discrete tegra_csi_tpg_sizes[] = {
  * V4L2 Subdevice Pad Operations
  */
 static int csi_enum_bus_code(struct v4l2_subdev *subdev,
-			     struct v4l2_subdev_state *sd_state,
+			     struct v4l2_subdev_pad_config *cfg,
 			     struct v4l2_subdev_mbus_code_enum *code)
 {
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
@@ -79,7 +79,7 @@ static int csi_enum_bus_code(struct v4l2_subdev *subdev,
 }
 
 static int csi_get_format(struct v4l2_subdev *subdev,
-			  struct v4l2_subdev_state *sd_state,
+			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *fmt)
 {
 	struct tegra_csi_channel *csi_chan = to_csi_chan(subdev);
@@ -127,7 +127,7 @@ static void csi_chan_update_blank_intervals(struct tegra_csi_channel *csi_chan,
 }
 
 static int csi_enum_framesizes(struct v4l2_subdev *subdev,
-			       struct v4l2_subdev_state *sd_state,
+			       struct v4l2_subdev_pad_config *cfg,
 			       struct v4l2_subdev_frame_size_enum *fse)
 {
 	unsigned int i;
@@ -154,7 +154,7 @@ static int csi_enum_framesizes(struct v4l2_subdev *subdev,
 }
 
 static int csi_enum_frameintervals(struct v4l2_subdev *subdev,
-				   struct v4l2_subdev_state *sd_state,
+				   struct v4l2_subdev_pad_config *cfg,
 				   struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct tegra_csi_channel *csi_chan = to_csi_chan(subdev);
@@ -181,7 +181,7 @@ static int csi_enum_frameintervals(struct v4l2_subdev *subdev,
 }
 
 static int csi_set_format(struct v4l2_subdev *subdev,
-			  struct v4l2_subdev_state *sd_state,
+			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *fmt)
 {
 	struct tegra_csi_channel *csi_chan = to_csi_chan(subdev);
@@ -253,14 +253,13 @@ static unsigned int csi_get_pixel_rate(struct tegra_csi_channel *csi_chan)
 }
 
 void tegra_csi_calc_settle_time(struct tegra_csi_channel *csi_chan,
-				u8 csi_port_num,
 				u8 *clk_settle_time,
 				u8 *ths_settle_time)
 {
 	struct tegra_csi *csi = csi_chan->csi;
 	unsigned int cil_clk_mhz;
 	unsigned int pix_clk_mhz;
-	int clk_idx = (csi_port_num >> 1) + 1;
+	int clk_idx = (csi_chan->csi_port_num >> 1) + 1;
 
 	cil_clk_mhz = clk_get_rate(csi->clks[clk_idx].clk) / MHZ;
 	pix_clk_mhz = csi_get_pixel_rate(csi_chan) / MHZ;
@@ -298,9 +297,10 @@ static int tegra_csi_enable_stream(struct v4l2_subdev *subdev)
 	struct tegra_csi *csi = csi_chan->csi;
 	int ret, err;
 
-	ret = pm_runtime_resume_and_get(csi->dev);
+	ret = pm_runtime_get_sync(csi->dev);
 	if (ret < 0) {
 		dev_err(csi->dev, "failed to get runtime PM: %d\n", ret);
+		pm_runtime_put_noidle(csi->dev);
 		return ret;
 	}
 
@@ -328,42 +328,12 @@ static int tegra_csi_enable_stream(struct v4l2_subdev *subdev)
 	}
 
 	csi_chan->pg_mode = chan->pg_mode;
-
-	/*
-	 * Tegra CSI receiver can detect the first LP to HS transition.
-	 * So, start the CSI stream-on prior to sensor stream-on and
-	 * vice-versa for stream-off.
-	 */
 	ret = csi->ops->csi_start_streaming(csi_chan);
 	if (ret < 0)
 		goto finish_calibration;
 
-	if (csi_chan->mipi) {
-		struct v4l2_subdev *src_subdev;
-		/*
-		 * TRM has incorrectly documented to wait for done status from
-		 * calibration logic after CSI interface power on.
-		 * As per the design, calibration results are latched and applied
-		 * to the pads only when the link is in LP11 state which will happen
-		 * during the sensor stream-on.
-		 * CSI subdev stream-on triggers start of MIPI pads calibration.
-		 * Wait for calibration to finish here after sensor subdev stream-on.
-		 */
-		src_subdev = tegra_channel_get_remote_source_subdev(chan);
-		ret = v4l2_subdev_call(src_subdev, video, s_stream, true);
-
-		if (ret < 0 && ret != -ENOIOCTLCMD)
-			goto disable_csi_stream;
-
-		err = tegra_mipi_finish_calibration(csi_chan->mipi);
-		if (err < 0)
-			dev_warn(csi->dev, "MIPI calibration failed: %d\n", err);
-	}
-
 	return 0;
 
-disable_csi_stream:
-	csi->ops->csi_stop_streaming(csi_chan);
 finish_calibration:
 	if (csi_chan->mipi)
 		tegra_mipi_finish_calibration(csi_chan->mipi);
@@ -382,23 +352,9 @@ rpm_put:
 
 static int tegra_csi_disable_stream(struct v4l2_subdev *subdev)
 {
-	struct tegra_vi_channel *chan = v4l2_get_subdev_hostdata(subdev);
 	struct tegra_csi_channel *csi_chan = to_csi_chan(subdev);
 	struct tegra_csi *csi = csi_chan->csi;
 	int err;
-
-	/*
-	 * Stream-off subdevices in reverse order to stream-on.
-	 * Remote source subdev in TPG mode is same as CSI subdev.
-	 */
-	if (csi_chan->mipi) {
-		struct v4l2_subdev *src_subdev;
-
-		src_subdev = tegra_channel_get_remote_source_subdev(chan);
-		err = v4l2_subdev_call(src_subdev, video, s_stream, false);
-		if (err < 0 && err != -ENOIOCTLCMD)
-			dev_err_probe(csi->dev, err, "source subdev stream off failed\n");
-	}
 
 	csi->ops->csi_stop_streaming(csi_chan);
 
@@ -454,7 +410,7 @@ static int tegra_csi_channel_alloc(struct tegra_csi *csi,
 				   unsigned int num_pads)
 {
 	struct tegra_csi_channel *chan;
-	int ret = 0, i;
+	int ret = 0;
 
 	chan = kzalloc(sizeof(*chan), GFP_KERNEL);
 	if (!chan)
@@ -462,22 +418,9 @@ static int tegra_csi_channel_alloc(struct tegra_csi *csi,
 
 	list_add_tail(&chan->list, &csi->csi_chans);
 	chan->csi = csi;
-	/*
-	 * Each CSI brick has maximum of 4 lanes.
-	 * For lanes more than 4, use multiple of immediate CSI bricks as gang.
-	 */
-	if (lanes <= CSI_LANES_PER_BRICK) {
-		chan->numlanes = lanes;
-		chan->numgangports = 1;
-	} else {
-		chan->numlanes = CSI_LANES_PER_BRICK;
-		chan->numgangports = lanes / CSI_LANES_PER_BRICK;
-	}
-
-	for (i = 0; i < chan->numgangports; i++)
-		chan->csi_port_nums[i] = port_num + i * CSI_PORTS_PER_BRICK;
-
-	chan->of_node = of_node_get(node);
+	chan->csi_port_num = port_num;
+	chan->numlanes = lanes;
+	chan->of_node = node;
 	chan->numpads = num_pads;
 	if (num_pads & 0x2) {
 		chan->pads[0].flags = MEDIA_PAD_FL_SINK;
@@ -492,7 +435,6 @@ static int tegra_csi_channel_alloc(struct tegra_csi *csi,
 	chan->mipi = tegra_mipi_request(csi->dev, node);
 	if (IS_ERR(chan->mipi)) {
 		ret = PTR_ERR(chan->mipi);
-		chan->mipi = NULL;
 		dev_err(csi->dev, "failed to get mipi device: %d\n", ret);
 	}
 
@@ -558,14 +500,7 @@ static int tegra_csi_channels_alloc(struct tegra_csi *csi)
 		}
 
 		lanes = v4l2_ep.bus.mipi_csi2.num_data_lanes;
-		/*
-		 * Each CSI brick has maximum 4 data lanes.
-		 * For lanes more than 4, validate lanes to be multiple of 4
-		 * so multiple of consecutive CSI bricks can be ganged up for
-		 * streaming.
-		 */
-		if (!lanes || ((lanes & (lanes - 1)) != 0) ||
-		    (lanes > CSI_LANES_PER_BRICK && ((portno & 1) != 0))) {
+		if (!lanes || ((lanes & (lanes - 1)) != 0)) {
 			dev_err(csi->dev, "invalid data-lanes %d for %pOF\n",
 				lanes, channel);
 			ret = -EINVAL;
@@ -609,7 +544,7 @@ static int tegra_csi_channel_init(struct tegra_csi_channel *chan)
 	subdev->dev = csi->dev;
 	if (IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
 		snprintf(subdev->name, V4L2_SUBDEV_NAME_SIZE, "%s-%d", "tpg",
-			 chan->csi_port_nums[0]);
+			 chan->csi_port_num);
 	else
 		snprintf(subdev->name, V4L2_SUBDEV_NAME_SIZE, "%s",
 			 kbasename(chan->of_node->full_name));
@@ -661,7 +596,7 @@ static int tegra_csi_channels_init(struct tegra_csi *csi)
 		if (ret) {
 			dev_err(csi->dev,
 				"failed to initialize channel-%d: %d\n",
-				chan->csi_port_nums[0], ret);
+				chan->csi_port_num, ret);
 			return ret;
 		}
 	}
@@ -685,7 +620,6 @@ static void tegra_csi_channels_cleanup(struct tegra_csi *csi)
 			media_entity_cleanup(&subdev->entity);
 		}
 
-		of_node_put(chan->of_node);
 		list_del(&chan->list);
 		kfree(chan);
 	}
@@ -822,17 +756,19 @@ rpm_disable:
 static int tegra_csi_remove(struct platform_device *pdev)
 {
 	struct tegra_csi *csi = platform_get_drvdata(pdev);
+	int err;
 
-	host1x_client_unregister(&csi->client);
+	err = host1x_client_unregister(&csi->client);
+	if (err < 0) {
+		dev_err(&pdev->dev,
+			"failed to unregister host1x client: %d\n", err);
+		return err;
+	}
 
 	pm_runtime_disable(&pdev->dev);
 
 	return 0;
 }
-
-#if defined(CONFIG_ARCH_TEGRA_210_SOC)
-extern const struct tegra_csi_soc tegra210_csi_soc;
-#endif
 
 static const struct of_device_id tegra_csi_of_id_table[] = {
 #if defined(CONFIG_ARCH_TEGRA_210_SOC)

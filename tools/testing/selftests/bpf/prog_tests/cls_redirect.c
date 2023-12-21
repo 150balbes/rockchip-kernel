@@ -7,13 +7,11 @@
 #include <string.h>
 
 #include <linux/pkt_cls.h>
-#include <netinet/tcp.h>
 
 #include <test_progs.h>
 
 #include "progs/test_cls_redirect.h"
 #include "test_cls_redirect.skel.h"
-#include "test_cls_redirect_dynptr.skel.h"
 #include "test_cls_redirect_subprogs.skel.h"
 
 #define ENCAP_IP INADDR_LOOPBACK
@@ -162,7 +160,7 @@ static socklen_t prepare_addr(struct sockaddr_storage *addr, int family)
 	}
 }
 
-static bool was_decapsulated(struct bpf_test_run_opts *tattr)
+static bool was_decapsulated(struct bpf_prog_test_run_attr *tattr)
 {
 	return tattr->data_size_out < tattr->data_size_in;
 }
@@ -368,12 +366,12 @@ static void close_fds(int *fds, int n)
 
 static void test_cls_redirect_common(struct bpf_program *prog)
 {
-	LIBBPF_OPTS(bpf_test_run_opts, tattr);
+	struct bpf_prog_test_run_attr tattr = {};
 	int families[] = { AF_INET, AF_INET6 };
 	struct sockaddr_storage ss;
 	struct sockaddr *addr;
 	socklen_t slen;
-	int i, j, err, prog_fd;
+	int i, j, err;
 	int servers[__NR_KIND][ARRAY_SIZE(families)] = {};
 	int conns[__NR_KIND][ARRAY_SIZE(families)] = {};
 	struct tuple tuples[__NR_KIND][ARRAY_SIZE(families)];
@@ -395,7 +393,7 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 			goto cleanup;
 	}
 
-	prog_fd = bpf_program__fd(prog);
+	tattr.prog_fd = bpf_program__fd(prog);
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		struct test_cfg *test = &tests[i];
 
@@ -416,7 +414,7 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 			if (CHECK_FAIL(!tattr.data_size_in))
 				continue;
 
-			err = bpf_prog_test_run_opts(prog_fd, &tattr);
+			err = bpf_prog_test_run_xattr(&tattr);
 			if (CHECK_FAIL(err))
 				continue;
 
@@ -445,28 +443,6 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 cleanup:
 	close_fds((int *)servers, sizeof(servers) / sizeof(servers[0][0]));
 	close_fds((int *)conns, sizeof(conns) / sizeof(conns[0][0]));
-}
-
-static void test_cls_redirect_dynptr(void)
-{
-	struct test_cls_redirect_dynptr *skel;
-	int err;
-
-	skel = test_cls_redirect_dynptr__open();
-	if (!ASSERT_OK_PTR(skel, "skel_open"))
-		return;
-
-	skel->rodata->ENCAPSULATION_IP = htonl(ENCAP_IP);
-	skel->rodata->ENCAPSULATION_PORT = htons(ENCAP_PORT);
-
-	err = test_cls_redirect_dynptr__load(skel);
-	if (!ASSERT_OK(err, "skel_load"))
-		goto cleanup;
-
-	test_cls_redirect_common(skel->progs.cls_redirect);
-
-cleanup:
-	test_cls_redirect_dynptr__destroy(skel);
 }
 
 static void test_cls_redirect_inlined(void)
@@ -519,6 +495,4 @@ void test_cls_redirect(void)
 		test_cls_redirect_inlined();
 	if (test__start_subtest("cls_redirect_subprogs"))
 		test_cls_redirect_subprogs();
-	if (test__start_subtest("cls_redirect_dynptr"))
-		test_cls_redirect_dynptr();
 }

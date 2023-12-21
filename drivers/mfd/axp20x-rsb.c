@@ -49,11 +49,11 @@ static int axp20x_rsb_probe(struct sunxi_rsb_device *rdev)
 	return axp20x_device_probe(axp20x);
 }
 
-static void axp20x_rsb_remove(struct sunxi_rsb_device *rdev)
+static int axp20x_rsb_remove(struct sunxi_rsb_device *rdev)
 {
 	struct axp20x_dev *axp20x = sunxi_rsb_device_get_drvdata(rdev);
 
-	axp20x_device_remove(axp20x);
+	return axp20x_device_remove(axp20x);
 }
 
 static const struct of_device_id axp20x_rsb_of_match[] = {

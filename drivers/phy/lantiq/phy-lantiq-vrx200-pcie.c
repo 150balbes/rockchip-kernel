@@ -402,6 +402,7 @@ static int ltq_vrx200_pcie_phy_probe(struct platform_device *pdev)
 	struct ltq_vrx200_pcie_phy_priv *priv;
 	struct device *dev = &pdev->dev;
 	struct phy_provider *provider;
+	struct resource *res;
 	void __iomem *base;
 	int ret;
 
@@ -409,7 +410,8 @@ static int ltq_vrx200_pcie_phy_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 

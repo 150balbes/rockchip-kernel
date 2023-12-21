@@ -42,6 +42,8 @@
 
 /* The first bunch of module clocks are exported */
 
+#define CLK_DRAM		96
+
 /* All the DRAM gates are exported */
 
 /* Some more module clocks are exported */

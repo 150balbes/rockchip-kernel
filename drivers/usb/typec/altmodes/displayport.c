@@ -47,6 +47,17 @@ enum {
 					 BIT(DP_PIN_ASSIGN_D) | \
 					 BIT(DP_PIN_ASSIGN_F))
 
+/*
+ * A UFP_U that uses a USB Type-C plug describes the pin assignments supported
+ * for the corresponding receptacle. (i.e., a UFP_D will describe the DFP_D pin
+ * assignments to which it connects), whereas a UFP_U that uses a USB Type-C
+ * receptacle describes its pin assignments directly (i.e., a UFP_D will
+ * describe its own UFP_D pin assignments).
+ */
+#define DP_CAP_PIN_ASSIGN(_cap_)	(((_cap_) & DP_CAP_RECEPTACLE) ? \
+					 DP_CAP_UFP_D_PIN_ASSIGN(_cap_) : \
+					 DP_CAP_DFP_D_PIN_ASSIGN(_cap_))
+
 enum dp_state {
 	DP_STATE_IDLE,
 	DP_STATE_ENTER,
@@ -70,17 +81,10 @@ struct dp_altmode {
 
 static int dp_altmode_notify(struct dp_altmode *dp)
 {
-	unsigned long conf;
-	u8 state;
+	u8 state = get_count_order(DP_CONF_GET_PIN_ASSIGN(dp->data.conf));
 
-	if (dp->data.conf) {
-		state = get_count_order(DP_CONF_GET_PIN_ASSIGN(dp->data.conf));
-		conf = TYPEC_MODAL_STATE(state);
-	} else {
-		conf = TYPEC_STATE_USB;
-	}
-
-	return typec_altmode_notify(dp->alt, conf, &dp->data);
+	return typec_altmode_notify(dp->alt, TYPEC_MODAL_STATE(state),
+				   &dp->data);
 }
 
 static int dp_altmode_configure(struct dp_altmode *dp, u8 con)
@@ -93,14 +97,10 @@ static int dp_altmode_configure(struct dp_altmode *dp, u8 con)
 		return 0;
 	case DP_STATUS_CON_DFP_D:
 		conf |= DP_CONF_UFP_U_AS_DFP_D;
-		pin_assign = DP_CAP_UFP_D_PIN_ASSIGN(dp->alt->vdo) &
-			     DP_CAP_DFP_D_PIN_ASSIGN(dp->port->vdo);
 		break;
 	case DP_STATUS_CON_UFP_D:
 	case DP_STATUS_CON_BOTH: /* NOTE: First acting as DP source */
 		conf |= DP_CONF_UFP_U_AS_UFP_D;
-		pin_assign = DP_CAP_PIN_ASSIGN_UFP_D(dp->alt->vdo) &
-				 DP_CAP_PIN_ASSIGN_DFP_D(dp->port->vdo);
 		break;
 	default:
 		break;
@@ -108,16 +108,21 @@ static int dp_altmode_configure(struct dp_altmode *dp, u8 con)
 
 	/* Determining the initial pin assignment. */
 	if (!DP_CONF_GET_PIN_ASSIGN(dp->data.conf)) {
+		pin_assign = DP_CAP_PIN_ASSIGN(dp->alt->vdo);
+
 		/* Is USB together with DP preferred */
 		if (dp->data.status & DP_STATUS_PREFER_MULTI_FUNC &&
 		    pin_assign & DP_PIN_ASSIGN_MULTI_FUNC_MASK)
 			pin_assign &= DP_PIN_ASSIGN_MULTI_FUNC_MASK;
-		else if (pin_assign & DP_PIN_ASSIGN_DP_ONLY_MASK) {
+		else if (pin_assign & DP_PIN_ASSIGN_DP_ONLY_MASK)
 			pin_assign &= DP_PIN_ASSIGN_DP_ONLY_MASK;
-			/* Default to pin assign C if available */
-			if (pin_assign & BIT(DP_PIN_ASSIGN_C))
-				pin_assign = BIT(DP_PIN_ASSIGN_C);
-		}
+
+		/*
+		 * DFP_U never selects Pin Assignment E when Pin Assignment C
+		 * and possibly Pin Assignment D are offered by the UFP_U.
+		 */
+		if (pin_assign & (BIT(DP_PIN_ASSIGN_C) | BIT(DP_PIN_ASSIGN_D)))
+			pin_assign &= ~BIT(DP_PIN_ASSIGN_E);
 
 		if (!pin_assign)
 			return -EINVAL;
@@ -150,7 +155,6 @@ static int dp_altmode_status_update(struct dp_altmode *dp)
 		if (dp->hpd != hpd) {
 			drm_connector_oob_hotplug_event(dp->connector_fwnode);
 			dp->hpd = hpd;
-			sysfs_notify(&dp->alt->dev.kobj, "displayport", "hpd");
 		}
 	}
 
@@ -159,10 +163,21 @@ static int dp_altmode_status_update(struct dp_altmode *dp)
 
 static int dp_altmode_configured(struct dp_altmode *dp)
 {
+	int ret;
+
 	sysfs_notify(&dp->alt->dev.kobj, "displayport", "configuration");
+
+	if (!dp->data.conf)
+		return typec_altmode_notify(dp->alt, TYPEC_STATE_USB,
+					    &dp->data);
+
+	ret = dp_altmode_notify(dp);
+	if (ret)
+		return ret;
+
 	sysfs_notify(&dp->alt->dev.kobj, "displayport", "pin_assignment");
 
-	return dp_altmode_notify(dp);
+	return 0;
 }
 
 static int dp_altmode_configure_vdm(struct dp_altmode *dp, u32 conf)
@@ -183,8 +198,13 @@ static int dp_altmode_configure_vdm(struct dp_altmode *dp, u32 conf)
 	}
 
 	ret = typec_altmode_vdm(dp->alt, header, &conf, 2);
-	if (ret)
-		dp_altmode_notify(dp);
+	if (ret) {
+		if (DP_CONF_GET_PIN_ASSIGN(dp->data.conf))
+			dp_altmode_notify(dp);
+		else
+			typec_altmode_notify(dp->alt, TYPEC_STATE_USB,
+					     &dp->data);
+	}
 
 	return ret;
 }
@@ -281,11 +301,9 @@ static int dp_altmode_vdm(struct typec_altmode *alt,
 	case CMDT_RSP_ACK:
 		switch (cmd) {
 		case CMD_ENTER_MODE:
-			typec_altmode_update_active(alt, true);
 			dp->state = DP_STATE_UPDATE;
 			break;
 		case CMD_EXIT_MODE:
-			typec_altmode_update_active(alt, false);
 			dp->data.status = 0;
 			dp->data.conf = 0;
 			break;
@@ -426,18 +444,6 @@ static const char * const pin_assignments[] = {
 	[DP_PIN_ASSIGN_F] = "F",
 };
 
-/*
- * Helper function to extract a peripheral's currently supported
- * Pin Assignments from its DisplayPort alternate mode state.
- */
-static u8 get_current_pin_assignments(struct dp_altmode *dp)
-{
-	if (DP_CONF_CURRENTLY(dp->data.conf) == DP_CONF_UFP_U_AS_DFP_D)
-		return DP_CAP_PIN_ASSIGN_DFP_D(dp->alt->vdo);
-	else
-		return DP_CAP_PIN_ASSIGN_UFP_D(dp->alt->vdo);
-}
-
 static ssize_t
 pin_assignment_store(struct device *dev, struct device_attribute *attr,
 		     const char *buf, size_t size)
@@ -464,7 +470,7 @@ pin_assignment_store(struct device *dev, struct device_attribute *attr,
 		goto out_unlock;
 	}
 
-	assignments = get_current_pin_assignments(dp);
+	assignments = DP_CAP_PIN_ASSIGN(dp->alt->vdo);
 
 	if (!(DP_CONF_GET_PIN_ASSIGN(conf) & assignments)) {
 		ret = -EINVAL;
@@ -501,7 +507,7 @@ static ssize_t pin_assignment_show(struct device *dev,
 
 	cur = get_count_order(DP_CONF_GET_PIN_ASSIGN(dp->data.conf));
 
-	assignments = get_current_pin_assignments(dp);
+	assignments = DP_CAP_PIN_ASSIGN(dp->alt->vdo);
 
 	for (i = 0; assignments; assignments >>= 1, i++) {
 		if (assignments & 1) {
@@ -516,27 +522,14 @@ static ssize_t pin_assignment_show(struct device *dev,
 
 	mutex_unlock(&dp->lock);
 
-	/* get_current_pin_assignments can return 0 when no matching pin assignments are found */
-	if (len == 0)
-		len++;
-
 	buf[len - 1] = '\n';
 	return len;
 }
 static DEVICE_ATTR_RW(pin_assignment);
 
-static ssize_t hpd_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct dp_altmode *dp = dev_get_drvdata(dev);
-
-	return sysfs_emit(buf, "%d\n", dp->hpd);
-}
-static DEVICE_ATTR_RO(hpd);
-
 static struct attribute *dp_altmode_attrs[] = {
 	&dev_attr_configuration.attr,
 	&dev_attr_pin_assignment.attr,
-	&dev_attr_hpd.attr,
 	NULL
 };
 
@@ -555,10 +548,10 @@ int dp_altmode_probe(struct typec_altmode *alt)
 	/* FIXME: Port can only be DFP_U. */
 
 	/* Make sure we have compatiple pin configurations */
-	if (!(DP_CAP_PIN_ASSIGN_DFP_D(port->vdo) &
-	      DP_CAP_PIN_ASSIGN_UFP_D(alt->vdo)) &&
-	    !(DP_CAP_PIN_ASSIGN_UFP_D(port->vdo) &
-	      DP_CAP_PIN_ASSIGN_DFP_D(alt->vdo)))
+	if (!(DP_CAP_DFP_D_PIN_ASSIGN(port->vdo) &
+	      DP_CAP_UFP_D_PIN_ASSIGN(alt->vdo)) &&
+	    !(DP_CAP_UFP_D_PIN_ASSIGN(port->vdo) &
+	      DP_CAP_DFP_D_PIN_ASSIGN(alt->vdo)))
 		return -ENODEV;
 
 	ret = sysfs_create_group(&alt->dev.kobj, &dp_altmode_group);

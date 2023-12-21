@@ -30,6 +30,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -43,7 +44,8 @@ void iser_reg_comp(struct ib_cq *cq, struct ib_wc *wc)
 	iser_err_comp(wc, "memreg");
 }
 
-static struct iser_fr_desc *iser_reg_desc_get_fr(struct ib_conn *ib_conn)
+static struct iser_fr_desc *
+iser_reg_desc_get_fr(struct ib_conn *ib_conn)
 {
 	struct iser_fr_pool *fr_pool = &ib_conn->fr_pool;
 	struct iser_fr_desc *desc;
@@ -58,8 +60,9 @@ static struct iser_fr_desc *iser_reg_desc_get_fr(struct ib_conn *ib_conn)
 	return desc;
 }
 
-static void iser_reg_desc_put_fr(struct ib_conn *ib_conn,
-				 struct iser_fr_desc *desc)
+static void
+iser_reg_desc_put_fr(struct ib_conn *ib_conn,
+		     struct iser_fr_desc *desc)
 {
 	struct iser_fr_pool *fr_pool = &ib_conn->fr_pool;
 	unsigned long flags;
@@ -70,10 +73,10 @@ static void iser_reg_desc_put_fr(struct ib_conn *ib_conn,
 }
 
 int iser_dma_map_task_data(struct iscsi_iser_task *iser_task,
-			   enum iser_data_dir iser_dir,
-			   enum dma_data_direction dma_dir)
+			    struct iser_data_buf *data,
+			    enum iser_data_dir iser_dir,
+			    enum dma_data_direction dma_dir)
 {
-	struct iser_data_buf *data = &iser_task->data[iser_dir];
 	struct ib_device *dev;
 
 	iser_task->dir[iser_dir] = 1;
@@ -84,44 +87,22 @@ int iser_dma_map_task_data(struct iscsi_iser_task *iser_task,
 		iser_err("dma_map_sg failed!!!\n");
 		return -EINVAL;
 	}
-
-	if (scsi_prot_sg_count(iser_task->sc)) {
-		struct iser_data_buf *pdata = &iser_task->prot[iser_dir];
-
-		pdata->dma_nents = ib_dma_map_sg(dev, pdata->sg, pdata->size, dma_dir);
-		if (unlikely(pdata->dma_nents == 0)) {
-			iser_err("protection dma_map_sg failed!!!\n");
-			goto out_unmap;
-		}
-	}
-
 	return 0;
-
-out_unmap:
-	ib_dma_unmap_sg(dev, data->sg, data->size, dma_dir);
-	return -EINVAL;
 }
 
-
 void iser_dma_unmap_task_data(struct iscsi_iser_task *iser_task,
-			      enum iser_data_dir iser_dir,
-			      enum dma_data_direction dma_dir)
+			      struct iser_data_buf *data,
+			      enum dma_data_direction dir)
 {
-	struct iser_data_buf *data = &iser_task->data[iser_dir];
 	struct ib_device *dev;
 
 	dev = iser_task->iser_conn->ib_conn.device->ib_device;
-	ib_dma_unmap_sg(dev, data->sg, data->size, dma_dir);
-
-	if (scsi_prot_sg_count(iser_task->sc)) {
-		struct iser_data_buf *pdata = &iser_task->prot[iser_dir];
-
-		ib_dma_unmap_sg(dev, pdata->sg, pdata->size, dma_dir);
-	}
+	ib_dma_unmap_sg(dev, data->sg, data->size, dir);
 }
 
-static int iser_reg_dma(struct iser_device *device, struct iser_data_buf *mem,
-			struct iser_mem_reg *reg)
+static int
+iser_reg_dma(struct iser_device *device, struct iser_data_buf *mem,
+	     struct iser_mem_reg *reg)
 {
 	struct scatterlist *sg = mem->sg;
 
@@ -152,7 +133,7 @@ void iser_unreg_mem_fastreg(struct iscsi_iser_task *iser_task,
 	struct iser_fr_desc *desc;
 	struct ib_mr_status mr_status;
 
-	desc = reg->desc;
+	desc = reg->mem_h;
 	if (!desc)
 		return;
 
@@ -169,16 +150,16 @@ void iser_unreg_mem_fastreg(struct iscsi_iser_task *iser_task,
 		ib_check_mr_status(desc->rsc.sig_mr, IB_MR_CHECK_SIG_STATUS,
 				   &mr_status);
 	}
-	iser_reg_desc_put_fr(&iser_task->iser_conn->ib_conn, reg->desc);
-	reg->desc = NULL;
+	iser_reg_desc_put_fr(&iser_task->iser_conn->ib_conn, reg->mem_h);
+	reg->mem_h = NULL;
 }
 
-static void iser_set_dif_domain(struct scsi_cmnd *sc,
-				struct ib_sig_domain *domain)
+static void
+iser_set_dif_domain(struct scsi_cmnd *sc, struct ib_sig_domain *domain)
 {
 	domain->sig_type = IB_SIG_TYPE_T10_DIF;
 	domain->sig.dif.pi_interval = scsi_prot_interval(sc);
-	domain->sig.dif.ref_tag = t10_pi_ref_tag(scsi_cmd_to_rq(sc));
+	domain->sig.dif.ref_tag = t10_pi_ref_tag(sc->request);
 	/*
 	 * At the moment we hard code those, but in the future
 	 * we will take them from sc.
@@ -188,10 +169,10 @@ static void iser_set_dif_domain(struct scsi_cmnd *sc,
 	domain->sig.dif.ref_escape = true;
 	if (sc->prot_flags & SCSI_PROT_REF_INCREMENT)
 		domain->sig.dif.ref_remap = true;
-}
+};
 
-static int iser_set_sig_attrs(struct scsi_cmnd *sc,
-			      struct ib_sig_attrs *sig_attrs)
+static int
+iser_set_sig_attrs(struct scsi_cmnd *sc, struct ib_sig_attrs *sig_attrs)
 {
 	switch (scsi_get_prot_op(sc)) {
 	case SCSI_PROT_WRITE_INSERT:
@@ -224,7 +205,8 @@ static int iser_set_sig_attrs(struct scsi_cmnd *sc,
 	return 0;
 }
 
-static inline void iser_set_prot_checks(struct scsi_cmnd *sc, u8 *mask)
+static inline void
+iser_set_prot_checks(struct scsi_cmnd *sc, u8 *mask)
 {
 	*mask = 0;
 	if (sc->prot_flags & SCSI_PROT_REF_CHECK)
@@ -233,8 +215,11 @@ static inline void iser_set_prot_checks(struct scsi_cmnd *sc, u8 *mask)
 		*mask |= IB_SIG_CHECK_GUARD;
 }
 
-static inline void iser_inv_rkey(struct ib_send_wr *inv_wr, struct ib_mr *mr,
-				 struct ib_cqe *cqe, struct ib_send_wr *next_wr)
+static inline void
+iser_inv_rkey(struct ib_send_wr *inv_wr,
+	      struct ib_mr *mr,
+	      struct ib_cqe *cqe,
+	      struct ib_send_wr *next_wr)
 {
 	inv_wr->opcode = IB_WR_LOCAL_INV;
 	inv_wr->wr_cqe = cqe;
@@ -244,11 +229,12 @@ static inline void iser_inv_rkey(struct ib_send_wr *inv_wr, struct ib_mr *mr,
 	inv_wr->next = next_wr;
 }
 
-static int iser_reg_sig_mr(struct iscsi_iser_task *iser_task,
-			   struct iser_data_buf *mem,
-			   struct iser_data_buf *sig_mem,
-			   struct iser_reg_resources *rsc,
-			   struct iser_mem_reg *sig_reg)
+static int
+iser_reg_sig_mr(struct iscsi_iser_task *iser_task,
+		struct iser_data_buf *mem,
+		struct iser_data_buf *sig_mem,
+		struct iser_reg_resources *rsc,
+		struct iser_mem_reg *sig_reg)
 {
 	struct iser_tx_desc *tx_desc = &iser_task->desc;
 	struct ib_cqe *cqe = &iser_task->iser_conn->ib_conn.reg_cqe;
@@ -349,26 +335,42 @@ static int iser_fast_reg_mr(struct iscsi_iser_task *iser_task,
 	return 0;
 }
 
+static int
+iser_reg_data_sg(struct iscsi_iser_task *task,
+		 struct iser_data_buf *mem,
+		 struct iser_fr_desc *desc,
+		 bool use_dma_key,
+		 struct iser_mem_reg *reg)
+{
+	struct iser_device *device = task->iser_conn->ib_conn.device;
+
+	if (use_dma_key)
+		return iser_reg_dma(device, mem, reg);
+
+	return iser_fast_reg_mr(task, mem, &desc->rsc, reg);
+}
+
 int iser_reg_mem_fastreg(struct iscsi_iser_task *task,
 			 enum iser_data_dir dir,
 			 bool all_imm)
 {
 	struct ib_conn *ib_conn = &task->iser_conn->ib_conn;
-	struct iser_device *device = ib_conn->device;
 	struct iser_data_buf *mem = &task->data[dir];
 	struct iser_mem_reg *reg = &task->rdma_reg[dir];
-	struct iser_fr_desc *desc;
+	struct iser_fr_desc *desc = NULL;
 	bool use_dma_key;
 	int err;
 
 	use_dma_key = mem->dma_nents == 1 && (all_imm || !iser_always_reg) &&
 		      scsi_get_prot_op(task->sc) == SCSI_PROT_NORMAL;
-	if (use_dma_key)
-		return iser_reg_dma(device, mem, reg);
 
-	desc = iser_reg_desc_get_fr(ib_conn);
+	if (!use_dma_key) {
+		desc = iser_reg_desc_get_fr(ib_conn);
+		reg->mem_h = desc;
+	}
+
 	if (scsi_get_prot_op(task->sc) == SCSI_PROT_NORMAL) {
-		err = iser_fast_reg_mr(task, mem, &desc->rsc, reg);
+		err = iser_reg_data_sg(task, mem, desc, use_dma_key, reg);
 		if (unlikely(err))
 			goto err_reg;
 	} else {
@@ -380,12 +382,12 @@ int iser_reg_mem_fastreg(struct iscsi_iser_task *task,
 		desc->sig_protected = true;
 	}
 
-	reg->desc = desc;
-
 	return 0;
 
 err_reg:
-	iser_reg_desc_put_fr(ib_conn, desc);
+	if (desc)
+		iser_reg_desc_put_fr(ib_conn, desc);
 
 	return err;
 }
+

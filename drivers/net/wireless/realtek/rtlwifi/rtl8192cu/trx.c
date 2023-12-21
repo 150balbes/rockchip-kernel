@@ -394,7 +394,7 @@ static void _rtl_rx_process(struct ieee80211_hw *hw, struct sk_buff *skb)
 				 (struct rx_desc_92c *)rxdesc, p_drvinfo);
 	}
 	skb_pull(skb, (drvinfo_len + RTL_RX_DESC_SIZE));
-	hdr = rtl_get_hdr(skb);
+	hdr = (struct ieee80211_hdr *)(skb->data);
 	fc = hdr->frame_control;
 	bv = ieee80211_is_probe_resp(fc);
 	if (bv)
@@ -448,7 +448,7 @@ static void _rtl_fill_usb_tx_desc(__le32 *txdesc)
 	set_tx_desc_first_seg(txdesc, 1);
 }
 
-/*
+/**
  *	For HW recovery information
  */
 static void _rtl_tx_desc_checksum(__le32 *txdesc)
@@ -540,7 +540,7 @@ void rtl92cu_tx_fill_desc(struct ieee80211_hw *hw,
 	rcu_read_lock();
 	sta = ieee80211_find_sta(mac->vif, mac->bssid);
 	if (sta) {
-		u8 ampdu_density = sta->deflink.ht_cap.ampdu_density;
+		u8 ampdu_density = sta->ht_cap.ampdu_density;
 
 		set_tx_desc_ampdu_density(txdesc, ampdu_density);
 	}
@@ -632,7 +632,7 @@ void rtl92cu_tx_fill_cmddesc(struct ieee80211_hw *hw,
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	u8 fw_queue = QSLT_BEACON;
-	struct ieee80211_hdr *hdr = rtl_get_hdr(skb);
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)(skb->data);
 	__le16 fc = hdr->frame_control;
 	__le32 *pdesc = (__le32 *)pdesc8;
 

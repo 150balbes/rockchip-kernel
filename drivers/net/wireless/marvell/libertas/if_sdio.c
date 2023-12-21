@@ -981,7 +981,7 @@ out:
 
 static int if_sdio_enter_deep_sleep(struct lbs_private *priv)
 {
-	int ret;
+	int ret = -1;
 	struct cmd_header cmd;
 
 	memset(&cmd, 0, sizeof(cmd));

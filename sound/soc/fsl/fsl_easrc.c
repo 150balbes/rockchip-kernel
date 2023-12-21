@@ -380,7 +380,7 @@ static int fsl_easrc_resampler_config(struct fsl_asrc *easrc)
 }
 
 /**
- *  fsl_easrc_normalize_filter - Scale filter coefficients (64 bits float)
+ *  Scale filter coefficients (64 bits float)
  *  For input float32 normalized range (1.0,-1.0) -> output int[16,24,32]:
  *      scale it by multiplying filter coefficients by 2^31
  *  For input int[16, 24, 32] -> output float32
@@ -749,7 +749,7 @@ static int fsl_easrc_config_one_slot(struct fsl_asrc_pair *ctx,
 {
 	struct fsl_asrc *easrc = ctx->asrc;
 	struct fsl_easrc_ctx_priv *ctx_priv = ctx->private;
-	int st1_chanxexp, st1_mem_alloc = 0, st2_mem_alloc;
+	int st1_chanxexp, st1_mem_alloc = 0, st2_mem_alloc = 0;
 	unsigned int reg0, reg1, reg2, reg3;
 	unsigned int addr;
 
@@ -1329,7 +1329,7 @@ static int fsl_easrc_stop_context(struct fsl_asrc_pair *ctx)
 {
 	struct fsl_asrc *easrc = ctx->asrc;
 	int val, i;
-	int size;
+	int size = 0;
 	int retry = 200;
 
 	regmap_read(easrc->regmap, REG_EASRC_CC(ctx->index), &val);
@@ -1531,7 +1531,7 @@ static int fsl_easrc_hw_free(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static const struct snd_soc_dai_ops fsl_easrc_dai_ops = {
+static struct snd_soc_dai_ops fsl_easrc_dai_ops = {
 	.startup = fsl_easrc_startup,
 	.trigger = fsl_easrc_trigger,
 	.hw_params = fsl_easrc_hw_params,
@@ -1573,10 +1573,9 @@ static struct snd_soc_dai_driver fsl_easrc_dai = {
 };
 
 static const struct snd_soc_component_driver fsl_easrc_component = {
-	.name			= "fsl-easrc-dai",
-	.controls		= fsl_easrc_snd_controls,
-	.num_controls		= ARRAY_SIZE(fsl_easrc_snd_controls),
-	.legacy_dai_naming	= 1,
+	.name		= "fsl-easrc-dai",
+	.controls       = fsl_easrc_snd_controls,
+	.num_controls   = ARRAY_SIZE(fsl_easrc_snd_controls),
 };
 
 static const struct reg_default fsl_easrc_reg_defaults[] = {
@@ -1890,21 +1889,27 @@ static int fsl_easrc_probe(struct platform_device *pdev)
 	easrc->private = easrc_priv;
 	np = dev->of_node;
 
-	regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(regs))
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(dev, res);
+	if (IS_ERR(regs)) {
+		dev_err(&pdev->dev, "failed ioremap\n");
 		return PTR_ERR(regs);
+	}
 
 	easrc->paddr = res->start;
 
-	easrc->regmap = devm_regmap_init_mmio(dev, regs, &fsl_easrc_regmap_config);
+	easrc->regmap = devm_regmap_init_mmio_clk(dev, "mem", regs,
+						  &fsl_easrc_regmap_config);
 	if (IS_ERR(easrc->regmap)) {
 		dev_err(dev, "failed to init regmap");
 		return PTR_ERR(easrc->regmap);
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(dev, "no irq for node %pOF\n", np);
 		return irq;
+	}
 
 	ret = devm_request_irq(&pdev->dev, irq, fsl_easrc_isr, 0,
 			       dev_name(dev), easrc);
@@ -1979,9 +1984,11 @@ static int fsl_easrc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void fsl_easrc_remove(struct platform_device *pdev)
+static int fsl_easrc_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static __maybe_unused int fsl_easrc_runtime_suspend(struct device *dev)
@@ -2091,7 +2098,7 @@ static const struct dev_pm_ops fsl_easrc_pm_ops = {
 
 static struct platform_driver fsl_easrc_driver = {
 	.probe = fsl_easrc_probe,
-	.remove_new = fsl_easrc_remove,
+	.remove = fsl_easrc_remove,
 	.driver = {
 		.name = "fsl-easrc",
 		.pm = &fsl_easrc_pm_ops,

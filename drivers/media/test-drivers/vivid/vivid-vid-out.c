@@ -793,6 +793,11 @@ int vivid_vid_out_s_selection(struct file *file, void *fh, struct v4l2_selection
 		}
 		s->r.top *= factor;
 		s->r.height *= factor;
+		if (dev->bitmap_out && (compose->width != s->r.width ||
+					compose->height != s->r.height)) {
+			vfree(dev->bitmap_out);
+			dev->bitmap_out = NULL;
+		}
 		*compose = s->r;
 		break;
 	default:
@@ -831,6 +836,7 @@ int vidioc_g_fmt_vid_out_overlay(struct file *file, void *priv,
 	struct vivid_dev *dev = video_drvdata(file);
 	const struct v4l2_rect *compose = &dev->compose_out;
 	struct v4l2_window *win = &f->fmt.win;
+	unsigned clipcount = win->clipcount;
 
 	if (!dev->has_fb)
 		return -EINVAL;
@@ -838,9 +844,24 @@ int vidioc_g_fmt_vid_out_overlay(struct file *file, void *priv,
 	win->w.left = dev->overlay_out_left;
 	win->w.width = compose->width;
 	win->w.height = compose->height;
+	win->clipcount = dev->clipcount_out;
 	win->field = V4L2_FIELD_ANY;
 	win->chromakey = dev->chromakey_out;
 	win->global_alpha = dev->global_alpha_out;
+	if (clipcount > dev->clipcount_out)
+		clipcount = dev->clipcount_out;
+	if (dev->bitmap_out == NULL)
+		win->bitmap = NULL;
+	else if (win->bitmap) {
+		if (copy_to_user(win->bitmap, dev->bitmap_out,
+		    ((dev->compose_out.width + 7) / 8) * dev->compose_out.height))
+			return -EFAULT;
+	}
+	if (clipcount && win->clips) {
+		if (copy_to_user(win->clips, dev->clips_out,
+				 clipcount * sizeof(dev->clips_out[0])))
+			return -EFAULT;
+	}
 	return 0;
 }
 
@@ -850,6 +871,7 @@ int vidioc_try_fmt_vid_out_overlay(struct file *file, void *priv,
 	struct vivid_dev *dev = video_drvdata(file);
 	const struct v4l2_rect *compose = &dev->compose_out;
 	struct v4l2_window *win = &f->fmt.win;
+	int i, j;
 
 	if (!dev->has_fb)
 		return -EINVAL;
@@ -864,6 +886,40 @@ int vidioc_try_fmt_vid_out_overlay(struct file *file, void *priv,
 	 * so always set this to ANY.
 	 */
 	win->field = V4L2_FIELD_ANY;
+	if (win->clipcount && !win->clips)
+		win->clipcount = 0;
+	if (win->clipcount > MAX_CLIPS)
+		win->clipcount = MAX_CLIPS;
+	if (win->clipcount) {
+		if (copy_from_user(dev->try_clips_out, win->clips,
+				   win->clipcount * sizeof(dev->clips_out[0])))
+			return -EFAULT;
+		for (i = 0; i < win->clipcount; i++) {
+			struct v4l2_rect *r = &dev->try_clips_out[i].c;
+
+			r->top = clamp_t(s32, r->top, 0, dev->display_height - 1);
+			r->height = clamp_t(s32, r->height, 1, dev->display_height - r->top);
+			r->left = clamp_t(u32, r->left, 0, dev->display_width - 1);
+			r->width = clamp_t(u32, r->width, 1, dev->display_width - r->left);
+		}
+		/*
+		 * Yeah, so sue me, it's an O(n^2) algorithm. But n is a small
+		 * number and it's typically a one-time deal.
+		 */
+		for (i = 0; i < win->clipcount - 1; i++) {
+			struct v4l2_rect *r1 = &dev->try_clips_out[i].c;
+
+			for (j = i + 1; j < win->clipcount; j++) {
+				struct v4l2_rect *r2 = &dev->try_clips_out[j].c;
+
+				if (v4l2_rect_overlap(r1, r2))
+					return -EINVAL;
+			}
+		}
+		if (copy_to_user(win->clips, dev->try_clips_out,
+				 win->clipcount * sizeof(dev->clips_out[0])))
+			return -EFAULT;
+	}
 	return 0;
 }
 
@@ -871,14 +927,34 @@ int vidioc_s_fmt_vid_out_overlay(struct file *file, void *priv,
 					struct v4l2_format *f)
 {
 	struct vivid_dev *dev = video_drvdata(file);
+	const struct v4l2_rect *compose = &dev->compose_out;
 	struct v4l2_window *win = &f->fmt.win;
 	int ret = vidioc_try_fmt_vid_out_overlay(file, priv, f);
+	unsigned bitmap_size = ((compose->width + 7) / 8) * compose->height;
+	unsigned clips_size = win->clipcount * sizeof(dev->clips_out[0]);
+	void *new_bitmap = NULL;
 
 	if (ret)
 		return ret;
 
+	if (win->bitmap) {
+		new_bitmap = vzalloc(bitmap_size);
+
+		if (!new_bitmap)
+			return -ENOMEM;
+		if (copy_from_user(new_bitmap, win->bitmap, bitmap_size)) {
+			vfree(new_bitmap);
+			return -EFAULT;
+		}
+	}
+
 	dev->overlay_out_top = win->w.top;
 	dev->overlay_out_left = win->w.left;
+	vfree(dev->bitmap_out);
+	dev->bitmap_out = new_bitmap;
+	dev->clipcount_out = win->clipcount;
+	if (dev->clipcount_out)
+		memcpy(dev->clips_out, dev->try_clips_out, clips_size);
 	dev->chromakey_out = win->chromakey;
 	dev->global_alpha_out = win->global_alpha;
 	return ret;
@@ -903,6 +979,8 @@ int vivid_vid_out_g_fbuf(struct file *file, void *fh,
 	struct vivid_dev *dev = video_drvdata(file);
 
 	a->capability = V4L2_FBUF_CAP_EXTERNOVERLAY |
+			V4L2_FBUF_CAP_BITMAP_CLIPPING |
+			V4L2_FBUF_CAP_LIST_CLIPPING |
 			V4L2_FBUF_CAP_CHROMAKEY |
 			V4L2_FBUF_CAP_SRC_CHROMAKEY |
 			V4L2_FBUF_CAP_GLOBAL_ALPHA |

@@ -35,7 +35,6 @@
  */
 
 #include "i915_drv.h"
-#include "i915_reg.h"
 #include "gt/intel_ggtt_fencing.h"
 #include "gvt.h"
 
@@ -64,7 +63,7 @@ static int alloc_gm(struct intel_vgpu *vgpu, bool high_gm)
 
 	mutex_lock(&gt->ggtt->vm.mutex);
 	mmio_hw_access_pre(gt);
-	ret = i915_gem_gtt_insert(&gt->ggtt->vm, NULL, node,
+	ret = i915_gem_gtt_insert(&gt->ggtt->vm, node,
 				  size, I915_GTT_PAGE_SIZE,
 				  I915_COLOR_UNEVICTABLE,
 				  start, end, flags);
@@ -240,13 +239,13 @@ static void free_resource(struct intel_vgpu *vgpu)
 }
 
 static int alloc_resource(struct intel_vgpu *vgpu,
-		const struct intel_vgpu_config *conf)
+		struct intel_vgpu_creation_params *param)
 {
 	struct intel_gvt *gvt = vgpu->gvt;
 	unsigned long request, avail, max, taken;
 	const char *item;
 
-	if (!conf->low_mm || !conf->high_mm || !conf->fence) {
+	if (!param->low_gm_sz || !param->high_gm_sz || !param->fence_sz) {
 		gvt_vgpu_err("Invalid vGPU creation params\n");
 		return -EINVAL;
 	}
@@ -255,7 +254,7 @@ static int alloc_resource(struct intel_vgpu *vgpu,
 	max = gvt_aperture_sz(gvt) - HOST_LOW_GM_SIZE;
 	taken = gvt->gm.vgpu_allocated_low_gm_size;
 	avail = max - taken;
-	request = conf->low_mm;
+	request = MB_TO_BYTES(param->low_gm_sz);
 
 	if (request > avail)
 		goto no_enough_resource;
@@ -266,7 +265,7 @@ static int alloc_resource(struct intel_vgpu *vgpu,
 	max = gvt_hidden_sz(gvt) - HOST_HIGH_GM_SIZE;
 	taken = gvt->gm.vgpu_allocated_high_gm_size;
 	avail = max - taken;
-	request = conf->high_mm;
+	request = MB_TO_BYTES(param->high_gm_sz);
 
 	if (request > avail)
 		goto no_enough_resource;
@@ -277,16 +276,16 @@ static int alloc_resource(struct intel_vgpu *vgpu,
 	max = gvt_fence_sz(gvt) - HOST_FENCE;
 	taken = gvt->fence.vgpu_allocated_fence_num;
 	avail = max - taken;
-	request = conf->fence;
+	request = param->fence_sz;
 
 	if (request > avail)
 		goto no_enough_resource;
 
 	vgpu_fence_sz(vgpu) = request;
 
-	gvt->gm.vgpu_allocated_low_gm_size += conf->low_mm;
-	gvt->gm.vgpu_allocated_high_gm_size += conf->high_mm;
-	gvt->fence.vgpu_allocated_fence_num += conf->fence;
+	gvt->gm.vgpu_allocated_low_gm_size += MB_TO_BYTES(param->low_gm_sz);
+	gvt->gm.vgpu_allocated_high_gm_size += MB_TO_BYTES(param->high_gm_sz);
+	gvt->fence.vgpu_allocated_fence_num += param->fence_sz;
 	return 0;
 
 no_enough_resource:
@@ -298,7 +297,7 @@ no_enough_resource:
 }
 
 /**
- * intel_vgpu_free_resource() - free HW resource owned by a vGPU
+ * inte_gvt_free_vgpu_resource - free HW resource owned by a vGPU
  * @vgpu: a vGPU
  *
  * This function is used to free the HW resource owned by a vGPU.
@@ -328,9 +327,9 @@ void intel_vgpu_reset_resource(struct intel_vgpu *vgpu)
 }
 
 /**
- * intel_vgpu_alloc_resource() - allocate HW resource for a vGPU
+ * intel_alloc_vgpu_resource - allocate HW resource for a vGPU
  * @vgpu: vGPU
- * @conf: vGPU creation params
+ * @param: vGPU creation params
  *
  * This function is used to allocate HW resource for a vGPU. User specifies
  * the resource configuration through the creation params.
@@ -340,11 +339,11 @@ void intel_vgpu_reset_resource(struct intel_vgpu *vgpu)
  *
  */
 int intel_vgpu_alloc_resource(struct intel_vgpu *vgpu,
-		const struct intel_vgpu_config *conf)
+		struct intel_vgpu_creation_params *param)
 {
 	int ret;
 
-	ret = alloc_resource(vgpu, conf);
+	ret = alloc_resource(vgpu, param);
 	if (ret)
 		return ret;
 

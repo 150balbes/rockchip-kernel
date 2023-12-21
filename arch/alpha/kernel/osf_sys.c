@@ -36,7 +36,6 @@
 #include <linux/types.h>
 #include <linux/ipc.h>
 #include <linux/namei.h>
-#include <linux/mount.h>
 #include <linux/uio.h>
 #include <linux/vfs.h>
 #include <linux/rcupdate.h>
@@ -108,7 +107,7 @@ struct osf_dirent_callback {
 	int error;
 };
 
-static bool
+static int
 osf_filldir(struct dir_context *ctx, const char *name, int namlen,
 	    loff_t offset, u64 ino, unsigned int d_type)
 {
@@ -120,11 +119,11 @@ osf_filldir(struct dir_context *ctx, const char *name, int namlen,
 
 	buf->error = -EINVAL;	/* only used if we fail */
 	if (reclen > buf->count)
-		return false;
+		return -EINVAL;
 	d_ino = ino;
 	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino) {
 		buf->error = -EOVERFLOW;
-		return false;
+		return -EOVERFLOW;
 	}
 	if (buf->basep) {
 		if (put_user(offset, buf->basep))
@@ -141,10 +140,10 @@ osf_filldir(struct dir_context *ctx, const char *name, int namlen,
 	dirent = (void __user *)dirent + reclen;
 	buf->dirent = dirent;
 	buf->count -= reclen;
-	return true;
+	return 0;
 Efault:
 	buf->error = -EFAULT;
-	return false;
+	return -EFAULT;
 }
 
 SYSCALL_DEFINE4(osf_getdirentries, unsigned int, fd,
@@ -522,7 +521,7 @@ SYSCALL_DEFINE4(osf_mount, unsigned long, typenr, const char __user *, path,
 		break;
 	default:
 		retval = -EINVAL;
-		printk_ratelimited("osf_mount(%ld, %x)\n", typenr, flag);
+		printk("osf_mount(%ld, %x)\n", typenr, flag);
 	}
 
 	return retval;
@@ -835,7 +834,7 @@ SYSCALL_DEFINE5(osf_setsysinfo, unsigned long, op, void __user *, buffer,
 			return -EFAULT;
 		state = &current_thread_info()->ieee_state;
 
-		/* Update software trap enable bits.  */
+		/* Update softare trap enable bits.  */
 		*state = (*state & ~IEEE_SW_MASK) | (swcr & IEEE_SW_MASK);
 
 		/* Update the real fpcr.  */
@@ -855,7 +854,7 @@ SYSCALL_DEFINE5(osf_setsysinfo, unsigned long, op, void __user *, buffer,
 		state = &current_thread_info()->ieee_state;
 		exc &= IEEE_STATUS_MASK;
 
-		/* Update software trap enable bits.  */
+		/* Update softare trap enable bits.  */
  		swcr = (*state & IEEE_SW_MASK) | exc;
 		*state |= exc;
 
@@ -877,7 +876,7 @@ SYSCALL_DEFINE5(osf_setsysinfo, unsigned long, op, void __user *, buffer,
 			if (fex & IEEE_TRAP_ENABLE_DZE) si_code = FPE_FLTDIV;
 			if (fex & IEEE_TRAP_ENABLE_INV) si_code = FPE_FLTINV;
 
-			send_sig_fault_trapno(SIGFPE, si_code,
+			send_sig_fault(SIGFPE, si_code,
 				       (void __user *)NULL,  /* FIXME */
 				       0, current);
  		}
@@ -1013,6 +1012,8 @@ SYSCALL_DEFINE2(osf_settimeofday, struct timeval32 __user *, tv,
 
 	return do_sys_settimeofday64(tv ? &kts : NULL, tz ? &ktz : NULL);
 }
+
+asmlinkage long sys_ni_posix_timers(void);
 
 SYSCALL_DEFINE2(osf_utimes, const char __user *, filename,
 		struct timeval32 __user *, tvs)
@@ -1274,6 +1275,48 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	addr = arch_get_unmapped_area_1 (PAGE_SIZE, len, limit);
 
 	return addr;
+}
+
+#ifdef CONFIG_OSF4_COMPAT
+/* Clear top 32 bits of iov_len in the user's buffer for
+   compatibility with old versions of OSF/1 where iov_len
+   was defined as int. */
+static int
+osf_fix_iov_len(const struct iovec __user *iov, unsigned long count)
+{
+	unsigned long i;
+
+	for (i = 0 ; i < count ; i++) {
+		int __user *iov_len_high = (int __user *)&iov[i].iov_len + 1;
+
+		if (put_user(0, iov_len_high))
+			return -EFAULT;
+	}
+	return 0;
+}
+#endif
+
+SYSCALL_DEFINE3(osf_readv, unsigned long, fd,
+		const struct iovec __user *, vector, unsigned long, count)
+{
+#ifdef CONFIG_OSF4_COMPAT
+	if (unlikely(personality(current->personality) == PER_OSF4))
+		if (osf_fix_iov_len(vector, count))
+			return -EFAULT;
+#endif
+
+	return sys_readv(fd, vector, count);
+}
+
+SYSCALL_DEFINE3(osf_writev, unsigned long, fd,
+		const struct iovec __user *, vector, unsigned long, count)
+{
+#ifdef CONFIG_OSF4_COMPAT
+	if (unlikely(personality(current->personality) == PER_OSF4))
+		if (osf_fix_iov_len(vector, count))
+			return -EFAULT;
+#endif
+	return sys_writev(fd, vector, count);
 }
 
 SYSCALL_DEFINE2(osf_getpriority, int, which, int, who)

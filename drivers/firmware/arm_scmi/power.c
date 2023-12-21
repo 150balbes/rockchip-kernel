@@ -2,7 +2,7 @@
 /*
  * System Control and Management Interface (SCMI) Power Protocol
  *
- * Copyright (C) 2018-2022 ARM Ltd.
+ * Copyright (C) 2018-2020 ARM Ltd.
  */
 
 #define pr_fmt(fmt) "SCMI Notifications POWER - " fmt
@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/scmi_protocol.h>
 
-#include "protocols.h"
+#include "common.h"
 #include "notify.h"
 
 enum scmi_power_protocol_cmd {
@@ -18,7 +18,6 @@ enum scmi_power_protocol_cmd {
 	POWER_STATE_SET = 0x4,
 	POWER_STATE_GET = 0x5,
 	POWER_STATE_NOTIFY = 0x6,
-	POWER_DOMAIN_NAME_GET = 0x8,
 };
 
 struct scmi_msg_resp_power_attributes {
@@ -34,8 +33,7 @@ struct scmi_msg_resp_power_domain_attributes {
 #define SUPPORTS_STATE_SET_NOTIFY(x)	((x) & BIT(31))
 #define SUPPORTS_STATE_SET_ASYNC(x)	((x) & BIT(30))
 #define SUPPORTS_STATE_SET_SYNC(x)	((x) & BIT(29))
-#define SUPPORTS_EXTENDED_NAMES(x)	((x) & BIT(27))
-	    u8 name[SCMI_SHORT_NAME_MAX_SIZE];
+	    u8 name[SCMI_MAX_STR_SIZE];
 };
 
 struct scmi_power_set_state {
@@ -99,11 +97,9 @@ static int scmi_power_attributes_get(const struct scmi_protocol_handle *ph,
 
 static int
 scmi_power_domain_attributes_get(const struct scmi_protocol_handle *ph,
-				 u32 domain, struct power_dom_info *dom_info,
-				 u32 version)
+				 u32 domain, struct power_dom_info *dom_info)
 {
 	int ret;
-	u32 flags;
 	struct scmi_xfer *t;
 	struct scmi_msg_resp_power_domain_attributes *attr;
 
@@ -117,26 +113,15 @@ scmi_power_domain_attributes_get(const struct scmi_protocol_handle *ph,
 
 	ret = ph->xops->do_xfer(ph, t);
 	if (!ret) {
-		flags = le32_to_cpu(attr->flags);
+		u32 flags = le32_to_cpu(attr->flags);
 
 		dom_info->state_set_notify = SUPPORTS_STATE_SET_NOTIFY(flags);
 		dom_info->state_set_async = SUPPORTS_STATE_SET_ASYNC(flags);
 		dom_info->state_set_sync = SUPPORTS_STATE_SET_SYNC(flags);
-		strscpy(dom_info->name, attr->name, SCMI_SHORT_NAME_MAX_SIZE);
+		strlcpy(dom_info->name, attr->name, SCMI_MAX_STR_SIZE);
 	}
+
 	ph->xops->xfer_put(ph, t);
-
-	/*
-	 * If supported overwrite short name with the extended one;
-	 * on error just carry on and use already provided short name.
-	 */
-	if (!ret && PROTOCOL_REV_MAJOR(version) >= 0x3 &&
-	    SUPPORTS_EXTENDED_NAMES(flags)) {
-		ph->hops->extended_name_get(ph, POWER_DOMAIN_NAME_GET,
-					    domain, dom_info->name,
-					    SCMI_MAX_STR_SIZE);
-	}
-
 	return ret;
 }
 
@@ -189,9 +174,8 @@ static int scmi_power_num_domains_get(const struct scmi_protocol_handle *ph)
 	return pi->num_domains;
 }
 
-static const char *
-scmi_power_name_get(const struct scmi_protocol_handle *ph,
-		    u32 domain)
+static char *scmi_power_name_get(const struct scmi_protocol_handle *ph,
+				 u32 domain)
 {
 	struct scmi_power_info *pi = ph->get_priv(ph);
 	struct power_dom_info *dom = pi->dom_info + domain;
@@ -296,13 +280,11 @@ static const struct scmi_protocol_events power_protocol_events = {
 
 static int scmi_power_protocol_init(const struct scmi_protocol_handle *ph)
 {
-	int domain, ret;
+	int domain;
 	u32 version;
 	struct scmi_power_info *pinfo;
 
-	ret = ph->xops->version_get(ph, &version);
-	if (ret)
-		return ret;
+	ph->xops->version_get(ph, &version);
 
 	dev_dbg(ph->dev, "Power Version %d.%d\n",
 		PROTOCOL_REV_MAJOR(version), PROTOCOL_REV_MINOR(version));
@@ -311,9 +293,7 @@ static int scmi_power_protocol_init(const struct scmi_protocol_handle *ph)
 	if (!pinfo)
 		return -ENOMEM;
 
-	ret = scmi_power_attributes_get(ph, pinfo);
-	if (ret)
-		return ret;
+	scmi_power_attributes_get(ph, pinfo);
 
 	pinfo->dom_info = devm_kcalloc(ph->dev, pinfo->num_domains,
 				       sizeof(*pinfo->dom_info), GFP_KERNEL);
@@ -323,7 +303,7 @@ static int scmi_power_protocol_init(const struct scmi_protocol_handle *ph)
 	for (domain = 0; domain < pinfo->num_domains; domain++) {
 		struct power_dom_info *dom = pinfo->dom_info + domain;
 
-		scmi_power_domain_attributes_get(ph, domain, dom, version);
+		scmi_power_domain_attributes_get(ph, domain, dom);
 	}
 
 	pinfo->version = version;
@@ -334,7 +314,7 @@ static int scmi_power_protocol_init(const struct scmi_protocol_handle *ph)
 static const struct scmi_protocol scmi_power = {
 	.id = SCMI_PROTOCOL_POWER,
 	.owner = THIS_MODULE,
-	.instance_init = &scmi_power_protocol_init,
+	.init_instance = &scmi_power_protocol_init,
 	.ops = &power_proto_ops,
 	.events = &power_protocol_events,
 };

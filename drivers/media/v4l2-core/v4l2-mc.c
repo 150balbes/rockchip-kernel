@@ -105,11 +105,9 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 	/* Link the tuner and IF video output pads */
 	if (tuner) {
 		if (if_vid) {
-			pad_source = media_get_pad_index(tuner,
-							 MEDIA_PAD_FL_SOURCE,
+			pad_source = media_get_pad_index(tuner, false,
 							 PAD_SIGNAL_ANALOG);
-			pad_sink = media_get_pad_index(if_vid,
-						       MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(if_vid, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_source < 0 || pad_sink < 0) {
 				dev_warn(mdev->dev, "Couldn't get tuner and/or PLL pad(s): (%d, %d)\n",
@@ -124,11 +122,9 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 				return ret;
 			}
 
-			pad_source = media_get_pad_index(if_vid,
-							 MEDIA_PAD_FL_SOURCE,
+			pad_source = media_get_pad_index(if_vid, false,
 							 PAD_SIGNAL_ANALOG);
-			pad_sink = media_get_pad_index(decoder,
-						       MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(decoder, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_source < 0 || pad_sink < 0) {
 				dev_warn(mdev->dev, "get decoder and/or PLL pad(s): (%d, %d)\n",
@@ -143,11 +139,9 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 				return ret;
 			}
 		} else {
-			pad_source = media_get_pad_index(tuner,
-							 MEDIA_PAD_FL_SOURCE,
+			pad_source = media_get_pad_index(tuner, false,
 							 PAD_SIGNAL_ANALOG);
-			pad_sink = media_get_pad_index(decoder,
-						       MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(decoder, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_source < 0 || pad_sink < 0) {
 				dev_warn(mdev->dev, "couldn't get tuner and/or decoder pad(s): (%d, %d)\n",
@@ -162,11 +156,9 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 		}
 
 		if (if_aud) {
-			pad_source = media_get_pad_index(tuner,
-							 MEDIA_PAD_FL_SOURCE,
+			pad_source = media_get_pad_index(tuner, false,
 							 PAD_SIGNAL_AUDIO);
-			pad_sink = media_get_pad_index(if_aud,
-						       MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(if_aud, true,
 						       PAD_SIGNAL_AUDIO);
 			if (pad_source < 0 || pad_sink < 0) {
 				dev_warn(mdev->dev, "couldn't get tuner and/or decoder pad(s) for audio: (%d, %d)\n",
@@ -188,8 +180,7 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 
 	/* Create demod to V4L, VBI and SDR radio links */
 	if (io_v4l) {
-		pad_source = media_get_pad_index(decoder, MEDIA_PAD_FL_SOURCE,
-						 PAD_SIGNAL_DV);
+		pad_source = media_get_pad_index(decoder, false, PAD_SIGNAL_DV);
 		if (pad_source < 0) {
 			dev_warn(mdev->dev, "couldn't get decoder output pad for V4L I/O\n");
 			return -EINVAL;
@@ -204,8 +195,7 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 	}
 
 	if (io_swradio) {
-		pad_source = media_get_pad_index(decoder, MEDIA_PAD_FL_SOURCE,
-						 PAD_SIGNAL_DV);
+		pad_source = media_get_pad_index(decoder, false, PAD_SIGNAL_DV);
 		if (pad_source < 0) {
 			dev_warn(mdev->dev, "couldn't get decoder output pad for SDR\n");
 			return -EINVAL;
@@ -220,8 +210,7 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 	}
 
 	if (io_vbi) {
-		pad_source = media_get_pad_index(decoder, MEDIA_PAD_FL_SOURCE,
-						 PAD_SIGNAL_DV);
+		pad_source = media_get_pad_index(decoder, false, PAD_SIGNAL_DV);
 		if (pad_source < 0) {
 			dev_warn(mdev->dev, "couldn't get decoder output pad for VBI\n");
 			return -EINVAL;
@@ -242,7 +231,7 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 		case MEDIA_ENT_F_CONN_RF:
 			if (!tuner)
 				continue;
-			pad_sink = media_get_pad_index(tuner, MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(tuner, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_sink < 0) {
 				dev_warn(mdev->dev, "couldn't get tuner analog pad sink\n");
@@ -254,11 +243,10 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 			break;
 		case MEDIA_ENT_F_CONN_SVIDEO:
 		case MEDIA_ENT_F_CONN_COMPOSITE:
-			pad_sink = media_get_pad_index(decoder,
-						       MEDIA_PAD_FL_SINK,
+			pad_sink = media_get_pad_index(decoder, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_sink < 0) {
-				dev_warn(mdev->dev, "couldn't get decoder analog pad sink\n");
+				dev_warn(mdev->dev, "couldn't get tuner analog pad sink\n");
 				return -EINVAL;
 			}
 			ret = media_create_pad_link(entity, 0, decoder,
@@ -322,12 +310,16 @@ int v4l_vb2q_enable_media_source(struct vb2_queue *q)
 EXPORT_SYMBOL_GPL(v4l_vb2q_enable_media_source);
 
 int v4l2_create_fwnode_links_to_pad(struct v4l2_subdev *src_sd,
-				    struct media_pad *sink, u32 flags)
+				    struct media_pad *sink)
 {
 	struct fwnode_handle *endpoint;
+	struct v4l2_subdev *sink_sd;
 
-	if (!(sink->flags & MEDIA_PAD_FL_SINK))
+	if (!(sink->flags & MEDIA_PAD_FL_SINK) ||
+	    !is_media_entity_v4l2_subdev(sink->entity))
 		return -EINVAL;
+
+	sink_sd = media_entity_to_v4l2_subdev(sink->entity);
 
 	fwnode_graph_for_each_endpoint(dev_fwnode(src_sd->dev), endpoint) {
 		struct fwnode_handle *remote_ep;
@@ -348,7 +340,7 @@ int v4l2_create_fwnode_links_to_pad(struct v4l2_subdev *src_sd,
 		 * ask the sink to verify it owns the remote endpoint,
 		 * and translate to a sink pad.
 		 */
-		sink_idx = media_entity_get_fwnode_pad(sink->entity,
+		sink_idx = media_entity_get_fwnode_pad(&sink_sd->entity,
 						       remote_ep,
 						       MEDIA_PAD_FL_SINK);
 		fwnode_handle_put(remote_ep);
@@ -370,17 +362,17 @@ int v4l2_create_fwnode_links_to_pad(struct v4l2_subdev *src_sd,
 		if (media_entity_find_link(src, sink))
 			continue;
 
-		dev_dbg(src_sd->dev, "creating link %s:%d -> %s:%d\n",
+		dev_dbg(sink_sd->dev, "creating link %s:%d -> %s:%d\n",
 			src_sd->entity.name, src_idx,
-			sink->entity->name, sink_idx);
+			sink_sd->entity.name, sink_idx);
 
 		ret = media_create_pad_link(&src_sd->entity, src_idx,
-					    sink->entity, sink_idx, flags);
+					    &sink_sd->entity, sink_idx, 0);
 		if (ret) {
-			dev_err(src_sd->dev,
+			dev_err(sink_sd->dev,
 				"link %s:%d -> %s:%d failed with %d\n",
 				src_sd->entity.name, src_idx,
-				sink->entity->name, sink_idx, ret);
+				sink_sd->entity.name, sink_idx, ret);
 
 			fwnode_handle_put(endpoint);
 			return ret;
@@ -403,7 +395,7 @@ int v4l2_create_fwnode_links(struct v4l2_subdev *src_sd,
 		if (!(pad->flags & MEDIA_PAD_FL_SINK))
 			continue;
 
-		ret = v4l2_create_fwnode_links_to_pad(src_sd, pad, 0);
+		ret = v4l2_create_fwnode_links_to_pad(src_sd, pad);
 		if (ret)
 			return ret;
 	}

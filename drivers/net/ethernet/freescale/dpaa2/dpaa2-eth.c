@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
 /* Copyright 2014-2016 Freescale Semiconductor Inc.
- * Copyright 2016-2022 NXP
+ * Copyright 2016-2020 NXP
  */
 #include <linux/init.h>
 #include <linux/module.h>
@@ -8,6 +8,7 @@
 #include <linux/etherdevice.h>
 #include <linux/of_net.h>
 #include <linux/interrupt.h>
+#include <linux/msi.h>
 #include <linux/kthread.h>
 #include <linux/iommu.h>
 #include <linux/fsl/mc.h>
@@ -17,8 +18,6 @@
 #include <linux/ptp_classify.h>
 #include <net/pkt_cls.h>
 #include <net/sock.h>
-#include <net/tso.h>
-#include <net/xdp_sock_drv.h>
 
 #include "dpaa2-eth.h"
 
@@ -35,77 +34,8 @@ MODULE_DESCRIPTION("Freescale DPAA2 Ethernet Driver");
 struct ptp_qoriq *dpaa2_ptp;
 EXPORT_SYMBOL(dpaa2_ptp);
 
-static void dpaa2_eth_detect_features(struct dpaa2_eth_priv *priv)
-{
-	priv->features = 0;
-
-	if (dpaa2_eth_cmp_dpni_ver(priv, DPNI_PTP_ONESTEP_VER_MAJOR,
-				   DPNI_PTP_ONESTEP_VER_MINOR) >= 0)
-		priv->features |= DPAA2_ETH_FEATURE_ONESTEP_CFG_DIRECT;
-}
-
-static void dpaa2_update_ptp_onestep_indirect(struct dpaa2_eth_priv *priv,
-					      u32 offset, u8 udp)
-{
-	struct dpni_single_step_cfg cfg;
-
-	cfg.en = 1;
-	cfg.ch_update = udp;
-	cfg.offset = offset;
-	cfg.peer_delay = 0;
-
-	if (dpni_set_single_step_cfg(priv->mc_io, 0, priv->mc_token, &cfg))
-		WARN_ONCE(1, "Failed to set single step register");
-}
-
-static void dpaa2_update_ptp_onestep_direct(struct dpaa2_eth_priv *priv,
-					    u32 offset, u8 udp)
-{
-	u32 val = 0;
-
-	val = DPAA2_PTP_SINGLE_STEP_ENABLE |
-	       DPAA2_PTP_SINGLE_CORRECTION_OFF(offset);
-
-	if (udp)
-		val |= DPAA2_PTP_SINGLE_STEP_CH;
-
-	if (priv->onestep_reg_base)
-		writel(val, priv->onestep_reg_base);
-}
-
-static void dpaa2_ptp_onestep_reg_update_method(struct dpaa2_eth_priv *priv)
-{
-	struct device *dev = priv->net_dev->dev.parent;
-	struct dpni_single_step_cfg ptp_cfg;
-
-	priv->dpaa2_set_onestep_params_cb = dpaa2_update_ptp_onestep_indirect;
-
-	if (!(priv->features & DPAA2_ETH_FEATURE_ONESTEP_CFG_DIRECT))
-		return;
-
-	if (dpni_get_single_step_cfg(priv->mc_io, 0,
-				     priv->mc_token, &ptp_cfg)) {
-		dev_err(dev, "dpni_get_single_step_cfg cannot retrieve onestep reg, falling back to indirect update\n");
-		return;
-	}
-
-	if (!ptp_cfg.ptp_onestep_reg_base) {
-		dev_err(dev, "1588 onestep reg not available, falling back to indirect update\n");
-		return;
-	}
-
-	priv->onestep_reg_base = ioremap(ptp_cfg.ptp_onestep_reg_base,
-					 sizeof(u32));
-	if (!priv->onestep_reg_base) {
-		dev_err(dev, "1588 onestep reg cannot be mapped, falling back to indirect update\n");
-		return;
-	}
-
-	priv->dpaa2_set_onestep_params_cb = dpaa2_update_ptp_onestep_direct;
-}
-
-void *dpaa2_iova_to_virt(struct iommu_domain *domain,
-			 dma_addr_t iova_addr)
+static void *dpaa2_iova_to_virt(struct iommu_domain *domain,
+				dma_addr_t iova_addr)
 {
 	phys_addr_t phys_addr;
 
@@ -279,56 +209,45 @@ static struct sk_buff *dpaa2_eth_build_frag_skb(struct dpaa2_eth_priv *priv,
  * be released in the pool
  */
 static void dpaa2_eth_free_bufs(struct dpaa2_eth_priv *priv, u64 *buf_array,
-				int count, bool xsk_zc)
+				int count)
 {
 	struct device *dev = priv->net_dev->dev.parent;
-	struct dpaa2_eth_swa *swa;
-	struct xdp_buff *xdp_buff;
 	void *vaddr;
 	int i;
 
 	for (i = 0; i < count; i++) {
 		vaddr = dpaa2_iova_to_virt(priv->iommu_domain, buf_array[i]);
-
-		if (!xsk_zc) {
-			dma_unmap_page(dev, buf_array[i], priv->rx_buf_size,
-				       DMA_BIDIRECTIONAL);
-			free_pages((unsigned long)vaddr, 0);
-		} else {
-			swa = (struct dpaa2_eth_swa *)
-				(vaddr + DPAA2_ETH_RX_HWA_SIZE);
-			xdp_buff = swa->xsk.xdp_buff;
-			xsk_buff_free(xdp_buff);
-		}
+		dma_unmap_page(dev, buf_array[i], priv->rx_buf_size,
+			       DMA_BIDIRECTIONAL);
+		free_pages((unsigned long)vaddr, 0);
 	}
 }
 
-void dpaa2_eth_recycle_buf(struct dpaa2_eth_priv *priv,
-			   struct dpaa2_eth_channel *ch,
-			   dma_addr_t addr)
+static void dpaa2_eth_xdp_release_buf(struct dpaa2_eth_priv *priv,
+				      struct dpaa2_eth_channel *ch,
+				      dma_addr_t addr)
 {
 	int retries = 0;
 	int err;
 
-	ch->recycled_bufs[ch->recycled_bufs_cnt++] = addr;
-	if (ch->recycled_bufs_cnt < DPAA2_ETH_BUFS_PER_CMD)
+	ch->xdp.drop_bufs[ch->xdp.drop_cnt++] = addr;
+	if (ch->xdp.drop_cnt < DPAA2_ETH_BUFS_PER_CMD)
 		return;
 
-	while ((err = dpaa2_io_service_release(ch->dpio, ch->bp->bpid,
-					       ch->recycled_bufs,
-					       ch->recycled_bufs_cnt)) == -EBUSY) {
+	while ((err = dpaa2_io_service_release(ch->dpio, priv->bpid,
+					       ch->xdp.drop_bufs,
+					       ch->xdp.drop_cnt)) == -EBUSY) {
 		if (retries++ >= DPAA2_ETH_SWP_BUSY_RETRIES)
 			break;
 		cpu_relax();
 	}
 
 	if (err) {
-		dpaa2_eth_free_bufs(priv, ch->recycled_bufs,
-				    ch->recycled_bufs_cnt, ch->xsk_zc);
-		ch->buf_count -= ch->recycled_bufs_cnt;
+		dpaa2_eth_free_bufs(priv, ch->xdp.drop_bufs, ch->xdp.drop_cnt);
+		ch->buf_count -= ch->xdp.drop_cnt;
 	}
 
-	ch->recycled_bufs_cnt = 0;
+	ch->xdp.drop_cnt = 0;
 }
 
 static int dpaa2_eth_xdp_flush(struct dpaa2_eth_priv *priv,
@@ -381,17 +300,17 @@ static void dpaa2_eth_xdp_tx_flush(struct dpaa2_eth_priv *priv,
 		ch->stats.xdp_tx++;
 	}
 	for (i = enqueued; i < fq->xdp_tx_fds.num; i++) {
-		dpaa2_eth_recycle_buf(priv, ch, dpaa2_fd_get_addr(&fds[i]));
+		dpaa2_eth_xdp_release_buf(priv, ch, dpaa2_fd_get_addr(&fds[i]));
 		percpu_stats->tx_errors++;
 		ch->stats.xdp_tx_err++;
 	}
 	fq->xdp_tx_fds.num = 0;
 }
 
-void dpaa2_eth_xdp_enqueue(struct dpaa2_eth_priv *priv,
-			   struct dpaa2_eth_channel *ch,
-			   struct dpaa2_fd *fd,
-			   void *buf_start, u16 queue_id)
+static void dpaa2_eth_xdp_enqueue(struct dpaa2_eth_priv *priv,
+				  struct dpaa2_eth_channel *ch,
+				  struct dpaa2_fd *fd,
+				  void *buf_start, u16 queue_id)
 {
 	struct dpaa2_faead *faead;
 	struct dpaa2_fd *dest_fd;
@@ -431,16 +350,22 @@ static u32 dpaa2_eth_run_xdp(struct dpaa2_eth_priv *priv,
 	struct bpf_prog *xdp_prog;
 	struct xdp_buff xdp;
 	u32 xdp_act = XDP_PASS;
-	int err, offset;
+	int err;
+
+	rcu_read_lock();
 
 	xdp_prog = READ_ONCE(ch->xdp.prog);
 	if (!xdp_prog)
 		goto out;
 
-	offset = dpaa2_fd_get_offset(fd) - XDP_PACKET_HEADROOM;
-	xdp_init_buff(&xdp, DPAA2_ETH_RX_BUF_RAW_SIZE - offset, &ch->xdp_rxq);
-	xdp_prepare_buff(&xdp, vaddr + offset, XDP_PACKET_HEADROOM,
-			 dpaa2_fd_get_len(fd), false);
+	xdp.data = vaddr + dpaa2_fd_get_offset(fd);
+	xdp.data_end = xdp.data + dpaa2_fd_get_len(fd);
+	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM;
+	xdp_set_data_meta_invalid(&xdp);
+	xdp.rxq = &ch->xdp_rxq;
+
+	xdp.frame_sz = DPAA2_ETH_RX_BUF_RAW_SIZE -
+		(dpaa2_fd_get_offset(fd) - XDP_PACKET_HEADROOM);
 
 	xdp_act = bpf_prog_run_xdp(xdp_prog, &xdp);
 
@@ -455,13 +380,13 @@ static u32 dpaa2_eth_run_xdp(struct dpaa2_eth_priv *priv,
 		dpaa2_eth_xdp_enqueue(priv, ch, fd, vaddr, rx_fq->flowid);
 		break;
 	default:
-		bpf_warn_invalid_xdp_action(priv->net_dev, xdp_prog, xdp_act);
+		bpf_warn_invalid_xdp_action(xdp_act);
 		fallthrough;
 	case XDP_ABORTED:
 		trace_xdp_exception(priv->net_dev, xdp_prog, xdp_act);
 		fallthrough;
 	case XDP_DROP:
-		dpaa2_eth_recycle_buf(priv, ch, addr);
+		dpaa2_eth_xdp_release_buf(priv, ch, addr);
 		ch->stats.xdp_drop++;
 		break;
 	case XDP_REDIRECT:
@@ -482,7 +407,7 @@ static u32 dpaa2_eth_run_xdp(struct dpaa2_eth_priv *priv,
 				free_pages((unsigned long)vaddr, 0);
 			} else {
 				ch->buf_count++;
-				dpaa2_eth_recycle_buf(priv, ch, addr);
+				dpaa2_eth_xdp_release_buf(priv, ch, addr);
 			}
 			ch->stats.xdp_drop++;
 		} else {
@@ -493,59 +418,71 @@ static u32 dpaa2_eth_run_xdp(struct dpaa2_eth_priv *priv,
 
 	ch->xdp.res |= xdp_act;
 out:
+	rcu_read_unlock();
 	return xdp_act;
 }
 
-struct sk_buff *dpaa2_eth_alloc_skb(struct dpaa2_eth_priv *priv,
-				    struct dpaa2_eth_channel *ch,
-				    const struct dpaa2_fd *fd, u32 fd_length,
-				    void *fd_vaddr)
+/* Main Rx frame processing routine */
+static void dpaa2_eth_rx(struct dpaa2_eth_priv *priv,
+			 struct dpaa2_eth_channel *ch,
+			 const struct dpaa2_fd *fd,
+			 struct dpaa2_eth_fq *fq)
 {
-	u16 fd_offset = dpaa2_fd_get_offset(fd);
-	struct sk_buff *skb = NULL;
-	unsigned int skb_len;
-
-	skb_len = fd_length + dpaa2_eth_needed_headroom(NULL);
-
-	skb = napi_alloc_skb(&ch->napi, skb_len);
-	if (!skb)
-		return NULL;
-
-	skb_reserve(skb, dpaa2_eth_needed_headroom(NULL));
-	skb_put(skb, fd_length);
-
-	memcpy(skb->data, fd_vaddr + fd_offset, fd_length);
-
-	dpaa2_eth_recycle_buf(priv, ch, dpaa2_fd_get_addr(fd));
-
-	return skb;
-}
-
-static struct sk_buff *dpaa2_eth_copybreak(struct dpaa2_eth_channel *ch,
-					   const struct dpaa2_fd *fd,
-					   void *fd_vaddr)
-{
-	struct dpaa2_eth_priv *priv = ch->priv;
-	u32 fd_length = dpaa2_fd_get_len(fd);
-
-	if (fd_length > priv->rx_copybreak)
-		return NULL;
-
-	return dpaa2_eth_alloc_skb(priv, ch, fd, fd_length, fd_vaddr);
-}
-
-void dpaa2_eth_receive_skb(struct dpaa2_eth_priv *priv,
-			   struct dpaa2_eth_channel *ch,
-			   const struct dpaa2_fd *fd, void *vaddr,
-			   struct dpaa2_eth_fq *fq,
-			   struct rtnl_link_stats64 *percpu_stats,
-			   struct sk_buff *skb)
-{
+	dma_addr_t addr = dpaa2_fd_get_addr(fd);
+	u8 fd_format = dpaa2_fd_get_format(fd);
+	void *vaddr;
+	struct sk_buff *skb;
+	struct rtnl_link_stats64 *percpu_stats;
+	struct dpaa2_eth_drv_stats *percpu_extras;
+	struct device *dev = priv->net_dev->dev.parent;
 	struct dpaa2_fas *fas;
+	void *buf_data;
 	u32 status = 0;
+	u32 xdp_act;
+
+	/* Tracing point */
+	trace_dpaa2_rx_fd(priv->net_dev, fd);
+
+	vaddr = dpaa2_iova_to_virt(priv->iommu_domain, addr);
+	dma_sync_single_for_cpu(dev, addr, priv->rx_buf_size,
+				DMA_BIDIRECTIONAL);
 
 	fas = dpaa2_get_fas(vaddr, false);
 	prefetch(fas);
+	buf_data = vaddr + dpaa2_fd_get_offset(fd);
+	prefetch(buf_data);
+
+	percpu_stats = this_cpu_ptr(priv->percpu_stats);
+	percpu_extras = this_cpu_ptr(priv->percpu_extras);
+
+	if (fd_format == dpaa2_fd_single) {
+		xdp_act = dpaa2_eth_run_xdp(priv, ch, fq, (struct dpaa2_fd *)fd, vaddr);
+		if (xdp_act != XDP_PASS) {
+			percpu_stats->rx_packets++;
+			percpu_stats->rx_bytes += dpaa2_fd_get_len(fd);
+			return;
+		}
+
+		dma_unmap_page(dev, addr, priv->rx_buf_size,
+			       DMA_BIDIRECTIONAL);
+		skb = dpaa2_eth_build_linear_skb(ch, fd, vaddr);
+	} else if (fd_format == dpaa2_fd_sg) {
+		WARN_ON(priv->xdp_prog);
+
+		dma_unmap_page(dev, addr, priv->rx_buf_size,
+			       DMA_BIDIRECTIONAL);
+		skb = dpaa2_eth_build_frag_skb(priv, ch, buf_data);
+		free_pages((unsigned long)vaddr, 0);
+		percpu_extras->rx_sg_frames++;
+		percpu_extras->rx_sg_bytes += dpaa2_fd_get_len(fd);
+	} else {
+		/* We don't support any other format */
+		goto err_frame_format;
+	}
+
+	if (unlikely(!skb))
+		goto err_build_skb;
+
 	prefetch(skb->data);
 
 	/* Get the timestamp value */
@@ -571,72 +508,9 @@ void dpaa2_eth_receive_skb(struct dpaa2_eth_priv *priv,
 
 	percpu_stats->rx_packets++;
 	percpu_stats->rx_bytes += dpaa2_fd_get_len(fd);
-	ch->stats.bytes_per_cdan += dpaa2_fd_get_len(fd);
 
 	list_add_tail(&skb->list, ch->rx_list);
-}
 
-/* Main Rx frame processing routine */
-void dpaa2_eth_rx(struct dpaa2_eth_priv *priv,
-		  struct dpaa2_eth_channel *ch,
-		  const struct dpaa2_fd *fd,
-		  struct dpaa2_eth_fq *fq)
-{
-	dma_addr_t addr = dpaa2_fd_get_addr(fd);
-	u8 fd_format = dpaa2_fd_get_format(fd);
-	void *vaddr;
-	struct sk_buff *skb;
-	struct rtnl_link_stats64 *percpu_stats;
-	struct dpaa2_eth_drv_stats *percpu_extras;
-	struct device *dev = priv->net_dev->dev.parent;
-	void *buf_data;
-	u32 xdp_act;
-
-	/* Tracing point */
-	trace_dpaa2_rx_fd(priv->net_dev, fd);
-
-	vaddr = dpaa2_iova_to_virt(priv->iommu_domain, addr);
-	dma_sync_single_for_cpu(dev, addr, priv->rx_buf_size,
-				DMA_BIDIRECTIONAL);
-
-	buf_data = vaddr + dpaa2_fd_get_offset(fd);
-	prefetch(buf_data);
-
-	percpu_stats = this_cpu_ptr(priv->percpu_stats);
-	percpu_extras = this_cpu_ptr(priv->percpu_extras);
-
-	if (fd_format == dpaa2_fd_single) {
-		xdp_act = dpaa2_eth_run_xdp(priv, ch, fq, (struct dpaa2_fd *)fd, vaddr);
-		if (xdp_act != XDP_PASS) {
-			percpu_stats->rx_packets++;
-			percpu_stats->rx_bytes += dpaa2_fd_get_len(fd);
-			return;
-		}
-
-		skb = dpaa2_eth_copybreak(ch, fd, vaddr);
-		if (!skb) {
-			dma_unmap_page(dev, addr, priv->rx_buf_size,
-				       DMA_BIDIRECTIONAL);
-			skb = dpaa2_eth_build_linear_skb(ch, fd, vaddr);
-		}
-	} else if (fd_format == dpaa2_fd_sg) {
-		WARN_ON(priv->xdp_prog);
-
-		dma_unmap_page(dev, addr, priv->rx_buf_size,
-			       DMA_BIDIRECTIONAL);
-		skb = dpaa2_eth_build_frag_skb(priv, ch, buf_data);
-		free_pages((unsigned long)vaddr, 0);
-		percpu_extras->rx_sg_frames++;
-		percpu_extras->rx_sg_bytes += dpaa2_fd_get_len(fd);
-	} else {
-		/* We don't support any other format */
-		goto err_frame_format;
-	}
-
-	if (unlikely(!skb))
-		goto err_build_skb;
-
-	dpaa2_eth_receive_skb(priv, ch, fd, vaddr, fq, percpu_stats, skb);
 	return;
 
 err_build_skb:
@@ -742,7 +616,6 @@ static int dpaa2_eth_consume_frames(struct dpaa2_eth_channel *ch,
 
 	fq->stats.frames += cleaned;
 	ch->stats.frames += cleaned;
-	ch->stats.frames_per_cdan += cleaned;
 
 	/* A dequeue operation only pulls frames from a single queue
 	 * into the store. Return the frame queue as an out param.
@@ -795,6 +668,7 @@ static void dpaa2_eth_enable_tx_tstamp(struct dpaa2_eth_priv *priv,
 				       struct sk_buff *skb)
 {
 	struct ptp_tstamp origin_timestamp;
+	struct dpni_single_step_cfg cfg;
 	u8 msgtype, twostep, udp;
 	struct dpaa2_faead *faead;
 	struct dpaa2_fas *fas;
@@ -822,7 +696,7 @@ static void dpaa2_eth_enable_tx_tstamp(struct dpaa2_eth_priv *priv,
 	if (skb->cb[0] == TX_TSTAMP_ONESTEP_SYNC) {
 		if (dpaa2_eth_ptp_parse(skb, &msgtype, &twostep, &udp,
 					&offset1, &offset2) ||
-		    msgtype != PTP_MSGTYPE_SYNC || twostep) {
+		    msgtype != 0 || twostep) {
 			WARN_ONCE(1, "Bad packet for one-step timestamping\n");
 			return;
 		}
@@ -848,46 +722,15 @@ static void dpaa2_eth_enable_tx_tstamp(struct dpaa2_eth_priv *priv,
 			htonl(origin_timestamp.sec_lsb);
 		*(__be32 *)(data + offset2 + 6) = htonl(origin_timestamp.nsec);
 
-		if (priv->ptp_correction_off == offset1)
-			return;
+		cfg.en = 1;
+		cfg.ch_update = udp;
+		cfg.offset = offset1;
+		cfg.peer_delay = 0;
 
-		priv->dpaa2_set_onestep_params_cb(priv, offset1, udp);
-		priv->ptp_correction_off = offset1;
-
+		if (dpni_set_single_step_cfg(priv->mc_io, 0, priv->mc_token,
+					     &cfg))
+			WARN_ONCE(1, "Failed to set single step register");
 	}
-}
-
-void *dpaa2_eth_sgt_get(struct dpaa2_eth_priv *priv)
-{
-	struct dpaa2_eth_sgt_cache *sgt_cache;
-	void *sgt_buf = NULL;
-	int sgt_buf_size;
-
-	sgt_cache = this_cpu_ptr(priv->sgt_cache);
-	sgt_buf_size = priv->tx_data_offset +
-		DPAA2_ETH_SG_ENTRIES_MAX * sizeof(struct dpaa2_sg_entry);
-
-	if (sgt_cache->count == 0)
-		sgt_buf = napi_alloc_frag_align(sgt_buf_size, DPAA2_ETH_TX_BUF_ALIGN);
-	else
-		sgt_buf = sgt_cache->buf[--sgt_cache->count];
-	if (!sgt_buf)
-		return NULL;
-
-	memset(sgt_buf, 0, sgt_buf_size);
-
-	return sgt_buf;
-}
-
-void dpaa2_eth_sgt_recycle(struct dpaa2_eth_priv *priv, void *sgt_buf)
-{
-	struct dpaa2_eth_sgt_cache *sgt_cache;
-
-	sgt_cache = this_cpu_ptr(priv->sgt_cache);
-	if (sgt_cache->count >= DPAA2_ETH_SGT_CACHE_SIZE)
-		skb_free_frag(sgt_buf);
-	else
-		sgt_cache->buf[sgt_cache->count++] = sgt_buf;
 }
 
 /* Create a frame descriptor based on a fragmented skb */
@@ -935,11 +778,13 @@ static int dpaa2_eth_build_sg_fd(struct dpaa2_eth_priv *priv,
 	/* Prepare the HW SGT structure */
 	sgt_buf_size = priv->tx_data_offset +
 		       sizeof(struct dpaa2_sg_entry) *  num_dma_bufs;
-	sgt_buf = dpaa2_eth_sgt_get(priv);
+	sgt_buf = napi_alloc_frag(sgt_buf_size + DPAA2_ETH_TX_BUF_ALIGN);
 	if (unlikely(!sgt_buf)) {
 		err = -ENOMEM;
 		goto sgt_buf_alloc_failed;
 	}
+	sgt_buf = PTR_ALIGN(sgt_buf, DPAA2_ETH_TX_BUF_ALIGN);
+	memset(sgt_buf, 0, sgt_buf_size);
 
 	sgt = (struct dpaa2_sg_entry *)(sgt_buf + priv->tx_data_offset);
 
@@ -975,7 +820,6 @@ static int dpaa2_eth_build_sg_fd(struct dpaa2_eth_priv *priv,
 		err = -ENOMEM;
 		goto dma_map_single_failed;
 	}
-	memset(fd, 0, sizeof(struct dpaa2_fd));
 	dpaa2_fd_set_offset(fd, priv->tx_data_offset);
 	dpaa2_fd_set_format(fd, dpaa2_fd_sg);
 	dpaa2_fd_set_addr(fd, addr);
@@ -985,7 +829,7 @@ static int dpaa2_eth_build_sg_fd(struct dpaa2_eth_priv *priv,
 	return 0;
 
 dma_map_single_failed:
-	dpaa2_eth_sgt_recycle(priv, sgt_buf);
+	skb_free_frag(sgt_buf);
 sgt_buf_alloc_failed:
 	dma_unmap_sg(dev, scl, num_sg, DMA_BIDIRECTIONAL);
 dma_map_sg_failed:
@@ -1005,6 +849,7 @@ static int dpaa2_eth_build_sg_fd_single_buf(struct dpaa2_eth_priv *priv,
 					    void **swa_addr)
 {
 	struct device *dev = priv->net_dev->dev.parent;
+	struct dpaa2_eth_sgt_cache *sgt_cache;
 	struct dpaa2_sg_entry *sgt;
 	struct dpaa2_eth_swa *swa;
 	dma_addr_t addr, sgt_addr;
@@ -1013,10 +858,18 @@ static int dpaa2_eth_build_sg_fd_single_buf(struct dpaa2_eth_priv *priv,
 	int err;
 
 	/* Prepare the HW SGT structure */
+	sgt_cache = this_cpu_ptr(priv->sgt_cache);
 	sgt_buf_size = priv->tx_data_offset + sizeof(struct dpaa2_sg_entry);
-	sgt_buf = dpaa2_eth_sgt_get(priv);
+
+	if (sgt_cache->count == 0)
+		sgt_buf = kzalloc(sgt_buf_size + DPAA2_ETH_TX_BUF_ALIGN,
+				  GFP_ATOMIC);
+	else
+		sgt_buf = sgt_cache->buf[--sgt_cache->count];
 	if (unlikely(!sgt_buf))
 		return -ENOMEM;
+
+	sgt_buf = PTR_ALIGN(sgt_buf, DPAA2_ETH_TX_BUF_ALIGN);
 	sgt = (struct dpaa2_sg_entry *)(sgt_buf + priv->tx_data_offset);
 
 	addr = dma_map_single(dev, skb->data, skb->len, DMA_BIDIRECTIONAL);
@@ -1044,7 +897,6 @@ static int dpaa2_eth_build_sg_fd_single_buf(struct dpaa2_eth_priv *priv,
 		goto sgt_map_failed;
 	}
 
-	memset(fd, 0, sizeof(struct dpaa2_fd));
 	dpaa2_fd_set_offset(fd, priv->tx_data_offset);
 	dpaa2_fd_set_format(fd, dpaa2_fd_sg);
 	dpaa2_fd_set_addr(fd, sgt_addr);
@@ -1056,7 +908,10 @@ static int dpaa2_eth_build_sg_fd_single_buf(struct dpaa2_eth_priv *priv,
 sgt_map_failed:
 	dma_unmap_single(dev, addr, skb->len, DMA_BIDIRECTIONAL);
 data_map_failed:
-	dpaa2_eth_sgt_recycle(priv, sgt_buf);
+	if (sgt_cache->count >= DPAA2_ETH_SGT_CACHE_SIZE)
+		kfree(sgt_buf);
+	else
+		sgt_cache->buf[sgt_cache->count++] = sgt_buf;
 
 	return err;
 }
@@ -1097,7 +952,6 @@ static int dpaa2_eth_build_single_fd(struct dpaa2_eth_priv *priv,
 	if (unlikely(dma_mapping_error(dev, addr)))
 		return -ENOMEM;
 
-	memset(fd, 0, sizeof(struct dpaa2_fd));
 	dpaa2_fd_set_addr(fd, addr);
 	dpaa2_fd_set_offset(fd, (u16)(skb->data - buffer_start));
 	dpaa2_fd_set_len(fd, skb->len);
@@ -1114,10 +968,9 @@ static int dpaa2_eth_build_single_fd(struct dpaa2_eth_priv *priv,
  * This can be called either from dpaa2_eth_tx_conf() or on the error path of
  * dpaa2_eth_tx().
  */
-void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
-			  struct dpaa2_eth_channel *ch,
-			  struct dpaa2_eth_fq *fq,
-			  const struct dpaa2_fd *fd, bool in_napi)
+static void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
+				 struct dpaa2_eth_fq *fq,
+				 const struct dpaa2_fd *fd, bool in_napi)
 {
 	struct device *dev = priv->net_dev->dev.parent;
 	dma_addr_t fd_addr, sg_addr;
@@ -1126,10 +979,9 @@ void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
 	struct dpaa2_eth_swa *swa;
 	u8 fd_format = dpaa2_fd_get_format(fd);
 	u32 fd_len = dpaa2_fd_get_len(fd);
+
+	struct dpaa2_eth_sgt_cache *sgt_cache;
 	struct dpaa2_sg_entry *sgt;
-	int should_free_skb = 1;
-	void *tso_hdr;
-	int i;
 
 	fd_addr = dpaa2_fd_get_addr(fd);
 	buffer_start = dpaa2_iova_to_virt(priv->iommu_domain, fd_addr);
@@ -1161,33 +1013,6 @@ void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
 			/* Unmap the SGT buffer */
 			dma_unmap_single(dev, fd_addr, swa->sg.sgt_size,
 					 DMA_BIDIRECTIONAL);
-		} else if (swa->type == DPAA2_ETH_SWA_SW_TSO) {
-			skb = swa->tso.skb;
-
-			sgt = (struct dpaa2_sg_entry *)(buffer_start +
-							priv->tx_data_offset);
-
-			/* Unmap the SGT buffer */
-			dma_unmap_single(dev, fd_addr, swa->tso.sgt_size,
-					 DMA_BIDIRECTIONAL);
-
-			/* Unmap and free the header */
-			tso_hdr = dpaa2_iova_to_virt(priv->iommu_domain, dpaa2_sg_get_addr(sgt));
-			dma_unmap_single(dev, dpaa2_sg_get_addr(sgt), TSO_HEADER_SIZE,
-					 DMA_TO_DEVICE);
-			kfree(tso_hdr);
-
-			/* Unmap the other SG entries for the data */
-			for (i = 1; i < swa->tso.num_sg; i++)
-				dma_unmap_single(dev, dpaa2_sg_get_addr(&sgt[i]),
-						 dpaa2_sg_get_len(&sgt[i]), DMA_TO_DEVICE);
-
-			if (!swa->tso.is_last_fd)
-				should_free_skb = 0;
-		} else if (swa->type == DPAA2_ETH_SWA_XSK) {
-			/* Unmap the SGT Buffer */
-			dma_unmap_single(dev, fd_addr, swa->xsk.sgt_size,
-					 DMA_BIDIRECTIONAL);
 		} else {
 			skb = swa->single.skb;
 
@@ -1205,12 +1030,6 @@ void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
 		return;
 	}
 
-	if (swa->type == DPAA2_ETH_SWA_XSK) {
-		ch->xsk_tx_pkts_sent++;
-		dpaa2_eth_sgt_recycle(priv, buffer_start);
-		return;
-	}
-
 	if (swa->type != DPAA2_ETH_SWA_XDP && in_napi) {
 		fq->dq_frames++;
 		fq->dq_bytes += fd_len;
@@ -1222,195 +1041,55 @@ void dpaa2_eth_free_tx_fd(struct dpaa2_eth_priv *priv,
 	}
 
 	/* Get the timestamp value */
-	if (swa->type != DPAA2_ETH_SWA_SW_TSO) {
-		if (skb->cb[0] == TX_TSTAMP) {
-			struct skb_shared_hwtstamps shhwtstamps;
-			__le64 *ts = dpaa2_get_ts(buffer_start, true);
-			u64 ns;
+	if (skb->cb[0] == TX_TSTAMP) {
+		struct skb_shared_hwtstamps shhwtstamps;
+		__le64 *ts = dpaa2_get_ts(buffer_start, true);
+		u64 ns;
 
-			memset(&shhwtstamps, 0, sizeof(shhwtstamps));
+		memset(&shhwtstamps, 0, sizeof(shhwtstamps));
 
-			ns = DPAA2_PTP_CLK_PERIOD_NS * le64_to_cpup(ts);
-			shhwtstamps.hwtstamp = ns_to_ktime(ns);
-			skb_tstamp_tx(skb, &shhwtstamps);
-		} else if (skb->cb[0] == TX_TSTAMP_ONESTEP_SYNC) {
-			mutex_unlock(&priv->onestep_tstamp_lock);
-		}
+		ns = DPAA2_PTP_CLK_PERIOD_NS * le64_to_cpup(ts);
+		shhwtstamps.hwtstamp = ns_to_ktime(ns);
+		skb_tstamp_tx(skb, &shhwtstamps);
+	} else if (skb->cb[0] == TX_TSTAMP_ONESTEP_SYNC) {
+		mutex_unlock(&priv->onestep_tstamp_lock);
 	}
 
 	/* Free SGT buffer allocated on tx */
-	if (fd_format != dpaa2_fd_single)
-		dpaa2_eth_sgt_recycle(priv, buffer_start);
-
-	/* Move on with skb release. If we are just confirming multiple FDs
-	 * from the same TSO skb then only the last one will need to free the
-	 * skb.
-	 */
-	if (should_free_skb)
-		napi_consume_skb(skb, in_napi);
-}
-
-static int dpaa2_eth_build_gso_fd(struct dpaa2_eth_priv *priv,
-				  struct sk_buff *skb, struct dpaa2_fd *fd,
-				  int *num_fds, u32 *total_fds_len)
-{
-	struct device *dev = priv->net_dev->dev.parent;
-	int hdr_len, total_len, data_left, fd_len;
-	int num_sge, err, i, sgt_buf_size;
-	struct dpaa2_fd *fd_start = fd;
-	struct dpaa2_sg_entry *sgt;
-	struct dpaa2_eth_swa *swa;
-	dma_addr_t sgt_addr, addr;
-	dma_addr_t tso_hdr_dma;
-	unsigned int index = 0;
-	struct tso_t tso;
-	char *tso_hdr;
-	void *sgt_buf;
-
-	/* Initialize the TSO handler, and prepare the first payload */
-	hdr_len = tso_start(skb, &tso);
-	*total_fds_len = 0;
-
-	total_len = skb->len - hdr_len;
-	while (total_len > 0) {
-		/* Prepare the HW SGT structure for this frame */
-		sgt_buf = dpaa2_eth_sgt_get(priv);
-		if (unlikely(!sgt_buf)) {
-			netdev_err(priv->net_dev, "dpaa2_eth_sgt_get() failed\n");
-			err = -ENOMEM;
-			goto err_sgt_get;
+	if (fd_format != dpaa2_fd_single) {
+		sgt_cache = this_cpu_ptr(priv->sgt_cache);
+		if (swa->type == DPAA2_ETH_SWA_SG) {
+			skb_free_frag(buffer_start);
+		} else {
+			if (sgt_cache->count >= DPAA2_ETH_SGT_CACHE_SIZE)
+				kfree(buffer_start);
+			else
+				sgt_cache->buf[sgt_cache->count++] = buffer_start;
 		}
-		sgt = (struct dpaa2_sg_entry *)(sgt_buf + priv->tx_data_offset);
-
-		/* Determine the data length of this frame */
-		data_left = min_t(int, skb_shinfo(skb)->gso_size, total_len);
-		total_len -= data_left;
-		fd_len = data_left + hdr_len;
-
-		/* Prepare packet headers: MAC + IP + TCP */
-		tso_hdr = kmalloc(TSO_HEADER_SIZE, GFP_ATOMIC);
-		if (!tso_hdr) {
-			err =  -ENOMEM;
-			goto err_alloc_tso_hdr;
-		}
-
-		tso_build_hdr(skb, tso_hdr, &tso, data_left, total_len == 0);
-		tso_hdr_dma = dma_map_single(dev, tso_hdr, TSO_HEADER_SIZE, DMA_TO_DEVICE);
-		if (dma_mapping_error(dev, tso_hdr_dma)) {
-			netdev_err(priv->net_dev, "dma_map_single(tso_hdr) failed\n");
-			err = -ENOMEM;
-			goto err_map_tso_hdr;
-		}
-
-		/* Setup the SG entry for the header */
-		dpaa2_sg_set_addr(sgt, tso_hdr_dma);
-		dpaa2_sg_set_len(sgt, hdr_len);
-		dpaa2_sg_set_final(sgt, data_left <= 0);
-
-		/* Compose the SG entries for each fragment of data */
-		num_sge = 1;
-		while (data_left > 0) {
-			int size;
-
-			/* Move to the next SG entry */
-			sgt++;
-			size = min_t(int, tso.size, data_left);
-
-			addr = dma_map_single(dev, tso.data, size, DMA_TO_DEVICE);
-			if (dma_mapping_error(dev, addr)) {
-				netdev_err(priv->net_dev, "dma_map_single(tso.data) failed\n");
-				err = -ENOMEM;
-				goto err_map_data;
-			}
-			dpaa2_sg_set_addr(sgt, addr);
-			dpaa2_sg_set_len(sgt, size);
-			dpaa2_sg_set_final(sgt, size == data_left);
-
-			num_sge++;
-
-			/* Build the data for the __next__ fragment */
-			data_left -= size;
-			tso_build_data(skb, &tso, size);
-		}
-
-		/* Store the skb backpointer in the SGT buffer */
-		sgt_buf_size = priv->tx_data_offset + num_sge * sizeof(struct dpaa2_sg_entry);
-		swa = (struct dpaa2_eth_swa *)sgt_buf;
-		swa->type = DPAA2_ETH_SWA_SW_TSO;
-		swa->tso.skb = skb;
-		swa->tso.num_sg = num_sge;
-		swa->tso.sgt_size = sgt_buf_size;
-		swa->tso.is_last_fd = total_len == 0 ? 1 : 0;
-
-		/* Separately map the SGT buffer */
-		sgt_addr = dma_map_single(dev, sgt_buf, sgt_buf_size, DMA_BIDIRECTIONAL);
-		if (unlikely(dma_mapping_error(dev, sgt_addr))) {
-			netdev_err(priv->net_dev, "dma_map_single(sgt_buf) failed\n");
-			err = -ENOMEM;
-			goto err_map_sgt;
-		}
-
-		/* Setup the frame descriptor */
-		memset(fd, 0, sizeof(struct dpaa2_fd));
-		dpaa2_fd_set_offset(fd, priv->tx_data_offset);
-		dpaa2_fd_set_format(fd, dpaa2_fd_sg);
-		dpaa2_fd_set_addr(fd, sgt_addr);
-		dpaa2_fd_set_len(fd, fd_len);
-		dpaa2_fd_set_ctrl(fd, FD_CTRL_PTA);
-
-		*total_fds_len += fd_len;
-		/* Advance to the next frame descriptor */
-		fd++;
-		index++;
 	}
 
-	*num_fds = index;
-
-	return 0;
-
-err_map_sgt:
-err_map_data:
-	/* Unmap all the data S/G entries for the current FD */
-	sgt = (struct dpaa2_sg_entry *)(sgt_buf + priv->tx_data_offset);
-	for (i = 1; i < num_sge; i++)
-		dma_unmap_single(dev, dpaa2_sg_get_addr(&sgt[i]),
-				 dpaa2_sg_get_len(&sgt[i]), DMA_TO_DEVICE);
-
-	/* Unmap the header entry */
-	dma_unmap_single(dev, tso_hdr_dma, TSO_HEADER_SIZE, DMA_TO_DEVICE);
-err_map_tso_hdr:
-	kfree(tso_hdr);
-err_alloc_tso_hdr:
-	dpaa2_eth_sgt_recycle(priv, sgt_buf);
-err_sgt_get:
-	/* Free all the other FDs that were already fully created */
-	for (i = 0; i < index; i++)
-		dpaa2_eth_free_tx_fd(priv, NULL, NULL, &fd_start[i], false);
-
-	return err;
+	/* Move on with skb release */
+	napi_consume_skb(skb, in_napi);
 }
 
 static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 				  struct net_device *net_dev)
 {
 	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
-	int total_enqueued = 0, retries = 0, enqueued;
-	struct dpaa2_eth_drv_stats *percpu_extras;
+	struct dpaa2_fd fd;
 	struct rtnl_link_stats64 *percpu_stats;
-	unsigned int needed_headroom;
-	int num_fds = 1, max_retries;
+	struct dpaa2_eth_drv_stats *percpu_extras;
 	struct dpaa2_eth_fq *fq;
 	struct netdev_queue *nq;
-	struct dpaa2_fd *fd;
 	u16 queue_mapping;
-	void *swa = NULL;
+	unsigned int needed_headroom;
+	u32 fd_len;
 	u8 prio = 0;
 	int err, i;
-	u32 fd_len;
+	void *swa;
 
 	percpu_stats = this_cpu_ptr(priv->percpu_stats);
 	percpu_extras = this_cpu_ptr(priv->percpu_extras);
-	fd = (this_cpu_ptr(priv->fd))->array;
 
 	needed_headroom = dpaa2_eth_needed_headroom(skb);
 
@@ -1425,28 +1104,20 @@ static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 	}
 
 	/* Setup the FD fields */
+	memset(&fd, 0, sizeof(fd));
 
-	if (skb_is_gso(skb)) {
-		err = dpaa2_eth_build_gso_fd(priv, skb, fd, &num_fds, &fd_len);
-		percpu_extras->tx_sg_frames += num_fds;
-		percpu_extras->tx_sg_bytes += fd_len;
-		percpu_extras->tx_tso_frames += num_fds;
-		percpu_extras->tx_tso_bytes += fd_len;
-	} else if (skb_is_nonlinear(skb)) {
-		err = dpaa2_eth_build_sg_fd(priv, skb, fd, &swa);
+	if (skb_is_nonlinear(skb)) {
+		err = dpaa2_eth_build_sg_fd(priv, skb, &fd, &swa);
 		percpu_extras->tx_sg_frames++;
 		percpu_extras->tx_sg_bytes += skb->len;
-		fd_len = dpaa2_fd_get_len(fd);
 	} else if (skb_headroom(skb) < needed_headroom) {
-		err = dpaa2_eth_build_sg_fd_single_buf(priv, skb, fd, &swa);
+		err = dpaa2_eth_build_sg_fd_single_buf(priv, skb, &fd, &swa);
 		percpu_extras->tx_sg_frames++;
 		percpu_extras->tx_sg_bytes += skb->len;
 		percpu_extras->tx_converted_sg_frames++;
 		percpu_extras->tx_converted_sg_bytes += skb->len;
-		fd_len = dpaa2_fd_get_len(fd);
 	} else {
-		err = dpaa2_eth_build_single_fd(priv, skb, fd, &swa);
-		fd_len = dpaa2_fd_get_len(fd);
+		err = dpaa2_eth_build_single_fd(priv, skb, &fd, &swa);
 	}
 
 	if (unlikely(err)) {
@@ -1454,12 +1125,11 @@ static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 		goto err_build_fd;
 	}
 
-	if (swa && skb->cb[0])
-		dpaa2_eth_enable_tx_tstamp(priv, fd, swa, skb);
+	if (skb->cb[0])
+		dpaa2_eth_enable_tx_tstamp(priv, &fd, swa, skb);
 
 	/* Tracing point */
-	for (i = 0; i < num_fds; i++)
-		trace_dpaa2_tx_fd(net_dev, &fd[i]);
+	trace_dpaa2_tx_fd(net_dev, &fd);
 
 	/* TxConf FQ selection relies on queue id from the stack.
 	 * In case of a forwarded frame from another DPNI interface, we choose
@@ -1479,32 +1149,27 @@ static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 		queue_mapping %= dpaa2_eth_queue_count(priv);
 	}
 	fq = &priv->fq[queue_mapping];
+
+	fd_len = dpaa2_fd_get_len(&fd);
 	nq = netdev_get_tx_queue(net_dev, queue_mapping);
 	netdev_tx_sent_queue(nq, fd_len);
 
 	/* Everything that happens after this enqueues might race with
 	 * the Tx confirmation callback for this frame
 	 */
-	max_retries = num_fds * DPAA2_ETH_ENQUEUE_RETRIES;
-	while (total_enqueued < num_fds && retries < max_retries) {
-		err = priv->enqueue(priv, fq, &fd[total_enqueued],
-				    prio, num_fds - total_enqueued, &enqueued);
-		if (err == -EBUSY) {
-			retries++;
-			continue;
-		}
-
-		total_enqueued += enqueued;
+	for (i = 0; i < DPAA2_ETH_ENQUEUE_RETRIES; i++) {
+		err = priv->enqueue(priv, fq, &fd, prio, 1, NULL);
+		if (err != -EBUSY)
+			break;
 	}
-	percpu_extras->tx_portal_busy += retries;
-
+	percpu_extras->tx_portal_busy += i;
 	if (unlikely(err < 0)) {
 		percpu_stats->tx_errors++;
 		/* Clean up everything, including freeing the skb */
-		dpaa2_eth_free_tx_fd(priv, NULL, fq, fd, false);
+		dpaa2_eth_free_tx_fd(priv, fq, &fd, false);
 		netdev_tx_completed_queue(nq, 1, fd_len);
 	} else {
-		percpu_stats->tx_packets += total_enqueued;
+		percpu_stats->tx_packets++;
 		percpu_stats->tx_bytes += fd_len;
 	}
 
@@ -1557,7 +1222,7 @@ static netdev_tx_t dpaa2_eth_tx(struct sk_buff *skb, struct net_device *net_dev)
 	if (skb->cb[0] == TX_TSTAMP_ONESTEP_SYNC) {
 		if (!dpaa2_eth_ptp_parse(skb, &msgtype, &twostep, &udp,
 					 &offset1, &offset2))
-			if (msgtype == PTP_MSGTYPE_SYNC && twostep == 0) {
+			if (msgtype == 0 && twostep == 0) {
 				skb_queue_tail(&priv->tx_skbs, skb);
 				queue_work(priv->dpaa2_ptp_wq,
 					   &priv->tx_onestep_tstamp);
@@ -1575,7 +1240,7 @@ static netdev_tx_t dpaa2_eth_tx(struct sk_buff *skb, struct net_device *net_dev)
 
 /* Tx confirmation frame processing routine */
 static void dpaa2_eth_tx_conf(struct dpaa2_eth_priv *priv,
-			      struct dpaa2_eth_channel *ch,
+			      struct dpaa2_eth_channel *ch __always_unused,
 			      const struct dpaa2_fd *fd,
 			      struct dpaa2_eth_fq *fq)
 {
@@ -1590,11 +1255,10 @@ static void dpaa2_eth_tx_conf(struct dpaa2_eth_priv *priv,
 	percpu_extras = this_cpu_ptr(priv->percpu_extras);
 	percpu_extras->tx_conf_frames++;
 	percpu_extras->tx_conf_bytes += fd_len;
-	ch->stats.bytes_per_cdan += fd_len;
 
 	/* Check frame errors in the FD field */
 	fd_errors = dpaa2_fd_get_ctrl(fd) & DPAA2_FD_TX_ERR_MASK;
-	dpaa2_eth_free_tx_fd(priv, ch, fq, fd, true);
+	dpaa2_eth_free_tx_fd(priv, fq, fd, true);
 
 	if (likely(!fd_errors))
 		return;
@@ -1606,22 +1270,6 @@ static void dpaa2_eth_tx_conf(struct dpaa2_eth_priv *priv,
 	percpu_stats = this_cpu_ptr(priv->percpu_stats);
 	/* Tx-conf logically pertains to the egress path. */
 	percpu_stats->tx_errors++;
-}
-
-static int dpaa2_eth_set_rx_vlan_filtering(struct dpaa2_eth_priv *priv,
-					   bool enable)
-{
-	int err;
-
-	err = dpni_enable_vlan_filter(priv->mc_io, 0, priv->mc_token, enable);
-
-	if (err) {
-		netdev_err(priv->net_dev,
-			   "dpni_enable_vlan_filter failed\n");
-		return err;
-	}
-
-	return 0;
 }
 
 static int dpaa2_eth_set_rx_csum(struct dpaa2_eth_priv *priv, bool enable)
@@ -1672,76 +1320,44 @@ static int dpaa2_eth_set_tx_csum(struct dpaa2_eth_priv *priv, bool enable)
  * to the specified buffer pool
  */
 static int dpaa2_eth_add_bufs(struct dpaa2_eth_priv *priv,
-			      struct dpaa2_eth_channel *ch)
+			      struct dpaa2_eth_channel *ch, u16 bpid)
 {
-	struct xdp_buff *xdp_buffs[DPAA2_ETH_BUFS_PER_CMD];
 	struct device *dev = priv->net_dev->dev.parent;
 	u64 buf_array[DPAA2_ETH_BUFS_PER_CMD];
-	struct dpaa2_eth_swa *swa;
 	struct page *page;
 	dma_addr_t addr;
 	int retries = 0;
-	int i = 0, err;
-	u32 batch;
+	int i, err;
 
-	/* Allocate buffers visible to WRIOP */
-	if (!ch->xsk_zc) {
-		for (i = 0; i < DPAA2_ETH_BUFS_PER_CMD; i++) {
-			/* Also allocate skb shared info and alignment padding.
-			 * There is one page for each Rx buffer. WRIOP sees
-			 * the entire page except for a tailroom reserved for
-			 * skb shared info
-			 */
-			page = dev_alloc_pages(0);
-			if (!page)
-				goto err_alloc;
-
-			addr = dma_map_page(dev, page, 0, priv->rx_buf_size,
-					    DMA_BIDIRECTIONAL);
-			if (unlikely(dma_mapping_error(dev, addr)))
-				goto err_map;
-
-			buf_array[i] = addr;
-
-			/* tracing point */
-			trace_dpaa2_eth_buf_seed(priv->net_dev,
-						 page_address(page),
-						 DPAA2_ETH_RX_BUF_RAW_SIZE,
-						 addr, priv->rx_buf_size,
-						 ch->bp->bpid);
-		}
-	} else if (xsk_buff_can_alloc(ch->xsk_pool, DPAA2_ETH_BUFS_PER_CMD)) {
-		/* Allocate XSK buffers for AF_XDP fast path in batches
-		 * of DPAA2_ETH_BUFS_PER_CMD. Bail out if the UMEM cannot
-		 * provide enough buffers at the moment
+	for (i = 0; i < DPAA2_ETH_BUFS_PER_CMD; i++) {
+		/* Allocate buffer visible to WRIOP + skb shared info +
+		 * alignment padding
 		 */
-		batch = xsk_buff_alloc_batch(ch->xsk_pool, xdp_buffs,
-					     DPAA2_ETH_BUFS_PER_CMD);
-		if (!batch)
+		/* allocate one page for each Rx buffer. WRIOP sees
+		 * the entire page except for a tailroom reserved for
+		 * skb shared info
+		 */
+		page = dev_alloc_pages(0);
+		if (!page)
 			goto err_alloc;
 
-		for (i = 0; i < batch; i++) {
-			swa = (struct dpaa2_eth_swa *)(xdp_buffs[i]->data_hard_start +
-						       DPAA2_ETH_RX_HWA_SIZE);
-			swa->xsk.xdp_buff = xdp_buffs[i];
+		addr = dma_map_page(dev, page, 0, priv->rx_buf_size,
+				    DMA_BIDIRECTIONAL);
+		if (unlikely(dma_mapping_error(dev, addr)))
+			goto err_map;
 
-			addr = xsk_buff_xdp_get_frame_dma(xdp_buffs[i]);
-			if (unlikely(dma_mapping_error(dev, addr)))
-				goto err_map;
+		buf_array[i] = addr;
 
-			buf_array[i] = addr;
-
-			trace_dpaa2_xsk_buf_seed(priv->net_dev,
-						 xdp_buffs[i]->data_hard_start,
-						 DPAA2_ETH_RX_BUF_RAW_SIZE,
-						 addr, priv->rx_buf_size,
-						 ch->bp->bpid);
-		}
+		/* tracing point */
+		trace_dpaa2_eth_buf_seed(priv->net_dev, page_address(page),
+					 DPAA2_ETH_RX_BUF_RAW_SIZE,
+					 addr, priv->rx_buf_size,
+					 bpid);
 	}
 
 release_bufs:
 	/* In case the portal is busy, retry until successful */
-	while ((err = dpaa2_io_service_release(ch->dpio, ch->bp->bpid,
+	while ((err = dpaa2_io_service_release(ch->dpio, bpid,
 					       buf_array, i)) == -EBUSY) {
 		if (retries++ >= DPAA2_ETH_SWP_BUSY_RETRIES)
 			break;
@@ -1752,19 +1368,14 @@ release_bufs:
 	 * not much else we can do about it
 	 */
 	if (err) {
-		dpaa2_eth_free_bufs(priv, buf_array, i, ch->xsk_zc);
+		dpaa2_eth_free_bufs(priv, buf_array, i);
 		return 0;
 	}
 
 	return i;
 
 err_map:
-	if (!ch->xsk_zc) {
-		__free_pages(page, 0);
-	} else {
-		for (; i < batch; i++)
-			xsk_buff_free(xdp_buffs[i]);
-	}
+	__free_pages(page, 0);
 err_alloc:
 	/* If we managed to allocate at least some buffers,
 	 * release them to hardware
@@ -1775,64 +1386,39 @@ err_alloc:
 	return 0;
 }
 
-static int dpaa2_eth_seed_pool(struct dpaa2_eth_priv *priv,
-			       struct dpaa2_eth_channel *ch)
+static int dpaa2_eth_seed_pool(struct dpaa2_eth_priv *priv, u16 bpid)
 {
-	int i;
+	int i, j;
 	int new_count;
 
-	for (i = 0; i < DPAA2_ETH_NUM_BUFS; i += DPAA2_ETH_BUFS_PER_CMD) {
-		new_count = dpaa2_eth_add_bufs(priv, ch);
-		ch->buf_count += new_count;
+	for (j = 0; j < priv->num_channels; j++) {
+		for (i = 0; i < DPAA2_ETH_NUM_BUFS;
+		     i += DPAA2_ETH_BUFS_PER_CMD) {
+			new_count = dpaa2_eth_add_bufs(priv, priv->channel[j], bpid);
+			priv->channel[j]->buf_count += new_count;
 
-		if (new_count < DPAA2_ETH_BUFS_PER_CMD)
-			return -ENOMEM;
+			if (new_count < DPAA2_ETH_BUFS_PER_CMD) {
+				return -ENOMEM;
+			}
+		}
 	}
 
 	return 0;
 }
 
-static void dpaa2_eth_seed_pools(struct dpaa2_eth_priv *priv)
-{
-	struct net_device *net_dev = priv->net_dev;
-	struct dpaa2_eth_channel *channel;
-	int i, err = 0;
-
-	for (i = 0; i < priv->num_channels; i++) {
-		channel = priv->channel[i];
-
-		err = dpaa2_eth_seed_pool(priv, channel);
-
-		/* Not much to do; the buffer pool, though not filled up,
-		 * may still contain some buffers which would enable us
-		 * to limp on.
-		 */
-		if (err)
-			netdev_err(net_dev, "Buffer seeding failed for DPBP %d (bpid=%d)\n",
-				   channel->bp->dev->obj_desc.id,
-				   channel->bp->bpid);
-	}
-}
-
 /*
- * Drain the specified number of buffers from one of the DPNI's private buffer
- * pools.
+ * Drain the specified number of buffers from the DPNI's private buffer pool.
  * @count must not exceeed DPAA2_ETH_BUFS_PER_CMD
  */
-static void dpaa2_eth_drain_bufs(struct dpaa2_eth_priv *priv, int bpid,
-				 int count)
+static void dpaa2_eth_drain_bufs(struct dpaa2_eth_priv *priv, int count)
 {
 	u64 buf_array[DPAA2_ETH_BUFS_PER_CMD];
-	bool xsk_zc = false;
 	int retries = 0;
-	int i, ret;
-
-	for (i = 0; i < priv->num_channels; i++)
-		if (priv->channel[i]->bp->bpid == bpid)
-			xsk_zc = priv->channel[i]->xsk_zc;
+	int ret;
 
 	do {
-		ret = dpaa2_io_service_acquire(NULL, bpid, buf_array, count);
+		ret = dpaa2_io_service_acquire(NULL, priv->bpid,
+					       buf_array, count);
 		if (ret < 0) {
 			if (ret == -EBUSY &&
 			    retries++ < DPAA2_ETH_SWP_BUSY_RETRIES)
@@ -1840,40 +1426,28 @@ static void dpaa2_eth_drain_bufs(struct dpaa2_eth_priv *priv, int bpid,
 			netdev_err(priv->net_dev, "dpaa2_io_service_acquire() failed\n");
 			return;
 		}
-		dpaa2_eth_free_bufs(priv, buf_array, ret, xsk_zc);
+		dpaa2_eth_free_bufs(priv, buf_array, ret);
 		retries = 0;
 	} while (ret);
 }
 
-static void dpaa2_eth_drain_pool(struct dpaa2_eth_priv *priv, int bpid)
+static void dpaa2_eth_drain_pool(struct dpaa2_eth_priv *priv)
 {
 	int i;
 
-	/* Drain the buffer pool */
-	dpaa2_eth_drain_bufs(priv, bpid, DPAA2_ETH_BUFS_PER_CMD);
-	dpaa2_eth_drain_bufs(priv, bpid, 1);
+	dpaa2_eth_drain_bufs(priv, DPAA2_ETH_BUFS_PER_CMD);
+	dpaa2_eth_drain_bufs(priv, 1);
 
-	/* Setup to zero the buffer count of all channels which were
-	 * using this buffer pool.
-	 */
 	for (i = 0; i < priv->num_channels; i++)
-		if (priv->channel[i]->bp->bpid == bpid)
-			priv->channel[i]->buf_count = 0;
-}
-
-static void dpaa2_eth_drain_pools(struct dpaa2_eth_priv *priv)
-{
-	int i;
-
-	for (i = 0; i < priv->num_bps; i++)
-		dpaa2_eth_drain_pool(priv, priv->bp[i]->bpid);
+		priv->channel[i]->buf_count = 0;
 }
 
 /* Function is called from softirq context only, so we don't need to guard
  * the access to percpu count
  */
 static int dpaa2_eth_refill_pool(struct dpaa2_eth_priv *priv,
-				 struct dpaa2_eth_channel *ch)
+				 struct dpaa2_eth_channel *ch,
+				 u16 bpid)
 {
 	int new_count;
 
@@ -1881,7 +1455,7 @@ static int dpaa2_eth_refill_pool(struct dpaa2_eth_priv *priv,
 		return 0;
 
 	do {
-		new_count = dpaa2_eth_add_bufs(priv, ch);
+		new_count = dpaa2_eth_add_bufs(priv, ch, bpid);
 		if (unlikely(!new_count)) {
 			/* Out of memory; abort for now, we'll try later on */
 			break;
@@ -1906,7 +1480,7 @@ static void dpaa2_eth_sgt_cache_drain(struct dpaa2_eth_priv *priv)
 		count = sgt_cache->count;
 
 		for (i = 0; i < count; i++)
-			skb_free_frag(sgt_cache->buf[i]);
+			kfree(sgt_cache->buf[i]);
 		sgt_cache->count = 0;
 	}
 }
@@ -1945,7 +1519,6 @@ static int dpaa2_eth_poll(struct napi_struct *napi, int budget)
 	struct dpaa2_eth_fq *fq, *txc_fq = NULL;
 	struct netdev_queue *nq;
 	int store_cleaned, work_done;
-	bool work_done_zc = false;
 	struct list_head rx_list;
 	int retries = 0;
 	u16 flowid;
@@ -1958,22 +1531,13 @@ static int dpaa2_eth_poll(struct napi_struct *napi, int budget)
 	INIT_LIST_HEAD(&rx_list);
 	ch->rx_list = &rx_list;
 
-	if (ch->xsk_zc) {
-		work_done_zc = dpaa2_xsk_tx(priv, ch);
-		/* If we reached the XSK Tx per NAPI threshold, we're done */
-		if (work_done_zc) {
-			work_done = budget;
-			goto out;
-		}
-	}
-
 	do {
 		err = dpaa2_eth_pull_channel(ch);
 		if (unlikely(err))
 			break;
 
 		/* Refill pool if appropriate */
-		dpaa2_eth_refill_pool(priv, ch);
+		dpaa2_eth_refill_pool(priv, ch, priv->bpid);
 
 		store_cleaned = dpaa2_eth_consume_frames(ch, &fq);
 		if (store_cleaned <= 0)
@@ -1993,20 +1557,9 @@ static int dpaa2_eth_poll(struct napi_struct *napi, int budget)
 		if (rx_cleaned >= budget ||
 		    txconf_cleaned >= DPAA2_ETH_TXCONF_PER_NAPI) {
 			work_done = budget;
-			if (ch->xdp.res & XDP_REDIRECT)
-				xdp_do_flush();
 			goto out;
 		}
 	} while (store_cleaned);
-
-	if (ch->xdp.res & XDP_REDIRECT)
-		xdp_do_flush();
-
-	/* Update NET DIM with the values for this CDAN */
-	dpaa2_io_update_net_dim(ch->dpio, ch->stats.frames_per_cdan,
-				ch->stats.bytes_per_cdan);
-	ch->stats.frames_per_cdan = 0;
-	ch->stats.bytes_per_cdan = 0;
 
 	/* We didn't consume the entire budget, so finish napi and
 	 * re-enable data availability notifications
@@ -2024,11 +1577,6 @@ static int dpaa2_eth_poll(struct napi_struct *napi, int budget)
 out:
 	netif_receive_skb_list(ch->rx_list);
 
-	if (ch->xsk_tx_pkts_sent) {
-		xsk_tx_completed(ch->xsk_pool, ch->xsk_tx_pkts_sent);
-		ch->xsk_tx_pkts_sent = 0;
-	}
-
 	if (txc_fq && txc_fq->dq_frames) {
 		nq = netdev_get_tx_queue(priv->net_dev, txc_fq->flowid);
 		netdev_tx_completed_queue(nq, txc_fq->dq_frames,
@@ -2037,7 +1585,9 @@ out:
 		txc_fq->dq_bytes = 0;
 	}
 
-	if (rx_cleaned && ch->xdp.res & XDP_TX)
+	if (ch->xdp.res & XDP_REDIRECT)
+		xdp_do_flush_map();
+	else if (rx_cleaned && ch->xdp.res & XDP_TX)
 		dpaa2_eth_xdp_tx_flush(priv, ch, &priv->fq[flowid]);
 
 	return work_done;
@@ -2108,7 +1658,7 @@ set_cgtd:
 	 * CG taildrop threshold, so it won't interfere with it; we also
 	 * want frames in non-PFC enabled traffic classes to be kept in check)
 	 */
-	td.enable = !tx_pause || pfc;
+	td.enable = !tx_pause || (tx_pause && pfc);
 	if (priv->rx_cgtd_enabled == td.enable)
 		return;
 
@@ -2150,11 +1700,8 @@ static int dpaa2_eth_link_state_update(struct dpaa2_eth_priv *priv)
 
 	/* When we manage the MAC/PHY using phylink there is no need
 	 * to manually update the netif_carrier.
-	 * We can avoid locking because we are called from the "link changed"
-	 * IRQ handler, which is the same as the "endpoint changed" IRQ handler
-	 * (the writer to priv->mac), so we cannot race with it.
 	 */
-	if (dpaa2_mac_is_type_phy(priv->mac))
+	if (priv->mac)
 		goto out;
 
 	/* Chech link state; speed / duplex changes are not treated yet */
@@ -2183,11 +1730,17 @@ static int dpaa2_eth_open(struct net_device *net_dev)
 	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
 	int err;
 
-	dpaa2_eth_seed_pools(priv);
+	err = dpaa2_eth_seed_pool(priv, priv->bpid);
+	if (err) {
+		/* Not much to do; the buffer pool, though not filled up,
+		 * may still contain some buffers which would enable us
+		 * to limp on.
+		 */
+		netdev_err(net_dev, "Buffer seeding failed for DPBP %d (bpid=%d)\n",
+			   priv->dpbp_dev->obj_desc.id, priv->bpid);
+	}
 
-	mutex_lock(&priv->mac_lock);
-
-	if (!dpaa2_eth_is_type_phy(priv)) {
+	if (!priv->mac) {
 		/* We'll only start the txqs when the link is actually ready;
 		 * make sure we don't race against the link up notification,
 		 * which may come immediately after dpni_enable();
@@ -2205,21 +1758,18 @@ static int dpaa2_eth_open(struct net_device *net_dev)
 
 	err = dpni_enable(priv->mc_io, 0, priv->mc_token);
 	if (err < 0) {
-		mutex_unlock(&priv->mac_lock);
 		netdev_err(net_dev, "dpni_enable() failed\n");
 		goto enable_err;
 	}
 
-	if (dpaa2_eth_is_type_phy(priv))
-		dpaa2_mac_start(priv->mac);
-
-	mutex_unlock(&priv->mac_lock);
+	if (priv->mac)
+		phylink_start(priv->mac->phylink);
 
 	return 0;
 
 enable_err:
 	dpaa2_eth_disable_ch_napi(priv);
-	dpaa2_eth_drain_pools(priv);
+	dpaa2_eth_drain_pool(priv);
 	return err;
 }
 
@@ -2286,16 +1836,12 @@ static int dpaa2_eth_stop(struct net_device *net_dev)
 	int dpni_enabled = 0;
 	int retries = 10;
 
-	mutex_lock(&priv->mac_lock);
-
-	if (dpaa2_eth_is_type_phy(priv)) {
-		dpaa2_mac_stop(priv->mac);
-	} else {
+	if (!priv->mac) {
 		netif_tx_stop_all_queues(net_dev);
 		netif_carrier_off(net_dev);
+	} else {
+		phylink_stop(priv->mac->phylink);
 	}
-
-	mutex_unlock(&priv->mac_lock);
 
 	/* On dpni_disable(), the MC firmware will:
 	 * - stop MAC Rx and wait for all Rx frames to be enqueued to software
@@ -2327,7 +1873,7 @@ static int dpaa2_eth_stop(struct net_device *net_dev)
 	dpaa2_eth_disable_ch_napi(priv);
 
 	/* Empty the buffer pool */
-	dpaa2_eth_drain_pools(priv);
+	dpaa2_eth_drain_pool(priv);
 
 	/* Empty the Scatter-Gather Buffer cache */
 	dpaa2_eth_sgt_cache_drain(priv);
@@ -2414,43 +1960,6 @@ static void dpaa2_eth_add_mc_hw_addr(const struct net_device *net_dev,
 				    "Could not add mcast MAC %pM to the filtering table (err %d)\n",
 				    ha->addr, err);
 	}
-}
-
-static int dpaa2_eth_rx_add_vid(struct net_device *net_dev,
-				__be16 vlan_proto, u16 vid)
-{
-	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
-	int err;
-
-	err = dpni_add_vlan_id(priv->mc_io, 0, priv->mc_token,
-			       vid, 0, 0, 0);
-
-	if (err) {
-		netdev_warn(priv->net_dev,
-			    "Could not add the vlan id %u\n",
-			    vid);
-		return err;
-	}
-
-	return 0;
-}
-
-static int dpaa2_eth_rx_kill_vid(struct net_device *net_dev,
-				 __be16 vlan_proto, u16 vid)
-{
-	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
-	int err;
-
-	err = dpni_remove_vlan_id(priv->mc_io, 0, priv->mc_token, vid);
-
-	if (err) {
-		netdev_warn(priv->net_dev,
-			    "Could not remove the vlan id %u\n",
-			    vid);
-		return err;
-	}
-
-	return 0;
 }
 
 static void dpaa2_eth_set_rx_mode(struct net_device *net_dev)
@@ -2559,13 +2068,6 @@ static int dpaa2_eth_set_features(struct net_device *net_dev,
 	bool enable;
 	int err;
 
-	if (changed & NETIF_F_HW_VLAN_CTAG_FILTER) {
-		enable = !!(features & NETIF_F_HW_VLAN_CTAG_FILTER);
-		err = dpaa2_eth_set_rx_vlan_filtering(priv, enable);
-		if (err)
-			return err;
-	}
-
 	if (changed & NETIF_F_RXCSUM) {
 		enable = !!(features & NETIF_F_RXCSUM);
 		err = dpaa2_eth_set_rx_csum(priv, enable);
@@ -2612,9 +2114,6 @@ static int dpaa2_eth_ts_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		config.rx_filter = HWTSTAMP_FILTER_ALL;
 	}
 
-	if (priv->tx_tstamp_type == HWTSTAMP_TX_ONESTEP_SYNC)
-		dpaa2_ptp_onestep_reg_update_method(priv);
-
 	return copy_to_user(rq->ifr_data, &config, sizeof(config)) ?
 			-EFAULT : 0;
 }
@@ -2622,20 +2121,12 @@ static int dpaa2_eth_ts_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 static int dpaa2_eth_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
 	struct dpaa2_eth_priv *priv = netdev_priv(dev);
-	int err;
 
 	if (cmd == SIOCSHWTSTAMP)
 		return dpaa2_eth_ts_ioctl(dev, rq, cmd);
 
-	mutex_lock(&priv->mac_lock);
-
-	if (dpaa2_eth_is_type_phy(priv)) {
-		err = phylink_mii_ioctl(priv->mac->phylink, rq, cmd);
-		mutex_unlock(&priv->mac_lock);
-		return err;
-	}
-
-	mutex_unlock(&priv->mac_lock);
+	if (priv->mac)
+		return phylink_mii_ioctl(priv->mac->phylink, rq, cmd);
 
 	return -EOPNOTSUPP;
 }
@@ -2744,7 +2235,7 @@ static int dpaa2_eth_setup_xdp(struct net_device *dev, struct bpf_prog *prog)
 	need_update = (!!priv->xdp_prog != !!prog);
 
 	if (up)
-		dev_close(dev);
+		dpaa2_eth_stop(dev);
 
 	/* While in xdp mode, enforce a maximum Rx frame size based on MTU.
 	 * Also, when switching between xdp/non-xdp modes we need to reconfigure
@@ -2772,7 +2263,7 @@ static int dpaa2_eth_setup_xdp(struct net_device *dev, struct bpf_prog *prog)
 	}
 
 	if (up) {
-		err = dev_open(dev, NULL);
+		err = dpaa2_eth_open(dev);
 		if (err)
 			return err;
 	}
@@ -2783,7 +2274,7 @@ out_err:
 	if (prog)
 		bpf_prog_sub(prog, priv->num_channels);
 	if (up)
-		dev_open(dev, NULL);
+		dpaa2_eth_open(dev);
 
 	return err;
 }
@@ -2793,8 +2284,6 @@ static int dpaa2_eth_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
 		return dpaa2_eth_setup_xdp(dev, xdp->prog);
-	case XDP_SETUP_XSK_POOL:
-		return dpaa2_xsk_setup_pool(dev, xdp->xsk.pool, xdp->xsk.queue_id);
 	default:
 		return -EINVAL;
 	}
@@ -2887,6 +2376,8 @@ static int dpaa2_eth_xdp_xmit(struct net_device *net_dev, int n,
 	percpu_stats->tx_packets += enqueued;
 	for (i = 0; i < enqueued; i++)
 		percpu_stats->tx_bytes += dpaa2_fd_get_len(&fds[i]);
+	for (i = enqueued; i < n; i++)
+		xdp_return_frame_rx_napi(frames[i]);
 
 	return enqueued;
 }
@@ -3021,14 +2512,11 @@ static const struct net_device_ops dpaa2_eth_ops = {
 	.ndo_get_stats64 = dpaa2_eth_get_stats,
 	.ndo_set_rx_mode = dpaa2_eth_set_rx_mode,
 	.ndo_set_features = dpaa2_eth_set_features,
-	.ndo_eth_ioctl = dpaa2_eth_ioctl,
+	.ndo_do_ioctl = dpaa2_eth_ioctl,
 	.ndo_change_mtu = dpaa2_eth_change_mtu,
 	.ndo_bpf = dpaa2_eth_xdp,
 	.ndo_xdp_xmit = dpaa2_eth_xdp_xmit,
-	.ndo_xsk_wakeup = dpaa2_xsk_wakeup,
 	.ndo_setup_tc = dpaa2_eth_setup_tc,
-	.ndo_vlan_rx_add_vid = dpaa2_eth_rx_add_vid,
-	.ndo_vlan_rx_kill_vid = dpaa2_eth_rx_kill_vid
 };
 
 static void dpaa2_eth_cdan_cb(struct dpaa2_io_notification_ctx *ctx)
@@ -3040,11 +2528,7 @@ static void dpaa2_eth_cdan_cb(struct dpaa2_io_notification_ctx *ctx)
 	/* Update NAPI statistics */
 	ch->stats.cdan++;
 
-	/* NAPI can also be scheduled from the AF_XDP Tx path. Mark a missed
-	 * so that it can be rescheduled again.
-	 */
-	if (!napi_if_scheduled_mark_missed(&ch->napi))
-		napi_schedule(&ch->napi);
+	napi_schedule(&ch->napi);
 }
 
 /* Allocate and configure a DPCON object */
@@ -3057,12 +2541,10 @@ static struct fsl_mc_device *dpaa2_eth_setup_dpcon(struct dpaa2_eth_priv *priv)
 	err = fsl_mc_object_allocate(to_fsl_mc_device(dev),
 				     FSL_MC_POOL_DPCON, &dpcon);
 	if (err) {
-		if (err == -ENXIO) {
-			dev_dbg(dev, "Waiting for DPCON\n");
+		if (err == -ENXIO)
 			err = -EPROBE_DEFER;
-		} else {
+		else
 			dev_info(dev, "Not enough DPCONs, will go on as-is\n");
-		}
 		return ERR_PTR(err);
 	}
 
@@ -3172,9 +2654,7 @@ static int dpaa2_eth_setup_dpio(struct dpaa2_eth_priv *priv)
 		channel = dpaa2_eth_alloc_channel(priv);
 		if (IS_ERR_OR_NULL(channel)) {
 			err = PTR_ERR_OR_ZERO(channel);
-			if (err == -EPROBE_DEFER)
-				dev_dbg(dev, "waiting for affine channel\n");
-			else
+			if (err != -EPROBE_DEFER)
 				dev_info(dev,
 					 "No affine channel for cpu %d and above\n", i);
 			goto err_alloc_ch;
@@ -3357,14 +2837,13 @@ static void dpaa2_eth_setup_fqs(struct dpaa2_eth_priv *priv)
 	dpaa2_eth_set_fq_affinity(priv);
 }
 
-/* Allocate and configure a buffer pool */
-struct dpaa2_eth_bp *dpaa2_eth_allocate_dpbp(struct dpaa2_eth_priv *priv)
+/* Allocate and configure one buffer pool for each interface */
+static int dpaa2_eth_setup_dpbp(struct dpaa2_eth_priv *priv)
 {
-	struct device *dev = priv->net_dev->dev.parent;
-	struct fsl_mc_device *dpbp_dev;
-	struct dpbp_attr dpbp_attrs;
-	struct dpaa2_eth_bp *bp;
 	int err;
+	struct fsl_mc_device *dpbp_dev;
+	struct device *dev = priv->net_dev->dev.parent;
+	struct dpbp_attr dpbp_attrs;
 
 	err = fsl_mc_object_allocate(to_fsl_mc_device(dev), FSL_MC_POOL_DPBP,
 				     &dpbp_dev);
@@ -3373,16 +2852,12 @@ struct dpaa2_eth_bp *dpaa2_eth_allocate_dpbp(struct dpaa2_eth_priv *priv)
 			err = -EPROBE_DEFER;
 		else
 			dev_err(dev, "DPBP device allocation failed\n");
-		return ERR_PTR(err);
+		return err;
 	}
 
-	bp = kzalloc(sizeof(*bp), GFP_KERNEL);
-	if (!bp) {
-		err = -ENOMEM;
-		goto err_alloc;
-	}
+	priv->dpbp_dev = dpbp_dev;
 
-	err = dpbp_open(priv->mc_io, 0, dpbp_dev->obj_desc.id,
+	err = dpbp_open(priv->mc_io, 0, priv->dpbp_dev->obj_desc.id,
 			&dpbp_dev->mc_handle);
 	if (err) {
 		dev_err(dev, "dpbp_open() failed\n");
@@ -3407,11 +2882,9 @@ struct dpaa2_eth_bp *dpaa2_eth_allocate_dpbp(struct dpaa2_eth_priv *priv)
 		dev_err(dev, "dpbp_get_attributes() failed\n");
 		goto err_get_attr;
 	}
+	priv->bpid = dpbp_attrs.bpid;
 
-	bp->dev = dpbp_dev;
-	bp->bpid = dpbp_attrs.bpid;
-
-	return bp;
+	return 0;
 
 err_get_attr:
 	dpbp_disable(priv->mc_io, 0, dpbp_dev->mc_handle);
@@ -3419,58 +2892,17 @@ err_enable:
 err_reset:
 	dpbp_close(priv->mc_io, 0, dpbp_dev->mc_handle);
 err_open:
-	kfree(bp);
-err_alloc:
 	fsl_mc_object_free(dpbp_dev);
 
-	return ERR_PTR(err);
+	return err;
 }
 
-static int dpaa2_eth_setup_default_dpbp(struct dpaa2_eth_priv *priv)
+static void dpaa2_eth_free_dpbp(struct dpaa2_eth_priv *priv)
 {
-	struct dpaa2_eth_bp *bp;
-	int i;
-
-	bp = dpaa2_eth_allocate_dpbp(priv);
-	if (IS_ERR(bp))
-		return PTR_ERR(bp);
-
-	priv->bp[DPAA2_ETH_DEFAULT_BP_IDX] = bp;
-	priv->num_bps++;
-
-	for (i = 0; i < priv->num_channels; i++)
-		priv->channel[i]->bp = bp;
-
-	return 0;
-}
-
-void dpaa2_eth_free_dpbp(struct dpaa2_eth_priv *priv, struct dpaa2_eth_bp *bp)
-{
-	int idx_bp;
-
-	/* Find the index at which this BP is stored */
-	for (idx_bp = 0; idx_bp < priv->num_bps; idx_bp++)
-		if (priv->bp[idx_bp] == bp)
-			break;
-
-	/* Drain the pool and disable the associated MC object */
-	dpaa2_eth_drain_pool(priv, bp->bpid);
-	dpbp_disable(priv->mc_io, 0, bp->dev->mc_handle);
-	dpbp_close(priv->mc_io, 0, bp->dev->mc_handle);
-	fsl_mc_object_free(bp->dev);
-	kfree(bp);
-
-	/* Move the last in use DPBP over in this position */
-	priv->bp[idx_bp] = priv->bp[priv->num_bps - 1];
-	priv->num_bps--;
-}
-
-static void dpaa2_eth_free_dpbps(struct dpaa2_eth_priv *priv)
-{
-	int i;
-
-	for (i = 0; i < priv->num_bps; i++)
-		dpaa2_eth_free_dpbp(priv, priv->bp[i]);
+	dpaa2_eth_drain_pool(priv);
+	dpbp_disable(priv->mc_io, 0, priv->dpbp_dev->mc_handle);
+	dpbp_close(priv->mc_io, 0, priv->dpbp_dev->mc_handle);
+	fsl_mc_object_free(priv->dpbp_dev);
 }
 
 static int dpaa2_eth_set_buffer_layout(struct dpaa2_eth_priv *priv)
@@ -3811,7 +3243,7 @@ static int dpaa2_eth_setup_dpni(struct fsl_mc_device *ls_dev)
 		dev_err(dev, "DPNI version %u.%u not supported, need >= %u.%u\n",
 			priv->dpni_ver_major, priv->dpni_ver_minor,
 			DPNI_VER_MAJOR, DPNI_VER_MINOR);
-		err = -EOPNOTSUPP;
+		err = -ENOTSUPP;
 		goto close;
 	}
 
@@ -3912,7 +3344,7 @@ static int dpaa2_eth_setup_rx_flow(struct dpaa2_eth_priv *priv,
 		return 0;
 
 	err = xdp_rxq_info_reg(&fq->channel->xdp_rxq, priv->net_dev,
-			       fq->flowid, 0);
+			       fq->flowid);
 	if (err) {
 		dev_err(dev, "xdp_rxq_info_reg failed\n");
 		return err;
@@ -4355,16 +3787,15 @@ out:
  */
 static int dpaa2_eth_bind_dpni(struct dpaa2_eth_priv *priv)
 {
-	struct dpaa2_eth_bp *bp = priv->bp[DPAA2_ETH_DEFAULT_BP_IDX];
 	struct net_device *net_dev = priv->net_dev;
-	struct dpni_pools_cfg pools_params = { 0 };
 	struct device *dev = net_dev->dev.parent;
+	struct dpni_pools_cfg pools_params;
 	struct dpni_error_cfg err_cfg;
 	int err = 0;
 	int i;
 
 	pools_params.num_dpbp = 1;
-	pools_params.pools[0].dpbp_id = bp->dev->obj_desc.id;
+	pools_params.pools[0].dpbp_id = priv->dpbp_dev->obj_desc.id;
 	pools_params.pools[0].backup_pool = 0;
 	pools_params.pools[0].buffer_size = priv->rx_buf_size;
 	err = dpni_set_pools(priv->mc_io, 0, priv->mc_token, &pools_params);
@@ -4498,7 +3929,7 @@ static int dpaa2_eth_set_mac_addr(struct dpaa2_eth_priv *priv)
 				return err;
 			}
 		}
-		eth_hw_addr_set(net_dev, mac_addr);
+		memcpy(net_dev->dev_addr, mac_addr, net_dev->addr_len);
 	} else if (is_zero_ether_addr(dpni_mac_addr)) {
 		/* No MAC address configured, fill in net_dev->dev_addr
 		 * with a random one
@@ -4523,7 +3954,7 @@ static int dpaa2_eth_set_mac_addr(struct dpaa2_eth_priv *priv)
 		/* NET_ADDR_PERM is default, all we have to do is
 		 * fill in the device addr.
 		 */
-		eth_hw_addr_set(net_dev, dpni_mac_addr);
+		memcpy(net_dev->dev_addr, dpni_mac_addr, net_dev->addr_len);
 	}
 
 	return 0;
@@ -4576,8 +4007,6 @@ static int dpaa2_eth_netdev_init(struct net_device *net_dev)
 		return err;
 	}
 
-	dpaa2_eth_detect_features(priv);
-
 	/* Capabilities listing */
 	supported |= IFF_LIVE_ADDR_CHANGE;
 
@@ -4593,18 +4022,8 @@ static int dpaa2_eth_netdev_init(struct net_device *net_dev)
 	net_dev->features = NETIF_F_RXCSUM |
 			    NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
 			    NETIF_F_SG | NETIF_F_HIGHDMA |
-			    NETIF_F_LLTX | NETIF_F_HW_TC | NETIF_F_TSO;
-	net_dev->gso_max_segs = DPAA2_ETH_ENQUEUE_MAX_FDS;
+			    NETIF_F_LLTX | NETIF_F_HW_TC;
 	net_dev->hw_features = net_dev->features;
-	net_dev->xdp_features = NETDEV_XDP_ACT_BASIC |
-				NETDEV_XDP_ACT_REDIRECT |
-				NETDEV_XDP_ACT_NDO_XMIT;
-	if (priv->dpni_attrs.wriop_version >= DPAA2_WRIOP_VERSION(3, 0, 0) &&
-	    priv->dpni_attrs.num_queues <= 8)
-		net_dev->xdp_features |= NETDEV_XDP_ACT_XSK_ZEROCOPY;
-
-	if (priv->dpni_attrs.vlan_filter_entries)
-		net_dev->hw_features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	return 0;
 }
@@ -4632,14 +4051,11 @@ static int dpaa2_eth_connect_mac(struct dpaa2_eth_priv *priv)
 	int err;
 
 	dpni_dev = to_fsl_mc_device(priv->net_dev->dev.parent);
-	dpmac_dev = fsl_mc_get_endpoint(dpni_dev, 0);
+	dpmac_dev = fsl_mc_get_endpoint(dpni_dev);
+	if (IS_ERR_OR_NULL(dpmac_dev) || dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type)
+		return 0;
 
-	if (PTR_ERR(dpmac_dev) == -EPROBE_DEFER) {
-		netdev_dbg(priv->net_dev, "waiting for mac\n");
-		return PTR_ERR(dpmac_dev);
-	}
-
-	if (IS_ERR(dpmac_dev) || dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type)
+	if (dpaa2_mac_is_type_fixed(dpmac_dev, priv->mc_io))
 		return 0;
 
 	mac = kzalloc(sizeof(struct dpaa2_mac), GFP_KERNEL);
@@ -4650,54 +4066,25 @@ static int dpaa2_eth_connect_mac(struct dpaa2_eth_priv *priv)
 	mac->mc_io = priv->mc_io;
 	mac->net_dev = priv->net_dev;
 
-	err = dpaa2_mac_open(mac);
-	if (err)
-		goto err_free_mac;
-
-	if (dpaa2_mac_is_type_phy(mac)) {
-		err = dpaa2_mac_connect(mac);
-		if (err) {
-			if (err == -EPROBE_DEFER)
-				netdev_dbg(priv->net_dev,
-					   "could not connect to MAC\n");
-			else
-				netdev_err(priv->net_dev,
-					   "Error connecting to the MAC endpoint: %pe",
-					   ERR_PTR(err));
-			goto err_close_mac;
-		}
+	err = dpaa2_mac_connect(mac);
+	if (err) {
+		netdev_err(priv->net_dev, "Error connecting to the MAC endpoint\n");
+		kfree(mac);
+		return err;
 	}
-
-	mutex_lock(&priv->mac_lock);
 	priv->mac = mac;
-	mutex_unlock(&priv->mac_lock);
 
 	return 0;
-
-err_close_mac:
-	dpaa2_mac_close(mac);
-err_free_mac:
-	kfree(mac);
-	return err;
 }
 
 static void dpaa2_eth_disconnect_mac(struct dpaa2_eth_priv *priv)
 {
-	struct dpaa2_mac *mac;
-
-	mutex_lock(&priv->mac_lock);
-	mac = priv->mac;
-	priv->mac = NULL;
-	mutex_unlock(&priv->mac_lock);
-
-	if (!mac)
+	if (!priv->mac)
 		return;
 
-	if (dpaa2_mac_is_type_phy(mac))
-		dpaa2_mac_disconnect(mac);
-
-	dpaa2_mac_close(mac);
-	kfree(mac);
+	dpaa2_mac_disconnect(priv->mac);
+	kfree(priv->mac);
+	priv->mac = NULL;
 }
 
 static irqreturn_t dpni_irq0_handler_thread(int irq_num, void *arg)
@@ -4707,7 +4094,6 @@ static irqreturn_t dpni_irq0_handler_thread(int irq_num, void *arg)
 	struct fsl_mc_device *dpni_dev = to_fsl_mc_device(dev);
 	struct net_device *net_dev = dev_get_drvdata(dev);
 	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
-	bool had_mac;
 	int err;
 
 	err = dpni_get_irq_status(dpni_dev->mc_io, 0, dpni_dev->mc_handle,
@@ -4724,15 +4110,12 @@ static irqreturn_t dpni_irq0_handler_thread(int irq_num, void *arg)
 		dpaa2_eth_set_mac_addr(netdev_priv(net_dev));
 		dpaa2_eth_update_tx_fqids(priv);
 
-		/* We can avoid locking because the "endpoint changed" IRQ
-		 * handler is the only one who changes priv->mac at runtime,
-		 * so we are not racing with anyone.
-		 */
-		had_mac = !!priv->mac;
-		if (had_mac)
+		rtnl_lock();
+		if (priv->mac)
 			dpaa2_eth_disconnect_mac(priv);
 		else
 			dpaa2_eth_connect_mac(priv);
+		rtnl_unlock();
 	}
 
 	return IRQ_HANDLED;
@@ -4750,7 +4133,7 @@ static int dpaa2_eth_setup_irqs(struct fsl_mc_device *ls_dev)
 	}
 
 	irq = ls_dev->irqs[0];
-	err = devm_request_threaded_irq(&ls_dev->dev, irq->virq,
+	err = devm_request_threaded_irq(&ls_dev->dev, irq->msi_desc->irq,
 					NULL, dpni_irq0_handler_thread,
 					IRQF_NO_SUSPEND | IRQF_ONESHOT,
 					dev_name(&ls_dev->dev), &ls_dev->dev);
@@ -4777,7 +4160,7 @@ static int dpaa2_eth_setup_irqs(struct fsl_mc_device *ls_dev)
 	return 0;
 
 free_irq:
-	devm_free_irq(&ls_dev->dev, irq->virq, &ls_dev->dev);
+	devm_free_irq(&ls_dev->dev, irq->msi_desc->irq, &ls_dev->dev);
 free_mc_irq:
 	fsl_mc_free_irqs(ls_dev);
 
@@ -4792,7 +4175,8 @@ static void dpaa2_eth_add_ch_napi(struct dpaa2_eth_priv *priv)
 	for (i = 0; i < priv->num_channels; i++) {
 		ch = priv->channel[i];
 		/* NAPI weight *MUST* be a multiple of DPAA2_ETH_STORE_SIZE */
-		netif_napi_add(priv->net_dev, &ch->napi, dpaa2_eth_poll);
+		netif_napi_add(priv->net_dev, &ch->napi, dpaa2_eth_poll,
+			       NAPI_POLL_WEIGHT);
 	}
 }
 
@@ -4828,9 +4212,6 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 
 	priv = netdev_priv(net_dev);
 	priv->net_dev = net_dev;
-	SET_NETDEV_DEVLINK_PORT(net_dev, &priv->devlink_port);
-
-	mutex_init(&priv->mac_lock);
 
 	priv->iommu_domain = iommu_get_domain_for_dev(dev);
 
@@ -4847,18 +4228,14 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 	mutex_init(&priv->onestep_tstamp_lock);
 	skb_queue_head_init(&priv->tx_skbs);
 
-	priv->rx_copybreak = DPAA2_ETH_DEFAULT_COPYBREAK;
-
 	/* Obtain a MC portal */
 	err = fsl_mc_portal_allocate(dpni_dev, FSL_MC_IO_ATOMIC_CONTEXT_PORTAL,
 				     &priv->mc_io);
 	if (err) {
-		if (err == -ENXIO) {
-			dev_dbg(dev, "waiting for MC portal\n");
+		if (err == -ENXIO)
 			err = -EPROBE_DEFER;
-		} else {
+		else
 			dev_err(dev, "MC portal allocation failed\n");
-		}
 		goto err_portal_alloc;
 	}
 
@@ -4873,7 +4250,7 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 
 	dpaa2_eth_setup_fqs(priv);
 
-	err = dpaa2_eth_setup_default_dpbp(priv);
+	err = dpaa2_eth_setup_dpbp(priv);
 	if (err)
 		goto err_dpbp_setup;
 
@@ -4905,13 +4282,6 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 		goto err_alloc_sgt_cache;
 	}
 
-	priv->fd = alloc_percpu(*priv->fd);
-	if (!priv->fd) {
-		dev_err(dev, "alloc_percpu(fds) failed\n");
-		err = -ENOMEM;
-		goto err_alloc_fds;
-	}
-
 	err = dpaa2_eth_netdev_init(net_dev);
 	if (err)
 		goto err_netdev_init;
@@ -4939,10 +4309,6 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 	}
 #endif
 
-	err = dpaa2_eth_connect_mac(priv);
-	if (err)
-		goto err_connect_mac;
-
 	err = dpaa2_eth_setup_irqs(dpni_dev);
 	if (err) {
 		netdev_warn(net_dev, "Failed to set link interrupt, fall back to polling\n");
@@ -4955,7 +4321,11 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 		priv->do_link_poll = true;
 	}
 
-	err = dpaa2_eth_dl_alloc(priv);
+	err = dpaa2_eth_connect_mac(priv);
+	if (err)
+		goto err_connect_mac;
+
+	err = dpaa2_eth_dl_register(priv);
 	if (err)
 		goto err_dl_register;
 
@@ -4977,7 +4347,6 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 	dpaa2_dbg_add(priv);
 #endif
 
-	dpaa2_eth_dl_register(priv);
 	dev_info(dev, "Probed interface %s\n", net_dev->name);
 	return 0;
 
@@ -4986,21 +4355,19 @@ err_netdev_reg:
 err_dl_port_add:
 	dpaa2_eth_dl_traps_unregister(priv);
 err_dl_trap_register:
-	dpaa2_eth_dl_free(priv);
+	dpaa2_eth_dl_unregister(priv);
 err_dl_register:
+	dpaa2_eth_disconnect_mac(priv);
+err_connect_mac:
 	if (priv->do_link_poll)
 		kthread_stop(priv->poll_thread);
 	else
 		fsl_mc_free_irqs(dpni_dev);
 err_poll_thread:
-	dpaa2_eth_disconnect_mac(priv);
-err_connect_mac:
 	dpaa2_eth_free_rings(priv);
 err_alloc_rings:
 err_csum:
 err_netdev_init:
-	free_percpu(priv->fd);
-err_alloc_fds:
 	free_percpu(priv->sgt_cache);
 err_alloc_sgt_cache:
 	free_percpu(priv->percpu_extras);
@@ -5009,7 +4376,7 @@ err_alloc_percpu_extras:
 err_alloc_percpu_stats:
 	dpaa2_eth_del_ch_napi(priv);
 err_bind:
-	dpaa2_eth_free_dpbps(priv);
+	dpaa2_eth_free_dpbp(priv);
 err_dpbp_setup:
 	dpaa2_eth_free_dpio(priv);
 err_dpio_setup:
@@ -5025,7 +4392,7 @@ err_wq_alloc:
 	return err;
 }
 
-static void dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
+static int dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 {
 	struct device *dev;
 	struct net_device *net_dev;
@@ -5035,36 +4402,33 @@ static void dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 	net_dev = dev_get_drvdata(dev);
 	priv = netdev_priv(net_dev);
 
-	dpaa2_eth_dl_unregister(priv);
-
 #ifdef CONFIG_DEBUG_FS
 	dpaa2_dbg_remove(priv);
 #endif
 
 	unregister_netdev(net_dev);
+	rtnl_lock();
+	dpaa2_eth_disconnect_mac(priv);
+	rtnl_unlock();
 
 	dpaa2_eth_dl_port_del(priv);
 	dpaa2_eth_dl_traps_unregister(priv);
-	dpaa2_eth_dl_free(priv);
+	dpaa2_eth_dl_unregister(priv);
 
 	if (priv->do_link_poll)
 		kthread_stop(priv->poll_thread);
 	else
 		fsl_mc_free_irqs(ls_dev);
 
-	dpaa2_eth_disconnect_mac(priv);
 	dpaa2_eth_free_rings(priv);
-	free_percpu(priv->fd);
 	free_percpu(priv->sgt_cache);
 	free_percpu(priv->percpu_stats);
 	free_percpu(priv->percpu_extras);
 
 	dpaa2_eth_del_ch_napi(priv);
-	dpaa2_eth_free_dpbps(priv);
+	dpaa2_eth_free_dpbp(priv);
 	dpaa2_eth_free_dpio(priv);
 	dpaa2_eth_free_dpni(priv);
-	if (priv->onestep_reg_base)
-		iounmap(priv->onestep_reg_base);
 
 	fsl_mc_portal_free(priv->mc_io);
 
@@ -5073,6 +4437,8 @@ static void dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 	dev_dbg(net_dev->dev.parent, "Removed interface %s\n", net_dev->name);
 
 	free_netdev(net_dev);
+
+	return 0;
 }
 
 static const struct fsl_mc_device_id dpaa2_eth_match_id_table[] = {

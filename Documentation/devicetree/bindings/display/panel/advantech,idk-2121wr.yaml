@@ -37,32 +37,33 @@ properties:
   panel-timing: true
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
-
+    type: object
     properties:
       port@0:
-        $ref: /schemas/graph.yaml#/$defs/port-base
-        unevaluatedProperties: false
+        type: object
         description: The sink for odd pixels.
         properties:
+          reg:
+            const: 0
+
           dual-lvds-odd-pixels: true
 
         required:
+          - reg
           - dual-lvds-odd-pixels
 
       port@1:
-        $ref: /schemas/graph.yaml#/$defs/port-base
-        unevaluatedProperties: false
+        type: object
         description: The sink for even pixels.
         properties:
+          reg:
+            const: 1
+
           dual-lvds-even-pixels: true
 
         required:
+          - reg
           - dual-lvds-even-pixels
-
-    required:
-      - port@0
-      - port@1
 
 additionalProperties: false
 

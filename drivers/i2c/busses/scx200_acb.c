@@ -523,12 +523,14 @@ static void scx200_cleanup_iface(struct scx200_acb_iface *iface)
 	kfree(iface);
 }
 
-static void scx200_remove(struct platform_device *pdev)
+static int scx200_remove(struct platform_device *pdev)
 {
 	struct scx200_acb_iface *iface;
 
 	iface = platform_get_drvdata(pdev);
 	scx200_cleanup_iface(iface);
+
+	return 0;
 }
 
 static struct platform_driver scx200_pci_driver = {
@@ -536,7 +538,7 @@ static struct platform_driver scx200_pci_driver = {
 		.name = "cs5535-smb",
 	},
 	.probe = scx200_probe,
-	.remove_new = scx200_remove,
+	.remove = scx200_remove,
 };
 
 static const struct pci_device_id scx200_isa[] = {

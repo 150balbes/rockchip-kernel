@@ -69,7 +69,7 @@ static __init void prom_init_mem(void)
 	 * call them at the beginning of the boot.
 	 *
 	 * BCM47XX uses 128MB for addressing the ram, if the system contains
-	 * less than that amount of ram it remaps the ram more often into the
+	 * less that that amount of ram it remaps the ram more often into the
 	 * available space.
 	 */
 
@@ -111,6 +111,10 @@ void __init prom_init(void)
 {
 	prom_init_mem();
 	setup_8250_early_printk_port(CKSEG1ADDR(BCM47XX_SERIAL_ADDR), 0, 0);
+}
+
+void __init prom_free_prom_memory(void)
+{
 }
 
 #if defined(CONFIG_BCM47XX_BCMA) && defined(CONFIG_HIGHMEM)

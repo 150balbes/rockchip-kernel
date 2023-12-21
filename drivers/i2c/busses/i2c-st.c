@@ -524,7 +524,7 @@ static void st_i2c_handle_write(struct st_i2c_dev *i2c_dev)
 }
 
 /**
- * st_i2c_handle_read() - Handle FIFO empty interrupt in case of read
+ * st_i2c_handle_write() - Handle FIFO enmpty interrupt in case of read
  * @i2c_dev: Controller's private data
  */
 static void st_i2c_handle_read(struct st_i2c_dev *i2c_dev)
@@ -558,7 +558,7 @@ static void st_i2c_handle_read(struct st_i2c_dev *i2c_dev)
 }
 
 /**
- * st_i2c_isr_thread() - Interrupt routine
+ * st_i2c_isr() - Interrupt routine
  * @irq: interrupt number
  * @data: Controller's private data
  */
@@ -740,6 +740,7 @@ static int st_i2c_xfer(struct i2c_adapter *i2c_adap,
 	return (ret < 0) ? ret : i;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int st_i2c_suspend(struct device *dev)
 {
 	struct st_i2c_dev *i2c_dev = dev_get_drvdata(dev);
@@ -761,7 +762,11 @@ static int st_i2c_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(st_i2c_pm, st_i2c_suspend, st_i2c_resume);
+static SIMPLE_DEV_PM_OPS(st_i2c_pm, st_i2c_suspend, st_i2c_resume);
+#define ST_I2C_PM	(&st_i2c_pm)
+#else
+#define ST_I2C_PM	NULL
+#endif
 
 static u32 st_i2c_func(struct i2c_adapter *adap)
 {
@@ -876,11 +881,13 @@ static int st_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void st_i2c_remove(struct platform_device *pdev)
+static int st_i2c_remove(struct platform_device *pdev)
 {
 	struct st_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&i2c_dev->adap);
+
+	return 0;
 }
 
 static const struct of_device_id st_i2c_match[] = {
@@ -894,10 +901,10 @@ static struct platform_driver st_i2c_driver = {
 	.driver = {
 		.name = "st-i2c",
 		.of_match_table = st_i2c_match,
-		.pm = pm_sleep_ptr(&st_i2c_pm),
+		.pm = ST_I2C_PM,
 	},
 	.probe = st_i2c_probe,
-	.remove_new = st_i2c_remove,
+	.remove = st_i2c_remove,
 };
 
 module_platform_driver(st_i2c_driver);

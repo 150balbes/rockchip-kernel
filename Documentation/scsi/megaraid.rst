@@ -1,8 +1,8 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-=================================
-Megaraid Common Management Module
-=================================
+==========================
+Notes on Management Module
+==========================
 
 Overview
 --------

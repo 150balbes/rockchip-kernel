@@ -193,11 +193,13 @@ static void pcap_isr_work(struct work_struct *work)
 		ezx_pcap_write(pcap, PCAP_REG_MSR, isr | msr);
 		ezx_pcap_write(pcap, PCAP_REG_ISR, isr);
 
+		local_irq_disable();
 		service = isr & ~msr;
 		for (irq = pcap->irq_base; service; service >>= 1, irq++) {
 			if (service & 1)
-				generic_handle_irq_safe(irq);
+				generic_handle_irq(irq);
 		}
+		local_irq_enable();
 		ezx_pcap_write(pcap, PCAP_REG_MSR, pcap->msr);
 	} while (gpio_get_value(pdata->gpio));
 }
@@ -390,7 +392,7 @@ static int pcap_add_subdev(struct pcap_chip *pcap,
 	return ret;
 }
 
-static void ezx_pcap_remove(struct spi_device *spi)
+static int ezx_pcap_remove(struct spi_device *spi)
 {
 	struct pcap_chip *pcap = spi_get_drvdata(spi);
 	unsigned long flags;
@@ -410,6 +412,8 @@ static void ezx_pcap_remove(struct spi_device *spi)
 		irq_set_chip_and_handler(i, NULL, NULL);
 
 	destroy_workqueue(pcap->workqueue);
+
+	return 0;
 }
 
 static int ezx_pcap_probe(struct spi_device *spi)
@@ -528,6 +532,7 @@ static void __exit ezx_pcap_exit(void)
 subsys_initcall(ezx_pcap_init);
 module_exit(ezx_pcap_exit);
 
+MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Ribeiro / Harald Welte");
 MODULE_DESCRIPTION("Motorola PCAP2 ASIC Driver");
 MODULE_ALIAS("spi:ezx-pcap");

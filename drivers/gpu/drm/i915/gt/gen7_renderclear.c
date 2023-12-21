@@ -6,7 +6,6 @@
 #include "gen7_renderclear.h"
 #include "i915_drv.h"
 #include "intel_gpu_commands.h"
-#include "intel_gt_regs.h"
 
 #define GT3_INLINE_DATA_DELAYS 0x1E00
 #define batch_advance(Y, CS) GEM_BUG_ON((Y)->end != (CS))
@@ -41,7 +40,7 @@ struct batch_vals {
 	u32 size;
 };
 
-static int num_primitives(const struct batch_vals *bv)
+static inline int num_primitives(const struct batch_vals *bv)
 {
 	/*
 	 * We need to saturate the GPU with work in order to dispatch
@@ -106,7 +105,7 @@ static u32 batch_offset(const struct batch_chunk *bc, u32 *cs)
 
 static u32 batch_addr(const struct batch_chunk *bc)
 {
-	return i915_vma_offset(bc->vma);
+	return bc->vma->node.start;
 }
 
 static void batch_add(struct batch_chunk *bc, const u32 d)

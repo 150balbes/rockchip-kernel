@@ -13,7 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/property.h>
+#include <linux/of_irq.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -112,7 +112,8 @@ static void smbalert_work(struct work_struct *work)
 }
 
 /* Setup SMBALERT# infrastructure */
-static int smbalert_probe(struct i2c_client *ara)
+static int smbalert_probe(struct i2c_client *ara,
+			  const struct i2c_device_id *id)
 {
 	struct i2c_smbus_alert_setup *setup = dev_get_platdata(&ara->dev);
 	struct i2c_smbus_alert *alert;
@@ -127,8 +128,7 @@ static int smbalert_probe(struct i2c_client *ara)
 	if (setup) {
 		irq = setup->irq;
 	} else {
-		irq = fwnode_irq_get_byname(dev_fwnode(adapter->dev.parent),
-					    "smbus_alert");
+		irq = of_irq_get_byname(adapter->dev.of_node, "smbus_alert");
 		if (irq <= 0)
 			return irq;
 	}
@@ -152,11 +152,12 @@ static int smbalert_probe(struct i2c_client *ara)
 }
 
 /* IRQ and memory resources are managed so they are freed automatically */
-static void smbalert_remove(struct i2c_client *ara)
+static int smbalert_remove(struct i2c_client *ara)
 {
 	struct i2c_smbus_alert *alert = i2c_get_clientdata(ara);
 
 	cancel_work_sync(&alert->alert);
+	return 0;
 }
 
 static const struct i2c_device_id smbalert_ids[] = {
@@ -360,15 +361,9 @@ void i2c_register_spd(struct i2c_adapter *adap)
 		return;
 	}
 
-	/*
-	 * Memory types could be found at section 7.18.2 (Memory Device — Type), table 78
-	 * https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.6.0.pdf
-	 */
 	switch (common_mem_type) {
-	case 0x12:	/* DDR */
 	case 0x13:	/* DDR2 */
 	case 0x18:	/* DDR3 */
-	case 0x1B:	/* LPDDR */
 	case 0x1C:	/* LPDDR2 */
 	case 0x1D:	/* LPDDR3 */
 		name = "spd";
@@ -395,7 +390,7 @@ void i2c_register_spd(struct i2c_adapter *adap)
 		unsigned short addr_list[2];
 
 		memset(&info, 0, sizeof(struct i2c_board_info));
-		strscpy(info.type, name, I2C_NAME_SIZE);
+		strlcpy(info.type, name, I2C_NAME_SIZE);
 		addr_list[0] = 0x50 + n;
 		addr_list[1] = I2C_CLIENT_END;
 

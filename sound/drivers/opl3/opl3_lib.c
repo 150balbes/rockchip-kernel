@@ -243,8 +243,7 @@ static int snd_opl3_timer1_init(struct snd_opl3 * opl3, int timer_no)
 	tid.card = opl3->card->number;
 	tid.device = timer_no;
 	tid.subdevice = 0;
-	err = snd_timer_new(opl3->card, "AdLib timer #1", &tid, &timer);
-	if (err >= 0) {
+	if ((err = snd_timer_new(opl3->card, "AdLib timer #1", &tid, &timer)) >= 0) {
 		strcpy(timer->name, "AdLib timer #1");
 		timer->private_data = opl3;
 		timer->hw = snd_opl3_timer1;
@@ -264,8 +263,7 @@ static int snd_opl3_timer2_init(struct snd_opl3 * opl3, int timer_no)
 	tid.card = opl3->card->number;
 	tid.device = timer_no;
 	tid.subdevice = 0;
-	err = snd_timer_new(opl3->card, "AdLib timer #2", &tid, &timer);
-	if (err >= 0) {
+	if ((err = snd_timer_new(opl3->card, "AdLib timer #2", &tid, &timer)) >= 0) {
 		strcpy(timer->name, "AdLib timer #2");
 		timer->private_data = opl3;
 		timer->hw = snd_opl3_timer2;
@@ -350,8 +348,7 @@ int snd_opl3_new(struct snd_card *card,
 	spin_lock_init(&opl3->reg_lock);
 	spin_lock_init(&opl3->timer_lock);
 
-	err = snd_device_new(card, SNDRV_DEV_CODEC, opl3, &ops);
-	if (err < 0) {
+	if ((err = snd_device_new(card, SNDRV_DEV_CODEC, opl3, &ops)) < 0) {
 		snd_opl3_free(opl3);
 		return err;
 	}
@@ -399,23 +396,19 @@ int snd_opl3_create(struct snd_card *card,
 	int err;
 
 	*ropl3 = NULL;
-	err = snd_opl3_new(card, hardware, &opl3);
-	if (err < 0)
+	if ((err = snd_opl3_new(card, hardware, &opl3)) < 0)
 		return err;
 	if (! integrated) {
-		opl3->res_l_port = request_region(l_port, 2, "OPL2/3 (left)");
-		if (!opl3->res_l_port) {
+		if ((opl3->res_l_port = request_region(l_port, 2, "OPL2/3 (left)")) == NULL) {
 			snd_printk(KERN_ERR "opl3: can't grab left port 0x%lx\n", l_port);
 			snd_device_free(card, opl3);
 			return -EBUSY;
 		}
-		if (r_port != 0) {
-			opl3->res_r_port = request_region(r_port, 2, "OPL2/3 (right)");
-			if (!opl3->res_r_port) {
-				snd_printk(KERN_ERR "opl3: can't grab right port 0x%lx\n", r_port);
-				snd_device_free(card, opl3);
-				return -EBUSY;
-			}
+		if (r_port != 0 &&
+		    (opl3->res_r_port = request_region(r_port, 2, "OPL2/3 (right)")) == NULL) {
+			snd_printk(KERN_ERR "opl3: can't grab right port 0x%lx\n", r_port);
+			snd_device_free(card, opl3);
+			return -EBUSY;
 		}
 	}
 	opl3->l_port = l_port;
@@ -430,8 +423,7 @@ int snd_opl3_create(struct snd_card *card,
 		break;
 	default:
 		opl3->command = &snd_opl2_command;
-		err = snd_opl3_detect(opl3);
-		if (err < 0) {
+		if ((err = snd_opl3_detect(opl3)) < 0) {
 			snd_printd("OPL2/3 chip not detected at 0x%lx/0x%lx\n",
 				   opl3->l_port, opl3->r_port);
 			snd_device_free(card, opl3);
@@ -457,14 +449,11 @@ int snd_opl3_timer_new(struct snd_opl3 * opl3, int timer1_dev, int timer2_dev)
 {
 	int err;
 
-	if (timer1_dev >= 0) {
-		err = snd_opl3_timer1_init(opl3, timer1_dev);
-		if (err < 0)
+	if (timer1_dev >= 0)
+		if ((err = snd_opl3_timer1_init(opl3, timer1_dev)) < 0)
 			return err;
-	}
 	if (timer2_dev >= 0) {
-		err = snd_opl3_timer2_init(opl3, timer2_dev);
-		if (err < 0) {
+		if ((err = snd_opl3_timer2_init(opl3, timer2_dev)) < 0) {
 			snd_device_free(opl3->card, opl3->timer1);
 			opl3->timer1 = NULL;
 			return err;
@@ -488,8 +477,7 @@ int snd_opl3_hwdep_new(struct snd_opl3 * opl3,
 
 	/* create hardware dependent device (direct FM) */
 
-	err = snd_hwdep_new(card, "OPL2/OPL3", device, &hw);
-	if (err < 0) {
+	if ((err = snd_hwdep_new(card, "OPL2/OPL3", device, &hw)) < 0) {
 		snd_device_free(card, opl3);
 		return err;
 	}

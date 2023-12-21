@@ -86,21 +86,15 @@ static int ext4_journal_check_start(struct super_block *sb)
 	return 0;
 }
 
-handle_t *__ext4_journal_start_sb(struct inode *inode,
-				  struct super_block *sb, unsigned int line,
+handle_t *__ext4_journal_start_sb(struct super_block *sb, unsigned int line,
 				  int type, int blocks, int rsv_blocks,
 				  int revoke_creds)
 {
 	journal_t *journal;
 	int err;
-	if (inode)
-		trace_ext4_journal_start_inode(inode, blocks, rsv_blocks,
-					revoke_creds, type,
-					_RET_IP_);
-	else
-		trace_ext4_journal_start_sb(sb, blocks, rsv_blocks,
-					revoke_creds, type,
-					_RET_IP_);
+
+	trace_ext4_journal_start(sb, blocks, rsv_blocks, revoke_creds,
+				 _RET_IP_);
 	err = ext4_journal_check_start(sb);
 	if (err < 0)
 		return ERR_PTR(err);
@@ -226,11 +220,9 @@ static void ext4_check_bdev_write_error(struct super_block *sb)
 }
 
 int __ext4_journal_get_write_access(const char *where, unsigned int line,
-				    handle_t *handle, struct super_block *sb,
-				    struct buffer_head *bh,
-				    enum ext4_journal_trigger_type trigger_type)
+				    handle_t *handle, struct buffer_head *bh)
 {
-	int err;
+	int err = 0;
 
 	might_sleep();
 
@@ -239,18 +231,11 @@ int __ext4_journal_get_write_access(const char *where, unsigned int line,
 
 	if (ext4_handle_valid(handle)) {
 		err = jbd2_journal_get_write_access(handle, bh);
-		if (err) {
+		if (err)
 			ext4_journal_abort_handle(where, line, __func__, bh,
 						  handle, err);
-			return err;
-		}
 	}
-	if (trigger_type == EXT4_JTR_NONE || !ext4_has_metadata_csum(sb))
-		return 0;
-	BUG_ON(trigger_type >= EXT4_JOURNAL_TRIGGER_COUNT);
-	jbd2_journal_set_triggers(bh,
-		&EXT4_SB(sb)->s_journal_triggers[trigger_type].tr_triggers);
-	return 0;
+	return err;
 }
 
 /*
@@ -261,6 +246,9 @@ int __ext4_journal_get_write_access(const char *where, unsigned int line,
  * "bh" may be NULL: a metadata block may have been freed from memory
  * but there may still be a record of it in the journal, and that record
  * still needs to be revoked.
+ *
+ * If the handle isn't valid we're not journaling, but we still need to
+ * call into ext4_journal_revoke() to put the buffer head.
  */
 int __ext4_forget(const char *where, unsigned int line, handle_t *handle,
 		  int is_metadata, struct inode *inode,
@@ -273,7 +261,8 @@ int __ext4_forget(const char *where, unsigned int line, handle_t *handle,
 	trace_ext4_forget(inode, is_metadata, blocknr);
 	BUFFER_TRACE(bh, "enter");
 
-	ext4_debug("forgetting bh %p: is_metadata=%d, mode %o, data mode %x\n",
+	jbd_debug(4, "forgetting bh %p: is_metadata = %d, mode %o, "
+		  "data mode %x\n",
 		  bh, is_metadata, inode->i_mode,
 		  test_opt(inode->i_sb, DATA_FLAGS));
 
@@ -309,35 +298,25 @@ int __ext4_forget(const char *where, unsigned int line, handle_t *handle,
 	if (err) {
 		ext4_journal_abort_handle(where, line, __func__,
 					  bh, handle, err);
-		__ext4_error(inode->i_sb, where, line, true, -err, 0,
-			     "error %d when attempting revoke", err);
+		__ext4_abort(inode->i_sb, where, line, -err,
+			   "error %d when attempting revoke", err);
 	}
 	BUFFER_TRACE(bh, "exit");
 	return err;
 }
 
 int __ext4_journal_get_create_access(const char *where, unsigned int line,
-				handle_t *handle, struct super_block *sb,
-				struct buffer_head *bh,
-				enum ext4_journal_trigger_type trigger_type)
+				handle_t *handle, struct buffer_head *bh)
 {
-	int err;
+	int err = 0;
 
-	if (!ext4_handle_valid(handle))
-		return 0;
-
-	err = jbd2_journal_get_create_access(handle, bh);
-	if (err) {
-		ext4_journal_abort_handle(where, line, __func__, bh, handle,
-					  err);
-		return err;
+	if (ext4_handle_valid(handle)) {
+		err = jbd2_journal_get_create_access(handle, bh);
+		if (err)
+			ext4_journal_abort_handle(where, line, __func__,
+						  bh, handle, err);
 	}
-	if (trigger_type == EXT4_JTR_NONE || !ext4_has_metadata_csum(sb))
-		return 0;
-	BUG_ON(trigger_type >= EXT4_JOURNAL_TRIGGER_COUNT);
-	jbd2_journal_set_triggers(bh,
-		&EXT4_SB(sb)->s_journal_triggers[trigger_type].tr_triggers);
-	return 0;
+	return err;
 }
 
 int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
@@ -350,7 +329,6 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 
 	set_buffer_meta(bh);
 	set_buffer_prio(bh);
-	set_buffer_uptodate(bh);
 	if (ext4_handle_valid(handle)) {
 		err = jbd2_journal_dirty_metadata(handle, bh);
 		/* Errors can only happen due to aborted journal or a nasty bug */
@@ -379,6 +357,7 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 					 err);
 		}
 	} else {
+		set_buffer_uptodate(bh);
 		if (inode)
 			mark_buffer_dirty_inode(bh, inode);
 		else
@@ -393,5 +372,22 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 			}
 		}
 	}
+	return err;
+}
+
+int __ext4_handle_dirty_super(const char *where, unsigned int line,
+			      handle_t *handle, struct super_block *sb)
+{
+	struct buffer_head *bh = EXT4_SB(sb)->s_sbh;
+	int err = 0;
+
+	ext4_superblock_csum_set(sb);
+	if (ext4_handle_valid(handle)) {
+		err = jbd2_journal_dirty_metadata(handle, bh);
+		if (err)
+			ext4_journal_abort_handle(where, line, __func__,
+						  bh, handle, err);
+	} else
+		mark_buffer_dirty(bh);
 	return err;
 }

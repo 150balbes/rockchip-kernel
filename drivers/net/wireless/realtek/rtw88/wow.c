@@ -12,54 +12,26 @@
 
 static void rtw_wow_show_wakeup_reason(struct rtw_dev *rtwdev)
 {
-	struct cfg80211_wowlan_nd_info nd_info;
-	struct cfg80211_wowlan_wakeup wakeup = {
-		.pattern_idx = -1,
-	};
 	u8 reason;
 
 	reason = rtw_read8(rtwdev, REG_WOWLAN_WAKE_REASON);
 
-	switch (reason) {
-	case RTW_WOW_RSN_RX_DEAUTH:
-		wakeup.disconnect = true;
+	if (reason == RTW_WOW_RSN_RX_DEAUTH)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: Rx deauth\n");
-		break;
-	case RTW_WOW_RSN_DISCONNECT:
-		wakeup.disconnect = true;
+	else if (reason == RTW_WOW_RSN_DISCONNECT)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: AP is off\n");
-		break;
-	case RTW_WOW_RSN_RX_MAGIC_PKT:
-		wakeup.magic_pkt = true;
+	else if (reason == RTW_WOW_RSN_RX_MAGIC_PKT)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: Rx magic packet\n");
-		break;
-	case RTW_WOW_RSN_RX_GTK_REKEY:
-		wakeup.gtk_rekey_failure = true;
+	else if (reason == RTW_WOW_RSN_RX_GTK_REKEY)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: Rx gtk rekey\n");
-		break;
-	case RTW_WOW_RSN_RX_PATTERN_MATCH:
-		/* Current firmware and driver don't report pattern index
-		 * Use pattern_idx to 0 defaultly.
-		 */
-		wakeup.pattern_idx = 0;
+	else if (reason == RTW_WOW_RSN_RX_PTK_REKEY)
+		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: Rx ptk rekey\n");
+	else if (reason == RTW_WOW_RSN_RX_PATTERN_MATCH)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "WOW: Rx pattern match packet\n");
-		break;
-	case RTW_WOW_RSN_RX_NLO:
-		/* Current firmware and driver don't report ssid index.
-		 * Use 0 for n_matches based on its comment.
-		 */
-		nd_info.n_matches = 0;
-		wakeup.net_detect = &nd_info;
+	else if (reason == RTW_WOW_RSN_RX_NLO)
 		rtw_dbg(rtwdev, RTW_DBG_WOW, "Rx NLO\n");
-		break;
-	default:
+	else
 		rtw_warn(rtwdev, "Unknown wakeup reason %x\n", reason);
-		ieee80211_report_wowlan_wakeup(rtwdev->wow.wow_vif, NULL,
-					       GFP_KERNEL);
-		return;
-	}
-	ieee80211_report_wowlan_wakeup(rtwdev->wow.wow_vif, &wakeup,
-				       GFP_KERNEL);
 }
 
 static void rtw_wow_pattern_write_cam(struct rtw_dev *rtwdev, u8 addr,
@@ -371,8 +343,7 @@ static void rtw_wow_fw_security_type_iter(struct ieee80211_hw *hw,
 		key->flags |= IEEE80211_KEY_FLAG_SW_MGMT_TX;
 		break;
 	default:
-		rtw_err(rtwdev, "Unsupported key type for wowlan mode: %#x\n",
-			key->cipher);
+		rtw_err(rtwdev, "Unsupported key type for wowlan mode\n");
 		hw_key_type = 0;
 		break;
 	}
@@ -471,31 +442,37 @@ static void rtw_wow_fw_media_status(struct rtw_dev *rtwdev, bool connect)
 	rtw_iterate_stas_atomic(rtwdev, rtw_wow_fw_media_status_iter, &data);
 }
 
-static int rtw_wow_config_wow_fw_rsvd_page(struct rtw_dev *rtwdev)
+static void rtw_wow_config_pno_rsvd_page(struct rtw_dev *rtwdev,
+					 struct rtw_vif *rtwvif)
 {
-	struct ieee80211_vif *wow_vif = rtwdev->wow.wow_vif;
-	struct rtw_vif *rtwvif = (struct rtw_vif *)wow_vif->drv_priv;
-
-	rtw_remove_rsvd_page(rtwdev, rtwvif);
-
-	if (rtw_wow_no_link(rtwdev))
-		rtw_add_rsvd_page_pno(rtwdev, rtwvif);
-	else
-		rtw_add_rsvd_page_sta(rtwdev, rtwvif);
-
-	return rtw_fw_download_rsvd_page(rtwdev);
+	rtw_add_rsvd_page_pno(rtwdev, rtwvif);
 }
 
-static int rtw_wow_config_normal_fw_rsvd_page(struct rtw_dev *rtwdev)
+static void rtw_wow_config_linked_rsvd_page(struct rtw_dev *rtwdev,
+					   struct rtw_vif *rtwvif)
+{
+	rtw_add_rsvd_page_sta(rtwdev, rtwvif);
+}
+
+static void rtw_wow_config_rsvd_page(struct rtw_dev *rtwdev,
+				     struct rtw_vif *rtwvif)
+{
+	rtw_remove_rsvd_page(rtwdev, rtwvif);
+
+	if (rtw_wow_mgd_linked(rtwdev)) {
+		rtw_wow_config_linked_rsvd_page(rtwdev, rtwvif);
+	} else if (test_bit(RTW_FLAG_WOWLAN, rtwdev->flags) &&
+		   rtw_wow_no_link(rtwdev)) {
+		rtw_wow_config_pno_rsvd_page(rtwdev, rtwvif);
+	}
+}
+
+static int rtw_wow_dl_fw_rsvd_page(struct rtw_dev *rtwdev)
 {
 	struct ieee80211_vif *wow_vif = rtwdev->wow.wow_vif;
 	struct rtw_vif *rtwvif = (struct rtw_vif *)wow_vif->drv_priv;
 
-	rtw_remove_rsvd_page(rtwdev, rtwvif);
-	rtw_add_rsvd_page_sta(rtwdev, rtwvif);
-
-	if (rtw_wow_no_link(rtwdev))
-		return 0;
+	rtw_wow_config_rsvd_page(rtwdev, rtwvif);
 
 	return rtw_fw_download_rsvd_page(rtwdev);
 }
@@ -589,10 +566,10 @@ static int rtw_wow_leave_no_link_ps(struct rtw_dev *rtwdev)
 	int ret = 0;
 
 	if (test_bit(RTW_FLAG_WOWLAN, rtwdev->flags)) {
-		if (rtw_get_lps_deep_mode(rtwdev) != LPS_DEEP_MODE_NONE)
+		if (rtw_fw_lps_deep_mode)
 			rtw_leave_lps_deep(rtwdev);
 	} else {
-		if (!test_bit(RTW_FLAG_POWERON, rtwdev->flags)) {
+		if (test_bit(RTW_FLAG_INACTIVE_PS, rtwdev->flags)) {
 			rtw_wow->ips_enabled = true;
 			ret = rtw_leave_ips(rtwdev);
 			if (ret)
@@ -650,8 +627,7 @@ static int rtw_wow_enter_ps(struct rtw_dev *rtwdev)
 
 	if (rtw_wow_mgd_linked(rtwdev))
 		ret = rtw_wow_enter_linked_ps(rtwdev);
-	else if (rtw_wow_no_link(rtwdev) &&
-		 rtw_get_lps_deep_mode(rtwdev) != LPS_DEEP_MODE_NONE)
+	else if (rtw_wow_no_link(rtwdev) && rtw_fw_lps_deep_mode)
 		ret = rtw_wow_enter_no_link_ps(rtwdev);
 
 	return ret;
@@ -693,7 +669,7 @@ static int rtw_wow_enable(struct rtw_dev *rtwdev)
 
 	set_bit(RTW_FLAG_WOWLAN, rtwdev->flags);
 
-	ret = rtw_wow_config_wow_fw_rsvd_page(rtwdev);
+	ret = rtw_wow_dl_fw_rsvd_page(rtwdev);
 	if (ret) {
 		rtw_err(rtwdev, "failed to download wowlan rsvd page\n");
 		goto error;
@@ -766,7 +742,7 @@ static int rtw_wow_disable(struct rtw_dev *rtwdev)
 		goto out;
 	}
 
-	ret = rtw_wow_config_normal_fw_rsvd_page(rtwdev);
+	ret = rtw_wow_dl_fw_rsvd_page(rtwdev);
 	if (ret)
 		rtw_err(rtwdev, "failed to download normal rsvd page\n");
 

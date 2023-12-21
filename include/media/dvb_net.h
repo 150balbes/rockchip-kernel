@@ -19,10 +19,12 @@
 #define _DVB_NET_H_
 
 #include <linux/module.h>
+#include <linux/netdevice.h>
+#include <linux/inetdevice.h>
+#include <linux/etherdevice.h>
+#include <linux/skbuff.h>
 
 #include <media/dvbdev.h>
-
-struct net_device;
 
 #define DVB_NET_DEVICES_MAX 10
 
@@ -39,9 +41,6 @@ struct net_device;
  * @exit:		flag to indicate when the device is being removed.
  * @demux:		pointer to &struct dmx_demux.
  * @ioctl_mutex:	protect access to this struct.
- * @remove_mutex:	mutex that avoids a race condition between a callback
- *			called when the hardware is disconnected and the
- *			file_operations of dvb_net.
  *
  * Currently, the core supports up to %DVB_NET_DEVICES_MAX (10) network
  * devices.
@@ -54,7 +53,6 @@ struct dvb_net {
 	unsigned int exit:1;
 	struct dmx_demux *demux;
 	struct mutex ioctl_mutex;
-	struct mutex remove_mutex;
 };
 
 /**

@@ -7,11 +7,16 @@
 #ifndef __TIMER_INTERNAL_H__
 #define __TIMER_INTERNAL_H__
 #include <linux/list.h>
-#include <asm/bug.h>
-#include <shared/timetravel.h>
 
 #define TIMER_MULTIPLIER 256
 #define TIMER_MIN_DELTA  500
+
+enum time_travel_mode {
+	TT_MODE_OFF,
+	TT_MODE_BASIC,
+	TT_MODE_INFCPU,
+	TT_MODE_EXTERNAL,
+};
 
 #ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
 struct time_travel_event {
@@ -21,7 +26,9 @@ struct time_travel_event {
 	bool pending, onstack;
 };
 
-void time_travel_sleep(void);
+extern enum time_travel_mode time_travel_mode;
+
+void time_travel_sleep(unsigned long long duration);
 
 static inline void
 time_travel_set_event_fn(struct time_travel_event *e,
@@ -47,14 +54,13 @@ static inline void time_travel_wait_readable(int fd)
 }
 
 void time_travel_add_irq_event(struct time_travel_event *e);
-void time_travel_add_event_rel(struct time_travel_event *e,
-			       unsigned long long delay_ns);
-bool time_travel_del_event(struct time_travel_event *e);
 #else
 struct time_travel_event {
 };
 
-static inline void time_travel_sleep(void)
+#define time_travel_mode TT_MODE_OFF
+
+static inline void time_travel_sleep(unsigned long long duration)
 {
 }
 
@@ -68,19 +74,6 @@ static inline void time_travel_propagate_time(void)
 static inline void time_travel_wait_readable(int fd)
 {
 }
-
-static inline void time_travel_add_irq_event(struct time_travel_event *e)
-{
-	WARN_ON(1);
-}
-
-/*
- * not inlines so the data structure need not exist,
- * cause linker failures
- */
-extern void time_travel_not_configured(void);
-#define time_travel_add_event_rel(...) time_travel_not_configured()
-#define time_travel_del_event(...) time_travel_not_configured()
 #endif /* CONFIG_UML_TIME_TRAVEL_SUPPORT */
 
 /*

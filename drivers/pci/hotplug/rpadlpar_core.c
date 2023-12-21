@@ -15,7 +15,6 @@
 
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/pci.h>
 #include <linux/string.h>
 #include <linux/vmalloc.h>
@@ -479,4 +478,3 @@ static void __exit rpadlpar_io_exit(void)
 module_init(rpadlpar_io_init);
 module_exit(rpadlpar_io_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("RPA Dynamic Logical Partitioning driver for I/O slots");

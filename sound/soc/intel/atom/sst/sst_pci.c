@@ -15,6 +15,7 @@
 #include <linux/pci.h>
 #include <linux/fs.h>
 #include <linux/firmware.h>
+#include <linux/pm_runtime.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <asm/platform_sst_audio.h>

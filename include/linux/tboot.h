@@ -126,6 +126,7 @@ extern void tboot_probe(void);
 extern void tboot_shutdown(u32 shutdown_type);
 extern struct acpi_table_header *tboot_get_dmar_table(
 				      struct acpi_table_header *dmar_tbl);
+extern int tboot_force_iommu(void);
 
 #else
 
@@ -135,6 +136,7 @@ extern struct acpi_table_header *tboot_get_dmar_table(
 #define tboot_sleep(sleep_state, pm1a_control, pm1b_control)	\
 					do { } while (0)
 #define tboot_get_dmar_table(dmar_tbl)	(dmar_tbl)
+#define tboot_force_iommu()		0
 
 #endif /* !CONFIG_INTEL_TXT */
 

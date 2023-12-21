@@ -604,17 +604,19 @@ static void dm1105_set_dma_addr(struct dm1105_dev *dev)
 
 static int dm1105_dma_map(struct dm1105_dev *dev)
 {
-	dev->ts_buf = dma_alloc_coherent(&dev->pdev->dev,
-					 6 * DM1105_DMA_BYTES, &dev->dma_addr,
-					 GFP_KERNEL);
+	dev->ts_buf = pci_alloc_consistent(dev->pdev,
+					6 * DM1105_DMA_BYTES,
+					&dev->dma_addr);
 
 	return !dev->ts_buf;
 }
 
 static void dm1105_dma_unmap(struct dm1105_dev *dev)
 {
-	dma_free_coherent(&dev->pdev->dev, 6 * DM1105_DMA_BYTES, dev->ts_buf,
-			  dev->dma_addr);
+	pci_free_consistent(dev->pdev,
+			6 * DM1105_DMA_BYTES,
+			dev->ts_buf,
+			dev->dma_addr);
 }
 
 static void dm1105_enable_irqs(struct dm1105_dev *dev)
@@ -1008,7 +1010,7 @@ static int dm1105_probe(struct pci_dev *pdev,
 	if (ret < 0)
 		goto err_kfree;
 
-	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret < 0)
 		goto err_pci_disable_device;
 
@@ -1176,7 +1178,6 @@ static void dm1105_remove(struct pci_dev *pdev)
 	struct dvb_demux *dvbdemux = &dev->demux;
 	struct dmx_demux *dmx = &dvbdemux->dmx;
 
-	cancel_work_sync(&dev->ir.work);
 	dm1105_ir_exit(dev);
 	dmx->close(dmx);
 	dvb_net_release(&dev->dvbnet);

@@ -217,10 +217,12 @@ static int __init ck804xrom_init_one(struct pci_dev *pdev,
 		unsigned long offset;
 		int i;
 
-		if (!map) {
+		if (!map)
 			map = kmalloc(sizeof(*map), GFP_KERNEL);
-			if (!map)
-				goto out;
+
+		if (!map) {
+			printk(KERN_ERR MOD_NAME ": kmalloc failed");
+			goto out;
 		}
 		memset(map, 0, sizeof(*map));
 		INIT_LIST_HEAD(&map->list);

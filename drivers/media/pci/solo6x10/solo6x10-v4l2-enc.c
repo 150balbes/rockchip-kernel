@@ -391,12 +391,12 @@ static int solo_send_desc(struct solo_enc_dev *solo_enc, int skip,
 }
 
 /* Extract values from VOP header - VE_STATUSxx */
-static inline __always_unused int vop_interlaced(const vop_header *vh)
+static inline int vop_interlaced(const vop_header *vh)
 {
 	return (__le32_to_cpu((*vh)[0]) >> 30) & 1;
 }
 
-static inline __always_unused u8 vop_channel(const vop_header *vh)
+static inline u8 vop_channel(const vop_header *vh)
 {
 	return (__le32_to_cpu((*vh)[0]) >> 24) & 0x1F;
 }
@@ -411,12 +411,12 @@ static inline u32 vop_mpeg_size(const vop_header *vh)
 	return __le32_to_cpu((*vh)[0]) & 0xFFFFF;
 }
 
-static inline u8 __always_unused vop_hsize(const vop_header *vh)
+static inline u8 vop_hsize(const vop_header *vh)
 {
 	return (__le32_to_cpu((*vh)[1]) >> 8) & 0xFF;
 }
 
-static inline u8 __always_unused vop_vsize(const vop_header *vh)
+static inline u8 vop_vsize(const vop_header *vh)
 {
 	return __le32_to_cpu((*vh)[1]) & 0xFF;
 }
@@ -436,12 +436,12 @@ static inline u32 vop_jpeg_size(const vop_header *vh)
 	return __le32_to_cpu((*vh)[4]) & 0xFFFFF;
 }
 
-static inline u32 __always_unused vop_sec(const vop_header *vh)
+static inline u32 vop_sec(const vop_header *vh)
 {
 	return __le32_to_cpu((*vh)[5]);
 }
 
-static inline __always_unused u32 vop_usec(const vop_header *vh)
+static inline u32 vop_usec(const vop_header *vh)
 {
 	return __le32_to_cpu((*vh)[6]);
 }
@@ -764,10 +764,13 @@ static int solo_enc_querycap(struct file *file, void  *priv,
 			     struct v4l2_capability *cap)
 {
 	struct solo_enc_dev *solo_enc = video_drvdata(file);
+	struct solo_dev *solo_dev = solo_enc->solo_dev;
 
 	strscpy(cap->driver, SOLO6X10_NAME, sizeof(cap->driver));
 	snprintf(cap->card, sizeof(cap->card), "Softlogic 6x10 Enc %d",
 		 solo_enc->ch);
+	snprintf(cap->bus_info, sizeof(cap->bus_info), "PCI:%s",
+		 pci_name(solo_dev->pdev));
 	return 0;
 }
 
@@ -1020,7 +1023,7 @@ static int solo_g_parm(struct file *file, void *priv,
 	cp->timeperframe.numerator = solo_enc->interval;
 	cp->timeperframe.denominator = solo_enc->solo_dev->fps;
 	cp->capturemode = 0;
-	/* XXX: Shouldn't we be able to get/set this from vb2? */
+	/* XXX: Shouldn't we be able to get/set this from videobuf? */
 	cp->readbuffers = 2;
 
 	return 0;
@@ -1283,11 +1286,10 @@ static struct solo_enc_dev *solo_enc_alloc(struct solo_dev *solo_dev,
 	memcpy(solo_enc->jpeg_header, jpeg_header, solo_enc->jpeg_len);
 
 	solo_enc->desc_nelts = 32;
-	solo_enc->desc_items = dma_alloc_coherent(&solo_dev->pdev->dev,
-						  sizeof(struct solo_p2m_desc) *
-						  solo_enc->desc_nelts,
-						  &solo_enc->desc_dma,
-						  GFP_KERNEL);
+	solo_enc->desc_items = pci_alloc_consistent(solo_dev->pdev,
+				      sizeof(struct solo_p2m_desc) *
+				      solo_enc->desc_nelts,
+				      &solo_enc->desc_dma);
 	ret = -ENOMEM;
 	if (solo_enc->desc_items == NULL)
 		goto hdl_free;
@@ -1315,9 +1317,9 @@ static struct solo_enc_dev *solo_enc_alloc(struct solo_dev *solo_dev,
 vdev_release:
 	video_device_release(solo_enc->vfd);
 pci_free:
-	dma_free_coherent(&solo_enc->solo_dev->pdev->dev,
-			  sizeof(struct solo_p2m_desc) * solo_enc->desc_nelts,
-			  solo_enc->desc_items, solo_enc->desc_dma);
+	pci_free_consistent(solo_enc->solo_dev->pdev,
+			sizeof(struct solo_p2m_desc) * solo_enc->desc_nelts,
+			solo_enc->desc_items, solo_enc->desc_dma);
 hdl_free:
 	v4l2_ctrl_handler_free(hdl);
 	kfree(solo_enc);
@@ -1329,9 +1331,9 @@ static void solo_enc_free(struct solo_enc_dev *solo_enc)
 	if (solo_enc == NULL)
 		return;
 
-	dma_free_coherent(&solo_enc->solo_dev->pdev->dev,
-			  sizeof(struct solo_p2m_desc) * solo_enc->desc_nelts,
-			  solo_enc->desc_items, solo_enc->desc_dma);
+	pci_free_consistent(solo_enc->solo_dev->pdev,
+			sizeof(struct solo_p2m_desc) * solo_enc->desc_nelts,
+			solo_enc->desc_items, solo_enc->desc_dma);
 	video_unregister_device(solo_enc->vfd);
 	v4l2_ctrl_handler_free(&solo_enc->hdl);
 	kfree(solo_enc);
@@ -1344,9 +1346,9 @@ int solo_enc_v4l2_init(struct solo_dev *solo_dev, unsigned nr)
 	init_waitqueue_head(&solo_dev->ring_thread_wait);
 
 	solo_dev->vh_size = sizeof(vop_header);
-	solo_dev->vh_buf = dma_alloc_coherent(&solo_dev->pdev->dev,
-					      solo_dev->vh_size,
-					      &solo_dev->vh_dma, GFP_KERNEL);
+	solo_dev->vh_buf = pci_alloc_consistent(solo_dev->pdev,
+						solo_dev->vh_size,
+						&solo_dev->vh_dma);
 	if (solo_dev->vh_buf == NULL)
 		return -ENOMEM;
 
@@ -1361,8 +1363,8 @@ int solo_enc_v4l2_init(struct solo_dev *solo_dev, unsigned nr)
 
 		while (i--)
 			solo_enc_free(solo_dev->v4l2_enc[i]);
-		dma_free_coherent(&solo_dev->pdev->dev, solo_dev->vh_size,
-				  solo_dev->vh_buf, solo_dev->vh_dma);
+		pci_free_consistent(solo_dev->pdev, solo_dev->vh_size,
+				    solo_dev->vh_buf, solo_dev->vh_dma);
 		solo_dev->vh_buf = NULL;
 		return ret;
 	}
@@ -1389,6 +1391,6 @@ void solo_enc_v4l2_exit(struct solo_dev *solo_dev)
 		solo_enc_free(solo_dev->v4l2_enc[i]);
 
 	if (solo_dev->vh_buf)
-		dma_free_coherent(&solo_dev->pdev->dev, solo_dev->vh_size,
-				  solo_dev->vh_buf, solo_dev->vh_dma);
+		pci_free_consistent(solo_dev->pdev, solo_dev->vh_size,
+			    solo_dev->vh_buf, solo_dev->vh_dma);
 }

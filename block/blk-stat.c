@@ -6,6 +6,7 @@
  */
 #include <linux/kernel.h>
 #include <linux/rculist.h>
+#include <linux/blk-mq.h>
 
 #include "blk-stat.h"
 #include "blk-mq.h"
@@ -14,7 +15,7 @@
 struct blk_queue_stats {
 	struct list_head callbacks;
 	spinlock_t lock;
-	int accounting;
+	bool enable_accounting;
 };
 
 void blk_rq_stat_init(struct blk_rq_stat *stat)
@@ -57,8 +58,7 @@ void blk_stat_add(struct request *rq, u64 now)
 
 	value = (now >= rq->io_start_time_ns) ? now - rq->io_start_time_ns : 0;
 
-	if (req_op(rq) == REQ_OP_READ || req_op(rq) == REQ_OP_WRITE)
-		blk_throtl_stat_add(rq, value);
+	blk_throtl_stat_add(rq, value);
 
 	rcu_read_lock();
 	cpu = get_cpu();
@@ -161,7 +161,7 @@ void blk_stat_remove_callback(struct request_queue *q,
 
 	spin_lock_irqsave(&q->stats->lock, flags);
 	list_del_rcu(&cb->list);
-	if (list_empty(&q->stats->callbacks) && !q->stats->accounting)
+	if (list_empty(&q->stats->callbacks) && !q->stats->enable_accounting)
 		blk_queue_flag_clear(QUEUE_FLAG_STATS, q);
 	spin_unlock_irqrestore(&q->stats->lock, flags);
 
@@ -184,24 +184,13 @@ void blk_stat_free_callback(struct blk_stat_callback *cb)
 		call_rcu(&cb->rcu, blk_stat_free_callback_rcu);
 }
 
-void blk_stat_disable_accounting(struct request_queue *q)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&q->stats->lock, flags);
-	if (!--q->stats->accounting && list_empty(&q->stats->callbacks))
-		blk_queue_flag_clear(QUEUE_FLAG_STATS, q);
-	spin_unlock_irqrestore(&q->stats->lock, flags);
-}
-EXPORT_SYMBOL_GPL(blk_stat_disable_accounting);
-
 void blk_stat_enable_accounting(struct request_queue *q)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&q->stats->lock, flags);
-	if (!q->stats->accounting++ && list_empty(&q->stats->callbacks))
-		blk_queue_flag_set(QUEUE_FLAG_STATS, q);
+	q->stats->enable_accounting = true;
+	blk_queue_flag_set(QUEUE_FLAG_STATS, q);
 	spin_unlock_irqrestore(&q->stats->lock, flags);
 }
 EXPORT_SYMBOL_GPL(blk_stat_enable_accounting);
@@ -216,7 +205,7 @@ struct blk_queue_stats *blk_alloc_queue_stats(void)
 
 	INIT_LIST_HEAD(&stats->callbacks);
 	spin_lock_init(&stats->lock);
-	stats->accounting = 0;
+	stats->enable_accounting = false;
 
 	return stats;
 }

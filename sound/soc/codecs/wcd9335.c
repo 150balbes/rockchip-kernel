@@ -24,8 +24,6 @@
 #include "wcd9335.h"
 #include "wcd-clsh-v2.h"
 
-#include <dt-bindings/sound/qcom,wcd9335.h>
-
 #define WCD9335_RATES_MASK (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |\
 			    SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000 |\
 			    SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
@@ -206,6 +204,17 @@ enum wcd9335_sido_voltage {
 };
 
 enum {
+	AIF1_PB = 0,
+	AIF1_CAP,
+	AIF2_PB,
+	AIF2_CAP,
+	AIF3_PB,
+	AIF3_CAP,
+	AIF4_PB,
+	NUM_CODEC_DAIS,
+};
+
+enum {
 	COMPANDER_1, /* HPH_L */
 	COMPANDER_2, /* HPH_R */
 	COMPANDER_3, /* LO1_DIFF */
@@ -332,8 +341,8 @@ struct wcd9335_codec {
 	int reset_gpio;
 	struct regulator_bulk_data supplies[WCD9335_MAX_SUPPLY];
 
-	unsigned int rx_port_value[WCD9335_RX_MAX];
-	unsigned int tx_port_value[WCD9335_TX_MAX];
+	unsigned int rx_port_value;
+	unsigned int tx_port_value;
 	int hph_l_gain;
 	int hph_r_gain;
 	u32 rx_bias_count;
@@ -1260,11 +1269,10 @@ static const struct snd_kcontrol_new sb_tx8_mux =
 static int slim_rx_mux_get(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_widget *w = snd_soc_dapm_kcontrol_widget(kc);
-	struct wcd9335_codec *wcd = dev_get_drvdata(w->dapm->dev);
-	u32 port_id = w->shift;
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_dapm(kc);
+	struct wcd9335_codec *wcd = dev_get_drvdata(dapm->dev);
 
-	ucontrol->value.enumerated.item[0] = wcd->rx_port_value[port_id];
+	ucontrol->value.enumerated.item[0] = wcd->rx_port_value;
 
 	return 0;
 }
@@ -1278,17 +1286,11 @@ static int slim_rx_mux_put(struct snd_kcontrol *kc,
 	struct snd_soc_dapm_update *update = NULL;
 	u32 port_id = w->shift;
 
-	if (wcd->rx_port_value[port_id] == ucontrol->value.enumerated.item[0])
-		return 0;
+	wcd->rx_port_value = ucontrol->value.enumerated.item[0];
 
-	wcd->rx_port_value[port_id] = ucontrol->value.enumerated.item[0];
-
-	/* Remove channel from any list it's in before adding it to a new one */
-	list_del_init(&wcd->rx_chs[port_id].list);
-
-	switch (wcd->rx_port_value[port_id]) {
+	switch (wcd->rx_port_value) {
 	case 0:
-		/* Channel already removed from lists. Nothing to do here */
+		list_del_init(&wcd->rx_chs[port_id].list);
 		break;
 	case 1:
 		list_add_tail(&wcd->rx_chs[port_id].list,
@@ -1307,11 +1309,11 @@ static int slim_rx_mux_put(struct snd_kcontrol *kc,
 			      &wcd->dai[AIF4_PB].slim_ch_list);
 		break;
 	default:
-		dev_err(wcd->dev, "Unknown AIF %d\n", wcd->rx_port_value[port_id]);
+		dev_err(wcd->dev, "Unknown AIF %d\n", wcd->rx_port_value);
 		goto err;
 	}
 
-	snd_soc_dapm_mux_update_power(w->dapm, kc, wcd->rx_port_value[port_id],
+	snd_soc_dapm_mux_update_power(w->dapm, kc, wcd->rx_port_value,
 				      e, update);
 
 	return 0;
@@ -1325,13 +1327,8 @@ static int slim_tx_mixer_get(struct snd_kcontrol *kc,
 
 	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_dapm(kc);
 	struct wcd9335_codec *wcd = dev_get_drvdata(dapm->dev);
-	struct snd_soc_dapm_widget *widget = snd_soc_dapm_kcontrol_widget(kc);
-	struct soc_mixer_control *mixer =
-			(struct soc_mixer_control *)kc->private_value;
-	int dai_id = widget->shift;
-	int port_id = mixer->shift;
 
-	ucontrol->value.integer.value[0] = wcd->tx_port_value[port_id] == dai_id;
+	ucontrol->value.integer.value[0] = wcd->tx_port_value;
 
 	return 0;
 }
@@ -1354,12 +1351,12 @@ static int slim_tx_mixer_put(struct snd_kcontrol *kc,
 	case AIF2_CAP:
 	case AIF3_CAP:
 		/* only add to the list if value not set */
-		if (enable && wcd->tx_port_value[port_id] != dai_id) {
-			wcd->tx_port_value[port_id] = dai_id;
+		if (enable && !(wcd->tx_port_value & BIT(port_id))) {
+			wcd->tx_port_value |= BIT(port_id);
 			list_add_tail(&wcd->tx_chs[port_id].list,
 					&wcd->dai[dai_id].slim_ch_list);
-		} else if (!enable && wcd->tx_port_value[port_id] == dai_id) {
-			wcd->tx_port_value[port_id] = -1;
+		} else if (!enable && (wcd->tx_port_value & BIT(port_id))) {
+			wcd->tx_port_value &= ~BIT(port_id);
 			list_del_init(&wcd->tx_chs[port_id].list);
 		}
 		break;
@@ -1809,11 +1806,11 @@ static int wcd9335_set_decimator_rate(struct snd_soc_dai *dai,
 			tx_port_reg = WCD9335_CDC_IF_ROUTER_TX_MUX_CFG0;
 			shift = (tx_port << 1);
 			shift_val = 0x03;
-		} else if (tx_port < 8) {
+		} else if ((tx_port >= 4) && (tx_port < 8)) {
 			tx_port_reg = WCD9335_CDC_IF_ROUTER_TX_MUX_CFG1;
 			shift = ((tx_port - 4) << 1);
 			shift_val = 0x03;
-		} else if (tx_port < 11) {
+		} else if ((tx_port >= 8) && (tx_port < 11)) {
 			tx_port_reg = WCD9335_CDC_IF_ROUTER_TX_MUX_CFG2;
 			shift = ((tx_port - 8) << 1);
 			shift_val = 0x03;
@@ -1821,10 +1818,12 @@ static int wcd9335_set_decimator_rate(struct snd_soc_dai *dai,
 			tx_port_reg = WCD9335_CDC_IF_ROUTER_TX_MUX_CFG3;
 			shift = 0;
 			shift_val = 0x0F;
-		} else /* (tx_port == 13) */ {
+		} else if (tx_port == 13) {
 			tx_port_reg = WCD9335_CDC_IF_ROUTER_TX_MUX_CFG3;
 			shift = 4;
 			shift_val = 0x03;
+		} else {
+			return -EINVAL;
 		}
 
 		tx_mux_sel = snd_soc_component_read(comp, tx_port_reg) &
@@ -2059,7 +2058,7 @@ static int wcd9335_get_channel_map(struct snd_soc_dai *dai,
 	return 0;
 }
 
-static const struct snd_soc_dai_ops wcd9335_dai_ops = {
+static struct snd_soc_dai_ops wcd9335_dai_ops = {
 	.hw_params = wcd9335_hw_params,
 	.trigger = wcd9335_trigger,
 	.set_channel_map = wcd9335_set_channel_map,
@@ -3971,7 +3970,7 @@ static irqreturn_t wcd9335_slimbus_irq(int irq, void *data)
 	}
 
 	for_each_set_bit(j, &status, 32) {
-		tx = (j >= 16);
+		tx = (j >= 16 ? true : false);
 		port_id = (tx ? j - 16 : j);
 		regmap_read(wcd->if_regmap,
 				WCD9335_SLIM_PGD_PORT_INT_RX_SOURCE0 + j, &val);
@@ -4851,7 +4850,7 @@ static int wcd9335_codec_probe(struct snd_soc_component *component)
 
 	snd_soc_component_init_regmap(component, wcd->regmap);
 	/* Class-H Init*/
-	wcd->clsh_ctrl = wcd_clsh_ctrl_alloc(component, WCD9335);
+	wcd->clsh_ctrl = wcd_clsh_ctrl_alloc(component, wcd->version);
 	if (IS_ERR(wcd->clsh_ctrl))
 		return PTR_ERR(wcd->clsh_ctrl);
 
@@ -4915,7 +4914,6 @@ static const struct snd_soc_component_driver wcd9335_component_drv = {
 	.num_dapm_widgets = ARRAY_SIZE(wcd9335_dapm_widgets),
 	.dapm_routes = wcd9335_audio_map,
 	.num_dapm_routes = ARRAY_SIZE(wcd9335_audio_map),
-	.endianness = 1,
 };
 
 static int wcd9335_probe(struct wcd9335_codec *wcd)
@@ -5011,22 +5009,16 @@ static const struct regmap_irq wcd9335_codec_irqs[] = {
 	},
 };
 
-static const unsigned int wcd9335_config_regs[] = {
-	WCD9335_INTR_LEVEL0,
-};
-
 static const struct regmap_irq_chip wcd9335_regmap_irq1_chip = {
 	.name = "wcd9335_pin1_irq",
 	.status_base = WCD9335_INTR_PIN1_STATUS0,
 	.mask_base = WCD9335_INTR_PIN1_MASK0,
 	.ack_base = WCD9335_INTR_PIN1_CLEAR0,
+	.type_base = WCD9335_INTR_LEVEL0,
+	.num_type_reg = 4,
 	.num_regs = 4,
 	.irqs = wcd9335_codec_irqs,
 	.num_irqs = ARRAY_SIZE(wcd9335_codec_irqs),
-	.config_base = wcd9335_config_regs,
-	.num_config_bases = ARRAY_SIZE(wcd9335_config_regs),
-	.num_config_regs = 4,
-	.set_type_config = regmap_irq_set_type_config_simple,
 };
 
 static int wcd9335_parse_dt(struct wcd9335_codec *wcd)
@@ -5138,17 +5130,20 @@ static int wcd9335_irq_init(struct wcd9335_codec *wcd)
 	 * INTR2 is a subset of first interrupt sources MAD, VBAT, and SVA
 	 */
 	wcd->intr1 = of_irq_get_byname(wcd->dev->of_node, "intr1");
-	if (wcd->intr1 < 0)
-		return dev_err_probe(wcd->dev, wcd->intr1,
-				     "Unable to configure IRQ\n");
+	if (wcd->intr1 < 0) {
+		if (wcd->intr1 != -EPROBE_DEFER)
+			dev_err(wcd->dev, "Unable to configure IRQ\n");
+
+		return wcd->intr1;
+	}
 
 	ret = devm_regmap_add_irq_chip(wcd->dev, wcd->regmap, wcd->intr1,
 				 IRQF_TRIGGER_HIGH, 0,
 				 &wcd9335_regmap_irq1_chip, &wcd->irq_data);
 	if (ret)
-		return dev_err_probe(wcd->dev, ret, "Failed to register IRQ chip\n");
+		dev_err(wcd->dev, "Failed to register IRQ chip: %d\n", ret);
 
-	return 0;
+	return ret;
 }
 
 static int wcd9335_slim_probe(struct slim_device *slim)
@@ -5204,15 +5199,17 @@ static int wcd9335_slim_status(struct slim_device *sdev,
 	slim_get_logical_addr(wcd->slim_ifc_dev);
 
 	wcd->regmap = regmap_init_slimbus(sdev, &wcd9335_regmap_config);
-	if (IS_ERR(wcd->regmap))
-		return dev_err_probe(dev, PTR_ERR(wcd->regmap),
-				     "Failed to allocate slim register map\n");
+	if (IS_ERR(wcd->regmap)) {
+		dev_err(dev, "Failed to allocate slim register map\n");
+		return PTR_ERR(wcd->regmap);
+	}
 
 	wcd->if_regmap = regmap_init_slimbus(wcd->slim_ifc_dev,
 						  &wcd9335_ifc_regmap_config);
-	if (IS_ERR(wcd->if_regmap))
-		return dev_err_probe(dev, PTR_ERR(wcd->if_regmap),
-				     "Failed to allocate ifc register map\n");
+	if (IS_ERR(wcd->if_regmap)) {
+		dev_err(dev, "Failed to allocate ifc register map\n");
+		return PTR_ERR(wcd->if_regmap);
+	}
 
 	ret = wcd9335_bring_up(wcd);
 	if (ret) {
@@ -5226,7 +5223,7 @@ static int wcd9335_slim_status(struct slim_device *sdev,
 
 	wcd9335_probe(wcd);
 
-	return 0;
+	return ret;
 }
 
 static const struct slim_device_id wcd9335_slim_id[] = {

@@ -3,8 +3,6 @@
 
 # Test various socket options that can be set by attaching programs to cgroups.
 
-MY_DIR=$(dirname $0)
-TEST=$MY_DIR/test_cgrp2_sock
 CGRP_MNT="/tmp/cgroupv2-test_cgrp2_sock"
 
 ################################################################################
@@ -21,7 +19,7 @@ print_result()
 
 check_sock()
 {
-	out=$($TEST)
+	out=$(test_cgrp2_sock)
 	echo $out | grep -q "$1"
 	if [ $? -ne 0 ]; then
 		print_result 1 "IPv4: $2"
@@ -35,7 +33,7 @@ check_sock()
 
 check_sock6()
 {
-	out=$($TEST -6)
+	out=$(test_cgrp2_sock -6)
 	echo $out | grep -q "$1"
 	if [ $? -ne 0 ]; then
 		print_result 1 "IPv6: $2"
@@ -63,7 +61,7 @@ cleanup_and_exit()
 
 	[ -n "$msg" ] && echo "ERROR: $msg"
 
-	$TEST -d ${CGRP_MNT}/sockopts
+	test_cgrp2_sock -d ${CGRP_MNT}/sockopts
 	ip li del cgrp2_sock
 	umount ${CGRP_MNT}
 
@@ -100,7 +98,7 @@ check_sock6 "dev , mark 0, priority 0" "No programs attached"
 
 # verify device is set
 #
-$TEST -b cgrp2_sock ${CGRP_MNT}/sockopts
+test_cgrp2_sock -b cgrp2_sock ${CGRP_MNT}/sockopts
 if [ $? -ne 0 ]; then
 	cleanup_and_exit 1 "Failed to install program to set device"
 fi
@@ -109,7 +107,7 @@ check_sock6 "dev cgrp2_sock, mark 0, priority 0" "Device set"
 
 # verify mark is set
 #
-$TEST -m 666 ${CGRP_MNT}/sockopts
+test_cgrp2_sock -m 666 ${CGRP_MNT}/sockopts
 if [ $? -ne 0 ]; then
 	cleanup_and_exit 1 "Failed to install program to set mark"
 fi
@@ -118,7 +116,7 @@ check_sock6 "dev , mark 666, priority 0" "Mark set"
 
 # verify priority is set
 #
-$TEST -p 123 ${CGRP_MNT}/sockopts
+test_cgrp2_sock -p 123 ${CGRP_MNT}/sockopts
 if [ $? -ne 0 ]; then
 	cleanup_and_exit 1 "Failed to install program to set priority"
 fi
@@ -127,7 +125,7 @@ check_sock6 "dev , mark 0, priority 123" "Priority set"
 
 # all 3 at once
 #
-$TEST -b cgrp2_sock -m 666 -p 123 ${CGRP_MNT}/sockopts
+test_cgrp2_sock -b cgrp2_sock -m 666 -p 123 ${CGRP_MNT}/sockopts
 if [ $? -ne 0 ]; then
 	cleanup_and_exit 1 "Failed to install program to set device, mark and priority"
 fi

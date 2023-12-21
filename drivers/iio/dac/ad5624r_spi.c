@@ -117,8 +117,8 @@ static ssize_t ad5624r_read_dac_powerdown(struct iio_dev *indio_dev,
 {
 	struct ad5624r_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n",
-			  !!(st->pwr_down_mask & (1 << chan->channel)));
+	return sprintf(buf, "%d\n",
+			!!(st->pwr_down_mask & (1 << chan->channel)));
 }
 
 static ssize_t ad5624r_write_dac_powerdown(struct iio_dev *indio_dev,
@@ -129,7 +129,7 @@ static ssize_t ad5624r_write_dac_powerdown(struct iio_dev *indio_dev,
 	int ret;
 	struct ad5624r_state *st = iio_priv(indio_dev);
 
-	ret = kstrtobool(buf, &pwr_down);
+	ret = strtobool(buf, &pwr_down);
 	if (ret)
 		return ret;
 
@@ -159,7 +159,7 @@ static const struct iio_chan_spec_ext_info ad5624r_ext_info[] = {
 	},
 	IIO_ENUM("powerdown_mode", IIO_SHARED_BY_TYPE,
 		 &ad5624r_powerdown_mode_enum),
-	IIO_ENUM_AVAILABLE("powerdown_mode", IIO_SHARED_BY_TYPE, &ad5624r_powerdown_mode_enum),
+	IIO_ENUM_AVAILABLE("powerdown_mode", &ad5624r_powerdown_mode_enum),
 	{ },
 };
 
@@ -293,7 +293,7 @@ error_disable_reg:
 	return ret;
 }
 
-static void ad5624r_remove(struct spi_device *spi)
+static int ad5624r_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ad5624r_state *st = iio_priv(indio_dev);
@@ -301,6 +301,8 @@ static void ad5624r_remove(struct spi_device *spi)
 	iio_device_unregister(indio_dev);
 	if (!IS_ERR(st->reg))
 		regulator_disable(st->reg);
+
+	return 0;
 }
 
 static const struct spi_device_id ad5624r_id[] = {

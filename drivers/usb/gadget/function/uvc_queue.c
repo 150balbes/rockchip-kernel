@@ -17,10 +17,10 @@
 #include <linux/wait.h>
 
 #include <media/v4l2-common.h>
-#include <media/videobuf2-dma-sg.h>
 #include <media/videobuf2-vmalloc.h>
 
 #include "uvc.h"
+#include "u_uvc.h"
 
 /* ------------------------------------------------------------------------
  * Video buffers queue management.
@@ -44,6 +44,10 @@ static int uvc_queue_setup(struct vb2_queue *vq,
 {
 	struct uvc_video_queue *queue = vb2_get_drv_priv(vq);
 	struct uvc_video *video = container_of(queue, struct uvc_video, queue);
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	struct uvc_device *uvc = container_of(video, struct uvc_device, video);
+	struct f_uvc_opts *opts = fi_to_f_uvc_opts(uvc->func.fi);
+#endif
 	unsigned int req_size;
 	unsigned int nreq;
 
@@ -53,6 +57,13 @@ static int uvc_queue_setup(struct vb2_queue *vq,
 	*nplanes = 1;
 
 	sizes[0] = video->imagesize;
+
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	if (opts && opts->uvc_num_request > 0) {
+		video->uvc_num_requests = opts->uvc_num_request;
+		return 0;
+	}
+#endif
 
 	req_size = video->ep->maxpacket
 		 * max_t(unsigned int, video->ep->maxburst, 1)
@@ -67,6 +78,72 @@ static int uvc_queue_setup(struct vb2_queue *vq,
 
 	return 0;
 }
+
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+/*
+ * uvc_dma_buf_phys_to_virt - Get the physical address of the dma_buf and
+ * translate it to virtual address.
+ *
+ * @dbuf: the dma_buf of vb2_plane
+ * @dev: the device to the actual usb controller
+ *
+ * This function is used for dma buf allocated by Contiguous Memory Allocator.
+ *
+ * Returns:
+ * The virtual addresses of the dma_buf.
+ */
+static void *uvc_dma_buf_phys_to_virt(struct uvc_device *uvc,
+				      struct dma_buf *dbuf)
+{
+	struct usb_gadget *gadget = uvc->func.config->cdev->gadget;
+	struct dma_buf_attachment *attachment;
+	struct sg_table *table;
+	struct scatterlist *sgl;
+	dma_addr_t phys = 0;
+	int i;
+
+	attachment = dma_buf_attach(dbuf, gadget->dev.parent);
+	if (IS_ERR(attachment))
+		return ERR_PTR(-ENOMEM);
+
+	table = dma_buf_map_attachment(attachment, DMA_BIDIRECTIONAL);
+	if (IS_ERR(table)) {
+		dma_buf_detach(dbuf, attachment);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	for_each_sgtable_sg(table, sgl, i)
+		phys = sg_phys(sgl);
+
+	dma_buf_unmap_attachment(attachment, table, DMA_BIDIRECTIONAL);
+	dma_buf_detach(dbuf, attachment);
+
+	if (i > 1) {
+		uvcg_err(&uvc->func, "Not support mult sgl for uvc zero copy\n");
+		return ERR_PTR(-ENOMEM);
+	}
+
+	return phys_to_virt(phys);
+}
+
+static void *uvc_buffer_mem_prepare(struct vb2_buffer *vb,
+				    struct uvc_video_queue *queue)
+{
+	struct uvc_video *video = container_of(queue, struct uvc_video, queue);
+	struct uvc_device *uvc = container_of(video, struct uvc_device, video);
+	struct f_uvc_opts *opts = fi_to_f_uvc_opts(uvc->func.fi);
+	void *mem;
+
+	if (!opts->uvc_zero_copy || video->fcc == V4L2_PIX_FMT_YUYV)
+		return (vb2_plane_vaddr(vb, 0) + vb2_plane_data_offset(vb, 0));
+
+	mem = uvc_dma_buf_phys_to_virt(uvc, vb->planes[0].dbuf);
+	if (IS_ERR(mem))
+		return ERR_PTR(-ENOMEM);
+
+	return (mem + vb2_plane_data_offset(vb, 0));
+}
+#endif
 
 static int uvc_buffer_prepare(struct vb2_buffer *vb)
 {
@@ -84,12 +161,13 @@ static int uvc_buffer_prepare(struct vb2_buffer *vb)
 		return -ENODEV;
 
 	buf->state = UVC_BUF_STATE_QUEUED;
-	if (queue->use_sg) {
-		buf->sgt = vb2_dma_sg_plane_desc(vb, 0);
-		buf->sg = buf->sgt->sgl;
-	} else {
-		buf->mem = vb2_plane_vaddr(vb, 0);
-	}
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	buf->mem = uvc_buffer_mem_prepare(vb, queue);
+	if (IS_ERR(buf->mem))
+		return -ENOMEM;
+#else
+	buf->mem = vb2_plane_vaddr(vb, 0);
+#endif
 	buf->length = vb2_plane_size(vb, 0);
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		buf->bytesused = 0;
@@ -111,8 +189,7 @@ static void uvc_buffer_queue(struct vb2_buffer *vb)
 	if (likely(!(queue->flags & UVC_QUEUE_DISCONNECTED))) {
 		list_add_tail(&buf->queue, &queue->irqqueue);
 	} else {
-		/*
-		 * If the device is disconnected return the buffer to userspace
+		/* If the device is disconnected return the buffer to userspace
 		 * directly. The next QBUF call will fail with -ENODEV.
 		 */
 		buf->state = UVC_BUF_STATE_ERROR;
@@ -130,11 +207,9 @@ static const struct vb2_ops uvc_queue_qops = {
 	.wait_finish = vb2_ops_wait_finish,
 };
 
-int uvcg_queue_init(struct uvc_video_queue *queue, struct device *dev, enum v4l2_buf_type type,
+int uvcg_queue_init(struct uvc_video_queue *queue, enum v4l2_buf_type type,
 		    struct mutex *lock)
 {
-	struct uvc_video *video = container_of(queue, struct uvc_video, queue);
-	struct usb_composite_dev *cdev = video->uvc->func.config->cdev;
 	int ret;
 
 	queue->queue.type = type;
@@ -143,17 +218,17 @@ int uvcg_queue_init(struct uvc_video_queue *queue, struct device *dev, enum v4l2
 	queue->queue.buf_struct_size = sizeof(struct uvc_buffer);
 	queue->queue.ops = &uvc_queue_qops;
 	queue->queue.lock = lock;
-	if (cdev->gadget->sg_supported) {
-		queue->queue.mem_ops = &vb2_dma_sg_memops;
-		queue->use_sg = 1;
-	} else {
-		queue->queue.mem_ops = &vb2_vmalloc_memops;
-	}
-
-	queue->queue.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY
+	queue->queue.mem_ops = &vb2_vmalloc_memops;
+	queue->queue.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
 				     | V4L2_BUF_FLAG_TSTAMP_SRC_EOF;
-	queue->queue.dev = dev;
-
+	/*
+	 * For rockchip platform, the userspace uvc application
+	 * use bytesused == 0 as a way to indicate that the data
+	 * is all zero and unused.
+	 */
+#ifdef CONFIG_ARCH_ROCKCHIP
+	queue->queue.allow_zero_bytesused = 1;
+#endif
 	ret = vb2_queue_init(&queue->queue);
 	if (ret)
 		return ret;
@@ -263,8 +338,7 @@ void uvcg_queue_cancel(struct uvc_video_queue *queue, int disconnect)
 	}
 	queue->buf_used = 0;
 
-	/*
-	 * This must be protected by the irqlock spinlock to avoid race
+	/* This must be protected by the irqlock spinlock to avoid race
 	 * conditions between uvc_queue_buffer and the disconnection event that
 	 * could result in an interruptible wait in uvc_dequeue_buffer. Do not
 	 * blindly replace this logic by checking for the UVC_DEV_DISCONNECTED
@@ -304,7 +378,6 @@ int uvcg_queue_enable(struct uvc_video_queue *queue, int enable)
 
 		queue->sequence = 0;
 		queue->buf_used = 0;
-		queue->flags &= ~UVC_QUEUE_DROP_INCOMPLETE;
 	} else {
 		ret = vb2_streamoff(&queue->queue, queue->queue.type);
 		if (ret < 0)
@@ -327,16 +400,24 @@ int uvcg_queue_enable(struct uvc_video_queue *queue, int enable)
 }
 
 /* called with &queue_irqlock held.. */
-void uvcg_complete_buffer(struct uvc_video_queue *queue,
+struct uvc_buffer *uvcg_queue_next_buffer(struct uvc_video_queue *queue,
 					  struct uvc_buffer *buf)
 {
-	if (queue->flags & UVC_QUEUE_DROP_INCOMPLETE) {
-		queue->flags &= ~UVC_QUEUE_DROP_INCOMPLETE;
-		buf->state = UVC_BUF_STATE_ERROR;
+	struct uvc_buffer *nextbuf;
+
+	if ((queue->flags & UVC_QUEUE_DROP_INCOMPLETE) &&
+	     buf->length != buf->bytesused) {
+		buf->state = UVC_BUF_STATE_QUEUED;
 		vb2_set_plane_payload(&buf->buf.vb2_buf, 0, 0);
-		vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_ERROR);
-		return;
+		return buf;
 	}
+
+	list_del(&buf->queue);
+	if (!list_empty(&queue->irqqueue))
+		nextbuf = list_first_entry(&queue->irqqueue, struct uvc_buffer,
+					   queue);
+	else
+		nextbuf = NULL;
 
 	buf->buf.field = V4L2_FIELD_NONE;
 	buf->buf.sequence = queue->sequence++;
@@ -344,6 +425,8 @@ void uvcg_complete_buffer(struct uvc_video_queue *queue,
 
 	vb2_set_plane_payload(&buf->buf.vb2_buf, 0, buf->bytesused);
 	vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_DONE);
+
+	return nextbuf;
 }
 
 struct uvc_buffer *uvcg_queue_head(struct uvc_video_queue *queue)

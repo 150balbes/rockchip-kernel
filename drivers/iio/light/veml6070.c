@@ -135,7 +135,8 @@ static const struct iio_info veml6070_info = {
 	.read_raw = veml6070_read_raw,
 };
 
-static int veml6070_probe(struct i2c_client *client)
+static int veml6070_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct veml6070_data *data;
 	struct iio_dev *indio_dev;
@@ -179,13 +180,15 @@ fail:
 	return ret;
 }
 
-static void veml6070_remove(struct i2c_client *client)
+static int veml6070_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct veml6070_data *data = iio_priv(indio_dev);
 
 	iio_device_unregister(indio_dev);
 	i2c_unregister_device(data->client2);
+
+	return 0;
 }
 
 static const struct i2c_device_id veml6070_id[] = {
@@ -198,7 +201,7 @@ static struct i2c_driver veml6070_driver = {
 	.driver = {
 		.name   = VEML6070_DRV_NAME,
 	},
-	.probe = veml6070_probe,
+	.probe  = veml6070_probe,
 	.remove  = veml6070_remove,
 	.id_table = veml6070_id,
 };

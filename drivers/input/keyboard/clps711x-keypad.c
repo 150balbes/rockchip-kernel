@@ -6,11 +6,9 @@
  */
 
 #include <linux/input.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/gpio/consumer.h>
+#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/sched.h>
 #include <linux/input/matrix_keypad.h>
@@ -88,6 +86,7 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 {
 	struct clps711x_keypad_data *priv;
 	struct device *dev = &pdev->dev;
+	struct device_node *np = dev->of_node;
 	struct input_dev *input;
 	u32 poll_interval;
 	int i, err;
@@ -96,11 +95,12 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->syscon = syscon_regmap_lookup_by_phandle(dev->of_node, "syscon");
+	priv->syscon =
+		syscon_regmap_lookup_by_compatible("cirrus,ep7209-syscon1");
 	if (IS_ERR(priv->syscon))
 		return PTR_ERR(priv->syscon);
 
-	priv->row_count = gpiod_count(dev, "row");
+	priv->row_count = of_gpio_named_count(np, "row-gpios");
 	if (priv->row_count < 1)
 		return -EINVAL;
 
@@ -120,7 +120,7 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 			return PTR_ERR(data->desc);
 	}
 
-	err = device_property_read_u32(dev, "poll-interval", &poll_interval);
+	err = of_property_read_u32(np, "poll-interval", &poll_interval);
 	if (err)
 		return err;
 
@@ -144,7 +144,7 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 		return err;
 
 	input_set_capability(input, EV_MSC, MSC_SCAN);
-	if (device_property_read_bool(dev, "autorepeat"))
+	if (of_property_read_bool(np, "autorepeat"))
 		__set_bit(EV_REP, input->evbit);
 
 	/* Set all columns to low */

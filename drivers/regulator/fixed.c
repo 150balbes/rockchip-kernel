@@ -18,8 +18,6 @@
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/pm_domain.h>
-#include <linux/pm_opp.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/fixed.h>
 #include <linux/gpio/consumer.h>
@@ -36,13 +34,11 @@ struct fixed_voltage_data {
 	struct regulator_dev *dev;
 
 	struct clk *enable_clock;
-	unsigned int enable_counter;
-	int performance_state;
+	unsigned int clk_enable_counter;
 };
 
 struct fixed_dev_type {
 	bool has_enable_clock;
-	bool has_performance_state;
 };
 
 static int reg_clock_enable(struct regulator_dev *rdev)
@@ -54,7 +50,7 @@ static int reg_clock_enable(struct regulator_dev *rdev)
 	if (ret)
 		return ret;
 
-	priv->enable_counter++;
+	priv->clk_enable_counter++;
 
 	return ret;
 }
@@ -64,46 +60,16 @@ static int reg_clock_disable(struct regulator_dev *rdev)
 	struct fixed_voltage_data *priv = rdev_get_drvdata(rdev);
 
 	clk_disable_unprepare(priv->enable_clock);
-	priv->enable_counter--;
+	priv->clk_enable_counter--;
 
 	return 0;
 }
 
-static int reg_domain_enable(struct regulator_dev *rdev)
-{
-	struct fixed_voltage_data *priv = rdev_get_drvdata(rdev);
-	struct device *dev = rdev->dev.parent;
-	int ret;
-
-	ret = dev_pm_genpd_set_performance_state(dev, priv->performance_state);
-	if (ret)
-		return ret;
-
-	priv->enable_counter++;
-
-	return ret;
-}
-
-static int reg_domain_disable(struct regulator_dev *rdev)
-{
-	struct fixed_voltage_data *priv = rdev_get_drvdata(rdev);
-	struct device *dev = rdev->dev.parent;
-	int ret;
-
-	ret = dev_pm_genpd_set_performance_state(dev, 0);
-	if (ret)
-		return ret;
-
-	priv->enable_counter--;
-
-	return 0;
-}
-
-static int reg_is_enabled(struct regulator_dev *rdev)
+static int reg_clock_is_enabled(struct regulator_dev *rdev)
 {
 	struct fixed_voltage_data *priv = rdev_get_drvdata(rdev);
 
-	return priv->enable_counter > 0;
+	return priv->clk_enable_counter > 0;
 }
 
 
@@ -151,7 +117,7 @@ of_get_fixed_voltage_config(struct device *dev,
 	of_property_read_u32(np, "startup-delay-us", &config->startup_delay);
 	of_property_read_u32(np, "off-on-delay-us", &config->off_on_delay);
 
-	if (of_property_present(np, "vin-supply"))
+	if (of_find_property(np, "vin-supply", NULL))
 		config->input_supply = "vin";
 
 	return config;
@@ -163,13 +129,7 @@ static const struct regulator_ops fixed_voltage_ops = {
 static const struct regulator_ops fixed_voltage_clkenabled_ops = {
 	.enable = reg_clock_enable,
 	.disable = reg_clock_disable,
-	.is_enabled = reg_is_enabled,
-};
-
-static const struct regulator_ops fixed_voltage_domain_ops = {
-	.enable = reg_domain_enable,
-	.disable = reg_domain_disable,
-	.is_enabled = reg_is_enabled,
+	.is_enabled = reg_clock_is_enabled,
 };
 
 static int reg_fixed_voltage_probe(struct platform_device *pdev)
@@ -215,15 +175,7 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 		drvdata->enable_clock = devm_clk_get(dev, NULL);
 		if (IS_ERR(drvdata->enable_clock)) {
 			dev_err(dev, "Can't get enable-clock from devicetree\n");
-			return PTR_ERR(drvdata->enable_clock);
-		}
-	} else if (drvtype && drvtype->has_performance_state) {
-		drvdata->desc.ops = &fixed_voltage_domain_ops;
-
-		drvdata->performance_state = of_get_required_opp_performance_state(dev->of_node, 0);
-		if (drvdata->performance_state < 0) {
-			dev_err(dev, "Can't get performance state from devicetree\n");
-			return drvdata->performance_state;
+			return -ENOENT;
 		}
 	} else {
 		drvdata->desc.ops = &fixed_voltage_ops;
@@ -236,8 +188,11 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 		drvdata->desc.supply_name = devm_kstrdup(&pdev->dev,
 					    config->input_supply,
 					    GFP_KERNEL);
-		if (!drvdata->desc.supply_name)
+		if (!drvdata->desc.supply_name) {
+			dev_err(&pdev->dev,
+				"Failed to allocate input supply\n");
 			return -ENOMEM;
+		}
 	}
 
 	if (config->microvolts)
@@ -273,8 +228,7 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 	 */
 	cfg.ena_gpiod = gpiod_get_optional(&pdev->dev, NULL, gflags);
 	if (IS_ERR(cfg.ena_gpiod))
-		return dev_err_probe(&pdev->dev, PTR_ERR(cfg.ena_gpiod),
-				     "can't get GPIO\n");
+		return PTR_ERR(cfg.ena_gpiod);
 
 	cfg.dev = &pdev->dev;
 	cfg.init_data = config->init_data;
@@ -284,9 +238,8 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 	drvdata->dev = devm_regulator_register(&pdev->dev, &drvdata->desc,
 					       &cfg);
 	if (IS_ERR(drvdata->dev)) {
-		ret = dev_err_probe(&pdev->dev, PTR_ERR(drvdata->dev),
-				    "Failed to register regulator: %ld\n",
-				    PTR_ERR(drvdata->dev));
+		ret = PTR_ERR(drvdata->dev);
+		dev_err(&pdev->dev, "Failed to register regulator: %d\n", ret);
 		return ret;
 	}
 
@@ -307,10 +260,6 @@ static const struct fixed_dev_type fixed_clkenable_data = {
 	.has_enable_clock = true,
 };
 
-static const struct fixed_dev_type fixed_domain_data = {
-	.has_performance_state = true,
-};
-
 static const struct of_device_id fixed_of_match[] = {
 	{
 		.compatible = "regulator-fixed",
@@ -319,10 +268,6 @@ static const struct of_device_id fixed_of_match[] = {
 	{
 		.compatible = "regulator-fixed-clock",
 		.data = &fixed_clkenable_data,
-	},
-	{
-		.compatible = "regulator-fixed-domain",
-		.data = &fixed_domain_data,
 	},
 	{
 	},
@@ -334,7 +279,6 @@ static struct platform_driver regulator_fixed_voltage_driver = {
 	.probe		= reg_fixed_voltage_probe,
 	.driver		= {
 		.name		= "reg-fixed-voltage",
-		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(fixed_of_match),
 	},
 };

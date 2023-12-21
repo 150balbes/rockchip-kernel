@@ -3,7 +3,6 @@
 #include <linux/hugetlb.h>
 #include <linux/bitops.h>
 #include <linux/mmu_notifier.h>
-#include <linux/mm_inline.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 
@@ -24,8 +23,7 @@ struct wp_walk {
 /**
  * wp_pte - Write-protect a pte
  * @pte: Pointer to the pte
- * @addr: The start of protecting virtual address
- * @end: The end of protecting virtual address
+ * @addr: The virtual page address
  * @walk: pagetable walk callback argument
  *
  * The function write-protects a pte and records the range in
@@ -35,7 +33,7 @@ static int wp_pte(pte_t *pte, unsigned long addr, unsigned long end,
 		  struct mm_walk *walk)
 {
 	struct wp_walk *wpwalk = walk->private;
-	pte_t ptent = ptep_get(pte);
+	pte_t ptent = *pte;
 
 	if (pte_write(ptent)) {
 		pte_t old_pte = ptep_modify_prot_start(walk->vma, addr, pte);
@@ -76,8 +74,7 @@ struct clean_walk {
  * clean_record_pte - Clean a pte and record its address space offset in a
  * bitmap
  * @pte: Pointer to the pte
- * @addr: The start of virtual address to be clean
- * @end: The end of virtual address to be clean
+ * @addr: The virtual page address
  * @walk: pagetable walk callback argument
  *
  * The function cleans a pte and records the range in
@@ -91,7 +88,7 @@ static int clean_record_pte(pte_t *pte, unsigned long addr,
 {
 	struct wp_walk *wpwalk = walk->private;
 	struct clean_walk *cwalk = to_clean_walk(wpwalk);
-	pte_t ptent = ptep_get(pte);
+	pte_t ptent = *pte;
 
 	if (pte_dirty(ptent)) {
 		pgoff_t pgoff = ((addr - walk->vma->vm_start) >> PAGE_SHIFT) +
@@ -126,13 +123,21 @@ static int clean_record_pte(pte_t *pte, unsigned long addr,
 static int wp_clean_pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long end,
 			      struct mm_walk *walk)
 {
-	pmd_t pmdval = pmdp_get_lockless(pmd);
+	pmd_t pmdval = pmd_read_atomic(pmd);
 
-	/* Do not split a huge pmd, present or migrated */
-	if (pmd_trans_huge(pmdval) || pmd_devmap(pmdval)) {
-		WARN_ON(pmd_write(pmdval) || pmd_dirty(pmdval));
-		walk->action = ACTION_CONTINUE;
+	if (!pmd_trans_unstable(&pmdval))
+		return 0;
+
+	if (pmd_none(pmdval)) {
+		walk->action = ACTION_AGAIN;
+		return 0;
 	}
+
+	/* Huge pmd, present or migrated */
+	walk->action = ACTION_CONTINUE;
+	if (pmd_trans_huge(pmdval) || pmd_devmap(pmdval))
+		WARN_ON(pmd_write(pmdval) || pmd_dirty(pmdval));
+
 	return 0;
 }
 
@@ -148,15 +153,21 @@ static int wp_clean_pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long end,
 static int wp_clean_pud_entry(pud_t *pud, unsigned long addr, unsigned long end,
 			      struct mm_walk *walk)
 {
-#ifdef CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
 	pud_t pudval = READ_ONCE(*pud);
 
-	/* Do not split a huge pud */
-	if (pud_trans_huge(pudval) || pud_devmap(pudval)) {
-		WARN_ON(pud_write(pudval) || pud_dirty(pudval));
-		walk->action = ACTION_CONTINUE;
+	if (!pud_trans_unstable(&pudval))
+		return 0;
+
+	if (pud_none(pudval)) {
+		walk->action = ACTION_AGAIN;
+		return 0;
 	}
-#endif
+
+	/* Huge pud */
+	walk->action = ACTION_CONTINUE;
+	if (pud_trans_huge(pudval) || pud_devmap(pudval))
+		WARN_ON(pud_write(pudval) || pud_dirty(pudval));
+
 	return 0;
 }
 
@@ -175,7 +186,7 @@ static int wp_clean_pre_vma(unsigned long start, unsigned long end,
 	wpwalk->tlbflush_end = start;
 
 	mmu_notifier_range_init(&wpwalk->range, MMU_NOTIFY_PROTECTION_PAGE, 0,
-				walk->mm, start, end);
+				walk->vma, walk->mm, start, end);
 	mmu_notifier_invalidate_range_start(&wpwalk->range);
 	flush_cache_range(walk->vma, start, end);
 
@@ -302,7 +313,7 @@ EXPORT_SYMBOL_GPL(wp_shared_mapping_range);
  * pfn_mkwrite(). And then after a TLB flush following the write-protection
  * pick up all dirty bits.
  *
- * This function currently skips transhuge page-table entries, since
+ * Note: This function currently skips transhuge page-table entries, since
  * it's intended for dirty-tracking on the PTE level. It will warn on
  * encountering transhuge dirty entries, though, and can easily be extended
  * to handle them as well.

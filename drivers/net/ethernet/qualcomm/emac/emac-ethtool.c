@@ -100,7 +100,7 @@ static void emac_get_strings(struct net_device *netdev, u32 stringset, u8 *data)
 
 	case ETH_SS_STATS:
 		for (i = 0; i < EMAC_STATS_LEN; i++) {
-			strscpy(data, emac_ethtool_stat_strings[i],
+			strlcpy(data, emac_ethtool_stat_strings[i],
 				ETH_GSTRING_LEN);
 			data += ETH_GSTRING_LEN;
 		}
@@ -133,9 +133,7 @@ static int emac_nway_reset(struct net_device *netdev)
 }
 
 static void emac_get_ringparam(struct net_device *netdev,
-			       struct ethtool_ringparam *ring,
-			       struct kernel_ethtool_ringparam *kernel_ring,
-			       struct netlink_ext_ack *extack)
+			       struct ethtool_ringparam *ring)
 {
 	struct emac_adapter *adpt = netdev_priv(netdev);
 
@@ -146,9 +144,7 @@ static void emac_get_ringparam(struct net_device *netdev,
 }
 
 static int emac_set_ringparam(struct net_device *netdev,
-			      struct ethtool_ringparam *ring,
-			      struct kernel_ethtool_ringparam *kernel_ring,
-			      struct netlink_ext_ack *extack)
+			      struct ethtool_ringparam *ring)
 {
 	struct emac_adapter *adpt = netdev_priv(netdev);
 

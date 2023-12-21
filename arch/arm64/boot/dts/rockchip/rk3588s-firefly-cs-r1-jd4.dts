@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "rk3588s-firefly-cs-r1-jd4.dtsi"
+
+/ {
+	model = "Firefly RK3588S Cluster-Server-R1 HDMI(Linux)";
+	compatible = "rockchip,rk3588s-firefly-cs-r1-jd4", "rockchip,rk3588";
+};

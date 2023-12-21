@@ -65,7 +65,6 @@
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
 #include <linux/if_vlan.h>
-#include <net/gso.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/tcp.h>
@@ -574,7 +573,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	/* Simple BLUE implementation.  Lack of ECN is deliberate. */
 	if (vars->p_drop)
-		drop |= (get_random_u32() < vars->p_drop);
+		drop |= (prandom_u32() < vars->p_drop);
 
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
@@ -1210,7 +1209,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			    iph_check->daddr != iph->daddr)
 				continue;
 
-			seglen = iph_totlen(skb, iph_check) -
+			seglen = ntohs(iph_check->tot_len) -
 				       (4 * iph_check->ihl);
 		} else if (iph_check->version == 6) {
 			ipv6h = (struct ipv6hdr *)iph;
@@ -1361,7 +1360,7 @@ static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
 		return cake_calc_overhead(q, len, off);
 
 	/* borrowed from qdisc_pkt_len_init() */
-	hdr_len = skb_transport_offset(skb);
+	hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
 
 	/* + transport layer */
 	if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 |
@@ -1369,14 +1368,14 @@ static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
 		const struct tcphdr *th;
 		struct tcphdr _tcphdr;
 
-		th = skb_header_pointer(skb, hdr_len,
+		th = skb_header_pointer(skb, skb_transport_offset(skb),
 					sizeof(_tcphdr), &_tcphdr);
 		if (likely(th))
 			hdr_len += __tcp_hdrlen(th);
 	} else {
 		struct udphdr _udphdr;
 
-		if (skb_header_pointer(skb, hdr_len,
+		if (skb_header_pointer(skb, skb_transport_offset(skb),
 				       sizeof(_udphdr), &_udphdr))
 			hdr_len += sizeof(struct udphdr);
 	}
@@ -1666,7 +1665,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 		goto hash;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	result = tcf_classify(skb, NULL, filter, &res, false);
+	result = tcf_classify(skb, filter, &res, false);
 
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
@@ -2093,11 +2092,11 @@ retry:
 
 		WARN_ON(host_load > CAKE_QUEUES);
 
-		/* The get_random_u16() is a way to apply dithering to avoid
-		 * accumulating roundoff errors
+		/* The shifted prandom_u32() is a way to apply dithering to
+		 * avoid accumulating roundoff errors
 		 */
 		flow->deficit += (b->flow_quantum * quantum_div[host_load] +
-				  get_random_u16()) >> 16;
+				  (prandom_u32() >> 16)) >> 16;
 		list_move_tail(&flow->flowchain, &b->old_flows);
 
 		goto retry;
@@ -2347,7 +2346,9 @@ static int cake_config_precedence(struct Qdisc *sch)
 
 /*	List of known Diffserv codepoints:
  *
- *	Default Forwarding (DF/CS0) - Best Effort
+ *	Least Effort (CS1)
+ *	Best Effort (CS0)
+ *	Max Reliability & LLT "Lo" (TOS1)
  *	Max Throughput (TOS2)
  *	Min Delay (TOS4)
  *	LLT "La" (TOS5)
@@ -2355,7 +2356,6 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Assured Forwarding 2 (AF2x) - x3
  *	Assured Forwarding 3 (AF3x) - x3
  *	Assured Forwarding 4 (AF4x) - x3
- *	Precedence Class 1 (CS1)
  *	Precedence Class 2 (CS2)
  *	Precedence Class 3 (CS3)
  *	Precedence Class 4 (CS4)
@@ -2364,12 +2364,11 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Precedence Class 7 (CS7)
  *	Voice Admit (VA)
  *	Expedited Forwarding (EF)
- *	Lower Effort (LE)
- *
- *	Total 26 codepoints.
+
+ *	Total 25 codepoints.
  */
 
-/*	List of traffic classes in RFC 4594, updated by RFC 8622:
+/*	List of traffic classes in RFC 4594:
  *		(roughly descending order of contended priority)
  *		(roughly ascending order of uncontended throughput)
  *
@@ -2380,12 +2379,12 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Realtime Interactive (CS4)     - eg. games
  *	Multimedia Streaming (AF3x)    - eg. YouTube, NetFlix, Twitch
  *	Broadcast Video (CS3)
- *	Low-Latency Data (AF2x,TOS4)      - eg. database
- *	Ops, Admin, Management (CS2)      - eg. ssh
- *	Standard Service (DF & unrecognised codepoints)
- *	High-Throughput Data (AF1x,TOS2)  - eg. web traffic
- *	Low-Priority Data (LE,CS1)        - eg. BitTorrent
- *
+ *	Low Latency Data (AF2x,TOS4)      - eg. database
+ *	Ops, Admin, Management (CS2,TOS1) - eg. ssh
+ *	Standard Service (CS0 & unrecognised codepoints)
+ *	High Throughput Data (AF1x,TOS2)  - eg. web traffic
+ *	Low Priority Data (CS1)           - eg. BitTorrent
+
  *	Total 12 traffic classes.
  */
 
@@ -2395,12 +2394,12 @@ static int cake_config_diffserv8(struct Qdisc *sch)
  *
  *		Network Control          (CS6, CS7)
  *		Minimum Latency          (EF, VA, CS5, CS4)
- *		Interactive Shell        (CS2)
+ *		Interactive Shell        (CS2, TOS1)
  *		Low Latency Transactions (AF2x, TOS4)
  *		Video Streaming          (AF4x, AF3x, CS3)
- *		Bog Standard             (DF etc.)
- *		High Throughput          (AF1x, TOS2, CS1)
- *		Background Traffic       (LE)
+ *		Bog Standard             (CS0 etc.)
+ *		High Throughput          (AF1x, TOS2)
+ *		Background Traffic       (CS1)
  *
  *		Total 8 traffic classes.
  */
@@ -2442,9 +2441,9 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 /*  Further pruned list of traffic classes for four-class system:
  *
  *	    Latency Sensitive  (CS7, CS6, EF, VA, CS5, CS4)
- *	    Streaming Media    (AF4x, AF3x, CS3, AF2x, TOS4, CS2)
- *	    Best Effort        (DF, AF1x, TOS2, and those not specified)
- *	    Background Traffic (LE, CS1)
+ *	    Streaming Media    (AF4x, AF3x, CS3, AF2x, TOS4, CS2, TOS1)
+ *	    Best Effort        (CS0, AF1x, TOS2, and those not specified)
+ *	    Background Traffic (CS1)
  *
  *		Total 4 traffic classes.
  */
@@ -2482,9 +2481,9 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 static int cake_config_diffserv3(struct Qdisc *sch)
 {
 /*  Simplified Diffserv structure with 3 tins.
- *		Latency Sensitive	(CS7, CS6, EF, VA, TOS4)
+ *		Low Priority		(CS1)
  *		Best Effort
- *		Low Priority		(LE, CS1)
+ *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
  */
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 mtu = psched_mtu(qdisc_dev(sch));
@@ -2573,6 +2572,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_CAKE_MAX + 1];
 	int err;
+
+	if (!opt)
+		return -EINVAL;
 
 	err = nla_parse_nested_deprecated(tb, TCA_CAKE_MAX, opt, cake_policy,
 					  extack);
@@ -3066,13 +3068,16 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
 
 		for (j = 0; j < CAKE_QUEUES; j++) {
-			if (list_empty(&b->flows[j].flowchain)) {
+			if (list_empty(&b->flows[j].flowchain) ||
+			    arg->count < arg->skip) {
 				arg->count++;
 				continue;
 			}
-			if (!tc_qdisc_stats_dump(sch, i * CAKE_QUEUES + j + 1,
-						 arg))
+			if (arg->fn(sch, i * CAKE_QUEUES + j + 1, arg) < 0) {
+				arg->stop = 1;
 				break;
+			}
+			arg->count++;
 		}
 	}
 }

@@ -1,5 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2014 Broadcom Corporation
+/*
+ * Copyright (C) 2014 Broadcom Corporation
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -12,6 +22,7 @@
 #include <linux/platform_device.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #define N_DATA_REGS					8
 
@@ -575,10 +586,12 @@ static void brcmstb_i2c_set_bsc_reg_defaults(struct brcmstb_i2c_dev *dev)
 static int bcm2711_release_bsc(struct brcmstb_i2c_dev *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->device);
+	struct resource *iomem;
 	void __iomem *autoi2c;
 
 	/* Map hardware registers */
-	autoi2c = devm_platform_ioremap_resource_byname(pdev, "auto-i2c");
+	iomem = platform_get_resource_byname(pdev, IORESOURCE_MEM, "auto-i2c");
+	autoi2c = devm_ioremap_resource(&pdev->dev, iomem);
 	if (IS_ERR(autoi2c))
 		return PTR_ERR(autoi2c);
 
@@ -672,7 +685,9 @@ static int brcmstb_i2c_probe(struct platform_device *pdev)
 	adap = &dev->adapter;
 	i2c_set_adapdata(adap, dev);
 	adap->owner = THIS_MODULE;
-	strscpy(adap->name, dev_name(&pdev->dev), sizeof(adap->name));
+	strlcpy(adap->name, "Broadcom STB : ", sizeof(adap->name));
+	if (int_name)
+		strlcat(adap->name, int_name, sizeof(adap->name));
 	adap->algo = &brcmstb_i2c_algo;
 	adap->dev.parent = &pdev->dev;
 	adap->dev.of_node = pdev->dev.of_node;
@@ -690,11 +705,12 @@ probe_errorout:
 	return rc;
 }
 
-static void brcmstb_i2c_remove(struct platform_device *pdev)
+static int brcmstb_i2c_remove(struct platform_device *pdev)
 {
 	struct brcmstb_i2c_dev *dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&dev->adapter);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -735,7 +751,7 @@ static struct platform_driver brcmstb_i2c_driver = {
 		   .pm = &brcmstb_i2c_pm,
 		   },
 	.probe = brcmstb_i2c_probe,
-	.remove_new = brcmstb_i2c_remove,
+	.remove = brcmstb_i2c_remove,
 };
 module_platform_driver(brcmstb_i2c_driver);
 

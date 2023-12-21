@@ -19,7 +19,6 @@
 
 #include <asm/sgidefs.h>
 #include <asm/asm-eva.h>
-#include <asm/isa-rev.h>
 
 #ifndef __VDSO__
 /*
@@ -115,7 +114,7 @@ symbol		=	value
 		.set	push;				\
 		.set	reorder;			\
 		PTR_LA	a0, 8f;				\
-		jal	_printk;			\
+		jal	printk;				\
 		.set	pop;				\
 		TEXT(string)
 #else
@@ -212,8 +211,6 @@ symbol		=	value
 #define LONG_SUB	sub
 #define LONG_SUBU	subu
 #define LONG_L		lw
-#define LONG_LL		ll
-#define LONG_SC		sc
 #define LONG_S		sw
 #define LONG_SP		swp
 #define LONG_SLL	sll
@@ -222,8 +219,6 @@ symbol		=	value
 #define LONG_SRLV	srlv
 #define LONG_SRA	sra
 #define LONG_SRAV	srav
-#define LONG_INS	ins
-#define LONG_EXT	ext
 
 #ifdef __ASSEMBLY__
 #define LONG		.word
@@ -241,8 +236,6 @@ symbol		=	value
 #define LONG_SUB	dsub
 #define LONG_SUBU	dsubu
 #define LONG_L		ld
-#define LONG_LL		lld
-#define LONG_SC		scd
 #define LONG_S		sd
 #define LONG_SP		sdp
 #define LONG_SLL	dsll
@@ -251,8 +244,6 @@ symbol		=	value
 #define LONG_SRLV	dsrlv
 #define LONG_SRA	dsra
 #define LONG_SRAV	dsrav
-#define LONG_INS	dins
-#define LONG_EXT	dext
 
 #ifdef __ASSEMBLY__
 #define LONG		.dword
@@ -285,7 +276,7 @@ symbol		=	value
 
 #define PTR_SCALESHIFT	2
 
-#define PTR_WD		.word
+#define PTR		.word
 #define PTRSIZE		4
 #define PTRLOG		2
 #endif
@@ -310,7 +301,7 @@ symbol		=	value
 
 #define PTR_SCALESHIFT	3
 
-#define PTR_WD		.dword
+#define PTR		.dword
 #define PTRSIZE		8
 #define PTRLOG		3
 #endif
@@ -328,19 +319,6 @@ symbol		=	value
 #endif
 
 #define SSNOP		sll zero, zero, 1
-
-/*
- * Using a branch-likely instruction to check the result of an sc instruction
- * works around a bug present in R10000 CPUs prior to revision 3.0 that could
- * cause ll-sc sequences to execute non-atomically.
- */
-#ifdef CONFIG_WAR_R10000_LLSC
-# define SC_BEQZ	beqzl
-#elif !defined(CONFIG_CC_HAS_BROKEN_INLINE_COMPAT_BRANCH) && MIPS_ISA_REV >= 6
-# define SC_BEQZ	beqzc
-#else
-# define SC_BEQZ	beqz
-#endif
 
 #ifdef CONFIG_SGI_IP28
 /* Inhibit speculative stores to volatile (e.g.DMA) or invalid addresses. */

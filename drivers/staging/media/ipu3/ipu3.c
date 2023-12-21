@@ -392,9 +392,10 @@ int imgu_s_stream(struct imgu_device *imgu, int enable)
 	}
 
 	/* Set Power */
-	r = pm_runtime_resume_and_get(dev);
+	r = pm_runtime_get_sync(dev);
 	if (r < 0) {
 		dev_err(dev, "failed to set imgu power\n");
+		pm_runtime_put(dev);
 		return r;
 	}
 
@@ -438,16 +439,6 @@ fail_start_streaming:
 	pm_runtime_put(dev);
 
 	return r;
-}
-
-static void imgu_video_nodes_exit(struct imgu_device *imgu)
-{
-	int i;
-
-	for (i = 0; i < IMGU_MAX_PIPE_NUM; i++)
-		imgu_dummybufs_cleanup(imgu, i);
-
-	imgu_v4l2_unregister(imgu);
 }
 
 static int imgu_video_nodes_init(struct imgu_device *imgu)
@@ -499,9 +490,22 @@ static int imgu_video_nodes_init(struct imgu_device *imgu)
 	return 0;
 
 out_cleanup:
-	imgu_video_nodes_exit(imgu);
+	for (j = 0; j < IMGU_MAX_PIPE_NUM; j++)
+		imgu_dummybufs_cleanup(imgu, j);
+
+	imgu_v4l2_unregister(imgu);
 
 	return r;
+}
+
+static void imgu_video_nodes_exit(struct imgu_device *imgu)
+{
+	int i;
+
+	for (i = 0; i < IMGU_MAX_PIPE_NUM; i++)
+		imgu_dummybufs_cleanup(imgu, i);
+
+	imgu_v4l2_unregister(imgu);
 }
 
 /**************** PCI interface ****************/

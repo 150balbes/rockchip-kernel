@@ -17,7 +17,6 @@ Introduction
    busses/index
    i2c-topology
    muxes/i2c-mux-gpio
-   i2c-sysfs
 
 Writing device drivers
 ======================

@@ -18,11 +18,11 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/notifier.h>
-#include <linux/of_address.h>
 #include <linux/vmalloc.h>
 
 #include <asm/processor.h>
 #include <asm/io.h>
+#include <asm/prom.h>
 #include <asm/pci-bridge.h>
 #include <asm/machdep.h>
 #include <asm/ppc-pci.h>
@@ -48,57 +48,87 @@ static void remap_isa_base(phys_addr_t pa, unsigned long size)
 	if (slab_is_available()) {
 		if (ioremap_page_range(ISA_IO_BASE, ISA_IO_BASE + size, pa,
 				pgprot_noncached(PAGE_KERNEL)))
-			vunmap_range(ISA_IO_BASE, ISA_IO_BASE + size);
+			unmap_kernel_range(ISA_IO_BASE, size);
 	} else {
 		early_ioremap_range(ISA_IO_BASE, pa, size,
 				pgprot_noncached(PAGE_KERNEL));
 	}
 }
 
-static int process_ISA_OF_ranges(struct device_node *isa_node,
-				 unsigned long phb_io_base_phys)
+static void pci_process_ISA_OF_ranges(struct device_node *isa_node,
+				      unsigned long phb_io_base_phys)
 {
-	unsigned int size;
-	struct of_range_parser parser;
-	struct of_range range;
+	/* We should get some saner parsing here and remove these structs */
+	struct pci_address {
+		u32 a_hi;
+		u32 a_mid;
+		u32 a_lo;
+	};
 
-	if (of_range_parser_init(&parser, isa_node))
+	struct isa_address {
+		u32 a_hi;
+		u32 a_lo;
+	};
+
+	struct isa_range {
+		struct isa_address isa_addr;
+		struct pci_address pci_addr;
+		unsigned int size;
+	};
+
+	const struct isa_range *range;
+	unsigned long pci_addr;
+	unsigned int isa_addr;
+	unsigned int size;
+	int rlen = 0;
+
+	range = of_get_property(isa_node, "ranges", &rlen);
+	if (range == NULL || (rlen < sizeof(struct isa_range)))
 		goto inval_range;
 
-	for_each_of_range(&parser, &range) {
-		if ((range.flags & ISA_SPACE_MASK) != ISA_SPACE_IO)
-			continue;
-
-		if (range.cpu_addr == OF_BAD_ADDR) {
-			pr_err("ISA: Bad CPU mapping: %s\n", __func__);
-			return -EINVAL;
-		}
-
-		/* We need page alignment */
-		if ((range.bus_addr & ~PAGE_MASK) || (range.cpu_addr & ~PAGE_MASK)) {
-			pr_warn("ISA: bridge %pOF has non aligned IO range\n", isa_node);
-			return -EINVAL;
-		}
-
-		/* Align size and make sure it's cropped to 64K */
-		size = PAGE_ALIGN(range.size);
-		if (size > 0x10000)
-			size = 0x10000;
-
-		if (!phb_io_base_phys)
-			phb_io_base_phys = range.cpu_addr;
-
-		remap_isa_base(phb_io_base_phys, size);
-		return 0;
+	/* From "ISA Binding to 1275"
+	 * The ranges property is laid out as an array of elements,
+	 * each of which comprises:
+	 *   cells 0 - 1:	an ISA address
+	 *   cells 2 - 4:	a PCI address
+	 *			(size depending on dev->n_addr_cells)
+	 *   cell 5:		the size of the range
+	 */
+	if ((range->isa_addr.a_hi & ISA_SPACE_MASK) != ISA_SPACE_IO) {
+		range++;
+		rlen -= sizeof(struct isa_range);
+		if (rlen < sizeof(struct isa_range))
+			goto inval_range;
 	}
+	if ((range->isa_addr.a_hi & ISA_SPACE_MASK) != ISA_SPACE_IO)
+		goto inval_range;
+
+	isa_addr = range->isa_addr.a_lo;
+	pci_addr = (unsigned long) range->pci_addr.a_mid << 32 |
+		range->pci_addr.a_lo;
+
+	/* Assume these are both zero. Note: We could fix that and
+	 * do a proper parsing instead ... oh well, that will do for
+	 * now as nobody uses fancy mappings for ISA bridges
+	 */
+	if ((pci_addr != 0) || (isa_addr != 0)) {
+		printk(KERN_ERR "unexpected isa to pci mapping: %s\n",
+		       __func__);
+		return;
+	}
+
+	/* Align size and make sure it's cropped to 64K */
+	size = PAGE_ALIGN(range->size);
+	if (size > 0x10000)
+		size = 0x10000;
+
+	remap_isa_base(phb_io_base_phys, size);
+	return;
 
 inval_range:
-	if (phb_io_base_phys) {
-		pr_err("no ISA IO ranges or unexpected isa range, mapping 64k\n");
-		remap_isa_base(phb_io_base_phys, 0x10000);
-		return 0;
-	}
-	return -EINVAL;
+	printk(KERN_ERR "no ISA IO ranges or unexpected isa range, "
+	       "mapping 64k\n");
+	remap_isa_base(phb_io_base_phys, 0x10000);
 }
 
 
@@ -140,7 +170,7 @@ void __init isa_bridge_find_early(struct pci_controller *hose)
 	isa_bridge_devnode = np;
 
 	/* Now parse the "ranges" property and setup the ISA mapping */
-	process_ISA_OF_ranges(np, hose->io_base_phys);
+	pci_process_ISA_OF_ranges(np, hose->io_base_phys);
 
 	/* Set the global ISA io base to indicate we have an ISA bridge */
 	isa_io_base = ISA_IO_BASE;
@@ -156,15 +186,75 @@ void __init isa_bridge_find_early(struct pci_controller *hose)
  */
 void __init isa_bridge_init_non_pci(struct device_node *np)
 {
-	int ret;
+	const __be32 *ranges, *pbasep = NULL;
+	int rlen, i, rs;
+	u32 na, ns, pna;
+	u64 cbase, pbase, size = 0;
 
 	/* If we already have an ISA bridge, bail off */
 	if (isa_bridge_devnode != NULL)
 		return;
 
-	ret = process_ISA_OF_ranges(np, 0);
-	if (ret)
+	pna = of_n_addr_cells(np);
+	if (of_property_read_u32(np, "#address-cells", &na) ||
+	    of_property_read_u32(np, "#size-cells", &ns)) {
+		pr_warn("ISA: Non-PCI bridge %pOF is missing address format\n",
+			np);
 		return;
+	}
+
+	/* Check it's a supported address format */
+	if (na != 2 || ns != 1) {
+		pr_warn("ISA: Non-PCI bridge %pOF has unsupported address format\n",
+			np);
+		return;
+	}
+	rs = na + ns + pna;
+
+	/* Grab the ranges property */
+	ranges = of_get_property(np, "ranges", &rlen);
+	if (ranges == NULL || rlen < rs) {
+		pr_warn("ISA: Non-PCI bridge %pOF has absent or invalid ranges\n",
+			np);
+		return;
+	}
+
+	/* Parse it. We are only looking for IO space */
+	for (i = 0; (i + rs - 1) < rlen; i += rs) {
+		if (be32_to_cpup(ranges + i) != 1)
+			continue;
+		cbase = be32_to_cpup(ranges + i + 1);
+		size = of_read_number(ranges + i + na + pna, ns);
+		pbasep = ranges + i + na;
+		break;
+	}
+
+	/* Got something ? */
+	if (!size || !pbasep) {
+		pr_warn("ISA: Non-PCI bridge %pOF has no usable IO range\n",
+			np);
+		return;
+	}
+
+	/* Align size and make sure it's cropped to 64K */
+	size = PAGE_ALIGN(size);
+	if (size > 0x10000)
+		size = 0x10000;
+
+	/* Map pbase */
+	pbase = of_translate_address(np, pbasep);
+	if (pbase == OF_BAD_ADDR) {
+		pr_warn("ISA: Non-PCI bridge %pOF failed to translate IO base\n",
+			np);
+		return;
+	}
+
+	/* We need page alignment */
+	if ((cbase & ~PAGE_MASK) || (pbase & ~PAGE_MASK)) {
+		pr_warn("ISA: Non-PCI bridge %pOF has non aligned IO range\n",
+			np);
+		return;
+	}
 
 	/* Got it */
 	isa_bridge_devnode = np;
@@ -173,6 +263,7 @@ void __init isa_bridge_init_non_pci(struct device_node *np)
 	 * and map it
 	 */
 	isa_io_base = ISA_IO_BASE;
+	remap_isa_base(pbase, size);
 
 	pr_debug("ISA: Non-PCI bridge is %pOF\n", np);
 }
@@ -191,7 +282,7 @@ static void isa_bridge_find_late(struct pci_dev *pdev,
 	isa_bridge_pcidev = pdev;
 
 	/* Now parse the "ranges" property and setup the ISA mapping */
-	process_ISA_OF_ranges(devnode, hose->io_base_phys);
+	pci_process_ISA_OF_ranges(devnode, hose->io_base_phys);
 
 	/* Set the global ISA io base to indicate we have an ISA bridge */
 	isa_io_base = ISA_IO_BASE;
@@ -220,7 +311,7 @@ static void isa_bridge_remove(void)
 	isa_bridge_pcidev = NULL;
 
 	/* Unmap the ISA area */
-	vunmap_range(ISA_IO_BASE, ISA_IO_BASE + 0x10000);
+	unmap_kernel_range(ISA_IO_BASE, 0x10000);
 }
 
 /**

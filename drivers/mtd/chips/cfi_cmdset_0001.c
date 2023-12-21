@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Common Flash Interface support:
  *   Intel Extended Vendor Command Set (ID 0x0001)
  *
- * (C) 2000 Red Hat.
+ * (C) 2000 Red Hat. GPL'd
  *
  *
  * 10/10/2000	Nicolas Pitre <nico@fluxnic.net>
@@ -73,8 +72,7 @@ static int cfi_intelext_is_locked(struct mtd_info *mtd, loff_t ofs,
 #ifdef CONFIG_MTD_OTP
 static int cfi_intelext_read_fact_prot_reg (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
 static int cfi_intelext_read_user_prot_reg (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
-static int cfi_intelext_write_user_prot_reg(struct mtd_info *, loff_t, size_t,
-					    size_t *, const u_char *);
+static int cfi_intelext_write_user_prot_reg (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
 static int cfi_intelext_lock_user_prot_reg (struct mtd_info *, loff_t, size_t);
 static int cfi_intelext_get_fact_prot_info(struct mtd_info *, size_t,
 					   size_t *, struct otp_info *);
@@ -2449,10 +2447,10 @@ static int cfi_intelext_read_user_prot_reg(struct mtd_info *mtd, loff_t from,
 
 static int cfi_intelext_write_user_prot_reg(struct mtd_info *mtd, loff_t from,
 					    size_t len, size_t *retlen,
-					    const u_char *buf)
+					     u_char *buf)
 {
 	return cfi_intelext_otp_walk(mtd, from, len, retlen,
-				     (u_char *)buf, do_otp_write, 1);
+				     buf, do_otp_write, 1);
 }
 
 static int cfi_intelext_lock_user_prot_reg(struct mtd_info *mtd,
@@ -2551,7 +2549,6 @@ static int cfi_intelext_suspend(struct mtd_info *mtd)
 			   anyway? The latter for now. */
 			printk(KERN_NOTICE "Flash device refused suspend due to active operation (state %d)\n", chip->state);
 			ret = -EAGAIN;
-			break;
 		case FL_PM_SUSPENDED:
 			break;
 		}

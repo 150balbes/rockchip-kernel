@@ -167,7 +167,7 @@ static void sun4i_spi_set_cs(struct spi_device *spi, bool enable)
 	reg = sun4i_spi_read(sspi, SUN4I_CTL_REG);
 
 	reg &= ~SUN4I_CTL_CS_MASK;
-	reg |= SUN4I_CTL_CS(spi_get_chipselect(spi, 0));
+	reg |= SUN4I_CTL_CS(spi->chip_select);
 
 	/* We want to control the chip select manually */
 	reg |= SUN4I_CTL_CS_MANUAL;
@@ -280,7 +280,7 @@ static int sun4i_spi_transfer_one(struct spi_master *master,
 	 * SPI_CLK = MOD_CLK / (2 ^ (cdr + 1))
 	 * Or we can use CDR2, which is calculated with the formula:
 	 * SPI_CLK = MOD_CLK / (2 * (cdr + 1))
-	 * Whether we use the former or the latter is set through the
+	 * Wether we use the former or the latter is set through the
 	 * DRS bit.
 	 *
 	 * First try CDR2, and if we can't reach the expected
@@ -516,9 +516,11 @@ err_free_master:
 	return ret;
 }
 
-static void sun4i_spi_remove(struct platform_device *pdev)
+static int sun4i_spi_remove(struct platform_device *pdev)
 {
 	pm_runtime_force_suspend(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id sun4i_spi_match[] = {
@@ -534,7 +536,7 @@ static const struct dev_pm_ops sun4i_spi_pm_ops = {
 
 static struct platform_driver sun4i_spi_driver = {
 	.probe	= sun4i_spi_probe,
-	.remove_new = sun4i_spi_remove,
+	.remove	= sun4i_spi_remove,
 	.driver	= {
 		.name		= "sun4i-spi",
 		.of_match_table	= sun4i_spi_match,

@@ -16,6 +16,8 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 
+#include <mach/hardware.h>
+
 #include "rtc-sa1100.h"
 
 #define RTC_DEF_DIVIDER		(32768 - 1)

@@ -55,7 +55,7 @@ static const struct i2c_device_id rx8010_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, rx8010_id);
 
-static const __maybe_unused struct of_device_id rx8010_of_match[] = {
+static const struct of_device_id rx8010_of_match[] = {
 	{ .compatible = "epson,rx8010" },
 	{ }
 };
@@ -73,11 +73,11 @@ static irqreturn_t rx8010_irq_1_handler(int irq, void *dev_id)
 	struct rx8010_data *rx8010 = i2c_get_clientdata(client);
 	int flagreg, err;
 
-	rtc_lock(rx8010->rtc);
+	mutex_lock(&rx8010->rtc->ops_lock);
 
 	err = regmap_read(rx8010->regs, RX8010_FLAG, &flagreg);
 	if (err) {
-		rtc_unlock(rx8010->rtc);
+		mutex_unlock(&rx8010->rtc->ops_lock);
 		return IRQ_NONE;
 	}
 
@@ -100,7 +100,7 @@ static irqreturn_t rx8010_irq_1_handler(int irq, void *dev_id)
 	}
 
 	err = regmap_write(rx8010->regs, RX8010_FLAG, flagreg);
-	rtc_unlock(rx8010->rtc);
+	mutex_unlock(&rx8010->rtc->ops_lock);
 	return err ? IRQ_NONE : IRQ_HANDLED;
 }
 
@@ -354,7 +354,13 @@ static int rx8010_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 	}
 }
 
-static const struct rtc_class_ops rx8010_rtc_ops = {
+static const struct rtc_class_ops rx8010_rtc_ops_default = {
+	.read_time = rx8010_get_time,
+	.set_time = rx8010_set_time,
+	.ioctl = rx8010_ioctl,
+};
+
+static const struct rtc_class_ops rx8010_rtc_ops_alarm = {
 	.read_time = rx8010_get_time,
 	.set_time = rx8010_set_time,
 	.ioctl = rx8010_ioctl,
@@ -394,29 +400,26 @@ static int rx8010_probe(struct i2c_client *client)
 		return PTR_ERR(rx8010->rtc);
 
 	if (client->irq > 0) {
-		unsigned long irqflags = IRQF_TRIGGER_LOW;
-
-		if (dev_fwnode(&client->dev))
-			irqflags = 0;
-
+		dev_info(dev, "IRQ %d supplied\n", client->irq);
 		err = devm_request_threaded_irq(dev, client->irq, NULL,
 						rx8010_irq_1_handler,
-						irqflags | IRQF_ONESHOT,
+						IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 						"rx8010", client);
 		if (err) {
 			dev_err(dev, "unable to request IRQ\n");
 			return err;
 		}
+
+		rx8010->rtc->ops = &rx8010_rtc_ops_alarm;
 	} else {
-		clear_bit(RTC_FEATURE_ALARM, rx8010->rtc->features);
+		rx8010->rtc->ops = &rx8010_rtc_ops_default;
 	}
 
-	rx8010->rtc->ops = &rx8010_rtc_ops;
 	rx8010->rtc->max_user_freq = 1;
 	rx8010->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	rx8010->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
-	return devm_rtc_register_device(rx8010->rtc);
+	return rtc_register_device(rx8010->rtc);
 }
 
 static struct i2c_driver rx8010_driver = {
@@ -424,7 +427,7 @@ static struct i2c_driver rx8010_driver = {
 		.name = "rtc-rx8010",
 		.of_match_table = of_match_ptr(rx8010_of_match),
 	},
-	.probe		= rx8010_probe,
+	.probe_new	= rx8010_probe,
 	.id_table	= rx8010_id,
 };
 

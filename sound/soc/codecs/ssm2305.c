@@ -57,6 +57,7 @@ static int ssm2305_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct ssm2305 *priv;
+	int err;
 
 	/* Allocate the private data */
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -68,9 +69,13 @@ static int ssm2305_probe(struct platform_device *pdev)
 	/* Get shutdown gpio */
 	priv->gpiod_shutdown = devm_gpiod_get(dev, "shutdown",
 					      GPIOD_OUT_LOW);
-	if (IS_ERR(priv->gpiod_shutdown))
-		return dev_err_probe(dev, PTR_ERR(priv->gpiod_shutdown),
-				     "Failed to get 'shutdown' gpio\n");
+	if (IS_ERR(priv->gpiod_shutdown)) {
+		err = PTR_ERR(priv->gpiod_shutdown);
+		if (err != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get 'shutdown' gpio: %d\n",
+				err);
+		return err;
+	}
 
 	return devm_snd_soc_register_component(dev, &ssm2305_component_driver,
 					       NULL, 0);

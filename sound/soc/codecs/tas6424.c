@@ -11,6 +11,7 @@
 #include <linux/errno.h>
 #include <linux/device.h>
 #include <linux/i2c.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/regulator/consumer.h>
@@ -159,11 +160,11 @@ static int tas6424_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	dev_dbg(component->dev, "%s() fmt=0x%0x\n", __func__, fmt);
 
 	/* clock masters */
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBC_CFC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
-		dev_err(component->dev, "Invalid DAI clocking\n");
+		dev_err(component->dev, "Invalid DAI master/slave interface\n");
 		return -EINVAL;
 	}
 
@@ -374,6 +375,7 @@ static struct snd_soc_component_driver soc_codec_dev_tas6424 = {
 	.num_dapm_routes	= ARRAY_SIZE(tas6424_audio_map),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct snd_soc_dai_ops tas6424_speaker_dai_ops = {
@@ -680,7 +682,8 @@ static const struct of_device_id tas6424_of_ids[] = {
 MODULE_DEVICE_TABLE(of, tas6424_of_ids);
 #endif
 
-static int tas6424_i2c_probe(struct i2c_client *client)
+static int tas6424_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct tas6424_data *tas6424;
@@ -754,7 +757,7 @@ static int tas6424_i2c_probe(struct i2c_client *client)
 				 TAS6424_RESET, TAS6424_RESET);
 	if (ret) {
 		dev_err(dev, "unable to reset device: %d\n", ret);
-		goto disable_regs;
+		return ret;
 	}
 
 	INIT_DELAYED_WORK(&tas6424->fault_check_work, tas6424_fault_check_work);
@@ -763,17 +766,13 @@ static int tas6424_i2c_probe(struct i2c_client *client)
 				     tas6424_dai, ARRAY_SIZE(tas6424_dai));
 	if (ret < 0) {
 		dev_err(dev, "unable to register codec: %d\n", ret);
-		goto disable_regs;
+		return ret;
 	}
 
 	return 0;
-
-disable_regs:
-	regulator_bulk_disable(ARRAY_SIZE(tas6424->supplies), tas6424->supplies);
-	return ret;
 }
 
-static void tas6424_i2c_remove(struct i2c_client *client)
+static int tas6424_i2c_remove(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct tas6424_data *tas6424 = dev_get_drvdata(dev);
@@ -787,8 +786,12 @@ static void tas6424_i2c_remove(struct i2c_client *client)
 
 	ret = regulator_bulk_disable(ARRAY_SIZE(tas6424->supplies),
 				     tas6424->supplies);
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(dev, "unable to disable supplies: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
 }
 
 static const struct i2c_device_id tas6424_i2c_ids[] = {

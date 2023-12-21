@@ -13,14 +13,13 @@
 struct xfs_buf;
 struct xfs_btree_cur;
 struct xfs_mount;
-struct xfs_perag;
 struct xbtree_afakeroot;
 
 /*
  * Btree block header size depends on a superblock flag.
  */
 #define XFS_ALLOC_BLOCK_LEN(mp) \
-	(xfs_has_crc(((mp))) ? \
+	(xfs_sb_version_hascrc(&((mp)->m_sb)) ? \
 		XFS_BTREE_SBLOCK_CRC_LEN : XFS_BTREE_SBLOCK_LEN)
 
 /*
@@ -47,11 +46,11 @@ struct xbtree_afakeroot;
 		 (maxrecs) * sizeof(xfs_alloc_key_t) + \
 		 ((index) - 1) * sizeof(xfs_alloc_ptr_t)))
 
-extern struct xfs_btree_cur *xfs_allocbt_init_cursor(struct xfs_mount *mp,
-		struct xfs_trans *tp, struct xfs_buf *bp,
-		struct xfs_perag *pag, xfs_btnum_t btnum);
+extern struct xfs_btree_cur *xfs_allocbt_init_cursor(struct xfs_mount *,
+		struct xfs_trans *, struct xfs_buf *,
+		xfs_agnumber_t, xfs_btnum_t);
 struct xfs_btree_cur *xfs_allocbt_stage_cursor(struct xfs_mount *mp,
-		struct xbtree_afakeroot *afake, struct xfs_perag *pag,
+		struct xbtree_afakeroot *afake, xfs_agnumber_t agno,
 		xfs_btnum_t btnum);
 extern int xfs_allocbt_maxrecs(struct xfs_mount *, int, int);
 extern xfs_extlen_t xfs_allocbt_calc_size(struct xfs_mount *mp,
@@ -59,10 +58,5 @@ extern xfs_extlen_t xfs_allocbt_calc_size(struct xfs_mount *mp,
 
 void xfs_allocbt_commit_staged_btree(struct xfs_btree_cur *cur,
 		struct xfs_trans *tp, struct xfs_buf *agbp);
-
-unsigned int xfs_allocbt_maxlevels_ondisk(void);
-
-int __init xfs_allocbt_init_cur_cache(void);
-void xfs_allocbt_destroy_cur_cache(void);
 
 #endif	/* __XFS_ALLOC_BTREE_H__ */

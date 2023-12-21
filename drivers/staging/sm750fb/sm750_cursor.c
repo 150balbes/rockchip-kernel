@@ -14,6 +14,7 @@
 #include <linux/pagemap.h>
 #include <linux/console.h>
 #include <linux/platform_device.h>
+#include <linux/screen_info.h>
 
 #include "sm750.h"
 #include "sm750_cursor.h"
@@ -96,7 +97,7 @@ void sm750_hw_cursor_setData(struct lynx_cursor *cursor, u16 rop,
 	count = pitch * cursor->h;
 
 	/* in byte */
-	offset = cursor->max_w * 2 / 8;
+	offset = cursor->maxW * 2 / 8;
 
 	data = 0;
 	pstart = cursor->vstart;
@@ -146,7 +147,7 @@ void sm750_hw_cursor_setData2(struct lynx_cursor *cursor, u16 rop,
 	count = pitch * cursor->h;
 
 	/* in byte */
-	offset = cursor->max_w * 2 / 8;
+	offset = cursor->maxW * 2 / 8;
 
 	data = 0;
 	pstart = cursor->vstart;

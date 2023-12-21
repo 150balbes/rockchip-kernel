@@ -166,7 +166,7 @@ static char *tomoyo_print_header(struct tomoyo_request_info *r)
 		       "#%04u/%02u/%02u %02u:%02u:%02u# profile=%u mode=%s granted=%s (global-pid=%u) task={ pid=%u ppid=%u uid=%u gid=%u euid=%u egid=%u suid=%u sgid=%u fsuid=%u fsgid=%u }",
 		       stamp.year, stamp.month, stamp.day, stamp.hour,
 		       stamp.min, stamp.sec, r->profile, tomoyo_mode[r->mode],
-		       str_yes_no(r->granted), gpid, tomoyo_sys_getpid(),
+		       tomoyo_yesno(r->granted), gpid, tomoyo_sys_getpid(),
 		       tomoyo_sys_getppid(),
 		       from_kuid(&init_user_ns, current_uid()),
 		       from_kgid(&init_user_ns, current_gid()),
@@ -271,7 +271,7 @@ char *tomoyo_init_log(struct tomoyo_request_info *r, int len, const char *fmt,
 		/* +18 is for " symlink.target=\"%s\"" */
 		len += 18 + strlen(symlink);
 	}
-	len = kmalloc_size_roundup(len);
+	len = tomoyo_round2(len);
 	buf = kzalloc(len, GFP_NOFS);
 	if (!buf)
 		goto out;
@@ -311,7 +311,7 @@ static LIST_HEAD(tomoyo_log);
 /* Lock for "struct list_head tomoyo_log". */
 static DEFINE_SPINLOCK(tomoyo_log_lock);
 
-/* Length of "struct list_head tomoyo_log". */
+/* Length of "stuct list_head tomoyo_log". */
 static unsigned int tomoyo_log_count;
 
 /**
@@ -320,7 +320,6 @@ static unsigned int tomoyo_log_count;
  * @ns:          Pointer to "struct tomoyo_policy_namespace".
  * @profile:     Profile number.
  * @index:       Index number of functionality.
- * @matched_acl: Pointer to "struct tomoyo_acl_info".
  * @is_granted:  True if granted log, false otherwise.
  *
  * Returns true if this request should be audited, false otherwise.
@@ -382,12 +381,12 @@ void tomoyo_write_log2(struct tomoyo_request_info *r, int len, const char *fmt,
 		goto out;
 	}
 	entry->log = buf;
-	len = kmalloc_size_roundup(strlen(buf) + 1);
+	len = tomoyo_round2(strlen(buf) + 1);
 	/*
 	 * The entry->size is used for memory quota checks.
 	 * Don't go beyond strlen(entry->log).
 	 */
-	entry->size = len + kmalloc_size_roundup(sizeof(*entry));
+	entry->size = len + tomoyo_round2(sizeof(*entry));
 	spin_lock(&tomoyo_log_lock);
 	if (tomoyo_memory_quota[TOMOYO_MEMORY_AUDIT] &&
 	    tomoyo_memory_used[TOMOYO_MEMORY_AUDIT] + entry->size >=
@@ -423,7 +422,7 @@ void tomoyo_write_log(struct tomoyo_request_info *r, const char *fmt, ...)
 	int len;
 
 	va_start(args, fmt);
-	len = vsnprintf(NULL, 0, fmt, args) + 1;
+	len = vsnprintf((char *) &len, 1, fmt, args) + 1;
 	va_end(args);
 	va_start(args, fmt);
 	tomoyo_write_log2(r, len, fmt, args);

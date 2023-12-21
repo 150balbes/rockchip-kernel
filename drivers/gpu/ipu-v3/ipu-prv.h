@@ -8,7 +8,6 @@
 
 struct ipu_soc;
 
-#include <linux/io.h>
 #include <linux/types.h>
 #include <linux/device.h>
 #include <linux/clk.h>

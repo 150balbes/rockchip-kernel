@@ -22,20 +22,8 @@
 #define MAXMEM_X86_64_4LEVEL (1ull << 46)
 
 const efi_system_table_t *efi_system_table;
-const efi_dxe_services_table_t *efi_dxe_table;
-u32 image_offset __section(".data");
+extern u32 image_offset;
 static efi_loaded_image_t *image = NULL;
-
-typedef union sev_memory_acceptance_protocol sev_memory_acceptance_protocol_t;
-union sev_memory_acceptance_protocol {
-	struct {
-		efi_status_t (__efiapi * allow_unaccepted_memory)(
-			sev_memory_acceptance_protocol_t *);
-	};
-	struct {
-		u32 allow_unaccepted_memory;
-	} mixed_mode;
-};
 
 static efi_status_t
 preserve_pci_rom_image(efi_pci_io_protocol_t *pci, struct pci_setup_rom **__rom)
@@ -223,132 +211,9 @@ static void retrieve_apple_device_properties(struct boot_params *boot_params)
 	}
 }
 
-static void
-adjust_memory_range_protection(unsigned long start, unsigned long size)
-{
-	efi_status_t status;
-	efi_gcd_memory_space_desc_t desc;
-	unsigned long end, next;
-	unsigned long rounded_start, rounded_end;
-	unsigned long unprotect_start, unprotect_size;
-
-	if (efi_dxe_table == NULL)
-		return;
-
-	rounded_start = rounddown(start, EFI_PAGE_SIZE);
-	rounded_end = roundup(start + size, EFI_PAGE_SIZE);
-
-	/*
-	 * Don't modify memory region attributes, they are
-	 * already suitable, to lower the possibility to
-	 * encounter firmware bugs.
-	 */
-
-	for (end = start + size; start < end; start = next) {
-
-		status = efi_dxe_call(get_memory_space_descriptor, start, &desc);
-
-		if (status != EFI_SUCCESS)
-			return;
-
-		next = desc.base_address + desc.length;
-
-		/*
-		 * Only system memory is suitable for trampoline/kernel image placement,
-		 * so only this type of memory needs its attributes to be modified.
-		 */
-
-		if (desc.gcd_memory_type != EfiGcdMemoryTypeSystemMemory ||
-		    (desc.attributes & (EFI_MEMORY_RO | EFI_MEMORY_XP)) == 0)
-			continue;
-
-		unprotect_start = max(rounded_start, (unsigned long)desc.base_address);
-		unprotect_size = min(rounded_end, next) - unprotect_start;
-
-		status = efi_dxe_call(set_memory_space_attributes,
-				      unprotect_start, unprotect_size,
-				      EFI_MEMORY_WB);
-
-		if (status != EFI_SUCCESS) {
-			efi_warn("Unable to unprotect memory range [%08lx,%08lx]: %lx\n",
-				 unprotect_start,
-				 unprotect_start + unprotect_size,
-				 status);
-		}
-	}
-}
-
-/*
- * Trampoline takes 2 pages and can be loaded in first megabyte of memory
- * with its end placed between 128k and 640k where BIOS might start.
- * (see arch/x86/boot/compressed/pgtable_64.c)
- *
- * We cannot find exact trampoline placement since memory map
- * can be modified by UEFI, and it can alter the computed address.
- */
-
-#define TRAMPOLINE_PLACEMENT_BASE ((128 - 8)*1024)
-#define TRAMPOLINE_PLACEMENT_SIZE (640*1024 - (128 - 8)*1024)
-
-void startup_32(struct boot_params *boot_params);
-
-static void
-setup_memory_protection(unsigned long image_base, unsigned long image_size)
-{
-	/*
-	 * Allow execution of possible trampoline used
-	 * for switching between 4- and 5-level page tables
-	 * and relocated kernel image.
-	 */
-
-	adjust_memory_range_protection(TRAMPOLINE_PLACEMENT_BASE,
-				       TRAMPOLINE_PLACEMENT_SIZE);
-
-#ifdef CONFIG_64BIT
-	if (image_base != (unsigned long)startup_32)
-		adjust_memory_range_protection(image_base, image_size);
-#else
-	/*
-	 * Clear protection flags on a whole range of possible
-	 * addresses used for KASLR. We don't need to do that
-	 * on x86_64, since KASLR/extraction is performed after
-	 * dedicated identity page tables are built and we only
-	 * need to remove possible protection on relocated image
-	 * itself disregarding further relocations.
-	 */
-	adjust_memory_range_protection(LOAD_PHYSICAL_ADDR,
-				       KERNEL_IMAGE_SIZE - LOAD_PHYSICAL_ADDR);
-#endif
-}
-
-static void setup_unaccepted_memory(void)
-{
-	efi_guid_t mem_acceptance_proto = OVMF_SEV_MEMORY_ACCEPTANCE_PROTOCOL_GUID;
-	sev_memory_acceptance_protocol_t *proto;
-	efi_status_t status;
-
-	if (!IS_ENABLED(CONFIG_UNACCEPTED_MEMORY))
-		return;
-
-	/*
-	 * Enable unaccepted memory before calling exit boot services in order
-	 * for the UEFI to not accept all memory on EBS.
-	 */
-	status = efi_bs_call(locate_protocol, &mem_acceptance_proto, NULL,
-			     (void **)&proto);
-	if (status != EFI_SUCCESS)
-		return;
-
-	status = efi_call_proto(proto, allow_unaccepted_memory);
-	if (status != EFI_SUCCESS)
-		efi_err("Memory acceptance protocol failed\n");
-}
-
 static const efi_char16_t apple[] = L"Apple";
 
-static void setup_quirks(struct boot_params *boot_params,
-			 unsigned long image_base,
-			 unsigned long image_size)
+static void setup_quirks(struct boot_params *boot_params)
 {
 	efi_char16_t *fw_vendor = (efi_char16_t *)(unsigned long)
 		efi_table_attr(efi_system_table, fw_vendor);
@@ -357,9 +222,6 @@ static void setup_quirks(struct boot_params *boot_params,
 		if (IS_ENABLED(CONFIG_APPLE_PROPERTIES))
 			retrieve_apple_device_properties(boot_params);
 	}
-
-	if (IS_ENABLED(CONFIG_EFI_DXE_MEM_ATTRIBUTES))
-		setup_memory_protection(image_base, image_size);
 }
 
 /*
@@ -478,6 +340,8 @@ static void __noreturn efi_exit(efi_handle_t handle, efi_status_t status)
 	for(;;)
 		asm("hlt");
 }
+
+void startup_32(struct boot_params *boot_params);
 
 void __noreturn efi_stub_entry(efi_handle_t handle,
 			       efi_system_table_t *sys_table_arg,
@@ -647,16 +511,6 @@ setup_e820(struct boot_params *params, struct setup_data *e820ext, u32 e820ext_s
 			e820_type = E820_TYPE_PMEM;
 			break;
 
-		case EFI_UNACCEPTED_MEMORY:
-			if (!IS_ENABLED(CONFIG_UNACCEPTED_MEMORY)) {
-				efi_warn_once(
-"The system has unaccepted memory,  but kernel does not support it\nConsider enabling CONFIG_UNACCEPTED_MEMORY\n");
-				continue;
-			}
-			e820_type = E820_TYPE_RAM;
-			process_unaccepted_memory(d->phys_addr,
-						  d->phys_addr + PAGE_SIZE * d->num_pages);
-			break;
 		default:
 			continue;
 		}
@@ -725,27 +579,28 @@ static efi_status_t allocate_e820(struct boot_params *params,
 				  struct setup_data **e820ext,
 				  u32 *e820ext_size)
 {
-	struct efi_boot_memmap *map;
+	unsigned long map_size, desc_size, map_key;
 	efi_status_t status;
-	__u32 nr_desc;
+	__u32 nr_desc, desc_version;
 
-	status = efi_get_memory_map(&map, false);
-	if (status != EFI_SUCCESS)
-		return status;
+	/* Only need the size of the mem map and size of each mem descriptor */
+	map_size = 0;
+	status = efi_bs_call(get_memory_map, &map_size, NULL, &map_key,
+			     &desc_size, &desc_version);
+	if (status != EFI_BUFFER_TOO_SMALL)
+		return (status != EFI_SUCCESS) ? status : EFI_UNSUPPORTED;
 
-	nr_desc = map->map_size / map->desc_size;
-	if (nr_desc > ARRAY_SIZE(params->e820_table) - EFI_MMAP_NR_SLACK_SLOTS) {
-		u32 nr_e820ext = nr_desc - ARRAY_SIZE(params->e820_table) +
-				 EFI_MMAP_NR_SLACK_SLOTS;
+	nr_desc = map_size / desc_size + EFI_MMAP_NR_SLACK_SLOTS;
+
+	if (nr_desc > ARRAY_SIZE(params->e820_table)) {
+		u32 nr_e820ext = nr_desc - ARRAY_SIZE(params->e820_table);
 
 		status = alloc_e820ext(nr_e820ext, e820ext, e820ext_size);
+		if (status != EFI_SUCCESS)
+			return status;
 	}
 
-	if (IS_ENABLED(CONFIG_UNACCEPTED_MEMORY) && status == EFI_SUCCESS)
-		status = allocate_unaccepted_bitmap(nr_desc, map);
-
-	efi_bs_call(free_pool, map);
-	return status;
+	return EFI_SUCCESS;
 }
 
 struct exit_boot_struct {
@@ -765,22 +620,32 @@ static efi_status_t exit_boot_func(struct efi_boot_memmap *map,
 
 	efi_set_u64_split((unsigned long)efi_system_table,
 			  &p->efi->efi_systab, &p->efi->efi_systab_hi);
-	p->efi->efi_memdesc_size	= map->desc_size;
-	p->efi->efi_memdesc_version	= map->desc_ver;
-	efi_set_u64_split((unsigned long)map->map,
+	p->efi->efi_memdesc_size	= *map->desc_size;
+	p->efi->efi_memdesc_version	= *map->desc_ver;
+	efi_set_u64_split((unsigned long)*map->map,
 			  &p->efi->efi_memmap, &p->efi->efi_memmap_hi);
-	p->efi->efi_memmap_size		= map->map_size;
+	p->efi->efi_memmap_size		= *map->map_size;
 
 	return EFI_SUCCESS;
 }
 
 static efi_status_t exit_boot(struct boot_params *boot_params, void *handle)
 {
+	unsigned long map_sz, key, desc_size, buff_size;
+	efi_memory_desc_t *mem_map;
 	struct setup_data *e820ext = NULL;
 	__u32 e820ext_size = 0;
 	efi_status_t status;
+	__u32 desc_version;
+	struct efi_boot_memmap map;
 	struct exit_boot_struct priv;
 
+	map.map			= &mem_map;
+	map.map_size		= &map_sz;
+	map.desc_size		= &desc_size;
+	map.desc_ver		= &desc_version;
+	map.key_ptr		= &key;
+	map.buff_size		= &buff_size;
 	priv.boot_params	= boot_params;
 	priv.efi		= &boot_params->efi_info;
 
@@ -789,7 +654,7 @@ static efi_status_t exit_boot(struct boot_params *boot_params, void *handle)
 		return status;
 
 	/* Might as well exit boot services now */
-	status = efi_exit_boot_services(handle, &priv, exit_boot_func);
+	status = efi_exit_boot_services(handle, &map, &priv, exit_boot_func);
 	if (status != EFI_SUCCESS)
 		return status;
 
@@ -808,27 +673,20 @@ static efi_status_t exit_boot(struct boot_params *boot_params, void *handle)
  * relocated by efi_relocate_kernel.
  * On failure, we exit to the firmware via efi_exit instead of returning.
  */
-asmlinkage unsigned long efi_main(efi_handle_t handle,
-				  efi_system_table_t *sys_table_arg,
-				  struct boot_params *boot_params)
+unsigned long efi_main(efi_handle_t handle,
+			     efi_system_table_t *sys_table_arg,
+			     struct boot_params *boot_params)
 {
 	unsigned long bzimage_addr = (unsigned long)startup_32;
 	unsigned long buffer_start, buffer_end;
 	struct setup_header *hdr = &boot_params->hdr;
-	const struct linux_efi_initrd *initrd = NULL;
 	efi_status_t status;
 
 	efi_system_table = sys_table_arg;
+
 	/* Check if we were booted by the EFI firmware */
 	if (efi_system_table->hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE)
 		efi_exit(handle, EFI_INVALID_PARAMETER);
-
-	efi_dxe_table = get_efi_config_table(EFI_DXE_SERVICES_TABLE_GUID);
-	if (efi_dxe_table &&
-	    efi_dxe_table->hdr.signature != EFI_DXE_SERVICES_TABLE_SIGNATURE) {
-		efi_warn("Ignoring DXE services table: invalid signature\n");
-		efi_dxe_table = NULL;
-	}
 
 	/*
 	 * If the kernel isn't already loaded at a suitable address,
@@ -864,11 +722,8 @@ asmlinkage unsigned long efi_main(efi_handle_t handle,
 	    (IS_ENABLED(CONFIG_X86_32) && buffer_end > KERNEL_IMAGE_SIZE)    ||
 	    (IS_ENABLED(CONFIG_X86_64) && buffer_end > MAXMEM_X86_64_4LEVEL) ||
 	    (image_offset == 0)) {
-		extern char _bss[];
-
 		status = efi_relocate_kernel(&bzimage_addr,
-					     (unsigned long)_bss - bzimage_addr,
-					     hdr->init_size,
+					     hdr->init_size, hdr->init_size,
 					     hdr->pref_address,
 					     hdr->kernel_alignment,
 					     LOAD_PHYSICAL_ADDR);
@@ -910,17 +765,23 @@ asmlinkage unsigned long efi_main(efi_handle_t handle,
 	 * arguments will be processed only if image is not NULL, which will be
 	 * the case only if we were loaded via the PE entry point.
 	 */
-	status = efi_load_initrd(image, hdr->initrd_addr_max, ULONG_MAX,
-				 &initrd);
-	if (status != EFI_SUCCESS)
-		goto fail;
-	if (initrd && initrd->size > 0) {
-		efi_set_u64_split(initrd->base, &hdr->ramdisk_image,
-				  &boot_params->ext_ramdisk_image);
-		efi_set_u64_split(initrd->size, &hdr->ramdisk_size,
-				  &boot_params->ext_ramdisk_size);
-	}
+	if (!efi_noinitrd) {
+		unsigned long addr, size;
 
+		status = efi_load_initrd(image, &addr, &size,
+					 hdr->initrd_addr_max, ULONG_MAX);
+
+		if (status != EFI_SUCCESS) {
+			efi_err("Failed to load initrd!\n");
+			goto fail;
+		}
+		if (size > 0) {
+			efi_set_u64_split(addr, &hdr->ramdisk_image,
+					  &boot_params->ext_ramdisk_image);
+			efi_set_u64_split(size, &hdr->ramdisk_size,
+					  &boot_params->ext_ramdisk_size);
+		}
+	}
 
 	/*
 	 * If the boot loader gave us a value for secure_boot then we use that,
@@ -940,9 +801,7 @@ asmlinkage unsigned long efi_main(efi_handle_t handle,
 
 	setup_efi_pci(boot_params);
 
-	setup_quirks(boot_params, bzimage_addr, buffer_end - buffer_start);
-
-	setup_unaccepted_memory();
+	setup_quirks(boot_params);
 
 	status = exit_boot(boot_params, handle);
 	if (status != EFI_SUCCESS) {

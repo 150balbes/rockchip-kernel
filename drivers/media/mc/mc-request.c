@@ -414,8 +414,7 @@ int media_request_object_bind(struct media_request *req,
 
 	spin_lock_irqsave(&req->lock, flags);
 
-	if (WARN_ON(req->state != MEDIA_REQUEST_STATE_UPDATING &&
-		    req->state != MEDIA_REQUEST_STATE_QUEUED))
+	if (WARN_ON(req->state != MEDIA_REQUEST_STATE_UPDATING))
 		goto unlock;
 
 	obj->req = req;

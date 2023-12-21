@@ -22,7 +22,7 @@ static loff_t isapnp_proc_bus_lseek(struct file *file, loff_t off, int whence)
 static ssize_t isapnp_proc_bus_read(struct file *file, char __user * buf,
 				    size_t nbytes, loff_t * ppos)
 {
-	struct pnp_dev *dev = pde_data(file_inode(file));
+	struct pnp_dev *dev = PDE_DATA(file_inode(file));
 	int pos = *ppos;
 	int cnt, size = 256;
 
@@ -57,20 +57,21 @@ static const struct proc_ops isapnp_proc_bus_proc_ops = {
 static int isapnp_proc_attach_device(struct pnp_dev *dev)
 {
 	struct pnp_card *bus = dev->card;
+	struct proc_dir_entry *de, *e;
 	char name[16];
 
-	if (!bus->procdir) {
+	if (!(de = bus->procdir)) {
 		sprintf(name, "%02x", bus->number);
-		bus->procdir = proc_mkdir(name, isapnp_proc_bus_dir);
-		if (!bus->procdir)
+		de = bus->procdir = proc_mkdir(name, isapnp_proc_bus_dir);
+		if (!de)
 			return -ENOMEM;
 	}
 	sprintf(name, "%02x", dev->number);
-	dev->procent = proc_create_data(name, S_IFREG | S_IRUGO, bus->procdir,
+	e = dev->procent = proc_create_data(name, S_IFREG | S_IRUGO, de,
 					    &isapnp_proc_bus_proc_ops, dev);
-	if (!dev->procent)
+	if (!e)
 		return -ENOMEM;
-	proc_set_size(dev->procent, 256);
+	proc_set_size(e, 256);
 	return 0;
 }
 

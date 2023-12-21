@@ -3,6 +3,8 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: key.c
+ *
  * Purpose: Implement functions for 802.11i Key management
  *
  * Author: Jerry Chen

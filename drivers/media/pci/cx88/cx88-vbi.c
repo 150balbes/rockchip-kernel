@@ -158,8 +158,7 @@ static void buffer_finish(struct vb2_buffer *vb)
 	struct cx88_riscmem *risc = &buf->risc;
 
 	if (risc->cpu)
-		dma_free_coherent(&dev->pci->dev, risc->size, risc->cpu,
-				  risc->dma);
+		pci_free_consistent(dev->pci, risc->size, risc->cpu, risc->dma);
 	memset(risc, 0, sizeof(*risc));
 }
 

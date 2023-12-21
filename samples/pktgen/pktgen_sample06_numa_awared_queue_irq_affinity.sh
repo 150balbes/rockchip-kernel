@@ -14,10 +14,8 @@ root_check_run_with_sudo "$@"
 # Required param: -i dev in $DEV
 source ${basedir}/parameters.sh
 
-# Trap EXIT first
-trap_exit
-
 # Base Config
+DELAY="0"        # Zero means max speed
 [ -z "$COUNT" ]     && COUNT="20000000"   # Zero means indefinitely
 [ -z "$CLONE_SKB" ] && CLONE_SKB="0"
 
@@ -47,7 +45,7 @@ if [ -n "$DST_PORT" ]; then
 fi
 
 # General cleanup everything since last run
-[ -z "$APPEND" ] && pg_ctrl "reset"
+pg_ctrl "reset"
 
 # Threads are specified with parameter -t value in $THREADS
 for ((i = 0; i < $THREADS; i++)); do
@@ -61,7 +59,7 @@ for ((i = 0; i < $THREADS; i++)); do
     info "irq ${irq_array[$i]} is set affinity to `cat /proc/irq/${irq_array[$i]}/smp_affinity_list`"
 
     # Add remove all other devices and add_device $dev to thread
-    [ -z "$APPEND" ] && pg_thread $thread "rem_device_all"
+    pg_thread $thread "rem_device_all"
     pg_thread $thread "add_device" $dev
 
     # select queue and bind the queue and $dev in 1:1 relationship
@@ -95,34 +93,21 @@ for ((i = 0; i < $THREADS; i++)); do
 	pg_set $dev "udp_dst_max $UDP_DST_MAX"
     fi
 
-    [ ! -z "$UDP_CSUM" ] && pg_set $dev "flag UDPCSUM"
-
     # Setup random UDP port src range
     pg_set $dev "flag UDPSRC_RND"
     pg_set $dev "udp_src_min $UDP_SRC_MIN"
     pg_set $dev "udp_src_max $UDP_SRC_MAX"
 done
 
-# Run if user hits control-c
-function print_result() {
-    # Print results
-    for ((i = 0; i < $THREADS; i++)); do
-        thread=${cpu_array[$((i+F_THREAD))]}
-        dev=${DEV}@${thread}
-        echo "Device: $dev"
-        cat /proc/net/pktgen/$dev | grep -A2 "Result:"
-    done
-}
-# trap keyboard interrupt (Ctrl-C)
-trap true SIGINT
-
 # start_run
-if [ -z "$APPEND" ]; then
-    echo "Running... ctrl^C to stop" >&2
-    pg_ctrl "start"
-    echo "Done" >&2
+echo "Running... ctrl^C to stop" >&2
+pg_ctrl "start"
+echo "Done" >&2
 
-    print_result
-else
-    echo "Append mode: config done. Do more or use 'pg_ctrl start' to run"
-fi
+# Print results
+for ((i = 0; i < $THREADS; i++)); do
+    thread=${cpu_array[$((i+F_THREAD))]}
+    dev=${DEV}@${thread}
+    echo "Device: $dev"
+    cat /proc/net/pktgen/$dev | grep -A2 "Result:"
+done

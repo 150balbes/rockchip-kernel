@@ -10,11 +10,6 @@
 	model = "Firefly roc-rk3328-cc";
 	compatible = "firefly,roc-rk3328-cc", "rockchip,rk3328";
 
-	aliases {
-		mmc0 = &sdmmc;
-		mmc1 = &emmc;
-	};
-
 	chosen {
 		stdout-path = "serial2:1500000n8";
 	};
@@ -96,6 +91,7 @@
 			linux,default-trigger = "heartbeat";
 			gpios = <&rk805 1 GPIO_ACTIVE_LOW>;
 			default-state = "on";
+			mode = <0x23>;
 		};
 
 		user_led: led-1 {
@@ -103,16 +99,9 @@
 			linux,default-trigger = "mmc1";
 			gpios = <&rk805 0 GPIO_ACTIVE_LOW>;
 			default-state = "off";
+			mode = <0x05>;
 		};
 	};
-};
-
-&analog_sound {
-	status = "okay";
-};
-
-&codec {
-	status = "okay";
 };
 
 &cpu0 {
@@ -169,10 +158,6 @@
 };
 
 &hdmiphy {
-	status = "okay";
-};
-
-&hdmi_sound {
 	status = "okay";
 };
 
@@ -285,14 +270,6 @@
 	};
 };
 
-&i2s0 {
-	status = "okay";
-};
-
-&i2s1 {
-	status = "okay";
-};
-
 &io_domains {
 	status = "okay";
 
@@ -357,11 +334,6 @@
 };
 
 &usb20_otg {
-	dr_mode = "host";
-	status = "okay";
-};
-
-&usbdrd3 {
 	dr_mode = "host";
 	status = "okay";
 };

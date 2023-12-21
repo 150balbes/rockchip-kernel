@@ -4,15 +4,10 @@
 
 #include <net/act_api.h>
 
-struct tcf_connmark_parms {
-	struct net *net;
-	u16 zone;
-	struct rcu_head rcu;
-};
-
 struct tcf_connmark_info {
 	struct tc_action common;
-	struct tcf_connmark_parms __rcu *parms;
+	struct net *net;
+	u16 zone;
 };
 
 #define to_connmark(a) ((struct tcf_connmark_info *)a)

@@ -1,6 +1,37 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ *   This file is provided under a GPLv2 license.  When using or
+ *   redistributing this file, you may do so under that license.
+ *
+ *   GPL LICENSE SUMMARY
+ *
  *   Copyright (C) 2016 T-Platforms. All Rights Reserved.
+ *
+ *   This program is free software; you can redistribute it and/or modify it
+ *   under the terms and conditions of the GNU General Public License,
+ *   version 2, as published by the Free Software Foundation.
+ *
+ *   This program is distributed in the hope that it will be useful, but WITHOUT
+ *   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ *   FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ *   more details.
+ *
+ *   You should have received a copy of the GNU General Public License along
+ *   with this program; if not, it can be found <http://www.gnu.org/licenses/>.
+ *
+ *   The full GNU General Public License is included in this distribution in
+ *   the file called "COPYING".
+ *
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * IDT PCIe-switch NTB Linux driver
  *
@@ -566,7 +597,7 @@ static int idt_eeprom_read_byte(struct idt_89hpesx_dev *pdev, u16 memaddr,
 		eeseq.memaddr = cpu_to_le16(memaddr);
 		ret = pdev->smb_write(pdev, &smbseq);
 		if (ret != 0) {
-			dev_err(dev, "Failed to init eeprom addr 0x%02x",
+			dev_err(dev, "Failed to init eeprom addr 0x%02hhx",
 				memaddr);
 			break;
 		}
@@ -575,7 +606,7 @@ static int idt_eeprom_read_byte(struct idt_89hpesx_dev *pdev, u16 memaddr,
 		smbseq.bytecnt = EEPROM_RD_CNT;
 		ret = pdev->smb_read(pdev, &smbseq);
 		if (ret != 0) {
-			dev_err(dev, "Failed to read eeprom data 0x%02x",
+			dev_err(dev, "Failed to read eeprom data 0x%02hhx",
 				memaddr);
 			break;
 		}
@@ -810,7 +841,7 @@ static int idt_csr_read(struct idt_89hpesx_dev *pdev, u16 csraddr, u32 *data)
 	smbseq.bytecnt = CSR_RD_CNT;
 	ret = pdev->smb_read(pdev, &smbseq);
 	if (ret != 0) {
-		dev_err(dev, "Failed to read csr 0x%04x",
+		dev_err(dev, "Failed to read csr 0x%04hx",
 			CSR_REAL_ADDR(csraddr));
 		goto err_mutex_unlock;
 	}
@@ -1075,7 +1106,7 @@ static const struct i2c_device_id *idt_ee_match_id(struct fwnode_handle *fwnode)
 		return NULL;
 
 	p = strchr(compatible, ',');
-	strscpy(devname, p ? p + 1 : compatible, sizeof(devname));
+	strlcpy(devname, p ? p + 1 : compatible, sizeof(devname));
 	/* Search through the device name */
 	while (id->name[0]) {
 		if (strcmp(devname, id->name) == 0)
@@ -1366,7 +1397,7 @@ static void idt_remove_dbgfs_files(struct idt_89hpesx_dev *pdev)
 /*
  * idt_probe() - IDT 89HPESx driver probe() callback method
  */
-static int idt_probe(struct i2c_client *client)
+static int idt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct idt_89hpesx_dev *pdev;
 	int ret;
@@ -1405,7 +1436,7 @@ err_free_pdev:
 /*
  * idt_remove() - IDT 89HPESx driver remove() callback method
  */
-static void idt_remove(struct i2c_client *client)
+static int idt_remove(struct i2c_client *client)
 {
 	struct idt_89hpesx_dev *pdev = i2c_get_clientdata(client);
 
@@ -1417,6 +1448,8 @@ static void idt_remove(struct i2c_client *client)
 
 	/* Discard driver data structure */
 	idt_free_pdev(pdev);
+
+	return 0;
 }
 
 /*
@@ -1566,20 +1599,12 @@ static struct i2c_driver idt_driver = {
  */
 static int __init idt_init(void)
 {
-	int ret;
-
 	/* Create Debugfs directory first */
 	if (debugfs_initialized())
 		csr_dbgdir = debugfs_create_dir("idt_csr", NULL);
 
 	/* Add new i2c-device driver */
-	ret = i2c_add_driver(&idt_driver);
-	if (ret) {
-		debugfs_remove_recursive(csr_dbgdir);
-		return ret;
-	}
-
-	return 0;
+	return i2c_add_driver(&idt_driver);
 }
 module_init(idt_init);
 

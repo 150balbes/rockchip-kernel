@@ -31,8 +31,7 @@
 #include "nouveau_chan.h"
 
 int nouveau_dma_wait(struct nouveau_channel *, int slots, int size);
-void nv50_dma_push(struct nouveau_channel *, u64 addr, u32 length,
-		   bool no_prefetch);
+void nv50_dma_push(struct nouveau_channel *, u64 addr, int length);
 
 /*
  * There's a hw race condition where you can't jump to your PUT offset,
@@ -45,9 +44,6 @@ void nv50_dma_push(struct nouveau_channel *, u64 addr, u32 length,
  * bytes so we need a larger SKIPS value.
  */
 #define NOUVEAU_DMA_SKIPS (128 / 4)
-
-/* Maximum push buffer size. */
-#define NV50_DMA_PUSH_MAX_LENGTH 0x7fffff
 
 /* Object handles - for stuff that's doesn't use handle == oclass. */
 enum {
@@ -93,7 +89,7 @@ FIRE_RING(struct nouveau_channel *chan)
 
 	if (chan->dma.ib_max) {
 		nv50_dma_push(chan, chan->push.addr + (chan->dma.put << 2),
-			      (chan->dma.cur - chan->dma.put) << 2, false);
+			      (chan->dma.cur - chan->dma.put) << 2);
 	} else {
 		WRITE_PUT(chan->dma.cur);
 	}

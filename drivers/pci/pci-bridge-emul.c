@@ -21,8 +21,9 @@
 #include "pci-bridge-emul.h"
 
 #define PCI_BRIDGE_CONF_END	PCI_STD_HEADER_SIZEOF
-#define PCI_CAP_SSID_SIZEOF	(PCI_SSVID_DEVICE_ID + 2)
 #define PCI_CAP_PCIE_SIZEOF	(PCI_EXP_SLTSTA2 + 2)
+#define PCI_CAP_PCIE_START	PCI_BRIDGE_CONF_END
+#define PCI_CAP_PCIE_END	(PCI_CAP_PCIE_START + PCI_CAP_PCIE_SIZEOF)
 
 /**
  * struct pci_bridge_reg_behavior - register bits behaviors
@@ -269,69 +270,7 @@ struct pci_bridge_reg_behavior pcie_cap_regs_behavior[PCI_CAP_PCIE_SIZEOF / 4] =
 		.ro = GENMASK(15, 0) | PCI_EXP_RTSTA_PENDING,
 		.w1c = PCI_EXP_RTSTA_PME,
 	},
-
-	[PCI_EXP_DEVCAP2 / 4] = {
-		/*
-		 * Device capabilities 2 register has reserved bits [30:27].
-		 * Also bits [26:24] are reserved for non-upstream ports.
-		 */
-		.ro = BIT(31) | GENMASK(23, 0),
-	},
-
-	[PCI_EXP_DEVCTL2 / 4] = {
-		/*
-		 * Device control 2 register is RW. Bit 11 is reserved for
-		 * non-upstream ports.
-		 *
-		 * Device status 2 register is reserved.
-		 */
-		.rw = GENMASK(15, 12) | GENMASK(10, 0),
-	},
-
-	[PCI_EXP_LNKCAP2 / 4] = {
-		/* Link capabilities 2 register has reserved bits [30:25] and 0. */
-		.ro = BIT(31) | GENMASK(24, 1),
-	},
-
-	[PCI_EXP_LNKCTL2 / 4] = {
-		/*
-		 * Link control 2 register is RW.
-		 *
-		 * Link status 2 register has bits 5, 15 W1C;
-		 * bits 10, 11 reserved and others are RO.
-		 */
-		.rw = GENMASK(15, 0),
-		.w1c = (BIT(15) | BIT(5)) << 16,
-		.ro = (GENMASK(14, 12) | GENMASK(9, 6) | GENMASK(4, 0)) << 16,
-	},
-
-	[PCI_EXP_SLTCAP2 / 4] = {
-		/* Slot capabilities 2 register is reserved. */
-	},
-
-	[PCI_EXP_SLTCTL2 / 4] = {
-		/* Both Slot control 2 and Slot status 2 registers are reserved. */
-	},
 };
-
-static pci_bridge_emul_read_status_t
-pci_bridge_emul_read_ssid(struct pci_bridge_emul *bridge, int reg, u32 *value)
-{
-	switch (reg) {
-	case PCI_CAP_LIST_ID:
-		*value = PCI_CAP_ID_SSVID |
-			((bridge->pcie_start > bridge->ssid_start) ? (bridge->pcie_start << 8) : 0);
-		return PCI_BRIDGE_EMUL_HANDLED;
-
-	case PCI_SSVID_VENDOR_ID:
-		*value = bridge->subsystem_vendor_id |
-			(bridge->subsystem_id << 16);
-		return PCI_BRIDGE_EMUL_HANDLED;
-
-	default:
-		return PCI_BRIDGE_EMUL_NOT_HANDLED;
-	}
-}
 
 /*
  * Initialize a pci_bridge_emul structure to represent a fake PCI
@@ -345,13 +284,7 @@ int pci_bridge_emul_init(struct pci_bridge_emul *bridge,
 {
 	BUILD_BUG_ON(sizeof(bridge->conf) != PCI_BRIDGE_CONF_END);
 
-	/*
-	 * class_revision: Class is high 24 bits and revision is low 8 bit
-	 * of this member, while class for PCI Bridge Normal Decode has the
-	 * 24-bit value: PCI_CLASS_BRIDGE_PCI_NORMAL
-	 */
-	bridge->conf.class_revision |=
-		cpu_to_le32(PCI_CLASS_BRIDGE_PCI_NORMAL << 8);
+	bridge->conf.class_revision |= cpu_to_le32(PCI_CLASS_BRIDGE_PCI << 16);
 	bridge->conf.header_type = PCI_HEADER_TYPE_BRIDGE;
 	bridge->conf.cache_line_size = 0x10;
 	bridge->conf.status = cpu_to_le16(PCI_STATUS_CAP_LIST);
@@ -361,33 +294,10 @@ int pci_bridge_emul_init(struct pci_bridge_emul *bridge,
 	if (!bridge->pci_regs_behavior)
 		return -ENOMEM;
 
-	/* If ssid_start and pcie_start were not specified then choose the lowest possible value. */
-	if (!bridge->ssid_start && !bridge->pcie_start) {
-		if (bridge->subsystem_vendor_id)
-			bridge->ssid_start = PCI_BRIDGE_CONF_END;
-		if (bridge->has_pcie)
-			bridge->pcie_start = bridge->ssid_start + PCI_CAP_SSID_SIZEOF;
-	} else if (!bridge->ssid_start && bridge->subsystem_vendor_id) {
-		if (bridge->pcie_start - PCI_BRIDGE_CONF_END >= PCI_CAP_SSID_SIZEOF)
-			bridge->ssid_start = PCI_BRIDGE_CONF_END;
-		else
-			bridge->ssid_start = bridge->pcie_start + PCI_CAP_PCIE_SIZEOF;
-	} else if (!bridge->pcie_start && bridge->has_pcie) {
-		if (bridge->ssid_start - PCI_BRIDGE_CONF_END >= PCI_CAP_PCIE_SIZEOF)
-			bridge->pcie_start = PCI_BRIDGE_CONF_END;
-		else
-			bridge->pcie_start = bridge->ssid_start + PCI_CAP_SSID_SIZEOF;
-	}
-
-	bridge->conf.capabilities_pointer = min(bridge->ssid_start, bridge->pcie_start);
-
-	if (bridge->conf.capabilities_pointer)
-		bridge->conf.status |= cpu_to_le16(PCI_STATUS_CAP_LIST);
-
 	if (bridge->has_pcie) {
+		bridge->conf.capabilities_pointer = PCI_CAP_PCIE_START;
+		bridge->conf.status |= cpu_to_le16(PCI_STATUS_CAP_LIST);
 		bridge->pcie_conf.cap_id = PCI_CAP_ID_EXP;
-		bridge->pcie_conf.next = (bridge->ssid_start > bridge->pcie_start) ?
-					 bridge->ssid_start : 0;
 		bridge->pcie_conf.cap |= cpu_to_le16(PCI_EXP_TYPE_ROOT_PORT << 4);
 		bridge->pcie_cap_regs_behavior =
 			kmemdup(pcie_cap_regs_behavior,
@@ -420,18 +330,9 @@ int pci_bridge_emul_init(struct pci_bridge_emul *bridge,
 			~(BIT(10) << 16);
 	}
 
-	if (flags & PCI_BRIDGE_EMUL_NO_PREFMEM_FORWARD) {
+	if (flags & PCI_BRIDGE_EMUL_NO_PREFETCHABLE_BAR) {
 		bridge->pci_regs_behavior[PCI_PREF_MEMORY_BASE / 4].ro = ~0;
 		bridge->pci_regs_behavior[PCI_PREF_MEMORY_BASE / 4].rw = 0;
-	}
-
-	if (flags & PCI_BRIDGE_EMUL_NO_IO_FORWARD) {
-		bridge->pci_regs_behavior[PCI_COMMAND / 4].ro |= PCI_COMMAND_IO;
-		bridge->pci_regs_behavior[PCI_COMMAND / 4].rw &= ~PCI_COMMAND_IO;
-		bridge->pci_regs_behavior[PCI_IO_BASE / 4].ro |= GENMASK(15, 0);
-		bridge->pci_regs_behavior[PCI_IO_BASE / 4].rw &= ~GENMASK(15, 0);
-		bridge->pci_regs_behavior[PCI_IO_BASE_UPPER16 / 4].ro = ~0;
-		bridge->pci_regs_behavior[PCI_IO_BASE_UPPER16 / 4].rw = 0;
 	}
 
 	return 0;
@@ -465,35 +366,25 @@ int pci_bridge_emul_conf_read(struct pci_bridge_emul *bridge, int where,
 	__le32 *cfgspace;
 	const struct pci_bridge_reg_behavior *behavior;
 
-	if (reg < PCI_BRIDGE_CONF_END) {
-		/* Emulated PCI space */
-		read_op = bridge->ops->read_base;
-		cfgspace = (__le32 *) &bridge->conf;
-		behavior = bridge->pci_regs_behavior;
-	} else if (reg >= bridge->ssid_start && reg < bridge->ssid_start + PCI_CAP_SSID_SIZEOF &&
-		   bridge->subsystem_vendor_id) {
-		/* Emulated PCI Bridge Subsystem Vendor ID capability */
-		reg -= bridge->ssid_start;
-		read_op = pci_bridge_emul_read_ssid;
-		cfgspace = NULL;
-		behavior = NULL;
-	} else if (reg >= bridge->pcie_start && reg < bridge->pcie_start + PCI_CAP_PCIE_SIZEOF &&
-		   bridge->has_pcie) {
-		/* Our emulated PCIe capability */
-		reg -= bridge->pcie_start;
+	if (bridge->has_pcie && reg >= PCI_CAP_PCIE_END) {
+		*value = 0;
+		return PCIBIOS_SUCCESSFUL;
+	}
+
+	if (!bridge->has_pcie && reg >= PCI_BRIDGE_CONF_END) {
+		*value = 0;
+		return PCIBIOS_SUCCESSFUL;
+	}
+
+	if (bridge->has_pcie && reg >= PCI_CAP_PCIE_START) {
+		reg -= PCI_CAP_PCIE_START;
 		read_op = bridge->ops->read_pcie;
 		cfgspace = (__le32 *) &bridge->pcie_conf;
 		behavior = bridge->pcie_cap_regs_behavior;
-	} else if (reg >= PCI_CFG_SPACE_SIZE && bridge->has_pcie) {
-		/* PCIe extended capability space */
-		reg -= PCI_CFG_SPACE_SIZE;
-		read_op = bridge->ops->read_ext;
-		cfgspace = NULL;
-		behavior = NULL;
 	} else {
-		/* Not implemented */
-		*value = 0;
-		return PCIBIOS_SUCCESSFUL;
+		read_op = bridge->ops->read_base;
+		cfgspace = (__le32 *) &bridge->conf;
+		behavior = bridge->pci_regs_behavior;
 	}
 
 	if (read_op)
@@ -501,20 +392,15 @@ int pci_bridge_emul_conf_read(struct pci_bridge_emul *bridge, int where,
 	else
 		ret = PCI_BRIDGE_EMUL_NOT_HANDLED;
 
-	if (ret == PCI_BRIDGE_EMUL_NOT_HANDLED) {
-		if (cfgspace)
-			*value = le32_to_cpu(cfgspace[reg / 4]);
-		else
-			*value = 0;
-	}
+	if (ret == PCI_BRIDGE_EMUL_NOT_HANDLED)
+		*value = le32_to_cpu(cfgspace[reg / 4]);
 
 	/*
 	 * Make sure we never return any reserved bit with a value
 	 * different from 0.
 	 */
-	if (behavior)
-		*value &= behavior[reg / 4].ro | behavior[reg / 4].rw |
-			  behavior[reg / 4].w1c;
+	*value &= behavior[reg / 4].ro | behavior[reg / 4].rw |
+		  behavior[reg / 4].w1c;
 
 	if (size == 1)
 		*value = (*value >> (8 * (where & 3))) & 0xff;
@@ -542,32 +428,11 @@ int pci_bridge_emul_conf_write(struct pci_bridge_emul *bridge, int where,
 	__le32 *cfgspace;
 	const struct pci_bridge_reg_behavior *behavior;
 
-	ret = pci_bridge_emul_conf_read(bridge, reg, 4, &old);
-	if (ret != PCIBIOS_SUCCESSFUL)
-		return ret;
-
-	if (reg < PCI_BRIDGE_CONF_END) {
-		/* Emulated PCI space */
-		write_op = bridge->ops->write_base;
-		cfgspace = (__le32 *) &bridge->conf;
-		behavior = bridge->pci_regs_behavior;
-	} else if (reg >= bridge->pcie_start && reg < bridge->pcie_start + PCI_CAP_PCIE_SIZEOF &&
-		   bridge->has_pcie) {
-		/* Our emulated PCIe capability */
-		reg -= bridge->pcie_start;
-		write_op = bridge->ops->write_pcie;
-		cfgspace = (__le32 *) &bridge->pcie_conf;
-		behavior = bridge->pcie_cap_regs_behavior;
-	} else if (reg >= PCI_CFG_SPACE_SIZE && bridge->has_pcie) {
-		/* PCIe extended capability space */
-		reg -= PCI_CFG_SPACE_SIZE;
-		write_op = bridge->ops->write_ext;
-		cfgspace = NULL;
-		behavior = NULL;
-	} else {
-		/* Not implemented */
+	if (bridge->has_pcie && reg >= PCI_CAP_PCIE_END)
 		return PCIBIOS_SUCCESSFUL;
-	}
+
+	if (!bridge->has_pcie && reg >= PCI_BRIDGE_CONF_END)
+		return PCIBIOS_SUCCESSFUL;
 
 	shift = (where & 0x3) * 8;
 
@@ -580,38 +445,44 @@ int pci_bridge_emul_conf_write(struct pci_bridge_emul *bridge, int where,
 	else
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	if (behavior) {
-		/* Keep all bits, except the RW bits */
-		new = old & (~mask | ~behavior[reg / 4].rw);
+	ret = pci_bridge_emul_conf_read(bridge, reg, 4, &old);
+	if (ret != PCIBIOS_SUCCESSFUL)
+		return ret;
 
-		/* Update the value of the RW bits */
-		new |= (value << shift) & (behavior[reg / 4].rw & mask);
-
-		/* Clear the W1C bits */
-		new &= ~((value << shift) & (behavior[reg / 4].w1c & mask));
+	if (bridge->has_pcie && reg >= PCI_CAP_PCIE_START) {
+		reg -= PCI_CAP_PCIE_START;
+		write_op = bridge->ops->write_pcie;
+		cfgspace = (__le32 *) &bridge->pcie_conf;
+		behavior = bridge->pcie_cap_regs_behavior;
 	} else {
-		new = old & ~mask;
-		new |= (value << shift) & mask;
+		write_op = bridge->ops->write_base;
+		cfgspace = (__le32 *) &bridge->conf;
+		behavior = bridge->pci_regs_behavior;
 	}
 
-	if (cfgspace) {
-		/* Save the new value with the cleared W1C bits into the cfgspace */
-		cfgspace[reg / 4] = cpu_to_le32(new);
-	}
+	/* Keep all bits, except the RW bits */
+	new = old & (~mask | ~behavior[reg / 4].rw);
 
-	if (behavior) {
-		/*
-		 * Clear the W1C bits not specified by the write mask, so that the
-		 * write_op() does not clear them.
-		 */
-		new &= ~(behavior[reg / 4].w1c & ~mask);
+	/* Update the value of the RW bits */
+	new |= (value << shift) & (behavior[reg / 4].rw & mask);
 
-		/*
-		 * Set the W1C bits specified by the write mask, so that write_op()
-		 * knows about that they are to be cleared.
-		 */
-		new |= (value << shift) & (behavior[reg / 4].w1c & mask);
-	}
+	/* Clear the W1C bits */
+	new &= ~((value << shift) & (behavior[reg / 4].w1c & mask));
+
+	/* Save the new value with the cleared W1C bits into the cfgspace */
+	cfgspace[reg / 4] = cpu_to_le32(new);
+
+	/*
+	 * Clear the W1C bits not specified by the write mask, so that the
+	 * write_op() does not clear them.
+	 */
+	new &= ~(behavior[reg / 4].w1c & ~mask);
+
+	/*
+	 * Set the W1C bits specified by the write mask, so that write_op()
+	 * knows about that they are to be cleared.
+	 */
+	new |= (value << shift) & (behavior[reg / 4].w1c & mask);
 
 	if (write_op)
 		write_op(bridge, reg, old, new, mask);

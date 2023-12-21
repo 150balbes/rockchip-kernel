@@ -11,6 +11,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <soc/imx/revision.h>
+#include <soc/imx/timer.h>
 #include <asm/irq.h>
 
 #include "clk.h"
@@ -49,6 +50,16 @@ enum mx31_clks {
 
 static struct clk *clk[clk_max];
 static struct clk_onecell_data clk_data;
+
+static struct clk ** const uart_clks[] __initconst = {
+	&clk[ipg],
+	&clk[uart1_gate],
+	&clk[uart2_gate],
+	&clk[uart3_gate],
+	&clk[uart4_gate],
+	&clk[uart5_gate],
+	NULL
+};
 
 static void __init _mx31_clocks_init(void __iomem *base, unsigned long fref)
 {

@@ -19,13 +19,15 @@
 #include "xdp_umem.h"
 #include "xsk_queue.h"
 
+#define XDP_UMEM_MIN_CHUNK_SIZE 2048
+
 static DEFINE_IDA(umem_ida);
 
 static void xdp_umem_unpin_pages(struct xdp_umem *umem)
 {
 	unpin_user_pages_dirty_lock(umem->pgs, umem->npgs, true);
 
-	kvfree(umem->pgs);
+	kfree(umem->pgs);
 	umem->pgs = NULL;
 }
 
@@ -55,7 +57,7 @@ static int xdp_umem_addr_map(struct xdp_umem *umem, struct page **pages,
 static void xdp_umem_release(struct xdp_umem *umem)
 {
 	umem->zc = false;
-	ida_free(&umem_ida, umem->id);
+	ida_simple_remove(&umem_ida, umem->id);
 
 	xdp_umem_addr_unmap(umem);
 	xdp_umem_unpin_pages(umem);
@@ -97,13 +99,14 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 	long npgs;
 	int err;
 
-	umem->pgs = kvcalloc(umem->npgs, sizeof(*umem->pgs), GFP_KERNEL | __GFP_NOWARN);
+	umem->pgs = kcalloc(umem->npgs, sizeof(*umem->pgs),
+			    GFP_KERNEL | __GFP_NOWARN);
 	if (!umem->pgs)
 		return -ENOMEM;
 
 	mmap_read_lock(current->mm);
 	npgs = pin_user_pages(address, umem->npgs,
-			      gup_flags | FOLL_LONGTERM, &umem->pgs[0]);
+			      gup_flags | FOLL_LONGTERM, &umem->pgs[0], NULL);
 	mmap_read_unlock(current->mm);
 
 	if (npgs != umem->npgs) {
@@ -120,7 +123,7 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 out_pin:
 	xdp_umem_unpin_pages(umem);
 out_pgs:
-	kvfree(umem->pgs);
+	kfree(umem->pgs);
 	umem->pgs = NULL;
 	return err;
 }
@@ -150,11 +153,10 @@ static int xdp_umem_account_pages(struct xdp_umem *umem)
 
 static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 {
+	u32 npgs_rem, chunk_size = mr->chunk_size, headroom = mr->headroom;
 	bool unaligned_chunks = mr->flags & XDP_UMEM_UNALIGNED_CHUNK_FLAG;
-	u32 chunk_size = mr->chunk_size, headroom = mr->headroom;
-	u64 addr = mr->addr, size = mr->len;
-	u32 chunks_rem, npgs_rem;
-	u64 chunks, npgs;
+	u64 npgs, addr = mr->addr, size = mr->len;
+	unsigned int chunks, chunks_rem;
 	int err;
 
 	if (chunk_size < XDP_UMEM_MIN_CHUNK_SIZE || chunk_size > PAGE_SIZE) {
@@ -189,8 +191,8 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 	if (npgs > U32_MAX)
 		return -EINVAL;
 
-	chunks = div_u64_rem(size, chunk_size, &chunks_rem);
-	if (!chunks || chunks > U32_MAX)
+	chunks = (unsigned int)div_u64_rem(size, chunk_size, &chunks_rem);
+	if (chunks == 0)
 		return -EINVAL;
 
 	if (!unaligned_chunks && chunks_rem)
@@ -203,7 +205,7 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 	umem->headroom = headroom;
 	umem->chunk_size = chunk_size;
 	umem->chunks = chunks;
-	umem->npgs = npgs;
+	umem->npgs = (u32)npgs;
 	umem->pgs = NULL;
 	umem->user = NULL;
 	umem->flags = mr->flags;
@@ -241,7 +243,7 @@ struct xdp_umem *xdp_umem_create(struct xdp_umem_reg *mr)
 	if (!umem)
 		return ERR_PTR(-ENOMEM);
 
-	err = ida_alloc(&umem_ida, GFP_KERNEL);
+	err = ida_simple_get(&umem_ida, 0, 0, GFP_KERNEL);
 	if (err < 0) {
 		kfree(umem);
 		return ERR_PTR(err);
@@ -250,7 +252,7 @@ struct xdp_umem *xdp_umem_create(struct xdp_umem_reg *mr)
 
 	err = xdp_umem_reg(umem, mr);
 	if (err) {
-		ida_free(&umem_ida, umem->id);
+		ida_simple_remove(&umem_ida, umem->id);
 		kfree(umem);
 		return ERR_PTR(err);
 	}

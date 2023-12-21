@@ -4,9 +4,9 @@
 
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <linux/mutex.h>
 #include <linux/alarmtimer.h>
 #include <linux/timerqueue.h>
+#include <linux/task_work.h>
 
 struct kernel_siginfo;
 struct task_struct;
@@ -63,18 +63,16 @@ static inline int clockid_to_fd(const clockid_t clk)
  * cpu_timer - Posix CPU timer representation for k_itimer
  * @node:	timerqueue node to queue in the task/sig
  * @head:	timerqueue head on which this timer is queued
- * @pid:	Pointer to target task PID
+ * @task:	Pointer to target task
  * @elist:	List head for the expiry list
  * @firing:	Timer is currently firing
- * @handling:	Pointer to the task which handles expiry
  */
 struct cpu_timer {
-	struct timerqueue_node		node;
-	struct timerqueue_head		*head;
-	struct pid			*pid;
-	struct list_head		elist;
-	int				firing;
-	struct task_struct __rcu	*handling;
+	struct timerqueue_node	node;
+	struct timerqueue_head	*head;
+	struct pid		*pid;
+	struct list_head	elist;
+	int			firing;
 };
 
 static inline bool cpu_timer_enqueue(struct timerqueue_head *head,
@@ -84,19 +82,12 @@ static inline bool cpu_timer_enqueue(struct timerqueue_head *head,
 	return timerqueue_add(head, &ctmr->node);
 }
 
-static inline bool cpu_timer_queued(struct cpu_timer *ctmr)
+static inline void cpu_timer_dequeue(struct cpu_timer *ctmr)
 {
-	return !!ctmr->head;
-}
-
-static inline bool cpu_timer_dequeue(struct cpu_timer *ctmr)
-{
-	if (cpu_timer_queued(ctmr)) {
+	if (ctmr->head) {
 		timerqueue_del(ctmr->head, &ctmr->node);
 		ctmr->head = NULL;
-		return true;
 	}
-	return false;
 }
 
 static inline u64 cpu_timer_getexpires(struct cpu_timer *ctmr)
@@ -138,12 +129,10 @@ struct posix_cputimers {
 /**
  * posix_cputimers_work - Container for task work based posix CPU timer expiry
  * @work:	The task work to be scheduled
- * @mutex:	Mutex held around expiry in context of this task work
  * @scheduled:  @work has been scheduled already, no further processing
  */
 struct posix_cputimers_work {
 	struct callback_head	work;
-	struct mutex		mutex;
 	unsigned int		scheduled;
 };
 
@@ -257,7 +246,7 @@ void posix_cpu_timers_exit_group(struct task_struct *task);
 void set_process_cpu_timer(struct task_struct *task, unsigned int clock_idx,
 			   u64 *newval, u64 *oldval);
 
-int update_rlimit_cpu(struct task_struct *task, unsigned long rlim_new);
+void update_rlimit_cpu(struct task_struct *task, unsigned long rlim_new);
 
 void posixtimer_rearm(struct kernel_siginfo *info);
 #endif

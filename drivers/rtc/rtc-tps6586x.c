@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * rtc-tps6586x.c: RTC driver for TI PMIC TPS6586X
  *
  * Copyright (c) 2012, NVIDIA Corporation.
  *
  * Author: Laxman Dewangan <ldewangan@nvidia.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any kind,
+ * whether express or implied; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ * 02111-1307, USA
  */
 
 #include <linux/device.h>
@@ -267,7 +280,7 @@ static int tps6586x_rtc_probe(struct platform_device *pdev)
 		goto fail_rtc_register;
 	}
 
-	ret = devm_rtc_register_device(rtc->rtc);
+	ret = rtc_register_device(rtc->rtc);
 	if (ret)
 		goto fail_rtc_register;
 
@@ -279,12 +292,13 @@ fail_rtc_register:
 	return ret;
 };
 
-static void tps6586x_rtc_remove(struct platform_device *pdev)
+static int tps6586x_rtc_remove(struct platform_device *pdev)
 {
 	struct device *tps_dev = to_tps6586x_dev(&pdev->dev);
 
 	tps6586x_update(tps_dev, RTC_CTRL, 0,
 		RTC_ENABLE | OSC_SRC_SEL | PRE_BYPASS | CL_SEL_MASK);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -316,7 +330,7 @@ static struct platform_driver tps6586x_rtc_driver = {
 		.pm	= &tps6586x_pm_ops,
 	},
 	.probe	= tps6586x_rtc_probe,
-	.remove_new = tps6586x_rtc_remove,
+	.remove	= tps6586x_rtc_remove,
 };
 module_platform_driver(tps6586x_rtc_driver);
 

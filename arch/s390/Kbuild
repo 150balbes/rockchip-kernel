@@ -8,6 +8,3 @@ obj-$(CONFIG_APPLDATA_BASE)	+= appldata/
 obj-y				+= net/
 obj-$(CONFIG_PCI)		+= pci/
 obj-$(CONFIG_ARCH_HAS_KEXEC_PURGATORY) += purgatory/
-
-# for cleaning
-subdir- += boot tools

@@ -93,38 +93,6 @@ int seq_buf_printf(struct seq_buf *s, const char *fmt, ...)
 }
 EXPORT_SYMBOL_GPL(seq_buf_printf);
 
-/**
- * seq_buf_do_printk - printk seq_buf line by line
- * @s: seq_buf descriptor
- * @lvl: printk level
- *
- * printk()-s a multi-line sequential buffer line by line. The function
- * makes sure that the buffer in @s is nul terminated and safe to read
- * as a string.
- */
-void seq_buf_do_printk(struct seq_buf *s, const char *lvl)
-{
-	const char *start, *lf;
-
-	if (s->size == 0 || s->len == 0)
-		return;
-
-	seq_buf_terminate(s);
-
-	start = s->buffer;
-	while ((lf = strchr(start, '\n'))) {
-		int len = lf - start + 1;
-
-		printk("%s%.*s", lvl, len, start);
-		start = ++lf;
-	}
-
-	/* No trailing LF */
-	if (start < s->buffer + s->len)
-		printk("%s%s\n", lvl, start);
-}
-EXPORT_SYMBOL_GPL(seq_buf_do_printk);
-
 #ifdef CONFIG_BINARY_PRINTF
 /**
  * seq_buf_bprintf - Write the printf string from binary arguments
@@ -321,7 +289,7 @@ int seq_buf_path(struct seq_buf *s, const struct path *path, const char *esc)
 }
 
 /**
- * seq_buf_to_user - copy the sequence buffer to user space
+ * seq_buf_to_user - copy the squence buffer to user space
  * @s: seq_buf descriptor
  * @ubuf: The userspace memory location to copy to
  * @cnt: The amount to copy

@@ -30,9 +30,6 @@
  * may refer to options placed after this field.
  */
 
-#include <asm/byteorder.h>
-#include <linux/types.h>
-
 struct guehdr {
 	union {
 		struct {

@@ -10,16 +10,11 @@
 #define DECLARE_BITMAP(name,bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
 
-#ifdef __SIZEOF_INT128__
-typedef __s128 s128;
-typedef __u128 u128;
-#endif
-
 typedef u32 __kernel_dev_t;
 
 typedef __kernel_fd_set		fd_set;
 typedef __kernel_dev_t		dev_t;
-typedef __kernel_ulong_t	ino_t;
+typedef __kernel_ino_t		ino_t;
 typedef __kernel_mode_t		mode_t;
 typedef unsigned short		umode_t;
 typedef u32			nlink_t;
@@ -40,7 +35,6 @@ typedef __kernel_uid16_t        uid16_t;
 typedef __kernel_gid16_t        gid16_t;
 
 typedef unsigned long		uintptr_t;
-typedef long			intptr_t;
 
 #ifdef CONFIG_HAVE_UID16
 /* This is defined by include/asm-{arch}/posix_types.h */
@@ -181,12 +175,6 @@ typedef struct {
 } atomic64_t;
 #endif
 
-typedef struct {
-	atomic_t refcnt;
-} rcuref_t;
-
-#define RCUREF_INIT(i)	{ .refcnt = ATOMIC_INIT(i - 1) }
-
 struct list_head {
 	struct list_head *next, *prev;
 };
@@ -201,11 +189,7 @@ struct hlist_node {
 
 struct ustat {
 	__kernel_daddr_t	f_tfree;
-#ifdef CONFIG_ARCH_32BIT_USTAT_F_TINODE
-	unsigned int		f_tinode;
-#else
-	unsigned long		f_tinode;
-#endif
+	__kernel_ino_t		f_tinode;
 	char			f_fname[6];
 	char			f_fpack[6];
 };
@@ -238,7 +222,6 @@ struct callback_head {
 typedef void (*rcu_callback_t)(struct rcu_head *head);
 typedef void (*call_rcu_func_t)(struct rcu_head *head, rcu_callback_t func);
 
-typedef void (*swap_r_func_t)(void *a, void *b, int size, const void *priv);
 typedef void (*swap_func_t)(void *a, void *b, int size);
 
 typedef int (*cmp_r_func_t)(const void *a, const void *b, const void *priv);

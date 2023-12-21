@@ -396,7 +396,6 @@ static int s3c_onenand_command(struct mtd_info *mtd, int cmd, loff_t addr,
 	case ONENAND_CMD_READOOB:
 	case ONENAND_CMD_BUFFERRAM:
 		ONENAND_SET_NEXT_BUFFERRAM(this);
-		break;
 	default:
 		break;
 	}
@@ -943,11 +942,13 @@ static int s3c_onenand_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void s3c_onenand_remove(struct platform_device *pdev)
+static int s3c_onenand_remove(struct platform_device *pdev)
 {
 	struct mtd_info *mtd = platform_get_drvdata(pdev);
 
 	onenand_release(mtd);
+
+	return 0;
 }
 
 static int s3c_pm_ops_suspend(struct device *dev)
@@ -994,7 +995,7 @@ static struct platform_driver s3c_onenand_driver = {
 	},
 	.id_table	= s3c_onenand_driver_ids,
 	.probe          = s3c_onenand_probe,
-	.remove_new     = s3c_onenand_remove,
+	.remove         = s3c_onenand_remove,
 };
 
 module_platform_driver(s3c_onenand_driver);

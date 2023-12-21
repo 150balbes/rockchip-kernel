@@ -25,7 +25,6 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_file.h>
-#include <drm/drm_framebuffer.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_mode_config.h>
 #include <drm/drm_print.h>
@@ -196,7 +195,7 @@ void drm_mode_config_reset(struct drm_device *dev)
 			crtc->funcs->reset(crtc);
 
 	drm_for_each_encoder(encoder, dev)
-		if (encoder->funcs && encoder->funcs->reset)
+		if (encoder->funcs->reset)
 			encoder->funcs->reset(encoder);
 
 	drm_connector_list_iter_begin(dev, &conn_iter);
@@ -365,6 +364,22 @@ static int drm_mode_create_standard_properties(struct drm_device *dev)
 		return -ENOMEM;
 	dev->mode_config.gamma_lut_size_property = prop;
 
+#if defined(CONFIG_ROCKCHIP_DRM_CUBIC_LUT)
+	prop = drm_property_create(dev,
+			DRM_MODE_PROP_BLOB,
+			"CUBIC_LUT", 0);
+	if (!prop)
+		return -ENOMEM;
+	dev->mode_config.cubic_lut_property = prop;
+
+	prop = drm_property_create_range(dev,
+			DRM_MODE_PROP_IMMUTABLE,
+			"CUBIC_LUT_SIZE", 0, UINT_MAX);
+	if (!prop)
+		return -ENOMEM;
+	dev->mode_config.cubic_lut_size_property = prop;
+#endif
+
 	prop = drm_property_create(dev,
 				   DRM_MODE_PROP_IMMUTABLE | DRM_MODE_PROP_BLOB,
 				   "IN_FORMATS", 0);
@@ -399,8 +414,6 @@ static void drm_mode_config_init_release(struct drm_device *dev, void *ptr)
  */
 int drmm_mode_config_init(struct drm_device *dev)
 {
-	int ret;
-
 	mutex_init(&dev->mode_config.mutex);
 	drm_modeset_lock_init(&dev->mode_config.connection_mutex);
 	mutex_init(&dev->mode_config.idr_mutex);
@@ -414,19 +427,15 @@ int drmm_mode_config_init(struct drm_device *dev)
 	INIT_LIST_HEAD(&dev->mode_config.property_blob_list);
 	INIT_LIST_HEAD(&dev->mode_config.plane_list);
 	INIT_LIST_HEAD(&dev->mode_config.privobj_list);
-	idr_init_base(&dev->mode_config.object_idr, 1);
-	idr_init_base(&dev->mode_config.tile_idr, 1);
+	idr_init(&dev->mode_config.object_idr);
+	idr_init(&dev->mode_config.tile_idr);
 	ida_init(&dev->mode_config.connector_ida);
 	spin_lock_init(&dev->mode_config.connector_list_lock);
 
 	init_llist_head(&dev->mode_config.connector_free_list);
 	INIT_WORK(&dev->mode_config.connector_free_work, drm_connector_free_work_fn);
 
-	ret = drm_mode_create_standard_properties(dev);
-	if (ret) {
-		drm_mode_config_cleanup(dev);
-		return ret;
-	}
+	drm_mode_create_standard_properties(dev);
 
 	/* Just to be sure */
 	dev->mode_config.num_fb = 0;
@@ -632,10 +641,6 @@ static void validate_encoder_possible_crtcs(struct drm_encoder *encoder)
 void drm_mode_config_validate(struct drm_device *dev)
 {
 	struct drm_encoder *encoder;
-	struct drm_crtc *crtc;
-	struct drm_plane *plane;
-	u32 primary_with_crtc = 0, cursor_with_crtc = 0;
-	unsigned int num_primary = 0;
 
 	if (!drm_core_check_feature(dev, DRIVER_MODESET))
 		return;
@@ -647,49 +652,4 @@ void drm_mode_config_validate(struct drm_device *dev)
 		validate_encoder_possible_clones(encoder);
 		validate_encoder_possible_crtcs(encoder);
 	}
-
-	drm_for_each_crtc(crtc, dev) {
-		WARN(!crtc->primary, "Missing primary plane on [CRTC:%d:%s]\n",
-		     crtc->base.id, crtc->name);
-
-		WARN(crtc->cursor && crtc->funcs->cursor_set,
-		     "[CRTC:%d:%s] must not have both a cursor plane and a cursor_set func",
-		     crtc->base.id, crtc->name);
-		WARN(crtc->cursor && crtc->funcs->cursor_set2,
-		     "[CRTC:%d:%s] must not have both a cursor plane and a cursor_set2 func",
-		     crtc->base.id, crtc->name);
-		WARN(crtc->cursor && crtc->funcs->cursor_move,
-		     "[CRTC:%d:%s] must not have both a cursor plane and a cursor_move func",
-		     crtc->base.id, crtc->name);
-
-		if (crtc->primary) {
-			WARN(!(crtc->primary->possible_crtcs & drm_crtc_mask(crtc)),
-			     "Bogus primary plane possible_crtcs: [PLANE:%d:%s] must be compatible with [CRTC:%d:%s]\n",
-			     crtc->primary->base.id, crtc->primary->name,
-			     crtc->base.id, crtc->name);
-			WARN(primary_with_crtc & drm_plane_mask(crtc->primary),
-			     "Primary plane [PLANE:%d:%s] used for multiple CRTCs",
-			     crtc->primary->base.id, crtc->primary->name);
-			primary_with_crtc |= drm_plane_mask(crtc->primary);
-		}
-		if (crtc->cursor) {
-			WARN(!(crtc->cursor->possible_crtcs & drm_crtc_mask(crtc)),
-			     "Bogus cursor plane possible_crtcs: [PLANE:%d:%s] must be compatible with [CRTC:%d:%s]\n",
-			     crtc->cursor->base.id, crtc->cursor->name,
-			     crtc->base.id, crtc->name);
-			WARN(cursor_with_crtc & drm_plane_mask(crtc->cursor),
-			     "Cursor plane [PLANE:%d:%s] used for multiple CRTCs",
-			     crtc->cursor->base.id, crtc->cursor->name);
-			cursor_with_crtc |= drm_plane_mask(crtc->cursor);
-		}
-	}
-
-	drm_for_each_plane(plane, dev) {
-		if (plane->type == DRM_PLANE_TYPE_PRIMARY)
-			num_primary++;
-	}
-
-	WARN(num_primary != dev->mode_config.num_crtc,
-	     "Must have as many primary planes as there are CRTCs, but have %u primary planes and %u CRTCs",
-	     num_primary, dev->mode_config.num_crtc);
 }

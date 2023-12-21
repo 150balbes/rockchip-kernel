@@ -129,7 +129,6 @@ static void hplance_init(struct net_device *dev, struct dio_dev *d)
 {
 	unsigned long va = (d->resource.start + DIO_VIRADDRBASE);
 	struct hplance_private *lp;
-	u8 addr[ETH_ALEN];
 	int i;
 
 	/* reset the board */
@@ -145,10 +144,9 @@ static void hplance_init(struct net_device *dev, struct dio_dev *d)
 		/* The NVRAM holds our ethernet address, one nibble per byte,
 		 * at bytes NVRAMOFF+1,3,5,7,9...
 		 */
-		addr[i] = ((in_8(va + HPLANCE_NVRAMOFF + i*4 + 1) & 0xF) << 4)
+		dev->dev_addr[i] = ((in_8(va + HPLANCE_NVRAMOFF + i*4 + 1) & 0xF) << 4)
 			| (in_8(va + HPLANCE_NVRAMOFF + i*4 + 3) & 0xF);
 	}
-	eth_hw_addr_set(dev, addr);
 
 	lp = netdev_priv(dev);
 	lp->lance.name = d->name;
@@ -172,7 +170,6 @@ static void hplance_init(struct net_device *dev, struct dio_dev *d)
 static void hplance_writerap(void *priv, unsigned short value)
 {
 	struct lance_private *lp = (struct lance_private *)priv;
-
 	do {
 		out_be16(lp->base + HPLANCE_REGOFF + LANCE_RAP, value);
 	} while ((in_8(lp->base + HPLANCE_STATUS) & LE_ACK) == 0);
@@ -181,7 +178,6 @@ static void hplance_writerap(void *priv, unsigned short value)
 static void hplance_writerdp(void *priv, unsigned short value)
 {
 	struct lance_private *lp = (struct lance_private *)priv;
-
 	do {
 		out_be16(lp->base + HPLANCE_REGOFF + LANCE_RDP, value);
 	} while ((in_8(lp->base + HPLANCE_STATUS) & LE_ACK) == 0);
@@ -191,7 +187,6 @@ static unsigned short hplance_readrdp(void *priv)
 {
 	struct lance_private *lp = (struct lance_private *)priv;
 	__u16 value;
-
 	do {
 		value = in_be16(lp->base + HPLANCE_REGOFF + LANCE_RDP);
 	} while ((in_8(lp->base + HPLANCE_STATUS) & LE_ACK) == 0);

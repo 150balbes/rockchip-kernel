@@ -367,7 +367,7 @@ err_unreg_clk_plt:
 	return err;
 }
 
-static void plt_clk_remove(struct platform_device *pdev)
+static int plt_clk_remove(struct platform_device *pdev)
 {
 	struct clk_plt_data *data;
 
@@ -377,6 +377,7 @@ static void plt_clk_remove(struct platform_device *pdev)
 	clkdev_drop(data->mclk_lookup);
 	plt_clk_unregister_loop(data, PMC_CLK_NUM);
 	plt_clk_unregister_parents(data);
+	return 0;
 }
 
 static struct platform_driver plt_clk_driver = {
@@ -384,6 +385,6 @@ static struct platform_driver plt_clk_driver = {
 		.name = "clk-pmc-atom",
 	},
 	.probe = plt_clk_probe,
-	.remove_new = plt_clk_remove,
+	.remove = plt_clk_remove,
 };
 builtin_platform_driver(plt_clk_driver);

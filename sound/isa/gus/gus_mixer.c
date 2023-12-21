@@ -162,14 +162,12 @@ int snd_gf1_new_mixer(struct snd_gus_card * gus)
 	if (!gus->ics_flag) {
 		max = gus->ess_flag ? 1 : ARRAY_SIZE(snd_gf1_controls);
 		for (idx = 0; idx < max; idx++) {
-			err = snd_ctl_add(card, snd_ctl_new1(&snd_gf1_controls[idx], gus));
-			if (err < 0)
+			if ((err = snd_ctl_add(card, snd_ctl_new1(&snd_gf1_controls[idx], gus))) < 0)
 				return err;
 		}
 	} else {
 		for (idx = 0; idx < ARRAY_SIZE(snd_ics_controls); idx++) {
-			err = snd_ctl_add(card, snd_ctl_new1(&snd_ics_controls[idx], gus));
-			if (err < 0)
+			if ((err = snd_ctl_add(card, snd_ctl_new1(&snd_ics_controls[idx], gus))) < 0)
 				return err;
 		}
 	}

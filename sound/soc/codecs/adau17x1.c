@@ -16,6 +16,7 @@
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 #include <sound/tlv.h>
+#include <linux/gcd.h>
 #include <linux/i2c.h>
 #include <linux/spi/spi.h>
 #include <linux/regmap.h>
@@ -333,17 +334,6 @@ static bool adau17x1_has_dsp(struct adau *adau)
 	}
 }
 
-/* Chip has a DSP but we're pretending it doesn't. */
-static bool adau17x1_has_disused_dsp(struct adau *adau)
-{
-	switch (adau->type) {
-	case ADAU1761_AS_1361:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static bool adau17x1_has_safeload(struct adau *adau)
 {
 	switch (adau->type) {
@@ -526,11 +516,10 @@ static int adau17x1_hw_params(struct snd_pcm_substream *substream,
 
 	regmap_update_bits(adau->regmap, ADAU17X1_CONVERTER0,
 		ADAU17X1_CONVERTER0_CONVSR_MASK, div);
-
-	if (adau17x1_has_dsp(adau) || adau17x1_has_disused_dsp(adau))
+	if (adau17x1_has_dsp(adau)) {
 		regmap_write(adau->regmap, ADAU17X1_SERIAL_SAMPLING_RATE, div);
-	if (adau17x1_has_dsp(adau))
 		regmap_write(adau->regmap, ADAU17X1_DSP_SAMPLING_RATE, dsp_div);
+	}
 
 	if (adau->sigmadsp) {
 		ret = adau17x1_setup_firmware(component, params_rate(params));
@@ -564,15 +553,14 @@ static int adau17x1_set_dai_fmt(struct snd_soc_dai *dai,
 {
 	struct adau *adau = snd_soc_component_get_drvdata(dai->component);
 	unsigned int ctrl0, ctrl1;
-	unsigned int ctrl0_mask;
 	int lrclk_pol;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		ctrl0 = ADAU17X1_SERIAL_PORT0_MASTER;
 		adau->master = true;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		ctrl0 = 0;
 		adau->master = false;
 		break;
@@ -624,16 +612,8 @@ static int adau17x1_set_dai_fmt(struct snd_soc_dai *dai,
 	if (lrclk_pol)
 		ctrl0 |= ADAU17X1_SERIAL_PORT0_LRCLK_POL;
 
-	/* Set the mask to update all relevant bits in ADAU17X1_SERIAL_PORT0 */
-	ctrl0_mask = ADAU17X1_SERIAL_PORT0_MASTER |
-		     ADAU17X1_SERIAL_PORT0_LRCLK_POL |
-		     ADAU17X1_SERIAL_PORT0_BCLK_POL |
-		     ADAU17X1_SERIAL_PORT0_PULSE_MODE;
-
-	regmap_update_bits(adau->regmap, ADAU17X1_SERIAL_PORT0, ctrl0_mask,
-			   ctrl0);
-	regmap_update_bits(adau->regmap, ADAU17X1_SERIAL_PORT1,
-			   ADAU17X1_SERIAL_PORT1_DELAY_MASK, ctrl1);
+	regmap_write(adau->regmap, ADAU17X1_SERIAL_PORT0, ctrl0);
+	regmap_write(adau->regmap, ADAU17X1_SERIAL_PORT1, ctrl1);
 
 	adau->dai_fmt = fmt & SND_SOC_DAIFMT_FORMAT_MASK;
 
@@ -674,7 +654,7 @@ static int adau17x1_set_dai_tdm_slot(struct snd_soc_dai *dai,
 
 	switch (slot_width * slots) {
 	case 32:
-		if (adau->type == ADAU1761 || adau->type == ADAU1761_AS_1361)
+		if (adau->type == ADAU1761)
 			return -EINVAL;
 
 		ser_ctrl1 = ADAU17X1_SERIAL_PORT1_BCLK32;
@@ -749,7 +729,7 @@ static int adau17x1_set_dai_tdm_slot(struct snd_soc_dai *dai,
 	regmap_update_bits(adau->regmap, ADAU17X1_SERIAL_PORT1,
 		ADAU17X1_SERIAL_PORT1_BCLK_MASK, ser_ctrl1);
 
-	if (!adau17x1_has_dsp(adau) && !adau17x1_has_disused_dsp(adau))
+	if (!adau17x1_has_dsp(adau))
 		return 0;
 
 	if (adau->dsp_bypass[SNDRV_PCM_STREAM_PLAYBACK]) {
@@ -1059,12 +1039,13 @@ int adau17x1_probe(struct device *dev, struct regmap *regmap,
 	if (!adau)
 		return -ENOMEM;
 
-	/* Clock is optional (for the driver) */
-	adau->mclk = devm_clk_get_optional(dev, "mclk");
-	if (IS_ERR(adau->mclk))
-		return PTR_ERR(adau->mclk);
-
-	if (adau->mclk) {
+	adau->mclk = devm_clk_get(dev, "mclk");
+	if (IS_ERR(adau->mclk)) {
+		if (PTR_ERR(adau->mclk) != -ENOENT)
+			return PTR_ERR(adau->mclk);
+		/* Clock is optional (for the driver) */
+		adau->mclk = NULL;
+	} else if (adau->mclk) {
 		adau->clk_src = ADAU17X1_CLK_SRC_PLL_AUTO;
 
 		/*
@@ -1114,7 +1095,8 @@ void adau17x1_remove(struct device *dev)
 {
 	struct adau *adau = dev_get_drvdata(dev);
 
-	clk_disable_unprepare(adau->mclk);
+	if (adau->mclk)
+		clk_disable_unprepare(adau->mclk);
 }
 EXPORT_SYMBOL_GPL(adau17x1_remove);
 

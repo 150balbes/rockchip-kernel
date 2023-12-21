@@ -14,9 +14,9 @@
 #include "internal.h"
 #include "mount.h"
 
-static long do_sys_name_to_handle(const struct path *path,
+static long do_sys_name_to_handle(struct path *path,
 				  struct file_handle __user *ufh,
-				  int __user *mnt_id, int fh_flags)
+				  int __user *mnt_id)
 {
 	long retval;
 	struct file_handle f_handle;
@@ -24,14 +24,11 @@ static long do_sys_name_to_handle(const struct path *path,
 	struct file_handle *handle = NULL;
 
 	/*
-	 * We need to make sure whether the file system support decoding of
-	 * the file handle if decodeable file handle was requested.
-	 * Otherwise, even empty export_operations are sufficient to opt-in
-	 * to encoding FIDs.
+	 * We need to make sure whether the file system
+	 * support decoding of the file handle
 	 */
 	if (!path->dentry->d_sb->s_export_op ||
-	    (!(fh_flags & EXPORT_FH_FID) &&
-	     !path->dentry->d_sb->s_export_op->fh_to_dentry))
+	    !path->dentry->d_sb->s_export_op->fh_to_dentry)
 		return -EOPNOTSUPP;
 
 	if (copy_from_user(&f_handle, ufh, sizeof(struct file_handle)))
@@ -48,28 +45,27 @@ static long do_sys_name_to_handle(const struct path *path,
 	/* convert handle size to multiple of sizeof(u32) */
 	handle_dwords = f_handle.handle_bytes >> 2;
 
-	/* we ask for a non connectable maybe decodeable file handle */
+	/* we ask for a non connected handle */
 	retval = exportfs_encode_fh(path->dentry,
 				    (struct fid *)handle->f_handle,
-				    &handle_dwords, fh_flags);
+				    &handle_dwords,  0);
 	handle->handle_type = retval;
 	/* convert handle size to bytes */
 	handle_bytes = handle_dwords * sizeof(u32);
 	handle->handle_bytes = handle_bytes;
 	if ((handle->handle_bytes > f_handle.handle_bytes) ||
-	    (retval == FILEID_INVALID) || (retval < 0)) {
+	    (retval == FILEID_INVALID) || (retval == -ENOSPC)) {
 		/* As per old exportfs_encode_fh documentation
 		 * we could return ENOSPC to indicate overflow
 		 * But file system returned 255 always. So handle
 		 * both the values
 		 */
-		if (retval == FILEID_INVALID || retval == -ENOSPC)
-			retval = -EOVERFLOW;
 		/*
 		 * set the handle size to zero so we copy only
 		 * non variable part of the file_handle
 		 */
 		handle_bytes = 0;
+		retval = -EOVERFLOW;
 	} else
 		retval = 0;
 	/* copy the mount id */
@@ -88,7 +84,6 @@ static long do_sys_name_to_handle(const struct path *path,
  * @handle: resulting file handle
  * @mnt_id: mount id of the file system containing the file
  * @flag: flag value to indicate whether to follow symlink or not
- *        and whether a decodable file handle is required.
  *
  * @handle->handle_size indicate the space available to store the
  * variable part of the file handle in bytes. If there is not
@@ -101,19 +96,17 @@ SYSCALL_DEFINE5(name_to_handle_at, int, dfd, const char __user *, name,
 {
 	struct path path;
 	int lookup_flags;
-	int fh_flags;
 	int err;
 
-	if (flag & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH | AT_HANDLE_FID))
+	if ((flag & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) != 0)
 		return -EINVAL;
 
 	lookup_flags = (flag & AT_SYMLINK_FOLLOW) ? LOOKUP_FOLLOW : 0;
-	fh_flags = (flag & AT_HANDLE_FID) ? EXPORT_FH_FID : 0;
 	if (flag & AT_EMPTY_PATH)
 		lookup_flags |= LOOKUP_EMPTY;
 	err = user_path_at(dfd, name, lookup_flags, &path);
 	if (!err) {
-		err = do_sys_name_to_handle(&path, handle, mnt_id, fh_flags);
+		err = do_sys_name_to_handle(&path, handle, mnt_id);
 		path_put(&path);
 	}
 	return err;
@@ -180,7 +173,7 @@ static int handle_to_path(int mountdirfd, struct file_handle __user *ufh,
 
 	/*
 	 * With handle we don't look at the execute bit on the
-	 * directory. Ideally we would like CAP_DAC_SEARCH.
+	 * the directory. Ideally we would like CAP_DAC_SEARCH.
 	 * But we don't have that
 	 */
 	if (!capable(CAP_DAC_READ_SEARCH)) {
@@ -236,12 +229,13 @@ static long do_handle_open(int mountdirfd, struct file_handle __user *ufh,
 		path_put(&path);
 		return fd;
 	}
-	file = file_open_root(&path, "", open_flag, 0);
+	file = file_open_root(path.dentry, path.mnt, "", open_flag, 0);
 	if (IS_ERR(file)) {
 		put_unused_fd(fd);
 		retval =  PTR_ERR(file);
 	} else {
 		retval = fd;
+		fsnotify_open(file);
 		fd_install(fd, file);
 	}
 	path_put(&path);

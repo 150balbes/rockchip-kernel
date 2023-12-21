@@ -8,7 +8,6 @@
 #include <linux/bitfield.h>
 #include <linux/device.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
 
@@ -81,7 +80,7 @@ struct ad7292_state {
 	struct regulator *reg;
 	unsigned short vref_mv;
 
-	__be16 d16 __aligned(IIO_DMA_MINALIGN);
+	__be16 d16 ____cacheline_aligned;
 	u8 d8[2];
 };
 
@@ -261,7 +260,7 @@ static int ad7292_probe(struct spi_device *spi)
 	struct ad7292_state *st;
 	struct iio_dev *indio_dev;
 	struct device_node *child;
-	bool diff_channels = false;
+	bool diff_channels = 0;
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
@@ -276,6 +275,8 @@ static int ad7292_probe(struct spi_device *spi)
 		dev_err(&spi->dev, "Wrong vendor id 0x%x\n", ret);
 		return -EINVAL;
 	}
+
+	spi_set_drvdata(spi, indio_dev);
 
 	st->reg = devm_regulator_get_optional(&spi->dev, "vref");
 	if (!IS_ERR(st->reg)) {

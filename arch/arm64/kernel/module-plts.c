@@ -7,7 +7,7 @@
 #include <linux/ftrace.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/moduleloader.h>
+#include <linux/slab.h>
 #include <linux/sort.h>
 
 static struct plt_entry __get_adrp_add_pair(u64 dst, u64 pc,
@@ -38,8 +38,7 @@ struct plt_entry get_plt_entry(u64 dst, void *pc)
 	return plt;
 }
 
-static bool plt_entries_equal(const struct plt_entry *a,
-			      const struct plt_entry *b)
+bool plt_entries_equal(const struct plt_entry *a, const struct plt_entry *b)
 {
 	u64 p, q;
 
@@ -66,12 +65,17 @@ static bool plt_entries_equal(const struct plt_entry *a,
 	       (q + aarch64_insn_adrp_get_offset(le32_to_cpu(b->adrp)));
 }
 
+static bool in_init(const struct module *mod, void *loc)
+{
+	return (u64)loc - (u64)mod->init_layout.base < mod->init_layout.size;
+}
+
 u64 module_emit_plt_entry(struct module *mod, Elf64_Shdr *sechdrs,
 			  void *loc, const Elf64_Rela *rela,
 			  Elf64_Sym *sym)
 {
-	struct mod_plt_sec *pltsec = !within_module_init((unsigned long)loc, mod) ?
-						&mod->arch.core : &mod->arch.init;
+	struct mod_plt_sec *pltsec = !in_init(mod, loc) ? &mod->arch.core :
+							  &mod->arch.init;
 	struct plt_entry *plt = (struct plt_entry *)sechdrs[pltsec->plt_shndx].sh_addr;
 	int i = pltsec->plt_num_entries;
 	int j = i - 1;
@@ -101,8 +105,8 @@ u64 module_emit_plt_entry(struct module *mod, Elf64_Shdr *sechdrs,
 u64 module_emit_veneer_for_adrp(struct module *mod, Elf64_Shdr *sechdrs,
 				void *loc, u64 val)
 {
-	struct mod_plt_sec *pltsec = !within_module_init((unsigned long)loc, mod) ?
-						&mod->arch.core : &mod->arch.init;
+	struct mod_plt_sec *pltsec = !in_init(mod, loc) ? &mod->arch.core :
+							  &mod->arch.init;
 	struct plt_entry *plt = (struct plt_entry *)sechdrs[pltsec->plt_shndx].sh_addr;
 	int i = pltsec->plt_num_entries++;
 	u32 br;
@@ -128,7 +132,7 @@ u64 module_emit_veneer_for_adrp(struct module *mod, Elf64_Shdr *sechdrs,
 }
 #endif
 
-#define cmp_3way(a, b)	((a) < (b) ? -1 : (a) > (b))
+#define cmp_3way(a,b)	((a) < (b) ? -1 : (a) > (b))
 
 static int cmp_rela(const void *a, const void *b)
 {
@@ -217,7 +221,7 @@ static unsigned int count_plts(Elf64_Sym *syms, Elf64_Rela *rela, int num,
 			 * increasing the section's alignment so that the
 			 * resulting address of this instruction is guaranteed
 			 * to equal the offset in that particular bit (as well
-			 * as all less significant bits). This ensures that the
+			 * as all less signficant bits). This ensures that the
 			 * address modulo 4 KB != 0xfff8 or 0xfffc (which would
 			 * have all ones in bits [11:3])
 			 */
@@ -287,6 +291,7 @@ static int partition_branch_plt_relas(Elf64_Sym *syms, Elf64_Rela *rela,
 int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 			      char *secstrings, struct module *mod)
 {
+	bool copy_rela_for_fips140 = false;
 	unsigned long core_plts = 0;
 	unsigned long init_plts = 0;
 	Elf64_Sym *syms = NULL;
@@ -318,6 +323,10 @@ int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 		return -ENOEXEC;
 	}
 
+	if (IS_ENABLED(CONFIG_CRYPTO_FIPS140) &&
+	    !strcmp(mod->name, "fips140"))
+		copy_rela_for_fips140 = true;
+
 	for (i = 0; i < ehdr->e_shnum; i++) {
 		Elf64_Rela *rels = (void *)ehdr + sechdrs[i].sh_offset;
 		int nents, numrels = sechdrs[i].sh_size / sizeof(Elf64_Rela);
@@ -326,9 +335,37 @@ int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 		if (sechdrs[i].sh_type != SHT_RELA)
 			continue;
 
+#ifdef CONFIG_CRYPTO_FIPS140
+		if (copy_rela_for_fips140 &&
+		    !strcmp(secstrings + dstsec->sh_name, ".rodata")) {
+			void *p = kmemdup(rels, numrels * sizeof(Elf64_Rela),
+					  GFP_KERNEL);
+			if (!p) {
+				pr_err("fips140: failed to allocate .rodata RELA buffer\n");
+				return -ENOMEM;
+			}
+			mod->arch.rodata_relocations = p;
+			mod->arch.num_rodata_relocations = numrels;
+		}
+#endif
+
 		/* ignore relocations that operate on non-exec sections */
 		if (!(dstsec->sh_flags & SHF_EXECINSTR))
 			continue;
+
+#ifdef CONFIG_CRYPTO_FIPS140
+		if (copy_rela_for_fips140 &&
+		    !strcmp(secstrings + dstsec->sh_name, ".text")) {
+			void *p = kmemdup(rels, numrels * sizeof(Elf64_Rela),
+					  GFP_KERNEL);
+			if (!p) {
+				pr_err("fips140: failed to allocate .text RELA buffer\n");
+				return -ENOMEM;
+			}
+			mod->arch.text_relocations = p;
+			mod->arch.num_text_relocations = numrels;
+		}
+#endif
 
 		/*
 		 * sort branch relocations requiring a PLT by type, symbol index

@@ -304,10 +304,11 @@ static irqreturn_t adc_irq_fn(int irq, void *dev_id)
 {
 	struct imx6ul_tsc *tsc = dev_id;
 	u32 coco;
+	u32 value;
 
 	coco = readl(tsc->adc_regs + REG_ADC_HS);
 	if (coco & 0x01) {
-		readl(tsc->adc_regs + REG_ADC_R0);
+		value = readl(tsc->adc_regs + REG_ADC_R0);
 		complete(&tsc->completion);
 	}
 
@@ -512,7 +513,7 @@ static int imx6ul_tsc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int imx6ul_tsc_suspend(struct device *dev)
+static int __maybe_unused imx6ul_tsc_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct imx6ul_tsc *tsc = platform_get_drvdata(pdev);
@@ -520,7 +521,7 @@ static int imx6ul_tsc_suspend(struct device *dev)
 
 	mutex_lock(&input_dev->mutex);
 
-	if (input_device_enabled(input_dev))
+	if (input_dev->users)
 		imx6ul_tsc_stop(tsc);
 
 	mutex_unlock(&input_dev->mutex);
@@ -528,7 +529,7 @@ static int imx6ul_tsc_suspend(struct device *dev)
 	return 0;
 }
 
-static int imx6ul_tsc_resume(struct device *dev)
+static int __maybe_unused imx6ul_tsc_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct imx6ul_tsc *tsc = platform_get_drvdata(pdev);
@@ -537,7 +538,7 @@ static int imx6ul_tsc_resume(struct device *dev)
 
 	mutex_lock(&input_dev->mutex);
 
-	if (input_device_enabled(input_dev))
+	if (input_dev->users)
 		retval = imx6ul_tsc_start(tsc);
 
 	mutex_unlock(&input_dev->mutex);
@@ -545,8 +546,8 @@ static int imx6ul_tsc_resume(struct device *dev)
 	return retval;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(imx6ul_tsc_pm_ops,
-				imx6ul_tsc_suspend, imx6ul_tsc_resume);
+static SIMPLE_DEV_PM_OPS(imx6ul_tsc_pm_ops,
+			 imx6ul_tsc_suspend, imx6ul_tsc_resume);
 
 static const struct of_device_id imx6ul_tsc_match[] = {
 	{ .compatible = "fsl,imx6ul-tsc", },
@@ -558,7 +559,7 @@ static struct platform_driver imx6ul_tsc_driver = {
 	.driver		= {
 		.name	= "imx6ul-tsc",
 		.of_match_table	= imx6ul_tsc_match,
-		.pm	= pm_sleep_ptr(&imx6ul_tsc_pm_ops),
+		.pm	= &imx6ul_tsc_pm_ops,
 	},
 	.probe		= imx6ul_tsc_probe,
 };

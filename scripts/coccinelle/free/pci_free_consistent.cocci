@@ -3,7 +3,7 @@
 ///
 // Confidence: Moderate
 // Copyright: (C) 2013 Petr Strnad.
-// URL: https://coccinelle.gitlabpages.inria.fr/website
+// URL: http://coccinelle.lip6.fr/
 // Keywords: pci_free_consistent, pci_alloc_consistent
 // Options: --no-includes --include-headers
 

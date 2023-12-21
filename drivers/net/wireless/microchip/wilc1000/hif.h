@@ -30,6 +30,8 @@ enum {
 	WILC_GET_CFG
 };
 
+#define WILC_MAX_ASSOC_RESP_FRAME_SIZE   256
+
 struct rf_info {
 	u8 link_speed;
 	s8 rssi;
@@ -45,7 +47,6 @@ enum host_if_state {
 	HOST_IF_WAITING_CONN_RESP	= 3,
 	HOST_IF_CONNECTED		= 4,
 	HOST_IF_P2P_LISTEN		= 5,
-	HOST_IF_EXTERNAL_AUTH           = 6,
 	HOST_IF_FORCE_32BIT		= 0xFFFFFFFF
 };
 
@@ -106,7 +107,6 @@ struct wilc_conn_info {
 	u8 bssid[ETH_ALEN];
 	u8 security;
 	enum authtype auth_type;
-	enum mfptype mfp_type;
 	u8 ch;
 	u8 *req_ies;
 	size_t req_ies_len;
@@ -123,7 +123,7 @@ struct wilc_remain_ch {
 	u32 duration;
 	void (*expired)(void *priv, u64 cookie);
 	void *arg;
-	u64 cookie;
+	u32 cookie;
 };
 
 struct wilc;
@@ -151,12 +151,15 @@ struct host_if_drv {
 };
 
 struct wilc_vif;
+int wilc_remove_wep_key(struct wilc_vif *vif, u8 index);
+int wilc_set_wep_default_keyid(struct wilc_vif *vif, u8 index);
+int wilc_add_wep_key_bss_sta(struct wilc_vif *vif, const u8 *key, u8 len,
+			     u8 index);
+int wilc_add_wep_key_bss_ap(struct wilc_vif *vif, const u8 *key, u8 len,
+			    u8 index, u8 mode, enum authtype auth_type);
 int wilc_add_ptk(struct wilc_vif *vif, const u8 *ptk, u8 ptk_key_len,
 		 const u8 *mac_addr, const u8 *rx_mic, const u8 *tx_mic,
 		 u8 mode, u8 cipher_mode, u8 index);
-int wilc_add_igtk(struct wilc_vif *vif, const u8 *igtk, u8 igtk_key_len,
-		  const u8 *pn, u8 pn_len, const u8 *mac_addr, u8 mode,
-		  u8 index);
 s32 wilc_get_inactive_time(struct wilc_vif *vif, const u8 *mac,
 			   u32 *out_val);
 int wilc_add_rx_gtk(struct wilc_vif *vif, const u8 *rx_gtk, u8 gtk_key_len,
@@ -165,7 +168,6 @@ int wilc_add_rx_gtk(struct wilc_vif *vif, const u8 *rx_gtk, u8 gtk_key_len,
 		    u8 cipher_mode);
 int wilc_set_pmkid_info(struct wilc_vif *vif, struct wilc_pmkid_attr *pmkid);
 int wilc_get_mac_address(struct wilc_vif *vif, u8 *mac_addr);
-int wilc_set_mac_address(struct wilc_vif *vif, u8 *mac_addr);
 int wilc_set_join_req(struct wilc_vif *vif, u8 *bssid, const u8 *ies,
 		      size_t ies_len);
 int wilc_disconnect(struct wilc_vif *vif);
@@ -204,15 +206,9 @@ int wilc_get_statistics(struct wilc_vif *vif, struct rf_info *stats);
 int wilc_get_vif_idx(struct wilc_vif *vif);
 int wilc_set_tx_power(struct wilc_vif *vif, u8 tx_power);
 int wilc_get_tx_power(struct wilc_vif *vif, u8 *tx_power);
-void wilc_set_wowlan_trigger(struct wilc_vif *vif, bool enabled);
-int wilc_set_external_auth_param(struct wilc_vif *vif,
-				 struct cfg80211_external_auth_params *param);
 void wilc_scan_complete_received(struct wilc *wilc, u8 *buffer, u32 length);
 void wilc_network_info_received(struct wilc *wilc, u8 *buffer, u32 length);
 void wilc_gnrl_async_info_received(struct wilc *wilc, u8 *buffer, u32 length);
 void *wilc_parse_join_bss_param(struct cfg80211_bss *bss,
 				struct cfg80211_crypto_settings *crypto);
-int wilc_set_default_mgmt_key_index(struct wilc_vif *vif, u8 index);
-void wilc_handle_disconnect(struct wilc_vif *vif);
-
 #endif

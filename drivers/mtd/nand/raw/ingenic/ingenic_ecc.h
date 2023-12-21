@@ -36,25 +36,25 @@ int ingenic_ecc_correct(struct ingenic_ecc *ecc,
 void ingenic_ecc_release(struct ingenic_ecc *ecc);
 struct ingenic_ecc *of_ingenic_ecc_get(struct device_node *np);
 #else /* CONFIG_MTD_NAND_INGENIC_ECC */
-static inline int ingenic_ecc_calculate(struct ingenic_ecc *ecc,
+int ingenic_ecc_calculate(struct ingenic_ecc *ecc,
 			  struct ingenic_ecc_params *params,
 			  const u8 *buf, u8 *ecc_code)
 {
 	return -ENODEV;
 }
 
-static inline int ingenic_ecc_correct(struct ingenic_ecc *ecc,
+int ingenic_ecc_correct(struct ingenic_ecc *ecc,
 			struct ingenic_ecc_params *params, u8 *buf,
 			u8 *ecc_code)
 {
 	return -ENODEV;
 }
 
-static inline void ingenic_ecc_release(struct ingenic_ecc *ecc)
+void ingenic_ecc_release(struct ingenic_ecc *ecc)
 {
 }
 
-static inline struct ingenic_ecc *of_ingenic_ecc_get(struct device_node *np)
+struct ingenic_ecc *of_ingenic_ecc_get(struct device_node *np)
 {
 	return ERR_PTR(-ENODEV);
 }

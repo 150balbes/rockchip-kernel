@@ -3,6 +3,8 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: channel.h
+ *
  * Purpose: Country Regulation Rules header file
  *
  * Author: Lucas Lin

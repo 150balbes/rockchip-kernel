@@ -1,4 +1,4 @@
-.. SPDX-License-Identifier: GPL-2.0 OR GFDL-1.1-no-invariants-or-later
+.. SPDX-License-Identifier: GFDL-1.1-no-invariants-or-later
 
 .. _lirc_func:
 
@@ -22,5 +22,6 @@ LIRC Function Reference
     lirc-set-rec-carrier-range
     lirc-set-send-carrier
     lirc-set-transmitter-mask
+    lirc-set-rec-timeout-reports
     lirc-set-measure-carrier-mode
     lirc-set-wideband-receiver

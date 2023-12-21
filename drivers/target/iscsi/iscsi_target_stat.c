@@ -28,6 +28,7 @@
 /* Instance Attributes Table */
 #define ISCSI_INST_NUM_NODES		1
 #define ISCSI_INST_DESCR		"Storage Engine Target"
+#define ISCSI_INST_LAST_FAILURE_TYPE	0
 #define ISCSI_DISCONTINUITY_TIME	0
 
 #define ISCSI_NODE_INDEX		1
@@ -599,7 +600,7 @@ static ssize_t iscsi_stat_sess_node_show(struct config_item *item, char *page)
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -620,7 +621,7 @@ static ssize_t iscsi_stat_sess_indx_show(struct config_item *item, char *page)
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -642,7 +643,7 @@ static ssize_t iscsi_stat_sess_cmd_pdus_show(struct config_item *item,
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -664,7 +665,7 @@ static ssize_t iscsi_stat_sess_rsp_pdus_show(struct config_item *item,
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -686,7 +687,7 @@ static ssize_t iscsi_stat_sess_txdata_octs_show(struct config_item *item,
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -708,7 +709,7 @@ static ssize_t iscsi_stat_sess_rxdata_octs_show(struct config_item *item,
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -730,7 +731,7 @@ static ssize_t iscsi_stat_sess_conn_digest_errors_show(struct config_item *item,
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 
@@ -752,7 +753,7 @@ static ssize_t iscsi_stat_sess_conn_timeout_errors_show(
 {
 	struct iscsi_node_acl *acl = iscsi_stat_nacl(item);
 	struct se_node_acl *se_nacl = &acl->se_node_acl;
-	struct iscsit_session *sess;
+	struct iscsi_session *sess;
 	struct se_session *se_sess;
 	ssize_t ret = 0;
 

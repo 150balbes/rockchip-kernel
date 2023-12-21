@@ -234,8 +234,10 @@ int sun4i_rgb_init(struct drm_device *drm, struct sun4i_tcon *tcon)
 
 	if (rgb->bridge) {
 		ret = drm_bridge_attach(encoder, rgb->bridge, NULL, 0);
-		if (ret)
+		if (ret) {
+			dev_err(drm->dev, "Couldn't attach our bridge\n");
 			goto err_cleanup_connector;
+		}
 	}
 
 	return 0;

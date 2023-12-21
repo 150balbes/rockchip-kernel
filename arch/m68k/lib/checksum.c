@@ -265,6 +265,8 @@ csum_and_copy_from_user(const void __user *src, void *dst, int len)
 	return sum;
 }
 
+EXPORT_SYMBOL(csum_and_copy_from_user);
+
 
 /*
  * copy from kernel space while checksumming, otherwise like csum_partial

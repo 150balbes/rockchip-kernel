@@ -3,6 +3,7 @@
  * Copyright IBM Corp. 2005, 2011
  *
  * Author(s): Rolf Adelsberger,
+ *	      Heiko Carstens <heiko.carstens@de.ibm.com>
  *	      Michael Holzheu <holzheu@linux.vnet.ibm.com>
  */
 
@@ -21,16 +22,13 @@
 #include <asm/elf.h>
 #include <asm/asm-offsets.h>
 #include <asm/cacheflush.h>
-#include <asm/abs_lowcore.h>
 #include <asm/os_info.h>
 #include <asm/set_memory.h>
 #include <asm/stacktrace.h>
 #include <asm/switch_to.h>
 #include <asm/nmi.h>
-#include <asm/sclp.h>
 
-typedef void (*relocate_kernel_t)(unsigned long, unsigned long, unsigned long);
-typedef int (*purgatory_t)(int);
+typedef void (*relocate_kernel_t)(kimage_entry_t *, unsigned long);
 
 extern const unsigned char relocate_kernel[];
 extern const unsigned long long relocate_kernel_len;
@@ -41,13 +39,10 @@ extern const unsigned long long relocate_kernel_len;
  * Reset the system, copy boot CPU registers to absolute zero,
  * and jump to the kdump image
  */
-static void __do_machine_kdump(void *data)
+static void __do_machine_kdump(void *image)
 {
-	struct kimage *image = data;
-	purgatory_t purgatory;
+	int (*start_kdump)(int);
 	unsigned long prefix;
-
-	purgatory = (purgatory_t)image->start;
 
 	/* store_status() saved the prefix register to lowcore */
 	prefix = (unsigned long) S390_lowcore.prefixreg_save_area;
@@ -60,12 +55,14 @@ static void __do_machine_kdump(void *data)
 	 * This need to be done *after* s390_reset_system set the
 	 * prefix register of this CPU to zero
 	 */
-	memcpy(absolute_pointer(__LC_FPREGS_SAVE_AREA),
-	       phys_to_virt(prefix + __LC_FPREGS_SAVE_AREA), 512);
+	memcpy((void *) __LC_FPREGS_SAVE_AREA,
+	       (void *)(prefix + __LC_FPREGS_SAVE_AREA), 512);
 
-	call_nodat(1, int, purgatory, int, 1);
+	__load_psw_mask(PSW_MASK_BASE | PSW_DEFAULT_KEY | PSW_MASK_EA | PSW_MASK_BA);
+	start_kdump = (void *)((struct kimage *) image)->start;
+	start_kdump(1);
 
-	/* Die if kdump returns */
+	/* Die if start_kdump returns */
 	disabled_wait();
 }
 
@@ -89,7 +86,7 @@ static noinline void __machine_kdump(void *image)
 			continue;
 	}
 	/* Store status of the boot CPU */
-	mcesa = __va(S390_lowcore.mcesad & MCESA_ORIGIN_MASK);
+	mcesa = (struct mcesa *)(S390_lowcore.mcesad & MCESA_ORIGIN_MASK);
 	if (MACHINE_HAS_VX)
 		save_vx_regs((__vector128 *) mcesa->vector_save_area);
 	if (MACHINE_HAS_GS) {
@@ -112,6 +109,18 @@ static noinline void __machine_kdump(void *image)
 	store_status(__do_machine_kdump, image);
 }
 
+static unsigned long do_start_kdump(unsigned long addr)
+{
+	struct kimage *image = (struct kimage *) addr;
+	int (*start_kdump)(int) = (void *)image->start;
+	int rc;
+
+	__arch_local_irq_stnsm(0xfb); /* disable DAT */
+	rc = start_kdump(0);
+	__arch_local_irq_stosm(0x04); /* enable DAT */
+	return rc;
+}
+
 #endif /* CONFIG_CRASH_DUMP */
 
 /*
@@ -120,10 +129,11 @@ static noinline void __machine_kdump(void *image)
 static bool kdump_csum_valid(struct kimage *image)
 {
 #ifdef CONFIG_CRASH_DUMP
-	purgatory_t purgatory = (purgatory_t)image->start;
 	int rc;
 
-	rc = call_nodat(1, int, purgatory, int, 0);
+	preempt_disable();
+	rc = CALL_ON_STACK(do_start_kdump, S390_lowcore.nodat_stack, 1, image);
+	preempt_enable();
 	return rc == 0;
 #else
 	return false;
@@ -197,7 +207,7 @@ int machine_kexec_prepare(struct kimage *image)
 		return -EINVAL;
 
 	/* Get the destination where the assembler code should be copied to.*/
-	reboot_code_buffer = page_to_virt(image->control_code_page);
+	reboot_code_buffer = (void *) page_to_phys(image->control_code_page);
 
 	/* Then copy it */
 	memcpy(reboot_code_buffer, relocate_kernel, relocate_kernel_len);
@@ -210,17 +220,13 @@ void machine_kexec_cleanup(struct kimage *image)
 
 void arch_crash_save_vmcoreinfo(void)
 {
-	struct lowcore *abs_lc;
-
 	VMCOREINFO_SYMBOL(lowcore_ptr);
 	VMCOREINFO_SYMBOL(high_memory);
 	VMCOREINFO_LENGTH(lowcore_ptr, NR_CPUS);
-	vmcoreinfo_append_str("SAMODE31=%lx\n", __samode31);
-	vmcoreinfo_append_str("EAMODE31=%lx\n", __eamode31);
+	vmcoreinfo_append_str("SDMA=%lx\n", __sdma);
+	vmcoreinfo_append_str("EDMA=%lx\n", __edma);
 	vmcoreinfo_append_str("KERNELOFFSET=%lx\n", kaslr_offset());
-	abs_lc = get_abs_lowcore();
-	abs_lc->vmcore_info = paddr_vmcoreinfo_note();
-	put_abs_lowcore(abs_lc);
+	mem_assign_absolute(S390_lowcore.vmcore_info, paddr_vmcoreinfo_note());
 }
 
 void machine_shutdown(void)
@@ -237,20 +243,15 @@ void machine_crash_shutdown(struct pt_regs *regs)
  */
 static void __do_machine_kexec(void *data)
 {
-	unsigned long data_mover, entry, diag308_subcode;
+	relocate_kernel_t data_mover;
 	struct kimage *image = data;
 
-	data_mover = page_to_phys(image->control_code_page);
-	entry = virt_to_phys(&image->head);
-	diag308_subcode = DIAG308_CLEAR_RESET;
-	if (sclp.has_iplcc)
-		diag308_subcode |= DIAG308_FLAG_EI;
 	s390_reset_system();
+	data_mover = (relocate_kernel_t) page_to_phys(image->control_code_page);
 
-	call_nodat(3, void, (relocate_kernel_t)data_mover,
-		   unsigned long, entry,
-		   unsigned long, image->start,
-		   unsigned long, diag308_subcode);
+	__arch_local_irq_stnsm(0xfb); /* disable DAT - avoid no-execute */
+	/* Call the moving routine */
+	(*data_mover)(&image->head, image->start);
 
 	/* Die if kexec returns */
 	disabled_wait();
@@ -261,6 +262,7 @@ static void __do_machine_kexec(void *data)
  */
 static void __machine_kexec(void *data)
 {
+	__arch_local_irq_stosm(0x04); /* enable DAT */
 	pfault_fini();
 	tracing_off();
 	debug_locks_off();

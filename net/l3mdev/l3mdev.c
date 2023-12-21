@@ -103,7 +103,7 @@ unlock:
 EXPORT_SYMBOL_GPL(l3mdev_ifindex_lookup_by_table_id);
 
 /**
- *	l3mdev_master_ifindex_rcu - get index of L3 master device
+ *	l3mdev_master_ifindex - get index of L3 master device
  *	@dev: targeted interface
  */
 
@@ -136,7 +136,7 @@ int l3mdev_master_ifindex_rcu(const struct net_device *dev)
 EXPORT_SYMBOL_GPL(l3mdev_master_ifindex_rcu);
 
 /**
- *	l3mdev_master_upper_ifindex_by_index_rcu - get index of upper l3 master
+ *	l3mdev_master_upper_ifindex_by_index - get index of upper l3 master
  *					       device
  *	@net: network namespace for device index lookup
  *	@ifindex: targeted interface
@@ -241,7 +241,6 @@ EXPORT_SYMBOL_GPL(l3mdev_link_scope_lookup);
  *				L3 master device
  *	@net: network namespace for device index lookup
  *	@fl:  flow struct
- *	@arg: store the table the rule matched with here
  */
 
 int l3mdev_fib_rule_match(struct net *net, struct flowi *fl,
@@ -250,19 +249,25 @@ int l3mdev_fib_rule_match(struct net *net, struct flowi *fl,
 	struct net_device *dev;
 	int rc = 0;
 
-	/* update flow ensures flowi_l3mdev is set when relevant */
-	if (!fl->flowi_l3mdev)
-		return 0;
-
 	rcu_read_lock();
 
-	dev = dev_get_by_index_rcu(net, fl->flowi_l3mdev);
+	dev = dev_get_by_index_rcu(net, fl->flowi_oif);
 	if (dev && netif_is_l3_master(dev) &&
 	    dev->l3mdev_ops->l3mdev_fib_table) {
 		arg->table = dev->l3mdev_ops->l3mdev_fib_table(dev);
 		rc = 1;
+		goto out;
 	}
 
+	dev = dev_get_by_index_rcu(net, fl->flowi_iif);
+	if (dev && netif_is_l3_master(dev) &&
+	    dev->l3mdev_ops->l3mdev_fib_table) {
+		arg->table = dev->l3mdev_ops->l3mdev_fib_table(dev);
+		rc = 1;
+		goto out;
+	}
+
+out:
 	rcu_read_unlock();
 
 	return rc;
@@ -271,28 +276,31 @@ int l3mdev_fib_rule_match(struct net *net, struct flowi *fl,
 void l3mdev_update_flow(struct net *net, struct flowi *fl)
 {
 	struct net_device *dev;
+	int ifindex;
 
 	rcu_read_lock();
 
 	if (fl->flowi_oif) {
 		dev = dev_get_by_index_rcu(net, fl->flowi_oif);
 		if (dev) {
-			if (!fl->flowi_l3mdev)
-				fl->flowi_l3mdev = l3mdev_master_ifindex_rcu(dev);
-
-			/* oif set to L3mdev directs lookup to its table;
-			 * reset to avoid oif match in fib_lookup
-			 */
-			if (netif_is_l3_master(dev))
-				fl->flowi_oif = 0;
-			goto out;
+			ifindex = l3mdev_master_ifindex_rcu(dev);
+			if (ifindex) {
+				fl->flowi_oif = ifindex;
+				fl->flowi_flags |= FLOWI_FLAG_SKIP_NH_OIF;
+				goto out;
+			}
 		}
 	}
 
-	if (fl->flowi_iif > LOOPBACK_IFINDEX && !fl->flowi_l3mdev) {
+	if (fl->flowi_iif) {
 		dev = dev_get_by_index_rcu(net, fl->flowi_iif);
-		if (dev)
-			fl->flowi_l3mdev = l3mdev_master_ifindex_rcu(dev);
+		if (dev) {
+			ifindex = l3mdev_master_ifindex_rcu(dev);
+			if (ifindex) {
+				fl->flowi_iif = ifindex;
+				fl->flowi_flags |= FLOWI_FLAG_SKIP_NH_OIF;
+			}
+		}
 	}
 
 out:

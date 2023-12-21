@@ -813,7 +813,6 @@ inline bool is_buswidth_valid(u8 buswidth, bool is_mpc8308)
 	case 16:
 		if (is_mpc8308)
 			return false;
-		break;
 	case 1:
 	case 2:
 	case 4:

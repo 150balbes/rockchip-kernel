@@ -45,6 +45,13 @@ enum cros_ec_lpc_mec_io_type {
  */
 void cros_ec_lpc_mec_init(unsigned int base, unsigned int end);
 
+/*
+ * cros_ec_lpc_mec_destroy
+ *
+ * Cleanup MEC I/O.
+ */
+void cros_ec_lpc_mec_destroy(void);
+
 /**
  * cros_ec_lpc_mec_in_range() - Determine if addresses are in MEC EMI range.
  *

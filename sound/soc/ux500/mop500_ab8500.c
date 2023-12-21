@@ -5,6 +5,8 @@
  * Author: Ola Lilja <ola.o.lilja@stericsson.com>,
  *         Kristoffer Karlsson <kristoffer.karlsson@stericsson.com>
  *         for ST-Ericsson.
+ *
+ * License terms:
  */
 
 #include <linux/module.h>
@@ -346,7 +348,7 @@ static int mop500_ab8500_hw_free(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-const struct snd_soc_ops mop500_ab8500_ops[] = {
+struct snd_soc_ops mop500_ab8500_ops[] = {
 	{
 		.hw_params = mop500_ab8500_hw_params,
 		.hw_free = mop500_ab8500_hw_free,
@@ -431,9 +433,12 @@ void mop500_ab8500_remove(struct snd_soc_card *card)
 {
 	struct mop500_ab8500_drvdata *drvdata = snd_soc_card_get_drvdata(card);
 
-	clk_put(drvdata->clk_ptr_sysclk);
-	clk_put(drvdata->clk_ptr_ulpclk);
-	clk_put(drvdata->clk_ptr_intclk);
+	if (drvdata->clk_ptr_sysclk != NULL)
+		clk_put(drvdata->clk_ptr_sysclk);
+	if (drvdata->clk_ptr_ulpclk != NULL)
+		clk_put(drvdata->clk_ptr_ulpclk);
+	if (drvdata->clk_ptr_intclk != NULL)
+		clk_put(drvdata->clk_ptr_intclk);
 
 	snd_soc_card_set_drvdata(card, drvdata);
 }

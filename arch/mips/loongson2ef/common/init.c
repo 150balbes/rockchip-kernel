@@ -19,6 +19,7 @@ unsigned long __maybe_unused _loongson_addrwincfg_base;
 static void __init mips_nmi_setup(void)
 {
 	void *base;
+	extern char except_vec_nmi[];
 
 	base = (void *)(CAC_BASE + 0x380);
 	memcpy(base, except_vec_nmi, 0x80);
@@ -44,4 +45,8 @@ void __init prom_init(void)
 	/*init the uart base address */
 	prom_init_uart_base();
 	board_nmi_handler_setup = mips_nmi_setup;
+}
+
+void __init prom_free_prom_memory(void)
+{
 }

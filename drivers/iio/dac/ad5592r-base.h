@@ -14,8 +14,6 @@
 #include <linux/mutex.h>
 #include <linux/gpio/driver.h>
 
-#include <linux/iio/iio.h>
-
 struct device;
 struct ad5592r_state;
 
@@ -67,12 +65,12 @@ struct ad5592r_state {
 	u8 gpio_in;
 	u8 gpio_val;
 
-	__be16 spi_msg __aligned(IIO_DMA_MINALIGN);
+	__be16 spi_msg ____cacheline_aligned;
 	__be16 spi_msg_nop;
 };
 
 int ad5592r_probe(struct device *dev, const char *name,
 		const struct ad5592r_rw_ops *ops);
-void ad5592r_remove(struct device *dev);
+int ad5592r_remove(struct device *dev);
 
 #endif /* __DRIVERS_IIO_DAC_AD5592R_BASE_H__ */

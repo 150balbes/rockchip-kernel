@@ -29,8 +29,10 @@ struct cinergyt2_state {
 	unsigned char data[64];
 };
 
-/* Forward declaration */
-static const struct dvb_usb_device_properties cinergyt2_properties;
+/* We are missing a release hook with usb_device data */
+static struct dvb_usb_device *cinergyt2_usb_device;
+
+static struct dvb_usb_device_properties cinergyt2_properties;
 
 static int cinergyt2_streaming_ctrl(struct dvb_usb_adapter *adap, int enable)
 {
@@ -81,6 +83,9 @@ static int cinergyt2_frontend_attach(struct dvb_usb_adapter *adap)
 		deb_rc("cinergyt2_power_ctrl() Failed to retrieve sleep state info\n");
 	}
 	mutex_unlock(&d->data_mutex);
+
+	/* Copy this pointer as we are gonna need it in the release phase */
+	cinergyt2_usb_device = adap->dev;
 
 	return ret;
 }
@@ -193,18 +198,14 @@ static int cinergyt2_usb_probe(struct usb_interface *intf,
 				   THIS_MODULE, NULL, adapter_nr);
 }
 
-enum {
-	TERRATEC_CINERGY_T2,
-};
-
 static struct usb_device_id cinergyt2_usb_table[] = {
-	DVB_USB_DEV(TERRATEC, TERRATEC_CINERGY_T2),
-	{ }
+	{ USB_DEVICE(USB_VID_TERRATEC, 0x0038) },
+	{ 0 }
 };
 
 MODULE_DEVICE_TABLE(usb, cinergyt2_usb_table);
 
-static const struct dvb_usb_device_properties cinergyt2_properties = {
+static struct dvb_usb_device_properties cinergyt2_properties = {
 	.size_of_priv = sizeof(struct cinergyt2_state),
 	.num_adapters = 1,
 	.adapter = {
@@ -244,7 +245,7 @@ static const struct dvb_usb_device_properties cinergyt2_properties = {
 	.devices = {
 		{ .name = "TerraTec/qanu USB2.0 Highspeed DVB-T Receiver",
 		  .cold_ids = {NULL},
-		  .warm_ids = { &cinergyt2_usb_table[TERRATEC_CINERGY_T2], NULL },
+		  .warm_ids = { &cinergyt2_usb_table[0], NULL },
 		},
 		{ NULL },
 	}

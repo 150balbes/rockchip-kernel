@@ -17,4 +17,3 @@ Card-Specific Information
    hdspm
    serial-u16550
    img-spdif-in
-   pcmtest

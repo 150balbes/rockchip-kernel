@@ -18,7 +18,7 @@
 #define ARCH_SUN5I_A13 1
 #define ARCH_SUN6I_A31 2
 
-static const struct resource adc_resources[] = {
+static struct resource adc_resources[] = {
 	DEFINE_RES_IRQ_NAMED(SUN4I_GPADC_IRQ_FIFO_DATA, "FIFO_DATA_PENDING"),
 	DEFINE_RES_IRQ_NAMED(SUN4I_GPADC_IRQ_TEMP_DATA, "TEMP_DATA_PENDING"),
 };
@@ -34,8 +34,9 @@ static const struct regmap_irq_chip sun4i_gpadc_regmap_irq_chip = {
 	.name = "sun4i_gpadc_irq_chip",
 	.status_base = SUN4I_GPADC_INT_FIFOS,
 	.ack_base = SUN4I_GPADC_INT_FIFOS,
-	.unmask_base = SUN4I_GPADC_INT_FIFOC,
+	.mask_base = SUN4I_GPADC_INT_FIFOC,
 	.init_ack_masked = true,
+	.mask_invert = true,
 	.irqs = sun4i_gpadc_regmap_irq,
 	.num_irqs = ARRAY_SIZE(sun4i_gpadc_regmap_irq),
 	.num_regs = 1,
@@ -93,6 +94,7 @@ MODULE_DEVICE_TABLE(of, sun4i_gpadc_of_match);
 static int sun4i_gpadc_probe(struct platform_device *pdev)
 {
 	struct sun4i_gpadc_dev *dev;
+	struct resource *mem;
 	const struct of_device_id *of_id;
 	const struct mfd_cell *cells;
 	unsigned int irq, size;
@@ -123,7 +125,8 @@ static int sun4i_gpadc_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 
-	dev->base = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dev->base = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(dev->base))
 		return PTR_ERR(dev->base);
 
@@ -163,7 +166,7 @@ static int sun4i_gpadc_probe(struct platform_device *pdev)
 static struct platform_driver sun4i_gpadc_driver = {
 	.driver = {
 		.name = "sun4i-gpadc",
-		.of_match_table = sun4i_gpadc_of_match,
+		.of_match_table = of_match_ptr(sun4i_gpadc_of_match),
 	},
 	.probe = sun4i_gpadc_probe,
 };

@@ -56,9 +56,10 @@ static int acpi_hed_add(struct acpi_device *device)
 	return 0;
 }
 
-static void acpi_hed_remove(struct acpi_device *device)
+static int acpi_hed_remove(struct acpi_device *device)
 {
 	hed_handle = NULL;
+	return 0;
 }
 
 static struct acpi_driver acpi_hed_driver = {
@@ -73,6 +74,7 @@ static struct acpi_driver acpi_hed_driver = {
 };
 module_acpi_driver(acpi_hed_driver);
 
+ACPI_MODULE_NAME("hed");
 MODULE_AUTHOR("Huang Ying");
 MODULE_DESCRIPTION("ACPI Hardware Error Device Driver");
 MODULE_LICENSE("GPL");

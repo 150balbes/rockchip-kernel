@@ -102,8 +102,8 @@
 /**
  * struct cs_data - struct with info on a chipselect setting
  * @enable_mask: mask to enable the chipselect in the EBI2 config
- * @slow_cfg: offset to XMEMC slow CS config
- * @fast_cfg: offset to XMEMC fast CS config
+ * @slow_cfg0: offset to XMEMC slow CS config
+ * @fast_cfg1: offset to XMEMC fast CS config
  */
 struct cs_data {
 	u32 enable_mask;
@@ -403,3 +403,4 @@ static struct platform_driver qcom_ebi2_driver = {
 module_platform_driver(qcom_ebi2_driver);
 MODULE_AUTHOR("Linus Walleij <linus.walleij@linaro.org>");
 MODULE_DESCRIPTION("Qualcomm EBI2 driver");
+MODULE_LICENSE("GPL");

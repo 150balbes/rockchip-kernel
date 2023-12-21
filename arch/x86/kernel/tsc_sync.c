@@ -245,6 +245,7 @@ bool tsc_store_and_check_tsc_adjust(bool bootcpu)
  */
 static atomic_t start_count;
 static atomic_t stop_count;
+static atomic_t skip_test;
 static atomic_t test_runs;
 
 /*
@@ -343,12 +344,19 @@ static inline unsigned int loop_timeout(int cpu)
 }
 
 /*
- * The freshly booted CPU initiates this via an async SMP function call.
+ * Source CPU calls into this - it waits for the freshly booted
+ * target CPU to arrive and then starts the measurement:
  */
-static void check_tsc_sync_source(void *__cpu)
+void check_tsc_sync_source(int cpu)
 {
-	unsigned int cpu = (unsigned long)__cpu;
 	int cpus = 2;
+
+	/*
+	 * No need to check if we already know that the TSC is not
+	 * synchronized or if we have no TSC.
+	 */
+	if (unsynchronized_tsc())
+		return;
 
 	/*
 	 * Set the maximum number of test runs to
@@ -360,9 +368,16 @@ static void check_tsc_sync_source(void *__cpu)
 	else
 		atomic_set(&test_runs, 3);
 retry:
-	/* Wait for the target to start. */
-	while (atomic_read(&start_count) != cpus - 1)
+	/*
+	 * Wait for the target to start or to skip the test:
+	 */
+	while (atomic_read(&start_count) != cpus - 1) {
+		if (atomic_read(&skip_test) > 0) {
+			atomic_set(&skip_test, 0);
+			return;
+		}
 		cpu_relax();
+	}
 
 	/*
 	 * Trigger the target to continue into the measurement too:
@@ -382,14 +397,14 @@ retry:
 	if (!nr_warps) {
 		atomic_set(&test_runs, 0);
 
-		pr_debug("TSC synchronization [CPU#%d -> CPU#%u]: passed\n",
+		pr_debug("TSC synchronization [CPU#%d -> CPU#%d]: passed\n",
 			smp_processor_id(), cpu);
 
 	} else if (atomic_dec_and_test(&test_runs) || random_warps) {
 		/* Force it to 0 if random warps brought us here */
 		atomic_set(&test_runs, 0);
 
-		pr_warn("TSC synchronization [CPU#%d -> CPU#%u]:\n",
+		pr_warn("TSC synchronization [CPU#%d -> CPU#%d]:\n",
 			smp_processor_id(), cpu);
 		pr_warn("Measured %Ld cycles TSC warp between CPUs, "
 			"turning off TSC clock.\n", max_warp);
@@ -442,12 +457,11 @@ void check_tsc_sync_target(void)
 	 * SoCs the TSC is frequency synchronized, but still the TSC ADJUST
 	 * register might have been wreckaged by the BIOS..
 	 */
-	if (tsc_store_and_check_tsc_adjust(false) || tsc_clocksource_reliable)
+	if (tsc_store_and_check_tsc_adjust(false) || tsc_clocksource_reliable) {
+		atomic_inc(&skip_test);
 		return;
+	}
 
-	/* Kick the control CPU into the TSC synchronization function */
-	smp_call_function_single(cpumask_first(cpu_online_mask), check_tsc_sync_source,
-				 (unsigned long *)(unsigned long)cpu, 0);
 retry:
 	/*
 	 * Register this CPU's participation and wait for the
@@ -499,7 +513,7 @@ retry:
 	/*
 	 * Add the result to the previous adjustment value.
 	 *
-	 * The adjustment value is slightly off by the overhead of the
+	 * The adjustement value is slightly off by the overhead of the
 	 * sync mechanism (observed values are ~200 TSC cycles), but this
 	 * really depends on CPU, node distance and frequency. So
 	 * compensating for this is hard to get right. Experiments show

@@ -96,7 +96,7 @@ struct smsc47b397_data {
 
 	struct mutex update_lock;
 	unsigned long last_updated; /* in jiffies */
-	bool valid;
+	int valid;
 
 	/* register values */
 	u16 fan[4];
@@ -137,7 +137,7 @@ static struct smsc47b397_data *smsc47b397_update_device(struct device *dev)
 		}
 
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 
 		dev_dbg(dev, "... device update complete\n");
 	}

@@ -108,7 +108,7 @@ extern unsigned int tlb_44x_index;
 typedef struct {
 	unsigned int	id;
 	unsigned int	active;
-	void __user	*vdso;
+	unsigned long	vdso_base;
 } mm_context_t;
 
 /* patch sites */

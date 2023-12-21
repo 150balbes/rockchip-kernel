@@ -84,6 +84,7 @@ struct xgene_rng_dev {
 	unsigned long failure_ts;/* First failure timestamp */
 	struct timer_list failure_timer;
 	struct device *dev;
+	struct clk *clk;
 };
 
 static void xgene_rng_expired_timer(struct timer_list *t)
@@ -199,7 +200,7 @@ static void xgene_rng_chk_overflow(struct xgene_rng_dev *ctx)
 
 static irqreturn_t xgene_rng_irq_handler(int irq, void *id)
 {
-	struct xgene_rng_dev *ctx = id;
+	struct xgene_rng_dev *ctx = (struct xgene_rng_dev *) id;
 
 	/* RNG Alarm Counter overflow */
 	xgene_rng_chk_overflow(ctx);
@@ -313,7 +314,6 @@ static struct hwrng xgene_rng_func = {
 static int xgene_rng_probe(struct platform_device *pdev)
 {
 	struct xgene_rng_dev *ctx;
-	struct clk *clk;
 	int rc = 0;
 
 	ctx = devm_kzalloc(&pdev->dev, sizeof(*ctx), GFP_KERNEL);
@@ -337,36 +337,58 @@ static int xgene_rng_probe(struct platform_device *pdev)
 
 	rc = devm_request_irq(&pdev->dev, ctx->irq, xgene_rng_irq_handler, 0,
 				dev_name(&pdev->dev), ctx);
-	if (rc)
-		return dev_err_probe(&pdev->dev, rc, "Could not request RNG alarm IRQ\n");
+	if (rc) {
+		dev_err(&pdev->dev, "Could not request RNG alarm IRQ\n");
+		return rc;
+	}
 
 	/* Enable IP clock */
-	clk = devm_clk_get_optional_enabled(&pdev->dev, NULL);
-	if (IS_ERR(clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(clk), "Couldn't get the clock for RNG\n");
+	ctx->clk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(ctx->clk)) {
+		dev_warn(&pdev->dev, "Couldn't get the clock for RNG\n");
+	} else {
+		rc = clk_prepare_enable(ctx->clk);
+		if (rc) {
+			dev_warn(&pdev->dev,
+				 "clock prepare enable failed for RNG");
+			return rc;
+		}
+	}
 
 	xgene_rng_func.priv = (unsigned long) ctx;
 
 	rc = devm_hwrng_register(&pdev->dev, &xgene_rng_func);
-	if (rc)
-		return dev_err_probe(&pdev->dev, rc, "RNG registering failed\n");
+	if (rc) {
+		dev_err(&pdev->dev, "RNG registering failed error %d\n", rc);
+		if (!IS_ERR(ctx->clk))
+			clk_disable_unprepare(ctx->clk);
+		return rc;
+	}
 
 	rc = device_init_wakeup(&pdev->dev, 1);
-	if (rc)
-		return dev_err_probe(&pdev->dev, rc, "RNG device_init_wakeup failed\n");
+	if (rc) {
+		dev_err(&pdev->dev, "RNG device_init_wakeup failed error %d\n",
+			rc);
+		if (!IS_ERR(ctx->clk))
+			clk_disable_unprepare(ctx->clk);
+		return rc;
+	}
 
 	return 0;
 }
 
 static int xgene_rng_remove(struct platform_device *pdev)
 {
+	struct xgene_rng_dev *ctx = platform_get_drvdata(pdev);
 	int rc;
 
 	rc = device_init_wakeup(&pdev->dev, 0);
 	if (rc)
 		dev_err(&pdev->dev, "RNG init wakeup failed error %d\n", rc);
+	if (!IS_ERR(ctx->clk))
+		clk_disable_unprepare(ctx->clk);
 
-	return 0;
+	return rc;
 }
 
 static const struct of_device_id xgene_rng_of_match[] = {

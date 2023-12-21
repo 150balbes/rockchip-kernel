@@ -52,12 +52,12 @@ struct klp_state:
 
 The state can be manipulated using two functions:
 
-  - klp_get_state()
+  - *klp_get_state(patch, id)*
 
     - Get struct klp_state associated with the given livepatch
       and state id.
 
-  - klp_get_prev_state()
+  - *klp_get_prev_state(id)*
 
     - Get struct klp_state associated with the given feature id and
       already installed livepatches.

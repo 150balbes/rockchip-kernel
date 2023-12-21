@@ -10,7 +10,6 @@
 #include <linux/wait.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
-#include <asm/cacheflush.h>
 #include "hbm.h"
 #include "client.h"
 
@@ -112,7 +111,7 @@ static void ishtp_cl_init(struct ishtp_cl *cl, struct ishtp_device *dev)
 
 /**
  * ishtp_cl_allocate() - allocates client structure and sets it up.
- * @cl_device: ishtp client device
+ * @dev: ishtp device
  *
  * Allocate memory for new client device and call to initialize each field.
  *
@@ -264,6 +263,7 @@ EXPORT_SYMBOL(ishtp_cl_unlink);
 int ishtp_cl_disconnect(struct ishtp_cl *cl)
 {
 	struct ishtp_device *dev;
+	int err;
 
 	if (WARN_ON(!cl || !cl->dev))
 		return -ENODEV;
@@ -283,7 +283,7 @@ int ishtp_cl_disconnect(struct ishtp_cl *cl)
 		return -ENODEV;
 	}
 
-	wait_event_interruptible_timeout(cl->wait_ctrl_res,
+	err = wait_event_interruptible_timeout(cl->wait_ctrl_res,
 			(dev->dev_state != ISHTP_DEV_ENABLED ||
 			cl->state == ISHTP_CL_DISCONNECTED),
 			ishtp_secs_to_jiffies(ISHTP_CL_CONNECT_TIMEOUT));
@@ -783,14 +783,6 @@ static void ishtp_cl_send_msg_dma(struct ishtp_device *dev,
 	/* write msg to dma buf */
 	memcpy(msg_addr, cl_msg->send_buf.data, cl_msg->send_buf.size);
 
-	/*
-	 * if current fw don't support cache snooping, driver have to
-	 * flush the cache manually.
-	 */
-	if (dev->ops->dma_no_cache_snooping &&
-		dev->ops->dma_no_cache_snooping(dev))
-		clflush_cache_range(msg_addr, cl_msg->send_buf.size);
-
 	/* send dma_xfer hbm msg */
 	off = msg_addr - (unsigned char *)dev->ishtp_host_dma_tx_buf;
 	ishtp_hbm_hdr(&hdr, sizeof(struct dma_xfer_hbm));
@@ -841,6 +833,7 @@ void recv_ishtp_cl_msg(struct ishtp_device *dev,
 	unsigned char *buffer = NULL;
 	struct ishtp_cl_rb *complete_rb = NULL;
 	unsigned long	flags;
+	int	rb_count;
 
 	if (ishtp_hdr->reserved) {
 		dev_err(dev->devc, "corrupted message header.\n");
@@ -854,7 +847,9 @@ void recv_ishtp_cl_msg(struct ishtp_device *dev,
 	}
 
 	spin_lock_irqsave(&dev->read_list_spinlock, flags);
+	rb_count = -1;
 	list_for_each_entry(rb, &dev->read_list.list, list) {
+		++rb_count;
 		cl = rb->cl;
 		if (!cl || !(cl->host_client_id == ishtp_hdr->host_addr &&
 				cl->fw_client_id == ishtp_hdr->fw_addr) ||
@@ -1012,15 +1007,6 @@ void recv_ishtp_cl_msg_dma(struct ishtp_device *dev, void *msg,
 		}
 
 		buffer = rb->buffer.data;
-
-		/*
-		 * if current fw don't support cache snooping, driver have to
-		 * flush the cache manually.
-		 */
-		if (dev->ops->dma_no_cache_snooping &&
-			dev->ops->dma_no_cache_snooping(dev))
-			clflush_cache_range(msg, hbm->msg_length);
-
 		memcpy(buffer, msg, hbm->msg_length);
 		rb->buf_idx = hbm->msg_length;
 

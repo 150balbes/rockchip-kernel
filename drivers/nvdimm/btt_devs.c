@@ -4,6 +4,7 @@
  */
 #include <linux/blkdev.h>
 #include <linux/device.h>
+#include <linux/genhd.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
@@ -50,14 +51,14 @@ static ssize_t sector_size_store(struct device *dev,
 	struct nd_btt *nd_btt = to_nd_btt(dev);
 	ssize_t rc;
 
-	device_lock(dev);
+	nd_device_lock(dev);
 	nvdimm_bus_lock(dev);
 	rc = nd_size_select_store(dev, buf, &nd_btt->lbasize,
 			btt_lbasize_supported);
 	dev_dbg(dev, "result: %zd wrote: %s%s", rc, buf,
 			buf[len - 1] == '\n' ? "" : "\n");
 	nvdimm_bus_unlock(dev);
-	device_unlock(dev);
+	nd_device_unlock(dev);
 
 	return rc ? rc : len;
 }
@@ -79,11 +80,11 @@ static ssize_t uuid_store(struct device *dev,
 	struct nd_btt *nd_btt = to_nd_btt(dev);
 	ssize_t rc;
 
-	device_lock(dev);
+	nd_device_lock(dev);
 	rc = nd_uuid_store(dev, &nd_btt->uuid, buf, len);
 	dev_dbg(dev, "result: %zd wrote: %s%s", rc, buf,
 			buf[len - 1] == '\n' ? "" : "\n");
-	device_unlock(dev);
+	nd_device_unlock(dev);
 
 	return rc ? rc : len;
 }
@@ -108,13 +109,13 @@ static ssize_t namespace_store(struct device *dev,
 	struct nd_btt *nd_btt = to_nd_btt(dev);
 	ssize_t rc;
 
-	device_lock(dev);
+	nd_device_lock(dev);
 	nvdimm_bus_lock(dev);
 	rc = nd_namespace_store(dev, &nd_btt->ndns, buf, len);
 	dev_dbg(dev, "result: %zd wrote: %s%s", rc, buf,
 			buf[len - 1] == '\n' ? "" : "\n");
 	nvdimm_bus_unlock(dev);
-	device_unlock(dev);
+	nd_device_unlock(dev);
 
 	return rc;
 }
@@ -126,14 +127,14 @@ static ssize_t size_show(struct device *dev,
 	struct nd_btt *nd_btt = to_nd_btt(dev);
 	ssize_t rc;
 
-	device_lock(dev);
+	nd_device_lock(dev);
 	if (dev->driver)
 		rc = sprintf(buf, "%llu\n", nd_btt->size);
 	else {
 		/* no size to convey if the btt instance is disabled */
 		rc = -ENXIO;
 	}
-	device_unlock(dev);
+	nd_device_unlock(dev);
 
 	return rc;
 }
@@ -178,11 +179,9 @@ bool is_nd_btt(struct device *dev)
 }
 EXPORT_SYMBOL(is_nd_btt);
 
-static struct lock_class_key nvdimm_btt_key;
-
 static struct device *__nd_btt_create(struct nd_region *nd_region,
-				      unsigned long lbasize, uuid_t *uuid,
-				      struct nd_namespace_common *ndns)
+		unsigned long lbasize, u8 *uuid,
+		struct nd_namespace_common *ndns)
 {
 	struct nd_btt *nd_btt;
 	struct device *dev;
@@ -207,7 +206,6 @@ static struct device *__nd_btt_create(struct nd_region *nd_region,
 	dev->parent = &nd_region->dev;
 	dev->type = &nd_btt_device_type;
 	device_initialize(&nd_btt->dev);
-	lockdep_set_class(&nd_btt->dev.mutex, &nvdimm_btt_key);
 	if (ndns && !__nd_attach_ndns(&nd_btt->dev, ndns, &nd_btt->ndns)) {
 		dev_dbg(&ndns->dev, "failed, already claimed by %s\n",
 				dev_name(ndns->claim));
@@ -228,7 +226,7 @@ struct device *nd_btt_create(struct nd_region *nd_region)
 {
 	struct device *dev = __nd_btt_create(nd_region, 0, NULL, NULL);
 
-	nd_device_register(dev);
+	__nd_device_register(dev);
 	return dev;
 }
 
@@ -246,16 +244,14 @@ struct device *nd_btt_create(struct nd_region *nd_region)
  */
 bool nd_btt_arena_is_valid(struct nd_btt *nd_btt, struct btt_sb *super)
 {
-	const uuid_t *ns_uuid = nd_dev_to_uuid(&nd_btt->ndns->dev);
-	uuid_t parent_uuid;
+	const u8 *parent_uuid = nd_dev_to_uuid(&nd_btt->ndns->dev);
 	u64 checksum;
 
 	if (memcmp(super->signature, BTT_SIG, BTT_SIG_LEN) != 0)
 		return false;
 
-	import_uuid(&parent_uuid, super->parent_uuid);
-	if (!uuid_is_null(&parent_uuid))
-		if (!uuid_equal(&parent_uuid, ns_uuid))
+	if (!guid_is_null((guid_t *)&super->parent_uuid))
+		if (memcmp(super->parent_uuid, parent_uuid, 16) != 0)
 			return false;
 
 	checksum = le64_to_cpu(super->checksum);
@@ -323,11 +319,11 @@ static int __nd_btt_probe(struct nd_btt *nd_btt,
 		return rc;
 
 	nd_btt->lbasize = le32_to_cpu(btt_sb->external_lbasize);
-	nd_btt->uuid = kmemdup(&btt_sb->uuid, sizeof(uuid_t), GFP_KERNEL);
+	nd_btt->uuid = kmemdup(btt_sb->uuid, 16, GFP_KERNEL);
 	if (!nd_btt->uuid)
 		return -ENOMEM;
 
-	nd_device_register(&nd_btt->dev);
+	__nd_device_register(&nd_btt->dev);
 
 	return 0;
 }

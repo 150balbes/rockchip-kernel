@@ -35,25 +35,25 @@ static unsigned long *pinned_asid_map;
 #define ASID_FIRST_VERSION	(1UL << asid_bits)
 
 #define NUM_USER_ASIDS		ASID_FIRST_VERSION
-#define ctxid2asid(asid)	((asid) & ~ASID_MASK)
-#define asid2ctxid(asid, genid)	((asid) | (genid))
+#define asid2idx(asid)		((asid) & ~ASID_MASK)
+#define idx2asid(idx)		asid2idx(idx)
 
 /* Get the ASIDBits supported by the current CPU */
 static u32 get_cpu_asid_bits(void)
 {
 	u32 asid;
 	int fld = cpuid_feature_extract_unsigned_field(read_cpuid(ID_AA64MMFR0_EL1),
-						ID_AA64MMFR0_EL1_ASIDBITS_SHIFT);
+						ID_AA64MMFR0_ASID_SHIFT);
 
 	switch (fld) {
 	default:
 		pr_warn("CPU%d: Unknown ASID size (%d); assuming 8-bit\n",
 					smp_processor_id(),  fld);
 		fallthrough;
-	case ID_AA64MMFR0_EL1_ASIDBITS_8:
+	case 0:
 		asid = 8;
 		break;
-	case ID_AA64MMFR0_EL1_ASIDBITS_16:
+	case 2:
 		asid = 16;
 	}
 
@@ -120,7 +120,7 @@ static void flush_context(void)
 		 */
 		if (asid == 0)
 			asid = per_cpu(reserved_asids, i);
-		__set_bit(ctxid2asid(asid), asid_map);
+		__set_bit(asid2idx(asid), asid_map);
 		per_cpu(reserved_asids, i) = asid;
 	}
 
@@ -162,7 +162,7 @@ static u64 new_context(struct mm_struct *mm)
 	u64 generation = atomic64_read(&asid_generation);
 
 	if (asid != 0) {
-		u64 newasid = asid2ctxid(ctxid2asid(asid), generation);
+		u64 newasid = generation | (asid & ~ASID_MASK);
 
 		/*
 		 * If our current ASID was active during a rollover, we
@@ -183,7 +183,7 @@ static u64 new_context(struct mm_struct *mm)
 		 * We had a valid ASID in a previous life, so try to re-use
 		 * it if possible.
 		 */
-		if (!__test_and_set_bit(ctxid2asid(asid), asid_map))
+		if (!__test_and_set_bit(asid2idx(asid), asid_map))
 			return newasid;
 	}
 
@@ -209,7 +209,7 @@ static u64 new_context(struct mm_struct *mm)
 set_asid:
 	__set_bit(asid, asid_map);
 	cur_idx = asid;
-	return asid2ctxid(asid, generation);
+	return idx2asid(asid) | generation;
 }
 
 void check_and_switch_context(struct mm_struct *mm)
@@ -300,13 +300,13 @@ unsigned long arm64_mm_context_get(struct mm_struct *mm)
 	}
 
 	nr_pinned_asids++;
-	__set_bit(ctxid2asid(asid), pinned_asid_map);
+	__set_bit(asid2idx(asid), pinned_asid_map);
 	refcount_set(&mm->context.pinned, 1);
 
 out_unlock:
 	raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
 
-	asid = ctxid2asid(asid);
+	asid &= ~ASID_MASK;
 
 	/* Set the equivalent of USER_ASID_BIT */
 	if (asid && arm64_kernel_unmapped_at_el0())
@@ -327,7 +327,7 @@ void arm64_mm_context_put(struct mm_struct *mm)
 	raw_spin_lock_irqsave(&cpu_asid_lock, flags);
 
 	if (refcount_dec_and_test(&mm->context.pinned)) {
-		__clear_bit(ctxid2asid(asid), pinned_asid_map);
+		__clear_bit(asid2idx(asid), pinned_asid_map);
 		nr_pinned_asids--;
 	}
 
@@ -364,8 +364,8 @@ void cpu_do_switch_mm(phys_addr_t pgd_phys, struct mm_struct *mm)
 	ttbr1 &= ~TTBR_ASID_MASK;
 	ttbr1 |= FIELD_PREP(TTBR_ASID_MASK, asid);
 
-	cpu_set_reserved_ttbr0_nosync();
 	write_sysreg(ttbr1, ttbr1_el1);
+	isb();
 	write_sysreg(ttbr0, ttbr0_el1);
 	isb();
 	post_ttbr_update_workaround();
@@ -402,12 +402,14 @@ static int asids_init(void)
 {
 	asid_bits = get_cpu_asid_bits();
 	atomic64_set(&asid_generation, ASID_FIRST_VERSION);
-	asid_map = bitmap_zalloc(NUM_USER_ASIDS, GFP_KERNEL);
+	asid_map = kcalloc(BITS_TO_LONGS(NUM_USER_ASIDS), sizeof(*asid_map),
+			   GFP_KERNEL);
 	if (!asid_map)
 		panic("Failed to allocate bitmap for %lu ASIDs\n",
 		      NUM_USER_ASIDS);
 
-	pinned_asid_map = bitmap_zalloc(NUM_USER_ASIDS, GFP_KERNEL);
+	pinned_asid_map = kcalloc(BITS_TO_LONGS(NUM_USER_ASIDS),
+				  sizeof(*pinned_asid_map), GFP_KERNEL);
 	nr_pinned_asids = 0;
 
 	/*

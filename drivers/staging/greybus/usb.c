@@ -27,7 +27,7 @@ struct gb_usb_hub_control_request {
 };
 
 struct gb_usb_hub_control_response {
-	DECLARE_FLEX_ARRAY(u8, buf);
+	u8 buf[0];
 };
 
 struct gb_usb_device {

@@ -2,6 +2,7 @@
 /* Copyright (c) 2020 Facebook */
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
 #pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)

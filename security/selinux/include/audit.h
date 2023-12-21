@@ -12,13 +12,10 @@
 #ifndef _SELINUX_AUDIT_H
 #define _SELINUX_AUDIT_H
 
-#include <linux/audit.h>
-#include <linux/types.h>
-
 /**
  *	selinux_audit_rule_init - alloc/init an selinux audit rule structure.
  *	@field: the field this rule refers to
- *	@op: the operator the rule uses
+ *	@op: the operater the rule uses
  *	@rulestr: the text "target" of the rule
  *	@rule: pointer to the new rule structure returned via this
  *
@@ -41,7 +38,7 @@ void selinux_audit_rule_free(void *rule);
  *	selinux_audit_rule_match - determine if a context ID matches a rule.
  *	@sid: the context ID to check
  *	@field: the field this rule refers to
- *	@op: the operator the rule uses
+ *	@op: the operater the rule uses
  *	@rule: pointer to the audit rule to check against
  *
  *	Returns 1 if the context id matches the rule, 0 if it does not, and
@@ -54,7 +51,7 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *rule);
  *	@rule: rule to be checked
  *	Returns 1 if there are selinux fields specified in the rule, 0 otherwise.
  */
-int selinux_audit_rule_known(struct audit_krule *rule);
+int selinux_audit_rule_known(struct audit_krule *krule);
 
 #endif /* _SELINUX_AUDIT_H */
 

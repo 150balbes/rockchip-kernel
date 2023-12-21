@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * Buffer/page management specific to NILFS
+ * page.c - buffer/page management specific to NILFS
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
@@ -195,12 +195,12 @@ void nilfs_page_bug(struct page *page)
  */
 static void nilfs_copy_page(struct page *dst, struct page *src, int copy_dirty)
 {
-	struct buffer_head *dbh, *dbufs, *sbh;
+	struct buffer_head *dbh, *dbufs, *sbh, *sbufs;
 	unsigned long mask = NILFS_BUFFER_INHERENT_BITS;
 
 	BUG_ON(PageWriteback(dst));
 
-	sbh = page_buffers(src);
+	sbh = sbufs = page_buffers(src);
 	if (!page_has_buffers(dst))
 		create_empty_buffers(dst, sbh->b_size, 0);
 
@@ -240,43 +240,42 @@ static void nilfs_copy_page(struct page *dst, struct page *src, int copy_dirty)
 int nilfs_copy_dirty_pages(struct address_space *dmap,
 			   struct address_space *smap)
 {
-	struct folio_batch fbatch;
+	struct pagevec pvec;
 	unsigned int i;
 	pgoff_t index = 0;
 	int err = 0;
 
-	folio_batch_init(&fbatch);
+	pagevec_init(&pvec);
 repeat:
-	if (!filemap_get_folios_tag(smap, &index, (pgoff_t)-1,
-				PAGECACHE_TAG_DIRTY, &fbatch))
+	if (!pagevec_lookup_tag(&pvec, smap, &index, PAGECACHE_TAG_DIRTY))
 		return 0;
 
-	for (i = 0; i < folio_batch_count(&fbatch); i++) {
-		struct folio *folio = fbatch.folios[i], *dfolio;
+	for (i = 0; i < pagevec_count(&pvec); i++) {
+		struct page *page = pvec.pages[i], *dpage;
 
-		folio_lock(folio);
-		if (unlikely(!folio_test_dirty(folio)))
-			NILFS_PAGE_BUG(&folio->page, "inconsistent dirty state");
+		lock_page(page);
+		if (unlikely(!PageDirty(page)))
+			NILFS_PAGE_BUG(page, "inconsistent dirty state");
 
-		dfolio = filemap_grab_folio(dmap, folio->index);
-		if (unlikely(IS_ERR(dfolio))) {
+		dpage = grab_cache_page(dmap, page->index);
+		if (unlikely(!dpage)) {
 			/* No empty page is added to the page cache */
-			folio_unlock(folio);
-			err = PTR_ERR(dfolio);
+			err = -ENOMEM;
+			unlock_page(page);
 			break;
 		}
-		if (unlikely(!folio_buffers(folio)))
-			NILFS_PAGE_BUG(&folio->page,
+		if (unlikely(!page_has_buffers(page)))
+			NILFS_PAGE_BUG(page,
 				       "found empty page in dat page cache");
 
-		nilfs_copy_page(&dfolio->page, &folio->page, 1);
-		filemap_dirty_folio(folio_mapping(dfolio), dfolio);
+		nilfs_copy_page(dpage, page, 1);
+		__set_page_dirty_nobuffers(dpage);
 
-		folio_unlock(dfolio);
-		folio_put(dfolio);
-		folio_unlock(folio);
+		unlock_page(dpage);
+		put_page(dpage);
+		unlock_page(page);
 	}
-	folio_batch_release(&fbatch);
+	pagevec_release(&pvec);
 	cond_resched();
 
 	if (likely(!err))
@@ -295,57 +294,57 @@ repeat:
 void nilfs_copy_back_pages(struct address_space *dmap,
 			   struct address_space *smap)
 {
-	struct folio_batch fbatch;
+	struct pagevec pvec;
 	unsigned int i, n;
-	pgoff_t start = 0;
+	pgoff_t index = 0;
 
-	folio_batch_init(&fbatch);
+	pagevec_init(&pvec);
 repeat:
-	n = filemap_get_folios(smap, &start, ~0UL, &fbatch);
+	n = pagevec_lookup(&pvec, smap, &index);
 	if (!n)
 		return;
 
-	for (i = 0; i < folio_batch_count(&fbatch); i++) {
-		struct folio *folio = fbatch.folios[i], *dfolio;
-		pgoff_t index = folio->index;
+	for (i = 0; i < pagevec_count(&pvec); i++) {
+		struct page *page = pvec.pages[i], *dpage;
+		pgoff_t offset = page->index;
 
-		folio_lock(folio);
-		dfolio = filemap_lock_folio(dmap, index);
-		if (!IS_ERR(dfolio)) {
-			/* overwrite existing folio in the destination cache */
-			WARN_ON(folio_test_dirty(dfolio));
-			nilfs_copy_page(&dfolio->page, &folio->page, 0);
-			folio_unlock(dfolio);
-			folio_put(dfolio);
-			/* Do we not need to remove folio from smap here? */
+		lock_page(page);
+		dpage = find_lock_page(dmap, offset);
+		if (dpage) {
+			/* overwrite existing page in the destination cache */
+			WARN_ON(PageDirty(dpage));
+			nilfs_copy_page(dpage, page, 0);
+			unlock_page(dpage);
+			put_page(dpage);
+			/* Do we not need to remove page from smap here? */
 		} else {
-			struct folio *f;
+			struct page *p;
 
-			/* move the folio to the destination cache */
+			/* move the page to the destination cache */
 			xa_lock_irq(&smap->i_pages);
-			f = __xa_erase(&smap->i_pages, index);
-			WARN_ON(folio != f);
+			p = __xa_erase(&smap->i_pages, offset);
+			WARN_ON(page != p);
 			smap->nrpages--;
 			xa_unlock_irq(&smap->i_pages);
 
 			xa_lock_irq(&dmap->i_pages);
-			f = __xa_store(&dmap->i_pages, index, folio, GFP_NOFS);
-			if (unlikely(f)) {
+			p = __xa_store(&dmap->i_pages, offset, page, GFP_NOFS);
+			if (unlikely(p)) {
 				/* Probably -ENOMEM */
-				folio->mapping = NULL;
-				folio_put(folio);
+				page->mapping = NULL;
+				put_page(page);
 			} else {
-				folio->mapping = dmap;
+				page->mapping = dmap;
 				dmap->nrpages++;
-				if (folio_test_dirty(folio))
-					__xa_set_mark(&dmap->i_pages, index,
+				if (PageDirty(page))
+					__xa_set_mark(&dmap->i_pages, offset,
 							PAGECACHE_TAG_DIRTY);
 			}
 			xa_unlock_irq(&dmap->i_pages);
 		}
-		folio_unlock(folio);
+		unlock_page(page);
 	}
-	folio_batch_release(&fbatch);
+	pagevec_release(&pvec);
 	cond_resched();
 
 	goto repeat;
@@ -358,30 +357,22 @@ repeat:
  */
 void nilfs_clear_dirty_pages(struct address_space *mapping, bool silent)
 {
-	struct folio_batch fbatch;
+	struct pagevec pvec;
 	unsigned int i;
 	pgoff_t index = 0;
 
-	folio_batch_init(&fbatch);
+	pagevec_init(&pvec);
 
-	while (filemap_get_folios_tag(mapping, &index, (pgoff_t)-1,
-				PAGECACHE_TAG_DIRTY, &fbatch)) {
-		for (i = 0; i < folio_batch_count(&fbatch); i++) {
-			struct folio *folio = fbatch.folios[i];
+	while (pagevec_lookup_tag(&pvec, mapping, &index,
+					PAGECACHE_TAG_DIRTY)) {
+		for (i = 0; i < pagevec_count(&pvec); i++) {
+			struct page *page = pvec.pages[i];
 
-			folio_lock(folio);
-
-			/*
-			 * This folio may have been removed from the address
-			 * space by truncation or invalidation when the lock
-			 * was acquired.  Skip processing in that case.
-			 */
-			if (likely(folio->mapping == mapping))
-				nilfs_clear_dirty_page(&folio->page, silent);
-
-			folio_unlock(folio);
+			lock_page(page);
+			nilfs_clear_dirty_page(page, silent);
+			unlock_page(page);
 		}
-		folio_batch_release(&fbatch);
+		pagevec_release(&pvec);
 		cond_resched();
 	}
 }
@@ -445,6 +436,15 @@ unsigned int nilfs_page_count_clean_buffers(struct page *page,
 	return nc;
 }
 
+void nilfs_mapping_init(struct address_space *mapping, struct inode *inode)
+{
+	mapping->host = inode;
+	mapping->flags = 0;
+	mapping_set_gfp_mask(mapping, GFP_NOFS);
+	mapping->private_data = NULL;
+	mapping->a_ops = &empty_aops;
+}
+
 /*
  * NILFS2 needs clear_page_dirty() in the following two cases:
  *
@@ -489,36 +489,41 @@ unsigned long nilfs_find_uncommitted_extent(struct inode *inode,
 					    sector_t start_blk,
 					    sector_t *blkoff)
 {
-	unsigned int i, nr_folios;
+	unsigned int i;
 	pgoff_t index;
+	unsigned int nblocks_in_page;
 	unsigned long length = 0;
-	struct folio_batch fbatch;
-	struct folio *folio;
+	sector_t b;
+	struct pagevec pvec;
+	struct page *page;
 
 	if (inode->i_mapping->nrpages == 0)
 		return 0;
 
 	index = start_blk >> (PAGE_SHIFT - inode->i_blkbits);
+	nblocks_in_page = 1U << (PAGE_SHIFT - inode->i_blkbits);
 
-	folio_batch_init(&fbatch);
+	pagevec_init(&pvec);
 
 repeat:
-	nr_folios = filemap_get_folios_contig(inode->i_mapping, &index, ULONG_MAX,
-			&fbatch);
-	if (nr_folios == 0)
+	pvec.nr = find_get_pages_contig(inode->i_mapping, index, PAGEVEC_SIZE,
+					pvec.pages);
+	if (pvec.nr == 0)
 		return length;
 
+	if (length > 0 && pvec.pages[0]->index > index)
+		goto out;
+
+	b = pvec.pages[0]->index << (PAGE_SHIFT - inode->i_blkbits);
 	i = 0;
 	do {
-		folio = fbatch.folios[i];
+		page = pvec.pages[i];
 
-		folio_lock(folio);
-		if (folio_buffers(folio)) {
+		lock_page(page);
+		if (page_has_buffers(page)) {
 			struct buffer_head *bh, *head;
-			sector_t b;
 
-			b = folio->index << (PAGE_SHIFT - inode->i_blkbits);
-			bh = head = folio_buffers(folio);
+			bh = head = page_buffers(page);
 			do {
 				if (b < start_blk)
 					continue;
@@ -533,17 +538,21 @@ repeat:
 		} else {
 			if (length > 0)
 				goto out_locked;
+
+			b += nblocks_in_page;
 		}
-		folio_unlock(folio);
+		unlock_page(page);
 
-	} while (++i < nr_folios);
+	} while (++i < pagevec_count(&pvec));
 
-	folio_batch_release(&fbatch);
+	index = page->index + 1;
+	pagevec_release(&pvec);
 	cond_resched();
 	goto repeat;
 
 out_locked:
-	folio_unlock(folio);
-	folio_batch_release(&fbatch);
+	unlock_page(page);
+out:
+	pagevec_release(&pvec);
 	return length;
 }

@@ -11,6 +11,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_device.h>
+#include <drm/drm_plane_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
@@ -22,7 +23,7 @@
 #include "sti_vtg.h"
 
 static void sti_crtc_atomic_enable(struct drm_crtc *crtc,
-				   struct drm_atomic_state *state)
+				   struct drm_crtc_state *old_state)
 {
 	struct sti_mixer *mixer = to_sti_mixer(crtc);
 
@@ -34,7 +35,7 @@ static void sti_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void sti_crtc_atomic_disable(struct drm_crtc *crtc,
-				    struct drm_atomic_state *state)
+				    struct drm_crtc_state *old_state)
 {
 	struct sti_mixer *mixer = to_sti_mixer(crtc);
 
@@ -132,7 +133,7 @@ sti_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static void sti_crtc_atomic_flush(struct drm_crtc *crtc,
-				  struct drm_atomic_state *state)
+				  struct drm_crtc_state *old_crtc_state)
 {
 	struct drm_device *drm_dev = crtc->dev;
 	struct sti_mixer *mixer = to_sti_mixer(crtc);

@@ -124,10 +124,16 @@ static int aq_pci_func_init(struct pci_dev *pdev)
 {
 	int err;
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (err)
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(64));
+	if (!err)
+		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
 	if (err) {
+		err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		if (!err)
+			err = pci_set_consistent_dma_mask(pdev,
+							  DMA_BIT_MASK(32));
+	}
+	if (err != 0) {
 		err = -ENOSR;
 		goto err_exit;
 	}
@@ -379,7 +385,6 @@ static void aq_pci_shutdown(struct pci_dev *pdev)
 	}
 }
 
-#ifdef CONFIG_PM
 static int aq_suspend_common(struct device *dev)
 {
 	struct aq_nic_s *nic = pci_get_drvdata(to_pci_dev(dev));
@@ -464,7 +469,6 @@ static const struct dev_pm_ops aq_pm_ops = {
 	.restore = aq_pm_resume_restore,
 	.thaw = aq_pm_thaw,
 };
-#endif
 
 static struct pci_driver aq_pci_ops = {
 	.name = AQ_CFG_DRV_NAME,

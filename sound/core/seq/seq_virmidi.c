@@ -263,16 +263,6 @@ static int snd_virmidi_output_close(struct snd_rawmidi_substream *substream)
 }
 
 /*
- * drain output work queue
- */
-static void snd_virmidi_output_drain(struct snd_rawmidi_substream *substream)
-{
-	struct snd_virmidi *vmidi = substream->runtime->private_data;
-
-	flush_work(&vmidi->output_work);
-}
-
-/*
  * subscribe callback - allow output to rawmidi device
  */
 static int snd_virmidi_subscribe(void *private_data,
@@ -346,7 +336,6 @@ static const struct snd_rawmidi_ops snd_virmidi_output_ops = {
 	.open = snd_virmidi_output_open,
 	.close = snd_virmidi_output_close,
 	.trigger = snd_virmidi_output_trigger,
-	.drain = snd_virmidi_output_drain,
 };
 
 /*
@@ -385,7 +374,6 @@ static int snd_virmidi_dev_attach_seq(struct snd_virmidi_dev *rdev)
 	pinfo->capability |= SNDRV_SEQ_PORT_CAP_WRITE | SNDRV_SEQ_PORT_CAP_SYNC_WRITE | SNDRV_SEQ_PORT_CAP_SUBS_WRITE;
 	pinfo->capability |= SNDRV_SEQ_PORT_CAP_READ | SNDRV_SEQ_PORT_CAP_SYNC_READ | SNDRV_SEQ_PORT_CAP_SUBS_READ;
 	pinfo->capability |= SNDRV_SEQ_PORT_CAP_DUPLEX;
-	pinfo->direction = SNDRV_SEQ_PORT_DIR_BIDIRECTION;
 	pinfo->type = SNDRV_SEQ_PORT_TYPE_MIDI_GENERIC
 		| SNDRV_SEQ_PORT_TYPE_SOFTWARE
 		| SNDRV_SEQ_PORT_TYPE_PORT;
@@ -494,11 +482,10 @@ int snd_virmidi_new(struct snd_card *card, int device, struct snd_rawmidi **rrmi
 	int err;
 	
 	*rrmidi = NULL;
-	err = snd_rawmidi_new(card, "VirMidi", device,
-			      16,	/* may be configurable */
-			      16,	/* may be configurable */
-			      &rmidi);
-	if (err < 0)
+	if ((err = snd_rawmidi_new(card, "VirMidi", device,
+				   16,	/* may be configurable */
+				   16,	/* may be configurable */
+				   &rmidi)) < 0)
 		return err;
 	strcpy(rmidi->name, rmidi->id);
 	rdev = kzalloc(sizeof(*rdev), GFP_KERNEL);

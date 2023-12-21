@@ -7,7 +7,6 @@
  * Contacts: Andrzej Hajda <a.hajda@samsung.com>
 */
 
-#include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/regulator/consumer.h>
 

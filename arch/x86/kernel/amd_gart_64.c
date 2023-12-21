@@ -38,9 +38,11 @@
 #include <asm/iommu.h>
 #include <asm/gart.h>
 #include <asm/set_memory.h>
+#include <asm/swiotlb.h>
 #include <asm/dma.h>
 #include <asm/amd_nb.h>
 #include <asm/x86_init.h>
+#include <asm/iommu_table.h>
 
 static unsigned long iommu_bus_base;	/* GART remapping area (physical) */
 static unsigned long iommu_size;	/* size of remapping area bytes */
@@ -53,7 +55,7 @@ static u32 *iommu_gatt_base;		/* Remapping table */
  * of only flushing when an mapping is reused. With it true the GART is
  * flushed for every mapping. Problem is that doing the lazy flush seems
  * to trigger bugs with some popular PCI cards, in particular 3ware (but
- * has been also seen with Qlogic at least).
+ * has been also also seen with Qlogic at least).
  */
 static int iommu_fullflush = 1;
 
@@ -329,7 +331,7 @@ static int __dma_map_cont(struct device *dev, struct scatterlist *start,
 	int i;
 
 	if (iommu_start == -1)
-		return -ENOMEM;
+		return -1;
 
 	for_each_sg(start, s, nelems, i) {
 		unsigned long pages, addr;
@@ -378,13 +380,13 @@ static int gart_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 		       enum dma_data_direction dir, unsigned long attrs)
 {
 	struct scatterlist *s, *ps, *start_sg, *sgmap;
-	int need = 0, nextneed, i, out, start, ret;
+	int need = 0, nextneed, i, out, start;
 	unsigned long pages = 0;
 	unsigned int seg_size;
 	unsigned int max_seg_size;
 
 	if (nents == 0)
-		return -EINVAL;
+		return 0;
 
 	out		= 0;
 	start		= 0;
@@ -412,9 +414,8 @@ static int gart_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 			if (!iommu_merge || !nextneed || !need || s->offset ||
 			    (s->length + seg_size > max_seg_size) ||
 			    (ps->offset + ps->length) % PAGE_SIZE) {
-				ret = dma_map_cont(dev, start_sg, i - start,
-						   sgmap, pages, need);
-				if (ret < 0)
+				if (dma_map_cont(dev, start_sg, i - start,
+						 sgmap, pages, need) < 0)
 					goto error;
 				out++;
 
@@ -431,8 +432,7 @@ static int gart_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 		pages += iommu_num_pages(s->offset, s->length, PAGE_SIZE);
 		ps = s;
 	}
-	ret = dma_map_cont(dev, start_sg, i - start, sgmap, pages, need);
-	if (ret < 0)
+	if (dma_map_cont(dev, start_sg, i - start, sgmap, pages, need) < 0)
 		goto error;
 	out++;
 	flush_gart();
@@ -456,7 +456,9 @@ error:
 		panic("dma_map_sg: overflow on %lu pages\n", pages);
 
 	iommu_full(dev, pages << PAGE_SHIFT, dir);
-	return ret;
+	for_each_sg(sg, s, nents, i)
+		s->dma_address = DMA_MAPPING_ERROR;
+	return 0;
 }
 
 /* allocate and map a coherent mapping */
@@ -504,7 +506,7 @@ static __init unsigned long check_iommu_size(unsigned long aper, u64 aper_size)
 	}
 
 	a = aper + iommu_size;
-	iommu_size -= round_up(a, PMD_SIZE) - a;
+	iommu_size -= round_up(a, PMD_PAGE_SIZE) - a;
 
 	if (iommu_size < 64*1024*1024) {
 		pr_warn("PCI-DMA: Warning: Small IOMMU %luMB."
@@ -806,7 +808,7 @@ int __init gart_iommu_init(void)
 	flush_gart();
 	dma_ops = &gart_dma_ops;
 	x86_platform.iommu_shutdown = gart_iommu_shutdown;
-	x86_swiotlb_enable = false;
+	swiotlb = 0;
 
 	return 0;
 }
@@ -840,3 +842,4 @@ void __init gart_parse_options(char *p)
 		}
 	}
 }
+IOMMU_INIT_POST(gart_iommu_hole_init);

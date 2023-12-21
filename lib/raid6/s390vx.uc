@@ -13,7 +13,8 @@
 
 #include <linux/raid/pq.h>
 #include <asm/fpu/api.h>
-#include <asm/vx-insn.h>
+
+asm(".include \"asm/vx-insn.h\"\n");
 
 #define NSIZE 16
 

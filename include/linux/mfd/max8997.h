@@ -14,13 +14,13 @@
  * others and b) it can be enabled simply by using MAX17042 driver.
  */
 
-#ifndef __LINUX_MFD_MAX8997_H
-#define __LINUX_MFD_MAX8997_H
+#ifndef __LINUX_MFD_MAX8998_H
+#define __LINUX_MFD_MAX8998_H
 
 #include <linux/regulator/consumer.h>
 
 /* MAX8997/8966 regulator IDs */
-enum max8997_regulators {
+enum max8998_regulators {
 	MAX8997_LDO1 = 0,
 	MAX8997_LDO2,
 	MAX8997_LDO3,
@@ -110,6 +110,8 @@ enum max8997_haptic_pwm_divisor {
 
 /**
  * max8997_haptic_platform_data
+ * @pwm_channel_id: channel number of PWM device
+ *		    valid for MAX8997_EXTERNAL_MODE
  * @pwm_period: period in nano second for PWM device
  *		valid for MAX8997_EXTERNAL_MODE
  * @type: motor type
@@ -126,6 +128,7 @@ enum max8997_haptic_pwm_divisor {
  *     [0 - 255]: available period
  */
 struct max8997_haptic_platform_data {
+	unsigned int pwm_channel_id;
 	unsigned int pwm_period;
 
 	enum max8997_haptic_motor_type type;
@@ -204,4 +207,4 @@ struct max8997_platform_data {
 	struct max8997_led_platform_data *led_pdata;
 };
 
-#endif /* __LINUX_MFD_MAX8997_H */
+#endif /* __LINUX_MFD_MAX8998_H */

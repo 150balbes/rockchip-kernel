@@ -13,9 +13,10 @@
 #include <linux/ftrace.h>
 #include <linux/completion.h>
 #include <linux/list.h>
-#include <linux/livepatch_sched.h>
 
 #if IS_ENABLED(CONFIG_LIVEPATCH)
+
+#include <asm/livepatch.h>
 
 /* task patch states */
 #define KLP_UNDEFINED	-1

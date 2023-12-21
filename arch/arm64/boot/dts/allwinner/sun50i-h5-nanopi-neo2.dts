@@ -22,13 +22,13 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-0 {
+		pwr {
 			label = "nanopi:green:pwr";
 			gpios = <&r_pio 0 10 GPIO_ACTIVE_HIGH>;
 			default-state = "on";
 		};
 
-		led-1 {
+		status {
 			label = "nanopi:blue:status";
 			gpios = <&pio 0 10 GPIO_ACTIVE_HIGH>;
 		};

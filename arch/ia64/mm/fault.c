@@ -84,6 +84,18 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 	if (faulthandler_disabled() || !mm)
 		goto no_context;
 
+#ifdef CONFIG_VIRTUAL_MEM_MAP
+	/*
+	 * If fault is in region 5 and we are in the kernel, we may already
+	 * have the mmap_lock (pfn_valid macro is called during mmap). There
+	 * is no vma for region 5 addr's anyway, so skip getting the semaphore
+	 * and go directly to the exception handling code.
+	 */
+
+	if ((REGION_NUMBER(address) == 5) && !user_mode(regs))
+		goto bad_area_no_up;
+#endif
+
 	/*
 	 * This is to handle the kprobes on user space access instructions
 	 */
@@ -110,12 +122,10 @@ retry:
          * register backing store that needs to expand upwards, in
          * this case vma will be null, but prev_vma will ne non-null
          */
-        if (( !vma && prev_vma ) || (address < vma->vm_start) ) {
-		vma = expand_stack(mm, address);
-		if (!vma)
-			goto bad_area_nosemaphore;
-	}
+        if (( !vma && prev_vma ) || (address < vma->vm_start) )
+		goto check_expansion;
 
+  good_area:
 	code = SEGV_ACCERR;
 
 	/* OK, we've got a good vm_area for this memory area.  Check the access permissions: */
@@ -138,14 +148,7 @@ retry:
 	 */
 	fault = handle_mm_fault(vma, address, flags, regs);
 
-	if (fault_signal_pending(fault, regs)) {
-		if (!user_mode(regs))
-			goto no_context;
-		return;
-	}
-
-	/* The fault is fully completed (including releasing mmap lock) */
-	if (fault & VM_FAULT_COMPLETED)
+	if (fault_signal_pending(fault, regs))
 		return;
 
 	if (unlikely(fault & VM_FAULT_ERROR)) {
@@ -165,23 +168,54 @@ retry:
 		BUG();
 	}
 
-	if (fault & VM_FAULT_RETRY) {
-		flags |= FAULT_FLAG_TRIED;
+	if (flags & FAULT_FLAG_ALLOW_RETRY) {
+		if (fault & VM_FAULT_RETRY) {
+			flags |= FAULT_FLAG_TRIED;
 
-		/* No need to mmap_read_unlock(mm) as we would
-		 * have already released it in __lock_page_or_retry
-		 * in mm/filemap.c.
-		 */
+			 /* No need to mmap_read_unlock(mm) as we would
+			 * have already released it in __lock_page_or_retry
+			 * in mm/filemap.c.
+			 */
 
-		goto retry;
+			goto retry;
+		}
 	}
 
 	mmap_read_unlock(mm);
 	return;
 
+  check_expansion:
+	if (!(prev_vma && (prev_vma->vm_flags & VM_GROWSUP) && (address == prev_vma->vm_end))) {
+		if (!vma)
+			goto bad_area;
+		if (!(vma->vm_flags & VM_GROWSDOWN))
+			goto bad_area;
+		if (REGION_NUMBER(address) != REGION_NUMBER(vma->vm_start)
+		    || REGION_OFFSET(address) >= RGN_MAP_LIMIT)
+			goto bad_area;
+		if (expand_stack(vma, address))
+			goto bad_area;
+	} else {
+		vma = prev_vma;
+		if (REGION_NUMBER(address) != REGION_NUMBER(vma->vm_start)
+		    || REGION_OFFSET(address) >= RGN_MAP_LIMIT)
+			goto bad_area;
+		/*
+		 * Since the register backing store is accessed sequentially,
+		 * we disallow growing it by more than a page at a time.
+		 */
+		if (address > vma->vm_end + PAGE_SIZE - sizeof(long))
+			goto bad_area;
+		if (expand_upwards(vma, address))
+			goto bad_area;
+	}
+	goto good_area;
+
   bad_area:
 	mmap_read_unlock(mm);
-  bad_area_nosemaphore:
+#ifdef CONFIG_VIRTUAL_MEM_MAP
+  bad_area_no_up:
+#endif
 	if ((isr & IA64_ISR_SP)
 	    || ((isr & IA64_ISR_NA) && (isr & IA64_ISR_CODE_MASK) == IA64_ISR_CODE_LFETCH))
 	{
@@ -240,7 +274,7 @@ retry:
 		regs = NULL;
 	bust_spinlocks(0);
 	if (regs)
-		make_task_dead(SIGKILL);
+		do_exit(SIGKILL);
 	return;
 
   out_of_memory:

@@ -49,14 +49,13 @@ might also consider using dev_archdata for this).
 
 ::
 
-  int rproc_shutdown(struct rproc *rproc)
+  void rproc_shutdown(struct rproc *rproc)
 
 Power off a remote processor (previously booted with rproc_boot()).
 In case @rproc is still being used by an additional user(s), then
 this function will just decrement the power refcount and exit,
 without really powering off the device.
 
-Returns 0 on success, and an appropriate error value otherwise.
 Every call to rproc_boot() must (eventually) be accompanied by a call
 to rproc_shutdown(). Calling rproc_shutdown() redundantly is a bug.
 

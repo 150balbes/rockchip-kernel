@@ -5,7 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/module.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
 
@@ -203,24 +203,33 @@ static const struct sunxi_ccu_desc sun9i_a80_de_clk_desc = {
 
 static int sun9i_a80_de_clk_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	struct clk *bus_clk;
 	struct reset_control *rstc;
 	void __iomem *reg;
 	int ret;
 
-	reg = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	reg = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
 	bus_clk = devm_clk_get(&pdev->dev, "bus");
-	if (IS_ERR(bus_clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(bus_clk),
-				     "Couldn't get bus clk\n");
+	if (IS_ERR(bus_clk)) {
+		ret = PTR_ERR(bus_clk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Couldn't get bus clk: %d\n", ret);
+		return ret;
+	}
 
 	rstc = devm_reset_control_get_exclusive(&pdev->dev, NULL);
-	if (IS_ERR(rstc))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rstc),
-				     "Couldn't get reset control\n");
+	if (IS_ERR(rstc)) {
+		ret = PTR_ERR(rstc);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev,
+				"Couldn't get reset control: %d\n", ret);
+		return ret;
+	}
 
 	/* The bus clock needs to be enabled for us to access the registers */
 	ret = clk_prepare_enable(bus_clk);
@@ -237,7 +246,8 @@ static int sun9i_a80_de_clk_probe(struct platform_device *pdev)
 		goto err_disable_clk;
 	}
 
-	ret = devm_sunxi_ccu_probe(&pdev->dev, reg, &sun9i_a80_de_clk_desc);
+	ret = sunxi_ccu_probe(pdev->dev.of_node, reg,
+			      &sun9i_a80_de_clk_desc);
 	if (ret)
 		goto err_assert_reset;
 
@@ -259,11 +269,7 @@ static struct platform_driver sun9i_a80_de_clk_driver = {
 	.probe	= sun9i_a80_de_clk_probe,
 	.driver	= {
 		.name	= "sun9i-a80-de-clks",
-		.suppress_bind_attrs = true,
 		.of_match_table	= sun9i_a80_de_clk_ids,
 	},
 };
-module_platform_driver(sun9i_a80_de_clk_driver);
-
-MODULE_IMPORT_NS(SUNXI_CCU);
-MODULE_LICENSE("GPL");
+builtin_platform_driver(sun9i_a80_de_clk_driver);

@@ -235,7 +235,7 @@ err_put_hcd:
 	return retval;
 }
 
-static void mv_ehci_remove(struct platform_device *pdev)
+static int mv_ehci_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct ehci_hcd_mv *ehci_mv = hcd_to_ehci_hcd_mv(hcd);
@@ -254,7 +254,11 @@ static void mv_ehci_remove(struct platform_device *pdev)
 	}
 
 	usb_put_hcd(hcd);
+
+	return 0;
 }
+
+MODULE_ALIAS("mv-ehci");
 
 static const struct platform_device_id ehci_id_table[] = {
 	{"pxa-u2oehci", 0},
@@ -280,7 +284,7 @@ static const struct of_device_id ehci_mv_dt_ids[] = {
 
 static struct platform_driver ehci_mv_driver = {
 	.probe = mv_ehci_probe,
-	.remove_new = mv_ehci_remove,
+	.remove = mv_ehci_remove,
 	.shutdown = mv_ehci_shutdown,
 	.driver = {
 		.name = "mv-ehci",

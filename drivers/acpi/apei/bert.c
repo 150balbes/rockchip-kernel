@@ -23,7 +23,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/acpi.h>
-#include <linux/cper.h>
 #include <linux/io.h>
 
 #include "apei-internal.h"
@@ -34,7 +33,7 @@
 #define ACPI_BERT_PRINT_MAX_RECORDS 5
 #define ACPI_BERT_PRINT_MAX_LEN 1024
 
-static int bert_disable __initdata;
+static int bert_disable;
 
 /*
  * Print "all" the error records in the BERT table, but avoid huge spam to
@@ -91,9 +90,6 @@ static void __init bert_print_all(struct acpi_bert_region *region,
 
 	if (skipped)
 		pr_info(HW_ERR "Skipped %d error records\n", skipped);
-
-	if (printed + skipped)
-		pr_info("Total records found: %d\n", printed + skipped);
 }
 
 static int __init setup_bert_disable(char *str)

@@ -491,7 +491,7 @@ static int __q6asm_memory_map_regions(struct audio_client *ac, int dir,
  *
  * @dir: direction of audio stream
  * @ac: audio client instanace
- * @phys: physical address that needs mapping.
+ * @phys: physcial address that needs mapping.
  * @period_sz: audio period size
  * @periods: number of periods
  *
@@ -513,7 +513,7 @@ int q6asm_map_memory_regions(unsigned int dir, struct audio_client *ac,
 		return 0;
 	}
 
-	buf = kcalloc(periods, sizeof(*buf), GFP_ATOMIC);
+	buf = kzalloc(((sizeof(struct audio_buffer)) * periods), GFP_ATOMIC);
 	if (!buf) {
 		spin_unlock_irqrestore(&ac->lock, flags);
 		return -ENOMEM;
@@ -1624,7 +1624,7 @@ EXPORT_SYMBOL_GPL(q6asm_write_async);
 
 static void q6asm_reset_buf_state(struct audio_client *ac)
 {
-	struct audio_port_data *port;
+	struct audio_port_data *port = NULL;
 	unsigned long flags;
 
 	spin_lock_irqsave(&ac->lock, flags);
@@ -1727,7 +1727,14 @@ static int q6asm_probe(struct apr_device *adev)
 	spin_lock_init(&q6asm->slock);
 	dev_set_drvdata(dev, q6asm);
 
-	return devm_of_platform_populate(dev);
+	return of_platform_populate(dev->of_node, NULL, NULL, dev);
+}
+
+static int q6asm_remove(struct apr_device *adev)
+{
+	of_platform_depopulate(&adev->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -1740,6 +1747,7 @@ MODULE_DEVICE_TABLE(of, q6asm_device_id);
 
 static struct apr_driver qcom_q6asm_driver = {
 	.probe = q6asm_probe,
+	.remove = q6asm_remove,
 	.callback = q6asm_srvc_callback,
 	.driver = {
 		.name = "qcom-q6asm",

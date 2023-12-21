@@ -41,16 +41,14 @@
 	.text
 	.align PAGE_SIZE
 	.code64
-SYM_CODE_START_NOALIGN(relocate_range)
 SYM_CODE_START_NOALIGN(relocate_kernel)
-	UNWIND_HINT_END_OF_STACK
-	ANNOTATE_NOENDBR
+	UNWIND_HINT_EMPTY
 	/*
 	 * %rdi indirection_page
 	 * %rsi page_list
 	 * %rdx start address
 	 * %rcx preserve_context
-	 * %r8  host_mem_enc_active
+	 * %r8  sme_active
 	 */
 
 	/* Save the CPU context, used for jumping back */
@@ -113,19 +111,11 @@ SYM_CODE_START_NOALIGN(relocate_kernel)
 SYM_CODE_END(relocate_kernel)
 
 SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
-	UNWIND_HINT_END_OF_STACK
+	UNWIND_HINT_EMPTY
 	/* set return address to 0 if not preserving context */
 	pushq	$0
 	/* store the start address on the stack */
 	pushq   %rdx
-
-	/*
-	 * Clear X86_CR4_CET (if it was set) such that we can clear CR0_WP
-	 * below.
-	 */
-	movq	%cr4, %rax
-	andq	$~(X86_CR4_CET), %rax
-	movq	%rax, %cr4
 
 	/*
 	 * Set cr0 to a known state:
@@ -134,7 +124,7 @@ SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
 	 *  - Write protect disabled
 	 *  - No task switch
 	 *  - Don't do FP software emulation.
-	 *  - Protected mode enabled
+	 *  - Proctected mode enabled
 	 */
 	movq	%cr0, %rax
 	andq	$~(X86_CR0_AM | X86_CR0_WP | X86_CR0_TS | X86_CR0_EM), %rax
@@ -231,8 +221,7 @@ SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
 SYM_CODE_END(identity_mapped)
 
 SYM_CODE_START_LOCAL_NOALIGN(virtual_mapped)
-	UNWIND_HINT_END_OF_STACK
-	ANNOTATE_NOENDBR // RET target, above
+	UNWIND_HINT_EMPTY
 	movq	RSP(%r8), %rsp
 	movq	CR4(%r8), %rax
 	movq	%rax, %cr4
@@ -256,8 +245,8 @@ SYM_CODE_END(virtual_mapped)
 
 	/* Do the copies */
 SYM_CODE_START_LOCAL_NOALIGN(swap_pages)
-	UNWIND_HINT_END_OF_STACK
-	movq	%rdi, %rcx	/* Put the page_list in %rcx */
+	UNWIND_HINT_EMPTY
+	movq	%rdi, %rcx 	/* Put the page_list in %rcx */
 	xorl	%edi, %edi
 	xorl	%esi, %esi
 	jmp	1f
@@ -313,5 +302,5 @@ SYM_CODE_START_LOCAL_NOALIGN(swap_pages)
 	int3
 SYM_CODE_END(swap_pages)
 
-	.skip KEXEC_CONTROL_CODE_MAX_SIZE - (. - relocate_kernel), 0xcc
-SYM_CODE_END(relocate_range);
+	.globl kexec_control_code_size
+.set kexec_control_code_size, . - relocate_kernel

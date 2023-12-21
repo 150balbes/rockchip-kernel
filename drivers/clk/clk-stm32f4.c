@@ -705,10 +705,10 @@ static unsigned long stm32f4_pll_div_recalc_rate(struct clk_hw *hw,
 	return clk_divider_ops.recalc_rate(hw, parent_rate);
 }
 
-static int stm32f4_pll_div_determine_rate(struct clk_hw *hw,
-					  struct clk_rate_request *req)
+static long stm32f4_pll_div_round_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long *prate)
 {
-	return clk_divider_ops.determine_rate(hw, req);
+	return clk_divider_ops.round_rate(hw, rate, prate);
 }
 
 static int stm32f4_pll_div_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -734,7 +734,7 @@ static int stm32f4_pll_div_set_rate(struct clk_hw *hw, unsigned long rate,
 
 static const struct clk_ops stm32f4_pll_div_ops = {
 	.recalc_rate = stm32f4_pll_div_recalc_rate,
-	.determine_rate = stm32f4_pll_div_determine_rate,
+	.round_rate = stm32f4_pll_div_round_rate,
 	.set_rate = stm32f4_pll_div_set_rate,
 };
 
@@ -1045,7 +1045,6 @@ static int cclk_mux_set_parent(struct clk_hw *hw, u8 index)
 }
 
 static const struct clk_ops cclk_mux_ops = {
-	.determine_rate = clk_hw_determine_rate_no_reparent,
 	.get_parent = cclk_mux_get_parent,
 	.set_parent = cclk_mux_set_parent,
 };

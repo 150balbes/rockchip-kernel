@@ -1,8 +1,7 @@
 cat <<EOF
-	if (__native_word(${atomic}_t)) {
-		smp_store_release(&(v)->counter, i);
-	} else {
-		__atomic_release_fence();
-		raw_${atomic}_set(v, i);
-	}
+static __always_inline void
+${arch}${atomic}_set_release(${atomic}_t *v, ${int} i)
+{
+	smp_store_release(&(v)->counter, i);
+}
 EOF

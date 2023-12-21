@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _DPU_HW_UTIL_H
@@ -10,32 +8,26 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include "dpu_hw_mdss.h"
-#include "dpu_hw_catalog.h"
 
 #define REG_MASK(n)                     ((BIT(n)) - 1)
-#define MISR_FRAME_COUNT_MASK           0xFF
-#define MISR_CTRL_ENABLE                BIT(8)
-#define MISR_CTRL_STATUS                BIT(9)
-#define MISR_CTRL_STATUS_CLEAR          BIT(10)
-#define MISR_CTRL_FREE_RUN_MASK         BIT(31)
 
 /*
  * This is the common struct maintained by each sub block
  * for mapping the register offsets in this block to the
  * absoulute IO address
- * @blk_addr:     hw block register mapped address
- * @log_mask:     log mask for this block
+ * @base_off:     mdp register mapped offset
+ * @blk_off:      pipe offset relative to mdss offset
+ * @length        length of register block offset
+ * @xin_id        xin id
+ * @hwversion     mdss hw version number
  */
 struct dpu_hw_blk_reg_map {
-	void __iomem *blk_addr;
+	void __iomem *base_off;
+	u32 blk_off;
+	u32 length;
+	u32 xin_id;
+	u32 hwversion;
 	u32 log_mask;
-};
-
-/**
- * struct dpu_hw_blk - opaque hardware block object
- */
-struct dpu_hw_blk {
-	/* opaque */
 };
 
 /**
@@ -105,7 +97,6 @@ struct dpu_hw_scaler3_de_cfg {
  * @ cir_lut:      pointer to circular filter LUT
  * @ sep_lut:      pointer to separable filter LUT
  * @ de: detail enhancer configuration
- * @ dir_weight:   Directional weight
  */
 struct dpu_hw_scaler3_cfg {
 	u32 enable;
@@ -146,8 +137,6 @@ struct dpu_hw_scaler3_cfg {
 	 * Detail enhancer settings
 	 */
 	struct dpu_hw_scaler3_de_cfg de;
-
-	u32 dir_weight;
 };
 
 /**
@@ -305,22 +294,6 @@ struct dpu_drm_scaler_v2 {
 	struct dpu_drm_de_v1 de;
 };
 
-/**
- * struct dpu_hw_qos_cfg: pipe QoS configuration
- * @danger_lut: LUT for generate danger level based on fill level
- * @safe_lut: LUT for generate safe level based on fill level
- * @creq_lut: LUT for generate creq level based on fill level
- * @creq_vblank: creq value generated to vbif during vertical blanking
- * @danger_vblank: danger value generated during vertical blanking
- * @vblank_en: enable creq_vblank and danger_vblank during vblank
- * @danger_safe_en: enable danger safe generation
- */
-struct dpu_hw_qos_cfg {
-	u32 danger_lut;
-	u32 safe_lut;
-	u64 creq_lut;
-	bool danger_safe_en;
-};
 
 u32 *dpu_hw_util_get_log_mask_ptr(void);
 
@@ -345,26 +318,6 @@ u32 dpu_hw_get_scaler3_ver(struct dpu_hw_blk_reg_map *c,
 
 void dpu_hw_csc_setup(struct dpu_hw_blk_reg_map  *c,
 		u32 csc_reg_off,
-		const struct dpu_csc_cfg *data, bool csc10);
-
-void dpu_setup_cdp(struct dpu_hw_blk_reg_map *c, u32 offset,
-		   const struct dpu_format *fmt, bool enable);
-
-u64 _dpu_hw_get_qos_lut(const struct dpu_qos_lut_tbl *tbl,
-		u32 total_fl);
-
-void _dpu_hw_setup_qos_lut(struct dpu_hw_blk_reg_map *c, u32 offset,
-			   bool qos_8lvl,
-			   const struct dpu_hw_qos_cfg *cfg);
-
-void dpu_hw_setup_misr(struct dpu_hw_blk_reg_map *c,
-		u32 misr_ctrl_offset,
-		bool enable,
-		u32 frame_count);
-
-int dpu_hw_collect_misr(struct dpu_hw_blk_reg_map *c,
-		u32 misr_ctrl_offset,
-		u32 misr_signature_offset,
-		u32 *misr_value);
+		struct dpu_csc_cfg *data, bool csc10);
 
 #endif /* _DPU_HW_UTIL_H */

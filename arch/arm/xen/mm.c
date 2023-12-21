@@ -23,20 +23,22 @@
 #include <asm/xen/hypercall.h>
 #include <asm/xen/interface.h>
 
-static gfp_t xen_swiotlb_gfp(void)
+unsigned long xen_get_swiotlb_free_pages(unsigned int order)
 {
 	phys_addr_t base;
+	gfp_t flags = __GFP_NOWARN|__GFP_KSWAPD_RECLAIM;
 	u64 i;
 
 	for_each_mem_range(i, &base, NULL) {
 		if (base < (phys_addr_t)0xffffffff) {
 			if (IS_ENABLED(CONFIG_ZONE_DMA32))
-				return __GFP_DMA32;
-			return __GFP_DMA;
+				flags |= __GFP_DMA32;
+			else
+				flags |= __GFP_DMA;
+			break;
 		}
 	}
-
-	return GFP_KERNEL;
+	return __get_free_pages(flags, order);
 }
 
 static bool hypercall_cflush = false;
@@ -116,21 +118,29 @@ bool xen_arch_need_swiotlb(struct device *dev,
 		!dev_is_dma_coherent(dev));
 }
 
+int xen_create_contiguous_region(phys_addr_t pstart, unsigned int order,
+				 unsigned int address_bits,
+				 dma_addr_t *dma_handle)
+{
+	if (!xen_initial_domain())
+		return -EINVAL;
+
+	/* we assume that dom0 is mapped 1:1 for now */
+	*dma_handle = pstart;
+	return 0;
+}
+
+void xen_destroy_contiguous_region(phys_addr_t pstart, unsigned int order)
+{
+	return;
+}
+
 static int __init xen_mm_init(void)
 {
 	struct gnttab_cache_flush cflush;
-	int rc;
-
-	if (!xen_swiotlb_detect())
+	if (!xen_initial_domain())
 		return 0;
-
-	/* we can work with the default swiotlb */
-	if (!io_tlb_default_mem.nslabs) {
-		rc = swiotlb_init_late(swiotlb_size_or_default(),
-				       xen_swiotlb_gfp(), NULL);
-		if (rc < 0)
-			return rc;
-	}
+	xen_swiotlb_init(1, false);
 
 	cflush.op = 0;
 	cflush.a.dev_bus_addr = 0;

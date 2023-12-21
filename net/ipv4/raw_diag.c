@@ -34,56 +34,57 @@ raw_get_hashinfo(const struct inet_diag_req_v2 *r)
  * use helper to figure it out.
  */
 
-static bool raw_lookup(struct net *net, const struct sock *sk,
-		       const struct inet_diag_req_v2 *req)
+static struct sock *raw_lookup(struct net *net, struct sock *from,
+			       const struct inet_diag_req_v2 *req)
 {
 	struct inet_diag_req_raw *r = (void *)req;
+	struct sock *sk = NULL;
 
 	if (r->sdiag_family == AF_INET)
-		return raw_v4_match(net, sk, r->sdiag_raw_protocol,
-				    r->id.idiag_dst[0],
-				    r->id.idiag_src[0],
-				    r->id.idiag_if, 0);
+		sk = __raw_v4_lookup(net, from, r->sdiag_raw_protocol,
+				     r->id.idiag_dst[0],
+				     r->id.idiag_src[0],
+				     r->id.idiag_if, 0);
 #if IS_ENABLED(CONFIG_IPV6)
 	else
-		return raw_v6_match(net, sk, r->sdiag_raw_protocol,
-				    (const struct in6_addr *)r->id.idiag_src,
-				    (const struct in6_addr *)r->id.idiag_dst,
-				    r->id.idiag_if, 0);
+		sk = __raw_v6_lookup(net, from, r->sdiag_raw_protocol,
+				     (const struct in6_addr *)r->id.idiag_src,
+				     (const struct in6_addr *)r->id.idiag_dst,
+				     r->id.idiag_if, 0);
 #endif
-	return false;
+	return sk;
 }
 
 static struct sock *raw_sock_get(struct net *net, const struct inet_diag_req_v2 *r)
 {
 	struct raw_hashinfo *hashinfo = raw_get_hashinfo(r);
-	struct hlist_head *hlist;
-	struct sock *sk;
+	struct sock *sk = NULL, *s;
 	int slot;
 
 	if (IS_ERR(hashinfo))
 		return ERR_CAST(hashinfo);
 
-	rcu_read_lock();
+	read_lock(&hashinfo->lock);
 	for (slot = 0; slot < RAW_HTABLE_SIZE; slot++) {
-		hlist = &hashinfo->ht[slot];
-		sk_for_each_rcu(sk, hlist) {
-			if (raw_lookup(net, sk, r)) {
+		sk_for_each(s, &hashinfo->ht[slot]) {
+			sk = raw_lookup(net, s, r);
+			if (sk) {
 				/*
 				 * Grab it and keep until we fill
-				 * diag message to be reported, so
+				 * diag meaage to be reported, so
 				 * caller should call sock_put then.
+				 * We can do that because we're keeping
+				 * hashinfo->lock here.
 				 */
-				if (refcount_inc_not_zero(&sk->sk_refcnt))
-					goto out_unlock;
+				sock_hold(sk);
+				goto out_unlock;
 			}
 		}
 	}
-	sk = ERR_PTR(-ENOENT);
 out_unlock:
-	rcu_read_unlock();
+	read_unlock(&hashinfo->lock);
 
-	return sk;
+	return sk ? sk : ERR_PTR(-ENOENT);
 }
 
 static int raw_diag_dump_one(struct netlink_callback *cb,
@@ -118,8 +119,11 @@ static int raw_diag_dump_one(struct netlink_callback *cb,
 		return err;
 	}
 
-	err = nlmsg_unicast(net->diag_nlsk, rep, NETLINK_CB(in_skb).portid);
-
+	err = netlink_unicast(net->diag_nlsk, rep,
+			      NETLINK_CB(in_skb).portid,
+			      MSG_DONTWAIT);
+	if (err > 0)
+		err = 0;
 	return err;
 }
 
@@ -142,7 +146,6 @@ static void raw_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,
 	struct net *net = sock_net(skb->sk);
 	struct inet_diag_dump_data *cb_data;
 	int num, s_num, slot, s_slot;
-	struct hlist_head *hlist;
 	struct sock *sk = NULL;
 	struct nlattr *bc;
 
@@ -154,12 +157,11 @@ static void raw_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,
 	s_slot = cb->args[0];
 	num = s_num = cb->args[1];
 
-	rcu_read_lock();
+	read_lock(&hashinfo->lock);
 	for (slot = s_slot; slot < RAW_HTABLE_SIZE; s_num = 0, slot++) {
 		num = 0;
 
-		hlist = &hashinfo->ht[slot];
-		sk_for_each_rcu(sk, hlist) {
+		sk_for_each(sk, &hashinfo->ht[slot]) {
 			struct inet_sock *inet = inet_sk(sk);
 
 			if (!net_eq(sock_net(sk), net))
@@ -182,7 +184,7 @@ next:
 	}
 
 out_unlock:
-	rcu_read_unlock();
+	read_unlock(&hashinfo->lock);
 
 	cb->args[0] = slot;
 	cb->args[1] = num;

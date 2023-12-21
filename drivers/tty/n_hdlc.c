@@ -76,6 +76,8 @@
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define HDLC_MAGIC 0x239e
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -96,8 +98,8 @@
 #include <linux/if.h>
 #include <linux/bitops.h>
 
+#include <asm/termios.h>
 #include <linux/uaccess.h>
-#include "tty.h"
 
 /*
  * Buffers for individual HDLC frames
@@ -121,6 +123,7 @@ struct n_hdlc_buf_list {
 
 /**
  * struct n_hdlc - per device instance data structure
+ * @magic: magic value for structure
  * @tbusy: reentrancy flag for tx wakeup code
  * @woke_up: tx wakeup needs to be run again as it was called while @tbusy
  * @tx_buf_list: list of pending transmit frame buffers
@@ -129,6 +132,7 @@ struct n_hdlc_buf_list {
  * @rx_free_buf_list: list unused received frame buffers
  */
 struct n_hdlc {
+	int			magic;
 	bool			tbusy;
 	bool			woke_up;
 	struct n_hdlc_buf_list	tx_buf_list;
@@ -195,6 +199,10 @@ static void n_hdlc_tty_close(struct tty_struct *tty)
 {
 	struct n_hdlc *n_hdlc = tty->disc_data;
 
+	if (n_hdlc->magic != HDLC_MAGIC) {
+		pr_warn("n_hdlc: trying to close unopened tty!\n");
+		return;
+	}
 #if defined(TTY_NO_WRITE_SPLIT)
 	clear_bit(TTY_NO_WRITE_SPLIT, &tty->flags);
 #endif
@@ -370,12 +378,18 @@ static void n_hdlc_tty_wakeup(struct tty_struct *tty)
  * interpreted as one HDLC frame.
  */
 static void n_hdlc_tty_receive(struct tty_struct *tty, const __u8 *data,
-			       const char *flags, int count)
+			       char *flags, int count)
 {
 	register struct n_hdlc *n_hdlc = tty->disc_data;
 	register struct n_hdlc_buf *buf;
 
 	pr_debug("%s() called count=%d\n", __func__, count);
+
+	/* verify line is using HDLC discipline */
+	if (n_hdlc->magic != HDLC_MAGIC) {
+		pr_err("line not using HDLC discipline\n");
+		return;
+	}
 
 	if (count > maxframe) {
 		pr_debug("rx count>maxframesize, data discarded\n");
@@ -417,10 +431,8 @@ static void n_hdlc_tty_receive(struct tty_struct *tty, const __u8 *data,
  * n_hdlc_tty_read - Called to retrieve one frame of data (if available)
  * @tty: pointer to tty instance data
  * @file: pointer to open file object
- * @kbuf: pointer to returned data buffer
+ * @buf: pointer to returned data buffer
  * @nr: size of returned data buffer
- * @cookie: stored rbuf from previous run
- * @offset: offset into the data buffer
  *
  * Returns the number of bytes returned or error code.
  */
@@ -527,6 +539,9 @@ static ssize_t n_hdlc_tty_write(struct tty_struct *tty, struct file *file,
 
 	pr_debug("%s() called count=%zd\n", __func__, count);
 
+	if (n_hdlc->magic != HDLC_MAGIC)
+		return -EIO;
+
 	/* verify frame size */
 	if (count > maxframe) {
 		pr_debug("%s: truncating user packet from %zu to %d\n",
@@ -575,13 +590,14 @@ static ssize_t n_hdlc_tty_write(struct tty_struct *tty, struct file *file,
 /**
  * n_hdlc_tty_ioctl - process IOCTL system call for the tty device.
  * @tty: pointer to tty instance data
+ * @file: pointer to open file object for device
  * @cmd: IOCTL command code
  * @arg: argument for IOCTL call (cmd dependent)
  *
  * Returns command dependent result.
  */
-static int n_hdlc_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
-			    unsigned long arg)
+static int n_hdlc_tty_ioctl(struct tty_struct *tty, struct file *file,
+			    unsigned int cmd, unsigned long arg)
 {
 	struct n_hdlc *n_hdlc = tty->disc_data;
 	int error = 0;
@@ -590,6 +606,10 @@ static int n_hdlc_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
 	struct n_hdlc_buf *buf = NULL;
 
 	pr_debug("%s() called %d\n", __func__, cmd);
+
+	/* Verify the status of the device */
+	if (n_hdlc->magic != HDLC_MAGIC)
+		return -EBADF;
 
 	switch (cmd) {
 	case FIONREAD:
@@ -628,7 +648,7 @@ static int n_hdlc_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
 		fallthrough;	/* to default */
 
 	default:
-		error = n_tty_ioctl_helper(tty, cmd, arg);
+		error = n_tty_ioctl_helper(tty, file, cmd, arg);
 		break;
 	}
 	return error;
@@ -650,6 +670,9 @@ static __poll_t n_hdlc_tty_poll(struct tty_struct *tty, struct file *filp,
 {
 	struct n_hdlc *n_hdlc = tty->disc_data;
 	__poll_t mask = 0;
+
+	if (n_hdlc->magic != HDLC_MAGIC)
+		return 0;
 
 	/*
 	 * queue the current process into any wait queue that may awaken in the
@@ -713,6 +736,9 @@ static struct n_hdlc *n_hdlc_alloc(void)
 
 	n_hdlc_alloc_buf(&n_hdlc->rx_free_buf_list, DEFAULT_RX_BUF_COUNT, "rx");
 	n_hdlc_alloc_buf(&n_hdlc->tx_free_buf_list, DEFAULT_TX_BUF_COUNT, "tx");
+
+	/* Initialize the control block */
+	n_hdlc->magic  = HDLC_MAGIC;
 
 	return n_hdlc;
 
@@ -782,7 +808,7 @@ static struct n_hdlc_buf *n_hdlc_buf_get(struct n_hdlc_buf_list *buf_list)
 
 static struct tty_ldisc_ops n_hdlc_ldisc = {
 	.owner		= THIS_MODULE,
-	.num		= N_HDLC,
+	.magic		= TTY_LDISC_MAGIC,
 	.name		= "hdlc",
 	.open		= n_hdlc_tty_open,
 	.close		= n_hdlc_tty_close,
@@ -802,7 +828,7 @@ static int __init n_hdlc_init(void)
 	/* range check maxframe arg */
 	maxframe = clamp(maxframe, 4096, MAX_HDLC_FRAME_SIZE);
 
-	status = tty_register_ldisc(&n_hdlc_ldisc);
+	status = tty_register_ldisc(N_HDLC, &n_hdlc_ldisc);
 	if (!status)
 		pr_info("N_HDLC line discipline registered with maxframe=%d\n",
 				maxframe);
@@ -816,7 +842,14 @@ static int __init n_hdlc_init(void)
 
 static void __exit n_hdlc_exit(void)
 {
-	tty_unregister_ldisc(&n_hdlc_ldisc);
+	/* Release tty registration of line discipline */
+	int status = tty_unregister_ldisc(N_HDLC);
+
+	if (status)
+		pr_err("N_HDLC: can't unregister line discipline (err = %d)\n",
+				status);
+	else
+		pr_info("N_HDLC: line discipline unregistered\n");
 }
 
 module_init(n_hdlc_init);

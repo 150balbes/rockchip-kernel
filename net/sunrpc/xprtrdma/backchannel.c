@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2015-2020, Oracle and/or its affiliates.
+ * Copyright (c) 2015 Oracle.  All rights reserved.
  *
- * Support for reverse-direction RPCs on RPC/RDMA.
+ * Support for backward direction RPCs on RPC/RDMA.
  */
 
 #include <linux/sunrpc/xprt.h>
@@ -12,6 +12,10 @@
 
 #include "xprt_rdma.h"
 #include <trace/events/rpcrdma.h>
+
+#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
+# define RPCDBG_FACILITY	RPCDBG_TRANS
+#endif
 
 #undef RPCRDMA_BACKCHANNEL_DEBUG
 
@@ -78,7 +82,7 @@ static int rpcrdma_bc_marshal_reply(struct rpc_rqst *rqst)
 				      &rqst->rq_snd_buf, rpcrdma_noch_pullup))
 		return -EIO;
 
-	trace_xprtrdma_cb_reply(r_xprt, rqst);
+	trace_xprtrdma_cb_reply(rqst);
 	return 0;
 }
 
@@ -111,7 +115,7 @@ int xprt_rdma_bc_send_reply(struct rpc_rqst *rqst)
 	if (rc < 0)
 		goto failed_marshal;
 
-	if (frwr_send(r_xprt, req))
+	if (rpcrdma_post_sends(r_xprt, req))
 		goto drop_connection;
 	return 0;
 
@@ -151,11 +155,9 @@ void xprt_rdma_bc_destroy(struct rpc_xprt *xprt, unsigned int reqs)
 void xprt_rdma_bc_free_rqst(struct rpc_rqst *rqst)
 {
 	struct rpcrdma_req *req = rpcr_to_rdmar(rqst);
-	struct rpcrdma_rep *rep = req->rl_reply;
 	struct rpc_xprt *xprt = rqst->rq_xprt;
-	struct rpcrdma_xprt *r_xprt = rpcx_to_rdmax(xprt);
 
-	rpcrdma_rep_put(&r_xprt->rx_buf, rep);
+	rpcrdma_recv_buffer_put(req->rl_reply);
 	req->rl_reply = NULL;
 
 	spin_lock(&xprt->bc_pa_lock);
@@ -189,7 +191,7 @@ create_req:
 		return NULL;
 
 	size = min_t(size_t, r_xprt->rx_ep->re_inline_recv, PAGE_SIZE);
-	req = rpcrdma_req_create(r_xprt, size);
+	req = rpcrdma_req_create(r_xprt, size, GFP_KERNEL);
 	if (!req)
 		return NULL;
 	if (rpcrdma_req_setup(r_xprt, req)) {
@@ -206,7 +208,7 @@ create_req:
 }
 
 /**
- * rpcrdma_bc_receive_call - Handle a reverse-direction Call
+ * rpcrdma_bc_receive_call - Handle a backward direction call
  * @r_xprt: transport receiving the call
  * @rep: receive buffer containing the call
  *
@@ -258,7 +260,7 @@ void rpcrdma_bc_receive_call(struct rpcrdma_xprt *r_xprt,
 	 */
 	req = rpcr_to_rdmar(rqst);
 	req->rl_reply = rep;
-	trace_xprtrdma_cb_call(r_xprt, rqst);
+	trace_xprtrdma_cb_call(rqst);
 
 	/* Queue rqst for ULP's callback service */
 	bc_serv = xprt->bc_serv;

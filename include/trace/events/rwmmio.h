@@ -1,108 +1,85 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021, The Linux Foundation. All rights reserved.
  */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM rwmmio
 
-#if !defined(_TRACE_RWMMIO_H) || defined(TRACE_HEADER_MULTI_READ)
-#define _TRACE_RWMMIO_H
+#if !defined(_TRACE_MMIO_H) || defined(TRACE_HEADER_MULTI_READ)
+#define _TRACE_MMIO_H
 
 #include <linux/tracepoint.h>
 
-DECLARE_EVENT_CLASS(rwmmio_rw_template,
+TRACE_EVENT(rwmmio_write,
 
-	TP_PROTO(unsigned long caller, unsigned long caller0, u64 val, u8 width,
-		 volatile void __iomem *addr),
+	TP_PROTO(unsigned long fn, u64 val, u8 width, volatile void __iomem *addr),
 
-	TP_ARGS(caller, caller0, val, width, addr),
+	TP_ARGS(fn, val, width, addr),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, caller)
-		__field(unsigned long, caller0)
-		__field(unsigned long, addr)
+		__field(u64, fn)
 		__field(u64, val)
 		__field(u8, width)
+		__field(u64, addr)
 	),
 
 	TP_fast_assign(
-		__entry->caller = caller;
-		__entry->caller0 = caller0;
+		__entry->fn = fn;
 		__entry->val = val;
-		__entry->addr = (unsigned long)addr;
 		__entry->width = width;
+		__entry->addr = (u64)addr;
 	),
 
-	TP_printk("%pS -> %pS width=%d val=%#llx addr=%#lx",
-		(void *)__entry->caller0, (void *)__entry->caller, __entry->width,
-		__entry->val, __entry->addr)
-);
-
-DEFINE_EVENT(rwmmio_rw_template, rwmmio_write,
-	TP_PROTO(unsigned long caller, unsigned long caller0, u64 val, u8 width,
-		 volatile void __iomem *addr),
-	TP_ARGS(caller, caller0, val, width, addr)
-);
-
-DEFINE_EVENT(rwmmio_rw_template, rwmmio_post_write,
-	TP_PROTO(unsigned long caller, unsigned long caller0, u64 val, u8 width,
-		 volatile void __iomem *addr),
-	TP_ARGS(caller, caller0, val, width, addr)
+	TP_printk("%llxS write addr=%llx of width=%x val=0x%llx\n",
+		__entry->fn, __entry->addr, __entry->width, __entry->val)
 );
 
 TRACE_EVENT(rwmmio_read,
 
-	TP_PROTO(unsigned long caller, unsigned long caller0, u8 width,
-		 const volatile void __iomem *addr),
+	TP_PROTO(unsigned long fn, u8 width, const volatile void __iomem *addr),
 
-	TP_ARGS(caller, caller0, width, addr),
+	TP_ARGS(fn, width, addr),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, caller)
-		__field(unsigned long, caller0)
-		__field(unsigned long, addr)
+		__field(u64, fn)
 		__field(u8, width)
+		__field(u64, addr)
 	),
 
 	TP_fast_assign(
-		__entry->caller = caller;
-		__entry->caller0 = caller0;
-		__entry->addr = (unsigned long)addr;
+		__entry->fn = fn;
 		__entry->width = width;
+		__entry->addr = (u64)addr;
 	),
 
-	TP_printk("%pS -> %pS width=%d addr=%#lx",
-		 (void *)__entry->caller0, (void *)__entry->caller, __entry->width, __entry->addr)
+	TP_printk("%llxS read addr=%llx of width=%x\n",
+		 __entry->fn, __entry->addr, __entry->width)
 );
 
 TRACE_EVENT(rwmmio_post_read,
 
-	TP_PROTO(unsigned long caller, unsigned long caller0, u64 val, u8 width,
-		 const volatile void __iomem *addr),
+	TP_PROTO(unsigned long fn, u64 val, u8 width, const volatile void __iomem *addr),
 
-	TP_ARGS(caller, caller0, val, width, addr),
+	TP_ARGS(fn, val, width, addr),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, caller)
-		__field(unsigned long, caller0)
-		__field(unsigned long, addr)
+		__field(u64, fn)
 		__field(u64, val)
 		__field(u8, width)
+		__field(u64, addr)
 	),
 
 	TP_fast_assign(
-		__entry->caller = caller;
-		__entry->caller0 = caller0;
+		__entry->fn = fn;
 		__entry->val = val;
-		__entry->addr = (unsigned long)addr;
 		__entry->width = width;
+		__entry->addr = (u64)addr;
 	),
 
-	TP_printk("%pS -> %pS width=%d val=%#llx addr=%#lx",
-		 (void *)__entry->caller0, (void *)__entry->caller, __entry->width,
-		 __entry->val, __entry->addr)
+	TP_printk("%llxS read addr=%llx of width=%x val=0x%llx\n",
+		 __entry->fn, __entry->addr, __entry->width, __entry->val)
 );
 
-#endif /* _TRACE_RWMMIO_H */
+#endif /* _TRACE_MMIO_H */
 
 #include <trace/define_trace.h>

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 /* Copyright (c) 2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2018-2022 Linaro Ltd.
+ * Copyright (C) 2018-2020 Linaro Ltd.
  */
 #include <linux/stddef.h>
 #include <linux/soc/qcom/qmi.h>
@@ -9,7 +9,7 @@
 #include "ipa_qmi_msg.h"
 
 /* QMI message structure definition for struct ipa_indication_register_req */
-const struct qmi_elem_info ipa_indication_register_req_ei[] = {
+struct qmi_elem_info ipa_indication_register_req_ei[] = {
 	{
 		.data_type	= QMI_OPT_FLAG,
 		.elem_len	= 1,
@@ -56,7 +56,7 @@ const struct qmi_elem_info ipa_indication_register_req_ei[] = {
 		.elem_size	=
 			sizeof_field(struct ipa_indication_register_req,
 				     ipa_mhi_ready_ind_valid),
-		.tlv_type	= 0x12,
+		.tlv_type	= 0x11,
 		.offset		= offsetof(struct ipa_indication_register_req,
 					   ipa_mhi_ready_ind_valid),
 	},
@@ -66,49 +66,9 @@ const struct qmi_elem_info ipa_indication_register_req_ei[] = {
 		.elem_size	=
 			sizeof_field(struct ipa_indication_register_req,
 				     ipa_mhi_ready_ind),
-		.tlv_type	= 0x12,
+		.tlv_type	= 0x11,
 		.offset		= offsetof(struct ipa_indication_register_req,
 					   ipa_mhi_ready_ind),
-	},
-	{
-		.data_type	= QMI_OPT_FLAG,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_indication_register_req,
-				     endpoint_desc_ind_valid),
-		.tlv_type	= 0x13,
-		.offset		= offsetof(struct ipa_indication_register_req,
-					   endpoint_desc_ind_valid),
-	},
-	{
-		.data_type	= QMI_UNSIGNED_1_BYTE,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_indication_register_req,
-				     endpoint_desc_ind),
-		.tlv_type	= 0x13,
-		.offset		= offsetof(struct ipa_indication_register_req,
-					   endpoint_desc_ind),
-	},
-	{
-		.data_type	= QMI_OPT_FLAG,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_indication_register_req,
-				     bw_change_ind_valid),
-		.tlv_type	= 0x14,
-		.offset		= offsetof(struct ipa_indication_register_req,
-					   bw_change_ind_valid),
-	},
-	{
-		.data_type	= QMI_UNSIGNED_1_BYTE,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_indication_register_req,
-				     bw_change_ind),
-		.tlv_type	= 0x14,
-		.offset		= offsetof(struct ipa_indication_register_req,
-					   bw_change_ind),
 	},
 	{
 		.data_type	= QMI_EOTI,
@@ -116,7 +76,7 @@ const struct qmi_elem_info ipa_indication_register_req_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_indication_register_rsp */
-const struct qmi_elem_info ipa_indication_register_rsp_ei[] = {
+struct qmi_elem_info ipa_indication_register_rsp_ei[] = {
 	{
 		.data_type	= QMI_STRUCT,
 		.elem_len	= 1,
@@ -134,7 +94,7 @@ const struct qmi_elem_info ipa_indication_register_rsp_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_driver_init_complete_req */
-const struct qmi_elem_info ipa_driver_init_complete_req_ei[] = {
+struct qmi_elem_info ipa_driver_init_complete_req_ei[] = {
 	{
 		.data_type	= QMI_UNSIGNED_1_BYTE,
 		.elem_len	= 1,
@@ -151,7 +111,7 @@ const struct qmi_elem_info ipa_driver_init_complete_req_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_driver_init_complete_rsp */
-const struct qmi_elem_info ipa_driver_init_complete_rsp_ei[] = {
+struct qmi_elem_info ipa_driver_init_complete_rsp_ei[] = {
 	{
 		.data_type	= QMI_STRUCT,
 		.elem_len	= 1,
@@ -169,7 +129,7 @@ const struct qmi_elem_info ipa_driver_init_complete_rsp_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_init_complete_ind */
-const struct qmi_elem_info ipa_init_complete_ind_ei[] = {
+struct qmi_elem_info ipa_init_complete_ind_ei[] = {
 	{
 		.data_type	= QMI_STRUCT,
 		.elem_len	= 1,
@@ -187,7 +147,7 @@ const struct qmi_elem_info ipa_init_complete_ind_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_mem_bounds */
-const struct qmi_elem_info ipa_mem_bounds_ei[] = {
+struct qmi_elem_info ipa_mem_bounds_ei[] = {
 	{
 		.data_type	= QMI_UNSIGNED_4_BYTE,
 		.elem_len	= 1,
@@ -208,7 +168,7 @@ const struct qmi_elem_info ipa_mem_bounds_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_mem_array */
-const struct qmi_elem_info ipa_mem_array_ei[] = {
+struct qmi_elem_info ipa_mem_array_ei[] = {
 	{
 		.data_type	= QMI_UNSIGNED_4_BYTE,
 		.elem_len	= 1,
@@ -229,7 +189,7 @@ const struct qmi_elem_info ipa_mem_array_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_mem_range */
-const struct qmi_elem_info ipa_mem_range_ei[] = {
+struct qmi_elem_info ipa_mem_range_ei[] = {
 	{
 		.data_type	= QMI_UNSIGNED_4_BYTE,
 		.elem_len	= 1,
@@ -250,7 +210,7 @@ const struct qmi_elem_info ipa_mem_range_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_init_modem_driver_req */
-const struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
+struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
 	{
 		.data_type	= QMI_OPT_FLAG,
 		.elem_len	= 1,
@@ -570,7 +530,7 @@ const struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
 					   hw_stats_quota_base_addr_valid),
 	},
 	{
-		.data_type	= QMI_UNSIGNED_4_BYTE,
+		.data_type	= QMI_SIGNED_4_BYTE_ENUM,
 		.elem_len	= 1,
 		.elem_size	=
 			sizeof_field(struct ipa_init_modem_driver_req,
@@ -585,17 +545,17 @@ const struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
 		.elem_size	=
 			sizeof_field(struct ipa_init_modem_driver_req,
 				     hw_stats_quota_size_valid),
-		.tlv_type	= 0x20,
+		.tlv_type	= 0x1f,
 		.offset		= offsetof(struct ipa_init_modem_driver_req,
 					   hw_stats_quota_size_valid),
 	},
 	{
-		.data_type	= QMI_UNSIGNED_4_BYTE,
+		.data_type	= QMI_SIGNED_4_BYTE_ENUM,
 		.elem_len	= 1,
 		.elem_size	=
 			sizeof_field(struct ipa_init_modem_driver_req,
 				     hw_stats_quota_size),
-		.tlv_type	= 0x20,
+		.tlv_type	= 0x1f,
 		.offset		= offsetof(struct ipa_init_modem_driver_req,
 					   hw_stats_quota_size),
 	},
@@ -604,38 +564,18 @@ const struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
 		.elem_len	= 1,
 		.elem_size	=
 			sizeof_field(struct ipa_init_modem_driver_req,
-				     hw_stats_drop_base_addr_valid),
-		.tlv_type	= 0x21,
-		.offset		= offsetof(struct ipa_init_modem_driver_req,
-					   hw_stats_drop_base_addr_valid),
-	},
-	{
-		.data_type	= QMI_UNSIGNED_4_BYTE,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_init_modem_driver_req,
-				     hw_stats_drop_base_addr),
-		.tlv_type	= 0x21,
-		.offset		= offsetof(struct ipa_init_modem_driver_req,
-					   hw_stats_drop_base_addr),
-	},
-	{
-		.data_type	= QMI_OPT_FLAG,
-		.elem_len	= 1,
-		.elem_size	=
-			sizeof_field(struct ipa_init_modem_driver_req,
 				     hw_stats_drop_size_valid),
-		.tlv_type	= 0x22,
+		.tlv_type	= 0x1f,
 		.offset		= offsetof(struct ipa_init_modem_driver_req,
 					   hw_stats_drop_size_valid),
 	},
 	{
-		.data_type	= QMI_UNSIGNED_4_BYTE,
+		.data_type	= QMI_SIGNED_4_BYTE_ENUM,
 		.elem_len	= 1,
 		.elem_size	=
 			sizeof_field(struct ipa_init_modem_driver_req,
 				     hw_stats_drop_size),
-		.tlv_type	= 0x22,
+		.tlv_type	= 0x1f,
 		.offset		= offsetof(struct ipa_init_modem_driver_req,
 					   hw_stats_drop_size),
 	},
@@ -645,7 +585,7 @@ const struct qmi_elem_info ipa_init_modem_driver_req_ei[] = {
 };
 
 /* QMI message structure definition for struct ipa_init_modem_driver_rsp */
-const struct qmi_elem_info ipa_init_modem_driver_rsp_ei[] = {
+struct qmi_elem_info ipa_init_modem_driver_rsp_ei[] = {
 	{
 		.data_type	= QMI_STRUCT,
 		.elem_len	= 1,

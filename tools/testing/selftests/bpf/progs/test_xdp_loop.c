@@ -16,6 +16,8 @@
 #include <bpf/bpf_endian.h>
 #include "test_iptunnel_common.h"
 
+int _version SEC("version") = 1;
+
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 256);
@@ -204,7 +206,7 @@ static __always_inline int handle_ipv6(struct xdp_md *xdp)
 	return XDP_TX;
 }
 
-SEC("xdp")
+SEC("xdp_tx_iptunnel")
 int _xdp_tx_iptunnel(struct xdp_md *xdp)
 {
 	void *data_end = (void *)(long)xdp->data_end;

@@ -163,8 +163,8 @@ static struct nlm_host *nlm_alloc_host(struct nlm_lookup_host_info *ni,
 	host->h_nsmhandle  = nsm;
 	host->h_addrbuf    = nsm->sm_addrbuf;
 	host->net	   = ni->net;
-	host->h_cred	   = get_cred(ni->cred);
-	strscpy(host->nodename, utsname()->nodename, sizeof(host->nodename));
+	host->h_cred	   = get_cred(ni->cred),
+	strlcpy(host->nodename, utsname()->nodename, sizeof(host->nodename));
 
 out:
 	return host;
@@ -629,7 +629,6 @@ nlm_shutdown_hosts_net(struct net *net)
 			rpc_shutdown_client(host->h_rpcclnt);
 			host->h_rpcclnt = NULL;
 		}
-		nlmsvc_free_host_resources(host);
 	}
 
 	/* Then, perform a garbage collection pass */

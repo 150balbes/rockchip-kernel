@@ -11,11 +11,10 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
 #include <drm/exynos_drm.h>
 
@@ -363,17 +362,15 @@ static int scaler_commit(struct exynos_drm_ipp *ipp,
 	struct drm_exynos_ipp_task_rect *src_pos = &task->src.rect;
 	struct drm_exynos_ipp_task_rect *dst_pos = &task->dst.rect;
 	const struct scaler_format *src_fmt, *dst_fmt;
-	int ret = 0;
 
 	src_fmt = scaler_get_format(task->src.buf.fourcc);
 	dst_fmt = scaler_get_format(task->dst.buf.fourcc);
 
-	ret = pm_runtime_resume_and_get(scaler->dev);
-	if (ret < 0)
-		return ret;
-
-	if (scaler_reset(scaler))
+	pm_runtime_get_sync(scaler->dev);
+	if (scaler_reset(scaler)) {
+		pm_runtime_put(scaler->dev);
 		return -EIO;
+	}
 
 	scaler->task = task;
 
@@ -486,6 +483,7 @@ static const struct component_ops scaler_component_ops = {
 static int scaler_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource	*regs_res;
 	struct scaler_context *scaler;
 	int irq;
 	int ret, i;
@@ -498,7 +496,8 @@ static int scaler_probe(struct platform_device *pdev)
 		(struct scaler_data *)of_device_get_match_data(dev);
 
 	scaler->dev = dev;
-	scaler->regs = devm_platform_ioremap_resource(pdev, 0);
+	regs_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	scaler->regs = devm_ioremap_resource(dev, regs_res);
 	if (IS_ERR(scaler->regs))
 		return PTR_ERR(scaler->regs);
 
@@ -550,6 +549,8 @@ static int scaler_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+
 static int clk_disable_unprepare_wrapper(struct clk *clk)
 {
 	clk_disable_unprepare(clk);
@@ -582,9 +583,13 @@ static int scaler_runtime_resume(struct device *dev)
 
 	return  scaler_clk_ctrl(scaler, true);
 }
+#endif
 
-static DEFINE_RUNTIME_DEV_PM_OPS(scaler_pm_ops, scaler_runtime_suspend,
-				 scaler_runtime_resume, NULL);
+static const struct dev_pm_ops scaler_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+	SET_RUNTIME_PM_OPS(scaler_runtime_suspend, scaler_runtime_resume, NULL)
+};
 
 static const struct drm_exynos_ipp_limit scaler_5420_two_pixel_hv_limits[] = {
 	{ IPP_SIZE_LIMIT(BUFFER, .h = { 16, SZ_8K }, .v = { 16, SZ_8K }) },
@@ -725,7 +730,7 @@ struct platform_driver scaler_driver = {
 	.driver		= {
 		.name	= "exynos-scaler",
 		.owner	= THIS_MODULE,
-		.pm	= pm_ptr(&scaler_pm_ops),
+		.pm	= &scaler_pm_ops,
 		.of_match_table = exynos_scaler_match,
 	},
 };

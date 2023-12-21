@@ -5,7 +5,7 @@
  *  Copyright (C) 2013-2017 Matthias Schwarzott <zzam@gentoo.org>
  *
  *  References:
- *  https://www.silabs.com/Support%20Documents/TechnicalDocs/Si2165-short.pdf
+ *  http://www.silabs.com/Support%20Documents/TechnicalDocs/Si2165-short.pdf
  */
 
 #include <linux/delay.h>
@@ -1144,7 +1144,8 @@ static const struct dvb_frontend_ops si2165_ops = {
 	.read_ber          = si2165_read_ber,
 };
 
-static int si2165_probe(struct i2c_client *client)
+static int si2165_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct si2165_state *state = NULL;
 	struct si2165_platform_data *pdata = client->dev.platform_data;
@@ -1273,13 +1274,14 @@ error:
 	return ret;
 }
 
-static void si2165_remove(struct i2c_client *client)
+static int si2165_remove(struct i2c_client *client)
 {
 	struct si2165_state *state = i2c_get_clientdata(client);
 
 	dev_dbg(&client->dev, "\n");
 
 	kfree(state);
+	return 0;
 }
 
 static const struct i2c_device_id si2165_id_table[] = {

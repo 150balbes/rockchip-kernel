@@ -12,7 +12,8 @@
 
 #include "pcm1789.h"
 
-static int pcm1789_i2c_probe(struct i2c_client *client)
+static int pcm1789_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct regmap *regmap;
 	int ret;
@@ -27,18 +28,16 @@ static int pcm1789_i2c_probe(struct i2c_client *client)
 	return pcm1789_common_init(&client->dev, regmap);
 }
 
-static void pcm1789_i2c_remove(struct i2c_client *client)
+static int pcm1789_i2c_remove(struct i2c_client *client)
 {
-	pcm1789_common_exit(&client->dev);
+	return pcm1789_common_exit(&client->dev);
 }
 
-#ifdef CONFIG_OF
 static const struct of_device_id pcm1789_of_match[] = {
 	{ .compatible = "ti,pcm1789", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, pcm1789_of_match);
-#endif
 
 static const struct i2c_device_id pcm1789_i2c_ids[] = {
 	{ "pcm1789", 0 },

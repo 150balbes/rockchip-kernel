@@ -4,6 +4,7 @@
 
 #include <linux/compiler.h>
 #include <linux/rbtree.h>
+#include <pthread.h>
 #include <api/fd/array.h>
 #include <stdio.h>
 
@@ -18,7 +19,7 @@ struct evlist;
 struct target;
 
 struct bpf_prog_info_node {
-	struct perf_bpil		*info_linear;
+	struct bpf_prog_info_linear	*info_linear;
 	struct rb_node			rb_node;
 };
 

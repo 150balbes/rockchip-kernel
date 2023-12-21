@@ -10,10 +10,9 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/cpu.h>
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
 #include <linux/slab.h>
@@ -57,9 +56,12 @@ static int sun50i_cpufreq_get_efuse(u32 *versions)
 
 	speedbin_nvmem = of_nvmem_cell_get(np, NULL);
 	of_node_put(np);
-	if (IS_ERR(speedbin_nvmem))
-		return dev_err_probe(cpu_dev, PTR_ERR(speedbin_nvmem),
-				     "Could not get nvmem cell\n");
+	if (IS_ERR(speedbin_nvmem)) {
+		if (PTR_ERR(speedbin_nvmem) != -EPROBE_DEFER)
+			pr_err("Could not get nvmem cell: %ld\n",
+			       PTR_ERR(speedbin_nvmem));
+		return PTR_ERR(speedbin_nvmem);
+	}
 
 	speedbin = nvmem_cell_read(speedbin_nvmem, &len);
 	nvmem_cell_put(speedbin_nvmem);
@@ -84,20 +86,20 @@ static int sun50i_cpufreq_get_efuse(u32 *versions)
 
 static int sun50i_cpufreq_nvmem_probe(struct platform_device *pdev)
 {
-	int *opp_tokens;
+	struct opp_table **opp_tables;
 	char name[MAX_NAME_LEN];
 	unsigned int cpu;
 	u32 speed = 0;
 	int ret;
 
-	opp_tokens = kcalloc(num_possible_cpus(), sizeof(*opp_tokens),
+	opp_tables = kcalloc(num_possible_cpus(), sizeof(*opp_tables),
 			     GFP_KERNEL);
-	if (!opp_tokens)
+	if (!opp_tables)
 		return -ENOMEM;
 
 	ret = sun50i_cpufreq_get_efuse(&speed);
 	if (ret) {
-		kfree(opp_tokens);
+		kfree(opp_tables);
 		return ret;
 	}
 
@@ -111,9 +113,9 @@ static int sun50i_cpufreq_nvmem_probe(struct platform_device *pdev)
 			goto free_opp;
 		}
 
-		opp_tokens[cpu] = dev_pm_opp_set_prop_name(cpu_dev, name);
-		if (opp_tokens[cpu] < 0) {
-			ret = opp_tokens[cpu];
+		opp_tables[cpu] = dev_pm_opp_set_prop_name(cpu_dev, name);
+		if (IS_ERR(opp_tables[cpu])) {
+			ret = PTR_ERR(opp_tables[cpu]);
 			pr_err("Failed to set prop name\n");
 			goto free_opp;
 		}
@@ -122,7 +124,7 @@ static int sun50i_cpufreq_nvmem_probe(struct platform_device *pdev)
 	cpufreq_dt_pdev = platform_device_register_simple("cpufreq-dt", -1,
 							  NULL, 0);
 	if (!IS_ERR(cpufreq_dt_pdev)) {
-		platform_set_drvdata(pdev, opp_tokens);
+		platform_set_drvdata(pdev, opp_tables);
 		return 0;
 	}
 
@@ -130,24 +132,27 @@ static int sun50i_cpufreq_nvmem_probe(struct platform_device *pdev)
 	pr_err("Failed to register platform device\n");
 
 free_opp:
-	for_each_possible_cpu(cpu)
-		dev_pm_opp_put_prop_name(opp_tokens[cpu]);
-	kfree(opp_tokens);
+	for_each_possible_cpu(cpu) {
+		if (IS_ERR_OR_NULL(opp_tables[cpu]))
+			break;
+		dev_pm_opp_put_prop_name(opp_tables[cpu]);
+	}
+	kfree(opp_tables);
 
 	return ret;
 }
 
 static int sun50i_cpufreq_nvmem_remove(struct platform_device *pdev)
 {
-	int *opp_tokens = platform_get_drvdata(pdev);
+	struct opp_table **opp_tables = platform_get_drvdata(pdev);
 	unsigned int cpu;
 
 	platform_device_unregister(cpufreq_dt_pdev);
 
 	for_each_possible_cpu(cpu)
-		dev_pm_opp_put_prop_name(opp_tokens[cpu]);
+		dev_pm_opp_put_prop_name(opp_tables[cpu]);
 
-	kfree(opp_tokens);
+	kfree(opp_tables);
 
 	return 0;
 }

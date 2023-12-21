@@ -11,22 +11,6 @@
 #include <linux/crush/hash.h>
 #include <linux/crush/mapper.h>
 
-static __printf(2, 3)
-void osdmap_info(const struct ceph_osdmap *map, const char *fmt, ...)
-{
-	struct va_format vaf;
-	va_list args;
-
-	va_start(args, fmt);
-	vaf.fmt = fmt;
-	vaf.va = &args;
-
-	printk(KERN_INFO "%s (%pU e%u): %pV", KBUILD_MODNAME, &map->fsid,
-	       map->epoch, &vaf);
-
-	va_end(args);
-}
-
 char *ceph_osdmap_state_str(char *str, int len, u32 state)
 {
 	if (!len)
@@ -587,10 +571,10 @@ static struct crush_map *crush_decode(void *pbyval, void *end)
 			goto bad;
 #endif
 		r = kmalloc(struct_size(r, steps, yes), GFP_NOFS);
+		c->rules[i] = r;
 		if (r == NULL)
 			goto badmem;
 		dout(" rule %d is at %p\n", i, r);
-		c->rules[i] = r;
 		r->len = yes;
 		ceph_decode_copy_safe(p, end, &r->mask, 4, bad); /* 4 u8's */
 		ceph_decode_need(p, end, r->len*3*sizeof(u32), bad);
@@ -996,7 +980,7 @@ static struct crush_work *alloc_workspace(const struct crush_map *c)
 	work_size = crush_work_size(c, CEPH_PG_MAX_SIZE);
 	dout("%s work_size %zu bytes\n", __func__, work_size);
 
-	work = kvmalloc(work_size, GFP_NOIO);
+	work = ceph_kvmalloc(work_size, GFP_NOIO);
 	if (!work)
 		return NULL;
 
@@ -1085,7 +1069,7 @@ again:
 
 		/*
 		 * Do not return the error but go back to waiting.  We
-		 * have the initial workspace and the CRUSH computation
+		 * have the inital workspace and the CRUSH computation
 		 * time is bounded so we will get it eventually.
 		 */
 		WARN_ON(atomic_read(&wsm->total_ws) < 1);
@@ -1206,9 +1190,9 @@ static int osdmap_set_max_osd(struct ceph_osdmap *map, u32 max)
 	if (max == map->max_osd)
 		return 0;
 
-	state = kvmalloc(array_size(max, sizeof(*state)), GFP_NOFS);
-	weight = kvmalloc(array_size(max, sizeof(*weight)), GFP_NOFS);
-	addr = kvmalloc(array_size(max, sizeof(*addr)), GFP_NOFS);
+	state = ceph_kvmalloc(array_size(max, sizeof(*state)), GFP_NOFS);
+	weight = ceph_kvmalloc(array_size(max, sizeof(*weight)), GFP_NOFS);
+	addr = ceph_kvmalloc(array_size(max, sizeof(*addr)), GFP_NOFS);
 	if (!state || !weight || !addr) {
 		kvfree(state);
 		kvfree(weight);
@@ -1238,7 +1222,7 @@ static int osdmap_set_max_osd(struct ceph_osdmap *map, u32 max)
 	if (map->osd_primary_affinity) {
 		u32 *affinity;
 
-		affinity = kvmalloc(array_size(max, sizeof(*affinity)),
+		affinity = ceph_kvmalloc(array_size(max, sizeof(*affinity)),
 					 GFP_NOFS);
 		if (!affinity)
 			return -ENOMEM;
@@ -1325,7 +1309,7 @@ static int get_osdmap_client_data_v(void **p, void *end,
 			return -EINVAL;
 		}
 
-		/* old osdmap encoding */
+		/* old osdmap enconding */
 		struct_v = 0;
 	}
 
@@ -1519,7 +1503,7 @@ static int set_primary_affinity(struct ceph_osdmap *map, int osd, u32 aff)
 	if (!map->osd_primary_affinity) {
 		int i;
 
-		map->osd_primary_affinity = kvmalloc(
+		map->osd_primary_affinity = ceph_kvmalloc(
 		    array_size(map->max_osd, sizeof(*map->osd_primary_affinity)),
 		    GFP_NOFS);
 		if (!map->osd_primary_affinity)
@@ -1582,7 +1566,7 @@ static int decode_new_primary_affinity(void **p, void *end,
 		if (ret)
 			return ret;
 
-		osdmap_info(map, "osd%d primary-affinity 0x%x\n", osd, aff);
+		pr_info("osd%d primary-affinity 0x%x\n", osd, aff);
 	}
 
 	return 0;
@@ -1663,8 +1647,7 @@ static int decode_old_pg_upmap_items(void **p, void *end,
 /*
  * decode a full map.
  */
-static int osdmap_decode(void **p, void *end, bool msgr2,
-			 struct ceph_osdmap *map)
+static int osdmap_decode(void **p, void *end, struct ceph_osdmap *map)
 {
 	u8 struct_v;
 	u32 epoch = 0;
@@ -1735,16 +1718,9 @@ static int osdmap_decode(void **p, void *end, bool msgr2,
 		goto e_inval;
 
 	for (i = 0; i < map->max_osd; i++) {
-		struct ceph_entity_addr *addr = &map->osd_addr[i];
-
-		if (struct_v >= 8)
-			err = ceph_decode_entity_addrvec(p, end, msgr2, addr);
-		else
-			err = ceph_decode_entity_addr(p, end, addr);
+		err = ceph_decode_entity_addr(p, end, &map->osd_addr[i]);
 		if (err)
 			goto bad;
-
-		dout("%s osd%d addr %s\n", __func__, i, ceph_pr_addr(addr));
 	}
 
 	/* pg_temp */
@@ -1814,7 +1790,7 @@ bad:
 /*
  * Allocate and decode a full map.
  */
-struct ceph_osdmap *ceph_osdmap_decode(void **p, void *end, bool msgr2)
+struct ceph_osdmap *ceph_osdmap_decode(void **p, void *end)
 {
 	struct ceph_osdmap *map;
 	int ret;
@@ -1823,7 +1799,7 @@ struct ceph_osdmap *ceph_osdmap_decode(void **p, void *end, bool msgr2)
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 
-	ret = osdmap_decode(p, end, msgr2, map);
+	ret = osdmap_decode(p, end, map);
 	if (ret) {
 		ceph_osdmap_destroy(map);
 		return ERR_PTR(ret);
@@ -1841,13 +1817,12 @@ struct ceph_osdmap *ceph_osdmap_decode(void **p, void *end, bool msgr2)
  *     new_state: { osd=6, xorstate=EXISTS } # clear osd_state
  */
 static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
-				      bool msgr2, struct ceph_osdmap *map)
+				      struct ceph_osdmap *map)
 {
 	void *new_up_client;
 	void *new_state;
 	void *new_weight_end;
 	u32 len;
-	int ret;
 	int i;
 
 	new_up_client = *p;
@@ -1856,12 +1831,8 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 		struct ceph_entity_addr addr;
 
 		ceph_decode_skip_32(p, end, e_inval);
-		if (struct_v >= 7)
-			ret = ceph_decode_entity_addrvec(p, end, msgr2, &addr);
-		else
-			ret = ceph_decode_entity_addr(p, end, &addr);
-		if (ret)
-			return ret;
+		if (ceph_decode_entity_addr(p, end, &addr))
+			goto e_inval;
 	}
 
 	new_state = *p;
@@ -1880,9 +1851,9 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 		osd = ceph_decode_32(p);
 		w = ceph_decode_32(p);
 		BUG_ON(osd >= map->max_osd);
-		osdmap_info(map, "osd%d weight 0x%x %s\n", osd, w,
-			    w == CEPH_OSD_IN ? "(in)" :
-			    (w == CEPH_OSD_OUT ? "(out)" : ""));
+		pr_info("osd%d weight 0x%x %s\n", osd, w,
+		     w == CEPH_OSD_IN ? "(in)" :
+		     (w == CEPH_OSD_OUT ? "(out)" : ""));
 		map->osd_weight[osd] = w;
 
 		/*
@@ -1903,6 +1874,7 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 	while (len--) {
 		s32 osd;
 		u32 xorstate;
+		int ret;
 
 		osd = ceph_decode_32(p);
 		if (struct_v >= 5)
@@ -1914,10 +1886,10 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 		BUG_ON(osd >= map->max_osd);
 		if ((map->osd_state[osd] & CEPH_OSD_UP) &&
 		    (xorstate & CEPH_OSD_UP))
-			osdmap_info(map, "osd%d down\n", osd);
+			pr_info("osd%d down\n", osd);
 		if ((map->osd_state[osd] & CEPH_OSD_EXISTS) &&
 		    (xorstate & CEPH_OSD_EXISTS)) {
-			osdmap_info(map, "osd%d does not exist\n", osd);
+			pr_info("osd%d does not exist\n", osd);
 			ret = set_primary_affinity(map, osd,
 						   CEPH_OSD_DEFAULT_PRIMARY_AFFINITY);
 			if (ret)
@@ -1938,16 +1910,9 @@ static int decode_new_up_state_weight(void **p, void *end, u8 struct_v,
 
 		osd = ceph_decode_32(p);
 		BUG_ON(osd >= map->max_osd);
-		if (struct_v >= 7)
-			ret = ceph_decode_entity_addrvec(p, end, msgr2, &addr);
-		else
-			ret = ceph_decode_entity_addr(p, end, &addr);
-		if (ret)
-			return ret;
-
-		dout("%s osd%d addr %s\n", __func__, osd, ceph_pr_addr(&addr));
-
-		osdmap_info(map, "osd%d up\n", osd);
+		if (ceph_decode_entity_addr(p, end, &addr))
+			goto e_inval;
+		pr_info("osd%d up\n", osd);
 		map->osd_state[osd] |= CEPH_OSD_EXISTS | CEPH_OSD_UP;
 		map->osd_addr[osd] = addr;
 	}
@@ -1962,7 +1927,7 @@ e_inval:
 /*
  * decode and apply an incremental map update.
  */
-struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
+struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end,
 					     struct ceph_osdmap *map)
 {
 	struct ceph_fsid fsid;
@@ -1997,7 +1962,7 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
 	if (len > 0) {
 		dout("apply_incremental full map len %d, %p to %p\n",
 		     len, *p, end);
-		return ceph_osdmap_decode(p, min(*p+len, end), msgr2);
+		return ceph_osdmap_decode(p, min(*p+len, end));
 	}
 
 	/* new crush? */
@@ -2049,7 +2014,7 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end, bool msgr2,
 	}
 
 	/* new_up_client, new_state, new_weight */
-	err = decode_new_up_state_weight(p, end, struct_v, msgr2, map);
+	err = decode_new_up_state_weight(p, end, struct_v, map);
 	if (err)
 		goto bad;
 
@@ -3026,7 +2991,7 @@ static bool is_valid_crush_name(const char *name)
  * parent, returns 0.
  *
  * Does a linear search, as there are no parent pointers of any
- * kind.  Note that the result is ambiguous for items that occur
+ * kind.  Note that the result is ambigous for items that occur
  * multiple times in the map.
  */
 static int get_immediate_parent(struct crush_map *c, int id,

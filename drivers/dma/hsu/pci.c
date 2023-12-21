@@ -10,7 +10,6 @@
 
 #include <linux/bitops.h>
 #include <linux/device.h>
-#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 
@@ -27,32 +26,29 @@
 static irqreturn_t hsu_pci_irq(int irq, void *dev)
 {
 	struct hsu_dma_chip *chip = dev;
-	unsigned long dmaisr;
-	unsigned short i;
+	u32 dmaisr;
 	u32 status;
+	unsigned short i;
 	int ret = 0;
 	int err;
 
 	dmaisr = readl(chip->regs + HSU_PCI_DMAISR);
-	for_each_set_bit(i, &dmaisr, chip->hsu->nr_channels) {
-		err = hsu_dma_get_status(chip, i, &status);
-		if (err > 0)
-			ret |= 1;
-		else if (err == 0)
-			ret |= hsu_dma_do_irq(chip, i, status);
+	for (i = 0; i < chip->hsu->nr_channels; i++) {
+		if (dmaisr & 0x1) {
+			err = hsu_dma_get_status(chip, i, &status);
+			if (err > 0)
+				ret |= 1;
+			else if (err == 0)
+				ret |= hsu_dma_do_irq(chip, i, status);
+		}
+		dmaisr >>= 1;
 	}
 
 	return IRQ_RETVAL(ret);
 }
 
-static void hsu_pci_dma_remove(void *chip)
-{
-	hsu_dma_remove(chip);
-}
-
 static int hsu_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	struct device *dev = &pdev->dev;
 	struct hsu_dma_chip *chip;
 	int ret;
 
@@ -69,7 +65,11 @@ static int hsu_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_master(pdev);
 	pci_try_set_mwi(pdev);
 
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (ret)
+		return ret;
+
+	ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret)
 		return ret;
 
@@ -91,13 +91,9 @@ static int hsu_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (ret)
 		return ret;
 
-	ret = devm_add_action_or_reset(dev, hsu_pci_dma_remove, chip);
+	ret = request_irq(chip->irq, hsu_pci_irq, 0, "hsu_dma_pci", chip);
 	if (ret)
-		return ret;
-
-	ret = devm_request_irq(dev, chip->irq, hsu_pci_irq, 0, "hsu_dma_pci", chip);
-	if (ret)
-		return ret;
+		goto err_register_irq;
 
 	/*
 	 * On Intel Tangier B0 and Anniedale the interrupt line, disregarding
@@ -113,6 +109,18 @@ static int hsu_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_drvdata(pdev, chip);
 
 	return 0;
+
+err_register_irq:
+	hsu_dma_remove(chip);
+	return ret;
+}
+
+static void hsu_pci_remove(struct pci_dev *pdev)
+{
+	struct hsu_dma_chip *chip = pci_get_drvdata(pdev);
+
+	free_irq(chip->irq, chip);
+	hsu_dma_remove(chip);
 }
 
 static const struct pci_device_id hsu_pci_id_table[] = {
@@ -126,6 +134,7 @@ static struct pci_driver hsu_pci_driver = {
 	.name		= "hsu_dma_pci",
 	.id_table	= hsu_pci_id_table,
 	.probe		= hsu_pci_probe,
+	.remove		= hsu_pci_remove,
 };
 
 module_pci_driver(hsu_pci_driver);

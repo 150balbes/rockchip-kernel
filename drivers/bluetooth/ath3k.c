@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/errno.h>
+#include <linux/device.h>
 #include <linux/firmware.h>
 #include <linux/usb.h>
 #include <asm/unaligned.h>

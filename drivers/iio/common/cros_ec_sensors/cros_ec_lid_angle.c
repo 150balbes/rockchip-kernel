@@ -20,7 +20,6 @@
 #include <linux/iio/triggered_buffer.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_data/cros_ec_commands.h>
 #include <linux/platform_device.h>
@@ -98,7 +97,8 @@ static int cros_ec_lid_angle_probe(struct platform_device *pdev)
 	if (!indio_dev)
 		return -ENOMEM;
 
-	ret = cros_ec_sensors_core_init(pdev, indio_dev, false, NULL);
+	ret = cros_ec_sensors_core_init(pdev, indio_dev, false, NULL,
+					NULL, false);
 	if (ret)
 		return ret;
 
@@ -114,7 +114,7 @@ static int cros_ec_lid_angle_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return cros_ec_sensors_core_register(dev, indio_dev, NULL);
+	return devm_iio_device_register(dev, indio_dev);
 }
 
 static const struct platform_device_id cros_ec_lid_angle_ids[] = {

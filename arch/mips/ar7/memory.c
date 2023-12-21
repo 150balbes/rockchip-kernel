@@ -49,3 +49,8 @@ void __init prom_meminit(void)
 	pages = memsize() >> PAGE_SHIFT;
 	memblock_add(PHYS_OFFSET, pages << PAGE_SHIFT);
 }
+
+void __init prom_free_prom_memory(void)
+{
+	/* Nothing to free */
+}

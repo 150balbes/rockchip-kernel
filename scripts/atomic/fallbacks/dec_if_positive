@@ -1,11 +1,15 @@
 cat <<EOF
-	${int} dec, c = raw_${atomic}_read(v);
+static __always_inline ${ret}
+${arch}${atomic}_dec_if_positive(${atomic}_t *v)
+{
+	${int} dec, c = ${arch}${atomic}_read(v);
 
 	do {
 		dec = c - 1;
 		if (unlikely(dec < 0))
 			break;
-	} while (!raw_${atomic}_try_cmpxchg(v, &c, dec));
+	} while (!${arch}${atomic}_try_cmpxchg(v, &c, dec));
 
 	return dec;
+}
 EOF

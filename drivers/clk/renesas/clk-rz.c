@@ -15,6 +15,11 @@
 #include <linux/of_address.h>
 #include <linux/slab.h>
 
+struct rz_cpg {
+	struct clk_onecell_data data;
+	void __iomem *reg;
+};
+
 #define CPG_FRQCR	0x10
 #define CPG_FRQCR2	0x14
 
@@ -44,8 +49,7 @@ static u16 __init rz_cpg_read_mode_pins(void)
 }
 
 static struct clk * __init
-rz_cpg_register_clock(struct device_node *np, void __iomem *base,
-		      const char *name)
+rz_cpg_register_clock(struct device_node *np, struct rz_cpg *cpg, const char *name)
 {
 	u32 val;
 	unsigned mult;
@@ -61,7 +65,7 @@ rz_cpg_register_clock(struct device_node *np, void __iomem *base,
 	}
 
 	/* If mapping regs failed, skip non-pll clocks. System will boot anyhow */
-	if (!base)
+	if (!cpg->reg)
 		return ERR_PTR(-ENXIO);
 
 	/* FIXME:"i" and "g" are variable clocks with non-integer dividers (e.g. 2/3)
@@ -69,9 +73,9 @@ rz_cpg_register_clock(struct device_node *np, void __iomem *base,
 	 * let them run at fixed current speed and implement the details later.
 	 */
 	if (strcmp(name, "i") == 0)
-		val = (readl(base + CPG_FRQCR) >> 8) & 3;
+		val = (readl(cpg->reg + CPG_FRQCR) >> 8) & 3;
 	else if (strcmp(name, "g") == 0)
-		val = readl(base + CPG_FRQCR2) & 3;
+		val = readl(cpg->reg + CPG_FRQCR2) & 3;
 	else
 		return ERR_PTR(-EINVAL);
 
@@ -81,9 +85,8 @@ rz_cpg_register_clock(struct device_node *np, void __iomem *base,
 
 static void __init rz_cpg_clocks_init(struct device_node *np)
 {
-	struct clk_onecell_data *data;
+	struct rz_cpg *cpg;
 	struct clk **clks;
-	void __iomem *base;
 	unsigned i;
 	int num_clks;
 
@@ -91,14 +94,14 @@ static void __init rz_cpg_clocks_init(struct device_node *np)
 	if (WARN(num_clks <= 0, "can't count CPG clocks\n"))
 		return;
 
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	cpg = kzalloc(sizeof(*cpg), GFP_KERNEL);
 	clks = kcalloc(num_clks, sizeof(*clks), GFP_KERNEL);
-	BUG_ON(!data || !clks);
+	BUG_ON(!cpg || !clks);
 
-	data->clks = clks;
-	data->clk_num = num_clks;
+	cpg->data.clks = clks;
+	cpg->data.clk_num = num_clks;
 
-	base = of_iomap(np, 0);
+	cpg->reg = of_iomap(np, 0);
 
 	for (i = 0; i < num_clks; ++i) {
 		const char *name;
@@ -106,15 +109,15 @@ static void __init rz_cpg_clocks_init(struct device_node *np)
 
 		of_property_read_string_index(np, "clock-output-names", i, &name);
 
-		clk = rz_cpg_register_clock(np, base, name);
+		clk = rz_cpg_register_clock(np, cpg, name);
 		if (IS_ERR(clk))
 			pr_err("%s: failed to register %pOFn %s clock (%ld)\n",
 			       __func__, np, name, PTR_ERR(clk));
 		else
-			data->clks[i] = clk;
+			cpg->data.clks[i] = clk;
 	}
 
-	of_clk_add_provider(np, of_clk_src_onecell_get, data);
+	of_clk_add_provider(np, of_clk_src_onecell_get, &cpg->data);
 
 	cpg_mstp_add_clk_domain(np);
 }

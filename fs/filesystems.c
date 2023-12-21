@@ -209,28 +209,21 @@ SYSCALL_DEFINE3(sysfs, int, option, unsigned long, arg1, unsigned long, arg2)
 }
 #endif
 
-int __init list_bdev_fs_names(char *buf, size_t size)
+int __init get_filesystem_list(char *buf)
 {
-	struct file_system_type *p;
-	size_t len;
-	int count = 0;
+	int len = 0;
+	struct file_system_type * tmp;
 
 	read_lock(&file_systems_lock);
-	for (p = file_systems; p; p = p->next) {
-		if (!(p->fs_flags & FS_REQUIRES_DEV))
-			continue;
-		len = strlen(p->name) + 1;
-		if (len > size) {
-			pr_warn("%s: truncating file system list\n", __func__);
-			break;
-		}
-		memcpy(buf, p->name, len);
-		buf += len;
-		size -= len;
-		count++;
+	tmp = file_systems;
+	while (tmp && len < PAGE_SIZE - 80) {
+		len += sprintf(buf+len, "%s\t%s\n",
+			(tmp->fs_flags & FS_REQUIRES_DEV) ? "" : "nodev",
+			tmp->name);
+		tmp = tmp->next;
 	}
 	read_unlock(&file_systems_lock);
-	return count;
+	return len;
 }
 
 #ifdef CONFIG_PROC_FS

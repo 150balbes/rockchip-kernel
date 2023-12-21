@@ -20,35 +20,23 @@ properties:
   compatible:
     const: google,cros-ec-typec
 
-  '#address-cells':
-    const: 1
-
-  '#size-cells':
-    const: 0
-
-patternProperties:
-  '^connector@[0-9a-f]+$':
+  connector:
     $ref: /schemas/connector/usb-connector.yaml#
-    unevaluatedProperties: false
-    properties:
-      reg:
-        maxItems: 1
 
 required:
   - compatible
 
-additionalProperties: false
+additionalProperties: true #fixme
 
 examples:
   - |+
-    spi {
+    spi0 {
       #address-cells = <1>;
       #size-cells = <0>;
 
       cros_ec: ec@0 {
         compatible = "google,cros-ec-spi";
         reg = <0>;
-        interrupts = <35 0>;
 
         typec {
           compatible = "google,cros-ec-typec";

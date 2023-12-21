@@ -14,7 +14,6 @@
 #include <linux/pm.h>
 #include <linux/clk.h>
 #include <linux/i2c.h>
-#include <linux/acpi.h>
 #include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -45,8 +44,6 @@
 /* R29 - Anti-pop 2 */
 #define WM8960_DISOP     0x40
 #define WM8960_DRES_MASK 0x30
-
-#define WM8960_DSCH_TOUT	600 /* discharge timeout, ms */
 
 static bool is_pll_freq_available(unsigned int source, unsigned int target);
 static int wm8960_set_pll(struct snd_soc_component *component,
@@ -136,7 +133,6 @@ struct wm8960_priv {
 	int freq_in;
 	bool is_stream_in_use[2];
 	struct wm8960_data pdata;
-	ktime_t dsch_start;
 };
 
 #define wm8960_reset(c)	regmap_write(c, WM8960_RESET, 0)
@@ -902,7 +898,6 @@ static int wm8960_set_bias_level_out3(struct snd_soc_component *component,
 	struct wm8960_priv *wm8960 = snd_soc_component_get_drvdata(component);
 	u16 pm2 = snd_soc_component_read(component, WM8960_POWER2);
 	int ret;
-	ktime_t tout;
 
 	switch (level) {
 	case SND_SOC_BIAS_ON:
@@ -949,11 +944,6 @@ static int wm8960_set_bias_level_out3(struct snd_soc_component *component,
 
 	case SND_SOC_BIAS_STANDBY:
 		if (snd_soc_component_get_bias_level(component) == SND_SOC_BIAS_OFF) {
-			/* ensure discharge is complete */
-			tout = WM8960_DSCH_TOUT - ktime_ms_delta(ktime_get(), wm8960->dsch_start);
-			if (tout > 0)
-				msleep(tout);
-
 			regcache_sync(wm8960->regmap);
 
 			/* Enable anti-pop features */
@@ -983,9 +973,9 @@ static int wm8960_set_bias_level_out3(struct snd_soc_component *component,
 			     WM8960_POBCTRL | WM8960_SOFT_ST |
 			     WM8960_BUFDCOPEN | WM8960_BUFIOEN);
 
-		/* Disable VMID and VREF, mark discharge */
+		/* Disable VMID and VREF, let them discharge */
 		snd_soc_component_write(component, WM8960_POWER1, 0);
-		wm8960->dsch_start = ktime_get();
+		msleep(600);
 		break;
 	}
 
@@ -1351,7 +1341,7 @@ static struct snd_soc_dai_driver wm8960_dai = {
 		.rates = WM8960_RATES,
 		.formats = WM8960_FORMATS,},
 	.ops = &wm8960_dai_ops,
-	.symmetric_rate = 1,
+	.symmetric_rates = 1,
 };
 
 static int wm8960_probe(struct snd_soc_component *component)
@@ -1378,6 +1368,7 @@ static const struct snd_soc_component_driver soc_component_dev_wm8960 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config wm8960_regmap = {
@@ -1410,7 +1401,8 @@ static void wm8960_set_pdata_from_of(struct i2c_client *i2c,
 				   ARRAY_SIZE(pdata->hp_cfg));
 }
 
-static int wm8960_i2c_probe(struct i2c_client *i2c)
+static int wm8960_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8960_data *pdata = dev_get_platdata(&i2c->dev);
 	struct wm8960_priv *wm8960;
@@ -1486,8 +1478,10 @@ static int wm8960_i2c_probe(struct i2c_client *i2c)
 	return ret;
 }
 
-static void wm8960_i2c_remove(struct i2c_client *client)
-{}
+static int wm8960_i2c_remove(struct i2c_client *client)
+{
+	return 0;
+}
 
 static const struct i2c_device_id wm8960_i2c_id[] = {
 	{ "wm8960", 0 },
@@ -1495,28 +1489,16 @@ static const struct i2c_device_id wm8960_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, wm8960_i2c_id);
 
-#if defined(CONFIG_OF)
 static const struct of_device_id wm8960_of_match[] = {
        { .compatible = "wlf,wm8960", },
        { }
 };
 MODULE_DEVICE_TABLE(of, wm8960_of_match);
-#endif
-
-#if defined(CONFIG_ACPI)
-static const struct acpi_device_id wm8960_acpi_match[] = {
-	{ "1AEC8960", 0 }, /* Wolfson PCI ID + part ID */
-	{ "10138960", 0 }, /* Cirrus Logic PCI ID + part ID */
-	{ },
-};
-MODULE_DEVICE_TABLE(acpi, wm8960_acpi_match);
-#endif
 
 static struct i2c_driver wm8960_i2c_driver = {
 	.driver = {
 		.name = "wm8960",
-		.of_match_table = of_match_ptr(wm8960_of_match),
-		.acpi_match_table = ACPI_PTR(wm8960_acpi_match),
+		.of_match_table = wm8960_of_match,
 	},
 	.probe =    wm8960_i2c_probe,
 	.remove =   wm8960_i2c_remove,

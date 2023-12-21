@@ -56,7 +56,7 @@ struct hfi_sys_set_resource_pkt {
 	struct hfi_pkt_hdr hdr;
 	u32 resource_handle;
 	u32 resource_type;
-	u32 resource_data[];
+	u32 resource_data[1];
 };
 
 struct hfi_sys_release_resource_pkt {
@@ -68,7 +68,7 @@ struct hfi_sys_release_resource_pkt {
 struct hfi_sys_set_property_pkt {
 	struct hfi_pkt_hdr hdr;
 	u32 num_properties;
-	u32 data[];
+	u32 data[1];
 };
 
 struct hfi_sys_get_property_pkt {
@@ -117,7 +117,7 @@ struct hfi_session_set_buffers_pkt {
 	u32 extradata_size;
 	u32 min_buffer_size;
 	u32 num_buffers;
-	u32 buffer_info[];
+	u32 buffer_info[1];
 };
 
 struct hfi_session_get_sequence_header_pkt {
@@ -256,7 +256,6 @@ void pkt_sys_init(struct hfi_sys_init_pkt *pkt, u32 arch_type);
 void pkt_sys_pc_prep(struct hfi_sys_pc_prep_pkt *pkt);
 void pkt_sys_idle_indicator(struct hfi_sys_set_property_pkt *pkt, u32 enable);
 void pkt_sys_power_control(struct hfi_sys_set_property_pkt *pkt, u32 enable);
-void pkt_sys_ubwc_config(struct hfi_sys_set_property_pkt *pkt, const struct hfi_ubwc_config *hfi);
 int pkt_sys_set_resource(struct hfi_sys_set_resource_pkt *pkt, u32 id, u32 size,
 			 u32 addr, void *cookie);
 int pkt_sys_unset_resource(struct hfi_sys_release_resource_pkt *pkt, u32 id,

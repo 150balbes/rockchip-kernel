@@ -512,12 +512,12 @@ static int vt_io_ioctl(struct vc_data *vc, unsigned int cmd, void __user *up,
 {
 	switch (cmd) {
 	case PIO_CMAP:
-		if (!perm)
+                if (!perm)
 			return -EPERM;
 		return con_set_cmap(up);
 
 	case GIO_CMAP:
-		return con_get_cmap(up);
+                return con_get_cmap(up);
 
 	case PIO_SCRNMAP:
 		if (!perm)
@@ -898,13 +898,11 @@ int vt_ioctl(struct tty_struct *tty,
 		if (arg > MAX_NR_CONSOLES)
 			return -ENXIO;
 
-		if (arg == 0) {
+		if (arg == 0)
 			vt_disallocate_all();
-			break;
-		}
-
-		arg = array_index_nospec(arg - 1, MAX_NR_CONSOLES);
-		return vt_disallocate(arg);
+		else
+			return vt_disallocate(--arg);
+		break;
 
 	case VT_RESIZE:
 	{
@@ -972,7 +970,8 @@ void reset_vc(struct vc_data *vc)
 	put_pid(vc->vt_pid);
 	vc->vt_pid = NULL;
 	vc->vt_newvt = -1;
-	reset_palette(vc);
+	if (!in_interrupt())    /* Via keyboard.c:SAK() - akpm */
+		reset_palette(vc);
 }
 
 void vc_SAK(struct work_struct *work)

@@ -25,8 +25,6 @@
 #include <linux/firmware.h>
 #include "amdgpu.h"
 #include "amdgpu_amdkfd.h"
-#include "amdgpu_amdkfd_arcturus.h"
-#include "amdgpu_reset.h"
 #include "sdma0/sdma0_4_2_2_offset.h"
 #include "sdma0/sdma0_4_2_2_sh_mask.h"
 #include "sdma1/sdma1_4_2_2_offset.h"
@@ -49,8 +47,6 @@
 #include "amdgpu_amdkfd_gfx_v9.h"
 #include "gfxhub_v1_0.h"
 #include "mmhub_v9_4.h"
-#include "gc/gc_9_0_offset.h"
-#include "gc/gc_9_0_sh_mask.h"
 
 #define HQD_N_REGS 56
 #define DUMP_REG(addr) do {				\
@@ -59,6 +55,11 @@
 		(*dump)[i][0] = (addr) << 2;		\
 		(*dump)[i++][1] = RREG32(addr);		\
 	} while (0)
+
+static inline struct amdgpu_device *get_amdgpu_device(struct kgd_dev *kgd)
+{
+	return (struct amdgpu_device *)kgd;
+}
 
 static inline struct v9_sdma_mqd *get_sdma_mqd(void *mqd)
 {
@@ -121,9 +122,10 @@ static uint32_t get_sdma_rlc_reg_offset(struct amdgpu_device *adev,
 	return sdma_rlc_reg_offset;
 }
 
-int kgd_arcturus_hqd_sdma_load(struct amdgpu_device *adev, void *mqd,
+static int kgd_hqd_sdma_load(struct kgd_dev *kgd, void *mqd,
 			     uint32_t __user *wptr, struct mm_struct *mm)
 {
+	struct amdgpu_device *adev = get_amdgpu_device(kgd);
 	struct v9_sdma_mqd *m;
 	uint32_t sdma_rlc_reg_offset;
 	unsigned long end_jiffies;
@@ -190,10 +192,11 @@ int kgd_arcturus_hqd_sdma_load(struct amdgpu_device *adev, void *mqd,
 	return 0;
 }
 
-int kgd_arcturus_hqd_sdma_dump(struct amdgpu_device *adev,
+static int kgd_hqd_sdma_dump(struct kgd_dev *kgd,
 			     uint32_t engine_id, uint32_t queue_id,
 			     uint32_t (**dump)[2], uint32_t *n_regs)
 {
+	struct amdgpu_device *adev = get_amdgpu_device(kgd);
 	uint32_t sdma_rlc_reg_offset = get_sdma_rlc_reg_offset(adev,
 			engine_id, queue_id);
 	uint32_t i = 0, reg;
@@ -221,9 +224,9 @@ int kgd_arcturus_hqd_sdma_dump(struct amdgpu_device *adev,
 	return 0;
 }
 
-bool kgd_arcturus_hqd_sdma_is_occupied(struct amdgpu_device *adev,
-				void *mqd)
+static bool kgd_hqd_sdma_is_occupied(struct kgd_dev *kgd, void *mqd)
 {
+	struct amdgpu_device *adev = get_amdgpu_device(kgd);
 	struct v9_sdma_mqd *m;
 	uint32_t sdma_rlc_reg_offset;
 	uint32_t sdma_rlc_rb_cntl;
@@ -240,9 +243,10 @@ bool kgd_arcturus_hqd_sdma_is_occupied(struct amdgpu_device *adev,
 	return false;
 }
 
-int kgd_arcturus_hqd_sdma_destroy(struct amdgpu_device *adev, void *mqd,
+static int kgd_hqd_sdma_destroy(struct kgd_dev *kgd, void *mqd,
 				unsigned int utimeout)
 {
+	struct amdgpu_device *adev = get_amdgpu_device(kgd);
 	struct v9_sdma_mqd *m;
 	uint32_t sdma_rlc_reg_offset;
 	uint32_t temp;
@@ -279,144 +283,25 @@ int kgd_arcturus_hqd_sdma_destroy(struct amdgpu_device *adev, void *mqd,
 	return 0;
 }
 
-/*
- * Helper used to suspend/resume gfx pipe for image post process work to set
- * barrier behaviour.
- */
-static int suspend_resume_compute_scheduler(struct amdgpu_device *adev, bool suspend)
-{
-	int i, r = 0;
-
-	for (i = 0; i < adev->gfx.num_compute_rings; i++) {
-		struct amdgpu_ring *ring = &adev->gfx.compute_ring[i];
-
-		if (!(ring && drm_sched_submit_ready(&ring->sched)))
-			continue;
-
-		/* stop secheduler and drain ring. */
-		if (suspend) {
-			drm_sched_stop(&ring->sched, NULL);
-			r = amdgpu_fence_wait_empty(ring);
-			if (r)
-				goto out;
-		} else {
-			drm_sched_start(&ring->sched, false);
-		}
-	}
-
-out:
-	/* return on resume or failure to drain rings. */
-	if (!suspend || r)
-		return r;
-
-	return amdgpu_device_ip_wait_for_idle(adev, AMD_IP_BLOCK_TYPE_GFX);
-}
-
-static void set_barrier_auto_waitcnt(struct amdgpu_device *adev, bool enable_waitcnt)
-{
-	uint32_t data;
-
-	WRITE_ONCE(adev->barrier_has_auto_waitcnt, enable_waitcnt);
-
-	if (!down_read_trylock(&adev->reset_domain->sem))
-		return;
-
-	amdgpu_amdkfd_suspend(adev, false);
-
-	if (suspend_resume_compute_scheduler(adev, true))
-		goto out;
-
-	data = RREG32(SOC15_REG_OFFSET(GC, 0, mmSQ_CONFIG));
-	data = REG_SET_FIELD(data, SQ_CONFIG, DISABLE_BARRIER_WAITCNT,
-						!enable_waitcnt);
-	WREG32(SOC15_REG_OFFSET(GC, 0, mmSQ_CONFIG), data);
-
-out:
-	suspend_resume_compute_scheduler(adev, false);
-
-	amdgpu_amdkfd_resume(adev, false);
-
-	up_read(&adev->reset_domain->sem);
-}
-
-/*
- * restore_dbg_registers is ignored here but is a general interface requirement
- * for devices that support GFXOFF and where the RLC save/restore list
- * does not support hw registers for debugging i.e. the driver has to manually
- * initialize the debug mode registers after it has disabled GFX off during the
- * debug session.
- */
-static uint32_t kgd_arcturus_enable_debug_trap(struct amdgpu_device *adev,
-				bool restore_dbg_registers,
-				uint32_t vmid)
-{
-	mutex_lock(&adev->grbm_idx_mutex);
-
-	kgd_gfx_v9_set_wave_launch_stall(adev, vmid, true);
-
-	set_barrier_auto_waitcnt(adev, true);
-
-	WREG32(SOC15_REG_OFFSET(GC, 0, mmSPI_GDBG_TRAP_MASK), 0);
-
-	kgd_gfx_v9_set_wave_launch_stall(adev, vmid, false);
-
-	mutex_unlock(&adev->grbm_idx_mutex);
-
-	return 0;
-}
-
-/*
- * keep_trap_enabled is ignored here but is a general interface requirement
- * for devices that support multi-process debugging where the performance
- * overhead from trap temporary setup needs to be bypassed when the debug
- * session has ended.
- */
-static uint32_t kgd_arcturus_disable_debug_trap(struct amdgpu_device *adev,
-					bool keep_trap_enabled,
-					uint32_t vmid)
-{
-
-	mutex_lock(&adev->grbm_idx_mutex);
-
-	kgd_gfx_v9_set_wave_launch_stall(adev, vmid, true);
-
-	set_barrier_auto_waitcnt(adev, false);
-
-	WREG32(SOC15_REG_OFFSET(GC, 0, mmSPI_GDBG_TRAP_MASK), 0);
-
-	kgd_gfx_v9_set_wave_launch_stall(adev, vmid, false);
-
-	mutex_unlock(&adev->grbm_idx_mutex);
-
-	return 0;
-}
 const struct kfd2kgd_calls arcturus_kfd2kgd = {
 	.program_sh_mem_settings = kgd_gfx_v9_program_sh_mem_settings,
 	.set_pasid_vmid_mapping = kgd_gfx_v9_set_pasid_vmid_mapping,
 	.init_interrupts = kgd_gfx_v9_init_interrupts,
 	.hqd_load = kgd_gfx_v9_hqd_load,
 	.hiq_mqd_load = kgd_gfx_v9_hiq_mqd_load,
-	.hqd_sdma_load = kgd_arcturus_hqd_sdma_load,
+	.hqd_sdma_load = kgd_hqd_sdma_load,
 	.hqd_dump = kgd_gfx_v9_hqd_dump,
-	.hqd_sdma_dump = kgd_arcturus_hqd_sdma_dump,
+	.hqd_sdma_dump = kgd_hqd_sdma_dump,
 	.hqd_is_occupied = kgd_gfx_v9_hqd_is_occupied,
-	.hqd_sdma_is_occupied = kgd_arcturus_hqd_sdma_is_occupied,
+	.hqd_sdma_is_occupied = kgd_hqd_sdma_is_occupied,
 	.hqd_destroy = kgd_gfx_v9_hqd_destroy,
-	.hqd_sdma_destroy = kgd_arcturus_hqd_sdma_destroy,
+	.hqd_sdma_destroy = kgd_hqd_sdma_destroy,
+	.address_watch_disable = kgd_gfx_v9_address_watch_disable,
+	.address_watch_execute = kgd_gfx_v9_address_watch_execute,
 	.wave_control_execute = kgd_gfx_v9_wave_control_execute,
+	.address_watch_get_offset = kgd_gfx_v9_address_watch_get_offset,
 	.get_atc_vmid_pasid_mapping_info =
 				kgd_gfx_v9_get_atc_vmid_pasid_mapping_info,
 	.set_vm_context_page_table_base =
 				kgd_gfx_v9_set_vm_context_page_table_base,
-	.enable_debug_trap = kgd_arcturus_enable_debug_trap,
-	.disable_debug_trap = kgd_arcturus_disable_debug_trap,
-	.validate_trap_override_request = kgd_gfx_v9_validate_trap_override_request,
-	.set_wave_launch_trap_override = kgd_gfx_v9_set_wave_launch_trap_override,
-	.set_wave_launch_mode = kgd_gfx_v9_set_wave_launch_mode,
-	.set_address_watch = kgd_gfx_v9_set_address_watch,
-	.clear_address_watch = kgd_gfx_v9_clear_address_watch,
-	.get_iq_wait_times = kgd_gfx_v9_get_iq_wait_times,
-	.build_grace_period_packet_info = kgd_gfx_v9_build_grace_period_packet_info,
-	.get_cu_occupancy = kgd_gfx_v9_get_cu_occupancy,
-	.program_trap_handler_settings = kgd_gfx_v9_program_trap_handler_settings
 };

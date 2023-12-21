@@ -44,12 +44,14 @@ static const struct reset_control_ops axs10x_reset_ops = {
 static int axs10x_reset_probe(struct platform_device *pdev)
 {
 	struct axs10x_rst *rst;
+	struct resource *mem;
 
 	rst = devm_kzalloc(&pdev->dev, sizeof(*rst), GFP_KERNEL);
 	if (!rst)
 		return -ENOMEM;
 
-	rst->regs_rst = devm_platform_ioremap_resource(pdev, 0);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rst->regs_rst = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(rst->regs_rst))
 		return PTR_ERR(rst->regs_rst);
 

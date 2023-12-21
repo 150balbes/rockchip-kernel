@@ -15,7 +15,8 @@
 
 static int hfsplus_security_getxattr(const struct xattr_handler *handler,
 				     struct dentry *unused, struct inode *inode,
-				     const char *name, void *buffer, size_t size)
+				     const char *name, void *buffer,
+				     size_t size, int flags)
 {
 	return hfsplus_getxattr(inode, name, buffer, size,
 				XATTR_SECURITY_PREFIX,
@@ -23,7 +24,6 @@ static int hfsplus_security_getxattr(const struct xattr_handler *handler,
 }
 
 static int hfsplus_security_setxattr(const struct xattr_handler *handler,
-				     struct mnt_idmap *idmap,
 				     struct dentry *unused, struct inode *inode,
 				     const char *name, const void *buffer,
 				     size_t size, int flags)

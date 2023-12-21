@@ -82,7 +82,8 @@ properties:
   '#gpio-cells':
     const: 2
 
-  gpio-ranges: true
+  gpio-ranges:
+    maxItems: 1
 
   interrupts: true
 

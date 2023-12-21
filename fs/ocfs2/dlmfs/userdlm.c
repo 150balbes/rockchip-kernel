@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * userdlm.c
  *
  * Code which implements the kernel side of a minimal userspace
@@ -629,6 +631,7 @@ int user_dlm_destroy_lock(struct user_lock_res *lockres)
 		goto bail;
 	}
 
+	lockres->l_flags &= ~USER_LOCK_ATTACHED;
 	lockres->l_flags |= USER_LOCK_BUSY;
 	spin_unlock(&lockres->l_lock);
 

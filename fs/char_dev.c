@@ -150,7 +150,7 @@ __register_chrdev_region(unsigned int major, unsigned int baseminor,
 	cd->major = major;
 	cd->baseminor = baseminor;
 	cd->minorct = minorct;
-	strscpy(cd->name, name, sizeof(cd->name));
+	strlcpy(cd->name, name, sizeof(cd->name));
 
 	if (!prev) {
 		cd->next = curr;
@@ -483,24 +483,17 @@ int cdev_add(struct cdev *p, dev_t dev, unsigned count)
 	p->dev = dev;
 	p->count = count;
 
-	if (WARN_ON(dev == WHITEOUT_DEV)) {
-		error = -EBUSY;
-		goto err;
-	}
+	if (WARN_ON(dev == WHITEOUT_DEV))
+		return -EBUSY;
 
 	error = kobj_map(cdev_map, dev, count, NULL,
 			 exact_match, exact_lock, p);
 	if (error)
-		goto err;
+		return error;
 
 	kobject_get(p->kobj.parent);
 
 	return 0;
-
-err:
-	kfree_const(p->kobj.name);
-	p->kobj.name = NULL;
-	return error;
 }
 
 /**
@@ -554,7 +547,7 @@ int cdev_device_add(struct cdev *cdev, struct device *dev)
 	}
 
 	rc = device_add(dev);
-	if (rc && dev->devt)
+	if (rc)
 		cdev_del(cdev);
 
 	return rc;

@@ -115,7 +115,7 @@ struct eccprivkeytoken {
 	u64 mkvp;     /* master key verification pattern */
 	u8  opk[48];  /* encrypted object protection key data */
 	u16 adatalen; /* associated data length in bytes */
-	u16 fseclen;  /* formatted section length in bytes */
+	u16 fseclen;  /* formated section length in bytes */
 	u8  more_data[]; /* more data follows */
 } __packed;
 
@@ -171,8 +171,8 @@ int cca_clr2seckey(u16 cardnr, u16 domain, u32 keybitsize,
  * Derive proteced key from an CCA AES DATA secure key.
  */
 int cca_sec2protkey(u16 cardnr, u16 domain,
-		    const u8 *seckey, u8 *protkey, u32 *protkeylen,
-		    u32 *protkeytype);
+		    const u8 seckey[SECKEYBLOBSIZE],
+		    u8 *protkey, u32 *protkeylen, u32 *protkeytype);
 
 /*
  * Generate (random) CCA AES CIPHER secure key.
@@ -232,7 +232,7 @@ int cca_findcard(const u8 *key, u16 *pcardnr, u16 *pdomain, int verify);
  * the number of apqns stored into the list is returned in *nr_apqns. One apqn
  * entry is simple a 32 bit value with 16 bit cardnr and 16 bit domain nr and
  * may be casted to struct pkey_apqn. The return value is either 0 for success
- * or a negative errno value. If no apqn meeting the criteria is found,
+ * or a negative errno value. If no apqn meeting the criterias is found,
  * -ENODEV is returned.
  */
 int cca_findcard2(u32 **apqns, u32 *nr_apqns, u16 cardnr, u16 domain,
@@ -251,18 +251,12 @@ struct cca_info {
 	char new_apka_mk_state; /* '1' empty, '2' partially full, '3' full */
 	char cur_apka_mk_state; /* '1' invalid, '2' valid */
 	char old_apka_mk_state; /* '1' invalid, '2' valid */
-	char new_asym_mk_state;	/* '1' empty, '2' partially full, '3' full */
-	char cur_asym_mk_state;	/* '1' invalid, '2' valid */
-	char old_asym_mk_state;	/* '1' invalid, '2' valid */
 	u64  new_aes_mkvp;	/* truncated sha256 of new aes master key */
 	u64  cur_aes_mkvp;	/* truncated sha256 of current aes master key */
 	u64  old_aes_mkvp;	/* truncated sha256 of old aes master key */
 	u64  new_apka_mkvp;	/* truncated sha256 of new apka master key */
 	u64  cur_apka_mkvp;	/* truncated sha256 of current apka mk */
 	u64  old_apka_mkvp;	/* truncated sha256 of old apka mk */
-	u8   new_asym_mkvp[16];	/* verify pattern of new asym master key */
-	u8   cur_asym_mkvp[16];	/* verify pattern of current asym master key */
-	u8   old_asym_mkvp[16];	/* verify pattern of old asym master key */
 	char serial[9];		/* serial number (8 ascii numbers + 0x00) */
 };
 

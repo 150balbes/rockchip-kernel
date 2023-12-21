@@ -11,14 +11,12 @@ used by media devices.
 
 Please see:
 
-Documentation/admin-guide/media/index.rst
+- :doc:`/admin-guide/media/index`
+    for usage information about media subsystem and supported drivers;
 
-  - for usage information about media subsystem and supported drivers;
-
-Documentation/driver-api/media/index.rst
-
-  - for driver development information and Kernel APIs used by
-    media devices;
+- :doc:`/driver-api/media/index`
+     for driver development information and Kernel APIs used by
+     media devices;
 
 
 .. only:: html

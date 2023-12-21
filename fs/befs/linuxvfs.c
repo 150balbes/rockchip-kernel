@@ -34,13 +34,14 @@
 MODULE_DESCRIPTION("BeOS File System (BeFS) driver");
 MODULE_AUTHOR("Will Dyson");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 
 /* The units the vfs expects inode->i_blocks to be in */
 #define VFS_BLOCK_SIZE 512
 
 static int befs_readdir(struct file *, struct dir_context *);
 static int befs_get_block(struct inode *, sector_t, struct buffer_head *, int);
-static int befs_read_folio(struct file *file, struct folio *folio);
+static int befs_readpage(struct file *file, struct page *page);
 static sector_t befs_bmap(struct address_space *mapping, sector_t block);
 static struct dentry *befs_lookup(struct inode *, struct dentry *,
 				  unsigned int);
@@ -48,7 +49,7 @@ static struct inode *befs_iget(struct super_block *, unsigned long);
 static struct inode *befs_alloc_inode(struct super_block *sb);
 static void befs_free_inode(struct inode *inode);
 static void befs_destroy_inodecache(void);
-static int befs_symlink_read_folio(struct file *, struct folio *);
+static int befs_symlink_readpage(struct file *, struct page *);
 static int befs_utf2nls(struct super_block *sb, const char *in, int in_len,
 			char **out, int *out_len);
 static int befs_nls2utf(struct super_block *sb, const char *in, int in_len,
@@ -87,12 +88,12 @@ static const struct inode_operations befs_dir_inode_operations = {
 };
 
 static const struct address_space_operations befs_aops = {
-	.read_folio	= befs_read_folio,
+	.readpage	= befs_readpage,
 	.bmap		= befs_bmap,
 };
 
 static const struct address_space_operations befs_symlink_aops = {
-	.read_folio	= befs_symlink_read_folio,
+	.readpage	= befs_symlink_readpage,
 };
 
 static const struct export_operations befs_export_operations = {
@@ -102,15 +103,16 @@ static const struct export_operations befs_export_operations = {
 };
 
 /*
- * Called by generic_file_read() to read a folio of data
+ * Called by generic_file_read() to read a page of data
  *
  * In turn, simply calls a generic block read function and
  * passes it the address of befs_get_block, for mapping file
  * positions to disk blocks.
  */
-static int befs_read_folio(struct file *file, struct folio *folio)
+static int
+befs_readpage(struct file *file, struct page *page)
 {
-	return block_read_full_folio(folio, befs_get_block);
+	return block_read_full_page(page, befs_get_block);
 }
 
 static sector_t
@@ -276,7 +278,7 @@ befs_alloc_inode(struct super_block *sb)
 {
 	struct befs_inode_info *bi;
 
-	bi = alloc_inode_sb(sb, befs_inode_cachep, GFP_KERNEL);
+	bi = kmem_cache_alloc(befs_inode_cachep, GFP_KERNEL);
 	if (!bi)
 		return NULL;
 	return &bi->vfs_inode;
@@ -374,7 +376,7 @@ static struct inode *befs_iget(struct super_block *sb, unsigned long ino)
 	if (S_ISLNK(inode->i_mode) && !(befs_ino->i_flags & BEFS_LONG_SYMLINK)){
 		inode->i_size = 0;
 		inode->i_blocks = befs_sb->block_size / VFS_BLOCK_SIZE;
-		strscpy(befs_ino->i_data.symlink, raw_inode->data.symlink,
+		strlcpy(befs_ino->i_data.symlink, raw_inode->data.symlink,
 			BEFS_SYMLINK_LEN);
 	} else {
 		int num_blks;
@@ -467,14 +469,14 @@ befs_destroy_inodecache(void)
  * The data stream become link name. Unless the LONG_SYMLINK
  * flag is set.
  */
-static int befs_symlink_read_folio(struct file *unused, struct folio *folio)
+static int befs_symlink_readpage(struct file *unused, struct page *page)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = page->mapping->host;
 	struct super_block *sb = inode->i_sb;
 	struct befs_inode_info *befs_ino = BEFS_I(inode);
 	befs_data_stream *data = &befs_ino->i_data.ds;
 	befs_off_t len = data->size;
-	char *link = folio_address(folio);
+	char *link = page_address(page);
 
 	if (len == 0 || len > PAGE_SIZE) {
 		befs_error(sb, "Long symlink with illegal length");
@@ -487,12 +489,12 @@ static int befs_symlink_read_folio(struct file *unused, struct folio *folio)
 		goto fail;
 	}
 	link[len - 1] = '\0';
-	folio_mark_uptodate(folio);
-	folio_unlock(folio);
+	SetPageUptodate(page);
+	unlock_page(page);
 	return 0;
 fail:
-	folio_set_error(folio);
-	folio_unlock(folio);
+	SetPageError(page);
+	unlock_page(page);
 	return -EIO;
 }
 

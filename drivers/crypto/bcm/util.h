@@ -58,26 +58,12 @@ void __dump_sg(struct scatterlist *sg, unsigned int skip, unsigned int len);
 
 #else /* !DEBUG_ON */
 
-static inline void flow_log(const char *format, ...)
-{
-}
+#define flow_log(...) do {} while (0)
+#define flow_dump(msg, var, var_len) do {} while (0)
+#define packet_log(...) do {} while (0)
+#define packet_dump(msg, var, var_len) do {} while (0)
 
-static inline void flow_dump(const char *msg, const void *var, size_t var_len)
-{
-}
-
-static inline void packet_log(const char *format, ...)
-{
-}
-
-static inline void packet_dump(const char *msg, const void *var, size_t var_len)
-{
-}
-
-static inline void dump_sg(struct scatterlist *sg, unsigned int skip,
-			   unsigned int len)
-{
-}
+#define dump_sg(sg, skip, len) do {} while (0)
 
 #endif /* DEBUG_ON */
 

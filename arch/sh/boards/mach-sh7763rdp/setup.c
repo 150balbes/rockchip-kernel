@@ -119,7 +119,7 @@ static struct fb_videomode sh7763fb_videomode = {
 	.vsync_len = 1,
 	.sync = 0,
 	.vmode = FB_VMODE_NONINTERLACED,
-	.flag = FB_MODE_IS_UNKNOWN,
+	.flag = FBINFO_FLAG_DEFAULT,
 };
 
 static struct sh7760fb_platdata sh7763fb_def_pdata = {

@@ -57,7 +57,7 @@ struct internal_rate {
 
 struct aif {
 	unsigned int id;
-	bool provider;
+	bool master;
 	struct pll *pll;
 };
 
@@ -177,7 +177,7 @@ static bool tscs454_volatile(struct device *dev, unsigned int reg)
 		return true;
 	default:
 		return false;
-	}
+	};
 }
 
 static bool tscs454_writable(struct device *dev, unsigned int reg)
@@ -197,7 +197,7 @@ static bool tscs454_writable(struct device *dev, unsigned int reg)
 		return false;
 	default:
 		return true;
-	}
+	};
 }
 
 static bool tscs454_readable(struct device *dev, unsigned int reg)
@@ -217,7 +217,7 @@ static bool tscs454_readable(struct device *dev, unsigned int reg)
 		return false;
 	default:
 		return true;
-	}
+	};
 }
 
 static bool tscs454_precious(struct device *dev, unsigned int reg)
@@ -246,7 +246,7 @@ static bool tscs454_precious(struct device *dev, unsigned int reg)
 		return true;
 	default:
 		return false;
-	}
+	};
 }
 
 static const struct regmap_range_cfg tscs454_regmap_range_cfg = {
@@ -727,12 +727,7 @@ static int pll_power_event(struct snd_soc_dapm_widget *w,
 	if (enable)
 		val = pll1 ? FV_PLL1CLKEN_ENABLE : FV_PLL2CLKEN_ENABLE;
 	else
-		/*
-		 * FV_PLL1CLKEN_DISABLE and FV_PLL2CLKEN_DISABLE are
-		 * identical zero vzalues, there is no need to test
-		 * the PLL index
-		 */
-		val = FV_PLL1CLKEN_DISABLE;
+		val = pll1 ? FV_PLL1CLKEN_DISABLE : FV_PLL2CLKEN_DISABLE;
 
 	ret = snd_soc_component_update_bits(component, R_PLLCTL, msk, val);
 	if (ret < 0) {
@@ -756,8 +751,8 @@ static int pll_power_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
-static inline int aif_set_provider(struct snd_soc_component *component,
-		unsigned int aif_id, bool provider)
+static inline int aif_set_master(struct snd_soc_component *component,
+		unsigned int aif_id, bool master)
 {
 	unsigned int reg;
 	unsigned int mask;
@@ -780,12 +775,12 @@ static inline int aif_set_provider(struct snd_soc_component *component,
 		return ret;
 	}
 	mask = FM_I2SPCTL_PORTMS;
-	val = provider ? FV_PORTMS_MASTER : FV_PORTMS_SLAVE;
+	val = master ? FV_PORTMS_MASTER : FV_PORTMS_SLAVE;
 
 	ret = snd_soc_component_update_bits(component, reg, mask, val);
 	if (ret < 0) {
 		dev_err(component->dev, "Failed to set DAI %d to %s (%d)\n",
-			aif_id, provider ? "provider" : "consumer", ret);
+			aif_id, master ? "master" : "slave", ret);
 		return ret;
 	}
 
@@ -797,7 +792,7 @@ int aif_prepare(struct snd_soc_component *component, struct aif *aif)
 {
 	int ret;
 
-	ret = aif_set_provider(component, aif->id, aif->provider);
+	ret = aif_set_master(component, aif->id, aif->master);
 	if (ret < 0)
 		return ret;
 
@@ -820,7 +815,7 @@ static inline int aif_free(struct snd_soc_component *component,
 
 	if (!aif_active(&tscs454->aifs_status, aif->id)) {
 		/* Do config in slave mode */
-		aif_set_provider(component, aif->id, false);
+		aif_set_master(component, aif->id, false);
 		dev_dbg(component->dev, "Freeing pll %d from aif %d\n",
 				aif->pll->id, aif->id);
 		free_pll(aif->pll);
@@ -2708,17 +2703,17 @@ static int tscs454_set_bclk_ratio(struct snd_soc_dai *dai,
 	return 0;
 }
 
-static inline int set_aif_provider_from_fmt(struct snd_soc_component *component,
+static inline int set_aif_master_from_fmt(struct snd_soc_component *component,
 		struct aif *aif, unsigned int fmt)
 {
 	int ret;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
-		aif->provider = true;
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
+		aif->master = true;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
-		aif->provider = false;
+	case SND_SOC_DAIFMT_CBS_CFS:
+		aif->master = false;
 		break;
 	default:
 		ret = -EINVAL;
@@ -2888,7 +2883,7 @@ static int tscs454_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	struct aif *aif = &tscs454->aifs[dai->id];
 	int ret;
 
-	ret = set_aif_provider_from_fmt(component, aif, fmt);
+	ret = set_aif_master_from_fmt(component, aif, fmt);
 	if (ret < 0)
 		return ret;
 
@@ -3351,9 +3346,9 @@ static struct snd_soc_dai_driver tscs454_dais[] = {
 			.rates = TSCS454_RATES,
 			.formats = TSCS454_FORMATS,},
 		.ops = &tscs454_dai1_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 		.symmetric_channels = 1,
-		.symmetric_sample_bits = 1,
+		.symmetric_samplebits = 1,
 	},
 	{
 		.name = "tscs454-dai2",
@@ -3371,9 +3366,9 @@ static struct snd_soc_dai_driver tscs454_dais[] = {
 			.rates = TSCS454_RATES,
 			.formats = TSCS454_FORMATS,},
 		.ops = &tscs454_dai23_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 		.symmetric_channels = 1,
-		.symmetric_sample_bits = 1,
+		.symmetric_samplebits = 1,
 	},
 	{
 		.name = "tscs454-dai3",
@@ -3391,16 +3386,17 @@ static struct snd_soc_dai_driver tscs454_dais[] = {
 			.rates = TSCS454_RATES,
 			.formats = TSCS454_FORMATS,},
 		.ops = &tscs454_dai23_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 		.symmetric_channels = 1,
-		.symmetric_sample_bits = 1,
+		.symmetric_samplebits = 1,
 	},
 };
 
 static char const * const src_names[] = {
 	"xtal", "mclk1", "mclk2", "bclk"};
 
-static int tscs454_i2c_probe(struct i2c_client *i2c)
+static int tscs454_i2c_probe(struct i2c_client *i2c,
+		const struct i2c_device_id *id)
 {
 	struct tscs454 *tscs454;
 	int src;
@@ -3473,7 +3469,7 @@ static struct i2c_driver tscs454_i2c_driver = {
 		.name = "tscs454",
 		.of_match_table = tscs454_of_match,
 	},
-	.probe = tscs454_i2c_probe,
+	.probe =    tscs454_i2c_probe,
 	.id_table = tscs454_i2c_id,
 };
 

@@ -313,17 +313,6 @@ arp_ip_target
 	maximum number of targets that can be specified is 16.  The
 	default value is no IP addresses.
 
-ns_ip6_target
-
-	Specifies the IPv6 addresses to use as IPv6 monitoring peers when
-	arp_interval is > 0.  These are the targets of the NS request
-	sent to determine the health of the link to the targets.
-	Specify these values in ffff:ffff::ffff:ffff format.  Multiple IPv6
-	addresses must be separated by a comma.  At least one IPv6
-	address must be given for NS/NA monitoring to function.  The
-	maximum number of targets that can be specified is 16.  The
-	default value is no IPv6 addresses.
-
 arp_validate
 
 	Specifies whether or not ARP probes and replies should be
@@ -433,17 +422,6 @@ arp_all_targets
 		consider the slave up only when all of the arp_ip_targets
 		are reachable
 
-arp_missed_max
-
-	Specifies the number of arp_interval monitor checks that must
-	fail in order for an interface to be marked down by the ARP monitor.
-
-	In order to provide orderly failover semantics, backup interfaces
-	are permitted an extra monitor check (i.e., they must fail
-	arp_missed_max + 1 times before being marked down).
-
-	The default value is 2, and the allowable range is 1 - 255.
-
 downdelay
 
 	Specifies the time, in milliseconds, to wait before disabling
@@ -524,18 +502,6 @@ fail_over_mac
 	This option was added in bonding version 3.2.0.  The "follow"
 	policy was added in bonding version 3.3.0.
 
-lacp_active
-	Option specifying whether to send LACPDU frames periodically.
-
-	off or 0
-		LACPDU frames acts as "speak when spoken to".
-
-	on or 1
-		LACPDU frames are sent along the configured links
-		periodically. See lacp_rate for more details.
-
-	The default is on.
-
 lacp_rate
 
 	Option specifying the rate in which we'll ask our link partner
@@ -566,8 +532,7 @@ miimon
 	link monitoring.  A value of 100 is a good starting point.
 	The use_carrier option, below, affects how the link state is
 	determined.  See the High Availability section for additional
-	information.  The default value is 100 if arp_interval is not
-	set.
+	information.  The default value is 0.
 
 min_links
 
@@ -776,22 +741,10 @@ peer_notif_delay
 	Specify the delay, in milliseconds, between each peer
 	notification (gratuitous ARP and unsolicited IPv6 Neighbor
 	Advertisement) when they are issued after a failover event.
-	This delay should be a multiple of the MII link monitor interval
-	(miimon).
-
-	The valid range is 0 - 300000. The default value is 0, which means
-	to match the value of the MII link monitor interval.
-
-prio
-	Slave priority. A higher number means higher priority.
-	The primary slave has the highest priority. This option also
-	follows the primary_reselect rules.
-
-	This option could only be configured via netlink, and is only valid
-	for active-backup(1), balance-tlb (5) and balance-alb (6) mode.
-	The valid value range is a signed 32 bit integer.
-
-	The default value is 0.
+	This delay should be a multiple of the link monitor interval
+	(arp_interval or miimon, whichever is active). The default
+	value is 0 which means to match the value of the link monitor
+	interval.
 
 primary
 
@@ -848,7 +801,7 @@ primary_reselect
 tlb_dynamic_lb
 
 	Specifies if dynamic shuffling of flows is enabled in tlb
-	or alb mode. The value has no effect on any other modes.
+	mode. The value has no effect on any other modes.
 
 	The default behavior of tlb mode is to shuffle active flows across
 	slaves based on the load in that interval. This gives nice lb
@@ -907,7 +860,7 @@ xmit_hash_policy
 		Uses XOR of hardware MAC addresses and packet type ID
 		field to generate the hash. The formula is
 
-		hash = source MAC[5] XOR destination MAC[5] XOR packet type ID
+		hash = source MAC XOR destination MAC XOR packet type ID
 		slave number = hash modulo slave count
 
 		This algorithm will place all traffic to a particular
@@ -923,7 +876,7 @@ xmit_hash_policy
 		Uses XOR of hardware MAC addresses and IP addresses to
 		generate the hash.  The formula is
 
-		hash = source MAC[5] XOR destination MAC[5] XOR packet type ID
+		hash = source MAC XOR destination MAC XOR packet type ID
 		hash = hash XOR source IP XOR destination IP
 		hash = hash XOR (hash RSHIFT 16)
 		hash = hash XOR (hash RSHIFT 8)
@@ -958,7 +911,6 @@ xmit_hash_policy
 		hash = hash XOR source IP XOR destination IP
 		hash = hash XOR (hash RSHIFT 16)
 		hash = hash XOR (hash RSHIFT 8)
-		hash = hash RSHIFT 1
 		And then hash is reduced modulo slave count.
 
 		If the protocol is IPv6 then the source and destination
@@ -999,19 +951,6 @@ xmit_hash_policy
 		improve the performance for tunnel users because the
 		packets will be distributed according to the encapsulated
 		flows.
-
-	vlan+srcmac
-
-		This policy uses a very rudimentary vlan ID and source mac
-		hash to load-balance traffic per-vlan, with failover
-		should one leg fail. The intended use case is for a bond
-		shared by multiple virtual machines, all configured to
-		use their own vlan, to give lacp-like functionality
-		without requiring lacp-capable switching hardware.
-
-		The formula for the hash is simply
-
-		hash = (vlan ID) XOR (source MAC vendor) XOR (source MAC dev)
 
 	The default value is layer2.  This option was added in bonding
 	version 2.6.3.  In earlier versions of bonding, this parameter
@@ -1985,6 +1924,15 @@ uses the response as an indication that the link is operating.  This
 gives some assurance that traffic is actually flowing to and from one
 or more peers on the local network.
 
+The ARP monitor relies on the device driver itself to verify
+that traffic is flowing.  In particular, the driver must keep up to
+date the last receive time, dev->last_rx.  Drivers that use NETIF_F_LLTX
+flag must also update netdev_queue->trans_start.  If they do not, then the
+ARP monitor will immediately fail any slaves using that driver, and
+those slaves will stay down.  If networking monitoring (tcpdump, etc)
+shows the ARP requests and replies on the network, then it may be that
+your device driver is not updating last_rx and trans_start.
+
 7.2 Configuring Multiple ARP Targets
 ------------------------------------
 
@@ -2028,7 +1976,7 @@ netif_carrier.
 If use_carrier is 0, then the MII monitor will first query the
 device's (via ioctl) MII registers and check the link state.  If that
 request fails (not just that it returns carrier down), then the MII
-monitor will make an ethtool ETHTOOL_GLINK request to attempt to obtain
+monitor will make an ethtool ETHOOL_GLINK request to attempt to obtain
 the same information.  If both methods fail (i.e., the driver either
 does not support or had some error in processing both the MII register
 and ethtool requests), then the MII monitor will assume the link is

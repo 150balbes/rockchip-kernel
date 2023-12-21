@@ -13,18 +13,14 @@
 #include <linux/net.h>
 #include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
-#include <linux/splice.h>
 
 #include <net/sock.h>
-#include <trace/events/sock.h>
 
 #include "smc.h"
 #include "smc_core.h"
 #include "smc_cdc.h"
 #include "smc_tx.h" /* smc_tx_consumer_update() */
 #include "smc_rx.h"
-#include "smc_stats.h"
-#include "smc_tracepoint.h"
 
 /* callback implementation to wakeup consumers blocked with smc_rx_wait().
  * indirectly called by smc_cdc_msg_recv_action().
@@ -32,8 +28,6 @@
 static void smc_rx_wake_up(struct sock *sk)
 {
 	struct socket_wq *wq;
-
-	trace_sk_data_ready(sk);
 
 	/* derived from sock_def_readable() */
 	/* called already in smc_listen_work() */
@@ -149,93 +143,35 @@ static void smc_rx_spd_release(struct splice_pipe_desc *spd,
 static int smc_rx_splice(struct pipe_inode_info *pipe, char *src, size_t len,
 			 struct smc_sock *smc)
 {
-	struct smc_link_group *lgr = smc->conn.lgr;
-	int offset = offset_in_page(src);
-	struct partial_page *partial;
 	struct splice_pipe_desc spd;
-	struct smc_spd_priv **priv;
-	struct page **pages;
-	int bytes, nr_pages;
-	int i;
+	struct partial_page partial;
+	struct smc_spd_priv *priv;
+	int bytes;
 
-	nr_pages = !lgr->is_smcd && smc->conn.rmb_desc->is_vm ?
-		   PAGE_ALIGN(len + offset) / PAGE_SIZE : 1;
-
-	pages = kcalloc(nr_pages, sizeof(*pages), GFP_KERNEL);
-	if (!pages)
-		goto out;
-	partial = kcalloc(nr_pages, sizeof(*partial), GFP_KERNEL);
-	if (!partial)
-		goto out_page;
-	priv = kcalloc(nr_pages, sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
-		goto out_part;
-	for (i = 0; i < nr_pages; i++) {
-		priv[i] = kzalloc(sizeof(**priv), GFP_KERNEL);
-		if (!priv[i])
-			goto out_priv;
-	}
+		return -ENOMEM;
+	priv->len = len;
+	priv->smc = smc;
+	partial.offset = src - (char *)smc->conn.rmb_desc->cpu_addr;
+	partial.len = len;
+	partial.private = (unsigned long)priv;
 
-	if (lgr->is_smcd ||
-	    (!lgr->is_smcd && !smc->conn.rmb_desc->is_vm)) {
-		/* smcd or smcr that uses physically contiguous RMBs */
-		priv[0]->len = len;
-		priv[0]->smc = smc;
-		partial[0].offset = src - (char *)smc->conn.rmb_desc->cpu_addr;
-		partial[0].len = len;
-		partial[0].private = (unsigned long)priv[0];
-		pages[0] = smc->conn.rmb_desc->pages;
-	} else {
-		int size, left = len;
-		void *buf = src;
-		/* smcr that uses virtually contiguous RMBs*/
-		for (i = 0; i < nr_pages; i++) {
-			size = min_t(int, PAGE_SIZE - offset, left);
-			priv[i]->len = size;
-			priv[i]->smc = smc;
-			pages[i] = vmalloc_to_page(buf);
-			partial[i].offset = offset;
-			partial[i].len = size;
-			partial[i].private = (unsigned long)priv[i];
-			buf += size / sizeof(*buf);
-			left -= size;
-			offset = 0;
-		}
-	}
-	spd.nr_pages_max = nr_pages;
-	spd.nr_pages = nr_pages;
-	spd.pages = pages;
-	spd.partial = partial;
+	spd.nr_pages_max = 1;
+	spd.nr_pages = 1;
+	spd.pages = &smc->conn.rmb_desc->pages;
+	spd.partial = &partial;
 	spd.ops = &smc_pipe_ops;
 	spd.spd_release = smc_rx_spd_release;
 
 	bytes = splice_to_pipe(pipe, &spd);
 	if (bytes > 0) {
 		sock_hold(&smc->sk);
-		if (!lgr->is_smcd && smc->conn.rmb_desc->is_vm) {
-			for (i = 0; i < PAGE_ALIGN(bytes + offset) / PAGE_SIZE; i++)
-				get_page(pages[i]);
-		} else {
-			get_page(smc->conn.rmb_desc->pages);
-		}
+		get_page(smc->conn.rmb_desc->pages);
 		atomic_add(bytes, &smc->conn.splice_pending);
 	}
-	kfree(priv);
-	kfree(partial);
-	kfree(pages);
 
 	return bytes;
-
-out_priv:
-	for (i = (i - 1); i >= 0; i--)
-		kfree(priv[i]);
-	kfree(priv);
-out_part:
-	kfree(partial);
-out_page:
-	kfree(pages);
-out:
-	return -ENOMEM;
 }
 
 static int smc_rx_data_available_and_no_splice_pend(struct smc_connection *conn)
@@ -267,9 +203,9 @@ int smc_rx_wait(struct smc_sock *smc, long *timeo,
 	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 	add_wait_queue(sk_sleep(sk), &wait);
 	rc = sk_wait_event(sk, timeo,
-			   READ_ONCE(sk->sk_err) ||
+			   sk->sk_err ||
 			   cflags->peer_conn_abort ||
-			   READ_ONCE(sk->sk_shutdown) & RCV_SHUTDOWN ||
+			   sk->sk_shutdown & RCV_SHUTDOWN ||
 			   conn->killed ||
 			   fcrit(conn),
 			   &wait);
@@ -291,7 +227,6 @@ static int smc_rx_recv_urg(struct smc_sock *smc, struct msghdr *msg, int len,
 	    conn->urg_state == SMC_URG_READ)
 		return -EINVAL;
 
-	SMC_STAT_INC(smc, urg_data_cnt);
 	if (conn->urg_state == SMC_URG_VALID) {
 		if (!(flags & MSG_PEEK))
 			smc->conn.urg_state = SMC_URG_READ;
@@ -368,12 +303,6 @@ int smc_rx_recvmsg(struct smc_sock *smc, struct msghdr *msg,
 	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, len);
 
-	readable = atomic_read(&conn->bytes_to_rcv);
-	if (readable >= conn->rmb_desc->len)
-		SMC_STAT_RMB_RX_FULL(smc, !conn->lnk);
-
-	if (len < readable)
-		SMC_STAT_RMB_RX_SIZE_SMALL(smc, !conn->lnk);
 	/* we currently use 1 RMBE per RMB, so RMBE == RMB base addr */
 	rcvbuf_base = conn->rx_off + conn->rmb_desc->cpu_addr;
 
@@ -475,6 +404,7 @@ copy:
 				if (rc < 0) {
 					if (!read_done)
 						read_done = -EFAULT;
+					smc_rmb_sync_sg_for_device(conn);
 					goto out;
 				}
 			}
@@ -488,6 +418,7 @@ copy:
 			chunk_len_sum += chunk_len;
 			chunk_off = 0; /* modulo offset in recv ring buffer */
 		}
+		smc_rmb_sync_sg_for_device(conn);
 
 		/* update cursors */
 		if (!(flags & MSG_PEEK)) {
@@ -499,8 +430,6 @@ copy:
 			if (msg && smc_rx_update_consumer(smc, cons, copylen))
 				goto out;
 		}
-
-		trace_smc_rx_recvmsg(smc, copylen);
 	} while (read_remaining);
 out:
 	return read_done;

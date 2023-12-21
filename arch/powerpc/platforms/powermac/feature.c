@@ -31,6 +31,7 @@
 #include <asm/keylargo.h>
 #include <asm/uninorth.h>
 #include <asm/io.h>
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/pmac_feature.h>
 #include <asm/dbdma.h>
@@ -1053,11 +1054,11 @@ core99_reset_cpu(struct device_node *node, long param, long value)
 		return -ENODEV;
 
 	for_each_of_cpu_node(np) {
+		const u32 *num = of_get_property(np, "reg", NULL);
 		const u32 *rst = of_get_property(np, "soft-reset", NULL);
-		if (!rst)
+		if (num == NULL || rst == NULL)
 			continue;
-		if (param == of_get_cpu_hwid(np, 0)) {
-			of_node_put(np);
+		if (param == *num) {
 			reset_io = *rst;
 			break;
 		}
@@ -1499,11 +1500,11 @@ static long g5_reset_cpu(struct device_node *node, long param, long value)
 		return -ENODEV;
 
 	for_each_of_cpu_node(np) {
+		const u32 *num = of_get_property(np, "reg", NULL);
 		const u32 *rst = of_get_property(np, "soft-reset", NULL);
-		if (!rst)
+		if (num == NULL || rst == NULL)
 			continue;
-		if (param == of_get_cpu_hwid(np, 0)) {
-			of_node_put(np);
+		if (param == *num) {
 			reset_io = *rst;
 			break;
 		}
@@ -1529,7 +1530,7 @@ static long g5_reset_cpu(struct device_node *node, long param, long value)
  * This takes the second CPU off the bus on dual CPU machines
  * running UP
  */
-void __init g5_phy_disable_cpu1(void)
+void g5_phy_disable_cpu1(void)
 {
 	if (uninorth_maj == 3)
 		UN_OUT(U3_API_PHY_CONFIG_1, 0);
@@ -2506,7 +2507,7 @@ found:
 			int cpu_count = 1;
 
 			/* Nap mode not supported on SMP */
-			if (of_property_read_bool(np, "flush-on-lock") ||
+			if (of_get_property(np, "flush-on-lock", NULL) ||
 			    (cpu_count > 1)) {
 				powersave_nap = 0;
 				of_node_put(np);
@@ -2545,7 +2546,8 @@ done:
  */
 static void __init probe_uninorth(void)
 {
-	struct resource res;
+	const u32 *addrp;
+	phys_addr_t address;
 	unsigned long actrl;
 
 	/* Locate core99 Uni-N */
@@ -2567,15 +2569,18 @@ static void __init probe_uninorth(void)
 		return;
 	}
 
-	if (of_address_to_resource(uninorth_node, 0, &res))
+	addrp = of_get_property(uninorth_node, "reg", NULL);
+	if (addrp == NULL)
 		return;
-
-	uninorth_base = ioremap(res.start, 0x40000);
+	address = of_translate_address(uninorth_node, addrp);
+	if (address == 0)
+		return;
+	uninorth_base = ioremap(address, 0x40000);
 	if (uninorth_base == NULL)
 		return;
 	uninorth_rev = in_be32(UN_REG(UNI_N_VERSION));
 	if (uninorth_maj == 3 || uninorth_maj == 4) {
-		u3_ht_base = ioremap(res.start + U3_HT_CONFIG_BASE, 0x1000);
+		u3_ht_base = ioremap(address + U3_HT_CONFIG_BASE, 0x1000);
 		if (u3_ht_base == NULL) {
 			iounmap(uninorth_base);
 			return;
@@ -2585,7 +2590,7 @@ static void __init probe_uninorth(void)
 	printk(KERN_INFO "Found %s memory controller & host bridge"
 	       " @ 0x%08x revision: 0x%02x\n", uninorth_maj == 3 ? "U3" :
 	       uninorth_maj == 4 ? "U4" : "UniNorth",
-	       (unsigned int)res.start, uninorth_rev);
+	       (unsigned int)address, uninorth_rev);
 	printk(KERN_INFO "Mapped at 0x%08lx\n", (unsigned long)uninorth_base);
 
 	/* Set the arbitrer QAck delay according to what Apple does
@@ -2628,31 +2633,31 @@ static void __init probe_one_macio(const char *name, const char *compat, int typ
 		if (!macio_chips[i].of_node)
 			break;
 		if (macio_chips[i].of_node == node)
-			goto out_put;
+			return;
 	}
 
 	if (i >= MAX_MACIO_CHIPS) {
 		printk(KERN_ERR "pmac_feature: Please increase MAX_MACIO_CHIPS !\n");
 		printk(KERN_ERR "pmac_feature: %pOF skipped\n", node);
-		goto out_put;
+		return;
 	}
 	addrp = of_get_pci_address(node, 0, &size, NULL);
 	if (addrp == NULL) {
 		printk(KERN_ERR "pmac_feature: %pOF: can't find base !\n",
 		       node);
-		goto out_put;
+		return;
 	}
 	addr = of_translate_address(node, addrp);
 	if (addr == 0) {
 		printk(KERN_ERR "pmac_feature: %pOF, can't translate base !\n",
 		       node);
-		goto out_put;
+		return;
 	}
 	base = ioremap(addr, (unsigned long)size);
 	if (!base) {
 		printk(KERN_ERR "pmac_feature: %pOF, can't map mac-io chip !\n",
 		       node);
-		goto out_put;
+		return;
 	}
 	if (type == macio_keylargo || type == macio_keylargo2) {
 		const u32 *did = of_get_property(node, "device-id", NULL);
@@ -2673,11 +2678,6 @@ static void __init probe_one_macio(const char *name, const char *compat, int typ
 		macio_chips[i].rev = *revp;
 	printk(KERN_INFO "Found a %s mac-io controller, rev: %d, mapped at 0x%p\n",
 		macio_names[type], macio_chips[i].rev, macio_chips[i].base);
-
-	return;
-
-out_put:
-	of_node_put(node);
 }
 
 static int __init

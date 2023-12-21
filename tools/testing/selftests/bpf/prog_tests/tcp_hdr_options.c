@@ -18,12 +18,12 @@
 #define LO_ADDR6 "::1"
 #define CG_NAME "/tcpbpf-hdr-opt-test"
 
-static struct bpf_test_option exp_passive_estab_in;
-static struct bpf_test_option exp_active_estab_in;
-static struct bpf_test_option exp_passive_fin_in;
-static struct bpf_test_option exp_active_fin_in;
-static struct hdr_stg exp_passive_hdr_stg;
-static struct hdr_stg exp_active_hdr_stg = { .active = true, };
+struct bpf_test_option exp_passive_estab_in;
+struct bpf_test_option exp_active_estab_in;
+struct bpf_test_option exp_passive_fin_in;
+struct bpf_test_option exp_active_fin_in;
+struct hdr_stg exp_passive_hdr_stg;
+struct hdr_stg exp_active_hdr_stg = { .active = true, };
 
 static struct test_misc_tcp_hdr_options *misc_skel;
 static struct test_tcp_hdr_options *skel;
@@ -42,10 +42,33 @@ struct sk_fds {
 
 static int create_netns(void)
 {
-	if (!ASSERT_OK(unshare(CLONE_NEWNET), "create netns"))
+	if (CHECK(unshare(CLONE_NEWNET), "create netns",
+		  "unshare(CLONE_NEWNET): %s (%d)",
+		  strerror(errno), errno))
 		return -1;
 
-	if (!ASSERT_OK(system("ip link set dev lo up"), "run ip cmd"))
+	if (CHECK(system("ip link set dev lo up"), "run ip cmd",
+		  "failed to bring lo link up\n"))
+		return -1;
+
+	return 0;
+}
+
+static int write_sysctl(const char *sysctl, const char *value)
+{
+	int fd, err, len;
+
+	fd = open(sysctl, O_WRONLY);
+	if (CHECK(fd == -1, "open sysctl", "open(%s): %s (%d)\n",
+		  sysctl, strerror(errno), errno))
+		return -1;
+
+	len = strlen(value);
+	err = write(fd, value, len);
+	close(fd);
+	if (CHECK(err != len, "write sysctl",
+		  "write(%s, %s): err:%d %s (%d)\n",
+		  sysctl, value, err, strerror(errno), errno))
 		return -1;
 
 	return 0;
@@ -77,12 +100,16 @@ static int sk_fds_shutdown(struct sk_fds *sk_fds)
 
 	shutdown(sk_fds->active_fd, SHUT_WR);
 	ret = read(sk_fds->passive_fd, &abyte, sizeof(abyte));
-	if (!ASSERT_EQ(ret, 0, "read-after-shutdown(passive_fd):"))
+	if (CHECK(ret != 0, "read-after-shutdown(passive_fd):",
+		  "ret:%d %s (%d)\n",
+		  ret, strerror(errno), errno))
 		return -1;
 
 	shutdown(sk_fds->passive_fd, SHUT_WR);
 	ret = read(sk_fds->active_fd, &abyte, sizeof(abyte));
-	if (!ASSERT_EQ(ret, 0, "read-after-shutdown(active_fd):"))
+	if (CHECK(ret != 0, "read-after-shutdown(active_fd):",
+		  "ret:%d %s (%d)\n",
+		  ret, strerror(errno), errno))
 		return -1;
 
 	return 0;
@@ -95,7 +122,8 @@ static int sk_fds_connect(struct sk_fds *sk_fds, bool fast_open)
 	socklen_t len;
 
 	sk_fds->srv_fd = start_server(AF_INET6, SOCK_STREAM, LO_ADDR6, 0, 0);
-	if (!ASSERT_NEQ(sk_fds->srv_fd, -1, "start_server"))
+	if (CHECK(sk_fds->srv_fd == -1, "start_server", "%s (%d)\n",
+		  strerror(errno), errno))
 		goto error;
 
 	if (fast_open)
@@ -104,25 +132,28 @@ static int sk_fds_connect(struct sk_fds *sk_fds, bool fast_open)
 	else
 		sk_fds->active_fd = connect_to_fd(sk_fds->srv_fd, 0);
 
-	if (!ASSERT_NEQ(sk_fds->active_fd, -1, "")) {
+	if (CHECK_FAIL(sk_fds->active_fd == -1)) {
 		close(sk_fds->srv_fd);
 		goto error;
 	}
 
 	len = sizeof(addr6);
-	if (!ASSERT_OK(getsockname(sk_fds->srv_fd, (struct sockaddr *)&addr6,
-				   &len), "getsockname(srv_fd)"))
+	if (CHECK(getsockname(sk_fds->srv_fd, (struct sockaddr *)&addr6,
+			      &len), "getsockname(srv_fd)", "%s (%d)\n",
+		  strerror(errno), errno))
 		goto error_close;
 	sk_fds->passive_lport = ntohs(addr6.sin6_port);
 
 	len = sizeof(addr6);
-	if (!ASSERT_OK(getsockname(sk_fds->active_fd, (struct sockaddr *)&addr6,
-				   &len), "getsockname(active_fd)"))
+	if (CHECK(getsockname(sk_fds->active_fd, (struct sockaddr *)&addr6,
+			      &len), "getsockname(active_fd)", "%s (%d)\n",
+		  strerror(errno), errno))
 		goto error_close;
 	sk_fds->active_lport = ntohs(addr6.sin6_port);
 
 	sk_fds->passive_fd = accept(sk_fds->srv_fd, NULL, 0);
-	if (!ASSERT_NEQ(sk_fds->passive_fd, -1, "accept(srv_fd)"))
+	if (CHECK(sk_fds->passive_fd == -1, "accept(srv_fd)", "%s (%d)\n",
+		  strerror(errno), errno))
 		goto error_close;
 
 	if (fast_open) {
@@ -130,7 +161,8 @@ static int sk_fds_connect(struct sk_fds *sk_fds, bool fast_open)
 		int ret;
 
 		ret = read(sk_fds->passive_fd, bytes_in, sizeof(bytes_in));
-		if (!ASSERT_EQ(ret, sizeof(fast), "read fastopen syn data")) {
+		if (CHECK(ret != sizeof(fast), "read fastopen syn data",
+			  "expected=%lu actual=%d\n", sizeof(fast), ret)) {
 			close(sk_fds->passive_fd);
 			goto error_close;
 		}
@@ -151,7 +183,8 @@ static int check_hdr_opt(const struct bpf_test_option *exp,
 			 const struct bpf_test_option *act,
 			 const char *hdr_desc)
 {
-	if (!ASSERT_EQ(memcmp(exp, act, sizeof(*exp)), 0, hdr_desc)) {
+	if (CHECK(memcmp(exp, act, sizeof(*exp)),
+		  "expected-vs-actual", "unexpected %s\n", hdr_desc)) {
 		print_option(exp, "expected: ");
 		print_option(act, "  actual: ");
 		return -1;
@@ -165,11 +198,13 @@ static int check_hdr_stg(const struct hdr_stg *exp, int fd,
 {
 	struct hdr_stg act;
 
-	if (!ASSERT_OK(bpf_map_lookup_elem(hdr_stg_map_fd, &fd, &act),
-		  "map_lookup(hdr_stg_map_fd)"))
+	if (CHECK(bpf_map_lookup_elem(hdr_stg_map_fd, &fd, &act),
+		  "map_lookup(hdr_stg_map_fd)", "%s %s (%d)\n",
+		  stg_desc, strerror(errno), errno))
 		return -1;
 
-	if (!ASSERT_EQ(memcmp(exp, &act, sizeof(*exp)), 0, stg_desc)) {
+	if (CHECK(memcmp(exp, &act, sizeof(*exp)),
+		  "expected-vs-actual", "unexpected %s\n", stg_desc)) {
 		print_hdr_stg(exp, "expected: ");
 		print_hdr_stg(&act, "  actual: ");
 		return -1;
@@ -213,8 +248,9 @@ static void check_hdr_and_close_fds(struct sk_fds *sk_fds)
 	if (sk_fds_shutdown(sk_fds))
 		goto check_linum;
 
-	if (!ASSERT_EQ(expected_inherit_cb_flags, skel->bss->inherit_cb_flags,
-		       "inherit_cb_flags"))
+	if (CHECK(expected_inherit_cb_flags != skel->bss->inherit_cb_flags,
+		  "Unexpected inherit_cb_flags", "0x%x != 0x%x\n",
+		  skel->bss->inherit_cb_flags, expected_inherit_cb_flags))
 		goto check_linum;
 
 	if (check_hdr_stg(&exp_passive_hdr_stg, sk_fds->passive_fd,
@@ -241,7 +277,7 @@ static void check_hdr_and_close_fds(struct sk_fds *sk_fds)
 		      "active_fin_in");
 
 check_linum:
-	ASSERT_FALSE(check_error_linum(sk_fds), "check_error_linum");
+	CHECK_FAIL(check_error_linum(sk_fds));
 	sk_fds_close(sk_fds);
 }
 
@@ -317,7 +353,8 @@ static void fastopen_estab(void)
 		return;
 
 	link = bpf_program__attach_cgroup(skel->progs.estab, cg_fd);
-	if (!ASSERT_OK_PTR(link, "attach_cgroup(estab)"))
+	if (CHECK(IS_ERR(link), "attach_cgroup(estab)", "err: %ld\n",
+		  PTR_ERR(link)))
 		return;
 
 	if (sk_fds_connect(&sk_fds, true)) {
@@ -361,7 +398,8 @@ static void syncookie_estab(void)
 		return;
 
 	link = bpf_program__attach_cgroup(skel->progs.estab, cg_fd);
-	if (!ASSERT_OK_PTR(link, "attach_cgroup(estab)"))
+	if (CHECK(IS_ERR(link), "attach_cgroup(estab)", "err: %ld\n",
+		  PTR_ERR(link)))
 		return;
 
 	if (sk_fds_connect(&sk_fds, false)) {
@@ -393,7 +431,8 @@ static void fin(void)
 		return;
 
 	link = bpf_program__attach_cgroup(skel->progs.estab, cg_fd);
-	if (!ASSERT_OK_PTR(link, "attach_cgroup(estab)"))
+	if (CHECK(IS_ERR(link), "attach_cgroup(estab)", "err: %ld\n",
+		  PTR_ERR(link)))
 		return;
 
 	if (sk_fds_connect(&sk_fds, false)) {
@@ -432,7 +471,8 @@ static void __simple_estab(bool exprm)
 		return;
 
 	link = bpf_program__attach_cgroup(skel->progs.estab, cg_fd);
-	if (!ASSERT_OK_PTR(link, "attach_cgroup(estab)"))
+	if (CHECK(IS_ERR(link), "attach_cgroup(estab)", "err: %ld\n",
+		  PTR_ERR(link)))
 		return;
 
 	if (sk_fds_connect(&sk_fds, false)) {
@@ -469,7 +509,8 @@ static void misc(void)
 		return;
 
 	link = bpf_program__attach_cgroup(misc_skel->progs.misc_estab, cg_fd);
-	if (!ASSERT_OK_PTR(link, "attach_cgroup(misc_estab)"))
+	if (CHECK(IS_ERR(link), "attach_cgroup(misc_estab)", "err: %ld\n",
+		  PTR_ERR(link)))
 		return;
 
 	if (sk_fds_connect(&sk_fds, false)) {
@@ -481,20 +522,26 @@ static void misc(void)
 		/* MSG_EOR to ensure skb will not be combined */
 		ret = send(sk_fds.active_fd, send_msg, sizeof(send_msg),
 			   MSG_EOR);
-		if (!ASSERT_EQ(ret, sizeof(send_msg), "send(msg)"))
+		if (CHECK(ret != sizeof(send_msg), "send(msg)", "ret:%d\n",
+			  ret))
 			goto check_linum;
 
 		ret = read(sk_fds.passive_fd, recv_msg, sizeof(recv_msg));
-		if (!ASSERT_EQ(ret, sizeof(send_msg), "read(msg)"))
+		if (CHECK(ret != sizeof(send_msg), "read(msg)", "ret:%d\n",
+			  ret))
 			goto check_linum;
 	}
 
 	if (sk_fds_shutdown(&sk_fds))
 		goto check_linum;
 
-	ASSERT_EQ(misc_skel->bss->nr_syn, 1, "unexpected nr_syn");
+	CHECK(misc_skel->bss->nr_syn != 1, "unexpected nr_syn",
+	      "expected (1) != actual (%u)\n",
+		misc_skel->bss->nr_syn);
 
-	ASSERT_EQ(misc_skel->bss->nr_data, nr_data, "unexpected nr_data");
+	CHECK(misc_skel->bss->nr_data != nr_data, "unexpected nr_data",
+	      "expected (%u) != actual (%u)\n",
+	      nr_data, misc_skel->bss->nr_data);
 
 	/* The last ACK may have been delayed, so it is either 1 or 2. */
 	CHECK(misc_skel->bss->nr_pure_ack != 1 &&
@@ -503,12 +550,12 @@ static void misc(void)
 	      "expected (1 or 2) != actual (%u)\n",
 		misc_skel->bss->nr_pure_ack);
 
-	ASSERT_EQ(misc_skel->bss->nr_fin, 1, "unexpected nr_fin");
-
-	ASSERT_EQ(misc_skel->bss->nr_hwtstamp, 0, "nr_hwtstamp");
+	CHECK(misc_skel->bss->nr_fin != 1, "unexpected nr_fin",
+	      "expected (1) != actual (%u)\n",
+	      misc_skel->bss->nr_fin);
 
 check_linum:
-	ASSERT_FALSE(check_error_linum(&sk_fds), "check_error_linum");
+	CHECK_FAIL(check_error_linum(&sk_fds));
 	sk_fds_close(&sk_fds);
 	bpf_link__destroy(link);
 }
@@ -533,15 +580,15 @@ void test_tcp_hdr_options(void)
 	int i;
 
 	skel = test_tcp_hdr_options__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "open and load skel"))
+	if (CHECK(!skel, "open and load skel", "failed"))
 		return;
 
 	misc_skel = test_misc_tcp_hdr_options__open_and_load();
-	if (!ASSERT_OK_PTR(misc_skel, "open and load misc test skel"))
+	if (CHECK(!misc_skel, "open and load misc test skel", "failed"))
 		goto skel_destroy;
 
 	cg_fd = test__join_cgroup(CG_NAME);
-	if (!ASSERT_GE(cg_fd, 0, "join_cgroup"))
+	if (CHECK_FAIL(cg_fd < 0))
 		goto skel_destroy;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {

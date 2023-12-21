@@ -9,7 +9,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
+#include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/iio/iio.h>
 
@@ -58,7 +58,8 @@ static const struct of_device_id st_gyro_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, st_gyro_of_match);
 
-static int st_gyro_i2c_probe(struct i2c_client *client)
+static int st_gyro_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	const struct st_sensor_settings *settings;
 	struct st_sensor_data *gdata;
@@ -89,7 +90,27 @@ static int st_gyro_i2c_probe(struct i2c_client *client)
 	if (err)
 		return err;
 
-	return st_gyro_common_probe(indio_dev);
+	err = st_gyro_common_probe(indio_dev);
+	if (err < 0)
+		goto st_gyro_power_off;
+
+	return 0;
+
+st_gyro_power_off:
+	st_sensors_power_disable(indio_dev);
+
+	return err;
+}
+
+static int st_gyro_i2c_remove(struct i2c_client *client)
+{
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+
+	st_gyro_common_remove(indio_dev);
+
+	st_sensors_power_disable(indio_dev);
+
+	return 0;
 }
 
 static const struct i2c_device_id st_gyro_id_table[] = {
@@ -112,6 +133,7 @@ static struct i2c_driver st_gyro_driver = {
 		.of_match_table = st_gyro_of_match,
 	},
 	.probe = st_gyro_i2c_probe,
+	.remove = st_gyro_i2c_remove,
 	.id_table = st_gyro_id_table,
 };
 module_i2c_driver(st_gyro_driver);
@@ -119,4 +141,3 @@ module_i2c_driver(st_gyro_driver);
 MODULE_AUTHOR("Denis Ciocca <denis.ciocca@st.com>");
 MODULE_DESCRIPTION("STMicroelectronics gyroscopes i2c driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS(IIO_ST_SENSORS);

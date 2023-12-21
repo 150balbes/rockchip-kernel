@@ -1,3 +1,5 @@
+.. _mm_concepts:
+
 =================
 Concepts overview
 =================
@@ -84,15 +86,16 @@ memory with the huge pages. The first one is `HugeTLB filesystem`, or
 hugetlbfs. It is a pseudo filesystem that uses RAM as its backing
 store. For the files created in this filesystem the data resides in
 the memory and mapped using huge pages. The hugetlbfs is described at
-Documentation/admin-guide/mm/hugetlbpage.rst.
+:ref:`Documentation/admin-guide/mm/hugetlbpage.rst <hugetlbpage>`.
 
 Another, more recent, mechanism that enables use of the huge pages is
 called `Transparent HugePages`, or THP. Unlike the hugetlbfs that
 requires users and/or system administrators to configure what parts of
 the system memory should and can be mapped by the huge pages, THP
 manages such mappings transparently to the user and hence the
-name. See Documentation/admin-guide/mm/transhuge.rst for more details
-about THP.
+name. See
+:ref:`Documentation/admin-guide/mm/transhuge.rst <admin_guide_transhuge>`
+for more details about THP.
 
 Zones
 =====
@@ -122,8 +125,8 @@ processor. Each bank is referred to as a `node` and for each node Linux
 constructs an independent memory management subsystem. A node has its
 own set of zones, lists of free and used pages and various statistics
 counters. You can find more details about NUMA in
-Documentation/mm/numa.rst` and in
-Documentation/admin-guide/mm/numa_memory_policy.rst.
+:ref:`Documentation/vm/numa.rst <numa>` and in
+:ref:`Documentation/admin-guide/mm/numa_memory_policy.rst <numa_memory_policy>`.
 
 Page cache
 ==========
@@ -181,7 +184,7 @@ pages either asynchronously or synchronously, depending on the state
 of the system. When the system is not loaded, most of the memory is free
 and allocation requests will be satisfied immediately from the free
 pages supply. As the load increases, the amount of the free pages goes
-down and when it reaches a certain threshold (low watermark), an
+down and when it reaches a certain threshold (high watermark), an
 allocation request will awaken the ``kswapd`` daemon. It will
 asynchronously scan memory pages and either just free them if the data
 they contain is available elsewhere, or evict to the backing storage

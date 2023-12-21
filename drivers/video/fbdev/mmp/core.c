@@ -127,18 +127,19 @@ EXPORT_SYMBOL_GPL(mmp_unregister_panel);
  */
 struct mmp_path *mmp_get_path(const char *name)
 {
-	struct mmp_path *path = NULL, *iter;
+	struct mmp_path *path;
+	int found = 0;
 
 	mutex_lock(&disp_lock);
-	list_for_each_entry(iter, &path_list, node) {
-		if (!strcmp(name, iter->name)) {
-			path = iter;
+	list_for_each_entry(path, &path_list, node) {
+		if (!strcmp(name, path->name)) {
+			found = 1;
 			break;
 		}
 	}
 	mutex_unlock(&disp_lock);
 
-	return path;
+	return found ? path : NULL;
 }
 EXPORT_SYMBOL_GPL(mmp_get_path);
 

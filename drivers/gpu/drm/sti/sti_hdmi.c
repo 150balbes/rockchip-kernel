@@ -8,7 +8,6 @@
 #include <linux/component.h>
 #include <linux/debugfs.h>
 #include <linux/hdmi.h>
-#include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
@@ -168,12 +167,6 @@ struct sti_hdmi_connector {
 #define to_sti_hdmi_connector(x) \
 	container_of(x, struct sti_hdmi_connector, drm_connector)
 
-static const struct drm_prop_enum_list colorspace_mode_names[] = {
-	{ HDMI_COLORSPACE_RGB, "rgb" },
-	{ HDMI_COLORSPACE_YUV422, "yuv422" },
-	{ HDMI_COLORSPACE_YUV444, "yuv444" },
-};
-
 u32 hdmi_read(struct sti_hdmi *hdmi, int offset)
 {
 	return readl(hdmi->regs + offset);
@@ -184,7 +177,7 @@ void hdmi_write(struct sti_hdmi *hdmi, u32 val, int offset)
 	writel(val, hdmi->regs + offset);
 }
 
-/*
+/**
  * HDMI interrupt handler threaded
  *
  * @irq: irq number
@@ -216,7 +209,7 @@ static irqreturn_t hdmi_irq_thread(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-/*
+/**
  * HDMI interrupt handler
  *
  * @irq: irq number
@@ -238,7 +231,7 @@ static irqreturn_t hdmi_irq(int irq, void *arg)
 	return IRQ_WAKE_THREAD;
 }
 
-/*
+/**
  * Set hdmi active area depending on the drm display mode selected
  *
  * @hdmi: pointer on the hdmi internal structure
@@ -259,14 +252,13 @@ static void hdmi_active_area(struct sti_hdmi *hdmi)
 	hdmi_write(hdmi, ymax, HDMI_ACTIVE_VID_YMAX);
 }
 
-/*
+/**
  * Overall hdmi configuration
  *
  * @hdmi: pointer on the hdmi internal structure
  */
 static void hdmi_config(struct sti_hdmi *hdmi)
 {
-	struct drm_connector *connector = hdmi->drm_connector;
 	u32 conf;
 
 	DRM_DEBUG_DRIVER("\n");
@@ -276,7 +268,7 @@ static void hdmi_config(struct sti_hdmi *hdmi)
 
 	/* Select encryption type and the framing mode */
 	conf |= HDMI_CFG_ESS_NOT_OESS;
-	if (connector->display_info.is_hdmi)
+	if (hdmi->hdmi_monitor)
 		conf |= HDMI_CFG_HDMI_NOT_DVI;
 
 	/* Set Hsync polarity */
@@ -338,7 +330,7 @@ static void hdmi_infoframe_reset(struct sti_hdmi *hdmi,
 		hdmi_write(hdmi, 0x0, pack_offset + i);
 }
 
-/*
+/**
  * Helper to concatenate infoframe in 32 bits word
  *
  * @ptr: pointer on the hdmi internal structure
@@ -355,7 +347,7 @@ static inline unsigned int hdmi_infoframe_subpack(const u8 *ptr, size_t size)
 	return value;
 }
 
-/*
+/**
  * Helper to write info frame
  *
  * @hdmi: pointer on the hdmi internal structure
@@ -425,7 +417,7 @@ static void hdmi_infoframe_write_infopack(struct sti_hdmi *hdmi,
 	hdmi_write(hdmi, val, HDMI_SW_DI_CFG);
 }
 
-/*
+/**
  * Prepare and configure the AVI infoframe
  *
  * AVI infoframe are transmitted at least once per two video field and
@@ -468,7 +460,7 @@ static int hdmi_avi_infoframe_config(struct sti_hdmi *hdmi)
 	return 0;
 }
 
-/*
+/**
  * Prepare and configure the AUDIO infoframe
  *
  * AUDIO infoframe are transmitted once per frame and
@@ -553,7 +545,7 @@ static int hdmi_vendor_infoframe_config(struct sti_hdmi *hdmi)
 
 #define HDMI_TIMEOUT_SWRESET  100   /*milliseconds */
 
-/*
+/**
  * Software reset of the hdmi subsystem
  *
  * @hdmi: pointer on the hdmi internal structure
@@ -787,7 +779,7 @@ static void sti_hdmi_disable(struct drm_bridge *bridge)
 	cec_notifier_set_phys_addr(hdmi->notifier, CEC_PHYS_ADDR_INVALID);
 }
 
-/*
+/**
  * sti_hdmi_audio_get_non_coherent_n() - get N parameter for non-coherent
  * clocks. None-coherent clocks means that audio and TMDS clocks have not the
  * same source (drifts between clocks). In this case assumption is that CTS is
@@ -894,7 +886,7 @@ static void sti_hdmi_pre_enable(struct drm_bridge *bridge)
 	if (clk_prepare_enable(hdmi->clk_tmds))
 		DRM_ERROR("Failed to prepare/enable hdmi_tmds clk\n");
 	if (clk_prepare_enable(hdmi->clk_phy))
-		DRM_ERROR("Failed to prepare/enable hdmi_rejection_pll clk\n");
+		DRM_ERROR("Failed to prepare/enable hdmi_rejec_pll clk\n");
 
 	hdmi->enabled = true;
 
@@ -942,7 +934,7 @@ static void sti_hdmi_set_mode(struct drm_bridge *bridge,
 	DRM_DEBUG_DRIVER("\n");
 
 	/* Copy the drm display mode in the connector local structure */
-	drm_mode_copy(&hdmi->mode, mode);
+	memcpy(&hdmi->mode, mode, sizeof(struct drm_display_mode));
 
 	/* Update clock framerate according to the selected mode */
 	ret = clk_set_rate(hdmi->clk_pix, mode->clock * 1000);
@@ -986,14 +978,14 @@ static int sti_hdmi_connector_get_modes(struct drm_connector *connector)
 	if (!edid)
 		goto fail;
 
+	hdmi->hdmi_monitor = drm_detect_hdmi_monitor(edid);
+	DRM_DEBUG_KMS("%s : %dx%d cm\n",
+		      (hdmi->hdmi_monitor ? "hdmi monitor" : "dvi monitor"),
+		      edid->width_cm, edid->height_cm);
 	cec_notifier_set_phys_addr_from_edid(hdmi->notifier, edid);
 
 	count = drm_add_edid_modes(connector, edid);
 	drm_connector_update_edid_property(connector, edid);
-
-	DRM_DEBUG_KMS("%s : %dx%d cm\n",
-		      (connector->display_info.is_hdmi ? "hdmi monitor" : "dvi monitor"),
-		      edid->width_cm, edid->height_cm);
 
 	kfree(edid);
 	return count;
@@ -1005,9 +997,8 @@ fail:
 
 #define CLK_TOLERANCE_HZ 50
 
-static enum drm_mode_status
-sti_hdmi_connector_mode_valid(struct drm_connector *connector,
-			      struct drm_display_mode *mode)
+static int sti_hdmi_connector_mode_valid(struct drm_connector *connector,
+					struct drm_display_mode *mode)
 {
 	int target = mode->clock * 1000;
 	int target_min = target - CLK_TOLERANCE_HZ;
@@ -1178,12 +1169,12 @@ static int hdmi_audio_hw_params(struct device *dev,
 	DRM_DEBUG_DRIVER("\n");
 
 	if ((daifmt->fmt != HDMI_I2S) || daifmt->bit_clk_inv ||
-	    daifmt->frame_clk_inv || daifmt->bit_clk_provider ||
-	    daifmt->frame_clk_provider) {
+	    daifmt->frame_clk_inv || daifmt->bit_clk_master ||
+	    daifmt->frame_clk_master) {
 		dev_err(dev, "%s: Bad flags %d %d %d %d\n", __func__,
 			daifmt->bit_clk_inv, daifmt->frame_clk_inv,
-			daifmt->bit_clk_provider,
-			daifmt->frame_clk_provider);
+			daifmt->bit_clk_master,
+			daifmt->frame_clk_master);
 		return -EINVAL;
 	}
 
@@ -1472,7 +1463,7 @@ static int sti_hdmi_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void sti_hdmi_remove(struct platform_device *pdev)
+static int sti_hdmi_remove(struct platform_device *pdev)
 {
 	struct sti_hdmi *hdmi = dev_get_drvdata(&pdev->dev);
 
@@ -1480,6 +1471,8 @@ static void sti_hdmi_remove(struct platform_device *pdev)
 	if (hdmi->audio_pdev)
 		platform_device_unregister(hdmi->audio_pdev);
 	component_del(&pdev->dev, &sti_hdmi_ops);
+
+	return 0;
 }
 
 struct platform_driver sti_hdmi_driver = {
@@ -1489,7 +1482,7 @@ struct platform_driver sti_hdmi_driver = {
 		.of_match_table = hdmi_of_match,
 	},
 	.probe = sti_hdmi_probe,
-	.remove_new = sti_hdmi_remove,
+	.remove = sti_hdmi_remove,
 };
 
 MODULE_AUTHOR("Benjamin Gaignard <benjamin.gaignard@st.com>");

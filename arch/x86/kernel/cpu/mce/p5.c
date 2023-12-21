@@ -21,7 +21,7 @@
 int mce_p5_enabled __read_mostly;
 
 /* Machine check handler for Pentium class Intel CPUs: */
-noinstr void pentium_machine_check(struct pt_regs *regs)
+static noinstr void pentium_machine_check(struct pt_regs *regs)
 {
 	u32 loaddr, hi, lotype;
 
@@ -53,6 +53,10 @@ void intel_p5_mcheck_init(struct cpuinfo_x86 *c)
 	/* Check for MCE support: */
 	if (!cpu_has(c, X86_FEATURE_MCE))
 		return;
+
+	machine_check_vector = pentium_machine_check;
+	/* Make sure the vector pointer is visible before we enable MCEs: */
+	wmb();
 
 	/* Read registers before enabling: */
 	rdmsr(MSR_IA32_P5_MC_ADDR, l, h);

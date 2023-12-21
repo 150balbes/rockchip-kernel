@@ -18,7 +18,7 @@
 
 MODULE_DESCRIPTION("Echo Fireworks driver");
 MODULE_AUTHOR("Takashi Sakamoto <o-takashi@sakamocchi.jp>");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 
 static int index[SNDRV_CARDS]	= SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS]	= SNDRV_DEFAULT_STR;
@@ -194,19 +194,19 @@ efw_card_free(struct snd_card *card)
 
 	snd_efw_stream_destroy_duplex(efw);
 	snd_efw_transaction_remove_instance(efw);
-
-	mutex_destroy(&efw->mutex);
-	fw_unit_put(efw->unit);
 }
 
-static int efw_probe(struct fw_unit *unit, const struct ieee1394_device_id *entry)
+static void
+do_registration(struct work_struct *work)
 {
+	struct snd_efw *efw = container_of(work, struct snd_efw, dwork.work);
 	unsigned int card_index;
-	struct snd_card *card;
-	struct snd_efw *efw;
 	int err;
 
-	// check registered cards.
+	if (efw->registered)
+		return;
+
+	/* check registered cards */
 	mutex_lock(&devices_mutex);
 	for (card_index = 0; card_index < SNDRV_CARDS; ++card_index) {
 		if (!test_bit(card_index, devices_used) && enable[card_index])
@@ -214,32 +214,26 @@ static int efw_probe(struct fw_unit *unit, const struct ieee1394_device_id *entr
 	}
 	if (card_index >= SNDRV_CARDS) {
 		mutex_unlock(&devices_mutex);
-		return -ENOENT;
+		return;
 	}
 
-	err = snd_card_new(&unit->device, index[card_index], id[card_index], THIS_MODULE,
-			   sizeof(*efw), &card);
+	err = snd_card_new(&efw->unit->device, index[card_index],
+			   id[card_index], THIS_MODULE, 0, &efw->card);
 	if (err < 0) {
 		mutex_unlock(&devices_mutex);
-		return err;
+		return;
 	}
-	card->private_free = efw_card_free;
 	set_bit(card_index, devices_used);
 	mutex_unlock(&devices_mutex);
 
-	efw = card->private_data;
-	efw->unit = fw_unit_get(unit);
-	dev_set_drvdata(&unit->device, efw);
-	efw->card = card;
-	efw->card_index = card_index;
+	efw->card->private_free = efw_card_free;
+	efw->card->private_data = efw;
 
-	mutex_init(&efw->mutex);
-	spin_lock_init(&efw->lock);
-	init_waitqueue_head(&efw->hwdep_wait);
-
-	// prepare response buffer.
-	snd_efw_resp_buf_size = clamp(snd_efw_resp_buf_size, SND_EFW_RESPONSE_MAXIMUM_BYTES, 4096U);
-	efw->resp_buf = devm_kzalloc(&card->card_dev, snd_efw_resp_buf_size, GFP_KERNEL);
+	/* prepare response buffer */
+	snd_efw_resp_buf_size = clamp(snd_efw_resp_buf_size,
+				      SND_EFW_RESPONSE_MAXIMUM_BYTES, 4096U);
+	efw->resp_buf = devm_kzalloc(&efw->card->card_dev,
+				     snd_efw_resp_buf_size, GFP_KERNEL);
 	if (!efw->resp_buf) {
 		err = -ENOMEM;
 		goto error;
@@ -271,48 +265,80 @@ static int efw_probe(struct fw_unit *unit, const struct ieee1394_device_id *entr
 	if (err < 0)
 		goto error;
 
-	err = snd_card_register(card);
+	err = snd_card_register(efw->card);
 	if (err < 0)
 		goto error;
 
-	return 0;
+	efw->registered = true;
+
+	return;
 error:
-	snd_card_free(card);
-	return err;
+	snd_card_free(efw->card);
+	dev_info(&efw->unit->device,
+		 "Sound card registration failed: %d\n", err);
+}
+
+static int
+efw_probe(struct fw_unit *unit, const struct ieee1394_device_id *entry)
+{
+	struct snd_efw *efw;
+
+	efw = devm_kzalloc(&unit->device, sizeof(struct snd_efw), GFP_KERNEL);
+	if (efw == NULL)
+		return -ENOMEM;
+	efw->unit = fw_unit_get(unit);
+	dev_set_drvdata(&unit->device, efw);
+
+	mutex_init(&efw->mutex);
+	spin_lock_init(&efw->lock);
+	init_waitqueue_head(&efw->hwdep_wait);
+
+	/* Allocate and register this sound card later. */
+	INIT_DEFERRABLE_WORK(&efw->dwork, do_registration);
+	snd_fw_schedule_registration(unit, &efw->dwork);
+
+	return 0;
 }
 
 static void efw_update(struct fw_unit *unit)
 {
 	struct snd_efw *efw = dev_get_drvdata(&unit->device);
 
+	/* Postpone a workqueue for deferred registration. */
+	if (!efw->registered)
+		snd_fw_schedule_registration(unit, &efw->dwork);
+
 	snd_efw_transaction_bus_reset(efw->unit);
 
-	mutex_lock(&efw->mutex);
-	snd_efw_stream_update_duplex(efw);
-	mutex_unlock(&efw->mutex);
+	/*
+	 * After registration, userspace can start packet streaming, then this
+	 * code block works fine.
+	 */
+	if (efw->registered) {
+		mutex_lock(&efw->mutex);
+		snd_efw_stream_update_duplex(efw);
+		mutex_unlock(&efw->mutex);
+	}
 }
 
 static void efw_remove(struct fw_unit *unit)
 {
 	struct snd_efw *efw = dev_get_drvdata(&unit->device);
 
-	// Block till all of ALSA character devices are released.
-	snd_card_free(efw->card);
-}
+	/*
+	 * Confirm to stop the work for registration before the sound card is
+	 * going to be released. The work is not scheduled again because bus
+	 * reset handler is not called anymore.
+	 */
+	cancel_delayed_work_sync(&efw->dwork);
 
-#define SPECIFIER_1394TA	0x00a02d
-#define VERSION_EFW		0x010000
+	if (efw->registered) {
+		// Block till all of ALSA character devices are released.
+		snd_card_free(efw->card);
+	}
 
-#define SND_EFW_DEV_ENTRY(vendor, model) \
-{ \
-	.match_flags	= IEEE1394_MATCH_VENDOR_ID | \
-			  IEEE1394_MATCH_MODEL_ID | \
-			  IEEE1394_MATCH_SPECIFIER_ID | \
-			  IEEE1394_MATCH_VERSION, \
-	.vendor_id	= vendor,\
-	.model_id	= model, \
-	.specifier_id	= SPECIFIER_1394TA, \
-	.version	= VERSION_EFW, \
+	mutex_destroy(&efw->mutex);
+	fw_unit_put(efw->unit);
 }
 
 static const struct ieee1394_device_id efw_id_table[] = {

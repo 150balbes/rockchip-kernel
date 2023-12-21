@@ -15,12 +15,11 @@
 #include "recover.h"
 #include "rcom.h"
 #include "config.h"
-#include "midcomms.h"
 #include "lowcomms.h"
 
 int dlm_slots_version(struct dlm_header *h)
 {
-	if ((le32_to_cpu(h->h_version) & 0x0000FFFF) < DLM_HEADER_SLOTS)
+	if ((h->h_version & 0x0000FFFF) < DLM_HEADER_SLOTS)
 		return 0;
 	return 1;
 }
@@ -120,13 +119,18 @@ int dlm_slots_copy_in(struct dlm_ls *ls)
 
 	ro0 = (struct rcom_slot *)(rc->rc_buf + sizeof(struct rcom_config));
 
+	for (i = 0, ro = ro0; i < num_slots; i++, ro++) {
+		ro->ro_nodeid = le32_to_cpu(ro->ro_nodeid);
+		ro->ro_slot = le16_to_cpu(ro->ro_slot);
+	}
+
 	log_slots(ls, gen, num_slots, ro0, NULL, 0);
 
 	list_for_each_entry(memb, &ls->ls_nodes, list) {
 		for (i = 0, ro = ro0; i < num_slots; i++, ro++) {
-			if (le32_to_cpu(ro->ro_nodeid) != memb->nodeid)
+			if (ro->ro_nodeid != memb->nodeid)
 				continue;
-			memb->slot = le16_to_cpu(ro->ro_slot);
+			memb->slot = ro->ro_slot;
 			memb->slot_prev = memb->slot;
 			break;
 		}
@@ -266,7 +270,7 @@ int dlm_slots_assign(struct dlm_ls *ls, int *num_slots, int *slots_size,
 
 	log_slots(ls, gen, num, NULL, array, array_size);
 
-	max_slots = (DLM_MAX_APP_BUFSIZE - sizeof(struct dlm_rcom) -
+	max_slots = (dlm_config.ci_buffer_size - sizeof(struct dlm_rcom) -
 		     sizeof(struct rcom_config)) / sizeof(struct rcom_slot);
 
 	if (num > max_slots) {
@@ -307,21 +311,6 @@ static void add_ordered_member(struct dlm_ls *ls, struct dlm_member *new)
 	}
 }
 
-static int add_remote_member(int nodeid)
-{
-	int error;
-
-	if (nodeid == dlm_our_nodeid())
-		return 0;
-
-	error = dlm_lowcomms_connect_node(nodeid);
-	if (error < 0)
-		return error;
-
-	dlm_midcomms_add_member(nodeid);
-	return 0;
-}
-
 static int dlm_add_member(struct dlm_ls *ls, struct dlm_config_node *node)
 {
 	struct dlm_member *memb;
@@ -331,16 +320,15 @@ static int dlm_add_member(struct dlm_ls *ls, struct dlm_config_node *node)
 	if (!memb)
 		return -ENOMEM;
 
-	memb->nodeid = node->nodeid;
-	memb->weight = node->weight;
-	memb->comm_seq = node->comm_seq;
-
-	error = add_remote_member(node->nodeid);
+	error = dlm_lowcomms_connect_node(node->nodeid);
 	if (error < 0) {
 		kfree(memb);
 		return error;
 	}
 
+	memb->nodeid = node->nodeid;
+	memb->weight = node->weight;
+	memb->comm_seq = node->comm_seq;
 	add_ordered_member(ls, memb);
 	ls->ls_num_nodes++;
 	return 0;
@@ -371,42 +359,26 @@ int dlm_is_removed(struct dlm_ls *ls, int nodeid)
 	return 0;
 }
 
-static void clear_memb_list(struct list_head *head,
-			    void (*after_del)(int nodeid))
+static void clear_memb_list(struct list_head *head)
 {
 	struct dlm_member *memb;
 
 	while (!list_empty(head)) {
 		memb = list_entry(head->next, struct dlm_member, list);
 		list_del(&memb->list);
-		if (after_del)
-			after_del(memb->nodeid);
 		kfree(memb);
 	}
 }
 
-static void remove_remote_member(int nodeid)
-{
-	if (nodeid == dlm_our_nodeid())
-		return;
-
-	dlm_midcomms_remove_member(nodeid);
-}
-
-static void clear_members_cb(int nodeid)
-{
-	remove_remote_member(nodeid);
-}
-
 void dlm_clear_members(struct dlm_ls *ls)
 {
-	clear_memb_list(&ls->ls_nodes, clear_members_cb);
+	clear_memb_list(&ls->ls_nodes);
 	ls->ls_num_nodes = 0;
 }
 
 void dlm_clear_members_gone(struct dlm_ls *ls)
 {
-	clear_memb_list(&ls->ls_nodes_gone, NULL);
+	clear_memb_list(&ls->ls_nodes_gone);
 }
 
 static void make_member_array(struct dlm_ls *ls)
@@ -460,10 +432,9 @@ static int ping_members(struct dlm_ls *ls)
 	int error = 0;
 
 	list_for_each_entry(memb, &ls->ls_nodes, list) {
-		if (dlm_recovery_stopped(ls)) {
-			error = -EINTR;
+		error = dlm_recovery_stopped(ls);
+		if (error)
 			break;
-		}
 		error = dlm_rcom_status(ls, memb->nodeid, 0);
 		if (error)
 			break;
@@ -557,11 +528,7 @@ int dlm_recover_members(struct dlm_ls *ls, struct dlm_recover *rv, int *neg_out)
 	int i, error, neg = 0, low = -1;
 
 	/* previously removed members that we've not finished removing need to
-	 * count as a negative change so the "neg" recovery steps will happen
-	 *
-	 * This functionality must report all member changes to lsops or
-	 * midcomms layer and must never return before.
-	 */
+	   count as a negative change so the "neg" recovery steps will happen */
 
 	list_for_each_entry(memb, &ls->ls_nodes_gone, list) {
 		log_rinfo(ls, "prev removed member %d", memb->nodeid);
@@ -585,7 +552,6 @@ int dlm_recover_members(struct dlm_ls *ls, struct dlm_recover *rv, int *neg_out)
 
 		neg++;
 		list_move(&memb->list, &ls->ls_nodes_gone);
-		remove_remote_member(memb->nodeid);
 		ls->ls_num_nodes--;
 		dlm_lsop_recover_slot(ls, memb);
 	}
@@ -596,10 +562,7 @@ int dlm_recover_members(struct dlm_ls *ls, struct dlm_recover *rv, int *neg_out)
 		node = &rv->nodes[i];
 		if (dlm_is_member(ls, node->nodeid))
 			continue;
-		error = dlm_add_member(ls, node);
-		if (error)
-			return error;
-
+		dlm_add_member(ls, node);
 		log_rinfo(ls, "add member %d", node->nodeid);
 	}
 
@@ -613,6 +576,13 @@ int dlm_recover_members(struct dlm_ls *ls, struct dlm_recover *rv, int *neg_out)
 	*neg_out = neg;
 
 	error = ping_members(ls);
+	if (!error || error == -EPROTO) {
+		/* new_lockspace() may be waiting to know if the config
+		   is good or bad */
+		ls->ls_members_result = error;
+		complete(&ls->ls_members_done);
+	}
+
 	log_rinfo(ls, "dlm_recover_members %d nodes", ls->ls_num_nodes);
 	return error;
 }
@@ -692,16 +662,7 @@ int dlm_ls_stop(struct dlm_ls *ls)
 	if (!ls->ls_recover_begin)
 		ls->ls_recover_begin = jiffies;
 
-	/* call recover_prep ops only once and not multiple times
-	 * for each possible dlm_ls_stop() when recovery is already
-	 * stopped.
-	 *
-	 * If we successful was able to clear LSFL_RUNNING bit and
-	 * it was set we know it is the first dlm_ls_stop() call.
-	 */
-	if (new)
-		dlm_lsop_recover_prep(ls);
-
+	dlm_lsop_recover_prep(ls);
 	return 0;
 }
 

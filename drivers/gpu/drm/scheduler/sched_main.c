@@ -32,8 +32,7 @@
  * backend operations to the scheduler like submitting a job to hardware run queue,
  * returning the dependencies of a job etc.
  *
- * The organisation of the scheduler is the following for scheduling policies
- * DRM_SCHED_POLICY_RR and DRM_SCHED_POLICY_FIFO:
+ * The organisation of the scheduler is the following:
  *
  * 1. Each hw run queue has one scheduler
  * 2. Each scheduler has multiple run queues with different priorities
@@ -43,38 +42,15 @@
  *    the hardware.
  *
  * The jobs in a entity are always scheduled in the order that they were pushed.
- *
- * The organisation of the scheduler is the following for scheduling policy
- * DRM_SCHED_POLICY_SINGLE_ENTITY:
- *
- * 1. One to one relationship between scheduler and entity
- * 2. No priorities implemented per scheduler (single job queue)
- * 3. No run queues in scheduler rather jobs are directly dequeued from entity
- * 4. The entity maintains a queue of jobs that will be scheduled on the
- * hardware
- *
- * The jobs in a entity are always scheduled in the order that they were pushed
- * regardless of scheduling policy.
- *
- * A policy of DRM_SCHED_POLICY_RR or DRM_SCHED_POLICY_FIFO is expected to used
- * when the KMD is scheduling directly on the hardware while a scheduling policy
- * of DRM_SCHED_POLICY_SINGLE_ENTITY is expected to be used when there is a
- * firmware scheduler.
- *
- * Note that once a job was taken from the entities queue and pushed to the
- * hardware, i.e. the pending queue, the entity must not be referenced anymore
- * through the jobs entity pointer.
  */
 
+#include <linux/kthread.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <linux/completion.h>
-#include <linux/dma-resv.h>
 #include <uapi/linux/sched/types.h>
 
 #include <drm/drm_print.h>
-#include <drm/drm_gem.h>
-#include <drm/drm_syncobj.h>
 #include <drm/gpu_scheduler.h>
 #include <drm/spsc_queue.h>
 
@@ -84,61 +60,11 @@
 #define to_drm_sched_job(sched_job)		\
 		container_of((sched_job), struct drm_sched_job, queue_node)
 
-int drm_sched_policy_default = DRM_SCHED_POLICY_FIFO;
-
-/**
- * DOC: sched_policy (int)
- * Used to override default entities scheduling policy in a run queue.
- */
-MODULE_PARM_DESC(sched_policy, "Specify the scheduling policy for entities on a run-queue, " __stringify(DRM_SCHED_POLICY_RR) " = Round Robin, " __stringify(DRM_SCHED_POLICY_FIFO) " = FIFO (default).");
-module_param_named(sched_policy, drm_sched_policy_default, int, 0444);
-
-static __always_inline bool drm_sched_entity_compare_before(struct rb_node *a,
-							    const struct rb_node *b)
-{
-	struct drm_sched_entity *ent_a =  rb_entry((a), struct drm_sched_entity, rb_tree_node);
-	struct drm_sched_entity *ent_b =  rb_entry((b), struct drm_sched_entity, rb_tree_node);
-
-	return ktime_before(ent_a->oldest_job_waiting, ent_b->oldest_job_waiting);
-}
-
-static inline void drm_sched_rq_remove_fifo_locked(struct drm_sched_entity *entity)
-{
-	struct drm_sched_rq *rq = entity->rq;
-
-	if (!RB_EMPTY_NODE(&entity->rb_tree_node)) {
-		rb_erase_cached(&entity->rb_tree_node, &rq->rb_tree_root);
-		RB_CLEAR_NODE(&entity->rb_tree_node);
-	}
-}
-
-void drm_sched_rq_update_fifo(struct drm_sched_entity *entity, ktime_t ts)
-{
-	WARN_ON(!!entity->single_sched);
-
-	/*
-	 * Both locks need to be grabbed, one to protect from entity->rq change
-	 * for entity from within concurrent drm_sched_entity_select_rq and the
-	 * other to update the rb tree structure.
-	 */
-	spin_lock(&entity->rq_lock);
-	spin_lock(&entity->rq->lock);
-
-	drm_sched_rq_remove_fifo_locked(entity);
-
-	entity->oldest_job_waiting = ts;
-
-	rb_add_cached(&entity->rb_tree_node, &entity->rq->rb_tree_root,
-		      drm_sched_entity_compare_before);
-
-	spin_unlock(&entity->rq->lock);
-	spin_unlock(&entity->rq_lock);
-}
+static void drm_sched_process_job(struct dma_fence *f, struct dma_fence_cb *cb);
 
 /**
  * drm_sched_rq_init - initialize a given run queue struct
  *
- * @sched: scheduler instance to associate with this run queue
  * @rq: scheduler run queue
  *
  * Initializes a scheduler runqueue.
@@ -146,11 +72,8 @@ void drm_sched_rq_update_fifo(struct drm_sched_entity *entity, ktime_t ts)
 static void drm_sched_rq_init(struct drm_gpu_scheduler *sched,
 			      struct drm_sched_rq *rq)
 {
-	WARN_ON(sched->sched_policy == DRM_SCHED_POLICY_SINGLE_ENTITY);
-
 	spin_lock_init(&rq->lock);
 	INIT_LIST_HEAD(&rq->entities);
-	rq->rb_tree_root = RB_ROOT_CACHED;
 	rq->current_entity = NULL;
 	rq->sched = sched;
 }
@@ -166,16 +89,11 @@ static void drm_sched_rq_init(struct drm_gpu_scheduler *sched,
 void drm_sched_rq_add_entity(struct drm_sched_rq *rq,
 			     struct drm_sched_entity *entity)
 {
-	WARN_ON(!!entity->single_sched);
-
 	if (!list_empty(&entity->list))
 		return;
-
 	spin_lock(&rq->lock);
-
-	atomic_inc(rq->sched->score);
+	atomic_inc(&rq->sched->score);
 	list_add_tail(&entity->list, &rq->entities);
-
 	spin_unlock(&rq->lock);
 }
 
@@ -190,35 +108,25 @@ void drm_sched_rq_add_entity(struct drm_sched_rq *rq,
 void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
 				struct drm_sched_entity *entity)
 {
-	WARN_ON(!!entity->single_sched);
-
 	if (list_empty(&entity->list))
 		return;
-
 	spin_lock(&rq->lock);
-
-	atomic_dec(rq->sched->score);
+	atomic_dec(&rq->sched->score);
 	list_del_init(&entity->list);
-
 	if (rq->current_entity == entity)
 		rq->current_entity = NULL;
-
-	if (rq->sched->sched_policy == DRM_SCHED_POLICY_FIFO)
-		drm_sched_rq_remove_fifo_locked(entity);
-
 	spin_unlock(&rq->lock);
 }
 
 /**
- * drm_sched_rq_select_entity_rr - Select an entity which could provide a job to run
+ * drm_sched_rq_select_entity - Select an entity which could provide a job to run
  *
  * @rq: scheduler run queue to check.
- * @dequeue: dequeue selected entity
  *
  * Try to find a ready entity, returns NULL if none found.
  */
 static struct drm_sched_entity *
-drm_sched_rq_select_entity_rr(struct drm_sched_rq *rq, bool dequeue)
+drm_sched_rq_select_entity(struct drm_sched_rq *rq)
 {
 	struct drm_sched_entity *entity;
 
@@ -228,10 +136,8 @@ drm_sched_rq_select_entity_rr(struct drm_sched_rq *rq, bool dequeue)
 	if (entity) {
 		list_for_each_entry_continue(entity, &rq->entities, list) {
 			if (drm_sched_entity_is_ready(entity)) {
-				if (dequeue) {
-					rq->current_entity = entity;
-					reinit_completion(&entity->entity_idle);
-				}
+				rq->current_entity = entity;
+				reinit_completion(&entity->entity_idle);
 				spin_unlock(&rq->lock);
 				return entity;
 			}
@@ -241,10 +147,8 @@ drm_sched_rq_select_entity_rr(struct drm_sched_rq *rq, bool dequeue)
 	list_for_each_entry(entity, &rq->entities, list) {
 
 		if (drm_sched_entity_is_ready(entity)) {
-			if (dequeue) {
-				rq->current_entity = entity;
-				reinit_completion(&entity->entity_idle);
-			}
+			rq->current_entity = entity;
+			reinit_completion(&entity->entity_idle);
 			spin_unlock(&rq->lock);
 			return entity;
 		}
@@ -259,168 +163,30 @@ drm_sched_rq_select_entity_rr(struct drm_sched_rq *rq, bool dequeue)
 }
 
 /**
- * drm_sched_rq_select_entity_fifo - Select an entity which provides a job to run
+ * drm_sched_dependency_optimized
  *
- * @rq: scheduler run queue to check.
- * @dequeue: dequeue selected entity
+ * @fence: the dependency fence
+ * @entity: the entity which depends on the above fence
  *
- * Find oldest waiting ready entity, returns NULL if none found.
+ * Returns true if the dependency can be optimized and false otherwise
  */
-static struct drm_sched_entity *
-drm_sched_rq_select_entity_fifo(struct drm_sched_rq *rq, bool dequeue)
+bool drm_sched_dependency_optimized(struct dma_fence* fence,
+				    struct drm_sched_entity *entity)
 {
-	struct rb_node *rb;
+	struct drm_gpu_scheduler *sched = entity->rq->sched;
+	struct drm_sched_fence *s_fence;
 
-	spin_lock(&rq->lock);
-	for (rb = rb_first_cached(&rq->rb_tree_root); rb; rb = rb_next(rb)) {
-		struct drm_sched_entity *entity;
+	if (!fence || dma_fence_is_signaled(fence))
+		return false;
+	if (fence->context == entity->fence_context)
+		return true;
+	s_fence = to_drm_sched_fence(fence);
+	if (s_fence && s_fence->sched == sched)
+		return true;
 
-		entity = rb_entry(rb, struct drm_sched_entity, rb_tree_node);
-		if (drm_sched_entity_is_ready(entity)) {
-			if (dequeue) {
-				rq->current_entity = entity;
-				reinit_completion(&entity->entity_idle);
-			}
-			break;
-		}
-	}
-	spin_unlock(&rq->lock);
-
-	return rb ? rb_entry(rb, struct drm_sched_entity, rb_tree_node) : NULL;
+	return false;
 }
-
-/**
- * drm_sched_run_job_queue - queue job submission
- * @sched: scheduler instance
- */
-static void drm_sched_run_job_queue(struct drm_gpu_scheduler *sched)
-{
-	if (!READ_ONCE(sched->pause_submit))
-		queue_work(sched->submit_wq, &sched->work_run_job);
-}
-
-/**
- * drm_sched_can_queue -- Can we queue more to the hardware?
- * @sched: scheduler instance
- *
- * Return true if we can push more jobs to the hw, otherwise false.
- */
-static bool drm_sched_can_queue(struct drm_gpu_scheduler *sched)
-{
-	return atomic_read(&sched->hw_rq_count) <
-		sched->hw_submission_limit;
-}
-
-/**
- * drm_sched_select_entity - Select next entity to process
- *
- * @sched: scheduler instance
- * @dequeue: dequeue selected entity
- *
- * Returns the entity to process or NULL if none are found.
- */
-static struct drm_sched_entity *
-drm_sched_select_entity(struct drm_gpu_scheduler *sched, bool dequeue)
-{
-	struct drm_sched_entity *entity;
-	int i;
-
-	if (!drm_sched_can_queue(sched))
-		return NULL;
-
-	if (sched->single_entity) {
-		if (!READ_ONCE(sched->single_entity->stopped) &&
-		    drm_sched_entity_is_ready(sched->single_entity))
-			return sched->single_entity;
-
-		return NULL;
-	}
-
-	/* Kernel run queue has higher priority than normal run queue*/
-	for (i = DRM_SCHED_PRIORITY_COUNT - 1; i >= DRM_SCHED_PRIORITY_MIN; i--) {
-		entity = sched->sched_policy == DRM_SCHED_POLICY_FIFO ?
-			drm_sched_rq_select_entity_fifo(&sched->sched_rq[i],
-							dequeue) :
-			drm_sched_rq_select_entity_rr(&sched->sched_rq[i],
-						      dequeue);
-		if (entity)
-			break;
-	}
-
-	return entity;
-}
-
-/**
- * drm_sched_run_job_queue_if_ready - queue job submission if ready
- * @sched: scheduler instance
- */
-static void drm_sched_run_job_queue_if_ready(struct drm_gpu_scheduler *sched)
-{
-	if (drm_sched_select_entity(sched, false))
-		drm_sched_run_job_queue(sched);
-}
-
-/**
- * drm_sched_free_job_queue - queue free job
- *
- * @sched: scheduler instance to queue free job
- */
-static void drm_sched_free_job_queue(struct drm_gpu_scheduler *sched)
-{
-	if (!READ_ONCE(sched->pause_submit))
-		queue_work(sched->submit_wq, &sched->work_free_job);
-}
-
-/**
- * drm_sched_free_job_queue_if_ready - queue free job if ready
- *
- * @sched: scheduler instance to queue free job
- */
-static void drm_sched_free_job_queue_if_ready(struct drm_gpu_scheduler *sched)
-{
-	struct drm_sched_job *job;
-
-	spin_lock(&sched->job_list_lock);
-	job = list_first_entry_or_null(&sched->pending_list,
-				       struct drm_sched_job, list);
-	if (job && dma_fence_is_signaled(&job->s_fence->finished))
-		drm_sched_free_job_queue(sched);
-	spin_unlock(&sched->job_list_lock);
-}
-
-/**
- * drm_sched_job_done - complete a job
- * @s_job: pointer to the job which is done
- *
- * Finish the job's fence and wake up the worker thread.
- */
-static void drm_sched_job_done(struct drm_sched_job *s_job, int result)
-{
-	struct drm_sched_fence *s_fence = s_job->s_fence;
-	struct drm_gpu_scheduler *sched = s_fence->sched;
-
-	atomic_dec(&sched->hw_rq_count);
-	atomic_dec(sched->score);
-
-	trace_drm_sched_process_job(s_fence);
-
-	dma_fence_get(&s_fence->finished);
-	drm_sched_fence_finished(s_fence, result);
-	dma_fence_put(&s_fence->finished);
-	drm_sched_free_job_queue(sched);
-}
-
-/**
- * drm_sched_job_done_cb - the callback for a done job
- * @f: fence
- * @cb: fence callbacks
- */
-static void drm_sched_job_done_cb(struct dma_fence *f, struct dma_fence_cb *cb)
-{
-	struct drm_sched_job *s_job = container_of(cb, struct drm_sched_job, cb);
-
-	drm_sched_job_done(s_job, f->error);
-}
+EXPORT_SYMBOL(drm_sched_dependency_optimized);
 
 /**
  * drm_sched_start_timeout - start timeout for reset worker
@@ -431,36 +197,10 @@ static void drm_sched_job_done_cb(struct dma_fence *f, struct dma_fence_cb *cb)
  */
 static void drm_sched_start_timeout(struct drm_gpu_scheduler *sched)
 {
-	lockdep_assert_held(&sched->job_list_lock);
-
 	if (sched->timeout != MAX_SCHEDULE_TIMEOUT &&
-	    !list_empty(&sched->pending_list))
-		mod_delayed_work(sched->timeout_wq, &sched->work_tdr, sched->timeout);
+	    !list_empty(&sched->ring_mirror_list))
+		schedule_delayed_work(&sched->work_tdr, sched->timeout);
 }
-
-static void drm_sched_start_timeout_unlocked(struct drm_gpu_scheduler *sched)
-{
-	spin_lock(&sched->job_list_lock);
-	drm_sched_start_timeout(sched);
-	spin_unlock(&sched->job_list_lock);
-}
-
-/**
- * drm_sched_tdr_queue_imm: - immediately start timeout handler including future
- * jobs
- *
- * @sched: scheduler where the timeout handling should be started.
- *
- * Start timeout handling immediately for current and future jobs
- */
-void drm_sched_tdr_queue_imm(struct drm_gpu_scheduler *sched)
-{
-	spin_lock(&sched->job_list_lock);
-	sched->timeout = 0;
-	drm_sched_start_timeout(sched);
-	spin_unlock(&sched->job_list_lock);
-}
-EXPORT_SYMBOL(drm_sched_tdr_queue_imm);
 
 /**
  * drm_sched_fault - immediately start timeout handler
@@ -471,8 +211,7 @@ EXPORT_SYMBOL(drm_sched_tdr_queue_imm);
  */
 void drm_sched_fault(struct drm_gpu_scheduler *sched)
 {
-	if (sched->timeout_wq)
-		mod_delayed_work(sched->timeout_wq, &sched->work_tdr, 0);
+	mod_delayed_work(system_wq, &sched->work_tdr, 0);
 }
 EXPORT_SYMBOL(drm_sched_fault);
 
@@ -498,7 +237,7 @@ unsigned long drm_sched_suspend_timeout(struct drm_gpu_scheduler *sched)
 	 * Modify the timeout to an arbitrarily large value. This also prevents
 	 * the timeout to be restarted when new submissions arrive
 	 */
-	if (mod_delayed_work(sched->timeout_wq, &sched->work_tdr, MAX_SCHEDULE_TIMEOUT)
+	if (mod_delayed_work(system_wq, &sched->work_tdr, MAX_SCHEDULE_TIMEOUT)
 			&& time_after(sched_timeout, now))
 		return sched_timeout - now;
 	else
@@ -519,10 +258,10 @@ void drm_sched_resume_timeout(struct drm_gpu_scheduler *sched,
 {
 	spin_lock(&sched->job_list_lock);
 
-	if (list_empty(&sched->pending_list))
+	if (list_empty(&sched->ring_mirror_list))
 		cancel_delayed_work(&sched->work_tdr);
 	else
-		mod_delayed_work(sched->timeout_wq, &sched->work_tdr, remaining);
+		mod_delayed_work(system_wq, &sched->work_tdr, remaining);
 
 	spin_unlock(&sched->job_list_lock);
 }
@@ -533,7 +272,8 @@ static void drm_sched_job_begin(struct drm_sched_job *s_job)
 	struct drm_gpu_scheduler *sched = s_job->sched;
 
 	spin_lock(&sched->job_list_lock);
-	list_add_tail(&s_job->list, &sched->pending_list);
+	list_add_tail(&s_job->node, &sched->ring_mirror_list);
+	drm_sched_start_timeout(sched);
 	spin_unlock(&sched->job_list_lock);
 }
 
@@ -541,14 +281,13 @@ static void drm_sched_job_timedout(struct work_struct *work)
 {
 	struct drm_gpu_scheduler *sched;
 	struct drm_sched_job *job;
-	enum drm_gpu_sched_stat status = DRM_GPU_SCHED_STAT_NOMINAL;
 
 	sched = container_of(work, struct drm_gpu_scheduler, work_tdr.work);
 
 	/* Protects against concurrent deletion in drm_sched_get_cleanup_job */
 	spin_lock(&sched->job_list_lock);
-	job = list_first_entry_or_null(&sched->pending_list,
-				       struct drm_sched_job, list);
+	job = list_first_entry_or_null(&sched->ring_mirror_list,
+				       struct drm_sched_job, node);
 
 	if (job) {
 		/*
@@ -556,10 +295,10 @@ static void drm_sched_job_timedout(struct work_struct *work)
 		 * drm_sched_cleanup_jobs. It will be reinserted back after sched->thread
 		 * is parked at which point it's safe.
 		 */
-		list_del_init(&job->list);
+		list_del_init(&job->node);
 		spin_unlock(&sched->job_list_lock);
 
-		status = job->sched->ops->timedout_job(job);
+		job->sched->ops->timedout_job(job);
 
 		/*
 		 * Guilty job did complete and hence needs to be manually removed
@@ -573,9 +312,55 @@ static void drm_sched_job_timedout(struct work_struct *work)
 		spin_unlock(&sched->job_list_lock);
 	}
 
-	if (status != DRM_GPU_SCHED_STAT_ENODEV)
-		drm_sched_start_timeout_unlocked(sched);
+	spin_lock(&sched->job_list_lock);
+	drm_sched_start_timeout(sched);
+	spin_unlock(&sched->job_list_lock);
 }
+
+ /**
+  * drm_sched_increase_karma - Update sched_entity guilty flag
+  *
+  * @bad: The job guilty of time out
+  *
+  * Increment on every hang caused by the 'bad' job. If this exceeds the hang
+  * limit of the scheduler then the respective sched entity is marked guilty and
+  * jobs from it will not be scheduled further
+  */
+void drm_sched_increase_karma(struct drm_sched_job *bad)
+{
+	int i;
+	struct drm_sched_entity *tmp;
+	struct drm_sched_entity *entity;
+	struct drm_gpu_scheduler *sched = bad->sched;
+
+	/* don't increase @bad's karma if it's from KERNEL RQ,
+	 * because sometimes GPU hang would cause kernel jobs (like VM updating jobs)
+	 * corrupt but keep in mind that kernel jobs always considered good.
+	 */
+	if (bad->s_priority != DRM_SCHED_PRIORITY_KERNEL) {
+		atomic_inc(&bad->karma);
+		for (i = DRM_SCHED_PRIORITY_MIN; i < DRM_SCHED_PRIORITY_KERNEL;
+		     i++) {
+			struct drm_sched_rq *rq = &sched->sched_rq[i];
+
+			spin_lock(&rq->lock);
+			list_for_each_entry_safe(entity, tmp, &rq->entities, list) {
+				if (bad->s_fence->scheduled.context ==
+				    entity->fence_context) {
+					if (atomic_read(&bad->karma) >
+					    bad->sched->hang_limit)
+						if (entity->guilty)
+							atomic_set(entity->guilty, 1);
+					break;
+				}
+			}
+			spin_unlock(&rq->lock);
+			if (&entity->list != &rq->entities)
+				break;
+		}
+	}
+}
+EXPORT_SYMBOL(drm_sched_increase_karma);
 
 /**
  * drm_sched_stop - stop the scheduler
@@ -586,14 +371,14 @@ static void drm_sched_job_timedout(struct work_struct *work)
  * Stop the scheduler and also removes and frees all completed jobs.
  * Note: bad job will not be freed as it might be used later and so it's
  * callers responsibility to release it manually if it's not part of the
- * pending list any more.
+ * mirror list any more.
  *
  */
 void drm_sched_stop(struct drm_gpu_scheduler *sched, struct drm_sched_job *bad)
 {
 	struct drm_sched_job *s_job, *tmp;
 
-	drm_sched_submit_stop(sched);
+	kthread_park(sched->thread);
 
 	/*
 	 * Reinsert back the bad job here - now it's safe as
@@ -607,29 +392,26 @@ void drm_sched_stop(struct drm_gpu_scheduler *sched, struct drm_sched_job *bad)
 		 * Add at the head of the queue to reflect it was the earliest
 		 * job extracted.
 		 */
-		list_add(&bad->list, &sched->pending_list);
+		list_add(&bad->node, &sched->ring_mirror_list);
 
 	/*
 	 * Iterate the job list from later to  earlier one and either deactive
-	 * their HW callbacks or remove them from pending list if they already
+	 * their HW callbacks or remove them from mirror list if they already
 	 * signaled.
 	 * This iteration is thread safe as sched thread is stopped.
 	 */
-	list_for_each_entry_safe_reverse(s_job, tmp, &sched->pending_list,
-					 list) {
+	list_for_each_entry_safe_reverse(s_job, tmp, &sched->ring_mirror_list, node) {
 		if (s_job->s_fence->parent &&
 		    dma_fence_remove_callback(s_job->s_fence->parent,
 					      &s_job->cb)) {
-			dma_fence_put(s_job->s_fence->parent);
-			s_job->s_fence->parent = NULL;
 			atomic_dec(&sched->hw_rq_count);
 		} else {
 			/*
-			 * remove job from pending_list.
+			 * remove job from ring_mirror_list.
 			 * Locking here is for concurrent resume timeout
 			 */
 			spin_lock(&sched->job_list_lock);
-			list_del_init(&s_job->list);
+			list_del_init(&s_job->node);
 			spin_unlock(&sched->job_list_lock);
 
 			/*
@@ -664,7 +446,7 @@ void drm_sched_stop(struct drm_gpu_scheduler *sched, struct drm_sched_job *bad)
 EXPORT_SYMBOL(drm_sched_stop);
 
 /**
- * drm_sched_start - recover jobs after a reset
+ * drm_sched_job_recovery - recover jobs after a reset
  *
  * @sched: scheduler instance
  * @full_recovery: proceed with complete sched restart
@@ -680,7 +462,7 @@ void drm_sched_start(struct drm_gpu_scheduler *sched, bool full_recovery)
 	 * so no new jobs are being inserted or removed. Also concurrent
 	 * GPU recovers can't run in parallel.
 	 */
-	list_for_each_entry_safe(s_job, tmp, &sched->pending_list, list) {
+	list_for_each_entry_safe(s_job, tmp, &sched->ring_mirror_list, node) {
 		struct dma_fence *fence = s_job->s_fence->parent;
 
 		atomic_inc(&sched->hw_rq_count);
@@ -690,39 +472,31 @@ void drm_sched_start(struct drm_gpu_scheduler *sched, bool full_recovery)
 
 		if (fence) {
 			r = dma_fence_add_callback(fence, &s_job->cb,
-						   drm_sched_job_done_cb);
+						   drm_sched_process_job);
 			if (r == -ENOENT)
-				drm_sched_job_done(s_job, fence->error);
+				drm_sched_process_job(fence, &s_job->cb);
 			else if (r)
-				DRM_DEV_ERROR(sched->dev, "fence add callback failed (%d)\n",
+				DRM_ERROR("fence add callback failed (%d)\n",
 					  r);
 		} else
-			drm_sched_job_done(s_job, -ECANCELED);
+			drm_sched_process_job(NULL, &s_job->cb);
 	}
 
-	drm_sched_submit_start(sched);
+	if (full_recovery) {
+		spin_lock(&sched->job_list_lock);
+		drm_sched_start_timeout(sched);
+		spin_unlock(&sched->job_list_lock);
+	}
 
-	if (full_recovery)
-		drm_sched_start_timeout_unlocked(sched);
+	kthread_unpark(sched->thread);
 }
 EXPORT_SYMBOL(drm_sched_start);
 
 /**
- * drm_sched_resubmit_jobs - Deprecated, don't use in new code!
+ * drm_sched_resubmit_jobs - helper to relunch job from mirror ring list
  *
  * @sched: scheduler instance
  *
- * Re-submitting jobs was a concept AMD came up as cheap way to implement
- * recovery after a job timeout.
- *
- * This turned out to be not working very well. First of all there are many
- * problem with the dma_fence implementation and requirements. Either the
- * implementation is risking deadlocks with core memory management or violating
- * documented implementation details of the dma_fence object.
- *
- * Drivers can still save and restore their state for recovery operations, but
- * we shouldn't make this a general scheduler feature around the dma_fence
- * interface.
  */
 void drm_sched_resubmit_jobs(struct drm_gpu_scheduler *sched)
 {
@@ -731,7 +505,7 @@ void drm_sched_resubmit_jobs(struct drm_gpu_scheduler *sched)
 	bool found_guilty = false;
 	struct dma_fence *fence;
 
-	list_for_each_entry_safe(s_job, tmp, &sched->pending_list, list) {
+	list_for_each_entry_safe(s_job, tmp, &sched->ring_mirror_list, node) {
 		struct drm_sched_fence *s_fence = s_job->s_fence;
 
 		if (!found_guilty && atomic_read(&s_job->karma) > sched->hang_limit) {
@@ -742,6 +516,7 @@ void drm_sched_resubmit_jobs(struct drm_gpu_scheduler *sched)
 		if (found_guilty && s_job->s_fence->scheduled.context == guilty_context)
 			dma_fence_set_error(&s_fence->finished, -ECANCELED);
 
+		dma_fence_put(s_job->s_fence->parent);
 		fence = sched->ops->run_job(s_job);
 
 		if (IS_ERR_OR_NULL(fence)) {
@@ -750,18 +525,17 @@ void drm_sched_resubmit_jobs(struct drm_gpu_scheduler *sched)
 
 			s_job->s_fence->parent = NULL;
 		} else {
-
-			s_job->s_fence->parent = dma_fence_get(fence);
-
-			/* Drop for orignal kref_init */
-			dma_fence_put(fence);
+			s_job->s_fence->parent = fence;
 		}
+
+
 	}
 }
 EXPORT_SYMBOL(drm_sched_resubmit_jobs);
 
 /**
  * drm_sched_job_init - init a scheduler job
+ *
  * @job: scheduler job to init
  * @entity: scheduler entity to use
  * @owner: job owner for debugging
@@ -769,248 +543,120 @@ EXPORT_SYMBOL(drm_sched_resubmit_jobs);
  * Refer to drm_sched_entity_push_job() documentation
  * for locking considerations.
  *
- * Drivers must make sure drm_sched_job_cleanup() if this function returns
- * successfully, even when @job is aborted before drm_sched_job_arm() is called.
- *
- * WARNING: amdgpu abuses &drm_sched.ready to signal when the hardware
- * has died, which can mean that there's no valid runqueue for a @entity.
- * This function returns -ENOENT in this case (which probably should be -EIO as
- * a more meanigful return value).
- *
  * Returns 0 for success, negative error code otherwise.
  */
 int drm_sched_job_init(struct drm_sched_job *job,
 		       struct drm_sched_entity *entity,
 		       void *owner)
 {
-	if (!entity->rq && !entity->single_sched)
+	struct drm_gpu_scheduler *sched;
+
+	drm_sched_entity_select_rq(entity);
+	if (!entity->rq)
 		return -ENOENT;
 
+	sched = entity->rq->sched;
+
+	job->sched = sched;
 	job->entity = entity;
-	job->s_fence = drm_sched_fence_alloc(entity, owner);
+	job->s_priority = entity->rq - sched->sched_rq;
+	job->s_fence = drm_sched_fence_create(entity, owner);
 	if (!job->s_fence)
 		return -ENOMEM;
+	job->id = atomic64_inc_return(&sched->job_id_count);
 
-	INIT_LIST_HEAD(&job->list);
-
-	xa_init_flags(&job->dependencies, XA_FLAGS_ALLOC);
+	INIT_LIST_HEAD(&job->node);
 
 	return 0;
 }
 EXPORT_SYMBOL(drm_sched_job_init);
 
 /**
- * drm_sched_job_arm - arm a scheduler job for execution
- * @job: scheduler job to arm
- *
- * This arms a scheduler job for execution. Specifically it initializes the
- * &drm_sched_job.s_fence of @job, so that it can be attached to struct dma_resv
- * or other places that need to track the completion of this job.
- *
- * Refer to drm_sched_entity_push_job() documentation for locking
- * considerations.
- *
- * This can only be called if drm_sched_job_init() succeeded.
- */
-void drm_sched_job_arm(struct drm_sched_job *job)
-{
-	struct drm_gpu_scheduler *sched;
-	struct drm_sched_entity *entity = job->entity;
-	bool single_entity = !!entity->single_sched;
-
-	BUG_ON(!entity);
-	if (!single_entity)
-		drm_sched_entity_select_rq(entity);
-	sched = drm_sched_entity_to_scheduler(entity);
-
-	job->sched = sched;
-	if (!single_entity)
-		job->s_priority = entity->rq - sched->sched_rq;
-	job->id = atomic64_inc_return(&sched->job_id_count);
-
-	drm_sched_fence_init(job->s_fence, job->entity);
-}
-EXPORT_SYMBOL(drm_sched_job_arm);
-
-/**
- * drm_sched_job_add_dependency - adds the fence as a job dependency
- * @job: scheduler job to add the dependencies to
- * @fence: the dma_fence to add to the list of dependencies.
- *
- * Note that @fence is consumed in both the success and error cases.
- *
- * Returns:
- * 0 on success, or an error on failing to expand the array.
- */
-int drm_sched_job_add_dependency(struct drm_sched_job *job,
-				 struct dma_fence *fence)
-{
-	struct dma_fence *entry;
-	unsigned long index;
-	u32 id = 0;
-	int ret;
-
-	if (!fence)
-		return 0;
-
-	/* Deduplicate if we already depend on a fence from the same context.
-	 * This lets the size of the array of deps scale with the number of
-	 * engines involved, rather than the number of BOs.
-	 */
-	xa_for_each(&job->dependencies, index, entry) {
-		if (entry->context != fence->context)
-			continue;
-
-		if (dma_fence_is_later(fence, entry)) {
-			dma_fence_put(entry);
-			xa_store(&job->dependencies, index, fence, GFP_KERNEL);
-		} else {
-			dma_fence_put(fence);
-		}
-		return 0;
-	}
-
-	ret = xa_alloc(&job->dependencies, &id, fence, xa_limit_32b, GFP_KERNEL);
-	if (ret != 0)
-		dma_fence_put(fence);
-
-	return ret;
-}
-EXPORT_SYMBOL(drm_sched_job_add_dependency);
-
-/**
- * drm_sched_job_add_syncobj_dependency - adds a syncobj's fence as a job dependency
- * @job: scheduler job to add the dependencies to
- * @file: drm file private pointer
- * @handle: syncobj handle to lookup
- * @point: timeline point
- *
- * This adds the fence matching the given syncobj to @job.
- *
- * Returns:
- * 0 on success, or an error on failing to expand the array.
- */
-int drm_sched_job_add_syncobj_dependency(struct drm_sched_job *job,
-					 struct drm_file *file,
-					 u32 handle,
-					 u32 point)
-{
-	struct dma_fence *fence;
-	int ret;
-
-	ret = drm_syncobj_find_fence(file, handle, point, 0, &fence);
-	if (ret)
-		return ret;
-
-	return drm_sched_job_add_dependency(job, fence);
-}
-EXPORT_SYMBOL(drm_sched_job_add_syncobj_dependency);
-
-/**
- * drm_sched_job_add_resv_dependencies - add all fences from the resv to the job
- * @job: scheduler job to add the dependencies to
- * @resv: the dma_resv object to get the fences from
- * @usage: the dma_resv_usage to use to filter the fences
- *
- * This adds all fences matching the given usage from @resv to @job.
- * Must be called with the @resv lock held.
- *
- * Returns:
- * 0 on success, or an error on failing to expand the array.
- */
-int drm_sched_job_add_resv_dependencies(struct drm_sched_job *job,
-					struct dma_resv *resv,
-					enum dma_resv_usage usage)
-{
-	struct dma_resv_iter cursor;
-	struct dma_fence *fence;
-	int ret;
-
-	dma_resv_assert_held(resv);
-
-	dma_resv_for_each_fence(&cursor, resv, usage, fence) {
-		/* Make sure to grab an additional ref on the added fence */
-		dma_fence_get(fence);
-		ret = drm_sched_job_add_dependency(job, fence);
-		if (ret) {
-			dma_fence_put(fence);
-			return ret;
-		}
-	}
-	return 0;
-}
-EXPORT_SYMBOL(drm_sched_job_add_resv_dependencies);
-
-/**
- * drm_sched_job_add_implicit_dependencies - adds implicit dependencies as job
- *   dependencies
- * @job: scheduler job to add the dependencies to
- * @obj: the gem object to add new dependencies from.
- * @write: whether the job might write the object (so we need to depend on
- * shared fences in the reservation object).
- *
- * This should be called after drm_gem_lock_reservations() on your array of
- * GEM objects used in the job but before updating the reservations with your
- * own fences.
- *
- * Returns:
- * 0 on success, or an error on failing to expand the array.
- */
-int drm_sched_job_add_implicit_dependencies(struct drm_sched_job *job,
-					    struct drm_gem_object *obj,
-					    bool write)
-{
-	return drm_sched_job_add_resv_dependencies(job, obj->resv,
-						   dma_resv_usage_rw(write));
-}
-EXPORT_SYMBOL(drm_sched_job_add_implicit_dependencies);
-
-/**
  * drm_sched_job_cleanup - clean up scheduler job resources
+ *
  * @job: scheduler job to clean up
- *
- * Cleans up the resources allocated with drm_sched_job_init().
- *
- * Drivers should call this from their error unwind code if @job is aborted
- * before drm_sched_job_arm() is called.
- *
- * After that point of no return @job is committed to be executed by the
- * scheduler, and this function should be called from the
- * &drm_sched_backend_ops.free_job callback.
  */
 void drm_sched_job_cleanup(struct drm_sched_job *job)
 {
-	struct dma_fence *fence;
-	unsigned long index;
-
-	if (kref_read(&job->s_fence->finished.refcount)) {
-		/* drm_sched_job_arm() has been called */
-		dma_fence_put(&job->s_fence->finished);
-	} else {
-		/* aborted job before committing to run it */
-		drm_sched_fence_free(job->s_fence);
-	}
-
+	dma_fence_put(&job->s_fence->finished);
 	job->s_fence = NULL;
-
-	xa_for_each(&job->dependencies, index, fence) {
-		dma_fence_put(fence);
-	}
-	xa_destroy(&job->dependencies);
-
 }
 EXPORT_SYMBOL(drm_sched_job_cleanup);
 
 /**
- * drm_sched_wakeup_if_can_queue - Wake up the scheduler
+ * drm_sched_ready - is the scheduler ready
+ *
  * @sched: scheduler instance
  *
- * Wake up the scheduler if we can queue jobs.
+ * Return true if we can push more jobs to the hw, otherwise false.
  */
-void drm_sched_wakeup_if_can_queue(struct drm_gpu_scheduler *sched)
+static bool drm_sched_ready(struct drm_gpu_scheduler *sched)
 {
-	if (drm_sched_can_queue(sched))
-		drm_sched_run_job_queue(sched);
+	return atomic_read(&sched->hw_rq_count) <
+		sched->hw_submission_limit;
+}
+
+/**
+ * drm_sched_wakeup - Wake up the scheduler when it is ready
+ *
+ * @sched: scheduler instance
+ *
+ */
+void drm_sched_wakeup(struct drm_gpu_scheduler *sched)
+{
+	if (drm_sched_ready(sched))
+		wake_up_interruptible(&sched->wake_up_worker);
+}
+
+/**
+ * drm_sched_select_entity - Select next entity to process
+ *
+ * @sched: scheduler instance
+ *
+ * Returns the entity to process or NULL if none are found.
+ */
+static struct drm_sched_entity *
+drm_sched_select_entity(struct drm_gpu_scheduler *sched)
+{
+	struct drm_sched_entity *entity;
+	int i;
+
+	if (!drm_sched_ready(sched))
+		return NULL;
+
+	/* Kernel run queue has higher priority than normal run queue*/
+	for (i = DRM_SCHED_PRIORITY_COUNT - 1; i >= DRM_SCHED_PRIORITY_MIN; i--) {
+		entity = drm_sched_rq_select_entity(&sched->sched_rq[i]);
+		if (entity)
+			break;
+	}
+
+	return entity;
+}
+
+/**
+ * drm_sched_process_job - process a job
+ *
+ * @f: fence
+ * @cb: fence callbacks
+ *
+ * Called after job has finished execution.
+ */
+static void drm_sched_process_job(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+	struct drm_sched_job *s_job = container_of(cb, struct drm_sched_job, cb);
+	struct drm_sched_fence *s_fence = s_job->s_fence;
+	struct drm_gpu_scheduler *sched = s_fence->sched;
+
+	atomic_dec(&sched->hw_rq_count);
+	atomic_dec(&sched->score);
+
+	trace_drm_sched_process_job(s_fence);
+
+	dma_fence_get(&s_fence->finished);
+	drm_sched_fence_finished(s_fence);
+	dma_fence_put(&s_fence->finished);
+	wake_up_interruptible(&sched->wake_up_worker);
 }
 
 /**
@@ -1018,39 +664,35 @@ void drm_sched_wakeup_if_can_queue(struct drm_gpu_scheduler *sched)
  *
  * @sched: scheduler instance
  *
- * Returns the next finished job from the pending list (if there is one)
+ * Returns the next finished job from the mirror list (if there is one)
  * ready for it to be destroyed.
  */
 static struct drm_sched_job *
 drm_sched_get_cleanup_job(struct drm_gpu_scheduler *sched)
 {
-	struct drm_sched_job *job, *next;
+	struct drm_sched_job *job;
+
+	/*
+	 * Don't destroy jobs while the timeout worker is running  OR thread
+	 * is being parked and hence assumed to not touch ring_mirror_list
+	 */
+	if ((sched->timeout != MAX_SCHEDULE_TIMEOUT &&
+	    !cancel_delayed_work(&sched->work_tdr)) ||
+	    kthread_should_park())
+		return NULL;
 
 	spin_lock(&sched->job_list_lock);
 
-	job = list_first_entry_or_null(&sched->pending_list,
-				       struct drm_sched_job, list);
+	job = list_first_entry_or_null(&sched->ring_mirror_list,
+				       struct drm_sched_job, node);
 
 	if (job && dma_fence_is_signaled(&job->s_fence->finished)) {
-		/* remove job from pending_list */
-		list_del_init(&job->list);
-
-		/* cancel this job's TO timer */
-		cancel_delayed_work(&sched->work_tdr);
-		/* make the scheduled timestamp more accurate */
-		next = list_first_entry_or_null(&sched->pending_list,
-						typeof(*next), list);
-
-		if (next) {
-			if (test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT,
-				     &next->s_fence->scheduled.flags))
-				next->s_fence->scheduled.timestamp =
-					job->s_fence->finished.timestamp;
-			/* start TO timer for next job */
-			drm_sched_start_timeout(sched);
-		}
+		/* remove job from ring_mirror_list */
+		list_del_init(&job->node);
 	} else {
 		job = NULL;
+		/* queue timeout for next job */
+		drm_sched_start_timeout(sched);
 	}
 
 	spin_unlock(&sched->job_list_lock);
@@ -1083,7 +725,7 @@ drm_sched_pick_best(struct drm_gpu_scheduler **sched_list,
 			continue;
 		}
 
-		num_score = atomic_read(sched->score);
+		num_score = atomic_read(&sched->score);
 		if (num_score < min_score) {
 			min_score = num_score;
 			picked_sched = sched;
@@ -1095,85 +737,94 @@ drm_sched_pick_best(struct drm_gpu_scheduler **sched_list,
 EXPORT_SYMBOL(drm_sched_pick_best);
 
 /**
- * drm_sched_free_job_work - worker to call free_job
+ * drm_sched_blocked - check if the scheduler is blocked
  *
- * @w: free job work
+ * @sched: scheduler instance
+ *
+ * Returns true if blocked, otherwise false.
  */
-static void drm_sched_free_job_work(struct work_struct *w)
+static bool drm_sched_blocked(struct drm_gpu_scheduler *sched)
 {
-	struct drm_gpu_scheduler *sched =
-		container_of(w, struct drm_gpu_scheduler, work_free_job);
-	struct drm_sched_job *cleanup_job;
-
-	if (READ_ONCE(sched->pause_submit))
-		return;
-
-	cleanup_job = drm_sched_get_cleanup_job(sched);
-	if (cleanup_job) {
-		sched->ops->free_job(cleanup_job);
-
-		drm_sched_free_job_queue_if_ready(sched);
-		drm_sched_run_job_queue_if_ready(sched);
+	if (kthread_should_park()) {
+		kthread_parkme();
+		return true;
 	}
+
+	return false;
 }
 
 /**
- * drm_sched_run_job_work - worker to call run_job
+ * drm_sched_main - main scheduler thread
  *
- * @w: run job work
+ * @param: scheduler instance
+ *
+ * Returns 0.
  */
-static void drm_sched_run_job_work(struct work_struct *w)
+static int drm_sched_main(void *param)
 {
-	struct drm_gpu_scheduler *sched =
-		container_of(w, struct drm_gpu_scheduler, work_run_job);
-	struct drm_sched_entity *entity;
-	struct dma_fence *fence;
-	struct drm_sched_fence *s_fence;
-	struct drm_sched_job *sched_job;
+	struct drm_gpu_scheduler *sched = (struct drm_gpu_scheduler *)param;
 	int r;
 
-	if (READ_ONCE(sched->pause_submit))
-		return;
+	sched_set_fifo_low(current);
 
-	entity = drm_sched_select_entity(sched, true);
-	if (!entity)
-		return;
+	while (!kthread_should_stop()) {
+		struct drm_sched_entity *entity = NULL;
+		struct drm_sched_fence *s_fence;
+		struct drm_sched_job *sched_job;
+		struct dma_fence *fence;
+		struct drm_sched_job *cleanup_job = NULL;
 
-	sched_job = drm_sched_entity_pop_job(entity);
-	if (!sched_job) {
-		complete_all(&entity->entity_idle);
-		return;	/* No more work */
+		wait_event_interruptible(sched->wake_up_worker,
+					 (cleanup_job = drm_sched_get_cleanup_job(sched)) ||
+					 (!drm_sched_blocked(sched) &&
+					  (entity = drm_sched_select_entity(sched))) ||
+					 kthread_should_stop());
+
+		if (cleanup_job) {
+			sched->ops->free_job(cleanup_job);
+			/* queue timeout for next job */
+			drm_sched_start_timeout(sched);
+		}
+
+		if (!entity)
+			continue;
+
+		sched_job = drm_sched_entity_pop_job(entity);
+
+		complete(&entity->entity_idle);
+
+		if (!sched_job)
+			continue;
+
+		s_fence = sched_job->s_fence;
+
+		atomic_inc(&sched->hw_rq_count);
+		drm_sched_job_begin(sched_job);
+
+		trace_drm_run_job(sched_job, entity);
+		fence = sched->ops->run_job(sched_job);
+		drm_sched_fence_scheduled(s_fence);
+
+		if (!IS_ERR_OR_NULL(fence)) {
+			s_fence->parent = dma_fence_get(fence);
+			r = dma_fence_add_callback(fence, &sched_job->cb,
+						   drm_sched_process_job);
+			if (r == -ENOENT)
+				drm_sched_process_job(fence, &sched_job->cb);
+			else if (r)
+				DRM_ERROR("fence add callback failed (%d)\n",
+					  r);
+			dma_fence_put(fence);
+		} else {
+			if (IS_ERR(fence))
+				dma_fence_set_error(&s_fence->finished, PTR_ERR(fence));
+
+			drm_sched_process_job(NULL, &sched_job->cb);
+		}
+
+		wake_up(&sched->job_scheduled);
 	}
-
-	s_fence = sched_job->s_fence;
-
-	atomic_inc(&sched->hw_rq_count);
-	drm_sched_job_begin(sched_job);
-
-	trace_drm_run_job(sched_job, entity);
-	fence = sched->ops->run_job(sched_job);
-	complete_all(&entity->entity_idle);
-	drm_sched_fence_scheduled(s_fence, fence);
-	drm_sched_start_timeout_unlocked(sched);
-
-	if (!IS_ERR_OR_NULL(fence)) {
-		/* Drop for original kref_init of the fence */
-		dma_fence_put(fence);
-
-		r = dma_fence_add_callback(fence, &sched_job->cb,
-					   drm_sched_job_done_cb);
-		if (r == -ENOENT)
-			drm_sched_job_done(sched_job, fence->error);
-		else if (r)
-			DRM_DEV_ERROR(sched->dev, "fence add callback failed (%d)\n",
-				  r);
-	} else {
-		drm_sched_job_done(sched_job, IS_ERR(fence) ?
-				   PTR_ERR(fence) : 0);
-	}
-
-	wake_up(&sched->job_scheduled);
-	drm_sched_run_job_queue_if_ready(sched);
+	return 0;
 }
 
 /**
@@ -1181,70 +832,46 @@ static void drm_sched_run_job_work(struct work_struct *w)
  *
  * @sched: scheduler instance
  * @ops: backend operations for this scheduler
- * @submit_wq: workqueue to use for submission. If NULL, an ordered wq is
- *	       allocated and used
  * @hw_submission: number of hw submissions that can be in flight
  * @hang_limit: number of times to allow a job to hang before dropping it
  * @timeout: timeout value in jiffies for the scheduler
- * @timeout_wq: workqueue to use for timeout work. If NULL, the system_wq is
- *		used
- * @score: optional score atomic shared with other schedulers
  * @name: name used for debugging
- * @sched_policy: schedule policy
- * @dev: target &struct device
  *
  * Return 0 on success, otherwise error code.
  */
 int drm_sched_init(struct drm_gpu_scheduler *sched,
 		   const struct drm_sched_backend_ops *ops,
-		   struct workqueue_struct *submit_wq,
-		   unsigned hw_submission, unsigned hang_limit,
-		   long timeout, struct workqueue_struct *timeout_wq,
-		   atomic_t *score, const char *name,
-		   enum drm_sched_policy sched_policy,
-		   struct device *dev)
+		   unsigned hw_submission,
+		   unsigned hang_limit,
+		   long timeout,
+		   const char *name)
 {
-	int i;
-
-	if (sched_policy >= DRM_SCHED_POLICY_COUNT)
-		return -EINVAL;
-
+	int i, ret;
 	sched->ops = ops;
-	sched->single_entity = NULL;
 	sched->hw_submission_limit = hw_submission;
 	sched->name = name;
-	if (!submit_wq) {
-		sched->submit_wq = alloc_ordered_workqueue(name, 0);
-		if (!sched->submit_wq)
-			return -ENOMEM;
-
-		sched->alloc_submit_wq = true;
-	} else {
-		sched->submit_wq = submit_wq;
-		sched->alloc_submit_wq = false;
-	}
 	sched->timeout = timeout;
-	sched->timeout_wq = timeout_wq ? : system_wq;
 	sched->hang_limit = hang_limit;
-	sched->score = score ? score : &sched->_score;
-	sched->dev = dev;
-	sched->sched_policy = sched_policy == DRM_SCHED_POLICY_UNSET ?
-		drm_sched_policy_default : sched_policy;
-	for (i = DRM_SCHED_PRIORITY_MIN; sched_policy !=
-	     DRM_SCHED_POLICY_SINGLE_ENTITY && i < DRM_SCHED_PRIORITY_COUNT;
-	     i++)
+	for (i = DRM_SCHED_PRIORITY_MIN; i < DRM_SCHED_PRIORITY_COUNT; i++)
 		drm_sched_rq_init(sched, &sched->sched_rq[i]);
 
+	init_waitqueue_head(&sched->wake_up_worker);
 	init_waitqueue_head(&sched->job_scheduled);
-	INIT_LIST_HEAD(&sched->pending_list);
+	INIT_LIST_HEAD(&sched->ring_mirror_list);
 	spin_lock_init(&sched->job_list_lock);
 	atomic_set(&sched->hw_rq_count, 0);
 	INIT_DELAYED_WORK(&sched->work_tdr, drm_sched_job_timedout);
-	INIT_WORK(&sched->work_run_job, drm_sched_run_job_work);
-	INIT_WORK(&sched->work_free_job, drm_sched_free_job_work);
-	atomic_set(&sched->_score, 0);
+	atomic_set(&sched->score, 0);
 	atomic64_set(&sched->job_id_count, 0);
-	sched->pause_submit = false;
+
+	/* Each scheduler will run on a seperate kernel thread */
+	sched->thread = kthread_run(drm_sched_main, sched, sched->name);
+	if (IS_ERR(sched->thread)) {
+		ret = PTR_ERR(sched->thread);
+		sched->thread = NULL;
+		DRM_ERROR("Failed to create scheduler for %s.\n", name);
+		return ret;
+	}
 
 	sched->ready = true;
 	return 0;
@@ -1263,18 +890,14 @@ void drm_sched_fini(struct drm_gpu_scheduler *sched)
 	struct drm_sched_entity *s_entity;
 	int i;
 
-	drm_sched_submit_stop(sched);
+	if (sched->thread)
+		kthread_stop(sched->thread);
 
-	if (sched->single_entity) {
-		spin_lock(&sched->single_entity->rq_lock);
-		sched->single_entity->stopped = true;
-		spin_unlock(&sched->single_entity->rq_lock);
-	}
-
-	for (i = DRM_SCHED_PRIORITY_COUNT - 1; sched->sched_policy !=
-	     DRM_SCHED_POLICY_SINGLE_ENTITY && i >= DRM_SCHED_PRIORITY_MIN;
-	     i--) {
+	for (i = DRM_SCHED_PRIORITY_COUNT - 1; i >= DRM_SCHED_PRIORITY_MIN; i--) {
 		struct drm_sched_rq *rq = &sched->sched_rq[i];
+
+		if (!rq)
+			continue;
 
 		spin_lock(&rq->lock);
 		list_for_each_entry(s_entity, &rq->entities, list)
@@ -1294,94 +917,6 @@ void drm_sched_fini(struct drm_gpu_scheduler *sched)
 	/* Confirm no work left behind accessing device structures */
 	cancel_delayed_work_sync(&sched->work_tdr);
 
-	if (sched->alloc_submit_wq)
-		destroy_workqueue(sched->submit_wq);
 	sched->ready = false;
 }
 EXPORT_SYMBOL(drm_sched_fini);
-
-/**
- * drm_sched_increase_karma - Update sched_entity guilty flag
- *
- * @bad: The job guilty of time out
- *
- * Increment on every hang caused by the 'bad' job. If this exceeds the hang
- * limit of the scheduler then the respective sched entity is marked guilty and
- * jobs from it will not be scheduled further
- */
-void drm_sched_increase_karma(struct drm_sched_job *bad)
-{
-	int i;
-	struct drm_sched_entity *tmp;
-	struct drm_sched_entity *entity;
-	struct drm_gpu_scheduler *sched = bad->sched;
-
-	WARN_ON(sched->sched_policy == DRM_SCHED_POLICY_SINGLE_ENTITY);
-
-	/* don't change @bad's karma if it's from KERNEL RQ,
-	 * because sometimes GPU hang would cause kernel jobs (like VM updating jobs)
-	 * corrupt but keep in mind that kernel jobs always considered good.
-	 */
-	if (bad->s_priority != DRM_SCHED_PRIORITY_KERNEL) {
-		atomic_inc(&bad->karma);
-
-		for (i = DRM_SCHED_PRIORITY_MIN; i < DRM_SCHED_PRIORITY_KERNEL;
-		     i++) {
-			struct drm_sched_rq *rq = &sched->sched_rq[i];
-
-			spin_lock(&rq->lock);
-			list_for_each_entry_safe(entity, tmp, &rq->entities, list) {
-				if (bad->s_fence->scheduled.context ==
-				    entity->fence_context) {
-					if (entity->guilty)
-						atomic_set(entity->guilty, 1);
-					break;
-				}
-			}
-			spin_unlock(&rq->lock);
-			if (&entity->list != &rq->entities)
-				break;
-		}
-	}
-}
-EXPORT_SYMBOL(drm_sched_increase_karma);
-
-/**
- * drm_sched_submit_ready - scheduler ready for submission
- *
- * @sched: scheduler instance
- *
- * Returns true if submission is ready
- */
-bool drm_sched_submit_ready(struct drm_gpu_scheduler *sched)
-{
-	return sched->ready;
-
-}
-EXPORT_SYMBOL(drm_sched_submit_ready);
-
-/**
- * drm_sched_submit_stop - stop scheduler submission
- *
- * @sched: scheduler instance
- */
-void drm_sched_submit_stop(struct drm_gpu_scheduler *sched)
-{
-	WRITE_ONCE(sched->pause_submit, true);
-	cancel_work_sync(&sched->work_run_job);
-	cancel_work_sync(&sched->work_free_job);
-}
-EXPORT_SYMBOL(drm_sched_submit_stop);
-
-/**
- * drm_sched_submit_start - start scheduler submission
- *
- * @sched: scheduler instance
- */
-void drm_sched_submit_start(struct drm_gpu_scheduler *sched)
-{
-	WRITE_ONCE(sched->pause_submit, false);
-	queue_work(sched->submit_wq, &sched->work_run_job);
-	queue_work(sched->submit_wq, &sched->work_free_job);
-}
-EXPORT_SYMBOL(drm_sched_submit_start);

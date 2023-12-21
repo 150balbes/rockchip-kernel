@@ -122,7 +122,8 @@ struct net_device *phonet_device_get(struct net *net)
 			break;
 		dev = NULL;
 	}
-	dev_hold(dev);
+	if (dev)
+		dev_hold(dev);
 	rcu_read_unlock();
 	return dev;
 }
@@ -232,11 +233,11 @@ static int phonet_device_autoconf(struct net_device *dev)
 	struct if_phonet_req req;
 	int ret;
 
-	if (!dev->netdev_ops->ndo_siocdevprivate)
+	if (!dev->netdev_ops->ndo_do_ioctl)
 		return -EOPNOTSUPP;
 
-	ret = dev->netdev_ops->ndo_siocdevprivate(dev, (struct ifreq *)&req,
-						  NULL, SIOCPNGAUTOCONF);
+	ret = dev->netdev_ops->ndo_do_ioctl(dev, (struct ifreq *)&req,
+						SIOCPNGAUTOCONF);
 	if (ret < 0)
 		return ret;
 
@@ -410,7 +411,8 @@ struct net_device *phonet_route_output(struct net *net, u8 daddr)
 	daddr >>= 2;
 	rcu_read_lock();
 	dev = rcu_dereference(routes->table[daddr]);
-	dev_hold(dev);
+	if (dev)
+		dev_hold(dev);
 	rcu_read_unlock();
 
 	if (!dev)

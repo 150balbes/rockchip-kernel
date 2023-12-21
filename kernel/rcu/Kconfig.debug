@@ -27,6 +27,10 @@ config RCU_SCALE_TEST
 	tristate "performance tests for RCU"
 	depends on DEBUG_KERNEL
 	select TORTURE_TEST
+	select SRCU
+	select TASKS_RCU
+	select TASKS_RUDE_RCU
+	select TASKS_TRACE_RCU
 	default n
 	help
 	  This option provides a kernel module that runs performance
@@ -42,6 +46,10 @@ config RCU_TORTURE_TEST
 	tristate "torture tests for RCU"
 	depends on DEBUG_KERNEL
 	select TORTURE_TEST
+	select SRCU
+	select TASKS_RCU
+	select TASKS_RUDE_RCU
+	select TASKS_TRACE_RCU
 	default n
 	help
 	  This option provides a kernel module that runs torture tests
@@ -57,6 +65,10 @@ config RCU_REF_SCALE_TEST
 	tristate "Scalability tests for read-side synchronization (RCU and others)"
 	depends on DEBUG_KERNEL
 	select TORTURE_TEST
+	select SRCU
+	select TASKS_RCU
+	select TASKS_RUDE_RCU
+	select TASKS_TRACE_RCU
 	default n
 	help
 	  This option provides a kernel module that runs performance tests
@@ -79,31 +91,28 @@ config RCU_CPU_STALL_TIMEOUT
 	  RCU grace period persists, additional CPU stall warnings are
 	  printed at more widely spaced intervals.
 
-config RCU_EXP_CPU_STALL_TIMEOUT
-	int "Expedited RCU CPU stall timeout in milliseconds"
+config BOOTPARAM_RCU_STALL_PANIC
+	bool "Panic (Reboot) On RCU CPU stall timeout"
 	depends on RCU_STALL_COMMON
-	range 0 300000
-	default 0
 	help
-	  If a given expedited RCU grace period extends more than the
-	  specified number of milliseconds, a CPU stall warning is printed.
-	  If the RCU grace period persists, additional CPU stall warnings
-	  are printed at more widely spaced intervals.  A value of zero
-	  says to use the RCU_CPU_STALL_TIMEOUT value converted from
-	  seconds to milliseconds.
+	  Say Y here to enable the kernel to panic on "rcu stall timeout",
+	  which are bugs that RCU grace period extends more than 21 seconds
+	  (configurable using the RCU_CPU_STALL_TIMEOUT).
 
-config RCU_CPU_STALL_CPUTIME
-	bool "Provide additional RCU stall debug information"
+	  The panic can be used in combination with panic_timeout,
+	  to cause the system to reboot automatically after a
+	  stall timeout. This feature is useful for high-availability
+	  systems that have uptime guarantees and where a stall timeout
+	  must be resolved ASAP.
+
+	  Say N if unsure.
+
+config BOOTPARAM_RCU_STALL_PANIC_VALUE
+	int
 	depends on RCU_STALL_COMMON
-	default n
-	help
-	  Collect statistics during the sampling period, such as the number of
-	  (hard interrupts, soft interrupts, task switches) and the cputime of
-	  (hard interrupts, soft interrupts, kernel tasks) are added to the
-	  RCU stall report. For multiple continuous RCU stalls, all sampling
-	  periods begin at half of the first RCU stall timeout.
-	  The boot option rcupdate.rcu_cpu_stall_cputime has the same function
-	  as this one, but will override this if it exists.
+	range 0 1
+	default 0 if !BOOTPARAM_RCU_STALL_PANIC
+	default 1 if BOOTPARAM_RCU_STALL_PANIC
 
 config RCU_TRACE
 	bool "Enable tracing for RCU"
@@ -130,7 +139,7 @@ config RCU_EQS_DEBUG
 
 config RCU_STRICT_GRACE_PERIOD
 	bool "Provide debug RCU implementation with short grace periods"
-	depends on DEBUG_KERNEL && RCU_EXPERT && NR_CPUS <= 4 && !TINY_RCU
+	depends on DEBUG_KERNEL && RCU_EXPERT
 	default n
 	select PREEMPT_COUNT if PREEMPT=n
 	help

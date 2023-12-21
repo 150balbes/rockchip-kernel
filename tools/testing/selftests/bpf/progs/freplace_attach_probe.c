@@ -23,7 +23,7 @@ struct {
 SEC("freplace/handle_kprobe")
 int new_handle_kprobe(struct pt_regs *ctx)
 {
-	struct hmap_elem *val;
+	struct hmap_elem zero = {}, *val;
 	int key = 0;
 
 	val = bpf_map_lookup_elem(&hash_map, &key);

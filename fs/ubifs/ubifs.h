@@ -27,8 +27,6 @@
 #include <linux/security.h>
 #include <linux/xattr.h>
 #include <linux/random.h>
-#include <linux/sysfs.h>
-#include <linux/completion.h>
 #include <crypto/hash_info.h>
 #include <crypto/hash.h>
 #include <crypto/algapi.h>
@@ -132,7 +130,7 @@
 #define WORST_COMPR_FACTOR 2
 
 #ifdef CONFIG_FS_ENCRYPTION
-#define UBIFS_CIPHER_BLOCK_SIZE FSCRYPT_CONTENTS_ALIGNMENT
+#define UBIFS_CIPHER_BLOCK_SIZE FS_CRYPTO_BLOCK_SIZE
 #else
 #define UBIFS_CIPHER_BLOCK_SIZE 0
 #endif
@@ -156,13 +154,6 @@
 #define UBIFS_HASH_ARR_SZ 0
 #define UBIFS_HMAC_ARR_SZ 0
 #endif
-
-/*
- * The UBIFS sysfs directory name pattern and maximum name length (3 for "ubi"
- * + 1 for "_" and plus 2x2 for 2 UBI numbers and 1 for the trailing zero byte.
- */
-#define UBIFS_DFS_DIR_NAME "ubi%d_%d"
-#define UBIFS_DFS_DIR_LEN  (3 + 1 + 2*2 + 1)
 
 /*
  * Lockdep classes for UBIFS inode @ui_mutex.
@@ -381,7 +372,7 @@ struct ubifs_gced_idx_leb {
  * @ui_mutex exists for two main reasons. At first it prevents inodes from
  * being written back while UBIFS changing them, being in the middle of an VFS
  * operation. This way UBIFS makes sure the inode fields are consistent. For
- * example, in 'ubifs_rename()' we change 4 inodes simultaneously, and
+ * example, in 'ubifs_rename()' we change 3 inodes simultaneously, and
  * write-back must not write any of them before we have finished.
  *
  * The second reason is budgeting - UBIFS has to budget all operations. If an
@@ -923,7 +914,7 @@ struct ubifs_budget_req {
  * @rb: rb-tree node of rb-tree of orphans sorted by inode number
  * @list: list head of list of orphans in order added
  * @new_list: list head of list of orphans added since the last commit
- * @child_list: list of xattr children if this orphan hosts xattrs, list head
+ * @child_list: list of xattr childs if this orphan hosts xattrs, list head
  * if this orphan is a xattr, not used otherwise.
  * @cnext: next orphan to commit
  * @dnext: next orphan to delete
@@ -997,18 +988,6 @@ struct ubifs_budg_info {
 	int page_budget;
 	int inode_budget;
 	int dent_budget;
-};
-
-/**
- * ubifs_stats_info - per-FS statistics information.
- * @magic_errors: number of bad magic numbers (will be reset with a new mount).
- * @node_errors: number of bad nodes (will be reset with a new mount).
- * @crc_errors: number of bad crcs (will be reset with a new mount).
- */
-struct ubifs_stats_info {
-	unsigned int magic_errors;
-	unsigned int node_errors;
-	unsigned int crc_errors;
 };
 
 struct ubifs_debug_info;
@@ -1272,10 +1251,6 @@ struct ubifs_debug_info;
  * @mount_opts: UBIFS-specific mount options
  *
  * @dbg: debugging-related information
- * @stats: statistics exported over sysfs
- *
- * @kobj: kobject for /sys/fs/ubifs/
- * @kobj_unregister: completion to unregister sysfs kobject
  */
 struct ubifs_info {
 	struct super_block *vfs_sb;
@@ -1310,9 +1285,6 @@ struct ubifs_info {
 	int cmt_state;
 	spinlock_t cs_lock;
 	wait_queue_head_t cmt_wq;
-
-	struct kobject kobj;
-	struct completion kobj_unregister;
 
 	unsigned int big_lpt:1;
 	unsigned int space_fixup:1;
@@ -1521,7 +1493,6 @@ struct ubifs_info {
 	struct ubifs_mount_opts mount_opts;
 
 	struct ubifs_debug_info *dbg;
-	struct ubifs_stats_info *stats;
 };
 
 extern struct list_head ubifs_infos;
@@ -1623,13 +1594,8 @@ static inline int ubifs_check_hmac(const struct ubifs_info *c,
 	return crypto_memneq(expected, got, c->hmac_desc_len);
 }
 
-#ifdef CONFIG_UBIFS_FS_AUTHENTICATION
 void ubifs_bad_hash(const struct ubifs_info *c, const void *node,
 		    const u8 *hash, int lnum, int offs);
-#else
-static inline void ubifs_bad_hash(const struct ubifs_info *c, const void *node,
-				  const u8 *hash, int lnum, int offs) {};
-#endif
 
 int __ubifs_node_check_hash(const struct ubifs_info *c, const void *buf,
 			  const u8 *expected);
@@ -1755,8 +1721,8 @@ int ubifs_write_node(struct ubifs_info *c, void *node, int len, int lnum,
 		     int offs);
 int ubifs_write_node_hmac(struct ubifs_info *c, void *buf, int len, int lnum,
 			  int offs, int hmac_offs);
-int ubifs_check_node(const struct ubifs_info *c, const void *buf, int len,
-		     int lnum, int offs, int quiet, int must_chk_crc);
+int ubifs_check_node(const struct ubifs_info *c, const void *buf, int lnum,
+		     int offs, int quiet, int must_chk_crc);
 void ubifs_init_node(struct ubifs_info *c, void *buf, int len, int pad);
 void ubifs_crc_node(struct ubifs_info *c, void *buf, int len);
 void ubifs_prepare_node(struct ubifs_info *c, void *buf, int len, int pad);
@@ -2025,31 +1991,28 @@ int ubifs_calc_dark(const struct ubifs_info *c, int spc);
 
 /* file.c */
 int ubifs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
-int ubifs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
-		  struct iattr *attr);
+int ubifs_setattr(struct dentry *dentry, struct iattr *attr);
 int ubifs_update_time(struct inode *inode, struct timespec64 *time, int flags);
 
 /* dir.c */
 struct inode *ubifs_new_inode(struct ubifs_info *c, struct inode *dir,
-			      umode_t mode, bool is_xattr);
-int ubifs_getattr(struct mnt_idmap *idmap, const struct path *path,
-		  struct kstat *stat, u32 request_mask, unsigned int flags);
+			      umode_t mode);
+int ubifs_getattr(const struct path *path, struct kstat *stat,
+		  u32 request_mask, unsigned int flags);
 int ubifs_check_dir_empty(struct inode *dir);
 
 /* xattr.c */
+extern const struct xattr_handler *ubifs_xattr_handlers[];
+ssize_t ubifs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 int ubifs_xattr_set(struct inode *host, const char *name, const void *value,
 		    size_t size, int flags, bool check_lock);
 ssize_t ubifs_xattr_get(struct inode *host, const char *name, void *buf,
 			size_t size);
 
 #ifdef CONFIG_UBIFS_FS_XATTR
-extern const struct xattr_handler *ubifs_xattr_handlers[];
-ssize_t ubifs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 void ubifs_evict_xattr_inode(struct ubifs_info *c, ino_t xattr_inum);
 int ubifs_purge_xattrs(struct inode *host);
 #else
-#define ubifs_listxattr NULL
-#define ubifs_xattr_handlers NULL
 static inline void ubifs_evict_xattr_inode(struct ubifs_info *c,
 					   ino_t xattr_inum) { }
 static inline int ubifs_purge_xattrs(struct inode *host)
@@ -2089,9 +2052,6 @@ int ubifs_recover_size(struct ubifs_info *c, bool in_place);
 void ubifs_destroy_size_tree(struct ubifs_info *c);
 
 /* ioctl.c */
-int ubifs_fileattr_get(struct dentry *dentry, struct fileattr *fa);
-int ubifs_fileattr_set(struct mnt_idmap *idmap,
-		       struct dentry *dentry, struct fileattr *fa);
 long ubifs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 void ubifs_set_inode_flags(struct inode *inode);
 #ifdef CONFIG_COMPAT
@@ -2105,12 +2065,6 @@ void ubifs_compress(const struct ubifs_info *c, const void *in_buf, int in_len,
 		    void *out_buf, int *out_len, int *compr_type);
 int ubifs_decompress(const struct ubifs_info *c, const void *buf, int len,
 		     void *out, int *out_len, int compr_type);
-
-/* sysfs.c */
-int ubifs_sysfs_init(void);
-void ubifs_sysfs_exit(void);
-int ubifs_sysfs_register(struct ubifs_info *c);
-void ubifs_sysfs_unregister(struct ubifs_info *c);
 
 #include "debug.h"
 #include "misc.h"

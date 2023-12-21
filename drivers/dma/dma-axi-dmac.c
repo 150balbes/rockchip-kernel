@@ -18,7 +18,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_dma.h>
-#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
@@ -56,9 +55,6 @@
 #define   AXI_DMAC_DMA_DST_TYPE_GET(x)	FIELD_GET(AXI_DMAC_DMA_DST_TYPE_MSK, x)
 #define   AXI_DMAC_DMA_DST_WIDTH_MSK	GENMASK(3, 0)
 #define   AXI_DMAC_DMA_DST_WIDTH_GET(x)	FIELD_GET(AXI_DMAC_DMA_DST_WIDTH_MSK, x)
-#define AXI_DMAC_REG_COHERENCY_DESC	0x14
-#define   AXI_DMAC_DST_COHERENT_MSK	BIT(0)
-#define   AXI_DMAC_DST_COHERENT_GET(x)	FIELD_GET(AXI_DMAC_DST_COHERENT_MSK, x)
 
 #define AXI_DMAC_REG_IRQ_MASK		0x80
 #define AXI_DMAC_REG_IRQ_PENDING	0x84
@@ -910,6 +906,7 @@ static int axi_dmac_probe(struct platform_device *pdev)
 {
 	struct dma_device *dma_dev;
 	struct axi_dmac *dmac;
+	struct resource *res;
 	struct regmap *regmap;
 	unsigned int version;
 	int ret;
@@ -924,7 +921,8 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	if (dmac->irq == 0)
 		return -EINVAL;
 
-	dmac->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dmac->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(dmac->base))
 		return PTR_ERR(dmac->base);
 
@@ -963,6 +961,7 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	dma_dev->device_terminate_all = axi_dmac_terminate_all;
 	dma_dev->device_synchronize = axi_dmac_synchronize;
 	dma_dev->dev = &pdev->dev;
+	dma_dev->chancnt = 1;
 	dma_dev->src_addr_widths = BIT(dmac->chan.src_width);
 	dma_dev->dst_addr_widths = BIT(dmac->chan.dest_width);
 	dma_dev->directions = BIT(dmac->chan.direction);
@@ -979,18 +978,6 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	dma_dev->copy_align = (dmac->chan.address_align_mask + 1);
 
 	axi_dmac_write(dmac, AXI_DMAC_REG_IRQ_MASK, 0x00);
-
-	if (of_dma_is_coherent(pdev->dev.of_node)) {
-		ret = axi_dmac_read(dmac, AXI_DMAC_REG_COHERENCY_DESC);
-
-		if (version < ADI_AXI_PCORE_VER(4, 4, 'a') ||
-		    !AXI_DMAC_DST_COHERENT_GET(ret)) {
-			dev_err(dmac->dma_dev.dev,
-				"Coherent DMA not supported in hardware");
-			ret = -EINVAL;
-			goto err_clk_disable;
-		}
-	}
 
 	ret = dma_async_device_register(dma_dev);
 	if (ret)

@@ -29,11 +29,11 @@ static struct symbol *symtab[HASH_BUCKETS];
 static FILE *debugfile;
 
 int cur_line = 1;
-char *cur_filename;
+char *cur_filename, *source_file;
 int in_source_file;
 
 static int flag_debug, flag_dump_defs, flag_reference, flag_dump_types,
-	   flag_preserve, flag_warnings;
+	   flag_preserve, flag_warnings, flag_rel_crcs;
 
 static int errors;
 static int nsyms;
@@ -680,7 +680,11 @@ void export_symbol(const char *name)
 		if (flag_dump_defs)
 			fputs(">\n", debugfile);
 
-		printf("#SYMVER %s 0x%08lx\n", name, crc);
+		/* Used as a linker script. */
+		printf(!flag_rel_crcs ? "__crc_%s = 0x%08lx;\n" :
+		       "SECTIONS { .rodata : ALIGN(4) { "
+		       "__crc_%s = .; LONG(0x%08lx); } }\n",
+		       name, crc);
 	}
 }
 
@@ -729,6 +733,7 @@ static void genksyms_usage(void)
 	      "  -q, --quiet           Disable warnings (default)\n"
 	      "  -h, --help            Print this message\n"
 	      "  -V, --version         Print the release version\n"
+	      "  -R, --relative-crc    Emit section relative symbol CRCs\n"
 #else				/* __GNU_LIBRARY__ */
 	      "  -s                    Select symbol prefix\n"
 	      "  -d                    Increment the debug level (repeatable)\n"
@@ -740,6 +745,7 @@ static void genksyms_usage(void)
 	      "  -q                    Disable warnings (default)\n"
 	      "  -h                    Print this message\n"
 	      "  -V                    Print the release version\n"
+	      "  -R                    Emit section relative symbol CRCs\n"
 #endif				/* __GNU_LIBRARY__ */
 	      , stderr);
 }
@@ -760,13 +766,14 @@ int main(int argc, char **argv)
 		{"preserve", 0, 0, 'p'},
 		{"version", 0, 0, 'V'},
 		{"help", 0, 0, 'h'},
+		{"relative-crc", 0, 0, 'R'},
 		{0, 0, 0, 0}
 	};
 
-	while ((o = getopt_long(argc, argv, "s:dwqVDr:T:ph",
+	while ((o = getopt_long(argc, argv, "s:dwqVDr:T:phR",
 				&long_opts[0], NULL)) != EOF)
 #else				/* __GNU_LIBRARY__ */
-	while ((o = getopt(argc, argv, "s:dwqVDr:T:ph")) != EOF)
+	while ((o = getopt(argc, argv, "s:dwqVDr:T:phR")) != EOF)
 #endif				/* __GNU_LIBRARY__ */
 		switch (o) {
 		case 'd':
@@ -806,6 +813,9 @@ int main(int argc, char **argv)
 		case 'h':
 			genksyms_usage();
 			return 0;
+		case 'R':
+			flag_rel_crcs = 1;
+			break;
 		default:
 			genksyms_usage();
 			return 1;

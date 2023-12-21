@@ -10,6 +10,9 @@
  * Atari, Amstrad, Commodore, Amiga, Sega, etc. joystick driver for Linux
  */
 
+/*
+ */
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>

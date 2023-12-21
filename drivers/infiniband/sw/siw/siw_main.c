@@ -98,14 +98,15 @@ static int siw_create_tx_threads(void)
 			continue;
 
 		siw_tx_thread[cpu] =
-			kthread_run_on_cpu(siw_run_sq,
-					   (unsigned long *)(long)cpu,
-					   cpu, "siw_tx/%u");
+			kthread_create(siw_run_sq, (unsigned long *)(long)cpu,
+				       "siw_tx/%d", cpu);
 		if (IS_ERR(siw_tx_thread[cpu])) {
 			siw_tx_thread[cpu] = NULL;
 			continue;
 		}
+		kthread_bind(siw_tx_thread[cpu], cpu);
 
+		wake_up_process(siw_tx_thread[cpu]);
 		assigned++;
 	}
 	return assigned;
@@ -119,7 +120,6 @@ static int siw_dev_qualified(struct net_device *netdev)
 	 * <linux/if_arp.h> for type identifiers.
 	 */
 	if (netdev->type == ARPHRD_ETHER || netdev->type == ARPHRD_IEEE802 ||
-	    netdev->type == ARPHRD_NONE ||
 	    (netdev->type == ARPHRD_LOOPBACK && loopback_enabled))
 		return 1;
 
@@ -297,7 +297,6 @@ static const struct ib_device_ops siw_device_ops = {
 
 	INIT_RDMA_OBJ_SIZE(ib_cq, siw_cq, base_cq),
 	INIT_RDMA_OBJ_SIZE(ib_pd, siw_pd, base_pd),
-	INIT_RDMA_OBJ_SIZE(ib_qp, siw_qp, base_qp),
 	INIT_RDMA_OBJ_SIZE(ib_srq, siw_srq, base_srq),
 	INIT_RDMA_OBJ_SIZE(ib_ucontext, siw_ucontext, base_ucontext),
 };
@@ -316,12 +315,12 @@ static struct siw_device *siw_device_create(struct net_device *netdev)
 
 	sdev->netdev = netdev;
 
-	if (netdev->type != ARPHRD_LOOPBACK && netdev->type != ARPHRD_NONE) {
+	if (netdev->type != ARPHRD_LOOPBACK) {
 		addrconf_addr_eui48((unsigned char *)&base_dev->node_guid,
 				    netdev->dev_addr);
 	} else {
 		/*
-		 * This device does not have a HW address,
+		 * The loopback device does not have a HW address,
 		 * but connection mangagement lib expects gid != 0
 		 */
 		size_t len = min_t(size_t, strlen(base_dev->name), 6);
@@ -331,8 +330,30 @@ static struct siw_device *siw_device_create(struct net_device *netdev)
 		addrconf_addr_eui48((unsigned char *)&base_dev->node_guid,
 				    addr);
 	}
-
-	base_dev->uverbs_cmd_mask |= BIT_ULL(IB_USER_VERBS_CMD_POST_SEND);
+	base_dev->uverbs_cmd_mask =
+		(1ull << IB_USER_VERBS_CMD_QUERY_DEVICE) |
+		(1ull << IB_USER_VERBS_CMD_QUERY_PORT) |
+		(1ull << IB_USER_VERBS_CMD_GET_CONTEXT) |
+		(1ull << IB_USER_VERBS_CMD_ALLOC_PD) |
+		(1ull << IB_USER_VERBS_CMD_DEALLOC_PD) |
+		(1ull << IB_USER_VERBS_CMD_REG_MR) |
+		(1ull << IB_USER_VERBS_CMD_DEREG_MR) |
+		(1ull << IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL) |
+		(1ull << IB_USER_VERBS_CMD_CREATE_CQ) |
+		(1ull << IB_USER_VERBS_CMD_POLL_CQ) |
+		(1ull << IB_USER_VERBS_CMD_REQ_NOTIFY_CQ) |
+		(1ull << IB_USER_VERBS_CMD_DESTROY_CQ) |
+		(1ull << IB_USER_VERBS_CMD_CREATE_QP) |
+		(1ull << IB_USER_VERBS_CMD_QUERY_QP) |
+		(1ull << IB_USER_VERBS_CMD_MODIFY_QP) |
+		(1ull << IB_USER_VERBS_CMD_DESTROY_QP) |
+		(1ull << IB_USER_VERBS_CMD_POST_SEND) |
+		(1ull << IB_USER_VERBS_CMD_POST_RECV) |
+		(1ull << IB_USER_VERBS_CMD_CREATE_SRQ) |
+		(1ull << IB_USER_VERBS_CMD_POST_SRQ_RECV) |
+		(1ull << IB_USER_VERBS_CMD_MODIFY_SRQ) |
+		(1ull << IB_USER_VERBS_CMD_QUERY_SRQ) |
+		(1ull << IB_USER_VERBS_CMD_DESTROY_SRQ);
 
 	base_dev->node_type = RDMA_NODE_RNIC;
 	memcpy(base_dev->node_desc, SIW_NODE_DESC_COMMON,
@@ -358,7 +379,7 @@ static struct siw_device *siw_device_create(struct net_device *netdev)
 	       sizeof(base_dev->iw_ifname));
 
 	/* Disable TCP port mapping */
-	base_dev->iw_driver_flags = IW_F_NO_PORT_MAP;
+	base_dev->iw_driver_flags = IW_F_NO_PORT_MAP,
 
 	sdev->attrs.max_qp = SIW_MAX_QP;
 	sdev->attrs.max_qp_wr = SIW_MAX_QP_WR;
@@ -436,6 +457,9 @@ static int siw_netdev_event(struct notifier_block *nb, unsigned long event,
 	struct siw_device *sdev;
 
 	dev_dbg(&netdev->dev, "siw: event %lu\n", event);
+
+	if (dev_net(netdev) != &init_net)
+		return NOTIFY_OK;
 
 	base_dev = ib_device_get_by_netdev(netdev, RDMA_DRIVER_SIW);
 	if (!base_dev)

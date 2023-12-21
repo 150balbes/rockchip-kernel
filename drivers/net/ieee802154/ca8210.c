@@ -51,7 +51,6 @@
 #include <linux/clk-provider.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/gpio/consumer.h>
 #include <linux/gpio.h>
 #include <linux/ieee802154.h>
 #include <linux/io.h>
@@ -89,6 +88,48 @@
 /* test interface constants */
 #define CA8210_TEST_INT_FILE_NAME "ca8210_test"
 #define CA8210_TEST_INT_FIFO_SIZE 256
+
+/* MAC status enumerations */
+#define MAC_SUCCESS                     (0x00)
+#define MAC_ERROR                       (0x01)
+#define MAC_CANCELLED                   (0x02)
+#define MAC_READY_FOR_POLL              (0x03)
+#define MAC_COUNTER_ERROR               (0xDB)
+#define MAC_IMPROPER_KEY_TYPE           (0xDC)
+#define MAC_IMPROPER_SECURITY_LEVEL     (0xDD)
+#define MAC_UNSUPPORTED_LEGACY          (0xDE)
+#define MAC_UNSUPPORTED_SECURITY        (0xDF)
+#define MAC_BEACON_LOST                 (0xE0)
+#define MAC_CHANNEL_ACCESS_FAILURE      (0xE1)
+#define MAC_DENIED                      (0xE2)
+#define MAC_DISABLE_TRX_FAILURE         (0xE3)
+#define MAC_SECURITY_ERROR              (0xE4)
+#define MAC_FRAME_TOO_LONG              (0xE5)
+#define MAC_INVALID_GTS                 (0xE6)
+#define MAC_INVALID_HANDLE              (0xE7)
+#define MAC_INVALID_PARAMETER           (0xE8)
+#define MAC_NO_ACK                      (0xE9)
+#define MAC_NO_BEACON                   (0xEA)
+#define MAC_NO_DATA                     (0xEB)
+#define MAC_NO_SHORT_ADDRESS            (0xEC)
+#define MAC_OUT_OF_CAP                  (0xED)
+#define MAC_PAN_ID_CONFLICT             (0xEE)
+#define MAC_REALIGNMENT                 (0xEF)
+#define MAC_TRANSACTION_EXPIRED         (0xF0)
+#define MAC_TRANSACTION_OVERFLOW        (0xF1)
+#define MAC_TX_ACTIVE                   (0xF2)
+#define MAC_UNAVAILABLE_KEY             (0xF3)
+#define MAC_UNSUPPORTED_ATTRIBUTE       (0xF4)
+#define MAC_INVALID_ADDRESS             (0xF5)
+#define MAC_ON_TIME_TOO_LONG            (0xF6)
+#define MAC_PAST_TIME                   (0xF7)
+#define MAC_TRACKING_OFF                (0xF8)
+#define MAC_INVALID_INDEX               (0xF9)
+#define MAC_LIMIT_REACHED               (0xFA)
+#define MAC_READ_ONLY                   (0xFB)
+#define MAC_SCAN_IN_PROGRESS            (0xFC)
+#define MAC_SUPERFRAME_OVERLAP          (0xFD)
+#define MAC_SYSTEM_ERROR                (0xFF)
 
 /* HWME attribute IDs */
 #define HWME_EDTHRESHOLD       (0x04)
@@ -275,7 +316,6 @@ struct cas_control {
  * struct ca8210_test - ca8210 test interface structure
  * @ca8210_dfs_spi_int: pointer to the entry in the debug fs for this device
  * @up_fifo:            fifo for upstream messages
- * @readq:              read wait queue
  *
  * This structure stores all the data pertaining to the debug interface
  */
@@ -306,12 +346,12 @@ struct ca8210_test {
  * @ca8210_is_awake:        nonzero if ca8210 is initialised, ready for comms
  * @sync_down:              counts number of downstream synchronous commands
  * @sync_up:                counts number of upstream synchronous commands
- * @spi_transfer_complete:  completion object for a single spi_transfer
- * @sync_exchange_complete: completion object for a complete synchronous API
- *                          exchange
- * @promiscuous:            whether the ca8210 is in promiscuous mode or not
+ * @spi_transfer_complete   completion object for a single spi_transfer
+ * @sync_exchange_complete  completion object for a complete synchronous API
+ *                           exchange
+ * @promiscuous             whether the ca8210 is in promiscuous mode or not
  * @retries:                records how many times the current pending spi
- *                          transfer has been retried
+ *                           transfer has been retried
  */
 struct ca8210_priv {
 	struct spi_device *spi;
@@ -380,8 +420,8 @@ struct fulladdr {
 
 /**
  * union macaddr: generic MAC address container
- * @short_address: 16-bit short address
- * @ieee_address:  64-bit extended address as LE byte array
+ * @short_addr:   16-bit short address
+ * @ieee_address: 64-bit extended address as LE byte array
  *
  */
 union macaddr {
@@ -510,58 +550,58 @@ static int link_to_linux_err(int link_status)
 		return link_status;
 	}
 	switch (link_status) {
-	case IEEE802154_SUCCESS:
-	case IEEE802154_REALIGNMENT:
+	case MAC_SUCCESS:
+	case MAC_REALIGNMENT:
 		return 0;
-	case IEEE802154_IMPROPER_KEY_TYPE:
+	case MAC_IMPROPER_KEY_TYPE:
 		return -EKEYREJECTED;
-	case IEEE802154_IMPROPER_SECURITY_LEVEL:
-	case IEEE802154_UNSUPPORTED_LEGACY:
-	case IEEE802154_DENIED:
+	case MAC_IMPROPER_SECURITY_LEVEL:
+	case MAC_UNSUPPORTED_LEGACY:
+	case MAC_DENIED:
 		return -EACCES;
-	case IEEE802154_BEACON_LOST:
-	case IEEE802154_NO_ACK:
-	case IEEE802154_NO_BEACON:
+	case MAC_BEACON_LOST:
+	case MAC_NO_ACK:
+	case MAC_NO_BEACON:
 		return -ENETUNREACH;
-	case IEEE802154_CHANNEL_ACCESS_FAILURE:
-	case IEEE802154_TX_ACTIVE:
-	case IEEE802154_SCAN_IN_PROGRESS:
+	case MAC_CHANNEL_ACCESS_FAILURE:
+	case MAC_TX_ACTIVE:
+	case MAC_SCAN_IN_PROGRESS:
 		return -EBUSY;
-	case IEEE802154_DISABLE_TRX_FAILURE:
-	case IEEE802154_OUT_OF_CAP:
+	case MAC_DISABLE_TRX_FAILURE:
+	case MAC_OUT_OF_CAP:
 		return -EAGAIN;
-	case IEEE802154_FRAME_TOO_LONG:
+	case MAC_FRAME_TOO_LONG:
 		return -EMSGSIZE;
-	case IEEE802154_INVALID_GTS:
-	case IEEE802154_PAST_TIME:
+	case MAC_INVALID_GTS:
+	case MAC_PAST_TIME:
 		return -EBADSLT;
-	case IEEE802154_INVALID_HANDLE:
+	case MAC_INVALID_HANDLE:
 		return -EBADMSG;
-	case IEEE802154_INVALID_PARAMETER:
-	case IEEE802154_UNSUPPORTED_ATTRIBUTE:
-	case IEEE802154_ON_TIME_TOO_LONG:
-	case IEEE802154_INVALID_INDEX:
+	case MAC_INVALID_PARAMETER:
+	case MAC_UNSUPPORTED_ATTRIBUTE:
+	case MAC_ON_TIME_TOO_LONG:
+	case MAC_INVALID_INDEX:
 		return -EINVAL;
-	case IEEE802154_NO_DATA:
+	case MAC_NO_DATA:
 		return -ENODATA;
-	case IEEE802154_NO_SHORT_ADDRESS:
+	case MAC_NO_SHORT_ADDRESS:
 		return -EFAULT;
-	case IEEE802154_PAN_ID_CONFLICT:
+	case MAC_PAN_ID_CONFLICT:
 		return -EADDRINUSE;
-	case IEEE802154_TRANSACTION_EXPIRED:
+	case MAC_TRANSACTION_EXPIRED:
 		return -ETIME;
-	case IEEE802154_TRANSACTION_OVERFLOW:
+	case MAC_TRANSACTION_OVERFLOW:
 		return -ENOBUFS;
-	case IEEE802154_UNAVAILABLE_KEY:
+	case MAC_UNAVAILABLE_KEY:
 		return -ENOKEY;
-	case IEEE802154_INVALID_ADDRESS:
+	case MAC_INVALID_ADDRESS:
 		return -ENXIO;
-	case IEEE802154_TRACKING_OFF:
-	case IEEE802154_SUPERFRAME_OVERLAP:
+	case MAC_TRACKING_OFF:
+	case MAC_SUPERFRAME_OVERLAP:
 		return -EREMOTEIO;
-	case IEEE802154_LIMIT_REACHED:
+	case MAC_LIMIT_REACHED:
 		return -EDQUOT;
-	case IEEE802154_READ_ONLY:
+	case MAC_READ_ONLY:
 		return -EROFS;
 	default:
 		return -EPROTO;
@@ -674,7 +714,7 @@ static void ca8210_mlme_reset_worker(struct work_struct *work)
 /**
  * ca8210_rx_done() - Calls various message dispatches responding to a received
  *                    command
- * @cas_ctl: Pointer to the cas_control object for the relevant spi transfer
+ * @arg:  Pointer to the cas_control object for the relevant spi transfer
  *
  * Presents a received SAP command from the ca8210 to the Cascoda EVBME, test
  * interface and network driver.
@@ -713,7 +753,7 @@ static void ca8210_rx_done(struct cas_control *cas_ctl)
 
 	ca8210_net_rx(priv->hw, buf, len);
 	if (buf[0] == SPI_MCPS_DATA_CONFIRM) {
-		if (buf[3] == IEEE802154_TRANSACTION_OVERFLOW) {
+		if (buf[3] == MAC_TRANSACTION_OVERFLOW) {
 			dev_info(
 				&priv->spi->dev,
 				"Waiting for transaction overflow to stabilise...\n");
@@ -790,7 +830,7 @@ static void ca8210_rx_done(struct cas_control *cas_ctl)
 finish:;
 }
 
-static void ca8210_remove(struct spi_device *spi_device);
+static int ca8210_remove(struct spi_device *spi_device);
 
 /**
  * ca8210_spi_transfer_complete() - Called when a single spi transfer has
@@ -1087,7 +1127,7 @@ static u8 tdme_setsfr_request_sync(
 	);
 	if (ret) {
 		dev_crit(&spi->dev, "cascoda_api_downstream returned %d", ret);
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	if (response.command_id != SPI_TDME_SETSFR_CONFIRM) {
@@ -1096,7 +1136,7 @@ static u8 tdme_setsfr_request_sync(
 			"sync response to SPI_TDME_SETSFR_REQUEST was not SPI_TDME_SETSFR_CONFIRM, it was %d\n",
 			response.command_id
 		);
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	return response.pdata.tdme_set_sfr_cnf.status;
@@ -1110,7 +1150,7 @@ static u8 tdme_setsfr_request_sync(
  */
 static u8 tdme_chipinit(void *device_ref)
 {
-	u8 status = IEEE802154_SUCCESS;
+	u8 status = MAC_SUCCESS;
 	u8 sfr_address;
 	struct spi_device *spi = device_ref;
 	struct preamble_cfg_sfr pre_cfg_value = {
@@ -1179,7 +1219,7 @@ static u8 tdme_chipinit(void *device_ref)
 		goto finish;
 
 finish:
-	if (status != IEEE802154_SUCCESS) {
+	if (status != MAC_SUCCESS) {
 		dev_err(
 			&spi->dev,
 			"failed to set sfr at %#03x, status = %#03x\n",
@@ -1237,6 +1277,7 @@ static u8 tdme_channelinit(u8 channel, void *device_ref)
  * @pib_attribute:        Attribute Number
  * @pib_attribute_length: Attribute length
  * @pib_attribute_value:  Pointer to Attribute Value
+ * @device_ref:           Nondescript pointer to target device
  *
  * Return: 802.15.4 status code of checks
  */
@@ -1246,7 +1287,7 @@ static u8 tdme_checkpibattribute(
 	const void   *pib_attribute_value
 )
 {
-	u8 status = IEEE802154_SUCCESS;
+	u8 status = MAC_SUCCESS;
 	u8 value;
 
 	value  = *((u8 *)pib_attribute_value);
@@ -1255,52 +1296,52 @@ static u8 tdme_checkpibattribute(
 	/* PHY */
 	case PHY_TRANSMIT_POWER:
 		if (value > 0x3F)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case PHY_CCA_MODE:
 		if (value > 0x03)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	/* MAC */
 	case MAC_BATT_LIFE_EXT_PERIODS:
 		if (value < 6 || value > 41)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_BEACON_PAYLOAD:
 		if (pib_attribute_length > MAX_BEACON_PAYLOAD_LENGTH)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_BEACON_PAYLOAD_LENGTH:
 		if (value > MAX_BEACON_PAYLOAD_LENGTH)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_BEACON_ORDER:
 		if (value > 15)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MAX_BE:
 		if (value < 3 || value > 8)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MAX_CSMA_BACKOFFS:
 		if (value > 5)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MAX_FRAME_RETRIES:
 		if (value > 7)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MIN_BE:
 		if (value > 8)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_RESPONSE_WAIT_TIME:
 		if (value < 2 || value > 64)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_SUPERFRAME_ORDER:
 		if (value > 15)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	/* boolean */
 	case MAC_ASSOCIATED_PAN_COORD:
@@ -1312,16 +1353,16 @@ static u8 tdme_checkpibattribute(
 	case MAC_RX_ON_WHEN_IDLE:
 	case MAC_SECURITY_ENABLED:
 		if (value > 1)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	/* MAC SEC */
 	case MAC_AUTO_REQUEST_SECURITY_LEVEL:
 		if (value > 7)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_AUTO_REQUEST_KEY_ID_MODE:
 		if (value > 3)
-			status = IEEE802154_INVALID_PARAMETER;
+			status = MAC_INVALID_PARAMETER;
 		break;
 	default:
 		break;
@@ -1481,9 +1522,9 @@ static u8 mcps_data_request(
 
 	if (ca8210_spi_transfer(device_ref, &command.command_id,
 				command.length + 2))
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 
-	return IEEE802154_SUCCESS;
+	return MAC_SUCCESS;
 }
 
 /**
@@ -1512,11 +1553,11 @@ static u8 mlme_reset_request_sync(
 		&response.command_id,
 		device_ref)) {
 		dev_err(&spi->dev, "cascoda_api_downstream failed\n");
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	if (response.command_id != SPI_MLME_RESET_CONFIRM)
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 
 	status = response.pdata.status;
 
@@ -1559,7 +1600,7 @@ static u8 mlme_set_request_sync(
 	 */
 	if (tdme_checkpibattribute(
 		pib_attribute, pib_attribute_length, pib_attribute_value)) {
-		return IEEE802154_INVALID_PARAMETER;
+		return MAC_INVALID_PARAMETER;
 	}
 
 	if (pib_attribute == PHY_CURRENT_CHANNEL) {
@@ -1595,11 +1636,11 @@ static u8 mlme_set_request_sync(
 		command.length + 2,
 		&response.command_id,
 		device_ref)) {
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	if (response.command_id != SPI_MLME_SET_CONFIRM)
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 
 	return response.pdata.status;
 }
@@ -1637,11 +1678,11 @@ static u8 hwme_set_request_sync(
 		command.length + 2,
 		&response.command_id,
 		device_ref)) {
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	if (response.command_id != SPI_HWME_SET_CONFIRM)
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 
 	return response.pdata.hwme_set_cnf.status;
 }
@@ -1673,13 +1714,13 @@ static u8 hwme_get_request_sync(
 		command.length + 2,
 		&response.command_id,
 		device_ref)) {
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 	}
 
 	if (response.command_id != SPI_HWME_GET_CONFIRM)
-		return IEEE802154_SYSTEM_ERROR;
+		return MAC_SYSTEM_ERROR;
 
-	if (response.pdata.hwme_get_cnf.status == IEEE802154_SUCCESS) {
+	if (response.pdata.hwme_get_cnf.status == MAC_SUCCESS) {
 		*hw_attribute_length =
 			response.pdata.hwme_get_cnf.hw_attribute_length;
 		memcpy(
@@ -1729,8 +1770,9 @@ static int ca8210_async_xmit_complete(
 			"Link transmission unsuccessful, status = %d\n",
 			status
 		);
-		if (status != IEEE802154_TRANSACTION_OVERFLOW) {
-			ieee802154_xmit_error(priv->hw, priv->tx_skb, status);
+		if (status != MAC_TRANSACTION_OVERFLOW) {
+			dev_kfree_skb_any(priv->tx_skb);
+			ieee802154_wake_queue(priv->hw);
 			return 0;
 		}
 	}
@@ -1903,9 +1945,10 @@ static int ca8210_skb_tx(
 	struct ca8210_priv  *priv
 )
 {
+	int status;
 	struct ieee802154_hdr header = { };
 	struct secspec secspec;
-	int mac_len, status;
+	unsigned int mac_len;
 
 	dev_dbg(&priv->spi->dev, "%s called\n", __func__);
 
@@ -1913,8 +1956,6 @@ static int ca8210_skb_tx(
 	 * packet
 	 */
 	mac_len = ieee802154_hdr_peek_addrs(skb, &header);
-	if (mac_len < 0)
-		return mac_len;
 
 	secspec.security_level = header.sec.level;
 	secspec.key_id_mode = header.sec.key_id_mode;
@@ -2295,7 +2336,7 @@ static int ca8210_set_csma_params(
  * @retries:  Number of retries
  *
  * Sets the number of times to retry a transmission if no acknowledgment was
- * received from the other end when one was requested.
+ * was received from the other end when one was requested.
  *
  * Return: 0 or linux error code
  */
@@ -2395,7 +2436,7 @@ static int ca8210_test_check_upstream(u8 *buf, void *device_ref)
 		if (ret) {
 			response[0]  = SPI_MLME_SET_CONFIRM;
 			response[1] = 3;
-			response[2] = IEEE802154_INVALID_PARAMETER;
+			response[2] = MAC_INVALID_PARAMETER;
 			response[3] = buf[2];
 			response[4] = buf[3];
 			if (cascoda_api_upstream)
@@ -2855,6 +2896,7 @@ static int ca8210_interrupt_init(struct spi_device *spi)
 	);
 	if (ret) {
 		dev_crit(&spi->dev, "request_irq %d failed\n", pdata->irq_id);
+		gpio_unexport(pdata->gpio_irq);
 		gpio_free(pdata->gpio_irq);
 	}
 
@@ -2897,7 +2939,9 @@ static int ca8210_dev_com_init(struct ca8210_priv *priv)
  */
 static void ca8210_dev_com_clear(struct ca8210_priv *priv)
 {
+	flush_workqueue(priv->mlme_workqueue);
 	destroy_workqueue(priv->mlme_workqueue);
+	flush_workqueue(priv->irq_workqueue);
 	destroy_workqueue(priv->irq_workqueue);
 }
 
@@ -2944,8 +2988,7 @@ static void ca8210_hw_setup(struct ieee802154_hw *ca8210_hw)
 	ca8210_hw->phy->flags =
 		WPAN_PHY_FLAG_TXPOWER |
 		WPAN_PHY_FLAG_CCA_ED_LEVEL |
-		WPAN_PHY_FLAG_CCA_MODE |
-		WPAN_PHY_FLAG_DATAGRAMS_ONLY;
+		WPAN_PHY_FLAG_CCA_MODE;
 }
 
 /**
@@ -2969,7 +3012,7 @@ static int ca8210_test_interface_init(struct ca8210_priv *priv)
 		sizeof(node_name),
 		"ca8210@%d_%d",
 		priv->spi->master->bus_num,
-		spi_get_chipselect(priv->spi, 0)
+		priv->spi->chip_select
 	);
 
 	test->ca8210_dfs_spi_int = debugfs_create_file(
@@ -3004,11 +3047,11 @@ static void ca8210_test_interface_clear(struct ca8210_priv *priv)
 
 /**
  * ca8210_remove() - Shut down a ca8210 upon being disconnected
- * @spi_device:  Pointer to spi device data structure
+ * @priv:  Pointer to private data structure
  *
  * Return: 0 or linux error code
  */
-static void ca8210_remove(struct spi_device *spi_device)
+static int ca8210_remove(struct spi_device *spi_device)
 {
 	struct ca8210_priv *priv;
 	struct ca8210_platform_data *pdata;
@@ -3048,11 +3091,13 @@ static void ca8210_remove(struct spi_device *spi_device)
 		if (IS_ENABLED(CONFIG_IEEE802154_CA8210_DEBUGFS))
 			ca8210_test_interface_clear(priv);
 	}
+
+	return 0;
 }
 
 /**
  * ca8210_probe() - Set up a connected ca8210 upon being detected by the system
- * @spi_device:  Pointer to spi device data structure
+ * @priv:  Pointer to private data structure
  *
  * Return: 0 or linux error code
  */
@@ -3179,7 +3224,8 @@ MODULE_DEVICE_TABLE(of, ca8210_of_ids);
 static struct spi_driver ca8210_spi_driver = {
 	.driver = {
 		.name =                 DRIVER_NAME,
-		.of_match_table =       ca8210_of_ids,
+		.owner =                THIS_MODULE,
+		.of_match_table =       of_match_ptr(ca8210_of_ids),
 	},
 	.probe  =                       ca8210_probe,
 	.remove =                       ca8210_remove

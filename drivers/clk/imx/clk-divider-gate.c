@@ -64,10 +64,10 @@ static unsigned long clk_divider_gate_recalc_rate(struct clk_hw *hw,
 				   div->flags, div->width);
 }
 
-static int clk_divider_determine_rate(struct clk_hw *hw,
-				      struct clk_rate_request *req)
+static long clk_divider_round_rate(struct clk_hw *hw, unsigned long rate,
+				   unsigned long *prate)
 {
-	return clk_divider_ops.determine_rate(hw, req);
+	return clk_divider_ops.round_rate(hw, rate, prate);
 }
 
 static int clk_divider_gate_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -154,12 +154,12 @@ static int clk_divider_is_enabled(struct clk_hw *hw)
 
 static const struct clk_ops clk_divider_gate_ro_ops = {
 	.recalc_rate = clk_divider_gate_recalc_rate_ro,
-	.determine_rate = clk_divider_determine_rate,
+	.round_rate = clk_divider_round_rate,
 };
 
 static const struct clk_ops clk_divider_gate_ops = {
 	.recalc_rate = clk_divider_gate_recalc_rate,
-	.determine_rate = clk_divider_determine_rate,
+	.round_rate = clk_divider_round_rate,
 	.set_rate = clk_divider_gate_set_rate,
 	.enable = clk_divider_enable,
 	.disable = clk_divider_disable,

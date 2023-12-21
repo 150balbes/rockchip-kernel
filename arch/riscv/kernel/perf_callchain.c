@@ -4,7 +4,11 @@
 #include <linux/perf_event.h>
 #include <linux/uaccess.h>
 
-#include <asm/stacktrace.h>
+/* Kernel callchain */
+struct stackframe {
+	unsigned long fp;
+	unsigned long ra;
+};
 
 /*
  * Get the return address for a single stackframe and return a pointer to the
@@ -56,7 +60,12 @@ static unsigned long user_backtrace(struct perf_callchain_entry_ctx *entry,
 void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
 			 struct pt_regs *regs)
 {
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
 	unsigned long fp = 0;
+
+	/* RISC-V does not support perf in guest mode. */
+	if (guest_cbs && guest_cbs->is_in_guest())
+		return;
 
 	fp = regs->s0;
 	perf_callchain_store(entry, regs->epc);
@@ -66,13 +75,23 @@ void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
 		fp = user_backtrace(entry, fp, 0);
 }
 
-static bool fill_callchain(void *entry, unsigned long pc)
+bool fill_callchain(unsigned long pc, void *entry)
 {
 	return perf_callchain_store(entry, pc) == 0;
 }
 
+void notrace walk_stackframe(struct task_struct *task,
+	struct pt_regs *regs, bool (*fn)(unsigned long, void *), void *arg);
 void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry,
 			   struct pt_regs *regs)
 {
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
+
+	/* RISC-V does not support perf in guest mode. */
+	if (guest_cbs && guest_cbs->is_in_guest()) {
+		pr_warn("RISC-V does not support perf in guest mode!");
+		return;
+	}
+
 	walk_stackframe(NULL, regs, fill_callchain, entry);
 }

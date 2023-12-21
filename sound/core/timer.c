@@ -959,7 +959,7 @@ int snd_timer_new(struct snd_card *card, char *id, struct snd_timer_id *tid,
 	timer->tmr_device = tid->device;
 	timer->tmr_subdevice = tid->subdevice;
 	if (id)
-		strscpy(timer->id, id, sizeof(timer->id));
+		strlcpy(timer->id, id, sizeof(timer->id));
 	timer->sticks = 1;
 	INIT_LIST_HEAD(&timer->device_list);
 	INIT_LIST_HEAD(&timer->open_list_head);
@@ -1246,7 +1246,6 @@ static void snd_timer_proc_read(struct snd_info_entry *entry,
 {
 	struct snd_timer *timer;
 	struct snd_timer_instance *ti;
-	unsigned long resolution;
 
 	mutex_lock(&register_mutex);
 	list_for_each_entry(timer, &snd_timer_list, device_list) {
@@ -1270,13 +1269,10 @@ static void snd_timer_proc_read(struct snd_info_entry *entry,
 				    timer->tmr_device, timer->tmr_subdevice);
 		}
 		snd_iprintf(buffer, "%s :", timer->name);
-		spin_lock_irq(&timer->lock);
-		resolution = snd_timer_hw_resolution(timer);
-		spin_unlock_irq(&timer->lock);
-		if (resolution)
+		if (timer->hw.resolution)
 			snd_iprintf(buffer, " %lu.%03luus (%lu ticks)",
-				    resolution / 1000,
-				    resolution % 1000,
+				    timer->hw.resolution / 1000,
+				    timer->hw.resolution % 1000,
 				    timer->hw.ticks);
 		if (timer->hw.flags & SNDRV_TIMER_HW_SLAVE)
 			snd_iprintf(buffer, " SLAVE");
@@ -1664,11 +1660,9 @@ static int snd_timer_user_ginfo(struct file *file,
 		ginfo->card = t->card ? t->card->number : -1;
 		if (t->hw.flags & SNDRV_TIMER_HW_SLAVE)
 			ginfo->flags |= SNDRV_TIMER_FLG_SLAVE;
-		strscpy(ginfo->id, t->id, sizeof(ginfo->id));
-		strscpy(ginfo->name, t->name, sizeof(ginfo->name));
-		spin_lock_irq(&t->lock);
-		ginfo->resolution = snd_timer_hw_resolution(t);
-		spin_unlock_irq(&t->lock);
+		strlcpy(ginfo->id, t->id, sizeof(ginfo->id));
+		strlcpy(ginfo->name, t->name, sizeof(ginfo->name));
+		ginfo->resolution = t->hw.resolution;
 		if (t->hw.resolution_min > 0) {
 			ginfo->resolution_min = t->hw.resolution_min;
 			ginfo->resolution_max = t->hw.resolution_max;
@@ -1821,11 +1815,9 @@ static int snd_timer_user_info(struct file *file,
 	info->card = t->card ? t->card->number : -1;
 	if (t->hw.flags & SNDRV_TIMER_HW_SLAVE)
 		info->flags |= SNDRV_TIMER_FLG_SLAVE;
-	strscpy(info->id, t->id, sizeof(info->id));
-	strscpy(info->name, t->name, sizeof(info->name));
-	spin_lock_irq(&t->lock);
-	info->resolution = snd_timer_hw_resolution(t);
-	spin_unlock_irq(&t->lock);
+	strlcpy(info->id, t->id, sizeof(info->id));
+	strlcpy(info->name, t->name, sizeof(info->name));
+	info->resolution = t->hw.resolution;
 	if (copy_to_user(_info, info, sizeof(*_info)))
 		err = -EFAULT;
 	kfree(info);

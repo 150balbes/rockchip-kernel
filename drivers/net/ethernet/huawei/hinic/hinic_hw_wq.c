@@ -89,7 +89,6 @@ static inline int WQE_PAGE_NUM(struct hinic_wq *wq, u16 idx)
 	return (((idx) >> ((wq)->wqebbs_per_page_shift))
 		& ((wq)->num_q_pages - 1));
 }
-
 /**
  * queue_alloc_page - allocate page for Queue
  * @hwif: HW interface for allocating DMA
@@ -175,6 +174,8 @@ static int cmdq_allocate_page(struct hinic_cmdq_pages *cmdq_pages)
 /**
  * cmdq_free_page - free page from cmdq
  * @cmdq_pages: the pages of the cmdq queue struct that hold the page
+ *
+ * Return 0 - Success, negative - Failure
  **/
 static void cmdq_free_page(struct hinic_cmdq_pages *cmdq_pages)
 {

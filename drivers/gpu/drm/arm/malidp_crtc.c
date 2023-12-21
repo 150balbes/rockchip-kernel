@@ -14,7 +14,6 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_framebuffer.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
@@ -47,7 +46,7 @@ static enum drm_mode_status malidp_crtc_mode_valid(struct drm_crtc *crtc,
 }
 
 static void malidp_crtc_atomic_enable(struct drm_crtc *crtc,
-				      struct drm_atomic_state *state)
+				      struct drm_crtc_state *old_state)
 {
 	struct malidp_drm *malidp = crtc_to_malidp_device(crtc);
 	struct malidp_hw_device *hwdev = malidp->dev;
@@ -71,10 +70,8 @@ static void malidp_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void malidp_crtc_atomic_disable(struct drm_crtc *crtc,
-				       struct drm_atomic_state *state)
+				       struct drm_crtc_state *old_state)
 {
-	struct drm_crtc_state *old_state = drm_atomic_get_old_crtc_state(state,
-									 crtc);
 	struct malidp_drm *malidp = crtc_to_malidp_device(crtc);
 	struct malidp_hw_device *hwdev = malidp->dev;
 	int err;
@@ -338,10 +335,8 @@ mclk_calc:
 }
 
 static int malidp_crtc_atomic_check(struct drm_crtc *crtc,
-				    struct drm_atomic_state *state)
+				    struct drm_crtc_state *state)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
-									  crtc);
 	struct malidp_drm *malidp = crtc_to_malidp_device(crtc);
 	struct malidp_hw_device *hwdev = malidp->dev;
 	struct drm_plane *plane;
@@ -376,7 +371,7 @@ static int malidp_crtc_atomic_check(struct drm_crtc *crtc,
 	 */
 
 	/* first count the number of rotated planes */
-	drm_atomic_crtc_state_for_each_plane_state(plane, pstate, crtc_state) {
+	drm_atomic_crtc_state_for_each_plane_state(plane, pstate, state) {
 		struct drm_framebuffer *fb = pstate->fb;
 
 		if ((pstate->rotation & MALIDP_ROTATED_MASK) || fb->modifier)
@@ -392,7 +387,7 @@ static int malidp_crtc_atomic_check(struct drm_crtc *crtc,
 		rot_mem_free += hwdev->rotation_memory[1];
 
 	/* now validate the rotation memory requirements */
-	drm_atomic_crtc_state_for_each_plane_state(plane, pstate, crtc_state) {
+	drm_atomic_crtc_state_for_each_plane_state(plane, pstate, state) {
 		struct malidp_plane *mp = to_malidp_plane(plane);
 		struct malidp_plane_state *ms = to_malidp_plane_state(pstate);
 		struct drm_framebuffer *fb = pstate->fb;
@@ -420,18 +415,18 @@ static int malidp_crtc_atomic_check(struct drm_crtc *crtc,
 	}
 
 	/* If only the writeback routing has changed, we don't need a modeset */
-	if (crtc_state->connectors_changed) {
+	if (state->connectors_changed) {
 		u32 old_mask = crtc->state->connector_mask;
-		u32 new_mask = crtc_state->connector_mask;
+		u32 new_mask = state->connector_mask;
 
 		if ((old_mask ^ new_mask) ==
 		    (1 << drm_connector_index(&malidp->mw_connector.base)))
-			crtc_state->connectors_changed = false;
+			state->connectors_changed = false;
 	}
 
-	ret = malidp_crtc_atomic_check_gamma(crtc, crtc_state);
-	ret = ret ? ret : malidp_crtc_atomic_check_ctm(crtc, crtc_state);
-	ret = ret ? ret : malidp_crtc_atomic_check_scaling(crtc, crtc_state);
+	ret = malidp_crtc_atomic_check_gamma(crtc, state);
+	ret = ret ? ret : malidp_crtc_atomic_check_ctm(crtc, state);
+	ret = ret ? ret : malidp_crtc_atomic_check_scaling(crtc, state);
 
 	return ret;
 }
@@ -514,6 +509,8 @@ static void malidp_crtc_disable_vblank(struct drm_crtc *crtc)
 }
 
 static const struct drm_crtc_funcs malidp_crtc_funcs = {
+	.gamma_set = drm_atomic_helper_legacy_gamma_set,
+	.destroy = drm_crtc_cleanup,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
 	.reset = malidp_crtc_reset,
@@ -525,7 +522,7 @@ static const struct drm_crtc_funcs malidp_crtc_funcs = {
 
 int malidp_crtc_init(struct drm_device *drm)
 {
-	struct malidp_drm *malidp = drm_to_malidp(drm);
+	struct malidp_drm *malidp = drm->dev_private;
 	struct drm_plane *primary = NULL, *plane;
 	int ret;
 
@@ -547,8 +544,8 @@ int malidp_crtc_init(struct drm_device *drm)
 		return -EINVAL;
 	}
 
-	ret = drmm_crtc_init_with_planes(drm, &malidp->crtc, primary, NULL,
-					 &malidp_crtc_funcs, NULL);
+	ret = drm_crtc_init_with_planes(drm, &malidp->crtc, primary, NULL,
+					&malidp_crtc_funcs, NULL);
 	if (ret)
 		return ret;
 

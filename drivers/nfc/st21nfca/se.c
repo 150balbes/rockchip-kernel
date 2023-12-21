@@ -236,12 +236,6 @@ int st21nfca_hci_se_io(struct nfc_hci_dev *hdev, u32 se_idx,
 					ST21NFCA_EVT_TRANSMIT_DATA,
 					apdu, apdu_length);
 	default:
-		/* Need to free cb_context here as at the moment we can't
-		 * clearly indicate to the caller if the callback function
-		 * would be called (and free it) or not. In both cases a
-		 * negative value may be returned to the caller.
-		 */
-		kfree(cb_context);
 		return -ENODEV;
 	}
 }
@@ -263,6 +257,8 @@ static void st21nfca_se_wt_work(struct work_struct *work)
 	struct st21nfca_hci_info *info = container_of(work,
 						struct st21nfca_hci_info,
 						se_info.timeout_work);
+
+	pr_debug("\n");
 
 	info->se_info.bwi_active = false;
 
@@ -289,6 +285,8 @@ static void st21nfca_se_activation_timeout(struct timer_list *t)
 {
 	struct st21nfca_hci_info *info = from_timer(info, t,
 						    se_info.se_active_timer);
+
+	pr_debug("\n");
 
 	info->se_info.se_active = false;
 

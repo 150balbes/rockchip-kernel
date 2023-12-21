@@ -15,7 +15,6 @@
 
 #include <asm/unistd.h>
 
-	.section .rodata
 	.globl __aarch32_sigret_code_start
 __aarch32_sigret_code_start:
 

@@ -10,7 +10,3 @@
                 .text
 
 testop	_test_and_clear_bit, bicne, strne
-
-#if __LINUX_ARM_ARCH__ >= 6
-sync_testop	_sync_test_and_clear_bit, bicne, strne
-#endif

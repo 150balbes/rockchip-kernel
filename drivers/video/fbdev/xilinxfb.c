@@ -241,8 +241,6 @@ xilinx_fb_blank(int blank_mode, struct fb_info *fbi)
 	case FB_BLANK_POWERDOWN:
 		/* turn off panel */
 		xilinx_fb_out32(drvdata, REG_CTRL, 0);
-		break;
-
 	default:
 		break;
 	}
@@ -251,9 +249,11 @@ xilinx_fb_blank(int blank_mode, struct fb_info *fbi)
 
 static const struct fb_ops xilinxfb_ops = {
 	.owner			= THIS_MODULE,
-	FB_DEFAULT_IOMEM_OPS,
 	.fb_setcolreg		= xilinx_fb_setcolreg,
 	.fb_blank		= xilinx_fb_blank,
+	.fb_fillrect		= cfb_fillrect,
+	.fb_copyarea		= cfb_copyarea,
+	.fb_imageblit		= cfb_imageblit,
 };
 
 /* ---------------------------------------------------------------------
@@ -271,7 +271,8 @@ static int xilinxfb_assign(struct platform_device *pdev,
 	if (drvdata->flags & BUS_ACCESS_FLAG) {
 		struct resource *res;
 
-		drvdata->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		drvdata->regs = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(drvdata->regs))
 			return PTR_ERR(drvdata->regs);
 
@@ -322,6 +323,7 @@ static int xilinxfb_assign(struct platform_device *pdev,
 	drvdata->info.fix.line_length = pdata->xvirt * BYTES_PER_PIXEL;
 
 	drvdata->info.pseudo_palette = drvdata->pseudo_palette;
+	drvdata->info.flags = FBINFO_DEFAULT;
 	drvdata->info.var = xilinx_fb_var;
 	drvdata->info.var.height = pdata->screen_height_mm;
 	drvdata->info.var.width = pdata->screen_width_mm;
@@ -372,7 +374,7 @@ err_cmap:
 	return rc;
 }
 
-static void xilinxfb_release(struct device *dev)
+static int xilinxfb_release(struct device *dev)
 {
 	struct xilinxfb_drvdata *drvdata = dev_get_drvdata(dev);
 
@@ -398,6 +400,8 @@ static void xilinxfb_release(struct device *dev)
 	if (!(drvdata->flags & BUS_ACCESS_FLAG))
 		dcr_unmap(drvdata->dcr_host, drvdata->dcr_len);
 #endif
+
+	return 0;
 }
 
 /* ---------------------------------------------------------------------
@@ -465,15 +469,16 @@ static int xilinxfb_of_probe(struct platform_device *pdev)
 		pdata.yvirt = prop[1];
 	}
 
-	pdata.rotate_screen = of_property_read_bool(pdev->dev.of_node, "rotate-display");
+	if (of_find_property(pdev->dev.of_node, "rotate-display", NULL))
+		pdata.rotate_screen = 1;
 
-	platform_set_drvdata(pdev, drvdata);
+	dev_set_drvdata(&pdev->dev, drvdata);
 	return xilinxfb_assign(pdev, drvdata, &pdata);
 }
 
-static void xilinxfb_of_remove(struct platform_device *op)
+static int xilinxfb_of_remove(struct platform_device *op)
 {
-	xilinxfb_release(&op->dev);
+	return xilinxfb_release(&op->dev);
 }
 
 /* Match table for of_platform binding */
@@ -489,7 +494,7 @@ MODULE_DEVICE_TABLE(of, xilinxfb_of_match);
 
 static struct platform_driver xilinxfb_of_driver = {
 	.probe = xilinxfb_of_probe,
-	.remove_new = xilinxfb_of_remove,
+	.remove = xilinxfb_of_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = xilinxfb_of_match,

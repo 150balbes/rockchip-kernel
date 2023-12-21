@@ -18,7 +18,6 @@
 #include <linux/netdevice.h>
 #include <linux/device.h>
 #include <linux/spinlock.h>
-#include <net/ieee802154_netdev.h>
 #include <net/mac802154.h>
 #include <net/cfg802154.h>
 #include <net/genetlink.h>
@@ -48,8 +47,6 @@ static const struct genl_multicast_group hwsim_mcgrps[] = {
 struct hwsim_pib {
 	u8 page;
 	u8 channel;
-	struct ieee802154_hw_addr_filt filt;
-	enum ieee802154_filtering_level filt_level;
 
 	struct rcu_head rcu;
 };
@@ -91,166 +88,22 @@ static int hwsim_hw_ed(struct ieee802154_hw *hw, u8 *level)
 	return 0;
 }
 
-static int hwsim_update_pib(struct ieee802154_hw *hw, u8 page, u8 channel,
-			    struct ieee802154_hw_addr_filt *filt,
-			    enum ieee802154_filtering_level filt_level)
+static int hwsim_hw_channel(struct ieee802154_hw *hw, u8 page, u8 channel)
 {
 	struct hwsim_phy *phy = hw->priv;
 	struct hwsim_pib *pib, *pib_old;
 
-	pib = kzalloc(sizeof(*pib), GFP_ATOMIC);
+	pib = kzalloc(sizeof(*pib), GFP_KERNEL);
 	if (!pib)
 		return -ENOMEM;
 
-	pib_old = rtnl_dereference(phy->pib);
-
 	pib->page = page;
 	pib->channel = channel;
-	pib->filt.short_addr = filt->short_addr;
-	pib->filt.pan_id = filt->pan_id;
-	pib->filt.ieee_addr = filt->ieee_addr;
-	pib->filt.pan_coord = filt->pan_coord;
-	pib->filt_level = filt_level;
 
+	pib_old = rtnl_dereference(phy->pib);
 	rcu_assign_pointer(phy->pib, pib);
 	kfree_rcu(pib_old, rcu);
 	return 0;
-}
-
-static int hwsim_hw_channel(struct ieee802154_hw *hw, u8 page, u8 channel)
-{
-	struct hwsim_phy *phy = hw->priv;
-	struct hwsim_pib *pib;
-	int ret;
-
-	rcu_read_lock();
-	pib = rcu_dereference(phy->pib);
-	ret = hwsim_update_pib(hw, page, channel, &pib->filt, pib->filt_level);
-	rcu_read_unlock();
-
-	return ret;
-}
-
-static int hwsim_hw_addr_filt(struct ieee802154_hw *hw,
-			      struct ieee802154_hw_addr_filt *filt,
-			      unsigned long changed)
-{
-	struct hwsim_phy *phy = hw->priv;
-	struct hwsim_pib *pib;
-	int ret;
-
-	rcu_read_lock();
-	pib = rcu_dereference(phy->pib);
-	ret = hwsim_update_pib(hw, pib->page, pib->channel, filt, pib->filt_level);
-	rcu_read_unlock();
-
-	return ret;
-}
-
-static void hwsim_hw_receive(struct ieee802154_hw *hw, struct sk_buff *skb,
-			     u8 lqi)
-{
-	struct ieee802154_hdr hdr;
-	struct hwsim_phy *phy = hw->priv;
-	struct hwsim_pib *pib;
-
-	rcu_read_lock();
-	pib = rcu_dereference(phy->pib);
-
-	if (!pskb_may_pull(skb, 3)) {
-		dev_dbg(hw->parent, "invalid frame\n");
-		goto drop;
-	}
-
-	memcpy(&hdr, skb->data, 3);
-
-	/* Level 4 filtering: Frame fields validity */
-	if (pib->filt_level == IEEE802154_FILTERING_4_FRAME_FIELDS) {
-		/* a) Drop reserved frame types */
-		switch (mac_cb(skb)->type) {
-		case IEEE802154_FC_TYPE_BEACON:
-		case IEEE802154_FC_TYPE_DATA:
-		case IEEE802154_FC_TYPE_ACK:
-		case IEEE802154_FC_TYPE_MAC_CMD:
-			break;
-		default:
-			dev_dbg(hw->parent, "unrecognized frame type 0x%x\n",
-				mac_cb(skb)->type);
-			goto drop;
-		}
-
-		/* b) Drop reserved frame versions */
-		switch (hdr.fc.version) {
-		case IEEE802154_2003_STD:
-		case IEEE802154_2006_STD:
-		case IEEE802154_STD:
-			break;
-		default:
-			dev_dbg(hw->parent,
-				"unrecognized frame version 0x%x\n",
-				hdr.fc.version);
-			goto drop;
-		}
-
-		/* c) PAN ID constraints */
-		if ((mac_cb(skb)->dest.mode == IEEE802154_ADDR_LONG ||
-		     mac_cb(skb)->dest.mode == IEEE802154_ADDR_SHORT) &&
-		    mac_cb(skb)->dest.pan_id != pib->filt.pan_id &&
-		    mac_cb(skb)->dest.pan_id != cpu_to_le16(IEEE802154_PANID_BROADCAST)) {
-			dev_dbg(hw->parent,
-				"unrecognized PAN ID %04x\n",
-				le16_to_cpu(mac_cb(skb)->dest.pan_id));
-			goto drop;
-		}
-
-		/* d1) Short address constraints */
-		if (mac_cb(skb)->dest.mode == IEEE802154_ADDR_SHORT &&
-		    mac_cb(skb)->dest.short_addr != pib->filt.short_addr &&
-		    mac_cb(skb)->dest.short_addr != cpu_to_le16(IEEE802154_ADDR_BROADCAST)) {
-			dev_dbg(hw->parent,
-				"unrecognized short address %04x\n",
-				le16_to_cpu(mac_cb(skb)->dest.short_addr));
-			goto drop;
-		}
-
-		/* d2) Extended address constraints */
-		if (mac_cb(skb)->dest.mode == IEEE802154_ADDR_LONG &&
-		    mac_cb(skb)->dest.extended_addr != pib->filt.ieee_addr) {
-			dev_dbg(hw->parent,
-				"unrecognized long address 0x%016llx\n",
-				mac_cb(skb)->dest.extended_addr);
-			goto drop;
-		}
-
-		/* d4) Specific PAN coordinator case (no parent) */
-		if ((mac_cb(skb)->type == IEEE802154_FC_TYPE_DATA ||
-		     mac_cb(skb)->type == IEEE802154_FC_TYPE_MAC_CMD) &&
-		    mac_cb(skb)->dest.mode == IEEE802154_ADDR_NONE) {
-			dev_dbg(hw->parent,
-				"relaying is not supported\n");
-			goto drop;
-		}
-
-		/* e) Beacon frames follow specific PAN ID rules */
-		if (mac_cb(skb)->type == IEEE802154_FC_TYPE_BEACON &&
-		    pib->filt.pan_id != cpu_to_le16(IEEE802154_PANID_BROADCAST) &&
-		    mac_cb(skb)->dest.pan_id != pib->filt.pan_id) {
-			dev_dbg(hw->parent,
-				"invalid beacon PAN ID %04x\n",
-				le16_to_cpu(mac_cb(skb)->dest.pan_id));
-			goto drop;
-		}
-	}
-
-	rcu_read_unlock();
-
-	ieee802154_rx_irqsafe(hw, skb, lqi);
-
-	return;
-
-drop:
-	rcu_read_unlock();
-	kfree_skb(skb);
 }
 
 static int hwsim_hw_xmit(struct ieee802154_hw *hw, struct sk_buff *skb)
@@ -280,7 +133,8 @@ static int hwsim_hw_xmit(struct ieee802154_hw *hw, struct sk_buff *skb)
 
 			einfo = rcu_dereference(e->info);
 			if (newskb)
-				hwsim_hw_receive(e->endpoint->hw, newskb, einfo->lqi);
+				ieee802154_rx_irqsafe(e->endpoint->hw, newskb,
+						      einfo->lqi);
 		}
 	}
 	rcu_read_unlock();
@@ -294,7 +148,6 @@ static int hwsim_hw_start(struct ieee802154_hw *hw)
 	struct hwsim_phy *phy = hw->priv;
 
 	phy->suspended = false;
-
 	return 0;
 }
 
@@ -308,22 +161,7 @@ static void hwsim_hw_stop(struct ieee802154_hw *hw)
 static int
 hwsim_set_promiscuous_mode(struct ieee802154_hw *hw, const bool on)
 {
-	enum ieee802154_filtering_level filt_level;
-	struct hwsim_phy *phy = hw->priv;
-	struct hwsim_pib *pib;
-	int ret;
-
-	if (on)
-		filt_level = IEEE802154_FILTERING_NONE;
-	else
-		filt_level = IEEE802154_FILTERING_4_FRAME_FIELDS;
-
-	rcu_read_lock();
-	pib = rcu_dereference(phy->pib);
-	ret = hwsim_update_pib(hw, pib->page, pib->channel, &pib->filt, filt_level);
-	rcu_read_unlock();
-
-	return ret;
+	return 0;
 }
 
 static const struct ieee802154_ops hwsim_ops = {
@@ -334,7 +172,6 @@ static const struct ieee802154_ops hwsim_ops = {
 	.start = hwsim_hw_start,
 	.stop = hwsim_hw_stop,
 	.set_promiscuous_mode = hwsim_set_promiscuous_mode,
-	.set_hw_addr_filt = hwsim_hw_addr_filt,
 };
 
 static int hwsim_new_radio_nl(struct sk_buff *msg, struct genl_info *info)
@@ -431,7 +268,7 @@ static int hwsim_get_radio(struct sk_buff *skb, struct hwsim_phy *phy,
 			   struct netlink_callback *cb, int flags)
 {
 	void *hdr;
-	int res;
+	int res = -EMSGSIZE;
 
 	hdr = genlmsg_put(skb, portid, seq, &hwsim_genl_family, flags,
 			  MAC802154_HWSIM_CMD_GET_RADIO);
@@ -685,7 +522,7 @@ static int hwsim_del_edge_nl(struct sk_buff *msg, struct genl_info *info)
 static int hwsim_set_edge_lqi(struct sk_buff *msg, struct genl_info *info)
 {
 	struct nlattr *edge_attrs[MAC802154_HWSIM_EDGE_ATTR_MAX + 1];
-	struct hwsim_edge_info *einfo, *einfo_old;
+	struct hwsim_edge_info *einfo;
 	struct hwsim_phy *phy_v0;
 	struct hwsim_edge *e;
 	u32 v0, v1;
@@ -723,10 +560,8 @@ static int hwsim_set_edge_lqi(struct sk_buff *msg, struct genl_info *info)
 	list_for_each_entry_rcu(e, &phy_v0->edges, list) {
 		if (e->endpoint->idx == v1) {
 			einfo->lqi = lqi;
-			einfo_old = rcu_replace_pointer(e->info, einfo,
-							lockdep_is_held(&hwsim_phys_lock));
+			rcu_assign_pointer(e->info, einfo);
 			rcu_read_unlock();
-			kfree_rcu(einfo_old, rcu);
 			mutex_unlock(&hwsim_phys_lock);
 			return 0;
 		}
@@ -795,7 +630,6 @@ static struct genl_family hwsim_genl_family __ro_after_init = {
 	.module = THIS_MODULE,
 	.small_ops = hwsim_nl_ops,
 	.n_small_ops = ARRAY_SIZE(hwsim_nl_ops),
-	.resv_start_op = MAC802154_HWSIM_CMD_NEW_EDGE + 1,
 	.mcgrps = hwsim_mcgrps,
 	.n_mcgrps = ARRAY_SIZE(hwsim_mcgrps),
 };
@@ -953,8 +787,6 @@ static int hwsim_add_one(struct genl_info *info, struct device *dev,
 	}
 
 	pib->channel = 13;
-	pib->filt.short_addr = cpu_to_le16(IEEE802154_ADDR_BROADCAST);
-	pib->filt.pan_id = cpu_to_le16(IEEE802154_PANID_BROADCAST);
 	rcu_assign_pointer(phy->pib, pib);
 	phy->idx = idx;
 	INIT_LIST_HEAD(&phy->edges);

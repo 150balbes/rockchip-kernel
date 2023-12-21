@@ -17,10 +17,8 @@ int __vdso_clock_gettime(clockid_t clock, struct __kernel_old_timespec *ts)
 {
 	long ret;
 
-	asm("syscall"
-		: "=a" (ret)
-		: "0" (__NR_clock_gettime), "D" (clock), "S" (ts)
-		: "rcx", "r11", "memory");
+	asm("syscall" : "=a" (ret) :
+		"0" (__NR_clock_gettime), "D" (clock), "S" (ts) : "memory");
 
 	return ret;
 }
@@ -31,10 +29,8 @@ int __vdso_gettimeofday(struct __kernel_old_timeval *tv, struct timezone *tz)
 {
 	long ret;
 
-	asm("syscall"
-		: "=a" (ret)
-		: "0" (__NR_gettimeofday), "D" (tv), "S" (tz)
-		: "rcx", "r11", "memory");
+	asm("syscall" : "=a" (ret) :
+		"0" (__NR_gettimeofday), "D" (tv), "S" (tz) : "memory");
 
 	return ret;
 }

@@ -9,11 +9,9 @@ Linux Tracing Technologies
    tracepoint-analysis
    ftrace
    ftrace-uses
-   fprobe
    kprobes
    kprobetrace
    uprobetracer
-   fprobetrace
    tracepoints
    events
    events-kmem
@@ -25,13 +23,8 @@ Linux Tracing Technologies
    histogram-design
    boottime-trace
    hwlat_detector
-   osnoise-tracer
-   timerlat-tracer
    intel_th
    ring-buffer-design
    stm
    sys-t
    coresight/index
-   user_events
-   rv/index
-   hisi-ptt

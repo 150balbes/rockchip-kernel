@@ -29,15 +29,15 @@
  * change between calls to kernel_read_file().
  *
  * Returns number of bytes read (no single read will be bigger
- * than SSIZE_MAX), or negative on error.
+ * than INT_MAX), or negative on error.
  *
  */
-ssize_t kernel_read_file(struct file *file, loff_t offset, void **buf,
-			 size_t buf_size, size_t *file_size,
-			 enum kernel_read_file_id id)
+int kernel_read_file(struct file *file, loff_t offset, void **buf,
+		     size_t buf_size, size_t *file_size,
+		     enum kernel_read_file_id id)
 {
 	loff_t i_size, pos;
-	ssize_t copied;
+	size_t copied;
 	void *allocated = NULL;
 	bool whole_file;
 	int ret;
@@ -58,7 +58,7 @@ ssize_t kernel_read_file(struct file *file, loff_t offset, void **buf,
 		goto out;
 	}
 	/* The file is too big for sane activities. */
-	if (i_size > SSIZE_MAX) {
+	if (i_size > INT_MAX) {
 		ret = -EFBIG;
 		goto out;
 	}
@@ -124,12 +124,12 @@ out:
 }
 EXPORT_SYMBOL_GPL(kernel_read_file);
 
-ssize_t kernel_read_file_from_path(const char *path, loff_t offset, void **buf,
-				   size_t buf_size, size_t *file_size,
-				   enum kernel_read_file_id id)
+int kernel_read_file_from_path(const char *path, loff_t offset, void **buf,
+			       size_t buf_size, size_t *file_size,
+			       enum kernel_read_file_id id)
 {
 	struct file *file;
-	ssize_t ret;
+	int ret;
 
 	if (!path || !*path)
 		return -EINVAL;
@@ -144,14 +144,14 @@ ssize_t kernel_read_file_from_path(const char *path, loff_t offset, void **buf,
 }
 EXPORT_SYMBOL_GPL(kernel_read_file_from_path);
 
-ssize_t kernel_read_file_from_path_initns(const char *path, loff_t offset,
-					  void **buf, size_t buf_size,
-					  size_t *file_size,
-					  enum kernel_read_file_id id)
+int kernel_read_file_from_path_initns(const char *path, loff_t offset,
+				      void **buf, size_t buf_size,
+				      size_t *file_size,
+				      enum kernel_read_file_id id)
 {
 	struct file *file;
 	struct path root;
-	ssize_t ret;
+	int ret;
 
 	if (!path || !*path)
 		return -EINVAL;
@@ -160,7 +160,7 @@ ssize_t kernel_read_file_from_path_initns(const char *path, loff_t offset,
 	get_fs_root(init_task.fs, &root);
 	task_unlock(&init_task);
 
-	file = file_open_root(&root, path, O_RDONLY, 0);
+	file = file_open_root(root.dentry, root.mnt, path, O_RDONLY, 0);
 	path_put(&root);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
@@ -171,12 +171,12 @@ ssize_t kernel_read_file_from_path_initns(const char *path, loff_t offset,
 }
 EXPORT_SYMBOL_GPL(kernel_read_file_from_path_initns);
 
-ssize_t kernel_read_file_from_fd(int fd, loff_t offset, void **buf,
-				 size_t buf_size, size_t *file_size,
-				 enum kernel_read_file_id id)
+int kernel_read_file_from_fd(int fd, loff_t offset, void **buf,
+			     size_t buf_size, size_t *file_size,
+			     enum kernel_read_file_id id)
 {
 	struct fd f = fdget(fd);
-	ssize_t ret = -EBADF;
+	int ret = -EBADF;
 
 	if (!f.file || !(f.file->f_mode & FMODE_READ))
 		goto out;

@@ -1,11 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * The Kernel Concurrency Sanitizer (KCSAN) infrastructure. Public interface and
- * data structures to set up runtime. See kcsan-checks.h for explicit checks and
- * modifiers. For more info please see Documentation/dev-tools/kcsan.rst.
- *
- * Copyright (C) 2019, Google LLC.
- */
 
 #ifndef _LINUX_KCSAN_H
 #define _LINUX_KCSAN_H
@@ -21,7 +14,6 @@
  */
 struct kcsan_ctx {
 	int disable_count; /* disable counter */
-	int disable_scoped; /* disable scoped access counter */
 	int atomic_next; /* number of following atomic ops */
 
 	/*
@@ -49,16 +41,8 @@ struct kcsan_ctx {
 	 */
 	unsigned long access_mask;
 
-	/* List of scoped accesses; likely to be empty. */
+	/* List of scoped accesses. */
 	struct list_head scoped_accesses;
-
-#ifdef CONFIG_KCSAN_WEAK_MEMORY
-	/*
-	 * Scoped access for modeling access reordering to detect missing memory
-	 * barriers; only keep 1 to keep fast-path complexity manageable.
-	 */
-	struct kcsan_scoped_access reorder_access;
-#endif
 };
 
 /**

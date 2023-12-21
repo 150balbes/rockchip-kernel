@@ -371,7 +371,7 @@ static int em_i2c_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
 
-	strscpy(priv->adap.name, "EMEV2 I2C", sizeof(priv->adap.name));
+	strlcpy(priv->adap.name, "EMEV2 I2C", sizeof(priv->adap.name));
 
 	priv->sclk = devm_clk_get(&pdev->dev, "sclk");
 	if (IS_ERR(priv->sclk))
@@ -419,12 +419,14 @@ err_clk:
 	return ret;
 }
 
-static void em_i2c_remove(struct platform_device *dev)
+static int em_i2c_remove(struct platform_device *dev)
 {
 	struct em_i2c_device *priv = platform_get_drvdata(dev);
 
 	i2c_del_adapter(&priv->adap);
 	clk_disable_unprepare(priv->sclk);
+
+	return 0;
 }
 
 static const struct of_device_id em_i2c_ids[] = {
@@ -434,7 +436,7 @@ static const struct of_device_id em_i2c_ids[] = {
 
 static struct platform_driver em_i2c_driver = {
 	.probe = em_i2c_probe,
-	.remove_new = em_i2c_remove,
+	.remove = em_i2c_remove,
 	.driver = {
 		.name = "em-i2c",
 		.of_match_table = em_i2c_ids,

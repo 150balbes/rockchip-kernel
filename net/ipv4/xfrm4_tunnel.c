@@ -8,7 +8,9 @@
 
 #include <linux/skbuff.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <net/xfrm.h>
+#include <net/ip.h>
 #include <net/protocol.h>
 
 static int ipip_output(struct xfrm_state *x, struct sk_buff *skb)
@@ -22,17 +24,13 @@ static int ipip_xfrm_rcv(struct xfrm_state *x, struct sk_buff *skb)
 	return ip_hdr(skb)->protocol;
 }
 
-static int ipip_init_state(struct xfrm_state *x, struct netlink_ext_ack *extack)
+static int ipip_init_state(struct xfrm_state *x)
 {
-	if (x->props.mode != XFRM_MODE_TUNNEL) {
-		NL_SET_ERR_MSG(extack, "IPv4 tunnel can only be used with tunnel mode");
+	if (x->props.mode != XFRM_MODE_TUNNEL)
 		return -EINVAL;
-	}
 
-	if (x->encap) {
-		NL_SET_ERR_MSG(extack, "IPv4 tunnel is not compatible with encapsulation");
+	if (x->encap)
 		return -EINVAL;
-	}
 
 	x->props.header_len = sizeof(struct iphdr);
 
@@ -44,6 +42,7 @@ static void ipip_destroy(struct xfrm_state *x)
 }
 
 static const struct xfrm_type ipip_type = {
+	.description	= "IPIP",
 	.owner		= THIS_MODULE,
 	.proto	     	= IPPROTO_IPIP,
 	.init_state	= ipip_init_state,

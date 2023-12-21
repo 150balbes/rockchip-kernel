@@ -18,8 +18,9 @@
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
+#include <mach/hardware.h>
 
-#include "spitz.h"
+#include <mach/spitz.h>
 #include "pxa27x.h"
 #include "sharpsl_pm.h"
 
@@ -166,7 +167,7 @@ static bool spitz_charger_wakeup(void)
 		gpio_get_value(SPITZ_GPIO_SYNC);
 }
 
-static unsigned long spitzpm_read_devdata(int type)
+unsigned long spitzpm_read_devdata(int type)
 {
 	switch (type) {
 	case SHARPSL_STATUS_ACIN:

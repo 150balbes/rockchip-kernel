@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_PSI_TYPES_H
 #define _LINUX_PSI_TYPES_H
 
@@ -16,15 +15,12 @@ enum psi_task_count {
 	NR_MEMSTALL,
 	NR_RUNNING,
 	/*
-	 * For IO and CPU stalls the presence of running/oncpu tasks
-	 * in the domain means a partial rather than a full stall.
-	 * For memory it's not so simple because of page reclaimers:
-	 * they are running/oncpu while representing a stall. To tell
-	 * whether a domain has productivity left or not, we need to
-	 * distinguish between regular running (i.e. productive)
-	 * threads and memstall ones.
+	 * This can't have values other than 0 or 1 and could be
+	 * implemented as a bit flag. But for now we still have room
+	 * in the first cacheline of psi_group_cpu, and this way we
+	 * don't have to special case any state tracking for it.
 	 */
-	NR_MEMSTALL_RUNNING,
+	NR_ONCPU,
 	NR_PSI_TASK_COUNTS = 4,
 };
 
@@ -32,20 +28,14 @@ enum psi_task_count {
 #define TSK_IOWAIT	(1 << NR_IOWAIT)
 #define TSK_MEMSTALL	(1 << NR_MEMSTALL)
 #define TSK_RUNNING	(1 << NR_RUNNING)
-#define TSK_MEMSTALL_RUNNING	(1 << NR_MEMSTALL_RUNNING)
-
-/* Only one task can be scheduled, no corresponding task count */
-#define TSK_ONCPU	(1 << NR_PSI_TASK_COUNTS)
+#define TSK_ONCPU	(1 << NR_ONCPU)
 
 /* Resources that workloads could be stalled on */
 enum psi_res {
 	PSI_IO,
 	PSI_MEM,
 	PSI_CPU,
-#ifdef CONFIG_IRQ_TIME_ACCOUNTING
-	PSI_IRQ,
-#endif
-	NR_PSI_RESOURCES,
+	NR_PSI_RESOURCES = 3,
 };
 
 /*
@@ -60,20 +50,10 @@ enum psi_states {
 	PSI_MEM_SOME,
 	PSI_MEM_FULL,
 	PSI_CPU_SOME,
-	PSI_CPU_FULL,
-#ifdef CONFIG_IRQ_TIME_ACCOUNTING
-	PSI_IRQ_FULL,
-#endif
 	/* Only per-CPU, to weigh the CPU in the global average: */
 	PSI_NONIDLE,
-	NR_PSI_STATES,
+	NR_PSI_STATES = 6,
 };
-
-/* Use one bit in the state mask to track TSK_ONCPU */
-#define PSI_ONCPU	(1 << NR_PSI_STATES)
-
-/* Flag whether to re-arm avgs_work, see details in get_recent_times() */
-#define PSI_STATE_RESCHEDULE	(1 << (NR_PSI_STATES + 1))
 
 enum psi_aggregators {
 	PSI_AVGS = 0,
@@ -137,9 +117,6 @@ struct psi_trigger {
 	/* Wait queue for polling */
 	wait_queue_head_t event_wait;
 
-	/* Kernfs file for cgroup triggers */
-	struct kernfs_open_file *of;
-
 	/* Pending event flag */
 	int event;
 
@@ -151,18 +128,9 @@ struct psi_trigger {
 	 * events to one per window
 	 */
 	u64 last_event_time;
-
-	/* Deferred event(s) from previous ratelimit window */
-	bool pending_event;
-
-	/* Trigger type - PSI_AVGS for unprivileged, PSI_POLL for RT */
-	enum psi_aggregators aggregator;
 };
 
 struct psi_group {
-	struct psi_group *parent;
-	bool enabled;
-
 	/* Protects data used by the aggregator */
 	struct mutex avgs_lock;
 
@@ -177,39 +145,33 @@ struct psi_group {
 	/* Aggregator work control */
 	struct delayed_work avgs_work;
 
-	/* Unprivileged triggers against N*PSI_FREQ windows */
-	struct list_head avg_triggers;
-	u32 avg_nr_triggers[NR_PSI_STATES - 1];
-
 	/* Total stall times and sampled pressure averages */
 	u64 total[NR_PSI_AGGREGATORS][NR_PSI_STATES - 1];
 	unsigned long avg[NR_PSI_STATES - 1][3];
 
-	/* Monitor RT polling work control */
-	struct task_struct __rcu *rtpoll_task;
-	struct timer_list rtpoll_timer;
-	wait_queue_head_t rtpoll_wait;
-	atomic_t rtpoll_wakeup;
-	atomic_t rtpoll_scheduled;
+	/* Monitor work control */
+	struct task_struct __rcu *poll_task;
+	struct timer_list poll_timer;
+	wait_queue_head_t poll_wait;
+	atomic_t poll_wakeup;
+	atomic_t poll_scheduled;
 
 	/* Protects data used by the monitor */
-	struct mutex rtpoll_trigger_lock;
+	struct mutex trigger_lock;
 
-	/* Configured RT polling triggers */
-	struct list_head rtpoll_triggers;
-	u32 rtpoll_nr_triggers[NR_PSI_STATES - 1];
-	u32 rtpoll_states;
-	u64 rtpoll_min_period;
+	/* Configured polling triggers */
+	struct list_head triggers;
+	u32 nr_triggers[NR_PSI_STATES - 1];
+	u32 poll_states;
+	u64 poll_min_period;
 
-	/* Total stall times at the start of RT polling monitor activation */
-	u64 rtpoll_total[NR_PSI_STATES - 1];
-	u64 rtpoll_next_update;
-	u64 rtpoll_until;
+	/* Total stall times at the start of monitor activation */
+	u64 polling_total[NR_PSI_STATES - 1];
+	u64 polling_next_update;
+	u64 polling_until;
 };
 
 #else /* CONFIG_PSI */
-
-#define NR_PSI_RESOURCES	0
 
 struct psi_group { };
 

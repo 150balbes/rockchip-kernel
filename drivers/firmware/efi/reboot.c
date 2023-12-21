@@ -6,7 +6,7 @@
 #include <linux/efi.h>
 #include <linux/reboot.h>
 
-static struct sys_off_handler *efi_sys_off_handler;
+static void (*orig_pm_power_off)(void);
 
 int efi_reboot_quirk_mode = -1;
 
@@ -51,11 +51,15 @@ bool __weak efi_poweroff_required(void)
 	return false;
 }
 
-static int efi_power_off(struct sys_off_data *data)
+static void efi_power_off(void)
 {
 	efi.reset_system(EFI_RESET_SHUTDOWN, EFI_SUCCESS, 0, NULL);
-
-	return NOTIFY_DONE;
+	/*
+	 * The above call should not return, if it does fall back to
+	 * the original power off method (typically ACPI poweroff).
+	 */
+	if (orig_pm_power_off)
+		orig_pm_power_off();
 }
 
 static int __init efi_shutdown_init(void)
@@ -64,13 +68,8 @@ static int __init efi_shutdown_init(void)
 		return -ENODEV;
 
 	if (efi_poweroff_required()) {
-		/* SYS_OFF_PRIO_FIRMWARE + 1 so that it runs before acpi_power_off */
-		efi_sys_off_handler =
-			register_sys_off_handler(SYS_OFF_MODE_POWER_OFF,
-						 SYS_OFF_PRIO_FIRMWARE + 1,
-						 efi_power_off, NULL);
-		if (IS_ERR(efi_sys_off_handler))
-			return PTR_ERR(efi_sys_off_handler);
+		orig_pm_power_off = pm_power_off;
+		pm_power_off = efi_power_off;
 	}
 
 	return 0;

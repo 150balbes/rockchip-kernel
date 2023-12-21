@@ -34,12 +34,12 @@ int gfs2_replay_read_block(struct gfs2_jdesc *jd, unsigned int blk,
 {
 	struct gfs2_inode *ip = GFS2_I(jd->jd_inode);
 	struct gfs2_glock *gl = ip->i_gl;
+	int new = 0;
 	u64 dblock;
 	u32 extlen;
 	int error;
 
-	extlen = 32;
-	error = gfs2_get_extent(&ip->i_inode, blk, &dblock, &extlen);
+	error = gfs2_extent_map(&ip->i_inode, blk, &new, &dblock, &extlen);
 	if (error)
 		return error;
 	if (!dblock) {
@@ -55,16 +55,17 @@ int gfs2_replay_read_block(struct gfs2_jdesc *jd, unsigned int blk,
 int gfs2_revoke_add(struct gfs2_jdesc *jd, u64 blkno, unsigned int where)
 {
 	struct list_head *head = &jd->jd_revoke_list;
-	struct gfs2_revoke_replay *rr = NULL, *iter;
+	struct gfs2_revoke_replay *rr;
+	int found = 0;
 
-	list_for_each_entry(iter, head, rr_list) {
-		if (iter->rr_blkno == blkno) {
-			rr = iter;
+	list_for_each_entry(rr, head, rr_list) {
+		if (rr->rr_blkno == blkno) {
+			found = 1;
 			break;
 		}
 	}
 
-	if (rr) {
+	if (found) {
 		rr->rr_where = where;
 		return 0;
 	}
@@ -82,17 +83,18 @@ int gfs2_revoke_add(struct gfs2_jdesc *jd, u64 blkno, unsigned int where)
 
 int gfs2_revoke_check(struct gfs2_jdesc *jd, u64 blkno, unsigned int where)
 {
-	struct gfs2_revoke_replay *rr = NULL, *iter;
+	struct gfs2_revoke_replay *rr;
 	int wrap, a, b, revoke;
+	int found = 0;
 
-	list_for_each_entry(iter, &jd->jd_revoke_list, rr_list) {
-		if (iter->rr_blkno == blkno) {
-			rr = iter;
+	list_for_each_entry(rr, &jd->jd_revoke_list, rr_list) {
+		if (rr->rr_blkno == blkno) {
+			found = 1;
 			break;
 		}
 	}
 
-	if (!rr)
+	if (!found)
 		return 0;
 
 	wrap = (rr->rr_where < jd->jd_replay_tail);
@@ -152,7 +154,7 @@ int __get_log_header(struct gfs2_sbd *sdp, const struct gfs2_log_header *lh,
  * get_log_header - read the log header for a given segment
  * @jd: the journal
  * @blk: the block to look at
- * @head: the log header to return
+ * @lh: the log header to return
  *
  * Read the log header for a given segement in a given journal.  Do a few
  * sanity checks on it.
@@ -185,7 +187,6 @@ static int get_log_header(struct gfs2_jdesc *jd, unsigned int blk,
  * @jd: the journal
  * @start: the first log header in the active region
  * @end: the last log header (don't process the contents of this entry))
- * @pass: iteration number (foreach_descriptor() is called in a for() loop)
  *
  * Call a given function once for every log descriptor in the active
  * portion of the log.
@@ -404,7 +405,7 @@ void gfs2_recover_func(struct work_struct *work)
 	struct gfs2_inode *ip = GFS2_I(jd->jd_inode);
 	struct gfs2_sbd *sdp = GFS2_SB(jd->jd_inode);
 	struct gfs2_log_header_host head;
-	struct gfs2_holder j_gh, ji_gh;
+	struct gfs2_holder j_gh, ji_gh, thaw_gh;
 	ktime_t t_start, t_jlck, t_jhd, t_tlck, t_rep;
 	int ro = 0;
 	unsigned int pass;
@@ -420,10 +421,10 @@ void gfs2_recover_func(struct work_struct *work)
 	if (sdp->sd_args.ar_spectator)
 		goto fail;
 	if (jd->jd_jid != sdp->sd_lockstruct.ls_jid) {
-		fs_info(sdp, "jid=%u: Trying to acquire journal glock...\n",
+		fs_info(sdp, "jid=%u: Trying to acquire journal lock...\n",
 			jd->jd_jid);
 		jlocked = 1;
-		/* Acquire the journal glock so we can do recovery */
+		/* Acquire the journal lock so we can do recovery */
 
 		error = gfs2_glock_nq_num(sdp, jd->jd_jid, &gfs2_journal_glops,
 					  LM_ST_EXCLUSIVE,
@@ -436,7 +437,6 @@ void gfs2_recover_func(struct work_struct *work)
 		case GLR_TRYFAILED:
 			fs_info(sdp, "jid=%u: Busy\n", jd->jd_jid);
 			error = 0;
-			goto fail;
 
 		default:
 			goto fail;
@@ -465,14 +465,14 @@ void gfs2_recover_func(struct work_struct *work)
 		ktime_ms_delta(t_jhd, t_jlck));
 
 	if (!(head.lh_flags & GFS2_LOG_HEAD_UNMOUNT)) {
-		mutex_lock(&sdp->sd_freeze_mutex);
+		fs_info(sdp, "jid=%u: Acquiring the transaction lock...\n",
+			jd->jd_jid);
 
-		if (test_bit(SDF_FROZEN, &sdp->sd_flags)) {
-			mutex_unlock(&sdp->sd_freeze_mutex);
-			fs_warn(sdp, "jid=%u: Can't replay: filesystem "
-				"is frozen\n", jd->jd_jid);
+		/* Acquire a shared hold on the freeze lock */
+
+		error = gfs2_freeze_lock(sdp, &thaw_gh, LM_FLAG_PRIORITY);
+		if (error)
 			goto fail_gunlock_ji;
-		}
 
 		if (test_bit(SDF_RORECOVERY, &sdp->sd_flags)) {
 			ro = 1;
@@ -496,7 +496,7 @@ void gfs2_recover_func(struct work_struct *work)
 			fs_warn(sdp, "jid=%u: Can't replay: read-only block "
 				"device\n", jd->jd_jid);
 			error = -EROFS;
-			goto fail_gunlock_nofreeze;
+			goto fail_gunlock_thaw;
 		}
 
 		t_tlck = ktime_get();
@@ -505,7 +505,7 @@ void gfs2_recover_func(struct work_struct *work)
 
 		/* We take the sd_log_flush_lock here primarily to prevent log
 		 * flushes and simultaneous journal replays from stomping on
-		 * each other wrt jd_log_bio. */
+		 * each other wrt sd_log_bio. */
 		down_read(&sdp->sd_log_flush_lock);
 		for (pass = 0; pass < 2; pass++) {
 			lops_before_scan(jd, &head, pass);
@@ -514,7 +514,7 @@ void gfs2_recover_func(struct work_struct *work)
 			lops_after_scan(jd, error, pass);
 			if (error) {
 				up_read(&sdp->sd_log_flush_lock);
-				goto fail_gunlock_nofreeze;
+				goto fail_gunlock_thaw;
 			}
 		}
 
@@ -522,7 +522,7 @@ void gfs2_recover_func(struct work_struct *work)
 		clean_journal(jd, &head);
 		up_read(&sdp->sd_log_flush_lock);
 
-		mutex_unlock(&sdp->sd_freeze_mutex);
+		gfs2_freeze_unlock(&thaw_gh);
 		t_rep = ktime_get();
 		fs_info(sdp, "jid=%u: Journal replayed in %lldms [jlck:%lldms, "
 			"jhead:%lldms, tlck:%lldms, replay:%lldms]\n",
@@ -543,8 +543,8 @@ void gfs2_recover_func(struct work_struct *work)
 	fs_info(sdp, "jid=%u: Done\n", jd->jd_jid);
 	goto done;
 
-fail_gunlock_nofreeze:
-	mutex_unlock(&sdp->sd_freeze_mutex);
+fail_gunlock_thaw:
+	gfs2_freeze_unlock(&thaw_gh);
 fail_gunlock_ji:
 	if (jlocked) {
 		gfs2_glock_dq_uninit(&ji_gh);

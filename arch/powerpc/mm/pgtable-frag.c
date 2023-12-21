@@ -83,7 +83,7 @@ static pte_t *__alloc_for_ptecache(struct mm_struct *mm, int kernel)
 	spin_lock(&mm->page_table_lock);
 	/*
 	 * If we find pgtable_page set, we return
-	 * the allocated page with single fragment
+	 * the allocated page with single fragement
 	 * count.
 	 */
 	if (likely(!pte_frag_get(&mm->context))) {

@@ -246,6 +246,7 @@ static struct snd_soc_dai_link *sof_card_dai_links_create(struct device *dev,
 	links[id].num_platforms = ARRAY_SIZE(platform_component);
 	links[id].init = sof_pcm512x_codec_init;
 	links[id].ops = &sof_pcm512x_ops;
+	links[id].nonatomic = true;
 	links[id].dpcm_playback = 1;
 	/*
 	 * capture only supported with specific versions of the Hifiberry DAC+
@@ -331,7 +332,8 @@ static struct snd_soc_dai_link *sof_card_dai_links_create(struct device *dev,
 				devm_kasprintf(dev, GFP_KERNEL,
 					       "intel-hdmi-hifi%d", i);
 		} else {
-			idisp_components[i - 1] = asoc_dummy_dlc;
+			idisp_components[i - 1].name = "snd-soc-dummy";
+			idisp_components[i - 1].dai_name = "snd-soc-dummy-dai";
 		}
 		if (!idisp_components[i - 1].dai_name)
 			goto devm_err;
@@ -415,10 +417,10 @@ static int sof_audio_probe(struct platform_device *pdev)
 					  &sof_audio_card_pcm512x);
 }
 
-static void sof_pcm512x_remove(struct platform_device *pdev)
+static int sof_pcm512x_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
-	struct snd_soc_component *component;
+	struct snd_soc_component *component = NULL;
 
 	for_each_card_components(card, component) {
 		if (!strcmp(component->name, pcm512x_component[0].name)) {
@@ -426,11 +428,13 @@ static void sof_pcm512x_remove(struct platform_device *pdev)
 			break;
 		}
 	}
+
+	return 0;
 }
 
 static struct platform_driver sof_audio = {
 	.probe = sof_audio_probe,
-	.remove_new = sof_pcm512x_remove,
+	.remove = sof_pcm512x_remove,
 	.driver = {
 		.name = "sof_pcm512x",
 		.pm = &snd_soc_pm_ops,
@@ -442,4 +446,3 @@ MODULE_DESCRIPTION("ASoC Intel(R) SOF + PCM512x Machine driver");
 MODULE_AUTHOR("Pierre-Louis Bossart");
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("platform:sof_pcm512x");
-MODULE_IMPORT_NS(SND_SOC_INTEL_HDA_DSP_COMMON);

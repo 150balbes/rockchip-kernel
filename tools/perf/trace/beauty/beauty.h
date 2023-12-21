@@ -11,7 +11,7 @@ struct strarray {
 	u64	    offset;
 	int	    nr_entries;
 	const char *prefix;
-	const char * const *entries;
+	const char **entries;
 };
 
 #define DEFINE_STRARRAY(array, _prefix) struct strarray strarray__##array = { \
@@ -61,8 +61,6 @@ bool strarrays__strtoul(struct strarrays *sas, char *bf, size_t size, u64 *ret);
 size_t pid__scnprintf_fd(struct trace *trace, pid_t pid, int fd, char *bf, size_t size);
 
 extern struct strarray strarray__socket_families;
-
-extern struct strarray strarray__socket_level;
 
 /**
  * augmented_arg: extra payload for syscall pointer arguments
@@ -232,9 +230,6 @@ size_t syscall_arg__scnprintf_sockaddr(char *bf, size_t size, struct syscall_arg
 size_t syscall_arg__scnprintf_socket_protocol(char *bf, size_t size, struct syscall_arg *arg);
 #define SCA_SK_PROTO syscall_arg__scnprintf_socket_protocol
 
-size_t syscall_arg__scnprintf_socket_level(char *bf, size_t size, struct syscall_arg *arg);
-#define SCA_SK_LEVEL syscall_arg__scnprintf_socket_level
-
 size_t syscall_arg__scnprintf_statx_flags(char *bf, size_t size, struct syscall_arg *arg);
 #define SCA_STATX_FLAGS syscall_arg__scnprintf_statx_flags
 
@@ -243,9 +238,6 @@ size_t syscall_arg__scnprintf_statx_mask(char *bf, size_t size, struct syscall_a
 
 size_t syscall_arg__scnprintf_sync_file_range_flags(char *bf, size_t size, struct syscall_arg *arg);
 #define SCA_SYNC_FILE_RANGE_FLAGS syscall_arg__scnprintf_sync_file_range_flags
-
-size_t syscall_arg__scnprintf_timespec(char *bf, size_t size, struct syscall_arg *arg);
-#define SCA_TIMESPEC syscall_arg__scnprintf_timespec
 
 size_t open__scnprintf_flags(unsigned long flags, char *bf, size_t size, bool show_prefix);
 

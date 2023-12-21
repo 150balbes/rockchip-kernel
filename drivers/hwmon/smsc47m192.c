@@ -86,7 +86,7 @@ struct smsc47m192_data {
 	struct i2c_client *client;
 	const struct attribute_group *groups[3];
 	struct mutex update_lock;
-	bool valid;		/* true if following fields are valid */
+	char valid;		/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	u8 in[8];		/* Register value */
@@ -157,7 +157,7 @@ static struct smsc47m192_data *smsc47m192_update_device(struct device *dev)
 						SMSC47M192_REG_ALARM2) << 8);
 
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -582,7 +582,7 @@ static int smsc47m192_detect(struct i2c_client *client,
 		return -ENODEV;
 	}
 
-	strscpy(info->type, "smsc47m192", I2C_NAME_SIZE);
+	strlcpy(info->type, "smsc47m192", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -628,7 +628,7 @@ static struct i2c_driver smsc47m192_driver = {
 	.driver = {
 		.name	= "smsc47m192",
 	},
-	.probe		= smsc47m192_probe,
+	.probe_new	= smsc47m192_probe,
 	.id_table	= smsc47m192_id,
 	.detect		= smsc47m192_detect,
 	.address_list	= normal_i2c,

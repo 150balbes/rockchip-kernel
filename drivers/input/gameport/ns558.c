@@ -8,6 +8,9 @@
  * NS558 based standard IBM game port driver for Linux
  */
 
+/*
+ */
+
 #include <asm/io.h>
 
 #include <linux/module.h>

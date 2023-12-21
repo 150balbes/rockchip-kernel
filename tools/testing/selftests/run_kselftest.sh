@@ -26,7 +26,6 @@ Usage: $0 [OPTIONS]
   -l | --list			List the available collection:test entries
   -d | --dry-run		Don't actually run any tests
   -h | --help			Show this usage info
-  -o | --override-timeout	Number of seconds after which we timeout
 EOF
 	exit $1
 }
@@ -34,7 +33,6 @@ EOF
 COLLECTIONS=""
 TESTS=""
 dryrun=""
-kselftest_override_timeout=""
 while true; do
 	case "$1" in
 		-s | --summary)
@@ -53,9 +51,6 @@ while true; do
 		-d | --dry-run)
 			dryrun="echo"
 			shift ;;
-		-o | --override-timeout)
-			kselftest_override_timeout="$2"
-			shift 2 ;;
 		-h | --help)
 			usage 0 ;;
 		"")
@@ -90,7 +85,7 @@ if [ -n "$TESTS" ]; then
 	available="$(echo "$valid" | sed -e 's/ /\n/g')"
 fi
 
-collections=$(echo "$available" | cut -d: -f1 | sort | uniq)
+collections=$(echo "$available" | cut -d: -f1 | uniq)
 for collection in $collections ; do
 	[ -w /dev/kmsg ] && echo "kselftest: Running tests in $collection" >> /dev/kmsg
 	tests=$(echo "$available" | grep "^$collection:" | cut -d: -f2)

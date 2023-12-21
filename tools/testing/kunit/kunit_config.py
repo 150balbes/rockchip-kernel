@@ -6,103 +6,84 @@
 # Author: Felix Guo <felixguoxiuping@gmail.com>
 # Author: Brendan Higgins <brendanhiggins@google.com>
 
-from dataclasses import dataclass
+import collections
 import re
-from typing import Any, Dict, Iterable, List, Tuple
 
 CONFIG_IS_NOT_SET_PATTERN = r'^# CONFIG_(\w+) is not set$'
 CONFIG_PATTERN = r'^CONFIG_(\w+)=(\S+|".*")$'
 
-@dataclass(frozen=True)
-class KconfigEntry:
-	name: str
-	value: str
+KconfigEntryBase = collections.namedtuple('KconfigEntryBase', ['name', 'value'])
+
+class KconfigEntry(KconfigEntryBase):
 
 	def __str__(self) -> str:
 		if self.value == 'n':
-			return f'# CONFIG_{self.name} is not set'
-		return f'CONFIG_{self.name}={self.value}'
+			return r'# CONFIG_%s is not set' % (self.name)
+		else:
+			return r'CONFIG_%s=%s' % (self.name, self.value)
 
 
 class KconfigParseError(Exception):
 	"""Error parsing Kconfig defconfig or .config."""
 
 
-class Kconfig:
+class Kconfig(object):
 	"""Represents defconfig or .config specified using the Kconfig language."""
 
-	def __init__(self) -> None:
-		self._entries = {}  # type: Dict[str, str]
+	def __init__(self):
+		self._entries = []
 
-	def __eq__(self, other: Any) -> bool:
-		if not isinstance(other, self.__class__):
-			return False
-		return self._entries == other._entries
+	def entries(self):
+		return set(self._entries)
 
-	def __repr__(self) -> str:
-		return ','.join(str(e) for e in self.as_entries())
-
-	def as_entries(self) -> Iterable[KconfigEntry]:
-		for name, value in self._entries.items():
-			yield KconfigEntry(name, value)
-
-	def add_entry(self, name: str, value: str) -> None:
-		self._entries[name] = value
+	def add_entry(self, entry: KconfigEntry) -> None:
+		self._entries.append(entry)
 
 	def is_subset_of(self, other: 'Kconfig') -> bool:
-		for name, value in self._entries.items():
-			b = other._entries.get(name)
-			if b is None:
-				if value == 'n':
+		for a in self.entries():
+			found = False
+			for b in other.entries():
+				if a.name != b.name:
 					continue
-				return False
-			if value != b:
+				if a.value != b.value:
+					return False
+				found = True
+			if a.value != 'n' and found == False:
 				return False
 		return True
 
-	def conflicting_options(self, other: 'Kconfig') -> List[Tuple[KconfigEntry, KconfigEntry]]:
-		diff = []  # type: List[Tuple[KconfigEntry, KconfigEntry]]
-		for name, value in self._entries.items():
-			b = other._entries.get(name)
-			if b and value != b:
-				pair = (KconfigEntry(name, value), KconfigEntry(name, b))
-				diff.append(pair)
-		return diff
-
-	def merge_in_entries(self, other: 'Kconfig') -> None:
-		for name, value in other._entries.items():
-			self._entries[name] = value
-
 	def write_to_file(self, path: str) -> None:
-		with open(path, 'a+') as f:
-			for e in self.as_entries():
-				f.write(str(e) + '\n')
+		with open(path, 'w') as f:
+			for entry in self.entries():
+				f.write(str(entry) + '\n')
 
-def parse_file(path: str) -> Kconfig:
-	with open(path, 'r') as f:
-		return parse_from_string(f.read())
+	def parse_from_string(self, blob: str) -> None:
+		"""Parses a string containing KconfigEntrys and populates this Kconfig."""
+		self._entries = []
+		is_not_set_matcher = re.compile(CONFIG_IS_NOT_SET_PATTERN)
+		config_matcher = re.compile(CONFIG_PATTERN)
+		for line in blob.split('\n'):
+			line = line.strip()
+			if not line:
+				continue
 
-def parse_from_string(blob: str) -> Kconfig:
-	"""Parses a string containing Kconfig entries."""
-	kconfig = Kconfig()
-	is_not_set_matcher = re.compile(CONFIG_IS_NOT_SET_PATTERN)
-	config_matcher = re.compile(CONFIG_PATTERN)
-	for line in blob.split('\n'):
-		line = line.strip()
-		if not line:
-			continue
+			match = config_matcher.match(line)
+			if match:
+				entry = KconfigEntry(match.group(1), match.group(2))
+				self.add_entry(entry)
+				continue
 
-		match = config_matcher.match(line)
-		if match:
-			kconfig.add_entry(match.group(1), match.group(2))
-			continue
+			empty_match = is_not_set_matcher.match(line)
+			if empty_match:
+				entry = KconfigEntry(empty_match.group(1), 'n')
+				self.add_entry(entry)
+				continue
 
-		empty_match = is_not_set_matcher.match(line)
-		if empty_match:
-			kconfig.add_entry(empty_match.group(1), 'n')
-			continue
+			if line[0] == '#':
+				continue
+			else:
+				raise KconfigParseError('Failed to parse: ' + line)
 
-		if line[0] == '#':
-			continue
-		raise KconfigParseError('Failed to parse: ' + line)
-	return kconfig
+	def read_from_file(self, path: str) -> None:
+		with open(path, 'r') as f:
+			self.parse_from_string(f.read())

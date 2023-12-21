@@ -20,7 +20,7 @@ struct nitrox_cipher {
 	enum flexi_cipher value;
 };
 
-/*
+/**
  * supported cipher list
  */
 static const struct nitrox_cipher flexi_cipher_table[] = {
@@ -337,11 +337,12 @@ static int nitrox_3des_decrypt(struct skcipher_request *skreq)
 static int nitrox_aes_xts_setkey(struct crypto_skcipher *cipher,
 				 const u8 *key, unsigned int keylen)
 {
-	struct nitrox_crypto_ctx *nctx = crypto_skcipher_ctx(cipher);
+	struct crypto_tfm *tfm = crypto_skcipher_tfm(cipher);
+	struct nitrox_crypto_ctx *nctx = crypto_tfm_ctx(tfm);
 	struct flexi_crypto_context *fctx;
 	int aes_keylen, ret;
 
-	ret = xts_verify_key(cipher, key, keylen);
+	ret = xts_check_key(tfm, key, keylen);
 	if (ret)
 		return ret;
 
@@ -361,7 +362,8 @@ static int nitrox_aes_xts_setkey(struct crypto_skcipher *cipher,
 static int nitrox_aes_ctr_rfc3686_setkey(struct crypto_skcipher *cipher,
 					 const u8 *key, unsigned int keylen)
 {
-	struct nitrox_crypto_ctx *nctx = crypto_skcipher_ctx(cipher);
+	struct crypto_tfm *tfm = crypto_skcipher_tfm(cipher);
+	struct nitrox_crypto_ctx *nctx = crypto_tfm_ctx(tfm);
 	struct flexi_crypto_context *fctx;
 	int aes_keylen;
 

@@ -38,10 +38,10 @@ int component_add_typed(struct device *dev, const struct component_ops *ops,
 	int subcomponent);
 void component_del(struct device *, const struct component_ops *);
 
-int component_bind_all(struct device *parent, void *data);
-void component_unbind_all(struct device *parent, void *data);
+int component_bind_all(struct device *master, void *master_data);
+void component_unbind_all(struct device *master, void *master_data);
 
-struct aggregate_device;
+struct master;
 
 /**
  * struct component_master_ops - callback for the aggregate driver
@@ -82,12 +82,6 @@ struct component_master_ops {
 	void (*unbind)(struct device *master);
 };
 
-/* A set helper functions for component compare/release */
-int component_compare_of(struct device *dev, void *data);
-void component_release_of(struct device *dev, void *data);
-int component_compare_dev(struct device *dev, void *data);
-int component_compare_dev_name(struct device *dev, void *data);
-
 void component_master_del(struct device *,
 	const struct component_master_ops *);
 
@@ -95,22 +89,22 @@ struct component_match;
 
 int component_master_add_with_match(struct device *,
 	const struct component_master_ops *, struct component_match *);
-void component_match_add_release(struct device *parent,
+void component_match_add_release(struct device *master,
 	struct component_match **matchptr,
 	void (*release)(struct device *, void *),
 	int (*compare)(struct device *, void *), void *compare_data);
-void component_match_add_typed(struct device *parent,
+void component_match_add_typed(struct device *master,
 	struct component_match **matchptr,
 	int (*compare_typed)(struct device *, int, void *), void *compare_data);
 
 /**
  * component_match_add - add a component match entry
- * @parent: device with the aggregate driver
+ * @master: device with the aggregate driver
  * @matchptr: pointer to the list of component matches
  * @compare: compare function to match against all components
  * @compare_data: opaque pointer passed to the @compare function
  *
- * Adds a new component match to the list stored in @matchptr, which the @parent
+ * Adds a new component match to the list stored in @matchptr, which the @master
  * aggregate driver needs to function. The list of component matches pointed to
  * by @matchptr must be initialized to NULL before adding the first match. This
  * only matches against components added with component_add().
@@ -120,11 +114,11 @@ void component_match_add_typed(struct device *parent,
  *
  * See also component_match_add_release() and component_match_add_typed().
  */
-static inline void component_match_add(struct device *parent,
+static inline void component_match_add(struct device *master,
 	struct component_match **matchptr,
 	int (*compare)(struct device *, void *), void *compare_data)
 {
-	component_match_add_release(parent, matchptr, NULL, compare,
+	component_match_add_release(master, matchptr, NULL, compare,
 				    compare_data);
 }
 

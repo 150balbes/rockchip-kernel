@@ -544,8 +544,8 @@ static int tegra_admaif_dai_probe(struct snd_soc_dai *dai)
 {
 	struct tegra_admaif *admaif = snd_soc_dai_get_drvdata(dai);
 
-	snd_soc_dai_init_dma_data(dai,	&admaif->playback_dma_data[dai->id],
-					&admaif->capture_dma_data[dai->id]);
+	dai->capture_dma_data = &admaif->capture_dma_data[dai->id];
+	dai->playback_dma_data = &admaif->playback_dma_data[dai->id];
 
 	return 0;
 }
@@ -692,9 +692,12 @@ static const struct snd_soc_component_driver tegra210_admaif_cmpnt = {
 	.controls		= tegra210_admaif_controls,
 	.num_controls		= ARRAY_SIZE(tegra210_admaif_controls),
 	.pcm_construct		= tegra_pcm_construct,
+	.pcm_destruct		= tegra_pcm_destruct,
 	.open			= tegra_pcm_open,
 	.close			= tegra_pcm_close,
 	.hw_params		= tegra_pcm_hw_params,
+	.hw_free		= tegra_pcm_hw_free,
+	.mmap			= tegra_pcm_mmap,
 	.pointer		= tegra_pcm_pointer,
 };
 
@@ -702,9 +705,12 @@ static const struct snd_soc_component_driver tegra186_admaif_cmpnt = {
 	.controls		= tegra186_admaif_controls,
 	.num_controls		= ARRAY_SIZE(tegra186_admaif_controls),
 	.pcm_construct		= tegra_pcm_construct,
+	.pcm_destruct		= tegra_pcm_destruct,
 	.open			= tegra_pcm_open,
 	.close			= tegra_pcm_close,
 	.hw_params		= tegra_pcm_hw_params,
+	.hw_free		= tegra_pcm_hw_free,
+	.mmap			= tegra_pcm_mmap,
 	.pointer		= tegra_pcm_pointer,
 };
 
@@ -780,7 +786,9 @@ static int tegra_admaif_probe(struct platform_device *pdev)
 			return -ENOMEM;
 	}
 
-	regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+	regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
@@ -842,9 +850,11 @@ static int tegra_admaif_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void tegra_admaif_remove(struct platform_device *pdev)
+static int tegra_admaif_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct dev_pm_ops tegra_admaif_pm_ops = {
@@ -856,7 +866,7 @@ static const struct dev_pm_ops tegra_admaif_pm_ops = {
 
 static struct platform_driver tegra_admaif_driver = {
 	.probe = tegra_admaif_probe,
-	.remove_new = tegra_admaif_remove,
+	.remove = tegra_admaif_remove,
 	.driver = {
 		.name = "tegra210-admaif",
 		.of_match_table = tegra_admaif_of_match,

@@ -18,9 +18,10 @@ menuconfig BPF_PRELOAD
 
 if BPF_PRELOAD
 config BPF_PRELOAD_UMD
-	tristate "bpf_preload kernel module"
+	tristate "bpf_preload kernel module with user mode driver"
+	depends on CC_CAN_LINK
+	depends on m || CC_CAN_LINK_STATIC
 	default m
 	help
-	  This builds bpf_preload kernel module with embedded BPF programs for
-	  introspection in bpffs.
+	  This builds bpf_preload kernel module with embedded user mode driver.
 endif

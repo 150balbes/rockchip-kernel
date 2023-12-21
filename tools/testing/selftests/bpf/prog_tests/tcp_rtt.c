@@ -2,7 +2,6 @@
 #include <test_progs.h>
 #include "cgroup_helpers.h"
 #include "network_helpers.h"
-#include "tcp_rtt.skel.h"
 
 struct tcp_rtt_storage {
 	__u32 invoked;
@@ -16,7 +15,8 @@ static void send_byte(int fd)
 {
 	char b = 0x55;
 
-	ASSERT_EQ(write(fd, &b, sizeof(b)), 1, "send single byte");
+	if (CHECK_FAIL(write(fd, &b, sizeof(b)) != 1))
+		perror("Failed to send single byte");
 }
 
 static int wait_for_ack(int fd, int retries)
@@ -50,8 +50,10 @@ static int verify_sk(int map_fd, int client_fd, const char *msg, __u32 invoked,
 	int err = 0;
 	struct tcp_rtt_storage val;
 
-	if (!ASSERT_GE(bpf_map_lookup_elem(map_fd, &client_fd, &val), 0, "read socket storage"))
+	if (CHECK_FAIL(bpf_map_lookup_elem(map_fd, &client_fd, &val) < 0)) {
+		perror("Failed to read socket storage");
 		return -1;
+	}
 
 	if (val.invoked != invoked) {
 		log_err("%s: unexpected bpf_tcp_sock.invoked %d != %d",
@@ -89,18 +91,26 @@ static int verify_sk(int map_fd, int client_fd, const char *msg, __u32 invoked,
 
 static int run_test(int cgroup_fd, int server_fd)
 {
-	struct tcp_rtt *skel;
+	struct bpf_prog_load_attr attr = {
+		.prog_type = BPF_PROG_TYPE_SOCK_OPS,
+		.file = "./tcp_rtt.o",
+		.expected_attach_type = BPF_CGROUP_SOCK_OPS,
+	};
+	struct bpf_object *obj;
+	struct bpf_map *map;
 	int client_fd;
 	int prog_fd;
 	int map_fd;
 	int err;
 
-	skel = tcp_rtt__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "skel_open_load"))
+	err = bpf_prog_load_xattr(&attr, &obj, &prog_fd);
+	if (err) {
+		log_err("Failed to load BPF object");
 		return -1;
+	}
 
-	map_fd = bpf_map__fd(skel->maps.socket_storage_map);
-	prog_fd = bpf_program__fd(skel->progs._sockops);
+	map = bpf_map__next(NULL, obj);
+	map_fd = bpf_map__fd(map);
 
 	err = bpf_prog_attach(prog_fd, cgroup_fd, BPF_CGROUP_SOCK_OPS, 0);
 	if (err) {
@@ -139,7 +149,7 @@ close_client_fd:
 	close(client_fd);
 
 close_bpf_object:
-	tcp_rtt__destroy(skel);
+	bpf_object__close(obj);
 	return err;
 }
 
@@ -148,14 +158,14 @@ void test_tcp_rtt(void)
 	int server_fd, cgroup_fd;
 
 	cgroup_fd = test__join_cgroup("/tcp_rtt");
-	if (!ASSERT_GE(cgroup_fd, 0, "join_cgroup /tcp_rtt"))
+	if (CHECK_FAIL(cgroup_fd < 0))
 		return;
 
 	server_fd = start_server(AF_INET, SOCK_STREAM, NULL, 0, 0);
-	if (!ASSERT_GE(server_fd, 0, "start_server"))
+	if (CHECK_FAIL(server_fd < 0))
 		goto close_cgroup_fd;
 
-	ASSERT_OK(run_test(cgroup_fd, server_fd), "run_test");
+	CHECK_FAIL(run_test(cgroup_fd, server_fd));
 
 	close(server_fd);
 

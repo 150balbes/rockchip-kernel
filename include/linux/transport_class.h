@@ -70,14 +70,8 @@ void transport_destroy_device(struct device *);
 static inline int
 transport_register_device(struct device *dev)
 {
-	int ret;
-
 	transport_setup_device(dev);
-	ret = transport_add_device(dev);
-	if (ret)
-		transport_destroy_device(dev);
-
-	return ret;
+	return transport_add_device(dev);
 }
 
 static inline void

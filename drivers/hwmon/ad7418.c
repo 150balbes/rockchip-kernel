@@ -46,7 +46,7 @@ struct ad7418_data {
 	enum chips		type;
 	struct mutex		lock;
 	int			adc_max;	/* number of ADC channels */
-	bool			valid;
+	char			valid;
 	unsigned long		last_updated;	/* In jiffies */
 	s16			temp[3];	/* Register values */
 	u16			in[4];
@@ -111,14 +111,14 @@ static int ad7418_update_device(struct device *dev)
 			goto abort;
 
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->lock);
 	return 0;
 
 abort:
-	data->valid = false;
+	data->valid = 0;
 	mutex_unlock(&data->lock);
 	return val;
 }
@@ -306,7 +306,7 @@ static struct i2c_driver ad7418_driver = {
 		.name	= "ad7418",
 		.of_match_table = ad7418_dt_ids,
 	},
-	.probe		= ad7418_probe,
+	.probe_new	= ad7418_probe,
 	.id_table	= ad7418_id,
 };
 

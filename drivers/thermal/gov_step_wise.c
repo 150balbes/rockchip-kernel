@@ -11,8 +11,7 @@
  */
 
 #include <linux/thermal.h>
-#include <linux/minmax.h>
-#include "thermal_trace.h"
+#include <trace/events/thermal.h>
 
 #include "thermal_core.h"
 
@@ -21,11 +20,19 @@
  *    a. if the trend is THERMAL_TREND_RAISING, use higher cooling
  *       state for this trip point
  *    b. if the trend is THERMAL_TREND_DROPPING, do nothing
+ *    c. if the trend is THERMAL_TREND_RAISE_FULL, use upper limit
+ *       for this trip point
+ *    d. if the trend is THERMAL_TREND_DROP_FULL, use lower limit
+ *       for this trip point
  * If the temperature is lower than a trip point,
  *    a. if the trend is THERMAL_TREND_RAISING, do nothing
  *    b. if the trend is THERMAL_TREND_DROPPING, use lower cooling
  *       state for this trip point, if the cooling state already
  *       equals lower limit, deactivate the thermal instance
+ *    c. if the trend is THERMAL_TREND_RAISE_FULL, do nothing
+ *    d. if the trend is THERMAL_TREND_DROP_FULL, use lower limit,
+ *       if the cooling state already equals lower limit,
+ *       deactivate the thermal instance
  */
 static unsigned long get_target_state(struct thermal_instance *instance,
 				enum thermal_trend trend, bool throttle)
@@ -45,7 +52,10 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 
 	if (!instance->initialized) {
 		if (throttle) {
-			next_target = clamp((cur_state + 1), instance->lower, instance->upper);
+			next_target = (cur_state + 1) >= instance->upper ?
+					instance->upper :
+					((cur_state + 1) < instance->lower ?
+					instance->lower : (cur_state + 1));
 		} else {
 			next_target = THERMAL_NO_TARGET;
 		}
@@ -53,16 +63,40 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 		return next_target;
 	}
 
-	if (throttle) {
-		if (trend == THERMAL_TREND_RAISING)
-			next_target = clamp((cur_state + 1), instance->lower, instance->upper);
-	} else {
-		if (trend == THERMAL_TREND_DROPPING) {
-			if (cur_state <= instance->lower)
-				next_target = THERMAL_NO_TARGET;
-			else
-				next_target = clamp((cur_state - 1), instance->lower, instance->upper);
+	switch (trend) {
+	case THERMAL_TREND_RAISING:
+		if (throttle) {
+			next_target = cur_state < instance->upper ?
+				    (cur_state + 1) : instance->upper;
+			if (next_target < instance->lower)
+				next_target = instance->lower;
 		}
+		break;
+	case THERMAL_TREND_RAISE_FULL:
+		if (throttle)
+			next_target = instance->upper;
+		break;
+	case THERMAL_TREND_DROPPING:
+		if (cur_state <= instance->lower) {
+			if (!throttle)
+				next_target = THERMAL_NO_TARGET;
+		} else {
+			if (!throttle) {
+				next_target = cur_state - 1;
+				if (next_target > instance->upper)
+					next_target = instance->upper;
+			}
+		}
+		break;
+	case THERMAL_TREND_DROP_FULL:
+		if (cur_state == instance->lower) {
+			if (!throttle)
+				next_target = THERMAL_NO_TARGET;
+		} else
+			next_target = instance->lower;
+		break;
+	default:
+		break;
 	}
 
 	return next_target;
@@ -75,32 +109,41 @@ static void update_passive_instance(struct thermal_zone_device *tz,
 	 * If value is +1, activate a passive instance.
 	 * If value is -1, deactivate a passive instance.
 	 */
-	if (type == THERMAL_TRIP_PASSIVE)
+	if (type == THERMAL_TRIP_PASSIVE || type == THERMAL_TRIPS_NONE)
 		tz->passive += value;
 }
 
-static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id)
+static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 {
+	int trip_temp;
+	enum thermal_trip_type trip_type;
 	enum thermal_trend trend;
 	struct thermal_instance *instance;
-	struct thermal_trip trip;
 	bool throttle = false;
 	int old_target;
 
-	__thermal_zone_get_trip(tz, trip_id, &trip);
+	if (trip == THERMAL_TRIPS_NONE) {
+		trip_temp = tz->forced_passive;
+		trip_type = THERMAL_TRIPS_NONE;
+	} else {
+		tz->ops->get_trip_temp(tz, trip, &trip_temp);
+		tz->ops->get_trip_type(tz, trip, &trip_type);
+	}
 
-	trend = get_tz_trend(tz, trip_id);
+	trend = get_tz_trend(tz, trip);
 
-	if (tz->temperature >= trip.temperature) {
+	if (tz->temperature >= trip_temp) {
 		throttle = true;
-		trace_thermal_zone_trip(tz, trip_id, trip.type);
+		trace_thermal_zone_trip(tz, trip, trip_type);
 	}
 
 	dev_dbg(&tz->device, "Trip%d[type=%d,temp=%d]:trend=%d,throttle=%d\n",
-				trip_id, trip.type, trip.temperature, trend, throttle);
+				trip, trip_type, trip_temp, trend, throttle);
+
+	mutex_lock(&tz->lock);
 
 	list_for_each_entry(instance, &tz->thermal_instances, tz_node) {
-		if (instance->trip != trip_id)
+		if (instance->trip != trip)
 			continue;
 
 		old_target = instance->target;
@@ -114,17 +157,19 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id
 		/* Activate a passive thermal instance */
 		if (old_target == THERMAL_NO_TARGET &&
 			instance->target != THERMAL_NO_TARGET)
-			update_passive_instance(tz, trip.type, 1);
+			update_passive_instance(tz, trip_type, 1);
 		/* Deactivate a passive thermal instance */
 		else if (old_target != THERMAL_NO_TARGET &&
 			instance->target == THERMAL_NO_TARGET)
-			update_passive_instance(tz, trip.type, -1);
+			update_passive_instance(tz, trip_type, -1);
 
 		instance->initialized = true;
 		mutex_lock(&instance->cdev->lock);
 		instance->cdev->updated = false; /* cdev needs update */
 		mutex_unlock(&instance->cdev->lock);
 	}
+
+	mutex_unlock(&tz->lock);
 }
 
 /**
@@ -142,12 +187,17 @@ static int step_wise_throttle(struct thermal_zone_device *tz, int trip)
 {
 	struct thermal_instance *instance;
 
-	lockdep_assert_held(&tz->lock);
-
 	thermal_zone_trip_update(tz, trip);
+
+	if (tz->forced_passive)
+		thermal_zone_trip_update(tz, THERMAL_TRIPS_NONE);
+
+	mutex_lock(&tz->lock);
 
 	list_for_each_entry(instance, &tz->thermal_instances, tz_node)
 		thermal_cdev_update(instance->cdev);
+
+	mutex_unlock(&tz->lock);
 
 	return 0;
 }

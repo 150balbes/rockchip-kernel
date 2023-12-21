@@ -48,7 +48,6 @@
 ########################################################################
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 
 .text
 
@@ -75,10 +74,14 @@ tmp0 =		%rax
 
 W_SIZE = 80*8
 WK_SIZE = 2*8
+RSPSAVE_SIZE = 1*8
+GPRSAVE_SIZE = 5*8
 
 frame_W = 0
 frame_WK = frame_W + W_SIZE
-frame_size = frame_WK + WK_SIZE
+frame_RSPSAVE = frame_WK + WK_SIZE
+frame_GPRSAVE = frame_RSPSAVE + RSPSAVE_SIZE
+frame_size = frame_GPRSAVE + GPRSAVE_SIZE
 
 # Useful QWORD "arrays" for simpler memory references
 # MSG, DIGEST, K_t, W_t are arrays
@@ -275,25 +278,25 @@ frame_size = frame_WK + WK_SIZE
 # of SHA512 message blocks.
 # "blocks" is the message length in SHA512 blocks.
 ########################################################################
-SYM_TYPED_FUNC_START(sha512_transform_ssse3)
+SYM_FUNC_START(sha512_transform_ssse3)
 
-	test msglen, msglen
-	je .Lnowork
-
-	# Save GPRs
-	push	%rbx
-	push	%r12
-	push	%r13
-	push	%r14
-	push	%r15
+	cmp $0, msglen
+	je nowork
 
 	# Allocate Stack Space
-	push	%rbp
-	mov	%rsp, %rbp
+	mov	%rsp, %rax
 	sub	$frame_size, %rsp
 	and	$~(0x20 - 1), %rsp
+	mov	%rax, frame_RSPSAVE(%rsp)
 
-.Lupdateblock:
+	# Save GPRs
+	mov	%rbx, frame_GPRSAVE(%rsp)
+	mov	%r12, frame_GPRSAVE +8*1(%rsp)
+	mov	%r13, frame_GPRSAVE +8*2(%rsp)
+	mov	%r14, frame_GPRSAVE +8*3(%rsp)
+	mov	%r15, frame_GPRSAVE +8*4(%rsp)
+
+updateblock:
 
 # Load state variables
 	mov	DIGEST(0), a_64
@@ -350,20 +353,19 @@ SYM_TYPED_FUNC_START(sha512_transform_ssse3)
 	# Advance to next message block
 	add	$16*8, msg
 	dec	msglen
-	jnz	.Lupdateblock
-
-	# Restore Stack Pointer
-	mov	%rbp, %rsp
-	pop	%rbp
+	jnz	updateblock
 
 	# Restore GPRs
-	pop	%r15
-	pop	%r14
-	pop	%r13
-	pop	%r12
-	pop	%rbx
+	mov	frame_GPRSAVE(%rsp),      %rbx
+	mov	frame_GPRSAVE +8*1(%rsp), %r12
+	mov	frame_GPRSAVE +8*2(%rsp), %r13
+	mov	frame_GPRSAVE +8*3(%rsp), %r14
+	mov	frame_GPRSAVE +8*4(%rsp), %r15
 
-.Lnowork:
+	# Restore Stack Pointer
+	mov	frame_RSPSAVE(%rsp), %rsp
+
+nowork:
 	RET
 SYM_FUNC_END(sha512_transform_ssse3)
 

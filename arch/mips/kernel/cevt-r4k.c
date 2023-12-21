@@ -195,12 +195,16 @@ int c0_compare_int_usable(void)
 	unsigned int delta;
 	unsigned int cnt;
 
+#ifdef CONFIG_KVM_GUEST
+    return 1;
+#endif
+
 	/*
 	 * IP7 already pending?	 Try to clear it by acking the timer.
 	 */
 	if (c0_compare_int_pending()) {
 		cnt = read_c0_count();
-		write_c0_compare(cnt - 1);
+		write_c0_compare(cnt);
 		back_to_back_c0_hazard();
 		while (read_c0_count() < (cnt  + COMPARE_INT_SEEN_TICKS))
 			if (!c0_compare_int_pending())
@@ -228,7 +232,7 @@ int c0_compare_int_usable(void)
 	if (!c0_compare_int_pending())
 		return 0;
 	cnt = read_c0_count();
-	write_c0_compare(cnt - 1);
+	write_c0_compare(cnt);
 	back_to_back_c0_hazard();
 	while (read_c0_count() < (cnt + COMPARE_INT_SEEN_TICKS))
 		if (!c0_compare_int_pending())

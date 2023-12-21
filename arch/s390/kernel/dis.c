@@ -24,8 +24,8 @@
 #include <linux/kdebug.h>
 #include <linux/uaccess.h>
 #include <linux/atomic.h>
-#include <linux/io.h>
 #include <asm/dis.h>
+#include <asm/io.h>
 #include <asm/cpcmd.h>
 #include <asm/lowcore.h>
 #include <asm/debug.h>
@@ -278,7 +278,6 @@ static const unsigned char formats[][6] = {
 	[INSTR_SIL_RDI]	     = { D_20, B_16, I16_32, 0, 0, 0 },
 	[INSTR_SIL_RDU]	     = { D_20, B_16, U16_32, 0, 0, 0 },
 	[INSTR_SIY_IRD]	     = { D20_20, B_16, I8_8, 0, 0, 0 },
-	[INSTR_SIY_RD]	     = { D20_20, B_16, 0, 0, 0, 0 },
 	[INSTR_SIY_URD]	     = { D20_20, B_16, U8_8, 0, 0, 0 },
 	[INSTR_SI_RD]	     = { D_20, B_16, 0, 0, 0, 0 },
 	[INSTR_SI_URD]	     = { D_20, B_16, U8_8, 0, 0, 0 },
@@ -313,12 +312,10 @@ static const unsigned char formats[][6] = {
 	[INSTR_VRR_VV]	     = { V_8, V_12, 0, 0, 0, 0 },
 	[INSTR_VRR_VV0U]     = { V_8, V_12, U4_32, 0, 0, 0 },
 	[INSTR_VRR_VV0U0U]   = { V_8, V_12, U4_32, U4_24, 0, 0 },
-	[INSTR_VRR_VV0U2]    = { V_8, V_12, U4_24, 0, 0, 0 },
 	[INSTR_VRR_VV0UU2]   = { V_8, V_12, U4_32, U4_28, 0, 0 },
 	[INSTR_VRR_VV0UUU]   = { V_8, V_12, U4_32, U4_28, U4_24, 0 },
 	[INSTR_VRR_VVV]	     = { V_8, V_12, V_16, 0, 0, 0 },
 	[INSTR_VRR_VVV0U]    = { V_8, V_12, V_16, U4_32, 0, 0 },
-	[INSTR_VRR_VVV0U0]   = { V_8, V_12, V_16, U4_24, 0, 0 },
 	[INSTR_VRR_VVV0U0U]  = { V_8, V_12, V_16, U4_32, U4_24, 0 },
 	[INSTR_VRR_VVV0UU]   = { V_8, V_12, V_16, U4_32, U4_28, 0 },
 	[INSTR_VRR_VVV0UUU]  = { V_8, V_12, V_16, U4_32, U4_28, U4_24 },
@@ -516,7 +513,7 @@ void show_code(struct pt_regs *regs)
 		if (copy_from_regs(regs, code + end, (void *)addr, 2))
 			break;
 	}
-	/* Code snapshot usable ? */
+	/* Code snapshot useable ? */
 	if ((regs->psw.addr & 1) || start >= end) {
 		printk("%s Code: Bad PSW.\n", mode);
 		return;

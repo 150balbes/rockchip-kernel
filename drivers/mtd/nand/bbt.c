@@ -24,8 +24,11 @@ int nanddev_bbt_init(struct nand_device *nand)
 {
 	unsigned int bits_per_block = fls(NAND_BBT_BLOCK_NUM_STATUS);
 	unsigned int nblocks = nanddev_neraseblocks(nand);
+	unsigned int nwords = DIV_ROUND_UP(nblocks * bits_per_block,
+					   BITS_PER_LONG);
 
-	nand->bbt.cache = bitmap_zalloc(nblocks * bits_per_block, GFP_KERNEL);
+	nand->bbt.cache = kcalloc(nwords, sizeof(*nand->bbt.cache),
+				  GFP_KERNEL);
 	if (!nand->bbt.cache)
 		return -ENOMEM;
 
@@ -41,7 +44,7 @@ EXPORT_SYMBOL_GPL(nanddev_bbt_init);
  */
 void nanddev_bbt_cleanup(struct nand_device *nand)
 {
-	bitmap_free(nand->bbt.cache);
+	kfree(nand->bbt.cache);
 }
 EXPORT_SYMBOL_GPL(nanddev_bbt_cleanup);
 
@@ -113,7 +116,10 @@ int nanddev_bbt_set_block_status(struct nand_device *nand, unsigned int entry,
 	if (entry >= nanddev_neraseblocks(nand))
 		return -ERANGE;
 
-	pos[0] &= ~GENMASK(offs + bits_per_block - 1, offs);
+	if (bits_per_block + offs > BITS_PER_LONG)
+		pos[0] &= ~GENMASK(BITS_PER_LONG - 1, offs);
+	else
+		pos[0] &= ~GENMASK(offs + bits_per_block - 1, offs);
 	pos[0] |= val << offs;
 
 	if (bits_per_block + offs > BITS_PER_LONG) {

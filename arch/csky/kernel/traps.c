@@ -39,7 +39,9 @@ asmlinkage void csky_cmpxchg(void);
 asmlinkage void csky_get_tls(void);
 asmlinkage void csky_irq(void);
 
-asmlinkage void csky_pagefault(void);
+asmlinkage void csky_tlbinvalidl(void);
+asmlinkage void csky_tlbinvalids(void);
+asmlinkage void csky_tlbmodified(void);
 
 /* Defined in head.S */
 asmlinkage void _start_smp_secondary(void);
@@ -64,9 +66,9 @@ void __init trap_init(void)
 	VEC_INIT(VEC_TRAP3, csky_get_tls);
 
 	/* setup MMU TLB exception */
-	VEC_INIT(VEC_TLBINVALIDL, csky_pagefault);
-	VEC_INIT(VEC_TLBINVALIDS, csky_pagefault);
-	VEC_INIT(VEC_TLBMODIFIED, csky_pagefault);
+	VEC_INIT(VEC_TLBINVALIDL, csky_tlbinvalidl);
+	VEC_INIT(VEC_TLBINVALIDS, csky_tlbinvalids);
+	VEC_INIT(VEC_TLBMODIFIED, csky_tlbmodified);
 
 #ifdef CONFIG_CPU_HAS_FPU
 	init_fpu();
@@ -109,7 +111,7 @@ void die(struct pt_regs *regs, const char *str)
 	if (panic_on_oops)
 		panic("Fatal exception");
 	if (ret != NOTIFY_STOP)
-		make_task_dead(SIGSEGV);
+		do_exit(SIGSEGV);
 }
 
 void do_trap(struct pt_regs *regs, int signo, int code, unsigned long addr)

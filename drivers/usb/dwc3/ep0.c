@@ -30,8 +30,6 @@
 static void __dwc3_ep0_do_control_status(struct dwc3 *dwc, struct dwc3_ep *dep);
 static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 		struct dwc3_ep *dep, struct dwc3_request *req);
-static int dwc3_ep0_delegate_req(struct dwc3 *dwc,
-				 struct usb_ctrlrequest *ctrl);
 
 static void dwc3_ep0_prepare_one_trb(struct dwc3_ep *dep,
 		dma_addr_t buf_dma, u32 len, u32 type, bool chain)
@@ -306,11 +304,22 @@ static struct dwc3_ep *dwc3_wIndex_to_dep(struct dwc3 *dwc, __le16 wIndex_le)
 {
 	struct dwc3_ep		*dep;
 	u32			windex = le16_to_cpu(wIndex_le);
-	u32			epnum;
+	u32			ep, epnum;
+	u8			num_in_eps, num_out_eps, min_eps;
 
-	epnum = (windex & USB_ENDPOINT_NUMBER_MASK) << 1;
-	if ((windex & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN)
-		epnum |= 1;
+	num_in_eps = DWC3_NUM_IN_EPS(&dwc->hwparams);
+	num_out_eps = dwc->num_eps - num_in_eps;
+	min_eps = min_t(u8, num_in_eps, num_out_eps);
+	ep = windex & USB_ENDPOINT_NUMBER_MASK;
+
+	if (ep + 1 > min_eps && num_in_eps != num_out_eps) {
+		epnum = ep + min_eps;
+
+	} else {
+		epnum = ep << 1;
+		if ((windex & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN)
+			epnum |= 1;
+	}
 
 	dep = dwc->eps[epnum];
 	if (dep == NULL)
@@ -358,9 +367,6 @@ static int dwc3_ep0_handle_status(struct dwc3 *dwc,
 				usb_status |= 1 << USB_DEV_STAT_U1_ENABLED;
 			if (reg & DWC3_DCTL_INITU2ENA)
 				usb_status |= 1 << USB_DEV_STAT_U2_ENABLED;
-		} else {
-			usb_status |= dwc->gadget->wakeup_armed <<
-					USB_DEVICE_REMOTE_WAKEUP;
 		}
 
 		break;
@@ -370,7 +376,7 @@ static int dwc3_ep0_handle_status(struct dwc3 *dwc,
 		 * Function Remote Wake Capable	D0
 		 * Function Remote Wakeup	D1
 		 */
-		return dwc3_ep0_delegate_req(dwc, ctrl);
+		break;
 
 	case USB_RECIP_ENDPOINT:
 		dep = dwc3_wIndex_to_dep(dwc, ctrl->wIndex);
@@ -481,10 +487,6 @@ static int dwc3_ep0_handle_device(struct dwc3 *dwc,
 
 	switch (wValue) {
 	case USB_DEVICE_REMOTE_WAKEUP:
-		if (dwc->wakeup_configured)
-			dwc->gadget->wakeup_armed = set;
-		else
-			ret = -EINVAL;
 		break;
 	/*
 	 * 9.4.1 says only for SS, in AddressState only for
@@ -519,7 +521,13 @@ static int dwc3_ep0_handle_intf(struct dwc3 *dwc,
 
 	switch (wValue) {
 	case USB_INTRF_FUNC_SUSPEND:
-		ret = dwc3_ep0_delegate_req(dwc, ctrl);
+		/*
+		 * REVISIT: Ideally we would enable some low power mode here,
+		 * however it's unclear what we should be doing here.
+		 *
+		 * For now, we're not doing anything, just making sure we return
+		 * 0 so USB Command Verifier tests pass without any errors.
+		 */
 		break;
 	default:
 		ret = -EINVAL;
@@ -820,8 +828,9 @@ static void dwc3_ep0_inspect_setup(struct dwc3 *dwc,
 	struct usb_ctrlrequest *ctrl = (void *) dwc->ep0_trb;
 	int ret = -EINVAL;
 	u32 len;
+	struct dwc3_vendor	*vdwc = container_of(dwc, struct dwc3_vendor, dwc);
 
-	if (!dwc->gadget_driver || !dwc->softconnect || !dwc->connected)
+	if (!dwc->gadget_driver || !vdwc->softconnect || !dwc->connected)
 		goto out;
 
 	trace_dwc3_ctrl_req(ctrl);
@@ -1086,9 +1095,10 @@ static void dwc3_ep0_do_control_status(struct dwc3 *dwc,
 void dwc3_ep0_send_delayed_status(struct dwc3 *dwc)
 {
 	unsigned int direction = !dwc->ep0_expect_in;
+	struct dwc3_vendor *vdwc = container_of(dwc, struct dwc3_vendor, dwc);
 
 	dwc->delayed_status = false;
-	dwc->clear_stall_protocol = 0;
+	vdwc->clear_stall_protocol = 0;
 
 	if (dwc->ep0state != EP0_STATUS_PHASE)
 		return;
@@ -1122,9 +1132,11 @@ void dwc3_ep0_end_control_data(struct dwc3 *dwc, struct dwc3_ep *dep)
 static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
+	struct dwc3_vendor	*vdwc = container_of(dwc, struct dwc3_vendor, dwc);
+
 	switch (event->status) {
 	case DEPEVT_STATUS_CONTROL_DATA:
-		if (!dwc->softconnect || !dwc->connected)
+		if (!vdwc->softconnect || !dwc->connected)
 			return;
 		/*
 		 * We already have a DATA transfer in the controller's cache,
@@ -1206,9 +1218,6 @@ void dwc3_ep0_interrupt(struct dwc3 *dwc,
 			dep->flags &= ~DWC3_EP_END_TRANSFER_PENDING;
 			dep->flags &= ~DWC3_EP_TRANSFER_STARTED;
 		}
-		break;
-	default:
-		dev_err(dwc->dev, "unknown endpoint event %d\n", event->endpoint_event);
 		break;
 	}
 }

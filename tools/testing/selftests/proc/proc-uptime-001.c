@@ -13,9 +13,7 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-// Test that boottime value in /proc/uptime and CLOCK_BOOTTIME increment
-// monotonically. We don't test idle time monotonicity due to broken iowait
-// task counting, cf: comment above get_cpu_idle_time_us()
+// Test that values in /proc/uptime increment monotonically.
 #undef NDEBUG
 #include <assert.h>
 #include <stdint.h>
@@ -27,31 +25,20 @@
 
 int main(void)
 {
-	uint64_t start, u0, u1, c0, c1;
+	uint64_t start, u0, u1, i0, i1;
 	int fd;
 
 	fd = open("/proc/uptime", O_RDONLY);
 	assert(fd >= 0);
 
-	u0 = proc_uptime(fd);
+	proc_uptime(fd, &u0, &i0);
 	start = u0;
-	c0 = clock_boottime();
-
 	do {
-		u1 = proc_uptime(fd);
-		c1 = clock_boottime();
-
-		/* Is /proc/uptime monotonic ? */
+		proc_uptime(fd, &u1, &i1);
 		assert(u1 >= u0);
-
-		/* Is CLOCK_BOOTTIME monotonic ? */
-		assert(c1 >= c0);
-
-		/* Is CLOCK_BOOTTIME VS /proc/uptime monotonic ? */
-		assert(c0 >= u0);
-
+		assert(i1 >= i0);
 		u0 = u1;
-		c0 = c1;
+		i0 = i1;
 	} while (u1 - start < 100);
 
 	return 0;

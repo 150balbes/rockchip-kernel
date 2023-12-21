@@ -29,11 +29,9 @@
 #include <linux/time.h>
 
 #include <mach/hardware.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 #include <asm/suspend.h>
 #include <asm/mach/time.h>
-
-#include "generic.h"
 
 extern int sa1100_finish_suspend(unsigned long);
 

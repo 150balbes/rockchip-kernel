@@ -33,6 +33,10 @@
 #include <sound/compress_offload.h>
 #include <sound/compress_driver.h>
 
+#ifndef __GENKSYMS__
+#include <trace/hooks/snd_compr.h>
+#endif
+
 /* struct snd_compr_codec_caps overflows the ioctl bit size for some
  * architectures, so we need to disable the relevant ioctls.
  */
@@ -46,6 +50,8 @@
  * - Multiple node representation
  *	driver should be able to register multiple nodes
  */
+
+static DEFINE_MUTEX(device_mutex);
 
 struct snd_compr_file {
 	unsigned long caps;
@@ -589,7 +595,7 @@ snd_compr_set_params(struct snd_compr_stream *stream, unsigned long arg)
 	struct snd_compr_params *params;
 	int retval;
 
-	if (stream->runtime->state == SNDRV_PCM_STATE_OPEN || stream->next_track) {
+	if (stream->runtime->state == SNDRV_PCM_STATE_OPEN) {
 		/*
 		 * we should allow parameter change only when stream has been
 		 * opened not in other cases
@@ -610,9 +616,6 @@ snd_compr_set_params(struct snd_compr_stream *stream, unsigned long arg)
 
 		retval = stream->ops->set_params(stream, params);
 		if (retval)
-			goto out;
-
-		if (stream->next_track)
 			goto out;
 
 		stream->metadata_set = false;
@@ -709,46 +712,46 @@ snd_compr_tstamp(struct snd_compr_stream *stream, unsigned long arg)
 static int snd_compr_pause(struct snd_compr_stream *stream)
 {
 	int retval;
+	bool use_pause_in_drain = false;
+	bool leave_draining_state = false;
 
-	switch (stream->runtime->state) {
-	case SNDRV_PCM_STATE_RUNNING:
+	trace_android_vh_snd_compr_use_pause_in_drain(&use_pause_in_drain,
+				&leave_draining_state);
+
+	if (use_pause_in_drain && stream->runtime->state == SNDRV_PCM_STATE_DRAINING) {
 		retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_PUSH);
-		if (!retval)
+		if (!retval && leave_draining_state) {
 			stream->runtime->state = SNDRV_PCM_STATE_PAUSED;
-		break;
-	case SNDRV_PCM_STATE_DRAINING:
-		if (!stream->device->use_pause_in_draining)
-			return -EPERM;
-		retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_PUSH);
-		if (!retval)
-			stream->pause_in_draining = true;
-		break;
-	default:
-		return -EPERM;
+			wake_up(&stream->runtime->sleep);
+		}
+		return retval;
 	}
+
+	if (stream->runtime->state != SNDRV_PCM_STATE_RUNNING)
+		return -EPERM;
+	retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_PUSH);
+	if (!retval)
+		stream->runtime->state = SNDRV_PCM_STATE_PAUSED;
 	return retval;
 }
 
 static int snd_compr_resume(struct snd_compr_stream *stream)
 {
 	int retval;
+	bool use_pause_in_drain = false;
+	bool leave_draining_state = false;
 
-	switch (stream->runtime->state) {
-	case SNDRV_PCM_STATE_PAUSED:
-		retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_RELEASE);
-		if (!retval)
-			stream->runtime->state = SNDRV_PCM_STATE_RUNNING;
-		break;
-	case SNDRV_PCM_STATE_DRAINING:
-		if (!stream->pause_in_draining)
-			return -EPERM;
-		retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_RELEASE);
-		if (!retval)
-			stream->pause_in_draining = false;
-		break;
-	default:
+	trace_android_vh_snd_compr_use_pause_in_drain(&use_pause_in_drain,
+				&leave_draining_state);
+
+	if (use_pause_in_drain && stream->runtime->state == SNDRV_PCM_STATE_DRAINING)
+		return stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_RELEASE);
+
+	if (stream->runtime->state != SNDRV_PCM_STATE_PAUSED)
 		return -EPERM;
-	}
+	retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_RELEASE);
+	if (!retval)
+		stream->runtime->state = SNDRV_PCM_STATE_RUNNING;
 	return retval;
 }
 
@@ -791,7 +794,6 @@ static int snd_compr_stop(struct snd_compr_stream *stream)
 		/* clear flags and stop any drain wait */
 		stream->partial_drain = false;
 		stream->metadata_set = false;
-		stream->pause_in_draining = false;
 		snd_compr_drain_notify(stream);
 		stream->runtime->total_bytes_available = 0;
 		stream->runtime->total_bytes_transferred = 0;
@@ -813,7 +815,7 @@ static void error_delayed_work(struct work_struct *work)
 	mutex_unlock(&stream->device->lock);
 }
 
-/**
+/*
  * snd_compr_stop_error: Report a fatal error on a stream
  * @stream: pointer to stream
  * @state: state to transition the stream to
@@ -821,8 +823,6 @@ static void error_delayed_work(struct work_struct *work)
  * Stop the stream and set its state.
  *
  * Should be called with compressed device lock held.
- *
- * Return: zero if successful, or a negative error code
  */
 int snd_compr_stop_error(struct snd_compr_stream *stream,
 			 snd_pcm_state_t state)
@@ -1135,7 +1135,7 @@ static void snd_compress_proc_done(struct snd_compr *compr)
 
 static inline void snd_compress_set_id(struct snd_compr *compr, const char *id)
 {
-	strscpy(compr->id, id, sizeof(compr->id));
+	strlcpy(compr->id, id, sizeof(compr->id));
 }
 #else
 static inline int snd_compress_proc_init(struct snd_compr *compr)
@@ -1162,15 +1162,12 @@ static int snd_compress_dev_free(struct snd_device *device)
 	return 0;
 }
 
-/**
+/*
  * snd_compress_new: create new compress device
  * @card: sound card pointer
  * @device: device number
  * @dirn: device direction, should be of type enum snd_compr_direction
- * @id: ID string
  * @compr: compress device pointer
- *
- * Return: zero if successful, or a negative error code
  */
 int snd_compress_new(struct snd_card *card, int device,
 			int dirn, const char *id, struct snd_compr *compr)
@@ -1185,7 +1182,6 @@ int snd_compress_new(struct snd_card *card, int device,
 	compr->card = card;
 	compr->device = device;
 	compr->direction = dirn;
-	mutex_init(&compr->lock);
 
 	snd_compress_set_id(compr, id);
 
@@ -1199,6 +1195,72 @@ int snd_compress_new(struct snd_card *card, int device,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(snd_compress_new);
+
+static int snd_compress_add_device(struct snd_compr *device)
+{
+	int ret;
+
+	if (!device->card)
+		return -EINVAL;
+
+	/* register the card */
+	ret = snd_card_register(device->card);
+	if (ret)
+		goto out;
+	return 0;
+
+out:
+	pr_err("failed with %d\n", ret);
+	return ret;
+
+}
+
+static int snd_compress_remove_device(struct snd_compr *device)
+{
+	return snd_card_free(device->card);
+}
+
+/**
+ * snd_compress_register - register compressed device
+ *
+ * @device: compressed device to register
+ */
+int snd_compress_register(struct snd_compr *device)
+{
+	int retval;
+
+	if (device->name == NULL || device->ops == NULL)
+		return -EINVAL;
+
+	pr_debug("Registering compressed device %s\n", device->name);
+	if (snd_BUG_ON(!device->ops->open))
+		return -EINVAL;
+	if (snd_BUG_ON(!device->ops->free))
+		return -EINVAL;
+	if (snd_BUG_ON(!device->ops->set_params))
+		return -EINVAL;
+	if (snd_BUG_ON(!device->ops->trigger))
+		return -EINVAL;
+
+	mutex_init(&device->lock);
+
+	/* register a compressed card */
+	mutex_lock(&device_mutex);
+	retval = snd_compress_add_device(device);
+	mutex_unlock(&device_mutex);
+	return retval;
+}
+EXPORT_SYMBOL_GPL(snd_compress_register);
+
+int snd_compress_deregister(struct snd_compr *device)
+{
+	pr_debug("Removing compressed device %s\n", device->name);
+	mutex_lock(&device_mutex);
+	snd_compress_remove_device(device);
+	mutex_unlock(&device_mutex);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(snd_compress_deregister);
 
 MODULE_DESCRIPTION("ALSA Compressed offload framework");
 MODULE_AUTHOR("Vinod Koul <vinod.koul@linux.intel.com>");

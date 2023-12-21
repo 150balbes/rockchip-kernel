@@ -58,11 +58,11 @@ struct hv_uio_private_data {
 	atomic_t refcnt;
 
 	void	*recv_buf;
-	struct vmbus_gpadl recv_gpadl;
+	u32	recv_gpadl;
 	char	recv_name[32];	/* "recv_4294967295" */
 
 	void	*send_buf;
-	struct vmbus_gpadl send_gpadl;
+	u32	send_gpadl;
 	char	send_name[32];
 };
 
@@ -179,13 +179,15 @@ hv_uio_new_channel(struct vmbus_channel *new_sc)
 static void
 hv_uio_cleanup(struct hv_device *dev, struct hv_uio_private_data *pdata)
 {
-	if (pdata->send_gpadl.gpadl_handle) {
-		vmbus_teardown_gpadl(dev->channel, &pdata->send_gpadl);
+	if (pdata->send_gpadl) {
+		vmbus_teardown_gpadl(dev->channel, pdata->send_gpadl);
+		pdata->send_gpadl = 0;
 		vfree(pdata->send_buf);
 	}
 
-	if (pdata->recv_gpadl.gpadl_handle) {
-		vmbus_teardown_gpadl(dev->channel, &pdata->recv_gpadl);
+	if (pdata->recv_gpadl) {
+		vmbus_teardown_gpadl(dev->channel, pdata->recv_gpadl);
+		pdata->recv_gpadl = 0;
 		vfree(pdata->recv_buf);
 	}
 }
@@ -245,14 +247,14 @@ hv_uio_probe(struct hv_device *dev,
 		return -ENOTSUPP;
 	}
 
-	pdata = devm_kzalloc(&dev->device, sizeof(*pdata), GFP_KERNEL);
+	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
 
 	ret = vmbus_alloc_ring(channel, HV_RING_SIZE * PAGE_SIZE,
 			       HV_RING_SIZE * PAGE_SIZE);
 	if (ret)
-		return ret;
+		goto fail;
 
 	set_channel_read_mode(channel, HV_CALL_ISR);
 
@@ -289,7 +291,7 @@ hv_uio_probe(struct hv_device *dev,
 	pdata->recv_buf = vzalloc(RECV_BUFFER_SIZE);
 	if (pdata->recv_buf == NULL) {
 		ret = -ENOMEM;
-		goto fail_free_ring;
+		goto fail_close;
 	}
 
 	ret = vmbus_establish_gpadl(channel, pdata->recv_buf,
@@ -301,7 +303,7 @@ hv_uio_probe(struct hv_device *dev,
 
 	/* put Global Physical Address Label in name */
 	snprintf(pdata->recv_name, sizeof(pdata->recv_name),
-		 "recv:%u", pdata->recv_gpadl.gpadl_handle);
+		 "recv:%u", pdata->recv_gpadl);
 	pdata->info.mem[RECV_BUF_MAP].name = pdata->recv_name;
 	pdata->info.mem[RECV_BUF_MAP].addr
 		= (uintptr_t)pdata->recv_buf;
@@ -322,7 +324,7 @@ hv_uio_probe(struct hv_device *dev,
 	}
 
 	snprintf(pdata->send_name, sizeof(pdata->send_name),
-		 "send:%u", pdata->send_gpadl.gpadl_handle);
+		 "send:%u", pdata->send_gpadl);
 	pdata->info.mem[SEND_BUF_MAP].name = pdata->send_name;
 	pdata->info.mem[SEND_BUF_MAP].addr
 		= (uintptr_t)pdata->send_buf;
@@ -349,25 +351,28 @@ hv_uio_probe(struct hv_device *dev,
 
 fail_close:
 	hv_uio_cleanup(dev, pdata);
-fail_free_ring:
-	vmbus_free_ring(dev->channel);
+fail:
+	kfree(pdata);
 
 	return ret;
 }
 
-static void
+static int
 hv_uio_remove(struct hv_device *dev)
 {
 	struct hv_uio_private_data *pdata = hv_get_drvdata(dev);
 
 	if (!pdata)
-		return;
+		return 0;
 
 	sysfs_remove_bin_file(&dev->channel->kobj, &ring_buffer_bin_attr);
 	uio_unregister_device(&pdata->info);
 	hv_uio_cleanup(dev, pdata);
+	hv_set_drvdata(dev, NULL);
 
 	vmbus_free_ring(dev->channel);
+	kfree(pdata);
+	return 0;
 }
 
 static struct hv_driver hv_uio_drv = {

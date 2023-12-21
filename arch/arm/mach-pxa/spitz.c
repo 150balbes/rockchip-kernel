@@ -25,7 +25,6 @@
 #include <linux/spi/pxa2xx_spi.h>
 #include <linux/mtd/sharpsl.h>
 #include <linux/mtd/physmap.h>
-#include <linux/input-event-codes.h>
 #include <linux/input/matrix_keypad.h>
 #include <linux/regulator/machine.h>
 #include <linux/io.h>
@@ -40,13 +39,14 @@
 
 #include "pxa27x.h"
 #include "pxa27x-udc.h"
-#include "reset.h"
+#include <mach/reset.h>
+#include <linux/platform_data/irda-pxaficp.h>
 #include <linux/platform_data/mmc-pxamci.h>
 #include <linux/platform_data/usb-ohci-pxa27x.h>
 #include <linux/platform_data/video-pxafb.h>
-#include "spitz.h"
+#include <mach/spitz.h>
 #include "sharpsl_pm.h"
-#include "smemc.h"
+#include <mach/smemc.h>
 
 #include "generic.h"
 #include "devices.h"
@@ -506,16 +506,12 @@ static struct ads7846_platform_data spitz_ads7846_info = {
 	.x_plate_ohms		= 419,
 	.y_plate_ohms		= 486,
 	.pressure_max		= 1024,
+	.gpio_pendown		= SPITZ_GPIO_TP_INT,
 	.wait_for_sync		= spitz_ads7846_wait_for_hsync,
 };
 
-static struct gpiod_lookup_table spitz_ads7846_gpio_table = {
-	.dev_id = "spi2.0",
-	.table = {
-		GPIO_LOOKUP("gpio-pxa", SPITZ_GPIO_TP_INT,
-			    "pendown", GPIO_ACTIVE_LOW),
-		{ }
-	},
+static struct pxa2xx_spi_chip spitz_ads7846_chip = {
+	.gpio_cs		= SPITZ_GPIO_ADS7846_CS,
 };
 
 static void spitz_bl_kick_battery(void)
@@ -559,6 +555,14 @@ static struct corgi_lcd_platform_data spitz_lcdcon_info = {
 	.kick_battery		= spitz_bl_kick_battery,
 };
 
+static struct pxa2xx_spi_chip spitz_lcdcon_chip = {
+	.gpio_cs	= SPITZ_GPIO_LCDCON_CS,
+};
+
+static struct pxa2xx_spi_chip spitz_max1111_chip = {
+	.gpio_cs	= SPITZ_GPIO_MAX1111_CS,
+};
+
 static struct spi_board_info spitz_spi_devices[] = {
 	{
 		.modalias		= "ads7846",
@@ -566,6 +570,7 @@ static struct spi_board_info spitz_spi_devices[] = {
 		.bus_num		= 2,
 		.chip_select		= 0,
 		.platform_data		= &spitz_ads7846_info,
+		.controller_data	= &spitz_ads7846_chip,
 		.irq			= PXA_GPIO_TO_IRQ(SPITZ_GPIO_TP_INT),
 	}, {
 		.modalias		= "corgi-lcd",
@@ -573,26 +578,18 @@ static struct spi_board_info spitz_spi_devices[] = {
 		.bus_num		= 2,
 		.chip_select		= 1,
 		.platform_data		= &spitz_lcdcon_info,
+		.controller_data	= &spitz_lcdcon_chip,
 	}, {
 		.modalias		= "max1111",
 		.max_speed_hz		= 450000,
 		.bus_num		= 2,
 		.chip_select		= 2,
+		.controller_data	= &spitz_max1111_chip,
 	},
 };
 
 static struct pxa2xx_spi_controller spitz_spi_info = {
 	.num_chipselect	= 3,
-};
-
-static struct gpiod_lookup_table spitz_spi_gpio_table = {
-	.dev_id = "spi2",
-	.table = {
-		GPIO_LOOKUP_IDX("gpio-pxa", SPITZ_GPIO_ADS7846_CS, "cs", 0, GPIO_ACTIVE_LOW),
-		GPIO_LOOKUP_IDX("gpio-pxa", SPITZ_GPIO_LCDCON_CS, "cs", 1, GPIO_ACTIVE_LOW),
-		GPIO_LOOKUP_IDX("gpio-pxa", SPITZ_GPIO_MAX1111_CS, "cs", 2, GPIO_ACTIVE_LOW),
-		{ },
-	},
 };
 
 static void __init spitz_spi_init(void)
@@ -602,8 +599,6 @@ static void __init spitz_spi_init(void)
 	else
 		gpiod_add_lookup_table(&spitz_lcdcon_gpio_table);
 
-	gpiod_add_lookup_table(&spitz_ads7846_gpio_table);
-	gpiod_add_lookup_table(&spitz_spi_gpio_table);
 	pxa2xx_set_spi_info(2, &spitz_spi_info);
 	spi_register_board_info(ARRAY_AND_SIZE(spitz_spi_devices));
 }
@@ -694,6 +689,27 @@ static void __init spitz_uhc_init(void)
 }
 #else
 static inline void spitz_uhc_init(void) {}
+#endif
+
+/******************************************************************************
+ * IrDA
+ ******************************************************************************/
+#if defined(CONFIG_PXA_FICP) || defined(CONFIG_PXA_FICP_MODULE)
+static struct pxaficp_platform_data spitz_ficp_platform_data = {
+	.transceiver_cap	= IR_SIRMODE | IR_OFF,
+};
+
+static void __init spitz_irda_init(void)
+{
+	if (machine_is_akita())
+		spitz_ficp_platform_data.gpio_pwdown = AKITA_GPIO_IR_ON;
+	else
+		spitz_ficp_platform_data.gpio_pwdown = SPITZ_GPIO_IR_ON;
+
+	pxa_set_ficp_info(&spitz_ficp_platform_data);
+}
+#else
+static inline void spitz_irda_init(void) {}
 #endif
 
 /******************************************************************************
@@ -950,42 +966,11 @@ static void __init spitz_i2c_init(void)
 static inline void spitz_i2c_init(void) {}
 #endif
 
-static struct gpiod_lookup_table spitz_audio_gpio_table = {
-	.dev_id = "spitz-audio",
-	.table = {
-		GPIO_LOOKUP("sharp-scoop.0", SPITZ_GPIO_MUTE_L - SPITZ_SCP_GPIO_BASE,
-			    "mute-l", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("sharp-scoop.0", SPITZ_GPIO_MUTE_R - SPITZ_SCP_GPIO_BASE,
-			    "mute-r", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("sharp-scoop.1", SPITZ_GPIO_MIC_BIAS - SPITZ_SCP2_GPIO_BASE,
-			    "mic", GPIO_ACTIVE_HIGH),
-		{ },
-	},
-};
-
-static struct gpiod_lookup_table akita_audio_gpio_table = {
-	.dev_id = "spitz-audio",
-	.table = {
-		GPIO_LOOKUP("sharp-scoop.0", SPITZ_GPIO_MUTE_L - SPITZ_SCP_GPIO_BASE,
-			    "mute-l", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("sharp-scoop.0", SPITZ_GPIO_MUTE_R - SPITZ_SCP_GPIO_BASE,
-			    "mute-r", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("i2c-max7310", AKITA_GPIO_MIC_BIAS - AKITA_IOEXP_GPIO_BASE,
-			    "mic", GPIO_ACTIVE_HIGH),
-		{ },
-	},
-};
-
 /******************************************************************************
  * Audio devices
  ******************************************************************************/
 static inline void spitz_audio_init(void)
 {
-	if (machine_is_akita())
-		gpiod_add_lookup_table(&akita_audio_gpio_table);
-	else
-		gpiod_add_lookup_table(&spitz_audio_gpio_table);
-
 	platform_device_register_simple("spitz-audio", -1, NULL, 0);
 }
 
@@ -1030,6 +1015,7 @@ static void __init spitz_init(void)
 	spitz_leds_init();
 	spitz_mmc_init();
 	spitz_pcmcia_init();
+	spitz_irda_init();
 	spitz_uhc_init();
 	spitz_lcd_init();
 	spitz_nor_init();
@@ -1052,6 +1038,7 @@ MACHINE_START(SPITZ, "SHARP Spitz")
 	.map_io		= pxa27x_map_io,
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.init_time	= pxa_timer_init,
 	.restart	= spitz_restart,
@@ -1064,6 +1051,7 @@ MACHINE_START(BORZOI, "SHARP Borzoi")
 	.map_io		= pxa27x_map_io,
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.init_time	= pxa_timer_init,
 	.restart	= spitz_restart,
@@ -1076,6 +1064,7 @@ MACHINE_START(AKITA, "SHARP Akita")
 	.map_io		= pxa27x_map_io,
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.init_time	= pxa_timer_init,
 	.restart	= spitz_restart,

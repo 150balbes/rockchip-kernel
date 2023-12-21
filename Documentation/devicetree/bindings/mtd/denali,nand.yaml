@@ -63,12 +63,6 @@ properties:
     minItems: 1
     maxItems: 2
 
-patternProperties:
-  "^nand@[a-f0-9]$":
-    type: object
-    $ref: raw-nand-chip.yaml
-    unevaluatedProperties: false
-
 allOf:
   - $ref: nand-controller.yaml
 
@@ -80,6 +74,7 @@ allOf:
     then:
       patternProperties:
         "^nand@[a-f0-9]$":
+          type: object
           properties:
             nand-ecc-strength:
               enum:
@@ -97,6 +92,7 @@ allOf:
     then:
       patternProperties:
         "^nand@[a-f0-9]$":
+          type: object
           properties:
             nand-ecc-strength:
               enum:
@@ -115,6 +111,7 @@ allOf:
     then:
       patternProperties:
         "^nand@[a-f0-9]$":
+          type: object
           properties:
             nand-ecc-strength:
               enum:
@@ -148,6 +145,6 @@ examples:
         #size-cells = <0>;
 
         nand@0 {
-            reg = <0>;
+                reg = <0>;
         };
     };

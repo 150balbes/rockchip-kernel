@@ -33,9 +33,11 @@
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("A loopback soundcard");
 MODULE_LICENSE("GPL");
+MODULE_SUPPORTED_DEVICE("{{ALSA,Loopback soundcard}}");
 
 #define MAX_PCM_SUBSTREAMS	8
 
+static bool use_raw_jiffies;
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 static bool enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
@@ -43,6 +45,8 @@ static int pcm_substreams[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 8};
 static int pcm_notify[SNDRV_CARDS];
 static char *timer_source[SNDRV_CARDS];
 
+module_param(use_raw_jiffies, bool, 0444);
+MODULE_PARM_DESC(use_raw_jiffies, "Use raw jiffies follows local clocks.");
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for loopback soundcard.");
 module_param_array(id, charp, NULL, 0444);
@@ -104,7 +108,7 @@ struct loopback_cable {
 	unsigned int running;
 	unsigned int pause;
 	/* timer specific */
-	const struct loopback_ops *ops;
+	struct loopback_ops *ops;
 	/* If sound timer is used */
 	struct {
 		int stream;
@@ -162,6 +166,22 @@ struct loopback_pcm {
 
 static struct platform_device *devices[SNDRV_CARDS];
 
+static inline unsigned long get_raw_jiffies(void)
+{
+	struct timespec64 ts64;
+
+	ktime_get_raw_ts64(&ts64);
+	return timespec64_to_jiffies(&ts64);
+}
+
+static inline unsigned long cycles_to_jiffies(void)
+{
+	if (likely(use_raw_jiffies))
+		return get_raw_jiffies();
+
+	return jiffies;
+}
+
 static inline unsigned int byte_pos(struct loopback_pcm *dpcm, unsigned int x)
 {
 	if (dpcm->pcm_rate_shift == NO_PITCH) {
@@ -218,7 +238,7 @@ static int loopback_jiffies_timer_start(struct loopback_pcm *dpcm)
 		dpcm->period_update_pending = 1;
 	}
 	tick = dpcm->period_size_frac - dpcm->irq_pos;
-	tick = DIV_ROUND_UP(tick, dpcm->pcm_bps);
+	tick = (tick + dpcm->pcm_bps - 1) / dpcm->pcm_bps;
 	mod_timer(&dpcm->timer, jiffies + tick);
 
 	return 0;
@@ -386,7 +406,7 @@ static int loopback_trigger(struct snd_pcm_substream *substream, int cmd)
 		err = loopback_check_format(cable, substream->stream);
 		if (err < 0)
 			return err;
-		dpcm->last_jiffies = jiffies;
+		dpcm->last_jiffies = cycles_to_jiffies();
 		dpcm->pcm_rate_shift = 0;
 		dpcm->last_drift = 0;
 		spin_lock(&cable->lock);	
@@ -418,7 +438,7 @@ static int loopback_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		spin_lock(&cable->lock);
-		dpcm->last_jiffies = jiffies;
+		dpcm->last_jiffies = cycles_to_jiffies();
 		cable->pause &= ~stream;
 		err = cable->ops->start(dpcm);
 		spin_unlock(&cable->lock);
@@ -535,7 +555,7 @@ static void copy_play_buf(struct loopback_pcm *play,
 
 	/* check if playback is draining, trim the capture copy size
 	 * when our pointer is at the end of playback ring buffer */
-	if (runtime->state == SNDRV_PCM_STATE_DRAINING &&
+	if (runtime->status->state == SNDRV_PCM_STATE_DRAINING &&
 	    snd_pcm_playback_hw_avail(runtime) < runtime->buffer_size) { 
 	    	snd_pcm_uframes_t appl_ptr, appl_ptr1, diff;
 		appl_ptr = appl_ptr1 = runtime->control->appl_ptr;
@@ -608,7 +628,7 @@ static unsigned int loopback_jiffies_timer_pos_update
 	unsigned long delta_play = 0, delta_capt = 0, cur_jiffies;
 	unsigned int running, count1, count2;
 
-	cur_jiffies = jiffies;
+	cur_jiffies = cycles_to_jiffies();
 	running = cable->running ^ cable->pause;
 	if (running & (1 << SNDRV_PCM_STREAM_PLAYBACK)) {
 		delta_play = cur_jiffies - dpcm_play->last_jiffies;
@@ -730,7 +750,7 @@ static void loopback_snd_timer_period_elapsed(struct loopback_cable *cable,
 
 	if (event == SNDRV_TIMER_EVENT_MSTOP) {
 		if (!dpcm_play ||
-		    dpcm_play->substream->runtime->state !=
+		    dpcm_play->substream->runtime->status->state !=
 				SNDRV_PCM_STATE_DRAINING) {
 			spin_unlock_irqrestore(&cable->lock, flags);
 			return;
@@ -842,7 +862,7 @@ static void loopback_jiffies_timer_dpcm_info(struct loopback_pcm *dpcm,
 	snd_iprintf(buffer, "    irq_pos:\t\t%u\n", dpcm->irq_pos);
 	snd_iprintf(buffer, "    period_frac:\t%u\n", dpcm->period_size_frac);
 	snd_iprintf(buffer, "    last_jiffies:\t%lu (%lu)\n",
-		    dpcm->last_jiffies, jiffies);
+		    dpcm->last_jiffies, cycles_to_jiffies());
 	snd_iprintf(buffer, "    timer_expires:\t%lu\n", dpcm->timer.expires);
 }
 
@@ -1021,7 +1041,7 @@ static int loopback_jiffies_timer_open(struct loopback_pcm *dpcm)
 	return 0;
 }
 
-static const struct loopback_ops loopback_jiffies_timer_ops = {
+static struct loopback_ops loopback_jiffies_timer_ops = {
 	.open = loopback_jiffies_timer_open,
 	.start = loopback_jiffies_timer_start,
 	.stop = loopback_jiffies_timer_stop,
@@ -1172,7 +1192,7 @@ exit:
 /* stop_sync() is not required for sound timer because it does not need to be
  * restarted in loopback_prepare() on Xrun recovery
  */
-static const struct loopback_ops loopback_snd_timer_ops = {
+static struct loopback_ops loopback_snd_timer_ops = {
 	.open = loopback_snd_timer_open,
 	.start = loopback_snd_timer_start,
 	.stop = loopback_snd_timer_stop,
@@ -1713,8 +1733,8 @@ static int loopback_probe(struct platform_device *devptr)
 	int dev = devptr->id;
 	int err;
 
-	err = snd_devm_card_new(&devptr->dev, index[dev], id[dev], THIS_MODULE,
-				sizeof(struct loopback), &card);
+	err = snd_card_new(&devptr->dev, index[dev], id[dev], THIS_MODULE,
+			   sizeof(struct loopback), &card);
 	if (err < 0)
 		return err;
 	loopback = card->private_data;
@@ -1731,13 +1751,13 @@ static int loopback_probe(struct platform_device *devptr)
 
 	err = loopback_pcm_new(loopback, 0, pcm_substreams[dev]);
 	if (err < 0)
-		return err;
+		goto __nodev;
 	err = loopback_pcm_new(loopback, 1, pcm_substreams[dev]);
 	if (err < 0)
-		return err;
+		goto __nodev;
 	err = loopback_mixer_new(loopback, pcm_notify[dev] ? 1 : 0);
 	if (err < 0)
-		return err;
+		goto __nodev;
 	loopback_cable_proc_new(loopback, 0);
 	loopback_cable_proc_new(loopback, 1);
 	loopback_timer_source_proc_new(loopback);
@@ -1745,9 +1765,18 @@ static int loopback_probe(struct platform_device *devptr)
 	strcpy(card->shortname, "Loopback");
 	sprintf(card->longname, "Loopback %i", dev + 1);
 	err = snd_card_register(card);
-	if (err < 0)
-		return err;
-	platform_set_drvdata(devptr, card);
+	if (!err) {
+		platform_set_drvdata(devptr, card);
+		return 0;
+	}
+      __nodev:
+	snd_card_free(card);
+	return err;
+}
+
+static int loopback_remove(struct platform_device *devptr)
+{
+	snd_card_free(platform_get_drvdata(devptr));
 	return 0;
 }
 
@@ -1778,6 +1807,7 @@ static SIMPLE_DEV_PM_OPS(loopback_pm, loopback_suspend, loopback_resume);
 
 static struct platform_driver loopback_driver = {
 	.probe		= loopback_probe,
+	.remove		= loopback_remove,
 	.driver		= {
 		.name	= SND_LOOPBACK_DRIVER,
 		.pm	= LOOPBACK_PM_OPS,

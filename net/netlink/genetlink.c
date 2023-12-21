@@ -13,7 +13,7 @@
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/socket.h>
-#include <linux/string_helpers.h>
+#include <linux/string.h>
 #include <linux/skbuff.h>
 #include <linux/mutex.h>
 #include <linux/bitmap.h>
@@ -39,6 +39,14 @@ void genl_unlock(void)
 	mutex_unlock(&genl_mutex);
 }
 EXPORT_SYMBOL(genl_unlock);
+
+#ifdef CONFIG_LOCKDEP
+bool lockdep_genl_is_held(void)
+{
+	return lockdep_is_held(&genl_mutex);
+}
+EXPORT_SYMBOL(lockdep_genl_is_held);
+#endif
 
 static void genl_lock_all(void)
 {
@@ -78,39 +86,9 @@ static unsigned long mc_group_start = 0x3 | BIT(GENL_ID_CTRL) |
 static unsigned long *mc_groups = &mc_group_start;
 static unsigned long mc_groups_longs = 1;
 
-/* We need the last attribute with non-zero ID therefore a 2-entry array */
-static struct nla_policy genl_policy_reject_all[] = {
-	{ .type = NLA_REJECT },
-	{ .type = NLA_REJECT },
-};
-
 static int genl_ctrl_event(int event, const struct genl_family *family,
 			   const struct genl_multicast_group *grp,
 			   int grp_id);
-
-static void
-genl_op_fill_in_reject_policy(const struct genl_family *family,
-			      struct genl_ops *op)
-{
-	BUILD_BUG_ON(ARRAY_SIZE(genl_policy_reject_all) - 1 != 1);
-
-	if (op->policy || op->cmd < family->resv_start_op)
-		return;
-
-	op->policy = genl_policy_reject_all;
-	op->maxattr = 1;
-}
-
-static void
-genl_op_fill_in_reject_policy_split(const struct genl_family *family,
-				    struct genl_split_ops *op)
-{
-	if (op->policy)
-		return;
-
-	op->policy = genl_policy_reject_all;
-	op->maxattr = 1;
-}
 
 static const struct genl_family *genl_family_find_byid(unsigned int id)
 {
@@ -129,15 +107,10 @@ static const struct genl_family *genl_family_find_byname(char *name)
 	return NULL;
 }
 
-struct genl_op_iter {
-	const struct genl_family *family;
-	struct genl_split_ops doit;
-	struct genl_split_ops dumpit;
-	int cmd_idx;
-	int entry_idx;
-	u32 cmd;
-	u8 flags;
-};
+static int genl_get_cmd_cnt(const struct genl_family *family)
+{
+	return family->n_ops + family->n_small_ops;
+}
 
 static void genl_op_from_full(const struct genl_family *family,
 			      unsigned int i, struct genl_ops *op)
@@ -148,8 +121,6 @@ static void genl_op_from_full(const struct genl_family *family,
 		op->maxattr = family->maxattr;
 	if (!op->policy)
 		op->policy = family->policy;
-
-	genl_op_fill_in_reject_policy(family, op);
 }
 
 static int genl_get_cmd_full(u32 cmd, const struct genl_family *family,
@@ -179,8 +150,6 @@ static void genl_op_from_small(const struct genl_family *family,
 
 	op->maxattr = family->maxattr;
 	op->policy = family->policy;
-
-	genl_op_fill_in_reject_policy(family, op);
 }
 
 static int genl_get_cmd_small(u32 cmd, const struct genl_family *family,
@@ -197,187 +166,24 @@ static int genl_get_cmd_small(u32 cmd, const struct genl_family *family,
 	return -ENOENT;
 }
 
-static void genl_op_from_split(struct genl_op_iter *iter)
+static int genl_get_cmd(u32 cmd, const struct genl_family *family,
+			struct genl_ops *op)
 {
-	const struct genl_family *family = iter->family;
-	int i, cnt = 0;
-
-	i = iter->entry_idx - family->n_ops - family->n_small_ops;
-
-	if (family->split_ops[i + cnt].flags & GENL_CMD_CAP_DO) {
-		iter->doit = family->split_ops[i + cnt];
-		genl_op_fill_in_reject_policy_split(family, &iter->doit);
-		cnt++;
-	} else {
-		memset(&iter->doit, 0, sizeof(iter->doit));
-	}
-
-	if (i + cnt < family->n_split_ops &&
-	    family->split_ops[i + cnt].flags & GENL_CMD_CAP_DUMP) {
-		iter->dumpit = family->split_ops[i + cnt];
-		genl_op_fill_in_reject_policy_split(family, &iter->dumpit);
-		cnt++;
-	} else {
-		memset(&iter->dumpit, 0, sizeof(iter->dumpit));
-	}
-
-	WARN_ON(!cnt);
-	iter->entry_idx += cnt;
+	if (!genl_get_cmd_full(cmd, family, op))
+		return 0;
+	return genl_get_cmd_small(cmd, family, op);
 }
 
-static int
-genl_get_cmd_split(u32 cmd, u8 flag, const struct genl_family *family,
-		   struct genl_split_ops *op)
+static void genl_get_cmd_by_index(unsigned int i,
+				  const struct genl_family *family,
+				  struct genl_ops *op)
 {
-	int i;
-
-	for (i = 0; i < family->n_split_ops; i++)
-		if (family->split_ops[i].cmd == cmd &&
-		    family->split_ops[i].flags & flag) {
-			*op = family->split_ops[i];
-			return 0;
-		}
-
-	return -ENOENT;
-}
-
-static int
-genl_cmd_full_to_split(struct genl_split_ops *op,
-		       const struct genl_family *family,
-		       const struct genl_ops *full, u8 flags)
-{
-	if ((flags & GENL_CMD_CAP_DO && !full->doit) ||
-	    (flags & GENL_CMD_CAP_DUMP && !full->dumpit)) {
-		memset(op, 0, sizeof(*op));
-		return -ENOENT;
-	}
-
-	if (flags & GENL_CMD_CAP_DUMP) {
-		op->start	= full->start;
-		op->dumpit	= full->dumpit;
-		op->done	= full->done;
-	} else {
-		op->pre_doit	= family->pre_doit;
-		op->doit	= full->doit;
-		op->post_doit	= family->post_doit;
-	}
-
-	if (flags & GENL_CMD_CAP_DUMP &&
-	    full->validate & GENL_DONT_VALIDATE_DUMP) {
-		op->policy	= NULL;
-		op->maxattr	= 0;
-	} else {
-		op->policy	= full->policy;
-		op->maxattr	= full->maxattr;
-	}
-
-	op->cmd			= full->cmd;
-	op->internal_flags	= full->internal_flags;
-	op->flags		= full->flags;
-	op->validate		= full->validate;
-
-	/* Make sure flags include the GENL_CMD_CAP_DO / GENL_CMD_CAP_DUMP */
-	op->flags		|= flags;
-
-	return 0;
-}
-
-/* Must make sure that op is initialized to 0 on failure */
-static int
-genl_get_cmd(u32 cmd, u8 flags, const struct genl_family *family,
-	     struct genl_split_ops *op)
-{
-	struct genl_ops full;
-	int err;
-
-	err = genl_get_cmd_full(cmd, family, &full);
-	if (err == -ENOENT)
-		err = genl_get_cmd_small(cmd, family, &full);
-	/* Found one of legacy forms */
-	if (err == 0)
-		return genl_cmd_full_to_split(op, family, &full, flags);
-
-	err = genl_get_cmd_split(cmd, flags, family, op);
-	if (err)
-		memset(op, 0, sizeof(*op));
-	return err;
-}
-
-/* For policy dumping only, get ops of both do and dump.
- * Fail if both are missing, genl_get_cmd() will zero-init in case of failure.
- */
-static int
-genl_get_cmd_both(u32 cmd, const struct genl_family *family,
-		  struct genl_split_ops *doit, struct genl_split_ops *dumpit)
-{
-	int err1, err2;
-
-	err1 = genl_get_cmd(cmd, GENL_CMD_CAP_DO, family, doit);
-	err2 = genl_get_cmd(cmd, GENL_CMD_CAP_DUMP, family, dumpit);
-
-	return err1 && err2 ? -ENOENT : 0;
-}
-
-static bool
-genl_op_iter_init(const struct genl_family *family, struct genl_op_iter *iter)
-{
-	iter->family = family;
-	iter->cmd_idx = 0;
-	iter->entry_idx = 0;
-
-	iter->flags = 0;
-
-	return iter->family->n_ops +
-		iter->family->n_small_ops +
-		iter->family->n_split_ops;
-}
-
-static bool genl_op_iter_next(struct genl_op_iter *iter)
-{
-	const struct genl_family *family = iter->family;
-	bool legacy_op = true;
-	struct genl_ops op;
-
-	if (iter->entry_idx < family->n_ops) {
-		genl_op_from_full(family, iter->entry_idx, &op);
-	} else if (iter->entry_idx < family->n_ops + family->n_small_ops) {
-		genl_op_from_small(family, iter->entry_idx - family->n_ops,
-				   &op);
-	} else if (iter->entry_idx <
-		   family->n_ops + family->n_small_ops + family->n_split_ops) {
-		legacy_op = false;
-		/* updates entry_idx */
-		genl_op_from_split(iter);
-	} else {
-		return false;
-	}
-
-	iter->cmd_idx++;
-
-	if (legacy_op) {
-		iter->entry_idx++;
-
-		genl_cmd_full_to_split(&iter->doit, family,
-				       &op, GENL_CMD_CAP_DO);
-		genl_cmd_full_to_split(&iter->dumpit, family,
-				       &op, GENL_CMD_CAP_DUMP);
-	}
-
-	iter->cmd = iter->doit.cmd | iter->dumpit.cmd;
-	iter->flags = iter->doit.flags | iter->dumpit.flags;
-
-	return true;
-}
-
-static void
-genl_op_iter_copy(struct genl_op_iter *dst, struct genl_op_iter *src)
-{
-	*dst = *src;
-}
-
-static unsigned int genl_op_iter_idx(struct genl_op_iter *iter)
-{
-	return iter->cmd_idx;
+	if (i < family->n_ops)
+		genl_op_from_full(family, i, op);
+	else if (i < family->n_ops + family->n_small_ops)
+		genl_op_from_small(family, i - family->n_ops, op);
+	else
+		WARN_ON_ONCE(1);
 }
 
 static int genl_allocate_reserve_groups(int n_groups, int *first_id)
@@ -457,7 +263,7 @@ static int genl_validate_assign_mc_groups(struct genl_family *family)
 
 		if (WARN_ON(grp->name[0] == '\0'))
 			return -EINVAL;
-		if (WARN_ON(!string_is_terminated(grp->name, GENL_NAMSIZ)))
+		if (WARN_ON(memchr(grp->name, '\0', GENL_NAMSIZ) == NULL))
 			return -EINVAL;
 	}
 
@@ -545,70 +351,27 @@ static void genl_unregister_mc_groups(const struct genl_family *family)
 	}
 }
 
-static bool genl_split_op_check(const struct genl_split_ops *op)
-{
-	if (WARN_ON(hweight8(op->flags & (GENL_CMD_CAP_DO |
-					  GENL_CMD_CAP_DUMP)) != 1))
-		return true;
-	return false;
-}
-
 static int genl_validate_ops(const struct genl_family *family)
 {
-	struct genl_op_iter i, j;
-	unsigned int s;
+	int i, j;
 
 	if (WARN_ON(family->n_ops && !family->ops) ||
-	    WARN_ON(family->n_small_ops && !family->small_ops) ||
-	    WARN_ON(family->n_split_ops && !family->split_ops))
+	    WARN_ON(family->n_small_ops && !family->small_ops))
 		return -EINVAL;
 
-	for (genl_op_iter_init(family, &i); genl_op_iter_next(&i); ) {
-		if (!(i.flags & (GENL_CMD_CAP_DO | GENL_CMD_CAP_DUMP)))
-			return -EINVAL;
+	for (i = 0; i < genl_get_cmd_cnt(family); i++) {
+		struct genl_ops op;
 
-		if (WARN_ON(i.cmd >= family->resv_start_op &&
-			    (i.doit.validate || i.dumpit.validate)))
+		genl_get_cmd_by_index(i, family, &op);
+		if (op.dumpit == NULL && op.doit == NULL)
 			return -EINVAL;
+		for (j = i + 1; j < genl_get_cmd_cnt(family); j++) {
+			struct genl_ops op2;
 
-		genl_op_iter_copy(&j, &i);
-		while (genl_op_iter_next(&j)) {
-			if (i.cmd == j.cmd)
+			genl_get_cmd_by_index(j, family, &op2);
+			if (op.cmd == op2.cmd)
 				return -EINVAL;
 		}
-	}
-
-	if (family->n_split_ops) {
-		if (genl_split_op_check(&family->split_ops[0]))
-			return -EINVAL;
-	}
-
-	for (s = 1; s < family->n_split_ops; s++) {
-		const struct genl_split_ops *a, *b;
-
-		a = &family->split_ops[s - 1];
-		b = &family->split_ops[s];
-
-		if (genl_split_op_check(b))
-			return -EINVAL;
-
-		/* Check sort order */
-		if (a->cmd < b->cmd)
-			continue;
-
-		if (a->internal_flags != b->internal_flags ||
-		    ((a->flags ^ b->flags) & ~(GENL_CMD_CAP_DO |
-					       GENL_CMD_CAP_DUMP))) {
-			WARN_ON(1);
-			return -EINVAL;
-		}
-
-		if ((a->flags & GENL_CMD_CAP_DO) &&
-		    (b->flags & GENL_CMD_CAP_DUMP))
-			continue;
-
-		WARN_ON(1);
-		return -EINVAL;
 	}
 
 	return 0;
@@ -764,7 +527,7 @@ static struct nlattr **
 genl_family_rcv_msg_attrs_parse(const struct genl_family *family,
 				struct nlmsghdr *nlh,
 				struct netlink_ext_ack *extack,
-				const struct genl_split_ops *ops,
+				const struct genl_ops *ops,
 				int hdrlen,
 				enum genl_validate_flags no_strict_flag)
 {
@@ -800,21 +563,22 @@ struct genl_start_context {
 	const struct genl_family *family;
 	struct nlmsghdr *nlh;
 	struct netlink_ext_ack *extack;
-	const struct genl_split_ops *ops;
+	const struct genl_ops *ops;
 	int hdrlen;
 };
 
 static int genl_start(struct netlink_callback *cb)
 {
 	struct genl_start_context *ctx = cb->data;
-	const struct genl_split_ops *ops;
+	const struct genl_ops *ops = ctx->ops;
 	struct genl_dumpit_info *info;
 	struct nlattr **attrs = NULL;
 	int rc = 0;
 
-	ops = ctx->ops;
-	if (!(ops->validate & GENL_DONT_VALIDATE_DUMP) &&
-	    ctx->nlh->nlmsg_len < nlmsg_msg_size(ctx->hdrlen))
+	if (ops->validate & GENL_DONT_VALIDATE_DUMP)
+		goto no_attrs;
+
+	if (ctx->nlh->nlmsg_len < nlmsg_msg_size(ctx->hdrlen))
 		return -EINVAL;
 
 	attrs = genl_family_rcv_msg_attrs_parse(ctx->family, ctx->nlh, ctx->extack,
@@ -823,6 +587,7 @@ static int genl_start(struct netlink_callback *cb)
 	if (IS_ERR(attrs))
 		return PTR_ERR(attrs);
 
+no_attrs:
 	info = genl_dumpit_info_alloc();
 	if (!info) {
 		genl_family_rcv_msg_attrs_free(attrs);
@@ -851,7 +616,7 @@ static int genl_start(struct netlink_callback *cb)
 
 static int genl_lock_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	const struct genl_split_ops *ops = &genl_dumpit_info(cb)->op;
+	const struct genl_ops *ops = &genl_dumpit_info(cb)->op;
 	int rc;
 
 	genl_lock();
@@ -863,7 +628,7 @@ static int genl_lock_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 static int genl_lock_done(struct netlink_callback *cb)
 {
 	const struct genl_dumpit_info *info = genl_dumpit_info(cb);
-	const struct genl_split_ops *ops = &info->op;
+	const struct genl_ops *ops = &info->op;
 	int rc = 0;
 
 	if (ops->done) {
@@ -879,7 +644,7 @@ static int genl_lock_done(struct netlink_callback *cb)
 static int genl_parallel_done(struct netlink_callback *cb)
 {
 	const struct genl_dumpit_info *info = genl_dumpit_info(cb);
-	const struct genl_split_ops *ops = &info->op;
+	const struct genl_ops *ops = &info->op;
 	int rc = 0;
 
 	if (ops->done)
@@ -893,11 +658,14 @@ static int genl_family_rcv_msg_dumpit(const struct genl_family *family,
 				      struct sk_buff *skb,
 				      struct nlmsghdr *nlh,
 				      struct netlink_ext_ack *extack,
-				      const struct genl_split_ops *ops,
+				      const struct genl_ops *ops,
 				      int hdrlen, struct net *net)
 {
 	struct genl_start_context ctx;
 	int err;
+
+	if (!ops->dumpit)
+		return -EOPNOTSUPP;
 
 	ctx.family = family;
 	ctx.nlh = nlh;
@@ -912,7 +680,6 @@ static int genl_family_rcv_msg_dumpit(const struct genl_family *family,
 			.start = genl_start,
 			.dump = genl_lock_dumpit,
 			.done = genl_lock_done,
-			.extack = extack,
 		};
 
 		genl_unlock();
@@ -925,7 +692,6 @@ static int genl_family_rcv_msg_dumpit(const struct genl_family *family,
 			.start = genl_start,
 			.dump = ops->dumpit,
 			.done = genl_parallel_done,
-			.extack = extack,
 		};
 
 		err = __netlink_dump_start(net->genl_sock, skb, nlh, &c);
@@ -938,12 +704,15 @@ static int genl_family_rcv_msg_doit(const struct genl_family *family,
 				    struct sk_buff *skb,
 				    struct nlmsghdr *nlh,
 				    struct netlink_ext_ack *extack,
-				    const struct genl_split_ops *ops,
+				    const struct genl_ops *ops,
 				    int hdrlen, struct net *net)
 {
 	struct nlattr **attrbuf;
 	struct genl_info info;
 	int err;
+
+	if (!ops->doit)
+		return -EOPNOTSUPP;
 
 	attrbuf = genl_family_rcv_msg_attrs_parse(family, nlh, extack,
 						  ops, hdrlen,
@@ -961,51 +730,21 @@ static int genl_family_rcv_msg_doit(const struct genl_family *family,
 	genl_info_net_set(&info, net);
 	memset(&info.user_ptr, 0, sizeof(info.user_ptr));
 
-	if (ops->pre_doit) {
-		err = ops->pre_doit(ops, skb, &info);
+	if (family->pre_doit) {
+		err = family->pre_doit(ops, skb, &info);
 		if (err)
 			goto out;
 	}
 
 	err = ops->doit(skb, &info);
 
-	if (ops->post_doit)
-		ops->post_doit(ops, skb, &info);
+	if (family->post_doit)
+		family->post_doit(ops, skb, &info);
 
 out:
 	genl_family_rcv_msg_attrs_free(attrbuf);
 
 	return err;
-}
-
-static int genl_header_check(const struct genl_family *family,
-			     struct nlmsghdr *nlh, struct genlmsghdr *hdr,
-			     struct netlink_ext_ack *extack)
-{
-	u16 flags;
-
-	/* Only for commands added after we started validating */
-	if (hdr->cmd < family->resv_start_op)
-		return 0;
-
-	if (hdr->reserved) {
-		NL_SET_ERR_MSG(extack, "genlmsghdr.reserved field is not 0");
-		return -EINVAL;
-	}
-
-	/* Old netlink flags have pretty loose semantics, allow only the flags
-	 * consumed by the core where we can enforce the meaning.
-	 */
-	flags = nlh->nlmsg_flags;
-	if ((flags & NLM_F_DUMP) == NLM_F_DUMP) /* DUMP is 2 bits */
-		flags &= ~NLM_F_DUMP;
-	if (flags & ~(NLM_F_REQUEST | NLM_F_ACK | NLM_F_ECHO)) {
-		NL_SET_ERR_MSG(extack,
-			       "ambiguous or reserved bits set in nlmsg_flags");
-		return -EINVAL;
-	}
-
-	return 0;
 }
 
 static int genl_family_rcv_msg(const struct genl_family *family,
@@ -1015,9 +754,8 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 {
 	struct net *net = sock_net(skb->sk);
 	struct genlmsghdr *hdr = nlmsg_data(nlh);
-	struct genl_split_ops op;
+	struct genl_ops op;
 	int hdrlen;
-	u8 flags;
 
 	/* this family doesn't exist in this netns */
 	if (!family->netnsok && !net_eq(net, &init_net))
@@ -1027,12 +765,7 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 	if (nlh->nlmsg_len < nlmsg_msg_size(hdrlen))
 		return -EINVAL;
 
-	if (genl_header_check(family, nlh, hdr, extack))
-		return -EINVAL;
-
-	flags = (nlh->nlmsg_flags & NLM_F_DUMP) == NLM_F_DUMP ?
-		GENL_CMD_CAP_DUMP : GENL_CMD_CAP_DO;
-	if (genl_get_cmd(hdr->cmd, flags, family, &op))
+	if (genl_get_cmd(hdr->cmd, family, &op))
 		return -EOPNOTSUPP;
 
 	if ((op.flags & GENL_ADMIN_PERM) &&
@@ -1043,7 +776,7 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	if (flags & GENL_CMD_CAP_DUMP)
+	if ((nlh->nlmsg_flags & NLM_F_DUMP) == NLM_F_DUMP)
 		return genl_family_rcv_msg_dumpit(family, skb, nlh, extack,
 						  &op, hdrlen, net);
 	else
@@ -1088,7 +821,6 @@ static struct genl_family genl_ctrl;
 static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 			  u32 flags, struct sk_buff *skb, u8 cmd)
 {
-	struct genl_op_iter i;
 	void *hdr;
 
 	hdr = genlmsg_put(skb, portid, seq, &genl_ctrl, flags, cmd);
@@ -1102,26 +834,33 @@ static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 	    nla_put_u32(skb, CTRL_ATTR_MAXATTR, family->maxattr))
 		goto nla_put_failure;
 
-	if (genl_op_iter_init(family, &i)) {
+	if (genl_get_cmd_cnt(family)) {
 		struct nlattr *nla_ops;
+		int i;
 
 		nla_ops = nla_nest_start_noflag(skb, CTRL_ATTR_OPS);
 		if (nla_ops == NULL)
 			goto nla_put_failure;
 
-		while (genl_op_iter_next(&i)) {
+		for (i = 0; i < genl_get_cmd_cnt(family); i++) {
 			struct nlattr *nest;
+			struct genl_ops op;
 			u32 op_flags;
 
-			op_flags = i.flags;
-			if (i.doit.policy || i.dumpit.policy)
+			genl_get_cmd_by_index(i, family, &op);
+			op_flags = op.flags;
+			if (op.dumpit)
+				op_flags |= GENL_CMD_CAP_DUMP;
+			if (op.doit)
+				op_flags |= GENL_CMD_CAP_DO;
+			if (op.policy)
 				op_flags |= GENL_CMD_CAP_HASPOL;
 
-			nest = nla_nest_start_noflag(skb, genl_op_iter_idx(&i));
+			nest = nla_nest_start_noflag(skb, i + 1);
 			if (nest == NULL)
 				goto nla_put_failure;
 
-			if (nla_put_u32(skb, CTRL_ATTR_OP_ID, i.cmd) ||
+			if (nla_put_u32(skb, CTRL_ATTR_OP_ID, op.cmd) ||
 			    nla_put_u32(skb, CTRL_ATTR_OP_FLAGS, op_flags))
 				goto nla_put_failure;
 
@@ -1374,10 +1113,10 @@ static int genl_ctrl_event(int event, const struct genl_family *family,
 struct ctrl_dump_policy_ctx {
 	struct netlink_policy_dump_state *state;
 	const struct genl_family *rt;
-	struct genl_op_iter *op_iter;
+	unsigned int opidx;
 	u32 op;
 	u16 fam_id;
-	u8 dump_map:1,
+	u8 policies:1,
 	   single_op:1;
 };
 
@@ -1394,8 +1133,8 @@ static int ctrl_dumppolicy_start(struct netlink_callback *cb)
 	struct ctrl_dump_policy_ctx *ctx = (void *)cb->ctx;
 	struct nlattr **tb = info->attrs;
 	const struct genl_family *rt;
-	struct genl_op_iter i;
-	int err;
+	struct genl_ops op;
+	int err, i;
 
 	BUILD_BUG_ON(sizeof(*ctx) > sizeof(cb->ctx));
 
@@ -1419,73 +1158,40 @@ static int ctrl_dumppolicy_start(struct netlink_callback *cb)
 	ctx->rt = rt;
 
 	if (tb[CTRL_ATTR_OP]) {
-		struct genl_split_ops doit, dump;
-
 		ctx->single_op = true;
 		ctx->op = nla_get_u32(tb[CTRL_ATTR_OP]);
 
-		err = genl_get_cmd_both(ctx->op, rt, &doit, &dump);
+		err = genl_get_cmd(ctx->op, rt, &op);
 		if (err) {
 			NL_SET_BAD_ATTR(cb->extack, tb[CTRL_ATTR_OP]);
 			return err;
 		}
 
-		if (doit.policy) {
-			err = netlink_policy_dump_add_policy(&ctx->state,
-							     doit.policy,
-							     doit.maxattr);
-			if (err)
-				goto err_free_state;
-		}
-		if (dump.policy) {
-			err = netlink_policy_dump_add_policy(&ctx->state,
-							     dump.policy,
-							     dump.maxattr);
-			if (err)
-				goto err_free_state;
-		}
-
-		if (!ctx->state)
+		if (!op.policy)
 			return -ENODATA;
 
-		ctx->dump_map = 1;
-		return 0;
+		return netlink_policy_dump_add_policy(&ctx->state, op.policy,
+						      op.maxattr);
 	}
 
-	ctx->op_iter = kmalloc(sizeof(*ctx->op_iter), GFP_KERNEL);
-	if (!ctx->op_iter)
-		return -ENOMEM;
+	for (i = 0; i < genl_get_cmd_cnt(rt); i++) {
+		genl_get_cmd_by_index(i, rt, &op);
 
-	genl_op_iter_init(rt, ctx->op_iter);
-	ctx->dump_map = genl_op_iter_next(ctx->op_iter);
-
-	for (genl_op_iter_init(rt, &i); genl_op_iter_next(&i); ) {
-		if (i.doit.policy) {
+		if (op.policy) {
 			err = netlink_policy_dump_add_policy(&ctx->state,
-							     i.doit.policy,
-							     i.doit.maxattr);
-			if (err)
-				goto err_free_state;
-		}
-		if (i.dumpit.policy) {
-			err = netlink_policy_dump_add_policy(&ctx->state,
-							     i.dumpit.policy,
-							     i.dumpit.maxattr);
+							     op.policy,
+							     op.maxattr);
 			if (err)
 				goto err_free_state;
 		}
 	}
 
-	if (!ctx->state) {
-		err = -ENODATA;
-		goto err_free_op_iter;
-	}
+	if (!ctx->state)
+		return -ENODATA;
 	return 0;
 
 err_free_state:
 	netlink_policy_dump_free(ctx->state);
-err_free_op_iter:
-	kfree(ctx->op_iter);
 	return err;
 }
 
@@ -1509,8 +1215,7 @@ static void *ctrl_dumppolicy_prep(struct sk_buff *skb,
 
 static int ctrl_dumppolicy_put_op(struct sk_buff *skb,
 				  struct netlink_callback *cb,
-				  struct genl_split_ops *doit,
-				  struct genl_split_ops *dumpit)
+			          struct genl_ops *op)
 {
 	struct ctrl_dump_policy_ctx *ctx = (void *)cb->ctx;
 	struct nlattr *nest_pol, *nest_op;
@@ -1518,7 +1223,10 @@ static int ctrl_dumppolicy_put_op(struct sk_buff *skb,
 	int idx;
 
 	/* skip if we have nothing to show */
-	if (!doit->policy && !dumpit->policy)
+	if (!op->policy)
+		return 0;
+	if (!op->doit &&
+	    (!op->dumpit || op->validate & GENL_DONT_VALIDATE_DUMP))
 		return 0;
 
 	hdr = ctrl_dumppolicy_prep(skb, cb);
@@ -1529,26 +1237,21 @@ static int ctrl_dumppolicy_put_op(struct sk_buff *skb,
 	if (!nest_pol)
 		goto err;
 
-	nest_op = nla_nest_start(skb, doit->cmd);
+	nest_op = nla_nest_start(skb, op->cmd);
 	if (!nest_op)
 		goto err;
 
-	if (doit->policy) {
-		idx = netlink_policy_dump_get_policy_idx(ctx->state,
-							 doit->policy,
-							 doit->maxattr);
+	/* for now both do/dump are always the same */
+	idx = netlink_policy_dump_get_policy_idx(ctx->state,
+						 op->policy,
+						 op->maxattr);
 
-		if (nla_put_u32(skb, CTRL_ATTR_POLICY_DO, idx))
-			goto err;
-	}
-	if (dumpit->policy) {
-		idx = netlink_policy_dump_get_policy_idx(ctx->state,
-							 dumpit->policy,
-							 dumpit->maxattr);
+	if (op->doit && nla_put_u32(skb, CTRL_ATTR_POLICY_DO, idx))
+		goto err;
 
-		if (nla_put_u32(skb, CTRL_ATTR_POLICY_DUMP, idx))
-			goto err;
-	}
+	if (op->dumpit && !(op->validate & GENL_DONT_VALIDATE_DUMP) &&
+	    nla_put_u32(skb, CTRL_ATTR_POLICY_DUMP, idx))
+		goto err;
 
 	nla_nest_end(skb, nest_op);
 	nla_nest_end(skb, nest_pol);
@@ -1565,29 +1268,31 @@ static int ctrl_dumppolicy(struct sk_buff *skb, struct netlink_callback *cb)
 	struct ctrl_dump_policy_ctx *ctx = (void *)cb->ctx;
 	void *hdr;
 
-	if (ctx->dump_map) {
-		if (ctx->single_op) {
-			struct genl_split_ops doit, dumpit;
+	if (!ctx->policies) {
+		while (ctx->opidx < genl_get_cmd_cnt(ctx->rt)) {
+			struct genl_ops op;
 
-			if (WARN_ON(genl_get_cmd_both(ctx->op, ctx->rt,
-						      &doit, &dumpit)))
-				return -ENOENT;
+			if (ctx->single_op) {
+				int err;
 
-			if (ctrl_dumppolicy_put_op(skb, cb, &doit, &dumpit))
+				err = genl_get_cmd(ctx->op, ctx->rt, &op);
+				if (WARN_ON(err))
+					return skb->len;
+
+				/* break out of the loop after this one */
+				ctx->opidx = genl_get_cmd_cnt(ctx->rt);
+			} else {
+				genl_get_cmd_by_index(ctx->opidx, ctx->rt, &op);
+			}
+
+			if (ctrl_dumppolicy_put_op(skb, cb, &op))
 				return skb->len;
 
-			/* done with the per-op policy index list */
-			ctx->dump_map = 0;
+			ctx->opidx++;
 		}
 
-		while (ctx->dump_map) {
-			if (ctrl_dumppolicy_put_op(skb, cb,
-						   &ctx->op_iter->doit,
-						   &ctx->op_iter->dumpit))
-				return skb->len;
-
-			ctx->dump_map = genl_op_iter_next(ctx->op_iter);
-		}
+		/* completed with the per-op policy index list */
+		ctx->policies = true;
 	}
 
 	while (netlink_policy_dump_loop(ctx->state)) {
@@ -1620,27 +1325,18 @@ static int ctrl_dumppolicy_done(struct netlink_callback *cb)
 {
 	struct ctrl_dump_policy_ctx *ctx = (void *)cb->ctx;
 
-	kfree(ctx->op_iter);
 	netlink_policy_dump_free(ctx->state);
 	return 0;
 }
 
-static const struct genl_split_ops genl_ctrl_ops[] = {
+static const struct genl_ops genl_ctrl_ops[] = {
 	{
 		.cmd		= CTRL_CMD_GETFAMILY,
-		.validate	= GENL_DONT_VALIDATE_STRICT,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.policy		= ctrl_policy_family,
 		.maxattr	= ARRAY_SIZE(ctrl_policy_family) - 1,
 		.doit		= ctrl_getfamily,
-		.flags		= GENL_CMD_CAP_DO,
-	},
-	{
-		.cmd		= CTRL_CMD_GETFAMILY,
-		.validate	= GENL_DONT_VALIDATE_DUMP,
-		.policy		= ctrl_policy_family,
-		.maxattr	= ARRAY_SIZE(ctrl_policy_family) - 1,
 		.dumpit		= ctrl_dumpfamily,
-		.flags		= GENL_CMD_CAP_DUMP,
 	},
 	{
 		.cmd		= CTRL_CMD_GETPOLICY,
@@ -1649,7 +1345,6 @@ static const struct genl_split_ops genl_ctrl_ops[] = {
 		.start		= ctrl_dumppolicy_start,
 		.dumpit		= ctrl_dumppolicy,
 		.done		= ctrl_dumppolicy_done,
-		.flags		= GENL_CMD_CAP_DUMP,
 	},
 };
 
@@ -1659,9 +1354,8 @@ static const struct genl_multicast_group genl_ctrl_groups[] = {
 
 static struct genl_family genl_ctrl __ro_after_init = {
 	.module = THIS_MODULE,
-	.split_ops = genl_ctrl_ops,
-	.n_split_ops = ARRAY_SIZE(genl_ctrl_ops),
-	.resv_start_op = CTRL_CMD_GETPOLICY + 1,
+	.ops = genl_ctrl_ops,
+	.n_ops = ARRAY_SIZE(genl_ctrl_ops),
 	.mcgrps = genl_ctrl_groups,
 	.n_mcgrps = ARRAY_SIZE(genl_ctrl_groups),
 	.id = GENL_ID_CTRL,
@@ -1670,43 +1364,11 @@ static struct genl_family genl_ctrl __ro_after_init = {
 	.netnsok = true,
 };
 
-static int genl_bind(struct net *net, int group)
-{
-	const struct genl_family *family;
-	unsigned int id;
-	int ret = 0;
-
-	down_read(&cb_lock);
-
-	idr_for_each_entry(&genl_fam_idr, family, id) {
-		const struct genl_multicast_group *grp;
-		int i;
-
-		if (family->n_mcgrps == 0)
-			continue;
-
-		i = group - family->mcgrp_offset;
-		if (i < 0 || i >= family->n_mcgrps)
-			continue;
-
-		grp = &family->mcgrps[i];
-		if ((grp->flags & GENL_UNS_ADMIN_PERM) &&
-		    !ns_capable(net->user_ns, CAP_NET_ADMIN))
-			ret = -EPERM;
-
-		break;
-	}
-
-	up_read(&cb_lock);
-	return ret;
-}
-
 static int __net_init genl_pernet_init(struct net *net)
 {
 	struct netlink_kernel_cfg cfg = {
 		.input		= genl_rcv,
 		.flags		= NL_CFG_F_NONROOT_RECV,
-		.bind		= genl_bind,
 	};
 
 	/* we'll bump the group number right afterwards */
@@ -1795,7 +1457,6 @@ int genlmsg_multicast_allns(const struct genl_family *family,
 {
 	if (WARN_ON_ONCE(group >= family->n_mcgrps))
 		return -EINVAL;
-
 	group = family->mcgrp_offset + group;
 	return genlmsg_mcast(skb, portid, group, flags);
 }
@@ -1806,12 +1467,14 @@ void genl_notify(const struct genl_family *family, struct sk_buff *skb,
 {
 	struct net *net = genl_info_net(info);
 	struct sock *sk = net->genl_sock;
+	int report = 0;
+
+	if (info->nlhdr)
+		report = nlmsg_report(info->nlhdr);
 
 	if (WARN_ON_ONCE(group >= family->n_mcgrps))
 		return;
-
 	group = family->mcgrp_offset + group;
-	nlmsg_notify(sk, skb, info->snd_portid, group,
-		     nlmsg_report(info->nlhdr), flags);
+	nlmsg_notify(sk, skb, info->snd_portid, group, report, flags);
 }
 EXPORT_SYMBOL(genl_notify);

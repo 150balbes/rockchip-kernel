@@ -21,46 +21,10 @@ io_pgtable_init_table[IO_PGTABLE_NUM_FMTS] = {
 	[ARM_64_LPAE_S2] = &io_pgtable_arm_64_lpae_s2_init_fns,
 	[ARM_MALI_LPAE] = &io_pgtable_arm_mali_lpae_init_fns,
 #endif
-#ifdef CONFIG_IOMMU_IO_PGTABLE_DART
-	[APPLE_DART] = &io_pgtable_apple_dart_init_fns,
-	[APPLE_DART2] = &io_pgtable_apple_dart_init_fns,
-#endif
 #ifdef CONFIG_IOMMU_IO_PGTABLE_ARMV7S
 	[ARM_V7S] = &io_pgtable_arm_v7s_init_fns,
 #endif
-#ifdef CONFIG_AMD_IOMMU
-	[AMD_IOMMU_V1] = &io_pgtable_amd_iommu_v1_init_fns,
-	[AMD_IOMMU_V2] = &io_pgtable_amd_iommu_v2_init_fns,
-#endif
 };
-
-static int check_custom_allocator(enum io_pgtable_fmt fmt,
-				  struct io_pgtable_cfg *cfg)
-{
-	/* When passing a custom allocator, both the alloc and free
-	 * functions should be provided.
-	 */
-	if ((cfg->alloc != NULL) != (cfg->free != NULL))
-		return -EINVAL;
-
-	/* No custom allocator, no need to check the format. */
-	if (!cfg->alloc)
-		return 0;
-
-	switch (fmt) {
-	case ARM_32_LPAE_S1:
-	case ARM_32_LPAE_S2:
-	case ARM_64_LPAE_S1:
-	case ARM_64_LPAE_S2:
-	case ARM_MALI_LPAE:
-		return 0;
-
-	default:
-		break;
-	}
-
-	return -EINVAL;
-}
 
 struct io_pgtable_ops *alloc_io_pgtable_ops(enum io_pgtable_fmt fmt,
 					    struct io_pgtable_cfg *cfg,
@@ -70,9 +34,6 @@ struct io_pgtable_ops *alloc_io_pgtable_ops(enum io_pgtable_fmt fmt,
 	const struct io_pgtable_init_fns *fns;
 
 	if (fmt >= IO_PGTABLE_NUM_FMTS)
-		return NULL;
-
-	if (check_custom_allocator(fmt, cfg))
 		return NULL;
 
 	fns = io_pgtable_init_table[fmt];

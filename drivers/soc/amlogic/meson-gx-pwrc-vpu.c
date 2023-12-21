@@ -273,7 +273,6 @@ static int meson_gx_pwrc_vpu_probe(struct platform_device *pdev)
 	const struct meson_gx_pwrc_vpu *vpu_pd_match;
 	struct regmap *regmap_ao, *regmap_hhi;
 	struct meson_gx_pwrc_vpu *vpu_pd;
-	struct device_node *parent_np;
 	struct reset_control *rstc;
 	struct clk *vpu_clk;
 	struct clk *vapb_clk;
@@ -292,9 +291,7 @@ static int meson_gx_pwrc_vpu_probe(struct platform_device *pdev)
 
 	memcpy(vpu_pd, vpu_pd_match, sizeof(*vpu_pd));
 
-	parent_np = of_get_parent(pdev->dev.of_node);
-	regmap_ao = syscon_node_to_regmap(parent_np);
-	of_node_put(parent_np);
+	regmap_ao = syscon_node_to_regmap(of_get_parent(pdev->dev.of_node));
 	if (IS_ERR(regmap_ao)) {
 		dev_err(&pdev->dev, "failed to get regmap\n");
 		return PTR_ERR(regmap_ao);
@@ -307,10 +304,12 @@ static int meson_gx_pwrc_vpu_probe(struct platform_device *pdev)
 		return PTR_ERR(regmap_hhi);
 	}
 
-	rstc = devm_reset_control_array_get_exclusive(&pdev->dev);
-	if (IS_ERR(rstc))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rstc),
-				     "failed to get reset lines\n");
+	rstc = devm_reset_control_array_get(&pdev->dev, false, false);
+	if (IS_ERR(rstc)) {
+		if (PTR_ERR(rstc) != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "failed to get reset lines\n");
+		return PTR_ERR(rstc);
+	}
 
 	vpu_clk = devm_clk_get(&pdev->dev, "vpu");
 	if (IS_ERR(vpu_clk)) {

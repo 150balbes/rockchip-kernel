@@ -226,7 +226,6 @@ int tm_signal_pagefault(void)
 	stack_t ss;
 
 	SKIP_IF(!have_htm());
-	SKIP_IF(htm_is_synthetic());
 	SKIP_IF(!have_userfaultfd());
 
 	setup_uf_mem();

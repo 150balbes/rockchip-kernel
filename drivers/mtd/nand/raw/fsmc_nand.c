@@ -26,8 +26,8 @@
 #include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand-ecc-sw-hamming.h>
 #include <linux/mtd/rawnand.h>
+#include <linux/mtd/nand_ecc.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/mtd/partitions.h>
@@ -450,17 +450,6 @@ static int fsmc_read_hwecc_ecc1(struct nand_chip *chip, const u8 *data,
 	return 0;
 }
 
-static int fsmc_correct_ecc1(struct nand_chip *chip,
-			     unsigned char *buf,
-			     unsigned char *read_ecc,
-			     unsigned char *calc_ecc)
-{
-	bool sm_order = chip->ecc.options & NAND_ECC_SOFT_HAMMING_SM_ORDER;
-
-	return ecc_sw_hamming_correct(buf, read_ecc, calc_ecc,
-				      chip->ecc.size, sm_order);
-}
-
 /* Count the number of 0's in buff upto a max of max_bits */
 static int count_written_bits(u8 *buff, int size, int max_bits)
 {
@@ -880,7 +869,7 @@ static int fsmc_nand_probe_config_dt(struct platform_device *pdev,
 		}
 	}
 
-	if (of_property_read_bool(np, "nand-skip-bbtscan"))
+	if (of_get_property(np, "nand-skip-bbtscan", NULL))
 		nand->options |= NAND_SKIP_BBTSCAN;
 
 	host->dev_timings = devm_kzalloc(&pdev->dev,
@@ -949,7 +938,7 @@ static int fsmc_nand_attach_chip(struct nand_chip *nand)
 	case NAND_ECC_ENGINE_TYPE_ON_HOST:
 		dev_info(host->dev, "Using 1-bit HW ECC scheme\n");
 		nand->ecc.calculate = fsmc_read_hwecc_ecc1;
-		nand->ecc.correct = fsmc_correct_ecc1;
+		nand->ecc.correct = nand_correct_data;
 		nand->ecc.hwctl = fsmc_enable_hwecc;
 		nand->ecc.bytes = 3;
 		nand->ecc.strength = 1;
@@ -962,7 +951,6 @@ static int fsmc_nand_attach_chip(struct nand_chip *nand)
 				 "Using 4-bit SW BCH ECC scheme\n");
 			break;
 		}
-		break;
 
 	case NAND_ECC_ENGINE_TYPE_ON_DIE:
 		break;
@@ -974,7 +962,7 @@ static int fsmc_nand_attach_chip(struct nand_chip *nand)
 
 	/*
 	 * Don't set layout for BCH4 SW ECC. This will be
-	 * generated later during BCH initialization.
+	 * generated later in nand_bch_init() later.
 	 */
 	if (nand->ecc.engine_type == NAND_ECC_ENGINE_TYPE_ON_HOST) {
 		switch (mtd->oobsize) {
@@ -1165,7 +1153,7 @@ disable_clk:
 /*
  * Clean up routine
  */
-static void fsmc_nand_remove(struct platform_device *pdev)
+static int fsmc_nand_remove(struct platform_device *pdev)
 {
 	struct fsmc_nand_data *host = platform_get_drvdata(pdev);
 
@@ -1184,6 +1172,8 @@ static void fsmc_nand_remove(struct platform_device *pdev)
 		}
 		clk_disable_unprepare(host->clk);
 	}
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1222,7 +1212,7 @@ static const struct of_device_id fsmc_nand_id_table[] = {
 MODULE_DEVICE_TABLE(of, fsmc_nand_id_table);
 
 static struct platform_driver fsmc_nand_driver = {
-	.remove_new = fsmc_nand_remove,
+	.remove = fsmc_nand_remove,
 	.driver = {
 		.name = "fsmc-nand",
 		.of_match_table = fsmc_nand_id_table,

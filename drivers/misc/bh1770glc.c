@@ -1162,7 +1162,8 @@ static const struct attribute_group bh1770_attribute_group = {
 	.attrs = sysfs_attrs
 };
 
-static int bh1770_probe(struct i2c_client *client)
+static int bh1770_probe(struct i2c_client *client,
+				const struct i2c_device_id *id)
 {
 	struct bh1770_chip *chip;
 	int err;
@@ -1279,7 +1280,7 @@ fail0:
 	return err;
 }
 
-static void bh1770_remove(struct i2c_client *client)
+static int bh1770_remove(struct i2c_client *client)
 {
 	struct bh1770_chip *chip = i2c_get_clientdata(client);
 
@@ -1298,6 +1299,8 @@ static void bh1770_remove(struct i2c_client *client)
 
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1374,11 +1377,11 @@ static const struct dev_pm_ops bh1770_pm_ops = {
 };
 
 static struct i2c_driver bh1770_driver = {
-	.driver	  = {
+	.driver	 = {
 		.name	= "bh1770glc",
 		.pm	= &bh1770_pm_ops,
 	},
-	.probe    = bh1770_probe,
+	.probe	  = bh1770_probe,
 	.remove	  = bh1770_remove,
 	.id_table = bh1770_id,
 };

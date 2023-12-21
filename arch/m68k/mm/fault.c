@@ -48,7 +48,7 @@ int send_fault_sig(struct pt_regs *regs)
 			pr_alert("Unable to handle kernel access");
 		pr_cont(" at virtual address %p\n", addr);
 		die_if_kernel("Oops", regs, 0 /*error_code*/);
-		make_task_dead(SIGKILL);
+		do_exit(SIGKILL);
 	}
 
 	return 1;
@@ -93,6 +93,8 @@ retry:
 	vma = find_vma(mm, address);
 	if (!vma)
 		goto map_err;
+	if (vma->vm_flags & VM_IO)
+		goto acc_err;
 	if (vma->vm_start <= address)
 		goto good_area;
 	if (!(vma->vm_flags & VM_GROWSDOWN))
@@ -105,9 +107,8 @@ retry:
 		if (address + 256 < rdusp())
 			goto map_err;
 	}
-	vma = expand_stack(mm, address);
-	if (!vma)
-		goto map_err_nosemaphore;
+	if (expand_stack(vma, address))
+		goto map_err;
 
 /*
  * Ok, we have a good vm_area for this memory access, so
@@ -139,14 +140,7 @@ good_area:
 	fault = handle_mm_fault(vma, address, flags, regs);
 	pr_debug("handle_mm_fault returns %x\n", fault);
 
-	if (fault_signal_pending(fault, regs)) {
-		if (!user_mode(regs))
-			goto no_context;
-		return 0;
-	}
-
-	/* The fault is fully completed (including releasing mmap lock) */
-	if (fault & VM_FAULT_COMPLETED)
+	if (fault_signal_pending(fault, regs))
 		return 0;
 
 	if (unlikely(fault & VM_FAULT_ERROR)) {
@@ -159,16 +153,18 @@ good_area:
 		BUG();
 	}
 
-	if (fault & VM_FAULT_RETRY) {
-		flags |= FAULT_FLAG_TRIED;
+	if (flags & FAULT_FLAG_ALLOW_RETRY) {
+		if (fault & VM_FAULT_RETRY) {
+			flags |= FAULT_FLAG_TRIED;
 
-		/*
-		 * No need to mmap_read_unlock(mm) as we would
-		 * have already released it in __lock_page_or_retry
-		 * in mm/filemap.c.
-		 */
+			/*
+			 * No need to mmap_read_unlock(mm) as we would
+			 * have already released it in __lock_page_or_retry
+			 * in mm/filemap.c.
+			 */
 
-		goto retry;
+			goto retry;
+		}
 	}
 
 	mmap_read_unlock(mm);
@@ -197,12 +193,10 @@ bus_err:
 	goto send_sig;
 
 map_err:
-	mmap_read_unlock(mm);
-map_err_nosemaphore:
 	current->thread.signo = SIGSEGV;
 	current->thread.code = SEGV_MAPERR;
 	current->thread.faddr = address;
-	return send_fault_sig(regs);
+	goto send_sig;
 
 acc_err:
 	current->thread.signo = SIGSEGV;

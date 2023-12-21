@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
-/*
+/* src/prism2/driver/prism2mib.c
  *
  * Management request for mibset/mibget
  *
@@ -7,6 +7,27 @@
  * --------------------------------------------------------------------
  *
  * linux-wlan
+ *
+ *   The contents of this file are subject to the Mozilla Public
+ *   License Version 1.1 (the "License"); you may not use this file
+ *   except in compliance with the License. You may obtain a copy of
+ *   the License at http://www.mozilla.org/MPL/
+ *
+ *   Software distributed under the License is distributed on an "AS
+ *   IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+ *   implied. See the License for the specific language governing
+ *   rights and limitations under the License.
+ *
+ *   Alternatively, the contents of this file may be used under the
+ *   terms of the GNU Public License version 2 (the "GPL"), in which
+ *   case the provisions of the GPL are applicable instead of the
+ *   above.  If you wish to allow the use of your version of this file
+ *   only under the terms of the GPL and not to allow others to use
+ *   your version of this file under the MPL, indicate your decision
+ *   by deleting the provisions above and replace them with the notice
+ *   and other provisions required by the GPL.  If you do not delete
+ *   the provisions above, a recipient may use your version of this
+ *   file under either the MPL or the GPL.
  *
  * --------------------------------------------------------------------
  *
@@ -647,10 +668,6 @@ static int prism2mib_priv(struct mibrec *mib,
 
 	switch (mib->did) {
 	case DIDMIB_LNX_CONFIGTABLE_RSNAIE: {
-		/*
-		 * This can never work: wpa is on the stack
-		 * and has no bytes allocated in wpa.data.
-		 */
 		struct hfa384x_wpa_data wpa;
 
 		if (isget) {
@@ -658,9 +675,11 @@ static int prism2mib_priv(struct mibrec *mib,
 					       HFA384x_RID_CNFWPADATA,
 					       (u8 *)&wpa,
 					       sizeof(wpa));
-			pstr->len = 0;
+			pstr->len = le16_to_cpu(wpa.datalen);
+			memcpy(pstr->data, wpa.data, pstr->len);
 		} else {
-			wpa.datalen = 0;
+			wpa.datalen = cpu_to_le16(pstr->len);
+			memcpy(wpa.data, pstr->data, pstr->len);
 
 			hfa384x_drvr_setconfig(hw,
 					       HFA384x_RID_CNFWPADATA,

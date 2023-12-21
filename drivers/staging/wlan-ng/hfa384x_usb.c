@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
-/*
+/* src/prism2/driver/hfa384x_usb.c
  *
  * Functions that talk to the USB variant of the Intersil hfa384x MAC
  *
@@ -7,6 +7,27 @@
  * --------------------------------------------------------------------
  *
  * linux-wlan
+ *
+ *   The contents of this file are subject to the Mozilla Public
+ *   License Version 1.1 (the "License"); you may not use this file
+ *   except in compliance with the License. You may obtain a copy of
+ *   the License at http://www.mozilla.org/MPL/
+ *
+ *   Software distributed under the License is distributed on an "AS
+ *   IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+ *   implied. See the License for the specific language governing
+ *   rights and limitations under the License.
+ *
+ *   Alternatively, the contents of this file may be used under the
+ *   terms of the GNU Public License version 2 (the "GPL"), in which
+ *   case the provisions of the GPL are applicable instead of the
+ *   above.  If you wish to allow the use of your version of this file
+ *   only under the terms of the GPL and not to allow others to use
+ *   your version of this file under the MPL, indicate your decision
+ *   by deleting the provisions above and replace them with the notice
+ *   and other provisions required by the GPL.  If you do not delete
+ *   the provisions above, a recipient may use your version of this
+ *   file under either the MPL or the GPL.
  *
  * --------------------------------------------------------------------
  *
@@ -170,9 +191,9 @@ static void hfa384x_usbctlx_resptimerfn(struct timer_list *t);
 
 static void hfa384x_usb_throttlefn(struct timer_list *t);
 
-static void hfa384x_usbctlx_completion_task(struct work_struct *work);
+static void hfa384x_usbctlx_completion_task(struct tasklet_struct *t);
 
-static void hfa384x_usbctlx_reaper_task(struct work_struct *work);
+static void hfa384x_usbctlx_reaper_task(struct tasklet_struct *t);
 
 static int hfa384x_usbctlx_submit(struct hfa384x *hw,
 				  struct hfa384x_usbctlx *ctlx);
@@ -518,8 +539,8 @@ void hfa384x_create(struct hfa384x *hw, struct usb_device *usb)
 	/* Initialize the authentication queue */
 	skb_queue_head_init(&hw->authq);
 
-	INIT_WORK(&hw->reaper_bh, hfa384x_usbctlx_reaper_task);
-	INIT_WORK(&hw->completion_bh, hfa384x_usbctlx_completion_task);
+	tasklet_setup(&hw->reaper_bh, hfa384x_usbctlx_reaper_task);
+	tasklet_setup(&hw->completion_bh, hfa384x_usbctlx_completion_task);
 	INIT_WORK(&hw->link_bh, prism2sta_processing_defer);
 	INIT_WORK(&hw->usb_work, hfa384x_usb_defer);
 
@@ -1095,8 +1116,8 @@ cleanup:
 		if (ctlx == get_active_ctlx(hw)) {
 			spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 
-			del_timer_sync(&hw->reqtimer);
-			del_timer_sync(&hw->resptimer);
+			del_singleshot_timer_sync(&hw->reqtimer);
+			del_singleshot_timer_sync(&hw->resptimer);
 			hw->req_timer_done = 1;
 			hw->resp_timer_done = 1;
 			usb_kill_urb(&hw->ctlx_urb);
@@ -2451,7 +2472,7 @@ int hfa384x_drvr_stop(struct hfa384x *hw)
  *----------------------------------------------------------------
  */
 int hfa384x_drvr_txframe(struct hfa384x *hw, struct sk_buff *skb,
-			 struct p80211_hdr *p80211_hdr,
+			 union p80211_hdr *p80211_hdr,
 			 struct p80211_metawep *p80211_wep)
 {
 	int usbpktlen = sizeof(struct hfa384x_tx_frame);
@@ -2495,7 +2516,8 @@ int hfa384x_drvr_txframe(struct hfa384x *hw, struct sk_buff *skb,
 	cpu_to_le16s(&hw->txbuff.txfrm.desc.tx_control);
 
 	/* copy the header over to the txdesc */
-	hw->txbuff.txfrm.desc.hdr = *p80211_hdr;
+	memcpy(&hw->txbuff.txfrm.desc.frame_control, p80211_hdr,
+	       sizeof(union p80211_hdr));
 
 	/* if we're using host WEP, increase size by IV+ICV */
 	if (p80211_wep->data) {
@@ -2564,20 +2586,20 @@ void hfa384x_tx_timeout(struct wlandevice *wlandev)
 /*----------------------------------------------------------------
  * hfa384x_usbctlx_reaper_task
  *
- * Deferred work callback to delete dead CTLX objects
+ * Tasklet to delete dead CTLX objects
  *
  * Arguments:
- *	work	contains ptr to a struct hfa384x
+ *	data	ptr to a struct hfa384x
  *
  * Returns:
  *
  * Call context:
- *      Task
+ *	Interrupt
  *----------------------------------------------------------------
  */
-static void hfa384x_usbctlx_reaper_task(struct work_struct *work)
+static void hfa384x_usbctlx_reaper_task(struct tasklet_struct *t)
 {
-	struct hfa384x *hw = container_of(work, struct hfa384x, reaper_bh);
+	struct hfa384x *hw = from_tasklet(hw, t, reaper_bh);
 	struct hfa384x_usbctlx *ctlx, *temp;
 	unsigned long flags;
 
@@ -2597,21 +2619,21 @@ static void hfa384x_usbctlx_reaper_task(struct work_struct *work)
 /*----------------------------------------------------------------
  * hfa384x_usbctlx_completion_task
  *
- * Deferred work callback to call completion handlers for returned CTLXs
+ * Tasklet to call completion handlers for returned CTLXs
  *
  * Arguments:
- *	work	contains ptr to a struct hfa384x
+ *	data	ptr to struct hfa384x
  *
  * Returns:
  *	Nothing
  *
  * Call context:
- *      Task
+ *	Interrupt
  *----------------------------------------------------------------
  */
-static void hfa384x_usbctlx_completion_task(struct work_struct *work)
+static void hfa384x_usbctlx_completion_task(struct tasklet_struct *t)
 {
-	struct hfa384x *hw = container_of(work, struct hfa384x, completion_bh);
+	struct hfa384x *hw = from_tasklet(hw, t, completion_bh);
 	struct hfa384x_usbctlx *ctlx, *temp;
 	unsigned long flags;
 
@@ -2665,7 +2687,7 @@ static void hfa384x_usbctlx_completion_task(struct work_struct *work)
 	spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 
 	if (reap)
-		schedule_work(&hw->reaper_bh);
+		tasklet_schedule(&hw->reaper_bh);
 }
 
 /*----------------------------------------------------------------
@@ -2722,7 +2744,7 @@ static int unlocked_usbctlx_cancel_async(struct hfa384x *hw,
  * aren't active and the timers should have been stopped.
  *
  * The CTLX is migrated to the "completing" queue, and the completing
- * work is scheduled.
+ * tasklet is scheduled.
  *
  * Arguments:
  *	hw		ptr to a struct hfa384x structure
@@ -2745,7 +2767,7 @@ static void unlocked_usbctlx_complete(struct hfa384x *hw,
 	 * queue.
 	 */
 	list_move_tail(&ctlx->list, &hw->ctlxq.completing);
-	schedule_work(&hw->completion_bh);
+	tasklet_schedule(&hw->completion_bh);
 
 	switch (ctlx->state) {
 	case CTLX_COMPLETE:
@@ -3236,7 +3258,7 @@ static void hfa384x_usbin_rx(struct wlandevice *wlandev, struct sk_buff *skb)
 
 	switch (status) {
 	case 0:
-		fc = le16_to_cpu(usbin->rxfrm.desc.hdr.frame_control);
+		fc = le16_to_cpu(usbin->rxfrm.desc.frame_control);
 
 		/* If exclude and we receive an unencrypted, drop it */
 		if ((wlandev->hostwep & HOSTWEP_EXCLUDEUNENCRYPTED) &&
@@ -3256,7 +3278,7 @@ static void hfa384x_usbin_rx(struct wlandevice *wlandev, struct sk_buff *skb)
 		 * with an "overlapping" copy
 		 */
 		memmove(skb_push(skb, hdrlen),
-			&usbin->rxfrm.desc.hdr, hdrlen);
+			&usbin->rxfrm.desc.frame_control, hdrlen);
 
 		skb->dev = wlandev->netdev;
 
@@ -3334,7 +3356,7 @@ static void hfa384x_int_rxmonitor(struct wlandevice *wlandev,
 
 	/* Remember the status, time, and data_len fields are in host order */
 	/* Figure out how big the frame is */
-	fc = le16_to_cpu(rxdesc->hdr.frame_control);
+	fc = le16_to_cpu(rxdesc->frame_control);
 	hdrlen = p80211_headerlen(fc);
 	datalen = le16_to_cpu(rxdesc->data_len);
 
@@ -3382,7 +3404,7 @@ static void hfa384x_int_rxmonitor(struct wlandevice *wlandev,
 	/* Copy the 802.11 header to the skb
 	 * (ctl frames may be less than a full header)
 	 */
-	skb_put_data(skb, &rxdesc->hdr.frame_control, hdrlen);
+	skb_put_data(skb, &rxdesc->frame_control, hdrlen);
 
 	/* If any, copy the data from the card to the skb */
 	if (datalen > 0) {

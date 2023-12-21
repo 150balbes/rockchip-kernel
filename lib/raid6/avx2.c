@@ -132,7 +132,7 @@ const struct raid6_calls raid6_avx2x1 = {
 	raid6_avx21_xor_syndrome,
 	raid6_have_avx2,
 	"avx2x1",
-	.priority = 2		/* Prefer AVX2 over priority 1 (SSE2 and others) */
+	1			/* Has cache hints */
 };
 
 /*
@@ -262,7 +262,7 @@ const struct raid6_calls raid6_avx2x2 = {
 	raid6_avx22_xor_syndrome,
 	raid6_have_avx2,
 	"avx2x2",
-	.priority = 2		/* Prefer AVX2 over priority 1 (SSE2 and others) */
+	1			/* Has cache hints */
 };
 
 #ifdef CONFIG_X86_64
@@ -465,6 +465,6 @@ const struct raid6_calls raid6_avx2x4 = {
 	raid6_avx24_xor_syndrome,
 	raid6_have_avx2,
 	"avx2x4",
-	.priority = 2		/* Prefer AVX2 over priority 1 (SSE2 and others) */
+	1			/* Has cache hints */
 };
-#endif /* CONFIG_X86_64 */
+#endif

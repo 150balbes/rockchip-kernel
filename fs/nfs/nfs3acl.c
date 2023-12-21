@@ -21,8 +21,9 @@ static void nfs3_prepare_get_acl(struct posix_acl **p)
 {
 	struct posix_acl *sentinel = uncached_acl_sentinel(current);
 
-	/* If the ACL isn't being read yet, set our sentinel. */
-	cmpxchg(p, ACL_NOT_CACHED, sentinel);
+	if (cmpxchg(p, ACL_NOT_CACHED, sentinel) != ACL_NOT_CACHED) {
+		/* Not the first reader or sentinel already in place. */
+	}
 }
 
 static void nfs3_complete_get_acl(struct posix_acl **p, struct posix_acl *acl)
@@ -43,7 +44,7 @@ static void nfs3_abort_get_acl(struct posix_acl **p)
 	cmpxchg(p, sentinel, ACL_NOT_CACHED);
 }
 
-struct posix_acl *nfs3_get_acl(struct inode *inode, int type, bool rcu)
+struct posix_acl *nfs3_get_acl(struct inode *inode, int type)
 {
 	struct nfs_server *server = NFS_SERVER(inode);
 	struct page *pages[NFSACL_MAXPAGES] = { };
@@ -61,13 +62,10 @@ struct posix_acl *nfs3_get_acl(struct inode *inode, int type, bool rcu)
 	};
 	int status, count;
 
-	if (rcu)
-		return ERR_PTR(-ECHILD);
-
 	if (!nfs_server_capable(inode, NFS_CAP_ACLS))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	status = nfs_revalidate_inode(inode, NFS_INO_INVALID_CHANGE);
+	status = nfs_revalidate_inode(server, inode);
 	if (status < 0)
 		return ERR_PTR(status);
 
@@ -113,7 +111,6 @@ struct posix_acl *nfs3_get_acl(struct inode *inode, int type, bool rcu)
 			fallthrough;
 		case -ENOTSUPP:
 			status = -EOPNOTSUPP;
-			goto getout;
 		default:
 			goto getout;
 	}
@@ -254,24 +251,22 @@ int nfs3_proc_setacls(struct inode *inode, struct posix_acl *acl,
 
 }
 
-int nfs3_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
-		 struct posix_acl *acl, int type)
+int nfs3_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 {
 	struct posix_acl *orig = acl, *dfacl = NULL, *alloc;
-	struct inode *inode = d_inode(dentry);
 	int status;
 
 	if (S_ISDIR(inode->i_mode)) {
 		switch(type) {
 		case ACL_TYPE_ACCESS:
-			alloc = get_inode_acl(inode, ACL_TYPE_DEFAULT);
+			alloc = get_acl(inode, ACL_TYPE_DEFAULT);
 			if (IS_ERR(alloc))
 				goto fail;
 			dfacl = alloc;
 			break;
 
 		case ACL_TYPE_DEFAULT:
-			alloc = get_inode_acl(inode, ACL_TYPE_ACCESS);
+			alloc = get_acl(inode, ACL_TYPE_ACCESS);
 			if (IS_ERR(alloc))
 				goto fail;
 			dfacl = acl;
@@ -299,6 +294,12 @@ fail:
 	goto out;
 }
 
+const struct xattr_handler *nfs3_xattr_handlers[] = {
+	&posix_acl_access_xattr_handler,
+	&posix_acl_default_xattr_handler,
+	NULL,
+};
+
 static int
 nfs3_list_one_acl(struct inode *inode, int type, const char *name, void *data,
 		size_t size, ssize_t *result)
@@ -306,7 +307,7 @@ nfs3_list_one_acl(struct inode *inode, int type, const char *name, void *data,
 	struct posix_acl *acl;
 	char *p = data + *result;
 
-	acl = get_inode_acl(inode, type);
+	acl = get_acl(inode, type);
 	if (IS_ERR_OR_NULL(acl))
 		return 0;
 

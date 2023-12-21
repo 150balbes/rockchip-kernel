@@ -46,8 +46,8 @@ gp10b_fault = {
 };
 
 int
-gp10b_fault_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+gp10b_fault_new(struct nvkm_device *device, int index,
 		struct nvkm_fault **pfault)
 {
-	return nvkm_fault_new_(&gp10b_fault, device, type, inst, pfault);
+	return nvkm_fault_new_(&gp10b_fault, device, index, pfault);
 }

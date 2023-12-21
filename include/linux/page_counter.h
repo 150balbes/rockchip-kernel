@@ -3,17 +3,16 @@
 #define _LINUX_PAGE_COUNTER_H
 
 #include <linux/atomic.h>
-#include <linux/cache.h>
 #include <linux/kernel.h>
 #include <asm/page.h>
 
 struct page_counter {
-	/*
-	 * Make sure 'usage' does not share cacheline with any other field. The
-	 * memcg->memory.usage is a hot member of struct mem_cgroup.
-	 */
 	atomic_long_t usage;
-	CACHELINE_PADDING(_pad1_);
+	unsigned long min;
+	unsigned long low;
+	unsigned long high;
+	unsigned long max;
+	struct page_counter *parent;
 
 	/* effective memory.min and memory.min usage tracking */
 	unsigned long emin;
@@ -25,18 +24,10 @@ struct page_counter {
 	atomic_long_t low_usage;
 	atomic_long_t children_low_usage;
 
+	/* legacy */
 	unsigned long watermark;
 	unsigned long failcnt;
-
-	/* Keep all the read most fields in a separete cacheline. */
-	CACHELINE_PADDING(_pad2_);
-
-	unsigned long min;
-	unsigned long low;
-	unsigned long high;
-	unsigned long max;
-	struct page_counter *parent;
-} ____cacheline_internodealigned_in_smp;
+};
 
 #if BITS_PER_LONG == 32
 #define PAGE_COUNTER_MAX LONG_MAX

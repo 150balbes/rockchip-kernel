@@ -39,14 +39,6 @@
 #define OMAP34xx_ProdID_SKUID			0x4830A20C
 #define OMAP3_SYSCON_BASE	(0x48000000 + 0x2000 + 0x270)
 
-#define AM625_EFUSE_K_MPU_OPP			11
-#define AM625_EFUSE_S_MPU_OPP			19
-#define AM625_EFUSE_T_MPU_OPP			20
-
-#define AM625_SUPPORT_K_MPU_OPP			BIT(0)
-#define AM625_SUPPORT_S_MPU_OPP			BIT(1)
-#define AM625_SUPPORT_T_MPU_OPP			BIT(2)
-
 #define VERSION_COUNT				2
 
 struct ti_cpufreq_data;
@@ -68,6 +60,7 @@ struct ti_cpufreq_data {
 	struct device_node *opp_node;
 	struct regmap *syscon;
 	const struct ti_cpufreq_soc_data *soc_data;
+	struct opp_table *opp_table;
 };
 
 static unsigned long amx3_efuse_xlate(struct ti_cpufreq_data *opp_data,
@@ -110,25 +103,6 @@ static unsigned long omap3_efuse_xlate(struct ti_cpufreq_data *opp_data,
 {
 	/* OPP enable bit ("Speed Binned") */
 	return BIT(efuse);
-}
-
-static unsigned long am625_efuse_xlate(struct ti_cpufreq_data *opp_data,
-				       unsigned long efuse)
-{
-	unsigned long calculated_efuse = AM625_SUPPORT_K_MPU_OPP;
-
-	switch (efuse) {
-	case AM625_EFUSE_T_MPU_OPP:
-		calculated_efuse |= AM625_SUPPORT_T_MPU_OPP;
-		fallthrough;
-	case AM625_EFUSE_S_MPU_OPP:
-		calculated_efuse |= AM625_SUPPORT_S_MPU_OPP;
-		fallthrough;
-	case AM625_EFUSE_K_MPU_OPP:
-		calculated_efuse |= AM625_SUPPORT_K_MPU_OPP;
-	}
-
-	return calculated_efuse;
 }
 
 static struct ti_cpufreq_soc_data am3x_soc_data = {
@@ -199,7 +173,7 @@ static struct ti_cpufreq_soc_data omap34xx_soc_data = {
  *    seems to always read as 0).
  */
 
-static const char * const omap3_reg_names[] = {"cpu0", "vbb", NULL};
+static const char * const omap3_reg_names[] = {"cpu0", "vbb"};
 
 static struct ti_cpufreq_soc_data omap36xx_soc_data = {
 	.reg_names = omap3_reg_names,
@@ -225,14 +199,6 @@ static struct ti_cpufreq_soc_data am3517_soc_data = {
 	.multi_regulator = false,
 };
 
-static struct ti_cpufreq_soc_data am625_soc_data = {
-	.efuse_xlate = am625_efuse_xlate,
-	.efuse_offset = 0x0018,
-	.efuse_mask = 0x07c0,
-	.efuse_shift = 0x6,
-	.rev_offset = 0x0014,
-	.multi_regulator = false,
-};
 
 /**
  * ti_cpufreq_get_efuse() - Parse and return efuse value present on SoC
@@ -336,8 +302,6 @@ static const struct of_device_id ti_cpufreq_of_match[] = {
 	{ .compatible = "ti,dra7", .data = &dra7_soc_data },
 	{ .compatible = "ti,omap34xx", .data = &omap34xx_soc_data, },
 	{ .compatible = "ti,omap36xx", .data = &omap36xx_soc_data, },
-	{ .compatible = "ti,am625", .data = &am625_soc_data, },
-	{ .compatible = "ti,am62a7", .data = &am625_soc_data, },
 	/* legacy */
 	{ .compatible = "ti,omap3430", .data = &omap34xx_soc_data, },
 	{ .compatible = "ti,omap3630", .data = &omap36xx_soc_data, },
@@ -360,13 +324,10 @@ static int ti_cpufreq_probe(struct platform_device *pdev)
 {
 	u32 version[VERSION_COUNT];
 	const struct of_device_id *match;
+	struct opp_table *ti_opp_table;
 	struct ti_cpufreq_data *opp_data;
-	const char * const default_reg_names[] = {"vdd", "vbb", NULL};
+	const char * const default_reg_names[] = {"vdd", "vbb"};
 	int ret;
-	struct dev_pm_opp_config config = {
-		.supported_hw = version,
-		.supported_hw_count = ARRAY_SIZE(version),
-	};
 
 	match = dev_get_platdata(&pdev->dev);
 	if (!match)
@@ -409,21 +370,33 @@ static int ti_cpufreq_probe(struct platform_device *pdev)
 	if (ret)
 		goto fail_put_node;
 
-	if (opp_data->soc_data->multi_regulator) {
-		if (opp_data->soc_data->reg_names)
-			config.regulator_names = opp_data->soc_data->reg_names;
-		else
-			config.regulator_names = default_reg_names;
-	}
-
-	ret = dev_pm_opp_set_config(opp_data->cpu_dev, &config);
-	if (ret < 0) {
-		dev_err(opp_data->cpu_dev, "Failed to set OPP config\n");
+	ti_opp_table = dev_pm_opp_set_supported_hw(opp_data->cpu_dev,
+						   version, VERSION_COUNT);
+	if (IS_ERR(ti_opp_table)) {
+		dev_err(opp_data->cpu_dev,
+			"Failed to set supported hardware\n");
+		ret = PTR_ERR(ti_opp_table);
 		goto fail_put_node;
 	}
 
-	of_node_put(opp_data->opp_node);
+	opp_data->opp_table = ti_opp_table;
 
+	if (opp_data->soc_data->multi_regulator) {
+		const char * const *reg_names = default_reg_names;
+
+		if (opp_data->soc_data->reg_names)
+			reg_names = opp_data->soc_data->reg_names;
+		ti_opp_table = dev_pm_opp_set_regulators(opp_data->cpu_dev,
+							 reg_names,
+							 ARRAY_SIZE(default_reg_names));
+		if (IS_ERR(ti_opp_table)) {
+			dev_pm_opp_put_supported_hw(opp_data->opp_table);
+			ret =  PTR_ERR(ti_opp_table);
+			goto fail_put_node;
+		}
+	}
+
+	of_node_put(opp_data->opp_node);
 register_cpufreq_dt:
 	platform_device_register_simple("cpufreq-dt", -1, NULL, 0);
 
@@ -435,7 +408,7 @@ fail_put_node:
 	return ret;
 }
 
-static int __init ti_cpufreq_init(void)
+static int ti_cpufreq_init(void)
 {
 	const struct of_device_id *match;
 

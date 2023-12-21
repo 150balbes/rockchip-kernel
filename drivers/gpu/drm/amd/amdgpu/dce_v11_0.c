@@ -22,8 +22,6 @@
  */
 
 #include <drm/drm_fourcc.h>
-#include <drm/drm_modeset_helper.h>
-#include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_vblank.h>
 
 #include "amdgpu.h"
@@ -248,7 +246,6 @@ static void dce_v11_0_pageflip_interrupt_fini(struct amdgpu_device *adev)
  * @adev: amdgpu_device pointer
  * @crtc_id: crtc to cleanup pageflip on
  * @crtc_base: new address of the crtc (GPU MC address)
- * @async: asynchronous flip
  *
  * Triggers the actual pageflip by updating the primary
  * surface base address.
@@ -1906,6 +1903,7 @@ static int dce_v11_0_crtc_do_set_base(struct drm_crtc *crtc,
 	u32 tmp, viewport_w, viewport_h;
 	int r;
 	bool bypass_lut = false;
+	struct drm_format_name_buf format_name;
 
 	/* no fb bound */
 	if (!atomic && !crtc->primary->fb) {
@@ -2024,8 +2022,8 @@ static int dce_v11_0_crtc_do_set_base(struct drm_crtc *crtc,
 #endif
 		break;
 	default:
-		DRM_ERROR("Unsupported screen format %p4cc\n",
-			  &target_fb->format->format);
+		DRM_ERROR("Unsupported screen format %s\n",
+		          drm_get_format_name(target_fb->format->format, &format_name));
 		return -EINVAL;
 	}
 
@@ -2237,18 +2235,22 @@ static int dce_v11_0_pick_dig_encoder(struct drm_encoder *encoder)
 			return 1;
 		else
 			return 0;
+		break;
 	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY1:
 		if (dig->linkb)
 			return 3;
 		else
 			return 2;
+		break;
 	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY2:
 		if (dig->linkb)
 			return 5;
 		else
 			return 4;
+		break;
 	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY3:
 		return 6;
+		break;
 	default:
 		DRM_ERROR("invalid encoder_id: 0x%x\n", amdgpu_encoder->encoder_id);
 		return 0;
@@ -2302,16 +2304,19 @@ static u32 dce_v11_0_pick_pll(struct drm_crtc *crtc)
 				return ATOM_COMBOPHY_PLL1;
 			else
 				return ATOM_COMBOPHY_PLL0;
+			break;
 		case ENCODER_OBJECT_ID_INTERNAL_UNIPHY1:
 			if (dig->linkb)
 				return ATOM_COMBOPHY_PLL3;
 			else
 				return ATOM_COMBOPHY_PLL2;
+			break;
 		case ENCODER_OBJECT_ID_INTERNAL_UNIPHY2:
 			if (dig->linkb)
 				return ATOM_COMBOPHY_PLL5;
 			else
 				return ATOM_COMBOPHY_PLL4;
+			break;
 		default:
 			DRM_ERROR("invalid encoder_id: 0x%x\n", amdgpu_encoder->encoder_id);
 			return ATOM_PPLL_INVALID;
@@ -2610,7 +2615,7 @@ static void dce_v11_0_crtc_dpms(struct drm_crtc *crtc, int mode)
 		break;
 	}
 	/* adjust pm to dpms */
-	amdgpu_dpm_compute_clocks(adev);
+	amdgpu_pm_compute_clocks(adev);
 }
 
 static void dce_v11_0_crtc_prepare(struct drm_crtc *crtc)
@@ -2780,7 +2785,7 @@ static int dce_v11_0_crtc_set_base_atomic(struct drm_crtc *crtc,
 					 struct drm_framebuffer *fb,
 					 int x, int y, enum mode_set_atomic state)
 {
-	return dce_v11_0_crtc_do_set_base(crtc, fb, x, y, 1);
+       return dce_v11_0_crtc_do_set_base(crtc, fb, x, y, 1);
 }
 
 static const struct drm_crtc_helper_funcs dce_v11_0_crtc_helper_funcs = {
@@ -2918,7 +2923,7 @@ static int dce_v11_0_sw_init(void *handle)
 	adev_to_drm(adev)->mode_config.preferred_depth = 24;
 	adev_to_drm(adev)->mode_config.prefer_shadow = 1;
 
-	adev_to_drm(adev)->mode_config.fb_modifiers_not_supported = true;
+	adev_to_drm(adev)->mode_config.fb_base = adev->gmc.aper_base;
 
 	r = amdgpu_display_modeset_create_props(adev);
 	if (r)
@@ -2948,17 +2953,6 @@ static int dce_v11_0_sw_init(void *handle)
 	r = dce_v11_0_audio_init(adev);
 	if (r)
 		return r;
-
-	/* Disable vblank IRQs aggressively for power-saving */
-	/* XXX: can this be enabled for DC? */
-	adev_to_drm(adev)->vblank_disable_immediate = true;
-
-	r = drm_vblank_init(adev_to_drm(adev), adev->mode_info.num_crtc);
-	if (r)
-		return r;
-
-	INIT_DELAYED_WORK(&adev->hotplug_work,
-		  amdgpu_display_hotplug_work_func);
 
 	drm_kms_helper_poll_init(adev_to_drm(adev));
 
@@ -3033,19 +3027,12 @@ static int dce_v11_0_hw_fini(void *handle)
 
 	dce_v11_0_pageflip_interrupt_fini(adev);
 
-	flush_delayed_work(&adev->hotplug_work);
-
 	return 0;
 }
 
 static int dce_v11_0_suspend(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
-	int r;
-
-	r = amdgpu_display_suspend_helper(adev);
-	if (r)
-		return r;
 
 	adev->mode_info.bl_level =
 		amdgpu_atombios_encoder_get_backlight_level_from_reg(adev);
@@ -3070,10 +3057,8 @@ static int dce_v11_0_resume(void *handle)
 		amdgpu_display_backlight_set_level(adev, adev->mode_info.bl_encoder,
 						    bl_level);
 	}
-	if (ret)
-		return ret;
 
-	return amdgpu_display_resume_helper(adev);
+	return ret;
 }
 
 static bool dce_v11_0_is_idle(void *handle)
@@ -3427,7 +3412,7 @@ static int dce_v11_0_hpd_irq(struct amdgpu_device *adev,
 
 	if (disp_int & mask) {
 		dce_v11_0_hpd_int_ack(adev, hpd);
-		schedule_delayed_work(&adev->hotplug_work, 0);
+		schedule_work(&adev->hotplug_work);
 		DRM_DEBUG("IH: HPD%d\n", hpd + 1);
 	}
 

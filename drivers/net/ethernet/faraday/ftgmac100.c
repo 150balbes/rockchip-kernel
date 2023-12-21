@@ -182,10 +182,13 @@ static void ftgmac100_initial_mac(struct ftgmac100 *priv)
 	u8 mac[ETH_ALEN];
 	unsigned int m;
 	unsigned int l;
+	void *addr;
 
-	if (!device_get_ethdev_address(priv->dev, priv->netdev)) {
+	addr = device_get_mac_address(priv->dev, mac, ETH_ALEN);
+	if (addr) {
+		ether_addr_copy(priv->netdev->dev_addr, mac);
 		dev_info(priv->dev, "Read MAC address %pM from device tree\n",
-			 priv->netdev->dev_addr);
+			 mac);
 		return;
 	}
 
@@ -200,7 +203,7 @@ static void ftgmac100_initial_mac(struct ftgmac100 *priv)
 	mac[5] = l & 0xff;
 
 	if (is_valid_ether_addr(mac)) {
-		eth_hw_addr_set(priv->netdev, mac);
+		ether_addr_copy(priv->netdev->dev_addr, mac);
 		dev_info(priv->dev, "Read MAC address %pM from chip\n", mac);
 	} else {
 		eth_hw_addr_random(priv->netdev);
@@ -989,6 +992,88 @@ static int ftgmac100_alloc_rx_buffers(struct ftgmac100 *priv)
 	return 0;
 }
 
+static void ftgmac100_adjust_link(struct net_device *netdev)
+{
+	struct ftgmac100 *priv = netdev_priv(netdev);
+	struct phy_device *phydev = netdev->phydev;
+	bool tx_pause, rx_pause;
+	int new_speed;
+
+	/* We store "no link" as speed 0 */
+	if (!phydev->link)
+		new_speed = 0;
+	else
+		new_speed = phydev->speed;
+
+	/* Grab pause settings from PHY if configured to do so */
+	if (priv->aneg_pause) {
+		rx_pause = tx_pause = phydev->pause;
+		if (phydev->asym_pause)
+			tx_pause = !rx_pause;
+	} else {
+		rx_pause = priv->rx_pause;
+		tx_pause = priv->tx_pause;
+	}
+
+	/* Link hasn't changed, do nothing */
+	if (phydev->speed == priv->cur_speed &&
+	    phydev->duplex == priv->cur_duplex &&
+	    rx_pause == priv->rx_pause &&
+	    tx_pause == priv->tx_pause)
+		return;
+
+	/* Print status if we have a link or we had one and just lost it,
+	 * don't print otherwise.
+	 */
+	if (new_speed || priv->cur_speed)
+		phy_print_status(phydev);
+
+	priv->cur_speed = new_speed;
+	priv->cur_duplex = phydev->duplex;
+	priv->rx_pause = rx_pause;
+	priv->tx_pause = tx_pause;
+
+	/* Link is down, do nothing else */
+	if (!new_speed)
+		return;
+
+	/* Disable all interrupts */
+	iowrite32(0, priv->base + FTGMAC100_OFFSET_IER);
+
+	/* Reset the adapter asynchronously */
+	schedule_work(&priv->reset_task);
+}
+
+static int ftgmac100_mii_probe(struct ftgmac100 *priv, phy_interface_t intf)
+{
+	struct net_device *netdev = priv->netdev;
+	struct phy_device *phydev;
+
+	phydev = phy_find_first(priv->mii_bus);
+	if (!phydev) {
+		netdev_info(netdev, "%s: no PHY found\n", netdev->name);
+		return -ENODEV;
+	}
+
+	phydev = phy_connect(netdev, phydev_name(phydev),
+			     &ftgmac100_adjust_link, intf);
+
+	if (IS_ERR(phydev)) {
+		netdev_err(netdev, "%s: Could not attach to PHY\n", netdev->name);
+		return PTR_ERR(phydev);
+	}
+
+	/* Indicate that we support PAUSE frames (see comment in
+	 * Documentation/networking/phy.rst)
+	 */
+	phy_support_asym_pause(phydev);
+
+	/* Display what we found */
+	phy_attached_info(phydev);
+
+	return 0;
+}
+
 static int ftgmac100_mdiobus_read(struct mii_bus *bus, int phy_addr, int regnum)
 {
 	struct net_device *netdev = bus->priv;
@@ -1063,15 +1148,12 @@ static int ftgmac100_mdiobus_write(struct mii_bus *bus, int phy_addr,
 static void ftgmac100_get_drvinfo(struct net_device *netdev,
 				  struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strscpy(info->bus_info, dev_name(&netdev->dev), sizeof(info->bus_info));
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->bus_info, dev_name(&netdev->dev), sizeof(info->bus_info));
 }
 
-static void
-ftgmac100_get_ringparam(struct net_device *netdev,
-			struct ethtool_ringparam *ering,
-			struct kernel_ethtool_ringparam *kernel_ering,
-			struct netlink_ext_ack *extack)
+static void ftgmac100_get_ringparam(struct net_device *netdev,
+				    struct ethtool_ringparam *ering)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
 
@@ -1082,11 +1164,8 @@ ftgmac100_get_ringparam(struct net_device *netdev,
 	ering->tx_pending = priv->tx_q_entries;
 }
 
-static int
-ftgmac100_set_ringparam(struct net_device *netdev,
-			struct ethtool_ringparam *ering,
-			struct kernel_ethtool_ringparam *kernel_ering,
-			struct netlink_ext_ack *extack)
+static int ftgmac100_set_ringparam(struct net_device *netdev,
+				   struct ethtool_ringparam *ering)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
 
@@ -1299,8 +1378,10 @@ static int ftgmac100_init_all(struct ftgmac100 *priv, bool ignore_alloc_err)
 	return err;
 }
 
-static void ftgmac100_reset(struct ftgmac100 *priv)
+static void ftgmac100_reset_task(struct work_struct *work)
 {
+	struct ftgmac100 *priv = container_of(work, struct ftgmac100,
+					      reset_task);
 	struct net_device *netdev = priv->netdev;
 	int err;
 
@@ -1346,134 +1427,6 @@ static void ftgmac100_reset(struct ftgmac100 *priv)
 	rtnl_unlock();
 }
 
-static void ftgmac100_reset_task(struct work_struct *work)
-{
-	struct ftgmac100 *priv = container_of(work, struct ftgmac100,
-					      reset_task);
-
-	ftgmac100_reset(priv);
-}
-
-static void ftgmac100_adjust_link(struct net_device *netdev)
-{
-	struct ftgmac100 *priv = netdev_priv(netdev);
-	struct phy_device *phydev = netdev->phydev;
-	bool tx_pause, rx_pause;
-	int new_speed;
-
-	/* We store "no link" as speed 0 */
-	if (!phydev->link)
-		new_speed = 0;
-	else
-		new_speed = phydev->speed;
-
-	/* Grab pause settings from PHY if configured to do so */
-	if (priv->aneg_pause) {
-		rx_pause = tx_pause = phydev->pause;
-		if (phydev->asym_pause)
-			tx_pause = !rx_pause;
-	} else {
-		rx_pause = priv->rx_pause;
-		tx_pause = priv->tx_pause;
-	}
-
-	/* Link hasn't changed, do nothing */
-	if (phydev->speed == priv->cur_speed &&
-	    phydev->duplex == priv->cur_duplex &&
-	    rx_pause == priv->rx_pause &&
-	    tx_pause == priv->tx_pause)
-		return;
-
-	/* Print status if we have a link or we had one and just lost it,
-	 * don't print otherwise.
-	 */
-	if (new_speed || priv->cur_speed)
-		phy_print_status(phydev);
-
-	priv->cur_speed = new_speed;
-	priv->cur_duplex = phydev->duplex;
-	priv->rx_pause = rx_pause;
-	priv->tx_pause = tx_pause;
-
-	/* Link is down, do nothing else */
-	if (!new_speed)
-		return;
-
-	/* Disable all interrupts */
-	iowrite32(0, priv->base + FTGMAC100_OFFSET_IER);
-
-	/* Release phy lock to allow ftgmac100_reset to aquire it, keeping lock
-	 * order consistent to prevent dead lock.
-	 */
-	if (netdev->phydev)
-		mutex_unlock(&netdev->phydev->lock);
-
-	ftgmac100_reset(priv);
-
-	if (netdev->phydev)
-		mutex_lock(&netdev->phydev->lock);
-
-}
-
-static int ftgmac100_mii_probe(struct net_device *netdev)
-{
-	struct ftgmac100 *priv = netdev_priv(netdev);
-	struct platform_device *pdev = to_platform_device(priv->dev);
-	struct device_node *np = pdev->dev.of_node;
-	struct phy_device *phydev;
-	phy_interface_t phy_intf;
-	int err;
-
-	/* Default to RGMII. It's a gigabit part after all */
-	err = of_get_phy_mode(np, &phy_intf);
-	if (err)
-		phy_intf = PHY_INTERFACE_MODE_RGMII;
-
-	/* Aspeed only supports these. I don't know about other IP
-	 * block vendors so I'm going to just let them through for
-	 * now. Note that this is only a warning if for some obscure
-	 * reason the DT really means to lie about it or it's a newer
-	 * part we don't know about.
-	 *
-	 * On the Aspeed SoC there are additionally straps and SCU
-	 * control bits that could tell us what the interface is
-	 * (or allow us to configure it while the IP block is held
-	 * in reset). For now I chose to keep this driver away from
-	 * those SoC specific bits and assume the device-tree is
-	 * right and the SCU has been configured properly by pinmux
-	 * or the firmware.
-	 */
-	if (priv->is_aspeed && !(phy_interface_mode_is_rgmii(phy_intf))) {
-		netdev_warn(netdev,
-			    "Unsupported PHY mode %s !\n",
-			    phy_modes(phy_intf));
-	}
-
-	phydev = phy_find_first(priv->mii_bus);
-	if (!phydev) {
-		netdev_info(netdev, "%s: no PHY found\n", netdev->name);
-		return -ENODEV;
-	}
-
-	phydev = phy_connect(netdev, phydev_name(phydev),
-			     &ftgmac100_adjust_link, phy_intf);
-
-	if (IS_ERR(phydev)) {
-		netdev_err(netdev, "%s: Could not attach to PHY\n", netdev->name);
-		return PTR_ERR(phydev);
-	}
-
-	/* Indicate that we support PAUSE frames (see comment in
-	 * Documentation/networking/phy.rst)
-	 */
-	phy_support_asym_pause(phydev);
-
-	/* Display what we found */
-	phy_attached_info(phydev);
-
-	return 0;
-}
-
 static int ftgmac100_open(struct net_device *netdev)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
@@ -1506,7 +1459,7 @@ static int ftgmac100_open(struct net_device *netdev)
 		goto err_hw;
 
 	/* Initialize NAPI */
-	netif_napi_add(netdev, &priv->napi, ftgmac100_poll);
+	netif_napi_add(netdev, &priv->napi, ftgmac100_poll, 64);
 
 	/* Grab our interrupt */
 	err = request_irq(netdev->irq, ftgmac100_interrupt, 0, netdev->name, netdev);
@@ -1634,7 +1587,7 @@ static const struct net_device_ops ftgmac100_netdev_ops = {
 	.ndo_start_xmit		= ftgmac100_hard_start_xmit,
 	.ndo_set_mac_address	= ftgmac100_set_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_eth_ioctl		= phy_do_ioctl,
+	.ndo_do_ioctl		= phy_do_ioctl,
 	.ndo_tx_timeout		= ftgmac100_tx_timeout,
 	.ndo_set_rx_mode	= ftgmac100_set_rx_mode,
 	.ndo_set_features	= ftgmac100_set_features,
@@ -1649,8 +1602,8 @@ static int ftgmac100_setup_mdio(struct net_device *netdev)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
 	struct platform_device *pdev = to_platform_device(priv->dev);
+	phy_interface_t phy_intf = PHY_INTERFACE_MODE_RGMII;
 	struct device_node *np = pdev->dev.of_node;
-	struct device_node *mdio_np;
 	int i, err = 0;
 	u32 reg;
 
@@ -1671,6 +1624,39 @@ static int ftgmac100_setup_mdio(struct net_device *netdev)
 		iowrite32(reg, priv->base + FTGMAC100_OFFSET_REVR);
 	}
 
+	/* Get PHY mode from device-tree */
+	if (np) {
+		/* Default to RGMII. It's a gigabit part after all */
+		err = of_get_phy_mode(np, &phy_intf);
+		if (err)
+			phy_intf = PHY_INTERFACE_MODE_RGMII;
+
+		/* Aspeed only supports these. I don't know about other IP
+		 * block vendors so I'm going to just let them through for
+		 * now. Note that this is only a warning if for some obscure
+		 * reason the DT really means to lie about it or it's a newer
+		 * part we don't know about.
+		 *
+		 * On the Aspeed SoC there are additionally straps and SCU
+		 * control bits that could tell us what the interface is
+		 * (or allow us to configure it while the IP block is held
+		 * in reset). For now I chose to keep this driver away from
+		 * those SoC specific bits and assume the device-tree is
+		 * right and the SCU has been configured properly by pinmux
+		 * or the firmware.
+		 */
+		if (priv->is_aspeed &&
+		    phy_intf != PHY_INTERFACE_MODE_RMII &&
+		    phy_intf != PHY_INTERFACE_MODE_RGMII &&
+		    phy_intf != PHY_INTERFACE_MODE_RGMII_ID &&
+		    phy_intf != PHY_INTERFACE_MODE_RGMII_RXID &&
+		    phy_intf != PHY_INTERFACE_MODE_RGMII_TXID) {
+			netdev_warn(netdev,
+				   "Unsupported PHY mode %s !\n",
+				   phy_modes(phy_intf));
+		}
+	}
+
 	priv->mii_bus->name = "ftgmac100_mdio";
 	snprintf(priv->mii_bus->id, MII_BUS_ID_SIZE, "%s-%d",
 		 pdev->name, pdev->id);
@@ -1682,24 +1668,28 @@ static int ftgmac100_setup_mdio(struct net_device *netdev)
 	for (i = 0; i < PHY_MAX_ADDR; i++)
 		priv->mii_bus->irq[i] = PHY_POLL;
 
-	mdio_np = of_get_child_by_name(np, "mdio");
-
-	err = of_mdiobus_register(priv->mii_bus, mdio_np);
+	err = mdiobus_register(priv->mii_bus);
 	if (err) {
 		dev_err(priv->dev, "Cannot register MDIO bus!\n");
 		goto err_register_mdiobus;
 	}
 
-	of_node_put(mdio_np);
+	err = ftgmac100_mii_probe(priv, phy_intf);
+	if (err) {
+		dev_err(priv->dev, "MII Probe failed!\n");
+		goto err_mii_probe;
+	}
 
 	return 0;
 
+err_mii_probe:
+	mdiobus_unregister(priv->mii_bus);
 err_register_mdiobus:
 	mdiobus_free(priv->mii_bus);
 	return err;
 }
 
-static void ftgmac100_phy_disconnect(struct net_device *netdev)
+static void ftgmac100_destroy_mdio(struct net_device *netdev)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
 
@@ -1707,17 +1697,6 @@ static void ftgmac100_phy_disconnect(struct net_device *netdev)
 		return;
 
 	phy_disconnect(netdev->phydev);
-	if (of_phy_is_fixed_link(priv->dev->of_node))
-		of_phy_deregister_fixed_link(priv->dev->of_node);
-}
-
-static void ftgmac100_destroy_mdio(struct net_device *netdev)
-{
-	struct ftgmac100 *priv = netdev_priv(netdev);
-
-	if (!priv->mii_bus)
-		return;
-
 	mdiobus_unregister(priv->mii_bus);
 	mdiobus_free(priv->mii_bus);
 }
@@ -1852,6 +1831,11 @@ static int ftgmac100_probe(struct platform_device *pdev)
 		priv->rxdes0_edorr_mask = BIT(30);
 		priv->txdes0_edotr_mask = BIT(30);
 		priv->is_aspeed = true;
+		/* Disable ast2600 problematic HW arbitration */
+		if (of_device_is_compatible(np, "aspeed,ast2600-mac")) {
+			iowrite32(FTGMAC100_TM_DEFAULT,
+				  priv->base + FTGMAC100_OFFSET_TM);
+		}
 	} else {
 		priv->rxdes0_edorr_mask = BIT(15);
 		priv->txdes0_edotr_mask = BIT(15);
@@ -1861,7 +1845,7 @@ static int ftgmac100_probe(struct platform_device *pdev)
 		if (!IS_ENABLED(CONFIG_NET_NCSI)) {
 			dev_err(&pdev->dev, "NCSI stack not enabled\n");
 			err = -EINVAL;
-			goto err_phy_connect;
+			goto err_ncsi_dev;
 		}
 
 		dev_info(&pdev->dev, "Using NCSI interface\n");
@@ -1869,48 +1853,17 @@ static int ftgmac100_probe(struct platform_device *pdev)
 		priv->ndev = ncsi_register_dev(netdev, ftgmac100_ncsi_handler);
 		if (!priv->ndev) {
 			err = -EINVAL;
-			goto err_phy_connect;
+			goto err_ncsi_dev;
 		}
-	} else if (np && of_phy_is_fixed_link(np)) {
-		struct phy_device *phy;
-
-		err = of_phy_register_fixed_link(np);
-		if (err) {
-			dev_err(&pdev->dev, "Failed to register fixed PHY\n");
-			goto err_phy_connect;
-		}
-
-		phy = of_phy_get_and_connect(priv->netdev, np,
-					     &ftgmac100_adjust_link);
-		if (!phy) {
-			dev_err(&pdev->dev, "Failed to connect to fixed PHY\n");
-			of_phy_deregister_fixed_link(np);
-			err = -EINVAL;
-			goto err_phy_connect;
-		}
-
-		/* Display what we found */
-		phy_attached_info(phy);
 	} else if (np && of_get_property(np, "phy-handle", NULL)) {
 		struct phy_device *phy;
-
-		/* Support "mdio"/"phy" child nodes for ast2400/2500 with
-		 * an embedded MDIO controller. Automatically scan the DTS for
-		 * available PHYs and register them.
-		 */
-		if (of_device_is_compatible(np, "aspeed,ast2400-mac") ||
-		    of_device_is_compatible(np, "aspeed,ast2500-mac")) {
-			err = ftgmac100_setup_mdio(netdev);
-			if (err)
-				goto err_setup_mdio;
-		}
 
 		phy = of_phy_get_and_connect(priv->netdev, np,
 					     &ftgmac100_adjust_link);
 		if (!phy) {
 			dev_err(&pdev->dev, "Failed to connect to phy\n");
 			err = -EINVAL;
-			goto err_phy_connect;
+			goto err_setup_mdio;
 		}
 
 		/* Indicate that we support PAUSE frames (see comment in
@@ -1930,24 +1883,12 @@ static int ftgmac100_probe(struct platform_device *pdev)
 		err = ftgmac100_setup_mdio(netdev);
 		if (err)
 			goto err_setup_mdio;
-
-		err = ftgmac100_mii_probe(netdev);
-		if (err) {
-			dev_err(priv->dev, "MII probe failed!\n");
-			goto err_ncsi_dev;
-		}
-
 	}
 
 	if (priv->is_aspeed) {
 		err = ftgmac100_setup_clk(priv);
 		if (err)
-			goto err_phy_connect;
-
-		/* Disable ast2600 problematic HW arbitration */
-		if (of_device_is_compatible(np, "aspeed,ast2600-mac"))
-			iowrite32(FTGMAC100_TM_DEFAULT,
-				  priv->base + FTGMAC100_OFFSET_TM);
+			goto err_ncsi_dev;
 	}
 
 	/* Default ring sizes */
@@ -1988,8 +1929,6 @@ static int ftgmac100_probe(struct platform_device *pdev)
 err_register_netdev:
 	clk_disable_unprepare(priv->rclk);
 	clk_disable_unprepare(priv->clk);
-err_phy_connect:
-	ftgmac100_phy_disconnect(netdev);
 err_ncsi_dev:
 	if (priv->ndev)
 		ncsi_unregister_dev(priv->ndev);
@@ -2024,7 +1963,6 @@ static int ftgmac100_remove(struct platform_device *pdev)
 	 */
 	cancel_work_sync(&priv->reset_task);
 
-	ftgmac100_phy_disconnect(netdev);
 	ftgmac100_destroy_mdio(netdev);
 
 	iounmap(priv->base);

@@ -14,16 +14,9 @@
 #include <linux/namei.h>
 #include <linux/scatterlist.h>
 #include <crypto/hash.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <crypto/skcipher.h>
 #include "fscrypt_private.h"
-
-/*
- * The minimum message length (input and output length), in bytes, for all
- * filenames encryption modes.  Filenames shorter than this will be zero-padded
- * before being encrypted.
- */
-#define FSCRYPT_FNAME_MIN_MSG_LEN 16
 
 /*
  * struct fscrypt_nokey_name - identifier for directory entry when key is absent
@@ -33,7 +26,7 @@
  * it to find the directory entry again if requested.  Naively, that would just
  * mean using the ciphertext filenames.  However, since the ciphertext filenames
  * can contain illegal characters ('\0' and '/'), they must be encoded in some
- * way.  We use base64url.  But that can cause names to exceed NAME_MAX (255
+ * way.  We use base64.  But that can cause names to exceed NAME_MAX (255
  * bytes), so we also need to use a strong hash to abbreviate long names.
  *
  * The filesystem may also need another kind of hash, the "dirhash", to quickly
@@ -45,7 +38,7 @@
  * casefolded directories use this type of dirhash.  At least in these cases,
  * each no-key name must include the name's dirhash too.
  *
- * To meet all these requirements, we base64url-encode the following
+ * To meet all these requirements, we base64-encode the following
  * variable-length structure.  It contains the dirhash, or 0's if the filesystem
  * didn't provide one; up to 149 bytes of the ciphertext name; and for
  * ciphertexts longer than 149 bytes, also the SHA-256 of the remaining bytes.
@@ -59,18 +52,14 @@ struct fscrypt_nokey_name {
 	u32 dirhash[2];
 	u8 bytes[149];
 	u8 sha256[SHA256_DIGEST_SIZE];
-}; /* 189 bytes => 252 bytes base64url-encoded, which is <= NAME_MAX (255) */
+}; /* 189 bytes => 252 bytes base64-encoded, which is <= NAME_MAX (255) */
 
 /*
- * Decoded size of max-size no-key name, i.e. a name that was abbreviated using
+ * Decoded size of max-size nokey name, i.e. a name that was abbreviated using
  * the strong hash and thus includes the 'sha256' field.  This isn't simply
  * sizeof(struct fscrypt_nokey_name), as the padding at the end isn't included.
  */
 #define FSCRYPT_NOKEY_NAME_MAX	offsetofend(struct fscrypt_nokey_name, sha256)
-
-/* Encoded size of max-size no-key name */
-#define FSCRYPT_NOKEY_NAME_MAX_ENCODED \
-		FSCRYPT_BASE64URL_CHARS(FSCRYPT_NOKEY_NAME_MAX)
 
 static inline bool fscrypt_is_dot_dotdot(const struct qstr *str)
 {
@@ -86,8 +75,7 @@ static inline bool fscrypt_is_dot_dotdot(const struct qstr *str)
 /**
  * fscrypt_fname_encrypt() - encrypt a filename
  * @inode: inode of the parent directory (for regular filenames)
- *	   or of the symlink (for symlink targets). Key must already be
- *	   set up.
+ *	   or of the symlink (for symlink targets)
  * @iname: the filename to encrypt
  * @out: (output) the encrypted filename
  * @olen: size of the encrypted filename.  It must be at least @iname->len.
@@ -110,7 +98,7 @@ int fscrypt_fname_encrypt(const struct inode *inode, const struct qstr *iname,
 	 * Copy the filename to the output buffer for encrypting in-place and
 	 * pad it with the needed number of NUL bytes.
 	 */
-	if (WARN_ON_ONCE(olen < iname->len))
+	if (WARN_ON(olen < iname->len))
 		return -ENOBUFS;
 	memcpy(out, iname->name, iname->len);
 	memset(out + iname->len, 0, olen - iname->len);
@@ -138,7 +126,6 @@ int fscrypt_fname_encrypt(const struct inode *inode, const struct qstr *iname,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(fscrypt_fname_encrypt);
 
 /**
  * fname_decrypt() - decrypt a filename
@@ -188,87 +175,67 @@ static int fname_decrypt(const struct inode *inode,
 	return 0;
 }
 
-static const char base64url_table[65] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+static const char lookup_table[65] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+,";
 
-#define FSCRYPT_BASE64URL_CHARS(nbytes)	DIV_ROUND_UP((nbytes) * 4, 3)
+#define BASE64_CHARS(nbytes)	DIV_ROUND_UP((nbytes) * 4, 3)
 
 /**
- * fscrypt_base64url_encode() - base64url-encode some binary data
- * @src: the binary data to encode
- * @srclen: the length of @src in bytes
- * @dst: (output) the base64url-encoded string.  Not NUL-terminated.
+ * base64_encode() - base64-encode some bytes
+ * @src: the bytes to encode
+ * @len: number of bytes to encode
+ * @dst: (output) the base64-encoded string.  Not NUL-terminated.
  *
- * Encodes data using base64url encoding, i.e. the "Base 64 Encoding with URL
- * and Filename Safe Alphabet" specified by RFC 4648.  '='-padding isn't used,
- * as it's unneeded and not required by the RFC.  base64url is used instead of
- * base64 to avoid the '/' character, which isn't allowed in filenames.
+ * Encodes the input string using characters from the set [A-Za-z0-9+,].
+ * The encoded string is roughly 4/3 times the size of the input string.
  *
- * Return: the length of the resulting base64url-encoded string in bytes.
- *	   This will be equal to FSCRYPT_BASE64URL_CHARS(srclen).
+ * Return: length of the encoded string
  */
-static int fscrypt_base64url_encode(const u8 *src, int srclen, char *dst)
+static int base64_encode(const u8 *src, int len, char *dst)
 {
-	u32 ac = 0;
-	int bits = 0;
-	int i;
+	int i, bits = 0, ac = 0;
 	char *cp = dst;
 
-	for (i = 0; i < srclen; i++) {
-		ac = (ac << 8) | src[i];
+	for (i = 0; i < len; i++) {
+		ac += src[i] << bits;
 		bits += 8;
 		do {
+			*cp++ = lookup_table[ac & 0x3f];
+			ac >>= 6;
 			bits -= 6;
-			*cp++ = base64url_table[(ac >> bits) & 0x3f];
 		} while (bits >= 6);
 	}
 	if (bits)
-		*cp++ = base64url_table[(ac << (6 - bits)) & 0x3f];
+		*cp++ = lookup_table[ac & 0x3f];
 	return cp - dst;
 }
 
-/**
- * fscrypt_base64url_decode() - base64url-decode a string
- * @src: the string to decode.  Doesn't need to be NUL-terminated.
- * @srclen: the length of @src in bytes
- * @dst: (output) the decoded binary data
- *
- * Decodes a string using base64url encoding, i.e. the "Base 64 Encoding with
- * URL and Filename Safe Alphabet" specified by RFC 4648.  '='-padding isn't
- * accepted, nor are non-encoding characters such as whitespace.
- *
- * This implementation hasn't been optimized for performance.
- *
- * Return: the length of the resulting decoded binary data in bytes,
- *	   or -1 if the string isn't a valid base64url string.
- */
-static int fscrypt_base64url_decode(const char *src, int srclen, u8 *dst)
+static int base64_decode(const char *src, int len, u8 *dst)
 {
-	u32 ac = 0;
-	int bits = 0;
-	int i;
-	u8 *bp = dst;
+	int i, bits = 0, ac = 0;
+	const char *p;
+	u8 *cp = dst;
 
-	for (i = 0; i < srclen; i++) {
-		const char *p = strchr(base64url_table, src[i]);
-
+	for (i = 0; i < len; i++) {
+		p = strchr(lookup_table, src[i]);
 		if (p == NULL || src[i] == 0)
-			return -1;
-		ac = (ac << 6) | (p - base64url_table);
+			return -2;
+		ac += (p - lookup_table) << bits;
 		bits += 6;
 		if (bits >= 8) {
+			*cp++ = ac & 0xff;
+			ac >>= 8;
 			bits -= 8;
-			*bp++ = (u8)(ac >> bits);
 		}
 	}
-	if (ac & ((1 << bits) - 1))
+	if (ac)
 		return -1;
-	return bp - dst;
+	return cp - dst;
 }
 
-bool __fscrypt_fname_encrypted_size(const union fscrypt_policy *policy,
-				    u32 orig_len, u32 max_len,
-				    u32 *encrypted_len_ret)
+bool fscrypt_fname_encrypted_size(const union fscrypt_policy *policy,
+				  u32 orig_len, u32 max_len,
+				  u32 *encrypted_len_ret)
 {
 	int padding = 4 << (fscrypt_policy_flags(policy) &
 			    FSCRYPT_POLICY_FLAGS_PAD_MASK);
@@ -276,34 +243,11 @@ bool __fscrypt_fname_encrypted_size(const union fscrypt_policy *policy,
 
 	if (orig_len > max_len)
 		return false;
-	encrypted_len = max_t(u32, orig_len, FSCRYPT_FNAME_MIN_MSG_LEN);
+	encrypted_len = max(orig_len, (u32)FS_CRYPTO_BLOCK_SIZE);
 	encrypted_len = round_up(encrypted_len, padding);
 	*encrypted_len_ret = min(encrypted_len, max_len);
 	return true;
 }
-
-/**
- * fscrypt_fname_encrypted_size() - calculate length of encrypted filename
- * @inode:		parent inode of dentry name being encrypted. Key must
- *			already be set up.
- * @orig_len:		length of the original filename
- * @max_len:		maximum length to return
- * @encrypted_len_ret:	where calculated length should be returned (on success)
- *
- * Filenames that are shorter than the maximum length may have their lengths
- * increased slightly by encryption, due to padding that is applied.
- *
- * Return: false if the orig_len is greater than max_len. Otherwise, true and
- *	   fill out encrypted_len_ret with the length (up to max_len).
- */
-bool fscrypt_fname_encrypted_size(const struct inode *inode, u32 orig_len,
-				  u32 max_len, u32 *encrypted_len_ret)
-{
-	return __fscrypt_fname_encrypted_size(&inode->i_crypt_info->ci_policy,
-					      orig_len, max_len,
-					      encrypted_len_ret);
-}
-EXPORT_SYMBOL_GPL(fscrypt_fname_encrypted_size);
 
 /**
  * fscrypt_fname_alloc_buffer() - allocate a buffer for presented filenames
@@ -319,8 +263,10 @@ EXPORT_SYMBOL_GPL(fscrypt_fname_encrypted_size);
 int fscrypt_fname_alloc_buffer(u32 max_encrypted_len,
 			       struct fscrypt_str *crypto_str)
 {
-	u32 max_presented_len = max_t(u32, FSCRYPT_NOKEY_NAME_MAX_ENCODED,
-				      max_encrypted_len);
+	const u32 max_encoded_len = BASE64_CHARS(FSCRYPT_NOKEY_NAME_MAX);
+	u32 max_presented_len;
+
+	max_presented_len = max(max_encoded_len, max_encrypted_len);
 
 	crypto_str->name = kmalloc(max_presented_len + 1, GFP_NOFS);
 	if (!crypto_str->name)
@@ -382,7 +328,7 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		return 0;
 	}
 
-	if (iname->len < FSCRYPT_FNAME_MIN_MSG_LEN)
+	if (iname->len < FS_CRYPTO_BLOCK_SIZE)
 		return -EUCLEAN;
 
 	if (fscrypt_has_encryption_key(inode))
@@ -396,7 +342,7 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		     offsetof(struct fscrypt_nokey_name, bytes));
 	BUILD_BUG_ON(offsetofend(struct fscrypt_nokey_name, bytes) !=
 		     offsetof(struct fscrypt_nokey_name, sha256));
-	BUILD_BUG_ON(FSCRYPT_NOKEY_NAME_MAX_ENCODED > NAME_MAX);
+	BUILD_BUG_ON(BASE64_CHARS(FSCRYPT_NOKEY_NAME_MAX) > NAME_MAX);
 
 	nokey_name.dirhash[0] = hash;
 	nokey_name.dirhash[1] = minor_hash;
@@ -412,8 +358,7 @@ int fscrypt_fname_disk_to_usr(const struct inode *inode,
 		       nokey_name.sha256);
 		size = FSCRYPT_NOKEY_NAME_MAX;
 	}
-	oname->len = fscrypt_base64url_encode((const u8 *)&nokey_name, size,
-					      oname->name);
+	oname->len = base64_encode((const u8 *)&nokey_name, size, oname->name);
 	return 0;
 }
 EXPORT_SYMBOL(fscrypt_fname_disk_to_usr);
@@ -460,7 +405,9 @@ int fscrypt_setup_filename(struct inode *dir, const struct qstr *iname,
 		return ret;
 
 	if (fscrypt_has_encryption_key(dir)) {
-		if (!fscrypt_fname_encrypted_size(dir, iname->len, NAME_MAX,
+		if (!fscrypt_fname_encrypted_size(&dir->i_crypt_info->ci_policy,
+						  iname->len,
+						  dir->i_sb->s_cop->max_namelen,
 						  &fname->crypto_buf.len))
 			return -ENAMETOOLONG;
 		fname->crypto_buf.name = kmalloc(fname->crypto_buf.len,
@@ -485,15 +432,14 @@ int fscrypt_setup_filename(struct inode *dir, const struct qstr *iname,
 	 * user-supplied name
 	 */
 
-	if (iname->len > FSCRYPT_NOKEY_NAME_MAX_ENCODED)
+	if (iname->len > BASE64_CHARS(FSCRYPT_NOKEY_NAME_MAX))
 		return -ENOENT;
 
 	fname->crypto_buf.name = kmalloc(FSCRYPT_NOKEY_NAME_MAX, GFP_KERNEL);
 	if (fname->crypto_buf.name == NULL)
 		return -ENOMEM;
 
-	ret = fscrypt_base64url_decode(iname->name, iname->len,
-				       fname->crypto_buf.name);
+	ret = base64_decode(iname->name, iname->len, fname->crypto_buf.name);
 	if (ret < (int)offsetof(struct fscrypt_nokey_name, bytes[1]) ||
 	    (ret > offsetof(struct fscrypt_nokey_name, sha256) &&
 	     ret != FSCRYPT_NOKEY_NAME_MAX)) {
@@ -570,7 +516,7 @@ u64 fscrypt_fname_siphash(const struct inode *dir, const struct qstr *name)
 {
 	const struct fscrypt_info *ci = dir->i_crypt_info;
 
-	WARN_ON_ONCE(!ci->ci_dirhash_key_initialized);
+	WARN_ON(!ci->ci_dirhash_key_initialized);
 
 	return siphash(name->name, name->len, &ci->ci_dirhash_key);
 }

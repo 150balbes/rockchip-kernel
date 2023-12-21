@@ -55,7 +55,7 @@
 #define ALTR_I2C_XFER_TIMEOUT	(msecs_to_jiffies(250))
 
 /**
- * struct altr_i2c_dev - I2C device context
+ * altr_i2c_dev - I2C device context
  * @base: pointer to register struct
  * @msg: pointer to current message
  * @msg_len: number of bytes transferred in msg
@@ -172,7 +172,7 @@ static void altr_i2c_init(struct altr_i2c_dev *idev)
 	altr_i2c_int_enable(idev, ALTR_I2C_ALL_IRQ, false);
 }
 
-/*
+/**
  * altr_i2c_transfer - On the last byte to be transmitted, send
  * a Stop bit on the last byte.
  */
@@ -185,7 +185,7 @@ static void altr_i2c_transfer(struct altr_i2c_dev *idev, u32 data)
 		writel(data, idev->base + ALTR_I2C_TFR_CMD);
 }
 
-/*
+/**
  * altr_i2c_empty_rx_fifo - Fetch data from RX FIFO until end of
  * transfer. Send a Stop bit on the last byte.
  */
@@ -201,8 +201,9 @@ static void altr_i2c_empty_rx_fifo(struct altr_i2c_dev *idev)
 	}
 }
 
-/*
+/**
  * altr_i2c_fill_tx_fifo - Fill TX FIFO from current message buffer.
+ * @return: Number of bytes left to transfer.
  */
 static int altr_i2c_fill_tx_fifo(struct altr_i2c_dev *idev)
 {
@@ -447,7 +448,7 @@ static int altr_i2c_probe(struct platform_device *pdev)
 	mutex_unlock(&idev->isr_mutex);
 
 	i2c_set_adapdata(&idev->adapter, idev);
-	strscpy(idev->adapter.name, pdev->name, sizeof(idev->adapter.name));
+	strlcpy(idev->adapter.name, pdev->name, sizeof(idev->adapter.name));
 	idev->adapter.owner = THIS_MODULE;
 	idev->adapter.algo = &altr_i2c_algo;
 	idev->adapter.dev.parent = &pdev->dev;
@@ -465,12 +466,14 @@ static int altr_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void altr_i2c_remove(struct platform_device *pdev)
+static int altr_i2c_remove(struct platform_device *pdev)
 {
 	struct altr_i2c_dev *idev = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(idev->i2c_clk);
 	i2c_del_adapter(&idev->adapter);
+
+	return 0;
 }
 
 /* Match table for of_platform binding */
@@ -482,7 +485,7 @@ MODULE_DEVICE_TABLE(of, altr_i2c_of_match);
 
 static struct platform_driver altr_i2c_driver = {
 	.probe = altr_i2c_probe,
-	.remove_new = altr_i2c_remove,
+	.remove = altr_i2c_remove,
 	.driver = {
 		.name = "altera-i2c",
 		.of_match_table = altr_i2c_of_match,

@@ -161,17 +161,8 @@ static int clk_pfdv2_set_rate(struct clk_hw *hw, unsigned long rate,
 	if (!rate)
 		return -EINVAL;
 
-	/*
-	 * PFD can NOT change rate without gating.
-	 * as the PFDs may enabled in HW by default but no
-	 * consumer used it, the enable count is '0', so the
-	 * 'SET_RATE_GATE' can NOT help on blocking the set_rate
-	 * ops especially for 'assigned-clock-xxx'. In order
-	 * to simplify the case, just disable the PFD if it is
-	 * enabled in HW but not in SW.
-	 */
-	if (clk_pfdv2_is_enabled(hw))
-		clk_pfdv2_disable(hw);
+	/* PFD can NOT change rate without gating */
+	WARN_ON(clk_pfdv2_is_enabled(hw));
 
 	tmp = tmp * 18 + rate / 2;
 	do_div(tmp, rate);
@@ -200,8 +191,8 @@ static const struct clk_ops clk_pfdv2_ops = {
 	.is_enabled     = clk_pfdv2_is_enabled,
 };
 
-struct clk_hw *imx_clk_hw_pfdv2(enum imx_pfdv2_type type, const char *name,
-			     const char *parent_name, void __iomem *reg, u8 idx)
+struct clk_hw *imx_clk_hw_pfdv2(const char *name, const char *parent_name,
+			     void __iomem *reg, u8 idx)
 {
 	struct clk_init_data init;
 	struct clk_pfdv2 *pfd;
@@ -223,10 +214,7 @@ struct clk_hw *imx_clk_hw_pfdv2(enum imx_pfdv2_type type, const char *name,
 	init.ops = &clk_pfdv2_ops;
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
-	if (type == IMX_PFDV2_IMX7ULP)
-		init.flags = CLK_SET_RATE_GATE | CLK_SET_RATE_PARENT;
-	else
-		init.flags = CLK_SET_RATE_GATE;
+	init.flags = CLK_SET_RATE_GATE | CLK_SET_RATE_PARENT;
 
 	pfd->hw.init = &init;
 
@@ -239,4 +227,3 @@ struct clk_hw *imx_clk_hw_pfdv2(enum imx_pfdv2_type type, const char *name,
 
 	return hw;
 }
-EXPORT_SYMBOL_GPL(imx_clk_hw_pfdv2);

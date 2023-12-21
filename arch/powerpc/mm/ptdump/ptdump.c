@@ -16,12 +16,10 @@
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/highmem.h>
-#include <linux/ptdump.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <asm/fixmap.h>
 #include <linux/const.h>
-#include <linux/kasan.h>
 #include <asm/page.h>
 #include <asm/hugetlb.h>
 
@@ -56,12 +54,13 @@
  *
  */
 struct pg_state {
-	struct ptdump_state ptdump;
 	struct seq_file *seq;
 	const struct addr_marker *marker;
 	unsigned long start_address;
 	unsigned long start_pa;
-	int level;
+	unsigned long last_pa;
+	unsigned long page_size;
+	unsigned int level;
 	u64 current_flags;
 	bool check_wx;
 	unsigned long wx_pages;
@@ -105,11 +104,6 @@ static struct addr_marker address_markers[] = {
 	{ -1,	NULL },
 };
 
-static struct ptdump_range ptdump_range[] __ro_after_init = {
-	{TASK_SIZE_MAX, ~0UL},
-	{0, 0}
-};
-
 #define pt_dump_seq_printf(m, fmt, args...)	\
 ({						\
 	if (m)					\
@@ -124,7 +118,7 @@ static struct ptdump_range ptdump_range[] __ro_after_init = {
 
 void pt_dump_size(struct seq_file *m, unsigned long size)
 {
-	static const char units[] = " KMGTPE";
+	static const char units[] = "KMGTPE";
 	const char *unit = units;
 
 	/* Work out what appropriate unit to use */
@@ -169,6 +163,8 @@ static void dump_flag_info(struct pg_state *st, const struct flag_info
 
 static void dump_addr(struct pg_state *st, unsigned long addr)
 {
+	unsigned long delta;
+
 #ifdef CONFIG_PPC64
 #define REG		"0x%016lx"
 #else
@@ -176,15 +172,21 @@ static void dump_addr(struct pg_state *st, unsigned long addr)
 #endif
 
 	pt_dump_seq_printf(st->seq, REG "-" REG " ", st->start_address, addr - 1);
-	pt_dump_seq_printf(st->seq, " " REG " ", st->start_pa);
-	pt_dump_size(st->seq, addr - st->start_address);
+	if (st->start_pa == st->last_pa && st->start_address + st->page_size != addr) {
+		pt_dump_seq_printf(st->seq, "[" REG "]", st->start_pa);
+		delta = st->page_size >> 10;
+	} else {
+		pt_dump_seq_printf(st->seq, " " REG " ", st->start_pa);
+		delta = (addr - st->start_address) >> 10;
+	}
+	pt_dump_size(st->seq, delta);
 }
 
 static void note_prot_wx(struct pg_state *st, unsigned long addr)
 {
 	pte_t pte = __pte(st->current_flags);
 
-	if (!IS_ENABLED(CONFIG_DEBUG_WX) || !st->check_wx)
+	if (!IS_ENABLED(CONFIG_PPC_DEBUG_WX) || !st->check_wx)
 		return;
 
 	if (!pte_write(pte) || !pte_exec(pte))
@@ -196,15 +198,17 @@ static void note_prot_wx(struct pg_state *st, unsigned long addr)
 	st->wx_pages += (addr - st->start_address) / PAGE_SIZE;
 }
 
-static void note_page_update_state(struct pg_state *st, unsigned long addr, int level, u64 val)
+static void note_page_update_state(struct pg_state *st, unsigned long addr,
+				   unsigned int level, u64 val, unsigned long page_size)
 {
-	u64 flag = level >= 0 ? val & pg_level[level].mask : 0;
+	u64 flag = val & pg_level[level].mask;
 	u64 pa = val & PTE_RPN_MASK;
 
 	st->level = level;
 	st->current_flags = flag;
 	st->start_address = addr;
 	st->start_pa = pa;
+	st->page_size = page_size;
 
 	while (addr >= st->marker[1].start_address) {
 		st->marker++;
@@ -212,24 +216,28 @@ static void note_page_update_state(struct pg_state *st, unsigned long addr, int 
 	}
 }
 
-static void note_page(struct ptdump_state *pt_st, unsigned long addr, int level, u64 val)
+static void note_page(struct pg_state *st, unsigned long addr,
+	       unsigned int level, u64 val, unsigned long page_size)
 {
-	u64 flag = level >= 0 ? val & pg_level[level].mask : 0;
-	struct pg_state *st = container_of(pt_st, struct pg_state, ptdump);
+	u64 flag = val & pg_level[level].mask;
+	u64 pa = val & PTE_RPN_MASK;
 
 	/* At first no level is set */
-	if (st->level == -1) {
+	if (!st->level) {
 		pt_dump_seq_printf(st->seq, "---[ %s ]---\n", st->marker->name);
-		note_page_update_state(st, addr, level, val);
+		note_page_update_state(st, addr, level, val, page_size);
 	/*
 	 * Dump the section of virtual memory when:
 	 *   - the PTE flags from one entry to the next differs.
 	 *   - we change levels in the tree.
 	 *   - the address is in a different section of memory and is thus
 	 *   used for a different purpose, regardless of the flags.
+	 *   - the pa of this page is not adjacent to the last inspected page
 	 */
 	} else if (flag != st->current_flags || level != st->level ||
-		   addr >= st->marker[1].start_address) {
+		   addr >= st->marker[1].start_address ||
+		   (pa != st->last_pa + st->page_size &&
+		    (pa != st->start_pa || st->start_pa != st->last_pa))) {
 
 		/* Check the PTE flags */
 		if (st->current_flags) {
@@ -249,7 +257,96 @@ static void note_page(struct ptdump_state *pt_st, unsigned long addr, int level,
 		 * Address indicates we have passed the end of the
 		 * current section of virtual memory
 		 */
-		note_page_update_state(st, addr, level, val);
+		note_page_update_state(st, addr, level, val, page_size);
+	}
+	st->last_pa = pa;
+}
+
+static void walk_pte(struct pg_state *st, pmd_t *pmd, unsigned long start)
+{
+	pte_t *pte = pte_offset_kernel(pmd, 0);
+	unsigned long addr;
+	unsigned int i;
+
+	for (i = 0; i < PTRS_PER_PTE; i++, pte++) {
+		addr = start + i * PAGE_SIZE;
+		note_page(st, addr, 4, pte_val(*pte), PAGE_SIZE);
+
+	}
+}
+
+static void walk_hugepd(struct pg_state *st, hugepd_t *phpd, unsigned long start,
+			int pdshift, int level)
+{
+#ifdef CONFIG_ARCH_HAS_HUGEPD
+	unsigned int i;
+	int shift = hugepd_shift(*phpd);
+	int ptrs_per_hpd = pdshift - shift > 0 ? 1 << (pdshift - shift) : 1;
+
+	if (start & ((1 << shift) - 1))
+		return;
+
+	for (i = 0; i < ptrs_per_hpd; i++) {
+		unsigned long addr = start + (i << shift);
+		pte_t *pte = hugepte_offset(*phpd, addr, pdshift);
+
+		note_page(st, addr, level + 1, pte_val(*pte), 1 << shift);
+	}
+#endif
+}
+
+static void walk_pmd(struct pg_state *st, pud_t *pud, unsigned long start)
+{
+	pmd_t *pmd = pmd_offset(pud, 0);
+	unsigned long addr;
+	unsigned int i;
+
+	for (i = 0; i < PTRS_PER_PMD; i++, pmd++) {
+		addr = start + i * PMD_SIZE;
+		if (!pmd_none(*pmd) && !pmd_is_leaf(*pmd))
+			/* pmd exists */
+			walk_pte(st, pmd, addr);
+		else
+			note_page(st, addr, 3, pmd_val(*pmd), PMD_SIZE);
+	}
+}
+
+static void walk_pud(struct pg_state *st, p4d_t *p4d, unsigned long start)
+{
+	pud_t *pud = pud_offset(p4d, 0);
+	unsigned long addr;
+	unsigned int i;
+
+	for (i = 0; i < PTRS_PER_PUD; i++, pud++) {
+		addr = start + i * PUD_SIZE;
+		if (!pud_none(*pud) && !pud_is_leaf(*pud))
+			/* pud exists */
+			walk_pmd(st, pud, addr);
+		else
+			note_page(st, addr, 2, pud_val(*pud), PUD_SIZE);
+	}
+}
+
+static void walk_pagetables(struct pg_state *st)
+{
+	unsigned int i;
+	unsigned long addr = st->start_address & PGDIR_MASK;
+	pgd_t *pgd = pgd_offset_k(addr);
+
+	/*
+	 * Traverse the linux pagetable structure and dump pages that are in
+	 * the hash pagetable.
+	 */
+	for (i = pgd_index(addr); i < PTRS_PER_PGD; i++, pgd++, addr += PGDIR_SIZE) {
+		p4d_t *p4d = p4d_offset(pgd, 0);
+
+		if (p4d_none(*p4d) || p4d_is_leaf(*p4d))
+			note_page(st, addr, 1, p4d_val(*p4d), PGDIR_SIZE);
+		else if (is_hugepd(__hugepd(p4d_val(*p4d))))
+			walk_hugepd(st, (hugepd_t *)p4d, addr, PGDIR_SHIFT, 1);
+		else
+			/* p4d exists */
+			walk_pud(st, p4d, addr);
 	}
 }
 
@@ -290,11 +387,11 @@ static void populate_markers(void)
 #endif
 	address_markers[i++].start_address = FIXADDR_START;
 	address_markers[i++].start_address = FIXADDR_TOP;
-#endif /* CONFIG_PPC64 */
 #ifdef CONFIG_KASAN
 	address_markers[i++].start_address = KASAN_SHADOW_START;
 	address_markers[i++].start_address = KASAN_SHADOW_END;
 #endif
+#endif /* CONFIG_PPC64 */
 }
 
 static int ptdump_show(struct seq_file *m, void *v)
@@ -302,21 +399,34 @@ static int ptdump_show(struct seq_file *m, void *v)
 	struct pg_state st = {
 		.seq = m,
 		.marker = address_markers,
-		.level = -1,
-		.ptdump = {
-			.note_page = note_page,
-			.range = ptdump_range,
-		}
+		.start_address = IS_ENABLED(CONFIG_PPC64) ? PAGE_OFFSET : TASK_SIZE,
 	};
 
+#ifdef CONFIG_PPC64
+	if (!radix_enabled())
+		st.start_address = KERN_VIRT_START;
+#endif
+
 	/* Traverse kernel page tables */
-	ptdump_walk_pgd(&st.ptdump, &init_mm, NULL);
+	walk_pagetables(&st);
+	note_page(&st, 0, 0, 0, 0);
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(ptdump);
 
-static void __init build_pgtable_complete_mask(void)
+static int ptdump_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ptdump_show, NULL);
+}
+
+static const struct file_operations ptdump_fops = {
+	.open		= ptdump_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static void build_pgtable_complete_mask(void)
 {
 	unsigned int i, j;
 
@@ -326,24 +436,22 @@ static void __init build_pgtable_complete_mask(void)
 				pg_level[i].mask |= pg_level[i].flag[j].mask;
 }
 
-#ifdef CONFIG_DEBUG_WX
+#ifdef CONFIG_PPC_DEBUG_WX
 void ptdump_check_wx(void)
 {
 	struct pg_state st = {
 		.seq = NULL,
-		.marker = (struct addr_marker[]) {
-			{ 0, NULL},
-			{ -1, NULL},
-		},
-		.level = -1,
+		.marker = address_markers,
 		.check_wx = true,
-		.ptdump = {
-			.note_page = note_page,
-			.range = ptdump_range,
-		}
+		.start_address = IS_ENABLED(CONFIG_PPC64) ? PAGE_OFFSET : TASK_SIZE,
 	};
 
-	ptdump_walk_pgd(&st.ptdump, &init_mm, NULL);
+#ifdef CONFIG_PPC64
+	if (!radix_enabled())
+		st.start_address = KERN_VIRT_START;
+#endif
+
+	walk_pagetables(&st);
 
 	if (st.wx_pages)
 		pr_warn("Checked W+X mappings: FAILED, %lu W+X pages found\n",
@@ -353,23 +461,12 @@ void ptdump_check_wx(void)
 }
 #endif
 
-static int __init ptdump_init(void)
+static int ptdump_init(void)
 {
-#ifdef CONFIG_PPC64
-	if (!radix_enabled())
-		ptdump_range[0].start = KERN_VIRT_START;
-	else
-		ptdump_range[0].start = PAGE_OFFSET;
-
-	ptdump_range[0].end = PAGE_OFFSET + (PGDIR_SIZE * PTRS_PER_PGD);
-#endif
-
 	populate_markers();
 	build_pgtable_complete_mask();
-
-	if (IS_ENABLED(CONFIG_PTDUMP_DEBUGFS))
-		debugfs_create_file("kernel_page_tables", 0400, NULL, NULL, &ptdump_fops);
-
+	debugfs_create_file("kernel_page_tables", 0400, NULL, NULL,
+			    &ptdump_fops);
 	return 0;
 }
 device_initcall(ptdump_init);

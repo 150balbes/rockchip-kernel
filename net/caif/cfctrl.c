@@ -258,7 +258,7 @@ int cfctrl_linkup_request(struct cflayer *layer,
 		tmp16 = cpu_to_le16(param->u.utility.fifosize_bufs);
 		cfpkt_add_body(pkt, &tmp16, 2);
 		memset(utility_name, 0, sizeof(utility_name));
-		strscpy(utility_name, param->u.utility.name,
+		strlcpy(utility_name, param->u.utility.name,
 			UTILITY_NAME_LENGTH);
 		cfpkt_add_body(pkt, utility_name, UTILITY_NAME_LENGTH);
 		tmp8 = param->u.utility.paramlen;
@@ -269,15 +269,11 @@ int cfctrl_linkup_request(struct cflayer *layer,
 	default:
 		pr_warn("Request setup of bad link type = %d\n",
 			param->linktype);
-		cfpkt_destroy(pkt);
 		return -EINVAL;
 	}
 	req = kzalloc(sizeof(*req), GFP_KERNEL);
-	if (!req) {
-		cfpkt_destroy(pkt);
+	if (!req)
 		return -ENOMEM;
-	}
-
 	req->client_layer = user_layer;
 	req->cmd = CFCTRL_CMD_LINK_SETUP;
 	req->param = *param;

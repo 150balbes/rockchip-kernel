@@ -13,16 +13,16 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
-#include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
 #include <asm/unaligned.h>
 
-#include <drm/display/drm_dp_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_dp_helper.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
@@ -241,7 +241,7 @@ static inline u32 TC358775_LVCFG_PCLKDIV(uint32_t val)
 }
 
 #define TC358775_LVCFG_LVDLINK__MASK                         0x00000002
-#define TC358775_LVCFG_LVDLINK__SHIFT                        1
+#define TC358775_LVCFG_LVDLINK__SHIFT                        0
 static inline u32 TC358775_LVCFG_LVDLINK(uint32_t val)
 {
 	return ((val) << TC358775_LVCFG_LVDLINK__SHIFT) &
@@ -339,7 +339,6 @@ static void d2l_read(struct i2c_client *i2c, u16 addr, u32 *val)
 		goto fail;
 
 	pr_debug("d2l: I2C : addr:%04x value:%08x\n", addr, *val);
-	return;
 
 fail:
 	dev_err(&i2c->dev, "Error %d reading from subaddress 0x%x\n",
@@ -407,7 +406,7 @@ static void tc_bridge_enable(struct drm_bridge *bridge)
 		 (val >> 8) & 0xFF, val & 0xFF);
 
 	d2l_write(tc->i2c, SYSRST, SYS_RST_REG | SYS_RST_DSIRX | SYS_RST_BM |
-		  SYS_RST_LCD | SYS_RST_I2CM);
+		  SYS_RST_LCD | SYS_RST_I2CM | SYS_RST_I2CS);
 	usleep_range(30000, 40000);
 
 	d2l_write(tc->i2c, PPI_TX_RX_TA, TTA_GET | TTA_SURE);
@@ -430,7 +429,7 @@ static void tc_bridge_enable(struct drm_bridge *bridge)
 		val = TC358775_VPCTRL_MSF(1);
 
 	dsiclk = mode->crtc_clock * 3 * tc->bpc / tc->num_dsi_lanes / 1000;
-	clkdiv = dsiclk / (tc->lvds_link == DUAL_LINK ? DIVIDE_BY_6 : DIVIDE_BY_3);
+	clkdiv = dsiclk / DIVIDE_BY_3 * tc->lvds_link;
 	byteclk = dsiclk / 4;
 	t1 = hactive * (tc->bpc * 3 / 8) / tc->num_dsi_lanes;
 	t2 = ((100000 / clkdiv)) * (hactive + hback_porch + hsync_len + hfront_porch) / 1000;
@@ -530,7 +529,8 @@ static int tc358775_parse_dt(struct device_node *np, struct tc_data *tc)
 	struct device_node *endpoint;
 	struct device_node *parent;
 	struct device_node *remote;
-	int dsi_lanes = -1;
+	struct property *prop;
+	int len = 0;
 
 	/*
 	 * To get the data-lanes of dsi, we need to access the dsi0_out of port1
@@ -544,15 +544,25 @@ static int tc358775_parse_dt(struct device_node *np, struct tc_data *tc)
 		of_node_put(endpoint);
 		if (parent) {
 			/* dsi0 port 1 */
-			dsi_lanes = drm_of_get_data_lanes_count_ep(parent, 1, -1, 1, 4);
+			endpoint = of_graph_get_endpoint_by_regs(parent, 1, -1);
 			of_node_put(parent);
+			if (endpoint) {
+				prop = of_find_property(endpoint, "data-lanes",
+							&len);
+				of_node_put(endpoint);
+				if (!prop) {
+					dev_err(tc->dev,
+						"failed to find data lane\n");
+					return -EPROBE_DEFER;
+				}
+			}
 		}
 	}
 
-	if (dsi_lanes < 0)
-		return dsi_lanes;
+	tc->num_dsi_lanes = len / sizeof(u32);
 
-	tc->num_dsi_lanes = dsi_lanes;
+	if (tc->num_dsi_lanes < 1 || tc->num_dsi_lanes > 4)
+		return -EINVAL;
 
 	tc->host_node = of_graph_get_remote_node(np, 0, 0);
 	if (!tc->host_node)
@@ -584,26 +594,11 @@ static int tc_bridge_attach(struct drm_bridge *bridge,
 			    enum drm_bridge_attach_flags flags)
 {
 	struct tc_data *tc = bridge_to_tc(bridge);
-
-	/* Attach the panel-bridge to the dsi bridge */
-	return drm_bridge_attach(bridge->encoder, tc->panel_bridge,
-				 &tc->bridge, flags);
-}
-
-static const struct drm_bridge_funcs tc_bridge_funcs = {
-	.attach = tc_bridge_attach,
-	.pre_enable = tc_bridge_pre_enable,
-	.enable = tc_bridge_enable,
-	.mode_valid = tc_mode_valid,
-	.post_disable = tc_bridge_post_disable,
-};
-
-static int tc_attach_host(struct tc_data *tc)
-{
 	struct device *dev = &tc->i2c->dev;
 	struct mipi_dsi_host *host;
 	struct mipi_dsi_device *dsi;
 	int ret;
+
 	const struct mipi_dsi_device_info info = { .type = "tc358775",
 							.channel = 0,
 							.node = NULL,
@@ -615,10 +610,11 @@ static int tc_attach_host(struct tc_data *tc)
 		return -EPROBE_DEFER;
 	}
 
-	dsi = devm_mipi_dsi_device_register_full(dev, host, &info);
+	dsi = mipi_dsi_device_register_full(host, &info);
 	if (IS_ERR(dsi)) {
 		dev_err(dev, "failed to create dsi device\n");
-		return PTR_ERR(dsi);
+		ret = PTR_ERR(dsi);
+		goto err_dsi_device;
 	}
 
 	tc->dsi = dsi;
@@ -627,18 +623,33 @@ static int tc_attach_host(struct tc_data *tc)
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO;
 
-	ret = devm_mipi_dsi_attach(dev, dsi);
+	ret = mipi_dsi_attach(dsi);
 	if (ret < 0) {
 		dev_err(dev, "failed to attach dsi to host\n");
-		return ret;
+		goto err_dsi_attach;
 	}
 
-	return 0;
+	/* Attach the panel-bridge to the dsi bridge */
+	return drm_bridge_attach(bridge->encoder, tc->panel_bridge,
+				 &tc->bridge, flags);
+err_dsi_attach:
+	mipi_dsi_device_unregister(dsi);
+err_dsi_device:
+	return ret;
 }
 
-static int tc_probe(struct i2c_client *client)
+static const struct drm_bridge_funcs tc_bridge_funcs = {
+	.attach = tc_bridge_attach,
+	.pre_enable = tc_bridge_pre_enable,
+	.enable = tc_bridge_enable,
+	.mode_valid = tc_mode_valid,
+	.post_disable = tc_bridge_post_disable,
+};
+
+static int tc_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
+	struct drm_panel *panel;
 	struct tc_data *tc;
 	int ret;
 
@@ -649,8 +660,14 @@ static int tc_probe(struct i2c_client *client)
 	tc->dev = dev;
 	tc->i2c = client;
 
-	tc->panel_bridge = devm_drm_of_get_bridge(dev, dev->of_node,
-						  TC358775_LVDS_OUT0, 0);
+	ret = drm_of_find_panel_or_bridge(dev->of_node, TC358775_LVDS_OUT0,
+					  0, &panel, NULL);
+	if (ret < 0)
+		return ret;
+	if (!panel)
+		return -ENODEV;
+
+	tc->panel_bridge = devm_drm_panel_bridge_add(dev, panel);
 	if (IS_ERR(tc->panel_bridge))
 		return PTR_ERR(tc->panel_bridge);
 
@@ -692,22 +709,16 @@ static int tc_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, tc);
 
-	ret = tc_attach_host(tc);
-	if (ret)
-		goto err_bridge_remove;
-
 	return 0;
-
-err_bridge_remove:
-	drm_bridge_remove(&tc->bridge);
-	return ret;
 }
 
-static void tc_remove(struct i2c_client *client)
+static int tc_remove(struct i2c_client *client)
 {
 	struct tc_data *tc = i2c_get_clientdata(client);
 
 	drm_bridge_remove(&tc->bridge);
+
+	return 0;
 }
 
 static const struct i2c_device_id tc358775_i2c_ids[] = {

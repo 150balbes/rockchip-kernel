@@ -2,7 +2,19 @@
 #ifndef _S390_SECTIONS_H
 #define _S390_SECTIONS_H
 
+#define arch_is_kernel_initmem_freed arch_is_kernel_initmem_freed
+
 #include <asm-generic/sections.h>
+
+extern bool initmem_freed;
+
+static inline int arch_is_kernel_initmem_freed(unsigned long addr)
+{
+	if (!initmem_freed)
+		return 0;
+	return addr >= (unsigned long)__init_begin &&
+	       addr < (unsigned long)__init_end;
+}
 
 /*
  * .boot.data section contains variables "shared" between the decompressor and
@@ -23,7 +35,7 @@
  */
 #define __bootdata_preserved(var) __section(".boot.preserved.data." #var) var
 
-extern unsigned long __samode31, __eamode31;
-extern unsigned long __stext_amode31, __etext_amode31;
+extern unsigned long __sdma, __edma;
+extern unsigned long __stext_dma, __etext_dma;
 
 #endif

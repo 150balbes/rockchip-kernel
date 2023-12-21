@@ -11,7 +11,6 @@
 #include <linux/mm.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
-#include <linux/irqdomain.h>
 #include <asm/synch.h>
 #include <asm/switch_to.h>
 #include <misc/cxl-base.h>

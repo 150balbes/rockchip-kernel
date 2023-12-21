@@ -67,7 +67,7 @@ static void regdump(struct net_device *dev)
 	/* set up the address register */
 	count = 0;
 	arcnet_outb((count >> 8) | RDDATAflag | AUTOINCflag,
-		    ioaddr, COM20020_REG_W_ADDR_HI);
+		    ioaddr, com20020_REG_W_ADDR_HI);
 	arcnet_outb(count & 0xff, ioaddr, COM20020_REG_W_ADDR_LO);
 
 	for (count = 0; count < 256 + 32; count++) {
@@ -134,7 +134,7 @@ static int com20020_probe(struct pcmcia_device *p_dev)
 	lp->hw.owner = THIS_MODULE;
 
 	/* fill in our module parameters as defaults */
-	arcnet_set_addr(dev, node);
+	dev->dev_addr[0] = node;
 
 	p_dev->resource[0]->flags |= IO_DATA_PATH_WIDTH_8;
 	p_dev->resource[0]->end = 16;

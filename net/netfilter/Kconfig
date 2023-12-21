@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menu "Core Netfilter Configuration"
-	depends on INET && NETFILTER
+	depends on NET && INET && NETFILTER
 
 config NETFILTER_INGRESS
 	bool "Netfilter ingress support"
@@ -10,17 +10,6 @@ config NETFILTER_INGRESS
 	  This allows you to classify packets from ingress using the Netfilter
 	  infrastructure.
 
-config NETFILTER_EGRESS
-	bool "Netfilter egress support"
-	default y
-	select NET_EGRESS
-	help
-	  This allows you to classify packets before transmission using the
-	  Netfilter infrastructure.
-
-config NETFILTER_SKIP_EGRESS
-	def_bool NETFILTER_EGRESS && (NET_CLS_ACT || IFB)
-
 config NETFILTER_NETLINK
 	tristate
 
@@ -29,19 +18,6 @@ config NETFILTER_FAMILY_BRIDGE
 
 config NETFILTER_FAMILY_ARP
 	bool
-
-config NETFILTER_BPF_LINK
-	def_bool BPF_SYSCALL
-
-config NETFILTER_NETLINK_HOOK
-	tristate "Netfilter base hook dump support"
-	depends on NETFILTER_ADVANCED
-	depends on NF_TABLES
-	select NETFILTER_NETLINK
-	help
-	  If this option is enabled, the kernel will include support
-	  to list the base netfilter hooks via NFNETLINK.
-	  This is helpful for debugging.
 
 config NETFILTER_NETLINK_ACCT
 	tristate "Netfilter NFACCT over NFNETLINK interface"
@@ -95,17 +71,12 @@ config NF_CONNTRACK
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
-config NF_LOG_SYSLOG
-	tristate "Syslog packet logging"
-	default m if NETFILTER_ADVANCED=n
-	help
-	  This option enable support for packet logging via syslog.
-	  It supports IPv4, IPV6, ARP and common transport protocols such
-	  as TCP and UDP.
-	  This is a simpler but less flexible logging method compared to
-	  CONFIG_NETFILTER_NETLINK_LOG.
-	  If both are enabled the backend to use can be configured at run-time
-	  by means of per-address-family sysctl tunables.
+config NF_LOG_COMMON
+	tristate
+
+config NF_LOG_NETDEV
+	tristate "Netdev packet logging"
+	select NF_LOG_COMMON
 
 if NF_CONNTRACK
 config NETFILTER_CONNCOUNT
@@ -191,9 +162,6 @@ config NF_CONNTRACK_LABELS
 	  This option enables support for assigning user-defined flag bits
 	  to connection tracking entries.  It can be used with xtables connlabel
 	  match and the nftables ct expression.
-
-config NF_CONNTRACK_OVS
-	bool
 
 config NF_CT_PROTO_DCCP
 	bool 'DCCP protocol connection tracking support'
@@ -465,9 +433,6 @@ config NF_NAT_REDIRECT
 config NF_NAT_MASQUERADE
 	bool
 
-config NF_NAT_OVS
-	bool
-
 config NETFILTER_SYNPROXY
 	tristate
 
@@ -523,6 +488,12 @@ config NFT_FLOW_OFFLOAD
 	  This option adds the "flow_offload" expression that you can use to
 	  choose what flows are placed into the hardware.
 
+config NFT_COUNTER
+	tristate "Netfilter nf_tables counter module"
+	help
+	  This option adds the "counter" expression that you can use to
+	  include packet and byte counters in a rule.
+
 config NFT_CONNLIMIT
 	tristate "Netfilter nf_tables connlimit module"
 	depends on NF_CONNTRACK
@@ -576,6 +547,12 @@ config NFT_TUNNEL
 	help
 	  This option adds the "tunnel" expression that you can use to set
 	  tunneling policies.
+
+config NFT_OBJREF
+	tristate "Netfilter nf_tables stateful object reference module"
+	help
+	  This option adds the "objref" expression that allows you to refer to
+	  stateful objects, such as counters and quotas.
 
 config NFT_QUEUE
 	depends on NETFILTER_NETLINK_QUEUE
@@ -704,16 +681,6 @@ config NFT_FIB_NETDEV
 	  The lookup will be delegated to the IPv4 or IPv6 FIB depending
 	  on the protocol of the packet.
 
-config NFT_REJECT_NETDEV
-	depends on NFT_REJECT_IPV4
-	depends on NFT_REJECT_IPV6
-	tristate "Netfilter nf_tables netdev REJECT support"
-	help
-	  This option enables the REJECT support from the netdev table.
-	  The return packet generation will be delegated to the IPv4
-	  or IPv6 ICMP or TCP RST implementation depending on the
-	  protocol of the packet.
-
 endif # NF_TABLES_NETDEV
 
 endif # NF_TABLES
@@ -736,14 +703,6 @@ config NF_FLOW_TABLE
 
 	  To compile it as a module, choose M here.
 
-config NF_FLOW_TABLE_PROCFS
-	bool "Supply flow table statistics in procfs"
-	depends on NF_FLOW_TABLE
-	depends on PROC_FS
-	help
-	  This option enables for the flow table offload statistics
-	  to be shown in procfs under net/netfilter/nf_flowtable.
-
 config NETFILTER_XTABLES
 	tristate "Netfilter Xtables support (required for ip_tables)"
 	default m if NETFILTER_ADVANCED=n
@@ -752,15 +711,6 @@ config NETFILTER_XTABLES
 	  ip6_tables or arp_tables.
 
 if NETFILTER_XTABLES
-
-config NETFILTER_XTABLES_COMPAT
-	bool "Netfilter Xtables 32bit support"
-	depends on COMPAT
-	help
-	   This option provides a translation layer to run 32bit arp,ip(6),ebtables
-	   binaries on 64bit kernels.
-
-	   If unsure, say N.
 
 comment "Xtables combined modules"
 
@@ -840,7 +790,7 @@ config NETFILTER_XT_TARGET_CLASSIFY
 	  the priority of a packet. Some qdiscs can use this value for
 	  classification, among these are:
 
-	  atm, cbq, dsmark, pfifo_fast, htb, prio
+  	  atm, cbq, dsmark, pfifo_fast, htb, prio
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
@@ -961,7 +911,8 @@ config NETFILTER_XT_TARGET_LED
 
 config NETFILTER_XT_TARGET_LOG
 	tristate "LOG target support"
-	select NF_LOG_SYSLOG
+	select NF_LOG_COMMON
+	select NF_LOG_IPV4
 	select NF_LOG_IPV6 if IP6_NF_IPTABLES
 	default m if NETFILTER_ADVANCED=n
 	help
@@ -1524,6 +1475,29 @@ config NETFILTER_XT_MATCH_QUOTA
 
 	  If you want to compile it as a module, say M here and read
 	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
+
+config NETFILTER_XT_MATCH_QUOTA2
+	tristate '"quota2" match support'
+	depends on NETFILTER_ADVANCED
+	help
+	  This option adds a `quota2' match, which allows to match on a
+	  byte counter correctly and not per CPU.
+	  It allows naming the quotas.
+	  This is based on http://xtables-addons.git.sourceforge.net
+
+	  If you want to compile it as a module, say M here and read
+	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+
+config NETFILTER_XT_MATCH_QUOTA2_LOG
+	bool '"quota2" Netfilter LOG support'
+	depends on NETFILTER_XT_MATCH_QUOTA2
+	default n
+	help
+	  This option allows `quota2' to log ONCE when a quota limit
+	  is passed. It logs via NETLINK using the NETLINK_NFLOG family.
+	  It logs similarly to how ipt_ULOG would without data.
+
+	  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_RATEEST
 	tristate '"rateest" match support'

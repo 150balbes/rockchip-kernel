@@ -26,20 +26,22 @@ properties:
 
   clocks:
     items:
-      - description: XO source
-      - description: SYS APCS AUX clock
+      - description: Primary PLL clock for power cluster (little)
+      - description: Primary PLL clock for perf cluster (big)
+      - description: Alternate PLL clock for power cluster (little)
+      - description: Alternate PLL clock for perf cluster (big)
 
   clock-names:
     items:
-      - const: xo
-      - const: sys_apcs_aux
+      - const: pwrcl_pll
+      - const: perfcl_pll
+      - const: pwrcl_alt_pll
+      - const: perfcl_alt_pll
 
 required:
   - compatible
   - reg
   - '#clock-cells'
-  - clocks
-  - clock-names
 
 additionalProperties: false
 
@@ -49,7 +51,4 @@ examples:
         compatible = "qcom,msm8996-apcc";
         reg = <0x6400000 0x90000>;
         #clock-cells = <1>;
-
-        clocks = <&xo_board>, <&apcs_glb>;
-        clock-names = "xo", "sys_apcs_aux";
     };

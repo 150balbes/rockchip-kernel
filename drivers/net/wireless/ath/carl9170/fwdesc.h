@@ -149,7 +149,7 @@ struct carl9170fw_fix_entry {
 
 struct carl9170fw_fix_desc {
 	struct carl9170fw_desc_head head;
-	struct carl9170fw_fix_entry data[];
+	struct carl9170fw_fix_entry data[0];
 } __packed;
 #define CARL9170FW_FIX_DESC_SIZE			\
 	(sizeof(struct carl9170fw_fix_desc))

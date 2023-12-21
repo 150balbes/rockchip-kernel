@@ -80,7 +80,6 @@ struct qedi_endpoint {
 	u32 handle;
 	u32 fw_cid;
 	void __iomem *p_doorbell;
-	struct iscsi_db_data db_data;
 
 	/* Send queue management */
 	struct iscsi_wqe *sq;
@@ -155,7 +154,7 @@ struct qedi_conn {
 	spinlock_t list_lock;		/* internal conn lock */
 	u32 active_cmd_count;
 	u32 cmd_cleanup_req;
-	atomic_t cmd_cleanup_cmpl;
+	u32 cmd_cleanup_cmpl;
 
 	u32 iscsi_conn_id;
 	int itt;
@@ -170,8 +169,8 @@ struct qedi_conn {
 	struct list_head tmf_work_list;
 	wait_queue_head_t wait_queue;
 	spinlock_t tmf_work_lock;	/* tmf work lock */
-	bool ep_disconnect_starting;
-	int fw_cleanup_works;
+	unsigned long flags;
+#define QEDI_CONN_FW_CLEANUP	1
 };
 
 struct qedi_cmd {
@@ -182,7 +181,7 @@ struct qedi_cmd {
 	struct scsi_cmnd *scsi_cmd;
 	struct scatterlist *sg;
 	struct qedi_io_bdt io_tbl;
-	struct iscsi_task_context request;
+	struct e4_iscsi_task_context request;
 	unsigned char *sense_buffer;
 	dma_addr_t sense_buffer_dma;
 	u16 task_id;
@@ -213,7 +212,6 @@ struct qedi_cmd {
 struct qedi_work_map {
 	struct list_head list;
 	struct qedi_cmd *qedi_cmd;
-	struct iscsi_task *ctask;
 	int rtid;
 
 	int state;

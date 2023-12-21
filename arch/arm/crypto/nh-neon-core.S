@@ -69,7 +69,7 @@
 
 /*
  * void nh_neon(const u32 *key, const u8 *message, size_t message_len,
- *		__le64 hash[NH_NUM_PASSES])
+ *		u8 hash[NH_HASH_BYTES])
  *
  * It's guaranteed that message_len % 16 == 0.
  */

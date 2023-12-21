@@ -1,13 +1,14 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-======
-CD-ROM
-======
+=====
+cdrom
+=====
 
 .. toctree::
     :maxdepth: 1
 
     cdrom-standard
+    ide-cd
     packet-writing
 
 .. only::  subproject and html

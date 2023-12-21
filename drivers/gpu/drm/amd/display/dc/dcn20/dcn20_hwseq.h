@@ -53,10 +53,6 @@ void dcn20_enable_stream(struct pipe_ctx *pipe_ctx);
 void dcn20_unblank_stream(struct pipe_ctx *pipe_ctx,
 		struct dc_link_settings *link_settings);
 void dcn20_disable_plane(struct dc *dc, struct pipe_ctx *pipe_ctx);
-void dcn20_disable_pixel_data(
-		struct dc *dc,
-		struct pipe_ctx *pipe_ctx,
-		bool blank);
 void dcn20_blank_pixel_data(
 		struct dc *dc,
 		struct pipe_ctx *pipe_ctx,
@@ -141,14 +137,5 @@ bool dcn20_optimize_timing_for_fsft(struct dc *dc,
 		struct dc_crtc_timing *timing,
 		unsigned int max_input_rate_in_khz);
 #endif
-
-void dcn20_set_disp_pattern_generator(const struct dc *dc,
-		struct pipe_ctx *pipe_ctx,
-		enum controller_dp_test_pattern test_pattern,
-		enum controller_dp_color_space color_space,
-		enum dc_color_depth color_depth,
-		const struct tg_color *solid_color,
-		int width, int height, int offset);
-
 #endif /* __DC_HWSS_DCN20_H__ */
 

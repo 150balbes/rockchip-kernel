@@ -14,11 +14,5 @@
 
 / {
 	model = "MediaTek krane sku176 board";
-	chassis-type = "tablet";
 	compatible = "google,krane-sku176", "google,krane", "mediatek,mt8183";
-};
-
-&panel {
-        status = "okay";
-        compatible = "boe,tv101wum-nl6";
 };

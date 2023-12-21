@@ -18,10 +18,11 @@
 #include <linux/regulator/consumer.h>
 #include <linux/types.h>
 
-#include <drm/display/drm_dp_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_crtc.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_dp_helper.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
@@ -536,7 +537,6 @@ static int anx6345_bridge_attach(struct drm_bridge *bridge,
 	/* Register aux channel */
 	anx6345->aux.name = "DP-AUX";
 	anx6345->aux.dev = &anx6345->client->dev;
-	anx6345->aux.drm_dev = bridge->dev;
 	anx6345->aux.transfer = anx6345_aux_transfer;
 
 	err = drm_dp_aux_register(&anx6345->aux);
@@ -550,11 +550,17 @@ static int anx6345_bridge_attach(struct drm_bridge *bridge,
 				 DRM_MODE_CONNECTOR_eDP);
 	if (err) {
 		DRM_ERROR("Failed to initialize connector: %d\n", err);
-		goto aux_unregister;
+		return err;
 	}
 
 	drm_connector_helper_add(&anx6345->connector,
 				 &anx6345_connector_helper_funcs);
+
+	err = drm_connector_register(&anx6345->connector);
+	if (err) {
+		DRM_ERROR("Failed to register connector: %d\n", err);
+		return err;
+	}
 
 	anx6345->connector.polled = DRM_CONNECTOR_POLL_HPD;
 
@@ -562,26 +568,10 @@ static int anx6345_bridge_attach(struct drm_bridge *bridge,
 					   bridge->encoder);
 	if (err) {
 		DRM_ERROR("Failed to link up connector to encoder: %d\n", err);
-		goto connector_cleanup;
-	}
-
-	err = drm_connector_register(&anx6345->connector);
-	if (err) {
-		DRM_ERROR("Failed to register connector: %d\n", err);
-		goto connector_cleanup;
+		return err;
 	}
 
 	return 0;
-connector_cleanup:
-	drm_connector_cleanup(&anx6345->connector);
-aux_unregister:
-	drm_dp_aux_unregister(&anx6345->aux);
-	return err;
-}
-
-static void anx6345_bridge_detach(struct drm_bridge *bridge)
-{
-	drm_dp_aux_unregister(&bridge_to_anx6345(bridge)->aux);
 }
 
 static enum drm_mode_status
@@ -634,7 +624,6 @@ static void anx6345_bridge_enable(struct drm_bridge *bridge)
 
 static const struct drm_bridge_funcs anx6345_bridge_funcs = {
 	.attach = anx6345_bridge_attach,
-	.detach = anx6345_bridge_detach,
 	.mode_valid = anx6345_bridge_mode_valid,
 	.disable = anx6345_bridge_disable,
 	.enable = anx6345_bridge_enable,
@@ -691,7 +680,8 @@ static bool anx6345_get_chip_id(struct anx6345 *anx6345)
 	return false;
 }
 
-static int anx6345_i2c_probe(struct i2c_client *client)
+static int anx6345_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct anx6345 *anx6345;
 	struct device *dev;
@@ -785,7 +775,7 @@ err_unregister_i2c:
 	return err;
 }
 
-static void anx6345_i2c_remove(struct i2c_client *client)
+static int anx6345_i2c_remove(struct i2c_client *client)
 {
 	struct anx6345 *anx6345 = i2c_get_clientdata(client);
 
@@ -796,6 +786,8 @@ static void anx6345_i2c_remove(struct i2c_client *client)
 	kfree(anx6345->edid);
 
 	mutex_destroy(&anx6345->lock);
+
+	return 0;
 }
 
 static const struct i2c_device_id anx6345_id[] = {
@@ -813,7 +805,7 @@ MODULE_DEVICE_TABLE(of, anx6345_match_table);
 static struct i2c_driver anx6345_driver = {
 	.driver = {
 		   .name = "anx6345",
-		   .of_match_table = anx6345_match_table,
+		   .of_match_table = of_match_ptr(anx6345_match_table),
 		  },
 	.probe = anx6345_i2c_probe,
 	.remove = anx6345_i2c_remove,

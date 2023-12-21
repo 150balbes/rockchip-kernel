@@ -29,8 +29,9 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/sched.h>
@@ -173,7 +174,7 @@ static int ping_read(struct iio_dev *indio_dev)
 
 	/*
 	 * read error code of laser ping sensor and give users chance to
-	 * figure out error by using dynamic debugging
+	 * figure out error by using dynamic debuggging
 	 */
 	if (data->cfg->laserping_error) {
 		if ((time_ns > 12500000) && (time_ns <= 13500000)) {
@@ -266,8 +267,8 @@ static const struct iio_chan_spec ping_chan_spec[] = {
 };
 
 static const struct of_device_id of_ping_match[] = {
-	{ .compatible = "parallax,ping", .data = &pa_ping_cfg },
-	{ .compatible = "parallax,laserping", .data = &pa_laser_ping_cfg },
+	{ .compatible = "parallax,ping", .data = &pa_ping_cfg},
+	{ .compatible = "parallax,laserping", .data = &pa_laser_ping_cfg},
 	{},
 };
 
@@ -287,7 +288,7 @@ static int ping_probe(struct platform_device *pdev)
 
 	data = iio_priv(indio_dev);
 	data->dev = dev;
-	data->cfg = device_get_match_data(dev);
+	data->cfg = of_device_get_match_data(dev);
 
 	mutex_init(&data->lock);
 	init_completion(&data->rising);

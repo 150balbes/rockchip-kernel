@@ -6,7 +6,7 @@
  */
 
 #include <linux/blk-crypto.h>
-#include <linux/blk-crypto-profile.h>
+#include <linux/keyslot-manager.h>
 #include <linux/mmc/host.h>
 
 #include "cqhci-crypto.h"
@@ -23,10 +23,9 @@ static const struct cqhci_crypto_alg_entry {
 };
 
 static inline struct cqhci_host *
-cqhci_host_from_crypto_profile(struct blk_crypto_profile *profile)
+cqhci_host_from_ksm(struct blk_keyslot_manager *ksm)
 {
-	struct mmc_host *mmc =
-		container_of(profile, struct mmc_host, crypto_profile);
+	struct mmc_host *mmc = container_of(ksm, struct mmc_host, ksm);
 
 	return mmc->cqe_private;
 }
@@ -58,12 +57,12 @@ static int cqhci_crypto_program_key(struct cqhci_host *cq_host,
 	return 0;
 }
 
-static int cqhci_crypto_keyslot_program(struct blk_crypto_profile *profile,
+static int cqhci_crypto_keyslot_program(struct blk_keyslot_manager *ksm,
 					const struct blk_crypto_key *key,
 					unsigned int slot)
 
 {
-	struct cqhci_host *cq_host = cqhci_host_from_crypto_profile(profile);
+	struct cqhci_host *cq_host = cqhci_host_from_ksm(ksm);
 	const union cqhci_crypto_cap_entry *ccap_array =
 		cq_host->crypto_cap_array;
 	const struct cqhci_crypto_alg_entry *alg =
@@ -116,11 +115,11 @@ static int cqhci_crypto_clear_keyslot(struct cqhci_host *cq_host, int slot)
 	return cqhci_crypto_program_key(cq_host, &cfg, slot);
 }
 
-static int cqhci_crypto_keyslot_evict(struct blk_crypto_profile *profile,
+static int cqhci_crypto_keyslot_evict(struct blk_keyslot_manager *ksm,
 				      const struct blk_crypto_key *key,
 				      unsigned int slot)
 {
-	struct cqhci_host *cq_host = cqhci_host_from_crypto_profile(profile);
+	struct cqhci_host *cq_host = cqhci_host_from_ksm(ksm);
 
 	return cqhci_crypto_clear_keyslot(cq_host, slot);
 }
@@ -133,7 +132,7 @@ static int cqhci_crypto_keyslot_evict(struct blk_crypto_profile *profile,
  * "enabled" when these are called, i.e. CQHCI_ENABLE might not be set in the
  * CQHCI_CFG register.  But the hardware allows that.
  */
-static const struct blk_crypto_ll_ops cqhci_crypto_ops = {
+static const struct blk_ksm_ll_ops cqhci_ksm_ops = {
 	.keyslot_program	= cqhci_crypto_keyslot_program,
 	.keyslot_evict		= cqhci_crypto_keyslot_evict,
 };
@@ -158,8 +157,8 @@ cqhci_find_blk_crypto_mode(union cqhci_crypto_cap_entry cap)
  *
  * If the driver previously set MMC_CAP2_CRYPTO and the CQE declares
  * CQHCI_CAP_CS, initialize the crypto support.  This involves reading the
- * crypto capability registers, initializing the blk_crypto_profile, clearing
- * all keyslots, and enabling 128-bit task descriptors.
+ * crypto capability registers, initializing the keyslot manager, clearing all
+ * keyslots, and enabling 128-bit task descriptors.
  *
  * Return: 0 if crypto was initialized or isn't supported; whether
  *	   MMC_CAP2_CRYPTO remains set indicates which one of those cases it is.
@@ -169,7 +168,7 @@ int cqhci_crypto_init(struct cqhci_host *cq_host)
 {
 	struct mmc_host *mmc = cq_host->mmc;
 	struct device *dev = mmc_dev(mmc);
-	struct blk_crypto_profile *profile = &mmc->crypto_profile;
+	struct blk_keyslot_manager *ksm = &mmc->ksm;
 	unsigned int num_keyslots;
 	unsigned int cap_idx;
 	enum blk_crypto_mode_num blk_mode_num;
@@ -200,15 +199,17 @@ int cqhci_crypto_init(struct cqhci_host *cq_host)
 	 */
 	num_keyslots = cq_host->crypto_capabilities.config_count + 1;
 
-	err = devm_blk_crypto_profile_init(dev, profile, num_keyslots);
+	err = devm_blk_ksm_init(dev, ksm, num_keyslots);
 	if (err)
 		goto out;
 
-	profile->ll_ops = cqhci_crypto_ops;
-	profile->dev = dev;
+	ksm->ksm_ll_ops = cqhci_ksm_ops;
+	ksm->dev = dev;
 
 	/* Unfortunately, CQHCI crypto only supports 32 DUN bits. */
-	profile->max_dun_bytes_supported = 4;
+	ksm->max_dun_bytes_supported = 4;
+
+	ksm->features = BLK_CRYPTO_FEATURE_STANDARD_KEYS;
 
 	/*
 	 * Cache all the crypto capabilities and advertise the supported crypto
@@ -224,7 +225,7 @@ int cqhci_crypto_init(struct cqhci_host *cq_host)
 					cq_host->crypto_cap_array[cap_idx]);
 		if (blk_mode_num == BLK_ENCRYPTION_MODE_INVALID)
 			continue;
-		profile->modes_supported[blk_mode_num] |=
+		ksm->crypto_modes_supported[blk_mode_num] |=
 			cq_host->crypto_cap_array[cap_idx].sdus_mask * 512;
 	}
 

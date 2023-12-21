@@ -99,9 +99,11 @@ static int filter_write(u32 reg)
 	if (!__ratelimit(&fw_rs))
 		return 0;
 
-	pr_warn("Write to unrecognized MSR 0x%x by %s (pid: %d).\n",
-	        reg, current->comm, current->pid);
-	pr_warn("See https://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git/about for details.\n");
+	if (reg == MSR_IA32_ENERGY_PERF_BIAS)
+		return 0;
+
+	pr_err("Write to unrecognized MSR 0x%x by %s (pid: %d). Please report to x86@kernel.org.\n",
+	       reg, current->comm, current->pid);
 
 	return 0;
 }
@@ -250,7 +252,7 @@ static int msr_device_destroy(unsigned int cpu)
 	return 0;
 }
 
-static char *msr_devnode(const struct device *dev, umode_t *mode)
+static char *msr_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "cpu/%u/msr", MINOR(dev->devt));
 }
@@ -263,7 +265,7 @@ static int __init msr_init(void)
 		pr_err("unable to get major %d for msr\n", MSR_MAJOR);
 		return -EBUSY;
 	}
-	msr_class = class_create("msr");
+	msr_class = class_create(THIS_MODULE, "msr");
 	if (IS_ERR(msr_class)) {
 		err = PTR_ERR(msr_class);
 		goto out_chrdev;

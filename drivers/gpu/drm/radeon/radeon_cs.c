@@ -93,8 +93,8 @@ static int radeon_cs_parser_relocs(struct radeon_cs_parser *p)
 	p->dma_reloc_idx = 0;
 	/* FIXME: we assume that each relocs use 4 dwords */
 	p->nrelocs = chunk->length_dw / 4;
-	p->relocs = kvcalloc(p->nrelocs, sizeof(struct radeon_bo_list),
-			GFP_KERNEL);
+	p->relocs = kvmalloc_array(p->nrelocs, sizeof(struct radeon_bo_list),
+			GFP_KERNEL | __GFP_ZERO);
 	if (p->relocs == NULL) {
 		return -ENOMEM;
 	}
@@ -130,7 +130,8 @@ static int radeon_cs_parser_relocs(struct radeon_cs_parser *p)
 		 * IGP chips to avoid image corruptions
 		 */
 		if (p->ring == R600_RING_TYPE_UVD_INDEX &&
-		    (i <= 0 || pci_find_capability(p->rdev->pdev, PCI_CAP_ID_AGP) ||
+		    (i <= 0 || pci_find_capability(p->rdev->ddev->pdev,
+						   PCI_CAP_ID_AGP) ||
 		     p->rdev->family == CHIP_RS780 ||
 		     p->rdev->family == CHIP_RS880)) {
 
@@ -270,8 +271,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 {
 	struct drm_radeon_cs *cs = data;
 	uint64_t *chunk_array_ptr;
-	u64 size;
-	unsigned i;
+	unsigned size, i;
 	u32 ring = RADEON_CS_RING_GFX;
 	s32 priority = 0;
 
@@ -289,7 +289,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 	p->chunk_relocs = NULL;
 	p->chunk_flags = NULL;
 	p->chunk_const_ib = NULL;
-	p->chunks_array = kvmalloc_array(cs->num_chunks, sizeof(uint64_t), GFP_KERNEL);
+	p->chunks_array = kcalloc(cs->num_chunks, sizeof(uint64_t), GFP_KERNEL);
 	if (p->chunks_array == NULL) {
 		return -ENOMEM;
 	}
@@ -300,7 +300,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 	}
 	p->cs_flags = 0;
 	p->nchunks = cs->num_chunks;
-	p->chunks = kvcalloc(p->nchunks, sizeof(struct radeon_cs_chunk), GFP_KERNEL);
+	p->chunks = kcalloc(p->nchunks, sizeof(struct radeon_cs_chunk), GFP_KERNEL);
 	if (p->chunks == NULL) {
 		return -ENOMEM;
 	}
@@ -394,25 +394,20 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 	return 0;
 }
 
-static int cmp_size_smaller_first(void *priv, const struct list_head *a,
-				  const struct list_head *b)
+static int cmp_size_smaller_first(void *priv, struct list_head *a,
+				  struct list_head *b)
 {
 	struct radeon_bo_list *la = list_entry(a, struct radeon_bo_list, tv.head);
 	struct radeon_bo_list *lb = list_entry(b, struct radeon_bo_list, tv.head);
 
 	/* Sort A before B if A is smaller. */
-	if (la->robj->tbo.base.size > lb->robj->tbo.base.size)
-		return 1;
-	if (la->robj->tbo.base.size < lb->robj->tbo.base.size)
-		return -1;
-	return 0;
+	return (int)la->robj->tbo.num_pages - (int)lb->robj->tbo.num_pages;
 }
 
 /**
- * radeon_cs_parser_fini() - clean parser states
+ * cs_parser_fini() - clean parser states
  * @parser:	parser structure holding parsing context.
  * @error:	error number
- * @backoff:	indicator to backoff the reservation
  *
  * If error is set than unvalidate buffer, otherwise just free memory
  * used by parsing context.
@@ -456,8 +451,8 @@ static void radeon_cs_parser_fini(struct radeon_cs_parser *parser, int error, bo
 	kvfree(parser->vm_bos);
 	for (i = 0; i < parser->nchunks; i++)
 		kvfree(parser->chunks[i].kdata);
-	kvfree(parser->chunks);
-	kvfree(parser->chunks_array);
+	kfree(parser->chunks);
+	kfree(parser->chunks_array);
 	radeon_ib_free(parser->rdev, &parser->ib);
 	radeon_ib_free(parser->rdev, &parser->const_ib);
 }
@@ -520,7 +515,7 @@ static int radeon_bo_vm_update_pte(struct radeon_cs_parser *p,
 	}
 
 	r = radeon_vm_bo_update(rdev, vm->ib_bo_va,
-				rdev->ring_tmp_bo.bo->tbo.resource);
+				&rdev->ring_tmp_bo.bo->tbo.mem);
 	if (r)
 		return r;
 
@@ -534,15 +529,11 @@ static int radeon_bo_vm_update_pte(struct radeon_cs_parser *p,
 			return -EINVAL;
 		}
 
-		r = radeon_vm_bo_update(rdev, bo_va, bo->tbo.resource);
+		r = radeon_vm_bo_update(rdev, bo_va, &bo->tbo.mem);
 		if (r)
 			return r;
 
 		radeon_sync_fence(&p->ib.sync, bo_va->last_pt_update);
-
-		r = dma_resv_reserve_fences(bo->tbo.base.resv, 1);
-		if (r)
-			return r;
 	}
 
 	return radeon_vm_clear_invalids(rdev, vm);
@@ -732,9 +723,8 @@ out:
 
 /**
  * radeon_cs_packet_parse() - parse cp packet and point ib index to next packet
- * @p:		parser structure holding parsing context.
+ * @parser:	parser structure holding parsing context.
  * @pkt:	where to store packet information
- * @idx:	packet index
  *
  * Assume that chunk_ib_index is properly set. Will return -EINVAL
  * if packet is bigger than remaining ib size. or if packets is unknown.
@@ -839,9 +829,11 @@ void radeon_cs_dump_packet(struct radeon_cs_parser *p,
 
 /**
  * radeon_cs_packet_next_reloc() - parse next (should be reloc) packet
- * @p:			parser structure holding parsing context.
- * @cs_reloc:		reloc informations
- * @nomm:		no memory management for debugging
+ * @parser:		parser structure holding parsing context.
+ * @data:		pointer to relocation data
+ * @offset_start:	starting offset
+ * @offset_mask:	offset mask (to align start offset on)
+ * @reloc:		reloc informations
  *
  * Check if next packet is relocation packet3, do bo validation and compute
  * GPU offset using the provided start.

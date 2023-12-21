@@ -31,17 +31,17 @@ static void gfs2_print_trans(struct gfs2_sbd *sdp, const struct gfs2_trans *tr)
 	fs_warn(sdp, "blocks=%u revokes=%u reserved=%u touched=%u\n",
 		tr->tr_blocks, tr->tr_revokes, tr->tr_reserved,
 		test_bit(TR_TOUCHED, &tr->tr_flags));
-	fs_warn(sdp, "Buf %u/%u Databuf %u/%u Revoke %u\n",
+	fs_warn(sdp, "Buf %u/%u Databuf %u/%u Revoke %u/%u\n",
 		tr->tr_num_buf_new, tr->tr_num_buf_rm,
 		tr->tr_num_databuf_new, tr->tr_num_databuf_rm,
-		tr->tr_num_revoke);
+		tr->tr_num_revoke, tr->tr_num_revoke_rm);
 }
 
-int __gfs2_trans_begin(struct gfs2_trans *tr, struct gfs2_sbd *sdp,
-		       unsigned int blocks, unsigned int revokes,
-		       unsigned long ip)
+int gfs2_trans_begin(struct gfs2_sbd *sdp, unsigned int blocks,
+		     unsigned int revokes)
 {
-	unsigned int extra_revokes;
+	struct gfs2_trans *tr;
+	int error;
 
 	if (current->journal_info) {
 		gfs2_print_trans(sdp, current->journal_info);
@@ -52,72 +52,39 @@ int __gfs2_trans_begin(struct gfs2_trans *tr, struct gfs2_sbd *sdp,
 	if (!test_bit(SDF_JOURNAL_LIVE, &sdp->sd_flags))
 		return -EROFS;
 
-	tr->tr_ip = ip;
+	tr = kmem_cache_zalloc(gfs2_trans_cachep, GFP_NOFS);
+	if (!tr)
+		return -ENOMEM;
+
+	tr->tr_ip = _RET_IP_;
 	tr->tr_blocks = blocks;
 	tr->tr_revokes = revokes;
-	tr->tr_reserved = GFS2_LOG_FLUSH_MIN_BLOCKS;
-	if (blocks) {
-		/*
-		 * The reserved blocks are either used for data or metadata.
-		 * We can have mixed data and metadata, each with its own log
-		 * descriptor block; see calc_reserved().
-		 */
-		tr->tr_reserved += blocks + 1 + DIV_ROUND_UP(blocks - 1, databuf_limit(sdp));
-	}
+	tr->tr_reserved = 1;
+	set_bit(TR_ALLOCED, &tr->tr_flags);
+	if (blocks)
+		tr->tr_reserved += 6 + blocks;
+	if (revokes)
+		tr->tr_reserved += gfs2_struct2blk(sdp, revokes);
 	INIT_LIST_HEAD(&tr->tr_databuf);
 	INIT_LIST_HEAD(&tr->tr_buf);
 	INIT_LIST_HEAD(&tr->tr_list);
 	INIT_LIST_HEAD(&tr->tr_ail1_list);
 	INIT_LIST_HEAD(&tr->tr_ail2_list);
 
-	if (gfs2_assert_warn(sdp, tr->tr_reserved <= sdp->sd_jdesc->jd_blocks))
-		return -EINVAL;
-
 	sb_start_intwrite(sdp->sd_vfs);
 
-	/*
-	 * Try the reservations under sd_log_flush_lock to prevent log flushes
-	 * from creating inconsistencies between the number of allocated and
-	 * reserved revokes.  If that fails, do a full-block allocation outside
-	 * of the lock to avoid stalling log flushes.  Then, allot the
-	 * appropriate number of blocks to revokes, use as many revokes locally
-	 * as needed, and "release" the surplus into the revokes pool.
-	 */
-
-	down_read(&sdp->sd_log_flush_lock);
-	if (gfs2_log_try_reserve(sdp, tr, &extra_revokes))
-		goto reserved;
-	up_read(&sdp->sd_log_flush_lock);
-	gfs2_log_reserve(sdp, tr, &extra_revokes);
-	down_read(&sdp->sd_log_flush_lock);
-
-reserved:
-	gfs2_log_release_revokes(sdp, extra_revokes);
-	if (unlikely(!test_bit(SDF_JOURNAL_LIVE, &sdp->sd_flags))) {
-		gfs2_log_release_revokes(sdp, tr->tr_revokes);
-		up_read(&sdp->sd_log_flush_lock);
-		gfs2_log_release(sdp, tr->tr_reserved);
-		sb_end_intwrite(sdp->sd_vfs);
-		return -EROFS;
-	}
+	error = gfs2_log_reserve(sdp, tr->tr_reserved);
+	if (error)
+		goto fail;
 
 	current->journal_info = tr;
 
 	return 0;
-}
 
-int gfs2_trans_begin(struct gfs2_sbd *sdp, unsigned int blocks,
-		     unsigned int revokes)
-{
-	struct gfs2_trans *tr;
-	int error;
+fail:
+	sb_end_intwrite(sdp->sd_vfs);
+	kmem_cache_free(gfs2_trans_cachep, tr);
 
-	tr = kmem_cache_zalloc(gfs2_trans_cachep, GFP_NOFS);
-	if (!tr)
-		return -ENOMEM;
-	error = __gfs2_trans_begin(tr, sdp, blocks, revokes, _RET_IP_);
-	if (error)
-		kmem_cache_free(gfs2_trans_cachep, tr);
 	return error;
 }
 
@@ -125,39 +92,37 @@ void gfs2_trans_end(struct gfs2_sbd *sdp)
 {
 	struct gfs2_trans *tr = current->journal_info;
 	s64 nbuf;
+	int alloced = test_bit(TR_ALLOCED, &tr->tr_flags);
 
 	current->journal_info = NULL;
 
 	if (!test_bit(TR_TOUCHED, &tr->tr_flags)) {
-		gfs2_log_release_revokes(sdp, tr->tr_revokes);
-		up_read(&sdp->sd_log_flush_lock);
 		gfs2_log_release(sdp, tr->tr_reserved);
-		if (!test_bit(TR_ONSTACK, &tr->tr_flags))
+		if (alloced) {
 			gfs2_trans_free(sdp, tr);
-		sb_end_intwrite(sdp->sd_vfs);
+			sb_end_intwrite(sdp->sd_vfs);
+		}
 		return;
 	}
-
-	gfs2_log_release_revokes(sdp, tr->tr_revokes - tr->tr_num_revoke);
 
 	nbuf = tr->tr_num_buf_new + tr->tr_num_databuf_new;
 	nbuf -= tr->tr_num_buf_rm;
 	nbuf -= tr->tr_num_databuf_rm;
 
-	if (gfs2_assert_withdraw(sdp, nbuf <= tr->tr_blocks) ||
-	    gfs2_assert_withdraw(sdp, tr->tr_num_revoke <= tr->tr_revokes))
+	if (gfs2_assert_withdraw(sdp, (nbuf <= tr->tr_blocks) &&
+				       (tr->tr_num_revoke <= tr->tr_revokes)))
 		gfs2_print_trans(sdp, tr);
 
 	gfs2_log_commit(sdp, tr);
-	if (!test_bit(TR_ONSTACK, &tr->tr_flags) &&
-	    !test_bit(TR_ATTACHED, &tr->tr_flags))
+	if (alloced && !test_bit(TR_ATTACHED, &tr->tr_flags))
 		gfs2_trans_free(sdp, tr);
 	up_read(&sdp->sd_log_flush_lock);
 
 	if (sdp->sd_vfs->s_flags & SB_SYNCHRONOUS)
 		gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_NORMAL |
 			       GFS2_LFC_TRANS_END);
-	sb_end_intwrite(sdp->sd_vfs);
+	if (alloced)
+		sb_end_intwrite(sdp->sd_vfs);
 }
 
 static struct gfs2_bufdata *gfs2_alloc_bufdata(struct gfs2_glock *gl,
@@ -233,6 +198,7 @@ void gfs2_trans_add_meta(struct gfs2_glock *gl, struct buffer_head *bh)
 	struct gfs2_bufdata *bd;
 	struct gfs2_meta_header *mh;
 	struct gfs2_trans *tr = current->journal_info;
+	enum gfs2_freeze_state state = atomic_read(&sdp->sd_freeze_state);
 
 	lock_buffer(bh);
 	if (buffer_pinned(bh)) {
@@ -266,7 +232,7 @@ void gfs2_trans_add_meta(struct gfs2_glock *gl, struct buffer_head *bh)
 		       (unsigned long long)bd->bd_bh->b_blocknr);
 		BUG();
 	}
-	if (unlikely(test_bit(SDF_FROZEN, &sdp->sd_flags))) {
+	if (unlikely(state == SFS_FROZEN)) {
 		fs_info(sdp, "GFS2:adding buf while frozen\n");
 		gfs2_assert_withdraw(sdp, 0);
 	}
@@ -298,6 +264,7 @@ void gfs2_trans_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 void gfs2_trans_remove_revoke(struct gfs2_sbd *sdp, u64 blkno, unsigned int len)
 {
 	struct gfs2_bufdata *bd, *tmp;
+	struct gfs2_trans *tr = current->journal_info;
 	unsigned int n = len;
 
 	gfs2_log_lock(sdp);
@@ -309,7 +276,7 @@ void gfs2_trans_remove_revoke(struct gfs2_sbd *sdp, u64 blkno, unsigned int len)
 			if (bd->bd_gl)
 				gfs2_glock_remove_revoke(bd->bd_gl);
 			kmem_cache_free(gfs2_bufdata_cachep, bd);
-			gfs2_log_release_revokes(sdp, 1);
+			tr->tr_num_revoke_rm++;
 			if (--n == 0)
 				break;
 		}

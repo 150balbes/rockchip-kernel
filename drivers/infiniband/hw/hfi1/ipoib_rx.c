@@ -11,10 +11,13 @@
 
 static void copy_ipoib_buf(struct sk_buff *skb, void *data, int size)
 {
+	void *dst_data;
+
 	skb_checksum_none_assert(skb);
 	skb->protocol = *((__be16 *)data);
 
-	skb_put_data(skb, data, size);
+	dst_data = skb_put(skb, size);
+	memcpy(dst_data, data, size);
 	skb->mac_header = HFI1_IPOIB_PSEUDO_LEN;
 	skb_pull(skb, HFI1_IPOIB_ENCAP_LEN);
 }

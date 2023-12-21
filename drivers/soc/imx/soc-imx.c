@@ -13,8 +13,6 @@
 #include <soc/imx/cpu.h>
 #include <soc/imx/revision.h>
 
-#define IIM_UID		0x820
-
 #define OCOTP_UID_H	0x420
 #define OCOTP_UID_L	0x410
 
@@ -34,10 +32,12 @@ static int __init imx_soc_device_init(void)
 	u64 soc_uid = 0;
 	u32 val;
 	int ret;
-	int i;
 
 	/* Return early if this is running on devices with different SoCs */
 	if (!__mxc_cpu_type)
+		return 0;
+
+	if (of_machine_is_compatible("fsl,ls1021a"))
 		return 0;
 
 	soc_dev_attr = kzalloc(sizeof(*soc_dev_attr), GFP_KERNEL);
@@ -71,15 +71,10 @@ static int __init imx_soc_device_init(void)
 	case MXC_CPU_MX35:
 		soc_id = "i.MX35";
 		break;
-	case MXC_CPU_MX50:
-		soc_id = "i.MX50";
-		break;
 	case MXC_CPU_MX51:
-		ocotp_compat = "fsl,imx51-iim";
 		soc_id = "i.MX51";
 		break;
 	case MXC_CPU_MX53:
-		ocotp_compat = "fsl,imx53-iim";
 		soc_id = "i.MX53";
 		break;
 	case MXC_CPU_IMX6SL:
@@ -162,13 +157,6 @@ static int __init imx_soc_device_init(void)
 			regmap_read(ocotp, OCOTP_ULP_UID_1, &val);
 			soc_uid <<= 16;
 			soc_uid |= val & 0xffff;
-		} else if (__mxc_cpu_type == MXC_CPU_MX51 ||
-			   __mxc_cpu_type == MXC_CPU_MX53) {
-			for (i=0; i < 8; i++) {
-				regmap_read(ocotp, IIM_UID + i*4, &val);
-				soc_uid <<= 8;
-				soc_uid |= (val & 0xff);
-			}
 		} else {
 			regmap_read(ocotp, OCOTP_UID_H, &val);
 			soc_uid = val;

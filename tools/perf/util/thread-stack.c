@@ -112,7 +112,7 @@ struct thread_stack {
  */
 static inline bool thread_stack__per_cpu(struct thread *thread)
 {
-	return !(thread__tid(thread) || thread__pid(thread));
+	return !(thread->tid || thread->pid_);
 }
 
 static int thread_stack__grow(struct thread_stack *ts)
@@ -155,8 +155,8 @@ static int thread_stack__init(struct thread_stack *ts, struct thread *thread,
 		ts->br_stack_sz = br_stack_sz;
 	}
 
-	if (thread__maps(thread) && maps__machine(thread__maps(thread))) {
-		struct machine *machine = maps__machine(thread__maps(thread));
+	if (thread->maps && thread->maps->machine) {
+		struct machine *machine = thread->maps->machine;
 		const char *arch = perf_env__arch(machine->env);
 
 		ts->kernel_start = machine__kernel_start(machine);
@@ -175,7 +175,7 @@ static struct thread_stack *thread_stack__new(struct thread *thread, int cpu,
 					      bool callstack,
 					      unsigned int br_stack_sz)
 {
-	struct thread_stack *ts = thread__ts(thread), *new_ts;
+	struct thread_stack *ts = thread->ts, *new_ts;
 	unsigned int old_sz = ts ? ts->arr_sz : 0;
 	unsigned int new_sz = 1;
 
@@ -189,8 +189,8 @@ static struct thread_stack *thread_stack__new(struct thread *thread, int cpu,
 		if (ts)
 			memcpy(new_ts, ts, old_sz * sizeof(*ts));
 		new_ts->arr_sz = new_sz;
-		free(thread__ts(thread));
-		thread__set_ts(thread, new_ts);
+		zfree(&thread->ts);
+		thread->ts = new_ts;
 		ts = new_ts;
 	}
 
@@ -207,7 +207,7 @@ static struct thread_stack *thread_stack__new(struct thread *thread, int cpu,
 
 static struct thread_stack *thread__cpu_stack(struct thread *thread, int cpu)
 {
-	struct thread_stack *ts = thread__ts(thread);
+	struct thread_stack *ts = thread->ts;
 
 	if (cpu < 0)
 		cpu = 0;
@@ -232,7 +232,7 @@ static inline struct thread_stack *thread__stack(struct thread *thread,
 	if (thread_stack__per_cpu(thread))
 		return thread__cpu_stack(thread, cpu);
 
-	return thread__ts(thread);
+	return thread->ts;
 }
 
 static int thread_stack__push(struct thread_stack *ts, u64 ret_addr,
@@ -363,7 +363,7 @@ static int __thread_stack__flush(struct thread *thread, struct thread_stack *ts)
 
 int thread_stack__flush(struct thread *thread)
 {
-	struct thread_stack *ts = thread__ts(thread);
+	struct thread_stack *ts = thread->ts;
 	unsigned int pos;
 	int err = 0;
 
@@ -502,14 +502,13 @@ static void thread_stack__reset(struct thread *thread, struct thread_stack *ts)
 
 void thread_stack__free(struct thread *thread)
 {
-	struct thread_stack *ts = thread__ts(thread);
+	struct thread_stack *ts = thread->ts;
 	unsigned int pos;
 
 	if (ts) {
 		for (pos = 0; pos < ts->arr_sz; pos++)
 			__thread_stack__free(thread, ts + pos);
-		free(thread__ts(thread));
-		thread__set_ts(thread, NULL);
+		zfree(&thread->ts);
 	}
 }
 
@@ -1128,7 +1127,7 @@ int thread_stack__process(struct thread *thread, struct comm *comm,
 		ts->rstate = X86_RETPOLINE_POSSIBLE;
 
 	/* Flush stack on exec */
-	if (ts->comm != comm && thread__pid(thread) == thread__tid(thread)) {
+	if (ts->comm != comm && thread->pid_ == thread->tid) {
 		err = __thread_stack__flush(thread, ts);
 		if (err)
 			return err;

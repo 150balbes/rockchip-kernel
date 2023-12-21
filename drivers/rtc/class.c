@@ -36,8 +36,7 @@ static void rtc_device_release(struct device *dev)
 
 	cancel_work_sync(&rtc->irqwork);
 
-	ida_free(&rtc_ida, rtc->id);
-	mutex_destroy(&rtc->ops_lock);
+	ida_simple_remove(&rtc_ida, rtc->id);
 	kfree(rtc);
 }
 
@@ -151,8 +150,8 @@ static int rtc_resume(struct device *dev)
 	struct timespec64	sleep_time;
 	int err;
 
-	if (timekeeping_rtc_skipresume())
-		return 0;
+	//if (timekeeping_rtc_skipresume())
+	//	return 0;
 
 	rtc_hctosys_ret = -ENODEV;
 	if (strcmp(dev_name(&rtc->dev), CONFIG_RTC_HCTOSYS_DEVICE) != 0)
@@ -210,13 +209,8 @@ static struct rtc_device *rtc_allocate_device(void)
 
 	device_initialize(&rtc->dev);
 
-	/*
-	 * Drivers can revise this default after allocating the device.
-	 * The default is what most RTCs do: Increment seconds exactly one
-	 * second after the write happened. This adds a default transport
-	 * time of 5ms which is at least halfways close to reality.
-	 */
-	rtc->set_offset_nsec = NSEC_PER_SEC + 5 * NSEC_PER_MSEC;
+	/* Drivers can revise this default after allocating the device. */
+	rtc->set_offset_nsec =  NSEC_PER_SEC / 2;
 
 	rtc->irq_freq = 1;
 	rtc->max_user_freq = 64;
@@ -240,9 +234,6 @@ static struct rtc_device *rtc_allocate_device(void)
 	rtc->pie_timer.function = rtc_pie_update_irq;
 	rtc->pie_enabled = 0;
 
-	set_bit(RTC_FEATURE_ALARM, rtc->features);
-	set_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc->features);
-
 	return rtc;
 }
 
@@ -262,7 +253,7 @@ static int rtc_device_get_id(struct device *dev)
 	}
 
 	if (id < 0)
-		id = ida_alloc(&rtc_ida, GFP_KERNEL);
+		id = ida_simple_get(&rtc_ida, 0, 0, GFP_KERNEL);
 
 	return id;
 }
@@ -334,59 +325,76 @@ static void rtc_device_get_offset(struct rtc_device *rtc)
 		rtc->offset_secs = 0;
 }
 
-static void devm_rtc_unregister_device(void *data)
+/**
+ * rtc_device_unregister - removes the previously registered RTC class device
+ *
+ * @rtc: the RTC class device to destroy
+ */
+static void rtc_device_unregister(struct rtc_device *rtc)
 {
-	struct rtc_device *rtc = data;
-
 	mutex_lock(&rtc->ops_lock);
 	/*
 	 * Remove innards of this RTC, then disable it, before
 	 * letting any rtc_class_open() users access it again
 	 */
 	rtc_proc_del_device(rtc);
-	if (!test_bit(RTC_NO_CDEV, &rtc->flags))
-		cdev_device_del(&rtc->char_dev, &rtc->dev);
+	cdev_device_del(&rtc->char_dev, &rtc->dev);
 	rtc->ops = NULL;
 	mutex_unlock(&rtc->ops_lock);
+	put_device(&rtc->dev);
 }
 
-static void devm_rtc_release_device(void *res)
+static void devm_rtc_release_device(struct device *dev, void *res)
 {
-	struct rtc_device *rtc = res;
+	struct rtc_device *rtc = *(struct rtc_device **)res;
 
-	put_device(&rtc->dev);
+	rtc_nvmem_unregister(rtc);
+
+	if (rtc->registered)
+		rtc_device_unregister(rtc);
+	else
+		put_device(&rtc->dev);
 }
 
 struct rtc_device *devm_rtc_allocate_device(struct device *dev)
 {
-	struct rtc_device *rtc;
+	struct rtc_device **ptr, *rtc;
 	int id, err;
 
 	id = rtc_device_get_id(dev);
 	if (id < 0)
 		return ERR_PTR(id);
 
+	ptr = devres_alloc(devm_rtc_release_device, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr) {
+		err = -ENOMEM;
+		goto exit_ida;
+	}
+
 	rtc = rtc_allocate_device();
 	if (!rtc) {
-		ida_free(&rtc_ida, id);
-		return ERR_PTR(-ENOMEM);
+		err = -ENOMEM;
+		goto exit_devres;
 	}
+
+	*ptr = rtc;
+	devres_add(dev, ptr);
 
 	rtc->id = id;
 	rtc->dev.parent = dev;
-	err = devm_add_action_or_reset(dev, devm_rtc_release_device, rtc);
-	if (err)
-		return ERR_PTR(err);
-
-	err = dev_set_name(&rtc->dev, "rtc%d", id);
-	if (err)
-		return ERR_PTR(err);
+	dev_set_name(&rtc->dev, "rtc%d", id);
 
 	return rtc;
+
+exit_devres:
+	devres_free(ptr);
+exit_ida:
+	ida_simple_remove(&rtc_ida, id);
+	return ERR_PTR(err);
 }
 EXPORT_SYMBOL_GPL(devm_rtc_allocate_device);
 
-int __devm_rtc_register_device(struct module *owner, struct rtc_device *rtc)
+int __rtc_register_device(struct module *owner, struct rtc_device *rtc)
 {
 	struct rtc_wkalrm alrm;
 	int err;
@@ -395,12 +403,6 @@ int __devm_rtc_register_device(struct module *owner, struct rtc_device *rtc)
 		dev_dbg(&rtc->dev, "no ops set\n");
 		return -EINVAL;
 	}
-
-	if (!rtc->ops->set_alarm)
-		clear_bit(RTC_FEATURE_ALARM, rtc->features);
-
-	if (rtc->ops->set_offset)
-		set_bit(RTC_FEATURE_CORRECTION, rtc->features);
 
 	rtc->owner = owner;
 	rtc_device_get_offset(rtc);
@@ -413,17 +415,16 @@ int __devm_rtc_register_device(struct module *owner, struct rtc_device *rtc)
 	rtc_dev_prepare(rtc);
 
 	err = cdev_device_add(&rtc->char_dev, &rtc->dev);
-	if (err) {
-		set_bit(RTC_NO_CDEV, &rtc->flags);
+	if (err)
 		dev_warn(rtc->dev.parent, "failed to add char device %d:%d\n",
 			 MAJOR(rtc->dev.devt), rtc->id);
-	} else {
+	else
 		dev_dbg(rtc->dev.parent, "char device (%d:%d)\n",
 			MAJOR(rtc->dev.devt), rtc->id);
-	}
 
 	rtc_proc_add_device(rtc);
 
+	rtc->registered = true;
 	dev_info(rtc->dev.parent, "registered as %s\n",
 		 dev_name(&rtc->dev));
 
@@ -432,10 +433,9 @@ int __devm_rtc_register_device(struct module *owner, struct rtc_device *rtc)
 		rtc_hctosys(rtc);
 #endif
 
-	return devm_add_action_or_reset(rtc->dev.parent,
-					devm_rtc_unregister_device, rtc);
+	return 0;
 }
-EXPORT_SYMBOL_GPL(__devm_rtc_register_device);
+EXPORT_SYMBOL_GPL(__rtc_register_device);
 
 /**
  * devm_rtc_device_register - resource managed rtc_device_register()
@@ -465,7 +465,7 @@ struct rtc_device *devm_rtc_device_register(struct device *dev,
 
 	rtc->ops = ops;
 
-	err = __devm_rtc_register_device(owner, rtc);
+	err = __rtc_register_device(owner, rtc);
 	if (err)
 		return ERR_PTR(err);
 
@@ -475,7 +475,7 @@ EXPORT_SYMBOL_GPL(devm_rtc_device_register);
 
 static int __init rtc_init(void)
 {
-	rtc_class = class_create("rtc");
+	rtc_class = class_create(THIS_MODULE, "rtc");
 	if (IS_ERR(rtc_class)) {
 		pr_err("couldn't create class\n");
 		return PTR_ERR(rtc_class);

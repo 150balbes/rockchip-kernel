@@ -16,20 +16,12 @@
  *    port 3, and so on.
  */
 
-#include <linux/bits.h>
 #include <linux/delay.h>
-#include <linux/device.h>
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/list.h>
 #include <linux/module.h>
-#include <linux/percpu-defs.h>
-#include <linux/scatterlist.h>
 #include <linux/slab.h>
-#include <linux/string.h>
-#include <linux/spinlock.h>
 
 #include "hsu.h"
 
@@ -209,7 +201,6 @@ EXPORT_SYMBOL_GPL(hsu_dma_get_status);
  */
 int hsu_dma_do_irq(struct hsu_dma_chip *chip, unsigned short nr, u32 status)
 {
-	struct dma_chan_percpu *stat;
 	struct hsu_dma_chan *hsuc;
 	struct hsu_dma_desc *desc;
 	unsigned long flags;
@@ -219,7 +210,6 @@ int hsu_dma_do_irq(struct hsu_dma_chip *chip, unsigned short nr, u32 status)
 		return 0;
 
 	hsuc = &chip->hsu->chan[nr];
-	stat = this_cpu_ptr(hsuc->vchan.chan.local);
 
 	spin_lock_irqsave(&hsuc->vchan.lock, flags);
 	desc = hsuc->desc;
@@ -231,7 +221,6 @@ int hsu_dma_do_irq(struct hsu_dma_chip *chip, unsigned short nr, u32 status)
 		} else {
 			vchan_cookie_complete(&desc->vdesc);
 			desc->status = DMA_COMPLETE;
-			stat->bytes_transferred += desc->length;
 			hsu_dma_start_transfer(hsuc);
 		}
 	}

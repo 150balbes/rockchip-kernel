@@ -66,9 +66,9 @@ void __init setup_arch(char **cmdline_p)
 		on_simulator = 0;
 
 	if (p[0] != '\0')
-		strscpy(boot_command_line, p, COMMAND_LINE_SIZE);
+		strlcpy(boot_command_line, p, COMMAND_LINE_SIZE);
 	else
-		strscpy(boot_command_line, default_command_line,
+		strlcpy(boot_command_line, default_command_line,
 			COMMAND_LINE_SIZE);
 
 	/*
@@ -76,7 +76,7 @@ void __init setup_arch(char **cmdline_p)
 	 * are both picked up by the init code. If no reason to
 	 * make them different, pass the same pointer back.
 	 */
-	strscpy(cmd_line, boot_command_line, COMMAND_LINE_SIZE);
+	strlcpy(cmd_line, boot_command_line, COMMAND_LINE_SIZE);
 	*cmdline_p = cmd_line;
 
 	parse_early_param();

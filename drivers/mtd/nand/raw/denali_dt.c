@@ -113,6 +113,7 @@ static int denali_dt_chip_init(struct denali_controller *denali,
 static int denali_dt_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct denali_dt *dt;
 	const struct denali_dt_data *data;
 	struct denali_controller *denali;
@@ -138,11 +139,13 @@ static int denali_dt_probe(struct platform_device *pdev)
 	if (denali->irq < 0)
 		return denali->irq;
 
-	denali->reg = devm_platform_ioremap_resource_byname(pdev, "denali_reg");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "denali_reg");
+	denali->reg = devm_ioremap_resource(dev, res);
 	if (IS_ERR(denali->reg))
 		return PTR_ERR(denali->reg);
 
-	denali->host = devm_platform_ioremap_resource_byname(pdev, "nand_data");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "nand_data");
+	denali->host = devm_ioremap_resource(dev, res);
 	if (IS_ERR(denali->host))
 		return PTR_ERR(denali->host);
 
@@ -233,7 +236,7 @@ out_disable_clk:
 	return ret;
 }
 
-static void denali_dt_remove(struct platform_device *pdev)
+static int denali_dt_remove(struct platform_device *pdev)
 {
 	struct denali_dt *dt = platform_get_drvdata(pdev);
 
@@ -243,11 +246,13 @@ static void denali_dt_remove(struct platform_device *pdev)
 	clk_disable_unprepare(dt->clk_ecc);
 	clk_disable_unprepare(dt->clk_x);
 	clk_disable_unprepare(dt->clk);
+
+	return 0;
 }
 
 static struct platform_driver denali_dt_driver = {
 	.probe		= denali_dt_probe,
-	.remove_new	= denali_dt_remove,
+	.remove		= denali_dt_remove,
 	.driver		= {
 		.name	= "denali-nand-dt",
 		.of_match_table	= denali_nand_dt_ids,

@@ -86,8 +86,7 @@ struct brcm_ahci_priv {
 	u32 port_mask;
 	u32 quirks;
 	enum brcm_ahci_version version;
-	struct reset_control *rcdev_rescal;
-	struct reset_control *rcdev_ahci;
+	struct reset_control *rcdev;
 };
 
 static inline u32 brcm_sata_readreg(void __iomem *addr)
@@ -246,7 +245,7 @@ static void brcm_sata_init(struct brcm_ahci_priv *priv)
 }
 
 static unsigned int brcm_ahci_read_id(struct ata_device *dev,
-				      struct ata_taskfile *tf, __le16 *id)
+				      struct ata_taskfile *tf, u16 *id)
 {
 	struct ata_port *ap = dev->link->ap;
 	struct ata_host *host = ap->host;
@@ -333,7 +332,7 @@ static struct ata_port_operations ahci_brcm_platform_ops = {
 
 static const struct ata_port_info ahci_brcm_port_info = {
 	.flags		= AHCI_FLAG_COMMON | ATA_FLAG_NO_DIPM,
-	.link_flags	= ATA_LFLAG_NO_DEBOUNCE_DELAY,
+	.link_flags	= ATA_LFLAG_NO_DB_DELAY,
 	.pio_mask	= ATA_PIO4,
 	.udma_mask	= ATA_UDMA6,
 	.port_ops	= &ahci_brcm_platform_ops,
@@ -353,8 +352,8 @@ static int brcm_ahci_suspend(struct device *dev)
 	else
 		ret = 0;
 
-	reset_control_assert(priv->rcdev_ahci);
-	reset_control_rearm(priv->rcdev_rescal);
+	if (priv->version != BRCM_SATA_BCM7216)
+		reset_control_assert(priv->rcdev);
 
 	return ret;
 }
@@ -366,10 +365,10 @@ static int __maybe_unused brcm_ahci_resume(struct device *dev)
 	struct brcm_ahci_priv *priv = hpriv->plat_data;
 	int ret = 0;
 
-	ret = reset_control_deassert(priv->rcdev_ahci);
-	if (ret)
-		return ret;
-	ret = reset_control_reset(priv->rcdev_rescal);
+	if (priv->version == BRCM_SATA_BCM7216)
+		ret = reset_control_reset(priv->rcdev);
+	else
+		ret = reset_control_deassert(priv->rcdev);
 	if (ret)
 		return ret;
 
@@ -417,7 +416,7 @@ out_disable_clks:
 	return ret;
 }
 
-static const struct scsi_host_template ahci_platform_sht = {
+static struct scsi_host_template ahci_platform_sht = {
 	AHCI_SHT(DRV_NAME),
 };
 
@@ -427,7 +426,7 @@ static const struct of_device_id ahci_of_match[] = {
 	{.compatible = "brcm,bcm63138-ahci", .data = (void *)BRCM_SATA_BCM7445},
 	{.compatible = "brcm,bcm-nsp-ahci", .data = (void *)BRCM_SATA_NSP},
 	{.compatible = "brcm,bcm7216-ahci", .data = (void *)BRCM_SATA_BCM7216},
-	{ /* sentinel */ }
+	{},
 };
 MODULE_DEVICE_TABLE(of, ahci_of_match);
 
@@ -435,6 +434,7 @@ static int brcm_ahci_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
 	struct device *dev = &pdev->dev;
+	const char *reset_name = NULL;
 	struct brcm_ahci_priv *priv;
 	struct ahci_host_priv *hpriv;
 	struct resource *res;
@@ -448,7 +448,7 @@ static int brcm_ahci_probe(struct platform_device *pdev)
 	if (!of_id)
 		return -ENODEV;
 
-	priv->version = (unsigned long)of_id->data;
+	priv->version = (enum brcm_ahci_version)of_id->data;
 	priv->dev = dev;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "top-ctrl");
@@ -456,15 +456,15 @@ static int brcm_ahci_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->top_ctrl))
 		return PTR_ERR(priv->top_ctrl);
 
-	if (priv->version == BRCM_SATA_BCM7216) {
-		priv->rcdev_rescal = devm_reset_control_get_optional_shared(
-			&pdev->dev, "rescal");
-		if (IS_ERR(priv->rcdev_rescal))
-			return PTR_ERR(priv->rcdev_rescal);
-	}
-	priv->rcdev_ahci = devm_reset_control_get_optional(&pdev->dev, "ahci");
-	if (IS_ERR(priv->rcdev_ahci))
-		return PTR_ERR(priv->rcdev_ahci);
+	/* Reset is optional depending on platform and named differently */
+	if (priv->version == BRCM_SATA_BCM7216)
+		reset_name = "rescal";
+	else
+		reset_name = "ahci";
+
+	priv->rcdev = devm_reset_control_get_optional(&pdev->dev, reset_name);
+	if (IS_ERR(priv->rcdev))
+		return PTR_ERR(priv->rcdev);
 
 	hpriv = ahci_platform_get_resources(pdev, 0);
 	if (IS_ERR(hpriv))
@@ -485,10 +485,10 @@ static int brcm_ahci_probe(struct platform_device *pdev)
 		break;
 	}
 
-	ret = reset_control_reset(priv->rcdev_rescal);
-	if (ret)
-		return ret;
-	ret = reset_control_deassert(priv->rcdev_ahci);
+	if (priv->version == BRCM_SATA_BCM7216)
+		ret = reset_control_reset(priv->rcdev);
+	else
+		ret = reset_control_deassert(priv->rcdev);
 	if (ret)
 		return ret;
 
@@ -539,20 +539,25 @@ out_disable_regulators:
 out_disable_clks:
 	ahci_platform_disable_clks(hpriv);
 out_reset:
-	reset_control_assert(priv->rcdev_ahci);
-	reset_control_rearm(priv->rcdev_rescal);
+	if (priv->version != BRCM_SATA_BCM7216)
+		reset_control_assert(priv->rcdev);
 	return ret;
 }
 
-static void brcm_ahci_remove(struct platform_device *pdev)
+static int brcm_ahci_remove(struct platform_device *pdev)
 {
 	struct ata_host *host = dev_get_drvdata(&pdev->dev);
 	struct ahci_host_priv *hpriv = host->private_data;
 	struct brcm_ahci_priv *priv = hpriv->plat_data;
+	int ret;
 
 	brcm_sata_phys_disable(priv);
 
-	ata_platform_remove_one(pdev);
+	ret = ata_platform_remove_one(pdev);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static void brcm_ahci_shutdown(struct platform_device *pdev)
@@ -573,7 +578,7 @@ static SIMPLE_DEV_PM_OPS(ahci_brcm_pm_ops, brcm_ahci_suspend, brcm_ahci_resume);
 
 static struct platform_driver brcm_ahci_driver = {
 	.probe = brcm_ahci_probe,
-	.remove_new = brcm_ahci_remove,
+	.remove = brcm_ahci_remove,
 	.shutdown = brcm_ahci_shutdown,
 	.driver = {
 		.name = DRV_NAME,

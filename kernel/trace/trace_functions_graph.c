@@ -58,12 +58,6 @@ static struct tracer_opt trace_opts[] = {
 	{ TRACER_OPT(funcgraph-irqs, TRACE_GRAPH_PRINT_IRQS) },
 	/* Display function name after trailing } */
 	{ TRACER_OPT(funcgraph-tail, TRACE_GRAPH_PRINT_TAIL) },
-#ifdef CONFIG_FUNCTION_GRAPH_RETVAL
-	/* Display function return value ? */
-	{ TRACER_OPT(funcgraph-retval, TRACE_GRAPH_PRINT_RETVAL) },
-	/* Display function return value in hexadecimal format ? */
-	{ TRACER_OPT(funcgraph-retval-hex, TRACE_GRAPH_PRINT_RETVAL_HEX) },
-#endif
 	/* Include sleep time (scheduled out) between entry and return */
 	{ TRACER_OPT(sleep-time, TRACE_GRAPH_SLEEP_TIME) },
 
@@ -102,7 +96,8 @@ print_graph_duration(struct trace_array *tr, unsigned long long duration,
 
 int __trace_graph_entry(struct trace_array *tr,
 				struct ftrace_graph_ent *trace,
-				unsigned int trace_ctx)
+				unsigned long flags,
+				int pc)
 {
 	struct trace_event_call *call = &event_funcgraph_entry;
 	struct ring_buffer_event *event;
@@ -110,7 +105,7 @@ int __trace_graph_entry(struct trace_array *tr,
 	struct ftrace_graph_ent_entry *entry;
 
 	event = trace_buffer_lock_reserve(buffer, TRACE_GRAPH_ENT,
-					  sizeof(*entry), trace_ctx);
+					  sizeof(*entry), flags, pc);
 	if (!event)
 		return 0;
 	entry	= ring_buffer_event_data(event);
@@ -126,7 +121,7 @@ static inline int ftrace_graph_ignore_irqs(void)
 	if (!ftrace_graph_skip_irqs || trace_recursion_test(TRACE_IRQ_BIT))
 		return 0;
 
-	return in_hardirq();
+	return in_irq();
 }
 
 int trace_graph_entry(struct ftrace_graph_ent *trace)
@@ -134,10 +129,10 @@ int trace_graph_entry(struct ftrace_graph_ent *trace)
 	struct trace_array *tr = graph_array;
 	struct trace_array_cpu *data;
 	unsigned long flags;
-	unsigned int trace_ctx;
 	long disabled;
 	int ret;
 	int cpu;
+	int pc;
 
 	if (trace_recursion_test(TRACE_GRAPH_NOTRACE_BIT))
 		return 0;
@@ -179,8 +174,8 @@ int trace_graph_entry(struct ftrace_graph_ent *trace)
 	data = per_cpu_ptr(tr->array_buffer.data, cpu);
 	disabled = atomic_inc_return(&data->disabled);
 	if (likely(disabled == 1)) {
-		trace_ctx = tracing_gen_ctx_flags(flags);
-		ret = __trace_graph_entry(tr, trace, trace_ctx);
+		pc = preempt_count();
+		ret = __trace_graph_entry(tr, trace, flags, pc);
 	} else {
 		ret = 0;
 	}
@@ -193,7 +188,7 @@ int trace_graph_entry(struct ftrace_graph_ent *trace)
 
 static void
 __trace_graph_function(struct trace_array *tr,
-		unsigned long ip, unsigned int trace_ctx)
+		unsigned long ip, unsigned long flags, int pc)
 {
 	u64 time = trace_clock_local();
 	struct ftrace_graph_ent ent = {
@@ -207,21 +202,22 @@ __trace_graph_function(struct trace_array *tr,
 		.rettime  = time,
 	};
 
-	__trace_graph_entry(tr, &ent, trace_ctx);
-	__trace_graph_return(tr, &ret, trace_ctx);
+	__trace_graph_entry(tr, &ent, flags, pc);
+	__trace_graph_return(tr, &ret, flags, pc);
 }
 
 void
 trace_graph_function(struct trace_array *tr,
 		unsigned long ip, unsigned long parent_ip,
-		unsigned int trace_ctx)
+		unsigned long flags, int pc)
 {
-	__trace_graph_function(tr, ip, trace_ctx);
+	__trace_graph_function(tr, ip, flags, pc);
 }
 
 void __trace_graph_return(struct trace_array *tr,
 				struct ftrace_graph_ret *trace,
-				unsigned int trace_ctx)
+				unsigned long flags,
+				int pc)
 {
 	struct trace_event_call *call = &event_funcgraph_exit;
 	struct ring_buffer_event *event;
@@ -229,7 +225,7 @@ void __trace_graph_return(struct trace_array *tr,
 	struct ftrace_graph_ret_entry *entry;
 
 	event = trace_buffer_lock_reserve(buffer, TRACE_GRAPH_RET,
-					  sizeof(*entry), trace_ctx);
+					  sizeof(*entry), flags, pc);
 	if (!event)
 		return;
 	entry	= ring_buffer_event_data(event);
@@ -243,9 +239,9 @@ void trace_graph_return(struct ftrace_graph_ret *trace)
 	struct trace_array *tr = graph_array;
 	struct trace_array_cpu *data;
 	unsigned long flags;
-	unsigned int trace_ctx;
 	long disabled;
 	int cpu;
+	int pc;
 
 	ftrace_graph_addr_finish(trace);
 
@@ -259,8 +255,8 @@ void trace_graph_return(struct ftrace_graph_ret *trace)
 	data = per_cpu_ptr(tr->array_buffer.data, cpu);
 	disabled = atomic_inc_return(&data->disabled);
 	if (likely(disabled == 1)) {
-		trace_ctx = tracing_gen_ctx_flags(flags);
-		__trace_graph_return(tr, trace, trace_ctx);
+		pc = preempt_count();
+		__trace_graph_return(tr, trace, flags, pc);
 	}
 	atomic_dec(&data->disabled);
 	local_irq_restore(flags);
@@ -625,56 +621,6 @@ print_graph_duration(struct trace_array *tr, unsigned long long duration,
 	trace_seq_puts(s, "|  ");
 }
 
-#ifdef CONFIG_FUNCTION_GRAPH_RETVAL
-
-#define __TRACE_GRAPH_PRINT_RETVAL TRACE_GRAPH_PRINT_RETVAL
-
-static void print_graph_retval(struct trace_seq *s, unsigned long retval,
-				bool leaf, void *func, bool hex_format)
-{
-	unsigned long err_code = 0;
-
-	if (retval == 0 || hex_format)
-		goto done;
-
-	/* Check if the return value matches the negative format */
-	if (IS_ENABLED(CONFIG_64BIT) && (retval & BIT(31)) &&
-		(((u64)retval) >> 32) == 0) {
-		/* sign extension */
-		err_code = (unsigned long)(s32)retval;
-	} else {
-		err_code = retval;
-	}
-
-	if (!IS_ERR_VALUE(err_code))
-		err_code = 0;
-
-done:
-	if (leaf) {
-		if (hex_format || (err_code == 0))
-			trace_seq_printf(s, "%ps(); /* = 0x%lx */\n",
-					func, retval);
-		else
-			trace_seq_printf(s, "%ps(); /* = %ld */\n",
-					func, err_code);
-	} else {
-		if (hex_format || (err_code == 0))
-			trace_seq_printf(s, "} /* %ps = 0x%lx */\n",
-					func, retval);
-		else
-			trace_seq_printf(s, "} /* %ps = %ld */\n",
-					func, err_code);
-	}
-}
-
-#else
-
-#define __TRACE_GRAPH_PRINT_RETVAL 0
-
-#define print_graph_retval(_seq, _retval, _leaf, _func, _format) do {} while (0)
-
-#endif
-
 /* Case of a leaf function on its call entry */
 static enum print_line_t
 print_graph_entry_leaf(struct trace_iterator *iter,
@@ -719,15 +665,7 @@ print_graph_entry_leaf(struct trace_iterator *iter,
 	for (i = 0; i < call->depth * TRACE_GRAPH_INDENT; i++)
 		trace_seq_putc(s, ' ');
 
-	/*
-	 * Write out the function return value if the option function-retval is
-	 * enabled.
-	 */
-	if (flags & __TRACE_GRAPH_PRINT_RETVAL)
-		print_graph_retval(s, graph_ret->retval, true, (void *)call->func,
-				!!(flags & TRACE_GRAPH_PRINT_RETVAL_HEX));
-	else
-		trace_seq_printf(s, "%ps();\n", (void *)call->func);
+	trace_seq_printf(s, "%ps();\n", (void *)call->func);
 
 	print_graph_irq(iter, graph_ret->func, TRACE_GRAPH_RET,
 			cpu, iter->ent->pid, flags);
@@ -828,7 +766,7 @@ print_graph_prologue(struct trace_iterator *iter, struct trace_seq *s,
  *  - we are inside irq code
  *  - we just entered irq code
  *
- * returns 0 if
+ * retunns 0 if
  *  - funcgraph-interrupts option is set
  *  - we are not inside irq code
  */
@@ -1006,29 +944,20 @@ print_graph_return(struct ftrace_graph_ret *trace, struct trace_seq *s,
 		trace_seq_putc(s, ' ');
 
 	/*
-	 * Always write out the function name and its return value if the
-	 * function-retval option is enabled.
+	 * If the return function does not have a matching entry,
+	 * then the entry was lost. Instead of just printing
+	 * the '}' and letting the user guess what function this
+	 * belongs to, write out the function name. Always do
+	 * that if the funcgraph-tail option is enabled.
 	 */
-	if (flags & __TRACE_GRAPH_PRINT_RETVAL) {
-		print_graph_retval(s, trace->retval, false, (void *)trace->func,
-			!!(flags & TRACE_GRAPH_PRINT_RETVAL_HEX));
-	} else {
-		/*
-		 * If the return function does not have a matching entry,
-		 * then the entry was lost. Instead of just printing
-		 * the '}' and letting the user guess what function this
-		 * belongs to, write out the function name. Always do
-		 * that if the funcgraph-tail option is enabled.
-		 */
-		if (func_match && !(flags & TRACE_GRAPH_PRINT_TAIL))
-			trace_seq_puts(s, "}\n");
-		else
-			trace_seq_printf(s, "} /* %ps */\n", (void *)trace->func);
-	}
+	if (func_match && !(flags & TRACE_GRAPH_PRINT_TAIL))
+		trace_seq_puts(s, "}\n");
+	else
+		trace_seq_printf(s, "} /* %ps */\n", (void *)trace->func);
 
 	/* Overrun */
 	if (flags & TRACE_GRAPH_PRINT_OVERRUN)
-		trace_seq_printf(s, " (Overruns: %u)\n",
+		trace_seq_printf(s, " (Overruns: %lu)\n",
 				 trace->overrun);
 
 	print_graph_irq(iter, trace->func, TRACE_GRAPH_RET,
@@ -1413,7 +1342,7 @@ static __init int init_graph_tracefs(void)
 	if (ret)
 		return 0;
 
-	trace_create_file("max_graph_depth", TRACE_MODE_WRITE, NULL,
+	trace_create_file("max_graph_depth", 0644, NULL,
 			  NULL, &graph_depth_fops);
 
 	return 0;

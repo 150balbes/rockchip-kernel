@@ -2,7 +2,6 @@
 
 config BTRFS_FS
 	tristate "Btrfs filesystem support"
-	select BLK_CGROUP_PUNT_BIO
 	select CRYPTO
 	select CRYPTO_CRC32C
 	select LIBCRC32C
@@ -18,7 +17,9 @@ config BTRFS_FS
 	select FS_IOMAP
 	select RAID6_PQ
 	select XOR_BLOCKS
-	depends on PAGE_SIZE_LESS_THAN_256KB
+	select SRCU
+	depends on !PPC_256K_PAGES	# powerpc
+	depends on !PAGE_SIZE_256KB	# hexagon
 
 	help
 	  Btrfs is a general purpose copy-on-write filesystem with extents,

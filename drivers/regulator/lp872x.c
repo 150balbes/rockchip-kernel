@@ -10,12 +10,13 @@
 #include <linux/i2c.h>
 #include <linux/regmap.h>
 #include <linux/err.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/delay.h>
 #include <linux/regulator/lp872x.h>
 #include <linux/regulator/driver.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/regulator/of_regulator.h>
 
 /* Registers : LP8720/8725 shared */
@@ -103,7 +104,7 @@ struct lp872x {
 	enum lp872x_id chipid;
 	struct lp872x_platform_data *pdata;
 	int num_regulators;
-	enum gpiod_flags dvs_pin;
+	enum lp872x_dvs_state dvs_pin;
 };
 
 /* LP8720/LP8725 shared voltage table for LDOs */
@@ -249,12 +250,12 @@ static int lp872x_regulator_enable_time(struct regulator_dev *rdev)
 }
 
 static void lp872x_set_dvs(struct lp872x *lp, enum lp872x_dvs_sel dvs_sel,
-			struct gpio_desc *gpio)
+			int gpio)
 {
-	enum gpiod_flags state;
+	enum lp872x_dvs_state state;
 
-	state = dvs_sel == SEL_V1 ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW;
-	gpiod_set_value(gpio, state);
+	state = dvs_sel == SEL_V1 ? DVS_HIGH : DVS_LOW;
+	gpio_set_value(gpio, state);
 	lp->dvs_pin = state;
 }
 
@@ -269,7 +270,7 @@ static u8 lp872x_select_buck_vout_addr(struct lp872x *lp,
 	switch (buck) {
 	case LP8720_ID_BUCK:
 		if (val & LP8720_EXT_DVS_M) {
-			addr = (lp->dvs_pin == GPIOD_OUT_HIGH) ?
+			addr = (lp->dvs_pin == DVS_HIGH) ?
 				LP8720_BUCK_VOUT1 : LP8720_BUCK_VOUT2;
 		} else {
 			if (lp872x_read_byte(lp, LP8720_ENABLE, &val))
@@ -283,7 +284,7 @@ static u8 lp872x_select_buck_vout_addr(struct lp872x *lp,
 		if (val & LP8725_DVS1_M)
 			addr = LP8725_BUCK1_VOUT1;
 		else
-			addr = (lp->dvs_pin == GPIOD_OUT_HIGH) ?
+			addr = (lp->dvs_pin == DVS_HIGH) ?
 				LP8725_BUCK1_VOUT1 : LP8725_BUCK1_VOUT2;
 		break;
 	case LP8725_ID_BUCK2:
@@ -320,7 +321,7 @@ static int lp872x_buck_set_voltage_sel(struct regulator_dev *rdev,
 	u8 addr, mask = LP872X_VOUT_M;
 	struct lp872x_dvs *dvs = lp->pdata ? lp->pdata->dvs : NULL;
 
-	if (dvs && dvs->gpio)
+	if (dvs && gpio_is_valid(dvs->gpio))
 		lp872x_set_dvs(lp, dvs->vsel, dvs->gpio);
 
 	addr = lp872x_select_buck_vout_addr(lp, buck);
@@ -674,23 +675,24 @@ static const struct regulator_desc lp8725_regulator_desc[] = {
 
 static int lp872x_init_dvs(struct lp872x *lp)
 {
+	int ret, gpio;
 	struct lp872x_dvs *dvs = lp->pdata ? lp->pdata->dvs : NULL;
-	enum gpiod_flags pinstate;
+	enum lp872x_dvs_state pinstate;
 	u8 mask[] = { LP8720_EXT_DVS_M, LP8725_DVS1_M | LP8725_DVS2_M };
 	u8 default_dvs_mode[] = { LP8720_DEFAULT_DVS, LP8725_DEFAULT_DVS };
 
 	if (!dvs)
 		goto set_default_dvs_mode;
 
-	if (!dvs->gpio)
+	gpio = dvs->gpio;
+	if (!gpio_is_valid(gpio))
 		goto set_default_dvs_mode;
 
 	pinstate = dvs->init_state;
-	dvs->gpio = devm_gpiod_get_optional(lp->dev, "ti,dvs", pinstate);
-
-	if (IS_ERR(dvs->gpio)) {
-		dev_err(lp->dev, "gpio request err: %ld\n", PTR_ERR(dvs->gpio));
-		return PTR_ERR(dvs->gpio);
+	ret = devm_gpio_request_one(lp->dev, gpio, pinstate, "LP872X DVS");
+	if (ret) {
+		dev_err(lp->dev, "gpio request err: %d\n", ret);
+		return ret;
 	}
 
 	lp->dvs_pin = pinstate;
@@ -704,17 +706,20 @@ set_default_dvs_mode:
 
 static int lp872x_hw_enable(struct lp872x *lp)
 {
+	int ret, gpio;
+
 	if (!lp->pdata)
 		return -EINVAL;
 
-	if (!lp->pdata->enable_gpio)
+	gpio = lp->pdata->enable_gpio;
+	if (!gpio_is_valid(gpio))
 		return 0;
 
 	/* Always set enable GPIO high. */
-	lp->pdata->enable_gpio = devm_gpiod_get_optional(lp->dev, "enable", GPIOD_OUT_HIGH);
-	if (IS_ERR(lp->pdata->enable_gpio)) {
-		dev_err(lp->dev, "gpio request err: %ld\n", PTR_ERR(lp->pdata->enable_gpio));
-		return PTR_ERR(lp->pdata->enable_gpio);
+	ret = devm_gpio_request_one(lp->dev, gpio, GPIOF_OUT_INIT_HIGH, "LP872X EN");
+	if (ret) {
+		dev_err(lp->dev, "gpio request err: %d\n", ret);
+		return ret;
 	}
 
 	/* Each chip has a different enable delay. */
@@ -832,15 +837,19 @@ static struct lp872x_platform_data
 		return ERR_PTR(-ENOMEM);
 
 	of_property_read_u8(np, "ti,general-config", &pdata->general_config);
-	pdata->update_config = of_property_read_bool(np, "ti,update-config");
+	if (of_find_property(np, "ti,update-config", NULL))
+		pdata->update_config = true;
 
 	pdata->dvs = devm_kzalloc(dev, sizeof(struct lp872x_dvs), GFP_KERNEL);
 	if (!pdata->dvs)
 		return ERR_PTR(-ENOMEM);
 
+	pdata->dvs->gpio = of_get_named_gpio(np, "ti,dvs-gpio", 0);
 	of_property_read_u8(np, "ti,dvs-vsel", (u8 *)&pdata->dvs->vsel);
 	of_property_read_u8(np, "ti,dvs-state", &dvs_state);
-	pdata->dvs->init_state = dvs_state ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW;
+	pdata->dvs->init_state = dvs_state ? DVS_HIGH : DVS_LOW;
+
+	pdata->enable_gpio = of_get_named_gpio(np, "enable-gpios", 0);
 
 	if (of_get_child_count(np) == 0)
 		goto out;
@@ -878,13 +887,12 @@ static struct lp872x_platform_data
 }
 #endif
 
-static int lp872x_probe(struct i2c_client *cl)
+static int lp872x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(cl);
 	struct lp872x *lp;
 	struct lp872x_platform_data *pdata;
 	int ret;
-	static const int lp872x_num_regulators[] = {
+	const int lp872x_num_regulators[] = {
 		[LP8720] = LP8720_NUM_REGULATORS,
 		[LP8725] = LP8725_NUM_REGULATORS,
 	};
@@ -927,7 +935,7 @@ static int lp872x_probe(struct i2c_client *cl)
 	return lp872x_regulator_register(lp);
 }
 
-static const struct of_device_id lp872x_dt_ids[] __maybe_unused = {
+static const struct of_device_id lp872x_dt_ids[] = {
 	{ .compatible = "ti,lp8720", },
 	{ .compatible = "ti,lp8725", },
 	{ }
@@ -944,7 +952,6 @@ MODULE_DEVICE_TABLE(i2c, lp872x_ids);
 static struct i2c_driver lp872x_driver = {
 	.driver = {
 		.name = "lp872x",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(lp872x_dt_ids),
 	},
 	.probe = lp872x_probe,

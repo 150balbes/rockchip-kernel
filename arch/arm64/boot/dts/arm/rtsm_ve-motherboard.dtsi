@@ -77,21 +77,13 @@
 	};
 
 	bus@8000000 {
-		compatible = "simple-bus";
-		#address-cells = <2>;
-		#size-cells = <1>;
-		ranges = <0 0x8000000 0 0x8000000 0x18000000>;
-
-		motherboard-bus@8000000 {
+		motherboard-bus {
+			arm,v2m-memory-map = "rs1";
 			compatible = "arm,vexpress,v2m-p1", "simple-bus";
 			#address-cells = <2>; /* SMB chipselect number and offset */
 			#size-cells = <1>;
-			ranges = <0 0 0 0x08000000 0x04000000>,
-				 <1 0 0 0x14000000 0x04000000>,
-				 <2 0 0 0x18000000 0x04000000>,
-				 <3 0 0 0x1c000000 0x04000000>,
-				 <4 0 0 0x0c000000 0x04000000>,
-				 <5 0 0 0x10000000 0x04000000>;
+			#interrupt-cells = <1>;
+			ranges;
 
 			flash@0 {
 				compatible = "arm,vexpress-flash", "cfi-flash";
@@ -110,7 +102,7 @@
 				compatible = "simple-bus";
 				#address-cells = <1>;
 				#size-cells = <1>;
-				ranges = <0 3 0 0x210000>;
+				ranges = <0 3 0 0x200000>;
 
 				v2m_sysreg: sysreg@10000 {
 					compatible = "arm,vexpress-sysreg";
@@ -138,7 +130,7 @@
 					clock-names = "apb_pclk";
 				};
 
-				mmc@50000 {
+				mmci@50000 {
 					compatible = "arm,pl180", "arm,primecell";
 					reg = <0x050000 0x1000>;
 					interrupts = <9>, <10>;
@@ -198,7 +190,7 @@
 					clock-names = "uartclk", "apb_pclk";
 				};
 
-				watchdog@f0000 {
+				wdt@f0000 {
 					compatible = "arm,sp805", "arm,primecell";
 					reg = <0x0f0000 0x1000>;
 					interrupts = <0>;
@@ -222,7 +214,7 @@
 					clock-names = "timclken1", "timclken2", "apb_pclk";
 				};
 
-				virtio@130000 {
+				virtio-block@130000 {
 					compatible = "virtio,mmio";
 					reg = <0x130000 0x200>;
 					interrupts = <42>;

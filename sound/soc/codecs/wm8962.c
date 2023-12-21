@@ -2092,13 +2092,6 @@ static SOC_ENUM_SINGLE_DECL(hpoutl_enum,
 static const struct snd_kcontrol_new hpoutl_mux =
 	SOC_DAPM_ENUM("HPOUTL Mux", hpoutl_enum);
 
-static const char * const input_mode_text[] = { "Analog", "Digital" };
-
-static SOC_ENUM_SINGLE_VIRT_DECL(input_mode_enum, input_mode_text);
-
-static const struct snd_kcontrol_new input_mode_mux =
-	SOC_DAPM_ENUM("Input Mode", input_mode_enum);
-
 static const struct snd_kcontrol_new inpgal[] = {
 SOC_DAPM_SINGLE("IN1L Switch", WM8962_LEFT_INPUT_PGA_CONTROL, 3, 1, 0),
 SOC_DAPM_SINGLE("IN2L Switch", WM8962_LEFT_INPUT_PGA_CONTROL, 2, 1, 0),
@@ -2199,9 +2192,6 @@ SND_SOC_DAPM_MIXER("MIXINR", WM8962_PWR_MGMT_1, 4, 0,
 
 SND_SOC_DAPM_AIF_IN("DMIC_ENA", NULL, 0, WM8962_PWR_MGMT_1, 10, 0),
 
-SND_SOC_DAPM_MUX("Input Mode L", SND_SOC_NOPM, 0, 0, &input_mode_mux),
-SND_SOC_DAPM_MUX("Input Mode R", SND_SOC_NOPM, 0, 0, &input_mode_mux),
-
 SND_SOC_DAPM_ADC("ADCL", "Capture", WM8962_PWR_MGMT_1, 3, 0),
 SND_SOC_DAPM_ADC("ADCR", "Capture", WM8962_PWR_MGMT_1, 2, 0),
 
@@ -2281,19 +2271,16 @@ static const struct snd_soc_dapm_route wm8962_intercon[] = {
 
 	{ "DMIC_ENA", NULL, "DMICDAT" },
 
-	{ "Input Mode L", "Analog", "MIXINL" },
-	{ "Input Mode L", "Digital", "DMIC_ENA" },
-	{ "Input Mode R", "Analog", "MIXINR" },
-	{ "Input Mode R", "Digital", "DMIC_ENA" },
-
 	{ "ADCL", NULL, "SYSCLK" },
 	{ "ADCL", NULL, "TOCLK" },
-	{ "ADCL", NULL, "Input Mode L" },
+	{ "ADCL", NULL, "MIXINL" },
+	{ "ADCL", NULL, "DMIC_ENA" },
 	{ "ADCL", NULL, "DSP2" },
 
 	{ "ADCR", NULL, "SYSCLK" },
 	{ "ADCR", NULL, "TOCLK" },
-	{ "ADCR", NULL, "Input Mode R" },
+	{ "ADCR", NULL, "MIXINR" },
+	{ "ADCR", NULL, "DMIC_ENA" },
 	{ "ADCR", NULL, "DSP2" },
 
 	{ "STL", "Left", "ADCL" },
@@ -2461,7 +2448,6 @@ static const int sysclk_rates[] = {
 static void wm8962_configure_bclk(struct snd_soc_component *component)
 {
 	struct wm8962_priv *wm8962 = snd_soc_component_get_drvdata(component);
-	int best, min_diff, diff;
 	int dspclk, i;
 	int clocking2 = 0;
 	int clocking4 = 0;
@@ -2540,25 +2526,23 @@ static void wm8962_configure_bclk(struct snd_soc_component *component)
 
 	dev_dbg(component->dev, "DSPCLK is %dHz, BCLK %d\n", dspclk, wm8962->bclk);
 
-	/* Search a proper bclk, not exact match. */
-	best = 0;
-	min_diff = INT_MAX;
+	/* We're expecting an exact match */
 	for (i = 0; i < ARRAY_SIZE(bclk_divs); i++) {
 		if (bclk_divs[i] < 0)
 			continue;
 
-		diff = (dspclk / bclk_divs[i]) - wm8962->bclk;
-		if (diff < 0) /* Table is sorted */
+		if (dspclk / bclk_divs[i] == wm8962->bclk) {
+			dev_dbg(component->dev, "Selected BCLK_DIV %d for %dHz\n",
+				bclk_divs[i], wm8962->bclk);
+			clocking2 |= i;
 			break;
-		if (diff < min_diff) {
-			best = i;
-			min_diff = diff;
 		}
 	}
-	wm8962->bclk = dspclk / bclk_divs[best];
-	clocking2 |= best;
-	dev_dbg(component->dev, "Selected BCLK_DIV %d for %dHz\n",
-		bclk_divs[best], wm8962->bclk);
+	if (i == ARRAY_SIZE(bclk_divs)) {
+		dev_err(component->dev, "Unsupported BCLK ratio %d\n",
+			dspclk / wm8962->bclk);
+		return;
+	}
 
 	aif2 |= wm8962->bclk / wm8962->lrclk;
 	dev_dbg(component->dev, "Selected LRCLK divisor %d for %dHz\n",
@@ -2949,8 +2933,9 @@ static int wm8962_set_fll(struct snd_soc_component *component, int fll_id, int s
 
 	reinit_completion(&wm8962->fll_lock);
 
-	ret = pm_runtime_resume_and_get(component->dev);
+	ret = pm_runtime_get_sync(component->dev);
 	if (ret < 0) {
+		pm_runtime_put_noidle(component->dev);
 		dev_err(component->dev, "Failed to resume device: %d\n", ret);
 		return ret;
 	}
@@ -3041,7 +3026,7 @@ static struct snd_soc_dai_driver wm8962_dai = {
 		.formats = WM8962_FORMATS,
 	},
 	.ops = &wm8962_dai_ops,
-	.symmetric_rate = 1,
+	.symmetric_rates = 1,
 };
 
 static void wm8962_mic_work(struct work_struct *work)
@@ -3082,8 +3067,9 @@ static irqreturn_t wm8962_irq(int irq, void *data)
 	unsigned int active;
 	int reg, ret;
 
-	ret = pm_runtime_resume_and_get(dev);
+	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
+		pm_runtime_put_noidle(dev);
 		dev_err(dev, "Failed to resume: %d\n", ret);
 		return IRQ_NONE;
 	}
@@ -3270,7 +3256,6 @@ static int wm8962_beep_event(struct input_dev *dev, unsigned int type,
 	case SND_BELL:
 		if (hz)
 			hz = 1000;
-		fallthrough;
 	case SND_TONE:
 		break;
 	default:
@@ -3283,8 +3268,9 @@ static int wm8962_beep_event(struct input_dev *dev, unsigned int type,
 	return 0;
 }
 
-static ssize_t beep_store(struct device *dev, struct device_attribute *attr,
-			  const char *buf, size_t count)
+static ssize_t wm8962_beep_set(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
 {
 	struct wm8962_priv *wm8962 = dev_get_drvdata(dev);
 	long int time;
@@ -3299,7 +3285,7 @@ static ssize_t beep_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static DEVICE_ATTR_WO(beep);
+static DEVICE_ATTR(beep, 0200, NULL, wm8962_beep_set);
 
 static void wm8962_init_beep(struct snd_soc_component *component)
 {
@@ -3555,6 +3541,7 @@ static const struct snd_soc_component_driver soc_component_dev_wm8962 = {
 	.set_pll		= wm8962_set_fll,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 /* Improve power consumption for IN4 DC measurement mode */
@@ -3601,11 +3588,13 @@ static int wm8962_set_pdata_from_of(struct i2c_client *i2c,
 				pdata->gpio_init[i] = 0x0;
 		}
 
-	pdata->mclk = devm_clk_get_optional(&i2c->dev, NULL);
-	return PTR_ERR_OR_ZERO(pdata->mclk);
+	pdata->mclk = devm_clk_get(&i2c->dev, NULL);
+
+	return 0;
 }
 
-static int wm8962_i2c_probe(struct i2c_client *i2c)
+static int wm8962_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8962_pdata *pdata = dev_get_platdata(&i2c->dev);
 	struct wm8962_priv *wm8962;
@@ -3631,6 +3620,14 @@ static int wm8962_i2c_probe(struct i2c_client *i2c)
 		ret = wm8962_set_pdata_from_of(i2c, &wm8962->pdata);
 		if (ret != 0)
 			return ret;
+	}
+
+	/* Mark the mclk pointer to NULL if no mclk assigned */
+	if (IS_ERR(wm8962->pdata.mclk)) {
+		/* But do not ignore the request for probe defer */
+		if (PTR_ERR(wm8962->pdata.mclk) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		wm8962->pdata.mclk = NULL;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(wm8962->supplies); i++)
@@ -3836,9 +3833,10 @@ err:
 	return ret;
 }
 
-static void wm8962_i2c_remove(struct i2c_client *client)
+static int wm8962_i2c_remove(struct i2c_client *client)
 {
 	pm_runtime_disable(&client->dev);
+	return 0;
 }
 
 #ifdef CONFIG_PM

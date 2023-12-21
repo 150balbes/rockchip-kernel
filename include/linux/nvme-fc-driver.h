@@ -7,7 +7,6 @@
 #define _NVME_FC_DRIVER_H 1
 
 #include <linux/scatterlist.h>
-#include <linux/blk-mq.h>
 
 
 /*
@@ -185,6 +184,7 @@ enum nvmefc_fcp_datadir {
  * @first_sgl: memory for 1st scatter/gather list segment for payload data
  * @sg_cnt:    number of elements in the scatter/gather list
  * @io_dir:    direction of the FCP request (see NVMEFC_FCP_xxx)
+ * @sqid:      The nvme SQID the command is being issued on
  * @done:      The callback routine the LLDD is to invoke upon completion of
  *             the FCP operation. req argument is the pointer to the original
  *             FCP IO operation.
@@ -193,13 +193,12 @@ enum nvmefc_fcp_datadir {
  *             while processing the operation. The length of the buffer
  *             corresponds to the fcprqst_priv_sz value specified in the
  *             nvme_fc_port_template supplied by the LLDD.
- * @sqid:      The nvme SQID the command is being issued on
  *
  * Values set by the LLDD indicating completion status of the FCP operation.
  * Must be set prior to calling the done() callback.
- * @rcv_rsplen: length, in bytes, of the FCP RSP IU received.
  * @transferred_length: amount of payload data, in bytes, that were
  *             transferred. Should equal payload_length on success.
+ * @rcv_rsplen: length, in bytes, of the FCP RSP IU received.
  * @status:    Completion status of the FCP operation. must be 0 upon success,
  *             negative errno value upon failure (ex: -EIO). Note: this is
  *             NOT a reflection of the NVME CQE completion status. Only the
@@ -219,14 +218,14 @@ struct nvmefc_fcp_req {
 	int			sg_cnt;
 	enum nvmefc_fcp_datadir	io_dir;
 
+	__le16			sqid;
+
 	void (*done)(struct nvmefc_fcp_req *req);
 
 	void			*private;
 
-	__le16			sqid;
-
-	u16			rcv_rsplen;
 	u32			transferred_length;
+	u16			rcv_rsplen;
 	u32			status;
 } __aligned(sizeof(u64));	/* alignment for other things alloc'd with */
 
@@ -498,8 +497,6 @@ struct nvme_fc_port_template {
 	int	(*xmt_ls_rsp)(struct nvme_fc_local_port *localport,
 				struct nvme_fc_remote_port *rport,
 				struct nvmefc_ls_rsp *ls_rsp);
-	void	(*map_queues)(struct nvme_fc_local_port *localport,
-			      struct blk_mq_queue_map *map);
 
 	u32	max_hw_queues;
 	u16	max_sgl_segments;
@@ -564,15 +561,6 @@ int nvme_fc_rcv_ls_req(struct nvme_fc_remote_port *remoteport,
 			void *lsreqbuf, u32 lsreqbuf_len);
 
 
-/*
- * Routine called to get the appid field associated with request by the lldd
- *
- * If the return value is NULL : the user/libvirt has not set the appid to VM
- * If the return value is non-zero: Returns the appid associated with VM
- *
- * @req: IO request from nvme fc to driver
- */
-char *nvme_fc_io_getuuid(struct nvmefc_fcp_req *req);
 
 /*
  * ***************  LLDD FC-NVME Target/Subsystem API ***************
@@ -730,7 +718,7 @@ enum {
  *
  * Fields with static values for the port. Initialized by the
  * port_info struct supplied to the registration call.
- * @port_num:  NVME-FC transport subsystem port number
+ * @port_num:  NVME-FC transport subsytem port number
  * @node_name: FC WWNN for the port
  * @port_name: FC WWPN for the port
  * @private:   pointer to memory allocated alongside the local port
@@ -790,10 +778,6 @@ struct nvmet_fc_target_port {
  *       The transport will always call the xmt_ls_rsp() routine for any
  *       LS received.
  *       Entrypoint is Mandatory.
- *
- * @map_queues: This functions lets the driver expose the queue mapping
- *	 to the block layer.
- *       Entrypoint is Optional.
  *
  * @fcp_op:  Called to perform a data transfer or transmit a response.
  *       The nvmefc_tgt_fcp_req structure is the same LLDD-supplied
@@ -1057,10 +1041,5 @@ int nvmet_fc_rcv_fcp_req(struct nvmet_fc_target_port *tgtport,
 
 void nvmet_fc_rcv_fcp_abort(struct nvmet_fc_target_port *tgtport,
 			struct nvmefc_tgt_fcp_req *fcpreq);
-/*
- * add a define, visible to the compiler, that indicates support
- * for feature. Allows for conditional compilation in LLDDs.
- */
-#define NVME_FC_FEAT_UUID	0x0001
 
 #endif /* _NVME_FC_DRIVER_H */

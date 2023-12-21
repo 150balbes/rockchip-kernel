@@ -29,7 +29,6 @@ usage() {
 	echo "  -y    make builtin have precedence over modules"
 	echo "  -O    dir to put generated output files.  Consider setting \$KCONFIG_CONFIG instead."
 	echo "  -s    strict mode. Fail if the fragment redefines any value."
-	echo "  -Q    disable warning messages for overridden options."
 	echo
 	echo "Used prefix: '$CONFIG_PREFIX'. You can redefine it with \$CONFIG_ environment variable."
 }
@@ -41,7 +40,6 @@ BUILTIN=false
 OUTPUT=.
 STRICT=false
 CONFIG_PREFIX=${CONFIG_-CONFIG_}
-WARNOVERRIDE=echo
 
 while true; do
 	case $1 in
@@ -81,11 +79,6 @@ while true; do
 		;;
 	"-s")
 		STRICT=true
-		shift
-		continue
-		;;
-	"-Q")
-		WARNOVERRIDE=true
 		shift
 		continue
 		;;
@@ -145,21 +138,21 @@ for ORIG_MERGE_FILE in $MERGE_LIST ; do
 		NEW_VAL=$(grep -w $CFG $MERGE_FILE)
 		BUILTIN_FLAG=false
 		if [ "$BUILTIN" = "true" ] && [ "${NEW_VAL#CONFIG_*=}" = "m" ] && [ "${PREV_VAL#CONFIG_*=}" = "y" ]; then
-			${WARNOVERRIDE} Previous  value: $PREV_VAL
-			${WARNOVERRIDE} New value:       $NEW_VAL
-			${WARNOVERRIDE} -y passed, will not demote y to m
-			${WARNOVERRIDE}
+			echo Previous  value: $PREV_VAL
+			echo New value:       $NEW_VAL
+			echo -y passed, will not demote y to m
+			echo
 			BUILTIN_FLAG=true
 		elif [ "x$PREV_VAL" != "x$NEW_VAL" ] ; then
-			${WARNOVERRIDE} Value of $CFG is redefined by fragment $ORIG_MERGE_FILE:
-			${WARNOVERRIDE} Previous  value: $PREV_VAL
-			${WARNOVERRIDE} New value:       $NEW_VAL
-			${WARNOVERRIDE}
+			echo Value of $CFG is redefined by fragment $ORIG_MERGE_FILE:
+			echo Previous  value: $PREV_VAL
+			echo New value:       $NEW_VAL
+			echo
 			if [ "$STRICT" = "true" ]; then
 				STRICT_MODE_VIOLATED=true
 			fi
 		elif [ "$WARNREDUN" = "true" ]; then
-			${WARNOVERRIDE} Value of $CFG is redundant by fragment $ORIG_MERGE_FILE:
+			echo Value of $CFG is redundant by fragment $ORIG_MERGE_FILE:
 		fi
 		if [ "$BUILTIN_FLAG" = "false" ]; then
 			sed -i "/$CFG[ =]/d" $TMP_FILE

@@ -8,13 +8,14 @@
  */
 
 #include <linux/err.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/mfd/core.h>
@@ -29,12 +30,17 @@
  * @irq_trigger: IRQ trigger to use for the interrupt to the host
  * @autosleep: bool to enable/disable stmpe autosleep
  * @autosleep_timeout: inactivity timeout in milliseconds for autosleep
+ * @irq_over_gpio: true if gpio is used to get irq
+ * @irq_gpio: gpio number over which irq will be requested (significant only if
+ *	      irq_over_gpio is true)
  */
 struct stmpe_platform_data {
 	int id;
 	unsigned int blocks;
 	unsigned int irq_trigger;
 	bool autosleep;
+	bool irq_over_gpio;
+	int irq_gpio;
 	int autosleep_timeout;
 };
 
@@ -331,7 +337,6 @@ static const struct mfd_cell stmpe_gpio_cell_noirq = {
  */
 
 static struct resource stmpe_keypad_resources[] = {
-	/* Start and end filled dynamically */
 	{
 		.name	= "KEYPAD",
 		.flags	= IORESOURCE_IRQ,
@@ -353,7 +358,6 @@ static const struct mfd_cell stmpe_keypad_cell = {
  * PWM (1601, 2401, 2403)
  */
 static struct resource stmpe_pwm_resources[] = {
-	/* Start and end filled dynamically */
 	{
 		.name	= "PWM0",
 		.flags	= IORESOURCE_IRQ,
@@ -442,7 +446,6 @@ static struct stmpe_variant_info stmpe801_noirq = {
  */
 
 static struct resource stmpe_ts_resources[] = {
-	/* Start and end filled dynamically */
 	{
 		.name	= "TOUCH_DET",
 		.flags	= IORESOURCE_IRQ,
@@ -465,7 +468,6 @@ static const struct mfd_cell stmpe_ts_cell = {
  */
 
 static struct resource stmpe_adc_resources[] = {
-	/* Start and end filled dynamically */
 	{
 		.name	= "STMPE_TEMP_SENS",
 		.flags	= IORESOURCE_IRQ,
@@ -1343,22 +1345,32 @@ static void stmpe_of_probe(struct stmpe_platform_data *pdata,
 	if (pdata->id < 0)
 		pdata->id = -1;
 
+	pdata->irq_gpio = of_get_named_gpio_flags(np, "irq-gpio", 0,
+				&pdata->irq_trigger);
+	if (gpio_is_valid(pdata->irq_gpio))
+		pdata->irq_over_gpio = 1;
+	else
+		pdata->irq_trigger = IRQF_TRIGGER_NONE;
+
 	of_property_read_u32(np, "st,autosleep-timeout",
 			&pdata->autosleep_timeout);
 
 	pdata->autosleep = (pdata->autosleep_timeout) ? true : false;
 
-	for_each_available_child_of_node(np, child) {
-		if (of_device_is_compatible(child, stmpe_gpio_cell.of_compatible))
+	for_each_child_of_node(np, child) {
+		if (of_node_name_eq(child, "stmpe_gpio")) {
 			pdata->blocks |= STMPE_BLOCK_GPIO;
-		else if (of_device_is_compatible(child, stmpe_keypad_cell.of_compatible))
+		} else if (of_node_name_eq(child, "stmpe_keypad")) {
 			pdata->blocks |= STMPE_BLOCK_KEYPAD;
-		else if (of_device_is_compatible(child, stmpe_ts_cell.of_compatible))
+		} else if (of_node_name_eq(child, "stmpe_touchscreen")) {
 			pdata->blocks |= STMPE_BLOCK_TOUCHSCREEN;
-		else if (of_device_is_compatible(child, stmpe_adc_cell.of_compatible))
+		} else if (of_node_name_eq(child, "stmpe_adc")) {
 			pdata->blocks |= STMPE_BLOCK_ADC;
-		else if (of_device_is_compatible(child, stmpe_pwm_cell.of_compatible))
+		} else if (of_node_name_eq(child, "stmpe_pwm")) {
 			pdata->blocks |= STMPE_BLOCK_PWM;
+		} else if (of_node_name_eq(child, "stmpe_rotator")) {
+			pdata->blocks |= STMPE_BLOCK_ROTATOR;
+		}
 	}
 }
 
@@ -1368,7 +1380,6 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 	struct stmpe_platform_data *pdata;
 	struct device_node *np = ci->dev->of_node;
 	struct stmpe *stmpe;
-	struct gpio_desc *irq_gpio;
 	int ret;
 	u32 val;
 
@@ -1378,7 +1389,7 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 
 	stmpe_of_probe(pdata, np);
 
-	if (!of_property_present(np, "interrupts"))
+	if (of_find_property(np, "interrupts", NULL) == NULL)
 		ci->irq = -1;
 
 	stmpe = devm_kzalloc(ci->dev, sizeof(struct stmpe), GFP_KERNEL);
@@ -1422,20 +1433,18 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 	if (ci->init)
 		ci->init(stmpe);
 
-	irq_gpio = devm_gpiod_get_optional(ci->dev, "irq", GPIOD_ASIS);
-	ret = PTR_ERR_OR_ZERO(irq_gpio);
-	if (ret) {
-		dev_err(stmpe->dev, "failed to request IRQ GPIO: %d\n", ret);
-		return ret;
-	}
+	if (pdata->irq_over_gpio) {
+		ret = devm_gpio_request_one(ci->dev, pdata->irq_gpio,
+				GPIOF_DIR_IN, "stmpe");
+		if (ret) {
+			dev_err(stmpe->dev, "failed to request IRQ GPIO: %d\n",
+					ret);
+			return ret;
+		}
 
-	if (irq_gpio) {
-		stmpe->irq = gpiod_to_irq(irq_gpio);
-		pdata->irq_trigger = gpiod_is_active_low(irq_gpio) ?
-					IRQF_TRIGGER_LOW : IRQF_TRIGGER_HIGH;
+		stmpe->irq = gpio_to_irq(pdata->irq_gpio);
 	} else {
 		stmpe->irq = ci->irq;
-		pdata->irq_trigger = IRQF_TRIGGER_NONE;
 	}
 
 	if (stmpe->irq < 0) {
@@ -1483,18 +1492,21 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 	return ret;
 }
 
-void stmpe_remove(struct stmpe *stmpe)
+int stmpe_remove(struct stmpe *stmpe)
 {
-	if (!IS_ERR(stmpe->vio) && regulator_is_enabled(stmpe->vio))
+	if (!IS_ERR(stmpe->vio))
 		regulator_disable(stmpe->vio);
-	if (!IS_ERR(stmpe->vcc) && regulator_is_enabled(stmpe->vcc))
+	if (!IS_ERR(stmpe->vcc))
 		regulator_disable(stmpe->vcc);
 
 	__stmpe_disable(stmpe, STMPE_BLOCK_ADC);
 
 	mfd_remove_devices(stmpe->dev);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM
 static int stmpe_suspend(struct device *dev)
 {
 	struct stmpe *stmpe = dev_get_drvdata(dev);
@@ -1515,5 +1527,8 @@ static int stmpe_resume(struct device *dev)
 	return 0;
 }
 
-EXPORT_GPL_SIMPLE_DEV_PM_OPS(stmpe_dev_pm_ops,
-			     stmpe_suspend, stmpe_resume);
+const struct dev_pm_ops stmpe_dev_pm_ops = {
+	.suspend	= stmpe_suspend,
+	.resume		= stmpe_resume,
+};
+#endif

@@ -19,8 +19,8 @@ int  sysctl_dccp_retries2		__read_mostly = TCP_RETR2;
 
 static void dccp_write_err(struct sock *sk)
 {
-	sk->sk_err = READ_ONCE(sk->sk_err_soft) ? : ETIMEDOUT;
-	sk_error_report(sk);
+	sk->sk_err = sk->sk_err_soft ? : ETIMEDOUT;
+	sk->sk_error_report(sk);
 
 	dccp_send_reset(sk, DCCP_RESET_CODE_ABORTED);
 	dccp_done(sk);
@@ -215,14 +215,13 @@ out:
 
 /**
  * dccp_write_xmitlet  -  Workhorse for CCID packet dequeueing interface
- * @t: pointer to the tasklet associated with this handler
+ * @data: Socket to act on
  *
  * See the comments above %ccid_dequeueing_decision for supported modes.
  */
-static void dccp_write_xmitlet(struct tasklet_struct *t)
+static void dccp_write_xmitlet(unsigned long data)
 {
-	struct dccp_sock *dp = from_tasklet(dp, t, dccps_xmitlet);
-	struct sock *sk = &dp->dccps_inet_connection.icsk_inet.sk;
+	struct sock *sk = (struct sock *)data;
 
 	bh_lock_sock(sk);
 	if (sock_owned_by_user(sk))
@@ -236,15 +235,16 @@ static void dccp_write_xmitlet(struct tasklet_struct *t)
 static void dccp_write_xmit_timer(struct timer_list *t)
 {
 	struct dccp_sock *dp = from_timer(dp, t, dccps_xmit_timer);
+	struct sock *sk = &dp->dccps_inet_connection.icsk_inet.sk;
 
-	dccp_write_xmitlet(&dp->dccps_xmitlet);
+	dccp_write_xmitlet((unsigned long)sk);
 }
 
 void dccp_init_xmit_timers(struct sock *sk)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 
-	tasklet_setup(&dp->dccps_xmitlet, dccp_write_xmitlet);
+	tasklet_init(&dp->dccps_xmitlet, dccp_write_xmitlet, (unsigned long)sk);
 	timer_setup(&dp->dccps_xmit_timer, dccp_write_xmit_timer, 0);
 	inet_csk_init_xmit_timers(sk, &dccp_write_timer, &dccp_delack_timer,
 				  &dccp_keepalive_timer);

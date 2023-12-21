@@ -8,7 +8,6 @@
  * TODO: gesture + proximity calib offsets
  */
 
-#include <linux/acpi.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -223,16 +222,14 @@ static const struct iio_event_spec apds9960_pxs_event_spec[] = {
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_FALLING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
-	},
-	{
-		.type = IIO_EV_TYPE_THRESH,
-		.mask_separate = BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 };
 
@@ -240,16 +237,14 @@ static const struct iio_event_spec apds9960_als_event_spec[] = {
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 	{
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_FALLING,
-		.mask_separate = BIT(IIO_EV_INFO_VALUE),
-	},
-	{
-		.type = IIO_EV_TYPE_THRESH,
-		.mask_separate = BIT(IIO_EV_INFO_ENABLE),
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+			BIT(IIO_EV_INFO_ENABLE),
 	},
 };
 
@@ -566,7 +561,7 @@ static int apds9960_write_raw(struct iio_dev *indio_dev,
 		}
 	default:
 		return -EINVAL;
-	}
+	};
 
 	return 0;
 }
@@ -988,9 +983,11 @@ static int apds9960_chip_init(struct apds9960_data *data)
 	return apds9960_set_powermode(data, 1);
 }
 
-static int apds9960_probe(struct i2c_client *client)
+static int apds9960_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct apds9960_data *data;
+	struct iio_buffer *buffer;
 	struct iio_dev *indio_dev;
 	int ret;
 
@@ -998,17 +995,19 @@ static int apds9960_probe(struct i2c_client *client)
 	if (!indio_dev)
 		return -ENOMEM;
 
+	buffer = devm_iio_kfifo_allocate(&client->dev);
+	if (!buffer)
+		return -ENOMEM;
+
+	iio_device_attach_buffer(indio_dev, buffer);
+
 	indio_dev->info = &apds9960_info;
 	indio_dev->name = APDS9960_DRV_NAME;
 	indio_dev->channels = apds9960_channels;
 	indio_dev->num_channels = ARRAY_SIZE(apds9960_channels);
 	indio_dev->available_scan_masks = apds9960_scan_masks;
-	indio_dev->modes = INDIO_DIRECT_MODE;
-
-	ret = devm_iio_kfifo_buffer_setup(&client->dev, indio_dev,
-					  &apds9960_buffer_setup_ops);
-	if (ret)
-		return ret;
+	indio_dev->modes = (INDIO_BUFFER_SOFTWARE | INDIO_DIRECT_MODE);
+	indio_dev->setup_ops = &apds9960_buffer_setup_ops;
 
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
@@ -1070,7 +1069,7 @@ error_power_down:
 	return ret;
 }
 
-static void apds9960_remove(struct i2c_client *client)
+static int apds9960_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct apds9960_data *data = iio_priv(indio_dev);
@@ -1079,6 +1078,8 @@ static void apds9960_remove(struct i2c_client *client)
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
 	apds9960_set_powermode(data, 0);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1112,12 +1113,6 @@ static const struct i2c_device_id apds9960_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, apds9960_id);
 
-static const struct acpi_device_id apds9960_acpi_match[] = {
-	{ "MSHW0184" },
-	{ }
-};
-MODULE_DEVICE_TABLE(acpi, apds9960_acpi_match);
-
 static const struct of_device_id apds9960_of_match[] = {
 	{ .compatible = "avago,apds9960" },
 	{ }
@@ -1129,7 +1124,6 @@ static struct i2c_driver apds9960_driver = {
 		.name	= APDS9960_DRV_NAME,
 		.of_match_table = apds9960_of_match,
 		.pm	= &apds9960_pm_ops,
-		.acpi_match_table = apds9960_acpi_match,
 	},
 	.probe		= apds9960_probe,
 	.remove		= apds9960_remove,

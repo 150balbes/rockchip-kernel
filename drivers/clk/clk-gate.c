@@ -7,12 +7,15 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/device.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/err.h>
 #include <linux/string.h>
+
+static bool clk_always_on;
+module_param_named(always_on, clk_always_on, bool, 0644);
+MODULE_PARM_DESC(always_on, "Always keep clks on except for system suspend.");
 
 /**
  * DOC: basic gatable clock which can gate and ungate it's ouput
@@ -53,12 +56,15 @@ static inline void clk_gate_writel(struct clk_gate *gate, u32 val)
  *
  * So, result is always: enable xor set2dis.
  */
-void clk_gate_endisable(struct clk_hw *hw, int enable)
+static void clk_gate_endisable(struct clk_hw *hw, int enable)
 {
 	struct clk_gate *gate = to_clk_gate(hw);
 	int set = gate->flags & CLK_GATE_SET_TO_DISABLE ? 1 : 0;
 	unsigned long flags;
 	u32 reg;
+
+	if (clk_always_on && !enable)
+		return;
 
 	set ^= enable;
 
@@ -87,7 +93,6 @@ void clk_gate_endisable(struct clk_hw *hw, int enable)
 	else
 		__release(gate->lock);
 }
-EXPORT_SYMBOL_GPL(clk_gate_endisable);
 
 static int clk_gate_enable(struct clk_hw *hw)
 {
@@ -224,37 +229,3 @@ void clk_hw_unregister_gate(struct clk_hw *hw)
 	kfree(gate);
 }
 EXPORT_SYMBOL_GPL(clk_hw_unregister_gate);
-
-static void devm_clk_hw_release_gate(struct device *dev, void *res)
-{
-	clk_hw_unregister_gate(*(struct clk_hw **)res);
-}
-
-struct clk_hw *__devm_clk_hw_register_gate(struct device *dev,
-		struct device_node *np, const char *name,
-		const char *parent_name, const struct clk_hw *parent_hw,
-		const struct clk_parent_data *parent_data,
-		unsigned long flags,
-		void __iomem *reg, u8 bit_idx,
-		u8 clk_gate_flags, spinlock_t *lock)
-{
-	struct clk_hw **ptr, *hw;
-
-	ptr = devres_alloc(devm_clk_hw_release_gate, sizeof(*ptr), GFP_KERNEL);
-	if (!ptr)
-		return ERR_PTR(-ENOMEM);
-
-	hw = __clk_hw_register_gate(dev, np, name, parent_name, parent_hw,
-				    parent_data, flags, reg, bit_idx,
-				    clk_gate_flags, lock);
-
-	if (!IS_ERR(hw)) {
-		*ptr = hw;
-		devres_add(dev, ptr);
-	} else {
-		devres_free(ptr);
-	}
-
-	return hw;
-}
-EXPORT_SYMBOL_GPL(__devm_clk_hw_register_gate);

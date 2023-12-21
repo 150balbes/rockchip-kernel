@@ -551,9 +551,12 @@ static int sun50i_h5_pinctrl_probe(struct platform_device *pdev)
 	int ret;
 
 	ret = platform_irq_count(pdev);
-	if (ret < 0)
-		return dev_err_probe(&pdev->dev, ret,
-				     "Couldn't determine irq count\n");
+	if (ret < 0) {
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Couldn't determine irq count: %pe\n",
+				ERR_PTR(ret));
+		return ret;
+	}
 
 	switch (ret) {
 	case 2:

@@ -158,7 +158,8 @@ static int ds1742_rtc_probe(struct platform_device *pdev)
 	if (!pdata)
 		return -ENOMEM;
 
-	ioaddr = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	ioaddr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(ioaddr))
 		return PTR_ERR(ioaddr);
 
@@ -189,12 +190,14 @@ static int ds1742_rtc_probe(struct platform_device *pdev)
 		return PTR_ERR(rtc);
 
 	rtc->ops = &ds1742_rtc_ops;
+	rtc->nvram_old_abi = true;
 
-	ret = devm_rtc_register_device(rtc);
+	ret = rtc_register_device(rtc);
 	if (ret)
 		return ret;
 
-	devm_rtc_nvmem_register(rtc, &nvmem_cfg);
+	if (rtc_nvmem_register(rtc, &nvmem_cfg))
+		dev_err(&pdev->dev, "Unable to register nvmem\n");
 
 	return 0;
 }

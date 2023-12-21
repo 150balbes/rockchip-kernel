@@ -131,7 +131,7 @@ static int ps2mult_create_port(struct ps2mult *psm, int i)
 	if (!serio)
 		return -ENOMEM;
 
-	strscpy(serio->name, "TQC PS/2 Multiplexer", sizeof(serio->name));
+	strlcpy(serio->name, "TQC PS/2 Multiplexer", sizeof(serio->name));
 	snprintf(serio->phys, sizeof(serio->phys),
 		 "%s/port%d", mx_serio->phys, i);
 	serio->id.type = SERIO_8042;

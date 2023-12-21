@@ -6,7 +6,7 @@
  */
 #include "./fireworks.h"
 
-#define READY_TIMEOUT_MS	1000
+#define CALLBACK_TIMEOUT	100
 
 static int init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 {
@@ -29,7 +29,7 @@ static int init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 	if (err < 0)
 		return err;
 
-	err = amdtp_am824_init(stream, efw->unit, s_dir, CIP_BLOCKING | CIP_UNAWARE_SYT);
+	err = amdtp_am824_init(stream, efw->unit, s_dir, CIP_BLOCKING);
 	if (err < 0) {
 		amdtp_stream_destroy(stream);
 		cmp_connection_destroy(conn);
@@ -50,9 +50,8 @@ static int init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 		     efw->firmware_version == 0x5070300 ||
 		     efw->firmware_version == 0x5080000))
 			efw->tx_stream.flags |= CIP_UNALIGHED_DBC;
-		// AudioFire9 always reports wrong dbs. Onyx 1200F with the latest firmware (v4.6.0)
-		// also report wrong dbs at 88.2 kHz or greater.
-		if (efw->is_af9 || efw->firmware_version == 0x4060000)
+		// AudioFire9 always reports wrong dbs.
+		if (efw->is_af9)
 			efw->tx_stream.flags |= CIP_WRONG_DBS;
 		// Firmware version 5.5 reports fixed interval for dbc.
 		if (efw->firmware_version == 0x5050000)
@@ -265,15 +264,6 @@ int snd_efw_stream_start_duplex(struct snd_efw *efw)
 		return err;
 
 	if (!amdtp_stream_running(&efw->rx_stream)) {
-		unsigned int tx_init_skip_cycles;
-
-		// Audiofire 2/4 skip an isochronous cycle several thousands after starting
-		// packet transmission.
-		if (efw->is_fireworks3 && !efw->is_af9)
-			tx_init_skip_cycles = 6000;
-		else
-			tx_init_skip_cycles = 0;
-
 		err = start_stream(efw, &efw->rx_stream, rate);
 		if (err < 0)
 			goto error;
@@ -282,14 +272,15 @@ int snd_efw_stream_start_duplex(struct snd_efw *efw)
 		if (err < 0)
 			goto error;
 
-		// NOTE: The device ignores presentation time expressed by the value of syt field
-		// of CIP header in received packets. The sequence of the number of data blocks per
-		// packet is important for media clock recovery.
-		err = amdtp_domain_start(&efw->domain, tx_init_skip_cycles, true, false);
+		err = amdtp_domain_start(&efw->domain, 0);
 		if (err < 0)
 			goto error;
 
-		if (!amdtp_domain_wait_ready(&efw->domain, READY_TIMEOUT_MS)) {
+		// Wait first callback.
+		if (!amdtp_stream_wait_callback(&efw->rx_stream,
+						CALLBACK_TIMEOUT) ||
+		    !amdtp_stream_wait_callback(&efw->tx_stream,
+						CALLBACK_TIMEOUT)) {
 			err = -ETIMEDOUT;
 			goto error;
 		}

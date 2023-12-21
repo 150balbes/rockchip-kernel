@@ -11,23 +11,13 @@ maintainers:
   - Thierry Reding <thierry.reding@gmail.com>
 
 allOf:
-  - $ref: panel-common.yaml#
-  - $ref: /schemas/display/lvds.yaml#
-
-select:
-  properties:
-    compatible:
-      contains:
-        const: advantech,idk-1110wr
-
-  required:
-    - compatible
+  - $ref: lvds.yaml#
 
 properties:
   compatible:
     items:
       - const: advantech,idk-1110wr
-      - const: panel-lvds
+      - {} # panel-lvds, but not listed here to avoid false select
 
   data-mapping:
     const: jeida-24
@@ -45,11 +35,6 @@ additionalProperties: false
 
 required:
   - compatible
-  - data-mapping
-  - width-mm
-  - height-mm
-  - panel-timing
-  - port
 
 examples:
   - |+

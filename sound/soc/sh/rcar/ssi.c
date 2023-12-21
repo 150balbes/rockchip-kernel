@@ -11,7 +11,7 @@
 /*
  * you can enable below define if you don't need
  * SSI interrupt status debug message when debugging
- * see rsnd_print_irq_status()
+ * see rsnd_dbg_irq_status()
  *
  * #define RSND_DEBUG_NO_IRQ_STATUS 1
  */
@@ -24,23 +24,23 @@
 /*
  * SSICR
  */
-#define	FORCE		(1u << 31)	/* Fixed */
-#define	DMEN		(1u << 28)	/* DMA Enable */
-#define	UIEN		(1u << 27)	/* Underflow Interrupt Enable */
-#define	OIEN		(1u << 26)	/* Overflow Interrupt Enable */
-#define	IIEN		(1u << 25)	/* Idle Mode Interrupt Enable */
-#define	DIEN		(1u << 24)	/* Data Interrupt Enable */
-#define	CHNL_4		(1u << 22)	/* Channels */
-#define	CHNL_6		(2u << 22)	/* Channels */
-#define	CHNL_8		(3u << 22)	/* Channels */
-#define DWL_MASK	(7u << 19)	/* Data Word Length mask */
-#define	DWL_8		(0u << 19)	/* Data Word Length */
-#define	DWL_16		(1u << 19)	/* Data Word Length */
-#define	DWL_18		(2u << 19)	/* Data Word Length */
-#define	DWL_20		(3u << 19)	/* Data Word Length */
-#define	DWL_22		(4u << 19)	/* Data Word Length */
-#define	DWL_24		(5u << 19)	/* Data Word Length */
-#define	DWL_32		(6u << 19)	/* Data Word Length */
+#define	FORCE		(1 << 31)	/* Fixed */
+#define	DMEN		(1 << 28)	/* DMA Enable */
+#define	UIEN		(1 << 27)	/* Underflow Interrupt Enable */
+#define	OIEN		(1 << 26)	/* Overflow Interrupt Enable */
+#define	IIEN		(1 << 25)	/* Idle Mode Interrupt Enable */
+#define	DIEN		(1 << 24)	/* Data Interrupt Enable */
+#define	CHNL_4		(1 << 22)	/* Channels */
+#define	CHNL_6		(2 << 22)	/* Channels */
+#define	CHNL_8		(3 << 22)	/* Channels */
+#define DWL_MASK	(7 << 19)	/* Data Word Length mask */
+#define	DWL_8		(0 << 19)	/* Data Word Length */
+#define	DWL_16		(1 << 19)	/* Data Word Length */
+#define	DWL_18		(2 << 19)	/* Data Word Length */
+#define	DWL_20		(3 << 19)	/* Data Word Length */
+#define	DWL_22		(4 << 19)	/* Data Word Length */
+#define	DWL_24		(5 << 19)	/* Data Word Length */
+#define	DWL_32		(6 << 19)	/* Data Word Length */
 
 /*
  * System word length
@@ -117,6 +117,8 @@ struct rsnd_ssi {
 	(rsnd_ssi_run_mods(io) & (1 << rsnd_mod_id(mod)))
 #define rsnd_ssi_can_output_clk(mod) (!__rsnd_ssi_is_pin_sharing(mod))
 
+static int rsnd_ssi_is_dma_mode(struct rsnd_mod *mod);
+
 int rsnd_ssi_use_busif(struct rsnd_dai_stream *io)
 {
 	struct rsnd_mod *mod = rsnd_io_to_mod_ssi(io);
@@ -165,7 +167,8 @@ static void rsnd_ssi_status_check(struct rsnd_mod *mod,
 
 static u32 rsnd_ssi_multi_secondaries(struct rsnd_dai_stream *io)
 {
-	static const enum rsnd_mod_type types[] = {
+	struct rsnd_mod *mod;
+	enum rsnd_mod_type types[] = {
 		RSND_MOD_SSIM1,
 		RSND_MOD_SSIM2,
 		RSND_MOD_SSIM3,
@@ -174,8 +177,7 @@ static u32 rsnd_ssi_multi_secondaries(struct rsnd_dai_stream *io)
 
 	mask = 0;
 	for (i = 0; i < ARRAY_SIZE(types); i++) {
-		struct rsnd_mod *mod = rsnd_io_to_mod(io, types[i]);
-
+		mod = rsnd_io_to_mod(io, types[i]);
 		if (!mod)
 			continue;
 
@@ -228,7 +230,7 @@ unsigned int rsnd_ssi_clk_query(struct rsnd_dai *rdai,
 		       int param1, int param2, int *idx)
 {
 	struct rsnd_priv *priv = rsnd_rdai_to_priv(rdai);
-	static const int ssi_clk_mul_table[] = {
+	int ssi_clk_mul_table[] = {
 		1, 2, 4, 8, 16, 6, 12,
 	};
 	int j, ret;
@@ -303,14 +305,15 @@ static int rsnd_ssi_master_clk_start(struct rsnd_mod *mod,
 		return 0;
 	}
 
-	ret = -EIO;
 	main_rate = rsnd_ssi_clk_query(rdai, rate, chan, &idx);
-	if (!main_rate)
-		goto rate_err;
+	if (!main_rate) {
+		dev_err(dev, "unsupported clock rate\n");
+		return -EIO;
+	}
 
 	ret = rsnd_adg_ssi_clk_try_start(mod, main_rate);
 	if (ret < 0)
-		goto rate_err;
+		return ret;
 
 	/*
 	 * SSI clock will be output contiguously
@@ -332,10 +335,6 @@ static int rsnd_ssi_master_clk_start(struct rsnd_mod *mod,
 		rsnd_mod_name(mod), chan, rate);
 
 	return 0;
-
-rate_err:
-	dev_err(dev, "unsupported clock rate\n");
-	return ret;
 }
 
 static void rsnd_ssi_master_clk_stop(struct rsnd_mod *mod,
@@ -373,6 +372,9 @@ static void rsnd_ssi_config_init(struct rsnd_mod *mod,
 	u32 wsr		= ssi->wsr;
 	int width;
 	int is_tdm, is_tdm_split;
+	int id = rsnd_mod_id(mod);
+	int i;
+	u32 sys_int_enable = 0;
 
 	is_tdm		= rsnd_runtime_is_tdm(io);
 	is_tdm_split	= rsnd_runtime_is_tdm_split(io);
@@ -398,6 +400,7 @@ static void rsnd_ssi_config_init(struct rsnd_mod *mod,
 	 * see
 	 *	rsnd_ssiu_init_gen2()
 	 */
+	wsr = ssi->wsr;
 	if (is_tdm || is_tdm_split) {
 		wsr	|= WS_MODE;
 		cr_own	|= CHNL_8;
@@ -445,6 +448,38 @@ static void rsnd_ssi_config_init(struct rsnd_mod *mod,
 			  DMEN;		/* DMA : enable DMA */
 	} else {
 		cr_mode = DIEN;		/* PIO : enable Data interrupt */
+	}
+
+	/* enable busif buffer over/under run interrupt. */
+	if (is_tdm || is_tdm_split) {
+		switch (id) {
+		case 0:
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+			for (i = 0; i < 4; i++) {
+				sys_int_enable = rsnd_mod_read(mod,
+					SSI_SYS_INT_ENABLE(i * 2));
+				sys_int_enable |= 0xf << (id * 4);
+				rsnd_mod_write(mod,
+					       SSI_SYS_INT_ENABLE(i * 2),
+					       sys_int_enable);
+			}
+
+			break;
+		case 9:
+			for (i = 0; i < 4; i++) {
+				sys_int_enable = rsnd_mod_read(mod,
+					SSI_SYS_INT_ENABLE((i * 2) + 1));
+				sys_int_enable |= 0xf << 4;
+				rsnd_mod_write(mod,
+					       SSI_SYS_INT_ENABLE((i * 2) + 1),
+					       sys_int_enable);
+			}
+
+			break;
+		}
 	}
 
 init_end:
@@ -503,6 +538,13 @@ static int rsnd_ssi_quit(struct rsnd_mod *mod,
 {
 	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
 	struct device *dev = rsnd_priv_to_dev(priv);
+	int is_tdm, is_tdm_split;
+	int id = rsnd_mod_id(mod);
+	int i;
+	u32 sys_int_enable = 0;
+
+	is_tdm		= rsnd_runtime_is_tdm(io);
+	is_tdm_split	= rsnd_runtime_is_tdm_split(io);
 
 	if (!rsnd_ssi_is_run_mods(mod, io))
 		return 0;
@@ -522,6 +564,38 @@ static int rsnd_ssi_quit(struct rsnd_mod *mod,
 		ssi->cr_own	= 0;
 		ssi->cr_mode	= 0;
 		ssi->wsr	= 0;
+	}
+
+	/* disable busif buffer over/under run interrupt. */
+	if (is_tdm || is_tdm_split) {
+		switch (id) {
+		case 0:
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+			for (i = 0; i < 4; i++) {
+				sys_int_enable = rsnd_mod_read(mod,
+						SSI_SYS_INT_ENABLE(i * 2));
+				sys_int_enable &= ~(0xf << (id * 4));
+				rsnd_mod_write(mod,
+					       SSI_SYS_INT_ENABLE(i * 2),
+					       sys_int_enable);
+			}
+
+			break;
+		case 9:
+			for (i = 0; i < 4; i++) {
+				sys_int_enable = rsnd_mod_read(mod,
+					SSI_SYS_INT_ENABLE((i * 2) + 1));
+				sys_int_enable &= ~(0xf << 4);
+				rsnd_mod_write(mod,
+					       SSI_SYS_INT_ENABLE((i * 2) + 1),
+					       sys_int_enable);
+			}
+
+			break;
+		}
 	}
 
 	return 0;
@@ -676,6 +750,12 @@ static void __rsnd_ssi_interrupt(struct rsnd_mod *mod,
 	u32 status;
 	bool elapsed = false;
 	bool stop = false;
+	int id = rsnd_mod_id(mod);
+	int i;
+	int is_tdm, is_tdm_split;
+
+	is_tdm		= rsnd_runtime_is_tdm(io);
+	is_tdm_split	= rsnd_runtime_is_tdm_split(io);
 
 	spin_lock(&priv->lock);
 
@@ -691,13 +771,56 @@ static void __rsnd_ssi_interrupt(struct rsnd_mod *mod,
 
 	/* DMA only */
 	if (is_dma && (status & (UIRQ | OIRQ))) {
-		rsnd_print_irq_status(dev, "%s err status : 0x%08x\n",
-				      rsnd_mod_name(mod), status);
+		rsnd_dbg_irq_status(dev, "%s err status : 0x%08x\n",
+			rsnd_mod_name(mod), status);
 
 		stop = true;
 	}
 
-	stop |= rsnd_ssiu_busif_err_status_clear(mod);
+	status = 0;
+
+	if (is_tdm || is_tdm_split) {
+		switch (id) {
+		case 0:
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+			for (i = 0; i < 4; i++) {
+				status = rsnd_mod_read(mod,
+						       SSI_SYS_STATUS(i * 2));
+				status &= 0xf << (id * 4);
+
+				if (status) {
+					rsnd_dbg_irq_status(dev,
+						"%s err status : 0x%08x\n",
+						rsnd_mod_name(mod), status);
+					rsnd_mod_write(mod,
+						       SSI_SYS_STATUS(i * 2),
+						       0xf << (id * 4));
+					stop = true;
+				}
+			}
+			break;
+		case 9:
+			for (i = 0; i < 4; i++) {
+				status = rsnd_mod_read(mod,
+						SSI_SYS_STATUS((i * 2) + 1));
+				status &= 0xf << 4;
+
+				if (status) {
+					rsnd_dbg_irq_status(dev,
+						"%s err status : 0x%08x\n",
+						rsnd_mod_name(mod), status);
+					rsnd_mod_write(mod,
+						SSI_SYS_STATUS((i * 2) + 1),
+						0xf << 4);
+					stop = true;
+				}
+			}
+			break;
+		}
+	}
 
 	rsnd_ssi_status_clear(mod);
 rsnd_ssi_interrupt_out:
@@ -1024,36 +1147,8 @@ static struct dma_chan *rsnd_ssi_dma_req(struct rsnd_dai_stream *io,
 		name = is_play ? "rx" : "tx";
 
 	return rsnd_dma_request_channel(rsnd_ssi_of_node(priv),
-					SSI_NAME, mod, name);
+					mod, name);
 }
-
-#ifdef CONFIG_DEBUG_FS
-static void rsnd_ssi_debug_info(struct seq_file *m,
-				struct rsnd_dai_stream *io,
-				struct rsnd_mod *mod)
-{
-	struct rsnd_dai *rdai = rsnd_io_to_rdai(io);
-	struct rsnd_ssi *ssi = rsnd_mod_to_ssi(mod);
-
-	seq_printf(m, "clock:           %s\n",		rsnd_rdai_is_clk_master(rdai) ?
-								"provider" : "consumer");
-	seq_printf(m, "bit_clk_inv:     %d\n",		rdai->bit_clk_inv);
-	seq_printf(m, "frm_clk_inv:     %d\n",		rdai->frm_clk_inv);
-	seq_printf(m, "pin share:       %d\n",		__rsnd_ssi_is_pin_sharing(mod));
-	seq_printf(m, "can out clk:     %d\n",		rsnd_ssi_can_output_clk(mod));
-	seq_printf(m, "multi secondary: %d\n",		rsnd_ssi_is_multi_secondary(mod, io));
-	seq_printf(m, "tdm:             %d, %d\n",	rsnd_runtime_is_tdm(io),
-							rsnd_runtime_is_tdm_split(io));
-	seq_printf(m, "chan:            %d\n",		ssi->chan);
-	seq_printf(m, "user:            %d\n",		ssi->usrcnt);
-
-	rsnd_debugfs_mod_reg_show(m, mod, RSND_GEN2_SSI,
-				  rsnd_mod_id(mod) * 0x40, 0x40);
-}
-#define DEBUG_INFO .debug_info = rsnd_ssi_debug_info
-#else
-#define DEBUG_INFO
-#endif
 
 static struct rsnd_mod_ops rsnd_ssi_dma_ops = {
 	.name		= SSI_NAME,
@@ -1069,10 +1164,9 @@ static struct rsnd_mod_ops rsnd_ssi_dma_ops = {
 	.fallback	= rsnd_ssi_fallback,
 	.hw_params	= rsnd_ssi_hw_params,
 	.get_status	= rsnd_ssi_get_status,
-	DEBUG_INFO
 };
 
-int rsnd_ssi_is_dma_mode(struct rsnd_mod *mod)
+static int rsnd_ssi_is_dma_mode(struct rsnd_mod *mod)
 {
 	return mod->ops == &rsnd_ssi_dma_ops;
 }
@@ -1084,7 +1178,7 @@ static void rsnd_ssi_connect(struct rsnd_mod *mod,
 			     struct rsnd_dai_stream *io)
 {
 	struct rsnd_dai *rdai = rsnd_io_to_rdai(io);
-	static const enum rsnd_mod_type types[] = {
+	enum rsnd_mod_type types[] = {
 		RSND_MOD_SSI,
 		RSND_MOD_SSIM1,
 		RSND_MOD_SSIM2,
@@ -1110,9 +1204,9 @@ void rsnd_parse_connect_ssi(struct rsnd_dai *rdai,
 			    struct device_node *capture)
 {
 	struct rsnd_priv *priv = rsnd_rdai_to_priv(rdai);
-	struct device *dev = rsnd_priv_to_dev(priv);
 	struct device_node *node;
 	struct device_node *np;
+	struct rsnd_mod *mod;
 	int i;
 
 	node = rsnd_ssi_of_node(priv);
@@ -1121,16 +1215,7 @@ void rsnd_parse_connect_ssi(struct rsnd_dai *rdai,
 
 	i = 0;
 	for_each_child_of_node(node, np) {
-		struct rsnd_mod *mod;
-
-		i = rsnd_node_fixed_index(dev, np, SSI_NAME, i);
-		if (i < 0) {
-			of_node_put(np);
-			break;
-		}
-
 		mod = rsnd_ssi_mod_get(priv, i);
-
 		if (np == playback)
 			rsnd_ssi_connect(mod, &rdai->playback);
 		if (np == capture)
@@ -1172,7 +1257,7 @@ int rsnd_ssi_probe(struct rsnd_priv *priv)
 	if (!node)
 		return -EINVAL;
 
-	nr = rsnd_node_count(priv, node, SSI_NAME);
+	nr = of_get_child_count(node);
 	if (!nr) {
 		ret = -EINVAL;
 		goto rsnd_ssi_probe_done;
@@ -1192,13 +1277,6 @@ int rsnd_ssi_probe(struct rsnd_priv *priv)
 		if (!of_device_is_available(np))
 			goto skip;
 
-		i = rsnd_node_fixed_index(dev, np, SSI_NAME, i);
-		if (i < 0) {
-			ret = -EINVAL;
-			of_node_put(np);
-			goto rsnd_ssi_probe_done;
-		}
-
 		ssi = rsnd_ssi_get(priv, i);
 
 		snprintf(name, RSND_SSI_NAME_SIZE, "%s.%d",
@@ -1211,10 +1289,10 @@ int rsnd_ssi_probe(struct rsnd_priv *priv)
 			goto rsnd_ssi_probe_done;
 		}
 
-		if (of_property_read_bool(np, "shared-pin"))
+		if (of_get_property(np, "shared-pin", NULL))
 			rsnd_flags_set(ssi, RSND_SSI_CLK_PIN_SHARE);
 
-		if (of_property_read_bool(np, "no-busif"))
+		if (of_get_property(np, "no-busif", NULL))
 			rsnd_flags_set(ssi, RSND_SSI_NO_BUSIF);
 
 		ssi->irq = irq_of_parse_and_map(np, 0);

@@ -537,8 +537,7 @@ gt215_clk = {
 };
 
 int
-gt215_clk_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-	      struct nvkm_clk **pclk)
+gt215_clk_new(struct nvkm_device *device, int index, struct nvkm_clk **pclk)
 {
 	struct gt215_clk *clk;
 
@@ -546,5 +545,5 @@ gt215_clk_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
 		return -ENOMEM;
 	*pclk = &clk->base;
 
-	return nvkm_clk_ctor(&gt215_clk, device, type, inst, true, &clk->base);
+	return nvkm_clk_ctor(&gt215_clk, device, index, true, &clk->base);
 }

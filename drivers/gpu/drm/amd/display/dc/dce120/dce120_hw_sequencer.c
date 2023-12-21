@@ -50,7 +50,6 @@ struct dce120_hw_seq_reg_offsets {
 	uint32_t crtc;
 };
 
-#if 0
 static const struct dce120_hw_seq_reg_offsets reg_offsets[] = {
 {
 	.crtc = (mmCRTC0_CRTC_GSL_CONTROL - mmCRTC0_CRTC_GSL_CONTROL),
@@ -80,6 +79,7 @@ static const struct dce120_hw_seq_reg_offsets reg_offsets[] = {
 /*******************************************************************************
  * Private definitions
  ******************************************************************************/
+#if 0
 static void dce120_init_pte(struct dc_context *ctx, uint8_t controller_id)
 {
 	uint32_t addr;
@@ -158,6 +158,9 @@ static bool dce120_enable_display_power_gating(
 	enum bp_result bp_result = BP_RESULT_OK;
 	enum bp_pipe_control_action cntl;
 	struct dc_context *ctx = dc->ctx;
+
+	if (IS_FPGA_MAXIMUS_DC(ctx->dce_environment))
+		return true;
 
 	if (power_gating == PIPE_GATING_CONTROL_INIT)
 		cntl = ASIC_PIPE_INIT;

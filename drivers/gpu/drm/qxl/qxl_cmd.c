@@ -53,11 +53,17 @@ void qxl_ring_free(struct qxl_ring *ring)
 	kfree(ring);
 }
 
+void qxl_ring_init_hdr(struct qxl_ring *ring)
+{
+	ring->ring->header.notify_on_prod = ring->n_elements;
+}
+
 struct qxl_ring *
 qxl_ring_create(struct qxl_ring_header *header,
 		int element_size,
 		int n_elements,
 		int prod_notify,
+		bool set_prod_notify,
 		wait_queue_head_t *push_event)
 {
 	struct qxl_ring *ring;
@@ -71,6 +77,8 @@ qxl_ring_create(struct qxl_ring_header *header,
 	ring->n_elements = n_elements;
 	ring->prod_notify = prod_notify;
 	ring->push_event = push_event;
+	if (set_prod_notify)
+		qxl_ring_init_hdr(ring);
 	spin_lock_init(&ring->lock);
 	return ring;
 }
@@ -246,7 +254,6 @@ int qxl_garbage_collect(struct qxl_device *qdev)
 		}
 	}
 
-	wake_up_all(&qdev->release_event);
 	DRM_DEBUG_DRIVER("%d\n", i);
 
 	return i;
@@ -579,7 +586,7 @@ void qxl_surface_evict(struct qxl_device *qdev, struct qxl_bo *surf, bool do_upd
 
 static int qxl_reap_surf(struct qxl_device *qdev, struct qxl_bo *surf, bool stall)
 {
-	long ret;
+	int ret;
 
 	ret = qxl_bo_reserve(surf);
 	if (ret)
@@ -588,19 +595,7 @@ static int qxl_reap_surf(struct qxl_device *qdev, struct qxl_bo *surf, bool stal
 	if (stall)
 		mutex_unlock(&qdev->surf_evict_mutex);
 
-	if (stall) {
-		ret = dma_resv_wait_timeout(surf->tbo.base.resv,
-					    DMA_RESV_USAGE_BOOKKEEP, true,
-					    15 * HZ);
-		if (ret > 0)
-			ret = 0;
-		else if (ret == 0)
-			ret = -EBUSY;
-	} else {
-		ret = dma_resv_test_signaled(surf->tbo.base.resv,
-					     DMA_RESV_USAGE_BOOKKEEP);
-		ret = ret ? -EBUSY : 0;
-	}
+	ret = ttm_bo_wait(&surf->tbo, true, !stall);
 
 	if (stall)
 		mutex_lock(&qdev->surf_evict_mutex);

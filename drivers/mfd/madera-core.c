@@ -8,12 +8,13 @@
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/err.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -36,9 +37,6 @@
 
 #define MADERA_RESET_MIN_US	2000
 #define MADERA_RESET_MAX_US	3000
-
-#define ERRATA_DCVDD_MIN_US	10000
-#define ERRATA_DCVDD_MAX_US	15000
 
 static const char * const madera_core_supplies[] = {
 	"AVDD",
@@ -293,9 +291,6 @@ static int __maybe_unused madera_runtime_resume(struct device *dev)
 
 	dev_dbg(dev, "Leaving sleep mode\n");
 
-	if (!madera->reset_errata)
-		madera_enable_hard_reset(madera);
-
 	ret = regulator_enable(madera->dcvdd);
 	if (ret) {
 		dev_err(dev, "Failed to enable DCVDD: %d\n", ret);
@@ -305,22 +300,7 @@ static int __maybe_unused madera_runtime_resume(struct device *dev)
 	regcache_cache_only(madera->regmap, false);
 	regcache_cache_only(madera->regmap_32bit, false);
 
-	if (madera->reset_errata)
-		usleep_range(ERRATA_DCVDD_MIN_US, ERRATA_DCVDD_MAX_US);
-	else
-		madera_disable_hard_reset(madera);
-
-	if (!madera->pdata.reset || madera->reset_errata) {
-		ret = madera_wait_for_boot(madera);
-		if (ret)
-			goto err;
-
-		ret = madera_soft_reset(madera);
-		if (ret) {
-			dev_err(dev, "Failed to reset: %d\n", ret);
-			goto err;
-		}
-	}
+	usleep_range(MADERA_RESET_MIN_US, MADERA_RESET_MAX_US);
 
 	ret = madera_wait_for_boot(madera);
 	if (ret)
@@ -509,8 +489,6 @@ int madera_dev_init(struct madera *madera)
 	 */
 	switch (madera->type) {
 	case CS47L15:
-		madera->reset_errata = true;
-		break;
 	case CS47L35:
 	case CS47L90:
 	case CS47L91:
@@ -561,19 +539,13 @@ int madera_dev_init(struct madera *madera)
 		goto err_dcvdd;
 	}
 
-	if (madera->reset_errata)
-		madera_disable_hard_reset(madera);
-
 	ret = regulator_enable(madera->dcvdd);
 	if (ret) {
 		dev_err(dev, "Failed to enable DCVDD: %d\n", ret);
 		goto err_enable;
 	}
 
-	if (madera->reset_errata)
-		usleep_range(ERRATA_DCVDD_MIN_US, ERRATA_DCVDD_MAX_US);
-	else
-		madera_disable_hard_reset(madera);
+	madera_disable_hard_reset(madera);
 
 	regcache_cache_only(madera->regmap, false);
 	regcache_cache_only(madera->regmap_32bit, false);
@@ -681,7 +653,7 @@ int madera_dev_init(struct madera *madera)
 	 * It looks like a device we support. If we don't have a hard reset
 	 * we can now attempt a soft reset.
 	 */
-	if (!madera->pdata.reset || madera->reset_errata) {
+	if (!madera->pdata.reset) {
 		ret = madera_soft_reset(madera);
 		if (ret)
 			goto err_reset;

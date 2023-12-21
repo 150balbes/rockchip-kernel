@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include <linux/dma-fence.h>
-
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_probe_helper.h>
@@ -16,24 +14,22 @@ static enum hrtimer_restart vkms_vblank_simulate(struct hrtimer *timer)
 	struct drm_crtc *crtc = &output->crtc;
 	struct vkms_crtc_state *state;
 	u64 ret_overrun;
-	bool ret, fence_cookie, composer_enabled;
-
-	fence_cookie = dma_fence_begin_signalling();
+	bool ret;
 
 	ret_overrun = hrtimer_forward_now(&output->vblank_hrtimer,
 					  output->period_ns);
 	if (ret_overrun != 1)
 		pr_warn("%s: vblank timer overrun\n", __func__);
 
+	spin_lock(&output->lock);
 	ret = drm_crtc_handle_vblank(crtc);
 	if (!ret)
 		DRM_ERROR("vkms failure on handling vblank");
 
 	state = output->composer_state;
-	composer_enabled = output->composer_enabled;
-	mutex_unlock(&output->enabled_lock);
+	spin_unlock(&output->lock);
 
-	if (state && composer_enabled) {
+	if (state && output->composer_enabled) {
 		u64 frame = drm_crtc_accurate_vblank_count(crtc);
 
 		/* update frame_start only if a queued vkms_composer_worker()
@@ -53,8 +49,6 @@ static enum hrtimer_restart vkms_vblank_simulate(struct hrtimer *timer)
 		if (!ret)
 			DRM_DEBUG_DRIVER("Composer worker already queued\n");
 	}
-
-	dma_fence_end_signalling(fence_cookie);
 
 	return HRTIMER_RESTART;
 }
@@ -161,6 +155,7 @@ static void vkms_atomic_crtc_reset(struct drm_crtc *crtc)
 
 static const struct drm_crtc_funcs vkms_crtc_funcs = {
 	.set_config             = drm_atomic_helper_set_config,
+	.destroy                = drm_crtc_cleanup,
 	.page_flip              = drm_atomic_helper_page_flip,
 	.reset                  = vkms_atomic_crtc_reset,
 	.atomic_duplicate_state = vkms_atomic_crtc_duplicate_state,
@@ -174,11 +169,9 @@ static const struct drm_crtc_funcs vkms_crtc_funcs = {
 };
 
 static int vkms_crtc_atomic_check(struct drm_crtc *crtc,
-				  struct drm_atomic_state *state)
+				  struct drm_crtc_state *state)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
-									  crtc);
-	struct vkms_crtc_state *vkms_state = to_vkms_crtc_state(crtc_state);
+	struct vkms_crtc_state *vkms_state = to_vkms_crtc_state(state);
 	struct drm_plane *plane;
 	struct drm_plane_state *plane_state;
 	int i = 0, ret;
@@ -186,12 +179,12 @@ static int vkms_crtc_atomic_check(struct drm_crtc *crtc,
 	if (vkms_state->active_planes)
 		return 0;
 
-	ret = drm_atomic_add_affected_planes(crtc_state->state, crtc);
+	ret = drm_atomic_add_affected_planes(state->state, crtc);
 	if (ret < 0)
 		return ret;
 
-	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
-		plane_state = drm_atomic_get_existing_plane_state(crtc_state->state,
+	drm_for_each_plane_mask(plane, crtc->dev, state->plane_mask) {
+		plane_state = drm_atomic_get_existing_plane_state(state->state,
 								  plane);
 		WARN_ON(!plane_state);
 
@@ -207,8 +200,8 @@ static int vkms_crtc_atomic_check(struct drm_crtc *crtc,
 	vkms_state->num_active_planes = i;
 
 	i = 0;
-	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
-		plane_state = drm_atomic_get_existing_plane_state(crtc_state->state,
+	drm_for_each_plane_mask(plane, crtc->dev, state->plane_mask) {
+		plane_state = drm_atomic_get_existing_plane_state(state->state,
 								  plane);
 
 		if (!plane_state->visible)
@@ -222,19 +215,19 @@ static int vkms_crtc_atomic_check(struct drm_crtc *crtc,
 }
 
 static void vkms_crtc_atomic_enable(struct drm_crtc *crtc,
-				    struct drm_atomic_state *state)
+				    struct drm_crtc_state *old_state)
 {
 	drm_crtc_vblank_on(crtc);
 }
 
 static void vkms_crtc_atomic_disable(struct drm_crtc *crtc,
-				     struct drm_atomic_state *state)
+				     struct drm_crtc_state *old_state)
 {
 	drm_crtc_vblank_off(crtc);
 }
 
 static void vkms_crtc_atomic_begin(struct drm_crtc *crtc,
-				   struct drm_atomic_state *state)
+				   struct drm_crtc_state *old_crtc_state)
 {
 	struct vkms_output *vkms_output = drm_crtc_to_vkms_output(crtc);
 
@@ -245,7 +238,7 @@ static void vkms_crtc_atomic_begin(struct drm_crtc *crtc,
 }
 
 static void vkms_crtc_atomic_flush(struct drm_crtc *crtc,
-				   struct drm_atomic_state *state)
+				   struct drm_crtc_state *old_crtc_state)
 {
 	struct vkms_output *vkms_output = drm_crtc_to_vkms_output(crtc);
 
@@ -281,8 +274,8 @@ int vkms_crtc_init(struct drm_device *dev, struct drm_crtc *crtc,
 	struct vkms_output *vkms_out = drm_crtc_to_vkms_output(crtc);
 	int ret;
 
-	ret = drmm_crtc_init_with_planes(dev, crtc, primary, cursor,
-					 &vkms_crtc_funcs, NULL);
+	ret = drm_crtc_init_with_planes(dev, crtc, primary, cursor,
+					&vkms_crtc_funcs, NULL);
 	if (ret) {
 		DRM_ERROR("Failed to init CRTC\n");
 		return ret;
@@ -290,12 +283,8 @@ int vkms_crtc_init(struct drm_device *dev, struct drm_crtc *crtc,
 
 	drm_crtc_helper_add(crtc, &vkms_crtc_helper_funcs);
 
-	drm_mode_crtc_set_gamma_size(crtc, VKMS_LUT_SIZE);
-	drm_crtc_enable_color_mgmt(crtc, 0, false, VKMS_LUT_SIZE);
-
 	spin_lock_init(&vkms_out->lock);
 	spin_lock_init(&vkms_out->composer_lock);
-	mutex_init(&vkms_out->enabled_lock);
 
 	vkms_out->composer_workq = alloc_ordered_workqueue("vkms_composer", 0);
 	if (!vkms_out->composer_workq)

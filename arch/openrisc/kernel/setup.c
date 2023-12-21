@@ -152,6 +152,21 @@ static void print_cpuinfo(void)
 		printk(KERN_INFO "-- custom unit(s)\n");
 }
 
+static struct device_node *setup_find_cpu_node(int cpu)
+{
+	u32 hwid;
+	struct device_node *cpun;
+
+	for_each_of_cpu_node(cpun) {
+		if (of_property_read_u32(cpun, "reg", &hwid))
+			continue;
+		if (hwid == cpu)
+			return cpun;
+	}
+
+	return NULL;
+}
+
 void __init setup_cpuinfo(void)
 {
 	struct device_node *cpu;
@@ -160,7 +175,7 @@ void __init setup_cpuinfo(void)
 	int cpu_id = smp_processor_id();
 	struct cpuinfo_or1k *cpuinfo = &cpuinfo_or1k[cpu_id];
 
-	cpu = of_get_cpu_node(cpu_id, NULL);
+	cpu = setup_find_cpu_node(cpu_id);
 	if (!cpu)
 		panic("Couldn't find CPU%d in device tree...\n", cpu_id);
 
@@ -194,8 +209,7 @@ void __init setup_cpuinfo(void)
 }
 
 /**
- * or1k_early_setup
- * @fdt: pointer to the start of the device tree in memory or NULL
+ * or32_early_setup
  *
  * Handles the pointer to the device tree that this kernel is to use
  * for establishing the available platform devices.
@@ -203,7 +217,7 @@ void __init setup_cpuinfo(void)
  * Falls back on built-in device tree in case null pointer is passed.
  */
 
-void __init or1k_early_setup(void *fdt)
+void __init or32_early_setup(void *fdt)
 {
 	if (fdt)
 		pr_info("FDT at %p\n", fdt);
@@ -229,6 +243,21 @@ static inline unsigned long extract_value(unsigned long reg, unsigned long mask)
 	return mask & reg;
 }
 
+void __init detect_unit_config(unsigned long upr, unsigned long mask,
+			       char *text, void (*func) (void))
+{
+	if (text != NULL)
+		printk("%s", text);
+
+	if (upr & mask) {
+		if (func != NULL)
+			func();
+		else
+			printk("present\n");
+	} else
+		printk("not present\n");
+}
+
 /*
  * calibrate_delay
  *
@@ -240,7 +269,7 @@ static inline unsigned long extract_value(unsigned long reg, unsigned long mask)
 void calibrate_delay(void)
 {
 	const int *val;
-	struct device_node *cpu = of_get_cpu_node(smp_processor_id(), NULL);
+	struct device_node *cpu = setup_find_cpu_node(smp_processor_id());
 
 	val = of_get_property(cpu, "clock-frequency", NULL);
 	if (!val)
@@ -264,7 +293,10 @@ void __init setup_arch(char **cmdline_p)
 #endif
 
 	/* process 1's initial memory region is the kernel code/data */
-	setup_initial_init_mm(_stext, _etext, _edata, _end);
+	init_mm.start_code = (unsigned long)_stext;
+	init_mm.end_code = (unsigned long)_etext;
+	init_mm.end_data = (unsigned long)_edata;
+	init_mm.brk = (unsigned long)_end;
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start == initrd_end) {

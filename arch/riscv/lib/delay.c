@@ -4,13 +4,9 @@
  */
 
 #include <linux/delay.h>
-#include <linux/math.h>
 #include <linux/param.h>
 #include <linux/timex.h>
-#include <linux/types.h>
 #include <linux/export.h>
-
-#include <asm/processor.h>
 
 /*
  * This is copies from arch/arm/include/asm/delay.h

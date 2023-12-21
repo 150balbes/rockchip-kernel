@@ -24,7 +24,8 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pm.h>
-#include <linux/units.h>
+
+#define HZ_PER_KHZ 1000
 
 #define AS73211_DRV_NAME "as73211"
 
@@ -755,22 +756,21 @@ static int as73211_probe(struct i2c_client *client)
 	return devm_iio_device_register(dev, indio_dev);
 }
 
-static int as73211_suspend(struct device *dev)
+static int __maybe_unused as73211_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 
 	return as73211_power(indio_dev, false);
 }
 
-static int as73211_resume(struct device *dev)
+static int __maybe_unused as73211_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 
 	return as73211_power(indio_dev, true);
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(as73211_pm_ops, as73211_suspend,
-				as73211_resume);
+static SIMPLE_DEV_PM_OPS(as73211_pm_ops, as73211_suspend, as73211_resume);
 
 static const struct of_device_id as73211_of_match[] = {
 	{ .compatible = "ams,as73211" },
@@ -788,9 +788,9 @@ static struct i2c_driver as73211_driver = {
 	.driver = {
 		.name           = AS73211_DRV_NAME,
 		.of_match_table = as73211_of_match,
-		.pm             = pm_sleep_ptr(&as73211_pm_ops),
+		.pm             = &as73211_pm_ops,
 	},
-	.probe      = as73211_probe,
+	.probe_new  = as73211_probe,
 	.id_table   = as73211_id,
 };
 module_i2c_driver(as73211_driver);

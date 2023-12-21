@@ -14,10 +14,15 @@ PHONY := __dtbs_install
 __dtbs_install:
 
 include include/config/auto.conf
-include $(srctree)/scripts/Kbuild.include
-include $(kbuild-file)
+include scripts/Kbuild.include
+include $(src)/Makefile
 
+ifneq ($(findstring rockchip,$(dst)),)
+dtbs    := $(addprefix $(dst)/, $(RK_KERNEL_DTS).dtb)
+else
 dtbs    := $(addprefix $(dst)/, $(dtb-y) $(if $(CONFIG_OF_ALL_DTBS),$(dtb-)))
+endif
+
 subdirs := $(addprefix $(obj)/, $(subdir-y) $(subdir-m))
 
 __dtbs_install: $(dtbs) $(subdirs)
@@ -29,11 +34,8 @@ quiet_cmd_dtb_install = INSTALL $@
 $(dst)/%.dtb: $(obj)/%.dtb
 	$(call cmd,dtb_install)
 
-$(dst)/%.dtbo: $(obj)/%.dtbo
-	$(call cmd,dtb_install)
-
 PHONY += $(subdirs)
 $(subdirs):
-	$(Q)$(MAKE) $(dtbinst)=$@ dst=$(if $(CONFIG_ARCH_WANT_FLAT_DTB_INSTALL),$(dst),$(patsubst $(obj)/%,$(dst)/%,$@))
+	$(Q)$(MAKE) $(dtbinst)=$@ dst=$(patsubst $(obj)/%,$(dst)/%,$@)
 
 .PHONY: $(PHONY)

@@ -5,6 +5,8 @@
  * Author: Ola Lilja <ola.o.lilja@stericsson.com>,
  *         Roger Nilsson <roger.xr.nilsson@stericsson.com>
  *         for ST-Ericsson.
+ *
+ * License terms:
  */
 #ifndef UX500_PCM_H
 #define UX500_PCM_H

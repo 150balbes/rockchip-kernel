@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 /*
  * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "dp_rx.h"
@@ -15,7 +14,6 @@ const struct ce_attr ath11k_host_ce_config_ipq8074[] = {
 		.src_nentries = 16,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE1: target->host HTT + HTC control */
@@ -42,7 +40,6 @@ const struct ce_attr ath11k_host_ce_config_ipq8074[] = {
 		.src_nentries = 32,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE4: host->target HTT */
@@ -76,12 +73,11 @@ const struct ce_attr ath11k_host_ce_config_ipq8074[] = {
 		.src_nentries = 32,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE8: target autonomous hif_memcpy */
 	{
-		.flags = CE_ATTR_FLAGS | CE_ATTR_DIS_INTR,
+		.flags = CE_ATTR_FLAGS,
 		.src_nentries = 0,
 		.src_sz_max = 0,
 		.dest_nentries = 0,
@@ -93,7 +89,6 @@ const struct ce_attr ath11k_host_ce_config_ipq8074[] = {
 		.src_nentries = 32,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE10: target->host HTT */
@@ -147,7 +142,6 @@ const struct ce_attr ath11k_host_ce_config_qca6390[] = {
 		.src_nentries = 32,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE4: host->target HTT */
@@ -181,7 +175,6 @@ const struct ce_attr ath11k_host_ce_config_qca6390[] = {
 		.src_nentries = 32,
 		.src_sz_max = 2048,
 		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
 	},
 
 	/* CE8: target autonomous hif_memcpy */
@@ -194,69 +187,15 @@ const struct ce_attr ath11k_host_ce_config_qca6390[] = {
 
 };
 
-const struct ce_attr ath11k_host_ce_config_qcn9074[] = {
-	/* CE0: host->target HTC control and raw streams */
-	{
-		.flags = CE_ATTR_FLAGS,
-		.src_nentries = 16,
-		.src_sz_max = 2048,
-		.dest_nentries = 0,
-	},
-
-	/* CE1: target->host HTT + HTC control */
-	{
-		.flags = CE_ATTR_FLAGS,
-		.src_nentries = 0,
-		.src_sz_max = 2048,
-		.dest_nentries = 512,
-		.recv_cb = ath11k_htc_rx_completion_handler,
-	},
-
-	/* CE2: target->host WMI */
-	{
-		.flags = CE_ATTR_FLAGS,
-		.src_nentries = 0,
-		.src_sz_max = 2048,
-		.dest_nentries = 32,
-		.recv_cb = ath11k_htc_rx_completion_handler,
-	},
-
-	/* CE3: host->target WMI (mac0) */
-	{
-		.flags = CE_ATTR_FLAGS,
-		.src_nentries = 32,
-		.src_sz_max = 2048,
-		.dest_nentries = 0,
-		.send_cb = ath11k_htc_tx_completion_handler,
-	},
-
-	/* CE4: host->target HTT */
-	{
-		.flags = CE_ATTR_FLAGS | CE_ATTR_DIS_INTR,
-		.src_nentries = 2048,
-		.src_sz_max = 256,
-		.dest_nentries = 0,
-	},
-
-	/* CE5: target->host pktlog */
-	{
-		.flags = CE_ATTR_FLAGS,
-		.src_nentries = 0,
-		.src_sz_max = 2048,
-		.dest_nentries = 512,
-		.recv_cb = ath11k_dp_htt_htc_t2h_msg_handler,
-	},
-};
-
 static bool ath11k_ce_need_shadow_fix(int ce_id)
 {
-	/* only ce4 needs shadow workaround */
+	/* only ce4 needs shadow workaroud*/
 	if (ce_id == 4)
 		return true;
 	return false;
 }
 
-void ath11k_ce_stop_shadow_timers(struct ath11k_base *ab)
+static void ath11k_ce_stop_shadow_timers(struct ath11k_base *ab)
 {
 	int i;
 
@@ -442,7 +381,7 @@ static void ath11k_ce_recv_process_cb(struct ath11k_ce_pipe *pipe)
 	}
 
 	while ((skb = __skb_dequeue(&list))) {
-		ath11k_dbg(ab, ATH11K_DBG_CE, "rx ce pipe %d len %d\n",
+		ath11k_dbg(ab, ATH11K_DBG_AHB, "rx ce pipe %d len %d\n",
 			   pipe->pipe_num, skb->len);
 		pipe->recv_cb(ab, skb);
 	}
@@ -497,32 +436,18 @@ err_unlock:
 	return skb;
 }
 
-static void ath11k_ce_tx_process_cb(struct ath11k_ce_pipe *pipe)
+static void ath11k_ce_send_done_cb(struct ath11k_ce_pipe *pipe)
 {
 	struct ath11k_base *ab = pipe->ab;
 	struct sk_buff *skb;
-	struct sk_buff_head list;
 
-	__skb_queue_head_init(&list);
 	while (!IS_ERR(skb = ath11k_ce_completed_send_next(pipe))) {
 		if (!skb)
 			continue;
 
 		dma_unmap_single(ab->dev, ATH11K_SKB_CB(skb)->paddr, skb->len,
 				 DMA_TO_DEVICE);
-
-		if ((!pipe->send_cb) || ab->hw_params.credit_flow) {
-			dev_kfree_skb_any(skb);
-			continue;
-		}
-
-		__skb_queue_tail(&list, skb);
-	}
-
-	while ((skb = __skb_dequeue(&list))) {
-		ath11k_dbg(ab, ATH11K_DBG_CE, "tx ce pipe %d len %d\n",
-			   pipe->pipe_num, skb->len);
-		pipe->send_cb(ab, skb);
+		dev_kfree_skb_any(skb);
 	}
 }
 
@@ -530,7 +455,7 @@ static void ath11k_ce_srng_msi_ring_params_setup(struct ath11k_base *ab, u32 ce_
 						 struct hal_srng_params *ring_params)
 {
 	u32 msi_data_start;
-	u32 msi_data_count, msi_data_idx;
+	u32 msi_data_count;
 	u32 msi_irq_start;
 	u32 addr_lo;
 	u32 addr_hi;
@@ -544,11 +469,10 @@ static void ath11k_ce_srng_msi_ring_params_setup(struct ath11k_base *ab, u32 ce_
 		return;
 
 	ath11k_get_msi_address(ab, &addr_lo, &addr_hi);
-	ath11k_get_ce_msi_idx(ab, ce_id, &msi_data_idx);
 
 	ring_params->msi_addr = addr_lo;
 	ring_params->msi_addr |= (dma_addr_t)(((uint64_t)addr_hi) << 32);
-	ring_params->msi_data = (msi_data_idx % msi_data_count) + msi_data_start;
+	ring_params->msi_data = (ce_id % msi_data_count) + msi_data_start;
 	ring_params->flags |= HAL_SRNG_FLAGS_MSI_INTR;
 }
 
@@ -658,7 +582,7 @@ static int ath11k_ce_alloc_pipe(struct ath11k_base *ab, int ce_id)
 	pipe->attr_flags = attr->flags;
 
 	if (attr->src_nentries) {
-		pipe->send_cb = attr->send_cb;
+		pipe->send_cb = ath11k_ce_send_done_cb;
 		nentries = roundup_pow_of_two(attr->src_nentries);
 		desc_sz = ath11k_hal_ce_get_desc_size(HAL_CE_DESC_SRC);
 		ring = ath11k_ce_alloc_ring(ab, nentries, desc_sz);
@@ -689,10 +613,9 @@ static int ath11k_ce_alloc_pipe(struct ath11k_base *ab, int ce_id)
 void ath11k_ce_per_engine_service(struct ath11k_base *ab, u16 ce_id)
 {
 	struct ath11k_ce_pipe *pipe = &ab->ce.ce_pipe[ce_id];
-	const struct ce_attr *attr = &ab->hw_params.host_ce_config[ce_id];
 
-	if (attr->src_nentries)
-		ath11k_ce_tx_process_cb(pipe);
+	if (pipe->send_cb)
+		pipe->send_cb(pipe);
 
 	if (pipe->recv_cb)
 		ath11k_ce_recv_process_cb(pipe);
@@ -701,10 +624,9 @@ void ath11k_ce_per_engine_service(struct ath11k_base *ab, u16 ce_id)
 void ath11k_ce_poll_send_completed(struct ath11k_base *ab, u8 pipe_id)
 {
 	struct ath11k_ce_pipe *pipe = &ab->ce.ce_pipe[pipe_id];
-	const struct ce_attr *attr =  &ab->hw_params.host_ce_config[pipe_id];
 
-	if ((pipe->attr_flags & CE_ATTR_DIS_INTR) && attr->src_nentries)
-		ath11k_ce_tx_process_cb(pipe);
+	if ((pipe->attr_flags & CE_ATTR_DIS_INTR) && pipe->send_cb)
+		pipe->send_cb(pipe);
 }
 EXPORT_SYMBOL(ath11k_ce_per_engine_service);
 
@@ -919,6 +841,9 @@ int ath11k_ce_init_pipes(struct ath11k_base *ab)
 	int i;
 	int ret;
 
+	ath11k_ce_get_shadow_config(ab, &ab->qmi.ce_cfg.shadow_reg_v2,
+				    &ab->qmi.ce_cfg.shadow_reg_v2_len);
+
 	for (i = 0; i < ab->hw_params.ce_count; i++) {
 		pipe = &ab->ce.ce_pipe[i];
 
@@ -974,7 +899,6 @@ int ath11k_ce_init_pipes(struct ath11k_base *ab)
 void ath11k_ce_free_pipes(struct ath11k_base *ab)
 {
 	struct ath11k_ce_pipe *pipe;
-	struct ath11k_ce_ring *ce_ring;
 	int desc_sz;
 	int i;
 
@@ -986,24 +910,22 @@ void ath11k_ce_free_pipes(struct ath11k_base *ab)
 
 		if (pipe->src_ring) {
 			desc_sz = ath11k_hal_ce_get_desc_size(HAL_CE_DESC_SRC);
-			ce_ring = pipe->src_ring;
 			dma_free_coherent(ab->dev,
 					  pipe->src_ring->nentries * desc_sz +
 					  CE_DESC_RING_ALIGN,
-					  ce_ring->base_addr_owner_space_unaligned,
-					  ce_ring->base_addr_ce_space_unaligned);
+					  pipe->src_ring->base_addr_owner_space,
+					  pipe->src_ring->base_addr_ce_space);
 			kfree(pipe->src_ring);
 			pipe->src_ring = NULL;
 		}
 
 		if (pipe->dest_ring) {
 			desc_sz = ath11k_hal_ce_get_desc_size(HAL_CE_DESC_DST);
-			ce_ring = pipe->dest_ring;
 			dma_free_coherent(ab->dev,
 					  pipe->dest_ring->nentries * desc_sz +
 					  CE_DESC_RING_ALIGN,
-					  ce_ring->base_addr_owner_space_unaligned,
-					  ce_ring->base_addr_ce_space_unaligned);
+					  pipe->dest_ring->base_addr_owner_space,
+					  pipe->dest_ring->base_addr_ce_space);
 			kfree(pipe->dest_ring);
 			pipe->dest_ring = NULL;
 		}
@@ -1011,12 +933,11 @@ void ath11k_ce_free_pipes(struct ath11k_base *ab)
 		if (pipe->status_ring) {
 			desc_sz =
 			  ath11k_hal_ce_get_desc_size(HAL_CE_DESC_DST_STATUS);
-			ce_ring = pipe->status_ring;
 			dma_free_coherent(ab->dev,
 					  pipe->status_ring->nentries * desc_sz +
 					  CE_DESC_RING_ALIGN,
-					  ce_ring->base_addr_owner_space_unaligned,
-					  ce_ring->base_addr_ce_space_unaligned);
+					  pipe->status_ring->base_addr_owner_space,
+					  pipe->status_ring->base_addr_ce_space);
 			kfree(pipe->status_ring);
 			pipe->status_ring = NULL;
 		}
@@ -1042,7 +963,7 @@ int ath11k_ce_alloc_pipes(struct ath11k_base *ab)
 
 		ret = ath11k_ce_alloc_pipe(ab, i);
 		if (ret) {
-			/* Free any partial successful allocation */
+			/* Free any parial successful allocation */
 			ath11k_ce_free_pipes(ab);
 			return ret;
 		}

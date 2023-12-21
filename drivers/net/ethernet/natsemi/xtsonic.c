@@ -127,7 +127,6 @@ static int sonic_probe1(struct net_device *dev)
 	unsigned int base_addr = dev->base_addr;
 	int i;
 	int err = 0;
-	unsigned char addr[ETH_ALEN];
 
 	if (!request_mem_region(base_addr, 0x100, xtsonic_string))
 		return -EBUSY;
@@ -164,10 +163,9 @@ static int sonic_probe1(struct net_device *dev)
 
 	for (i=0; i<3; i++) {
 		unsigned int val = SONIC_READ(SONIC_CAP0-i);
-		addr[i*2] = val;
-		addr[i*2+1] = val >> 8;
+		dev->dev_addr[i*2] = val;
+		dev->dev_addr[i*2+1] = val >> 8;
 	}
-	eth_hw_addr_set(dev, addr);
 
 	lp->dma_bitmode = SONIC_BITMODE32;
 
@@ -217,6 +215,7 @@ int xtsonic_probe(struct platform_device *pdev)
 	lp->device = &pdev->dev;
 	platform_set_drvdata(pdev, dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
+	netdev_boot_setup_check(dev);
 
 	dev->base_addr = resmem->start;
 	dev->irq = resirq->start;

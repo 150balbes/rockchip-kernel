@@ -27,6 +27,8 @@ properties:
   reg:
     maxItems: 1
 
+  spi-max-frequency: true
+
   vref-supply: true
 
   "#io-channel-cells":
@@ -37,10 +39,7 @@ required:
   - reg
   - vref-supply
 
-allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

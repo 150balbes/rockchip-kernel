@@ -28,7 +28,6 @@
 #include <linux/usb/ohci_pdriver.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
-#include <linux/usb/of.h>
 
 #include "ohci.h"
 
@@ -40,6 +39,8 @@ struct ohci_platform_priv {
 	struct clk *clks[OHCI_MAX_CLKS];
 	struct reset_control *resets;
 };
+
+static const char hcd_name[] = "ohci-platform";
 
 static int ohci_platform_power_on(struct platform_device *dev)
 {
@@ -95,7 +96,7 @@ static int ohci_platform_probe(struct platform_device *dev)
 	struct ohci_hcd *ohci;
 	int err, irq, clk = 0;
 
-	if (usb_disabled())
+	if (usb_disabled() || of_machine_is_compatible("rockchip,rk3288"))
 		return -ENODEV;
 
 	/*
@@ -194,6 +195,7 @@ static int ohci_platform_probe(struct platform_device *dev)
 
 	pm_runtime_set_active(&dev->dev);
 	pm_runtime_enable(&dev->dev);
+	pm_runtime_get_sync(&dev->dev);
 	if (pdata->power_on) {
 		err = pdata->power_on(dev);
 		if (err < 0)
@@ -209,14 +211,12 @@ static int ohci_platform_probe(struct platform_device *dev)
 	hcd->rsrc_start = res_mem->start;
 	hcd->rsrc_len = resource_size(res_mem);
 
-	hcd->tpl_support = of_usb_host_tpl_support(dev->dev.of_node);
-
 	err = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (err)
 		goto err_power;
 
 	device_wakeup_enable(hcd->self.controller);
-
+	device_init_wakeup(hcd->self.controller, true);
 	platform_set_drvdata(dev, hcd);
 
 	return err;
@@ -225,6 +225,7 @@ err_power:
 	if (pdata->power_off)
 		pdata->power_off(dev);
 err_reset:
+	pm_runtime_put_sync(&dev->dev);
 	pm_runtime_disable(&dev->dev);
 	reset_control_assert(priv->resets);
 err_put_clks:
@@ -239,14 +240,13 @@ err_put_clks:
 	return err;
 }
 
-static void ohci_platform_remove(struct platform_device *dev)
+static int ohci_platform_remove(struct platform_device *dev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(dev);
 	struct usb_ohci_pdata *pdata = dev_get_platdata(&dev->dev);
 	struct ohci_platform_priv *priv = hcd_to_ohci_priv(hcd);
 	int clk;
 
-	pm_runtime_get_sync(&dev->dev);
 	usb_remove_hcd(hcd);
 
 	if (pdata->power_off)
@@ -264,6 +264,8 @@ static void ohci_platform_remove(struct platform_device *dev)
 
 	if (pdata == &ohci_platform_defaults)
 		dev->dev.platform_data = NULL;
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -279,41 +281,38 @@ static int ohci_platform_suspend(struct device *dev)
 	if (ret)
 		return ret;
 
-	if (pdata->power_suspend)
+	if (pdata->power_suspend && !do_wakeup)
 		pdata->power_suspend(pdev);
+
+	if (do_wakeup)
+		enable_irq_wake(hcd->irq);
 
 	return ret;
 }
 
-static int ohci_platform_resume_common(struct device *dev, bool hibernated)
+static int ohci_platform_resume(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct usb_ohci_pdata *pdata = dev_get_platdata(dev);
 	struct platform_device *pdev = to_platform_device(dev);
+	bool do_wakeup = device_may_wakeup(dev);
 
-	if (pdata->power_on) {
+	if (do_wakeup)
+		disable_irq_wake(hcd->irq);
+		
+	if (pdata->power_on && !do_wakeup) {
 		int err = pdata->power_on(pdev);
 		if (err < 0)
 			return err;
 	}
 
-	ohci_resume(hcd, hibernated);
+	ohci_resume(hcd, false);
 
 	pm_runtime_disable(dev);
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 
 	return 0;
-}
-
-static int ohci_platform_resume(struct device *dev)
-{
-	return ohci_platform_resume_common(dev, false);
-}
-
-static int ohci_platform_restore(struct device *dev)
-{
-	return ohci_platform_resume_common(dev, true);
 }
 #endif /* CONFIG_PM_SLEEP */
 
@@ -331,29 +330,18 @@ static const struct platform_device_id ohci_platform_table[] = {
 };
 MODULE_DEVICE_TABLE(platform, ohci_platform_table);
 
-#ifdef CONFIG_PM_SLEEP
-static const struct dev_pm_ops ohci_platform_pm_ops = {
-	.suspend = ohci_platform_suspend,
-	.resume = ohci_platform_resume,
-	.freeze = ohci_platform_suspend,
-	.thaw = ohci_platform_resume,
-	.poweroff = ohci_platform_suspend,
-	.restore = ohci_platform_restore,
-};
-#endif
+static SIMPLE_DEV_PM_OPS(ohci_platform_pm_ops, ohci_platform_suspend,
+	ohci_platform_resume);
 
 static struct platform_driver ohci_platform_driver = {
 	.id_table	= ohci_platform_table,
 	.probe		= ohci_platform_probe,
-	.remove_new	= ohci_platform_remove,
+	.remove		= ohci_platform_remove,
 	.shutdown	= usb_hcd_platform_shutdown,
 	.driver		= {
 		.name	= "ohci-platform",
-#ifdef CONFIG_PM_SLEEP
 		.pm	= &ohci_platform_pm_ops,
-#endif
 		.of_match_table = ohci_platform_ids,
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	}
 };
 
@@ -361,6 +349,8 @@ static int __init ohci_platform_init(void)
 {
 	if (usb_disabled())
 		return -ENODEV;
+
+	pr_info("%s: " DRIVER_DESC "\n", hcd_name);
 
 	ohci_init_driver(&ohci_platform_hc_driver, &platform_overrides);
 	return platform_driver_register(&ohci_platform_driver);

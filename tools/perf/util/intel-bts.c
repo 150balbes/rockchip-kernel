@@ -35,7 +35,7 @@
 #define INTEL_BTS_ERR_NOINSN  5
 #define INTEL_BTS_ERR_LOST    9
 
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if __BYTE_ORDER == __BIG_ENDIAN
 #define le64_to_cpu bswap_64
 #else
 #define le64_to_cpu
@@ -456,7 +456,7 @@ static int intel_bts_process_queue(struct intel_bts_queue *btsq, u64 *timestamp)
 		thread = machine__find_thread(btsq->bts->machine, -1,
 					      btsq->tid);
 		if (thread)
-			btsq->pid = thread__pid(thread);
+			btsq->pid = thread->pid_;
 	} else {
 		thread = machine__findnew_thread(btsq->bts->machine, btsq->pid,
 						 btsq->tid);

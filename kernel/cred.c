@@ -17,6 +17,8 @@
 #include <linux/cn_proc.h>
 #include <linux/uidgid.h>
 
+#include <trace/hooks/creds.h>
+
 #if 0
 #define kdebug(FMT, ...)						\
 	printk("[%-5.5s%5u] " FMT "\n",					\
@@ -33,7 +35,7 @@ do {									\
 static struct kmem_cache *cred_jar;
 
 /* init to 2 - one for init_task, one to ensure it is never freed */
-static struct group_info init_groups = { .usage = ATOMIC_INIT(2) };
+struct group_info init_groups = { .usage = ATOMIC_INIT(2) };
 
 /*
  * The initial credentials for the initial task
@@ -60,7 +62,6 @@ struct cred init_cred = {
 	.user			= INIT_USER,
 	.user_ns		= &init_user_ns,
 	.group_info		= &init_groups,
-	.ucounts		= &init_ucounts,
 };
 
 static inline void set_cred_subscribers(struct cred *cred, int n)
@@ -120,8 +121,6 @@ static void put_cred_rcu(struct rcu_head *rcu)
 	if (cred->group_info)
 		put_group_info(cred->group_info);
 	free_uid(cred->user);
-	if (cred->ucounts)
-		put_ucounts(cred->ucounts);
 	put_user_ns(cred->user_ns);
 	kmem_cache_free(cred_jar, cred);
 }
@@ -181,6 +180,7 @@ void exit_creds(struct task_struct *tsk)
 	key_put(tsk->cached_requested_key);
 	tsk->cached_requested_key = NULL;
 #endif
+	trace_android_vh_exit_creds(tsk, cred);
 }
 
 /**
@@ -225,6 +225,7 @@ struct cred *cred_alloc_blank(void)
 #ifdef CONFIG_DEBUG_CREDENTIALS
 	new->magic = CRED_MAGIC;
 #endif
+
 	if (security_cred_alloc_blank(new, GFP_KERNEL_ACCOUNT) < 0)
 		goto error;
 
@@ -284,13 +285,8 @@ struct cred *prepare_creds(void)
 	new->security = NULL;
 #endif
 
-	new->ucounts = get_ucounts(new->ucounts);
-	if (!new->ucounts)
-		goto error;
-
 	if (security_prepare_creds(new, old, GFP_KERNEL_ACCOUNT) < 0)
 		goto error;
-
 	validate_creds(new);
 	return new;
 
@@ -358,7 +354,7 @@ int copy_creds(struct task_struct *p, unsigned long clone_flags)
 		kdebug("share_creds(%p{%d,%d})",
 		       p->cred, atomic_read(&p->cred->usage),
 		       read_cred_subscribers(p->cred));
-		inc_rlimit_ucounts(task_ucounts(p), UCOUNT_RLIMIT_NPROC, 1);
+		atomic_inc(&p->cred->user->processes);
 		return 0;
 	}
 
@@ -368,9 +364,6 @@ int copy_creds(struct task_struct *p, unsigned long clone_flags)
 
 	if (clone_flags & CLONE_NEWUSER) {
 		ret = create_user_ns(new);
-		if (ret < 0)
-			goto error_put;
-		ret = set_cred_ucounts(new);
 		if (ret < 0)
 			goto error_put;
 	}
@@ -394,8 +387,8 @@ int copy_creds(struct task_struct *p, unsigned long clone_flags)
 	}
 #endif
 
+	atomic_inc(&new->user->processes);
 	p->cred = p->real_cred = get_cred(new);
-	inc_rlimit_ucounts(task_ucounts(p), UCOUNT_RLIMIT_NPROC, 1);
 	alter_cred_subscribers(new, 2);
 	validate_creds(new);
 	return 0;
@@ -495,12 +488,13 @@ int commit_creds(struct cred *new)
 	 * in set_user().
 	 */
 	alter_cred_subscribers(new, 2);
-	if (new->user != old->user || new->user_ns != old->user_ns)
-		inc_rlimit_ucounts(new->ucounts, UCOUNT_RLIMIT_NPROC, 1);
+	if (new->user != old->user)
+		atomic_inc(&new->user->processes);
 	rcu_assign_pointer(task->real_cred, new);
 	rcu_assign_pointer(task->cred, new);
-	if (new->user != old->user || new->user_ns != old->user_ns)
-		dec_rlimit_ucounts(old->ucounts, UCOUNT_RLIMIT_NPROC, 1);
+	trace_android_vh_commit_creds(task, new);
+	if (new->user != old->user)
+		atomic_dec(&old->user->processes);
 	alter_cred_subscribers(old, -2);
 
 	/* send notifications */
@@ -576,6 +570,7 @@ const struct cred *override_creds(const struct cred *new)
 	get_new_cred((struct cred *)new);
 	alter_cred_subscribers(new, 1);
 	rcu_assign_pointer(current->cred, new);
+	trace_android_vh_override_creds(current, new);
 	alter_cred_subscribers(old, -1);
 
 	kdebug("override_creds() = %p{%d,%d}", old,
@@ -604,6 +599,7 @@ void revert_creds(const struct cred *old)
 	validate_creds(override);
 	alter_cred_subscribers(old, 1);
 	rcu_assign_pointer(current->cred, old);
+	trace_android_vh_revert_creds(current, old);
 	alter_cred_subscribers(override, -1);
 	put_cred(override);
 }
@@ -663,26 +659,6 @@ int cred_fscmp(const struct cred *a, const struct cred *b)
 }
 EXPORT_SYMBOL(cred_fscmp);
 
-int set_cred_ucounts(struct cred *new)
-{
-	struct ucounts *new_ucounts, *old_ucounts = new->ucounts;
-
-	/*
-	 * This optimization is needed because alloc_ucounts() uses locks
-	 * for table lookups.
-	 */
-	if (old_ucounts->ns == new->user_ns && uid_eq(old_ucounts->uid, new->uid))
-		return 0;
-
-	if (!(new_ucounts = alloc_ucounts(new->user_ns, new->uid)))
-		return -EAGAIN;
-
-	new->ucounts = new_ucounts;
-	put_ucounts(old_ucounts);
-
-	return 0;
-}
-
 /*
  * initialise the credentials stuff
  */
@@ -701,9 +677,9 @@ void __init cred_init(void)
  * override a task's own credentials so that work can be done on behalf of that
  * task that requires a different subjective context.
  *
- * @daemon is used to provide a base cred, with the security data derived from
- * that; if this is "&init_task", they'll be set to 0, no groups, full
- * capabilities, and no keys.
+ * @daemon is used to provide a base for the security record, but can be NULL.
+ * If @daemon is supplied, then the security data will be derived from that;
+ * otherwise they'll be set to 0 and no groups, full capabilities and no keys.
  *
  * The caller may change these controls afterwards if desired.
  *
@@ -714,16 +690,17 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	const struct cred *old;
 	struct cred *new;
 
-	if (WARN_ON_ONCE(!daemon))
-		return NULL;
-
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
 		return NULL;
 
 	kdebug("prepare_kernel_cred() alloc %p", new);
 
-	old = get_task_cred(daemon);
+	if (daemon)
+		old = get_task_cred(daemon);
+	else
+		old = get_cred(&init_cred);
+
 	validate_creds(old);
 
 	*new = *old;
@@ -745,10 +722,6 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 #ifdef CONFIG_SECURITY
 	new->security = NULL;
 #endif
-	new->ucounts = get_ucounts(new->ucounts);
-	if (!new->ucounts)
-		goto error;
-
 	if (security_prepare_creds(new, old, GFP_KERNEL_ACCOUNT) < 0)
 		goto error;
 
@@ -869,7 +842,7 @@ static void dump_invalid_creds(const struct cred *cred, const char *label,
 /*
  * report use of invalid credentials
  */
-void __noreturn __invalid_creds(const struct cred *cred, const char *file, unsigned line)
+void __invalid_creds(const struct cred *cred, const char *file, unsigned line)
 {
 	printk(KERN_ERR "CRED: Invalid credentials\n");
 	printk(KERN_ERR "CRED: At %s:%u\n", file, line);

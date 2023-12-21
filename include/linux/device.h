@@ -30,7 +30,7 @@
 #include <linux/device/bus.h>
 #include <linux/device/class.h>
 #include <linux/device/driver.h>
-#include <linux/cleanup.h>
+#include <linux/android_kabi.h>
 #include <asm/device.h>
 
 struct device;
@@ -46,12 +46,11 @@ struct iommu_ops;
 struct iommu_group;
 struct dev_pin_info;
 struct dev_iommu;
-struct msi_device_data;
 
 /**
  * struct subsys_interface - interfaces to device functions
  * @name:       name of the device function
- * @subsys:     subsystem of the devices to attach to
+ * @subsys:     subsytem of the devices to attach to
  * @node:       the list of functions registered at the subsystem
  * @add_dev:    device hookup to device function handler
  * @remove_dev: device hookup to device function handler
@@ -89,20 +88,15 @@ int subsys_virtual_register(struct bus_type *subsys,
 struct device_type {
 	const char *name;
 	const struct attribute_group **groups;
-	int (*uevent)(const struct device *dev, struct kobj_uevent_env *env);
-	char *(*devnode)(const struct device *dev, umode_t *mode,
+	int (*uevent)(struct device *dev, struct kobj_uevent_env *env);
+	char *(*devnode)(struct device *dev, umode_t *mode,
 			 kuid_t *uid, kgid_t *gid);
 	void (*release)(struct device *dev);
 
 	const struct dev_pm_ops *pm;
 };
 
-/**
- * struct device_attribute - Interface for exporting device attributes.
- * @attr: sysfs attribute definition.
- * @show: Show handler.
- * @store: Store handler.
- */
+/* interface for exporting device attributes */
 struct device_attribute {
 	struct attribute	attr;
 	ssize_t (*show)(struct device *dev, struct device_attribute *attr,
@@ -111,11 +105,6 @@ struct device_attribute {
 			 const char *buf, size_t count);
 };
 
-/**
- * struct dev_ext_attribute - Exported device attribute with extra context.
- * @attr: Exported device attribute.
- * @var: Pointer to context.
- */
 struct dev_ext_attribute {
 	struct device_attribute attr;
 	void *var;
@@ -134,124 +123,30 @@ ssize_t device_show_bool(struct device *dev, struct device_attribute *attr,
 ssize_t device_store_bool(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count);
 
-/**
- * DEVICE_ATTR - Define a device attribute.
- * @_name: Attribute name.
- * @_mode: File mode.
- * @_show: Show handler. Optional, but mandatory if attribute is readable.
- * @_store: Store handler. Optional, but mandatory if attribute is writable.
- *
- * Convenience macro for defining a struct device_attribute.
- *
- * For example, ``DEVICE_ATTR(foo, 0644, foo_show, foo_store);`` expands to:
- *
- * .. code-block:: c
- *
- *	struct device_attribute dev_attr_foo = {
- *		.attr	= { .name = "foo", .mode = 0644 },
- *		.show	= foo_show,
- *		.store	= foo_store,
- *	};
- */
 #define DEVICE_ATTR(_name, _mode, _show, _store) \
 	struct device_attribute dev_attr_##_name = __ATTR(_name, _mode, _show, _store)
-
-/**
- * DEVICE_ATTR_PREALLOC - Define a preallocated device attribute.
- * @_name: Attribute name.
- * @_mode: File mode.
- * @_show: Show handler. Optional, but mandatory if attribute is readable.
- * @_store: Store handler. Optional, but mandatory if attribute is writable.
- *
- * Like DEVICE_ATTR(), but ``SYSFS_PREALLOC`` is set on @_mode.
- */
 #define DEVICE_ATTR_PREALLOC(_name, _mode, _show, _store) \
 	struct device_attribute dev_attr_##_name = \
 		__ATTR_PREALLOC(_name, _mode, _show, _store)
-
-/**
- * DEVICE_ATTR_RW - Define a read-write device attribute.
- * @_name: Attribute name.
- *
- * Like DEVICE_ATTR(), but @_mode is 0644, @_show is <_name>_show,
- * and @_store is <_name>_store.
- */
 #define DEVICE_ATTR_RW(_name) \
 	struct device_attribute dev_attr_##_name = __ATTR_RW(_name)
-
-/**
- * DEVICE_ATTR_ADMIN_RW - Define an admin-only read-write device attribute.
- * @_name: Attribute name.
- *
- * Like DEVICE_ATTR_RW(), but @_mode is 0600.
- */
 #define DEVICE_ATTR_ADMIN_RW(_name) \
 	struct device_attribute dev_attr_##_name = __ATTR_RW_MODE(_name, 0600)
-
-/**
- * DEVICE_ATTR_RO - Define a readable device attribute.
- * @_name: Attribute name.
- *
- * Like DEVICE_ATTR(), but @_mode is 0444 and @_show is <_name>_show.
- */
 #define DEVICE_ATTR_RO(_name) \
 	struct device_attribute dev_attr_##_name = __ATTR_RO(_name)
-
-/**
- * DEVICE_ATTR_ADMIN_RO - Define an admin-only readable device attribute.
- * @_name: Attribute name.
- *
- * Like DEVICE_ATTR_RO(), but @_mode is 0400.
- */
 #define DEVICE_ATTR_ADMIN_RO(_name) \
 	struct device_attribute dev_attr_##_name = __ATTR_RO_MODE(_name, 0400)
-
-/**
- * DEVICE_ATTR_WO - Define an admin-only writable device attribute.
- * @_name: Attribute name.
- *
- * Like DEVICE_ATTR(), but @_mode is 0200 and @_store is <_name>_store.
- */
 #define DEVICE_ATTR_WO(_name) \
 	struct device_attribute dev_attr_##_name = __ATTR_WO(_name)
-
-/**
- * DEVICE_ULONG_ATTR - Define a device attribute backed by an unsigned long.
- * @_name: Attribute name.
- * @_mode: File mode.
- * @_var: Identifier of unsigned long.
- *
- * Like DEVICE_ATTR(), but @_show and @_store are automatically provided
- * such that reads and writes to the attribute from userspace affect @_var.
- */
 #define DEVICE_ULONG_ATTR(_name, _mode, _var) \
 	struct dev_ext_attribute dev_attr_##_name = \
 		{ __ATTR(_name, _mode, device_show_ulong, device_store_ulong), &(_var) }
-
-/**
- * DEVICE_INT_ATTR - Define a device attribute backed by an int.
- * @_name: Attribute name.
- * @_mode: File mode.
- * @_var: Identifier of int.
- *
- * Like DEVICE_ULONG_ATTR(), but @_var is an int.
- */
 #define DEVICE_INT_ATTR(_name, _mode, _var) \
 	struct dev_ext_attribute dev_attr_##_name = \
 		{ __ATTR(_name, _mode, device_show_int, device_store_int), &(_var) }
-
-/**
- * DEVICE_BOOL_ATTR - Define a device attribute backed by a bool.
- * @_name: Attribute name.
- * @_mode: File mode.
- * @_var: Identifier of bool.
- *
- * Like DEVICE_ULONG_ATTR(), but @_var is a bool.
- */
 #define DEVICE_BOOL_ATTR(_name, _mode, _var) \
 	struct dev_ext_attribute dev_attr_##_name = \
 		{ __ATTR(_name, _mode, device_show_bool, device_store_bool), &(_var) }
-
 #define DEVICE_ATTR_IGNORE_LOCKDEP(_name, _mode, _show, _store) \
 	struct device_attribute dev_attr_##_name =		\
 		__ATTR_IGNORE_LOCKDEP(_name, _mode, _show, _store)
@@ -271,12 +166,21 @@ void device_remove_bin_file(struct device *dev,
 typedef void (*dr_release_t)(struct device *dev, void *res);
 typedef int (*dr_match_t)(struct device *dev, void *res, void *match_data);
 
+#ifdef CONFIG_DEBUG_DEVRES
 void *__devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp,
 			  int nid, const char *name) __malloc;
 #define devres_alloc(release, size, gfp) \
 	__devres_alloc_node(release, size, gfp, NUMA_NO_NODE, #release)
 #define devres_alloc_node(release, size, gfp, nid) \
 	__devres_alloc_node(release, size, gfp, nid, #release)
+#else
+void *devres_alloc_node(dr_release_t release, size_t size,
+			gfp_t gfp, int nid) __malloc;
+static inline void *devres_alloc(dr_release_t release, size_t size, gfp_t gfp)
+{
+	return devres_alloc_node(release, size, gfp, NUMA_NO_NODE);
+}
+#endif
 
 void devres_for_each_res(struct device *dev, dr_release_t release,
 			 dr_match_t match, void *match_data,
@@ -302,9 +206,9 @@ void devres_remove_group(struct device *dev, void *id);
 int devres_release_group(struct device *dev, void *id);
 
 /* managed devm_k.alloc/kfree for device drivers */
-void *devm_kmalloc(struct device *dev, size_t size, gfp_t gfp) __alloc_size(2);
+void *devm_kmalloc(struct device *dev, size_t size, gfp_t gfp) __malloc;
 void *devm_krealloc(struct device *dev, void *ptr, size_t size,
-		    gfp_t gfp) __must_check __realloc_size(3);
+		    gfp_t gfp) __must_check;
 __printf(3, 0) char *devm_kvasprintf(struct device *dev, gfp_t gfp,
 				     const char *fmt, va_list ap) __malloc;
 __printf(3, 4) char *devm_kasprintf(struct device *dev, gfp_t gfp,
@@ -328,22 +232,10 @@ static inline void *devm_kcalloc(struct device *dev,
 {
 	return devm_kmalloc_array(dev, n, size, flags | __GFP_ZERO);
 }
-static inline __realloc_size(3, 4) void * __must_check
-devm_krealloc_array(struct device *dev, void *p, size_t new_n, size_t new_size, gfp_t flags)
-{
-	size_t bytes;
-
-	if (unlikely(check_mul_overflow(new_n, new_size, &bytes)))
-		return NULL;
-
-	return devm_krealloc(dev, p, bytes, flags);
-}
-
 void devm_kfree(struct device *dev, const void *p);
 char *devm_kstrdup(struct device *dev, const char *s, gfp_t gfp) __malloc;
 const char *devm_kstrdup_const(struct device *dev, const char *s, gfp_t gfp);
-void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp)
-	__realloc_size(3);
+void *devm_kmemdup(struct device *dev, const void *src, size_t len, gfp_t gfp);
 
 unsigned long devm_get_free_pages(struct device *dev,
 				  gfp_t gfp_mask, unsigned int order);
@@ -359,26 +251,21 @@ void __iomem *devm_of_iomap(struct device *dev,
 			    resource_size_t *size);
 
 /* allows to add/remove a custom action to devres stack */
+int devm_add_action(struct device *dev, void (*action)(void *), void *data);
 void devm_remove_action(struct device *dev, void (*action)(void *), void *data);
 void devm_release_action(struct device *dev, void (*action)(void *), void *data);
 
-int __devm_add_action(struct device *dev, void (*action)(void *), void *data, const char *name);
-#define devm_add_action(release, action, data) \
-	__devm_add_action(release, action, data, #action)
-
-static inline int __devm_add_action_or_reset(struct device *dev, void (*action)(void *),
-					     void *data, const char *name)
+static inline int devm_add_action_or_reset(struct device *dev,
+					   void (*action)(void *), void *data)
 {
 	int ret;
 
-	ret = __devm_add_action(dev, action, data, name);
+	ret = devm_add_action(dev, action, data);
 	if (ret)
 		action(data);
 
 	return ret;
 }
-#define devm_add_action_or_reset(release, action, data) \
-	__devm_add_action_or_reset(release, action, data, #action)
 
 /**
  * devm_alloc_percpu - Resource-managed alloc_percpu
@@ -449,7 +336,6 @@ enum device_link_state {
 #define DL_FLAG_MANAGED			BIT(6)
 #define DL_FLAG_SYNC_STATE_ONLY		BIT(7)
 #define DL_FLAG_INFERRED		BIT(8)
-#define DL_FLAG_CYCLE			BIT(9)
 
 /**
  * enum dl_dev_state - Device driver presence tracking information.
@@ -463,22 +349,6 @@ enum dl_dev_state {
 	DL_DEV_PROBING,
 	DL_DEV_DRIVER_BOUND,
 	DL_DEV_UNBINDING,
-};
-
-/**
- * enum device_removable - Whether the device is removable. The criteria for a
- * device to be classified as removable is determined by its subsystem or bus.
- * @DEVICE_REMOVABLE_NOT_SUPPORTED: This attribute is not supported for this
- *				    device (default).
- * @DEVICE_REMOVABLE_UNKNOWN:  Device location is Unknown.
- * @DEVICE_FIXED: Device is not removable by the user.
- * @DEVICE_REMOVABLE: Device is removable by the user.
- */
-enum device_removable {
-	DEVICE_REMOVABLE_NOT_SUPPORTED = 0, /* must be 0 */
-	DEVICE_REMOVABLE_UNKNOWN,
-	DEVICE_FIXED,
-	DEVICE_REMOVABLE,
 };
 
 /**
@@ -496,87 +366,6 @@ struct dev_links_info {
 };
 
 /**
- * struct dev_msi_info - Device data related to MSI
- * @domain:	The MSI interrupt domain associated to the device
- * @data:	Pointer to MSI device data
- */
-struct dev_msi_info {
-#ifdef CONFIG_GENERIC_MSI_IRQ
-	struct irq_domain	*domain;
-	struct msi_device_data	*data;
-#endif
-};
-
-/**
- * enum device_physical_location_panel - Describes which panel surface of the
- * system's housing the device connection point resides on.
- * @DEVICE_PANEL_TOP: Device connection point is on the top panel.
- * @DEVICE_PANEL_BOTTOM: Device connection point is on the bottom panel.
- * @DEVICE_PANEL_LEFT: Device connection point is on the left panel.
- * @DEVICE_PANEL_RIGHT: Device connection point is on the right panel.
- * @DEVICE_PANEL_FRONT: Device connection point is on the front panel.
- * @DEVICE_PANEL_BACK: Device connection point is on the back panel.
- * @DEVICE_PANEL_UNKNOWN: The panel with device connection point is unknown.
- */
-enum device_physical_location_panel {
-	DEVICE_PANEL_TOP,
-	DEVICE_PANEL_BOTTOM,
-	DEVICE_PANEL_LEFT,
-	DEVICE_PANEL_RIGHT,
-	DEVICE_PANEL_FRONT,
-	DEVICE_PANEL_BACK,
-	DEVICE_PANEL_UNKNOWN,
-};
-
-/**
- * enum device_physical_location_vertical_position - Describes vertical
- * position of the device connection point on the panel surface.
- * @DEVICE_VERT_POS_UPPER: Device connection point is at upper part of panel.
- * @DEVICE_VERT_POS_CENTER: Device connection point is at center part of panel.
- * @DEVICE_VERT_POS_LOWER: Device connection point is at lower part of panel.
- */
-enum device_physical_location_vertical_position {
-	DEVICE_VERT_POS_UPPER,
-	DEVICE_VERT_POS_CENTER,
-	DEVICE_VERT_POS_LOWER,
-};
-
-/**
- * enum device_physical_location_horizontal_position - Describes horizontal
- * position of the device connection point on the panel surface.
- * @DEVICE_HORI_POS_LEFT: Device connection point is at left part of panel.
- * @DEVICE_HORI_POS_CENTER: Device connection point is at center part of panel.
- * @DEVICE_HORI_POS_RIGHT: Device connection point is at right part of panel.
- */
-enum device_physical_location_horizontal_position {
-	DEVICE_HORI_POS_LEFT,
-	DEVICE_HORI_POS_CENTER,
-	DEVICE_HORI_POS_RIGHT,
-};
-
-/**
- * struct device_physical_location - Device data related to physical location
- * of the device connection point.
- * @panel: Panel surface of the system's housing that the device connection
- *         point resides on.
- * @vertical_position: Vertical position of the device connection point within
- *                     the panel.
- * @horizontal_position: Horizontal position of the device connection point
- *                       within the panel.
- * @dock: Set if the device connection point resides in a docking station or
- *        port replicator.
- * @lid: Set if this device connection point resides on the lid of laptop
- *       system.
- */
-struct device_physical_location {
-	enum device_physical_location_panel panel;
-	enum device_physical_location_vertical_position vertical_position;
-	enum device_physical_location_horizontal_position horizontal_position;
-	bool dock;
-	bool lid;
-};
-
-/**
  * struct device - The basic device structure
  * @parent:	The device's "parent" device, the device to which it is attached.
  * 		In most cases, a parent device is some sort of bus or host
@@ -590,6 +379,8 @@ struct device_physical_location {
  * 		This identifies the device type and carries type-specific
  * 		information.
  * @mutex:	Mutex to synchronize calls to its driver.
+ * @lockdep_mutex: An optional debug lock that a subsystem can use as a
+ * 		peer lock to gain localized lockdep coverage of the device_lock.
  * @bus:	Type of bus device is on.
  * @driver:	Which driver has allocated this
  * @platform_data: Platform data specific to the device.
@@ -609,8 +400,9 @@ struct device_physical_location {
  * 		along with subsystem-level and driver-level callbacks.
  * @em_pd:	device's energy model performance domain
  * @pins:	For device pin management.
- *		See Documentation/driver-api/pin-control.rst for details.
- * @msi:	MSI related data
+ *		See Documentation/driver-api/pinctl.rst for details.
+ * @msi_list:	Hosts MSI descriptors
+ * @msi_domain: The generic MSI domain this device is using.
  * @numa_node:	NUMA node this device is close to.
  * @dma_ops:    DMA mapping operations for this device.
  * @dma_mask:	Dma mask (if dma'ble device).
@@ -625,7 +417,6 @@ struct device_physical_location {
  * @dma_pools:	Dma pools (if dma'ble device).
  * @dma_mem:	Internal for coherent mem override.
  * @cma_area:	Contiguous memory area for dma allocations
- * @dma_io_tlb_mem: Pointer to the swiotlb pool used.  Not for driver use.
  * @archdata:	For arch-specific additions.
  * @of_node:	Associated device tree node.
  * @fwnode:	Associated device node supplied by platform firmware.
@@ -641,11 +432,6 @@ struct device_physical_location {
  * 		device (i.e. the bus driver that discovered the device).
  * @iommu_group: IOMMU group the device belongs to.
  * @iommu:	Per device generic IOMMU runtime data
- * @physical_location: Describes physical location of the device connection
- *		point in the system housing.
- * @removable:  Whether the device can be removed from the system. This
- *              should be set by the subsystem / bus driver that discovered
- *              the device.
  *
  * @offline_disabled: If set, the device is permanently online.
  * @offline:	Set after successful invocation of bus type's .offline().
@@ -654,9 +440,6 @@ struct device_physical_location {
  * @state_synced: The hardware state of this device has been synced to match
  *		  the software state of this device by calling the driver/bus
  *		  sync_state() callback.
- * @can_match:	The device has matched with a driver at least once or it is in
- *		a bus (like AMBA) which can't check for matching drivers until
- *		other devices probe successfully.
  * @dma_coherent: this particular device is dma coherent, even if the
  *		architecture supports non-coherent devices.
  * @dma_ops_bypass: If set to %true then the dma_ops are bypassed for the
@@ -682,13 +465,16 @@ struct device {
 	const char		*init_name; /* initial name of the device */
 	const struct device_type *type;
 
-	const struct bus_type	*bus;	/* type of bus device is on */
+	struct bus_type	*bus;		/* type of bus device is on */
 	struct device_driver *driver;	/* which driver has allocated this
 					   device */
 	void		*platform_data;	/* Platform specific data, device
 					   core doesn't touch it */
 	void		*driver_data;	/* Driver data, set and get with
 					   dev_set_drvdata/dev_get_drvdata */
+#ifdef CONFIG_PROVE_LOCKING
+	struct mutex		lockdep_mutex;
+#endif
 	struct mutex		mutex;	/* mutex to synchronize calls to
 					 * its driver.
 					 */
@@ -701,10 +487,15 @@ struct device {
 	struct em_perf_domain	*em_pd;
 #endif
 
+#ifdef CONFIG_GENERIC_MSI_IRQ_DOMAIN
+	struct irq_domain	*msi_domain;
+#endif
 #ifdef CONFIG_PINCTRL
 	struct dev_pin_info	*pins;
 #endif
-	struct dev_msi_info	msi;
+#ifdef CONFIG_GENERIC_MSI_IRQ
+	struct list_head	msi_list;
+#endif
 #ifdef CONFIG_DMA_OPS
 	const struct dma_map_ops *dma_ops;
 #endif
@@ -729,9 +520,6 @@ struct device {
 	struct cma *cma_area;		/* contiguous memory area for dma
 					   allocations */
 #endif
-#ifdef CONFIG_SWIOTLB
-	struct io_tlb_mem *dma_io_tlb_mem;
-#endif
 	/* arch specific additions */
 	struct dev_archdata	archdata;
 
@@ -747,22 +535,17 @@ struct device {
 	spinlock_t		devres_lock;
 	struct list_head	devres_head;
 
-	const struct class	*class;
+	struct class		*class;
 	const struct attribute_group **groups;	/* optional groups */
 
 	void	(*release)(struct device *dev);
 	struct iommu_group	*iommu_group;
 	struct dev_iommu	*iommu;
 
-	struct device_physical_location *physical_location;
-
-	enum device_removable	removable;
-
 	bool			offline_disabled:1;
 	bool			offline:1;
 	bool			of_node_reused:1;
 	bool			state_synced:1;
-	bool			can_match:1;
 #if defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_DEVICE) || \
     defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU) || \
     defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU_ALL)
@@ -771,6 +554,14 @@ struct device {
 #ifdef CONFIG_DMA_OPS_BYPASS
 	bool			dma_ops_bypass : 1;
 #endif
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+	ANDROID_KABI_RESERVE(5);
+	ANDROID_KABI_RESERVE(6);
+	ANDROID_KABI_RESERVE(7);
+	ANDROID_KABI_RESERVE(8);
 };
 
 /**
@@ -797,11 +588,20 @@ struct device_link {
 	u32 flags;
 	refcount_t rpm_active;
 	struct kref kref;
+#ifdef CONFIG_SRCU
+	/* Not currently used, here for potential abi issues in the future */
+	struct rcu_head rcu_head;
+#endif
 	struct work_struct rm_work;
 	bool supplier_preactivated; /* Owned by consumer probe. */
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
-#define kobj_to_dev(__kobj)	container_of_const(__kobj, struct device, kobj)
+static inline struct device *kobj_to_dev(struct kobject *kobj)
+{
+	return container_of(kobj, struct device, kobj);
+}
 
 /**
  * device_iommu_mapped - Returns true when the device DMA is translated
@@ -816,11 +616,6 @@ static inline bool device_iommu_mapped(struct device *dev)
 /* Get the wakeup routines, which depend on struct device */
 #include <linux/pm_wakeup.h>
 
-/**
- * dev_name - Return a device's name.
- * @dev: Device with name to get.
- * Return: The kobject name of the device, or its initial name if unavailable.
- */
 static inline const char *dev_name(const struct device *dev)
 {
 	/* Use the init name until the kobject becomes available */
@@ -865,8 +660,8 @@ static inline void set_dev_node(struct device *dev, int node)
 
 static inline struct irq_domain *dev_get_msi_domain(const struct device *dev)
 {
-#ifdef CONFIG_GENERIC_MSI_IRQ
-	return dev->msi.domain;
+#ifdef CONFIG_GENERIC_MSI_IRQ_DOMAIN
+	return dev->msi_domain;
 #else
 	return NULL;
 #endif
@@ -874,8 +669,8 @@ static inline struct irq_domain *dev_get_msi_domain(const struct device *dev)
 
 static inline void dev_set_msi_domain(struct device *dev, struct irq_domain *d)
 {
-#ifdef CONFIG_GENERIC_MSI_IRQ
-	dev->msi.domain = d;
+#ifdef CONFIG_GENERIC_MSI_IRQ_DOMAIN
+	dev->msi_domain = d;
 #endif
 }
 
@@ -996,22 +791,6 @@ static inline bool dev_has_sync_state(struct device *dev)
 	return false;
 }
 
-static inline void dev_set_removable(struct device *dev,
-				     enum device_removable removable)
-{
-	dev->removable = removable;
-}
-
-static inline bool dev_is_removable(struct device *dev)
-{
-	return dev->removable == DEVICE_REMOVABLE;
-}
-
-static inline bool dev_removable_is_valid(struct device *dev)
-{
-	return dev->removable != DEVICE_REMOVABLE_NOT_SUPPORTED;
-}
-
 /*
  * High level routines for use by the bus drivers
  */
@@ -1020,9 +799,6 @@ void device_unregister(struct device *dev);
 void device_initialize(struct device *dev);
 int __must_check device_add(struct device *dev);
 void device_del(struct device *dev);
-
-DEFINE_FREE(device_del, struct device *, if (_T) device_del(_T))
-
 int device_for_each_child(struct device *dev, void *data,
 			  int (*fn)(struct device *dev, void *data));
 int device_for_each_child_reverse(struct device *dev, void *data,
@@ -1031,61 +807,18 @@ struct device *device_find_child(struct device *dev, void *data,
 				 int (*match)(struct device *dev, void *data));
 struct device *device_find_child_by_name(struct device *parent,
 					 const char *name);
-struct device *device_find_any_child(struct device *parent);
-
 int device_rename(struct device *dev, const char *new_name);
 int device_move(struct device *dev, struct device *new_parent,
 		enum dpm_order dpm_order);
 int device_change_owner(struct device *dev, kuid_t kuid, kgid_t kgid);
+const char *device_get_devnode(struct device *dev, umode_t *mode, kuid_t *uid,
+			       kgid_t *gid, const char **tmp);
 int device_is_dependent(struct device *dev, void *target);
 
 static inline bool device_supports_offline(struct device *dev)
 {
 	return dev->bus && dev->bus->offline && dev->bus->online;
 }
-
-#define __device_lock_set_class(dev, name, key)                        \
-do {                                                                   \
-	struct device *__d2 __maybe_unused = dev;                      \
-	lock_set_class(&__d2->mutex.dep_map, name, key, 0, _THIS_IP_); \
-} while (0)
-
-/**
- * device_lock_set_class - Specify a temporary lock class while a device
- *			   is attached to a driver
- * @dev: device to modify
- * @key: lock class key data
- *
- * This must be called with the device_lock() already held, for example
- * from driver ->probe(). Take care to only override the default
- * lockdep_no_validate class.
- */
-#ifdef CONFIG_LOCKDEP
-#define device_lock_set_class(dev, key)                                    \
-do {                                                                       \
-	struct device *__d = dev;                                          \
-	dev_WARN_ONCE(__d, !lockdep_match_class(&__d->mutex,               \
-						&__lockdep_no_validate__), \
-		 "overriding existing custom lock class\n");               \
-	__device_lock_set_class(__d, #key, key);                           \
-} while (0)
-#else
-#define device_lock_set_class(dev, key) __device_lock_set_class(dev, #key, key)
-#endif
-
-/**
- * device_lock_reset_class - Return a device to the default lockdep novalidate state
- * @dev: device to modify
- *
- * This must be called with the device_lock() already held, for example
- * from driver ->remove().
- */
-#define device_lock_reset_class(dev) \
-do { \
-	struct device *__d __maybe_unused = dev;                       \
-	lock_set_novalidate_class(&__d->mutex.dep_map, "&dev->mutex",  \
-				  _THIS_IP_);                          \
-} while (0)
 
 void lock_device_hotplug(void);
 void unlock_device_hotplug(void);
@@ -1095,7 +828,6 @@ int device_online(struct device *dev);
 void set_primary_fwnode(struct device *dev, struct fwnode_handle *fwnode);
 void set_secondary_fwnode(struct device *dev, struct fwnode_handle *fwnode);
 void device_set_of_node_from_dev(struct device *dev, const struct device *dev2);
-void device_set_node(struct device *dev, struct fwnode_handle *fwnode);
 
 static inline int dev_num_vf(struct device *dev)
 {
@@ -1124,8 +856,6 @@ static inline void *dev_get_platdata(const struct device *dev)
  * Manual binding of a device to driver. See drivers/base/bus.c
  * for information on use.
  */
-int __must_check device_driver_attach(struct device_driver *drv,
-				      struct device *dev);
 int __must_check device_bind_driver(struct device *dev);
 void device_release_driver(struct device *dev);
 int  __must_check device_attach(struct device *dev);
@@ -1139,13 +869,13 @@ bool device_is_bound(struct device *dev);
  * Easy functions for dynamically creating devices on the fly
  */
 __printf(5, 6) struct device *
-device_create(const struct class *cls, struct device *parent, dev_t devt,
+device_create(struct class *cls, struct device *parent, dev_t devt,
 	      void *drvdata, const char *fmt, ...);
 __printf(6, 7) struct device *
-device_create_with_groups(const struct class *cls, struct device *parent, dev_t devt,
+device_create_with_groups(struct class *cls, struct device *parent, dev_t devt,
 			  void *drvdata, const struct attribute_group **groups,
 			  const char *fmt, ...);
-void device_destroy(const struct class *cls, dev_t devt);
+void device_destroy(struct class *cls, dev_t devt);
 
 int __must_check device_add_groups(struct device *dev,
 				   const struct attribute_group **groups);
@@ -1170,8 +900,12 @@ static inline void device_remove_group(struct device *dev,
 
 int __must_check devm_device_add_groups(struct device *dev,
 					const struct attribute_group **groups);
+void devm_device_remove_groups(struct device *dev,
+			       const struct attribute_group **groups);
 int __must_check devm_device_add_group(struct device *dev,
 				       const struct attribute_group *grp);
+void devm_device_remove_group(struct device *dev,
+			      const struct attribute_group *grp);
 
 /*
  * Platform "fixup" functions - allow the platform to have their say
@@ -1190,9 +924,6 @@ extern int (*platform_notify_remove)(struct device *dev);
  */
 struct device *get_device(struct device *dev);
 void put_device(struct device *dev);
-
-DEFINE_FREE(put_device, struct device *, if (_T) put_device(_T))
-
 bool kill_device(struct device *dev);
 
 #ifdef CONFIG_DEVTMPFS
@@ -1215,12 +946,19 @@ void device_link_remove(void *consumer, struct device *supplier);
 void device_links_supplier_sync_state_pause(void);
 void device_links_supplier_sync_state_resume(void);
 
-__printf(3, 4) int dev_err_probe(const struct device *dev, int err, const char *fmt, ...);
+extern __printf(3, 4)
+int dev_err_probe(const struct device *dev, int err, const char *fmt, ...);
 
 /* Create alias, so I can be autoloaded. */
 #define MODULE_ALIAS_CHARDEV(major,minor) \
 	MODULE_ALIAS("char-major-" __stringify(major) "-" __stringify(minor))
 #define MODULE_ALIAS_CHARDEV_MAJOR(major) \
 	MODULE_ALIAS("char-major-" __stringify(major) "-*")
+
+#ifdef CONFIG_SYSFS_DEPRECATED
+extern long sysfs_deprecated;
+#else
+#define sysfs_deprecated 0
+#endif
 
 #endif /* _DEVICE_H_ */

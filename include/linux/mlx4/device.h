@@ -46,6 +46,7 @@
 
 #define DEFAULT_UAR_PAGE_SHIFT  12
 
+#define MAX_MSIX_P_PORT		17
 #define MAX_MSIX		128
 #define MIN_MSIX_P_PORT		5
 #define MLX4_IS_LEGACY_EQ_MODE(dev_cap) ((dev_cap).num_comp_vectors < \
@@ -1436,7 +1437,7 @@ int mlx4_map_sw_to_hw_steering_id(struct mlx4_dev *dev,
 				  enum mlx4_net_trans_rule_id id);
 int mlx4_hw_rule_sz(struct mlx4_dev *dev, enum mlx4_net_trans_rule_id id);
 
-int mlx4_tunnel_steer_add(struct mlx4_dev *dev, const unsigned char *addr,
+int mlx4_tunnel_steer_add(struct mlx4_dev *dev, unsigned char *addr,
 			  int port, int qpn, u16 prio, u64 *reg_id);
 
 void mlx4_sync_pkey_table(struct mlx4_dev *dev, int slave, int port,

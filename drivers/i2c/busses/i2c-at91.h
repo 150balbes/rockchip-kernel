@@ -18,6 +18,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/i2c.h>
+#include <linux/platform_data/dma-atmel.h>
 #include <linux/platform_device.h>
 
 #define AT91_I2C_TIMEOUT	msecs_to_jiffies(100)	/* transfer timeout */
@@ -122,6 +123,7 @@ struct at91_twi_pdata {
 	bool has_adv_dig_filtr;
 	bool has_ana_filtr;
 	bool has_clear_cmd;
+	struct at_dma_slave dma_slave;
 };
 
 struct at91_twi_dma {

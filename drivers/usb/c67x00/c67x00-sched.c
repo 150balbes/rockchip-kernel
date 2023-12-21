@@ -655,7 +655,7 @@ static int c67x00_add_data_urb(struct c67x00_hcd *c67x00, struct urb *urb)
 			       usb_pipeout(urb->pipe));
 	remaining = urb->transfer_buffer_length - urb->actual_length;
 
-	maxps = usb_maxpacket(urb->dev, urb->pipe);
+	maxps = usb_maxpacket(urb->dev, urb->pipe, usb_pipeout(urb->pipe));
 
 	need_empty = (urb->transfer_flags & URB_ZERO_PACKET) &&
 	    usb_pipeout(urb->pipe) && !(remaining % maxps);
@@ -866,7 +866,7 @@ static inline int c67x00_end_of_data(struct c67x00_td *td)
 	if (unlikely(!act_bytes))
 		return 1;	/* This was an empty packet */
 
-	maxps = usb_maxpacket(td_udev(td), td->pipe);
+	maxps = usb_maxpacket(td_udev(td), td->pipe, usb_pipeout(td->pipe));
 
 	if (unlikely(act_bytes < maxps))
 		return 1;	/* Smaller then full packet */
@@ -1123,26 +1123,24 @@ static void c67x00_do_work(struct c67x00_hcd *c67x00)
 
 /* -------------------------------------------------------------------------- */
 
-static void c67x00_sched_work(struct work_struct *work)
+static void c67x00_sched_tasklet(struct tasklet_struct *t)
 {
-	struct c67x00_hcd *c67x00;
-
-	c67x00 = container_of(work, struct c67x00_hcd, work);
+	struct c67x00_hcd *c67x00 = from_tasklet(c67x00, t, tasklet);
 	c67x00_do_work(c67x00);
 }
 
 void c67x00_sched_kick(struct c67x00_hcd *c67x00)
 {
-	queue_work(system_highpri_wq, &c67x00->work);
+	tasklet_hi_schedule(&c67x00->tasklet);
 }
 
 int c67x00_sched_start_scheduler(struct c67x00_hcd *c67x00)
 {
-	INIT_WORK(&c67x00->work, c67x00_sched_work);
+	tasklet_setup(&c67x00->tasklet, c67x00_sched_tasklet);
 	return 0;
 }
 
 void c67x00_sched_stop_scheduler(struct c67x00_hcd *c67x00)
 {
-	cancel_work_sync(&c67x00->work);
+	tasklet_kill(&c67x00->tasklet);
 }

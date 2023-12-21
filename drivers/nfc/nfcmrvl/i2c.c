@@ -1,16 +1,30 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Marvell NFC-over-I2C driver: I2C interface related functions
  *
  * Copyright (C) 2015, Marvell International Ltd.
- */
+ *
+ * This software file (the "File") is distributed by Marvell International
+ * Ltd. under the terms of the GNU General Public License Version 2, June 1991
+ * (the "License").  You may use, redistribute and/or modify this File in
+ * accordance with the terms and conditions of the License, a copy of which
+ * is available on the worldwide web at
+ * http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt.
+ *
+ * THE FILE IS DISTRIBUTED AS-IS, WITHOUT WARRANTY OF ANY KIND, AND THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE
+ * ARE EXPRESSLY DISCLAIMED.  The License provides additional details about
+ * this warranty disclaimer.
+ **/
 
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
+#include <linux/pm_runtime.h>
 #include <linux/nfc.h>
+#include <linux/gpio.h>
 #include <linux/delay.h>
 #include <linux/of_irq.h>
+#include <linux/of_gpio.h>
 #include <net/nfc/nci.h>
 #include <net/nfc/nci_core.h>
 #include "nfcmrvl.h"
@@ -32,6 +46,11 @@ static int nfcmrvl_i2c_read(struct nfcmrvl_i2c_drv_data *drv_data,
 	ret = i2c_master_recv(drv_data->i2c, (u8 *)&nci_hdr, NCI_CTRL_HDR_SIZE);
 	if (ret != NCI_CTRL_HDR_SIZE) {
 		nfc_err(&drv_data->i2c->dev, "cannot read NCI header\n");
+		return -EBADMSG;
+	}
+
+	if (nci_hdr.plen > NCI_MAX_PAYLOAD_SIZE) {
+		nfc_err(&drv_data->i2c->dev, "invalid packet payload size\n");
 		return -EBADMSG;
 	}
 
@@ -112,10 +131,8 @@ static int nfcmrvl_i2c_nci_send(struct nfcmrvl_private *priv,
 	struct nfcmrvl_i2c_drv_data *drv_data = priv->drv_data;
 	int ret;
 
-	if (test_bit(NFCMRVL_PHY_ERROR, &priv->flags)) {
-		kfree_skb(skb);
+	if (test_bit(NFCMRVL_PHY_ERROR, &priv->flags))
 		return -EREMOTEIO;
-	}
 
 	ret = i2c_master_send(drv_data->i2c, skb->data, skb->len);
 
@@ -150,7 +167,7 @@ static void nfcmrvl_i2c_nci_update_config(struct nfcmrvl_private *priv,
 {
 }
 
-static const struct nfcmrvl_if_ops i2c_ops = {
+static struct nfcmrvl_if_ops i2c_ops = {
 	.nci_open = nfcmrvl_i2c_nci_open,
 	.nci_close = nfcmrvl_i2c_nci_close,
 	.nci_send = nfcmrvl_i2c_nci_send,
@@ -168,7 +185,7 @@ static int nfcmrvl_i2c_parse_dt(struct device_node *node,
 		return ret;
 	}
 
-	if (of_property_read_bool(node, "i2c-int-falling"))
+	if (of_find_property(node, "i2c-int-falling", NULL))
 		pdata->irq_polarity = IRQF_TRIGGER_FALLING;
 	else
 		pdata->irq_polarity = IRQF_TRIGGER_RISING;
@@ -183,10 +200,11 @@ static int nfcmrvl_i2c_parse_dt(struct device_node *node,
 	return 0;
 }
 
-static int nfcmrvl_i2c_probe(struct i2c_client *client)
+static int nfcmrvl_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
-	const struct nfcmrvl_platform_data *pdata;
 	struct nfcmrvl_i2c_drv_data *drv_data;
+	struct nfcmrvl_platform_data *pdata;
 	struct nfcmrvl_platform_data config;
 	int ret;
 
@@ -237,15 +255,17 @@ static int nfcmrvl_i2c_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void nfcmrvl_i2c_remove(struct i2c_client *client)
+static int nfcmrvl_i2c_remove(struct i2c_client *client)
 {
 	struct nfcmrvl_i2c_drv_data *drv_data = i2c_get_clientdata(client);
 
 	nfcmrvl_nci_unregister_dev(drv_data->priv);
+
+	return 0;
 }
 
 
-static const struct of_device_id of_nfcmrvl_i2c_match[] __maybe_unused = {
+static const struct of_device_id of_nfcmrvl_i2c_match[] = {
 	{ .compatible = "marvell,nfc-i2c", },
 	{},
 };

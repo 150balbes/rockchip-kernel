@@ -7,18 +7,24 @@
 #include <linux/module.h>
 #include "mt76x02.h"
 
-#define MT76x02_CCK_RATE(_idx, _rate) {					\
+#define CCK_RATE(_idx, _rate) {					\
 	.bitrate = _rate,					\
 	.flags = IEEE80211_RATE_SHORT_PREAMBLE,			\
 	.hw_value = (MT_PHY_TYPE_CCK << 8) | (_idx),		\
 	.hw_value_short = (MT_PHY_TYPE_CCK << 8) | (8 + (_idx)),	\
 }
 
+#define OFDM_RATE(_idx, _rate) {				\
+	.bitrate = _rate,					\
+	.hw_value = (MT_PHY_TYPE_OFDM << 8) | (_idx),		\
+	.hw_value_short = (MT_PHY_TYPE_OFDM << 8) | (_idx),	\
+}
+
 struct ieee80211_rate mt76x02_rates[] = {
-	MT76x02_CCK_RATE(0, 10),
-	MT76x02_CCK_RATE(1, 20),
-	MT76x02_CCK_RATE(2, 55),
-	MT76x02_CCK_RATE(3, 110),
+	CCK_RATE(0, 10),
+	CCK_RATE(1, 20),
+	CCK_RATE(2, 55),
+	CCK_RATE(3, 110),
 	OFDM_RATE(0, 60),
 	OFDM_RATE(1, 90),
 	OFDM_RATE(2, 120),
@@ -87,9 +93,10 @@ static const struct ieee80211_iface_combination mt76x02u_if_comb[] = {
 };
 
 static void
-mt76x02_led_set_config(struct mt76_phy *mphy, u8 delay_on, u8 delay_off)
+mt76x02_led_set_config(struct mt76_dev *mdev, u8 delay_on,
+		       u8 delay_off)
 {
-	struct mt76x02_dev *dev = container_of(mphy->dev, struct mt76x02_dev,
+	struct mt76x02_dev *dev = container_of(mdev, struct mt76x02_dev,
 					       mt76);
 	u32 val;
 
@@ -97,13 +104,13 @@ mt76x02_led_set_config(struct mt76_phy *mphy, u8 delay_on, u8 delay_off)
 	      FIELD_PREP(MT_LED_STATUS_OFF, delay_off) |
 	      FIELD_PREP(MT_LED_STATUS_ON, delay_on);
 
-	mt76_wr(dev, MT_LED_S0(mphy->leds.pin), val);
-	mt76_wr(dev, MT_LED_S1(mphy->leds.pin), val);
+	mt76_wr(dev, MT_LED_S0(mdev->led_pin), val);
+	mt76_wr(dev, MT_LED_S1(mdev->led_pin), val);
 
-	val = MT_LED_CTRL_REPLAY(mphy->leds.pin) |
-	      MT_LED_CTRL_KICK(mphy->leds.pin);
-	if (mphy->leds.al)
-		val |= MT_LED_CTRL_POLARITY(mphy->leds.pin);
+	val = MT_LED_CTRL_REPLAY(mdev->led_pin) |
+	      MT_LED_CTRL_KICK(mdev->led_pin);
+	if (mdev->led_al)
+		val |= MT_LED_CTRL_POLARITY(mdev->led_pin);
 	mt76_wr(dev, MT_LED_CTRL, val);
 }
 
@@ -112,14 +119,14 @@ mt76x02_led_set_blink(struct led_classdev *led_cdev,
 		      unsigned long *delay_on,
 		      unsigned long *delay_off)
 {
-	struct mt76_phy *mphy = container_of(led_cdev, struct mt76_phy,
-					     leds.cdev);
+	struct mt76_dev *mdev = container_of(led_cdev, struct mt76_dev,
+					     led_cdev);
 	u8 delta_on, delta_off;
 
 	delta_off = max_t(u8, *delay_off / 10, 1);
 	delta_on = max_t(u8, *delay_on / 10, 1);
 
-	mt76x02_led_set_config(mphy, delta_on, delta_off);
+	mt76x02_led_set_config(mdev, delta_on, delta_off);
 
 	return 0;
 }
@@ -128,21 +135,21 @@ static void
 mt76x02_led_set_brightness(struct led_classdev *led_cdev,
 			   enum led_brightness brightness)
 {
-	struct mt76_phy *mphy = container_of(led_cdev, struct mt76_phy,
-					     leds.cdev);
+	struct mt76_dev *mdev = container_of(led_cdev, struct mt76_dev,
+					     led_cdev);
 
 	if (!brightness)
-		mt76x02_led_set_config(mphy, 0, 0xff);
+		mt76x02_led_set_config(mdev, 0, 0xff);
 	else
-		mt76x02_led_set_config(mphy, 0xff, 0);
+		mt76x02_led_set_config(mdev, 0xff, 0);
 }
 
-int mt76x02_init_device(struct mt76x02_dev *dev)
+void mt76x02_init_device(struct mt76x02_dev *dev)
 {
 	struct ieee80211_hw *hw = mt76_hw(dev);
 	struct wiphy *wiphy = hw->wiphy;
 
-	INIT_DELAYED_WORK(&dev->mphy.mac_work, mt76x02_mac_work);
+	INIT_DELAYED_WORK(&dev->mt76.mac_work, mt76x02_mac_work);
 
 	hw->queues = 4;
 	hw->max_rates = 1;
@@ -166,9 +173,9 @@ int mt76x02_init_device(struct mt76x02_dev *dev)
 
 		/* init led callbacks */
 		if (IS_ENABLED(CONFIG_MT76_LEDS)) {
-			dev->mphy.leds.cdev.brightness_set =
+			dev->mt76.led_cdev.brightness_set =
 					mt76x02_led_set_brightness;
-			dev->mphy.leds.cdev.blink_set = mt76x02_led_set_blink;
+			dev->mt76.led_cdev.blink_set = mt76x02_led_set_blink;
 		}
 	}
 
@@ -179,7 +186,6 @@ int mt76x02_init_device(struct mt76x02_dev *dev)
 
 	ieee80211_hw_set(hw, SUPPORTS_HT_CCK_RATES);
 	ieee80211_hw_set(hw, HOST_BROADCAST_PS_BUFFERING);
-	ieee80211_hw_set(hw, NEEDS_UNIQUE_STA_ADDR);
 
 	dev->mt76.global_wcid.idx = 255;
 	dev->mt76.global_wcid.hw_key_idx = -1;
@@ -190,14 +196,12 @@ int mt76x02_init_device(struct mt76x02_dev *dev)
 				IEEE80211_HT_CAP_LDPC_CODING;
 		dev->mphy.sband_5g.sband.ht_cap.cap |=
 				IEEE80211_HT_CAP_LDPC_CODING;
-		dev->mphy.chainmask = 0x202;
+		dev->chainmask = 0x202;
 		dev->mphy.antenna_mask = 3;
 	} else {
-		dev->mphy.chainmask = 0x101;
+		dev->chainmask = 0x101;
 		dev->mphy.antenna_mask = 1;
 	}
-
-	return 0;
 }
 EXPORT_SYMBOL_GPL(mt76x02_init_device);
 
@@ -288,11 +292,8 @@ mt76x02_vif_init(struct mt76x02_dev *dev, struct ieee80211_vif *vif,
 	mvif->idx = idx;
 	mvif->group_wcid.idx = MT_VIF_WCID(idx);
 	mvif->group_wcid.hw_key_idx = -1;
-	mt76_packet_id_init(&mvif->group_wcid);
-
 	mtxq = (struct mt76_txq *)vif->txq->drv_priv;
-	rcu_assign_pointer(dev->mt76.wcid[MT_VIF_WCID(idx)], &mvif->group_wcid);
-	mtxq->wcid = MT_VIF_WCID(idx);
+	mtxq->wcid = &mvif->group_wcid;
 }
 
 int
@@ -302,13 +303,13 @@ mt76x02_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	unsigned int idx = 0;
 
 	/* Allow to change address in HW if we create first interface. */
-	if (!dev->mt76.vif_mask &&
-	    (((vif->addr[0] ^ dev->mphy.macaddr[0]) & ~GENMASK(4, 1)) ||
-	     memcmp(vif->addr + 1, dev->mphy.macaddr + 1, ETH_ALEN - 1)))
+	if (!dev->mphy.vif_mask &&
+	    (((vif->addr[0] ^ dev->mt76.macaddr[0]) & ~GENMASK(4, 1)) ||
+	     memcmp(vif->addr + 1, dev->mt76.macaddr + 1, ETH_ALEN - 1)))
 		mt76x02_mac_setaddr(dev, vif->addr);
 
 	if (vif->addr[0] & BIT(1))
-		idx = 1 + (((dev->mphy.macaddr[0] ^ vif->addr[0]) >> 2) & 7);
+		idx = 1 + (((dev->mt76.macaddr[0] ^ vif->addr[0]) >> 2) & 7);
 
 	/*
 	 * Client mode typically only has one configurable BSSID register,
@@ -327,11 +328,11 @@ mt76x02_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 		idx += 8;
 
 	/* vif is already set or idx is 8 for AP/Mesh/... */
-	if (dev->mt76.vif_mask & BIT_ULL(idx) ||
+	if (dev->mphy.vif_mask & BIT(idx) ||
 	    (vif->type != NL80211_IFTYPE_STATION && idx > 7))
 		return -EBUSY;
 
-	dev->mt76.vif_mask |= BIT_ULL(idx);
+	dev->mphy.vif_mask |= BIT(idx);
 
 	mt76x02_vif_init(dev, vif, idx);
 	return 0;
@@ -344,9 +345,7 @@ void mt76x02_remove_interface(struct ieee80211_hw *hw,
 	struct mt76x02_dev *dev = hw->priv;
 	struct mt76x02_vif *mvif = (struct mt76x02_vif *)vif->drv_priv;
 
-	dev->mt76.vif_mask &= ~BIT_ULL(mvif->idx);
-	rcu_assign_pointer(dev->mt76.wcid[mvif->group_wcid.idx], NULL);
-	mt76_packet_id_flush(&dev->mt76, &mvif->group_wcid);
+	dev->mphy.vif_mask &= ~BIT(mvif->idx);
 }
 EXPORT_SYMBOL_GPL(mt76x02_remove_interface);
 
@@ -454,20 +453,20 @@ int mt76x02_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	msta = sta ? (struct mt76x02_sta *)sta->drv_priv : NULL;
 	wcid = msta ? &msta->wcid : &mvif->group_wcid;
 
-	if (cmd != SET_KEY) {
+	if (cmd == SET_KEY) {
+		key->hw_key_idx = wcid->idx;
+		wcid->hw_key_idx = idx;
+		if (key->flags & IEEE80211_KEY_FLAG_RX_MGMT) {
+			key->flags |= IEEE80211_KEY_FLAG_SW_MGMT_TX;
+			wcid->sw_iv = true;
+		}
+	} else {
 		if (idx == wcid->hw_key_idx) {
 			wcid->hw_key_idx = -1;
 			wcid->sw_iv = false;
 		}
 
-		return 0;
-	}
-
-	key->hw_key_idx = wcid->idx;
-	wcid->hw_key_idx = idx;
-	if (key->flags & IEEE80211_KEY_FLAG_RX_MGMT) {
-		key->flags |= IEEE80211_KEY_FLAG_SW_MGMT_TX;
-		wcid->sw_iv = true;
+		key = NULL;
 	}
 	mt76_wcid_key_setup(&dev->mt76, wcid, key);
 
@@ -486,14 +485,13 @@ int mt76x02_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 EXPORT_SYMBOL_GPL(mt76x02_set_key);
 
 int mt76x02_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-		    unsigned int link_id, u16 queue,
-		    const struct ieee80211_tx_queue_params *params)
+		    u16 queue, const struct ieee80211_tx_queue_params *params)
 {
 	struct mt76x02_dev *dev = hw->priv;
 	u8 cw_min = 5, cw_max = 10, qid;
 	u32 val;
 
-	qid = dev->mphy.q_tx[queue]->hw_idx;
+	qid = dev->mt76.q_tx[queue]->hw_idx;
 
 	if (params->cw_min)
 		cw_min = fls(params->cw_min);
@@ -627,7 +625,7 @@ void mt76x02_sta_ps(struct mt76_dev *mdev, struct ieee80211_sta *sta,
 	struct mt76x02_sta *msta = (struct mt76x02_sta *)sta->drv_priv;
 	int idx = msta->wcid.idx;
 
-	mt76_stop_tx_queues(&dev->mphy, sta, true);
+	mt76_stop_tx_queues(&dev->mt76, sta, true);
 	if (mt76_is_mmio(mdev))
 		mt76x02_mac_wcid_set_drop(dev, idx, ps);
 }
@@ -636,7 +634,7 @@ EXPORT_SYMBOL_GPL(mt76x02_sta_ps);
 void mt76x02_bss_info_changed(struct ieee80211_hw *hw,
 			      struct ieee80211_vif *vif,
 			      struct ieee80211_bss_conf *info,
-			      u64 changed)
+			      u32 changed)
 {
 	struct mt76x02_vif *mvif = (struct mt76x02_vif *)vif->drv_priv;
 	struct mt76x02_dev *dev = hw->priv;
@@ -683,7 +681,7 @@ void mt76x02_config_mac_addr_list(struct mt76x02_dev *dev)
 	for (i = 0; i < ARRAY_SIZE(dev->macaddr_list); i++) {
 		u8 *addr = dev->macaddr_list[i].addr;
 
-		memcpy(addr, dev->mphy.macaddr, ETH_ALEN);
+		memcpy(addr, dev->mt76.macaddr, ETH_ALEN);
 
 		if (!i)
 			continue;

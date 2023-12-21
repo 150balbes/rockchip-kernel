@@ -643,7 +643,7 @@ emc2103_detect(struct i2c_client *new_client, struct i2c_board_info *info)
 	if ((product != 0x24) && (product != 0x26))
 		return -ENODEV;
 
-	strscpy(info->type, "emc2103", I2C_NAME_SIZE);
+	strlcpy(info->type, "emc2103", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -653,7 +653,7 @@ static struct i2c_driver emc2103_driver = {
 	.driver = {
 		.name	= "emc2103",
 	},
-	.probe		= emc2103_probe,
+	.probe_new	= emc2103_probe,
 	.id_table	= emc2103_ids,
 	.detect		= emc2103_detect,
 	.address_list	= normal_i2c,

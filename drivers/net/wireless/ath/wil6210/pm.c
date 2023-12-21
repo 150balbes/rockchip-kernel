@@ -445,9 +445,10 @@ int wil_pm_runtime_get(struct wil6210_priv *wil)
 	int rc;
 	struct device *dev = wil_to_dev(wil);
 
-	rc = pm_runtime_resume_and_get(dev);
+	rc = pm_runtime_get_sync(dev);
 	if (rc < 0) {
-		wil_err(wil, "pm_runtime_resume_and_get() failed, rc = %d\n", rc);
+		wil_err(wil, "pm_runtime_get_sync() failed, rc = %d\n", rc);
+		pm_runtime_put_noidle(dev);
 		return rc;
 	}
 

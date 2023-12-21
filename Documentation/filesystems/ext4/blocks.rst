@@ -39,7 +39,7 @@ For 32-bit filesystems, limits are as follows:
      - 4TiB
      - 8TiB
      - 16TiB
-     - 256TiB
+     - 256PiB
    * - Blocks Per Block Group
      - 8,192
      - 16,384

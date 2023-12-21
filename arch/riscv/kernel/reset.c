@@ -23,12 +23,16 @@ void machine_restart(char *cmd)
 
 void machine_halt(void)
 {
-	do_kernel_power_off();
-	default_power_off();
+	if (pm_power_off != NULL)
+		pm_power_off();
+	else
+		default_power_off();
 }
 
 void machine_power_off(void)
 {
-	do_kernel_power_off();
-	default_power_off();
+	if (pm_power_off != NULL)
+		pm_power_off();
+	else
+		default_power_off();
 }

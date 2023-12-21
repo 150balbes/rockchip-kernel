@@ -101,9 +101,7 @@ static struct dsp56k_device {
 	int tx_wsize, rx_wsize;
 } dsp56k;
 
-static const struct class dsp56k_class = {
-	.name = "dsp56k",
-};
+static struct class *dsp56k_class;
 
 static int dsp56k_reset(void)
 {
@@ -495,7 +493,7 @@ static const char banner[] __initconst = KERN_INFO "DSP56k driver installed\n";
 
 static int __init dsp56k_init_driver(void)
 {
-	int err;
+	int err = 0;
 
 	if(!MACH_IS_ATARI || !ATARIHW_PRESENT(DSP56K)) {
 		printk("DSP56k driver: Hardware not present\n");
@@ -506,10 +504,12 @@ static int __init dsp56k_init_driver(void)
 		printk("DSP56k driver: Unable to register driver\n");
 		return -ENODEV;
 	}
-	err = class_register(&dsp56k_class);
-	if (err)
+	dsp56k_class = class_create(THIS_MODULE, "dsp56k");
+	if (IS_ERR(dsp56k_class)) {
+		err = PTR_ERR(dsp56k_class);
 		goto out_chrdev;
-	device_create(&dsp56k_class, NULL, MKDEV(DSP56K_MAJOR, 0), NULL,
+	}
+	device_create(dsp56k_class, NULL, MKDEV(DSP56K_MAJOR, 0), NULL,
 		      "dsp56k");
 
 	printk(banner);
@@ -524,8 +524,8 @@ module_init(dsp56k_init_driver);
 
 static void __exit dsp56k_cleanup_driver(void)
 {
-	device_destroy(&dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
-	class_unregister(&dsp56k_class);
+	device_destroy(dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
+	class_destroy(dsp56k_class);
 	unregister_chrdev(DSP56K_MAJOR, "dsp56k");
 }
 module_exit(dsp56k_cleanup_driver);

@@ -14,7 +14,6 @@
 #include <linux/init.h>
 #include <linux/cpumask.h>
 #include <linux/slab.h>
-#include <linux/amd-iommu.h>
 
 #include "../perf_event.h"
 #include "iommu.h"
@@ -161,7 +160,7 @@ static int get_next_avail_iommu_bnk_cntr(struct perf_event *event)
 
 	raw_spin_lock_irqsave(&piommu->lock, flags);
 
-	for (bank = 0; bank < max_banks; bank++) {
+	for (bank = 0, shift = 0; bank < max_banks; bank++) {
 		for (cntr = 0; cntr < max_cntrs; cntr++) {
 			shift = bank + (bank*3) + cntr;
 			if (piommu->cntr_assign_mask & BIT_ULL(shift)) {

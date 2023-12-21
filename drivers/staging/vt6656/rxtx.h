@@ -3,6 +3,8 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: rxtx.h
+ *
  * Purpose:
  *
  * Author: Jerry Chen
@@ -93,7 +95,7 @@ struct vnt_rts_g {
 	u16 wReserved;
 	struct ieee80211_rts data;
 	struct vnt_tx_datahead_g data_head;
-} __packed __aligned(2);
+} __packed;
 
 struct vnt_rts_ab {
 	struct vnt_phy_field ab;
@@ -101,7 +103,7 @@ struct vnt_rts_ab {
 	u16 wReserved;
 	struct ieee80211_rts data;
 	struct vnt_tx_datahead_ab data_head;
-} __packed __aligned(2);
+} __packed;
 
 /* CTS buffer header */
 struct vnt_cts {
@@ -111,7 +113,7 @@ struct vnt_cts {
 	struct ieee80211_cts data;
 	u16 reserved2;
 	struct vnt_tx_datahead_g data_head;
-} __packed __aligned(2);
+} __packed;
 
 union vnt_tx_data_head {
 	/* rts g */

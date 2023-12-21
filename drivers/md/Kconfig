@@ -6,6 +6,7 @@
 menuconfig MD
 	bool "Multiple devices driver support (RAID and LVM)"
 	depends on BLOCK
+	select SRCU
 	help
 	  Support multiple physical spindles through a single logical device.
 	  Required for RAID and logical volume management.
@@ -14,11 +15,6 @@ if MD
 
 config BLK_DEV_MD
 	tristate "RAID support"
-	select BLOCK_HOLDER_DEPRECATED if SYSFS
-	# BLOCK_LEGACY_AUTOLOAD requirement should be removed
-	# after relevant mdadm enhancements - to make "names=yes"
-	# the default - are widely available.
-	select BLOCK_LEGACY_AUTOLOAD
 	help
 	  This driver lets you combine several hard disk partitions into one
 	  logical block device. This can be used to simply append one
@@ -51,7 +47,7 @@ config MD_AUTODETECT
 	  If unsure, say Y.
 
 config MD_LINEAR
-	tristate "Linear (append) mode (deprecated)"
+	tristate "Linear (append) mode"
 	depends on BLK_DEV_MD
 	help
 	  If you say Y here, then your multiple devices driver will be able to
@@ -162,7 +158,7 @@ config MD_RAID456
 	  If unsure, say Y.
 
 config MD_MULTIPATH
-	tristate "Multipath I/O support (deprecated)"
+	tristate "Multipath I/O support"
 	depends on BLK_DEV_MD
 	help
 	  MD_MULTIPATH provides a simple multi-path personality for use
@@ -173,7 +169,7 @@ config MD_MULTIPATH
 	  If unsure, say N.
 
 config MD_FAULTY
-	tristate "Faulty test module for MD (deprecated)"
+	tristate "Faulty test module for MD"
 	depends on BLK_DEV_MD
 	help
 	  The "faulty" module allows for a block device that occasionally returns
@@ -205,9 +201,7 @@ config BLK_DEV_DM_BUILTIN
 
 config BLK_DEV_DM
 	tristate "Device mapper support"
-	select BLOCK_HOLDER_DEPRECATED if SYSFS
 	select BLK_DEV_DM_BUILTIN
-	select BLK_MQ_STACKING
 	depends on DAX || DAX=n
 	help
 	  Device-mapper is a low level volume manager.  It works by allowing
@@ -276,7 +270,6 @@ config DM_CRYPT
 	tristate "Crypt target support"
 	depends on BLK_DEV_DM
 	depends on (ENCRYPTED_KEYS || ENCRYPTED_KEYS=n)
-	depends on (TRUSTED_KEYS || TRUSTED_KEYS=n)
 	select CRYPTO
 	select CRYPTO_CBC
 	select CRYPTO_ESSIV
@@ -292,6 +285,27 @@ config DM_CRYPT
 	  be called dm-crypt.
 
 	  If unsure, say N.
+
+config DM_DEFAULT_KEY
+	tristate "Default-key target support"
+	depends on BLK_DEV_DM
+	depends on BLK_INLINE_ENCRYPTION
+	# dm-default-key doesn't require -o inlinecrypt, but it does currently
+	# rely on the inline encryption hooks being built into the kernel.
+	depends on FS_ENCRYPTION_INLINE_CRYPT
+	help
+	  This device-mapper target allows you to create a device that
+	  assigns a default encryption key to bios that aren't for the
+	  contents of an encrypted file.
+
+	  This ensures that all blocks on-disk will be encrypted with
+	  some key, without the performance hit of file contents being
+	  encrypted twice when fscrypt (File-Based Encryption) is used.
+
+	  It is only appropriate to use dm-default-key when key
+	  configuration is tightly controlled, like it is in Android,
+	  such that all fscrypt keys are at least as hard to compromise
+	  as the default key.
 
 config DM_SNAPSHOT
        tristate "Snapshot target"
@@ -346,7 +360,7 @@ config DM_WRITECACHE
 
 config DM_EBS
 	tristate "Emulated block size target (EXPERIMENTAL)"
-	depends on BLK_DEV_DM && !HIGHMEM
+	depends on BLK_DEV_DM
 	select DM_BUFIO
 	help
 	  dm-ebs emulates smaller logical block size on backing devices
@@ -470,15 +484,6 @@ config DM_MULTIPATH_HST
 
 	  If unsure, say N.
 
-config DM_MULTIPATH_IOA
-	tristate "I/O Path Selector based on CPU submission"
-	depends on DM_MULTIPATH
-	help
-	  This path selector selects the path based on the CPU the IO is
-	  executed on and the CPU to path mapping setup at path addition time.
-
-	  If unsure, say N.
-
 config DM_DELAY
 	tristate "I/O delaying target"
 	depends on BLK_DEV_DM
@@ -546,21 +551,10 @@ config DM_VERITY_VERIFY_ROOTHASH_SIG
 	bool "Verity data device root hash signature verification support"
 	depends on DM_VERITY
 	select SYSTEM_DATA_VERIFICATION
-	help
+	  help
 	  Add ability for dm-verity device to be validated if the
 	  pre-generated tree of cryptographic checksums passed has a pkcs#7
 	  signature file that can validate the roothash of the tree.
-
-	  By default, rely on the builtin trusted keyring.
-
-	  If unsure, say N.
-
-config DM_VERITY_VERIFY_ROOTHASH_SIG_SECONDARY_KEYRING
-	bool "Verity data device root hash signature verification with secondary keyring"
-	depends on DM_VERITY_VERIFY_ROOTHASH_SIG
-	depends on SECONDARY_TRUSTED_KEYRING
-	help
-	  Rely on the secondary trusted keyring to verify dm-verity signatures.
 
 	  If unsure, say N.
 
@@ -614,7 +608,6 @@ config DM_INTEGRITY
 	select CRYPTO
 	select CRYPTO_SKCIPHER
 	select ASYNC_XOR
-	select DM_AUDIT if AUDIT
 	help
 	  This device-mapper target emulates a block device that has
 	  additional per-sector tags that can be used for storing
@@ -647,13 +640,30 @@ config DM_ZONED
 
 	  If unsure, say N.
 
-config DM_AUDIT
-	bool "DM audit events"
-	depends on AUDIT
+config DM_BOW
+	tristate "Backup block device"
+	depends on BLK_DEV_DM
+	select DM_BUFIO
 	help
-	  Generate audit events for device-mapper.
+	  This device-mapper target takes a device and keeps a log of all
+	  changes using free blocks identified by issuing a trim command.
+	  This can then be restored by running a command line utility,
+	  or committed by simply replacing the target.
 
-	  Enables audit logging of several security relevant events in the
-	  particular device-mapper targets, especially the integrity target.
+	  If unsure, say N.
+
+config DM_USER
+	tristate "Block device in userspace"
+	depends on BLK_DEV_DM
+	default y
+	help
+	  This device-mapper target allows a userspace daemon to provide the
+	  contents of a block device.  See
+	  <file:Documentation/block/dm-user.rst> for more information.
+
+	  To compile this code as a module, choose M here: the module will be
+	  called dm-user.
+
+	  If unsure, say N.
 
 endif # MD

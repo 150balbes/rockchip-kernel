@@ -102,8 +102,8 @@ static void vq_reset(struct vq_info *info, int num, struct virtio_device *vdev)
 
 	memset(info->ring, 0, vring_size(num, 4096));
 	vring_init(&info->vring, num, info->ring, 4096);
-	info->vq = vring_new_virtqueue(info->idx, num, 4096, vdev, true, false,
-				       info->ring, vq_notify, vq_callback, "test");
+	info->vq = __vring_new_virtqueue(info->idx, info->vring, vdev, true,
+					 false, vq_notify, vq_callback, "test");
 	assert(info->vq);
 	info->vq->priv = info;
 }
@@ -134,7 +134,7 @@ static void vdev_info_init(struct vdev_info* dev, unsigned long long features)
 	dev->buf_size = 1024;
 	dev->buf = malloc(dev->buf_size);
 	assert(dev->buf);
-	dev->control = open("/dev/vhost-test", O_RDWR);
+        dev->control = open("/dev/vhost-test", O_RDWR);
 	assert(dev->control >= 0);
 	r = ioctl(dev->control, VHOST_SET_OWNER, NULL);
 	assert(r >= 0);
@@ -173,7 +173,7 @@ static void run_test(struct vdev_info *dev, struct vq_info *vq,
 	long started = 0, completed = 0, next_reset = reset_n;
 	long completed_before, started_before;
 	int r, test = 1;
-	unsigned int len;
+	unsigned len;
 	long long spurious = 0;
 	const bool random_batch = batch == RANDOM_BATCH;
 
@@ -327,7 +327,7 @@ const struct option longopts[] = {
 	}
 };
 
-static void help(int status)
+static void help(void)
 {
 	fprintf(stderr, "Usage: virtio_test [--help]"
 		" [--no-indirect]"
@@ -337,8 +337,6 @@ static void help(int status)
 		" [--batch=random/N]"
 		" [--reset=N]"
 		"\n");
-
-	exit(status);
 }
 
 int main(int argc, char **argv)
@@ -356,12 +354,14 @@ int main(int argc, char **argv)
 		case -1:
 			goto done;
 		case '?':
-			help(2);
+			help();
+			exit(2);
 		case 'e':
 			features &= ~(1ULL << VIRTIO_RING_F_EVENT_IDX);
 			break;
 		case 'h':
-			help(0);
+			help();
+			goto done;
 		case 'i':
 			features &= ~(1ULL << VIRTIO_RING_F_INDIRECT_DESC);
 			break;

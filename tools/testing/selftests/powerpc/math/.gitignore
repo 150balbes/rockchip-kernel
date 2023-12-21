@@ -7,4 +7,3 @@ fpu_signal
 vmx_signal
 vsx_preempt
 fpu_denormal
-mma

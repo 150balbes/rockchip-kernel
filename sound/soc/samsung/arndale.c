@@ -48,7 +48,7 @@ static int arndale_rt5631_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static const struct snd_soc_ops arndale_rt5631_ops = {
+static struct snd_soc_ops arndale_rt5631_ops = {
 	.hw_params = arndale_rt5631_hw_params,
 };
 
@@ -80,7 +80,7 @@ static int arndale_wm1811_hw_params(struct snd_pcm_substream *substream,
 					rclk + 1, SND_SOC_CLOCK_IN);
 }
 
-static const struct snd_soc_ops arndale_wm1811_ops = {
+static struct snd_soc_ops arndale_wm1811_ops = {
 	.hw_params = arndale_wm1811_hw_params,
 };
 
@@ -185,11 +185,12 @@ err_put_of_nodes:
 	return ret;
 }
 
-static void arndale_audio_remove(struct platform_device *pdev)
+static int arndale_audio_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
 	arndale_put_of_nodes(card);
+	return 0;
 }
 
 static const struct of_device_id arndale_audio_of_match[] = {
@@ -207,7 +208,7 @@ static struct platform_driver arndale_audio_driver = {
 		.of_match_table = arndale_audio_of_match,
 	},
 	.probe = arndale_audio_probe,
-	.remove_new = arndale_audio_remove,
+	.remove = arndale_audio_remove,
 };
 
 module_platform_driver(arndale_audio_driver);

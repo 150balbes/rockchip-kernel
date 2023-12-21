@@ -96,9 +96,9 @@ static int __clk_bulk_get(struct device *dev, int num_clks,
 			if (ret == -ENOENT && optional)
 				continue;
 
-			dev_err_probe(dev, ret,
-				      "Failed to get clk '%s'\n",
-				      clks[i].id);
+			if (ret != -EPROBE_DEFER)
+				dev_err(dev, "Failed to get clk '%s': %d\n",
+					clks[i].id, ret);
 			goto err;
 		}
 	}

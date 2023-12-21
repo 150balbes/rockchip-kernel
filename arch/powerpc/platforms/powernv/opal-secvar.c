@@ -54,7 +54,8 @@ static int opal_status_to_err(int rc)
 	return err;
 }
 
-static int opal_get_variable(const char *key, u64 ksize, u8 *data, u64 *dsize)
+static int opal_get_variable(const char *key, uint64_t ksize,
+			     u8 *data, uint64_t *dsize)
 {
 	int rc;
 
@@ -70,7 +71,8 @@ static int opal_get_variable(const char *key, u64 ksize, u8 *data, u64 *dsize)
 	return opal_status_to_err(rc);
 }
 
-static int opal_get_next_variable(const char *key, u64 *keylen, u64 keybufsize)
+static int opal_get_next_variable(const char *key, uint64_t *keylen,
+				  uint64_t keybufsize)
 {
 	int rc;
 
@@ -86,7 +88,8 @@ static int opal_get_next_variable(const char *key, u64 *keylen, u64 keybufsize)
 	return opal_status_to_err(rc);
 }
 
-static int opal_set_variable(const char *key, u64 ksize, u8 *data, u64 dsize)
+static int opal_set_variable(const char *key, uint64_t ksize, u8 *data,
+			     uint64_t dsize)
 {
 	int rc;
 
@@ -98,57 +101,10 @@ static int opal_set_variable(const char *key, u64 ksize, u8 *data, u64 dsize)
 	return opal_status_to_err(rc);
 }
 
-static ssize_t opal_secvar_format(char *buf, size_t bufsize)
-{
-	ssize_t rc = 0;
-	struct device_node *node;
-	const char *format;
-
-	node = of_find_compatible_node(NULL, NULL, "ibm,secvar-backend");
-	if (!of_device_is_available(node)) {
-		rc = -ENODEV;
-		goto out;
-	}
-
-	rc = of_property_read_string(node, "format", &format);
-	if (rc)
-		goto out;
-
-	rc = snprintf(buf, bufsize, "%s", format);
-
-out:
-	of_node_put(node);
-
-	return rc;
-}
-
-static int opal_secvar_max_size(u64 *max_size)
-{
-	int rc;
-	struct device_node *node;
-
-	node = of_find_compatible_node(NULL, NULL, "ibm,secvar-backend");
-	if (!node)
-		return -ENODEV;
-
-	if (!of_device_is_available(node)) {
-		rc = -ENODEV;
-		goto out;
-	}
-
-	rc = of_property_read_u64(node, "max-var-size", max_size);
-
-out:
-	of_node_put(node);
-	return rc;
-}
-
 static const struct secvar_operations opal_secvar_ops = {
 	.get = opal_get_variable,
 	.get_next = opal_get_next_variable,
 	.set = opal_set_variable,
-	.format = opal_secvar_format,
-	.max_size = opal_secvar_max_size,
 };
 
 static int opal_secvar_probe(struct platform_device *pdev)
@@ -160,7 +116,9 @@ static int opal_secvar_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	return set_secvar_ops(&opal_secvar_ops);
+	set_secvar_ops(&opal_secvar_ops);
+
+	return 0;
 }
 
 static const struct of_device_id opal_secvar_match[] = {

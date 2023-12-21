@@ -4,21 +4,25 @@
 
 #include <asm/atomic_ll_sc.h>
 
-#ifdef CONFIG_ARM64_LSE_ATOMICS
+#if defined(CONFIG_ARM64_LSE_ATOMICS) && !defined(BUILD_FIPS140_KO)
 
 #define __LSE_PREAMBLE	".arch_extension lse\n"
 
 #include <linux/compiler_types.h>
 #include <linux/export.h>
+#include <linux/jump_label.h>
 #include <linux/stringify.h>
 #include <asm/alternative.h>
-#include <asm/alternative-macros.h>
 #include <asm/atomic_lse.h>
 #include <asm/cpucaps.h>
 
-static __always_inline bool system_uses_lse_atomics(void)
+extern struct static_key_false cpu_hwcap_keys[ARM64_NCAPS];
+extern struct static_key_false arm64_const_caps_ready;
+
+static inline bool system_uses_lse_atomics(void)
 {
-	return alternative_has_cap_likely(ARM64_HAS_LSE_ATOMICS);
+	return (static_branch_likely(&arm64_const_caps_ready)) &&
+		static_branch_likely(&cpu_hwcap_keys[ARM64_HAS_LSE_ATOMICS]);
 }
 
 #define __lse_ll_sc_body(op, ...)					\

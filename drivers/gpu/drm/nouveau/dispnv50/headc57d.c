@@ -28,19 +28,6 @@
 #include <nvhw/class/clc57d.h>
 
 static int
-headc57d_display_id(struct nv50_head *head, u32 display_id)
-{
-	struct nvif_push *push = nv50_disp(head->base.base.dev)->core->chan.push;
-	int ret;
-
-	if ((ret = PUSH_WAIT(push, 2)))
-		return ret;
-
-	PUSH_NVSQ(push, NVC57D, 0x2020 + (head->base.index * 0x400), display_id);
-	return 0;
-}
-
-static int
 headc57d_or(struct nv50_head *head, struct nv50_head_atom *asyh)
 {
 	struct nvif_push *push = nv50_disp(head->base.base.dev)->core->chan.push;
@@ -182,7 +169,7 @@ headc57d_olut_load(struct drm_color_lut *in, int size, void __iomem *mem)
 	writew(readw(mem - 4), mem + 4);
 }
 
-static bool
+bool
 headc57d_olut(struct nv50_head *head, struct nv50_head_atom *asyh, int size)
 {
 	if (size != 0 && size != 256 && size != 1024)
@@ -249,7 +236,6 @@ headc57d = {
 	.view = headc37d_view,
 	.mode = headc57d_mode,
 	.olut = headc57d_olut,
-	.ilut_check = head907d_ilut_check,
 	.olut_identity = true,
 	.olut_size = 1024,
 	.olut_set = headc57d_olut_set,
@@ -263,5 +249,4 @@ headc57d = {
 	.or = headc57d_or,
 	/* TODO: flexible window mappings */
 	.static_wndw_map = headc37d_static_wndw_map,
-	.display_id = headc57d_display_id,
 };

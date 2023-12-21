@@ -164,6 +164,16 @@ static void xhci_histb_host_disable(struct xhci_hcd_histb *histb)
 	clk_disable_unprepare(histb->bus_clk);
 }
 
+static void xhci_histb_quirks(struct device *dev, struct xhci_hcd *xhci)
+{
+	/*
+	 * As of now platform drivers don't provide MSI support so we ensure
+	 * here that the generic code does not try to make a pci_dev from our
+	 * dev struct in order to setup MSI
+	 */
+	xhci->quirks |= XHCI_PLAT;
+}
+
 /* called during probe() after chip reset completes */
 static int xhci_histb_setup(struct usb_hcd *hcd)
 {
@@ -176,7 +186,7 @@ static int xhci_histb_setup(struct usb_hcd *hcd)
 			return ret;
 	}
 
-	return xhci_gen_setup(hcd, NULL);
+	return xhci_gen_setup(hcd, xhci_histb_quirks);
 }
 
 static const struct xhci_driver_overrides xhci_histb_overrides __initconst = {
@@ -309,7 +319,7 @@ disable_pm:
 	return ret;
 }
 
-static void xhci_histb_remove(struct platform_device *dev)
+static int xhci_histb_remove(struct platform_device *dev)
 {
 	struct xhci_hcd_histb *histb = platform_get_drvdata(dev);
 	struct usb_hcd *hcd = histb->hcd;
@@ -329,6 +339,8 @@ static void xhci_histb_remove(struct platform_device *dev)
 	usb_put_hcd(hcd);
 	pm_runtime_put_sync(&dev->dev);
 	pm_runtime_disable(&dev->dev);
+
+	return 0;
 }
 
 static int __maybe_unused xhci_histb_suspend(struct device *dev)
@@ -355,7 +367,7 @@ static int __maybe_unused xhci_histb_resume(struct device *dev)
 	if (!device_may_wakeup(dev))
 		xhci_histb_host_enable(histb);
 
-	return xhci_resume(xhci, PMSG_RESUME);
+	return xhci_resume(xhci, 0);
 }
 
 static const struct dev_pm_ops xhci_histb_pm_ops = {
@@ -373,7 +385,7 @@ MODULE_DEVICE_TABLE(of, histb_xhci_of_match);
 
 static struct platform_driver histb_xhci_driver = {
 	.probe	= xhci_histb_probe,
-	.remove_new = xhci_histb_remove,
+	.remove	= xhci_histb_remove,
 	.driver	= {
 		.name = "xhci-histb",
 		.pm = DEV_PM_OPS,

@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
-generated/bit-length.h
 generated/map-shift.h
 idr.c
 idr-test
@@ -7,5 +6,3 @@ main
 multiorder
 radix-tree.c
 xarray
-maple
-ma_xa_benchmark

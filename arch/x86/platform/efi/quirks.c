@@ -114,14 +114,6 @@ void efi_delete_dummy_variable(void)
 				     EFI_VARIABLE_RUNTIME_ACCESS, 0, NULL);
 }
 
-u64 efivar_reserved_space(void)
-{
-	if (efi_no_storage_paranoia)
-		return 0;
-	return EFI_MIN_RESERVE;
-}
-EXPORT_SYMBOL_GPL(efivar_reserved_space);
-
 /*
  * In the nonblocking case we do not attempt to perform garbage
  * collection if we do not have enough free space. Rather, we do the
@@ -450,25 +442,13 @@ void __init efi_free_boot_services(void)
 		 * 1.4.4 with SGX enabled booting Linux via Fedora 24's
 		 * grub2-efi on a hard disk.  (And no, I don't know why
 		 * this happened, but Linux should still try to boot rather
-		 * panicking early.)
+		 * panicing early.)
 		 */
 		rm_size = real_mode_size_needed();
 		if (rm_size && (start + rm_size) < (1<<20) && size >= rm_size) {
 			set_real_mode_mem(start);
 			start += rm_size;
 			size -= rm_size;
-		}
-
-		/*
-		 * Don't free memory under 1M for two reasons:
-		 * - BIOS might clobber it
-		 * - Crash kernel needs it to be reserved
-		 */
-		if (start + size < SZ_1M)
-			continue;
-		if (start < SZ_1M) {
-			size -= (SZ_1M - start);
-			start = SZ_1M;
 		}
 
 		memblock_free_late(start, size);
@@ -708,25 +688,15 @@ int efi_capsule_setup_info(struct capsule_info *cap_info, void *kbuff,
  * @return: Returns, if the page fault is not handled. This function
  * will never return if the page fault is handled successfully.
  */
-void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
+void efi_recover_from_page_fault(unsigned long phys_addr)
 {
 	if (!IS_ENABLED(CONFIG_X86_64))
 		return;
 
 	/*
-	 * If we get an interrupt/NMI while processing an EFI runtime service
-	 * then this is a regular OOPS, not an EFI failure.
-	 */
-	if (in_interrupt())
-		return;
-
-	/*
 	 * Make sure that an efi runtime service caused the page fault.
-	 * READ_ONCE() because we might be OOPSing in a different thread,
-	 * and we don't want to trip KTSAN while trying to OOPS.
 	 */
-	if (READ_ONCE(efi_rts_work.efi_rts_id) == EFI_NONE ||
-	    current_work() != &efi_rts_work.work)
+	if (efi_rts_work.efi_rts_id == EFI_NONE)
 		return;
 
 	/*
@@ -747,7 +717,7 @@ void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
 	 * Buggy efi_reset_system() is handled differently from other EFI
 	 * Runtime Services as it doesn't use efi_rts_wq. Although,
 	 * native_machine_emergency_restart() says that machine_real_restart()
-	 * could fail, it's better not to complicate this fault handler
+	 * could fail, it's better not to compilcate this fault handler
 	 * because this case occurs *very* rarely and hence could be improved
 	 * on a need by basis.
 	 */
@@ -778,4 +748,6 @@ void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
 		set_current_state(TASK_IDLE);
 		schedule();
 	}
+
+	return;
 }

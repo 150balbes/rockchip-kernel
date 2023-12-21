@@ -26,7 +26,6 @@ struct symsrc {
 	GElf_Shdr	     opdshdr;
 
 	Elf_Scn		     *symtab;
-	size_t		     symtab_idx;
 	GElf_Shdr	     symshdr;
 
 	Elf_Scn		     *dynsym;

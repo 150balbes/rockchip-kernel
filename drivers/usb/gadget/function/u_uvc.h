@@ -18,19 +18,24 @@
 #include <linux/usb/video.h>
 
 #define fi_to_f_uvc_opts(f)	container_of(f, struct f_uvc_opts, func_inst)
+DECLARE_UVC_EXTENSION_UNIT_DESCRIPTOR(1, 1);
 
 struct f_uvc_opts {
 	struct usb_function_instance			func_inst;
+	bool						streaming_bulk;
 	unsigned int					streaming_interval;
 	unsigned int					streaming_maxpacket;
 	unsigned int					streaming_maxburst;
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	bool						device_name_allocated;
+	const char					*device_name;
+	unsigned int					uvc_num_request;
+	unsigned int					uvc_zero_copy;
+#endif
 
 	unsigned int					control_interface;
 	unsigned int					streaming_interface;
 	char						function_name[32];
-	unsigned int					last_unit_id;
-
-	bool						enable_interrupt_ep;
 
 	/*
 	 * Control descriptors array pointers for full-/high-speed and
@@ -55,6 +60,8 @@ struct f_uvc_opts {
 	struct uvc_camera_terminal_descriptor		uvc_camera_terminal;
 	struct uvc_processing_unit_descriptor		uvc_processing;
 	struct uvc_output_terminal_descriptor		uvc_output_terminal;
+	struct UVC_EXTENSION_UNIT_DESCRIPTOR(1, 1)	uvc_extension;
+	struct uvc_color_matching_descriptor		uvc_color_matching;
 
 	/*
 	 * Control descriptors pointers arrays for full-/high-speed and
@@ -63,14 +70,8 @@ struct f_uvc_opts {
 	 * descriptors. Used by configfs only, must not be touched by legacy
 	 * gadgets.
 	 */
-	struct uvc_descriptor_header			*uvc_fs_control_cls[5];
-	struct uvc_descriptor_header			*uvc_ss_control_cls[5];
-
-	/*
-	 * Control descriptors for extension units. There could be any number
-	 * of these, including none at all.
-	 */
-	struct list_head				extension_units;
+	struct uvc_descriptor_header			*uvc_fs_control_cls[6];
+	struct uvc_descriptor_header			*uvc_ss_control_cls[6];
 
 	/*
 	 * Streaming descriptors for full-speed, high-speed and super-speed.
@@ -83,14 +84,6 @@ struct f_uvc_opts {
 	struct uvc_descriptor_header			**uvc_ss_streaming_cls;
 
 	/*
-	 * Indexes into the function's string descriptors allowing users to set
-	 * custom descriptions rather than the hard-coded defaults.
-	 */
-	u8						iad_index;
-	u8						vs0_index;
-	u8						vs1_index;
-
-	/*
 	 * Read/write access to configfs attributes is handled by configfs.
 	 *
 	 * This lock protects the descriptors from concurrent access by
@@ -98,6 +91,7 @@ struct f_uvc_opts {
 	 */
 	struct mutex			lock;
 	int				refcnt;
+	int				pm_qos_latency;
 };
 
 #endif /* U_UVC_H */

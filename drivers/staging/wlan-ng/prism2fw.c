@@ -8,6 +8,27 @@
  *
  * linux-wlan
  *
+ *   The contents of this file are subject to the Mozilla Public
+ *   License Version 1.1 (the "License"); you may not use this file
+ *   except in compliance with the License. You may obtain a copy of
+ *   the License at http://www.mozilla.org/MPL/
+ *
+ *   Software distributed under the License is distributed on an "AS
+ *   IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+ *   implied. See the License for the specific language governing
+ *   rights and limitations under the License.
+ *
+ *   Alternatively, the contents of this file may be used under the
+ *   terms of the GNU Public License version 2 (the "GPL"), in which
+ *   case the provisions of the GPL are applicable instead of the
+ *   above.  If you wish to allow the use of your version of this file
+ *   only under the terms of the GPL and not to allow others to use
+ *   your version of this file under the MPL, indicate your decision
+ *   by deleting the provisions above and replace them with the notice
+ *   and other provisions required by the GPL.  If you do not delete
+ *   the provisions above, a recipient may use your version of this
+ *   file under either the MPL or the GPL.
+ *
  * --------------------------------------------------------------------
  *
  * Inquiries regarding the linux-wlan Open Source project can be
@@ -275,7 +296,7 @@ static int prism2_fwapply(const struct ihex_binrec *rfptr,
 	memset(&getmsg, 0, sizeof(getmsg));
 	getmsg.msgcode = DIDMSG_DOT11REQ_MIBGET;
 	getmsg.msglen = sizeof(getmsg);
-	strscpy(getmsg.devname, wlandev->name, sizeof(getmsg.devname));
+	strcpy(getmsg.devname, wlandev->name);
 
 	getmsg.mibattribute.did = DIDMSG_DOT11REQ_MIBGET_MIBATTRIBUTE;
 	getmsg.mibattribute.status = P80211ENUM_msgitem_status_data_ok;
@@ -668,7 +689,6 @@ static int plugimage(struct imgchunk *fchunk, unsigned int nfchunks,
 	for (i = 0; i < ns3plug; i++) {
 		pstart = s3plug[i].addr;
 		pend = s3plug[i].addr + s3plug[i].len;
-		j = -1;
 		/* find the matching PDR (or filename) */
 		if (s3plug[i].itemcode != 0xffffffffUL) { /* not filename */
 			for (j = 0; j < pda->nrec; j++) {
@@ -676,6 +696,8 @@ static int plugimage(struct imgchunk *fchunk, unsigned int nfchunks,
 				    le16_to_cpu(pda->rec[j]->code))
 					break;
 			}
+		} else {
+			j = -1;
 		}
 		if (j >= pda->nrec && j != -1) { /*  if no matching PDR, fail */
 			pr_warn("warning: Failed to find PDR for plugrec 0x%04x.\n",
@@ -764,7 +786,7 @@ static int read_cardpda(struct pda *pda, struct wlandevice *wlandev)
 	/* set up the msg */
 	msg->msgcode = DIDMSG_P2REQ_READPDA;
 	msg->msglen = sizeof(msg);
-	strscpy(msg->devname, wlandev->name, sizeof(msg->devname));
+	strcpy(msg->devname, wlandev->name);
 	msg->pda.did = DIDMSG_P2REQ_READPDA_PDA;
 	msg->pda.len = HFA384x_PDA_LEN_MAX;
 	msg->pda.status = P80211ENUM_msgitem_status_no_value;
@@ -986,15 +1008,16 @@ static int writeimage(struct wlandevice *wlandev, struct imgchunk *fchunk,
 	rstmsg = kzalloc(sizeof(*rstmsg), GFP_KERNEL);
 	rwrmsg = kzalloc(sizeof(*rwrmsg), GFP_KERNEL);
 	if (!rstmsg || !rwrmsg) {
+		kfree(rstmsg);
+		kfree(rwrmsg);
 		netdev_err(wlandev->netdev,
 			   "%s: no memory for firmware download, aborting download\n",
 			   __func__);
-		result = -ENOMEM;
-		goto free_result;
+		return -ENOMEM;
 	}
 
 	/* Initialize the messages */
-	strscpy(rstmsg->devname, wlandev->name, sizeof(rstmsg->devname));
+	strcpy(rstmsg->devname, wlandev->name);
 	rstmsg->msgcode = DIDMSG_P2REQ_RAMDL_STATE;
 	rstmsg->msglen = sizeof(*rstmsg);
 	rstmsg->enable.did = DIDMSG_P2REQ_RAMDL_STATE_ENABLE;
@@ -1007,7 +1030,7 @@ static int writeimage(struct wlandevice *wlandev, struct imgchunk *fchunk,
 	rstmsg->exeaddr.len = sizeof(u32);
 	rstmsg->resultcode.len = sizeof(u32);
 
-	strscpy(rwrmsg->devname, wlandev->name, sizeof(rwrmsg->devname));
+	strcpy(rwrmsg->devname, wlandev->name);
 	rwrmsg->msgcode = DIDMSG_P2REQ_RAMDL_WRITE;
 	rwrmsg->msglen = sizeof(*rwrmsg);
 	rwrmsg->addr.did = DIDMSG_P2REQ_RAMDL_WRITE_ADDR;

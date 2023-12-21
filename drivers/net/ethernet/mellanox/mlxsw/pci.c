@@ -103,8 +103,6 @@ struct mlxsw_pci {
 	struct pci_dev *pdev;
 	u8 __iomem *hw_addr;
 	u64 free_running_clock_offset;
-	u64 utc_sec_offset;
-	u64 utc_nsec_offset;
 	struct mlxsw_pci_queue_type_group queues[MLXSW_PCI_QUEUE_TYPE_COUNT];
 	u32 doorbell_offset;
 	struct mlxsw_core *core;
@@ -329,8 +327,8 @@ static int mlxsw_pci_wqe_frag_map(struct mlxsw_pci *mlxsw_pci, char *wqe,
 	struct pci_dev *pdev = mlxsw_pci->pdev;
 	dma_addr_t mapaddr;
 
-	mapaddr = dma_map_single(&pdev->dev, frag_data, frag_len, direction);
-	if (unlikely(dma_mapping_error(&pdev->dev, mapaddr))) {
+	mapaddr = pci_map_single(pdev, frag_data, frag_len, direction);
+	if (unlikely(pci_dma_mapping_error(pdev, mapaddr))) {
 		dev_err_ratelimited(&pdev->dev, "failed to dma map tx frag\n");
 		return -EIO;
 	}
@@ -348,7 +346,7 @@ static void mlxsw_pci_wqe_frag_unmap(struct mlxsw_pci *mlxsw_pci, char *wqe,
 
 	if (!frag_len)
 		return;
-	dma_unmap_single(&pdev->dev, mapaddr, frag_len, direction);
+	pci_unmap_single(pdev, mapaddr, frag_len, direction);
 }
 
 static int mlxsw_pci_rdq_skb_alloc(struct mlxsw_pci *mlxsw_pci,
@@ -458,9 +456,9 @@ static void mlxsw_pci_cq_pre_init(struct mlxsw_pci *mlxsw_pci,
 {
 	q->u.cq.v = mlxsw_pci->max_cqe_ver;
 
+	/* For SDQ it is pointless to use CQEv2, so use CQEv1 instead */
 	if (q->u.cq.v == MLXSW_PCI_CQE_V2 &&
-	    q->num < mlxsw_pci->num_sdq_cqs &&
-	    !mlxsw_core_sdq_supports_cqe_v2(mlxsw_pci->core))
+	    q->num < mlxsw_pci->num_sdq_cqs)
 		q->u.cq.v = MLXSW_PCI_CQE_V1;
 }
 
@@ -507,32 +505,9 @@ static void mlxsw_pci_cq_fini(struct mlxsw_pci *mlxsw_pci,
 	mlxsw_cmd_hw2sw_cq(mlxsw_pci->core, q->num);
 }
 
-static unsigned int mlxsw_pci_read32_off(struct mlxsw_pci *mlxsw_pci,
-					 ptrdiff_t off)
-{
-	return ioread32be(mlxsw_pci->hw_addr + off);
-}
-
-static void mlxsw_pci_skb_cb_ts_set(struct mlxsw_pci *mlxsw_pci,
-				    struct sk_buff *skb,
-				    enum mlxsw_pci_cqe_v cqe_v, char *cqe)
-{
-	if (cqe_v != MLXSW_PCI_CQE_V2)
-		return;
-
-	if (mlxsw_pci_cqe2_time_stamp_type_get(cqe) !=
-	    MLXSW_PCI_CQE_TIME_STAMP_TYPE_UTC)
-		return;
-
-	mlxsw_skb_cb(skb)->cqe_ts.sec = mlxsw_pci_cqe2_time_stamp_sec_get(cqe);
-	mlxsw_skb_cb(skb)->cqe_ts.nsec =
-		mlxsw_pci_cqe2_time_stamp_nsec_get(cqe);
-}
-
 static void mlxsw_pci_cqe_sdq_handle(struct mlxsw_pci *mlxsw_pci,
 				     struct mlxsw_pci_queue *q,
 				     u16 consumer_counter_limit,
-				     enum mlxsw_pci_cqe_v cqe_v,
 				     char *cqe)
 {
 	struct pci_dev *pdev = mlxsw_pci->pdev;
@@ -552,7 +527,6 @@ static void mlxsw_pci_cqe_sdq_handle(struct mlxsw_pci *mlxsw_pci,
 
 	if (unlikely(!tx_info.is_emad &&
 		     skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP)) {
-		mlxsw_pci_skb_cb_ts_set(mlxsw_pci, skb, cqe_v, cqe);
 		mlxsw_core_ptp_transmitted(mlxsw_pci->core, skb,
 					   tx_info.local_port);
 		skb = NULL;
@@ -565,55 +539,6 @@ static void mlxsw_pci_cqe_sdq_handle(struct mlxsw_pci *mlxsw_pci,
 	if (q->consumer_counter++ != consumer_counter_limit)
 		dev_dbg_ratelimited(&pdev->dev, "Consumer counter does not match limit in SDQ\n");
 	spin_unlock(&q->lock);
-}
-
-static void mlxsw_pci_cqe_rdq_md_tx_port_init(struct sk_buff *skb,
-					      const char *cqe)
-{
-	struct mlxsw_skb_cb *cb = mlxsw_skb_cb(skb);
-
-	if (mlxsw_pci_cqe2_tx_lag_get(cqe)) {
-		cb->rx_md_info.tx_port_is_lag = true;
-		cb->rx_md_info.tx_lag_id = mlxsw_pci_cqe2_tx_lag_id_get(cqe);
-		cb->rx_md_info.tx_lag_port_index =
-			mlxsw_pci_cqe2_tx_lag_subport_get(cqe);
-	} else {
-		cb->rx_md_info.tx_port_is_lag = false;
-		cb->rx_md_info.tx_sys_port =
-			mlxsw_pci_cqe2_tx_system_port_get(cqe);
-	}
-
-	if (cb->rx_md_info.tx_sys_port != MLXSW_PCI_CQE2_TX_PORT_MULTI_PORT &&
-	    cb->rx_md_info.tx_sys_port != MLXSW_PCI_CQE2_TX_PORT_INVALID)
-		cb->rx_md_info.tx_port_valid = 1;
-	else
-		cb->rx_md_info.tx_port_valid = 0;
-}
-
-static void mlxsw_pci_cqe_rdq_md_init(struct sk_buff *skb, const char *cqe)
-{
-	struct mlxsw_skb_cb *cb = mlxsw_skb_cb(skb);
-
-	cb->rx_md_info.tx_congestion = mlxsw_pci_cqe2_mirror_cong_get(cqe);
-	if (cb->rx_md_info.tx_congestion != MLXSW_PCI_CQE2_MIRROR_CONG_INVALID)
-		cb->rx_md_info.tx_congestion_valid = 1;
-	else
-		cb->rx_md_info.tx_congestion_valid = 0;
-	cb->rx_md_info.tx_congestion <<= MLXSW_PCI_CQE2_MIRROR_CONG_SHIFT;
-
-	cb->rx_md_info.latency = mlxsw_pci_cqe2_mirror_latency_get(cqe);
-	if (cb->rx_md_info.latency != MLXSW_PCI_CQE2_MIRROR_LATENCY_INVALID)
-		cb->rx_md_info.latency_valid = 1;
-	else
-		cb->rx_md_info.latency_valid = 0;
-
-	cb->rx_md_info.tx_tc = mlxsw_pci_cqe2_mirror_tclass_get(cqe);
-	if (cb->rx_md_info.tx_tc != MLXSW_PCI_CQE2_MIRROR_TCLASS_INVALID)
-		cb->rx_md_info.tx_tc_valid = 1;
-	else
-		cb->rx_md_info.tx_tc_valid = 0;
-
-	mlxsw_pci_cqe_rdq_md_tx_port_init(skb, cqe);
 }
 
 static void mlxsw_pci_cqe_rdq_handle(struct mlxsw_pci *mlxsw_pci,
@@ -662,18 +587,12 @@ static void mlxsw_pci_cqe_rdq_handle(struct mlxsw_pci *mlxsw_pci,
 
 		if (mlxsw_pci->max_cqe_ver >= MLXSW_PCI_CQE_V2)
 			cookie_index = mlxsw_pci_cqe2_user_def_val_orig_pkt_len_get(cqe);
-		mlxsw_skb_cb(skb)->rx_md_info.cookie_index = cookie_index;
+		mlxsw_skb_cb(skb)->cookie_index = cookie_index;
 	} else if (rx_info.trap_id >= MLXSW_TRAP_ID_MIRROR_SESSION0 &&
 		   rx_info.trap_id <= MLXSW_TRAP_ID_MIRROR_SESSION7 &&
 		   mlxsw_pci->max_cqe_ver >= MLXSW_PCI_CQE_V2) {
 		rx_info.mirror_reason = mlxsw_pci_cqe2_mirror_reason_get(cqe);
-		mlxsw_pci_cqe_rdq_md_init(skb, cqe);
-	} else if (rx_info.trap_id == MLXSW_TRAP_ID_PKT_SAMPLE &&
-		   mlxsw_pci->max_cqe_ver >= MLXSW_PCI_CQE_V2) {
-		mlxsw_pci_cqe_rdq_md_tx_port_init(skb, cqe);
 	}
-
-	mlxsw_pci_skb_cb_ts_set(mlxsw_pci, skb, cqe_v, cqe);
 
 	byte_count = mlxsw_pci_cqe_byte_count_get(cqe);
 	if (mlxsw_pci_cqe_crc_get(cqe_v, cqe))
@@ -726,7 +645,7 @@ static void mlxsw_pci_cq_tasklet(struct tasklet_struct *t)
 
 			sdq = mlxsw_pci_sdq_get(mlxsw_pci, dqn);
 			mlxsw_pci_cqe_sdq_handle(mlxsw_pci, sdq,
-						 wqe_counter, q->u.cq.v, ncqe);
+						 wqe_counter, ncqe);
 			q->u.cq.comp_sdq_count++;
 		} else {
 			struct mlxsw_pci_queue *rdq;
@@ -942,9 +861,9 @@ static int mlxsw_pci_queue_init(struct mlxsw_pci *mlxsw_pci, char *mbox,
 		tasklet_setup(&q->tasklet, q_ops->tasklet);
 
 	mem_item->size = MLXSW_PCI_AQ_SIZE;
-	mem_item->buf = dma_alloc_coherent(&mlxsw_pci->pdev->dev,
-					   mem_item->size, &mem_item->mapaddr,
-					   GFP_KERNEL);
+	mem_item->buf = pci_alloc_consistent(mlxsw_pci->pdev,
+					     mem_item->size,
+					     &mem_item->mapaddr);
 	if (!mem_item->buf)
 		return -ENOMEM;
 
@@ -974,8 +893,8 @@ static int mlxsw_pci_queue_init(struct mlxsw_pci *mlxsw_pci, char *mbox,
 err_q_ops_init:
 	kfree(q->elem_info);
 err_elem_info_alloc:
-	dma_free_coherent(&mlxsw_pci->pdev->dev, mem_item->size,
-			  mem_item->buf, mem_item->mapaddr);
+	pci_free_consistent(mlxsw_pci->pdev, mem_item->size,
+			    mem_item->buf, mem_item->mapaddr);
 	return err;
 }
 
@@ -987,8 +906,8 @@ static void mlxsw_pci_queue_fini(struct mlxsw_pci *mlxsw_pci,
 
 	q_ops->fini(mlxsw_pci, q);
 	kfree(q->elem_info);
-	dma_free_coherent(&mlxsw_pci->pdev->dev, mem_item->size,
-			  mem_item->buf, mem_item->mapaddr);
+	pci_free_consistent(mlxsw_pci->pdev, mem_item->size,
+			    mem_item->buf, mem_item->mapaddr);
 }
 
 static int mlxsw_pci_queue_group_init(struct mlxsw_pci *mlxsw_pci, char *mbox,
@@ -1187,11 +1106,6 @@ static int mlxsw_pci_config_profile(struct mlxsw_pci *mlxsw_pci, char *mbox,
 		mlxsw_cmd_mbox_config_profile_max_vepa_channels_set(
 			mbox, profile->max_vepa_channels);
 	}
-	if (profile->used_max_lag) {
-		mlxsw_cmd_mbox_config_profile_set_max_lag_set(mbox, 1);
-		mlxsw_cmd_mbox_config_profile_max_lag_set(mbox,
-							  profile->max_lag);
-	}
 	if (profile->used_max_mid) {
 		mlxsw_cmd_mbox_config_profile_set_max_mid_set(
 			mbox, 1);
@@ -1268,11 +1182,6 @@ static int mlxsw_pci_config_profile(struct mlxsw_pci *mlxsw_pci, char *mbox,
 		mlxsw_cmd_mbox_config_profile_adaptive_routing_group_cap_set(
 			mbox, profile->adaptive_routing_group_cap);
 	}
-	if (profile->used_ubridge) {
-		mlxsw_cmd_mbox_config_profile_set_ubridge_set(mbox, 1);
-		mlxsw_cmd_mbox_config_profile_ubridge_set(mbox,
-							  profile->ubridge);
-	}
 	if (profile->used_kvd_sizes && MLXSW_RES_VALID(res, KVD_SIZE)) {
 		err = mlxsw_pci_profile_get_kvd_sizes(mlxsw_pci, profile, res);
 		if (err)
@@ -1298,13 +1207,6 @@ static int mlxsw_pci_config_profile(struct mlxsw_pci *mlxsw_pci, char *mbox,
 	if (mlxsw_pci->max_cqe_ver > MLXSW_PCI_CQE_V0) {
 		mlxsw_cmd_mbox_config_profile_set_cqe_version_set(mbox, 1);
 		mlxsw_cmd_mbox_config_profile_cqe_version_set(mbox, 1);
-	}
-
-	if (profile->used_cqe_time_stamp_type) {
-		mlxsw_cmd_mbox_config_profile_set_cqe_time_stamp_type_set(mbox,
-									  1);
-		mlxsw_cmd_mbox_config_profile_cqe_time_stamp_type_set(mbox,
-					profile->cqe_time_stamp_type);
 	}
 
 	return mlxsw_cmd_config_profile_set(mlxsw_pci->core, mbox);
@@ -1343,9 +1245,9 @@ static int mlxsw_pci_fw_area_init(struct mlxsw_pci *mlxsw_pci, char *mbox,
 		mem_item = &mlxsw_pci->fw_area.items[i];
 
 		mem_item->size = MLXSW_PCI_PAGE_SIZE;
-		mem_item->buf = dma_alloc_coherent(&mlxsw_pci->pdev->dev,
-						   mem_item->size,
-						   &mem_item->mapaddr, GFP_KERNEL);
+		mem_item->buf = pci_alloc_consistent(mlxsw_pci->pdev,
+						     mem_item->size,
+						     &mem_item->mapaddr);
 		if (!mem_item->buf) {
 			err = -ENOMEM;
 			goto err_alloc;
@@ -1374,8 +1276,8 @@ err_alloc:
 	for (i--; i >= 0; i--) {
 		mem_item = &mlxsw_pci->fw_area.items[i];
 
-		dma_free_coherent(&mlxsw_pci->pdev->dev, mem_item->size,
-				  mem_item->buf, mem_item->mapaddr);
+		pci_free_consistent(mlxsw_pci->pdev, mem_item->size,
+				    mem_item->buf, mem_item->mapaddr);
 	}
 	kfree(mlxsw_pci->fw_area.items);
 	return err;
@@ -1391,8 +1293,8 @@ static void mlxsw_pci_fw_area_fini(struct mlxsw_pci *mlxsw_pci)
 	for (i = 0; i < mlxsw_pci->fw_area.count; i++) {
 		mem_item = &mlxsw_pci->fw_area.items[i];
 
-		dma_free_coherent(&mlxsw_pci->pdev->dev, mem_item->size,
-				  mem_item->buf, mem_item->mapaddr);
+		pci_free_consistent(mlxsw_pci->pdev, mem_item->size,
+				    mem_item->buf, mem_item->mapaddr);
 	}
 	kfree(mlxsw_pci->fw_area.items);
 }
@@ -1417,8 +1319,8 @@ static int mlxsw_pci_mbox_alloc(struct mlxsw_pci *mlxsw_pci,
 	int err = 0;
 
 	mbox->size = MLXSW_CMD_MBOX_SIZE;
-	mbox->buf = dma_alloc_coherent(&pdev->dev, MLXSW_CMD_MBOX_SIZE,
-				       &mbox->mapaddr, GFP_KERNEL);
+	mbox->buf = pci_alloc_consistent(pdev, MLXSW_CMD_MBOX_SIZE,
+					 &mbox->mapaddr);
 	if (!mbox->buf) {
 		dev_err(&pdev->dev, "Failed allocating memory for mailbox\n");
 		err = -ENOMEM;
@@ -1432,8 +1334,8 @@ static void mlxsw_pci_mbox_free(struct mlxsw_pci *mlxsw_pci,
 {
 	struct pci_dev *pdev = mlxsw_pci->pdev;
 
-	dma_free_coherent(&pdev->dev, MLXSW_CMD_MBOX_SIZE, mbox->buf,
-			  mbox->mapaddr);
+	pci_free_consistent(pdev, MLXSW_CMD_MBOX_SIZE, mbox->buf,
+			    mbox->mapaddr);
 }
 
 static int mlxsw_pci_sys_ready_wait(struct mlxsw_pci *mlxsw_pci,
@@ -1442,6 +1344,11 @@ static int mlxsw_pci_sys_ready_wait(struct mlxsw_pci *mlxsw_pci,
 {
 	unsigned long end;
 	u32 val;
+
+	if (id->device == PCI_DEVICE_ID_MELLANOX_SWITCHX2) {
+		msleep(MLXSW_PCI_SW_RESET_TIMEOUT_MSECS);
+		return 0;
+	}
 
 	/* We must wait for the HW to become responsive. */
 	msleep(MLXSW_PCI_SW_RESET_WAIT_MSECS);
@@ -1564,24 +1471,6 @@ static int mlxsw_pci_init(void *bus_priv, struct mlxsw_core *mlxsw_core,
 	mlxsw_pci->free_running_clock_offset =
 		mlxsw_cmd_mbox_query_fw_free_running_clock_offset_get(mbox);
 
-	if (mlxsw_cmd_mbox_query_fw_utc_sec_bar_get(mbox) != 0) {
-		dev_err(&pdev->dev, "Unsupported UTC sec BAR queried from hw\n");
-		err = -EINVAL;
-		goto err_utc_sec_bar;
-	}
-
-	mlxsw_pci->utc_sec_offset =
-		mlxsw_cmd_mbox_query_fw_utc_sec_offset_get(mbox);
-
-	if (mlxsw_cmd_mbox_query_fw_utc_nsec_bar_get(mbox) != 0) {
-		dev_err(&pdev->dev, "Unsupported UTC nsec BAR queried from hw\n");
-		err = -EINVAL;
-		goto err_utc_nsec_bar;
-	}
-
-	mlxsw_pci->utc_nsec_offset =
-		mlxsw_cmd_mbox_query_fw_utc_nsec_offset_get(mbox);
-
 	num_pages = mlxsw_cmd_mbox_query_fw_fw_pages_get(mbox);
 	err = mlxsw_pci_fw_area_init(mlxsw_pci, mbox, num_pages);
 	if (err)
@@ -1614,14 +1503,6 @@ static int mlxsw_pci_init(void *bus_priv, struct mlxsw_core *mlxsw_core,
 	if (err)
 		goto err_config_profile;
 
-	/* Some resources depend on unified bridge model, which is configured
-	 * as part of config_profile. Query the resources again to get correct
-	 * values.
-	 */
-	err = mlxsw_core_resources_query(mlxsw_core, mbox, res);
-	if (err)
-		goto err_requery_resources;
-
 	err = mlxsw_pci_aqs_init(mlxsw_pci, mbox);
 	if (err)
 		goto err_aqs_init;
@@ -1639,15 +1520,12 @@ static int mlxsw_pci_init(void *bus_priv, struct mlxsw_core *mlxsw_core,
 err_request_eq_irq:
 	mlxsw_pci_aqs_fini(mlxsw_pci);
 err_aqs_init:
-err_requery_resources:
 err_config_profile:
 err_cqe_v_check:
 err_query_resources:
 err_boardinfo:
 	mlxsw_pci_fw_area_fini(mlxsw_pci);
 err_fw_area_init:
-err_utc_nsec_bar:
-err_utc_sec_bar:
 err_fr_rn_clk_bar:
 err_doorbell_page_bar:
 err_iface_rev:
@@ -1862,33 +1740,19 @@ static int mlxsw_pci_cmd_exec(void *bus_priv, u16 opcode, u8 opcode_mod,
 static u32 mlxsw_pci_read_frc_h(void *bus_priv)
 {
 	struct mlxsw_pci *mlxsw_pci = bus_priv;
-	u64 frc_offset_h;
+	u64 frc_offset;
 
-	frc_offset_h = mlxsw_pci->free_running_clock_offset;
-	return mlxsw_pci_read32_off(mlxsw_pci, frc_offset_h);
+	frc_offset = mlxsw_pci->free_running_clock_offset;
+	return mlxsw_pci_read32(mlxsw_pci, FREE_RUNNING_CLOCK_H(frc_offset));
 }
 
 static u32 mlxsw_pci_read_frc_l(void *bus_priv)
 {
 	struct mlxsw_pci *mlxsw_pci = bus_priv;
-	u64 frc_offset_l;
+	u64 frc_offset;
 
-	frc_offset_l = mlxsw_pci->free_running_clock_offset + 4;
-	return mlxsw_pci_read32_off(mlxsw_pci, frc_offset_l);
-}
-
-static u32 mlxsw_pci_read_utc_sec(void *bus_priv)
-{
-	struct mlxsw_pci *mlxsw_pci = bus_priv;
-
-	return mlxsw_pci_read32_off(mlxsw_pci, mlxsw_pci->utc_sec_offset);
-}
-
-static u32 mlxsw_pci_read_utc_nsec(void *bus_priv)
-{
-	struct mlxsw_pci *mlxsw_pci = bus_priv;
-
-	return mlxsw_pci_read32_off(mlxsw_pci, mlxsw_pci->utc_nsec_offset);
+	frc_offset = mlxsw_pci->free_running_clock_offset;
+	return mlxsw_pci_read32(mlxsw_pci, FREE_RUNNING_CLOCK_L(frc_offset));
 }
 
 static const struct mlxsw_bus mlxsw_pci_bus = {
@@ -1900,8 +1764,6 @@ static const struct mlxsw_bus mlxsw_pci_bus = {
 	.cmd_exec		= mlxsw_pci_cmd_exec,
 	.read_frc_h		= mlxsw_pci_read_frc_h,
 	.read_frc_l		= mlxsw_pci_read_frc_l,
-	.read_utc_sec		= mlxsw_pci_read_utc_sec,
-	.read_utc_nsec		= mlxsw_pci_read_utc_nsec,
 	.features		= MLXSW_BUS_F_TXRX | MLXSW_BUS_F_RESET,
 };
 
@@ -1938,7 +1800,7 @@ static void mlxsw_pci_cmd_fini(struct mlxsw_pci *mlxsw_pci)
 
 static int mlxsw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	const char *driver_name = dev_driver_string(&pdev->dev);
+	const char *driver_name = pdev->driver->name;
 	struct mlxsw_pci *mlxsw_pci;
 	int err;
 
@@ -1958,11 +1820,17 @@ static int mlxsw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_pci_request_regions;
 	}
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (err) {
-		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(64));
+	if (!err) {
+		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
 		if (err) {
-			dev_err(&pdev->dev, "dma_set_mask failed\n");
+			dev_err(&pdev->dev, "pci_set_consistent_dma_mask failed\n");
+			goto err_pci_set_dma_mask;
+		}
+	} else {
+		err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		if (err) {
+			dev_err(&pdev->dev, "pci_set_dma_mask failed\n");
 			goto err_pci_set_dma_mask;
 		}
 	}
@@ -1992,7 +1860,7 @@ static int mlxsw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mlxsw_pci->bus_info.device_kind = driver_name;
 	mlxsw_pci->bus_info.device_name = pci_name(mlxsw_pci->pdev);
 	mlxsw_pci->bus_info.dev = &pdev->dev;
-	mlxsw_pci->bus_info.read_clock_capable = true;
+	mlxsw_pci->bus_info.read_frc_capable = true;
 	mlxsw_pci->id = id;
 
 	err = mlxsw_core_bus_device_register(&mlxsw_pci->bus_info,

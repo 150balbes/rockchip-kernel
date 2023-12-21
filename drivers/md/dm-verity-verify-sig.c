@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2019 Microsoft Corporation.
  *
@@ -119,13 +119,8 @@ int verity_verify_root_hash(const void *root_hash, size_t root_hash_len,
 	}
 
 	ret = verify_pkcs7_signature(root_hash, root_hash_len, sig_data,
-				sig_len,
-#ifdef CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG_SECONDARY_KEYRING
-				VERIFY_USE_SECONDARY_KEYRING,
-#else
-				NULL,
-#endif
-				VERIFYING_UNSPECIFIED_SIGNATURE, NULL, NULL);
+				sig_len, NULL, VERIFYING_UNSPECIFIED_SIGNATURE,
+				NULL, NULL);
 
 	return ret;
 }

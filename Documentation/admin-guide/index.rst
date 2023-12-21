@@ -19,7 +19,6 @@ etc.
    sysctl/index
 
    abi
-   features
 
 This section describes CPU vulnerabilities and their mitigations.
 
@@ -34,9 +33,8 @@ problems and bugs in particular.
 .. toctree::
    :maxdepth: 1
 
-   reporting-issues
-   reporting-regressions
-   quickly-build-trimmed-linux
+   reporting-bugs
+   security-bugs
    bug-hunting
    bug-bisect
    tainted-kernels
@@ -55,17 +53,6 @@ ABI will be found here.
    :maxdepth: 1
 
    sysfs-rules
-
-This is the beginning of a section with information of interest to
-application developers and system integrators doing analysis of the
-Linux kernel for safety critical applications. Documents supporting
-analysis of kernel interactions with applications, and key kernel
-subsystems expectations will be found here.
-
-.. toctree::
-   :maxdepth: 1
-
-   workload-tracing
 
 The rest of this manual consists of various unordered guides on how to
 configure specific aspects of kernel behavior to your liking.
@@ -94,7 +81,6 @@ configure specific aspects of kernel behavior to your liking.
    edid
    efi-stub
    ext4
-   filesystem-monitoring
    nfs/index
    gpio/index
    highuid
@@ -125,14 +111,13 @@ configure specific aspects of kernel behavior to your liking.
    rtc
    serial-console
    svga
-   syscall-user-dispatch
    sysrq
-   thermal/index
    thunderbolt
    ufs
    unicode
    vga-softcursor
    video-output
+   wimax/index
    xfs
 
 .. only::  subproject and html

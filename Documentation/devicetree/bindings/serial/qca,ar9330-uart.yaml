@@ -10,7 +10,7 @@ maintainers:
   - Oleksij Rempel <o.rempel@pengutronix.de>
 
 allOf:
-  - $ref: serial.yaml#
+  - $ref: /schemas/serial.yaml#
 
 properties:
   compatible:
@@ -35,7 +35,7 @@ required:
   - clocks
   - clock-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

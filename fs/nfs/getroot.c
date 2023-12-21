@@ -67,7 +67,7 @@ static int nfs_superblock_set_dummy_root(struct super_block *sb, struct inode *i
 int nfs_get_root(struct super_block *s, struct fs_context *fc)
 {
 	struct nfs_fs_context *ctx = nfs_fc2context(fc);
-	struct nfs_server *server = NFS_SB(s), *clone_server;
+	struct nfs_server *server = NFS_SB(s);
 	struct nfs_fsinfo fsinfo;
 	struct dentry *root;
 	struct inode *inode;
@@ -80,28 +80,31 @@ int nfs_get_root(struct super_block *s, struct fs_context *fc)
 		goto out;
 
 	/* get the actual root for this mount */
-	fsinfo.fattr = nfs_alloc_fattr_with_label(server);
+	fsinfo.fattr = nfs_alloc_fattr();
 	if (fsinfo.fattr == NULL)
 		goto out_name;
 
+	fsinfo.fattr->label = nfs4_label_alloc(server, GFP_KERNEL);
+	if (IS_ERR(fsinfo.fattr->label))
+		goto out_fattr;
 	error = server->nfs_client->rpc_ops->getroot(server, ctx->mntfh, &fsinfo);
 	if (error < 0) {
 		dprintk("nfs_get_root: getattr error = %d\n", -error);
 		nfs_errorf(fc, "NFS: Couldn't getattr on root");
-		goto out_fattr;
+		goto out_label;
 	}
 
-	inode = nfs_fhget(s, ctx->mntfh, fsinfo.fattr);
+	inode = nfs_fhget(s, ctx->mntfh, fsinfo.fattr, NULL);
 	if (IS_ERR(inode)) {
 		dprintk("nfs_get_root: get root inode failed\n");
 		error = PTR_ERR(inode);
 		nfs_errorf(fc, "NFS: Couldn't get root inode");
-		goto out_fattr;
+		goto out_label;
 	}
 
 	error = nfs_superblock_set_dummy_root(s, inode);
 	if (error != 0)
-		goto out_fattr;
+		goto out_label;
 
 	/* root dentries normally start off anonymous and get spliced in later
 	 * if the dentry tree reaches them; however if the dentry already
@@ -112,7 +115,7 @@ int nfs_get_root(struct super_block *s, struct fs_context *fc)
 		dprintk("nfs_get_root: get root dentry failed\n");
 		error = PTR_ERR(root);
 		nfs_errorf(fc, "NFS: Couldn't get root dentry");
-		goto out_fattr;
+		goto out_label;
 	}
 
 	security_d_instantiate(root, inode);
@@ -124,7 +127,7 @@ int nfs_get_root(struct super_block *s, struct fs_context *fc)
 	}
 	spin_unlock(&root->d_lock);
 	fc->root = root;
-	if (server->caps & NFS_CAP_SECURITY_LABEL)
+	if (NFS_SB(s)->caps & NFS_CAP_SECURITY_LABEL)
 		kflags |= SECURITY_LSM_NATIVE_LABELS;
 	if (ctx->clone_data.sb) {
 		if (d_inode(fc->root)->i_fop != &nfs_dir_operations) {
@@ -134,23 +137,21 @@ int nfs_get_root(struct super_block *s, struct fs_context *fc)
 		/* clone lsm security options from the parent to the new sb */
 		error = security_sb_clone_mnt_opts(ctx->clone_data.sb,
 						   s, kflags, &kflags_out);
-		if (error)
-			goto error_splat_root;
-		clone_server = NFS_SB(ctx->clone_data.sb);
-		server->has_sec_mnt_opts = clone_server->has_sec_mnt_opts;
 	} else {
 		error = security_sb_set_mnt_opts(s, fc->security,
 							kflags, &kflags_out);
 	}
 	if (error)
 		goto error_splat_root;
-	if (server->caps & NFS_CAP_SECURITY_LABEL &&
+	if (NFS_SB(s)->caps & NFS_CAP_SECURITY_LABEL &&
 		!(kflags_out & SECURITY_LSM_NATIVE_LABELS))
-		server->caps &= ~NFS_CAP_SECURITY_LABEL;
+		NFS_SB(s)->caps &= ~NFS_CAP_SECURITY_LABEL;
 
-	nfs_setsecurity(inode, fsinfo.fattr);
+	nfs_setsecurity(inode, fsinfo.fattr, fsinfo.fattr->label);
 	error = 0;
 
+out_label:
+	nfs4_label_free(fsinfo.fattr->label);
 out_fattr:
 	nfs_free_fattr(fsinfo.fattr);
 out_name:
@@ -160,5 +161,5 @@ out:
 error_splat_root:
 	dput(fc->root);
 	fc->root = NULL;
-	goto out_fattr;
+	goto out_label;
 }

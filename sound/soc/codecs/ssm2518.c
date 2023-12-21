@@ -6,13 +6,14 @@
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
  */
 
-#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
+#include <linux/platform_data/ssm2518.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -113,7 +114,7 @@ struct ssm2518 {
 	unsigned int sysclk;
 	const struct snd_pcm_hw_constraint_list *constraints;
 
-	struct gpio_desc *enable_gpio;
+	int enable_gpio;
 };
 
 static const struct reg_default ssm2518_reg_defaults[] = {
@@ -408,8 +409,8 @@ static int ssm2518_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	bool invert_fclk;
 	int ret;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBC_CFC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -482,8 +483,8 @@ static int ssm2518_set_power(struct ssm2518 *ssm2518, bool enable)
 		regcache_mark_dirty(ssm2518->regmap);
 	}
 
-	if (ssm2518->enable_gpio)
-		gpiod_set_value_cansleep(ssm2518->enable_gpio, enable);
+	if (gpio_is_valid(ssm2518->enable_gpio))
+		gpio_set_value(ssm2518->enable_gpio, enable);
 
 	regcache_cache_only(ssm2518->regmap, !enable);
 
@@ -720,6 +721,7 @@ static const struct snd_soc_component_driver ssm2518_component_driver = {
 	.num_dapm_routes	= ARRAY_SIZE(ssm2518_routes),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config ssm2518_regmap_config = {
@@ -733,8 +735,10 @@ static const struct regmap_config ssm2518_regmap_config = {
 	.num_reg_defaults = ARRAY_SIZE(ssm2518_reg_defaults),
 };
 
-static int ssm2518_i2c_probe(struct i2c_client *i2c)
+static int ssm2518_i2c_probe(struct i2c_client *i2c,
+	const struct i2c_device_id *id)
 {
+	struct ssm2518_platform_data *pdata = i2c->dev.platform_data;
 	struct ssm2518 *ssm2518;
 	int ret;
 
@@ -742,14 +746,22 @@ static int ssm2518_i2c_probe(struct i2c_client *i2c)
 	if (ssm2518 == NULL)
 		return -ENOMEM;
 
-	/* Start with enabling the chip */
-	ssm2518->enable_gpio = devm_gpiod_get_optional(&i2c->dev, NULL,
-						       GPIOD_OUT_HIGH);
-	ret = PTR_ERR_OR_ZERO(ssm2518->enable_gpio);
-	if (ret)
-		return ret;
+	if (pdata) {
+		ssm2518->enable_gpio = pdata->enable_gpio;
+	} else if (i2c->dev.of_node) {
+		ssm2518->enable_gpio = of_get_gpio(i2c->dev.of_node, 0);
+		if (ssm2518->enable_gpio < 0 && ssm2518->enable_gpio != -ENOENT)
+			return ssm2518->enable_gpio;
+	} else {
+		ssm2518->enable_gpio = -1;
+	}
 
-	gpiod_set_consumer_name(ssm2518->enable_gpio, "SSM2518 nSD");
+	if (gpio_is_valid(ssm2518->enable_gpio)) {
+		ret = devm_gpio_request_one(&i2c->dev, ssm2518->enable_gpio,
+				GPIOF_OUT_INIT_HIGH, "SSM2518 nSD");
+		if (ret)
+			return ret;
+	}
 
 	i2c_set_clientdata(i2c, ssm2518);
 

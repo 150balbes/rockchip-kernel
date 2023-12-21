@@ -428,6 +428,7 @@ done_restore:
 	jr	ra
 	 nop
 	.space 30 * 4, 0
+octeon_mult_save_end:
 	EXPORT(octeon_mult_save_end)
 	END(octeon_mult_save)
 
@@ -447,6 +448,7 @@ done_restore:
 	sd	k0, PT_MPL+8(sp)      /* PT_MPL+8  has MPL1 */
 	jr	ra
 	 sd	k1, PT_MPL+16(sp)     /* PT_MPL+16 has MPL2 */
+octeon_mult_save2_end:
 	EXPORT(octeon_mult_save2_end)
 	END(octeon_mult_save2)
 
@@ -478,6 +480,7 @@ done_restore:
 	sd	$10, PT_MPL+(4*8)(sp)	/* store MPL4 */
 	jr	ra
 	 sd	$11, PT_MPL+(5*8)(sp)	/* store MPL5 */
+octeon_mult_save3_end:
 	EXPORT(octeon_mult_save3_end)
 	END(octeon_mult_save3)
 	.set pop
@@ -495,6 +498,7 @@ done_restore:
 	jr	ra
 	 nop
 	.space 30 * 4, 0
+octeon_mult_restore_end:
 	EXPORT(octeon_mult_restore_end)
 	END(octeon_mult_restore)
 
@@ -513,6 +517,7 @@ done_restore:
 	mtp1	v0			/* P1 */
 	jr	ra
 	 mtp0	v1			/* P0 */
+octeon_mult_restore2_end:
 	EXPORT(octeon_mult_restore2_end)
 	END(octeon_mult_restore2)
 
@@ -543,6 +548,7 @@ done_restore:
 	.word	0x714b000b
 	/* mtp2	$10, $11		   restore P2 and P5 */
 
+octeon_mult_restore3_end:
 	EXPORT(octeon_mult_restore3_end)
 	END(octeon_mult_restore3)
 	.set pop

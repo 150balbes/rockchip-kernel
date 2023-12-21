@@ -226,7 +226,6 @@ static struct snd_soc_dai_driver xlnx_spdif_rx_dai = {
 
 static const struct snd_soc_component_driver xlnx_spdif_component = {
 	.name = "xlnx-spdif",
-	.legacy_dai_naming = 1,
 };
 
 static const struct of_device_id xlnx_spdif_of_match[] = {
@@ -238,6 +237,7 @@ MODULE_DEVICE_TABLE(of, xlnx_spdif_of_match);
 static int xlnx_spdif_probe(struct platform_device *pdev)
 {
 	int ret;
+	struct resource *res;
 	struct snd_soc_dai_driver *dai_drv;
 	struct spdif_dev_data *ctx;
 
@@ -273,10 +273,13 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 	if (ctx->mode) {
 		dai_drv = &xlnx_spdif_tx_dai;
 	} else {
-		ret = platform_get_irq(pdev, 0);
-		if (ret < 0)
+		res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+		if (!res) {
+			dev_err(dev, "No IRQ resource found\n");
+			ret = -ENODEV;
 			goto clk_err;
-		ret = devm_request_irq(dev, ret,
+		}
+		ret = devm_request_irq(dev, res->start,
 				       xlnx_spdifrx_irq_handler,
 				       0, "XLNX_SPDIF_RX", ctx);
 		if (ret) {
@@ -312,11 +315,12 @@ clk_err:
 	return ret;
 }
 
-static void xlnx_spdif_remove(struct platform_device *pdev)
+static int xlnx_spdif_remove(struct platform_device *pdev)
 {
 	struct spdif_dev_data *ctx = dev_get_drvdata(&pdev->dev);
 
 	clk_disable_unprepare(ctx->axi_clk);
+	return 0;
 }
 
 static struct platform_driver xlnx_spdif_driver = {
@@ -325,7 +329,7 @@ static struct platform_driver xlnx_spdif_driver = {
 		.of_match_table = xlnx_spdif_of_match,
 	},
 	.probe = xlnx_spdif_probe,
-	.remove_new = xlnx_spdif_remove,
+	.remove = xlnx_spdif_remove,
 };
 module_platform_driver(xlnx_spdif_driver);
 

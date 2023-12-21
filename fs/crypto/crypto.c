@@ -113,7 +113,7 @@ int fscrypt_crypt_block(const struct inode *inode, fscrypt_direction_t rw,
 
 	if (WARN_ON_ONCE(len <= 0))
 		return -EINVAL;
-	if (WARN_ON_ONCE(len % FSCRYPT_CONTENTS_ALIGNMENT != 0))
+	if (WARN_ON_ONCE(len % FS_CRYPTO_BLOCK_SIZE != 0))
 		return -EINVAL;
 
 	fscrypt_generate_iv(&iv, lblk_num, ci);
@@ -213,8 +213,8 @@ EXPORT_SYMBOL(fscrypt_encrypt_pagecache_blocks);
  * fscrypt_encrypt_block_inplace() - Encrypt a filesystem block in-place
  * @inode:     The inode to which this block belongs
  * @page:      The page containing the block to encrypt
- * @len:       Size of block to encrypt.  This must be a multiple of
- *		FSCRYPT_CONTENTS_ALIGNMENT.
+ * @len:       Size of block to encrypt.  Doesn't need to be a multiple of the
+ *		fs block size, but must be a multiple of FS_CRYPTO_BLOCK_SIZE.
  * @offs:      Byte offset within @page at which the block to encrypt begins
  * @lblk_num:  Filesystem logical block number of the block, i.e. the 0-based
  *		number of the block within the file
@@ -237,43 +237,41 @@ EXPORT_SYMBOL(fscrypt_encrypt_block_inplace);
 
 /**
  * fscrypt_decrypt_pagecache_blocks() - Decrypt filesystem blocks in a
- *					pagecache folio
- * @folio:     The locked pagecache folio containing the block(s) to decrypt
+ *					pagecache page
+ * @page:      The locked pagecache page containing the block(s) to decrypt
  * @len:       Total size of the block(s) to decrypt.  Must be a nonzero
  *		multiple of the filesystem's block size.
- * @offs:      Byte offset within @folio of the first block to decrypt.  Must be
+ * @offs:      Byte offset within @page of the first block to decrypt.  Must be
  *		a multiple of the filesystem's block size.
  *
- * The specified block(s) are decrypted in-place within the pagecache folio,
- * which must still be locked and not uptodate.
+ * The specified block(s) are decrypted in-place within the pagecache page,
+ * which must still be locked and not uptodate.  Normally, blocksize ==
+ * PAGE_SIZE and the whole page is decrypted at once.
  *
- * This is for use by the filesystem's ->readahead() method.
+ * This is for use by the filesystem's ->readpages() method.
  *
  * Return: 0 on success; -errno on failure
  */
-int fscrypt_decrypt_pagecache_blocks(struct folio *folio, size_t len,
-				     size_t offs)
+int fscrypt_decrypt_pagecache_blocks(struct page *page, unsigned int len,
+				     unsigned int offs)
 {
-	const struct inode *inode = folio->mapping->host;
+	const struct inode *inode = page->mapping->host;
 	const unsigned int blockbits = inode->i_blkbits;
 	const unsigned int blocksize = 1 << blockbits;
-	u64 lblk_num = ((u64)folio->index << (PAGE_SHIFT - blockbits)) +
+	u64 lblk_num = ((u64)page->index << (PAGE_SHIFT - blockbits)) +
 		       (offs >> blockbits);
-	size_t i;
+	unsigned int i;
 	int err;
 
-	if (WARN_ON_ONCE(!folio_test_locked(folio)))
+	if (WARN_ON_ONCE(!PageLocked(page)))
 		return -EINVAL;
 
 	if (WARN_ON_ONCE(len <= 0 || !IS_ALIGNED(len | offs, blocksize)))
 		return -EINVAL;
 
 	for (i = offs; i < offs + len; i += blocksize, lblk_num++) {
-		struct page *page = folio_page(folio, i >> PAGE_SHIFT);
-
 		err = fscrypt_crypt_block(inode, FS_DECRYPT, lblk_num, page,
-					  page, blocksize, i & ~PAGE_MASK,
-					  GFP_NOFS);
+					  page, blocksize, i, GFP_NOFS);
 		if (err)
 			return err;
 	}
@@ -285,8 +283,8 @@ EXPORT_SYMBOL(fscrypt_decrypt_pagecache_blocks);
  * fscrypt_decrypt_block_inplace() - Decrypt a filesystem block in-place
  * @inode:     The inode to which this block belongs
  * @page:      The page containing the block to decrypt
- * @len:       Size of block to decrypt.  This must be a multiple of
- *		FSCRYPT_CONTENTS_ALIGNMENT.
+ * @len:       Size of block to decrypt.  Doesn't need to be a multiple of the
+ *		fs block size, but must be a multiple of FS_CRYPTO_BLOCK_SIZE.
  * @offs:      Byte offset within @page at which the block to decrypt begins
  * @lblk_num:  Filesystem logical block number of the block, i.e. the 0-based
  *		number of the block within the file
@@ -308,24 +306,19 @@ EXPORT_SYMBOL(fscrypt_decrypt_block_inplace);
 
 /**
  * fscrypt_initialize() - allocate major buffers for fs encryption.
- * @sb: the filesystem superblock
+ * @cop_flags:  fscrypt operations flags
  *
  * We only call this when we start accessing encrypted files, since it
  * results in memory getting allocated that wouldn't otherwise be used.
  *
  * Return: 0 on success; -errno on failure
  */
-int fscrypt_initialize(struct super_block *sb)
+int fscrypt_initialize(unsigned int cop_flags)
 {
 	int err = 0;
-	mempool_t *pool;
-
-	/* pairs with smp_store_release() below */
-	if (likely(smp_load_acquire(&fscrypt_bounce_page_pool)))
-		return 0;
 
 	/* No need to allocate a bounce page pool if this FS won't use it. */
-	if (sb->s_cop->flags & FS_CFLG_OWN_PAGES)
+	if (cop_flags & FS_CFLG_OWN_PAGES)
 		return 0;
 
 	mutex_lock(&fscrypt_init_mutex);
@@ -333,11 +326,11 @@ int fscrypt_initialize(struct super_block *sb)
 		goto out_unlock;
 
 	err = -ENOMEM;
-	pool = mempool_create_page_pool(num_prealloc_crypto_pages, 0);
-	if (!pool)
+	fscrypt_bounce_page_pool =
+		mempool_create_page_pool(num_prealloc_crypto_pages, 0);
+	if (!fscrypt_bounce_page_pool)
 		goto out_unlock;
-	/* pairs with smp_load_acquire() above */
-	smp_store_release(&fscrypt_bounce_page_pool, pool);
+
 	err = 0;
 out_unlock:
 	mutex_unlock(&fscrypt_init_mutex);

@@ -91,9 +91,6 @@ __acquires(ohci->lock)
 	update_done_list(ohci);
 	ohci_work(ohci);
 
-	/* All ED unlinks should be finished, no need for SOF interrupts */
-	ohci_writel(ohci, OHCI_INTR_SF, &ohci->regs->intrdisable);
-
 	/*
 	 * Some controllers don't handle "global" suspend properly if
 	 * there are unsuspended ports.  For these controllers, put all
@@ -695,7 +692,6 @@ int ohci_hub_control(
 		case C_HUB_OVER_CURRENT:
 			ohci_writel (ohci, RH_HS_OCIC,
 					&ohci->regs->roothub.status);
-			break;
 		case C_HUB_LOCAL_POWER:
 			break;
 		default:

@@ -7,6 +7,9 @@
  *  Serial mouse driver for Linux
  */
 
+/*
+ */
+
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/slab.h>

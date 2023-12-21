@@ -9,7 +9,7 @@ struct {
 	__uint(max_entries, 4);
 } dm_ports SEC(".maps");
 
-SEC("xdp")
+SEC("xdp_redir")
 int xdp_redir_prog(struct xdp_md *ctx)
 {
 	return bpf_redirect_map(&dm_ports, 1, 0);
@@ -18,7 +18,7 @@ int xdp_redir_prog(struct xdp_md *ctx)
 /* invalid program on DEVMAP entry;
  * SEC name means expected attach type not set
  */
-SEC("xdp")
+SEC("xdp_dummy")
 int xdp_dummy_prog(struct xdp_md *ctx)
 {
 	return XDP_PASS;
@@ -27,7 +27,7 @@ int xdp_dummy_prog(struct xdp_md *ctx)
 /* valid program on DEVMAP entry via SEC name;
  * has access to egress and ingress ifindex
  */
-SEC("xdp/devmap")
+SEC("xdp_devmap/map_prog")
 int xdp_dummy_dm(struct xdp_md *ctx)
 {
 	char fmt[] = "devmap redirect: dev %u -> dev %u len %u\n";
@@ -40,11 +40,4 @@ int xdp_dummy_dm(struct xdp_md *ctx)
 
 	return XDP_PASS;
 }
-
-SEC("xdp.frags/devmap")
-int xdp_dummy_dm_frags(struct xdp_md *ctx)
-{
-	return XDP_PASS;
-}
-
 char _license[] SEC("license") = "GPL";

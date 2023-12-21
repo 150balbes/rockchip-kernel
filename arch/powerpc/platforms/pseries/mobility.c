@@ -12,11 +12,9 @@
 #include <linux/cpu.h>
 #include <linux/kernel.h>
 #include <linux/kobject.h>
-#include <linux/nmi.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/stat.h>
-#include <linux/stop_machine.h>
 #include <linux/completion.h>
 #include <linux/device.h>
 #include <linux/delay.h>
@@ -24,10 +22,8 @@
 #include <linux/stringify.h>
 
 #include <asm/machdep.h>
-#include <asm/nmi.h>
 #include <asm/rtas.h>
 #include "pseries.h"
-#include "vas.h"	/* vas_migration_handler() */
 #include "../../kernel/cacheinfo.h"
 
 static struct kobject *mobility_kobj;
@@ -48,31 +44,6 @@ struct update_props_workarea {
 
 #define MIGRATION_SCOPE	(1)
 #define PRRN_SCOPE -2
-
-#ifdef CONFIG_PPC_WATCHDOG
-static unsigned int nmi_wd_lpm_factor = 200;
-
-#ifdef CONFIG_SYSCTL
-static struct ctl_table nmi_wd_lpm_factor_ctl_table[] = {
-	{
-		.procname	= "nmi_wd_lpm_factor",
-		.data		= &nmi_wd_lpm_factor,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_douintvec_minmax,
-	},
-	{}
-};
-
-static int __init register_nmi_wd_lpm_factor_sysctl(void)
-{
-	register_sysctl("kernel", nmi_wd_lpm_factor_ctl_table);
-
-	return 0;
-}
-device_initcall(register_nmi_wd_lpm_factor_sysctl);
-#endif /* CONFIG_SYSCTL */
-#endif /* CONFIG_PPC_WATCHDOG */
 
 static int mobility_rtas_call(int token, char *buf, s32 scope)
 {
@@ -188,7 +159,7 @@ static int update_dt_node(struct device_node *dn, s32 scope)
 	u32 nprops;
 	u32 vd;
 
-	update_properties_token = rtas_function_token(RTAS_FN_IBM_UPDATE_PROPERTIES);
+	update_properties_token = rtas_token("ibm,update-properties");
 	if (update_properties_token == RTAS_UNKNOWN_SERVICE)
 		return -EINVAL;
 
@@ -209,7 +180,7 @@ static int update_dt_node(struct device_node *dn, s32 scope)
 		nprops = be32_to_cpu(upwa->nprops);
 
 		/* On the first call to ibm,update-properties for a node the
-		 * first property value descriptor contains an empty
+		 * the first property value descriptor contains an empty
 		 * property name, the property value length encoded as u32,
 		 * and the property value is the node path being updated.
 		 */
@@ -243,12 +214,11 @@ static int update_dt_node(struct device_node *dn, s32 scope)
 				rc = update_dt_property(dn, &prop, prop_name,
 							vd, prop_data);
 				if (rc) {
-					pr_err("updating %s property failed: %d\n",
-					       prop_name, rc);
+					printk(KERN_ERR "Could not update %s"
+					       " property\n", prop_name);
 				}
 
 				prop_data += vd;
-				break;
 			}
 
 			cond_resched();
@@ -292,16 +262,16 @@ static int add_dt_node(struct device_node *parent_dn, __be32 drc_index)
 	return rc;
 }
 
-static int pseries_devicetree_update(s32 scope)
+int pseries_devicetree_update(s32 scope)
 {
 	char *rtas_buf;
 	__be32 *data;
 	int update_nodes_token;
 	int rc;
 
-	update_nodes_token = rtas_function_token(RTAS_FN_IBM_UPDATE_NODES);
+	update_nodes_token = rtas_token("ibm,update-nodes");
 	if (update_nodes_token == RTAS_UNKNOWN_SERVICE)
-		return 0;
+		return -EINVAL;
 
 	rtas_buf = kzalloc(RTAS_DATA_BUF_SIZE, GFP_KERNEL);
 	if (!rtas_buf)
@@ -360,8 +330,21 @@ static int pseries_devicetree_update(s32 scope)
 void post_mobility_fixup(void)
 {
 	int rc;
+	int activate_fw_token;
 
-	rtas_activate_firmware();
+	activate_fw_token = rtas_token("ibm,activate-firmware");
+	if (activate_fw_token == RTAS_UNKNOWN_SERVICE) {
+		printk(KERN_ERR "Could not make post-mobility "
+		       "activate-fw call.\n");
+		return;
+	}
+
+	do {
+		rc = rtas_call(activate_fw_token, 0, 1, NULL);
+	} while (rtas_busy_delay(rc));
+
+	if (rc)
+		printk(KERN_ERR "Post-mobility activate-fw failed: %d\n", rc);
 
 	/*
 	 * We don't want CPUs to go online/offline while the device
@@ -378,7 +361,8 @@ void post_mobility_fixup(void)
 
 	rc = pseries_devicetree_update(MIGRATION_SCOPE);
 	if (rc)
-		pr_err("device tree update failed: %d\n", rc);
+		printk(KERN_ERR "Post-mobility device tree update "
+			"failed: %d\n", rc);
 
 	cacheinfo_rebuild();
 
@@ -393,395 +377,8 @@ void post_mobility_fixup(void)
 	return;
 }
 
-static int poll_vasi_state(u64 handle, unsigned long *res)
-{
-	unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
-	long hvrc;
-	int ret;
-
-	hvrc = plpar_hcall(H_VASI_STATE, retbuf, handle);
-	switch (hvrc) {
-	case H_SUCCESS:
-		ret = 0;
-		*res = retbuf[0];
-		break;
-	case H_PARAMETER:
-		ret = -EINVAL;
-		break;
-	case H_FUNCTION:
-		ret = -EOPNOTSUPP;
-		break;
-	case H_HARDWARE:
-	default:
-		pr_err("unexpected H_VASI_STATE result %ld\n", hvrc);
-		ret = -EIO;
-		break;
-	}
-	return ret;
-}
-
-static int wait_for_vasi_session_suspending(u64 handle)
-{
-	unsigned long state;
-	int ret;
-
-	/*
-	 * Wait for transition from H_VASI_ENABLED to
-	 * H_VASI_SUSPENDING. Treat anything else as an error.
-	 */
-	while (true) {
-		ret = poll_vasi_state(handle, &state);
-
-		if (ret != 0 || state == H_VASI_SUSPENDING) {
-			break;
-		} else if (state == H_VASI_ENABLED) {
-			ssleep(1);
-		} else {
-			pr_err("unexpected H_VASI_STATE result %lu\n", state);
-			ret = -EIO;
-			break;
-		}
-	}
-
-	/*
-	 * Proceed even if H_VASI_STATE is unavailable. If H_JOIN or
-	 * ibm,suspend-me are also unimplemented, we'll recover then.
-	 */
-	if (ret == -EOPNOTSUPP)
-		ret = 0;
-
-	return ret;
-}
-
-static void wait_for_vasi_session_completed(u64 handle)
-{
-	unsigned long state = 0;
-	int ret;
-
-	pr_info("waiting for memory transfer to complete...\n");
-
-	/*
-	 * Wait for transition from H_VASI_RESUMED to H_VASI_COMPLETED.
-	 */
-	while (true) {
-		ret = poll_vasi_state(handle, &state);
-
-		/*
-		 * If the memory transfer is already complete and the migration
-		 * has been cleaned up by the hypervisor, H_PARAMETER is return,
-		 * which is translate in EINVAL by poll_vasi_state().
-		 */
-		if (ret == -EINVAL || (!ret && state == H_VASI_COMPLETED)) {
-			pr_info("memory transfer completed.\n");
-			break;
-		}
-
-		if (ret) {
-			pr_err("H_VASI_STATE return error (%d)\n", ret);
-			break;
-		}
-
-		if (state != H_VASI_RESUMED) {
-			pr_err("unexpected H_VASI_STATE result %lu\n", state);
-			break;
-		}
-
-		msleep(500);
-	}
-}
-
-static void prod_single(unsigned int target_cpu)
-{
-	long hvrc;
-	int hwid;
-
-	hwid = get_hard_smp_processor_id(target_cpu);
-	hvrc = plpar_hcall_norets(H_PROD, hwid);
-	if (hvrc == H_SUCCESS)
-		return;
-	pr_err_ratelimited("H_PROD of CPU %u (hwid %d) error: %ld\n",
-			   target_cpu, hwid, hvrc);
-}
-
-static void prod_others(void)
-{
-	unsigned int cpu;
-
-	for_each_online_cpu(cpu) {
-		if (cpu != smp_processor_id())
-			prod_single(cpu);
-	}
-}
-
-static u16 clamp_slb_size(void)
-{
-#ifdef CONFIG_PPC_64S_HASH_MMU
-	u16 prev = mmu_slb_size;
-
-	slb_set_size(SLB_MIN_SIZE);
-
-	return prev;
-#else
-	return 0;
-#endif
-}
-
-static int do_suspend(void)
-{
-	u16 saved_slb_size;
-	int status;
-	int ret;
-
-	pr_info("calling ibm,suspend-me on CPU %i\n", smp_processor_id());
-
-	/*
-	 * The destination processor model may have fewer SLB entries
-	 * than the source. We reduce mmu_slb_size to a safe minimum
-	 * before suspending in order to minimize the possibility of
-	 * programming non-existent entries on the destination. If
-	 * suspend fails, we restore it before returning. On success
-	 * the OF reconfig path will update it from the new device
-	 * tree after resuming on the destination.
-	 */
-	saved_slb_size = clamp_slb_size();
-
-	ret = rtas_ibm_suspend_me(&status);
-	if (ret != 0) {
-		pr_err("ibm,suspend-me error: %d\n", status);
-		slb_set_size(saved_slb_size);
-	}
-
-	return ret;
-}
-
-/**
- * struct pseries_suspend_info - State shared between CPUs for join/suspend.
- * @counter: Threads are to increment this upon resuming from suspend
- *           or if an error is received from H_JOIN. The thread which performs
- *           the first increment (i.e. sets it to 1) is responsible for
- *           waking the other threads.
- * @done: False if join/suspend is in progress. True if the operation is
- *        complete (successful or not).
- */
-struct pseries_suspend_info {
-	atomic_t counter;
-	bool done;
-};
-
-static int do_join(void *arg)
-{
-	struct pseries_suspend_info *info = arg;
-	atomic_t *counter = &info->counter;
-	long hvrc;
-	int ret;
-
-retry:
-	/* Must ensure MSR.EE off for H_JOIN. */
-	hard_irq_disable();
-	hvrc = plpar_hcall_norets(H_JOIN);
-
-	switch (hvrc) {
-	case H_CONTINUE:
-		/*
-		 * All other CPUs are offline or in H_JOIN. This CPU
-		 * attempts the suspend.
-		 */
-		ret = do_suspend();
-		break;
-	case H_SUCCESS:
-		/*
-		 * The suspend is complete and this cpu has received a
-		 * prod, or we've received a stray prod from unrelated
-		 * code (e.g. paravirt spinlocks) and we need to join
-		 * again.
-		 *
-		 * This barrier orders the return from H_JOIN above vs
-		 * the load of info->done. It pairs with the barrier
-		 * in the wakeup/prod path below.
-		 */
-		smp_mb();
-		if (READ_ONCE(info->done) == false) {
-			pr_info_ratelimited("premature return from H_JOIN on CPU %i, retrying",
-					    smp_processor_id());
-			goto retry;
-		}
-		ret = 0;
-		break;
-	case H_BAD_MODE:
-	case H_HARDWARE:
-	default:
-		ret = -EIO;
-		pr_err_ratelimited("H_JOIN error %ld on CPU %i\n",
-				   hvrc, smp_processor_id());
-		break;
-	}
-
-	if (atomic_inc_return(counter) == 1) {
-		pr_info("CPU %u waking all threads\n", smp_processor_id());
-		WRITE_ONCE(info->done, true);
-		/*
-		 * This barrier orders the store to info->done vs subsequent
-		 * H_PRODs to wake the other CPUs. It pairs with the barrier
-		 * in the H_SUCCESS case above.
-		 */
-		smp_mb();
-		prod_others();
-	}
-	/*
-	 * Execution may have been suspended for several seconds, so reset
-	 * the watchdogs. touch_nmi_watchdog() also touches the soft lockup
-	 * watchdog.
-	 */
-	rcu_cpu_stall_reset();
-	touch_nmi_watchdog();
-
-	return ret;
-}
-
-/*
- * Abort reason code byte 0. We use only the 'Migrating partition' value.
- */
-enum vasi_aborting_entity {
-	ORCHESTRATOR        = 1,
-	VSP_SOURCE          = 2,
-	PARTITION_FIRMWARE  = 3,
-	PLATFORM_FIRMWARE   = 4,
-	VSP_TARGET          = 5,
-	MIGRATING_PARTITION = 6,
-};
-
-static void pseries_cancel_migration(u64 handle, int err)
-{
-	u32 reason_code;
-	u32 detail;
-	u8 entity;
-	long hvrc;
-
-	entity = MIGRATING_PARTITION;
-	detail = abs(err) & 0xffffff;
-	reason_code = (entity << 24) | detail;
-
-	hvrc = plpar_hcall_norets(H_VASI_SIGNAL, handle,
-				  H_VASI_SIGNAL_CANCEL, reason_code);
-	if (hvrc)
-		pr_err("H_VASI_SIGNAL error: %ld\n", hvrc);
-}
-
-static int pseries_suspend(u64 handle)
-{
-	const unsigned int max_attempts = 5;
-	unsigned int retry_interval_ms = 1;
-	unsigned int attempt = 1;
-	int ret;
-
-	while (true) {
-		struct pseries_suspend_info info;
-		unsigned long vasi_state;
-		int vasi_err;
-
-		info = (struct pseries_suspend_info) {
-			.counter = ATOMIC_INIT(0),
-			.done = false,
-		};
-
-		ret = stop_machine(do_join, &info, cpu_online_mask);
-		if (ret == 0)
-			break;
-		/*
-		 * Encountered an error. If the VASI stream is still
-		 * in Suspending state, it's likely a transient
-		 * condition related to some device in the partition
-		 * and we can retry in the hope that the cause has
-		 * cleared after some delay.
-		 *
-		 * A better design would allow drivers etc to prepare
-		 * for the suspend and avoid conditions which prevent
-		 * the suspend from succeeding. For now, we have this
-		 * mitigation.
-		 */
-		pr_notice("Partition suspend attempt %u of %u error: %d\n",
-			  attempt, max_attempts, ret);
-
-		if (attempt == max_attempts)
-			break;
-
-		vasi_err = poll_vasi_state(handle, &vasi_state);
-		if (vasi_err == 0) {
-			if (vasi_state != H_VASI_SUSPENDING) {
-				pr_notice("VASI state %lu after failed suspend\n",
-					  vasi_state);
-				break;
-			}
-		} else if (vasi_err != -EOPNOTSUPP) {
-			pr_err("VASI state poll error: %d", vasi_err);
-			break;
-		}
-
-		pr_notice("Will retry partition suspend after %u ms\n",
-			  retry_interval_ms);
-
-		msleep(retry_interval_ms);
-		retry_interval_ms *= 10;
-		attempt++;
-	}
-
-	return ret;
-}
-
-static int pseries_migrate_partition(u64 handle)
-{
-	int ret;
-	unsigned int factor = 0;
-
-#ifdef CONFIG_PPC_WATCHDOG
-	factor = nmi_wd_lpm_factor;
-#endif
-	/*
-	 * When the migration is initiated, the hypervisor changes VAS
-	 * mappings to prepare before OS gets the notification and
-	 * closes all VAS windows. NX generates continuous faults during
-	 * this time and the user space can not differentiate these
-	 * faults from the migration event. So reduce this time window
-	 * by closing VAS windows at the beginning of this function.
-	 */
-	vas_migration_handler(VAS_SUSPEND);
-
-	ret = wait_for_vasi_session_suspending(handle);
-	if (ret)
-		goto out;
-
-	if (factor)
-		watchdog_hardlockup_set_timeout_pct(factor);
-
-	ret = pseries_suspend(handle);
-	if (ret == 0) {
-		post_mobility_fixup();
-		/*
-		 * Wait until the memory transfer is complete, so that the user
-		 * space process returns from the syscall after the transfer is
-		 * complete. This allows the user hooks to be executed at the
-		 * right time.
-		 */
-		wait_for_vasi_session_completed(handle);
-	} else
-		pseries_cancel_migration(handle, ret);
-
-	if (factor)
-		watchdog_hardlockup_set_timeout_pct(0);
-
-out:
-	vas_migration_handler(VAS_RESUME);
-
-	return ret;
-}
-
-int rtas_syscall_dispatch_ibm_suspend_me(u64 handle)
-{
-	return pseries_migrate_partition(handle);
-}
-
-static ssize_t migration_store(const struct class *class,
-			       const struct class_attribute *attr, const char *buf,
+static ssize_t migration_store(struct class *class,
+			       struct class_attribute *attr, const char *buf,
 			       size_t count)
 {
 	u64 streamid;
@@ -791,9 +388,16 @@ static ssize_t migration_store(const struct class *class,
 	if (rc)
 		return rc;
 
-	rc = pseries_migrate_partition(streamid);
+	do {
+		rc = rtas_ibm_suspend_me(streamid);
+		if (rc == -EAGAIN)
+			ssleep(1);
+	} while (rc == -EAGAIN);
+
 	if (rc)
 		return rc;
+
+	post_mobility_fixup();
 
 	return count;
 }

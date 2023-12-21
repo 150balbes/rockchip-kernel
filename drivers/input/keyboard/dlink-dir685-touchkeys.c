@@ -59,11 +59,12 @@ static irqreturn_t dir685_tk_irq_thread(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int dir685_tk_probe(struct i2c_client *client)
+static int dir685_tk_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
-	static const u8 bl_data[] = { 0xa7, 0x40 };
-	struct device *dev = &client->dev;
 	struct dir685_touchkeys *tk;
+	struct device *dev = &client->dev;
+	u8 bl_data[] = { 0xa7, 0x40 };
 	int err;
 	int i;
 

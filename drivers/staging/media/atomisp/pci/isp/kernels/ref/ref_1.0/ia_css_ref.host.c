@@ -22,17 +22,16 @@
 #include "isp.h"
 #include "ia_css_ref.host.h"
 
-int ia_css_ref_config(struct sh_css_isp_ref_isp_config *to,
-		      const struct ia_css_ref_configuration  *from,
-		      unsigned int size)
+void
+ia_css_ref_config(
+    struct sh_css_isp_ref_isp_config *to,
+    const struct ia_css_ref_configuration  *from,
+    unsigned int size)
 {
 	unsigned int elems_a = ISP_VEC_NELEMS, i;
-	int ret;
 
 	if (from->ref_frames[0]) {
-		ret = ia_css_dma_configure_from_info(&to->port_b, &from->ref_frames[0]->frame_info);
-		if (ret)
-			return ret;
+		ia_css_dma_configure_from_info(&to->port_b, &from->ref_frames[0]->info);
 		to->width_a_over_b = elems_a / to->port_b.elems;
 		to->dvs_frame_delay = from->dvs_frame_delay;
 	} else {
@@ -53,25 +52,22 @@ int ia_css_ref_config(struct sh_css_isp_ref_isp_config *to,
 	}
 
 	/* Assume divisiblity here, may need to generalize to fixed point. */
-	if (elems_a % to->port_b.elems != 0)
-		return -EINVAL;
-
-	return 0;
+	assert(elems_a % to->port_b.elems == 0);
 }
 
-int ia_css_ref_configure(const struct ia_css_binary        *binary,
-			 const struct ia_css_frame * const *ref_frames,
-			 const uint32_t dvs_frame_delay)
+void
+ia_css_ref_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame * const *ref_frames,
+    const uint32_t dvs_frame_delay)
 {
 	struct ia_css_ref_configuration config;
 	unsigned int i;
 
 	for (i = 0; i < MAX_NUM_VIDEO_DELAY_FRAMES; i++)
 		config.ref_frames[i] = ref_frames[i];
-
 	config.dvs_frame_delay = dvs_frame_delay;
-
-	return ia_css_configure_ref(binary, &config);
+	ia_css_configure_ref(binary, &config);
 }
 
 void

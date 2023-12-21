@@ -4,9 +4,7 @@
  * Copyright (C) 2014 ROCKCHIP, Inc.
  */
 
-#include <linux/bitfield.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -40,9 +38,9 @@
 #define SARADC_MAX_CHANNELS		8
 
 /* v2 registers */
-#define SARADC2_CONV_CON		0x000
-#define SARADC_T_PD_SOC			0x004
-#define SARADC_T_DAS_SOC		0x00c
+#define SARADC2_CONV_CON		0x0
+#define SARADC_T_PD_SOC			0x4
+#define SARADC_T_DAS_SOC		0xc
 #define SARADC2_END_INT_EN		0x104
 #define SARADC2_ST_CON			0x108
 #define SARADC2_STATUS			0x10c
@@ -52,8 +50,6 @@
 #define SARADC2_EN_END_INT		BIT(0)
 #define SARADC2_START			BIT(4)
 #define SARADC2_SINGLE_MODE		BIT(5)
-
-#define SARADC2_CONV_CHANNELS GENMASK(15, 0)
 
 struct rockchip_saradc;
 
@@ -72,19 +68,26 @@ struct rockchip_saradc {
 	struct clk		*clk;
 	struct completion	completion;
 	struct regulator	*vref;
-	/* lock to protect against multiple access to the device */
-	struct mutex		lock;
 	int			uv_vref;
 	struct reset_control	*reset;
 	const struct rockchip_saradc_data *data;
 	u16			last_val;
 	const struct iio_chan_spec *last_chan;
 	struct notifier_block nb;
+	bool			suspended;
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	bool			test;
+	u32			chn;
+	spinlock_t		lock;
+	struct workqueue_struct *wq;
+	struct delayed_work	work;
+#endif
 };
 
 static void rockchip_saradc_reset_controller(struct reset_control *reset);
 
-static void rockchip_saradc_start_v1(struct rockchip_saradc *info, int chn)
+static void rockchip_saradc_start_v1(struct rockchip_saradc *info,
+					int chn)
 {
 	/* 8 clock periods as delay between power up and start cmd */
 	writel_relaxed(8, info->regs + SARADC_DLY_PU_SOC);
@@ -93,26 +96,27 @@ static void rockchip_saradc_start_v1(struct rockchip_saradc *info, int chn)
 	       SARADC_CTRL_IRQ_ENABLE, info->regs + SARADC_CTRL);
 }
 
-static void rockchip_saradc_start_v2(struct rockchip_saradc *info, int chn)
+static void rockchip_saradc_start_v2(struct rockchip_saradc *info,
+					int chn)
 {
 	int val;
 
+	/* If read other chn at anytime, then chn1 will error, assert
+	 * controller as a workaround.
+	 */
 	if (info->reset)
 		rockchip_saradc_reset_controller(info->reset);
 
 	writel_relaxed(0xc, info->regs + SARADC_T_DAS_SOC);
 	writel_relaxed(0x20, info->regs + SARADC_T_PD_SOC);
-	val = FIELD_PREP(SARADC2_EN_END_INT, 1);
-	val |= val << 16;
+	val = SARADC2_EN_END_INT << 16 | SARADC2_EN_END_INT;
 	writel_relaxed(val, info->regs + SARADC2_END_INT_EN);
-	val = FIELD_PREP(SARADC2_START, 1) |
-	      FIELD_PREP(SARADC2_SINGLE_MODE, 1) |
-	      FIELD_PREP(SARADC2_CONV_CHANNELS, chn);
-	val |= val << 16;
-	writel(val, info->regs + SARADC2_CONV_CON);
+	val = SARADC2_START | SARADC2_SINGLE_MODE | chn;
+	writel(val << 16 | val, info->regs + SARADC2_CONV_CON);
 }
 
-static void rockchip_saradc_start(struct rockchip_saradc *info, int chn)
+static void rockchip_saradc_start(struct rockchip_saradc *info,
+					int chn)
 {
 	info->data->start(info, chn);
 }
@@ -125,11 +129,18 @@ static int rockchip_saradc_read_v1(struct rockchip_saradc *info)
 static int rockchip_saradc_read_v2(struct rockchip_saradc *info)
 {
 	int offset;
+	int channel;
 
 	/* Clear irq */
 	writel_relaxed(0x1, info->regs + SARADC2_END_INT_ST);
 
-	offset = SARADC2_DATA_BASE + info->last_chan->channel * 0x4;
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	channel = info->chn;
+#else
+	channel = info->last_chan->channel;
+#endif
+
+	offset = SARADC2_DATA_BASE + channel * 0x4;
 
 	return readl_relaxed(info->regs + offset);
 }
@@ -151,10 +162,11 @@ static void rockchip_saradc_power_down(struct rockchip_saradc *info)
 }
 
 static int rockchip_saradc_conversion(struct rockchip_saradc *info,
-				      struct iio_chan_spec const *chan)
+				   struct iio_chan_spec const *chan)
 {
 	reinit_completion(&info->completion);
 
+	/* prevent isr get NULL last_chan */
 	info->last_chan = chan;
 	rockchip_saradc_start(info, chan->channel);
 
@@ -171,21 +183,34 @@ static int rockchip_saradc_read_raw(struct iio_dev *indio_dev,
 	struct rockchip_saradc *info = iio_priv(indio_dev);
 	int ret;
 
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	if (info->test)
+		return 0;
+#endif
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&info->lock);
+		mutex_lock(&indio_dev->mlock);
+
+		if (info->suspended) {
+			mutex_unlock(&indio_dev->mlock);
+			return -EBUSY;
+		}
 
 		ret = rockchip_saradc_conversion(info, chan);
 		if (ret) {
 			rockchip_saradc_power_down(info);
-			mutex_unlock(&info->lock);
+			mutex_unlock(&indio_dev->mlock);
 			return ret;
 		}
 
 		*val = info->last_val;
-		mutex_unlock(&info->lock);
+		mutex_unlock(&indio_dev->mlock);
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
+		/* It is a dummy regulator */
+		if (info->uv_vref < 0)
+			return info->uv_vref;
+
 		*val = info->uv_vref / 1000;
 		*val2 = chan->scan_type.realbits;
 		return IIO_VAL_FRACTIONAL_LOG2;
@@ -197,15 +222,27 @@ static int rockchip_saradc_read_raw(struct iio_dev *indio_dev,
 static irqreturn_t rockchip_saradc_isr(int irq, void *dev_id)
 {
 	struct rockchip_saradc *info = dev_id;
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	unsigned long flags;
+#endif
 
 	/* Read value */
 	info->last_val = rockchip_saradc_read(info);
+#ifndef CONFIG_ROCKCHIP_SARADC_TEST_CHN
 	info->last_val &= GENMASK(info->last_chan->scan_type.realbits - 1, 0);
+#endif
 
 	rockchip_saradc_power_down(info);
 
 	complete(&info->completion);
-
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	spin_lock_irqsave(&info->lock, flags);
+	if (info->test) {
+		pr_info("chn[%d] val = %d\n", info->chn, info->last_val);
+		mod_delayed_work(info->wq, &info->work, msecs_to_jiffies(100));
+	}
+	spin_unlock_irqrestore(&info->lock, flags);
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -276,6 +313,40 @@ static const struct rockchip_saradc_data rk3399_saradc_data = {
 	.power_down = rockchip_saradc_power_down_v1,
 };
 
+static const struct iio_chan_spec rockchip_rk3528_saradc_iio_channels[] = {
+	SARADC_CHANNEL(0, "adc0", 10),
+	SARADC_CHANNEL(1, "adc1", 10),
+	SARADC_CHANNEL(2, "adc2", 10),
+	SARADC_CHANNEL(3, "adc3", 10),
+};
+
+static const struct rockchip_saradc_data rk3528_saradc_data = {
+	.channels = rockchip_rk3528_saradc_iio_channels,
+	.num_channels = ARRAY_SIZE(rockchip_rk3528_saradc_iio_channels),
+	.clk_rate = 1000000,
+	.start = rockchip_saradc_start_v2,
+	.read = rockchip_saradc_read_v2,
+};
+
+static const struct iio_chan_spec rockchip_rk3562_saradc_iio_channels[] = {
+	SARADC_CHANNEL(0, "adc0", 10),
+	SARADC_CHANNEL(1, "adc1", 10),
+	SARADC_CHANNEL(2, "adc2", 10),
+	SARADC_CHANNEL(3, "adc3", 10),
+	SARADC_CHANNEL(4, "adc4", 10),
+	SARADC_CHANNEL(5, "adc5", 10),
+	SARADC_CHANNEL(6, "adc6", 10),
+	SARADC_CHANNEL(7, "adc7", 10),
+};
+
+static const struct rockchip_saradc_data rk3562_saradc_data = {
+	.channels = rockchip_rk3562_saradc_iio_channels,
+	.num_channels = ARRAY_SIZE(rockchip_rk3562_saradc_iio_channels),
+	.clk_rate = 1000000,
+	.start = rockchip_saradc_start_v2,
+	.read = rockchip_saradc_read_v2,
+};
+
 static const struct iio_chan_spec rockchip_rk3568_saradc_iio_channels[] = {
 	SARADC_CHANNEL(0, "adc0", 10),
 	SARADC_CHANNEL(1, "adc1", 10),
@@ -315,6 +386,19 @@ static const struct rockchip_saradc_data rk3588_saradc_data = {
 	.read = rockchip_saradc_read_v2,
 };
 
+static const struct iio_chan_spec rockchip_rv1106_saradc_iio_channels[] = {
+	SARADC_CHANNEL(0, "adc0", 10),
+	SARADC_CHANNEL(1, "adc1", 10),
+};
+
+static const struct rockchip_saradc_data rv1106_saradc_data = {
+	.channels = rockchip_rv1106_saradc_iio_channels,
+	.num_channels = ARRAY_SIZE(rockchip_rv1106_saradc_iio_channels),
+	.clk_rate = 1000000,
+	.start = rockchip_saradc_start_v2,
+	.read = rockchip_saradc_read_v2,
+};
+
 static const struct of_device_id rockchip_saradc_match[] = {
 	{
 		.compatible = "rockchip,saradc",
@@ -326,11 +410,20 @@ static const struct of_device_id rockchip_saradc_match[] = {
 		.compatible = "rockchip,rk3399-saradc",
 		.data = &rk3399_saradc_data,
 	}, {
+		.compatible = "rockchip,rk3528-saradc",
+		.data = &rk3528_saradc_data,
+	}, {
+		.compatible = "rockchip,rk3562-saradc",
+		.data = &rk3562_saradc_data,
+	}, {
 		.compatible = "rockchip,rk3568-saradc",
 		.data = &rk3568_saradc_data,
 	}, {
 		.compatible = "rockchip,rk3588-saradc",
 		.data = &rk3588_saradc_data,
+	}, {
+		.compatible = "rockchip,rv1106-saradc",
+		.data = &rv1106_saradc_data,
 	},
 	{},
 };
@@ -344,6 +437,20 @@ static void rockchip_saradc_reset_controller(struct reset_control *reset)
 	reset_control_assert(reset);
 	usleep_range(10, 20);
 	reset_control_deassert(reset);
+}
+
+static void rockchip_saradc_clk_disable(void *data)
+{
+	struct rockchip_saradc *info = data;
+
+	clk_disable_unprepare(info->clk);
+}
+
+static void rockchip_saradc_pclk_disable(void *data)
+{
+	struct rockchip_saradc *info = data;
+
+	clk_disable_unprepare(info->pclk);
 }
 
 static void rockchip_saradc_regulator_disable(void *data)
@@ -369,7 +476,7 @@ static irqreturn_t rockchip_saradc_trigger_handler(int irq, void *p)
 	int ret;
 	int i, j = 0;
 
-	mutex_lock(&info->lock);
+	mutex_lock(&i_dev->mlock);
 
 	for_each_set_bit(i, i_dev->active_scan_mask, i_dev->masklength) {
 		const struct iio_chan_spec *chan = &i_dev->channels[i];
@@ -386,7 +493,7 @@ static irqreturn_t rockchip_saradc_trigger_handler(int irq, void *p)
 
 	iio_push_to_buffers_with_timestamp(i_dev, &data, iio_get_time_ns(i_dev));
 out:
-	mutex_unlock(&info->lock);
+	mutex_unlock(&i_dev->mlock);
 
 	iio_trigger_notify_done(i_dev->trig);
 
@@ -394,7 +501,8 @@ out:
 }
 
 static int rockchip_saradc_volt_notify(struct notifier_block *nb,
-				       unsigned long event, void *data)
+						   unsigned long event,
+						   void *data)
 {
 	struct rockchip_saradc *info =
 			container_of(nb, struct rockchip_saradc, nb);
@@ -412,12 +520,82 @@ static void rockchip_saradc_regulator_unreg_notifier(void *data)
 	regulator_unregister_notifier(info->vref, &info->nb);
 }
 
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+static ssize_t saradc_test_chn_store(struct device *dev,
+			struct device_attribute *attr,
+			const char *buf, size_t size)
+{
+	u32 val = 0;
+	int err;
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+	struct rockchip_saradc *info = iio_priv(indio_dev);
+	unsigned long flags;
+
+	err = kstrtou32(buf, 10, &val);
+	if (err)
+		return err;
+
+	spin_lock_irqsave(&info->lock, flags);
+
+	if (val > SARADC_CTRL_CHN_MASK && info->test) {
+		info->test = false;
+		spin_unlock_irqrestore(&info->lock, flags);
+		cancel_delayed_work_sync(&info->work);
+		return size;
+	}
+
+	if (!info->test && val <= SARADC_CTRL_CHN_MASK) {
+		info->test = true;
+		info->chn = val;
+		mod_delayed_work(info->wq, &info->work, msecs_to_jiffies(100));
+	}
+
+	spin_unlock_irqrestore(&info->lock, flags);
+
+	return size;
+}
+
+static DEVICE_ATTR_WO(saradc_test_chn);
+
+static struct attribute *saradc_attrs[] = {
+	&dev_attr_saradc_test_chn.attr,
+	NULL
+};
+
+static const struct attribute_group rockchip_saradc_attr_group = {
+	.attrs = saradc_attrs,
+};
+
+static void rockchip_saradc_remove_sysgroup(void *data)
+{
+	struct platform_device *pdev = data;
+
+	sysfs_remove_group(&pdev->dev.kobj, &rockchip_saradc_attr_group);
+}
+
+static void rockchip_saradc_destroy_wq(void *data)
+{
+	struct rockchip_saradc *info = data;
+
+	destroy_workqueue(info->wq);
+}
+
+static void rockchip_saradc_test_work(struct work_struct *work)
+{
+	struct rockchip_saradc *info = container_of(work,
+					struct rockchip_saradc, work.work);
+
+	rockchip_saradc_start(info, info->chn);
+}
+#endif
+
 static int rockchip_saradc_probe(struct platform_device *pdev)
 {
-	const struct rockchip_saradc_data *match_data;
 	struct rockchip_saradc *info = NULL;
 	struct device_node *np = pdev->dev.of_node;
 	struct iio_dev *indio_dev = NULL;
+	struct resource	*mem;
+	const struct of_device_id *match;
 	int ret;
 	int irq;
 
@@ -425,25 +603,28 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(*info));
-	if (!indio_dev)
-		return dev_err_probe(&pdev->dev, -ENOMEM,
-				     "failed allocating iio device\n");
-
+	if (!indio_dev) {
+		dev_err(&pdev->dev, "failed allocating iio device\n");
+		return -ENOMEM;
+	}
 	info = iio_priv(indio_dev);
 
-	match_data = of_device_get_match_data(&pdev->dev);
-	if (!match_data)
-		return dev_err_probe(&pdev->dev, -ENODEV,
-				     "failed to match device\n");
+	match = of_match_device(rockchip_saradc_match, &pdev->dev);
+	if (!match) {
+		dev_err(&pdev->dev, "failed to match device\n");
+		return -ENODEV;
+	}
 
-	info->data = match_data;
+	info->data = match->data;
 
 	/* Sanity check for possible later IP variants with more channels */
-	if (info->data->num_channels > SARADC_MAX_CHANNELS)
-		return dev_err_probe(&pdev->dev, -EINVAL,
-				     "max channels exceeded");
+	if (info->data->num_channels > SARADC_MAX_CHANNELS) {
+		dev_err(&pdev->dev, "max channels exceeded");
+		return -EINVAL;
+	}
 
-	info->regs = devm_platform_ioremap_resource(pdev, 0);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	info->regs = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(info->regs))
 		return PTR_ERR(info->regs);
 
@@ -456,8 +637,7 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 	if (IS_ERR(info->reset)) {
 		ret = PTR_ERR(info->reset);
 		if (ret != -ENOENT)
-			return dev_err_probe(&pdev->dev, ret,
-					     "failed to get saradc-apb\n");
+			return ret;
 
 		dev_dbg(&pdev->dev, "no reset control found\n");
 		info->reset = NULL;
@@ -467,7 +647,7 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
-		return dev_err_probe(&pdev->dev, irq, "failed to get irq\n");
+		return irq;
 
 	ret = devm_request_irq(&pdev->dev, irq, rockchip_saradc_isr,
 			       0, dev_name(&pdev->dev), info);
@@ -476,10 +656,24 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	info->pclk = devm_clk_get(&pdev->dev, "apb_pclk");
+	if (IS_ERR(info->pclk)) {
+		dev_err(&pdev->dev, "failed to get pclk\n");
+		return PTR_ERR(info->pclk);
+	}
+
+	info->clk = devm_clk_get(&pdev->dev, "saradc");
+	if (IS_ERR(info->clk)) {
+		dev_err(&pdev->dev, "failed to get adc clock\n");
+		return PTR_ERR(info->clk);
+	}
+
 	info->vref = devm_regulator_get(&pdev->dev, "vref");
-	if (IS_ERR(info->vref))
-		return dev_err_probe(&pdev->dev, PTR_ERR(info->vref),
-				     "failed to get regulator\n");
+	if (IS_ERR(info->vref)) {
+		dev_err(&pdev->dev, "failed to get regulator, %ld\n",
+			PTR_ERR(info->vref));
+		return PTR_ERR(info->vref);
+	}
 
 	if (info->reset)
 		rockchip_saradc_reset_controller(info->reset);
@@ -489,36 +683,57 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 	 * This may become user-configurable in the future.
 	 */
 	ret = clk_set_rate(info->clk, info->data->clk_rate);
-	if (ret < 0)
-		return dev_err_probe(&pdev->dev, ret,
-				     "failed to set adc clk rate\n");
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to set adc clk rate, %d\n", ret);
+		return ret;
+	}
 
 	ret = regulator_enable(info->vref);
-	if (ret < 0)
-		return dev_err_probe(&pdev->dev, ret,
-				     "failed to enable vref regulator\n");
-
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to enable vref regulator\n");
+		return ret;
+	}
 	ret = devm_add_action_or_reset(&pdev->dev,
 				       rockchip_saradc_regulator_disable, info);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret,
-				     "failed to register devm action\n");
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register devm action, %d\n",
+			ret);
+		return ret;
+	}
 
 	ret = regulator_get_voltage(info->vref);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to get voltage\n");
 		return ret;
+	}
 
 	info->uv_vref = ret;
 
-	info->pclk = devm_clk_get_enabled(&pdev->dev, "apb_pclk");
-	if (IS_ERR(info->pclk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(info->pclk),
-				     "failed to get pclk\n");
+	ret = clk_prepare_enable(info->pclk);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to enable pclk\n");
+		return ret;
+	}
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       rockchip_saradc_pclk_disable, info);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register devm action, %d\n",
+			ret);
+		return ret;
+	}
 
-	info->clk = devm_clk_get_enabled(&pdev->dev, "saradc");
-	if (IS_ERR(info->clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(info->clk),
-				     "failed to get adc clock\n");
+	ret = clk_prepare_enable(info->clk);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to enable converter clock\n");
+		return ret;
+	}
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       rockchip_saradc_clk_disable, info);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register devm action, %d\n",
+			ret);
+		return ret;
+	}
 
 	platform_set_drvdata(pdev, indio_dev);
 
@@ -545,19 +760,48 @@ static int rockchip_saradc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	mutex_init(&info->lock);
+#ifdef CONFIG_ROCKCHIP_SARADC_TEST_CHN
+	info->wq = create_singlethread_workqueue("adc_wq");
+	INIT_DELAYED_WORK(&info->work, rockchip_saradc_test_work);
+	spin_lock_init(&info->lock);
+	ret = sysfs_create_group(&pdev->dev.kobj, &rockchip_saradc_attr_group);
+	if (ret)
+		return ret;
 
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       rockchip_saradc_remove_sysgroup, pdev);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register devm action, %d\n",
+			ret);
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       rockchip_saradc_destroy_wq, info);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register destroy_wq, %d\n",
+			ret);
+		return ret;
+	}
+#endif
 	return devm_iio_device_register(&pdev->dev, indio_dev);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int rockchip_saradc_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct rockchip_saradc *info = iio_priv(indio_dev);
 
+	/* Avoid reading saradc when suspending */
+	mutex_lock(&indio_dev->mlock);
+
 	clk_disable_unprepare(info->clk);
 	clk_disable_unprepare(info->pclk);
 	regulator_disable(info->vref);
+
+	info->suspended = true;
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -580,19 +824,21 @@ static int rockchip_saradc_resume(struct device *dev)
 	if (ret)
 		clk_disable_unprepare(info->pclk);
 
+	info->suspended = false;
+
 	return ret;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(rockchip_saradc_pm_ops,
-				rockchip_saradc_suspend,
-				rockchip_saradc_resume);
+static SIMPLE_DEV_PM_OPS(rockchip_saradc_pm_ops,
+			 rockchip_saradc_suspend, rockchip_saradc_resume);
 
 static struct platform_driver rockchip_saradc_driver = {
 	.probe		= rockchip_saradc_probe,
 	.driver		= {
 		.name	= "rockchip-saradc",
 		.of_match_table = rockchip_saradc_match,
-		.pm	= pm_sleep_ptr(&rockchip_saradc_pm_ops),
+		.pm	= &rockchip_saradc_pm_ops,
 	},
 };
 

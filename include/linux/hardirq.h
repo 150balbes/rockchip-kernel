@@ -6,7 +6,6 @@
 #include <linux/preempt.h>
 #include <linux/lockdep.h>
 #include <linux/ftrace_irq.h>
-#include <linux/sched.h>
 #include <linux/vtime.h>
 #include <asm/hardirq.h>
 
@@ -33,9 +32,9 @@ static __always_inline void rcu_irq_enter_check_tick(void)
  */
 #define __irq_enter()					\
 	do {						\
+		account_irq_enter_time(current);	\
 		preempt_count_add(HARDIRQ_OFFSET);	\
 		lockdep_hardirq_enter();		\
-		account_hardirq_enter(current);		\
 	} while (0)
 
 /*
@@ -63,8 +62,8 @@ void irq_enter_rcu(void);
  */
 #define __irq_exit()					\
 	do {						\
-		account_hardirq_exit(current);		\
 		lockdep_hardirq_exit();			\
+		account_irq_exit_time(current);		\
 		preempt_count_sub(HARDIRQ_OFFSET);	\
 	} while (0)
 
@@ -92,6 +91,14 @@ void irq_exit_rcu(void);
 #define arch_nmi_exit()		do { } while (0)
 #endif
 
+#ifdef CONFIG_TINY_RCU
+static inline void rcu_nmi_enter(void) { }
+static inline void rcu_nmi_exit(void) { }
+#else
+extern void rcu_nmi_enter(void);
+extern void rcu_nmi_exit(void);
+#endif
+
 /*
  * NMI vs Tracing
  * --------------
@@ -108,6 +115,7 @@ void irq_exit_rcu(void);
 	do {							\
 		lockdep_off();					\
 		arch_nmi_enter();				\
+		printk_nmi_enter();				\
 		BUG_ON(in_nmi() == NMI_MASK);			\
 		__preempt_count_add(NMI_OFFSET + HARDIRQ_OFFSET);	\
 	} while (0)
@@ -116,7 +124,7 @@ void irq_exit_rcu(void);
 	do {							\
 		__nmi_enter();					\
 		lockdep_hardirq_enter();			\
-		ct_nmi_enter();				\
+		rcu_nmi_enter();				\
 		instrumentation_begin();			\
 		ftrace_nmi_enter();				\
 		instrumentation_end();				\
@@ -126,6 +134,7 @@ void irq_exit_rcu(void);
 	do {							\
 		BUG_ON(!in_nmi());				\
 		__preempt_count_sub(NMI_OFFSET + HARDIRQ_OFFSET);	\
+		printk_nmi_exit();				\
 		arch_nmi_exit();				\
 		lockdep_on();					\
 	} while (0)
@@ -135,7 +144,7 @@ void irq_exit_rcu(void);
 		instrumentation_begin();			\
 		ftrace_nmi_exit();				\
 		instrumentation_end();				\
-		ct_nmi_exit();					\
+		rcu_nmi_exit();					\
 		lockdep_hardirq_exit();				\
 		__nmi_exit();					\
 	} while (0)

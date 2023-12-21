@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright 2014-2022 Advanced Micro Devices, Inc.
+ * Copyright 2014 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -35,7 +34,7 @@
 #include "kfd_priv.h"
 #include <linux/mm.h>
 #include <linux/mman.h>
-#include <linux/processor.h>
+#include <asm/processor.h>
 
 /*
  * The primary memory I/O features being added for revisions of gfxip
@@ -309,7 +308,7 @@
  * 16MB are reserved for kernel use (CWSR trap handler and kernel IB
  * for now).
  */
-#define SVM_USER_BASE (u64)(KFD_CWSR_TBA_TMA_SIZE + 2*PAGE_SIZE)
+#define SVM_USER_BASE 0x1000000ull
 #define SVM_CWSR_BASE (SVM_USER_BASE - KFD_CWSR_TBA_TMA_SIZE)
 #define SVM_IB_BASE   (SVM_CWSR_BASE - PAGE_SIZE)
 
@@ -322,21 +321,21 @@ static void kfd_init_apertures_vi(struct kfd_process_device *pdd, uint8_t id)
 	pdd->lds_base = MAKE_LDS_APP_BASE_VI();
 	pdd->lds_limit = MAKE_LDS_APP_LIMIT(pdd->lds_base);
 
-	if (!pdd->dev->kfd->use_iommu_v2) {
+	if (!pdd->dev->use_iommu_v2) {
 		/* dGPUs: SVM aperture starting at 0
 		 * with small reserved space for kernel.
 		 * Set them to CANONICAL addresses.
 		 */
 		pdd->gpuvm_base = SVM_USER_BASE;
 		pdd->gpuvm_limit =
-			pdd->dev->kfd->shared_resources.gpuvm_size - 1;
+			pdd->dev->shared_resources.gpuvm_size - 1;
 	} else {
 		/* set them to non CANONICAL addresses, and no SVM is
 		 * allocated.
 		 */
 		pdd->gpuvm_base = MAKE_GPUVM_APP_BASE_VI(id + 1);
 		pdd->gpuvm_limit = MAKE_GPUVM_APP_LIMIT(pdd->gpuvm_base,
-				pdd->dev->kfd->shared_resources.gpuvm_size);
+				pdd->dev->shared_resources.gpuvm_size);
 	}
 
 	pdd->scratch_base = MAKE_SCRATCH_APP_BASE_VI();
@@ -356,7 +355,7 @@ static void kfd_init_apertures_v9(struct kfd_process_device *pdd, uint8_t id)
 	 */
 	pdd->gpuvm_base = SVM_USER_BASE;
 	pdd->gpuvm_limit =
-		pdd->dev->kfd->shared_resources.gpuvm_size - 1;
+		pdd->dev->shared_resources.gpuvm_size - 1;
 
 	pdd->scratch_base = MAKE_SCRATCH_APP_BASE_V9();
 	pdd->scratch_limit = MAKE_SCRATCH_APP_LIMIT(pdd->scratch_base);
@@ -365,7 +364,7 @@ static void kfd_init_apertures_v9(struct kfd_process_device *pdd, uint8_t id)
 int kfd_init_apertures(struct kfd_process *process)
 {
 	uint8_t id  = 0;
-	struct kfd_node *dev;
+	struct kfd_dev *dev;
 	struct kfd_process_device *pdd;
 
 	/*Iterating over all devices*/
@@ -395,7 +394,7 @@ int kfd_init_apertures(struct kfd_process *process)
 			pdd->gpuvm_base = pdd->gpuvm_limit = 0;
 			pdd->scratch_base = pdd->scratch_limit = 0;
 		} else {
-			switch (dev->adev->asic_type) {
+			switch (dev->device_info->asic_family) {
 			case CHIP_KAVERI:
 			case CHIP_HAWAII:
 			case CHIP_CARRIZO:
@@ -407,17 +406,26 @@ int kfd_init_apertures(struct kfd_process *process)
 			case CHIP_VEGAM:
 				kfd_init_apertures_vi(pdd, id);
 				break;
+			case CHIP_VEGA10:
+			case CHIP_VEGA12:
+			case CHIP_VEGA20:
+			case CHIP_RAVEN:
+			case CHIP_RENOIR:
+			case CHIP_ARCTURUS:
+			case CHIP_NAVI10:
+			case CHIP_NAVI12:
+			case CHIP_NAVI14:
+			case CHIP_SIENNA_CICHLID:
+			case CHIP_NAVY_FLOUNDER:
+				kfd_init_apertures_v9(pdd, id);
+				break;
 			default:
-				if (KFD_GC_VERSION(dev) >= IP_VERSION(9, 0, 1))
-					kfd_init_apertures_v9(pdd, id);
-				else {
-					WARN(1, "Unexpected ASIC family %u",
-					     dev->adev->asic_type);
-					return -EINVAL;
-				}
+				WARN(1, "Unexpected ASIC family %u",
+				     dev->device_info->asic_family);
+				return -EINVAL;
 			}
 
-			if (!dev->kfd->use_iommu_v2) {
+			if (!dev->use_iommu_v2) {
 				/* dGPUs: the reserved space for kernel
 				 * before SVM
 				 */

@@ -7,7 +7,7 @@
 
 #include <linux/linkage.h>
 #include <linux/init.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 
 /*
  * Boot code for secondary CPUs.

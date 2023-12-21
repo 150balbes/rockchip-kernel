@@ -146,15 +146,13 @@ void ubi_refill_pools(struct ubi_device *ubi)
 	if (ubi->fm_anchor) {
 		wl_tree_add(ubi->fm_anchor, &ubi->free);
 		ubi->free_count++;
-		ubi->fm_anchor = NULL;
 	}
 
-	if (!ubi->fm_disabled)
-		/*
-		 * All available PEBs are in ubi->free, now is the time to get
-		 * the best anchor PEBs.
-		 */
-		ubi->fm_anchor = ubi_wl_get_fm_peb(ubi, 1);
+	/*
+	 * All available PEBs are in ubi->free, now is the time to get
+	 * the best anchor PEBs.
+	 */
+	ubi->fm_anchor = ubi_wl_get_fm_peb(ubi, 1);
 
 	for (;;) {
 		enough = 0;
@@ -275,58 +273,6 @@ again:
 	spin_unlock(&ubi->wl_lock);
 out:
 	return ret;
-}
-
-/**
- * next_peb_for_wl - returns next PEB to be used internally by the
- * WL sub-system.
- *
- * @ubi: UBI device description object
- */
-static struct ubi_wl_entry *next_peb_for_wl(struct ubi_device *ubi)
-{
-	struct ubi_fm_pool *pool = &ubi->fm_wl_pool;
-	int pnum;
-
-	if (pool->used == pool->size)
-		return NULL;
-
-	pnum = pool->pebs[pool->used];
-	return ubi->lookuptbl[pnum];
-}
-
-/**
- * need_wear_leveling - checks whether to trigger a wear leveling work.
- * UBI fetches free PEB from wl_pool, we check free PEBs from both 'wl_pool'
- * and 'ubi->free', because free PEB in 'ubi->free' tree maybe moved into
- * 'wl_pool' by ubi_refill_pools().
- *
- * @ubi: UBI device description object
- */
-static bool need_wear_leveling(struct ubi_device *ubi)
-{
-	int ec;
-	struct ubi_wl_entry *e;
-
-	if (!ubi->used.rb_node)
-		return false;
-
-	e = next_peb_for_wl(ubi);
-	if (!e) {
-		if (!ubi->free.rb_node)
-			return false;
-		e = find_wl_entry(ubi, &ubi->free, WL_FREE_MAX_DIFF);
-		ec = e->ec;
-	} else {
-		ec = e->ec;
-		if (ubi->free.rb_node) {
-			e = find_wl_entry(ubi, &ubi->free, WL_FREE_MAX_DIFF);
-			ec = max(ec, e->ec);
-		}
-	}
-	e = rb_entry(rb_first(&ubi->used), struct ubi_wl_entry, u.rb);
-
-	return ec - e->ec >= UBI_WL_THRESHOLD;
 }
 
 /* get_peb_for_wl - returns a PEB to be used internally by the WL sub-system.

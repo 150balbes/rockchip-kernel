@@ -16,7 +16,6 @@
  */
 
 #define pr_fmt(fmt) "PM: " fmt
-#define dev_fmt pr_fmt
 
 #include <linux/device.h>
 #include <linux/export.h>
@@ -32,8 +31,10 @@
 #include <linux/suspend.h>
 #include <trace/events/power.h>
 #include <linux/cpufreq.h>
+#include <linux/cpuidle.h>
 #include <linux/devfreq.h>
 #include <linux/timer.h>
+#include <linux/wakeup_reason.h>
 
 #include "../base.h"
 #include "power.h"
@@ -219,13 +220,16 @@ static void initcall_debug_report(struct device *dev, ktime_t calltime,
 				  void *cb, int error)
 {
 	ktime_t rettime;
+	s64 nsecs;
 
 	if (!pm_print_times_enabled)
 		return;
 
 	rettime = ktime_get();
+	nsecs = (s64) ktime_to_ns(ktime_sub(rettime, calltime));
+
 	dev_info(dev, "%pS returned %d after %Ld usecs\n", cb, error,
-		 (unsigned long long)ktime_us_delta(rettime, calltime));
+		 (unsigned long long)nsecs >> 10);
 }
 
 /**
@@ -438,16 +442,16 @@ static pm_callback_t pm_noirq_op(const struct dev_pm_ops *ops, pm_message_t stat
 
 static void pm_dev_dbg(struct device *dev, pm_message_t state, const char *info)
 {
-	dev_dbg(dev, "%s%s%s driver flags: %x\n", info, pm_verb(state.event),
+	dev_dbg(dev, "%s%s%s\n", info, pm_verb(state.event),
 		((state.event & PM_EVENT_SLEEP) && device_may_wakeup(dev)) ?
-		", may wakeup" : "", dev->power.driver_flags);
+		", may wakeup" : "");
 }
 
 static void pm_dev_err(struct device *dev, pm_message_t state, const char *info,
 			int error)
 {
-	dev_err(dev, "failed to %s%s: error %d\n", pm_verb(state.event), info,
-		error);
+	pr_err("Device %s failed to %s%s: error %d\n",
+	       dev_name(dev), pm_verb(state.event), info, error);
 }
 
 static void dpm_show_time(ktime_t starttime, pm_message_t state, int error,
@@ -485,7 +489,7 @@ static int dpm_run_callback(pm_callback_t cb, struct device *dev,
 	trace_device_pm_callback_start(dev, info, state.event);
 	error = cb(dev);
 	trace_device_pm_callback_end(dev, error);
-	suspend_report_result(dev, cb, error);
+	suspend_report_result(cb, error);
 
 	initcall_debug_report(dev, calltime, cb, error);
 
@@ -679,7 +683,7 @@ static bool dpm_async_fn(struct device *dev, async_func_t func)
 
 static void async_resume_noirq(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = device_resume_noirq(dev, pm_transition, true);
@@ -710,7 +714,6 @@ static void dpm_noirq_resume_devices(pm_message_t state)
 		dev = to_device(dpm_noirq_list.next);
 		get_device(dev);
 		list_move_tail(&dev->power.entry, &dpm_late_early_list);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		if (!is_async(dev)) {
@@ -725,9 +728,8 @@ static void dpm_noirq_resume_devices(pm_message_t state)
 			}
 		}
 
-		put_device(dev);
-
 		mutex_lock(&dpm_list_mtx);
+		put_device(dev);
 	}
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
@@ -748,6 +750,8 @@ void dpm_resume_noirq(pm_message_t state)
 
 	resume_device_irqs();
 	device_wakeup_disarm_wake_irqs();
+
+	cpuidle_resume();
 }
 
 /**
@@ -816,7 +820,7 @@ Out:
 
 static void async_resume_early(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = device_resume_early(dev, pm_transition, true);
@@ -851,7 +855,6 @@ void dpm_resume_early(pm_message_t state)
 		dev = to_device(dpm_late_early_list.next);
 		get_device(dev);
 		list_move_tail(&dev->power.entry, &dpm_suspended_list);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		if (!is_async(dev)) {
@@ -865,10 +868,8 @@ void dpm_resume_early(pm_message_t state)
 				pm_dev_err(dev, state, " early", error);
 			}
 		}
-
-		put_device(dev);
-
 		mutex_lock(&dpm_list_mtx);
+		put_device(dev);
 	}
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
@@ -980,7 +981,7 @@ static int device_resume(struct device *dev, pm_message_t state, bool async)
 
 static void async_resume(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = device_resume(dev, pm_transition, true);
@@ -1031,12 +1032,7 @@ void dpm_resume(pm_message_t state)
 		}
 		if (!list_empty(&dev->power.entry))
 			list_move_tail(&dev->power.entry, &dpm_prepared_list);
-
-		mutex_unlock(&dpm_list_mtx);
-
 		put_device(dev);
-
-		mutex_lock(&dpm_list_mtx);
 	}
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
@@ -1114,16 +1110,14 @@ void dpm_complete(pm_message_t state)
 		get_device(dev);
 		dev->power.is_prepared = false;
 		list_move(&dev->power.entry, &list);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		trace_device_pm_callback_start(dev, "", state.event);
 		device_complete(dev, state);
 		trace_device_pm_callback_end(dev, 0);
 
-		put_device(dev);
-
 		mutex_lock(&dpm_list_mtx);
+		put_device(dev);
 	}
 	list_splice(&list, &dpm_list);
 	mutex_unlock(&dpm_list_mtx);
@@ -1241,6 +1235,8 @@ Run:
 	error = dpm_run_callback(callback, dev, state, info);
 	if (error) {
 		async_error = error;
+		log_suspend_abort_reason("Device %s failed to %s noirq: error %d",
+					 dev_name(dev), pm_verb(state.event), error);
 		goto Complete;
 	}
 
@@ -1269,7 +1265,7 @@ Complete:
 
 static void async_suspend_noirq(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = __device_suspend_noirq(dev, pm_transition, true);
@@ -1308,21 +1304,17 @@ static int dpm_noirq_suspend_devices(pm_message_t state)
 		error = device_suspend_noirq(dev);
 
 		mutex_lock(&dpm_list_mtx);
-
 		if (error) {
 			pm_dev_err(dev, state, " noirq", error);
 			dpm_save_failed_dev(dev_name(dev));
-		} else if (!list_empty(&dev->power.entry)) {
-			list_move(&dev->power.entry, &dpm_noirq_list);
+			put_device(dev);
+			break;
 		}
-
-		mutex_unlock(&dpm_list_mtx);
-
+		if (!list_empty(&dev->power.entry))
+			list_move(&dev->power.entry, &dpm_noirq_list);
 		put_device(dev);
 
-		mutex_lock(&dpm_list_mtx);
-
-		if (error || async_error)
+		if (async_error)
 			break;
 	}
 	mutex_unlock(&dpm_list_mtx);
@@ -1350,6 +1342,8 @@ int dpm_suspend_noirq(pm_message_t state)
 {
 	int ret;
 
+	cpuidle_pause();
+
 	device_wakeup_arm_wake_irqs();
 	suspend_device_irqs();
 
@@ -1369,7 +1363,7 @@ static void dpm_propagate_wakeup_to_parent(struct device *dev)
 
 	spin_lock_irq(&parent->power.lock);
 
-	if (device_wakeup_path(dev) && !parent->power.ignore_children)
+	if (dev->power.wakeup_path && !parent->power.ignore_children)
 		parent->power.wakeup_path = true;
 
 	spin_unlock_irq(&parent->power.lock);
@@ -1435,6 +1429,8 @@ Run:
 	error = dpm_run_callback(callback, dev, state, info);
 	if (error) {
 		async_error = error;
+		log_suspend_abort_reason("Device %s failed to %s late: error %d",
+					 dev_name(dev), pm_verb(state.event), error);
 		goto Complete;
 	}
 	dpm_propagate_wakeup_to_parent(dev);
@@ -1450,7 +1446,7 @@ Complete:
 
 static void async_suspend_late(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = __device_suspend_late(dev, pm_transition, true);
@@ -1479,7 +1475,6 @@ int dpm_suspend_late(pm_message_t state)
 	int error = 0;
 
 	trace_suspend_resume(TPS("dpm_suspend_late"), state.event, true);
-	wake_up_all_idle_cpus();
 	mutex_lock(&dpm_list_mtx);
 	pm_transition = state;
 	async_error = 0;
@@ -1488,28 +1483,23 @@ int dpm_suspend_late(pm_message_t state)
 		struct device *dev = to_device(dpm_suspended_list.prev);
 
 		get_device(dev);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		error = device_suspend_late(dev);
 
 		mutex_lock(&dpm_list_mtx);
-
 		if (!list_empty(&dev->power.entry))
 			list_move(&dev->power.entry, &dpm_late_early_list);
 
 		if (error) {
 			pm_dev_err(dev, state, " late", error);
 			dpm_save_failed_dev(dev_name(dev));
+			put_device(dev);
+			break;
 		}
-
-		mutex_unlock(&dpm_list_mtx);
-
 		put_device(dev);
 
-		mutex_lock(&dpm_list_mtx);
-
-		if (error || async_error)
+		if (async_error)
 			break;
 	}
 	mutex_unlock(&dpm_list_mtx);
@@ -1568,7 +1558,7 @@ static int legacy_suspend(struct device *dev, pm_message_t state,
 	trace_device_pm_callback_start(dev, info, state.event);
 	error = cb(dev, state);
 	trace_device_pm_callback_end(dev, error);
-	suspend_report_result(dev, cb, error);
+	suspend_report_result(cb, error);
 
 	initcall_debug_report(dev, calltime, cb, error);
 
@@ -1643,7 +1633,7 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		goto Complete;
 
 	/* Avoid direct_complete to let wakeup_path propagate. */
-	if (device_may_wakeup(dev) || device_wakeup_path(dev))
+	if (device_may_wakeup(dev) || dev->power.wakeup_path)
 		dev->power.direct_complete = false;
 
 	if (dev->power.direct_complete) {
@@ -1711,6 +1701,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 
 		dpm_propagate_wakeup_to_parent(dev);
 		dpm_clear_superiors_direct_complete(dev);
+	} else {
+		log_suspend_abort_reason("Device %s failed to %s: error %d",
+					 dev_name(dev), pm_verb(state.event), error);
 	}
 
 	device_unlock(dev);
@@ -1727,7 +1720,7 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 
 static void async_suspend(void *data, async_cookie_t cookie)
 {
-	struct device *dev = data;
+	struct device *dev = (struct device *)data;
 	int error;
 
 	error = __device_suspend(dev, pm_transition, true);
@@ -1769,27 +1762,21 @@ int dpm_suspend(pm_message_t state)
 		struct device *dev = to_device(dpm_prepared_list.prev);
 
 		get_device(dev);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		error = device_suspend(dev);
 
 		mutex_lock(&dpm_list_mtx);
-
 		if (error) {
 			pm_dev_err(dev, state, "", error);
 			dpm_save_failed_dev(dev_name(dev));
-		} else if (!list_empty(&dev->power.entry)) {
-			list_move(&dev->power.entry, &dpm_suspended_list);
+			put_device(dev);
+			break;
 		}
-
-		mutex_unlock(&dpm_list_mtx);
-
+		if (!list_empty(&dev->power.entry))
+			list_move(&dev->power.entry, &dpm_suspended_list);
 		put_device(dev);
-
-		mutex_lock(&dpm_list_mtx);
-
-		if (error || async_error)
+		if (async_error)
 			break;
 	}
 	mutex_unlock(&dpm_list_mtx);
@@ -1855,7 +1842,7 @@ unlock:
 	device_unlock(dev);
 
 	if (ret < 0) {
-		suspend_report_result(dev, callback, ret);
+		suspend_report_result(callback, ret);
 		pm_runtime_put(dev);
 		return ret;
 	}
@@ -1902,11 +1889,10 @@ int dpm_prepare(pm_message_t state)
 	device_block_probing();
 
 	mutex_lock(&dpm_list_mtx);
-	while (!list_empty(&dpm_list) && !error) {
+	while (!list_empty(&dpm_list)) {
 		struct device *dev = to_device(dpm_list.next);
 
 		get_device(dev);
-
 		mutex_unlock(&dpm_list_mtx);
 
 		trace_device_pm_callback_start(dev, "", state.event);
@@ -1914,23 +1900,24 @@ int dpm_prepare(pm_message_t state)
 		trace_device_pm_callback_end(dev, error);
 
 		mutex_lock(&dpm_list_mtx);
-
-		if (!error) {
-			dev->power.is_prepared = true;
-			if (!list_empty(&dev->power.entry))
-				list_move_tail(&dev->power.entry, &dpm_prepared_list);
-		} else if (error == -EAGAIN) {
-			error = 0;
-		} else {
-			dev_info(dev, "not prepared for power transition: code %d\n",
-				 error);
+		if (error) {
+			if (error == -EAGAIN) {
+				put_device(dev);
+				error = 0;
+				continue;
+			}
+			pr_info("Device %s not prepared for power transition: code %d\n",
+				dev_name(dev), error);
+			log_suspend_abort_reason("Device %s not prepared for power transition: code %d",
+						 dev_name(dev), error);
+			dpm_save_failed_dev(dev_name(dev));
+			put_device(dev);
+			break;
 		}
-
-		mutex_unlock(&dpm_list_mtx);
-
+		dev->power.is_prepared = true;
+		if (!list_empty(&dev->power.entry))
+			list_move_tail(&dev->power.entry, &dpm_prepared_list);
 		put_device(dev);
-
-		mutex_lock(&dpm_list_mtx);
 	}
 	mutex_unlock(&dpm_list_mtx);
 	trace_suspend_resume(TPS("dpm_prepare"), state.event, false);
@@ -1960,10 +1947,10 @@ int dpm_suspend_start(pm_message_t state)
 }
 EXPORT_SYMBOL_GPL(dpm_suspend_start);
 
-void __suspend_report_result(const char *function, struct device *dev, void *fn, int ret)
+void __suspend_report_result(const char *function, void *fn, int ret)
 {
 	if (ret)
-		dev_err(dev, "%s(): %pS returns %d\n", function, fn, ret);
+		pr_err("%s(): %pS returns %d\n", function, fn, ret);
 }
 EXPORT_SYMBOL_GPL(__suspend_report_result);
 

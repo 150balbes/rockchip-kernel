@@ -229,7 +229,6 @@ static u8 da8xx_cfgchip_mux_clk_get_parent(struct clk_hw *hw)
 }
 
 static const struct clk_ops da8xx_cfgchip_mux_clk_ops = {
-	.determine_rate	= clk_hw_determine_rate_no_reparent,
 	.set_parent	= da8xx_cfgchip_mux_clk_set_parent,
 	.get_parent	= da8xx_cfgchip_mux_clk_get_parent,
 };
@@ -462,12 +461,10 @@ static unsigned long da8xx_usb0_clk48_recalc_rate(struct clk_hw *hw,
 	return 48000000;
 }
 
-static int da8xx_usb0_clk48_determine_rate(struct clk_hw *hw,
-					   struct clk_rate_request *req)
+static long da8xx_usb0_clk48_round_rate(struct clk_hw *hw, unsigned long rate,
+					unsigned long *parent_rate)
 {
-	req->rate = 48000000;
-
-	return 0;
+	return 48000000;
 }
 
 static int da8xx_usb0_clk48_set_parent(struct clk_hw *hw, u8 index)
@@ -496,7 +493,7 @@ static const struct clk_ops da8xx_usb0_clk48_ops = {
 	.disable	= da8xx_usb0_clk48_disable,
 	.is_enabled	= da8xx_usb0_clk48_is_enabled,
 	.recalc_rate	= da8xx_usb0_clk48_recalc_rate,
-	.determine_rate	= da8xx_usb0_clk48_determine_rate,
+	.round_rate	= da8xx_usb0_clk48_round_rate,
 	.set_parent	= da8xx_usb0_clk48_set_parent,
 	.get_parent	= da8xx_usb0_clk48_get_parent,
 };
@@ -513,7 +510,8 @@ da8xx_cfgchip_register_usb0_clk48(struct device *dev,
 
 	fck_clk = devm_clk_get(dev, "fck");
 	if (IS_ERR(fck_clk)) {
-		dev_err_probe(dev, PTR_ERR(fck_clk), "Missing fck clock\n");
+		if (PTR_ERR(fck_clk) != -EPROBE_DEFER)
+			dev_err(dev, "Missing fck clock\n");
 		return ERR_CAST(fck_clk);
 	}
 
@@ -567,7 +565,6 @@ static u8 da8xx_usb1_clk48_get_parent(struct clk_hw *hw)
 }
 
 static const struct clk_ops da8xx_usb1_clk48_ops = {
-	.determine_rate	= clk_hw_determine_rate_no_reparent,
 	.set_parent	= da8xx_usb1_clk48_set_parent,
 	.get_parent	= da8xx_usb1_clk48_get_parent,
 };

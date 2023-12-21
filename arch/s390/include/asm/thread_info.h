@@ -9,9 +9,6 @@
 #define _ASM_THREAD_INFO_H
 
 #include <linux/bits.h>
-#ifndef ASM_OFFSETS_C
-#include <asm/asm-offsets.h>
-#endif
 
 /*
  * General size of kernel stacks
@@ -21,14 +18,15 @@
 #else
 #define THREAD_SIZE_ORDER 2
 #endif
-#define BOOT_STACK_SIZE (PAGE_SIZE << 2)
+#define BOOT_STACK_ORDER  2
 #define THREAD_SIZE (PAGE_SIZE << THREAD_SIZE_ORDER)
-
-#define STACK_INIT_OFFSET (THREAD_SIZE - STACK_FRAME_OVERHEAD - __PT_SIZE)
 
 #ifndef __ASSEMBLY__
 #include <asm/lowcore.h>
 #include <asm/page.h>
+
+#define STACK_INIT_OFFSET \
+	(THREAD_SIZE - STACK_FRAME_OVERHEAD - sizeof(struct pt_regs))
 
 /*
  * low level task data that entry.S needs immediate access to
@@ -38,8 +36,6 @@
  */
 struct thread_info {
 	unsigned long		flags;		/* low level flags */
-	unsigned long		syscall_work;	/* SYSCALL_WORK_ flags */
-	unsigned int		cpu;		/* current CPU */
 };
 
 /*
@@ -50,7 +46,8 @@ struct thread_info {
 	.flags		= 0,			\
 }
 
-struct task_struct;
+void arch_release_task_struct(struct task_struct *tsk);
+int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
 
 void arch_setup_new_exec(void);
 #define arch_setup_new_exec arch_setup_new_exec
@@ -69,8 +66,8 @@ void arch_setup_new_exec(void);
 #define TIF_PATCH_PENDING	5	/* pending live patching update */
 #define TIF_PGSTE		6	/* New mm's will use 4K page tables */
 #define TIF_NOTIFY_SIGNAL	7	/* signal notifications exist */
+#define TIF_ISOLATE_BP		8	/* Run process with isolated BP */
 #define TIF_ISOLATE_BP_GUEST	9	/* Run KVM guests with isolated BP */
-#define TIF_PER_TRAP		10	/* Need to handle PER trap on exit to usermode */
 
 #define TIF_31BIT		16	/* 32bit process */
 #define TIF_MEMDIE		17	/* is terminating due to OOM killer */
@@ -92,8 +89,8 @@ void arch_setup_new_exec(void);
 #define _TIF_UPROBE		BIT(TIF_UPROBE)
 #define _TIF_GUARDED_STORAGE	BIT(TIF_GUARDED_STORAGE)
 #define _TIF_PATCH_PENDING	BIT(TIF_PATCH_PENDING)
+#define _TIF_ISOLATE_BP		BIT(TIF_ISOLATE_BP)
 #define _TIF_ISOLATE_BP_GUEST	BIT(TIF_ISOLATE_BP_GUEST)
-#define _TIF_PER_TRAP		BIT(TIF_PER_TRAP)
 
 #define _TIF_31BIT		BIT(TIF_31BIT)
 #define _TIF_SINGLE_STEP	BIT(TIF_SINGLE_STEP)

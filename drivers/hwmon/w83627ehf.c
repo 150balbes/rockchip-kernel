@@ -320,7 +320,7 @@ struct w83627ehf_data {
 	const u16 *scale_in;
 
 	struct mutex update_lock;
-	bool valid;		/* true if following fields are valid */
+	char valid;		/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	/* Register values */
@@ -372,10 +372,12 @@ struct w83627ehf_data {
 	u8 temp3_val_only:1;
 	u8 have_vid:1;
 
+#ifdef CONFIG_PM
 	/* Remember extra register values over suspend/resume */
 	u8 vbat;
 	u8 fandiv1;
 	u8 fandiv2;
+#endif
 };
 
 struct w83627ehf_sio_data {
@@ -688,7 +690,7 @@ static struct w83627ehf_data *w83627ehf_update_device(struct device *dev)
 						W83627EHF_REG_CASEOPEN_DET);
 
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -1081,7 +1083,7 @@ cpu0_vid_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct w83627ehf_data *data = dev_get_drvdata(dev);
 	return sprintf(buf, "%d\n", vid_from_reg(data->vid, data->vrm));
 }
-static DEVICE_ATTR_RO(cpu0_vid);
+DEVICE_ATTR_RO(cpu0_vid);
 
 
 /* Case open detection */
@@ -1099,7 +1101,7 @@ clear_caseopen(struct device *dev, struct w83627ehf_data *data, int channel,
 	reg = w83627ehf_read_value(data, W83627EHF_REG_CASEOPEN_CLR);
 	w83627ehf_write_value(data, W83627EHF_REG_CASEOPEN_CLR, reg | mask);
 	w83627ehf_write_value(data, W83627EHF_REG_CASEOPEN_CLR, reg & ~mask);
-	data->valid = false;	/* Force cache refresh */
+	data->valid = 0;	/* Force cache refresh */
 	mutex_unlock(&data->update_lock);
 
 	return 0;
@@ -1108,7 +1110,7 @@ clear_caseopen(struct device *dev, struct w83627ehf_data *data, int channel,
 static umode_t w83627ehf_attrs_visible(struct kobject *kobj,
 				       struct attribute *a, int n)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct w83627ehf_data *data = dev_get_drvdata(dev);
 	struct device_attribute *devattr;
 	struct sensor_device_attribute *sda;
@@ -1640,7 +1642,7 @@ static const struct hwmon_ops w83627ehf_ops = {
 	.write = w83627ehf_write,
 };
 
-static const struct hwmon_channel_info * const w83627ehf_info[] = {
+static const struct hwmon_channel_info *w83627ehf_info[] = {
 	HWMON_CHANNEL_INFO(fan,
 		HWMON_F_ALARM | HWMON_F_DIV | HWMON_F_INPUT | HWMON_F_MIN,
 		HWMON_F_ALARM | HWMON_F_DIV | HWMON_F_INPUT | HWMON_F_MIN,
@@ -1692,7 +1694,7 @@ static const struct hwmon_chip_info w83627ehf_chip_info = {
 	.info = w83627ehf_info,
 };
 
-static int __init w83627ehf_probe(struct platform_device *pdev)
+static int w83627ehf_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct w83627ehf_sio_data *sio_data = dev_get_platdata(dev);
@@ -1703,12 +1705,20 @@ static int __init w83627ehf_probe(struct platform_device *pdev)
 	struct device *hwmon_dev;
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
-	if (!devm_request_region(dev, res->start, IOREGION_LENGTH, DRVNAME))
-		return -EBUSY;
+	if (!request_region(res->start, IOREGION_LENGTH, DRVNAME)) {
+		err = -EBUSY;
+		dev_err(dev, "Failed to request region 0x%lx-0x%lx\n",
+			(unsigned long)res->start,
+			(unsigned long)res->start + IOREGION_LENGTH - 1);
+		goto exit;
+	}
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = devm_kzalloc(&pdev->dev, sizeof(struct w83627ehf_data),
+			    GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit_release;
+	}
 
 	data->addr = res->start;
 	mutex_init(&data->lock);
@@ -1872,7 +1882,7 @@ static int __init w83627ehf_probe(struct platform_device *pdev)
 
 	err = superio_enter(sio_data->sioreg);
 	if (err)
-		return err;
+		goto exit_release;
 
 	/* Read VID value */
 	if (sio_data->kind == w83667hg || sio_data->kind == w83667hg_b) {
@@ -1941,9 +1951,29 @@ static int __init w83627ehf_probe(struct platform_device *pdev)
 							 data,
 							 &w83627ehf_chip_info,
 							 w83627ehf_groups);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev)) {
+		err = PTR_ERR(hwmon_dev);
+		goto exit_release;
+	}
+
+	return 0;
+
+exit_release:
+	release_region(res->start, IOREGION_LENGTH);
+exit:
+	return err;
 }
 
+static int w83627ehf_remove(struct platform_device *pdev)
+{
+	struct w83627ehf_data *data = platform_get_drvdata(pdev);
+
+	release_region(data->addr, IOREGION_LENGTH);
+
+	return 0;
+}
+
+#ifdef CONFIG_PM
 static int w83627ehf_suspend(struct device *dev)
 {
 	struct w83627ehf_data *data = w83627ehf_update_device(dev);
@@ -2004,19 +2034,31 @@ static int w83627ehf_resume(struct device *dev)
 	w83627ehf_write_value(data, W83627EHF_REG_VBAT, data->vbat);
 
 	/* Force re-reading all values */
-	data->valid = false;
+	data->valid = 0;
 	mutex_unlock(&data->update_lock);
 
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(w83627ehf_dev_pm_ops, w83627ehf_suspend, w83627ehf_resume);
+static const struct dev_pm_ops w83627ehf_dev_pm_ops = {
+	.suspend = w83627ehf_suspend,
+	.resume = w83627ehf_resume,
+	.freeze = w83627ehf_suspend,
+	.restore = w83627ehf_resume,
+};
+
+#define W83627EHF_DEV_PM_OPS	(&w83627ehf_dev_pm_ops)
+#else
+#define W83627EHF_DEV_PM_OPS	NULL
+#endif /* CONFIG_PM */
 
 static struct platform_driver w83627ehf_driver = {
 	.driver = {
 		.name	= DRVNAME,
-		.pm	= pm_sleep_ptr(&w83627ehf_dev_pm_ops),
+		.pm	= W83627EHF_DEV_PM_OPS,
 	},
+	.probe		= w83627ehf_probe,
+	.remove		= w83627ehf_remove,
 };
 
 /* w83627ehf_find() looks for a '627 in the Super-I/O config space */
@@ -2108,7 +2150,8 @@ static int __init w83627ehf_find(int sioaddr, unsigned short *addr,
 /*
  * when Super-I/O functions move to a separate file, the Super-I/O
  * bus will manage the lifetime of the device and this module will only keep
- * track of the w83627ehf driver.
+ * track of the w83627ehf driver. But since we platform_device_alloc(), we
+ * must keep track of the device
  */
 static struct platform_device *pdev;
 
@@ -2116,10 +2159,7 @@ static int __init sensors_w83627ehf_init(void)
 {
 	int err;
 	unsigned short address;
-	struct resource res = {
-		.name	= DRVNAME,
-		.flags	= IORESOURCE_IO,
-	};
+	struct resource res;
 	struct w83627ehf_sio_data sio_data;
 
 	/*
@@ -2133,17 +2173,55 @@ static int __init sensors_w83627ehf_init(void)
 	    w83627ehf_find(0x4e, &address, &sio_data))
 		return -ENODEV;
 
+	err = platform_driver_register(&w83627ehf_driver);
+	if (err)
+		goto exit;
+
+	pdev = platform_device_alloc(DRVNAME, address);
+	if (!pdev) {
+		err = -ENOMEM;
+		pr_err("Device allocation failed\n");
+		goto exit_unregister;
+	}
+
+	err = platform_device_add_data(pdev, &sio_data,
+				       sizeof(struct w83627ehf_sio_data));
+	if (err) {
+		pr_err("Platform data allocation failed\n");
+		goto exit_device_put;
+	}
+
+	memset(&res, 0, sizeof(res));
+	res.name = DRVNAME;
 	res.start = address + IOREGION_OFFSET;
 	res.end = address + IOREGION_OFFSET + IOREGION_LENGTH - 1;
+	res.flags = IORESOURCE_IO;
 
 	err = acpi_check_resource_conflict(&res);
 	if (err)
-		return err;
+		goto exit_device_put;
 
-	pdev = platform_create_bundle(&w83627ehf_driver, w83627ehf_probe, &res, 1, &sio_data,
-				      sizeof(struct w83627ehf_sio_data));
+	err = platform_device_add_resources(pdev, &res, 1);
+	if (err) {
+		pr_err("Device resource addition failed (%d)\n", err);
+		goto exit_device_put;
+	}
 
-	return PTR_ERR_OR_ZERO(pdev);
+	/* platform_device_add calls probe() */
+	err = platform_device_add(pdev);
+	if (err) {
+		pr_err("Device addition failed (%d)\n", err);
+		goto exit_device_put;
+	}
+
+	return 0;
+
+exit_device_put:
+	platform_device_put(pdev);
+exit_unregister:
+	platform_driver_unregister(&w83627ehf_driver);
+exit:
+	return err;
 }
 
 static void __exit sensors_w83627ehf_exit(void)

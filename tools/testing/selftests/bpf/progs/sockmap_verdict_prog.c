@@ -1,27 +1,28 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include "bpf_misc.h"
+
+int _version SEC("version") = 1;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
 	__uint(max_entries, 20);
-	__type(key, int);
-	__type(value, int);
+	__uint(key_size, sizeof(int));
+	__uint(value_size, sizeof(int));
 } sock_map_rx SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
 	__uint(max_entries, 20);
-	__type(key, int);
-	__type(value, int);
+	__uint(key_size, sizeof(int));
+	__uint(value_size, sizeof(int));
 } sock_map_tx SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
 	__uint(max_entries, 20);
-	__type(key, int);
-	__type(value, int);
+	__uint(key_size, sizeof(int));
+	__uint(value_size, sizeof(int));
 } sock_map_msg SEC(".maps");
 
 struct {
@@ -40,9 +41,6 @@ int bpf_prog2(struct __sk_buff *skb)
 	__u32 rport = skb->remote_port;
 	__u8 *d = data;
 	__u8 sk, map;
-
-	__sink(lport);
-	__sink(rport);
 
 	if (data + 8 > data_end)
 		return SK_DROP;

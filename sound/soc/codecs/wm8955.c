@@ -952,6 +952,7 @@ static const struct snd_soc_component_driver soc_component_dev_wm8955 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config wm8955_regmap = {
@@ -967,7 +968,8 @@ static const struct regmap_config wm8955_regmap = {
 	.num_reg_defaults = ARRAY_SIZE(wm8955_reg_defaults),
 };
 
-static int wm8955_i2c_probe(struct i2c_client *i2c)
+static int wm8955_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8955_priv *wm8955;
 	int ret;
@@ -1003,7 +1005,7 @@ static struct i2c_driver wm8955_i2c_driver = {
 	.driver = {
 		.name = "wm8955",
 	},
-	.probe = wm8955_i2c_probe,
+	.probe =    wm8955_i2c_probe,
 	.id_table = wm8955_i2c_id,
 };
 

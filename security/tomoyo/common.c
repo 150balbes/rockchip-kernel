@@ -8,7 +8,6 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/security.h>
-#include <linux/string_helpers.h>
 #include "common.h"
 
 /* String table for operation mode. */
@@ -174,6 +173,16 @@ static const char * const tomoyo_category_keywords
 static bool tomoyo_manage_by_non_root;
 
 /* Utility functions. */
+
+/**
+ * tomoyo_yesno - Return "yes" or "no".
+ *
+ * @value: Bool value.
+ */
+const char *tomoyo_yesno(const unsigned int value)
+{
+	return value ? "yes" : "no";
+}
 
 /**
  * tomoyo_addprintf - strncat()-like-snprintf().
@@ -489,7 +498,7 @@ static struct tomoyo_profile *tomoyo_assign_profile
 	ptr = ns->profile_ptr[profile];
 	if (ptr)
 		return ptr;
-	entry = kzalloc(sizeof(*entry), GFP_NOFS | __GFP_NOWARN);
+	entry = kzalloc(sizeof(*entry), GFP_NOFS);
 	if (mutex_lock_interruptible(&tomoyo_policy_lock))
 		goto out;
 	ptr = ns->profile_ptr[profile];
@@ -626,7 +635,7 @@ static int tomoyo_set_mode(char *name, const char *value,
 			if (strstr(value, tomoyo_mode[mode]))
 				/*
 				 * Update lower 3 bits in order to distinguish
-				 * 'config' from 'TOMOYO_CONFIG_USE_DEFAULT'.
+				 * 'config' from 'TOMOYO_CONFIG_USE_DEAFULT'.
 				 */
 				config = (config & ~7) | mode;
 		if (config != TOMOYO_CONFIG_USE_DEFAULT) {
@@ -721,8 +730,8 @@ static void tomoyo_print_config(struct tomoyo_io_buffer *head, const u8 config)
 {
 	tomoyo_io_printf(head, "={ mode=%s grant_log=%s reject_log=%s }\n",
 			 tomoyo_mode[config & 3],
-			 str_yes_no(config & TOMOYO_CONFIG_WANT_GRANT_LOG),
-			 str_yes_no(config & TOMOYO_CONFIG_WANT_REJECT_LOG));
+			 tomoyo_yesno(config & TOMOYO_CONFIG_WANT_GRANT_LOG),
+			 tomoyo_yesno(config & TOMOYO_CONFIG_WANT_REJECT_LOG));
 }
 
 /**
@@ -1345,8 +1354,8 @@ static bool tomoyo_print_condition(struct tomoyo_io_buffer *head,
 	case 3:
 		if (cond->grant_log != TOMOYO_GRANTLOG_AUTO)
 			tomoyo_io_printf(head, " grant_log=%s",
-					 str_yes_no(cond->grant_log ==
-						    TOMOYO_GRANTLOG_YES));
+					 tomoyo_yesno(cond->grant_log ==
+						      TOMOYO_GRANTLOG_YES));
 		tomoyo_set_lf(head);
 		return true;
 	}
@@ -2057,7 +2066,7 @@ int tomoyo_supervisor(struct tomoyo_request_info *r, const char *fmt, ...)
 	bool quota_exceeded = false;
 
 	va_start(args, fmt);
-	len = vsnprintf(NULL, 0, fmt, args) + 1;
+	len = vsnprintf((char *) &len, 1, fmt, args) + 1;
 	va_end(args);
 	/* Write /sys/kernel/security/tomoyo/audit. */
 	va_start(args, fmt);
@@ -2094,7 +2103,7 @@ int tomoyo_supervisor(struct tomoyo_request_info *r, const char *fmt, ...)
 		tomoyo_add_entry(r->domain, entry.query);
 		goto out;
 	}
-	len = kmalloc_size_roundup(entry.query_len);
+	len = tomoyo_round2(entry.query_len);
 	entry.domain = r->domain;
 	spin_lock(&tomoyo_query_list_lock);
 	if (tomoyo_memory_quota[TOMOYO_MEMORY_QUERY] &&
@@ -2565,7 +2574,7 @@ static inline bool tomoyo_has_more_namespace(struct tomoyo_io_buffer *head)
  * tomoyo_read_control - read() for /sys/kernel/security/tomoyo/ interface.
  *
  * @head:       Pointer to "struct tomoyo_io_buffer".
- * @buffer:     Pointer to buffer to write to.
+ * @buffer:     Poiner to buffer to write to.
  * @buffer_len: Size of @buffer.
  *
  * Returns bytes read on success, negative value otherwise.
@@ -2599,7 +2608,7 @@ ssize_t tomoyo_read_control(struct tomoyo_io_buffer *head, char __user *buffer,
 /**
  * tomoyo_parse_policy - Parse a policy line.
  *
- * @head: Pointer to "struct tomoyo_io_buffer".
+ * @head: Poiter to "struct tomoyo_io_buffer".
  * @line: Line to parse.
  *
  * Returns 0 on success, negative value otherwise.

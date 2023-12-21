@@ -53,3 +53,4 @@ examples:
         clocks = <&clock 278>;
         clock-names = "rotator";
     };
+

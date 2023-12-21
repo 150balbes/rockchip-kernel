@@ -10,6 +10,12 @@ struct xfs_bstat;
 struct xfs_ibulk;
 struct xfs_inogrp;
 
+
+extern int
+xfs_ioc_space(
+	struct file		*filp,
+	xfs_flock64_t		*bf);
+
 int
 xfs_ioc_swapext(
 	xfs_swapext_t	*sxp);
@@ -41,17 +47,6 @@ xfs_handle_to_dentry(
 	struct file		*parfilp,
 	void __user		*uhandle,
 	u32			hlen);
-
-extern int
-xfs_fileattr_get(
-	struct dentry		*dentry,
-	struct fileattr		*fa);
-
-extern int
-xfs_fileattr_set(
-	struct mnt_idmap	*idmap,
-	struct dentry		*dentry,
-	struct fileattr		*fa);
 
 extern long
 xfs_file_ioctl(

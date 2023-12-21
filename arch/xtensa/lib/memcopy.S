@@ -273,8 +273,21 @@ WEAK(memcpy)
 	abi_ret_default
 
 ENDPROC(__memcpy)
-EXPORT_SYMBOL(__memcpy)
-EXPORT_SYMBOL(memcpy)
+
+/*
+ * void bcopy(const void *src, void *dest, size_t n);
+ */
+
+ENTRY(bcopy)
+
+	abi_entry_default
+	# a2=src, a3=dst, a4=len
+	mov	a5, a3
+	mov	a3, a2
+	mov	a2, a5
+	j	.Lmovecommon	# go to common code for memmove+bcopy
+
+ENDPROC(bcopy)
 
 /*
  * void *memmove(void *dst, const void *src, size_t len);
@@ -389,13 +402,13 @@ WEAK(memmove)
 	 */
 	# copy 16 bytes per iteration for word-aligned dst and word-aligned src
 #if XCHAL_HAVE_LOOPS
-	loopnez	a7, .LbackLoop1done
+	loopnez	a7, .backLoop1done
 #else /* !XCHAL_HAVE_LOOPS */
-	beqz	a7, .LbackLoop1done
+	beqz	a7, .backLoop1done
 	slli	a8, a7, 4
 	sub	a8, a3, a8	# a8 = start of first 16B source chunk
 #endif /* !XCHAL_HAVE_LOOPS */
-.LbackLoop1:
+.backLoop1:
 	addi	a3, a3, -16
 	l32i	a7, a3, 12
 	l32i	a6, a3,  8
@@ -407,9 +420,9 @@ WEAK(memmove)
 	s32i	a7, a5,  4
 	s32i	a6, a5,  0
 #if !XCHAL_HAVE_LOOPS
-	bne	a3, a8, .LbackLoop1  # continue loop if a3:src != a8:src_start
+	bne	a3, a8, .backLoop1  # continue loop if a3:src != a8:src_start
 #endif /* !XCHAL_HAVE_LOOPS */
-.LbackLoop1done:
+.backLoop1done:
 	bbci.l	a4, 3, .Lback2
 	# copy 8 bytes
 	addi	a3, a3, -8
@@ -466,13 +479,13 @@ WEAK(memmove)
 #endif
 	l32i	a6, a3, 0	# load first word
 #if XCHAL_HAVE_LOOPS
-	loopnez	a7, .LbackLoop2done
+	loopnez	a7, .backLoop2done
 #else /* !XCHAL_HAVE_LOOPS */
-	beqz	a7, .LbackLoop2done
+	beqz	a7, .backLoop2done
 	slli	a10, a7, 4
 	sub	a10, a3, a10	# a10 = start of first 16B source chunk
 #endif /* !XCHAL_HAVE_LOOPS */
-.LbackLoop2:
+.backLoop2:
 	addi	a3, a3, -16
 	l32i	a7, a3, 12
 	l32i	a8, a3,  8
@@ -488,9 +501,9 @@ WEAK(memmove)
 	__src_b	a9, a6, a9
 	s32i	a9, a5,  0
 #if !XCHAL_HAVE_LOOPS
-	bne	a3, a10, .LbackLoop2 # continue loop if a3:src != a10:src_start
+	bne	a3, a10, .backLoop2 # continue loop if a3:src != a10:src_start
 #endif /* !XCHAL_HAVE_LOOPS */
-.LbackLoop2done:
+.backLoop2done:
 	bbci.l	a4, 3, .Lback12
 	# copy 8 bytes
 	addi	a3, a3, -8
@@ -538,5 +551,3 @@ WEAK(memmove)
 	abi_ret_default
 
 ENDPROC(__memmove)
-EXPORT_SYMBOL(__memmove)
-EXPORT_SYMBOL(memmove)

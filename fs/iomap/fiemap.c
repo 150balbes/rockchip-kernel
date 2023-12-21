@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2016-2021 Christoph Hellwig.
+ * Copyright (c) 2016-2018 Christoph Hellwig.
  */
 #include <linux/module.h>
 #include <linux/compiler.h>
 #include <linux/fs.h>
 #include <linux/iomap.h>
 #include <linux/fiemap.h>
-#include <linux/pagemap.h>
+
+struct fiemap_ctx {
+	struct fiemap_extent_info *fi;
+	struct iomap prev;
+};
 
 static int iomap_to_fiemap(struct fiemap_extent_info *fi,
-		const struct iomap *iomap, u32 flags)
+		struct iomap *iomap, u32 flags)
 {
 	switch (iomap->type) {
 	case IOMAP_HOLE:
@@ -39,22 +43,24 @@ static int iomap_to_fiemap(struct fiemap_extent_info *fi,
 			iomap->length, flags);
 }
 
-static loff_t iomap_fiemap_iter(const struct iomap_iter *iter,
-		struct fiemap_extent_info *fi, struct iomap *prev)
+static loff_t
+iomap_fiemap_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
+		struct iomap *iomap, struct iomap *srcmap)
 {
-	int ret;
+	struct fiemap_ctx *ctx = data;
+	loff_t ret = length;
 
-	if (iter->iomap.type == IOMAP_HOLE)
-		return iomap_length(iter);
+	if (iomap->type == IOMAP_HOLE)
+		return length;
 
-	ret = iomap_to_fiemap(fi, prev, 0);
-	*prev = iter->iomap;
+	ret = iomap_to_fiemap(ctx->fi, &ctx->prev, 0);
+	ctx->prev = *iomap;
 	switch (ret) {
 	case 0:		/* success */
-		return iomap_length(iter);
+		return length;
 	case 1:		/* extent array full */
 		return 0;
-	default:	/* error */
+	default:
 		return ret;
 	}
 }
@@ -62,63 +68,73 @@ static loff_t iomap_fiemap_iter(const struct iomap_iter *iter,
 int iomap_fiemap(struct inode *inode, struct fiemap_extent_info *fi,
 		u64 start, u64 len, const struct iomap_ops *ops)
 {
-	struct iomap_iter iter = {
-		.inode		= inode,
-		.pos		= start,
-		.len		= len,
-		.flags		= IOMAP_REPORT,
-	};
-	struct iomap prev = {
-		.type		= IOMAP_HOLE,
-	};
-	int ret;
+	struct fiemap_ctx ctx;
+	loff_t ret;
 
-	ret = fiemap_prep(inode, fi, start, &iter.len, 0);
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.fi = fi;
+	ctx.prev.type = IOMAP_HOLE;
+
+	ret = fiemap_prep(inode, fi, start, &len, 0);
 	if (ret)
 		return ret;
 
-	while ((ret = iomap_iter(&iter, ops)) > 0)
-		iter.processed = iomap_fiemap_iter(&iter, fi, &prev);
+	while (len > 0) {
+		ret = iomap_apply(inode, start, len, IOMAP_REPORT, ops, &ctx,
+				iomap_fiemap_actor);
+		/* inode with no (attribute) mapping will give ENOENT */
+		if (ret == -ENOENT)
+			break;
+		if (ret < 0)
+			return ret;
+		if (ret == 0)
+			break;
 
-	if (prev.type != IOMAP_HOLE) {
-		ret = iomap_to_fiemap(fi, &prev, FIEMAP_EXTENT_LAST);
+		start += ret;
+		len -= ret;
+	}
+
+	if (ctx.prev.type != IOMAP_HOLE) {
+		ret = iomap_to_fiemap(fi, &ctx.prev, FIEMAP_EXTENT_LAST);
 		if (ret < 0)
 			return ret;
 	}
 
-	/* inode with no (attribute) mapping will give ENOENT */
-	if (ret < 0 && ret != -ENOENT)
-		return ret;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(iomap_fiemap);
+
+static loff_t
+iomap_bmap_actor(struct inode *inode, loff_t pos, loff_t length,
+		void *data, struct iomap *iomap, struct iomap *srcmap)
+{
+	sector_t *bno = data, addr;
+
+	if (iomap->type == IOMAP_MAPPED) {
+		addr = (pos - iomap->offset + iomap->addr) >> inode->i_blkbits;
+		*bno = addr;
+	}
+	return 0;
+}
 
 /* legacy ->bmap interface.  0 is the error return (!) */
 sector_t
 iomap_bmap(struct address_space *mapping, sector_t bno,
 		const struct iomap_ops *ops)
 {
-	struct iomap_iter iter = {
-		.inode	= mapping->host,
-		.pos	= (loff_t)bno << mapping->host->i_blkbits,
-		.len	= i_blocksize(mapping->host),
-		.flags	= IOMAP_REPORT,
-	};
-	const unsigned int blkshift = mapping->host->i_blkbits - SECTOR_SHIFT;
+	struct inode *inode = mapping->host;
+	loff_t pos = bno << inode->i_blkbits;
+	unsigned blocksize = i_blocksize(inode);
 	int ret;
 
 	if (filemap_write_and_wait(mapping))
 		return 0;
 
 	bno = 0;
-	while ((ret = iomap_iter(&iter, ops)) > 0) {
-		if (iter.iomap.type == IOMAP_MAPPED)
-			bno = iomap_sector(&iter.iomap, iter.pos) >> blkshift;
-		/* leave iter.processed unset to abort loop */
-	}
+	ret = iomap_apply(inode, pos, blocksize, 0, ops, &bno,
+			  iomap_bmap_actor);
 	if (ret)
 		return 0;
-
 	return bno;
 }
 EXPORT_SYMBOL_GPL(iomap_bmap);

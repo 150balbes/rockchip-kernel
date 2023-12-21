@@ -19,7 +19,7 @@
 #include <linux/smp.h>
 #include <linux/binfmts.h>	/* do_coredum */
 #include <linux/bitops.h>
-#include <linux/resume_user_mode.h>
+#include <linux/tracehook.h>
 
 #include <linux/uaccess.h>
 #include <asm/ptrace.h>
@@ -244,7 +244,7 @@ static int setup_frame(struct ksignal *ksig, struct pt_regs *regs,
 		get_sigframe(ksig, regs, sigframe_size);
 
 	if (invalid_frame_pointer(sf, sigframe_size)) {
-		force_exit_sig(SIGILL);
+		do_exit(SIGILL);
 		return -EINVAL;
 	}
 
@@ -336,7 +336,7 @@ static int setup_rt_frame(struct ksignal *ksig, struct pt_regs *regs,
 	sf = (struct rt_signal_frame __user *)
 		get_sigframe(ksig, regs, sigframe_size);
 	if (invalid_frame_pointer(sf, sigframe_size)) {
-		force_exit_sig(SIGILL);
+		do_exit(SIGILL);
 		return -EINVAL;
 	}
 
@@ -400,8 +400,8 @@ static int setup_rt_frame(struct ksignal *ksig, struct pt_regs *regs,
 	else {
 		regs->u_regs[UREG_I7] = (unsigned long)(&(sf->insns[0]) - 2);
 
-		/* mov __NR_rt_sigreturn, %g1 */
-		err |= __put_user(0x82102065, &sf->insns[0]);
+		/* mov __NR_sigreturn, %g1 */
+		err |= __put_user(0x821020d8, &sf->insns[0]);
 
 		/* t 0x10 */
 		err |= __put_user(0x91d02010, &sf->insns[1]);
@@ -524,7 +524,7 @@ void do_notify_resume(struct pt_regs *regs, unsigned long orig_i0,
 	if (thread_info_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
 		do_signal(regs, orig_i0);
 	if (thread_info_flags & _TIF_NOTIFY_RESUME)
-		resume_user_mode_work(regs);
+		tracehook_notify_resume(regs);
 }
 
 asmlinkage int do_sys_sigstack(struct sigstack __user *ssptr,

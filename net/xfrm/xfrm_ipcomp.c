@@ -41,16 +41,19 @@ static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 	const int plen = skb->len;
 	int dlen = IPCOMP_SCRATCH_SIZE;
 	const u8 *start = skb->data;
-	u8 *scratch = *this_cpu_ptr(ipcomp_scratches);
-	struct crypto_comp *tfm = *this_cpu_ptr(ipcd->tfms);
+	const int cpu = get_cpu();
+	u8 *scratch = *per_cpu_ptr(ipcomp_scratches, cpu);
+	struct crypto_comp *tfm = *per_cpu_ptr(ipcd->tfms, cpu);
 	int err = crypto_comp_decompress(tfm, start, plen, scratch, &dlen);
 	int len;
 
 	if (err)
-		return err;
+		goto out;
 
-	if (dlen < (plen + sizeof(struct ip_comp_hdr)))
-		return -EINVAL;
+	if (dlen < (plen + sizeof(struct ip_comp_hdr))) {
+		err = -EINVAL;
+		goto out;
+	}
 
 	len = dlen - plen;
 	if (len > skb_tailroom(skb))
@@ -65,20 +68,25 @@ static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 		skb_frag_t *frag;
 		struct page *page;
 
+		err = -EMSGSIZE;
 		if (WARN_ON(skb_shinfo(skb)->nr_frags >= MAX_SKB_FRAGS))
-			return -EMSGSIZE;
+			goto out;
 
 		frag = skb_shinfo(skb)->frags + skb_shinfo(skb)->nr_frags;
 		page = alloc_page(GFP_ATOMIC);
 
+		err = -ENOMEM;
 		if (!page)
-			return -ENOMEM;
+			goto out;
+
+		__skb_frag_set_page(frag, page);
 
 		len = PAGE_SIZE;
 		if (dlen < len)
 			len = dlen;
 
-		skb_frag_fill_page_desc(frag, page, 0, len);
+		skb_frag_off_set(frag, 0);
+		skb_frag_size_set(frag, len);
 		memcpy(skb_frag_address(frag), scratch, len);
 
 		skb->truesize += len;
@@ -88,7 +96,11 @@ static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 		skb_shinfo(skb)->nr_frags++;
 	}
 
-	return 0;
+	err = 0;
+
+out:
+	put_cpu();
+	return err;
 }
 
 int ipcomp_input(struct xfrm_state *x, struct sk_buff *skb)
@@ -323,22 +335,18 @@ void ipcomp_destroy(struct xfrm_state *x)
 }
 EXPORT_SYMBOL_GPL(ipcomp_destroy);
 
-int ipcomp_init_state(struct xfrm_state *x, struct netlink_ext_ack *extack)
+int ipcomp_init_state(struct xfrm_state *x)
 {
 	int err;
 	struct ipcomp_data *ipcd;
 	struct xfrm_algo_desc *calg_desc;
 
 	err = -EINVAL;
-	if (!x->calg) {
-		NL_SET_ERR_MSG(extack, "Missing required compression algorithm");
+	if (!x->calg)
 		goto out;
-	}
 
-	if (x->encap) {
-		NL_SET_ERR_MSG(extack, "IPComp is not compatible with encapsulation");
+	if (x->encap)
 		goto out;
-	}
 
 	err = -ENOMEM;
 	ipcd = kzalloc(sizeof(*ipcd), GFP_KERNEL);

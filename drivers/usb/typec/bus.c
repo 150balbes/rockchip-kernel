@@ -9,24 +9,6 @@
 #include <linux/usb/pd_vdo.h>
 
 #include "bus.h"
-#include "class.h"
-#include "mux.h"
-#include "retimer.h"
-
-static inline int
-typec_altmode_set_retimer(struct altmode *alt, unsigned long conf, void *data)
-{
-	struct typec_retimer_state state;
-
-	if (!alt->retimer)
-		return 0;
-
-	state.alt = &alt->adev;
-	state.mode = conf;
-	state.data = data;
-
-	return typec_retimer_set(alt->retimer, &state);
-}
 
 static inline int
 typec_altmode_set_mux(struct altmode *alt, unsigned long conf, void *data)
@@ -40,20 +22,7 @@ typec_altmode_set_mux(struct altmode *alt, unsigned long conf, void *data)
 	state.mode = conf;
 	state.data = data;
 
-	return typec_mux_set(alt->mux, &state);
-}
-
-/* Wrapper to set various Type-C port switches together. */
-static inline int
-typec_altmode_set_switches(struct altmode *alt, unsigned long conf, void *data)
-{
-	int ret;
-
-	ret = typec_altmode_set_retimer(alt, conf, data);
-	if (ret)
-		return ret;
-
-	return typec_altmode_set_mux(alt, conf, data);
+	return alt->mux->set(alt->mux, &state);
 }
 
 static int typec_altmode_set_state(struct typec_altmode *adev,
@@ -64,7 +33,7 @@ static int typec_altmode_set_state(struct typec_altmode *adev,
 
 	port_altmode = is_port ? to_altmode(adev) : to_altmode(adev)->partner;
 
-	return typec_altmode_set_switches(port_altmode, conf, data);
+	return typec_altmode_set_mux(port_altmode, conf, data);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -102,7 +71,7 @@ int typec_altmode_notify(struct typec_altmode *adev,
 	is_port = is_typec_port(adev->dev.parent);
 	partner = altmode->partner;
 
-	ret = typec_altmode_set_switches(is_port ? altmode : partner, conf, data);
+	ret = typec_altmode_set_mux(is_port ? altmode : partner, conf, data);
 	if (ret)
 		return ret;
 
@@ -163,7 +132,7 @@ int typec_altmode_exit(struct typec_altmode *adev)
 	if (!adev || !adev->active)
 		return 0;
 
-	if (!pdev->ops || !pdev->ops->exit)
+	if (!pdev->ops || !pdev->ops->enter)
 		return -EOPNOTSUPP;
 
 	/* Moving to USB Safe State */
@@ -350,9 +319,9 @@ static int typec_match(struct device *dev, struct device_driver *driver)
 	return 0;
 }
 
-static int typec_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int typec_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct typec_altmode *altmode = to_typec_altmode(dev);
+	struct typec_altmode *altmode = to_typec_altmode(dev);
 
 	if (add_uevent_var(env, "SVID=%04X", altmode->svid))
 		return -ENOMEM;
@@ -411,7 +380,7 @@ static int typec_probe(struct device *dev)
 	return ret;
 }
 
-static void typec_remove(struct device *dev)
+static int typec_remove(struct device *dev)
 {
 	struct typec_altmode_driver *drv = to_altmode_driver(dev->driver);
 	struct typec_altmode *adev = to_typec_altmode(dev);
@@ -429,9 +398,11 @@ static void typec_remove(struct device *dev)
 
 	adev->desc = NULL;
 	adev->ops = NULL;
+
+	return 0;
 }
 
-const struct bus_type typec_bus = {
+struct bus_type typec_bus = {
 	.name = "typec",
 	.dev_groups = typec_groups,
 	.match = typec_match,

@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/display/panel/display-timings.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: display timings
+title: display timings bindings
 
 maintainers:
   - Thierry Reding <thierry.reding@gmail.com>
@@ -31,7 +31,8 @@ properties:
 patternProperties:
   "^timing":
     type: object
-    $ref: panel-timing.yaml#
+    allOf:
+      - $ref: panel-timing.yaml#
 
 additionalProperties: false
 

@@ -109,7 +109,8 @@ nvkm_gr_oclass_get(struct nvkm_oclass *oclass, int index)
 }
 
 static int
-nvkm_gr_cclass_new(struct nvkm_chan *chan, const struct nvkm_oclass *oclass,
+nvkm_gr_cclass_new(struct nvkm_fifo_chan *chan,
+		   const struct nvkm_oclass *oclass,
 		   struct nvkm_object **pobject)
 {
 	struct nvkm_gr *gr = nvkm_gr(oclass->engine);
@@ -126,34 +127,12 @@ nvkm_gr_intr(struct nvkm_engine *engine)
 }
 
 static int
-nvkm_gr_nonstall(struct nvkm_engine *engine)
-{
-	struct nvkm_gr *gr = nvkm_gr(engine);
-
-	if (gr->func->nonstall)
-		return gr->func->nonstall(gr);
-
-	return -EINVAL;
-}
-
-static int
 nvkm_gr_oneinit(struct nvkm_engine *engine)
 {
 	struct nvkm_gr *gr = nvkm_gr(engine);
 	if (gr->func->oneinit)
 		return gr->func->oneinit(gr);
 	return 0;
-}
-
-static int
-nvkm_gr_reset(struct nvkm_engine *engine)
-{
-	struct nvkm_gr *gr = nvkm_gr(engine);
-
-	if (gr->func->reset)
-		return gr->func->reset(gr);
-
-	return -ENOSYS;
 }
 
 static int
@@ -187,8 +166,6 @@ nvkm_gr = {
 	.oneinit = nvkm_gr_oneinit,
 	.init = nvkm_gr_init,
 	.fini = nvkm_gr_fini,
-	.reset = nvkm_gr_reset,
-	.nonstall = nvkm_gr_nonstall,
 	.intr = nvkm_gr_intr,
 	.tile = nvkm_gr_tile,
 	.chsw_load = nvkm_gr_chsw_load,
@@ -198,8 +175,8 @@ nvkm_gr = {
 
 int
 nvkm_gr_ctor(const struct nvkm_gr_func *func, struct nvkm_device *device,
-	     enum nvkm_subdev_type type, int inst, bool enable, struct nvkm_gr *gr)
+	     int index, bool enable, struct nvkm_gr *gr)
 {
 	gr->func = func;
-	return nvkm_engine_ctor(&nvkm_gr, device, type, inst, enable, &gr->engine);
+	return nvkm_engine_ctor(&nvkm_gr, device, index, enable, &gr->engine);
 }

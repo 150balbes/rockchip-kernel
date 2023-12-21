@@ -1244,7 +1244,7 @@ static void ath10k_pci_process_htt_rx_cb(struct ath10k_ce_pipe *ce_state,
 	unsigned int nbytes, max_nbytes, nentries;
 	int orig_len;
 
-	/* No need to acquire ce_lock for CE5, since this is the only place CE5
+	/* No need to aquire ce_lock for CE5, since this is the only place CE5
 	 * is processed other than init and deinit. Before releasing CE5
 	 * buffers, interrupts are disabled. Thus CE5 access is serialized.
 	 */
@@ -1774,7 +1774,7 @@ static void ath10k_pci_fw_dump_work(struct work_struct *work)
 
 	mutex_unlock(&ar->dump_mutex);
 
-	ath10k_core_start_recovery(ar);
+	queue_work(ar->workqueue, &ar->restart_work);
 }
 
 static void ath10k_pci_fw_crashed_dump(struct ath10k *ar)
@@ -1958,7 +1958,7 @@ static int ath10k_pci_hif_start(struct ath10k *ar)
 
 	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot hif start\n");
 
-	ath10k_core_napi_enable(ar);
+	napi_enable(&ar->napi);
 
 	ath10k_pci_irq_enable(ar);
 	ath10k_pci_rx_post(ar);
@@ -2075,9 +2075,8 @@ static void ath10k_pci_hif_stop(struct ath10k *ar)
 
 	ath10k_pci_irq_disable(ar);
 	ath10k_pci_irq_sync(ar);
-
-	ath10k_core_napi_sync_disable(ar);
-
+	napi_synchronize(&ar->napi);
+	napi_disable(&ar->napi);
 	cancel_work_sync(&ar_pci->dump_work);
 
 	/* Most likely the device has HTT Rx ring configured. The only way to
@@ -3215,7 +3214,8 @@ static void ath10k_pci_free_irq(struct ath10k *ar)
 
 void ath10k_pci_init_napi(struct ath10k *ar)
 {
-	netif_napi_add(&ar->napi_dev, &ar->napi, ath10k_pci_napi_poll);
+	netif_napi_add(&ar->napi_dev, &ar->napi, ath10k_pci_napi_poll,
+		       ATH10K_NAPI_BUDGET);
 }
 
 static int ath10k_pci_init_irq(struct ath10k *ar)
@@ -3236,7 +3236,7 @@ static int ath10k_pci_init_irq(struct ath10k *ar)
 		if (ret == 0)
 			return 0;
 
-		/* MHI failed, try legacy irq next */
+		/* fall-through */
 	}
 
 	/* Try legacy irq
@@ -3392,9 +3392,16 @@ static int ath10k_pci_claim(struct ath10k *ar)
 	}
 
 	/* Target expects 32 bit DMA. Enforce it. */
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret) {
 		ath10k_err(ar, "failed to set dma mask to 32-bit: %d\n", ret);
+		goto err_region;
+	}
+
+	ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (ret) {
+		ath10k_err(ar, "failed to set consistent dma mask to 32-bit: %d\n",
+			   ret);
 		goto err_region;
 	}
 
@@ -3406,11 +3413,14 @@ static int ath10k_pci_claim(struct ath10k *ar)
 	if (!ar_pci->mem) {
 		ath10k_err(ar, "failed to iomap BAR%d\n", BAR_NUM);
 		ret = -EIO;
-		goto err_region;
+		goto err_master;
 	}
 
 	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot pci_mem 0x%pK\n", ar_pci->mem);
 	return 0;
+
+err_master:
+	pci_clear_master(pdev);
 
 err_region:
 	pci_release_region(pdev, BAR_NUM);
@@ -3428,6 +3438,7 @@ static void ath10k_pci_release(struct ath10k *ar)
 
 	pci_iounmap(pdev, ar_pci->mem);
 	pci_release_region(pdev, BAR_NUM);
+	pci_clear_master(pdev);
 	pci_disable_device(pdev);
 }
 
@@ -3788,22 +3799,18 @@ static struct pci_driver ath10k_pci_driver = {
 
 static int __init ath10k_pci_init(void)
 {
-	int ret1, ret2;
+	int ret;
 
-	ret1 = pci_register_driver(&ath10k_pci_driver);
-	if (ret1)
+	ret = pci_register_driver(&ath10k_pci_driver);
+	if (ret)
 		printk(KERN_ERR "failed to register ath10k pci driver: %d\n",
-		       ret1);
+		       ret);
 
-	ret2 = ath10k_ahb_init();
-	if (ret2)
-		printk(KERN_ERR "ahb init failed: %d\n", ret2);
+	ret = ath10k_ahb_init();
+	if (ret)
+		printk(KERN_ERR "ahb init failed: %d\n", ret);
 
-	if (ret1 && ret2)
-		return ret1;
-
-	/* registered to at least one bus */
-	return 0;
+	return ret;
 }
 module_init(ath10k_pci_init);
 

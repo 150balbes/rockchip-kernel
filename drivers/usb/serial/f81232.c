@@ -136,46 +136,71 @@ static int calc_baud_divisor(speed_t baudrate, speed_t clockrate)
 static int f81232_get_register(struct usb_serial_port *port, u16 reg, u8 *val)
 {
 	int status;
+	u8 *tmp;
 	struct usb_device *dev = port->serial->dev;
 
-	status = usb_control_msg_recv(dev,
-				      0,
-				      F81232_REGISTER_REQUEST,
-				      F81232_GET_REGISTER,
-				      reg,
-				      0,
-				      val,
-				      sizeof(*val),
-				      USB_CTRL_GET_TIMEOUT,
-				      GFP_KERNEL);
-	if (status) {
+	tmp = kmalloc(sizeof(*val), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	status = usb_control_msg(dev,
+				usb_rcvctrlpipe(dev, 0),
+				F81232_REGISTER_REQUEST,
+				F81232_GET_REGISTER,
+				reg,
+				0,
+				tmp,
+				sizeof(*val),
+				USB_CTRL_GET_TIMEOUT);
+	if (status != sizeof(*val)) {
 		dev_err(&port->dev, "%s failed status: %d\n", __func__, status);
-		status = usb_translate_errors(status);
+
+		if (status < 0)
+			status = usb_translate_errors(status);
+		else
+			status = -EIO;
+	} else {
+		status = 0;
+		*val = *tmp;
 	}
 
+	kfree(tmp);
 	return status;
 }
 
 static int f81232_set_register(struct usb_serial_port *port, u16 reg, u8 val)
 {
 	int status;
+	u8 *tmp;
 	struct usb_device *dev = port->serial->dev;
 
-	status = usb_control_msg_send(dev,
-				      0,
-				      F81232_REGISTER_REQUEST,
-				      F81232_SET_REGISTER,
-				      reg,
-				      0,
-				      &val,
-				      sizeof(val),
-				      USB_CTRL_SET_TIMEOUT,
-				      GFP_KERNEL);
-	if (status) {
+	tmp = kmalloc(sizeof(val), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	*tmp = val;
+
+	status = usb_control_msg(dev,
+				usb_sndctrlpipe(dev, 0),
+				F81232_REGISTER_REQUEST,
+				F81232_SET_REGISTER,
+				reg,
+				0,
+				tmp,
+				sizeof(val),
+				USB_CTRL_SET_TIMEOUT);
+	if (status != sizeof(val)) {
 		dev_err(&port->dev, "%s failed status: %d\n", __func__, status);
-		status = usb_translate_errors(status);
+
+		if (status < 0)
+			status = usb_translate_errors(status);
+		else
+			status = -EIO;
+	} else {
+		status = 0;
 	}
 
+	kfree(tmp);
 	return status;
 }
 
@@ -448,7 +473,7 @@ static void f81534a_process_read_urb(struct urb *urb)
 	tty_flip_buffer_push(&port->port);
 }
 
-static int f81232_break_ctl(struct tty_struct *tty, int break_state)
+static void f81232_break_ctl(struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct f81232_private *priv = usb_get_serial_port_data(port);
@@ -467,8 +492,6 @@ static int f81232_break_ctl(struct tty_struct *tty, int break_state)
 		dev_err(&port->dev, "set break failed: %d\n", status);
 
 	mutex_unlock(&priv->lock);
-
-	return status;
 }
 
 static int f81232_find_clk(speed_t baudrate)
@@ -607,8 +630,7 @@ static int f81232_port_disable(struct usb_serial_port *port)
 }
 
 static void f81232_set_termios(struct tty_struct *tty,
-			       struct usb_serial_port *port,
-			       const struct ktermios *old_termios)
+		struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	struct f81232_private *priv = usb_get_serial_port_data(port);
 	u8 new_lcr = 0;
@@ -648,7 +670,21 @@ static void f81232_set_termios(struct tty_struct *tty,
 	if (C_CSTOPB(tty))
 		new_lcr |= UART_LCR_STOP;
 
-	new_lcr |= UART_LCR_WLEN(tty_get_char_size(tty->termios.c_cflag));
+	switch (C_CSIZE(tty)) {
+	case CS5:
+		new_lcr |= UART_LCR_WLEN5;
+		break;
+	case CS6:
+		new_lcr |= UART_LCR_WLEN6;
+		break;
+	case CS7:
+		new_lcr |= UART_LCR_WLEN7;
+		break;
+	default:
+	case CS8:
+		new_lcr |= UART_LCR_WLEN8;
+		break;
+	}
 
 	mutex_lock(&priv->lock);
 
@@ -790,12 +826,17 @@ static int f81232_carrier_raised(struct usb_serial_port *port)
 	return 0;
 }
 
-static void f81232_get_serial(struct tty_struct *tty, struct serial_struct *ss)
+static int f81232_get_serial_info(struct tty_struct *tty,
+		struct serial_struct *ss)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct f81232_private *priv = usb_get_serial_port_data(port);
 
+	ss->type = PORT_16550A;
+	ss->line = port->minor;
+	ss->port = port->port_number;
 	ss->baud_base = priv->baud_base;
+	return 0;
 }
 
 static void  f81232_interrupt_work(struct work_struct *work)
@@ -827,22 +868,32 @@ static int f81534a_ctrl_set_register(struct usb_interface *intf, u16 reg,
 	struct usb_device *dev = interface_to_usbdev(intf);
 	int retry = F81534A_ACCESS_REG_RETRY;
 	int status;
+	u8 *tmp;
+
+	tmp = kmemdup(val, size, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
 
 	while (retry--) {
-		status = usb_control_msg_send(dev,
-					      0,
-					      F81232_REGISTER_REQUEST,
-					      F81232_SET_REGISTER,
-					      reg,
-					      0,
-					      val,
-					      size,
-					      USB_CTRL_SET_TIMEOUT,
-					      GFP_KERNEL);
-		if (status) {
+		status = usb_control_msg(dev,
+					usb_sndctrlpipe(dev, 0),
+					F81232_REGISTER_REQUEST,
+					F81232_SET_REGISTER,
+					reg,
+					0,
+					tmp,
+					size,
+					USB_CTRL_SET_TIMEOUT);
+		if (status < 0) {
 			status = usb_translate_errors(status);
 			if (status == -EIO)
 				continue;
+		} else if (status != size) {
+			/* Retry on short transfers */
+			status = -EIO;
+			continue;
+		} else {
+			status = 0;
 		}
 
 		break;
@@ -853,6 +904,7 @@ static int f81534a_ctrl_set_register(struct usb_interface *intf, u16 reg,
 				reg, status);
 	}
 
+	kfree(tmp);
 	return status;
 }
 
@@ -911,6 +963,7 @@ static int f81232_port_probe(struct usb_serial_port *port)
 
 	usb_set_serial_port_data(port, priv);
 
+	port->port.drain_delay = 256;
 	priv->port = port;
 
 	return 0;
@@ -978,7 +1031,7 @@ static struct usb_serial_driver f81232_device = {
 	.close =		f81232_close,
 	.dtr_rts =		f81232_dtr_rts,
 	.carrier_raised =	f81232_carrier_raised,
-	.get_serial =		f81232_get_serial,
+	.get_serial =		f81232_get_serial_info,
 	.break_ctl =		f81232_break_ctl,
 	.set_termios =		f81232_set_termios,
 	.tiocmget =		f81232_tiocmget,
@@ -1003,7 +1056,7 @@ static struct usb_serial_driver f81534a_device = {
 	.close =		f81232_close,
 	.dtr_rts =		f81232_dtr_rts,
 	.carrier_raised =	f81232_carrier_raised,
-	.get_serial =		f81232_get_serial,
+	.get_serial =		f81232_get_serial_info,
 	.break_ctl =		f81232_break_ctl,
 	.set_termios =		f81232_set_termios,
 	.tiocmget =		f81232_tiocmget,

@@ -104,6 +104,8 @@ static __inline__ int test_and_change_bit(int nr, volatile unsigned long * addr)
 
 #include <asm-generic/bitops/non-atomic.h>
 
+#ifdef __KERNEL__
+
 /**
  * __ffs - find first bit in word. returns 0 to "BITS_PER_LONG-1".
  * @word: The word to search
@@ -203,7 +205,16 @@ static __inline__ int fls(unsigned int x)
 #include <asm-generic/bitops/hweight.h>
 #include <asm-generic/bitops/lock.h>
 #include <asm-generic/bitops/sched.h>
+
+#endif /* __KERNEL__ */
+
+#include <asm-generic/bitops/find.h>
+
+#ifdef __KERNEL__
+
 #include <asm-generic/bitops/le.h>
 #include <asm-generic/bitops/ext2-atomic-setbit.h>
+
+#endif	/* __KERNEL__ */
 
 #endif /* _PARISC_BITOPS_H */

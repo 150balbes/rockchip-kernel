@@ -25,8 +25,8 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
-#include <linux/uio.h>
-#include <linux/cc_platform.h>
+#include <linux/uaccess.h>
+#include <linux/mem_encrypt.h>
 #include <asm/io.h>
 #include "internal.h"
 
@@ -62,79 +62,54 @@ core_param(novmcoredd, vmcoredd_disabled, bool, 0);
 /* Device Dump Size */
 static size_t vmcoredd_orig_sz;
 
-static DEFINE_SPINLOCK(vmcore_cb_lock);
-DEFINE_STATIC_SRCU(vmcore_cb_srcu);
-/* List of registered vmcore callbacks. */
-static LIST_HEAD(vmcore_cb_list);
-/* Whether the vmcore has been opened once. */
-static bool vmcore_opened;
+/*
+ * Returns > 0 for RAM pages, 0 for non-RAM pages, < 0 on error
+ * The called function has to take care of module refcounting.
+ */
+static int (*oldmem_pfn_is_ram)(unsigned long pfn);
 
-void register_vmcore_cb(struct vmcore_cb *cb)
+int register_oldmem_pfn_is_ram(int (*fn)(unsigned long pfn))
 {
-	INIT_LIST_HEAD(&cb->next);
-	spin_lock(&vmcore_cb_lock);
-	list_add_tail(&cb->next, &vmcore_cb_list);
-	/*
-	 * Registering a vmcore callback after the vmcore was opened is
-	 * very unusual (e.g., manual driver loading).
-	 */
-	if (vmcore_opened)
-		pr_warn_once("Unexpected vmcore callback registration\n");
-	spin_unlock(&vmcore_cb_lock);
+	if (oldmem_pfn_is_ram)
+		return -EBUSY;
+	oldmem_pfn_is_ram = fn;
+	return 0;
 }
-EXPORT_SYMBOL_GPL(register_vmcore_cb);
+EXPORT_SYMBOL_GPL(register_oldmem_pfn_is_ram);
 
-void unregister_vmcore_cb(struct vmcore_cb *cb)
+void unregister_oldmem_pfn_is_ram(void)
 {
-	spin_lock(&vmcore_cb_lock);
-	list_del_rcu(&cb->next);
-	/*
-	 * Unregistering a vmcore callback after the vmcore was opened is
-	 * very unusual (e.g., forced driver removal), but we cannot stop
-	 * unregistering.
-	 */
-	if (vmcore_opened)
-		pr_warn_once("Unexpected vmcore callback unregistration\n");
-	spin_unlock(&vmcore_cb_lock);
-
-	synchronize_srcu(&vmcore_cb_srcu);
+	oldmem_pfn_is_ram = NULL;
+	wmb();
 }
-EXPORT_SYMBOL_GPL(unregister_vmcore_cb);
+EXPORT_SYMBOL_GPL(unregister_oldmem_pfn_is_ram);
 
-static bool pfn_is_ram(unsigned long pfn)
+static int pfn_is_ram(unsigned long pfn)
 {
-	struct vmcore_cb *cb;
-	bool ret = true;
+	int (*fn)(unsigned long pfn);
+	/* pfn is ram unless fn() checks pagetype */
+	int ret = 1;
 
-	list_for_each_entry_srcu(cb, &vmcore_cb_list, next,
-				 srcu_read_lock_held(&vmcore_cb_srcu)) {
-		if (unlikely(!cb->pfn_is_ram))
-			continue;
-		ret = cb->pfn_is_ram(cb, pfn);
-		if (!ret)
-			break;
-	}
+	/*
+	 * Ask hypervisor if the pfn is really ram.
+	 * A ballooned page contains no data and reading from such a page
+	 * will cause high load in the hypervisor.
+	 */
+	fn = oldmem_pfn_is_ram;
+	if (fn)
+		ret = fn(pfn);
 
 	return ret;
 }
 
-static int open_vmcore(struct inode *inode, struct file *file)
-{
-	spin_lock(&vmcore_cb_lock);
-	vmcore_opened = true;
-	spin_unlock(&vmcore_cb_lock);
-
-	return 0;
-}
-
 /* Reads a page from the oldmem device from given offset. */
-ssize_t read_from_oldmem(struct iov_iter *iter, size_t count,
-			 u64 *ppos, bool encrypted)
+ssize_t read_from_oldmem(char *buf, size_t count,
+			 u64 *ppos, int userbuf,
+			 bool encrypted)
 {
 	unsigned long pfn, offset;
 	size_t nr_bytes;
 	ssize_t read = 0, tmp;
-	int idx;
 
 	if (!count)
 		return 0;
@@ -142,7 +117,6 @@ ssize_t read_from_oldmem(struct iov_iter *iter, size_t count,
 	offset = (unsigned long)(*ppos % PAGE_SIZE);
 	pfn = (unsigned long)(*ppos / PAGE_SIZE);
 
-	idx = srcu_read_lock(&vmcore_cb_srcu);
 	do {
 		if (count > (PAGE_SIZE - offset))
 			nr_bytes = PAGE_SIZE - offset;
@@ -150,29 +124,32 @@ ssize_t read_from_oldmem(struct iov_iter *iter, size_t count,
 			nr_bytes = count;
 
 		/* If pfn is not ram, return zeros for sparse dump files */
-		if (!pfn_is_ram(pfn)) {
-			tmp = iov_iter_zero(nr_bytes, iter);
+		if (pfn_is_ram(pfn) == 0) {
+			tmp = 0;
+			if (!userbuf)
+				memset(buf, 0, nr_bytes);
+			else if (clear_user(buf, nr_bytes))
+				tmp = -EFAULT;
 		} else {
 			if (encrypted)
-				tmp = copy_oldmem_page_encrypted(iter, pfn,
+				tmp = copy_oldmem_page_encrypted(pfn, buf,
 								 nr_bytes,
-								 offset);
+								 offset,
+								 userbuf);
 			else
-				tmp = copy_oldmem_page(iter, pfn, nr_bytes,
-						       offset);
+				tmp = copy_oldmem_page(pfn, buf, nr_bytes,
+						       offset, userbuf);
 		}
-		if (tmp < nr_bytes) {
-			srcu_read_unlock(&vmcore_cb_srcu, idx);
-			return -EFAULT;
-		}
+		if (tmp < 0)
+			return tmp;
 
 		*ppos += nr_bytes;
 		count -= nr_bytes;
+		buf += nr_bytes;
 		read += nr_bytes;
 		++pfn;
 		offset = 0;
 	} while (count);
-	srcu_read_unlock(&vmcore_cb_srcu, idx);
 
 	return read;
 }
@@ -196,12 +173,7 @@ void __weak elfcorehdr_free(unsigned long long addr)
  */
 ssize_t __weak elfcorehdr_read(char *buf, size_t count, u64 *ppos)
 {
-	struct kvec kvec = { .iov_base = buf, .iov_len = count };
-	struct iov_iter iter;
-
-	iov_iter_kvec(&iter, ITER_DEST, &kvec, 1, count);
-
-	return read_from_oldmem(&iter, count, ppos, false);
+	return read_from_oldmem(buf, count, ppos, 0, false);
 }
 
 /*
@@ -209,13 +181,7 @@ ssize_t __weak elfcorehdr_read(char *buf, size_t count, u64 *ppos)
  */
 ssize_t __weak elfcorehdr_read_notes(char *buf, size_t count, u64 *ppos)
 {
-	struct kvec kvec = { .iov_base = buf, .iov_len = count };
-	struct iov_iter iter;
-
-	iov_iter_kvec(&iter, ITER_DEST, &kvec, 1, count);
-
-	return read_from_oldmem(&iter, count, ppos,
-			cc_platform_has(CC_ATTR_MEM_ENCRYPT));
+	return read_from_oldmem(buf, count, ppos, 0, mem_encrypt_active());
 }
 
 /*
@@ -232,14 +198,29 @@ int __weak remap_oldmem_pfn_range(struct vm_area_struct *vma,
 /*
  * Architectures which support memory encryption override this.
  */
-ssize_t __weak copy_oldmem_page_encrypted(struct iov_iter *iter,
-		unsigned long pfn, size_t csize, unsigned long offset)
+ssize_t __weak
+copy_oldmem_page_encrypted(unsigned long pfn, char *buf, size_t csize,
+			   unsigned long offset, int userbuf)
 {
-	return copy_oldmem_page(iter, pfn, csize, offset);
+	return copy_oldmem_page(pfn, buf, csize, offset, userbuf);
+}
+
+/*
+ * Copy to either kernel or user space
+ */
+static int copy_to(void *target, void *src, size_t size, int userbuf)
+{
+	if (userbuf) {
+		if (copy_to_user((char __user *) target, src, size))
+			return -EFAULT;
+	} else {
+		memcpy(target, src, size);
+	}
+	return 0;
 }
 
 #ifdef CONFIG_PROC_VMCORE_DEVICE_DUMP
-static int vmcoredd_copy_dumps(struct iov_iter *iter, u64 start, size_t size)
+static int vmcoredd_copy_dumps(void *dst, u64 start, size_t size, int userbuf)
 {
 	struct vmcoredd_node *dump;
 	u64 offset = 0;
@@ -252,13 +233,14 @@ static int vmcoredd_copy_dumps(struct iov_iter *iter, u64 start, size_t size)
 		if (start < offset + dump->size) {
 			tsz = min(offset + (u64)dump->size - start, (u64)size);
 			buf = dump->buf + start - offset;
-			if (copy_to_iter(buf, tsz, iter) < tsz) {
+			if (copy_to(dst, buf, tsz, userbuf)) {
 				ret = -EFAULT;
 				goto out_unlock;
 			}
 
 			size -= tsz;
 			start += tsz;
+			dst += tsz;
 
 			/* Leave now if buffer filled already */
 			if (!size)
@@ -314,32 +296,37 @@ out_unlock:
 /* Read from the ELF header and then the crash dump. On error, negative value is
  * returned otherwise number of bytes read are returned.
  */
-static ssize_t __read_vmcore(struct iov_iter *iter, loff_t *fpos)
+static ssize_t __read_vmcore(char *buffer, size_t buflen, loff_t *fpos,
+			     int userbuf)
 {
 	ssize_t acc = 0, tmp;
 	size_t tsz;
 	u64 start;
 	struct vmcore *m = NULL;
 
-	if (!iov_iter_count(iter) || *fpos >= vmcore_size)
+	if (buflen == 0 || *fpos >= vmcore_size)
 		return 0;
 
-	iov_iter_truncate(iter, vmcore_size - *fpos);
+	/* trim buflen to not go beyond EOF */
+	if (buflen > vmcore_size - *fpos)
+		buflen = vmcore_size - *fpos;
 
 	/* Read ELF core header */
 	if (*fpos < elfcorebuf_sz) {
-		tsz = min(elfcorebuf_sz - (size_t)*fpos, iov_iter_count(iter));
-		if (copy_to_iter(elfcorebuf + *fpos, tsz, iter) < tsz)
+		tsz = min(elfcorebuf_sz - (size_t)*fpos, buflen);
+		if (copy_to(buffer, elfcorebuf + *fpos, tsz, userbuf))
 			return -EFAULT;
+		buflen -= tsz;
 		*fpos += tsz;
+		buffer += tsz;
 		acc += tsz;
 
 		/* leave now if filled buffer already */
-		if (!iov_iter_count(iter))
+		if (buflen == 0)
 			return acc;
 	}
 
-	/* Read ELF note segment */
+	/* Read Elf note segment */
 	if (*fpos < elfcorebuf_sz + elfnotes_sz) {
 		void *kaddr;
 
@@ -356,32 +343,35 @@ static ssize_t __read_vmcore(struct iov_iter *iter, loff_t *fpos)
 		/* Read device dumps */
 		if (*fpos < elfcorebuf_sz + vmcoredd_orig_sz) {
 			tsz = min(elfcorebuf_sz + vmcoredd_orig_sz -
-				  (size_t)*fpos, iov_iter_count(iter));
+				  (size_t)*fpos, buflen);
 			start = *fpos - elfcorebuf_sz;
-			if (vmcoredd_copy_dumps(iter, start, tsz))
+			if (vmcoredd_copy_dumps(buffer, start, tsz, userbuf))
 				return -EFAULT;
 
+			buflen -= tsz;
 			*fpos += tsz;
+			buffer += tsz;
 			acc += tsz;
 
 			/* leave now if filled buffer already */
-			if (!iov_iter_count(iter))
+			if (!buflen)
 				return acc;
 		}
 #endif /* CONFIG_PROC_VMCORE_DEVICE_DUMP */
 
 		/* Read remaining elf notes */
-		tsz = min(elfcorebuf_sz + elfnotes_sz - (size_t)*fpos,
-			  iov_iter_count(iter));
+		tsz = min(elfcorebuf_sz + elfnotes_sz - (size_t)*fpos, buflen);
 		kaddr = elfnotes_buf + *fpos - elfcorebuf_sz - vmcoredd_orig_sz;
-		if (copy_to_iter(kaddr, tsz, iter) < tsz)
+		if (copy_to(buffer, kaddr, tsz, userbuf))
 			return -EFAULT;
 
+		buflen -= tsz;
 		*fpos += tsz;
+		buffer += tsz;
 		acc += tsz;
 
 		/* leave now if filled buffer already */
-		if (!iov_iter_count(iter))
+		if (buflen == 0)
 			return acc;
 	}
 
@@ -389,17 +379,19 @@ static ssize_t __read_vmcore(struct iov_iter *iter, loff_t *fpos)
 		if (*fpos < m->offset + m->size) {
 			tsz = (size_t)min_t(unsigned long long,
 					    m->offset + m->size - *fpos,
-					    iov_iter_count(iter));
+					    buflen);
 			start = m->paddr + *fpos - m->offset;
-			tmp = read_from_oldmem(iter, tsz, &start,
-					cc_platform_has(CC_ATTR_MEM_ENCRYPT));
+			tmp = read_from_oldmem(buffer, tsz, &start,
+					       userbuf, mem_encrypt_active());
 			if (tmp < 0)
 				return tmp;
+			buflen -= tsz;
 			*fpos += tsz;
+			buffer += tsz;
 			acc += tsz;
 
 			/* leave now if filled buffer already */
-			if (!iov_iter_count(iter))
+			if (buflen == 0)
 				return acc;
 		}
 	}
@@ -407,14 +399,15 @@ static ssize_t __read_vmcore(struct iov_iter *iter, loff_t *fpos)
 	return acc;
 }
 
-static ssize_t read_vmcore(struct kiocb *iocb, struct iov_iter *iter)
+static ssize_t read_vmcore(struct file *file, char __user *buffer,
+			   size_t buflen, loff_t *fpos)
 {
-	return __read_vmcore(iter, &iocb->ki_pos);
+	return __read_vmcore((__force char *) buffer, buflen, fpos, 1);
 }
 
 /*
  * The vmcore fault handler uses the page cache and fills data using the
- * standard __read_vmcore() function.
+ * standard __vmcore_read() function.
  *
  * On s390 the fault handler is used for memory regions that can't be mapped
  * directly with remap_pfn_range().
@@ -424,10 +417,9 @@ static vm_fault_t mmap_vmcore_fault(struct vm_fault *vmf)
 #ifdef CONFIG_S390
 	struct address_space *mapping = vmf->vma->vm_file->f_mapping;
 	pgoff_t index = vmf->pgoff;
-	struct iov_iter iter;
-	struct kvec kvec;
 	struct page *page;
 	loff_t offset;
+	char *buf;
 	int rc;
 
 	page = find_or_create_page(mapping, index, GFP_KERNEL);
@@ -435,11 +427,8 @@ static vm_fault_t mmap_vmcore_fault(struct vm_fault *vmf)
 		return VM_FAULT_OOM;
 	if (!PageUptodate(page)) {
 		offset = (loff_t) index << PAGE_SHIFT;
-		kvec.iov_base = page_address(page);
-		kvec.iov_len = PAGE_SIZE;
-		iov_iter_kvec(&iter, ITER_DEST, &kvec, 1, PAGE_SIZE);
-
-		rc = __read_vmcore(&iter, &offset);
+		buf = __va((page_to_pfn(page) << PAGE_SHIFT));
+		rc = __read_vmcore(buf, PAGE_SIZE, &offset, 0);
 		if (rc < 0) {
 			unlock_page(page);
 			put_page(page);
@@ -461,7 +450,7 @@ static const struct vm_operations_struct vmcore_mmap_ops = {
 
 /**
  * vmcore_alloc_buf - allocate buffer in vmalloc memory
- * @size: size of buffer
+ * @sizez: size of buffer
  *
  * If CONFIG_MMU is defined, use vmalloc_user() to allow users to mmap
  * the buffer to user-space by means of remap_vmalloc_range().
@@ -552,19 +541,14 @@ static int vmcore_remap_oldmem_pfn(struct vm_area_struct *vma,
 			    unsigned long from, unsigned long pfn,
 			    unsigned long size, pgprot_t prot)
 {
-	int ret, idx;
-
 	/*
-	 * Check if a callback was registered to avoid looping over all
-	 * pages without a reason.
+	 * Check if oldmem_pfn_is_ram was registered to avoid
+	 * looping over all pages without a reason.
 	 */
-	idx = srcu_read_lock(&vmcore_cb_srcu);
-	if (!list_empty(&vmcore_cb_list))
-		ret = remap_oldmem_pfn_checked(vma, from, pfn, size, prot);
+	if (oldmem_pfn_is_ram)
+		return remap_oldmem_pfn_checked(vma, from, pfn, size, prot);
 	else
-		ret = remap_oldmem_pfn_range(vma, from, pfn, size, prot);
-	srcu_read_unlock(&vmcore_cb_srcu, idx);
-	return ret;
+		return remap_oldmem_pfn_range(vma, from, pfn, size, prot);
 }
 
 static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
@@ -582,7 +566,8 @@ static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
 	if (vma->vm_flags & (VM_WRITE | VM_EXEC))
 		return -EPERM;
 
-	vm_flags_mod(vma, VM_MIXEDMAP, VM_MAYWRITE | VM_MAYEXEC);
+	vma->vm_flags &= ~(VM_MAYWRITE | VM_MAYEXEC);
+	vma->vm_flags |= VM_MIXEDMAP;
 	vma->vm_ops = &vmcore_mmap_ops;
 
 	len = 0;
@@ -687,8 +672,7 @@ static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
 #endif
 
 static const struct proc_ops vmcore_proc_ops = {
-	.proc_open	= open_vmcore,
-	.proc_read_iter	= read_vmcore,
+	.proc_read	= read_vmcore,
 	.proc_lseek	= default_llseek,
 	.proc_mmap	= mmap_vmcore,
 };
@@ -877,7 +861,7 @@ static int __init merge_note_headers_elf64(char *elfptr, size_t *elfsz,
 	phdr.p_offset  = roundup(note_off, PAGE_SIZE);
 	phdr.p_vaddr   = phdr.p_paddr = 0;
 	phdr.p_filesz  = phdr.p_memsz = phdr_sz;
-	phdr.p_align   = 4;
+	phdr.p_align   = 0;
 
 	/* Add merged PT_NOTE program header*/
 	tmp = elfptr + sizeof(Elf64_Ehdr);
@@ -1068,7 +1052,7 @@ static int __init merge_note_headers_elf32(char *elfptr, size_t *elfsz,
 	phdr.p_offset  = roundup(note_off, PAGE_SIZE);
 	phdr.p_vaddr   = phdr.p_paddr = 0;
 	phdr.p_filesz  = phdr.p_memsz = phdr_sz;
-	phdr.p_align   = 4;
+	phdr.p_align   = 0;
 
 	/* Add merged PT_NOTE program header*/
 	tmp = elfptr + sizeof(Elf32_Ehdr);
@@ -1109,7 +1093,7 @@ static int __init process_ptload_program_headers_elf64(char *elfptr,
 	ehdr_ptr = (Elf64_Ehdr *)elfptr;
 	phdr_ptr = (Elf64_Phdr*)(elfptr + sizeof(Elf64_Ehdr)); /* PT_NOTE hdr */
 
-	/* Skip ELF header, program headers and ELF note segment. */
+	/* Skip Elf header, program headers and Elf note segment. */
 	vmcore_off = elfsz + elfnotes_sz;
 
 	for (i = 0; i < ehdr_ptr->e_phnum; i++, phdr_ptr++) {
@@ -1152,7 +1136,7 @@ static int __init process_ptload_program_headers_elf32(char *elfptr,
 	ehdr_ptr = (Elf32_Ehdr *)elfptr;
 	phdr_ptr = (Elf32_Phdr*)(elfptr + sizeof(Elf32_Ehdr)); /* PT_NOTE hdr */
 
-	/* Skip ELF header, program headers and ELF note segment. */
+	/* Skip Elf header, program headers and Elf note segment. */
 	vmcore_off = elfsz + elfnotes_sz;
 
 	for (i = 0; i < ehdr_ptr->e_phnum; i++, phdr_ptr++) {
@@ -1188,7 +1172,7 @@ static void set_vmcore_list_offsets(size_t elfsz, size_t elfnotes_sz,
 	loff_t vmcore_off;
 	struct vmcore *m;
 
-	/* Skip ELF header, program headers and ELF note segment. */
+	/* Skip Elf header, program headers and Elf note segment. */
 	vmcore_off = elfsz + elfnotes_sz;
 
 	list_for_each_entry(m, vc_list, list) {
@@ -1213,7 +1197,7 @@ static int __init parse_crash_elf64_headers(void)
 
 	addr = elfcorehdr_addr;
 
-	/* Read ELF header */
+	/* Read Elf header */
 	rc = elfcorehdr_read((char *)&ehdr, sizeof(Elf64_Ehdr), &addr);
 	if (rc < 0)
 		return rc;
@@ -1269,7 +1253,7 @@ static int __init parse_crash_elf32_headers(void)
 
 	addr = elfcorehdr_addr;
 
-	/* Read ELF header */
+	/* Read Elf header */
 	rc = elfcorehdr_read((char *)&ehdr, sizeof(Elf32_Ehdr), &addr);
 	if (rc < 0)
 		return rc;
@@ -1376,12 +1360,12 @@ static void vmcoredd_write_header(void *buf, struct vmcoredd_data *data,
 }
 
 /**
- * vmcoredd_update_program_headers - Update all ELF program headers
+ * vmcoredd_update_program_headers - Update all Elf program headers
  * @elfptr: Pointer to elf header
  * @elfnotesz: Size of elf notes aligned to page size
  * @vmcoreddsz: Size of device dumps to be added to elf note header
  *
- * Determine type of ELF header (Elf64 or Elf32) and update the elf note size.
+ * Determine type of Elf header (Elf64 or Elf32) and update the elf note size.
  * Also update the offsets of all the program headers after the elf note header.
  */
 static void vmcoredd_update_program_headers(char *elfptr, size_t elfnotesz,
@@ -1439,10 +1423,10 @@ static void vmcoredd_update_program_headers(char *elfptr, size_t elfnotesz,
 
 /**
  * vmcoredd_update_size - Update the total size of the device dumps and update
- * ELF header
+ * Elf header
  * @dump_size: Size of the current device dump to be added to total size
  *
- * Update the total size of all the device dumps and update the ELF program
+ * Update the total size of all the device dumps and update the Elf program
  * headers. Calculate the new offsets for the vmcore list and update the
  * total vmcore size.
  */
@@ -1466,7 +1450,7 @@ static void vmcoredd_update_size(size_t dump_size)
  * @data: dump info.
  *
  * Allocate a buffer and invoke the calling driver's dump collect routine.
- * Write ELF note at the beginning of the buffer to indicate vmcore device
+ * Write Elf note at the beginning of the buffer to indicate vmcore device
  * dump and add the dump to global list.
  */
 int vmcore_add_device_dump(struct vmcoredd_data *data)
@@ -1523,8 +1507,11 @@ int vmcore_add_device_dump(struct vmcoredd_data *data)
 	return 0;
 
 out_err:
-	vfree(buf);
-	vfree(dump);
+	if (buf)
+		vfree(buf);
+
+	if (dump)
+		vfree(dump);
 
 	return ret;
 }
@@ -1566,7 +1553,6 @@ static int __init vmcore_init(void)
 		return rc;
 	rc = parse_crash_elf_headers();
 	if (rc) {
-		elfcorehdr_free(elfcorehdr_addr);
 		pr_warn("Kdump: vmcore not initialized\n");
 		return rc;
 	}

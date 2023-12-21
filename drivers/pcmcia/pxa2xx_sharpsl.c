@@ -15,10 +15,11 @@
 #include <linux/platform_device.h>
 
 #include <asm/mach-types.h>
+#include <mach/hardware.h>
 #include <asm/irq.h>
 #include <asm/hardware/scoop.h>
 
-#include <pcmcia/soc_common.h>
+#include "soc_common.h"
 
 #define	NO_KEEP_VS 0x0001
 #define SCOOP_DEV platform_scoop_config->devs

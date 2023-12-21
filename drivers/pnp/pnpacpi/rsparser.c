@@ -206,8 +206,7 @@ static acpi_status pnpacpi_allocated_resource(struct acpi_resource *res,
 		if (i >= 0) {
 			flags = acpi_dev_irq_flags(gpio->triggering,
 						   gpio->polarity,
-						   gpio->shareable,
-						   gpio->wake_capable);
+						   gpio->shareable);
 		} else {
 			flags = IORESOURCE_DISABLED;
 		}
@@ -316,7 +315,7 @@ static __init void pnpacpi_parse_irq_option(struct pnp_dev *dev,
 		if (p->interrupts[i])
 			__set_bit(p->interrupts[i], map.bits);
 
-	flags = acpi_dev_irq_flags(p->triggering, p->polarity, p->shareable, p->wake_capable);
+	flags = acpi_dev_irq_flags(p->triggering, p->polarity, p->shareable);
 	pnp_register_irq_resource(dev, option_flags, &map, flags);
 }
 
@@ -340,7 +339,7 @@ static __init void pnpacpi_parse_ext_irq_option(struct pnp_dev *dev,
 		}
 	}
 
-	flags = acpi_dev_irq_flags(p->triggering, p->polarity, p->shareable, p->wake_capable);
+	flags = acpi_dev_irq_flags(p->triggering, p->polarity, p->shareable);
 	pnp_register_irq_resource(dev, option_flags, &map, flags);
 }
 

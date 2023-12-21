@@ -5,7 +5,6 @@
  * Copyright (c) 2009, Intel Corporation.
  */
 
-#include <linux/bitfield.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -25,7 +24,7 @@
 #endif
 
 /* Slave spi_device related */
-struct dw_spi_chip_data {
+struct chip_data {
 	u32 cr0;
 	u32 rx_sample_dly;	/* RX sample delay */
 };
@@ -57,17 +56,21 @@ static const struct debugfs_reg32 dw_spi_dbgfs_regs[] = {
 	DW_SPI_DBGFS_REG("RX_SAMPLE_DLY", DW_SPI_RX_SAMPLE_DLY),
 };
 
-static void dw_spi_debugfs_init(struct dw_spi *dws)
+static int dw_spi_debugfs_init(struct dw_spi *dws)
 {
 	char name[32];
 
 	snprintf(name, 32, "dw_spi%d", dws->master->bus_num);
 	dws->debugfs = debugfs_create_dir(name, NULL);
+	if (!dws->debugfs)
+		return -ENOMEM;
 
 	dws->regset.regs = dw_spi_dbgfs_regs;
 	dws->regset.nregs = ARRAY_SIZE(dw_spi_dbgfs_regs);
 	dws->regset.base = dws->regs;
 	debugfs_create_regset32("registers", 0400, dws->debugfs, &dws->regset);
+
+	return 0;
 }
 
 static void dw_spi_debugfs_remove(struct dw_spi *dws)
@@ -76,8 +79,9 @@ static void dw_spi_debugfs_remove(struct dw_spi *dws)
 }
 
 #else
-static inline void dw_spi_debugfs_init(struct dw_spi *dws)
+static inline int dw_spi_debugfs_init(struct dw_spi *dws)
 {
+	return 0;
 }
 
 static inline void dw_spi_debugfs_remove(struct dw_spi *dws)
@@ -98,14 +102,14 @@ void dw_spi_set_cs(struct spi_device *spi, bool enable)
 	 * support active-high or active-low CS level.
 	 */
 	if (cs_high == enable)
-		dw_writel(dws, DW_SPI_SER, BIT(spi_get_chipselect(spi, 0)));
+		dw_writel(dws, DW_SPI_SER, BIT(spi->chip_select));
 	else
 		dw_writel(dws, DW_SPI_SER, 0);
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_set_cs, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_set_cs);
 
 /* Return the max entries we can fill into tx fifo */
-static inline u32 dw_spi_tx_max(struct dw_spi *dws)
+static inline u32 tx_max(struct dw_spi *dws)
 {
 	u32 tx_room, rxtx_gap;
 
@@ -125,24 +129,22 @@ static inline u32 dw_spi_tx_max(struct dw_spi *dws)
 }
 
 /* Return the max entries we should read out of rx fifo */
-static inline u32 dw_spi_rx_max(struct dw_spi *dws)
+static inline u32 rx_max(struct dw_spi *dws)
 {
 	return min_t(u32, dws->rx_len, dw_readl(dws, DW_SPI_RXFLR));
 }
 
 static void dw_writer(struct dw_spi *dws)
 {
-	u32 max = dw_spi_tx_max(dws);
-	u32 txw = 0;
+	u32 max = tx_max(dws);
+	u16 txw = 0;
 
 	while (max--) {
 		if (dws->tx) {
 			if (dws->n_bytes == 1)
 				txw = *(u8 *)(dws->tx);
-			else if (dws->n_bytes == 2)
-				txw = *(u16 *)(dws->tx);
 			else
-				txw = *(u32 *)(dws->tx);
+				txw = *(u16 *)(dws->tx);
 
 			dws->tx += dws->n_bytes;
 		}
@@ -153,18 +155,16 @@ static void dw_writer(struct dw_spi *dws)
 
 static void dw_reader(struct dw_spi *dws)
 {
-	u32 max = dw_spi_rx_max(dws);
-	u32 rxw;
+	u32 max = rx_max(dws);
+	u16 rxw;
 
 	while (max--) {
 		rxw = dw_read_io_reg(dws, DW_SPI_DR);
 		if (dws->rx) {
 			if (dws->n_bytes == 1)
 				*(u8 *)(dws->rx) = rxw;
-			else if (dws->n_bytes == 2)
-				*(u16 *)(dws->rx) = rxw;
 			else
-				*(u32 *)(dws->rx) = rxw;
+				*(u16 *)(dws->rx) = rxw;
 
 			dws->rx += dws->n_bytes;
 		}
@@ -182,31 +182,31 @@ int dw_spi_check_status(struct dw_spi *dws, bool raw)
 	else
 		irq_status = dw_readl(dws, DW_SPI_ISR);
 
-	if (irq_status & DW_SPI_INT_RXOI) {
+	if (irq_status & SPI_INT_RXOI) {
 		dev_err(&dws->master->dev, "RX FIFO overflow detected\n");
 		ret = -EIO;
 	}
 
-	if (irq_status & DW_SPI_INT_RXUI) {
+	if (irq_status & SPI_INT_RXUI) {
 		dev_err(&dws->master->dev, "RX FIFO underflow detected\n");
 		ret = -EIO;
 	}
 
-	if (irq_status & DW_SPI_INT_TXOI) {
+	if (irq_status & SPI_INT_TXOI) {
 		dev_err(&dws->master->dev, "TX FIFO overflow detected\n");
 		ret = -EIO;
 	}
 
 	/* Generically handle the erroneous situation */
 	if (ret) {
-		dw_spi_reset_chip(dws);
+		spi_reset_chip(dws);
 		if (dws->master->cur_msg)
 			dws->master->cur_msg->status = ret;
 	}
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_check_status, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_check_status);
 
 static irqreturn_t dw_spi_transfer_handler(struct dw_spi *dws)
 {
@@ -226,7 +226,7 @@ static irqreturn_t dw_spi_transfer_handler(struct dw_spi *dws)
 	 */
 	dw_reader(dws);
 	if (!dws->rx_len) {
-		dw_spi_mask_intr(dws, 0xff);
+		spi_mask_intr(dws, 0xff);
 		spi_finalize_current_transfer(dws->master);
 	} else if (dws->rx_len <= dw_readl(dws, DW_SPI_RXFTLR)) {
 		dw_writel(dws, DW_SPI_RXFTLR, dws->rx_len - 1);
@@ -237,10 +237,10 @@ static irqreturn_t dw_spi_transfer_handler(struct dw_spi *dws)
 	 * disabled after the data transmission is finished so not to
 	 * have the TXE IRQ flood at the final stage of the transfer.
 	 */
-	if (irq_status & DW_SPI_INT_TXEI) {
+	if (irq_status & SPI_INT_TXEI) {
 		dw_writer(dws);
 		if (!dws->tx_len)
-			dw_spi_mask_intr(dws, DW_SPI_INT_TXEI);
+			spi_mask_intr(dws, SPI_INT_TXEI);
 	}
 
 	return IRQ_HANDLED;
@@ -250,13 +250,13 @@ static irqreturn_t dw_spi_irq(int irq, void *dev_id)
 {
 	struct spi_controller *master = dev_id;
 	struct dw_spi *dws = spi_controller_get_devdata(master);
-	u16 irq_status = dw_readl(dws, DW_SPI_ISR) & DW_SPI_INT_MASK;
+	u16 irq_status = dw_readl(dws, DW_SPI_ISR) & 0x3f;
 
 	if (!irq_status)
 		return IRQ_NONE;
 
 	if (!master->cur_msg) {
-		dw_spi_mask_intr(dws, 0xff);
+		spi_mask_intr(dws, 0xff);
 		return IRQ_HANDLED;
 	}
 
@@ -267,44 +267,37 @@ static u32 dw_spi_prepare_cr0(struct dw_spi *dws, struct spi_device *spi)
 {
 	u32 cr0 = 0;
 
-	if (dw_spi_ip_is(dws, PSSI)) {
+	if (!(dws->caps & DW_SPI_CAP_DWC_SSI)) {
 		/* CTRLR0[ 5: 4] Frame Format */
-		cr0 |= FIELD_PREP(DW_PSSI_CTRLR0_FRF_MASK, DW_SPI_CTRLR0_FRF_MOTO_SPI);
+		cr0 |= SSI_MOTO_SPI << SPI_FRF_OFFSET;
 
 		/*
 		 * SPI mode (SCPOL|SCPH)
 		 * CTRLR0[ 6] Serial Clock Phase
 		 * CTRLR0[ 7] Serial Clock Polarity
 		 */
-		if (spi->mode & SPI_CPOL)
-			cr0 |= DW_PSSI_CTRLR0_SCPOL;
-		if (spi->mode & SPI_CPHA)
-			cr0 |= DW_PSSI_CTRLR0_SCPHA;
+		cr0 |= ((spi->mode & SPI_CPOL) ? 1 : 0) << SPI_SCOL_OFFSET;
+		cr0 |= ((spi->mode & SPI_CPHA) ? 1 : 0) << SPI_SCPH_OFFSET;
 
 		/* CTRLR0[11] Shift Register Loop */
-		if (spi->mode & SPI_LOOP)
-			cr0 |= DW_PSSI_CTRLR0_SRL;
+		cr0 |= ((spi->mode & SPI_LOOP) ? 1 : 0) << SPI_SRL_OFFSET;
 	} else {
 		/* CTRLR0[ 7: 6] Frame Format */
-		cr0 |= FIELD_PREP(DW_HSSI_CTRLR0_FRF_MASK, DW_SPI_CTRLR0_FRF_MOTO_SPI);
+		cr0 |= SSI_MOTO_SPI << DWC_SSI_CTRLR0_FRF_OFFSET;
 
 		/*
 		 * SPI mode (SCPOL|SCPH)
 		 * CTRLR0[ 8] Serial Clock Phase
 		 * CTRLR0[ 9] Serial Clock Polarity
 		 */
-		if (spi->mode & SPI_CPOL)
-			cr0 |= DW_HSSI_CTRLR0_SCPOL;
-		if (spi->mode & SPI_CPHA)
-			cr0 |= DW_HSSI_CTRLR0_SCPHA;
+		cr0 |= ((spi->mode & SPI_CPOL) ? 1 : 0) << DWC_SSI_CTRLR0_SCPOL_OFFSET;
+		cr0 |= ((spi->mode & SPI_CPHA) ? 1 : 0) << DWC_SSI_CTRLR0_SCPH_OFFSET;
 
 		/* CTRLR0[13] Shift Register Loop */
-		if (spi->mode & SPI_LOOP)
-			cr0 |= DW_HSSI_CTRLR0_SRL;
+		cr0 |= ((spi->mode & SPI_LOOP) ? 1 : 0) << DWC_SSI_CTRLR0_SRL_OFFSET;
 
-		/* CTRLR0[31] MST */
-		if (dw_spi_ver_is_ge(dws, HSSI, 102A))
-			cr0 |= DW_HSSI_CTRLR0_MST;
+		if (dws->caps & DW_SPI_CAP_KEEMBAY_MST)
+			cr0 |= DWC_SSI_CTRLR0_KEEMBAY_MST;
 	}
 
 	return cr0;
@@ -313,25 +306,24 @@ static u32 dw_spi_prepare_cr0(struct dw_spi *dws, struct spi_device *spi)
 void dw_spi_update_config(struct dw_spi *dws, struct spi_device *spi,
 			  struct dw_spi_cfg *cfg)
 {
-	struct dw_spi_chip_data *chip = spi_get_ctldata(spi);
+	struct chip_data *chip = spi_get_ctldata(spi);
 	u32 cr0 = chip->cr0;
 	u32 speed_hz;
 	u16 clk_div;
 
-	/* CTRLR0[ 4/3: 0] or CTRLR0[ 20: 16] Data Frame Size */
-	cr0 |= (cfg->dfs - 1) << dws->dfs_offset;
+	/* CTRLR0[ 4/3: 0] Data Frame Size */
+	cr0 |= (cfg->dfs - 1);
 
-	if (dw_spi_ip_is(dws, PSSI))
+	if (!(dws->caps & DW_SPI_CAP_DWC_SSI))
 		/* CTRLR0[ 9:8] Transfer Mode */
-		cr0 |= FIELD_PREP(DW_PSSI_CTRLR0_TMOD_MASK, cfg->tmode);
+		cr0 |= cfg->tmode << SPI_TMOD_OFFSET;
 	else
 		/* CTRLR0[11:10] Transfer Mode */
-		cr0 |= FIELD_PREP(DW_HSSI_CTRLR0_TMOD_MASK, cfg->tmode);
+		cr0 |= cfg->tmode << DWC_SSI_CTRLR0_TMOD_OFFSET;
 
 	dw_writel(dws, DW_SPI_CTRLR0, cr0);
 
-	if (cfg->tmode == DW_SPI_CTRLR0_TMOD_EPROMREAD ||
-	    cfg->tmode == DW_SPI_CTRLR0_TMOD_RO)
+	if (cfg->tmode == SPI_TMOD_EPROMREAD || cfg->tmode == SPI_TMOD_RO)
 		dw_writel(dws, DW_SPI_CTRLR1, cfg->ndf ? cfg->ndf - 1 : 0);
 
 	/* Note DW APB SSI clock divider doesn't support odd numbers */
@@ -339,7 +331,7 @@ void dw_spi_update_config(struct dw_spi *dws, struct spi_device *spi,
 	speed_hz = dws->max_freq / clk_div;
 
 	if (dws->current_freq != speed_hz) {
-		dw_spi_set_clk(dws, clk_div);
+		spi_set_clk(dws, clk_div);
 		dws->current_freq = speed_hz;
 	}
 
@@ -349,7 +341,7 @@ void dw_spi_update_config(struct dw_spi *dws, struct spi_device *spi,
 		dws->cur_rx_sample_dly = chip->rx_sample_dly;
 	}
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_update_config, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_update_config);
 
 static void dw_spi_irq_setup(struct dw_spi *dws)
 {
@@ -361,15 +353,15 @@ static void dw_spi_irq_setup(struct dw_spi *dws)
 	 * will be adjusted at the final stage of the IRQ-based SPI transfer
 	 * execution so not to lose the leftover of the incoming data.
 	 */
-	level = min_t(unsigned int, dws->fifo_len / 2, dws->tx_len);
+	level = min_t(u16, dws->fifo_len / 2, dws->tx_len);
 	dw_writel(dws, DW_SPI_TXFTLR, level);
 	dw_writel(dws, DW_SPI_RXFTLR, level - 1);
 
 	dws->transfer_handler = dw_spi_transfer_handler;
 
-	imask = DW_SPI_INT_TXEI | DW_SPI_INT_TXOI |
-		DW_SPI_INT_RXUI | DW_SPI_INT_RXOI | DW_SPI_INT_RXFI;
-	dw_spi_umask_intr(dws, imask);
+	imask = SPI_INT_TXEI | SPI_INT_TXOI | SPI_INT_RXUI | SPI_INT_RXOI |
+		SPI_INT_RXFI;
+	spi_umask_intr(dws, imask);
 }
 
 /*
@@ -409,22 +401,18 @@ static int dw_spi_poll_transfer(struct dw_spi *dws,
 }
 
 static int dw_spi_transfer_one(struct spi_controller *master,
-			       struct spi_device *spi,
-			       struct spi_transfer *transfer)
+		struct spi_device *spi, struct spi_transfer *transfer)
 {
 	struct dw_spi *dws = spi_controller_get_devdata(master);
 	struct dw_spi_cfg cfg = {
-		.tmode = DW_SPI_CTRLR0_TMOD_TR,
+		.tmode = SPI_TMOD_TR,
 		.dfs = transfer->bits_per_word,
 		.freq = transfer->speed_hz,
 	};
 	int ret;
 
 	dws->dma_mapped = 0;
-	dws->n_bytes =
-		roundup_pow_of_two(DIV_ROUND_UP(transfer->bits_per_word,
-						BITS_PER_BYTE));
-
+	dws->n_bytes = DIV_ROUND_UP(transfer->bits_per_word, BITS_PER_BYTE);
 	dws->tx = (void *)transfer->tx_buf;
 	dws->tx_len = transfer->len / dws->n_bytes;
 	dws->rx = transfer->rx_buf;
@@ -433,7 +421,7 @@ static int dw_spi_transfer_one(struct spi_controller *master,
 	/* Ensure the data above is visible for all CPUs */
 	smp_mb();
 
-	dw_spi_enable_chip(dws, 0);
+	spi_enable_chip(dws, 0);
 
 	dw_spi_update_config(dws, spi, &cfg);
 
@@ -444,7 +432,7 @@ static int dw_spi_transfer_one(struct spi_controller *master,
 		dws->dma_mapped = master->cur_msg_mapped;
 
 	/* For poll mode just disable all interrupts */
-	dw_spi_mask_intr(dws, 0xff);
+	spi_mask_intr(dws, 0xff);
 
 	if (dws->dma_mapped) {
 		ret = dws->dma_ops->dma_setup(dws, transfer);
@@ -452,7 +440,7 @@ static int dw_spi_transfer_one(struct spi_controller *master,
 			return ret;
 	}
 
-	dw_spi_enable_chip(dws, 1);
+	spi_enable_chip(dws, 1);
 
 	if (dws->dma_mapped)
 		return dws->dma_ops->dma_transfer(dws, transfer);
@@ -465,20 +453,20 @@ static int dw_spi_transfer_one(struct spi_controller *master,
 }
 
 static void dw_spi_handle_err(struct spi_controller *master,
-			      struct spi_message *msg)
+		struct spi_message *msg)
 {
 	struct dw_spi *dws = spi_controller_get_devdata(master);
 
 	if (dws->dma_mapped)
 		dws->dma_ops->dma_stop(dws);
 
-	dw_spi_reset_chip(dws);
+	spi_reset_chip(dws);
 }
 
 static int dw_spi_adjust_mem_op_size(struct spi_mem *mem, struct spi_mem_op *op)
 {
 	if (op->data.dir == SPI_MEM_DATA_IN)
-		op->data.nbytes = clamp_val(op->data.nbytes, 0, DW_SPI_NDF_MASK + 1);
+		op->data.nbytes = clamp_val(op->data.nbytes, 0, SPI_NDF_MASK + 1);
 
 	return 0;
 }
@@ -506,7 +494,7 @@ static int dw_spi_init_mem_buf(struct dw_spi *dws, const struct spi_mem_op *op)
 	if (op->data.dir == SPI_MEM_DATA_OUT)
 		len += op->data.nbytes;
 
-	if (len <= DW_SPI_BUF_SIZE) {
+	if (len <= SPI_BUF_SIZE) {
 		out = dws->buf;
 	} else {
 		out = kzalloc(len, GFP_KERNEL);
@@ -520,9 +508,9 @@ static int dw_spi_init_mem_buf(struct dw_spi *dws, const struct spi_mem_op *op)
 	 * single buffer in order to speed the data transmission up.
 	 */
 	for (i = 0; i < op->cmd.nbytes; ++i)
-		out[i] = DW_SPI_GET_BYTE(op->cmd.opcode, op->cmd.nbytes - i - 1);
+		out[i] = SPI_GET_BYTE(op->cmd.opcode, op->cmd.nbytes - i - 1);
 	for (j = 0; j < op->addr.nbytes; ++i, ++j)
-		out[i] = DW_SPI_GET_BYTE(op->addr.val, op->addr.nbytes - j - 1);
+		out[i] = SPI_GET_BYTE(op->addr.val, op->addr.nbytes - j - 1);
 	for (j = 0; j < op->dummy.nbytes; ++i, ++j)
 		out[i] = 0x0;
 
@@ -595,7 +583,7 @@ static int dw_spi_write_then_read(struct dw_spi *dws, struct spi_device *spi)
 		entries = readl_relaxed(dws->regs + DW_SPI_RXFLR);
 		if (!entries) {
 			sts = readl_relaxed(dws->regs + DW_SPI_RISR);
-			if (sts & DW_SPI_INT_RXOI) {
+			if (sts & SPI_INT_RXOI) {
 				dev_err(&dws->master->dev, "FIFO overflow on Rx\n");
 				return -EIO;
 			}
@@ -611,12 +599,12 @@ static int dw_spi_write_then_read(struct dw_spi *dws, struct spi_device *spi)
 
 static inline bool dw_spi_ctlr_busy(struct dw_spi *dws)
 {
-	return dw_readl(dws, DW_SPI_SR) & DW_SPI_SR_BUSY;
+	return dw_readl(dws, DW_SPI_SR) & SR_BUSY;
 }
 
 static int dw_spi_wait_mem_op_done(struct dw_spi *dws)
 {
-	int retry = DW_SPI_WAIT_RETRIES;
+	int retry = SPI_WAIT_RETRIES;
 	struct spi_delay delay;
 	unsigned long ns, us;
 	u32 nents;
@@ -646,9 +634,9 @@ static int dw_spi_wait_mem_op_done(struct dw_spi *dws)
 
 static void dw_spi_stop_mem_op(struct dw_spi *dws, struct spi_device *spi)
 {
-	dw_spi_enable_chip(dws, 0);
+	spi_enable_chip(dws, 0);
 	dw_spi_set_cs(spi, true);
-	dw_spi_enable_chip(dws, 1);
+	spi_enable_chip(dws, 1);
 }
 
 /*
@@ -681,19 +669,19 @@ static int dw_spi_exec_mem_op(struct spi_mem *mem, const struct spi_mem_op *op)
 	cfg.dfs = 8;
 	cfg.freq = clamp(mem->spi->max_speed_hz, 0U, dws->max_mem_freq);
 	if (op->data.dir == SPI_MEM_DATA_IN) {
-		cfg.tmode = DW_SPI_CTRLR0_TMOD_EPROMREAD;
+		cfg.tmode = SPI_TMOD_EPROMREAD;
 		cfg.ndf = op->data.nbytes;
 	} else {
-		cfg.tmode = DW_SPI_CTRLR0_TMOD_TO;
+		cfg.tmode = SPI_TMOD_TO;
 	}
 
-	dw_spi_enable_chip(dws, 0);
+	spi_enable_chip(dws, 0);
 
 	dw_spi_update_config(dws, mem->spi, &cfg);
 
-	dw_spi_mask_intr(dws, 0xff);
+	spi_mask_intr(dws, 0xff);
 
-	dw_spi_enable_chip(dws, 1);
+	spi_enable_chip(dws, 1);
 
 	/*
 	 * DW APB SSI controller has very nasty peculiarities. First originally
@@ -776,7 +764,7 @@ static void dw_spi_init_mem_ops(struct dw_spi *dws)
 static int dw_spi_setup(struct spi_device *spi)
 {
 	struct dw_spi *dws = spi_controller_get_devdata(spi->controller);
-	struct dw_spi_chip_data *chip;
+	struct chip_data *chip;
 
 	/* Only alloc on first setup */
 	chip = spi_get_ctldata(spi);
@@ -784,7 +772,7 @@ static int dw_spi_setup(struct spi_device *spi)
 		struct dw_spi *dws = spi_controller_get_devdata(spi->controller);
 		u32 rx_sample_dly_ns;
 
-		chip = kzalloc(sizeof(*chip), GFP_KERNEL);
+		chip = kzalloc(sizeof(struct chip_data), GFP_KERNEL);
 		if (!chip)
 			return -ENOMEM;
 		spi_set_ctldata(spi, chip);
@@ -811,30 +799,16 @@ static int dw_spi_setup(struct spi_device *spi)
 
 static void dw_spi_cleanup(struct spi_device *spi)
 {
-	struct dw_spi_chip_data *chip = spi_get_ctldata(spi);
+	struct chip_data *chip = spi_get_ctldata(spi);
 
 	kfree(chip);
 	spi_set_ctldata(spi, NULL);
 }
 
 /* Restart the controller, disable all interrupts, clean rx fifo */
-static void dw_spi_hw_init(struct device *dev, struct dw_spi *dws)
+static void spi_hw_init(struct device *dev, struct dw_spi *dws)
 {
-	dw_spi_reset_chip(dws);
-
-	/*
-	 * Retrieve the Synopsys component version if it hasn't been specified
-	 * by the platform. CoreKit version ID is encoded as a 3-chars ASCII
-	 * code enclosed with '*' (typical for the most of Synopsys IP-cores).
-	 */
-	if (!dws->ver) {
-		dws->ver = dw_readl(dws, DW_SPI_VERSION);
-
-		dev_dbg(dev, "Synopsys DWC%sSSI v%c.%c%c\n",
-			dw_spi_ip_is(dws, PSSI) ? " APB " : " ",
-			DW_SPI_GET_BYTE(dws->ver, 3), DW_SPI_GET_BYTE(dws->ver, 2),
-			DW_SPI_GET_BYTE(dws->ver, 1));
-	}
+	spi_reset_chip(dws);
 
 	/*
 	 * Try to detect the FIFO depth if not set by interface driver,
@@ -854,29 +828,6 @@ static void dw_spi_hw_init(struct device *dev, struct dw_spi *dws)
 		dev_dbg(dev, "Detected FIFO size: %u bytes\n", dws->fifo_len);
 	}
 
-	/*
-	 * Detect CTRLR0.DFS field size and offset by testing the lowest bits
-	 * writability. Note DWC SSI controller also has the extended DFS, but
-	 * with zero offset.
-	 */
-	if (dw_spi_ip_is(dws, PSSI)) {
-		u32 cr0, tmp = dw_readl(dws, DW_SPI_CTRLR0);
-
-		dw_spi_enable_chip(dws, 0);
-		dw_writel(dws, DW_SPI_CTRLR0, 0xffffffff);
-		cr0 = dw_readl(dws, DW_SPI_CTRLR0);
-		dw_writel(dws, DW_SPI_CTRLR0, tmp);
-		dw_spi_enable_chip(dws, 1);
-
-		if (!(cr0 & DW_PSSI_CTRLR0_DFS_MASK)) {
-			dws->caps |= DW_SPI_CAP_DFS32;
-			dws->dfs_offset = __bf_shf(DW_PSSI_CTRLR0_DFS32_MASK);
-			dev_dbg(dev, "Detected 32-bits max data frame size\n");
-		}
-	} else {
-		dws->caps |= DW_SPI_CAP_DFS32;
-	}
-
 	/* enable HW fixup for explicit CS deselect for Amazon's alpine chip */
 	if (dws->caps & DW_SPI_CAP_CS_OVERRIDE)
 		dw_writel(dws, DW_SPI_CS_OVERRIDE, 0xF);
@@ -894,15 +845,13 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 	if (!master)
 		return -ENOMEM;
 
-	device_set_node(&master->dev, dev_fwnode(dev));
-
 	dws->master = master;
 	dws->dma_addr = (dma_addr_t)(dws->paddr + DW_SPI_DR);
 
 	spi_controller_set_devdata(master, dws);
 
 	/* Basic HW init */
-	dw_spi_hw_init(dev, dws);
+	spi_hw_init(dev, dws);
 
 	ret = request_irq(dws->irq, dw_spi_irq, IRQF_SHARED, dev_name(dev),
 			  master);
@@ -915,10 +864,7 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 
 	master->use_gpio_descriptors = true;
 	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LOOP;
-	if (dws->caps & DW_SPI_CAP_DFS32)
-		master->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 32);
-	else
-		master->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
+	master->bits_per_word_mask =  SPI_BPW_RANGE_MASK(4, 16);
 	master->bus_num = dws->bus_num;
 	master->num_chipselect = dws->num_cs;
 	master->setup = dw_spi_setup;
@@ -932,6 +878,8 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 	if (dws->mem_ops.exec_op)
 		master->mem_ops = &dws->mem_ops;
 	master->max_speed_hz = dws->max_freq;
+	master->dev.of_node = dev->of_node;
+	master->dev.fwnode = dev->fwnode;
 	master->flags = SPI_MASTER_GPIO_SS;
 	master->auto_runtime_pm = true;
 
@@ -941,9 +889,7 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 
 	if (dws->dma_ops && dws->dma_ops->dma_init) {
 		ret = dws->dma_ops->dma_init(dev, dws);
-		if (ret == -EPROBE_DEFER) {
-			goto err_free_irq;
-		} else if (ret) {
+		if (ret) {
 			dev_warn(dev, "DMA init failed\n");
 		} else {
 			master->can_dma = dws->dma_ops->can_dma;
@@ -953,7 +899,7 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 
 	ret = spi_register_controller(master);
 	if (ret) {
-		dev_err_probe(dev, ret, "problem registering spi master\n");
+		dev_err(&master->dev, "problem registering spi master\n");
 		goto err_dma_exit;
 	}
 
@@ -963,14 +909,13 @@ int dw_spi_add_host(struct device *dev, struct dw_spi *dws)
 err_dma_exit:
 	if (dws->dma_ops && dws->dma_ops->dma_exit)
 		dws->dma_ops->dma_exit(dws);
-	dw_spi_enable_chip(dws, 0);
-err_free_irq:
+	spi_enable_chip(dws, 0);
 	free_irq(dws->irq, master);
 err_free_master:
 	spi_controller_put(master);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_add_host, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_add_host);
 
 void dw_spi_remove_host(struct dw_spi *dws)
 {
@@ -981,11 +926,11 @@ void dw_spi_remove_host(struct dw_spi *dws)
 	if (dws->dma_ops && dws->dma_ops->dma_exit)
 		dws->dma_ops->dma_exit(dws);
 
-	dw_spi_shutdown_chip(dws);
+	spi_shutdown_chip(dws);
 
 	free_irq(dws->irq, dws->master);
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_remove_host, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_remove_host);
 
 int dw_spi_suspend_host(struct dw_spi *dws)
 {
@@ -995,17 +940,17 @@ int dw_spi_suspend_host(struct dw_spi *dws)
 	if (ret)
 		return ret;
 
-	dw_spi_shutdown_chip(dws);
+	spi_shutdown_chip(dws);
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_suspend_host, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_suspend_host);
 
 int dw_spi_resume_host(struct dw_spi *dws)
 {
-	dw_spi_hw_init(&dws->master->dev, dws);
+	spi_hw_init(&dws->master->dev, dws);
 	return spi_controller_resume(dws->master);
 }
-EXPORT_SYMBOL_NS_GPL(dw_spi_resume_host, SPI_DW_CORE);
+EXPORT_SYMBOL_GPL(dw_spi_resume_host);
 
 MODULE_AUTHOR("Feng Tang <feng.tang@intel.com>");
 MODULE_DESCRIPTION("Driver for DesignWare SPI controller core");

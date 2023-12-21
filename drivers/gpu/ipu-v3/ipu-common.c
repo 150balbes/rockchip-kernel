@@ -18,7 +18,7 @@
 #include <linux/irq.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_graph.h>
 
 #include <drm/drm_fourcc.h>
@@ -1003,16 +1003,19 @@ err_cpmem:
 static void ipu_irq_handle(struct ipu_soc *ipu, const int *regs, int num_regs)
 {
 	unsigned long status;
-	int i, bit;
+	int i, bit, irq;
 
 	for (i = 0; i < num_regs; i++) {
 
 		status = ipu_cm_read(ipu, IPU_INT_STAT(regs[i]));
 		status &= ipu_cm_read(ipu, IPU_INT_CTRL(regs[i]));
 
-		for_each_set_bit(bit, &status, 32)
-			generic_handle_domain_irq(ipu->domain,
-						  regs[i] * 32 + bit);
+		for_each_set_bit(bit, &status, 32) {
+			irq = irq_linear_revmap(ipu->domain,
+						regs[i] * 32 + bit);
+			if (irq)
+				generic_handle_irq(irq);
+		}
 	}
 }
 
@@ -1165,7 +1168,6 @@ static int ipu_add_client_devices(struct ipu_soc *ipu, unsigned long ipu_base)
 		pdev = platform_device_alloc(reg->name, id++);
 		if (!pdev) {
 			ret = -ENOMEM;
-			of_node_put(of_node);
 			goto err_register;
 		}
 

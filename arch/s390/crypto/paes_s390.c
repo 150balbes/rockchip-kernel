@@ -5,7 +5,7 @@
  * s390 implementation of the AES Cipher Algorithm with protected keys.
  *
  * s390 Version:
- *   Copyright IBM Corp. 2017, 2023
+ *   Copyright IBM Corp. 2017,2020
  *   Author(s): Martin Schwidefsky <schwidefsky@de.ibm.com>
  *		Harald Freudenberger <freude@de.ibm.com>
  */
@@ -22,7 +22,6 @@
 #include <linux/init.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
-#include <linux/delay.h>
 #include <crypto/internal/skcipher.h>
 #include <crypto/xts.h>
 #include <asm/cpacf.h>
@@ -129,11 +128,7 @@ static inline int __paes_keyblob2pkey(struct key_blob *kb,
 
 	/* try three times in case of failure */
 	for (i = 0; i < 3; i++) {
-		if (i > 0 && ret == -EAGAIN && in_task())
-			if (msleep_interruptible(1000))
-				return -EINTR;
-		ret = pkey_keyblob2pkey(kb->key, kb->keylen,
-					pk->protkey, &pk->len, &pk->type);
+		ret = pkey_keyblob2pkey(kb->key, kb->keylen, pk);
 		if (ret == 0)
 			break;
 	}
@@ -143,13 +138,10 @@ static inline int __paes_keyblob2pkey(struct key_blob *kb,
 
 static inline int __paes_convert_key(struct s390_paes_ctx *ctx)
 {
-	int ret;
 	struct pkey_protkey pkey;
 
-	pkey.len = sizeof(pkey.protkey);
-	ret = __paes_keyblob2pkey(&ctx->kb, &pkey);
-	if (ret)
-		return ret;
+	if (__paes_keyblob2pkey(&ctx->kb, &pkey))
+		return -EINVAL;
 
 	spin_lock_bh(&ctx->pk_lock);
 	memcpy(&ctx->pk, &pkey, sizeof(pkey));
@@ -177,12 +169,10 @@ static void ecb_paes_exit(struct crypto_skcipher *tfm)
 
 static inline int __ecb_paes_set_key(struct s390_paes_ctx *ctx)
 {
-	int rc;
 	unsigned long fc;
 
-	rc = __paes_convert_key(ctx);
-	if (rc)
-		return rc;
+	if (__paes_convert_key(ctx))
+		return -EINVAL;
 
 	/* Pick the correct function code based on the protected key type */
 	fc = (ctx->pk.type == PKEY_KEYTYPE_AES_128) ? CPACF_KM_PAES_128 :
@@ -292,12 +282,10 @@ static void cbc_paes_exit(struct crypto_skcipher *tfm)
 
 static inline int __cbc_paes_set_key(struct s390_paes_ctx *ctx)
 {
-	int rc;
 	unsigned long fc;
 
-	rc = __paes_convert_key(ctx);
-	if (rc)
-		return rc;
+	if (__paes_convert_key(ctx))
+		return -EINVAL;
 
 	/* Pick the correct function code based on the protected key type */
 	fc = (ctx->pk.type == PKEY_KEYTYPE_AES_128) ? CPACF_KMC_PAES_128 :
@@ -416,9 +404,6 @@ static inline int __xts_paes_convert_key(struct s390_pxts_ctx *ctx)
 {
 	struct pkey_protkey pkey0, pkey1;
 
-	pkey0.len = sizeof(pkey0.protkey);
-	pkey1.len = sizeof(pkey1.protkey);
-
 	if (__paes_keyblob2pkey(&ctx->kb[0], &pkey0) ||
 	    __paes_keyblob2pkey(&ctx->kb[1], &pkey1))
 		return -EINVAL;
@@ -479,7 +464,7 @@ static int xts_paes_set_key(struct crypto_skcipher *tfm, const u8 *in_key,
 		return rc;
 
 	/*
-	 * xts_verify_key verifies the key length is not odd and makes
+	 * xts_check_key verifies the key length is not odd and makes
 	 * sure that the two keys are not the same. This can be done
 	 * on the two protected keys as well
 	 */
@@ -592,12 +577,10 @@ static void ctr_paes_exit(struct crypto_skcipher *tfm)
 
 static inline int __ctr_paes_set_key(struct s390_paes_ctx *ctx)
 {
-	int rc;
 	unsigned long fc;
 
-	rc = __paes_convert_key(ctx);
-	if (rc)
-		return rc;
+	if (__paes_convert_key(ctx))
+		return -EINVAL;
 
 	/* Pick the correct function code based on the protected key type */
 	fc = (ctx->pk.type == PKEY_KEYTYPE_AES_128) ? CPACF_KMCTR_PAES_128 :

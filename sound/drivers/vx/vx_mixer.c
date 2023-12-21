@@ -910,8 +910,7 @@ int snd_vx_mixer_new(struct vx_core *chip)
 		temp = vx_control_output_level;
 		temp.index = i;
 		temp.tlv.p = chip->hw->output_level_db_scale;
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 	}
 
@@ -922,26 +921,22 @@ int snd_vx_mixer_new(struct vx_core *chip)
 		temp.index = i;
 		temp.name = "PCM Playback Volume";
 		temp.private_value = val;
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 		temp = vx_control_output_switch;
 		temp.index = i;
 		temp.private_value = val;
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 		temp = vx_control_monitor_gain;
 		temp.index = i;
 		temp.private_value = val;
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 		temp = vx_control_monitor_switch;
 		temp.index = i;
 		temp.private_value = val;
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 	}
 	for (i = 0; i < chip->hw->num_outs; i++) {
@@ -949,25 +944,20 @@ int snd_vx_mixer_new(struct vx_core *chip)
 		temp.index = i;
 		temp.name = "PCM Capture Volume";
 		temp.private_value = (i * 2) | (1 << 8);
-		err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 	}
 
 	/* Audio source */
-	err = snd_ctl_add(card, snd_ctl_new1(&vx_control_audio_src, chip));
-	if (err < 0)
+	if ((err = snd_ctl_add(card, snd_ctl_new1(&vx_control_audio_src, chip))) < 0)
 		return err;
 	/* clock mode */
-	err = snd_ctl_add(card, snd_ctl_new1(&vx_control_clock_mode, chip));
-	if (err < 0)
+	if ((err = snd_ctl_add(card, snd_ctl_new1(&vx_control_clock_mode, chip))) < 0)
 		return err;
 	/* IEC958 controls */
-	err = snd_ctl_add(card, snd_ctl_new1(&vx_control_iec958_mask, chip));
-	if (err < 0)
+	if ((err = snd_ctl_add(card, snd_ctl_new1(&vx_control_iec958_mask, chip))) < 0)
 		return err;
-	err = snd_ctl_add(card, snd_ctl_new1(&vx_control_iec958, chip));
-	if (err < 0)
+	if ((err = snd_ctl_add(card, snd_ctl_new1(&vx_control_iec958, chip))) < 0)
 		return err;
 	/* VU, peak, saturation meters */
 	for (c = 0; c < 2; c++) {
@@ -978,8 +968,7 @@ int snd_vx_mixer_new(struct vx_core *chip)
 				temp = vx_control_saturation;
 				temp.index = i;
 				temp.private_value = val;
-				err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-				if (err < 0)
+				if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 					return err;
 			}
 			sprintf(name, "%s VU Meter", dir[c]);
@@ -987,16 +976,14 @@ int snd_vx_mixer_new(struct vx_core *chip)
 			temp.index = i;
 			temp.name = name;
 			temp.private_value = val;
-			err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 			sprintf(name, "%s Peak Meter", dir[c]);
 			temp = vx_control_peak_meter;
 			temp.index = i;
 			temp.name = name;
 			temp.private_value = val;
-			err = snd_ctl_add(card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 		}
 	}

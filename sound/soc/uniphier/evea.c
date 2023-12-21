@@ -397,6 +397,7 @@ static struct snd_soc_component_driver soc_codec_evea = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static struct snd_soc_dai_driver soc_dai_evea[] = {
@@ -536,7 +537,7 @@ err_out_clock:
 	return ret;
 }
 
-static void evea_remove(struct platform_device *pdev)
+static int evea_remove(struct platform_device *pdev)
 {
 	struct evea_priv *evea = platform_get_drvdata(pdev);
 
@@ -546,9 +547,11 @@ static void evea_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(evea->clk_exiv);
 	clk_disable_unprepare(evea->clk);
+
+	return 0;
 }
 
-static const struct of_device_id evea_of_match[] __maybe_unused = {
+static const struct of_device_id evea_of_match[] = {
 	{ .compatible = "socionext,uniphier-evea", },
 	{}
 };
@@ -560,7 +563,7 @@ static struct platform_driver evea_codec_driver = {
 		.of_match_table = of_match_ptr(evea_of_match),
 	},
 	.probe  = evea_probe,
-	.remove_new = evea_remove,
+	.remove = evea_remove,
 };
 module_platform_driver(evea_codec_driver);
 

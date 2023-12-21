@@ -17,16 +17,14 @@
 
 enum error_detector {
 	ERROR_DETECTOR_KFENCE,
-	ERROR_DETECTOR_KASAN,
-	ERROR_DETECTOR_WARN,
+	ERROR_DETECTOR_KASAN
 };
 
 #endif /* __ERROR_REPORT_DECLARE_TRACE_ENUMS_ONCE_ONLY */
 
-#define error_detector_list			\
+#define error_detector_list	\
 	EM(ERROR_DETECTOR_KFENCE, "kfence")	\
-	EM(ERROR_DETECTOR_KASAN, "kasan")	\
-	EMe(ERROR_DETECTOR_WARN, "warning")
+	EMe(ERROR_DETECTOR_KASAN, "kasan")
 /* Always end the list with an EMe. */
 
 #undef EM

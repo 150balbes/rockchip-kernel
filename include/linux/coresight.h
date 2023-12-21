@@ -36,16 +36,17 @@
 extern struct bus_type coresight_bustype;
 
 enum coresight_dev_type {
+	CORESIGHT_DEV_TYPE_NONE,
 	CORESIGHT_DEV_TYPE_SINK,
 	CORESIGHT_DEV_TYPE_LINK,
 	CORESIGHT_DEV_TYPE_LINKSINK,
 	CORESIGHT_DEV_TYPE_SOURCE,
 	CORESIGHT_DEV_TYPE_HELPER,
-	CORESIGHT_DEV_TYPE_MAX
+	CORESIGHT_DEV_TYPE_ECT,
 };
 
 enum coresight_dev_subtype_sink {
-	CORESIGHT_DEV_SUBTYPE_SINK_DUMMY,
+	CORESIGHT_DEV_SUBTYPE_SINK_NONE,
 	CORESIGHT_DEV_SUBTYPE_SINK_PORT,
 	CORESIGHT_DEV_SUBTYPE_SINK_BUFFER,
 	CORESIGHT_DEV_SUBTYPE_SINK_SYSMEM,
@@ -53,21 +54,28 @@ enum coresight_dev_subtype_sink {
 };
 
 enum coresight_dev_subtype_link {
+	CORESIGHT_DEV_SUBTYPE_LINK_NONE,
 	CORESIGHT_DEV_SUBTYPE_LINK_MERG,
 	CORESIGHT_DEV_SUBTYPE_LINK_SPLIT,
 	CORESIGHT_DEV_SUBTYPE_LINK_FIFO,
 };
 
 enum coresight_dev_subtype_source {
+	CORESIGHT_DEV_SUBTYPE_SOURCE_NONE,
 	CORESIGHT_DEV_SUBTYPE_SOURCE_PROC,
 	CORESIGHT_DEV_SUBTYPE_SOURCE_BUS,
 	CORESIGHT_DEV_SUBTYPE_SOURCE_SOFTWARE,
-	CORESIGHT_DEV_SUBTYPE_SOURCE_OTHERS,
 };
 
 enum coresight_dev_subtype_helper {
+	CORESIGHT_DEV_SUBTYPE_HELPER_NONE,
 	CORESIGHT_DEV_SUBTYPE_HELPER_CATU,
-	CORESIGHT_DEV_SUBTYPE_HELPER_ECT_CTI
+};
+
+/* Embedded Cross Trigger (ECT) sub-types */
+enum coresight_dev_subtype_ect {
+	CORESIGHT_DEV_SUBTYPE_ECT_NONE,
+	CORESIGHT_DEV_SUBTYPE_ECT_CTI,
 };
 
 /**
@@ -80,6 +88,8 @@ enum coresight_dev_subtype_helper {
  *			by @coresight_dev_subtype_source.
  * @helper_subtype:	type of helper this component is, as defined
  *			by @coresight_dev_subtype_helper.
+ * @ect_subtype:        type of cross trigger this component is, as
+ *			defined by @coresight_dev_subtype_ect
  */
 union coresight_dev_subtype {
 	/* We have some devices which acts as LINK and SINK */
@@ -89,25 +99,21 @@ union coresight_dev_subtype {
 	};
 	enum coresight_dev_subtype_source source_subtype;
 	enum coresight_dev_subtype_helper helper_subtype;
+	enum coresight_dev_subtype_ect ect_subtype;
 };
 
 /**
  * struct coresight_platform_data - data harvested from the firmware
  * specification.
  *
- * @nr_inconns: Number of elements for the input connections.
- * @nr_outconns: Number of elements for the output connections.
- * @out_conns: Array of nr_outconns pointers to connections from this
- *	       component.
- * @in_conns: Sparse array of pointers to input connections. Sparse
- *            because the source device owns the connection so when it's
- *            unloaded the connection leaves an empty slot.
+ * @nr_inport:	Number of elements for the input connections.
+ * @nr_outport:	Number of elements for the output connections.
+ * @conns:	Sparse array of nr_outport connections from this component.
  */
 struct coresight_platform_data {
-	int nr_inconns;
-	int nr_outconns;
-	struct coresight_connection **out_conns;
-	struct coresight_connection **in_conns;
+	int nr_inport;
+	int nr_outport;
+	struct coresight_connection *conns;
 };
 
 /**
@@ -162,42 +168,19 @@ struct coresight_desc {
 
 /**
  * struct coresight_connection - representation of a single connection
- * @src_port:	a connection's output port number.
- * @dest_port:	destination's input port number @src_port is connected to.
- * @dest_fwnode: destination component's fwnode handle.
- * @dest_dev:	a @coresight_device representation of the component
-		connected to @src_port. NULL until the device is created
+ * @outport:	a connection's output port number.
+ * @child_port:	remote component's port number @output is connected to.
+ * @chid_fwnode: remote component's fwnode handle.
+ * @child_dev:	a @coresight_device representation of the component
+		connected to @outport.
  * @link: Representation of the connection as a sysfs link.
- *
- * The full connection structure looks like this, where in_conns store
- * references to same connection as the source device's out_conns.
- *
- * +-----------------------------+   +-----------------------------+
- * |coresight_device             |   |coresight_connection         |
- * |-----------------------------|   |-----------------------------|
- * |                             |   |                             |
- * |                             |   |                    dest_dev*|<--
- * |pdata->out_conns[nr_outconns]|<->|src_dev*                     |   |
- * |                             |   |                             |   |
- * +-----------------------------+   +-----------------------------+   |
- *                                                                     |
- *                                   +-----------------------------+   |
- *                                   |coresight_device             |   |
- *                                   |------------------------------   |
- *                                   |                             |   |
- *                                   |  pdata->in_conns[nr_inconns]|<--
- *                                   |                             |
- *                                   +-----------------------------+
  */
 struct coresight_connection {
-	int src_port;
-	int dest_port;
-	struct fwnode_handle *dest_fwnode;
-	struct coresight_device *dest_dev;
+	int outport;
+	int child_port;
+	struct fwnode_handle *child_fwnode;
+	struct coresight_device *child_dev;
 	struct coresight_sysfs_link *link;
-	struct coresight_device *src_dev;
-	atomic_t src_refcnt;
-	atomic_t dest_refcnt;
 };
 
 /**
@@ -232,13 +215,11 @@ struct coresight_sysfs_link {
  *		from source to that sink.
  * @ea:		Device attribute for sink representation under PMU directory.
  * @def_sink:	cached reference to default sink found for this device.
+ * @ect_dev:	Associated cross trigger device. Not part of the trace data
+ *		path or connections.
  * @nr_links:   number of sysfs links created to other components from this
  *		device. These will appear in the "connections" group.
  * @has_conns_grp: Have added a "connections" group for sysfs links.
- * @feature_csdev_list: List of complex feature programming added to the device.
- * @config_csdev_list:  List of system configurations added to the device.
- * @cscfg_csdev_lock:	Protect the lists of configurations and features.
- * @active_cscfg_ctxt:  Context information for current active system configuration.
  */
 struct coresight_device {
 	struct coresight_platform_data *pdata;
@@ -247,21 +228,19 @@ struct coresight_device {
 	const struct coresight_ops *ops;
 	struct csdev_access access;
 	struct device dev;
-	atomic_t refcnt;
+	atomic_t *refcnt;
 	bool orphan;
 	bool enable;	/* true only if configured as part of a path */
 	/* sink specific fields */
 	bool activated;	/* true only if a sink is part of a path */
 	struct dev_ext_attribute *ea;
 	struct coresight_device *def_sink;
+	/* cross trigger handling */
+	struct coresight_device *ect_dev;
 	/* sysfs links between components */
 	int nr_links;
 	bool has_conns_grp;
-	/* system configuration and feature lists */
-	struct list_head feature_csdev_list;
-	struct list_head config_csdev_list;
-	spinlock_t cscfg_csdev_lock;
-	void *active_cscfg_ctxt;
+	bool ect_enabled; /* true only if associated ect device is enabled */
 };
 
 /*
@@ -288,12 +267,6 @@ static struct coresight_dev_list (var) = {				\
 
 #define to_coresight_device(d) container_of(d, struct coresight_device, dev)
 
-enum cs_mode {
-	CS_MODE_DISABLED,
-	CS_MODE_SYSFS,
-	CS_MODE_PERF,
-};
-
 #define source_ops(csdev)	csdev->ops->source_ops
 #define sink_ops(csdev)		csdev->ops->sink_ops
 #define link_ops(csdev)		csdev->ops->link_ops
@@ -310,8 +283,7 @@ enum cs_mode {
  * @update_buffer:	update buffer pointers after a trace session.
  */
 struct coresight_ops_sink {
-	int (*enable)(struct coresight_device *csdev, enum cs_mode mode,
-		      void *data);
+	int (*enable)(struct coresight_device *csdev, u32 mode, void *data);
 	int (*disable)(struct coresight_device *csdev);
 	void *(*alloc_buffer)(struct coresight_device *csdev,
 			      struct perf_event *event, void **pages,
@@ -329,12 +301,8 @@ struct coresight_ops_sink {
  * @disable:	disables flow between iport and oport.
  */
 struct coresight_ops_link {
-	int (*enable)(struct coresight_device *csdev,
-		      struct coresight_connection *in,
-		      struct coresight_connection *out);
-	void (*disable)(struct coresight_device *csdev,
-			struct coresight_connection *in,
-			struct coresight_connection *out);
+	int (*enable)(struct coresight_device *csdev, int iport, int oport);
+	void (*disable)(struct coresight_device *csdev, int iport, int oport);
 };
 
 /**
@@ -342,13 +310,16 @@ struct coresight_ops_link {
  * Operations available for sources.
  * @cpu_id:	returns the value of the CPU number this component
  *		is associated to.
+ * @trace_id:	returns the value of the component's trace ID as known
+ *		to the HW.
  * @enable:	enables tracing for a source.
  * @disable:	disables tracing for a source.
  */
 struct coresight_ops_source {
 	int (*cpu_id)(struct coresight_device *csdev);
-	int (*enable)(struct coresight_device *csdev, struct perf_event *event,
-		      enum cs_mode mode);
+	int (*trace_id)(struct coresight_device *csdev);
+	int (*enable)(struct coresight_device *csdev,
+		      struct perf_event *event,  u32 mode);
 	void (*disable)(struct coresight_device *csdev,
 			struct perf_event *event);
 };
@@ -363,9 +334,19 @@ struct coresight_ops_source {
  * @disable	: Disable the device
  */
 struct coresight_ops_helper {
-	int (*enable)(struct coresight_device *csdev, enum cs_mode mode,
-		      void *data);
+	int (*enable)(struct coresight_device *csdev, void *data);
 	int (*disable)(struct coresight_device *csdev, void *data);
+};
+
+/**
+ * struct coresight_ops_ect - Ops for an embedded cross trigger device
+ *
+ * @enable	: Enable the device
+ * @disable	: Disable the device
+ */
+struct coresight_ops_ect {
+	int (*enable)(struct coresight_device *csdev);
+	int (*disable)(struct coresight_device *csdev);
 };
 
 struct coresight_ops {
@@ -373,6 +354,7 @@ struct coresight_ops {
 	const struct coresight_ops_link *link_ops;
 	const struct coresight_ops_source *source_ops;
 	const struct coresight_ops_helper *helper_ops;
+	const struct coresight_ops_ect *ect_ops;
 };
 
 #if IS_ENABLED(CONFIG_CORESIGHT)
@@ -384,29 +366,6 @@ static inline u32 csdev_access_relaxed_read32(struct csdev_access *csa,
 		return readl_relaxed(csa->base + offset);
 
 	return csa->read(offset, true, false);
-}
-
-static inline u64 csdev_access_relaxed_read_pair(struct csdev_access *csa,
-						 u32 lo_offset, u32 hi_offset)
-{
-	if (likely(csa->io_mem)) {
-		return readl_relaxed(csa->base + lo_offset) |
-			((u64)readl_relaxed(csa->base + hi_offset) << 32);
-	}
-
-	return csa->read(lo_offset, true, false) | (csa->read(hi_offset, true, false) << 32);
-}
-
-static inline void csdev_access_relaxed_write_pair(struct csdev_access *csa, u64 val,
-						   u32 lo_offset, u32 hi_offset)
-{
-	if (likely(csa->io_mem)) {
-		writel_relaxed((u32)val, csa->base + lo_offset);
-		writel_relaxed((u32)(val >> 32), csa->base + hi_offset);
-	} else {
-		csa->write((u32)val, lo_offset, true, false);
-		csa->write((u32)(val >> 32), hi_offset, true, false);
-	}
 }
 
 static inline u32 csdev_access_read32(struct csdev_access *csa, u32 offset)
@@ -618,18 +577,5 @@ static inline void coresight_write64(struct coresight_device *csdev, u64 val, u3
 extern int coresight_get_cpu(struct device *dev);
 
 struct coresight_platform_data *coresight_get_platform_data(struct device *dev);
-struct coresight_connection *
-coresight_add_out_conn(struct device *dev,
-		       struct coresight_platform_data *pdata,
-		       const struct coresight_connection *new_conn);
-int coresight_add_in_conn(struct coresight_connection *conn);
-struct coresight_device *
-coresight_find_input_type(struct coresight_platform_data *pdata,
-			  enum coresight_dev_type type,
-			  union coresight_dev_subtype subtype);
-struct coresight_device *
-coresight_find_output_type(struct coresight_platform_data *pdata,
-			   enum coresight_dev_type type,
-			   union coresight_dev_subtype subtype);
 
 #endif		/* _LINUX_COREISGHT_H */

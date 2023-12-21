@@ -19,20 +19,25 @@ properties:
     maxItems: 1
 
   clocks:
-    maxItems: 4
+    items:
+      - description: phy ref clock.
+      - description: phy pcs immortal clock.
+      - description: phy peripheral clock.
 
   clock-names:
     items:
       - const: refclk
       - const: immortal
       - const: pclk
-      - const: utmi
 
   resets:
-    maxItems: 5
+      - description: phy init reset.
+      - description: phy cmn reset.
+      - description: phy lane reset.
+      - description: phy pcs apb reset.
+      - description: phy pma apb reset.
 
   reset-names:
-    items:
       - const: init
       - const: cmn
       - const: lane
@@ -40,7 +45,6 @@ properties:
       - const: pma_apb
 
   rockchip,dp-lane-mux:
-    $ref: /schemas/types.yaml#/definitions/uint32-array
     minItems: 2
     maxItems: 4
     description:
@@ -74,24 +78,6 @@ properties:
       Phandle to the syscon managing the 'video output general register files'.
       When select the dp lane mapping will request its phandle.
 
-  sbu1-dc-gpios:
-    description:
-      GPIO connected to the SBU1 line of the USB-C connector via a big resistor
-      (~100K) to apply a DC offset for signalling the connector orientation.
-
-  sbu2-dc-gpios:
-    description:
-      GPIO connected to the SBU2 line of the USB-C connector via a big resistor
-      (~100K) to apply a DC offset for signalling the connector orientation.
-
-  orientation-switch:
-    description: Flag the port as possible handler of orientation switching
-    type: boolean
-
-  mode-switch:
-    description: Flag the port as possible handle of altmode switching
-    type: boolean
-
   dp-port:
     type: object
     additionalProperties: false
@@ -103,7 +89,7 @@ properties:
     required:
       - "#phy-cells"
 
-  usb3-port:
+  u3-port:
     type: object
     additionalProperties: false
 
@@ -114,12 +100,6 @@ properties:
     required:
       - "#phy-cells"
 
-  port:
-    $ref: /schemas/graph.yaml#/properties/port
-    description:
-      A port node to link the PHY to a TypeC controller for the purpose of
-      handling orientation switching.
-
 required:
   - compatible
   - reg
@@ -128,7 +108,7 @@ required:
   - resets
   - reset-names
   - dp-port
-  - usb3-port
+  - u3-port
 
 additionalProperties: false
 
@@ -160,7 +140,7 @@ examples:
         status = "disabled";
       };
 
-      usbdp_phy0_u3: usb3-port {
+      usbdp_phy0_u3: u3-port {
         #phy-cells = <0>;
         status = "disabled";
     };

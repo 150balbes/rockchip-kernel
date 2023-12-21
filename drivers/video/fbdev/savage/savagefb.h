@@ -195,6 +195,7 @@ struct savagefb_par {
 	struct savage_reg initial;
 	struct vgastate vgastate;
 	struct mutex open_lock;
+	unsigned char   *edid;
 	u32 pseudo_palette[16];
 	u32 open_count;
 	int paletteEnabled;

@@ -16,6 +16,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/interrupt.h>
+#include <linux/android_kabi.h>
 
 struct module;
 struct uio_map;
@@ -77,6 +78,8 @@ struct uio_device {
 	struct mutex		info_lock;
 	struct kobject          *map_dir;
 	struct kobject          *portio_dir;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -109,6 +112,7 @@ struct uio_info {
 	int (*open)(struct uio_info *info, struct inode *inode);
 	int (*release)(struct uio_info *info, struct inode *inode);
 	int (*irqcontrol)(struct uio_info *info, s32 irq_on);
+	ANDROID_KABI_RESERVE(1);
 };
 
 extern int __must_check
@@ -117,14 +121,6 @@ extern int __must_check
 			      struct uio_info *info);
 
 /* use a define to avoid include chaining to get THIS_MODULE */
-
-/**
- * uio_register_device - register a new userspace IO device
- * @parent:	parent device
- * @info:	UIO device capabilities
- *
- * returns zero on success or a negative error code.
- */
 #define uio_register_device(parent, info) \
 	__uio_register_device(THIS_MODULE, parent, info)
 
@@ -137,14 +133,6 @@ extern int __must_check
 				   struct uio_info *info);
 
 /* use a define to avoid include chaining to get THIS_MODULE */
-
-/**
- * devm_uio_register_device - Resource managed uio_register_device()
- * @parent:	parent device
- * @info:	UIO device capabilities
- *
- * returns zero on success or a negative error code.
- */
 #define devm_uio_register_device(parent, info) \
 	__devm_uio_register_device(THIS_MODULE, parent, info)
 

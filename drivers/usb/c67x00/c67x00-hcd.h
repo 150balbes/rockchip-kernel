@@ -76,7 +76,7 @@ struct c67x00_hcd {
 	u16 next_td_addr;
 	u16 next_buf_addr;
 
-	struct work_struct work;
+	struct tasklet_struct tasklet;
 
 	struct completion endpoint_disable;
 

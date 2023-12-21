@@ -707,16 +707,20 @@ static int ethoc_mdio_probe(struct net_device *dev)
 	else
 		phy = phy_find_first(priv->mdio);
 
-	if (!phy)
-		return dev_err_probe(&dev->dev, -ENXIO, "no PHY found\n");
+	if (!phy) {
+		dev_err(&dev->dev, "no PHY found\n");
+		return -ENXIO;
+	}
 
 	priv->old_duplex = -1;
 	priv->old_link = -1;
 
 	err = phy_connect_direct(dev, phy, ethoc_mdio_poll,
 				 PHY_INTERFACE_MODE_GMII);
-	if (err)
-		return dev_err_probe(&dev->dev, err, "could not attach to PHY\n");
+	if (err) {
+		dev_err(&dev->dev, "could not attach to PHY\n");
+		return err;
+	}
 
 	phy_set_max_speed(phy, SPEED_100);
 
@@ -802,8 +806,8 @@ static int ethoc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 static void ethoc_do_set_mac_address(struct net_device *dev)
 {
-	const unsigned char *mac = dev->dev_addr;
 	struct ethoc *priv = netdev_priv(dev);
+	unsigned char *mac = dev->dev_addr;
 
 	ethoc_write(priv, MAC_ADDR0, (mac[2] << 24) | (mac[3] << 16) |
 				     (mac[4] <<  8) | (mac[5] <<  0));
@@ -816,7 +820,7 @@ static int ethoc_set_mac_address(struct net_device *dev, void *p)
 
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
-	eth_hw_addr_set(dev, addr->sa_data);
+	memcpy(dev->dev_addr, addr->sa_data, ETH_ALEN);
 	ethoc_do_set_mac_address(dev);
 	return 0;
 }
@@ -945,9 +949,7 @@ static void ethoc_get_regs(struct net_device *dev, struct ethtool_regs *regs,
 }
 
 static void ethoc_get_ringparam(struct net_device *dev,
-				struct ethtool_ringparam *ring,
-				struct kernel_ethtool_ringparam *kernel_ring,
-				struct netlink_ext_ack *extack)
+				struct ethtool_ringparam *ring)
 {
 	struct ethoc *priv = netdev_priv(dev);
 
@@ -963,9 +965,7 @@ static void ethoc_get_ringparam(struct net_device *dev,
 }
 
 static int ethoc_set_ringparam(struct net_device *dev,
-			       struct ethtool_ringparam *ring,
-			       struct kernel_ethtool_ringparam *kernel_ring,
-			       struct netlink_ext_ack *extack)
+			       struct ethtool_ringparam *ring)
 {
 	struct ethoc *priv = netdev_priv(dev);
 
@@ -1009,7 +1009,7 @@ static const struct ethtool_ops ethoc_ethtool_ops = {
 static const struct net_device_ops ethoc_netdev_ops = {
 	.ndo_open = ethoc_open,
 	.ndo_stop = ethoc_stop,
-	.ndo_eth_ioctl = ethoc_ioctl,
+	.ndo_do_ioctl = ethoc_ioctl,
 	.ndo_set_mac_address = ethoc_set_mac_address,
 	.ndo_set_rx_mode = ethoc_set_multicast_list,
 	.ndo_change_mtu = ethoc_change_mtu,
@@ -1078,11 +1078,14 @@ static int ethoc_probe(struct platform_device *pdev)
 
 
 	/* obtain device IRQ number */
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
+	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (!res) {
+		dev_err(&pdev->dev, "cannot obtain IRQ\n");
+		ret = -ENXIO;
 		goto free;
+	}
 
-	netdev->irq = ret;
+	netdev->irq = res->start;
 
 	/* setup driver-private data */
 	priv = netdev_priv(netdev);
@@ -1145,22 +1148,22 @@ static int ethoc_probe(struct platform_device *pdev)
 
 	/* Allow the platform setup code to pass in a MAC address. */
 	if (pdata) {
-		eth_hw_addr_set(netdev, pdata->hwaddr);
+		ether_addr_copy(netdev->dev_addr, pdata->hwaddr);
 		priv->phy_id = pdata->phy_id;
 	} else {
-		of_get_ethdev_address(pdev->dev.of_node, netdev);
+		const void *mac;
+
+		mac = of_get_mac_address(pdev->dev.of_node);
+		if (!IS_ERR(mac))
+			ether_addr_copy(netdev->dev_addr, mac);
 		priv->phy_id = -1;
 	}
 
 	/* Check that the given MAC address is valid. If it isn't, read the
 	 * current MAC from the controller.
 	 */
-	if (!is_valid_ether_addr(netdev->dev_addr)) {
-		u8 addr[ETH_ALEN];
-
-		ethoc_get_mac_address(netdev, addr);
-		eth_hw_addr_set(netdev, addr);
-	}
+	if (!is_valid_ether_addr(netdev->dev_addr))
+		ethoc_get_mac_address(netdev, netdev->dev_addr);
 
 	/* Check the MAC again for validity, if it still isn't choose and
 	 * program a random one.
@@ -1224,7 +1227,7 @@ static int ethoc_probe(struct platform_device *pdev)
 	netdev->ethtool_ops = &ethoc_ethtool_ops;
 
 	/* setup NAPI */
-	netif_napi_add(netdev, &priv->napi, ethoc_poll);
+	netif_napi_add(netdev, &priv->napi, ethoc_poll, 64);
 
 	spin_lock_init(&priv->lock);
 

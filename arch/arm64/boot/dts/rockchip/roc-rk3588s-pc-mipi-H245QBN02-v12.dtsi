@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "roc-rk3588s-pc-mipi-H245QBN02-v10.dtsi"
+#include "roc-rk3588s-pc-v12-diff.dtsi"

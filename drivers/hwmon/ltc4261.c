@@ -73,13 +73,13 @@ static struct ltc4261_data *ltc4261_update_device(struct device *dev)
 					"Failed to read ADC value: error %d\n",
 					val);
 				ret = ERR_PTR(val);
-				data->valid = false;
+				data->valid = 0;
 				goto abort;
 			}
 			data->regs[i] = val;
 		}
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -130,7 +130,7 @@ static ssize_t ltc4261_value_show(struct device *dev,
 		return PTR_ERR(data);
 
 	value = ltc4261_get_value(data, attr->index);
-	return sysfs_emit(buf, "%d\n", value);
+	return snprintf(buf, PAGE_SIZE, "%d\n", value);
 }
 
 static ssize_t ltc4261_bool_show(struct device *dev,
@@ -147,7 +147,7 @@ static ssize_t ltc4261_bool_show(struct device *dev,
 	if (fault)		/* Clear reported faults in chip register */
 		i2c_smbus_write_byte_data(data->client, LTC4261_FAULT, ~fault);
 
-	return sysfs_emit(buf, "%d\n", fault ? 1 : 0);
+	return snprintf(buf, PAGE_SIZE, "%d\n", fault ? 1 : 0);
 }
 
 /*
@@ -233,7 +233,7 @@ static struct i2c_driver ltc4261_driver = {
 	.driver = {
 		   .name = "ltc4261",
 		   },
-	.probe = ltc4261_probe,
+	.probe_new = ltc4261_probe,
 	.id_table = ltc4261_id,
 };
 

@@ -76,7 +76,7 @@ static int lzo_uncompress(struct squashfs_sb_info *msblk, void *strm,
 	while (bio_next_segment(bio, &iter_all)) {
 		int avail = min(bytes, ((int)bvec->bv_len) - offset);
 
-		data = bvec_virt(bvec);
+		data = page_address(bvec->bv_page) + bvec->bv_offset;
 		memcpy(buff, data + offset, avail);
 		buff += avail;
 		bytes -= avail;
@@ -93,12 +93,10 @@ static int lzo_uncompress(struct squashfs_sb_info *msblk, void *strm,
 	buff = stream->output;
 	while (data) {
 		if (bytes <= PAGE_SIZE) {
-			if (!IS_ERR(data))
-				memcpy(data, buff, bytes);
+			memcpy(data, buff, bytes);
 			break;
 		} else {
-			if (!IS_ERR(data))
-				memcpy(data, buff, PAGE_SIZE);
+			memcpy(data, buff, PAGE_SIZE);
 			buff += PAGE_SIZE;
 			bytes -= PAGE_SIZE;
 			data = squashfs_next_page(output);
@@ -118,6 +116,5 @@ const struct squashfs_decompressor squashfs_lzo_comp_ops = {
 	.decompress = lzo_uncompress,
 	.id = LZO_COMPRESSION,
 	.name = "lzo",
-	.alloc_buffer = 0,
 	.supported = 1
 };

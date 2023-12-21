@@ -42,7 +42,8 @@ static struct i2c_driver tps40422_driver = {
 	.driver = {
 		   .name = "tps40422",
 		   },
-	.probe = tps40422_probe,
+	.probe_new = tps40422_probe,
+	.remove = pmbus_do_remove,
 	.id_table = tps40422_id,
 };
 
@@ -51,4 +52,3 @@ module_i2c_driver(tps40422_driver);
 MODULE_AUTHOR("Zhu Laiwen <richard.zhu@nsn.com>");
 MODULE_DESCRIPTION("PMBus driver for TI TPS40422");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(PMBUS);

@@ -370,7 +370,7 @@ static struct usb_driver hso_driver;
 static struct tty_driver *tty_drv;
 static struct hso_device *serial_table[HSO_SERIAL_TTY_MINORS];
 static struct hso_device *network_table[HSO_MAX_NET_DEVICES];
-static DEFINE_SPINLOCK(serial_table_lock);
+static spinlock_t serial_table_lock;
 
 static const s32 default_port_spec[] = {
 	HSO_INTF_MUX | HSO_PORT_NETWORK,
@@ -457,8 +457,9 @@ static const struct usb_device_id hso_ids[] = {
 MODULE_DEVICE_TABLE(usb, hso_ids);
 
 /* Sysfs attribute */
-static ssize_t hsotype_show(struct device *dev,
-			    struct device_attribute *attr, char *buf)
+static ssize_t hso_sysfs_show_porttype(struct device *dev,
+				       struct device_attribute *attr,
+				       char *buf)
 {
 	struct hso_device *hso_dev = dev_get_drvdata(dev);
 	char *port_name;
@@ -504,7 +505,7 @@ static ssize_t hsotype_show(struct device *dev,
 
 	return sprintf(buf, "%s\n", port_name);
 }
-static DEVICE_ATTR_RO(hsotype);
+static DEVICE_ATTR(hsotype, 0444, hso_sysfs_show_porttype, NULL);
 
 static struct attribute *hso_serial_dev_attrs[] = {
 	&dev_attr_hsotype.attr,
@@ -1079,7 +1080,8 @@ static void hso_init_termios(struct ktermios *termios)
 	tty_termios_encode_baud_rate(termios, 115200, 115200);
 }
 
-static void _hso_serial_set_termios(struct tty_struct *tty)
+static void _hso_serial_set_termios(struct tty_struct *tty,
+				    struct ktermios *old)
 {
 	struct hso_serial *serial = tty->driver_data;
 
@@ -1210,10 +1212,9 @@ static void hso_std_serial_read_bulk_callback(struct urb *urb)
  * This needs to be a tasklet otherwise we will
  * end up recursively calling this function.
  */
-static void hso_unthrottle_tasklet(struct tasklet_struct *t)
+static void hso_unthrottle_tasklet(unsigned long data)
 {
-	struct hso_serial *serial = from_tasklet(serial, t,
-						 unthrottle_tasklet);
+	struct hso_serial *serial = (struct hso_serial *)data;
 	unsigned long flags;
 
 	spin_lock_irqsave(&serial->serial_lock, flags);
@@ -1261,9 +1262,10 @@ static int hso_serial_open(struct tty_struct *tty, struct file *filp)
 	if (serial->port.count == 1) {
 		serial->rx_state = RX_IDLE;
 		/* Force default termio settings */
-		_hso_serial_set_termios(tty);
-		tasklet_setup(&serial->unthrottle_tasklet,
-			      hso_unthrottle_tasklet);
+		_hso_serial_set_termios(tty, NULL);
+		tasklet_init(&serial->unthrottle_tasklet,
+			     hso_unthrottle_tasklet,
+			     (unsigned long)serial);
 		result = hso_start_serial_device(serial->parent, GFP_KERNEL);
 		if (result) {
 			hso_stop_serial_device(serial->parent);
@@ -1355,10 +1357,10 @@ out:
 }
 
 /* how much room is there for writing */
-static unsigned int hso_serial_write_room(struct tty_struct *tty)
+static int hso_serial_write_room(struct tty_struct *tty)
 {
 	struct hso_serial *serial = tty->driver_data;
-	unsigned int room;
+	int room;
 	unsigned long flags;
 
 	spin_lock_irqsave(&serial->serial_lock, flags);
@@ -1380,8 +1382,7 @@ static void hso_serial_cleanup(struct tty_struct *tty)
 }
 
 /* setup the term */
-static void hso_serial_set_termios(struct tty_struct *tty,
-				   const struct ktermios *old)
+static void hso_serial_set_termios(struct tty_struct *tty, struct ktermios *old)
 {
 	struct hso_serial *serial = tty->driver_data;
 	unsigned long flags;
@@ -1394,7 +1395,7 @@ static void hso_serial_set_termios(struct tty_struct *tty,
 	/* the actual setup */
 	spin_lock_irqsave(&serial->serial_lock, flags);
 	if (serial->port.count)
-		_hso_serial_set_termios(tty);
+		_hso_serial_set_termios(tty, old);
 	else
 		tty->termios = *old;
 	spin_unlock_irqrestore(&serial->serial_lock, flags);
@@ -1403,11 +1404,11 @@ static void hso_serial_set_termios(struct tty_struct *tty,
 }
 
 /* how many characters in the buffer */
-static unsigned int hso_serial_chars_in_buffer(struct tty_struct *tty)
+static int hso_serial_chars_in_buffer(struct tty_struct *tty)
 {
 	struct hso_serial *serial = tty->driver_data;
+	int chars;
 	unsigned long flags;
-	unsigned int chars;
 
 	/* sanity check */
 	if (serial == NULL)
@@ -2320,7 +2321,7 @@ static struct hso_device *hso_create_device(struct usb_interface *intf,
 {
 	struct hso_device *hso_dev;
 
-	hso_dev = kzalloc(sizeof(*hso_dev), GFP_KERNEL);
+	hso_dev = kzalloc(sizeof(*hso_dev), GFP_ATOMIC);
 	if (!hso_dev)
 		return NULL;
 
@@ -3241,14 +3242,14 @@ static int __init hso_init(void)
 	pr_info("%s\n", version);
 
 	/* Initialise the serial table semaphore and table */
+	spin_lock_init(&serial_table_lock);
 	for (i = 0; i < HSO_SERIAL_TTY_MINORS; i++)
 		serial_table[i] = NULL;
 
 	/* allocate our driver using the proper amount of supported minors */
-	tty_drv = tty_alloc_driver(HSO_SERIAL_TTY_MINORS, TTY_DRIVER_REAL_RAW |
-			TTY_DRIVER_DYNAMIC_DEV);
-	if (IS_ERR(tty_drv))
-		return PTR_ERR(tty_drv);
+	tty_drv = alloc_tty_driver(HSO_SERIAL_TTY_MINORS);
+	if (!tty_drv)
+		return -ENOMEM;
 
 	/* fill in all needed values */
 	tty_drv->driver_name = driver_name;
@@ -3261,6 +3262,7 @@ static int __init hso_init(void)
 	tty_drv->minor_start = 0;
 	tty_drv->type = TTY_DRIVER_TYPE_SERIAL;
 	tty_drv->subtype = SERIAL_TYPE_NORMAL;
+	tty_drv->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 	tty_drv->init_termios = tty_std_termios;
 	hso_init_termios(&tty_drv->init_termios);
 	tty_set_operations(tty_drv, &hso_serial_ops);
@@ -3285,7 +3287,7 @@ static int __init hso_init(void)
 err_unreg_tty:
 	tty_unregister_driver(tty_drv);
 err_free_tty:
-	tty_driver_kref_put(tty_drv);
+	put_tty_driver(tty_drv);
 	return result;
 }
 
@@ -3296,7 +3298,7 @@ static void __exit hso_exit(void)
 	tty_unregister_driver(tty_drv);
 	/* deregister the usb driver */
 	usb_deregister(&hso_driver);
-	tty_driver_kref_put(tty_drv);
+	put_tty_driver(tty_drv);
 }
 
 /* Module definitions */

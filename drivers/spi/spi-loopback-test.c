@@ -53,12 +53,6 @@ module_param(no_cs, int, 0);
 MODULE_PARM_DESC(no_cs,
 		 "if set Chip Select (CS) will not be used");
 
-/* run tests only for a specific length */
-static int run_only_iter_len = -1;
-module_param(run_only_iter_len, int, 0);
-MODULE_PARM_DESC(run_only_iter_len,
-		 "only run tests for a length of this number in iterate_len list");
-
 /* run only a specific test */
 static int run_only_test = -1;
 module_param(run_only_test, int, 0);
@@ -76,11 +70,6 @@ static int check_ranges = 1;
 module_param(check_ranges, int, 0644);
 MODULE_PARM_DESC(check_ranges,
 		 "checks rx_buffer pattern are valid");
-
-static unsigned int delay_ms = 100;
-module_param(delay_ms, uint, 0644);
-MODULE_PARM_DESC(delay_ms,
-		 "delay between tests, in milliseconds (default: 100)");
 
 /* the actual tests to execute */
 static struct spi_test spi_tests[] = {
@@ -324,33 +313,6 @@ static struct spi_test spi_tests[] = {
 			},
 		},
 	},
-	{
-		.description	= "three tx+rx transfers with overlapping cache lines",
-		.fill_option	= FILL_COUNT_8,
-		/*
-		 * This should be large enough for the controller driver to
-		 * choose to transfer it with DMA.
-		 */
-		.iterate_len    = { 512, -1 },
-		.iterate_transfer_mask = BIT(1),
-		.transfer_count = 3,
-		.transfers		= {
-			{
-				.len = 1,
-				.tx_buf = TX(0),
-				.rx_buf = RX(0),
-			},
-			{
-				.tx_buf = TX(1),
-				.rx_buf = RX(1),
-			},
-			{
-				.len = 1,
-				.tx_buf = TX(513),
-				.rx_buf = RX(513),
-			},
-		},
-	},
 
 	{ /* end of tests sequence */ }
 };
@@ -492,8 +454,7 @@ struct rx_ranges {
 	u8 *end;
 };
 
-static int rx_ranges_cmp(void *priv, const struct list_head *a,
-			 const struct list_head *b)
+static int rx_ranges_cmp(void *priv, struct list_head *a, struct list_head *b)
 {
 	struct rx_ranges *rx_a = list_entry(a, struct rx_ranges, list);
 	struct rx_ranges *rx_b = list_entry(b, struct rx_ranges, list);
@@ -1039,8 +1000,6 @@ int spi_test_run_test(struct spi_device *spi, const struct spi_test *test,
 
 	for (idx_len = 0; idx_len < SPI_TEST_MAX_ITERATE &&
 	     (len = test->iterate_len[idx_len]) != -1; idx_len++) {
-		if ((run_only_iter_len > -1) && len != run_only_iter_len)
-			continue;
 		FOR_EACH_ALIGNMENT(tx_align) {
 			FOR_EACH_ALIGNMENT(rx_align) {
 				/* and run the iteration */
@@ -1111,8 +1070,7 @@ int spi_test_run_tests(struct spi_device *spi,
 		 * detect the individual tests when using a logic analyzer
 		 * we also add scheduling to avoid potential spi_timeouts...
 		 */
-		if (delay_ms)
-			mdelay(delay_ms);
+		mdelay(100);
 		schedule();
 	}
 

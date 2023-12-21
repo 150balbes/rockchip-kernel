@@ -358,7 +358,8 @@ static const struct v4l2_subdev_ops saa7110_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int saa7110_probe(struct i2c_client *client)
+static int saa7110_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct saa7110 *decoder;
 	struct v4l2_subdev *sd;
@@ -427,13 +428,14 @@ static int saa7110_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void saa7110_remove(struct i2c_client *client)
+static int saa7110_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct saa7110 *decoder = to_saa7110(sd);
 
 	v4l2_device_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(&decoder->hdl);
+	return 0;
 }
 
 /* ----------------------------------------------------------------------- */

@@ -20,7 +20,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/skbuff.h>
 
-static int raw_eth_ioctl(struct net_device *dev, struct if_settings *ifs);
+static int raw_eth_ioctl(struct net_device *dev, struct ifreq *ifr);
 
 static netdev_tx_t eth_tx(struct sk_buff *skb, struct net_device *dev)
 {
@@ -48,22 +48,22 @@ static struct hdlc_proto proto = {
 };
 
 
-static int raw_eth_ioctl(struct net_device *dev, struct if_settings *ifs)
+static int raw_eth_ioctl(struct net_device *dev, struct ifreq *ifr)
 {
-	raw_hdlc_proto __user *raw_s = ifs->ifs_ifsu.raw_hdlc;
+	raw_hdlc_proto __user *raw_s = ifr->ifr_settings.ifs_ifsu.raw_hdlc;
 	const size_t size = sizeof(raw_hdlc_proto);
 	raw_hdlc_proto new_settings;
 	hdlc_device *hdlc = dev_to_hdlc(dev);
 	unsigned int old_qlen;
 	int result;
 
-	switch (ifs->type) {
+	switch (ifr->ifr_settings.type) {
 	case IF_GET_PROTO:
 		if (dev_to_hdlc(dev)->proto != &proto)
 			return -EINVAL;
-		ifs->type = IF_PROTO_HDLC_ETH;
-		if (ifs->size < size) {
-			ifs->size = size; /* data size wanted */
+		ifr->ifr_settings.type = IF_PROTO_HDLC_ETH;
+		if (ifr->ifr_settings.size < size) {
+			ifr->ifr_settings.size = size; /* data size wanted */
 			return -ENOBUFS;
 		}
 		if (copy_to_user(raw_s, hdlc->state, size))
@@ -110,7 +110,7 @@ static int raw_eth_ioctl(struct net_device *dev, struct if_settings *ifs)
 }
 
 
-static int __init hdlc_eth_init(void)
+static int __init mod_init(void)
 {
 	register_hdlc_protocol(&proto);
 	return 0;
@@ -118,14 +118,14 @@ static int __init hdlc_eth_init(void)
 
 
 
-static void __exit hdlc_eth_exit(void)
+static void __exit mod_exit(void)
 {
 	unregister_hdlc_protocol(&proto);
 }
 
 
-module_init(hdlc_eth_init);
-module_exit(hdlc_eth_exit);
+module_init(mod_init);
+module_exit(mod_exit);
 
 MODULE_AUTHOR("Krzysztof Halasa <khc@pm.waw.pl>");
 MODULE_DESCRIPTION("Ethernet encapsulation support for generic HDLC");

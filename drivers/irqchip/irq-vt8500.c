@@ -183,7 +183,7 @@ static void __exception_irq_entry vt8500_handle_irq(struct pt_regs *regs)
 				continue;
 		}
 
-		generic_handle_domain_irq(intc[i].domain, irqnr);
+		handle_domain_irq(intc[i].domain, irqnr, regs);
 	}
 }
 

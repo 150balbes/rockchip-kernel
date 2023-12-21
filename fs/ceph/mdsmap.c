@@ -29,7 +29,7 @@ static int __mdsmap_get_random_mds(struct ceph_mdsmap *m, bool ignore_laggy)
 		return -1;
 
 	/* pick */
-	n = get_random_u32_below(n);
+	n = prandom_u32() % n;
 	for (j = 0, i = 0; i < m->possible_max_rank; i++) {
 		if (CEPH_MDS_IS_READY(i, ignore_laggy))
 			j++;
@@ -114,7 +114,7 @@ bad:
  * Ignore any fields we don't care about (there are quite a few of
  * them).
  */
-struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
+struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end)
 {
 	struct ceph_mdsmap *m;
 	const void *start = *p;
@@ -122,7 +122,6 @@ struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
 	int err;
 	u8 mdsmap_v;
 	u16 mdsmap_ev;
-	u32 target;
 
 	m = kzalloc(sizeof(*m), GFP_NOFS);
 	if (!m)
@@ -202,19 +201,18 @@ struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
 		namelen = ceph_decode_32(p);  /* skip mds name */
 		*p += namelen;
 
-		ceph_decode_32_safe(p, end, mds, bad);
-		ceph_decode_32_safe(p, end, inc, bad);
-		ceph_decode_32_safe(p, end, state, bad);
+		ceph_decode_need(p, end,
+				 4*sizeof(u32) + sizeof(u64) +
+				 sizeof(addr) + sizeof(struct ceph_timespec),
+				 bad);
+		mds = ceph_decode_32(p);
+		inc = ceph_decode_32(p);
+		state = ceph_decode_32(p);
 		*p += sizeof(u64);		/* state_seq */
-		if (info_v >= 8)
-			err = ceph_decode_entity_addrvec(p, end, msgr2, &addr);
-		else
-			err = ceph_decode_entity_addr(p, end, &addr);
+		err = ceph_decode_entity_addr(p, end, &addr);
 		if (err)
 			goto corrupt;
-
-		ceph_decode_copy_safe(p, end, &laggy_since, sizeof(laggy_since),
-				      bad);
+		ceph_decode_copy(p, &laggy_since, sizeof(laggy_since));
 		laggy = laggy_since.tv_sec != 0 || laggy_since.tv_nsec != 0;
 		*p += sizeof(u32);
 		ceph_decode_32_safe(p, end, namelen, bad);
@@ -261,10 +259,9 @@ struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
 						       sizeof(u32), GFP_NOFS);
 			if (!info->export_targets)
 				goto nomem;
-			for (j = 0; j < num_export_targets; j++) {
-				target = ceph_decode_32(&pexport_targets);
-				info->export_targets[j] = target;
-			}
+			for (j = 0; j < num_export_targets; j++)
+				info->export_targets[j] =
+				       ceph_decode_32(&pexport_targets);
 		} else {
 			info->export_targets = NULL;
 		}
@@ -352,10 +349,12 @@ struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
 		__decode_and_drop_type(p, end, u8, bad_ext);
 	}
 	if (mdsmap_ev >= 8) {
+		u32 name_len;
 		/* enabled */
 		ceph_decode_8_safe(p, end, m->m_enabled, bad_ext);
-		/* fs_name */
-		ceph_decode_skip_string(p, end, bad_ext);
+		ceph_decode_32_safe(p, end, name_len, bad_ext);
+		ceph_decode_need(p, end, name_len, bad_ext);
+		*p += name_len;
 	}
 	/* damaged */
 	if (mdsmap_ev >= 9) {
@@ -367,22 +366,6 @@ struct ceph_mdsmap *ceph_mdsmap_decode(void **p, void *end, bool msgr2)
 		m->m_damaged = n > 0;
 	} else {
 		m->m_damaged = false;
-	}
-	if (mdsmap_ev >= 17) {
-		/* balancer */
-		ceph_decode_skip_string(p, end, bad_ext);
-		/* standby_count_wanted */
-		ceph_decode_skip_32(p, end, bad_ext);
-		/* old_max_mds */
-		ceph_decode_skip_32(p, end, bad_ext);
-		/* min_compat_client */
-		ceph_decode_skip_8(p, end, bad_ext);
-		/* required_client_features */
-		ceph_decode_skip_set(p, end, 64, bad_ext);
-		ceph_decode_64_safe(p, end, m->m_max_xattr_size, bad_ext);
-	} else {
-		/* This forces the usage of the (sync) SETXATTR Op */
-		m->m_max_xattr_size = 0;
 	}
 bad_ext:
 	dout("mdsmap_decode m_enabled: %d, m_damaged: %d, m_num_laggy: %d\n",

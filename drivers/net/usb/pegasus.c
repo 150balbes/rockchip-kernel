@@ -1,7 +1,31 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- *  Copyright (c) 1999-2021 Petko Manolov (petkan@nucleusys.com)
+ *  Copyright (c) 1999-2013 Petko Manolov (petkan@nucleusys.com)
  *
+ *	ChangeLog:
+ *		....	Most of the time spent on reading sources & docs.
+ *		v0.2.x	First official release for the Linux kernel.
+ *		v0.3.0	Beutified and structured, some bugs fixed.
+ *		v0.3.x	URBifying bulk requests and bugfixing. First relatively
+ *			stable release. Still can touch device's registers only
+ *			from top-halves.
+ *		v0.4.0	Control messages remained unurbified are now URBs.
+ *			Now we can touch the HW at any time.
+ *		v0.4.9	Control urbs again use process context to wait. Argh...
+ *			Some long standing bugs (enable_net_traffic) fixed.
+ *			Also nasty trick about resubmiting control urb from
+ *			interrupt context used. Please let me know how it
+ *			behaves. Pegasus II support added since this version.
+ *			TODO: suppressing HCD warnings spewage on disconnect.
+ *		v0.4.13	Ethernet address is now set at probe(), not at open()
+ *			time as this seems to break dhcpd.
+ *		v0.5.0	branch to 2.5.x kernels
+ *		v0.5.1	ethtool support added
+ *		v0.5.5	rx socket buffers are in a pool and the their allocation
+ *			is out of the interrupt routine.
+ *		...
+ *		v0.9.3	simplified [get|set]_register(s), async update registers
+ *			logic revisited, receive skb_pool removed.
  */
 
 #include <linux/sched.h>
@@ -21,6 +45,7 @@
 /*
  * Version Information
  */
+#define DRIVER_VERSION "v0.9.3 (2013/04/25)"
 #define DRIVER_AUTHOR "Petko Manolov <petkan@nucleusys.com>"
 #define DRIVER_DESC "Pegasus/Pegasus II USB Ethernet driver"
 
@@ -357,7 +382,7 @@ static void set_ethernet_addr(pegasus_t *pegasus)
 			goto err;
 	}
 
-	eth_hw_addr_set(pegasus->net, node_id);
+	memcpy(pegasus->net->dev_addr, node_id, sizeof(node_id));
 
 	return;
 err:
@@ -562,11 +587,12 @@ tl_sched:
 	tasklet_schedule(&pegasus->rx_tl);
 }
 
-static void rx_fixup(struct tasklet_struct *t)
+static void rx_fixup(unsigned long data)
 {
-	pegasus_t *pegasus = from_tasklet(pegasus, t, rx_tl);
+	pegasus_t *pegasus;
 	int status;
 
+	pegasus = (pegasus_t *) data;
 	if (pegasus->flags & PEGASUS_UNPLUG)
 		return;
 
@@ -894,7 +920,8 @@ static void pegasus_get_drvinfo(struct net_device *dev,
 {
 	pegasus_t *pegasus = netdev_priv(dev);
 
-	strscpy(info->driver, driver_name, sizeof(info->driver));
+	strlcpy(info->driver, driver_name, sizeof(info->driver));
+	strlcpy(info->version, DRIVER_VERSION, sizeof(info->version));
 	usb_make_path(pegasus->usb, info->bus_info, sizeof(info->bus_info));
 }
 
@@ -1001,8 +1028,7 @@ static const struct ethtool_ops ops = {
 	.set_link_ksettings = pegasus_set_link_ksettings,
 };
 
-static int pegasus_siocdevprivate(struct net_device *net, struct ifreq *rq,
-				  void __user *udata, int cmd)
+static int pegasus_ioctl(struct net_device *net, struct ifreq *rq, int cmd)
 {
 	__u16 *data = (__u16 *) &rq->ifr_ifru;
 	pegasus_t *pegasus = netdev_priv(net);
@@ -1151,7 +1177,7 @@ static int pegasus_probe(struct usb_interface *intf,
 		goto out1;
 	}
 
-	tasklet_setup(&pegasus->rx_tl, rx_fixup);
+	tasklet_init(&pegasus->rx_tl, rx_fixup, (unsigned long) pegasus);
 
 	INIT_DELAYED_WORK(&pegasus->carrier_check, check_carrier);
 
@@ -1270,7 +1296,7 @@ static int pegasus_resume(struct usb_interface *intf)
 static const struct net_device_ops pegasus_netdev_ops = {
 	.ndo_open =			pegasus_open,
 	.ndo_stop =			pegasus_close,
-	.ndo_siocdevprivate =		pegasus_siocdevprivate,
+	.ndo_do_ioctl =			pegasus_ioctl,
 	.ndo_start_xmit =		pegasus_start_xmit,
 	.ndo_set_rx_mode =		pegasus_set_multicast,
 	.ndo_tx_timeout =		pegasus_tx_timeout,
@@ -1321,7 +1347,7 @@ static void __init parse_id(char *id)
 
 static int __init pegasus_init(void)
 {
-	pr_info("%s: " DRIVER_DESC "\n", driver_name);
+	pr_info("%s: %s, " DRIVER_DESC "\n", driver_name, DRIVER_VERSION);
 	if (devid)
 		parse_id(devid);
 	return usb_register(&pegasus_driver);

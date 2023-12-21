@@ -13,7 +13,9 @@
 #include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include "bpf_misc.h"
+
+#define barrier() __asm__ __volatile__("": : :"memory")
+int _version SEC("version") = 1;
 
 /* llvm will optimize both subprograms into exactly the same BPF assembly
  *
@@ -52,8 +54,6 @@ int get_skb_len(struct __sk_buff *skb)
 {
 	volatile char buf[MAX_STACK] = {};
 
-	__sink(buf[MAX_STACK - 1]);
-
 	return skb->len;
 }
 
@@ -76,8 +76,6 @@ int get_skb_ifindex(int val, struct __sk_buff *skb, int var)
 {
 	volatile char buf[MAX_STACK] = {};
 
-	__sink(buf[MAX_STACK - 1]);
-
 	return skb->ifindex * val * var;
 }
 
@@ -99,7 +97,7 @@ int test_pkt_write_access_subprog(struct __sk_buff *skb, __u32 off)
 	return 0;
 }
 
-SEC("tc")
+SEC("classifier/test_pkt_access")
 int test_pkt_access(struct __sk_buff *skb)
 {
 	void *data_end = (void *)(long)skb->data_end;

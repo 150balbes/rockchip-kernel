@@ -858,11 +858,8 @@ int dss_runtime_get(struct dss_device *dss)
 	DSSDBG("dss_runtime_get\n");
 
 	r = pm_runtime_get_sync(&dss->pdev->dev);
-	if (WARN_ON(r < 0)) {
-		pm_runtime_put_noidle(&dss->pdev->dev);
-		return r;
-	}
-	return 0;
+	WARN_ON(r < 0);
+	return r < 0 ? r : 0;
 }
 
 void dss_runtime_put(struct dss_device *dss)
@@ -1311,7 +1308,6 @@ static int dss_bind(struct device *dev)
 {
 	struct dss_device *dss = dev_get_drvdata(dev);
 	struct platform_device *drm_pdev;
-	struct dss_pdata pdata;
 	int r;
 
 	r = component_bind_all(dev, NULL);
@@ -1320,9 +1316,9 @@ static int dss_bind(struct device *dev)
 
 	pm_set_vt_switch(0);
 
-	pdata.dss = dss;
-	drm_pdev = platform_device_register_data(NULL, "omapdrm", 0,
-						 &pdata, sizeof(pdata));
+	omapdss_set_dss(dss);
+
+	drm_pdev = platform_device_register_simple("omapdrm", 0, NULL, 0);
 	if (IS_ERR(drm_pdev)) {
 		component_unbind_all(dev, NULL);
 		return PTR_ERR(drm_pdev);
@@ -1339,6 +1335,8 @@ static void dss_unbind(struct device *dev)
 
 	platform_device_unregister(dss->drm_pdev);
 
+	omapdss_set_dss(NULL);
+
 	component_unbind_all(dev, NULL);
 }
 
@@ -1346,6 +1344,12 @@ static const struct component_master_ops dss_component_ops = {
 	.bind = dss_bind,
 	.unbind = dss_unbind,
 };
+
+static int dss_component_compare(struct device *dev, void *data)
+{
+	struct device *child = data;
+	return dev == child;
+}
 
 struct dss_component_match_data {
 	struct device *dev;
@@ -1376,7 +1380,7 @@ static int dss_add_child_component(struct device *dev, void *data)
 		return device_for_each_child(dev, cmatch,
 					     dss_add_child_component);
 
-	component_match_add(cmatch->dev, match, component_compare_dev, dev);
+	component_match_add(cmatch->dev, match, dss_component_compare, dev);
 
 	return 0;
 }
@@ -1421,6 +1425,7 @@ static int dss_probe(struct platform_device *pdev)
 	const struct soc_device_attribute *soc;
 	struct dss_component_match_data cmatch;
 	struct component_match *match = NULL;
+	struct resource *dss_mem;
 	struct dss_device *dss;
 	int r;
 
@@ -1448,7 +1453,8 @@ static int dss_probe(struct platform_device *pdev)
 		dss->feat = of_match_device(dss_of_match, &pdev->dev)->data;
 
 	/* Map I/O registers, get and setup clocks. */
-	dss->base = devm_platform_ioremap_resource(pdev, 0);
+	dss_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dss->base = devm_ioremap_resource(&pdev->dev, dss_mem);
 	if (IS_ERR(dss->base)) {
 		r = PTR_ERR(dss->base);
 		goto err_free_dss;
@@ -1532,7 +1538,7 @@ err_free_dss:
 	return r;
 }
 
-static void dss_remove(struct platform_device *pdev)
+static int dss_remove(struct platform_device *pdev)
 {
 	struct dss_device *dss = platform_get_drvdata(pdev);
 
@@ -1557,14 +1563,24 @@ static void dss_remove(struct platform_device *pdev)
 	dss_put_clocks(dss);
 
 	kfree(dss);
+
+	return 0;
 }
 
 static void dss_shutdown(struct platform_device *pdev)
 {
+	struct omap_dss_device *dssdev = NULL;
+
 	DSSDBG("shutdown\n");
+
+	for_each_dss_output(dssdev) {
+		if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE &&
+		    dssdev->ops && dssdev->ops->disable)
+			dssdev->ops->disable(dssdev);
+	}
 }
 
-static __maybe_unused int dss_runtime_suspend(struct device *dev)
+static int dss_runtime_suspend(struct device *dev)
 {
 	struct dss_device *dss = dev_get_drvdata(dev);
 
@@ -1576,7 +1592,7 @@ static __maybe_unused int dss_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static __maybe_unused int dss_runtime_resume(struct device *dev)
+static int dss_runtime_resume(struct device *dev)
 {
 	struct dss_device *dss = dev_get_drvdata(dev);
 	int r;
@@ -1599,13 +1615,14 @@ static __maybe_unused int dss_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops dss_pm_ops = {
-	SET_RUNTIME_PM_OPS(dss_runtime_suspend, dss_runtime_resume, NULL)
+	.runtime_suspend = dss_runtime_suspend,
+	.runtime_resume = dss_runtime_resume,
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 
 struct platform_driver omap_dsshw_driver = {
 	.probe		= dss_probe,
-	.remove_new	= dss_remove,
+	.remove		= dss_remove,
 	.shutdown	= dss_shutdown,
 	.driver         = {
 		.name   = "omapdss_dss",
@@ -1633,14 +1650,21 @@ static struct platform_driver * const omap_dss_drivers[] = {
 #endif
 };
 
-int __init omap_dss_init(void)
+static int __init omap_dss_init(void)
 {
 	return platform_register_drivers(omap_dss_drivers,
 					 ARRAY_SIZE(omap_dss_drivers));
 }
 
-void omap_dss_exit(void)
+static void __exit omap_dss_exit(void)
 {
 	platform_unregister_drivers(omap_dss_drivers,
 				    ARRAY_SIZE(omap_dss_drivers));
 }
+
+module_init(omap_dss_init);
+module_exit(omap_dss_exit);
+
+MODULE_AUTHOR("Tomi Valkeinen <tomi.valkeinen@ti.com>");
+MODULE_DESCRIPTION("OMAP2/3/4/5 Display Subsystem");
+MODULE_LICENSE("GPL v2");

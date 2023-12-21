@@ -2,6 +2,7 @@
 /* Copyright (c) 2020 Facebook */
 #include "bpf_iter.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 char _license[] SEC("license") = "GPL";
 
@@ -109,15 +110,6 @@ int dump_bpf_hash_map(struct bpf_iter__bpf_map_elem *ctx)
 
 	BPF_SEQ_PRINTF(seq, "%d: (%x %d %x) (%llx)\n", map->id,
 		       key->a, key->b, key->c, *val);
-
-	return 0;
-}
-
-SEC("iter.s/bpf_map_elem")
-int sleepable_dummy_dump(struct bpf_iter__bpf_map_elem *ctx)
-{
-	if (ctx->meta->seq_num == 0)
-		BPF_SEQ_PRINTF(ctx->meta->seq, "map dump starts\n");
 
 	return 0;
 }

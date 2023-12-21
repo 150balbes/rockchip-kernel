@@ -11,7 +11,6 @@
 
 #include <linux/types.h>
 #include <linux/list.h>
-#include <asm/asm-extable.h>
 #include <asm/sclp.h>
 #include <asm/ebcdic.h>
 
@@ -82,6 +81,15 @@ typedef unsigned int sclp_cmdw_t;
 
 #define GDS_KEY_SELFDEFTEXTMSG	0x31
 
+enum sclp_pm_event {
+	SCLP_PM_EVENT_FREEZE,
+	SCLP_PM_EVENT_THAW,
+	SCLP_PM_EVENT_RESTORE,
+};
+
+#define SCLP_PANIC_PRIO		1
+#define SCLP_PANIC_PRIO_CLIENT	0
+
 typedef u64 sccb_mask_t;
 
 struct sccb_header {
@@ -148,11 +156,7 @@ struct read_cpu_info_sccb {
 	u16	offset_configured;
 	u16	nr_standby;
 	u16	offset_standby;
-	/*
-	 * Without ext sccb, struct size is PAGE_SIZE.
-	 * With ext sccb, struct size is EXT_SCCB_READ_CPU.
-	 */
-	u8	reserved[];
+	u8	reserved[4096 - 16];
 } __attribute__((packed, aligned(PAGE_SIZE)));
 
 struct read_info_sccb {
@@ -195,7 +199,7 @@ struct read_info_sccb {
 	u8	byte_134;			/* 134 */
 	u8	cpudirq;		/* 135 */
 	u16	cbl;			/* 136-137 */
-	u8	_pad_138[EXT_SCCB_READ_SCP - 138];
+	u8	_pad_138[4096 - 138];	/* 138-4095 */
 } __packed __aligned(PAGE_SIZE);
 
 struct read_storage_sccb {
@@ -204,7 +208,7 @@ struct read_storage_sccb {
 	u16 assigned;
 	u16 standby;
 	u16 :16;
-	u32 entries[];
+	u32 entries[0];
 } __packed;
 
 static inline void sclp_fill_core_info(struct sclp_core_info *info,
@@ -285,6 +289,10 @@ struct sclp_register {
 	void (*state_change_fn)(struct sclp_register *);
 	/* called for events in cp_receive_mask/sclp_receive_mask */
 	void (*receiver_fn)(struct evbuf_header *);
+	/* called for power management events */
+	void (*pm_event_fn)(struct sclp_register *, enum sclp_pm_event);
+	/* pm event posted flag */
+	int pm_event_posted;
 };
 
 /* externals from sclp.c */
@@ -307,9 +315,11 @@ enum {
 
 extern int sclp_init_state;
 extern int sclp_console_pages;
-extern bool sclp_console_drop;
+extern int sclp_console_drop;
 extern unsigned long sclp_console_full;
 extern bool sclp_mask_compat_mode;
+
+extern char *sclp_early_sccb;
 
 void sclp_early_wait_irq(void);
 int sclp_early_cmd(sclp_cmdw_t cmd, void *sccb);
@@ -318,7 +328,7 @@ unsigned int sclp_early_con_check_vt220(struct init_sccb *sccb);
 int sclp_early_set_event_mask(struct init_sccb *sccb,
 			      sccb_mask_t receive_mask,
 			      sccb_mask_t send_mask);
-struct read_info_sccb * __init sclp_early_get_info(void);
+int sclp_early_get_info(struct read_info_sccb *info);
 
 /* useful inlines */
 
@@ -334,7 +344,7 @@ static inline int sclp_service_call(sclp_cmdw_t command, void *sccb)
 		"2:\n"
 		EX_TABLE(0b, 2b)
 		EX_TABLE(1b, 2b)
-		: "+&d" (cc) : "d" (command), "a" (__pa(sccb))
+		: "+&d" (cc) : "d" (command), "a" ((unsigned long)sccb)
 		: "cc", "memory");
 	if (cc == 4)
 		return -EINVAL;

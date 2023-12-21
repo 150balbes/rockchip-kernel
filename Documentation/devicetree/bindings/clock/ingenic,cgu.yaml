@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/clock/ingenic,cgu.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Ingenic SoCs CGU
+title: Ingenic SoCs CGU devicetree bindings
 
 description: |
   The CGU in an Ingenic SoC provides all the clocks generated on-chip. It
@@ -22,9 +22,6 @@ select:
         enum:
           - ingenic,jz4740-cgu
           - ingenic,jz4725b-cgu
-          - ingenic,jz4755-cgu
-          - ingenic,jz4760-cgu
-          - ingenic,jz4760b-cgu
           - ingenic,jz4770-cgu
           - ingenic,jz4780-cgu
           - ingenic,x1000-cgu
@@ -52,9 +49,6 @@ properties:
       - enum:
           - ingenic,jz4740-cgu
           - ingenic,jz4725b-cgu
-          - ingenic,jz4755-cgu
-          - ingenic,jz4760-cgu
-          - ingenic,jz4760b-cgu
           - ingenic,jz4770-cgu
           - ingenic,jz4780-cgu
           - ingenic,x1000-cgu
@@ -98,15 +92,13 @@ required:
 
 patternProperties:
   "^usb-phy@[a-f0-9]+$":
-    $ref: /schemas/phy/ingenic,phy-usb.yaml#
-  "^mac-phy-ctrl@[a-f0-9]+$":
-    $ref: /schemas/net/ingenic,mac.yaml#
+    allOf: [ $ref: "../usb/ingenic,jz4770-phy.yaml#" ]
 
 additionalProperties: false
 
 examples:
   - |
-    #include <dt-bindings/clock/ingenic,jz4770-cgu.h>
+    #include <dt-bindings/clock/jz4770-cgu.h>
     cgu: clock-controller@10000000 {
       compatible = "ingenic,jz4770-cgu", "simple-mfd";
       reg = <0x10000000 0x100>;

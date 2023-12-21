@@ -145,12 +145,12 @@ static void uniphier_serial_out(struct uart_port *p, int offset, int value)
  * The divisor latch register exists at different address.
  * Override dl_read/write callbacks.
  */
-static u32 uniphier_serial_dl_read(struct uart_8250_port *up)
+static int uniphier_serial_dl_read(struct uart_8250_port *up)
 {
 	return readl(up->port.membase + UNIPHIER_UART_DLR);
 }
 
-static void uniphier_serial_dl_write(struct uart_8250_port *up, u32 value)
+static void uniphier_serial_dl_write(struct uart_8250_port *up, int value)
 {
 	writel(value, up->port.membase + UNIPHIER_UART_DLR);
 }

@@ -115,7 +115,7 @@ static int vega20_send_msg_to_smc(struct pp_hwmgr *hwmgr, uint16_t msg)
 
 	ret = vega20_wait_for_response(hwmgr);
 	if (ret != PPSMC_Result_OK)
-		dev_err(adev->dev, "Failed to send message 0x%x, response 0x%x\n", msg, ret);
+		pr_err("Failed to send message 0x%x, response 0x%x\n", msg, ret);
 
 	return (ret == PPSMC_Result_OK) ? 0 : -EIO;
 }
@@ -143,7 +143,7 @@ static int vega20_send_msg_to_smc_with_parameter(struct pp_hwmgr *hwmgr,
 
 	ret = vega20_wait_for_response(hwmgr);
 	if (ret != PPSMC_Result_OK)
-		dev_err(adev->dev, "Failed to send message 0x%x, response 0x%x\n", msg, ret);
+		pr_err("Failed to send message 0x%x, response 0x%x\n", msg, ret);
 
 	return (ret == PPSMC_Result_OK) ? 0 : -EIO;
 }
@@ -192,7 +192,8 @@ static int vega20_copy_table_from_smc(struct pp_hwmgr *hwmgr,
 			"[CopyTableFromSMC] Attempt to Transfer Table From SMU Failed!",
 			return ret);
 
-	amdgpu_asic_invalidate_hdp(adev, NULL);
+	/* flush hdp cache */
+	amdgpu_asic_flush_hdp(adev, NULL);
 
 	memcpy(table, priv->smu_tables.entry[table_id].table,
 			priv->smu_tables.entry[table_id].size);
@@ -306,7 +307,8 @@ int vega20_get_activity_monitor_coeff(struct pp_hwmgr *hwmgr,
 			"[GetActivityMonitor] Attempt to Transfer Table From SMU Failed!",
 			return ret);
 
-	amdgpu_asic_invalidate_hdp(adev, NULL);
+	/* flush hdp cache */
+	amdgpu_asic_flush_hdp(adev, NULL);
 
 	memcpy(table, priv->smu_tables.entry[TABLE_ACTIVITY_MONITOR_COEFF].table,
 			priv->smu_tables.entry[TABLE_ACTIVITY_MONITOR_COEFF].size);
@@ -520,7 +522,7 @@ static int vega20_smu_init(struct pp_hwmgr *hwmgr)
 	priv->smu_tables.entry[TABLE_ACTIVITY_MONITOR_COEFF].version = 0x01;
 	priv->smu_tables.entry[TABLE_ACTIVITY_MONITOR_COEFF].size = sizeof(DpmActivityMonitorCoeffInt_t);
 
-	ret = smu_v11_0_i2c_control_init(adev);
+	ret = smu_v11_0_i2c_control_init(&adev->pm.smu_i2c);
 	if (ret)
 		goto err4;
 
@@ -558,7 +560,7 @@ static int vega20_smu_fini(struct pp_hwmgr *hwmgr)
 			(struct vega20_smumgr *)(hwmgr->smu_backend);
 	struct amdgpu_device *adev = hwmgr->adev;
 
-	smu_v11_0_i2c_control_fini(adev);
+	smu_v11_0_i2c_control_fini(&adev->pm.smu_i2c);
 
 	if (priv) {
 		amdgpu_bo_free_kernel(&priv->smu_tables.entry[TABLE_PPTABLE].handle,

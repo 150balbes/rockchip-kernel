@@ -9,7 +9,6 @@
 
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of_graph.h>
 #include <linux/regulator/consumer.h>
@@ -17,9 +16,14 @@
 #include <video/mipi_display.h>
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_of.h>
+#include <drm/drm_panel.h>
 #include <drm/drm_print.h>
+#include <drm/drm_probe_helper.h>
 
 #define FLD_MASK(start, end)    (((1 << ((start) - (end) + 1)) - 1) << (end))
 #define FLD_VAL(val, start, end) (((val) << (end)) & FLD_MASK(start, end))
@@ -42,10 +46,10 @@
 
 /* Video path registers */
 #define VP_CTRL			0x0450 /* Video Path Control */
-#define VP_CTRL_MSF		BIT(0) /* Magic square in RGB666 */
-#define VP_CTRL_VTGEN		BIT(4) /* Use chip clock for timing */
-#define VP_CTRL_EVTMODE		BIT(5) /* Event mode */
-#define VP_CTRL_RGB888		BIT(8) /* RGB888 mode */
+#define VP_CTRL_MSF(v)		FLD_VAL(v, 0, 0) /* Magic square in RGB666 */
+#define VP_CTRL_VTGEN(v)	FLD_VAL(v, 4, 4) /* Use chip clock for timing */
+#define VP_CTRL_EVTMODE(v)	FLD_VAL(v, 5, 5) /* Event mode */
+#define VP_CTRL_RGB888(v)	FLD_VAL(v, 8, 8) /* RGB888 mode */
 #define VP_CTRL_VSDELAY(v)	FLD_VAL(v, 31, 20) /* VSYNC delay */
 #define VP_CTRL_HSPOL		BIT(17) /* Polarity of HSYNC signal */
 #define VP_CTRL_DEPOL		BIT(18) /* Polarity of DE signal */
@@ -149,9 +153,9 @@ static const char * const tc358764_supplies[] = {
 struct tc358764 {
 	struct device *dev;
 	struct drm_bridge bridge;
-	struct drm_bridge *next_bridge;
 	struct regulator_bulk_data supplies[ARRAY_SIZE(tc358764_supplies)];
 	struct gpio_desc *gpio_reset;
+	struct drm_bridge *panel_bridge;
 	int error;
 };
 
@@ -176,7 +180,7 @@ static void tc358764_read(struct tc358764 *ctx, u16 addr, u32 *val)
 	if (ret >= 0)
 		le32_to_cpus(val);
 
-	dev_dbg(ctx->dev, "read: addr=0x%04x data=0x%08x\n", addr, *val);
+	dev_dbg(ctx->dev, "read: %d, addr: %d\n", addr, *val);
 }
 
 static void tc358764_write(struct tc358764 *ctx, u16 addr, u32 val)
@@ -233,8 +237,8 @@ static int tc358764_init(struct tc358764 *ctx)
 	tc358764_write(ctx, DSI_STARTDSI, DSI_RX_START);
 
 	/* configure video path */
-	tc358764_write(ctx, VP_CTRL, VP_CTRL_VSDELAY(15) | VP_CTRL_RGB888 |
-		       VP_CTRL_EVTMODE | VP_CTRL_HSPOL | VP_CTRL_VSPOL);
+	tc358764_write(ctx, VP_CTRL, VP_CTRL_VSDELAY(15) | VP_CTRL_RGB888(1) |
+		       VP_CTRL_EVTMODE(1) | VP_CTRL_HSPOL | VP_CTRL_VSPOL);
 
 	/* reset PHY */
 	tc358764_write(ctx, LV_PHY0, LV_PHY0_RST(1) |
@@ -299,7 +303,8 @@ static int tc358764_attach(struct drm_bridge *bridge,
 {
 	struct tc358764 *ctx = bridge_to_tc358764(bridge);
 
-	return drm_bridge_attach(bridge->encoder, ctx->next_bridge, bridge, flags);
+	return drm_bridge_attach(bridge->encoder, ctx->panel_bridge,
+				 bridge, flags);
 }
 
 static const struct drm_bridge_funcs tc358764_bridge_funcs = {
@@ -310,7 +315,10 @@ static const struct drm_bridge_funcs tc358764_bridge_funcs = {
 
 static int tc358764_parse_dt(struct tc358764 *ctx)
 {
+	struct drm_bridge *panel_bridge;
 	struct device *dev = ctx->dev;
+	struct drm_panel *panel;
+	int ret;
 
 	ctx->gpio_reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ctx->gpio_reset)) {
@@ -318,10 +326,15 @@ static int tc358764_parse_dt(struct tc358764 *ctx)
 		return PTR_ERR(ctx->gpio_reset);
 	}
 
-	ctx->next_bridge = devm_drm_of_get_bridge(dev, dev->of_node, 1, 0);
-	if (IS_ERR(ctx->next_bridge))
-		return PTR_ERR(ctx->next_bridge);
+	ret = drm_of_find_panel_or_bridge(dev->of_node, 1, 0, &panel, NULL);
+	if (ret)
+		return ret;
 
+	panel_bridge = devm_drm_panel_bridge_add(dev, panel);
+	if (IS_ERR(panel_bridge))
+		return PTR_ERR(panel_bridge);
+
+	ctx->panel_bridge = panel_bridge;
 	return 0;
 }
 
@@ -368,8 +381,8 @@ static int tc358764_probe(struct mipi_dsi_device *dsi)
 		return ret;
 
 	ctx->bridge.funcs = &tc358764_bridge_funcs;
+	ctx->bridge.type = DRM_MODE_CONNECTOR_LVDS;
 	ctx->bridge.of_node = dev->of_node;
-	ctx->bridge.pre_enable_prev_first = true;
 
 	drm_bridge_add(&ctx->bridge);
 
@@ -382,12 +395,14 @@ static int tc358764_probe(struct mipi_dsi_device *dsi)
 	return ret;
 }
 
-static void tc358764_remove(struct mipi_dsi_device *dsi)
+static int tc358764_remove(struct mipi_dsi_device *dsi)
 {
 	struct tc358764 *ctx = mipi_dsi_get_drvdata(dsi);
 
 	mipi_dsi_detach(dsi);
 	drm_bridge_remove(&ctx->bridge);
+
+	return 0;
 }
 
 static const struct of_device_id tc358764_of_match[] = {

@@ -79,7 +79,7 @@ static int gdm_lte_rx(struct sk_buff *skb, struct nic *nic, int nic_type)
 	int ret, len;
 
 	len = skb->len + ETH_HLEN;
-	ret = netif_rx(skb);
+	ret = netif_rx_ni(skb);
 	if (ret == NET_RX_DROP) {
 		nic->stats.rx_dropped++;
 	} else {
@@ -195,6 +195,7 @@ static __sum16 icmp6_checksum(struct ipv6hdr *ipv6, u16 *ptr, int len)
 	pseudo_header.ph.ph_len = be16_to_cpu(ipv6->payload_len);
 	pseudo_header.ph.ph_nxt = ipv6->nexthdr;
 
+	w = (u16 *)&pseudo_header;
 	for (i = 0; i < ARRAY_SIZE(pseudo_header.pa); i++) {
 		pa = pseudo_header.pa[i];
 		sum = csum_add(sum, csum_unfold((__force __sum16)pa));
@@ -349,7 +350,7 @@ static s32 gdm_lte_tx_nic_type(struct net_device *dev, struct sk_buff *skb)
 	/* Get ethernet protocol */
 	eth = (struct ethhdr *)skb->data;
 	if (ntohs(eth->h_proto) == ETH_P_8021Q) {
-		vlan_eth = skb_vlan_eth_hdr(skb);
+		vlan_eth = (struct vlan_ethhdr *)skb->data;
 		mac_proto = ntohs(vlan_eth->h_vlan_encapsulated_proto);
 		network_data = skb->data + VLAN_ETH_HLEN;
 		nic_type |= NIC_TYPE_F_VLAN;
@@ -435,7 +436,7 @@ static netdev_tx_t gdm_lte_tx(struct sk_buff *skb, struct net_device *dev)
 	 * driver based on the NIC mac
 	 */
 	if (nic_type & NIC_TYPE_F_VLAN) {
-		struct vlan_ethhdr *vlan_eth = skb_vlan_eth_hdr(skb);
+		struct vlan_ethhdr *vlan_eth = (struct vlan_ethhdr *)skb->data;
 
 		nic->vlan_id = ntohs(vlan_eth->h_vlan_TCI) & VLAN_VID_MASK;
 		data_buf = skb->data + (VLAN_ETH_HLEN - ETH_HLEN);
@@ -687,6 +688,7 @@ static void gdm_lte_multi_sdu_pkt(struct phy_dev *phy_dev, char *buf, int len)
 	u32 nic_type;
 	int index;
 
+	hci_len = gdm_dev16_to_cpu(endian, multi_sdu->len);
 	num_packet = gdm_dev16_to_cpu(endian, multi_sdu->num_packet);
 
 	for (i = 0; i < num_packet; i++) {
@@ -867,7 +869,6 @@ int register_lte_device(struct phy_dev *phy_dev,
 	struct nic *nic;
 	struct net_device *net;
 	char pdn_dev_name[16];
-	u8 addr[ETH_ALEN];
 	int ret = 0;
 	u8 index;
 
@@ -894,12 +895,11 @@ int register_lte_device(struct phy_dev *phy_dev,
 		nic->phy_dev = phy_dev;
 		nic->nic_id = index;
 
-		form_mac_address(addr,
+		form_mac_address(net->dev_addr,
 				 nic->src_mac_addr,
 				 nic->dest_mac_addr,
 				 mac_address,
 				 index);
-		eth_hw_addr_set(net, addr);
 
 		SET_NETDEV_DEV(net, dev);
 		SET_NETDEV_DEVTYPE(net, &wwan_type);

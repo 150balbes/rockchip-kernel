@@ -4,6 +4,7 @@
  * Copyright (C) 2016 William Breathitt Gray
  */
 #include <linux/bitmap.h>
+#include <linux/bitops.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/gpio/driver.h>
@@ -16,9 +17,8 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/spinlock.h>
-#include <linux/types.h>
 
-#define WS16C48_EXTENT 10
+#define WS16C48_EXTENT 16
 #define MAX_NUM_WS16C48 max_num_isa_dev(WS16C48_EXTENT)
 
 static unsigned int base[MAX_NUM_WS16C48];
@@ -27,23 +27,8 @@ module_param_hw_array(base, uint, ioport, &num_ws16c48, 0);
 MODULE_PARM_DESC(base, "WinSystems WS16C48 base addresses");
 
 static unsigned int irq[MAX_NUM_WS16C48];
-static unsigned int num_irq;
-module_param_hw_array(irq, uint, irq, &num_irq, 0);
+module_param_hw_array(irq, uint, irq, NULL, 0);
 MODULE_PARM_DESC(irq, "WinSystems WS16C48 interrupt line numbers");
-
-/**
- * struct ws16c48_reg - device register structure
- * @port:		Port 0 through 5 I/O
- * @int_pending:	Interrupt Pending
- * @page_lock:		Register page (Bits 7-6) and I/O port lock (Bits 5-0)
- * @pol_enab_int_id:	Interrupt polarity, enable, and ID
- */
-struct ws16c48_reg {
-	u8 port[6];
-	u8 int_pending;
-	u8 page_lock;
-	u8 pol_enab_int_id[3];
-};
 
 /**
  * struct ws16c48_gpio - GPIO device private data structure
@@ -53,7 +38,7 @@ struct ws16c48_reg {
  * @lock:	synchronization lock to prevent I/O race conditions
  * @irq_mask:	I/O bits affected by interrupts
  * @flow_mask:	IRQ flow type mask for the respective I/O bits
- * @reg:	I/O address offset for the device registers
+ * @base:	base port address of the GPIO device
  */
 struct ws16c48_gpio {
 	struct gpio_chip chip;
@@ -62,7 +47,7 @@ struct ws16c48_gpio {
 	raw_spinlock_t lock;
 	unsigned long irq_mask;
 	unsigned long flow_mask;
-	struct ws16c48_reg __iomem *reg;
+	unsigned base;
 };
 
 static int ws16c48_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
@@ -88,7 +73,7 @@ static int ws16c48_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 
 	ws16c48gpio->io_state[port] |= mask;
 	ws16c48gpio->out_state[port] &= ~mask;
-	iowrite8(ws16c48gpio->out_state[port], ws16c48gpio->reg->port + port);
+	outb(ws16c48gpio->out_state[port], ws16c48gpio->base + port);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 
@@ -110,7 +95,7 @@ static int ws16c48_gpio_direction_output(struct gpio_chip *chip,
 		ws16c48gpio->out_state[port] |= mask;
 	else
 		ws16c48gpio->out_state[port] &= ~mask;
-	iowrite8(ws16c48gpio->out_state[port], ws16c48gpio->reg->port + port);
+	outb(ws16c48gpio->out_state[port], ws16c48gpio->base + port);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 
@@ -133,7 +118,7 @@ static int ws16c48_gpio_get(struct gpio_chip *chip, unsigned offset)
 		return -EINVAL;
 	}
 
-	port_state = ioread8(ws16c48gpio->reg->port + port);
+	port_state = inb(ws16c48gpio->base + port);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 
@@ -146,17 +131,15 @@ static int ws16c48_gpio_get_multiple(struct gpio_chip *chip,
 	struct ws16c48_gpio *const ws16c48gpio = gpiochip_get_data(chip);
 	unsigned long offset;
 	unsigned long gpio_mask;
-	size_t index;
-	u8 __iomem *port_addr;
+	unsigned int port_addr;
 	unsigned long port_state;
 
 	/* clear bits array to a clean slate */
 	bitmap_zero(bits, chip->ngpio);
 
 	for_each_set_clump8(offset, gpio_mask, mask, chip->ngpio) {
-		index = offset / 8;
-		port_addr = ws16c48gpio->reg->port + index;
-		port_state = ioread8(port_addr) & gpio_mask;
+		port_addr = ws16c48gpio->base + offset / 8;
+		port_state = inb(port_addr) & gpio_mask;
 
 		bitmap_set_value8(bits, port_state, offset);
 	}
@@ -183,7 +166,7 @@ static void ws16c48_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 		ws16c48gpio->out_state[port] |= mask;
 	else
 		ws16c48gpio->out_state[port] &= ~mask;
-	iowrite8(ws16c48gpio->out_state[port], ws16c48gpio->reg->port + port);
+	outb(ws16c48gpio->out_state[port], ws16c48gpio->base + port);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 }
@@ -195,13 +178,13 @@ static void ws16c48_gpio_set_multiple(struct gpio_chip *chip,
 	unsigned long offset;
 	unsigned long gpio_mask;
 	size_t index;
-	u8 __iomem *port_addr;
+	unsigned int port_addr;
 	unsigned long bitmask;
 	unsigned long flags;
 
 	for_each_set_clump8(offset, gpio_mask, mask, chip->ngpio) {
 		index = offset / 8;
-		port_addr = ws16c48gpio->reg->port + index;
+		port_addr = ws16c48gpio->base + index;
 
 		/* mask out GPIO configured for input */
 		gpio_mask &= ~ws16c48gpio->io_state[index];
@@ -212,7 +195,7 @@ static void ws16c48_gpio_set_multiple(struct gpio_chip *chip,
 		/* update output state data and set device gpio register */
 		ws16c48gpio->out_state[index] &= ~gpio_mask;
 		ws16c48gpio->out_state[index] |= bitmask;
-		iowrite8(ws16c48gpio->out_state[index], port_addr);
+		outb(ws16c48gpio->out_state[index], port_addr);
 
 		raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 	}
@@ -236,15 +219,10 @@ static void ws16c48_irq_ack(struct irq_data *data)
 
 	port_state = ws16c48gpio->irq_mask >> (8*port);
 
-	/* Select Register Page 2; Unlock all I/O ports */
-	iowrite8(0x80, &ws16c48gpio->reg->page_lock);
-
-	/* Clear pending interrupt */
-	iowrite8(port_state & ~mask, ws16c48gpio->reg->pol_enab_int_id + port);
-	iowrite8(port_state | mask, ws16c48gpio->reg->pol_enab_int_id + port);
-
-	/* Select Register Page 3; Unlock all I/O ports */
-	iowrite8(0xC0, &ws16c48gpio->reg->page_lock);
+	outb(0x80, ws16c48gpio->base + 7);
+	outb(port_state & ~mask, ws16c48gpio->base + 8 + port);
+	outb(port_state | mask, ws16c48gpio->base + 8 + port);
+	outb(0xC0, ws16c48gpio->base + 7);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 }
@@ -257,7 +235,6 @@ static void ws16c48_irq_mask(struct irq_data *data)
 	const unsigned long mask = BIT(offset);
 	const unsigned port = offset / 8;
 	unsigned long flags;
-	unsigned long port_state;
 
 	/* only the first 3 ports support interrupts */
 	if (port > 2)
@@ -266,17 +243,10 @@ static void ws16c48_irq_mask(struct irq_data *data)
 	raw_spin_lock_irqsave(&ws16c48gpio->lock, flags);
 
 	ws16c48gpio->irq_mask &= ~mask;
-	gpiochip_disable_irq(chip, offset);
-	port_state = ws16c48gpio->irq_mask >> (8 * port);
 
-	/* Select Register Page 2; Unlock all I/O ports */
-	iowrite8(0x80, &ws16c48gpio->reg->page_lock);
-
-	/* Disable interrupt */
-	iowrite8(port_state, ws16c48gpio->reg->pol_enab_int_id + port);
-
-	/* Select Register Page 3; Unlock all I/O ports */
-	iowrite8(0xC0, &ws16c48gpio->reg->page_lock);
+	outb(0x80, ws16c48gpio->base + 7);
+	outb(ws16c48gpio->irq_mask >> (8*port), ws16c48gpio->base + 8 + port);
+	outb(0xC0, ws16c48gpio->base + 7);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 }
@@ -289,7 +259,6 @@ static void ws16c48_irq_unmask(struct irq_data *data)
 	const unsigned long mask = BIT(offset);
 	const unsigned port = offset / 8;
 	unsigned long flags;
-	unsigned long port_state;
 
 	/* only the first 3 ports support interrupts */
 	if (port > 2)
@@ -297,18 +266,11 @@ static void ws16c48_irq_unmask(struct irq_data *data)
 
 	raw_spin_lock_irqsave(&ws16c48gpio->lock, flags);
 
-	gpiochip_enable_irq(chip, offset);
 	ws16c48gpio->irq_mask |= mask;
-	port_state = ws16c48gpio->irq_mask >> (8 * port);
 
-	/* Select Register Page 2; Unlock all I/O ports */
-	iowrite8(0x80, &ws16c48gpio->reg->page_lock);
-
-	/* Enable interrupt */
-	iowrite8(port_state, ws16c48gpio->reg->pol_enab_int_id + port);
-
-	/* Select Register Page 3; Unlock all I/O ports */
-	iowrite8(0xC0, &ws16c48gpio->reg->page_lock);
+	outb(0x80, ws16c48gpio->base + 7);
+	outb(ws16c48gpio->irq_mask >> (8*port), ws16c48gpio->base + 8 + port);
+	outb(0xC0, ws16c48gpio->base + 7);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 }
@@ -321,7 +283,6 @@ static int ws16c48_irq_set_type(struct irq_data *data, unsigned flow_type)
 	const unsigned long mask = BIT(offset);
 	const unsigned port = offset / 8;
 	unsigned long flags;
-	unsigned long port_state;
 
 	/* only the first 3 ports support interrupts */
 	if (port > 2)
@@ -343,56 +304,46 @@ static int ws16c48_irq_set_type(struct irq_data *data, unsigned flow_type)
 		return -EINVAL;
 	}
 
-	port_state = ws16c48gpio->flow_mask >> (8 * port);
-
-	/* Select Register Page 1; Unlock all I/O ports */
-	iowrite8(0x40, &ws16c48gpio->reg->page_lock);
-
-	/* Set interrupt polarity */
-	iowrite8(port_state, ws16c48gpio->reg->pol_enab_int_id + port);
-
-	/* Select Register Page 3; Unlock all I/O ports */
-	iowrite8(0xC0, &ws16c48gpio->reg->page_lock);
+	outb(0x40, ws16c48gpio->base + 7);
+	outb(ws16c48gpio->flow_mask >> (8*port), ws16c48gpio->base + 8 + port);
+	outb(0xC0, ws16c48gpio->base + 7);
 
 	raw_spin_unlock_irqrestore(&ws16c48gpio->lock, flags);
 
 	return 0;
 }
 
-static const struct irq_chip ws16c48_irqchip = {
+static struct irq_chip ws16c48_irqchip = {
 	.name = "ws16c48",
 	.irq_ack = ws16c48_irq_ack,
 	.irq_mask = ws16c48_irq_mask,
 	.irq_unmask = ws16c48_irq_unmask,
-	.irq_set_type = ws16c48_irq_set_type,
-	.flags = IRQCHIP_IMMUTABLE,
-	GPIOCHIP_IRQ_RESOURCE_HELPERS,
+	.irq_set_type = ws16c48_irq_set_type
 };
 
 static irqreturn_t ws16c48_irq_handler(int irq, void *dev_id)
 {
 	struct ws16c48_gpio *const ws16c48gpio = dev_id;
 	struct gpio_chip *const chip = &ws16c48gpio->chip;
-	struct ws16c48_reg __iomem *const reg = ws16c48gpio->reg;
 	unsigned long int_pending;
 	unsigned long port;
 	unsigned long int_id;
 	unsigned long gpio;
 
-	int_pending = ioread8(&reg->int_pending) & 0x7;
+	int_pending = inb(ws16c48gpio->base + 6) & 0x7;
 	if (!int_pending)
 		return IRQ_NONE;
 
 	/* loop until all pending interrupts are handled */
 	do {
 		for_each_set_bit(port, &int_pending, 3) {
-			int_id = ioread8(reg->pol_enab_int_id + port);
+			int_id = inb(ws16c48gpio->base + 8 + port);
 			for_each_set_bit(gpio, &int_id, 8)
-				generic_handle_domain_irq(chip->irq.domain,
-							  gpio + 8*port);
+				generic_handle_irq(irq_find_mapping(
+					chip->irq.domain, gpio + 8*port));
 		}
 
-		int_pending = ioread8(&reg->int_pending) & 0x7;
+		int_pending = inb(ws16c48gpio->base + 6) & 0x7;
 	} while (int_pending);
 
 	return IRQ_HANDLED;
@@ -418,16 +369,12 @@ static int ws16c48_irq_init_hw(struct gpio_chip *gc)
 {
 	struct ws16c48_gpio *const ws16c48gpio = gpiochip_get_data(gc);
 
-	/* Select Register Page 2; Unlock all I/O ports */
-	iowrite8(0x80, &ws16c48gpio->reg->page_lock);
-
-	/* Disable interrupts for all lines */
-	iowrite8(0, &ws16c48gpio->reg->pol_enab_int_id[0]);
-	iowrite8(0, &ws16c48gpio->reg->pol_enab_int_id[1]);
-	iowrite8(0, &ws16c48gpio->reg->pol_enab_int_id[2]);
-
-	/* Select Register Page 3; Unlock all I/O ports */
-	iowrite8(0xC0, &ws16c48gpio->reg->page_lock);
+	/* Disable IRQ by default */
+	outb(0x80, ws16c48gpio->base + 7);
+	outb(0, ws16c48gpio->base + 8);
+	outb(0, ws16c48gpio->base + 9);
+	outb(0, ws16c48gpio->base + 10);
+	outb(0xC0, ws16c48gpio->base + 7);
 
 	return 0;
 }
@@ -449,10 +396,6 @@ static int ws16c48_probe(struct device *dev, unsigned int id)
 		return -EBUSY;
 	}
 
-	ws16c48gpio->reg = devm_ioport_map(dev, base[id], WS16C48_EXTENT);
-	if (!ws16c48gpio->reg)
-		return -ENOMEM;
-
 	ws16c48gpio->chip.label = name;
 	ws16c48gpio->chip.parent = dev;
 	ws16c48gpio->chip.owner = THIS_MODULE;
@@ -466,9 +409,10 @@ static int ws16c48_probe(struct device *dev, unsigned int id)
 	ws16c48gpio->chip.get_multiple = ws16c48_gpio_get_multiple;
 	ws16c48gpio->chip.set = ws16c48_gpio_set;
 	ws16c48gpio->chip.set_multiple = ws16c48_gpio_set_multiple;
+	ws16c48gpio->base = base[id];
 
 	girq = &ws16c48gpio->chip.irq;
-	gpio_irq_chip_set_chip(girq, &ws16c48_irqchip);
+	girq->chip = &ws16c48_irqchip;
 	/* This will let us handle the parent IRQ in the driver */
 	girq->parent_handler = NULL;
 	girq->num_parents = 0;
@@ -502,7 +446,7 @@ static struct isa_driver ws16c48_driver = {
 	},
 };
 
-module_isa_driver_with_irq(ws16c48_driver, num_ws16c48, num_irq);
+module_isa_driver(ws16c48_driver, num_ws16c48);
 
 MODULE_AUTHOR("William Breathitt Gray <vilhelm.gray@gmail.com>");
 MODULE_DESCRIPTION("WinSystems WS16C48 GPIO driver");

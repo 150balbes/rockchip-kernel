@@ -53,6 +53,7 @@ static void combiner_handle_irq(struct irq_desc *desc)
 	chained_irq_enter(chip, desc);
 
 	for (reg = 0; reg < combiner->nregs; reg++) {
+		int virq;
 		int hwirq;
 		u32 bit;
 		u32 status;
@@ -69,7 +70,10 @@ static void combiner_handle_irq(struct irq_desc *desc)
 			bit = __ffs(status);
 			status &= ~(1 << bit);
 			hwirq = irq_nr(reg, bit);
-			generic_handle_domain_irq(combiner->domain, hwirq);
+			virq = irq_find_mapping(combiner->domain, hwirq);
+			if (virq > 0)
+				generic_handle_irq(virq);
+
 		}
 	}
 

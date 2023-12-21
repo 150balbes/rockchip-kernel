@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
 #include "dm-core.h"
 
 /*
@@ -45,4 +45,5 @@ void dm_kobject_release(struct kobject *kobj)
 {
 	complete(dm_get_completion_from_kobject(kobj));
 }
+
 EXPORT_SYMBOL(dm_kobject_release);

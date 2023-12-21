@@ -14,7 +14,6 @@
 #include <linux/mutex.h>
 #include <linux/err.h>
 #include <linux/hwmon.h>
-#include <linux/kstrtox.h>
 
 /* Insmod parameters */
 
@@ -229,13 +228,14 @@ exit_sysfs_remove:
 	return err;
 }
 
-static void pcf8591_remove(struct i2c_client *client)
+static int pcf8591_remove(struct i2c_client *client)
 {
 	struct pcf8591_data *data = i2c_get_clientdata(client);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &pcf8591_attr_group_opt);
 	sysfs_remove_group(&client->dev.kobj, &pcf8591_attr_group);
+	return 0;
 }
 
 /* Called when we have found a new PCF8591. */
@@ -294,7 +294,7 @@ static struct i2c_driver pcf8591_driver = {
 	.driver = {
 		.name	= "pcf8591",
 	},
-	.probe		= pcf8591_probe,
+	.probe_new	= pcf8591_probe,
 	.remove		= pcf8591_remove,
 	.id_table	= pcf8591_id,
 };

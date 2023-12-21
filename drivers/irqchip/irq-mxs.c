@@ -58,7 +58,7 @@ struct icoll_priv {
 static struct icoll_priv icoll_priv;
 static struct irq_domain *icoll_domain;
 
-/* calculate bit offset depending on number of interrupt per register */
+/* calculate bit offset depending on number of intterupt per register */
 static u32 icoll_intr_bitshift(struct irq_data *d, u32 bit)
 {
 	/*
@@ -68,7 +68,7 @@ static u32 icoll_intr_bitshift(struct irq_data *d, u32 bit)
 	return bit << ((d->hwirq & 3) << 3);
 }
 
-/* calculate mem offset depending on number of interrupt per register */
+/* calculate mem offset depending on number of intterupt per register */
 static void __iomem *icoll_intr_reg(struct irq_data *d)
 {
 	/* offset = hwirq / intr_per_reg * 0x10 */
@@ -136,7 +136,7 @@ asmlinkage void __exception_irq_entry icoll_handle_irq(struct pt_regs *regs)
 
 	irqnr = __raw_readl(icoll_priv.stat);
 	__raw_writel(irqnr, icoll_priv.vector);
-	generic_handle_domain_irq(icoll_domain, irqnr);
+	handle_domain_irq(icoll_domain, irqnr, regs);
 }
 
 static int icoll_irq_domain_map(struct irq_domain *d, unsigned int virq,
@@ -201,7 +201,6 @@ static int __init icoll_of_init(struct device_node *np,
 	stmp_reset_block(icoll_priv.ctrl);
 
 	icoll_add_domain(np, ICOLL_NUM_IRQS);
-	set_handle_irq(icoll_handle_irq);
 
 	return 0;
 }

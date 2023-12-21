@@ -21,10 +21,9 @@
 #include "xfs_dquot.h"
 #include "xfs_trace.h"
 #include "xfs_log.h"
-#include "xfs_log_priv.h"
 
 
-struct kmem_cache	*xfs_buf_item_cache;
+kmem_zone_t	*xfs_buf_item_zone;
 
 static inline struct xfs_buf_log_item *BUF_ITEM(struct xfs_log_item *lip)
 {
@@ -56,24 +55,6 @@ xfs_buf_log_format_size(
 			(blfp->blf_map_size * sizeof(blfp->blf_data_map[0]));
 }
 
-static inline bool
-xfs_buf_item_straddle(
-	struct xfs_buf		*bp,
-	uint			offset,
-	int			first_bit,
-	int			nbits)
-{
-	void			*first, *last;
-
-	first = xfs_buf_offset(bp, offset + (first_bit << XFS_BLF_SHIFT));
-	last = xfs_buf_offset(bp,
-			offset + ((first_bit + nbits) << XFS_BLF_SHIFT));
-
-	if (last - first != nbits * XFS_BLF_CHUNK)
-		return true;
-	return false;
-}
-
 /*
  * Return the number of log iovecs and space needed to log the given buf log
  * item segment.
@@ -86,56 +67,24 @@ STATIC void
 xfs_buf_item_size_segment(
 	struct xfs_buf_log_item		*bip,
 	struct xfs_buf_log_format	*blfp,
-	uint				offset,
 	int				*nvecs,
 	int				*nbytes)
 {
 	struct xfs_buf			*bp = bip->bli_buf;
-	int				first_bit;
-	int				nbits;
 	int				next_bit;
 	int				last_bit;
 
-	first_bit = xfs_next_bit(blfp->blf_data_map, blfp->blf_map_size, 0);
-	if (first_bit == -1)
+	last_bit = xfs_next_bit(blfp->blf_data_map, blfp->blf_map_size, 0);
+	if (last_bit == -1)
 		return;
 
-	(*nvecs)++;
-	*nbytes += xfs_buf_log_format_size(blfp);
+	/*
+	 * initial count for a dirty buffer is 2 vectors - the format structure
+	 * and the first dirty region.
+	 */
+	*nvecs += 2;
+	*nbytes += xfs_buf_log_format_size(blfp) + XFS_BLF_CHUNK;
 
-	do {
-		nbits = xfs_contig_bits(blfp->blf_data_map,
-					blfp->blf_map_size, first_bit);
-		ASSERT(nbits > 0);
-
-		/*
-		 * Straddling a page is rare because we don't log contiguous
-		 * chunks of unmapped buffers anywhere.
-		 */
-		if (nbits > 1 &&
-		    xfs_buf_item_straddle(bp, offset, first_bit, nbits))
-			goto slow_scan;
-
-		(*nvecs)++;
-		*nbytes += nbits * XFS_BLF_CHUNK;
-
-		/*
-		 * This takes the bit number to start looking from and
-		 * returns the next set bit from there.  It returns -1
-		 * if there are no more bits set or the start bit is
-		 * beyond the end of the bitmap.
-		 */
-		first_bit = xfs_next_bit(blfp->blf_data_map, blfp->blf_map_size,
-					(uint)first_bit + nbits + 1);
-	} while (first_bit != -1);
-
-	return;
-
-slow_scan:
-	/* Count the first bit we jumped out of the above loop from */
-	(*nvecs)++;
-	*nbytes += XFS_BLF_CHUNK;
-	last_bit = first_bit;
 	while (last_bit != -1) {
 		/*
 		 * This takes the bit number to start looking from and
@@ -152,15 +101,16 @@ slow_scan:
 		 */
 		if (next_bit == -1) {
 			break;
-		} else if (next_bit != last_bit + 1 ||
-		           xfs_buf_item_straddle(bp, offset, first_bit, nbits)) {
+		} else if (next_bit != last_bit + 1) {
 			last_bit = next_bit;
-			first_bit = next_bit;
 			(*nvecs)++;
-			nbits = 1;
+		} else if (xfs_buf_offset(bp, next_bit * XFS_BLF_CHUNK) !=
+			   (xfs_buf_offset(bp, last_bit * XFS_BLF_CHUNK) +
+			    XFS_BLF_CHUNK)) {
+			last_bit = next_bit;
+			(*nvecs)++;
 		} else {
 			last_bit++;
-			nbits++;
 		}
 		*nbytes += XFS_BLF_CHUNK;
 	}
@@ -191,10 +141,7 @@ xfs_buf_item_size(
 	int			*nbytes)
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
-	struct xfs_buf		*bp = bip->bli_buf;
 	int			i;
-	int			bytes;
-	uint			offset = 0;
 
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 	if (bip->bli_flags & XFS_BLI_STALE) {
@@ -226,7 +173,7 @@ xfs_buf_item_size(
 	}
 
 	/*
-	 * The vector count is based on the number of buffer vectors we have
+	 * the vector count is based on the number of buffer vectors we have
 	 * dirty bits in. This will only be greater than one when we have a
 	 * compound buffer with more than one segment dirty. Hence for compound
 	 * buffers we need to track which segment the dirty bits correspond to,
@@ -234,19 +181,10 @@ xfs_buf_item_size(
 	 * count for the extra buf log format structure that will need to be
 	 * written.
 	 */
-	bytes = 0;
 	for (i = 0; i < bip->bli_format_count; i++) {
-		xfs_buf_item_size_segment(bip, &bip->bli_formats[i], offset,
-					  nvecs, &bytes);
-		offset += BBTOB(bp->b_maps[i].bm_len);
+		xfs_buf_item_size_segment(bip, &bip->bli_formats[i],
+					  nvecs, nbytes);
 	}
-
-	/*
-	 * Round up the buffer size required to minimise the number of memory
-	 * allocations that need to be done as this item grows when relogged by
-	 * repeated modifications.
-	 */
-	*nbytes = round_up(bytes, 512);
 	trace_xfs_buf_item_size(bip);
 }
 
@@ -263,6 +201,18 @@ xfs_buf_item_copy_iovec(
 	xlog_copy_iovec(lv, vecp, XLOG_REG_TYPE_BCHUNK,
 			xfs_buf_offset(bp, offset),
 			nbits * XFS_BLF_CHUNK);
+}
+
+static inline bool
+xfs_buf_item_straddle(
+	struct xfs_buf		*bp,
+	uint			offset,
+	int			next_bit,
+	int			last_bit)
+{
+	return xfs_buf_offset(bp, offset + (next_bit << XFS_BLF_SHIFT)) !=
+		(xfs_buf_offset(bp, offset + (last_bit << XFS_BLF_SHIFT)) +
+		 XFS_BLF_CHUNK);
 }
 
 static void
@@ -317,38 +267,6 @@ xfs_buf_item_format_segment(
 	/*
 	 * Fill in an iovec for each set of contiguous chunks.
 	 */
-	do {
-		ASSERT(first_bit >= 0);
-		nbits = xfs_contig_bits(blfp->blf_data_map,
-					blfp->blf_map_size, first_bit);
-		ASSERT(nbits > 0);
-
-		/*
-		 * Straddling a page is rare because we don't log contiguous
-		 * chunks of unmapped buffers anywhere.
-		 */
-		if (nbits > 1 &&
-		    xfs_buf_item_straddle(bp, offset, first_bit, nbits))
-			goto slow_scan;
-
-		xfs_buf_item_copy_iovec(lv, vecp, bp, offset,
-					first_bit, nbits);
-		blfp->blf_size++;
-
-		/*
-		 * This takes the bit number to start looking from and
-		 * returns the next set bit from there.  It returns -1
-		 * if there are no more bits set or the start bit is
-		 * beyond the end of the bitmap.
-		 */
-		first_bit = xfs_next_bit(blfp->blf_data_map, blfp->blf_map_size,
-					(uint)first_bit + nbits + 1);
-	} while (first_bit != -1);
-
-	return;
-
-slow_scan:
-	ASSERT(bp->b_addr == NULL);
 	last_bit = first_bit;
 	nbits = 1;
 	for (;;) {
@@ -373,7 +291,7 @@ slow_scan:
 			blfp->blf_size++;
 			break;
 		} else if (next_bit != last_bit + 1 ||
-		           xfs_buf_item_straddle(bp, offset, first_bit, nbits)) {
+		           xfs_buf_item_straddle(bp, offset, next_bit, last_bit)) {
 			xfs_buf_item_copy_iovec(lv, vecp, bp, offset,
 						first_bit, nbits);
 			blfp->blf_size++;
@@ -429,7 +347,7 @@ xfs_buf_item_format(
 	 * occurs during recovery.
 	 */
 	if (bip->bli_flags & XFS_BLI_INODE_BUF) {
-		if (xfs_has_v3inodes(lip->li_log->l_mp) ||
+		if (xfs_sb_version_has_v3inode(&lip->li_mountp->m_sb) ||
 		    !((bip->bli_flags & XFS_BLI_INODE_ALLOC_BUF) &&
 		      xfs_log_item_in_current_chkpt(lip)))
 			bip->__bli_format.blf_flags |= XFS_BLF_INODE_BUF;
@@ -452,18 +370,10 @@ xfs_buf_item_format(
  * This is called to pin the buffer associated with the buf log item in memory
  * so it cannot be written out.
  *
- * We take a reference to the buffer log item here so that the BLI life cycle
- * extends at least until the buffer is unpinned via xfs_buf_item_unpin() and
- * inserted into the AIL.
- *
- * We also need to take a reference to the buffer itself as the BLI unpin
- * processing requires accessing the buffer after the BLI has dropped the final
- * BLI reference. See xfs_buf_item_unpin() for an explanation.
- * If unpins race to drop the final BLI reference and only the
- * BLI owns a reference to the buffer, then the loser of the race can have the
- * buffer fgreed from under it (e.g. on shutdown). Taking a buffer reference per
- * pin count ensures the life cycle of the buffer extends for as
- * long as we hold the buffer pin reference in xfs_buf_item_unpin().
+ * We also always take a reference to the buffer log item here so that the bli
+ * is held while the item is pinned in memory. This means that we can
+ * unconditionally drop the reference count a transaction holds when the
+ * transaction is completed.
  */
 STATIC void
 xfs_buf_item_pin(
@@ -478,30 +388,13 @@ xfs_buf_item_pin(
 
 	trace_xfs_buf_item_pin(bip);
 
-	xfs_buf_hold(bip->bli_buf);
 	atomic_inc(&bip->bli_refcount);
 	atomic_inc(&bip->bli_buf->b_pin_count);
 }
 
 /*
- * This is called to unpin the buffer associated with the buf log item which was
- * previously pinned with a call to xfs_buf_item_pin().  We enter this function
- * with a buffer pin count, a buffer reference and a BLI reference.
- *
- * We must drop the BLI reference before we unpin the buffer because the AIL
- * doesn't acquire a BLI reference whenever it accesses it. Therefore if the
- * refcount drops to zero, the bli could still be AIL resident and the buffer
- * submitted for I/O at any point before we return. This can result in IO
- * completion freeing the buffer while we are still trying to access it here.
- * This race condition can also occur in shutdown situations where we abort and
- * unpin buffers from contexts other that journal IO completion.
- *
- * Hence we have to hold a buffer reference per pin count to ensure that the
- * buffer cannot be freed until we have finished processing the unpin operation.
- * The reference is taken in xfs_buf_item_pin(), and we must hold it until we
- * are done processing the buffer state. In the case of an abort (remove =
- * true) then we re-use the current pin reference as the IO reference we hand
- * off to IO failure handling.
+ * This is called to unpin the buffer associated with the buf log item which
+ * was previously pinned with a call to xfs_buf_item_pin().
  */
 STATIC void
 xfs_buf_item_unpin(
@@ -509,7 +402,7 @@ xfs_buf_item_unpin(
 	int			remove)
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
-	struct xfs_buf		*bp = bip->bli_buf;
+	xfs_buf_t		*bp = bip->bli_buf;
 	int			stale = bip->bli_flags & XFS_BLI_STALE;
 	int			freed;
 
@@ -518,18 +411,24 @@ xfs_buf_item_unpin(
 
 	trace_xfs_buf_item_unpin(bip);
 
+	/*
+	 * Drop the bli ref associated with the pin and grab the hold required
+	 * for the I/O simulation failure in the abort case. We have to do this
+	 * before the pin count drops because the AIL doesn't acquire a bli
+	 * reference. Therefore if the refcount drops to zero, the bli could
+	 * still be AIL resident and the buffer submitted for I/O (and freed on
+	 * completion) at any point before we return. This can be removed once
+	 * the AIL properly holds a reference on the bli.
+	 */
 	freed = atomic_dec_and_test(&bip->bli_refcount);
+	if (freed && !stale && remove)
+		xfs_buf_hold(bp);
 	if (atomic_dec_and_test(&bp->b_pin_count))
 		wake_up_all(&bp->b_waiters);
 
-	/*
-	 * Nothing to do but drop the buffer pin reference if the BLI is
-	 * still active.
-	 */
-	if (!freed) {
-		xfs_buf_rele(bp);
+	 /* nothing to do but drop the pin count if the bli is active */
+	if (!freed)
 		return;
-	}
 
 	if (stale) {
 		ASSERT(bip->bli_flags & XFS_BLI_STALE);
@@ -540,15 +439,6 @@ xfs_buf_item_unpin(
 		ASSERT(!bp->b_transp);
 
 		trace_xfs_buf_item_unpin_stale(bip);
-
-		/*
-		 * The buffer has been locked and referenced since it was marked
-		 * stale so we own both lock and reference exclusively here. We
-		 * do not need the pin reference any more, so drop it now so
-		 * that we only have one reference to drop once item completion
-		 * processing is complete.
-		 */
-		xfs_buf_rele(bp);
 
 		/*
 		 * If we get called here because of an IO error, we may or may
@@ -566,30 +456,16 @@ xfs_buf_item_unpin(
 			ASSERT(bp->b_log_item == NULL);
 		}
 		xfs_buf_relse(bp);
-		return;
-	}
-
-	if (remove) {
+	} else if (remove) {
 		/*
-		 * We need to simulate an async IO failures here to ensure that
-		 * the correct error completion is run on this buffer. This
-		 * requires a reference to the buffer and for the buffer to be
-		 * locked. We can safely pass ownership of the pin reference to
-		 * the IO to ensure that nothing can free the buffer while we
-		 * wait for the lock and then run the IO failure completion.
+		 * The buffer must be locked and held by the caller to simulate
+		 * an async I/O failure. We acquired the hold for this case
+		 * before the buffer was unpinned.
 		 */
 		xfs_buf_lock(bp);
 		bp->b_flags |= XBF_ASYNC;
 		xfs_buf_ioend_fail(bp);
-		return;
 	}
-
-	/*
-	 * BLI has no more active references - it will be moved to the AIL to
-	 * manage the remaining BLI/buffer life cycle. There is nothing left for
-	 * us to do here so drop the pin reference to the buffer.
-	 */
-	xfs_buf_rele(bp);
 }
 
 STATIC uint
@@ -624,7 +500,7 @@ xfs_buf_item_push(
 	if (bp->b_flags & XBF_WRITE_FAIL) {
 		xfs_buf_alert_ratelimited(bp, "XFS: Failing async write",
 	    "Failing async write on buffer block 0x%llx. Retrying async write.",
-					  (long long)xfs_buf_daddr(bp));
+					  (long long)bp->b_bn);
 	}
 
 	if (!xfs_buf_delwri_queue(bp, buffer_list))
@@ -659,7 +535,7 @@ xfs_buf_item_put(
 	 * that case, the bli is freed on buffer writeback completion.
 	 */
 	aborted = test_bit(XFS_LI_ABORTED, &lip->li_flags) ||
-			xlog_is_shutdown(lip->li_log);
+		  XFS_FORCED_SHUTDOWN(lip->li_mountp);
 	dirty = bip->bli_flags & XFS_BLI_DIRTY;
 	if (dirty && !aborted)
 		return false;
@@ -847,7 +723,7 @@ xfs_buf_item_init(
 		return 0;
 	}
 
-	bip = kmem_cache_zalloc(xfs_buf_item_cache, GFP_KERNEL | __GFP_NOFAIL);
+	bip = kmem_cache_zalloc(xfs_buf_item_zone, GFP_KERNEL | __GFP_NOFAIL);
 	xfs_log_item_init(mp, &bip->bli_item, XFS_LI_BUF, &xfs_buf_item_ops);
 	bip->bli_buf = bp;
 
@@ -868,7 +744,7 @@ xfs_buf_item_init(
 		map_size = DIV_ROUND_UP(chunks, NBWORD);
 
 		if (map_size > XFS_BLF_DATAMAP_SIZE) {
-			kmem_cache_free(xfs_buf_item_cache, bip);
+			kmem_cache_free(xfs_buf_item_zone, bip);
 			xfs_err(mp,
 	"buffer item dirty bitmap (%u uints) too small to reflect %u bytes!",
 					map_size,
@@ -1045,7 +921,7 @@ xfs_buf_item_free(
 {
 	xfs_buf_item_free_format(bip);
 	kmem_free(bip->bli_item.li_lv_shadow);
-	kmem_cache_free(xfs_buf_item_cache, bip);
+	kmem_cache_free(xfs_buf_item_zone, bip);
 }
 
 /*
@@ -1053,15 +929,13 @@ xfs_buf_item_free(
  */
 void
 xfs_buf_item_relse(
-	struct xfs_buf	*bp)
+	xfs_buf_t	*bp)
 {
 	struct xfs_buf_log_item	*bip = bp->b_log_item;
 
 	trace_xfs_buf_item_relse(bp, _RET_IP_);
 	ASSERT(!test_bit(XFS_LI_IN_AIL, &bip->bli_item.li_flags));
 
-	if (atomic_read(&bip->bli_refcount))
-		return;
 	bp->b_log_item = NULL;
 	xfs_buf_rele(bp);
 	xfs_buf_item_free(bip);

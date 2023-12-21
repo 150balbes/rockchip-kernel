@@ -18,10 +18,6 @@
 #include <asm/book3s/64/hash-4k.h>
 #endif
 
-#define H_PTRS_PER_PTE		(1 << H_PTE_INDEX_SIZE)
-#define H_PTRS_PER_PMD		(1 << H_PMD_INDEX_SIZE)
-#define H_PTRS_PER_PUD		(1 << H_PUD_INDEX_SIZE)
-
 /* Bits to set in a PMD/PUD/PGD entry valid bit*/
 #define HASH_PMD_VAL_BITS		(0x8000000000000000UL)
 #define HASH_PUD_VAL_BITS		(0x8000000000000000UL)
@@ -103,6 +99,10 @@
  * Defines the address of the vmemap area, in its own region on
  * hash table CPUs.
  */
+#ifdef CONFIG_PPC_MM_SLICES
+#define HAVE_ARCH_UNMAPPED_AREA
+#define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
+#endif /* CONFIG_PPC_MM_SLICES */
 
 /* PTEIDX nibble */
 #define _PTEIDX_SECONDARY	0x8
@@ -132,11 +132,6 @@ static inline int get_region_id(unsigned long ea)
 	return region_id;
 }
 
-static inline int hash__pmd_same(pmd_t pmd_a, pmd_t pmd_b)
-{
-	return (((pmd_raw(pmd_a) ^ pmd_raw(pmd_b)) & ~cpu_to_be64(_PAGE_HPTEFLAGS)) == 0);
-}
-
 #define	hash__pmd_bad(pmd)		(pmd_val(pmd) & H_PMD_BAD_BITS)
 #define	hash__pud_bad(pud)		(pud_val(pud) & H_PUD_BAD_BITS)
 static inline int hash__p4d_bad(p4d_t p4d)
@@ -150,7 +145,7 @@ extern void hash__mark_initmem_nx(void);
 
 extern void hpte_need_flush(struct mm_struct *mm, unsigned long addr,
 			    pte_t *ptep, unsigned long pte, int huge);
-unsigned long htab_convert_pte_flags(unsigned long pteflags, unsigned long flags);
+extern unsigned long htab_convert_pte_flags(unsigned long pteflags);
 /* Atomic PTE updates */
 static inline unsigned long hash__pte_update(struct mm_struct *mm,
 					 unsigned long addr,
@@ -259,8 +254,6 @@ extern void hash__vmemmap_remove_mapping(unsigned long start,
 int hash__create_section_mapping(unsigned long start, unsigned long end,
 				 int nid, pgprot_t prot);
 int hash__remove_section_mapping(unsigned long start, unsigned long end);
-
-void hash__kernel_map_pages(struct page *page, int numpages, int enable);
 
 #endif /* !__ASSEMBLY__ */
 #endif /* __KERNEL__ */

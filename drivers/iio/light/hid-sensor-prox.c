@@ -6,10 +6,13 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
+#include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 #include <linux/hid-sensor-hub.h>
 #include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 #include <linux/iio/buffer.h>
 #include "../common/hid-sensors/hid-sensor-trigger.h"
 
@@ -23,11 +26,6 @@ struct prox_state {
 	int scale_pre_decml;
 	int scale_post_decml;
 	int scale_precision;
-};
-
-static const u32 prox_sensitivity_addresses[] = {
-	HID_USAGE_SENSOR_HUMAN_PRESENCE,
-	HID_USAGE_SENSOR_DATA_PRESENCE,
 };
 
 /* Channel definitions */
@@ -61,7 +59,6 @@ static int prox_read_raw(struct iio_dev *indio_dev,
 			      long mask)
 {
 	struct prox_state *prox_state = iio_priv(indio_dev);
-	struct hid_sensor_hub_device *hsdev;
 	int report_id = -1;
 	u32 address;
 	int ret_type;
@@ -76,7 +73,6 @@ static int prox_read_raw(struct iio_dev *indio_dev,
 			report_id = prox_state->prox_attr.report_id;
 			min = prox_state->prox_attr.logical_minimum;
 			address = HID_USAGE_SENSOR_HUMAN_PRESENCE;
-			hsdev = prox_state->common_attributes.hsdev;
 			break;
 		default:
 			report_id = -1;
@@ -86,8 +82,11 @@ static int prox_read_raw(struct iio_dev *indio_dev,
 			hid_sensor_power_state(&prox_state->common_attributes,
 						true);
 			*val = sensor_hub_input_attr_get_raw_value(
-				hsdev, hsdev->usage, address, report_id,
-				SENSOR_HUB_SYNC, min < 0);
+				prox_state->common_attributes.hsdev,
+				HID_USAGE_SENSOR_PROX, address,
+				report_id,
+				SENSOR_HUB_SYNC,
+				min < 0);
 			hid_sensor_power_state(&prox_state->common_attributes,
 						false);
 		} else {
@@ -190,16 +189,10 @@ static int prox_capture_sample(struct hid_sensor_hub_device *hsdev,
 
 	switch (usage_id) {
 	case HID_USAGE_SENSOR_HUMAN_PRESENCE:
-		switch (raw_len) {
-		case 1:
-			prox_state->human_presence = *(u8 *)raw_data;
-			return 0;
-		case 4:
-			prox_state->human_presence = *(u32 *)raw_data;
-			return 0;
-		default:
-			break;
-		}
+		prox_state->human_presence = *(u32 *)raw_data;
+		ret = 0;
+		break;
+	default:
 		break;
 	}
 
@@ -227,6 +220,29 @@ static int prox_parse_report(struct platform_device *pdev,
 	dev_dbg(&pdev->dev, "prox %x:%x\n", st->prox_attr.index,
 			st->prox_attr.report_id);
 
+	/* Set Sensitivity field ids, when there is no individual modifier */
+	if (st->common_attributes.sensitivity.index < 0) {
+		sensor_hub_input_get_attribute_info(hsdev,
+			HID_FEATURE_REPORT, usage_id,
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
+			HID_USAGE_SENSOR_DATA_PRESENCE,
+			&st->common_attributes.sensitivity);
+		dev_dbg(&pdev->dev, "Sensitivity index:report %d:%d\n",
+			st->common_attributes.sensitivity.index,
+			st->common_attributes.sensitivity.report_id);
+	}
+	if (st->common_attributes.sensitivity.index < 0)
+		sensor_hub_input_get_attribute_info(hsdev,
+			HID_FEATURE_REPORT, usage_id,
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS |
+			HID_USAGE_SENSOR_HUMAN_PRESENCE,
+			&st->common_attributes.sensitivity);
+
+	st->scale_precision = hid_sensor_format_scale(
+				hsdev->usage,
+				&st->prox_attr,
+				&st->scale_pre_decml, &st->scale_post_decml);
+
 	return ret;
 }
 
@@ -249,17 +265,15 @@ static int hid_prox_probe(struct platform_device *pdev)
 	prox_state->common_attributes.hsdev = hsdev;
 	prox_state->common_attributes.pdev = pdev;
 
-	ret = hid_sensor_parse_common_attributes(hsdev, hsdev->usage,
-					&prox_state->common_attributes,
-					prox_sensitivity_addresses,
-					ARRAY_SIZE(prox_sensitivity_addresses));
+	ret = hid_sensor_parse_common_attributes(hsdev, HID_USAGE_SENSOR_PROX,
+					&prox_state->common_attributes);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to setup common attributes\n");
 		return ret;
 	}
 
-	indio_dev->channels = devm_kmemdup(&pdev->dev, prox_channels,
-					   sizeof(prox_channels), GFP_KERNEL);
+	indio_dev->channels = kmemdup(prox_channels, sizeof(prox_channels),
+				      GFP_KERNEL);
 	if (!indio_dev->channels) {
 		dev_err(&pdev->dev, "failed to duplicate channels\n");
 		return -ENOMEM;
@@ -267,10 +281,10 @@ static int hid_prox_probe(struct platform_device *pdev)
 
 	ret = prox_parse_report(pdev, hsdev,
 				(struct iio_chan_spec *)indio_dev->channels,
-				hsdev->usage, prox_state);
+				HID_USAGE_SENSOR_PROX, prox_state);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to setup attributes\n");
-		return ret;
+		goto error_free_dev_mem;
 	}
 
 	indio_dev->num_channels = ARRAY_SIZE(prox_channels);
@@ -284,7 +298,7 @@ static int hid_prox_probe(struct platform_device *pdev)
 				&prox_state->common_attributes);
 	if (ret) {
 		dev_err(&pdev->dev, "trigger setup failed\n");
-		return ret;
+		goto error_free_dev_mem;
 	}
 
 	ret = iio_device_register(indio_dev);
@@ -296,8 +310,8 @@ static int hid_prox_probe(struct platform_device *pdev)
 	prox_state->callbacks.send_event = prox_proc_event;
 	prox_state->callbacks.capture_sample = prox_capture_sample;
 	prox_state->callbacks.pdev = pdev;
-	ret = sensor_hub_register_callback(hsdev, hsdev->usage,
-					   &prox_state->callbacks);
+	ret = sensor_hub_register_callback(hsdev, HID_USAGE_SENSOR_PROX,
+					&prox_state->callbacks);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "callback reg failed\n");
 		goto error_iio_unreg;
@@ -309,6 +323,8 @@ error_iio_unreg:
 	iio_device_unregister(indio_dev);
 error_remove_trigger:
 	hid_sensor_remove_trigger(indio_dev, &prox_state->common_attributes);
+error_free_dev_mem:
+	kfree(indio_dev->channels);
 	return ret;
 }
 
@@ -319,9 +335,10 @@ static int hid_prox_remove(struct platform_device *pdev)
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct prox_state *prox_state = iio_priv(indio_dev);
 
-	sensor_hub_remove_callback(hsdev, hsdev->usage);
+	sensor_hub_remove_callback(hsdev, HID_USAGE_SENSOR_PROX);
 	iio_device_unregister(indio_dev);
 	hid_sensor_remove_trigger(indio_dev, &prox_state->common_attributes);
+	kfree(indio_dev->channels);
 
 	return 0;
 }
@@ -330,10 +347,6 @@ static const struct platform_device_id hid_prox_ids[] = {
 	{
 		/* Format: HID-SENSOR-usage_id_in_hex_lowercase */
 		.name = "HID-SENSOR-200011",
-	},
-	{
-		/* Format: HID-SENSOR-tag-usage_id_in_hex_lowercase */
-		.name = "HID-SENSOR-LISS-0226",
 	},
 	{ /* sentinel */ }
 };
@@ -353,4 +366,3 @@ module_platform_driver(hid_prox_platform_driver);
 MODULE_DESCRIPTION("HID Sensor Proximity");
 MODULE_AUTHOR("Archana Patni <archana.patni@intel.com>");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(IIO_HID);

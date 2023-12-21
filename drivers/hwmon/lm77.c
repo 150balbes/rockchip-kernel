@@ -55,7 +55,7 @@ static const u8 temp_regs[t_num_temp] = {
 struct lm77_data {
 	struct i2c_client	*client;
 	struct mutex		update_lock;
-	bool			valid;
+	char			valid;
 	unsigned long		last_updated;	/* In jiffies */
 	int			temp[t_num_temp]; /* index using temp_index */
 	u8			alarms;
@@ -118,7 +118,7 @@ static struct lm77_data *lm77_update_device(struct device *dev)
 		data->alarms =
 			lm77_read_value(client, LM77_REG_TEMP) & 0x0007;
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -302,7 +302,7 @@ static int lm77_detect(struct i2c_client *client, struct i2c_board_info *info)
 	 || i2c_smbus_read_word_data(client, 7) != min)
 		return -ENODEV;
 
-	strscpy(info->type, "lm77", I2C_NAME_SIZE);
+	strlcpy(info->type, "lm77", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -348,7 +348,7 @@ static struct i2c_driver lm77_driver = {
 	.driver = {
 		.name	= "lm77",
 	},
-	.probe		= lm77_probe,
+	.probe_new	= lm77_probe,
 	.id_table	= lm77_id,
 	.detect		= lm77_detect,
 	.address_list	= normal_i2c,

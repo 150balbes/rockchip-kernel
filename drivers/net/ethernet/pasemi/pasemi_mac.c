@@ -221,7 +221,7 @@ static int pasemi_mac_set_mac_addr(struct net_device *dev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	eth_hw_addr_set(dev, addr->sa_data);
+	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
 
 	adr0 = dev->dev_addr[2] << 24 |
 	       dev->dev_addr[3] << 16 |
@@ -247,13 +247,12 @@ static int pasemi_mac_unmap_tx_skb(struct pasemi_mac *mac,
 	int f;
 	struct pci_dev *pdev = mac->dma_pdev;
 
-	dma_unmap_single(&pdev->dev, dmas[0], skb_headlen(skb), DMA_TO_DEVICE);
+	pci_unmap_single(pdev, dmas[0], skb_headlen(skb), PCI_DMA_TODEVICE);
 
 	for (f = 0; f < nfrags; f++) {
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[f];
 
-		dma_unmap_page(&pdev->dev, dmas[f + 1], skb_frag_size(frag),
-			       DMA_TO_DEVICE);
+		pci_unmap_page(pdev, dmas[f+1], skb_frag_size(frag), PCI_DMA_TODEVICE);
 	}
 	dev_kfree_skb_irq(skb);
 
@@ -549,8 +548,10 @@ static void pasemi_mac_free_rx_buffers(struct pasemi_mac *mac)
 	for (i = 0; i < RX_RING_SIZE; i++) {
 		info = &RX_DESC_INFO(rx, i);
 		if (info->skb && info->dma) {
-			dma_unmap_single(&mac->dma_pdev->dev, info->dma,
-					 info->skb->len, DMA_FROM_DEVICE);
+			pci_unmap_single(mac->dma_pdev,
+					 info->dma,
+					 info->skb->len,
+					 PCI_DMA_FROMDEVICE);
 			dev_kfree_skb_any(info->skb);
 		}
 		info->dma = 0;
@@ -599,11 +600,11 @@ static void pasemi_mac_replenish_rx_ring(struct net_device *dev,
 		if (unlikely(!skb))
 			break;
 
-		dma = dma_map_single(&mac->dma_pdev->dev, skb->data,
+		dma = pci_map_single(mac->dma_pdev, skb->data,
 				     mac->bufsz - LOCAL_SKB_ALIGN,
-				     DMA_FROM_DEVICE);
+				     PCI_DMA_FROMDEVICE);
 
-		if (dma_mapping_error(&mac->dma_pdev->dev, dma)) {
+		if (unlikely(pci_dma_mapping_error(mac->dma_pdev, dma))) {
 			dev_kfree_skb_irq(info->skb);
 			break;
 		}
@@ -740,9 +741,8 @@ static int pasemi_mac_clean_rx(struct pasemi_mac_rxring *rx,
 
 		len = (macrx & XCT_MACRX_LLEN_M) >> XCT_MACRX_LLEN_S;
 
-		dma_unmap_single(&pdev->dev, dma,
-				 mac->bufsz - LOCAL_SKB_ALIGN,
-				 DMA_FROM_DEVICE);
+		pci_unmap_single(pdev, dma, mac->bufsz - LOCAL_SKB_ALIGN,
+				 PCI_DMA_FROMDEVICE);
 
 		if (macrx & XCT_MACRX_CRC) {
 			/* CRC error flagged */
@@ -1423,7 +1423,7 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 	write_dma_reg(PAS_DMA_TXCHAN_INCR(txring->chan.chno), 2);
 }
 
-static netdev_tx_t pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *dev)
+static int pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct pasemi_mac * const mac = netdev_priv(dev);
 	struct pasemi_mac_txring * const txring = tx_ring(mac);
@@ -1444,10 +1444,10 @@ static netdev_tx_t pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *d
 
 	nfrags = skb_shinfo(skb)->nr_frags;
 
-	map[0] = dma_map_single(&mac->dma_pdev->dev, skb->data,
-				skb_headlen(skb), DMA_TO_DEVICE);
+	map[0] = pci_map_single(mac->dma_pdev, skb->data, skb_headlen(skb),
+				PCI_DMA_TODEVICE);
 	map_size[0] = skb_headlen(skb);
-	if (dma_mapping_error(&mac->dma_pdev->dev, map[0]))
+	if (pci_dma_mapping_error(mac->dma_pdev, map[0]))
 		goto out_err_nolock;
 
 	for (i = 0; i < nfrags; i++) {
@@ -1534,8 +1534,8 @@ out_err:
 	spin_unlock_irqrestore(&txring->lock, flags);
 out_err_nolock:
 	while (nfrags--)
-		dma_unmap_single(&mac->dma_pdev->dev, map[nfrags],
-				 map_size[nfrags], DMA_TO_DEVICE);
+		pci_unmap_single(mac->dma_pdev, map[nfrags], map_size[nfrags],
+				 PCI_DMA_TODEVICE);
 
 	return NETDEV_TX_BUSY;
 }
@@ -1697,7 +1697,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	mac->pdev = pdev;
 	mac->netdev = dev;
 
-	netif_napi_add(dev, &mac->napi, pasemi_mac_poll);
+	netif_napi_add(dev, &mac->napi, pasemi_mac_poll, 64);
 
 	dev->features = NETIF_F_IP_CSUM | NETIF_F_LLTX | NETIF_F_SG |
 			NETIF_F_HIGHDMA | NETIF_F_GSO;
@@ -1722,7 +1722,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		err = -ENODEV;
 		goto out;
 	}
-	eth_hw_addr_set(dev, mac->mac_addr);
+	memcpy(dev->dev_addr, mac->mac_addr, sizeof(mac->mac_addr));
 
 	ret = mac_to_intf(mac);
 	if (ret < 0) {

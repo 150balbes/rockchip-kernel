@@ -28,7 +28,6 @@
 #include <linux/init.h>
 #include <linux/string.h>
 #include <linux/ioport.h>
-#include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
 #include <linux/memblock.h>
 #include <linux/pci.h>
@@ -47,6 +46,7 @@
 #include <linux/log2.h>
 #include <linux/export.h>
 
+extern struct atomic_notifier_head panic_notifier_list;
 static int alpha_panic_event(struct notifier_block *, unsigned long, void *);
 static struct notifier_block alpha_panic_block = {
 	alpha_panic_event,
@@ -77,6 +77,11 @@ int alpha_l3_cacheshape;
 /* 0=minimum, 1=verbose, 2=all */
 /* These can be overridden via the command line, ie "verbose_mcheck=2") */
 unsigned long alpha_verbose_mcheck = CONFIG_VERBOSE_MCHECK_ON;
+#endif
+
+#ifdef CONFIG_NUMA
+struct cpumask node_to_cpumask_map[MAX_NUMNODES] __read_mostly;
+EXPORT_SYMBOL(node_to_cpumask_map);
 #endif
 
 /* Which processor we booted from.  */
@@ -300,6 +305,7 @@ move_initrd(unsigned long mem_limit)
 }
 #endif
 
+#ifndef CONFIG_DISCONTIGMEM
 static void __init
 setup_memory(void *kernel_end)
 {
@@ -384,6 +390,9 @@ setup_memory(void *kernel_end)
 	}
 #endif /* CONFIG_BLK_DEV_INITRD */
 }
+#else
+extern void setup_memory(void *);
+#endif /* !CONFIG_DISCONTIGMEM */
 
 int __init
 page_is_ram(unsigned long pfn)
@@ -491,9 +500,9 @@ setup_arch(char **cmdline_p)
 	   boot flags depending on the boot mode, we need some shorthand.
 	   This should do for installation.  */
 	if (strcmp(COMMAND_LINE, "INSTALL") == 0) {
-		strscpy(command_line, "root=/dev/fd0 load_ramdisk=1", sizeof(command_line));
+		strlcpy(command_line, "root=/dev/fd0 load_ramdisk=1", sizeof command_line);
 	} else {
-		strscpy(command_line, COMMAND_LINE, sizeof(command_line));
+		strlcpy(command_line, COMMAND_LINE, sizeof command_line);
 	}
 	strcpy(boot_command_line, command_line);
 	*cmdline_p = command_line;
@@ -610,6 +619,13 @@ setup_arch(char **cmdline_p)
 	       "VERBOSE_MCHECK "
 #endif
 
+#ifdef CONFIG_DISCONTIGMEM
+	       "DISCONTIGMEM "
+#ifdef CONFIG_NUMA
+	       "NUMA "
+#endif
+#endif
+
 #ifdef CONFIG_DEBUG_SPINLOCK
 	       "DEBUG_SPINLOCK "
 #endif
@@ -633,7 +649,6 @@ setup_arch(char **cmdline_p)
 	/* Find our memory.  */
 	setup_memory(kernel_end);
 	memblock_set_bottom_up(true);
-	sparse_init();
 
 	/* First guess at cpu cache sizes.  Do this before init_arch.  */
 	determine_cpu_caches(cpu->type);
@@ -658,7 +673,7 @@ setup_arch(char **cmdline_p)
 #endif
 
 	/* Default root filesystem to sda2.  */
-	ROOT_DEV = MKDEV(SCSI_DISK0_MAJOR, 2);
+	ROOT_DEV = Root_SDA2;
 
 #ifdef CONFIG_EISA
 	/* FIXME:  only set this when we actually have EISA in this box? */

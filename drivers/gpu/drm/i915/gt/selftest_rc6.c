@@ -1,11 +1,11 @@
-// SPDX-License-Identifier: MIT
 /*
+ * SPDX-License-Identifier: MIT
+ *
  * Copyright © 2019 Intel Corporation
  */
 
 #include "intel_context.h"
 #include "intel_engine_pm.h"
-#include "intel_gpu_commands.h"
 #include "intel_gt_requests.h"
 #include "intel_ring.h"
 #include "selftest_rc6.h"
@@ -19,11 +19,11 @@ static u64 rc6_residency(struct intel_rc6 *rc6)
 
 	/* XXX VLV_GT_MEDIA_RC6? */
 
-	result = intel_rc6_residency_ns(rc6, INTEL_RC6_RES_RC6);
+	result = intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6);
 	if (HAS_RC6p(rc6_to_i915(rc6)))
-		result += intel_rc6_residency_ns(rc6, INTEL_RC6_RES_RC6p);
+		result += intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6p);
 	if (HAS_RC6pp(rc6_to_i915(rc6)))
-		result += intel_rc6_residency_ns(rc6, INTEL_RC6_RES_RC6pp);
+		result += intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6pp);
 
 	return result;
 }
@@ -34,7 +34,6 @@ int live_rc6_manual(void *arg)
 	struct intel_rc6 *rc6 = &gt->rc6;
 	u64 rc0_power, rc6_power;
 	intel_wakeref_t wakeref;
-	bool has_power;
 	ktime_t dt;
 	u64 res[2];
 	int err = 0;
@@ -51,7 +50,6 @@ int live_rc6_manual(void *arg)
 	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915))
 		return 0;
 
-	has_power = librapl_supported(gt->i915);
 	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
 
 	/* Force RC6 off for starters */
@@ -73,14 +71,11 @@ int live_rc6_manual(void *arg)
 		goto out_unlock;
 	}
 
-	if (has_power) {
-		rc0_power = div64_u64(NSEC_PER_SEC * rc0_power,
-				      ktime_to_ns(dt));
-		if (!rc0_power) {
-			pr_err("No power measured while in RC0\n");
-			err = -EINVAL;
-			goto out_unlock;
-		}
+	rc0_power = div64_u64(NSEC_PER_SEC * rc0_power, ktime_to_ns(dt));
+	if (!rc0_power) {
+		pr_err("No power measured while in RC0\n");
+		err = -EINVAL;
+		goto out_unlock;
 	}
 
 	/* Manually enter RC6 */
@@ -102,16 +97,13 @@ int live_rc6_manual(void *arg)
 		err = -EINVAL;
 	}
 
-	if (has_power) {
-		rc6_power = div64_u64(NSEC_PER_SEC * rc6_power,
-				      ktime_to_ns(dt));
-		pr_info("GPU consumed %llduW in RC0 and %llduW in RC6\n",
-			rc0_power, rc6_power);
-		if (2 * rc6_power > rc0_power) {
-			pr_err("GPU leaked energy while in RC6!\n");
-			err = -EINVAL;
-			goto out_unlock;
-		}
+	rc6_power = div64_u64(NSEC_PER_SEC * rc6_power, ktime_to_ns(dt));
+	pr_info("GPU consumed %llduW in RC0 and %llduW in RC6\n",
+		rc0_power, rc6_power);
+	if (2 * rc6_power > rc0_power) {
+		pr_err("GPU leaked energy while in RC6!\n");
+		err = -EINVAL;
+		goto out_unlock;
 	}
 
 	/* Restore what should have been the original state! */
@@ -140,7 +132,7 @@ static const u32 *__live_rc6_ctx(struct intel_context *ce)
 	}
 
 	cmd = MI_STORE_REGISTER_MEM | MI_USE_GGTT;
-	if (GRAPHICS_VER(rq->engine->i915) >= 8)
+	if (INTEL_GEN(rq->engine->i915) >= 8)
 		cmd++;
 
 	*cs++ = cmd;
@@ -193,7 +185,7 @@ int live_rc6_ctx_wa(void *arg)
 	int err = 0;
 
 	/* A read of CTX_INFO upsets rc6. Poke the bear! */
-	if (GRAPHICS_VER(gt->i915) < 8)
+	if (INTEL_GEN(gt->i915) < 8)
 		return 0;
 
 	engines = randomised_engines(gt, &prng, &count);

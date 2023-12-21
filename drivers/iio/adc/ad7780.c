@@ -300,11 +300,6 @@ static int ad7780_init_gpios(struct device *dev, struct ad7780_state *st)
 	return 0;
 }
 
-static void ad7780_reg_disable(void *reg)
-{
-	regulator_disable(reg);
-}
-
 static int ad7780_probe(struct spi_device *spi)
 {
 	struct ad7780_state *st;
@@ -322,6 +317,8 @@ static int ad7780_probe(struct spi_device *spi)
 
 	st->chip_info =
 		&ad7780_chip_info_tbl[spi_get_device_id(spi)->driver_data];
+
+	spi_set_drvdata(spi, indio_dev);
 
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
@@ -343,15 +340,35 @@ static int ad7780_probe(struct spi_device *spi)
 		return ret;
 	}
 
-	ret = devm_add_action_or_reset(&spi->dev, ad7780_reg_disable, st->reg);
+	ret = ad_sd_setup_buffer_and_trigger(indio_dev);
 	if (ret)
-		return ret;
+		goto error_disable_reg;
 
-	ret = devm_ad_sd_setup_buffer_and_trigger(&spi->dev, indio_dev);
+	ret = iio_device_register(indio_dev);
 	if (ret)
-		return ret;
+		goto error_cleanup_buffer_and_trigger;
 
-	return devm_iio_device_register(&spi->dev, indio_dev);
+	return 0;
+
+error_cleanup_buffer_and_trigger:
+	ad_sd_cleanup_buffer_and_trigger(indio_dev);
+error_disable_reg:
+	regulator_disable(st->reg);
+
+	return ret;
+}
+
+static int ad7780_remove(struct spi_device *spi)
+{
+	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct ad7780_state *st = iio_priv(indio_dev);
+
+	iio_device_unregister(indio_dev);
+	ad_sd_cleanup_buffer_and_trigger(indio_dev);
+
+	regulator_disable(st->reg);
+
+	return 0;
 }
 
 static const struct spi_device_id ad7780_id[] = {
@@ -368,6 +385,7 @@ static struct spi_driver ad7780_driver = {
 		.name	= "ad7780",
 	},
 	.probe		= ad7780_probe,
+	.remove		= ad7780_remove,
 	.id_table	= ad7780_id,
 };
 module_spi_driver(ad7780_driver);
@@ -375,4 +393,3 @@ module_spi_driver(ad7780_driver);
 MODULE_AUTHOR("Michael Hennerich <michael.hennerich@analog.com>");
 MODULE_DESCRIPTION("Analog Devices AD7780 and similar ADCs");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS(IIO_AD_SIGMA_DELTA);

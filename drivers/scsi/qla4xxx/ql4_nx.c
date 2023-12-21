@@ -375,35 +375,6 @@ qla4_82xx_pci_set_crbwindow_2M(struct scsi_qla_host *ha, ulong *off)
 	*off = (*off & MASK(16)) + CRB_INDIRECT_2M + ha->nx_pcibase;
 }
 
-#define CRB_WIN_LOCK_TIMEOUT 100000000
-
-/*
- * Context: atomic
- */
-static int qla4_82xx_crb_win_lock(struct scsi_qla_host *ha)
-{
-	int done = 0, timeout = 0;
-
-	while (!done) {
-		/* acquire semaphore3 from PCI HW block */
-		done = qla4_82xx_rd_32(ha, QLA82XX_PCIE_REG(PCIE_SEM7_LOCK));
-		if (done == 1)
-			break;
-		if (timeout >= CRB_WIN_LOCK_TIMEOUT)
-			return -1;
-
-		timeout++;
-		udelay(10);
-	}
-	qla4_82xx_wr_32(ha, QLA82XX_CRB_WIN_LOCK_ID, ha->func_num);
-	return 0;
-}
-
-void qla4_82xx_crb_win_unlock(struct scsi_qla_host *ha)
-{
-	qla4_82xx_rd_32(ha, QLA82XX_PCIE_REG(PCIE_SEM7_UNLOCK));
-}
-
 void
 qla4_82xx_wr_32(struct scsi_qla_host *ha, ulong off, u32 data)
 {
@@ -504,6 +475,40 @@ int qla4_82xx_md_wr_32(struct scsi_qla_host *ha, uint32_t off, uint32_t data)
 	return rval;
 }
 
+#define CRB_WIN_LOCK_TIMEOUT 100000000
+
+int qla4_82xx_crb_win_lock(struct scsi_qla_host *ha)
+{
+	int i;
+	int done = 0, timeout = 0;
+
+	while (!done) {
+		/* acquire semaphore3 from PCI HW block */
+		done = qla4_82xx_rd_32(ha, QLA82XX_PCIE_REG(PCIE_SEM7_LOCK));
+		if (done == 1)
+			break;
+		if (timeout >= CRB_WIN_LOCK_TIMEOUT)
+			return -1;
+
+		timeout++;
+
+		/* Yield CPU */
+		if (!in_interrupt())
+			schedule();
+		else {
+			for (i = 0; i < 20; i++)
+				cpu_relax();    /*This a nop instr on i386*/
+		}
+	}
+	qla4_82xx_wr_32(ha, QLA82XX_CRB_WIN_LOCK_ID, ha->func_num);
+	return 0;
+}
+
+void qla4_82xx_crb_win_unlock(struct scsi_qla_host *ha)
+{
+	qla4_82xx_rd_32(ha, QLA82XX_PCIE_REG(PCIE_SEM7_UNLOCK));
+}
+
 #define IDC_LOCK_TIMEOUT 100000000
 
 /**
@@ -512,14 +517,11 @@ int qla4_82xx_md_wr_32(struct scsi_qla_host *ha, uint32_t off, uint32_t data)
  *
  * General purpose lock used to synchronize access to
  * CRB_DEV_STATE, CRB_DEV_REF_COUNT, etc.
- *
- * Context: task, can sleep
  **/
 int qla4_82xx_idc_lock(struct scsi_qla_host *ha)
 {
+	int i;
 	int done = 0, timeout = 0;
-
-	might_sleep();
 
 	while (!done) {
 		/* acquire semaphore5 from PCI HW block */
@@ -530,7 +532,14 @@ int qla4_82xx_idc_lock(struct scsi_qla_host *ha)
 			return -1;
 
 		timeout++;
-		msleep(100);
+
+		/* Yield CPU */
+		if (!in_interrupt())
+			schedule();
+		else {
+			for (i = 0; i < 20; i++)
+				cpu_relax();    /*This a nop instr on i386*/
+		}
 	}
 	return 0;
 }
@@ -871,18 +880,15 @@ qla4_82xx_decode_crb_addr(unsigned long addr)
 static long rom_max_timeout = 100;
 static long qla4_82xx_rom_lock_timeout = 100;
 
-/*
- * Context: task, can_sleep
- */
 static int
 qla4_82xx_rom_lock(struct scsi_qla_host *ha)
 {
+	int i;
 	int done = 0, timeout = 0;
-
-	might_sleep();
 
 	while (!done) {
 		/* acquire semaphore2 from PCI HW block */
+
 		done = qla4_82xx_rd_32(ha, QLA82XX_PCIE_REG(PCIE_SEM2_LOCK));
 		if (done == 1)
 			break;
@@ -890,7 +896,14 @@ qla4_82xx_rom_lock(struct scsi_qla_host *ha)
 			return -1;
 
 		timeout++;
-		msleep(20);
+
+		/* Yield CPU */
+		if (!in_interrupt())
+			schedule();
+		else {
+			for (i = 0; i < 20; i++)
+				cpu_relax();    /*This a nop instr on i386*/
+		}
 	}
 	qla4_82xx_wr_32(ha, QLA82XX_ROM_LOCK_ID, ROM_LOCK_DRIVER);
 	return 0;
@@ -1767,7 +1780,7 @@ qla4_82xx_start_firmware(struct scsi_qla_host *ha, uint32_t image_start)
 
 int qla4_82xx_try_start_fw(struct scsi_qla_host *ha)
 {
-	int rval;
+	int rval = QLA_ERROR;
 
 	/*
 	 * FW Load priority:
@@ -3634,6 +3647,12 @@ flash_conf_addr(struct ql82xx_hw_data *hw, uint32_t faddr)
 	return hw->flash_conf_off | faddr;
 }
 
+static inline uint32_t
+flash_data_addr(struct ql82xx_hw_data *hw, uint32_t faddr)
+{
+	return hw->flash_data_off | faddr;
+}
+
 static uint32_t *
 qla4_82xx_read_flash_data(struct scsi_qla_host *ha, uint32_t *dwptr,
     uint32_t faddr, uint32_t length)
@@ -3658,7 +3677,7 @@ qla4_82xx_read_flash_data(struct scsi_qla_host *ha, uint32_t *dwptr,
 			    "Do ROM fast read failed\n");
 			goto done_read;
 		}
-		dwptr[i] = cpu_to_le32(val);
+		dwptr[i] = __constant_cpu_to_le32(val);
 	}
 
 done_read:
@@ -3721,9 +3740,9 @@ qla4_8xxx_get_flt_info(struct scsi_qla_host *ha, uint32_t flt_addr)
 			goto no_flash_data;
 	}
 
-	if (*wptr == cpu_to_le16(0xffff))
+	if (*wptr == __constant_cpu_to_le16(0xffff))
 		goto no_flash_data;
-	if (flt->version != cpu_to_le16(1)) {
+	if (flt->version != __constant_cpu_to_le16(1)) {
 		DEBUG2(ql4_printk(KERN_INFO, ha, "Unsupported FLT detected: "
 			"version=0x%x length=0x%x checksum=0x%x.\n",
 			le16_to_cpu(flt->version), le16_to_cpu(flt->length),
@@ -3826,7 +3845,7 @@ qla4_82xx_get_fdt_info(struct scsi_qla_host *ha)
 	qla4_82xx_read_optrom_data(ha, (uint8_t *)ha->request_ring,
 	    hw->flt_region_fdt << 2, OPTROM_BURST_SIZE);
 
-	if (*wptr == cpu_to_le16(0xffff))
+	if (*wptr == __constant_cpu_to_le16(0xffff))
 		goto no_flash_data;
 
 	if (fdt->sig[0] != 'Q' || fdt->sig[1] != 'L' || fdt->sig[2] != 'I' ||
@@ -3883,7 +3902,7 @@ qla4_82xx_get_idc_param(struct scsi_qla_host *ha)
 	qla4_82xx_read_optrom_data(ha, (uint8_t *)ha->request_ring,
 			QLA82XX_IDC_PARAM_ADDR , 8);
 
-	if (*wptr == cpu_to_le32(0xffffffff)) {
+	if (*wptr == __constant_cpu_to_le32(0xffffffff)) {
 		ha->nx_dev_init_timeout = ROM_DEV_INIT_TIMEOUT;
 		ha->nx_reset_timeout = ROM_DRV_RESET_ACK_TIMEOUT;
 	} else {

@@ -270,7 +270,7 @@ static void el3_dev_fill(struct net_device *dev, __be16 *phys_addr, int ioaddr,
 {
 	struct el3_private *lp = netdev_priv(dev);
 
-	eth_hw_addr_set(dev, (u8 *)phys_addr);
+	memcpy(dev->dev_addr, phys_addr, ETH_ALEN);
 	dev->base_addr = ioaddr;
 	dev->irq = irq;
 	dev->if_port = if_port;
@@ -302,6 +302,7 @@ static int el3_isa_match(struct device *pdev, unsigned int ndev)
 		return -ENOMEM;
 
 	SET_NETDEV_DEV(dev, pdev);
+	netdev_boot_setup_check(dev);
 
 	if (!request_region(ioaddr, EL3_IO_EXTENT, "3c509-isa")) {
 		free_netdev(dev);
@@ -334,11 +335,12 @@ static int el3_isa_match(struct device *pdev, unsigned int ndev)
 	return 1;
 }
 
-static void el3_isa_remove(struct device *pdev,
+static int el3_isa_remove(struct device *pdev,
 				    unsigned int ndev)
 {
 	el3_device_remove(pdev);
 	dev_set_drvdata(pdev, NULL);
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -420,6 +422,7 @@ static int el3_pnp_probe(struct pnp_dev *pdev, const struct pnp_device_id *id)
 		return -ENOMEM;
 	}
 	SET_NETDEV_DEV(dev, &pdev->dev);
+	netdev_boot_setup_check(dev);
 
 	el3_dev_fill(dev, phys_addr, ioaddr, irq, if_port, EL3_PNP);
 	pnp_set_drvdata(pdev, dev);
@@ -512,9 +515,7 @@ static int el3_common_init(struct net_device *dev)
 {
 	struct el3_private *lp = netdev_priv(dev);
 	int err;
-	static const char * const if_names[] = {
-		"10baseT", "AUI", "undefined", "BNC"
-	};
+	const char *if_names[] = {"10baseT", "AUI", "undefined", "BNC"};
 
 	spin_lock_init(&lp->lock);
 
@@ -588,6 +589,7 @@ static int el3_eisa_probe(struct device *device)
 	}
 
 	SET_NETDEV_DEV(dev, device);
+	netdev_boot_setup_check(dev);
 
 	el3_dev_fill(dev, phys_addr, ioaddr, irq, if_port, EL3_EISA);
 	eisa_set_drvdata (edev, dev);
@@ -1050,7 +1052,6 @@ el3_netdev_get_ecmd(struct net_device *dev, struct ethtool_link_ksettings *cmd)
 		break;
 	case 3:
 		cmd->base.port = PORT_BNC;
-		break;
 	default:
 		break;
 	}
@@ -1135,7 +1136,7 @@ el3_netdev_set_ecmd(struct net_device *dev,
 
 static void el3_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
 }
 
 static int el3_get_link_ksettings(struct net_device *dev,

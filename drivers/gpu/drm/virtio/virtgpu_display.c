@@ -27,7 +27,6 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_damage_helper.h>
-#include <drm/drm_edid.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_probe_helper.h>
@@ -96,12 +95,12 @@ static void virtio_gpu_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static void virtio_gpu_crtc_atomic_enable(struct drm_crtc *crtc,
-					  struct drm_atomic_state *state)
+					  struct drm_crtc_state *old_state)
 {
 }
 
 static void virtio_gpu_crtc_atomic_disable(struct drm_crtc *crtc,
-					   struct drm_atomic_state *state)
+					   struct drm_crtc_state *old_state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct virtio_gpu_device *vgdev = dev->dev_private;
@@ -112,16 +111,14 @@ static void virtio_gpu_crtc_atomic_disable(struct drm_crtc *crtc,
 }
 
 static int virtio_gpu_crtc_atomic_check(struct drm_crtc *crtc,
-					struct drm_atomic_state *state)
+					struct drm_crtc_state *state)
 {
 	return 0;
 }
 
 static void virtio_gpu_crtc_atomic_flush(struct drm_crtc *crtc,
-					 struct drm_atomic_state *state)
+					 struct drm_crtc_state *old_state)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
-									  crtc);
 	struct virtio_gpu_output *output = drm_crtc_to_virtio_gpu_output(crtc);
 
 	/*
@@ -130,7 +127,7 @@ static void virtio_gpu_crtc_atomic_flush(struct drm_crtc *crtc,
 	 * in the plane update callback, and here we just check
 	 * whenever we must force the modeset.
 	 */
-	if (drm_atomic_crtc_needs_modeset(crtc_state)) {
+	if (drm_atomic_crtc_needs_modeset(crtc->state)) {
 		output->needs_modeset = true;
 	}
 }
@@ -301,20 +298,14 @@ virtio_gpu_user_framebuffer_create(struct drm_device *dev,
 	struct virtio_gpu_framebuffer *virtio_gpu_fb;
 	int ret;
 
-	if (mode_cmd->pixel_format != DRM_FORMAT_HOST_XRGB8888 &&
-	    mode_cmd->pixel_format != DRM_FORMAT_HOST_ARGB8888)
-		return ERR_PTR(-ENOENT);
-
 	/* lookup object associated with res handle */
 	obj = drm_gem_object_lookup(file_priv, mode_cmd->handles[0]);
 	if (!obj)
 		return ERR_PTR(-EINVAL);
 
 	virtio_gpu_fb = kzalloc(sizeof(*virtio_gpu_fb), GFP_KERNEL);
-	if (virtio_gpu_fb == NULL) {
-		drm_gem_object_put(obj);
+	if (virtio_gpu_fb == NULL)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	ret = virtio_gpu_framebuffer_init(dev, virtio_gpu_fb, mode_cmd, obj);
 	if (ret) {
@@ -336,14 +327,10 @@ int virtio_gpu_modeset_init(struct virtio_gpu_device *vgdev)
 {
 	int i, ret;
 
-	if (!vgdev->num_scanouts)
-		return 0;
-
 	ret = drmm_mode_config_init(vgdev->ddev);
 	if (ret)
 		return ret;
 
-	vgdev->ddev->mode_config.quirk_addfb_prefer_host_byte_order = true;
 	vgdev->ddev->mode_config.funcs = &virtio_gpu_mode_funcs;
 
 	/* modes will be validated against the framebuffer size */
@@ -351,8 +338,6 @@ int virtio_gpu_modeset_init(struct virtio_gpu_device *vgdev)
 	vgdev->ddev->mode_config.min_height = YRES_MIN;
 	vgdev->ddev->mode_config.max_width = XRES_MAX;
 	vgdev->ddev->mode_config.max_height = YRES_MAX;
-
-	vgdev->ddev->mode_config.fb_modifiers_not_supported = true;
 
 	for (i = 0 ; i < vgdev->num_scanouts; ++i)
 		vgdev_output_init(vgdev, i);
@@ -364,9 +349,6 @@ int virtio_gpu_modeset_init(struct virtio_gpu_device *vgdev)
 void virtio_gpu_modeset_fini(struct virtio_gpu_device *vgdev)
 {
 	int i;
-
-	if (!vgdev->num_scanouts)
-		return;
 
 	for (i = 0 ; i < vgdev->num_scanouts; ++i)
 		kfree(vgdev->outputs[i].edid);

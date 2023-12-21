@@ -9,6 +9,7 @@
 #define _ASM_MIPSMTREGS_H
 
 #include <asm/mipsregs.h>
+#include <asm/war.h>
 
 #ifndef __ASSEMBLY__
 

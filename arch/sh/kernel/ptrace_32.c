@@ -20,6 +20,7 @@
 #include <linux/io.h>
 #include <linux/audit.h>
 #include <linux/seccomp.h>
+#include <linux/tracehook.h>
 #include <linux/elf.h>
 #include <linux/regset.h>
 #include <linux/hw_breakpoint.h>
@@ -157,8 +158,8 @@ static int genregs_set(struct task_struct *target,
 					 offsetof(struct pt_regs, pc),
 					 sizeof(struct pt_regs));
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  sizeof(struct pt_regs), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						sizeof(struct pt_regs), -1);
 
 	return ret;
 }
@@ -229,8 +230,8 @@ static int dspregs_set(struct task_struct *target,
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, regs,
 				 0, sizeof(struct pt_dspregs));
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  sizeof(struct pt_dspregs), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						sizeof(struct pt_dspregs), -1);
 
 	return ret;
 }
@@ -455,7 +456,7 @@ long arch_ptrace(struct task_struct *child, long request,
 asmlinkage long do_syscall_trace_enter(struct pt_regs *regs)
 {
 	if (test_thread_flag(TIF_SYSCALL_TRACE) &&
-	    ptrace_report_syscall_entry(regs)) {
+	    tracehook_report_syscall_entry(regs)) {
 		regs->regs[0] = -ENOSYS;
 		return -1;
 	}
@@ -483,5 +484,5 @@ asmlinkage void do_syscall_trace_leave(struct pt_regs *regs)
 
 	step = test_thread_flag(TIF_SINGLESTEP);
 	if (step || test_thread_flag(TIF_SYSCALL_TRACE))
-		ptrace_report_syscall_exit(regs, step);
+		tracehook_report_syscall_exit(regs, step);
 }

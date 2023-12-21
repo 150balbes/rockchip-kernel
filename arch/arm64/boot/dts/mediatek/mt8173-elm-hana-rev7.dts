@@ -8,7 +8,6 @@
 
 / {
 	model = "Google Hanawl";
-	chassis-type = "laptop";
 	compatible = "google,hana-rev7", "mediatek,mt8173";
 };
 
@@ -22,7 +21,7 @@
 };
 
 &gpio_keys {
-	/delete-node/switch-tablet-mode;
-	/delete-node/switch-volume-down;
-	/delete-node/switch-volume-up;
+	/delete-node/tablet_mode;
+	/delete-node/volume_down;
+	/delete-node/volume_up;
 };

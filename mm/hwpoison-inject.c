@@ -30,11 +30,11 @@ static int hwpoison_inject(void *data, u64 val)
 	if (!hwpoison_filter_enable)
 		goto inject;
 
-	shake_page(hpage);
+	shake_page(hpage, 0);
 	/*
-	 * This implies unable to support non-LRU pages except free page.
+	 * This implies unable to support non-LRU pages.
 	 */
-	if (!PageLRU(hpage) && !PageHuge(p) && !is_free_buddy_page(p))
+	if (!PageLRU(hpage) && !PageHuge(p))
 		return 0;
 
 	/*
@@ -48,8 +48,7 @@ static int hwpoison_inject(void *data, u64 val)
 
 inject:
 	pr_info("Injecting memory failure at pfn %#lx\n", pfn);
-	err = memory_failure(pfn, MF_SW_SIMULATED);
-	return (err == -EOPNOTSUPP) ? 0 : err;
+	return memory_failure(pfn, 0);
 }
 
 static int hwpoison_unpoison(void *data, u64 val)
@@ -63,13 +62,12 @@ static int hwpoison_unpoison(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(hwpoison_fops, NULL, hwpoison_inject, "%lli\n");
 DEFINE_DEBUGFS_ATTRIBUTE(unpoison_fops, NULL, hwpoison_unpoison, "%lli\n");
 
-static void __exit pfn_inject_exit(void)
+static void pfn_inject_exit(void)
 {
-	hwpoison_filter_enable = 0;
 	debugfs_remove_recursive(hwpoison_dir);
 }
 
-static int __init pfn_inject_init(void)
+static int pfn_inject_init(void)
 {
 	hwpoison_dir = debugfs_create_dir("hwpoison", NULL);
 

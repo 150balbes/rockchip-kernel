@@ -13,7 +13,6 @@
 #include <asm/mipsregs.h>
 #include <asm/mipsmtregs.h>
 #include <asm/pm.h>
-#include <asm/smp-cps.h>
 
 #define GCR_CPC_BASE_OFS	0x0088
 #define GCR_CL_COHERENCE_OFS	0x2008
@@ -81,20 +80,26 @@
 	 nop
 	.endm
 
+	/* Calculate an uncached address for the CM GCRs */
+	.macro	cmgcrb	dest
+	.set	push
+	.set	noat
+	MFC0	$1, CP0_CMGCRBASE
+	PTR_SLL	$1, $1, 4
+	PTR_LI	\dest, UNCAC_BASE
+	PTR_ADDU \dest, \dest, $1
+	.set	pop
+	.endm
 
+.section .text.cps-vec
 .balign 0x1000
 
 LEAF(mips_cps_core_entry)
 	/*
-	 * These first several instructions will be patched by cps_smp_setup to load the
-	 * CCA to use into register s0 and GCR base address to register s1.
+	 * These first 4 bytes will be patched by cps_smp_setup to load the
+	 * CCA to use into register s0.
 	 */
-	.rept   CPS_ENTRY_PATCH_INSNS
-	nop
-	.endr
-
-	.global mips_cps_core_entry_patch_end
-mips_cps_core_entry_patch_end:
+	.word	0
 
 	/* Check whether we're here due to an NMI */
 	mfc0	k0, CP0_STATUS
@@ -116,10 +121,9 @@ not_nmi:
 	li	t0, ST0_CU1 | ST0_CU0 | ST0_BEV | STATUS_BITDEPS
 	mtc0	t0, CP0_STATUS
 
-	/* We don't know how to do coherence setup on earlier ISA */
-#if MIPS_ISA_REV > 0
 	/* Skip cache & coherence setup if we're already coherent */
-	lw	s7, GCR_CL_COHERENCE_OFS(s1)
+	cmgcrb	v1
+	lw	s7, GCR_CL_COHERENCE_OFS(v1)
 	bnez	s7, 1f
 	 nop
 
@@ -129,9 +133,8 @@ not_nmi:
 
 	/* Enter the coherent domain */
 	li	t0, 0xff
-	sw	t0, GCR_CL_COHERENCE_OFS(s1)
+	sw	t0, GCR_CL_COHERENCE_OFS(v1)
 	ehb
-#endif /* MIPS_ISA_REV > 0 */
 
 	/* Set Kseg0 CCA to that in s0 */
 1:	mfc0	t0, CP0_CONFIG
@@ -303,7 +306,8 @@ LEAF(mips_cps_core_init)
  */
 LEAF(mips_cps_get_bootcfg)
 	/* Calculate a pointer to this cores struct core_boot_config */
-	lw	t0, GCR_CL_ID_OFS(s1)
+	cmgcrb	t0
+	lw	t0, GCR_CL_ID_OFS(t0)
 	li	t1, COREBOOTCFG_SIZE
 	mul	t0, t0, t1
 	PTR_LA	t1, mips_cps_core_bootcfg
@@ -363,9 +367,8 @@ LEAF(mips_cps_boot_vpes)
 	has_vp	t0, 5f
 
 	/* Find base address of CPC */
-	PTR_LA	t1, mips_gcr_base
-	PTR_L	t1, 0(t1)
-	PTR_L	t1, GCR_CPC_BASE_OFS(t1)
+	cmgcrb	t3
+	PTR_L	t1, GCR_CPC_BASE_OFS(t3)
 	PTR_LI	t2, ~0x7fff
 	and	t1, t1, t2
 	PTR_LI	t2, UNCAC_BASE
@@ -518,7 +521,6 @@ LEAF(mips_cps_boot_vpes)
 	 nop
 	END(mips_cps_boot_vpes)
 
-#if MIPS_ISA_REV > 0
 LEAF(mips_cps_cache_init)
 	/*
 	 * Clear the bits used to index the caches. Note that the architecture
@@ -592,7 +594,6 @@ dcache_done:
 	jr	ra
 	 nop
 	END(mips_cps_cache_init)
-#endif /* MIPS_ISA_REV > 0 */
 
 #if defined(CONFIG_MIPS_CPS_PM) && defined(CONFIG_CPU_PM)
 

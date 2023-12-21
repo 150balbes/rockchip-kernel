@@ -84,8 +84,7 @@ emulate_generic_r0_12_noflags(probes_opcode_t insn,
 	register void *rfn asm("lr") = asi->insn_fn;
 
 	__asm__ __volatile__ (
-ARM(		"stmdb	sp!, {%[regs], r11}	\n\t"	)
-THUMB(		"stmdb	sp!, {%[regs], r7}	\n\t"	)
+		"stmdb	sp!, {%[regs], r11}	\n\t"
 		"ldmia	%[regs], {r0-r12}	\n\t"
 #if __LINUX_ARM_ARCH__ >= 6
 		"blx	%[fn]			\n\t"
@@ -97,11 +96,10 @@ THUMB(		"stmdb	sp!, {%[regs], r7}	\n\t"	)
 #endif
 		"ldr	lr, [sp], #4		\n\t" /* lr = regs */
 		"stmia	lr, {r0-r12}		\n\t"
-ARM(		"ldr	r11, [sp], #4		\n\t"	)
-THUMB(		"ldr	r7, [sp], #4		\n\t"	)
+		"ldr	r11, [sp], #4		\n\t"
 		: [regs] "=r" (rregs), [fn] "=r" (rfn)
 		: "0" (rregs), "1" (rfn)
-		: "r0", "r2", "r3", "r4", "r5", "r6", ARM("r7") THUMB("r11"),
+		: "r0", "r2", "r3", "r4", "r5", "r6", "r7",
 		  "r8", "r9", "r10", "r12", "memory", "cc"
 		);
 }

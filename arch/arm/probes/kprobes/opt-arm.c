@@ -145,6 +145,8 @@ __arch_remove_optimized_kprobe(struct optimized_kprobe *op, int dirty)
 	}
 }
 
+extern void kprobe_handler(struct pt_regs *regs);
+
 static void
 optimized_callback(struct optimized_kprobe *op, struct pt_regs *regs)
 {
@@ -345,11 +347,10 @@ void arch_unoptimize_kprobes(struct list_head *oplist,
 }
 
 int arch_within_optimized_kprobe(struct optimized_kprobe *op,
-				 kprobe_opcode_t *addr)
+				unsigned long addr)
 {
-	return (op->kp.addr <= addr &&
-		op->kp.addr + (RELATIVEJUMP_SIZE / sizeof(kprobe_opcode_t)) > addr);
-
+	return ((unsigned long)op->kp.addr <= addr &&
+		(unsigned long)op->kp.addr + RELATIVEJUMP_SIZE > addr);
 }
 
 void arch_remove_optimized_kprobe(struct optimized_kprobe *op)

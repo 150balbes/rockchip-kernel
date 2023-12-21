@@ -501,23 +501,28 @@ static int tps65010_gpio_get(struct gpio_chip *chip, unsigned offset)
 
 static struct tps65010 *the_tps;
 
-static void tps65010_remove(struct i2c_client *client)
+static int tps65010_remove(struct i2c_client *client)
 {
 	struct tps65010		*tps = i2c_get_clientdata(client);
 	struct tps65010_board	*board = dev_get_platdata(&client->dev);
 
-	if (board && board->teardown)
-		board->teardown(client, &tps->chip);
+	if (board && board->teardown) {
+		int status = board->teardown(client, board->context);
+		if (status < 0)
+			dev_dbg(&client->dev, "board %s %s err %d\n",
+				"teardown", client->name, status);
+	}
 	if (client->irq > 0)
 		free_irq(client->irq, tps);
 	cancel_delayed_work_sync(&tps->work);
 	debugfs_remove(tps->file);
 	the_tps = NULL;
+	return 0;
 }
 
-static int tps65010_probe(struct i2c_client *client)
+static int tps65010_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct tps65010		*tps;
 	int			status;
 	struct tps65010_board	*board = dev_get_platdata(&client->dev);
@@ -615,7 +620,7 @@ static int tps65010_probe(struct i2c_client *client)
 				tps, DEBUG_FOPS);
 
 	/* optionally register GPIOs */
-	if (board) {
+	if (board && board->base != 0) {
 		tps->outmask = board->outmask;
 
 		tps->chip.label = client->name;
@@ -628,7 +633,7 @@ static int tps65010_probe(struct i2c_client *client)
 		/* NOTE:  only partial support for inputs; nyet IRQs */
 		tps->chip.get = tps65010_gpio_get;
 
-		tps->chip.base = -1;
+		tps->chip.base = board->base;
 		tps->chip.ngpio = 7;
 		tps->chip.can_sleep = 1;
 
@@ -637,7 +642,7 @@ static int tps65010_probe(struct i2c_client *client)
 			dev_err(&client->dev, "can't add gpiochip, err %d\n",
 					status);
 		else if (board->setup) {
-			status = board->setup(client, &tps->chip);
+			status = board->setup(client, board->context);
 			if (status < 0) {
 				dev_dbg(&client->dev,
 					"board %s %s err %d\n",
@@ -664,7 +669,7 @@ static struct i2c_driver tps65010_driver = {
 	.driver = {
 		.name	= "tps65010",
 	},
-	.probe = tps65010_probe,
+	.probe	= tps65010_probe,
 	.remove	= tps65010_remove,
 	.id_table = tps65010_id,
 };

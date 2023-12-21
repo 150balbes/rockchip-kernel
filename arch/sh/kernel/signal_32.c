@@ -25,7 +25,7 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/io.h>
-#include <linux/resume_user_mode.h>
+#include <linux/tracehook.h>
 #include <asm/ucontext.h>
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
@@ -115,7 +115,6 @@ static int
 restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *sc, int *r0_p)
 {
 	unsigned int err = 0;
-	unsigned int sr = regs->sr & ~SR_USER_MASK;
 
 #define COPY(x)		err |= __get_user(regs->x, &sc->sc_##x)
 			COPY(regs[1]);
@@ -130,8 +129,6 @@ restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *sc, int *r0_p
 	COPY(macl);	COPY(pr);
 	COPY(sr);	COPY(pc);
 #undef COPY
-
-	regs->sr = (regs->sr & SR_USER_MASK) | sr;
 
 #ifdef CONFIG_SH_FPU
 	if (boot_cpu_data.flags & CPU_HAS_FPU) {
@@ -506,5 +503,5 @@ asmlinkage void do_notify_resume(struct pt_regs *regs, unsigned int save_r0,
 		do_signal(regs, save_r0);
 
 	if (thread_info_flags & _TIF_NOTIFY_RESUME)
-		resume_user_mode_work(regs);
+		tracehook_notify_resume(regs);
 }

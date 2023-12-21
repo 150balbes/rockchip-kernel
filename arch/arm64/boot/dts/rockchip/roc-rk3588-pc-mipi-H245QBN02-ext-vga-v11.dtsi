@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "roc-rk3588-pc.dtsi"
+#include "roc-rk3588-pc-ext-usb3.dtsi"
+//#include "rk3588-firefly-demo.dtsi"
+#include "roc-rk3588-pc-mipi-H245QBN02.dtsi"

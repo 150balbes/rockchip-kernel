@@ -203,7 +203,7 @@
  *	prb_rec_init_wr(&r, 5);
  *
  *	// try to extend, but only if it does not exceed 32 bytes
- *	if (prb_reserve_in_last(&e, &test_rb, &r, printk_caller_id(), 32)) {
+ *	if (prb_reserve_in_last(&e, &test_rb, &r, printk_caller_id()), 32) {
  *		snprintf(&r.text_buf[r.info->text_len],
  *			 r.text_buf_size - r.info->text_len, "hello");
  *
@@ -562,12 +562,11 @@ static void desc_make_reusable(struct prb_desc_ring *desc_ring,
  * on error the caller can re-load the tail lpos to determine the situation.
  */
 static bool data_make_reusable(struct printk_ringbuffer *rb,
+			       struct prb_data_ring *data_ring,
 			       unsigned long lpos_begin,
 			       unsigned long lpos_end,
 			       unsigned long *lpos_out)
 {
-
-	struct prb_data_ring *data_ring = &rb->text_data_ring;
 	struct prb_desc_ring *desc_ring = &rb->desc_ring;
 	struct prb_data_block *blk;
 	enum desc_state d_state;
@@ -629,9 +628,10 @@ static bool data_make_reusable(struct printk_ringbuffer *rb,
  * descriptors into the reusable state if the tail is pushed beyond
  * their associated data block.
  */
-static bool data_push_tail(struct printk_ringbuffer *rb, unsigned long lpos)
+static bool data_push_tail(struct printk_ringbuffer *rb,
+			   struct prb_data_ring *data_ring,
+			   unsigned long lpos)
 {
-	struct prb_data_ring *data_ring = &rb->text_data_ring;
 	unsigned long tail_lpos_new;
 	unsigned long tail_lpos;
 	unsigned long next_lpos;
@@ -672,7 +672,8 @@ static bool data_push_tail(struct printk_ringbuffer *rb, unsigned long lpos)
 		 * Make all descriptors reusable that are associated with
 		 * data blocks before @lpos.
 		 */
-		if (!data_make_reusable(rb, tail_lpos, lpos, &next_lpos)) {
+		if (!data_make_reusable(rb, data_ring, tail_lpos, lpos,
+					&next_lpos)) {
 			/*
 			 * 1. Guarantee the block ID loaded in
 			 *    data_make_reusable() is performed before
@@ -809,7 +810,7 @@ static bool desc_push_tail(struct printk_ringbuffer *rb,
 	 * data blocks once their associated descriptor is gone.
 	 */
 
-	if (!data_push_tail(rb, desc.text_blk_lpos.next))
+	if (!data_push_tail(rb, &rb->text_data_ring, desc.text_blk_lpos.next))
 		return false;
 
 	/*
@@ -1021,10 +1022,10 @@ static unsigned long get_next_lpos(struct prb_data_ring *data_ring,
  * if necessary. This function also associates the data block with
  * a specified descriptor.
  */
-static char *data_alloc(struct printk_ringbuffer *rb, unsigned int size,
+static char *data_alloc(struct printk_ringbuffer *rb,
+			struct prb_data_ring *data_ring, unsigned int size,
 			struct prb_data_blk_lpos *blk_lpos, unsigned long id)
 {
-	struct prb_data_ring *data_ring = &rb->text_data_ring;
 	struct prb_data_block *blk;
 	unsigned long begin_lpos;
 	unsigned long next_lpos;
@@ -1043,7 +1044,7 @@ static char *data_alloc(struct printk_ringbuffer *rb, unsigned int size,
 	do {
 		next_lpos = get_next_lpos(data_ring, begin_lpos, size);
 
-		if (!data_push_tail(rb, next_lpos - DATA_SIZE(data_ring))) {
+		if (!data_push_tail(rb, data_ring, next_lpos - DATA_SIZE(data_ring))) {
 			/* Failed to allocate, specify a data-less block. */
 			blk_lpos->begin = FAILED_LPOS;
 			blk_lpos->next = FAILED_LPOS;
@@ -1102,10 +1103,10 @@ static char *data_alloc(struct printk_ringbuffer *rb, unsigned int size,
  * Return a pointer to the beginning of the entire data buffer or NULL on
  * failure.
  */
-static char *data_realloc(struct printk_ringbuffer *rb, unsigned int size,
+static char *data_realloc(struct printk_ringbuffer *rb,
+			  struct prb_data_ring *data_ring, unsigned int size,
 			  struct prb_data_blk_lpos *blk_lpos, unsigned long id)
 {
-	struct prb_data_ring *data_ring = &rb->text_data_ring;
 	struct prb_data_block *blk;
 	unsigned long head_lpos;
 	unsigned long next_lpos;
@@ -1132,7 +1133,7 @@ static char *data_realloc(struct printk_ringbuffer *rb, unsigned int size,
 		return &blk->data[0];
 	}
 
-	if (!data_push_tail(rb, next_lpos - DATA_SIZE(data_ring)))
+	if (!data_push_tail(rb, data_ring, next_lpos - DATA_SIZE(data_ring)))
 		return NULL;
 
 	/* The memory barrier involvement is the same as data_alloc:A. */
@@ -1397,7 +1398,7 @@ bool prb_reserve_in_last(struct prb_reserved_entry *e, struct printk_ringbuffer 
 		if (r->text_buf_size > max_size)
 			goto fail;
 
-		r->text_buf = data_alloc(rb, r->text_buf_size,
+		r->text_buf = data_alloc(rb, &rb->text_data_ring, r->text_buf_size,
 					 &d->text_blk_lpos, id);
 	} else {
 		if (!get_data(&rb->text_data_ring, &d->text_blk_lpos, &data_size))
@@ -1421,7 +1422,7 @@ bool prb_reserve_in_last(struct prb_reserved_entry *e, struct printk_ringbuffer 
 		if (r->text_buf_size > max_size)
 			goto fail;
 
-		r->text_buf = data_realloc(rb, r->text_buf_size,
+		r->text_buf = data_realloc(rb, &rb->text_data_ring, r->text_buf_size,
 					   &d->text_blk_lpos, id);
 	}
 	if (r->text_buf_size && !r->text_buf)
@@ -1552,7 +1553,8 @@ bool prb_reserve(struct prb_reserved_entry *e, struct printk_ringbuffer *rb,
 	if (info->seq > 0)
 		desc_make_final(desc_ring, DESC_ID(id - 1));
 
-	r->text_buf = data_alloc(rb, r->text_buf_size, &d->text_blk_lpos, id);
+	r->text_buf = data_alloc(rb, &rb->text_data_ring, r->text_buf_size,
+				 &d->text_blk_lpos, id);
 	/* If text data allocation fails, a data-less record is committed. */
 	if (r->text_buf_size && !r->text_buf) {
 		prb_commit(e);

@@ -123,6 +123,7 @@ pll_map(struct nvkm_bios *bios)
 	case NV_20:
 	case NV_30:
 		return nv04_pll_mapping;
+		break;
 	case NV_40:
 		return nv40_pll_mapping;
 	case NV_50:

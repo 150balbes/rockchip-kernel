@@ -1,5 +1,5 @@
 =================================
-Brief tutorial on CRC computation
+brief tutorial on CRC computation
 =================================
 
 A CRC is a long-division remainder.  You add the CRC to the message,

@@ -25,8 +25,8 @@
 #include <linux/memblock.h>
 #include <linux/gfp.h>
 #include <linux/kmemleak.h>
-#include <linux/of_address.h>
 #include <asm/io.h>
+#include <asm/prom.h>
 #include <asm/iommu.h>
 #include <asm/pci-bridge.h>
 #include <asm/machdep.h>
@@ -226,7 +226,7 @@ static void dart_free(struct iommu_table *tbl, long index, long npages)
 	dart_cache_sync(orig_dp, orig_npages);
 }
 
-static void __init allocate_dart(void)
+static void allocate_dart(void)
 {
 	unsigned long tmp;
 
@@ -344,8 +344,7 @@ static void iommu_table_dart_setup(void)
 	iommu_table_dart.it_index = 0;
 	iommu_table_dart.it_blocksize = 1;
 	iommu_table_dart.it_ops = &iommu_dart_ops;
-	if (!iommu_init_table(&iommu_table_dart, -1, 0, 0))
-		panic("Failed to initialize iommu table");
+	iommu_init_table(&iommu_table_dart, -1, 0, 0);
 
 	/* Reserve the last page of the DART to avoid possible prefetch
 	 * past the DART mapped area

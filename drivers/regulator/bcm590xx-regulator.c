@@ -354,7 +354,6 @@ static int bcm590xx_probe(struct platform_device *pdev)
 static struct platform_driver bcm590xx_regulator_driver = {
 	.driver = {
 		.name = "bcm590xx-vregs",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = bcm590xx_probe,
 };

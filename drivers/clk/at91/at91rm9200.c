@@ -7,8 +7,6 @@
 
 #include "pmc.h"
 
-static DEFINE_SPINLOCK(rm9200_mck_lock);
-
 struct sck {
 	char *n;
 	char *p;
@@ -108,12 +106,12 @@ static void __init at91rm9200_pmc_setup(struct device_node *np)
 
 	bypass = of_property_read_bool(np, "atmel,osc-bypass");
 
-	hw = at91_clk_register_main_osc(regmap, "main_osc", mainxtal_name, NULL,
+	hw = at91_clk_register_main_osc(regmap, "main_osc", mainxtal_name,
 					bypass);
 	if (IS_ERR(hw))
 		goto err_free;
 
-	hw = at91_clk_register_rm9200_main(regmap, "mainck", "main_osc", NULL);
+	hw = at91_clk_register_rm9200_main(regmap, "mainck", "main_osc");
 	if (IS_ERR(hw))
 		goto err_free;
 
@@ -139,19 +137,9 @@ static void __init at91rm9200_pmc_setup(struct device_node *np)
 	parent_names[1] = "mainck";
 	parent_names[2] = "pllack";
 	parent_names[3] = "pllbck";
-	hw = at91_clk_register_master_pres(regmap, "masterck_pres", 4,
-					   parent_names, NULL,
-					   &at91rm9200_master_layout,
-					   &rm9200_mck_characteristics,
-					   &rm9200_mck_lock);
-	if (IS_ERR(hw))
-		goto err_free;
-
-	hw = at91_clk_register_master_div(regmap, "masterck_div",
-					  "masterck_pres", NULL,
-					  &at91rm9200_master_layout,
-					  &rm9200_mck_characteristics,
-					  &rm9200_mck_lock, CLK_SET_RATE_GATE, 0);
+	hw = at91_clk_register_master(regmap, "masterck", 4, parent_names,
+				      &at91rm9200_master_layout,
+				      &rm9200_mck_characteristics);
 	if (IS_ERR(hw))
 		goto err_free;
 
@@ -171,7 +159,7 @@ static void __init at91rm9200_pmc_setup(struct device_node *np)
 		snprintf(name, sizeof(name), "prog%d", i);
 
 		hw = at91_clk_register_programmable(regmap, name,
-						    parent_names, NULL, 4, i,
+						    parent_names, 4, i,
 						    &at91rm9200_programmable_layout,
 						    NULL);
 		if (IS_ERR(hw))
@@ -182,8 +170,8 @@ static void __init at91rm9200_pmc_setup(struct device_node *np)
 
 	for (i = 0; i < ARRAY_SIZE(at91rm9200_systemck); i++) {
 		hw = at91_clk_register_system(regmap, at91rm9200_systemck[i].n,
-					      at91rm9200_systemck[i].p, NULL,
-					      at91rm9200_systemck[i].id, 0);
+					      at91rm9200_systemck[i].p,
+					      at91rm9200_systemck[i].id);
 		if (IS_ERR(hw))
 			goto err_free;
 
@@ -193,7 +181,7 @@ static void __init at91rm9200_pmc_setup(struct device_node *np)
 	for (i = 0; i < ARRAY_SIZE(at91rm9200_periphck); i++) {
 		hw = at91_clk_register_peripheral(regmap,
 						  at91rm9200_periphck[i].n,
-						  "masterck_div", NULL,
+						  "masterck",
 						  at91rm9200_periphck[i].id);
 		if (IS_ERR(hw))
 			goto err_free;
@@ -214,4 +202,5 @@ err_free:
  * deferring properly. Once this is fixed, this can be switched to a platform
  * driver.
  */
-CLK_OF_DECLARE(at91rm9200_pmc, "atmel,at91rm9200-pmc", at91rm9200_pmc_setup);
+CLK_OF_DECLARE_DRIVER(at91rm9200_pmc, "atmel,at91rm9200-pmc",
+		      at91rm9200_pmc_setup);

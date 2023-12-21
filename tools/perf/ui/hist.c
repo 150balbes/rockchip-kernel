@@ -11,8 +11,7 @@
 #include "../util/sort.h"
 #include "../util/evsel.h"
 #include "../util/evlist.h"
-#include "../util/thread.h"
-#include "../util/util.h"
+#include "../perf.h"
 
 /* hist period print (hpp) functions */
 
@@ -275,9 +274,7 @@ static int __hpp__sort_acc(struct hist_entry *a, struct hist_entry *b,
 		if (ret)
 			return ret;
 
-		if ((a->thread == NULL ? NULL : RC_CHK_ACCESS(a->thread)) !=
-		    (b->thread == NULL ? NULL : RC_CHK_ACCESS(b->thread)) ||
-		    !hist_entry__has_callchains(a) || !symbol_conf.use_callchain)
+		if (a->thread != b->thread || !hist_entry__has_callchains(a) || !symbol_conf.use_callchain)
 			return 0;
 
 		ret = b->callchain->max_depth - a->callchain->max_depth;

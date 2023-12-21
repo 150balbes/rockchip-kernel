@@ -45,5 +45,6 @@
 #define	_RPT_CNT_MSK			0x000FFFFF
 #define	_RPT_CNT_SHT			0
 
+
 #endif	/*__RTL8712_WMAC_BITDEF_H__*/
 

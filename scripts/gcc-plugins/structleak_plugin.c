@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2013-2017 by PaX Team <pageexec@freemail.hu>
+ * Licensed under the GPL v2
  *
  * Note: the choice of the license means that the compilation process is
  *       NOT 'eligible' as defined by gcc's library exception to the GPL v3,
@@ -37,7 +37,7 @@
 __visible int plugin_is_GPL_compatible;
 
 static struct plugin_info structleak_plugin_info = {
-	.version	= PLUGIN_VERSION,
+	.version	= "20190125vanilla",
 	.help		= "disable\tdo not activate plugin\n"
 			  "byref\tinit structs passed by reference\n"
 			  "byref-all\tinit anything passed by reference\n"
@@ -68,7 +68,9 @@ static void register_attributes(void *event_data, void *data)
 {
 	user_attr.name			= "user";
 	user_attr.handler		= handle_user_attribute;
+#if BUILDING_GCC_VERSION >= 4007
 	user_attr.affects_type_identity	= true;
+#endif
 
 	register_attribute(&user_attr);
 }
@@ -103,8 +105,10 @@ static void finish_type(void *event_data, void *data)
 	if (type == NULL_TREE || type == error_mark_node)
 		return;
 
+#if BUILDING_GCC_VERSION >= 5000
 	if (TREE_CODE(type) == ENUMERAL_TYPE)
 		return;
+#endif
 
 	if (TYPE_USERSPACE(type))
 		return;
@@ -133,9 +137,11 @@ static void initialize(tree var)
 		if (!gimple_assign_single_p(stmt))
 			continue;
 		rhs1 = gimple_assign_rhs1(stmt);
+#if BUILDING_GCC_VERSION >= 4007
 		/* ... of a non-clobbering expression... */
 		if (TREE_CLOBBER_P(rhs1))
 			continue;
+#endif
 		/* ... to our variable... */
 		if (gimple_get_lhs(stmt) != var)
 			continue;
@@ -168,6 +174,7 @@ static void initialize(tree var)
 static unsigned int structleak_execute(void)
 {
 	basic_block bb;
+	unsigned int ret = 0;
 	tree var;
 	unsigned int i;
 
@@ -197,7 +204,7 @@ static unsigned int structleak_execute(void)
 			initialize(var);
 	}
 
-	return 0;
+	return ret;
 }
 
 #define PASS_NAME structleak

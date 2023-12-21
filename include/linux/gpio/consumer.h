@@ -3,22 +3,32 @@
 #define __LINUX_GPIO_CONSUMER_H
 
 #include <linux/bits.h>
-#include <linux/types.h>
+#include <linux/bug.h>
+#include <linux/compiler_types.h>
+#include <linux/err.h>
 
-struct acpi_device;
 struct device;
-struct fwnode_handle;
 
-struct gpio_array;
+/**
+ * Opaque descriptor for a GPIO. These are obtained using gpiod_get() and are
+ * preferable to the old integer-based handles.
+ *
+ * Contrary to integers, a pointer to a gpio_desc is guaranteed to be valid
+ * until the GPIO is released.
+ */
 struct gpio_desc;
 
 /**
- * struct gpio_descs - Struct containing an array of descriptors that can be
- *                     obtained using gpiod_get_array()
- *
- * @info:	Pointer to the opaque gpio_array structure
- * @ndescs:	Number of held descriptors
- * @desc:	Array of pointers to GPIO descriptors
+ * Opaque descriptor for a structure of GPIO array attributes.  This structure
+ * is attached to struct gpiod_descs obtained from gpiod_get_array() and can be
+ * passed back to get/set array functions in order to activate fast processing
+ * path if applicable.
+ */
+struct gpio_array;
+
+/**
+ * Struct containing an array of descriptors that can be obtained using
+ * gpiod_get_array().
  */
 struct gpio_descs {
 	struct gpio_array *info;
@@ -33,16 +43,8 @@ struct gpio_descs {
 #define GPIOD_FLAGS_BIT_NONEXCLUSIVE	BIT(4)
 
 /**
- * enum gpiod_flags - Optional flags that can be passed to one of gpiod_* to
- *                    configure direction and output value. These values
- *                    cannot be OR'd.
- *
- * @GPIOD_ASIS:			Don't change anything
- * @GPIOD_IN:			Set lines to input mode
- * @GPIOD_OUT_LOW:		Set lines to output and drive them low
- * @GPIOD_OUT_HIGH:		Set lines to output and drive them high
- * @GPIOD_OUT_LOW_OPEN_DRAIN:	Set lines to open-drain output and drive them low
- * @GPIOD_OUT_HIGH_OPEN_DRAIN:	Set lines to open-drain output and drive them high
+ * Optional flags that can be passed to one of gpiod_* to configure direction
+ * and output value. These values cannot be OR'd.
  */
 enum gpiod_flags {
 	GPIOD_ASIS	= 0,
@@ -110,8 +112,6 @@ int gpiod_get_direction(struct gpio_desc *desc);
 int gpiod_direction_input(struct gpio_desc *desc);
 int gpiod_direction_output(struct gpio_desc *desc, int value);
 int gpiod_direction_output_raw(struct gpio_desc *desc, int value);
-int gpiod_enable_hw_timestamp_ns(struct gpio_desc *desc, unsigned long flags);
-int gpiod_disable_hw_timestamp_ns(struct gpio_desc *desc, unsigned long flags);
 
 /* Value get/set from non-sleeping context */
 int gpiod_get_value(const struct gpio_desc *desc);
@@ -158,7 +158,7 @@ int gpiod_set_raw_array_value_cansleep(unsigned int array_size,
 				       unsigned long *value_bitmap);
 
 int gpiod_set_config(struct gpio_desc *desc, unsigned long config);
-int gpiod_set_debounce(struct gpio_desc *desc, unsigned int debounce);
+int gpiod_set_debounce(struct gpio_desc *desc, unsigned debounce);
 int gpiod_set_transitory(struct gpio_desc *desc, bool transitory);
 void gpiod_toggle_active_low(struct gpio_desc *desc);
 
@@ -172,6 +172,13 @@ int gpiod_set_consumer_name(struct gpio_desc *desc, const char *name);
 struct gpio_desc *gpio_to_desc(unsigned gpio);
 int desc_to_gpio(const struct gpio_desc *desc);
 
+/* Child properties interface */
+struct fwnode_handle;
+
+struct gpio_desc *fwnode_get_named_gpiod(struct fwnode_handle *fwnode,
+					 const char *propname, int index,
+					 enum gpiod_flags dflags,
+					 const char *label);
 struct gpio_desc *fwnode_gpiod_get_index(struct fwnode_handle *fwnode,
 					 const char *con_id, int index,
 					 enum gpiod_flags flags,
@@ -184,10 +191,7 @@ struct gpio_desc *devm_fwnode_gpiod_get_index(struct device *dev,
 
 #else /* CONFIG_GPIOLIB */
 
-#include <linux/err.h>
 #include <linux/kernel.h>
-
-#include <asm/bug.h>
 
 static inline int gpiod_count(struct device *dev, const char *con_id)
 {
@@ -349,18 +353,8 @@ static inline int gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 	WARN_ON(desc);
 	return -ENOSYS;
 }
-static inline int gpiod_enable_hw_timestamp_ns(struct gpio_desc *desc,
-					       unsigned long flags)
-{
-	WARN_ON(desc);
-	return -ENOSYS;
-}
-static inline int gpiod_disable_hw_timestamp_ns(struct gpio_desc *desc,
-						unsigned long flags)
-{
-	WARN_ON(desc);
-	return -ENOSYS;
-}
+
+
 static inline int gpiod_get_value(const struct gpio_desc *desc)
 {
 	/* GPIO can never have been requested */
@@ -487,7 +481,7 @@ static inline int gpiod_set_config(struct gpio_desc *desc, unsigned long config)
 	return -ENOSYS;
 }
 
-static inline int gpiod_set_debounce(struct gpio_desc *desc, unsigned int debounce)
+static inline int gpiod_set_debounce(struct gpio_desc *desc, unsigned debounce)
 {
 	/* GPIO can never have been requested */
 	WARN_ON(desc);
@@ -547,6 +541,18 @@ static inline int desc_to_gpio(const struct gpio_desc *desc)
 	return -EINVAL;
 }
 
+/* Child properties interface */
+struct fwnode_handle;
+
+static inline
+struct gpio_desc *fwnode_get_named_gpiod(struct fwnode_handle *fwnode,
+					 const char *propname, int index,
+					 enum gpiod_flags dflags,
+					 const char *label)
+{
+	return ERR_PTR(-ENOSYS);
+}
+
 static inline
 struct gpio_desc *fwnode_gpiod_get_index(struct fwnode_handle *fwnode,
 					 const char *con_id, int index,
@@ -579,6 +585,75 @@ struct gpio_desc *devm_fwnode_gpiod_get(struct device *dev,
 					   flags, label);
 }
 
+static inline
+struct gpio_desc *devm_fwnode_get_index_gpiod_from_child(struct device *dev,
+						const char *con_id, int index,
+						struct fwnode_handle *child,
+						enum gpiod_flags flags,
+						const char *label)
+{
+	return devm_fwnode_gpiod_get_index(dev, child, con_id, index,
+					   flags, label);
+}
+
+static inline
+struct gpio_desc *devm_fwnode_get_gpiod_from_child(struct device *dev,
+						   const char *con_id,
+						   struct fwnode_handle *child,
+						   enum gpiod_flags flags,
+						   const char *label)
+{
+	return devm_fwnode_gpiod_get_index(dev, child, con_id, 0, flags, label);
+}
+
+#if IS_ENABLED(CONFIG_GPIOLIB) && IS_ENABLED(CONFIG_OF_GPIO)
+struct device_node;
+
+struct gpio_desc *gpiod_get_from_of_node(struct device_node *node,
+					 const char *propname, int index,
+					 enum gpiod_flags dflags,
+					 const char *label);
+
+#else  /* CONFIG_GPIOLIB && CONFIG_OF_GPIO */
+
+struct device_node;
+
+static inline
+struct gpio_desc *gpiod_get_from_of_node(struct device_node *node,
+					 const char *propname, int index,
+					 enum gpiod_flags dflags,
+					 const char *label)
+{
+	return ERR_PTR(-ENOSYS);
+}
+
+#endif /* CONFIG_GPIOLIB && CONFIG_OF_GPIO */
+
+#ifdef CONFIG_GPIOLIB
+struct device_node;
+
+struct gpio_desc *devm_gpiod_get_from_of_node(struct device *dev,
+					      struct device_node *node,
+					      const char *propname, int index,
+					      enum gpiod_flags dflags,
+					      const char *label);
+
+#else  /* CONFIG_GPIOLIB */
+
+struct device_node;
+
+static inline
+struct gpio_desc *devm_gpiod_get_from_of_node(struct device *dev,
+					      struct device_node *node,
+					      const char *propname, int index,
+					      enum gpiod_flags dflags,
+					      const char *label)
+{
+	return ERR_PTR(-ENOSYS);
+}
+
+#endif /* CONFIG_GPIOLIB */
+
 struct acpi_gpio_params {
 	unsigned int crs_entry_index;
 	unsigned int line_index;
@@ -607,18 +682,19 @@ struct acpi_gpio_mapping {
 
 #if IS_ENABLED(CONFIG_GPIOLIB) && IS_ENABLED(CONFIG_ACPI)
 
+struct acpi_device;
+
 int acpi_dev_add_driver_gpios(struct acpi_device *adev,
 			      const struct acpi_gpio_mapping *gpios);
 void acpi_dev_remove_driver_gpios(struct acpi_device *adev);
 
 int devm_acpi_dev_add_driver_gpios(struct device *dev,
 				   const struct acpi_gpio_mapping *gpios);
-
-struct gpio_desc *acpi_get_and_request_gpiod(char *path, unsigned int pin, char *label);
+void devm_acpi_dev_remove_driver_gpios(struct device *dev);
 
 #else  /* CONFIG_GPIOLIB && CONFIG_ACPI */
 
-#include <linux/err.h>
+struct acpi_device;
 
 static inline int acpi_dev_add_driver_gpios(struct acpi_device *adev,
 			      const struct acpi_gpio_mapping *gpios)
@@ -632,12 +708,7 @@ static inline int devm_acpi_dev_add_driver_gpios(struct device *dev,
 {
 	return -ENXIO;
 }
-
-static inline struct gpio_desc *acpi_get_and_request_gpiod(char *path, unsigned int pin,
-							   char *label)
-{
-	return ERR_PTR(-ENOSYS);
-}
+static inline void devm_acpi_dev_remove_driver_gpios(struct device *dev) {}
 
 #endif /* CONFIG_GPIOLIB && CONFIG_ACPI */
 
@@ -650,8 +721,6 @@ int gpiod_export_link(struct device *dev, const char *name,
 void gpiod_unexport(struct gpio_desc *desc);
 
 #else  /* CONFIG_GPIOLIB && CONFIG_GPIO_SYSFS */
-
-#include <asm/errno.h>
 
 static inline int gpiod_export(struct gpio_desc *desc,
 			       bool direction_may_change)

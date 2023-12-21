@@ -53,7 +53,7 @@ static unsigned long int get_module_load_offset(void)
 		 */
 		if (module_load_offset == 0)
 			module_load_offset =
-				get_random_u32_inclusive(1, 1024) * PAGE_SIZE;
+				(get_random_int() % 1024 + 1) * PAGE_SIZE;
 		mutex_unlock(&module_kaslr_mutex);
 	}
 	return module_load_offset;
@@ -67,19 +67,17 @@ static unsigned long int get_module_load_offset(void)
 
 void *module_alloc(unsigned long size)
 {
-	gfp_t gfp_mask = GFP_KERNEL;
 	void *p;
 
 	if (PAGE_ALIGN(size) > MODULES_LEN)
 		return NULL;
 
 	p = __vmalloc_node_range(size, MODULE_ALIGN,
-				 MODULES_VADDR + get_module_load_offset(),
-				 MODULES_END, gfp_mask, PAGE_KERNEL,
-				 VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK,
-				 NUMA_NO_NODE, __builtin_return_address(0));
-
-	if (p && (kasan_alloc_module_shadow(p, size, gfp_mask) < 0)) {
+				    MODULES_VADDR + get_module_load_offset(),
+				    MODULES_END, GFP_KERNEL,
+				    PAGE_KERNEL, 0, NUMA_NO_NODE,
+				    __builtin_return_address(0));
+	if (p && (kasan_module_alloc(p, size) < 0)) {
 		vfree(p);
 		return NULL;
 	}
@@ -129,27 +127,22 @@ int apply_relocate(Elf32_Shdr *sechdrs,
 	return 0;
 }
 #else /*X86_64*/
-static int __write_relocate_add(Elf64_Shdr *sechdrs,
+static int __apply_relocate_add(Elf64_Shdr *sechdrs,
 		   const char *strtab,
 		   unsigned int symindex,
 		   unsigned int relsec,
 		   struct module *me,
-		   void *(*write)(void *dest, const void *src, size_t len),
-		   bool apply)
+		   void *(*write)(void *dest, const void *src, size_t len))
 {
 	unsigned int i;
 	Elf64_Rela *rel = (void *)sechdrs[relsec].sh_addr;
 	Elf64_Sym *sym;
 	void *loc;
 	u64 val;
-	u64 zero = 0ULL;
 
-	DEBUGP("%s relocate section %u to %u\n",
-	       apply ? "Applying" : "Clearing",
+	DEBUGP("Applying relocate section %u to %u\n",
 	       relsec, sechdrs[relsec].sh_info);
 	for (i = 0; i < sechdrs[relsec].sh_size / sizeof(*rel); i++) {
-		size_t size;
-
 		/* This is where to make the change */
 		loc = (void *)sechdrs[sechdrs[relsec].sh_info].sh_addr
 			+ rel[i].r_offset;
@@ -167,52 +160,59 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 
 		switch (ELF64_R_TYPE(rel[i].r_info)) {
 		case R_X86_64_NONE:
-			continue;  /* nothing to write */
+			break;
 		case R_X86_64_64:
-			size = 8;
+			if (*(u64 *)loc != 0)
+				goto invalid_relocation;
+			write(loc, &val, 8);
 			break;
 		case R_X86_64_32:
-			if (val != *(u32 *)&val)
+			if (*(u32 *)loc != 0)
+				goto invalid_relocation;
+			write(loc, &val, 4);
+			if (val != *(u32 *)loc)
 				goto overflow;
-			size = 4;
 			break;
 		case R_X86_64_32S:
-			if ((s64)val != *(s32 *)&val)
+			if (*(s32 *)loc != 0)
+				goto invalid_relocation;
+			write(loc, &val, 4);
+			if ((s64)val != *(s32 *)loc)
 				goto overflow;
-			size = 4;
 			break;
 		case R_X86_64_PC32:
 		case R_X86_64_PLT32:
+			if (*(u32 *)loc != 0)
+				goto invalid_relocation;
 			val -= (u64)loc;
-			size = 4;
+			write(loc, &val, 4);
+#if 0
+			if ((s64)val != *(s32 *)loc)
+				goto overflow;
+#endif
 			break;
 		case R_X86_64_PC64:
+			if (*(u64 *)loc != 0)
+				goto invalid_relocation;
 			val -= (u64)loc;
-			size = 8;
+			write(loc, &val, 8);
 			break;
+		case R_X86_64_8:
+			if (!strncmp(strtab + sym->st_name, "__typeid__", 10))
+				break;
+			/* fallthrough */
 		default:
 			pr_err("%s: Unknown rela relocation: %llu\n",
 			       me->name, ELF64_R_TYPE(rel[i].r_info));
 			return -ENOEXEC;
 		}
-
-		if (apply) {
-			if (memcmp(loc, &zero, size)) {
-				pr_err("x86/modules: Invalid relocation target, existing value is nonzero for type %d, loc %p, val %Lx\n",
-				       (int)ELF64_R_TYPE(rel[i].r_info), loc, val);
-				return -ENOEXEC;
-			}
-			write(loc, &val, size);
-		} else {
-			if (memcmp(loc, &val, size)) {
-				pr_warn("x86/modules: Invalid relocation target, existing value does not match expected value for type %d, loc %p, val %Lx\n",
-					(int)ELF64_R_TYPE(rel[i].r_info), loc, val);
-				return -ENOEXEC;
-			}
-			write(loc, &zero, size);
-		}
 	}
 	return 0;
+
+invalid_relocation:
+	pr_err("x86/modules: Skipping invalid relocation target, existing value is nonzero for type %d, loc %p, val %Lx\n",
+	       (int)ELF64_R_TYPE(rel[i].r_info), loc, val);
+	return -ENOEXEC;
 
 overflow:
 	pr_err("overflow in relocation type %d val %Lx\n",
@@ -222,12 +222,11 @@ overflow:
 	return -ENOEXEC;
 }
 
-static int write_relocate_add(Elf64_Shdr *sechdrs,
-			      const char *strtab,
-			      unsigned int symindex,
-			      unsigned int relsec,
-			      struct module *me,
-			      bool apply)
+int apply_relocate_add(Elf64_Shdr *sechdrs,
+		   const char *strtab,
+		   unsigned int symindex,
+		   unsigned int relsec,
+		   struct module *me)
 {
 	int ret;
 	bool early = me->state == MODULE_STATE_UNFORMED;
@@ -238,8 +237,8 @@ static int write_relocate_add(Elf64_Shdr *sechdrs,
 		mutex_lock(&text_mutex);
 	}
 
-	ret = __write_relocate_add(sechdrs, strtab, symindex, relsec, me,
-				   write, apply);
+	ret = __apply_relocate_add(sechdrs, strtab, symindex, relsec, me,
+				   write);
 
 	if (!early) {
 		text_poke_sync();
@@ -249,39 +248,20 @@ static int write_relocate_add(Elf64_Shdr *sechdrs,
 	return ret;
 }
 
-int apply_relocate_add(Elf64_Shdr *sechdrs,
-		   const char *strtab,
-		   unsigned int symindex,
-		   unsigned int relsec,
-		   struct module *me)
-{
-	return write_relocate_add(sechdrs, strtab, symindex, relsec, me, true);
-}
-
-#ifdef CONFIG_LIVEPATCH
-void clear_relocate_add(Elf64_Shdr *sechdrs,
-			const char *strtab,
-			unsigned int symindex,
-			unsigned int relsec,
-			struct module *me)
-{
-	write_relocate_add(sechdrs, strtab, symindex, relsec, me, false);
-}
-#endif
-
 #endif
 
 int module_finalize(const Elf_Ehdr *hdr,
 		    const Elf_Shdr *sechdrs,
 		    struct module *me)
 {
-	const Elf_Shdr *s, *alt = NULL, *locks = NULL,
+	const Elf_Shdr *s, *text = NULL, *alt = NULL, *locks = NULL,
 		*para = NULL, *orc = NULL, *orc_ip = NULL,
-		*retpolines = NULL, *returns = NULL, *ibt_endbr = NULL,
-		*calls = NULL, *cfi = NULL;
+		*retpolines = NULL, *returns = NULL;
 	char *secstrings = (void *)hdr + sechdrs[hdr->e_shstrndx].sh_offset;
 
 	for (s = sechdrs; s < sechdrs + hdr->e_shnum; s++) {
+		if (!strcmp(".text", secstrings + s->sh_name))
+			text = s;
 		if (!strcmp(".altinstructions", secstrings + s->sh_name))
 			alt = s;
 		if (!strcmp(".smp_locks", secstrings + s->sh_name))
@@ -296,38 +276,8 @@ int module_finalize(const Elf_Ehdr *hdr,
 			retpolines = s;
 		if (!strcmp(".return_sites", secstrings + s->sh_name))
 			returns = s;
-		if (!strcmp(".call_sites", secstrings + s->sh_name))
-			calls = s;
-		if (!strcmp(".cfi_sites", secstrings + s->sh_name))
-			cfi = s;
-		if (!strcmp(".ibt_endbr_seal", secstrings + s->sh_name))
-			ibt_endbr = s;
 	}
 
-	/*
-	 * See alternative_instructions() for the ordering rules between the
-	 * various patching types.
-	 */
-	if (para) {
-		void *pseg = (void *)para->sh_addr;
-		apply_paravirt(pseg, pseg + para->sh_size);
-	}
-	if (retpolines || cfi) {
-		void *rseg = NULL, *cseg = NULL;
-		unsigned int rsize = 0, csize = 0;
-
-		if (retpolines) {
-			rseg = (void *)retpolines->sh_addr;
-			rsize = retpolines->sh_size;
-		}
-
-		if (cfi) {
-			cseg = (void *)cfi->sh_addr;
-			csize = cfi->sh_size;
-		}
-
-		apply_fineibt(rseg, rseg + rsize, cseg, cseg + csize);
-	}
 	if (retpolines) {
 		void *rseg = (void *)retpolines->sh_addr;
 		apply_retpolines(rseg, rseg + retpolines->sh_size);
@@ -341,33 +291,21 @@ int module_finalize(const Elf_Ehdr *hdr,
 		void *aseg = (void *)alt->sh_addr;
 		apply_alternatives(aseg, aseg + alt->sh_size);
 	}
-	if (calls || para) {
-		struct callthunk_sites cs = {};
-
-		if (calls) {
-			cs.call_start = (void *)calls->sh_addr;
-			cs.call_end = (void *)calls->sh_addr + calls->sh_size;
-		}
-
-		if (para) {
-			cs.pv_start = (void *)para->sh_addr;
-			cs.pv_end = (void *)para->sh_addr + para->sh_size;
-		}
-
-		callthunks_patch_module_calls(&cs, me);
-	}
-	if (ibt_endbr) {
-		void *iseg = (void *)ibt_endbr->sh_addr;
-		apply_seal_endbr(iseg, iseg + ibt_endbr->sh_size);
-	}
-	if (locks) {
+	if (locks && text) {
 		void *lseg = (void *)locks->sh_addr;
-		void *text = me->mem[MOD_TEXT].base;
-		void *text_end = text + me->mem[MOD_TEXT].size;
+		void *tseg = (void *)text->sh_addr;
 		alternatives_smp_module_add(me, me->name,
 					    lseg, lseg + locks->sh_size,
-					    text, text_end);
+					    tseg, tseg + text->sh_size);
 	}
+
+	if (para) {
+		void *pseg = (void *)para->sh_addr;
+		apply_paravirt(pseg, pseg + para->sh_size);
+	}
+
+	/* make jump label nops */
+	jump_label_apply_nops(me);
 
 	if (orc && orc_ip)
 		unwind_module_init(me, (void *)orc_ip->sh_addr, orc_ip->sh_size,

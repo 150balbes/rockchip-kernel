@@ -283,8 +283,7 @@ static const struct i2c_algorithm kempld_i2c_algorithm = {
 static const struct i2c_adapter kempld_i2c_adapter = {
 	.owner		= THIS_MODULE,
 	.name		= "i2c-kempld",
-	.class		= I2C_CLASS_HWMON | I2C_CLASS_SPD |
-			  I2C_CLASS_DEPRECATED,
+	.class		= I2C_CLASS_HWMON | I2C_CLASS_SPD,
 	.algo		= &kempld_i2c_algorithm,
 };
 
@@ -303,7 +302,6 @@ static int kempld_i2c_probe(struct platform_device *pdev)
 	i2c->dev = &pdev->dev;
 	i2c->adap = kempld_i2c_adapter;
 	i2c->adap.dev.parent = i2c->dev;
-	ACPI_COMPANION_SET(&i2c->adap.dev, ACPI_COMPANION(&pdev->dev));
 	i2c_set_adapdata(&i2c->adap, i2c);
 	platform_set_drvdata(pdev, i2c);
 
@@ -329,7 +327,7 @@ static int kempld_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void kempld_i2c_remove(struct platform_device *pdev)
+static int kempld_i2c_remove(struct platform_device *pdev)
 {
 	struct kempld_i2c_data *i2c = platform_get_drvdata(pdev);
 	struct kempld_device_data *pld = i2c->pld;
@@ -348,6 +346,8 @@ static void kempld_i2c_remove(struct platform_device *pdev)
 	kempld_release_mutex(pld);
 
 	i2c_del_adapter(&i2c->adap);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -387,7 +387,7 @@ static struct platform_driver kempld_i2c_driver = {
 		.name = "kempld-i2c",
 	},
 	.probe		= kempld_i2c_probe,
-	.remove_new	= kempld_i2c_remove,
+	.remove		= kempld_i2c_remove,
 	.suspend	= kempld_i2c_suspend,
 	.resume		= kempld_i2c_resume,
 };

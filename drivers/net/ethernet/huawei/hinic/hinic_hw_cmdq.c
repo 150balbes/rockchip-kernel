@@ -82,6 +82,11 @@
 						     struct hinic_func_to_io, \
 						     cmdqs)
 
+enum cmdq_wqe_type {
+	WQE_LCMD_TYPE = 0,
+	WQE_SCMD_TYPE = 1,
+};
+
 enum completion_format {
 	COMPLETE_DIRECT = 0,
 	COMPLETE_SGE    = 1,
@@ -218,7 +223,7 @@ static void cmdq_prepare_wqe_ctrl(struct hinic_cmdq_wqe *wqe, int wrapped,
 	saved_data = CMDQ_WQE_HEADER(wqe)->saved_data;
 	saved_data = HINIC_SAVED_DATA_CLEAR(saved_data, ARM);
 
-	if (cmd == CMDQ_SET_ARM_CMD && mod == HINIC_MOD_COMM)
+	if ((cmd == CMDQ_SET_ARM_CMD) && (mod == HINIC_MOD_COMM))
 		CMDQ_WQE_HEADER(wqe)->saved_data |=
 						HINIC_SAVED_DATA_SET(1, ARM);
 	else
@@ -504,8 +509,8 @@ int hinic_cmdq_direct_resp(struct hinic_cmdqs *cmdqs,
  *
  * Return 0 - Success, negative - Failure
  **/
-static int hinic_set_arm_bit(struct hinic_cmdqs *cmdqs,
-			     enum hinic_set_arm_qtype q_type, u32 q_id)
+int hinic_set_arm_bit(struct hinic_cmdqs *cmdqs,
+		      enum hinic_set_arm_qtype q_type, u32 q_id)
 {
 	struct hinic_cmdq *cmdq = &cmdqs->cmdq[HINIC_CMDQ_SYNC];
 	struct hinic_hwif *hwif = cmdqs->hwif;
@@ -589,7 +594,7 @@ static void cmdq_update_errcode(struct hinic_cmdq *cmdq, u16 prod_idx,
 }
 
 /**
- * cmdq_sync_cmd_handler - cmdq completion event handler for sync command
+ * cmdq_arm_ceq_handler - cmdq completion event handler for sync command
  * @cmdq: the cmdq of the command
  * @cons_idx: the consumer index to update the error code for
  * @errcode: the error code

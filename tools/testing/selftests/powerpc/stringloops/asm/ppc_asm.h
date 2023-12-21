@@ -9,7 +9,6 @@
 
 #define _GLOBAL(A) FUNC_START(test_ ## A)
 #define _GLOBAL_TOC(A) FUNC_START(test_ ## A)
-#define CFUNC(name) name
 
 #define CONFIG_ALTIVEC
 

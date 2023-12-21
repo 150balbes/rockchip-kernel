@@ -136,12 +136,13 @@ static int eeprom_detect(struct i2c_client *client, struct i2c_board_info *info)
 	 && !i2c_check_functionality(adapter, I2C_FUNC_SMBUS_READ_I2C_BLOCK))
 		return -ENODEV;
 
-	strscpy(info->type, "eeprom", I2C_NAME_SIZE);
+	strlcpy(info->type, "eeprom", I2C_NAME_SIZE);
 
 	return 0;
 }
 
-static int eeprom_probe(struct i2c_client *client)
+static int eeprom_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct eeprom_data *data;
@@ -182,9 +183,11 @@ static int eeprom_probe(struct i2c_client *client)
 	return sysfs_create_bin_file(&client->dev.kobj, &eeprom_attr);
 }
 
-static void eeprom_remove(struct i2c_client *client)
+static int eeprom_remove(struct i2c_client *client)
 {
 	sysfs_remove_bin_file(&client->dev.kobj, &eeprom_attr);
+
+	return 0;
 }
 
 static const struct i2c_device_id eeprom_id[] = {

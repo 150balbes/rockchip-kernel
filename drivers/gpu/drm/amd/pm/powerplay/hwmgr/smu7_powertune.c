@@ -852,14 +852,12 @@ static const struct gpu_pt_config_reg DIDTConfig_VegaM[] =
 };
 static int smu7_enable_didt(struct pp_hwmgr *hwmgr, const bool enable)
 {
-	struct amdgpu_device *adev = hwmgr->adev;
 	uint32_t en = enable ? 1 : 0;
 	uint32_t block_en = 0;
 	int32_t result = 0;
 	uint32_t didt_block;
 
-	if ((hwmgr->chip_id == CHIP_POLARIS11) &&
-	    (adev->pdev->subsystem_vendor != 0x106B))
+	if (hwmgr->chip_id == CHIP_POLARIS11)
 		didt_block = Polaris11_DIDTBlock_Info;
 	else
 		didt_block = DIDTBlock_Info;
@@ -964,7 +962,6 @@ int smu7_enable_didt_config(struct pp_hwmgr *hwmgr)
 	uint32_t num_se = 0;
 	uint32_t count, value, value2;
 	struct amdgpu_device *adev = hwmgr->adev;
-	uint32_t efuse;
 
 	num_se = adev->gfx.config.max_shader_engines;
 
@@ -973,7 +970,7 @@ int smu7_enable_didt_config(struct pp_hwmgr *hwmgr)
 	    PP_CAP(PHM_PlatformCaps_TDRamping) ||
 	    PP_CAP(PHM_PlatformCaps_TCPRamping)) {
 
-		amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
+		amdgpu_gfx_rlc_enter_safe_mode(adev);
 		mutex_lock(&adev->grbm_idx_mutex);
 		value = 0;
 		value2 = cgs_read_register(hwmgr->device, mmGRBM_GFX_INDEX);
@@ -991,9 +988,7 @@ int smu7_enable_didt_config(struct pp_hwmgr *hwmgr)
 			} else if (hwmgr->chip_id == CHIP_POLARIS11) {
 				result = smu7_program_pt_config_registers(hwmgr, GCCACConfig_Polaris11);
 				PP_ASSERT_WITH_CODE((result == 0), "DIDT Config failed.", goto error);
-
-				if (ASICID_IS_P21(adev->pdev->device, adev->pdev->revision) ||
-				    ASICID_IS_P31(adev->pdev->device, adev->pdev->revision))
+				if (hwmgr->is_kicker)
 					result = smu7_program_pt_config_registers(hwmgr, DIDTConfig_Polaris11_Kicker);
 				else
 					result = smu7_program_pt_config_registers(hwmgr, DIDTConfig_Polaris11);
@@ -1021,40 +1016,15 @@ int smu7_enable_didt_config(struct pp_hwmgr *hwmgr)
 						NULL);
 			PP_ASSERT_WITH_CODE((0 == result),
 					"Failed to enable DPM DIDT.", goto error);
-
-			if (ASICID_IS_P21(adev->pdev->device, adev->pdev->revision) ||
-			    ASICID_IS_P31(adev->pdev->device, adev->pdev->revision)) {
-				result = smum_send_msg_to_smc(hwmgr,
-							(uint16_t)(PPSMC_MSG_EnableDpmMcBlackout),
-							NULL);
-				PP_ASSERT_WITH_CODE((0 == result),
-						"Failed to enable workaround for CRC issue.", goto error);
-			} else {
-				atomctrl_read_efuse(hwmgr, 547, 547, &efuse);
-				if (efuse == 1) {
-					result = smum_send_msg_to_smc(hwmgr,
-								(uint16_t)(PPSMC_MSG_EnableDpmMcBlackout),
-								NULL);
-					PP_ASSERT_WITH_CODE((0 == result),
-							"Failed to enable workaround for CRC issue.", goto error);
-				} else {
-					result = smum_send_msg_to_smc(hwmgr,
-								(uint16_t)(PPSMC_MSG_DisableDpmMcBlackout),
-								NULL);
-					PP_ASSERT_WITH_CODE((0 == result),
-							"Failed to enable workaround for CRC issue.", goto error);
-				}
-			}
 		}
-
 		mutex_unlock(&adev->grbm_idx_mutex);
-		amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+		amdgpu_gfx_rlc_exit_safe_mode(adev);
 	}
 
 	return 0;
 error:
 	mutex_unlock(&adev->grbm_idx_mutex);
-	amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+	amdgpu_gfx_rlc_exit_safe_mode(adev);
 	return result;
 }
 
@@ -1068,7 +1038,7 @@ int smu7_disable_didt_config(struct pp_hwmgr *hwmgr)
 	    PP_CAP(PHM_PlatformCaps_TDRamping) ||
 	    PP_CAP(PHM_PlatformCaps_TCPRamping)) {
 
-		amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
+		amdgpu_gfx_rlc_enter_safe_mode(adev);
 
 		result = smu7_enable_didt(hwmgr, false);
 		PP_ASSERT_WITH_CODE((result == 0),
@@ -1081,12 +1051,12 @@ int smu7_disable_didt_config(struct pp_hwmgr *hwmgr)
 			PP_ASSERT_WITH_CODE((0 == result),
 					"Failed to disable DPM DIDT.", goto error);
 		}
-		amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+		amdgpu_gfx_rlc_exit_safe_mode(adev);
 	}
 
 	return 0;
 error:
-	amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+	amdgpu_gfx_rlc_exit_safe_mode(adev);
 	return result;
 }
 

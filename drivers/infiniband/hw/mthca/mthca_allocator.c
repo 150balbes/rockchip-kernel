@@ -51,7 +51,7 @@ u32 mthca_alloc(struct mthca_alloc *alloc)
 	}
 
 	if (obj < alloc->max) {
-		__set_bit(obj, alloc->table);
+		set_bit(obj, alloc->table);
 		obj |= alloc->top;
 	} else
 		obj = -1;
@@ -69,7 +69,7 @@ void mthca_free(struct mthca_alloc *alloc, u32 obj)
 
 	spin_lock_irqsave(&alloc->lock, flags);
 
-	__clear_bit(obj, alloc->table);
+	clear_bit(obj, alloc->table);
 	alloc->last = min(alloc->last, obj);
 	alloc->top = (alloc->top + alloc->max) & alloc->mask;
 
@@ -79,6 +79,8 @@ void mthca_free(struct mthca_alloc *alloc, u32 obj)
 int mthca_alloc_init(struct mthca_alloc *alloc, u32 num, u32 mask,
 		     u32 reserved)
 {
+	int i;
+
 	/* num must be a power of 2 */
 	if (num != 1 << (ffs(num) - 1))
 		return -EINVAL;
@@ -88,18 +90,21 @@ int mthca_alloc_init(struct mthca_alloc *alloc, u32 num, u32 mask,
 	alloc->max  = num;
 	alloc->mask = mask;
 	spin_lock_init(&alloc->lock);
-	alloc->table = bitmap_zalloc(num, GFP_KERNEL);
+	alloc->table = kmalloc_array(BITS_TO_LONGS(num), sizeof(long),
+				     GFP_KERNEL);
 	if (!alloc->table)
 		return -ENOMEM;
 
-	bitmap_set(alloc->table, 0, reserved);
+	bitmap_zero(alloc->table, num);
+	for (i = 0; i < reserved; ++i)
+		set_bit(i, alloc->table);
 
 	return 0;
 }
 
 void mthca_alloc_cleanup(struct mthca_alloc *alloc)
 {
-	bitmap_free(alloc->table);
+	kfree(alloc->table);
 }
 
 /*

@@ -515,7 +515,7 @@ err:
 	return ret;
 }
 
-static void zd1301_demod_remove(struct platform_device *pdev)
+static int zd1301_demod_remove(struct platform_device *pdev)
 {
 	struct zd1301_demod_dev *dev = platform_get_drvdata(pdev);
 
@@ -523,6 +523,8 @@ static void zd1301_demod_remove(struct platform_device *pdev)
 
 	i2c_del_adapter(&dev->adapter);
 	kfree(dev);
+
+	return 0;
 }
 
 static struct platform_driver zd1301_demod_driver = {
@@ -531,7 +533,7 @@ static struct platform_driver zd1301_demod_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe          = zd1301_demod_probe,
-	.remove_new     = zd1301_demod_remove,
+	.remove         = zd1301_demod_remove,
 };
 module_platform_driver(zd1301_demod_driver);
 

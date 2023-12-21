@@ -10,37 +10,33 @@
 #include <linux/iommu.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 
-#include <drm/drm_aperture.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_framebuffer.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_prime.h>
 #include <drm/drm_vblank.h>
 
-#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
-#include <asm/dma-iommu.h>
-#endif
-
-#include "dc.h"
 #include "drm.h"
 #include "gem.h"
-#include "uapi.h"
 
 #define DRIVER_NAME "tegra"
 #define DRIVER_DESC "NVIDIA Tegra graphics"
 #define DRIVER_DATE "20120330"
-#define DRIVER_MAJOR 1
+#define DRIVER_MAJOR 0
 #define DRIVER_MINOR 0
 #define DRIVER_PATCHLEVEL 0
 
 #define CARVEOUT_SZ SZ_64M
 #define CDMA_GATHER_FETCHES_MAX_NB 16383
+
+struct tegra_drm_file {
+	struct idr contexts;
+	struct mutex lock;
+};
 
 static int tegra_atomic_check(struct drm_device *drm,
 			      struct drm_atomic_state *state)
@@ -56,20 +52,12 @@ static int tegra_atomic_check(struct drm_device *drm,
 
 static const struct drm_mode_config_funcs tegra_drm_mode_config_funcs = {
 	.fb_create = tegra_fb_create,
+#ifdef CONFIG_DRM_FBDEV_EMULATION
+	.output_poll_changed = drm_fb_helper_output_poll_changed,
+#endif
 	.atomic_check = tegra_atomic_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
-
-static void tegra_atomic_post_commit(struct drm_device *drm,
-				     struct drm_atomic_state *old_state)
-{
-	struct drm_crtc_state *old_crtc_state __maybe_unused;
-	struct drm_crtc *crtc;
-	unsigned int i;
-
-	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i)
-		tegra_crtc_atomic_post_commit(crtc, old_state);
-}
 
 static void tegra_atomic_commit_tail(struct drm_atomic_state *old_state)
 {
@@ -77,21 +65,16 @@ static void tegra_atomic_commit_tail(struct drm_atomic_state *old_state)
 	struct tegra_drm *tegra = drm->dev_private;
 
 	if (tegra->hub) {
-		bool fence_cookie = dma_fence_begin_signalling();
-
 		drm_atomic_helper_commit_modeset_disables(drm, old_state);
 		tegra_display_hub_atomic_commit(drm, old_state);
 		drm_atomic_helper_commit_planes(drm, old_state, 0);
 		drm_atomic_helper_commit_modeset_enables(drm, old_state);
 		drm_atomic_helper_commit_hw_done(old_state);
-		dma_fence_end_signalling(fence_cookie);
 		drm_atomic_helper_wait_for_vblanks(drm, old_state);
 		drm_atomic_helper_cleanup_planes(drm, old_state);
 	} else {
 		drm_atomic_helper_commit_tail_rpm(old_state);
 	}
-
-	tegra_atomic_post_commit(drm, old_state);
 }
 
 static const struct drm_mode_config_helper_funcs
@@ -107,9 +90,7 @@ static int tegra_drm_open(struct drm_device *drm, struct drm_file *filp)
 	if (!fpriv)
 		return -ENOMEM;
 
-	idr_init_base(&fpriv->legacy_contexts, 1);
-	xa_init_flags(&fpriv->contexts, XA_FLAGS_ALLOC1);
-	xa_init(&fpriv->syncpoints);
+	idr_init_base(&fpriv->contexts, 1);
 	mutex_init(&fpriv->lock);
 	filp->driver_priv = fpriv;
 
@@ -119,8 +100,21 @@ static int tegra_drm_open(struct drm_device *drm, struct drm_file *filp)
 static void tegra_drm_context_free(struct tegra_drm_context *context)
 {
 	context->client->ops->close_channel(context);
-	pm_runtime_put(context->client->base.dev);
 	kfree(context);
+}
+
+static struct host1x_bo *
+host1x_bo_lookup(struct drm_file *file, u32 handle)
+{
+	struct drm_gem_object *gem;
+	struct tegra_bo *bo;
+
+	gem = drm_gem_object_lookup(file, handle);
+	if (!gem)
+		return NULL;
+
+	bo = to_tegra_bo(gem);
+	return &bo->base;
 }
 
 static int host1x_reloc_copy_from_user(struct host1x_reloc *dest,
@@ -153,11 +147,11 @@ static int host1x_reloc_copy_from_user(struct host1x_reloc *dest,
 
 	dest->flags = HOST1X_RELOC_READ | HOST1X_RELOC_WRITE;
 
-	dest->cmdbuf.bo = tegra_gem_lookup(file, cmdbuf);
+	dest->cmdbuf.bo = host1x_bo_lookup(file, cmdbuf);
 	if (!dest->cmdbuf.bo)
 		return -ENOENT;
 
-	dest->target.bo = tegra_gem_lookup(file, target);
+	dest->target.bo = host1x_bo_lookup(file, target);
 	if (!dest->target.bo)
 		return -ENOENT;
 
@@ -177,7 +171,7 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 	struct drm_tegra_syncpt syncpt;
 	struct host1x *host1x = dev_get_drvdata(drm->dev->parent);
 	struct drm_gem_object **refs;
-	struct host1x_syncpt *sp = NULL;
+	struct host1x_syncpt *sp;
 	struct host1x_job *job;
 	unsigned int num_refs;
 	int err;
@@ -195,7 +189,7 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 		return -EINVAL;
 
 	job = host1x_job_alloc(context->channel, args->num_cmdbufs,
-			       args->num_relocs, false);
+			       args->num_relocs);
 	if (!job)
 		return -ENOMEM;
 
@@ -203,7 +197,6 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 	job->client = client;
 	job->class = client->class;
 	job->serialize = true;
-	job->syncpt_recovery = true;
 
 	/*
 	 * Track referenced BOs so that they can be unreferenced after the
@@ -240,7 +233,7 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 			goto fail;
 		}
 
-		bo = tegra_gem_lookup(file, cmdbuf.handle);
+		bo = host1x_bo_lookup(file, cmdbuf.handle);
 		if (!bo) {
 			err = -ENOENT;
 			goto fail;
@@ -305,8 +298,8 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 		goto fail;
 	}
 
-	/* Syncpoint ref will be dropped on job release. */
-	sp = host1x_syncpt_get_by_id(host1x, syncpt.id);
+	/* check whether syncpoint ID is valid */
+	sp = host1x_syncpt_get(host1x, syncpt.id);
 	if (!sp) {
 		err = -ENOENT;
 		goto fail;
@@ -315,7 +308,7 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 	job->is_addr_reg = context->client->ops->is_addr_reg;
 	job->is_valid_class = context->client->ops->is_valid_class;
 	job->syncpt_incrs = syncpt.incrs;
-	job->syncpt = sp;
+	job->syncpt_id = syncpt.id;
 	job->timeout = 10000;
 
 	if (args->timeout && args->timeout < 10000)
@@ -387,7 +380,7 @@ static int tegra_syncpt_read(struct drm_device *drm, void *data,
 	struct drm_tegra_syncpt_read *args = data;
 	struct host1x_syncpt *sp;
 
-	sp = host1x_syncpt_get_by_id_noref(host, args->id);
+	sp = host1x_syncpt_get(host, args->id);
 	if (!sp)
 		return -EINVAL;
 
@@ -402,7 +395,7 @@ static int tegra_syncpt_incr(struct drm_device *drm, void *data,
 	struct drm_tegra_syncpt_incr *args = data;
 	struct host1x_syncpt *sp;
 
-	sp = host1x_syncpt_get_by_id_noref(host1x, args->id);
+	sp = host1x_syncpt_get(host1x, args->id);
 	if (!sp)
 		return -EINVAL;
 
@@ -416,7 +409,7 @@ static int tegra_syncpt_wait(struct drm_device *drm, void *data,
 	struct drm_tegra_syncpt_wait *args = data;
 	struct host1x_syncpt *sp;
 
-	sp = host1x_syncpt_get_by_id_noref(host1x, args->id);
+	sp = host1x_syncpt_get(host1x, args->id);
 	if (!sp)
 		return -EINVAL;
 
@@ -431,20 +424,13 @@ static int tegra_client_open(struct tegra_drm_file *fpriv,
 {
 	int err;
 
-	err = pm_runtime_resume_and_get(client->base.dev);
-	if (err)
-		return err;
-
 	err = client->ops->open_channel(client, context);
-	if (err < 0) {
-		pm_runtime_put(client->base.dev);
+	if (err < 0)
 		return err;
-	}
 
-	err = idr_alloc(&fpriv->legacy_contexts, context, 1, 0, GFP_KERNEL);
+	err = idr_alloc(&fpriv->contexts, context, 1, 0, GFP_KERNEL);
 	if (err < 0) {
 		client->ops->close_channel(context);
-		pm_runtime_put(client->base.dev);
 		return err;
 	}
 
@@ -497,13 +483,13 @@ static int tegra_close_channel(struct drm_device *drm, void *data,
 
 	mutex_lock(&fpriv->lock);
 
-	context = idr_find(&fpriv->legacy_contexts, args->context);
+	context = idr_find(&fpriv->contexts, args->context);
 	if (!context) {
 		err = -EINVAL;
 		goto unlock;
 	}
 
-	idr_remove(&fpriv->legacy_contexts, context->id);
+	idr_remove(&fpriv->contexts, context->id);
 	tegra_drm_context_free(context);
 
 unlock:
@@ -522,7 +508,7 @@ static int tegra_get_syncpt(struct drm_device *drm, void *data,
 
 	mutex_lock(&fpriv->lock);
 
-	context = idr_find(&fpriv->legacy_contexts, args->context);
+	context = idr_find(&fpriv->contexts, args->context);
 	if (!context) {
 		err = -ENODEV;
 		goto unlock;
@@ -551,7 +537,7 @@ static int tegra_submit(struct drm_device *drm, void *data,
 
 	mutex_lock(&fpriv->lock);
 
-	context = idr_find(&fpriv->legacy_contexts, args->context);
+	context = idr_find(&fpriv->contexts, args->context);
 	if (!context) {
 		err = -ENODEV;
 		goto unlock;
@@ -576,7 +562,7 @@ static int tegra_get_syncpt_base(struct drm_device *drm, void *data,
 
 	mutex_lock(&fpriv->lock);
 
-	context = idr_find(&fpriv->legacy_contexts, args->context);
+	context = idr_find(&fpriv->contexts, args->context);
 	if (!context) {
 		err = -ENODEV;
 		goto unlock;
@@ -745,25 +731,10 @@ static int tegra_gem_get_flags(struct drm_device *drm, void *data,
 
 static const struct drm_ioctl_desc tegra_drm_ioctls[] = {
 #ifdef CONFIG_DRM_TEGRA_STAGING
-	DRM_IOCTL_DEF_DRV(TEGRA_CHANNEL_OPEN, tegra_drm_ioctl_channel_open,
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_CREATE, tegra_gem_create,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_CHANNEL_CLOSE, tegra_drm_ioctl_channel_close,
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_MMAP, tegra_gem_mmap,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_CHANNEL_MAP, tegra_drm_ioctl_channel_map,
-			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_CHANNEL_UNMAP, tegra_drm_ioctl_channel_unmap,
-			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_CHANNEL_SUBMIT, tegra_drm_ioctl_channel_submit,
-			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPOINT_ALLOCATE, tegra_drm_ioctl_syncpoint_allocate,
-			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPOINT_FREE, tegra_drm_ioctl_syncpoint_free,
-			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPOINT_WAIT, tegra_drm_ioctl_syncpoint_wait,
-			  DRM_RENDER_ALLOW),
-
-	DRM_IOCTL_DEF_DRV(TEGRA_GEM_CREATE, tegra_gem_create, DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(TEGRA_GEM_MMAP, tegra_gem_mmap, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPT_READ, tegra_syncpt_read,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPT_INCR, tegra_syncpt_incr,
@@ -817,11 +788,10 @@ static void tegra_drm_postclose(struct drm_device *drm, struct drm_file *file)
 	struct tegra_drm_file *fpriv = file->driver_priv;
 
 	mutex_lock(&fpriv->lock);
-	idr_for_each(&fpriv->legacy_contexts, tegra_drm_context_cleanup, NULL);
-	tegra_drm_uapi_close_file(fpriv);
+	idr_for_each(&fpriv->contexts, tegra_drm_context_cleanup, NULL);
 	mutex_unlock(&fpriv->lock);
 
-	idr_destroy(&fpriv->legacy_contexts);
+	idr_destroy(&fpriv->contexts);
 	mutex_destroy(&fpriv->lock);
 	kfree(fpriv);
 }
@@ -877,16 +847,23 @@ static void tegra_debugfs_init(struct drm_minor *minor)
 }
 #endif
 
-static const struct drm_driver tegra_drm_driver = {
+static struct drm_driver tegra_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM |
-			   DRIVER_ATOMIC | DRIVER_RENDER | DRIVER_SYNCOBJ,
+			   DRIVER_ATOMIC | DRIVER_RENDER,
 	.open = tegra_drm_open,
 	.postclose = tegra_drm_postclose,
+	.lastclose = drm_fb_helper_lastclose,
 
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = tegra_debugfs_init,
 #endif
 
+	.gem_free_object_unlocked = tegra_bo_free_object,
+	.gem_vm_ops = &tegra_bo_vm_ops,
+
+	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+	.gem_prime_export = tegra_gem_prime_export,
 	.gem_prime_import = tegra_gem_prime_import,
 
 	.dumb_create = tegra_bo_dumb_create,
@@ -906,14 +883,6 @@ static const struct drm_driver tegra_drm_driver = {
 int tegra_drm_register_client(struct tegra_drm *tegra,
 			      struct tegra_drm_client *client)
 {
-	/*
-	 * When MLOCKs are implemented, change to allocate a shared channel
-	 * only when MLOCKs are disabled.
-	 */
-	client->shared_channel = host1x_channel_request(&client->base);
-	if (!client->shared_channel)
-		return -EBUSY;
-
 	mutex_lock(&tegra->clients_lock);
 	list_add_tail(&client->list, &tegra->clients);
 	client->drm = tegra;
@@ -930,9 +899,6 @@ int tegra_drm_unregister_client(struct tegra_drm *tegra,
 	client->drm = NULL;
 	mutex_unlock(&tegra->clients_lock);
 
-	if (client->shared_channel)
-		host1x_channel_put(client->shared_channel);
-
 	return 0;
 }
 
@@ -943,17 +909,6 @@ int host1x_client_iommu_attach(struct host1x_client *client)
 	struct tegra_drm *tegra = drm->dev_private;
 	struct iommu_group *group = NULL;
 	int err;
-
-#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
-	if (client->dev->archdata.mapping) {
-		struct dma_iommu_mapping *mapping =
-				to_dma_iommu_mapping(client->dev);
-		arm_iommu_detach_device(client->dev);
-		arm_iommu_release_mapping(mapping);
-
-		domain = iommu_get_domain_for_dev(client->dev);
-	}
-#endif
 
 	/*
 	 * If the host1x client is already attached to an IOMMU domain that is
@@ -1051,7 +1006,7 @@ void *tegra_drm_alloc(struct tegra_drm *tegra, size_t size, dma_addr_t *dma)
 
 	*dma = iova_dma_addr(&tegra->carveout.domain, alloc);
 	err = iommu_map(tegra->domain, *dma, virt_to_phys(virt),
-			size, IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
+			size, IOMMU_READ | IOMMU_WRITE);
 	if (err < 0)
 		goto free_iova;
 
@@ -1134,11 +1089,12 @@ static bool host1x_drm_wants_iommu(struct host1x_device *dev)
 
 static int host1x_drm_probe(struct host1x_device *dev)
 {
+	struct drm_driver *driver = &tegra_drm_driver;
 	struct tegra_drm *tegra;
 	struct drm_device *drm;
 	int err;
 
-	drm = drm_dev_alloc(&tegra_drm_driver, &dev->dev);
+	drm = drm_dev_alloc(driver, &dev->dev);
 	if (IS_ERR(drm))
 		return PTR_ERR(drm);
 
@@ -1171,27 +1127,24 @@ static int host1x_drm_probe(struct host1x_device *dev)
 
 	drm->mode_config.min_width = 0;
 	drm->mode_config.min_height = 0;
-	drm->mode_config.max_width = 0;
-	drm->mode_config.max_height = 0;
+
+	drm->mode_config.max_width = 4096;
+	drm->mode_config.max_height = 4096;
 
 	drm->mode_config.normalize_zpos = true;
 
 	drm->mode_config.funcs = &tegra_drm_mode_config_funcs;
 	drm->mode_config.helper_private = &tegra_drm_mode_config_helpers;
 
+	err = tegra_drm_fb_prepare(drm);
+	if (err < 0)
+		goto config;
+
 	drm_kms_helper_poll_init(drm);
 
 	err = host1x_device_init(dev);
 	if (err < 0)
-		goto poll;
-
-	/*
-	 * Now that all display controller have been initialized, the maximum
-	 * supported resolution is known and the bitmask for horizontal and
-	 * vertical bitfields can be computed.
-	 */
-	tegra->hmask = drm->mode_config.max_width - 1;
-	tegra->vmask = drm->mode_config.max_height - 1;
+		goto fbdev;
 
 	if (tegra->use_explicit_iommu) {
 		u64 carveout_start, carveout_end, gem_start, gem_end;
@@ -1233,6 +1186,13 @@ static int host1x_drm_probe(struct host1x_device *dev)
 			goto device;
 	}
 
+	/*
+	 * We don't use the drm_irq_install() helpers provided by the DRM
+	 * core, so we need to set this manually in order to allow the
+	 * DRM_IOCTL_WAIT_VBLANK to operate correctly.
+	 */
+	drm->irq_enabled = true;
+
 	/* syncpoints are used for full 32-bit hardware VBLANK counters */
 	drm->max_vblank_count = 0xffffffff;
 
@@ -1242,18 +1202,23 @@ static int host1x_drm_probe(struct host1x_device *dev)
 
 	drm_mode_config_reset(drm);
 
-	err = drm_aperture_remove_framebuffers(&tegra_drm_driver);
+	err = drm_fb_helper_remove_conflicting_framebuffers(NULL, "tegradrmfb",
+							    false);
+	if (err < 0)
+		goto hub;
+
+	err = tegra_drm_fb_init(drm);
 	if (err < 0)
 		goto hub;
 
 	err = drm_dev_register(drm, 0);
 	if (err < 0)
-		goto hub;
-
-	tegra_fbdev_setup(drm);
+		goto fb;
 
 	return 0;
 
+fb:
+	tegra_drm_fb_exit(drm);
 hub:
 	if (tegra->hub)
 		tegra_display_hub_cleanup(tegra->hub);
@@ -1266,8 +1231,10 @@ device:
 	}
 
 	host1x_device_exit(dev);
-poll:
+fbdev:
 	drm_kms_helper_poll_fini(drm);
+	tegra_drm_fb_free(drm);
+config:
 	drm_mode_config_cleanup(drm);
 domain:
 	if (tegra->domain)
@@ -1288,6 +1255,7 @@ static int host1x_drm_remove(struct host1x_device *dev)
 	drm_dev_unregister(drm);
 
 	drm_kms_helper_poll_fini(drm);
+	tegra_drm_fb_exit(drm);
 	drm_atomic_helper_shutdown(drm);
 	drm_mode_config_cleanup(drm);
 
@@ -1340,10 +1308,8 @@ static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra30-hdmi", },
 	{ .compatible = "nvidia,tegra30-gr2d", },
 	{ .compatible = "nvidia,tegra30-gr3d", },
-	{ .compatible = "nvidia,tegra114-dc", },
 	{ .compatible = "nvidia,tegra114-dsi", },
 	{ .compatible = "nvidia,tegra114-hdmi", },
-	{ .compatible = "nvidia,tegra114-gr2d", },
 	{ .compatible = "nvidia,tegra114-gr3d", },
 	{ .compatible = "nvidia,tegra124-dc", },
 	{ .compatible = "nvidia,tegra124-sor", },
@@ -1356,20 +1322,15 @@ static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra210-sor", },
 	{ .compatible = "nvidia,tegra210-sor1", },
 	{ .compatible = "nvidia,tegra210-vic", },
-	{ .compatible = "nvidia,tegra210-nvdec", },
 	{ .compatible = "nvidia,tegra186-display", },
 	{ .compatible = "nvidia,tegra186-dc", },
 	{ .compatible = "nvidia,tegra186-sor", },
 	{ .compatible = "nvidia,tegra186-sor1", },
 	{ .compatible = "nvidia,tegra186-vic", },
-	{ .compatible = "nvidia,tegra186-nvdec", },
 	{ .compatible = "nvidia,tegra194-display", },
 	{ .compatible = "nvidia,tegra194-dc", },
 	{ .compatible = "nvidia,tegra194-sor", },
 	{ .compatible = "nvidia,tegra194-vic", },
-	{ .compatible = "nvidia,tegra194-nvdec", },
-	{ .compatible = "nvidia,tegra234-vic", },
-	{ .compatible = "nvidia,tegra234-nvdec", },
 	{ /* sentinel */ }
 };
 
@@ -1393,15 +1354,11 @@ static struct platform_driver * const drivers[] = {
 	&tegra_gr2d_driver,
 	&tegra_gr3d_driver,
 	&tegra_vic_driver,
-	&tegra_nvdec_driver,
 };
 
 static int __init host1x_drm_init(void)
 {
 	int err;
-
-	if (drm_firmware_drivers_only())
-		return -ENODEV;
 
 	err = host1x_driver_register(&host1x_drm_driver);
 	if (err < 0)

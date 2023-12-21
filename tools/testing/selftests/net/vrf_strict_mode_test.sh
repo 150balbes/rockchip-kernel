@@ -3,9 +3,6 @@
 
 # This test is designed for testing the new VRF strict_mode functionality.
 
-# Kselftest framework requirement - SKIP code is 4.
-ksft_skip=4
-
 ret=0
 
 # identifies the "init" network namespace which is often called root network
@@ -13,8 +10,6 @@ ret=0
 INIT_NETNS_NAME="init"
 
 PAUSE_ON_FAIL=${PAUSE_ON_FAIL:=no}
-
-TESTS="init testns mix"
 
 log_test()
 {
@@ -264,8 +259,6 @@ cleanup()
 
 vrf_strict_mode_tests_init()
 {
-	log_section "VRF strict_mode test on init network namespace"
-
 	vrf_strict_mode_check_support init
 
 	strict_mode_check_default init
@@ -296,8 +289,6 @@ vrf_strict_mode_tests_init()
 
 vrf_strict_mode_tests_testns()
 {
-	log_section "VRF strict_mode test on testns network namespace"
-
 	vrf_strict_mode_check_support testns
 
 	strict_mode_check_default testns
@@ -324,8 +315,6 @@ vrf_strict_mode_tests_testns()
 
 vrf_strict_mode_tests_mix()
 {
-	log_section "VRF strict_mode test mixing init and testns network namespaces"
-
 	read_strict_mode_compare_and_check init 1
 
 	read_strict_mode_compare_and_check testns 0
@@ -349,29 +338,17 @@ vrf_strict_mode_tests_mix()
 	read_strict_mode_compare_and_check testns 0
 }
 
-################################################################################
-# usage
-
-usage()
+vrf_strict_mode_tests()
 {
-	cat <<EOF
-usage: ${0##*/} OPTS
+	log_section "VRF strict_mode test on init network namespace"
+	vrf_strict_mode_tests_init
 
-	-t <test>	Test(s) to run (default: all)
-			(options: $TESTS)
-EOF
+	log_section "VRF strict_mode test on testns network namespace"
+	vrf_strict_mode_tests_testns
+
+	log_section "VRF strict_mode test mixing init and testns network namespaces"
+	vrf_strict_mode_tests_mix
 }
-
-################################################################################
-# main
-
-while getopts ":t:h" opt; do
-	case $opt in
-		t) TESTS=$OPTARG;;
-		h) usage; exit 0;;
-		*) usage; exit 1;;
-	esac
-done
 
 vrf_strict_mode_check_support()
 {
@@ -394,34 +371,24 @@ vrf_strict_mode_check_support()
 
 if [ "$(id -u)" -ne 0 ];then
 	echo "SKIP: Need root privileges"
-	exit $ksft_skip
+	exit 0
 fi
 
 if [ ! -x "$(command -v ip)" ]; then
 	echo "SKIP: Could not run test without ip tool"
-	exit $ksft_skip
+	exit 0
 fi
 
 modprobe vrf &>/dev/null
 if [ ! -e /proc/sys/net/vrf/strict_mode ]; then
 	echo "SKIP: vrf sysctl does not exist"
-	exit $ksft_skip
+	exit 0
 fi
 
 cleanup &> /dev/null
 
 setup
-for t in $TESTS
-do
-	case $t in
-	vrf_strict_mode_tests_init|init) vrf_strict_mode_tests_init;;
-	vrf_strict_mode_tests_testns|testns) vrf_strict_mode_tests_testns;;
-	vrf_strict_mode_tests_mix|mix) vrf_strict_mode_tests_mix;;
-
-	help) echo "Test names: $TESTS"; exit 0;;
-
-	esac
-done
+vrf_strict_mode_tests
 cleanup
 
 print_log_test_results

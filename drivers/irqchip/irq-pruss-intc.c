@@ -488,7 +488,8 @@ static void pruss_intc_irq_handler(struct irq_desc *desc)
 
 	while (true) {
 		u32 hipir;
-		int hwirq, err;
+		unsigned int virq;
+		int hwirq;
 
 		/* get highest priority pending PRUSS system event */
 		hipir = pruss_intc_read_reg(intc, PRU_INTC_HIPIR(host_irq));
@@ -496,14 +497,16 @@ static void pruss_intc_irq_handler(struct irq_desc *desc)
 			break;
 
 		hwirq = hipir & GENMASK(9, 0);
-		err = generic_handle_domain_irq(intc->domain, hwirq);
+		virq = irq_find_mapping(intc->domain, hwirq);
 
 		/*
 		 * NOTE: manually ACK any system events that do not have a
 		 * handler mapped yet
 		 */
-		if (WARN_ON_ONCE(err))
+		if (WARN_ON_ONCE(!virq))
 			pruss_intc_write_reg(intc, PRU_INTC_SICR, hwirq);
+		else
+			generic_handle_irq(virq);
 	}
 
 	chained_irq_exit(chip, desc);

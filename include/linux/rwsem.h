@@ -11,27 +11,15 @@
 #include <linux/linkage.h>
 
 #include <linux/types.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/atomic.h>
 #include <linux/err.h>
-#include <linux/cleanup.h>
-
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-# define __RWSEM_DEP_MAP_INIT(lockname)			\
-	.dep_map = {					\
-		.name = #lockname,			\
-		.wait_type_inner = LD_WAIT_SLEEP,	\
-	},
-#else
-# define __RWSEM_DEP_MAP_INIT(lockname)
-#endif
-
-#ifndef CONFIG_PREEMPT_RT
-
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER
 #include <linux/osq_lock.h>
 #endif
+#include <linux/android_vendor.h>
 
 /*
  * For an uncontended rwsem, count and owner are the only fields a task
@@ -64,6 +52,21 @@ struct rw_semaphore {
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
+	ANDROID_VENDOR_DATA(1);
+	ANDROID_OEM_DATA_ARRAY(1, 2);
+};
+
+enum rwsem_waiter_type {
+	RWSEM_WAITING_FOR_WRITE,
+	RWSEM_WAITING_FOR_READ
+};
+
+struct rwsem_waiter {
+	struct list_head list;
+	struct task_struct *task;
+	enum rwsem_waiter_type type;
+	unsigned long timeout;
+	unsigned long last_rowner;
 };
 
 /* In all implementations count != 0 means locked */
@@ -76,6 +79,16 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 #define __RWSEM_COUNT_INIT(name)	.count = ATOMIC_LONG_INIT(RWSEM_UNLOCKED_VALUE)
 
 /* Common initializer macros and functions */
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+# define __RWSEM_DEP_MAP_INIT(lockname)			\
+	.dep_map = {					\
+		.name = #lockname,			\
+		.wait_type_inner = LD_WAIT_SLEEP,	\
+	},
+#else
+# define __RWSEM_DEP_MAP_INIT(lockname)
+#endif
 
 #ifdef CONFIG_DEBUG_RWSEMS
 # define __RWSEM_DEBUG_INIT(lockname) .magic = &lockname,
@@ -113,7 +126,7 @@ do {								\
 
 /*
  * This is the same regardless of which rwsem implementation that is being used.
- * It is just a heuristic meant to be called by somebody already holding the
+ * It is just a heuristic meant to be called by somebody alreadying holding the
  * rwsem to see if somebody from an incompatible type is wanting access to the
  * lock.
  */
@@ -121,53 +134,6 @@ static inline int rwsem_is_contended(struct rw_semaphore *sem)
 {
 	return !list_empty(&sem->wait_list);
 }
-
-#else /* !CONFIG_PREEMPT_RT */
-
-#include <linux/rwbase_rt.h>
-
-struct rw_semaphore {
-	struct rwbase_rt	rwbase;
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map	dep_map;
-#endif
-};
-
-#define __RWSEM_INITIALIZER(name)				\
-	{							\
-		.rwbase = __RWBASE_INITIALIZER(name),		\
-		__RWSEM_DEP_MAP_INIT(name)			\
-	}
-
-#define DECLARE_RWSEM(lockname) \
-	struct rw_semaphore lockname = __RWSEM_INITIALIZER(lockname)
-
-extern void  __init_rwsem(struct rw_semaphore *rwsem, const char *name,
-			  struct lock_class_key *key);
-
-#define init_rwsem(sem)						\
-do {								\
-	static struct lock_class_key __key;			\
-								\
-	__init_rwsem((sem), #sem, &__key);			\
-} while (0)
-
-static __always_inline int rwsem_is_locked(struct rw_semaphore *sem)
-{
-	return rw_base_is_locked(&sem->rwbase);
-}
-
-static __always_inline int rwsem_is_contended(struct rw_semaphore *sem)
-{
-	return rw_base_is_contended(&sem->rwbase);
-}
-
-#endif /* CONFIG_PREEMPT_RT */
-
-/*
- * The functions below are the same for all rwsem implementations including
- * the RT specific variant.
- */
 
 /*
  * lock for reading
@@ -202,13 +168,6 @@ extern void up_read(struct rw_semaphore *sem);
  */
 extern void up_write(struct rw_semaphore *sem);
 
-DEFINE_GUARD(rwsem_read, struct rw_semaphore *, down_read(_T), up_read(_T))
-DEFINE_GUARD(rwsem_write, struct rw_semaphore *, down_write(_T), up_write(_T))
-
-DEFINE_FREE(up_read, struct rw_semaphore *, if (_T) up_read(_T))
-DEFINE_FREE(up_write, struct rw_semaphore *, if (_T) up_write(_T))
-
-
 /*
  * downgrade write lock to read lock
  */
@@ -238,7 +197,7 @@ extern void _down_write_nest_lock(struct rw_semaphore *sem, struct lockdep_map *
 do {								\
 	typecheck(struct lockdep_map *, &(nest_lock)->dep_map);	\
 	_down_write_nest_lock(sem, &(nest_lock)->dep_map);	\
-} while (0)
+} while (0);
 
 /*
  * Take/release a lock when not the owner will release it.

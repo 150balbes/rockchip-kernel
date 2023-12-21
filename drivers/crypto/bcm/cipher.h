@@ -16,8 +16,7 @@
 #include <crypto/aead.h>
 #include <crypto/arc4.h>
 #include <crypto/gcm.h>
-#include <crypto/sha1.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <crypto/sha3.h>
 
 #include "spu.h"
@@ -231,7 +230,7 @@ struct iproc_ctx_s {
 
 	/*
 	 * shash descriptor - needed to perform incremental hashing in
-	 * software, when hw doesn't support it.
+	 * in software, when hw doesn't support it.
 	 */
 	struct shash_desc *shash;
 
@@ -339,12 +338,15 @@ struct iproc_reqctx_s {
 	/* hmac context */
 	bool is_sw_hmac;
 
+	/* aead context */
+	struct crypto_tfm *old_tfm;
+	crypto_completion_t old_complete;
+	void *old_data;
+
 	gfp_t gfp;
 
 	/* Buffers used to build SPU request and response messages */
 	struct spu_msg_buf msg_buf;
-
-	struct aead_request req;
 };
 
 /*

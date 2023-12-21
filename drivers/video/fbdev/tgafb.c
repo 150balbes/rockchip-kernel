@@ -12,7 +12,6 @@
  *  more details.
  */
 
-#include <linux/aperture.h>
 #include <linux/bitrev.h>
 #include <linux/compiler.h>
 #include <linux/delay.h>
@@ -107,12 +106,6 @@ static struct pci_driver tgafb_pci_driver = {
 static int tgafb_pci_register(struct pci_dev *pdev,
 			      const struct pci_device_id *ent)
 {
-	int ret;
-
-	ret = aperture_remove_conflicting_pci_devices(pdev, "tgafb");
-	if (ret)
-		return ret;
-
 	return tgafb_register(&pdev->dev);
 }
 
@@ -172,9 +165,6 @@ static int
 tgafb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct tga_par *par = (struct tga_par *)info->par;
-
-	if (!var->pixclock)
-		return -EINVAL;
 
 	if (par->tga_type == TGA_TYPE_8PLANE) {
 		if (var->bits_per_pixel != 8)
@@ -565,7 +555,7 @@ tgafb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue,
 
 /**
  *      tgafb_blank - Optional function.  Blanks the display.
- *      @blank: the blank mode we want.
+ *      @blank_mode: the blank mode we want.
  *      @info: frame buffer structure that represents a single frame buffer
  */
 static int
@@ -739,7 +729,7 @@ tgafb_mono_imageblit(struct fb_info *info, const struct fb_image *image)
 
 		/* Handle another common case in which accel_putcs
 		   generates a large bitmap, which happens to be aligned.
-		   Allow the tail to be misaligned.  This case is
+		   Allow the tail to be misaligned.  This case is 
 		   interesting because we've not got to hold partial
 		   bytes across the words being written.  */
 
@@ -847,7 +837,7 @@ tgafb_clut_imageblit(struct fb_info *info, const struct fb_image *image)
 	u32 *palette = ((u32 *)info->pseudo_palette);
 	unsigned long pos, line_length, i, j;
 	const unsigned char *data;
-	void __iomem *fb_base;
+	void __iomem *regs_base, *fb_base;
 
 	dx = image->dx;
 	dy = image->dy;
@@ -865,6 +855,7 @@ tgafb_clut_imageblit(struct fb_info *info, const struct fb_image *image)
 	if (dy + height > vyres)
 		height = vyres - dy;
 
+	regs_base = par->tga_regs_base;
 	fb_base = par->tga_fb_base;
 
 	pos = dy * line_length + (dx * 4);
@@ -918,9 +909,9 @@ tgafb_imageblit(struct fb_info *info, const struct fb_image *image)
 }
 
 /**
- *      tgafb_fillrect - REQUIRED function. Can use generic routines if
+ *      tgafb_fillrect - REQUIRED function. Can use generic routines if 
  *                       non acclerated hardware and packed pixel based.
- *                       Draws a rectangle on the screen.
+ *                       Draws a rectangle on the screen.               
  *
  *      @info: frame buffer structure that represents a single frame buffer
  *      @rect: structure defining the rectagle and operation.
@@ -1043,7 +1034,7 @@ tgafb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 		     regs_base + TGA_MODE_REG);
 }
 
-/*
+/**
  *      tgafb_copyarea - REQUIRED function. Can use generic routines if
  *                       non acclerated hardware and packed pixel based.
  *                       Copies on area of the screen to another area.
@@ -1054,7 +1045,7 @@ tgafb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 
 /* Handle the special case of copying entire lines, e.g. during scrolling.
    We can avoid a lot of needless computation in this case.  In the 8bpp
-   case we need to use the COPY64 registers instead of mask writes into
+   case we need to use the COPY64 registers instead of mask writes into 
    the frame buffer to achieve maximum performance.  */
 
 static inline void
@@ -1261,7 +1252,7 @@ copyarea_8bpp(struct fb_info *info, u32 dx, u32 dy, u32 sx, u32 sy,
 }
 
 static void
-tgafb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
+tgafb_copyarea(struct fb_info *info, const struct fb_copyarea *area) 
 {
 	unsigned long dx, dy, width, height, sx, sy, vxres, vyres;
 	unsigned long line_length, bpp;
@@ -1354,7 +1345,7 @@ tgafb_init_fix(struct fb_info *info)
 		memory_size = 16777216;
 	}
 
-	strscpy(info->fix.id, tga_type_name, sizeof(info->fix.id));
+	strlcpy(info->fix.id, tga_type_name, sizeof(info->fix.id));
 
 	info->fix.type = FB_TYPE_PACKED_PIXELS;
 	info->fix.type_aux = 0;
@@ -1470,7 +1461,7 @@ static int tgafb_register(struct device *dev)
 		par->tga_chip_rev = TGA_READ_REG(par, TGA_START_REG) & 0xff;
 
 	/* Setup framebuffer.  */
-	info->flags = FBINFO_HWACCEL_COPYAREA |
+	info->flags = FBINFO_DEFAULT | FBINFO_HWACCEL_COPYAREA |
 		      FBINFO_HWACCEL_IMAGEBLIT | FBINFO_HWACCEL_FILLRECT;
 	info->fbops = &tgafb_ops;
 	info->screen_base = par->tga_fb_base;
@@ -1600,12 +1591,7 @@ static int tgafb_init(void)
 	int status;
 #ifndef MODULE
 	char *option = NULL;
-#endif
 
-	if (fb_modesetting_disabled("tgafb"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if (fb_get_options("tgafb", &option))
 		return -ENODEV;
 	tgafb_setup(option);

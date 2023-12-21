@@ -43,7 +43,9 @@ static int framebuffer_probe(struct coreboot_device *dev)
 		    fb->green_mask_pos     == formats[i].green.offset &&
 		    fb->green_mask_size    == formats[i].green.length &&
 		    fb->blue_mask_pos      == formats[i].blue.offset &&
-		    fb->blue_mask_size     == formats[i].blue.length)
+		    fb->blue_mask_size     == formats[i].blue.length &&
+		    fb->reserved_mask_pos  == formats[i].transp.offset &&
+		    fb->reserved_mask_size == formats[i].transp.length)
 			pdata.format = formats[i].name;
 	}
 	if (!pdata.format)
@@ -70,11 +72,13 @@ static int framebuffer_probe(struct coreboot_device *dev)
 	return PTR_ERR_OR_ZERO(pdev);
 }
 
-static void framebuffer_remove(struct coreboot_device *dev)
+static int framebuffer_remove(struct coreboot_device *dev)
 {
 	struct platform_device *pdev = dev_get_drvdata(&dev->dev);
 
 	platform_device_unregister(pdev);
+
+	return 0;
 }
 
 static struct coreboot_driver framebuffer_driver = {

@@ -30,7 +30,7 @@
 
 #define APN806_MAX_DIVIDER		32
 
-/*
+/**
  * struct cpu_dfs_regs: CPU DFS register mapping
  * @divider_reg: full integer ratio from PLL frequency to CPU clock frequency
  * @force_reg: request to force new ratio regardless of relation to other clocks
@@ -253,12 +253,12 @@ static int ap_cpu_clock_probe(struct platform_device *pdev)
 	 */
 	nclusters = 1;
 	for_each_of_cpu_node(dn) {
-		u64 cpu;
+		int cpu, err;
 
-		cpu = of_get_cpu_hwid(dn, 0);
-		if (WARN_ON(cpu == OF_BAD_ADDR)) {
+		err = of_property_read_u32(dn, "reg", &cpu);
+		if (WARN_ON(err)) {
 			of_node_put(dn);
-			return -EINVAL;
+			return err;
 		}
 
 		/* If cpu2 or cpu3 is enabled */
@@ -288,12 +288,12 @@ static int ap_cpu_clock_probe(struct platform_device *pdev)
 		struct clk_init_data init;
 		const char *parent_name;
 		struct clk *parent;
-		u64 cpu;
+		int cpu, err;
 
-		cpu = of_get_cpu_hwid(dn, 0);
-		if (WARN_ON(cpu == OF_BAD_ADDR)) {
+		err = of_property_read_u32(dn, "reg", &cpu);
+		if (WARN_ON(err)) {
 			of_node_put(dn);
-			return -EINVAL;
+			return err;
 		}
 
 		cluster_index = cpu & APN806_CLUSTER_NUM_MASK;

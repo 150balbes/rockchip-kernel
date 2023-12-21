@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
+#include <linux/genhd.h>
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <asm/eadm.h>
@@ -461,12 +462,12 @@ int scm_blk_dev_setup(struct scm_blk_dev *bdev, struct scm_device *scmdev)
 	if (ret)
 		goto out;
 
-	bdev->gendisk = blk_mq_alloc_disk(&bdev->tag_set, scmdev);
-	if (IS_ERR(bdev->gendisk)) {
-		ret = PTR_ERR(bdev->gendisk);
+	rq = blk_mq_init_queue(&bdev->tag_set);
+	if (IS_ERR(rq)) {
+		ret = PTR_ERR(rq);
 		goto out_tag;
 	}
-	rq = bdev->rq = bdev->gendisk->queue;
+	bdev->rq = rq;
 	nr_max_blk = min(scmdev->nr_max_block,
 			 (unsigned int) (PAGE_SIZE / sizeof(struct aidaw)));
 
@@ -476,11 +477,17 @@ int scm_blk_dev_setup(struct scm_blk_dev *bdev, struct scm_device *scmdev)
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, rq);
 	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, rq);
 
+	bdev->gendisk = alloc_disk(SCM_NR_PARTS);
+	if (!bdev->gendisk) {
+		ret = -ENOMEM;
+		goto out_queue;
+	}
+	rq->queuedata = scmdev;
 	bdev->gendisk->private_data = scmdev;
 	bdev->gendisk->fops = &scm_blk_devops;
+	bdev->gendisk->queue = rq;
 	bdev->gendisk->major = scm_major;
 	bdev->gendisk->first_minor = devindex * SCM_NR_PARTS;
-	bdev->gendisk->minors = SCM_NR_PARTS;
 
 	len = snprintf(bdev->gendisk->disk_name, DISK_NAME_LEN, "scm");
 	if (devindex > 25) {
@@ -494,14 +501,11 @@ int scm_blk_dev_setup(struct scm_blk_dev *bdev, struct scm_device *scmdev)
 
 	/* 512 byte sectors */
 	set_capacity(bdev->gendisk, scmdev->size >> 9);
-	ret = device_add_disk(&scmdev->dev, bdev->gendisk, NULL);
-	if (ret)
-		goto out_cleanup_disk;
-
+	device_add_disk(&scmdev->dev, bdev->gendisk, NULL);
 	return 0;
 
-out_cleanup_disk:
-	put_disk(bdev->gendisk);
+out_queue:
+	blk_cleanup_queue(rq);
 out_tag:
 	blk_mq_free_tag_set(&bdev->tag_set);
 out:
@@ -512,8 +516,9 @@ out:
 void scm_blk_dev_cleanup(struct scm_blk_dev *bdev)
 {
 	del_gendisk(bdev->gendisk);
-	put_disk(bdev->gendisk);
+	blk_cleanup_queue(bdev->gendisk->queue);
 	blk_mq_free_tag_set(&bdev->tag_set);
+	put_disk(bdev->gendisk);
 }
 
 void scm_blk_set_available(struct scm_blk_dev *bdev)

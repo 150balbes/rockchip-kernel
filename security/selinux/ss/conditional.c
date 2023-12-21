@@ -38,7 +38,7 @@ static int cond_evaluate_expr(struct policydb *p, struct cond_expr *expr)
 			if (sp == (COND_EXPR_MAXDEPTH - 1))
 				return -1;
 			sp++;
-			s[sp] = p->bool_val_to_struct[node->boolean - 1]->state;
+			s[sp] = p->bool_val_to_struct[node->bool - 1]->state;
 			break;
 		case COND_NOT:
 			if (sp < 0)
@@ -256,8 +256,7 @@ struct cond_insertf_data {
 	struct cond_av_list *other;
 };
 
-static int cond_insertf(struct avtab *a, const struct avtab_key *k,
-			const struct avtab_datum *d, void *ptr)
+static int cond_insertf(struct avtab *a, struct avtab_key *k, struct avtab_datum *d, void *ptr)
 {
 	struct cond_insertf_data *data = ptr;
 	struct policydb *p = data->p;
@@ -366,7 +365,7 @@ static int expr_node_isvalid(struct policydb *p, struct cond_expr_node *expr)
 		return 0;
 	}
 
-	if (expr->boolean > p->p_bools.nprim) {
+	if (expr->bool > p->p_bools.nprim) {
 		pr_err("SELinux: conditional expressions uses unknown bool.\n");
 		return 0;
 	}
@@ -401,7 +400,7 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, void *fp)
 			return rc;
 
 		expr->expr_type = le32_to_cpu(buf[0]);
-		expr->boolean = le32_to_cpu(buf[1]);
+		expr->bool = le32_to_cpu(buf[1]);
 
 		if (!expr_node_isvalid(p, expr))
 			return -EINVAL;
@@ -518,7 +517,7 @@ static int cond_write_node(struct policydb *p, struct cond_node *node,
 
 	for (i = 0; i < node->expr.len; i++) {
 		buf[0] = cpu_to_le32(node->expr.nodes[i].expr_type);
-		buf[1] = cpu_to_le32(node->expr.nodes[i].boolean);
+		buf[1] = cpu_to_le32(node->expr.nodes[i].bool);
 		rc = put_entry(buf, sizeof(u32), 2, fp);
 		if (rc)
 			return rc;
@@ -567,6 +566,8 @@ void cond_compute_xperms(struct avtab *ctab, struct avtab_key *key,
 		if (node->key.specified & AVTAB_ENABLED)
 			services_compute_xperms_decision(xpermd, node);
 	}
+	return;
+
 }
 /* Determine whether additional permissions are granted by the conditional
  * av table, and if so, add them to the result
@@ -628,8 +629,7 @@ static int cond_dup_av_list(struct cond_av_list *new,
 static int duplicate_policydb_cond_list(struct policydb *newp,
 					struct policydb *origp)
 {
-	int rc;
-	u32 i;
+	int rc, i, j;
 
 	rc = avtab_alloc_dup(&newp->te_cond_avtab, &origp->te_cond_avtab);
 	if (rc)
@@ -649,12 +649,12 @@ static int duplicate_policydb_cond_list(struct policydb *newp,
 		newp->cond_list_len++;
 
 		newn->cur_state = orign->cur_state;
-		newn->expr.nodes = kmemdup(orign->expr.nodes,
-				orign->expr.len * sizeof(*orign->expr.nodes),
-				GFP_KERNEL);
+		newn->expr.nodes = kcalloc(orign->expr.len,
+					sizeof(*newn->expr.nodes), GFP_KERNEL);
 		if (!newn->expr.nodes)
 			goto error;
-
+		for (j = 0; j < orign->expr.len; j++)
+			newn->expr.nodes[j] = orign->expr.nodes[j];
 		newn->expr.len = orign->expr.len;
 
 		rc = cond_dup_av_list(&newn->true_list, &orign->true_list,

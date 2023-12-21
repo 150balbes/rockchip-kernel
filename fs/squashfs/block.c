@@ -17,8 +17,8 @@
 #include <linux/fs.h>
 #include <linux/vfs.h>
 #include <linux/slab.h>
-#include <linux/pagemap.h>
 #include <linux/string.h>
+#include <linux/buffer_head.h>
 #include <linux/bio.h>
 
 #include "squashfs_fs.h"
@@ -34,14 +34,11 @@ static int copy_bio_to_actor(struct bio *bio,
 			     struct squashfs_page_actor *actor,
 			     int offset, int req_length)
 {
-	void *actor_addr;
+	void *actor_addr = squashfs_first_page(actor);
 	struct bvec_iter_all iter_all = {};
 	struct bio_vec *bvec = bvec_init_iter_all(&iter_all);
 	int copied_bytes = 0;
 	int actor_offset = 0;
-
-	squashfs_actor_nobuff(actor);
-	actor_addr = squashfs_first_page(actor);
 
 	if (WARN_ON_ONCE(!bio_next_segment(bio, &iter_all)))
 		return 0;
@@ -52,9 +49,9 @@ static int copy_bio_to_actor(struct bio *bio,
 
 		bytes_to_copy = min_t(int, bytes_to_copy,
 				      req_length - copied_bytes);
-		if (!IS_ERR(actor_addr))
-			memcpy(actor_addr + actor_offset, bvec_virt(bvec) +
-					offset, bytes_to_copy);
+		memcpy(actor_addr + actor_offset,
+		       page_address(bvec->bv_page) + bvec->bv_offset + offset,
+		       bytes_to_copy);
 
 		actor_offset += bytes_to_copy;
 		copied_bytes += bytes_to_copy;
@@ -76,121 +73,10 @@ static int copy_bio_to_actor(struct bio *bio,
 	return copied_bytes;
 }
 
-static int squashfs_bio_read_cached(struct bio *fullbio,
-		struct address_space *cache_mapping, u64 index, int length,
-		u64 read_start, u64 read_end, int page_count)
-{
-	struct page *head_to_cache = NULL, *tail_to_cache = NULL;
-	struct block_device *bdev = fullbio->bi_bdev;
-	int start_idx = 0, end_idx = 0;
-	struct bvec_iter_all iter_all;
-	struct bio *bio = NULL;
-	struct bio_vec *bv;
-	int idx = 0;
-	int err = 0;
-
-	bio_for_each_segment_all(bv, fullbio, iter_all) {
-		struct page *page = bv->bv_page;
-
-		if (page->mapping == cache_mapping) {
-			idx++;
-			continue;
-		}
-
-		/*
-		 * We only use this when the device block size is the same as
-		 * the page size, so read_start and read_end cover full pages.
-		 *
-		 * Compare these to the original required index and length to
-		 * only cache pages which were requested partially, since these
-		 * are the ones which are likely to be needed when reading
-		 * adjacent blocks.
-		 */
-		if (idx == 0 && index != read_start)
-			head_to_cache = page;
-		else if (idx == page_count - 1 && index + length != read_end)
-			tail_to_cache = page;
-
-		if (!bio || idx != end_idx) {
-			struct bio *new = bio_alloc_clone(bdev, fullbio,
-							  GFP_NOIO, &fs_bio_set);
-
-			if (bio) {
-				bio_trim(bio, start_idx * PAGE_SECTORS,
-					 (end_idx - start_idx) * PAGE_SECTORS);
-				bio_chain(bio, new);
-				submit_bio(bio);
-			}
-
-			bio = new;
-			start_idx = idx;
-		}
-
-		idx++;
-		end_idx = idx;
-	}
-
-	if (bio) {
-		bio_trim(bio, start_idx * PAGE_SECTORS,
-			 (end_idx - start_idx) * PAGE_SECTORS);
-		err = submit_bio_wait(bio);
-		bio_put(bio);
-	}
-
-	if (err)
-		return err;
-
-	if (head_to_cache) {
-		int ret = add_to_page_cache_lru(head_to_cache, cache_mapping,
-						read_start >> PAGE_SHIFT,
-						GFP_NOIO);
-
-		if (!ret) {
-			SetPageUptodate(head_to_cache);
-			unlock_page(head_to_cache);
-		}
-
-	}
-
-	if (tail_to_cache) {
-		int ret = add_to_page_cache_lru(tail_to_cache, cache_mapping,
-						(read_end >> PAGE_SHIFT) - 1,
-						GFP_NOIO);
-
-		if (!ret) {
-			SetPageUptodate(tail_to_cache);
-			unlock_page(tail_to_cache);
-		}
-	}
-
-	return 0;
-}
-
-static struct page *squashfs_get_cache_page(struct address_space *mapping,
-					    pgoff_t index)
-{
-	struct page *page;
-
-	if (!mapping)
-		return NULL;
-
-	page = find_get_page(mapping, index);
-	if (!page)
-		return NULL;
-
-	if (!PageUptodate(page)) {
-		put_page(page);
-		return NULL;
-	}
-
-	return page;
-}
-
 static int squashfs_bio_read(struct super_block *sb, u64 index, int length,
 			     struct bio **biop, int *block_offset)
 {
 	struct squashfs_sb_info *msblk = sb->s_fs_info;
-	struct address_space *cache_mapping = msblk->cache_mapping;
 	const u64 read_start = round_down(index, msblk->devblksize);
 	const sector_t block = read_start >> msblk->devblksize_log2;
 	const u64 read_end = round_up(index + length, msblk->devblksize);
@@ -201,42 +87,36 @@ static int squashfs_bio_read(struct super_block *sb, u64 index, int length,
 	int error, i;
 	struct bio *bio;
 
-	bio = bio_kmalloc(page_count, GFP_NOIO);
+	if (page_count <= BIO_MAX_PAGES)
+		bio = bio_alloc(GFP_NOIO, page_count);
+	else
+		bio = bio_kmalloc(GFP_NOIO, page_count);
+
 	if (!bio)
 		return -ENOMEM;
-	bio_init(bio, sb->s_bdev, bio->bi_inline_vecs, page_count, REQ_OP_READ);
+
+	bio_set_dev(bio, sb->s_bdev);
+	bio->bi_opf = READ;
 	bio->bi_iter.bi_sector = block * (msblk->devblksize >> SECTOR_SHIFT);
 
 	for (i = 0; i < page_count; ++i) {
 		unsigned int len =
 			min_t(unsigned int, PAGE_SIZE - offset, total_len);
-		pgoff_t index = (read_start >> PAGE_SHIFT) + i;
-		struct page *page;
-
-		page = squashfs_get_cache_page(cache_mapping, index);
-		if (!page)
-			page = alloc_page(GFP_NOIO);
+		struct page *page = alloc_page(GFP_NOIO);
 
 		if (!page) {
 			error = -ENOMEM;
 			goto out_free_bio;
 		}
-
-		/*
-		 * Use the __ version to avoid merging since we need each page
-		 * to be separate when we check for and avoid cached pages.
-		 */
-		__bio_add_page(bio, page, len, offset);
+		if (!bio_add_page(bio, page, len, offset)) {
+			error = -EIO;
+			goto out_free_bio;
+		}
 		offset = 0;
 		total_len -= len;
 	}
 
-	if (cache_mapping)
-		error = squashfs_bio_read_cached(bio, cache_mapping, index,
-						 length, read_start, read_end,
-						 page_count);
-	else
-		error = submit_bio_wait(bio);
+	error = submit_bio_wait(bio);
 	if (error)
 		goto out_free_bio;
 
@@ -246,8 +126,7 @@ static int squashfs_bio_read(struct super_block *sb, u64 index, int length,
 
 out_free_bio:
 	bio_free_pages(bio);
-	bio_uninit(bio);
-	kfree(bio);
+	bio_put(bio);
 	return error;
 }
 
@@ -298,7 +177,7 @@ int squashfs_read_data(struct super_block *sb, u64 index, int length,
 			goto out_free_bio;
 		}
 		/* Extract the length of the metadata block */
-		data = bvec_virt(bvec);
+		data = page_address(bvec->bv_page) + bvec->bv_offset;
 		length = data[offset];
 		if (offset < bvec->bv_len - 1) {
 			length |= data[offset + 1] << 8;
@@ -307,12 +186,11 @@ int squashfs_read_data(struct super_block *sb, u64 index, int length,
 				res = -EIO;
 				goto out_free_bio;
 			}
-			data = bvec_virt(bvec);
+			data = page_address(bvec->bv_page) + bvec->bv_offset;
 			length |= data[0] << 8;
 		}
 		bio_free_pages(bio);
-		bio_uninit(bio);
-		kfree(bio);
+		bio_put(bio);
 
 		compressed = SQUASHFS_COMPRESSED(length);
 		length = SQUASHFS_COMPRESSED_SIZE(length);
@@ -339,21 +217,17 @@ int squashfs_read_data(struct super_block *sb, u64 index, int length,
 			res = -EIO;
 			goto out_free_bio;
 		}
-		res = msblk->thread_ops->decompress(msblk, bio, offset, length, output);
+		res = squashfs_decompress(msblk, bio, offset, length, output);
 	} else {
 		res = copy_bio_to_actor(bio, output, offset, length);
 	}
 
 out_free_bio:
 	bio_free_pages(bio);
-	bio_uninit(bio);
-	kfree(bio);
+	bio_put(bio);
 out:
-	if (res < 0) {
+	if (res < 0)
 		ERROR("Failed to read block 0x%llx: %d\n", index, res);
-		if (msblk->panic_on_errors)
-			panic("squashfs read failed");
-	}
 
 	return res;
 }

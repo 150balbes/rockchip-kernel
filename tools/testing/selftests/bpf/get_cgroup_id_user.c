@@ -19,7 +19,7 @@
 #include <bpf/libbpf.h>
 
 #include "cgroup_helpers.h"
-#include "testing_helpers.h"
+#include "bpf_rlimit.h"
 
 #define CHECK(condition, tag, format...) ({		\
 	int __ret = !!(condition);			\
@@ -48,7 +48,7 @@ static int bpf_find_map(const char *test, struct bpf_object *obj,
 int main(int argc, char **argv)
 {
 	const char *probe_name = "syscalls/sys_enter_nanosleep";
-	const char *file = "get_cgroup_id_kern.bpf.o";
+	const char *file = "get_cgroup_id_kern.o";
 	int err, bytes, efd, prog_fd, pmu_fd;
 	int cgroup_fd, cgidmap_fd, pidmap_fd;
 	struct perf_event_attr attr = {};
@@ -57,20 +57,13 @@ int main(int argc, char **argv)
 	__u32 key = 0, pid;
 	int exit_code = 1;
 	char buf[256];
-	const struct timespec req = {
-		.tv_sec = 1,
-		.tv_nsec = 0,
-	};
 
 	cgroup_fd = cgroup_setup_and_join(TEST_CGROUP);
 	if (CHECK(cgroup_fd < 0, "cgroup_setup_and_join", "err %d errno %d\n", cgroup_fd, errno))
 		return 1;
 
-	/* Use libbpf 1.0 API mode */
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-
-	err = bpf_prog_test_load(file, BPF_PROG_TYPE_TRACEPOINT, &obj, &prog_fd);
-	if (CHECK(err, "bpf_prog_test_load", "err %d errno %d\n", err, errno))
+	err = bpf_prog_load(file, BPF_PROG_TYPE_TRACEPOINT, &obj, &prog_fd);
+	if (CHECK(err, "bpf_prog_load", "err %d errno %d\n", err, errno))
 		goto cleanup_cgroup_env;
 
 	cgidmap_fd = bpf_find_map(__func__, obj, "cg_ids");
@@ -86,13 +79,8 @@ int main(int argc, char **argv)
 	pid = getpid();
 	bpf_map_update_elem(pidmap_fd, &key, &pid, 0);
 
-	if (access("/sys/kernel/tracing/trace", F_OK) == 0) {
-		snprintf(buf, sizeof(buf),
-			 "/sys/kernel/tracing/events/%s/id", probe_name);
-	} else {
-		snprintf(buf, sizeof(buf),
-			 "/sys/kernel/debug/tracing/events/%s/id", probe_name);
-	}
+	snprintf(buf, sizeof(buf),
+		 "/sys/kernel/debug/tracing/events/%s/id", probe_name);
 	efd = open(buf, O_RDONLY, 0);
 	if (CHECK(efd < 0, "open", "err %d errno %d\n", efd, errno))
 		goto close_prog;
@@ -127,7 +115,7 @@ int main(int argc, char **argv)
 		goto close_pmu;
 
 	/* trigger some syscalls */
-	syscall(__NR_nanosleep, &req, NULL);
+	sleep(1);
 
 	err = bpf_map_lookup_elem(cgidmap_fd, &key, &kcgid);
 	if (CHECK(err, "bpf_map_lookup_elem", "err %d errno %d\n", err, errno))

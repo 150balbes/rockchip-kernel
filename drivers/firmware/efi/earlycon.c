@@ -10,14 +10,11 @@
 #include <linux/kernel.h>
 #include <linux/serial_core.h>
 #include <linux/screen_info.h>
-#include <linux/string.h>
 
 #include <asm/early_ioremap.h>
 
 static const struct console *earlycon_console __initdata;
 static const struct font_desc *font;
-static u16 cur_line_y, max_line_y;
-static u32 efi_x_array[1024];
 static u32 efi_x, efi_y;
 static u64 fb_base;
 static bool fb_wb;
@@ -32,8 +29,8 @@ static void *efi_fb;
  */
 static int __init efi_earlycon_remap_fb(void)
 {
-	/* bail if there is no bootconsole or it was unregistered already */
-	if (!earlycon_console || !console_is_registered(earlycon_console))
+	/* bail if there is no bootconsole or it has been disabled already */
+	if (!earlycon_console || !(earlycon_console->flags & CON_ENABLED))
 		return 0;
 
 	efi_fb = memremap(fb_base, screen_info.lfb_size,
@@ -45,8 +42,8 @@ early_initcall(efi_earlycon_remap_fb);
 
 static int __init efi_earlycon_unmap_fb(void)
 {
-	/* unmap the bootconsole fb unless keep_bootcon left it registered */
-	if (efi_fb && !console_is_registered(earlycon_console))
+	/* unmap the bootconsole fb unless keep_bootcon has left it enabled */
+	if (efi_fb && !(earlycon_console->flags & CON_ENABLED))
 		memunmap(efi_fb);
 	return 0;
 }
@@ -88,16 +85,8 @@ static void efi_earlycon_clear_scanline(unsigned int y)
 static void efi_earlycon_scroll_up(void)
 {
 	unsigned long *dst, *src;
-	u16 maxlen = 0;
 	u16 len;
 	u32 i, height;
-
-	/* Find the cached maximum x coordinate */
-	for (i = 0; i < max_line_y; i++) {
-		if (efi_x_array[i] > maxlen)
-			maxlen = efi_x_array[i];
-	}
-	maxlen *= 4;
 
 	len = screen_info.lfb_linelength;
 	height = screen_info.lfb_height;
@@ -113,7 +102,7 @@ static void efi_earlycon_scroll_up(void)
 			return;
 		}
 
-		memmove(dst, src, maxlen);
+		memmove(dst, src, len);
 
 		efi_earlycon_unmap(src, len);
 		efi_earlycon_unmap(dst, len);
@@ -146,7 +135,6 @@ static void
 efi_earlycon_write(struct console *con, const char *str, unsigned int num)
 {
 	struct screen_info *si;
-	u32 cur_efi_x = efi_x;
 	unsigned int len;
 	const char *s;
 	void *dst;
@@ -155,10 +143,16 @@ efi_earlycon_write(struct console *con, const char *str, unsigned int num)
 	len = si->lfb_linelength;
 
 	while (num) {
-		unsigned int linemax = (si->lfb_width - efi_x) / font->width;
-		unsigned int h, count;
+		unsigned int linemax;
+		unsigned int h, count = 0;
 
-		count = strnchrnul(str, num, '\n') - str;
+		for (s = str; *s && *s != '\n'; s++) {
+			if (count == num)
+				break;
+			count++;
+		}
+
+		linemax = (si->lfb_width - efi_x) / font->width;
 		if (count > linemax)
 			count = linemax;
 
@@ -187,7 +181,6 @@ efi_earlycon_write(struct console *con, const char *str, unsigned int num)
 		str += count;
 
 		if (num > 0 && *s == '\n') {
-			cur_efi_x = efi_x;
 			efi_x = 0;
 			efi_y += font->height;
 			str++;
@@ -195,16 +188,12 @@ efi_earlycon_write(struct console *con, const char *str, unsigned int num)
 		}
 
 		if (efi_x + font->width > si->lfb_width) {
-			cur_efi_x = efi_x;
 			efi_x = 0;
 			efi_y += font->height;
 		}
 
 		if (efi_y + font->height > si->lfb_height) {
 			u32 i;
-
-			efi_x_array[cur_line_y] = cur_efi_x;
-			cur_line_y = (cur_line_y + 1) % max_line_y;
 
 			efi_y -= font->height;
 			efi_earlycon_scroll_up();
@@ -215,14 +204,6 @@ efi_earlycon_write(struct console *con, const char *str, unsigned int num)
 	}
 }
 
-static bool __initdata fb_probed;
-
-void __init efi_earlycon_reprobe(void)
-{
-	if (fb_probed)
-		setup_earlycon("efifb");
-}
-
 static int __init efi_earlycon_setup(struct earlycon_device *device,
 				     const char *opt)
 {
@@ -230,16 +211,14 @@ static int __init efi_earlycon_setup(struct earlycon_device *device,
 	u16 xres, yres;
 	u32 i;
 
-	fb_wb = opt && !strcmp(opt, "ram");
-
-	if (screen_info.orig_video_isVGA != VIDEO_TYPE_EFI) {
-		fb_probed = true;
+	if (screen_info.orig_video_isVGA != VIDEO_TYPE_EFI)
 		return -ENODEV;
-	}
 
 	fb_base = screen_info.lfb_base;
 	if (screen_info.capabilities & VIDEO_CAPABILITY_64BIT_BASE)
 		fb_base |= (u64)screen_info.ext_lfb_base << 32;
+
+	fb_wb = opt && !strcmp(opt, "ram");
 
 	si = &screen_info;
 	xres = si->lfb_width;
@@ -256,15 +235,7 @@ static int __init efi_earlycon_setup(struct earlycon_device *device,
 	if (!font)
 		return -ENODEV;
 
-	/* Fill the cache with maximum possible value of x coordinate */
-	memset32(efi_x_array, rounddown(xres, font->width), ARRAY_SIZE(efi_x_array));
-	efi_y = rounddown(yres, font->height);
-
-	/* Make sure we have cache for the x coordinate for the full screen */
-	max_line_y = efi_y / font->height + 1;
-	cur_line_y = 0;
-
-	efi_y -= font->height;
+	efi_y = rounddown(yres, font->height) - font->height;
 	for (i = 0; i < (yres - efi_y) / font->height; i++)
 		efi_earlycon_scroll_up();
 

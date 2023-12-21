@@ -26,6 +26,6 @@ static inline int is_absolute_path(const char *path)
 	return path[0] == '/';
 }
 
-char *mkpath(char *path_buf, size_t sz, const char *fmt, ...) __printf(3, 4);
+char *mkpath(const char *fmt, ...) __printf(1, 2);
 
 #endif /* __PERF_CACHE_H */

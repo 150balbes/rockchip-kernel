@@ -21,27 +21,67 @@ properties:
     maxItems: 1
     description: virtual channel number of a DSI peripheral
 
-  reset-gpios:
-    maxItems: 1
-
   vddc-supply:
     description: Regulator for 1.2V internal core power.
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
+    type: object
 
     properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
       port@0:
-        $ref: /schemas/graph.yaml#/properties/port
-        description:
+        type: object
+        additionalProperties: false
+
+        description: |
           Video port for MIPI DSI input
 
+        properties:
+          reg:
+            const: 0
+
+        patternProperties:
+          endpoint:
+            type: object
+            additionalProperties: false
+
+            properties:
+              remote-endpoint: true
+
+        required:
+          - reg
+
       port@1:
-        $ref: /schemas/graph.yaml#/properties/port
-        description:
+        type: object
+        additionalProperties: false
+
+        description: |
           Video port for MIPI DPI output (panel or connector).
 
+        properties:
+          reg:
+            const: 1
+
+        patternProperties:
+          endpoint:
+            type: object
+            additionalProperties: false
+
+            properties:
+              remote-endpoint: true
+
+        required:
+          - reg
+
     required:
+      - "#address-cells"
+      - "#size-cells"
+      - port@0
       - port@1
 
 required:
@@ -54,7 +94,7 @@ additionalProperties: false
 
 examples:
   - |
-    i2c {
+    i2c1 {
       #address-cells = <1>;
       #size-cells = <0>;
 

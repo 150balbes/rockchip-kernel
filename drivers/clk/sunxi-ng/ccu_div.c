@@ -141,4 +141,3 @@ const struct clk_ops ccu_div_ops = {
 	.recalc_rate	= ccu_div_recalc_rate,
 	.set_rate	= ccu_div_set_rate,
 };
-EXPORT_SYMBOL_NS_GPL(ccu_div_ops, SUNXI_CCU);

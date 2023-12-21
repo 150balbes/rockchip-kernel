@@ -350,9 +350,10 @@ static irqreturn_t mcp795_irq(int irq, void *data)
 {
 	struct spi_device *spi = data;
 	struct rtc_device *rtc = spi_get_drvdata(spi);
+	struct mutex *lock = &rtc->ops_lock;
 	int ret;
 
-	rtc_lock(rtc);
+	mutex_lock(lock);
 
 	/* Disable alarm.
 	 * There is no need to clear ALM0IF (Alarm 0 Interrupt Flag) bit,
@@ -364,7 +365,7 @@ static irqreturn_t mcp795_irq(int irq, void *data)
 			"Failed to disable alarm in IRQ (ret=%d)\n", ret);
 	rtc_update_irq(rtc, 1, RTC_AF | RTC_IRQF);
 
-	rtc_unlock(rtc);
+	mutex_unlock(lock);
 
 	return IRQ_HANDLED;
 }
@@ -430,19 +431,12 @@ static const struct of_device_id mcp795_of_match[] = {
 MODULE_DEVICE_TABLE(of, mcp795_of_match);
 #endif
 
-static const struct spi_device_id mcp795_spi_ids[] = {
-	{ .name = "mcp795" },
-	{ }
-};
-MODULE_DEVICE_TABLE(spi, mcp795_spi_ids);
-
 static struct spi_driver mcp795_driver = {
 		.driver = {
 				.name = "rtc-mcp795",
 				.of_match_table = of_match_ptr(mcp795_of_match),
 		},
 		.probe = mcp795_probe,
-		.id_table = mcp795_spi_ids,
 };
 
 module_spi_driver(mcp795_driver);

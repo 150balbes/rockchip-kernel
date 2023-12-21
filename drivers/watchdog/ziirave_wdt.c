@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/watchdog.h>
 
 #include <asm/unaligned.h>
@@ -68,6 +69,9 @@ static char *ziirave_reasons[] = {"power cycle", "hw watchdog", NULL, NULL,
 
 #define ZIIRAVE_CMD_JUMP_TO_BOOTLOADER_MAGIC	1
 #define ZIIRAVE_CMD_RESET_PROCESSOR_MAGIC	1
+
+#define ZIIRAVE_FW_VERSION_FMT	"02.%02u.%02u"
+#define ZIIRAVE_BL_VERSION_FMT	"01.%02u.%02u"
 
 struct ziirave_wdt_rev {
 	unsigned char major;
@@ -442,9 +446,8 @@ static ssize_t ziirave_wdt_sysfs_show_firm(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = sysfs_emit(buf, "02.%02u.%02u\n",
-			 w_priv->firmware_rev.major,
-			 w_priv->firmware_rev.minor);
+	ret = sprintf(buf, ZIIRAVE_FW_VERSION_FMT, w_priv->firmware_rev.major,
+		      w_priv->firmware_rev.minor);
 
 	mutex_unlock(&w_priv->sysfs_mutex);
 
@@ -466,9 +469,8 @@ static ssize_t ziirave_wdt_sysfs_show_boot(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = sysfs_emit(buf, "01.%02u.%02u\n",
-			 w_priv->bootloader_rev.major,
-			 w_priv->bootloader_rev.minor);
+	ret = sprintf(buf, ZIIRAVE_BL_VERSION_FMT, w_priv->bootloader_rev.major,
+		      w_priv->bootloader_rev.minor);
 
 	mutex_unlock(&w_priv->sysfs_mutex);
 
@@ -490,7 +492,7 @@ static ssize_t ziirave_wdt_sysfs_show_reason(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = sysfs_emit(buf, "%s\n", ziirave_reasons[w_priv->reset_reason]);
+	ret = sprintf(buf, "%s", ziirave_reasons[w_priv->reset_reason]);
 
 	mutex_unlock(&w_priv->sysfs_mutex);
 
@@ -535,7 +537,7 @@ static ssize_t ziirave_wdt_sysfs_store_firm(struct device *dev,
 	}
 
 	dev_info(&client->dev,
-		 "Firmware updated to version 02.%02u.%02u\n",
+		 "Firmware updated to version " ZIIRAVE_FW_VERSION_FMT "\n",
 		 w_priv->firmware_rev.major, w_priv->firmware_rev.minor);
 
 	/* Restore the watchdog timeout */
@@ -593,7 +595,8 @@ static int ziirave_wdt_init_duration(struct i2c_client *client)
 					 reset_duration);
 }
 
-static int ziirave_wdt_probe(struct i2c_client *client)
+static int ziirave_wdt_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	int ret;
 	struct ziirave_wdt_data *w_priv;
@@ -675,7 +678,7 @@ static int ziirave_wdt_probe(struct i2c_client *client)
 	}
 
 	dev_info(&client->dev,
-		 "Firmware version: 02.%02u.%02u\n",
+		 "Firmware version: " ZIIRAVE_FW_VERSION_FMT "\n",
 		 w_priv->firmware_rev.major, w_priv->firmware_rev.minor);
 
 	ret = ziirave_wdt_revision(client, &w_priv->bootloader_rev,
@@ -686,7 +689,7 @@ static int ziirave_wdt_probe(struct i2c_client *client)
 	}
 
 	dev_info(&client->dev,
-		 "Bootloader version: 01.%02u.%02u\n",
+		 "Bootloader version: " ZIIRAVE_BL_VERSION_FMT "\n",
 		 w_priv->bootloader_rev.major, w_priv->bootloader_rev.minor);
 
 	w_priv->reset_reason = i2c_smbus_read_byte_data(client,
@@ -707,11 +710,13 @@ static int ziirave_wdt_probe(struct i2c_client *client)
 	return ret;
 }
 
-static void ziirave_wdt_remove(struct i2c_client *client)
+static int ziirave_wdt_remove(struct i2c_client *client)
 {
 	struct ziirave_wdt_data *w_priv = i2c_get_clientdata(client);
 
 	watchdog_unregister_device(&w_priv->wdd);
+
+	return 0;
 }
 
 static const struct i2c_device_id ziirave_wdt_id[] = {

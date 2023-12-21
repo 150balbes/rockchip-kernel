@@ -44,7 +44,10 @@ struct arch_hw_breakpoint {
 /* Total number of available HW breakpoint registers */
 #define HBP_NUM 4
 
-#define hw_breakpoint_slots(type) (HBP_NUM)
+static inline int hw_breakpoint_slots(int type)
+{
+	return HBP_NUM;
+}
 
 struct perf_event_attr;
 struct perf_event;

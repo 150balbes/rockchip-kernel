@@ -29,6 +29,12 @@ enum {
 
 int mt76_wcid_alloc(u32 *mask, int size);
 
+static inline bool
+mt76_wcid_mask_test(u32 *mask, int idx)
+{
+	return mask[idx / 32] & BIT(idx % 32);
+}
+
 static inline void
 mt76_wcid_mask_set(u32 *mask, int idx)
 {
@@ -64,14 +70,16 @@ mt76_worker_setup(struct ieee80211_hw *hw, struct mt76_worker *w,
 
 	if (fn)
 		w->fn = fn;
-	w->task = kthread_run(__mt76_worker_fn, w,
-			      "mt76-%s %s", name, dev_name);
+	w->task = kthread_create(__mt76_worker_fn, w, "mt76-%s %s",
+				 name, dev_name);
 
-	if (IS_ERR(w->task)) {
-		ret = PTR_ERR(w->task);
+	ret = PTR_ERR_OR_ZERO(w->task);
+	if (ret) {
 		w->task = NULL;
 		return ret;
 	}
+
+	wake_up_process(w->task);
 
 	return 0;
 }

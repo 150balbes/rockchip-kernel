@@ -32,9 +32,11 @@ sh_css_vf_downscale_log2(
     const struct ia_css_frame_info *vf_info,
     unsigned int *downscale_log2);
 
-int ia_css_vf_config(struct sh_css_isp_vf_isp_config *to,
-		     const struct ia_css_vf_configuration *from,
-		     unsigned int size);
+void
+ia_css_vf_config(
+    struct sh_css_isp_vf_isp_config *to,
+    const struct ia_css_vf_configuration *from,
+    unsigned int size);
 
 int
 ia_css_vf_configure(

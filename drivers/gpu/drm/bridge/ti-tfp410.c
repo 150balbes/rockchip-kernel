@@ -6,7 +6,6 @@
 
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
-#include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/of_graph.h>
 #include <linux/platform_device.h>
@@ -15,7 +14,6 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_edid.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
@@ -206,55 +204,12 @@ static enum drm_mode_status tfp410_mode_valid(struct drm_bridge *bridge,
 	return MODE_OK;
 }
 
-static u32 *tfp410_get_input_bus_fmts(struct drm_bridge *bridge,
-				      struct drm_bridge_state *bridge_state,
-				      struct drm_crtc_state *crtc_state,
-				      struct drm_connector_state *conn_state,
-				      u32 output_fmt,
-				      unsigned int *num_input_fmts)
-{
-	struct tfp410 *dvi = drm_bridge_to_tfp410(bridge);
-	u32 *input_fmts;
-
-	*num_input_fmts = 0;
-
-	input_fmts = kzalloc(sizeof(*input_fmts), GFP_KERNEL);
-	if (!input_fmts)
-		return NULL;
-
-	*num_input_fmts = 1;
-	input_fmts[0] = dvi->bus_format;
-
-	return input_fmts;
-}
-
-static int tfp410_atomic_check(struct drm_bridge *bridge,
-			       struct drm_bridge_state *bridge_state,
-			       struct drm_crtc_state *crtc_state,
-			       struct drm_connector_state *conn_state)
-{
-	struct tfp410 *dvi = drm_bridge_to_tfp410(bridge);
-
-	/*
-	 * There might be flags negotiation supported in future.
-	 * Set the bus flags in atomic_check statically for now.
-	 */
-	bridge_state->input_bus_cfg.flags = dvi->timings.input_bus_flags;
-
-	return 0;
-}
-
 static const struct drm_bridge_funcs tfp410_bridge_funcs = {
 	.attach		= tfp410_attach,
 	.detach		= tfp410_detach,
 	.enable		= tfp410_enable,
 	.disable	= tfp410_disable,
 	.mode_valid	= tfp410_mode_valid,
-	.atomic_reset = drm_atomic_helper_bridge_reset,
-	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
-	.atomic_get_input_bus_fmts = tfp410_get_input_bus_fmts,
-	.atomic_check = tfp410_atomic_check,
 };
 
 static const struct drm_bridge_timings tfp410_default_timings = {
@@ -386,11 +341,13 @@ static int tfp410_init(struct device *dev, bool i2c)
 	return 0;
 }
 
-static void tfp410_fini(struct device *dev)
+static int tfp410_fini(struct device *dev)
 {
 	struct tfp410 *dvi = dev_get_drvdata(dev);
 
 	drm_bridge_remove(&dvi->bridge);
+
+	return 0;
 }
 
 static int tfp410_probe(struct platform_device *pdev)
@@ -398,9 +355,9 @@ static int tfp410_probe(struct platform_device *pdev)
 	return tfp410_init(&pdev->dev, false);
 }
 
-static void tfp410_remove(struct platform_device *pdev)
+static int tfp410_remove(struct platform_device *pdev)
 {
-	tfp410_fini(&pdev->dev);
+	return tfp410_fini(&pdev->dev);
 }
 
 static const struct of_device_id tfp410_match[] = {
@@ -411,7 +368,7 @@ MODULE_DEVICE_TABLE(of, tfp410_match);
 
 static struct platform_driver tfp410_platform_driver = {
 	.probe	= tfp410_probe,
-	.remove_new = tfp410_remove,
+	.remove	= tfp410_remove,
 	.driver	= {
 		.name		= "tfp410-bridge",
 		.of_match_table	= tfp410_match,
@@ -420,7 +377,8 @@ static struct platform_driver tfp410_platform_driver = {
 
 #if IS_ENABLED(CONFIG_I2C)
 /* There is currently no i2c functionality. */
-static int tfp410_i2c_probe(struct i2c_client *client)
+static int tfp410_i2c_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	int reg;
 
@@ -434,9 +392,9 @@ static int tfp410_i2c_probe(struct i2c_client *client)
 	return tfp410_init(&client->dev, true);
 }
 
-static void tfp410_i2c_remove(struct i2c_client *client)
+static int tfp410_i2c_remove(struct i2c_client *client)
 {
-	tfp410_fini(&client->dev);
+	return tfp410_fini(&client->dev);
 }
 
 static const struct i2c_device_id tfp410_i2c_ids[] = {
@@ -448,7 +406,7 @@ MODULE_DEVICE_TABLE(i2c, tfp410_i2c_ids);
 static struct i2c_driver tfp410_i2c_driver = {
 	.driver = {
 		.name	= "tfp410",
-		.of_match_table = tfp410_match,
+		.of_match_table = of_match_ptr(tfp410_match),
 	},
 	.id_table	= tfp410_i2c_ids,
 	.probe		= tfp410_i2c_probe,

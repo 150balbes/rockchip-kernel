@@ -43,7 +43,6 @@
 #include "bearer.h"
 #include <net/sock.h>
 #include <linux/module.h>
-#include <trace/events/sock.h>
 
 /* Number of messages to send before rescheduling */
 #define MAX_SEND_MSG_COUNT	25
@@ -397,7 +396,7 @@ static int tipc_conn_rcv_from_sock(struct tipc_conn *con)
 	iov.iov_base = &s;
 	iov.iov_len = sizeof(s);
 	msg.msg_name = NULL;
-	iov_iter_kvec(&msg.msg_iter, ITER_DEST, &iov, 1, iov.iov_len);
+	iov_iter_kvec(&msg.msg_iter, READ, &iov, 1, iov.iov_len);
 	ret = sock_recvmsg(con->sock, &msg, MSG_DONTWAIT);
 	if (ret == -EWOULDBLOCK)
 		return -EWOULDBLOCK;
@@ -439,8 +438,6 @@ static void tipc_conn_recv_work(struct work_struct *work)
 static void tipc_conn_data_ready(struct sock *sk)
 {
 	struct tipc_conn *con;
-
-	trace_sk_data_ready(sk);
 
 	read_lock_bh(&sk->sk_callback_lock);
 	con = sk->sk_user_data;
@@ -499,8 +496,6 @@ static void tipc_topsrv_listener_data_ready(struct sock *sk)
 {
 	struct tipc_topsrv *srv;
 
-	trace_sk_data_ready(sk);
-
 	read_lock_bh(&sk->sk_callback_lock);
 	srv = sk->sk_user_data;
 	if (srv)
@@ -533,13 +528,13 @@ static int tipc_topsrv_create_listener(struct tipc_topsrv *srv)
 		goto err;
 
 	saddr.family	                = AF_TIPC;
-	saddr.addrtype		        = TIPC_SERVICE_RANGE;
-	saddr.addr.nameseq.type	= TIPC_TOP_SRV;
+	saddr.addrtype		        = TIPC_ADDR_NAMESEQ;
+	saddr.addr.nameseq.type	        = TIPC_TOP_SRV;
 	saddr.addr.nameseq.lower	= TIPC_TOP_SRV;
 	saddr.addr.nameseq.upper	= TIPC_TOP_SRV;
 	saddr.scope			= TIPC_NODE_SCOPE;
 
-	rc = tipc_sk_bind(lsock, (struct sockaddr *)&saddr, sizeof(saddr));
+	rc = kernel_bind(lsock, (struct sockaddr *)&saddr, sizeof(saddr));
 	if (rc < 0)
 		goto err;
 	rc = kernel_listen(lsock, 0);

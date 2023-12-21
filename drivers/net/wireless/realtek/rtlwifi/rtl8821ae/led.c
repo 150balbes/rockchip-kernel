@@ -6,15 +6,24 @@
 #include "reg.h"
 #include "led.h"
 
-void rtl8821ae_sw_led_on(struct ieee80211_hw *hw, enum rtl_led_pin pin)
+static void _rtl8821ae_init_led(struct ieee80211_hw *hw,
+				struct rtl_led *pled,
+				enum rtl_led_pin ledpin)
+{
+	pled->hw = hw;
+	pled->ledpin = ledpin;
+	pled->ledon = false;
+}
+
+void rtl8821ae_sw_led_on(struct ieee80211_hw *hw, struct rtl_led *pled)
 {
 	u8 ledcfg;
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
 	rtl_dbg(rtlpriv, COMP_LED, DBG_LOUD,
-		"LedAddr:%X ledpin=%d\n", REG_LEDCFG2, pin);
+		"LedAddr:%X ledpin=%d\n", REG_LEDCFG2, pled->ledpin);
 
-	switch (pin) {
+	switch (pled->ledpin) {
 	case LED_PIN_GPIO0:
 		break;
 	case LED_PIN_LED0:
@@ -29,18 +38,19 @@ void rtl8821ae_sw_led_on(struct ieee80211_hw *hw, enum rtl_led_pin pin)
 		break;
 	default:
 		rtl_dbg(rtlpriv, COMP_ERR, DBG_LOUD,
-			"switch case %#x not processed\n", pin);
+			"switch case %#x not processed\n", pled->ledpin);
 		break;
 	}
+	pled->ledon = true;
 }
 
-void rtl8812ae_sw_led_on(struct ieee80211_hw *hw, enum rtl_led_pin pin)
+void rtl8812ae_sw_led_on(struct ieee80211_hw *hw, struct rtl_led *pled)
 {
 	u16	ledreg = REG_LEDCFG1;
 	u8	ledcfg = 0;
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
-	switch (pin) {
+	switch (pled->ledpin) {
 	case LED_PIN_LED0:
 		ledreg = REG_LEDCFG1;
 		break;
@@ -56,26 +66,27 @@ void rtl8812ae_sw_led_on(struct ieee80211_hw *hw, enum rtl_led_pin pin)
 
 	rtl_dbg(rtlpriv, COMP_LED, DBG_LOUD,
 		"In SwLedOn, LedAddr:%X LEDPIN=%d\n",
-		ledreg, pin);
+		ledreg, pled->ledpin);
 
 	ledcfg =  rtl_read_byte(rtlpriv, ledreg);
 	ledcfg |= BIT(5); /*Set 0x4c[21]*/
 	ledcfg &= ~(BIT(7) | BIT(6) | BIT(3) | BIT(2) | BIT(1) | BIT(0));
 		/*Clear 0x4c[23:22] and 0x4c[19:16]*/
 	rtl_write_byte(rtlpriv, ledreg, ledcfg); /*SW control led0 on.*/
+	pled->ledon = true;
 }
 
-void rtl8821ae_sw_led_off(struct ieee80211_hw *hw, enum rtl_led_pin pin)
+void rtl8821ae_sw_led_off(struct ieee80211_hw *hw, struct rtl_led *pled)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	u8 ledcfg;
 
 	rtl_dbg(rtlpriv, COMP_LED, DBG_LOUD,
-		"LedAddr:%X ledpin=%d\n", REG_LEDCFG2, pin);
+		"LedAddr:%X ledpin=%d\n", REG_LEDCFG2, pled->ledpin);
 
 	ledcfg = rtl_read_byte(rtlpriv, REG_LEDCFG2);
 
-	switch (pin) {
+	switch (pled->ledpin) {
 	case LED_PIN_GPIO0:
 		break;
 	case LED_PIN_LED0:
@@ -99,17 +110,18 @@ void rtl8821ae_sw_led_off(struct ieee80211_hw *hw, enum rtl_led_pin pin)
 		break;
 	default:
 		rtl_dbg(rtlpriv, COMP_ERR, DBG_LOUD,
-			"switch case %#x not processed\n", pin);
+			"switch case %#x not processed\n", pled->ledpin);
 		break;
 	}
+	pled->ledon = false;
 }
 
-void rtl8812ae_sw_led_off(struct ieee80211_hw *hw, enum rtl_led_pin pin)
+void rtl8812ae_sw_led_off(struct ieee80211_hw *hw, struct rtl_led *pled)
 {
 	u16 ledreg = REG_LEDCFG1;
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
-	switch (pin) {
+	switch (pled->ledpin) {
 	case LED_PIN_LED0:
 		ledreg = REG_LEDCFG1;
 		break;
@@ -125,7 +137,7 @@ void rtl8812ae_sw_led_off(struct ieee80211_hw *hw, enum rtl_led_pin pin)
 
 	rtl_dbg(rtlpriv, COMP_LED, DBG_LOUD,
 		"In SwLedOff,LedAddr:%X LEDPIN=%d\n",
-		ledreg, pin);
+		ledreg, pled->ledpin);
 	/*Open-drain arrangement for controlling the LED*/
 	if (rtlpriv->ledctl.led_opendrain) {
 		u8 ledcfg = rtl_read_byte(rtlpriv, ledreg);
@@ -140,13 +152,23 @@ void rtl8812ae_sw_led_off(struct ieee80211_hw *hw, enum rtl_led_pin pin)
 	} else {
 		rtl_write_byte(rtlpriv, ledreg, 0x28);
 	}
+
+	pled->ledon = false;
+}
+
+void rtl8821ae_init_sw_leds(struct ieee80211_hw *hw)
+{
+	struct rtl_priv *rtlpriv = rtl_priv(hw);
+
+	_rtl8821ae_init_led(hw, &rtlpriv->ledctl.sw_led0, LED_PIN_LED0);
+	_rtl8821ae_init_led(hw, &rtlpriv->ledctl.sw_led1, LED_PIN_LED1);
 }
 
 static void _rtl8821ae_sw_led_control(struct ieee80211_hw *hw,
 				      enum led_ctl_mode ledaction)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
-	enum rtl_led_pin pin0 = rtlpriv->ledctl.sw_led0;
+	struct rtl_led *pled0 = &rtlpriv->ledctl.sw_led0;
 	struct rtl_hal *rtlhal = rtl_hal(rtl_priv(hw));
 
 	switch (ledaction) {
@@ -154,15 +176,15 @@ static void _rtl8821ae_sw_led_control(struct ieee80211_hw *hw,
 	case LED_CTL_LINK:
 	case LED_CTL_NO_LINK:
 		if (rtlhal->hw_type == HARDWARE_TYPE_RTL8812AE)
-			rtl8812ae_sw_led_on(hw, pin0);
+			rtl8812ae_sw_led_on(hw, pled0);
 		else
-			rtl8821ae_sw_led_on(hw, pin0);
+			rtl8821ae_sw_led_on(hw, pled0);
 		break;
 	case LED_CTL_POWER_OFF:
 		if (rtlhal->hw_type == HARDWARE_TYPE_RTL8812AE)
-			rtl8812ae_sw_led_off(hw, pin0);
+			rtl8812ae_sw_led_off(hw, pled0);
 		else
-			rtl8821ae_sw_led_off(hw, pin0);
+			rtl8821ae_sw_led_off(hw, pled0);
 		break;
 	default:
 		break;

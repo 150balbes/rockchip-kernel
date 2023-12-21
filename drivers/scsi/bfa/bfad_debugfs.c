@@ -371,7 +371,8 @@ bfad_debugfs_release_fwtrc(struct inode *inode, struct file *file)
 	if (!fw_debug)
 		return 0;
 
-	vfree(fw_debug->debug_buffer);
+	if (fw_debug->debug_buffer)
+		vfree(fw_debug->debug_buffer);
 
 	file->private_data = NULL;
 	kfree(fw_debug);

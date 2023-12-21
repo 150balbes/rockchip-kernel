@@ -15,7 +15,8 @@ unsigned long unwind_get_return_address(struct unwind_state *state)
 
 	addr = READ_ONCE_NOCHECK(*state->sp);
 
-	return unwind_recover_ret_addr(state, addr, state->sp);
+	return ftrace_graph_ret_addr(state->task, &state->graph_idx,
+				     addr, state->sp);
 }
 EXPORT_SYMBOL_GPL(unwind_get_return_address);
 

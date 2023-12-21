@@ -14,51 +14,36 @@
 
 #ifdef CONFIG_EFI
 extern void efi_init(void);
-
-bool efi_runtime_fixup_exception(struct pt_regs *regs, const char *msg);
 #else
 #define efi_init()
-
-static inline
-bool efi_runtime_fixup_exception(struct pt_regs *regs, const char *msg)
-{
-	return false;
-}
 #endif
 
 int efi_create_mapping(struct mm_struct *mm, efi_memory_desc_t *md);
-int efi_set_mapping_permissions(struct mm_struct *mm, efi_memory_desc_t *md,
-				bool has_bti);
+int efi_set_mapping_permissions(struct mm_struct *mm, efi_memory_desc_t *md);
 
 #define arch_efi_call_virt_setup()					\
 ({									\
 	efi_virtmap_load();						\
 	__efi_fpsimd_begin();						\
-	raw_spin_lock(&efi_rt_lock);					\
+	spin_lock(&efi_rt_lock);					\
 })
 
-#undef arch_efi_call_virt
 #define arch_efi_call_virt(p, f, args...)				\
-	__efi_rt_asm_wrapper((p)->f, #f, args)
+({									\
+	efi_##f##_t *__f;						\
+	__f = p->f;							\
+	__efi_rt_asm_wrapper(__f, #f, args);				\
+})
 
 #define arch_efi_call_virt_teardown()					\
 ({									\
-	raw_spin_unlock(&efi_rt_lock);					\
+	spin_unlock(&efi_rt_lock);					\
 	__efi_fpsimd_end();						\
 	efi_virtmap_unload();						\
 })
 
-extern raw_spinlock_t efi_rt_lock;
-extern u64 *efi_rt_stack_top;
+extern spinlock_t efi_rt_lock;
 efi_status_t __efi_rt_asm_wrapper(void *, const char *, ...);
-
-/*
- * efi_rt_stack_top[-1] contains the value the stack pointer had before
- * switching to the EFI runtime stack.
- */
-#define current_in_efi()						\
-	(!preemptible() && efi_rt_stack_top != NULL &&			\
-	 on_task_stack(current, READ_ONCE(efi_rt_stack_top[-1]), 1))
 
 #define ARCH_EFI_IRQ_FLAGS_MASK (PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT)
 
@@ -82,13 +67,19 @@ efi_status_t __efi_rt_asm_wrapper(void *, const char *, ...);
 #define EFI_KIMG_ALIGN	\
 	(SEGMENT_ALIGN > THREAD_ALIGN ? SEGMENT_ALIGN : THREAD_ALIGN)
 
+/* on arm64, the FDT may be located anywhere in system RAM */
+static inline unsigned long efi_get_max_fdt_addr(unsigned long image_addr)
+{
+	return ULONG_MAX;
+}
+
 /*
  * On arm64, we have to ensure that the initrd ends up in the linear region,
  * which is a 1 GB aligned region of size '1UL << (VA_BITS_MIN - 1)' that is
  * guaranteed to cover the kernel Image.
  *
  * Since the EFI stub is part of the kernel Image, we can relax the
- * usual requirements in Documentation/arch/arm64/booting.rst, which still
+ * usual requirements in Documentation/arm64/booting.rst, which still
  * apply to other bootloaders, and are required for some kernel
  * configurations.
  */
@@ -97,25 +88,17 @@ static inline unsigned long efi_get_max_initrd_addr(unsigned long image_addr)
 	return (image_addr & ~(SZ_1G - 1UL)) + (1UL << (VA_BITS_MIN - 1));
 }
 
-static inline unsigned long efi_get_kimg_min_align(void)
-{
-	extern bool efi_nokaslr;
+#define alloc_screen_info(x...)		&screen_info
 
-	/*
-	 * Although relocatable kernels can fix up the misalignment with
-	 * respect to MIN_KIMG_ALIGN, the resulting virtual text addresses are
-	 * subtly out of sync with those recorded in the vmlinux when kaslr is
-	 * disabled but the image required relocation anyway. Therefore retain
-	 * 2M alignment if KASLR was explicitly disabled, even if it was not
-	 * going to be activated to begin with.
-	 */
-	return efi_nokaslr ? MIN_KIMG_ALIGN : EFI_KIMG_ALIGN;
+static inline void free_screen_info(struct screen_info *si)
+{
+}
+
+static inline void efifb_setup_from_dmi(struct screen_info *si, const char *opt)
+{
 }
 
 #define EFI_ALLOC_ALIGN		SZ_64K
-#define EFI_ALLOC_LIMIT		((1UL << 48) - 1)
-
-extern unsigned long primary_entry_offset(void);
 
 /*
  * On ARM systems, virtually remapped UEFI runtime services are set up in two
@@ -160,12 +143,5 @@ static inline void efi_set_pgd(struct mm_struct *mm)
 
 void efi_virtmap_load(void);
 void efi_virtmap_unload(void);
-
-static inline void efi_capsule_flush_cache_range(void *addr, int size)
-{
-	dcache_clean_inval_poc((unsigned long)addr, (unsigned long)addr + size);
-}
-
-efi_status_t efi_handle_corrupted_x18(efi_status_t s, const char *f);
 
 #endif /* _ASM_EFI_H */

@@ -72,8 +72,6 @@
 
 #include <asm/mach-loongson64/cpucfg-emul.h>
 
-#include "access-helper.h"
-
 extern void check_wait(void);
 extern asmlinkage void rollback_handle_int(void);
 extern asmlinkage void handle_int(void);
@@ -103,21 +101,14 @@ extern asmlinkage void handle_reserved(void);
 extern void tlb_do_page_fault_0(void);
 
 void (*board_be_init)(void);
-static int (*board_be_handler)(struct pt_regs *regs, int is_fixup);
+int (*board_be_handler)(struct pt_regs *regs, int is_fixup);
 void (*board_nmi_handler_setup)(void);
 void (*board_ejtag_handler_setup)(void);
 void (*board_bind_eic_interrupt)(int irq, int regset);
 void (*board_ebase_setup)(void);
 void(*board_cache_error_setup)(void);
 
-void mips_set_be_handler(int (*handler)(struct pt_regs *regs, int is_fixup))
-{
-	board_be_handler = handler;
-}
-EXPORT_SYMBOL_GPL(mips_set_be_handler);
-
-static void show_raw_backtrace(unsigned long reg29, const char *loglvl,
-			       bool user)
+static void show_raw_backtrace(unsigned long reg29, const char *loglvl)
 {
 	unsigned long *sp = (unsigned long *)(reg29 & ~3);
 	unsigned long addr;
@@ -127,7 +118,9 @@ static void show_raw_backtrace(unsigned long reg29, const char *loglvl,
 	printk("%s\n", loglvl);
 #endif
 	while (!kstack_end(sp)) {
-		if (__get_addr(&addr, sp++, user)) {
+		unsigned long __user *p =
+			(unsigned long __user *)(unsigned long)sp++;
+		if (__get_user(addr, p)) {
 			printk("%s (Bad stack address)", loglvl);
 			break;
 		}
@@ -148,7 +141,7 @@ __setup("raw_show_trace", set_raw_show_trace);
 #endif
 
 static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
-			   const char *loglvl, bool user)
+			   const char *loglvl)
 {
 	unsigned long sp = regs->regs[29];
 	unsigned long ra = regs->regs[31];
@@ -158,7 +151,7 @@ static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
 		task = current;
 
 	if (raw_show_trace || user_mode(regs) || !__kernel_text_address(pc)) {
-		show_raw_backtrace(sp, loglvl, user);
+		show_raw_backtrace(sp, loglvl);
 		return;
 	}
 	printk("%sCall Trace:\n", loglvl);
@@ -174,12 +167,12 @@ static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
  * with at least a bit of error checking ...
  */
 static void show_stacktrace(struct task_struct *task,
-	const struct pt_regs *regs, const char *loglvl, bool user)
+	const struct pt_regs *regs, const char *loglvl)
 {
 	const int field = 2 * sizeof(unsigned long);
-	unsigned long stackdata;
+	long stackdata;
 	int i;
-	unsigned long *sp = (unsigned long *)regs->regs[29];
+	unsigned long __user *sp = (unsigned long __user *)regs->regs[29];
 
 	printk("%sStack :", loglvl);
 	i = 0;
@@ -193,7 +186,7 @@ static void show_stacktrace(struct task_struct *task,
 			break;
 		}
 
-		if (__get_addr(&stackdata, sp++, user)) {
+		if (__get_user(stackdata, sp++)) {
 			pr_cont(" (Bad stack address)");
 			break;
 		}
@@ -202,12 +195,13 @@ static void show_stacktrace(struct task_struct *task,
 		i++;
 	}
 	pr_cont("\n");
-	show_backtrace(task, regs, loglvl, user);
+	show_backtrace(task, regs, loglvl);
 }
 
 void show_stack(struct task_struct *task, unsigned long *sp, const char *loglvl)
 {
 	struct pt_regs regs;
+	mm_segment_t old_fs = get_fs();
 
 	regs.cp0_status = KSU_KERNEL;
 	if (sp) {
@@ -223,41 +217,33 @@ void show_stack(struct task_struct *task, unsigned long *sp, const char *loglvl)
 			prepare_frametrace(&regs);
 		}
 	}
-	show_stacktrace(task, &regs, loglvl, false);
+	/*
+	 * show_stack() deals exclusively with kernel mode, so be sure to access
+	 * the stack in the kernel (not user) address space.
+	 */
+	set_fs(KERNEL_DS);
+	show_stacktrace(task, &regs, loglvl);
+	set_fs(old_fs);
 }
 
-static void show_code(void *pc, bool user)
+static void show_code(unsigned int __user *pc)
 {
 	long i;
-	unsigned short *pc16 = NULL;
+	unsigned short __user *pc16 = NULL;
 
 	printk("Code:");
 
 	if ((unsigned long)pc & 1)
-		pc16 = (u16 *)((unsigned long)pc & ~1);
-
+		pc16 = (unsigned short __user *)((unsigned long)pc & ~1);
 	for(i = -3 ; i < 6 ; i++) {
-		if (pc16) {
-			u16 insn16;
-
-			if (__get_inst16(&insn16, pc16 + i, user))
-				goto bad_address;
-
-			pr_cont("%c%04x%c", (i?' ':'<'), insn16, (i?' ':'>'));
-		} else {
-			u32 insn32;
-
-			if (__get_inst32(&insn32, (u32 *)pc + i, user))
-				goto bad_address;
-
-			pr_cont("%c%08x%c", (i?' ':'<'), insn32, (i?' ':'>'));
+		unsigned int insn;
+		if (pc16 ? __get_user(insn, pc16 + i) : __get_user(insn, pc + i)) {
+			pr_cont(" (Bad address in epc)\n");
+			break;
 		}
+		pr_cont("%c%0*x%c", (i?' ':'<'), pc16 ? 4 : 8, insn, (i?' ':'>'));
 	}
 	pr_cont("\n");
-	return;
-
-bad_address:
-	pr_cont(" (Bad address in epc)\n\n");
 }
 
 static void __show_regs(const struct pt_regs *regs)
@@ -370,6 +356,7 @@ void show_regs(struct pt_regs *regs)
 void show_registers(struct pt_regs *regs)
 {
 	const int field = 2 * sizeof(unsigned long);
+	mm_segment_t old_fs = get_fs();
 
 	__show_regs(regs);
 	print_modules();
@@ -384,9 +371,13 @@ void show_registers(struct pt_regs *regs)
 			printk("*HwTLS: %0*lx\n", field, tls);
 	}
 
-	show_stacktrace(current, regs, KERN_DEFAULT, user_mode(regs));
-	show_code((void *)regs->cp0_epc, user_mode(regs));
+	if (!user_mode(regs))
+		/* Necessary for getting the correct stack content */
+		set_fs(KERNEL_DS);
+	show_stacktrace(current, regs, KERN_DEFAULT);
+	show_code((unsigned int __user *) regs->cp0_epc);
 	printk("\n");
+	set_fs(old_fs);
 }
 
 static DEFINE_RAW_SPINLOCK(die_lock);
@@ -422,7 +413,7 @@ void __noreturn die(const char *str, struct pt_regs *regs)
 	if (regs && kexec_should_crash(current))
 		crash_kexec(regs);
 
-	make_task_dead(sig);
+	do_exit(sig);
 }
 
 extern struct exception_table_entry __start___dbe_table[];
@@ -790,6 +781,7 @@ void force_fcr31_sig(unsigned long fcr31, void __user *fault_addr,
 int process_fpemu_return(int sig, void __user *fault_addr, unsigned long fcr31)
 {
 	int si_code;
+	struct vm_area_struct *vma;
 
 	switch (sig) {
 	case 0:
@@ -805,7 +797,8 @@ int process_fpemu_return(int sig, void __user *fault_addr, unsigned long fcr31)
 
 	case SIGSEGV:
 		mmap_read_lock(current->mm);
-		if (vma_lookup(current->mm, (unsigned long)fault_addr))
+		vma = find_vma(current->mm, (unsigned long)fault_addr);
+		if (vma && (vma->vm_start <= (unsigned long)fault_addr))
 			si_code = SEGV_ACCERR;
 		else
 			si_code = SEGV_MAPERR;
@@ -1029,14 +1022,18 @@ asmlinkage void do_bp(struct pt_regs *regs)
 	unsigned long epc = msk_isa16_mode(exception_epc(regs));
 	unsigned int opcode, bcode;
 	enum ctx_state prev_state;
-	bool user = user_mode(regs);
+	mm_segment_t seg;
+
+	seg = get_fs();
+	if (!user_mode(regs))
+		set_fs(KERNEL_DS);
 
 	prev_state = exception_enter();
 	current->thread.trap_nr = (regs->cp0_cause >> 2) & 0x1f;
 	if (get_isa16_mode(regs->cp0_epc)) {
 		u16 instr[2];
 
-		if (__get_inst16(&instr[0], (u16 *)epc, user))
+		if (__get_user(instr[0], (u16 __user *)epc))
 			goto out_sigsegv;
 
 		if (!cpu_has_mmips) {
@@ -1047,13 +1044,13 @@ asmlinkage void do_bp(struct pt_regs *regs)
 			bcode = instr[0] & 0xf;
 		} else {
 			/* 32-bit microMIPS BREAK */
-			if (__get_inst16(&instr[1], (u16 *)(epc + 2), user))
+			if (__get_user(instr[1], (u16 __user *)(epc + 2)))
 				goto out_sigsegv;
 			opcode = (instr[0] << 16) | instr[1];
 			bcode = (opcode >> 6) & ((1 << 20) - 1);
 		}
 	} else {
-		if (__get_inst32(&opcode, (u32 *)epc, user))
+		if (__get_user(opcode, (unsigned int __user *)epc))
 			goto out_sigsegv;
 		bcode = (opcode >> 6) & ((1 << 20) - 1);
 	}
@@ -1103,6 +1100,7 @@ asmlinkage void do_bp(struct pt_regs *regs)
 	do_trap_or_bp(regs, bcode, TRAP_BRKPT, "Break");
 
 out:
+	set_fs(seg);
 	exception_exit(prev_state);
 	return;
 
@@ -1116,21 +1114,25 @@ asmlinkage void do_tr(struct pt_regs *regs)
 	u32 opcode, tcode = 0;
 	enum ctx_state prev_state;
 	u16 instr[2];
-	bool user = user_mode(regs);
+	mm_segment_t seg;
 	unsigned long epc = msk_isa16_mode(exception_epc(regs));
+
+	seg = get_fs();
+	if (!user_mode(regs))
+		set_fs(KERNEL_DS);
 
 	prev_state = exception_enter();
 	current->thread.trap_nr = (regs->cp0_cause >> 2) & 0x1f;
 	if (get_isa16_mode(regs->cp0_epc)) {
-		if (__get_inst16(&instr[0], (u16 *)(epc + 0), user) ||
-		    __get_inst16(&instr[1], (u16 *)(epc + 2), user))
+		if (__get_user(instr[0], (u16 __user *)(epc + 0)) ||
+		    __get_user(instr[1], (u16 __user *)(epc + 2)))
 			goto out_sigsegv;
 		opcode = (instr[0] << 16) | instr[1];
 		/* Immediate versions don't provide a code.  */
 		if (!(opcode & OPCODE))
 			tcode = (opcode >> 12) & ((1 << 4) - 1);
 	} else {
-		if (__get_inst32(&opcode, (u32 *)epc, user))
+		if (__get_user(opcode, (u32 __user *)epc))
 			goto out_sigsegv;
 		/* Immediate versions don't provide a code.  */
 		if (!(opcode & OPCODE))
@@ -1140,6 +1142,7 @@ asmlinkage void do_tr(struct pt_regs *regs)
 	do_trap_or_bp(regs, tcode, 0, "Trap");
 
 out:
+	set_fs(seg);
 	exception_exit(prev_state);
 	return;
 
@@ -1588,6 +1591,7 @@ asmlinkage void do_mcheck(struct pt_regs *regs)
 {
 	int multi_match = regs->cp0_status & ST0_TS;
 	enum ctx_state prev_state;
+	mm_segment_t old_fs = get_fs();
 
 	prev_state = exception_enter();
 	show_regs(regs);
@@ -1598,7 +1602,12 @@ asmlinkage void do_mcheck(struct pt_regs *regs)
 		dump_tlb_all();
 	}
 
-	show_code((void *)regs->cp0_epc, user_mode(regs));
+	if (!user_mode(regs))
+		set_fs(KERNEL_DS);
+
+	show_code((unsigned int __user *) regs->cp0_epc);
+
+	set_fs(old_fs);
 
 	/*
 	 * Some chips may have other causes of machine check (e.g. SB1
@@ -2000,15 +2009,12 @@ void __noreturn nmi_exception_handler(struct pt_regs *regs)
 	nmi_exit();
 }
 
+#define VECTORSPACING 0x100	/* for EI/VI mode */
+
 unsigned long ebase;
 EXPORT_SYMBOL_GPL(ebase);
 unsigned long exception_handlers[32];
 unsigned long vi_handlers[64];
-
-void reserve_exception_space(phys_addr_t addr, unsigned long size)
-{
-	memblock_reserve(addr, size);
-}
 
 void __init *set_except_vector(int n, void *addr)
 {
@@ -2361,7 +2367,10 @@ void __init trap_init(void)
 
 	if (!cpu_has_mips_r2_r6) {
 		ebase = CAC_BASE;
+		ebase_pa = virt_to_phys((void *)ebase);
 		vec_size = 0x400;
+
+		memblock_reserve(ebase_pa, vec_size);
 	} else {
 		if (cpu_has_veic || cpu_has_vint)
 			vec_size = 0x200 + VECTORSPACING*64;

@@ -198,7 +198,7 @@ static int adv748x_initialise_clients(struct adv748x_state *state)
 			return ret;
 	}
 
-	return 0;
+	return adv748x_set_slave_addresses(state);
 }
 
 /**
@@ -516,10 +516,6 @@ static int adv748x_reset(struct adv748x_state *state)
 	if (ret)
 		return ret;
 
-	adv748x_afe_s_input(&state->afe, state->afe.input);
-
-	adv_dbg(state, "AFE Default input set to %d\n", state->afe.input);
-
 	/* Reset TXA and TXB */
 	adv748x_tx_power(&state->txa, 1);
 	adv748x_tx_power(&state->txa, 0);
@@ -530,14 +526,10 @@ static int adv748x_reset(struct adv748x_state *state)
 	io_write(state, ADV748X_IO_PD, ADV748X_IO_PD_RX_EN);
 
 	/* Conditionally enable TXa and TXb. */
-	if (is_tx_enabled(&state->txa)) {
+	if (is_tx_enabled(&state->txa))
 		regval |= ADV748X_IO_10_CSI4_EN;
-		adv748x_csi2_set_virtual_channel(&state->txa, 0);
-	}
-	if (is_tx_enabled(&state->txb)) {
+	if (is_tx_enabled(&state->txb))
 		regval |= ADV748X_IO_10_CSI1_EN;
-		adv748x_csi2_set_virtual_channel(&state->txb, 0);
-	}
 	io_write(state, ADV748X_IO_10, regval);
 
 	/* Use vid_std and v_freq as freerun resolution for CP */
@@ -563,18 +555,6 @@ static int adv748x_identify_chip(struct adv748x_state *state)
 		 state->client->addr << 1, lsb, msb);
 
 	return 0;
-}
-
-/* -----------------------------------------------------------------------------
- * Suspend / Resume
- */
-
-static int __maybe_unused adv748x_resume_early(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-	struct adv748x_state *state = i2c_get_clientdata(client);
-
-	return adv748x_reset(state);
 }
 
 /* -----------------------------------------------------------------------------
@@ -609,13 +589,14 @@ static int adv748x_parse_csi2_lanes(struct adv748x_state *state,
 				    unsigned int port,
 				    struct device_node *ep)
 {
-	struct v4l2_fwnode_endpoint vep = { .bus_type = V4L2_MBUS_CSI2_DPHY };
+	struct v4l2_fwnode_endpoint vep;
 	unsigned int num_lanes;
 	int ret;
 
 	if (port != ADV748X_PORT_TXA && port != ADV748X_PORT_TXB)
 		return 0;
 
+	vep.bus_type = V4L2_MBUS_CSI2_DPHY;
 	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(ep), &vep);
 	if (ret)
 		return ret;
@@ -815,7 +796,7 @@ err_free_mutex:
 	return ret;
 }
 
-static void adv748x_remove(struct i2c_client *client)
+static int adv748x_remove(struct i2c_client *client)
 {
 	struct adv748x_state *state = i2c_get_clientdata(client);
 
@@ -828,6 +809,8 @@ static void adv748x_remove(struct i2c_client *client)
 	adv748x_unregister_clients(state);
 	adv748x_dt_cleanup(state);
 	mutex_destroy(&state->mutex);
+
+	return 0;
 }
 
 static const struct of_device_id adv748x_of_table[] = {
@@ -837,17 +820,12 @@ static const struct of_device_id adv748x_of_table[] = {
 };
 MODULE_DEVICE_TABLE(of, adv748x_of_table);
 
-static const struct dev_pm_ops adv748x_pm_ops = {
-	SET_LATE_SYSTEM_SLEEP_PM_OPS(NULL, adv748x_resume_early)
-};
-
 static struct i2c_driver adv748x_driver = {
 	.driver = {
 		.name = "adv748x",
 		.of_match_table = adv748x_of_table,
-		.pm = &adv748x_pm_ops,
 	},
-	.probe = adv748x_probe,
+	.probe_new = adv748x_probe,
 	.remove = adv748x_remove,
 };
 

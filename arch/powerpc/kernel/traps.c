@@ -37,11 +37,10 @@
 #include <linux/smp.h>
 #include <linux/console.h>
 #include <linux/kmsg_dump.h>
-#include <linux/debugfs.h>
 
 #include <asm/emulated_ops.h>
 #include <linux/uaccess.h>
-#include <asm/interrupt.h>
+#include <asm/debugfs.h>
 #include <asm/io.h>
 #include <asm/machdep.h>
 #include <asm/rtas.h>
@@ -53,6 +52,7 @@
 #ifdef CONFIG_PPC64
 #include <asm/firmware.h>
 #include <asm/processor.h>
+#include <asm/tm.h>
 #endif
 #include <asm/kexec.h>
 #include <asm/ppc-opcode.h>
@@ -67,8 +67,6 @@
 #include <asm/kprobes.h>
 #include <asm/stacktrace.h>
 #include <asm/nmi.h>
-#include <asm/disassemble.h>
-#include <asm/udbg.h>
 
 #if defined(CONFIG_DEBUGGER) || defined(CONFIG_KEXEC_CORE)
 int (*__debugger)(struct pt_regs *regs) __read_mostly;
@@ -172,6 +170,7 @@ extern void panic_flush_kmsg_start(void)
 
 extern void panic_flush_kmsg_end(void)
 {
+	printk_safe_flush_on_panic();
 	kmsg_dump(KMSG_DUMP_PANIC);
 	bust_spinlocks(0);
 	debug_locks_off();
@@ -222,7 +221,7 @@ static void oops_end(unsigned long flags, struct pt_regs *regs,
 	/*
 	 * system_reset_excption handles debugger, crash dump, panic, for 0x100
 	 */
-	if (TRAP(regs) == INTERRUPT_SYSTEM_RESET)
+	if (TRAP(regs) == 0x100)
 		return;
 
 	crash_fadump(regs, "die oops");
@@ -246,7 +245,7 @@ static void oops_end(unsigned long flags, struct pt_regs *regs,
 
 	if (panic_on_oops)
 		panic("Fatal exception");
-	make_task_dead(signr);
+	do_exit(signr);
 }
 NOKPROBE_SYMBOL(oops_end);
 
@@ -290,7 +289,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 	/*
 	 * system_reset_excption handles debugger, crash dump, panic, for 0x100
 	 */
-	if (TRAP(regs) != INTERRUPT_SYSTEM_RESET) {
+	if (TRAP(regs) != 0x100) {
 		if (debugger(regs))
 			return;
 	}
@@ -341,18 +340,18 @@ static bool exception_common(int signr, struct pt_regs *regs, int code,
 		return false;
 	}
 
-	/*
-	 * Must not enable interrupts even for user-mode exception, because
-	 * this can be called from machine check, which may be a NMI or IRQ
-	 * which don't like interrupts being enabled. Could check for
-	 * in_hardirq || in_nmi perhaps, but there doesn't seem to be a good
-	 * reason why _exception() should enable irqs for an exception handler,
-	 * the handlers themselves do that directly.
-	 */
-
 	show_signal_msg(signr, regs, code, addr);
 
+	if (arch_irqs_disabled() && !arch_irq_disabled_regs(regs))
+		local_irq_enable();
+
 	current->thread.trap_nr = code;
+
+	/*
+	 * Save all the pkey registers AMR/IAMR/UAMOR. Eg: Core dumps need
+	 * to capture the content, if the task gets killed.
+	 */
+	thread_pkey_regs_save(&current->thread);
 
 	return true;
 }
@@ -394,7 +393,7 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
  * Builds that do not support KVM could take this second option to increase
  * the recoverability of NMIs.
  */
-noinstr void hv_nmi_check_nonrecoverable(struct pt_regs *regs)
+void hv_nmi_check_nonrecoverable(struct pt_regs *regs)
 {
 #ifdef CONFIG_PPC_POWERNV
 	unsigned long kbase = (unsigned long)_stext;
@@ -411,7 +410,7 @@ noinstr void hv_nmi_check_nonrecoverable(struct pt_regs *regs)
 	 * Now test if the interrupt has hit a range that may be using
 	 * HSPRG1 without having RI=0 (i.e., an HSRR interrupt). The
 	 * problem ranges all run un-relocated. Test real and virt modes
-	 * at the same time by dropping the high bit of the nip (virt mode
+	 * at the same time by droping the high bit of the nip (virt mode
 	 * entry points still have the +0x4000 offset).
 	 */
 	nip &= ~0xc000000000000000ULL;
@@ -435,14 +434,18 @@ noinstr void hv_nmi_check_nonrecoverable(struct pt_regs *regs)
 
 nonrecoverable:
 	regs->msr &= ~MSR_RI;
-	local_paca->hsrr_valid = 0;
-	local_paca->srr_valid = 0;
 #endif
 }
-DEFINE_INTERRUPT_HANDLER_NMI(system_reset_exception)
+
+void system_reset_exception(struct pt_regs *regs)
 {
 	unsigned long hsrr0, hsrr1;
 	bool saved_hsrrs = false;
+	u8 ftrace_enabled = this_cpu_get_ftrace_enabled();
+
+	this_cpu_set_ftrace_enabled(0);
+
+	nmi_enter();
 
 	/*
 	 * System reset can interrupt code where HSRRs are live and MSR[RI]=1.
@@ -506,7 +509,7 @@ out:
 		die("Unrecoverable nested System Reset", regs, SIGABRT);
 #endif
 	/* Must die if the interrupt is not recoverable */
-	if (regs_is_unrecoverable(regs)) {
+	if (!(regs->msr & MSR_RI)) {
 		/* For the reason explained in die_mce, nmi_exit before die */
 		nmi_exit();
 		die("Unrecoverable System Reset", regs, SIGABRT);
@@ -517,9 +520,11 @@ out:
 		mtspr(SPRN_HSRR1, hsrr1);
 	}
 
-	/* What should we do here? We could issue a shutdown or hard reset. */
+	nmi_exit();
 
-	return 0;
+	this_cpu_set_ftrace_enabled(ftrace_enabled);
+
+	/* What should we do here? We could issue a shutdown or hard reset. */
 }
 
 /*
@@ -546,11 +551,11 @@ static inline int check_io_access(struct pt_regs *regs)
 		 * For the debug message, we look at the preceding
 		 * load or store.
 		 */
-		if (*nip == PPC_RAW_NOP())
+		if (*nip == PPC_INST_NOP)
 			nip -= 2;
-		else if (*nip == PPC_RAW_ISYNC())
+		else if (*nip == PPC_INST_ISYNC)
 			--nip;
-		if (*nip == PPC_RAW_SYNC() || get_op(*nip) == OP_TRAP) {
+		if (*nip == PPC_INST_SYNC || (*nip >> 26) == OP_TRAP) {
 			unsigned int rb;
 
 			--nip;
@@ -558,8 +563,8 @@ static inline int check_io_access(struct pt_regs *regs)
 			printk(KERN_DEBUG "%s bad port %lx at %p\n",
 			       (*nip & 0x100)? "OUT to": "IN from",
 			       regs->gpr[rb] - _IO_BASE, nip);
-			regs_set_recoverable(regs);
-			regs_set_return_ip(regs, extable_fixup(entry));
+			regs->msr |= MSR_RI;
+			regs->nip = extable_fixup(entry);
 			return 1;
 		}
 	}
@@ -570,7 +575,7 @@ static inline int check_io_access(struct pt_regs *regs)
 #ifdef CONFIG_PPC_ADV_DEBUG_REGS
 /* On 4xx, the reason for the machine check or program exception
    is in the ESR. */
-#define get_reason(regs)	((regs)->esr)
+#define get_reason(regs)	((regs)->dsisr)
 #define REASON_FP		ESR_FP
 #define REASON_ILLEGAL		(ESR_PIL | ESR_PUO)
 #define REASON_PRIVILEGED	ESR_PPR
@@ -595,13 +600,13 @@ static inline int check_io_access(struct pt_regs *regs)
 #define REASON_BOUNDARY		SRR1_BOUNDARY
 
 #define single_stepping(regs)	((regs)->msr & MSR_SE)
-#define clear_single_step(regs)	(regs_set_return_msr((regs), (regs)->msr & ~MSR_SE))
-#define clear_br_trace(regs)	(regs_set_return_msr((regs), (regs)->msr & ~MSR_BE))
+#define clear_single_step(regs)	((regs)->msr &= ~MSR_SE)
+#define clear_br_trace(regs)	((regs)->msr &= ~MSR_BE)
 #endif
 
 #define inst_length(reason)	(((reason) & REASON_PREFIXED) ? 8 : 4)
 
-#if defined(CONFIG_PPC_E500)
+#if defined(CONFIG_E500)
 int machine_check_e500mc(struct pt_regs *regs)
 {
 	unsigned long mcsr = mfspr(SPRN_MCSR);
@@ -755,6 +760,31 @@ int machine_check_generic(struct pt_regs *regs)
 {
 	return 0;
 }
+#elif defined(CONFIG_E200)
+int machine_check_e200(struct pt_regs *regs)
+{
+	unsigned long reason = mfspr(SPRN_MCSR);
+
+	printk("Machine check in kernel mode.\n");
+	printk("Caused by (from MCSR=%lx): ", reason);
+
+	if (reason & MCSR_MCP)
+		pr_cont("Machine Check Signal\n");
+	if (reason & MCSR_CP_PERR)
+		pr_cont("Cache Push Parity Error\n");
+	if (reason & MCSR_CPERR)
+		pr_cont("Cache Parity Error\n");
+	if (reason & MCSR_EXCP_ERR)
+		pr_cont("ISI, ITLB, or Bus Error on first instruction fetch for an exception handler\n");
+	if (reason & MCSR_BUS_IRERR)
+		pr_cont("Bus - Read Bus Error on instruction fetch\n");
+	if (reason & MCSR_BUS_DRERR)
+		pr_cont("Bus - Read Bus Error on data load\n");
+	if (reason & MCSR_BUS_WRERR)
+		pr_cont("Bus - Write Bus Error on buffered store or cache line push\n");
+
+	return 0;
+}
 #elif defined(CONFIG_PPC32)
 int machine_check_generic(struct pt_regs *regs)
 {
@@ -792,31 +822,23 @@ int machine_check_generic(struct pt_regs *regs)
 }
 #endif /* everything else */
 
-void die_mce(const char *str, struct pt_regs *regs, long err)
-{
-	/*
-	 * The machine check wants to kill the interrupted context,
-	 * but make_task_dead() checks for in_interrupt() and panics
-	 * in that case, so exit the irq/nmi before calling die.
-	 */
-	if (in_nmi())
-		nmi_exit();
-	else
-		irq_exit();
-	die(str, regs, err);
-}
-
-/*
- * BOOK3S_64 does not usually call this handler as a non-maskable interrupt
- * (it uses its own early real-mode handler to handle the MCE proper
- * and then raises irq_work to call this handler when interrupts are
- * enabled). The only time when this is not true is if the early handler
- * is unrecoverable, then it does call this directly to try to get a
- * message out.
- */
-static void __machine_check_exception(struct pt_regs *regs)
+void machine_check_exception(struct pt_regs *regs)
 {
 	int recover = 0;
+
+	/*
+	 * BOOK3S_64 does not call this handler as a non-maskable interrupt
+	 * (it uses its own early real-mode handler to handle the MCE proper
+	 * and then raises irq_work to call this handler when interrupts are
+	 * enabled).
+	 *
+	 * This is silly. The BOOK3S_64 should just call a different function
+	 * rather than expecting semantics to magically change. Something
+	 * like 'non_nmi_machine_check_exception()', perhaps?
+	 */
+	const bool nmi = !IS_ENABLED(CONFIG_PPC_BOOK3S_64);
+
+	if (nmi) nmi_enter();
 
 	__this_cpu_inc(irq_stat.mce_exceptions);
 
@@ -842,41 +864,21 @@ static void __machine_check_exception(struct pt_regs *regs)
 	if (check_io_access(regs))
 		goto bail;
 
-	die_mce("Machine check", regs, SIGBUS);
+	if (nmi) nmi_exit();
+
+	die("Machine check", regs, SIGBUS);
+
+	/* Must die if the interrupt is not recoverable */
+	if (!(regs->msr & MSR_RI))
+		die("Unrecoverable Machine check", regs, SIGBUS);
+
+	return;
 
 bail:
-	/* Must die if the interrupt is not recoverable */
-	if (regs_is_unrecoverable(regs))
-		die_mce("Unrecoverable Machine check", regs, SIGBUS);
+	if (nmi) nmi_exit();
 }
 
-#ifdef CONFIG_PPC_BOOK3S_64
-DEFINE_INTERRUPT_HANDLER_RAW(machine_check_early_boot)
-{
-	udbg_printf("Machine check (early boot)\n");
-	udbg_printf("SRR0=0x%016lx   SRR1=0x%016lx\n", regs->nip, regs->msr);
-	udbg_printf(" DAR=0x%016lx  DSISR=0x%08lx\n", regs->dar, regs->dsisr);
-	udbg_printf("  LR=0x%016lx     R1=0x%08lx\n", regs->link, regs->gpr[1]);
-	udbg_printf("------\n");
-	die("Machine check (early boot)", regs, SIGBUS);
-	for (;;)
-		;
-	return 0;
-}
-
-DEFINE_INTERRUPT_HANDLER_ASYNC(machine_check_exception_async)
-{
-	__machine_check_exception(regs);
-}
-#endif
-DEFINE_INTERRUPT_HANDLER_NMI(machine_check_exception)
-{
-	__machine_check_exception(regs);
-
-	return 0;
-}
-
-DEFINE_INTERRUPT_HANDLER(SMIException) /* async? */
+void SMIException(struct pt_regs *regs)
 {
 	die("System Management Interrupt", regs, SIGABRT);
 }
@@ -890,7 +892,7 @@ static void p9_hmi_special_emu(struct pt_regs *regs)
 	unsigned long ea, msr, msr_mask;
 	bool swap;
 
-	if (__get_user(instr, (unsigned int __user *)regs->nip))
+	if (__get_user_inatomic(instr, (unsigned int __user *)regs->nip))
 		return;
 
 	/*
@@ -1058,15 +1060,16 @@ static void p9_hmi_special_emu(struct pt_regs *regs)
 #endif /* !__LITTLE_ENDIAN__ */
 
 	/* Go to next instruction */
-	regs_add_return_ip(regs, 4);
+	regs->nip += 4;
 }
 #endif /* CONFIG_VSX */
 
-DEFINE_INTERRUPT_HANDLER_ASYNC(handle_hmi_exception)
+void handle_hmi_exception(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs;
 
 	old_regs = set_irq_regs(regs);
+	irq_enter();
 
 #ifdef CONFIG_VSX
 	/* Real mode flagged P9 special emu is needed */
@@ -1086,52 +1089,46 @@ DEFINE_INTERRUPT_HANDLER_ASYNC(handle_hmi_exception)
 	if (ppc_md.handle_hmi_exception)
 		ppc_md.handle_hmi_exception(regs);
 
+	irq_exit();
 	set_irq_regs(old_regs);
 }
 
-DEFINE_INTERRUPT_HANDLER(unknown_exception)
+void unknown_exception(struct pt_regs *regs)
 {
-	printk("Bad trap at PC: %lx, SR: %lx, vector=%lx\n",
-	       regs->nip, regs->msr, regs->trap);
+	enum ctx_state prev_state = exception_enter();
 
-	_exception(SIGTRAP, regs, TRAP_UNK, 0);
-}
-
-DEFINE_INTERRUPT_HANDLER_ASYNC(unknown_async_exception)
-{
-	printk("Bad trap at PC: %lx, SR: %lx, vector=%lx\n",
-	       regs->nip, regs->msr, regs->trap);
-
-	_exception(SIGTRAP, regs, TRAP_UNK, 0);
-}
-
-DEFINE_INTERRUPT_HANDLER_NMI(unknown_nmi_exception)
-{
 	printk("Bad trap at PC: %lx, SR: %lx, vector=%lx\n",
 	       regs->nip, regs->msr, regs->trap);
 
 	_exception(SIGTRAP, regs, TRAP_UNK, 0);
 
-	return 0;
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(instruction_breakpoint_exception)
+void instruction_breakpoint_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
+
 	if (notify_die(DIE_IABR_MATCH, "iabr_match", regs, 5,
 					5, SIGTRAP) == NOTIFY_STOP)
-		return;
+		goto bail;
 	if (debugger_iabr_match(regs))
-		return;
+		goto bail;
 	_exception(SIGTRAP, regs, TRAP_BRKPT, regs->nip);
+
+bail:
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(RunModeException)
+void RunModeException(struct pt_regs *regs)
 {
 	_exception(SIGTRAP, regs, TRAP_UNK, 0);
 }
 
-static void __single_step_exception(struct pt_regs *regs)
+void single_step_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
+
 	clear_single_step(regs);
 	clear_br_trace(regs);
 
@@ -1140,17 +1137,16 @@ static void __single_step_exception(struct pt_regs *regs)
 
 	if (notify_die(DIE_SSTEP, "single_step", regs, 5,
 					5, SIGTRAP) == NOTIFY_STOP)
-		return;
+		goto bail;
 	if (debugger_sstep(regs))
-		return;
+		goto bail;
 
 	_exception(SIGTRAP, regs, TRAP_TRACE, regs->nip);
-}
 
-DEFINE_INTERRUPT_HANDLER(single_step_exception)
-{
-	__single_step_exception(regs);
+bail:
+	exception_exit(prev_state);
 }
+NOKPROBE_SYMBOL(single_step_exception);
 
 /*
  * After we have successfully emulated an instruction, we have to
@@ -1161,7 +1157,7 @@ DEFINE_INTERRUPT_HANDLER(single_step_exception)
 static void emulate_single_step(struct pt_regs *regs)
 {
 	if (single_stepping(regs))
-		__single_step_exception(regs);
+		single_step_exception(regs);
 }
 
 static inline int __parse_fpscr(unsigned long fpscr)
@@ -1197,9 +1193,7 @@ static void parse_fpe(struct pt_regs *regs)
 
 	flush_fp_to_thread(current);
 
-#ifdef CONFIG_PPC_FPU_REGS
 	code = __parse_fpscr(current->thread.fp_state.fpscr);
-#endif
 
 	_exception(SIGFPE, regs, code, regs->nip);
 }
@@ -1350,6 +1344,7 @@ static int emulate_instruction(struct pt_regs *regs)
 
 	if (!user_mode(regs))
 		return -EINVAL;
+	CHECK_FULL_REGS(regs);
 
 	if (get_user(instword, (u32 __user *)(regs->nip)))
 		return -EFAULT;
@@ -1446,6 +1441,7 @@ int is_valid_bugaddr(unsigned long addr)
 static int emulate_math(struct pt_regs *regs)
 {
 	int ret;
+	extern int do_mathemu(struct pt_regs *regs);
 
 	ret = do_mathemu(regs);
 	if (ret >= 0)
@@ -1472,8 +1468,9 @@ static int emulate_math(struct pt_regs *regs)
 static inline int emulate_math(struct pt_regs *regs) { return -1; }
 #endif
 
-static void do_program_check(struct pt_regs *regs)
+void program_check_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
 	unsigned int reason = get_reason(regs);
 
 	/* We can now get here via a FP Unavailable exception if the core
@@ -1482,22 +1479,22 @@ static void do_program_check(struct pt_regs *regs)
 	if (reason & REASON_FP) {
 		/* IEEE FP exception */
 		parse_fpe(regs);
-		return;
+		goto bail;
 	}
 	if (reason & REASON_TRAP) {
 		unsigned long bugaddr;
 		/* Debugger is first in line to stop recursive faults in
 		 * rcu_lock, notify_die, or atomic_notifier_call_chain */
 		if (debugger_bpt(regs))
-			return;
+			goto bail;
 
 		if (kprobe_handler(regs))
-			return;
+			goto bail;
 
 		/* trap exception */
 		if (notify_die(DIE_BPT, "breakpoint", regs, 5, 5, SIGTRAP)
 				== NOTIFY_STOP)
-			return;
+			goto bail;
 
 		bugaddr = regs->nip;
 		/*
@@ -1508,32 +1505,11 @@ static void do_program_check(struct pt_regs *regs)
 
 		if (!(regs->msr & MSR_PR) &&  /* not user-mode */
 		    report_bug(bugaddr, regs) == BUG_TRAP_TYPE_WARN) {
-			const struct exception_table_entry *entry;
-
-			entry = search_exception_tables(bugaddr);
-			if (entry) {
-				regs_set_return_ip(regs, extable_fixup(entry) + regs->nip - bugaddr);
-				return;
-			}
+			regs->nip += 4;
+			goto bail;
 		}
-
-		if (cpu_has_feature(CPU_FTR_DEXCR_NPHIE) && user_mode(regs)) {
-			ppc_inst_t insn;
-
-			if (get_user_instr(insn, (void __user *)regs->nip)) {
-				_exception(SIGSEGV, regs, SEGV_MAPERR, regs->nip);
-				return;
-			}
-
-			if (ppc_inst_primary_opcode(insn) == 31 &&
-			    get_xop(ppc_inst_val(insn)) == OP_31_XOP_HASHCHK) {
-				_exception(SIGILL, regs, ILL_ILLOPN, regs->nip);
-				return;
-			}
-		}
-
 		_exception(SIGTRAP, regs, TRAP_BRKPT, regs->nip);
-		return;
+		goto bail;
 	}
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 	if (reason & REASON_TM) {
@@ -1554,7 +1530,7 @@ static void do_program_check(struct pt_regs *regs)
 		 */
 		if (user_mode(regs)) {
 			_exception(SIGILL, regs, ILL_ILLOPN, regs->nip);
-			return;
+			goto bail;
 		} else {
 			printk(KERN_EMERG "Unexpected TM Bad Thing exception "
 			       "at %lx (msr 0x%lx) tm_scratch=%llx\n",
@@ -1574,7 +1550,9 @@ static void do_program_check(struct pt_regs *regs)
 	if (!user_mode(regs))
 		goto sigill;
 
-	interrupt_cond_local_irq_enable(regs);
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
 	 * but there seems to be a hardware bug on the 405GP (RevD)
@@ -1585,18 +1563,18 @@ static void do_program_check(struct pt_regs *regs)
 	 * pattern to occurrences etc. -dgibson 31/Mar/2003
 	 */
 	if (!emulate_math(regs))
-		return;
+		goto bail;
 
 	/* Try to emulate it if we should. */
 	if (reason & (REASON_ILLEGAL | REASON_PRIVILEGED)) {
 		switch (emulate_instruction(regs)) {
 		case 0:
-			regs_add_return_ip(regs, 4);
+			regs->nip += 4;
 			emulate_single_step(regs);
-			return;
+			goto bail;
 		case -EFAULT:
 			_exception(SIGSEGV, regs, SEGV_MAPERR, regs->nip);
-			return;
+			goto bail;
 		}
 	}
 
@@ -1606,31 +1584,34 @@ sigill:
 	else
 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
 
+bail:
+	exception_exit(prev_state);
 }
-
-DEFINE_INTERRUPT_HANDLER(program_check_exception)
-{
-	do_program_check(regs);
-}
+NOKPROBE_SYMBOL(program_check_exception);
 
 /*
  * This occurs when running in hypervisor mode on POWER6 or later
  * and an illegal instruction is encountered.
  */
-DEFINE_INTERRUPT_HANDLER(emulation_assist_interrupt)
+void emulation_assist_interrupt(struct pt_regs *regs)
 {
-	regs_set_return_msr(regs, regs->msr | REASON_ILLEGAL);
-	do_program_check(regs);
+	regs->msr |= REASON_ILLEGAL;
+	program_check_exception(regs);
 }
+NOKPROBE_SYMBOL(emulation_assist_interrupt);
 
-DEFINE_INTERRUPT_HANDLER(alignment_exception)
+void alignment_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
 	int sig, code, fixed = 0;
 	unsigned long  reason;
 
-	interrupt_cond_local_irq_enable(regs);
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	reason = get_reason(regs);
+
 	if (reason & REASON_BOUNDARY) {
 		sig = SIGBUS;
 		code = BUS_ADRALN;
@@ -1638,7 +1619,7 @@ DEFINE_INTERRUPT_HANDLER(alignment_exception)
 	}
 
 	if (tm_abort_check(regs, TM_CAUSE_ALIGNMENT | TM_CAUSE_PERSISTENT))
-		return;
+		goto bail;
 
 	/* we don't implement logging of alignment exceptions */
 	if (!(current->thread.align_ctl & PR_UNALIGN_SIGBUS))
@@ -1646,9 +1627,9 @@ DEFINE_INTERRUPT_HANDLER(alignment_exception)
 
 	if (fixed == 1) {
 		/* skip over emulated instruction */
-		regs_add_return_ip(regs, inst_length(reason));
+		regs->nip += inst_length(reason);
 		emulate_single_step(regs);
-		return;
+		goto bail;
 	}
 
 	/* Operand address was bad */
@@ -1663,36 +1644,61 @@ bad:
 	if (user_mode(regs))
 		_exception(sig, regs, code, regs->dar);
 	else
-		bad_page_fault(regs, sig);
+		bad_page_fault(regs, regs->dar, sig);
+
+bail:
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(stack_overflow_exception)
+void StackOverflow(struct pt_regs *regs)
 {
+	pr_crit("Kernel stack overflow in process %s[%d], r1=%lx\n",
+		current->comm, task_pid_nr(current), regs->gpr[1]);
+	debugger(regs);
+	show_regs(regs);
+	panic("kernel stack overflow");
+}
+
+void stack_overflow_exception(struct pt_regs *regs)
+{
+	enum ctx_state prev_state = exception_enter();
+
 	die("Kernel stack overflow", regs, SIGSEGV);
+
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(kernel_fp_unavailable_exception)
+void kernel_fp_unavailable_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
+
 	printk(KERN_EMERG "Unrecoverable FP Unavailable Exception "
 			  "%lx at %lx\n", regs->trap, regs->nip);
 	die("Unrecoverable FP Unavailable Exception", regs, SIGABRT);
+
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(altivec_unavailable_exception)
+void altivec_unavailable_exception(struct pt_regs *regs)
 {
+	enum ctx_state prev_state = exception_enter();
+
 	if (user_mode(regs)) {
 		/* A user program has executed an altivec instruction,
 		   but this kernel doesn't support altivec. */
 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
-		return;
+		goto bail;
 	}
 
 	printk(KERN_EMERG "Unrecoverable VMX/Altivec Unavailable Exception "
 			"%lx at %lx\n", regs->trap, regs->nip);
 	die("Unrecoverable VMX/Altivec Unavailable Exception", regs, SIGABRT);
+
+bail:
+	exception_exit(prev_state);
 }
 
-DEFINE_INTERRUPT_HANDLER(vsx_unavailable_exception)
+void vsx_unavailable_exception(struct pt_regs *regs)
 {
 	if (user_mode(regs)) {
 		/* A user program has executed an vsx instruction,
@@ -1706,13 +1712,13 @@ DEFINE_INTERRUPT_HANDLER(vsx_unavailable_exception)
 	die("Unrecoverable VSX Unavailable Exception", regs, SIGABRT);
 }
 
-#ifdef CONFIG_PPC_BOOK3S_64
+#ifdef CONFIG_PPC64
 static void tm_unavailable(struct pt_regs *regs)
 {
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 	if (user_mode(regs)) {
 		current->thread.load_tm++;
-		regs_set_return_msr(regs, regs->msr | MSR_TM);
+		regs->msr |= MSR_TM;
 		tm_enable();
 		tm_restore_sprs(&current->thread);
 		return;
@@ -1723,7 +1729,7 @@ static void tm_unavailable(struct pt_regs *regs)
 	die("Unrecoverable TM Unavailable Exception", regs, SIGABRT);
 }
 
-DEFINE_INTERRUPT_HANDLER(facility_unavailable_exception)
+void facility_unavailable_exception(struct pt_regs *regs)
 {
 	static char *facility_strings[] = {
 		[FSCR_FP_LG] = "FPU",
@@ -1744,7 +1750,7 @@ DEFINE_INTERRUPT_HANDLER(facility_unavailable_exception)
 	u8 status;
 	bool hv;
 
-	hv = (TRAP(regs) == INTERRUPT_H_FAC_UNAVAIL);
+	hv = (TRAP(regs) == 0xf80);
 	if (hv)
 		value = mfspr(SPRN_HFSCR);
 	else
@@ -1763,7 +1769,9 @@ DEFINE_INTERRUPT_HANDLER(facility_unavailable_exception)
 		die("Unexpected facility unavailable exception", regs, SIGABRT);
 	}
 
-	interrupt_cond_local_irq_enable(regs);
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	if (status == FSCR_DSCR_LG) {
 		/*
@@ -1804,7 +1812,7 @@ DEFINE_INTERRUPT_HANDLER(facility_unavailable_exception)
 				pr_err("DSCR based mfspr emulation failed\n");
 				return;
 			}
-			regs_add_return_ip(regs, 4);
+			regs->nip += 4;
 			emulate_single_step(regs);
 		}
 		return;
@@ -1841,7 +1849,7 @@ out:
 
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 
-DEFINE_INTERRUPT_HANDLER(fp_unavailable_tm)
+void fp_unavailable_tm(struct pt_regs *regs)
 {
 	/* Note:  This does not handle any kind of FP laziness. */
 
@@ -1874,7 +1882,7 @@ DEFINE_INTERRUPT_HANDLER(fp_unavailable_tm)
 	tm_recheckpoint(&current->thread);
 }
 
-DEFINE_INTERRUPT_HANDLER(altivec_unavailable_tm)
+void altivec_unavailable_tm(struct pt_regs *regs)
 {
 	/* See the comments in fp_unavailable_tm().  This function operates
 	 * the same way.
@@ -1889,7 +1897,7 @@ DEFINE_INTERRUPT_HANDLER(altivec_unavailable_tm)
 	current->thread.used_vr = 1;
 }
 
-DEFINE_INTERRUPT_HANDLER(vsx_unavailable_tm)
+void vsx_unavailable_tm(struct pt_regs *regs)
 {
 	/* See the comments in fp_unavailable_tm().  This works similarly,
 	 * though we're loading both FP and VEC registers in here.
@@ -1914,27 +1922,29 @@ DEFINE_INTERRUPT_HANDLER(vsx_unavailable_tm)
 }
 #endif /* CONFIG_PPC_TRANSACTIONAL_MEM */
 
-#ifdef CONFIG_PPC64
-DECLARE_INTERRUPT_HANDLER_NMI(performance_monitor_exception_nmi);
-DEFINE_INTERRUPT_HANDLER_NMI(performance_monitor_exception_nmi)
+static void performance_monitor_exception_nmi(struct pt_regs *regs)
 {
+	nmi_enter();
+
 	__this_cpu_inc(irq_stat.pmu_irqs);
 
 	perf_irq(regs);
 
-	return 0;
+	nmi_exit();
 }
-#endif
 
-DECLARE_INTERRUPT_HANDLER_ASYNC(performance_monitor_exception_async);
-DEFINE_INTERRUPT_HANDLER_ASYNC(performance_monitor_exception_async)
+static void performance_monitor_exception_async(struct pt_regs *regs)
 {
+	irq_enter();
+
 	__this_cpu_inc(irq_stat.pmu_irqs);
 
 	perf_irq(regs);
+
+	irq_exit();
 }
 
-DEFINE_INTERRUPT_HANDLER_RAW(performance_monitor_exception)
+void performance_monitor_exception(struct pt_regs *regs)
 {
 	/*
 	 * On 64-bit, if perf interrupts hit in a local_irq_disable
@@ -1946,8 +1956,6 @@ DEFINE_INTERRUPT_HANDLER_RAW(performance_monitor_exception)
 		performance_monitor_exception_nmi(regs);
 	else
 		performance_monitor_exception_async(regs);
-
-	return 0;
 }
 
 #ifdef CONFIG_PPC_ADV_DEBUG_REGS
@@ -2001,7 +2009,7 @@ static void handle_debug(struct pt_regs *regs, unsigned long debug_status)
 	 */
 	if (DBCR_ACTIVE_EVENTS(current->thread.debug.dbcr0,
 			       current->thread.debug.dbcr1))
-		regs_set_return_msr(regs, regs->msr | MSR_DE);
+		regs->msr |= MSR_DE;
 	else
 		/* Make sure the IDM flag is off */
 		current->thread.debug.dbcr0 &= ~DBCR0_IDM;
@@ -2010,10 +2018,8 @@ static void handle_debug(struct pt_regs *regs, unsigned long debug_status)
 		mtspr(SPRN_DBCR0, current->thread.debug.dbcr0);
 }
 
-DEFINE_INTERRUPT_HANDLER(DebugException)
+void DebugException(struct pt_regs *regs, unsigned long debug_status)
 {
-	unsigned long debug_status = regs->dsisr;
-
 	current->thread.debug.dbsr = debug_status;
 
 	/* Hack alert: On BookE, Branch Taken stops on the branch itself, while
@@ -2022,7 +2028,7 @@ DEFINE_INTERRUPT_HANDLER(DebugException)
 	 * instead of stopping here when hitting a BT
 	 */
 	if (debug_status & DBSR_BT) {
-		regs_set_return_msr(regs, regs->msr & ~MSR_DE);
+		regs->msr &= ~MSR_DE;
 
 		/* Disable BT */
 		mtspr(SPRN_DBCR0, mfspr(SPRN_DBCR0) & ~DBCR0_BT);
@@ -2033,7 +2039,7 @@ DEFINE_INTERRUPT_HANDLER(DebugException)
 		if (user_mode(regs)) {
 			current->thread.debug.dbcr0 &= ~DBCR0_BT;
 			current->thread.debug.dbcr0 |= DBCR0_IDM | DBCR0_IC;
-			regs_set_return_msr(regs, regs->msr | MSR_DE);
+			regs->msr |= MSR_DE;
 			return;
 		}
 
@@ -2047,7 +2053,7 @@ DEFINE_INTERRUPT_HANDLER(DebugException)
 		if (debugger_sstep(regs))
 			return;
 	} else if (debug_status & DBSR_IC) { 	/* Instruction complete */
-		regs_set_return_msr(regs, regs->msr & ~MSR_DE);
+		regs->msr &= ~MSR_DE;
 
 		/* Disable instruction completion */
 		mtspr(SPRN_DBCR0, mfspr(SPRN_DBCR0) & ~DBCR0_IC);
@@ -2069,7 +2075,7 @@ DEFINE_INTERRUPT_HANDLER(DebugException)
 			current->thread.debug.dbcr0 &= ~DBCR0_IC;
 			if (DBCR_ACTIVE_EVENTS(current->thread.debug.dbcr0,
 					       current->thread.debug.dbcr1))
-				regs_set_return_msr(regs, regs->msr | MSR_DE);
+				regs->msr |= MSR_DE;
 			else
 				/* Make sure the IDM bit is off */
 				current->thread.debug.dbcr0 &= ~DBCR0_IDM;
@@ -2079,10 +2085,11 @@ DEFINE_INTERRUPT_HANDLER(DebugException)
 	} else
 		handle_debug(regs, debug_status);
 }
+NOKPROBE_SYMBOL(DebugException);
 #endif /* CONFIG_PPC_ADV_DEBUG_REGS */
 
 #ifdef CONFIG_ALTIVEC
-DEFINE_INTERRUPT_HANDLER(altivec_assist_exception)
+void altivec_assist_exception(struct pt_regs *regs)
 {
 	int err;
 
@@ -2097,7 +2104,7 @@ DEFINE_INTERRUPT_HANDLER(altivec_assist_exception)
 	PPC_WARN_EMULATED(altivec, regs);
 	err = emulate_altivec(regs);
 	if (err == 0) {
-		regs_add_return_ip(regs, 4); /* skip emulated instruction */
+		regs->nip += 4;		/* skip emulated instruction */
 		emulate_single_step(regs);
 		return;
 	}
@@ -2115,11 +2122,10 @@ DEFINE_INTERRUPT_HANDLER(altivec_assist_exception)
 }
 #endif /* CONFIG_ALTIVEC */
 
-#ifdef CONFIG_PPC_85xx
-DEFINE_INTERRUPT_HANDLER(CacheLockingException)
+#ifdef CONFIG_FSL_BOOKE
+void CacheLockingException(struct pt_regs *regs, unsigned long address,
+			   unsigned long error_code)
 {
-	unsigned long error_code = regs->dsisr;
-
 	/* We treat cache locking instructions from the user
 	 * as priv ops, in the future we could try to do
 	 * something smarter
@@ -2128,17 +2134,20 @@ DEFINE_INTERRUPT_HANDLER(CacheLockingException)
 		_exception(SIGILL, regs, ILL_PRVOPC, regs->nip);
 	return;
 }
-#endif /* CONFIG_PPC_85xx */
+#endif /* CONFIG_FSL_BOOKE */
 
 #ifdef CONFIG_SPE
-DEFINE_INTERRUPT_HANDLER(SPEFloatingPointException)
+void SPEFloatingPointException(struct pt_regs *regs)
 {
+	extern int do_spe_mathemu(struct pt_regs *regs);
 	unsigned long spefscr;
 	int fpexc_mode;
 	int code = FPE_FLTUNK;
 	int err;
 
-	interrupt_cond_local_irq_enable(regs);
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	flush_spe_to_thread(current);
 
@@ -2161,7 +2170,7 @@ DEFINE_INTERRUPT_HANDLER(SPEFloatingPointException)
 
 	err = do_spe_mathemu(regs);
 	if (err == 0) {
-		regs_add_return_ip(regs, 4); /* skip emulated instruction */
+		regs->nip += 4;		/* skip emulated instruction */
 		emulate_single_step(regs);
 		return;
 	}
@@ -2180,21 +2189,24 @@ DEFINE_INTERRUPT_HANDLER(SPEFloatingPointException)
 	return;
 }
 
-DEFINE_INTERRUPT_HANDLER(SPEFloatingPointRoundException)
+void SPEFloatingPointRoundException(struct pt_regs *regs)
 {
+	extern int speround_handler(struct pt_regs *regs);
 	int err;
 
-	interrupt_cond_local_irq_enable(regs);
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	preempt_disable();
 	if (regs->msr & MSR_SPE)
 		giveup_spe(current);
 	preempt_enable();
 
-	regs_add_return_ip(regs, -4);
+	regs->nip -= 4;
 	err = speround_handler(regs);
 	if (err == 0) {
-		regs_add_return_ip(regs, 4); /* skip emulated instruction */
+		regs->nip += 4;		/* skip emulated instruction */
 		emulate_single_step(regs);
 		return;
 	}
@@ -2219,15 +2231,13 @@ DEFINE_INTERRUPT_HANDLER(SPEFloatingPointRoundException)
  * in the MSR is 0.  This indicates that SRR0/1 are live, and that
  * we therefore lost state by taking this exception.
  */
-void __noreturn unrecoverable_exception(struct pt_regs *regs)
+void unrecoverable_exception(struct pt_regs *regs)
 {
 	pr_emerg("Unrecoverable exception %lx at %lx (msr=%lx)\n",
 		 regs->trap, regs->nip, regs->msr);
 	die("Unrecoverable exception", regs, SIGABRT);
-	/* die() should not return */
-	for (;;)
-		;
 }
+NOKPROBE_SYMBOL(unrecoverable_exception);
 
 #if defined(CONFIG_BOOKE_WDT) || defined(CONFIG_40x)
 /*
@@ -2241,11 +2251,10 @@ void __attribute__ ((weak)) WatchdogHandler(struct pt_regs *regs)
 	return;
 }
 
-DEFINE_INTERRUPT_HANDLER_NMI(WatchdogException)
+void WatchdogException(struct pt_regs *regs)
 {
 	printk (KERN_EMERG "PowerPC Book-E Watchdog Exception\n");
 	WatchdogHandler(regs);
-	return 0;
 }
 #endif
 
@@ -2253,12 +2262,18 @@ DEFINE_INTERRUPT_HANDLER_NMI(WatchdogException)
  * We enter here if we discover during exception entry that we are
  * running in supervisor mode with a userspace value in the stack pointer.
  */
-DEFINE_INTERRUPT_HANDLER(kernel_bad_stack)
+void kernel_bad_stack(struct pt_regs *regs)
 {
 	printk(KERN_EMERG "Bad kernel stack pointer %lx at %lx\n",
 	       regs->gpr[1], regs->nip);
 	die("Bad kernel stack pointer", regs, SIGABRT);
 }
+NOKPROBE_SYMBOL(kernel_bad_stack);
+
+void __init trap_init(void)
+{
+}
+
 
 #ifdef CONFIG_PPC_EMULATED_STATS
 
@@ -2312,7 +2327,7 @@ static int __init ppc_warn_emulated_init(void)
 	struct ppc_emulated_entry *entries = (void *)&ppc_emulated;
 
 	dir = debugfs_create_dir("emulated_instructions",
-				 arch_debugfs_dir);
+				 powerpc_debugfs_root);
 
 	debugfs_create_u32("do_warn", 0644, dir, &ppc_warn_emulated);
 

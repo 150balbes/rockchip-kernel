@@ -28,7 +28,7 @@
 static bool kvmppc_check_fp_disabled(struct kvm_vcpu *vcpu)
 {
 	if (!(kvmppc_get_msr(vcpu) & MSR_FP)) {
-		kvmppc_core_queue_fpunavail(vcpu, kvmppc_get_msr(vcpu) & SRR1_PREFIXED);
+		kvmppc_core_queue_fpunavail(vcpu);
 		return true;
 	}
 
@@ -40,7 +40,7 @@ static bool kvmppc_check_fp_disabled(struct kvm_vcpu *vcpu)
 static bool kvmppc_check_vsx_disabled(struct kvm_vcpu *vcpu)
 {
 	if (!(kvmppc_get_msr(vcpu) & MSR_VSX)) {
-		kvmppc_core_queue_vsx_unavail(vcpu, kvmppc_get_msr(vcpu) & SRR1_PREFIXED);
+		kvmppc_core_queue_vsx_unavail(vcpu);
 		return true;
 	}
 
@@ -52,7 +52,7 @@ static bool kvmppc_check_vsx_disabled(struct kvm_vcpu *vcpu)
 static bool kvmppc_check_altivec_disabled(struct kvm_vcpu *vcpu)
 {
 	if (!(kvmppc_get_msr(vcpu) & MSR_VEC)) {
-		kvmppc_core_queue_vec_unavail(vcpu, kvmppc_get_msr(vcpu) & SRR1_PREFIXED);
+		kvmppc_core_queue_vec_unavail(vcpu);
 		return true;
 	}
 
@@ -71,8 +71,9 @@ static bool kvmppc_check_altivec_disabled(struct kvm_vcpu *vcpu)
  */
 int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu)
 {
-	ppc_inst_t inst;
+	u32 inst;
 	enum emulation_result emulated = EMULATE_FAIL;
+	int advance = 1;
 	struct instruction_op op;
 
 	/* this default type might be overwritten by subcategories */
@@ -93,11 +94,9 @@ int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu)
 
 	emulated = EMULATE_FAIL;
 	vcpu->arch.regs.msr = vcpu->arch.shared->msr;
-	if (analyse_instr(&op, &vcpu->arch.regs, inst) == 0) {
+	if (analyse_instr(&op, &vcpu->arch.regs, ppc_inst(inst)) == 0) {
 		int type = op.type & INSTR_TYPE_MASK;
 		int size = GETSIZE(op.type);
-
-		vcpu->mmio_is_write = OP_IS_STORE(type);
 
 		switch (type) {
 		case LOAD:  {
@@ -356,11 +355,16 @@ int kvmppc_emulate_loadstore(struct kvm_vcpu *vcpu)
 		}
 	}
 
-	trace_kvm_ppc_instr(ppc_inst_val(inst), kvmppc_get_pc(vcpu), emulated);
+	if (emulated == EMULATE_FAIL) {
+		advance = 0;
+		kvmppc_core_queue_program(vcpu, 0);
+	}
+
+	trace_kvm_ppc_instr(inst, kvmppc_get_pc(vcpu), emulated);
 
 	/* Advance past emulated instruction. */
-	if (emulated != EMULATE_FAIL)
-		kvmppc_set_pc(vcpu, kvmppc_get_pc(vcpu) + ppc_inst_len(inst));
+	if (advance)
+		kvmppc_set_pc(vcpu, kvmppc_get_pc(vcpu) + 4);
 
 	return emulated;
 }

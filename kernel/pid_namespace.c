@@ -23,7 +23,6 @@
 #include <linux/sched/task.h>
 #include <linux/sched/signal.h>
 #include <linux/idr.h>
-#include "pid_sysctl.h"
 
 static DEFINE_MUTEX(pid_caches_mutex);
 static struct kmem_cache *pid_ns_cachep;
@@ -48,12 +47,12 @@ static struct kmem_cache *create_pid_cachep(unsigned int level)
 		return kc;
 
 	snprintf(name, sizeof(name), "pid_%u", level + 1);
-	len = struct_size_t(struct pid, numbers, level + 1);
+	len = sizeof(struct pid) + level * sizeof(struct upid);
 	mutex_lock(&pid_caches_mutex);
 	/* Name collision forces to do allocation under mutex. */
 	if (!*pkc)
 		*pkc = kmem_cache_create(name, len, 0,
-					 SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT, NULL);
+					 SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT, 0);
 	mutex_unlock(&pid_caches_mutex);
 	/* current can fail, but someone else can succeed. */
 	return READ_ONCE(*pkc);
@@ -104,14 +103,12 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 		goto out_free_idr;
 	ns->ns.ops = &pidns_operations;
 
-	refcount_set(&ns->ns.count, 1);
+	kref_init(&ns->kref);
 	ns->level = level;
 	ns->parent = get_pid_ns(parent_pid_ns);
 	ns->user_ns = get_user_ns(user_ns);
 	ns->ucounts = ucounts;
 	ns->pid_allocated = PIDNS_ADDING;
-
-	initialize_memfd_noexec_scope(ns);
 
 	return ns;
 
@@ -152,15 +149,22 @@ struct pid_namespace *copy_pid_ns(unsigned long flags,
 	return create_pid_namespace(user_ns, old_ns);
 }
 
+static void free_pid_ns(struct kref *kref)
+{
+	struct pid_namespace *ns;
+
+	ns = container_of(kref, struct pid_namespace, kref);
+	destroy_pid_namespace(ns);
+}
+
 void put_pid_ns(struct pid_namespace *ns)
 {
 	struct pid_namespace *parent;
 
 	while (ns != &init_pid_ns) {
 		parent = ns->parent;
-		if (!refcount_dec_and_test(&ns->ns.count))
+		if (!kref_put(&ns->kref, free_pid_ns))
 			break;
-		destroy_pid_namespace(ns);
 		ns = parent;
 	}
 }
@@ -247,24 +251,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (pid_ns->pid_allocated == init_pids)
 			break;
-		/*
-		 * Release tasks_rcu_exit_srcu to avoid following deadlock:
-		 *
-		 * 1) TASK A unshare(CLONE_NEWPID)
-		 * 2) TASK A fork() twice -> TASK B (child reaper for new ns)
-		 *    and TASK C
-		 * 3) TASK B exits, kills TASK C, waits for TASK A to reap it
-		 * 4) TASK A calls synchronize_rcu_tasks()
-		 *                   -> synchronize_srcu(tasks_rcu_exit_srcu)
-		 * 5) *DEADLOCK*
-		 *
-		 * It is considered safe to release tasks_rcu_exit_srcu here
-		 * because we assume the current task can not be concurrently
-		 * reaped at this point.
-		 */
-		exit_tasks_rcu_stop();
 		schedule();
-		exit_tasks_rcu_start();
 	}
 	__set_current_state(TASK_RUNNING);
 
@@ -314,6 +301,7 @@ static struct ctl_table pid_ns_ctl_table[] = {
 	},
 	{ }
 };
+static struct ctl_path kern_path[] = { { .procname = "kernel", }, { } };
 #endif	/* CONFIG_CHECKPOINT_RESTORE */
 
 int reboot_pid_ns(struct pid_namespace *pid_ns, int cmd)
@@ -469,13 +457,11 @@ const struct proc_ns_operations pidns_for_children_operations = {
 
 static __init int pid_namespaces_init(void)
 {
-	pid_ns_cachep = KMEM_CACHE(pid_namespace, SLAB_PANIC | SLAB_ACCOUNT);
+	pid_ns_cachep = KMEM_CACHE(pid_namespace, SLAB_PANIC);
 
 #ifdef CONFIG_CHECKPOINT_RESTORE
-	register_sysctl_init("kernel", pid_ns_ctl_table);
+	register_sysctl_paths(kern_path, pid_ns_ctl_table);
 #endif
-
-	register_pid_ns_sysctl_table_vm();
 	return 0;
 }
 

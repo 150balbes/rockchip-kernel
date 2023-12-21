@@ -8,42 +8,44 @@
 #include <linux/spinlock.h>
 #include <asm-generic/mm_hooks.h>
 
+static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
+{
+}
+
 /* on PA-RISC, we actually have enough contexts to justify an allocator
  * for them.  prumpf */
 
 extern unsigned long alloc_sid(void);
 extern void free_sid(unsigned long);
 
-#define init_new_context init_new_context
 static inline int
 init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 {
 	BUG_ON(atomic_read(&mm->mm_users) != 1);
 
-	mm->context.space_id = alloc_sid();
+	mm->context = alloc_sid();
 	return 0;
 }
 
-#define destroy_context destroy_context
 static inline void
 destroy_context(struct mm_struct *mm)
 {
-	free_sid(mm->context.space_id);
-	mm->context.space_id = 0;
+	free_sid(mm->context);
+	mm->context = 0;
 }
 
 static inline unsigned long __space_to_prot(mm_context_t context)
 {
 #if SPACEID_SHIFT == 0
-	return context.space_id << 1;
+	return context << 1;
 #else
-	return context.space_id >> (SPACEID_SHIFT - 1);
+	return context >> (SPACEID_SHIFT - 1);
 #endif
 }
 
 static inline void load_context(mm_context_t context)
 {
-	mtsp(context.space_id, SR_USER);
+	mtsp(context, 3);
 	mtctl(__space_to_prot(context), 8);
 }
 
@@ -76,7 +78,8 @@ static inline void switch_mm(struct mm_struct *prev,
 }
 #define switch_mm_irqs_off switch_mm_irqs_off
 
-#define activate_mm activate_mm
+#define deactivate_mm(tsk,mm)	do { } while (0)
+
 static inline void activate_mm(struct mm_struct *prev, struct mm_struct *next)
 {
 	/*
@@ -89,12 +92,9 @@ static inline void activate_mm(struct mm_struct *prev, struct mm_struct *next)
 
 	BUG_ON(next == &init_mm); /* Should never happen */
 
-	if (next->context.space_id == 0)
-		next->context.space_id = alloc_sid();
+	if (next->context == 0)
+	    next->context = alloc_sid();
 
 	switch_mm(prev,next,current);
 }
-
-#include <asm-generic/mmu_context.h>
-
 #endif

@@ -82,10 +82,7 @@ static struct snd_soc_dai_driver dmic_dai = {
 		.rates = SNDRV_PCM_RATE_CONTINUOUS,
 		.formats = SNDRV_PCM_FMTBIT_S32_LE
 			| SNDRV_PCM_FMTBIT_S24_LE
-			| SNDRV_PCM_FMTBIT_S16_LE
-			| SNDRV_PCM_FMTBIT_DSD_U8
-			| SNDRV_PCM_FMTBIT_DSD_U16_LE
-			| SNDRV_PCM_FMTBIT_DSD_U32_LE,
+			| SNDRV_PCM_FMTBIT_S16_LE,
 	},
 	.ops    = &dmic_dai_ops,
 };
@@ -140,6 +137,7 @@ static const struct snd_soc_component_driver soc_dmic = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static int dmic_dev_probe(struct platform_device *pdev)

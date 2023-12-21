@@ -37,7 +37,9 @@ static unsigned long adjust_error_retval(unsigned long addr, unsigned long retv)
 {
 	switch (get_injectable_error_type(addr)) {
 	case EI_ETYPE_NULL:
-		return 0;
+		if (retv != 0)
+			return 0;
+		break;
 	case EI_ETYPE_ERRNO:
 		if (retv < (unsigned long)-MAX_ERRNO)
 			return (unsigned long)-EINVAL;
@@ -46,8 +48,6 @@ static unsigned long adjust_error_retval(unsigned long addr, unsigned long retv)
 		if (retv != 0 && retv < (unsigned long)-MAX_ERRNO)
 			return (unsigned long)-EINVAL;
 		break;
-	case EI_ETYPE_TRUE:
-		return 1;
 	}
 
 	return retv;
@@ -163,7 +163,10 @@ static void fei_debugfs_add_attr(struct fei_attr *attr)
 
 static void fei_debugfs_remove_attr(struct fei_attr *attr)
 {
-	debugfs_lookup_and_remove(attr->kp.symbol_name, fei_debugfs_dir);
+	struct dentry *dir;
+
+	dir = debugfs_lookup(attr->kp.symbol_name, fei_debugfs_dir);
+	debugfs_remove_recursive(dir);
 }
 
 static int fei_kprobe_handler(struct kprobe *kp, struct pt_regs *regs)
@@ -244,11 +247,15 @@ static ssize_t fei_write(struct file *file, const char __user *buffer,
 	/* cut off if it is too long */
 	if (count > KSYM_NAME_LEN)
 		count = KSYM_NAME_LEN;
+	buf = kmalloc(count + 1, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
 
-	buf = memdup_user_nul(buffer, count);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
-
+	if (copy_from_user(buf, buffer, count)) {
+		ret = -EFAULT;
+		goto out_free;
+	}
+	buf[count] = '\0';
 	sym = strstrip(buf);
 
 	mutex_lock(&fei_lock);
@@ -291,15 +298,17 @@ static ssize_t fei_write(struct file *file, const char __user *buffer,
 	}
 
 	ret = register_kprobe(&attr->kp);
-	if (ret) {
-		fei_attr_free(attr);
-		goto out;
+	if (!ret)
+		fei_debugfs_add_attr(attr);
+	if (ret < 0)
+		fei_attr_remove(attr);
+	else {
+		list_add_tail(&attr->list, &fei_attr_list);
+		ret = count;
 	}
-	fei_debugfs_add_attr(attr);
-	list_add_tail(&attr->list, &fei_attr_list);
-	ret = count;
 out:
 	mutex_unlock(&fei_lock);
+out_free:
 	kfree(buf);
 	return ret;
 }

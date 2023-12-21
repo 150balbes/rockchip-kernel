@@ -77,6 +77,10 @@ struct aa_labelset {
 #define __labelset_for_each(LS, N) \
 	for ((N) = rb_first(&(LS)->root); (N); (N) = rb_next(N))
 
+void aa_labelset_destroy(struct aa_labelset *ls);
+void aa_labelset_init(struct aa_labelset *ls);
+
+
 enum label_flags {
 	FLAG_HAT = 1,			/* profile is a hat */
 	FLAG_UNCONFINED = 2,		/* label unconfined only if all */
@@ -92,8 +96,6 @@ enum label_flags {
 	FLAG_STALE = 0x800,		/* replaced/removed */
 	FLAG_RENAMED = 0x1000,		/* label has renaming in it */
 	FLAG_REVOKED = 0x2000,		/* label has revocation in it */
-	FLAG_DEBUG1 = 0x4000,
-	FLAG_DEBUG2 = 0x8000,
 
 	/* These flags must correspond with PATH_flags */
 	/* TODO: add new path flags */
@@ -146,7 +148,6 @@ do {							\
 #define __label_make_stale(X) ((X)->flags |= FLAG_STALE)
 #define labels_ns(X) (vec_ns(&((X)->vec[0]), (X)->size))
 #define labels_set(X) (&labels_ns(X)->labels)
-#define labels_view(X) labels_ns(X)
 #define labels_profile(X) ((X)->vec[(X)->size - 1])
 
 
@@ -261,7 +262,7 @@ for ((I).i = (I).j = 0;							\
 	struct label_it i;						\
 	int ret = 0;							\
 	label_for_each(i, (L), profile) {				\
-		if (RULE_MEDIATES(&profile->rules, (C))) {		\
+		if (PROFILE_MEDIATES(profile, (C))) {			\
 			ret = 1;					\
 			break;						\
 		}							\
@@ -333,7 +334,7 @@ struct aa_label *aa_label_parse(struct aa_label *base, const char *str,
 static inline const char *aa_label_strn_split(const char *str, int n)
 {
 	const char *pos;
-	aa_state_t state;
+	unsigned int state;
 
 	state = aa_dfa_matchn_until(stacksplitdfa, DFA_START, str, n, &pos);
 	if (!ACCEPT_TABLE(stacksplitdfa)[state])
@@ -345,7 +346,7 @@ static inline const char *aa_label_strn_split(const char *str, int n)
 static inline const char *aa_label_str_split(const char *str)
 {
 	const char *pos;
-	aa_state_t state;
+	unsigned int state;
 
 	state = aa_dfa_match_until(stacksplitdfa, DFA_START, str, &pos);
 	if (!ACCEPT_TABLE(stacksplitdfa)[state])
@@ -357,10 +358,9 @@ static inline const char *aa_label_str_split(const char *str)
 
 
 struct aa_perms;
-struct aa_ruleset;
-int aa_label_match(struct aa_profile *profile, struct aa_ruleset *rules,
-		   struct aa_label *label, aa_state_t state, bool subns,
-		   u32 request, struct aa_perms *perms);
+int aa_label_match(struct aa_profile *profile, struct aa_label *label,
+		   unsigned int state, bool subns, u32 request,
+		   struct aa_perms *perms);
 
 
 /**

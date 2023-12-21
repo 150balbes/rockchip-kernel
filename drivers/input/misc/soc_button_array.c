@@ -109,27 +109,6 @@ static const struct dmi_system_id dmi_use_low_level_irq[] = {
 };
 
 /*
- * Some devices have a wrong entry which points to a GPIO which is
- * required in another driver, so this driver must not claim it.
- */
-static const struct dmi_system_id dmi_invalid_acpi_index[] = {
-	{
-		/*
-		 * Lenovo Yoga Book X90F / X90L, the PNP0C40 home button entry
-		 * points to a GPIO which is not a home button and which is
-		 * required by the lenovo-yogabook driver.
-		 */
-		.matches = {
-			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Intel Corporation"),
-			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "CHERRYVIEW D1 PLATFORM"),
-			DMI_EXACT_MATCH(DMI_PRODUCT_VERSION, "YETI-11"),
-		},
-		.driver_data = (void *)1l,
-	},
-	{} /* Terminating entry */
-};
-
-/*
  * Get the Nth GPIO number from the ACPI object.
  */
 static int soc_button_lookup_gpio(struct device *dev, int acpi_index,
@@ -158,8 +137,6 @@ soc_button_device_create(struct platform_device *pdev,
 	struct platform_device *pd;
 	struct gpio_keys_button *gpio_keys;
 	struct gpio_keys_platform_data *gpio_keys_pdata;
-	const struct dmi_system_id *dmi_id;
-	int invalid_acpi_index = -1;
 	int error, gpio, irq;
 	int n_buttons = 0;
 
@@ -177,15 +154,8 @@ soc_button_device_create(struct platform_device *pdev,
 	gpio_keys = (void *)(gpio_keys_pdata + 1);
 	n_buttons = 0;
 
-	dmi_id = dmi_first_match(dmi_invalid_acpi_index);
-	if (dmi_id)
-		invalid_acpi_index = (long)dmi_id->driver_data;
-
 	for (info = button_info; info->name; info++) {
 		if (info->autorepeat != autorepeat)
-			continue;
-
-		if (info->acpi_index == invalid_acpi_index)
 			continue;
 
 		error = soc_button_lookup_gpio(&pdev->dev, info->acpi_index, &gpio, &irq);
@@ -512,27 +482,6 @@ static const struct soc_device_data soc_device_INT33D3 = {
 };
 
 /*
- * Button info for Microsoft Surface 3 (non pro), this is indentical to
- * the PNP0C40 info except that the home button is active-high.
- *
- * The Surface 3 Pro also has a MSHW0028 ACPI device, but that uses a custom
- * version of the drivers/platform/x86/intel/hid.c 5 button array ACPI API
- * instead. A check() callback is not necessary though as the Surface 3 Pro
- * MSHW0028 ACPI device's resource table does not contain any GPIOs.
- */
-static const struct soc_button_info soc_button_MSHW0028[] = {
-	{ "power", 0, EV_KEY, KEY_POWER, false, true, true },
-	{ "home", 1, EV_KEY, KEY_LEFTMETA, false, true, false },
-	{ "volume_up", 2, EV_KEY, KEY_VOLUMEUP, true, false, true },
-	{ "volume_down", 3, EV_KEY, KEY_VOLUMEDOWN, true, false, true },
-	{ }
-};
-
-static const struct soc_device_data soc_device_MSHW0028 = {
-	.button_info = soc_button_MSHW0028,
-};
-
-/*
  * Special device check for Surface Book 2 and Surface Pro (2017).
  * Both, the Surface Pro 4 (surfacepro3_button.c) and the above mentioned
  * devices use MSHW0040 for power and volume buttons, however the way they
@@ -598,8 +547,7 @@ static const struct acpi_device_id soc_button_acpi_match[] = {
 	{ "ID9001", (unsigned long)&soc_device_INT33D3 },
 	{ "ACPI0011", 0 },
 
-	/* Microsoft Surface Devices (3th, 5th and 6th generation) */
-	{ "MSHW0028", (unsigned long)&soc_device_MSHW0028 },
+	/* Microsoft Surface Devices (5th and 6th generation) */
 	{ "MSHW0040", (unsigned long)&soc_device_MSHW0040 },
 
 	{ }

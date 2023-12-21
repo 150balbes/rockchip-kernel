@@ -88,7 +88,6 @@ static int fsl_ifc_ctrl_remove(struct platform_device *dev)
 {
 	struct fsl_ifc_ctrl *ctrl = dev_get_drvdata(&dev->dev);
 
-	of_platform_depopulate(&dev->dev);
 	free_irq(ctrl->nand_irq, ctrl);
 	free_irq(ctrl->irq, ctrl);
 
@@ -286,15 +285,8 @@ static int fsl_ifc_ctrl_probe(struct platform_device *dev)
 		}
 	}
 
-	/* legacy dts may still use "simple-bus" compatible */
-	ret = of_platform_default_populate(dev->dev.of_node, NULL, &dev->dev);
-	if (ret)
-		goto err_free_nandirq;
-
 	return 0;
 
-err_free_nandirq:
-	free_irq(fsl_ifc_ctrl_dev->nand_irq, fsl_ifc_ctrl_dev);
 err_free_irq:
 	free_irq(fsl_ifc_ctrl_dev->irq, fsl_ifc_ctrl_dev);
 err_unmap_nandirq:
@@ -327,5 +319,6 @@ static int __init fsl_ifc_init(void)
 }
 subsys_initcall(fsl_ifc_init);
 
+MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Freescale Semiconductor");
 MODULE_DESCRIPTION("Freescale Integrated Flash Controller driver");

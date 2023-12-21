@@ -1,5 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2016 Broadcom
+/*
+ * Copyright (C) 2016 Broadcom
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -68,8 +78,8 @@ static void iproc_pwmc_disable(struct iproc_pwmc *ip, unsigned int channel)
 	ndelay(400);
 }
 
-static int iproc_pwmc_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-				struct pwm_state *state)
+static void iproc_pwmc_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+				 struct pwm_state *state)
 {
 	struct iproc_pwmc *ip = to_iproc_pwmc(chip);
 	u64 tmp, multi, rate;
@@ -91,7 +101,7 @@ static int iproc_pwmc_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	if (rate == 0) {
 		state->period = 0;
 		state->duty_cycle = 0;
-		return 0;
+		return;
 	}
 
 	value = readl(ip->base + IPROC_PWM_PRESCALE_OFFSET);
@@ -107,8 +117,6 @@ static int iproc_pwmc_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	value = readl(ip->base + IPROC_PWM_DUTY_CYCLE_OFFSET(pwm->hwpwm));
 	tmp = (value & IPROC_PWM_PERIOD_MAX) * multi;
 	state->duty_cycle = div64_u64(tmp, rate);
-
-	return 0;
 }
 
 static int iproc_pwmc_apply(struct pwm_chip *chip, struct pwm_device *pwm,
@@ -189,6 +197,7 @@ static const struct pwm_ops iproc_pwm_ops = {
 static int iproc_pwmc_probe(struct platform_device *pdev)
 {
 	struct iproc_pwmc *ip;
+	struct resource *res;
 	unsigned int i;
 	u32 value;
 	int ret;
@@ -201,9 +210,13 @@ static int iproc_pwmc_probe(struct platform_device *pdev)
 
 	ip->chip.dev = &pdev->dev;
 	ip->chip.ops = &iproc_pwm_ops;
+	ip->chip.base = -1;
 	ip->chip.npwm = 4;
+	ip->chip.of_xlate = of_pwm_xlate_with_flags;
+	ip->chip.of_pwm_n_cells = 3;
 
-	ip->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	ip->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(ip->base))
 		return PTR_ERR(ip->base);
 
@@ -239,13 +252,13 @@ static int iproc_pwmc_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void iproc_pwmc_remove(struct platform_device *pdev)
+static int iproc_pwmc_remove(struct platform_device *pdev)
 {
 	struct iproc_pwmc *ip = platform_get_drvdata(pdev);
 
-	pwmchip_remove(&ip->chip);
-
 	clk_disable_unprepare(ip->clk);
+
+	return pwmchip_remove(&ip->chip);
 }
 
 static const struct of_device_id bcm_iproc_pwmc_dt[] = {
@@ -260,7 +273,7 @@ static struct platform_driver iproc_pwmc_driver = {
 		.of_match_table = bcm_iproc_pwmc_dt,
 	},
 	.probe = iproc_pwmc_probe,
-	.remove_new = iproc_pwmc_remove,
+	.remove = iproc_pwmc_remove,
 };
 module_platform_driver(iproc_pwmc_driver);
 

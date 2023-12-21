@@ -92,7 +92,7 @@ int memcons_getc(void)
 	return c;
 }
 
-void __init udbg_init_memcons(void)
+void udbg_init_memcons(void)
 {
 	udbg_putc = memcons_putc;
 	udbg_getc = memcons_getc;

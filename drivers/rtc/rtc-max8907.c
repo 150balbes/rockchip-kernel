@@ -9,6 +9,7 @@
  */
 
 #include <linux/bcd.h>
+#include <linux/i2c.h>
 #include <linux/mfd/max8907.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>

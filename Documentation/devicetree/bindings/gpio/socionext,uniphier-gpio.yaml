@@ -43,7 +43,8 @@ properties:
 
   gpio-ranges: true
 
-  gpio-ranges-group-names: true
+  gpio-ranges-group-names:
+    $ref: /schemas/types.yaml#/definitions/string-array
 
   socionext,interrupt-ranges:
     description: |
@@ -51,23 +52,6 @@ properties:
       its interrupt parent, in the form of arbitrary number of
       <child-interrupt-base parent-interrupt-base length> triplets.
     $ref: /schemas/types.yaml#/definitions/uint32-matrix
-
-patternProperties:
-  "^.+-hog(-[0-9]+)?$":
-    type: object
-    properties:
-      gpio-hog: true
-      gpios: true
-      input: true
-      output-high: true
-      output-low: true
-      line-name: true
-
-    required:
-      - gpio-hog
-      - gpios
-
-    additionalProperties: false
 
 required:
   - compatible

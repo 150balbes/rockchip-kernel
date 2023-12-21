@@ -139,7 +139,8 @@ static struct i2c_driver pxe1610_driver = {
 	.driver = {
 			.name = "pxe1610",
 			},
-	.probe = pxe1610_probe,
+	.probe_new = pxe1610_probe,
+	.remove = pmbus_do_remove,
 	.id_table = pxe1610_id,
 };
 
@@ -148,4 +149,3 @@ module_i2c_driver(pxe1610_driver);
 MODULE_AUTHOR("Vijay Khemka <vijaykhemka@fb.com>");
 MODULE_DESCRIPTION("PMBus driver for Infineon PXE1610, PXE1110 and PXM1310");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(PMBUS);

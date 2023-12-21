@@ -211,10 +211,7 @@ static int jffs2_build_filesystem(struct jffs2_sb_info *c)
 		ic->scan_dents = NULL;
 		cond_resched();
 	}
-	ret = jffs2_build_xattr_subsystem(c);
-	if (ret)
-		goto exit;
-
+	jffs2_build_xattr_subsystem(c);
 	c->flags &= ~JFFS2_SB_FLAG_BUILDING;
 
 	dbg_fsbuild("FS build complete\n");

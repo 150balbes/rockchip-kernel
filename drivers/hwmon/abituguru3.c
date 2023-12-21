@@ -145,7 +145,7 @@ struct abituguru3_data {
 	struct device *hwmon_dev;	/* hwmon registered device */
 	struct mutex update_lock;	/* protect access to data and uGuru */
 	unsigned short addr;		/* uguru base address */
-	bool valid;			/* true if following fields are valid */
+	char valid;			/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	/*
@@ -1083,7 +1083,7 @@ static struct abituguru3_data *abituguru3_update_device(struct device *dev)
 	mutex_lock(&data->update_lock);
 	if (!data->valid || time_after(jiffies, data->last_updated + HZ)) {
 		/* Clear data->valid while updating */
-		data->valid = false;
+		data->valid = 0;
 		/* Read alarms */
 		if (abituguru3_read_increment_offset(data,
 				ABIT_UGURU3_SETTINGS_BANK,
@@ -1117,7 +1117,7 @@ static struct abituguru3_data *abituguru3_update_device(struct device *dev)
 				goto LEAVE_UPDATE;
 		}
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 LEAVE_UPDATE:
 	mutex_unlock(&data->update_lock);
@@ -1127,6 +1127,7 @@ LEAVE_UPDATE:
 		return NULL;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int abituguru3_suspend(struct device *dev)
 {
 	struct abituguru3_data *data = dev_get_drvdata(dev);
@@ -1145,12 +1146,16 @@ static int abituguru3_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(abituguru3_pm, abituguru3_suspend, abituguru3_resume);
+static SIMPLE_DEV_PM_OPS(abituguru3_pm, abituguru3_suspend, abituguru3_resume);
+#define ABIT_UGURU3_PM	(&abituguru3_pm)
+#else
+#define ABIT_UGURU3_PM	NULL
+#endif /* CONFIG_PM */
 
 static struct platform_driver abituguru3_driver = {
 	.driver = {
 		.name	= ABIT_UGURU3_NAME,
-		.pm	= pm_sleep_ptr(&abituguru3_pm),
+		.pm	= ABIT_UGURU3_PM
 	},
 	.probe	= abituguru3_probe,
 	.remove	= abituguru3_remove,

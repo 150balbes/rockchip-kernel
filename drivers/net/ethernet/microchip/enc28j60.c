@@ -58,6 +58,7 @@ struct enc28j60_net {
 	struct mutex lock;
 	struct sk_buff *tx_skb;
 	struct work_struct tx_work;
+	struct work_struct irq_work;
 	struct work_struct setrx_work;
 	struct work_struct restart_work;
 	u8 bank;		/* current register bank selected */
@@ -516,7 +517,7 @@ static int enc28j60_set_mac_address(struct net_device *dev, void *addr)
 	if (!is_valid_ether_addr(address->sa_data))
 		return -EADDRNOTAVAIL;
 
-	eth_hw_addr_set(dev, address->sa_data);
+	ether_addr_copy(dev->dev_addr, address->sa_data);
 	return enc28j60_set_hw_macaddr(dev);
 }
 
@@ -974,7 +975,7 @@ static void enc28j60_hw_rx(struct net_device *ndev)
 			/* update statistics */
 			ndev->stats.rx_packets++;
 			ndev->stats.rx_bytes += len;
-			netif_rx(skb);
+			netif_rx_ni(skb);
 		}
 	}
 	/*
@@ -1117,9 +1118,10 @@ static int enc28j60_rx_interrupt(struct net_device *ndev)
 	return ret;
 }
 
-static irqreturn_t enc28j60_irq(int irq, void *dev_id)
+static void enc28j60_irq_work_handler(struct work_struct *work)
 {
-	struct enc28j60_net *priv = dev_id;
+	struct enc28j60_net *priv =
+		container_of(work, struct enc28j60_net, irq_work);
 	struct net_device *ndev = priv->netdev;
 	int intflags, loop;
 
@@ -1223,8 +1225,6 @@ static irqreturn_t enc28j60_irq(int irq, void *dev_id)
 
 	/* re-enable interrupts */
 	locked_reg_bfset(priv, EIE, EIE_INTIE);
-
-	return IRQ_HANDLED;
 }
 
 /*
@@ -1307,6 +1307,22 @@ static void enc28j60_tx_work_handler(struct work_struct *work)
 
 	/* actual delivery of data */
 	enc28j60_hw_tx(priv);
+}
+
+static irqreturn_t enc28j60_irq(int irq, void *dev_id)
+{
+	struct enc28j60_net *priv = dev_id;
+
+	/*
+	 * Can't do anything in interrupt context because we need to
+	 * block (spi_sync() is blocking) so fire of the interrupt
+	 * handling workqueue.
+	 * Remember that we access enc28j60 registers through SPI bus
+	 * via spi_sync() call.
+	 */
+	schedule_work(&priv->irq_work);
+
+	return IRQ_HANDLED;
 }
 
 static void enc28j60_tx_timeout(struct net_device *ndev, unsigned int txqueue)
@@ -1451,9 +1467,9 @@ static void enc28j60_restart_work_handler(struct work_struct *work)
 static void
 enc28j60_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strscpy(info->version, DRV_VERSION, sizeof(info->version));
-	strscpy(info->bus_info,
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
+	strlcpy(info->bus_info,
 		dev_name(dev->dev.parent), sizeof(info->bus_info));
 }
 
@@ -1523,6 +1539,7 @@ static const struct net_device_ops enc28j60_netdev_ops = {
 
 static int enc28j60_probe(struct spi_device *spi)
 {
+	unsigned char macaddr[ETH_ALEN];
 	struct net_device *dev;
 	struct enc28j60_net *priv;
 	int ret = 0;
@@ -1543,6 +1560,7 @@ static int enc28j60_probe(struct spi_device *spi)
 	mutex_init(&priv->lock);
 	INIT_WORK(&priv->tx_work, enc28j60_tx_work_handler);
 	INIT_WORK(&priv->setrx_work, enc28j60_setrx_work_handler);
+	INIT_WORK(&priv->irq_work, enc28j60_irq_work_handler);
 	INIT_WORK(&priv->restart_work, enc28j60_restart_work_handler);
 	spi_set_drvdata(spi, priv);	/* spi to priv reference */
 	SET_NETDEV_DEV(dev, &spi->dev);
@@ -1554,15 +1572,16 @@ static int enc28j60_probe(struct spi_device *spi)
 		goto error_irq;
 	}
 
-	if (device_get_ethdev_address(&spi->dev, dev))
+	if (device_get_mac_address(&spi->dev, macaddr, sizeof(macaddr)))
+		ether_addr_copy(dev->dev_addr, macaddr);
+	else
 		eth_hw_addr_random(dev);
 	enc28j60_set_hw_macaddr(dev);
 
 	/* Board setup must set the relevant edge trigger type;
 	 * level triggers won't currently work.
 	 */
-	ret = request_threaded_irq(spi->irq, NULL, enc28j60_irq, IRQF_ONESHOT,
-				   DRV_NAME, priv);
+	ret = request_irq(spi->irq, enc28j60_irq, 0, DRV_NAME, priv);
 	if (ret < 0) {
 		if (netif_msg_probe(priv))
 			dev_err(&spi->dev, "request irq %d failed (ret = %d)\n",
@@ -1596,13 +1615,15 @@ error_alloc:
 	return ret;
 }
 
-static void enc28j60_remove(struct spi_device *spi)
+static int enc28j60_remove(struct spi_device *spi)
 {
 	struct enc28j60_net *priv = spi_get_drvdata(spi);
 
 	unregister_netdev(priv->netdev);
 	free_irq(spi->irq, priv);
 	free_netdev(priv->netdev);
+
+	return 0;
 }
 
 static const struct of_device_id enc28j60_dt_ids[] = {

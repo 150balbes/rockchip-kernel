@@ -26,10 +26,8 @@ asmlinkage void sm3_ce_transform(struct sm3_state *sst, u8 const *src,
 static int sm3_ce_update(struct shash_desc *desc, const u8 *data,
 			 unsigned int len)
 {
-	if (!crypto_simd_usable()) {
-		sm3_update(shash_desc_ctx(desc), data, len);
-		return 0;
-	}
+	if (!crypto_simd_usable())
+		return crypto_sm3_update(desc, data, len);
 
 	kernel_neon_begin();
 	sm3_base_do_update(desc, data, len, sm3_ce_transform);
@@ -40,10 +38,8 @@ static int sm3_ce_update(struct shash_desc *desc, const u8 *data,
 
 static int sm3_ce_final(struct shash_desc *desc, u8 *out)
 {
-	if (!crypto_simd_usable()) {
-		sm3_final(shash_desc_ctx(desc), out);
-		return 0;
-	}
+	if (!crypto_simd_usable())
+		return crypto_sm3_finup(desc, NULL, 0, out);
 
 	kernel_neon_begin();
 	sm3_base_do_finalize(desc, sm3_ce_transform);
@@ -55,22 +51,14 @@ static int sm3_ce_final(struct shash_desc *desc, u8 *out)
 static int sm3_ce_finup(struct shash_desc *desc, const u8 *data,
 			unsigned int len, u8 *out)
 {
-	if (!crypto_simd_usable()) {
-		struct sm3_state *sctx = shash_desc_ctx(desc);
-
-		if (len)
-			sm3_update(sctx, data, len);
-		sm3_final(sctx, out);
-		return 0;
-	}
+	if (!crypto_simd_usable())
+		return crypto_sm3_finup(desc, data, len, out);
 
 	kernel_neon_begin();
-	if (len)
-		sm3_base_do_update(desc, data, len, sm3_ce_transform);
-	sm3_base_do_finalize(desc, sm3_ce_transform);
+	sm3_base_do_update(desc, data, len, sm3_ce_transform);
 	kernel_neon_end();
 
-	return sm3_base_finish(desc, out);
+	return sm3_ce_final(desc, out);
 }
 
 static struct shash_alg sm3_alg = {
@@ -84,7 +72,7 @@ static struct shash_alg sm3_alg = {
 	.base.cra_driver_name	= "sm3-ce",
 	.base.cra_blocksize	= SM3_BLOCK_SIZE,
 	.base.cra_module	= THIS_MODULE,
-	.base.cra_priority	= 400,
+	.base.cra_priority	= 200,
 };
 
 static int __init sm3_ce_mod_init(void)

@@ -129,9 +129,6 @@ static ssize_t cobalt_lcdfb_read(struct fb_info *info, char __user *buf,
 	unsigned long pos;
 	int len, retval = 0;
 
-	if (!info->screen_base)
-		return -ENODEV;
-
 	pos = *ppos;
 	if (pos >= LCD_CHARS_MAX || count == 0)
 		return 0;
@@ -177,9 +174,6 @@ static ssize_t cobalt_lcdfb_write(struct fb_info *info, const char __user *buf,
 	char dst[LCD_CHARS_MAX];
 	unsigned long pos;
 	int len, retval = 0;
-
-	if (!info->screen_base)
-		return -ENODEV;
 
 	pos = *ppos;
 	if (pos >= LCD_CHARS_MAX || count == 0)
@@ -313,6 +307,7 @@ static int cobalt_lcdfb_probe(struct platform_device *dev)
 	info->fix.smem_len = info->screen_size;
 	info->pseudo_palette = NULL;
 	info->par = NULL;
+	info->flags = FBINFO_DEFAULT;
 
 	retval = register_framebuffer(info);
 	if (retval < 0) {
@@ -329,7 +324,7 @@ static int cobalt_lcdfb_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void cobalt_lcdfb_remove(struct platform_device *dev)
+static int cobalt_lcdfb_remove(struct platform_device *dev)
 {
 	struct fb_info *info;
 
@@ -338,11 +333,13 @@ static void cobalt_lcdfb_remove(struct platform_device *dev)
 		unregister_framebuffer(info);
 		framebuffer_release(info);
 	}
+
+	return 0;
 }
 
 static struct platform_driver cobalt_lcdfb_driver = {
 	.probe	= cobalt_lcdfb_probe,
-	.remove_new = cobalt_lcdfb_remove,
+	.remove	= cobalt_lcdfb_remove,
 	.driver	= {
 		.name	= "cobalt-lcd",
 	},

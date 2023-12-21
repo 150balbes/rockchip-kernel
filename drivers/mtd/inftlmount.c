@@ -259,13 +259,20 @@ static int find_boot_record(struct INFTLrecord *inftl)
 		/* Memory alloc */
 		inftl->PUtable = kmalloc_array(inftl->nb_blocks, sizeof(u16),
 					       GFP_KERNEL);
-		if (!inftl->PUtable)
+		if (!inftl->PUtable) {
+			printk(KERN_WARNING "INFTL: allocation of PUtable "
+				"failed (%zd bytes)\n",
+				inftl->nb_blocks * sizeof(u16));
 			return -ENOMEM;
+		}
 
 		inftl->VUtable = kmalloc_array(inftl->nb_blocks, sizeof(u16),
 					       GFP_KERNEL);
 		if (!inftl->VUtable) {
 			kfree(inftl->PUtable);
+			printk(KERN_WARNING "INFTL: allocation of VUtable "
+				"failed (%zd bytes)\n",
+				inftl->nb_blocks * sizeof(u16));
 			return -ENOMEM;
 		}
 
@@ -323,7 +330,7 @@ static int check_free_sectors(struct INFTLrecord *inftl, unsigned int address,
 
 	buf = kmalloc(SECTORSIZE + mtd->oobsize, GFP_KERNEL);
 	if (!buf)
-		return -ENOMEM;
+		return -1;
 
 	ret = -1;
 	for (i = 0; i < len; i += SECTORSIZE) {
@@ -551,8 +558,12 @@ int INFTL_mount(struct INFTLrecord *s)
 
 	/* Temporary buffer to store ANAC numbers. */
 	ANACtable = kcalloc(s->nb_blocks, sizeof(u8), GFP_KERNEL);
-	if (!ANACtable)
+	if (!ANACtable) {
+		printk(KERN_WARNING "INFTL: allocation of ANACtable "
+				"failed (%zd bytes)\n",
+				s->nb_blocks * sizeof(u8));
 		return -ENOMEM;
+	}
 
 	/*
 	 * First pass is to explore each physical unit, and construct the

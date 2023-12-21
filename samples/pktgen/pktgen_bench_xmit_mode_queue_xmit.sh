@@ -14,10 +14,6 @@ root_check_run_with_sudo "$@"
 
 # Parameter parsing via include
 source ${basedir}/parameters.sh
-
-# Trap EXIT first
-trap_exit
-
 if [ -z "$DEST_IP" ]; then
     [ -z "$IP6" ] && DEST_IP="198.18.0.42" || DEST_IP="FD00::1"
 fi
@@ -36,6 +32,9 @@ if [ -n "$DST_PORT" ]; then
     read -r UDP_DST_MIN UDP_DST_MAX <<< $(parse_ports $DST_PORT)
     validate_ports $UDP_DST_MIN $UDP_DST_MAX
 fi
+
+# Base Config
+DELAY="0"        # Zero means max speed
 
 # General cleanup everything since last run
 pg_ctrl "reset"
@@ -73,21 +72,14 @@ for ((thread = $F_THREAD; thread <= $L_THREAD; thread++)); do
     pg_set $dev "xmit_mode queue_xmit"
 done
 
-# Run if user hits control-c
-function print_result {
-    # Print results
-    for ((thread = $F_THREAD; thread <= $L_THREAD; thread++)); do
-        dev=${DEV}@${thread}
-        echo "Device: $dev"
-        cat /proc/net/pktgen/$dev | grep -A2 "Result:"
-    done
-}
-# trap keyboard interrupt (Ctrl-C)
-trap true SIGINT
-
 # start_run
 echo "Running... ctrl^C to stop" >&2
 pg_ctrl "start"
 echo "Done" >&2
 
-print_result
+# Print results
+for ((thread = $F_THREAD; thread <= $L_THREAD; thread++)); do
+    dev=${DEV}@${thread}
+    echo "Device: $dev"
+    cat /proc/net/pktgen/$dev | grep -A2 "Result:"
+done

@@ -1403,17 +1403,14 @@ static int prism2_hw_init2(struct net_device *dev, int initial)
 	hfa384x_events_only_cmd(dev);
 
 	if (initial) {
-		u8 addr[ETH_ALEN] = {};
 		struct list_head *ptr;
-
 		prism2_check_sta_fw_version(local);
 
 		if (hfa384x_get_rid(dev, HFA384X_RID_CNFOWNMACADDR,
-				    addr, ETH_ALEN, 1) < 0) {
+				    dev->dev_addr, 6, 1) < 0) {
 			printk("%s: could not get own MAC address\n",
 			       dev->name);
 		}
-		eth_hw_addr_set(dev, addr);
 		list_for_each(ptr, &local->hostap_interfaces) {
 			iface = list_entry(ptr, struct hostap_interface, list);
 			eth_hw_addr_inherit(iface->dev, dev);
@@ -1815,9 +1812,8 @@ static int prism2_tx_80211(struct sk_buff *skb, struct net_device *dev)
 	memset(&txdesc, 0, sizeof(txdesc));
 
 	/* skb->data starts with txdesc->frame_control */
-	hdr_len = sizeof(txdesc.header);
-	BUILD_BUG_ON(hdr_len != 24);
-	skb_copy_from_linear_data(skb, &txdesc.header, hdr_len);
+	hdr_len = 24;
+	skb_copy_from_linear_data(skb, &txdesc.frame_control, hdr_len);
 	if (ieee80211_is_data(txdesc.frame_control) &&
 	    ieee80211_has_a4(txdesc.frame_control) &&
 	    skb->len >= 30) {
@@ -3173,15 +3169,22 @@ prism2_init_local_data(struct prism2_helper_functions *funcs, int card_idx,
 
 	/* Initialize tasklets for handling hardware IRQ related operations
 	 * outside hw IRQ handler */
-	tasklet_setup(&local->bap_tasklet, hostap_bap_tasklet);
-	tasklet_setup(&local->info_tasklet, hostap_info_tasklet);
+#define HOSTAP_TASKLET_INIT(q, f, d) \
+do { memset((q), 0, sizeof(*(q))); (q)->func = (void(*)(unsigned long))(f); } \
+while (0)
+	HOSTAP_TASKLET_INIT(&local->bap_tasklet, hostap_bap_tasklet,
+			    (unsigned long) local);
+
+	HOSTAP_TASKLET_INIT(&local->info_tasklet, hostap_info_tasklet,
+			    (unsigned long) local);
 	hostap_info_init(local);
 
-	tasklet_setup(&local->rx_tasklet, hostap_rx_tasklet);
+	HOSTAP_TASKLET_INIT(&local->rx_tasklet,
+			    hostap_rx_tasklet, (unsigned long) local);
 	skb_queue_head_init(&local->rx_list);
 
-	tasklet_setup(&local->sta_tx_exc_tasklet,
-			    hostap_sta_tx_exc_tasklet);
+	HOSTAP_TASKLET_INIT(&local->sta_tx_exc_tasklet,
+			    hostap_sta_tx_exc_tasklet, (unsigned long) local);
 	skb_queue_head_init(&local->sta_tx_exc_list);
 
 	INIT_LIST_HEAD(&local->cmd_queue);

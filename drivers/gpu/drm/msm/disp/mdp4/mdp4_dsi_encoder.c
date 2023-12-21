@@ -11,8 +11,6 @@
 
 #include "mdp4_kms.h"
 
-#ifdef CONFIG_DRM_MSM_DSI
-
 struct mdp4_dsi_encoder {
 	struct drm_encoder base;
 	struct drm_panel *panel;
@@ -172,4 +170,3 @@ fail:
 
 	return ERR_PTR(ret);
 }
-#endif /* CONFIG_DRM_MSM_DSI */

@@ -193,7 +193,8 @@ get_queue_num:
 		if (recontend_queue)
 			goto get_queue_num;
 
-		return INVALID_QUEUE;
+		q_num = INVALID_QUEUE;
+		return q_num;
 	}
 
 	common->selected_qnum = q_num;
@@ -420,8 +421,7 @@ void rsi_core_xmit(struct rsi_common *common, struct sk_buff *skb)
 			rsi_hal_send_sta_notify_frame(common,
 						      RSI_IFTYPE_STATION,
 						      STA_CONNECTED, bss->bssid,
-						      bss->qos, vif->cfg.aid,
-						      0,
+						      bss->qos, bss->aid, 0,
 						      vif);
 		}
 
@@ -466,9 +466,7 @@ void rsi_core_xmit(struct rsi_common *common, struct sk_buff *skb)
 							      tid, 0);
 			}
 		}
-
-		if (IEEE80211_SKB_CB(skb)->control.flags &
-		    IEEE80211_TX_CTRL_PORT_CTRL_PROTO) {
+		if (skb->protocol == cpu_to_be16(ETH_P_PAE)) {
 			q_num = MGMT_SOFT_Q;
 			skb->priority = q_num;
 		}

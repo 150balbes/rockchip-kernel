@@ -857,7 +857,8 @@ static struct dvb_frontend *lgdt330x_get_dvb_frontend(struct i2c_client *client)
 static const struct dvb_frontend_ops lgdt3302_ops;
 static const struct dvb_frontend_ops lgdt3303_ops;
 
-static int lgdt330x_probe(struct i2c_client *client)
+static int lgdt330x_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct lgdt330x_state *state = NULL;
 	u8 buf[1];
@@ -973,13 +974,15 @@ static const struct dvb_frontend_ops lgdt3303_ops = {
 	.release              = lgdt330x_release,
 };
 
-static void lgdt330x_remove(struct i2c_client *client)
+static int lgdt330x_remove(struct i2c_client *client)
 {
 	struct lgdt330x_state *state = i2c_get_clientdata(client);
 
 	dev_dbg(&client->dev, "\n");
 
 	kfree(state);
+
+	return 0;
 }
 
 static const struct i2c_device_id lgdt330x_id_table[] = {

@@ -4,10 +4,10 @@
 $id: http://devicetree.org/schemas/mfd/khadas,mcu.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Khadas on-board Microcontroller
+title: Khadas on-board Microcontroller Device Tree Bindings
 
 maintainers:
-  - Neil Armstrong <neil.armstrong@linaro.org>
+  - Neil Armstrong <narmstrong@baylibre.com>
 
 description: |
   Khadas embeds a microcontroller on their VIM and Edge boards adding some

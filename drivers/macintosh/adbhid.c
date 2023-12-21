@@ -789,14 +789,15 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 
 	switch (default_id) {
 	case ADB_KEYBOARD:
-		hid->keycode = kmemdup(adb_to_linux_keycodes,
-				       sizeof(adb_to_linux_keycodes), GFP_KERNEL);
+		hid->keycode = kmalloc(sizeof(adb_to_linux_keycodes), GFP_KERNEL);
 		if (!hid->keycode) {
 			err = -ENOMEM;
 			goto fail;
 		}
 
 		sprintf(hid->name, "ADB keyboard");
+
+		memcpy(hid->keycode, adb_to_linux_keycodes, sizeof(adb_to_linux_keycodes));
 
 		switch (original_handler_id) {
 		default:
@@ -816,7 +817,9 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 		case 0xC4: case 0xC7:
 			keyboard_type = "ISO, swapping keys";
 			input_dev->id.version = ADB_KEYBOARD_ISO;
-			swap(hid->keycode[10], hid->keycode[50]);
+			i = hid->keycode[10];
+			hid->keycode[10] = hid->keycode[50];
+			hid->keycode[50] = i;
 			break;
 
 		case 0x12: case 0x15: case 0x16: case 0x17: case 0x1A:

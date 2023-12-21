@@ -1,8 +1,8 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-=================
-SCSI FC Transport
-=================
+================
+SCSI FC Tansport
+================
 
 Date:  11/18/2008
 
@@ -556,5 +556,5 @@ The following people have contributed to this document:
 
 
 James Smart
-james.smart@broadcom.com
+james.smart@emulex.com
 

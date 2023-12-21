@@ -22,7 +22,8 @@ properties:
       - ti,hdc2010
       - ti,hdc2080
 
-  vdd-supply: true
+  vdd-supply:
+    maxItems: 1
 
   reg:
     maxItems: 1
@@ -35,12 +36,12 @@ additionalProperties: false
 
 examples:
   - |
-    i2c {
-        #address-cells = <1>;
-        #size-cells = <0>;
+    i2c0 {
+      #address-cells = <1>;
+      #size-cells = <0>;
 
-        humidity@40 {
-            compatible = "ti,hdc2010";
-            reg = <0x40>;
-        };
+      humidity@40 {
+          compatible = "ti,hdc2010";
+          reg = <0x40>;
+      };
     };

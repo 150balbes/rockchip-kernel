@@ -30,20 +30,13 @@ static const struct device_type pci_epf_type;
  */
 void pci_epf_unbind(struct pci_epf *epf)
 {
-	struct pci_epf *epf_vf;
-
 	if (!epf->driver) {
 		dev_WARN(&epf->dev, "epf device not bound to driver\n");
 		return;
 	}
 
 	mutex_lock(&epf->lock);
-	list_for_each_entry(epf_vf, &epf->pci_vepf, list) {
-		if (epf_vf->is_bound)
-			epf_vf->driver->ops->unbind(epf_vf);
-	}
-	if (epf->is_bound)
-		epf->driver->ops->unbind(epf);
+	epf->driver->ops->unbind(epf);
 	mutex_unlock(&epf->lock);
 	module_put(epf->driver->owner);
 }
@@ -58,14 +51,10 @@ EXPORT_SYMBOL_GPL(pci_epf_unbind);
  */
 int pci_epf_bind(struct pci_epf *epf)
 {
-	struct device *dev = &epf->dev;
-	struct pci_epf *epf_vf;
-	u8 func_no, vfunc_no;
-	struct pci_epc *epc;
 	int ret;
 
 	if (!epf->driver) {
-		dev_WARN(dev, "epf device not bound to driver\n");
+		dev_WARN(&epf->dev, "epf device not bound to driver\n");
 		return -EINVAL;
 	}
 
@@ -73,176 +62,36 @@ int pci_epf_bind(struct pci_epf *epf)
 		return -EAGAIN;
 
 	mutex_lock(&epf->lock);
-	list_for_each_entry(epf_vf, &epf->pci_vepf, list) {
-		vfunc_no = epf_vf->vfunc_no;
-
-		if (vfunc_no < 1) {
-			dev_err(dev, "Invalid virtual function number\n");
-			ret = -EINVAL;
-			goto ret;
-		}
-
-		epc = epf->epc;
-		func_no = epf->func_no;
-		if (!IS_ERR_OR_NULL(epc)) {
-			if (!epc->max_vfs) {
-				dev_err(dev, "No support for virt function\n");
-				ret = -EINVAL;
-				goto ret;
-			}
-
-			if (vfunc_no > epc->max_vfs[func_no]) {
-				dev_err(dev, "PF%d: Exceeds max vfunc number\n",
-					func_no);
-				ret = -EINVAL;
-				goto ret;
-			}
-		}
-
-		epc = epf->sec_epc;
-		func_no = epf->sec_epc_func_no;
-		if (!IS_ERR_OR_NULL(epc)) {
-			if (!epc->max_vfs) {
-				dev_err(dev, "No support for virt function\n");
-				ret = -EINVAL;
-				goto ret;
-			}
-
-			if (vfunc_no > epc->max_vfs[func_no]) {
-				dev_err(dev, "PF%d: Exceeds max vfunc number\n",
-					func_no);
-				ret = -EINVAL;
-				goto ret;
-			}
-		}
-
-		epf_vf->func_no = epf->func_no;
-		epf_vf->sec_epc_func_no = epf->sec_epc_func_no;
-		epf_vf->epc = epf->epc;
-		epf_vf->sec_epc = epf->sec_epc;
-		ret = epf_vf->driver->ops->bind(epf_vf);
-		if (ret)
-			goto ret;
-		epf_vf->is_bound = true;
-	}
-
 	ret = epf->driver->ops->bind(epf);
-	if (ret)
-		goto ret;
-	epf->is_bound = true;
-
 	mutex_unlock(&epf->lock);
-	return 0;
-
-ret:
-	mutex_unlock(&epf->lock);
-	pci_epf_unbind(epf);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pci_epf_bind);
 
 /**
- * pci_epf_add_vepf() - associate virtual EP function to physical EP function
- * @epf_pf: the physical EP function to which the virtual EP function should be
- *   associated
- * @epf_vf: the virtual EP function to be added
- *
- * A physical endpoint function can be associated with multiple virtual
- * endpoint functions. Invoke pci_epf_add_epf() to add a virtual PCI endpoint
- * function to a physical PCI endpoint function.
- */
-int pci_epf_add_vepf(struct pci_epf *epf_pf, struct pci_epf *epf_vf)
-{
-	u32 vfunc_no;
-
-	if (IS_ERR_OR_NULL(epf_pf) || IS_ERR_OR_NULL(epf_vf))
-		return -EINVAL;
-
-	if (epf_pf->epc || epf_vf->epc || epf_vf->epf_pf)
-		return -EBUSY;
-
-	if (epf_pf->sec_epc || epf_vf->sec_epc)
-		return -EBUSY;
-
-	mutex_lock(&epf_pf->lock);
-	vfunc_no = find_first_zero_bit(&epf_pf->vfunction_num_map,
-				       BITS_PER_LONG);
-	if (vfunc_no >= BITS_PER_LONG) {
-		mutex_unlock(&epf_pf->lock);
-		return -EINVAL;
-	}
-
-	set_bit(vfunc_no, &epf_pf->vfunction_num_map);
-	epf_vf->vfunc_no = vfunc_no;
-
-	epf_vf->epf_pf = epf_pf;
-	epf_vf->is_vf = true;
-
-	list_add_tail(&epf_vf->list, &epf_pf->pci_vepf);
-	mutex_unlock(&epf_pf->lock);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(pci_epf_add_vepf);
-
-/**
- * pci_epf_remove_vepf() - remove virtual EP function from physical EP function
- * @epf_pf: the physical EP function from which the virtual EP function should
- *   be removed
- * @epf_vf: the virtual EP function to be removed
- *
- * Invoke to remove a virtual endpoint function from the physical endpoint
- * function.
- */
-void pci_epf_remove_vepf(struct pci_epf *epf_pf, struct pci_epf *epf_vf)
-{
-	if (IS_ERR_OR_NULL(epf_pf) || IS_ERR_OR_NULL(epf_vf))
-		return;
-
-	mutex_lock(&epf_pf->lock);
-	clear_bit(epf_vf->vfunc_no, &epf_pf->vfunction_num_map);
-	list_del(&epf_vf->list);
-	mutex_unlock(&epf_pf->lock);
-}
-EXPORT_SYMBOL_GPL(pci_epf_remove_vepf);
-
-/**
  * pci_epf_free_space() - free the allocated PCI EPF register space
  * @epf: the EPF device from whom to free the memory
  * @addr: the virtual address of the PCI EPF register space
  * @bar: the BAR number corresponding to the register space
- * @type: Identifies if the allocated space is for primary EPC or secondary EPC
  *
  * Invoke to free the allocated PCI EPF register space.
  */
-void pci_epf_free_space(struct pci_epf *epf, void *addr, enum pci_barno bar,
-			enum pci_epc_interface_type type)
+void pci_epf_free_space(struct pci_epf *epf, void *addr, enum pci_barno bar)
 {
-	struct device *dev;
-	struct pci_epf_bar *epf_bar;
-	struct pci_epc *epc;
+	struct device *dev = epf->epc->dev.parent;
 
 	if (!addr)
 		return;
 
-	if (type == PRIMARY_INTERFACE) {
-		epc = epf->epc;
-		epf_bar = epf->bar;
-	} else {
-		epc = epf->sec_epc;
-		epf_bar = epf->sec_epc_bar;
-	}
+	dma_free_coherent(dev, epf->bar[bar].size, addr,
+			  epf->bar[bar].phys_addr);
 
-	dev = epc->dev.parent;
-	dma_free_coherent(dev, epf_bar[bar].size, addr,
-			  epf_bar[bar].phys_addr);
-
-	epf_bar[bar].phys_addr = 0;
-	epf_bar[bar].addr = NULL;
-	epf_bar[bar].size = 0;
-	epf_bar[bar].barno = 0;
-	epf_bar[bar].flags = 0;
+	epf->bar[bar].phys_addr = 0;
+	epf->bar[bar].addr = NULL;
+	epf->bar[bar].size = 0;
+	epf->bar[bar].barno = 0;
+	epf->bar[bar].flags = 0;
 }
 EXPORT_SYMBOL_GPL(pci_epf_free_space);
 
@@ -252,18 +101,15 @@ EXPORT_SYMBOL_GPL(pci_epf_free_space);
  * @size: the size of the memory that has to be allocated
  * @bar: the BAR number corresponding to the allocated register space
  * @align: alignment size for the allocation region
- * @type: Identifies if the allocation is for primary EPC or secondary EPC
  *
  * Invoke to allocate memory for the PCI EPF register space.
  */
 void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
-			  size_t align, enum pci_epc_interface_type type)
+			  size_t align)
 {
-	struct pci_epf_bar *epf_bar;
-	dma_addr_t phys_addr;
-	struct pci_epc *epc;
-	struct device *dev;
 	void *space;
+	struct device *dev = epf->epc->dev.parent;
+	dma_addr_t phys_addr;
 
 	if (size < 128)
 		size = 128;
@@ -273,26 +119,17 @@ void *pci_epf_alloc_space(struct pci_epf *epf, size_t size, enum pci_barno bar,
 	else
 		size = roundup_pow_of_two(size);
 
-	if (type == PRIMARY_INTERFACE) {
-		epc = epf->epc;
-		epf_bar = epf->bar;
-	} else {
-		epc = epf->sec_epc;
-		epf_bar = epf->sec_epc_bar;
-	}
-
-	dev = epc->dev.parent;
 	space = dma_alloc_coherent(dev, size, &phys_addr, GFP_KERNEL);
 	if (!space) {
 		dev_err(dev, "failed to allocate mem space\n");
 		return NULL;
 	}
 
-	epf_bar[bar].phys_addr = phys_addr;
-	epf_bar[bar].addr = space;
-	epf_bar[bar].size = size;
-	epf_bar[bar].barno = bar;
-	epf_bar[bar].flags |= upper_32_bits(size) ?
+	epf->bar[bar].phys_addr = phys_addr;
+	epf->bar[bar].addr = space;
+	epf->bar[bar].size = size;
+	epf->bar[bar].barno = bar;
+	epf->bar[bar].flags |= upper_32_bits(size) ?
 				PCI_BASE_ADDRESS_MEM_TYPE_64 :
 				PCI_BASE_ADDRESS_MEM_TYPE_32;
 
@@ -400,7 +237,7 @@ EXPORT_SYMBOL_GPL(pci_epf_destroy);
 /**
  * pci_epf_create() - create a new PCI EPF device
  * @name: the name of the PCI EPF device. This name will be used to bind the
- *	  EPF device to a EPF driver
+ *	  the EPF device to a EPF driver
  *
  * Invoke to create a new PCI EPF device by providing the name of the function
  * device.
@@ -422,10 +259,6 @@ struct pci_epf *pci_epf_create(const char *name)
 		kfree(epf);
 		return ERR_PTR(-ENOMEM);
 	}
-
-	/* VFs are numbered starting with 1. So set BIT(0) by default */
-	epf->vfunction_num_map = 1;
-	INIT_LIST_HEAD(&epf->pci_vepf);
 
 	dev = &epf->dev;
 	device_initialize(dev);
@@ -449,6 +282,22 @@ struct pci_epf *pci_epf_create(const char *name)
 }
 EXPORT_SYMBOL_GPL(pci_epf_create);
 
+const struct pci_epf_device_id *
+pci_epf_match_device(const struct pci_epf_device_id *id, struct pci_epf *epf)
+{
+	if (!id || !epf)
+		return NULL;
+
+	while (*id->name) {
+		if (strcmp(epf->name, id->name) == 0)
+			return id;
+		id++;
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(pci_epf_match_device);
+
 static void pci_epf_dev_release(struct device *dev)
 {
 	struct pci_epf *epf = to_pci_epf(dev);
@@ -461,16 +310,16 @@ static const struct device_type pci_epf_type = {
 	.release	= pci_epf_dev_release,
 };
 
-static const struct pci_epf_device_id *
+static int
 pci_epf_match_id(const struct pci_epf_device_id *id, const struct pci_epf *epf)
 {
 	while (id->name[0]) {
 		if (strcmp(epf->name, id->name) == 0)
-			return id;
+			return true;
 		id++;
 	}
 
-	return NULL;
+	return false;
 }
 
 static int pci_epf_device_match(struct device *dev, struct device_driver *drv)
@@ -479,7 +328,7 @@ static int pci_epf_device_match(struct device *dev, struct device_driver *drv)
 	struct pci_epf_driver *driver = to_pci_epf_driver(drv);
 
 	if (driver->id_table)
-		return !!pci_epf_match_id(driver->id_table, epf);
+		return pci_epf_match_id(driver->id_table, epf);
 
 	return !strcmp(epf->name, drv->name);
 }
@@ -494,17 +343,20 @@ static int pci_epf_device_probe(struct device *dev)
 
 	epf->driver = driver;
 
-	return driver->probe(epf, pci_epf_match_id(driver->id_table, epf));
+	return driver->probe(epf);
 }
 
-static void pci_epf_device_remove(struct device *dev)
+static int pci_epf_device_remove(struct device *dev)
 {
+	int ret = 0;
 	struct pci_epf *epf = to_pci_epf(dev);
 	struct pci_epf_driver *driver = to_pci_epf_driver(dev->driver);
 
 	if (driver->remove)
-		driver->remove(epf);
+		ret = driver->remove(epf);
 	epf->driver = NULL;
+
+	return ret;
 }
 
 static struct bus_type pci_epf_bus_type = {
@@ -536,3 +388,4 @@ module_exit(pci_epf_exit);
 
 MODULE_DESCRIPTION("PCI EPF Library");
 MODULE_AUTHOR("Kishon Vijay Abraham I <kishon@ti.com>");
+MODULE_LICENSE("GPL v2");

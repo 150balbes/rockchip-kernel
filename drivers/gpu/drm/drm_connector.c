@@ -20,23 +20,16 @@
  * OF THIS SOFTWARE.
  */
 
-#include <drm/drm_auth.h>
 #include <drm/drm_connector.h>
-#include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_encoder.h>
-#include <drm/drm_file.h>
-#include <drm/drm_managed.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_print.h>
-#include <drm/drm_privacy_screen_consumer.h>
-#include <drm/drm_sysfs.h>
 #include <drm/drm_utils.h>
+#include <drm/drm_print.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_sysfs.h>
 
-#include <linux/property.h>
 #include <linux/uaccess.h>
-
-#include <video/cmdline.h>
 
 #include "drm_crtc_internal.h"
 #include "drm_internal.h"
@@ -71,14 +64,6 @@
  * support can instead use e.g. drm_helper_hpd_irq_event().
  */
 
-/*
- * Global connector list for drm_connector_find_by_fwnode().
- * Note drm_connector_[un]register() first take connector->lock and then
- * take the connector_list_lock.
- */
-static DEFINE_MUTEX(connector_list_lock);
-static LIST_HEAD(connector_list);
-
 struct drm_conn_prop_enum_list {
 	int type;
 	const char *name;
@@ -109,7 +94,6 @@ static struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
 	{ DRM_MODE_CONNECTOR_DPI, "DPI" },
 	{ DRM_MODE_CONNECTOR_WRITEBACK, "Writeback" },
 	{ DRM_MODE_CONNECTOR_SPI, "SPI" },
-	{ DRM_MODE_CONNECTOR_USB, "USB" },
 };
 
 void drm_connector_ida_init(void)
@@ -156,10 +140,9 @@ EXPORT_SYMBOL(drm_get_connector_type_name);
 static void drm_connector_get_cmdline_mode(struct drm_connector *connector)
 {
 	struct drm_cmdline_mode *mode = &connector->cmdline_mode;
-	const char *option;
+	char *option = NULL;
 
-	option = video_get_options(connector->name);
-	if (!option)
+	if (fb_get_options(connector->name, &option))
 		return;
 
 	if (!drm_mode_parse_command_line_for_connector(option,
@@ -218,11 +201,23 @@ void drm_connector_free_work_fn(struct work_struct *work)
 	}
 }
 
-static int __drm_connector_init(struct drm_device *dev,
-				struct drm_connector *connector,
-				const struct drm_connector_funcs *funcs,
-				int connector_type,
-				struct i2c_adapter *ddc)
+/**
+ * drm_connector_init - Init a preallocated connector
+ * @dev: DRM device
+ * @connector: the connector to init
+ * @funcs: callbacks for this connector
+ * @connector_type: user visible type of the connector
+ *
+ * Initialises a preallocated connector. Connectors should be
+ * subclassed as part of driver connector objects.
+ *
+ * Returns:
+ * Zero on success, error code on failure.
+ */
+int drm_connector_init(struct drm_device *dev,
+		       struct drm_connector *connector,
+		       const struct drm_connector_funcs *funcs,
+		       int connector_type)
 {
 	struct drm_mode_config *config = &dev->mode_config;
 	int ret;
@@ -244,7 +239,7 @@ static int __drm_connector_init(struct drm_device *dev,
 	connector->funcs = funcs;
 
 	/* connector index is used with 32bit bitmasks */
-	ret = ida_alloc_max(&config->connector_ida, 31, GFP_KERNEL);
+	ret = ida_simple_get(&config->connector_ida, 0, 32, GFP_KERNEL);
 	if (ret < 0) {
 		DRM_DEBUG_KMS("Failed to allocate %s connector index: %d\n",
 			      drm_connector_enum_list[connector_type].name,
@@ -256,7 +251,7 @@ static int __drm_connector_init(struct drm_device *dev,
 
 	connector->connector_type = connector_type;
 	connector->connector_type_id =
-		ida_alloc_min(connector_ida, 1, GFP_KERNEL);
+		ida_simple_get(connector_ida, 1, 0, GFP_KERNEL);
 	if (connector->connector_type_id < 0) {
 		ret = connector->connector_type_id;
 		goto out_put_id;
@@ -270,14 +265,9 @@ static int __drm_connector_init(struct drm_device *dev,
 		goto out_put_type_id;
 	}
 
-	/* provide ddc symlink in sysfs */
-	connector->ddc = ddc;
-
-	INIT_LIST_HEAD(&connector->global_connector_list_entry);
 	INIT_LIST_HEAD(&connector->probed_modes);
 	INIT_LIST_HEAD(&connector->modes);
 	mutex_init(&connector->mutex);
-	mutex_init(&connector->edid_override_mutex);
 	connector->edid_blob_ptr = NULL;
 	connector->epoch_counter = 0;
 	connector->tile_blob_ptr = NULL;
@@ -288,8 +278,7 @@ static int __drm_connector_init(struct drm_device *dev,
 	drm_connector_get_cmdline_mode(connector);
 
 	/* We should add connectors at the end to avoid upsetting the connector
-	 * index too much.
-	 */
+	 * index too much. */
 	spin_lock_irq(&config->connector_list_lock);
 	list_add_tail(&connector->head, &config->connector_list);
 	config->num_connector++;
@@ -320,47 +309,15 @@ static int __drm_connector_init(struct drm_device *dev,
 	connector->debugfs_entry = NULL;
 out_put_type_id:
 	if (ret)
-		ida_free(connector_ida, connector->connector_type_id);
+		ida_simple_remove(connector_ida, connector->connector_type_id);
 out_put_id:
 	if (ret)
-		ida_free(&config->connector_ida, connector->index);
+		ida_simple_remove(&config->connector_ida, connector->index);
 out_put:
 	if (ret)
 		drm_mode_object_unregister(dev, &connector->base);
 
 	return ret;
-}
-
-/**
- * drm_connector_init - Init a preallocated connector
- * @dev: DRM device
- * @connector: the connector to init
- * @funcs: callbacks for this connector
- * @connector_type: user visible type of the connector
- *
- * Initialises a preallocated connector. Connectors should be
- * subclassed as part of driver connector objects.
- *
- * At driver unload time the driver's &drm_connector_funcs.destroy hook
- * should call drm_connector_cleanup() and free the connector structure.
- * The connector structure should not be allocated with devm_kzalloc().
- *
- * Note: consider using drmm_connector_init() instead of
- * drm_connector_init() to let the DRM managed resource infrastructure
- * take care of cleanup and deallocation.
- *
- * Returns:
- * Zero on success, error code on failure.
- */
-int drm_connector_init(struct drm_device *dev,
-		       struct drm_connector *connector,
-		       const struct drm_connector_funcs *funcs,
-		       int connector_type)
-{
-	if (drm_WARN_ON(dev, !(funcs && funcs->destroy)))
-		return -EINVAL;
-
-	return __drm_connector_init(dev, connector, funcs, connector_type, NULL);
 }
 EXPORT_SYMBOL(drm_connector_init);
 
@@ -375,15 +332,7 @@ EXPORT_SYMBOL(drm_connector_init);
  * Initialises a preallocated connector. Connectors should be
  * subclassed as part of driver connector objects.
  *
- * At driver unload time the driver's &drm_connector_funcs.destroy hook
- * should call drm_connector_cleanup() and free the connector structure.
- * The connector structure should not be allocated with devm_kzalloc().
- *
  * Ensures that the ddc field of the connector is correctly set.
- *
- * Note: consider using drmm_connector_init() instead of
- * drm_connector_init_with_ddc() to let the DRM managed resource
- * infrastructure take care of cleanup and deallocation.
  *
  * Returns:
  * Zero on success, error code on failure.
@@ -394,63 +343,18 @@ int drm_connector_init_with_ddc(struct drm_device *dev,
 				int connector_type,
 				struct i2c_adapter *ddc)
 {
-	if (drm_WARN_ON(dev, !(funcs && funcs->destroy)))
-		return -EINVAL;
-
-	return __drm_connector_init(dev, connector, funcs, connector_type, ddc);
-}
-EXPORT_SYMBOL(drm_connector_init_with_ddc);
-
-static void drm_connector_cleanup_action(struct drm_device *dev,
-					 void *ptr)
-{
-	struct drm_connector *connector = ptr;
-
-	drm_connector_cleanup(connector);
-}
-
-/**
- * drmm_connector_init - Init a preallocated connector
- * @dev: DRM device
- * @connector: the connector to init
- * @funcs: callbacks for this connector
- * @connector_type: user visible type of the connector
- * @ddc: optional pointer to the associated ddc adapter
- *
- * Initialises a preallocated connector. Connectors should be
- * subclassed as part of driver connector objects.
- *
- * Cleanup is automatically handled with a call to
- * drm_connector_cleanup() in a DRM-managed action.
- *
- * The connector structure should be allocated with drmm_kzalloc().
- *
- * Returns:
- * Zero on success, error code on failure.
- */
-int drmm_connector_init(struct drm_device *dev,
-			struct drm_connector *connector,
-			const struct drm_connector_funcs *funcs,
-			int connector_type,
-			struct i2c_adapter *ddc)
-{
 	int ret;
 
-	if (drm_WARN_ON(dev, funcs && funcs->destroy))
-		return -EINVAL;
-
-	ret = __drm_connector_init(dev, connector, funcs, connector_type, ddc);
+	ret = drm_connector_init(dev, connector, funcs, connector_type);
 	if (ret)
 		return ret;
 
-	ret = drmm_add_action_or_reset(dev, drm_connector_cleanup_action,
-				       connector);
-	if (ret)
-		return ret;
+	/* provide ddc symlink in sysfs */
+	connector->ddc = ddc;
 
-	return 0;
+	return ret;
 }
-EXPORT_SYMBOL(drmm_connector_init);
+EXPORT_SYMBOL(drm_connector_init_with_ddc);
 
 /**
  * drm_connector_attach_edid_property - attach edid property.
@@ -546,11 +450,6 @@ void drm_connector_cleanup(struct drm_connector *connector)
 		    DRM_CONNECTOR_REGISTERED))
 		drm_connector_unregister(connector);
 
-	if (connector->privacy_screen) {
-		drm_privacy_screen_put(connector->privacy_screen);
-		connector->privacy_screen = NULL;
-	}
-
 	if (connector->tile_group) {
 		drm_mode_put_tile_group(dev, connector->tile_group);
 		connector->tile_group = NULL;
@@ -562,18 +461,16 @@ void drm_connector_cleanup(struct drm_connector *connector)
 	list_for_each_entry_safe(mode, t, &connector->modes, head)
 		drm_mode_remove(connector, mode);
 
-	ida_free(&drm_connector_enum_list[connector->connector_type].ida,
+	ida_simple_remove(&drm_connector_enum_list[connector->connector_type].ida,
 			  connector->connector_type_id);
 
-	ida_free(&dev->mode_config.connector_ida, connector->index);
+	ida_simple_remove(&dev->mode_config.connector_ida,
+			  connector->index);
 
 	kfree(connector->display_info.bus_formats);
-	kfree(connector->display_info.vics);
 	drm_mode_object_unregister(dev, &connector->base);
 	kfree(connector->name);
 	connector->name = NULL;
-	fwnode_handle_put(connector->fwnode);
-	connector->fwnode = NULL;
 	spin_lock_irq(&dev->mode_config.connector_list_lock);
 	list_del(&connector->head);
 	dev->mode_config.num_connector--;
@@ -587,9 +484,6 @@ void drm_connector_cleanup(struct drm_connector *connector)
 	mutex_destroy(&connector->mutex);
 
 	memset(connector, 0, sizeof(*connector));
-
-	if (dev->registered)
-		drm_sysfs_hotplug_event(dev);
 }
 EXPORT_SYMBOL(drm_connector_cleanup);
 
@@ -601,9 +495,6 @@ EXPORT_SYMBOL(drm_connector_cleanup);
  * which can be hotplugged after drm_dev_register() has been called already,
  * e.g. DP MST connectors. All other connectors will be registered automatically
  * when calling drm_dev_register().
- *
- * When the connector is no longer available, callers must call
- * drm_connector_unregister().
  *
  * Returns:
  * Zero on success, error code on failure.
@@ -636,15 +527,8 @@ int drm_connector_register(struct drm_connector *connector)
 	connector->registration_state = DRM_CONNECTOR_REGISTERED;
 
 	/* Let userspace know we have a new connector */
-	drm_sysfs_connector_hotplug_event(connector);
+	drm_sysfs_hotplug_event(connector->dev);
 
-	if (connector->privacy_screen)
-		drm_privacy_screen_register_notifier(connector->privacy_screen,
-					   &connector->privacy_screen_notifier);
-
-	mutex_lock(&connector_list_lock);
-	list_add_tail(&connector->global_connector_list_entry, &connector_list);
-	mutex_unlock(&connector_list_lock);
 	goto unlock;
 
 err_debugfs:
@@ -661,8 +545,9 @@ EXPORT_SYMBOL(drm_connector_register);
  * @connector: the connector to unregister
  *
  * Unregister userspace interfaces for a connector. Only call this for
- * connectors which have been registered explicitly by calling
- * drm_connector_register().
+ * connectors which have registered explicitly by calling drm_dev_register(),
+ * since connectors are unregistered automatically when drm_dev_unregister() is
+ * called.
  */
 void drm_connector_unregister(struct drm_connector *connector)
 {
@@ -671,15 +556,6 @@ void drm_connector_unregister(struct drm_connector *connector)
 		mutex_unlock(&connector->mutex);
 		return;
 	}
-
-	mutex_lock(&connector_list_lock);
-	list_del_init(&connector->global_connector_list_entry);
-	mutex_unlock(&connector_list_lock);
-
-	if (connector->privacy_screen)
-		drm_privacy_screen_unregister_notifier(
-					connector->privacy_screen,
-					&connector->privacy_screen_notifier);
 
 	if (connector->funcs->early_unregister)
 		connector->funcs->early_unregister(connector);
@@ -728,8 +604,6 @@ int drm_connector_register_all(struct drm_device *dev)
  *
  * In contrast to the other drm_get_*_name functions this one here returns a
  * const pointer and hence is threadsafe.
- *
- * Returns: connector status string
  */
 const char *drm_get_connector_status_name(enum drm_connector_status status)
 {
@@ -812,7 +686,7 @@ __drm_connector_put_safe(struct drm_connector *conn)
  * drm_connector_list_iter_next - return next connector
  * @iter: connector_list iterator
  *
- * Returns: the next connector for @iter, or NULL when the list walk has
+ * Returns the next connector for @iter, or NULL when the list walk has
  * completed.
  */
 struct drm_connector *
@@ -885,8 +759,6 @@ static const struct drm_prop_enum_list drm_subpixel_enum_list[] = {
  *
  * Note you could abuse this and return something out of bounds, but that
  * would be a caller error.  No unscrubbed user data should make it here.
- *
- * Returns: string describing an enumerated subpixel property
  */
 const char *drm_get_subpixel_order_name(enum subpixel_order order)
 {
@@ -916,9 +788,6 @@ static const struct drm_prop_enum_list drm_link_status_enum_list[] = {
  * Store the supported bus formats in display info structure.
  * See MEDIA_BUS_FMT_* definitions in include/uapi/linux/media-bus-format.h for
  * a full list of available formats.
- *
- * Returns:
- * 0 on success or a negative error code on failure.
  */
 int drm_display_info_set_bus_formats(struct drm_display_info *info,
 				     const u32 *formats,
@@ -988,41 +857,6 @@ static const struct drm_prop_enum_list drm_dvi_i_subconnector_enum_list[] = {
 DRM_ENUM_NAME_FN(drm_get_dvi_i_subconnector_name,
 		 drm_dvi_i_subconnector_enum_list)
 
-static const struct drm_prop_enum_list drm_tv_mode_enum_list[] = {
-	{ DRM_MODE_TV_MODE_NTSC, "NTSC" },
-	{ DRM_MODE_TV_MODE_NTSC_443, "NTSC-443" },
-	{ DRM_MODE_TV_MODE_NTSC_J, "NTSC-J" },
-	{ DRM_MODE_TV_MODE_PAL, "PAL" },
-	{ DRM_MODE_TV_MODE_PAL_M, "PAL-M" },
-	{ DRM_MODE_TV_MODE_PAL_N, "PAL-N" },
-	{ DRM_MODE_TV_MODE_SECAM, "SECAM" },
-};
-DRM_ENUM_NAME_FN(drm_get_tv_mode_name, drm_tv_mode_enum_list)
-
-/**
- * drm_get_tv_mode_from_name - Translates a TV mode name into its enum value
- * @name: TV Mode name we want to convert
- * @len: Length of @name
- *
- * Translates @name into an enum drm_connector_tv_mode.
- *
- * Returns: the enum value on success, a negative errno otherwise.
- */
-int drm_get_tv_mode_from_name(const char *name, size_t len)
-{
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(drm_tv_mode_enum_list); i++) {
-		const struct drm_prop_enum_list *item = &drm_tv_mode_enum_list[i];
-
-		if (strlen(item->name) == len && !strncmp(item->name, name, len))
-			return item->type;
-	}
-
-	return -EINVAL;
-}
-EXPORT_SYMBOL(drm_get_tv_mode_from_name);
-
 static const struct drm_prop_enum_list drm_tv_select_enum_list[] = {
 	{ DRM_MODE_SUBCONNECTOR_Automatic, "Automatic" }, /* DVI-I and TV-out */
 	{ DRM_MODE_SUBCONNECTOR_Composite, "Composite" }, /* TV-out */
@@ -1055,85 +889,64 @@ static const struct drm_prop_enum_list drm_dp_subconnector_enum_list[] = {
 DRM_ENUM_NAME_FN(drm_get_dp_subconnector_name,
 		 drm_dp_subconnector_enum_list)
 
-
-static const char * const colorspace_names[] = {
+static const struct drm_prop_enum_list hdmi_colorspaces[] = {
 	/* For Default case, driver will set the colorspace */
-	[DRM_MODE_COLORIMETRY_DEFAULT] = "Default",
+	{ DRM_MODE_COLORIMETRY_DEFAULT, "Default" },
 	/* Standard Definition Colorimetry based on CEA 861 */
-	[DRM_MODE_COLORIMETRY_SMPTE_170M_YCC] = "SMPTE_170M_YCC",
-	[DRM_MODE_COLORIMETRY_BT709_YCC] = "BT709_YCC",
+	{ DRM_MODE_COLORIMETRY_SMPTE_170M_YCC, "SMPTE_170M_YCC" },
+	{ DRM_MODE_COLORIMETRY_BT709_YCC, "BT709_YCC" },
 	/* Standard Definition Colorimetry based on IEC 61966-2-4 */
-	[DRM_MODE_COLORIMETRY_XVYCC_601] = "XVYCC_601",
+	{ DRM_MODE_COLORIMETRY_XVYCC_601, "XVYCC_601" },
 	/* High Definition Colorimetry based on IEC 61966-2-4 */
-	[DRM_MODE_COLORIMETRY_XVYCC_709] = "XVYCC_709",
+	{ DRM_MODE_COLORIMETRY_XVYCC_709, "XVYCC_709" },
 	/* Colorimetry based on IEC 61966-2-1/Amendment 1 */
-	[DRM_MODE_COLORIMETRY_SYCC_601] = "SYCC_601",
+	{ DRM_MODE_COLORIMETRY_SYCC_601, "SYCC_601" },
 	/* Colorimetry based on IEC 61966-2-5 [33] */
-	[DRM_MODE_COLORIMETRY_OPYCC_601] = "opYCC_601",
+	{ DRM_MODE_COLORIMETRY_OPYCC_601, "opYCC_601" },
 	/* Colorimetry based on IEC 61966-2-5 */
-	[DRM_MODE_COLORIMETRY_OPRGB] = "opRGB",
+	{ DRM_MODE_COLORIMETRY_OPRGB, "opRGB" },
 	/* Colorimetry based on ITU-R BT.2020 */
-	[DRM_MODE_COLORIMETRY_BT2020_CYCC] = "BT2020_CYCC",
+	{ DRM_MODE_COLORIMETRY_BT2020_CYCC, "BT2020_CYCC" },
 	/* Colorimetry based on ITU-R BT.2020 */
-	[DRM_MODE_COLORIMETRY_BT2020_RGB] = "BT2020_RGB",
+	{ DRM_MODE_COLORIMETRY_BT2020_RGB, "BT2020_RGB" },
 	/* Colorimetry based on ITU-R BT.2020 */
-	[DRM_MODE_COLORIMETRY_BT2020_YCC] = "BT2020_YCC",
+	{ DRM_MODE_COLORIMETRY_BT2020_YCC, "BT2020_YCC" },
 	/* Added as part of Additional Colorimetry Extension in 861.G */
-	[DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65] = "DCI-P3_RGB_D65",
-	[DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER] = "DCI-P3_RGB_Theater",
-	[DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED] = "RGB_WIDE_FIXED",
-	/* Colorimetry based on scRGB (IEC 61966-2-2) */
-	[DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT] = "RGB_WIDE_FLOAT",
-	[DRM_MODE_COLORIMETRY_BT601_YCC] = "BT601_YCC",
+	{ DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65, "DCI-P3_RGB_D65" },
+	{ DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER, "DCI-P3_RGB_Theater" },
 };
-
-/**
- * drm_get_colorspace_name - return a string for color encoding
- * @colorspace: color space to compute name of
- *
- * In contrast to the other drm_get_*_name functions this one here returns a
- * const pointer and hence is threadsafe.
- */
-const char *drm_get_colorspace_name(enum drm_colorspace colorspace)
-{
-	if (colorspace < ARRAY_SIZE(colorspace_names) && colorspace_names[colorspace])
-		return colorspace_names[colorspace];
-	else
-		return "(null)";
-}
-
-static const u32 hdmi_colorspaces =
-	BIT(DRM_MODE_COLORIMETRY_SMPTE_170M_YCC) |
-	BIT(DRM_MODE_COLORIMETRY_BT709_YCC) |
-	BIT(DRM_MODE_COLORIMETRY_XVYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_XVYCC_709) |
-	BIT(DRM_MODE_COLORIMETRY_SYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_OPYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_OPRGB) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_CYCC) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_RGB) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_YCC) |
-	BIT(DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65) |
-	BIT(DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER);
 
 /*
  * As per DP 1.4a spec, 2.2.5.7.5 VSC SDP Payload for Pixel Encoding/Colorimetry
  * Format Table 2-120
  */
-static const u32 dp_colorspaces =
-	BIT(DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED) |
-	BIT(DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT) |
-	BIT(DRM_MODE_COLORIMETRY_OPRGB) |
-	BIT(DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_RGB) |
-	BIT(DRM_MODE_COLORIMETRY_BT601_YCC) |
-	BIT(DRM_MODE_COLORIMETRY_BT709_YCC) |
-	BIT(DRM_MODE_COLORIMETRY_XVYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_XVYCC_709) |
-	BIT(DRM_MODE_COLORIMETRY_SYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_OPYCC_601) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_CYCC) |
-	BIT(DRM_MODE_COLORIMETRY_BT2020_YCC);
+static const struct drm_prop_enum_list dp_colorspaces[] = {
+	/* For Default case, driver will set the colorspace */
+	{ DRM_MODE_COLORIMETRY_DEFAULT, "Default" },
+	{ DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED, "RGB_Wide_Gamut_Fixed_Point" },
+	/* Colorimetry based on scRGB (IEC 61966-2-2) */
+	{ DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT, "RGB_Wide_Gamut_Floating_Point" },
+	/* Colorimetry based on IEC 61966-2-5 */
+	{ DRM_MODE_COLORIMETRY_OPRGB, "opRGB" },
+	/* Colorimetry based on SMPTE RP 431-2 */
+	{ DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65, "DCI-P3_RGB_D65" },
+	/* Colorimetry based on ITU-R BT.2020 */
+	{ DRM_MODE_COLORIMETRY_BT2020_RGB, "BT2020_RGB" },
+	{ DRM_MODE_COLORIMETRY_BT601_YCC, "BT601_YCC" },
+	{ DRM_MODE_COLORIMETRY_BT709_YCC, "BT709_YCC" },
+	/* Standard Definition Colorimetry based on IEC 61966-2-4 */
+	{ DRM_MODE_COLORIMETRY_XVYCC_601, "XVYCC_601" },
+	/* High Definition Colorimetry based on IEC 61966-2-4 */
+	{ DRM_MODE_COLORIMETRY_XVYCC_709, "XVYCC_709" },
+	/* Colorimetry based on IEC 61966-2-1/Amendment 1 */
+	{ DRM_MODE_COLORIMETRY_SYCC_601, "SYCC_601" },
+	/* Colorimetry based on IEC 61966-2-5 [33] */
+	{ DRM_MODE_COLORIMETRY_OPYCC_601, "opYCC_601" },
+	/* Colorimetry based on ITU-R BT.2020 */
+	{ DRM_MODE_COLORIMETRY_BT2020_CYCC, "BT2020_CYCC" },
+	/* Colorimetry based on ITU-R BT.2020 */
+	{ DRM_MODE_COLORIMETRY_BT2020_YCC, "BT2020_YCC" },
+};
 
 /**
  * DOC: standard connector properties
@@ -1147,11 +960,6 @@ static const u32 dp_colorspaces =
  * 	drm_connector_update_edid_property(), usually after having parsed
  * 	the EDID using drm_add_edid_modes(). Userspace cannot change this
  * 	property.
- *
- * 	User-space should not parse the EDID to obtain information exposed via
- * 	other KMS properties (because the kernel might apply limits, quirks or
- * 	fixups to the EDID). For instance, user-space should not try to parse
- * 	mode lists from the EDID.
  * DPMS:
  * 	Legacy property for setting the power state of the connector. For atomic
  * 	drivers this is only provided for backwards compatibility with existing
@@ -1430,60 +1238,6 @@ static const u32 dp_colorspaces =
  *	For DVI-I and TVout there is also a matching property "select subconnector"
  *	allowing to switch between signal types.
  *	DP subconnector corresponds to a downstream port.
- *
- * privacy-screen sw-state, privacy-screen hw-state:
- *	These 2 optional properties can be used to query the state of the
- *	electronic privacy screen that is available on some displays; and in
- *	some cases also control the state. If a driver implements these
- *	properties then both properties must be present.
- *
- *	"privacy-screen hw-state" is read-only and reflects the actual state
- *	of the privacy-screen, possible values: "Enabled", "Disabled,
- *	"Enabled-locked", "Disabled-locked". The locked states indicate
- *	that the state cannot be changed through the DRM API. E.g. there
- *	might be devices where the firmware-setup options, or a hardware
- *	slider-switch, offer always on / off modes.
- *
- *	"privacy-screen sw-state" can be set to change the privacy-screen state
- *	when not locked. In this case the driver must update the hw-state
- *	property to reflect the new state on completion of the commit of the
- *	sw-state property. Setting the sw-state property when the hw-state is
- *	locked must be interpreted by the driver as a request to change the
- *	state to the set state when the hw-state becomes unlocked. E.g. if
- *	"privacy-screen hw-state" is "Enabled-locked" and the sw-state
- *	gets set to "Disabled" followed by the user unlocking the state by
- *	changing the slider-switch position, then the driver must set the
- *	state to "Disabled" upon receiving the unlock event.
- *
- *	In some cases the privacy-screen's actual state might change outside of
- *	control of the DRM code. E.g. there might be a firmware handled hotkey
- *	which toggles the actual state, or the actual state might be changed
- *	through another userspace API such as writing /proc/acpi/ibm/lcdshadow.
- *	In this case the driver must update both the hw-state and the sw-state
- *	to reflect the new value, overwriting any pending state requests in the
- *	sw-state. Any pending sw-state requests are thus discarded.
- *
- *	Note that the ability for the state to change outside of control of
- *	the DRM master process means that userspace must not cache the value
- *	of the sw-state. Caching the sw-state value and including it in later
- *	atomic commits may lead to overriding a state change done through e.g.
- *	a firmware handled hotkey. Therefor userspace must not include the
- *	privacy-screen sw-state in an atomic commit unless it wants to change
- *	its value.
- *
- * left margin, right margin, top margin, bottom margin:
- *	Add margins to the connector's viewport. This is typically used to
- *	mitigate overscan on TVs.
- *
- *	The value is the size in pixels of the black border which will be
- *	added. The attached CRTC's content will be scaled to fill the whole
- *	area inside the margin.
- *
- *	The margins configuration might be sent to the sink, e.g. via HDMI AVI
- *	InfoFrames.
- *
- *	Drivers can set up these properties by calling
- *	drm_mode_create_tv_margin_properties().
  */
 
 int drm_connector_create_standard_properties(struct drm_device *dev)
@@ -1546,8 +1300,6 @@ int drm_connector_create_standard_properties(struct drm_device *dev)
  * @dev: DRM device
  *
  * Called by a driver the first time a DVI-I connector is made.
- *
- * Returns: %0
  */
 int drm_mode_create_dvi_i_properties(struct drm_device *dev)
 {
@@ -1619,71 +1371,9 @@ EXPORT_SYMBOL(drm_connector_attach_dp_subconnector_property);
  *	Game:
  *		Content type is game
  *
- *	The meaning of each content type is defined in CTA-861-G table 15.
- *
  *	Drivers can set up this property by calling
  *	drm_connector_attach_content_type_property(). Decoding to
  *	infoframe values is done through drm_hdmi_avi_infoframe_content_type().
- */
-
-/*
- * TODO: Document the properties:
- *   - brightness
- *   - contrast
- *   - flicker reduction
- *   - hue
- *   - mode
- *   - overscan
- *   - saturation
- *   - select subconnector
- */
-/**
- * DOC: Analog TV Connector Properties
- *
- * TV Mode:
- *	Indicates the TV Mode used on an analog TV connector. The value
- *	of this property can be one of the following:
- *
- *	NTSC:
- *		TV Mode is CCIR System M (aka 525-lines) together with
- *		the NTSC Color Encoding.
- *
- *	NTSC-443:
- *
- *		TV Mode is CCIR System M (aka 525-lines) together with
- *		the NTSC Color Encoding, but with a color subcarrier
- *		frequency of 4.43MHz
- *
- *	NTSC-J:
- *
- *		TV Mode is CCIR System M (aka 525-lines) together with
- *		the NTSC Color Encoding, but with a black level equal to
- *		the blanking level.
- *
- *	PAL:
- *
- *		TV Mode is CCIR System B (aka 625-lines) together with
- *		the PAL Color Encoding.
- *
- *	PAL-M:
- *
- *		TV Mode is CCIR System M (aka 525-lines) together with
- *		the PAL Color Encoding.
- *
- *	PAL-N:
- *
- *		TV Mode is CCIR System N together with the PAL Color
- *		Encoding, a color subcarrier frequency of 3.58MHz, the
- *		SECAM color space, and narrower channels than other PAL
- *		variants.
- *
- *	SECAM:
- *
- *		TV Mode is CCIR System B (aka 625-lines) together with
- *		the SECAM Color Encoding.
- *
- *	Drivers can set up this property by calling
- *	drm_mode_create_tv_properties().
  */
 
 /**
@@ -1691,8 +1381,6 @@ EXPORT_SYMBOL(drm_connector_attach_dp_subconnector_property);
  * @connector: connector to attach content type property on.
  *
  * Called by a driver the first time a HDMI connector is made.
- *
- * Returns: %0
  */
 int drm_connector_attach_content_type_property(struct drm_connector *connector)
 {
@@ -1704,9 +1392,42 @@ int drm_connector_attach_content_type_property(struct drm_connector *connector)
 }
 EXPORT_SYMBOL(drm_connector_attach_content_type_property);
 
+
 /**
- * drm_connector_attach_tv_margin_properties - attach TV connector margin
- * 	properties
+ * drm_hdmi_avi_infoframe_content_type() - fill the HDMI AVI infoframe
+ *                                         content type information, based
+ *                                         on correspondent DRM property.
+ * @frame: HDMI AVI infoframe
+ * @conn_state: DRM display connector state
+ *
+ */
+void drm_hdmi_avi_infoframe_content_type(struct hdmi_avi_infoframe *frame,
+					 const struct drm_connector_state *conn_state)
+{
+	switch (conn_state->content_type) {
+	case DRM_MODE_CONTENT_TYPE_GRAPHICS:
+		frame->content_type = HDMI_CONTENT_TYPE_GRAPHICS;
+		break;
+	case DRM_MODE_CONTENT_TYPE_CINEMA:
+		frame->content_type = HDMI_CONTENT_TYPE_CINEMA;
+		break;
+	case DRM_MODE_CONTENT_TYPE_GAME:
+		frame->content_type = HDMI_CONTENT_TYPE_GAME;
+		break;
+	case DRM_MODE_CONTENT_TYPE_PHOTO:
+		frame->content_type = HDMI_CONTENT_TYPE_PHOTO;
+		break;
+	default:
+		/* Graphics is the default(0) */
+		frame->content_type = HDMI_CONTENT_TYPE_GRAPHICS;
+	}
+
+	frame->itc = conn_state->content_type != DRM_MODE_CONTENT_TYPE_NO_DATA;
+}
+EXPORT_SYMBOL(drm_hdmi_avi_infoframe_content_type);
+
+/**
+ * drm_mode_attach_tv_margin_properties - attach TV connector margin properties
  * @connector: DRM connector
  *
  * Called by a driver when it needs to attach TV margin props to a connector.
@@ -1738,10 +1459,7 @@ EXPORT_SYMBOL(drm_connector_attach_tv_margin_properties);
  * Called by a driver's HDMI connector initialization routine, this function
  * creates the TV margin properties for a given device. No need to call this
  * function for an SDTV connector, it's already called from
- * drm_mode_create_tv_properties_legacy().
- *
- * Returns:
- * 0 on success or a negative error code on failure.
+ * drm_mode_create_tv_properties().
  */
 int drm_mode_create_tv_margin_properties(struct drm_device *dev)
 {
@@ -1773,7 +1491,7 @@ int drm_mode_create_tv_margin_properties(struct drm_device *dev)
 EXPORT_SYMBOL(drm_mode_create_tv_margin_properties);
 
 /**
- * drm_mode_create_tv_properties_legacy - create TV specific connector properties
+ * drm_mode_create_tv_properties - create TV specific connector properties
  * @dev: DRM device
  * @num_modes: number of different TV formats (modes) supported
  * @modes: array of pointers to strings containing name of each format
@@ -1782,17 +1500,10 @@ EXPORT_SYMBOL(drm_mode_create_tv_margin_properties);
  * the TV specific connector properties for a given device.  Caller is
  * responsible for allocating a list of format names and passing them to
  * this routine.
- *
- * NOTE: This functions registers the deprecated "mode" connector
- * property to select the analog TV mode (ie, NTSC, PAL, etc.). New
- * drivers must use drm_mode_create_tv_properties() instead.
- *
- * Returns:
- * 0 on success or a negative error code on failure.
  */
-int drm_mode_create_tv_properties_legacy(struct drm_device *dev,
-					 unsigned int num_modes,
-					 const char * const modes[])
+int drm_mode_create_tv_properties(struct drm_device *dev,
+				  unsigned int num_modes,
+				  const char * const modes[])
 {
 	struct drm_property *tv_selector;
 	struct drm_property *tv_subconnector;
@@ -1828,17 +1539,15 @@ int drm_mode_create_tv_properties_legacy(struct drm_device *dev,
 	if (drm_mode_create_tv_margin_properties(dev))
 		goto nomem;
 
-	if (num_modes) {
-		dev->mode_config.legacy_tv_mode_property =
-			drm_property_create(dev, DRM_MODE_PROP_ENUM,
-					    "mode", num_modes);
-		if (!dev->mode_config.legacy_tv_mode_property)
-			goto nomem;
+	dev->mode_config.tv_mode_property =
+		drm_property_create(dev, DRM_MODE_PROP_ENUM,
+				    "mode", num_modes);
+	if (!dev->mode_config.tv_mode_property)
+		goto nomem;
 
-		for (i = 0; i < num_modes; i++)
-			drm_property_add_enum(dev->mode_config.legacy_tv_mode_property,
-					      i, modes[i]);
-	}
+	for (i = 0; i < num_modes; i++)
+		drm_property_add_enum(dev->mode_config.tv_mode_property,
+				      i, modes[i]);
 
 	dev->mode_config.tv_brightness_property =
 		drm_property_create_range(dev, 0, "brightness", 0, 100);
@@ -1874,47 +1583,6 @@ int drm_mode_create_tv_properties_legacy(struct drm_device *dev,
 nomem:
 	return -ENOMEM;
 }
-EXPORT_SYMBOL(drm_mode_create_tv_properties_legacy);
-
-/**
- * drm_mode_create_tv_properties - create TV specific connector properties
- * @dev: DRM device
- * @supported_tv_modes: Bitmask of TV modes supported (See DRM_MODE_TV_MODE_*)
- *
- * Called by a driver's TV initialization routine, this function creates
- * the TV specific connector properties for a given device.
- *
- * Returns:
- * 0 on success or a negative error code on failure.
- */
-int drm_mode_create_tv_properties(struct drm_device *dev,
-				  unsigned int supported_tv_modes)
-{
-	struct drm_prop_enum_list tv_mode_list[DRM_MODE_TV_MODE_MAX];
-	struct drm_property *tv_mode;
-	unsigned int i, len = 0;
-
-	if (dev->mode_config.tv_mode_property)
-		return 0;
-
-	for (i = 0; i < DRM_MODE_TV_MODE_MAX; i++) {
-		if (!(supported_tv_modes & BIT(i)))
-			continue;
-
-		tv_mode_list[len].type = i;
-		tv_mode_list[len].name = drm_get_tv_mode_name(i);
-		len++;
-	}
-
-	tv_mode = drm_property_create_enum(dev, 0, "TV mode",
-					   tv_mode_list, len);
-	if (!tv_mode)
-		return -ENOMEM;
-
-	dev->mode_config.tv_mode_property = tv_mode;
-
-	return drm_mode_create_tv_properties_legacy(dev, 0, NULL);
-}
 EXPORT_SYMBOL(drm_mode_create_tv_properties);
 
 /**
@@ -1925,10 +1593,8 @@ EXPORT_SYMBOL(drm_mode_create_tv_properties);
  * connectors.
  *
  * Atomic drivers should use drm_connector_attach_scaling_mode_property()
- * instead to correctly assign &drm_connector_state.scaling_mode
+ * instead to correctly assign &drm_connector_state.picture_aspect_ratio
  * in the atomic state.
- *
- * Returns: %0
  */
 int drm_mode_create_scaling_mode_property(struct drm_device *dev)
 {
@@ -2047,7 +1713,7 @@ EXPORT_SYMBOL(drm_connector_attach_vrr_capable_property);
  * @scaling_mode_mask: or'ed mask of BIT(%DRM_MODE_SCALE_\*).
  *
  * This is used to add support for scaling mode to atomic drivers.
- * The scaling mode will be set to &drm_connector_state.scaling_mode
+ * The scaling mode will be set to &drm_connector_state.picture_aspect_ratio
  * and can be used from &drm_connector_helper_funcs->atomic_check for validation.
  *
  * This is the atomic version of drm_mode_create_scaling_mode_property().
@@ -2156,50 +1822,6 @@ EXPORT_SYMBOL(drm_mode_create_aspect_ratio_property);
  * drm_mode_create_dp_colorspace_property() is used for DP connector.
  */
 
-static int drm_mode_create_colorspace_property(struct drm_connector *connector,
-					u32 supported_colorspaces)
-{
-	struct drm_device *dev = connector->dev;
-	u32 colorspaces = supported_colorspaces | BIT(DRM_MODE_COLORIMETRY_DEFAULT);
-	struct drm_prop_enum_list enum_list[DRM_MODE_COLORIMETRY_COUNT];
-	int i, len;
-
-	if (connector->colorspace_property)
-		return 0;
-
-	if (!supported_colorspaces) {
-		drm_err(dev, "No supported colorspaces provded on [CONNECTOR:%d:%s]\n",
-			    connector->base.id, connector->name);
-		return -EINVAL;
-	}
-
-	if ((supported_colorspaces & -BIT(DRM_MODE_COLORIMETRY_COUNT)) != 0) {
-		drm_err(dev, "Unknown colorspace provded on [CONNECTOR:%d:%s]\n",
-			    connector->base.id, connector->name);
-		return -EINVAL;
-	}
-
-	len = 0;
-	for (i = 0; i < DRM_MODE_COLORIMETRY_COUNT; i++) {
-		if ((colorspaces & BIT(i)) == 0)
-			continue;
-
-		enum_list[len].type = i;
-		enum_list[len].name = colorspace_names[i];
-		len++;
-	}
-
-	connector->colorspace_property =
-		drm_property_create_enum(dev, DRM_MODE_PROP_ENUM, "Colorspace",
-					enum_list,
-					len);
-
-	if (!connector->colorspace_property)
-		return -ENOMEM;
-
-	return 0;
-}
-
 /**
  * drm_mode_create_hdmi_colorspace_property - create hdmi colorspace property
  * @connector: connector to create the Colorspace property on.
@@ -2210,17 +1832,22 @@ static int drm_mode_create_colorspace_property(struct drm_connector *connector,
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_create_hdmi_colorspace_property(struct drm_connector *connector,
-					     u32 supported_colorspaces)
+int drm_mode_create_hdmi_colorspace_property(struct drm_connector *connector)
 {
-	u32 colorspaces;
+	struct drm_device *dev = connector->dev;
 
-	if (supported_colorspaces)
-		colorspaces = supported_colorspaces & hdmi_colorspaces;
-	else
-		colorspaces = hdmi_colorspaces;
+	if (connector->colorspace_property)
+		return 0;
 
-	return drm_mode_create_colorspace_property(connector, colorspaces);
+	connector->colorspace_property =
+		drm_property_create_enum(dev, DRM_MODE_PROP_ENUM, "Colorspace",
+					 hdmi_colorspaces,
+					 ARRAY_SIZE(hdmi_colorspaces));
+
+	if (!connector->colorspace_property)
+		return -ENOMEM;
+
+	return 0;
 }
 EXPORT_SYMBOL(drm_mode_create_hdmi_colorspace_property);
 
@@ -2234,17 +1861,22 @@ EXPORT_SYMBOL(drm_mode_create_hdmi_colorspace_property);
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_create_dp_colorspace_property(struct drm_connector *connector,
-					   u32 supported_colorspaces)
+int drm_mode_create_dp_colorspace_property(struct drm_connector *connector)
 {
-	u32 colorspaces;
+	struct drm_device *dev = connector->dev;
 
-	if (supported_colorspaces)
-		colorspaces = supported_colorspaces & dp_colorspaces;
-	else
-		colorspaces = dp_colorspaces;
+	if (connector->colorspace_property)
+		return 0;
 
-	return drm_mode_create_colorspace_property(connector, colorspaces);
+	connector->colorspace_property =
+		drm_property_create_enum(dev, DRM_MODE_PROP_ENUM, "Colorspace",
+					 dp_colorspaces,
+					 ARRAY_SIZE(dp_colorspaces));
+
+	if (!connector->colorspace_property)
+		return -ENOMEM;
+
+	return 0;
 }
 EXPORT_SYMBOL(drm_mode_create_dp_colorspace_property);
 
@@ -2280,9 +1912,6 @@ EXPORT_SYMBOL(drm_mode_create_content_type_property);
  * @dev: DRM device
  *
  * Create the suggested x/y offset property for connectors.
- *
- * Returns:
- * 0 on success or a negative error code on failure.
  */
 int drm_mode_create_suggested_offset_properties(struct drm_device *dev)
 {
@@ -2322,11 +1951,11 @@ int drm_connector_set_path_property(struct drm_connector *connector,
 	int ret;
 
 	ret = drm_property_replace_global_blob(dev,
-					       &connector->path_blob_ptr,
-					       strlen(path) + 1,
-					       path,
-					       &connector->base,
-					       dev->mode_config.path_property);
+	                                       &connector->path_blob_ptr,
+	                                       strlen(path) + 1,
+	                                       path,
+	                                       &connector->base,
+	                                       dev->mode_config.path_property);
 	return ret;
 }
 EXPORT_SYMBOL(drm_connector_set_path_property);
@@ -2352,11 +1981,11 @@ int drm_connector_set_tile_property(struct drm_connector *connector)
 
 	if (!connector->has_tile) {
 		ret  = drm_property_replace_global_blob(dev,
-							&connector->tile_blob_ptr,
-							0,
-							NULL,
-							&connector->base,
-							dev->mode_config.tile_property);
+		                                        &connector->tile_blob_ptr,
+		                                        0,
+		                                        NULL,
+		                                        &connector->base,
+		                                        dev->mode_config.tile_property);
 		return ret;
 	}
 
@@ -2367,14 +1996,88 @@ int drm_connector_set_tile_property(struct drm_connector *connector)
 		 connector->tile_h_size, connector->tile_v_size);
 
 	ret = drm_property_replace_global_blob(dev,
-					       &connector->tile_blob_ptr,
-					       strlen(tile) + 1,
-					       tile,
-					       &connector->base,
-					       dev->mode_config.tile_property);
+	                                       &connector->tile_blob_ptr,
+	                                       strlen(tile) + 1,
+	                                       tile,
+	                                       &connector->base,
+	                                       dev->mode_config.tile_property);
 	return ret;
 }
 EXPORT_SYMBOL(drm_connector_set_tile_property);
+
+/**
+ * drm_connector_update_edid_property - update the edid property of a connector
+ * @connector: drm connector
+ * @edid: new value of the edid property
+ *
+ * This function creates a new blob modeset object and assigns its id to the
+ * connector's edid property.
+ * Since we also parse tile information from EDID's displayID block, we also
+ * set the connector's tile property here. See drm_connector_set_tile_property()
+ * for more details.
+ *
+ * Returns:
+ * Zero on success, negative errno on failure.
+ */
+int drm_connector_update_edid_property(struct drm_connector *connector,
+				       const struct edid *edid)
+{
+	struct drm_device *dev = connector->dev;
+	size_t size = 0;
+	int ret;
+	const struct edid *old_edid;
+
+	/* ignore requests to set edid when overridden */
+	if (connector->override_edid)
+		return 0;
+
+	if (edid)
+		size = EDID_LENGTH * (1 + edid->extensions);
+
+	/* Set the display info, using edid if available, otherwise
+	 * resetting the values to defaults. This duplicates the work
+	 * done in drm_add_edid_modes, but that function is not
+	 * consistently called before this one in all drivers and the
+	 * computation is cheap enough that it seems better to
+	 * duplicate it rather than attempt to ensure some arbitrary
+	 * ordering of calls.
+	 */
+	if (edid)
+		drm_add_display_info(connector, edid);
+	else
+		drm_reset_display_info(connector);
+
+	drm_update_tile_info(connector, edid);
+
+	if (connector->edid_blob_ptr) {
+		old_edid = (const struct edid *)connector->edid_blob_ptr->data;
+		if (old_edid) {
+			if (!drm_edid_are_equal(edid, old_edid)) {
+				DRM_DEBUG_KMS("[CONNECTOR:%d:%s] Edid was changed.\n",
+					      connector->base.id, connector->name);
+
+				connector->epoch_counter += 1;
+				DRM_DEBUG_KMS("Updating change counter to %llu\n",
+					      connector->epoch_counter);
+			}
+		}
+	}
+
+	drm_object_property_set_value(&connector->base,
+				      dev->mode_config.non_desktop_property,
+				      connector->display_info.non_desktop);
+
+	ret = drm_property_replace_global_blob(dev,
+					       &connector->edid_blob_ptr,
+	                                       size,
+	                                       edid,
+	                                       &connector->base,
+	                                       dev->mode_config.edid_property);
+	if (ret)
+		return ret;
+	return drm_connector_set_tile_property(connector);
+}
+EXPORT_SYMBOL(drm_connector_update_edid_property);
 
 /**
  * drm_connector_set_link_status_property - Set link status property of a connector
@@ -2441,75 +2144,6 @@ int drm_connector_attach_max_bpc_property(struct drm_connector *connector,
 EXPORT_SYMBOL(drm_connector_attach_max_bpc_property);
 
 /**
- * drm_connector_attach_hdr_output_metadata_property - attach "HDR_OUTPUT_METADA" property
- * @connector: connector to attach the property on.
- *
- * This is used to allow the userspace to send HDR Metadata to the
- * driver.
- *
- * Returns:
- * Zero on success, negative errno on failure.
- */
-int drm_connector_attach_hdr_output_metadata_property(struct drm_connector *connector)
-{
-	struct drm_device *dev = connector->dev;
-	struct drm_property *prop = dev->mode_config.hdr_output_metadata_property;
-
-	drm_object_attach_property(&connector->base, prop, 0);
-
-	return 0;
-}
-EXPORT_SYMBOL(drm_connector_attach_hdr_output_metadata_property);
-
-/**
- * drm_connector_attach_colorspace_property - attach "Colorspace" property
- * @connector: connector to attach the property on.
- *
- * This is used to allow the userspace to signal the output colorspace
- * to the driver.
- *
- * Returns:
- * Zero on success, negative errno on failure.
- */
-int drm_connector_attach_colorspace_property(struct drm_connector *connector)
-{
-	struct drm_property *prop = connector->colorspace_property;
-
-	drm_object_attach_property(&connector->base, prop, DRM_MODE_COLORIMETRY_DEFAULT);
-
-	return 0;
-}
-EXPORT_SYMBOL(drm_connector_attach_colorspace_property);
-
-/**
- * drm_connector_atomic_hdr_metadata_equal - checks if the hdr metadata changed
- * @old_state: old connector state to compare
- * @new_state: new connector state to compare
- *
- * This is used by HDR-enabled drivers to test whether the HDR metadata
- * have changed between two different connector state (and thus probably
- * requires a full blown mode change).
- *
- * Returns:
- * True if the metadata are equal, False otherwise
- */
-bool drm_connector_atomic_hdr_metadata_equal(struct drm_connector_state *old_state,
-					     struct drm_connector_state *new_state)
-{
-	struct drm_property_blob *old_blob = old_state->hdr_output_metadata;
-	struct drm_property_blob *new_blob = new_state->hdr_output_metadata;
-
-	if (!old_blob || !new_blob)
-		return old_blob == new_blob;
-
-	if (old_blob->length != new_blob->length)
-		return false;
-
-	return !memcmp(old_blob->data, new_blob->data, old_blob->length);
-}
-EXPORT_SYMBOL(drm_connector_atomic_hdr_metadata_equal);
-
-/**
  * drm_connector_set_vrr_capable_property - sets the variable refresh rate
  * capable property for a connector
  * @connector: drm connector
@@ -2544,9 +2178,6 @@ EXPORT_SYMBOL(drm_connector_set_vrr_capable_property);
  *
  * It is allowed to call this function with a panel_orientation of
  * DRM_MODE_PANEL_ORIENTATION_UNKNOWN, in which case it is a no-op.
- *
- * The function shouldn't be called in panel after drm is registered (i.e.
- * drm_dev_register() is called in drm).
  *
  * Returns:
  * Zero on success, negative errno on failure.
@@ -2588,8 +2219,8 @@ int drm_connector_set_panel_orientation(
 EXPORT_SYMBOL(drm_connector_set_panel_orientation);
 
 /**
- * drm_connector_set_panel_orientation_with_quirk - set the
- *	connector's panel_orientation after checking for quirks
+ * drm_connector_set_panel_orientation_with_quirk -
+ *	set the connector's panel_orientation after checking for quirks
  * @connector: connector for which to init the panel-orientation property.
  * @panel_orientation: drm_panel_orientation value to set
  * @width: width in pixels of the panel, used for panel quirk detection
@@ -2616,181 +2247,6 @@ int drm_connector_set_panel_orientation_with_quirk(
 						   panel_orientation);
 }
 EXPORT_SYMBOL(drm_connector_set_panel_orientation_with_quirk);
-
-/**
- * drm_connector_set_orientation_from_panel -
- *	set the connector's panel_orientation from panel's callback.
- * @connector: connector for which to init the panel-orientation property.
- * @panel: panel that can provide orientation information.
- *
- * Drm drivers should call this function before drm_dev_register().
- * Orientation is obtained from panel's .get_orientation() callback.
- *
- * Returns:
- * Zero on success, negative errno on failure.
- */
-int drm_connector_set_orientation_from_panel(
-	struct drm_connector *connector,
-	struct drm_panel *panel)
-{
-	enum drm_panel_orientation orientation;
-
-	if (panel && panel->funcs && panel->funcs->get_orientation)
-		orientation = panel->funcs->get_orientation(panel);
-	else
-		orientation = DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
-
-	return drm_connector_set_panel_orientation(connector, orientation);
-}
-EXPORT_SYMBOL(drm_connector_set_orientation_from_panel);
-
-static const struct drm_prop_enum_list privacy_screen_enum[] = {
-	{ PRIVACY_SCREEN_DISABLED,		"Disabled" },
-	{ PRIVACY_SCREEN_ENABLED,		"Enabled" },
-	{ PRIVACY_SCREEN_DISABLED_LOCKED,	"Disabled-locked" },
-	{ PRIVACY_SCREEN_ENABLED_LOCKED,	"Enabled-locked" },
-};
-
-/**
- * drm_connector_create_privacy_screen_properties - create the drm connecter's
- *    privacy-screen properties.
- * @connector: connector for which to create the privacy-screen properties
- *
- * This function creates the "privacy-screen sw-state" and "privacy-screen
- * hw-state" properties for the connector. They are not attached.
- */
-void
-drm_connector_create_privacy_screen_properties(struct drm_connector *connector)
-{
-	if (connector->privacy_screen_sw_state_property)
-		return;
-
-	/* Note sw-state only supports the first 2 values of the enum */
-	connector->privacy_screen_sw_state_property =
-		drm_property_create_enum(connector->dev, DRM_MODE_PROP_ENUM,
-				"privacy-screen sw-state",
-				privacy_screen_enum, 2);
-
-	connector->privacy_screen_hw_state_property =
-		drm_property_create_enum(connector->dev,
-				DRM_MODE_PROP_IMMUTABLE | DRM_MODE_PROP_ENUM,
-				"privacy-screen hw-state",
-				privacy_screen_enum,
-				ARRAY_SIZE(privacy_screen_enum));
-}
-EXPORT_SYMBOL(drm_connector_create_privacy_screen_properties);
-
-/**
- * drm_connector_attach_privacy_screen_properties - attach the drm connecter's
- *    privacy-screen properties.
- * @connector: connector on which to attach the privacy-screen properties
- *
- * This function attaches the "privacy-screen sw-state" and "privacy-screen
- * hw-state" properties to the connector. The initial state of both is set
- * to "Disabled".
- */
-void
-drm_connector_attach_privacy_screen_properties(struct drm_connector *connector)
-{
-	if (!connector->privacy_screen_sw_state_property)
-		return;
-
-	drm_object_attach_property(&connector->base,
-				   connector->privacy_screen_sw_state_property,
-				   PRIVACY_SCREEN_DISABLED);
-
-	drm_object_attach_property(&connector->base,
-				   connector->privacy_screen_hw_state_property,
-				   PRIVACY_SCREEN_DISABLED);
-}
-EXPORT_SYMBOL(drm_connector_attach_privacy_screen_properties);
-
-static void drm_connector_update_privacy_screen_properties(
-	struct drm_connector *connector, bool set_sw_state)
-{
-	enum drm_privacy_screen_status sw_state, hw_state;
-
-	drm_privacy_screen_get_state(connector->privacy_screen,
-				     &sw_state, &hw_state);
-
-	if (set_sw_state)
-		connector->state->privacy_screen_sw_state = sw_state;
-	drm_object_property_set_value(&connector->base,
-			connector->privacy_screen_hw_state_property, hw_state);
-}
-
-static int drm_connector_privacy_screen_notifier(
-	struct notifier_block *nb, unsigned long action, void *data)
-{
-	struct drm_connector *connector =
-		container_of(nb, struct drm_connector, privacy_screen_notifier);
-	struct drm_device *dev = connector->dev;
-
-	drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
-	drm_connector_update_privacy_screen_properties(connector, true);
-	drm_modeset_unlock(&dev->mode_config.connection_mutex);
-
-	drm_sysfs_connector_property_event(connector,
-					   connector->privacy_screen_sw_state_property);
-	drm_sysfs_connector_property_event(connector,
-					   connector->privacy_screen_hw_state_property);
-
-	return NOTIFY_DONE;
-}
-
-/**
- * drm_connector_attach_privacy_screen_provider - attach a privacy-screen to
- *    the connector
- * @connector: connector to attach the privacy-screen to
- * @priv: drm_privacy_screen to attach
- *
- * Create and attach the standard privacy-screen properties and register
- * a generic notifier for generating sysfs-connector-status-events
- * on external changes to the privacy-screen status.
- * This function takes ownership of the passed in drm_privacy_screen and will
- * call drm_privacy_screen_put() on it when the connector is destroyed.
- */
-void drm_connector_attach_privacy_screen_provider(
-	struct drm_connector *connector, struct drm_privacy_screen *priv)
-{
-	connector->privacy_screen = priv;
-	connector->privacy_screen_notifier.notifier_call =
-		drm_connector_privacy_screen_notifier;
-
-	drm_connector_create_privacy_screen_properties(connector);
-	drm_connector_update_privacy_screen_properties(connector, true);
-	drm_connector_attach_privacy_screen_properties(connector);
-}
-EXPORT_SYMBOL(drm_connector_attach_privacy_screen_provider);
-
-/**
- * drm_connector_update_privacy_screen - update connector's privacy-screen sw-state
- * @connector_state: connector-state to update the privacy-screen for
- *
- * This function calls drm_privacy_screen_set_sw_state() on the connector's
- * privacy-screen.
- *
- * If the connector has no privacy-screen, then this is a no-op.
- */
-void drm_connector_update_privacy_screen(const struct drm_connector_state *connector_state)
-{
-	struct drm_connector *connector = connector_state->connector;
-	int ret;
-
-	if (!connector->privacy_screen)
-		return;
-
-	ret = drm_privacy_screen_set_sw_state(connector->privacy_screen,
-					      connector_state->privacy_screen_sw_state);
-	if (ret) {
-		drm_err(connector->dev, "Error updating privacy-screen sw_state\n");
-		return;
-	}
-
-	/* The hw_state property value may have changed, update it. */
-	drm_connector_update_privacy_screen_properties(connector, false);
-}
-EXPORT_SYMBOL(drm_connector_update_privacy_screen);
 
 int drm_connector_set_obj_prop(struct drm_mode_object *obj,
 				    struct drm_property *property,
@@ -2828,8 +2284,7 @@ int drm_connector_property_set_ioctl(struct drm_device *dev,
 static struct drm_encoder *drm_connector_get_encoder(struct drm_connector *connector)
 {
 	/* For atomic drivers only state objects are synchronously updated and
-	 * protected by modeset locks, so check those first.
-	 */
+	 * protected by modeset locks, so check those first. */
 	if (connector->state)
 		return connector->state->best_encoder;
 	return connector->encoder;
@@ -2883,7 +2338,6 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 	struct drm_mode_modeinfo u_mode;
 	struct drm_mode_modeinfo __user *mode_ptr;
 	uint32_t __user *encoder_ptr;
-	bool is_current_master;
 
 	if (!drm_core_check_feature(dev, DRIVER_MODESET))
 		return -EOPNOTSUPP;
@@ -2914,17 +2368,11 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 	out_resp->connector_type = connector->connector_type;
 	out_resp->connector_type_id = connector->connector_type_id;
 
-	is_current_master = drm_is_current_master(file_priv);
-
 	mutex_lock(&dev->mode_config.mutex);
 	if (out_resp->count_modes == 0) {
-		if (is_current_master)
-			connector->funcs->fill_modes(connector,
-						     dev->mode_config.max_width,
-						     dev->mode_config.max_height);
-		else
-			drm_dbg_kms(dev, "User-space requested a forced probe on [CONNECTOR:%d:%s] but is not the DRM master, demoting to read-only probe",
-				    connector->base.id, connector->name);
+		connector->funcs->fill_modes(connector,
+					     dev->mode_config.max_width,
+					     dev->mode_config.max_height);
 	}
 
 	out_resp->mm_width = connector->display_info.width_mm;
@@ -2998,8 +2446,7 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 		out_resp->encoder_id = 0;
 
 	/* Only grab properties after probing, to make sure EDID and other
-	 * properties reflect the latest status.
-	 */
+	 * properties reflect the latest status. */
 	ret = drm_mode_object_get_properties(&connector->base, file_priv->atomic,
 			(uint32_t __user *)(unsigned long)(out_resp->props_ptr),
 			(uint64_t __user *)(unsigned long)(out_resp->prop_values_ptr),
@@ -3011,67 +2458,6 @@ out:
 
 	return ret;
 }
-
-/**
- * drm_connector_find_by_fwnode - Find a connector based on the associated fwnode
- * @fwnode: fwnode for which to find the matching drm_connector
- *
- * This functions looks up a drm_connector based on its associated fwnode. When
- * a connector is found a reference to the connector is returned. The caller must
- * call drm_connector_put() to release this reference when it is done with the
- * connector.
- *
- * Returns: A reference to the found connector or an ERR_PTR().
- */
-struct drm_connector *drm_connector_find_by_fwnode(struct fwnode_handle *fwnode)
-{
-	struct drm_connector *connector, *found = ERR_PTR(-ENODEV);
-
-	if (!fwnode)
-		return ERR_PTR(-ENODEV);
-
-	mutex_lock(&connector_list_lock);
-
-	list_for_each_entry(connector, &connector_list, global_connector_list_entry) {
-		if (connector->fwnode == fwnode ||
-		    (connector->fwnode && connector->fwnode->secondary == fwnode)) {
-			drm_connector_get(connector);
-			found = connector;
-			break;
-		}
-	}
-
-	mutex_unlock(&connector_list_lock);
-
-	return found;
-}
-
-/**
- * drm_connector_oob_hotplug_event - Report out-of-band hotplug event to connector
- * @connector_fwnode: fwnode_handle to report the event on
- *
- * On some hardware a hotplug event notification may come from outside the display
- * driver / device. An example of this is some USB Type-C setups where the hardware
- * muxes the DisplayPort data and aux-lines but does not pass the altmode HPD
- * status bit to the GPU's DP HPD pin.
- *
- * This function can be used to report these out-of-band events after obtaining
- * a drm_connector reference through calling drm_connector_find_by_fwnode().
- */
-void drm_connector_oob_hotplug_event(struct fwnode_handle *connector_fwnode)
-{
-	struct drm_connector *connector;
-
-	connector = drm_connector_find_by_fwnode(connector_fwnode);
-	if (IS_ERR(connector))
-		return;
-
-	if (connector->funcs->oob_hotplug_event)
-		connector->funcs->oob_hotplug_event(connector);
-
-	drm_connector_put(connector);
-}
-EXPORT_SYMBOL(drm_connector_oob_hotplug_event);
 
 
 /**

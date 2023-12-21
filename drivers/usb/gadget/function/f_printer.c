@@ -54,10 +54,7 @@
 #define DEFAULT_Q_LEN		10 /* same as legacy g_printer gadget */
 
 static int major, minors;
-static const struct class usb_gadget_class = {
-	.name = "usb_printer_gadget",
-};
-
+static struct class *usb_gadget_class;
 static DEFINE_IDA(printer_ida);
 static DEFINE_MUTEX(printer_ida_lock); /* protects access do printer_ida */
 
@@ -367,7 +364,7 @@ printer_open(struct inode *inode, struct file *fd)
 	spin_unlock_irqrestore(&dev->lock, flags);
 
 	kref_get(&dev->kref);
-
+	DBG(dev, "printer_open returned %x\n", ret);
 	return ret;
 }
 
@@ -385,6 +382,7 @@ printer_close(struct inode *inode, struct file *fd)
 	spin_unlock_irqrestore(&dev->lock, flags);
 
 	kref_put(&dev->kref, printer_dev_free);
+	DBG(dev, "printer_close\n");
 
 	return 0;
 }
@@ -669,7 +667,8 @@ printer_write(struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 		value = usb_ep_queue(dev->in_ep, req, GFP_ATOMIC);
 		spin_lock(&dev->lock);
 		if (value) {
-			list_move(&req->list, &dev->tx_reqs);
+			list_del(&req->list);
+			list_add(&req->list, &dev->tx_reqs);
 			spin_unlock_irqrestore(&dev->lock, flags);
 			mutex_unlock(&dev->lock_printer_io);
 			return -EAGAIN;
@@ -826,7 +825,7 @@ set_printer_interface(struct printer_dev *dev)
 
 	result = usb_ep_enable(dev->out_ep);
 	if (result != 0) {
-		DBG(dev, "enable %s --> %d\n", dev->out_ep->name, result);
+		DBG(dev, "enable %s --> %d\n", dev->in_ep->name, result);
 		goto done;
 	}
 
@@ -849,6 +848,8 @@ static void printer_reset_interface(struct printer_dev *dev)
 
 	if (dev->interface < 0)
 		return;
+
+	DBG(dev, "%s\n", __func__);
 
 	if (dev->in_ep->desc)
 		usb_ep_disable(dev->in_ep);
@@ -886,6 +887,8 @@ static int set_interface(struct printer_dev *dev, unsigned number)
 static void printer_soft_reset(struct printer_dev *dev)
 {
 	struct usb_request	*req;
+
+	INFO(dev, "Received Printer Reset Request\n");
 
 	if (usb_ep_disable(dev->in_ep))
 		DBG(dev, "Failed to disable USB in_ep\n");
@@ -1123,7 +1126,7 @@ autoconf_fail:
 
 	/* Setup the sysfs files for the printer gadget. */
 	devt = MKDEV(major, dev->minor);
-	pdev = device_create(&usb_gadget_class, NULL, devt,
+	pdev = device_create(usb_gadget_class, NULL, devt,
 				  NULL, "g_printer%d", dev->minor);
 	if (IS_ERR(pdev)) {
 		ERROR(dev, "Failed to create device: g_printer\n");
@@ -1146,7 +1149,7 @@ autoconf_fail:
 	return 0;
 
 fail_cdev_add:
-	device_destroy(&usb_gadget_class, devt);
+	device_destroy(usb_gadget_class, devt);
 
 fail_rx_reqs:
 	while (!list_empty(&dev->rx_reqs)) {
@@ -1183,6 +1186,8 @@ static void printer_func_disable(struct usb_function *f)
 {
 	struct printer_dev *dev = func_to_printer(f);
 
+	DBG(dev, "%s\n", __func__);
+
 	printer_reset_interface(dev);
 }
 
@@ -1214,8 +1219,8 @@ static ssize_t f_printer_opts_pnp_string_show(struct config_item *item,
 	if (!opts->pnp_string)
 		goto unlock;
 
-	result = strscpy(page, opts->pnp_string, PAGE_SIZE);
-	if (result < 1) {
+	result = strlcpy(page, opts->pnp_string, PAGE_SIZE);
+	if (result >= PAGE_SIZE) {
 		result = PAGE_SIZE;
 	} else if (page[result - 1] != '\n' && result + 1 < PAGE_SIZE) {
 		page[result++] = '\n';
@@ -1413,7 +1418,7 @@ static void printer_func_unbind(struct usb_configuration *c,
 
 	dev = func_to_printer(f);
 
-	device_destroy(&usb_gadget_class, MKDEV(major, dev->minor));
+	device_destroy(usb_gadget_class, MKDEV(major, dev->minor));
 
 	/* Remove Character Device */
 	cdev_del(&dev->printer_cdev);
@@ -1515,14 +1520,19 @@ static int gprinter_setup(int count)
 	int status;
 	dev_t devt;
 
-	status = class_register(&usb_gadget_class);
-	if (status)
+	usb_gadget_class = class_create(THIS_MODULE, "usb_printer_gadget");
+	if (IS_ERR(usb_gadget_class)) {
+		status = PTR_ERR(usb_gadget_class);
+		usb_gadget_class = NULL;
+		pr_err("unable to create usb_gadget class %d\n", status);
 		return status;
+	}
 
 	status = alloc_chrdev_region(&devt, 0, count, "USB printer gadget");
 	if (status) {
 		pr_err("alloc_chrdev_region %d\n", status);
-		class_unregister(&usb_gadget_class);
+		class_destroy(usb_gadget_class);
+		usb_gadget_class = NULL;
 		return status;
 	}
 
@@ -1538,5 +1548,6 @@ static void gprinter_cleanup(void)
 		unregister_chrdev_region(MKDEV(major, 0), minors);
 		major = minors = 0;
 	}
-	class_unregister(&usb_gadget_class);
+	class_destroy(usb_gadget_class);
+	usb_gadget_class = NULL;
 }

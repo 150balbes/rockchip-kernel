@@ -117,6 +117,7 @@ static int sun9i_usb_phy_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
 	struct phy_provider *phy_provider;
+	struct resource *res;
 
 	phy = devm_kzalloc(dev, sizeof(*phy), GFP_KERNEL);
 	if (!phy)
@@ -155,7 +156,8 @@ static int sun9i_usb_phy_probe(struct platform_device *pdev)
 		}
 	}
 
-	phy->pmu = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	phy->pmu = devm_ioremap_resource(dev, res);
 	if (IS_ERR(phy->pmu))
 		return PTR_ERR(phy->pmu);
 

@@ -32,36 +32,26 @@ struct perf_thread_map *perf_thread_map__realloc(struct perf_thread_map *map, in
 
 #define thread_map__alloc(__nr) perf_thread_map__realloc(NULL, __nr)
 
-void perf_thread_map__set_pid(struct perf_thread_map *map, int idx, pid_t pid)
+void perf_thread_map__set_pid(struct perf_thread_map *map, int thread, pid_t pid)
 {
-	map->map[idx].pid = pid;
+	map->map[thread].pid = pid;
 }
 
-char *perf_thread_map__comm(struct perf_thread_map *map, int idx)
+char *perf_thread_map__comm(struct perf_thread_map *map, int thread)
 {
-	return map->map[idx].comm;
-}
-
-struct perf_thread_map *perf_thread_map__new_array(int nr_threads, pid_t *array)
-{
-	struct perf_thread_map *threads = thread_map__alloc(nr_threads);
-	int i;
-
-	if (!threads)
-		return NULL;
-
-	for (i = 0; i < nr_threads; i++)
-		perf_thread_map__set_pid(threads, i, array ? array[i] : -1);
-
-	threads->nr = nr_threads;
-	refcount_set(&threads->refcnt, 1);
-
-	return threads;
+	return map->map[thread].comm;
 }
 
 struct perf_thread_map *perf_thread_map__new_dummy(void)
 {
-	return perf_thread_map__new_array(1, NULL);
+	struct perf_thread_map *threads = thread_map__alloc(1);
+
+	if (threads != NULL) {
+		perf_thread_map__set_pid(threads, 0, -1);
+		threads->nr = 1;
+		refcount_set(&threads->refcnt, 1);
+	}
+	return threads;
 }
 
 static void perf_thread_map__delete(struct perf_thread_map *threads)
@@ -95,7 +85,7 @@ int perf_thread_map__nr(struct perf_thread_map *threads)
 	return threads ? threads->nr : 1;
 }
 
-pid_t perf_thread_map__pid(struct perf_thread_map *map, int idx)
+pid_t perf_thread_map__pid(struct perf_thread_map *map, int thread)
 {
-	return map->map[idx].pid;
+	return map->map[thread].pid;
 }

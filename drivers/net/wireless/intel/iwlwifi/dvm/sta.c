@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2014, 2022 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
+ *
+ * Contact Information:
+ *  Intel Linux Wireless <linuxwifi@intel.com>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ *
  *****************************************************************************/
 #include <linux/etherdevice.h>
 #include <net/mac80211.h>
@@ -139,7 +144,7 @@ bool iwl_is_ht40_tx_allowed(struct iwl_priv *priv,
 	if (!sta)
 		return true;
 
-	return sta->deflink.bandwidth >= IEEE80211_STA_RX_BW_40;
+	return sta->bandwidth >= IEEE80211_STA_RX_BW_40;
 }
 
 static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
@@ -147,7 +152,7 @@ static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
 				  struct iwl_rxon_context *ctx,
 				  __le32 *flags, __le32 *mask)
 {
-	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->deflink.ht_cap;
+	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->ht_cap;
 
 	*mask = STA_FLG_RTS_MIMO_PROT_MSK |
 		STA_FLG_MIMO_DIS_MSK |
@@ -161,12 +166,12 @@ static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
 
 	IWL_DEBUG_INFO(priv, "STA %pM SM PS mode: %s\n",
 			sta->addr,
-			(sta->deflink.smps_mode == IEEE80211_SMPS_STATIC) ?
+			(sta->smps_mode == IEEE80211_SMPS_STATIC) ?
 			"static" :
-			(sta->deflink.smps_mode == IEEE80211_SMPS_DYNAMIC) ?
+			(sta->smps_mode == IEEE80211_SMPS_DYNAMIC) ?
 			"dynamic" : "disabled");
 
-	switch (sta->deflink.smps_mode) {
+	switch (sta->smps_mode) {
 	case IEEE80211_SMPS_STATIC:
 		*flags |= STA_FLG_MIMO_DIS_MSK;
 		break;
@@ -176,7 +181,7 @@ static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
 	case IEEE80211_SMPS_OFF:
 		break;
 	default:
-		IWL_WARN(priv, "Invalid MIMO PS mode %d\n", sta->deflink.smps_mode);
+		IWL_WARN(priv, "Invalid MIMO PS mode %d\n", sta->smps_mode);
 		break;
 	}
 
@@ -1081,7 +1086,6 @@ static int iwlagn_send_sta_key(struct iwl_priv *priv,
 {
 	__le16 key_flags;
 	struct iwl_addsta_cmd sta_cmd;
-	size_t to_copy;
 	int i;
 
 	spin_lock_bh(&priv->sta_lock);
@@ -1101,13 +1105,11 @@ static int iwlagn_send_sta_key(struct iwl_priv *priv,
 		sta_cmd.key.tkip_rx_tsc_byte2 = tkip_iv32;
 		for (i = 0; i < 5; i++)
 			sta_cmd.key.tkip_rx_ttak[i] = cpu_to_le16(tkip_p1k[i]);
-		/* keyconf may contain MIC rx/tx keys which iwl does not use */
-		to_copy = min_t(size_t, sizeof(sta_cmd.key.key), keyconf->keylen);
-		memcpy(sta_cmd.key.key, keyconf->key, to_copy);
+		memcpy(sta_cmd.key.key, keyconf->key, keyconf->keylen);
 		break;
 	case WLAN_CIPHER_SUITE_WEP104:
 		key_flags |= STA_KEY_FLG_KEY_SIZE_MSK;
-		fallthrough;
+		/* fall through */
 	case WLAN_CIPHER_SUITE_WEP40:
 		key_flags |= STA_KEY_FLG_WEP;
 		memcpy(&sta_cmd.key.key[3], keyconf->key, keyconf->keylen);

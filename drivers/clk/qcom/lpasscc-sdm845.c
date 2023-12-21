@@ -3,7 +3,6 @@
  * Copyright (c) 2018, The Linux Foundation. All rights reserved.
  */
 
-#include <linux/clk-provider.h>
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/of_address.h>

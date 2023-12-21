@@ -9,7 +9,6 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/acpi.h>
-#include <linux/dmi.h>
 
 #include "ucsi.h"
 
@@ -20,11 +19,10 @@
 struct ucsi_acpi {
 	struct device *dev;
 	struct ucsi *ucsi;
-	void *base;
+	void __iomem *base;
 	struct completion complete;
 	unsigned long flags;
 	guid_t guid;
-	u64 cmd;
 };
 
 static int ucsi_acpi_dsm(struct ucsi_acpi *ua, int func)
@@ -53,7 +51,7 @@ static int ucsi_acpi_read(struct ucsi *ucsi, unsigned int offset,
 	if (ret)
 		return ret;
 
-	memcpy(val, ua->base + offset, val_len);
+	memcpy(val, (const void __force *)(ua->base + offset), val_len);
 
 	return 0;
 }
@@ -63,8 +61,7 @@ static int ucsi_acpi_async_write(struct ucsi *ucsi, unsigned int offset,
 {
 	struct ucsi_acpi *ua = ucsi_get_drvdata(ucsi);
 
-	memcpy(ua->base + offset, val, val_len);
-	ua->cmd = *(u64 *)val;
+	memcpy((void __force *)(ua->base + offset), val, val_len);
 
 	return ucsi_acpi_dsm(ua, UCSI_DSM_FUNC_WRITE);
 }
@@ -81,7 +78,7 @@ static int ucsi_acpi_sync_write(struct ucsi *ucsi, unsigned int offset,
 	if (ret)
 		goto out_clear_bit;
 
-	if (!wait_for_completion_timeout(&ua->complete, 5 * HZ))
+	if (!wait_for_completion_timeout(&ua->complete, 60 * HZ))
 		ret = -ETIMEDOUT;
 
 out_clear_bit:
@@ -96,46 +93,13 @@ static const struct ucsi_operations ucsi_acpi_ops = {
 	.async_write = ucsi_acpi_async_write
 };
 
-static int
-ucsi_zenbook_read(struct ucsi *ucsi, unsigned int offset, void *val, size_t val_len)
-{
-	struct ucsi_acpi *ua = ucsi_get_drvdata(ucsi);
-	int ret;
-
-	if (offset == UCSI_VERSION || UCSI_COMMAND(ua->cmd) == UCSI_PPM_RESET) {
-		ret = ucsi_acpi_dsm(ua, UCSI_DSM_FUNC_READ);
-		if (ret)
-			return ret;
-	}
-
-	memcpy(val, ua->base + offset, val_len);
-
-	return 0;
-}
-
-static const struct ucsi_operations ucsi_zenbook_ops = {
-	.read = ucsi_zenbook_read,
-	.sync_write = ucsi_acpi_sync_write,
-	.async_write = ucsi_acpi_async_write
-};
-
-static const struct dmi_system_id zenbook_dmi_id[] = {
-	{
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "ZenBook UX325UA_UM325UA"),
-		},
-	},
-	{ }
-};
-
 static void ucsi_acpi_notify(acpi_handle handle, u32 event, void *data)
 {
 	struct ucsi_acpi *ua = data;
 	u32 cci;
 	int ret;
 
-	ret = ua->ucsi->ops->read(ua->ucsi, UCSI_CCI, &cci, sizeof(cci));
+	ret = ucsi_acpi_read(ua->ucsi, UCSI_CCI, &cci, sizeof(cci));
 	if (ret)
 		return;
 
@@ -150,7 +114,6 @@ static void ucsi_acpi_notify(acpi_handle handle, u32 event, void *data)
 static int ucsi_acpi_probe(struct platform_device *pdev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
-	const struct ucsi_operations *ops = &ucsi_acpi_ops;
 	struct ucsi_acpi *ua;
 	struct resource *res;
 	acpi_status status;
@@ -169,9 +132,20 @@ static int ucsi_acpi_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	ua->base = devm_memremap(&pdev->dev, res->start, resource_size(res), MEMREMAP_WB);
-	if (IS_ERR(ua->base))
-		return PTR_ERR(ua->base);
+	/* This will make sure we can use ioremap() */
+	status = acpi_release_memory(ACPI_HANDLE(&pdev->dev), res, 1);
+	if (ACPI_FAILURE(status))
+		return -ENOMEM;
+
+	/*
+	 * NOTE: The memory region for the data structures is used also in an
+	 * operation region, which means ACPI has already reserved it. Therefore
+	 * it can not be requested here, and we can not use
+	 * devm_ioremap_resource().
+	 */
+	ua->base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	if (!ua->base)
+		return -ENOMEM;
 
 	ret = guid_parse(UCSI_DSM_UUID, &ua->guid);
 	if (ret)
@@ -180,10 +154,7 @@ static int ucsi_acpi_probe(struct platform_device *pdev)
 	init_completion(&ua->complete);
 	ua->dev = &pdev->dev;
 
-	if (dmi_check_system(zenbook_dmi_id))
-		ops = &ucsi_zenbook_ops;
-
-	ua->ucsi = ucsi_create(&pdev->dev, ops);
+	ua->ucsi = ucsi_create(&pdev->dev, &ucsi_acpi_ops);
 	if (IS_ERR(ua->ucsi))
 		return PTR_ERR(ua->ucsi);
 
@@ -212,7 +183,7 @@ static int ucsi_acpi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ucsi_acpi_remove(struct platform_device *pdev)
+static int ucsi_acpi_remove(struct platform_device *pdev)
 {
 	struct ucsi_acpi *ua = platform_get_drvdata(pdev);
 
@@ -221,16 +192,9 @@ static void ucsi_acpi_remove(struct platform_device *pdev)
 
 	acpi_remove_notify_handler(ACPI_HANDLE(&pdev->dev), ACPI_DEVICE_NOTIFY,
 				   ucsi_acpi_notify);
+
+	return 0;
 }
-
-static int ucsi_acpi_resume(struct device *dev)
-{
-	struct ucsi_acpi *ua = dev_get_drvdata(dev);
-
-	return ucsi_resume(ua->ucsi);
-}
-
-static DEFINE_SIMPLE_DEV_PM_OPS(ucsi_acpi_pm_ops, NULL, ucsi_acpi_resume);
 
 static const struct acpi_device_id ucsi_acpi_match[] = {
 	{ "PNP0CA0", 0 },
@@ -241,11 +205,10 @@ MODULE_DEVICE_TABLE(acpi, ucsi_acpi_match);
 static struct platform_driver ucsi_acpi_platform_driver = {
 	.driver = {
 		.name = "ucsi_acpi",
-		.pm = pm_ptr(&ucsi_acpi_pm_ops),
 		.acpi_match_table = ACPI_PTR(ucsi_acpi_match),
 	},
 	.probe = ucsi_acpi_probe,
-	.remove_new = ucsi_acpi_remove,
+	.remove = ucsi_acpi_remove,
 };
 
 module_platform_driver(ucsi_acpi_platform_driver);

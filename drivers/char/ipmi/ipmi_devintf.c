@@ -247,13 +247,11 @@ static int handle_recv(struct ipmi_file_private *priv,
 
 	if (msg->msg.data_len > 0) {
 		if (rsp->msg.data_len < msg->msg.data_len) {
-			if (trunc) {
-				rv2 = -EMSGSIZE;
+			rv2 = -EMSGSIZE;
+			if (trunc)
 				msg->msg.data_len = rsp->msg.data_len;
-			} else {
-				rv = -EMSGSIZE;
+			else
 				goto recv_putback_on_err;
-			}
 		}
 
 		if (copy_to_user(rsp->msg.data,
@@ -492,6 +490,7 @@ static long ipmi_ioctl(struct file   *file,
 		}
 
 		return ipmi_set_my_address(priv->user, val.channel, val.value);
+		break;
 	}
 
 	case IPMICTL_GET_MY_CHANNEL_ADDRESS_CMD:
@@ -860,7 +859,7 @@ static int __init init_ipmi_devintf(void)
 
 	pr_info("ipmi device interface\n");
 
-	ipmi_class = class_create("ipmi");
+	ipmi_class = class_create(THIS_MODULE, "ipmi");
 	if (IS_ERR(ipmi_class)) {
 		pr_err("ipmi: can't register device class\n");
 		return PTR_ERR(ipmi_class);

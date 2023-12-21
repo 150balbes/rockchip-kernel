@@ -14,14 +14,7 @@
 #include <linux/acpi.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_irq.h>
 #include <linux/platform_device.h>
-
-/* Undefined on purpose */
-extern of_irq_init_cb_t typecheck_irq_init_cb;
-
-#define typecheck_irq_init_cb(fn)					\
-	(__typecheck(typecheck_irq_init_cb, &fn) ? fn : fn)
 
 /*
  * This macro must be used by the different irqchip drivers to declare
@@ -30,34 +23,29 @@ extern of_irq_init_cb_t typecheck_irq_init_cb;
  *
  * @name: name that must be unique across all IRQCHIP_DECLARE of the
  * same file.
- * @compat: compatible string of the irqchip driver
+ * @compstr: compatible string of the irqchip driver
  * @fn: initialization function
  */
-#define IRQCHIP_DECLARE(name, compat, fn)	\
-	OF_DECLARE_2(irqchip, name, compat, typecheck_irq_init_cb(fn))
+#define IRQCHIP_DECLARE(name, compat, fn) OF_DECLARE_2(irqchip, name, compat, fn)
 
 extern int platform_irqchip_probe(struct platform_device *pdev);
 
 #define IRQCHIP_PLATFORM_DRIVER_BEGIN(drv_name) \
 static const struct of_device_id drv_name##_irqchip_match_table[] = {
 
-#define IRQCHIP_MATCH(compat, fn) { .compatible = compat,		\
-				    .data = typecheck_irq_init_cb(fn), },
+#define IRQCHIP_MATCH(compat, fn) { .compatible = compat, .data = fn },
 
-
-#define IRQCHIP_PLATFORM_DRIVER_END(drv_name, ...)			\
+#define IRQCHIP_PLATFORM_DRIVER_END(drv_name)				\
 	{},								\
 };									\
 MODULE_DEVICE_TABLE(of, drv_name##_irqchip_match_table);		\
-static struct platform_driver drv_name##_driver = {			\
-	.probe  = IS_ENABLED(CONFIG_IRQCHIP) ? 				\
-			platform_irqchip_probe : NULL,			\
+static struct platform_driver drv_name##_driver = {		\
+	.probe  = platform_irqchip_probe,				\
 	.driver = {							\
 		.name = #drv_name,					\
 		.owner = THIS_MODULE,					\
 		.of_match_table = drv_name##_irqchip_match_table,	\
 		.suppress_bind_attrs = true,				\
-		__VA_ARGS__						\
 	},								\
 };									\
 builtin_platform_driver(drv_name##_driver)

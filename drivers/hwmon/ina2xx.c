@@ -310,7 +310,8 @@ static ssize_t ina2xx_value_show(struct device *dev,
 	if (err < 0)
 		return err;
 
-	return sysfs_emit(buf, "%d\n", ina2xx_get_value(data, attr->index, regval));
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			ina2xx_get_value(data, attr->index, regval));
 }
 
 static int ina226_reg_to_alert(struct ina2xx_data *data, u8 bit, u16 regval)
@@ -385,7 +386,7 @@ static ssize_t ina226_alert_show(struct device *dev,
 		val = ina226_reg_to_alert(data, attr->index, regval);
 	}
 
-	ret = sysfs_emit(buf, "%d\n", val);
+	ret = snprintf(buf, PAGE_SIZE, "%d\n", val);
 abort:
 	mutex_unlock(&data->config_lock);
 	return ret;
@@ -449,7 +450,7 @@ static ssize_t ina226_alarm_show(struct device *dev,
 
 	alarm = (regval & BIT(attr->index)) &&
 		(regval & INA226_ALERT_FUNCTION_FLAG);
-	return sysfs_emit(buf, "%d\n", alarm);
+	return snprintf(buf, PAGE_SIZE, "%d\n", alarm);
 }
 
 /*
@@ -480,7 +481,7 @@ static ssize_t ina2xx_shunt_show(struct device *dev,
 {
 	struct ina2xx_data *data = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%li\n", data->rshunt);
+	return snprintf(buf, PAGE_SIZE, "%li\n", data->rshunt);
 }
 
 static ssize_t ina2xx_shunt_store(struct device *dev,
@@ -536,7 +537,7 @@ static ssize_t ina226_interval_show(struct device *dev,
 	if (status)
 		return status;
 
-	return sysfs_emit(buf, "%d\n", ina226_reg_to_interval(regval));
+	return snprintf(buf, PAGE_SIZE, "%d\n", ina226_reg_to_interval(regval));
 }
 
 /* shunt voltage */
@@ -656,10 +657,6 @@ static int ina2xx_probe(struct i2c_client *client)
 		return PTR_ERR(data->regmap);
 	}
 
-	ret = devm_regulator_get_enable(dev, "vs");
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to enable vs regulator\n");
-
 	ret = ina2xx_init(data);
 	if (ret < 0) {
 		dev_err(dev, "error configuring the device: %d\n", ret);
@@ -721,7 +718,7 @@ static struct i2c_driver ina2xx_driver = {
 		.name	= "ina2xx",
 		.of_match_table = of_match_ptr(ina2xx_of_match),
 	},
-	.probe		= ina2xx_probe,
+	.probe_new	= ina2xx_probe,
 	.id_table	= ina2xx_id,
 };
 

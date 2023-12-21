@@ -10,41 +10,31 @@
 
 #define ALL_AUTO_MODE_MASKS (RDMA_COUNTER_MASK_QP_TYPE | RDMA_COUNTER_MASK_PID)
 
-static int __counter_set_mode(struct rdma_port_counter *port_counter,
+static int __counter_set_mode(struct rdma_counter_mode *curr,
 			      enum rdma_nl_counter_mode new_mode,
 			      enum rdma_nl_counter_mask new_mask)
 {
-	if (new_mode == RDMA_COUNTER_MODE_AUTO) {
-		if (new_mask & (~ALL_AUTO_MODE_MASKS))
-			return -EINVAL;
-		if (port_counter->num_counters)
-			return -EBUSY;
-	}
+	if ((new_mode == RDMA_COUNTER_MODE_AUTO) &&
+	    ((new_mask & (~ALL_AUTO_MODE_MASKS)) ||
+	     (curr->mode != RDMA_COUNTER_MODE_NONE)))
+		return -EINVAL;
 
-	port_counter->mode.mode = new_mode;
-	port_counter->mode.mask = new_mask;
+	curr->mode = new_mode;
+	curr->mask = new_mask;
 	return 0;
 }
 
-/*
+/**
  * rdma_counter_set_auto_mode() - Turn on/off per-port auto mode
  *
- * @dev: Device to operate
- * @port: Port to use
- * @mask: Mask to configure
- * @extack: Message to the user
- *
- * Return 0 on success. If counter mode wasn't changed then it is considered
- * as success as well.
- * Return -EBUSY when changing to auto mode while there are bounded counters.
- *
+ * When @on is true, the @mask must be set; When @on is false, it goes
+ * into manual mode if there's any counter, so that the user is able to
+ * manually access them.
  */
-int rdma_counter_set_auto_mode(struct ib_device *dev, u32 port,
-			       enum rdma_nl_counter_mask mask,
-			       struct netlink_ext_ack *extack)
+int rdma_counter_set_auto_mode(struct ib_device *dev, u8 port,
+			       bool on, enum rdma_nl_counter_mask mask)
 {
 	struct rdma_port_counter *port_counter;
-	enum rdma_nl_counter_mode mode;
 	int ret;
 
 	port_counter = &dev->port_data[port].port_counter;
@@ -52,95 +42,30 @@ int rdma_counter_set_auto_mode(struct ib_device *dev, u32 port,
 		return -EOPNOTSUPP;
 
 	mutex_lock(&port_counter->lock);
-	if (mask)
-		mode = RDMA_COUNTER_MODE_AUTO;
-	else
-		mode = (port_counter->num_counters) ? RDMA_COUNTER_MODE_MANUAL :
-						      RDMA_COUNTER_MODE_NONE;
+	if (on) {
+		ret = __counter_set_mode(&port_counter->mode,
+					 RDMA_COUNTER_MODE_AUTO, mask);
+	} else {
+		if (port_counter->mode.mode != RDMA_COUNTER_MODE_AUTO) {
+			ret = -EINVAL;
+			goto out;
+		}
 
-	if (port_counter->mode.mode == mode &&
-	    port_counter->mode.mask == mask) {
-		ret = 0;
-		goto out;
+		if (port_counter->num_counters)
+			ret = __counter_set_mode(&port_counter->mode,
+						 RDMA_COUNTER_MODE_MANUAL, 0);
+		else
+			ret = __counter_set_mode(&port_counter->mode,
+						 RDMA_COUNTER_MODE_NONE, 0);
 	}
-
-	ret = __counter_set_mode(port_counter, mode, mask);
 
 out:
 	mutex_unlock(&port_counter->lock);
-	if (ret == -EBUSY)
-		NL_SET_ERR_MSG(
-			extack,
-			"Modifying auto mode is not allowed when there is a bound QP");
 	return ret;
 }
 
-static void auto_mode_init_counter(struct rdma_counter *counter,
-				   const struct ib_qp *qp,
-				   enum rdma_nl_counter_mask new_mask)
-{
-	struct auto_mode_param *param = &counter->mode.param;
-
-	counter->mode.mode = RDMA_COUNTER_MODE_AUTO;
-	counter->mode.mask = new_mask;
-
-	if (new_mask & RDMA_COUNTER_MASK_QP_TYPE)
-		param->qp_type = qp->qp_type;
-}
-
-static int __rdma_counter_bind_qp(struct rdma_counter *counter,
-				  struct ib_qp *qp)
-{
-	int ret;
-
-	if (qp->counter)
-		return -EINVAL;
-
-	if (!qp->device->ops.counter_bind_qp)
-		return -EOPNOTSUPP;
-
-	mutex_lock(&counter->lock);
-	ret = qp->device->ops.counter_bind_qp(counter, qp);
-	mutex_unlock(&counter->lock);
-
-	return ret;
-}
-
-int rdma_counter_modify(struct ib_device *dev, u32 port,
-			unsigned int index, bool enable)
-{
-	struct rdma_hw_stats *stats;
-	int ret = 0;
-
-	if (!dev->ops.modify_hw_stat)
-		return -EOPNOTSUPP;
-
-	stats = ib_get_hw_stats_port(dev, port);
-	if (!stats || index >= stats->num_counters ||
-	    !(stats->descs[index].flags & IB_STAT_FLAG_OPTIONAL))
-		return -EINVAL;
-
-	mutex_lock(&stats->lock);
-
-	if (enable != test_bit(index, stats->is_disabled))
-		goto out;
-
-	ret = dev->ops.modify_hw_stat(dev, port, index, enable);
-	if (ret)
-		goto out;
-
-	if (enable)
-		clear_bit(index, stats->is_disabled);
-	else
-		set_bit(index, stats->is_disabled);
-out:
-	mutex_unlock(&stats->lock);
-	return ret;
-}
-
-static struct rdma_counter *alloc_and_bind(struct ib_device *dev, u32 port,
-					   struct ib_qp *qp,
-					   enum rdma_nl_counter_mode mode)
+static struct rdma_counter *rdma_counter_alloc(struct ib_device *dev, u8 port,
+					       enum rdma_nl_counter_mode mode)
 {
 	struct rdma_port_counter *port_counter;
 	struct rdma_counter *counter;
@@ -163,22 +88,11 @@ static struct rdma_counter *alloc_and_bind(struct ib_device *dev, u32 port,
 
 	port_counter = &dev->port_data[port].port_counter;
 	mutex_lock(&port_counter->lock);
-	switch (mode) {
-	case RDMA_COUNTER_MODE_MANUAL:
-		ret = __counter_set_mode(port_counter, RDMA_COUNTER_MODE_MANUAL,
-					 0);
-		if (ret) {
-			mutex_unlock(&port_counter->lock);
+	if (mode == RDMA_COUNTER_MODE_MANUAL) {
+		ret = __counter_set_mode(&port_counter->mode,
+					 RDMA_COUNTER_MODE_MANUAL, 0);
+		if (ret)
 			goto err_mode;
-		}
-		break;
-	case RDMA_COUNTER_MODE_AUTO:
-		auto_mode_init_counter(counter, qp, port_counter->mode.mask);
-		break;
-	default:
-		ret = -EOPNOTSUPP;
-		mutex_unlock(&port_counter->lock);
-		goto err_mode;
 	}
 
 	port_counter->num_counters++;
@@ -188,16 +102,11 @@ static struct rdma_counter *alloc_and_bind(struct ib_device *dev, u32 port,
 	kref_init(&counter->kref);
 	mutex_init(&counter->lock);
 
-	ret = __rdma_counter_bind_qp(counter, qp);
-	if (ret)
-		goto err_mode;
-
-	rdma_restrack_parent_name(&counter->res, &qp->res);
-	rdma_restrack_add(&counter->res);
 	return counter;
 
 err_mode:
-	rdma_free_hw_stats_struct(counter->stats);
+	mutex_unlock(&port_counter->lock);
+	kfree(counter->stats);
 err_stats:
 	rdma_restrack_put(&counter->res);
 	kfree(counter);
@@ -213,13 +122,27 @@ static void rdma_counter_free(struct rdma_counter *counter)
 	port_counter->num_counters--;
 	if (!port_counter->num_counters &&
 	    (port_counter->mode.mode == RDMA_COUNTER_MODE_MANUAL))
-		__counter_set_mode(port_counter, RDMA_COUNTER_MODE_NONE, 0);
+		__counter_set_mode(&port_counter->mode, RDMA_COUNTER_MODE_NONE,
+				   0);
 
 	mutex_unlock(&port_counter->lock);
 
 	rdma_restrack_del(&counter->res);
-	rdma_free_hw_stats_struct(counter->stats);
+	kfree(counter->stats);
 	kfree(counter);
+}
+
+static void auto_mode_init_counter(struct rdma_counter *counter,
+				   const struct ib_qp *qp,
+				   enum rdma_nl_counter_mask new_mask)
+{
+	struct auto_mode_param *param = &counter->mode.param;
+
+	counter->mode.mode = RDMA_COUNTER_MODE_AUTO;
+	counter->mode.mask = new_mask;
+
+	if (new_mask & RDMA_COUNTER_MASK_QP_TYPE)
+		param->qp_type = qp->qp_type;
 }
 
 static bool auto_mode_match(struct ib_qp *qp, struct rdma_counter *counter,
@@ -236,6 +159,24 @@ static bool auto_mode_match(struct ib_qp *qp, struct rdma_counter *counter,
 			  task_pid_nr(qp->res.task));
 
 	return match;
+}
+
+static int __rdma_counter_bind_qp(struct rdma_counter *counter,
+				  struct ib_qp *qp)
+{
+	int ret;
+
+	if (qp->counter)
+		return -EINVAL;
+
+	if (!qp->device->ops.counter_bind_qp)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&counter->lock);
+	ret = qp->device->ops.counter_bind_qp(counter, qp);
+	mutex_unlock(&counter->lock);
+
+	return ret;
 }
 
 static int __rdma_counter_unbind_qp(struct ib_qp *qp)
@@ -269,14 +210,14 @@ static void counter_history_stat_update(struct rdma_counter *counter)
 		port_counter->hstats->value[i] += counter->stats->value[i];
 }
 
-/*
+/**
  * rdma_get_counter_auto_mode - Find the counter that @qp should be bound
  *     with in auto mode
  *
  * Return: The counter (with ref-count increased) if found
  */
 static struct rdma_counter *rdma_get_counter_auto_mode(struct ib_qp *qp,
-						       u32 port)
+						       u8 port)
 {
 	struct rdma_port_counter *port_counter;
 	struct rdma_counter *counter = NULL;
@@ -306,6 +247,13 @@ next:
 	return counter;
 }
 
+static void rdma_counter_res_add(struct rdma_counter *counter,
+				 struct ib_qp *qp)
+{
+	rdma_restrack_parent_name(&counter->res, &qp->res);
+	rdma_restrack_add(&counter->res);
+}
+
 static void counter_release(struct kref *kref)
 {
 	struct rdma_counter *counter;
@@ -316,18 +264,18 @@ static void counter_release(struct kref *kref)
 	rdma_counter_free(counter);
 }
 
-/*
+/**
  * rdma_counter_bind_qp_auto - Check and bind the QP to a counter base on
  *   the auto-mode rule
  */
-int rdma_counter_bind_qp_auto(struct ib_qp *qp, u32 port)
+int rdma_counter_bind_qp_auto(struct ib_qp *qp, u8 port)
 {
 	struct rdma_port_counter *port_counter;
 	struct ib_device *dev = qp->device;
 	struct rdma_counter *counter;
 	int ret;
 
-	if (!rdma_restrack_is_tracked(&qp->res) || rdma_is_kernel_res(&qp->res))
+	if (!qp->res.valid || rdma_is_kernel_res(&qp->res))
 		return 0;
 
 	if (!rdma_is_port_valid(dev, port))
@@ -345,15 +293,25 @@ int rdma_counter_bind_qp_auto(struct ib_qp *qp, u32 port)
 			return ret;
 		}
 	} else {
-		counter = alloc_and_bind(dev, port, qp, RDMA_COUNTER_MODE_AUTO);
+		counter = rdma_counter_alloc(dev, port, RDMA_COUNTER_MODE_AUTO);
 		if (!counter)
 			return -ENOMEM;
+
+		auto_mode_init_counter(counter, qp, port_counter->mode.mask);
+
+		ret = __rdma_counter_bind_qp(counter, qp);
+		if (ret) {
+			rdma_counter_free(counter);
+			return ret;
+		}
+
+		rdma_counter_res_add(counter, qp);
 	}
 
 	return 0;
 }
 
-/*
+/**
  * rdma_counter_unbind_qp - Unbind a qp from a counter
  * @force:
  *   true - Decrease the counter ref-count anyway (e.g., qp destroy)
@@ -390,7 +348,7 @@ int rdma_counter_query_stats(struct rdma_counter *counter)
 }
 
 static u64 get_running_counters_hwstat_sum(struct ib_device *dev,
-					   u32 port, u32 index)
+					   u8 port, u32 index)
 {
 	struct rdma_restrack_entry *res;
 	struct rdma_restrack_root *rt;
@@ -422,11 +380,11 @@ next:
 	return sum;
 }
 
-/*
+/**
  * rdma_counter_get_hwstat_value() - Get the sum value of all counters on a
  *   specific port, including the running ones and history data
  */
-u64 rdma_counter_get_hwstat_value(struct ib_device *dev, u32 port, u32 index)
+u64 rdma_counter_get_hwstat_value(struct ib_device *dev, u8 port, u32 index)
 {
 	struct rdma_port_counter *port_counter;
 	u64 sum;
@@ -461,6 +419,15 @@ err:
 	return NULL;
 }
 
+static int rdma_counter_bind_qp_manual(struct rdma_counter *counter,
+				       struct ib_qp *qp)
+{
+	if ((counter->device != qp->device) || (counter->port != qp->port))
+		return -EINVAL;
+
+	return __rdma_counter_bind_qp(counter, qp);
+}
+
 static struct rdma_counter *rdma_get_counter_by_id(struct ib_device *dev,
 						   u32 counter_id)
 {
@@ -478,10 +445,10 @@ static struct rdma_counter *rdma_get_counter_by_id(struct ib_device *dev,
 	return counter;
 }
 
-/*
+/**
  * rdma_counter_bind_qpn() - Bind QP @qp_num to counter @counter_id
  */
-int rdma_counter_bind_qpn(struct ib_device *dev, u32 port,
+int rdma_counter_bind_qpn(struct ib_device *dev, u8 port,
 			  u32 qp_num, u32 counter_id)
 {
 	struct rdma_port_counter *port_counter;
@@ -508,12 +475,7 @@ int rdma_counter_bind_qpn(struct ib_device *dev, u32 port,
 		goto err_task;
 	}
 
-	if ((counter->device != qp->device) || (counter->port != qp->port)) {
-		ret = -EINVAL;
-		goto err_task;
-	}
-
-	ret = __rdma_counter_bind_qp(counter, qp);
+	ret = rdma_counter_bind_qp_manual(counter, qp);
 	if (ret)
 		goto err_task;
 
@@ -527,11 +489,11 @@ err:
 	return ret;
 }
 
-/*
+/**
  * rdma_counter_bind_qpn_alloc() - Alloc a counter and bind QP @qp_num to it
  *   The id of new counter is returned in @counter_id
  */
-int rdma_counter_bind_qpn_alloc(struct ib_device *dev, u32 port,
+int rdma_counter_bind_qpn_alloc(struct ib_device *dev, u8 port,
 				u32 qp_num, u32 *counter_id)
 {
 	struct rdma_port_counter *port_counter;
@@ -558,27 +520,35 @@ int rdma_counter_bind_qpn_alloc(struct ib_device *dev, u32 port,
 		goto err;
 	}
 
-	counter = alloc_and_bind(dev, port, qp, RDMA_COUNTER_MODE_MANUAL);
+	counter = rdma_counter_alloc(dev, port, RDMA_COUNTER_MODE_MANUAL);
 	if (!counter) {
 		ret = -ENOMEM;
 		goto err;
 	}
 
+	ret = rdma_counter_bind_qp_manual(counter, qp);
+	if (ret)
+		goto err_bind;
+
 	if (counter_id)
 		*counter_id = counter->id;
 
-	rdma_restrack_put(&qp->res);
-	return 0;
+	rdma_counter_res_add(counter, qp);
 
+	rdma_restrack_put(&qp->res);
+	return ret;
+
+err_bind:
+	rdma_counter_free(counter);
 err:
 	rdma_restrack_put(&qp->res);
 	return ret;
 }
 
-/*
+/**
  * rdma_counter_unbind_qpn() - Unbind QP @qp_num from a counter
  */
-int rdma_counter_unbind_qpn(struct ib_device *dev, u32 port,
+int rdma_counter_unbind_qpn(struct ib_device *dev, u8 port,
 			    u32 qp_num, u32 counter_id)
 {
 	struct rdma_port_counter *port_counter;
@@ -611,7 +581,7 @@ out:
 	return ret;
 }
 
-int rdma_counter_get_mode(struct ib_device *dev, u32 port,
+int rdma_counter_get_mode(struct ib_device *dev, u8 port,
 			  enum rdma_nl_counter_mode *mode,
 			  enum rdma_nl_counter_mask *mask)
 {
@@ -637,10 +607,10 @@ void rdma_counter_init(struct ib_device *dev)
 		port_counter->mode.mode = RDMA_COUNTER_MODE_NONE;
 		mutex_init(&port_counter->lock);
 
-		if (!dev->ops.alloc_hw_port_stats)
+		if (!dev->ops.alloc_hw_stats)
 			continue;
 
-		port_counter->hstats = dev->ops.alloc_hw_port_stats(dev, port);
+		port_counter->hstats = dev->ops.alloc_hw_stats(dev, port);
 		if (!port_counter->hstats)
 			goto fail;
 	}
@@ -650,7 +620,7 @@ void rdma_counter_init(struct ib_device *dev)
 fail:
 	for (i = port; i >= rdma_start_port(dev); i--) {
 		port_counter = &dev->port_data[port].port_counter;
-		rdma_free_hw_stats_struct(port_counter->hstats);
+		kfree(port_counter->hstats);
 		port_counter->hstats = NULL;
 		mutex_destroy(&port_counter->lock);
 	}
@@ -663,7 +633,7 @@ void rdma_counter_release(struct ib_device *dev)
 
 	rdma_for_each_port(dev, port) {
 		port_counter = &dev->port_data[port].port_counter;
-		rdma_free_hw_stats_struct(port_counter->hstats);
+		kfree(port_counter->hstats);
 		mutex_destroy(&port_counter->lock);
 	}
 }

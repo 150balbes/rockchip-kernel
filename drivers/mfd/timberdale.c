@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/msi.h>
 #include <linux/mfd/core.h>
 #include <linux/slab.h>
 
@@ -622,8 +623,8 @@ static const struct mfd_cell timberdale_cells_bar2[] = {
 	},
 };
 
-static ssize_t fw_ver_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+static ssize_t show_fw_ver(struct device *dev, struct device_attribute *attr,
+	char *buf)
 {
 	struct timberdale_device *priv = dev_get_drvdata(dev);
 
@@ -631,7 +632,7 @@ static ssize_t fw_ver_show(struct device *dev,
 		priv->fw.config);
 }
 
-static DEVICE_ATTR_RO(fw_ver);
+static DEVICE_ATTR(fw_ver, S_IRUGO, show_fw_ver, NULL);
 
 /*--------------------------------------------------------------------------*/
 

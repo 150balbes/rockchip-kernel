@@ -141,15 +141,53 @@ exit:
 }
 
 static int tpm_tis_spi_read_bytes(struct tpm_tis_data *data, u32 addr,
-				  u16 len, u8 *result, enum tpm_tis_io_mode io_mode)
+				  u16 len, u8 *result)
 {
 	return tpm_tis_spi_transfer(data, addr, len, result, NULL);
 }
 
 static int tpm_tis_spi_write_bytes(struct tpm_tis_data *data, u32 addr,
-				   u16 len, const u8 *value, enum tpm_tis_io_mode io_mode)
+				   u16 len, const u8 *value)
 {
 	return tpm_tis_spi_transfer(data, addr, len, NULL, value);
+}
+
+int tpm_tis_spi_read16(struct tpm_tis_data *data, u32 addr, u16 *result)
+{
+	__le16 result_le;
+	int rc;
+
+	rc = data->phy_ops->read_bytes(data, addr, sizeof(u16),
+				       (u8 *)&result_le);
+	if (!rc)
+		*result = le16_to_cpu(result_le);
+
+	return rc;
+}
+
+int tpm_tis_spi_read32(struct tpm_tis_data *data, u32 addr, u32 *result)
+{
+	__le32 result_le;
+	int rc;
+
+	rc = data->phy_ops->read_bytes(data, addr, sizeof(u32),
+				       (u8 *)&result_le);
+	if (!rc)
+		*result = le32_to_cpu(result_le);
+
+	return rc;
+}
+
+int tpm_tis_spi_write32(struct tpm_tis_data *data, u32 addr, u32 value)
+{
+	__le32 value_le;
+	int rc;
+
+	value_le = cpu_to_le32(value);
+	rc = data->phy_ops->write_bytes(data, addr, sizeof(u32),
+					(u8 *)&value_le);
+
+	return rc;
 }
 
 int tpm_tis_spi_init(struct spi_device *spi, struct tpm_tis_spi_phy *phy,
@@ -167,6 +205,9 @@ int tpm_tis_spi_init(struct spi_device *spi, struct tpm_tis_spi_phy *phy,
 static const struct tpm_tis_phy_ops tpm_spi_phy_ops = {
 	.read_bytes = tpm_tis_spi_read_bytes,
 	.write_bytes = tpm_tis_spi_write_bytes,
+	.read16 = tpm_tis_spi_read16,
+	.read32 = tpm_tis_spi_read32,
+	.write32 = tpm_tis_spi_write32,
 };
 
 static int tpm_tis_spi_probe(struct spi_device *dev)
@@ -199,26 +240,23 @@ static int tpm_tis_spi_driver_probe(struct spi_device *spi)
 	tpm_tis_spi_probe_func probe_func;
 
 	probe_func = of_device_get_match_data(&spi->dev);
-	if (!probe_func) {
-		if (spi_dev_id) {
-			probe_func = (tpm_tis_spi_probe_func)spi_dev_id->driver_data;
-			if (!probe_func)
-				return -ENODEV;
-		} else
-			probe_func = tpm_tis_spi_probe;
-	}
+	if (!probe_func && spi_dev_id)
+		probe_func = (tpm_tis_spi_probe_func)spi_dev_id->driver_data;
+	if (!probe_func)
+		return -ENODEV;
 
 	return probe_func(spi);
 }
 
 static SIMPLE_DEV_PM_OPS(tpm_tis_pm, tpm_pm_suspend, tpm_tis_spi_resume);
 
-static void tpm_tis_spi_remove(struct spi_device *dev)
+static int tpm_tis_spi_remove(struct spi_device *dev)
 {
 	struct tpm_chip *chip = spi_get_drvdata(dev);
 
 	tpm_chip_unregister(chip);
 	tpm_tis_remove(chip);
+	return 0;
 }
 
 static const struct spi_device_id tpm_tis_spi_id[] = {
@@ -231,7 +269,7 @@ static const struct spi_device_id tpm_tis_spi_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, tpm_tis_spi_id);
 
-static const struct of_device_id of_tis_spi_match[] __maybe_unused = {
+static const struct of_device_id of_tis_spi_match[] = {
 	{ .compatible = "st,st33htpm-spi", .data = tpm_tis_spi_probe },
 	{ .compatible = "infineon,slb9670", .data = tpm_tis_spi_probe },
 	{ .compatible = "tcg,tpm_tis-spi", .data = tpm_tis_spi_probe },
@@ -240,7 +278,7 @@ static const struct of_device_id of_tis_spi_match[] __maybe_unused = {
 };
 MODULE_DEVICE_TABLE(of, of_tis_spi_match);
 
-static const struct acpi_device_id acpi_tis_spi_match[] __maybe_unused = {
+static const struct acpi_device_id acpi_tis_spi_match[] = {
 	{"SMO0768", 0},
 	{}
 };

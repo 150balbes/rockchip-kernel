@@ -32,7 +32,6 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 
-#include <net/inet_dscp.h>
 #include <net/ip.h>
 #include <net/protocol.h>
 #include <net/route.h>
@@ -291,7 +290,7 @@ __be32 fib_compute_spec_dst(struct sk_buff *skb)
 		bool vmark = in_dev && IN_DEV_SRC_VMARK(in_dev);
 		struct flowi4 fl4 = {
 			.flowi4_iif = LOOPBACK_IFINDEX,
-			.flowi4_l3mdev = l3mdev_master_ifindex_rcu(dev),
+			.flowi4_oif = l3mdev_master_ifindex_rcu(dev),
 			.daddr = ip_hdr(skb)->saddr,
 			.flowi4_tos = ip_hdr(skb)->tos & IPTOS_RT_MASK,
 			.flowi4_scope = scope,
@@ -353,8 +352,9 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	bool dev_match;
 
 	fl4.flowi4_oif = 0;
-	fl4.flowi4_l3mdev = l3mdev_master_ifindex_rcu(dev);
-	fl4.flowi4_iif = oif ? : LOOPBACK_IFINDEX;
+	fl4.flowi4_iif = l3mdev_master_ifindex_rcu(dev);
+	if (!fl4.flowi4_iif)
+		fl4.flowi4_iif = oif ? : LOOPBACK_IFINDEX;
 	fl4.daddr = src;
 	fl4.saddr = dst;
 	fl4.flowi4_tos = tos;
@@ -389,7 +389,7 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	dev_match = dev_match || (res.type == RTN_LOCAL &&
 				  dev == net->loopback_dev);
 	if (dev_match) {
-		ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_HOST;
+		ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_LINK;
 		return ret;
 	}
 	if (no_addr)
@@ -401,7 +401,7 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	ret = 0;
 	if (fib_lookup(net, &fl4, &res, FIB_LOOKUP_IGNORE_LINKSTATE) == 0) {
 		if (res.type == RTN_UNICAST)
-			ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_HOST;
+			ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_LINK;
 	}
 	return ret;
 
@@ -436,9 +436,6 @@ int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 		if (net->ipv4.fib_has_custom_local_routes ||
 		    fib4_has_custom_rules(net))
 			goto full_check;
-		/* Within the same container, it is regarded as a martian source,
-		 * and the same host but different containers are not.
-		 */
 		if (inet_lookup_ifaddr_rcu(net, src))
 			return -EINVAL;
 
@@ -575,9 +572,6 @@ static int rtentry_to_fib_config(struct net *net, int cmd, struct rtentry *rt,
 		    addr_type == RTN_UNICAST)
 			cfg->fc_scope = RT_SCOPE_UNIVERSE;
 	}
-
-	if (!cfg->fc_table)
-		cfg->fc_table = RT_TABLE_MAIN;
 
 	if (cmd == SIOCDELRT)
 		return 0;
@@ -741,16 +735,8 @@ static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 	memset(cfg, 0, sizeof(*cfg));
 
 	rtm = nlmsg_data(nlh);
-
-	if (!inet_validate_dscp(rtm->rtm_tos)) {
-		NL_SET_ERR_MSG(extack,
-			       "Invalid dsfield (tos): ECN bits must be 0");
-		err = -EINVAL;
-		goto errout;
-	}
-	cfg->fc_dscp = inet_dsfield_to_dscp(rtm->rtm_tos);
-
 	cfg->fc_dst_len = rtm->rtm_dst_len;
+	cfg->fc_tos = rtm->rtm_tos;
 	cfg->fc_table = rtm->rtm_table;
 	cfg->fc_protocol = rtm->rtm_protocol;
 	cfg->fc_scope = rtm->rtm_scope;
@@ -1143,8 +1129,10 @@ void fib_add_ifaddr(struct in_ifaddr *ifa)
 				  prefix, ifa->ifa_prefixlen, prim,
 				  ifa->ifa_rt_priority);
 
-		/* Add the network broadcast address, when it makes sense */
+		/* Add network specific broadcasts, when it takes a sense */
 		if (ifa->ifa_prefixlen < 31) {
+			fib_magic(RTM_NEWROUTE, RTN_BROADCAST, prefix, 32,
+				  prim, 0);
 			fib_magic(RTM_NEWROUTE, RTN_BROADCAST, prefix | ~mask,
 				  32, prim, 0);
 			arp_invalidate(dev, prefix | ~mask, false);
@@ -1390,13 +1378,13 @@ static void nl_fib_input(struct sk_buff *skb)
 		return;
 	nlh = nlmsg_hdr(skb);
 
-	frn = nlmsg_data(nlh);
+	frn = (struct fib_result_nl *) nlmsg_data(nlh);
 	nl_fib_lookup(net, frn);
 
 	portid = NETLINK_CB(skb).portid;      /* netlink portid */
 	NETLINK_CB(skb).portid = 0;        /* from kernel */
 	NETLINK_CB(skb).dst_group = 0;  /* unicast */
-	nlmsg_unicast(net->ipv4.fibnl, skb, portid);
+	netlink_unicast(net->ipv4.fibnl, skb, portid, MSG_DONTWAIT);
 }
 
 static int __net_init nl_fib_lookup_init(struct net *net)
@@ -1431,7 +1419,7 @@ static void fib_disable_ip(struct net_device *dev, unsigned long event,
 
 static int fib_inetaddr_event(struct notifier_block *this, unsigned long event, void *ptr)
 {
-	struct in_ifaddr *ifa = ptr;
+	struct in_ifaddr *ifa = (struct in_ifaddr *)ptr;
 	struct net_device *dev = ifa->ifa_dev->dev;
 	struct net *net = dev_net(dev);
 
@@ -1536,12 +1524,6 @@ static int __net_init ip_fib_net_init(struct net *net)
 	if (err)
 		return err;
 
-#ifdef CONFIG_IP_ROUTE_MULTIPATH
-	/* Default to 3-tuple */
-	net->ipv4.sysctl_fib_multipath_hash_fields =
-		FIB_MULTIPATH_HASH_FIELD_DEFAULT_MASK;
-#endif
-
 	/* Avoid false sharing : Use at least a full cache line */
 	size = max_t(size_t, size, L1_CACHE_BYTES);
 
@@ -1567,7 +1549,7 @@ static void ip_fib_net_exit(struct net *net)
 {
 	int i;
 
-	ASSERT_RTNL();
+	rtnl_lock();
 #ifdef CONFIG_IP_MULTIPLE_TABLES
 	RCU_INIT_POINTER(net->ipv4.fib_main, NULL);
 	RCU_INIT_POINTER(net->ipv4.fib_default, NULL);
@@ -1592,7 +1574,7 @@ static void ip_fib_net_exit(struct net *net)
 #ifdef CONFIG_IP_MULTIPLE_TABLES
 	fib4_rules_exit(net);
 #endif
-
+	rtnl_unlock();
 	kfree(net->ipv4.fib_table_hash);
 	fib4_notifier_exit(net);
 }
@@ -1619,9 +1601,7 @@ out:
 out_proc:
 	nl_fib_lookup_exit(net);
 out_nlfl:
-	rtnl_lock();
 	ip_fib_net_exit(net);
-	rtnl_unlock();
 	goto out;
 }
 
@@ -1629,23 +1609,12 @@ static void __net_exit fib_net_exit(struct net *net)
 {
 	fib_proc_exit(net);
 	nl_fib_lookup_exit(net);
-}
-
-static void __net_exit fib_net_exit_batch(struct list_head *net_list)
-{
-	struct net *net;
-
-	rtnl_lock();
-	list_for_each_entry(net, net_list, exit_list)
-		ip_fib_net_exit(net);
-
-	rtnl_unlock();
+	ip_fib_net_exit(net);
 }
 
 static struct pernet_operations fib_net_ops = {
 	.init = fib_net_init,
 	.exit = fib_net_exit,
-	.exit_batch = fib_net_exit_batch,
 };
 
 void __init ip_fib_init(void)

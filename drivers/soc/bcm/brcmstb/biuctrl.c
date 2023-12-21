@@ -136,8 +136,6 @@ static int __init mcp_write_pairing_set(void)
 
 static const u32 a72_b53_mach_compat[] = {
 	0x7211,
-	0x72113,
-	0x72116,
 	0x7216,
 	0x72164,
 	0x72165,
@@ -288,10 +286,7 @@ static int __init setup_hifcpubiuctrl_regs(struct device_node *np)
 	if (BRCM_ID(family_id) == 0x7260 && BRCM_REV(family_id) == 0)
 		cpubiuctrl_regs = b53_cpubiuctrl_no_wb_regs;
 out:
-	if (ret && cpubiuctrl_base) {
-		iounmap(cpubiuctrl_base);
-		cpubiuctrl_base = NULL;
-	}
+	of_node_put(np);
 	return ret;
 }
 
@@ -343,12 +338,12 @@ static int __init brcmstb_biuctrl_init(void)
 
 	ret = setup_hifcpubiuctrl_regs(np);
 	if (ret)
-		goto out_put;
+		return ret;
 
 	ret = mcp_write_pairing_set();
 	if (ret) {
 		pr_err("MCP: Unable to disable write pairing!\n");
-		goto out_put;
+		return ret;
 	}
 
 	a72_b53_rac_enable_all(np);
@@ -356,9 +351,6 @@ static int __init brcmstb_biuctrl_init(void)
 #ifdef CONFIG_PM_SLEEP
 	register_syscore_ops(&brcmstb_cpu_credit_syscore_ops);
 #endif
-	ret = 0;
-out_put:
-	of_node_put(np);
-	return ret;
+	return 0;
 }
 early_initcall(brcmstb_biuctrl_init);

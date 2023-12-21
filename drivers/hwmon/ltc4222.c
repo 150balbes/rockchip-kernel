@@ -94,7 +94,7 @@ static ssize_t ltc4222_value_show(struct device *dev,
 	value = ltc4222_get_value(dev, attr->index);
 	if (value < 0)
 		return value;
-	return sysfs_emit(buf, "%d\n", value);
+	return snprintf(buf, PAGE_SIZE, "%d\n", value);
 }
 
 static ssize_t ltc4222_bool_show(struct device *dev,
@@ -112,7 +112,7 @@ static ssize_t ltc4222_bool_show(struct device *dev,
 	if (fault)		/* Clear reported faults in chip register */
 		regmap_update_bits(regmap, attr->nr, attr->index, 0);
 
-	return sysfs_emit(buf, "%d\n", !!fault);
+	return snprintf(buf, PAGE_SIZE, "%d\n", !!fault);
 }
 
 /* Voltages */
@@ -210,7 +210,7 @@ static struct i2c_driver ltc4222_driver = {
 	.driver = {
 		   .name = "ltc4222",
 		   },
-	.probe = ltc4222_probe,
+	.probe_new = ltc4222_probe,
 	.id_table = ltc4222_id,
 };
 

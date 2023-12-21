@@ -32,6 +32,8 @@ properties:
 
   spi-cpol: true
 
+  spi-max-frequency: true
+
   interrupts:
     maxItems: 1
 
@@ -40,23 +42,20 @@ required:
   - reg
   - interrupts
 
-allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
     #include <dt-bindings/interrupt-controller/irq.h>
-    i2c {
+    i2c0 {
         #address-cells = <1>;
         #size-cells = <0>;
 
         /* Example for a I2C device node */
         accelerometer@2a {
             compatible = "adi,adxl345";
-            reg = <0x2a>;
+            reg = <0x53>;
             interrupt-parent = <&gpio0>;
             interrupts = <0 IRQ_TYPE_LEVEL_HIGH>;
         };
@@ -64,7 +63,7 @@ examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
     #include <dt-bindings/interrupt-controller/irq.h>
-    spi {
+    spi0 {
         #address-cells = <1>;
         #size-cells = <0>;
 

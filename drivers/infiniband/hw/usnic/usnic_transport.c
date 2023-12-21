@@ -32,6 +32,7 @@
  */
 #include <linux/bitmap.h>
 #include <linux/file.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <net/inet_sock.h>
 

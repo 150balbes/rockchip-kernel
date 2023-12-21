@@ -327,7 +327,8 @@ static const struct regmap_config si514_regmap_config = {
 	.volatile_reg = si514_regmap_is_volatile,
 };
 
-static int si514_probe(struct i2c_client *client)
+static int si514_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct clk_si514 *data;
 	struct clk_init_data init;
@@ -360,13 +361,19 @@ static int si514_probe(struct i2c_client *client)
 		dev_err(&client->dev, "clock registration failed\n");
 		return err;
 	}
-	err = devm_of_clk_add_hw_provider(&client->dev, of_clk_hw_simple_get,
-					  &data->hw);
+	err = of_clk_add_hw_provider(client->dev.of_node, of_clk_hw_simple_get,
+				     &data->hw);
 	if (err) {
 		dev_err(&client->dev, "unable to add clk provider\n");
 		return err;
 	}
 
+	return 0;
+}
+
+static int si514_remove(struct i2c_client *client)
+{
+	of_clk_del_provider(client->dev.of_node);
 	return 0;
 }
 
@@ -388,6 +395,7 @@ static struct i2c_driver si514_driver = {
 		.of_match_table = clk_si514_of_match,
 	},
 	.probe		= si514_probe,
+	.remove		= si514_remove,
 	.id_table	= si514_id,
 };
 module_i2c_driver(si514_driver);

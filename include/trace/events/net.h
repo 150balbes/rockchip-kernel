@@ -51,8 +51,7 @@ TRACE_EVENT(net_dev_start_xmit,
 		__entry->network_offset = skb_network_offset(skb);
 		__entry->transport_offset_valid =
 			skb_transport_header_was_set(skb);
-		__entry->transport_offset = skb_transport_header_was_set(skb) ?
-			skb_transport_offset(skb) : 0;
+		__entry->transport_offset = skb_transport_offset(skb);
 		__entry->tx_flags = skb_shinfo(skb)->tx_flags;
 		__entry->gso_size = skb_shinfo(skb)->gso_size;
 		__entry->gso_segs = skb_shinfo(skb)->gso_segs;
@@ -261,6 +260,13 @@ DEFINE_EVENT(net_dev_rx_verbose_template, netif_rx_entry,
 	TP_ARGS(skb)
 );
 
+DEFINE_EVENT(net_dev_rx_verbose_template, netif_rx_ni_entry,
+
+	TP_PROTO(const struct sk_buff *skb),
+
+	TP_ARGS(skb)
+);
+
 DECLARE_EVENT_CLASS(net_dev_rx_exit_template,
 
 	TP_PROTO(int ret),
@@ -300,6 +306,13 @@ DEFINE_EVENT(net_dev_rx_exit_template, netif_receive_skb_exit,
 );
 
 DEFINE_EVENT(net_dev_rx_exit_template, netif_rx_exit,
+
+	TP_PROTO(int ret),
+
+	TP_ARGS(ret)
+);
+
+DEFINE_EVENT(net_dev_rx_exit_template, netif_rx_ni_exit,
 
 	TP_PROTO(int ret),
 

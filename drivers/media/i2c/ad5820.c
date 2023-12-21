@@ -270,7 +270,8 @@ static const struct v4l2_subdev_internal_ops ad5820_internal_ops = {
  */
 static int __maybe_unused ad5820_suspend(struct device *dev)
 {
-	struct v4l2_subdev *subdev = dev_get_drvdata(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
+	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
 	struct ad5820_device *coil = to_ad5820_device(subdev);
 
 	if (!coil->power_count)
@@ -281,7 +282,8 @@ static int __maybe_unused ad5820_suspend(struct device *dev)
 
 static int __maybe_unused ad5820_resume(struct device *dev)
 {
-	struct v4l2_subdev *subdev = dev_get_drvdata(dev);
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
+	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
 	struct ad5820_device *coil = to_ad5820_device(subdev);
 
 	if (!coil->power_count)
@@ -290,7 +292,8 @@ static int __maybe_unused ad5820_resume(struct device *dev)
 	return ad5820_power_on(coil, true);
 }
 
-static int ad5820_probe(struct i2c_client *client)
+static int ad5820_probe(struct i2c_client *client,
+			const struct i2c_device_id *devid)
 {
 	struct ad5820_device *coil;
 	int ret;
@@ -300,15 +303,21 @@ static int ad5820_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	coil->vana = devm_regulator_get(&client->dev, "VANA");
-	if (IS_ERR(coil->vana))
-		return dev_err_probe(&client->dev, PTR_ERR(coil->vana),
-				     "could not get regulator for vana\n");
+	if (IS_ERR(coil->vana)) {
+		ret = PTR_ERR(coil->vana);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&client->dev, "could not get regulator for vana\n");
+		return ret;
+	}
 
 	coil->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable",
 						    GPIOD_OUT_LOW);
-	if (IS_ERR(coil->enable_gpio))
-		return dev_err_probe(&client->dev, PTR_ERR(coil->enable_gpio),
-				     "could not get enable gpio\n");
+	if (IS_ERR(coil->enable_gpio)) {
+		ret = PTR_ERR(coil->enable_gpio);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&client->dev, "could not get enable gpio\n");
+		return ret;
+	}
 
 	mutex_init(&coil->power_lock);
 
@@ -320,22 +329,22 @@ static int ad5820_probe(struct i2c_client *client)
 
 	ret = media_entity_pads_init(&coil->subdev.entity, 0, NULL);
 	if (ret < 0)
-		goto clean_mutex;
+		goto cleanup2;
 
 	ret = v4l2_async_register_subdev(&coil->subdev);
 	if (ret < 0)
-		goto clean_entity;
+		goto cleanup;
 
 	return ret;
 
-clean_entity:
-	media_entity_cleanup(&coil->subdev.entity);
-clean_mutex:
+cleanup2:
 	mutex_destroy(&coil->power_lock);
+cleanup:
+	media_entity_cleanup(&coil->subdev.entity);
 	return ret;
 }
 
-static void ad5820_remove(struct i2c_client *client)
+static int ad5820_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
 	struct ad5820_device *coil = to_ad5820_device(subdev);
@@ -344,6 +353,7 @@ static void ad5820_remove(struct i2c_client *client)
 	v4l2_ctrl_handler_free(&coil->ctrls);
 	media_entity_cleanup(&coil->subdev.entity);
 	mutex_destroy(&coil->power_lock);
+	return 0;
 }
 
 static const struct i2c_device_id ad5820_id_table[] = {

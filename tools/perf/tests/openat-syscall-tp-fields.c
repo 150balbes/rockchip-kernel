@@ -14,7 +14,6 @@
 #include "util/mmap.h"
 #include <errno.h>
 #include <perf/mmap.h>
-#include "util/sample.h"
 
 #ifndef O_DIRECTORY
 #define O_DIRECTORY    00200000
@@ -23,8 +22,7 @@
 #define AT_FDCWD       -100
 #endif
 
-static int test__syscall_openat_tp_fields(struct test_suite *test __maybe_unused,
-					  int subtest __maybe_unused)
+int test__syscall_openat_tp_fields(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	struct record_opts opts = {
 		.target = {
@@ -44,7 +42,7 @@ static int test__syscall_openat_tp_fields(struct test_suite *test __maybe_unused
 	char sbuf[STRERR_BUFSIZE];
 
 	if (evlist == NULL) {
-		pr_debug("%s: evlist__new\n", __func__);
+		pr_debug("%s: perf_evlist__new\n", __func__);
 		goto out;
 	}
 
@@ -56,9 +54,9 @@ static int test__syscall_openat_tp_fields(struct test_suite *test __maybe_unused
 
 	evlist__add(evlist, evsel);
 
-	err = evlist__create_maps(evlist, &opts.target);
+	err = perf_evlist__create_maps(evlist, &opts.target);
 	if (err < 0) {
-		pr_debug("%s: evlist__create_maps\n", __func__);
+		pr_debug("%s: perf_evlist__create_maps\n", __func__);
 		goto out_delete_evlist;
 	}
 
@@ -144,5 +142,3 @@ out_delete_evlist:
 out:
 	return err;
 }
-
-DEFINE_SUITE("syscalls:sys_enter_openat event fields", syscall_openat_tp_fields);

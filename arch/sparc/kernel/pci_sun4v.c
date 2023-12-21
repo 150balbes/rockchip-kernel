@@ -193,7 +193,7 @@ static void *dma_4v_alloc_coherent(struct device *dev, size_t size,
 
 	size = IO_PAGE_ALIGN(size);
 	order = get_order(size);
-	if (unlikely(order > MAX_ORDER))
+	if (unlikely(order >= MAX_ORDER))
 		return NULL;
 
 	npages = size >> IO_PAGE_SHIFT;
@@ -486,7 +486,7 @@ static int dma_4v_map_sg(struct device *dev, struct scatterlist *sglist,
 
 	iommu = dev->archdata.iommu;
 	if (nelems == 0 || !iommu)
-		return -EINVAL;
+		return 0;
 	atu = iommu->atu;
 
 	prot = HV_PCI_MAP_ATTR_READ;
@@ -594,6 +594,7 @@ static int dma_4v_map_sg(struct device *dev, struct scatterlist *sglist,
 
 	if (outcount < incount) {
 		outs = sg_next(outs);
+		outs->dma_address = DMA_MAPPING_ERROR;
 		outs->dma_length = 0;
 	}
 
@@ -610,6 +611,7 @@ iommu_map_failed:
 			iommu_tbl_range_free(tbl, vaddr, npages,
 					     IOMMU_ERROR_CODE);
 			/* XXX demap? XXX */
+			s->dma_address = DMA_MAPPING_ERROR;
 			s->dma_length = 0;
 		}
 		if (s == outs)
@@ -617,7 +619,7 @@ iommu_map_failed:
 	}
 	local_irq_restore(flags);
 
-	return -EINVAL;
+	return 0;
 }
 
 static void dma_4v_unmap_sg(struct device *dev, struct scatterlist *sglist,

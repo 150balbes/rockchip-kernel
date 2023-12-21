@@ -4,13 +4,13 @@
 $id: http://devicetree.org/schemas/mtd/arasan,nand-controller.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Arasan NAND Flash Controller with ONFI 3.1 support
+title: Arasan NAND Flash Controller with ONFI 3.1 support device tree bindings
 
 allOf:
-  - $ref: nand-controller.yaml
+  - $ref: "nand-controller.yaml"
 
 maintainers:
-  - Michal Simek <michal.simek@amd.com>
+  - Naga Sureshkumar Relli <naga.sureshkumar.relli@xilinx.com>
 
 properties:
   compatible:
@@ -35,6 +35,9 @@ properties:
   interrupts:
     maxItems: 1
 
+  "#address-cells": true
+  "#size-cells": true
+
 required:
   - compatible
   - reg
@@ -42,7 +45,7 @@ required:
   - clock-names
   - interrupts
 
-unevaluatedProperties: true
+additionalProperties: true
 
 examples:
   - |

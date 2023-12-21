@@ -361,11 +361,8 @@ static int venc_runtime_get(struct venc_device *venc)
 	DSSDBG("venc_runtime_get\n");
 
 	r = pm_runtime_get_sync(&venc->pdev->dev);
-	if (WARN_ON(r < 0)) {
-		pm_runtime_put_noidle(&venc->pdev->dev);
-		return r;
-	}
-	return 0;
+	WARN_ON(r < 0);
+	return r < 0 ? r : 0;
 }
 
 static void venc_runtime_put(struct venc_device *venc)
@@ -733,7 +730,9 @@ static int venc_init_output(struct venc_device *venc)
 	out->type = OMAP_DISPLAY_TYPE_VENC;
 	out->name = "venc.0";
 	out->dispc_channel = OMAP_DSS_CHANNEL_DIGIT;
+	out->owner = THIS_MODULE;
 	out->of_port = 0;
+	out->ops_flags = OMAP_DSS_DEVICE_OP_MODES;
 
 	r = omapdss_device_init_output(out, &venc->bridge);
 	if (r < 0) {
@@ -806,6 +805,7 @@ static const struct soc_device_attribute venc_soc_devices[] = {
 static int venc_probe(struct platform_device *pdev)
 {
 	struct venc_device *venc;
+	struct resource *venc_mem;
 	int r;
 
 	venc = kzalloc(sizeof(*venc), GFP_KERNEL);
@@ -822,7 +822,8 @@ static int venc_probe(struct platform_device *pdev)
 
 	venc->config = &venc_config_pal_trm;
 
-	venc->base = devm_platform_ioremap_resource(pdev, 0);
+	venc_mem = platform_get_resource(venc->pdev, IORESOURCE_MEM, 0);
+	venc->base = devm_ioremap_resource(&pdev->dev, venc_mem);
 	if (IS_ERR(venc->base)) {
 		r = PTR_ERR(venc->base);
 		goto err_free;
@@ -865,7 +866,7 @@ err_free:
 	return r;
 }
 
-static void venc_remove(struct platform_device *pdev)
+static int venc_remove(struct platform_device *pdev)
 {
 	struct venc_device *venc = platform_get_drvdata(pdev);
 
@@ -876,9 +877,10 @@ static void venc_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	kfree(venc);
+	return 0;
 }
 
-static __maybe_unused int venc_runtime_suspend(struct device *dev)
+static int venc_runtime_suspend(struct device *dev)
 {
 	struct venc_device *venc = dev_get_drvdata(dev);
 
@@ -888,7 +890,7 @@ static __maybe_unused int venc_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static __maybe_unused int venc_runtime_resume(struct device *dev)
+static int venc_runtime_resume(struct device *dev)
 {
 	struct venc_device *venc = dev_get_drvdata(dev);
 
@@ -899,7 +901,8 @@ static __maybe_unused int venc_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops venc_pm_ops = {
-	SET_RUNTIME_PM_OPS(venc_runtime_suspend, venc_runtime_resume, NULL)
+	.runtime_suspend = venc_runtime_suspend,
+	.runtime_resume = venc_runtime_resume,
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 
@@ -912,7 +915,7 @@ static const struct of_device_id venc_of_match[] = {
 
 struct platform_driver omap_venchw_driver = {
 	.probe		= venc_probe,
-	.remove_new	= venc_remove,
+	.remove		= venc_remove,
 	.driver         = {
 		.name   = "omapdss_venc",
 		.pm	= &venc_pm_ops,

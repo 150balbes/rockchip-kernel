@@ -243,6 +243,10 @@ DECLARE_PER_CPU(struct cpuinfo_ia64, ia64_cpu_info);
 
 extern void print_cpu_info (struct cpuinfo_ia64 *);
 
+typedef struct {
+	unsigned long seg;
+} mm_segment_t;
+
 #define SET_UNALIGN_CTL(task,value)								\
 ({												\
 	(task)->thread.flags = (((task)->thread.flags & ~IA64_THREAD_UAC_MASK)			\
@@ -318,8 +322,15 @@ struct thread_struct {
 struct mm_struct;
 struct task_struct;
 
+/*
+ * Free all resources held by a thread. This is called after the
+ * parent of DEAD_TASK has collected the exit status of the task via
+ * wait().
+ */
+#define release_thread(dead_task)
+
 /* Get wait channel for task P.  */
-extern unsigned long __get_wchan (struct task_struct *p);
+extern unsigned long get_wchan (struct task_struct *p);
 
 /* Return instruction pointer of blocked task TSK.  */
 #define KSTK_EIP(tsk)					\

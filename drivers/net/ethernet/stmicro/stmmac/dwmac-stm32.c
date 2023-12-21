@@ -371,7 +371,7 @@ static int stm32_dwmac_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	plat_dat = stmmac_probe_config_dt(pdev, stmmac_res.mac);
+	plat_dat = stmmac_probe_config_dt(pdev, &stmmac_res.mac);
 	if (IS_ERR(plat_dat))
 		return PTR_ERR(plat_dat);
 
@@ -417,13 +417,12 @@ err_remove_config_dt:
 	return ret;
 }
 
-static void stm32_dwmac_remove(struct platform_device *pdev)
+static int stm32_dwmac_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct stmmac_priv *priv = netdev_priv(ndev);
+	int ret = stmmac_dvr_remove(&pdev->dev);
 	struct stm32_dwmac *dwmac = priv->plat->bsp_priv;
-
-	stmmac_dvr_remove(&pdev->dev);
 
 	stm32_dwmac_clk_disable(priv->plat->bsp_priv);
 
@@ -431,6 +430,8 @@ static void stm32_dwmac_remove(struct platform_device *pdev)
 		dev_pm_clear_wake_irq(&pdev->dev);
 		device_init_wakeup(&pdev->dev, false);
 	}
+
+	return ret;
 }
 
 static int stm32mp1_suspend(struct stm32_dwmac *dwmac)
@@ -526,7 +527,7 @@ MODULE_DEVICE_TABLE(of, stm32_dwmac_match);
 
 static struct platform_driver stm32_dwmac_driver = {
 	.probe  = stm32_dwmac_probe,
-	.remove_new = stm32_dwmac_remove,
+	.remove = stm32_dwmac_remove,
 	.driver = {
 		.name           = "stm32-dwmac",
 		.pm		= &stm32_dwmac_pm_ops,

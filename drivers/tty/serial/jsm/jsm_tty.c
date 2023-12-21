@@ -300,8 +300,8 @@ static void jsm_tty_close(struct uart_port *port)
 }
 
 static void jsm_tty_set_termios(struct uart_port *port,
-				struct ktermios *termios,
-				const struct ktermios *old_termios)
+				 struct ktermios *termios,
+				 struct ktermios *old_termios)
 {
 	unsigned long lock_flags;
 	struct jsm_channel *channel =
@@ -606,22 +606,18 @@ void jsm_input(struct jsm_channel *ch)
 
 		if (I_PARMRK(tp) || I_BRKINT(tp) || I_INPCK(tp)) {
 			for (i = 0; i < s; i++) {
-				u8 chr   = ch->ch_rqueue[tail + i];
-				u8 error = ch->ch_equeue[tail + i];
-				char flag = TTY_NORMAL;
-
 				/*
-				 * Give the Linux ld the flags in the format it
-				 * likes.
+				 * Give the Linux ld the flags in the
+				 * format it likes.
 				 */
-				if (error & UART_LSR_BI)
-					flag = TTY_BREAK;
-				else if (error & UART_LSR_PE)
-					flag = TTY_PARITY;
-				else if (error & UART_LSR_FE)
-					flag = TTY_FRAME;
-
-				tty_insert_flip_char(port, chr, flag);
+				if (*(ch->ch_equeue +tail +i) & UART_LSR_BI)
+					tty_insert_flip_char(port, *(ch->ch_rqueue +tail +i),  TTY_BREAK);
+				else if (*(ch->ch_equeue +tail +i) & UART_LSR_PE)
+					tty_insert_flip_char(port, *(ch->ch_rqueue +tail +i), TTY_PARITY);
+				else if (*(ch->ch_equeue +tail +i) & UART_LSR_FE)
+					tty_insert_flip_char(port, *(ch->ch_rqueue +tail +i), TTY_FRAME);
+				else
+					tty_insert_flip_char(port, *(ch->ch_rqueue +tail +i), TTY_NORMAL);
 			}
 		} else {
 			tty_insert_flip_string(port, ch->ch_rqueue + tail, s);
@@ -749,8 +745,7 @@ void jsm_check_queue_flow_control(struct jsm_channel *ch)
 	int qleft;
 
 	/* Store how much space we have left in the queue */
-	qleft = ch->ch_r_tail - ch->ch_r_head - 1;
-	if (qleft < 0)
+	if ((qleft = ch->ch_r_tail - ch->ch_r_head - 1) < 0)
 		qleft += RQUEUEMASK + 1;
 
 	/*

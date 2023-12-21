@@ -36,27 +36,31 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/swap.h>
+#include <linux/swiotlb.h>
 
+#include <drm/drm_agpsupport.h>
+#include <drm/drm_debugfs.h>
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
 #include <drm/drm_prime.h>
 #include <drm/radeon_drm.h>
-#include <drm/ttm/ttm_bo.h>
+#include <drm/ttm/ttm_bo_api.h>
+#include <drm/ttm/ttm_bo_driver.h>
+#include <drm/ttm/ttm_module.h>
+#include <drm/ttm/ttm_page_alloc.h>
 #include <drm/ttm/ttm_placement.h>
-#include <drm/ttm/ttm_range_manager.h>
-#include <drm/ttm/ttm_tt.h>
 
 #include "radeon_reg.h"
 #include "radeon.h"
-#include "radeon_ttm.h"
 
-static void radeon_ttm_debugfs_init(struct radeon_device *rdev);
+static int radeon_ttm_debugfs_init(struct radeon_device *rdev);
+static void radeon_ttm_debugfs_fini(struct radeon_device *rdev);
 
-static int radeon_ttm_tt_bind(struct ttm_device *bdev, struct ttm_tt *ttm,
+static int radeon_ttm_tt_bind(struct ttm_bo_device *bdev,
+			      struct ttm_tt *ttm,
 			      struct ttm_resource *bo_mem);
-static void radeon_ttm_tt_unbind(struct ttm_device *bdev, struct ttm_tt *ttm);
 
-struct radeon_device *radeon_get_rdev(struct ttm_device *bdev)
+struct radeon_device *radeon_get_rdev(struct ttm_bo_device *bdev)
 {
 	struct radeon_mman *mman;
 	struct radeon_device *rdev;
@@ -85,7 +89,7 @@ static void radeon_evict_flags(struct ttm_buffer_object *bo,
 		.fpfn = 0,
 		.lpfn = 0,
 		.mem_type = TTM_PL_SYSTEM,
-		.flags = 0
+		.flags = TTM_PL_MASK_CACHING
 	};
 
 	struct radeon_bo *rbo;
@@ -98,12 +102,12 @@ static void radeon_evict_flags(struct ttm_buffer_object *bo,
 		return;
 	}
 	rbo = container_of(bo, struct radeon_bo, tbo);
-	switch (bo->resource->mem_type) {
+	switch (bo->mem.mem_type) {
 	case TTM_PL_VRAM:
 		if (rbo->rdev->ring[radeon_copy_ring_index(rbo->rdev)].ready == false)
 			radeon_ttm_placement_from_domain(rbo, RADEON_GEM_DOMAIN_CPU);
 		else if (rbo->rdev->mc.visible_vram_size < rbo->rdev->mc.real_vram_size &&
-			 bo->resource->start < (rbo->rdev->mc.visible_vram_size >> PAGE_SHIFT)) {
+			 bo->mem.start < (rbo->rdev->mc.visible_vram_size >> PAGE_SHIFT)) {
 			unsigned fpfn = rbo->rdev->mc.visible_vram_size >> PAGE_SHIFT;
 			int i;
 
@@ -135,8 +139,19 @@ static void radeon_evict_flags(struct ttm_buffer_object *bo,
 	*placement = rbo->placement;
 }
 
+static int radeon_verify_access(struct ttm_buffer_object *bo, struct file *filp)
+{
+	struct radeon_bo *rbo = container_of(bo, struct radeon_bo, tbo);
+	struct radeon_device *rdev = radeon_get_rdev(bo->bdev);
+
+	if (radeon_ttm_tt_has_userptr(rdev, bo->ttm))
+		return -EPERM;
+	return drm_vma_node_verify_access(&rbo->tbo.base.vma_node,
+					  filp->private_data);
+}
+
 static int radeon_move_blit(struct ttm_buffer_object *bo,
-			bool evict,
+			bool evict, bool no_wait_gpu,
 			struct ttm_resource *new_mem,
 			struct ttm_resource *old_mem)
 {
@@ -180,7 +195,7 @@ static int radeon_move_blit(struct ttm_buffer_object *bo,
 
 	BUILD_BUG_ON((PAGE_SIZE % RADEON_GPU_PAGE_SIZE) != 0);
 
-	num_pages = PFN_UP(new_mem->size) * (PAGE_SIZE / RADEON_GPU_PAGE_SIZE);
+	num_pages = new_mem->num_pages * (PAGE_SIZE / RADEON_GPU_PAGE_SIZE);
 	fence = radeon_copy(rdev, old_start, new_start, num_pages, bo->base.resv);
 	if (IS_ERR(fence))
 		return PTR_ERR(fence);
@@ -190,81 +205,163 @@ static int radeon_move_blit(struct ttm_buffer_object *bo,
 	return r;
 }
 
-static int radeon_bo_move(struct ttm_buffer_object *bo, bool evict,
-			  struct ttm_operation_ctx *ctx,
-			  struct ttm_resource *new_mem,
-			  struct ttm_place *hop)
+static int radeon_move_vram_ram(struct ttm_buffer_object *bo,
+				bool evict, bool interruptible,
+				bool no_wait_gpu,
+				struct ttm_resource *new_mem)
 {
-	struct ttm_resource *old_mem = bo->resource;
-	struct radeon_device *rdev;
-	struct radeon_bo *rbo;
+	struct ttm_operation_ctx ctx = { interruptible, no_wait_gpu };
+	struct ttm_resource *old_mem = &bo->mem;
+	struct ttm_resource tmp_mem;
+	struct ttm_place placements;
+	struct ttm_placement placement;
 	int r;
 
-	if (new_mem->mem_type == TTM_PL_TT) {
-		r = radeon_ttm_tt_bind(bo->bdev, bo->ttm, new_mem);
-		if (r)
-			return r;
+	tmp_mem = *new_mem;
+	tmp_mem.mm_node = NULL;
+	placement.num_placement = 1;
+	placement.placement = &placements;
+	placement.num_busy_placement = 1;
+	placement.busy_placement = &placements;
+	placements.fpfn = 0;
+	placements.lpfn = 0;
+	placements.mem_type = TTM_PL_TT;
+	placements.flags = TTM_PL_MASK_CACHING;
+	r = ttm_bo_mem_space(bo, &placement, &tmp_mem, &ctx);
+	if (unlikely(r)) {
+		return r;
 	}
 
-	r = ttm_bo_wait_ctx(bo, ctx);
+	r = ttm_tt_set_placement_caching(bo->ttm, tmp_mem.placement);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+
+	r = ttm_tt_populate(bo->bdev, bo->ttm, &ctx);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+
+	r = radeon_ttm_tt_bind(bo->bdev, bo->ttm, &tmp_mem);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+	r = radeon_move_blit(bo, true, no_wait_gpu, &tmp_mem, old_mem);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+	r = ttm_bo_move_ttm(bo, &ctx, new_mem);
+out_cleanup:
+	ttm_resource_free(bo, &tmp_mem);
+	return r;
+}
+
+static int radeon_move_ram_vram(struct ttm_buffer_object *bo,
+				bool evict, bool interruptible,
+				bool no_wait_gpu,
+				struct ttm_resource *new_mem)
+{
+	struct ttm_operation_ctx ctx = { interruptible, no_wait_gpu };
+	struct ttm_resource *old_mem = &bo->mem;
+	struct ttm_resource tmp_mem;
+	struct ttm_placement placement;
+	struct ttm_place placements;
+	int r;
+
+	tmp_mem = *new_mem;
+	tmp_mem.mm_node = NULL;
+	placement.num_placement = 1;
+	placement.placement = &placements;
+	placement.num_busy_placement = 1;
+	placement.busy_placement = &placements;
+	placements.fpfn = 0;
+	placements.lpfn = 0;
+	placements.mem_type = TTM_PL_TT;
+	placements.flags = TTM_PL_MASK_CACHING;
+	r = ttm_bo_mem_space(bo, &placement, &tmp_mem, &ctx);
+	if (unlikely(r)) {
+		return r;
+	}
+	r = ttm_bo_move_ttm(bo, &ctx, &tmp_mem);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+	r = radeon_move_blit(bo, true, no_wait_gpu, new_mem, old_mem);
+	if (unlikely(r)) {
+		goto out_cleanup;
+	}
+out_cleanup:
+	ttm_resource_free(bo, &tmp_mem);
+	return r;
+}
+
+static int radeon_bo_move(struct ttm_buffer_object *bo, bool evict,
+			  struct ttm_operation_ctx *ctx,
+			  struct ttm_resource *new_mem)
+{
+	struct radeon_device *rdev;
+	struct radeon_bo *rbo;
+	struct ttm_resource *old_mem = &bo->mem;
+	int r;
+
+	r = ttm_bo_wait(bo, ctx->interruptible, ctx->no_wait_gpu);
 	if (r)
 		return r;
 
+	/* Can't move a pinned BO */
 	rbo = container_of(bo, struct radeon_bo, tbo);
+	if (WARN_ON_ONCE(rbo->pin_count > 0))
+		return -EINVAL;
+
 	rdev = radeon_get_rdev(bo->bdev);
-	if (!old_mem || (old_mem->mem_type == TTM_PL_SYSTEM &&
-			 bo->ttm == NULL)) {
+	if (old_mem->mem_type == TTM_PL_SYSTEM && bo->ttm == NULL) {
 		ttm_bo_move_null(bo, new_mem);
-		goto out;
+		return 0;
 	}
-	if (old_mem->mem_type == TTM_PL_SYSTEM &&
-	    new_mem->mem_type == TTM_PL_TT) {
+	if ((old_mem->mem_type == TTM_PL_TT &&
+	     new_mem->mem_type == TTM_PL_SYSTEM) ||
+	    (old_mem->mem_type == TTM_PL_SYSTEM &&
+	     new_mem->mem_type == TTM_PL_TT)) {
+		/* bind is enough */
 		ttm_bo_move_null(bo, new_mem);
-		goto out;
+		return 0;
+	}
+	if (!rdev->ring[radeon_copy_ring_index(rdev)].ready ||
+	    rdev->asic->copy.copy == NULL) {
+		/* use memcpy */
+		goto memcpy;
 	}
 
-	if (old_mem->mem_type == TTM_PL_TT &&
+	if (old_mem->mem_type == TTM_PL_VRAM &&
 	    new_mem->mem_type == TTM_PL_SYSTEM) {
-		radeon_ttm_tt_unbind(bo->bdev, bo->ttm);
-		ttm_resource_free(bo, &bo->resource);
-		ttm_bo_assign_mem(bo, new_mem);
-		goto out;
-	}
-	if (rdev->ring[radeon_copy_ring_index(rdev)].ready &&
-	    rdev->asic->copy.copy != NULL) {
-		if ((old_mem->mem_type == TTM_PL_SYSTEM &&
-		     new_mem->mem_type == TTM_PL_VRAM) ||
-		    (old_mem->mem_type == TTM_PL_VRAM &&
-		     new_mem->mem_type == TTM_PL_SYSTEM)) {
-			hop->fpfn = 0;
-			hop->lpfn = 0;
-			hop->mem_type = TTM_PL_TT;
-			hop->flags = 0;
-			return -EMULTIHOP;
-		}
-
-		r = radeon_move_blit(bo, evict, new_mem, old_mem);
+		r = radeon_move_vram_ram(bo, evict, ctx->interruptible,
+					ctx->no_wait_gpu, new_mem);
+	} else if (old_mem->mem_type == TTM_PL_SYSTEM &&
+		   new_mem->mem_type == TTM_PL_VRAM) {
+		r = radeon_move_ram_vram(bo, evict, ctx->interruptible,
+					    ctx->no_wait_gpu, new_mem);
 	} else {
-		r = -ENODEV;
+		r = radeon_move_blit(bo, evict, ctx->no_wait_gpu,
+				     new_mem, old_mem);
 	}
 
 	if (r) {
+memcpy:
 		r = ttm_bo_move_memcpy(bo, ctx, new_mem);
-		if (r)
+		if (r) {
 			return r;
+		}
 	}
 
-out:
 	/* update statistics */
-	atomic64_add(bo->base.size, &rdev->num_bytes_moved);
-	radeon_bo_move_notify(bo);
+	atomic64_add((u64)bo->num_pages << PAGE_SHIFT, &rdev->num_bytes_moved);
 	return 0;
 }
 
-static int radeon_ttm_io_mem_reserve(struct ttm_device *bdev, struct ttm_resource *mem)
+static int radeon_ttm_io_mem_reserve(struct ttm_bo_device *bdev, struct ttm_resource *mem)
 {
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
-	size_t bus_size = (size_t)mem->size;
+	size_t bus_size = (size_t)mem->num_pages << PAGE_SHIFT;
 
 	switch (mem->mem_type) {
 	case TTM_PL_SYSTEM:
@@ -276,8 +373,7 @@ static int radeon_ttm_io_mem_reserve(struct ttm_device *bdev, struct ttm_resourc
 			/* RADEON_IS_AGP is set only if AGP is active */
 			mem->bus.offset = (mem->start << PAGE_SHIFT) +
 				rdev->mc.agp_base;
-			mem->bus.is_iomem = !rdev->agp->cant_use_aperture;
-			mem->bus.caching = ttm_write_combined;
+			mem->bus.is_iomem = !rdev->ddev->agp->cant_use_aperture;
 		}
 #endif
 		break;
@@ -288,13 +384,17 @@ static int radeon_ttm_io_mem_reserve(struct ttm_device *bdev, struct ttm_resourc
 			return -EINVAL;
 		mem->bus.offset += rdev->mc.aper_base;
 		mem->bus.is_iomem = true;
-		mem->bus.caching = ttm_write_combined;
 #ifdef __alpha__
 		/*
 		 * Alpha: use bus.addr to hold the ioremap() return,
 		 * so we can modify bus.base below.
 		 */
-		mem->bus.addr = ioremap_wc(mem->bus.offset, bus_size);
+		if (mem->placement & TTM_PL_FLAG_WC)
+			mem->bus.addr =
+				ioremap_wc(mem->bus.offset, bus_size);
+		else
+			mem->bus.addr =
+				ioremap(mem->bus.offset, bus_size);
 		if (!mem->bus.addr)
 			return -ENOMEM;
 
@@ -305,7 +405,7 @@ static int radeon_ttm_io_mem_reserve(struct ttm_device *bdev, struct ttm_resourc
 		 * access, as done in ttm_bo_vm_fault().
 		 */
 		mem->bus.offset = (mem->bus.offset & 0x0ffffffffUL) +
-			rdev->hose->dense_mem_base;
+			rdev->ddev->hose->dense_mem_base;
 #endif
 		break;
 	default:
@@ -318,7 +418,7 @@ static int radeon_ttm_io_mem_reserve(struct ttm_device *bdev, struct ttm_resourc
  * TTM backend functions.
  */
 struct radeon_ttm_tt {
-	struct ttm_tt		ttm;
+	struct ttm_dma_tt		ttm;
 	u64				offset;
 
 	uint64_t			userptr;
@@ -328,7 +428,7 @@ struct radeon_ttm_tt {
 };
 
 /* prepare the sg table with the user pages */
-static int radeon_ttm_tt_pin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm)
+static int radeon_ttm_tt_pin_userptr(struct ttm_bo_device *bdev, struct ttm_tt *ttm)
 {
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
 	struct radeon_ttm_tt *gtt = (void *)ttm;
@@ -345,7 +445,7 @@ static int radeon_ttm_tt_pin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm
 	if (gtt->userflags & RADEON_GEM_USERPTR_ANONONLY) {
 		/* check that we only pin down anonymous memory
 		   to prevent problems with writeback */
-		unsigned long end = gtt->userptr + (u64)ttm->num_pages * PAGE_SIZE;
+		unsigned long end = gtt->userptr + ttm->num_pages * PAGE_SIZE;
 		struct vm_area_struct *vma;
 		vma = find_vma(gtt->usermm, gtt->userptr);
 		if (!vma || vma->vm_file || vma->vm_end < end)
@@ -358,7 +458,7 @@ static int radeon_ttm_tt_pin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm
 		struct page **pages = ttm->pages + pinned;
 
 		r = get_user_pages(userptr, num_pages, write ? FOLL_WRITE : 0,
-				   pages);
+				   pages, NULL);
 		if (r < 0)
 			goto release_pages;
 
@@ -367,7 +467,7 @@ static int radeon_ttm_tt_pin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm
 	} while (pinned < ttm->num_pages);
 
 	r = sg_alloc_table_from_pages(ttm->sg, ttm->pages, ttm->num_pages, 0,
-				      (u64)ttm->num_pages << PAGE_SHIFT,
+				      ttm->num_pages << PAGE_SHIFT,
 				      GFP_KERNEL);
 	if (r)
 		goto release_sg;
@@ -376,8 +476,8 @@ static int radeon_ttm_tt_pin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm
 	if (r)
 		goto release_sg;
 
-	drm_prime_sg_to_dma_addr_array(ttm->sg, gtt->ttm.dma_address,
-				       ttm->num_pages);
+	drm_prime_sg_to_page_addr_arrays(ttm->sg, ttm->pages,
+					 gtt->ttm.dma_address, ttm->num_pages);
 
 	return 0;
 
@@ -389,7 +489,7 @@ release_pages:
 	return r;
 }
 
-static void radeon_ttm_tt_unpin_userptr(struct ttm_device *bdev, struct ttm_tt *ttm)
+static void radeon_ttm_tt_unpin_userptr(struct ttm_bo_device *bdev, struct ttm_tt *ttm)
 {
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
 	struct radeon_ttm_tt *gtt = (void *)ttm;
@@ -400,7 +500,7 @@ static void radeon_ttm_tt_unpin_userptr(struct ttm_device *bdev, struct ttm_tt *
 		DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
 
 	/* double check that we don't free the table twice */
-	if (!ttm->sg || !ttm->sg->sgl)
+	if (!ttm->sg->sgl)
 		return;
 
 	/* free the sg table and pages again */
@@ -425,7 +525,7 @@ static bool radeon_ttm_backend_is_bound(struct ttm_tt *ttm)
 	return (gtt->bound);
 }
 
-static int radeon_ttm_backend_bind(struct ttm_device *bdev,
+static int radeon_ttm_backend_bind(struct ttm_bo_device *bdev,
 				   struct ttm_tt *ttm,
 				   struct ttm_resource *bo_mem)
 {
@@ -445,15 +545,15 @@ static int radeon_ttm_backend_bind(struct ttm_device *bdev,
 
 	gtt->offset = (unsigned long)(bo_mem->start << PAGE_SHIFT);
 	if (!ttm->num_pages) {
-		WARN(1, "nothing to bind %u pages for mreg %p back %p!\n",
+		WARN(1, "nothing to bind %lu pages for mreg %p back %p!\n",
 		     ttm->num_pages, bo_mem, ttm);
 	}
-	if (ttm->caching == ttm_cached)
+	if (ttm->caching_state == tt_cached)
 		flags |= RADEON_GART_PAGE_SNOOP;
 	r = radeon_gart_bind(rdev, gtt->offset, ttm->num_pages,
 			     ttm->pages, gtt->ttm.dma_address, flags);
 	if (r) {
-		DRM_ERROR("failed to bind %u pages at 0x%08X\n",
+		DRM_ERROR("failed to bind %lu pages at 0x%08X\n",
 			  ttm->num_pages, (unsigned)gtt->offset);
 		return r;
 	}
@@ -461,7 +561,7 @@ static int radeon_ttm_backend_bind(struct ttm_device *bdev,
 	return 0;
 }
 
-static void radeon_ttm_backend_unbind(struct ttm_device *bdev, struct ttm_tt *ttm)
+static void radeon_ttm_backend_unbind(struct ttm_bo_device *bdev, struct ttm_tt *ttm)
 {
 	struct radeon_ttm_tt *gtt = (void *)ttm;
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
@@ -477,46 +577,40 @@ static void radeon_ttm_backend_unbind(struct ttm_device *bdev, struct ttm_tt *tt
 	gtt->bound = false;
 }
 
-static void radeon_ttm_backend_destroy(struct ttm_device *bdev, struct ttm_tt *ttm)
+static void radeon_ttm_backend_destroy(struct ttm_bo_device *bdev, struct ttm_tt *ttm)
 {
 	struct radeon_ttm_tt *gtt = (void *)ttm;
 
-	ttm_tt_fini(&gtt->ttm);
+	radeon_ttm_backend_unbind(bdev, ttm);
+	ttm_tt_destroy_common(bdev, ttm);
+
+	ttm_dma_tt_fini(&gtt->ttm);
 	kfree(gtt);
 }
 
 static struct ttm_tt *radeon_ttm_tt_create(struct ttm_buffer_object *bo,
 					   uint32_t page_flags)
 {
+	struct radeon_device *rdev;
 	struct radeon_ttm_tt *gtt;
-	enum ttm_caching caching;
-	struct radeon_bo *rbo;
-#if IS_ENABLED(CONFIG_AGP)
-	struct radeon_device *rdev = radeon_get_rdev(bo->bdev);
 
+	rdev = radeon_get_rdev(bo->bdev);
+#if IS_ENABLED(CONFIG_AGP)
 	if (rdev->flags & RADEON_IS_AGP) {
-		return ttm_agp_tt_create(bo, rdev->agp->bridge, page_flags);
+		return ttm_agp_tt_create(bo, rdev->ddev->agp->bridge,
+					 page_flags);
 	}
 #endif
-	rbo = container_of(bo, struct radeon_bo, tbo);
 
 	gtt = kzalloc(sizeof(struct radeon_ttm_tt), GFP_KERNEL);
 	if (gtt == NULL) {
 		return NULL;
 	}
-
-	if (rbo->flags & RADEON_GEM_GTT_UC)
-		caching = ttm_uncached;
-	else if (rbo->flags & RADEON_GEM_GTT_WC)
-		caching = ttm_write_combined;
-	else
-		caching = ttm_cached;
-
-	if (ttm_sg_tt_init(&gtt->ttm, bo, page_flags, caching)) {
+	if (ttm_dma_tt_init(&gtt->ttm, bo, page_flags)) {
 		kfree(gtt);
 		return NULL;
 	}
-	return &gtt->ttm;
+	return &gtt->ttm.ttm;
 }
 
 static struct radeon_ttm_tt *radeon_ttm_tt_to_gtt(struct radeon_device *rdev,
@@ -529,53 +623,79 @@ static struct radeon_ttm_tt *radeon_ttm_tt_to_gtt(struct radeon_device *rdev,
 
 	if (!ttm)
 		return NULL;
-	return container_of(ttm, struct radeon_ttm_tt, ttm);
+	return container_of(ttm, struct radeon_ttm_tt, ttm.ttm);
 }
 
-static int radeon_ttm_tt_populate(struct ttm_device *bdev,
+static int radeon_ttm_tt_populate(struct ttm_bo_device *bdev,
 				  struct ttm_tt *ttm,
 				  struct ttm_operation_ctx *ctx)
 {
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
 	struct radeon_ttm_tt *gtt = radeon_ttm_tt_to_gtt(rdev, ttm);
-	bool slave = !!(ttm->page_flags & TTM_TT_FLAG_EXTERNAL);
+	bool slave = !!(ttm->page_flags & TTM_PAGE_FLAG_SG);
 
 	if (gtt && gtt->userptr) {
 		ttm->sg = kzalloc(sizeof(struct sg_table), GFP_KERNEL);
 		if (!ttm->sg)
 			return -ENOMEM;
 
-		ttm->page_flags |= TTM_TT_FLAG_EXTERNAL;
+		ttm->page_flags |= TTM_PAGE_FLAG_SG;
+		ttm_tt_set_populated(ttm);
 		return 0;
 	}
 
 	if (slave && ttm->sg) {
-		drm_prime_sg_to_dma_addr_array(ttm->sg, gtt->ttm.dma_address,
-					       ttm->num_pages);
+		drm_prime_sg_to_page_addr_arrays(ttm->sg, ttm->pages,
+						 gtt->ttm.dma_address, ttm->num_pages);
+		ttm_tt_set_populated(ttm);
 		return 0;
 	}
 
-	return ttm_pool_alloc(&rdev->mman.bdev.pool, ttm, ctx);
+#if IS_ENABLED(CONFIG_AGP)
+	if (rdev->flags & RADEON_IS_AGP) {
+		return ttm_pool_populate(ttm, ctx);
+	}
+#endif
+
+#ifdef CONFIG_SWIOTLB
+	if (rdev->need_swiotlb && swiotlb_nr_tbl()) {
+		return ttm_dma_populate(&gtt->ttm, rdev->dev, ctx);
+	}
+#endif
+
+	return ttm_populate_and_map_pages(rdev->dev, &gtt->ttm, ctx);
 }
 
-static void radeon_ttm_tt_unpopulate(struct ttm_device *bdev, struct ttm_tt *ttm)
+static void radeon_ttm_tt_unpopulate(struct ttm_bo_device *bdev, struct ttm_tt *ttm)
 {
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
 	struct radeon_ttm_tt *gtt = radeon_ttm_tt_to_gtt(rdev, ttm);
-	bool slave = !!(ttm->page_flags & TTM_TT_FLAG_EXTERNAL);
-
-	radeon_ttm_tt_unbind(bdev, ttm);
+	bool slave = !!(ttm->page_flags & TTM_PAGE_FLAG_SG);
 
 	if (gtt && gtt->userptr) {
 		kfree(ttm->sg);
-		ttm->page_flags &= ~TTM_TT_FLAG_EXTERNAL;
+		ttm->page_flags &= ~TTM_PAGE_FLAG_SG;
 		return;
 	}
 
 	if (slave)
 		return;
 
-	return ttm_pool_free(&rdev->mman.bdev.pool, ttm);
+#if IS_ENABLED(CONFIG_AGP)
+	if (rdev->flags & RADEON_IS_AGP) {
+		ttm_pool_unpopulate(ttm);
+		return;
+	}
+#endif
+
+#ifdef CONFIG_SWIOTLB
+	if (rdev->need_swiotlb && swiotlb_nr_tbl()) {
+		ttm_dma_unpopulate(&gtt->ttm, rdev->dev);
+		return;
+	}
+#endif
+
+	ttm_unmap_and_unpopulate_pages(rdev->dev, &gtt->ttm);
 }
 
 int radeon_ttm_tt_set_userptr(struct radeon_device *rdev,
@@ -593,7 +713,7 @@ int radeon_ttm_tt_set_userptr(struct radeon_device *rdev,
 	return 0;
 }
 
-bool radeon_ttm_tt_is_bound(struct ttm_device *bdev,
+bool radeon_ttm_tt_is_bound(struct ttm_bo_device *bdev,
 			    struct ttm_tt *ttm)
 {
 #if IS_ENABLED(CONFIG_AGP)
@@ -604,7 +724,7 @@ bool radeon_ttm_tt_is_bound(struct ttm_device *bdev,
 	return radeon_ttm_backend_is_bound(ttm);
 }
 
-static int radeon_ttm_tt_bind(struct ttm_device *bdev,
+static int radeon_ttm_tt_bind(struct ttm_bo_device *bdev,
 			      struct ttm_tt *ttm,
 			      struct ttm_resource *bo_mem)
 {
@@ -622,7 +742,7 @@ static int radeon_ttm_tt_bind(struct ttm_device *bdev,
 	return radeon_ttm_backend_bind(bdev, ttm, bo_mem);
 }
 
-static void radeon_ttm_tt_unbind(struct ttm_device *bdev,
+static void radeon_ttm_tt_unbind(struct ttm_bo_device *bdev,
 				 struct ttm_tt *ttm)
 {
 #if IS_ENABLED(CONFIG_AGP)
@@ -636,13 +756,15 @@ static void radeon_ttm_tt_unbind(struct ttm_device *bdev,
 	radeon_ttm_backend_unbind(bdev, ttm);
 }
 
-static void radeon_ttm_tt_destroy(struct ttm_device *bdev,
+static void radeon_ttm_tt_destroy(struct ttm_bo_device *bdev,
 				  struct ttm_tt *ttm)
 {
 #if IS_ENABLED(CONFIG_AGP)
 	struct radeon_device *rdev = radeon_get_rdev(bdev);
 
 	if (rdev->flags & RADEON_IS_AGP) {
+		ttm_agp_unbind(ttm);
+		ttm_tt_destroy_common(bdev, ttm);
 		ttm_agp_destroy(ttm);
 		return;
 	}
@@ -672,14 +794,19 @@ bool radeon_ttm_tt_is_readonly(struct radeon_device *rdev,
 	return !!(gtt->userflags & RADEON_GEM_USERPTR_READONLY);
 }
 
-static struct ttm_device_funcs radeon_bo_driver = {
+static struct ttm_bo_driver radeon_bo_driver = {
 	.ttm_tt_create = &radeon_ttm_tt_create,
 	.ttm_tt_populate = &radeon_ttm_tt_populate,
 	.ttm_tt_unpopulate = &radeon_ttm_tt_unpopulate,
+	.ttm_tt_bind = &radeon_ttm_tt_bind,
+	.ttm_tt_unbind = &radeon_ttm_tt_unbind,
 	.ttm_tt_destroy = &radeon_ttm_tt_destroy,
 	.eviction_valuable = ttm_bo_eviction_valuable,
 	.evict_flags = &radeon_evict_flags,
 	.move = &radeon_bo_move,
+	.verify_access = &radeon_verify_access,
+	.move_notify = &radeon_bo_move_notify,
+	.fault_reserve_notify = &radeon_bo_fault_reserve_notify,
 	.io_mem_reserve = &radeon_ttm_io_mem_reserve,
 };
 
@@ -688,10 +815,10 @@ int radeon_ttm_init(struct radeon_device *rdev)
 	int r;
 
 	/* No others user of address space so set it to 0 */
-	r = ttm_device_init(&rdev->mman.bdev, &radeon_bo_driver, rdev->dev,
+	r = ttm_bo_device_init(&rdev->mman.bdev,
+			       &radeon_bo_driver,
 			       rdev->ddev->anon_inode->i_mapping,
 			       rdev->ddev->vma_offset_manager,
-			       rdev->need_swiotlb,
 			       dma_addressing_limited(&rdev->pdev->dev));
 	if (r) {
 		DRM_ERROR("failed initializing buffer object driver(%d).\n", r);
@@ -733,8 +860,11 @@ int radeon_ttm_init(struct radeon_device *rdev)
 	DRM_INFO("radeon: %uM of GTT memory ready.\n",
 		 (unsigned)(rdev->mc.gtt_size / (1024 * 1024)));
 
-	radeon_ttm_debugfs_init(rdev);
-
+	r = radeon_ttm_debugfs_init(rdev);
+	if (r) {
+		DRM_ERROR("Failed to init debugfs\n");
+		return r;
+	}
 	return 0;
 }
 
@@ -744,7 +874,7 @@ void radeon_ttm_fini(struct radeon_device *rdev)
 
 	if (!rdev->mman.initialized)
 		return;
-
+	radeon_ttm_debugfs_fini(rdev);
 	if (rdev->stolen_vga_memory) {
 		r = radeon_bo_reserve(rdev->stolen_vga_memory, false);
 		if (r == 0) {
@@ -755,7 +885,7 @@ void radeon_ttm_fini(struct radeon_device *rdev)
 	}
 	ttm_range_man_fini(&rdev->mman.bdev, TTM_PL_VRAM);
 	ttm_range_man_fini(&rdev->mman.bdev, TTM_PL_TT);
-	ttm_device_fini(&rdev->mman.bdev);
+	ttm_bo_device_release(&rdev->mman.bdev);
 	radeon_gart_fini(rdev);
 	rdev->mman.initialized = false;
 	DRM_INFO("radeon: ttm finalized\n");
@@ -775,16 +905,74 @@ void radeon_ttm_set_active_vram_size(struct radeon_device *rdev, u64 size)
 	man->size = size >> PAGE_SHIFT;
 }
 
-#if defined(CONFIG_DEBUG_FS)
-
-static int radeon_ttm_page_pool_show(struct seq_file *m, void *data)
+static vm_fault_t radeon_ttm_fault(struct vm_fault *vmf)
 {
-	struct radeon_device *rdev = m->private;
+	struct ttm_buffer_object *bo;
+	struct radeon_device *rdev;
+	vm_fault_t ret;
 
-	return ttm_pool_debugfs(&rdev->mman.bdev.pool, m);
+	bo = (struct ttm_buffer_object *)vmf->vma->vm_private_data;
+	if (bo == NULL)
+		return VM_FAULT_NOPAGE;
+
+	rdev = radeon_get_rdev(bo->bdev);
+	down_read(&rdev->pm.mclk_lock);
+	ret = ttm_bo_vm_fault(vmf);
+	up_read(&rdev->pm.mclk_lock);
+	return ret;
 }
 
-DEFINE_SHOW_ATTRIBUTE(radeon_ttm_page_pool);
+static struct vm_operations_struct radeon_ttm_vm_ops = {
+	.fault = radeon_ttm_fault,
+	.open = ttm_bo_vm_open,
+	.close = ttm_bo_vm_close,
+	.access = ttm_bo_vm_access
+};
+
+int radeon_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	int r;
+	struct drm_file *file_priv = filp->private_data;
+	struct radeon_device *rdev = file_priv->minor->dev->dev_private;
+
+	if (rdev == NULL)
+		return -EINVAL;
+
+	r = ttm_bo_mmap(filp, vma, &rdev->mman.bdev);
+	if (unlikely(r != 0))
+		return r;
+
+	vma->vm_ops = &radeon_ttm_vm_ops;
+	return 0;
+}
+
+#if defined(CONFIG_DEBUG_FS)
+
+static int radeon_mm_dump_table(struct seq_file *m, void *data)
+{
+	struct drm_info_node *node = (struct drm_info_node *)m->private;
+	unsigned ttm_pl = *(int*)node->info_ent->data;
+	struct drm_device *dev = node->minor->dev;
+	struct radeon_device *rdev = dev->dev_private;
+	struct ttm_resource_manager *man = ttm_manager_type(&rdev->mman.bdev, ttm_pl);
+	struct drm_printer p = drm_seq_file_printer(m);
+
+	man->func->debug(man, &p);
+	return 0;
+}
+
+
+static int ttm_pl_vram = TTM_PL_VRAM;
+static int ttm_pl_tt = TTM_PL_TT;
+
+static struct drm_info_list radeon_ttm_debugfs_list[] = {
+	{"radeon_vram_mm", radeon_mm_dump_table, 0, &ttm_pl_vram},
+	{"radeon_gtt_mm", radeon_mm_dump_table, 0, &ttm_pl_tt},
+	{"ttm_page_pool", ttm_page_alloc_debugfs, 0, NULL},
+#ifdef CONFIG_SWIOTLB
+	{"ttm_dma_page_pool", ttm_dma_page_alloc_debugfs, 0, NULL}
+#endif
+};
 
 static int radeon_ttm_vram_open(struct inode *inode, struct file *filep)
 {
@@ -818,7 +1006,7 @@ static ssize_t radeon_ttm_vram_read(struct file *f, char __user *buf,
 		value = RREG32(RADEON_MM_DATA);
 		spin_unlock_irqrestore(&rdev->mmio_idx_lock, flags);
 
-		r = put_user(value, (uint32_t __user *)buf);
+		r = put_user(value, (uint32_t *)buf);
 		if (r)
 			return r;
 
@@ -865,11 +1053,11 @@ static ssize_t radeon_ttm_gtt_read(struct file *f, char __user *buf,
 
 		page = rdev->gart.pages[p];
 		if (page) {
-			ptr = kmap_local_page(page);
+			ptr = kmap(page);
 			ptr += off;
 
 			r = copy_to_user(buf, ptr, cur_size);
-			kunmap_local(ptr);
+			kunmap(rdev->gart.pages[p]);
 		} else
 			r = clear_user(buf, cur_size);
 
@@ -894,23 +1082,43 @@ static const struct file_operations radeon_ttm_gtt_fops = {
 
 #endif
 
-static void radeon_ttm_debugfs_init(struct radeon_device *rdev)
+static int radeon_ttm_debugfs_init(struct radeon_device *rdev)
 {
 #if defined(CONFIG_DEBUG_FS)
+	unsigned count;
+
 	struct drm_minor *minor = rdev->ddev->primary;
 	struct dentry *root = minor->debugfs_root;
 
-	debugfs_create_file("radeon_vram", 0444, root, rdev,
-			    &radeon_ttm_vram_fops);
-	debugfs_create_file("radeon_gtt", 0444, root, rdev,
-			    &radeon_ttm_gtt_fops);
-	debugfs_create_file("ttm_page_pool", 0444, root, rdev,
-			    &radeon_ttm_page_pool_fops);
-	ttm_resource_manager_create_debugfs(ttm_manager_type(&rdev->mman.bdev,
-							     TTM_PL_VRAM),
-					    root, "radeon_vram_mm");
-	ttm_resource_manager_create_debugfs(ttm_manager_type(&rdev->mman.bdev,
-							     TTM_PL_TT),
-					    root, "radeon_gtt_mm");
+	rdev->mman.vram = debugfs_create_file("radeon_vram", S_IFREG | S_IRUGO,
+					      root, rdev,
+					      &radeon_ttm_vram_fops);
+
+	rdev->mman.gtt = debugfs_create_file("radeon_gtt", S_IFREG | S_IRUGO,
+					     root, rdev, &radeon_ttm_gtt_fops);
+
+	count = ARRAY_SIZE(radeon_ttm_debugfs_list);
+
+#ifdef CONFIG_SWIOTLB
+	if (!(rdev->need_swiotlb && swiotlb_nr_tbl()))
+		--count;
+#endif
+
+	return radeon_debugfs_add_files(rdev, radeon_ttm_debugfs_list, count);
+#else
+
+	return 0;
+#endif
+}
+
+static void radeon_ttm_debugfs_fini(struct radeon_device *rdev)
+{
+#if defined(CONFIG_DEBUG_FS)
+
+	debugfs_remove(rdev->mman.vram);
+	rdev->mman.vram = NULL;
+
+	debugfs_remove(rdev->mman.gtt);
+	rdev->mman.gtt = NULL;
 #endif
 }

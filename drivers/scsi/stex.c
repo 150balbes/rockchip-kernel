@@ -109,9 +109,7 @@ enum {
 	TASK_ATTRIBUTE_HEADOFQUEUE		= 0x1,
 	TASK_ATTRIBUTE_ORDERED			= 0x2,
 	TASK_ATTRIBUTE_ACA			= 0x4,
-};
 
-enum {
 	SS_STS_NORMAL				= 0x80000000,
 	SS_STS_DONE				= 0x40000000,
 	SS_STS_HANDSHAKE			= 0x20000000,
@@ -123,9 +121,7 @@ enum {
 	SS_I2H_REQUEST_RESET			= 0x2000,
 
 	SS_MU_OPERATIONAL			= 0x80000000,
-};
 
-enum {
 	STEX_CDB_LENGTH				= 16,
 	STATUS_VAR_LEN				= 128,
 
@@ -402,8 +398,11 @@ static struct status_msg *stex_get_status(struct st_hba *hba)
 static void stex_invalid_field(struct scsi_cmnd *cmd,
 			       void (*done)(struct scsi_cmnd *))
 {
+	cmd->result = (DRIVER_SENSE << 24) | SAM_STAT_CHECK_CONDITION;
+
 	/* "Invalid field in cdb" */
-	scsi_build_sense(cmd, 0, ILLEGAL_REQUEST, 0x24, 0x0);
+	scsi_build_sense_buffer(0, cmd->sense_buffer, ILLEGAL_REQUEST, 0x24,
+				0x0);
 	done(cmd);
 }
 
@@ -544,7 +543,7 @@ stex_ss_send_cmd(struct st_hba *hba, struct req_msg *req, u16 tag)
 	msg_h = (struct st_msg_header *)req - 1;
 	if (likely(cmd)) {
 		msg_h->channel = (u8)cmd->device->channel;
-		msg_h->timeout = cpu_to_le16(scsi_cmd_to_rq(cmd)->timeout / HZ);
+		msg_h->timeout = cpu_to_le16(cmd->request->timeout/HZ);
 	}
 	addr = hba->dma_handle + hba->req_head * hba->rq_size;
 	addr += (hba->ccb[tag].sg_count+4)/11;
@@ -578,7 +577,7 @@ static void return_abnormal_state(struct st_hba *hba, int status)
 		if (ccb->cmd) {
 			scsi_dma_unmap(ccb->cmd);
 			ccb->cmd->result = status << 16;
-			scsi_done(ccb->cmd);
+			ccb->cmd->scsi_done(ccb->cmd);
 			ccb->cmd = NULL;
 		}
 	}
@@ -594,9 +593,9 @@ stex_slave_config(struct scsi_device *sdev)
 	return 0;
 }
 
-static int stex_queuecommand_lck(struct scsi_cmnd *cmd)
+static int
+stex_queuecommand_lck(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
 {
-	void (*done)(struct scsi_cmnd *) = scsi_done;
 	struct st_hba *hba;
 	struct Scsi_Host *host;
 	unsigned int id, lun;
@@ -626,7 +625,7 @@ static int stex_queuecommand_lck(struct scsi_cmnd *cmd)
 		if (page == 0x8 || page == 0x3f) {
 			scsi_sg_copy_from_buffer(cmd, ms10_caching_page,
 						 sizeof(ms10_caching_page));
-			cmd->result = DID_OK << 16;
+			cmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
 			done(cmd);
 		} else
 			stex_invalid_field(cmd, done);
@@ -645,7 +644,7 @@ static int stex_queuecommand_lck(struct scsi_cmnd *cmd)
 		break;
 	case TEST_UNIT_READY:
 		if (id == host->max_id - 1) {
-			cmd->result = DID_OK << 16;
+			cmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
 			done(cmd);
 			return 0;
 		}
@@ -662,7 +661,7 @@ static int stex_queuecommand_lck(struct scsi_cmnd *cmd)
 			(cmd->cmnd[1] & INQUIRY_EVPD) == 0) {
 			scsi_sg_copy_from_buffer(cmd, (void *)console_inq_page,
 						 sizeof(console_inq_page));
-			cmd->result = DID_OK << 16;
+			cmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
 			done(cmd);
 		} else
 			stex_invalid_field(cmd, done);
@@ -681,19 +680,19 @@ static int stex_queuecommand_lck(struct scsi_cmnd *cmd)
 			size_t cp_len = sizeof(ver);
 
 			cp_len = scsi_sg_copy_from_buffer(cmd, &ver, cp_len);
-			if (sizeof(ver) == cp_len)
-				cmd->result = DID_OK << 16;
-			else
-				cmd->result = DID_ERROR << 16;
+			cmd->result = sizeof(ver) == cp_len ?
+				DID_OK << 16 | COMMAND_COMPLETE << 8 :
+				DID_ERROR << 16 | COMMAND_COMPLETE << 8;
 			done(cmd);
 			return 0;
 		}
-		break;
 	default:
 		break;
 	}
 
-	tag = scsi_cmd_to_rq(cmd)->tag;
+	cmd->scsi_done = done;
+
+	tag = cmd->request->tag;
 
 	if (unlikely(tag >= host->can_queue))
 		return SCSI_MLQUEUE_HOST_BUSY;
@@ -737,37 +736,37 @@ static void stex_scsi_done(struct st_ccb *ccb)
 		result = ccb->scsi_status;
 		switch (ccb->scsi_status) {
 		case SAM_STAT_GOOD:
-			result |= DID_OK << 16;
+			result |= DID_OK << 16 | COMMAND_COMPLETE << 8;
 			break;
 		case SAM_STAT_CHECK_CONDITION:
-			result |= DID_OK << 16;
+			result |= DRIVER_SENSE << 24;
 			break;
 		case SAM_STAT_BUSY:
-			result |= DID_BUS_BUSY << 16;
+			result |= DID_BUS_BUSY << 16 | COMMAND_COMPLETE << 8;
 			break;
 		default:
-			result |= DID_ERROR << 16;
+			result |= DID_ERROR << 16 | COMMAND_COMPLETE << 8;
 			break;
 		}
 	}
 	else if (ccb->srb_status & SRB_SEE_SENSE)
-		result = SAM_STAT_CHECK_CONDITION;
+		result = DRIVER_SENSE << 24 | SAM_STAT_CHECK_CONDITION;
 	else switch (ccb->srb_status) {
 		case SRB_STATUS_SELECTION_TIMEOUT:
-			result = DID_NO_CONNECT << 16;
+			result = DID_NO_CONNECT << 16 | COMMAND_COMPLETE << 8;
 			break;
 		case SRB_STATUS_BUSY:
-			result = DID_BUS_BUSY << 16;
+			result = DID_BUS_BUSY << 16 | COMMAND_COMPLETE << 8;
 			break;
 		case SRB_STATUS_INVALID_REQUEST:
 		case SRB_STATUS_ERROR:
 		default:
-			result = DID_ERROR << 16;
+			result = DID_ERROR << 16 | COMMAND_COMPLETE << 8;
 			break;
 	}
 
 	cmd->result = result;
-	scsi_done(cmd);
+	cmd->scsi_done(cmd);
 }
 
 static void stex_copy_data(struct st_ccb *ccb,
@@ -1249,7 +1248,7 @@ static int stex_abort(struct scsi_cmnd *cmd)
 {
 	struct Scsi_Host *host = cmd->device->host;
 	struct st_hba *hba = (struct st_hba *)host->hostdata;
-	u16 tag = scsi_cmd_to_rq(cmd)->tag;
+	u16 tag = cmd->request->tag;
 	void __iomem *base;
 	u32 data;
 	int result = SUCCESS;
@@ -1476,7 +1475,7 @@ static int stex_biosparam(struct scsi_device *sdev,
 	return 0;
 }
 
-static const struct scsi_host_template driver_template = {
+static struct scsi_host_template driver_template = {
 	.module				= THIS_MODULE,
 	.name				= DRV_NAME,
 	.proc_name			= DRV_NAME,

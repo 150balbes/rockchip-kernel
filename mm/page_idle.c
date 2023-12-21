@@ -13,8 +13,6 @@
 #include <linux/page_ext.h>
 #include <linux/page_idle.h>
 
-#include "internal.h"
-
 #define BITMAP_CHUNK_SIZE	sizeof(u64)
 #define BITMAP_CHUNK_BITS	(BITMAP_CHUNK_SIZE * BITS_PER_BYTE)
 
@@ -31,29 +29,34 @@
  *
  * This function tries to get a user memory page by pfn as described above.
  */
-static struct folio *page_idle_get_folio(unsigned long pfn)
+static struct page *page_idle_get_page(unsigned long pfn)
 {
 	struct page *page = pfn_to_online_page(pfn);
-	struct folio *folio;
+	pg_data_t *pgdat;
 
-	if (!page || PageTail(page))
+	if (!page || !PageLRU(page) ||
+	    !get_page_unless_zero(page))
 		return NULL;
 
-	folio = page_folio(page);
-	if (!folio_test_lru(folio) || !folio_try_get(folio))
-		return NULL;
-	if (unlikely(page_folio(page) != folio || !folio_test_lru(folio))) {
-		folio_put(folio);
-		folio = NULL;
+	pgdat = page_pgdat(page);
+	spin_lock_irq(&pgdat->lru_lock);
+	if (unlikely(!PageLRU(page))) {
+		put_page(page);
+		page = NULL;
 	}
-	return folio;
+	spin_unlock_irq(&pgdat->lru_lock);
+	return page;
 }
 
-static bool page_idle_clear_pte_refs_one(struct folio *folio,
+static bool page_idle_clear_pte_refs_one(struct page *page,
 					struct vm_area_struct *vma,
 					unsigned long addr, void *arg)
 {
-	DEFINE_FOLIO_VMA_WALK(pvmw, folio, vma, addr, 0);
+	struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = addr,
+	};
 	bool referenced = false;
 
 	while (page_vma_mapped_walk(&pvmw)) {
@@ -75,18 +78,18 @@ static bool page_idle_clear_pte_refs_one(struct folio *folio,
 	}
 
 	if (referenced) {
-		folio_clear_idle(folio);
+		clear_page_idle(page);
 		/*
 		 * We cleared the referenced bit in a mapping to this page. To
 		 * avoid interference with page reclaim, mark it young so that
-		 * folio_referenced() will return > 0.
+		 * page_referenced() will return > 0.
 		 */
-		folio_set_young(folio);
+		set_page_young(page);
 	}
 	return true;
 }
 
-static void page_idle_clear_pte_refs(struct folio *folio)
+static void page_idle_clear_pte_refs(struct page *page)
 {
 	/*
 	 * Since rwc.try_lock is unused, rwc is effectively immutable, so we
@@ -94,21 +97,22 @@ static void page_idle_clear_pte_refs(struct folio *folio)
 	 */
 	static struct rmap_walk_control rwc = {
 		.rmap_one = page_idle_clear_pte_refs_one,
-		.anon_lock = folio_lock_anon_vma_read,
+		.anon_lock = page_lock_anon_vma_read,
 	};
 	bool need_lock;
 
-	if (!folio_mapped(folio) || !folio_raw_mapping(folio))
+	if (!page_mapped(page) ||
+	    !page_rmapping(page))
 		return;
 
-	need_lock = !folio_test_anon(folio) || folio_test_ksm(folio);
-	if (need_lock && !folio_trylock(folio))
+	need_lock = !PageAnon(page) || PageKsm(page);
+	if (need_lock && !trylock_page(page))
 		return;
 
-	rmap_walk(folio, &rwc);
+	rmap_walk(page, (struct rmap_walk_control *)&rwc);
 
 	if (need_lock)
-		folio_unlock(folio);
+		unlock_page(page);
 }
 
 static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
@@ -116,7 +120,7 @@ static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
 				     loff_t pos, size_t count)
 {
 	u64 *out = (u64 *)buf;
-	struct folio *folio;
+	struct page *page;
 	unsigned long pfn, end_pfn;
 	int bit;
 
@@ -135,19 +139,19 @@ static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
 		bit = pfn % BITMAP_CHUNK_BITS;
 		if (!bit)
 			*out = 0ULL;
-		folio = page_idle_get_folio(pfn);
-		if (folio) {
-			if (folio_test_idle(folio)) {
+		page = page_idle_get_page(pfn);
+		if (page) {
+			if (page_is_idle(page)) {
 				/*
 				 * The page might have been referenced via a
 				 * pte, in which case it is not idle. Clear
 				 * refs and recheck.
 				 */
-				page_idle_clear_pte_refs(folio);
-				if (folio_test_idle(folio))
+				page_idle_clear_pte_refs(page);
+				if (page_is_idle(page))
 					*out |= 1ULL << bit;
 			}
-			folio_put(folio);
+			put_page(page);
 		}
 		if (bit == BITMAP_CHUNK_BITS - 1)
 			out++;
@@ -161,7 +165,7 @@ static ssize_t page_idle_bitmap_write(struct file *file, struct kobject *kobj,
 				      loff_t pos, size_t count)
 {
 	const u64 *in = (u64 *)buf;
-	struct folio *folio;
+	struct page *page;
 	unsigned long pfn, end_pfn;
 	int bit;
 
@@ -179,11 +183,11 @@ static ssize_t page_idle_bitmap_write(struct file *file, struct kobject *kobj,
 	for (; pfn < end_pfn; pfn++) {
 		bit = pfn % BITMAP_CHUNK_BITS;
 		if ((*in >> bit) & 1) {
-			folio = page_idle_get_folio(pfn);
-			if (folio) {
-				page_idle_clear_pte_refs(folio);
-				folio_set_idle(folio);
-				folio_put(folio);
+			page = page_idle_get_page(pfn);
+			if (page) {
+				page_idle_clear_pte_refs(page);
+				set_page_idle(page);
+				put_page(page);
 			}
 		}
 		if (bit == BITMAP_CHUNK_BITS - 1)

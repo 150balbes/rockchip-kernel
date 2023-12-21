@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Defines interfaces for interacting with the Raspberry Pi firmware's
+ * Defines interfaces for interacting wtih the Raspberry Pi firmware's
  * property channel.
  *
  * Copyright © 2015 Broadcom
@@ -228,26 +228,6 @@ static void rpi_register_clk_driver(struct device *dev)
 						-1, NULL, 0);
 }
 
-unsigned int rpi_firmware_clk_get_max_rate(struct rpi_firmware *fw, unsigned int id)
-{
-	struct rpi_firmware_clk_rate_request msg =
-		RPI_FIRMWARE_CLK_RATE_REQUEST(id);
-	int ret;
-
-	ret = rpi_firmware_property(fw, RPI_FIRMWARE_GET_MAX_CLOCK_RATE,
-				    &msg, sizeof(msg));
-	if (ret)
-		/*
-		 * If our firmware doesn't support that operation, or fails, we
-		 * assume the maximum clock rate is absolute maximum we can
-		 * store over our type.
-		 */
-		 return UINT_MAX;
-
-	return le32_to_cpu(msg.rate);
-}
-EXPORT_SYMBOL_GPL(rpi_firmware_clk_get_max_rate);
-
 static void rpi_firmware_delete(struct kref *kref)
 {
 	struct rpi_firmware *fw = container_of(kref, struct rpi_firmware,
@@ -262,13 +242,6 @@ void rpi_firmware_put(struct rpi_firmware *fw)
 	kref_put(&fw->consumers, rpi_firmware_delete);
 }
 EXPORT_SYMBOL_GPL(rpi_firmware_put);
-
-static void devm_rpi_firmware_put(void *data)
-{
-	struct rpi_firmware *fw = data;
-
-	rpi_firmware_put(fw);
-}
 
 static int rpi_firmware_probe(struct platform_device *pdev)
 {
@@ -290,8 +263,9 @@ static int rpi_firmware_probe(struct platform_device *pdev)
 	fw->chan = mbox_request_channel(&fw->cl, 0);
 	if (IS_ERR(fw->chan)) {
 		int ret = PTR_ERR(fw->chan);
-		kfree(fw);
-		return dev_err_probe(dev, ret, "Failed to get mbox channel\n");
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get mbox channel: %d\n", ret);
+		return ret;
 	}
 
 	init_completion(&fw->c);
@@ -330,18 +304,6 @@ static int rpi_firmware_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id rpi_firmware_of_match[] = {
-	{ .compatible = "raspberrypi,bcm2835-firmware", },
-	{},
-};
-MODULE_DEVICE_TABLE(of, rpi_firmware_of_match);
-
-struct device_node *rpi_firmware_find_node(void)
-{
-	return of_find_matching_node(NULL, rpi_firmware_of_match);
-}
-EXPORT_SYMBOL_GPL(rpi_firmware_find_node);
-
 /**
  * rpi_firmware_get - Get pointer to rpi_firmware structure.
  * @firmware_node:    Pointer to the firmware Device Tree node.
@@ -375,27 +337,11 @@ err_put_device:
 }
 EXPORT_SYMBOL_GPL(rpi_firmware_get);
 
-/**
- * devm_rpi_firmware_get - Get pointer to rpi_firmware structure.
- * @firmware_node:    Pointer to the firmware Device Tree node.
- *
- * Returns NULL is the firmware device is not ready.
- */
-struct rpi_firmware *devm_rpi_firmware_get(struct device *dev,
-					   struct device_node *firmware_node)
-{
-	struct rpi_firmware *fw;
-
-	fw = rpi_firmware_get(firmware_node);
-	if (!fw)
-		return NULL;
-
-	if (devm_add_action_or_reset(dev, devm_rpi_firmware_put, fw))
-		return NULL;
-
-	return fw;
-}
-EXPORT_SYMBOL_GPL(devm_rpi_firmware_get);
+static const struct of_device_id rpi_firmware_of_match[] = {
+	{ .compatible = "raspberrypi,bcm2835-firmware", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, rpi_firmware_of_match);
 
 static struct platform_driver rpi_firmware_driver = {
 	.driver = {

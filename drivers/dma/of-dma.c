@@ -79,18 +79,8 @@ static struct dma_chan *of_dma_router_xlate(struct of_phandle_args *dma_spec,
 		ofdma->dma_router->route_free(ofdma->dma_router->dev,
 					      route_data);
 	} else {
-		int ret = 0;
-
 		chan->router = ofdma->dma_router;
 		chan->route_data = route_data;
-
-		if (chan->device->device_router_config)
-			ret = chan->device->device_router_config(chan);
-
-		if (ret) {
-			dma_release_channel(chan);
-			chan = ERR_PTR(ret);
-		}
 	}
 
 err:
@@ -264,7 +254,7 @@ struct dma_chan *of_dma_request_slave_channel(struct device_node *np,
 	}
 
 	/* Silently fail if there is not even the "dmas" property */
-	if (!of_property_present(np, "dmas"))
+	if (!of_find_property(np, "dmas", NULL))
 		return ERR_PTR(-ENODEV);
 
 	count = of_property_count_strings(np, "dma-names");

@@ -56,6 +56,7 @@ double __extendsfdf2(float a)
 #include "r8192U_dm.h"
 #include <linux/usb.h>
 #include <linux/slab.h>
+#include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 /* FIXME: check if 2.6.7 is ok */
 
@@ -95,12 +96,15 @@ MODULE_DESCRIPTION("Linux driver for Realtek RTL8192 USB WiFi cards");
 
 static char *ifname = "wlan%d";
 static int hwwep = 1;  /* default use hw. set 0 to use software security */
+static int channels = 0x3fff;
 
 module_param(ifname, charp, 0644);
 module_param(hwwep, int, 0644);
+module_param(channels, int, 0644);
 
 MODULE_PARM_DESC(ifname, " Net interface name, wlan%d=default");
 MODULE_PARM_DESC(hwwep, " Try to use hardware security support. ");
+MODULE_PARM_DESC(channels, " Channel bitmask for specific locales. NYI");
 
 static int rtl8192_usb_probe(struct usb_interface *intf,
 			     const struct usb_device_id *id);
@@ -452,6 +456,179 @@ static void rtl8192_restart(struct work_struct *work);
 static void watch_dog_timer_callback(struct timer_list *t);
 
 /****************************************************************************
+ *   -----------------------------PROCFS STUFF-------------------------
+ ****************************************************************************/
+
+static struct proc_dir_entry *rtl8192_proc;
+
+static int __maybe_unused proc_get_stats_ap(struct seq_file *m, void *v)
+{
+	struct net_device *dev = m->private;
+	struct r8192_priv *priv = (struct r8192_priv *)ieee80211_priv(dev);
+	struct ieee80211_device *ieee = priv->ieee80211;
+	struct ieee80211_network *target;
+
+	list_for_each_entry(target, &ieee->network_list, list) {
+		const char *wpa = "non_WPA";
+
+		if (target->wpa_ie_len > 0 || target->rsn_ie_len > 0)
+			wpa = "WPA";
+
+		seq_printf(m, "%s %s\n", target->ssid, wpa);
+	}
+
+	return 0;
+}
+
+static int __maybe_unused proc_get_registers(struct seq_file *m, void *v)
+{
+	struct net_device *dev = m->private;
+	int i, n, max = 0xff;
+	u8 byte_rd;
+
+	seq_puts(m, "\n####################page 0##################\n ");
+
+	for (n = 0; n <= max;) {
+		seq_printf(m, "\nD:  %2x > ", n);
+
+		for (i = 0; i < 16 && n <= max; i++, n++) {
+			read_nic_byte(dev, 0x000 | n, &byte_rd);
+			seq_printf(m, "%2x ", byte_rd);
+		}
+	}
+
+	seq_puts(m, "\n####################page 1##################\n ");
+	for (n = 0; n <= max;) {
+		seq_printf(m, "\nD:  %2x > ", n);
+
+		for (i = 0; i < 16 && n <= max; i++, n++) {
+			read_nic_byte(dev, 0x100 | n, &byte_rd);
+			seq_printf(m, "%2x ", byte_rd);
+		}
+	}
+
+	seq_puts(m, "\n####################page 3##################\n ");
+	for (n = 0; n <= max;) {
+		seq_printf(m, "\nD:  %2x > ", n);
+
+		for (i = 0; i < 16 && n <= max; i++, n++) {
+			read_nic_byte(dev, 0x300 | n, &byte_rd);
+			seq_printf(m, "%2x ", byte_rd);
+		}
+	}
+
+	seq_putc(m, '\n');
+	return 0;
+}
+
+static int __maybe_unused proc_get_stats_tx(struct seq_file *m, void *v)
+{
+	struct net_device *dev = m->private;
+	struct r8192_priv *priv = (struct r8192_priv *)ieee80211_priv(dev);
+
+	seq_printf(m,
+		   "TX VI priority ok int: %lu\n"
+		   "TX VI priority error int: %lu\n"
+		   "TX VO priority ok int: %lu\n"
+		   "TX VO priority error int: %lu\n"
+		   "TX BE priority ok int: %lu\n"
+		   "TX BE priority error int: %lu\n"
+		   "TX BK priority ok int: %lu\n"
+		   "TX BK priority error int: %lu\n"
+		   "TX MANAGE priority ok int: %lu\n"
+		   "TX MANAGE priority error int: %lu\n"
+		   "TX BEACON priority ok int: %lu\n"
+		   "TX BEACON priority error int: %lu\n"
+		   "TX queue resume: %lu\n"
+		   "TX queue stopped?: %d\n"
+		   "TX fifo overflow: %lu\n"
+		   "TX VI queue: %d\n"
+		   "TX VO queue: %d\n"
+		   "TX BE queue: %d\n"
+		   "TX BK queue: %d\n"
+		   "TX VI dropped: %lu\n"
+		   "TX VO dropped: %lu\n"
+		   "TX BE dropped: %lu\n"
+		   "TX BK dropped: %lu\n"
+		   "TX total data packets %lu\n",
+		   priv->stats.txviokint,
+		   priv->stats.txvierr,
+		   priv->stats.txvookint,
+		   priv->stats.txvoerr,
+		   priv->stats.txbeokint,
+		   priv->stats.txbeerr,
+		   priv->stats.txbkokint,
+		   priv->stats.txbkerr,
+		   priv->stats.txmanageokint,
+		   priv->stats.txmanageerr,
+		   priv->stats.txbeaconokint,
+		   priv->stats.txbeaconerr,
+		   priv->stats.txresumed,
+		   netif_queue_stopped(dev),
+		   priv->stats.txoverflow,
+		   atomic_read(&(priv->tx_pending[VI_PRIORITY])),
+		   atomic_read(&(priv->tx_pending[VO_PRIORITY])),
+		   atomic_read(&(priv->tx_pending[BE_PRIORITY])),
+		   atomic_read(&(priv->tx_pending[BK_PRIORITY])),
+		   priv->stats.txvidrop,
+		   priv->stats.txvodrop,
+		   priv->stats.txbedrop,
+		   priv->stats.txbkdrop,
+		   priv->stats.txdatapkt
+		);
+
+	return 0;
+}
+
+static int __maybe_unused proc_get_stats_rx(struct seq_file *m, void *v)
+{
+	struct net_device *dev = m->private;
+	struct r8192_priv *priv = (struct r8192_priv *)ieee80211_priv(dev);
+
+	seq_printf(m,
+		   "RX packets: %lu\n"
+		   "RX urb status error: %lu\n"
+		   "RX invalid urb error: %lu\n",
+		   priv->stats.rxoktotal,
+		   priv->stats.rxstaterr,
+		   priv->stats.rxurberr);
+
+	return 0;
+}
+
+static void rtl8192_proc_module_init(void)
+{
+	RT_TRACE(COMP_INIT, "Initializing proc filesystem");
+	rtl8192_proc = proc_mkdir(RTL819XU_MODULE_NAME, init_net.proc_net);
+}
+
+static void rtl8192_proc_init_one(struct net_device *dev)
+{
+	struct proc_dir_entry *dir;
+
+	if (!rtl8192_proc)
+		return;
+
+	dir = proc_mkdir_data(dev->name, 0, rtl8192_proc, dev);
+	if (!dir)
+		return;
+
+	proc_create_single("stats-rx", S_IFREG | 0444, dir,
+			   proc_get_stats_rx);
+	proc_create_single("stats-tx", S_IFREG | 0444, dir,
+			   proc_get_stats_tx);
+	proc_create_single("stats-ap", S_IFREG | 0444, dir,
+			   proc_get_stats_ap);
+	proc_create_single("registers", S_IFREG | 0444, dir,
+			   proc_get_registers);
+}
+
+static void rtl8192_proc_remove_one(struct net_device *dev)
+{
+	remove_proc_subtree(dev->name, rtl8192_proc);
+}
+
+/****************************************************************************
  *  -----------------------------MISC STUFF-------------------------
  *****************************************************************************/
 
@@ -690,7 +867,7 @@ static void rtl8192_rx_isr(struct urb *urb)
 	urb->context = skb;
 	skb_queue_tail(&priv->rx_queue, skb);
 	err = usb_submit_urb(urb, GFP_ATOMIC);
-	if (err && err != -EPERM)
+	if (err && err != EPERM)
 		netdev_err(dev,
 			   "can not submit rxurb, err is %x, URB status is %x\n",
 			   err, urb->status);
@@ -725,6 +902,7 @@ static void rtl8192_hard_data_xmit(struct sk_buff *skb, struct net_device *dev,
 				   int rate)
 {
 	struct r8192_priv *priv = (struct r8192_priv *)ieee80211_priv(dev);
+	int ret;
 	unsigned long flags;
 	struct cb_desc *tcb_desc = (struct cb_desc *)(skb->cb + MAX_DEV_ADDR_SIZE);
 	u8 queue_index = tcb_desc->queue_index;
@@ -737,7 +915,7 @@ static void rtl8192_hard_data_xmit(struct sk_buff *skb, struct net_device *dev,
 	*(struct net_device **)(skb->cb) = dev;
 	tcb_desc->bTxEnableFwCalcDur = 1;
 	skb_push(skb, priv->ieee80211->tx_headroom);
-	rtl8192_tx(dev, skb);
+	ret = rtl8192_tx(dev, skb);
 
 	spin_unlock_irqrestore(&priv->tx_lock, flags);
 }
@@ -1430,8 +1608,6 @@ static short rtl8192_usb_initendpoints(struct net_device *dev)
 		void *oldaddr, *newaddr;
 
 		priv->rx_urb[16] = usb_alloc_urb(0, GFP_KERNEL);
-		if (!priv->rx_urb[16])
-			return -ENOMEM;
 		priv->oldaddr = kmalloc(16, GFP_KERNEL);
 		if (!priv->oldaddr)
 			return -ENOMEM;
@@ -2126,17 +2302,16 @@ static int rtl8192_read_eeprom_info(struct net_device *dev)
 	/* set channelplan from eeprom */
 	priv->ChannelPlan = priv->eeprom_ChannelPlan;
 	if (bLoad_From_EEPOM) {
-		u8 addr[ETH_ALEN];
+		int i;
 
 		for (i = 0; i < 6; i += 2) {
 			ret = eprom_read(dev, (u16)((EEPROM_NODE_ADDRESS_BYTE_0 + i) >> 1));
 			if (ret < 0)
 				return ret;
-			*(u16 *)(&addr[i]) = (u16)ret;
+			*(u16 *)(&dev->dev_addr[i]) = (u16)ret;
 		}
-		eth_hw_addr_set(dev, addr);
 	} else {
-		eth_hw_addr_set(dev, bMac_Tmp_Addr);
+		memcpy(dev->dev_addr, bMac_Tmp_Addr, 6);
 		/* should I set IDR0 here? */
 	}
 	RT_TRACE(COMP_EPROM, "MAC addr:%pM\n", dev->dev_addr);
@@ -2192,6 +2367,8 @@ static int rtl8192_read_eeprom_info(struct net_device *dev)
 			priv->EEPROM_Def_Ver = 1;
 		RT_TRACE(COMP_EPROM, "EEPROM_DEF_VER:%d\n", priv->EEPROM_Def_Ver);
 		if (priv->EEPROM_Def_Ver == 0) { /* old eeprom definition */
+			int i;
+
 			if (bLoad_From_EEPOM) {
 				ret = eprom_read(dev, (EEPROM_TX_PW_INDEX_CCK >> 1));
 				if (ret < 0)
@@ -2357,13 +2534,13 @@ static short rtl8192_init(struct net_device *dev)
 #ifdef PIPE12
 	{
 		int i = 0;
-		static const u8 queuetopipe[] = {3, 2, 1, 0, 4, 8, 7, 6, 5};
+		u8 queuetopipe[] = {3, 2, 1, 0, 4, 8, 7, 6, 5};
 
 		memcpy(priv->txqueue_to_outpipemap, queuetopipe, 9);
 	}
 #else
 	{
-		static const u8 queuetopipe[] = {3, 2, 1, 0, 4, 4, 0, 4, 4};
+		u8 queuetopipe[] = {3, 2, 1, 0, 4, 4, 0, 4, 4};
 
 		memcpy(priv->txqueue_to_outpipemap, queuetopipe, 9);
 	}
@@ -2492,7 +2669,14 @@ static bool rtl8192_adapter_start(struct net_device *dev)
 	/* config CPUReset Register */
 	/* Firmware Reset or not? */
 	read_nic_dword(dev, CPU_GEN, &dwRegRead);
-	dwRegRead |= CPU_GEN_SYSTEM_RESET; /* do nothing here? */
+	if (priv->pFirmware->firmware_status == FW_STATUS_0_INIT)
+		dwRegRead |= CPU_GEN_SYSTEM_RESET; /* do nothing here? */
+	else if (priv->pFirmware->firmware_status == FW_STATUS_5_READY)
+		dwRegRead |= CPU_GEN_FIRMWARE_RESET;
+	else
+		RT_TRACE(COMP_ERR,
+			 "ERROR in %s(): undefined firmware state(%d)\n",
+			 __func__,   priv->pFirmware->firmware_status);
 
 	write_nic_dword(dev, CPU_GEN, dwRegRead);
 	/* config BB. */
@@ -2786,9 +2970,11 @@ static RESET_TYPE RxCheckStuck(struct net_device *dev)
 	return RESET_TYPE_NORESET;
 }
 
-/*
+/**
  * This function is called by Checkforhang to check whether we should
  * ask OS to reset driver
+ *
+ * \param pAdapter	The adapter context for this miniport
  *
  * Note:NIC with USB interface sholud not call this function because we
  * cannot scan descriptor to judge whether there is tx stuck.
@@ -2867,14 +3053,14 @@ static void CamRestoreAllEntry(struct net_device *dev)
 	} else if (priv->ieee80211->pairwise_key_type == KEY_TYPE_TKIP) {
 		if (priv->ieee80211->iw_mode == IW_MODE_ADHOC)
 			setKey(dev, 4, 0, priv->ieee80211->pairwise_key_type,
-			       (const u8 *)dev->dev_addr, 0, NULL);
+			       (u8 *)dev->dev_addr, 0, NULL);
 		else
 			setKey(dev, 4, 0, priv->ieee80211->pairwise_key_type,
 			       MacAddr, 0, NULL);
 	} else if (priv->ieee80211->pairwise_key_type == KEY_TYPE_CCMP) {
 		if (priv->ieee80211->iw_mode == IW_MODE_ADHOC)
 			setKey(dev, 4, 0, priv->ieee80211->pairwise_key_type,
-			       (const u8 *)dev->dev_addr, 0, NULL);
+			       (u8 *)dev->dev_addr, 0, NULL);
 		else
 			setKey(dev, 4, 0, priv->ieee80211->pairwise_key_type,
 			       MacAddr, 0, NULL);
@@ -3228,6 +3414,7 @@ int rtl8192_down(struct net_device *dev)
 void rtl8192_commit(struct net_device *dev)
 {
 	struct r8192_priv *priv = ieee80211_priv(dev);
+	int reset_status = 0;
 
 	if (priv->up == 0)
 		return;
@@ -3239,7 +3426,7 @@ void rtl8192_commit(struct net_device *dev)
 	ieee80211_softmac_stop_protocol(priv->ieee80211);
 
 	rtl8192_rtx_disable(dev);
-	_rtl8192_up(dev);
+	reset_status = _rtl8192_up(dev);
 }
 
 static void rtl8192_restart(struct work_struct *work)
@@ -3276,7 +3463,7 @@ static int r8192_set_mac_adr(struct net_device *dev, void *mac)
 
 	mutex_lock(&priv->wx_mutex);
 
-	eth_hw_addr_set(dev, addr->sa_data);
+	ether_addr_copy(dev->dev_addr, addr->sa_data);
 
 	schedule_work(&priv->reset_wq);
 	mutex_unlock(&priv->wx_mutex);
@@ -3509,7 +3696,7 @@ static u8 HwRateToMRate90(bool bIsHT, u8 rate)
 	return ret_rate;
 }
 
-/*
+/**
  * Function:     UpdateRxPktTimeStamp
  * Overview:     Record the TSF time stamp when receiving a packet
  *
@@ -4109,7 +4296,7 @@ static void TranslateRxSignalStuff819xUsb(struct sk_buff *skb,
 	rtl8192_record_rxdesc_forlateruse(pstats, &previous_stats);
 }
 
-/*
+/**
  * Function:	UpdateReceivedRateHistogramStatistics
  * Overview:	Record the received data rate
  *
@@ -4556,7 +4743,7 @@ static int rtl8192_usb_probe(struct usb_interface *intf,
 		goto fail2;
 
 	RT_TRACE(COMP_INIT, "dev name=======> %s\n", dev->name);
-	rtl8192_debugfs_init_one(dev);
+	rtl8192_proc_init_one(dev);
 
 	RT_TRACE(COMP_INIT, "Driver probe completed\n");
 	return 0;
@@ -4590,11 +4777,10 @@ static void rtl8192_usb_disconnect(struct usb_interface *intf)
 	struct net_device *dev = usb_get_intfdata(intf);
 	struct r8192_priv *priv = ieee80211_priv(dev);
 
+	unregister_netdev(dev);
 
 	RT_TRACE(COMP_DOWN, "=============>wlan driver to be removed\n");
-	rtl8192_debugfs_exit_one(dev);
-
-	unregister_netdev(dev);
+	rtl8192_proc_remove_one(dev);
 
 	rtl8192_down(dev);
 	kfree(priv->pFirmware);
@@ -4606,107 +4792,53 @@ static void rtl8192_usb_disconnect(struct usb_interface *intf)
 	RT_TRACE(COMP_DOWN, "wlan driver removed\n");
 }
 
-static int rtl8192_usb_netdev_event(struct notifier_block *nb, unsigned long event,
-				    void *data)
-{
-	struct net_device *netdev = netdev_notifier_info_to_dev(data);
-
-	if (netdev->netdev_ops != &rtl8192_netdev_ops)
-		goto out;
-
-	switch (event) {
-	case NETDEV_CHANGENAME:
-		rtl8192_debugfs_rename_one(netdev);
-		break;
-	default:
-		break;
-	}
-
-out:
-	return NOTIFY_DONE;
-}
-
-static struct notifier_block rtl8192_usb_netdev_notifier = {
-	.notifier_call = rtl8192_usb_netdev_event,
-};
-
 static int __init rtl8192_usb_module_init(void)
 {
 	int ret;
 
-	pr_info("\nLinux kernel driver for RTL8192 based WLAN cards\n");
-	pr_info("Copyright (c) 2007-2008, Realsil Wlan\n");
-	RT_TRACE(COMP_INIT, "Initializing module");
-	RT_TRACE(COMP_INIT, "Wireless extensions version %d", WIRELESS_EXT);
-
-	ret = register_netdevice_notifier(&rtl8192_usb_netdev_notifier);
-	if (ret) {
-		pr_err("register_netdevice_notifier failed %d\n", ret);
-		return ret;
-	}
-
-	rtl8192_debugfs_init();
+#ifdef CONFIG_IEEE80211_DEBUG
 	ret = ieee80211_debug_init();
 	if (ret) {
 		pr_err("ieee80211_debug_init() failed %d\n", ret);
-		goto debugfs_exit;
+		return ret;
 	}
-
+#endif
 	ret = ieee80211_crypto_init();
 	if (ret) {
 		pr_err("ieee80211_crypto_init() failed %d\n", ret);
-		goto debug_exit;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_tkip_init();
 	if (ret) {
 		pr_err("ieee80211_crypto_tkip_init() failed %d\n", ret);
-		goto crypto_exit;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_ccmp_init();
 	if (ret) {
 		pr_err("ieee80211_crypto_ccmp_init() failed %d\n", ret);
-		goto crypto_tkip_exit;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_wep_init();
 	if (ret) {
 		pr_err("ieee80211_crypto_wep_init() failed %d\n", ret);
-		goto crypto_ccmp_exit;
+		return ret;
 	}
 
-	ret = usb_register(&rtl8192_usb_driver);
-	if (ret)
-		goto crypto_wep_exit;
-	return ret;
-
-crypto_wep_exit:
-	ieee80211_crypto_wep_exit();
-crypto_ccmp_exit:
-	ieee80211_crypto_ccmp_exit();
-crypto_tkip_exit:
-	ieee80211_crypto_tkip_exit();
-crypto_exit:
-	ieee80211_crypto_deinit();
-debug_exit:
-	ieee80211_debug_exit();
-debugfs_exit:
-	rtl8192_debugfs_exit();
-	unregister_netdevice_notifier(&rtl8192_usb_netdev_notifier);
-	return ret;
+	pr_info("\nLinux kernel driver for RTL8192 based WLAN cards\n");
+	pr_info("Copyright (c) 2007-2008, Realsil Wlan\n");
+	RT_TRACE(COMP_INIT, "Initializing module");
+	RT_TRACE(COMP_INIT, "Wireless extensions version %d", WIRELESS_EXT);
+	rtl8192_proc_module_init();
+	return usb_register(&rtl8192_usb_driver);
 }
 
 static void __exit rtl8192_usb_module_exit(void)
 {
 	usb_deregister(&rtl8192_usb_driver);
-	ieee80211_crypto_wep_exit();
-	ieee80211_crypto_ccmp_exit();
-	ieee80211_crypto_tkip_exit();
-	ieee80211_crypto_deinit();
-	ieee80211_debug_exit();
-	rtl8192_debugfs_exit();
-	unregister_netdevice_notifier(&rtl8192_usb_netdev_notifier);
+
 	RT_TRACE(COMP_DOWN, "Exiting");
 }
 
@@ -4745,7 +4877,7 @@ void EnableHWSecurityConfig8192(struct net_device *dev)
 }
 
 void setKey(struct net_device *dev, u8 entryno, u8 keyindex, u16 keytype,
-	    const u8 *macaddr, u8 defaultkey, u32 *keycontent)
+	    u8 *macaddr, u8 defaultkey, u32 *keycontent)
 {
 	u32 target_command = 0;
 	u32 target_content = 0;

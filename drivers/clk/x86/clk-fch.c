@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * clock framework for AMD FCH controller block
+ * clock framework for AMD Stoney based clocks
  *
  * Copyright 2018 Advanced Micro Devices, Inc.
  */
@@ -8,7 +8,6 @@
 #include <linux/clk.h>
 #include <linux/clkdev.h>
 #include <linux/clk-provider.h>
-#include <linux/pci.h>
 #include <linux/platform_data/clk-fch.h>
 #include <linux/platform_device.h>
 
@@ -27,37 +26,22 @@
 #define ST_CLK_GATE	3
 #define ST_MAX_CLKS	4
 
-#define CLK_48M_FIXED	0
-#define CLK_GATE_FIXED	1
-#define CLK_MAX_FIXED	2
-
-/* List of supported CPU ids for clk mux with 25Mhz clk support */
-#define AMD_CPU_ID_ST                  0x1576
+#define RV_CLK_48M	0
+#define RV_CLK_GATE	1
+#define RV_MAX_CLKS	2
 
 static const char * const clk_oscout1_parents[] = { "clk48MHz", "clk25MHz" };
 static struct clk_hw *hws[ST_MAX_CLKS];
 
-static const struct pci_device_id fch_pci_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, AMD_CPU_ID_ST) },
-	{ }
-};
-
 static int fch_clk_probe(struct platform_device *pdev)
 {
 	struct fch_clk_data *fch_data;
-	struct pci_dev *rdev;
 
 	fch_data = dev_get_platdata(&pdev->dev);
 	if (!fch_data || !fch_data->base)
 		return -EINVAL;
 
-	rdev = pci_get_domain_bus_and_slot(0, 0, PCI_DEVFN(0, 0));
-	if (!rdev) {
-		dev_err(&pdev->dev, "FCH device not found\n");
-		return -ENODEV;
-	}
-
-	if (pci_match_id(fch_pci_ids, rdev)) {
+	if (!fch_data->is_rv) {
 		hws[ST_CLK_48M] = clk_hw_register_fixed_rate(NULL, "clk48MHz",
 			NULL, 0, 48000000);
 		hws[ST_CLK_25M] = clk_hw_register_fixed_rate(NULL, "clk25MHz",
@@ -75,38 +59,35 @@ static int fch_clk_probe(struct platform_device *pdev)
 			OSCCLKENB, CLK_GATE_SET_TO_DISABLE, NULL);
 
 		devm_clk_hw_register_clkdev(&pdev->dev, hws[ST_CLK_GATE],
-					    fch_data->name, NULL);
+			"oscout1", NULL);
 	} else {
-		hws[CLK_48M_FIXED] = clk_hw_register_fixed_rate(NULL, "clk48MHz",
+		hws[RV_CLK_48M] = clk_hw_register_fixed_rate(NULL, "clk48MHz",
 			NULL, 0, 48000000);
 
-		hws[CLK_GATE_FIXED] = clk_hw_register_gate(NULL, "oscout1",
+		hws[RV_CLK_GATE] = clk_hw_register_gate(NULL, "oscout1",
 			"clk48MHz", 0, fch_data->base + MISCCLKCNTL1,
-			OSCCLKENB, 0, NULL);
+			OSCCLKENB, CLK_GATE_SET_TO_DISABLE, NULL);
 
-		devm_clk_hw_register_clkdev(&pdev->dev, hws[CLK_GATE_FIXED],
-					    fch_data->name, NULL);
+		devm_clk_hw_register_clkdev(&pdev->dev, hws[RV_CLK_GATE],
+			"oscout1", NULL);
 	}
 
-	pci_dev_put(rdev);
 	return 0;
 }
 
-static void fch_clk_remove(struct platform_device *pdev)
+static int fch_clk_remove(struct platform_device *pdev)
 {
 	int i, clks;
-	struct pci_dev *rdev;
+	struct fch_clk_data *fch_data;
 
-	rdev = pci_get_domain_bus_and_slot(0, 0, PCI_DEVFN(0, 0));
-	if (!rdev)
-		return;
+	fch_data = dev_get_platdata(&pdev->dev);
 
-	clks = pci_match_id(fch_pci_ids, rdev) ? CLK_MAX_FIXED : ST_MAX_CLKS;
+	clks = fch_data->is_rv ? RV_MAX_CLKS : ST_MAX_CLKS;
 
 	for (i = 0; i < clks; i++)
 		clk_hw_unregister(hws[i]);
 
-	pci_dev_put(rdev);
+	return 0;
 }
 
 static struct platform_driver fch_clk_driver = {
@@ -115,6 +96,6 @@ static struct platform_driver fch_clk_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe = fch_clk_probe,
-	.remove_new = fch_clk_remove,
+	.remove = fch_clk_remove,
 };
 builtin_platform_driver(fch_clk_driver);

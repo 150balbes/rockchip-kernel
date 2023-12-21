@@ -18,7 +18,6 @@
 #include "event.h"
 #include "debug.h"
 #include "evlist.h"
-#include "namespaces.h"
 #include "symbol.h"
 #include <elf.h>
 
@@ -36,7 +35,6 @@ struct jit_buf_desc {
 	struct perf_data *output;
 	struct perf_session *session;
 	struct machine *machine;
-	struct nsinfo  *nsi;
 	union jr_entry   *entry;
 	void             *buf;
 	uint64_t	 sample_type;
@@ -56,6 +54,13 @@ struct jit_buf_desc {
 	char		 dir[PATH_MAX];
 };
 
+struct debug_line_info {
+	unsigned long vma;
+	unsigned int lineno;
+	/* The filename format is unspecified, absolute path, relative etc. */
+	char const filename[];
+};
+
 struct jit_tool {
 	struct perf_tool tool;
 	struct perf_data	output;
@@ -67,8 +72,7 @@ struct jit_tool {
 #define get_jit_tool(t) (container_of(tool, struct jit_tool, tool))
 
 static int
-jit_emit_elf(struct jit_buf_desc *jd,
-	     char *filename,
+jit_emit_elf(char *filename,
 	     const char *sym,
 	     uint64_t code_addr,
 	     const void *code,
@@ -79,18 +83,14 @@ jit_emit_elf(struct jit_buf_desc *jd,
 	     uint32_t unwinding_header_size,
 	     uint32_t unwinding_size)
 {
-	int ret, fd, saved_errno;
-	struct nscookie nsc;
+	int ret, fd;
 
 	if (verbose > 0)
 		fprintf(stderr, "write ELF image %s\n", filename);
 
-	nsinfo__mountns_enter(jd->nsi, &nsc);
 	fd = open(filename, O_CREAT|O_TRUNC|O_WRONLY, 0644);
-	saved_errno = errno;
-	nsinfo__mountns_exit(&nsc);
 	if (fd == -1) {
-		pr_warning("cannot create jit ELF %s: %s\n", filename, strerror(saved_errno));
+		pr_warning("cannot create jit ELF %s: %s\n", filename, strerror(errno));
 		return -1;
 	}
 
@@ -99,11 +99,8 @@ jit_emit_elf(struct jit_buf_desc *jd,
 
         close(fd);
 
-	if (ret) {
-		nsinfo__mountns_enter(jd->nsi, &nsc);
-		unlink(filename);
-		nsinfo__mountns_exit(&nsc);
-	}
+        if (ret)
+                unlink(filename);
 
 	return ret;
 }
@@ -137,15 +134,12 @@ static int
 jit_open(struct jit_buf_desc *jd, const char *name)
 {
 	struct jitheader header;
-	struct nscookie nsc;
 	struct jr_prefix *prefix;
 	ssize_t bs, bsz = 0;
 	void *n, *buf = NULL;
 	int ret, retval = -1;
 
-	nsinfo__mountns_enter(jd->nsi, &nsc);
 	jd->in = fopen(name, "r");
-	nsinfo__mountns_exit(&nsc);
 	if (!jd->in)
 		return -1;
 
@@ -235,11 +229,9 @@ jit_open(struct jit_buf_desc *jd, const char *name)
 	 */
 	strcpy(jd->dir, name);
 	dirname(jd->dir);
-	free(buf);
 
 	return 0;
 error:
-	free(buf);
 	funlockfile(jd->in);
 	fclose(jd->in);
 	return retval;
@@ -375,20 +367,6 @@ jit_inject_event(struct jit_buf_desc *jd, union perf_event *event)
 	return 0;
 }
 
-static pid_t jr_entry_pid(struct jit_buf_desc *jd, union jr_entry *jr)
-{
-	if (jd->nsi && nsinfo__in_pidns(jd->nsi))
-		return nsinfo__tgid(jd->nsi);
-	return jr->load.pid;
-}
-
-static pid_t jr_entry_tid(struct jit_buf_desc *jd, union jr_entry *jr)
-{
-	if (jd->nsi && nsinfo__in_pidns(jd->nsi))
-		return nsinfo__pid(jd->nsi);
-	return jr->load.tid;
-}
-
 static uint64_t convert_timestamp(struct jit_buf_desc *jd, uint64_t timestamp)
 {
 	struct perf_tsc_conversion tc = { .time_shift = 0, };
@@ -434,15 +412,14 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 	const char *sym;
 	uint64_t count;
 	int ret, csize, usize;
-	pid_t nspid, pid, tid;
+	pid_t pid, tid;
 	struct {
 		u32 pid, tid;
 		u64 time;
 	} *id;
 
-	nspid = jr->load.pid;
-	pid   = jr_entry_pid(jd, jr);
-	tid   = jr_entry_tid(jd, jr);
+	pid   = jr->load.pid;
+	tid   = jr->load.tid;
 	csize = jr->load.code_size;
 	usize = jd->unwinding_mapped_size;
 	addr  = jr->load.code_addr;
@@ -458,14 +435,14 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 	filename = event->mmap2.filename;
 	size = snprintf(filename, PATH_MAX, "%s/jitted-%d-%" PRIu64 ".so",
 			jd->dir,
-			nspid,
+			pid,
 			count);
 
 	size++; /* for \0 */
 
 	size = PERF_ALIGN(size, sizeof(u64));
 	uaddr = (uintptr_t)code;
-	ret = jit_emit_elf(jd, filename, sym, addr, (const void *)uaddr, csize, jd->debug_data, jd->nr_debug_entries,
+	ret = jit_emit_elf(filename, sym, addr, (const void *)uaddr, csize, jd->debug_data, jd->nr_debug_entries,
 			   jd->unwinding_data, jd->eh_frame_hdr_size, jd->unwinding_size);
 
 	if (jd->debug_data && jd->nr_debug_entries) {
@@ -484,7 +461,7 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 		free(event);
 		return -1;
 	}
-	if (nsinfo__stat(filename, &st, jd->nsi))
+	if (stat(filename, &st))
 		memset(&st, 0, sizeof(st));
 
 	event->mmap2.header.type = PERF_RECORD_MMAP2;
@@ -525,7 +502,7 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 
 	ret = perf_event__process_mmap2(tool, event, &sample, jd->machine);
 	if (ret)
-		goto out;
+		return ret;
 
 	ret = jit_inject_event(jd, event);
 	/*
@@ -534,8 +511,6 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 	if (!ret)
 		build_id__mark_dso_hit(tool, event, &sample, NULL, jd->machine);
 
-out:
-	free(event);
 	return ret;
 }
 
@@ -550,15 +525,14 @@ static int jit_repipe_code_move(struct jit_buf_desc *jd, union jr_entry *jr)
 	int usize;
 	u16 idr_size;
 	int ret;
-	pid_t nspid, pid, tid;
+	pid_t pid, tid;
 	struct {
 		u32 pid, tid;
 		u64 time;
 	} *id;
 
-	nspid = jr->load.pid;
-	pid   = jr_entry_pid(jd, jr);
-	tid   = jr_entry_tid(jd, jr);
+	pid = jr->move.pid;
+	tid =  jr->move.tid;
 	usize = jd->unwinding_mapped_size;
 	idr_size = jd->machine->id_hdr_size;
 
@@ -572,12 +546,12 @@ static int jit_repipe_code_move(struct jit_buf_desc *jd, union jr_entry *jr)
 	filename = event->mmap2.filename;
 	size = snprintf(filename, PATH_MAX, "%s/jitted-%d-%" PRIu64 ".so",
 	         jd->dir,
-		 nspid,
+	         pid,
 		 jr->move.code_index);
 
 	size++; /* for \0 */
 
-	if (nsinfo__stat(filename, &st, jd->nsi))
+	if (stat(filename, &st))
 		memset(&st, 0, sizeof(st));
 
 	size = PERF_ALIGN(size, sizeof(u64));
@@ -736,7 +710,7 @@ jit_inject(struct jit_buf_desc *jd, char *path)
  * as captured in the RECORD_MMAP record
  */
 static int
-jit_detect(char *mmap_name, pid_t pid, struct nsinfo *nsi)
+jit_detect(char *mmap_name, pid_t pid)
  {
 	char *p;
 	char *end = NULL;
@@ -776,7 +750,7 @@ jit_detect(char *mmap_name, pid_t pid, struct nsinfo *nsi)
 	 * pid does not match mmap pid
 	 * pid==0 in system-wide mode (synthesized)
 	 */
-	if (pid && pid2 != nsinfo__nstgid(nsi))
+	if (pid && pid2 != pid)
 		return -1;
 	/*
 	 * validate suffix
@@ -799,21 +773,17 @@ static void jit_add_pid(struct machine *machine, pid_t pid)
 		return;
 	}
 
-	thread__set_priv(thread, (void *)true);
-	thread__put(thread);
+	thread->priv = (void *)1;
 }
 
 static bool jit_has_pid(struct machine *machine, pid_t pid)
 {
 	struct thread *thread = machine__find_thread(machine, pid, pid);
-	void *priv;
 
 	if (!thread)
-		return false;
+		return 0;
 
-	priv = thread__priv(thread);
-	thread__put(thread);
-	return (bool)priv;
+	return (bool)thread->priv;
 }
 
 int
@@ -822,37 +792,18 @@ jit_process(struct perf_session *session,
 	    struct machine *machine,
 	    char *filename,
 	    pid_t pid,
-	    pid_t tid,
 	    u64 *nbytes)
 {
-	struct thread *thread;
-	struct nsinfo *nsi;
 	struct evsel *first;
 	struct jit_buf_desc jd;
 	int ret;
 
-	thread = machine__findnew_thread(machine, pid, tid);
-	if (thread == NULL) {
-		pr_err("problem processing JIT mmap event, skipping it.\n");
-		return 0;
-	}
-
-	nsi = nsinfo__get(thread__nsinfo(thread));
-	thread__put(thread);
-
 	/*
 	 * first, detect marker mmap (i.e., the jitdump mmap)
 	 */
-	if (jit_detect(filename, pid, nsi)) {
-		nsinfo__put(nsi);
-
-		/*
-		 * Strip //anon*, [anon:* and /memfd:* mmaps if we processed a jitdump for this pid
-		 */
-		if (jit_has_pid(machine, pid) &&
-			((strncmp(filename, "//anon", 6) == 0) ||
-			 (strncmp(filename, "[anon:", 6) == 0) ||
-			 (strncmp(filename, "/memfd:", 7) == 0)))
+	if (jit_detect(filename, pid)) {
+		// Strip //anon* mmaps if we processed a jitdump for this pid
+		if (jit_has_pid(machine, pid) && (strncmp(filename, "//anon", 6) == 0))
 			return 1;
 
 		return 0;
@@ -863,7 +814,6 @@ jit_process(struct perf_session *session,
 	jd.session = session;
 	jd.output  = output;
 	jd.machine = machine;
-	jd.nsi = nsi;
 
 	/*
 	 * track sample_type to compute id_all layout
@@ -880,9 +830,6 @@ jit_process(struct perf_session *session,
 		*nbytes = jd.bytes_written;
 		ret = 1;
 	}
-
-	nsinfo__put(jd.nsi);
-	free(jd.buf);
 
 	return ret;
 }

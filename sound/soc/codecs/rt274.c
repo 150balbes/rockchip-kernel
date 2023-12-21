@@ -980,11 +980,14 @@ static int rt274_probe(struct snd_soc_component *component)
 	struct rt274_priv *rt274 = snd_soc_component_get_drvdata(component);
 
 	rt274->component = component;
-	INIT_DELAYED_WORK(&rt274->jack_detect_work, rt274_jack_detect_work);
 
-	if (rt274->i2c->irq)
+	if (rt274->i2c->irq) {
+		INIT_DELAYED_WORK(&rt274->jack_detect_work,
+					rt274_jack_detect_work);
 		schedule_delayed_work(&rt274->jack_detect_work,
-				      msecs_to_jiffies(1250));
+					msecs_to_jiffies(1250));
+	}
+
 	return 0;
 }
 
@@ -993,7 +996,6 @@ static void rt274_remove(struct snd_soc_component *component)
 	struct rt274_priv *rt274 = snd_soc_component_get_drvdata(component);
 
 	cancel_delayed_work_sync(&rt274->jack_detect_work);
-	rt274->component = NULL;
 }
 
 #ifdef CONFIG_PM
@@ -1054,7 +1056,7 @@ static struct snd_soc_dai_driver rt274_dai[] = {
 			.formats = RT274_FORMATS,
 		},
 		.ops = &rt274_aif_dai_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 	},
 };
 
@@ -1073,6 +1075,7 @@ static const struct snd_soc_component_driver soc_component_dev_rt274 = {
 	.num_dapm_routes	= ARRAY_SIZE(rt274_dapm_routes),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config rt274_regmap = {
@@ -1111,7 +1114,8 @@ static const struct acpi_device_id rt274_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, rt274_acpi_match);
 #endif
 
-static int rt274_i2c_probe(struct i2c_client *i2c)
+static int rt274_i2c_probe(struct i2c_client *i2c,
+			   const struct i2c_device_id *id)
 {
 	struct rt274_priv *rt274;
 
@@ -1204,12 +1208,14 @@ static int rt274_i2c_probe(struct i2c_client *i2c)
 	return ret;
 }
 
-static void rt274_i2c_remove(struct i2c_client *i2c)
+static int rt274_i2c_remove(struct i2c_client *i2c)
 {
 	struct rt274_priv *rt274 = i2c_get_clientdata(i2c);
 
 	if (i2c->irq)
 		free_irq(i2c->irq, rt274);
+
+	return 0;
 }
 
 

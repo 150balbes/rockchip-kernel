@@ -20,7 +20,7 @@
 #include "xfs_ialloc.h"
 #include "xfs_trace.h"
 
-struct kmem_cache	*xfs_icreate_cache;		/* inode create item */
+kmem_zone_t	*xfs_icreate_zone;		/* inode create item zone */
 
 static inline struct xfs_icreate_item *ICR_ITEM(struct xfs_log_item *lip)
 {
@@ -63,8 +63,7 @@ STATIC void
 xfs_icreate_item_release(
 	struct xfs_log_item	*lip)
 {
-	kmem_free(ICR_ITEM(lip)->ic_item.li_lv_shadow);
-	kmem_cache_free(xfs_icreate_cache, ICR_ITEM(lip));
+	kmem_cache_free(xfs_icreate_zone, ICR_ITEM(lip));
 }
 
 static const struct xfs_item_ops xfs_icreate_item_ops = {
@@ -98,7 +97,7 @@ xfs_icreate_log(
 {
 	struct xfs_icreate_item	*icp;
 
-	icp = kmem_cache_zalloc(xfs_icreate_cache, GFP_KERNEL | __GFP_NOFAIL);
+	icp = kmem_cache_zalloc(xfs_icreate_zone, GFP_KERNEL | __GFP_NOFAIL);
 
 	xfs_log_item_init(tp->t_mountp, &icp->ic_item, XFS_LI_ICREATE,
 			  &xfs_icreate_item_ops);
@@ -202,7 +201,7 @@ xlog_recover_icreate_commit_pass2(
 	if (length != igeo->ialloc_blks &&
 	    length != igeo->ialloc_min_blks) {
 		xfs_warn(log->l_mp,
-			 "%s: unsupported chunk length", __func__);
+			 "%s: unsupported chunk length", __FUNCTION__);
 		return -EINVAL;
 	}
 
@@ -210,7 +209,7 @@ xlog_recover_icreate_commit_pass2(
 	if ((count >> mp->m_sb.sb_inopblog) != length) {
 		xfs_warn(log->l_mp,
 			 "%s: inconsistent inode count and chunk length",
-			 __func__);
+			 __FUNCTION__);
 		return -EINVAL;
 	}
 

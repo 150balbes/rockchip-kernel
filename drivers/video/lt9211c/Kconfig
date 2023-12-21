@@ -1,0 +1,14 @@
+menuconfig GPIOLIB
+	bool "GPIO Support"
+	help
+	  This enables GPIO support through the generic GPIO library.
+	  You only need to enable this, if you also want to enable
+	  one or more of the GPIO drivers below.
+
+	  If unsure, say N.
+
+config LT9211C_DRIVER
+	tristate "Loutium LT9211C"
+	default y
+	help
+	nothing

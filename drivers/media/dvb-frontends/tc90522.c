@@ -779,9 +779,9 @@ static const struct dvb_frontend_ops tc90522_ops_ter = {
 };
 
 
-static int tc90522_probe(struct i2c_client *client)
+static int tc90522_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct tc90522_state *state;
 	struct tc90522_config *cfg;
 	const struct dvb_frontend_ops *ops;
@@ -819,13 +819,14 @@ free_state:
 	return ret;
 }
 
-static void tc90522_remove(struct i2c_client *client)
+static int tc90522_remove(struct i2c_client *client)
 {
 	struct tc90522_state *state;
 
 	state = cfg_to_state(i2c_get_clientdata(client));
 	i2c_del_adapter(&state->tuner_i2c);
 	kfree(state);
+	return 0;
 }
 
 

@@ -132,7 +132,7 @@ ds1685_rtc_bin2bcd(struct ds1685_priv *rtc, u8 val, u8 bin_mask, u8 bcd_mask)
 }
 
 /**
- * ds1685_rtc_check_mday - check validity of the day of month.
+ * s1685_rtc_check_mday - check validity of the day of month.
  * @rtc: pointer to the ds1685 rtc structure.
  * @mday: day of month.
  *
@@ -658,6 +658,7 @@ ds1685_rtc_irq_handler(int irq, void *dev_id)
 {
 	struct platform_device *pdev = dev_id;
 	struct ds1685_priv *rtc = platform_get_drvdata(pdev);
+	struct mutex *rtc_mutex;
 	u8 ctrlb, ctrlc;
 	unsigned long events = 0;
 	u8 num_irqs = 0;
@@ -666,7 +667,8 @@ ds1685_rtc_irq_handler(int irq, void *dev_id)
 	if (unlikely(!rtc))
 		return IRQ_HANDLED;
 
-	rtc_lock(rtc->dev);
+	rtc_mutex = &rtc->dev->ops_lock;
+	mutex_lock(rtc_mutex);
 
 	/* Ctrlb holds the interrupt-enable bits and ctrlc the flag bits. */
 	ctrlb = rtc->read(rtc, RTC_CTRL_B);
@@ -711,7 +713,7 @@ ds1685_rtc_irq_handler(int irq, void *dev_id)
 		}
 	}
 	rtc_update_irq(rtc->dev, num_irqs, events);
-	rtc_unlock(rtc->dev);
+	mutex_unlock(rtc_mutex);
 
 	return events ? IRQ_HANDLED : IRQ_NONE;
 }
@@ -1273,7 +1275,7 @@ ds1685_rtc_probe(struct platform_device *pdev)
 
 	/* See if the platform doesn't support UIE. */
 	if (pdata->uie_unsupported)
-		clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc_dev->features);
+		rtc_dev->uie_unsupported = 1;
 
 	rtc->dev = rtc_dev;
 
@@ -1285,10 +1287,13 @@ ds1685_rtc_probe(struct platform_device *pdev)
 	 * there won't be an automatic way of notifying the kernel about it,
 	 * unless ctrlc is explicitly polled.
 	 */
-	rtc->irq_num = platform_get_irq(pdev, 0);
-	if (rtc->irq_num <= 0) {
-		clear_bit(RTC_FEATURE_ALARM, rtc_dev->features);
-	} else {
+	if (!pdata->no_irq) {
+		ret = platform_get_irq(pdev, 0);
+		if (ret <= 0)
+			return ret;
+
+		rtc->irq_num = ret;
+
 		/* Request an IRQ. */
 		ret = devm_request_threaded_irq(&pdev->dev, rtc->irq_num,
 				       NULL, ds1685_rtc_irq_handler,
@@ -1302,6 +1307,7 @@ ds1685_rtc_probe(struct platform_device *pdev)
 			rtc->irq_num = 0;
 		}
 	}
+	rtc->no_irq = pdata->no_irq;
 
 	/* Setup complete. */
 	ds1685_rtc_switch_to_bank0(rtc);
@@ -1310,19 +1316,20 @@ ds1685_rtc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	rtc_dev->nvram_old_abi = true;
 	nvmem_cfg.priv = rtc;
-	ret = devm_rtc_nvmem_register(rtc_dev, &nvmem_cfg);
+	ret = rtc_nvmem_register(rtc_dev, &nvmem_cfg);
 	if (ret)
 		return ret;
 
-	return devm_rtc_register_device(rtc_dev);
+	return rtc_register_device(rtc_dev);
 }
 
 /**
  * ds1685_rtc_remove - removes rtc driver.
  * @pdev: pointer to platform_device structure.
  */
-static void
+static int
 ds1685_rtc_remove(struct platform_device *pdev)
 {
 	struct ds1685_priv *rtc = platform_get_drvdata(pdev);
@@ -1344,6 +1351,8 @@ ds1685_rtc_remove(struct platform_device *pdev)
 	rtc->write(rtc, RTC_EXT_CTRL_4A,
 		   (rtc->read(rtc, RTC_EXT_CTRL_4A) &
 		    ~(RTC_CTRL_4A_RWK_MASK)));
+
+	return 0;
 }
 
 /*
@@ -1354,7 +1363,7 @@ static struct platform_driver ds1685_rtc_driver = {
 		.name	= "rtc-ds1685",
 	},
 	.probe		= ds1685_rtc_probe,
-	.remove_new	= ds1685_rtc_remove,
+	.remove		= ds1685_rtc_remove,
 };
 module_platform_driver(ds1685_rtc_driver);
 /* ----------------------------------------------------------------------- */
@@ -1388,7 +1397,7 @@ ds1685_rtc_poweroff(struct platform_device *pdev)
 		 * have been taken care of by the shutdown scripts and this
 		 * is the final function call.
 		 */
-		if (rtc->irq_num)
+		if (!rtc->no_irq)
 			disable_irq_nosync(rtc->irq_num);
 
 		/* Oscillator must be on and the countdown chain enabled. */

@@ -25,8 +25,6 @@
 
 #define SUPER_CDIV_ENB		BIT(31)
 
-#define TSENSOR_SLOWDOWN	BIT(23)
-
 static struct tegra_clk_super_mux *cclk_super;
 static bool cclk_on_pllx;
 
@@ -49,20 +47,10 @@ static int cclk_super_set_rate(struct clk_hw *hw, unsigned long rate,
 static unsigned long cclk_super_recalc_rate(struct clk_hw *hw,
 					    unsigned long parent_rate)
 {
-	struct tegra_clk_super_mux *super = to_clk_super_mux(hw);
-	u32 val = readl_relaxed(super->reg);
-	unsigned int div2;
-
-	/* check whether thermal throttling is active */
-	if (val & TSENSOR_SLOWDOWN)
-		div2 = 1;
-	else
-		div2 = 0;
-
 	if (cclk_super_get_parent(hw) == PLLX_INDEX)
-		return parent_rate >> div2;
+		return parent_rate;
 
-	return tegra_clk_super_ops.recalc_rate(hw, parent_rate) >> div2;
+	return tegra_clk_super_ops.recalc_rate(hw, parent_rate);
 }
 
 static int cclk_super_determine_rate(struct clk_hw *hw,
@@ -86,18 +74,9 @@ static int cclk_super_determine_rate(struct clk_hw *hw,
 	if (rate <= pllp_rate) {
 		if (super->flags & TEGRA20_SUPER_CLK)
 			rate = pllp_rate;
-		else {
-			struct clk_rate_request parent = {
-				.rate = req->rate,
-				.best_parent_rate = pllp_rate,
-			};
-
-			clk_hw_get_rate_range(hw, &parent.min_rate,
-					      &parent.max_rate);
-			tegra_clk_super_ops.determine_rate(hw, &parent);
-			pllp_rate = parent.best_parent_rate;
-			rate = parent.rate;
-		}
+		else
+			rate = tegra_clk_super_ops.round_rate(hw, rate,
+							      &pllp_rate);
 
 		req->best_parent_rate = pllp_rate;
 		req->best_parent_hw = pllp_hw;

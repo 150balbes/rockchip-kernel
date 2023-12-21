@@ -83,9 +83,7 @@ struct nv50_outp_atom {
 	struct list_head head;
 
 	struct drm_encoder *encoder;
-
-	bool disabled;
-	bool enabled;
+	bool flush_disable;
 
 	union nv50_outp_atom_mask {
 		struct {

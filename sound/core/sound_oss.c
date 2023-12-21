@@ -222,8 +222,7 @@ static void snd_minor_info_oss_read(struct snd_info_entry *entry,
 
 	mutex_lock(&sound_oss_mutex);
 	for (minor = 0; minor < SNDRV_OSS_MINORS; ++minor) {
-		mptr = snd_oss_minors[minor];
-		if (!mptr)
+		if (!(mptr = snd_oss_minors[minor]))
 			continue;
 		if (mptr->card >= 0)
 			snd_iprintf(buffer, "%3i: [%i-%2i]: %s\n", minor,

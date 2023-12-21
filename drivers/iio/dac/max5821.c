@@ -84,7 +84,7 @@ static ssize_t max5821_read_dac_powerdown(struct iio_dev *indio_dev,
 {
 	struct max5821_data *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", st->powerdown[chan->channel]);
+	return sprintf(buf, "%d\n", st->powerdown[chan->channel]);
 }
 
 static int max5821_sync_powerdown_mode(struct max5821_data *data,
@@ -116,7 +116,7 @@ static ssize_t max5821_write_dac_powerdown(struct iio_dev *indio_dev,
 	bool powerdown;
 	int ret;
 
-	ret = kstrtobool(buf, &powerdown);
+	ret = strtobool(buf, &powerdown);
 	if (ret)
 		return ret;
 
@@ -137,7 +137,7 @@ static const struct iio_chan_spec_ext_info max5821_ext_info[] = {
 		.shared = IIO_SEPARATE,
 	},
 	IIO_ENUM("powerdown_mode", IIO_SEPARATE, &max5821_powerdown_mode_enum),
-	IIO_ENUM_AVAILABLE("powerdown_mode", IIO_SHARED_BY_TYPE, &max5821_powerdown_mode_enum),
+	IIO_ENUM_AVAILABLE("powerdown_mode", &max5821_powerdown_mode_enum),
 	{ },
 };
 
@@ -267,7 +267,7 @@ static int max5821_write_raw(struct iio_dev *indio_dev,
 	}
 }
 
-static int max5821_suspend(struct device *dev)
+static int __maybe_unused max5821_suspend(struct device *dev)
 {
 	u8 outbuf[2] = { MAX5821_EXTENDED_COMMAND_MODE,
 			 MAX5821_EXTENDED_DAC_A |
@@ -277,7 +277,7 @@ static int max5821_suspend(struct device *dev)
 	return i2c_master_send(to_i2c_client(dev), outbuf, 2);
 }
 
-static int max5821_resume(struct device *dev)
+static int __maybe_unused max5821_resume(struct device *dev)
 {
 	u8 outbuf[2] = { MAX5821_EXTENDED_COMMAND_MODE,
 			 MAX5821_EXTENDED_DAC_A |
@@ -287,22 +287,16 @@ static int max5821_resume(struct device *dev)
 	return i2c_master_send(to_i2c_client(dev), outbuf, 2);
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(max5821_pm_ops, max5821_suspend,
-				max5821_resume);
+static SIMPLE_DEV_PM_OPS(max5821_pm_ops, max5821_suspend, max5821_resume);
 
 static const struct iio_info max5821_info = {
 	.read_raw = max5821_read_raw,
 	.write_raw = max5821_write_raw,
 };
 
-static void max5821_regulator_disable(void *reg)
+static int max5821_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	regulator_disable(reg);
-}
-
-static int max5821_probe(struct i2c_client *client)
-{
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct max5821_data *data;
 	struct iio_dev *indio_dev;
 	u32 tmp;
@@ -312,6 +306,7 @@ static int max5821_probe(struct i2c_client *client)
 	if (!indio_dev)
 		return -ENOMEM;
 	data = iio_priv(indio_dev);
+	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
 	mutex_init(&data->lock);
 
@@ -322,30 +317,25 @@ static int max5821_probe(struct i2c_client *client)
 	}
 
 	data->vref_reg = devm_regulator_get(&client->dev, "vref");
-	if (IS_ERR(data->vref_reg))
-		return dev_err_probe(&client->dev, PTR_ERR(data->vref_reg),
-				     "Failed to get vref regulator\n");
+	if (IS_ERR(data->vref_reg)) {
+		ret = PTR_ERR(data->vref_reg);
+		dev_err(&client->dev,
+			"Failed to get vref regulator: %d\n", ret);
+		goto error_free_reg;
+	}
 
 	ret = regulator_enable(data->vref_reg);
 	if (ret) {
 		dev_err(&client->dev,
 			"Failed to enable vref regulator: %d\n", ret);
-		return ret;
-	}
-
-	ret = devm_add_action_or_reset(&client->dev, max5821_regulator_disable,
-				       data->vref_reg);
-	if (ret) {
-		dev_err(&client->dev,
-			"Failed to add action to managed regulator: %d\n", ret);
-		return ret;
+		goto error_free_reg;
 	}
 
 	ret = regulator_get_voltage(data->vref_reg);
 	if (ret < 0) {
 		dev_err(&client->dev,
 			"Failed to get voltage on regulator: %d\n", ret);
-		return ret;
+		goto error_disable_reg;
 	}
 
 	data->vref_mv = ret / 1000;
@@ -356,7 +346,25 @@ static int max5821_probe(struct i2c_client *client)
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &max5821_info;
 
-	return devm_iio_device_register(&client->dev, indio_dev);
+	return iio_device_register(indio_dev);
+
+error_disable_reg:
+	regulator_disable(data->vref_reg);
+
+error_free_reg:
+
+	return ret;
+}
+
+static int max5821_remove(struct i2c_client *client)
+{
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	struct max5821_data *data = iio_priv(indio_dev);
+
+	iio_device_unregister(indio_dev);
+	regulator_disable(data->vref_reg);
+
+	return 0;
 }
 
 static const struct i2c_device_id max5821_id[] = {
@@ -375,9 +383,10 @@ static struct i2c_driver max5821_driver = {
 	.driver = {
 		.name	= "max5821",
 		.of_match_table = max5821_of_match,
-		.pm     = pm_sleep_ptr(&max5821_pm_ops),
+		.pm     = &max5821_pm_ops,
 	},
 	.probe		= max5821_probe,
+	.remove		= max5821_remove,
 	.id_table	= max5821_id,
 };
 module_i2c_driver(max5821_driver);

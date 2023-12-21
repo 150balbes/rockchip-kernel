@@ -16,6 +16,10 @@
 // Based on cx88-dvb, saa7134-dvb and videobuf-dvb originally written by:
 //	(c) 2004, 2005 Chris Pascoe <c.pascoe@itee.uq.edu.au>
 //	(c) 2004 Gerd Knorr <kraxel@bytesex.org> [SuSE Labs]
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation version 2 of the License.
 
 #include "em28xx.h"
 
@@ -58,7 +62,6 @@
 #include "si2157.h"
 #include "tc90522.h"
 #include "qm1d1c0042.h"
-#include "mxl692.h"
 
 MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@kernel.org>");
 MODULE_LICENSE("GPL v2");
@@ -1204,12 +1207,6 @@ static int em28178_dvb_init_pctv_461e(struct em28xx *dev)
 
 	/* attach SEC */
 	a8293_pdata.dvb_frontend = dvb->fe[0];
-	/*
-	 * 461e has a tendency to have vIN undervoltage troubles.
-	 * Slew mitigates this.
-	 */
-	a8293_pdata.volt_slew_nanos_per_mv = 20;
-
 	dvb->i2c_client_sec = dvb_module_probe("a8293", NULL,
 					       &dev->i2c_adap[dev->def_i2c_bus],
 					       0x08, &a8293_pdata);
@@ -1458,26 +1455,6 @@ static int em28174_dvb_init_hauppauge_wintv_dualhd_01595(struct em28xx *dev)
 		dvb_module_release(dvb->i2c_client_demod);
 		return -ENODEV;
 	}
-
-	return 0;
-}
-
-static int em2874_dvb_init_hauppauge_usb_quadhd(struct em28xx *dev)
-{
-	struct em28xx_dvb *dvb = dev->dvb;
-	struct mxl692_config mxl692_config = {};
-	unsigned char addr;
-
-	/* attach demod/tuner combo */
-	mxl692_config.id = (dev->ts == PRIMARY_TS) ? 0 : 1;
-	mxl692_config.fe = &dvb->fe[0];
-	addr = (dev->ts == PRIMARY_TS) ? 0x60 : 0x63;
-
-	dvb->i2c_client_demod = dvb_module_probe("mxl692", NULL,
-						 &dev->i2c_adap[dev->def_i2c_bus],
-						 addr, &mxl692_config);
-	if (!dvb->i2c_client_demod)
-		return -ENODEV;
 
 	return 0;
 }
@@ -1965,11 +1942,6 @@ static int em28xx_dvb_init(struct em28xx *dev)
 		break;
 	case EM28174_BOARD_HAUPPAUGE_WINTV_DUALHD_01595:
 		result = em28174_dvb_init_hauppauge_wintv_dualhd_01595(dev);
-		if (result)
-			goto out_free;
-		break;
-	case EM2874_BOARD_HAUPPAUGE_USB_QUADHD:
-		result = em2874_dvb_init_hauppauge_usb_quadhd(dev);
 		if (result)
 			goto out_free;
 		break;

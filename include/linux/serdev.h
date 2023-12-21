@@ -7,8 +7,6 @@
 
 #include <linux/types.h>
 #include <linux/device.h>
-#include <linux/iopoll.h>
-#include <linux/uaccess.h>
 #include <linux/termios.h>
 #include <linux/delay.h>
 
@@ -93,7 +91,6 @@ struct serdev_controller_ops {
 	void (*wait_until_sent)(struct serdev_controller *, long);
 	int (*get_tiocm)(struct serdev_controller *);
 	int (*set_tiocm)(struct serdev_controller *, unsigned int, unsigned int);
-	int (*break_ctl)(struct serdev_controller *ctrl, unsigned int break_state);
 };
 
 /**
@@ -168,8 +165,20 @@ int serdev_device_add(struct serdev_device *);
 void serdev_device_remove(struct serdev_device *);
 
 struct serdev_controller *serdev_controller_alloc(struct device *, size_t);
-int serdev_controller_add(struct serdev_controller *);
+int serdev_controller_add_platform(struct serdev_controller *, bool);
 void serdev_controller_remove(struct serdev_controller *);
+
+/**
+ * serdev_controller_add() - Add an serdev controller
+ * @ctrl:	controller to be registered.
+ *
+ * Register a controller previously allocated via serdev_controller_alloc() with
+ * the serdev core.
+ */
+static inline int serdev_controller_add(struct serdev_controller *ctrl)
+{
+	return serdev_controller_add_platform(ctrl, false);
+}
 
 static inline void serdev_controller_write_wakeup(struct serdev_controller *ctrl)
 {
@@ -204,7 +213,6 @@ int serdev_device_write_buf(struct serdev_device *, const unsigned char *, size_
 void serdev_device_wait_until_sent(struct serdev_device *, long);
 int serdev_device_get_tiocm(struct serdev_device *);
 int serdev_device_set_tiocm(struct serdev_device *, int, int);
-int serdev_device_break_ctl(struct serdev_device *serdev, int break_state);
 void serdev_device_write_wakeup(struct serdev_device *);
 int serdev_device_write(struct serdev_device *, const unsigned char *, size_t, long);
 void serdev_device_write_flush(struct serdev_device *);
@@ -252,15 +260,11 @@ static inline int serdev_device_write_buf(struct serdev_device *serdev,
 static inline void serdev_device_wait_until_sent(struct serdev_device *sdev, long timeout) {}
 static inline int serdev_device_get_tiocm(struct serdev_device *serdev)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int serdev_device_set_tiocm(struct serdev_device *serdev, int set, int clear)
 {
-	return -EOPNOTSUPP;
-}
-static inline int serdev_device_break_ctl(struct serdev_device *serdev, int break_state)
-{
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int serdev_device_write(struct serdev_device *sdev, const unsigned char *buf,
 				      size_t count, unsigned long timeout)
@@ -286,10 +290,18 @@ static inline bool serdev_device_get_cts(struct serdev_device *serdev)
 
 static inline int serdev_device_wait_for_cts(struct serdev_device *serdev, bool state, int timeout_ms)
 {
+	unsigned long timeout;
 	bool signal;
 
-	return readx_poll_timeout(serdev_device_get_cts, serdev, signal, signal == state,
-				  2000, timeout_ms * 1000);
+	timeout = jiffies + msecs_to_jiffies(timeout_ms);
+	while (time_is_after_jiffies(timeout)) {
+		signal = serdev_device_get_cts(serdev);
+		if (signal == state)
+			return 0;
+		usleep_range(1000, 2000);
+	}
+
+	return -ETIMEDOUT;
 }
 
 static inline int serdev_device_set_rts(struct serdev_device *serdev, bool enable)
@@ -326,19 +338,5 @@ static inline int serdev_tty_port_unregister(struct tty_port *port)
 	return -ENODEV;
 }
 #endif /* CONFIG_SERIAL_DEV_CTRL_TTYPORT */
-
-struct acpi_resource;
-struct acpi_resource_uart_serialbus;
-
-#ifdef CONFIG_ACPI
-bool serdev_acpi_get_uart_resource(struct acpi_resource *ares,
-				   struct acpi_resource_uart_serialbus **uart);
-#else
-static inline bool serdev_acpi_get_uart_resource(struct acpi_resource *ares,
-						 struct acpi_resource_uart_serialbus **uart)
-{
-	return false;
-}
-#endif /* CONFIG_ACPI */
 
 #endif /*_LINUX_SERDEV_H */

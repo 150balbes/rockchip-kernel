@@ -27,10 +27,7 @@ enum chips { adm1075, adm1272, adm1275, adm1276, adm1278, adm1293, adm1294 };
 #define ADM1275_PEAK_IOUT		0xd0
 #define ADM1275_PEAK_VIN		0xd1
 #define ADM1275_PEAK_VOUT		0xd2
-#define ADM1275_PMON_CONTROL		0xd3
 #define ADM1275_PMON_CONFIG		0xd4
-
-#define ADM1275_CONVERT_EN		BIT(0)
 
 #define ADM1275_VIN_VOUT_SELECT		BIT(6)
 #define ADM1275_VRANGE			BIT(5)
@@ -40,12 +37,9 @@ enum chips { adm1075, adm1272, adm1275, adm1276, adm1278, adm1293, adm1294 };
 
 #define ADM1272_IRANGE			BIT(0)
 
-#define ADM1278_TSFILT			BIT(15)
 #define ADM1278_TEMP1_EN		BIT(3)
 #define ADM1278_VIN_EN			BIT(2)
 #define ADM1278_VOUT_EN			BIT(1)
-
-#define ADM1278_PMON_DEFCONFIG		(ADM1278_VOUT_EN | ADM1278_TEMP1_EN | ADM1278_TSFILT)
 
 #define ADM1293_IRANGE_25		0
 #define ADM1293_IRANGE_50		BIT(6)
@@ -176,8 +170,8 @@ static const struct coefficients adm1293_coefficients[] = {
 	[18] = { 7658, 0, -3 },		/* power, 21V, irange200 */
 };
 
-static int adm1275_read_samples(const struct adm1275_data *data,
-				struct i2c_client *client, bool is_power)
+static int adm1275_read_pmon_config(const struct adm1275_data *data,
+				    struct i2c_client *client, bool is_power)
 {
 	int shift, ret;
 	u16 mask;
@@ -203,36 +197,8 @@ static int adm1275_read_samples(const struct adm1275_data *data,
 }
 
 static int adm1275_write_pmon_config(const struct adm1275_data *data,
-				     struct i2c_client *client, u16 word)
-{
-	int ret, ret2;
-
-	ret = i2c_smbus_write_byte_data(client, ADM1275_PMON_CONTROL, 0);
-	if (ret)
-		return ret;
-
-	if (data->have_power_sampling)
-		ret = i2c_smbus_write_word_data(client, ADM1275_PMON_CONFIG,
-						word);
-	else
-		ret = i2c_smbus_write_byte_data(client, ADM1275_PMON_CONFIG,
-						word);
-
-	/*
-	 * We still want to re-enable conversions if writing into
-	 * ADM1275_PMON_CONFIG failed.
-	 */
-	ret2 = i2c_smbus_write_byte_data(client, ADM1275_PMON_CONTROL,
-					 ADM1275_CONVERT_EN);
-	if (!ret)
-		ret = ret2;
-
-	return ret;
-}
-
-static int adm1275_write_samples(const struct adm1275_data *data,
-				 struct i2c_client *client,
-				 bool is_power, u16 word)
+				     struct i2c_client *client,
+				     bool is_power, u16 word)
 {
 	int shift, ret;
 	u16 mask;
@@ -250,8 +216,14 @@ static int adm1275_write_samples(const struct adm1275_data *data,
 		return ret;
 
 	word = (ret & ~mask) | ((word << shift) & mask);
+	if (data->have_power_sampling)
+		ret = i2c_smbus_write_word_data(client, ADM1275_PMON_CONFIG,
+						word);
+	else
+		ret = i2c_smbus_write_byte_data(client, ADM1275_PMON_CONFIG,
+						word);
 
-	return adm1275_write_pmon_config(data, client, word);
+	return ret;
 }
 
 static int adm1275_read_word_data(struct i2c_client *client, int page,
@@ -346,14 +318,14 @@ static int adm1275_read_word_data(struct i2c_client *client, int page,
 	case PMBUS_VIRT_POWER_SAMPLES:
 		if (!data->have_power_sampling)
 			return -ENXIO;
-		ret = adm1275_read_samples(data, client, true);
+		ret = adm1275_read_pmon_config(data, client, true);
 		if (ret < 0)
 			break;
 		ret = BIT(ret);
 		break;
 	case PMBUS_VIRT_IN_SAMPLES:
 	case PMBUS_VIRT_CURR_SAMPLES:
-		ret = adm1275_read_samples(data, client, false);
+		ret = adm1275_read_pmon_config(data, client, false);
 		if (ret < 0)
 			break;
 		ret = BIT(ret);
@@ -406,12 +378,14 @@ static int adm1275_write_word_data(struct i2c_client *client, int page, int reg,
 		if (!data->have_power_sampling)
 			return -ENXIO;
 		word = clamp_val(word, 1, ADM1275_SAMPLES_AVG_MAX);
-		ret = adm1275_write_samples(data, client, true, ilog2(word));
+		ret = adm1275_write_pmon_config(data, client, true,
+						ilog2(word));
 		break;
 	case PMBUS_VIRT_IN_SAMPLES:
 	case PMBUS_VIRT_CURR_SAMPLES:
 		word = clamp_val(word, 1, ADM1275_SAMPLES_AVG_MAX);
-		ret = adm1275_write_samples(data, client, false, ilog2(word));
+		ret = adm1275_write_pmon_config(data, client, false,
+						ilog2(word));
 		break;
 	default:
 		ret = -ENODATA;
@@ -488,23 +462,6 @@ static const struct i2c_device_id adm1275_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, adm1275_id);
 
-/* Enable VOUT & TEMP1 if not enabled (disabled by default) */
-static int adm1275_enable_vout_temp(struct adm1275_data *data,
-				    struct i2c_client *client, int config)
-{
-	int ret;
-
-	if ((config & ADM1278_PMON_DEFCONFIG) != ADM1278_PMON_DEFCONFIG) {
-		config |= ADM1278_PMON_DEFCONFIG;
-		ret = adm1275_write_pmon_config(data, client, config);
-		if (ret < 0) {
-			dev_err(&client->dev, "Failed to enable VOUT/TEMP1 monitoring\n");
-			return ret;
-		}
-	}
-	return 0;
-}
-
 static int adm1275_probe(struct i2c_client *client)
 {
 	s32 (*config_read_fn)(const struct i2c_client *client, u8 reg);
@@ -518,7 +475,6 @@ static int adm1275_probe(struct i2c_client *client)
 	int vindex = -1, voindex = -1, cindex = -1, pindex = -1;
 	int tindex = -1;
 	u32 shunt;
-	u32 avg;
 
 	if (!i2c_check_functionality(client->adapter,
 				     I2C_FUNC_SMBUS_READ_BYTE_DATA
@@ -655,13 +611,24 @@ static int adm1275_probe(struct i2c_client *client)
 		tindex = 8;
 
 		info->func[0] |= PMBUS_HAVE_PIN | PMBUS_HAVE_STATUS_INPUT |
-			PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT |
-			PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP;
+			PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT;
 
-		ret = adm1275_enable_vout_temp(data, client, config);
-		if (ret)
-			return ret;
+		/* Enable VOUT if not enabled (it is disabled by default) */
+		if (!(config & ADM1278_VOUT_EN)) {
+			config |= ADM1278_VOUT_EN;
+			ret = i2c_smbus_write_byte_data(client,
+							ADM1275_PMON_CONFIG,
+							config);
+			if (ret < 0) {
+				dev_err(&client->dev,
+					"Failed to enable VOUT monitoring\n");
+				return -ENODEV;
+			}
+		}
 
+		if (config & ADM1278_TEMP1_EN)
+			info->func[0] |=
+				PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP;
 		if (config & ADM1278_VIN_EN)
 			info->func[0] |= PMBUS_HAVE_VIN;
 		break;
@@ -718,9 +685,19 @@ static int adm1275_probe(struct i2c_client *client)
 			PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT |
 			PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP;
 
-		ret = adm1275_enable_vout_temp(data, client, config);
-		if (ret)
-			return ret;
+		/* Enable VOUT & TEMP1 if not enabled (disabled by default) */
+		if ((config & (ADM1278_VOUT_EN | ADM1278_TEMP1_EN)) !=
+		    (ADM1278_VOUT_EN | ADM1278_TEMP1_EN)) {
+			config |= ADM1278_VOUT_EN | ADM1278_TEMP1_EN;
+			ret = i2c_smbus_write_byte_data(client,
+							ADM1275_PMON_CONFIG,
+							config);
+			if (ret < 0) {
+				dev_err(&client->dev,
+					"Failed to enable VOUT monitoring\n");
+				return -ENODEV;
+			}
+		}
 
 		if (config & ADM1278_VIN_EN)
 			info->func[0] |= PMBUS_HAVE_VIN;
@@ -781,41 +758,6 @@ static int adm1275_probe(struct i2c_client *client)
 		return -ENODEV;
 	}
 
-	if (data->have_power_sampling &&
-	    of_property_read_u32(client->dev.of_node,
-				 "adi,power-sample-average", &avg) == 0) {
-		if (!avg || avg > ADM1275_SAMPLES_AVG_MAX ||
-		    BIT(__fls(avg)) != avg) {
-			dev_err(&client->dev,
-				"Invalid number of power samples");
-			return -EINVAL;
-		}
-		ret = adm1275_write_samples(data, client, true, ilog2(avg));
-		if (ret < 0) {
-			dev_err(&client->dev,
-				"Setting power sample averaging failed with error %d",
-				ret);
-			return ret;
-		}
-	}
-
-	if (of_property_read_u32(client->dev.of_node,
-				"adi,volt-curr-sample-average", &avg) == 0) {
-		if (!avg || avg > ADM1275_SAMPLES_AVG_MAX ||
-		    BIT(__fls(avg)) != avg) {
-			dev_err(&client->dev,
-				"Invalid number of voltage/current samples");
-			return -EINVAL;
-		}
-		ret = adm1275_write_samples(data, client, false, ilog2(avg));
-		if (ret < 0) {
-			dev_err(&client->dev,
-				"Setting voltage and current sample averaging failed with error %d",
-				ret);
-			return ret;
-		}
-	}
-
 	if (voindex < 0)
 		voindex = vindex;
 	if (vindex >= 0) {
@@ -854,7 +796,8 @@ static struct i2c_driver adm1275_driver = {
 	.driver = {
 		   .name = "adm1275",
 		   },
-	.probe = adm1275_probe,
+	.probe_new = adm1275_probe,
+	.remove = pmbus_do_remove,
 	.id_table = adm1275_id,
 };
 
@@ -863,4 +806,3 @@ module_i2c_driver(adm1275_driver);
 MODULE_AUTHOR("Guenter Roeck");
 MODULE_DESCRIPTION("PMBus driver for Analog Devices ADM1275 and compatibles");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(PMBUS);

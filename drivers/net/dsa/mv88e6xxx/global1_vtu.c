@@ -13,7 +13,6 @@
 
 #include "chip.h"
 #include "global1.h"
-#include "trace.h"
 
 /* Offset 0x02: VTU FID Register */
 
@@ -28,7 +27,7 @@ static int mv88e6xxx_g1_vtu_fid_read(struct mv88e6xxx_chip *chip,
 		return err;
 
 	entry->fid = val & MV88E6352_G1_VTU_FID_MASK;
-	entry->policy = !!(val & MV88E6352_G1_VTU_FID_VID_POLICY);
+
 	return 0;
 }
 
@@ -37,15 +36,13 @@ static int mv88e6xxx_g1_vtu_fid_write(struct mv88e6xxx_chip *chip,
 {
 	u16 val = entry->fid & MV88E6352_G1_VTU_FID_MASK;
 
-	if (entry->policy)
-		val |= MV88E6352_G1_VTU_FID_VID_POLICY;
-
 	return mv88e6xxx_g1_write(chip, MV88E6352_G1_VTU_FID, val);
 }
 
 /* Offset 0x03: VTU SID Register */
 
-static int mv88e6xxx_g1_vtu_sid_read(struct mv88e6xxx_chip *chip, u8 *sid)
+static int mv88e6xxx_g1_vtu_sid_read(struct mv88e6xxx_chip *chip,
+				     struct mv88e6xxx_vtu_entry *entry)
 {
 	u16 val;
 	int err;
@@ -54,14 +51,15 @@ static int mv88e6xxx_g1_vtu_sid_read(struct mv88e6xxx_chip *chip, u8 *sid)
 	if (err)
 		return err;
 
-	*sid = val & MV88E6352_G1_VTU_SID_MASK;
+	entry->sid = val & MV88E6352_G1_VTU_SID_MASK;
 
 	return 0;
 }
 
-static int mv88e6xxx_g1_vtu_sid_write(struct mv88e6xxx_chip *chip, u8 sid)
+static int mv88e6xxx_g1_vtu_sid_write(struct mv88e6xxx_chip *chip,
+				      struct mv88e6xxx_vtu_entry *entry)
 {
-	u16 val = sid & MV88E6352_G1_VTU_SID_MASK;
+	u16 val = entry->sid & MV88E6352_G1_VTU_SID_MASK;
 
 	return mv88e6xxx_g1_write(chip, MV88E6352_G1_VTU_SID, val);
 }
@@ -90,7 +88,7 @@ static int mv88e6xxx_g1_vtu_op(struct mv88e6xxx_chip *chip, u16 op)
 /* Offset 0x06: VTU VID Register */
 
 static int mv88e6xxx_g1_vtu_vid_read(struct mv88e6xxx_chip *chip,
-				     bool *valid, u16 *vid)
+				     struct mv88e6xxx_vtu_entry *entry)
 {
 	u16 val;
 	int err;
@@ -99,28 +97,25 @@ static int mv88e6xxx_g1_vtu_vid_read(struct mv88e6xxx_chip *chip,
 	if (err)
 		return err;
 
-	if (vid) {
-		*vid = val & 0xfff;
+	entry->vid = val & 0xfff;
 
-		if (val & MV88E6390_G1_VTU_VID_PAGE)
-			*vid |= 0x1000;
-	}
+	if (val & MV88E6390_G1_VTU_VID_PAGE)
+		entry->vid |= 0x1000;
 
-	if (valid)
-		*valid = !!(val & MV88E6XXX_G1_VTU_VID_VALID);
+	entry->valid = !!(val & MV88E6XXX_G1_VTU_VID_VALID);
 
 	return 0;
 }
 
 static int mv88e6xxx_g1_vtu_vid_write(struct mv88e6xxx_chip *chip,
-				      bool valid, u16 vid)
+				      struct mv88e6xxx_vtu_entry *entry)
 {
-	u16 val = vid & 0xfff;
+	u16 val = entry->vid & 0xfff;
 
-	if (vid & 0x1000)
+	if (entry->vid & 0x1000)
 		val |= MV88E6390_G1_VTU_VID_PAGE;
 
-	if (valid)
+	if (entry->valid)
 		val |= MV88E6XXX_G1_VTU_VID_VALID;
 
 	return mv88e6xxx_g1_write(chip, MV88E6XXX_G1_VTU_VID, val);
@@ -149,7 +144,7 @@ static int mv88e6185_g1_vtu_stu_data_read(struct mv88e6xxx_chip *chip,
 }
 
 static int mv88e6185_g1_vtu_data_read(struct mv88e6xxx_chip *chip,
-				      u8 *member, u8 *state)
+				      struct mv88e6xxx_vtu_entry *entry)
 {
 	u16 regs[3];
 	int err;
@@ -162,20 +157,36 @@ static int mv88e6185_g1_vtu_data_read(struct mv88e6xxx_chip *chip,
 	/* Extract MemberTag data */
 	for (i = 0; i < mv88e6xxx_num_ports(chip); ++i) {
 		unsigned int member_offset = (i % 4) * 4;
-		unsigned int state_offset = member_offset + 2;
 
-		if (member)
-			member[i] = (regs[i / 4] >> member_offset) & 0x3;
+		entry->member[i] = (regs[i / 4] >> member_offset) & 0x3;
+	}
 
-		if (state)
-			state[i] = (regs[i / 4] >> state_offset) & 0x3;
+	return 0;
+}
+
+static int mv88e6185_g1_stu_data_read(struct mv88e6xxx_chip *chip,
+				      struct mv88e6xxx_vtu_entry *entry)
+{
+	u16 regs[3];
+	int err;
+	int i;
+
+	err = mv88e6185_g1_vtu_stu_data_read(chip, regs);
+	if (err)
+		return err;
+
+	/* Extract PortState data */
+	for (i = 0; i < mv88e6xxx_num_ports(chip); ++i) {
+		unsigned int state_offset = (i % 4) * 4 + 2;
+
+		entry->state[i] = (regs[i / 4] >> state_offset) & 0x3;
 	}
 
 	return 0;
 }
 
 static int mv88e6185_g1_vtu_data_write(struct mv88e6xxx_chip *chip,
-				       u8 *member, u8 *state)
+				       struct mv88e6xxx_vtu_entry *entry)
 {
 	u16 regs[3] = { 0 };
 	int i;
@@ -185,11 +196,8 @@ static int mv88e6185_g1_vtu_data_write(struct mv88e6xxx_chip *chip,
 		unsigned int member_offset = (i % 4) * 4;
 		unsigned int state_offset = member_offset + 2;
 
-		if (member)
-			regs[i / 4] |= (member[i] & 0x3) << member_offset;
-
-		if (state)
-			regs[i / 4] |= (state[i] & 0x3) << state_offset;
+		regs[i / 4] |= (entry->member[i] & 0x3) << member_offset;
+		regs[i / 4] |= (entry->state[i] & 0x3) << state_offset;
 	}
 
 	/* Write all 3 VTU/STU Data registers */
@@ -257,8 +265,50 @@ static int mv88e6390_g1_vtu_data_write(struct mv88e6xxx_chip *chip, u8 *data)
 
 /* VLAN Translation Unit Operations */
 
-int mv88e6xxx_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
-			     struct mv88e6xxx_vtu_entry *entry)
+static int mv88e6xxx_g1_vtu_stu_getnext(struct mv88e6xxx_chip *chip,
+					struct mv88e6xxx_vtu_entry *entry)
+{
+	int err;
+
+	err = mv88e6xxx_g1_vtu_sid_write(chip, entry);
+	if (err)
+		return err;
+
+	err = mv88e6xxx_g1_vtu_op(chip, MV88E6XXX_G1_VTU_OP_STU_GET_NEXT);
+	if (err)
+		return err;
+
+	err = mv88e6xxx_g1_vtu_sid_read(chip, entry);
+	if (err)
+		return err;
+
+	return mv88e6xxx_g1_vtu_vid_read(chip, entry);
+}
+
+static int mv88e6xxx_g1_vtu_stu_get(struct mv88e6xxx_chip *chip,
+				    struct mv88e6xxx_vtu_entry *vtu)
+{
+	struct mv88e6xxx_vtu_entry stu;
+	int err;
+
+	err = mv88e6xxx_g1_vtu_sid_read(chip, vtu);
+	if (err)
+		return err;
+
+	stu.sid = vtu->sid - 1;
+
+	err = mv88e6xxx_g1_vtu_stu_getnext(chip, &stu);
+	if (err)
+		return err;
+
+	if (stu.sid != vtu->sid || !stu.valid)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int mv88e6xxx_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
+				    struct mv88e6xxx_vtu_entry *entry)
 {
 	int err;
 
@@ -274,7 +324,7 @@ int mv88e6xxx_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 	 * write the VID only once, when the entry is given as invalid.
 	 */
 	if (!entry->valid) {
-		err = mv88e6xxx_g1_vtu_vid_write(chip, false, entry->vid);
+		err = mv88e6xxx_g1_vtu_vid_write(chip, entry);
 		if (err)
 			return err;
 	}
@@ -283,7 +333,40 @@ int mv88e6xxx_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 	if (err)
 		return err;
 
-	return mv88e6xxx_g1_vtu_vid_read(chip, &entry->valid, &entry->vid);
+	return mv88e6xxx_g1_vtu_vid_read(chip, entry);
+}
+
+int mv88e6250_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
+			     struct mv88e6xxx_vtu_entry *entry)
+{
+	u16 val;
+	int err;
+
+	err = mv88e6xxx_g1_vtu_getnext(chip, entry);
+	if (err)
+		return err;
+
+	if (entry->valid) {
+		err = mv88e6185_g1_vtu_data_read(chip, entry);
+		if (err)
+			return err;
+
+		err = mv88e6185_g1_stu_data_read(chip, entry);
+		if (err)
+			return err;
+
+		/* VTU DBNum[3:0] are located in VTU Operation 3:0
+		 * VTU DBNum[5:4] are located in VTU Operation 9:8
+		 */
+		err = mv88e6xxx_g1_read(chip, MV88E6XXX_G1_VTU_OP, &val);
+		if (err)
+			return err;
+
+		entry->fid = val & 0x000f;
+		entry->fid |= (val & 0x0300) >> 4;
+	}
+
+	return 0;
 }
 
 int mv88e6185_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
@@ -297,12 +380,16 @@ int mv88e6185_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 		return err;
 
 	if (entry->valid) {
-		err = mv88e6185_g1_vtu_data_read(chip, entry->member, entry->state);
+		err = mv88e6185_g1_vtu_data_read(chip, entry);
+		if (err)
+			return err;
+
+		err = mv88e6185_g1_stu_data_read(chip, entry);
 		if (err)
 			return err;
 
 		/* VTU DBNum[3:0] are located in VTU Operation 3:0
-		 * VTU DBNum[7:4] ([5:4] for 6250) are located in VTU Operation 11:8 (9:8)
+		 * VTU DBNum[7:4] are located in VTU Operation 11:8
 		 */
 		err = mv88e6xxx_g1_read(chip, MV88E6XXX_G1_VTU_OP, &val);
 		if (err)
@@ -310,7 +397,6 @@ int mv88e6185_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 
 		entry->fid = val & 0x000f;
 		entry->fid |= (val & 0x0f00) >> 4;
-		entry->fid &= mv88e6xxx_num_databases(chip) - 1;
 	}
 
 	return 0;
@@ -327,7 +413,7 @@ int mv88e6352_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 		return err;
 
 	if (entry->valid) {
-		err = mv88e6185_g1_vtu_data_read(chip, entry->member, NULL);
+		err = mv88e6185_g1_vtu_data_read(chip, entry);
 		if (err)
 			return err;
 
@@ -335,7 +421,12 @@ int mv88e6352_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 		if (err)
 			return err;
 
-		err = mv88e6xxx_g1_vtu_sid_read(chip, &entry->sid);
+		/* Fetch VLAN PortState data from the STU */
+		err = mv88e6xxx_g1_vtu_stu_get(chip, entry);
+		if (err)
+			return err;
+
+		err = mv88e6185_g1_stu_data_read(chip, entry);
 		if (err)
 			return err;
 	}
@@ -358,16 +449,50 @@ int mv88e6390_g1_vtu_getnext(struct mv88e6xxx_chip *chip,
 		if (err)
 			return err;
 
-		err = mv88e6xxx_g1_vtu_fid_read(chip, entry);
+		/* Fetch VLAN PortState data from the STU */
+		err = mv88e6xxx_g1_vtu_stu_get(chip, entry);
 		if (err)
 			return err;
 
-		err = mv88e6xxx_g1_vtu_sid_read(chip, &entry->sid);
+		err = mv88e6390_g1_vtu_data_read(chip, entry->state);
+		if (err)
+			return err;
+
+		err = mv88e6xxx_g1_vtu_fid_read(chip, entry);
 		if (err)
 			return err;
 	}
 
 	return 0;
+}
+
+int mv88e6250_g1_vtu_loadpurge(struct mv88e6xxx_chip *chip,
+			       struct mv88e6xxx_vtu_entry *entry)
+{
+	u16 op = MV88E6XXX_G1_VTU_OP_VTU_LOAD_PURGE;
+	int err;
+
+	err = mv88e6xxx_g1_vtu_op_wait(chip);
+	if (err)
+		return err;
+
+	err = mv88e6xxx_g1_vtu_vid_write(chip, entry);
+	if (err)
+		return err;
+
+	if (entry->valid) {
+		err = mv88e6185_g1_vtu_data_write(chip, entry);
+		if (err)
+			return err;
+
+		/* VTU DBNum[3:0] are located in VTU Operation 3:0
+		 * VTU DBNum[5:4] are located in VTU Operation 9:8
+		 */
+		op |= entry->fid & 0x000f;
+		op |= (entry->fid & 0x0030) << 4;
+	}
+
+	return mv88e6xxx_g1_vtu_op(chip, op);
 }
 
 int mv88e6185_g1_vtu_loadpurge(struct mv88e6xxx_chip *chip,
@@ -380,21 +505,17 @@ int mv88e6185_g1_vtu_loadpurge(struct mv88e6xxx_chip *chip,
 	if (err)
 		return err;
 
-	err = mv88e6xxx_g1_vtu_vid_write(chip, entry->valid, entry->vid);
+	err = mv88e6xxx_g1_vtu_vid_write(chip, entry);
 	if (err)
 		return err;
 
 	if (entry->valid) {
-		err = mv88e6185_g1_vtu_data_write(chip, entry->member, entry->state);
+		err = mv88e6185_g1_vtu_data_write(chip, entry);
 		if (err)
 			return err;
 
 		/* VTU DBNum[3:0] are located in VTU Operation 3:0
 		 * VTU DBNum[7:4] are located in VTU Operation 11:8
-		 *
-		 * For the 6250/6220, the latter are really [5:4] and
-		 * 9:8, but in those cases bits 7:6 of entry->fid are
-		 * 0 since they have num_databases = 64.
 		 */
 		op |= entry->fid & 0x000f;
 		op |= (entry->fid & 0x00f0) << 4;
@@ -412,21 +533,27 @@ int mv88e6352_g1_vtu_loadpurge(struct mv88e6xxx_chip *chip,
 	if (err)
 		return err;
 
-	err = mv88e6xxx_g1_vtu_vid_write(chip, entry->valid, entry->vid);
+	err = mv88e6xxx_g1_vtu_vid_write(chip, entry);
 	if (err)
 		return err;
 
 	if (entry->valid) {
-		/* Write MemberTag data */
-		err = mv88e6185_g1_vtu_data_write(chip, entry->member, NULL);
+		/* Write MemberTag and PortState data */
+		err = mv88e6185_g1_vtu_data_write(chip, entry);
+		if (err)
+			return err;
+
+		err = mv88e6xxx_g1_vtu_sid_write(chip, entry);
+		if (err)
+			return err;
+
+		/* Load STU entry */
+		err = mv88e6xxx_g1_vtu_op(chip,
+					  MV88E6XXX_G1_VTU_OP_STU_LOAD_PURGE);
 		if (err)
 			return err;
 
 		err = mv88e6xxx_g1_vtu_fid_write(chip, entry);
-		if (err)
-			return err;
-
-		err = mv88e6xxx_g1_vtu_sid_write(chip, entry->sid);
 		if (err)
 			return err;
 	}
@@ -444,21 +571,32 @@ int mv88e6390_g1_vtu_loadpurge(struct mv88e6xxx_chip *chip,
 	if (err)
 		return err;
 
-	err = mv88e6xxx_g1_vtu_vid_write(chip, entry->valid, entry->vid);
+	err = mv88e6xxx_g1_vtu_vid_write(chip, entry);
 	if (err)
 		return err;
 
 	if (entry->valid) {
+		/* Write PortState data */
+		err = mv88e6390_g1_vtu_data_write(chip, entry->state);
+		if (err)
+			return err;
+
+		err = mv88e6xxx_g1_vtu_sid_write(chip, entry);
+		if (err)
+			return err;
+
+		/* Load STU entry */
+		err = mv88e6xxx_g1_vtu_op(chip,
+					  MV88E6XXX_G1_VTU_OP_STU_LOAD_PURGE);
+		if (err)
+			return err;
+
 		/* Write MemberTag data */
 		err = mv88e6390_g1_vtu_data_write(chip, entry->member);
 		if (err)
 			return err;
 
 		err = mv88e6xxx_g1_vtu_fid_write(chip, entry);
-		if (err)
-			return err;
-
-		err = mv88e6xxx_g1_vtu_sid_write(chip, entry->sid);
 		if (err)
 			return err;
 	}
@@ -478,139 +616,13 @@ int mv88e6xxx_g1_vtu_flush(struct mv88e6xxx_chip *chip)
 	return mv88e6xxx_g1_vtu_op(chip, MV88E6XXX_G1_VTU_OP_FLUSH_ALL);
 }
 
-/* Spanning Tree Unit Operations */
-
-int mv88e6xxx_g1_stu_getnext(struct mv88e6xxx_chip *chip,
-			     struct mv88e6xxx_stu_entry *entry)
-{
-	int err;
-
-	err = mv88e6xxx_g1_vtu_op_wait(chip);
-	if (err)
-		return err;
-
-	/* To get the next higher active SID, the STU GetNext operation can be
-	 * started again without setting the SID registers since it already
-	 * contains the last SID.
-	 *
-	 * To save a few hardware accesses and abstract this to the caller,
-	 * write the SID only once, when the entry is given as invalid.
-	 */
-	if (!entry->valid) {
-		err = mv88e6xxx_g1_vtu_sid_write(chip, entry->sid);
-		if (err)
-			return err;
-	}
-
-	err = mv88e6xxx_g1_vtu_op(chip, MV88E6XXX_G1_VTU_OP_STU_GET_NEXT);
-	if (err)
-		return err;
-
-	err = mv88e6xxx_g1_vtu_vid_read(chip, &entry->valid, NULL);
-	if (err)
-		return err;
-
-	if (entry->valid) {
-		err = mv88e6xxx_g1_vtu_sid_read(chip, &entry->sid);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
-
-int mv88e6352_g1_stu_getnext(struct mv88e6xxx_chip *chip,
-			     struct mv88e6xxx_stu_entry *entry)
-{
-	int err;
-
-	err = mv88e6xxx_g1_stu_getnext(chip, entry);
-	if (err)
-		return err;
-
-	if (!entry->valid)
-		return 0;
-
-	return mv88e6185_g1_vtu_data_read(chip, NULL, entry->state);
-}
-
-int mv88e6390_g1_stu_getnext(struct mv88e6xxx_chip *chip,
-			     struct mv88e6xxx_stu_entry *entry)
-{
-	int err;
-
-	err = mv88e6xxx_g1_stu_getnext(chip, entry);
-	if (err)
-		return err;
-
-	if (!entry->valid)
-		return 0;
-
-	return mv88e6390_g1_vtu_data_read(chip, entry->state);
-}
-
-int mv88e6352_g1_stu_loadpurge(struct mv88e6xxx_chip *chip,
-			       struct mv88e6xxx_stu_entry *entry)
-{
-	int err;
-
-	err = mv88e6xxx_g1_vtu_op_wait(chip);
-	if (err)
-		return err;
-
-	err = mv88e6xxx_g1_vtu_vid_write(chip, entry->valid, 0);
-	if (err)
-		return err;
-
-	err = mv88e6xxx_g1_vtu_sid_write(chip, entry->sid);
-	if (err)
-		return err;
-
-	if (entry->valid) {
-		err = mv88e6185_g1_vtu_data_write(chip, NULL, entry->state);
-		if (err)
-			return err;
-	}
-
-	/* Load/Purge STU entry */
-	return mv88e6xxx_g1_vtu_op(chip, MV88E6XXX_G1_VTU_OP_STU_LOAD_PURGE);
-}
-
-int mv88e6390_g1_stu_loadpurge(struct mv88e6xxx_chip *chip,
-			       struct mv88e6xxx_stu_entry *entry)
-{
-	int err;
-
-	err = mv88e6xxx_g1_vtu_op_wait(chip);
-	if (err)
-		return err;
-
-	err = mv88e6xxx_g1_vtu_vid_write(chip, entry->valid, 0);
-	if (err)
-		return err;
-
-	err = mv88e6xxx_g1_vtu_sid_write(chip, entry->sid);
-	if (err)
-		return err;
-
-	if (entry->valid) {
-		err = mv88e6390_g1_vtu_data_write(chip, entry->state);
-		if (err)
-			return err;
-	}
-
-	/* Load/Purge STU entry */
-	return mv88e6xxx_g1_vtu_op(chip, MV88E6XXX_G1_VTU_OP_STU_LOAD_PURGE);
-}
-
-/* VTU Violation Management */
-
 static irqreturn_t mv88e6xxx_g1_vtu_prob_irq_thread_fn(int irq, void *dev_id)
 {
 	struct mv88e6xxx_chip *chip = dev_id;
-	u16 val, vid;
+	struct mv88e6xxx_vtu_entry entry;
 	int spid;
 	int err;
+	u16 val;
 
 	mv88e6xxx_reg_lock(chip);
 
@@ -622,19 +634,21 @@ static irqreturn_t mv88e6xxx_g1_vtu_prob_irq_thread_fn(int irq, void *dev_id)
 	if (err)
 		goto out;
 
-	err = mv88e6xxx_g1_vtu_vid_read(chip, NULL, &vid);
+	err = mv88e6xxx_g1_vtu_vid_read(chip, &entry);
 	if (err)
 		goto out;
 
 	spid = val & MV88E6XXX_G1_VTU_OP_SPID_MASK;
 
 	if (val & MV88E6XXX_G1_VTU_OP_MEMBER_VIOLATION) {
-		trace_mv88e6xxx_vtu_member_violation(chip->dev, spid, vid);
+		dev_err_ratelimited(chip->dev, "VTU member violation for vid %d, source port %d\n",
+				    entry.vid, spid);
 		chip->ports[spid].vtu_member_violation++;
 	}
 
 	if (val & MV88E6XXX_G1_VTU_OP_MISS_VIOLATION) {
-		trace_mv88e6xxx_vtu_miss_violation(chip->dev, spid, vid);
+		dev_dbg_ratelimited(chip->dev, "VTU miss violation for vid %d, source port %d\n",
+				    entry.vid, spid);
 		chip->ports[spid].vtu_miss_violation++;
 	}
 

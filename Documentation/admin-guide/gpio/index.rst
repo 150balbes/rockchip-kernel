@@ -10,7 +10,6 @@ gpio
     gpio-aggregator
     sysfs
     gpio-mockup
-    gpio-sim
 
 .. only::  subproject and html
 

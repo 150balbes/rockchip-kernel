@@ -76,6 +76,8 @@
 #define SWITCH_SND7 0x80
 #define SWITCH_NONE 0x00
 
+#define up(x, r) (((x) + (r) - 1) & ~((r)-1))
+
 
 static int default_par;		/* default resolution (0=none) */
 
@@ -235,6 +237,16 @@ static int MV300_reg_8bit[256] = {
 static int *MV300_reg = MV300_reg_8bit;
 #endif /* ATAFB_EXT */
 
+
+static int inverse;
+
+extern int fontheight_8x8;
+extern int fontwidth_8x8;
+extern unsigned char fontdata_8x8[];
+
+extern int fontheight_8x16;
+extern int fontwidth_8x16;
+extern unsigned char fontdata_8x16[];
 
 /*
  * struct fb_ops {
@@ -465,27 +477,27 @@ static struct fb_videomode atafb_modedb[] __initdata = {
 	{
 		/* 320x200, 15 kHz, 60 Hz (ST low) */
 		"st-low", 60, 320, 200, 32000, 32, 16, 31, 14, 96, 4,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
 		/* 640x200, 15 kHz, 60 Hz (ST medium) */
 		"st-mid", 60, 640, 200, 32000, 32, 16, 31, 14, 96, 4,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
 		/* 640x400, 30.25 kHz, 63.5 Hz (ST high) */
 		"st-high", 63, 640, 400, 32000, 128, 0, 40, 14, 128, 4,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
 		/* 320x480, 15 kHz, 60 Hz (TT low) */
 		"tt-low", 60, 320, 480, 31041, 120, 100, 8, 16, 140, 30,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
 		/* 640x480, 29 kHz, 57 Hz (TT medium) */
 		"tt-mid", 60, 640, 480, 31041, 120, 100, 8, 16, 140, 30,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
-		/* 1280x960, 72 kHz, 72 Hz (TT high) */
-		"tt-high", 72, 1280, 960, 7760, 260, 60, 36, 4, 192, 4,
-		0, FB_VMODE_NONINTERLACED
+		/* 1280x960, 29 kHz, 60 Hz (TT high) */
+		"tt-high", 57, 640, 960, 31041, 120, 100, 8, 16, 140, 30,
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	},
 
 	/*
@@ -494,12 +506,12 @@ static struct fb_videomode atafb_modedb[] __initdata = {
 
 	{
 		/* 640x480, 31 kHz, 60 Hz (VGA) */
-		"vga", 60, 640, 480, 39721, 42, 18, 31, 11, 100, 3,
-		0, FB_VMODE_NONINTERLACED
+		"vga", 63.5, 640, 480, 32000, 18, 42, 31, 11, 96, 3,
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	}, {
 		/* 640x400, 31 kHz, 70 Hz (VGA) */
-		"vga70", 70, 640, 400, 39721, 42, 18, 31, 11, 100, 3,
-		FB_SYNC_VERT_HIGH_ACT | FB_SYNC_COMP_HIGH_ACT, FB_VMODE_NONINTERLACED
+		"vga70", 70, 640, 400, 32000, 18, 42, 31, 11, 96, 3,
+		FB_SYNC_VERT_HIGH_ACT | FB_SYNC_COMP_HIGH_ACT, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	},
 
 	/*
@@ -509,7 +521,7 @@ static struct fb_videomode atafb_modedb[] __initdata = {
 	{
 		/* 896x608, 31 kHz, 60 Hz (Falcon High) */
 		"falh", 60, 896, 608, 32000, 18, 42, 31, 1, 96,3,
-		0, FB_VMODE_NONINTERLACED
+		0, FB_VMODE_NONINTERLACED | FB_VMODE_YWRAP
 	},
 };
 
@@ -1008,6 +1020,10 @@ static int falcon_decode_var(struct fb_var_screeninfo *var,
 	else if (yres_virtual < yres)
 		yres_virtual = yres;
 
+	/* backward bug-compatibility */
+	if (var->pixclock > 1)
+		var->pixclock -= 1;
+
 	par->hw.falcon.line_width = bpp * xres / 16;
 	par->hw.falcon.line_offset = bpp * (xres_virtual - xres) / 16;
 
@@ -1066,6 +1082,8 @@ static int falcon_decode_var(struct fb_var_screeninfo *var,
 			xstretch = 2;	/* Double pixel width only for hicolor */
 		/* Default values are used for vert./hor. timing if no pixelclock given. */
 		if (var->pixclock == 0) {
+			int linesize;
+
 			/* Choose master pixelclock depending on hor. timing */
 			plen = 1 * xstretch;
 			if ((plen * xres + f25.right + f25.hsync + f25.left) *
@@ -1084,6 +1102,7 @@ static int falcon_decode_var(struct fb_var_screeninfo *var,
 			left_margin = pclock->left / plen;
 			right_margin = pclock->right / plen;
 			hsync_len = pclock->hsync / plen;
+			linesize = left_margin + xres + right_margin + hsync_len;
 			upper_margin = 31;
 			lower_margin = 11;
 			vsync_len = 3;
@@ -1632,18 +1651,18 @@ static irqreturn_t falcon_vbl_switcher(int irq, void *dummy)
 static int falcon_pan_display(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 
 	int xoffset;
 	int bpp = info->var.bits_per_pixel;
 
 	if (bpp == 1)
-		var->xoffset = round_up(var->xoffset, 32);
+		var->xoffset = up(var->xoffset, 32);
 	if (bpp != 16)
 		par->hw.falcon.xoffset = var->xoffset & 15;
 	else {
 		par->hw.falcon.xoffset = 0;
-		var->xoffset = round_up(var->xoffset, 2);
+		var->xoffset = up(var->xoffset, 2);
 	}
 	par->hw.falcon.line_offset = bpp *
 		(info->var.xres_virtual - info->var.xres) / 16;
@@ -2199,10 +2218,6 @@ static int ext_setcolreg(unsigned int regno, unsigned int red,
 	if (regno > 255)
 		return 1;
 
-	red >>= 8;
-	green >>= 8;
-	blue >>= 8;
-
 	switch (external_card_type) {
 	case IS_VGA:
 		OUTB(0x3c8, regno);
@@ -2256,12 +2271,12 @@ static void set_screen_base(void *s_base)
 
 static int pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 
 	if (!fbhw->set_screen_base ||
 	    (!ATARIHW_PRESENT(EXTD_SHIFTER) && var->xoffset))
 		return -EINVAL;
-	var->xoffset = round_up(var->xoffset, 16);
+	var->xoffset = up(var->xoffset, 16);
 	par->screen_base = screen_base +
 	        (var->yoffset * info->var.xres_virtual + var->xoffset)
 	        * info->var.bits_per_pixel / 8;
@@ -2399,22 +2414,68 @@ static void atafb_set_disp(struct fb_info *info)
 				atari_stram_to_virt(info->fix.smem_start));
 }
 
+static int atafb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
+			   u_int transp, struct fb_info *info)
+{
+	red >>= 8;
+	green >>= 8;
+	blue >>= 8;
+
+	return info->fbops->fb_setcolreg(regno, red, green, blue, transp, info);
+}
+
 static int
 atafb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 {
-	if (!fbhw->pan_display)
+	int xoffset = var->xoffset;
+	int yoffset = var->yoffset;
+	int err;
+
+	if (var->vmode & FB_VMODE_YWRAP) {
+		if (yoffset < 0 || yoffset >= info->var.yres_virtual || xoffset)
+			return -EINVAL;
+	} else {
+		if (xoffset + info->var.xres > info->var.xres_virtual ||
+		    yoffset + info->var.yres > info->var.yres_virtual)
+			return -EINVAL;
+	}
+
+	if (fbhw->pan_display) {
+		err = fbhw->pan_display(var, info);
+		if (err)
+			return err;
+	} else
 		return -EINVAL;
 
-	return fbhw->pan_display(var, info);
+	info->var.xoffset = xoffset;
+	info->var.yoffset = yoffset;
+
+	if (var->vmode & FB_VMODE_YWRAP)
+		info->var.vmode |= FB_VMODE_YWRAP;
+	else
+		info->var.vmode &= ~FB_VMODE_YWRAP;
+
+	return 0;
 }
 
 /*
  * generic drawing routines; imageblit needs updating for image depth > 1
  */
 
+#if BITS_PER_LONG == 32
+#define BYTES_PER_LONG	4
+#define SHIFT_PER_LONG	5
+#elif BITS_PER_LONG == 64
+#define BYTES_PER_LONG	8
+#define SHIFT_PER_LONG	6
+#else
+#define Please update me
+#endif
+
+
 static void atafb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 	int x2, y2;
 	u32 width, height;
 
@@ -2457,7 +2518,7 @@ static void atafb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 
 static void atafb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 	int x2, y2;
 	u32 dx, dy, sx, sy, width, height;
 	int rev_copy = 0;
@@ -2511,8 +2572,10 @@ static void atafb_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 
 static void atafb_imageblit(struct fb_info *info, const struct fb_image *image)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 	int x2, y2;
+	unsigned long *dst;
+	int dst_idx;
 	const char *src;
 	u32 dx, dy, width, height, pitch;
 
@@ -2539,6 +2602,10 @@ static void atafb_imageblit(struct fb_info *info, const struct fb_image *image)
 
 	if (image->depth == 1) {
 		// used for font data
+		dst = (unsigned long *)
+			((unsigned long)info->screen_base & ~(BYTES_PER_LONG - 1));
+		dst_idx = ((unsigned long)info->screen_base & (BYTES_PER_LONG - 1)) * 8;
+		dst_idx += dy * par->next_line * 8 + dx;
 		src = image->data;
 		pitch = (image->width + 7) / 8;
 		while (height--) {
@@ -2575,14 +2642,14 @@ atafb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 #ifdef FBCMD_GET_CURRENTPAR
 	case FBCMD_GET_CURRENTPAR:
-		if (copy_to_user((void *)arg, &current_par,
+		if (copy_to_user((void *)arg, (void *)&current_par,
 				 sizeof(struct atafb_par)))
 			return -EFAULT;
 		return 0;
 #endif
 #ifdef FBCMD_SET_CURRENTPAR
 	case FBCMD_SET_CURRENTPAR:
-		if (copy_from_user(&current_par, (void *)arg,
+		if (copy_from_user((void *)&current_par, (void *)arg,
 				   sizeof(struct atafb_par)))
 			return -EFAULT;
 		ata_set_par(&current_par);
@@ -2648,7 +2715,7 @@ static int atafb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	 * hw par just decoded */
 static int atafb_set_par(struct fb_info *info)
 {
-	struct atafb_par *par = info->par;
+	struct atafb_par *par = (struct atafb_par *)info->par;
 
 	/* Decode wanted screen parameters */
 	fbhw->decode_var(&info->var, par);
@@ -2667,6 +2734,7 @@ static struct fb_ops atafb_ops = {
 	.owner =	THIS_MODULE,
 	.fb_check_var	= atafb_check_var,
 	.fb_set_par	= atafb_set_par,
+	.fb_setcolreg	= atafb_setcolreg,
 	.fb_blank =	atafb_blank,
 	.fb_pan_display	= atafb_pan_display,
 	.fb_fillrect	= atafb_fillrect,
@@ -2934,7 +3002,7 @@ static void __init atafb_setup_user(char *spec)
 	}
 }
 
-static int __init atafb_setup(char *options)
+int __init atafb_setup(char *options)
 {
 	char *this_opt;
 	int temp;
@@ -2949,7 +3017,7 @@ static int __init atafb_setup(char *options)
 			default_par = temp;
 			mode_option = this_opt;
 		} else if (!strcmp(this_opt, "inverse"))
-			fb_invert_cmaps();
+			inverse = 1;
 		else if (!strncmp(this_opt, "hwscroll_", 9)) {
 			hwscroll = simple_strtoul(this_opt + 9, NULL, 10);
 			if (hwscroll < 0)
@@ -3112,6 +3180,7 @@ static int __init atafb_probe(struct platform_device *pdev)
 #ifdef ATAFB_FALCON
 	fb_info.pseudo_palette = current_par.hw.falcon.pseudo_palette;
 #endif
+	fb_info.flags = FBINFO_FLAG_DEFAULT;
 
 	if (!fb_find_mode(&fb_info.var, &fb_info, mode_option, atafb_modedb,
 			  NUM_TOTAL_MODES, &atafb_modedb[defmode],

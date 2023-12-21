@@ -3,13 +3,10 @@
  * Copyright (C) 2000 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
  */
 
-#include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/mm.h>
-#include <linux/ctype.h>
 #include <linux/module.h>
-#include <linux/panic_notifier.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
 #include <linux/utsname.h>
@@ -17,10 +14,8 @@
 #include <linux/sched/task.h>
 #include <linux/kmsg_dump.h>
 #include <linux/suspend.h>
-#include <linux/random.h>
 
 #include <asm/processor.h>
-#include <asm/cpufeature.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <as-layout.h>
@@ -31,10 +26,7 @@
 #include <mem_user.h>
 #include <os.h>
 
-#include "um_arch.h"
-
-#define DEFAULT_COMMAND_LINE_ROOT "root=98:0"
-#define DEFAULT_COMMAND_LINE_CONSOLE "console=tty0"
+#define DEFAULT_COMMAND_LINE "root=98:0"
 
 /* Changed in add_arg and setup_arch, which run before SMP is started */
 static char __initdata command_line[COMMAND_LINE_SIZE] = { 0 };
@@ -57,12 +49,8 @@ static void __init add_arg(char *arg)
  */
 struct cpuinfo_um boot_cpu_data = {
 	.loops_per_jiffy	= 0,
-	.ipi_pipe		= { -1, -1 },
-	.cache_alignment	= L1_CACHE_BYTES,
-	.x86_capability		= { 0 }
+	.ipi_pipe		= { -1, -1 }
 };
-
-EXPORT_SYMBOL(boot_cpu_data);
 
 union thread_union cpu0_irqstack
 	__section(".data..init_irqstack") =
@@ -73,31 +61,23 @@ static char host_info[(__NEW_UTS_LEN + 1) * 5];
 
 static int show_cpuinfo(struct seq_file *m, void *v)
 {
-	int i = 0;
+	int index = 0;
 
-	seq_printf(m, "processor\t: %d\n", i);
+	seq_printf(m, "processor\t: %d\n", index);
 	seq_printf(m, "vendor_id\t: User Mode Linux\n");
 	seq_printf(m, "model name\t: UML\n");
 	seq_printf(m, "mode\t\t: skas\n");
 	seq_printf(m, "host\t\t: %s\n", host_info);
-	seq_printf(m, "fpu\t\t: %s\n", cpu_has(&boot_cpu_data, X86_FEATURE_FPU) ? "yes" : "no");
-	seq_printf(m, "flags\t\t:");
-	for (i = 0; i < 32*NCAPINTS; i++)
-		if (cpu_has(&boot_cpu_data, i) && (x86_cap_flags[i] != NULL))
-			seq_printf(m, " %s", x86_cap_flags[i]);
-	seq_printf(m, "\n");
-	seq_printf(m, "cache_alignment\t: %d\n", boot_cpu_data.cache_alignment);
-	seq_printf(m, "bogomips\t: %lu.%02lu\n",
+	seq_printf(m, "bogomips\t: %lu.%02lu\n\n",
 		   loops_per_jiffy/(500000/HZ),
 		   (loops_per_jiffy/(5000/HZ)) % 100);
-
 
 	return 0;
 }
 
 static void *c_start(struct seq_file *m, loff_t *pos)
 {
-	return *pos < nr_cpu_ids ? &boot_cpu_data + *pos : NULL;
+	return *pos < nr_cpu_ids ? cpu_data + *pos : NULL;
 }
 
 static void *c_next(struct seq_file *m, void *v, loff_t *pos)
@@ -129,11 +109,10 @@ unsigned long end_vm;
 int ncpus = 1;
 
 /* Set in early boot */
-static int have_root __initdata;
-static int have_console __initdata;
+static int have_root __initdata = 0;
 
 /* Set in uml_mem_setup and modified in linux_main */
-long long physmem_size = 64 * 1024 * 1024;
+long long physmem_size = 32 * 1024 * 1024;
 EXPORT_SYMBOL(physmem_size);
 
 static const char *usage_string =
@@ -180,17 +159,6 @@ static int __init no_skas_debug_setup(char *line, int *add)
 __uml_setup("debug", no_skas_debug_setup,
 "debug\n"
 "    this flag is not needed to run gdb on UML in skas mode\n\n"
-);
-
-static int __init uml_console_setup(char *line, int *add)
-{
-	have_console = 1;
-	return 0;
-}
-
-__uml_setup("console=", uml_console_setup,
-"console=<preferred console>\n"
-"    Specify the preferred console output driver\n\n"
 );
 
 static int __init Usage(char *line, int *add)
@@ -248,13 +216,13 @@ static int panic_exit(struct notifier_block *self, unsigned long unused1,
 	bust_spinlocks(0);
 	uml_exitcode = 1;
 	os_dump_core();
-
-	return NOTIFY_DONE;
+	return 0;
 }
 
 static struct notifier_block panic_exit_notifier = {
-	.notifier_call	= panic_exit,
-	.priority	= INT_MAX - 1, /* run as 2nd notifier, won't return */
+	.notifier_call 		= panic_exit,
+	.next 			= NULL,
+	.priority 		= 0
 };
 
 void uml_finishsetup(void)
@@ -268,7 +236,6 @@ void uml_finishsetup(void)
 }
 
 /* Set during early boot */
-unsigned long stub_start;
 unsigned long task_size;
 EXPORT_SYMBOL(task_size);
 
@@ -279,30 +246,6 @@ unsigned long end_iomem;
 EXPORT_SYMBOL(end_iomem);
 
 #define MIN_VMALLOC (32 * 1024 * 1024)
-
-static void parse_host_cpu_flags(char *line)
-{
-	int i;
-	for (i = 0; i < 32*NCAPINTS; i++) {
-		if ((x86_cap_flags[i] != NULL) && strstr(line, x86_cap_flags[i]))
-			set_cpu_cap(&boot_cpu_data, i);
-	}
-}
-static void parse_cache_line(char *line)
-{
-	long res;
-	char *to_parse = strstr(line, ":");
-	if (to_parse) {
-		to_parse++;
-		while (*to_parse != 0 && isspace(*to_parse)) {
-			to_parse++;
-		}
-		if (kstrtoul(to_parse, 10, &res) == 0 && is_power_of_2(res))
-			boot_cpu_data.cache_alignment = res;
-		else
-			boot_cpu_data.cache_alignment = L1_CACHE_BYTES;
-	}
-}
 
 int __init linux_main(int argc, char **argv)
 {
@@ -321,20 +264,9 @@ int __init linux_main(int argc, char **argv)
 			add_arg(argv[i]);
 	}
 	if (have_root == 0)
-		add_arg(DEFAULT_COMMAND_LINE_ROOT);
-
-	if (have_console == 0)
-		add_arg(DEFAULT_COMMAND_LINE_CONSOLE);
+		add_arg(DEFAULT_COMMAND_LINE);
 
 	host_task_size = os_get_top_address();
-	/* reserve a few pages for the stubs (taking care of data alignment) */
-	/* align the data portion */
-	BUILD_BUG_ON(!is_power_of_2(STUB_DATA_PAGES));
-	stub_start = (host_task_size - 1) & ~(STUB_DATA_PAGES * PAGE_SIZE - 1);
-	/* another page for the code portion */
-	stub_start -= PAGE_SIZE;
-	host_task_size = stub_start;
-
 	/*
 	 * TASK_SIZE needs to be PGDIR_SIZE aligned or else exit_mmap craps
 	 * out
@@ -343,8 +275,6 @@ int __init linux_main(int argc, char **argv)
 
 	/* OS sanity checks that need to happen before the kernel runs */
 	os_early_checks();
-
-	get_host_cpu_features(parse_host_cpu_flags, parse_cache_line);
 
 	brk_start = (unsigned long) sbrk(0);
 
@@ -412,33 +342,21 @@ int __init __weak read_initrd(void)
 
 void __init setup_arch(char **cmdline_p)
 {
-	u8 rng_seed[32];
-
 	stack_protections((unsigned long) &init_thread_info);
 	setup_physmem(uml_physmem, uml_reserved, physmem_size, highmem);
 	mem_total_pages(physmem_size, iomem_size, highmem);
-	uml_dtb_init();
 	read_initrd();
 
 	paging_init();
-	strscpy(boot_command_line, command_line, COMMAND_LINE_SIZE);
+	strlcpy(boot_command_line, command_line, COMMAND_LINE_SIZE);
 	*cmdline_p = command_line;
 	setup_hostinfo(host_info, sizeof host_info);
-
-	if (os_getrandom(rng_seed, sizeof(rng_seed), 0) == sizeof(rng_seed)) {
-		add_bootloader_randomness(rng_seed, sizeof(rng_seed));
-		memzero_explicit(rng_seed, sizeof(rng_seed));
-	}
 }
 
-void __init arch_cpu_finalize_init(void)
+void __init check_bugs(void)
 {
 	arch_check_bugs();
 	os_check_bugs();
-}
-
-void apply_seal_endbr(s32 *start, s32 *end)
-{
 }
 
 void apply_retpolines(s32 *start, s32 *end)
@@ -446,11 +364,6 @@ void apply_retpolines(s32 *start, s32 *end)
 }
 
 void apply_returns(s32 *start, s32 *end)
-{
-}
-
-void apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
-		   s32 *start_cfi, s32 *end_cfi)
 {
 }
 
@@ -474,50 +387,11 @@ void text_poke_sync(void)
 {
 }
 
+#ifdef CONFIG_PM_SLEEP
 void uml_pm_wake(void)
 {
 	pm_system_wakeup();
 }
-
-#ifdef CONFIG_PM_SLEEP
-static int um_suspend_valid(suspend_state_t state)
-{
-	return state == PM_SUSPEND_MEM;
-}
-
-static int um_suspend_prepare(void)
-{
-	um_irqs_suspend();
-	return 0;
-}
-
-static int um_suspend_enter(suspend_state_t state)
-{
-	if (WARN_ON(state != PM_SUSPEND_MEM))
-		return -EINVAL;
-
-	/*
-	 * This is identical to the idle sleep, but we've just
-	 * (during suspend) turned off all interrupt sources
-	 * except for the ones we want, so now we can only wake
-	 * up on something we actually want to wake up on. All
-	 * timing has also been suspended.
-	 */
-	um_idle_sleep();
-	return 0;
-}
-
-static void um_suspend_finish(void)
-{
-	um_irqs_resume();
-}
-
-const struct platform_suspend_ops um_suspend_ops = {
-	.valid = um_suspend_valid,
-	.prepare = um_suspend_prepare,
-	.enter = um_suspend_enter,
-	.finish = um_suspend_finish,
-};
 
 static int init_pm_wake_signal(void)
 {
@@ -531,9 +405,6 @@ static int init_pm_wake_signal(void)
 	 */
 	if (time_travel_mode != TT_MODE_EXTERNAL)
 		register_pm_wake_signal();
-
-	suspend_set_ops(&um_suspend_ops);
-
 	return 0;
 }
 

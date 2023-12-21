@@ -157,6 +157,7 @@ static int st_nci_i2c_read(struct st_nci_i2c_phy *phy,
 static irqreturn_t st_nci_irq_thread_fn(int irq, void *phy_id)
 {
 	struct st_nci_i2c_phy *phy = phy_id;
+	struct i2c_client *client;
 	struct sk_buff *skb = NULL;
 	int r;
 
@@ -164,6 +165,9 @@ static irqreturn_t st_nci_irq_thread_fn(int irq, void *phy_id)
 		WARN_ON_ONCE(1);
 		return IRQ_NONE;
 	}
+
+	client = phy->i2c_dev;
+	dev_dbg(&client->dev, "IRQ\n");
 
 	if (phy->ndlc->hard_fault)
 		return IRQ_HANDLED;
@@ -182,7 +186,7 @@ static irqreturn_t st_nci_irq_thread_fn(int irq, void *phy_id)
 	return IRQ_HANDLED;
 }
 
-static const struct nfc_phy_ops i2c_phy_ops = {
+static struct nfc_phy_ops i2c_phy_ops = {
 	.write = st_nci_i2c_write,
 	.enable = st_nci_i2c_enable,
 	.disable = st_nci_i2c_disable,
@@ -195,11 +199,15 @@ static const struct acpi_gpio_mapping acpi_st_nci_gpios[] = {
 	{},
 };
 
-static int st_nci_i2c_probe(struct i2c_client *client)
+static int st_nci_i2c_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct st_nci_i2c_phy *phy;
 	int r;
+
+	dev_dbg(&client->dev, "%s\n", __func__);
+	dev_dbg(&client->dev, "IRQ: %d\n", client->irq);
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		nfc_err(&client->dev, "Need I2C_FUNC_I2C\n");
@@ -249,11 +257,15 @@ static int st_nci_i2c_probe(struct i2c_client *client)
 	return r;
 }
 
-static void st_nci_i2c_remove(struct i2c_client *client)
+static int st_nci_i2c_remove(struct i2c_client *client)
 {
 	struct st_nci_i2c_phy *phy = i2c_get_clientdata(client);
 
+	dev_dbg(&client->dev, "%s\n", __func__);
+
 	ndlc_remove(phy->ndlc);
+
+	return 0;
 }
 
 static const struct i2c_device_id st_nci_i2c_id_table[] = {
@@ -262,14 +274,14 @@ static const struct i2c_device_id st_nci_i2c_id_table[] = {
 };
 MODULE_DEVICE_TABLE(i2c, st_nci_i2c_id_table);
 
-static const struct acpi_device_id st_nci_i2c_acpi_match[] __maybe_unused = {
+static const struct acpi_device_id st_nci_i2c_acpi_match[] = {
 	{"SMO2101"},
 	{"SMO2102"},
 	{}
 };
 MODULE_DEVICE_TABLE(acpi, st_nci_i2c_acpi_match);
 
-static const struct of_device_id of_st_nci_i2c_match[] __maybe_unused = {
+static const struct of_device_id of_st_nci_i2c_match[] = {
 	{ .compatible = "st,st21nfcb-i2c", },
 	{ .compatible = "st,st21nfcb_i2c", },
 	{ .compatible = "st,st21nfcc-i2c", },

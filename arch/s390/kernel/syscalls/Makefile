@@ -21,7 +21,8 @@ uapi:	$(uapi-hdrs-y)
 
 
 # Create output directory if not already present
-$(shell mkdir -p $(uapi) $(kapi))
+_dummy := $(shell [ -d '$(uapi)' ] || mkdir -p '$(uapi)') \
+	  $(shell [ -d '$(kapi)' ] || mkdir -p '$(kapi)')
 
 filechk_syshdr = $(CONFIG_SHELL) '$(systbl)' -H -a $(syshdr_abi_$(basetarget)) -f "$2" < $<
 

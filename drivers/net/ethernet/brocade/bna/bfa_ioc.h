@@ -147,20 +147,16 @@ struct bfa_ioc_notify {
 	(__notify)->cbarg = (__cbarg);				\
 } while (0)
 
-enum iocpf_event;
-
 struct bfa_iocpf {
-	void (*fsm)(struct bfa_iocpf *s, enum iocpf_event e);
+	bfa_fsm_t		fsm;
 	struct bfa_ioc		*ioc;
 	bool			fw_mismatch_notified;
 	bool			auto_recover;
 	u32			poll_time;
 };
 
-enum ioc_event;
-
 struct bfa_ioc {
-	void (*fsm)(struct bfa_ioc *s, enum ioc_event e);
+	bfa_fsm_t		fsm;
 	struct bfa		*bfa;
 	struct bfa_pcidev	pcidev;
 	struct timer_list	ioc_timer;

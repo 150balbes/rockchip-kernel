@@ -69,7 +69,6 @@
 	.fixup_map_array_48b = { 1 },
 	.result = REJECT,
 	.errstr = "R1 min value is outside of the allowed memory range",
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"direct map access, write test 7",
@@ -196,7 +195,6 @@
 	.fixup_map_array_48b = { 1, 3 },
 	.result = REJECT,
 	.errstr = "invalid access to map value, value_size=48 off=47 size=2",
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"direct map access, write test 17",
@@ -211,7 +209,6 @@
 	.fixup_map_array_48b = { 1, 3 },
 	.result = REJECT,
 	.errstr = "invalid access to map value, value_size=48 off=47 size=2",
-	.flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
 {
 	"direct map access, write test 18",

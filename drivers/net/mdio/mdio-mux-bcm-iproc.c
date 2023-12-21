@@ -65,7 +65,7 @@ static void mdio_mux_iproc_config(struct iproc_mdiomux_desc *md)
 	writel(val, md->base + MDIO_SCAN_CTRL_OFFSET);
 
 	if (md->core_clk) {
-		/* use rate adjust regs to derive the mdio's operating
+		/* use rate adjust regs to derrive the mdio's operating
 		 * frequency from the specified core clock
 		 */
 		divisor = clk_get_rate(md->core_clk) / MDIO_OPERATING_FREQUENCY;
@@ -98,7 +98,7 @@ static int iproc_mdio_wait_for_idle(void __iomem *base, bool result)
  * Return value: Successful Read operation returns read reg values and write
  *      operation returns 0. Failure operation returns negative error code.
  */
-static int start_miim_ops(void __iomem *base, bool c45,
+static int start_miim_ops(void __iomem *base,
 			  u16 phyid, u32 reg, u16 val, u32 op)
 {
 	u32 param;
@@ -112,7 +112,7 @@ static int start_miim_ops(void __iomem *base, bool c45,
 	param = readl(base + MDIO_PARAM_OFFSET);
 	param |= phyid << MDIO_PARAM_PHY_ID;
 	param |= val << MDIO_PARAM_PHY_DATA;
-	if (c45)
+	if (reg & MII_ADDR_C45)
 		param |= BIT(MDIO_PARAM_C45_SEL);
 
 	writel(param, base + MDIO_PARAM_OFFSET);
@@ -131,58 +131,28 @@ err:
 	return ret;
 }
 
-static int iproc_mdiomux_read_c22(struct mii_bus *bus, int phyid, int reg)
+static int iproc_mdiomux_read(struct mii_bus *bus, int phyid, int reg)
 {
 	struct iproc_mdiomux_desc *md = bus->priv;
 	int ret;
 
-	ret = start_miim_ops(md->base, false, phyid, reg, 0, MDIO_CTRL_READ_OP);
+	ret = start_miim_ops(md->base, phyid, reg, 0, MDIO_CTRL_READ_OP);
 	if (ret < 0)
-		dev_err(&bus->dev, "mdiomux c22 read operation failed!!!");
+		dev_err(&bus->dev, "mdiomux read operation failed!!!");
 
 	return ret;
 }
 
-static int iproc_mdiomux_read_c45(struct mii_bus *bus, int phyid, int devad,
-				  int reg)
-{
-	struct iproc_mdiomux_desc *md = bus->priv;
-	int ret;
-
-	ret = start_miim_ops(md->base, true, phyid, reg | devad << 16, 0,
-			     MDIO_CTRL_READ_OP);
-	if (ret < 0)
-		dev_err(&bus->dev, "mdiomux read c45 operation failed!!!");
-
-	return ret;
-}
-
-static int iproc_mdiomux_write_c22(struct mii_bus *bus,
-				   int phyid, int reg, u16 val)
+static int iproc_mdiomux_write(struct mii_bus *bus,
+			       int phyid, int reg, u16 val)
 {
 	struct iproc_mdiomux_desc *md = bus->priv;
 	int ret;
 
 	/* Write val at reg offset */
-	ret = start_miim_ops(md->base, false, phyid, reg, val,
-			     MDIO_CTRL_WRITE_OP);
+	ret = start_miim_ops(md->base, phyid, reg, val, MDIO_CTRL_WRITE_OP);
 	if (ret < 0)
-		dev_err(&bus->dev, "mdiomux write c22 operation failed!!!");
-
-	return ret;
-}
-
-static int iproc_mdiomux_write_c45(struct mii_bus *bus,
-				   int phyid, int devad, int reg, u16 val)
-{
-	struct iproc_mdiomux_desc *md = bus->priv;
-	int ret;
-
-	/* Write val at reg offset */
-	ret = start_miim_ops(md->base, true, phyid, reg | devad << 16, val,
-			     MDIO_CTRL_WRITE_OP);
-	if (ret < 0)
-		dev_err(&bus->dev, "mdiomux write c45 operation failed!!!");
+		dev_err(&bus->dev, "mdiomux write operation failed!!!");
 
 	return ret;
 }
@@ -217,9 +187,7 @@ static int mdio_mux_iproc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	md->dev = &pdev->dev;
 
-	md->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(md->base))
-		return PTR_ERR(md->base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (res->start & 0xfff) {
 		/* For backward compatibility in case the
 		 * base address is specified with an offset.
@@ -227,6 +195,11 @@ static int mdio_mux_iproc_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "fix base address in dt-blob\n");
 		res->start &= ~0xfff;
 		res->end = res->start + MDIO_REG_ADDR_SPACE_SIZE - 1;
+	}
+	md->base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(md->base)) {
+		dev_err(&pdev->dev, "failed to ioremap register\n");
+		return PTR_ERR(md->base);
 	}
 
 	md->mii_bus = devm_mdiobus_alloc(&pdev->dev);
@@ -253,10 +226,8 @@ static int mdio_mux_iproc_probe(struct platform_device *pdev)
 	bus->name = "iProc MDIO mux bus";
 	snprintf(bus->id, MII_BUS_ID_SIZE, "%s-%d", pdev->name, pdev->id);
 	bus->parent = &pdev->dev;
-	bus->read = iproc_mdiomux_read_c22;
-	bus->write = iproc_mdiomux_write_c22;
-	bus->read_c45 = iproc_mdiomux_read_c45;
-	bus->write_c45 = iproc_mdiomux_write_c45;
+	bus->read = iproc_mdiomux_read;
+	bus->write = iproc_mdiomux_write;
 
 	bus->phy_mask = ~0;
 	bus->dev.of_node = pdev->dev.of_node;

@@ -210,9 +210,7 @@ static void jpeg_v1_0_decode_ring_insert_end(struct amdgpu_ring *ring)
  * jpeg_v1_0_decode_ring_emit_fence - emit an fence & trap command
  *
  * @ring: amdgpu_ring pointer
- * @addr: address
- * @seq: sequence number
- * @flags: fence related flags
+ * @fence: fence to emit
  *
  * Write a fence and a trap command to the ring.
  */
@@ -284,9 +282,7 @@ static void jpeg_v1_0_decode_ring_emit_fence(struct amdgpu_ring *ring, u64 addr,
  * jpeg_v1_0_decode_ring_emit_ib - execute indirect buffer
  *
  * @ring: amdgpu_ring pointer
- * @job: job to retrieve vmid from
  * @ib: indirect buffer to execute
- * @flags: unused
  *
  * Write ring commands to execute the indirect buffer.
  */
@@ -376,7 +372,7 @@ static void jpeg_v1_0_decode_ring_emit_reg_wait(struct amdgpu_ring *ring,
 static void jpeg_v1_0_decode_ring_emit_vm_flush(struct amdgpu_ring *ring,
 		unsigned vmid, uint64_t pd_addr)
 {
-	struct amdgpu_vmhub *hub = &ring->adev->vmhub[ring->vm_hub];
+	struct amdgpu_vmhub *hub = &ring->adev->vmhub[ring->funcs->vmhub];
 	uint32_t data0, data1, mask;
 
 	pd_addr = amdgpu_gmc_emit_flush_gpu_tlb(ring, vmid, pd_addr);
@@ -437,7 +433,7 @@ static int jpeg_v1_0_process_interrupt(struct amdgpu_device *adev,
 
 	switch (entry->src_id) {
 	case 126:
-		amdgpu_fence_process(adev->jpeg.inst->ring_dec);
+		amdgpu_fence_process(&adev->jpeg.inst->ring_dec);
 		break;
 	default:
 		DRM_ERROR("Unhandled interrupt: %d %d\n",
@@ -460,7 +456,6 @@ int jpeg_v1_0_early_init(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	adev->jpeg.num_jpeg_inst = 1;
-	adev->jpeg.num_jpeg_rings = 1;
 
 	jpeg_v1_0_set_dec_ring_funcs(adev);
 	jpeg_v1_0_set_irq_funcs(adev);
@@ -485,15 +480,14 @@ int jpeg_v1_0_sw_init(void *handle)
 	if (r)
 		return r;
 
-	ring = adev->jpeg.inst->ring_dec;
-	ring->vm_hub = AMDGPU_MMHUB0(0);
+	ring = &adev->jpeg.inst->ring_dec;
 	sprintf(ring->name, "jpeg_dec");
 	r = amdgpu_ring_init(adev, ring, 512, &adev->jpeg.inst->irq,
-			     0, AMDGPU_RING_PRIO_DEFAULT, NULL);
+			     0, AMDGPU_RING_PRIO_DEFAULT);
 	if (r)
 		return r;
 
-	adev->jpeg.internal.jpeg_pitch[0] = adev->jpeg.inst->external.jpeg_pitch[0] =
+	adev->jpeg.internal.jpeg_pitch = adev->jpeg.inst->external.jpeg_pitch =
 		SOC15_REG_OFFSET(JPEG, 0, mmUVD_JPEG_PITCH);
 
 	return 0;
@@ -510,20 +504,19 @@ void jpeg_v1_0_sw_fini(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
-	amdgpu_ring_fini(adev->jpeg.inst->ring_dec);
+	amdgpu_ring_fini(&adev->jpeg.inst[0].ring_dec);
 }
 
 /**
  * jpeg_v1_0_start - start JPEG block
  *
  * @adev: amdgpu_device pointer
- * @mode: SPG or DPG mode
  *
  * Setup and start the JPEG block
  */
 void jpeg_v1_0_start(struct amdgpu_device *adev, int mode)
 {
-	struct amdgpu_ring *ring = adev->jpeg.inst->ring_dec;
+	struct amdgpu_ring *ring = &adev->jpeg.inst->ring_dec;
 
 	if (mode == 0) {
 		WREG32_SOC15(JPEG, 0, mmUVD_LMI_JRBC_RB_VMID, 0);
@@ -550,6 +543,7 @@ static const struct amdgpu_ring_funcs jpeg_v1_0_decode_ring_vm_funcs = {
 	.nop = PACKET0(0x81ff, 0),
 	.support_64bit_ptrs = false,
 	.no_user_fence = true,
+	.vmhub = AMDGPU_MMHUB_0,
 	.extra_dw = 64,
 	.get_rptr = jpeg_v1_0_decode_ring_get_rptr,
 	.get_wptr = jpeg_v1_0_decode_ring_get_wptr,
@@ -580,7 +574,7 @@ static const struct amdgpu_ring_funcs jpeg_v1_0_decode_ring_vm_funcs = {
 
 static void jpeg_v1_0_set_dec_ring_funcs(struct amdgpu_device *adev)
 {
-	adev->jpeg.inst->ring_dec->funcs = &jpeg_v1_0_decode_ring_vm_funcs;
+	adev->jpeg.inst->ring_dec.funcs = &jpeg_v1_0_decode_ring_vm_funcs;
 	DRM_INFO("JPEG decode is enabled in VM mode\n");
 }
 

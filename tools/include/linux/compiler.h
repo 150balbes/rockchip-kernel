@@ -2,7 +2,9 @@
 #ifndef _TOOLS_LINUX_COMPILER_H_
 #define _TOOLS_LINUX_COMPILER_H_
 
-#include <linux/compiler_types.h>
+#ifdef __GNUC__
+#include <linux/compiler-gcc.h>
+#endif
 
 #ifndef __compiletime_error
 # define __compiletime_error(message)
@@ -102,6 +104,10 @@
 # define __init
 #endif
 
+#ifndef noinline
+# define noinline
+#endif
+
 #include <linux/types.h>
 
 /*
@@ -185,6 +191,10 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 	__u.__val;					\
 })
 
+
+#ifndef __fallthrough
+# define __fallthrough
+#endif
 
 /* Indirect macros required for expanded argument pasting, eg. __LINE__. */
 #define ___PASTE(a, b) a##b

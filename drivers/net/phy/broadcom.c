@@ -14,12 +14,8 @@
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/phy.h>
-#include <linux/pm_wakeup.h>
 #include <linux/brcmphy.h>
 #include <linux/of.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/gpio/consumer.h>
 
 #define BRCM_PHY_MODEL(phydev) \
 	((phydev)->drv->phy_id & (phydev)->drv->phy_id_mask)
@@ -30,20 +26,6 @@
 MODULE_DESCRIPTION("Broadcom PHY driver");
 MODULE_AUTHOR("Maciej W. Rozycki");
 MODULE_LICENSE("GPL");
-
-struct bcm54xx_phy_priv {
-	u64	*stats;
-	struct bcm_ptp_private *ptp;
-	int	wake_irq;
-	bool	wake_irq_enabled;
-};
-
-static bool bcm54xx_phy_can_wakeup(struct phy_device *phydev)
-{
-	struct bcm54xx_phy_priv *priv = phydev->priv;
-
-	return phy_interrupt_is_valid(phydev) || priv->wake_irq >= 0;
-}
 
 static int bcm54xx_config_clock_delay(struct phy_device *phydev)
 {
@@ -270,7 +252,6 @@ static void bcm54xx_adjust_rxrefclk(struct phy_device *phydev)
 	if (BRCM_PHY_MODEL(phydev) != PHY_ID_BCM57780 &&
 	    BRCM_PHY_MODEL(phydev) != PHY_ID_BCM50610 &&
 	    BRCM_PHY_MODEL(phydev) != PHY_ID_BCM50610M &&
-	    BRCM_PHY_MODEL(phydev) != PHY_ID_BCM54210E &&
 	    BRCM_PHY_MODEL(phydev) != PHY_ID_BCM54810 &&
 	    BRCM_PHY_MODEL(phydev) != PHY_ID_BCM54811)
 		return;
@@ -305,10 +286,9 @@ static void bcm54xx_adjust_rxrefclk(struct phy_device *phydev)
 		val |= BCM54XX_SHD_SCR3_DLLAPD_DIS;
 
 	if (phydev->dev_flags & PHY_BRCM_DIS_TXCRXC_NOENRGY) {
-		if (BRCM_PHY_MODEL(phydev) == PHY_ID_BCM54210E ||
-		    BRCM_PHY_MODEL(phydev) == PHY_ID_BCM54810 ||
+		if (BRCM_PHY_MODEL(phydev) == PHY_ID_BCM54810 ||
 		    BRCM_PHY_MODEL(phydev) == PHY_ID_BCM54811)
-			val |= BCM54XX_SHD_SCR3_RXCTXC_DIS;
+			val |= BCM54810_SHD_SCR3_TRDDAPD;
 		else
 			val |= BCM54XX_SHD_SCR3_TRDDAPD;
 	}
@@ -329,22 +309,6 @@ static void bcm54xx_adjust_rxrefclk(struct phy_device *phydev)
 
 	if (orig != val)
 		bcm_phy_write_shadow(phydev, BCM54XX_SHD_APD, val);
-}
-
-static void bcm54xx_ptp_stop(struct phy_device *phydev)
-{
-	struct bcm54xx_phy_priv *priv = phydev->priv;
-
-	if (priv->ptp)
-		bcm_ptp_stop(priv->ptp);
-}
-
-static void bcm54xx_ptp_config_init(struct phy_device *phydev)
-{
-	struct bcm54xx_phy_priv *priv = phydev->priv;
-
-	if (priv->ptp)
-		bcm_ptp_config_init(phydev);
 }
 
 static int bcm54xx_config_init(struct phy_device *phydev)
@@ -405,118 +369,25 @@ static int bcm54xx_config_init(struct phy_device *phydev)
 
 	bcm54xx_phydsp_config(phydev);
 
-	/* For non-SFP setups, encode link speed into LED1 and LED3 pair
-	 * (green/amber).
+	/* Encode link speed into LED1 and LED3 pair (green/amber).
 	 * Also flash these two LEDs on activity. This means configuring
 	 * them for MULTICOLOR and encoding link/activity into them.
-	 * Don't do this for devices on an SFP module, since some of these
-	 * use the LED outputs to control the SFP LOS signal, and changing
-	 * these settings will cause LOS to malfunction.
 	 */
-	if (!phy_on_sfp(phydev)) {
-		val = BCM54XX_SHD_LEDS1_LED1(BCM_LED_SRC_MULTICOLOR1) |
-			BCM54XX_SHD_LEDS1_LED3(BCM_LED_SRC_MULTICOLOR1);
-		bcm_phy_write_shadow(phydev, BCM54XX_SHD_LEDS1, val);
+	val = BCM5482_SHD_LEDS1_LED1(BCM_LED_SRC_MULTICOLOR1) |
+		BCM5482_SHD_LEDS1_LED3(BCM_LED_SRC_MULTICOLOR1);
+	bcm_phy_write_shadow(phydev, BCM5482_SHD_LEDS1, val);
 
-		val = BCM_LED_MULTICOLOR_IN_PHASE |
-			BCM54XX_SHD_LEDS1_LED1(BCM_LED_MULTICOLOR_LINK_ACT) |
-			BCM54XX_SHD_LEDS1_LED3(BCM_LED_MULTICOLOR_LINK_ACT);
-		bcm_phy_write_exp(phydev, BCM_EXP_MULTICOLOR, val);
-	}
-
-	bcm54xx_ptp_config_init(phydev);
-
-	/* Acknowledge any left over interrupt and charge the device for
-	 * wake-up.
-	 */
-	err = bcm_phy_read_exp(phydev, BCM54XX_WOL_INT_STATUS);
-	if (err < 0)
-		return err;
-
-	if (err)
-		pm_wakeup_event(&phydev->mdio.dev, 0);
+	val = BCM_LED_MULTICOLOR_IN_PHASE |
+		BCM5482_SHD_LEDS1_LED1(BCM_LED_MULTICOLOR_LINK_ACT) |
+		BCM5482_SHD_LEDS1_LED3(BCM_LED_MULTICOLOR_LINK_ACT);
+	bcm_phy_write_exp(phydev, BCM_EXP_MULTICOLOR, val);
 
 	return 0;
 }
 
-static int bcm54xx_iddq_set(struct phy_device *phydev, bool enable)
-{
-	int ret = 0;
-
-	if (!(phydev->dev_flags & PHY_BRCM_IDDQ_SUSPEND))
-		return ret;
-
-	ret = bcm_phy_read_exp(phydev, BCM54XX_TOP_MISC_IDDQ_CTRL);
-	if (ret < 0)
-		goto out;
-
-	if (enable)
-		ret |= BCM54XX_TOP_MISC_IDDQ_SR | BCM54XX_TOP_MISC_IDDQ_LP;
-	else
-		ret &= ~(BCM54XX_TOP_MISC_IDDQ_SR | BCM54XX_TOP_MISC_IDDQ_LP);
-
-	ret = bcm_phy_write_exp(phydev, BCM54XX_TOP_MISC_IDDQ_CTRL, ret);
-out:
-	return ret;
-}
-
-static int bcm54xx_set_wakeup_irq(struct phy_device *phydev, bool state)
-{
-	struct bcm54xx_phy_priv *priv = phydev->priv;
-	int ret = 0;
-
-	if (!bcm54xx_phy_can_wakeup(phydev))
-		return ret;
-
-	if (priv->wake_irq_enabled != state) {
-		if (state)
-			ret = enable_irq_wake(priv->wake_irq);
-		else
-			ret = disable_irq_wake(priv->wake_irq);
-		priv->wake_irq_enabled = state;
-	}
-
-	return ret;
-}
-
-static int bcm54xx_suspend(struct phy_device *phydev)
-{
-	int ret = 0;
-
-	bcm54xx_ptp_stop(phydev);
-
-	/* Acknowledge any Wake-on-LAN interrupt prior to suspend */
-	ret = bcm_phy_read_exp(phydev, BCM54XX_WOL_INT_STATUS);
-	if (ret < 0)
-		return ret;
-
-	if (phydev->wol_enabled)
-		return bcm54xx_set_wakeup_irq(phydev, true);
-
-	/* We cannot use a read/modify/write here otherwise the PHY gets into
-	 * a bad state where its LEDs keep flashing, thus defeating the purpose
-	 * of low power mode.
-	 */
-	ret = phy_write(phydev, MII_BMCR, BMCR_PDOWN);
-	if (ret < 0)
-		return ret;
-
-	return bcm54xx_iddq_set(phydev, true);
-}
-
 static int bcm54xx_resume(struct phy_device *phydev)
 {
-	int ret = 0;
-
-	if (phydev->wol_enabled) {
-		ret = bcm54xx_set_wakeup_irq(phydev, false);
-		if (ret)
-			return ret;
-	}
-
-	ret = bcm54xx_iddq_set(phydev, false);
-	if (ret < 0)
-		return ret;
+	int ret;
 
 	/* Writes to register other than BMCR would be ignored
 	 * unless we clear the PDOWN bit first
@@ -529,15 +400,6 @@ static int bcm54xx_resume(struct phy_device *phydev)
 	 * for 40us
 	 */
 	fsleep(40);
-
-	/* Issue a soft reset after clearing the power down bit
-	 * and before doing any other configuration.
-	 */
-	if (phydev->dev_flags & PHY_BRCM_IDDQ_SUSPEND) {
-		ret = genphy_soft_reset(phydev);
-		if (ret < 0)
-			return ret;
-	}
 
 	return bcm54xx_config_init(phydev);
 }
@@ -568,6 +430,96 @@ static int bcm54811_config_init(struct phy_device *phydev)
 	return err;
 }
 
+static int bcm5482_config_init(struct phy_device *phydev)
+{
+	int err, reg;
+
+	err = bcm54xx_config_init(phydev);
+
+	if (phydev->dev_flags & PHY_BCM_FLAGS_MODE_1000BX) {
+		/*
+		 * Enable secondary SerDes and its use as an LED source
+		 */
+		reg = bcm_phy_read_shadow(phydev, BCM5482_SHD_SSD);
+		bcm_phy_write_shadow(phydev, BCM5482_SHD_SSD,
+				     reg |
+				     BCM5482_SHD_SSD_LEDM |
+				     BCM5482_SHD_SSD_EN);
+
+		/*
+		 * Enable SGMII slave mode and auto-detection
+		 */
+		reg = BCM5482_SSD_SGMII_SLAVE | MII_BCM54XX_EXP_SEL_SSD;
+		err = bcm_phy_read_exp(phydev, reg);
+		if (err < 0)
+			return err;
+		err = bcm_phy_write_exp(phydev, reg, err |
+					BCM5482_SSD_SGMII_SLAVE_EN |
+					BCM5482_SSD_SGMII_SLAVE_AD);
+		if (err < 0)
+			return err;
+
+		/*
+		 * Disable secondary SerDes powerdown
+		 */
+		reg = BCM5482_SSD_1000BX_CTL | MII_BCM54XX_EXP_SEL_SSD;
+		err = bcm_phy_read_exp(phydev, reg);
+		if (err < 0)
+			return err;
+		err = bcm_phy_write_exp(phydev, reg,
+					err & ~BCM5482_SSD_1000BX_CTL_PWRDOWN);
+		if (err < 0)
+			return err;
+
+		/*
+		 * Select 1000BASE-X register set (primary SerDes)
+		 */
+		reg = bcm_phy_read_shadow(phydev, BCM54XX_SHD_MODE);
+		bcm_phy_write_shadow(phydev, BCM54XX_SHD_MODE,
+				     reg | BCM54XX_SHD_MODE_1000BX);
+
+		/*
+		 * LED1=ACTIVITYLED, LED3=LINKSPD[2]
+		 * (Use LED1 as secondary SerDes ACTIVITY LED)
+		 */
+		bcm_phy_write_shadow(phydev, BCM5482_SHD_LEDS1,
+			BCM5482_SHD_LEDS1_LED1(BCM_LED_SRC_ACTIVITYLED) |
+			BCM5482_SHD_LEDS1_LED3(BCM_LED_SRC_LINKSPD2));
+
+		/*
+		 * Auto-negotiation doesn't seem to work quite right
+		 * in this mode, so we disable it and force it to the
+		 * right speed/duplex setting.  Only 'link status'
+		 * is important.
+		 */
+		phydev->autoneg = AUTONEG_DISABLE;
+		phydev->speed = SPEED_1000;
+		phydev->duplex = DUPLEX_FULL;
+	}
+
+	return err;
+}
+
+static int bcm5482_read_status(struct phy_device *phydev)
+{
+	int err;
+
+	err = genphy_read_status(phydev);
+
+	if (phydev->dev_flags & PHY_BCM_FLAGS_MODE_1000BX) {
+		/*
+		 * Only link status matters for 1000Base-X mode, so force
+		 * 1000 Mbit/s full-duplex status
+		 */
+		if (phydev->link) {
+			phydev->speed = SPEED_1000;
+			phydev->duplex = DUPLEX_FULL;
+		}
+	}
+
+	return err;
+}
+
 static int bcm5481_config_aneg(struct phy_device *phydev)
 {
 	struct device_node *np = phydev->mdio.dev.of_node;
@@ -590,20 +542,9 @@ static int bcm5481_config_aneg(struct phy_device *phydev)
 	return ret;
 }
 
-struct bcm54616s_phy_priv {
-	bool mode_1000bx_en;
-};
-
 static int bcm54616s_probe(struct phy_device *phydev)
 {
-	struct bcm54616s_phy_priv *priv;
 	int val;
-
-	priv = devm_kzalloc(&phydev->mdio.dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
-
-	phydev->priv = priv;
 
 	val = bcm_phy_read_shadow(phydev, BCM54XX_SHD_MODE);
 	if (val < 0)
@@ -626,7 +567,7 @@ static int bcm54616s_probe(struct phy_device *phydev)
 		 * 1000BASE-X configuration.
 		 */
 		if (!(val & BCM54616S_100FX_MODE))
-			priv->mode_1000bx_en = true;
+			phydev->dev_flags |= PHY_BCM_FLAGS_MODE_1000BX;
 
 		phydev->port = PORT_FIBRE;
 	}
@@ -636,11 +577,10 @@ static int bcm54616s_probe(struct phy_device *phydev)
 
 static int bcm54616s_config_aneg(struct phy_device *phydev)
 {
-	struct bcm54616s_phy_priv *priv = phydev->priv;
 	int ret;
 
 	/* Aneg firstly. */
-	if (priv->mode_1000bx_en)
+	if (phydev->dev_flags & PHY_BCM_FLAGS_MODE_1000BX)
 		ret = genphy_c37_config_aneg(phydev);
 	else
 		ret = genphy_config_aneg(phydev);
@@ -653,15 +593,25 @@ static int bcm54616s_config_aneg(struct phy_device *phydev)
 
 static int bcm54616s_read_status(struct phy_device *phydev)
 {
-	struct bcm54616s_phy_priv *priv = phydev->priv;
 	int err;
 
-	if (priv->mode_1000bx_en)
+	if (phydev->dev_flags & PHY_BCM_FLAGS_MODE_1000BX)
 		err = genphy_c37_read_status(phydev);
 	else
 		err = genphy_read_status(phydev);
 
 	return err;
+}
+
+static int brcm_phy_setbits(struct phy_device *phydev, int reg, int set)
+{
+	int val;
+
+	val = phy_read(phydev, reg);
+	if (val < 0)
+		return val;
+
+	return phy_write(phydev, reg, val | set);
 }
 
 static int brcm_fet_config_init(struct phy_device *phydev)
@@ -734,15 +684,15 @@ static int brcm_fet_config_init(struct phy_device *phydev)
 		goto done;
 
 	/* Enable auto MDIX */
-	err = phy_set_bits(phydev, MII_BRCM_FET_SHDW_MISCCTRL,
-			   MII_BRCM_FET_SHDW_MC_FAME);
+	err = brcm_phy_setbits(phydev, MII_BRCM_FET_SHDW_MISCCTRL,
+				       MII_BRCM_FET_SHDW_MC_FAME);
 	if (err < 0)
 		goto done;
 
 	if (phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE) {
 		/* Enable auto power down */
-		err = phy_set_bits(phydev, MII_BRCM_FET_SHDW_AUXSTAT2,
-				   MII_BRCM_FET_SHDW_AS2_APDE);
+		err = brcm_phy_setbits(phydev, MII_BRCM_FET_SHDW_AUXSTAT2,
+					       MII_BRCM_FET_SHDW_AS2_APDE);
 	}
 
 done:
@@ -774,125 +724,26 @@ static int brcm_fet_config_intr(struct phy_device *phydev)
 	if (reg < 0)
 		return reg;
 
-	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
-		err = brcm_fet_ack_interrupt(phydev);
-		if (err)
-			return err;
-
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED)
 		reg &= ~MII_BRCM_FET_IR_MASK;
-		err = phy_write(phydev, MII_BRCM_FET_INTREG, reg);
-	} else {
+	else
 		reg |= MII_BRCM_FET_IR_MASK;
-		err = phy_write(phydev, MII_BRCM_FET_INTREG, reg);
-		if (err)
-			return err;
 
-		err = brcm_fet_ack_interrupt(phydev);
-	}
-
+	err = phy_write(phydev, MII_BRCM_FET_INTREG, reg);
 	return err;
 }
 
-static irqreturn_t brcm_fet_handle_interrupt(struct phy_device *phydev)
+struct bcm53xx_phy_priv {
+	u64	*stats;
+};
+
+static int bcm53xx_phy_probe(struct phy_device *phydev)
 {
-	int irq_status;
-
-	irq_status = phy_read(phydev, MII_BRCM_FET_INTREG);
-	if (irq_status < 0) {
-		phy_error(phydev);
-		return IRQ_NONE;
-	}
-
-	if (irq_status == 0)
-		return IRQ_NONE;
-
-	phy_trigger_machine(phydev);
-
-	return IRQ_HANDLED;
-}
-
-static int brcm_fet_suspend(struct phy_device *phydev)
-{
-	int reg, err, err2, brcmtest;
-
-	/* We cannot use a read/modify/write here otherwise the PHY continues
-	 * to drive LEDs which defeats the purpose of low power mode.
-	 */
-	err = phy_write(phydev, MII_BMCR, BMCR_PDOWN);
-	if (err < 0)
-		return err;
-
-	/* Enable shadow register access */
-	brcmtest = phy_read(phydev, MII_BRCM_FET_BRCMTEST);
-	if (brcmtest < 0)
-		return brcmtest;
-
-	reg = brcmtest | MII_BRCM_FET_BT_SRE;
-
-	err = phy_write(phydev, MII_BRCM_FET_BRCMTEST, reg);
-	if (err < 0)
-		return err;
-
-	/* Set standby mode */
-	err = phy_modify(phydev, MII_BRCM_FET_SHDW_AUXMODE4,
-			 MII_BRCM_FET_SHDW_AM4_STANDBY,
-			 MII_BRCM_FET_SHDW_AM4_STANDBY);
-
-	/* Disable shadow register access */
-	err2 = phy_write(phydev, MII_BRCM_FET_BRCMTEST, brcmtest);
-	if (!err)
-		err = err2;
-
-	return err;
-}
-
-static void bcm54xx_phy_get_wol(struct phy_device *phydev,
-				struct ethtool_wolinfo *wol)
-{
-	/* We cannot wake-up if we do not have a dedicated PHY interrupt line
-	 * or an out of band GPIO descriptor for wake-up. Zeroing
-	 * wol->supported allows the caller (MAC driver) to play through and
-	 * offer its own Wake-on-LAN scheme if available.
-	 */
-	if (!bcm54xx_phy_can_wakeup(phydev)) {
-		wol->supported = 0;
-		return;
-	}
-
-	bcm_phy_get_wol(phydev, wol);
-}
-
-static int bcm54xx_phy_set_wol(struct phy_device *phydev,
-			       struct ethtool_wolinfo *wol)
-{
-	int ret;
-
-	/* We cannot wake-up if we do not have a dedicated PHY interrupt line
-	 * or an out of band GPIO descriptor for wake-up. Returning -EOPNOTSUPP
-	 * allows the caller (MAC driver) to play through and offer its own
-	 * Wake-on-LAN scheme if available.
-	 */
-	if (!bcm54xx_phy_can_wakeup(phydev))
-		return -EOPNOTSUPP;
-
-	ret = bcm_phy_set_wol(phydev, wol);
-	if (ret < 0)
-		return ret;
-
-	return 0;
-}
-
-static int bcm54xx_phy_probe(struct phy_device *phydev)
-{
-	struct bcm54xx_phy_priv *priv;
-	struct gpio_desc *wakeup_gpio;
-	int ret = 0;
+	struct bcm53xx_phy_priv *priv;
 
 	priv = devm_kzalloc(&phydev->mdio.dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
-
-	priv->wake_irq = -ENXIO;
 
 	phydev->priv = priv;
 
@@ -902,77 +753,15 @@ static int bcm54xx_phy_probe(struct phy_device *phydev)
 	if (!priv->stats)
 		return -ENOMEM;
 
-	priv->ptp = bcm_ptp_probe(phydev);
-	if (IS_ERR(priv->ptp))
-		return PTR_ERR(priv->ptp);
-
-	/* We cannot utilize the _optional variant here since we want to know
-	 * whether the GPIO descriptor exists or not to advertise Wake-on-LAN
-	 * support or not.
-	 */
-	wakeup_gpio = devm_gpiod_get(&phydev->mdio.dev, "wakeup", GPIOD_IN);
-	if (PTR_ERR(wakeup_gpio) == -EPROBE_DEFER)
-		return PTR_ERR(wakeup_gpio);
-
-	if (!IS_ERR(wakeup_gpio)) {
-		priv->wake_irq = gpiod_to_irq(wakeup_gpio);
-
-		/* Dummy interrupt handler which is not enabled but is provided
-		 * in order for the interrupt descriptor to be fully set-up.
-		 */
-		ret = devm_request_irq(&phydev->mdio.dev, priv->wake_irq,
-				       bcm_phy_wol_isr,
-				       IRQF_TRIGGER_LOW | IRQF_NO_AUTOEN,
-				       dev_name(&phydev->mdio.dev), phydev);
-		if (ret)
-			return ret;
-	}
-
-	/* If we do not have a main interrupt or a side-band wake-up interrupt,
-	 * then the device cannot be marked as wake-up capable.
-	 */
-	if (!bcm54xx_phy_can_wakeup(phydev))
-		return 0;
-
-	return device_init_wakeup(&phydev->mdio.dev, true);
+	return 0;
 }
 
-static void bcm54xx_get_stats(struct phy_device *phydev,
-			      struct ethtool_stats *stats, u64 *data)
+static void bcm53xx_phy_get_stats(struct phy_device *phydev,
+				  struct ethtool_stats *stats, u64 *data)
 {
-	struct bcm54xx_phy_priv *priv = phydev->priv;
+	struct bcm53xx_phy_priv *priv = phydev->priv;
 
 	bcm_phy_get_stats(phydev, priv->stats, stats, data);
-}
-
-static void bcm54xx_link_change_notify(struct phy_device *phydev)
-{
-	u16 mask = MII_BCM54XX_EXP_EXP08_EARLY_DAC_WAKE |
-		   MII_BCM54XX_EXP_EXP08_FORCE_DAC_WAKE;
-	int ret;
-
-	if (phydev->state != PHY_RUNNING)
-		return;
-
-	/* Don't change the DAC wake settings if auto power down
-	 * is not requested.
-	 */
-	if (!(phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE))
-		return;
-
-	ret = bcm_phy_read_exp(phydev, MII_BCM54XX_EXP_EXP08);
-	if (ret < 0)
-		return;
-
-	/* Enable/disable 10BaseT auto and forced early DAC wake depending
-	 * on the negotiated speed, those settings should only be done
-	 * for 10Mbits/sec.
-	 */
-	if (phydev->speed == SPEED_10)
-		ret |= mask;
-	else
-		ret &= ~mask;
-	bcm_phy_write_exp(phydev, MII_BCM54XX_EXP_EXP08, ret);
 }
 
 static struct phy_driver broadcom_drivers[] = {
@@ -981,74 +770,41 @@ static struct phy_driver broadcom_drivers[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5411",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
 }, {
 	.phy_id		= PHY_ID_BCM5421,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5421",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
 }, {
 	.phy_id		= PHY_ID_BCM54210E,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM54210E",
 	/* PHY_GBIT_FEATURES */
-	.flags		= PHY_ALWAYS_CALL_SUSPEND,
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.suspend	= bcm54xx_suspend,
-	.resume		= bcm54xx_resume,
-	.get_wol	= bcm54xx_phy_get_wol,
-	.set_wol	= bcm54xx_phy_set_wol,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM5461,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5461",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM54612E,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM54612E",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM54616S,
 	.phy_id_mask	= 0xfffffff0,
@@ -1057,157 +813,100 @@ static struct phy_driver broadcom_drivers[] = {
 	.soft_reset     = genphy_soft_reset,
 	.config_init	= bcm54xx_config_init,
 	.config_aneg	= bcm54616s_config_aneg,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
 	.read_status	= bcm54616s_read_status,
 	.probe		= bcm54616s_probe,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM5464,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5464",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM5481,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5481",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
 	.config_aneg	= bcm5481_config_aneg,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id         = PHY_ID_BCM54810,
 	.phy_id_mask    = 0xfffffff0,
 	.name           = "Broadcom BCM54810",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init    = bcm54xx_config_init,
 	.config_aneg    = bcm5481_config_aneg,
+	.ack_interrupt  = bcm_phy_ack_intr,
 	.config_intr    = bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.suspend	= bcm54xx_suspend,
+	.suspend	= genphy_suspend,
 	.resume		= bcm54xx_resume,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id         = PHY_ID_BCM54811,
 	.phy_id_mask    = 0xfffffff0,
 	.name           = "Broadcom BCM54811",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init    = bcm54811_config_init,
 	.config_aneg    = bcm5481_config_aneg,
+	.ack_interrupt  = bcm_phy_ack_intr,
 	.config_intr    = bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.suspend	= bcm54xx_suspend,
+	.suspend	= genphy_suspend,
 	.resume		= bcm54xx_resume,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM5482,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5482",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
-	.config_init	= bcm54xx_config_init,
+	.config_init	= bcm5482_config_init,
+	.read_status	= bcm5482_read_status,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM50610,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM50610",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.suspend	= bcm54xx_suspend,
-	.resume		= bcm54xx_resume,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM50610M,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM50610M",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.suspend	= bcm54xx_suspend,
-	.resume		= bcm54xx_resume,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCM57780,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM57780",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id		= PHY_ID_BCMAC131,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCMAC131",
 	/* PHY_BASIC_FEATURES */
 	.config_init	= brcm_fet_config_init,
+	.ack_interrupt	= brcm_fet_ack_interrupt,
 	.config_intr	= brcm_fet_config_intr,
-	.handle_interrupt = brcm_fet_handle_interrupt,
-	.suspend	= brcm_fet_suspend,
-	.resume		= brcm_fet_config_init,
 }, {
 	.phy_id		= PHY_ID_BCM5241,
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "Broadcom BCM5241",
 	/* PHY_BASIC_FEATURES */
 	.config_init	= brcm_fet_config_init,
+	.ack_interrupt	= brcm_fet_ack_interrupt,
 	.config_intr	= brcm_fet_config_intr,
-	.handle_interrupt = brcm_fet_handle_interrupt,
-	.suspend	= brcm_fet_suspend,
-	.resume		= brcm_fet_config_init,
 }, {
 	.phy_id		= PHY_ID_BCM5395,
 	.phy_id_mask	= 0xfffffff0,
@@ -1216,10 +915,8 @@ static struct phy_driver broadcom_drivers[] = {
 	/* PHY_GBIT_FEATURES */
 	.get_sset_count	= bcm_phy_get_sset_count,
 	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
+	.get_stats	= bcm53xx_phy_get_stats,
+	.probe		= bcm53xx_phy_probe,
 }, {
 	.phy_id		= PHY_ID_BCM53125,
 	.phy_id_mask	= 0xfffffff0,
@@ -1228,41 +925,19 @@ static struct phy_driver broadcom_drivers[] = {
 	/* PHY_GBIT_FEATURES */
 	.get_sset_count	= bcm_phy_get_sset_count,
 	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
+	.get_stats	= bcm53xx_phy_get_stats,
+	.probe		= bcm53xx_phy_probe,
 	.config_init	= bcm54xx_config_init,
+	.ack_interrupt	= bcm_phy_ack_intr,
 	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
-}, {
-	.phy_id		= PHY_ID_BCM53128,
-	.phy_id_mask	= 0xfffffff0,
-	.name		= "Broadcom BCM53128",
-	.flags		= PHY_IS_INTERNAL,
-	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
-	.config_init	= bcm54xx_config_init,
-	.config_intr	= bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
-	.led_brightness_set	= bcm_phy_led_brightness_set,
 }, {
 	.phy_id         = PHY_ID_BCM89610,
 	.phy_id_mask    = 0xfffffff0,
 	.name           = "Broadcom BCM89610",
 	/* PHY_GBIT_FEATURES */
-	.get_sset_count	= bcm_phy_get_sset_count,
-	.get_strings	= bcm_phy_get_strings,
-	.get_stats	= bcm54xx_get_stats,
-	.probe		= bcm54xx_phy_probe,
 	.config_init    = bcm54xx_config_init,
+	.ack_interrupt  = bcm_phy_ack_intr,
 	.config_intr    = bcm_phy_config_intr,
-	.handle_interrupt = bcm_phy_handle_interrupt,
-	.link_change_notify	= bcm54xx_link_change_notify,
 } };
 
 module_phy_driver(broadcom_drivers);
@@ -1286,7 +961,6 @@ static struct mdio_device_id __maybe_unused broadcom_tbl[] = {
 	{ PHY_ID_BCM5241, 0xfffffff0 },
 	{ PHY_ID_BCM5395, 0xfffffff0 },
 	{ PHY_ID_BCM53125, 0xfffffff0 },
-	{ PHY_ID_BCM53128, 0xfffffff0 },
 	{ PHY_ID_BCM89610, 0xfffffff0 },
 	{ }
 };

@@ -207,8 +207,7 @@ static int __init arcrimi_found(struct net_device *dev)
 	}
 
 	/* get and check the station ID from offset 1 in shmem */
-	arcnet_set_addr(dev, arcnet_readb(lp->mem_start,
-					  COM9026_REG_R_STATION));
+	dev->dev_addr[0] = arcnet_readb(lp->mem_start, COM9026_REG_R_STATION);
 
 	arc_printk(D_NORMAL, dev, "ARCnet RIM I: station %02Xh found at IRQ %d, ShMem %lXh (%ld*%d bytes)\n",
 		   dev->dev_addr[0],
@@ -325,7 +324,7 @@ static int __init arc_rimi_init(void)
 		return -ENOMEM;
 
 	if (node && node != 0xff)
-		arcnet_set_addr(dev, node);
+		dev->dev_addr[0] = node;
 
 	dev->mem_start = io;
 	dev->irq = irq;

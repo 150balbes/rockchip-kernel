@@ -283,7 +283,8 @@ static int pca9541_release_chan(struct i2c_mux_core *muxc, u32 chan)
 /*
  * I2C init/probing/exit functions
  */
-static int pca9541_probe(struct i2c_client *client)
+static int pca9541_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adap = client->adapter;
 	struct i2c_mux_core *muxc;
@@ -324,11 +325,12 @@ static int pca9541_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void pca9541_remove(struct i2c_client *client)
+static int pca9541_remove(struct i2c_client *client)
 {
 	struct i2c_mux_core *muxc = i2c_get_clientdata(client);
 
 	i2c_mux_del_adapters(muxc);
+	return 0;
 }
 
 static struct i2c_driver pca9541_driver = {

@@ -16,6 +16,7 @@
 #include <linux/console.h>
 #include <linux/memblock.h>
 #include <linux/ioport.h>
+#include <linux/blkdev.h>
 
 #include <asm/bootinfo.h>
 #include <asm/mach-rc32434/ddr.h>
@@ -32,6 +33,11 @@ static struct resource ddr_reg[] = {
 		.flags = IORESOURCE_MEM,
 	}
 };
+
+void __init prom_free_prom_memory(void)
+{
+	/* No prom memory to free */
+}
 
 static inline int match_tag(char *arg, const char *tag)
 {

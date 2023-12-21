@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2013 Freescale Semiconductor, Inc.
- * Copyright 2021 NXP
  *
  * clock driver for Freescale QorIQ SoCs.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <dt-bindings/clock/fsl,qoriq-clockgen.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
@@ -565,9 +563,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 1, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) | BIT(CGA_PLL3) |
-			    BIT(CGB_PLL1) | BIT(CGB_PLL2),
+		.pll_mask = 0x3f,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -583,9 +579,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 1, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) | BIT(CGA_PLL3) |
-			    BIT(CGB_PLL1) | BIT(CGB_PLL2),
+		.pll_mask = 0x3f,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -596,8 +590,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x03,
 	},
 	{
 		.compat = "fsl,ls1028a-clockgen",
@@ -611,8 +604,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 0, 0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_VER3 | CG_LITTLE_ENDIAN,
 	},
 	{
@@ -627,8 +619,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -643,8 +634,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -658,8 +648,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_VER3 | CG_LITTLE_ENDIAN,
 	},
 	{
@@ -670,7 +659,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) | BIT(CGA_PLL1),
+		.pll_mask = 0x03,
 	},
 	{
 		.compat = "fsl,ls2080a-clockgen",
@@ -680,9 +669,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) |
-			    BIT(CGB_PLL1) | BIT(CGB_PLL2),
+		.pll_mask = 0x37,
 		.flags = CG_VER3 | CG_LITTLE_ENDIAN,
 	},
 	{
@@ -693,9 +680,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 0, 0, 1, 1, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) |
-			    BIT(CGB_PLL1) | BIT(CGB_PLL2),
+		.pll_mask = 0x37,
 		.flags = CG_VER3 | CG_LITTLE_ENDIAN,
 	},
 	{
@@ -708,8 +693,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 	},
 	{
 		.compat = "fsl,p3041-clockgen",
@@ -721,8 +705,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 	},
 	{
 		.compat = "fsl,p4080-clockgen",
@@ -734,9 +717,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 0, 0, 1, 1, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) |
-			    BIT(CGA_PLL3) | BIT(CGA_PLL4),
+		.pll_mask = 0x1f,
 	},
 	{
 		.compat = "fsl,p5020-clockgen",
@@ -748,8 +729,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 	},
 	{
 		.compat = "fsl,p5040-clockgen",
@@ -761,8 +741,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 1, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) | BIT(CGA_PLL3),
+		.pll_mask = 0x0f,
 	},
 	{
 		.compat = "fsl,t1023-clockgen",
@@ -777,7 +756,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) | BIT(CGA_PLL1),
+		.pll_mask = 0x03,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -790,8 +769,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 0, 0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -807,8 +785,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2),
+		.pll_mask = 0x07,
 		.flags = CG_PLL_8BIT,
 	},
 	{
@@ -824,9 +801,7 @@ static const struct clockgen_chipinfo chipinfo[] = {
 		.cmux_to_group = {
 			0, 0, 1, -1
 		},
-		.pll_mask = BIT(PLATFORM_PLL) |
-			    BIT(CGA_PLL1) | BIT(CGA_PLL2) | BIT(CGA_PLL3) |
-			    BIT(CGB_PLL1) | BIT(CGB_PLL2),
+		.pll_mask = 0x3f,
 		.flags = CG_PLL_8BIT,
 	},
 	{},
@@ -878,7 +853,6 @@ static u8 mux_get_parent(struct clk_hw *hw)
 }
 
 static const struct clk_ops cmux_ops = {
-	.determine_rate = clk_hw_determine_rate_no_reparent,
 	.get_parent = mux_get_parent,
 	.set_parent = mux_set_parent,
 };
@@ -1400,33 +1374,33 @@ static struct clk *clockgen_clk_get(struct of_phandle_args *clkspec, void *data)
 	idx = clkspec->args[1];
 
 	switch (type) {
-	case QORIQ_CLK_SYSCLK:
+	case 0:
 		if (idx != 0)
 			goto bad_args;
 		clk = cg->sysclk;
 		break;
-	case QORIQ_CLK_CMUX:
+	case 1:
 		if (idx >= ARRAY_SIZE(cg->cmux))
 			goto bad_args;
 		clk = cg->cmux[idx];
 		break;
-	case QORIQ_CLK_HWACCEL:
+	case 2:
 		if (idx >= ARRAY_SIZE(cg->hwaccel))
 			goto bad_args;
 		clk = cg->hwaccel[idx];
 		break;
-	case QORIQ_CLK_FMAN:
+	case 3:
 		if (idx >= ARRAY_SIZE(cg->fman))
 			goto bad_args;
 		clk = cg->fman[idx];
 		break;
-	case QORIQ_CLK_PLATFORM_PLL:
+	case 4:
 		pll = &cg->pll[PLATFORM_PLL];
 		if (idx >= ARRAY_SIZE(pll->div))
 			goto bad_args;
 		clk = pll->div[idx].clk;
 		break;
-	case QORIQ_CLK_CORECLK:
+	case 5:
 		if (idx != 0)
 			goto bad_args;
 		clk = cg->coreclk;

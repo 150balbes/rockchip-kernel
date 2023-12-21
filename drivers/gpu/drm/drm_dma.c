@@ -81,7 +81,6 @@ int drm_legacy_dma_setup(struct drm_device *dev)
 void drm_legacy_dma_takedown(struct drm_device *dev)
 {
 	struct drm_device_dma *dma = dev->dma;
-	drm_dma_handle_t *dmah;
 	int i, j;
 
 	if (!drm_core_check_feature(dev, DRIVER_HAVE_DMA) ||
@@ -101,12 +100,7 @@ void drm_legacy_dma_takedown(struct drm_device *dev)
 				  dma->bufs[i].seg_count);
 			for (j = 0; j < dma->bufs[i].seg_count; j++) {
 				if (dma->bufs[i].seglist[j]) {
-					dmah = dma->bufs[i].seglist[j];
-					dma_free_coherent(dev->dev,
-							  dmah->size,
-							  dmah->vaddr,
-							  dmah->busaddr);
-					kfree(dmah);
+					drm_pci_free(dev, dma->bufs[i].seglist[j]);
 				}
 			}
 			kfree(dma->bufs[i].seglist);

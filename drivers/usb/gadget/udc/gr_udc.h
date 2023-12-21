@@ -215,6 +215,8 @@ struct gr_udc {
 	struct list_head ep_list;
 
 	spinlock_t lock; /* General lock, a.k.a. "dev->lock" in comments */
+
+	struct dentry *dfs_root;
 };
 
 #define to_gr_udc(gadget)	(container_of((gadget), struct gr_udc, gadget))

@@ -91,9 +91,11 @@ static int memconsole_probe(struct coreboot_device *dev)
 	return memconsole_sysfs_init();
 }
 
-static void memconsole_remove(struct coreboot_device *dev)
+static int memconsole_remove(struct coreboot_device *dev)
 {
 	memconsole_exit();
+
+	return 0;
 }
 
 static struct coreboot_driver memconsole_driver = {

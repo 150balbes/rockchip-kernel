@@ -4,24 +4,23 @@
 
 #define IFINDEX_LO 1
 
-void serial_test_xdp_info(void)
+void test_xdp_info(void)
 {
 	__u32 len = sizeof(struct bpf_prog_info), duration = 0, prog_id;
-	const char *file = "./xdp_dummy.bpf.o";
-	LIBBPF_OPTS(bpf_xdp_query_opts, opts);
+	const char *file = "./xdp_dummy.o";
 	struct bpf_prog_info info = {};
 	struct bpf_object *obj;
 	int err, prog_fd;
 
 	/* Get prog_id for XDP_ATTACHED_NONE mode */
 
-	err = bpf_xdp_query_id(IFINDEX_LO, 0, &prog_id);
+	err = bpf_get_link_xdp_id(IFINDEX_LO, &prog_id, 0);
 	if (CHECK(err, "get_xdp_none", "errno=%d\n", errno))
 		return;
 	if (CHECK(prog_id, "prog_id_none", "unexpected prog_id=%u\n", prog_id))
 		return;
 
-	err = bpf_xdp_query_id(IFINDEX_LO, XDP_FLAGS_SKB_MODE, &prog_id);
+	err = bpf_get_link_xdp_id(IFINDEX_LO, &prog_id, XDP_FLAGS_SKB_MODE);
 	if (CHECK(err, "get_xdp_none_skb", "errno=%d\n", errno))
 		return;
 	if (CHECK(prog_id, "prog_id_none_skb", "unexpected prog_id=%u\n",
@@ -30,47 +29,40 @@ void serial_test_xdp_info(void)
 
 	/* Setup prog */
 
-	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
+	err = bpf_prog_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
 	if (CHECK_FAIL(err))
 		return;
 
-	err = bpf_prog_get_info_by_fd(prog_fd, &info, &len);
+	err = bpf_obj_get_info_by_fd(prog_fd, &info, &len);
 	if (CHECK(err, "get_prog_info", "errno=%d\n", errno))
 		goto out_close;
 
-	err = bpf_xdp_attach(IFINDEX_LO, prog_fd, XDP_FLAGS_SKB_MODE, NULL);
+	err = bpf_set_link_xdp_fd(IFINDEX_LO, prog_fd, XDP_FLAGS_SKB_MODE);
 	if (CHECK(err, "set_xdp_skb", "errno=%d\n", errno))
 		goto out_close;
 
 	/* Get prog_id for single prog mode */
 
-	err = bpf_xdp_query_id(IFINDEX_LO, 0, &prog_id);
+	err = bpf_get_link_xdp_id(IFINDEX_LO, &prog_id, 0);
 	if (CHECK(err, "get_xdp", "errno=%d\n", errno))
 		goto out;
 	if (CHECK(prog_id != info.id, "prog_id", "prog_id not available\n"))
 		goto out;
 
-	err = bpf_xdp_query_id(IFINDEX_LO, XDP_FLAGS_SKB_MODE, &prog_id);
+	err = bpf_get_link_xdp_id(IFINDEX_LO, &prog_id, XDP_FLAGS_SKB_MODE);
 	if (CHECK(err, "get_xdp_skb", "errno=%d\n", errno))
 		goto out;
 	if (CHECK(prog_id != info.id, "prog_id_skb", "prog_id not available\n"))
 		goto out;
 
-	err = bpf_xdp_query_id(IFINDEX_LO, XDP_FLAGS_DRV_MODE, &prog_id);
+	err = bpf_get_link_xdp_id(IFINDEX_LO, &prog_id, XDP_FLAGS_DRV_MODE);
 	if (CHECK(err, "get_xdp_drv", "errno=%d\n", errno))
 		goto out;
 	if (CHECK(prog_id, "prog_id_drv", "unexpected prog_id=%u\n", prog_id))
 		goto out;
 
-	/* Check xdp features supported by lo device */
-	opts.feature_flags = ~0;
-	err = bpf_xdp_query(IFINDEX_LO, XDP_FLAGS_DRV_MODE, &opts);
-	if (!ASSERT_OK(err, "bpf_xdp_query"))
-		goto out;
-
-	ASSERT_EQ(opts.feature_flags, 0, "opts.feature_flags");
 out:
-	bpf_xdp_detach(IFINDEX_LO, 0, NULL);
+	bpf_set_link_xdp_fd(IFINDEX_LO, -1, 0);
 out_close:
 	bpf_object__close(obj);
 }

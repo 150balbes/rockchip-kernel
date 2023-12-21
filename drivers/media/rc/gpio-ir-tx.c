@@ -62,13 +62,8 @@ static void delay_until(ktime_t until)
 			return;
 
 		/* udelay more than 1ms may not work */
-		if (delta >= 1000) {
-			mdelay(delta / 1000);
-			continue;
-		}
-
+		delta = min(delta, 1000);
 		udelay(delta);
-		break;
 	}
 }
 
@@ -174,9 +169,12 @@ static int gpio_ir_tx_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	gpio_ir->gpio = devm_gpiod_get(&pdev->dev, NULL, GPIOD_OUT_LOW);
-	if (IS_ERR(gpio_ir->gpio))
-		return dev_err_probe(&pdev->dev, PTR_ERR(gpio_ir->gpio),
-				     "Failed to get gpio\n");
+	if (IS_ERR(gpio_ir->gpio)) {
+		if (PTR_ERR(gpio_ir->gpio) != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Failed to get gpio (%ld)\n",
+				PTR_ERR(gpio_ir->gpio));
+		return PTR_ERR(gpio_ir->gpio);
+	}
 
 	rcdev->priv = gpio_ir;
 	rcdev->driver_name = DRIVER_NAME;

@@ -53,6 +53,12 @@ struct dlm_lockspace_ops {
  *   The dlm should not use a resource directory, but statically assign
  *   resource mastery to nodes based on the name hash that is otherwise
  *   used to select the directory node.  Must be the same on all nodes.
+ * DLM_LSFL_TIMEWARN
+ *   The dlm should emit netlink messages if locks have been waiting
+ *   for a configurable amount of time.  (Unused.)
+ * DLM_LSFL_FS
+ *   The lockspace user is in the kernel (i.e. filesystem).  Enables
+ *   direct bast/cast callbacks.
  * DLM_LSFL_NEWEXCL
  *   dlm_new_lockspace() should return -EEXIST if the lockspace exists.
  *
@@ -128,7 +134,7 @@ int dlm_lock(dlm_lockspace_t *lockspace,
 	     int mode,
 	     struct dlm_lksb *lksb,
 	     uint32_t flags,
-	     const void *name,
+	     void *name,
 	     unsigned int namelen,
 	     uint32_t parent_lkid,
 	     void (*lockast) (void *astarg),

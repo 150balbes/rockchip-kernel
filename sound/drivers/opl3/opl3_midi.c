@@ -180,7 +180,8 @@ static int opl3_get_voice(struct snd_opl3 *opl3, int instr_4op,
 			if (vp2->state == SNDRV_OPL3_ST_ON_2OP) {
 				/* kill two voices, EXPENSIVE */
 				bp++;
-				voice_time = max(voice_time, vp2->time);
+				voice_time = (voice_time > vp->time) ?
+					voice_time : vp->time;
 			}
 		} else {
 			/* allocate 2op voice */

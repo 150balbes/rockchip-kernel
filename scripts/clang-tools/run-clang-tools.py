@@ -12,6 +12,7 @@ compile_commands.json.
 import argparse
 import json
 import multiprocessing
+import os
 import subprocess
 import sys
 
@@ -45,14 +46,12 @@ def init(l, a):
 
 def run_analysis(entry):
     # Disable all checks, then re-enable the ones we want
-    checks = []
-    checks.append("-checks=-*")
+    checks = "-checks=-*,"
     if args.type == "clang-tidy":
-        checks.append("linuxkernel-*")
+        checks += "linuxkernel-*"
     else:
-        checks.append("clang-analyzer-*")
-        checks.append("-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling")
-    p = subprocess.run(["clang-tidy", "-p", args.path, ",".join(checks), entry["file"]],
+        checks += "clang-analyzer-*"
+    p = subprocess.run(["clang-tidy", "-p", args.path, checks, entry["file"]],
                        stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT,
                        cwd=entry["directory"])
@@ -61,21 +60,14 @@ def run_analysis(entry):
 
 
 def main():
-    try:
-        args = parse_arguments()
+    args = parse_arguments()
 
-        lock = multiprocessing.Lock()
-        pool = multiprocessing.Pool(initializer=init, initargs=(lock, args))
-        # Read JSON data into the datastore variable
-        with open(args.path, "r") as f:
-            datastore = json.load(f)
-            pool.map(run_analysis, datastore)
-    except BrokenPipeError:
-        # Python flushes standard streams on exit; redirect remaining output
-        # to devnull to avoid another BrokenPipeError at shutdown
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        sys.exit(1)  # Python exits with error code 1 on EPIPE
+    lock = multiprocessing.Lock()
+    pool = multiprocessing.Pool(initializer=init, initargs=(lock, args))
+    # Read JSON data into the datastore variable
+    with open(args.path, "r") as f:
+        datastore = json.load(f)
+        pool.map(run_analysis, datastore)
 
 
 if __name__ == "__main__":

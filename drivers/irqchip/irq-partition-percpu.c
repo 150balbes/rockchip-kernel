@@ -124,10 +124,13 @@ static void partition_handle_irq(struct irq_desc *desc)
 			break;
 	}
 
-	if (unlikely(hwirq == part->nr_parts))
+	if (unlikely(hwirq == part->nr_parts)) {
 		handle_bad_irq(desc);
-	else
-		generic_handle_domain_irq(part->domain, hwirq);
+	} else {
+		unsigned int irq;
+		irq = irq_find_mapping(part->domain, hwirq);
+		generic_handle_irq(irq);
+	}
 
 	chained_irq_exit(chip, desc);
 }
@@ -215,7 +218,8 @@ struct partition_desc *partition_create_desc(struct fwnode_handle *fwnode,
 		goto out;
 	desc->domain = d;
 
-	desc->bitmap = bitmap_zalloc(nr_parts, GFP_KERNEL);
+	desc->bitmap = kcalloc(BITS_TO_LONGS(nr_parts), sizeof(long),
+			       GFP_KERNEL);
 	if (WARN_ON(!desc->bitmap))
 		goto out;
 

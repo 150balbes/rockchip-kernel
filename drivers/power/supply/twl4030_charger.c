@@ -726,9 +726,11 @@ twl4030_bci_mode_show(struct device *dev,
 
 	for (i = 0; i < ARRAY_SIZE(modes); i++)
 		if (mode == i)
-			len += sysfs_emit_at(buf, len, "[%s] ", modes[i]);
+			len += scnprintf(buf+len, PAGE_SIZE-len,
+					"[%s] ", modes[i]);
 		else
-			len += sysfs_emit_at(buf, len, "%s ", modes[i]);
+			len += scnprintf(buf+len, PAGE_SIZE-len,
+					"%s ", modes[i]);
 	buf[len-1] = '\n';
 	return len;
 }
@@ -1126,7 +1128,7 @@ static int twl4030_bci_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id twl_bci_of_match[] __maybe_unused = {
+static const struct of_device_id twl_bci_of_match[] = {
 	{.compatible = "ti,twl4030-bci", },
 	{ }
 };

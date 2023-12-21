@@ -46,9 +46,6 @@
 #define HHI_NANOQ_MEM_PD_REG1		(0x47 << 2)
 #define HHI_VPU_MEM_PD_REG2		(0x4d << 2)
 
-#define G12A_HHI_NANOQ_MEM_PD_REG0	(0x43 << 2)
-#define G12A_HHI_NANOQ_MEM_PD_REG1	(0x44 << 2)
-
 struct meson_ee_pwrc;
 struct meson_ee_pwrc_domain;
 
@@ -71,7 +68,7 @@ struct meson_ee_pwrc_domain_desc {
 	struct meson_ee_pwrc_top_domain *top_pd;
 	unsigned int mem_pd_count;
 	struct meson_ee_pwrc_mem_domain *mem_pd;
-	bool (*is_powered_off)(struct meson_ee_pwrc_domain *pwrc_domain);
+	bool (*get_power)(struct meson_ee_pwrc_domain *pwrc_domain);
 };
 
 struct meson_ee_pwrc_domain_data {
@@ -108,13 +105,6 @@ static struct meson_ee_pwrc_top_domain sm1_pwrc_nna = SM1_EE_PD(16);
 static struct meson_ee_pwrc_top_domain sm1_pwrc_usb = SM1_EE_PD(17);
 static struct meson_ee_pwrc_top_domain sm1_pwrc_pci = SM1_EE_PD(18);
 static struct meson_ee_pwrc_top_domain sm1_pwrc_ge2d = SM1_EE_PD(19);
-
-static struct meson_ee_pwrc_top_domain g12a_pwrc_nna = {
-	.sleep_reg = GX_AO_RTI_GEN_PWR_SLEEP0,
-	.sleep_mask = BIT(16) | BIT(17),
-	.iso_reg = GX_AO_RTI_GEN_PWR_ISO0,
-	.iso_mask = BIT(16) | BIT(17),
-};
 
 /* Memory PD Domains */
 
@@ -227,12 +217,7 @@ static struct meson_ee_pwrc_mem_domain sm1_pwrc_mem_audio[] = {
 	{ HHI_AUDIO_MEM_PD_REG0, GENMASK(27, 26) },
 };
 
-static struct meson_ee_pwrc_mem_domain g12a_pwrc_mem_nna[] = {
-	{ G12A_HHI_NANOQ_MEM_PD_REG0, GENMASK(31, 0) },
-	{ G12A_HHI_NANOQ_MEM_PD_REG1, GENMASK(23, 0) },
-};
-
-#define VPU_PD(__name, __top_pd, __mem, __is_pwr_off, __resets, __clks)	\
+#define VPU_PD(__name, __top_pd, __mem, __get_power, __resets, __clks)	\
 	{								\
 		.name = __name,						\
 		.reset_names_count = __resets,				\
@@ -240,48 +225,46 @@ static struct meson_ee_pwrc_mem_domain g12a_pwrc_mem_nna[] = {
 		.top_pd = __top_pd,					\
 		.mem_pd_count = ARRAY_SIZE(__mem),			\
 		.mem_pd = __mem,					\
-		.is_powered_off = __is_pwr_off,				\
+		.get_power = __get_power,				\
 	}
 
-#define TOP_PD(__name, __top_pd, __mem, __is_pwr_off)			\
+#define TOP_PD(__name, __top_pd, __mem, __get_power)			\
 	{								\
 		.name = __name,						\
 		.top_pd = __top_pd,					\
 		.mem_pd_count = ARRAY_SIZE(__mem),			\
 		.mem_pd = __mem,					\
-		.is_powered_off = __is_pwr_off,				\
+		.get_power = __get_power,				\
 	}
 
 #define MEM_PD(__name, __mem)						\
 	TOP_PD(__name, NULL, __mem, NULL)
 
-static bool pwrc_ee_is_powered_off(struct meson_ee_pwrc_domain *pwrc_domain);
+static bool pwrc_ee_get_power(struct meson_ee_pwrc_domain *pwrc_domain);
 
 static struct meson_ee_pwrc_domain_desc axg_pwrc_domains[] = {
 	[PWRC_AXG_VPU_ID]  = VPU_PD("VPU", &gx_pwrc_vpu, axg_pwrc_mem_vpu,
-				     pwrc_ee_is_powered_off, 5, 2),
+				     pwrc_ee_get_power, 5, 2),
 	[PWRC_AXG_ETHERNET_MEM_ID] = MEM_PD("ETH", meson_pwrc_mem_eth),
 	[PWRC_AXG_AUDIO_ID] = MEM_PD("AUDIO", axg_pwrc_mem_audio),
 };
 
 static struct meson_ee_pwrc_domain_desc g12a_pwrc_domains[] = {
 	[PWRC_G12A_VPU_ID]  = VPU_PD("VPU", &gx_pwrc_vpu, g12a_pwrc_mem_vpu,
-				     pwrc_ee_is_powered_off, 11, 2),
+				     pwrc_ee_get_power, 11, 2),
 	[PWRC_G12A_ETH_ID] = MEM_PD("ETH", meson_pwrc_mem_eth),
-	[PWRC_G12A_NNA_ID] = TOP_PD("NNA", &g12a_pwrc_nna, g12a_pwrc_mem_nna,
-				    pwrc_ee_is_powered_off),
 };
 
 static struct meson_ee_pwrc_domain_desc gxbb_pwrc_domains[] = {
 	[PWRC_GXBB_VPU_ID]  = VPU_PD("VPU", &gx_pwrc_vpu, gxbb_pwrc_mem_vpu,
-				     pwrc_ee_is_powered_off, 12, 2),
+				     pwrc_ee_get_power, 12, 2),
 	[PWRC_GXBB_ETHERNET_MEM_ID] = MEM_PD("ETH", meson_pwrc_mem_eth),
 };
 
 static struct meson_ee_pwrc_domain_desc meson8_pwrc_domains[] = {
 	[PWRC_MESON8_VPU_ID]  = VPU_PD("VPU", &meson8_pwrc_vpu,
-				       meson8_pwrc_mem_vpu,
-				       pwrc_ee_is_powered_off, 0, 1),
+				       meson8_pwrc_mem_vpu, pwrc_ee_get_power,
+				       0, 1),
 	[PWRC_MESON8_ETHERNET_MEM_ID] = MEM_PD("ETHERNET_MEM",
 					       meson_pwrc_mem_eth),
 	[PWRC_MESON8_AUDIO_DSP_MEM_ID] = MEM_PD("AUDIO_DSP_MEM",
@@ -290,8 +273,8 @@ static struct meson_ee_pwrc_domain_desc meson8_pwrc_domains[] = {
 
 static struct meson_ee_pwrc_domain_desc meson8b_pwrc_domains[] = {
 	[PWRC_MESON8_VPU_ID]  = VPU_PD("VPU", &meson8_pwrc_vpu,
-				       meson8_pwrc_mem_vpu,
-				       pwrc_ee_is_powered_off, 11, 1),
+				       meson8_pwrc_mem_vpu, pwrc_ee_get_power,
+				       11, 1),
 	[PWRC_MESON8_ETHERNET_MEM_ID] = MEM_PD("ETHERNET_MEM",
 					       meson_pwrc_mem_eth),
 	[PWRC_MESON8_AUDIO_DSP_MEM_ID] = MEM_PD("AUDIO_DSP_MEM",
@@ -300,15 +283,15 @@ static struct meson_ee_pwrc_domain_desc meson8b_pwrc_domains[] = {
 
 static struct meson_ee_pwrc_domain_desc sm1_pwrc_domains[] = {
 	[PWRC_SM1_VPU_ID]  = VPU_PD("VPU", &sm1_pwrc_vpu, sm1_pwrc_mem_vpu,
-				    pwrc_ee_is_powered_off, 11, 2),
+				    pwrc_ee_get_power, 11, 2),
 	[PWRC_SM1_NNA_ID]  = TOP_PD("NNA", &sm1_pwrc_nna, sm1_pwrc_mem_nna,
-				    pwrc_ee_is_powered_off),
+				    pwrc_ee_get_power),
 	[PWRC_SM1_USB_ID]  = TOP_PD("USB", &sm1_pwrc_usb, sm1_pwrc_mem_usb,
-				    pwrc_ee_is_powered_off),
+				    pwrc_ee_get_power),
 	[PWRC_SM1_PCIE_ID] = TOP_PD("PCI", &sm1_pwrc_pci, sm1_pwrc_mem_pcie,
-				    pwrc_ee_is_powered_off),
+				    pwrc_ee_get_power),
 	[PWRC_SM1_GE2D_ID] = TOP_PD("GE2D", &sm1_pwrc_ge2d, sm1_pwrc_mem_ge2d,
-				    pwrc_ee_is_powered_off),
+				    pwrc_ee_get_power),
 	[PWRC_SM1_AUDIO_ID] = MEM_PD("AUDIO", sm1_pwrc_mem_audio),
 	[PWRC_SM1_ETH_ID] = MEM_PD("ETH", meson_pwrc_mem_eth),
 };
@@ -331,7 +314,7 @@ struct meson_ee_pwrc {
 	struct genpd_onecell_data xlate;
 };
 
-static bool pwrc_ee_is_powered_off(struct meson_ee_pwrc_domain *pwrc_domain)
+static bool pwrc_ee_get_power(struct meson_ee_pwrc_domain *pwrc_domain)
 {
 	u32 reg;
 
@@ -430,7 +413,8 @@ static int meson_ee_pwrc_init_domain(struct platform_device *pdev,
 			dev_warn(&pdev->dev, "Invalid resets count %d for domain %s\n",
 				 count, dom->desc.name);
 
-		dom->rstc = devm_reset_control_array_get_exclusive(&pdev->dev);
+		dom->rstc = devm_reset_control_array_get(&pdev->dev, false,
+							 false);
 		if (IS_ERR(dom->rstc))
 			return PTR_ERR(dom->rstc);
 	}
@@ -462,7 +446,7 @@ static int meson_ee_pwrc_init_domain(struct platform_device *pdev,
          * we need to power the domain off, otherwise the internal clocks
          * prepare/enable counters won't be in sync.
          */
-	if (dom->num_clks && dom->desc.is_powered_off && !dom->desc.is_powered_off(dom)) {
+	if (dom->num_clks && dom->desc.get_power && !dom->desc.get_power(dom)) {
 		ret = clk_bulk_prepare_enable(dom->num_clks, dom->clks);
 		if (ret)
 			return ret;
@@ -473,8 +457,8 @@ static int meson_ee_pwrc_init_domain(struct platform_device *pdev,
 			return ret;
 	} else {
 		ret = pm_genpd_init(&dom->base, NULL,
-				    (dom->desc.is_powered_off ?
-				     dom->desc.is_powered_off(dom) : true));
+				    (dom->desc.get_power ?
+				     dom->desc.get_power(dom) : true));
 		if (ret)
 			return ret;
 	}
@@ -486,7 +470,6 @@ static int meson_ee_pwrc_probe(struct platform_device *pdev)
 {
 	const struct meson_ee_pwrc_domain_data *match;
 	struct regmap *regmap_ao, *regmap_hhi;
-	struct device_node *parent_np;
 	struct meson_ee_pwrc *pwrc;
 	int i, ret;
 
@@ -513,9 +496,7 @@ static int meson_ee_pwrc_probe(struct platform_device *pdev)
 
 	pwrc->xlate.num_domains = match->count;
 
-	parent_np = of_get_parent(pdev->dev.of_node);
-	regmap_hhi = syscon_node_to_regmap(parent_np);
-	of_node_put(parent_np);
+	regmap_hhi = syscon_node_to_regmap(of_get_parent(pdev->dev.of_node));
 	if (IS_ERR(regmap_hhi)) {
 		dev_err(&pdev->dev, "failed to get HHI regmap\n");
 		return PTR_ERR(regmap_hhi);
@@ -556,7 +537,7 @@ static void meson_ee_pwrc_shutdown(struct platform_device *pdev)
 	for (i = 0 ; i < pwrc->xlate.num_domains ; ++i) {
 		struct meson_ee_pwrc_domain *dom = &pwrc->domains[i];
 
-		if (dom->desc.is_powered_off && !dom->desc.is_powered_off(dom))
+		if (dom->desc.get_power && !dom->desc.get_power(dom))
 			meson_ee_pwrc_off(&dom->base);
 	}
 }

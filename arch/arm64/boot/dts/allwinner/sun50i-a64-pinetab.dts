@@ -14,9 +14,8 @@
 #include <dt-bindings/pwm/pwm.h>
 
 / {
-	model = "PineTab, Development Sample";
+	model = "PineTab";
 	compatible = "pine64,pinetab", "allwinner,sun50i-a64";
-	chassis-type = "tablet";
 
 	aliases {
 		serial0 = &uart0;
@@ -34,17 +33,6 @@
 
 	chosen {
 		stdout-path = "serial0:115200n8";
-	};
-
-	hdmi-connector {
-		compatible = "hdmi-connector";
-		type = "c";
-
-		port {
-			hdmi_con_in: endpoint {
-				remote-endpoint = <&hdmi_out_con>;
-			};
-		};
 	};
 
 	i2c-csi {
@@ -89,7 +77,7 @@
 		sound-name-prefix = "Speaker Amp";
 	};
 
-	vdd_bl: regulator {
+	vdd_bl: regulator@0 {
 		compatible = "regulator-fixed";
 		regulator-name = "bl-3v3";
 		regulator-min-microvolt = <3300000>;
@@ -278,7 +266,7 @@
 		compatible = "x-powers,axp803";
 		reg = <0x3a3>;
 		interrupt-parent = <&r_intc>;
-		interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
 		x-powers,drive-vbus-en;
 	};
 };
@@ -420,21 +408,6 @@
 
 &reg_rtc_ldo {
 	regulator-name = "vcc-rtc";
-};
-
-&simplefb_hdmi {
-	vcc-hdmi-supply = <&reg_dldo1>;
-};
-
-&hdmi {
-	hvcc-supply = <&reg_dldo1>;
-	status = "okay";
-};
-
-&hdmi_out {
-	hdmi_out_con: endpoint {
-		remote-endpoint = <&hdmi_con_in>;
-	};
 };
 
 &sound {

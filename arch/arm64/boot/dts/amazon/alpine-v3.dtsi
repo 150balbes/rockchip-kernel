@@ -250,7 +250,6 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-level = <2>;
-			cache-unified;
 		};
 
 		cluster1_l2: cache@100 {
@@ -259,7 +258,6 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-level = <2>;
-			cache-unified;
 		};
 
 		cluster2_l2: cache@200 {
@@ -268,7 +266,6 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-level = <2>;
-			cache-unified;
 		};
 
 		cluster3_l2: cache@300 {
@@ -277,7 +274,6 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-level = <2>;
-			cache-unified;
 		};
 
 	};

@@ -6,6 +6,7 @@
  * Author: Moritz Fischer <moritz.fischer@ettus.com>
  */
 
+#include <linux/kallsyms.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/notifier.h>
@@ -33,6 +34,7 @@ static void syscon_poweroff(void)
 
 static int syscon_poweroff_probe(struct platform_device *pdev)
 {
+	char symname[KSYM_NAME_LEN];
 	int mask_err, value_err;
 
 	map = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "regmap");
@@ -63,8 +65,10 @@ static int syscon_poweroff_probe(struct platform_device *pdev)
 	}
 
 	if (pm_power_off) {
-		dev_err(&pdev->dev, "pm_power_off already claimed for %ps",
-			pm_power_off);
+		lookup_symbol_name((ulong)pm_power_off, symname);
+		dev_err(&pdev->dev,
+		"pm_power_off already claimed %p %s",
+		pm_power_off, symname);
 		return -EBUSY;
 	}
 

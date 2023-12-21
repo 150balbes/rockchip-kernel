@@ -60,6 +60,4 @@ static inline int hvm_get_parameter(int idx, uint64_t *value)
 
 void xen_setup_callback_vector(void);
 
-int xen_set_upcall_vector(unsigned int cpu);
-
 #endif /* XEN_HVM_H__ */

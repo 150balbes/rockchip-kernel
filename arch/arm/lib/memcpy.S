@@ -42,25 +42,26 @@
 	strb\cond \reg, [\ptr], #1
 	.endm
 
-	.macro enter regs:vararg
-UNWIND( .save	{r0, \regs}		)
-	stmdb sp!, {r0, \regs}
+	.macro enter reg1 reg2
+	stmdb sp!, {r0, \reg1, \reg2}
 	.endm
 
-	.macro exit regs:vararg
-	ldmfd sp!, {r0, \regs}
+	.macro usave reg1 reg2
+	UNWIND(	.save	{r0, \reg1, \reg2}	)
+	.endm
+
+	.macro exit reg1 reg2
+	ldmfd sp!, {r0, \reg1, \reg2}
 	.endm
 
 	.text
 
 /* Prototype: void *memcpy(void *dest, const void *src, size_t n); */
 
-ENTRY(__memcpy)
 ENTRY(mmiocpy)
-WEAK(memcpy)
+ENTRY(memcpy)
 
 #include "copy_template.S"
 
 ENDPROC(memcpy)
 ENDPROC(mmiocpy)
-ENDPROC(__memcpy)

@@ -1,8 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-or-later OR copyleft-next-0.3.1
 /*
  * proc sysctl test driver
  *
  * Copyright (C) 2017 Luis R. Rodriguez <mcgrof@kernel.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or at your option any
+ * later version; or, when distributed separately from the Linux kernel or
+ * when incorporated into other software packages, subject to the following
+ * license:
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of copyleft-next (version 0.3.1 or later) as published
+ * at http://copyleft-next.org/.
  */
 
 /*
@@ -28,14 +38,6 @@
 
 static int i_zero;
 static int i_one_hundred = 100;
-static int match_int_ok = 1;
-
-
-static struct {
-	struct ctl_table_header *test_h_setup_node;
-	struct ctl_table_header *test_h_mnt;
-	struct ctl_table_header *test_h_mnterror;
-} sysctl_test_headers;
 
 struct test_sysctl_data {
 	int int_0001;
@@ -94,13 +96,6 @@ static struct ctl_table test_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
-		.procname	= "match_int",
-		.data		= &match_int_ok,
-		.maxlen		= sizeof(match_int_ok),
-		.mode		= 0444,
-		.proc_handler	= proc_dointvec,
-	},
-	{
 		.procname	= "boot_int",
 		.data		= &test_data.boot_int,
 		.maxlen		= sizeof(test_data.boot_int),
@@ -133,121 +128,47 @@ static struct ctl_table test_table[] = {
 	{ }
 };
 
-static void test_sysctl_calc_match_int_ok(void)
-{
-	int i;
-
-	struct {
-		int defined;
-		int wanted;
-	} match_int[] = {
-		{.defined = *(int *)SYSCTL_ZERO,	.wanted = 0},
-		{.defined = *(int *)SYSCTL_ONE,		.wanted = 1},
-		{.defined = *(int *)SYSCTL_TWO,		.wanted = 2},
-		{.defined = *(int *)SYSCTL_THREE,	.wanted = 3},
-		{.defined = *(int *)SYSCTL_FOUR,	.wanted = 4},
-		{.defined = *(int *)SYSCTL_ONE_HUNDRED, .wanted = 100},
-		{.defined = *(int *)SYSCTL_TWO_HUNDRED,	.wanted = 200},
-		{.defined = *(int *)SYSCTL_ONE_THOUSAND, .wanted = 1000},
-		{.defined = *(int *)SYSCTL_THREE_THOUSAND, .wanted = 3000},
-		{.defined = *(int *)SYSCTL_INT_MAX,	.wanted = INT_MAX},
-		{.defined = *(int *)SYSCTL_MAXOLDUID,	.wanted = 65535},
-		{.defined = *(int *)SYSCTL_NEG_ONE,	.wanted = -1},
-	};
-
-	for (i = 0; i < ARRAY_SIZE(match_int); i++)
-		if (match_int[i].defined != match_int[i].wanted)
-			match_int_ok = 0;
-}
-
-static int test_sysctl_setup_node_tests(void)
-{
-	test_sysctl_calc_match_int_ok();
-	test_data.bitmap_0001 = kzalloc(SYSCTL_TEST_BITMAP_SIZE/8, GFP_KERNEL);
-	if (!test_data.bitmap_0001)
-		return -ENOMEM;
-	sysctl_test_headers.test_h_setup_node = register_sysctl("debug/test_sysctl", test_table);
-	if (!sysctl_test_headers.test_h_setup_node) {
-		kfree(test_data.bitmap_0001);
-		return -ENOMEM;
-	}
-
-	return 0;
-}
-
-/* Used to test that unregister actually removes the directory */
-static struct ctl_table test_table_unregister[] = {
+static struct ctl_table test_sysctl_table[] = {
 	{
-		.procname	= "unregister_error",
-		.data		= &test_data.int_0001,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
+		.procname	= "test_sysctl",
+		.maxlen		= 0,
+		.mode		= 0555,
+		.child		= test_table,
 	},
-	{}
+	{ }
 };
 
-static int test_sysctl_run_unregister_nested(void)
-{
-	struct ctl_table_header *unregister;
+static struct ctl_table test_sysctl_root_table[] = {
+	{
+		.procname	= "debug",
+		.maxlen		= 0,
+		.mode		= 0555,
+		.child		= test_sysctl_table,
+	},
+	{ }
+};
 
-	unregister = register_sysctl("debug/test_sysctl/unregister_error",
-				   test_table_unregister);
-	if (!unregister)
-		return -ENOMEM;
-
-	unregister_sysctl_table(unregister);
-	return 0;
-}
-
-static int test_sysctl_run_register_mount_point(void)
-{
-	sysctl_test_headers.test_h_mnt
-		= register_sysctl_mount_point("debug/test_sysctl/mnt");
-	if (!sysctl_test_headers.test_h_mnt)
-		return -ENOMEM;
-
-	sysctl_test_headers.test_h_mnterror
-		= register_sysctl("debug/test_sysctl/mnt/mnt_error",
-				  test_table_unregister);
-	/*
-	 * Don't check the result.:
-	 * If it fails (expected behavior), return 0.
-	 * If successful (missbehavior of register mount point), we want to see
-	 * mnt_error when we run the sysctl test script
-	 */
-
-	return 0;
-}
+static struct ctl_table_header *test_sysctl_header;
 
 static int __init test_sysctl_init(void)
 {
-	int err;
-
-	err = test_sysctl_setup_node_tests();
-	if (err)
-		goto out;
-
-	err = test_sysctl_run_unregister_nested();
-	if (err)
-		goto out;
-
-	err = test_sysctl_run_register_mount_point();
-
-out:
-	return err;
+	test_data.bitmap_0001 = kzalloc(SYSCTL_TEST_BITMAP_SIZE/8, GFP_KERNEL);
+	if (!test_data.bitmap_0001)
+		return -ENOMEM;
+	test_sysctl_header = register_sysctl_table(test_sysctl_root_table);
+	if (!test_sysctl_header) {
+		kfree(test_data.bitmap_0001);
+		return -ENOMEM;
+	}
+	return 0;
 }
 module_init(test_sysctl_init);
 
 static void __exit test_sysctl_exit(void)
 {
 	kfree(test_data.bitmap_0001);
-	if (sysctl_test_headers.test_h_setup_node)
-		unregister_sysctl_table(sysctl_test_headers.test_h_setup_node);
-	if (sysctl_test_headers.test_h_mnt)
-		unregister_sysctl_table(sysctl_test_headers.test_h_mnt);
-	if (sysctl_test_headers.test_h_mnterror)
-		unregister_sysctl_table(sysctl_test_headers.test_h_mnterror);
+	if (test_sysctl_header)
+		unregister_sysctl_table(test_sysctl_header);
 }
 
 module_exit(test_sysctl_exit);

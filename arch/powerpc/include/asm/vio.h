@@ -113,8 +113,7 @@ struct vio_driver {
 	const char *name;
 	const struct vio_device_id *id_table;
 	int (*probe)(struct vio_dev *dev, const struct vio_device_id *id);
-	void (*remove)(struct vio_dev *dev);
-	void (*shutdown)(struct vio_dev *dev);
+	int (*remove)(struct vio_dev *dev);
 	/* A driver must have a get_desired_dma() function to
 	 * be loaded in a CMO environment if it uses DMA.
 	 */
@@ -161,7 +160,10 @@ static inline struct vio_driver *to_vio_driver(struct device_driver *drv)
 	return container_of(drv, struct vio_driver, driver);
 }
 
-#define to_vio_dev(__dev)	container_of_const(__dev, struct vio_dev, dev)
+static inline struct vio_dev *to_vio_dev(struct device *dev)
+{
+	return container_of(dev, struct vio_dev, dev);
+}
 
 #endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_VIO_H */

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * dlmmod.c
  *
  * standalone DLM module
@@ -258,12 +260,12 @@ static void dlm_init_mle(struct dlm_master_list_entry *mle,
 	mle->type = type;
 	INIT_HLIST_NODE(&mle->master_hash_node);
 	INIT_LIST_HEAD(&mle->hb_events);
-	bitmap_zero(mle->maybe_map, O2NM_MAX_NODES);
+	memset(mle->maybe_map, 0, sizeof(mle->maybe_map));
 	spin_lock_init(&mle->spinlock);
 	init_waitqueue_head(&mle->wq);
 	atomic_set(&mle->woken, 0);
 	kref_init(&mle->mle_refs);
-	bitmap_zero(mle->response_map, O2NM_MAX_NODES);
+	memset(mle->response_map, 0, sizeof(mle->response_map));
 	mle->master = O2NM_MAX_NODES;
 	mle->new_master = O2NM_MAX_NODES;
 	mle->inuse = 0;
@@ -290,8 +292,8 @@ static void dlm_init_mle(struct dlm_master_list_entry *mle,
 	atomic_inc(&dlm->mle_cur_count[mle->type]);
 
 	/* copy off the node_map and register hb callbacks on our copy */
-	bitmap_copy(mle->node_map, dlm->domain_map, O2NM_MAX_NODES);
-	bitmap_copy(mle->vote_map, dlm->domain_map, O2NM_MAX_NODES);
+	memcpy(mle->node_map, dlm->domain_map, sizeof(mle->node_map));
+	memcpy(mle->vote_map, dlm->domain_map, sizeof(mle->vote_map));
 	clear_bit(dlm->node_num, mle->vote_map);
 	clear_bit(dlm->node_num, mle->node_map);
 
@@ -572,7 +574,7 @@ static void dlm_init_lockres(struct dlm_ctxt *dlm,
 	spin_unlock(&dlm->track_lock);
 
 	memset(res->lvb, 0, DLM_LVB_LEN);
-	bitmap_zero(res->refmap, O2NM_MAX_NODES);
+	memset(res->refmap, 0, sizeof(res->refmap));
 }
 
 struct dlm_lock_resource *dlm_new_lockres(struct dlm_ctxt *dlm,
@@ -861,7 +863,7 @@ lookup:
 		 * to see if there are any nodes that still need to be
 		 * considered.  these will not appear in the mle nodemap
 		 * but they might own this lockres.  wait on them. */
-		bit = find_first_bit(dlm->recovery_map, O2NM_MAX_NODES);
+		bit = find_next_bit(dlm->recovery_map, O2NM_MAX_NODES, 0);
 		if (bit < O2NM_MAX_NODES) {
 			mlog(0, "%s: res %.*s, At least one node (%d) "
 			     "to recover before lock mastery can begin\n",
@@ -912,7 +914,7 @@ redo_request:
 		dlm_wait_for_recovery(dlm);
 
 		spin_lock(&dlm->spinlock);
-		bit = find_first_bit(dlm->recovery_map, O2NM_MAX_NODES);
+		bit = find_next_bit(dlm->recovery_map, O2NM_MAX_NODES, 0);
 		if (bit < O2NM_MAX_NODES) {
 			mlog(0, "%s: res %.*s, At least one node (%d) "
 			     "to recover before lock mastery can begin\n",
@@ -1036,10 +1038,10 @@ recheck:
 
 	spin_lock(&mle->spinlock);
 	m = mle->master;
-	map_changed = !bitmap_equal(mle->vote_map, mle->node_map,
-				    O2NM_MAX_NODES);
-	voting_done = bitmap_equal(mle->vote_map, mle->response_map,
-				   O2NM_MAX_NODES);
+	map_changed = (memcmp(mle->vote_map, mle->node_map,
+			      sizeof(mle->vote_map)) != 0);
+	voting_done = (memcmp(mle->vote_map, mle->response_map,
+			     sizeof(mle->vote_map)) == 0);
 
 	/* restart if we hit any errors */
 	if (map_changed) {
@@ -1079,7 +1081,7 @@ recheck:
 		sleep = 1;
 		/* have all nodes responded? */
 		if (voting_done && !*blocked) {
-			bit = find_first_bit(mle->maybe_map, O2NM_MAX_NODES);
+			bit = find_next_bit(mle->maybe_map, O2NM_MAX_NODES, 0);
 			if (dlm->node_num <= bit) {
 				/* my node number is lowest.
 			 	 * now tell other nodes that I am
@@ -1234,8 +1236,8 @@ static int dlm_restart_lock_mastery(struct dlm_ctxt *dlm,
 		} else {
 			mlog(ML_ERROR, "node down! %d\n", node);
 			if (blocked) {
-				int lowest = find_first_bit(mle->maybe_map,
-						       O2NM_MAX_NODES);
+				int lowest = find_next_bit(mle->maybe_map,
+						       O2NM_MAX_NODES, 0);
 
 				/* act like it was never there */
 				clear_bit(node, mle->maybe_map);
@@ -1277,11 +1279,11 @@ static int dlm_restart_lock_mastery(struct dlm_ctxt *dlm,
 
 			/* now blank out everything, as if we had never
 			 * contacted anyone */
-			bitmap_zero(mle->maybe_map, O2NM_MAX_NODES);
-			bitmap_zero(mle->response_map, O2NM_MAX_NODES);
+			memset(mle->maybe_map, 0, sizeof(mle->maybe_map));
+			memset(mle->response_map, 0, sizeof(mle->response_map));
 			/* reset the vote_map to the current node_map */
-			bitmap_copy(mle->vote_map, mle->node_map,
-				    O2NM_MAX_NODES);
+			memcpy(mle->vote_map, mle->node_map,
+			       sizeof(mle->node_map));
 			/* put myself into the maybe map */
 			if (mle->type != DLM_MLE_BLOCK)
 				set_bit(dlm->node_num, mle->maybe_map);
@@ -1795,7 +1797,7 @@ int dlm_assert_master_handler(struct o2net_msg *msg, u32 len, void *data,
 		     "MLE for it! (%.*s)\n", assert->node_idx,
 		     namelen, name);
 	} else {
-		int bit = find_first_bit(mle->maybe_map, O2NM_MAX_NODES);
+		int bit = find_next_bit (mle->maybe_map, O2NM_MAX_NODES, 0);
 		if (bit >= O2NM_MAX_NODES) {
 			/* not necessarily an error, though less likely.
 			 * could be master just re-asserting. */
@@ -2094,7 +2096,7 @@ static void dlm_assert_master_worker(struct dlm_work_item *item, void *data)
 	flags = item->u.am.flags;
 
 	spin_lock(&dlm->spinlock);
-	bitmap_copy(nodemap, dlm->domain_map, O2NM_MAX_NODES);
+	memcpy(nodemap, dlm->domain_map, sizeof(nodemap));
 	spin_unlock(&dlm->spinlock);
 
 	clear_bit(dlm->node_num, nodemap);
@@ -2521,7 +2523,7 @@ static int dlm_is_lockres_migratable(struct dlm_ctxt *dlm,
 	}
 
 	if (!nonlocal) {
-		node_ref = find_first_bit(res->refmap, O2NM_MAX_NODES);
+		node_ref = find_next_bit(res->refmap, O2NM_MAX_NODES, 0);
 		if (node_ref >= O2NM_MAX_NODES)
 			return 0;
 	}
@@ -2977,7 +2979,7 @@ static u8 dlm_pick_migration_target(struct dlm_ctxt *dlm,
 				    struct dlm_lock_resource *res)
 {
 	enum dlm_lockres_list idx;
-	struct list_head *queue;
+	struct list_head *queue = &res->granted;
 	struct dlm_lock *lock;
 	int noderef;
 	u8 nodenum = O2NM_MAX_NODES;
@@ -3303,7 +3305,7 @@ static void dlm_clean_block_mle(struct dlm_ctxt *dlm,
 	BUG_ON(mle->type != DLM_MLE_BLOCK);
 
 	spin_lock(&mle->spinlock);
-	bit = find_first_bit(mle->maybe_map, O2NM_MAX_NODES);
+	bit = find_next_bit(mle->maybe_map, O2NM_MAX_NODES, 0);
 	if (bit != dead_node) {
 		mlog(0, "mle found, but dead node %u would not have been "
 		     "master\n", dead_node);
@@ -3447,7 +3449,7 @@ int dlm_finish_migration(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 		ret = 0;
 	}
 
-	bitmap_zero(iter.node_map, O2NM_MAX_NODES);
+	memset(iter.node_map, 0, sizeof(iter.node_map));
 	set_bit(old_master, iter.node_map);
 	mlog(0, "doing assert master of %.*s back to %u\n",
 	     res->lockname.len, res->lockname.name, old_master);
@@ -3542,7 +3544,7 @@ void dlm_force_free_mles(struct dlm_ctxt *dlm)
 	spin_lock(&dlm->master_lock);
 
 	BUG_ON(dlm->dlm_state != DLM_CTXT_LEAVING);
-	BUG_ON((find_first_bit(dlm->domain_map, O2NM_MAX_NODES) < O2NM_MAX_NODES));
+	BUG_ON((find_next_bit(dlm->domain_map, O2NM_MAX_NODES, 0) < O2NM_MAX_NODES));
 
 	for (i = 0; i < DLM_HASH_BUCKETS; i++) {
 		bucket = dlm_master_hash(dlm, i);

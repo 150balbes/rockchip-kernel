@@ -352,11 +352,11 @@ out_free:
 	ubifs_err(c, "failed to recover master node");
 	if (mst1) {
 		ubifs_err(c, "dumping first master node");
-		ubifs_dump_node(c, mst1, c->leb_size - ((void *)mst1 - buf1));
+		ubifs_dump_node(c, mst1);
 	}
 	if (mst2) {
 		ubifs_err(c, "dumping second master node");
-		ubifs_dump_node(c, mst2, c->leb_size - ((void *)mst2 - buf2));
+		ubifs_dump_node(c, mst2);
 	}
 	vfree(buf2);
 	vfree(buf1);
@@ -469,7 +469,7 @@ static int no_more_nodes(const struct ubifs_info *c, void *buf, int len,
 	 * The area after the common header size is not empty, so the common
 	 * header must be intact. Check it.
 	 */
-	if (ubifs_check_node(c, buf, len, lnum, offs, 1, 0) != -EUCLEAN) {
+	if (ubifs_check_node(c, buf, lnum, offs, 1, 0) != -EUCLEAN) {
 		dbg_rcvry("unexpected bad common header at %d:%d", lnum, offs);
 		return 0;
 	}
@@ -662,10 +662,43 @@ struct ubifs_scan_leb *ubifs_recover_leb(struct ubifs_info *c, int lnum,
 			offs += ret;
 			buf += ret;
 			len -= ret;
-		} else if (ret == SCANNED_EMPTY_SPACE ||
-			   ret == SCANNED_GARBAGE     ||
-			   ret == SCANNED_A_BAD_PAD_NODE ||
-			   ret == SCANNED_A_CORRUPT_NODE) {
+		} else if (ret == SCANNED_A_CORRUPT_NODE) {
+			dbg_rcvry("found corruption (%d) at %d:%d",
+				  ret, lnum, offs);
+			if (ubifs_check_node(c, buf, lnum, offs, 1, 1) == -EUCLEAN &&
+			    !no_more_nodes(c, buf, len, lnum, offs)) {
+				int skip;
+				struct ubifs_ch *ch = buf;
+
+				/*
+				 * If the flash voltage power down suddenly in the programming
+				 * process, it may lead to abnormal data written by the flash
+				 * in the low-voltage operation process, and the last data
+				 * should be discarded.
+				 */
+				ubifs_msg(c, "recovery corrupt node\n");
+				skip = ALIGN(offs + le32_to_cpu(ch->len), c->max_write_size) - offs;
+				memset(buf + skip, 0xff, len - skip);
+			}
+
+			break;
+		} else if (ret == SCANNED_EMPTY_SPACE) {
+			dbg_rcvry("found corruption (%d) at %d:%d",
+				  ret, lnum, offs);
+			if (!is_empty(buf, len) && !is_last_write(c, buf, offs)) {
+				/*
+				 * If the flash voltage power down suddenly in the programming
+				 * process, it may lead to the data was programmed to the wroge
+				 * page written by the flash in the low-voltage operation process,
+				 * and the data should be discarded.
+				 */
+				ubifs_msg(c, "recovery empty space\n");
+				memset(buf, 0xff, len);
+			}
+
+			break;
+		} else if (ret == SCANNED_GARBAGE     ||
+			   ret == SCANNED_A_BAD_PAD_NODE) {
 			dbg_rcvry("found corruption (%d) at %d:%d",
 				  ret, lnum, offs);
 			break;

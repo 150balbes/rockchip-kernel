@@ -53,9 +53,6 @@
 
 static int get_default_compressor(struct ubifs_info *c)
 {
-	if (ubifs_compr_present(c, UBIFS_COMPR_ZSTD))
-		return UBIFS_COMPR_ZSTD;
-
 	if (ubifs_compr_present(c, UBIFS_COMPR_LZO))
 		return UBIFS_COMPR_LZO;
 
@@ -506,7 +503,7 @@ static int validate_sb(struct ubifs_info *c, struct ubifs_sb_node *sup)
 
 failed:
 	ubifs_err(c, "bad superblock, error %d", err);
-	ubifs_dump_node(c, sup, ALIGN(UBIFS_SB_NODE_SZ, c->min_io_size));
+	ubifs_dump_node(c, sup);
 	return -EINVAL;
 }
 

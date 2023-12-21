@@ -40,10 +40,10 @@
  */
 
 struct net_rate_estimator {
-	struct gnet_stats_basic_sync	*bstats;
+	struct gnet_stats_basic_packed	*bstats;
 	spinlock_t		*stats_lock;
-	bool			running;
-	struct gnet_stats_basic_sync __percpu *cpu_bstats;
+	seqcount_t		*running;
+	struct gnet_stats_basic_cpu __percpu *cpu_bstats;
 	u8			ewma_log;
 	u8			intvl_log; /* period : (250ms << intvl_log) */
 
@@ -60,13 +60,13 @@ struct net_rate_estimator {
 };
 
 static void est_fetch_counters(struct net_rate_estimator *e,
-			       struct gnet_stats_basic_sync *b)
+			       struct gnet_stats_basic_packed *b)
 {
-	gnet_stats_basic_sync_init(b);
+	memset(b, 0, sizeof(*b));
 	if (e->stats_lock)
 		spin_lock(e->stats_lock);
 
-	gnet_stats_add_basic(b, e->cpu_bstats, e->bstats, e->running);
+	__gnet_stats_copy_basic(e->running, b, e->cpu_bstats, e->bstats);
 
 	if (e->stats_lock)
 		spin_unlock(e->stats_lock);
@@ -76,18 +76,14 @@ static void est_fetch_counters(struct net_rate_estimator *e,
 static void est_timer(struct timer_list *t)
 {
 	struct net_rate_estimator *est = from_timer(est, t, timer);
-	struct gnet_stats_basic_sync b;
-	u64 b_bytes, b_packets;
+	struct gnet_stats_basic_packed b;
 	u64 rate, brate;
 
 	est_fetch_counters(est, &b);
-	b_bytes = u64_stats_read(&b.bytes);
-	b_packets = u64_stats_read(&b.packets);
-
-	brate = (b_bytes - est->last_bytes) << (10 - est->intvl_log);
+	brate = (b.bytes - est->last_bytes) << (10 - est->intvl_log);
 	brate = (brate >> est->ewma_log) - (est->avbps >> est->ewma_log);
 
-	rate = (b_packets - est->last_packets) << (10 - est->intvl_log);
+	rate = (b.packets - est->last_packets) << (10 - est->intvl_log);
 	rate = (rate >> est->ewma_log) - (est->avpps >> est->ewma_log);
 
 	write_seqcount_begin(&est->seq);
@@ -95,8 +91,8 @@ static void est_timer(struct timer_list *t)
 	est->avpps += rate;
 	write_seqcount_end(&est->seq);
 
-	est->last_bytes = b_bytes;
-	est->last_packets = b_packets;
+	est->last_bytes = b.bytes;
+	est->last_packets = b.packets;
 
 	est->next_jiffies += ((HZ/4) << est->intvl_log);
 
@@ -113,9 +109,7 @@ static void est_timer(struct timer_list *t)
  * @cpu_bstats: bstats per cpu
  * @rate_est: rate estimator statistics
  * @lock: lock for statistics and control path
- * @running: true if @bstats represents a running qdisc, thus @bstats'
- *           internal values might change during basic reads. Only used
- *           if @bstats_cpu is NULL
+ * @running: qdisc running seqcount
  * @opt: rate estimator configuration TLV
  *
  * Creates a new rate estimator with &bstats as source and &rate_est
@@ -127,16 +121,16 @@ static void est_timer(struct timer_list *t)
  * Returns 0 on success or a negative error code.
  *
  */
-int gen_new_estimator(struct gnet_stats_basic_sync *bstats,
-		      struct gnet_stats_basic_sync __percpu *cpu_bstats,
+int gen_new_estimator(struct gnet_stats_basic_packed *bstats,
+		      struct gnet_stats_basic_cpu __percpu *cpu_bstats,
 		      struct net_rate_estimator __rcu **rate_est,
 		      spinlock_t *lock,
-		      bool running,
+		      seqcount_t *running,
 		      struct nlattr *opt)
 {
 	struct gnet_estimator *parm = nla_data(opt);
 	struct net_rate_estimator *old, *est;
-	struct gnet_stats_basic_sync b;
+	struct gnet_stats_basic_packed b;
 	int intvl_log;
 
 	if (nla_len(opt) < sizeof(*parm))
@@ -170,8 +164,8 @@ int gen_new_estimator(struct gnet_stats_basic_sync *bstats,
 	est_fetch_counters(est, &b);
 	if (lock)
 		local_bh_enable();
-	est->last_bytes = u64_stats_read(&b.bytes);
-	est->last_packets = u64_stats_read(&b.packets);
+	est->last_bytes = b.bytes;
+	est->last_packets = b.packets;
 
 	if (lock)
 		spin_lock_bh(lock);
@@ -208,7 +202,7 @@ void gen_kill_estimator(struct net_rate_estimator __rcu **rate_est)
 
 	est = xchg((__force struct net_rate_estimator **)rate_est, NULL);
 	if (est) {
-		timer_shutdown_sync(&est->timer);
+		del_timer_sync(&est->timer);
 		kfree_rcu(est, rcu);
 	}
 }
@@ -220,9 +214,7 @@ EXPORT_SYMBOL(gen_kill_estimator);
  * @cpu_bstats: bstats per cpu
  * @rate_est: rate estimator statistics
  * @lock: lock for statistics and control path
- * @running: true if @bstats represents a running qdisc, thus @bstats'
- *           internal values might change during basic reads. Only used
- *           if @cpu_bstats is NULL
+ * @running: qdisc running seqcount (might be NULL)
  * @opt: rate estimator configuration TLV
  *
  * Replaces the configuration of a rate estimator by calling
@@ -230,11 +222,11 @@ EXPORT_SYMBOL(gen_kill_estimator);
  *
  * Returns 0 on success or a negative error code.
  */
-int gen_replace_estimator(struct gnet_stats_basic_sync *bstats,
-			  struct gnet_stats_basic_sync __percpu *cpu_bstats,
+int gen_replace_estimator(struct gnet_stats_basic_packed *bstats,
+			  struct gnet_stats_basic_cpu __percpu *cpu_bstats,
 			  struct net_rate_estimator __rcu **rate_est,
 			  spinlock_t *lock,
-			  bool running, struct nlattr *opt)
+			  seqcount_t *running, struct nlattr *opt)
 {
 	return gen_new_estimator(bstats, cpu_bstats, rate_est,
 				 lock, running, opt);

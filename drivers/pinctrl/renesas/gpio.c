@@ -8,6 +8,7 @@
 
 #include <linux/device.h>
 #include <linux/gpio/driver.h>
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/slab.h>
@@ -135,12 +136,12 @@ static int gpio_pin_request(struct gpio_chip *gc, unsigned offset)
 	if (idx < 0 || pfc->info->pins[idx].enum_id == 0)
 		return -EINVAL;
 
-	return pinctrl_gpio_request(gc->base + offset);
+	return pinctrl_gpio_request(offset);
 }
 
 static void gpio_pin_free(struct gpio_chip *gc, unsigned offset)
 {
-	return pinctrl_gpio_free(gc->base + offset);
+	return pinctrl_gpio_free(offset);
 }
 
 static void gpio_pin_set_value(struct sh_pfc_chip *chip, unsigned offset,
@@ -164,7 +165,7 @@ static void gpio_pin_set_value(struct sh_pfc_chip *chip, unsigned offset,
 
 static int gpio_pin_direction_input(struct gpio_chip *gc, unsigned offset)
 {
-	return pinctrl_gpio_direction_input(gc->base + offset);
+	return pinctrl_gpio_direction_input(offset);
 }
 
 static int gpio_pin_direction_output(struct gpio_chip *gc, unsigned offset,
@@ -172,7 +173,7 @@ static int gpio_pin_direction_output(struct gpio_chip *gc, unsigned offset,
 {
 	gpio_pin_set_value(gpiochip_get_data(gc), offset, value);
 
-	return pinctrl_gpio_direction_output(gc->base + offset);
+	return pinctrl_gpio_direction_output(offset);
 }
 
 static int gpio_pin_get(struct gpio_chip *gc, unsigned offset)
@@ -238,7 +239,7 @@ static int gpio_pin_setup(struct sh_pfc_chip *chip)
 	gc->label = pfc->info->name;
 	gc->parent = pfc->dev;
 	gc->owner = THIS_MODULE;
-	gc->base = IS_ENABLED(CONFIG_PINCTRL_SH_FUNC_GPIO) ? 0 : -1;
+	gc->base = 0;
 	gc->ngpio = pfc->nr_gpio_pins;
 
 	return 0;
@@ -327,7 +328,7 @@ int sh_pfc_register_gpiochip(struct sh_pfc *pfc)
 	if (pfc->info->data_regs == NULL)
 		return 0;
 
-	/* Find the memory window that contains the GPIO registers. Boards that
+	/* Find the memory window that contain the GPIO registers. Boards that
 	 * register a separate GPIO device will not supply a memory resource
 	 * that covers the data registers. In that case don't try to handle
 	 * GPIOs.

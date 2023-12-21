@@ -91,6 +91,7 @@ static int bcm63xx_power_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
+	struct resource *res;
 	const struct bcm63xx_power_data *entry, *table;
 	struct bcm63xx_power *power;
 	unsigned int ndom;
@@ -101,7 +102,8 @@ static int bcm63xx_power_probe(struct platform_device *pdev)
 	if (!power)
 		return -ENOMEM;
 
-	power->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	power->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(power->base))
 		return PTR_ERR(power->base);
 

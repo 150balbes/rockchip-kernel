@@ -11,8 +11,7 @@
 
 struct tidss_device;
 
-int tidss_encoder_create(struct tidss_device *tidss,
-			 struct drm_bridge *next_bridge,
-			 u32 encoder_type, u32 possible_crtcs);
+struct drm_encoder *tidss_encoder_create(struct tidss_device *tidss,
+					 u32 encoder_type, u32 possible_crtcs);
 
 #endif

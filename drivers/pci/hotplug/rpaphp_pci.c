@@ -8,7 +8,6 @@
  * Send feedback to <lxie@us.ibm.com>
  *
  */
-#include <linux/of.h>
 #include <linux/pci.h>
 #include <linux/string.h>
 

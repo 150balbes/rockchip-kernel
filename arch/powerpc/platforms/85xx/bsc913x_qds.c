@@ -50,14 +50,24 @@ static void __init bsc913x_qds_setup_arch(void)
 
 machine_arch_initcall(bsc9132_qds, mpc85xx_common_publish_devices);
 
+/*
+ * Called very early, device-tree isn't unflattened
+ */
+
+static int __init bsc9132_qds_probe(void)
+{
+	return of_machine_is_compatible("fsl,bsc9132qds");
+}
+
 define_machine(bsc9132_qds) {
 	.name			= "BSC9132 QDS",
-	.compatible		= "fsl,bsc9132qds",
+	.probe			= bsc9132_qds_probe,
 	.setup_arch		= bsc913x_qds_setup_arch,
 	.init_IRQ		= bsc913x_qds_pic_init,
 #ifdef CONFIG_PCI
 	.pcibios_fixup_bus	= fsl_pcibios_fixup_bus,
 #endif
 	.get_irq		= mpic_get_irq,
+	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

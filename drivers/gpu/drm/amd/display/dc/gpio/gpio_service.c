@@ -27,6 +27,8 @@
  * Pre-requisites: headers required by header of this unit
  */
 
+#include <linux/slab.h>
+
 #include "dm_services.h"
 #include "include/gpio_interface.h"
 #include "include/gpio_service_interface.h"
@@ -645,9 +647,7 @@ enum gpio_result dal_ddc_set_config(
 void dal_ddc_close(
 	struct ddc *ddc)
 {
-	if (ddc != NULL) {
-		dal_gpio_close(ddc->pin_clock);
-		dal_gpio_close(ddc->pin_data);
-	}
+	dal_gpio_close(ddc->pin_clock);
+	dal_gpio_close(ddc->pin_data);
 }
 

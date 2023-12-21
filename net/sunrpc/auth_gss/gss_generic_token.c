@@ -222,8 +222,10 @@ g_verify_token_header(struct xdr_netobj *mech, int *body_size,
 	if (ret)
 		return ret;
 
-	*buf_in = buf;
-	*body_size = toksize;
+	if (!ret) {
+		*buf_in = buf;
+		*body_size = toksize;
+	}
 
 	return ret;
 }

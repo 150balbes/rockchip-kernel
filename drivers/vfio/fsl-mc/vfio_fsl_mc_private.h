@@ -22,6 +22,11 @@ struct vfio_fsl_mc_irq {
 	char            *name;
 };
 
+struct vfio_fsl_mc_reflck {
+	struct kref		kref;
+	struct mutex		lock;
+};
+
 struct vfio_fsl_mc_region {
 	u32			flags;
 	u32			type;
@@ -31,15 +36,16 @@ struct vfio_fsl_mc_region {
 };
 
 struct vfio_fsl_mc_device {
-	struct vfio_device		vdev;
 	struct fsl_mc_device		*mc_dev;
 	struct notifier_block        nb;
+	int				refcnt;
 	struct vfio_fsl_mc_region	*regions;
+	struct vfio_fsl_mc_reflck   *reflck;
 	struct mutex         igate;
 	struct vfio_fsl_mc_irq      *mc_irqs;
 };
 
-int vfio_fsl_mc_set_irqs_ioctl(struct vfio_fsl_mc_device *vdev,
+extern int vfio_fsl_mc_set_irqs_ioctl(struct vfio_fsl_mc_device *vdev,
 			       u32 flags, unsigned int index,
 			       unsigned int start, unsigned int count,
 			       void *data);

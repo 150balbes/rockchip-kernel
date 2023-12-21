@@ -63,7 +63,7 @@
 
 #define AT_MAX_RECEIVE_QUEUE    4
 #define AT_DEF_RECEIVE_QUEUE	1
-#define AT_MAX_TRANSMIT_QUEUE  4
+#define AT_MAX_TRANSMIT_QUEUE	2
 
 #define AT_DMA_HI_ADDR_MASK     0xffffffff00000000ULL
 #define AT_DMA_LO_ADDR_MASK     0x00000000ffffffffULL
@@ -241,8 +241,6 @@ struct atl1c_tpd_ext_desc {
 #define RRS_PACKET_PROT_IS_IPV6_ONLY(word) \
 	((((word) >> RRS_PROT_ID_SHIFT) & RRS_PROT_ID_MASK) == 6)
 
-#define RRS_MT_PROT_ID_TCPUDP	BIT(19)
-
 struct atl1c_recv_ret_status {
 	__le32  word0;
 	__le32	rss_hash;
@@ -291,7 +289,11 @@ enum atl1c_nic_type {
 	athr_l2c_b2,
 	athr_l1d,
 	athr_l1d_2,
-	athr_mt,
+};
+
+enum atl1c_trans_queue {
+	atl1c_trans_normal = 0,
+	atl1c_trans_high = 1
 };
 
 struct atl1c_hw_stats {
@@ -365,7 +367,6 @@ struct atl1c_hw {
 	u16 phy_id1;
 	u16 phy_id2;
 
-	spinlock_t intr_mask_lock;	/* protect the intr_mask */
 	u32 intr_mask;
 
 	u8 preamble_len;
@@ -470,16 +471,13 @@ struct atl1c_buffer {
 
 /* transimit packet descriptor (tpd) ring */
 struct atl1c_tpd_ring {
-	struct atl1c_adapter *adapter;
 	void *desc;		/* descriptor ring virtual address */
 	dma_addr_t dma;		/* descriptor ring physical address */
-	u16 num;
 	u16 size;		/* descriptor ring length in bytes */
 	u16 count;		/* number of descriptors in the ring */
 	u16 next_to_use;
 	atomic_t next_to_clean;
 	struct atl1c_buffer *buffer_info;
-	struct napi_struct napi;
 };
 
 /* receive free descriptor (rfd) ring */
@@ -495,30 +493,26 @@ struct atl1c_rfd_ring {
 
 /* receive return descriptor (rrd) ring */
 struct atl1c_rrd_ring {
-	struct atl1c_adapter *adapter;
 	void *desc;		/* descriptor ring virtual address */
 	dma_addr_t dma;		/* descriptor ring physical address */
-	u16 num;
 	u16 size;		/* descriptor ring length in bytes */
 	u16 count;		/* number of descriptors in the ring */
 	u16 next_to_use;
 	u16 next_to_clean;
-	struct napi_struct napi;
-	struct page *rx_page;
-	unsigned int rx_page_offset;
 };
 
 /* board specific private data structure */
 struct atl1c_adapter {
 	struct net_device   *netdev;
 	struct pci_dev      *pdev;
+	struct napi_struct  napi;
+	struct page         *rx_page;
+	unsigned int	    rx_page_offset;
 	unsigned int	    rx_frag_size;
 	struct atl1c_hw        hw;
 	struct atl1c_hw_stats  hw_stats;
 	struct mii_if_info  mii;    /* MII interface info */
 	u16 rx_buffer_len;
-	unsigned int tx_queue_count;
-	unsigned int rx_queue_count;
 
 	unsigned long flags;
 #define __AT_TESTING        0x0001
@@ -544,8 +538,8 @@ struct atl1c_adapter {
 	/* All Descriptor memory */
 	struct atl1c_ring_header ring_header;
 	struct atl1c_tpd_ring tpd_ring[AT_MAX_TRANSMIT_QUEUE];
-	struct atl1c_rfd_ring rfd_ring[AT_MAX_RECEIVE_QUEUE];
-	struct atl1c_rrd_ring rrd_ring[AT_MAX_RECEIVE_QUEUE];
+	struct atl1c_rfd_ring rfd_ring;
+	struct atl1c_rrd_ring rrd_ring;
 	u32 bd_number;     /* board number;*/
 };
 

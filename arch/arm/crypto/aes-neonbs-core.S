@@ -758,24 +758,29 @@ ENTRY(aesbs_cbc_decrypt)
 ENDPROC(aesbs_cbc_decrypt)
 
 	.macro		next_ctr, q
-	vmov		\q\()h, r9, r10
+	vmov.32		\q\()h[1], r10
 	adds		r10, r10, #1
+	vmov.32		\q\()h[0], r9
 	adcs		r9, r9, #0
-	vmov		\q\()l, r7, r8
+	vmov.32		\q\()l[1], r8
 	adcs		r8, r8, #0
+	vmov.32		\q\()l[0], r7
 	adc		r7, r7, #0
 	vrev32.8	\q, \q
 	.endm
 
 	/*
 	 * aesbs_ctr_encrypt(u8 out[], u8 const in[], u8 const rk[],
-	 *		     int rounds, int bytes, u8 ctr[])
+	 *		     int rounds, int blocks, u8 ctr[], u8 final[])
 	 */
 ENTRY(aesbs_ctr_encrypt)
 	mov		ip, sp
 	push		{r4-r10, lr}
 
-	ldm		ip, {r5, r6}		// load args 4-5
+	ldm		ip, {r5-r7}		// load args 4-6
+	teq		r7, #0
+	addne		r5, r5, #1		// one extra block if final != 0
+
 	vld1.8		{q0}, [r6]		// load counter
 	vrev32.8	q1, q0
 	vmov		r9, r10, d3
@@ -787,19 +792,20 @@ ENTRY(aesbs_ctr_encrypt)
 	adc		r7, r7, #0
 
 99:	vmov		q1, q0
-	sub		lr, r5, #1
 	vmov		q2, q0
-	adr		ip, 0f
 	vmov		q3, q0
-	and		lr, lr, #112
 	vmov		q4, q0
-	cmp		r5, #112
 	vmov		q5, q0
-	sub		ip, ip, lr, lsl #1
 	vmov		q6, q0
-	add		ip, ip, lr, lsr #2
 	vmov		q7, q0
-	movle		pc, ip			// computed goto if bytes < 112
+
+	adr		ip, 0f
+	sub		lr, r5, #1
+	and		lr, lr, #7
+	cmp		r5, #8
+	sub		ip, ip, lr, lsl #5
+	sub		ip, ip, lr, lsl #2
+	movlt		pc, ip			// computed goto if blocks < 8
 
 	next_ctr	q1
 	next_ctr	q2
@@ -814,14 +820,12 @@ ENTRY(aesbs_ctr_encrypt)
 	bl		aesbs_encrypt8
 
 	adr		ip, 1f
-	sub		lr, r5, #1
-	cmp		r5, #128
-	bic		lr, lr, #15
-	ands		r4, r5, #15		// preserves C flag
-	teqcs		r5, r5			// set Z flag if not last iteration
-	sub		ip, ip, lr, lsr #2
-	rsb		r4, r4, #16
-	movcc		pc, ip			// computed goto if bytes < 128
+	and		lr, r5, #7
+	cmp		r5, #8
+	movgt		r4, #0
+	ldrle		r4, [sp, #40]		// load final in the last round
+	sub		ip, ip, lr, lsl #2
+	movlt		pc, ip			// computed goto if blocks < 8
 
 	vld1.8		{q8}, [r1]!
 	vld1.8		{q9}, [r1]!
@@ -830,69 +834,45 @@ ENTRY(aesbs_ctr_encrypt)
 	vld1.8		{q12}, [r1]!
 	vld1.8		{q13}, [r1]!
 	vld1.8		{q14}, [r1]!
-1:	subne		r1, r1, r4
+	teq		r4, #0			// skip last block if 'final'
+1:	bne		2f
 	vld1.8		{q15}, [r1]!
 
-	add		ip, ip, #2f - 1b
+2:	adr		ip, 3f
+	cmp		r5, #8
+	sub		ip, ip, lr, lsl #3
+	movlt		pc, ip			// computed goto if blocks < 8
 
 	veor		q0, q0, q8
-	veor		q1, q1, q9
-	veor		q4, q4, q10
-	veor		q6, q6, q11
-	veor		q3, q3, q12
-	veor		q7, q7, q13
-	veor		q2, q2, q14
-	bne		3f
-	veor		q5, q5, q15
-
-	movcc		pc, ip			// computed goto if bytes < 128
-
 	vst1.8		{q0}, [r0]!
+	veor		q1, q1, q9
 	vst1.8		{q1}, [r0]!
+	veor		q4, q4, q10
 	vst1.8		{q4}, [r0]!
+	veor		q6, q6, q11
 	vst1.8		{q6}, [r0]!
+	veor		q3, q3, q12
 	vst1.8		{q3}, [r0]!
+	veor		q7, q7, q13
 	vst1.8		{q7}, [r0]!
+	veor		q2, q2, q14
 	vst1.8		{q2}, [r0]!
-2:	subne		r0, r0, r4
+	teq		r4, #0			// skip last block if 'final'
+	W(bne)		5f
+3:	veor		q5, q5, q15
 	vst1.8		{q5}, [r0]!
 
-	next_ctr	q0
+4:	next_ctr	q0
 
-	subs		r5, r5, #128
+	subs		r5, r5, #8
 	bgt		99b
 
 	vst1.8		{q0}, [r6]
 	pop		{r4-r10, pc}
 
-3:	adr		lr, .Lpermute_table + 16
-	cmp		r5, #16			// Z flag remains cleared
-	sub		lr, lr, r4
-	vld1.8		{q8-q9}, [lr]
-	vtbl.8		d16, {q5}, d16
-	vtbl.8		d17, {q5}, d17
-	veor		q5, q8, q15
-	bcc		4f			// have to reload prev if R5 < 16
-	vtbx.8		d10, {q2}, d18
-	vtbx.8		d11, {q2}, d19
-	mov		pc, ip			// branch back to VST sequence
-
-4:	sub		r0, r0, r4
-	vshr.s8		q9, q9, #7		// create mask for VBIF
-	vld1.8		{q8}, [r0]		// reload
-	vbif		q5, q8, q9
-	vst1.8		{q5}, [r0]
-	pop		{r4-r10, pc}
+5:	vst1.8		{q5}, [r4]
+	b		4b
 ENDPROC(aesbs_ctr_encrypt)
-
-	.align		6
-.Lpermute_table:
-	.byte		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-	.byte		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-	.byte		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
-	.byte		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
-	.byte		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-	.byte		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 
 	.macro		next_tweak, out, in, const, tmp
 	vshr.s64	\tmp, \in, #63
@@ -908,7 +888,6 @@ ENDPROC(aesbs_ctr_encrypt)
 	 * aesbs_xts_decrypt(u8 out[], u8 const in[], u8 const rk[], int rounds,
 	 *		     int blocks, u8 iv[], int reorder_last_tweak)
 	 */
-	.align		6
 __xts_prepare8:
 	vld1.8		{q14}, [r7]		// load iv
 	vmov.i32	d30, #0x87		// compose tweak mask vector

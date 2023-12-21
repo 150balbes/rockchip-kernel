@@ -35,23 +35,21 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_damage_helper.h>
-#include <drm/drm_edid.h>
-#include <drm/drm_format_helper.h>
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
-#include <drm/drm_gem_shmem_helper.h>
-#include <drm/drm_managed.h>
+#include <drm/drm_gem_vram_helper.h>
+#include <drm/drm_plane_helper.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 
 #include "ast_drv.h"
 #include "ast_tables.h"
 
-#define AST_LUT_SIZE 256
+static struct ast_i2c_chan *ast_i2c_create(struct drm_device *dev);
+static void ast_i2c_destroy(struct ast_i2c_chan *i2c);
 
-static inline void ast_load_palette_index(struct ast_device *ast,
+static inline void ast_load_palette_index(struct ast_private *ast,
 				     u8 index, u8 red, u8 green,
 				     u8 blue)
 {
@@ -65,46 +63,20 @@ static inline void ast_load_palette_index(struct ast_device *ast,
 	ast_io_read8(ast, AST_IO_SEQ_PORT);
 }
 
-static void ast_crtc_set_gamma_linear(struct ast_device *ast,
-				      const struct drm_format_info *format)
+static void ast_crtc_load_lut(struct ast_private *ast, struct drm_crtc *crtc)
 {
+	u16 *r, *g, *b;
 	int i;
 
-	switch (format->format) {
-	case DRM_FORMAT_C8: /* In this case, gamma table is used as color palette */
-	case DRM_FORMAT_RGB565:
-	case DRM_FORMAT_XRGB8888:
-		for (i = 0; i < AST_LUT_SIZE; i++)
-			ast_load_palette_index(ast, i, i, i, i);
-		break;
-	default:
-		drm_warn_once(&ast->base, "Unsupported format %p4cc for gamma correction\n",
-			      &format->format);
-		break;
-	}
-}
+	if (!crtc->enabled)
+		return;
 
-static void ast_crtc_set_gamma(struct ast_device *ast,
-			       const struct drm_format_info *format,
-			       struct drm_color_lut *lut)
-{
-	int i;
+	r = crtc->gamma_store;
+	g = r + crtc->gamma_size;
+	b = g + crtc->gamma_size;
 
-	switch (format->format) {
-	case DRM_FORMAT_C8: /* In this case, gamma table is used as color palette */
-	case DRM_FORMAT_RGB565:
-	case DRM_FORMAT_XRGB8888:
-		for (i = 0; i < AST_LUT_SIZE; i++)
-			ast_load_palette_index(ast, i,
-					       lut[i].red >> 8,
-					       lut[i].green >> 8,
-					       lut[i].blue >> 8);
-		break;
-	default:
-		drm_warn_once(&ast->base, "Unsupported format %p4cc for gamma correction\n",
-			      &format->format);
-		break;
-	}
+	for (i = 0; i < 256; i++)
+		ast_load_palette_index(ast, i, *r++ >> 8, *g++ >> 8, *b++ >> 8);
 }
 
 static bool ast_get_vbios_mode_info(const struct drm_format_info *format,
@@ -141,9 +113,6 @@ static bool ast_get_vbios_mode_info(const struct drm_format_info *format,
 		break;
 	case 1024:
 		vbios_mode->enh_table = &res_1024x768[refresh_rate_index];
-		break;
-	case 1152:
-		vbios_mode->enh_table = &res_1152x864[refresh_rate_index];
 		break;
 	case 1280:
 		if (mode->crtc_vdisplay == 800)
@@ -232,7 +201,7 @@ static bool ast_get_vbios_mode_info(const struct drm_format_info *format,
 	return true;
 }
 
-static void ast_set_vbios_color_reg(struct ast_device *ast,
+static void ast_set_vbios_color_reg(struct ast_private *ast,
 				    const struct drm_format_info *format,
 				    const struct ast_vbios_mode_info *vbios_mode)
 {
@@ -263,7 +232,7 @@ static void ast_set_vbios_color_reg(struct ast_device *ast,
 	}
 }
 
-static void ast_set_vbios_mode_reg(struct ast_device *ast,
+static void ast_set_vbios_mode_reg(struct ast_private *ast,
 				   const struct drm_display_mode *adjusted_mode,
 				   const struct ast_vbios_mode_info *vbios_mode)
 {
@@ -287,7 +256,7 @@ static void ast_set_vbios_mode_reg(struct ast_device *ast,
 	}
 }
 
-static void ast_set_std_reg(struct ast_device *ast,
+static void ast_set_std_reg(struct ast_private *ast,
 			    struct drm_display_mode *mode,
 			    struct ast_vbios_mode_info *vbios_mode)
 {
@@ -305,7 +274,7 @@ static void ast_set_std_reg(struct ast_device *ast,
 	ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT, 0x01, 0xdf, stdtable->seq[0]);
 	for (i = 1; i < 4; i++) {
 		jreg = stdtable->seq[i];
-		ast_set_index_reg(ast, AST_IO_SEQ_PORT, (i + 1), jreg);
+		ast_set_index_reg(ast, AST_IO_SEQ_PORT, (i + 1) , jreg);
 	}
 
 	/* Set CRTC; except base address and offset */
@@ -335,14 +304,14 @@ static void ast_set_std_reg(struct ast_device *ast,
 		ast_set_index_reg(ast, AST_IO_GR_PORT, i, stdtable->gr[i]);
 }
 
-static void ast_set_crtc_reg(struct ast_device *ast,
+static void ast_set_crtc_reg(struct ast_private *ast,
 			     struct drm_display_mode *mode,
 			     struct ast_vbios_mode_info *vbios_mode)
 {
 	u8 jreg05 = 0, jreg07 = 0, jreg09 = 0, jregAC = 0, jregAD = 0, jregAE = 0;
 	u16 temp, precache = 0;
 
-	if ((IS_AST_GEN6(ast) || IS_AST_GEN7(ast)) &&
+	if ((ast->chip == AST2500) &&
 	    (vbios_mode->enh_table->flags & AST2500PreCatchCRT))
 		precache = 40;
 
@@ -382,12 +351,6 @@ static void ast_set_crtc_reg(struct ast_device *ast,
 
 	ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xAC, 0x00, jregAC);
 	ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xAD, 0x00, jregAD);
-
-	// Workaround for HSync Time non octave pixels (1920x1080@60Hz HSync 44 pixels);
-	if (IS_AST_GEN7(ast) && (mode->crtc_vdisplay == 1080))
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xFC, 0xFD, 0x02);
-	else
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xFC, 0xFD, 0x00);
 
 	/* vert timings */
 	temp = (mode->crtc_vtotal) - 2;
@@ -450,7 +413,7 @@ static void ast_set_crtc_reg(struct ast_device *ast,
 	ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0x11, 0x7f, 0x80);
 }
 
-static void ast_set_offset_reg(struct ast_device *ast,
+static void ast_set_offset_reg(struct ast_private *ast,
 			       struct drm_framebuffer *fb)
 {
 	u16 offset;
@@ -460,13 +423,13 @@ static void ast_set_offset_reg(struct ast_device *ast,
 	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xb0, (offset >> 8) & 0x3f);
 }
 
-static void ast_set_dclk_reg(struct ast_device *ast,
+static void ast_set_dclk_reg(struct ast_private *ast,
 			     struct drm_display_mode *mode,
 			     struct ast_vbios_mode_info *vbios_mode)
 {
 	const struct ast_vbios_dclk_info *clk_info;
 
-	if (IS_AST_GEN6(ast) || IS_AST_GEN7(ast))
+	if (ast->chip == AST2500)
 		clk_info = &dclk_table_ast2500[vbios_mode->enh_table->dclk_index];
 	else
 		clk_info = &dclk_table[vbios_mode->enh_table->dclk_index];
@@ -478,7 +441,7 @@ static void ast_set_dclk_reg(struct ast_device *ast,
 			       ((clk_info->param3 & 0x3) << 4));
 }
 
-static void ast_set_color_reg(struct ast_device *ast,
+static void ast_set_color_reg(struct ast_private *ast,
 			      const struct drm_format_info *format)
 {
 	u8 jregA0 = 0, jregA3 = 0, jregA8 = 0;
@@ -507,16 +470,17 @@ static void ast_set_color_reg(struct ast_device *ast,
 	ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xa8, 0xfd, jregA8);
 }
 
-static void ast_set_crtthd_reg(struct ast_device *ast)
+static void ast_set_crtthd_reg(struct ast_private *ast)
 {
 	/* Set Threshold */
-	if (IS_AST_GEN7(ast)) {
-		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa7, 0xe0);
-		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa6, 0xa0);
-	} else if (IS_AST_GEN6(ast) || IS_AST_GEN5(ast) || IS_AST_GEN4(ast)) {
+	if (ast->chip == AST2300 || ast->chip == AST2400 ||
+	    ast->chip == AST2500) {
 		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa7, 0x78);
 		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa6, 0x60);
-	} else if (IS_AST_GEN3(ast) || IS_AST_GEN2(ast)) {
+	} else if (ast->chip == AST2100 ||
+		   ast->chip == AST1100 ||
+		   ast->chip == AST2200 ||
+		   ast->chip == AST2150) {
 		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa7, 0x3f);
 		ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xa6, 0x2f);
 	} else {
@@ -525,7 +489,7 @@ static void ast_set_crtthd_reg(struct ast_device *ast)
 	}
 }
 
-static void ast_set_sync_reg(struct ast_device *ast,
+static void ast_set_sync_reg(struct ast_private *ast,
 			     struct drm_display_mode *mode,
 			     struct ast_vbios_mode_info *vbios_mode)
 {
@@ -533,15 +497,13 @@ static void ast_set_sync_reg(struct ast_device *ast,
 
 	jreg  = ast_io_read8(ast, AST_IO_MISC_PORT_READ);
 	jreg &= ~0xC0;
-	if (vbios_mode->enh_table->flags & NVSync)
-		jreg |= 0x80;
-	if (vbios_mode->enh_table->flags & NHSync)
-		jreg |= 0x40;
+	if (vbios_mode->enh_table->flags & NVSync) jreg |= 0x80;
+	if (vbios_mode->enh_table->flags & NHSync) jreg |= 0x40;
 	ast_io_write8(ast, AST_IO_MISC_PORT_WRITE, jreg);
 }
 
-static void ast_set_start_address_crt1(struct ast_device *ast,
-				       unsigned int offset)
+static void ast_set_start_address_crt1(struct ast_private *ast,
+				       unsigned offset)
 {
 	u32 addr;
 
@@ -552,7 +514,7 @@ static void ast_set_start_address_crt1(struct ast_device *ast,
 
 }
 
-static void ast_wait_for_vretrace(struct ast_device *ast)
+static void ast_wait_for_vretrace(struct ast_private *ast)
 {
 	unsigned long timeout = jiffies + HZ;
 	u8 vgair1;
@@ -560,29 +522,6 @@ static void ast_wait_for_vretrace(struct ast_device *ast)
 	do {
 		vgair1 = ast_io_read8(ast, AST_IO_INPUT_STATUS1_READ);
 	} while (!(vgair1 & AST_IO_VGAIR1_VREFRESH) && time_before(jiffies, timeout));
-}
-
-/*
- * Planes
- */
-
-static int ast_plane_init(struct drm_device *dev, struct ast_plane *ast_plane,
-			  void __iomem *vaddr, u64 offset, unsigned long size,
-			  uint32_t possible_crtcs,
-			  const struct drm_plane_funcs *funcs,
-			  const uint32_t *formats, unsigned int format_count,
-			  const uint64_t *format_modifiers,
-			  enum drm_plane_type type)
-{
-	struct drm_plane *plane = &ast_plane->base;
-
-	ast_plane->vaddr = vaddr;
-	ast_plane->offset = offset;
-	ast_plane->size = size;
-
-	return drm_universal_plane_init(dev, plane, possible_crtcs, funcs,
-					formats, format_count, format_modifiers,
-					type, NULL);
 }
 
 /*
@@ -596,64 +535,48 @@ static const uint32_t ast_primary_plane_formats[] = {
 };
 
 static int ast_primary_plane_helper_atomic_check(struct drm_plane *plane,
-						 struct drm_atomic_state *state)
+						 struct drm_plane_state *state)
 {
-	struct drm_device *dev = plane->dev;
-	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_crtc_state *new_crtc_state = NULL;
-	struct ast_crtc_state *new_ast_crtc_state;
+	struct drm_crtc_state *crtc_state;
+	struct ast_crtc_state *ast_crtc_state;
 	int ret;
 
-	if (new_plane_state->crtc)
-		new_crtc_state = drm_atomic_get_new_crtc_state(state, new_plane_state->crtc);
+	if (!state->crtc)
+		return 0;
 
-	ret = drm_atomic_helper_check_plane_state(new_plane_state, new_crtc_state,
-						  DRM_PLANE_NO_SCALING,
-						  DRM_PLANE_NO_SCALING,
+	crtc_state = drm_atomic_get_new_crtc_state(state->state, state->crtc);
+
+	ret = drm_atomic_helper_check_plane_state(state, crtc_state,
+						  DRM_PLANE_HELPER_NO_SCALING,
+						  DRM_PLANE_HELPER_NO_SCALING,
 						  false, true);
-	if (ret) {
+	if (ret)
 		return ret;
-	} else if (!new_plane_state->visible) {
-		if (drm_WARN_ON(dev, new_plane_state->crtc)) /* cannot legally happen */
-			return -EINVAL;
-		else
-			return 0;
-	}
 
-	new_ast_crtc_state = to_ast_crtc_state(new_crtc_state);
+	if (!state->visible)
+		return 0;
 
-	new_ast_crtc_state->format = new_plane_state->fb->format;
+	ast_crtc_state = to_ast_crtc_state(crtc_state);
+
+	ast_crtc_state->format = state->fb->format;
 
 	return 0;
 }
 
-static void ast_handle_damage(struct ast_plane *ast_plane, struct iosys_map *src,
-			      struct drm_framebuffer *fb,
-			      const struct drm_rect *clip)
-{
-	struct iosys_map dst = IOSYS_MAP_INIT_VADDR_IOMEM(ast_plane->vaddr);
-
-	iosys_map_incr(&dst, drm_fb_clip_offset(fb->pitches[0], fb->format, clip));
-	drm_fb_memcpy(&dst, fb->pitches, src, fb, clip);
-}
-
-static void ast_primary_plane_helper_atomic_update(struct drm_plane *plane,
-						   struct drm_atomic_state *state)
+static void
+ast_primary_plane_helper_atomic_update(struct drm_plane *plane,
+				       struct drm_plane_state *old_state)
 {
 	struct drm_device *dev = plane->dev;
-	struct ast_device *ast = to_ast_device(dev);
-	struct drm_plane_state *plane_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(plane_state);
-	struct drm_framebuffer *fb = plane_state->fb;
-	struct drm_plane_state *old_plane_state = drm_atomic_get_old_plane_state(state, plane);
-	struct drm_framebuffer *old_fb = old_plane_state->fb;
-	struct ast_plane *ast_plane = to_ast_plane(plane);
-	struct drm_rect damage;
-	struct drm_atomic_helper_damage_iter iter;
+	struct ast_private *ast = to_ast_private(dev);
+	struct drm_plane_state *state = plane->state;
+	struct drm_gem_vram_object *gbo;
+	s64 gpu_addr;
+	struct drm_framebuffer *fb = state->fb;
+	struct drm_framebuffer *old_fb = old_state->fb;
 
 	if (!old_fb || (fb->format != old_fb->format)) {
-		struct drm_crtc *crtc = plane_state->crtc;
-		struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+		struct drm_crtc_state *crtc_state = state->crtc->state;
 		struct ast_crtc_state *ast_crtc_state = to_ast_crtc_state(crtc_state);
 		struct ast_vbios_mode_info *vbios_mode_info = &ast_crtc_state->vbios_mode_info;
 
@@ -661,50 +584,31 @@ static void ast_primary_plane_helper_atomic_update(struct drm_plane *plane,
 		ast_set_vbios_color_reg(ast, fb->format, vbios_mode_info);
 	}
 
-	drm_atomic_helper_damage_iter_init(&iter, old_plane_state, plane_state);
-	drm_atomic_for_each_plane_damage(&iter, &damage) {
-		ast_handle_damage(ast_plane, shadow_plane_state->data, fb, &damage);
-	}
+	gbo = drm_gem_vram_of_gem(fb->obj[0]);
+	gpu_addr = drm_gem_vram_offset(gbo);
+	if (drm_WARN_ON_ONCE(dev, gpu_addr < 0))
+		return; /* Bug: we didn't pin the BO to VRAM in prepare_fb. */
 
-	/*
-	 * Some BMCs stop scanning out the video signal after the driver
-	 * reprogrammed the offset. This stalls display output for several
-	 * seconds and makes the display unusable. Therefore only update
-	 * the offset if it changes.
-	 */
-	if (!old_fb || old_fb->pitches[0] != fb->pitches[0])
-		ast_set_offset_reg(ast, fb);
-}
+	ast_set_offset_reg(ast, fb);
+	ast_set_start_address_crt1(ast, (u32)gpu_addr);
 
-static void ast_primary_plane_helper_atomic_enable(struct drm_plane *plane,
-						   struct drm_atomic_state *state)
-{
-	struct ast_device *ast = to_ast_device(plane->dev);
-	struct ast_plane *ast_plane = to_ast_plane(plane);
-
-	/*
-	 * Some BMCs stop scanning out the video signal after the driver
-	 * reprogrammed the scanout address. This stalls display
-	 * output for several seconds and makes the display unusable.
-	 * Therefore only reprogram the address after enabling the plane.
-	 */
-	ast_set_start_address_crt1(ast, (u32)ast_plane->offset);
 	ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT, 0x1, 0xdf, 0x00);
 }
 
-static void ast_primary_plane_helper_atomic_disable(struct drm_plane *plane,
-						    struct drm_atomic_state *state)
+static void
+ast_primary_plane_helper_atomic_disable(struct drm_plane *plane,
+					struct drm_plane_state *old_state)
 {
-	struct ast_device *ast = to_ast_device(plane->dev);
+	struct ast_private *ast = to_ast_private(plane->dev);
 
 	ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT, 0x1, 0xdf, 0x20);
 }
 
 static const struct drm_plane_helper_funcs ast_primary_plane_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
+	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
 	.atomic_check = ast_primary_plane_helper_atomic_check,
 	.atomic_update = ast_primary_plane_helper_atomic_update,
-	.atomic_enable = ast_primary_plane_helper_atomic_enable,
 	.atomic_disable = ast_primary_plane_helper_atomic_disable,
 };
 
@@ -712,240 +616,101 @@ static const struct drm_plane_funcs ast_primary_plane_funcs = {
 	.update_plane = drm_atomic_helper_update_plane,
 	.disable_plane = drm_atomic_helper_disable_plane,
 	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
+	.reset = drm_atomic_helper_plane_reset,
+	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
 };
-
-static int ast_primary_plane_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct ast_plane *ast_primary_plane = &ast->primary_plane;
-	struct drm_plane *primary_plane = &ast_primary_plane->base;
-	void __iomem *vaddr = ast->vram;
-	u64 offset = 0; /* with shmem, the primary plane is always at offset 0 */
-	unsigned long cursor_size = roundup(AST_HWC_SIZE + AST_HWC_SIGNATURE_SIZE, PAGE_SIZE);
-	unsigned long size = ast->vram_fb_available - cursor_size;
-	int ret;
-
-	ret = ast_plane_init(dev, ast_primary_plane, vaddr, offset, size,
-			     0x01, &ast_primary_plane_funcs,
-			     ast_primary_plane_formats, ARRAY_SIZE(ast_primary_plane_formats),
-			     NULL, DRM_PLANE_TYPE_PRIMARY);
-	if (ret) {
-		drm_err(dev, "ast_plane_init() failed: %d\n", ret);
-		return ret;
-	}
-	drm_plane_helper_add(primary_plane, &ast_primary_plane_helper_funcs);
-	drm_plane_enable_fb_damage_clips(primary_plane);
-
-	return 0;
-}
 
 /*
  * Cursor plane
  */
 
-static void ast_update_cursor_image(u8 __iomem *dst, const u8 *src, int width, int height)
-{
-	union {
-		u32 ul;
-		u8 b[4];
-	} srcdata32[2], data32;
-	union {
-		u16 us;
-		u8 b[2];
-	} data16;
-	u32 csum = 0;
-	s32 alpha_dst_delta, last_alpha_dst_delta;
-	u8 __iomem *dstxor;
-	const u8 *srcxor;
-	int i, j;
-	u32 per_pixel_copy, two_pixel_copy;
-
-	alpha_dst_delta = AST_MAX_HWC_WIDTH << 1;
-	last_alpha_dst_delta = alpha_dst_delta - (width << 1);
-
-	srcxor = src;
-	dstxor = (u8 *)dst + last_alpha_dst_delta + (AST_MAX_HWC_HEIGHT - height) * alpha_dst_delta;
-	per_pixel_copy = width & 1;
-	two_pixel_copy = width >> 1;
-
-	for (j = 0; j < height; j++) {
-		for (i = 0; i < two_pixel_copy; i++) {
-			srcdata32[0].ul = *((u32 *)srcxor) & 0xf0f0f0f0;
-			srcdata32[1].ul = *((u32 *)(srcxor + 4)) & 0xf0f0f0f0;
-			data32.b[0] = srcdata32[0].b[1] | (srcdata32[0].b[0] >> 4);
-			data32.b[1] = srcdata32[0].b[3] | (srcdata32[0].b[2] >> 4);
-			data32.b[2] = srcdata32[1].b[1] | (srcdata32[1].b[0] >> 4);
-			data32.b[3] = srcdata32[1].b[3] | (srcdata32[1].b[2] >> 4);
-
-			writel(data32.ul, dstxor);
-			csum += data32.ul;
-
-			dstxor += 4;
-			srcxor += 8;
-
-		}
-
-		for (i = 0; i < per_pixel_copy; i++) {
-			srcdata32[0].ul = *((u32 *)srcxor) & 0xf0f0f0f0;
-			data16.b[0] = srcdata32[0].b[1] | (srcdata32[0].b[0] >> 4);
-			data16.b[1] = srcdata32[0].b[3] | (srcdata32[0].b[2] >> 4);
-			writew(data16.us, dstxor);
-			csum += (u32)data16.us;
-
-			dstxor += 2;
-			srcxor += 4;
-		}
-		dstxor += last_alpha_dst_delta;
-	}
-
-	/* write checksum + signature */
-	dst += AST_HWC_SIZE;
-	writel(csum, dst);
-	writel(width, dst + AST_HWC_SIGNATURE_SizeX);
-	writel(height, dst + AST_HWC_SIGNATURE_SizeY);
-	writel(0, dst + AST_HWC_SIGNATURE_HOTSPOTX);
-	writel(0, dst + AST_HWC_SIGNATURE_HOTSPOTY);
-}
-
-static void ast_set_cursor_base(struct ast_device *ast, u64 address)
-{
-	u8 addr0 = (address >> 3) & 0xff;
-	u8 addr1 = (address >> 11) & 0xff;
-	u8 addr2 = (address >> 19) & 0xff;
-
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc8, addr0);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc9, addr1);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xca, addr2);
-}
-
-static void ast_set_cursor_location(struct ast_device *ast, u16 x, u16 y,
-				    u8 x_offset, u8 y_offset)
-{
-	u8 x0 = (x & 0x00ff);
-	u8 x1 = (x & 0x0f00) >> 8;
-	u8 y0 = (y & 0x00ff);
-	u8 y1 = (y & 0x0700) >> 8;
-
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc2, x_offset);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc3, y_offset);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc4, x0);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc5, x1);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc6, y0);
-	ast_set_index_reg(ast, AST_IO_CRTC_PORT, 0xc7, y1);
-}
-
-static void ast_set_cursor_enabled(struct ast_device *ast, bool enabled)
-{
-	static const u8 mask = (u8)~(AST_IO_VGACRCB_HWC_16BPP |
-				     AST_IO_VGACRCB_HWC_ENABLED);
-
-	u8 vgacrcb = AST_IO_VGACRCB_HWC_16BPP;
-
-	if (enabled)
-		vgacrcb |= AST_IO_VGACRCB_HWC_ENABLED;
-
-	ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xcb, mask, vgacrcb);
-}
-
 static const uint32_t ast_cursor_plane_formats[] = {
 	DRM_FORMAT_ARGB8888,
 };
 
-static int ast_cursor_plane_helper_atomic_check(struct drm_plane *plane,
-						struct drm_atomic_state *state)
+static int
+ast_cursor_plane_helper_prepare_fb(struct drm_plane *plane,
+				   struct drm_plane_state *new_state)
 {
-	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_framebuffer *new_fb = new_plane_state->fb;
-	struct drm_crtc_state *new_crtc_state = NULL;
+	struct drm_framebuffer *fb = new_state->fb;
+	struct drm_crtc *crtc = new_state->crtc;
+	struct ast_private *ast;
 	int ret;
 
-	if (new_plane_state->crtc)
-		new_crtc_state = drm_atomic_get_new_crtc_state(state, new_plane_state->crtc);
+	if (!crtc || !fb)
+		return 0;
 
-	ret = drm_atomic_helper_check_plane_state(new_plane_state, new_crtc_state,
-						  DRM_PLANE_NO_SCALING,
-						  DRM_PLANE_NO_SCALING,
-						  true, true);
-	if (ret || !new_plane_state->visible)
+	ast = to_ast_private(plane->dev);
+
+	ret = ast_cursor_blit(ast, fb);
+	if (ret)
 		return ret;
 
-	if (new_fb->width > AST_MAX_HWC_WIDTH || new_fb->height > AST_MAX_HWC_HEIGHT)
+	return 0;
+}
+
+static int ast_cursor_plane_helper_atomic_check(struct drm_plane *plane,
+						struct drm_plane_state *state)
+{
+	struct drm_framebuffer *fb = state->fb;
+	struct drm_crtc_state *crtc_state;
+	int ret;
+
+	if (!state->crtc)
+		return 0;
+
+	crtc_state = drm_atomic_get_new_crtc_state(state->state, state->crtc);
+
+	ret = drm_atomic_helper_check_plane_state(state, crtc_state,
+						  DRM_PLANE_HELPER_NO_SCALING,
+						  DRM_PLANE_HELPER_NO_SCALING,
+						  true, true);
+	if (ret)
+		return ret;
+
+	if (!state->visible)
+		return 0;
+
+	if (fb->width > AST_MAX_HWC_WIDTH || fb->height > AST_MAX_HWC_HEIGHT)
 		return -EINVAL;
 
 	return 0;
 }
 
-static void ast_cursor_plane_helper_atomic_update(struct drm_plane *plane,
-						  struct drm_atomic_state *state)
+static void
+ast_cursor_plane_helper_atomic_update(struct drm_plane *plane,
+				      struct drm_plane_state *old_state)
 {
-	struct ast_plane *ast_plane = to_ast_plane(plane);
-	struct drm_plane_state *plane_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(plane_state);
-	struct drm_framebuffer *fb = plane_state->fb;
-	struct drm_plane_state *old_plane_state = drm_atomic_get_old_plane_state(state, plane);
-	struct ast_device *ast = to_ast_device(plane->dev);
-	struct iosys_map src_map = shadow_plane_state->data[0];
-	struct drm_rect damage;
-	const u8 *src = src_map.vaddr; /* TODO: Use mapping abstraction properly */
-	u64 dst_off = ast_plane->offset;
-	u8 __iomem *dst = ast_plane->vaddr; /* TODO: Use mapping abstraction properly */
-	u8 __iomem *sig = dst + AST_HWC_SIZE; /* TODO: Use mapping abstraction properly */
+	struct drm_plane_state *state = plane->state;
+	struct drm_framebuffer *fb = state->fb;
+	struct ast_private *ast = to_ast_private(plane->dev);
 	unsigned int offset_x, offset_y;
-	u16 x, y;
-	u8 x_offset, y_offset;
-
-	/*
-	 * Do data transfer to hardware buffer and point the scanout
-	 * engine to the offset.
-	 */
-
-	if (drm_atomic_helper_damage_merged(old_plane_state, plane_state, &damage)) {
-		ast_update_cursor_image(dst, src, fb->width, fb->height);
-		ast_set_cursor_base(ast, dst_off);
-	}
-
-	/*
-	 * Update location in HWC signature and registers.
-	 */
-
-	writel(plane_state->crtc_x, sig + AST_HWC_SIGNATURE_X);
-	writel(plane_state->crtc_y, sig + AST_HWC_SIGNATURE_Y);
 
 	offset_x = AST_MAX_HWC_WIDTH - fb->width;
 	offset_y = AST_MAX_HWC_HEIGHT - fb->height;
 
-	if (plane_state->crtc_x < 0) {
-		x_offset = (-plane_state->crtc_x) + offset_x;
-		x = 0;
-	} else {
-		x_offset = offset_x;
-		x = plane_state->crtc_x;
-	}
-	if (plane_state->crtc_y < 0) {
-		y_offset = (-plane_state->crtc_y) + offset_y;
-		y = 0;
-	} else {
-		y_offset = offset_y;
-		y = plane_state->crtc_y;
+	if (state->fb != old_state->fb) {
+		/* A new cursor image was installed. */
+		ast_cursor_page_flip(ast);
 	}
 
-	ast_set_cursor_location(ast, x, y, x_offset, y_offset);
-
-	/* Dummy write to enable HWC and make the HW pick-up the changes. */
-	ast_set_cursor_enabled(ast, true);
+	ast_cursor_show(ast, state->crtc_x, state->crtc_y,
+			offset_x, offset_y);
 }
 
-static void ast_cursor_plane_helper_atomic_disable(struct drm_plane *plane,
-						   struct drm_atomic_state *state)
+static void
+ast_cursor_plane_helper_atomic_disable(struct drm_plane *plane,
+				       struct drm_plane_state *old_state)
 {
-	struct ast_device *ast = to_ast_device(plane->dev);
+	struct ast_private *ast = to_ast_private(plane->dev);
 
-	ast_set_cursor_enabled(ast, false);
+	ast_cursor_hide(ast);
 }
 
 static const struct drm_plane_helper_funcs ast_cursor_plane_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.prepare_fb = ast_cursor_plane_helper_prepare_fb,
+	.cleanup_fb = NULL, /* not required for cursor plane */
 	.atomic_check = ast_cursor_plane_helper_atomic_check,
 	.atomic_update = ast_cursor_plane_helper_atomic_update,
 	.atomic_disable = ast_cursor_plane_helper_atomic_disable,
@@ -955,47 +720,10 @@ static const struct drm_plane_funcs ast_cursor_plane_funcs = {
 	.update_plane = drm_atomic_helper_update_plane,
 	.disable_plane = drm_atomic_helper_disable_plane,
 	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
+	.reset = drm_atomic_helper_plane_reset,
+	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
 };
-
-static int ast_cursor_plane_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct ast_plane *ast_cursor_plane = &ast->cursor_plane;
-	struct drm_plane *cursor_plane = &ast_cursor_plane->base;
-	size_t size;
-	void __iomem *vaddr;
-	u64 offset;
-	int ret;
-
-	/*
-	 * Allocate backing storage for cursors. The BOs are permanently
-	 * pinned to the top end of the VRAM.
-	 */
-
-	size = roundup(AST_HWC_SIZE + AST_HWC_SIGNATURE_SIZE, PAGE_SIZE);
-
-	if (ast->vram_fb_available < size)
-		return -ENOMEM;
-
-	vaddr = ast->vram + ast->vram_fb_available - size;
-	offset = ast->vram_fb_available - size;
-
-	ret = ast_plane_init(dev, ast_cursor_plane, vaddr, offset, size,
-			     0x01, &ast_cursor_plane_funcs,
-			     ast_cursor_plane_formats, ARRAY_SIZE(ast_cursor_plane_formats),
-			     NULL, DRM_PLANE_TYPE_CURSOR);
-	if (ret) {
-		drm_err(dev, "ast_plane_init() failed: %d\n", ret);
-		return ret;
-	}
-	drm_plane_helper_add(cursor_plane, &ast_cursor_plane_helper_funcs);
-	drm_plane_enable_fb_damage_clips(cursor_plane);
-
-	ast->vram_fb_available -= size;
-
-	return 0;
-}
 
 /*
  * CRTC
@@ -1003,175 +731,44 @@ static int ast_cursor_plane_init(struct ast_device *ast)
 
 static void ast_crtc_dpms(struct drm_crtc *crtc, int mode)
 {
-	struct ast_device *ast = to_ast_device(crtc->dev);
-	u8 ch = AST_DPMS_VSYNC_OFF | AST_DPMS_HSYNC_OFF;
-	struct ast_crtc_state *ast_state;
-	const struct drm_format_info *format;
-	struct ast_vbios_mode_info *vbios_mode_info;
+	struct ast_private *ast = to_ast_private(crtc->dev);
 
 	/* TODO: Maybe control display signal generation with
 	 *       Sync Enable (bit CR17.7).
 	 */
 	switch (mode) {
 	case DRM_MODE_DPMS_ON:
-		ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT,  0x01, 0xdf, 0);
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb6, 0xfc, 0);
-		if (ast->tx_chip_types & AST_TX_DP501_BIT)
-			ast_set_dp501_video_output(crtc->dev, 1);
-
-		if (ast->tx_chip_types & AST_TX_ASTDP_BIT) {
-			ast_dp_power_on_off(crtc->dev, AST_DP_POWER_ON);
-			ast_wait_for_vretrace(ast);
-			ast_dp_set_on_off(crtc->dev, 1);
-		}
-
-		ast_state = to_ast_crtc_state(crtc->state);
-		format = ast_state->format;
-
-		if (format) {
-			vbios_mode_info = &ast_state->vbios_mode_info;
-
-			ast_set_color_reg(ast, format);
-			ast_set_vbios_color_reg(ast, format, vbios_mode_info);
-			if (crtc->state->gamma_lut)
-				ast_crtc_set_gamma(ast, format, crtc->state->gamma_lut->data);
-			else
-				ast_crtc_set_gamma_linear(ast, format);
-		}
-		break;
 	case DRM_MODE_DPMS_STANDBY:
 	case DRM_MODE_DPMS_SUSPEND:
+		if (ast->tx_chip_type == AST_TX_DP501)
+			ast_set_dp501_video_output(crtc->dev, 1);
+		break;
 	case DRM_MODE_DPMS_OFF:
-		ch = mode;
-		if (ast->tx_chip_types & AST_TX_DP501_BIT)
+		if (ast->tx_chip_type == AST_TX_DP501)
 			ast_set_dp501_video_output(crtc->dev, 0);
-
-		if (ast->tx_chip_types & AST_TX_ASTDP_BIT) {
-			ast_dp_set_on_off(crtc->dev, 0);
-			ast_dp_power_on_off(crtc->dev, AST_DP_POWER_OFF);
-		}
-
-		ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT,  0x01, 0xdf, 0x20);
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb6, 0xfc, ch);
 		break;
 	}
-}
-
-static enum drm_mode_status
-ast_crtc_helper_mode_valid(struct drm_crtc *crtc, const struct drm_display_mode *mode)
-{
-	struct ast_device *ast = to_ast_device(crtc->dev);
-	enum drm_mode_status status;
-	uint32_t jtemp;
-
-	if (ast->support_wide_screen) {
-		if ((mode->hdisplay == 1680) && (mode->vdisplay == 1050))
-			return MODE_OK;
-		if ((mode->hdisplay == 1280) && (mode->vdisplay == 800))
-			return MODE_OK;
-		if ((mode->hdisplay == 1440) && (mode->vdisplay == 900))
-			return MODE_OK;
-		if ((mode->hdisplay == 1360) && (mode->vdisplay == 768))
-			return MODE_OK;
-		if ((mode->hdisplay == 1600) && (mode->vdisplay == 900))
-			return MODE_OK;
-		if ((mode->hdisplay == 1152) && (mode->vdisplay == 864))
-			return MODE_OK;
-
-		if ((ast->chip == AST2100) || // GEN2, but not AST1100 (?)
-		    (ast->chip == AST2200) || // GEN3, but not AST2150 (?)
-		    IS_AST_GEN4(ast) || IS_AST_GEN5(ast) ||
-		    IS_AST_GEN6(ast) || IS_AST_GEN7(ast)) {
-			if ((mode->hdisplay == 1920) && (mode->vdisplay == 1080))
-				return MODE_OK;
-
-			if ((mode->hdisplay == 1920) && (mode->vdisplay == 1200)) {
-				jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xd1, 0xff);
-				if (jtemp & 0x01)
-					return MODE_NOMODE;
-				else
-					return MODE_OK;
-			}
-		}
-	}
-
-	status = MODE_NOMODE;
-
-	switch (mode->hdisplay) {
-	case 640:
-		if (mode->vdisplay == 480)
-			status = MODE_OK;
-		break;
-	case 800:
-		if (mode->vdisplay == 600)
-			status = MODE_OK;
-		break;
-	case 1024:
-		if (mode->vdisplay == 768)
-			status = MODE_OK;
-		break;
-	case 1152:
-		if (mode->vdisplay == 864)
-			status = MODE_OK;
-		break;
-	case 1280:
-		if (mode->vdisplay == 1024)
-			status = MODE_OK;
-		break;
-	case 1600:
-		if (mode->vdisplay == 1200)
-			status = MODE_OK;
-		break;
-	default:
-		break;
-	}
-
-	return status;
 }
 
 static int ast_crtc_helper_atomic_check(struct drm_crtc *crtc,
-					struct drm_atomic_state *state)
+					struct drm_crtc_state *state)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
-	struct drm_crtc_state *old_crtc_state = drm_atomic_get_old_crtc_state(state, crtc);
-	struct ast_crtc_state *old_ast_crtc_state = to_ast_crtc_state(old_crtc_state);
 	struct drm_device *dev = crtc->dev;
 	struct ast_crtc_state *ast_state;
 	const struct drm_format_info *format;
 	bool succ;
-	int ret;
 
-	if (!crtc_state->enable)
-		return 0;
+	if (!state->enable)
+		return 0; /* no mode checks if CRTC is being disabled */
 
-	ret = drm_atomic_helper_check_crtc_primary_plane(crtc_state);
-	if (ret)
-		return ret;
-
-	ast_state = to_ast_crtc_state(crtc_state);
+	ast_state = to_ast_crtc_state(state);
 
 	format = ast_state->format;
 	if (drm_WARN_ON_ONCE(dev, !format))
 		return -EINVAL; /* BUG: We didn't set format in primary check(). */
 
-	/*
-	 * The gamma LUT has to be reloaded after changing the primary
-	 * plane's color format.
-	 */
-	if (old_ast_crtc_state->format != format)
-		crtc_state->color_mgmt_changed = true;
-
-	if (crtc_state->color_mgmt_changed && crtc_state->gamma_lut) {
-		if (crtc_state->gamma_lut->length !=
-		    AST_LUT_SIZE * sizeof(struct drm_color_lut)) {
-			drm_err(dev, "Wrong size for gamma_lut %zu\n",
-				crtc_state->gamma_lut->length);
-			return -EINVAL;
-		}
-	}
-
-	succ = ast_get_vbios_mode_info(format, &crtc_state->mode,
-				       &crtc_state->adjusted_mode,
+	succ = ast_get_vbios_mode_info(format, &state->mode,
+				       &state->adjusted_mode,
 				       &ast_state->vbios_mode_info);
 	if (!succ)
 		return -EINVAL;
@@ -1180,39 +777,27 @@ static int ast_crtc_helper_atomic_check(struct drm_crtc *crtc,
 }
 
 static void
-ast_crtc_helper_atomic_flush(struct drm_crtc *crtc,
-			     struct drm_atomic_state *state)
+ast_crtc_helper_atomic_flush(struct drm_crtc *crtc, struct drm_crtc_state *old_crtc_state)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
-									  crtc);
-	struct drm_device *dev = crtc->dev;
-	struct ast_device *ast = to_ast_device(dev);
-	struct ast_crtc_state *ast_crtc_state = to_ast_crtc_state(crtc_state);
-	struct ast_vbios_mode_info *vbios_mode_info = &ast_crtc_state->vbios_mode_info;
+	struct ast_private *ast = to_ast_private(crtc->dev);
+	struct ast_crtc_state *ast_crtc_state = to_ast_crtc_state(crtc->state);
+	struct ast_crtc_state *old_ast_crtc_state = to_ast_crtc_state(old_crtc_state);
 
 	/*
 	 * The gamma LUT has to be reloaded after changing the primary
 	 * plane's color format.
 	 */
-	if (crtc_state->enable && crtc_state->color_mgmt_changed) {
-		if (crtc_state->gamma_lut)
-			ast_crtc_set_gamma(ast,
-					   ast_crtc_state->format,
-					   crtc_state->gamma_lut->data);
-		else
-			ast_crtc_set_gamma_linear(ast, ast_crtc_state->format);
-	}
-
-	//Set Aspeed Display-Port
-	if (ast->tx_chip_types & AST_TX_ASTDP_BIT)
-		ast_dp_set_mode(crtc, vbios_mode_info);
+	if (old_ast_crtc_state->format != ast_crtc_state->format)
+		ast_crtc_load_lut(ast, crtc);
 }
 
-static void ast_crtc_helper_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_state *state)
+static void
+ast_crtc_helper_atomic_enable(struct drm_crtc *crtc,
+			      struct drm_crtc_state *old_crtc_state)
 {
 	struct drm_device *dev = crtc->dev;
-	struct ast_device *ast = to_ast_device(dev);
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	struct ast_private *ast = to_ast_private(dev);
+	struct drm_crtc_state *crtc_state = crtc->state;
 	struct ast_crtc_state *ast_crtc_state = to_ast_crtc_state(crtc_state);
 	struct ast_vbios_mode_info *vbios_mode_info =
 		&ast_crtc_state->vbios_mode_info;
@@ -1229,11 +814,12 @@ static void ast_crtc_helper_atomic_enable(struct drm_crtc *crtc, struct drm_atom
 	ast_crtc_dpms(crtc, DRM_MODE_DPMS_ON);
 }
 
-static void ast_crtc_helper_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_state *state)
+static void
+ast_crtc_helper_atomic_disable(struct drm_crtc *crtc,
+			       struct drm_crtc_state *old_crtc_state)
 {
-	struct drm_crtc_state *old_crtc_state = drm_atomic_get_old_crtc_state(state, crtc);
 	struct drm_device *dev = crtc->dev;
-	struct ast_device *ast = to_ast_device(dev);
+	struct ast_private *ast = to_ast_private(dev);
 
 	ast_crtc_dpms(crtc, DRM_MODE_DPMS_OFF);
 
@@ -1257,7 +843,6 @@ static void ast_crtc_helper_atomic_disable(struct drm_crtc *crtc, struct drm_ato
 }
 
 static const struct drm_crtc_helper_funcs ast_crtc_helper_funcs = {
-	.mode_valid = ast_crtc_helper_mode_valid,
 	.atomic_check = ast_crtc_helper_atomic_check,
 	.atomic_flush = ast_crtc_helper_atomic_flush,
 	.atomic_enable = ast_crtc_helper_atomic_enable,
@@ -1312,6 +897,7 @@ static void ast_crtc_atomic_destroy_state(struct drm_crtc *crtc,
 
 static const struct drm_crtc_funcs ast_crtc_funcs = {
 	.reset = ast_crtc_reset,
+	.gamma_set = drm_atomic_helper_legacy_gamma_set,
 	.destroy = drm_crtc_cleanup,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
@@ -1321,494 +907,177 @@ static const struct drm_crtc_funcs ast_crtc_funcs = {
 
 static int ast_crtc_init(struct drm_device *dev)
 {
-	struct ast_device *ast = to_ast_device(dev);
+	struct ast_private *ast = to_ast_private(dev);
 	struct drm_crtc *crtc = &ast->crtc;
 	int ret;
 
-	ret = drm_crtc_init_with_planes(dev, crtc, &ast->primary_plane.base,
-					&ast->cursor_plane.base, &ast_crtc_funcs,
+	ret = drm_crtc_init_with_planes(dev, crtc, &ast->primary_plane,
+					&ast->cursor_plane, &ast_crtc_funcs,
 					NULL);
 	if (ret)
 		return ret;
 
-	drm_mode_crtc_set_gamma_size(crtc, AST_LUT_SIZE);
-	drm_crtc_enable_color_mgmt(crtc, 0, false, AST_LUT_SIZE);
-
+	drm_mode_crtc_set_gamma_size(crtc, 256);
 	drm_crtc_helper_add(crtc, &ast_crtc_helper_funcs);
 
 	return 0;
 }
 
 /*
- * VGA Connector
+ * Encoder
  */
 
-static int ast_vga_connector_helper_get_modes(struct drm_connector *connector)
+static int ast_encoder_init(struct drm_device *dev)
 {
-	struct ast_vga_connector *ast_vga_connector = to_ast_vga_connector(connector);
-	struct drm_device *dev = connector->dev;
-	struct ast_device *ast = to_ast_device(dev);
-	struct edid *edid;
-	int count;
-
-	if (!ast_vga_connector->i2c)
-		goto err_drm_connector_update_edid_property;
-
-	/*
-	 * Protect access to I/O registers from concurrent modesetting
-	 * by acquiring the I/O-register lock.
-	 */
-	mutex_lock(&ast->ioregs_lock);
-
-	edid = drm_get_edid(connector, &ast_vga_connector->i2c->adapter);
-	if (!edid)
-		goto err_mutex_unlock;
-
-	mutex_unlock(&ast->ioregs_lock);
-
-	count = drm_add_edid_modes(connector, edid);
-	kfree(edid);
-
-	return count;
-
-err_mutex_unlock:
-	mutex_unlock(&ast->ioregs_lock);
-err_drm_connector_update_edid_property:
-	drm_connector_update_edid_property(connector, NULL);
-	return 0;
-}
-
-static const struct drm_connector_helper_funcs ast_vga_connector_helper_funcs = {
-	.get_modes = ast_vga_connector_helper_get_modes,
-};
-
-static const struct drm_connector_funcs ast_vga_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
-
-static int ast_vga_connector_init(struct drm_device *dev,
-				  struct ast_vga_connector *ast_vga_connector)
-{
-	struct drm_connector *connector = &ast_vga_connector->base;
-	int ret;
-
-	ast_vga_connector->i2c = ast_i2c_create(dev);
-	if (!ast_vga_connector->i2c)
-		drm_err(dev, "failed to add ddc bus for connector\n");
-
-	if (ast_vga_connector->i2c)
-		ret = drm_connector_init_with_ddc(dev, connector, &ast_vga_connector_funcs,
-						  DRM_MODE_CONNECTOR_VGA,
-						  &ast_vga_connector->i2c->adapter);
-	else
-		ret = drm_connector_init(dev, connector, &ast_vga_connector_funcs,
-					 DRM_MODE_CONNECTOR_VGA);
-	if (ret)
-		return ret;
-
-	drm_connector_helper_add(connector, &ast_vga_connector_helper_funcs);
-
-	connector->interlace_allowed = 0;
-	connector->doublescan_allowed = 0;
-
-	connector->polled = DRM_CONNECTOR_POLL_CONNECT;
-
-	return 0;
-}
-
-static int ast_vga_output_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct drm_crtc *crtc = &ast->crtc;
-	struct drm_encoder *encoder = &ast->output.vga.encoder;
-	struct ast_vga_connector *ast_vga_connector = &ast->output.vga.vga_connector;
-	struct drm_connector *connector = &ast_vga_connector->base;
+	struct ast_private *ast = to_ast_private(dev);
+	struct drm_encoder *encoder = &ast->encoder;
 	int ret;
 
 	ret = drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_DAC);
 	if (ret)
 		return ret;
-	encoder->possible_crtcs = drm_crtc_mask(crtc);
 
-	ret = ast_vga_connector_init(dev, ast_vga_connector);
-	if (ret)
-		return ret;
-
-	ret = drm_connector_attach_encoder(connector, encoder);
-	if (ret)
-		return ret;
+	encoder->possible_crtcs = 1;
 
 	return 0;
 }
 
 /*
- * SIL164 Connector
+ * Connector
  */
 
-static int ast_sil164_connector_helper_get_modes(struct drm_connector *connector)
+static int ast_get_modes(struct drm_connector *connector)
 {
-	struct ast_sil164_connector *ast_sil164_connector = to_ast_sil164_connector(connector);
-	struct drm_device *dev = connector->dev;
-	struct ast_device *ast = to_ast_device(dev);
+	struct ast_connector *ast_connector = to_ast_connector(connector);
+	struct ast_private *ast = to_ast_private(connector->dev);
 	struct edid *edid;
-	int count;
+	int ret;
+	bool flags = false;
+	if (ast->tx_chip_type == AST_TX_DP501) {
+		ast->dp501_maxclk = 0xff;
+		edid = kmalloc(128, GFP_KERNEL);
+		if (!edid)
+			return -ENOMEM;
 
-	if (!ast_sil164_connector->i2c)
-		goto err_drm_connector_update_edid_property;
-
-	/*
-	 * Protect access to I/O registers from concurrent modesetting
-	 * by acquiring the I/O-register lock.
-	 */
-	mutex_lock(&ast->ioregs_lock);
-
-	edid = drm_get_edid(connector, &ast_sil164_connector->i2c->adapter);
-	if (!edid)
-		goto err_mutex_unlock;
-
-	mutex_unlock(&ast->ioregs_lock);
-
-	count = drm_add_edid_modes(connector, edid);
-	kfree(edid);
-
-	return count;
-
-err_mutex_unlock:
-	mutex_unlock(&ast->ioregs_lock);
-err_drm_connector_update_edid_property:
-	drm_connector_update_edid_property(connector, NULL);
+		flags = ast_dp501_read_edid(connector->dev, (u8 *)edid);
+		if (flags)
+			ast->dp501_maxclk = ast_get_dp501_max_clk(connector->dev);
+		else
+			kfree(edid);
+	}
+	if (!flags)
+		edid = drm_get_edid(connector, &ast_connector->i2c->adapter);
+	if (edid) {
+		drm_connector_update_edid_property(&ast_connector->base, edid);
+		ret = drm_add_edid_modes(connector, edid);
+		kfree(edid);
+		return ret;
+	} else
+		drm_connector_update_edid_property(&ast_connector->base, NULL);
 	return 0;
 }
 
-static const struct drm_connector_helper_funcs ast_sil164_connector_helper_funcs = {
-	.get_modes = ast_sil164_connector_helper_get_modes,
+static enum drm_mode_status ast_mode_valid(struct drm_connector *connector,
+			  struct drm_display_mode *mode)
+{
+	struct ast_private *ast = to_ast_private(connector->dev);
+	int flags = MODE_NOMODE;
+	uint32_t jtemp;
+
+	if (ast->support_wide_screen) {
+		if ((mode->hdisplay == 1680) && (mode->vdisplay == 1050))
+			return MODE_OK;
+		if ((mode->hdisplay == 1280) && (mode->vdisplay == 800))
+			return MODE_OK;
+		if ((mode->hdisplay == 1440) && (mode->vdisplay == 900))
+			return MODE_OK;
+		if ((mode->hdisplay == 1360) && (mode->vdisplay == 768))
+			return MODE_OK;
+		if ((mode->hdisplay == 1600) && (mode->vdisplay == 900))
+			return MODE_OK;
+
+		if ((ast->chip == AST2100) || (ast->chip == AST2200) ||
+		    (ast->chip == AST2300) || (ast->chip == AST2400) ||
+		    (ast->chip == AST2500)) {
+			if ((mode->hdisplay == 1920) && (mode->vdisplay == 1080))
+				return MODE_OK;
+
+			if ((mode->hdisplay == 1920) && (mode->vdisplay == 1200)) {
+				jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xd1, 0xff);
+				if (jtemp & 0x01)
+					return MODE_NOMODE;
+				else
+					return MODE_OK;
+			}
+		}
+	}
+	switch (mode->hdisplay) {
+	case 640:
+		if (mode->vdisplay == 480) flags = MODE_OK;
+		break;
+	case 800:
+		if (mode->vdisplay == 600) flags = MODE_OK;
+		break;
+	case 1024:
+		if (mode->vdisplay == 768) flags = MODE_OK;
+		break;
+	case 1280:
+		if (mode->vdisplay == 1024) flags = MODE_OK;
+		break;
+	case 1600:
+		if (mode->vdisplay == 1200) flags = MODE_OK;
+		break;
+	default:
+		return flags;
+	}
+
+	return flags;
+}
+
+static void ast_connector_destroy(struct drm_connector *connector)
+{
+	struct ast_connector *ast_connector = to_ast_connector(connector);
+	ast_i2c_destroy(ast_connector->i2c);
+	drm_connector_cleanup(connector);
+}
+
+static const struct drm_connector_helper_funcs ast_connector_helper_funcs = {
+	.get_modes = ast_get_modes,
+	.mode_valid = ast_mode_valid,
 };
 
-static const struct drm_connector_funcs ast_sil164_connector_funcs = {
+static const struct drm_connector_funcs ast_connector_funcs = {
 	.reset = drm_atomic_helper_connector_reset,
 	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
+	.destroy = ast_connector_destroy,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
-static int ast_sil164_connector_init(struct drm_device *dev,
-				     struct ast_sil164_connector *ast_sil164_connector)
+static int ast_connector_init(struct drm_device *dev)
 {
-	struct drm_connector *connector = &ast_sil164_connector->base;
-	int ret;
+	struct ast_private *ast = to_ast_private(dev);
+	struct ast_connector *ast_connector = &ast->connector;
+	struct drm_connector *connector = &ast_connector->base;
+	struct drm_encoder *encoder = &ast->encoder;
 
-	ast_sil164_connector->i2c = ast_i2c_create(dev);
-	if (!ast_sil164_connector->i2c)
+	ast_connector->i2c = ast_i2c_create(dev);
+	if (!ast_connector->i2c)
 		drm_err(dev, "failed to add ddc bus for connector\n");
 
-	if (ast_sil164_connector->i2c)
-		ret = drm_connector_init_with_ddc(dev, connector, &ast_sil164_connector_funcs,
-						  DRM_MODE_CONNECTOR_DVII,
-						  &ast_sil164_connector->i2c->adapter);
-	else
-		ret = drm_connector_init(dev, connector, &ast_sil164_connector_funcs,
-					 DRM_MODE_CONNECTOR_DVII);
-	if (ret)
-		return ret;
+	drm_connector_init_with_ddc(dev, connector,
+				    &ast_connector_funcs,
+				    DRM_MODE_CONNECTOR_VGA,
+				    &ast_connector->i2c->adapter);
 
-	drm_connector_helper_add(connector, &ast_sil164_connector_helper_funcs);
+	drm_connector_helper_add(connector, &ast_connector_helper_funcs);
 
 	connector->interlace_allowed = 0;
 	connector->doublescan_allowed = 0;
 
 	connector->polled = DRM_CONNECTOR_POLL_CONNECT;
 
-	return 0;
-}
-
-static int ast_sil164_output_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct drm_crtc *crtc = &ast->crtc;
-	struct drm_encoder *encoder = &ast->output.sil164.encoder;
-	struct ast_sil164_connector *ast_sil164_connector = &ast->output.sil164.sil164_connector;
-	struct drm_connector *connector = &ast_sil164_connector->base;
-	int ret;
-
-	ret = drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_TMDS);
-	if (ret)
-		return ret;
-	encoder->possible_crtcs = drm_crtc_mask(crtc);
-
-	ret = ast_sil164_connector_init(dev, ast_sil164_connector);
-	if (ret)
-		return ret;
-
-	ret = drm_connector_attach_encoder(connector, encoder);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-/*
- * DP501 Connector
- */
-
-static int ast_dp501_connector_helper_get_modes(struct drm_connector *connector)
-{
-	void *edid;
-	bool succ;
-	int count;
-
-	edid = kmalloc(EDID_LENGTH, GFP_KERNEL);
-	if (!edid)
-		goto err_drm_connector_update_edid_property;
-
-	succ = ast_dp501_read_edid(connector->dev, edid);
-	if (!succ)
-		goto err_kfree;
-
-	drm_connector_update_edid_property(connector, edid);
-	count = drm_add_edid_modes(connector, edid);
-	kfree(edid);
-
-	return count;
-
-err_kfree:
-	kfree(edid);
-err_drm_connector_update_edid_property:
-	drm_connector_update_edid_property(connector, NULL);
-	return 0;
-}
-
-static int ast_dp501_connector_helper_detect_ctx(struct drm_connector *connector,
-						 struct drm_modeset_acquire_ctx *ctx,
-						 bool force)
-{
-	struct ast_device *ast = to_ast_device(connector->dev);
-
-	if (ast_dp501_is_connected(ast))
-		return connector_status_connected;
-	return connector_status_disconnected;
-}
-
-static const struct drm_connector_helper_funcs ast_dp501_connector_helper_funcs = {
-	.get_modes = ast_dp501_connector_helper_get_modes,
-	.detect_ctx = ast_dp501_connector_helper_detect_ctx,
-};
-
-static const struct drm_connector_funcs ast_dp501_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
-
-static int ast_dp501_connector_init(struct drm_device *dev, struct drm_connector *connector)
-{
-	int ret;
-
-	ret = drm_connector_init(dev, connector, &ast_dp501_connector_funcs,
-				 DRM_MODE_CONNECTOR_DisplayPort);
-	if (ret)
-		return ret;
-
-	drm_connector_helper_add(connector, &ast_dp501_connector_helper_funcs);
-
-	connector->interlace_allowed = 0;
-	connector->doublescan_allowed = 0;
-
-	connector->polled = DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT;
-
-	return 0;
-}
-
-static int ast_dp501_output_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct drm_crtc *crtc = &ast->crtc;
-	struct drm_encoder *encoder = &ast->output.dp501.encoder;
-	struct drm_connector *connector = &ast->output.dp501.connector;
-	int ret;
-
-	ret = drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_TMDS);
-	if (ret)
-		return ret;
-	encoder->possible_crtcs = drm_crtc_mask(crtc);
-
-	ret = ast_dp501_connector_init(dev, connector);
-	if (ret)
-		return ret;
-
-	ret = drm_connector_attach_encoder(connector, encoder);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-/*
- * ASPEED Display-Port Connector
- */
-
-static int ast_astdp_connector_helper_get_modes(struct drm_connector *connector)
-{
-	void *edid;
-	struct drm_device *dev = connector->dev;
-	struct ast_device *ast = to_ast_device(dev);
-
-	int succ;
-	int count;
-
-	edid = kmalloc(EDID_LENGTH, GFP_KERNEL);
-	if (!edid)
-		goto err_drm_connector_update_edid_property;
-
-	/*
-	 * Protect access to I/O registers from concurrent modesetting
-	 * by acquiring the I/O-register lock.
-	 */
-	mutex_lock(&ast->ioregs_lock);
-
-	succ = ast_astdp_read_edid(connector->dev, edid);
-	if (succ < 0)
-		goto err_mutex_unlock;
-
-	mutex_unlock(&ast->ioregs_lock);
-
-	drm_connector_update_edid_property(connector, edid);
-	count = drm_add_edid_modes(connector, edid);
-	kfree(edid);
-
-	return count;
-
-err_mutex_unlock:
-	mutex_unlock(&ast->ioregs_lock);
-	kfree(edid);
-err_drm_connector_update_edid_property:
-	drm_connector_update_edid_property(connector, NULL);
-	return 0;
-}
-
-static int ast_astdp_connector_helper_detect_ctx(struct drm_connector *connector,
-						 struct drm_modeset_acquire_ctx *ctx,
-						 bool force)
-{
-	struct ast_device *ast = to_ast_device(connector->dev);
-
-	if (ast_astdp_is_connected(ast))
-		return connector_status_connected;
-	return connector_status_disconnected;
-}
-
-static const struct drm_connector_helper_funcs ast_astdp_connector_helper_funcs = {
-	.get_modes = ast_astdp_connector_helper_get_modes,
-	.detect_ctx = ast_astdp_connector_helper_detect_ctx,
-};
-
-static const struct drm_connector_funcs ast_astdp_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
-
-static int ast_astdp_connector_init(struct drm_device *dev, struct drm_connector *connector)
-{
-	int ret;
-
-	ret = drm_connector_init(dev, connector, &ast_astdp_connector_funcs,
-				 DRM_MODE_CONNECTOR_DisplayPort);
-	if (ret)
-		return ret;
-
-	drm_connector_helper_add(connector, &ast_astdp_connector_helper_funcs);
-
-	connector->interlace_allowed = 0;
-	connector->doublescan_allowed = 0;
-
-	connector->polled = DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT;
-
-	return 0;
-}
-
-static int ast_astdp_output_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct drm_crtc *crtc = &ast->crtc;
-	struct drm_encoder *encoder = &ast->output.astdp.encoder;
-	struct drm_connector *connector = &ast->output.astdp.connector;
-	int ret;
-
-	ret = drm_simple_encoder_init(dev, encoder, DRM_MODE_ENCODER_TMDS);
-	if (ret)
-		return ret;
-	encoder->possible_crtcs = drm_crtc_mask(crtc);
-
-	ret = ast_astdp_connector_init(dev, connector);
-	if (ret)
-		return ret;
-
-	ret = drm_connector_attach_encoder(connector, encoder);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-/*
- * BMC virtual Connector
- */
-
-static const struct drm_encoder_funcs ast_bmc_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
-
-static int ast_bmc_connector_helper_get_modes(struct drm_connector *connector)
-{
-	return drm_add_modes_noedid(connector, 4096, 4096);
-}
-
-static const struct drm_connector_helper_funcs ast_bmc_connector_helper_funcs = {
-	.get_modes = ast_bmc_connector_helper_get_modes,
-};
-
-static const struct drm_connector_funcs ast_bmc_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
-
-static int ast_bmc_output_init(struct ast_device *ast)
-{
-	struct drm_device *dev = &ast->base;
-	struct drm_crtc *crtc = &ast->crtc;
-	struct drm_encoder *encoder = &ast->output.bmc.encoder;
-	struct drm_connector *connector = &ast->output.bmc.connector;
-	int ret;
-
-	ret = drm_encoder_init(dev, encoder,
-			       &ast_bmc_encoder_funcs,
-			       DRM_MODE_ENCODER_VIRTUAL, "ast_bmc");
-	if (ret)
-		return ret;
-	encoder->possible_crtcs = drm_crtc_mask(crtc);
-
-	ret = drm_connector_init(dev, connector, &ast_bmc_connector_funcs,
-				 DRM_MODE_CONNECTOR_VIRTUAL);
-	if (ret)
-		return ret;
-
-	drm_connector_helper_add(connector, &ast_bmc_connector_helper_funcs);
-
-	ret = drm_connector_attach_encoder(connector, encoder);
-	if (ret)
-		return ret;
+	drm_connector_attach_encoder(connector, encoder);
 
 	return 0;
 }
@@ -1817,54 +1086,26 @@ static int ast_bmc_output_init(struct ast_device *ast)
  * Mode config
  */
 
-static void ast_mode_config_helper_atomic_commit_tail(struct drm_atomic_state *state)
-{
-	struct ast_device *ast = to_ast_device(state->dev);
-
-	/*
-	 * Concurrent operations could possibly trigger a call to
-	 * drm_connector_helper_funcs.get_modes by trying to read the
-	 * display modes. Protect access to I/O registers by acquiring
-	 * the I/O-register lock. Released in atomic_flush().
-	 */
-	mutex_lock(&ast->ioregs_lock);
-	drm_atomic_helper_commit_tail_rpm(state);
-	mutex_unlock(&ast->ioregs_lock);
-}
-
-static const struct drm_mode_config_helper_funcs ast_mode_config_helper_funcs = {
-	.atomic_commit_tail = ast_mode_config_helper_atomic_commit_tail,
+static const struct drm_mode_config_helper_funcs
+ast_mode_config_helper_funcs = {
+	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
-static enum drm_mode_status ast_mode_config_mode_valid(struct drm_device *dev,
-						       const struct drm_display_mode *mode)
-{
-	static const unsigned long max_bpp = 4; /* DRM_FORMAT_XRGB8888 */
-	struct ast_device *ast = to_ast_device(dev);
-	unsigned long fbsize, fbpages, max_fbpages;
-
-	max_fbpages = (ast->vram_fb_available) >> PAGE_SHIFT;
-
-	fbsize = mode->hdisplay * mode->vdisplay * max_bpp;
-	fbpages = DIV_ROUND_UP(fbsize, PAGE_SIZE);
-
-	if (fbpages > max_fbpages)
-		return MODE_MEM;
-
-	return MODE_OK;
-}
-
 static const struct drm_mode_config_funcs ast_mode_config_funcs = {
-	.fb_create = drm_gem_fb_create_with_dirty,
-	.mode_valid = ast_mode_config_mode_valid,
+	.fb_create = drm_gem_fb_create,
+	.mode_valid = drm_vram_helper_mode_valid,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
 
-int ast_mode_config_init(struct ast_device *ast)
+int ast_mode_config_init(struct ast_private *ast)
 {
 	struct drm_device *dev = &ast->base;
 	int ret;
+
+	ret = ast_cursor_init(ast);
+	if (ret)
+		return ret;
 
 	ret = drmm_mode_config_init(dev);
 	if (ret)
@@ -1874,13 +1115,14 @@ int ast_mode_config_init(struct ast_device *ast)
 	dev->mode_config.min_width = 0;
 	dev->mode_config.min_height = 0;
 	dev->mode_config.preferred_depth = 24;
+	dev->mode_config.prefer_shadow = 1;
+	dev->mode_config.fb_base = pci_resource_start(dev->pdev, 0);
 
-	if (ast->chip == AST2100 || // GEN2, but not AST1100 (?)
-	    ast->chip == AST2200 || // GEN3, but not AST2150 (?)
-	    IS_AST_GEN7(ast) ||
-	    IS_AST_GEN6(ast) ||
-	    IS_AST_GEN5(ast) ||
-	    IS_AST_GEN4(ast)) {
+	if (ast->chip == AST2100 ||
+	    ast->chip == AST2200 ||
+	    ast->chip == AST2300 ||
+	    ast->chip == AST2400 ||
+	    ast->chip == AST2500) {
 		dev->mode_config.max_width = 1920;
 		dev->mode_config.max_height = 2048;
 	} else {
@@ -1890,43 +1132,157 @@ int ast_mode_config_init(struct ast_device *ast)
 
 	dev->mode_config.helper_private = &ast_mode_config_helper_funcs;
 
-	ret = ast_primary_plane_init(ast);
-	if (ret)
+	memset(&ast->primary_plane, 0, sizeof(ast->primary_plane));
+	ret = drm_universal_plane_init(dev, &ast->primary_plane, 0x01,
+				       &ast_primary_plane_funcs,
+				       ast_primary_plane_formats,
+				       ARRAY_SIZE(ast_primary_plane_formats),
+				       NULL, DRM_PLANE_TYPE_PRIMARY, NULL);
+	if (ret) {
+		drm_err(dev, "ast: drm_universal_plane_init() failed: %d\n", ret);
 		return ret;
+	}
+	drm_plane_helper_add(&ast->primary_plane,
+			     &ast_primary_plane_helper_funcs);
 
-	ret = ast_cursor_plane_init(ast);
-	if (ret)
+	ret = drm_universal_plane_init(dev, &ast->cursor_plane, 0x01,
+				       &ast_cursor_plane_funcs,
+				       ast_cursor_plane_formats,
+				       ARRAY_SIZE(ast_cursor_plane_formats),
+				       NULL, DRM_PLANE_TYPE_CURSOR, NULL);
+	if (ret) {
+		drm_err(dev, "drm_universal_plane_failed(): %d\n", ret);
 		return ret;
+	}
+	drm_plane_helper_add(&ast->cursor_plane,
+			     &ast_cursor_plane_helper_funcs);
 
 	ast_crtc_init(dev);
-
-	if (ast->tx_chip_types & AST_TX_NONE_BIT) {
-		ret = ast_vga_output_init(ast);
-		if (ret)
-			return ret;
-	}
-	if (ast->tx_chip_types & AST_TX_SIL164_BIT) {
-		ret = ast_sil164_output_init(ast);
-		if (ret)
-			return ret;
-	}
-	if (ast->tx_chip_types & AST_TX_DP501_BIT) {
-		ret = ast_dp501_output_init(ast);
-		if (ret)
-			return ret;
-	}
-	if (ast->tx_chip_types & AST_TX_ASTDP_BIT) {
-		ret = ast_astdp_output_init(ast);
-		if (ret)
-			return ret;
-	}
-	ret = ast_bmc_output_init(ast);
-	if (ret)
-		return ret;
+	ast_encoder_init(dev);
+	ast_connector_init(dev);
 
 	drm_mode_config_reset(dev);
 
-	drm_kms_helper_poll_init(dev);
-
 	return 0;
+}
+
+static int get_clock(void *i2c_priv)
+{
+	struct ast_i2c_chan *i2c = i2c_priv;
+	struct ast_private *ast = to_ast_private(i2c->dev);
+	uint32_t val, val2, count, pass;
+
+	count = 0;
+	pass = 0;
+	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+	do {
+		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+		if (val == val2) {
+			pass++;
+		} else {
+			pass = 0;
+			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
+		}
+	} while ((pass < 5) && (count++ < 0x10000));
+
+	return val & 1 ? 1 : 0;
+}
+
+static int get_data(void *i2c_priv)
+{
+	struct ast_i2c_chan *i2c = i2c_priv;
+	struct ast_private *ast = to_ast_private(i2c->dev);
+	uint32_t val, val2, count, pass;
+
+	count = 0;
+	pass = 0;
+	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+	do {
+		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+		if (val == val2) {
+			pass++;
+		} else {
+			pass = 0;
+			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
+		}
+	} while ((pass < 5) && (count++ < 0x10000));
+
+	return val & 1 ? 1 : 0;
+}
+
+static void set_clock(void *i2c_priv, int clock)
+{
+	struct ast_i2c_chan *i2c = i2c_priv;
+	struct ast_private *ast = to_ast_private(i2c->dev);
+	int i;
+	u8 ujcrb7, jtemp;
+
+	for (i = 0; i < 0x10000; i++) {
+		ujcrb7 = ((clock & 0x01) ? 0 : 1);
+		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf4, ujcrb7);
+		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x01);
+		if (ujcrb7 == jtemp)
+			break;
+	}
+}
+
+static void set_data(void *i2c_priv, int data)
+{
+	struct ast_i2c_chan *i2c = i2c_priv;
+	struct ast_private *ast = to_ast_private(i2c->dev);
+	int i;
+	u8 ujcrb7, jtemp;
+
+	for (i = 0; i < 0x10000; i++) {
+		ujcrb7 = ((data & 0x01) ? 0 : 1) << 2;
+		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf1, ujcrb7);
+		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x04);
+		if (ujcrb7 == jtemp)
+			break;
+	}
+}
+
+static struct ast_i2c_chan *ast_i2c_create(struct drm_device *dev)
+{
+	struct ast_i2c_chan *i2c;
+	int ret;
+
+	i2c = kzalloc(sizeof(struct ast_i2c_chan), GFP_KERNEL);
+	if (!i2c)
+		return NULL;
+
+	i2c->adapter.owner = THIS_MODULE;
+	i2c->adapter.class = I2C_CLASS_DDC;
+	i2c->adapter.dev.parent = &dev->pdev->dev;
+	i2c->dev = dev;
+	i2c_set_adapdata(&i2c->adapter, i2c);
+	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
+		 "AST i2c bit bus");
+	i2c->adapter.algo_data = &i2c->bit;
+
+	i2c->bit.udelay = 20;
+	i2c->bit.timeout = 2;
+	i2c->bit.data = i2c;
+	i2c->bit.setsda = set_data;
+	i2c->bit.setscl = set_clock;
+	i2c->bit.getsda = get_data;
+	i2c->bit.getscl = get_clock;
+	ret = i2c_bit_add_bus(&i2c->adapter);
+	if (ret) {
+		drm_err(dev, "Failed to register bit i2c\n");
+		goto out_free;
+	}
+
+	return i2c;
+out_free:
+	kfree(i2c);
+	return NULL;
+}
+
+static void ast_i2c_destroy(struct ast_i2c_chan *i2c)
+{
+	if (!i2c)
+		return;
+	i2c_del_adapter(&i2c->adapter);
+	kfree(i2c);
 }

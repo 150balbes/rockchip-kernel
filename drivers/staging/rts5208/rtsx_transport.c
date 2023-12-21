@@ -55,9 +55,9 @@ unsigned int rtsx_stor_access_xfer_buf(unsigned char *buffer,
 		*offset += cnt;
 
 	/*
-	 * Using scatter-gather. We have to go through the list one entry
-	 * at a time. Each s-g entry contains some number of pages which
-	 * have to be copied one at a time.
+	 * Using scatter-gather.  We have to go through the list one entry
+	 * at a time.  Each s-g entry contains some number of pages, and
+	 * each page has to be kmap()'ed separately.
 	 */
 	} else {
 		struct scatterlist *sg =
@@ -92,11 +92,13 @@ unsigned int rtsx_stor_access_xfer_buf(unsigned char *buffer,
 			while (sglen > 0) {
 				unsigned int plen = min(sglen, (unsigned int)
 						PAGE_SIZE - poff);
+				unsigned char *ptr = kmap(page);
 
 				if (dir == TO_XFER_BUF)
-					memcpy_to_page(page, poff, buffer + cnt, plen);
+					memcpy(ptr + poff, buffer + cnt, plen);
 				else
-					memcpy_from_page(buffer + cnt, page, poff, plen);
+					memcpy(buffer + cnt, ptr + poff, plen);
+				kunmap(page);
 
 				/* Start at the beginning of the next page */
 				poff = 0;
@@ -324,7 +326,7 @@ static int rtsx_transfer_sglist_adma_partial(struct rtsx_chip *chip, u8 card,
 	struct scatterlist *sg_ptr;
 	u32 val = TRIG_DMA;
 
-	if (!sg || num_sg <= 0 || !offset || !index)
+	if (!sg || (num_sg <= 0) || !offset || !index)
 		return -EIO;
 
 	if (dma_dir == DMA_TO_DEVICE)
@@ -487,7 +489,7 @@ static int rtsx_transfer_sglist_adma(struct rtsx_chip *chip, u8 card,
 	long timeleft;
 	struct scatterlist *sg_ptr;
 
-	if (!sg || num_sg <= 0)
+	if (!sg || (num_sg <= 0))
 		return -EIO;
 
 	if (dma_dir == DMA_TO_DEVICE)
@@ -633,7 +635,7 @@ static int rtsx_transfer_buf(struct rtsx_chip *chip, u8 card, void *buf,
 	u32 val = BIT(31);
 	long timeleft;
 
-	if (!buf || len <= 0)
+	if (!buf || (len <= 0))
 		return -EIO;
 
 	if (dma_dir == DMA_TO_DEVICE)

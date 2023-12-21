@@ -174,7 +174,8 @@ static int ip_vs_mh_populate(struct ip_vs_mh_state *s,
 		return 0;
 	}
 
-	table = bitmap_zalloc(IP_VS_MH_TAB_SIZE, GFP_KERNEL);
+	table = kcalloc(BITS_TO_LONGS(IP_VS_MH_TAB_SIZE),
+			sizeof(unsigned long), GFP_KERNEL);
 	if (!table)
 		return -ENOMEM;
 
@@ -226,7 +227,7 @@ static int ip_vs_mh_populate(struct ip_vs_mh_state *s,
 	}
 
 out:
-	bitmap_free(table);
+	kfree(table);
 	return 0;
 }
 

@@ -7,7 +7,7 @@
 #include <linux/device.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_graph.h>
 #include <linux/platform_device.h>
 
@@ -128,6 +128,7 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 	struct clk_hw_onecell_data *clk_data;
 	struct sun8i_tcon_top *tcon_top;
 	const struct sun8i_tcon_top_quirks *quirks;
+	struct resource *res;
 	void __iomem *regs;
 	int ret, i;
 
@@ -157,7 +158,8 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		return PTR_ERR(tcon_top->bus);
 	}
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(dev, res);
 	tcon_top->regs = regs;
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
@@ -189,23 +191,22 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 	 * if TVE is active on each TCON TV. If it is, mux should be switched
 	 * to TVE clock parent.
 	 */
-	i = 0;
 	clk_data->hws[CLK_TCON_TOP_TV0] =
 		sun8i_tcon_top_register_gate(dev, "tcon-tv0", regs,
 					     &tcon_top->reg_lock,
-					     TCON_TOP_TCON_TV0_GATE, i++);
+					     TCON_TOP_TCON_TV0_GATE, 0);
 
 	if (quirks->has_tcon_tv1)
 		clk_data->hws[CLK_TCON_TOP_TV1] =
 			sun8i_tcon_top_register_gate(dev, "tcon-tv1", regs,
 						     &tcon_top->reg_lock,
-						     TCON_TOP_TCON_TV1_GATE, i++);
+						     TCON_TOP_TCON_TV1_GATE, 1);
 
 	if (quirks->has_dsi)
 		clk_data->hws[CLK_TCON_TOP_DSI] =
 			sun8i_tcon_top_register_gate(dev, "dsi", regs,
 						     &tcon_top->reg_lock,
-						     TCON_TOP_TCON_DSI_GATE, i++);
+						     TCON_TOP_TCON_DSI_GATE, 2);
 
 	for (i = 0; i < CLK_NUM; i++)
 		if (IS_ERR(clk_data->hws[i])) {
@@ -261,17 +262,15 @@ static int sun8i_tcon_top_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sun8i_tcon_top_ops);
 }
 
-static void sun8i_tcon_top_remove(struct platform_device *pdev)
+static int sun8i_tcon_top_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sun8i_tcon_top_ops);
+
+	return 0;
 }
 
 static const struct sun8i_tcon_top_quirks sun8i_r40_tcon_top_quirks = {
 	.has_tcon_tv1	= true,
-	.has_dsi	= true,
-};
-
-static const struct sun8i_tcon_top_quirks sun20i_d1_tcon_top_quirks = {
 	.has_dsi	= true,
 };
 
@@ -286,10 +285,6 @@ const struct of_device_id sun8i_tcon_top_of_table[] = {
 		.data = &sun8i_r40_tcon_top_quirks
 	},
 	{
-		.compatible = "allwinner,sun20i-d1-tcon-top",
-		.data = &sun20i_d1_tcon_top_quirks
-	},
-	{
 		.compatible = "allwinner,sun50i-h6-tcon-top",
 		.data = &sun50i_h6_tcon_top_quirks
 	},
@@ -300,7 +295,7 @@ EXPORT_SYMBOL(sun8i_tcon_top_of_table);
 
 static struct platform_driver sun8i_tcon_top_platform_driver = {
 	.probe		= sun8i_tcon_top_probe,
-	.remove_new	= sun8i_tcon_top_remove,
+	.remove		= sun8i_tcon_top_remove,
 	.driver		= {
 		.name		= "sun8i-tcon-top",
 		.of_match_table	= sun8i_tcon_top_of_table,

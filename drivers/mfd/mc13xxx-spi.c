@@ -15,6 +15,7 @@
 #include <linux/mfd/mc13xxx.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/err.h>
 #include <linux/spi/spi.h>
 
@@ -114,7 +115,7 @@ static int mc13xxx_spi_write(void *context, const void *data, size_t count)
  * result, the SS will negate before all of the data has been
  * transferred to/from the peripheral."
  * We workaround this by accessing the SPI controller with a
- * single transfer.
+ * single transfert.
  */
 
 static struct regmap_bus regmap_mc13xxx_bus = {
@@ -165,9 +166,9 @@ static int mc13xxx_spi_probe(struct spi_device *spi)
 	return mc13xxx_common_init(&spi->dev);
 }
 
-static void mc13xxx_spi_remove(struct spi_device *spi)
+static int mc13xxx_spi_remove(struct spi_device *spi)
 {
-	mc13xxx_common_exit(&spi->dev);
+	return mc13xxx_common_exit(&spi->dev);
 }
 
 static struct spi_driver mc13xxx_spi_driver = {

@@ -8,7 +8,7 @@ config IMA
 	select CRYPTO_HMAC
 	select CRYPTO_SHA1
 	select CRYPTO_HASH_INFO
-	select TCG_TPM if HAS_IOMEM
+	select TCG_TPM if HAS_IOMEM && !UML
 	select TCG_TIS if TCG_TPM && X86
 	select TCG_CRB if TCG_TPM && ACPI
 	select TCG_IBMVTPM if TCG_TPM && PPC_PSERIES
@@ -112,7 +112,7 @@ choice
 
 	config IMA_DEFAULT_HASH_SM3
 		bool "SM3"
-		depends on CRYPTO_SM3_GENERIC=y
+		depends on CRYPTO_SM3=y
 endchoice
 
 config IMA_DEFAULT_HASH
@@ -331,10 +331,3 @@ config IMA_SECURE_AND_OR_TRUSTED_BOOT
        help
           This option is selected by architectures to enable secure and/or
           trusted boot based on IMA runtime policies.
-
-config IMA_DISABLE_HTABLE
-	bool "Disable htable to allow measurement of duplicate records"
-	depends on IMA
-	default n
-	help
-	   This option disables htable to allow measurement of duplicate records.

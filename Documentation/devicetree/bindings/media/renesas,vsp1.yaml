@@ -16,15 +16,9 @@ description:
 
 properties:
   compatible:
-    oneOf:
-      - enum:
-          - renesas,r9a07g044-vsp2 # RZ/G2L
-          - renesas,vsp1 # R-Car Gen2 and RZ/G1
-          - renesas,vsp2 # R-Car Gen3 and RZ/G2
-      - items:
-          - enum:
-              - renesas,r9a07g054-vsp2    # RZ/V2L
-          - const: renesas,r9a07g044-vsp2 # RZ/G2L fallback
+    enum:
+      - renesas,vsp1 # R-Car Gen2 and RZ/G1
+      - renesas,vsp2 # R-Car Gen3 and RZ/G2
 
   reg:
     maxItems: 1
@@ -32,8 +26,8 @@ properties:
   interrupts:
     maxItems: 1
 
-  clocks: true
-  clock-names: true
+  clocks:
+    maxItems: 1
 
   power-domains:
     maxItems: 1
@@ -56,43 +50,17 @@ required:
 
 additionalProperties: false
 
-allOf:
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: renesas,vsp1
-    then:
-      properties:
-        renesas,fcp: false
-    else:
-      required:
-        - renesas,fcp
-
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: renesas,r9a07g044-vsp2
-    then:
-      properties:
-        clocks:
-          items:
-            - description: Main clock
-            - description: Register access clock
-            - description: Video clock
-        clock-names:
-          items:
-            - const: aclk
-            - const: pclk
-            - const: vclk
-      required:
-        - clock-names
-    else:
-      properties:
-        clocks:
-          maxItems: 1
-        clock-names: false
+if:
+  properties:
+    compatible:
+      items:
+        - const: renesas,vsp1
+then:
+  properties:
+    renesas,fcp: false
+else:
+  required:
+    - renesas,fcp
 
 examples:
   # R8A7790 (R-Car H2) VSP1-S

@@ -240,6 +240,7 @@ static int rza2_gpio_register(struct rza2_pinctrl_priv *priv)
 	int ret;
 
 	chip.label = devm_kasprintf(priv->dev, GFP_KERNEL, "%pOFn", np);
+	chip.of_node = np;
 	chip.parent = priv->dev;
 	chip.ngpio = priv->npins;
 
@@ -514,3 +515,4 @@ core_initcall(rza2_pinctrl_init);
 
 MODULE_AUTHOR("Chris Brandt <chris.brandt@renesas.com>");
 MODULE_DESCRIPTION("Pin and gpio controller driver for RZ/A2 SoC");
+MODULE_LICENSE("GPL v2");

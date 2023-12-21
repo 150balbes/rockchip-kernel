@@ -5,10 +5,10 @@
 $id: http://devicetree.org/schemas/media/i2c/ov8856.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Omnivision OV8856 CMOS Sensor
+title: Omnivision OV8856 CMOS Sensor Device Tree Bindings
 
 maintainers:
-  - Sakari Ailus <sakari.ailus@linux.intel.com>
+  - Dongchun Zhu <dongchun.zhu@mediatek.com>
 
 description: |-
   The Omnivision OV8856 is a high performance, 1/4-inch, 8 megapixel, CMOS
@@ -57,13 +57,16 @@ properties:
       active low.
 
   port:
-    $ref: /schemas/graph.yaml#/$defs/port-base
+    type: object
     additionalProperties: false
+    description:
+      A node containing an output port node with an endpoint definition
+      as documented in
+      Documentation/devicetree/bindings/media/video-interfaces.txt
 
     properties:
       endpoint:
-        $ref: /schemas/media/video-interfaces.yaml#
-        unevaluatedProperties: false
+        type: object
 
         properties:
           data-lanes:
@@ -76,13 +79,17 @@ properties:
               - const: 4
 
           link-frequencies:
-            description: Frequencies listed are driver, not h/w limitations.
-            maxItems: 2
-            items:
-              enum: [ 360000000, 180000000 ]
+            $ref: /schemas/types.yaml#/definitions/uint64-array
+            description:
+              Allowed data bus frequencies. 360000000, 180000000 Hz or both
+              are supported by the driver.
+
 
         required:
           - link-frequencies
+
+    required:
+      - endpoint
 
 required:
   - compatible
@@ -132,3 +139,4 @@ examples:
         };
     };
 ...
+

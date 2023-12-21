@@ -16,7 +16,9 @@
 #include "pvrusb2-context.h"
 #include "pvrusb2-debug.h"
 #include "pvrusb2-v4l2.h"
+#ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
 #include "pvrusb2-sysfs.h"
+#endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
 
 #define DRIVER_AUTHOR "Mike Isely <isely@pobox.com>"
 #define DRIVER_DESC "Hauppauge WinTV-PVR-USB2 MPEG2 Encoder/Tuner"
@@ -34,6 +36,10 @@ int pvrusb2_debug = DEFAULT_DEBUG_MASK;
 module_param_named(debug,pvrusb2_debug,int,S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug trace mask");
 
+#ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
+static struct pvr2_sysfs_class *class_ptr = NULL;
+#endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
+
 static void pvr_setup_attach(struct pvr2_context *pvr)
 {
 	/* Create association with v4l layer */
@@ -42,7 +48,9 @@ static void pvr_setup_attach(struct pvr2_context *pvr)
 	/* Create association with dvb layer */
 	pvr2_dvb_create(pvr);
 #endif
-	pvr2_sysfs_create(pvr);
+#ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
+	pvr2_sysfs_create(pvr,class_ptr);
+#endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
 }
 
 static int pvr_probe(struct usb_interface *intf,
@@ -107,7 +115,9 @@ static int __init pvr_init(void)
 		return ret;
 	}
 
-	pvr2_sysfs_class_create();
+#ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
+	class_ptr = pvr2_sysfs_class_create();
+#endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
 
 	ret = usb_register(&pvr_driver);
 
@@ -131,7 +141,9 @@ static void __exit pvr_exit(void)
 
 	pvr2_context_global_done();
 
-	pvr2_sysfs_class_destroy();
+#ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
+	pvr2_sysfs_class_destroy(class_ptr);
+#endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
 
 	pvr2_trace(PVR2_TRACE_INIT,"pvr_exit complete");
 }

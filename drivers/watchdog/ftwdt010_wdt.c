@@ -47,28 +47,21 @@ struct ftwdt010_wdt *to_ftwdt010_wdt(struct watchdog_device *wdd)
 	return container_of(wdd, struct ftwdt010_wdt, wdd);
 }
 
-static void ftwdt010_enable(struct ftwdt010_wdt *gwdt,
-			    unsigned int timeout,
-			    bool need_irq)
+static int ftwdt010_wdt_start(struct watchdog_device *wdd)
 {
+	struct ftwdt010_wdt *gwdt = to_ftwdt010_wdt(wdd);
 	u32 enable;
 
-	writel(timeout * WDT_CLOCK, gwdt->base + FTWDT010_WDLOAD);
+	writel(wdd->timeout * WDT_CLOCK, gwdt->base + FTWDT010_WDLOAD);
 	writel(WDRESTART_MAGIC, gwdt->base + FTWDT010_WDRESTART);
 	/* set clock before enabling */
 	enable = WDCR_CLOCK_5MHZ | WDCR_SYS_RST;
 	writel(enable, gwdt->base + FTWDT010_WDCR);
-	if (need_irq)
+	if (gwdt->has_irq)
 		enable |= WDCR_WDINTR;
 	enable |= WDCR_ENABLE;
 	writel(enable, gwdt->base + FTWDT010_WDCR);
-}
 
-static int ftwdt010_wdt_start(struct watchdog_device *wdd)
-{
-	struct ftwdt010_wdt *gwdt = to_ftwdt010_wdt(wdd);
-
-	ftwdt010_enable(gwdt, wdd->timeout, gwdt->has_irq);
 	return 0;
 }
 
@@ -100,13 +93,6 @@ static int ftwdt010_wdt_set_timeout(struct watchdog_device *wdd,
 	return 0;
 }
 
-static int ftwdt010_wdt_restart(struct watchdog_device *wdd,
-				unsigned long action, void *data)
-{
-	ftwdt010_enable(to_ftwdt010_wdt(wdd), 0, false);
-	return 0;
-}
-
 static irqreturn_t ftwdt010_wdt_interrupt(int irq, void *data)
 {
 	struct ftwdt010_wdt *gwdt = data;
@@ -121,7 +107,6 @@ static const struct watchdog_ops ftwdt010_wdt_ops = {
 	.stop		= ftwdt010_wdt_stop,
 	.ping		= ftwdt010_wdt_ping,
 	.set_timeout	= ftwdt010_wdt_set_timeout,
-	.restart	= ftwdt010_wdt_restart,
 	.owner		= THIS_MODULE,
 };
 
@@ -171,7 +156,7 @@ static int ftwdt010_wdt_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq > 0) {
+	if (irq) {
 		ret = devm_request_irq(dev, irq, ftwdt010_wdt_interrupt, 0,
 				       "watchdog bark", gwdt);
 		if (ret)

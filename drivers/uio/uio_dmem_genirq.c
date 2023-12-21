@@ -41,11 +41,6 @@ struct uio_dmem_genirq_platdata {
 	unsigned int refcnt;
 };
 
-/* Bits in uio_dmem_genirq_platdata.flags */
-enum {
-	UIO_IRQ_DISABLED = 0,
-};
-
 static int uio_dmem_genirq_open(struct uio_info *info, struct inode *inode)
 {
 	struct uio_dmem_genirq_platdata *priv = info->priv;
@@ -115,10 +110,8 @@ static irqreturn_t uio_dmem_genirq_handler(int irq, struct uio_info *dev_info)
 	 * remember the state so we can allow user space to enable it later.
 	 */
 
-	spin_lock(&priv->lock);
-	if (!__test_and_set_bit(UIO_IRQ_DISABLED, &priv->flags))
+	if (!test_and_set_bit(0, &priv->flags))
 		disable_irq_nosync(irq);
-	spin_unlock(&priv->lock);
 
 	return IRQ_HANDLED;
 }
@@ -132,28 +125,22 @@ static int uio_dmem_genirq_irqcontrol(struct uio_info *dev_info, s32 irq_on)
 	 * in the interrupt controller, but keep track of the
 	 * state to prevent per-irq depth damage.
 	 *
-	 * Serialize this operation to support multiple tasks and concurrency
-	 * with irq handler on SMP systems.
+	 * Serialize this operation to support multiple tasks.
 	 */
 
 	spin_lock_irqsave(&priv->lock, flags);
 	if (irq_on) {
-		if (__test_and_clear_bit(UIO_IRQ_DISABLED, &priv->flags))
+		if (test_and_clear_bit(0, &priv->flags))
 			enable_irq(dev_info->irq);
+		spin_unlock_irqrestore(&priv->lock, flags);
 	} else {
-		if (!__test_and_set_bit(UIO_IRQ_DISABLED, &priv->flags))
-			disable_irq_nosync(dev_info->irq);
+		if (!test_and_set_bit(0, &priv->flags)) {
+			spin_unlock_irqrestore(&priv->lock, flags);
+			disable_irq(dev_info->irq);
+		}
 	}
-	spin_unlock_irqrestore(&priv->lock, flags);
 
 	return 0;
-}
-
-static void uio_dmem_genirq_pm_disable(void *data)
-{
-	struct device *dev = data;
-
-	pm_runtime_disable(dev);
 }
 
 static int uio_dmem_genirq_probe(struct platform_device *pdev)
@@ -167,10 +154,11 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 
 	if (pdev->dev.of_node) {
 		/* alloc uioinfo for one device */
-		uioinfo = devm_kzalloc(&pdev->dev, sizeof(*uioinfo), GFP_KERNEL);
+		uioinfo = kzalloc(sizeof(*uioinfo), GFP_KERNEL);
 		if (!uioinfo) {
+			ret = -ENOMEM;
 			dev_err(&pdev->dev, "unable to kmalloc\n");
-			return -ENOMEM;
+			goto bad2;
 		}
 		uioinfo->name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%pOFn",
 					       pdev->dev.of_node);
@@ -179,26 +167,23 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 
 	if (!uioinfo || !uioinfo->name || !uioinfo->version) {
 		dev_err(&pdev->dev, "missing platform_data\n");
-		return -EINVAL;
+		goto bad0;
 	}
 
 	if (uioinfo->handler || uioinfo->irqcontrol ||
 	    uioinfo->irq_flags & IRQF_SHARED) {
 		dev_err(&pdev->dev, "interrupt configuration error\n");
-		return -EINVAL;
+		goto bad0;
 	}
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
+		ret = -ENOMEM;
 		dev_err(&pdev->dev, "unable to kmalloc\n");
-		return -ENOMEM;
+		goto bad0;
 	}
 
-	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
-	if (ret) {
-		dev_err(&pdev->dev, "DMA enable failed\n");
-		return ret;
-	}
+	dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 
 	priv->uioinfo = uioinfo;
 	spin_lock_init(&priv->lock);
@@ -212,7 +197,7 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 		if (ret == -ENXIO && pdev->dev.of_node)
 			ret = UIO_IRQ_NONE;
 		else if (ret < 0)
-			return ret;
+			goto bad1;
 		uioinfo->irq = ret;
 	}
 
@@ -297,11 +282,41 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 	 */
 	pm_runtime_enable(&pdev->dev);
 
-	ret = devm_add_action_or_reset(&pdev->dev, uio_dmem_genirq_pm_disable, &pdev->dev);
-	if (ret)
-		return ret;
+	ret = uio_register_device(&pdev->dev, priv->uioinfo);
+	if (ret) {
+		dev_err(&pdev->dev, "unable to register uio device\n");
+		pm_runtime_disable(&pdev->dev);
+		goto bad1;
+	}
 
-	return devm_uio_register_device(&pdev->dev, priv->uioinfo);
+	platform_set_drvdata(pdev, priv);
+	return 0;
+ bad1:
+	kfree(priv);
+ bad0:
+	/* kfree uioinfo for OF */
+	if (pdev->dev.of_node)
+		kfree(uioinfo);
+ bad2:
+	return ret;
+}
+
+static int uio_dmem_genirq_remove(struct platform_device *pdev)
+{
+	struct uio_dmem_genirq_platdata *priv = platform_get_drvdata(pdev);
+
+	uio_unregister_device(priv->uioinfo);
+	pm_runtime_disable(&pdev->dev);
+
+	priv->uioinfo->handler = NULL;
+	priv->uioinfo->irqcontrol = NULL;
+
+	/* kfree uioinfo for OF */
+	if (pdev->dev.of_node)
+		kfree(priv->uioinfo);
+
+	kfree(priv);
+	return 0;
 }
 
 static int uio_dmem_genirq_runtime_nop(struct device *dev)
@@ -335,6 +350,7 @@ MODULE_DEVICE_TABLE(of, uio_of_genirq_match);
 
 static struct platform_driver uio_dmem_genirq = {
 	.probe = uio_dmem_genirq_probe,
+	.remove = uio_dmem_genirq_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.pm = &uio_dmem_genirq_dev_pm_ops,

@@ -9,6 +9,7 @@ Support for Serial devices
 
 
     driver
+    tty
 
 Serial drivers
 ==============
@@ -16,6 +17,10 @@ Serial drivers
 .. toctree::
     :maxdepth: 1
 
+    cyclades_z
+    moxa-smartio
+    n_gsm
+    rocket
     serial-iso7816
     serial-rs485
 

@@ -32,9 +32,6 @@ static unsigned int pic32_xlate_core_timer_irq(void)
 		goto default_map;
 
 	irq = irq_of_parse_and_map(node, 0);
-
-	of_node_put(node);
-
 	if (!irq)
 		goto default_map;
 

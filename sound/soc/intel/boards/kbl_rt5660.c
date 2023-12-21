@@ -173,9 +173,9 @@ static int kabylake_rt5660_codec_init(struct snd_soc_pcm_runtime *rtd)
 	}
 
 	/* Create and initialize headphone jack, this jack is not mandatory, don't return if fails */
-	ret = snd_soc_card_jack_new_pins(rtd->card, "Lineout Jack",
-					 SND_JACK_LINEOUT, &lineout_jack,
-					 &lineout_jack_pin, 1);
+	ret = snd_soc_card_jack_new(rtd->card, "Lineout Jack",
+				    SND_JACK_LINEOUT, &lineout_jack,
+				    &lineout_jack_pin, 1);
 	if (ret)
 		dev_warn(component->dev, "Can't create Lineout jack\n");
 	else {
@@ -187,9 +187,9 @@ static int kabylake_rt5660_codec_init(struct snd_soc_pcm_runtime *rtd)
 	}
 
 	/* Create and initialize mic jack, this jack is not mandatory, don't return if fails */
-	ret = snd_soc_card_jack_new_pins(rtd->card, "Mic Jack",
-					 SND_JACK_MICROPHONE, &mic_jack,
-					 &mic_jack_pin, 1);
+	ret = snd_soc_card_jack_new(rtd->card, "Mic Jack",
+				    SND_JACK_MICROPHONE, &mic_jack,
+				    &mic_jack_pin, 1);
 	if (ret)
 		dev_warn(component->dev, "Can't create mic jack\n");
 	else {
@@ -436,7 +436,7 @@ static struct snd_soc_dai_link kabylake_rt5660_dais[] = {
 		.exit = kabylake_rt5660_codec_exit,
 		.dai_fmt = SND_SOC_DAIFMT_I2S |
 		SND_SOC_DAIFMT_NB_NF |
-		SND_SOC_DAIFMT_CBC_CFC,
+		SND_SOC_DAIFMT_CBS_CFS,
 		.ignore_pmdown_time = 1,
 		.be_hw_params_fixup = kabylake_ssp0_fixup,
 		.ops = &kabylake_rt5660_ops,
@@ -485,7 +485,8 @@ static int kabylake_card_late_probe(struct snd_soc_card *card)
 		snprintf(jack_name, sizeof(jack_name),
 			"HDMI/DP, pcm=%d Jack", pcm->device);
 		err = snd_soc_card_jack_new(card, jack_name,
-					SND_JACK_AVOUT, &skylake_hdmi[i]);
+					SND_JACK_AVOUT, &skylake_hdmi[i],
+					NULL, 0);
 
 		if (err)
 			return err;
@@ -547,7 +548,6 @@ static const struct platform_device_id kbl_board_ids[] = {
 	},
 	{ }
 };
-MODULE_DEVICE_TABLE(platform, kbl_board_ids);
 
 static struct platform_driver kabylake_audio = {
 	.probe = kabylake_audio_probe,
@@ -564,3 +564,4 @@ module_platform_driver(kabylake_audio)
 MODULE_DESCRIPTION("Audio Machine driver-RT5660 in I2S mode");
 MODULE_AUTHOR("Hui Wang <hui.wang@canonical.com>");
 MODULE_LICENSE("GPL v2");
+MODULE_ALIAS("platform:kbl_rt5660");

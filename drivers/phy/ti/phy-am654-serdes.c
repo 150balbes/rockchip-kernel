@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
+/**
  * PCIe SERDES driver for AM654x SoC
  *
  * Copyright (C) 2018 - 2019 Texas Instruments Incorporated - http://www.ti.com/
@@ -634,7 +634,6 @@ static int serdes_am654_clk_mux_set_parent(struct clk_hw *hw, u8 index)
 }
 
 static const struct clk_ops serdes_am654_clk_mux_ops = {
-	.determine_rate = __clk_mux_determine_rate,
 	.set_parent = serdes_am654_clk_mux_set_parent,
 	.get_parent = serdes_am654_clk_mux_get_parent,
 };
@@ -843,18 +842,20 @@ clk_err:
 	return ret;
 }
 
-static void serdes_am654_remove(struct platform_device *pdev)
+static int serdes_am654_remove(struct platform_device *pdev)
 {
 	struct serdes_am654 *am654_phy = platform_get_drvdata(pdev);
 	struct device_node *node = am654_phy->of_node;
 
 	pm_runtime_disable(&pdev->dev);
 	of_clk_del_provider(node);
+
+	return 0;
 }
 
 static struct platform_driver serdes_am654_driver = {
 	.probe		= serdes_am654_probe,
-	.remove_new	= serdes_am654_remove,
+	.remove		= serdes_am654_remove,
 	.driver		= {
 		.name	= "phy-am654",
 		.of_match_table = serdes_am654_id_table,

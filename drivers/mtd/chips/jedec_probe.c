@@ -1,7 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
    Common Flash Interface probe code.
-   (C) 2000 Red Hat.
+   (C) 2000 Red Hat. GPL'd.
    See JEDEC (http://www.jedec.org/) standard JESD21C (section 3.5)
    for the standard this probe goes back to.
 

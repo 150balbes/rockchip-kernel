@@ -210,7 +210,7 @@ void poly1305_final_arch(struct poly1305_desc_ctx *dctx, u8 *dst)
 	}
 
 	poly1305_simd_emit(&dctx->h, dst, dctx->s);
-	memzero_explicit(dctx, sizeof(*dctx));
+	*dctx = (struct poly1305_desc_ctx){};
 }
 EXPORT_SYMBOL(poly1305_final_arch);
 

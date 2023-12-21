@@ -17,6 +17,7 @@
 #include <linux/sched.h>
 #include <linux/module.h>
 #include <trace/events/power.h>
+#include <trace/hooks/sched.h>
 
 #include <asm/irq_regs.h>
 
@@ -27,11 +28,10 @@
  */
 DEFINE_PER_CPU(struct tick_device, tick_cpu_device);
 /*
- * Tick next event: keeps track of the tick time. It's updated by the
- * CPU which handles the tick and protected by jiffies_lock. There is
- * no requirement to write hold the jiffies seqcount for it.
+ * Tick next event: keeps track of the tick time
  */
 ktime_t tick_next_period;
+ktime_t tick_period;
 
 /*
  * tick_do_timer_cpu is a timer core internal variable which holds the CPU NR
@@ -89,12 +89,13 @@ static void tick_periodic(int cpu)
 		write_seqcount_begin(&jiffies_seq);
 
 		/* Keep track of the next tick event */
-		tick_next_period = ktime_add_ns(tick_next_period, TICK_NSEC);
+		tick_next_period = ktime_add(tick_next_period, tick_period);
 
 		do_timer(1);
 		write_seqcount_end(&jiffies_seq);
 		raw_spin_unlock(&jiffies_lock);
 		update_wall_time();
+		trace_android_vh_jiffies_update(NULL);
 	}
 
 	update_process_times(user_mode(get_irq_regs()));
@@ -128,7 +129,7 @@ void tick_handle_periodic(struct clock_event_device *dev)
 		 * Setup the next period for devices, which do not have
 		 * periodic mode:
 		 */
-		next = ktime_add_ns(next, TICK_NSEC);
+		next = ktime_add(next, tick_period);
 
 		if (!clockevents_program_event(dev, next, false))
 			return;
@@ -174,7 +175,7 @@ void tick_setup_periodic(struct clock_event_device *dev, int broadcast)
 		for (;;) {
 			if (!clockevents_program_event(dev, next, false))
 				return;
-			next = ktime_add_ns(next, TICK_NSEC);
+			next = ktime_add(next, tick_period);
 		}
 	}
 }
@@ -219,7 +220,9 @@ static void tick_setup_device(struct tick_device *td,
 		 */
 		if (tick_do_timer_cpu == TICK_DO_TIMER_BOOT) {
 			tick_do_timer_cpu = cpu;
+
 			tick_next_period = ktime_get();
+			tick_period = NSEC_PER_SEC / HZ;
 #ifdef CONFIG_NO_HZ_FULL
 			/*
 			 * The boot CPU may be nohz_full, in which case set
@@ -347,7 +350,12 @@ void tick_check_new_device(struct clock_event_device *newdev)
 	td = &per_cpu(tick_cpu_device, cpu);
 	curdev = td->evtdev;
 
-	if (!tick_check_replacement(curdev, newdev))
+	/* cpu local device ? */
+	if (!tick_check_percpu(curdev, newdev, cpu))
+		goto out_bc;
+
+	/* Preference decision */
+	if (!tick_check_preferred(curdev, newdev))
 		goto out_bc;
 
 	if (!try_module_get(newdev->owner))
@@ -401,13 +409,17 @@ EXPORT_SYMBOL_GPL(tick_broadcast_oneshot_control);
 /*
  * Transfer the do_timer job away from a dying cpu.
  *
- * Called with interrupts disabled. No locking required. If
+ * Called with interrupts disabled. Not locking required. If
  * tick_do_timer_cpu is owned by this cpu, nothing can change it.
  */
 void tick_handover_do_timer(void)
 {
-	if (tick_do_timer_cpu == smp_processor_id())
-		tick_do_timer_cpu = cpumask_first(cpu_online_mask);
+	if (tick_do_timer_cpu == smp_processor_id()) {
+		int cpu = cpumask_first(cpu_online_mask);
+
+		tick_do_timer_cpu = (cpu < nr_cpu_ids) ? cpu :
+			TICK_DO_TIMER_NONE;
+	}
 }
 
 /*
@@ -469,13 +481,6 @@ void tick_resume_local(void)
 		else
 			tick_resume_oneshot();
 	}
-
-	/*
-	 * Ensure that hrtimers are up to date and the clockevents device
-	 * is reprogrammed correctly when high resolution timers are
-	 * enabled.
-	 */
-	hrtimers_resume_local();
 }
 
 /**

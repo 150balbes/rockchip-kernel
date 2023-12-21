@@ -221,7 +221,7 @@ static int ir_mce_kbd_decode(struct rc_dev *dev, struct ir_raw_event ev)
 	struct lirc_scancode lsc = {};
 
 	if (!is_timing_event(ev)) {
-		if (ev.overflow)
+		if (ev.reset)
 			data->state = STATE_INACTIVE;
 		return 0;
 	}

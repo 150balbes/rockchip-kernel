@@ -23,6 +23,11 @@ static DEFINE_SPINLOCK(ras_log_buf_lock);
 
 static int ras_check_exception_token;
 
+static void mce_process_errlog_event(struct irq_work *work);
+static struct irq_work mce_errlog_process_work = {
+	.func = mce_process_errlog_event,
+};
+
 #define EPOW_SENSOR_TOKEN	9
 #define EPOW_SENSOR_INDEX	0
 
@@ -55,17 +60,11 @@ struct pseries_mc_errorlog {
 	 *      XX	2: Reserved.
 	 *        XXX	3: Type of UE error.
 	 *
-	 * For error_type == MC_ERROR_TYPE_SLB/ERAT/TLB
+	 * For error_type != MC_ERROR_TYPE_UE
 	 *   XXXXXXXX
 	 *   X		1: Effective address provided.
 	 *    XXXXX	5: Reserved.
 	 *         XX	2: Type of SLB/ERAT/TLB error.
-	 *
-	 * For error_type == MC_ERROR_TYPE_CTRL_MEM_ACCESS
-	 *   XXXXXXXX
-	 *   X		1: Error causing address provided.
-	 *    XXX	3: Type of error.
-	 *       XXXX	4: Reserved.
 	 */
 	u8	sub_err_type;
 	u8	reserved_1[6];
@@ -81,7 +80,6 @@ struct pseries_mc_errorlog {
 #define MC_ERROR_TYPE_TLB		0x04
 #define MC_ERROR_TYPE_D_CACHE		0x05
 #define MC_ERROR_TYPE_I_CACHE		0x07
-#define MC_ERROR_TYPE_CTRL_MEM_ACCESS	0x08
 
 /* RTAS pseries MCE error sub types */
 #define MC_ERROR_UE_INDETERMINATE		0
@@ -92,7 +90,6 @@ struct pseries_mc_errorlog {
 
 #define UE_EFFECTIVE_ADDR_PROVIDED		0x40
 #define UE_LOGICAL_ADDR_PROVIDED		0x20
-#define MC_EFFECTIVE_ADDR_PROVIDED		0x80
 
 #define MC_ERROR_SLB_PARITY		0
 #define MC_ERROR_SLB_MULTIHIT		1
@@ -106,9 +103,6 @@ struct pseries_mc_errorlog {
 #define MC_ERROR_TLB_MULTIHIT		2
 #define MC_ERROR_TLB_INDETERMINATE	3
 
-#define MC_ERROR_CTRL_MEM_ACCESS_PTABLE_WALK	0
-#define MC_ERROR_CTRL_MEM_ACCESS_OP_ACCESS	1
-
 static inline u8 rtas_mc_error_sub_type(const struct pseries_mc_errorlog *mlog)
 {
 	switch (mlog->error_type) {
@@ -118,8 +112,6 @@ static inline u8 rtas_mc_error_sub_type(const struct pseries_mc_errorlog *mlog)
 	case	MC_ERROR_TYPE_ERAT:
 	case	MC_ERROR_TYPE_TLB:
 		return (mlog->sub_err_type & 0x03);
-	case	MC_ERROR_TYPE_CTRL_MEM_ACCESS:
-		return (mlog->sub_err_type & 0x70) >> 4;
 	default:
 		return 0;
 	}
@@ -130,7 +122,7 @@ static inline u8 rtas_mc_error_sub_type(const struct pseries_mc_errorlog *mlog)
  * devices or systems (e.g. hugepages) that have not been initialized at the
  * subsys stage.
  */
-static int __init init_ras_hotplug_IRQ(void)
+int __init init_ras_hotplug_IRQ(void)
 {
 	struct device_node *np;
 
@@ -155,7 +147,7 @@ static int __init init_ras_IRQ(void)
 {
 	struct device_node *np;
 
-	ras_check_exception_token = rtas_function_token(RTAS_FN_CHECK_EXCEPTION);
+	ras_check_exception_token = rtas_token("check-exception");
 
 	/* Internal Errors */
 	np = of_find_node_by_path("/event-sources/internal-errors");
@@ -323,10 +315,12 @@ static irqreturn_t ras_hotplug_interrupt(int irq, void *dev_id)
 /* Handle environmental and power warning (EPOW) interrupts. */
 static irqreturn_t ras_epow_interrupt(int irq, void *dev_id)
 {
+	int status;
 	int state;
 	int critical;
 
-	rtas_get_sensor_fast(EPOW_SENSOR_TOKEN, EPOW_SENSOR_INDEX, &state);
+	status = rtas_get_sensor_fast(EPOW_SENSOR_TOKEN, EPOW_SENSOR_INDEX,
+				      &state);
 
 	if (state > 3)
 		critical = 1;		/* Time Critical */
@@ -335,9 +329,12 @@ static irqreturn_t ras_epow_interrupt(int irq, void *dev_id)
 
 	spin_lock(&ras_log_buf_lock);
 
-	rtas_call(ras_check_exception_token, 6, 1, NULL, RTAS_VECTOR_EXTERNAL_INTERRUPT,
-		  virq_to_hw(irq), RTAS_EPOW_WARNING, critical, __pa(&ras_log_buf),
-		  rtas_get_error_log_max());
+	status = rtas_call(ras_check_exception_token, 6, 1, NULL,
+			   RTAS_VECTOR_EXTERNAL_INTERRUPT,
+			   virq_to_hw(irq),
+			   RTAS_EPOW_WARNING,
+			   critical, __pa(&ras_log_buf),
+				rtas_get_error_log_max());
 
 	log_error(ras_log_buf, ERR_TYPE_RTAS_LOG, 0);
 
@@ -495,8 +492,8 @@ int pSeries_system_reset_exception(struct pt_regs *regs)
 	if ((be64_to_cpu(regs->msr) &
 			(MSR_LE|MSR_RI|MSR_DR|MSR_IR|MSR_ME|MSR_PR|
 			 MSR_ILE|MSR_HV|MSR_SF)) == (MSR_DR|MSR_SF)) {
-		regs_set_return_ip(regs, be64_to_cpu((__be64)regs->nip));
-		regs_set_return_msr(regs, 0);
+		regs->nip = be64_to_cpu((__be64)regs->nip);
+		regs->msr = 0;
 	}
 #endif
 
@@ -529,12 +526,8 @@ static int mce_handle_err_realmode(int disposition, u8 error_type)
 #ifdef CONFIG_PPC_BOOK3S_64
 	if (disposition == RTAS_DISP_NOT_RECOVERED) {
 		switch (error_type) {
-		case	MC_ERROR_TYPE_ERAT:
-			flush_erat();
-			disposition = RTAS_DISP_FULLY_RECOVERED;
-			break;
 		case	MC_ERROR_TYPE_SLB:
-#ifdef CONFIG_PPC_64S_HASH_MMU
+		case	MC_ERROR_TYPE_ERAT:
 			/*
 			 * Store the old slb content in paca before flushing.
 			 * Print this when we go to virtual mode.
@@ -547,7 +540,6 @@ static int mce_handle_err_realmode(int disposition, u8 error_type)
 				slb_save_contents(local_paca->mce_faulty_slbs);
 			flush_and_reload_slb();
 			disposition = RTAS_DISP_FULLY_RECOVERED;
-#endif
 			break;
 		default:
 			break;
@@ -603,6 +595,8 @@ static int mce_handle_err_virtmode(struct pt_regs *regs,
 		mce_err.severity = MCE_SEV_SEVERE;
 	else if (severity == RTAS_SEVERITY_ERROR)
 		mce_err.severity = MCE_SEV_SEVERE;
+	else if (severity == RTAS_SEVERITY_FATAL)
+		mce_err.severity = MCE_SEV_FATAL;
 	else
 		mce_err.severity = MCE_SEV_FATAL;
 
@@ -666,7 +660,7 @@ static int mce_handle_err_virtmode(struct pt_regs *regs,
 			mce_err.u.slb_error_type = MCE_SLB_ERROR_INDETERMINATE;
 			break;
 		}
-		if (mce_log->sub_err_type & MC_EFFECTIVE_ADDR_PROVIDED)
+		if (mce_log->sub_err_type & 0x80)
 			eaddr = be64_to_cpu(mce_log->effective_address);
 		break;
 	case MC_ERROR_TYPE_ERAT:
@@ -683,7 +677,7 @@ static int mce_handle_err_virtmode(struct pt_regs *regs,
 			mce_err.u.erat_error_type = MCE_ERAT_ERROR_INDETERMINATE;
 			break;
 		}
-		if (mce_log->sub_err_type & MC_EFFECTIVE_ADDR_PROVIDED)
+		if (mce_log->sub_err_type & 0x80)
 			eaddr = be64_to_cpu(mce_log->effective_address);
 		break;
 	case MC_ERROR_TYPE_TLB:
@@ -700,29 +694,14 @@ static int mce_handle_err_virtmode(struct pt_regs *regs,
 			mce_err.u.tlb_error_type = MCE_TLB_ERROR_INDETERMINATE;
 			break;
 		}
-		if (mce_log->sub_err_type & MC_EFFECTIVE_ADDR_PROVIDED)
+		if (mce_log->sub_err_type & 0x80)
 			eaddr = be64_to_cpu(mce_log->effective_address);
 		break;
 	case MC_ERROR_TYPE_D_CACHE:
 		mce_err.error_type = MCE_ERROR_TYPE_DCACHE;
 		break;
 	case MC_ERROR_TYPE_I_CACHE:
-		mce_err.error_type = MCE_ERROR_TYPE_ICACHE;
-		break;
-	case MC_ERROR_TYPE_CTRL_MEM_ACCESS:
-		mce_err.error_type = MCE_ERROR_TYPE_RA;
-		switch (err_sub_type) {
-		case MC_ERROR_CTRL_MEM_ACCESS_PTABLE_WALK:
-			mce_err.u.ra_error_type =
-				MCE_RA_ERROR_PAGE_TABLE_WALK_LOAD_STORE_FOREIGN;
-			break;
-		case MC_ERROR_CTRL_MEM_ACCESS_OP_ACCESS:
-			mce_err.u.ra_error_type =
-				MCE_RA_ERROR_LOAD_STORE_FOREIGN;
-			break;
-		}
-		if (mce_log->sub_err_type & MC_EFFECTIVE_ADDR_PROVIDED)
-			eaddr = be64_to_cpu(mce_log->effective_address);
+		mce_err.error_type = MCE_ERROR_TYPE_DCACHE;
 		break;
 	case MC_ERROR_TYPE_UNKNOWN:
 	default:
@@ -753,7 +732,19 @@ static int mce_handle_error(struct pt_regs *regs, struct rtas_error_log *errp)
 	error_type = mce_log->error_type;
 
 	disposition = mce_handle_err_realmode(disposition, error_type);
+
+	/*
+	 * Enable translation as we will be accessing per-cpu variables
+	 * in save_mce_event() which may fall outside RMO region, also
+	 * leave it enabled because subsequently we will be queuing work
+	 * to workqueues where again per-cpu variables accessed, besides
+	 * fwnmi_release_errinfo() crashes when called in realmode on
+	 * pseries.
+	 * Note: All the realmode handling like flushing SLB entries for
+	 *       SLB multihit is done by now.
+	 */
 out:
+	mtmsr(mfmsr() | MSR_IR | MSR_DR);
 	disposition = mce_handle_err_virtmode(regs, errp, mce_log,
 					      disposition);
 	return disposition;
@@ -762,7 +753,7 @@ out:
 /*
  * Process MCE rtas errlog event.
  */
-void pSeries_machine_check_log_err(void)
+static void mce_process_errlog_event(struct irq_work *work)
 {
 	struct rtas_error_log *err;
 
@@ -783,7 +774,7 @@ static int recover_mce(struct pt_regs *regs, struct machine_check_event *evt)
 {
 	int recovered = 0;
 
-	if (regs_is_unrecoverable(regs)) {
+	if (!(regs->msr & MSR_RI)) {
 		/* If MSR_RI isn't set, we cannot recover */
 		pr_err("Machine check interrupt unrecoverable: MSR(RI=0)\n");
 		recovered = 0;
@@ -819,7 +810,7 @@ static int recover_mce(struct pt_regs *regs, struct machine_check_event *evt)
 			 */
 			recovered = 0;
 		} else {
-			die_mce("Machine check", regs, SIGBUS);
+			die("Machine check", regs, SIGBUS);
 			recovered = 1;
 		}
 	}
@@ -871,8 +862,10 @@ long pseries_machine_check_realmode(struct pt_regs *regs)
 		 * virtual mode.
 		 */
 		disposition = mce_handle_error(regs, errp);
-
 		fwnmi_release_errinfo();
+
+		/* Queue irq work to log this rtas event later. */
+		irq_work_queue(&mce_errlog_process_work);
 
 		if (disposition == RTAS_DISP_FULLY_RECOVERED)
 			return 1;

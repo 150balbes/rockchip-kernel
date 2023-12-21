@@ -261,7 +261,7 @@ static unsigned int rfin(unsigned int x)
 
 int emulate_altivec(struct pt_regs *regs)
 {
-	ppc_inst_t instr;
+	struct ppc_inst instr;
 	unsigned int i, word;
 	unsigned int va, vb, vc, vd;
 	vector128 *vrs;

@@ -14,7 +14,6 @@
  * Access to the event log extended by the TCG BIOS of PC platform
  */
 
-#include <linux/device.h>
 #include <linux/seq_file.h>
 #include <linux/fs.h>
 #include <linux/security.h>
@@ -91,21 +90,16 @@ int tpm_read_log_acpi(struct tpm_chip *chip)
 			return -ENODEV;
 
 		if (tbl->header.length <
-				sizeof(*tbl) + sizeof(struct acpi_tpm2_phy)) {
-			acpi_put_table((struct acpi_table_header *)tbl);
+				sizeof(*tbl) + sizeof(struct acpi_tpm2_phy))
 			return -ENODEV;
-		}
 
 		tpm2_phy = (void *)tbl + sizeof(*tbl);
 		len = tpm2_phy->log_area_minimum_length;
 
 		start = tpm2_phy->log_area_start_address;
-		if (!start || !len) {
-			acpi_put_table((struct acpi_table_header *)tbl);
+		if (!start || !len)
 			return -ENODEV;
-		}
 
-		acpi_put_table((struct acpi_table_header *)tbl);
 		format = EFI_TCG2_EVENT_LOG_FORMAT_TCG_2;
 	} else {
 		/* Find TCPA entry in RSDT (ACPI_LOGICAL_ADDRESSING) */
@@ -126,17 +120,15 @@ int tpm_read_log_acpi(struct tpm_chip *chip)
 			break;
 		}
 
-		acpi_put_table((struct acpi_table_header *)buff);
 		format = EFI_TCG2_EVENT_LOG_FORMAT_TCG_1_2;
 	}
-
 	if (!len) {
 		dev_warn(&chip->dev, "%s: TCPA log area empty\n", __func__);
 		return -EIO;
 	}
 
 	/* malloc EventLog space */
-	log->bios_event_log = devm_kmalloc(&chip->dev, len, GFP_KERNEL);
+	log->bios_event_log = kmalloc(len, GFP_KERNEL);
 	if (!log->bios_event_log)
 		return -ENOMEM;
 
@@ -144,12 +136,8 @@ int tpm_read_log_acpi(struct tpm_chip *chip)
 
 	ret = -EIO;
 	virt = acpi_os_map_iomem(start, len);
-	if (!virt) {
-		dev_warn(&chip->dev, "%s: Failed to map ACPI memory\n", __func__);
-		/* try EFI log next */
-		ret = -ENODEV;
+	if (!virt)
 		goto err;
-	}
 
 	memcpy_fromio(log->bios_event_log, virt, len);
 
@@ -165,7 +153,8 @@ int tpm_read_log_acpi(struct tpm_chip *chip)
 	return format;
 
 err:
-	devm_kfree(&chip->dev, log->bios_event_log);
+	kfree(log->bios_event_log);
 	log->bios_event_log = NULL;
 	return ret;
+
 }

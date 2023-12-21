@@ -44,7 +44,8 @@ static const struct cma3000_bus_ops cma3000_i2c_bops = {
 	.write		= cma3000_i2c_set,
 };
 
-static int cma3000_i2c_probe(struct i2c_client *client)
+static int cma3000_i2c_probe(struct i2c_client *client,
+					const struct i2c_device_id *id)
 {
 	struct cma3000_accl_data *data;
 
@@ -57,13 +58,16 @@ static int cma3000_i2c_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void cma3000_i2c_remove(struct i2c_client *client)
+static int cma3000_i2c_remove(struct i2c_client *client)
 {
 	struct cma3000_accl_data *data = i2c_get_clientdata(client);
 
 	cma3000_exit(data);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM
 static int cma3000_i2c_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -88,6 +92,7 @@ static const struct dev_pm_ops cma3000_i2c_pm_ops = {
 	.suspend	= cma3000_i2c_suspend,
 	.resume		= cma3000_i2c_resume,
 };
+#endif
 
 static const struct i2c_device_id cma3000_i2c_id[] = {
 	{ "cma3000_d01", 0 },
@@ -102,7 +107,9 @@ static struct i2c_driver cma3000_i2c_driver = {
 	.id_table	= cma3000_i2c_id,
 	.driver = {
 		.name	= "cma3000_i2c_accl",
-		.pm	= pm_sleep_ptr(&cma3000_i2c_pm_ops),
+#ifdef CONFIG_PM
+		.pm	= &cma3000_i2c_pm_ops,
+#endif
 	},
 };
 

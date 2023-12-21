@@ -53,7 +53,7 @@
  *  Features supported by this driver:
  *  Hardware PEC                     yes
  *  Block buffer                     yes
- *  Block process call transaction   yes
+ *  Block process call transaction   no
  *  Slave mode                       no
  */
 
@@ -146,8 +146,8 @@
 #define ISMT_SPGT_SPD_MASK	0xc0000000	/* SMBus Speed mask */
 #define ISMT_SPGT_SPD_80K	0x00		/* 80 kHz */
 #define ISMT_SPGT_SPD_100K	(0x1 << 30)	/* 100 kHz */
-#define ISMT_SPGT_SPD_400K	(0x2U << 30)	/* 400 kHz */
-#define ISMT_SPGT_SPD_1M	(0x3U << 30)	/* 1 MHz */
+#define ISMT_SPGT_SPD_400K	(0x2 << 30)	/* 400 kHz */
+#define ISMT_SPGT_SPD_1M	(0x3 << 30)	/* 1 MHz */
 
 
 /* MSI Control Register (MSICTL) bit definitions */
@@ -335,8 +335,7 @@ static int ismt_process_desc(const struct ismt_desc *desc,
 
 	if (desc->status & ISMT_DESC_SCS) {
 		if (read_write == I2C_SMBUS_WRITE &&
-		    size != I2C_SMBUS_PROC_CALL &&
-		    size != I2C_SMBUS_BLOCK_PROC_CALL)
+		    size != I2C_SMBUS_PROC_CALL)
 			return 0;
 
 		switch (size) {
@@ -349,7 +348,6 @@ static int ismt_process_desc(const struct ismt_desc *desc,
 			data->word = dma_buffer[0] | (dma_buffer[1] << 8);
 			break;
 		case I2C_SMBUS_BLOCK_DATA:
-		case I2C_SMBUS_BLOCK_PROC_CALL:
 			if (desc->rxbytes != dma_buffer[0] + 1)
 				return -EMSGSIZE;
 
@@ -509,9 +507,6 @@ static int ismt_access(struct i2c_adapter *adap, u16 addr,
 		if (read_write == I2C_SMBUS_WRITE) {
 			/* Block Write */
 			dev_dbg(dev, "I2C_SMBUS_BLOCK_DATA:  WRITE\n");
-			if (data->block[0] < 1 || data->block[0] > I2C_SMBUS_BLOCK_MAX)
-				return -EINVAL;
-
 			dma_size = data->block[0] + 1;
 			dma_direction = DMA_TO_DEVICE;
 			desc->wr_len_cmd = dma_size;
@@ -527,21 +522,6 @@ static int ismt_access(struct i2c_adapter *adap, u16 addr,
 			desc->wr_len_cmd = command;
 			desc->control |= (ISMT_DESC_BLK | ISMT_DESC_CWRL);
 		}
-		break;
-
-	case I2C_SMBUS_BLOCK_PROC_CALL:
-		dev_dbg(dev, "I2C_SMBUS_BLOCK_PROC_CALL\n");
-		if (data->block[0] > I2C_SMBUS_BLOCK_MAX)
-			return -EINVAL;
-
-		dma_size = I2C_SMBUS_BLOCK_MAX;
-		desc->tgtaddr_rw = ISMT_DESC_ADDR_RW(addr, 1);
-		desc->wr_len_cmd = data->block[0] + 1;
-		desc->rd_len = dma_size;
-		desc->control |= ISMT_DESC_BLK;
-		dma_direction = DMA_BIDIRECTIONAL;
-		dma_buffer[0] = command;
-		memcpy(&dma_buffer[1], &data->block[1], data->block[0]);
 		break;
 
 	case I2C_SMBUS_I2C_BLOCK_DATA:
@@ -650,7 +630,6 @@ static u32 ismt_func(struct i2c_adapter *adap)
 	       I2C_FUNC_SMBUS_BYTE_DATA		|
 	       I2C_FUNC_SMBUS_WORD_DATA		|
 	       I2C_FUNC_SMBUS_PROC_CALL		|
-	       I2C_FUNC_SMBUS_BLOCK_PROC_CALL	|
 	       I2C_FUNC_SMBUS_BLOCK_DATA	|
 	       I2C_FUNC_SMBUS_I2C_BLOCK		|
 	       I2C_FUNC_SMBUS_PEC;
@@ -938,10 +917,15 @@ ismt_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return -ENODEV;
 	}
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (err) {
-		dev_err(&pdev->dev, "dma_set_mask fail\n");
-		return -ENODEV;
+	if ((pci_set_dma_mask(pdev, DMA_BIT_MASK(64)) != 0) ||
+	    (pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64)) != 0)) {
+		if ((pci_set_dma_mask(pdev, DMA_BIT_MASK(32)) != 0) ||
+		    (pci_set_consistent_dma_mask(pdev,
+						 DMA_BIT_MASK(32)) != 0)) {
+			dev_err(&pdev->dev, "pci_set_dma_mask fail %p\n",
+				pdev);
+			return -ENODEV;
+		}
 	}
 
 	err = ismt_dev_init(priv);

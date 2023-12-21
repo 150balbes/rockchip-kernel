@@ -10,7 +10,6 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
-#include <linux/blk_types.h>
 
 #include "exfat_raw.h"
 #include "exfat_fs.h"
@@ -46,6 +45,23 @@ void __exfat_fs_error(struct super_block *sb, int report, const char *fmt, ...)
 	}
 }
 
+/*
+ * exfat_msg() - print preformated EXFAT specific messages.
+ * All logs except what uses exfat_fs_error() should be written by exfat_msg()
+ */
+void exfat_msg(struct super_block *sb, const char *level, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+	/* level means KERN_ pacility level */
+	printk("%sexFAT-fs (%s): %pV\n", level, sb->s_id, &vaf);
+	va_end(args);
+}
+
 #define SECS_PER_MIN    (60)
 #define TIMEZONE_SEC(x)	((x) * 15 * SECS_PER_MIN)
 
@@ -55,13 +71,6 @@ static void exfat_adjust_tz(struct timespec64 *ts, u8 tz_off)
 		ts->tv_sec -= TIMEZONE_SEC(tz_off);
 	else /* 0x40 <= (tz_off & 0x7F) <=0x7F */
 		ts->tv_sec += TIMEZONE_SEC(0x80 - tz_off);
-}
-
-static inline int exfat_tz_offset(struct exfat_sb_info *sbi)
-{
-	if (sbi->options.sys_tz)
-		return -sys_tz.tz_minuteswest;
-	return sbi->options.time_offset;
 }
 
 /* Convert a EXFAT time/date pair to a UNIX date (seconds since 1 1 70). */
@@ -86,7 +95,8 @@ void exfat_get_entry_time(struct exfat_sb_info *sbi, struct timespec64 *ts,
 		/* Adjust timezone to UTC0. */
 		exfat_adjust_tz(ts, tz & ~EXFAT_TZ_VALID);
 	else
-		ts->tv_sec -= exfat_tz_offset(sbi) * SECS_PER_MIN;
+		/* Convert from local time to UTC using time_offset. */
+		ts->tv_sec -= sbi->options.time_offset * SECS_PER_MIN;
 }
 
 /* Convert linear UNIX date to a EXFAT time/date pair. */
@@ -170,7 +180,7 @@ int exfat_update_bhs(struct buffer_head **bhs, int nr_bhs, int sync)
 		set_buffer_uptodate(bhs[i]);
 		mark_buffer_dirty(bhs[i]);
 		if (sync)
-			write_dirty_buffer(bhs[i], REQ_SYNC);
+			write_dirty_buffer(bhs[i], 0);
 	}
 
 	for (i = 0; i < nr_bhs && sync; i++) {

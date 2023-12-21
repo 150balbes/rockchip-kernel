@@ -53,7 +53,6 @@ static inline void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 
 static inline void queued_spin_unlock(struct qspinlock *lock)
 {
-	kcsan_release();
 	pv_queued_spin_unlock(lock);
 }
 

@@ -1,10 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI clock support
  *
  * Copyright (C) 2013 Texas Instruments, Inc.
  *
  * Tero Kristo <t-kristo@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -111,53 +119,12 @@ int ti_clk_setup_ll_ops(struct ti_clk_ll_ops *ops)
 	return 0;
 }
 
-/*
- * Eventually we could standardize to using '_' for clk-*.c files to follow the
- * TRM naming and leave out the tmp name here.
- */
-static struct device_node *ti_find_clock_provider(struct device_node *from,
-						  const char *name)
-{
-	struct device_node *np;
-	bool found = false;
-	const char *n;
-	char *tmp;
-
-	tmp = kstrdup(name, GFP_KERNEL);
-	if (!tmp)
-		return NULL;
-	strreplace(tmp, '-', '_');
-
-	/* Node named "clock" with "clock-output-names" */
-	for_each_of_allnodes_from(from, np) {
-		if (of_property_read_string_index(np, "clock-output-names",
-						  0, &n))
-			continue;
-
-		if (!strncmp(n, tmp, strlen(tmp))) {
-			of_node_get(np);
-			found = true;
-			break;
-		}
-	}
-	kfree(tmp);
-
-	if (found) {
-		of_node_put(from);
-		return np;
-	}
-
-	/* Fall back to using old node name base provider name */
-	return of_find_node_by_name(from, name);
-}
-
 /**
  * ti_dt_clocks_register - register DT alias clocks during boot
  * @oclks: list of clocks to register
  *
  * Register alias or non-standard DT clock entries during boot. By
- * default, DT clocks are found based on their clock-output-names
- * property, or the clock node name for legacy cases. If any
+ * default, DT clocks are found based on their node name. If any
  * additional con-id / dev-id -> clock mapping is required, use this
  * function to list these.
  */
@@ -201,7 +168,7 @@ void __init ti_dt_clocks_register(struct ti_dt_clk oclks[])
 		if (num_args && clkctrl_nodes_missing)
 			continue;
 
-		node = ti_find_clock_provider(NULL, buf);
+		node = of_find_node_by_name(NULL, buf);
 		if (num_args && compat_mode) {
 			parent = node;
 			child = of_get_child_by_name(parent, "clock");
@@ -263,7 +230,7 @@ static LIST_HEAD(retry_list);
 
 /**
  * ti_clk_retry_init - retries a failed clock init at later phase
- * @node: device node for the clock
+ * @node: device not for the clock
  * @user: user data pointer
  * @func: init function to be called for the clock
  *
@@ -307,8 +274,6 @@ int ti_clk_get_reg_addr(struct device_node *node, int index,
 	for (i = 0; i < CLK_MAX_MEMMAPS; i++) {
 		if (clocks_node_ptr[i] == node->parent)
 			break;
-		if (clocks_node_ptr[i] == node->parent->parent)
-			break;
 	}
 
 	if (i == CLK_MAX_MEMMAPS) {
@@ -319,12 +284,8 @@ int ti_clk_get_reg_addr(struct device_node *node, int index,
 	reg->index = i;
 
 	if (of_property_read_u32_index(node, "reg", index, &val)) {
-		if (of_property_read_u32_index(node->parent, "reg",
-					       index, &val)) {
-			pr_err("%pOFn or parent must have reg[%d]!\n",
-			       node, index);
-			return -EINVAL;
-		}
+		pr_err("%pOFn must have reg[%d]!\n", node, index);
+		return -EINVAL;
 	}
 
 	reg->offset = val;
@@ -442,24 +403,6 @@ static const struct of_device_id simple_clk_match_table[] __initconst = {
 };
 
 /**
- * ti_dt_clk_name - init clock name from first output name or node name
- * @np: device node
- *
- * Use the first clock-output-name for the clock name if found. Fall back
- * to legacy naming based on node name.
- */
-const char *ti_dt_clk_name(struct device_node *np)
-{
-	const char *name;
-
-	if (!of_property_read_string_index(np, "clock-output-names", 0,
-					   &name))
-		return name;
-
-	return np->name;
-}
-
-/**
  * ti_clk_add_aliases - setup clock aliases
  *
  * Sets up any missing clock aliases. No return value.
@@ -475,7 +418,7 @@ void __init ti_clk_add_aliases(void)
 		clkspec.np = np;
 		clk = of_clk_get_from_provider(&clkspec);
 
-		ti_clk_add_alias(clk, ti_dt_clk_name(np));
+		ti_clk_add_alias(NULL, clk, np->name);
 	}
 }
 
@@ -528,6 +471,7 @@ void omap2_clk_enable_init_clocks(const char **clk_names, u8 num_clocks)
 
 /**
  * ti_clk_add_alias - add a clock alias for a TI clock
+ * @dev: device alias for this clock
  * @clk: clock handle to create alias for
  * @con: connection ID for this clock
  *
@@ -535,7 +479,7 @@ void omap2_clk_enable_init_clocks(const char **clk_names, u8 num_clocks)
  * and assigns the data to it. Returns 0 if successful, negative error
  * value otherwise.
  */
-int ti_clk_add_alias(struct clk *clk, const char *con)
+int ti_clk_add_alias(struct device *dev, struct clk *clk, const char *con)
 {
 	struct clk_lookup *cl;
 
@@ -549,6 +493,8 @@ int ti_clk_add_alias(struct clk *clk, const char *con)
 	if (!cl)
 		return -ENOMEM;
 
+	if (dev)
+		cl->dev_id = dev_name(dev);
 	cl->con_id = con;
 	cl->clk = clk;
 
@@ -558,8 +504,8 @@ int ti_clk_add_alias(struct clk *clk, const char *con)
 }
 
 /**
- * of_ti_clk_register - register a TI clock to the common clock framework
- * @node: device node for this clock
+ * ti_clk_register - register a TI clock to the common clock framework
+ * @dev: device for this clock
  * @hw: hardware clock handle
  * @con: connection ID for this clock
  *
@@ -567,18 +513,17 @@ int ti_clk_add_alias(struct clk *clk, const char *con)
  * alias for it. Returns a handle to the registered clock if successful,
  * ERR_PTR value in failure.
  */
-struct clk *of_ti_clk_register(struct device_node *node, struct clk_hw *hw,
-			       const char *con)
+struct clk *ti_clk_register(struct device *dev, struct clk_hw *hw,
+			    const char *con)
 {
 	struct clk *clk;
 	int ret;
 
-	ret = of_clk_hw_register(node, hw);
-	if (ret)
-		return ERR_PTR(ret);
+	clk = clk_register(dev, hw);
+	if (IS_ERR(clk))
+		return clk;
 
-	clk = hw->clk;
-	ret = ti_clk_add_alias(clk, con);
+	ret = ti_clk_add_alias(dev, clk, con);
 	if (ret) {
 		clk_unregister(clk);
 		return ERR_PTR(ret);
@@ -588,8 +533,8 @@ struct clk *of_ti_clk_register(struct device_node *node, struct clk_hw *hw,
 }
 
 /**
- * of_ti_clk_register_omap_hw - register a clk_hw_omap to the clock framework
- * @node: device node for this clock
+ * ti_clk_register_omap_hw - register a clk_hw_omap to the clock framework
+ * @dev: device for this clock
  * @hw: hardware clock handle
  * @con: connection ID for this clock
  *
@@ -598,13 +543,13 @@ struct clk *of_ti_clk_register(struct device_node *node, struct clk_hw *hw,
  * Returns a handle to the registered clock if successful, ERR_PTR value
  * in failure.
  */
-struct clk *of_ti_clk_register_omap_hw(struct device_node *node,
-				       struct clk_hw *hw, const char *con)
+struct clk *ti_clk_register_omap_hw(struct device *dev, struct clk_hw *hw,
+				    const char *con)
 {
 	struct clk *clk;
 	struct clk_hw_omap *oclk;
 
-	clk = of_ti_clk_register(node, hw, con);
+	clk = ti_clk_register(dev, hw, con);
 	if (IS_ERR(clk))
 		return clk;
 

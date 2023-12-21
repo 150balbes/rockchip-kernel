@@ -52,10 +52,10 @@ static inline unsigned long xchg64(__volatile__ unsigned long *m, unsigned long 
 	return val;
 }
 
-#define arch_xchg(ptr,x)							\
+#define xchg(ptr,x)							\
 ({	__typeof__(*(ptr)) __ret;					\
 	__ret = (__typeof__(*(ptr)))					\
-		__arch_xchg((unsigned long)(x), (ptr), sizeof(*(ptr)));	\
+		__xchg((unsigned long)(x), (ptr), sizeof(*(ptr)));	\
 	__ret;								\
 })
 
@@ -87,8 +87,8 @@ xchg16(__volatile__ unsigned short *m, unsigned short val)
 	return (load32 & mask) >> bit_shift;
 }
 
-static __always_inline unsigned long
-__arch_xchg(unsigned long x, __volatile__ void * ptr, int size)
+static inline unsigned long __xchg(unsigned long x, __volatile__ void * ptr,
+				       int size)
 {
 	switch (size) {
 	case 2:
@@ -168,7 +168,7 @@ __cmpxchg(volatile void *ptr, unsigned long old, unsigned long new, int size)
 	return old;
 }
 
-#define arch_cmpxchg(ptr,o,n)						 \
+#define cmpxchg(ptr,o,n)						 \
   ({									 \
      __typeof__(*(ptr)) _o_ = (o);					 \
      __typeof__(*(ptr)) _n_ = (n);					 \
@@ -189,20 +189,20 @@ static inline unsigned long __cmpxchg_local(volatile void *ptr,
 	case 4:
 	case 8:	return __cmpxchg(ptr, old, new, size);
 	default:
-		return __generic_cmpxchg_local(ptr, old, new, size);
+		return __cmpxchg_local_generic(ptr, old, new, size);
 	}
 
 	return old;
 }
 
-#define arch_cmpxchg_local(ptr, o, n)				  	\
+#define cmpxchg_local(ptr, o, n)				  	\
 	((__typeof__(*(ptr)))__cmpxchg_local((ptr), (unsigned long)(o),	\
 			(unsigned long)(n), sizeof(*(ptr))))
-#define arch_cmpxchg64_local(ptr, o, n)					\
+#define cmpxchg64_local(ptr, o, n)					\
   ({									\
 	BUILD_BUG_ON(sizeof(*(ptr)) != 8);				\
-	arch_cmpxchg_local((ptr), (o), (n));					\
+	cmpxchg_local((ptr), (o), (n));					\
   })
-#define arch_cmpxchg64(ptr, o, n)	arch_cmpxchg64_local((ptr), (o), (n))
+#define cmpxchg64(ptr, o, n)	cmpxchg64_local((ptr), (o), (n))
 
 #endif /* __ARCH_SPARC64_CMPXCHG__ */

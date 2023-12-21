@@ -27,7 +27,7 @@ void test_get_stackid_cannot_attach(void)
 		return;
 
 	/* override program type */
-	bpf_program__set_type(skel->progs.oncpu, BPF_PROG_TYPE_PERF_EVENT);
+	bpf_program__set_perf_event(skel->progs.oncpu);
 
 	err = test_stacktrace_build_id__load(skel);
 	if (CHECK(err, "skel_load", "skeleton load failed: %d\n", err))
@@ -48,7 +48,8 @@ void test_get_stackid_cannot_attach(void)
 
 	skel->links.oncpu = bpf_program__attach_perf_event(skel->progs.oncpu,
 							   pmu_fd);
-	ASSERT_ERR_PTR(skel->links.oncpu, "attach_perf_event_no_callchain");
+	CHECK(!IS_ERR(skel->links.oncpu), "attach_perf_event_no_callchain",
+	      "should have failed\n");
 	close(pmu_fd);
 
 	/* add PERF_SAMPLE_CALLCHAIN, attach should succeed */
@@ -64,8 +65,8 @@ void test_get_stackid_cannot_attach(void)
 
 	skel->links.oncpu = bpf_program__attach_perf_event(skel->progs.oncpu,
 							   pmu_fd);
-	ASSERT_OK_PTR(skel->links.oncpu, "attach_perf_event_callchain");
-	bpf_link__destroy(skel->links.oncpu);
+	CHECK(IS_ERR(skel->links.oncpu), "attach_perf_event_callchain",
+	      "err: %ld\n", PTR_ERR(skel->links.oncpu));
 	close(pmu_fd);
 
 	/* add exclude_callchain_kernel, attach should fail */
@@ -81,7 +82,8 @@ void test_get_stackid_cannot_attach(void)
 
 	skel->links.oncpu = bpf_program__attach_perf_event(skel->progs.oncpu,
 							   pmu_fd);
-	ASSERT_ERR_PTR(skel->links.oncpu, "attach_perf_event_exclude_callchain_kernel");
+	CHECK(!IS_ERR(skel->links.oncpu), "attach_perf_event_exclude_callchain_kernel",
+	      "should have failed\n");
 	close(pmu_fd);
 
 cleanup:

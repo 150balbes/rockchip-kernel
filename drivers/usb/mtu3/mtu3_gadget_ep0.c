@@ -66,7 +66,7 @@ __acquires(mtu->lock)
 {
 	int ret;
 
-	if (!mtu->gadget_driver || !mtu->async_callbacks)
+	if (!mtu->gadget_driver)
 		return -EOPNOTSUPP;
 
 	spin_unlock(&mtu->lock);
@@ -226,8 +226,6 @@ ep0_get_status(struct mtu3 *mtu, const struct usb_ctrlrequest *setup)
 
 		break;
 	case USB_RECIP_INTERFACE:
-		/* status of function remote wakeup, forward request */
-		handled = 0;
 		break;
 	case USB_RECIP_ENDPOINT:
 		epnum = (u8) le16_to_cpu(setup->wIndex);
@@ -399,8 +397,10 @@ static int ep0_handle_feature(struct mtu3 *mtu,
 		/* superspeed only */
 		if (value == USB_INTRF_FUNC_SUSPEND &&
 		    mtu->g.speed >= USB_SPEED_SUPER) {
-			/* forward the request for function suspend */
-			mtu->may_wakeup = !!(index & USB_INTRF_FUNC_SUSPEND_RW);
+			/*
+			 * forward the request because function drivers
+			 * should handle it
+			 */
 			handled = 0;
 		}
 		break;

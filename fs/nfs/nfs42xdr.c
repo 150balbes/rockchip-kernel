@@ -7,9 +7,6 @@
 
 #include "nfs42.h"
 
-/* Not limited by NFS itself, limited by the generic xattr code */
-#define nfs4_xattr_name_maxsz   XDR_QUADLEN(XATTR_NAME_MAX)
-
 #define encode_fallocate_maxsz		(encode_stateid_maxsz + \
 					 2 /* offset */ + \
 					 2 /* length */)
@@ -50,14 +47,13 @@
 #define decode_deallocate_maxsz		(op_decode_hdr_maxsz)
 #define encode_read_plus_maxsz		(op_encode_hdr_maxsz + \
 					 encode_stateid_maxsz + 3)
-#define NFS42_READ_PLUS_DATA_SEGMENT_SIZE \
-					(1 /* data_content4 */ + \
+#define NFS42_READ_PLUS_SEGMENT_SIZE	(1 /* data_content4 */ + \
 					 2 /* data_info4.di_offset */ + \
-					 1 /* data_info4.di_length */)
+					 2 /* data_info4.di_length */)
 #define decode_read_plus_maxsz		(op_decode_hdr_maxsz + \
 					 1 /* rpr_eof */ + \
 					 1 /* rpr_contents count */ + \
-					 NFS42_READ_PLUS_DATA_SEGMENT_SIZE)
+					 2 * NFS42_READ_PLUS_SEGMENT_SIZE)
 #define encode_seek_maxsz		(op_encode_hdr_maxsz + \
 					 encode_stateid_maxsz + \
 					 2 /* offset */ + \
@@ -92,18 +88,6 @@
 					2 /* dst offset */ + \
 					2 /* count */)
 #define decode_clone_maxsz		(op_decode_hdr_maxsz)
-#define encode_getxattr_maxsz		(op_encode_hdr_maxsz + 1 + \
-					 nfs4_xattr_name_maxsz)
-#define decode_getxattr_maxsz		(op_decode_hdr_maxsz + 1 + pagepad_maxsz)
-#define encode_setxattr_maxsz		(op_encode_hdr_maxsz + \
-					 1 + nfs4_xattr_name_maxsz + 1)
-#define decode_setxattr_maxsz		(op_decode_hdr_maxsz + decode_change_info_maxsz)
-#define encode_listxattrs_maxsz		(op_encode_hdr_maxsz + 2 + 1)
-#define decode_listxattrs_maxsz		(op_decode_hdr_maxsz + 2 + 1 + 1 + 1)
-#define encode_removexattr_maxsz	(op_encode_hdr_maxsz + 1 + \
-					 nfs4_xattr_name_maxsz)
-#define decode_removexattr_maxsz	(op_decode_hdr_maxsz + \
-					 decode_change_info_maxsz)
 
 #define NFS4_enc_allocate_sz		(compound_encode_hdr_maxsz + \
 					 encode_sequence_maxsz + \
@@ -201,40 +185,55 @@
 					 decode_putfh_maxsz + \
 					 decode_clone_maxsz + \
 					 decode_getattr_maxsz)
-#define NFS4_enc_getxattr_sz		(compound_encode_hdr_maxsz + \
-					 encode_sequence_maxsz + \
-					 encode_putfh_maxsz + \
-					 encode_getxattr_maxsz)
-#define NFS4_dec_getxattr_sz		(compound_decode_hdr_maxsz + \
-					 decode_sequence_maxsz + \
-					 decode_putfh_maxsz + \
-					 decode_getxattr_maxsz)
-#define NFS4_enc_setxattr_sz		(compound_encode_hdr_maxsz + \
-					 encode_sequence_maxsz + \
-					 encode_putfh_maxsz + \
-					 encode_setxattr_maxsz + \
-					 encode_getattr_maxsz)
-#define NFS4_dec_setxattr_sz		(compound_decode_hdr_maxsz + \
-					 decode_sequence_maxsz + \
-					 decode_putfh_maxsz + \
-					 decode_setxattr_maxsz + \
-					 decode_getattr_maxsz)
-#define NFS4_enc_listxattrs_sz		(compound_encode_hdr_maxsz + \
-					 encode_sequence_maxsz + \
-					 encode_putfh_maxsz + \
-					 encode_listxattrs_maxsz)
-#define NFS4_dec_listxattrs_sz		(compound_decode_hdr_maxsz + \
-					 decode_sequence_maxsz + \
-					 decode_putfh_maxsz + \
-					 decode_listxattrs_maxsz)
-#define NFS4_enc_removexattr_sz		(compound_encode_hdr_maxsz + \
-					 encode_sequence_maxsz + \
-					 encode_putfh_maxsz + \
-					 encode_removexattr_maxsz)
-#define NFS4_dec_removexattr_sz		(compound_decode_hdr_maxsz + \
-					 decode_sequence_maxsz + \
-					 decode_putfh_maxsz + \
-					 decode_removexattr_maxsz)
+
+/* Not limited by NFS itself, limited by the generic xattr code */
+#define nfs4_xattr_name_maxsz   XDR_QUADLEN(XATTR_NAME_MAX)
+
+#define encode_getxattr_maxsz   (op_encode_hdr_maxsz + 1 + \
+				 nfs4_xattr_name_maxsz)
+#define decode_getxattr_maxsz   (op_decode_hdr_maxsz + 1 + 1)
+#define encode_setxattr_maxsz   (op_encode_hdr_maxsz + \
+				 1 + nfs4_xattr_name_maxsz + 1)
+#define decode_setxattr_maxsz   (op_decode_hdr_maxsz + decode_change_info_maxsz)
+#define encode_listxattrs_maxsz  (op_encode_hdr_maxsz + 2 + 1)
+#define decode_listxattrs_maxsz  (op_decode_hdr_maxsz + 2 + 1 + 1 + 1)
+#define encode_removexattr_maxsz (op_encode_hdr_maxsz + 1 + \
+				  nfs4_xattr_name_maxsz)
+#define decode_removexattr_maxsz (op_decode_hdr_maxsz + \
+				  decode_change_info_maxsz)
+
+#define NFS4_enc_getxattr_sz	(compound_encode_hdr_maxsz + \
+				encode_sequence_maxsz + \
+				encode_putfh_maxsz + \
+				encode_getxattr_maxsz)
+#define NFS4_dec_getxattr_sz	(compound_decode_hdr_maxsz + \
+				decode_sequence_maxsz + \
+				decode_putfh_maxsz + \
+				decode_getxattr_maxsz)
+#define NFS4_enc_setxattr_sz	(compound_encode_hdr_maxsz + \
+				encode_sequence_maxsz + \
+				encode_putfh_maxsz + \
+				encode_setxattr_maxsz)
+#define NFS4_dec_setxattr_sz	(compound_decode_hdr_maxsz + \
+				decode_sequence_maxsz + \
+				decode_putfh_maxsz + \
+				decode_setxattr_maxsz)
+#define NFS4_enc_listxattrs_sz	(compound_encode_hdr_maxsz + \
+				encode_sequence_maxsz + \
+				encode_putfh_maxsz + \
+				encode_listxattrs_maxsz)
+#define NFS4_dec_listxattrs_sz	(compound_decode_hdr_maxsz + \
+				decode_sequence_maxsz + \
+				decode_putfh_maxsz + \
+				decode_listxattrs_maxsz)
+#define NFS4_enc_removexattr_sz	(compound_encode_hdr_maxsz + \
+				encode_sequence_maxsz + \
+				encode_putfh_maxsz + \
+				encode_removexattr_maxsz)
+#define NFS4_dec_removexattr_sz	(compound_decode_hdr_maxsz + \
+				decode_sequence_maxsz + \
+				decode_putfh_maxsz + \
+				decode_removexattr_maxsz)
 
 /*
  * These values specify the maximum amount of data that is not
@@ -315,18 +314,6 @@ static void encode_copy(struct xdr_stream *xdr,
 	}
 	encode_uint32(xdr, 1); /* supporting 1 server */
 	encode_nl4_server(xdr, args->cp_src);
-}
-
-static void encode_copy_commit(struct xdr_stream *xdr,
-			  const struct nfs42_copy_args *args,
-			  struct compound_hdr *hdr)
-{
-	__be32 *p;
-
-	encode_op_hdr(xdr, OP_COMMIT, decode_commit_maxsz, hdr);
-	p = reserve_space(xdr, 12);
-	p = xdr_encode_hyper(p, args->dst_pos);
-	*p = cpu_to_be32(args->count);
 }
 
 static void encode_offload_cancel(struct xdr_stream *xdr,
@@ -464,6 +451,20 @@ static void encode_setxattr(struct xdr_stream *xdr,
 		xdr_write_pages(xdr, arg->xattr_pages, 0, arg->xattr_len);
 }
 
+static int decode_setxattr(struct xdr_stream *xdr,
+			   struct nfs4_change_info *cinfo)
+{
+	int status;
+
+	status = decode_op_hdr(xdr, OP_SETXATTR);
+	if (status)
+		goto out;
+	status = decode_change_info(xdr, cinfo);
+out:
+	return status;
+}
+
+
 static void encode_getxattr(struct xdr_stream *xdr, const char *name,
 			    struct compound_hdr *hdr)
 {
@@ -471,11 +472,57 @@ static void encode_getxattr(struct xdr_stream *xdr, const char *name,
 	encode_string(xdr, strlen(name), name);
 }
 
+static int decode_getxattr(struct xdr_stream *xdr,
+			   struct nfs42_getxattrres *res,
+			   struct rpc_rqst *req)
+{
+	int status;
+	__be32 *p;
+	u32 len, rdlen;
+
+	status = decode_op_hdr(xdr, OP_GETXATTR);
+	if (status)
+		return status;
+
+	p = xdr_inline_decode(xdr, 4);
+	if (unlikely(!p))
+		return -EIO;
+
+	len = be32_to_cpup(p);
+	if (len > req->rq_rcv_buf.page_len)
+		return -ERANGE;
+
+	res->xattr_len = len;
+
+	if (len > 0) {
+		rdlen = xdr_read_pages(xdr, len);
+		if (rdlen < len)
+			return -EIO;
+	}
+
+	return 0;
+}
+
 static void encode_removexattr(struct xdr_stream *xdr, const char *name,
 			       struct compound_hdr *hdr)
 {
 	encode_op_hdr(xdr, OP_REMOVEXATTR, decode_removexattr_maxsz, hdr);
 	encode_string(xdr, strlen(name), name);
+}
+
+
+static int decode_removexattr(struct xdr_stream *xdr,
+			   struct nfs4_change_info *cinfo)
+{
+	int status;
+
+	status = decode_op_hdr(xdr, OP_REMOVEXATTR);
+	if (status)
+		goto out;
+
+	status = decode_change_info(xdr, cinfo);
+out:
+	return status;
 }
 
 static void encode_listxattrs(struct xdr_stream *xdr,
@@ -499,6 +546,96 @@ static void encode_listxattrs(struct xdr_stream *xdr,
 	*p = cpu_to_be32(arg->count + 8 + 4);
 }
 
+static int decode_listxattrs(struct xdr_stream *xdr,
+			    struct nfs42_listxattrsres *res)
+{
+	int status;
+	__be32 *p;
+	u32 count, len, ulen;
+	size_t left, copied;
+	char *buf;
+
+	status = decode_op_hdr(xdr, OP_LISTXATTRS);
+	if (status) {
+		/*
+		 * Special case: for LISTXATTRS, NFS4ERR_TOOSMALL
+		 * should be translated to ERANGE.
+		 */
+		if (status == -ETOOSMALL)
+			status = -ERANGE;
+		goto out;
+	}
+
+	p = xdr_inline_decode(xdr, 8);
+	if (unlikely(!p))
+		return -EIO;
+
+	xdr_decode_hyper(p, &res->cookie);
+
+	p = xdr_inline_decode(xdr, 4);
+	if (unlikely(!p))
+		return -EIO;
+
+	left = res->xattr_len;
+	buf = res->xattr_buf;
+
+	count = be32_to_cpup(p);
+	copied = 0;
+
+	/*
+	 * We have asked for enough room to encode the maximum number
+	 * of possible attribute names, so everything should fit.
+	 *
+	 * But, don't rely on that assumption. Just decode entries
+	 * until they don't fit anymore, just in case the server did
+	 * something odd.
+	 */
+	while (count--) {
+		p = xdr_inline_decode(xdr, 4);
+		if (unlikely(!p))
+			return -EIO;
+
+		len = be32_to_cpup(p);
+		if (len > (XATTR_NAME_MAX - XATTR_USER_PREFIX_LEN)) {
+			status = -ERANGE;
+			goto out;
+		}
+
+		p = xdr_inline_decode(xdr, len);
+		if (unlikely(!p))
+			return -EIO;
+
+		ulen = len + XATTR_USER_PREFIX_LEN + 1;
+		if (buf) {
+			if (ulen > left) {
+				status = -ERANGE;
+				goto out;
+			}
+
+			memcpy(buf, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN);
+			memcpy(buf + XATTR_USER_PREFIX_LEN, p, len);
+
+			buf[ulen - 1] = 0;
+			buf += ulen;
+			left -= ulen;
+		}
+		copied += ulen;
+	}
+
+	p = xdr_inline_decode(xdr, 4);
+	if (unlikely(!p))
+		return -EIO;
+
+	res->eof = be32_to_cpup(p);
+	res->copied = copied;
+
+out:
+	if (status == -ERANGE && res->xattr_len == XATTR_LIST_MAX)
+		status = -E2BIG;
+
+	return status;
+}
+
 /*
  * Encode ALLOCATE request
  */
@@ -517,6 +654,18 @@ static void nfs4_xdr_enc_allocate(struct rpc_rqst *req,
 	encode_allocate(xdr, args, &hdr);
 	encode_getfattr(xdr, args->falloc_bitmask, &hdr);
 	encode_nops(&hdr);
+}
+
+static void encode_copy_commit(struct xdr_stream *xdr,
+			  const struct nfs42_copy_args *args,
+			  struct compound_hdr *hdr)
+{
+	__be32 *p;
+
+	encode_op_hdr(xdr, OP_COMMIT, decode_commit_maxsz, hdr);
+	p = reserve_space(xdr, 12);
+	p = xdr_encode_hyper(p, args->dst_pos);
+	*p = cpu_to_be32(args->count);
 }
 
 /*
@@ -707,90 +856,6 @@ static void nfs4_xdr_enc_layouterror(struct rpc_rqst *req,
 	encode_nops(&hdr);
 }
 
-/*
- * Encode SETXATTR request
- */
-static void nfs4_xdr_enc_setxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
-				  const void *data)
-{
-	const struct nfs42_setxattrargs *args = data;
-	struct compound_hdr hdr = {
-		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
-	};
-
-	encode_compound_hdr(xdr, req, &hdr);
-	encode_sequence(xdr, &args->seq_args, &hdr);
-	encode_putfh(xdr, args->fh, &hdr);
-	encode_setxattr(xdr, args, &hdr);
-	encode_getfattr(xdr, args->bitmask, &hdr);
-	encode_nops(&hdr);
-}
-
-/*
- * Encode GETXATTR request
- */
-static void nfs4_xdr_enc_getxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
-				  const void *data)
-{
-	const struct nfs42_getxattrargs *args = data;
-	struct compound_hdr hdr = {
-		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
-	};
-	uint32_t replen;
-
-	encode_compound_hdr(xdr, req, &hdr);
-	encode_sequence(xdr, &args->seq_args, &hdr);
-	encode_putfh(xdr, args->fh, &hdr);
-	replen = hdr.replen + op_decode_hdr_maxsz + 1;
-	encode_getxattr(xdr, args->xattr_name, &hdr);
-
-	rpc_prepare_reply_pages(req, args->xattr_pages, 0, args->xattr_len,
-				replen);
-
-	encode_nops(&hdr);
-}
-
-/*
- * Encode LISTXATTR request
- */
-static void nfs4_xdr_enc_listxattrs(struct rpc_rqst *req,
-				    struct xdr_stream *xdr, const void *data)
-{
-	const struct nfs42_listxattrsargs *args = data;
-	struct compound_hdr hdr = {
-		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
-	};
-	uint32_t replen;
-
-	encode_compound_hdr(xdr, req, &hdr);
-	encode_sequence(xdr, &args->seq_args, &hdr);
-	encode_putfh(xdr, args->fh, &hdr);
-	replen = hdr.replen + op_decode_hdr_maxsz + 2 + 1;
-	encode_listxattrs(xdr, args, &hdr);
-
-	rpc_prepare_reply_pages(req, args->xattr_pages, 0, args->count, replen);
-
-	encode_nops(&hdr);
-}
-
-/*
- * Encode REMOVEXATTR request
- */
-static void nfs4_xdr_enc_removexattr(struct rpc_rqst *req,
-				     struct xdr_stream *xdr, const void *data)
-{
-	const struct nfs42_removexattrargs *args = data;
-	struct compound_hdr hdr = {
-		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
-	};
-
-	encode_compound_hdr(xdr, req, &hdr);
-	encode_sequence(xdr, &args->seq_args, &hdr);
-	encode_putfh(xdr, args->fh, &hdr);
-	encode_removexattr(xdr, args->xattr_name, &hdr);
-	encode_nops(&hdr);
-}
-
 static int decode_allocate(struct xdr_stream *xdr, struct nfs42_falloc_res *res)
 {
 	return decode_op_hdr(xdr, OP_ALLOCATE);
@@ -954,93 +1019,50 @@ static int decode_deallocate(struct xdr_stream *xdr, struct nfs42_falloc_res *re
 	return decode_op_hdr(xdr, OP_DEALLOCATE);
 }
 
-struct read_plus_segment {
-	enum data_content4 type;
+static int decode_read_plus_data(struct xdr_stream *xdr,
+				 struct nfs_pgio_res *res)
+{
+	uint32_t count, recvd;
 	uint64_t offset;
-	union {
-		struct {
-			uint64_t length;
-		} hole;
-
-		struct {
-			uint32_t length;
-			unsigned int from;
-		} data;
-	};
-};
-
-static inline uint64_t read_plus_segment_length(struct read_plus_segment *seg)
-{
-	return seg->type == NFS4_CONTENT_DATA ? seg->data.length : seg->hole.length;
-}
-
-static int decode_read_plus_segment(struct xdr_stream *xdr,
-				    struct read_plus_segment *seg)
-{
 	__be32 *p;
 
-	p = xdr_inline_decode(xdr, 4);
+	p = xdr_inline_decode(xdr, 8 + 4);
 	if (!p)
-		return -EIO;
-	seg->type = be32_to_cpup(p++);
+		return 1;
 
-	p = xdr_inline_decode(xdr, seg->type == NFS4_CONTENT_DATA ? 12 : 16);
-	if (!p)
-		return -EIO;
-	p = xdr_decode_hyper(p, &seg->offset);
+	p = xdr_decode_hyper(p, &offset);
+	count = be32_to_cpup(p);
+	recvd = xdr_align_data(xdr, res->count, count);
+	res->count += recvd;
 
-	if (seg->type == NFS4_CONTENT_DATA) {
-		struct xdr_buf buf;
-		uint32_t len = be32_to_cpup(p);
-
-		seg->data.length = len;
-		seg->data.from = xdr_stream_pos(xdr);
-
-		if (!xdr_stream_subsegment(xdr, &buf, xdr_align_size(len)))
-			return -EIO;
-	} else if (seg->type == NFS4_CONTENT_HOLE) {
-		xdr_decode_hyper(p, &seg->hole.length);
-	} else
-		return -EINVAL;
+	if (count > recvd)
+		return 1;
 	return 0;
 }
 
-static int process_read_plus_segment(struct xdr_stream *xdr,
-				     struct nfs_pgio_args *args,
-				     struct nfs_pgio_res *res,
-				     struct read_plus_segment *seg)
+static int decode_read_plus_hole(struct xdr_stream *xdr, struct nfs_pgio_res *res,
+				 uint32_t *eof)
 {
-	unsigned long offset = seg->offset;
-	unsigned long length = read_plus_segment_length(seg);
-	unsigned int bufpos;
+	uint64_t offset, length, recvd;
+	__be32 *p;
 
-	if (offset + length < args->offset)
-		return 0;
-	else if (offset > args->offset + args->count) {
-		res->eof = 0;
-		return 0;
-	} else if (offset < args->offset) {
-		length -= (args->offset - offset);
-		offset = args->offset;
-	} else if (offset + length > args->offset + args->count) {
-		length = (args->offset + args->count) - offset;
-		res->eof = 0;
-	}
+	p = xdr_inline_decode(xdr, 8 + 8);
+	if (!p)
+		return 1;
 
-	bufpos = xdr->buf->head[0].iov_len + (offset - args->offset);
-	if (seg->type == NFS4_CONTENT_HOLE)
-		return xdr_stream_zero(xdr, bufpos, length);
-	else
-		return xdr_stream_move_subsegment(xdr, seg->data.from, bufpos, length);
+	p = xdr_decode_hyper(p, &offset);
+	p = xdr_decode_hyper(p, &length);
+	recvd = xdr_expand_hole(xdr, res->count, length);
+	res->count += recvd;
+
+	if (recvd < length)
+		return 1;
+	return 0;
 }
 
 static int decode_read_plus(struct xdr_stream *xdr, struct nfs_pgio_res *res)
 {
-	struct nfs_pgio_header *hdr =
-		container_of(res, struct nfs_pgio_header, res);
-	struct nfs_pgio_args *args = &hdr->args;
-	uint32_t segments;
-	struct read_plus_segment *segs;
+	uint32_t eof, segments, type;
 	int status, i;
 	__be32 *p;
 
@@ -1052,31 +1074,38 @@ static int decode_read_plus(struct xdr_stream *xdr, struct nfs_pgio_res *res)
 	if (unlikely(!p))
 		return -EIO;
 
-	res->count = 0;
-	res->eof = be32_to_cpup(p++);
+	eof = be32_to_cpup(p++);
 	segments = be32_to_cpup(p++);
 	if (segments == 0)
-		return status;
+		goto out;
 
-	segs = kmalloc_array(segments, sizeof(*segs), GFP_KERNEL);
-	if (!segs)
-		return -ENOMEM;
-
-	status = -EIO;
 	for (i = 0; i < segments; i++) {
-		status = decode_read_plus_segment(xdr, &segs[i]);
+		p = xdr_inline_decode(xdr, 4);
+		if (!p)
+			goto early_out;
+
+		type = be32_to_cpup(p++);
+		if (type == NFS4_CONTENT_DATA)
+			status = decode_read_plus_data(xdr, res);
+		else if (type == NFS4_CONTENT_HOLE)
+			status = decode_read_plus_hole(xdr, res, &eof);
+		else
+			return -EINVAL;
+
 		if (status < 0)
-			goto out;
+			return status;
+		if (status > 0)
+			goto early_out;
 	}
 
-	xdr_set_pagelen(xdr, xdr_align_size(args->count));
-	for (i = segments; i > 0; i--)
-		res->count += process_read_plus_segment(xdr, args, res, &segs[i-1]);
-	status = 0;
-
 out:
-	kfree(segs);
-	return status;
+	res->eof = eof;
+	return 0;
+early_out:
+	if (unlikely(!i))
+		return -EIO;
+	res->eof = 0;
+	return 0;
 }
 
 static int decode_seek(struct xdr_stream *xdr, struct nfs42_seek_res *res)
@@ -1110,168 +1139,6 @@ static int decode_clone(struct xdr_stream *xdr)
 static int decode_layouterror(struct xdr_stream *xdr)
 {
 	return decode_op_hdr(xdr, OP_LAYOUTERROR);
-}
-
-static int decode_setxattr(struct xdr_stream *xdr,
-			   struct nfs4_change_info *cinfo)
-{
-	int status;
-
-	status = decode_op_hdr(xdr, OP_SETXATTR);
-	if (status)
-		goto out;
-	status = decode_change_info(xdr, cinfo);
-out:
-	return status;
-}
-
-static int decode_getxattr(struct xdr_stream *xdr,
-			   struct nfs42_getxattrres *res,
-			   struct rpc_rqst *req)
-{
-	int status;
-	__be32 *p;
-	u32 len, rdlen;
-
-	status = decode_op_hdr(xdr, OP_GETXATTR);
-	if (status)
-		return status;
-
-	p = xdr_inline_decode(xdr, 4);
-	if (unlikely(!p))
-		return -EIO;
-
-	len = be32_to_cpup(p);
-
-	/*
-	 * Only check against the page length here. The actual
-	 * requested length may be smaller, but that is only
-	 * checked against after possibly caching a valid reply.
-	 */
-	if (len > req->rq_rcv_buf.page_len)
-		return -ERANGE;
-
-	res->xattr_len = len;
-
-	if (len > 0) {
-		rdlen = xdr_read_pages(xdr, len);
-		if (rdlen < len)
-			return -EIO;
-	}
-
-	return 0;
-}
-
-static int decode_removexattr(struct xdr_stream *xdr,
-			   struct nfs4_change_info *cinfo)
-{
-	int status;
-
-	status = decode_op_hdr(xdr, OP_REMOVEXATTR);
-	if (status)
-		goto out;
-
-	status = decode_change_info(xdr, cinfo);
-out:
-	return status;
-}
-
-static int decode_listxattrs(struct xdr_stream *xdr,
-			    struct nfs42_listxattrsres *res)
-{
-	int status;
-	__be32 *p;
-	u32 count, len, ulen;
-	size_t left, copied;
-	char *buf;
-
-	status = decode_op_hdr(xdr, OP_LISTXATTRS);
-	if (status) {
-		/*
-		 * Special case: for LISTXATTRS, NFS4ERR_TOOSMALL
-		 * should be translated to ERANGE.
-		 */
-		if (status == -ETOOSMALL)
-			status = -ERANGE;
-		/*
-		 * Special case: for LISTXATTRS, NFS4ERR_NOXATTR
-		 * should be translated to success with zero-length reply.
-		 */
-		if (status == -ENODATA) {
-			res->eof = true;
-			status = 0;
-		}
-		goto out;
-	}
-
-	p = xdr_inline_decode(xdr, 8);
-	if (unlikely(!p))
-		return -EIO;
-
-	xdr_decode_hyper(p, &res->cookie);
-
-	p = xdr_inline_decode(xdr, 4);
-	if (unlikely(!p))
-		return -EIO;
-
-	left = res->xattr_len;
-	buf = res->xattr_buf;
-
-	count = be32_to_cpup(p);
-	copied = 0;
-
-	/*
-	 * We have asked for enough room to encode the maximum number
-	 * of possible attribute names, so everything should fit.
-	 *
-	 * But, don't rely on that assumption. Just decode entries
-	 * until they don't fit anymore, just in case the server did
-	 * something odd.
-	 */
-	while (count--) {
-		p = xdr_inline_decode(xdr, 4);
-		if (unlikely(!p))
-			return -EIO;
-
-		len = be32_to_cpup(p);
-		if (len > (XATTR_NAME_MAX - XATTR_USER_PREFIX_LEN)) {
-			status = -ERANGE;
-			goto out;
-		}
-
-		p = xdr_inline_decode(xdr, len);
-		if (unlikely(!p))
-			return -EIO;
-
-		ulen = len + XATTR_USER_PREFIX_LEN + 1;
-		if (buf) {
-			if (ulen > left) {
-				status = -ERANGE;
-				goto out;
-			}
-
-			memcpy(buf, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN);
-			memcpy(buf + XATTR_USER_PREFIX_LEN, p, len);
-
-			buf[ulen - 1] = 0;
-			buf += ulen;
-			left -= ulen;
-		}
-		copied += ulen;
-	}
-
-	p = xdr_inline_decode(xdr, 4);
-	if (unlikely(!p))
-		return -EIO;
-
-	res->eof = be32_to_cpup(p);
-	res->copied = copied;
-
-out:
-	if (status == -ERANGE && res->xattr_len == XATTR_LIST_MAX)
-		status = -E2BIG;
-
-	return status;
 }
 
 /*
@@ -1428,8 +1295,6 @@ static int nfs4_xdr_dec_read_plus(struct rpc_rqst *rqstp,
 	struct compound_hdr hdr;
 	int status;
 
-	xdr_set_scratch_buffer(xdr, res->scratch, sizeof(res->scratch));
-
 	status = decode_compound_hdr(xdr, &hdr);
 	if (status)
 		goto out;
@@ -1563,9 +1428,22 @@ out:
 	return status;
 }
 
-/*
- * Decode SETXATTR request
- */
+#ifdef CONFIG_NFS_V4_2
+static void nfs4_xdr_enc_setxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
+				  const void *data)
+{
+	const struct nfs42_setxattrargs *args = data;
+	struct compound_hdr hdr = {
+		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
+	};
+
+	encode_compound_hdr(xdr, req, &hdr);
+	encode_sequence(xdr, &args->seq_args, &hdr);
+	encode_putfh(xdr, args->fh, &hdr);
+	encode_setxattr(xdr, args, &hdr);
+	encode_nops(&hdr);
+}
+
 static int nfs4_xdr_dec_setxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
 				 void *data)
 {
@@ -1582,17 +1460,35 @@ static int nfs4_xdr_dec_setxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
 	status = decode_putfh(xdr);
 	if (status)
 		goto out;
+
 	status = decode_setxattr(xdr, &res->cinfo);
-	if (status)
-		goto out;
-	status = decode_getfattr(xdr, res->fattr, res->server);
 out:
 	return status;
 }
 
-/*
- * Decode GETXATTR request
- */
+static void nfs4_xdr_enc_getxattr(struct rpc_rqst *req, struct xdr_stream *xdr,
+				  const void *data)
+{
+	const struct nfs42_getxattrargs *args = data;
+	struct compound_hdr hdr = {
+		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
+	};
+	size_t plen;
+
+	encode_compound_hdr(xdr, req, &hdr);
+	encode_sequence(xdr, &args->seq_args, &hdr);
+	encode_putfh(xdr, args->fh, &hdr);
+	encode_getxattr(xdr, args->xattr_name, &hdr);
+
+	plen = args->xattr_len ? args->xattr_len : XATTR_SIZE_MAX;
+
+	rpc_prepare_reply_pages(req, args->xattr_pages, 0, plen,
+	    hdr.replen);
+	req->rq_rcv_buf.flags |= XDRBUF_SPARSE_PAGES;
+
+	encode_nops(&hdr);
+}
+
 static int nfs4_xdr_dec_getxattr(struct rpc_rqst *rqstp,
 				 struct xdr_stream *xdr, void *data)
 {
@@ -1614,9 +1510,25 @@ out:
 	return status;
 }
 
-/*
- * Decode LISTXATTR request
- */
+static void nfs4_xdr_enc_listxattrs(struct rpc_rqst *req,
+				    struct xdr_stream *xdr, const void *data)
+{
+	const struct nfs42_listxattrsargs *args = data;
+	struct compound_hdr hdr = {
+		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
+	};
+
+	encode_compound_hdr(xdr, req, &hdr);
+	encode_sequence(xdr, &args->seq_args, &hdr);
+	encode_putfh(xdr, args->fh, &hdr);
+	encode_listxattrs(xdr, args, &hdr);
+
+	rpc_prepare_reply_pages(req, args->xattr_pages, 0, args->count,
+	    hdr.replen);
+
+	encode_nops(&hdr);
+}
+
 static int nfs4_xdr_dec_listxattrs(struct rpc_rqst *rqstp,
 				   struct xdr_stream *xdr, void *data)
 {
@@ -1624,7 +1536,7 @@ static int nfs4_xdr_dec_listxattrs(struct rpc_rqst *rqstp,
 	struct compound_hdr hdr;
 	int status;
 
-	xdr_set_scratch_page(xdr, res->scratch);
+	xdr_set_scratch_buffer(xdr, page_address(res->scratch), PAGE_SIZE);
 
 	status = decode_compound_hdr(xdr, &hdr);
 	if (status)
@@ -1640,9 +1552,21 @@ out:
 	return status;
 }
 
-/*
- * Decode REMOVEXATTR request
- */
+static void nfs4_xdr_enc_removexattr(struct rpc_rqst *req,
+				     struct xdr_stream *xdr, const void *data)
+{
+	const struct nfs42_removexattrargs *args = data;
+	struct compound_hdr hdr = {
+		.minorversion = nfs4_xdr_minorversion(&args->seq_args),
+	};
+
+	encode_compound_hdr(xdr, req, &hdr);
+	encode_sequence(xdr, &args->seq_args, &hdr);
+	encode_putfh(xdr, args->fh, &hdr);
+	encode_removexattr(xdr, args->xattr_name, &hdr);
+	encode_nops(&hdr);
+}
+
 static int nfs4_xdr_dec_removexattr(struct rpc_rqst *req,
 				    struct xdr_stream *xdr, void *data)
 {
@@ -1664,4 +1588,5 @@ static int nfs4_xdr_dec_removexattr(struct rpc_rqst *req,
 out:
 	return status;
 }
+#endif
 #endif /* __LINUX_FS_NFS_NFS4_2XDR_H */

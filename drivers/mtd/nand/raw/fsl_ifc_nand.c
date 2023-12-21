@@ -15,6 +15,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
+#include <linux/mtd/nand_ecc.h>
 #include <linux/fsl_ifc.h>
 #include <linux/iopoll.h>
 
@@ -1094,7 +1095,7 @@ err:
 	return ret;
 }
 
-static void fsl_ifc_nand_remove(struct platform_device *dev)
+static int fsl_ifc_nand_remove(struct platform_device *dev)
 {
 	struct fsl_ifc_mtd *priv = dev_get_drvdata(&dev->dev);
 	struct nand_chip *chip = &priv->chip;
@@ -1113,6 +1114,8 @@ static void fsl_ifc_nand_remove(struct platform_device *dev)
 		kfree(ifc_nand_ctrl);
 	}
 	mutex_unlock(&fsl_ifc_nand_mutex);
+
+	return 0;
 }
 
 static const struct of_device_id fsl_ifc_nand_match[] = {
@@ -1129,7 +1132,7 @@ static struct platform_driver fsl_ifc_nand_driver = {
 		.of_match_table = fsl_ifc_nand_match,
 	},
 	.probe       = fsl_ifc_nand_probe,
-	.remove_new  = fsl_ifc_nand_remove,
+	.remove      = fsl_ifc_nand_remove,
 };
 
 module_platform_driver(fsl_ifc_nand_driver);

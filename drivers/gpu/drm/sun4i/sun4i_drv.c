@@ -7,19 +7,17 @@
  */
 
 #include <linux/component.h>
-#include <linux/dma-mapping.h>
 #include <linux/kfifo.h>
 #include <linux/module.h>
 #include <linux/of_graph.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 
-#include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
-#include <drm/drm_gem_dma_helper.h>
-#include <drm/drm_module.h>
+#include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
@@ -37,12 +35,12 @@ static int drm_sun4i_gem_dumb_create(struct drm_file *file_priv,
 	/* The hardware only allows even pitches for YUV buffers. */
 	args->pitch = ALIGN(DIV_ROUND_UP(args->width * args->bpp, 8), 2);
 
-	return drm_gem_dma_dumb_create_internal(file_priv, drm, args);
+	return drm_gem_cma_dumb_create_internal(file_priv, drm, args);
 }
 
-DEFINE_DRM_GEM_DMA_FOPS(sun4i_drv_fops);
+DEFINE_DRM_GEM_CMA_FOPS(sun4i_drv_fops);
 
-static const struct drm_driver sun4i_drv_driver = {
+static struct drm_driver sun4i_drv_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 
 	/* Generic Operations */
@@ -54,7 +52,7 @@ static const struct drm_driver sun4i_drv_driver = {
 	.minor			= 0,
 
 	/* GEM Operations */
-	DRM_GEM_DMA_DRIVER_OPS_WITH_DUMB_CREATE(drm_sun4i_gem_dumb_create),
+	DRM_GEM_CMA_DRIVER_OPS_VMAP_WITH_DUMB_CREATE(drm_sun4i_gem_dumb_create),
 };
 
 static int sun4i_drv_bind(struct device *dev)
@@ -95,12 +93,12 @@ static int sun4i_drv_bind(struct device *dev)
 	/* drm_vblank_init calls kcalloc, which can fail */
 	ret = drm_vblank_init(drm, drm->mode_config.num_crtc);
 	if (ret)
-		goto unbind_all;
+		goto cleanup_mode_config;
+
+	drm->irq_enabled = true;
 
 	/* Remove early framebuffers (ie. simplefb) */
-	ret = drm_aperture_remove_framebuffers(&sun4i_drv_driver);
-	if (ret)
-		goto unbind_all;
+	drm_fb_helper_remove_conflicting_framebuffers(NULL, "sun4i-drm-fb", false);
 
 	sun4i_framebuffer_init(drm);
 
@@ -111,7 +109,7 @@ static int sun4i_drv_bind(struct device *dev)
 	if (ret)
 		goto finish_poll;
 
-	drm_fbdev_dma_setup(drm, 32);
+	drm_fbdev_generic_setup(drm, 32);
 
 	dev_set_drvdata(dev, drm);
 
@@ -119,8 +117,6 @@ static int sun4i_drv_bind(struct device *dev)
 
 finish_poll:
 	drm_kms_helper_poll_fini(drm);
-unbind_all:
-	component_unbind_all(dev, NULL);
 cleanup_mode_config:
 	drm_mode_config_cleanup(drm);
 	of_reserved_mem_device_release(dev);
@@ -204,6 +200,15 @@ static bool sun4i_drv_node_is_tcon_top(struct device_node *node)
 {
 	return IS_ENABLED(CONFIG_DRM_SUN8I_TCON_TOP) &&
 		!!of_match_node(sun8i_tcon_top_of_table, node);
+}
+
+static int compare_of(struct device *dev, void *data)
+{
+	DRM_DEBUG_DRIVER("Comparing of node %pOF with %pOF\n",
+			 dev->of_node,
+			 data);
+
+	return dev->of_node == data;
 }
 
 /*
@@ -325,7 +330,7 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 	     of_device_is_available(node))) {
 		/* Add current component */
 		DRM_DEBUG_DRIVER("Adding component %pOF\n", node);
-		drm_of_component_match_add(dev, match, component_compare_of, node);
+		drm_of_component_match_add(dev, match, compare_of, node);
 		count++;
 	}
 
@@ -371,13 +376,6 @@ static int sun4i_drv_probe(struct platform_device *pdev)
 
 	INIT_KFIFO(list.fifo);
 
-	/*
-	 * DE2 and DE3 cores actually supports 40-bit addresses, but
-	 * driver does not.
-	 */
-	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
-
 	for (i = 0;; i++) {
 		struct device_node *pipeline = of_parse_phandle(np,
 								"allwinner,pipelines",
@@ -408,14 +406,11 @@ static int sun4i_drv_probe(struct platform_device *pdev)
 		return 0;
 }
 
-static void sun4i_drv_remove(struct platform_device *pdev)
+static int sun4i_drv_remove(struct platform_device *pdev)
 {
 	component_master_del(&pdev->dev, &sun4i_drv_master_ops);
-}
 
-static void sun4i_drv_shutdown(struct platform_device *pdev)
-{
-	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
+	return 0;
 }
 
 static const struct of_device_id sun4i_drv_of_table[] = {
@@ -432,7 +427,6 @@ static const struct of_device_id sun4i_drv_of_table[] = {
 	{ .compatible = "allwinner,sun8i-r40-display-engine" },
 	{ .compatible = "allwinner,sun8i-v3s-display-engine" },
 	{ .compatible = "allwinner,sun9i-a80-display-engine" },
-	{ .compatible = "allwinner,sun20i-d1-display-engine" },
 	{ .compatible = "allwinner,sun50i-a64-display-engine" },
 	{ .compatible = "allwinner,sun50i-h6-display-engine" },
 	{ }
@@ -441,15 +435,14 @@ MODULE_DEVICE_TABLE(of, sun4i_drv_of_table);
 
 static struct platform_driver sun4i_drv_platform_driver = {
 	.probe		= sun4i_drv_probe,
-	.remove_new	= sun4i_drv_remove,
-	.shutdown	= sun4i_drv_shutdown,
+	.remove		= sun4i_drv_remove,
 	.driver		= {
 		.name		= "sun4i-drm",
 		.of_match_table	= sun4i_drv_of_table,
 		.pm = &sun4i_drv_drm_pm_ops,
 	},
 };
-drm_module_platform_driver(sun4i_drv_platform_driver);
+module_platform_driver(sun4i_drv_platform_driver);
 
 MODULE_AUTHOR("Boris Brezillon <boris.brezillon@free-electrons.com>");
 MODULE_AUTHOR("Maxime Ripard <maxime.ripard@free-electrons.com>");

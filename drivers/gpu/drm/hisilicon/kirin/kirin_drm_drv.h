@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016 Linaro Limited.
- * Copyright (c) 2014-2016 HiSilicon Limited.
+ * Copyright (c) 2014-2016 Hisilicon Limited.
  */
 
 #ifndef __KIRIN_DRM_DRV_H__
@@ -40,7 +40,7 @@ struct kirin_drm_data {
 	u32 num_planes;
 	u32 prim_plane;
 
-	const struct drm_driver *driver;
+	struct drm_driver *driver;
 	const struct drm_crtc_helper_funcs *crtc_helper_funcs;
 	const struct drm_crtc_funcs *crtc_funcs;
 	const struct drm_plane_helper_funcs *plane_helper_funcs;
@@ -52,6 +52,11 @@ struct kirin_drm_data {
 	void (*cleanup_hw_ctx)(void *hw_ctx);
 };
 
+#ifdef CONFIG_DRM_HISI_KIRIN620
 extern struct kirin_drm_data ade_driver_data;
+#endif
+#ifdef CONFIG_DRM_HISI_KIRIN960
+extern const struct kirin_drm_data dpe_driver_data;
+#endif
 
 #endif /* __KIRIN_DRM_DRV_H__ */

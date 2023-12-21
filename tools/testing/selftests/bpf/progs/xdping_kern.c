@@ -86,9 +86,10 @@ static __always_inline int icmp_check(struct xdp_md *ctx, int type)
 	return XDP_TX;
 }
 
-SEC("xdp")
+SEC("xdpclient")
 int xdping_client(struct xdp_md *ctx)
 {
+	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct pinginfo *pinginfo = NULL;
 	struct ethhdr *eth = data;
@@ -149,9 +150,10 @@ int xdping_client(struct xdp_md *ctx)
 	return XDP_TX;
 }
 
-SEC("xdp")
+SEC("xdpserver")
 int xdping_server(struct xdp_md *ctx)
 {
+	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *eth = data;
 	struct icmphdr *icmph;

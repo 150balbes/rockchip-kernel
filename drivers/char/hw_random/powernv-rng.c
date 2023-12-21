@@ -11,7 +11,6 @@
 #include <linux/platform_device.h>
 #include <linux/random.h>
 #include <linux/hw_random.h>
-#include <asm/archrandom.h>
 
 static int powernv_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 {
@@ -24,7 +23,7 @@ static int powernv_rng_read(struct hwrng *rng, void *data, size_t max, bool wait
 	buf = (unsigned long *)data;
 
 	for (i = 0; i < len; i++)
-		pnv_get_random_long(buf++);
+		powernv_get_random_long(buf++);
 
 	return len * sizeof(unsigned long);
 }

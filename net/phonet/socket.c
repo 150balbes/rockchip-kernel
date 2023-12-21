@@ -379,7 +379,8 @@ static int pn_socket_ioctl(struct socket *sock, unsigned int cmd,
 			saddr = PN_NO_ADDR;
 		release_sock(sk);
 
-		dev_put(dev);
+		if (dev)
+			dev_put(dev);
 		if (saddr == PN_NO_ADDR)
 			return -EHOSTUNREACH;
 
@@ -387,7 +388,7 @@ static int pn_socket_ioctl(struct socket *sock, unsigned int cmd,
 		return put_user(handle, (__u16 __user *)arg);
 	}
 
-	return sk_ioctl(sk, cmd, (void __user *)arg);
+	return sk->sk_prot->ioctl(sk, cmd, arg);
 }
 
 static int pn_socket_listen(struct socket *sock, int backlog)
@@ -441,6 +442,7 @@ const struct proto_ops phonet_dgram_ops = {
 	.sendmsg	= pn_socket_sendmsg,
 	.recvmsg	= sock_common_recvmsg,
 	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage,
 };
 
 const struct proto_ops phonet_stream_ops = {
@@ -461,6 +463,7 @@ const struct proto_ops phonet_stream_ops = {
 	.sendmsg	= pn_socket_sendmsg,
 	.recvmsg	= sock_common_recvmsg,
 	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage,
 };
 EXPORT_SYMBOL(phonet_stream_ops);
 

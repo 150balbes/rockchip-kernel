@@ -74,7 +74,7 @@ void str_printf(struct gstr *gs, const char *fmt, ...)
 }
 
 /* Retrieve value of growable string */
-char *str_get(struct gstr *gs)
+const char *str_get(struct gstr *gs)
 {
 	return gs->s;
 }

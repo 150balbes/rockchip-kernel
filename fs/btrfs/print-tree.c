@@ -3,12 +3,9 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
-#include "messages.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "print-tree.h"
-#include "accessors.h"
-#include "tree-checker.h"
 
 struct root_name_map {
 	u64 id;
@@ -26,7 +23,6 @@ static const struct root_name_map root_map[] = {
 	{ BTRFS_QUOTA_TREE_OBJECTID,		"QUOTA_TREE"		},
 	{ BTRFS_UUID_TREE_OBJECTID,		"UUID_TREE"		},
 	{ BTRFS_FREE_SPACE_TREE_OBJECTID,	"FREE_SPACE_TREE"	},
-	{ BTRFS_BLOCK_GROUP_TREE_OBJECTID,	"BLOCK_GROUP_TREE"	},
 	{ BTRFS_DATA_RELOC_TREE_OBJECTID,	"DATA_RELOC_TREE"	},
 };
 
@@ -49,7 +45,7 @@ const char *btrfs_root_name(const struct btrfs_key *key, char *buf)
 	return buf;
 }
 
-static void print_chunk(const struct extent_buffer *eb, struct btrfs_chunk *chunk)
+static void print_chunk(struct extent_buffer *eb, struct btrfs_chunk *chunk)
 {
 	int num_stripes = btrfs_chunk_num_stripes(eb, chunk);
 	int i;
@@ -62,7 +58,7 @@ static void print_chunk(const struct extent_buffer *eb, struct btrfs_chunk *chun
 		      btrfs_stripe_offset_nr(eb, chunk, i));
 	}
 }
-static void print_dev_item(const struct extent_buffer *eb,
+static void print_dev_item(struct extent_buffer *eb,
 			   struct btrfs_dev_item *dev_item)
 {
 	pr_info("\t\tdev item devid %llu total_bytes %llu bytes used %llu\n",
@@ -70,7 +66,7 @@ static void print_dev_item(const struct extent_buffer *eb,
 	       btrfs_device_total_bytes(eb, dev_item),
 	       btrfs_device_bytes_used(eb, dev_item));
 }
-static void print_extent_data_ref(const struct extent_buffer *eb,
+static void print_extent_data_ref(struct extent_buffer *eb,
 				  struct btrfs_extent_data_ref *ref)
 {
 	pr_cont("extent data backref root %llu objectid %llu offset %llu count %u\n",
@@ -80,7 +76,7 @@ static void print_extent_data_ref(const struct extent_buffer *eb,
 	       btrfs_extent_data_ref_count(eb, ref));
 }
 
-static void print_extent_item(const struct extent_buffer *eb, int slot, int type)
+static void print_extent_item(struct extent_buffer *eb, int slot, int type)
 {
 	struct btrfs_extent_item *ei;
 	struct btrfs_extent_inline_ref *iref;
@@ -89,7 +85,7 @@ static void print_extent_item(const struct extent_buffer *eb, int slot, int type
 	struct btrfs_disk_key key;
 	unsigned long end;
 	unsigned long ptr;
-	u32 item_size = btrfs_item_size(eb, slot);
+	u32 item_size = btrfs_item_size_nr(eb, slot);
 	u64 flags;
 	u64 offset;
 	int ref_index = 0;
@@ -151,10 +147,10 @@ static void print_extent_item(const struct extent_buffer *eb, int slot, int type
 			pr_cont("shared data backref parent %llu count %u\n",
 			       offset, btrfs_shared_data_ref_count(eb, sref));
 			/*
-			 * Offset is supposed to be a tree block which must be
-			 * aligned to sectorsize.
+			 * offset is supposed to be a tree block which
+			 * must be aligned to nodesize.
 			 */
-			if (!IS_ALIGNED(offset, eb->fs_info->sectorsize))
+			if (!IS_ALIGNED(offset, eb->fs_info->nodesize))
 				pr_info(
 			"\t\t\t(parent %llu not aligned to sectorsize %u)\n",
 				     offset, eb->fs_info->sectorsize);
@@ -169,7 +165,7 @@ static void print_extent_item(const struct extent_buffer *eb, int slot, int type
 	WARN_ON(ptr > end);
 }
 
-static void print_uuid_item(const struct extent_buffer *l, unsigned long offset,
+static void print_uuid_item(struct extent_buffer *l, unsigned long offset,
 			    u32 item_size)
 {
 	if (!IS_ALIGNED(item_size, sizeof(u64))) {
@@ -181,7 +177,8 @@ static void print_uuid_item(const struct extent_buffer *l, unsigned long offset,
 		__le64 subvol_id;
 
 		read_extent_buffer(l, &subvol_id, offset, sizeof(subvol_id));
-		pr_info("\t\tsubvol_id %llu\n", le64_to_cpu(subvol_id));
+		pr_info("\t\tsubvol_id %llu\n",
+		       (unsigned long long)le64_to_cpu(subvol_id));
 		item_size -= sizeof(u64);
 		offset += sizeof(u64);
 	}
@@ -191,19 +188,27 @@ static void print_uuid_item(const struct extent_buffer *l, unsigned long offset,
  * Helper to output refs and locking status of extent buffer.  Useful to debug
  * race condition related problems.
  */
-static void print_eb_refs_lock(const struct extent_buffer *eb)
+static void print_eb_refs_lock(struct extent_buffer *eb)
 {
 #ifdef CONFIG_BTRFS_DEBUG
-	btrfs_info(eb->fs_info, "refs %u lock_owner %u current %u",
-		   atomic_read(&eb->refs), eb->lock_owner, current->pid);
+	btrfs_info(eb->fs_info,
+"refs %u lock (w:%d r:%d bw:%d br:%d sw:%d sr:%d) lock_owner %u current %u",
+		   atomic_read(&eb->refs), eb->write_locks,
+		   atomic_read(&eb->read_locks),
+		   eb->blocking_writers,
+		   atomic_read(&eb->blocking_readers),
+		   eb->spinning_writers,
+		   atomic_read(&eb->spinning_readers),
+		   eb->lock_owner, current->pid);
 #endif
 }
 
-void btrfs_print_leaf(const struct extent_buffer *l)
+void btrfs_print_leaf(struct extent_buffer *l)
 {
 	struct btrfs_fs_info *fs_info;
 	int i;
 	u32 type, nr;
+	struct btrfs_item *item;
 	struct btrfs_root_item *ri;
 	struct btrfs_dir_item *di;
 	struct btrfs_inode_item *ii;
@@ -227,11 +232,12 @@ void btrfs_print_leaf(const struct extent_buffer *l)
 		   btrfs_leaf_free_space(l), btrfs_header_owner(l));
 	print_eb_refs_lock(l);
 	for (i = 0 ; i < nr ; i++) {
+		item = btrfs_item_nr(i);
 		btrfs_item_key_to_cpu(l, &key, i);
 		type = key.type;
 		pr_info("\titem %d key (%llu %u %llu) itemoff %d itemsize %d\n",
 			i, key.objectid, type, key.offset,
-			btrfs_item_offset(l, i), btrfs_item_size(l, i));
+			btrfs_item_offset(l, item), btrfs_item_size(l, item));
 		switch (type) {
 		case BTRFS_INODE_ITEM_KEY:
 			ii = btrfs_item_ptr(l, i, struct btrfs_inode_item);
@@ -243,9 +249,9 @@ void btrfs_print_leaf(const struct extent_buffer *l)
 		case BTRFS_DIR_ITEM_KEY:
 			di = btrfs_item_ptr(l, i, struct btrfs_dir_item);
 			btrfs_dir_item_key_to_cpu(l, di, &found_key);
-			pr_info("\t\tdir oid %llu flags %u\n",
+			pr_info("\t\tdir oid %llu type %u\n",
 				found_key.objectid,
-				btrfs_dir_flags(l, di));
+				btrfs_dir_type(l, di));
 			break;
 		case BTRFS_ROOT_ITEM_KEY:
 			ri = btrfs_item_ptr(l, i, struct btrfs_root_item);
@@ -349,13 +355,13 @@ void btrfs_print_leaf(const struct extent_buffer *l)
 		case BTRFS_UUID_KEY_SUBVOL:
 		case BTRFS_UUID_KEY_RECEIVED_SUBVOL:
 			print_uuid_item(l, btrfs_item_ptr_offset(l, i),
-					btrfs_item_size(l, i));
+					btrfs_item_size_nr(l, i));
 			break;
 		}
 	}
 }
 
-void btrfs_print_tree(const struct extent_buffer *c, bool follow)
+void btrfs_print_tree(struct extent_buffer *c, bool follow)
 {
 	struct btrfs_fs_info *fs_info;
 	int i; u32 nr;
@@ -387,19 +393,16 @@ void btrfs_print_tree(const struct extent_buffer *c, bool follow)
 	if (!follow)
 		return;
 	for (i = 0; i < nr; i++) {
-		struct btrfs_tree_parent_check check = {
-			.level = level - 1,
-			.transid = btrfs_node_ptr_generation(c, i),
-			.owner_root = btrfs_header_owner(c),
-			.has_first_key = true
-		};
+		struct btrfs_key first_key;
 		struct extent_buffer *next;
 
-		btrfs_node_key_to_cpu(c, &check.first_key, i);
-		next = read_tree_block(fs_info, btrfs_node_blockptr(c, i), &check);
-		if (IS_ERR(next))
+		btrfs_node_key_to_cpu(c, &first_key, i);
+		next = read_tree_block(fs_info, btrfs_node_blockptr(c, i),
+				       btrfs_node_ptr_generation(c, i),
+				       level - 1, &first_key);
+		if (IS_ERR(next)) {
 			continue;
-		if (!extent_buffer_uptodate(next)) {
+		} else if (!extent_buffer_uptodate(next)) {
 			free_extent_buffer(next);
 			continue;
 		}

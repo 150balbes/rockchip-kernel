@@ -59,7 +59,6 @@
 #include <linux/slab.h>
 #include <linux/sysctl.h>
 #include <linux/moduleparam.h>
-#include <linux/jiffies.h>
 
 #include <asm/page.h>
 #include <asm/tlb.h>
@@ -81,8 +80,9 @@
 static uint __read_mostly balloon_boot_timeout = 180;
 module_param(balloon_boot_timeout, uint, 0444);
 
-#ifdef CONFIG_XEN_BALLOON_MEMORY_HOTPLUG
 static int xen_hotplug_unpopulated;
+
+#ifdef CONFIG_XEN_BALLOON_MEMORY_HOTPLUG
 
 static struct ctl_table balloon_table[] = {
 	{
@@ -97,8 +97,24 @@ static struct ctl_table balloon_table[] = {
 	{ }
 };
 
-#else
-#define xen_hotplug_unpopulated 0
+static struct ctl_table balloon_root[] = {
+	{
+		.procname	= "balloon",
+		.mode		= 0555,
+		.child		= balloon_table,
+	},
+	{ }
+};
+
+static struct ctl_table xen_root[] = {
+	{
+		.procname	= "xen",
+		.mode		= 0555,
+		.child		= balloon_root,
+	},
+	{ }
+};
+
 #endif
 
 /*
@@ -320,7 +336,7 @@ static enum bp_state reserve_additional_memory(void)
 	mutex_unlock(&balloon_mutex);
 	/* add_memory_resource() requires the device_hotplug lock */
 	lock_device_hotplug();
-	rc = add_memory_resource(nid, resource, MHP_MERGE_RESOURCE);
+	rc = add_memory_resource(nid, resource, MEMHP_MERGE_RESOURCE);
 	unlock_device_hotplug();
 	mutex_lock(&balloon_mutex);
 
@@ -564,7 +580,7 @@ void balloon_set_new_target(unsigned long target)
 }
 EXPORT_SYMBOL_GPL(balloon_set_new_target);
 
-static int add_ballooned_pages(unsigned int nr_pages)
+static int add_ballooned_pages(int nr_pages)
 {
 	enum bp_state st;
 
@@ -592,14 +608,14 @@ static int add_ballooned_pages(unsigned int nr_pages)
 }
 
 /**
- * xen_alloc_ballooned_pages - get pages that have been ballooned out
+ * alloc_xenballooned_pages - get pages that have been ballooned out
  * @nr_pages: Number of pages to get
  * @pages: pages returned
  * @return 0 on success, error otherwise
  */
-int xen_alloc_ballooned_pages(unsigned int nr_pages, struct page **pages)
+int alloc_xenballooned_pages(int nr_pages, struct page **pages)
 {
-	unsigned int pgno = 0;
+	int pgno = 0;
 	struct page *page;
 	int ret;
 
@@ -634,25 +650,25 @@ int xen_alloc_ballooned_pages(unsigned int nr_pages, struct page **pages)
 	return 0;
  out_undo:
 	mutex_unlock(&balloon_mutex);
-	xen_free_ballooned_pages(pgno, pages);
+	free_xenballooned_pages(pgno, pages);
 	/*
-	 * NB: xen_free_ballooned_pages will only subtract pgno pages, but since
+	 * NB: free_xenballooned_pages will only subtract pgno pages, but since
 	 * target_unpopulated is incremented with nr_pages at the start we need
 	 * to remove the remaining ones also, or accounting will be screwed.
 	 */
 	balloon_stats.target_unpopulated -= nr_pages - pgno;
 	return ret;
 }
-EXPORT_SYMBOL(xen_alloc_ballooned_pages);
+EXPORT_SYMBOL(alloc_xenballooned_pages);
 
 /**
- * xen_free_ballooned_pages - return pages retrieved with get_ballooned_pages
+ * free_xenballooned_pages - return pages retrieved with get_ballooned_pages
  * @nr_pages: Number of pages
  * @pages: pages to return
  */
-void xen_free_ballooned_pages(unsigned int nr_pages, struct page **pages)
+void free_xenballooned_pages(int nr_pages, struct page **pages)
 {
-	unsigned int i;
+	int i;
 
 	mutex_lock(&balloon_mutex);
 
@@ -669,36 +685,31 @@ void xen_free_ballooned_pages(unsigned int nr_pages, struct page **pages)
 
 	mutex_unlock(&balloon_mutex);
 }
-EXPORT_SYMBOL(xen_free_ballooned_pages);
+EXPORT_SYMBOL(free_xenballooned_pages);
 
-static void __init balloon_add_regions(void)
+#if defined(CONFIG_XEN_PV) && !defined(CONFIG_XEN_UNPOPULATED_ALLOC)
+static void __init balloon_add_region(unsigned long start_pfn,
+				      unsigned long pages)
 {
-#if defined(CONFIG_XEN_PV)
-	unsigned long start_pfn, pages;
 	unsigned long pfn, extra_pfn_end;
-	unsigned int i;
 
-	for (i = 0; i < XEN_EXTRA_MEM_MAX_REGIONS; i++) {
-		pages = xen_extra_mem[i].n_pfns;
-		if (!pages)
-			continue;
+	/*
+	 * If the amount of usable memory has been limited (e.g., with
+	 * the 'mem' command line parameter), don't add pages beyond
+	 * this limit.
+	 */
+	extra_pfn_end = min(max_pfn, start_pfn + pages);
 
-		start_pfn = xen_extra_mem[i].start_pfn;
-
-		/*
-		 * If the amount of usable memory has been limited (e.g., with
-		 * the 'mem' command line parameter), don't add pages beyond
-		 * this limit.
-		 */
-		extra_pfn_end = min(max_pfn, start_pfn + pages);
-
-		for (pfn = start_pfn; pfn < extra_pfn_end; pfn++)
-			balloon_append(pfn_to_page(pfn));
-
-		balloon_stats.total_pages += extra_pfn_end - start_pfn;
+	for (pfn = start_pfn; pfn < extra_pfn_end; pfn++) {
+		/* totalram_pages and totalhigh_pages do not
+		   include the boot-time balloon extension, so
+		   don't subtract from it. */
+		balloon_append(pfn_to_page(pfn));
 	}
-#endif
+
+	balloon_stats.total_pages += extra_pfn_end - start_pfn;
 }
+#endif
 
 static int __init balloon_init(void)
 {
@@ -729,10 +740,23 @@ static int __init balloon_init(void)
 #ifdef CONFIG_XEN_BALLOON_MEMORY_HOTPLUG
 	set_online_page_callback(&xen_online_page);
 	register_memory_notifier(&xen_memory_nb);
-	register_sysctl_init("xen/balloon", balloon_table);
+	register_sysctl_table(xen_root);
 #endif
 
-	balloon_add_regions();
+#if defined(CONFIG_XEN_PV) && !defined(CONFIG_XEN_UNPOPULATED_ALLOC)
+	{
+		int i;
+
+		/*
+		 * Initialize the balloon with pages from the extra memory
+		 * regions (see arch/x86/xen/setup.c).
+		 */
+		for (i = 0; i < XEN_EXTRA_MEM_MAX_REGIONS; i++)
+			if (xen_extra_mem[i].n_pfns)
+				balloon_add_region(xen_extra_mem[i].start_pfn,
+						   xen_extra_mem[i].n_pfns);
+	}
+#endif
 
 	task = kthread_run(balloon_thread, NULL, "xen-balloon");
 	if (IS_ERR(task)) {
@@ -769,7 +793,7 @@ static int __init balloon_wait_finish(void)
 		if (balloon_state == BP_ECANCELED) {
 			pr_warn_once("Initial ballooning failed, %ld pages need to be freed.\n",
 				     -credit);
-			if (time_is_before_eq_jiffies(last_changed + HZ * balloon_boot_timeout))
+			if (jiffies - last_changed >= HZ * balloon_boot_timeout)
 				panic("Initial ballooning failed!\n");
 		}
 

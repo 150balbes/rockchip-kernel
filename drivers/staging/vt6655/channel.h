@@ -3,6 +3,7 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: channel.h
  */
 
 #ifndef _CHANNEL_H_

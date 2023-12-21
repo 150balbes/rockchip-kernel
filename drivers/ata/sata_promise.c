@@ -158,7 +158,7 @@ static void pdc_error_handler(struct ata_port *ap);
 static void pdc_post_internal_cmd(struct ata_queued_cmd *qc);
 static int pdc_pata_cable_detect(struct ata_port *ap);
 
-static const struct scsi_host_template pdc_ata_sht = {
+static struct scsi_host_template pdc_ata_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	.sg_tablesize		= PDC_MAX_PRD,
 	.dma_boundary		= ATA_DMA_BOUNDARY,
@@ -596,8 +596,7 @@ static void pdc_fill_sg(struct ata_queued_cmd *qc)
 
 			prd[idx].addr = cpu_to_le32(addr);
 			prd[idx].flags_len = cpu_to_le32(len & 0xffff);
-			ata_port_dbg(ap, "PRD[%u] = (0x%X, 0x%X)\n",
-				     idx, addr, len);
+			VPRINTK("PRD[%u] = (0x%X, 0x%X)\n", idx, addr, len);
 
 			idx++;
 			sg_len -= len;
@@ -610,16 +609,17 @@ static void pdc_fill_sg(struct ata_queued_cmd *qc)
 	if (len > SG_COUNT_ASIC_BUG) {
 		u32 addr;
 
+		VPRINTK("Splitting last PRD.\n");
+
 		addr = le32_to_cpu(prd[idx - 1].addr);
 		prd[idx - 1].flags_len = cpu_to_le32(len - SG_COUNT_ASIC_BUG);
-		ata_port_dbg(ap, "PRD[%u] = (0x%X, 0x%X)\n",
-			     idx - 1, addr, SG_COUNT_ASIC_BUG);
+		VPRINTK("PRD[%u] = (0x%X, 0x%X)\n", idx - 1, addr, SG_COUNT_ASIC_BUG);
 
 		addr = addr + len - SG_COUNT_ASIC_BUG;
 		len = SG_COUNT_ASIC_BUG;
 		prd[idx].addr = cpu_to_le32(addr);
 		prd[idx].flags_len = cpu_to_le32(len);
-		ata_port_dbg(ap, "PRD[%u] = (0x%X, 0x%X)\n", idx, addr, len);
+		VPRINTK("PRD[%u] = (0x%X, 0x%X)\n", idx, addr, len);
 
 		idx++;
 	}
@@ -631,6 +631,8 @@ static enum ata_completion_errors pdc_qc_prep(struct ata_queued_cmd *qc)
 {
 	struct pdc_port_priv *pp = qc->ap->private_data;
 	unsigned int i;
+
+	VPRINTK("ENTER\n");
 
 	switch (qc->tf.protocol) {
 	case ATA_PROT_DMA:
@@ -817,7 +819,7 @@ static int pdc_sata_hardreset(struct ata_link *link, unsigned int *class,
 
 static void pdc_error_handler(struct ata_port *ap)
 {
-	if (!ata_port_is_frozen(ap))
+	if (!(ap->pflags & ATA_PFLAG_FROZEN))
 		pdc_reset_port(ap);
 
 	ata_sff_error_handler(ap);
@@ -828,7 +830,7 @@ static void pdc_post_internal_cmd(struct ata_queued_cmd *qc)
 	struct ata_port *ap = qc->ap;
 
 	/* make DMA engine forget about the failed command */
-	if (qc->flags & ATA_QCFLAG_EH)
+	if (qc->flags & ATA_QCFLAG_FAILED)
 		pdc_reset_port(ap);
 }
 
@@ -920,8 +922,12 @@ static irqreturn_t pdc_interrupt(int irq, void *dev_instance)
 	u32 hotplug_status;
 	int is_sataii_tx4;
 
-	if (!host || !host->iomap[PDC_MMIO_BAR])
+	VPRINTK("ENTER\n");
+
+	if (!host || !host->iomap[PDC_MMIO_BAR]) {
+		VPRINTK("QUICK EXIT\n");
 		return IRQ_NONE;
+	}
 
 	host_mmio = host->iomap[PDC_MMIO_BAR];
 
@@ -940,18 +946,23 @@ static irqreturn_t pdc_interrupt(int irq, void *dev_instance)
 	/* reading should also clear interrupts */
 	mask = readl(host_mmio + PDC_INT_SEQMASK);
 
-	if (mask == 0xffffffff && hotplug_status == 0)
+	if (mask == 0xffffffff && hotplug_status == 0) {
+		VPRINTK("QUICK EXIT 2\n");
 		goto done_irq;
+	}
 
 	mask &= 0xffff;		/* only 16 SEQIDs possible */
-	if (mask == 0 && hotplug_status == 0)
+	if (mask == 0 && hotplug_status == 0) {
+		VPRINTK("QUICK EXIT 3\n");
 		goto done_irq;
+	}
 
 	writel(mask, host_mmio + PDC_INT_SEQMASK);
 
 	is_sataii_tx4 = pdc_is_sataii_tx4(host->ports[0]->flags);
 
 	for (i = 0; i < host->n_ports; i++) {
+		VPRINTK("port %u\n", i);
 		ap = host->ports[i];
 
 		/* check for a plug or unplug event */
@@ -978,6 +989,8 @@ static irqreturn_t pdc_interrupt(int irq, void *dev_instance)
 		}
 	}
 
+	VPRINTK("EXIT\n");
+
 done_irq:
 	spin_unlock(&host->lock);
 	return IRQ_RETVAL(handled);
@@ -991,6 +1004,8 @@ static void pdc_packet_start(struct ata_queued_cmd *qc)
 	void __iomem *ata_mmio = ap->ioaddr.cmd_addr;
 	unsigned int port_no = ap->port_no;
 	u8 seq = (u8) (port_no + 1);
+
+	VPRINTK("ENTER, ap %p\n", ap);
 
 	writel(0x00000001, host_mmio + (seq * 4));
 	readl(host_mmio + (seq * 4));	/* flush */

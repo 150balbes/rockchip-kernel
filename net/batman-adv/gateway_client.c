@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2009-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  */
@@ -9,7 +9,6 @@
 
 #include <linux/atomic.h>
 #include <linux/byteorder/generic.h>
-#include <linux/container_of.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
 #include <linux/gfp.h>
@@ -26,6 +25,7 @@
 #include <linux/netlink.h>
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
+#include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -121,7 +121,8 @@ batadv_gw_get_selected_orig(struct batadv_priv *bat_priv)
 unlock:
 	rcu_read_unlock();
 out:
-	batadv_gw_node_put(gw_node);
+	if (gw_node)
+		batadv_gw_node_put(gw_node);
 	return orig_node;
 }
 
@@ -138,7 +139,8 @@ static void batadv_gw_select(struct batadv_priv *bat_priv,
 	curr_gw_node = rcu_replace_pointer(bat_priv->gw.curr_gw, new_gw_node,
 					   true);
 
-	batadv_gw_node_put(curr_gw_node);
+	if (curr_gw_node)
+		batadv_gw_node_put(curr_gw_node);
 
 	spin_unlock_bh(&bat_priv->gw.list_lock);
 }
@@ -273,10 +275,14 @@ void batadv_gw_election(struct batadv_priv *bat_priv)
 	batadv_gw_select(bat_priv, next_gw);
 
 out:
-	batadv_gw_node_put(curr_gw);
-	batadv_gw_node_put(next_gw);
-	batadv_neigh_node_put(router);
-	batadv_neigh_ifinfo_put(router_ifinfo);
+	if (curr_gw)
+		batadv_gw_node_put(curr_gw);
+	if (next_gw)
+		batadv_gw_node_put(next_gw);
+	if (router)
+		batadv_neigh_node_put(router);
+	if (router_ifinfo)
+		batadv_neigh_ifinfo_put(router_ifinfo);
 }
 
 /**
@@ -310,7 +316,8 @@ void batadv_gw_check_election(struct batadv_priv *bat_priv,
 reselect:
 	batadv_gw_reselect(bat_priv);
 out:
-	batadv_orig_node_put(curr_gw_orig);
+	if (curr_gw_orig)
+		batadv_orig_node_put(curr_gw_orig);
 }
 
 /**
@@ -450,11 +457,13 @@ void batadv_gw_node_update(struct batadv_priv *bat_priv,
 		if (gw_node == curr_gw)
 			batadv_gw_reselect(bat_priv);
 
-		batadv_gw_node_put(curr_gw);
+		if (curr_gw)
+			batadv_gw_node_put(curr_gw);
 	}
 
 out:
-	batadv_gw_node_put(gw_node);
+	if (gw_node)
+		batadv_gw_node_put(gw_node);
 }
 
 /**
@@ -491,6 +500,44 @@ void batadv_gw_node_free(struct batadv_priv *bat_priv)
 	}
 	spin_unlock_bh(&bat_priv->gw.list_lock);
 }
+
+#ifdef CONFIG_BATMAN_ADV_DEBUGFS
+
+/**
+ * batadv_gw_client_seq_print_text() - Print the gateway table in a seq file
+ * @seq: seq file to print on
+ * @offset: not used
+ *
+ * Return: always 0
+ */
+int batadv_gw_client_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_priv *bat_priv = netdev_priv(net_dev);
+	struct batadv_hard_iface *primary_if;
+
+	primary_if = batadv_seq_print_text_primary_if_get(seq);
+	if (!primary_if)
+		return 0;
+
+	seq_printf(seq, "[B.A.T.M.A.N. adv %s, MainIF/MAC: %s/%pM (%s %s)]\n",
+		   BATADV_SOURCE_VERSION, primary_if->net_dev->name,
+		   primary_if->net_dev->dev_addr, net_dev->name,
+		   bat_priv->algo_ops->name);
+
+	batadv_hardif_put(primary_if);
+
+	if (!bat_priv->algo_ops->gw.print) {
+		seq_puts(seq,
+			 "No printing function for this routing protocol\n");
+		return 0;
+	}
+
+	bat_priv->algo_ops->gw.print(bat_priv, seq);
+
+	return 0;
+}
+#endif
 
 /**
  * batadv_gw_dump() - Dump gateways into a message
@@ -537,8 +584,10 @@ int batadv_gw_dump(struct sk_buff *msg, struct netlink_callback *cb)
 	ret = msg->len;
 
 out:
-	batadv_hardif_put(primary_if);
-	dev_put(soft_iface);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	if (soft_iface)
+		dev_put(soft_iface);
 
 	return ret;
 }
@@ -760,10 +809,15 @@ bool batadv_gw_out_of_range(struct batadv_priv *bat_priv,
 	batadv_neigh_ifinfo_put(old_ifinfo);
 
 out:
-	batadv_orig_node_put(orig_dst_node);
-	batadv_gw_node_put(curr_gw);
-	batadv_gw_node_put(gw_node);
-	batadv_neigh_node_put(neigh_old);
-	batadv_neigh_node_put(neigh_curr);
+	if (orig_dst_node)
+		batadv_orig_node_put(orig_dst_node);
+	if (curr_gw)
+		batadv_gw_node_put(curr_gw);
+	if (gw_node)
+		batadv_gw_node_put(gw_node);
+	if (neigh_old)
+		batadv_neigh_node_put(neigh_old);
+	if (neigh_curr)
+		batadv_neigh_node_put(neigh_curr);
 	return out_of_range;
 }

@@ -84,8 +84,7 @@ static int daca_get_deemphasis(struct snd_kcontrol *kcontrol,
 {
 	struct snd_pmac *chip = snd_kcontrol_chip(kcontrol);
 	struct pmac_daca *mix;
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	ucontrol->value.integer.value[0] = mix->deemphasis ? 1 : 0;
 	return 0;
@@ -98,8 +97,7 @@ static int daca_put_deemphasis(struct snd_kcontrol *kcontrol,
 	struct pmac_daca *mix;
 	int change;
 
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	change = mix->deemphasis != ucontrol->value.integer.value[0];
 	if (change) {
@@ -125,8 +123,7 @@ static int daca_get_volume(struct snd_kcontrol *kcontrol,
 {
 	struct snd_pmac *chip = snd_kcontrol_chip(kcontrol);
 	struct pmac_daca *mix;
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	ucontrol->value.integer.value[0] = mix->left_vol;
 	ucontrol->value.integer.value[1] = mix->right_vol;
@@ -141,8 +138,7 @@ static int daca_put_volume(struct snd_kcontrol *kcontrol,
 	unsigned int vol[2];
 	int change;
 
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	vol[0] = ucontrol->value.integer.value[0];
 	vol[1] = ucontrol->value.integer.value[1];
@@ -166,8 +162,7 @@ static int daca_get_amp(struct snd_kcontrol *kcontrol,
 {
 	struct snd_pmac *chip = snd_kcontrol_chip(kcontrol);
 	struct pmac_daca *mix;
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	ucontrol->value.integer.value[0] = mix->amp_on ? 1 : 0;
 	return 0;
@@ -180,8 +175,7 @@ static int daca_put_amp(struct snd_kcontrol *kcontrol,
 	struct pmac_daca *mix;
 	int change;
 
-	mix = chip->mixer_data;
-	if (!mix)
+	if (! (mix = chip->mixer_data))
 		return -ENODEV;
 	change = mix->amp_on != ucontrol->value.integer.value[0];
 	if (change) {
@@ -254,8 +248,7 @@ int snd_pmac_daca_init(struct snd_pmac *chip)
 	mix->i2c.addr = DACA_I2C_ADDR;
 	mix->i2c.init_client = daca_init_client;
 	mix->i2c.name = "DACA";
-	err = snd_pmac_keywest_init(&mix->i2c);
-	if (err < 0)
+	if ((err = snd_pmac_keywest_init(&mix->i2c)) < 0)
 		return err;
 
 	/*
@@ -264,8 +257,7 @@ int snd_pmac_daca_init(struct snd_pmac *chip)
 	strcpy(chip->card->mixername, "PowerMac DACA");
 
 	for (i = 0; i < ARRAY_SIZE(daca_mixers); i++) {
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&daca_mixers[i], chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&daca_mixers[i], chip))) < 0)
 			return err;
 	}
 

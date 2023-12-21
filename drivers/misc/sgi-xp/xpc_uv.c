@@ -1598,7 +1598,7 @@ out_2:
 		 * by xpc_notify_senders_of_disconnect_uv(), and to also get an
 		 * error returned here will confuse them. Additionally, since
 		 * in this case the channel is being disconnected we don't need
-		 * to put the msg_slot back on the free list.
+		 * to put the the msg_slot back on the free list.
 		 */
 		if (cmpxchg(&msg_slot->func, func, NULL) != func) {
 			ret = xpSuccess;
@@ -1742,7 +1742,7 @@ xpc_init_mq_node(int nid)
 {
 	int cpu;
 
-	cpus_read_lock();
+	get_online_cpus();
 
 	for_each_cpu(cpu, cpumask_of_node(nid)) {
 		xpc_activate_mq_uv =
@@ -1753,7 +1753,7 @@ xpc_init_mq_node(int nid)
 			break;
 	}
 	if (IS_ERR(xpc_activate_mq_uv)) {
-		cpus_read_unlock();
+		put_online_cpus();
 		return PTR_ERR(xpc_activate_mq_uv);
 	}
 
@@ -1767,11 +1767,11 @@ xpc_init_mq_node(int nid)
 	}
 	if (IS_ERR(xpc_notify_mq_uv)) {
 		xpc_destroy_gru_mq_uv(xpc_activate_mq_uv);
-		cpus_read_unlock();
+		put_online_cpus();
 		return PTR_ERR(xpc_notify_mq_uv);
 	}
 
-	cpus_read_unlock();
+	put_online_cpus();
 	return 0;
 }
 

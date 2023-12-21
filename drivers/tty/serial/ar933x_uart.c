@@ -283,7 +283,7 @@ static void ar933x_uart_get_scale_step(unsigned int clk,
 
 static void ar933x_uart_set_termios(struct uart_port *port,
 				    struct ktermios *new,
-				    const struct ktermios *old)
+				    struct ktermios *old)
 {
 	struct ar933x_uart_port *up =
 		container_of(port, struct ar933x_uart_port, port);
@@ -385,7 +385,9 @@ static void ar933x_uart_rx_chars(struct ar933x_uart_port *up)
 			tty_insert_flip_char(port, ch, TTY_NORMAL);
 	} while (max_count-- > 0);
 
+	spin_unlock(&up->port.lock);
 	tty_flip_buffer_push(port);
+	spin_lock(&up->port.lock);
 }
 
 static void ar933x_uart_tx_chars(struct ar933x_uart_port *up)
@@ -425,7 +427,8 @@ static void ar933x_uart_tx_chars(struct ar933x_uart_port *up)
 
 		ar933x_uart_putc(up, xmit->buf[xmit->tail]);
 
-		uart_xmit_advance(&up->port, 1);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		up->port.icount.tx++;
 	} while (--count > 0);
 
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
@@ -579,16 +582,23 @@ static const struct uart_ops ar933x_uart_ops = {
 	.verify_port	= ar933x_uart_verify_port,
 };
 
-static int ar933x_config_rs485(struct uart_port *port, struct ktermios *termios,
+static int ar933x_config_rs485(struct uart_port *port,
 				struct serial_rs485 *rs485conf)
 {
 	struct ar933x_uart_port *up =
-			container_of(port, struct ar933x_uart_port, port);
+		container_of(port, struct ar933x_uart_port, port);
 
-	if (port->rs485.flags & SER_RS485_ENABLED)
+	if ((rs485conf->flags & SER_RS485_ENABLED) &&
+	    !up->rts_gpiod) {
+		dev_err(port->dev, "RS485 needs rts-gpio\n");
+		return 1;
+	}
+
+	if (rs485conf->flags & SER_RS485_ENABLED)
 		gpiod_set_value(up->rts_gpiod,
 			!!(rs485conf->flags & SER_RS485_RTS_AFTER_SEND));
 
+	port->rs485 = *rs485conf;
 	return 0;
 }
 
@@ -610,7 +620,7 @@ static void ar933x_uart_wait_xmitr(struct ar933x_uart_port *up)
 	} while ((status & AR933X_UART_DATA_TX_CSR) == 0);
 }
 
-static void ar933x_uart_console_putchar(struct uart_port *port, unsigned char ch)
+static void ar933x_uart_console_putchar(struct uart_port *port, int ch)
 {
 	struct ar933x_uart_port *up =
 		container_of(port, struct ar933x_uart_port, port);
@@ -699,21 +709,16 @@ static struct uart_driver ar933x_uart_driver = {
 	.cons		= NULL, /* filled in runtime */
 };
 
-static const struct serial_rs485 ar933x_no_rs485 = {};
-static const struct serial_rs485 ar933x_rs485_supported = {
-	.flags = SER_RS485_ENABLED | SER_RS485_RTS_ON_SEND | SER_RS485_RTS_AFTER_SEND,
-};
-
 static int ar933x_uart_probe(struct platform_device *pdev)
 {
 	struct ar933x_uart_port *up;
 	struct uart_port *port;
 	struct resource *mem_res;
+	struct resource *irq_res;
 	struct device_node *np;
 	unsigned int baud;
 	int id;
 	int ret;
-	int irq;
 
 	np = pdev->dev.of_node;
 	if (IS_ENABLED(CONFIG_OF) && np) {
@@ -732,9 +737,11 @@ static int ar933x_uart_probe(struct platform_device *pdev)
 	if (id >= CONFIG_SERIAL_AR933X_NR_UARTS)
 		return -EINVAL;
 
-	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return irq;
+	irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (!irq_res) {
+		dev_err(&pdev->dev, "no IRQ resource\n");
+		return -EINVAL;
+	}
 
 	up = devm_kzalloc(&pdev->dev, sizeof(struct ar933x_uart_port),
 			  GFP_KERNEL);
@@ -766,7 +773,7 @@ static int ar933x_uart_probe(struct platform_device *pdev)
 
 	port->mapbase = mem_res->start;
 	port->line = id;
-	port->irq = irq;
+	port->irq = irq_res->start;
 	port->dev = &pdev->dev;
 	port->type = PORT_AR933X;
 	port->iotype = UPIO_MEM32;
@@ -775,7 +782,6 @@ static int ar933x_uart_probe(struct platform_device *pdev)
 	port->fifosize = AR933X_UART_FIFO_SIZE;
 	port->ops = &ar933x_uart_ops;
 	port->rs485_config = ar933x_config_rs485;
-	port->rs485_supported = ar933x_rs485_supported;
 
 	baud = ar933x_uart_get_baud(port->uartclk, AR933X_UART_MAX_SCALE, 1);
 	up->min_baud = max_t(unsigned int, baud, AR933X_UART_MIN_BAUD);
@@ -795,12 +801,10 @@ static int ar933x_uart_probe(struct platform_device *pdev)
 
 	up->rts_gpiod = mctrl_gpio_to_gpiod(up->gpios, UART_GPIO_RTS);
 
-	if (!up->rts_gpiod) {
-		port->rs485_supported = ar933x_no_rs485;
-		if (port->rs485.flags & SER_RS485_ENABLED) {
-			dev_err(&pdev->dev, "lacking rts-gpio, disabling RS485\n");
-			port->rs485.flags &= ~SER_RS485_ENABLED;
-		}
+	if ((port->rs485.flags & SER_RS485_ENABLED) &&
+	    !up->rts_gpiod) {
+		dev_err(&pdev->dev, "lacking rts-gpio, disabling RS485\n");
+		port->rs485.flags &= ~SER_RS485_ENABLED;
 	}
 
 #ifdef CONFIG_SERIAL_AR933X_CONSOLE

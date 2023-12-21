@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef __NOUVEAU_BO_H__
 #define __NOUVEAU_BO_H__
+#include <drm/ttm/ttm_bo_driver.h>
 #include <drm/drm_gem.h>
-#include <drm/ttm/ttm_bo.h>
-#include <drm/ttm/ttm_placement.h>
 
 struct nouveau_channel;
 struct nouveau_cli;
@@ -27,12 +26,6 @@ struct nouveau_bo {
 	int pbbo_index;
 	bool validate_mapped;
 
-	/* Root GEM object we derive the dma_resv of in case this BO is not
-	 * shared between VMs.
-	 */
-	struct drm_gem_object *r_obj;
-	bool no_share;
-
 	/* GPU address space is independent of CPU word size */
 	uint64_t offset;
 
@@ -46,6 +39,11 @@ struct nouveau_bo {
 	unsigned mode;
 
 	struct nouveau_drm_tile *tile;
+
+	/* protect by the ttm reservation lock */
+	int pin_refcnt;
+
+	struct ttm_bo_kmap_obj dma_buf_vmap;
 };
 
 static inline struct nouveau_bo *
@@ -75,11 +73,11 @@ nouveau_bo_ref(struct nouveau_bo *ref, struct nouveau_bo **pnvbo)
 	return 0;
 }
 
-extern struct ttm_device_funcs nouveau_bo_driver;
+extern struct ttm_bo_driver nouveau_bo_driver;
 
 void nouveau_bo_move_init(struct nouveau_drm *);
 struct nouveau_bo *nouveau_bo_alloc(struct nouveau_cli *, u64 *size, int *align,
-				    u32 domain, u32 tile_mode, u32 tile_flags, bool internal);
+				    u32 domain, u32 tile_mode, u32 tile_flags);
 int  nouveau_bo_init(struct nouveau_bo *, u64 size, int align, u32 domain,
 		     struct sg_table *sg, struct dma_resv *robj);
 int  nouveau_bo_new(struct nouveau_cli *, u64 size, int align, u32 domain,
@@ -94,7 +92,6 @@ void nouveau_bo_placement_set(struct nouveau_bo *, u32 type, u32 busy);
 void nouveau_bo_wr16(struct nouveau_bo *, unsigned index, u16 val);
 u32  nouveau_bo_rd32(struct nouveau_bo *, unsigned index);
 void nouveau_bo_wr32(struct nouveau_bo *, unsigned index, u32 val);
-vm_fault_t nouveau_ttm_fault_reserve_notify(struct ttm_buffer_object *bo);
 void nouveau_bo_fence(struct nouveau_bo *, struct nouveau_fence *, bool exclusive);
 int  nouveau_bo_validate(struct nouveau_bo *, bool interruptible,
 			 bool no_wait_gpu);

@@ -18,12 +18,9 @@ it.
 
    kernel-api
    workqueue
-   watch_queue
    printk-basics
    printk-formats
-   printk-index
    symbol-namespaces
-   asm-annotations
 
 Data structures and low-level utilities
 =======================================
@@ -37,41 +34,31 @@ Library functionality that is used throughout the kernel.
    kref
    assoc_array
    xarray
-   maple_tree
    idr
    circular-buffers
    rbtree
    generic-radix-tree
    packing
+   bus-virt-phys-mapping
    this_cpu_ops
    timekeeping
    errseq
-   wrappers/atomic_t
-   wrappers/atomic_bitops
-
-Low level entry and exit
-========================
-
-.. toctree::
-   :maxdepth: 1
-
-   entry
 
 Concurrency primitives
 ======================
 
 How Linux keeps everything from happening at the same time.  See
-Documentation/locking/index.rst for more related documentation.
+:doc:`/locking/index` for more related documentation.
 
 .. toctree::
    :maxdepth: 1
 
+   atomic_ops
    refcount-vs-atomic
    irq/index
    local_ops
    padata
    ../RCU/index
-   wrappers/memory-barriers.rst
 
 Low-level hardware management
 =============================
@@ -91,7 +78,7 @@ Memory management
 =================
 
 How to allocate and use memory in the kernel.  Note that there is a lot
-more memory-management documentation in Documentation/mm/index.rst.
+more memory-management documentation in :doc:`/vm/index`.
 
 .. toctree::
    :maxdepth: 1
@@ -127,7 +114,6 @@ Documents that don't fit elsewhere or which have yet to be categorized.
    :maxdepth: 1
 
    librs
-   netlink
 
 .. only:: subproject and html
 

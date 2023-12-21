@@ -5,7 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/module.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 
 #include "ccu_common.h"
@@ -92,18 +92,23 @@ static const struct sunxi_ccu_desc sun9i_a80_usb_clk_desc = {
 
 static int sun9i_a80_usb_clk_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	struct clk *bus_clk;
 	void __iomem *reg;
 	int ret;
 
-	reg = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	reg = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
 	bus_clk = devm_clk_get(&pdev->dev, "bus");
-	if (IS_ERR(bus_clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(bus_clk),
-				     "Couldn't get bus clk\n");
+	if (IS_ERR(bus_clk)) {
+		ret = PTR_ERR(bus_clk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "Couldn't get bus clk: %d\n", ret);
+		return ret;
+	}
 
 	/* The bus clock needs to be enabled for us to access the registers */
 	ret = clk_prepare_enable(bus_clk);
@@ -112,7 +117,8 @@ static int sun9i_a80_usb_clk_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	ret = devm_sunxi_ccu_probe(&pdev->dev, reg, &sun9i_a80_usb_clk_desc);
+	ret = sunxi_ccu_probe(pdev->dev.of_node, reg,
+			      &sun9i_a80_usb_clk_desc);
 	if (ret)
 		goto err_disable_clk;
 
@@ -135,7 +141,4 @@ static struct platform_driver sun9i_a80_usb_clk_driver = {
 		.of_match_table	= sun9i_a80_usb_clk_ids,
 	},
 };
-module_platform_driver(sun9i_a80_usb_clk_driver);
-
-MODULE_IMPORT_NS(SUNXI_CCU);
-MODULE_LICENSE("GPL");
+builtin_platform_driver(sun9i_a80_usb_clk_driver);

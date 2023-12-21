@@ -175,7 +175,7 @@ static void altera_uart_break_ctl(struct uart_port *port, int break_state)
 
 static void altera_uart_set_termios(struct uart_port *port,
 				    struct ktermios *termios,
-				    const struct ktermios *old)
+				    struct ktermios *old)
 {
 	unsigned long flags;
 	unsigned int baud, baudclk;
@@ -199,8 +199,9 @@ static void altera_uart_set_termios(struct uart_port *port,
 	 */
 }
 
-static void altera_uart_rx_chars(struct uart_port *port)
+static void altera_uart_rx_chars(struct altera_uart *pp)
 {
+	struct uart_port *port = &pp->port;
 	unsigned char ch, flag;
 	unsigned short status;
 
@@ -242,34 +243,57 @@ static void altera_uart_rx_chars(struct uart_port *port)
 				 flag);
 	}
 
+	spin_unlock(&port->lock);
 	tty_flip_buffer_push(&port->state->port);
+	spin_lock(&port->lock);
 }
 
-static void altera_uart_tx_chars(struct uart_port *port)
+static void altera_uart_tx_chars(struct altera_uart *pp)
 {
-	u8 ch;
+	struct uart_port *port = &pp->port;
+	struct circ_buf *xmit = &port->state->xmit;
 
-	uart_port_tx(port, ch,
-		altera_uart_readl(port, ALTERA_UART_STATUS_REG) &
-		                ALTERA_UART_STATUS_TRDY_MSK,
-		altera_uart_writel(port, ch, ALTERA_UART_TXDATA_REG));
+	if (port->x_char) {
+		/* Send special char - probably flow control */
+		altera_uart_writel(port, port->x_char, ALTERA_UART_TXDATA_REG);
+		port->x_char = 0;
+		port->icount.tx++;
+		return;
+	}
+
+	while (altera_uart_readl(port, ALTERA_UART_STATUS_REG) &
+	       ALTERA_UART_STATUS_TRDY_MSK) {
+		if (xmit->head == xmit->tail)
+			break;
+		altera_uart_writel(port, xmit->buf[xmit->tail],
+		       ALTERA_UART_TXDATA_REG);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+	}
+
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
+		uart_write_wakeup(port);
+
+	if (xmit->head == xmit->tail) {
+		pp->imr &= ~ALTERA_UART_CONTROL_TRDY_MSK;
+		altera_uart_update_ctrl_reg(pp);
+	}
 }
 
 static irqreturn_t altera_uart_interrupt(int irq, void *data)
 {
 	struct uart_port *port = data;
 	struct altera_uart *pp = container_of(port, struct altera_uart, port);
-	unsigned long flags;
 	unsigned int isr;
 
 	isr = altera_uart_readl(port, ALTERA_UART_STATUS_REG) & pp->imr;
 
-	spin_lock_irqsave(&port->lock, flags);
+	spin_lock(&port->lock);
 	if (isr & ALTERA_UART_STATUS_RRDY_MSK)
-		altera_uart_rx_chars(port);
+		altera_uart_rx_chars(pp);
 	if (isr & ALTERA_UART_STATUS_TRDY_MSK)
-		altera_uart_tx_chars(port);
-	spin_unlock_irqrestore(&port->lock, flags);
+		altera_uart_tx_chars(pp);
+	spin_unlock(&port->lock);
 
 	return IRQ_RETVAL(isr);
 }
@@ -416,7 +440,7 @@ static struct altera_uart altera_uart_ports[CONFIG_SERIAL_ALTERA_UART_MAXPORTS];
 
 #if defined(CONFIG_SERIAL_ALTERA_UART_CONSOLE)
 
-static void altera_uart_console_putc(struct uart_port *port, unsigned char c)
+static void altera_uart_console_putc(struct uart_port *port, int c)
 {
 	while (!(altera_uart_readl(port, ALTERA_UART_STATUS_REG) &
 		 ALTERA_UART_STATUS_TRDY_MSK))
@@ -531,6 +555,7 @@ static int altera_uart_probe(struct platform_device *pdev)
 	struct altera_uart_platform_uart *platp = dev_get_platdata(&pdev->dev);
 	struct uart_port *port;
 	struct resource *res_mem;
+	struct resource *res_irq;
 	int i = pdev->id;
 	int ret;
 
@@ -554,11 +579,9 @@ static int altera_uart_probe(struct platform_device *pdev)
 	else
 		return -EINVAL;
 
-	ret = platform_get_irq_optional(pdev, 0);
-	if (ret < 0 && ret != -ENXIO)
-		return ret;
-	if (ret > 0)
-		port->irq = ret;
+	res_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (res_irq)
+		port->irq = res_irq->start;
 	else if (platp)
 		port->irq = platp->irq;
 

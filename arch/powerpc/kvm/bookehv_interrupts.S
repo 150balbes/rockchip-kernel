@@ -139,7 +139,7 @@ END_BTB_FLUSH_SECTION
 	 * kvmppc_get_last_inst().
 	 */
 	li	r9, KVM_INST_FETCH_FAILED
-	PPC_STL	r9, VCPU_LAST_INST(r4)
+	stw	r9, VCPU_LAST_INST(r4)
 	.endif
 
 	.if	\flags & NEED_ESR
@@ -423,6 +423,15 @@ _GLOBAL(kvmppc_resume_host)
 	rlwinm	r3, r3, 0, ~SPRN_EPCR_DMIUH
 	mtspr	SPRN_EPCR, r3
 	isync
+
+#ifdef CONFIG_64BIT
+	/*
+	 * We enter with interrupts disabled in hardware, but
+	 * we need to call RECONCILE_IRQ_STATE to ensure
+	 * that the software state is kept in sync.
+	 */
+	RECONCILE_IRQ_STATE(r3,r5)
+#endif
 
 	/* Switch to kernel stack and jump to handler. */
 	mr	r3, r4

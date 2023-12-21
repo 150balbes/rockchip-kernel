@@ -10,7 +10,6 @@
 #include <kunit/test.h>
 
 #include "string-stream.h"
-#include "debugfs.h"
 
 #define KUNIT_DEBUGFS_ROOT             "kunit"
 #define KUNIT_DEBUGFS_RESULTS          "results"
@@ -53,29 +52,19 @@ static void debugfs_print_result(struct seq_file *seq,
 static int debugfs_print_results(struct seq_file *seq, void *v)
 {
 	struct kunit_suite *suite = (struct kunit_suite *)seq->private;
-	enum kunit_status success = kunit_suite_has_succeeded(suite);
+	bool success = kunit_suite_has_succeeded(suite);
 	struct kunit_case *test_case;
 
-	if (!suite)
+	if (!suite || !suite->log)
 		return 0;
 
-	/* Print KTAP header so the debugfs log can be parsed as valid KTAP. */
-	seq_puts(seq, "KTAP version 1\n");
-	seq_puts(seq, "1..1\n");
-
-	/* Print suite header because it is not stored in the test logs. */
-	seq_puts(seq, KUNIT_SUBTEST_INDENT "KTAP version 1\n");
-	seq_printf(seq, KUNIT_SUBTEST_INDENT "# Subtest: %s\n", suite->name);
-	seq_printf(seq, KUNIT_SUBTEST_INDENT "1..%zd\n", kunit_suite_num_test_cases(suite));
+	seq_printf(seq, "%s", suite->log);
 
 	kunit_suite_for_each_test_case(suite, test_case)
 		debugfs_print_result(seq, suite, test_case);
 
-	if (suite->log)
-		seq_printf(seq, "%s", suite->log);
-
-	seq_printf(seq, "%s %d %s\n",
-		   kunit_status_to_ok_not_ok(success), 1, suite->name);
+	seq_printf(seq, "%s %d - %s\n",
+		   kunit_status_to_string(success), 1, suite->name);
 	return 0;
 }
 

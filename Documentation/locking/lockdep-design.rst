@@ -453,9 +453,9 @@ There are simply four block conditions:
 Block condition matrix, Y means the row blocks the column, and N means otherwise.
 
 	+---+---+---+---+
-	|   | W | r | R |
+	|   | E | r | R |
 	+---+---+---+---+
-	| W | Y | Y | Y |
+	| E | Y | Y | Y |
 	+---+---+---+---+
 	| r | Y | Y | N |
 	+---+---+---+---+

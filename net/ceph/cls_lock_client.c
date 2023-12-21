@@ -10,9 +10,7 @@
 
 /**
  * ceph_cls_lock - grab rados lock for object
- * @osdc: OSD client instance
- * @oid: object to lock
- * @oloc: object to lock
+ * @oid, @oloc: object to lock
  * @lock_name: the name of the lock
  * @type: lock type (CEPH_CLS_LOCK_EXCLUSIVE or CEPH_CLS_LOCK_SHARED)
  * @cookie: user-defined identifier for this instance of the lock
@@ -84,9 +82,7 @@ EXPORT_SYMBOL(ceph_cls_lock);
 
 /**
  * ceph_cls_unlock - release rados lock for object
- * @osdc: OSD client instance
- * @oid: object to lock
- * @oloc: object to lock
+ * @oid, @oloc: object to lock
  * @lock_name: the name of the lock
  * @cookie: user-defined identifier for this instance of the lock
  */
@@ -134,9 +130,7 @@ EXPORT_SYMBOL(ceph_cls_unlock);
 
 /**
  * ceph_cls_break_lock - release rados lock for object for specified client
- * @osdc: OSD client instance
- * @oid: object to lock
- * @oloc: object to lock
+ * @oid, @oloc: object to lock
  * @lock_name: the name of the lock
  * @cookie: user-defined identifier for this instance of the lock
  * @locker: current lock owner

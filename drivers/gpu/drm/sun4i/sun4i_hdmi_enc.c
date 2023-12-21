@@ -7,10 +7,9 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
-#include <linux/i2c.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -100,7 +99,6 @@ static void sun4i_hdmi_enable(struct drm_encoder *encoder)
 {
 	struct drm_display_mode *mode = &encoder->crtc->state->adjusted_mode;
 	struct sun4i_hdmi *hdmi = drm_encoder_to_sun4i_hdmi(encoder);
-	struct drm_display_info *display = &hdmi->connector.display_info;
 	u32 val = 0;
 
 	DRM_DEBUG_DRIVER("Enabling the HDMI Output\n");
@@ -113,7 +111,7 @@ static void sun4i_hdmi_enable(struct drm_encoder *encoder)
 	writel(val, hdmi->base + SUN4I_HDMI_PKT_CTRL_REG(0));
 
 	val = SUN4I_HDMI_VID_CTRL_ENABLE;
-	if (display->is_hdmi)
+	if (hdmi->hdmi_monitor)
 		val |= SUN4I_HDMI_VID_CTRL_HDMI_MODE;
 
 	writel(val, hdmi->base + SUN4I_HDMI_VID_CTRL_REG);
@@ -217,8 +215,9 @@ static int sun4i_hdmi_get_modes(struct drm_connector *connector)
 	if (!edid)
 		return 0;
 
+	hdmi->hdmi_monitor = drm_detect_hdmi_monitor(edid);
 	DRM_DEBUG_DRIVER("Monitor is %s monitor\n",
-			 connector->display_info.is_hdmi ? "an HDMI" : "a DVI");
+			 hdmi->hdmi_monitor ? "an HDMI" : "a DVI");
 
 	drm_connector_update_edid_property(connector, edid);
 	cec_s_phys_addr_from_edid(hdmi->cec_adap, edid);
@@ -490,6 +489,7 @@ static int sun4i_hdmi_bind(struct device *dev, struct device *master,
 	struct cec_connector_info conn_info;
 	struct sun4i_drv *drv = drm->dev_private;
 	struct sun4i_hdmi *hdmi;
+	struct resource *res;
 	u32 reg;
 	int ret;
 
@@ -504,7 +504,8 @@ static int sun4i_hdmi_bind(struct device *dev, struct device *master,
 	if (!hdmi->variant)
 		return -EINVAL;
 
-	hdmi->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hdmi->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(hdmi->base)) {
 		dev_err(dev, "Couldn't map the HDMI encoder registers\n");
 		return PTR_ERR(hdmi->base);
@@ -693,9 +694,11 @@ static int sun4i_hdmi_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sun4i_hdmi_ops);
 }
 
-static void sun4i_hdmi_remove(struct platform_device *pdev)
+static int sun4i_hdmi_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sun4i_hdmi_ops);
+
+	return 0;
 }
 
 static const struct of_device_id sun4i_hdmi_of_table[] = {
@@ -708,7 +711,7 @@ MODULE_DEVICE_TABLE(of, sun4i_hdmi_of_table);
 
 static struct platform_driver sun4i_hdmi_driver = {
 	.probe		= sun4i_hdmi_probe,
-	.remove_new	= sun4i_hdmi_remove,
+	.remove		= sun4i_hdmi_remove,
 	.driver		= {
 		.name		= "sun4i-hdmi",
 		.of_match_table	= sun4i_hdmi_of_table,

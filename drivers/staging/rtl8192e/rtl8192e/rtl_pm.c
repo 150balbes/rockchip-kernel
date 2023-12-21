@@ -9,6 +9,7 @@
 #include "r8190P_rtl8256.h"
 #include "rtl_pm.h"
 
+
 int rtl92e_suspend(struct device *dev_d)
 {
 	struct net_device *dev = dev_get_drvdata(dev_d);
@@ -31,7 +32,7 @@ int rtl92e_suspend(struct device *dev_d)
 	netif_device_detach(dev);
 
 	if (!priv->rtllib->bSupportRemoteWakeUp) {
-		rtl92e_set_rf_state(dev, rf_off, RF_CHANGE_BY_INIT);
+		rtl92e_set_rf_state(dev, eRfOff, RF_CHANGE_BY_INIT);
 		ulRegRead = rtl92e_readl(dev, CPU_GEN);
 		ulRegRead |= CPU_GEN_SYSTEM_RESET;
 		rtl92e_writel(dev, CPU_GEN, ulRegRead);
@@ -40,7 +41,7 @@ int rtl92e_suspend(struct device *dev_d)
 		rtl92e_writel(dev, WFCRC1, 0xffffffff);
 		rtl92e_writel(dev, WFCRC2, 0xffffffff);
 		rtl92e_writeb(dev, PMR, 0x5);
-		rtl92e_writeb(dev, MAC_BLK_CTRL, 0xa);
+		rtl92e_writeb(dev, MacBlkCtrl, 0xa);
 	}
 out_pci_suspend:
 	netdev_info(dev, "WOL is %s\n", priv->rtllib->bSupportRemoteWakeUp ?
@@ -60,6 +61,7 @@ int rtl92e_resume(struct device *dev_d)
 	u32 val;
 
 	netdev_info(dev, "================>r8192E resume call.\n");
+
 
 	pci_read_config_dword(pdev, 0x40, &val);
 	if ((val & 0x0000ff00) != 0)
@@ -81,9 +83,10 @@ int rtl92e_resume(struct device *dev_d)
 		dev->netdev_ops->ndo_open(dev);
 
 	if (!priv->rtllib->bSupportRemoteWakeUp)
-		rtl92e_set_rf_state(dev, rf_on, RF_CHANGE_BY_INIT);
+		rtl92e_set_rf_state(dev, eRfOn, RF_CHANGE_BY_INIT);
 
 out:
+	RT_TRACE(COMP_POWER, "<================r8192E resume call.\n");
 	return 0;
 }
 

@@ -172,15 +172,9 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 	int ret;
 	unsigned int value;
 
-	ret = clk_prepare_enable(priv->clk);
+	ret = reset_control_reset(priv->reset);
 	if (ret)
 		return ret;
-
-	ret = reset_control_reset(priv->reset);
-	if (ret) {
-		clk_disable_unprepare(priv->clk);
-		return ret;
-	}
 
 	udelay(RESET_COMPLETE_TIME);
 
@@ -283,13 +277,8 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 static int phy_meson_g12a_usb2_exit(struct phy *phy)
 {
 	struct phy_meson_g12a_usb2_priv *priv = phy_get_drvdata(phy);
-	int ret;
 
-	ret = reset_control_reset(priv->reset);
-	if (!ret)
-		clk_disable_unprepare(priv->clk);
-
-	return ret;
+	return reset_control_reset(priv->reset);
 }
 
 /* set_mode is not needed, mode setting is handled via the UTMI bus */
@@ -303,6 +292,7 @@ static int phy_meson_g12a_usb2_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct phy_provider *phy_provider;
+	struct resource *res;
 	struct phy_meson_g12a_usb2_priv *priv;
 	struct phy *phy;
 	void __iomem *base;
@@ -315,7 +305,8 @@ static int phy_meson_g12a_usb2_probe(struct platform_device *pdev)
 	priv->dev = dev;
 	platform_set_drvdata(pdev, priv);
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 

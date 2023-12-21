@@ -641,12 +641,12 @@ static int alc5623_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	struct snd_soc_component *component = codec_dai->component;
 	u16 iface = 0;
 
-	/* set audio interface clocking */
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	/* set master/slave audio interface */
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		iface = ALC5623_DAI_SDP_MASTER_MODE;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		iface = ALC5623_DAI_SDP_SLAVE_MODE;
 		break;
 	default:
@@ -956,6 +956,7 @@ static const struct snd_soc_component_driver soc_component_device_alc5623 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config alc5623_regmap = {
@@ -967,21 +968,14 @@ static const struct regmap_config alc5623_regmap = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static const struct i2c_device_id alc5623_i2c_table[] = {
-	{"alc5621", 0x21},
-	{"alc5622", 0x22},
-	{"alc5623", 0x23},
-	{}
-};
-MODULE_DEVICE_TABLE(i2c, alc5623_i2c_table);
-
 /*
  * ALC5623 2 wire address is determined by A1 pin
  * state during powerup.
  *    low  = 0x1a
  *    high = 0x1b
  */
-static int alc5623_i2c_probe(struct i2c_client *client)
+static int alc5623_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct alc5623_platform_data *pdata;
 	struct alc5623_priv *alc5623;
@@ -989,7 +983,6 @@ static int alc5623_i2c_probe(struct i2c_client *client)
 	unsigned int vid1, vid2;
 	int ret;
 	u32 val32;
-	const struct i2c_device_id *id;
 
 	alc5623 = devm_kzalloc(&client->dev, sizeof(struct alc5623_priv),
 			       GFP_KERNEL);
@@ -1015,8 +1008,6 @@ static int alc5623_i2c_probe(struct i2c_client *client)
 		return ret;
 	}
 	vid2 >>= 8;
-
-	id = i2c_match_id(alc5623_i2c_table, client);
 
 	if ((vid1 != 0x10ec) || (vid2 != id->driver_data)) {
 		dev_err(&client->dev, "unknown or wrong codec\n");
@@ -1069,13 +1060,19 @@ static int alc5623_i2c_probe(struct i2c_client *client)
 	return ret;
 }
 
-#ifdef CONFIG_OF
+static const struct i2c_device_id alc5623_i2c_table[] = {
+	{"alc5621", 0x21},
+	{"alc5622", 0x22},
+	{"alc5623", 0x23},
+	{}
+};
+MODULE_DEVICE_TABLE(i2c, alc5623_i2c_table);
+
 static const struct of_device_id alc5623_of_match[] = {
 	{ .compatible = "realtek,alc5623", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, alc5623_of_match);
-#endif
 
 /*  i2c codec control layer */
 static struct i2c_driver alc5623_i2c_driver = {

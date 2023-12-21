@@ -54,10 +54,6 @@
 		vbus-supply = <&typec2_vbus>;
 
 		status = "okay";
-
-		connector {
-			compatible = "usb-c-connector";
-		};
 	};
 };
 

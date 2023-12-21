@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2011-2020  B.A.T.M.A.N. contributors:
  *
  * Simon Wunderlich
  */
@@ -10,7 +10,6 @@
 #include <linux/atomic.h>
 #include <linux/byteorder/generic.h>
 #include <linux/compiler.h>
-#include <linux/container_of.h>
 #include <linux/crc16.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
@@ -26,8 +25,10 @@
 #include <linux/lockdep.h>
 #include <linux/netdevice.h>
 #include <linux/netlink.h>
+#include <linux/preempt.h>
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
+#include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -65,7 +66,7 @@ batadv_bla_send_announce(struct batadv_priv *bat_priv,
  */
 static inline u32 batadv_choose_claim(const void *data, u32 size)
 {
-	const struct batadv_bla_claim *claim = data;
+	struct batadv_bla_claim *claim = (struct batadv_bla_claim *)data;
 	u32 hash = 0;
 
 	hash = jhash(&claim->addr, sizeof(claim->addr), hash);
@@ -86,7 +87,7 @@ static inline u32 batadv_choose_backbone_gw(const void *data, u32 size)
 	const struct batadv_bla_backbone_gw *gw;
 	u32 hash = 0;
 
-	gw = data;
+	gw = (struct batadv_bla_backbone_gw *)data;
 	hash = jhash(&gw->orig, sizeof(gw->orig), hash);
 	hash = jhash(&gw->vid, sizeof(gw->vid), hash);
 
@@ -255,7 +256,7 @@ batadv_claim_hash_find(struct batadv_priv *bat_priv,
  * Return: backbone gateway if found or NULL otherwise
  */
 static struct batadv_bla_backbone_gw *
-batadv_backbone_hash_find(struct batadv_priv *bat_priv, const u8 *addr,
+batadv_backbone_hash_find(struct batadv_priv *bat_priv, u8 *addr,
 			  unsigned short vid)
 {
 	struct batadv_hashtable *hash = bat_priv->bla.backbone_hash;
@@ -337,7 +338,7 @@ batadv_bla_del_backbone_claims(struct batadv_bla_backbone_gw *backbone_gw)
  * @vid: the VLAN ID
  * @claimtype: the type of the claim (CLAIM, UNCLAIM, ANNOUNCE, ...)
  */
-static void batadv_bla_send_claim(struct batadv_priv *bat_priv, const u8 *mac,
+static void batadv_bla_send_claim(struct batadv_priv *bat_priv, u8 *mac,
 				  unsigned short vid, int claimtype)
 {
 	struct sk_buff *skb;
@@ -402,7 +403,7 @@ static void batadv_bla_send_claim(struct batadv_priv *bat_priv, const u8 *mac,
 		break;
 	case BATADV_CLAIM_TYPE_ANNOUNCE:
 		/* announcement frame
-		 * set HW SRC to the special mac containing the crc
+		 * set HW SRC to the special mac containg the crc
 		 */
 		ether_addr_copy(hw_src, mac);
 		batadv_dbg(BATADV_DBG_BLA, bat_priv,
@@ -444,9 +445,13 @@ static void batadv_bla_send_claim(struct batadv_priv *bat_priv, const u8 *mac,
 	batadv_add_counter(bat_priv, BATADV_CNT_RX_BYTES,
 			   skb->len + ETH_HLEN);
 
-	netif_rx(skb);
+	if (in_interrupt())
+		netif_rx(skb);
+	else
+		netif_rx_ni(skb);
 out:
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 }
 
 /**
@@ -489,7 +494,7 @@ static void batadv_bla_loopdetect_report(struct work_struct *work)
  * Return: the (possibly created) backbone gateway or NULL on error
  */
 static struct batadv_bla_backbone_gw *
-batadv_bla_get_backbone_gw(struct batadv_priv *bat_priv, const u8 *orig,
+batadv_bla_get_backbone_gw(struct batadv_priv *bat_priv, u8 *orig,
 			   unsigned short vid, bool own_backbone)
 {
 	struct batadv_bla_backbone_gw *entry;
@@ -927,7 +932,7 @@ static bool batadv_handle_request(struct batadv_priv *bat_priv,
  */
 static bool batadv_handle_unclaim(struct batadv_priv *bat_priv,
 				  struct batadv_hard_iface *primary_if,
-				  const u8 *backbone_addr, const u8 *claim_addr,
+				  u8 *backbone_addr, u8 *claim_addr,
 				  unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
@@ -965,7 +970,7 @@ static bool batadv_handle_unclaim(struct batadv_priv *bat_priv,
  */
 static bool batadv_handle_claim(struct batadv_priv *bat_priv,
 				struct batadv_hard_iface *primary_if,
-				const u8 *backbone_addr, const u8 *claim_addr,
+				u8 *backbone_addr, u8 *claim_addr,
 				unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
@@ -1046,7 +1051,7 @@ static int batadv_check_claim_group(struct batadv_priv *bat_priv,
 	/* lets see if this originator is in our mesh */
 	orig_node = batadv_orig_hash_find(bat_priv, backbone_addr);
 
-	/* don't accept claims from gateways which are not in
+	/* dont accept claims from gateways which are not in
 	 * the same mesh or group.
 	 */
 	if (!orig_node)
@@ -1504,7 +1509,8 @@ static void batadv_bla_periodic_work(struct work_struct *work)
 		rcu_read_unlock();
 	}
 out:
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 
 	queue_delayed_work(batadv_event_workqueue, &bat_priv->bla.work,
 			   msecs_to_jiffies(BATADV_BLA_PERIOD_LENGTH));
@@ -1817,7 +1823,8 @@ void batadv_bla_free(struct batadv_priv *bat_priv)
 		batadv_hash_destroy(bat_priv->bla.backbone_hash);
 		bat_priv->bla.backbone_hash = NULL;
 	}
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 }
 
 /**
@@ -2004,8 +2011,10 @@ handled:
 	ret = true;
 
 out:
-	batadv_hardif_put(primary_if);
-	batadv_claim_put(claim);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	if (claim)
+		batadv_claim_put(claim);
 	return ret;
 }
 
@@ -2109,10 +2118,75 @@ allow:
 handled:
 	ret = true;
 out:
-	batadv_hardif_put(primary_if);
-	batadv_claim_put(claim);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	if (claim)
+		batadv_claim_put(claim);
 	return ret;
 }
+
+#ifdef CONFIG_BATMAN_ADV_DEBUGFS
+/**
+ * batadv_bla_claim_table_seq_print_text() - print the claim table in a seq file
+ * @seq: seq file to print on
+ * @offset: not used
+ *
+ * Return: always 0
+ */
+int batadv_bla_claim_table_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_priv *bat_priv = netdev_priv(net_dev);
+	struct batadv_hashtable *hash = bat_priv->bla.claim_hash;
+	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_bla_claim *claim;
+	struct batadv_hard_iface *primary_if;
+	struct hlist_head *head;
+	u16 backbone_crc;
+	u32 i;
+	bool is_own;
+	u8 *primary_addr;
+
+	primary_if = batadv_seq_print_text_primary_if_get(seq);
+	if (!primary_if)
+		goto out;
+
+	primary_addr = primary_if->net_dev->dev_addr;
+	seq_printf(seq,
+		   "Claims announced for the mesh %s (orig %pM, group id %#.4x)\n",
+		   net_dev->name, primary_addr,
+		   ntohs(bat_priv->bla.claim_dest.group));
+	seq_puts(seq,
+		 "   Client               VID      Originator        [o] (CRC   )\n");
+	for (i = 0; i < hash->size; i++) {
+		head = &hash->table[i];
+
+		rcu_read_lock();
+		hlist_for_each_entry_rcu(claim, head, hash_entry) {
+			backbone_gw = batadv_bla_claim_get_backbone_gw(claim);
+
+			is_own = batadv_compare_eth(backbone_gw->orig,
+						    primary_addr);
+
+			spin_lock_bh(&backbone_gw->crc_lock);
+			backbone_crc = backbone_gw->crc;
+			spin_unlock_bh(&backbone_gw->crc_lock);
+			seq_printf(seq, " * %pM on %5d by %pM [%c] (%#.4x)\n",
+				   claim->addr, batadv_print_vid(claim->vid),
+				   backbone_gw->orig,
+				   (is_own ? 'x' : ' '),
+				   backbone_crc);
+
+			batadv_backbone_gw_put(backbone_gw);
+		}
+		rcu_read_unlock();
+	}
+out:
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	return 0;
+}
+#endif
 
 /**
  * batadv_bla_claim_dump_entry() - dump one entry of the claim table
@@ -2131,7 +2205,7 @@ batadv_bla_claim_dump_entry(struct sk_buff *msg, u32 portid,
 			    struct batadv_hard_iface *primary_if,
 			    struct batadv_bla_claim *claim)
 {
-	const u8 *primary_addr = primary_if->net_dev->dev_addr;
+	u8 *primary_addr = primary_if->net_dev->dev_addr;
 	u16 backbone_crc;
 	bool is_own;
 	void *hdr;
@@ -2275,12 +2349,80 @@ int batadv_bla_claim_dump(struct sk_buff *msg, struct netlink_callback *cb)
 	ret = msg->len;
 
 out:
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 
-	dev_put(soft_iface);
+	if (soft_iface)
+		dev_put(soft_iface);
 
 	return ret;
 }
+
+#ifdef CONFIG_BATMAN_ADV_DEBUGFS
+/**
+ * batadv_bla_backbone_table_seq_print_text() - print the backbone table in a
+ *  seq file
+ * @seq: seq file to print on
+ * @offset: not used
+ *
+ * Return: always 0
+ */
+int batadv_bla_backbone_table_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_priv *bat_priv = netdev_priv(net_dev);
+	struct batadv_hashtable *hash = bat_priv->bla.backbone_hash;
+	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_hard_iface *primary_if;
+	struct hlist_head *head;
+	int secs, msecs;
+	u16 backbone_crc;
+	u32 i;
+	bool is_own;
+	u8 *primary_addr;
+
+	primary_if = batadv_seq_print_text_primary_if_get(seq);
+	if (!primary_if)
+		goto out;
+
+	primary_addr = primary_if->net_dev->dev_addr;
+	seq_printf(seq,
+		   "Backbones announced for the mesh %s (orig %pM, group id %#.4x)\n",
+		   net_dev->name, primary_addr,
+		   ntohs(bat_priv->bla.claim_dest.group));
+	seq_puts(seq, "   Originator           VID   last seen (CRC   )\n");
+	for (i = 0; i < hash->size; i++) {
+		head = &hash->table[i];
+
+		rcu_read_lock();
+		hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
+			msecs = jiffies_to_msecs(jiffies -
+						 backbone_gw->lasttime);
+			secs = msecs / 1000;
+			msecs = msecs % 1000;
+
+			is_own = batadv_compare_eth(backbone_gw->orig,
+						    primary_addr);
+			if (is_own)
+				continue;
+
+			spin_lock_bh(&backbone_gw->crc_lock);
+			backbone_crc = backbone_gw->crc;
+			spin_unlock_bh(&backbone_gw->crc_lock);
+
+			seq_printf(seq, " * %pM on %5d %4i.%03is (%#.4x)\n",
+				   backbone_gw->orig,
+				   batadv_print_vid(backbone_gw->vid), secs,
+				   msecs, backbone_crc);
+		}
+		rcu_read_unlock();
+	}
+out:
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	return 0;
+}
+#endif
 
 /**
  * batadv_bla_backbone_dump_entry() - dump one entry of the backbone table to a
@@ -2299,7 +2441,7 @@ batadv_bla_backbone_dump_entry(struct sk_buff *msg, u32 portid,
 			       struct batadv_hard_iface *primary_if,
 			       struct batadv_bla_backbone_gw *backbone_gw)
 {
-	const u8 *primary_addr = primary_if->net_dev->dev_addr;
+	u8 *primary_addr = primary_if->net_dev->dev_addr;
 	u16 backbone_crc;
 	bool is_own;
 	int msecs;
@@ -2445,9 +2587,11 @@ int batadv_bla_backbone_dump(struct sk_buff *msg, struct netlink_callback *cb)
 	ret = msg->len;
 
 out:
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 
-	dev_put(soft_iface);
+	if (soft_iface)
+		dev_put(soft_iface);
 
 	return ret;
 }

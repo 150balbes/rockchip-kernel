@@ -38,11 +38,11 @@ static inline struct neighbour *__ipv4_neigh_lookup(struct net_device *dev, u32 
 {
 	struct neighbour *n;
 
-	rcu_read_lock();
+	rcu_read_lock_bh();
 	n = __ipv4_neigh_lookup_noref(dev, key);
 	if (n && !refcount_inc_not_zero(&n->refcnt))
 		n = NULL;
-	rcu_read_unlock();
+	rcu_read_unlock_bh();
 
 	return n;
 }
@@ -51,10 +51,16 @@ static inline void __ipv4_confirm_neigh(struct net_device *dev, u32 key)
 {
 	struct neighbour *n;
 
-	rcu_read_lock();
+	rcu_read_lock_bh();
 	n = __ipv4_neigh_lookup_noref(dev, key);
-	neigh_confirm(n);
-	rcu_read_unlock();
+	if (n) {
+		unsigned long now = jiffies;
+
+		/* avoid dirtying neighbour */
+		if (READ_ONCE(n->confirmed) != now)
+			WRITE_ONCE(n->confirmed, now);
+	}
+	rcu_read_unlock_bh();
 }
 
 void arp_init(void);

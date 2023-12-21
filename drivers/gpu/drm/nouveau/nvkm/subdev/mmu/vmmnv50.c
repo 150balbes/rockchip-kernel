@@ -184,7 +184,7 @@ nv50_vmm_flush(struct nvkm_vmm *vmm, int level)
 	struct nvkm_device *device = subdev->device;
 	int i, id;
 
-	mutex_lock(&vmm->mmu->mutex);
+	mutex_lock(&subdev->mutex);
 	for (i = 0; i < NVKM_SUBDEV_NR; i++) {
 		if (!atomic_read(&vmm->engref[i]))
 			continue;
@@ -207,7 +207,7 @@ nv50_vmm_flush(struct nvkm_vmm *vmm, int level)
 		case NVKM_ENGINE_MSVLD : id = 0x09; break;
 		case NVKM_ENGINE_CIPHER:
 		case NVKM_ENGINE_SEC   : id = 0x0a; break;
-		case NVKM_ENGINE_CE    : id = 0x0d; break;
+		case NVKM_ENGINE_CE0   : id = 0x0d; break;
 		default:
 			continue;
 		}
@@ -217,9 +217,10 @@ nv50_vmm_flush(struct nvkm_vmm *vmm, int level)
 			if (!(nvkm_rd32(device, 0x100c80) & 0x00000001))
 				break;
 		) < 0)
-			nvkm_error(subdev, "%s mmu invalidate timeout\n", nvkm_subdev_type[i]);
+			nvkm_error(subdev, "%s mmu invalidate timeout\n",
+				   nvkm_subdev_name[i]);
 	}
-	mutex_unlock(&vmm->mmu->mutex);
+	mutex_unlock(&subdev->mutex);
 }
 
 int
@@ -296,22 +297,19 @@ nv50_vmm_valid(struct nvkm_vmm *vmm, void *argv, u32 argc,
 			return -EINVAL;
 		}
 
-		if (!map->no_comp) {
-			ret = nvkm_memory_tags_get(memory, device, tags, NULL,
-						   &map->tags);
-			if (ret) {
-				VMM_DEBUG(vmm, "comp %d", ret);
-				return ret;
-			}
+		ret = nvkm_memory_tags_get(memory, device, tags, NULL,
+					   &map->tags);
+		if (ret) {
+			VMM_DEBUG(vmm, "comp %d", ret);
+			return ret;
+		}
 
-			if (map->tags->mn) {
-				u32 tags = map->tags->mn->offset +
-					   (map->offset >> 16);
-				map->ctag |= (u64)comp << 49;
-				map->type |= (u64)comp << 47;
-				map->type |= (u64)tags << 49;
-				map->next |= map->ctag;
-			}
+		if (map->tags->mn) {
+			u32 tags = map->tags->mn->offset + (map->offset >> 16);
+			map->ctag |= (u64)comp << 49;
+			map->type |= (u64)comp << 47;
+			map->type |= (u64)tags << 49;
+			map->next |= map->ctag;
 		}
 	}
 

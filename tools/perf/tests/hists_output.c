@@ -54,7 +54,6 @@ static int add_hist_entries(struct hists *hists, struct machine *machine)
 	struct perf_sample sample = { .period = 100, };
 	size_t i;
 
-	addr_location__init(&al);
 	for (i = 0; i < ARRAY_SIZE(fake_samples); i++) {
 		struct hist_entry_iter iter = {
 			.evsel = evsel,
@@ -74,21 +73,19 @@ static int add_hist_entries(struct hists *hists, struct machine *machine)
 
 		if (hist_entry_iter__add(&iter, &al, sysctl_perf_event_max_stack,
 					 NULL) < 0) {
+			addr_location__put(&al);
 			goto out;
 		}
 
 		fake_samples[i].thread = al.thread;
-		map__put(fake_samples[i].map);
-		fake_samples[i].map = map__get(al.map);
+		fake_samples[i].map = al.map;
 		fake_samples[i].sym = al.sym;
 	}
 
-	addr_location__exit(&al);
 	return TEST_OK;
 
 out:
 	pr_debug("Not enough memory for adding a hist entry\n");
-	addr_location__exit(&al);
 	return TEST_FAIL;
 }
 
@@ -116,23 +113,13 @@ static void del_hist_entries(struct hists *hists)
 	}
 }
 
-static void put_fake_samples(void)
-{
-	size_t i;
-
-	for (i = 0; i < ARRAY_SIZE(fake_samples); i++) {
-		map__put(fake_samples[i].map);
-		fake_samples[i].map = NULL;
-	}
-}
-
 typedef int (*test_fn_t)(struct evsel *, struct machine *);
 
 #define COMM(he)  (thread__comm_str(he->thread))
-#define DSO(he)   (map__dso(he->ms.map)->short_name)
+#define DSO(he)   (he->ms.map->dso->short_name)
 #define SYM(he)   (he->ms.sym->name)
 #define CPU(he)   (he->cpu)
-#define PID(he)   (thread__tid(he->thread))
+#define PID(he)   (he->thread->tid)
 
 /* default sort keys (no field) */
 static int test1(struct evsel *evsel, struct machine *machine)
@@ -588,7 +575,7 @@ out:
 	return err;
 }
 
-static int test__hists_output(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__hists_output(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	int err = TEST_FAIL;
 	struct machines machines;
@@ -606,7 +593,7 @@ static int test__hists_output(struct test_suite *test __maybe_unused, int subtes
 
 	TEST_ASSERT_VAL("No memory", evlist);
 
-	err = parse_event(evlist, "cpu-clock");
+	err = parse_events(evlist, "cpu-clock", NULL);
 	if (err)
 		goto out;
 	err = TEST_FAIL;
@@ -633,9 +620,6 @@ out:
 	/* tear down everything */
 	evlist__delete(evlist);
 	machines__exit(&machines);
-	put_fake_samples();
 
 	return err;
 }
-
-DEFINE_SUITE("Sort output of hist entries", hists_output);

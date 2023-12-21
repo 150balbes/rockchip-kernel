@@ -4,7 +4,6 @@
  * Copyright (C) 2015  Dialog Semiconductor Ltd.
  */
 
-#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/input.h>
@@ -183,6 +182,13 @@ static irqreturn_t da9063_onkey_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static void da9063_cancel_poll(void *data)
+{
+	struct da9063_onkey *onkey = data;
+
+	cancel_delayed_work_sync(&onkey->work);
+}
+
 static int da9063_onkey_probe(struct platform_device *pdev)
 {
 	struct da9063_onkey *onkey;
@@ -228,8 +234,9 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 
 	input_set_capability(onkey->input, EV_KEY, KEY_POWER);
 
-	error = devm_delayed_work_autocancel(&pdev->dev, &onkey->work,
-					     da9063_poll_on);
+	INIT_DELAYED_WORK(&onkey->work, da9063_poll_on);
+
+	error = devm_add_action(&pdev->dev, da9063_cancel_poll, onkey);
 	if (error) {
 		dev_err(&pdev->dev,
 			"Failed to add cancel poll action: %d\n",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2013-2020  B.A.T.M.A.N. contributors:
  *
  * Martin Hundebøll <martin@hundeboll.net>
  */
@@ -14,8 +14,8 @@
 #include <linux/gfp.h>
 #include <linux/if_ether.h>
 #include <linux/jiffies.h>
+#include <linux/kernel.h>
 #include <linux/lockdep.h>
-#include <linux/minmax.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
@@ -27,6 +27,7 @@
 #include "originator.h"
 #include "routing.h"
 #include "send.h"
+#include "soft-interface.h"
 
 /**
  * batadv_frag_clear_chain() - delete entries in the fragment buffer chain
@@ -381,8 +382,10 @@ bool batadv_frag_skb_fwd(struct sk_buff *skb,
 	}
 
 out:
-	batadv_orig_node_put(orig_node_dst);
-	batadv_neigh_node_put(neigh_node);
+	if (orig_node_dst)
+		batadv_orig_node_put(orig_node_dst);
+	if (neigh_node)
+		batadv_neigh_node_put(neigh_node);
 	return ret;
 }
 

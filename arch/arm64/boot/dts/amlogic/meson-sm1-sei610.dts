@@ -48,7 +48,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		key-1 {
+		key1 {
 			label = "A";
 			linux,code = <BTN_0>;
 			gpios = <&gpio GPIOH_6 GPIO_ACTIVE_LOW>;
@@ -56,7 +56,7 @@
 			interrupts = <34 IRQ_TYPE_EDGE_BOTH>;
 		};
 
-		key-2 {
+		key2 {
 			label = "B";
 			linux,code = <BTN_1>;
 			gpios = <&gpio GPIOH_7 GPIO_ACTIVE_LOW>;
@@ -64,7 +64,7 @@
 			interrupts = <35 IRQ_TYPE_EDGE_BOTH>;
 		};
 
-		key-3 {
+		key3 {
 			label = "C";
 			linux,code = <BTN_2>;
 			gpios = <&gpio_ao GPIOAO_2 GPIO_ACTIVE_LOW>;
@@ -72,7 +72,7 @@
 			interrupts = <2 IRQ_TYPE_EDGE_BOTH>;
 		};
 
-		key-mic-mute {
+		mic_mute {
 			label = "MicMute";
 			linux,code = <SW_MUTE_DEVICE>;
 			linux,input-type = <EV_SW>;
@@ -81,7 +81,7 @@
 			interrupts = <99 IRQ_TYPE_EDGE_BOTH>;
 		};
 
-		key-power {
+		power_key {
 			label = "PowerKey";
 			linux,code = <KEY_POWER>;
 			gpios = <&gpio_ao GPIOAO_3 GPIO_ACTIVE_LOW>;
@@ -101,20 +101,20 @@
 		};
 	};
 
-	led-controller-1 {
+	leds {
 		compatible = "gpio-leds";
 
-		led-1 {
+		led-bluetooth {
 			label = "sei610:blue:bt";
 			gpios = <&gpio GPIOC_7 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
 			default-state = "off";
 		};
 	};
 
-	led-controller-2 {
+	pwmleds {
 		compatible = "pwm-leds";
 
-		led-2 {
+		power {
 			label = "sei610:red:power";
 			pwms = <&pwm_AO_ab 0 30518 0>;
 			max-brightness = <255>;
@@ -171,6 +171,7 @@
 		regulator-max-microvolt = <3300000>;
 		vin-supply = <&vddao_3v3>;
 		gpio = <&gpio GPIOH_8 GPIO_OPEN_DRAIN>;
+		enable-active-low;
 		regulator-always-on;
 	};
 
@@ -184,7 +185,7 @@
 		regulator-min-microvolt = <690000>;
 		regulator-max-microvolt = <1050000>;
 
-		pwm-supply = <&dc_in>;
+		vin-supply = <&dc_in>;
 
 		pwms = <&pwm_AO_cd 1 1500 0>;
 		pwm-dutycycle-range = <100 0>;
@@ -211,7 +212,7 @@
 
 	sound {
 		compatible = "amlogic,axg-sound-card";
-		model = "SEI610";
+		model = "SM1-SEI610";
 		audio-aux-devs = <&tdmout_a>, <&tdmout_b>,
 				 <&tdmin_a>, <&tdmin_b>;
 		audio-routing = "TDMOUT_A IN 0", "FRDDR_A OUT 0",

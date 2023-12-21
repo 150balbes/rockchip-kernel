@@ -13,6 +13,9 @@
 #include <linux/acpi.h>
 #include <linux/security.h>
 
+#include "acpica/accommon.h"
+#include "acpica/actables.h"
+
 static struct config_group *acpi_table_group;
 
 struct acpi_table {
@@ -70,7 +73,7 @@ static inline struct acpi_table_header *get_header(struct config_item *cfg)
 	if (!table->header)
 		pr_err("table not loaded\n");
 
-	return table->header ?: ERR_PTR(-EINVAL);
+	return table->header;
 }
 
 static ssize_t acpi_table_aml_read(struct config_item *cfg,
@@ -78,8 +81,8 @@ static ssize_t acpi_table_aml_read(struct config_item *cfg,
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
 	if (data)
 		memcpy(data, h, h->length);
@@ -100,60 +103,60 @@ static ssize_t acpi_table_signature_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%.*s\n", ACPI_NAMESEG_SIZE, h->signature);
+	return sprintf(str, "%.*s\n", ACPI_NAMESEG_SIZE, h->signature);
 }
 
 static ssize_t acpi_table_length_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%d\n", h->length);
+	return sprintf(str, "%d\n", h->length);
 }
 
 static ssize_t acpi_table_revision_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%d\n", h->revision);
+	return sprintf(str, "%d\n", h->revision);
 }
 
 static ssize_t acpi_table_oem_id_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%.*s\n", ACPI_OEM_ID_SIZE, h->oem_id);
+	return sprintf(str, "%.*s\n", ACPI_OEM_ID_SIZE, h->oem_id);
 }
 
 static ssize_t acpi_table_oem_table_id_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%.*s\n", ACPI_OEM_TABLE_ID_SIZE, h->oem_table_id);
+	return sprintf(str, "%.*s\n", ACPI_OEM_TABLE_ID_SIZE, h->oem_table_id);
 }
 
 static ssize_t acpi_table_oem_revision_show(struct config_item *cfg, char *str)
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%d\n", h->oem_revision);
+	return sprintf(str, "%d\n", h->oem_revision);
 }
 
 static ssize_t acpi_table_asl_compiler_id_show(struct config_item *cfg,
@@ -161,10 +164,10 @@ static ssize_t acpi_table_asl_compiler_id_show(struct config_item *cfg,
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%.*s\n", ACPI_NAMESEG_SIZE, h->asl_compiler_id);
+	return sprintf(str, "%.*s\n", ACPI_NAMESEG_SIZE, h->asl_compiler_id);
 }
 
 static ssize_t acpi_table_asl_compiler_revision_show(struct config_item *cfg,
@@ -172,10 +175,10 @@ static ssize_t acpi_table_asl_compiler_revision_show(struct config_item *cfg,
 {
 	struct acpi_table_header *h = get_header(cfg);
 
-	if (IS_ERR(h))
-		return PTR_ERR(h);
+	if (!h)
+		return -EINVAL;
 
-	return sysfs_emit(str, "%d\n", h->asl_compiler_revision);
+	return sprintf(str, "%d\n", h->asl_compiler_revision);
 }
 
 CONFIGFS_ATTR_RO(acpi_table_, signature);
@@ -223,7 +226,7 @@ static void acpi_table_drop_item(struct config_group *group,
 {
 	struct acpi_table *table = container_of(cfg, struct acpi_table, cfg);
 
-	pr_debug("Host-directed Dynamic ACPI Table Unload\n");
+	ACPI_INFO(("Host-directed Dynamic ACPI Table Unload"));
 	acpi_unload_table(table->index);
 	config_item_put(cfg);
 }

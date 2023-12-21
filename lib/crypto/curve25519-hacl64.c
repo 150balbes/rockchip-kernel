@@ -14,6 +14,8 @@
 #include <crypto/curve25519.h>
 #include <linux/string.h>
 
+typedef __uint128_t u128;
+
 static __always_inline u64 u64_eq_mask(u64 a, u64 b)
 {
 	u64 x = a ^ b;

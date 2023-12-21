@@ -19,6 +19,7 @@
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 #include <asm/sync.h>
+#include <asm/war.h>
 #include <asm/thread_info.h>
 
 	__INIT
@@ -162,7 +163,7 @@ NESTED(handle_int, PT_SIZE, sp)
 	.set	push
 	.set	noat
 	mfc0	k0, CP0_STATUS
-#if defined(CONFIG_CPU_R3000)
+#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
 	and	k0, ST0_IEP
 	bnez	k0, 1f
 
@@ -348,8 +349,8 @@ NESTED(ejtag_debug_handler, PT_SIZE, sp)
 	MTC0	k0, CP0_DESAVE
 	mfc0	k0, CP0_DEBUG
 
-	andi	k0, k0, MIPS_DEBUG_DBP	# Check for SDBBP.
-	beqz	k0, ejtag_return
+	sll	k0, k0, 30	# Check for SDBBP.
+	bgez	k0, ejtag_return
 
 #ifdef CONFIG_SMP
 1:	PTR_LA	k0, ejtag_debug_buffer_spinlock
@@ -480,7 +481,7 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	.set	push
 	/* gas fails to assemble cfc1 for some archs (octeon).*/ \
 	.set	mips1
-	.set	hardfloat
+	SET_HARDFLOAT
 	cfc1	a1, fcr31
 	.set	pop
 	.endm
@@ -644,7 +645,7 @@ isrdhwr:
 	get_saved_sp	/* k1 := current_thread_info */
 	.set	noreorder
 	MFC0	k0, CP0_EPC
-#if defined(CONFIG_CPU_R3000)
+#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
 	ori	k1, _THREAD_MASK
 	xori	k1, _THREAD_MASK
 	LONG_L	v1, TI_TP_VALUE(k1)

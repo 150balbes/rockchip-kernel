@@ -36,31 +36,26 @@ static unsigned long at91sam9x5_clk_smd_recalc_rate(struct clk_hw *hw,
 	return parent_rate / (smddiv + 1);
 }
 
-static int at91sam9x5_clk_smd_determine_rate(struct clk_hw *hw,
-					     struct clk_rate_request *req)
+static long at91sam9x5_clk_smd_round_rate(struct clk_hw *hw, unsigned long rate,
+					  unsigned long *parent_rate)
 {
 	unsigned long div;
 	unsigned long bestrate;
 	unsigned long tmp;
 
-	if (req->rate >= req->best_parent_rate) {
-		req->rate = req->best_parent_rate;
-		return 0;
-	}
+	if (rate >= *parent_rate)
+		return *parent_rate;
 
-	div = req->best_parent_rate / req->rate;
-	if (div > SMD_MAX_DIV) {
-		req->rate = req->best_parent_rate / (SMD_MAX_DIV + 1);
-		return 0;
-	}
+	div = *parent_rate / rate;
+	if (div > SMD_MAX_DIV)
+		return *parent_rate / (SMD_MAX_DIV + 1);
 
-	bestrate = req->best_parent_rate / div;
-	tmp = req->best_parent_rate / (div + 1);
-	if (bestrate - req->rate > req->rate - tmp)
+	bestrate = *parent_rate / div;
+	tmp = *parent_rate / (div + 1);
+	if (bestrate - rate > rate - tmp)
 		bestrate = tmp;
 
-	req->rate = bestrate;
-	return 0;
+	return bestrate;
 }
 
 static int at91sam9x5_clk_smd_set_parent(struct clk_hw *hw, u8 index)
@@ -103,7 +98,7 @@ static int at91sam9x5_clk_smd_set_rate(struct clk_hw *hw, unsigned long rate,
 
 static const struct clk_ops at91sam9x5_smd_ops = {
 	.recalc_rate = at91sam9x5_clk_smd_recalc_rate,
-	.determine_rate = at91sam9x5_clk_smd_determine_rate,
+	.round_rate = at91sam9x5_clk_smd_round_rate,
 	.get_parent = at91sam9x5_clk_smd_get_parent,
 	.set_parent = at91sam9x5_clk_smd_set_parent,
 	.set_rate = at91sam9x5_clk_smd_set_rate,

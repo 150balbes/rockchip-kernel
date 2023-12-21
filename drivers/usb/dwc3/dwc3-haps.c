@@ -33,10 +33,6 @@ static const struct property_entry initial_properties[] = {
 	{ },
 };
 
-static const struct software_node dwc3_haps_swnode = {
-	.properties = initial_properties,
-};
-
 static int dwc3_haps_probe(struct pci_dev *pci,
 			   const struct pci_device_id *id)
 {
@@ -81,7 +77,7 @@ static int dwc3_haps_probe(struct pci_dev *pci,
 	dwc->pci = pci;
 	dwc->dwc3->dev.parent = dev;
 
-	ret = device_add_software_node(&dwc->dwc3->dev, &dwc3_haps_swnode);
+	ret = platform_device_add_properties(dwc->dwc3, initial_properties);
 	if (ret)
 		goto err;
 
@@ -95,7 +91,6 @@ static int dwc3_haps_probe(struct pci_dev *pci,
 
 	return 0;
 err:
-	device_remove_software_node(&dwc->dwc3->dev);
 	platform_device_put(dwc->dwc3);
 	return ret;
 }
@@ -104,7 +99,6 @@ static void dwc3_haps_remove(struct pci_dev *pci)
 {
 	struct dwc3_haps *dwc = pci_get_drvdata(pci);
 
-	device_remove_software_node(&dwc->dwc3->dev);
 	platform_device_unregister(dwc->dwc3);
 }
 

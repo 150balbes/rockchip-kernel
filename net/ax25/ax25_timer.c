@@ -108,12 +108,10 @@ int ax25_t1timer_running(ax25_cb *ax25)
 
 unsigned long ax25_display_timer(struct timer_list *timer)
 {
-	long delta = timer->expires - jiffies;
-
 	if (!timer_pending(timer))
 		return 0;
 
-	return max(0L, delta);
+	return timer->expires - jiffies;
 }
 
 EXPORT_SYMBOL(ax25_display_timer);

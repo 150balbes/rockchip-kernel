@@ -51,11 +51,16 @@ static int dvic_connect(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
 	struct omap_dss_device *in = ddata->in;
+	int r;
 
 	if (omapdss_device_is_connected(dssdev))
 		return 0;
 
-	return in->ops.dvi->connect(in, dssdev);
+	r = in->ops.dvi->connect(in, dssdev);
+	if (r)
+		return r;
+
+	return 0;
 }
 
 static void dvic_disconnect(struct omap_dss_device *dssdev)

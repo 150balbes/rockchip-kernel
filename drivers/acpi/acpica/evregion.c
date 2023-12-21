@@ -3,7 +3,7 @@
  *
  * Module Name: evregion - Operation Region support
  *
- * Copyright (C) 2000 - 2023, Intel Corp.
+ * Copyright (C) 2000 - 2020, Intel Corp.
  *
  *****************************************************************************/
 
@@ -21,8 +21,7 @@ extern u8 acpi_gbl_default_address_spaces[];
 /* Local prototypes */
 
 static void
-acpi_ev_execute_orphan_reg_method(struct acpi_namespace_node *device_node,
-				  acpi_adr_space_type space_id);
+acpi_ev_orphan_ec_reg_method(struct acpi_namespace_node *ec_device_node);
 
 static acpi_status
 acpi_ev_reg_run(acpi_handle obj_handle,
@@ -162,25 +161,6 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 			return_ACPI_STATUS(AE_NOT_EXIST);
 		}
 
-		if (region_obj->region.space_id == ACPI_ADR_SPACE_PLATFORM_COMM) {
-			struct acpi_pcc_info *ctx =
-			    handler_desc->address_space.context;
-
-			ctx->internal_buffer =
-			    field_obj->field.internal_pcc_buffer;
-			ctx->length = (u16)region_obj->region.length;
-			ctx->subspace_id = (u8)region_obj->region.address;
-		}
-
-		if (region_obj->region.space_id ==
-		    ACPI_ADR_SPACE_FIXED_HARDWARE) {
-			struct acpi_ffh_info *ctx =
-			    handler_desc->address_space.context;
-
-			ctx->length = region_obj->region.length;
-			ctx->offset = region_obj->region.address;
-		}
-
 		/*
 		 * We must exit the interpreter because the region setup will
 		 * potentially execute control methods (for example, the _REG method
@@ -263,8 +243,7 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 	 *      the previous Connection)
 	 *   2) bit_width is the actual bit length of the field (number of pins)
 	 */
-	if ((region_obj->region.space_id == ACPI_ADR_SPACE_GSBUS ||
-	     region_obj->region.space_id == ACPI_ADR_SPACE_GPIO) &&
+	if ((region_obj->region.space_id == ACPI_ADR_SPACE_GSBUS) &&
 	    context && field_obj) {
 
 		status =
@@ -280,11 +259,25 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 		context->connection = field_obj->field.resource_buffer;
 		context->length = field_obj->field.resource_length;
 		context->access_length = field_obj->field.access_length;
+	}
+	if ((region_obj->region.space_id == ACPI_ADR_SPACE_GPIO) &&
+	    context && field_obj) {
 
-		if (region_obj->region.space_id == ACPI_ADR_SPACE_GPIO) {
-			address = field_obj->field.pin_number_index;
-			bit_width = field_obj->field.bit_length;
+		status =
+		    acpi_os_acquire_mutex(context_mutex, ACPI_WAIT_FOREVER);
+		if (ACPI_FAILURE(status)) {
+			goto re_enter_interpreter;
 		}
+
+		context_locked = TRUE;
+
+		/* Get the Connection (resource_template) buffer */
+
+		context->connection = field_obj->field.resource_buffer;
+		context->length = field_obj->field.resource_length;
+		context->access_length = field_obj->field.access_length;
+		address = field_obj->field.pin_number_index;
+		bit_width = field_obj->field.bit_length;
 	}
 
 	/* Call the handler */
@@ -721,12 +714,10 @@ acpi_ev_execute_reg_methods(struct acpi_namespace_node *node,
 				     ACPI_NS_WALK_UNLOCK, acpi_ev_reg_run, NULL,
 				     &info, NULL);
 
-	/*
-	 * Special case for EC and GPIO: handle "orphan" _REG methods with
-	 * no region.
-	 */
-	if (space_id == ACPI_ADR_SPACE_EC || space_id == ACPI_ADR_SPACE_GPIO) {
-		acpi_ev_execute_orphan_reg_method(node, space_id);
+	/* Special case for EC: handle "orphan" _REG methods with no region */
+
+	if (space_id == ACPI_ADR_SPACE_EC) {
+		acpi_ev_orphan_ec_reg_method(node);
 	}
 
 	ACPI_DEBUG_PRINT_RAW((ACPI_DB_NAMES,
@@ -799,28 +790,31 @@ acpi_ev_reg_run(acpi_handle obj_handle,
 
 /*******************************************************************************
  *
- * FUNCTION:    acpi_ev_execute_orphan_reg_method
+ * FUNCTION:    acpi_ev_orphan_ec_reg_method
  *
- * PARAMETERS:  device_node         - Namespace node for an ACPI device
- *              space_id            - The address space ID
+ * PARAMETERS:  ec_device_node      - Namespace node for an EC device
  *
  * RETURN:      None
  *
- * DESCRIPTION: Execute an "orphan" _REG method that appears under an ACPI
+ * DESCRIPTION: Execute an "orphan" _REG method that appears under the EC
  *              device. This is a _REG method that has no corresponding region
- *              within the device's scope. ACPI tables depending on these
- *              "orphan" _REG methods have been seen for both EC and GPIO
- *              Operation Regions. Presumably the Windows ACPI implementation
- *              always calls the _REG method independent of the presence of
- *              an actual Operation Region with the correct address space ID.
+ *              within the EC device scope. The orphan _REG method appears to
+ *              have been enabled by the description of the ECDT in the ACPI
+ *              specification: "The availability of the region space can be
+ *              detected by providing a _REG method object underneath the
+ *              Embedded Controller device."
+ *
+ *              To quickly access the EC device, we use the ec_device_node used
+ *              during EC handler installation. Otherwise, we would need to
+ *              perform a time consuming namespace walk, executing _HID
+ *              methods to find the EC device.
  *
  *  MUTEX:      Assumes the namespace is locked
  *
  ******************************************************************************/
 
 static void
-acpi_ev_execute_orphan_reg_method(struct acpi_namespace_node *device_node,
-				  acpi_adr_space_type space_id)
+acpi_ev_orphan_ec_reg_method(struct acpi_namespace_node *ec_device_node)
 {
 	acpi_handle reg_method;
 	struct acpi_namespace_node *next_node;
@@ -828,9 +822,9 @@ acpi_ev_execute_orphan_reg_method(struct acpi_namespace_node *device_node,
 	struct acpi_object_list args;
 	union acpi_object objects[2];
 
-	ACPI_FUNCTION_TRACE(ev_execute_orphan_reg_method);
+	ACPI_FUNCTION_TRACE(ev_orphan_ec_reg_method);
 
-	if (!device_node) {
+	if (!ec_device_node) {
 		return_VOID;
 	}
 
@@ -840,7 +834,7 @@ acpi_ev_execute_orphan_reg_method(struct acpi_namespace_node *device_node,
 
 	/* Get a handle to a _REG method immediately under the EC device */
 
-	status = acpi_get_handle(device_node, METHOD_NAME__REG, &reg_method);
+	status = acpi_get_handle(ec_device_node, METHOD_NAME__REG, &reg_method);
 	if (ACPI_FAILURE(status)) {
 		goto exit;	/* There is no _REG method present */
 	}
@@ -852,23 +846,23 @@ acpi_ev_execute_orphan_reg_method(struct acpi_namespace_node *device_node,
 	 * with other space IDs to be present; but the code below will then
 	 * execute the _REG method with the embedded_control space_ID argument.
 	 */
-	next_node = acpi_ns_get_next_node(device_node, NULL);
+	next_node = acpi_ns_get_next_node(ec_device_node, NULL);
 	while (next_node) {
 		if ((next_node->type == ACPI_TYPE_REGION) &&
 		    (next_node->object) &&
-		    (next_node->object->region.space_id == space_id)) {
+		    (next_node->object->region.space_id == ACPI_ADR_SPACE_EC)) {
 			goto exit;	/* Do not execute the _REG */
 		}
 
-		next_node = acpi_ns_get_next_node(device_node, next_node);
+		next_node = acpi_ns_get_next_node(ec_device_node, next_node);
 	}
 
-	/* Evaluate the _REG(space_id,Connect) method */
+	/* Evaluate the _REG(embedded_control,Connect) method */
 
 	args.count = 2;
 	args.pointer = objects;
 	objects[0].type = ACPI_TYPE_INTEGER;
-	objects[0].integer.value = space_id;
+	objects[0].integer.value = ACPI_ADR_SPACE_EC;
 	objects[1].type = ACPI_TYPE_INTEGER;
 	objects[1].integer.value = ACPI_REG_CONNECT;
 

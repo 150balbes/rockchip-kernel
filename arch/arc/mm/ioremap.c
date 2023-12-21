@@ -39,8 +39,7 @@ void __iomem *ioremap(phys_addr_t paddr, unsigned long size)
 	if (arc_uncached_addr_space(paddr))
 		return (void __iomem *)(u32)paddr;
 
-	return ioremap_prot(paddr, size,
-			    pgprot_val(pgprot_noncached(PAGE_KERNEL)));
+	return ioremap_prot(paddr, size, PAGE_KERNEL_NO_CACHE);
 }
 EXPORT_SYMBOL(ioremap);
 

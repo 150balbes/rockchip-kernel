@@ -214,9 +214,9 @@ static bool trackpoint_is_attr_available(struct psmouse *psmouse,
 static umode_t trackpoint_is_attr_visible(struct kobject *kobj,
 					  struct attribute *attr, int n)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct serio *serio = to_serio_port(dev);
-	struct psmouse *psmouse = psmouse_from_serio(serio);
+	struct psmouse *psmouse = serio_get_drvdata(serio);
 
 	return trackpoint_is_attr_available(psmouse, attr) ? attr->mode : 0;
 }

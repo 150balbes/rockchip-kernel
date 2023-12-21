@@ -14,6 +14,6 @@
 struct mhdp_platform_ops;
 
 extern const struct mhdp_platform_ops mhdp_ti_j721e_ops;
-extern const u32 mhdp_ti_j721e_bridge_input_bus_flags;
+extern const struct drm_bridge_timings mhdp_ti_j721e_bridge_timings;
 
 #endif /* !CDNS_MHDP8546_J721E_H */

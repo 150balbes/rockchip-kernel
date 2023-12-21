@@ -615,7 +615,8 @@ static ssize_t lm8323_set_disable(struct device *dev,
 }
 static DEVICE_ATTR(disable_kp, 0644, lm8323_show_disable, lm8323_set_disable);
 
-static int lm8323_probe(struct i2c_client *client)
+static int lm8323_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct lm8323_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct input_dev *idev;
@@ -751,7 +752,7 @@ fail1:
 	return err;
 }
 
-static void lm8323_remove(struct i2c_client *client)
+static int lm8323_remove(struct i2c_client *client)
 {
 	struct lm8323_chip *lm = i2c_get_clientdata(client);
 	int i;
@@ -768,8 +769,11 @@ static void lm8323_remove(struct i2c_client *client)
 			led_classdev_unregister(&lm->pwm[i].cdev);
 
 	kfree(lm);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 /*
  * We don't need to explicitly suspend the chip, as it already switches off
  * when there's no activity.
@@ -813,8 +817,9 @@ static int lm8323_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(lm8323_pm_ops, lm8323_suspend, lm8323_resume);
+static SIMPLE_DEV_PM_OPS(lm8323_pm_ops, lm8323_suspend, lm8323_resume);
 
 static const struct i2c_device_id lm8323_id[] = {
 	{ "lm8323", 0 },
@@ -824,7 +829,7 @@ static const struct i2c_device_id lm8323_id[] = {
 static struct i2c_driver lm8323_i2c_driver = {
 	.driver = {
 		.name	= "lm8323",
-		.pm	= pm_sleep_ptr(&lm8323_pm_ops),
+		.pm	= &lm8323_pm_ops,
 	},
 	.probe		= lm8323_probe,
 	.remove		= lm8323_remove,

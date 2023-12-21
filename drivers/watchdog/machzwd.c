@@ -174,7 +174,6 @@ static inline void zf_set_timer(unsigned short new, unsigned char n)
 		fallthrough;
 	case WD2:
 		zf_writeb(COUNTER_2, new > 0xff ? 0xff : new);
-		fallthrough;
 	default:
 		return;
 	}

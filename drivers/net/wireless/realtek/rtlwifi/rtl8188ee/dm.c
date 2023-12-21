@@ -474,11 +474,11 @@ static void rtl88e_dm_dig(struct ieee80211_hw *hw)
 	u8 dm_dig_max, dm_dig_min;
 	u8 current_igi = dm_dig->cur_igvalue;
 
-	if (!rtlpriv->dm.dm_initialgain_enable)
+	if (rtlpriv->dm.dm_initialgain_enable == false)
 		return;
-	if (!dm_dig->dig_enable_flag)
+	if (dm_dig->dig_enable_flag == false)
 		return;
-	if (mac->act_scanning)
+	if (mac->act_scanning == true)
 		return;
 
 	if (mac->link_state >= MAC80211_LINKED)
@@ -1637,7 +1637,7 @@ static void rtl88e_dm_fast_ant_training(struct ieee80211_hw *hw)
 			}
 		}
 
-		if (!bpkt_filter_match) {
+		if (bpkt_filter_match == false) {
 			rtl_set_bbreg(hw, DM_REG_TXAGC_A_1_MCS32_11N,
 				      BIT(16), 0);
 			rtl_set_bbreg(hw, DM_REG_IGI_A_11N, BIT(7), 0);

@@ -111,11 +111,10 @@ static unsigned long get_user_msr(struct task_struct *task)
 	return task->thread.regs->msr | task->thread.fpexc_mode;
 }
 
-static __always_inline int set_user_msr(struct task_struct *task, unsigned long msr)
+static int set_user_msr(struct task_struct *task, unsigned long msr)
 {
-	unsigned long newmsr = (task->thread.regs->msr & ~MSR_DEBUGCHANGE) |
-				(msr & MSR_DEBUGCHANGE);
-	regs_set_return_msr(task->thread.regs, newmsr);
+	task->thread.regs->msr &= ~MSR_DEBUGCHANGE;
+	task->thread.regs->msr |= msr & MSR_DEBUGCHANGE;
 	return 0;
 }
 
@@ -148,7 +147,7 @@ static int set_user_dscr(struct task_struct *task, unsigned long dscr)
  * We prevent mucking around with the reserved area of trap
  * which are used internally by the kernel.
  */
-static __always_inline int set_user_trap(struct task_struct *task, unsigned long trap)
+static int set_user_trap(struct task_struct *task, unsigned long trap)
 {
 	set_trap(task->thread.regs, trap);
 	return 0;
@@ -174,7 +173,7 @@ int ptrace_get_reg(struct task_struct *task, int regno, unsigned long *data)
 
 	/*
 	 * softe copies paca->irq_soft_mask variable state. Since irq_soft_mask is
-	 * no more used as a flag, lets force usr to always see the softe value as 1
+	 * no more used as a flag, lets force usr to alway see the softe value as 1
 	 * which means interrupts are not soft disabled.
 	 */
 	if (IS_ENABLED(CONFIG_PPC64) && regno == PT_SOFTE) {
@@ -218,19 +217,26 @@ int ptrace_put_reg(struct task_struct *task, int regno, unsigned long data)
 static int gpr_get(struct task_struct *target, const struct user_regset *regset,
 		   struct membuf to)
 {
-	struct membuf to_msr = membuf_at(&to, offsetof(struct pt_regs, msr));
-#ifdef CONFIG_PPC64
-	struct membuf to_softe = membuf_at(&to, offsetof(struct pt_regs, softe));
-#endif
+	int i;
+
 	if (target->thread.regs == NULL)
 		return -EIO;
 
-	membuf_write(&to, target->thread.regs, sizeof(struct user_pt_regs));
+	if (!FULL_REGS(target->thread.regs)) {
+		/* We have a partial register set.  Fill 14-31 with bogus values */
+		for (i = 14; i < 32; i++)
+			target->thread.regs->gpr[i] = NV_REG_POISON;
+	}
 
-	membuf_store(&to_msr, get_user_msr(target));
-#ifdef CONFIG_PPC64
-	membuf_store(&to_softe, 0x1ul);
-#endif
+	membuf_write(&to, target->thread.regs, offsetof(struct pt_regs, msr));
+	membuf_store(&to, get_user_msr(target));
+
+	BUILD_BUG_ON(offsetof(struct pt_regs, orig_gpr3) !=
+		     offsetof(struct pt_regs, msr) + sizeof(long));
+
+	membuf_write(&to, &target->thread.regs->orig_gpr3,
+			sizeof(struct user_pt_regs) -
+			offsetof(struct pt_regs, orig_gpr3));
 	return membuf_zero(&to, ELF_NGREG * sizeof(unsigned long) -
 				 sizeof(struct user_pt_regs));
 }
@@ -244,6 +250,8 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 
 	if (target->thread.regs == NULL)
 		return -EIO;
+
+	CHECK_FULL_REGS(target->thread.regs);
 
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				 target->thread.regs,
@@ -267,9 +275,9 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 					 (PT_MAX_PUT_REG + 1) * sizeof(reg));
 
 	if (PT_MAX_PUT_REG + 1 < PT_TRAP && !ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  (PT_MAX_PUT_REG + 1) * sizeof(reg),
-					  PT_TRAP * sizeof(reg));
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						(PT_MAX_PUT_REG + 1) * sizeof(reg),
+						PT_TRAP * sizeof(reg));
 
 	if (!ret && count > 0) {
 		ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, &reg,
@@ -280,8 +288,8 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 	}
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  (PT_TRAP + 1) * sizeof(reg), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						(PT_TRAP + 1) * sizeof(reg), -1);
 
 	return ret;
 }
@@ -290,9 +298,6 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 static int ppr_get(struct task_struct *target, const struct user_regset *regset,
 		   struct membuf to)
 {
-	if (!target->thread.regs)
-		return -EINVAL;
-
 	return membuf_write(&to, &target->thread.regs->ppr, sizeof(u64));
 }
 
@@ -300,9 +305,6 @@ static int ppr_set(struct task_struct *target, const struct user_regset *regset,
 		   unsigned int pos, unsigned int count, const void *kbuf,
 		   const void __user *ubuf)
 {
-	if (!target->thread.regs)
-		return -EINVAL;
-
 	return user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				  &target->thread.regs->ppr, 0, sizeof(u64));
 }
@@ -454,65 +456,7 @@ static int pmu_set(struct task_struct *target, const struct user_regset *regset,
 					 5 * sizeof(unsigned long));
 	return ret;
 }
-
-static int dexcr_active(struct task_struct *target, const struct user_regset *regset)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_31))
-		return -ENODEV;
-
-	return regset->n;
-}
-
-static int dexcr_get(struct task_struct *target, const struct user_regset *regset,
-		     struct membuf to)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_31))
-		return -ENODEV;
-
-	/*
-	 * The DEXCR is currently static across all CPUs, so we don't
-	 * store the target's value anywhere, but the static value
-	 * will also be correct.
-	 */
-	membuf_store(&to, (u64)lower_32_bits(DEXCR_INIT));
-
-	/*
-	 * Technically the HDEXCR is per-cpu, but a hypervisor can't reasonably
-	 * change it between CPUs of the same guest.
-	 */
-	return membuf_store(&to, (u64)lower_32_bits(mfspr(SPRN_HDEXCR_RO)));
-}
-
-#ifdef CONFIG_CHECKPOINT_RESTORE
-static int hashkeyr_active(struct task_struct *target, const struct user_regset *regset)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_31))
-		return -ENODEV;
-
-	return regset->n;
-}
-
-static int hashkeyr_get(struct task_struct *target, const struct user_regset *regset,
-			struct membuf to)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_31))
-		return -ENODEV;
-
-	return membuf_store(&to, target->thread.hashkeyr);
-}
-
-static int hashkeyr_set(struct task_struct *target, const struct user_regset *regset,
-			unsigned int pos, unsigned int count, const void *kbuf,
-			const void __user *ubuf)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_31))
-		return -ENODEV;
-
-	return user_regset_copyin(&pos, &count, &kbuf, &ubuf, &target->thread.hashkeyr,
-				  0, sizeof(unsigned long));
-}
-#endif /* CONFIG_CHECKPOINT_RESTORE */
-#endif /* CONFIG_PPC_BOOK3S_64 */
+#endif
 
 #ifdef CONFIG_PPC_MEM_KEYS
 static int pkey_active(struct task_struct *target, const struct user_regset *regset)
@@ -526,12 +470,12 @@ static int pkey_active(struct task_struct *target, const struct user_regset *reg
 static int pkey_get(struct task_struct *target, const struct user_regset *regset,
 		    struct membuf to)
 {
+	BUILD_BUG_ON(TSO(amr) + sizeof(unsigned long) != TSO(iamr));
 
 	if (!arch_pkeys_enabled())
 		return -ENODEV;
 
-	membuf_store(&to, target->thread.regs->amr);
-	membuf_store(&to, target->thread.regs->iamr);
+	membuf_write(&to, &target->thread.amr, 2 * sizeof(unsigned long));
 	return membuf_store(&to, default_uamor);
 }
 
@@ -564,8 +508,7 @@ static int pkey_set(struct task_struct *target, const struct user_regset *regset
 	 * Pick the AMR values for the keys that kernel is using. This
 	 * will be indicated by the ~default_uamor bits.
 	 */
-	target->thread.regs->amr = (new_amr & default_uamor) |
-		(target->thread.regs->amr & ~default_uamor);
+	target->thread.amr = (new_amr & default_uamor) | (target->thread.amr & ~default_uamor);
 
 	return 0;
 }
@@ -673,18 +616,6 @@ static const struct user_regset native_regsets[] = {
 		.size = sizeof(u64), .align = sizeof(u64),
 		.active = pmu_active, .regset_get = pmu_get, .set = pmu_set
 	},
-	[REGSET_DEXCR] = {
-		.core_note_type = NT_PPC_DEXCR, .n = ELF_NDEXCR,
-		.size = sizeof(u64), .align = sizeof(u64),
-		.active = dexcr_active, .regset_get = dexcr_get
-	},
-#ifdef CONFIG_CHECKPOINT_RESTORE
-	[REGSET_HASHKEYR] = {
-		.core_note_type = NT_PPC_HASHKEYR, .n = ELF_NHASHKEYR,
-		.size = sizeof(u64), .align = sizeof(u64),
-		.active = hashkeyr_active, .regset_get = hashkeyr_get, .set = hashkeyr_set
-	},
-#endif
 #endif
 #ifdef CONFIG_PPC_MEM_KEYS
 	[REGSET_PKEY] = {
@@ -726,9 +657,6 @@ int gpr32_set_common(struct task_struct *target,
 	const compat_ulong_t __user *u = ubuf;
 	compat_ulong_t reg;
 
-	if (!kbuf && !user_read_access_begin(u, count))
-		return -EFAULT;
-
 	pos /= sizeof(reg);
 	count /= sizeof(reg);
 
@@ -737,7 +665,8 @@ int gpr32_set_common(struct task_struct *target,
 			regs[pos++] = *k++;
 	else
 		for (; count > 0 && pos < PT_MSR; --count) {
-			unsafe_get_user(reg, u++, Efault);
+			if (__get_user(reg, u++))
+				return -EFAULT;
 			regs[pos++] = reg;
 		}
 
@@ -745,8 +674,8 @@ int gpr32_set_common(struct task_struct *target,
 	if (count > 0 && pos == PT_MSR) {
 		if (kbuf)
 			reg = *k++;
-		else
-			unsafe_get_user(reg, u++, Efault);
+		else if (__get_user(reg, u++))
+			return -EFAULT;
 		set_user_msr(target, reg);
 		++pos;
 		--count;
@@ -759,45 +688,50 @@ int gpr32_set_common(struct task_struct *target,
 			++k;
 	} else {
 		for (; count > 0 && pos <= PT_MAX_PUT_REG; --count) {
-			unsafe_get_user(reg, u++, Efault);
+			if (__get_user(reg, u++))
+				return -EFAULT;
 			regs[pos++] = reg;
 		}
 		for (; count > 0 && pos < PT_TRAP; --count, ++pos)
-			unsafe_get_user(reg, u++, Efault);
+			if (__get_user(reg, u++))
+				return -EFAULT;
 	}
 
 	if (count > 0 && pos == PT_TRAP) {
 		if (kbuf)
 			reg = *k++;
-		else
-			unsafe_get_user(reg, u++, Efault);
+		else if (__get_user(reg, u++))
+			return -EFAULT;
 		set_user_trap(target, reg);
 		++pos;
 		--count;
 	}
-	if (!kbuf)
-		user_read_access_end();
 
 	kbuf = k;
 	ubuf = u;
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  (PT_TRAP + 1) * sizeof(reg), -1);
-	return 0;
-
-Efault:
-	user_read_access_end();
-	return -EFAULT;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 (PT_TRAP + 1) * sizeof(reg), -1);
 }
 
 static int gpr32_get(struct task_struct *target,
 		     const struct user_regset *regset,
 		     struct membuf to)
 {
+	int i;
+
 	if (target->thread.regs == NULL)
 		return -EIO;
 
+	if (!FULL_REGS(target->thread.regs)) {
+		/*
+		 * We have a partial register set.
+		 * Fill 14-31 with bogus values.
+		 */
+		for (i = 14; i < 32; i++)
+			target->thread.regs->gpr[i] = NV_REG_POISON;
+	}
 	return gpr32_get_common(target, regset, to,
 			&target->thread.regs->gpr[0]);
 }
@@ -810,6 +744,7 @@ static int gpr32_set(struct task_struct *target,
 	if (target->thread.regs == NULL)
 		return -EIO;
 
+	CHECK_FULL_REGS(target->thread.regs);
 	return gpr32_set_common(target, regset, pos, count, kbuf, ubuf,
 			&target->thread.regs->gpr[0]);
 }
@@ -918,7 +853,7 @@ static const struct user_regset_view user_ppc_compat_view = {
 
 const struct user_regset_view *task_user_regset_view(struct task_struct *task)
 {
-	if (IS_ENABLED(CONFIG_COMPAT) && is_tsk_32bit_task(task))
+	if (IS_ENABLED(CONFIG_PPC64) && test_tsk_thread_flag(task, TIF_32BIT))
 		return &user_ppc_compat_view;
 	return &user_ppc_native_view;
 }

@@ -7,9 +7,7 @@
 #include <linux/bitfield.h>
 #include <linux/etherdevice.h>
 
-#include "tag.h"
-
-#define AR9331_NAME			"ar9331"
+#include "dsa_priv.h"
 
 #define AR9331_HDR_LEN			2
 #define AR9331_HDR_VERSION		1
@@ -46,7 +44,8 @@ static struct sk_buff *ar9331_tag_xmit(struct sk_buff *skb,
 }
 
 static struct sk_buff *ar9331_tag_rcv(struct sk_buff *skb,
-				      struct net_device *ndev)
+				      struct net_device *ndev,
+				      struct packet_type *pt)
 {
 	u8 ver, port;
 	u16 hdr;
@@ -82,13 +81,13 @@ static struct sk_buff *ar9331_tag_rcv(struct sk_buff *skb,
 }
 
 static const struct dsa_device_ops ar9331_netdev_ops = {
-	.name	= AR9331_NAME,
+	.name	= "ar9331",
 	.proto	= DSA_TAG_PROTO_AR9331,
 	.xmit	= ar9331_tag_xmit,
 	.rcv	= ar9331_tag_rcv,
-	.needed_headroom = AR9331_HDR_LEN,
+	.overhead = AR9331_HDR_LEN,
 };
 
 MODULE_LICENSE("GPL v2");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_AR9331, AR9331_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_AR9331);
 module_dsa_tag_driver(ar9331_netdev_ops);

@@ -8,9 +8,9 @@
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/rbtree.h>
+#include <pthread.h>
 #include <asm/bug.h>
 #include "symbol_conf.h"
-#include "mutex.h"
 #include "spark.h"
 
 struct hist_browser_timer;
@@ -84,18 +84,16 @@ struct annotation_options {
 	     print_lines,
 	     full_path,
 	     show_linenr,
-	     show_fileloc,
 	     show_nr_jumps,
 	     show_minmax_cycle,
 	     show_asm_raw,
-	     annotate_src,
-	     full_addr;
+	     annotate_src;
 	u8   offset_level;
 	int  min_pcnt;
 	int  max_lines;
 	int  context;
-	char *objdump_path;
-	char *disassembler_style;
+	const char *objdump_path;
+	const char *disassembler_style;
 	const char *prefix;
 	const char *prefix_strip;
 	unsigned int percent_type;
@@ -108,6 +106,8 @@ enum {
 };
 
 #define ANNOTATION__MIN_OFFSET_LEVEL ANNOTATION__OFFSET_JUMP_TARGETS
+
+extern struct annotation_options annotation__default_options;
 
 struct annotation;
 
@@ -136,7 +136,6 @@ struct annotation_line {
 	s64			 offset;
 	char			*line;
 	int			 line_nr;
-	char			*fileloc;
 	int			 jump_sources;
 	float			 ipc;
 	u64			 cycles;
@@ -271,7 +270,8 @@ struct annotated_source {
 	struct sym_hist	   *histograms;
 };
 
-struct LOCKABLE annotation {
+struct annotation {
+	pthread_mutex_t		lock;
 	u64			max_coverage;
 	u64			start;
 	u64			hit_cycles;
@@ -297,15 +297,6 @@ struct LOCKABLE annotation {
 	struct annotated_source *src;
 };
 
-static inline void annotation__init(struct annotation *notes __maybe_unused)
-{
-}
-void annotation__exit(struct annotation *notes);
-
-void annotation__lock(struct annotation *notes) EXCLUSIVE_LOCK_FUNCTION(*notes);
-void annotation__unlock(struct annotation *notes) UNLOCK_FUNCTION(*notes);
-bool annotation__trylock(struct annotation *notes) EXCLUSIVE_TRYLOCK_FUNCTION(true, *notes);
-
 static inline int annotation__cycles_width(struct annotation *notes)
 {
 	if (notes->have_cycles && notes->options->show_minmax_cycle)
@@ -329,7 +320,6 @@ void annotation__compute_ipc(struct annotation *notes, size_t size);
 void annotation__mark_jump_targets(struct annotation *notes, struct symbol *sym);
 void annotation__update_column_widths(struct annotation *notes);
 void annotation__init_column_widths(struct annotation *notes, struct symbol *sym);
-void annotation__toggle_full_addr(struct annotation *notes, struct map_symbol *ms);
 
 static inline struct sym_hist *annotated_source__histogram(struct annotated_source *src, int idx)
 {
@@ -420,9 +410,6 @@ static inline int symbol__tui_annotate(struct map_symbol *ms __maybe_unused,
 	return 0;
 }
 #endif
-
-void annotation_options__init(struct annotation_options *opt);
-void annotation_options__exit(struct annotation_options *opt);
 
 void annotation_config__init(struct annotation_options *opt);
 

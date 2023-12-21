@@ -4,10 +4,12 @@
  */
 
 #include <crypto/internal/blake2s.h>
+#include <crypto/internal/simd.h>
 
 #include <linux/types.h>
 #include <linux/jump_label.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/sizes.h>
 
 #include <asm/cpufeature.h>
@@ -31,7 +33,7 @@ void blake2s_compress(struct blake2s_state *state, const u8 *block,
 	/* SIMD disables preemption, so relax after processing each page. */
 	BUILD_BUG_ON(SZ_4K / BLAKE2S_BLOCK_SIZE < 8);
 
-	if (!static_branch_likely(&blake2s_use_ssse3) || !may_use_simd()) {
+	if (!static_branch_likely(&blake2s_use_ssse3) || !crypto_simd_usable()) {
 		blake2s_compress_generic(state, block, nblocks, inc);
 		return;
 	}
@@ -71,4 +73,6 @@ static int __init blake2s_mod_init(void)
 	return 0;
 }
 
-subsys_initcall(blake2s_mod_init);
+module_init(blake2s_mod_init);
+
+MODULE_LICENSE("GPL v2");

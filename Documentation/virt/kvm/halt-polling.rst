@@ -112,25 +112,12 @@ powerpc kvm-hv case.
 |			| function.		    |			      |
 +-----------------------+---------------------------+-------------------------+
 
-These module parameters can be set from the sysfs files in:
+These module parameters can be set from the debugfs files in:
 
 	/sys/module/kvm/parameters/
 
-Note: these module parameters are system-wide values and are not able to
+Note: that these module parameters are system wide values and are not able to
       be tuned on a per vm basis.
-
-Any changes to these parameters will be picked up by new and existing vCPUs the
-next time they halt, with the notable exception of VMs using KVM_CAP_HALT_POLL
-(see next section).
-
-KVM_CAP_HALT_POLL
-=================
-
-KVM_CAP_HALT_POLL is a VM capability that allows userspace to override halt_poll_ns
-on a per-VM basis. VMs using KVM_CAP_HALT_POLL ignore halt_poll_ns completely (but
-still obey halt_poll_ns_grow, halt_poll_ns_grow_start, and halt_poll_ns_shrink).
-
-See Documentation/virt/kvm/api.rst for more information on this capability.
 
 Further Notes
 =============
@@ -142,12 +129,12 @@ Further Notes
   global max polling interval (halt_poll_ns) then the host will always poll for the
   entire block time and thus cpu utilisation will go to 100%.
 
-- Halt polling essentially presents a trade-off between power usage and latency and
+- Halt polling essentially presents a trade off between power usage and latency and
   the module parameters should be used to tune the affinity for this. Idle cpu time is
   essentially converted to host kernel time with the aim of decreasing latency when
   entering the guest.
 
 - Halt polling will only be conducted by the host when no other tasks are runnable on
   that cpu, otherwise the polling will cease immediately and schedule will be invoked to
-  allow that other task to run. Thus this doesn't allow a guest to cause denial of service
-  of the cpu.
+  allow that other task to run. Thus this doesn't allow a guest to denial of service the
+  cpu.

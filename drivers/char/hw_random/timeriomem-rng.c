@@ -145,6 +145,8 @@ static int timeriomem_rng_probe(struct platform_device *pdev)
 		if (!of_property_read_u32(pdev->dev.of_node,
 						"quality", &i))
 			priv->rng_ops.quality = i;
+		else
+			priv->rng_ops.quality = 0;
 	} else {
 		period = pdata->period;
 		priv->rng_ops.quality = pdata->quality;
@@ -167,7 +169,7 @@ static int timeriomem_rng_probe(struct platform_device *pdev)
 	priv->present = 1;
 	complete(&priv->completion);
 
-	err = devm_hwrng_register(&pdev->dev, &priv->rng_ops);
+	err = hwrng_register(&priv->rng_ops);
 	if (err) {
 		dev_err(&pdev->dev, "problem registering\n");
 		return err;
@@ -183,6 +185,7 @@ static int timeriomem_rng_remove(struct platform_device *pdev)
 {
 	struct timeriomem_rng_private *priv = platform_get_drvdata(pdev);
 
+	hwrng_unregister(&priv->rng_ops);
 	hrtimer_cancel(&priv->timer);
 
 	return 0;

@@ -67,7 +67,7 @@ struct pid
 	/* wait queue for pidfd notifications */
 	wait_queue_head_t wait_pidfd;
 	struct rcu_head rcu;
-	struct upid numbers[];
+	struct upid numbers[1];
 };
 
 extern struct pid init_struct_pid;
@@ -78,9 +78,6 @@ struct file;
 
 extern struct pid *pidfd_pid(const struct file *file);
 struct pid *pidfd_get_pid(unsigned int fd, unsigned int *flags);
-struct task_struct *pidfd_get_task(int pidfd, unsigned int *flags);
-int pidfd_create(struct pid *pid, unsigned int flags);
-int pidfd_prepare(struct pid *pid, unsigned int flags, struct file **ret);
 
 static inline struct pid *get_pid(struct pid *pid)
 {

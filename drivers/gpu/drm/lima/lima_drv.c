@@ -2,8 +2,7 @@
 /* Copyright 2017-2019 Qiang Yu <yuq825@gmail.com> */
 
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
@@ -256,13 +255,13 @@ static const struct drm_ioctl_desc lima_drm_driver_ioctls[] = {
 
 DEFINE_DRM_GEM_FOPS(lima_drm_driver_fops);
 
-/*
+/**
  * Changelog:
  *
  * - 1.1.0 - add heap buffer support
  */
 
-static const struct drm_driver lima_drm_driver = {
+static struct drm_driver lima_drm_driver = {
 	.driver_features    = DRIVER_RENDER | DRIVER_GEM | DRIVER_SYNCOBJ,
 	.open               = lima_drm_driver_open,
 	.postclose          = lima_drm_driver_postclose,
@@ -277,7 +276,10 @@ static const struct drm_driver lima_drm_driver = {
 	.patchlevel         = 0,
 
 	.gem_create_object  = lima_gem_create_object,
+	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
 	.gem_prime_import_sg_table = drm_gem_shmem_prime_import_sg_table,
+	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+	.gem_prime_mmap = drm_gem_prime_mmap,
 };
 
 struct lima_block_reader {
@@ -390,10 +392,8 @@ static int lima_pdev_probe(struct platform_device *pdev)
 
 	/* Allocate and initialize the DRM device. */
 	ddev = drm_dev_alloc(&lima_drm_driver, &pdev->dev);
-	if (IS_ERR(ddev)) {
-		err = PTR_ERR(ddev);
-		goto err_out0;
-	}
+	if (IS_ERR(ddev))
+		return PTR_ERR(ddev);
 
 	ddev->dev_private = ldev;
 	ldev->ddev = ddev;
@@ -439,7 +439,7 @@ err_out0:
 	return err;
 }
 
-static void lima_pdev_remove(struct platform_device *pdev)
+static int lima_pdev_remove(struct platform_device *pdev)
 {
 	struct lima_device *ldev = platform_get_drvdata(pdev);
 	struct drm_device *ddev = ldev->ddev;
@@ -457,6 +457,7 @@ static void lima_pdev_remove(struct platform_device *pdev)
 
 	drm_dev_put(ddev);
 	lima_sched_slab_fini();
+	return 0;
 }
 
 static const struct of_device_id dt_match[] = {
@@ -473,7 +474,7 @@ static const struct dev_pm_ops lima_pm_ops = {
 
 static struct platform_driver lima_platform_driver = {
 	.probe      = lima_pdev_probe,
-	.remove_new = lima_pdev_remove,
+	.remove     = lima_pdev_remove,
 	.driver     = {
 		.name   = "lima",
 		.pm	= &lima_pm_ops,

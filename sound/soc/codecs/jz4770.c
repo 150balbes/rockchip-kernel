@@ -98,7 +98,7 @@ enum {
 #define REG_CR_HP_MUTE			BIT(7)
 #define REG_CR_HP_LOAD			BIT(6)
 #define REG_CR_HP_SB_OFFSET		4
-#define REG_CR_HP_SB_HPCM_OFFSET	3
+#define REG_CR_HP_SB_HPCM		BIT(3)
 #define REG_CR_HP_SEL_OFFSET		0
 #define REG_CR_HP_SEL_MASK		(0x3 << REG_CR_HP_SEL_OFFSET)
 
@@ -190,21 +190,18 @@ static int jz4770_codec_set_bias_level(struct snd_soc_component *codec,
 
 	switch (level) {
 	case SND_SOC_BIAS_PREPARE:
-		/* Reset all interrupt flags. */
-		regmap_write(regmap, JZ4770_CODEC_REG_IFR, REG_IFR_ALL_MASK);
-
-		regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
-				  REG_CR_VIC_SB);
+		regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
+				   REG_CR_VIC_SB, 0);
 		msleep(250);
-		regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
-				  REG_CR_VIC_SB_SLEEP);
+		regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
+				   REG_CR_VIC_SB_SLEEP, 0);
 		msleep(400);
 		break;
 	case SND_SOC_BIAS_STANDBY:
-		regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
-				REG_CR_VIC_SB_SLEEP);
-		regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
-				REG_CR_VIC_SB);
+		regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
+				   REG_CR_VIC_SB_SLEEP, REG_CR_VIC_SB_SLEEP);
+		regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_VIC,
+				   REG_CR_VIC_SB, REG_CR_VIC_SB);
 		fallthrough;
 	default:
 		break;
@@ -287,7 +284,7 @@ static int jz4770_codec_mute_stream(struct snd_soc_dai *dai, int mute, int direc
 		err = regmap_read_poll_timeout(jz_codec->regmap,
 					       JZ4770_CODEC_REG_IFR,
 					       val, val & gain_bit,
-					       1000, 1 * USEC_PER_SEC);
+					       1000, 100 * USEC_PER_MSEC);
 		if (err) {
 			dev_err(jz_codec->dev,
 				"Timeout while setting digital mute: %d", err);
@@ -295,8 +292,8 @@ static int jz4770_codec_mute_stream(struct snd_soc_dai *dai, int mute, int direc
 		}
 
 		/* clear GUP/GDO flag */
-		regmap_set_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
-				gain_bit);
+		regmap_update_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
+				   gain_bit, gain_bit);
 	}
 
 	return 0;
@@ -307,7 +304,6 @@ static const DECLARE_TLV_DB_MINMAX_MUTE(dac_tlv, -3100, 0);
 static const DECLARE_TLV_DB_SCALE(adc_tlv, 0, 100, 0);
 static const DECLARE_TLV_DB_MINMAX(out_tlv, -2500, 600);
 static const DECLARE_TLV_DB_SCALE(linein_tlv, -2500, 100, 0);
-static const DECLARE_TLV_DB_MINMAX(mixer_tlv, -3100, 0);
 
 /* Unconditional controls. */
 static const struct snd_kcontrol_new jz4770_codec_snd_controls[] = {
@@ -320,14 +316,6 @@ static const struct snd_kcontrol_new jz4770_codec_snd_controls[] = {
 	SOC_DOUBLE_R_TLV("Line In Bypass Playback Volume",
 			 JZ4770_CODEC_REG_GCR_LIBYL, JZ4770_CODEC_REG_GCR_LIBYR,
 			 REG_GCR_GAIN_OFFSET, REG_GCR_GAIN_MAX, 1, linein_tlv),
-
-	SOC_SINGLE_TLV("Mixer Capture Volume",
-		       JZ4770_CODEC_REG_GCR_MIXADC,
-		       REG_GCR_GAIN_OFFSET, REG_GCR_GAIN_MAX, 1, mixer_tlv),
-
-	SOC_SINGLE_TLV("Mixer Playback Volume",
-		       JZ4770_CODEC_REG_GCR_MIXDAC,
-		       REG_GCR_GAIN_OFFSET, REG_GCR_GAIN_MAX, 1, mixer_tlv),
 };
 
 static const struct snd_kcontrol_new jz4770_codec_pcm_playback_controls[] = {
@@ -380,9 +368,9 @@ static int hpout_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		/* unmute HP */
-		regmap_clear_bits(jz_codec->regmap, JZ4770_CODEC_REG_CR_HP,
-				  REG_CR_HP_MUTE);
+		/* set cap-less, unmute HP */
+		regmap_update_bits(jz_codec->regmap, JZ4770_CODEC_REG_CR_HP,
+				   REG_CR_HP_SB_HPCM | REG_CR_HP_MUTE, 0);
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
@@ -390,35 +378,36 @@ static int hpout_event(struct snd_soc_dapm_widget *w,
 		err = regmap_read_poll_timeout(jz_codec->regmap,
 					       JZ4770_CODEC_REG_IFR,
 					       val, val & REG_IFR_RUP,
-					       1000, 1 * USEC_PER_SEC);
+					       1000, 100 * USEC_PER_MSEC);
 		if (err) {
 			dev_err(jz_codec->dev, "RUP timeout: %d", err);
 			return err;
 		}
 
 		/* clear RUP flag */
-		regmap_set_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
-				REG_IFR_RUP);
+		regmap_update_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
+				   REG_IFR_RUP, REG_IFR_RUP);
 
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
-		/* mute HP */
-		regmap_set_bits(jz_codec->regmap, JZ4770_CODEC_REG_CR_HP,
-				REG_CR_HP_MUTE);
+		/* set cap-couple, mute HP */
+		regmap_update_bits(jz_codec->regmap, JZ4770_CODEC_REG_CR_HP,
+				   REG_CR_HP_SB_HPCM | REG_CR_HP_MUTE,
+				   REG_CR_HP_SB_HPCM | REG_CR_HP_MUTE);
 
 		err = regmap_read_poll_timeout(jz_codec->regmap,
 					       JZ4770_CODEC_REG_IFR,
 					       val, val & REG_IFR_RDO,
-					       1000, 1 * USEC_PER_SEC);
+					       1000, 100 * USEC_PER_MSEC);
 		if (err) {
 			dev_err(jz_codec->dev, "RDO timeout: %d", err);
 			return err;
 		}
 
 		/* clear RDO flag */
-		regmap_set_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
-				REG_IFR_RDO);
+		regmap_update_bits(jz_codec->regmap, JZ4770_CODEC_REG_IFR,
+				   REG_IFR_RDO, REG_IFR_RDO);
 
 		break;
 	}
@@ -528,9 +517,6 @@ static const struct snd_soc_dapm_widget jz4770_codec_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("MICBIAS", JZ4770_CODEC_REG_CR_MIC,
 			    REG_CR_MIC_BIAS_SB_OFFSET, 1, NULL, 0),
 
-	SND_SOC_DAPM_SUPPLY("Cap-less", JZ4770_CODEC_REG_CR_HP,
-			    REG_CR_HP_SB_HPCM_OFFSET, 1, NULL, 0),
-
 	SND_SOC_DAPM_INPUT("MIC1P"),
 	SND_SOC_DAPM_INPUT("MIC1N"),
 	SND_SOC_DAPM_INPUT("MIC2P"),
@@ -606,58 +592,70 @@ static void jz4770_codec_codec_init_regs(struct snd_soc_component *codec)
 	regcache_cache_only(regmap, true);
 
 	/* default HP output to PCM */
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_HP, REG_CR_HP_SEL_MASK);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_HP,
+			   REG_CR_HP_SEL_MASK, REG_CR_HP_SEL_MASK);
 
 	/* default line output to PCM */
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_LO, REG_CR_LO_SEL_MASK);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_LO,
+			   REG_CR_LO_SEL_MASK, REG_CR_LO_SEL_MASK);
 
 	/* Disable stereo mic */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_MIC,
-			  BIT(REG_CR_MIC_STEREO_OFFSET));
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_MIC,
+			   BIT(REG_CR_MIC_STEREO_OFFSET), 0);
 
 	/* Set mic 1 as default source for ADC */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_ADC,
-			  REG_CR_ADC_IN_SEL_MASK);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_ADC,
+			   REG_CR_ADC_IN_SEL_MASK, 0);
 
 	/* ADC/DAC: serial + i2s */
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_AICR_ADC,
-			REG_AICR_ADC_SERIAL | REG_AICR_ADC_I2S);
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_AICR_DAC,
-			REG_AICR_DAC_SERIAL | REG_AICR_DAC_I2S);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_AICR_ADC,
+			   REG_AICR_ADC_SERIAL | REG_AICR_ADC_I2S,
+			   REG_AICR_ADC_SERIAL | REG_AICR_ADC_I2S);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_AICR_DAC,
+			   REG_AICR_DAC_SERIAL | REG_AICR_DAC_I2S,
+			   REG_AICR_DAC_SERIAL | REG_AICR_DAC_I2S);
 
 	/* The generated IRQ is a high level */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_ICR, REG_ICR_INT_FORM_MASK);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_ICR,
+			   REG_ICR_INT_FORM_MASK, 0);
 	regmap_update_bits(regmap, JZ4770_CODEC_REG_IMR, REG_IMR_ALL_MASK,
 			   REG_IMR_JACK_MASK | REG_IMR_RUP_MASK |
 			   REG_IMR_RDO_MASK | REG_IMR_GUP_MASK |
 			   REG_IMR_GDO_MASK);
 
 	/* 12M oscillator */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_CCR, REG_CCR_CRYSTAL_MASK);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CCR,
+			   REG_CCR_CRYSTAL_MASK, 0);
 
 	/* 0: 16ohm/220uF, 1: 10kohm/1uF */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_HP, REG_CR_HP_LOAD);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_HP,
+			   REG_CR_HP_LOAD, 0);
 
 	/* disable automatic gain */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_AGC1, REG_AGC1_EN);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_AGC1, REG_AGC1_EN, 0);
 
 	/* Disable DAC lrswap */
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_DAC, REG_CR_DAC_LRSWAP);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_DAC,
+			   REG_CR_DAC_LRSWAP, REG_CR_DAC_LRSWAP);
 
 	/* Independent L/R DAC gain control */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_GCR_DACL,
-			  REG_GCR_DACL_RLGOD);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_GCR_DACL,
+			   REG_GCR_DACL_RLGOD, 0);
 
 	/* Disable ADC lrswap */
-	regmap_set_bits(regmap, JZ4770_CODEC_REG_CR_ADC, REG_CR_ADC_LRSWAP);
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_ADC,
+			   REG_CR_ADC_LRSWAP, REG_CR_ADC_LRSWAP);
 
 	/* default to cap-less mode(0) */
-	regmap_clear_bits(regmap, JZ4770_CODEC_REG_CR_HP,
-			  BIT(REG_CR_HP_SB_HPCM_OFFSET));
+	regmap_update_bits(regmap, JZ4770_CODEC_REG_CR_HP,
+			   REG_CR_HP_SB_HPCM, 0);
 
 	/* Send collected updates. */
 	regcache_cache_only(regmap, false);
 	regcache_sync(regmap);
+
+	/* Reset all interrupt flags. */
+	regmap_write(regmap, JZ4770_CODEC_REG_IFR, REG_IFR_ALL_MASK);
 }
 
 static int jz4770_codec_codec_probe(struct snd_soc_component *codec)
@@ -816,7 +814,7 @@ static int jz4770_codec_io_wait(struct jz_codec *codec)
 
 	return readl_poll_timeout(codec->base + ICDC_RGADW_OFFSET, reg,
 				  !(reg & ICDC_RGADW_RGWR),
-				  1000, 1 * USEC_PER_SEC);
+				  1000, 10 * USEC_PER_MSEC);
 }
 
 static int jz4770_codec_reg_read(void *context, unsigned int reg,
@@ -902,8 +900,11 @@ static int jz4770_codec_probe(struct platform_device *pdev)
 	codec->dev = dev;
 
 	codec->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(codec->base))
-		return PTR_ERR(codec->base);
+	if (IS_ERR(codec->base)) {
+		ret = PTR_ERR(codec->base);
+		dev_err(dev, "Failed to ioremap mmio memory: %d\n", ret);
+		return ret;
+	}
 
 	codec->regmap = devm_regmap_init(dev, NULL, codec,
 					&jz4770_codec_regmap_config);

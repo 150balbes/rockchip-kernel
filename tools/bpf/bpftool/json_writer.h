@@ -14,7 +14,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <linux/compiler.h>
 
 /* Opaque class structure */

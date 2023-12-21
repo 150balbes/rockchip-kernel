@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * super.c
  *
@@ -16,6 +15,11 @@
  *    https://www.iso.org/
  *
  * COPYRIGHT
+ *  This file is distributed under the terms of the GNU General Public
+ *  License (GPL). Copies of the GPL can be obtained from:
+ *    ftp://prep.ai.mit.edu/pub/gnu/GPL
+ *  Each contributing author retains all rights to their own work.
+ *
  *  (C) 1998 Dave Boynton
  *  (C) 1998-2004 Ben Fennema
  *  (C) 2000 Stelias Computing Inc
@@ -82,13 +86,6 @@ enum {
 #define UDF_MAX_LVID_NESTING 1000
 
 enum { UDF_MAX_LINKS = 0xffff };
-/*
- * We limit filesize to 4TB. This is arbitrary as the on-disk format supports
- * more but because the file space is described by a linked list of extents,
- * each of which can have at most 1GB, the creation and handling of extents
- * gets unusably slow beyond certain point...
- */
-#define UDF_MAX_FILESIZE (1ULL << 42)
 
 /* These are the "meat" - everything else is stuffing */
 static int udf_fill_super(struct super_block *, void *, int);
@@ -139,7 +136,7 @@ static struct kmem_cache *udf_inode_cachep;
 static struct inode *udf_alloc_inode(struct super_block *sb)
 {
 	struct udf_inode_info *ei;
-	ei = alloc_inode_sb(sb, udf_inode_cachep, GFP_KERNEL);
+	ei = kmem_cache_alloc(udf_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 
@@ -150,7 +147,6 @@ static struct inode *udf_alloc_inode(struct super_block *sb)
 	ei->i_next_alloc_goal = 0;
 	ei->i_strat4096 = 0;
 	ei->i_streamdir = 0;
-	ei->i_hidden = 0;
 	init_rwsem(&ei->i_data_sem);
 	ei->cached_extent.lstart = -1;
 	spin_lock_init(&ei->i_extent_cache_lock);
@@ -166,7 +162,7 @@ static void udf_free_in_core_inode(struct inode *inode)
 
 static void init_once(void *foo)
 {
-	struct udf_inode_info *ei = foo;
+	struct udf_inode_info *ei = (struct udf_inode_info *)foo;
 
 	ei->i_data = NULL;
 	inode_init_once(&ei->vfs_inode);
@@ -459,7 +455,6 @@ static int udf_parse_options(char *options, struct udf_options *uopt,
 {
 	char *p;
 	int option;
-	unsigned int uv;
 
 	uopt->novrs = 0;
 	uopt->session = 0xFFFFFFFF;
@@ -509,17 +504,17 @@ static int udf_parse_options(char *options, struct udf_options *uopt,
 			uopt->flags &= ~(1 << UDF_FLAG_USE_SHORT_AD);
 			break;
 		case Opt_gid:
-			if (match_uint(args, &uv))
+			if (match_int(args, &option))
 				return 0;
-			uopt->gid = make_kgid(current_user_ns(), uv);
+			uopt->gid = make_kgid(current_user_ns(), option);
 			if (!gid_valid(uopt->gid))
 				return 0;
 			uopt->flags |= (1 << UDF_FLAG_GID_SET);
 			break;
 		case Opt_uid:
-			if (match_uint(args, &uv))
+			if (match_int(args, &option))
 				return 0;
-			uopt->uid = make_kuid(current_user_ns(), uv);
+			uopt->uid = make_kuid(current_user_ns(), option);
 			if (!uid_valid(uopt->uid))
 				return 0;
 			uopt->flags |= (1 << UDF_FLAG_UID_SET);
@@ -737,7 +732,7 @@ static int udf_check_vsd(struct super_block *sb)
 	 * added */
 	for (; !nsr && sector < VSD_MAX_SECTOR_OFFSET; sector += sectorsize) {
 		/* Read a block */
-		bh = sb_bread(sb, sector >> sb->s_blocksize_bits);
+		bh = udf_tread(sb, sector >> sb->s_blocksize_bits);
 		if (!bh)
 			break;
 
@@ -824,7 +819,7 @@ static int udf_find_fileset(struct super_block *sb,
 			    struct kernel_lb_addr *fileset,
 			    struct kernel_lb_addr *root)
 {
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 	uint16_t ident;
 	int ret;
 
@@ -1179,8 +1174,10 @@ static int udf_load_vat(struct super_block *sb, int p_index, int type1_index)
 	struct udf_part_map *map = &sbi->s_partmaps[p_index];
 	struct buffer_head *bh = NULL;
 	struct udf_inode_info *vati;
+	uint32_t pos;
 	struct virtualAllocationTable20 *vat20;
-	sector_t blocks = sb_bdev_nr_blocks(sb);
+	sector_t blocks = i_size_read(sb->s_bdev->bd_inode) >>
+			  sb->s_blocksize_bits;
 
 	udf_find_vat_block(sb, p_index, type1_index, sbi->s_last_block);
 	if (!sbi->s_vat_inode &&
@@ -1200,14 +1197,10 @@ static int udf_load_vat(struct super_block *sb, int p_index, int type1_index)
 	} else if (map->s_partition_type == UDF_VIRTUAL_MAP20) {
 		vati = UDF_I(sbi->s_vat_inode);
 		if (vati->i_alloc_type != ICBTAG_FLAG_AD_IN_ICB) {
-			int err = 0;
-
-			bh = udf_bread(sbi->s_vat_inode, 0, 0, &err);
-			if (!bh) {
-				if (!err)
-					err = -EFSCORRUPTED;
-				return err;
-			}
+			pos = udf_block_map(sbi->s_vat_inode, 0);
+			bh = sb_bread(sb, pos);
+			if (!bh)
+				return -EIO;
 			vat20 = (struct virtualAllocationTable20 *)bh->b_data;
 		} else {
 			vat20 = (struct virtualAllocationTable20 *)
@@ -1845,6 +1838,11 @@ static int udf_check_anchor_block(struct super_block *sb, sector_t block,
 	uint16_t ident;
 	int ret;
 
+	if (UDF_QUERY_FLAG(sb, UDF_FLAG_VARCONV) &&
+	    udf_fixed_to_variable(block) >=
+	    i_size_read(sb->s_bdev->bd_inode) >> sb->s_blocksize_bits)
+		return -EAGAIN;
+
 	bh = udf_read_tagged(sb, block, block, &ident);
 	if (!bh)
 		return -EAGAIN;
@@ -1863,10 +1861,10 @@ static int udf_check_anchor_block(struct super_block *sb, sector_t block,
  * Returns < 0 on error, 0 on success. -EAGAIN is special - try next set
  * of anchors.
  */
-static int udf_scan_anchors(struct super_block *sb, udf_pblk_t *lastblock,
+static int udf_scan_anchors(struct super_block *sb, sector_t *lastblock,
 			    struct kernel_lb_addr *fileset)
 {
-	udf_pblk_t last[6];
+	sector_t last[6];
 	int i;
 	struct udf_sb_info *sbi = UDF_SB(sb);
 	int last_count = 0;
@@ -1904,7 +1902,8 @@ static int udf_scan_anchors(struct super_block *sb, udf_pblk_t *lastblock,
 		last[last_count++] = *lastblock - 152;
 
 	for (i = 0; i < last_count; i++) {
-		if (last[i] >= sb_bdev_nr_blocks(sb))
+		if (last[i] >= i_size_read(sb->s_bdev->bd_inode) >>
+				sb->s_blocksize_bits)
 			continue;
 		ret = udf_check_anchor_block(sb, last[i], fileset);
 		if (ret != -EAGAIN) {
@@ -1924,6 +1923,46 @@ static int udf_scan_anchors(struct super_block *sb, udf_pblk_t *lastblock,
 
 	/* Finally try block 512 in case media is open */
 	return udf_check_anchor_block(sb, sbi->s_session + 512, fileset);
+}
+
+/*
+ * Find an anchor volume descriptor and load Volume Descriptor Sequence from
+ * area specified by it. The function expects sbi->s_lastblock to be the last
+ * block on the media.
+ *
+ * Return <0 on error, 0 if anchor found. -EAGAIN is special meaning anchor
+ * was not found.
+ */
+static int udf_find_anchor(struct super_block *sb,
+			   struct kernel_lb_addr *fileset)
+{
+	struct udf_sb_info *sbi = UDF_SB(sb);
+	sector_t lastblock = sbi->s_last_block;
+	int ret;
+
+	ret = udf_scan_anchors(sb, &lastblock, fileset);
+	if (ret != -EAGAIN)
+		goto out;
+
+	/* No anchor found? Try VARCONV conversion of block numbers */
+	UDF_SET_FLAG(sb, UDF_FLAG_VARCONV);
+	lastblock = udf_variable_to_fixed(sbi->s_last_block);
+	/* Firstly, we try to not convert number of the last block */
+	ret = udf_scan_anchors(sb, &lastblock, fileset);
+	if (ret != -EAGAIN)
+		goto out;
+
+	lastblock = sbi->s_last_block;
+	/* Secondly, we try with converted number of the last block */
+	ret = udf_scan_anchors(sb, &lastblock, fileset);
+	if (ret < 0) {
+		/* VARCONV didn't help. Clear it. */
+		UDF_CLEAR_FLAG(sb, UDF_FLAG_VARCONV);
+	}
+out:
+	if (ret == 0)
+		sbi->s_last_block = lastblock;
+	return ret;
 }
 
 /*
@@ -1966,7 +2005,7 @@ static int udf_load_vrs(struct super_block *sb, struct udf_options *uopt,
 
 	/* Look for anchor block and load Volume Descriptor Sequence */
 	sbi->s_anchor = uopt->anchor;
-	ret = udf_scan_anchors(sb, &sbi->s_last_block, fileset);
+	ret = udf_find_anchor(sb, fileset);
 	if (ret < 0) {
 		if (!silent && ret == -EAGAIN)
 			udf_warn(sb, "No anchor found\n");
@@ -2260,7 +2299,7 @@ static int udf_fill_super(struct super_block *sb, void *options, int silent)
 		ret = -ENOMEM;
 		goto error_out;
 	}
-	sb->s_maxbytes = UDF_MAX_FILESIZE;
+	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_max_links = UDF_MAX_LINKS;
 	return 0;
 
@@ -2417,7 +2456,7 @@ static unsigned int udf_count_free_bitmap(struct super_block *sb,
 		if (bytes) {
 			brelse(bh);
 			newblock = udf_get_lb_pblock(sb, &loc, ++block);
-			bh = sb_bread(sb, newblock);
+			bh = udf_tread(sb, newblock);
 			if (!bh) {
 				udf_debug("read failed\n");
 				goto out;
@@ -2437,6 +2476,7 @@ static unsigned int udf_count_free_table(struct super_block *sb,
 	unsigned int accum = 0;
 	uint32_t elen;
 	struct kernel_lb_addr eloc;
+	int8_t etype;
 	struct extent_position epos;
 
 	mutex_lock(&UDF_SB(sb)->s_alloc_mutex);
@@ -2444,7 +2484,7 @@ static unsigned int udf_count_free_table(struct super_block *sb,
 	epos.offset = sizeof(struct unallocSpaceEntry);
 	epos.bh = NULL;
 
-	while (udf_next_aext(table, &epos, &eloc, &elen, 1) != -1)
+	while ((etype = udf_next_aext(table, &epos, &eloc, &elen, 1)) != -1)
 		accum += (elen >> table->i_sb->s_blocksize_bits);
 
 	brelse(epos.bh);
@@ -2505,5 +2545,6 @@ static unsigned int udf_count_free(struct super_block *sb)
 MODULE_AUTHOR("Ben Fennema");
 MODULE_DESCRIPTION("Universal Disk Format Filesystem");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 module_init(init_udf_fs)
 module_exit(exit_udf_fs)

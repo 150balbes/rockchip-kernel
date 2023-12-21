@@ -8,13 +8,11 @@
 #ifndef _DMA_HSU_H
 #define _DMA_HSU_H
 
-#include <linux/errno.h>
-#include <linux/kconfig.h>
-#include <linux/types.h>
+#include <linux/device.h>
+#include <linux/interrupt.h>
 
 #include <linux/platform_data/dma-hsu.h>
 
-struct device;
 struct hsu_dma;
 
 /**

@@ -21,22 +21,18 @@ struct hugetlb_cgroup;
 struct resv_map;
 struct file_region;
 
-#ifdef CONFIG_CGROUP_HUGETLB
 /*
  * Minimum page order trackable by hugetlb cgroup.
- * At least 3 pages are necessary for all the tracking information.
- * The second tail page contains all of the hugetlb-specific fields.
+ * At least 4 pages are necessary for all the tracking information.
+ * The second tail page (hpage[2]) is the fault usage cgroup.
+ * The third tail page (hpage[3]) is the reservation usage cgroup.
  */
-#define HUGETLB_CGROUP_MIN_ORDER order_base_2(__NR_USED_SUBPAGE)
+#define HUGETLB_CGROUP_MIN_ORDER	2
 
+#ifdef CONFIG_CGROUP_HUGETLB
 enum hugetlb_memory_event {
 	HUGETLB_MAX,
 	HUGETLB_NR_MEMORY_EVENTS,
-};
-
-struct hugetlb_cgroup_per_node {
-	/* hugetlb usage in pages over all hstates. */
-	unsigned long usage[HUGE_MAX_HSTATE];
 };
 
 struct hugetlb_cgroup {
@@ -60,55 +56,56 @@ struct hugetlb_cgroup {
 
 	/* Handle for "hugetlb.events.local" */
 	struct cgroup_file events_local_file[HUGE_MAX_HSTATE];
-
-	struct hugetlb_cgroup_per_node *nodeinfo[];
 };
 
 static inline struct hugetlb_cgroup *
-__hugetlb_cgroup_from_folio(struct folio *folio, bool rsvd)
+__hugetlb_cgroup_from_page(struct page *page, bool rsvd)
 {
-	VM_BUG_ON_FOLIO(!folio_test_hugetlb(folio), folio);
-	if (folio_order(folio) < HUGETLB_CGROUP_MIN_ORDER)
+	VM_BUG_ON_PAGE(!PageHuge(page), page);
+
+	if (compound_order(page) < HUGETLB_CGROUP_MIN_ORDER)
 		return NULL;
 	if (rsvd)
-		return folio->_hugetlb_cgroup_rsvd;
+		return (struct hugetlb_cgroup *)page[3].private;
 	else
-		return folio->_hugetlb_cgroup;
+		return (struct hugetlb_cgroup *)page[2].private;
 }
 
-static inline struct hugetlb_cgroup *hugetlb_cgroup_from_folio(struct folio *folio)
+static inline struct hugetlb_cgroup *hugetlb_cgroup_from_page(struct page *page)
 {
-	return __hugetlb_cgroup_from_folio(folio, false);
+	return __hugetlb_cgroup_from_page(page, false);
 }
 
 static inline struct hugetlb_cgroup *
-hugetlb_cgroup_from_folio_rsvd(struct folio *folio)
+hugetlb_cgroup_from_page_rsvd(struct page *page)
 {
-	return __hugetlb_cgroup_from_folio(folio, true);
+	return __hugetlb_cgroup_from_page(page, true);
 }
 
-static inline void __set_hugetlb_cgroup(struct folio *folio,
+static inline int __set_hugetlb_cgroup(struct page *page,
 				       struct hugetlb_cgroup *h_cg, bool rsvd)
 {
-	VM_BUG_ON_FOLIO(!folio_test_hugetlb(folio), folio);
-	if (folio_order(folio) < HUGETLB_CGROUP_MIN_ORDER)
-		return;
+	VM_BUG_ON_PAGE(!PageHuge(page), page);
+
+	if (compound_order(page) < HUGETLB_CGROUP_MIN_ORDER)
+		return -1;
 	if (rsvd)
-		folio->_hugetlb_cgroup_rsvd = h_cg;
+		page[3].private = (unsigned long)h_cg;
 	else
-		folio->_hugetlb_cgroup = h_cg;
+		page[2].private = (unsigned long)h_cg;
+	return 0;
 }
 
-static inline void set_hugetlb_cgroup(struct folio *folio,
+static inline int set_hugetlb_cgroup(struct page *page,
 				     struct hugetlb_cgroup *h_cg)
 {
-	__set_hugetlb_cgroup(folio, h_cg, false);
+	return __set_hugetlb_cgroup(page, h_cg, false);
 }
 
-static inline void set_hugetlb_cgroup_rsvd(struct folio *folio,
+static inline int set_hugetlb_cgroup_rsvd(struct page *page,
 					  struct hugetlb_cgroup *h_cg)
 {
-	__set_hugetlb_cgroup(folio, h_cg, true);
+	return __set_hugetlb_cgroup(page, h_cg, true);
 }
 
 static inline bool hugetlb_cgroup_disabled(void)
@@ -128,27 +125,20 @@ static inline void resv_map_dup_hugetlb_cgroup_uncharge_info(
 		css_get(resv_map->css);
 }
 
-static inline void resv_map_put_hugetlb_cgroup_uncharge_info(
-						struct resv_map *resv_map)
-{
-	if (resv_map->css)
-		css_put(resv_map->css);
-}
-
 extern int hugetlb_cgroup_charge_cgroup(int idx, unsigned long nr_pages,
 					struct hugetlb_cgroup **ptr);
 extern int hugetlb_cgroup_charge_cgroup_rsvd(int idx, unsigned long nr_pages,
 					     struct hugetlb_cgroup **ptr);
 extern void hugetlb_cgroup_commit_charge(int idx, unsigned long nr_pages,
 					 struct hugetlb_cgroup *h_cg,
-					 struct folio *folio);
+					 struct page *page);
 extern void hugetlb_cgroup_commit_charge_rsvd(int idx, unsigned long nr_pages,
 					      struct hugetlb_cgroup *h_cg,
-					      struct folio *folio);
-extern void hugetlb_cgroup_uncharge_folio(int idx, unsigned long nr_pages,
-					 struct folio *folio);
-extern void hugetlb_cgroup_uncharge_folio_rsvd(int idx, unsigned long nr_pages,
-					      struct folio *folio);
+					      struct page *page);
+extern void hugetlb_cgroup_uncharge_page(int idx, unsigned long nr_pages,
+					 struct page *page);
+extern void hugetlb_cgroup_uncharge_page_rsvd(int idx, unsigned long nr_pages,
+					      struct page *page);
 
 extern void hugetlb_cgroup_uncharge_cgroup(int idx, unsigned long nr_pages,
 					   struct hugetlb_cgroup *h_cg);
@@ -164,8 +154,8 @@ extern void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
 						bool region_del);
 
 extern void hugetlb_cgroup_file_init(void) __init;
-extern void hugetlb_cgroup_migrate(struct folio *old_folio,
-				   struct folio *new_folio);
+extern void hugetlb_cgroup_migrate(struct page *oldhpage,
+				   struct page *newhpage);
 
 #else
 static inline void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
@@ -175,25 +165,33 @@ static inline void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
 {
 }
 
-static inline struct hugetlb_cgroup *hugetlb_cgroup_from_folio(struct folio *folio)
+static inline struct hugetlb_cgroup *hugetlb_cgroup_from_page(struct page *page)
 {
 	return NULL;
 }
 
 static inline struct hugetlb_cgroup *
-hugetlb_cgroup_from_folio_rsvd(struct folio *folio)
+hugetlb_cgroup_from_page_resv(struct page *page)
 {
 	return NULL;
 }
 
-static inline void set_hugetlb_cgroup(struct folio *folio,
-				     struct hugetlb_cgroup *h_cg)
+static inline struct hugetlb_cgroup *
+hugetlb_cgroup_from_page_rsvd(struct page *page)
 {
+	return NULL;
 }
 
-static inline void set_hugetlb_cgroup_rsvd(struct folio *folio,
+static inline int set_hugetlb_cgroup(struct page *page,
+				     struct hugetlb_cgroup *h_cg)
+{
+	return 0;
+}
+
+static inline int set_hugetlb_cgroup_rsvd(struct page *page,
 					  struct hugetlb_cgroup *h_cg)
 {
+	return 0;
 }
 
 static inline bool hugetlb_cgroup_disabled(void)
@@ -206,11 +204,6 @@ static inline void hugetlb_cgroup_put_rsvd_cgroup(struct hugetlb_cgroup *h_cg)
 }
 
 static inline void resv_map_dup_hugetlb_cgroup_uncharge_info(
-						struct resv_map *resv_map)
-{
-}
-
-static inline void resv_map_put_hugetlb_cgroup_uncharge_info(
 						struct resv_map *resv_map)
 {
 }
@@ -230,25 +223,25 @@ static inline int hugetlb_cgroup_charge_cgroup_rsvd(int idx,
 
 static inline void hugetlb_cgroup_commit_charge(int idx, unsigned long nr_pages,
 						struct hugetlb_cgroup *h_cg,
-						struct folio *folio)
+						struct page *page)
 {
 }
 
 static inline void
 hugetlb_cgroup_commit_charge_rsvd(int idx, unsigned long nr_pages,
 				  struct hugetlb_cgroup *h_cg,
-				  struct folio *folio)
+				  struct page *page)
 {
 }
 
-static inline void hugetlb_cgroup_uncharge_folio(int idx, unsigned long nr_pages,
-						struct folio *folio)
+static inline void hugetlb_cgroup_uncharge_page(int idx, unsigned long nr_pages,
+						struct page *page)
 {
 }
 
-static inline void hugetlb_cgroup_uncharge_folio_rsvd(int idx,
+static inline void hugetlb_cgroup_uncharge_page_rsvd(int idx,
 						     unsigned long nr_pages,
-						     struct folio *folio)
+						     struct page *page)
 {
 }
 static inline void hugetlb_cgroup_uncharge_cgroup(int idx,
@@ -273,8 +266,8 @@ static inline void hugetlb_cgroup_file_init(void)
 {
 }
 
-static inline void hugetlb_cgroup_migrate(struct folio *old_folio,
-					  struct folio *new_folio)
+static inline void hugetlb_cgroup_migrate(struct page *oldhpage,
+					  struct page *newhpage)
 {
 }
 

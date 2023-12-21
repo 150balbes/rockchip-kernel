@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define KSYM_NAME_LEN 512
+#define KSYM_NAME_LEN 128
 
 struct module;
 

@@ -16,9 +16,6 @@ description:
 maintainers:
   - Heiko Stuebner <heiko@sntech.de>
 
-allOf:
-  - $ref: dai-common.yaml#
-
 properties:
   compatible:
     enum:
@@ -27,6 +24,7 @@ properties:
       - rockchip,rk1808-pdm
       - rockchip,rk3308-pdm
       - rockchip,rk3568-pdm
+      - rockchip,rk3588-pdm
       - rockchip,rv1126-pdm
 
   reg:
@@ -86,7 +84,7 @@ required:
   - dma-names
   - "#sound-dai-cells"
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

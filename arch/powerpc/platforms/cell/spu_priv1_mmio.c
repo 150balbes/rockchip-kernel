@@ -19,6 +19,7 @@
 #include <asm/spu.h>
 #include <asm/spu_priv1.h>
 #include <asm/firmware.h>
+#include <asm/prom.h>
 
 #include "interrupt.h"
 #include "spu_priv1_mmio.h"

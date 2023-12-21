@@ -207,11 +207,11 @@ static void efx_skb_copy_bits_to_pio(struct efx_nic *efx, struct sk_buff *skb,
 		skb_frag_t *f = &skb_shinfo(skb)->frags[i];
 		u8 *vaddr;
 
-		vaddr = kmap_local_page(skb_frag_page(f));
+		vaddr = kmap_atomic(skb_frag_page(f));
 
 		efx_memcpy_toio_aligned_cb(efx, piobuf, vaddr + skb_frag_off(f),
 					   skb_frag_size(f), copy_buf);
-		kunmap_local(vaddr);
+		kunmap_atomic(vaddr);
 	}
 
 	EFX_WARN_ON_ONCE_PARANOID(skb_shinfo(skb)->frag_list);
@@ -412,6 +412,14 @@ err:
 	return NETDEV_TX_OK;
 }
 
+static void efx_xdp_return_frames(int n,  struct xdp_frame **xdpfs)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		xdp_return_frame_rx_napi(xdpfs[i]);
+}
+
 /* Transmit a packet from an XDP buffer
  *
  * Returns number of packets sent on success, error code otherwise.
@@ -428,35 +436,23 @@ int efx_xdp_tx_buffers(struct efx_nic *efx, int n, struct xdp_frame **xdpfs,
 	unsigned int len;
 	int space;
 	int cpu;
-	int i = 0;
-
-	if (unlikely(n && !xdpfs))
-		return -EINVAL;
-	if (unlikely(!n))
-		return 0;
+	int i;
 
 	cpu = raw_smp_processor_id();
-	if (unlikely(cpu >= efx->xdp_tx_queue_count))
+
+	if (!efx->xdp_tx_queue_count ||
+	    unlikely(cpu >= efx->xdp_tx_queue_count))
 		return -EINVAL;
 
 	tx_queue = efx->xdp_tx_queues[cpu];
 	if (unlikely(!tx_queue))
 		return -EINVAL;
 
-	if (!tx_queue->initialised)
+	if (unlikely(n && !xdpfs))
 		return -EINVAL;
 
-	if (efx->xdp_txq_queues_mode != EFX_XDP_TX_QUEUES_DEDICATED)
-		HARD_TX_LOCK(efx->net_dev, tx_queue->core_txq, cpu);
-
-	/* If we're borrowing net stack queues we have to handle stop-restart
-	 * or we might block the queue and it will be considered as frozen
-	 */
-	if (efx->xdp_txq_queues_mode == EFX_XDP_TX_QUEUES_BORROWED) {
-		if (netif_tx_queue_stopped(tx_queue->core_txq))
-			goto unlock;
-		efx_tx_maybe_stop_queue(tx_queue);
-	}
+	if (!n)
+		return 0;
 
 	/* Check for available space. We should never need multiple
 	 * descriptors per frame.
@@ -496,11 +492,12 @@ int efx_xdp_tx_buffers(struct efx_nic *efx, int n, struct xdp_frame **xdpfs,
 	if (flush && i > 0)
 		efx_nic_push_buffers(tx_queue);
 
-unlock:
-	if (efx->xdp_txq_queues_mode != EFX_XDP_TX_QUEUES_DEDICATED)
-		HARD_TX_UNLOCK(efx->net_dev, tx_queue->core_txq);
+	if (i == 0)
+		return -EIO;
 
-	return i == 0 ? -EIO : i;
+	efx_xdp_return_frames(n - i, xdpfs + i);
+
+	return i;
 }
 
 /* Initiate a packet transmission.  We use one channel per CPU
@@ -512,7 +509,7 @@ unlock:
 netdev_tx_t efx_hard_start_xmit(struct sk_buff *skb,
 				struct net_device *net_dev)
 {
-	struct efx_nic *efx = efx_netdev_priv(net_dev);
+	struct efx_nic *efx = netdev_priv(net_dev);
 	struct efx_tx_queue *tx_queue;
 	unsigned index, type;
 
@@ -527,8 +524,7 @@ netdev_tx_t efx_hard_start_xmit(struct sk_buff *skb,
 
 	/* PTP "event" packet */
 	if (unlikely(efx_xmit_with_hwtstamp(skb)) &&
-	    ((efx_ptp_use_mac_tx_timestamps(efx) && efx->ptp_data) ||
-	    unlikely(efx_ptp_is_ptp_tx(efx, skb)))) {
+	    unlikely(efx_ptp_is_ptp_tx(efx, skb))) {
 		/* There may be existing transmits on the channel that are
 		 * waiting for this packet to trigger the doorbell write.
 		 * We need to send the packets at this point.
@@ -559,7 +555,6 @@ netdev_tx_t efx_hard_start_xmit(struct sk_buff *skb,
 void efx_xmit_done_single(struct efx_tx_queue *tx_queue)
 {
 	unsigned int pkts_compl = 0, bytes_compl = 0;
-	unsigned int efv_pkts_compl = 0;
 	unsigned int read_ptr;
 	bool finished = false;
 
@@ -581,8 +576,7 @@ void efx_xmit_done_single(struct efx_tx_queue *tx_queue)
 		/* Need to check the flag before dequeueing. */
 		if (buffer->flags & EFX_TX_BUF_SKB)
 			finished = true;
-		efx_dequeue_buffer(tx_queue, buffer, &pkts_compl, &bytes_compl,
-				   &efv_pkts_compl);
+		efx_dequeue_buffer(tx_queue, buffer, &pkts_compl, &bytes_compl);
 
 		++tx_queue->read_count;
 		read_ptr = tx_queue->read_count & tx_queue->ptr_mask;
@@ -591,7 +585,7 @@ void efx_xmit_done_single(struct efx_tx_queue *tx_queue)
 	tx_queue->pkts_compl += pkts_compl;
 	tx_queue->bytes_compl += bytes_compl;
 
-	EFX_WARN_ON_PARANOID(pkts_compl + efv_pkts_compl != 1);
+	EFX_WARN_ON_PARANOID(pkts_compl != 1);
 
 	efx_xmit_done_check_empty(tx_queue);
 }
@@ -611,7 +605,7 @@ void efx_init_tx_queue_core_txq(struct efx_tx_queue *tx_queue)
 int efx_setup_tc(struct net_device *net_dev, enum tc_setup_type type,
 		 void *type_data)
 {
-	struct efx_nic *efx = efx_netdev_priv(net_dev);
+	struct efx_nic *efx = netdev_priv(net_dev);
 	struct tc_mqprio_qopt *mqprio = type_data;
 	unsigned tc, num_tc;
 

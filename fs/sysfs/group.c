@@ -61,8 +61,8 @@ static int create_files(struct kernfs_node *parent, struct kobject *kobj,
 			     (*attr)->name, mode);
 
 			mode &= SYSFS_PREALLOC | 0664;
-			error = sysfs_add_file_mode_ns(parent, *attr, mode, uid,
-						       gid, NULL);
+			error = sysfs_add_file_mode_ns(parent, *attr, false,
+						       mode, uid, gid, NULL);
 			if (unlikely(error))
 				break;
 		}
@@ -90,9 +90,10 @@ static int create_files(struct kernfs_node *parent, struct kobject *kobj,
 			     (*bin_attr)->attr.name, mode);
 
 			mode &= SYSFS_PREALLOC | 0664;
-			error = sysfs_add_bin_file_mode_ns(parent, *bin_attr,
-							   mode, uid, gid,
-							   NULL);
+			error = sysfs_add_file_mode_ns(parent,
+					&(*bin_attr)->attr, true,
+					mode,
+					uid, gid, NULL);
 			if (error)
 				break;
 		}
@@ -118,13 +119,11 @@ static int internal_create_group(struct kobject *kobj, int update,
 	/* Updates may happen before the object has been instantiated */
 	if (unlikely(update && !kobj->sd))
 		return -EINVAL;
-
 	if (!grp->attrs && !grp->bin_attrs) {
-		pr_debug("sysfs: (bin_)attrs not set by subsystem for group: %s/%s, skipping\n",
-			 kobj->name, grp->name ?: "");
-		return 0;
+		WARN(1, "sysfs: (bin_)attrs not set by subsystem for group: %s/%s\n",
+			kobj->name, grp->name ?: "");
+		return -EINVAL;
 	}
-
 	kobject_get_ownership(kobj, &uid, &gid);
 	if (grp->name) {
 		if (update) {
@@ -144,10 +143,8 @@ static int internal_create_group(struct kobject *kobj, int update,
 				return PTR_ERR(kn);
 			}
 		}
-	} else {
+	} else
 		kn = kobj->sd;
-	}
-
 	kernfs_get(kn);
 	error = create_files(kn, kobj, uid, gid, grp, update);
 	if (error) {
@@ -343,8 +340,8 @@ int sysfs_merge_group(struct kobject *kobj,
 	kobject_get_ownership(kobj, &uid, &gid);
 
 	for ((i = 0, attr = grp->attrs); *attr && !error; (++i, ++attr))
-		error = sysfs_add_file_mode_ns(parent, *attr, (*attr)->mode,
-					       uid, gid, NULL);
+		error = sysfs_add_file_mode_ns(parent, *attr, false,
+					       (*attr)->mode, uid, gid, NULL);
 	if (error) {
 		while (--i >= 0)
 			kernfs_remove_by_name(parent, (*--attr)->name);
@@ -449,7 +446,7 @@ int compat_only_sysfs_link_entry_to_kobj(struct kobject *kobj,
 	if (!target)
 		return -ENOENT;
 
-	entry = kernfs_find_and_get(target, target_name);
+	entry = kernfs_find_and_get(target_kobj->sd, target_name);
 	if (!entry) {
 		kernfs_put(target);
 		return -ENOENT;

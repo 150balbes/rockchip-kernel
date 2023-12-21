@@ -173,7 +173,8 @@ static const struct regmap_config stw481x_regmap_config = {
 	.val_bits = 8,
 };
 
-static int stw481x_probe(struct i2c_client *client)
+static int stw481x_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct stw481x			*stw481x;
 	int ret;

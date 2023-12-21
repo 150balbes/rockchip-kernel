@@ -1889,9 +1889,12 @@ enum tegra_mux {
 	TEGRA_MUX_XIO,
 };
 
-#define FUNCTION(fname) #fname
+#define FUNCTION(fname)					\
+	{						\
+		.name = #fname,				\
+	}
 
-static const char * const tegra20_functions[] = {
+static struct tegra_function tegra20_functions[] = {
 	FUNCTION(ahb_clk),
 	FUNCTION(apb_clk),
 	FUNCTION(audio_sync),

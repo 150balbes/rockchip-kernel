@@ -35,6 +35,7 @@ static bool secure_firmware __ro_after_init;
  */
 #define exynos_v7_exit_coherency_flush(level) \
 	asm volatile( \
+	"stmfd	sp!, {fp, ip}\n\t"\
 	"mrc	p15, 0, r0, c1, c0, 0	@ get SCTLR\n\t" \
 	"bic	r0, r0, #"__stringify(CR_C)"\n\t" \
 	"mcr	p15, 0, r0, c1, c0, 0	@ set SCTLR\n\t" \
@@ -49,10 +50,11 @@ static bool secure_firmware __ro_after_init;
 	"mcr	p15, 0, r0, c1, c0, 1	@ set ACTLR\n\t" \
 	"isb\n\t" \
 	"dsb\n\t" \
+	"ldmfd	sp!, {fp, ip}" \
 	: \
 	: "Ir" (pmu_base_addr + S5P_INFORM0) \
-	: "r0", "r1", "r2", "r3", "r4", "r5", "r6", \
-	  "r9", "r10", "ip", "lr", "memory")
+	: "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", \
+	  "r9", "r10", "lr", "memory")
 
 static int exynos_cpu_powerup(unsigned int cpu, unsigned int cluster)
 {

@@ -1064,9 +1064,9 @@ static void lcd_da8xx_cpufreq_deregister(struct da8xx_fb_par *par)
 }
 #endif
 
-static void fb_remove(struct platform_device *dev)
+static int fb_remove(struct platform_device *dev)
 {
-	struct fb_info *info = platform_get_drvdata(dev);
+	struct fb_info *info = dev_get_drvdata(&dev->dev);
 	struct da8xx_fb_par *par = info->par;
 	int ret;
 
@@ -1076,8 +1076,7 @@ static void fb_remove(struct platform_device *dev)
 	if (par->lcd_supply) {
 		ret = regulator_disable(par->lcd_supply);
 		if (ret)
-			dev_warn(&dev->dev, "Failed to disable regulator (%pe)\n",
-				 ERR_PTR(ret));
+			return ret;
 	}
 
 	lcd_disable_raster(DA8XX_FRAME_WAIT);
@@ -1091,6 +1090,8 @@ static void fb_remove(struct platform_device *dev)
 	pm_runtime_put_sync(&dev->dev);
 	pm_runtime_disable(&dev->dev);
 	framebuffer_release(info);
+
+	return 0;
 }
 
 /*
@@ -1295,12 +1296,14 @@ static int da8xxfb_set_par(struct fb_info *info)
 
 static const struct fb_ops da8xx_fb_ops = {
 	.owner = THIS_MODULE,
-	FB_DEFAULT_IOMEM_OPS,
 	.fb_check_var = fb_check_var,
 	.fb_set_par = da8xxfb_set_par,
 	.fb_setcolreg = fb_setcolreg,
 	.fb_pan_display = da8xx_pan_display,
 	.fb_ioctl = fb_ioctl,
+	.fb_fillrect = cfb_fillrect,
+	.fb_copyarea = cfb_copyarea,
+	.fb_imageblit = cfb_imageblit,
 	.fb_blank = cfb_blank,
 };
 
@@ -1351,9 +1354,10 @@ static int fb_probe(struct platform_device *device)
 		return PTR_ERR(da8xx_fb_reg_base);
 
 	tmp_lcdc_clk = devm_clk_get(&device->dev, "fck");
-	if (IS_ERR(tmp_lcdc_clk))
-		return dev_err_probe(&device->dev, PTR_ERR(tmp_lcdc_clk),
-				     "Can not get device clock\n");
+	if (IS_ERR(tmp_lcdc_clk)) {
+		dev_err(&device->dev, "Can not get device clock\n");
+		return PTR_ERR(tmp_lcdc_clk);
+	}
 
 	pm_runtime_enable(&device->dev);
 	pm_runtime_get_sync(&device->dev);
@@ -1427,7 +1431,7 @@ static int fb_probe(struct platform_device *device)
 		dev_err(&device->dev,
 			"GLCD: kmalloc for frame buffer failed\n");
 		ret = -EINVAL;
-		goto err_disable_reg;
+		goto err_release_fb;
 	}
 
 	da8xx_fb_info->screen_base = (char __iomem *) par->vram_virt;
@@ -1461,6 +1465,7 @@ static int fb_probe(struct platform_device *device)
 	da8xx_fb_var.bits_per_pixel = lcd_cfg->bpp;
 
 	/* Initialize fbinfo */
+	da8xx_fb_info->flags = FBINFO_FLAG_DEFAULT;
 	da8xx_fb_info->fix = da8xx_fb_fix;
 	da8xx_fb_info->var = da8xx_fb_var;
 	da8xx_fb_info->fbops = &da8xx_fb_ops;
@@ -1470,14 +1475,14 @@ static int fb_probe(struct platform_device *device)
 
 	ret = fb_alloc_cmap(&da8xx_fb_info->cmap, PALETTE_SIZE, 0);
 	if (ret)
-		goto err_disable_reg;
+		goto err_release_fb;
 	da8xx_fb_info->cmap.len = par->palette_sz;
 
 	/* initialize var_screeninfo */
 	da8xx_fb_var.activate = FB_ACTIVATE_FORCE;
 	fb_set_var(da8xx_fb_info, &da8xx_fb_var);
 
-	platform_set_drvdata(device, da8xx_fb_info);
+	dev_set_drvdata(&device->dev, da8xx_fb_info);
 
 	/* initialize the vsync wait queue */
 	init_waitqueue_head(&par->vsync_wait);
@@ -1524,9 +1529,6 @@ err_cpu_freq:
 err_dealloc_cmap:
 	fb_dealloc_cmap(&da8xx_fb_info->cmap);
 
-err_disable_reg:
-	if (par->lcd_supply)
-		regulator_disable(par->lcd_supply);
 err_release_fb:
 	framebuffer_release(da8xx_fb_info);
 
@@ -1652,7 +1654,7 @@ static SIMPLE_DEV_PM_OPS(fb_pm_ops, fb_suspend, fb_resume);
 
 static struct platform_driver da8xx_fb_driver = {
 	.probe = fb_probe,
-	.remove_new = fb_remove,
+	.remove = fb_remove,
 	.driver = {
 		   .name = DRIVER_NAME,
 		   .pm	= &fb_pm_ops,

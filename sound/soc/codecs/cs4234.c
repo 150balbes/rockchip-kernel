@@ -585,7 +585,7 @@ static struct snd_soc_dai_driver cs4234_dai[] = {
 			.formats = CS4234_FORMATS,
 		},
 		.ops = &cs4234_dai_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 	},
 };
 
@@ -660,9 +660,9 @@ static const struct snd_soc_component_driver soc_component_cs4234 = {
 	.controls		= cs4234_snd_controls,
 	.num_controls		= ARRAY_SIZE(cs4234_snd_controls),
 	.set_bias_level		= cs4234_set_bias_level,
+	.non_legacy_dai_naming	= 1,
 	.idle_bias_on		= 1,
 	.suspend_bias_off	= 1,
-	.endianness		= 1,
 };
 
 static const struct regmap_config cs4234_regmap = {
@@ -675,7 +675,7 @@ static const struct regmap_config cs4234_regmap = {
 	.writeable_reg = cs4234_writeable_register,
 	.reg_defaults = cs4234_default_reg,
 	.num_reg_defaults = ARRAY_SIZE(cs4234_default_reg),
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.use_single_read = true,
 	.use_single_write = true,
 };
@@ -731,7 +731,7 @@ static int cs4234_powerup(struct cs4234 *cs4234)
 	return 0;
 }
 
-static int cs4234_i2c_probe(struct i2c_client *i2c_client)
+static int cs4234_i2c_probe(struct i2c_client *i2c_client, const struct i2c_device_id *id)
 {
 	struct cs4234 *cs4234;
 	struct device *dev = &i2c_client->dev;
@@ -850,7 +850,7 @@ fail_shutdown:
 	return ret;
 }
 
-static void cs4234_i2c_remove(struct i2c_client *i2c_client)
+static int cs4234_i2c_remove(struct i2c_client *i2c_client)
 {
 	struct cs4234 *cs4234 = i2c_get_clientdata(i2c_client);
 	struct device *dev = &i2c_client->dev;
@@ -858,6 +858,8 @@ static void cs4234_i2c_remove(struct i2c_client *i2c_client)
 	snd_soc_unregister_component(dev);
 	pm_runtime_disable(dev);
 	cs4234_shutdown(cs4234);
+
+	return 0;
 }
 
 static int __maybe_unused cs4234_runtime_resume(struct device *dev)

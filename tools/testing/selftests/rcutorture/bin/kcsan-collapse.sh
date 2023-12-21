@@ -14,7 +14,7 @@ if test -z "$TORTURE_KCONFIG_KCSAN_ARG"
 then
 	exit 0
 fi
-find $1 -name console.log -exec cat {} \; |
+cat $1/*/console.log |
 	grep "BUG: KCSAN: " |
 	sed -e 's/^\[[^]]*] //' |
 	sort |

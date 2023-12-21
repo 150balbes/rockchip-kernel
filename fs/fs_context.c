@@ -80,35 +80,6 @@ static int vfs_parse_sb_flag(struct fs_context *fc, const char *key)
 }
 
 /**
- * vfs_parse_fs_param_source - Handle setting "source" via parameter
- * @fc: The filesystem context to modify
- * @param: The parameter
- *
- * This is a simple helper for filesystems to verify that the "source" they
- * accept is sane.
- *
- * Returns 0 on success, -ENOPARAM if this is not  "source" parameter, and
- * -EINVAL otherwise. In the event of failure, supplementary error information
- *  is logged.
- */
-int vfs_parse_fs_param_source(struct fs_context *fc, struct fs_parameter *param)
-{
-	if (strcmp(param->key, "source") != 0)
-		return -ENOPARAM;
-
-	if (param->type != fs_value_is_string)
-		return invalf(fc, "Non-string source");
-
-	if (fc->source)
-		return invalf(fc, "Multiple sources");
-
-	fc->source = param->string;
-	param->string = NULL;
-	return 0;
-}
-EXPORT_SYMBOL(vfs_parse_fs_param_source);
-
-/**
  * vfs_parse_fs_param - Add a single parameter to a superblock config
  * @fc: The filesystem context to modify
  * @param: The parameter
@@ -151,9 +122,15 @@ int vfs_parse_fs_param(struct fs_context *fc, struct fs_parameter *param)
 	/* If the filesystem doesn't take any arguments, give it the
 	 * default handling of source.
 	 */
-	ret = vfs_parse_fs_param_source(fc, param);
-	if (ret != -ENOPARAM)
-		return ret;
+	if (strcmp(param->key, "source") == 0) {
+		if (param->type != fs_value_is_string)
+			return invalf(fc, "VFS: Non-string source");
+		if (fc->source)
+			return invalf(fc, "VFS: Multiple sources");
+		fc->source = param->string;
+		param->string = NULL;
+		return 0;
+	}
 
 	return invalf(fc, "%s: Unknown parameter '%s'",
 		      fc->fs_type->name, param->key);
@@ -527,11 +504,16 @@ static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	struct legacy_fs_context *ctx = fc->fs_private;
 	unsigned int size = ctx->data_size;
 	size_t len = 0;
-	int ret;
 
-	ret = vfs_parse_fs_param_source(fc, param);
-	if (ret != -ENOPARAM)
-		return ret;
+	if (strcmp(param->key, "source") == 0) {
+		if (param->type != fs_value_is_string)
+			return invalf(fc, "VFS: Legacy: Non-string source");
+		if (fc->source)
+			return invalf(fc, "VFS: Legacy: Multiple sources");
+		fc->source = param->string;
+		param->string = NULL;
+		return 0;
+	}
 
 	if (ctx->param_type == LEGACY_FS_MONOLITHIC_PARAMS)
 		return invalf(fc, "VFS: Legacy: Can't mix monolithic and individual options");
@@ -561,8 +543,7 @@ static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
 			return -ENOMEM;
 	}
 
-	if (size)
-		ctx->legacy_data[size++] = ',';
+	ctx->legacy_data[size++] = ',';
 	len = strlen(param->key);
 	memcpy(ctx->legacy_data + size, param->key, len);
 	size += len;

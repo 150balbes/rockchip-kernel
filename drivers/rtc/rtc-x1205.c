@@ -614,7 +614,8 @@ static void x1205_sysfs_unregister(struct device *dev)
 }
 
 
-static int x1205_probe(struct i2c_client *client)
+static int x1205_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int err = 0;
 	unsigned char sr;
@@ -657,9 +658,10 @@ static int x1205_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void x1205_remove(struct i2c_client *client)
+static int x1205_remove(struct i2c_client *client)
 {
 	x1205_sysfs_unregister(&client->dev);
+	return 0;
 }
 
 static const struct i2c_device_id x1205_id[] = {

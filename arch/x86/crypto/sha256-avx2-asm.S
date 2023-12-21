@@ -49,7 +49,6 @@
 ########################################################################
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 
 ## assume buffers not aligned
 #define	VMOVDQ vmovdqu
@@ -118,13 +117,15 @@ _XMM_SAVE_SIZE	= 0
 _INP_END_SIZE	= 8
 _INP_SIZE	= 8
 _CTX_SIZE	= 8
+_RSP_SIZE	= 8
 
 _XFER		= 0
 _XMM_SAVE	= _XFER     + _XFER_SIZE
 _INP_END	= _XMM_SAVE + _XMM_SAVE_SIZE
 _INP		= _INP_END  + _INP_END_SIZE
 _CTX		= _INP      + _INP_SIZE
-STACK_SIZE	= _CTX      + _CTX_SIZE
+_RSP		= _CTX      + _CTX_SIZE
+STACK_SIZE	= _RSP      + _RSP_SIZE
 
 # rotate_Xs
 # Rotate values of symbols X0...X3
@@ -524,26 +525,27 @@ STACK_SIZE	= _CTX      + _CTX_SIZE
 ## arg 3 : Num blocks
 ########################################################################
 .text
-SYM_TYPED_FUNC_START(sha256_transform_rorx)
+SYM_FUNC_START(sha256_transform_rorx)
+.align 32
 	pushq	%rbx
 	pushq	%r12
 	pushq	%r13
 	pushq	%r14
 	pushq	%r15
 
-	push	%rbp
-	mov	%rsp, %rbp
-
+	mov	%rsp, %rax
 	subq	$STACK_SIZE, %rsp
 	and	$-32, %rsp	# align rsp to 32 byte boundary
+	mov	%rax, _RSP(%rsp)
+
 
 	shl	$6, NUM_BLKS	# convert to bytes
-	jz	.Ldone_hash
+	jz	done_hash
 	lea	-64(INP, NUM_BLKS), NUM_BLKS # pointer to last block
 	mov	NUM_BLKS, _INP_END(%rsp)
 
 	cmp	NUM_BLKS, INP
-	je	.Lonly_one_block
+	je	only_one_block
 
 	## load initial digest
 	mov	(CTX), a
@@ -561,7 +563,7 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 
 	mov	CTX, _CTX(%rsp)
 
-.Lloop0:
+loop0:
 	## Load first 16 dwords from two blocks
 	VMOVDQ	0*32(INP),XTMP0
 	VMOVDQ	1*32(INP),XTMP1
@@ -580,7 +582,7 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	vperm2i128	$0x20, XTMP3, XTMP1, X2
 	vperm2i128	$0x31, XTMP3, XTMP1, X3
 
-.Llast_block_enter:
+last_block_enter:
 	add	$64, INP
 	mov	INP, _INP(%rsp)
 
@@ -588,40 +590,34 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	xor	SRND, SRND
 
 .align 16
-.Lloop1:
-	leaq	K256+0*32(%rip), INP		## reuse INP as scratch reg
-	vpaddd	(INP, SRND), X0, XFER
+loop1:
+	vpaddd	K256+0*32(SRND), X0, XFER
 	vmovdqa XFER, 0*32+_XFER(%rsp, SRND)
 	FOUR_ROUNDS_AND_SCHED	_XFER + 0*32
 
-	leaq	K256+1*32(%rip), INP
-	vpaddd	(INP, SRND), X0, XFER
+	vpaddd	K256+1*32(SRND), X0, XFER
 	vmovdqa XFER, 1*32+_XFER(%rsp, SRND)
 	FOUR_ROUNDS_AND_SCHED	_XFER + 1*32
 
-	leaq	K256+2*32(%rip), INP
-	vpaddd	(INP, SRND), X0, XFER
+	vpaddd	K256+2*32(SRND), X0, XFER
 	vmovdqa XFER, 2*32+_XFER(%rsp, SRND)
 	FOUR_ROUNDS_AND_SCHED	_XFER + 2*32
 
-	leaq	K256+3*32(%rip), INP
-	vpaddd	(INP, SRND), X0, XFER
+	vpaddd	K256+3*32(SRND), X0, XFER
 	vmovdqa XFER, 3*32+_XFER(%rsp, SRND)
 	FOUR_ROUNDS_AND_SCHED	_XFER + 3*32
 
 	add	$4*32, SRND
 	cmp	$3*4*32, SRND
-	jb	.Lloop1
+	jb	loop1
 
-.Lloop2:
+loop2:
 	## Do last 16 rounds with no scheduling
-	leaq	K256+0*32(%rip), INP
-	vpaddd	(INP, SRND), X0, XFER
+	vpaddd	K256+0*32(SRND), X0, XFER
 	vmovdqa XFER, 0*32+_XFER(%rsp, SRND)
 	DO_4ROUNDS	_XFER + 0*32
 
-	leaq	K256+1*32(%rip), INP
-	vpaddd	(INP, SRND), X1, XFER
+	vpaddd	K256+1*32(SRND), X1, XFER
 	vmovdqa XFER, 1*32+_XFER(%rsp, SRND)
 	DO_4ROUNDS	_XFER + 1*32
 	add	$2*32, SRND
@@ -630,7 +626,7 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	vmovdqa	X3, X1
 
 	cmp	$4*4*32, SRND
-	jb	.Lloop2
+	jb	loop2
 
 	mov	_CTX(%rsp), CTX
 	mov	_INP(%rsp), INP
@@ -645,17 +641,17 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	addm    (4*7)(CTX),h
 
 	cmp	_INP_END(%rsp), INP
-	ja	.Ldone_hash
+	ja	done_hash
 
 	#### Do second block using previously scheduled results
 	xor	SRND, SRND
 .align 16
-.Lloop3:
+loop3:
 	DO_4ROUNDS	 _XFER + 0*32 + 16
 	DO_4ROUNDS	 _XFER + 1*32 + 16
 	add	$2*32, SRND
 	cmp	$4*4*32, SRND
-	jb	.Lloop3
+	jb	loop3
 
 	mov	_CTX(%rsp), CTX
 	mov	_INP(%rsp), INP
@@ -671,10 +667,10 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	addm    (4*7)(CTX),h
 
 	cmp	_INP_END(%rsp), INP
-	jb	.Lloop0
-	ja	.Ldone_hash
+	jb	loop0
+	ja	done_hash
 
-.Ldo_last_block:
+do_last_block:
 	VMOVDQ	0*16(INP),XWORD0
 	VMOVDQ	1*16(INP),XWORD1
 	VMOVDQ	2*16(INP),XWORD2
@@ -685,9 +681,9 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	vpshufb	X_BYTE_FLIP_MASK, XWORD2, XWORD2
 	vpshufb	X_BYTE_FLIP_MASK, XWORD3, XWORD3
 
-	jmp	.Llast_block_enter
+	jmp	last_block_enter
 
-.Lonly_one_block:
+only_one_block:
 
 	## load initial digest
 	mov	(4*0)(CTX),a
@@ -704,12 +700,11 @@ SYM_TYPED_FUNC_START(sha256_transform_rorx)
 	vmovdqa	_SHUF_DC00(%rip), SHUF_DC00
 
 	mov	CTX, _CTX(%rsp)
-	jmp	.Ldo_last_block
+	jmp	do_last_block
 
-.Ldone_hash:
+done_hash:
 
-	mov	%rbp, %rsp
-	pop	%rbp
+	mov	_RSP(%rsp), %rsp
 
 	popq	%r15
 	popq	%r14

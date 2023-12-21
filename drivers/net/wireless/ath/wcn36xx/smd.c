@@ -16,13 +16,11 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/bitfield.h>
 #include <linux/etherdevice.h>
 #include <linux/firmware.h>
 #include <linux/bitops.h>
 #include <linux/rpmsg.h>
 #include "smd.h"
-#include "firmware.h"
 
 struct wcn36xx_cfg_val {
 	u32 cfg_id;
@@ -80,7 +78,6 @@ static struct wcn36xx_cfg_val wcn36xx_cfg_vals[] = {
 	WCN36XX_CFG_VAL(MAX_ASSOC_LIMIT, 10),
 	WCN36XX_CFG_VAL(ENABLE_MCC_ADAPTIVE_SCHEDULER, 0),
 	WCN36XX_CFG_VAL(ENABLE_DYNAMIC_RA_START_RATE, 133), /* MCS 5 */
-	WCN36XX_CFG_VAL(LINK_FAIL_TX_CNT, 1000),
 };
 
 static struct wcn36xx_cfg_val wcn3680_cfg_vals[] = {
@@ -165,7 +162,7 @@ static struct wcn36xx_cfg_val wcn3680_cfg_vals[] = {
 	WCN36XX_CFG_VAL(ENABLE_RTSCTS_HTVHT, 0),
 	WCN36XX_CFG_VAL(BTC_STATIC_OPP_WLAN_IDLE_WLAN_LEN, 30000),
 	WCN36XX_CFG_VAL(BTC_STATIC_OPP_WLAN_IDLE_BT_LEN, 120000),
-	WCN36XX_CFG_VAL(LINK_FAIL_TX_CNT, 1000),
+	WCN36XX_CFG_VAL(LINK_FAIL_TX_CNT, 200),
 	WCN36XX_CFG_VAL(TOGGLE_ARP_BDRATES, 0),
 	WCN36XX_CFG_VAL(OPTIMIZE_CA_EVENT, 0),
 	WCN36XX_CFG_VAL(EXT_SCAN_CONC_MODE, 0),
@@ -209,9 +206,9 @@ static void wcn36xx_smd_set_bss_nw_type(struct wcn36xx *wcn,
 {
 	if (NL80211_BAND_5GHZ == WCN36XX_BAND(wcn))
 		bss_params->nw_type = WCN36XX_HAL_11A_NW_TYPE;
-	else if (sta && sta->deflink.ht_cap.ht_supported)
+	else if (sta && sta->ht_cap.ht_supported)
 		bss_params->nw_type = WCN36XX_HAL_11N_NW_TYPE;
-	else if (sta && (sta->deflink.supp_rates[NL80211_BAND_2GHZ] & 0x7f))
+	else if (sta && (sta->supp_rates[NL80211_BAND_2GHZ] & 0x7f))
 		bss_params->nw_type = WCN36XX_HAL_11G_NW_TYPE;
 	else
 		bss_params->nw_type = WCN36XX_HAL_11B_NW_TYPE;
@@ -226,10 +223,9 @@ static void wcn36xx_smd_set_bss_ht_params(struct ieee80211_vif *vif,
 		struct ieee80211_sta *sta,
 		struct wcn36xx_hal_config_bss_params *bss_params)
 {
-	if (sta && sta->deflink.ht_cap.ht_supported) {
-		unsigned long caps = sta->deflink.ht_cap.cap;
-
-		bss_params->ht = sta->deflink.ht_cap.ht_supported;
+	if (sta && sta->ht_cap.ht_supported) {
+		unsigned long caps = sta->ht_cap.cap;
+		bss_params->ht = sta->ht_cap.ht_supported;
 		bss_params->tx_channel_width_set = is_cap_supported(caps,
 			IEEE80211_HT_CAP_SUP_WIDTH_20_40);
 		bss_params->lsig_tx_op_protection_full_support =
@@ -252,26 +248,24 @@ wcn36xx_smd_set_bss_vht_params(struct ieee80211_vif *vif,
 			       struct ieee80211_sta *sta,
 			       struct wcn36xx_hal_config_bss_params_v1 *bss)
 {
-	if (sta && sta->deflink.vht_cap.vht_supported)
+	if (sta && sta->vht_cap.vht_supported)
 		bss->vht_capable = 1;
 }
 
 static void wcn36xx_smd_set_sta_ht_params(struct ieee80211_sta *sta,
 		struct wcn36xx_hal_config_sta_params *sta_params)
 {
-	if (sta->deflink.ht_cap.ht_supported) {
-		unsigned long caps = sta->deflink.ht_cap.cap;
-
-		sta_params->ht_capable = sta->deflink.ht_cap.ht_supported;
+	if (sta->ht_cap.ht_supported) {
+		unsigned long caps = sta->ht_cap.cap;
+		sta_params->ht_capable = sta->ht_cap.ht_supported;
 		sta_params->tx_channel_width_set = is_cap_supported(caps,
 			IEEE80211_HT_CAP_SUP_WIDTH_20_40);
 		sta_params->lsig_txop_protection = is_cap_supported(caps,
 			IEEE80211_HT_CAP_LSIG_TXOP_PROT);
 
-		sta_params->max_ampdu_size = sta->deflink.ht_cap.ampdu_factor;
-		sta_params->max_ampdu_density = sta->deflink.ht_cap.ampdu_density;
-		/* max_amsdu_size: 1 : 3839 bytes, 0 : 7935 bytes (max) */
-		sta_params->max_amsdu_size = !is_cap_supported(caps,
+		sta_params->max_ampdu_size = sta->ht_cap.ampdu_factor;
+		sta_params->max_ampdu_density = sta->ht_cap.ampdu_density;
+		sta_params->max_amsdu_size = is_cap_supported(caps,
 			IEEE80211_HT_CAP_MAX_AMSDU);
 		sta_params->sgi_20Mhz = is_cap_supported(caps,
 			IEEE80211_HT_CAP_SGI_20);
@@ -290,13 +284,13 @@ static void wcn36xx_smd_set_sta_vht_params(struct wcn36xx *wcn,
 		struct ieee80211_sta *sta,
 		struct wcn36xx_hal_config_sta_params_v1 *sta_params)
 {
-	if (sta->deflink.vht_cap.vht_supported) {
-		unsigned long caps = sta->deflink.vht_cap.cap;
+	if (sta->vht_cap.vht_supported) {
+		unsigned long caps = sta->vht_cap.cap;
 
-		sta_params->vht_capable = sta->deflink.vht_cap.vht_supported;
+		sta_params->vht_capable = sta->vht_cap.vht_supported;
 		sta_params->vht_ldpc_enabled =
 			is_cap_supported(caps, IEEE80211_VHT_CAP_RXLDPC);
-		if (wcn36xx_firmware_get_feat_caps(wcn->fw_feat_caps, MU_MIMO)) {
+		if (get_feat_caps(wcn->fw_feat_caps, MU_MIMO)) {
 			sta_params->vht_tx_mu_beamformee_capable =
 				is_cap_supported(caps, IEEE80211_VHT_CAP_MU_BEAMFORMER_CAPABLE);
 			if (sta_params->vht_tx_mu_beamformee_capable)
@@ -311,10 +305,9 @@ static void wcn36xx_smd_set_sta_vht_params(struct wcn36xx *wcn,
 static void wcn36xx_smd_set_sta_ht_ldpc_params(struct ieee80211_sta *sta,
 		struct wcn36xx_hal_config_sta_params_v1 *sta_params)
 {
-	if (sta->deflink.ht_cap.ht_supported) {
+	if (sta->ht_cap.ht_supported) {
 		sta_params->ht_ldpc_enabled =
-			is_cap_supported(sta->deflink.ht_cap.cap,
-					 IEEE80211_HT_CAP_LDPC_CODING);
+			is_cap_supported(sta->ht_cap.cap, IEEE80211_HT_CAP_LDPC_CODING);
 	}
 }
 
@@ -451,12 +444,22 @@ out:
 	return ret;
 }
 
+static void init_hal_msg(struct wcn36xx_hal_msg_header *hdr,
+			 enum wcn36xx_hal_host_msg_type msg_type,
+			 size_t msg_size)
+{
+	memset(hdr, 0, msg_size + sizeof(*hdr));
+	hdr->msg_type = msg_type;
+	hdr->msg_version = WCN36XX_HAL_MSG_VERSION0;
+	hdr->len = msg_size + sizeof(*hdr);
+}
+
 #define __INIT_HAL_MSG(msg_body, type, version) \
 	do {								\
-		memset(&(msg_body), 0, sizeof(msg_body));		\
-		(msg_body).header.msg_type = type;			\
-		(msg_body).header.msg_version = version;		\
-		(msg_body).header.len = sizeof(msg_body);		\
+		memset(&msg_body, 0, sizeof(msg_body));			\
+		msg_body.header.msg_type = type;			\
+		msg_body.header.msg_version = version;			\
+		msg_body.header.len = sizeof(msg_body);			\
 	} while (0)							\
 
 #define INIT_HAL_MSG(msg_body, type)	\
@@ -475,12 +478,13 @@ out:
 
 #define PREPARE_HAL_BUF(send_buf, msg_body) \
 	do {							\
-		memcpy_and_pad(send_buf, msg_body.header.len,	\
-			       &msg_body, sizeof(msg_body), 0);	\
+		memset(send_buf, 0, msg_body.header.len);	\
+		memcpy(send_buf, &msg_body, sizeof(msg_body));	\
 	} while (0)						\
 
 #define PREPARE_HAL_PTT_MSG_BUF(send_buf, p_msg_body) \
 	do {							\
+		memset(send_buf, 0, p_msg_body->header.len); \
 		memcpy(send_buf, p_msg_body, p_msg_body->header.len); \
 	} while (0)
 
@@ -510,10 +514,10 @@ int wcn36xx_smd_load_nv(struct wcn36xx *wcn)
 	u16 fm_offset = 0;
 
 	if (!wcn->nv) {
-		ret = request_firmware(&wcn->nv, wcn->nv_file, wcn->dev);
+		ret = request_firmware(&wcn->nv, WLAN_NV_FILE, wcn->dev);
 		if (ret) {
 			wcn36xx_err("Failed to load nv file %s: %d\n",
-				    wcn->nv_file, ret);
+				      WLAN_NV_FILE, ret);
 			goto out;
 		}
 	}
@@ -933,86 +937,6 @@ int wcn36xx_smd_stop_hw_scan(struct wcn36xx *wcn)
 		goto out;
 	}
 out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-int wcn36xx_smd_update_channel_list(struct wcn36xx *wcn, struct cfg80211_scan_request *req)
-{
-	struct wcn36xx_hal_update_channel_list_req_msg *msg_body;
-	int ret, i;
-
-	msg_body = kzalloc(sizeof(*msg_body), GFP_KERNEL);
-	if (!msg_body)
-		return -ENOMEM;
-
-	INIT_HAL_MSG((*msg_body), WCN36XX_HAL_UPDATE_CHANNEL_LIST_REQ);
-
-	msg_body->num_channel = min_t(u8, req->n_channels, ARRAY_SIZE(msg_body->channels));
-	for (i = 0; i < msg_body->num_channel; i++) {
-		struct wcn36xx_hal_channel_param *param = &msg_body->channels[i];
-		u32 min_power = WCN36XX_HAL_DEFAULT_MIN_POWER;
-		u32 ant_gain = WCN36XX_HAL_DEFAULT_ANT_GAIN;
-
-		param->mhz = req->channels[i]->center_freq;
-		param->band_center_freq1 = req->channels[i]->center_freq;
-		param->band_center_freq2 = 0;
-
-		if (req->channels[i]->flags & IEEE80211_CHAN_NO_IR)
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_FLAG_PASSIVE;
-
-		if (req->channels[i]->flags & IEEE80211_CHAN_RADAR)
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_FLAG_DFS;
-
-		if (req->channels[i]->band == NL80211_BAND_5GHZ) {
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_FLAG_HT;
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_FLAG_VHT;
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_PHY_11A;
-		} else {
-			param->channel_info |= WCN36XX_HAL_CHAN_INFO_PHY_11BG;
-		}
-
-		if (min_power > req->channels[i]->max_power)
-			min_power = req->channels[i]->max_power;
-
-		if (req->channels[i]->max_antenna_gain)
-			ant_gain = req->channels[i]->max_antenna_gain;
-
-		u32p_replace_bits(&param->reg_info_1, min_power,
-				  WCN36XX_HAL_CHAN_REG1_MIN_PWR_MASK);
-		u32p_replace_bits(&param->reg_info_1, req->channels[i]->max_power,
-				  WCN36XX_HAL_CHAN_REG1_MAX_PWR_MASK);
-		u32p_replace_bits(&param->reg_info_1, req->channels[i]->max_reg_power,
-				  WCN36XX_HAL_CHAN_REG1_REG_PWR_MASK);
-		u32p_replace_bits(&param->reg_info_1, 0,
-				  WCN36XX_HAL_CHAN_REG1_CLASS_ID_MASK);
-		u32p_replace_bits(&param->reg_info_2, ant_gain,
-				  WCN36XX_HAL_CHAN_REG2_ANT_GAIN_MASK);
-
-		wcn36xx_dbg(WCN36XX_DBG_HAL,
-			    "%s: freq=%u, channel_info=%08x, reg_info1=%08x, reg_info2=%08x\n",
-			    __func__, param->mhz, param->channel_info, param->reg_info_1,
-			    param->reg_info_2);
-	}
-
-	mutex_lock(&wcn->hal_mutex);
-
-	PREPARE_HAL_BUF(wcn->hal_buf, (*msg_body));
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body->header.len);
-	if (ret) {
-		wcn36xx_err("Sending hal_update_channel_list failed\n");
-		goto out;
-	}
-
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("hal_update_channel_list response failed err=%d\n", ret);
-		goto out;
-	}
-
-out:
-	kfree(msg_body);
 	mutex_unlock(&wcn->hal_mutex);
 	return ret;
 }
@@ -2255,7 +2179,6 @@ int wcn36xx_smd_exit_bmps(struct wcn36xx *wcn, struct ieee80211_vif *vif)
 	INIT_HAL_MSG(msg_body, WCN36XX_HAL_EXIT_BMPS_REQ);
 
 	msg_body.bss_index = vif_priv->bss_index;
-	msg_body.send_data_null = 1;
 
 	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
 
@@ -2269,59 +2192,6 @@ int wcn36xx_smd_exit_bmps(struct wcn36xx *wcn, struct ieee80211_vif *vif)
 		wcn36xx_err("hal_exit_bmps response failed err=%d\n", ret);
 		goto out;
 	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-int wcn36xx_smd_enter_imps(struct wcn36xx *wcn)
-{
-	struct wcn36xx_hal_enter_imps_req_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_ENTER_IMPS_REQ);
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending hal_enter_imps failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("hal_enter_imps response failed err=%d\n", ret);
-		goto out;
-	}
-
-	wcn36xx_dbg(WCN36XX_DBG_HAL, "Entered idle mode\n");
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-int wcn36xx_smd_exit_imps(struct wcn36xx *wcn)
-{
-	struct wcn36xx_hal_exit_imps_req_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_EXIT_IMPS_REQ);
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending hal_exit_imps failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("hal_exit_imps response failed err=%d\n", ret);
-		goto out;
-	}
-	wcn36xx_dbg(WCN36XX_DBG_HAL, "Exited idle mode\n");
 out:
 	mutex_unlock(&wcn->hal_mutex);
 	return ret;
@@ -2432,6 +2302,49 @@ out:
 	return ret;
 }
 
+void set_feat_caps(u32 *bitmap, enum place_holder_in_cap_bitmap cap)
+{
+	int arr_idx, bit_idx;
+
+	if (cap < 0 || cap > 127) {
+		wcn36xx_warn("error cap idx %d\n", cap);
+		return;
+	}
+
+	arr_idx = cap / 32;
+	bit_idx = cap % 32;
+	bitmap[arr_idx] |= (1 << bit_idx);
+}
+
+int get_feat_caps(u32 *bitmap, enum place_holder_in_cap_bitmap cap)
+{
+	int arr_idx, bit_idx;
+
+	if (cap < 0 || cap > 127) {
+		wcn36xx_warn("error cap idx %d\n", cap);
+		return -EINVAL;
+	}
+
+	arr_idx = cap / 32;
+	bit_idx = cap % 32;
+
+	return (bitmap[arr_idx] & (1 << bit_idx)) ? 1 : 0;
+}
+
+void clear_feat_caps(u32 *bitmap, enum place_holder_in_cap_bitmap cap)
+{
+	int arr_idx, bit_idx;
+
+	if (cap < 0 || cap > 127) {
+		wcn36xx_warn("error cap idx %d\n", cap);
+		return;
+	}
+
+	arr_idx = cap / 32;
+	bit_idx = cap % 32;
+	bitmap[arr_idx] &= ~(1 << bit_idx);
+}
+
 int wcn36xx_smd_feature_caps_exchange(struct wcn36xx *wcn)
 {
 	struct wcn36xx_hal_feat_caps_msg msg_body, *rsp;
@@ -2440,13 +2353,9 @@ int wcn36xx_smd_feature_caps_exchange(struct wcn36xx *wcn)
 	mutex_lock(&wcn->hal_mutex);
 	INIT_HAL_MSG(msg_body, WCN36XX_HAL_FEATURE_CAPS_EXCHANGE_REQ);
 
-	wcn36xx_firmware_set_feat_caps(msg_body.feat_caps, STA_POWERSAVE);
-	if (wcn->rf_id == RF_IRIS_WCN3680) {
-		wcn36xx_firmware_set_feat_caps(msg_body.feat_caps, DOT11AC);
-		wcn36xx_firmware_set_feat_caps(msg_body.feat_caps, WLAN_CH144);
-		wcn36xx_firmware_set_feat_caps(msg_body.feat_caps,
-					       ANTENNA_DIVERSITY_SELECTION);
-	}
+	set_feat_caps(msg_body.feat_caps, STA_POWERSAVE);
+	if (wcn->rf_id == RF_IRIS_WCN3680)
+		set_feat_caps(msg_body.feat_caps, DOT11AC);
 
 	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
 
@@ -2523,7 +2432,6 @@ int wcn36xx_smd_add_ba_session(struct wcn36xx *wcn,
 					     &session_id);
 	if (ret) {
 		wcn36xx_err("hal_add_ba_session response failed err=%d\n", ret);
-		ret = -EINVAL;
 		goto out;
 	}
 
@@ -2561,7 +2469,7 @@ out:
 	return ret;
 }
 
-int wcn36xx_smd_del_ba(struct wcn36xx *wcn, u16 tid, u8 direction, u8 sta_index)
+int wcn36xx_smd_del_ba(struct wcn36xx *wcn, u16 tid, u8 sta_index)
 {
 	struct wcn36xx_hal_del_ba_req_msg msg_body;
 	int ret;
@@ -2571,7 +2479,7 @@ int wcn36xx_smd_del_ba(struct wcn36xx *wcn, u16 tid, u8 direction, u8 sta_index)
 
 	msg_body.sta_index = sta_index;
 	msg_body.tid = tid;
-	msg_body.direction = direction;
+	msg_body.direction = 0;
 	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
 
 	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
@@ -2589,99 +2497,27 @@ out:
 	return ret;
 }
 
-int wcn36xx_smd_get_stats(struct wcn36xx *wcn, u8 sta_index, u32 stats_mask,
-			  struct station_info *sinfo)
+static int wcn36xx_smd_trigger_ba_rsp(void *buf, int len)
 {
-	struct wcn36xx_hal_stats_req_msg msg_body;
-	struct wcn36xx_hal_stats_rsp_msg *rsp;
-	void *rsp_body;
-	int ret;
-
-	if (stats_mask & ~HAL_GLOBAL_CLASS_A_STATS_INFO) {
-		wcn36xx_err("stats_mask 0x%x contains unimplemented types\n",
-			    stats_mask);
-		return -EINVAL;
-	}
-
-	mutex_lock(&wcn->hal_mutex);
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_GET_STATS_REQ);
-
-	msg_body.sta_id = sta_index;
-	msg_body.stats_mask = stats_mask;
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("sending hal_get_stats failed\n");
-		goto out;
-	}
-
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("hal_get_stats response failed err=%d\n", ret);
-		goto out;
-	}
-
-	rsp = (struct wcn36xx_hal_stats_rsp_msg *)wcn->hal_buf;
-	rsp_body = (wcn->hal_buf + sizeof(struct wcn36xx_hal_stats_rsp_msg));
-
-	if (rsp->stats_mask != stats_mask) {
-		wcn36xx_err("stats_mask 0x%x differs from requested 0x%x\n",
-			    rsp->stats_mask, stats_mask);
-		goto out;
-	}
-
-	if (rsp->stats_mask & HAL_GLOBAL_CLASS_A_STATS_INFO) {
-		struct ani_global_class_a_stats_info *stats_info = rsp_body;
-
-		wcn36xx_process_tx_rate(stats_info, &sinfo->txrate);
-		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
-		rsp_body += sizeof(struct ani_global_class_a_stats_info);
-	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-
-	return ret;
-}
-
-static int wcn36xx_smd_trigger_ba_rsp(void *buf, int len, struct add_ba_info *ba_info)
-{
-	struct wcn36xx_hal_trigger_ba_rsp_candidate *candidate;
 	struct wcn36xx_hal_trigger_ba_rsp_msg *rsp;
-	int i;
 
 	if (len < sizeof(*rsp))
 		return -EINVAL;
 
 	rsp = (struct wcn36xx_hal_trigger_ba_rsp_msg *) buf;
-
-	if (rsp->candidate_cnt < 1)
-		return rsp->status ? rsp->status : -EINVAL;
-
-	candidate = (struct wcn36xx_hal_trigger_ba_rsp_candidate *)(buf + sizeof(*rsp));
-
-	for (i = 0; i < STACFG_MAX_TC; i++) {
-		ba_info[i] = candidate->ba_info[i];
-	}
-
 	return rsp->status;
 }
 
-int wcn36xx_smd_trigger_ba(struct wcn36xx *wcn, u8 sta_index, u16 tid, u16 *ssn)
+int wcn36xx_smd_trigger_ba(struct wcn36xx *wcn, u8 sta_index, u16 tid, u8 session_id)
 {
 	struct wcn36xx_hal_trigger_ba_req_msg msg_body;
 	struct wcn36xx_hal_trigger_ba_req_candidate *candidate;
-	struct add_ba_info ba_info[STACFG_MAX_TC];
 	int ret;
-
-	if (tid >= STACFG_MAX_TC)
-		return -EINVAL;
 
 	mutex_lock(&wcn->hal_mutex);
 	INIT_HAL_MSG(msg_body, WCN36XX_HAL_TRIGGER_BA_REQ);
 
-	msg_body.session_id = 0; /* not really used */
+	msg_body.session_id = session_id;
 	msg_body.candidate_cnt = 1;
 	msg_body.header.len += sizeof(*candidate);
 	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
@@ -2696,17 +2532,13 @@ int wcn36xx_smd_trigger_ba(struct wcn36xx *wcn, u8 sta_index, u16 tid, u16 *ssn)
 		wcn36xx_err("Sending hal_trigger_ba failed\n");
 		goto out;
 	}
-	ret = wcn36xx_smd_trigger_ba_rsp(wcn->hal_buf, wcn->hal_rsp_len, ba_info);
+	ret = wcn36xx_smd_trigger_ba_rsp(wcn->hal_buf, wcn->hal_rsp_len);
 	if (ret) {
 		wcn36xx_err("hal_trigger_ba response failed err=%d\n", ret);
 		goto out;
 	}
 out:
 	mutex_unlock(&wcn->hal_mutex);
-
-	if (ssn)
-		*ssn = ba_info[tid].starting_seq_num;
-
 	return ret;
 }
 
@@ -2740,7 +2572,7 @@ static int wcn36xx_smd_hw_scan_ind(struct wcn36xx *wcn, void *buf, size_t len)
 	case WCN36XX_HAL_SCAN_IND_FAILED:
 	case WCN36XX_HAL_SCAN_IND_DEQUEUED:
 		scan_info.aborted = true;
-		fallthrough;
+		/* fall through */
 	case WCN36XX_HAL_SCAN_IND_COMPLETED:
 		mutex_lock(&wcn->scan_lock);
 		wcn->scan_req = NULL;
@@ -2922,7 +2754,8 @@ int wcn36xx_smd_set_mc_list(struct wcn36xx *wcn,
 
 	msg_body = (struct wcn36xx_hal_rcv_flt_pkt_set_mc_list_req_msg *)
 		   wcn->hal_buf;
-	INIT_HAL_MSG(*msg_body, WCN36XX_HAL_8023_MULTICAST_LIST_REQ);
+	init_hal_msg(&msg_body->header, WCN36XX_HAL_8023_MULTICAST_LIST_REQ,
+		     sizeof(msg_body->mc_addr_list));
 
 	/* An empty list means all mc traffic will be received */
 	if (fp)
@@ -2941,354 +2774,6 @@ int wcn36xx_smd_set_mc_list(struct wcn36xx *wcn,
 	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
 	if (ret) {
 		wcn36xx_err("HAL_8023_MULTICAST_LIST rsp failed err=%d\n", ret);
-		goto out;
-	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-int wcn36xx_smd_arp_offload(struct wcn36xx *wcn, struct ieee80211_vif *vif,
-			    bool enable)
-{
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	struct wcn36xx_hal_host_offload_req_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_HOST_OFFLOAD_REQ);
-	msg_body.host_offload_params.offload_type =
-		WCN36XX_HAL_IPV4_ARP_REPLY_OFFLOAD;
-	if (enable) {
-		msg_body.host_offload_params.enable =
-			WCN36XX_HAL_OFFLOAD_ARP_AND_BCAST_FILTER_ENABLE;
-		memcpy(&msg_body.host_offload_params.u,
-		       &vif->cfg.arp_addr_list[0], sizeof(__be32));
-	}
-	msg_body.ns_offload_params.bss_index = vif_priv->bss_index;
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending host_offload_arp failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("host_offload_arp failed err=%d\n", ret);
-		goto out;
-	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-#if IS_ENABLED(CONFIG_IPV6)
-int wcn36xx_smd_ipv6_ns_offload(struct wcn36xx *wcn, struct ieee80211_vif *vif,
-				bool enable)
-{
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	struct wcn36xx_hal_host_offload_req_msg msg_body;
-	struct wcn36xx_hal_ns_offload_params *ns_params;
-	struct wcn36xx_hal_host_offload_req *ho_params;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_HOST_OFFLOAD_REQ);
-	ho_params = &msg_body.host_offload_params;
-	ns_params = &msg_body.ns_offload_params;
-
-	ho_params->offload_type = WCN36XX_HAL_IPV6_NS_OFFLOAD;
-	if (enable) {
-		ho_params->enable =
-			WCN36XX_HAL_OFFLOAD_NS_AND_MCAST_FILTER_ENABLE;
-		if (vif_priv->num_target_ipv6_addrs) {
-			memcpy(&ho_params->u,
-			       &vif_priv->target_ipv6_addrs[0].in6_u,
-			       sizeof(struct in6_addr));
-			memcpy(&ns_params->target_ipv6_addr1,
-			       &vif_priv->target_ipv6_addrs[0].in6_u,
-			       sizeof(struct in6_addr));
-			ns_params->target_ipv6_addr1_valid = 1;
-		}
-		if (vif_priv->num_target_ipv6_addrs > 1) {
-			memcpy(&ns_params->target_ipv6_addr2,
-			       &vif_priv->target_ipv6_addrs[1].in6_u,
-			       sizeof(struct in6_addr));
-			ns_params->target_ipv6_addr2_valid = 1;
-		}
-	}
-	memcpy(&ns_params->self_addr, vif->addr, ETH_ALEN);
-	ns_params->bss_index = vif_priv->bss_index;
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending host_offload_arp failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("host_offload_arp failed err=%d\n", ret);
-		goto out;
-	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-#else
-int wcn36xx_smd_ipv6_ns_offload(struct wcn36xx *wcn, struct ieee80211_vif *vif,
-				bool enable)
-{
-	return 0;
-}
-#endif
-
-int wcn36xx_smd_gtk_offload(struct wcn36xx *wcn, struct ieee80211_vif *vif,
-			    bool enable)
-{
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	struct wcn36xx_hal_gtk_offload_req_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_GTK_OFFLOAD_REQ);
-
-	if (enable) {
-		memcpy(&msg_body.kek, vif_priv->rekey_data.kek, NL80211_KEK_LEN);
-		memcpy(&msg_body.kck, vif_priv->rekey_data.kck, NL80211_KCK_LEN);
-		msg_body.key_replay_counter =
-			le64_to_cpu(vif_priv->rekey_data.replay_ctr);
-		msg_body.bss_index = vif_priv->bss_index;
-	} else {
-		msg_body.flags = WCN36XX_HAL_GTK_OFFLOAD_FLAGS_DISABLE;
-	}
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending host_offload_arp failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("host_offload_arp failed err=%d\n", ret);
-		goto out;
-	}
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-static int wcn36xx_smd_gtk_offload_get_info_rsp(struct wcn36xx *wcn,
-						struct ieee80211_vif *vif)
-{
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	struct wcn36xx_hal_gtk_offload_get_info_rsp_msg *rsp;
-	__be64 replay_ctr;
-
-	if (wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len))
-		return -EIO;
-
-	rsp = (struct wcn36xx_hal_gtk_offload_get_info_rsp_msg *)wcn->hal_buf;
-
-	if (rsp->bss_index != vif_priv->bss_index) {
-		wcn36xx_err("gtk_offload_info invalid response bss index %d\n",
-			    rsp->bss_index);
-		return -ENOENT;
-	}
-
-	if (vif_priv->rekey_data.replay_ctr != cpu_to_le64(rsp->key_replay_counter)) {
-		replay_ctr = cpu_to_be64(rsp->key_replay_counter);
-		vif_priv->rekey_data.replay_ctr =
-			cpu_to_le64(rsp->key_replay_counter);
-		ieee80211_gtk_rekey_notify(vif, vif->bss_conf.bssid,
-					   (void *)&replay_ctr, GFP_KERNEL);
-		wcn36xx_dbg(WCN36XX_DBG_HAL,
-			    "GTK replay counter increment %llu\n",
-			    rsp->key_replay_counter);
-	}
-
-	wcn36xx_dbg(WCN36XX_DBG_HAL,
-		    "gtk offload info status %d last_rekey_status %d "
-		    "replay_counter %llu total_rekey_count %d gtk_rekey_count %d "
-		    "igtk_rekey_count %d bss_index %d\n",
-		    rsp->status, rsp->last_rekey_status,
-		    rsp->key_replay_counter, rsp->total_rekey_count,
-		    rsp->gtk_rekey_count, rsp->igtk_rekey_count,
-		    rsp->bss_index);
-
-	return 0;
-}
-
-int wcn36xx_smd_gtk_offload_get_info(struct wcn36xx *wcn,
-				     struct ieee80211_vif *vif)
-{
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	struct wcn36xx_hal_gtk_offload_get_info_req_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_GTK_OFFLOAD_GETINFO_REQ);
-
-	msg_body.bss_index = vif_priv->bss_index;
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending gtk_offload_get_info failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("gtk_offload_get_info failed err=%d\n", ret);
-		goto out;
-	}
-	ret = wcn36xx_smd_gtk_offload_get_info_rsp(wcn, vif);
-out:
-	mutex_unlock(&wcn->hal_mutex);
-	return ret;
-}
-
-int wcn36xx_smd_wlan_host_suspend_ind(struct wcn36xx *wcn)
-{
-	struct wcn36xx_hal_wlan_host_suspend_ind_msg msg_body;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_HOST_SUSPEND_IND);
-	msg_body.configured_mcst_bcst_filter_setting = 0;
-	msg_body.active_session_count = 1;
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = rpmsg_send(wcn->smd_channel, wcn->hal_buf, msg_body.header.len);
-
-	mutex_unlock(&wcn->hal_mutex);
-
-	return ret;
-}
-
-int wcn36xx_smd_host_resume(struct wcn36xx *wcn)
-{
-	struct wcn36xx_hal_wlan_host_resume_req_msg msg_body;
-	struct wcn36xx_hal_host_resume_rsp_msg *rsp;
-	int ret;
-
-	mutex_lock(&wcn->hal_mutex);
-
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_HOST_RESUME_REQ);
-	msg_body.configured_mcst_bcst_filter_setting = 0;
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body.header.len);
-	if (ret) {
-		wcn36xx_err("Sending wlan_host_resume failed\n");
-		goto out;
-	}
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("wlan_host_resume err=%d\n", ret);
-		goto out;
-	}
-
-	rsp = (struct wcn36xx_hal_host_resume_rsp_msg *)wcn->hal_buf;
-	if (rsp->status)
-		wcn36xx_warn("wlan_host_resume status=%d\n", rsp->status);
-
-out:
-	mutex_unlock(&wcn->hal_mutex);
-
-	return ret;
-}
-
-#define BEACON_FILTER(eid, presence, offs, val, mask, ref_val) \
-	{					\
-		.element_id = eid,		\
-		.check_ie_presence = presence,	\
-		.offset = offs,			\
-		.value = val,			\
-		.bitmask = mask,		\
-		.ref = ref_val,			\
-	}
-
-static const struct beacon_filter_ie bcn_filter_ies[] = {
-	BEACON_FILTER(WLAN_EID_DS_PARAMS, 0, 0, 0,
-		      WCN36XX_FILTER_IE_DS_CHANNEL_MASK, 0),
-	BEACON_FILTER(WLAN_EID_ERP_INFO, 0, 0, 0,
-		      WCN36XX_FILTER_IE_ERP_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_EDCA_PARAM_SET, 0, 0, 0,
-		      WCN36XX_FILTER_IE_EDCA_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_QOS_CAPA, 0, 0, 0,
-		      WCN36XX_FILTER_IE_QOS_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_CHANNEL_SWITCH, 1, 0, 0,
-		      WCN36XX_FILTER_IE_CHANNEL_SWITCH_MASK, 0),
-	BEACON_FILTER(WLAN_EID_HT_OPERATION, 0, 0, 0,
-		      WCN36XX_FILTER_IE_HT_BYTE0_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_HT_OPERATION, 0, 2, 0,
-		      WCN36XX_FILTER_IE_HT_BYTE2_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_HT_OPERATION, 0, 5, 0,
-		      WCN36XX_FILTER_IE_HT_BYTE5_FILTER_MASK, 0),
-	BEACON_FILTER(WLAN_EID_PWR_CONSTRAINT, 0, 0, 0,
-		      WCN36XX_FILTER_IE_PWR_CONSTRAINT_MASK, 0),
-	BEACON_FILTER(WLAN_EID_OPMODE_NOTIF, 0, 0, 0,
-		      WCN36XX_FILTER_IE_OPMODE_NOTIF_MASK, 0),
-	BEACON_FILTER(WLAN_EID_VHT_OPERATION, 0, 0, 0,
-		      WCN36XX_FILTER_IE_VHTOP_CHWIDTH_MASK, 0),
-	BEACON_FILTER(WLAN_EID_RSN, 1, 0, 0,
-		      WCN36XX_FILTER_IE_RSN_MASK, 0),
-	BEACON_FILTER(WLAN_EID_VENDOR_SPECIFIC, 1, 0, 0,
-		      WCN36XX_FILTER_IE_VENDOR_MASK, 0),
-};
-
-int wcn36xx_smd_add_beacon_filter(struct wcn36xx *wcn,
-				  struct ieee80211_vif *vif)
-{
-	struct wcn36xx_hal_add_bcn_filter_req_msg msg_body, *body;
-	struct wcn36xx_vif *vif_priv = wcn36xx_vif_to_priv(vif);
-	u8 *payload;
-	size_t payload_size;
-	int ret;
-
-	if (!wcn36xx_firmware_get_feat_caps(wcn->fw_feat_caps, BCN_FILTER))
-		return -EOPNOTSUPP;
-
-	mutex_lock(&wcn->hal_mutex);
-	INIT_HAL_MSG(msg_body, WCN36XX_HAL_ADD_BCN_FILTER_REQ);
-
-	PREPARE_HAL_BUF(wcn->hal_buf, msg_body);
-
-	body = (struct wcn36xx_hal_add_bcn_filter_req_msg *)wcn->hal_buf;
-	body->capability_info = vif->bss_conf.assoc_capability;
-	body->capability_mask = WCN36XX_FILTER_CAPABILITY_MASK;
-	body->beacon_interval = vif->bss_conf.beacon_int;
-	body->ie_num = ARRAY_SIZE(bcn_filter_ies);
-	body->bss_index = vif_priv->bss_index;
-
-	payload = ((u8 *)body) + body->header.len;
-	payload_size = sizeof(bcn_filter_ies);
-	memcpy(payload, &bcn_filter_ies, payload_size);
-
-	body->header.len += payload_size;
-
-	ret = wcn36xx_smd_send_and_wait(wcn, body->header.len);
-	if (ret) {
-		wcn36xx_err("Sending add bcn_filter failed\n");
-		goto out;
-	}
-
-	ret = wcn36xx_smd_rsp_status_check(wcn->hal_buf, wcn->hal_rsp_len);
-	if (ret) {
-		wcn36xx_err("add bcn filter response failed err=%d\n", ret);
 		goto out;
 	}
 out:
@@ -3334,7 +2819,6 @@ int wcn36xx_smd_rsp_process(struct rpmsg_device *rpdev,
 	case WCN36XX_HAL_ADD_BA_SESSION_RSP:
 	case WCN36XX_HAL_ADD_BA_RSP:
 	case WCN36XX_HAL_DEL_BA_RSP:
-	case WCN36XX_HAL_GET_STATS_RSP:
 	case WCN36XX_HAL_TRIGGER_BA_RSP:
 	case WCN36XX_HAL_UPDATE_CFG_RSP:
 	case WCN36XX_HAL_JOIN_RSP:
@@ -3345,14 +2829,6 @@ int wcn36xx_smd_rsp_process(struct rpmsg_device *rpdev,
 	case WCN36XX_HAL_8023_MULTICAST_LIST_RSP:
 	case WCN36XX_HAL_START_SCAN_OFFLOAD_RSP:
 	case WCN36XX_HAL_STOP_SCAN_OFFLOAD_RSP:
-	case WCN36XX_HAL_HOST_OFFLOAD_RSP:
-	case WCN36XX_HAL_GTK_OFFLOAD_RSP:
-	case WCN36XX_HAL_GTK_OFFLOAD_GETINFO_RSP:
-	case WCN36XX_HAL_HOST_RESUME_RSP:
-	case WCN36XX_HAL_ENTER_IMPS_RSP:
-	case WCN36XX_HAL_EXIT_IMPS_RSP:
-	case WCN36XX_HAL_UPDATE_CHANNEL_LIST_RSP:
-	case WCN36XX_HAL_ADD_BCN_FILTER_RSP:
 		memcpy(wcn->hal_buf, buf, len);
 		wcn->hal_rsp_len = len;
 		complete(&wcn->hal_rsp_compl);
@@ -3366,7 +2842,7 @@ int wcn36xx_smd_rsp_process(struct rpmsg_device *rpdev,
 	case WCN36XX_HAL_DELETE_STA_CONTEXT_IND:
 	case WCN36XX_HAL_PRINT_REG_INFO_IND:
 	case WCN36XX_HAL_SCAN_OFFLOAD_IND:
-		msg_ind = kmalloc(struct_size(msg_ind, msg, len), GFP_ATOMIC);
+		msg_ind = kmalloc(sizeof(*msg_ind) + len, GFP_ATOMIC);
 		if (!msg_ind) {
 			wcn36xx_err("Run out of memory while handling SMD_EVENT (%d)\n",
 				    msg_header->msg_type);

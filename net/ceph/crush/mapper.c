@@ -906,6 +906,7 @@ int crush_do_rule(const struct crush_map *map,
 	int recurse_to_leaf;
 	int wsize = 0;
 	int osize;
+	int *tmp;
 	const struct crush_rule *rule;
 	__u32 step;
 	int i, j;
@@ -1072,7 +1073,9 @@ int crush_do_rule(const struct crush_map *map,
 				memcpy(o, c, osize*sizeof(*o));
 
 			/* swap o and w arrays */
-			swap(o, w);
+			tmp = o;
+			o = w;
+			w = tmp;
 			wsize = osize;
 			break;
 

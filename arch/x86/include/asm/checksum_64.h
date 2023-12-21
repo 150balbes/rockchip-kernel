@@ -9,6 +9,7 @@
  */
 
 #include <linux/compiler.h>
+#include <linux/uaccess.h>
 #include <asm/byteorder.h>
 
 /**

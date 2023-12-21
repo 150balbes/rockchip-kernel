@@ -4,7 +4,6 @@
  * Authors: Joonyoung Shim <jy0922.shim@samsung.com>
  */
 
-#include <linux/refcount.h>
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/delay.h>
@@ -206,10 +205,9 @@ struct g2d_cmdlist_userptr {
 	dma_addr_t		dma_addr;
 	unsigned long		userptr;
 	unsigned long		size;
-	struct page		**pages;
-	unsigned int		npages;
+	struct frame_vector	*vec;
 	struct sg_table		*sgt;
-	refcount_t		refcount;
+	atomic_t		refcount;
 	bool			in_pool;
 	bool			out_of_list;
 };
@@ -380,6 +378,7 @@ static void g2d_userptr_put_dma_addr(struct g2d_data *g2d,
 					bool force)
 {
 	struct g2d_cmdlist_userptr *g2d_userptr = obj;
+	struct page **pages;
 
 	if (!obj)
 		return;
@@ -387,9 +386,9 @@ static void g2d_userptr_put_dma_addr(struct g2d_data *g2d,
 	if (force)
 		goto out;
 
-	refcount_dec(&g2d_userptr->refcount);
+	atomic_dec(&g2d_userptr->refcount);
 
-	if (refcount_read(&g2d_userptr->refcount) > 0)
+	if (atomic_read(&g2d_userptr->refcount) > 0)
 		return;
 
 	if (g2d_userptr->in_pool)
@@ -399,9 +398,15 @@ out:
 	dma_unmap_sgtable(to_dma_dev(g2d->drm_dev), g2d_userptr->sgt,
 			  DMA_BIDIRECTIONAL, 0);
 
-	unpin_user_pages_dirty_lock(g2d_userptr->pages, g2d_userptr->npages,
-				    true);
-	kvfree(g2d_userptr->pages);
+	pages = frame_vector_pages(g2d_userptr->vec);
+	if (!IS_ERR(pages)) {
+		int i;
+
+		for (i = 0; i < frame_vector_count(g2d_userptr->vec); i++)
+			set_page_dirty_lock(pages[i]);
+	}
+	put_vaddr_frames(g2d_userptr->vec);
+	frame_vector_destroy(g2d_userptr->vec);
 
 	if (!g2d_userptr->out_of_list)
 		list_del_init(&g2d_userptr->list);
@@ -437,7 +442,7 @@ static dma_addr_t *g2d_userptr_get_dma_addr(struct g2d_data *g2d,
 			 * and different size.
 			 */
 			if (g2d_userptr->size == size) {
-				refcount_inc(&g2d_userptr->refcount);
+				atomic_inc(&g2d_userptr->refcount);
 				*obj = g2d_userptr;
 
 				return &g2d_userptr->dma_addr;
@@ -462,42 +467,42 @@ static dma_addr_t *g2d_userptr_get_dma_addr(struct g2d_data *g2d,
 	if (!g2d_userptr)
 		return ERR_PTR(-ENOMEM);
 
-	refcount_set(&g2d_userptr->refcount, 1);
+	atomic_set(&g2d_userptr->refcount, 1);
 	g2d_userptr->size = size;
 
 	start = userptr & PAGE_MASK;
 	offset = userptr & ~PAGE_MASK;
 	end = PAGE_ALIGN(userptr + size);
 	npages = (end - start) >> PAGE_SHIFT;
-	g2d_userptr->pages = kvmalloc_array(npages, sizeof(*g2d_userptr->pages),
-					    GFP_KERNEL);
-	if (!g2d_userptr->pages) {
+	g2d_userptr->vec = frame_vector_create(npages);
+	if (!g2d_userptr->vec) {
 		ret = -ENOMEM;
 		goto err_free;
 	}
 
-	ret = pin_user_pages_fast(start, npages,
-				  FOLL_WRITE | FOLL_LONGTERM,
-				  g2d_userptr->pages);
+	ret = get_vaddr_frames(start, npages, FOLL_FORCE | FOLL_WRITE,
+		g2d_userptr->vec);
 	if (ret != npages) {
 		DRM_DEV_ERROR(g2d->dev,
 			      "failed to get user pages from userptr.\n");
 		if (ret < 0)
-			goto err_destroy_pages;
-		npages = ret;
+			goto err_destroy_framevec;
 		ret = -EFAULT;
-		goto err_unpin_pages;
+		goto err_put_framevec;
 	}
-	g2d_userptr->npages = npages;
+	if (frame_vector_to_pages(g2d_userptr->vec) < 0) {
+		ret = -EFAULT;
+		goto err_put_framevec;
+	}
 
 	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
 		ret = -ENOMEM;
-		goto err_unpin_pages;
+		goto err_put_framevec;
 	}
 
 	ret = sg_alloc_table_from_pages(sgt,
-					g2d_userptr->pages,
+					frame_vector_pages(g2d_userptr->vec),
 					npages, offset, size, GFP_KERNEL);
 	if (ret < 0) {
 		DRM_DEV_ERROR(g2d->dev, "failed to get sgt from pages.\n");
@@ -533,11 +538,11 @@ err_sg_free_table:
 err_free_sgt:
 	kfree(sgt);
 
-err_unpin_pages:
-	unpin_user_pages(g2d_userptr->pages, npages);
+err_put_framevec:
+	put_vaddr_frames(g2d_userptr->vec);
 
-err_destroy_pages:
-	kvfree(g2d_userptr->pages);
+err_destroy_framevec:
+	frame_vector_destroy(g2d_userptr->vec);
 
 err_free:
 	kfree(g2d_userptr);
@@ -893,19 +898,11 @@ static void g2d_runqueue_worker(struct work_struct *work)
 		g2d->runqueue_node = g2d_get_runqueue_node(g2d);
 
 		if (g2d->runqueue_node) {
-			int ret;
-
-			ret = pm_runtime_resume_and_get(g2d->dev);
-			if (ret < 0) {
-				dev_err(g2d->dev, "failed to enable G2D device.\n");
-				goto out;
-			}
-
+			pm_runtime_get_sync(g2d->dev);
 			g2d_dma_start(g2d, g2d->runqueue_node);
 		}
 	}
 
-out:
 	mutex_unlock(&g2d->runqueue_mutex);
 }
 
@@ -1335,7 +1332,7 @@ int exynos_g2d_exec_ioctl(struct drm_device *drm_dev, void *data,
 	/* Let the runqueue know that there is work to do. */
 	queue_work(g2d->g2d_workq, &g2d->runqueue_work);
 
-	if (req->async)
+	if (runqueue_node->async)
 		goto out;
 
 	wait_for_completion(&runqueue_node->complete);
@@ -1449,6 +1446,7 @@ static const struct component_ops g2d_component_ops = {
 static int g2d_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct g2d_data *g2d;
 	int ret;
 
@@ -1490,7 +1488,9 @@ static int g2d_probe(struct platform_device *pdev)
 	clear_bit(G2D_BIT_SUSPEND_RUNQUEUE, &g2d->flags);
 	clear_bit(G2D_BIT_ENGINE_BUSY, &g2d->flags);
 
-	g2d->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+	g2d->regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(g2d->regs)) {
 		ret = PTR_ERR(g2d->regs);
 		goto err_put_clk;
@@ -1549,6 +1549,7 @@ static int g2d_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int g2d_suspend(struct device *dev)
 {
 	struct g2d_data *g2d = dev_get_drvdata(dev);
@@ -1573,7 +1574,9 @@ static int g2d_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
+#ifdef CONFIG_PM
 static int g2d_runtime_suspend(struct device *dev)
 {
 	struct g2d_data *g2d = dev_get_drvdata(dev);
@@ -1594,10 +1597,11 @@ static int g2d_runtime_resume(struct device *dev)
 
 	return ret;
 }
+#endif
 
 static const struct dev_pm_ops g2d_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(g2d_suspend, g2d_resume)
-	RUNTIME_PM_OPS(g2d_runtime_suspend, g2d_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(g2d_suspend, g2d_resume)
+	SET_RUNTIME_PM_OPS(g2d_runtime_suspend, g2d_runtime_resume, NULL)
 };
 
 static const struct of_device_id exynos_g2d_match[] = {
@@ -1613,7 +1617,7 @@ struct platform_driver g2d_driver = {
 	.driver		= {
 		.name	= "exynos-drm-g2d",
 		.owner	= THIS_MODULE,
-		.pm	= pm_ptr(&g2d_pm_ops),
+		.pm	= &g2d_pm_ops,
 		.of_match_table = exynos_g2d_match,
 	},
 };

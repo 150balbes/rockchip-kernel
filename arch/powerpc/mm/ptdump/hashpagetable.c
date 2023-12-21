@@ -238,10 +238,7 @@ static int native_find(unsigned long ea, int psize, bool primary, u64 *v, u64
 
 static int pseries_find(unsigned long ea, int psize, bool primary, u64 *v, u64 *r)
 {
-	struct {
-		unsigned long v;
-		unsigned long r;
-	} ptes[4];
+	struct hash_pte ptes[4];
 	unsigned long vsid, vpn, hash, hpte_group, want_v;
 	int i, j, ssize = mmu_kernel_ssize;
 	long lpar_rc = 0;
@@ -529,7 +526,17 @@ static int ptdump_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(ptdump);
+static int ptdump_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ptdump_show, NULL);
+}
+
+static const struct file_operations ptdump_fops = {
+	.open		= ptdump_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 static int ptdump_init(void)
 {

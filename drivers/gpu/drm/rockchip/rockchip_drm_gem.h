@@ -41,8 +41,8 @@ struct drm_gem_object *
 rockchip_gem_prime_import_sg_table(struct drm_device *dev,
 				   struct dma_buf_attachment *attach,
 				   struct sg_table *sg);
-//void *rockchip_gem_prime_vmap(struct drm_gem_object *obj);
-//void rockchip_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr);
+void *rockchip_gem_prime_vmap(struct drm_gem_object *obj);
+void rockchip_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr);
 
 /* drm driver mmap file operations */
 int rockchip_gem_mmap(struct file *filp, struct vm_area_struct *vma);
@@ -81,14 +81,5 @@ int rockchip_gem_prime_begin_cpu_access(struct drm_gem_object *obj,
 int rockchip_gem_prime_end_cpu_access(struct drm_gem_object *obj,
 				      enum dma_data_direction dir);
 
-int rockchip_gem_prime_begin_cpu_access_partial(struct drm_gem_object *obj,
-						enum dma_data_direction dir,
-						unsigned int offset,
-						unsigned int len);
-
-int rockchip_gem_prime_end_cpu_access_partial(struct drm_gem_object *obj,
-					      enum dma_data_direction dir,
-					      unsigned int offset,
-					      unsigned int len);
 void rockchip_gem_get_ddr_info(void);
 #endif /* _ROCKCHIP_DRM_GEM_H */

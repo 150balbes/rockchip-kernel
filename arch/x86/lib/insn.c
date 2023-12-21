@@ -5,7 +5,6 @@
  * Copyright (C) IBM Corporation, 2002, 2004, 2009
  */
 
-#include <linux/kernel.h>
 #ifdef __KERNEL__
 #include <linux/string.h>
 #else
@@ -13,35 +12,21 @@
 #endif
 #include <asm/inat.h> /*__ignore_sync_check__ */
 #include <asm/insn.h> /* __ignore_sync_check__ */
-#include <asm/unaligned.h> /* __ignore_sync_check__ */
 
 #include <linux/errno.h>
 #include <linux/kconfig.h>
 
 #include <asm/emulate_prefix.h> /* __ignore_sync_check__ */
 
-#define leXX_to_cpu(t, r)						\
-({									\
-	__typeof__(t) v;						\
-	switch (sizeof(t)) {						\
-	case 4: v = le32_to_cpu(r); break;				\
-	case 2: v = le16_to_cpu(r); break;				\
-	case 1:	v = r; break;						\
-	default:							\
-		BUILD_BUG(); break;					\
-	}								\
-	v;								\
-})
-
 /* Verify next sizeof(t) bytes can be on the same instruction */
 #define validate_next(t, insn, n)	\
 	((insn)->next_byte + sizeof(t) + n <= (insn)->end_kaddr)
 
 #define __get_next(t, insn)	\
-	({ t r = get_unaligned((t *)(insn)->next_byte); (insn)->next_byte += sizeof(t); leXX_to_cpu(t, r); })
+	({ t r = *(t*)insn->next_byte; insn->next_byte += sizeof(t); r; })
 
 #define __peek_nbyte_next(t, insn, n)	\
-	({ t r = get_unaligned((t *)(insn)->next_byte + n); leXX_to_cpu(t, r); })
+	({ t r = *(t*)((insn)->next_byte + n); r; })
 
 #define get_next(t, insn)	\
 	({ if (unlikely(!validate_next(t, insn, 0))) goto err_out; __get_next(t, insn); })
@@ -55,7 +40,6 @@
  * insn_init() - initialize struct insn
  * @insn:	&struct insn to be initialized
  * @kaddr:	address (in kernel memory) of instruction (or copy thereof)
- * @buf_len:	length of the insn buffer at @kaddr
  * @x86_64:	!0 for 64-bit kernel or 64-bit app
  */
 void insn_init(struct insn *insn, const void *kaddr, int buf_len, int x86_64)
@@ -170,9 +154,9 @@ found:
 			b = insn->prefixes.bytes[3];
 			for (i = 0; i < nb; i++)
 				if (prefixes->bytes[i] == lb)
-					insn_set_byte(prefixes, i, b);
+					prefixes->bytes[i] = b;
 		}
-		insn_set_byte(&insn->prefixes, 3, lb);
+		insn->prefixes.bytes[3] = lb;
 	}
 
 	/* Decode REX prefix */
@@ -180,7 +164,8 @@ found:
 		b = peek_next(insn_byte_t, insn);
 		attr = inat_get_opcode_attribute(b);
 		if (inat_is_rex_prefix(attr)) {
-			insn_field_set(&insn->rex_prefix, b, 1);
+			insn->rex_prefix.value = b;
+			insn->rex_prefix.nbytes = 1;
 			insn->next_byte++;
 			if (X86_REX_W(b))
 				/* REX.W overrides opnd_size */
@@ -203,13 +188,13 @@ found:
 			if (X86_MODRM_MOD(b2) != 3)
 				goto vex_end;
 		}
-		insn_set_byte(&insn->vex_prefix, 0, b);
-		insn_set_byte(&insn->vex_prefix, 1, b2);
+		insn->vex_prefix.bytes[0] = b;
+		insn->vex_prefix.bytes[1] = b2;
 		if (inat_is_evex_prefix(attr)) {
 			b2 = peek_nbyte_next(insn_byte_t, insn, 2);
-			insn_set_byte(&insn->vex_prefix, 2, b2);
+			insn->vex_prefix.bytes[2] = b2;
 			b2 = peek_nbyte_next(insn_byte_t, insn, 3);
-			insn_set_byte(&insn->vex_prefix, 3, b2);
+			insn->vex_prefix.bytes[3] = b2;
 			insn->vex_prefix.nbytes = 4;
 			insn->next_byte += 4;
 			if (insn->x86_64 && X86_VEX_W(b2))
@@ -217,7 +202,7 @@ found:
 				insn->opnd_bytes = 8;
 		} else if (inat_is_vex3_prefix(attr)) {
 			b2 = peek_nbyte_next(insn_byte_t, insn, 2);
-			insn_set_byte(&insn->vex_prefix, 2, b2);
+			insn->vex_prefix.bytes[2] = b2;
 			insn->vex_prefix.nbytes = 3;
 			insn->next_byte += 3;
 			if (insn->x86_64 && X86_VEX_W(b2))
@@ -229,7 +214,7 @@ found:
 			 * Makes it easier to decode vex.W, vex.vvvv,
 			 * vex.L and vex.pp. Masking with 0x7f sets vex.W == 0.
 			 */
-			insn_set_byte(&insn->vex_prefix, 2, b2 & 0x7f);
+			insn->vex_prefix.bytes[2] = b2 & 0x7f;
 			insn->vex_prefix.nbytes = 2;
 			insn->next_byte += 2;
 		}
@@ -276,7 +261,7 @@ int insn_get_opcode(struct insn *insn)
 
 	/* Get first opcode */
 	op = get_next(insn_byte_t, insn);
-	insn_set_byte(opcode, 0, op);
+	opcode->bytes[0] = op;
 	opcode->nbytes = 1;
 
 	/* Check if there is VEX prefix or not */
@@ -347,7 +332,8 @@ int insn_get_modrm(struct insn *insn)
 
 	if (inat_has_modrm(insn->attr)) {
 		mod = get_next(insn_byte_t, insn);
-		insn_field_set(modrm, mod, 1);
+		modrm->value = mod;
+		modrm->nbytes = 1;
 		if (inat_is_group(insn->attr)) {
 			pfx_id = insn_last_prefix_id(insn);
 			insn->attr = inat_get_group_attribute(mod, pfx_id,
@@ -395,7 +381,7 @@ int insn_rip_relative(struct insn *insn)
 	 * For rip-relative instructions, the mod field (top 2 bits)
 	 * is zero and the r/m field (bottom 3 bits) is 0x5.
 	 */
-	return (modrm->nbytes && (modrm->bytes[0] & 0xc7) == 0x5);
+	return (modrm->nbytes && (modrm->value & 0xc7) == 0x5);
 }
 
 /**
@@ -424,11 +410,11 @@ int insn_get_sib(struct insn *insn)
 	}
 
 	if (insn->modrm.nbytes) {
-		modrm = insn->modrm.bytes[0];
+		modrm = (insn_byte_t)insn->modrm.value;
 		if (insn->addr_bytes != 2 &&
 		    X86_MODRM_MOD(modrm) != 3 && X86_MODRM_RM(modrm) == 4) {
-			insn_field_set(&insn->sib,
-				       get_next(insn_byte_t, insn), 1);
+			insn->sib.value = get_next(insn_byte_t, insn);
+			insn->sib.nbytes = 1;
 		}
 	}
 	insn->sib.got = 1;
@@ -490,18 +476,19 @@ int insn_get_displacement(struct insn *insn)
 		if (mod == 3)
 			goto out;
 		if (mod == 1) {
-			insn_field_set(&insn->displacement,
-				       get_next(signed char, insn), 1);
+			insn->displacement.value = get_next(signed char, insn);
+			insn->displacement.nbytes = 1;
 		} else if (insn->addr_bytes == 2) {
 			if ((mod == 0 && rm == 6) || mod == 2) {
-				insn_field_set(&insn->displacement,
-					       get_next(short, insn), 2);
+				insn->displacement.value =
+					 get_next(short, insn);
+				insn->displacement.nbytes = 2;
 			}
 		} else {
 			if ((mod == 0 && rm == 5) || mod == 2 ||
 			    (mod == 0 && base == 5)) {
-				insn_field_set(&insn->displacement,
-					       get_next(int, insn), 4);
+				insn->displacement.value = get_next(int, insn);
+				insn->displacement.nbytes = 4;
 			}
 		}
 	}
@@ -518,14 +505,18 @@ static int __get_moffset(struct insn *insn)
 {
 	switch (insn->addr_bytes) {
 	case 2:
-		insn_field_set(&insn->moffset1, get_next(short, insn), 2);
+		insn->moffset1.value = get_next(short, insn);
+		insn->moffset1.nbytes = 2;
 		break;
 	case 4:
-		insn_field_set(&insn->moffset1, get_next(int, insn), 4);
+		insn->moffset1.value = get_next(int, insn);
+		insn->moffset1.nbytes = 4;
 		break;
 	case 8:
-		insn_field_set(&insn->moffset1, get_next(int, insn), 4);
-		insn_field_set(&insn->moffset2, get_next(int, insn), 4);
+		insn->moffset1.value = get_next(int, insn);
+		insn->moffset1.nbytes = 4;
+		insn->moffset2.value = get_next(int, insn);
+		insn->moffset2.nbytes = 4;
 		break;
 	default:	/* opnd_bytes must be modified manually */
 		goto err_out;
@@ -543,11 +534,13 @@ static int __get_immv32(struct insn *insn)
 {
 	switch (insn->opnd_bytes) {
 	case 2:
-		insn_field_set(&insn->immediate, get_next(short, insn), 2);
+		insn->immediate.value = get_next(short, insn);
+		insn->immediate.nbytes = 2;
 		break;
 	case 4:
 	case 8:
-		insn_field_set(&insn->immediate, get_next(int, insn), 4);
+		insn->immediate.value = get_next(int, insn);
+		insn->immediate.nbytes = 4;
 		break;
 	default:	/* opnd_bytes must be modified manually */
 		goto err_out;
@@ -564,15 +557,18 @@ static int __get_immv(struct insn *insn)
 {
 	switch (insn->opnd_bytes) {
 	case 2:
-		insn_field_set(&insn->immediate1, get_next(short, insn), 2);
+		insn->immediate1.value = get_next(short, insn);
+		insn->immediate1.nbytes = 2;
 		break;
 	case 4:
-		insn_field_set(&insn->immediate1, get_next(int, insn), 4);
+		insn->immediate1.value = get_next(int, insn);
 		insn->immediate1.nbytes = 4;
 		break;
 	case 8:
-		insn_field_set(&insn->immediate1, get_next(int, insn), 4);
-		insn_field_set(&insn->immediate2, get_next(int, insn), 4);
+		insn->immediate1.value = get_next(int, insn);
+		insn->immediate1.nbytes = 4;
+		insn->immediate2.value = get_next(int, insn);
+		insn->immediate2.nbytes = 4;
 		break;
 	default:	/* opnd_bytes must be modified manually */
 		goto err_out;
@@ -589,10 +585,12 @@ static int __get_immptr(struct insn *insn)
 {
 	switch (insn->opnd_bytes) {
 	case 2:
-		insn_field_set(&insn->immediate1, get_next(short, insn), 2);
+		insn->immediate1.value = get_next(short, insn);
+		insn->immediate1.nbytes = 2;
 		break;
 	case 4:
-		insn_field_set(&insn->immediate1, get_next(int, insn), 4);
+		insn->immediate1.value = get_next(int, insn);
+		insn->immediate1.nbytes = 4;
 		break;
 	case 8:
 		/* ptr16:64 is not exist (no segment) */
@@ -600,7 +598,8 @@ static int __get_immptr(struct insn *insn)
 	default:	/* opnd_bytes must be modified manually */
 		goto err_out;
 	}
-	insn_field_set(&insn->immediate2, get_next(unsigned short, insn), 2);
+	insn->immediate2.value = get_next(unsigned short, insn);
+	insn->immediate2.nbytes = 2;
 	insn->immediate1.got = insn->immediate2.got = 1;
 
 	return 1;
@@ -646,17 +645,22 @@ int insn_get_immediate(struct insn *insn)
 
 	switch (inat_immediate_size(insn->attr)) {
 	case INAT_IMM_BYTE:
-		insn_field_set(&insn->immediate, get_next(signed char, insn), 1);
+		insn->immediate.value = get_next(signed char, insn);
+		insn->immediate.nbytes = 1;
 		break;
 	case INAT_IMM_WORD:
-		insn_field_set(&insn->immediate, get_next(short, insn), 2);
+		insn->immediate.value = get_next(short, insn);
+		insn->immediate.nbytes = 2;
 		break;
 	case INAT_IMM_DWORD:
-		insn_field_set(&insn->immediate, get_next(int, insn), 4);
+		insn->immediate.value = get_next(int, insn);
+		insn->immediate.nbytes = 4;
 		break;
 	case INAT_IMM_QWORD:
-		insn_field_set(&insn->immediate1, get_next(int, insn), 4);
-		insn_field_set(&insn->immediate2, get_next(int, insn), 4);
+		insn->immediate1.value = get_next(int, insn);
+		insn->immediate1.nbytes = 4;
+		insn->immediate2.value = get_next(int, insn);
+		insn->immediate2.nbytes = 4;
 		break;
 	case INAT_IMM_PTR:
 		if (!__get_immptr(insn))
@@ -675,7 +679,8 @@ int insn_get_immediate(struct insn *insn)
 		goto err_out;
 	}
 	if (inat_has_second_immediate(insn->attr)) {
-		insn_field_set(&insn->immediate2, get_next(signed char, insn), 1);
+		insn->immediate2.value = get_next(signed char, insn);
+		insn->immediate2.nbytes = 1;
 	}
 done:
 	insn->immediate.got = 1;
@@ -713,13 +718,6 @@ int insn_get_length(struct insn *insn)
 				     - (unsigned long)insn->kaddr);
 
 	return 0;
-}
-
-/* Ensure this instruction is decoded completely */
-static inline int insn_complete(struct insn *insn)
-{
-	return insn->opcode.got && insn->modrm.got && insn->sib.got &&
-		insn->displacement.got && insn->immediate.got;
 }
 
 /**

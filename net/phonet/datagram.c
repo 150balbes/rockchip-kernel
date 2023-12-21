@@ -28,21 +28,24 @@ static void pn_sock_close(struct sock *sk, long timeout)
 	sk_common_release(sk);
 }
 
-static int pn_ioctl(struct sock *sk, int cmd, int *karg)
+static int pn_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
 	struct sk_buff *skb;
+	int answ;
 
 	switch (cmd) {
 	case SIOCINQ:
 		lock_sock(sk);
 		skb = skb_peek(&sk->sk_receive_queue);
-		*karg = skb ? skb->len : 0;
+		answ = skb ? skb->len : 0;
 		release_sock(sk);
-		return 0;
+		return put_user(answ, (int __user *)arg);
 
 	case SIOCPNADDRESOURCE:
 	case SIOCPNDELRESOURCE: {
-			u32 res = *karg;
+			u32 res;
+			if (get_user(res, (u32 __user *)arg))
+				return -EFAULT;
 			if (res >= 256)
 				return -EINVAL;
 			if (cmd == SIOCPNADDRESOURCE)
@@ -109,7 +112,7 @@ static int pn_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 }
 
 static int pn_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
-		      int flags, int *addr_len)
+		      int noblock, int flags, int *addr_len)
 {
 	struct sk_buff *skb = NULL;
 	struct sockaddr_pn sa;
@@ -120,7 +123,7 @@ static int pn_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 			MSG_CMSG_COMPAT))
 		goto out_nofree;
 
-	skb = skb_recv_datagram(sk, flags, &rval);
+	skb = skb_recv_datagram(sk, flags, noblock, &rval);
 	if (skb == NULL)
 		goto out_nofree;
 

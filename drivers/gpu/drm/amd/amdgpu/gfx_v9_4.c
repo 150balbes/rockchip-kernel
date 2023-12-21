@@ -863,8 +863,8 @@ static int gfx_v9_4_ras_error_count(struct amdgpu_device *adev,
 	return 0;
 }
 
-static void gfx_v9_4_query_ras_error_count(struct amdgpu_device *adev,
-					  void *ras_error_status)
+int gfx_v9_4_query_ras_error_count(struct amdgpu_device *adev,
+				   void *ras_error_status)
 {
 	struct ras_err_data *err_data = (struct ras_err_data *)ras_error_status;
 	uint32_t sec_count = 0, ded_count = 0;
@@ -872,7 +872,7 @@ static void gfx_v9_4_query_ras_error_count(struct amdgpu_device *adev,
 	uint32_t reg_value;
 
 	if (!amdgpu_ras_is_supported(adev, AMDGPU_RAS_BLOCK__GFX))
-		return;
+		return -EINVAL;
 
 	err_data->ue_count = 0;
 	err_data->ce_count = 0;
@@ -903,9 +903,10 @@ static void gfx_v9_4_query_ras_error_count(struct amdgpu_device *adev,
 
 	gfx_v9_4_query_utc_edc_status(adev, err_data);
 
+	return 0;
 }
 
-static void gfx_v9_4_reset_ras_error_count(struct amdgpu_device *adev)
+void gfx_v9_4_reset_ras_error_count(struct amdgpu_device *adev)
 {
 	int i, j, k;
 
@@ -970,10 +971,32 @@ static void gfx_v9_4_reset_ras_error_count(struct amdgpu_device *adev)
 	WREG32_SOC15(GC, 0, mmATC_L2_CACHE_4K_DSM_INDEX, 255);
 }
 
-static const struct soc15_reg_entry gfx_v9_4_ea_err_status_regs =
+int gfx_v9_4_ras_error_inject(struct amdgpu_device *adev, void *inject_if)
+{
+	struct ras_inject_if *info = (struct ras_inject_if *)inject_if;
+	int ret;
+	struct ta_ras_trigger_error_input block_info = { 0 };
+
+	if (!amdgpu_ras_is_supported(adev, AMDGPU_RAS_BLOCK__GFX))
+		return -EINVAL;
+
+	block_info.block_id = amdgpu_ras_block_to_ta(info->head.block);
+	block_info.sub_block_index = info->head.sub_block_index;
+	block_info.inject_error_type = amdgpu_ras_error_to_ta(info->head.type);
+	block_info.address = info->address;
+	block_info.value = info->value;
+
+	mutex_lock(&adev->grbm_idx_mutex);
+	ret = psp_ras_trigger_error(&adev->psp, &block_info);
+	mutex_unlock(&adev->grbm_idx_mutex);
+
+	return ret;
+}
+
+static const struct soc15_reg_entry gfx_v9_4_rdrsp_status_regs =
 	{ SOC15_REG_ENTRY(GC, 0, mmGCEA_ERR_STATUS), 0, 1, 32 };
 
-static void gfx_v9_4_query_ras_error_status(struct amdgpu_device *adev)
+void gfx_v9_4_query_ras_error_status(struct amdgpu_device *adev)
 {
 	uint32_t i, j;
 	uint32_t reg_value;
@@ -983,37 +1006,18 @@ static void gfx_v9_4_query_ras_error_status(struct amdgpu_device *adev)
 
 	mutex_lock(&adev->grbm_idx_mutex);
 
-	for (i = 0; i < gfx_v9_4_ea_err_status_regs.se_num; i++) {
-		for (j = 0; j < gfx_v9_4_ea_err_status_regs.instance;
+	for (i = 0; i < gfx_v9_4_rdrsp_status_regs.se_num; i++) {
+		for (j = 0; j < gfx_v9_4_rdrsp_status_regs.instance;
 		     j++) {
 			gfx_v9_4_select_se_sh(adev, i, 0, j);
 			reg_value = RREG32(SOC15_REG_ENTRY_OFFSET(
-				gfx_v9_4_ea_err_status_regs));
-			if (REG_GET_FIELD(reg_value, GCEA_ERR_STATUS, SDP_RDRSP_STATUS) ||
-			    REG_GET_FIELD(reg_value, GCEA_ERR_STATUS, SDP_WRRSP_STATUS) ||
-			    REG_GET_FIELD(reg_value, GCEA_ERR_STATUS, SDP_RDRSP_DATAPARITY_ERROR)) {
-				/* SDP read/write error/parity error in FUE_IS_FATAL mode
-				 * can cause system fatal error in arcturas. Harvest the error
-				 * status before GPU reset */
+				gfx_v9_4_rdrsp_status_regs));
+			if (reg_value)
 				dev_warn(adev->dev, "GCEA err detected at instance: %d, status: 0x%x!\n",
 						j, reg_value);
-			}
 		}
 	}
 
 	gfx_v9_4_select_se_sh(adev, 0xffffffff, 0xffffffff, 0xffffffff);
 	mutex_unlock(&adev->grbm_idx_mutex);
 }
-
-
-const struct amdgpu_ras_block_hw_ops  gfx_v9_4_ras_ops = {
-	.query_ras_error_count = &gfx_v9_4_query_ras_error_count,
-	.reset_ras_error_count = &gfx_v9_4_reset_ras_error_count,
-	.query_ras_error_status = &gfx_v9_4_query_ras_error_status,
-};
-
-struct amdgpu_gfx_ras gfx_v9_4_ras = {
-	.ras_block = {
-		.hw_ops = &gfx_v9_4_ras_ops,
-	},
-};

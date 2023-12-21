@@ -201,7 +201,7 @@ out:
 /*
  * Remove a NAND device.
  */
-static void socrates_nand_remove(struct platform_device *ofdev)
+static int socrates_nand_remove(struct platform_device *ofdev)
 {
 	struct socrates_nand_host *host = dev_get_drvdata(&ofdev->dev);
 	struct nand_chip *chip = &host->nand_chip;
@@ -212,6 +212,8 @@ static void socrates_nand_remove(struct platform_device *ofdev)
 	nand_cleanup(chip);
 
 	iounmap(host->io_base);
+
+	return 0;
 }
 
 static const struct of_device_id socrates_nand_match[] =
@@ -230,7 +232,7 @@ static struct platform_driver socrates_nand_driver = {
 		.of_match_table = socrates_nand_match,
 	},
 	.probe		= socrates_nand_probe,
-	.remove_new	= socrates_nand_remove,
+	.remove		= socrates_nand_remove,
 };
 
 module_platform_driver(socrates_nand_driver);

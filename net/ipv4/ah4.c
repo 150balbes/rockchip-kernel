@@ -117,11 +117,11 @@ static int ip_clear_mutable_options(const struct iphdr *iph, __be32 *daddr)
 	return 0;
 }
 
-static void ah_output_done(void *data, int err)
+static void ah_output_done(struct crypto_async_request *base, int err)
 {
 	u8 *icv;
 	struct iphdr *iph;
-	struct sk_buff *skb = data;
+	struct sk_buff *skb = base->data;
 	struct xfrm_state *x = skb_dst(skb)->xfrm;
 	struct ah_data *ahp = x->data;
 	struct iphdr *top_iph = ip_hdr(skb);
@@ -141,7 +141,7 @@ static void ah_output_done(void *data, int err)
 	}
 
 	kfree(AH_SKB_CB(skb)->tmp);
-	xfrm_output_resume(skb->sk, skb, err);
+	xfrm_output_resume(skb, err);
 }
 
 static int ah_output(struct xfrm_state *x, struct sk_buff *skb)
@@ -262,12 +262,12 @@ out:
 	return err;
 }
 
-static void ah_input_done(void *data, int err)
+static void ah_input_done(struct crypto_async_request *base, int err)
 {
 	u8 *auth_data;
 	u8 *icv;
 	struct iphdr *work_iph;
-	struct sk_buff *skb = data;
+	struct sk_buff *skb = base->data;
 	struct xfrm_state *x = xfrm_input_state(skb);
 	struct ah_data *ahp = x->data;
 	struct ip_auth_hdr *ah = ip_auth_hdr(skb);
@@ -450,7 +450,6 @@ static int ah4_err(struct sk_buff *skb, u32 info)
 	case ICMP_DEST_UNREACH:
 		if (icmp_hdr(skb)->code != ICMP_FRAG_NEEDED)
 			return 0;
-		break;
 	case ICMP_REDIRECT:
 		break;
 	default:
@@ -471,38 +470,30 @@ static int ah4_err(struct sk_buff *skb, u32 info)
 	return 0;
 }
 
-static int ah_init_state(struct xfrm_state *x, struct netlink_ext_ack *extack)
+static int ah_init_state(struct xfrm_state *x)
 {
 	struct ah_data *ahp = NULL;
 	struct xfrm_algo_desc *aalg_desc;
 	struct crypto_ahash *ahash;
 
-	if (!x->aalg) {
-		NL_SET_ERR_MSG(extack, "AH requires a state with an AUTH algorithm");
+	if (!x->aalg)
 		goto error;
-	}
 
-	if (x->encap) {
-		NL_SET_ERR_MSG(extack, "AH is not compatible with encapsulation");
+	if (x->encap)
 		goto error;
-	}
 
 	ahp = kzalloc(sizeof(*ahp), GFP_KERNEL);
 	if (!ahp)
 		return -ENOMEM;
 
 	ahash = crypto_alloc_ahash(x->aalg->alg_name, 0, 0);
-	if (IS_ERR(ahash)) {
-		NL_SET_ERR_MSG(extack, "Kernel was unable to initialize cryptographic operations");
+	if (IS_ERR(ahash))
 		goto error;
-	}
 
 	ahp->ahash = ahash;
 	if (crypto_ahash_setkey(ahash, x->aalg->alg_key,
-				(x->aalg->alg_key_len + 7) / 8)) {
-		NL_SET_ERR_MSG(extack, "Kernel was unable to initialize cryptographic operations");
+				(x->aalg->alg_key_len + 7) / 8))
 		goto error;
-	}
 
 	/*
 	 * Lookup the algorithm description maintained by xfrm_algo,
@@ -515,7 +506,10 @@ static int ah_init_state(struct xfrm_state *x, struct netlink_ext_ack *extack)
 
 	if (aalg_desc->uinfo.auth.icv_fullbits/8 !=
 	    crypto_ahash_digestsize(ahash)) {
-		NL_SET_ERR_MSG(extack, "Kernel was unable to initialize cryptographic operations");
+		pr_info("%s: %s digestsize %u != %hu\n",
+			__func__, x->aalg->alg_name,
+			crypto_ahash_digestsize(ahash),
+			aalg_desc->uinfo.auth.icv_fullbits / 8);
 		goto error;
 	}
 
@@ -560,6 +554,7 @@ static int ah4_rcv_cb(struct sk_buff *skb, int err)
 
 static const struct xfrm_type ah_type =
 {
+	.description	= "AH4",
 	.owner		= THIS_MODULE,
 	.proto	     	= IPPROTO_AH,
 	.flags		= XFRM_TYPE_REPLAY_PROT,

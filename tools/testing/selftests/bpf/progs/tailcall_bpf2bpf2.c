@@ -20,16 +20,16 @@ int subprog_tail(struct __sk_buff *skb)
 	return 1;
 }
 
-int count = 0;
+static volatile int count;
 
-SEC("tc")
-int classifier_0(struct __sk_buff *skb)
+SEC("classifier/0")
+int bpf_func_0(struct __sk_buff *skb)
 {
 	count++;
 	return subprog_tail(skb);
 }
 
-SEC("tc")
+SEC("classifier")
 int entry(struct __sk_buff *skb)
 {
 	bpf_tail_call_static(skb, &jmp_table, 0);
@@ -38,3 +38,4 @@ int entry(struct __sk_buff *skb)
 }
 
 char __license[] SEC("license") = "GPL";
+int _version SEC("version") = 1;

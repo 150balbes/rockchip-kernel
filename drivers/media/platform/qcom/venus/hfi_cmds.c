@@ -3,7 +3,6 @@
  * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2017 Linaro Ltd.
  */
-#include <linux/overflow.h>
 #include <linux/errno.h>
 #include <linux/hash.h>
 
@@ -28,7 +27,7 @@ void pkt_sys_idle_indicator(struct hfi_sys_set_property_pkt *pkt, u32 enable)
 {
 	struct hfi_enable *hfi = (struct hfi_enable *)&pkt->data[1];
 
-	pkt->hdr.size = struct_size(pkt, data, 1) + sizeof(*hfi);
+	pkt->hdr.size = sizeof(*pkt) + sizeof(*hfi) + sizeof(u32);
 	pkt->hdr.pkt_type = HFI_CMD_SYS_SET_PROPERTY;
 	pkt->num_properties = 1;
 	pkt->data[0] = HFI_PROPERTY_SYS_IDLE_INDICATOR;
@@ -40,7 +39,7 @@ void pkt_sys_debug_config(struct hfi_sys_set_property_pkt *pkt, u32 mode,
 {
 	struct hfi_debug_config *hfi;
 
-	pkt->hdr.size = struct_size(pkt, data, 1) + sizeof(*hfi);
+	pkt->hdr.size = sizeof(*pkt) + sizeof(*hfi) + sizeof(u32);
 	pkt->hdr.pkt_type = HFI_CMD_SYS_SET_PROPERTY;
 	pkt->num_properties = 1;
 	pkt->data[0] = HFI_PROPERTY_SYS_DEBUG_CONFIG;
@@ -51,20 +50,11 @@ void pkt_sys_debug_config(struct hfi_sys_set_property_pkt *pkt, u32 mode,
 
 void pkt_sys_coverage_config(struct hfi_sys_set_property_pkt *pkt, u32 mode)
 {
-	pkt->hdr.size = struct_size(pkt, data, 2);
+	pkt->hdr.size = sizeof(*pkt) + sizeof(u32);
 	pkt->hdr.pkt_type = HFI_CMD_SYS_SET_PROPERTY;
 	pkt->num_properties = 1;
 	pkt->data[0] = HFI_PROPERTY_SYS_CONFIG_COVERAGE;
 	pkt->data[1] = mode;
-}
-
-void pkt_sys_ubwc_config(struct hfi_sys_set_property_pkt *pkt, const struct hfi_ubwc_config *hfi)
-{
-	pkt->hdr.size = struct_size(pkt, data, 1) + sizeof(*hfi);
-	pkt->hdr.pkt_type = HFI_CMD_SYS_SET_PROPERTY;
-	pkt->num_properties = 1;
-	pkt->data[0] = HFI_PROPERTY_SYS_UBWC_CONFIG;
-	memcpy(&pkt->data[1], hfi, sizeof(*hfi));
 }
 
 int pkt_sys_set_resource(struct hfi_sys_set_resource_pkt *pkt, u32 id, u32 size,
@@ -83,7 +73,7 @@ int pkt_sys_set_resource(struct hfi_sys_set_resource_pkt *pkt, u32 id, u32 size,
 		res->size = size;
 		res->mem = addr;
 		pkt->resource_type = HFI_RESOURCE_OCMEM;
-		pkt->hdr.size += sizeof(*res);
+		pkt->hdr.size += sizeof(*res) - sizeof(u32);
 		break;
 	}
 	case VIDC_RESOURCE_NONE:
@@ -126,7 +116,7 @@ void pkt_sys_power_control(struct hfi_sys_set_property_pkt *pkt, u32 enable)
 {
 	struct hfi_enable *hfi = (struct hfi_enable *)&pkt->data[1];
 
-	pkt->hdr.size = struct_size(pkt, data, 1) + sizeof(*hfi);
+	pkt->hdr.size = sizeof(*pkt) + sizeof(*hfi) + sizeof(u32);
 	pkt->hdr.pkt_type = HFI_CMD_SYS_SET_PROPERTY;
 	pkt->num_properties = 1;
 	pkt->data[0] = HFI_PROPERTY_SYS_CODEC_POWER_PLANE_CTRL;
@@ -200,8 +190,8 @@ int pkt_session_set_buffers(struct hfi_session_set_buffers_pkt *pkt,
 		struct hfi_buffer_info *bi;
 
 		pkt->extradata_size = bd->extradata_size;
-		pkt->shdr.hdr.size = sizeof(*pkt) +
-			bd->num_buffers * sizeof(*bi);
+		pkt->shdr.hdr.size = sizeof(*pkt) - sizeof(u32) +
+			(bd->num_buffers * sizeof(*bi));
 		bi = (struct hfi_buffer_info *)pkt->buffer_info;
 		for (i = 0; i < pkt->num_buffers; i++) {
 			bi->buffer_addr = bd->device_addr;
@@ -209,8 +199,8 @@ int pkt_session_set_buffers(struct hfi_session_set_buffers_pkt *pkt,
 		}
 	} else {
 		pkt->extradata_size = 0;
-		pkt->shdr.hdr.size = struct_size(pkt, buffer_info,
-						 bd->num_buffers);
+		pkt->shdr.hdr.size = sizeof(*pkt) +
+			((bd->num_buffers - 1) * sizeof(u32));
 		for (i = 0; i < pkt->num_buffers; i++)
 			pkt->buffer_info[i] = bd->device_addr;
 	}
@@ -243,16 +233,16 @@ int pkt_session_unset_buffers(struct hfi_session_release_buffer_pkt *pkt,
 			bi->extradata_addr = bd->extradata_addr;
 		}
 		pkt->shdr.hdr.size =
-				sizeof(struct hfi_session_set_buffers_pkt) +
-				bd->num_buffers * sizeof(*bi);
+				sizeof(struct hfi_session_set_buffers_pkt) -
+				sizeof(u32) + (bd->num_buffers * sizeof(*bi));
 	} else {
 		for (i = 0; i < pkt->num_buffers; i++)
 			pkt->buffer_info[i] = bd->device_addr;
 
 		pkt->extradata_size = 0;
 		pkt->shdr.hdr.size =
-			struct_size((struct hfi_session_set_buffers_pkt *)0,
-				    buffer_info, bd->num_buffers);
+				sizeof(struct hfi_session_set_buffers_pkt) +
+				((bd->num_buffers - 1) * sizeof(u32));
 	}
 
 	pkt->response_req = bd->response_required;
@@ -264,7 +254,7 @@ int pkt_session_unset_buffers(struct hfi_session_release_buffer_pkt *pkt,
 int pkt_session_etb_decoder(struct hfi_session_empty_buffer_compressed_pkt *pkt,
 			    void *cookie, struct hfi_frame_data *in_frame)
 {
-	if (!cookie)
+	if (!cookie || !in_frame->device_addr)
 		return -EINVAL;
 
 	pkt->shdr.hdr.size = sizeof(*pkt);
@@ -521,7 +511,6 @@ static int pkt_session_set_property_1x(struct hfi_session_set_property_pkt *pkt,
 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*en);
 		break;
 	}
-	case HFI_PROPERTY_PARAM_VDEC_ENABLE_SUFFICIENT_SEQCHANGE_EVENT:
 	case HFI_PROPERTY_CONFIG_VDEC_POST_LOOP_DEBLOCKER: {
 		struct hfi_enable *in = pdata;
 		struct hfi_enable *en = prop_data;
@@ -771,9 +760,7 @@ static int pkt_session_set_property_1x(struct hfi_session_set_property_pkt *pkt,
 		struct hfi_conceal_color *color = prop_data;
 		u32 *in = pdata;
 
-		color->conceal_color = *in & 0xff;
-		color->conceal_color |= ((*in >> 10) & 0xff) << 8;
-		color->conceal_color |= ((*in >> 20) & 0xff) << 16;
+		color->conceal_color = *in;
 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*color);
 		break;
 	}
@@ -1052,20 +1039,6 @@ static int pkt_session_set_property_1x(struct hfi_session_set_property_pkt *pkt,
 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*hierp);
 		break;
 	}
-	case HFI_PROPERTY_PARAM_UNCOMPRESSED_PLANE_ACTUAL_INFO: {
-		struct hfi_uncompressed_plane_actual_info *in = pdata;
-		struct hfi_uncompressed_plane_actual_info *info = prop_data;
-
-		info->buffer_type = in->buffer_type;
-		info->num_planes = in->num_planes;
-		info->plane_format[0] = in->plane_format[0];
-		if (in->num_planes > 1)
-			info->plane_format[1] = in->plane_format[1];
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*info);
-		break;
-	}
-	case HFI_PROPERTY_PARAM_VENC_HDR10_PQ_SEI:
-		return -ENOTSUPP;
 
 	/* FOLLOWING PROPERTIES ARE NOT IMPLEMENTED IN CORE YET */
 	case HFI_PROPERTY_CONFIG_BUFFER_REQUIREMENTS:
@@ -1232,56 +1205,6 @@ pkt_session_set_property_4xx(struct hfi_session_set_property_pkt *pkt,
 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*cu);
 		break;
 	}
-	case HFI_PROPERTY_PARAM_VENC_HDR10_PQ_SEI: {
-		struct hfi_hdr10_pq_sei *in = pdata, *hdr10 = prop_data;
-
-		memcpy(hdr10, in, sizeof(*hdr10));
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*hdr10);
-		break;
-	}
-	case HFI_PROPERTY_PARAM_VDEC_CONCEAL_COLOR: {
-		struct hfi_conceal_color_v4 *color = prop_data;
-		u32 *in = pdata;
-
-		color->conceal_color_8bit = *in & 0xff;
-		color->conceal_color_8bit |= ((*in >> 10) & 0xff) << 8;
-		color->conceal_color_8bit |= ((*in >> 20) & 0xff) << 16;
-		color->conceal_color_10bit = *in;
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*color);
-		break;
-	}
-
-	case HFI_PROPERTY_PARAM_VENC_H264_TRANSFORM_8X8: {
-		struct hfi_h264_8x8_transform *in = pdata, *tm = prop_data;
-
-		tm->enable_type = in->enable_type;
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*tm);
-		break;
-	}
-	case HFI_PROPERTY_PARAM_VENC_SESSION_QP_RANGE_V2: {
-		struct hfi_quantization_range_v2 *in = pdata, *range = prop_data;
-		u32 min_qp, max_qp;
-
-		min_qp = in->min_qp.qp_packed;
-		max_qp = in->max_qp.qp_packed;
-
-		/* We'll be packing in the qp, so make sure we
-		 * won't be losing data when masking
-		 */
-		if (min_qp > 0xff || max_qp > 0xff)
-			return -ERANGE;
-
-		range->min_qp.layer_id = 0xFF;
-		range->max_qp.layer_id = 0xFF;
-		range->min_qp.qp_packed = (min_qp & 0xFF) | ((min_qp & 0xFF) << 8) |
-			((min_qp & 0xFF) << 16);
-		range->max_qp.qp_packed = (max_qp & 0xFF) | ((max_qp & 0xFF) << 8) |
-			((max_qp & 0xFF) << 16);
-		range->min_qp.enable = 7;
-		range->max_qp.enable = 7;
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*range);
-		break;
-	}
 	case HFI_PROPERTY_CONFIG_VENC_MAX_BITRATE:
 	case HFI_PROPERTY_CONFIG_VDEC_POST_LOOP_DEBLOCKER:
 	case HFI_PROPERTY_PARAM_BUFFER_ALLOC_MODE:
@@ -1314,34 +1237,13 @@ pkt_session_set_property_6xx(struct hfi_session_set_property_pkt *pkt,
 	pkt->data[0] = ptype;
 
 	switch (ptype) {
-	case HFI_PROPERTY_PARAM_UNCOMPRESSED_PLANE_ACTUAL_CONSTRAINTS_INFO: {
-		struct hfi_uncompressed_plane_actual_constraints_info *in = pdata;
-		struct hfi_uncompressed_plane_actual_constraints_info *info = prop_data;
-
-		info->buffer_type = in->buffer_type;
-		info->num_planes = in->num_planes;
-		info->plane_format[0] = in->plane_format[0];
-		if (in->num_planes > 1)
-			info->plane_format[1] = in->plane_format[1];
-
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*info);
-		break;
-	}
 	case HFI_PROPERTY_CONFIG_HEIC_FRAME_QUALITY: {
 		struct hfi_heic_frame_quality *in = pdata, *cq = prop_data;
 
 		cq->frame_quality = in->frame_quality;
 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*cq);
 		break;
-	}
-	case HFI_PROPERTY_PARAM_WORK_ROUTE: {
-		struct hfi_video_work_route *in = pdata, *wr = prop_data;
-
-		wr->video_work_route = in->video_work_route;
-		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*wr);
-		break;
-	}
-	default:
+	} default:
 		return pkt_session_set_property_4xx(pkt, cookie, ptype, pdata);
 	}
 

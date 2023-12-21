@@ -28,7 +28,18 @@
 	}
 
 #define DNV_COMMUNITY(b, s, e, g)			\
-	INTEL_COMMUNITY_GPPS(b, s, e, g, DNV)
+	{						\
+		.barno = (b),				\
+		.padown_offset = DNV_PAD_OWN,		\
+		.padcfglock_offset = DNV_PADCFGLOCK,	\
+		.hostown_offset = DNV_HOSTSW_OWN,	\
+		.is_offset = DNV_GPI_IS,		\
+		.ie_offset = DNV_GPI_IE,		\
+		.pin_base = (s),			\
+		.npins = ((e) - (s) + 1),		\
+		.gpps = (g),				\
+		.ngpps = ARRAY_SIZE(g),			\
+	}
 
 /* Denverton */
 static const struct pinctrl_pin_desc dnv_pins[] = {

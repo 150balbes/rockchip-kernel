@@ -34,8 +34,8 @@ else
 endif
 
 FEATURE_USER = .bpf
-FEATURE_TESTS = libbfd disassembler-four-args disassembler-init-styled
-FEATURE_DISPLAY = libbfd
+FEATURE_TESTS = libbfd disassembler-four-args
+FEATURE_DISPLAY = libbfd disassembler-four-args
 
 check_feat := 1
 NON_CHECK_FEAT_TARGETS := clean bpftool_clean runqslower_clean resolve_btfids_clean
@@ -55,9 +55,6 @@ endif
 
 ifeq ($(feature-disassembler-four-args), 1)
 CFLAGS += -DDISASM_FOUR_ARGS_SIGNATURE
-endif
-ifeq ($(feature-disassembler-init-styled), 1)
-CFLAGS += -DDISASM_INIT_STYLED
 endif
 
 $(OUTPUT)%.yacc.c: $(srctree)/tools/bpf/%.y

@@ -21,7 +21,7 @@
 				DBG_MDSCR_KDE | \
 				DBG_MDSCR_MDE)
 
-static DEFINE_PER_CPU(u64, mdcr_el2);
+static DEFINE_PER_CPU(u32, mdcr_el2);
 
 /**
  * save/restore_guest_debug_regs
@@ -32,10 +32,6 @@ static DEFINE_PER_CPU(u64, mdcr_el2);
  *
  * Guest access to MDSCR_EL1 is trapped by the hypervisor and handled
  * after we have restored the preserved value to the main context.
- *
- * When single-step is enabled by userspace, we tweak PSTATE.SS on every
- * guest entry. Preserve PSTATE.SS so we can restore the original value
- * for the vcpu after the single-step is disabled.
  */
 static void save_guest_debug_regs(struct kvm_vcpu *vcpu)
 {
@@ -45,9 +41,6 @@ static void save_guest_debug_regs(struct kvm_vcpu *vcpu)
 
 	trace_kvm_arm_set_dreg32("Saved MDSCR_EL1",
 				vcpu->arch.guest_debug_preserved.mdscr_el1);
-
-	vcpu->arch.guest_debug_preserved.pstate_ss =
-					(*vcpu_cpsr(vcpu) & DBG_SPSR_SS);
 }
 
 static void restore_guest_debug_regs(struct kvm_vcpu *vcpu)
@@ -58,11 +51,6 @@ static void restore_guest_debug_regs(struct kvm_vcpu *vcpu)
 
 	trace_kvm_arm_set_dreg32("Restored MDSCR_EL1",
 				vcpu_read_sys_reg(vcpu, MDSCR_EL1));
-
-	if (vcpu->arch.guest_debug_preserved.pstate_ss)
-		*vcpu_cpsr(vcpu) |= DBG_SPSR_SS;
-	else
-		*vcpu_cpsr(vcpu) &= ~DBG_SPSR_SS;
 }
 
 /**
@@ -91,13 +79,12 @@ void kvm_arm_init_debug(void)
  *  - OS related registers (MDCR_EL2_TDOSA)
  *  - Statistical profiler (MDCR_EL2_TPMS/MDCR_EL2_E2PB)
  *  - Self-hosted Trace Filter controls (MDCR_EL2_TTRF)
- *  - Self-hosted Trace (MDCR_EL2_TTRF/MDCR_EL2_E2TB)
  */
 static void kvm_arm_setup_mdcr_el2(struct kvm_vcpu *vcpu)
 {
 	/*
-	 * This also clears MDCR_EL2_E2PB_MASK and MDCR_EL2_E2TB_MASK
-	 * to disable guest access to the profiling and trace buffers
+	 * This also clears MDCR_EL2_E2PB_MASK to disable guest access
+	 * to the profiling buffer.
 	 */
 	vcpu->arch.mdcr_el2 = __this_cpu_read(mdcr_el2) & MDCR_EL2_HPMN_MASK;
 	vcpu->arch.mdcr_el2 |= (MDCR_EL2_TPM |
@@ -116,12 +103,10 @@ static void kvm_arm_setup_mdcr_el2(struct kvm_vcpu *vcpu)
 	 * Trap debug register access when one of the following is true:
 	 *  - Userspace is using the hardware to debug the guest
 	 *  (KVM_GUESTDBG_USE_HW is set).
-	 *  - The guest is not using debug (DEBUG_DIRTY clear).
-	 *  - The guest has enabled the OS Lock (debug exceptions are blocked).
+	 *  - The guest is not using debug (KVM_ARM64_DEBUG_DIRTY is clear).
 	 */
 	if ((vcpu->guest_debug & KVM_GUESTDBG_USE_HW) ||
-	    !vcpu_get_flag(vcpu, DEBUG_DIRTY) ||
-	    kvm_vcpu_os_lock_enabled(vcpu))
+	    !(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
 		vcpu->arch.mdcr_el2 |= MDCR_EL2_TDA;
 
 	trace_kvm_arm_set_dreg32("MDCR_EL2", vcpu->arch.mdcr_el2);
@@ -156,11 +141,17 @@ void kvm_arm_reset_debug_ptr(struct kvm_vcpu *vcpu)
  * @vcpu:	the vcpu pointer
  *
  * This is called before each entry into the hypervisor to setup any
- * debug related registers.
+ * debug related registers. Currently this just ensures we will trap
+ * access to:
+ *  - Performance monitors (MDCR_EL2_TPM/MDCR_EL2_TPMCR)
+ *  - Debug ROM Address (MDCR_EL2_TDRA)
+ *  - OS related registers (MDCR_EL2_TDOSA)
+ *  - Statistical profiler (MDCR_EL2_TPMS/MDCR_EL2_E2PB)
+ *  - Self-hosted Trace (MDCR_EL2_TTRF/MDCR_EL2_E2TB)
  *
  * Additionally, KVM only traps guest accesses to the debug registers if
- * the guest is not actively using them (see the DEBUG_DIRTY
- * flag on vcpu->arch.iflags).  Since the guest must not interfere
+ * the guest is not actively using them (see the KVM_ARM64_DEBUG_DIRTY
+ * flag on vcpu->arch.flags).  Since the guest must not interfere
  * with the hardware state when debugging the guest, we must ensure that
  * trapping is enabled whenever we are debugging the guest using the
  * debug registers.
@@ -174,8 +165,8 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 
 	kvm_arm_setup_mdcr_el2(vcpu);
 
-	/* Check if we need to use the debug registers. */
-	if (vcpu->guest_debug || kvm_vcpu_os_lock_enabled(vcpu)) {
+	/* Is Guest debugging in effect? */
+	if (vcpu->guest_debug) {
 		/* Save guest debug state */
 		save_guest_debug_regs(vcpu);
 
@@ -200,18 +191,7 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 		 * debugging the system.
 		 */
 		if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP) {
-			/*
-			 * If the software step state at the last guest exit
-			 * was Active-pending, we don't set DBG_SPSR_SS so
-			 * that the state is maintained (to not run another
-			 * single-step until the pending Software Step
-			 * exception is taken).
-			 */
-			if (!vcpu_get_flag(vcpu, DBG_SS_ACTIVE_PENDING))
-				*vcpu_cpsr(vcpu) |= DBG_SPSR_SS;
-			else
-				*vcpu_cpsr(vcpu) &= ~DBG_SPSR_SS;
-
+			*vcpu_cpsr(vcpu) |=  DBG_SPSR_SS;
 			mdscr = vcpu_read_sys_reg(vcpu, MDSCR_EL1);
 			mdscr |= DBG_MDSCR_SS;
 			vcpu_write_sys_reg(vcpu, mdscr, MDSCR_EL1);
@@ -228,8 +208,9 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 		 *
 		 * We simply switch the debug_ptr to point to our new
 		 * external_debug_state which has been populated by the
-		 * debug ioctl. The existing DEBUG_DIRTY mechanism ensures
-		 * the registers are updated on the world switch.
+		 * debug ioctl. The existing KVM_ARM64_DEBUG_DIRTY
+		 * mechanism ensures the registers are updated on the
+		 * world switch.
 		 */
 		if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW) {
 			/* Enable breakpoints/watchpoints */
@@ -238,7 +219,7 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 			vcpu_write_sys_reg(vcpu, mdscr, MDSCR_EL1);
 
 			vcpu->arch.debug_ptr = &vcpu->arch.external_debug_state;
-			vcpu_set_flag(vcpu, DEBUG_DIRTY);
+			vcpu->arch.flags |= KVM_ARM64_DEBUG_DIRTY;
 
 			trace_kvm_arm_set_regset("BKPTS", get_num_brps(),
 						&vcpu->arch.debug_ptr->dbg_bcr[0],
@@ -247,19 +228,6 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 			trace_kvm_arm_set_regset("WAPTS", get_num_wrps(),
 						&vcpu->arch.debug_ptr->dbg_wcr[0],
 						&vcpu->arch.debug_ptr->dbg_wvr[0]);
-
-		/*
-		 * The OS Lock blocks debug exceptions in all ELs when it is
-		 * enabled. If the guest has enabled the OS Lock, constrain its
-		 * effects to the guest. Emulate the behavior by clearing
-		 * MDSCR_EL1.MDE. In so doing, we ensure that host debug
-		 * exceptions are unaffected by guest configuration of the OS
-		 * Lock.
-		 */
-		} else if (kvm_vcpu_os_lock_enabled(vcpu)) {
-			mdscr = vcpu_read_sys_reg(vcpu, MDSCR_EL1);
-			mdscr &= ~DBG_MDSCR_MDE;
-			vcpu_write_sys_reg(vcpu, mdscr, MDSCR_EL1);
 		}
 	}
 
@@ -268,7 +236,7 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 
 	/* If KDE or MDE are set, perform a full save/restore cycle. */
 	if (vcpu_read_sys_reg(vcpu, MDSCR_EL1) & (DBG_MDSCR_KDE | DBG_MDSCR_MDE))
-		vcpu_set_flag(vcpu, DEBUG_DIRTY);
+		vcpu->arch.flags |= KVM_ARM64_DEBUG_DIRTY;
 
 	/* Write mdcr_el2 changes since vcpu_load on VHE systems */
 	if (has_vhe() && orig_mdcr_el2 != vcpu->arch.mdcr_el2)
@@ -281,19 +249,7 @@ void kvm_arm_clear_debug(struct kvm_vcpu *vcpu)
 {
 	trace_kvm_arm_clear_debug(vcpu->guest_debug);
 
-	/*
-	 * Restore the guest's debug registers if we were using them.
-	 */
-	if (vcpu->guest_debug || kvm_vcpu_os_lock_enabled(vcpu)) {
-		if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP) {
-			if (!(*vcpu_cpsr(vcpu) & DBG_SPSR_SS))
-				/*
-				 * Mark the vcpu as ACTIVE_PENDING
-				 * until Software Step exception is taken.
-				 */
-				vcpu_set_flag(vcpu, DBG_SS_ACTIVE_PENDING);
-		}
-
+	if (vcpu->guest_debug) {
 		restore_guest_debug_regs(vcpu);
 
 		/*
@@ -327,18 +283,18 @@ void kvm_arch_vcpu_load_debug_state_flags(struct kvm_vcpu *vcpu)
 	 * If SPE is present on this CPU and is available at current EL,
 	 * we may need to check if the host state needs to be saved.
 	 */
-	if (cpuid_feature_extract_unsigned_field(dfr0, ID_AA64DFR0_EL1_PMSVer_SHIFT) &&
-	    !(read_sysreg_s(SYS_PMBIDR_EL1) & BIT(PMBIDR_EL1_P_SHIFT)))
-		vcpu_set_flag(vcpu, DEBUG_STATE_SAVE_SPE);
+	if (cpuid_feature_extract_unsigned_field(dfr0, ID_AA64DFR0_PMSVER_SHIFT) &&
+	    !(read_sysreg_s(SYS_PMBIDR_EL1) & BIT(SYS_PMBIDR_EL1_P_SHIFT)))
+		vcpu->arch.flags |= KVM_ARM64_DEBUG_STATE_SAVE_SPE;
 
 	/* Check if we have TRBE implemented and available at the host */
-	if (cpuid_feature_extract_unsigned_field(dfr0, ID_AA64DFR0_EL1_TraceBuffer_SHIFT) &&
-	    !(read_sysreg_s(SYS_TRBIDR_EL1) & TRBIDR_EL1_P))
-		vcpu_set_flag(vcpu, DEBUG_STATE_SAVE_TRBE);
+	if (cpuid_feature_extract_unsigned_field(dfr0, ID_AA64DFR0_TRBE_SHIFT) &&
+	    !(read_sysreg_s(SYS_TRBIDR_EL1) & TRBIDR_PROG))
+		vcpu->arch.flags |= KVM_ARM64_DEBUG_STATE_SAVE_TRBE;
 }
 
 void kvm_arch_vcpu_put_debug_state_flags(struct kvm_vcpu *vcpu)
 {
-	vcpu_clear_flag(vcpu, DEBUG_STATE_SAVE_SPE);
-	vcpu_clear_flag(vcpu, DEBUG_STATE_SAVE_TRBE);
+	vcpu->arch.flags &= ~(KVM_ARM64_DEBUG_STATE_SAVE_SPE |
+			      KVM_ARM64_DEBUG_STATE_SAVE_TRBE);
 }

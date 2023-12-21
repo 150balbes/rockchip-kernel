@@ -680,7 +680,7 @@ static struct debug_buffer *alloc_buffer(struct ohci_hcd *ohci,
 
 static int fill_buffer(struct debug_buffer *buf)
 {
-	int ret;
+	int ret = 0;
 
 	if (!buf->page)
 		buf->page = (char *)get_zeroed_page(GFP_KERNEL);
@@ -705,7 +705,7 @@ static ssize_t debug_output(struct file *file, char __user *user_buf,
 			size_t len, loff_t *offset)
 {
 	struct debug_buffer *buf = file->private_data;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&buf->mutex);
 	if (buf->count == 0) {

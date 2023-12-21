@@ -16,6 +16,7 @@
 #include <linux/clk.h>
 #include <linux/cpu.h>
 #include <linux/platform_data/gpio-omap.h>
+#include <linux/pinctrl/pinmux.h>
 #include <linux/wkup_m3_ipc.h>
 #include <linux/of.h>
 #include <linux/rtc.h>
@@ -104,6 +105,8 @@ static int amx3_common_init(int (*idle)(u32 wfi_flags))
 
 static int am33xx_suspend_init(int (*idle)(u32 wfi_flags))
 {
+	int ret;
+
 	gfx_l4ls_clkdm = clkdm_lookup("gfx_l4ls_gfx_clkdm");
 
 	if (!gfx_l4ls_clkdm) {
@@ -111,7 +114,9 @@ static int am33xx_suspend_init(int (*idle)(u32 wfi_flags))
 		return -ENODEV;
 	}
 
-	return amx3_common_init(idle);
+	ret = amx3_common_init(idle);
+
+	return ret;
 }
 
 static int am43xx_suspend_init(int (*idle)(u32 wfi_flags))

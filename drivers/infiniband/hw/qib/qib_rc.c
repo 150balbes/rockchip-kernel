@@ -207,7 +207,6 @@ bail:
 /**
  * qib_make_rc_req - construct a request packet (SEND, RDMA r/w, ATOMIC)
  * @qp: a pointer to the QP
- * @flags: unused
  *
  * Assumes the s_lock is held.
  *
@@ -993,7 +992,7 @@ static struct rvt_swqe *do_rc_completion(struct rvt_qp *qp,
 	return wqe;
 }
 
-/*
+/**
  * do_rc_ack - process an incoming RC ACK
  * @qp: the QP the ACK came in on
  * @psn: the packet sequence number of the ACK
@@ -1260,7 +1259,6 @@ static void rdma_seq_err(struct rvt_qp *qp, struct qib_ibport *ibp, u32 psn,
  * @psn: the packet sequence number for this packet
  * @hdrsize: the header length
  * @pmtu: the path MTU
- * @rcd: the context pointer
  *
  * This is called from qib_rc_rcv() to process an incoming RC response
  * packet for the given QP.
@@ -1482,7 +1480,6 @@ bail:
  * @opcode: the opcode for this packet
  * @psn: the packet sequence number for this packet
  * @diff: the difference between the PSN and the expected PSN
- * @rcd: the context pointer
  *
  * This is called from qib_rc_rcv() to process an unexpected
  * incoming RC packet for the given QP.

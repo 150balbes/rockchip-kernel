@@ -30,5 +30,6 @@
 #define	_RXUSEDK					BIT(1)
 #define	_TXUSEDK					BIT(0)
 
+
 #endif	/*__RTL8712_SECURITY_BITDEF_H__*/
 

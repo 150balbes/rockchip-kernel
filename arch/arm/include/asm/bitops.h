@@ -160,20 +160,18 @@ extern int _test_and_change_bit(int nr, volatile unsigned long * p);
 /*
  * Little endian assembly bitops.  nr = 0 -> byte 0 bit 0.
  */
-unsigned long _find_first_zero_bit_le(const unsigned long *p, unsigned long size);
-unsigned long _find_next_zero_bit_le(const unsigned long *p,
-				     unsigned long size, unsigned long offset);
-unsigned long _find_first_bit_le(const unsigned long *p, unsigned long size);
-unsigned long _find_next_bit_le(const unsigned long *p, unsigned long size, unsigned long offset);
+extern int _find_first_zero_bit_le(const unsigned long *p, unsigned size);
+extern int _find_next_zero_bit_le(const unsigned long *p, int size, int offset);
+extern int _find_first_bit_le(const unsigned long *p, unsigned size);
+extern int _find_next_bit_le(const unsigned long *p, int size, int offset);
 
 /*
  * Big endian assembly bitops.  nr = 0 -> byte 3 bit 0.
  */
-unsigned long _find_first_zero_bit_be(const unsigned long *p, unsigned long size);
-unsigned long _find_next_zero_bit_be(const unsigned long *p,
-				     unsigned long size, unsigned long offset);
-unsigned long _find_first_bit_be(const unsigned long *p, unsigned long size);
-unsigned long _find_next_bit_be(const unsigned long *p, unsigned long size, unsigned long offset);
+extern int _find_first_zero_bit_be(const unsigned long *p, unsigned size);
+extern int _find_next_zero_bit_be(const unsigned long *p, int size, int offset);
+extern int _find_first_bit_be(const unsigned long *p, unsigned size);
+extern int _find_next_bit_be(const unsigned long *p, int size, int offset);
 
 #ifndef CONFIG_SMP
 /*
@@ -266,6 +264,7 @@ static inline int find_next_bit_le(const void *p, int size, int offset)
 
 #endif
 
+#include <asm-generic/bitops/find.h>
 #include <asm-generic/bitops/le.h>
 
 /*

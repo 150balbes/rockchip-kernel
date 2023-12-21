@@ -1,5 +1,3 @@
-.. SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
-
 ================
 bpftool-prog
 ================
@@ -9,29 +7,25 @@ tool for inspection and simple manipulation of eBPF progs
 
 :Manual section: 8
 
-.. include:: substitutions.rst
-
 SYNOPSIS
 ========
 
 	**bpftool** [*OPTIONS*] **prog** *COMMAND*
 
-	*OPTIONS* := { |COMMON_OPTIONS| |
-	{ **-f** | **--bpffs** } | { **-m** | **--mapcompat** } | { **-n** | **--nomount** } |
-	{ **-L** | **--use-loader** } }
+	*OPTIONS* := { { **-j** | **--json** } [{ **-p** | **--pretty** }] | { **-f** | **--bpffs** } }
 
 	*COMMANDS* :=
-	{ **show** | **list** | **dump xlated** | **dump jited** | **pin** | **load** |
-	**loadall** | **help** }
+	{ **show** | **list** | **dump xlated** | **dump jited** | **pin** | **load**
+	| **loadall** | **help** }
 
 PROG COMMANDS
 =============
 
 |	**bpftool** **prog** { **show** | **list** } [*PROG*]
-|	**bpftool** **prog dump xlated** *PROG* [{ **file** *FILE* | [**opcodes**] [**linum**] [**visual**] }]
-|	**bpftool** **prog dump jited**  *PROG* [{ **file** *FILE* | [**opcodes**] [**linum**] }]
+|	**bpftool** **prog dump xlated** *PROG* [{**file** *FILE* | **opcodes** | **visual** | **linum**}]
+|	**bpftool** **prog dump jited**  *PROG* [{**file** *FILE* | **opcodes** | **linum**}]
 |	**bpftool** **prog pin** *PROG* *FILE*
-|	**bpftool** **prog** { **load** | **loadall** } *OBJ* *PATH* [**type** *TYPE*] [**map** { **idx** *IDX* | **name** *NAME* } *MAP*] [{ **offload_dev** | **xdpmeta_dev** } *NAME*] [**pinmaps** *MAP_DIR*] [**autoattach**]
+|	**bpftool** **prog** { **load** | **loadall** } *OBJ* *PATH* [**type** *TYPE*] [**map** {**idx** *IDX* | **name** *NAME*} *MAP*] [**dev** *NAME*] [**pinmaps** *MAP_DIR*]
 |	**bpftool** **prog attach** *PROG* *ATTACH_TYPE* [*MAP*]
 |	**bpftool** **prog detach** *PROG* *ATTACH_TYPE* [*MAP*]
 |	**bpftool** **prog tracelog**
@@ -53,13 +47,11 @@ PROG COMMANDS
 |		**cgroup/getsockopt** | **cgroup/setsockopt** | **cgroup/sock_release** |
 |		**struct_ops** | **fentry** | **fexit** | **freplace** | **sk_lookup**
 |	}
-|	*ATTACH_TYPE* := {
-|		**sk_msg_verdict** | **sk_skb_verdict** | **sk_skb_stream_verdict** |
-|		**sk_skb_stream_parser** | **flow_dissector**
+|       *ATTACH_TYPE* := {
+|		**msg_verdict** | **stream_verdict** | **stream_parser** | **flow_dissector**
 |	}
 |	*METRICs* := {
-|		**cycles** | **instructions** | **l1d_loads** | **llc_misses** |
-|		**itlb_misses** | **dtlb_misses**
+|		**cycles** | **instructions** | **l1d_loads** | **llc_misses**
 |	}
 
 
@@ -88,7 +80,7 @@ DESCRIPTION
 		  programs. On such kernels bpftool will automatically emit this
 		  information as well.
 
-	**bpftool prog dump xlated** *PROG* [{ **file** *FILE* | [**opcodes**] [**linum**] [**visual**] }]
+	**bpftool prog dump xlated** *PROG* [{ **file** *FILE* | **opcodes** | **visual** | **linum** }]
 		  Dump eBPF instructions of the programs from the kernel. By
 		  default, eBPF will be disassembled and printed to standard
 		  output in human-readable format. In this case, **opcodes**
@@ -106,10 +98,11 @@ DESCRIPTION
 		  CFG in DOT format, on standard output.
 
 		  If the programs have line_info available, the source line will
-		  be displayed.  If **linum** is specified, the filename, line
-		  number and line column will also be displayed.
+		  be displayed by default.  If **linum** is specified,
+		  the filename, line number and line column will also be
+		  displayed on top of the source line.
 
-	**bpftool prog dump jited**  *PROG* [{ **file** *FILE* | [**opcodes**] [**linum**] }]
+	**bpftool prog dump jited**  *PROG* [{ **file** *FILE* | **opcodes** | **linum** }]
 		  Dump jited image (host machine code) of the program.
 
 		  If *FILE* is specified image will be written to a file,
@@ -119,8 +112,9 @@ DESCRIPTION
 		  **opcodes** controls if raw opcodes will be printed.
 
 		  If the prog has line_info available, the source line will
-		  be displayed.  If **linum** is specified, the filename, line
-		  number and line column will also be displayed.
+		  be displayed by default.  If **linum** is specified,
+		  the filename, line number and line column will also be
+		  displayed on top of the source line.
 
 	**bpftool prog pin** *PROG* *FILE*
 		  Pin program *PROG* as *FILE*.
@@ -129,7 +123,7 @@ DESCRIPTION
 		  contain a dot character ('.'), which is reserved for future
 		  extensions of *bpffs*.
 
-	**bpftool prog { load | loadall }** *OBJ* *PATH* [**type** *TYPE*] [**map** { **idx** *IDX* | **name** *NAME* } *MAP*] [{ **offload_dev** | **xdpmeta_dev** } *NAME*] [**pinmaps** *MAP_DIR*] [**autoattach**]
+	**bpftool prog { load | loadall }** *OBJ* *PATH* [**type** *TYPE*] [**map** {**idx** *IDX* | **name** *NAME*} *MAP*] [**dev** *NAME*] [**pinmaps** *MAP_DIR*]
 		  Load bpf program(s) from binary *OBJ* and pin as *PATH*.
 		  **bpftool prog load** pins only the first program from the
 		  *OBJ* as *PATH*. **bpftool prog loadall** pins all programs
@@ -143,24 +137,10 @@ DESCRIPTION
 		  to be replaced in the ELF file counting from 0, while *NAME*
 		  allows to replace a map by name.  *MAP* specifies the map to
 		  use, referring to it by **id** or through a **pinned** file.
-		  If **offload_dev** *NAME* is specified program will be loaded
-		  onto given networking device (offload).
-		  If **xdpmeta_dev** *NAME* is specified program will become
-		  device-bound without offloading, this facilitates access
-		  to XDP metadata.
+		  If **dev** *NAME* is specified program will be loaded onto
+		  given networking device (offload).
 		  Optional **pinmaps** argument can be provided to pin all
 		  maps under *MAP_DIR* directory.
-
-		  If **autoattach** is specified program will be attached
-		  before pin. In that case, only the link (representing the
-		  program attached to its hook) is pinned, not the program as
-		  such, so the path won't show in **bpftool prog show -f**,
-		  only show in **bpftool link show -f**. Also, this only works
-		  when bpftool (libbpf) is able to infer all necessary
-		  information from the object file, in particular, it's not
-		  supported for all program types. If a program does not
-		  support autoattach, bpftool falls back to regular pinning
-		  for that program instead.
 
 		  Note: *PATH* must be located in *bpffs* mount. It must not
 		  contain a dot character ('.'), which is reserved for future
@@ -242,20 +222,6 @@ OPTIONS
 	-n, --nomount
 		  Do not automatically attempt to mount any virtual file system
 		  (such as tracefs or BPF virtual file system) when necessary.
-
-	-L, --use-loader
-		  Load program as a "loader" program. This is useful to debug
-		  the generation of such programs. When this option is in
-		  use, bpftool attempts to load the programs from the object
-		  file into the kernel, but does not pin them (therefore, the
-		  *PATH* must not be provided).
-
-		  When combined with the **-d**\ \|\ **--debug** option,
-		  additional debug messages are generated, and the execution
-		  of the loader program will use the **bpf_trace_printk**\ ()
-		  helper to log each step of loading BTF, creating the maps,
-		  and loading the programs (see **bpftool prog tracelog** as
-		  a way to dump those messages).
 
 EXAMPLES
 ========
@@ -360,16 +326,3 @@ EXAMPLES
       40176203 cycles                                                 (83.05%)
       42518139 instructions    #   1.06 insns per cycle               (83.39%)
            123 llc_misses      #   2.89 LLC misses per million insns  (83.15%)
-
-|
-| Output below is for the trace logs.
-| Run in separate terminals:
-| **# bpftool prog tracelog**
-| **# bpftool prog load -L -d file.o**
-
-::
-
-    bpftool-620059  [004] d... 2634685.517903: bpf_trace_printk: btf_load size 665 r=5
-    bpftool-620059  [004] d... 2634685.517912: bpf_trace_printk: map_create sample_map idx 0 type 2 value_size 4 value_btf_id 0 r=6
-    bpftool-620059  [004] d... 2634685.517997: bpf_trace_printk: prog_load sample insn_cnt 13 r=7
-    bpftool-620059  [004] d... 2634685.517999: bpf_trace_printk: close(5) = 0

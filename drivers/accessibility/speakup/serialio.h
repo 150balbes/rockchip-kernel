@@ -33,8 +33,9 @@ struct old_serial_port {
 #define NUM_DISABLE_TIMEOUTS 3
 /* buffer timeout in ms */
 #define SPK_TIMEOUT 100
+#define BOTH_EMPTY (UART_LSR_TEMT | UART_LSR_THRE)
 
 #define spk_serial_tx_busy() \
-	(!uart_lsr_tx_empty(inb(speakup_info.port_tts + UART_LSR)))
+	((inb(speakup_info.port_tts + UART_LSR) & BOTH_EMPTY) != BOTH_EMPTY)
 
 #endif

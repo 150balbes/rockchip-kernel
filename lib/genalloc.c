@@ -40,30 +40,32 @@ static inline size_t chunk_size(const struct gen_pool_chunk *chunk)
 	return chunk->end_addr - chunk->start_addr + 1;
 }
 
-static inline int
-set_bits_ll(unsigned long *addr, unsigned long mask_to_set)
+static int set_bits_ll(unsigned long *addr, unsigned long mask_to_set)
 {
-	unsigned long val = READ_ONCE(*addr);
+	unsigned long val, nval;
 
+	nval = *addr;
 	do {
+		val = nval;
 		if (val & mask_to_set)
 			return -EBUSY;
 		cpu_relax();
-	} while (!try_cmpxchg(addr, &val, val | mask_to_set));
+	} while ((nval = cmpxchg(addr, val, val | mask_to_set)) != val);
 
 	return 0;
 }
 
-static inline int
-clear_bits_ll(unsigned long *addr, unsigned long mask_to_clear)
+static int clear_bits_ll(unsigned long *addr, unsigned long mask_to_clear)
 {
-	unsigned long val = READ_ONCE(*addr);
+	unsigned long val, nval;
 
+	nval = *addr;
 	do {
+		val = nval;
 		if ((val & mask_to_clear) != mask_to_clear)
 			return -EBUSY;
 		cpu_relax();
-	} while (!try_cmpxchg(addr, &val, val & ~mask_to_clear));
+	} while ((nval = cmpxchg(addr, val, val & ~mask_to_clear)) != val);
 
 	return 0;
 }
@@ -79,8 +81,7 @@ clear_bits_ll(unsigned long *addr, unsigned long mask_to_clear)
  * users set the same bit, one user will return remain bits, otherwise
  * return 0.
  */
-static unsigned long
-bitmap_set_ll(unsigned long *map, unsigned long start, unsigned long nr)
+static int bitmap_set_ll(unsigned long *map, unsigned long start, unsigned long nr)
 {
 	unsigned long *p = map + BIT_WORD(start);
 	const unsigned long size = start + nr;
@@ -249,7 +250,7 @@ void gen_pool_destroy(struct gen_pool *pool)
 		list_del(&chunk->next_chunk);
 
 		end_bit = chunk_size(chunk) >> order;
-		bit = find_first_bit(chunk->bits, end_bit);
+		bit = find_next_bit(chunk->bits, end_bit, 0);
 		BUG_ON(bit < end_bit);
 
 		vfree(chunk);
@@ -640,7 +641,6 @@ EXPORT_SYMBOL(gen_pool_set_algo);
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
- * @start_addr: not used in this function
  */
 unsigned long gen_pool_first_fit(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -659,7 +659,6 @@ EXPORT_SYMBOL(gen_pool_first_fit);
  * @nr: The number of zeroed bits we're looking for
  * @data: data for alignment
  * @pool: pool to get order from
- * @start_addr: start addr of alloction chunk
  */
 unsigned long gen_pool_first_fit_align(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -687,7 +686,6 @@ EXPORT_SYMBOL(gen_pool_first_fit_align);
  * @nr: The number of zeroed bits we're looking for
  * @data: data for alignment
  * @pool: pool to get order from
- * @start_addr: not used in this function
  */
 unsigned long gen_pool_fixed_alloc(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -722,7 +720,6 @@ EXPORT_SYMBOL(gen_pool_fixed_alloc);
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
- * @start_addr: not used in this function
  */
 unsigned long gen_pool_first_fit_order_align(unsigned long *map,
 		unsigned long size, unsigned long start,
@@ -737,14 +734,13 @@ EXPORT_SYMBOL(gen_pool_first_fit_order_align);
 
 /**
  * gen_pool_best_fit - find the best fitting region of memory
- * matching the size requirement (no alignment constraint)
+ * macthing the size requirement (no alignment constraint)
  * @map: The address to base the search on
  * @size: The bitmap size in bits
  * @start: The bitnumber to start searching at
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
- * @start_addr: not used in this function
  *
  * Iterate over the bitmap to find the smallest free region
  * which we can allocate the memory.

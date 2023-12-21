@@ -51,7 +51,7 @@ static void nft_osf_eval(const struct nft_expr *expr, struct nft_regs *regs,
 			snprintf(os_match, NFT_OSF_MAXGENRELEN, "%s:%s",
 				 data.genre, data.version);
 		else
-			strscpy(os_match, data.genre, NFT_OSF_MAXGENRELEN);
+			strlcpy(os_match, data.genre, NFT_OSF_MAXGENRELEN);
 
 		strncpy((char *)dest, os_match, NFT_OSF_MAXGENRELEN);
 	}
@@ -92,15 +92,14 @@ static int nft_osf_init(const struct nft_ctx *ctx,
 	return 0;
 }
 
-static int nft_osf_dump(struct sk_buff *skb,
-			const struct nft_expr *expr, bool reset)
+static int nft_osf_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_osf *priv = nft_expr_priv(expr);
 
 	if (nla_put_u8(skb, NFTA_OSF_TTL, priv->ttl))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, NFTA_OSF_FLAGS, ntohl((__force __be32)priv->flags)))
+	if (nla_put_be32(skb, NFTA_OSF_FLAGS, ntohl(priv->flags)))
 		goto nla_put_failure;
 
 	if (nft_dump_register(skb, NFTA_OSF_DREG, priv->dreg))
@@ -133,30 +132,6 @@ static int nft_osf_validate(const struct nft_ctx *ctx,
 	return nft_chain_validate_hooks(ctx->chain, hooks);
 }
 
-static bool nft_osf_reduce(struct nft_regs_track *track,
-			   const struct nft_expr *expr)
-{
-	struct nft_osf *priv = nft_expr_priv(expr);
-	struct nft_osf *osf;
-
-	if (!nft_reg_track_cmp(track, expr, priv->dreg)) {
-		nft_reg_track_update(track, expr, priv->dreg, NFT_OSF_MAXGENRELEN);
-		return false;
-	}
-
-	osf = nft_expr_priv(track->regs[priv->dreg].selector);
-	if (priv->flags != osf->flags ||
-	    priv->ttl != osf->ttl) {
-		nft_reg_track_update(track, expr, priv->dreg, NFT_OSF_MAXGENRELEN);
-		return false;
-	}
-
-	if (!track->regs[priv->dreg].bitwise)
-		return true;
-
-	return false;
-}
-
 static struct nft_expr_type nft_osf_type;
 static const struct nft_expr_ops nft_osf_op = {
 	.eval		= nft_osf_eval,
@@ -165,7 +140,6 @@ static const struct nft_expr_ops nft_osf_op = {
 	.dump		= nft_osf_dump,
 	.type		= &nft_osf_type,
 	.validate	= nft_osf_validate,
-	.reduce		= nft_osf_reduce,
 };
 
 static struct nft_expr_type nft_osf_type __read_mostly = {

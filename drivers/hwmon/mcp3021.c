@@ -7,7 +7,7 @@
  * Reworked by Sven Schuchmann <schuchmann@schleissheimer.de>
  * DT support added by Clemens Gruber <clemens.gruber@pqgruber.com>
  *
- * This driver exports the value of analog input voltage to sysfs, the
+ * This driver export the value of analog input voltage to sysfs, the
  * voltage unit is mV. Through the sysfs interface, lm-sensors tool
  * can also display the input voltage.
  */
@@ -45,29 +45,19 @@ enum chips {
  * Client data (each client gets its own)
  */
 struct mcp3021_data {
-	struct i2c_client *client;
+	struct device *hwmon_dev;
 	u32 vdd;        /* supply and reference voltage in millivolt */
 	u16 sar_shift;
 	u16 sar_mask;
 	u8 output_res;
 };
 
-static inline u16 volts_from_reg(struct mcp3021_data *data, u16 val)
+static int mcp3021_read16(struct i2c_client *client)
 {
-	return DIV_ROUND_CLOSEST(data->vdd * val, 1 << data->output_res);
-}
-
-static int mcp3021_read(struct device *dev, enum hwmon_sensor_types type,
-			u32 attr, int channel, long *val)
-{
-	struct mcp3021_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-	__be16 buf;
-	u16 reg;
+	struct mcp3021_data *data = i2c_get_clientdata(client);
 	int ret;
-
-	if (type != hwmon_in)
-		return -EOPNOTSUPP;
+	u16 reg;
+	__be16 buf;
 
 	ret = i2c_master_recv(client, (char *)&buf, 2);
 	if (ret < 0)
@@ -84,46 +74,39 @@ static int mcp3021_read(struct device *dev, enum hwmon_sensor_types type,
 	 */
 	reg = (reg >> data->sar_shift) & data->sar_mask;
 
-	*val = volts_from_reg(data, reg);
-
-	return 0;
+	return reg;
 }
 
-static umode_t mcp3021_is_visible(const void *_data,
-				  enum hwmon_sensor_types type,
-				  u32 attr, int channel)
+static inline u16 volts_from_reg(struct mcp3021_data *data, u16 val)
 {
-	if (type != hwmon_in)
-		return 0;
-
-	if (attr != hwmon_in_input)
-		return 0;
-
-	return 0444;
+	return DIV_ROUND_CLOSEST(data->vdd * val, 1 << data->output_res);
 }
 
-static const struct hwmon_channel_info * const mcp3021_info[] = {
-	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT),
-	NULL
-};
+static ssize_t in0_input_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct mcp3021_data *data = i2c_get_clientdata(client);
+	int reg, in_input;
 
-static const struct hwmon_ops mcp3021_hwmon_ops = {
-	.is_visible = mcp3021_is_visible,
-	.read = mcp3021_read,
-};
+	reg = mcp3021_read16(client);
+	if (reg < 0)
+		return reg;
 
-static const struct hwmon_chip_info mcp3021_chip_info = {
-	.ops = &mcp3021_hwmon_ops,
-	.info = mcp3021_info,
-};
+	in_input = volts_from_reg(data, reg);
+
+	return sprintf(buf, "%d\n", in_input);
+}
+
+static DEVICE_ATTR_RO(in0_input);
 
 static const struct i2c_device_id mcp3021_id[];
 
 static int mcp3021_probe(struct i2c_client *client)
 {
+	int err;
 	struct mcp3021_data *data = NULL;
 	struct device_node *np = client->dev.of_node;
-	struct device *hwmon_dev;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
 		return -ENODEV;
@@ -164,17 +147,34 @@ static int mcp3021_probe(struct i2c_client *client)
 		break;
 	}
 
-	data->client = client;
-
 	if (data->vdd > MCP3021_VDD_REF_MAX || data->vdd < MCP3021_VDD_REF_MIN)
 		return -EINVAL;
 
-	hwmon_dev = devm_hwmon_device_register_with_info(&client->dev,
-							 client->name,
-							 data,
-							 &mcp3021_chip_info,
-							 NULL);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	err = sysfs_create_file(&client->dev.kobj, &dev_attr_in0_input.attr);
+	if (err)
+		return err;
+
+	data->hwmon_dev = hwmon_device_register(&client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
+		goto exit_remove;
+	}
+
+	return 0;
+
+exit_remove:
+	sysfs_remove_file(&client->dev.kobj, &dev_attr_in0_input.attr);
+	return err;
+}
+
+static int mcp3021_remove(struct i2c_client *client)
+{
+	struct mcp3021_data *data = i2c_get_clientdata(client);
+
+	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_file(&client->dev.kobj, &dev_attr_in0_input.attr);
+
+	return 0;
 }
 
 static const struct i2c_device_id mcp3021_id[] = {
@@ -198,7 +198,8 @@ static struct i2c_driver mcp3021_driver = {
 		.name = "mcp3021",
 		.of_match_table = of_match_ptr(of_mcp3021_match),
 	},
-	.probe = mcp3021_probe,
+	.probe_new = mcp3021_probe,
+	.remove = mcp3021_remove,
 	.id_table = mcp3021_id,
 };
 

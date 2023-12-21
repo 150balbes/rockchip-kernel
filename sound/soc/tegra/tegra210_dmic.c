@@ -339,7 +339,7 @@ static struct snd_soc_dai_driver tegra210_dmic_dais[] = {
 				   SNDRV_PCM_FMTBIT_S32_LE,
 		},
 		.ops = &tegra210_dmic_dai_ops,
-		.symmetric_rate = 1,
+		.symmetric_rates = 1,
 	},
 };
 
@@ -436,7 +436,7 @@ static bool tegra210_dmic_wr_reg(struct device *dev, unsigned int reg)
 		return true;
 	default:
 		return false;
-	}
+	};
 }
 
 static bool tegra210_dmic_rd_reg(struct device *dev, unsigned int reg)
@@ -452,7 +452,7 @@ static bool tegra210_dmic_rd_reg(struct device *dev, unsigned int reg)
 		return true;
 	default:
 		return false;
-	}
+	};
 }
 
 static bool tegra210_dmic_volatile_reg(struct device *dev, unsigned int reg)
@@ -467,7 +467,7 @@ static bool tegra210_dmic_volatile_reg(struct device *dev, unsigned int reg)
 		return true;
 	default:
 		return false;
-	}
+	};
 }
 
 static const struct regmap_config tegra210_dmic_regmap_config = {
@@ -534,9 +534,11 @@ static int tegra210_dmic_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void tegra210_dmic_remove(struct platform_device *pdev)
+static int tegra210_dmic_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct dev_pm_ops tegra210_dmic_pm_ops = {
@@ -559,7 +561,7 @@ static struct platform_driver tegra210_dmic_driver = {
 		.pm = &tegra210_dmic_pm_ops,
 	},
 	.probe = tegra210_dmic_probe,
-	.remove_new = tegra210_dmic_remove,
+	.remove = tegra210_dmic_remove,
 };
 module_platform_driver(tegra210_dmic_driver)
 

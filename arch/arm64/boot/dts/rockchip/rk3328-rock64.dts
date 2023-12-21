@@ -10,11 +10,6 @@
 	model = "Pine64 Rock64";
 	compatible = "pine64,rock64", "rockchip,rk3328";
 
-	aliases {
-		mmc0 = &sdmmc;
-		mmc1 = &emmc;
-	};
-
 	chosen {
 		stdout-path = "serial2:1500000n8";
 	};
@@ -23,6 +18,13 @@
 		compatible = "fixed-clock";
 		clock-frequency = <125000000>;
 		clock-output-names = "gmac_clkin";
+		#clock-cells = <0>;
+	};
+
+	xin32k: xin32k {
+		compatible = "fixed-clock";
+		clock-frequency = <32768>;
+		clock-output-names = "xin32k";
 		#clock-cells = <0>;
 	};
 
@@ -37,13 +39,23 @@
 		vin-supply = <&vcc_io>;
 	};
 
-	/* Common enable line for all of the rails mentioned in the labels */
-	vcc_host_5v: vcc_host1_5v: vcc_otg_5v: vcc-host-5v-regulator {
+	vcc_host_5v: vcc-host-5v-regulator {
 		compatible = "regulator-fixed";
 		gpio = <&gpio0 RK_PA2 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb20_host_drv>;
 		regulator-name = "vcc_host_5v";
+		regulator-always-on;
+		regulator-boot-on;
+		vin-supply = <&vcc_sys>;
+	};
+
+	vcc_host1_5v: vcc_otg_5v: vcc-host1-5v-regulator {
+		compatible = "regulator-fixed";
+		gpio = <&gpio0 RK_PA2 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb20_host_drv>;
+		regulator-name = "vcc_host1_5v";
 		regulator-always-on;
 		regulator-boot-on;
 		vin-supply = <&vcc_sys>;
@@ -79,32 +91,34 @@
 		};
 	};
 
-	spdif_sound: spdif-sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "SPDIF";
-
-		simple-audio-card,cpu {
-			sound-dai = <&spdif>;
-		};
-
-		simple-audio-card,codec {
-			sound-dai = <&spdif_dit>;
-		};
+	sound {
+		compatible = "audio-graph-card";
+		label = "rockchip,rk3328";
+		dais = <&i2s1_p0
+			&spdif_p0>;
 	};
 
-	spdif_dit: spdif-dit {
+	spdif-dit {
 		compatible = "linux,spdif-dit";
 		#sound-dai-cells = <0>;
-	};
-};
 
-&analog_sound {
-	status = "okay";
+		port {
+			dit_p0_0: endpoint {
+				remote-endpoint = <&spdif_p0_0>;
+			};
+		};
+	};
 };
 
 &codec {
 	mute-gpios = <&grf_gpio 0 GPIO_ACTIVE_LOW>;
 	status = "okay";
+
+	port@0 {
+		codec_p0_0: endpoint {
+			remote-endpoint = <&i2s1_p0_0>;
+		};
+	};
 };
 
 &cpu0 {
@@ -156,10 +170,6 @@
 	status = "okay";
 };
 
-&hdmi_sound {
-	status = "okay";
-};
-
 &hdmiphy {
 	status = "okay";
 };
@@ -173,7 +183,7 @@
 		interrupt-parent = <&gpio2>;
 		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
 		#clock-cells = <1>;
-		clock-output-names = "xin32k", "rk805-clkout2";
+		clock-output-names = "rk805-clkout1", "rk805-clkout2";
 		gpio-controller;
 		#gpio-cells = <2>;
 		pinctrl-names = "default";
@@ -275,12 +285,16 @@
 	};
 };
 
-&i2s0 {
-	status = "okay";
-};
-
 &i2s1 {
 	status = "okay";
+
+	i2s1_p0: port {
+		i2s1_p0_0: endpoint {
+			dai-format = "i2s";
+			mclk-fs = <256>;
+			remote-endpoint = <&codec_p0_0>;
+		};
+	};
 };
 
 &io_domains {
@@ -330,12 +344,18 @@
 &spdif {
 	pinctrl-0 = <&spdifm0_tx>;
 	status = "okay";
+
+	spdif_p0: port {
+		spdif_p0_0: endpoint {
+			remote-endpoint = <&dit_p0_0>;
+		};
+	};
 };
 
 &spi0 {
 	status = "okay";
 
-	flash@0 {
+	spiflash@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
 

@@ -866,23 +866,23 @@ EXPORT_SYMBOL_GPL(sprd_mcdt_chan_dma_disable);
 struct sprd_mcdt_chan *sprd_mcdt_request_chan(u8 channel,
 					      enum sprd_mcdt_channel_type type)
 {
-	struct sprd_mcdt_chan *temp;
+	struct sprd_mcdt_chan *temp, *chan = NULL;
 
 	mutex_lock(&sprd_mcdt_list_mutex);
 
 	list_for_each_entry(temp, &sprd_mcdt_chan_list, list) {
 		if (temp->type == type && temp->id == channel) {
-			list_del_init(&temp->list);
+			chan = temp;
 			break;
 		}
 	}
 
-	if (list_entry_is_head(temp, &sprd_mcdt_chan_list, list))
-		temp = NULL;
+	if (chan)
+		list_del(&chan->list);
 
 	mutex_unlock(&sprd_mcdt_list_mutex);
 
-	return temp;
+	return chan;
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_request_chan);
 
@@ -949,7 +949,8 @@ static int sprd_mcdt_probe(struct platform_device *pdev)
 	if (!mcdt)
 		return -ENOMEM;
 
-	mcdt->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mcdt->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mcdt->base))
 		return PTR_ERR(mcdt->base);
 
@@ -973,7 +974,7 @@ static int sprd_mcdt_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void sprd_mcdt_remove(struct platform_device *pdev)
+static int sprd_mcdt_remove(struct platform_device *pdev)
 {
 	struct sprd_mcdt_chan *chan, *temp;
 
@@ -983,6 +984,8 @@ static void sprd_mcdt_remove(struct platform_device *pdev)
 		list_del(&chan->list);
 
 	mutex_unlock(&sprd_mcdt_list_mutex);
+
+	return 0;
 }
 
 static const struct of_device_id sprd_mcdt_of_match[] = {
@@ -993,7 +996,7 @@ MODULE_DEVICE_TABLE(of, sprd_mcdt_of_match);
 
 static struct platform_driver sprd_mcdt_driver = {
 	.probe = sprd_mcdt_probe,
-	.remove_new = sprd_mcdt_remove,
+	.remove = sprd_mcdt_remove,
 	.driver = {
 		.name = "sprd-mcdt",
 		.of_match_table = sprd_mcdt_of_match,

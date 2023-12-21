@@ -6,10 +6,10 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
-#include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 
@@ -23,8 +23,7 @@ struct display_connector {
 	struct gpio_desc	*hpd_gpio;
 	int			hpd_irq;
 
-	struct regulator	*supply;
-	struct gpio_desc	*ddc_en;
+	struct regulator	*dp_pwr;
 };
 
 static inline struct display_connector *
@@ -190,18 +189,6 @@ static irqreturn_t display_connector_hpd_irq(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static int display_connector_get_supply(struct platform_device *pdev,
-					struct display_connector *conn,
-					const char *name)
-{
-	conn->supply = devm_regulator_get_optional(&pdev->dev, name);
-
-	if (conn->supply == ERR_PTR(-ENODEV))
-		conn->supply = NULL;
-
-	return PTR_ERR_OR_ZERO(conn->supply);
-}
-
 static int display_connector_probe(struct platform_device *pdev)
 {
 	struct display_connector *conn;
@@ -282,9 +269,12 @@ static int display_connector_probe(struct platform_device *pdev)
 	    type == DRM_MODE_CONNECTOR_DisplayPort) {
 		conn->hpd_gpio = devm_gpiod_get_optional(&pdev->dev, "hpd",
 							 GPIOD_IN);
-		if (IS_ERR(conn->hpd_gpio))
-			return dev_err_probe(&pdev->dev, PTR_ERR(conn->hpd_gpio),
-					     "Unable to retrieve HPD GPIO\n");
+		if (IS_ERR(conn->hpd_gpio)) {
+			if (PTR_ERR(conn->hpd_gpio) != -EPROBE_DEFER)
+				dev_err(&pdev->dev,
+					"Unable to retrieve HPD GPIO\n");
+			return PTR_ERR(conn->hpd_gpio);
+		}
 
 		conn->hpd_irq = gpiod_to_irq(conn->hpd_gpio);
 	} else {
@@ -327,33 +317,31 @@ static int display_connector_probe(struct platform_device *pdev)
 	if (type == DRM_MODE_CONNECTOR_DisplayPort) {
 		int ret;
 
-		ret = display_connector_get_supply(pdev, conn, "dp-pwr");
-		if (ret < 0)
-			return dev_err_probe(&pdev->dev, ret, "failed to get DP PWR regulator\n");
-	}
+		conn->dp_pwr = devm_regulator_get_optional(&pdev->dev, "dp-pwr");
 
-	/* enable DDC */
-	if (type == DRM_MODE_CONNECTOR_HDMIA) {
-		int ret;
+		if (IS_ERR(conn->dp_pwr)) {
+			ret = PTR_ERR(conn->dp_pwr);
 
-		conn->ddc_en = devm_gpiod_get_optional(&pdev->dev, "ddc-en",
-						       GPIOD_OUT_HIGH);
+			switch (ret) {
+			case -ENODEV:
+				conn->dp_pwr = NULL;
+				break;
 
-		if (IS_ERR(conn->ddc_en)) {
-			dev_err(&pdev->dev, "Couldn't get ddc-en gpio\n");
-			return PTR_ERR(conn->ddc_en);
+			case -EPROBE_DEFER:
+				return -EPROBE_DEFER;
+
+			default:
+				dev_err(&pdev->dev, "failed to get DP PWR regulator: %d\n", ret);
+				return ret;
+			}
 		}
 
-		ret = display_connector_get_supply(pdev, conn, "hdmi-pwr");
-		if (ret < 0)
-			return dev_err_probe(&pdev->dev, ret, "failed to get HDMI +5V Power regulator\n");
-	}
-
-	if (conn->supply) {
-		ret = regulator_enable(conn->supply);
-		if (ret) {
-			dev_err(&pdev->dev, "failed to enable PWR regulator: %d\n", ret);
-			return ret;
+		if (conn->dp_pwr) {
+			ret = regulator_enable(conn->dp_pwr);
+			if (ret) {
+				dev_err(&pdev->dev, "failed to enable DP PWR regulator: %d\n", ret);
+				return ret;
+			}
 		}
 	}
 
@@ -381,20 +369,19 @@ static int display_connector_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void display_connector_remove(struct platform_device *pdev)
+static int display_connector_remove(struct platform_device *pdev)
 {
 	struct display_connector *conn = platform_get_drvdata(pdev);
 
-	if (conn->ddc_en)
-		gpiod_set_value(conn->ddc_en, 0);
-
-	if (conn->supply)
-		regulator_disable(conn->supply);
+	if (conn->dp_pwr)
+		regulator_disable(conn->dp_pwr);
 
 	drm_bridge_remove(&conn->bridge);
 
 	if (!IS_ERR(conn->bridge.ddc))
 		i2c_put_adapter(conn->bridge.ddc);
+
+	return 0;
 }
 
 static const struct of_device_id display_connector_match[] = {
@@ -423,7 +410,7 @@ MODULE_DEVICE_TABLE(of, display_connector_match);
 
 static struct platform_driver display_connector_driver = {
 	.probe	= display_connector_probe,
-	.remove_new = display_connector_remove,
+	.remove	= display_connector_remove,
 	.driver		= {
 		.name		= "display-connector",
 		.of_match_table	= display_connector_match,

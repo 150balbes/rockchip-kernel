@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/blkdev.h>
 #include <linux/freezer.h>
+#include <linux/kthread.h>
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
 #include <linux/backing-dev.h>
@@ -33,6 +34,8 @@ void mmc_cqe_check_busy(struct mmc_queue *mq)
 {
 	if ((mq->cqe_busy & MMC_CQE_DCMD_BUSY) && !mmc_cqe_dcmd_busy(mq))
 		mq->cqe_busy &= ~MMC_CQE_DCMD_BUSY;
+
+	mq->cqe_busy &= ~MMC_CQE_QUEUE_FULL;
 }
 
 static inline bool mmc_cqe_can_dcmd(struct mmc_host *host)
@@ -48,7 +51,6 @@ static enum mmc_issue_type mmc_cqe_issue_type(struct mmc_host *host,
 	case REQ_OP_DRV_OUT:
 	case REQ_OP_DISCARD:
 	case REQ_OP_SECURE_ERASE:
-	case REQ_OP_WRITE_ZEROES:
 		return MMC_ISSUE_SYNC;
 	case REQ_OP_FLUSH:
 		return mmc_cqe_can_dcmd(host) ? MMC_ISSUE_DCMD : MMC_ISSUE_SYNC;
@@ -61,7 +63,7 @@ enum mmc_issue_type mmc_issue_type(struct mmc_queue *mq, struct request *req)
 {
 	struct mmc_host *host = mq->card->host;
 
-	if (host->cqe_enabled && !host->hsq_enabled)
+	if (mq->use_cqe && !host->hsq_enabled)
 		return mmc_cqe_issue_type(host, req);
 
 	if (req_op(req) == REQ_OP_READ || req_op(req) == REQ_OP_WRITE)
@@ -69,6 +71,7 @@ enum mmc_issue_type mmc_issue_type(struct mmc_queue *mq, struct request *req)
 
 	return MMC_ISSUE_SYNC;
 }
+EXPORT_SYMBOL_GPL(mmc_issue_type);
 
 static void __mmc_cqe_recovery_notifier(struct mmc_queue *mq)
 {
@@ -117,7 +120,8 @@ static enum blk_eh_timer_return mmc_cqe_timed_out(struct request *req)
 	}
 }
 
-static enum blk_eh_timer_return mmc_mq_timed_out(struct request *req)
+static enum blk_eh_timer_return mmc_mq_timed_out(struct request *req,
+						 bool reserved)
 {
 	struct request_queue *q = req->q;
 	struct mmc_queue *mq = q->queuedata;
@@ -127,7 +131,7 @@ static enum blk_eh_timer_return mmc_mq_timed_out(struct request *req)
 	bool ignore_tout;
 
 	spin_lock_irqsave(&mq->lock, flags);
-	ignore_tout = mq->recovery_needed || !host->cqe_enabled || host->hsq_enabled;
+	ignore_tout = mq->recovery_needed || !mq->use_cqe || host->hsq_enabled;
 	spin_unlock_irqrestore(&mq->lock, flags);
 
 	return ignore_tout ? BLK_EH_RESET_TIMER : mmc_cqe_timed_out(req);
@@ -144,7 +148,7 @@ static void mmc_mq_recovery_handler(struct work_struct *work)
 
 	mq->in_recovery = true;
 
-	if (host->cqe_enabled && !host->hsq_enabled)
+	if (mq->use_cqe && !host->hsq_enabled)
 		mmc_blk_cqe_recovery(mq);
 	else
 		mmc_blk_mq_recovery(mq);
@@ -163,7 +167,7 @@ static void mmc_mq_recovery_handler(struct work_struct *work)
 	blk_mq_run_hw_queues(q, true);
 }
 
-static struct scatterlist *mmc_alloc_sg(unsigned short sg_len, gfp_t gfp)
+static struct scatterlist *mmc_alloc_sg(int sg_len, gfp_t gfp)
 {
 	struct scatterlist *sg;
 
@@ -183,45 +187,62 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 	if (!max_discard)
 		return;
 
+	blk_queue_flag_set(QUEUE_FLAG_DISCARD, q);
 	blk_queue_max_discard_sectors(q, max_discard);
 	q->limits.discard_granularity = card->pref_erase << 9;
 	/* granularity must not be greater than max. discard */
 	if (card->pref_erase > max_discard)
 		q->limits.discard_granularity = SECTOR_SIZE;
 	if (mmc_can_secure_erase_trim(card))
-		blk_queue_max_secure_erase_sectors(q, max_discard);
-	if (mmc_can_trim(card) && card->erased_byte == 0)
-		blk_queue_max_write_zeroes_sectors(q, max_discard);
+		blk_queue_flag_set(QUEUE_FLAG_SECERASE, q);
 }
 
-static unsigned short mmc_get_max_segments(struct mmc_host *host)
+static unsigned int mmc_get_max_segments(struct mmc_host *host)
 {
 	return host->can_dma_map_merge ? MMC_DMA_MAP_MERGE_SEGMENTS :
 					 host->max_segs;
 }
 
-static int mmc_mq_init_request(struct blk_mq_tag_set *set, struct request *req,
-			       unsigned int hctx_idx, unsigned int numa_node)
+/**
+ * mmc_init_request() - initialize the MMC-specific per-request data
+ * @mq: the request queue
+ * @req: the request
+ * @gfp: memory allocation policy
+ */
+static int __mmc_init_request(struct mmc_queue *mq, struct request *req,
+			      gfp_t gfp)
 {
 	struct mmc_queue_req *mq_rq = req_to_mmc_queue_req(req);
-	struct mmc_queue *mq = set->driver_data;
 	struct mmc_card *card = mq->card;
 	struct mmc_host *host = card->host;
 
-	mq_rq->sg = mmc_alloc_sg(mmc_get_max_segments(host), GFP_KERNEL);
+	mq_rq->sg = mmc_alloc_sg(mmc_get_max_segments(host), gfp);
 	if (!mq_rq->sg)
 		return -ENOMEM;
 
 	return 0;
 }
 
-static void mmc_mq_exit_request(struct blk_mq_tag_set *set, struct request *req,
-				unsigned int hctx_idx)
+static void mmc_exit_request(struct request_queue *q, struct request *req)
 {
 	struct mmc_queue_req *mq_rq = req_to_mmc_queue_req(req);
 
 	kfree(mq_rq->sg);
 	mq_rq->sg = NULL;
+}
+
+static int mmc_mq_init_request(struct blk_mq_tag_set *set, struct request *req,
+			       unsigned int hctx_idx, unsigned int numa_node)
+{
+	return __mmc_init_request(set->driver_data, req, GFP_KERNEL);
+}
+
+static void mmc_mq_exit_request(struct blk_mq_tag_set *set, struct request *req,
+				unsigned int hctx_idx)
+{
+	struct mmc_queue *mq = set->driver_data;
+
+	mmc_exit_request(mq->queue, req);
 }
 
 static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -235,7 +256,7 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 	enum mmc_issue_type issue_type;
 	enum mmc_issued issued;
 	bool get_card, cqe_retune_ok;
-	blk_status_t ret;
+	int ret;
 
 	if (mmc_card_removed(mq->card)) {
 		req->rq_flags |= RQF_QUIET;
@@ -298,7 +319,7 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (get_card)
 		mmc_get_card(card, &mq->ctx);
 
-	if (host->cqe_enabled) {
+	if (mq->use_cqe) {
 		host->retune_now = host->need_retune && cqe_retune_ok &&
 				   !host->hold_retune;
 	}
@@ -398,7 +419,11 @@ static inline bool mmc_merge_capable(struct mmc_host *host)
 }
 
 /* Set queue depth to get a reasonable value for q->nr_requests */
+#ifdef CONFIG_MMC_QUEUE_DEPTH
+#define MMC_QUEUE_DEPTH CONFIG_MMC_QUEUE_DEPTH
+#else
 #define MMC_QUEUE_DEPTH 64
+#endif
 
 /**
  * mmc_init_queue - initialise a queue structure.
@@ -407,13 +432,13 @@ static inline bool mmc_merge_capable(struct mmc_host *host)
  *
  * Initialise a MMC card request queue.
  */
-struct gendisk *mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
+int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
 {
 	struct mmc_host *host = card->host;
-	struct gendisk *disk;
 	int ret;
 
 	mq->card = card;
+	mq->use_cqe = host->cqe_enabled;
 	
 	spin_lock_init(&mq->lock);
 
@@ -423,7 +448,7 @@ struct gendisk *mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
 	 * The queue depth for CQE must match the hardware because the request
 	 * tag is used to index the hardware queue.
 	 */
-	if (host->cqe_enabled && !host->hsq_enabled)
+	if (mq->use_cqe && !host->hsq_enabled)
 		mq->tag_set.queue_depth =
 			min_t(int, card->ext_csd.cmdq_depth, host->cqe_qdepth);
 	else
@@ -448,22 +473,26 @@ struct gendisk *mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
 
 	ret = blk_mq_alloc_tag_set(&mq->tag_set);
 	if (ret)
-		return ERR_PTR(ret);
-		
+		return ret;
 
-	disk = blk_mq_alloc_disk(&mq->tag_set, mq);
-	if (IS_ERR(disk)) {
-		blk_mq_free_tag_set(&mq->tag_set);
-		return disk;
+	mq->queue = blk_mq_init_queue(&mq->tag_set);
+	if (IS_ERR(mq->queue)) {
+		ret = PTR_ERR(mq->queue);
+		goto free_tag_set;
 	}
-	mq->queue = disk->queue;
 
 	if (mmc_host_is_spi(host) && host->use_spi_crc)
 		blk_queue_flag_set(QUEUE_FLAG_STABLE_WRITES, mq->queue);
+
+	mq->queue->queuedata = mq;
 	blk_queue_rq_timeout(mq->queue, 60 * HZ);
 
 	mmc_setup_queue(mq, card);
-	return disk;
+	return 0;
+
+free_tag_set:
+	blk_mq_free_tag_set(&mq->tag_set);
+	return ret;
 }
 
 void mmc_queue_suspend(struct mmc_queue *mq)
@@ -494,13 +523,7 @@ void mmc_cleanup_queue(struct mmc_queue *mq)
 	if (blk_queue_quiesced(q))
 		blk_mq_unquiesce_queue(q);
 
-	/*
-	 * If the recovery completes the last (and only remaining) request in
-	 * the queue, and the card has been removed, we could end up here with
-	 * the recovery not quite finished yet, so cancel it.
-	 */
-	cancel_work_sync(&mq->recovery_work);
-
+	blk_cleanup_queue(q);
 	blk_mq_free_tag_set(&mq->tag_set);
 
 	/*

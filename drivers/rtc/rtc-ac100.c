@@ -528,7 +528,7 @@ static irqreturn_t ac100_rtc_irq(int irq, void *data)
 	unsigned int val = 0;
 	int ret;
 
-	rtc_lock(chip->rtc);
+	mutex_lock(&chip->rtc->ops_lock);
 
 	/* read status */
 	ret = regmap_read(regmap, AC100_ALM_INT_STA, &val);
@@ -551,7 +551,7 @@ static irqreturn_t ac100_rtc_irq(int irq, void *data)
 	}
 
 out:
-	rtc_unlock(chip->rtc);
+	mutex_unlock(&chip->rtc->ops_lock);
 	return IRQ_HANDLED;
 }
 
@@ -610,14 +610,16 @@ static int ac100_rtc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return devm_rtc_register_device(chip->rtc);
+	return rtc_register_device(chip->rtc);
 }
 
-static void ac100_rtc_remove(struct platform_device *pdev)
+static int ac100_rtc_remove(struct platform_device *pdev)
 {
 	struct ac100_rtc_dev *chip = platform_get_drvdata(pdev);
 
 	ac100_rtc_unregister_clks(chip);
+
+	return 0;
 }
 
 static const struct of_device_id ac100_rtc_match[] = {
@@ -628,7 +630,7 @@ MODULE_DEVICE_TABLE(of, ac100_rtc_match);
 
 static struct platform_driver ac100_rtc_driver = {
 	.probe		= ac100_rtc_probe,
-	.remove_new	= ac100_rtc_remove,
+	.remove		= ac100_rtc_remove,
 	.driver		= {
 		.name		= "ac100-rtc",
 		.of_match_table	= of_match_ptr(ac100_rtc_match),

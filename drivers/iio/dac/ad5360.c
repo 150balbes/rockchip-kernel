@@ -79,13 +79,13 @@ struct ad5360_state {
 	struct mutex			lock;
 
 	/*
-	 * DMA (thus cache coherency maintenance) may require the
+	 * DMA (thus cache coherency maintenance) requires the
 	 * transfer buffers to live in their own cache lines.
 	 */
 	union {
 		__be32 d32;
 		u8 d8[4];
-	} data[2] __aligned(IIO_DMA_MINALIGN);
+	} data[2] ____cacheline_aligned;
 };
 
 enum ad5360_type {
@@ -255,7 +255,7 @@ static ssize_t ad5360_read_dac_powerdown(struct device *dev,
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ad5360_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", (bool)(st->ctrl & AD5360_SF_CTRL_PWR_DOWN));
+	return sprintf(buf, "%d\n", (bool)(st->ctrl & AD5360_SF_CTRL_PWR_DOWN));
 }
 
 static int ad5360_update_ctrl(struct iio_dev *indio_dev, unsigned int set,
@@ -284,7 +284,7 @@ static ssize_t ad5360_write_dac_powerdown(struct device *dev,
 	bool pwr_down;
 	int ret;
 
-	ret = kstrtobool(buf, &pwr_down);
+	ret = strtobool(buf, &pwr_down);
 	if (ret)
 		return ret;
 
@@ -521,7 +521,7 @@ error_free_channels:
 	return ret;
 }
 
-static void ad5360_remove(struct spi_device *spi)
+static int ad5360_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ad5360_state *st = iio_priv(indio_dev);
@@ -531,6 +531,8 @@ static void ad5360_remove(struct spi_device *spi)
 	kfree(indio_dev->channels);
 
 	regulator_bulk_disable(st->chip_info->num_vrefs, st->vref_reg);
+
+	return 0;
 }
 
 static const struct spi_device_id ad5360_ids[] = {

@@ -221,6 +221,6 @@ alpha_rtc_init(void)
 		rtc->ops = &remote_rtc_ops;
 #endif
 
-	return devm_rtc_register_device(rtc);
+	return rtc_register_device(rtc);
 }
 device_initcall(alpha_rtc_init);

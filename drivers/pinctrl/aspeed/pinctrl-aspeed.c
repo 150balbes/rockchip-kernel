@@ -5,7 +5,6 @@
 
 #include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include "../core.h"
@@ -109,8 +108,7 @@ static int aspeed_sig_expr_disable(struct aspeed_pinmux_data *ctx,
 }
 
 /**
- * aspeed_disable_sig() - Disable a signal on a pin by disabling all provided
- * signal expressions.
+ * Disable a signal on a pin by disabling all provided signal expressions.
  *
  * @ctx: The pinmux context
  * @exprs: The list of signal expressions (from a priority level on a pin)
@@ -123,7 +121,7 @@ static int aspeed_disable_sig(struct aspeed_pinmux_data *ctx,
 	int ret = 0;
 
 	if (!exprs)
-		return -EINVAL;
+		return true;
 
 	while (*exprs && !ret) {
 		ret = aspeed_sig_expr_disable(ctx, *exprs);
@@ -134,8 +132,8 @@ static int aspeed_disable_sig(struct aspeed_pinmux_data *ctx,
 }
 
 /**
- * aspeed_find_expr_by_name - Search for the signal expression needed to
- * enable the pin's signal for the requested function.
+ * Search for the signal expression needed to enable the pin's signal for the
+ * requested function.
  *
  * @exprs: List of signal expressions (haystack)
  * @name: The name of the requested function (needle)

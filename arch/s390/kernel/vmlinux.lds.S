@@ -5,21 +5,15 @@
 
 #include <asm/thread_info.h>
 #include <asm/page.h>
-#include <asm/ftrace.lds.h>
 
 /*
  * Put .bss..swapper_pg_dir as the first thing in .bss. This will
  * make sure it has 16k alignment.
  */
-#define BSS_FIRST_SECTIONS *(.bss..swapper_pg_dir) \
-			   *(.bss..invalid_pg_dir)
-
-#define RO_EXCEPTION_TABLE_ALIGN	16
+#define BSS_FIRST_SECTIONS *(.bss..swapper_pg_dir)
 
 /* Handle ro_after_init data on our own. */
 #define RO_AFTER_INIT_DATA
-
-#define RUNTIME_DISCARD_EXIT
 
 #define EMITS_PT_NOTE
 
@@ -46,12 +40,13 @@ SECTIONS
 		HEAD_TEXT
 		TEXT_TEXT
 		SCHED_TEXT
+		CPUIDLE_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
 		IRQENTRY_TEXT
 		SOFTIRQENTRY_TEXT
-		FTRACE_HOTPATCH_TRAMPOLINES_TEXT
 		*(.text.*_indirect_*)
+		*(.fixup)
 		*(.gnu.warning)
 		. = ALIGN(PAGE_SIZE);
 		_etext = .;		/* End of text section */
@@ -68,20 +63,13 @@ SECTIONS
 		 *(.data..ro_after_init)
 		JUMP_TABLE_DATA
 	} :data
+	EXCEPTION_TABLE(16)
 	. = ALIGN(PAGE_SIZE);
 	__end_ro_after_init = .;
 
 	RW_DATA(0x100, PAGE_SIZE, THREAD_SIZE)
 	BOOT_DATA_PRESERVED
 
-	. = ALIGN(8);
-	.amode31.refs : {
-		_start_amode31_refs = .;
-		*(.amode31.refs)
-		_end_amode31_refs = .;
-	}
-
-	. = ALIGN(PAGE_SIZE);
 	_edata = .;		/* End of data section */
 
 	/* will be freed after init */
@@ -148,32 +136,6 @@ SECTIONS
 
 	BOOT_DATA
 
-	/*
-	 * .amode31 section for code, data, ex_table that need to stay
-	 * below 2 GB, even when the kernel is relocated above 2 GB.
-	 */
-	. = ALIGN(PAGE_SIZE);
-	_samode31 = .;
-	.amode31.text : {
-		_stext_amode31 = .;
-		*(.amode31.text)
-		*(.amode31.text.*_indirect_*)
-		. = ALIGN(PAGE_SIZE);
-		_etext_amode31 = .;
-	}
-	. = ALIGN(16);
-	.amode31.ex_table : {
-		_start_amode31_ex_table = .;
-		KEEP(*(.amode31.ex_table))
-		_stop_amode31_ex_table = .;
-	}
-	. = ALIGN(PAGE_SIZE);
-	.amode31.data : {
-		*(.amode31.data)
-	}
-	. = ALIGN(PAGE_SIZE);
-	_eamode31 = .;
-
 	/* early.c uses stsi, which requires page aligned data. */
 	. = ALIGN(PAGE_SIZE);
 	INIT_DATA_SECTION(0x100)
@@ -196,7 +158,6 @@ SECTIONS
 
 	BSS_SECTION(PAGE_SIZE, 4 * PAGE_SIZE, PAGE_SIZE)
 
-	. = ALIGN(PAGE_SIZE);
 	_end = . ;
 
 	/*
@@ -216,17 +177,6 @@ SECTIONS
 		QUAD(__dynsym_start)				/* dynsym_start */
 		QUAD(__rela_dyn_start)				/* rela_dyn_start */
 		QUAD(__rela_dyn_end)				/* rela_dyn_end */
-		QUAD(_eamode31 - _samode31)			/* amode31_size */
-		QUAD(init_mm)
-		QUAD(swapper_pg_dir)
-		QUAD(invalid_pg_dir)
-#ifdef CONFIG_KASAN
-		QUAD(kasan_early_shadow_page)
-		QUAD(kasan_early_shadow_pte)
-		QUAD(kasan_early_shadow_pmd)
-		QUAD(kasan_early_shadow_pud)
-		QUAD(kasan_early_shadow_p4d)
-#endif
 	} :NONE
 
 	/* Debugging sections.	*/
@@ -238,6 +188,5 @@ SECTIONS
 	DISCARDS
 	/DISCARD/ : {
 		*(.eh_frame)
-		*(.interp)
 	}
 }

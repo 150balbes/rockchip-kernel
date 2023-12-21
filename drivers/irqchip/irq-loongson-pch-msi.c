@@ -15,8 +15,6 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 
-static int nr_pics;
-
 struct pch_msi_data {
 	struct mutex	msi_map_lock;
 	phys_addr_t	doorbell;
@@ -24,8 +22,6 @@ struct pch_msi_data {
 	u32		num_irqs;	/* The number of vectors for MSIs */
 	unsigned long	*msi_map;
 };
-
-static struct fwnode_handle *pch_msi_handle[MAX_IO_PICS];
 
 static void pch_msi_mask_msi_irq(struct irq_data *d)
 {
@@ -158,23 +154,24 @@ static const struct irq_domain_ops pch_msi_middle_domain_ops = {
 };
 
 static int pch_msi_init_domains(struct pch_msi_data *priv,
-				struct irq_domain *parent,
-				struct fwnode_handle *domain_handle)
+				struct device_node *node,
+				struct irq_domain *parent)
 {
 	struct irq_domain *middle_domain, *msi_domain;
 
-	middle_domain = irq_domain_create_hierarchy(parent, 0, priv->num_irqs,
-						    domain_handle,
-						    &pch_msi_middle_domain_ops,
-						    priv);
+	middle_domain = irq_domain_create_linear(of_node_to_fwnode(node),
+						priv->num_irqs,
+						&pch_msi_middle_domain_ops,
+						priv);
 	if (!middle_domain) {
 		pr_err("Failed to create the MSI middle domain\n");
 		return -ENOMEM;
 	}
 
+	middle_domain->parent = parent;
 	irq_domain_update_bus_token(middle_domain, DOMAIN_BUS_NEXUS);
 
-	msi_domain = pci_msi_create_irq_domain(domain_handle,
+	msi_domain = pci_msi_create_irq_domain(of_node_to_fwnode(node),
 					       &pch_msi_domain_info,
 					       middle_domain);
 	if (!msi_domain) {
@@ -186,51 +183,13 @@ static int pch_msi_init_domains(struct pch_msi_data *priv,
 	return 0;
 }
 
-static int pch_msi_init(phys_addr_t msg_address, int irq_base, int irq_count,
-			struct irq_domain *parent_domain, struct fwnode_handle *domain_handle)
+static int pch_msi_init(struct device_node *node,
+			    struct device_node *parent)
 {
-	int ret;
 	struct pch_msi_data *priv;
-
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
-
-	mutex_init(&priv->msi_map_lock);
-
-	priv->doorbell = msg_address;
-	priv->irq_first = irq_base;
-	priv->num_irqs = irq_count;
-
-	priv->msi_map = bitmap_zalloc(priv->num_irqs, GFP_KERNEL);
-	if (!priv->msi_map)
-		goto err_priv;
-
-	pr_debug("Registering %d MSIs, starting at %d\n",
-		 priv->num_irqs, priv->irq_first);
-
-	ret = pch_msi_init_domains(priv, parent_domain, domain_handle);
-	if (ret)
-		goto err_map;
-
-	pch_msi_handle[nr_pics++] = domain_handle;
-	return 0;
-
-err_map:
-	bitmap_free(priv->msi_map);
-err_priv:
-	kfree(priv);
-
-	return -EINVAL;
-}
-
-#ifdef CONFIG_OF
-static int pch_msi_of_init(struct device_node *node, struct device_node *parent)
-{
-	int err;
-	int irq_base, irq_count;
-	struct resource res;
 	struct irq_domain *parent_domain;
+	struct resource res;
+	int ret;
 
 	parent_domain = irq_find_host(parent);
 	if (!parent_domain) {
@@ -238,55 +197,54 @@ static int pch_msi_of_init(struct device_node *node, struct device_node *parent)
 		return -ENXIO;
 	}
 
-	if (of_address_to_resource(node, 0, &res)) {
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	mutex_init(&priv->msi_map_lock);
+
+	ret = of_address_to_resource(node, 0, &res);
+	if (ret) {
 		pr_err("Failed to allocate resource\n");
-		return -EINVAL;
+		goto err_priv;
 	}
 
-	if (of_property_read_u32(node, "loongson,msi-base-vec", &irq_base)) {
+	priv->doorbell = res.start;
+
+	if (of_property_read_u32(node, "loongson,msi-base-vec",
+				&priv->irq_first)) {
 		pr_err("Unable to parse MSI vec base\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_priv;
 	}
 
-	if (of_property_read_u32(node, "loongson,msi-num-vecs", &irq_count)) {
+	if (of_property_read_u32(node, "loongson,msi-num-vecs",
+				&priv->num_irqs)) {
 		pr_err("Unable to parse MSI vec number\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_priv;
 	}
 
-	err = pch_msi_init(res.start, irq_base, irq_count, parent_domain, of_node_to_fwnode(node));
-	if (err < 0)
-		return err;
+	priv->msi_map = bitmap_zalloc(priv->num_irqs, GFP_KERNEL);
+	if (!priv->msi_map) {
+		ret = -ENOMEM;
+		goto err_priv;
+	}
+
+	pr_debug("Registering %d MSIs, starting at %d\n",
+		 priv->num_irqs, priv->irq_first);
+
+	ret = pch_msi_init_domains(priv, node, parent_domain);
+	if (ret)
+		goto err_map;
 
 	return 0;
-}
 
-IRQCHIP_DECLARE(pch_msi, "loongson,pch-msi-1.0", pch_msi_of_init);
-#endif
-
-#ifdef CONFIG_ACPI
-struct fwnode_handle *get_pch_msi_handle(int pci_segment)
-{
-	int i;
-
-	for (i = 0; i < MAX_IO_PICS; i++) {
-		if (msi_group[i].pci_segment == pci_segment)
-			return pch_msi_handle[i];
-	}
-	return NULL;
-}
-
-int __init pch_msi_acpi_init(struct irq_domain *parent,
-					struct acpi_madt_msi_pic *acpi_pchmsi)
-{
-	int ret;
-	struct fwnode_handle *domain_handle;
-
-	domain_handle = irq_domain_alloc_fwnode(&acpi_pchmsi->msg_address);
-	ret = pch_msi_init(acpi_pchmsi->msg_address, acpi_pchmsi->start,
-				acpi_pchmsi->count, parent, domain_handle);
-	if (ret < 0)
-		irq_domain_free_fwnode(domain_handle);
-
+err_map:
+	kfree(priv->msi_map);
+err_priv:
+	kfree(priv);
 	return ret;
 }
-#endif
+
+IRQCHIP_DECLARE(pch_msi, "loongson,pch-msi-1.0", pch_msi_init);

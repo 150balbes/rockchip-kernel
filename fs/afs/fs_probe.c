@@ -9,7 +9,6 @@
 #include <linux/slab.h>
 #include "afs_fs.h"
 #include "internal.h"
-#include "protocol_afs.h"
 #include "protocol_yfs.h"
 
 static unsigned int afs_fs_probe_fast_poll_interval = 30 * HZ;
@@ -103,7 +102,7 @@ void afs_fileserver_probe_result(struct afs_call *call)
 	struct afs_addr_list *alist = call->alist;
 	struct afs_server *server = call->server;
 	unsigned int index = call->addr_ix;
-	unsigned int rtt_us = 0, cap0;
+	unsigned int rtt_us = 0;
 	int ret = call->error;
 
 	_enter("%pU,%u", &server->uuid, index);
@@ -160,11 +159,6 @@ responded:
 			clear_bit(AFS_SERVER_FL_IS_YFS, &server->flags);
 			alist->addrs[index].srx_service = call->service_id;
 		}
-		cap0 = ntohl(call->tmp);
-		if (cap0 & AFS3_VICED_CAPABILITY_64BITFILES)
-			set_bit(AFS_SERVER_FL_HAS_FS64, &server->flags);
-		else
-			clear_bit(AFS_SERVER_FL_HAS_FS64, &server->flags);
 	}
 
 	rxrpc_kernel_get_srtt(call->net->socket, call->rxcall, &rtt_us);
@@ -366,15 +360,12 @@ void afs_fs_probe_dispatcher(struct work_struct *work)
 	unsigned long nowj, timer_at, poll_at;
 	bool first_pass = true, set_timer = false;
 
-	if (!net->live) {
-		afs_dec_servers_outstanding(net);
+	if (!net->live)
 		return;
-	}
 
 	_enter("");
 
 	if (list_empty(&net->fs_probe_fast) && list_empty(&net->fs_probe_slow)) {
-		afs_dec_servers_outstanding(net);
 		_leave(" [none]");
 		return;
 	}

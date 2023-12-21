@@ -446,10 +446,12 @@ static void nv_tco_cleanup(void)
 	release_region(tcobase, 0x10);
 }
 
-static void nv_tco_remove(struct platform_device *dev)
+static int nv_tco_remove(struct platform_device *dev)
 {
 	if (tcobase)
 		nv_tco_cleanup();
+
+	return 0;
 }
 
 static void nv_tco_shutdown(struct platform_device *dev)
@@ -467,7 +469,7 @@ static void nv_tco_shutdown(struct platform_device *dev)
 
 static struct platform_driver nv_tco_driver = {
 	.probe		= nv_tco_init,
-	.remove_new	= nv_tco_remove,
+	.remove		= nv_tco_remove,
 	.shutdown	= nv_tco_shutdown,
 	.driver		= {
 		.name	= TCO_MODULE_NAME,

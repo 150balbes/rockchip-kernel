@@ -47,15 +47,14 @@ retry:
 	vma = find_vma(mm, address);
 	if (!vma)
 		goto out;
-	if (vma->vm_start <= address)
+	else if (vma->vm_start <= address)
 		goto good_area;
-	if (!(vma->vm_flags & VM_GROWSDOWN))
+	else if (!(vma->vm_flags & VM_GROWSDOWN))
 		goto out;
-	if (is_user && !ARCH_IS_STACKGROW(address))
+	else if (is_user && !ARCH_IS_STACKGROW(address))
 		goto out;
-	vma = expand_stack(mm, address);
-	if (!vma)
-		goto out_nosemaphore;
+	else if (expand_stack(vma, address))
+		goto out;
 
 good_area:
 	*code_out = SEGV_ACCERR;
@@ -77,10 +76,6 @@ good_area:
 		if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
 			goto out_nosemaphore;
 
-		/* The fault is fully completed (including releasing mmap lock) */
-		if (fault & VM_FAULT_COMPLETED)
-			return 0;
-
 		if (unlikely(fault & VM_FAULT_ERROR)) {
 			if (fault & VM_FAULT_OOM) {
 				goto out_of_memory;
@@ -92,10 +87,12 @@ good_area:
 			}
 			BUG();
 		}
-		if (fault & VM_FAULT_RETRY) {
-			flags |= FAULT_FLAG_TRIED;
+		if (flags & FAULT_FLAG_ALLOW_RETRY) {
+			if (fault & VM_FAULT_RETRY) {
+				flags |= FAULT_FLAG_TRIED;
 
-			goto retry;
+				goto retry;
+			}
 		}
 
 		pmd = pmd_off(mm, address);
@@ -130,6 +127,7 @@ out_of_memory:
 	pagefault_out_of_memory();
 	return 0;
 }
+EXPORT_SYMBOL(handle_page_fault);
 
 static void show_segv_info(struct uml_pt_regs *regs)
 {
@@ -160,7 +158,7 @@ static void bad_segv(struct faultinfo fi, unsigned long ip)
 
 void fatal_sigsegv(void)
 {
-	force_fatal_sig(SIGSEGV);
+	force_sigsegv(SIGSEGV);
 	do_signal(&current->thread.regs);
 	/*
 	 * This is to tell gcc that we're not returning - do_signal
@@ -312,4 +310,8 @@ void bus_handler(int sig, struct siginfo *si, struct uml_pt_regs *regs)
 void winch(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
 {
 	do_IRQ(WINCH_IRQ, regs);
+}
+
+void trap_init(void)
+{
 }

@@ -26,7 +26,7 @@
 
 #if defined(CONFIG_PPC_BOOK3S_64)
 
-#ifdef CONFIG_PPC64_ELF_ABI_V2
+#ifdef PPC64_ELF_ABI_v2
 #define FUNC(name) 		name
 #else
 #define FUNC(name) 		GLUE(.,name)
@@ -36,8 +36,8 @@
 
 #define FUNC(name)		name
 
-#define RFI_TO_KERNEL	rfi
-#define RFI_TO_GUEST	rfi
+#define RFI_TO_KERNEL	RFI
+#define RFI_TO_GUEST	RFI
 
 .macro INTERRUPT_TRAMPOLINE intno
 
@@ -123,7 +123,6 @@ INTERRUPT_TRAMPOLINE	BOOK3S_INTERRUPT_ALTIVEC
 kvmppc_handler_skip_ins:
 
 	/* Patch the IP to the next instruction */
-	/* Note that prefixed instructions are disabled in PR KVM for now */
 	mfsrr0	r12
 	addi	r12, r12, 4
 	mtsrr0	r12

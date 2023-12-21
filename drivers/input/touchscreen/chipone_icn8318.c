@@ -148,12 +148,13 @@ static void icn8318_stop(struct input_dev *dev)
 	gpiod_set_value_cansleep(data->wake_gpio, 0);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int icn8318_suspend(struct device *dev)
 {
 	struct icn8318_data *data = i2c_get_clientdata(to_i2c_client(dev));
 
 	mutex_lock(&data->input->mutex);
-	if (input_device_enabled(data->input))
+	if (data->input->users)
 		icn8318_stop(data->input);
 	mutex_unlock(&data->input->mutex);
 
@@ -165,16 +166,18 @@ static int icn8318_resume(struct device *dev)
 	struct icn8318_data *data = i2c_get_clientdata(to_i2c_client(dev));
 
 	mutex_lock(&data->input->mutex);
-	if (input_device_enabled(data->input))
+	if (data->input->users)
 		icn8318_start(data->input);
 	mutex_unlock(&data->input->mutex);
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(icn8318_pm_ops, icn8318_suspend, icn8318_resume);
+static SIMPLE_DEV_PM_OPS(icn8318_pm_ops, icn8318_suspend, icn8318_resume);
 
-static int icn8318_probe(struct i2c_client *client)
+static int icn8318_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct icn8318_data *data;
@@ -261,7 +264,7 @@ MODULE_DEVICE_TABLE(i2c, icn8318_i2c_id);
 static struct i2c_driver icn8318_driver = {
 	.driver = {
 		.name	= "chipone_icn8318",
-		.pm	= pm_sleep_ptr(&icn8318_pm_ops),
+		.pm	= &icn8318_pm_ops,
 		.of_match_table = icn8318_of_match,
 	},
 	.probe = icn8318_probe,

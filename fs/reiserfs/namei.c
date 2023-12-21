@@ -132,7 +132,6 @@ int search_by_entry_key(struct super_block *sb, const struct cpu_key *key,
 			return IO_ERROR;
 		}
 		PATH_LAST_POSITION(path)--;
-		break;
 
 	case ITEM_FOUND:
 		break;
@@ -378,11 +377,13 @@ static struct dentry *reiserfs_lookup(struct inode *dir, struct dentry *dentry,
 
 		/*
 		 * Propagate the private flag so we know we're
-		 * in the priv tree.  Also clear xattr support
+		 * in the priv tree.  Also clear IOP_XATTR
 		 * since we don't have xattrs on xattr files.
 		 */
-		if (IS_PRIVATE(dir))
-			reiserfs_init_priv_inode(inode);
+		if (IS_PRIVATE(dir)) {
+			inode->i_flags |= S_PRIVATE;
+			inode->i_opflags &= ~IOP_XATTR;
+		}
 	}
 	reiserfs_write_unlock(dir->i_sb);
 	if (retval == IO_ERROR) {
@@ -614,12 +615,12 @@ static int new_inode_init(struct inode *inode, struct inode *dir, umode_t mode)
 	 * the quota init calls have to know who to charge the quota to, so
 	 * we have to set uid and gid here
 	 */
-	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+	inode_init_owner(inode, dir, mode);
 	return dquot_initialize(inode);
 }
 
-static int reiserfs_create(struct mnt_idmap *idmap, struct inode *dir,
-			   struct dentry *dentry, umode_t mode, bool excl)
+static int reiserfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+			   bool excl)
 {
 	int retval;
 	struct inode *inode;
@@ -694,12 +695,11 @@ static int reiserfs_create(struct mnt_idmap *idmap, struct inode *dir,
 
 out_failed:
 	reiserfs_write_unlock(dir->i_sb);
-	reiserfs_security_free(&security);
 	return retval;
 }
 
-static int reiserfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
-			  struct dentry *dentry, umode_t mode, dev_t rdev)
+static int reiserfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
+			  dev_t rdev)
 {
 	int retval;
 	struct inode *inode;
@@ -778,12 +778,10 @@ static int reiserfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 
 out_failed:
 	reiserfs_write_unlock(dir->i_sb);
-	reiserfs_security_free(&security);
 	return retval;
 }
 
-static int reiserfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-			  struct dentry *dentry, umode_t mode)
+static int reiserfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	int retval;
 	struct inode *inode;
@@ -878,7 +876,6 @@ static int reiserfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	retval = journal_end(&th);
 out_failed:
 	reiserfs_write_unlock(dir->i_sb);
-	reiserfs_security_free(&security);
 	return retval;
 }
 
@@ -1097,9 +1094,8 @@ out_unlink:
 	return retval;
 }
 
-static int reiserfs_symlink(struct mnt_idmap *idmap,
-			    struct inode *parent_dir, struct dentry *dentry,
-			    const char *symname)
+static int reiserfs_symlink(struct inode *parent_dir,
+			    struct dentry *dentry, const char *symname)
 {
 	int retval;
 	struct inode *inode;
@@ -1195,7 +1191,6 @@ static int reiserfs_symlink(struct mnt_idmap *idmap,
 	retval = journal_end(&th);
 out_failed:
 	reiserfs_write_unlock(parent_dir->i_sb);
-	reiserfs_security_free(&security);
 	return retval;
 }
 
@@ -1309,8 +1304,7 @@ static void set_ino_in_dir_entry(struct reiserfs_dir_entry *de,
  * one path. If it holds 2 or more, it can get into endless waiting in
  * get_empty_nodes or its clones
  */
-static int reiserfs_rename(struct mnt_idmap *idmap,
-			   struct inode *old_dir, struct dentry *old_dentry,
+static int reiserfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			   struct inode *new_dir, struct dentry *new_dentry,
 			   unsigned int flags)
 {
@@ -1647,48 +1641,6 @@ static int reiserfs_rename(struct mnt_idmap *idmap,
 	return retval;
 }
 
-static const struct inode_operations reiserfs_priv_dir_inode_operations = {
-	.create = reiserfs_create,
-	.lookup = reiserfs_lookup,
-	.link = reiserfs_link,
-	.unlink = reiserfs_unlink,
-	.symlink = reiserfs_symlink,
-	.mkdir = reiserfs_mkdir,
-	.rmdir = reiserfs_rmdir,
-	.mknod = reiserfs_mknod,
-	.rename = reiserfs_rename,
-	.setattr = reiserfs_setattr,
-	.permission = reiserfs_permission,
-	.fileattr_get = reiserfs_fileattr_get,
-	.fileattr_set = reiserfs_fileattr_set,
-};
-
-static const struct inode_operations reiserfs_priv_symlink_inode_operations = {
-	.get_link	= page_get_link,
-	.setattr = reiserfs_setattr,
-	.permission = reiserfs_permission,
-};
-
-static const struct inode_operations reiserfs_priv_special_inode_operations = {
-	.setattr = reiserfs_setattr,
-	.permission = reiserfs_permission,
-};
-
-void reiserfs_init_priv_inode(struct inode *inode)
-{
-	inode->i_flags |= S_PRIVATE;
-	inode->i_opflags &= ~IOP_XATTR;
-
-	if (S_ISREG(inode->i_mode))
-		inode->i_op = &reiserfs_priv_file_inode_operations;
-	else if (S_ISDIR(inode->i_mode))
-		inode->i_op = &reiserfs_priv_dir_inode_operations;
-	else if (S_ISLNK(inode->i_mode))
-		inode->i_op = &reiserfs_priv_symlink_inode_operations;
-	else
-		inode->i_op = &reiserfs_priv_special_inode_operations;
-}
-
 /* directories can handle most operations...  */
 const struct inode_operations reiserfs_dir_inode_operations = {
 	.create = reiserfs_create,
@@ -1703,10 +1655,8 @@ const struct inode_operations reiserfs_dir_inode_operations = {
 	.setattr = reiserfs_setattr,
 	.listxattr = reiserfs_listxattr,
 	.permission = reiserfs_permission,
-	.get_inode_acl = reiserfs_get_acl,
+	.get_acl = reiserfs_get_acl,
 	.set_acl = reiserfs_set_acl,
-	.fileattr_get = reiserfs_fileattr_get,
-	.fileattr_set = reiserfs_fileattr_set,
 };
 
 /*
@@ -1727,6 +1677,6 @@ const struct inode_operations reiserfs_special_inode_operations = {
 	.setattr = reiserfs_setattr,
 	.listxattr = reiserfs_listxattr,
 	.permission = reiserfs_permission,
-	.get_inode_acl = reiserfs_get_acl,
+	.get_acl = reiserfs_get_acl,
 	.set_acl = reiserfs_set_acl,
 };

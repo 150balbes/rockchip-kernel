@@ -221,10 +221,7 @@ static void efx_mcdi_filter_push_prep(struct efx_nic *efx,
 		efx_mcdi_filter_push_prep_set_match_fields(efx, spec, inbuf);
 	}
 
-	if (flags & EFX_FILTER_FLAG_VPORT_ID)
-		MCDI_SET_DWORD(inbuf, FILTER_OP_IN_PORT_ID, spec->vport_id);
-	else
-		MCDI_SET_DWORD(inbuf, FILTER_OP_IN_PORT_ID, efx->vport_id);
+	MCDI_SET_DWORD(inbuf, FILTER_OP_IN_PORT_ID, efx->vport_id);
 	MCDI_SET_DWORD(inbuf, FILTER_OP_IN_RX_DEST,
 		       spec->dmaq_id == EFX_FILTER_RX_DMAQ_ID_DROP ?
 		       MC_CMD_FILTER_OP_IN_RX_DEST_DROP :
@@ -491,7 +488,6 @@ static s32 efx_mcdi_filter_insert_locked(struct efx_nic *efx,
 			saved_spec->flags |= spec->flags;
 			saved_spec->rss_context = spec->rss_context;
 			saved_spec->dmaq_id = spec->dmaq_id;
-			saved_spec->vport_id = spec->vport_id;
 		}
 	} else if (!replacing) {
 		kfree(saved_spec);

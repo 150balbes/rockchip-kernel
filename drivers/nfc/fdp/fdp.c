@@ -38,7 +38,7 @@
 #define NCI_OP_PROP_SET_PDATA_OID		0x23
 
 struct fdp_nci_info {
-	const struct nfc_phy_ops *phy_ops;
+	struct nfc_phy_ops *phy_ops;
 	struct fdp_i2c_phy *phy;
 	struct nci_dev *ndev;
 
@@ -52,7 +52,7 @@ struct fdp_nci_info {
 	u32 limited_otp_version;
 	u8 key_index;
 
-	const u8 *fw_vsc_cfg;
+	u8 *fw_vsc_cfg;
 	u8 clock_type;
 	u32 clock_freq;
 
@@ -65,7 +65,7 @@ struct fdp_nci_info {
 	wait_queue_head_t setup_wq;
 };
 
-static const u8 nci_core_get_config_otp_ram_version[5] = {
+static u8 nci_core_get_config_otp_ram_version[5] = {
 	0x04,
 	NCI_PARAM_ID_FW_RAM_VERSION,
 	NCI_PARAM_ID_FW_OTP_VERSION,
@@ -111,7 +111,7 @@ static inline int fdp_nci_patch_cmd(struct nci_dev *ndev, u8 type)
 }
 
 static inline int fdp_nci_set_production_data(struct nci_dev *ndev, u8 len,
-					      const char *data)
+					      char *data)
 {
 	return nci_prop_cmd(ndev, NCI_OP_PROP_SET_PDATA_OID, len, data);
 }
@@ -149,7 +149,7 @@ static void fdp_nci_send_patch_cb(struct nci_dev *ndev)
 	wake_up(&info->setup_wq);
 }
 
-/*
+/**
  * Register a packet sent counter and a callback
  *
  * We have no other way of knowing when all firmware packets were sent out
@@ -167,7 +167,7 @@ static void fdp_nci_set_data_pkt_counter(struct nci_dev *ndev,
 	info->data_pkt_counter_cb = cb;
 }
 
-/*
+/**
  * The device is expecting a stream of packets. All packets need to
  * have the PBF flag set to 0x0 (last packet) even if the firmware
  * file is segmented and there are multiple packets. If we give the
@@ -176,7 +176,7 @@ static void fdp_nci_set_data_pkt_counter(struct nci_dev *ndev,
  *
  * The firmware will be analyzed and applied when we send NCI_OP_PROP_PATCH_CMD
  * command with NCI_PATCH_TYPE_EOT parameter. The device will send a
- * NFCC_PATCH_NTF packet and a NCI_OP_CORE_RESET_NTF packet.
+ * NFCC_PATCH_NTF packaet and a NCI_OP_CORE_RESET_NTF packet.
  */
 static int fdp_nci_send_patch(struct nci_dev *ndev, u8 conn_id, u8 type)
 {
@@ -236,9 +236,12 @@ static int fdp_nci_send_patch(struct nci_dev *ndev, u8 conn_id, u8 type)
 
 static int fdp_nci_open(struct nci_dev *ndev)
 {
-	const struct fdp_nci_info *info = nci_get_drvdata(ndev);
+	int r;
+	struct fdp_nci_info *info = nci_get_drvdata(ndev);
 
-	return info->phy_ops->enable(info->phy);
+	r = info->phy_ops->enable(info->phy);
+
+	return r;
 }
 
 static int fdp_nci_close(struct nci_dev *ndev)
@@ -268,30 +271,30 @@ static int fdp_nci_request_firmware(struct nci_dev *ndev)
 {
 	struct fdp_nci_info *info = nci_get_drvdata(ndev);
 	struct device *dev = &info->phy->i2c_dev->dev;
-	const u8 *data;
+	u8 *data;
 	int r;
 
 	r = request_firmware(&info->ram_patch, FDP_RAM_PATCH_NAME, dev);
 	if (r < 0) {
 		nfc_err(dev, "RAM patch request error\n");
-		return r;
+		goto error;
 	}
 
-	data = info->ram_patch->data;
+	data = (u8 *) info->ram_patch->data;
 	info->ram_patch_version =
 		data[FDP_FW_HEADER_SIZE] |
 		(data[FDP_FW_HEADER_SIZE + 1] << 8) |
 		(data[FDP_FW_HEADER_SIZE + 2] << 16) |
 		(data[FDP_FW_HEADER_SIZE + 3] << 24);
 
-	dev_dbg(dev, "RAM patch version: %d, size: %zu\n",
-		  info->ram_patch_version, info->ram_patch->size);
+	dev_dbg(dev, "RAM patch version: %d, size: %d\n",
+		  info->ram_patch_version, (int) info->ram_patch->size);
 
 
 	r = request_firmware(&info->otp_patch, FDP_OTP_PATCH_NAME, dev);
 	if (r < 0) {
 		nfc_err(dev, "OTP patch request error\n");
-		return 0;
+		goto out;
 	}
 
 	data = (u8 *) info->otp_patch->data;
@@ -301,9 +304,12 @@ static int fdp_nci_request_firmware(struct nci_dev *ndev)
 		(data[FDP_FW_HEADER_SIZE+2] << 16) |
 		(data[FDP_FW_HEADER_SIZE+3] << 24);
 
-	dev_dbg(dev, "OTP patch version: %d, size: %zu\n",
-		 info->otp_patch_version, info->otp_patch->size);
+	dev_dbg(dev, "OTP patch version: %d, size: %d\n",
+		 info->otp_patch_version, (int) info->otp_patch->size);
+out:
 	return 0;
+error:
+	return r;
 }
 
 static void fdp_nci_release_firmware(struct nci_dev *ndev)
@@ -329,7 +335,7 @@ static int fdp_nci_patch_otp(struct nci_dev *ndev)
 	int r = 0;
 
 	if (info->otp_version >= info->otp_patch_version)
-		return r;
+		goto out;
 
 	info->setup_patch_sent = 0;
 	info->setup_reset_ntf = 0;
@@ -338,17 +344,19 @@ static int fdp_nci_patch_otp(struct nci_dev *ndev)
 	/* Patch init request */
 	r = fdp_nci_patch_cmd(ndev, NCI_PATCH_TYPE_OTP);
 	if (r)
-		return r;
+		goto out;
 
 	/* Patch data connection creation */
 	conn_id = fdp_nci_create_conn(ndev);
-	if (conn_id < 0)
-		return conn_id;
+	if (conn_id < 0) {
+		r = conn_id;
+		goto out;
+	}
 
 	/* Send the patch over the data connection */
 	r = fdp_nci_send_patch(ndev, conn_id, NCI_PATCH_TYPE_OTP);
 	if (r)
-		return r;
+		goto out;
 
 	/* Wait for all the packets to be send over i2c */
 	wait_event_interruptible(info->setup_wq,
@@ -360,12 +368,13 @@ static int fdp_nci_patch_otp(struct nci_dev *ndev)
 	/* Close the data connection */
 	r = nci_core_conn_close(info->ndev, conn_id);
 	if (r)
-		return r;
+		goto out;
 
 	/* Patch finish message */
 	if (fdp_nci_patch_cmd(ndev, NCI_PATCH_TYPE_EOT)) {
 		nfc_err(dev, "OTP patch error 0x%x\n", r);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out;
 	}
 
 	/* If the patch notification didn't arrive yet, wait for it */
@@ -375,7 +384,8 @@ static int fdp_nci_patch_otp(struct nci_dev *ndev)
 	r = info->setup_patch_status;
 	if (r) {
 		nfc_err(dev, "OTP patch error 0x%x\n", r);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out;
 	}
 
 	/*
@@ -384,6 +394,7 @@ static int fdp_nci_patch_otp(struct nci_dev *ndev)
 	 */
 	wait_event_interruptible(info->setup_wq, info->setup_reset_ntf);
 
+out:
 	return r;
 }
 
@@ -395,7 +406,7 @@ static int fdp_nci_patch_ram(struct nci_dev *ndev)
 	int r = 0;
 
 	if (info->ram_version >= info->ram_patch_version)
-		return r;
+		goto out;
 
 	info->setup_patch_sent = 0;
 	info->setup_reset_ntf = 0;
@@ -404,17 +415,19 @@ static int fdp_nci_patch_ram(struct nci_dev *ndev)
 	/* Patch init request */
 	r = fdp_nci_patch_cmd(ndev, NCI_PATCH_TYPE_RAM);
 	if (r)
-		return r;
+		goto out;
 
 	/* Patch data connection creation */
 	conn_id = fdp_nci_create_conn(ndev);
-	if (conn_id < 0)
-		return conn_id;
+	if (conn_id < 0) {
+		r = conn_id;
+		goto out;
+	}
 
 	/* Send the patch over the data connection */
 	r = fdp_nci_send_patch(ndev, conn_id, NCI_PATCH_TYPE_RAM);
 	if (r)
-		return r;
+		goto out;
 
 	/* Wait for all the packets to be send over i2c */
 	wait_event_interruptible(info->setup_wq,
@@ -426,12 +439,13 @@ static int fdp_nci_patch_ram(struct nci_dev *ndev)
 	/* Close the data connection */
 	r = nci_core_conn_close(info->ndev, conn_id);
 	if (r)
-		return r;
+		goto out;
 
 	/* Patch finish message */
 	if (fdp_nci_patch_cmd(ndev, NCI_PATCH_TYPE_EOT)) {
 		nfc_err(dev, "RAM patch error 0x%x\n", r);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out;
 	}
 
 	/* If the patch notification didn't arrive yet, wait for it */
@@ -441,7 +455,8 @@ static int fdp_nci_patch_ram(struct nci_dev *ndev)
 	r = info->setup_patch_status;
 	if (r) {
 		nfc_err(dev, "RAM patch error 0x%x\n", r);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out;
 	}
 
 	/*
@@ -450,6 +465,7 @@ static int fdp_nci_patch_ram(struct nci_dev *ndev)
 	 */
 	wait_event_interruptible(info->setup_wq, info->setup_reset_ntf);
 
+out:
 	return r;
 }
 
@@ -618,9 +634,8 @@ static int fdp_nci_core_get_config_rsp_packet(struct nci_dev *ndev,
 {
 	struct fdp_nci_info *info = nci_get_drvdata(ndev);
 	struct device *dev = &info->phy->i2c_dev->dev;
-	const struct nci_core_get_config_rsp *rsp = (void *) skb->data;
-	unsigned int i;
-	const u8 *p;
+	struct nci_core_get_config_rsp *rsp = (void *) skb->data;
+	u8 i, *p;
 
 	if (rsp->status == NCI_STATUS_OK) {
 
@@ -660,7 +675,7 @@ static int fdp_nci_core_get_config_rsp_packet(struct nci_dev *ndev,
 	return 0;
 }
 
-static const struct nci_driver_ops fdp_core_ops[] = {
+static struct nci_driver_ops fdp_core_ops[] = {
 	{
 		.opcode = NCI_OP_CORE_GET_CONFIG_RSP,
 		.rsp = fdp_nci_core_get_config_rsp_packet,
@@ -671,7 +686,7 @@ static const struct nci_driver_ops fdp_core_ops[] = {
 	},
 };
 
-static const struct nci_driver_ops fdp_prop_ops[] = {
+static struct nci_driver_ops fdp_prop_ops[] = {
 	{
 		.opcode = nci_opcode_pack(NCI_GID_PROP, NCI_OP_PROP_PATCH_OID),
 		.rsp = fdp_nci_prop_patch_rsp_packet,
@@ -684,7 +699,7 @@ static const struct nci_driver_ops fdp_prop_ops[] = {
 	},
 };
 
-static const struct nci_ops nci_ops = {
+static struct nci_ops nci_ops = {
 	.open = fdp_nci_open,
 	.close = fdp_nci_close,
 	.send = fdp_nci_send,
@@ -696,10 +711,10 @@ static const struct nci_ops nci_ops = {
 	.n_core_ops = ARRAY_SIZE(fdp_core_ops),
 };
 
-int fdp_nci_probe(struct fdp_i2c_phy *phy, const struct nfc_phy_ops *phy_ops,
+int fdp_nci_probe(struct fdp_i2c_phy *phy, struct nfc_phy_ops *phy_ops,
 			struct nci_dev **ndevp, int tx_headroom,
 			int tx_tailroom, u8 clock_type, u32 clock_freq,
-			const u8 *fw_vsc_cfg)
+			u8 *fw_vsc_cfg)
 {
 	struct device *dev = &phy->i2c_dev->dev;
 	struct fdp_nci_info *info;
@@ -727,7 +742,6 @@ int fdp_nci_probe(struct fdp_i2c_phy *phy, const struct nfc_phy_ops *phy_ops,
 		    NFC_PROTO_NFC_DEP_MASK |
 		    NFC_PROTO_ISO15693_MASK;
 
-	BUILD_BUG_ON(ARRAY_SIZE(fdp_prop_ops) > NCI_MAX_PROPRIETARY_CMD);
 	ndev = nci_allocate_device(&nci_ops, protocols, tx_headroom,
 				   tx_tailroom);
 	if (!ndev) {
@@ -762,6 +776,3 @@ EXPORT_SYMBOL(fdp_nci_remove);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("NFC NCI driver for Intel Fields Peak NFC controller");
 MODULE_AUTHOR("Robert Dolca <robert.dolca@intel.com>");
-
-MODULE_FIRMWARE(FDP_OTP_PATCH_NAME);
-MODULE_FIRMWARE(FDP_RAM_PATCH_NAME);

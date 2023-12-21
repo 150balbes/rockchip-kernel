@@ -7,6 +7,7 @@
 #ifndef _LINUX_BTT_H
 #define _LINUX_BTT_H
 
+#include <linux/badblocks.h>
 #include <linux/types.h>
 
 #define BTT_SIG_LEN 16
@@ -196,11 +197,10 @@ struct arena_info {
 	int log_index[2];
 };
 
-struct badblocks;
-
 /**
  * struct btt - handle for a BTT instance
  * @btt_disk:		Pointer to the gendisk for BTT device
+ * @btt_queue:		Pointer to the request queue for the BTT device
  * @arena_list:		Head of the list of arenas
  * @debugfs_dir:	Debugfs dentry
  * @nd_btt:		Parent nd_btt struct
@@ -218,6 +218,7 @@ struct badblocks;
  */
 struct btt {
 	struct gendisk *btt_disk;
+	struct request_queue *btt_queue;
 	struct list_head arena_list;
 	struct dentry *debugfs_dir;
 	struct nd_btt *nd_btt;

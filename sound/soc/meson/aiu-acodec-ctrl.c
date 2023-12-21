@@ -159,7 +159,7 @@ static const struct snd_kcontrol_new aiu_acodec_ctrl_controls[] = {
 };
 
 static int aiu_acodec_of_xlate_dai_name(struct snd_soc_component *component,
-					const struct of_phandle_args *args,
+					struct of_phandle_args *args,
 					const char **dai_name)
 {
 	return aiu_of_xlate_dai_name(component, args, dai_name, AIU_ACODEC);
@@ -192,9 +192,7 @@ static const struct snd_soc_component_driver aiu_acodec_ctrl_component = {
 	.num_dapm_routes	= ARRAY_SIZE(aiu_acodec_ctrl_routes),
 	.of_xlate_dai_name	= aiu_acodec_of_xlate_dai_name,
 	.endianness		= 1,
-#ifdef CONFIG_DEBUG_FS
-	.debugfs_prefix		= "acodec",
-#endif
+	.non_legacy_dai_naming	= 1,
 };
 
 int aiu_acodec_ctrl_register_component(struct device *dev)

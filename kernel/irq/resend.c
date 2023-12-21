@@ -21,34 +21,36 @@
 
 #ifdef CONFIG_HARDIRQS_SW_RESEND
 
-/* hlist_head to handle software resend of interrupts: */
-static HLIST_HEAD(irq_resend_list);
-static DEFINE_RAW_SPINLOCK(irq_resend_lock);
+/* Bitmap to handle software resend of interrupts: */
+static DECLARE_BITMAP(irqs_resend, IRQ_BITMAP_BITS);
 
 /*
  * Run software resends of IRQ's
  */
-static void resend_irqs(struct tasklet_struct *unused)
+static void resend_irqs(unsigned long arg)
 {
 	struct irq_desc *desc;
+	int irq;
 
-	raw_spin_lock_irq(&irq_resend_lock);
-	while (!hlist_empty(&irq_resend_list)) {
-		desc = hlist_entry(irq_resend_list.first, struct irq_desc,
-				   resend_node);
-		hlist_del_init(&desc->resend_node);
-		raw_spin_unlock(&irq_resend_lock);
+	while (!bitmap_empty(irqs_resend, nr_irqs)) {
+		irq = find_first_bit(irqs_resend, nr_irqs);
+		clear_bit(irq, irqs_resend);
+		desc = irq_to_desc(irq);
+		if (!desc)
+			continue;
+		local_irq_disable();
 		desc->handle_irq(desc);
-		raw_spin_lock(&irq_resend_lock);
+		local_irq_enable();
 	}
-	raw_spin_unlock_irq(&irq_resend_lock);
 }
 
 /* Tasklet to handle resend: */
-static DECLARE_TASKLET(resend_tasklet, resend_irqs);
+static DECLARE_TASKLET_OLD(resend_tasklet, resend_irqs);
 
 static int irq_sw_resend(struct irq_desc *desc)
 {
+	unsigned int irq = irq_desc_get_irq(desc);
+
 	/*
 	 * Validate whether this interrupt can be safely injected from
 	 * non interrupt context
@@ -68,31 +70,16 @@ static int irq_sw_resend(struct irq_desc *desc)
 		 */
 		if (!desc->parent_irq)
 			return -EINVAL;
+		irq = desc->parent_irq;
 	}
 
-	/* Add to resend_list and activate the softirq: */
-	raw_spin_lock(&irq_resend_lock);
-	hlist_add_head(&desc->resend_node, &irq_resend_list);
-	raw_spin_unlock(&irq_resend_lock);
+	/* Set it pending and activate the softirq: */
+	set_bit(irq, irqs_resend);
 	tasklet_schedule(&resend_tasklet);
 	return 0;
 }
 
-void clear_irq_resend(struct irq_desc *desc)
-{
-	raw_spin_lock(&irq_resend_lock);
-	hlist_del_init(&desc->resend_node);
-	raw_spin_unlock(&irq_resend_lock);
-}
-
-void irq_resend_init(struct irq_desc *desc)
-{
-	INIT_HLIST_NODE(&desc->resend_node);
-}
 #else
-void clear_irq_resend(struct irq_desc *desc) {}
-void irq_resend_init(struct irq_desc *desc) {}
-
 static int irq_sw_resend(struct irq_desc *desc)
 {
 	return -EINVAL;
@@ -141,7 +128,7 @@ int check_irq_resend(struct irq_desc *desc, bool inject)
 	if (!try_retrigger(desc))
 		err = irq_sw_resend(desc);
 
-	/* If the retrigger was successful, mark it with the REPLAY bit */
+	/* If the retrigger was successfull, mark it with the REPLAY bit */
 	if (!err)
 		desc->istate |= IRQS_REPLAY;
 	return err;

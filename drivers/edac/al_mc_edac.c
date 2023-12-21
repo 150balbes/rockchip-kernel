@@ -238,9 +238,11 @@ static int al_mc_edac_probe(struct platform_device *pdev)
 	if (!mci)
 		return -ENOMEM;
 
-	ret = devm_add_action_or_reset(&pdev->dev, devm_al_mc_edac_free, mci);
-	if (ret)
+	ret = devm_add_action(&pdev->dev, devm_al_mc_edac_free, mci);
+	if (ret) {
+		edac_mc_free(mci);
 		return ret;
+	}
 
 	platform_set_drvdata(pdev, mci);
 	al_mc = mci->pvt_info;
@@ -291,9 +293,11 @@ static int al_mc_edac_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	ret = devm_add_action_or_reset(&pdev->dev, devm_al_mc_edac_del, &pdev->dev);
-	if (ret)
+	ret = devm_add_action(&pdev->dev, devm_al_mc_edac_del, &pdev->dev);
+	if (ret) {
+		edac_mc_del_mc(&pdev->dev);
 		return ret;
+	}
 
 	if (al_mc->irq_ue > 0) {
 		ret = devm_request_irq(&pdev->dev,

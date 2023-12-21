@@ -780,7 +780,7 @@ static ssize_t mtk_btcvsd_snd_write(struct mtk_btcvsd_snd *bt,
 				    char __user *buf,
 				    size_t count)
 {
-	int written_size = count, avail, cur_write_idx, write_size, cont;
+	int written_size = count, avail = 0, cur_write_idx, write_size, cont;
 	unsigned int cur_buf_ofs = 0;
 	unsigned long flags;
 	unsigned int packet_size = bt->tx->packet_size;
@@ -808,7 +808,7 @@ static ssize_t mtk_btcvsd_snd_write(struct mtk_btcvsd_snd *bt,
 		spin_unlock_irqrestore(&bt->tx_lock, flags);
 
 		if (!avail) {
-			int ret = wait_for_bt_irq(bt, bt->tx);
+			int ret = wait_for_bt_irq(bt, bt->rx);
 
 			if (ret)
 				return written_size;
@@ -1038,9 +1038,11 @@ static int mtk_pcm_btcvsd_copy(struct snd_soc_component *component,
 	struct mtk_btcvsd_snd *bt = snd_soc_component_get_drvdata(component);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		return mtk_btcvsd_snd_write(bt, buf, count);
+		mtk_btcvsd_snd_write(bt, buf, count);
 	else
-		return mtk_btcvsd_snd_read(bt, buf, count);
+		mtk_btcvsd_snd_read(bt, buf, count);
+
+	return 0;
 }
 
 /* kcontrol */
@@ -1387,12 +1389,13 @@ unmap_pkv_err:
 	return ret;
 }
 
-static void mtk_btcvsd_snd_remove(struct platform_device *pdev)
+static int mtk_btcvsd_snd_remove(struct platform_device *pdev)
 {
 	struct mtk_btcvsd_snd *btcvsd = dev_get_drvdata(&pdev->dev);
 
 	iounmap(btcvsd->bt_pkv_base);
 	iounmap(btcvsd->bt_sram_bank2_base);
+	return 0;
 }
 
 static const struct of_device_id mtk_btcvsd_snd_dt_match[] = {
@@ -1407,7 +1410,7 @@ static struct platform_driver mtk_btcvsd_snd_driver = {
 		.of_match_table = mtk_btcvsd_snd_dt_match,
 	},
 	.probe = mtk_btcvsd_snd_probe,
-	.remove_new = mtk_btcvsd_snd_remove,
+	.remove = mtk_btcvsd_snd_remove,
 };
 
 module_platform_driver(mtk_btcvsd_snd_driver);

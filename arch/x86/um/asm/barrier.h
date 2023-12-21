@@ -2,7 +2,6 @@
 #ifndef _ASM_UM_BARRIER_H_
 #define _ASM_UM_BARRIER_H_
 
-#include <asm/cpufeatures.h>
 #include <asm/alternative.h>
 
 /*

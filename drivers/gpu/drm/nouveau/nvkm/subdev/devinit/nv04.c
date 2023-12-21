@@ -434,8 +434,9 @@ nv04_devinit_dtor(struct nvkm_devinit *base)
 }
 
 int
-nv04_devinit_new_(const struct nvkm_devinit_func *func, struct nvkm_device *device,
-		  enum nvkm_subdev_type type, int inst, struct nvkm_devinit **pinit)
+nv04_devinit_new_(const struct nvkm_devinit_func *func,
+		  struct nvkm_device *device, int index,
+		  struct nvkm_devinit **pinit)
 {
 	struct nv04_devinit *init;
 
@@ -443,7 +444,7 @@ nv04_devinit_new_(const struct nvkm_devinit_func *func, struct nvkm_device *devi
 		return -ENOMEM;
 	*pinit = &init->base;
 
-	nvkm_devinit_ctor(func, device, type, inst, &init->base);
+	nvkm_devinit_ctor(func, device, index, &init->base);
 	init->owner = -1;
 	return 0;
 }
@@ -458,8 +459,8 @@ nv04_devinit = {
 };
 
 int
-nv04_devinit_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+nv04_devinit_new(struct nvkm_device *device, int index,
 		 struct nvkm_devinit **pinit)
 {
-	return nv04_devinit_new_(&nv04_devinit, device, type, inst, pinit);
+	return nv04_devinit_new_(&nv04_devinit, device, index, pinit);
 }

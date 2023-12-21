@@ -183,7 +183,7 @@ int amvdec_set_canvases(struct amvdec_session *sess,
 	u32 pixfmt = sess->pixfmt_cap;
 	u32 width = ALIGN(sess->width, 32);
 	u32 height = ALIGN(sess->height, 32);
-	u32 reg_cur;
+	u32 reg_cur = reg_base[0];
 	u32 reg_num_cur = 0;
 	u32 reg_base_cur = 0;
 	int i = 0;
@@ -280,13 +280,13 @@ static void dst_buf_done(struct amvdec_session *sess,
 
 	switch (sess->pixfmt_cap) {
 	case V4L2_PIX_FMT_NV12M:
-		vb2_set_plane_payload(&vbuf->vb2_buf, 0, output_size);
-		vb2_set_plane_payload(&vbuf->vb2_buf, 1, output_size / 2);
+		vbuf->vb2_buf.planes[0].bytesused = output_size;
+		vbuf->vb2_buf.planes[1].bytesused = output_size / 2;
 		break;
 	case V4L2_PIX_FMT_YUV420M:
-		vb2_set_plane_payload(&vbuf->vb2_buf, 0, output_size);
-		vb2_set_plane_payload(&vbuf->vb2_buf, 1, output_size / 4);
-		vb2_set_plane_payload(&vbuf->vb2_buf, 2, output_size / 4);
+		vbuf->vb2_buf.planes[0].bytesused = output_size;
+		vbuf->vb2_buf.planes[1].bytesused = output_size / 4;
+		vbuf->vb2_buf.planes[2].bytesused = output_size / 4;
 		break;
 	}
 

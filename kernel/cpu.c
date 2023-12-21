@@ -17,7 +17,6 @@
 #include <linux/cpu.h>
 #include <linux/oom.h>
 #include <linux/rcupdate.h>
-#include <linux/delay.h>
 #include <linux/export.h>
 #include <linux/bug.h>
 #include <linux/kthread.h>
@@ -36,31 +35,29 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/cpuset.h>
 #include <linux/random.h>
-#include <linux/cc_platform.h>
+#include <uapi/linux/sched/types.h>
 
 #include <trace/events/power.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/cpuhp.h>
 
+#undef CREATE_TRACE_POINTS
+#include <trace/hooks/sched.h>
+#include <trace/hooks/cpu.h>
+
 #include "smpboot.h"
 
 /**
- * struct cpuhp_cpu_state - Per cpu hotplug state storage
+ * cpuhp_cpu_state - Per cpu hotplug state storage
  * @state:	The current cpu state
  * @target:	The target state
- * @fail:	Current CPU hotplug callback state
  * @thread:	Pointer to the hotplug thread
  * @should_run:	Thread should execute
  * @rollback:	Perform a rollback
  * @single:	Single callback invocation
  * @bringup:	Single callback bringup or teardown selector
- * @cpu:	CPU number
- * @node:	Remote CPU node; for multi-instance, do a
- *		single entry callback for install/remove
- * @last:	For multi-instance rollback, remember how far we got
  * @cb_state:	The state for a single callback (install/uninstall)
  * @result:	Result of the operation
- * @ap_sync_state:	State for AP synchronization
  * @done_up:	Signal completion to the issuer of the task for cpu-up
  * @done_down:	Signal completion to the issuer of the task for cpu-down
  */
@@ -78,7 +75,6 @@ struct cpuhp_cpu_state {
 	struct hlist_node	*last;
 	enum cpuhp_state	cb_state;
 	int			result;
-	atomic_t		ap_sync_state;
 	struct completion	done_up;
 	struct completion	done_down;
 #endif
@@ -116,12 +112,11 @@ static inline void cpuhp_lock_release(bool bringup) { }
 #endif
 
 /**
- * struct cpuhp_step - Hotplug state machine step
+ * cpuhp_step - Hotplug state machine step
  * @name:	Name of the step
  * @startup:	Startup function of the step
  * @teardown:	Teardown function of the step
  * @cant_stop:	Bringup/teardown can't be stopped at this step
- * @multi_instance:	State has multiple instances which get added afterwards
  */
 struct cpuhp_step {
 	const char		*name;
@@ -135,9 +130,7 @@ struct cpuhp_step {
 		int		(*multi)(unsigned int cpu,
 					 struct hlist_node *node);
 	} teardown;
-	/* private: */
 	struct hlist_head	list;
-	/* public: */
 	bool			cant_stop;
 	bool			multi_instance;
 };
@@ -150,13 +143,8 @@ static struct cpuhp_step *cpuhp_get_step(enum cpuhp_state state)
 	return cpuhp_hp_states + state;
 }
 
-static bool cpuhp_step_empty(bool bringup, struct cpuhp_step *step)
-{
-	return bringup ? !step->startup.single : !step->teardown.single;
-}
-
 /**
- * cpuhp_invoke_callback - Invoke the callbacks for a given state
+ * cpuhp_invoke_callback _ Invoke the callbacks for a given state
  * @cpu:	The cpu for which the callback should be invoked
  * @state:	The state to do callbacks for
  * @bringup:	True if the bringup callback should be invoked
@@ -164,8 +152,6 @@ static bool cpuhp_step_empty(bool bringup, struct cpuhp_step *step)
  * @lastp:	For multi-instance rollback, remember how far we got
  *
  * Called from cpu hotplug and from the state register machinery.
- *
- * Return: %0 on success or a negative errno code
  */
 static int cpuhp_invoke_callback(unsigned int cpu, enum cpuhp_state state,
 				 bool bringup, struct hlist_node *node,
@@ -179,24 +165,26 @@ static int cpuhp_invoke_callback(unsigned int cpu, enum cpuhp_state state,
 
 	if (st->fail == state) {
 		st->fail = CPUHP_INVALID;
-		return -EAGAIN;
-	}
 
-	if (cpuhp_step_empty(bringup, step)) {
-		WARN_ON_ONCE(1);
-		return 0;
+		if (!(bringup ? step->startup.single : step->teardown.single))
+			return 0;
+
+		return -EAGAIN;
 	}
 
 	if (!step->multi_instance) {
 		WARN_ON_ONCE(lastp && *lastp);
 		cb = bringup ? step->startup.single : step->teardown.single;
-
+		if (!cb)
+			return 0;
 		trace_cpuhp_enter(cpu, st->target, state, cb);
 		ret = cb(cpu);
 		trace_cpuhp_exit(cpu, st->state, state, ret);
 		return ret;
 	}
 	cbm = bringup ? step->startup.multi : step->teardown.multi;
+	if (!cbm)
+		return 0;
 
 	/* Single invocation for instance add/remove */
 	if (node) {
@@ -279,182 +267,6 @@ static bool cpuhp_is_atomic_state(enum cpuhp_state state)
 	return CPUHP_AP_IDLE_DEAD <= state && state < CPUHP_AP_ONLINE;
 }
 
-/* Synchronization state management */
-enum cpuhp_sync_state {
-	SYNC_STATE_DEAD,
-	SYNC_STATE_KICKED,
-	SYNC_STATE_SHOULD_DIE,
-	SYNC_STATE_ALIVE,
-	SYNC_STATE_SHOULD_ONLINE,
-	SYNC_STATE_ONLINE,
-};
-
-#ifdef CONFIG_HOTPLUG_CORE_SYNC
-/**
- * cpuhp_ap_update_sync_state - Update synchronization state during bringup/teardown
- * @state:	The synchronization state to set
- *
- * No synchronization point. Just update of the synchronization state, but implies
- * a full barrier so that the AP changes are visible before the control CPU proceeds.
- */
-static inline void cpuhp_ap_update_sync_state(enum cpuhp_sync_state state)
-{
-	atomic_t *st = this_cpu_ptr(&cpuhp_state.ap_sync_state);
-
-	(void)atomic_xchg(st, state);
-}
-
-void __weak arch_cpuhp_sync_state_poll(void) { cpu_relax(); }
-
-static bool cpuhp_wait_for_sync_state(unsigned int cpu, enum cpuhp_sync_state state,
-				      enum cpuhp_sync_state next_state)
-{
-	atomic_t *st = per_cpu_ptr(&cpuhp_state.ap_sync_state, cpu);
-	ktime_t now, end, start = ktime_get();
-	int sync;
-
-	end = start + 10ULL * NSEC_PER_SEC;
-
-	sync = atomic_read(st);
-	while (1) {
-		if (sync == state) {
-			if (!atomic_try_cmpxchg(st, &sync, next_state))
-				continue;
-			return true;
-		}
-
-		now = ktime_get();
-		if (now > end) {
-			/* Timeout. Leave the state unchanged */
-			return false;
-		} else if (now - start < NSEC_PER_MSEC) {
-			/* Poll for one millisecond */
-			arch_cpuhp_sync_state_poll();
-		} else {
-			usleep_range_state(USEC_PER_MSEC, 2 * USEC_PER_MSEC, TASK_UNINTERRUPTIBLE);
-		}
-		sync = atomic_read(st);
-	}
-	return true;
-}
-#else  /* CONFIG_HOTPLUG_CORE_SYNC */
-static inline void cpuhp_ap_update_sync_state(enum cpuhp_sync_state state) { }
-#endif /* !CONFIG_HOTPLUG_CORE_SYNC */
-
-#ifdef CONFIG_HOTPLUG_CORE_SYNC_DEAD
-/**
- * cpuhp_ap_report_dead - Update synchronization state to DEAD
- *
- * No synchronization point. Just update of the synchronization state.
- */
-void cpuhp_ap_report_dead(void)
-{
-	cpuhp_ap_update_sync_state(SYNC_STATE_DEAD);
-}
-
-void __weak arch_cpuhp_cleanup_dead_cpu(unsigned int cpu) { }
-
-/*
- * Late CPU shutdown synchronization point. Cannot use cpuhp_state::done_down
- * because the AP cannot issue complete() at this stage.
- */
-static void cpuhp_bp_sync_dead(unsigned int cpu)
-{
-	atomic_t *st = per_cpu_ptr(&cpuhp_state.ap_sync_state, cpu);
-	int sync = atomic_read(st);
-
-	do {
-		/* CPU can have reported dead already. Don't overwrite that! */
-		if (sync == SYNC_STATE_DEAD)
-			break;
-	} while (!atomic_try_cmpxchg(st, &sync, SYNC_STATE_SHOULD_DIE));
-
-	if (cpuhp_wait_for_sync_state(cpu, SYNC_STATE_DEAD, SYNC_STATE_DEAD)) {
-		/* CPU reached dead state. Invoke the cleanup function */
-		arch_cpuhp_cleanup_dead_cpu(cpu);
-		return;
-	}
-
-	/* No further action possible. Emit message and give up. */
-	pr_err("CPU%u failed to report dead state\n", cpu);
-}
-#else /* CONFIG_HOTPLUG_CORE_SYNC_DEAD */
-static inline void cpuhp_bp_sync_dead(unsigned int cpu) { }
-#endif /* !CONFIG_HOTPLUG_CORE_SYNC_DEAD */
-
-#ifdef CONFIG_HOTPLUG_CORE_SYNC_FULL
-/**
- * cpuhp_ap_sync_alive - Synchronize AP with the control CPU once it is alive
- *
- * Updates the AP synchronization state to SYNC_STATE_ALIVE and waits
- * for the BP to release it.
- */
-void cpuhp_ap_sync_alive(void)
-{
-	atomic_t *st = this_cpu_ptr(&cpuhp_state.ap_sync_state);
-
-	cpuhp_ap_update_sync_state(SYNC_STATE_ALIVE);
-
-	/* Wait for the control CPU to release it. */
-	while (atomic_read(st) != SYNC_STATE_SHOULD_ONLINE)
-		cpu_relax();
-}
-
-static bool cpuhp_can_boot_ap(unsigned int cpu)
-{
-	atomic_t *st = per_cpu_ptr(&cpuhp_state.ap_sync_state, cpu);
-	int sync = atomic_read(st);
-
-again:
-	switch (sync) {
-	case SYNC_STATE_DEAD:
-		/* CPU is properly dead */
-		break;
-	case SYNC_STATE_KICKED:
-		/* CPU did not come up in previous attempt */
-		break;
-	case SYNC_STATE_ALIVE:
-		/* CPU is stuck cpuhp_ap_sync_alive(). */
-		break;
-	default:
-		/* CPU failed to report online or dead and is in limbo state. */
-		return false;
-	}
-
-	/* Prepare for booting */
-	if (!atomic_try_cmpxchg(st, &sync, SYNC_STATE_KICKED))
-		goto again;
-
-	return true;
-}
-
-void __weak arch_cpuhp_cleanup_kick_cpu(unsigned int cpu) { }
-
-/*
- * Early CPU bringup synchronization point. Cannot use cpuhp_state::done_up
- * because the AP cannot issue complete() so early in the bringup.
- */
-static int cpuhp_bp_sync_alive(unsigned int cpu)
-{
-	int ret = 0;
-
-	if (!IS_ENABLED(CONFIG_HOTPLUG_CORE_SYNC_FULL))
-		return 0;
-
-	if (!cpuhp_wait_for_sync_state(cpu, SYNC_STATE_ALIVE, SYNC_STATE_SHOULD_ONLINE)) {
-		pr_err("CPU%u failed to report alive state\n", cpu);
-		ret = -EIO;
-	}
-
-	/* Let the architecture cleanup the kick alive mechanics. */
-	arch_cpuhp_cleanup_kick_cpu(cpu);
-	return ret;
-}
-#else /* CONFIG_HOTPLUG_CORE_SYNC_FULL */
-static inline int cpuhp_bp_sync_alive(unsigned int cpu) { return 0; }
-static inline bool cpuhp_can_boot_ap(unsigned int cpu) { return true; }
-#endif /* !CONFIG_HOTPLUG_CORE_SYNC_FULL */
-
 /* Serializes the updates to cpu_online_mask, cpu_present_mask */
 static DEFINE_MUTEX(cpu_add_remove_lock);
 bool cpuhp_tasks_frozen;
@@ -468,11 +280,13 @@ void cpu_maps_update_begin(void)
 {
 	mutex_lock(&cpu_add_remove_lock);
 }
+EXPORT_SYMBOL_GPL(cpu_maps_update_begin);
 
 void cpu_maps_update_done(void)
 {
 	mutex_unlock(&cpu_add_remove_lock);
 }
+EXPORT_SYMBOL_GPL(cpu_maps_update_done);
 
 /*
  * If set, cpu_up and cpu_down will return -EBUSY and do nothing.
@@ -525,13 +339,6 @@ void lockdep_assert_cpus_held(void)
 
 	percpu_rwsem_assert_held(&cpu_hotplug_lock);
 }
-
-#ifdef CONFIG_LOCKDEP
-int lockdep_is_cpus_held(void)
-{
-	return percpu_rwsem_is_held(&cpu_hotplug_lock);
-}
-#endif
 
 static void lockdep_acquire_cpus_lock(void)
 {
@@ -649,58 +456,28 @@ bool cpu_smt_possible(void)
 		cpu_smt_control != CPU_SMT_NOT_SUPPORTED;
 }
 EXPORT_SYMBOL_GPL(cpu_smt_possible);
-
-static inline bool cpuhp_smt_aware(void)
-{
-	return topology_smt_supported();
-}
-
-static inline const struct cpumask *cpuhp_get_primary_thread_mask(void)
-{
-	return cpu_primary_thread_mask;
-}
 #else
 static inline bool cpu_smt_allowed(unsigned int cpu) { return true; }
-static inline bool cpuhp_smt_aware(void) { return false; }
-static inline const struct cpumask *cpuhp_get_primary_thread_mask(void)
-{
-	return cpu_present_mask;
-}
 #endif
 
 static inline enum cpuhp_state
-cpuhp_set_state(int cpu, struct cpuhp_cpu_state *st, enum cpuhp_state target)
+cpuhp_set_state(struct cpuhp_cpu_state *st, enum cpuhp_state target)
 {
 	enum cpuhp_state prev_state = st->state;
-	bool bringup = st->state < target;
 
 	st->rollback = false;
 	st->last = NULL;
 
 	st->target = target;
 	st->single = false;
-	st->bringup = bringup;
-	if (cpu_dying(cpu) != !bringup)
-		set_cpu_dying(cpu, !bringup);
+	st->bringup = st->state < target;
 
 	return prev_state;
 }
 
 static inline void
-cpuhp_reset_state(int cpu, struct cpuhp_cpu_state *st,
-		  enum cpuhp_state prev_state)
+cpuhp_reset_state(struct cpuhp_cpu_state *st, enum cpuhp_state prev_state)
 {
-	bool bringup = !st->bringup;
-
-	st->target = prev_state;
-
-	/*
-	 * Already rolling back. No need invert the bringup value or to change
-	 * the current state.
-	 */
-	if (st->rollback)
-		return;
-
 	st->rollback = true;
 
 	/*
@@ -714,9 +491,8 @@ cpuhp_reset_state(int cpu, struct cpuhp_cpu_state *st,
 			st->state++;
 	}
 
-	st->bringup = bringup;
-	if (cpu_dying(cpu) != !bringup)
-		set_cpu_dying(cpu, !bringup);
+	st->target = prev_state;
+	st->bringup = !st->bringup;
 }
 
 /* Regular hotplug invocation of the AP hotplug thread */
@@ -736,23 +512,22 @@ static void __cpuhp_kick_ap(struct cpuhp_cpu_state *st)
 	wait_for_ap_thread(st, st->bringup);
 }
 
-static int cpuhp_kick_ap(int cpu, struct cpuhp_cpu_state *st,
-			 enum cpuhp_state target)
+static int cpuhp_kick_ap(struct cpuhp_cpu_state *st, enum cpuhp_state target)
 {
 	enum cpuhp_state prev_state;
 	int ret;
 
-	prev_state = cpuhp_set_state(cpu, st, target);
+	prev_state = cpuhp_set_state(st, target);
 	__cpuhp_kick_ap(st);
 	if ((ret = st->result)) {
-		cpuhp_reset_state(cpu, st, prev_state);
+		cpuhp_reset_state(st, prev_state);
 		__cpuhp_kick_ap(st);
 	}
 
 	return ret;
 }
 
-static int bringup_wait_for_ap_online(unsigned int cpu)
+static int bringup_wait_for_ap(unsigned int cpu)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 
@@ -773,22 +548,23 @@ static int bringup_wait_for_ap_online(unsigned int cpu)
 	 */
 	if (!cpu_smt_allowed(cpu))
 		return -ECANCELED;
-	return 0;
+
+	if (st->target <= CPUHP_AP_ONLINE_IDLE)
+		return 0;
+
+	return cpuhp_kick_ap(st, st->target);
 }
 
-#ifdef CONFIG_HOTPLUG_SPLIT_STARTUP
-static int cpuhp_kick_ap_alive(unsigned int cpu)
+static int bringup_cpu(unsigned int cpu)
 {
-	if (!cpuhp_can_boot_ap(cpu))
-		return -EAGAIN;
-
-	return arch_cpuhp_kick_ap_alive(cpu, idle_thread_get(cpu));
-}
-
-static int cpuhp_bringup_ap(unsigned int cpu)
-{
-	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+	struct task_struct *idle = idle_thread_get(cpu);
 	int ret;
+
+	/*
+	 * Reset stale stack state from the last time this CPU was online.
+	 */
+	scs_task_reset(idle);
+	kasan_unpoison_task_stack(idle);
 
 	/*
 	 * Some architectures have to walk the irq descriptors to
@@ -797,70 +573,13 @@ static int cpuhp_bringup_ap(unsigned int cpu)
 	 */
 	irq_lock_sparse();
 
-	ret = cpuhp_bp_sync_alive(cpu);
-	if (ret)
-		goto out_unlock;
-
-	ret = bringup_wait_for_ap_online(cpu);
-	if (ret)
-		goto out_unlock;
-
-	irq_unlock_sparse();
-
-	if (st->target <= CPUHP_AP_ONLINE_IDLE)
-		return 0;
-
-	return cpuhp_kick_ap(cpu, st, st->target);
-
-out_unlock:
-	irq_unlock_sparse();
-	return ret;
-}
-#else
-static int bringup_cpu(unsigned int cpu)
-{
-	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
-	struct task_struct *idle = idle_thread_get(cpu);
-	int ret;
-
-	if (!cpuhp_can_boot_ap(cpu))
-		return -EAGAIN;
-
-	/*
-	 * Some architectures have to walk the irq descriptors to
-	 * setup the vector space for the cpu which comes online.
-	 *
-	 * Prevent irq alloc/free across the bringup by acquiring the
-	 * sparse irq lock. Hold it until the upcoming CPU completes the
-	 * startup in cpuhp_online_idle() which allows to avoid
-	 * intermediate synchronization points in the architecture code.
-	 */
-	irq_lock_sparse();
-
+	/* Arch-specific enabling code. */
 	ret = __cpu_up(cpu, idle);
-	if (ret)
-		goto out_unlock;
-
-	ret = cpuhp_bp_sync_alive(cpu);
-	if (ret)
-		goto out_unlock;
-
-	ret = bringup_wait_for_ap_online(cpu);
-	if (ret)
-		goto out_unlock;
-
 	irq_unlock_sparse();
-
-	if (st->target <= CPUHP_AP_ONLINE_IDLE)
-		return 0;
-
-	return cpuhp_kick_ap(cpu, st, st->target);
-
-out_unlock:
-	irq_unlock_sparse();
-	return ret;
+	if (ret)
+		return ret;
+	return bringup_wait_for_ap(cpu);
 }
-#endif
 
 static int finish_cpu(unsigned int cpu)
 {
@@ -873,7 +592,7 @@ static int finish_cpu(unsigned int cpu)
 	 */
 	if (mm != &init_mm)
 		idle->active_mm = &init_mm;
-	mmdrop_lazy_tlb(mm);
+	mmdrop(mm);
 	return 0;
 }
 
@@ -881,83 +600,10 @@ static int finish_cpu(unsigned int cpu)
  * Hotplug state machine related functions
  */
 
-/*
- * Get the next state to run. Empty ones will be skipped. Returns true if a
- * state must be run.
- *
- * st->state will be modified ahead of time, to match state_to_run, as if it
- * has already ran.
- */
-static bool cpuhp_next_state(bool bringup,
-			     enum cpuhp_state *state_to_run,
-			     struct cpuhp_cpu_state *st,
-			     enum cpuhp_state target)
+static void undo_cpu_up(unsigned int cpu, struct cpuhp_cpu_state *st)
 {
-	do {
-		if (bringup) {
-			if (st->state >= target)
-				return false;
-
-			*state_to_run = ++st->state;
-		} else {
-			if (st->state <= target)
-				return false;
-
-			*state_to_run = st->state--;
-		}
-
-		if (!cpuhp_step_empty(bringup, cpuhp_get_step(*state_to_run)))
-			break;
-	} while (true);
-
-	return true;
-}
-
-static int __cpuhp_invoke_callback_range(bool bringup,
-					 unsigned int cpu,
-					 struct cpuhp_cpu_state *st,
-					 enum cpuhp_state target,
-					 bool nofail)
-{
-	enum cpuhp_state state;
-	int ret = 0;
-
-	while (cpuhp_next_state(bringup, &state, st, target)) {
-		int err;
-
-		err = cpuhp_invoke_callback(cpu, state, bringup, NULL, NULL);
-		if (!err)
-			continue;
-
-		if (nofail) {
-			pr_warn("CPU %u %s state %s (%d) failed (%d)\n",
-				cpu, bringup ? "UP" : "DOWN",
-				cpuhp_get_step(st->state)->name,
-				st->state, err);
-			ret = -1;
-		} else {
-			ret = err;
-			break;
-		}
-	}
-
-	return ret;
-}
-
-static inline int cpuhp_invoke_callback_range(bool bringup,
-					      unsigned int cpu,
-					      struct cpuhp_cpu_state *st,
-					      enum cpuhp_state target)
-{
-	return __cpuhp_invoke_callback_range(bringup, cpu, st, target, false);
-}
-
-static inline void cpuhp_invoke_callback_range_nofail(bool bringup,
-						      unsigned int cpu,
-						      struct cpuhp_cpu_state *st,
-						      enum cpuhp_state target)
-{
-	__cpuhp_invoke_callback_range(bringup, cpu, st, target, true);
+	for (st->state--; st->state > st->target; st->state--)
+		cpuhp_invoke_callback(cpu, st->state, false, NULL, NULL);
 }
 
 static inline bool can_rollback_cpu(struct cpuhp_cpu_state *st)
@@ -980,16 +626,16 @@ static int cpuhp_up_callbacks(unsigned int cpu, struct cpuhp_cpu_state *st,
 	enum cpuhp_state prev_state = st->state;
 	int ret = 0;
 
-	ret = cpuhp_invoke_callback_range(true, cpu, st, target);
-	if (ret) {
-		pr_debug("CPU UP failed (%d) CPU %u state %s (%d)\n",
-			 ret, cpu, cpuhp_get_step(st->state)->name,
-			 st->state);
-
-		cpuhp_reset_state(cpu, st, prev_state);
-		if (can_rollback_cpu(st))
-			WARN_ON(cpuhp_invoke_callback_range(false, cpu, st,
-							    prev_state));
+	while (st->state < target) {
+		st->state++;
+		ret = cpuhp_invoke_callback(cpu, st->state, true, NULL, NULL);
+		if (ret) {
+			if (can_rollback_cpu(st)) {
+				st->target = prev_state;
+				undo_cpu_up(cpu, st);
+			}
+			break;
+		}
 	}
 	return ret;
 }
@@ -997,6 +643,14 @@ static int cpuhp_up_callbacks(unsigned int cpu, struct cpuhp_cpu_state *st,
 /*
  * The cpu hotplug threads manage the bringup and teardown of the cpus
  */
+static void cpuhp_create(unsigned int cpu)
+{
+	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+
+	init_completion(&st->done_up);
+	init_completion(&st->done_down);
+}
+
 static int cpuhp_should_run(unsigned int cpu)
 {
 	struct cpuhp_cpu_state *st = this_cpu_ptr(&cpuhp_state);
@@ -1045,9 +699,17 @@ static void cpuhp_thread_fun(unsigned int cpu)
 		state = st->cb_state;
 		st->should_run = false;
 	} else {
-		st->should_run = cpuhp_next_state(bringup, &state, st, st->target);
-		if (!st->should_run)
-			goto end;
+		if (bringup) {
+			st->state++;
+			state = st->state;
+			st->should_run = (st->state < st->target);
+			WARN_ON_ONCE(st->state > st->target);
+		} else {
+			state = st->state;
+			st->state--;
+			st->should_run = (st->state > st->target);
+			WARN_ON_ONCE(st->state < st->target);
+		}
 	}
 
 	WARN_ON_ONCE(!cpuhp_is_ap_state(state));
@@ -1075,7 +737,6 @@ static void cpuhp_thread_fun(unsigned int cpu)
 		st->should_run = false;
 	}
 
-end:
 	cpuhp_lock_release(bringup);
 	lockdep_release_cpus_lock();
 
@@ -1148,7 +809,7 @@ static int cpuhp_kick_ap_work(unsigned int cpu)
 	cpuhp_lock_release(true);
 
 	trace_cpuhp_enter(cpu, st->target, prev_state, cpuhp_kick_ap_work);
-	ret = cpuhp_kick_ap(cpu, st, st->target);
+	ret = cpuhp_kick_ap(st, st->target);
 	trace_cpuhp_exit(cpu, st->state, prev_state, ret);
 
 	return ret;
@@ -1156,27 +817,15 @@ static int cpuhp_kick_ap_work(unsigned int cpu)
 
 static struct smp_hotplug_thread cpuhp_threads = {
 	.store			= &cpuhp_state.thread,
+	.create			= &cpuhp_create,
 	.thread_should_run	= cpuhp_should_run,
 	.thread_fn		= cpuhp_thread_fun,
 	.thread_comm		= "cpuhp/%u",
 	.selfparking		= true,
 };
 
-static __init void cpuhp_init_state(void)
-{
-	struct cpuhp_cpu_state *st;
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		st = per_cpu_ptr(&cpuhp_state, cpu);
-		init_completion(&st->done_up);
-		init_completion(&st->done_down);
-	}
-}
-
 void __init cpuhp_threads_init(void)
 {
-	cpuhp_init_state();
 	BUG_ON(smpboot_register_percpu_thread(&cpuhp_threads));
 	kthread_unpark(this_cpu_read(cpuhp_state.thread));
 }
@@ -1279,6 +928,7 @@ static int take_cpu_down(void *_param)
 	struct cpuhp_cpu_state *st = this_cpu_ptr(&cpuhp_state);
 	enum cpuhp_state target = max((int)st->target, CPUHP_AP_OFFLINE);
 	int err, cpu = smp_processor_id();
+	int ret;
 
 	/* Ensure this CPU doesn't handle any more interrupts. */
 	err = __cpu_disable();
@@ -1286,15 +936,19 @@ static int take_cpu_down(void *_param)
 		return err;
 
 	/*
-	 * Must be called from CPUHP_TEARDOWN_CPU, which means, as we are going
-	 * down, that the current state is CPUHP_TEARDOWN_CPU - 1.
+	 * We get here while we are in CPUHP_TEARDOWN_CPU state and we must not
+	 * do this step again.
 	 */
-	WARN_ON(st->state != (CPUHP_TEARDOWN_CPU - 1));
-
-	/*
-	 * Invoke the former CPU_DYING callbacks. DYING must not fail!
-	 */
-	cpuhp_invoke_callback_range_nofail(false, cpu, st, target);
+	WARN_ON(st->state != CPUHP_TEARDOWN_CPU);
+	st->state--;
+	/* Invoke the former CPU_DYING callbacks */
+	for (; st->state > target; st->state--) {
+		ret = cpuhp_invoke_callback(cpu, st->state, false, NULL, NULL);
+		/*
+		 * DYING must not fail!
+		 */
+		WARN_ON_ONCE(ret);
+	}
 
 	/* Give up timekeeping duties */
 	tick_handover_do_timer();
@@ -1311,7 +965,7 @@ static int takedown_cpu(unsigned int cpu)
 	int err;
 
 	/* Park the smpboot threads */
-	kthread_park(st->thread);
+	kthread_park(per_cpu_ptr(&cpuhp_state, cpu)->thread);
 
 	/*
 	 * Prevent irq alloc/free while the dying cpu reorganizes the
@@ -1327,7 +981,7 @@ static int takedown_cpu(unsigned int cpu)
 		/* CPU refused to die */
 		irq_unlock_sparse();
 		/* Unpark the hotplug thread so we can rollback there */
-		kthread_unpark(st->thread);
+		kthread_unpark(per_cpu_ptr(&cpuhp_state, cpu)->thread);
 		return err;
 	}
 	BUG_ON(cpu_online(cpu));
@@ -1348,8 +1002,6 @@ static int takedown_cpu(unsigned int cpu)
 	hotplug_cpu__broadcast_tick_pull(cpu);
 	/* This actually kills the CPU. */
 	__cpu_die(cpu);
-
-	cpuhp_bp_sync_dead(cpu);
 
 	tick_cleanup_dead_cpu(cpu);
 	rcutree_migrate_callbacks(cpu);
@@ -1378,25 +1030,27 @@ void cpuhp_report_idle_dead(void)
 				 cpuhp_complete_idle_dead, st, 0);
 }
 
+static void undo_cpu_down(unsigned int cpu, struct cpuhp_cpu_state *st)
+{
+	for (st->state++; st->state < st->target; st->state++)
+		cpuhp_invoke_callback(cpu, st->state, true, NULL, NULL);
+}
+
 static int cpuhp_down_callbacks(unsigned int cpu, struct cpuhp_cpu_state *st,
 				enum cpuhp_state target)
 {
 	enum cpuhp_state prev_state = st->state;
 	int ret = 0;
 
-	ret = cpuhp_invoke_callback_range(false, cpu, st, target);
-	if (ret) {
-		pr_debug("CPU DOWN failed (%d) CPU %u state %s (%d)\n",
-			 ret, cpu, cpuhp_get_step(st->state)->name,
-			 st->state);
-
-		cpuhp_reset_state(cpu, st, prev_state);
-
-		if (st->state < prev_state)
-			WARN_ON(cpuhp_invoke_callback_range(true, cpu, st,
-							    prev_state));
+	for (; st->state > target; st->state--) {
+		ret = cpuhp_invoke_callback(cpu, st->state, false, NULL, NULL);
+		if (ret) {
+			st->target = prev_state;
+			if (st->state < prev_state)
+				undo_cpu_down(cpu, st);
+			break;
+		}
 	}
-
 	return ret;
 }
 
@@ -1407,7 +1061,7 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	int prev_state, ret = 0;
 
-	if (num_online_cpus() == 1)
+	if (num_active_cpus() == 1 && cpu_active(cpu))
 		return -EBUSY;
 
 	if (!cpu_present(cpu))
@@ -1417,7 +1071,7 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 
 	cpuhp_tasks_frozen = tasks_frozen;
 
-	prev_state = cpuhp_set_state(cpu, st, target);
+	prev_state = cpuhp_set_state(st, target);
 	/*
 	 * If the current CPU state is in the range of the AP hotplug thread,
 	 * then we need to kick the thread.
@@ -1446,13 +1100,9 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	 * to do the further cleanups.
 	 */
 	ret = cpuhp_down_callbacks(cpu, st, target);
-	if (ret && st->state < prev_state) {
-		if (st->state == CPUHP_TEARDOWN_CPU) {
-			cpuhp_reset_state(cpu, st, prev_state);
-			__cpuhp_kick_ap(st);
-		} else {
-			WARN(1, "DEAD callback error for CPU%d", cpu);
-		}
+	if (ret && st->state == CPUHP_TEARDOWN_CPU && st->state < prev_state) {
+		cpuhp_reset_state(st, prev_state);
+		__cpuhp_kick_ap(st);
 	}
 
 out:
@@ -1469,12 +1119,6 @@ out:
 
 static int cpu_down_maps_locked(unsigned int cpu, enum cpuhp_state target)
 {
-	/*
-	 * If the platform does not support hotplug, report it explicitly to
-	 * differentiate it from a transient offlining failure.
-	 */
-	if (cc_platform_has(CC_ATTR_HOTPLUG_DISABLED))
-		return -EOPNOTSUPP;
 	if (cpu_hotplug_disabled)
 		return -EBUSY;
 	return _cpu_down(cpu, 0, target);
@@ -1497,8 +1141,6 @@ static int cpu_down(unsigned int cpu, enum cpuhp_state target)
  * This function is meant to be used by device core cpu subsystem only.
  *
  * Other subsystems should use remove_cpu() instead.
- *
- * Return: %0 on success or a negative errno code
  */
 int cpu_device_down(struct device *dev)
 {
@@ -1516,6 +1158,251 @@ int remove_cpu(unsigned int cpu)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(remove_cpu);
+
+extern int  dl_cpu_busy(int cpu, struct task_struct *p);
+
+int __pause_drain_rq(struct cpumask *cpus)
+{
+	unsigned int cpu;
+	int err = 0;
+
+	/*
+	 * Disabling preemption avoids that one of the stopper, started from
+	 * sched_cpu_drain_rq(), blocks firing draining for the whole cpumask.
+	 */
+	preempt_disable();
+	for_each_cpu(cpu, cpus) {
+		err = sched_cpu_drain_rq(cpu);
+		if (err)
+			break;
+	}
+	preempt_enable();
+
+	return err;
+}
+
+void __wait_drain_rq(struct cpumask *cpus)
+{
+	unsigned int cpu;
+
+	for_each_cpu(cpu, cpus)
+		sched_cpu_drain_rq_wait(cpu);
+}
+
+/* if rt task, set to cfs and return previous prio */
+static int pause_reduce_prio(void)
+{
+	int prev_prio = -1;
+
+	if (current->prio < MAX_RT_PRIO) {
+		struct sched_param param = { .sched_priority = 0 };
+
+		prev_prio = current->prio;
+		sched_setscheduler_nocheck(current, SCHED_NORMAL, &param);
+	}
+
+	return prev_prio;
+}
+
+/* if previous prio was set, restore */
+static void pause_restore_prio(int prev_prio)
+{
+	if (prev_prio >= 0 && prev_prio < MAX_RT_PRIO) {
+		struct sched_param param = { .sched_priority = MAX_RT_PRIO-1-prev_prio };
+
+		sched_setscheduler_nocheck(current, SCHED_FIFO, &param);
+	}
+}
+
+int pause_cpus(struct cpumask *cpus)
+{
+	int err = 0;
+	int cpu;
+	u64 start_time = 0;
+	int prev_prio;
+
+	start_time = sched_clock();
+
+	cpu_maps_update_begin();
+
+	if (cpu_hotplug_disabled) {
+		err = -EBUSY;
+		goto err_cpu_maps_update;
+	}
+
+	/* Pausing an already inactive CPU isn't an error */
+	cpumask_and(cpus, cpus, cpu_active_mask);
+
+	for_each_cpu(cpu, cpus) {
+		if (!cpu_online(cpu) || dl_cpu_busy(cpu, NULL) ||
+			get_cpu_device(cpu)->offline_disabled == true) {
+			err = -EBUSY;
+			goto err_cpu_maps_update;
+		}
+	}
+
+	if (cpumask_weight(cpus) >= num_active_cpus()) {
+		err = -EBUSY;
+		goto err_cpu_maps_update;
+	}
+
+	if (cpumask_empty(cpus))
+		goto err_cpu_maps_update;
+
+	/*
+	 * Lazy migration:
+	 *
+	 * We do care about how fast a CPU can go idle and stay this in this
+	 * state. If we try to take the cpus_write_lock() here, we would have
+	 * to wait for a few dozens of ms, as this function might schedule.
+	 * However, we can, as a first step, flip the active mask and migrate
+	 * anything currently on the run-queue, to give a chance to the paused
+	 * CPUs to reach quickly an idle state. There's a risk meanwhile for
+	 * another CPU to observe an out-of-date active_mask or to incompletely
+	 * update a cpuset. Both problems would be resolved later in the slow
+	 * path, which ensures active_mask synchronization, triggers a cpuset
+	 * rebuild and migrate any task that would have escaped the lazy
+	 * migration.
+	 */
+	for_each_cpu(cpu, cpus)
+		set_cpu_active(cpu, false);
+	err = __pause_drain_rq(cpus);
+	if (err) {
+		__wait_drain_rq(cpus);
+		for_each_cpu(cpu, cpus)
+			set_cpu_active(cpu, true);
+		goto err_cpu_maps_update;
+	}
+
+	prev_prio = pause_reduce_prio();
+
+	/*
+	 * Slow path deactivation:
+	 *
+	 * Now that paused CPUs are most likely idle, we can go through a
+	 * complete scheduler deactivation.
+	 *
+	 * The cpu_active_mask being already set and cpus_write_lock calling
+	 * synchronize_rcu(), we know that all preempt-disabled and RCU users
+	 * will observe the updated value.
+	 */
+	cpus_write_lock();
+
+	__wait_drain_rq(cpus);
+
+	cpuhp_tasks_frozen = 0;
+
+	if (sched_cpus_deactivate_nosync(cpus)) {
+		err = -EBUSY;
+		goto err_cpus_write_unlock;
+	}
+
+	err = __pause_drain_rq(cpus);
+	__wait_drain_rq(cpus);
+	if (err) {
+		for_each_cpu(cpu, cpus)
+			sched_cpu_activate(cpu);
+		goto err_cpus_write_unlock;
+	}
+
+	/*
+	 * Even if living on the side of the regular HP path, pause is using
+	 * one of the HP step (CPUHP_AP_ACTIVE). This should be reflected on the
+	 * current state of the CPU.
+	 */
+	for_each_cpu(cpu, cpus) {
+		struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+
+		st->state = CPUHP_AP_ACTIVE - 1;
+		st->target = st->state;
+	}
+
+err_cpus_write_unlock:
+	cpus_write_unlock();
+	pause_restore_prio(prev_prio);
+err_cpu_maps_update:
+	cpu_maps_update_done();
+
+	trace_cpuhp_pause(cpus, start_time, 1);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(pause_cpus);
+
+int resume_cpus(struct cpumask *cpus)
+{
+	unsigned int cpu;
+	int err = 0;
+	u64 start_time = 0;
+	int prev_prio;
+
+	start_time = sched_clock();
+
+	cpu_maps_update_begin();
+
+	if (cpu_hotplug_disabled) {
+		err = -EBUSY;
+		goto err_cpu_maps_update;
+	}
+
+	/* Resuming an already active CPU isn't an error */
+	cpumask_andnot(cpus, cpus, cpu_active_mask);
+
+	for_each_cpu(cpu, cpus) {
+		if (!cpu_online(cpu)) {
+			err = -EBUSY;
+			goto err_cpu_maps_update;
+		}
+	}
+
+	if (cpumask_empty(cpus))
+		goto err_cpu_maps_update;
+
+	for_each_cpu(cpu, cpus)
+		set_cpu_active(cpu, true);
+
+	trace_android_rvh_resume_cpus(cpus, &err);
+	if (err)
+		goto err_cpu_maps_update;
+
+	prev_prio = pause_reduce_prio();
+
+	/* Lazy Resume. Build domains through schedule a workqueue on
+	 * resuming cpu. This is so that the resuming cpu can work more
+	 * early, and cannot add additional load to other busy cpu.
+	 */
+	cpuset_update_active_cpus_affine(cpumask_first(cpus));
+
+	cpus_write_lock();
+
+	cpuhp_tasks_frozen = 0;
+
+	if (sched_cpus_activate(cpus)) {
+		err = -EBUSY;
+		goto err_cpus_write_unlock;
+	}
+
+	/*
+	 * see pause_cpus.
+	 */
+	for_each_cpu(cpu, cpus) {
+		struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+
+		st->state = CPUHP_ONLINE;
+		st->target = st->state;
+	}
+
+err_cpus_write_unlock:
+	cpus_write_unlock();
+	pause_restore_prio(prev_prio);
+err_cpu_maps_update:
+	cpu_maps_update_done();
+
+	trace_cpuhp_pause(cpus, start_time, 0);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(resume_cpus);
 
 void smp_shutdown_nonboot_cpus(unsigned int primary_cpu)
 {
@@ -1574,14 +1461,18 @@ void notify_cpu_starting(unsigned int cpu)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	enum cpuhp_state target = min((int)st->target, CPUHP_AP_ONLINE);
+	int ret;
 
 	rcu_cpu_starting(cpu);	/* Enables RCU usage on this CPU. */
 	cpumask_set_cpu(cpu, &cpus_booted_once_mask);
-
-	/*
-	 * STARTING must not fail!
-	 */
-	cpuhp_invoke_callback_range_nofail(true, cpu, st, target);
+	while (st->state < target) {
+		st->state++;
+		ret = cpuhp_invoke_callback(cpu, st->state, true, NULL, NULL);
+		/*
+		 * STARTING must not fail!
+		 */
+		WARN_ON_ONCE(ret);
+	}
 }
 
 /*
@@ -1597,16 +1488,33 @@ void cpuhp_online_idle(enum cpuhp_state state)
 	if (state != CPUHP_AP_ONLINE_IDLE)
 		return;
 
-	cpuhp_ap_update_sync_state(SYNC_STATE_ONLINE);
-
 	/*
-	 * Unpark the stopper thread before we start the idle loop (and start
+	 * Unpart the stopper thread before we start the idle loop (and start
 	 * scheduling); this ensures the stopper task is always available.
 	 */
 	stop_machine_unpark(smp_processor_id());
 
 	st->state = CPUHP_AP_ONLINE_IDLE;
 	complete_ap_thread(st, true);
+}
+
+static int switch_to_rt_policy(void)
+{
+	struct sched_param param = { .sched_priority = MAX_RT_PRIO - 1 };
+	unsigned int policy = current->policy;
+
+	if (policy == SCHED_NORMAL)
+		/* Switch to SCHED_FIFO from SCHED_NORMAL. */
+		return sched_setscheduler_nocheck(current, SCHED_FIFO, &param);
+	else
+		return 1;
+}
+
+static int switch_to_fair_policy(void)
+{
+	struct sched_param param = { .sched_priority = 0 };
+
+	return sched_setscheduler_nocheck(current, SCHED_NORMAL, &param);
 }
 
 /* Requires cpu_add_remove_lock to be held */
@@ -1637,17 +1545,11 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen, enum cpuhp_state target)
 			ret = PTR_ERR(idle);
 			goto out;
 		}
-
-		/*
-		 * Reset stale stack state from the last time this CPU was online.
-		 */
-		scs_task_reset(idle);
-		kasan_unpoison_task_stack(idle);
 	}
 
 	cpuhp_tasks_frozen = tasks_frozen;
 
-	cpuhp_set_state(cpu, st, target);
+	cpuhp_set_state(st, target);
 	/*
 	 * If the current CPU state is in the range of the AP hotplug thread,
 	 * then we need to kick the thread once more.
@@ -1679,6 +1581,7 @@ out:
 static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 {
 	int err = 0;
+	int switch_err;
 
 	if (!cpu_possible(cpu)) {
 		pr_err("can't online cpu %d because it is not configured as may-hotadd at boot time\n",
@@ -1689,9 +1592,23 @@ static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 		return -EINVAL;
 	}
 
+	trace_android_vh_cpu_up(cpu);
+
+	/*
+	 * CPU hotplug operations consists of many steps and each step
+	 * calls a callback of core kernel subsystem. CPU hotplug-in
+	 * operation may get preempted by other CFS tasks and whole
+	 * operation of cpu hotplug in CPU gets delayed. Switch the
+	 * current task to SCHED_FIFO from SCHED_NORMAL, so that
+	 * hotplug in operation may complete quickly in heavy loaded
+	 * conditions and new CPU will start handle the workload.
+	 */
+
+	switch_err = switch_to_rt_policy();
+
 	err = try_online_node(cpu_to_node(cpu));
 	if (err)
-		return err;
+		goto switch_out;
 
 	cpu_maps_update_begin();
 
@@ -1707,6 +1624,14 @@ static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 	err = _cpu_up(cpu, 0, target);
 out:
 	cpu_maps_update_done();
+switch_out:
+	if (!switch_err) {
+		switch_err = switch_to_fair_policy();
+		if (switch_err)
+			pr_err("Hotplug policy switch err=%d Task %s pid=%d\n",
+				switch_err, current->comm, current->pid);
+	}
+
 	return err;
 }
 
@@ -1717,8 +1642,6 @@ out:
  * This function is meant to be used by device core cpu subsystem only.
  *
  * Other subsystems should use add_cpu() instead.
- *
- * Return: %0 on success or a negative errno code
  */
 int cpu_device_up(struct device *dev)
 {
@@ -1744,8 +1667,6 @@ EXPORT_SYMBOL_GPL(add_cpu);
  * On some architectures like arm64, we can hibernate on any CPU, but on
  * wake up the CPU we hibernated on might be offline as a side effect of
  * using maxcpus= for example.
- *
- * Return: %0 on success or a negative errno code
  */
 int bringup_hibernate_cpu(unsigned int sleep_cpu)
 {
@@ -1762,94 +1683,16 @@ int bringup_hibernate_cpu(unsigned int sleep_cpu)
 	return 0;
 }
 
-static void __init cpuhp_bringup_mask(const struct cpumask *mask, unsigned int ncpus,
-				      enum cpuhp_state target)
+void bringup_nonboot_cpus(unsigned int setup_max_cpus)
 {
 	unsigned int cpu;
 
-	for_each_cpu(cpu, mask) {
-		struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
-
-		if (cpu_up(cpu, target) && can_rollback_cpu(st)) {
-			/*
-			 * If this failed then cpu_up() might have only
-			 * rolled back to CPUHP_BP_KICK_AP for the final
-			 * online. Clean it up. NOOP if already rolled back.
-			 */
-			WARN_ON(cpuhp_invoke_callback_range(false, cpu, st, CPUHP_OFFLINE));
-		}
-
-		if (!--ncpus)
+	for_each_present_cpu(cpu) {
+		if (num_online_cpus() >= setup_max_cpus)
 			break;
+		if (!cpu_online(cpu))
+			cpu_up(cpu, CPUHP_ONLINE);
 	}
-}
-
-#ifdef CONFIG_HOTPLUG_PARALLEL
-static bool __cpuhp_parallel_bringup __ro_after_init = true;
-
-static int __init parallel_bringup_parse_param(char *arg)
-{
-	return kstrtobool(arg, &__cpuhp_parallel_bringup);
-}
-early_param("cpuhp.parallel", parallel_bringup_parse_param);
-
-/*
- * On architectures which have enabled parallel bringup this invokes all BP
- * prepare states for each of the to be onlined APs first. The last state
- * sends the startup IPI to the APs. The APs proceed through the low level
- * bringup code in parallel and then wait for the control CPU to release
- * them one by one for the final onlining procedure.
- *
- * This avoids waiting for each AP to respond to the startup IPI in
- * CPUHP_BRINGUP_CPU.
- */
-static bool __init cpuhp_bringup_cpus_parallel(unsigned int ncpus)
-{
-	const struct cpumask *mask = cpu_present_mask;
-
-	if (__cpuhp_parallel_bringup)
-		__cpuhp_parallel_bringup = arch_cpuhp_init_parallel_bringup();
-	if (!__cpuhp_parallel_bringup)
-		return false;
-
-	if (cpuhp_smt_aware()) {
-		const struct cpumask *pmask = cpuhp_get_primary_thread_mask();
-		static struct cpumask tmp_mask __initdata;
-
-		/*
-		 * X86 requires to prevent that SMT siblings stopped while
-		 * the primary thread does a microcode update for various
-		 * reasons. Bring the primary threads up first.
-		 */
-		cpumask_and(&tmp_mask, mask, pmask);
-		cpuhp_bringup_mask(&tmp_mask, ncpus, CPUHP_BP_KICK_AP);
-		cpuhp_bringup_mask(&tmp_mask, ncpus, CPUHP_ONLINE);
-		/* Account for the online CPUs */
-		ncpus -= num_online_cpus();
-		if (!ncpus)
-			return true;
-		/* Create the mask for secondary CPUs */
-		cpumask_andnot(&tmp_mask, mask, pmask);
-		mask = &tmp_mask;
-	}
-
-	/* Bring the not-yet started CPUs up */
-	cpuhp_bringup_mask(mask, ncpus, CPUHP_BP_KICK_AP);
-	cpuhp_bringup_mask(mask, ncpus, CPUHP_ONLINE);
-	return true;
-}
-#else
-static inline bool cpuhp_bringup_cpus_parallel(unsigned int ncpus) { return false; }
-#endif /* CONFIG_HOTPLUG_PARALLEL */
-
-void __init bringup_nonboot_cpus(unsigned int setup_max_cpus)
-{
-	/* Try parallel bringup optimization if enabled */
-	if (cpuhp_bringup_cpus_parallel(setup_max_cpus))
-		return;
-
-	/* Full per CPU serialized bringup */
-	cpuhp_bringup_mask(cpu_present_mask, setup_max_cpus, CPUHP_ONLINE);
 }
 
 #ifdef CONFIG_PM_SLEEP_SMP
@@ -1862,8 +1705,8 @@ int freeze_secondary_cpus(int primary)
 	cpu_maps_update_begin();
 	if (primary == -1) {
 		primary = cpumask_first(cpu_online_mask);
-		if (!housekeeping_cpu(primary, HK_TYPE_TIMER))
-			primary = housekeeping_any_cpu(HK_TYPE_TIMER);
+		if (!housekeeping_cpu(primary, HK_FLAG_TIMER))
+			primary = housekeeping_any_cpu(HK_FLAG_TIMER);
 	} else {
 		if (!cpu_online(primary))
 			primary = cpumask_first(cpu_online_mask);
@@ -1924,6 +1767,7 @@ void __weak arch_thaw_secondary_cpus_end(void)
 void thaw_secondary_cpus(void)
 {
 	int cpu, error;
+	struct device *cpu_device;
 
 	/* Allow everyone to use the CPU hotplug again */
 	cpu_maps_update_begin();
@@ -1941,6 +1785,12 @@ void thaw_secondary_cpus(void)
 		trace_suspend_resume(TPS("CPU_ON"), cpu, false);
 		if (!error) {
 			pr_info("CPU%d is up\n", cpu);
+			cpu_device = get_cpu_device(cpu);
+			if (!cpu_device)
+				pr_err("%s: failed to get cpu%d device\n",
+				       __func__, cpu);
+			else
+				kobject_uevent(&cpu_device->kobj, KOBJ_ONLINE);
 			continue;
 		}
 		pr_warn("Error taking CPU%d up: %d\n", cpu, error);
@@ -2012,6 +1862,22 @@ core_initcall(cpu_hotplug_pm_sync_init);
 
 int __boot_cpu_id;
 
+/* Horrific hacks because we can't add more to cpuhp_hp_states. */
+static int random_and_perf_prepare_fusion(unsigned int cpu)
+{
+#ifdef CONFIG_PERF_EVENTS
+	perf_event_init_cpu(cpu);
+#endif
+	random_prepare_cpu(cpu);
+	return 0;
+}
+static int random_and_workqueue_online_fusion(unsigned int cpu)
+{
+	workqueue_online_cpu(cpu);
+	random_online_cpu(cpu);
+	return 0;
+}
+
 #endif /* CONFIG_SMP */
 
 /* Boot processor state steps */
@@ -2030,13 +1896,8 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 	},
 	[CPUHP_PERF_PREPARE] = {
 		.name			= "perf:prepare",
-		.startup.single		= perf_event_init_cpu,
+		.startup.single		= random_and_perf_prepare_fusion,
 		.teardown.single	= perf_event_exit_cpu,
-	},
-	[CPUHP_RANDOM_PREPARE] = {
-		.name			= "random:prepare",
-		.startup.single		= random_prepare_cpu,
-		.teardown.single	= NULL,
 	},
 	[CPUHP_WORKQUEUE_PREP] = {
 		.name			= "workqueue:prepare",
@@ -2078,38 +1939,13 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 		.startup.single		= timers_prepare_cpu,
 		.teardown.single	= timers_dead_cpu,
 	},
-
-#ifdef CONFIG_HOTPLUG_SPLIT_STARTUP
-	/*
-	 * Kicks the AP alive. AP will wait in cpuhp_ap_sync_alive() until
-	 * the next step will release it.
-	 */
-	[CPUHP_BP_KICK_AP] = {
-		.name			= "cpu:kick_ap",
-		.startup.single		= cpuhp_kick_ap_alive,
-	},
-
-	/*
-	 * Waits for the AP to reach cpuhp_ap_sync_alive() and then
-	 * releases it for the complete bringup.
-	 */
-	[CPUHP_BRINGUP_CPU] = {
-		.name			= "cpu:bringup",
-		.startup.single		= cpuhp_bringup_ap,
-		.teardown.single	= finish_cpu,
-		.cant_stop		= true,
-	},
-#else
-	/*
-	 * All-in-one CPU bringup state which includes the kick alive.
-	 */
+	/* Kicks the plugged cpu into life */
 	[CPUHP_BRINGUP_CPU] = {
 		.name			= "cpu:bringup",
 		.startup.single		= bringup_cpu,
 		.teardown.single	= finish_cpu,
 		.cant_stop		= true,
 	},
-#endif
 	/* Final state before CPU kills itself */
 	[CPUHP_AP_IDLE_DEAD] = {
 		.name			= "idle:dead",
@@ -2144,7 +1980,7 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 		.name			= "ap:online",
 	},
 	/*
-	 * Handled on control processor until the plugged processor manages
+	 * Handled on controll processor until the plugged processor manages
 	 * this itself.
 	 */
 	[CPUHP_TEARDOWN_CPU] = {
@@ -2153,13 +1989,6 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 		.teardown.single	= takedown_cpu,
 		.cant_stop		= true,
 	},
-
-	[CPUHP_AP_SCHED_WAIT_EMPTY] = {
-		.name			= "sched:waitempty",
-		.startup.single		= NULL,
-		.teardown.single	= sched_cpu_wait_empty,
-	},
-
 	/* Handle smpboot threads park/unpark */
 	[CPUHP_AP_SMPBOOT_THREADS] = {
 		.name			= "smpboot/threads:online",
@@ -2183,13 +2012,8 @@ static struct cpuhp_step cpuhp_hp_states[] = {
 	},
 	[CPUHP_AP_WORKQUEUE_ONLINE] = {
 		.name			= "workqueue:online",
-		.startup.single		= workqueue_online_cpu,
+		.startup.single		= random_and_workqueue_online_fusion,
 		.teardown.single	= workqueue_offline_cpu,
-	},
-	[CPUHP_AP_RANDOM_ONLINE] = {
-		.name			= "random:online",
-		.startup.single		= random_online_cpu,
-		.teardown.single	= NULL,
 	},
 	[CPUHP_AP_RCUTREE_ONLINE] = {
 		.name			= "RCU/tree:online",
@@ -2313,7 +2137,8 @@ static int cpuhp_issue_call(int cpu, enum cpuhp_state state, bool bringup,
 	 * If there's nothing to do, we done.
 	 * Relies on the union for multi_instance.
 	 */
-	if (cpuhp_step_empty(bringup, sp))
+	if ((bringup && !sp->startup.single) ||
+	    (!bringup && !sp->teardown.single))
 		return 0;
 	/*
 	 * The non AP bound callbacks can fail on bringup. On teardown
@@ -2415,7 +2240,6 @@ EXPORT_SYMBOL_GPL(__cpuhp_state_add_instance);
 /**
  * __cpuhp_setup_state_cpuslocked - Setup the callbacks for an hotplug machine state
  * @state:		The state to setup
- * @name:		Name of the step
  * @invoke:		If true, the startup function is invoked for cpus where
  *			cpu state >= @state
  * @startup:		startup callback function
@@ -2424,9 +2248,9 @@ EXPORT_SYMBOL_GPL(__cpuhp_state_add_instance);
  *			added afterwards.
  *
  * The caller needs to hold cpus read locked while calling this function.
- * Return:
+ * Returns:
  *   On success:
- *      Positive state number if @state is CPUHP_AP_ONLINE_DYN;
+ *      Positive state number if @state is CPUHP_AP_ONLINE_DYN
  *      0 for all other states
  *   On failure: proper (negative) error code
  */
@@ -2672,17 +2496,18 @@ int cpuhp_smt_enable(void)
 #endif
 
 #if defined(CONFIG_SYSFS) && defined(CONFIG_HOTPLUG_CPU)
-static ssize_t state_show(struct device *dev,
-			  struct device_attribute *attr, char *buf)
+static ssize_t show_cpuhp_state(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, dev->id);
 
 	return sprintf(buf, "%d\n", st->state);
 }
-static DEVICE_ATTR_RO(state);
+static DEVICE_ATTR(state, 0444, show_cpuhp_state, NULL);
 
-static ssize_t target_store(struct device *dev, struct device_attribute *attr,
-			    const char *buf, size_t count)
+static ssize_t write_cpuhp_target(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, dev->id);
 	struct cpuhp_step *sp;
@@ -2713,26 +2538,26 @@ static ssize_t target_store(struct device *dev, struct device_attribute *attr,
 
 	if (st->state < target)
 		ret = cpu_up(dev->id, target);
-	else if (st->state > target)
+	else
 		ret = cpu_down(dev->id, target);
-	else if (WARN_ON(st->target != target))
-		st->target = target;
 out:
 	unlock_device_hotplug();
 	return ret ? ret : count;
 }
 
-static ssize_t target_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+static ssize_t show_cpuhp_target(struct device *dev,
+				 struct device_attribute *attr, char *buf)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, dev->id);
 
 	return sprintf(buf, "%d\n", st->target);
 }
-static DEVICE_ATTR_RW(target);
+static DEVICE_ATTR(target, 0644, show_cpuhp_target, write_cpuhp_target);
 
-static ssize_t fail_store(struct device *dev, struct device_attribute *attr,
-			  const char *buf, size_t count)
+
+static ssize_t write_cpuhp_fail(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, dev->id);
 	struct cpuhp_step *sp;
@@ -2742,11 +2567,6 @@ static ssize_t fail_store(struct device *dev, struct device_attribute *attr,
 	if (ret)
 		return ret;
 
-	if (fail == CPUHP_INVALID) {
-		st->fail = fail;
-		return count;
-	}
-
 	if (fail < CPUHP_OFFLINE || fail > CPUHP_ONLINE)
 		return -EINVAL;
 
@@ -2754,15 +2574,6 @@ static ssize_t fail_store(struct device *dev, struct device_attribute *attr,
 	 * Cannot fail STARTING/DYING callbacks.
 	 */
 	if (cpuhp_is_atomic_state(fail))
-		return -EINVAL;
-
-	/*
-	 * DEAD callbacks cannot fail...
-	 * ... neither can CPUHP_BRINGUP_CPU during hotunplug. The latter
-	 * triggering STARTING callbacks, a failure in this state would
-	 * hinder rollback.
-	 */
-	if (fail <= CPUHP_BRINGUP_CPU && st->state > CPUHP_BRINGUP_CPU)
 		return -EINVAL;
 
 	/*
@@ -2781,15 +2592,15 @@ static ssize_t fail_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static ssize_t fail_show(struct device *dev,
-			 struct device_attribute *attr, char *buf)
+static ssize_t show_cpuhp_fail(struct device *dev,
+			       struct device_attribute *attr, char *buf)
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, dev->id);
 
 	return sprintf(buf, "%d\n", st->fail);
 }
 
-static DEVICE_ATTR_RW(fail);
+static DEVICE_ATTR(fail, 0644, show_cpuhp_fail, write_cpuhp_fail);
 
 static struct attribute *cpuhp_cpu_attrs[] = {
 	&dev_attr_state.attr,
@@ -2804,7 +2615,7 @@ static const struct attribute_group cpuhp_cpu_attr_group = {
 	NULL
 };
 
-static ssize_t states_show(struct device *dev,
+static ssize_t show_cpuhp_states(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	ssize_t cur, res = 0;
@@ -2823,7 +2634,7 @@ static ssize_t states_show(struct device *dev,
 	mutex_unlock(&cpuhp_state_mutex);
 	return res;
 }
-static DEVICE_ATTR_RO(states);
+static DEVICE_ATTR(states, 0444, show_cpuhp_states, NULL);
 
 static struct attribute *cpuhp_cpu_root_attrs[] = {
 	&dev_attr_states.attr,
@@ -2896,27 +2707,28 @@ static const char *smt_states[] = {
 	[CPU_SMT_NOT_IMPLEMENTED]	= "notimplemented",
 };
 
-static ssize_t control_show(struct device *dev,
-			    struct device_attribute *attr, char *buf)
+static ssize_t
+show_smt_control(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	const char *state = smt_states[cpu_smt_control];
 
 	return snprintf(buf, PAGE_SIZE - 2, "%s\n", state);
 }
 
-static ssize_t control_store(struct device *dev, struct device_attribute *attr,
-			     const char *buf, size_t count)
+static ssize_t
+store_smt_control(struct device *dev, struct device_attribute *attr,
+		  const char *buf, size_t count)
 {
 	return __store_smt_control(dev, attr, buf, count);
 }
-static DEVICE_ATTR_RW(control);
+static DEVICE_ATTR(control, 0644, show_smt_control, store_smt_control);
 
-static ssize_t active_show(struct device *dev,
-			   struct device_attribute *attr, char *buf)
+static ssize_t
+show_smt_active(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	return snprintf(buf, PAGE_SIZE - 2, "%d\n", sched_smt_active());
 }
-static DEVICE_ATTR_RO(active);
+static DEVICE_ATTR(active, 0444, show_smt_active, NULL);
 
 static struct attribute *cpuhp_smt_attrs[] = {
 	&dev_attr_control.attr,
@@ -2932,33 +2744,22 @@ static const struct attribute_group cpuhp_smt_attr_group = {
 
 static int __init cpu_smt_sysfs_init(void)
 {
-	struct device *dev_root;
-	int ret = -ENODEV;
-
-	dev_root = bus_get_dev_root(&cpu_subsys);
-	if (dev_root) {
-		ret = sysfs_create_group(&dev_root->kobj, &cpuhp_smt_attr_group);
-		put_device(dev_root);
-	}
-	return ret;
+	return sysfs_create_group(&cpu_subsys.dev_root->kobj,
+				  &cpuhp_smt_attr_group);
 }
 
 static int __init cpuhp_sysfs_init(void)
 {
-	struct device *dev_root;
 	int cpu, ret;
 
 	ret = cpu_smt_sysfs_init();
 	if (ret)
 		return ret;
 
-	dev_root = bus_get_dev_root(&cpu_subsys);
-	if (dev_root) {
-		ret = sysfs_create_group(&dev_root->kobj, &cpuhp_cpu_root_attr_group);
-		put_device(dev_root);
-		if (ret)
-			return ret;
-	}
+	ret = sysfs_create_group(&cpu_subsys.dev_root->kobj,
+				 &cpuhp_cpu_root_attr_group);
+	if (ret)
+		return ret;
 
 	for_each_possible_cpu(cpu) {
 		struct device *dev = get_cpu_device(cpu);
@@ -3018,9 +2819,6 @@ EXPORT_SYMBOL(__cpu_present_mask);
 
 struct cpumask __cpu_active_mask __read_mostly;
 EXPORT_SYMBOL(__cpu_active_mask);
-
-struct cpumask __cpu_dying_mask __read_mostly;
-EXPORT_SYMBOL(__cpu_dying_mask);
 
 atomic_t __num_online_cpus __read_mostly;
 EXPORT_SYMBOL(__num_online_cpus);
@@ -3086,10 +2884,8 @@ void __init boot_cpu_hotplug_init(void)
 {
 #ifdef CONFIG_SMP
 	cpumask_set_cpu(smp_processor_id(), &cpus_booted_once_mask);
-	atomic_set(this_cpu_ptr(&cpuhp_state.ap_sync_state), SYNC_STATE_ONLINE);
 #endif
 	this_cpu_write(cpuhp_state.state, CPUHP_ONLINE);
-	this_cpu_write(cpuhp_state.target, CPUHP_ONLINE);
 }
 
 /*
@@ -3134,3 +2930,23 @@ bool cpu_mitigations_auto_nosmt(void)
 	return cpu_mitigations == CPU_MITIGATIONS_AUTO_NOSMT;
 }
 EXPORT_SYMBOL_GPL(cpu_mitigations_auto_nosmt);
+
+static ATOMIC_NOTIFIER_HEAD(idle_notifier);
+
+void idle_notifier_register(struct notifier_block *n)
+{
+	atomic_notifier_chain_register(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_register);
+
+void idle_notifier_unregister(struct notifier_block *n)
+{
+	atomic_notifier_chain_unregister(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_unregister);
+
+void idle_notifier_call_chain(unsigned long val)
+{
+	atomic_notifier_call_chain(&idle_notifier, val, NULL);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_call_chain);

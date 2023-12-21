@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * Copyright (C) 2017-2023 Oracle.  All Rights Reserved.
- * Author: Darrick J. Wong <djwong@kernel.org>
+ * Copyright (C) 2017 Oracle.  All Rights Reserved.
+ * Author: Darrick J. Wong <darrick.wong@oracle.com>
  */
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -18,14 +18,15 @@
 /* Set us up to scrub a symbolic link. */
 int
 xchk_setup_symlink(
-	struct xfs_scrub	*sc)
+	struct xfs_scrub	*sc,
+	struct xfs_inode	*ip)
 {
 	/* Allocate the buffer without the inode lock held. */
-	sc->buf = kvzalloc(XFS_SYMLINK_MAXLEN + 1, XCHK_GFP_FLAGS);
+	sc->buf = kvzalloc(XFS_SYMLINK_MAXLEN + 1, GFP_KERNEL);
 	if (!sc->buf)
 		return -ENOMEM;
 
-	return xchk_setup_inode_contents(sc, 0);
+	return xchk_setup_inode_contents(sc, ip, 0);
 }
 
 /* Symbolic links. */
@@ -41,8 +42,8 @@ xchk_symlink(
 
 	if (!S_ISLNK(VFS_I(ip)->i_mode))
 		return -ENOENT;
-	ifp = xfs_ifork_ptr(ip, XFS_DATA_FORK);
-	len = ip->i_disk_size;
+	ifp = XFS_IFORK_PTR(ip, XFS_DATA_FORK);
+	len = ip->i_d.di_size;
 
 	/* Plausible size? */
 	if (len > XFS_SYMLINK_MAXLEN || len <= 0) {
@@ -51,9 +52,9 @@ xchk_symlink(
 	}
 
 	/* Inline symlink? */
-	if (ifp->if_format == XFS_DINODE_FMT_LOCAL) {
-		if (len > xfs_inode_data_fork_size(ip) ||
-		    len > strnlen(ifp->if_u1.if_data, xfs_inode_data_fork_size(ip)))
+	if (ifp->if_flags & XFS_IFINLINE) {
+		if (len > XFS_IFORK_DSIZE(ip) ||
+		    len > strnlen(ifp->if_u1.if_data, XFS_IFORK_DSIZE(ip)))
 			xchk_fblock_set_corrupt(sc, XFS_DATA_FORK, 0);
 		goto out;
 	}

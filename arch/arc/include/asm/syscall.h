@@ -12,8 +12,6 @@
 #include <asm/unistd.h>
 #include <asm/ptrace.h>		/* in_syscall() */
 
-extern void *sys_call_table[];
-
 static inline long
 syscall_get_nr(struct task_struct *task, struct pt_regs *regs)
 {

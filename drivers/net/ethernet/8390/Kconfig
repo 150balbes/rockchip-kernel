@@ -102,7 +102,6 @@ config MCF8390
 config NE2000
 	tristate "NE2000/NE1000 support"
 	depends on (ISA || (Q40 && m) || MACH_TX49XX || ATARI_ETHERNEC)
-	select NETDEV_LEGACY_INIT if ISA
 	select CRC32
 	help
 	  If you have a network (Ethernet) card of this type, say Y here.
@@ -170,7 +169,6 @@ config STNIC
 config ULTRA
 	tristate "SMC Ultra support"
 	depends on ISA
-	select NETDEV_LEGACY_INIT
 	select CRC32
 	help
 	  If you have a network (Ethernet) card of this type, say Y here.
@@ -188,7 +186,6 @@ config ULTRA
 config WD80x3
 	tristate "WD80*3 support"
 	depends on ISA
-	select NETDEV_LEGACY_INIT
 	select CRC32
 	help
 	  If you have a network (Ethernet) card of this type, say Y here.

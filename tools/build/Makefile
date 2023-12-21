@@ -30,18 +30,12 @@ build     := -f $(srctree)/tools/build/Makefile.build dir=. obj
 
 all: $(OUTPUT)fixdep
 
-# Make sure there's anything to clean,
-# feature contains check for existing OUTPUT
-TMP_O := $(if $(OUTPUT),$(OUTPUT)feature/,./)
-
 clean:
 	$(call QUIET_CLEAN, fixdep)
-	$(Q)find $(or $(OUTPUT),.) -name '*.o' -delete -o -name '\.*.cmd' -delete -o -name '\.*.d' -delete
+	$(Q)find $(if $(OUTPUT),$(OUTPUT),.) -name '*.o' -delete -o -name '\.*.cmd' -delete -o -name '\.*.d' -delete
 	$(Q)rm -f $(OUTPUT)fixdep
 	$(call QUIET_CLEAN, feature-detect)
-ifneq ($(wildcard $(TMP_O)),)
-	$(Q)$(MAKE) -C feature OUTPUT=$(TMP_O) clean >/dev/null
-endif
+	$(Q)$(MAKE) -C feature/ clean >/dev/null
 
 $(OUTPUT)fixdep-in.o: FORCE
 	$(Q)$(MAKE) $(build)=fixdep

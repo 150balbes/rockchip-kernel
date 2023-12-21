@@ -6,7 +6,7 @@
 // Copyright: (C) 2009, 2010 Nicolas Palix, DIKU.
 // Copyright: (C) 2009, 2010 Julia Lawall, DIKU.
 // Copyright: (C) 2009, 2010 Gilles Muller, INRIA/LiP6.
-// URL: https://coccinelle.gitlabpages.inria.fr/website
+// URL: http://coccinelle.lip6.fr/
 // Options:
 //
 // Keywords: ERR_PTR, PTR_ERR, ERR_CAST

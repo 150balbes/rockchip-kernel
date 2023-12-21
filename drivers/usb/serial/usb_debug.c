@@ -47,19 +47,12 @@ MODULE_DEVICE_TABLE(usb, id_table_combined);
 /* This HW really does not support a serial break, so one will be
  * emulated when ever the break state is set to true.
  */
-static int usb_debug_break_ctl(struct tty_struct *tty, int break_state)
+static void usb_debug_break_ctl(struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
-	int ret;
-
 	if (!break_state)
-		return 0;
-
-	ret = usb_serial_generic_write(tty, port, USB_DEBUG_BRK, USB_DEBUG_BRK_SIZE);
-	if (ret < 0)
-		return ret;
-
-	return 0;
+		return;
+	usb_serial_generic_write(tty, port, USB_DEBUG_BRK, USB_DEBUG_BRK_SIZE);
 }
 
 static void usb_debug_process_read_urb(struct urb *urb)

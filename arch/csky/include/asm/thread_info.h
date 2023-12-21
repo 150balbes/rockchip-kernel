@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+// Copyright (C) 2018 Hangzhou C-SKY Microsystems co.,ltd.
 
 #ifndef _ASM_CSKY_THREAD_INFO_H
 #define _ASM_CSKY_THREAD_INFO_H
 
 #ifndef __ASSEMBLY__
 
+#include <linux/version.h>
 #include <asm/types.h>
 #include <asm/page.h>
 #include <asm/processor.h>
@@ -16,6 +18,7 @@ struct thread_info {
 	unsigned long		flags;
 	int			preempt_count;
 	unsigned long		tp_value;
+	mm_segment_t		addr_limit;
 	struct restart_block	restart_block;
 	struct pt_regs		*regs;
 	unsigned int		cpu;
@@ -25,6 +28,7 @@ struct thread_info {
 {						\
 	.task		= &tsk,			\
 	.preempt_count  = INIT_PREEMPT_COUNT,	\
+	.addr_limit     = KERNEL_DS,		\
 	.cpu		= 0,			\
 	.restart_block = {			\
 		.fn = do_no_restart_syscall,	\

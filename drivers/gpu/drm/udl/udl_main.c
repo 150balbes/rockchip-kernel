@@ -20,14 +20,16 @@
 #define NR_USB_REQUEST_CHANNEL 0x12
 
 #define MAX_TRANSFER (PAGE_SIZE*16 - BULK_SIZE)
-#define WRITES_IN_FLIGHT (20)
+#define WRITES_IN_FLIGHT (4)
 #define MAX_VENDOR_DESCRIPTOR_SIZE 256
 
-static struct urb *udl_get_urb_locked(struct udl_device *udl, long timeout);
+#define GET_URB_TIMEOUT	HZ
+#define FREE_URB_TIMEOUT (HZ*2)
 
-static int udl_parse_vendor_descriptor(struct udl_device *udl)
+static int udl_parse_vendor_descriptor(struct drm_device *dev,
+				       struct usb_device *usbdev)
 {
-	struct usb_device *udev = udl_to_usb_device(udl);
+	struct udl_device *udl = to_udl(dev);
 	char *desc;
 	char *buf;
 	char *desc_end;
@@ -39,7 +41,7 @@ static int udl_parse_vendor_descriptor(struct udl_device *udl)
 		return false;
 	desc = buf;
 
-	total_len = usb_get_descriptor(udev, 0x5f, /* vendor specific */
+	total_len = usb_get_descriptor(usbdev, 0x5f, /* vendor specific */
 				    0, desc, MAX_VENDOR_DESCRIPTOR_SIZE);
 	if (total_len > 5) {
 		DRM_INFO("vendor descriptor length:%x data:%11ph\n",
@@ -94,28 +96,35 @@ success:
 /*
  * Need to ensure a channel is selected before submitting URBs
  */
-int udl_select_std_channel(struct udl_device *udl)
+static int udl_select_std_channel(struct udl_device *udl)
 {
+	int ret;
 	static const u8 set_def_chn[] = {0x57, 0xCD, 0xDC, 0xA7,
 					 0x1C, 0x88, 0x5E, 0x15,
 					 0x60, 0xFE, 0xC6, 0x97,
 					 0x16, 0x3D, 0x47, 0xF2};
-
 	void *sendbuf;
-	int ret;
-	struct usb_device *udev = udl_to_usb_device(udl);
 
 	sendbuf = kmemdup(set_def_chn, sizeof(set_def_chn), GFP_KERNEL);
 	if (!sendbuf)
 		return -ENOMEM;
 
-	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
+	ret = usb_control_msg(udl->udev,
+			      usb_sndctrlpipe(udl->udev, 0),
 			      NR_USB_REQUEST_CHANNEL,
 			      (USB_DIR_OUT | USB_TYPE_VENDOR), 0, 0,
 			      sendbuf, sizeof(set_def_chn),
 			      USB_CTRL_SET_TIMEOUT);
 	kfree(sendbuf);
 	return ret < 0 ? ret : 0;
+}
+
+static void udl_release_urb_work(struct work_struct *work)
+{
+	struct urb_node *unode = container_of(work, struct urb_node,
+					      release_urb_work.work);
+
+	up(&unode->dev->urbs.limit_sem);
 }
 
 void udl_urb_completion(struct urb *urb)
@@ -128,7 +137,6 @@ void udl_urb_completion(struct urb *urb)
 	if (urb->status) {
 		if (!(urb->status == -ENOENT ||
 		    urb->status == -ECONNRESET ||
-		    urb->status == -EPROTO ||
 		    urb->status == -ESHUTDOWN)) {
 			DRM_ERROR("%s - nonzero write bulk status received: %d\n",
 				__func__, urb->status);
@@ -142,34 +150,49 @@ void udl_urb_completion(struct urb *urb)
 	udl->urbs.available++;
 	spin_unlock_irqrestore(&udl->urbs.lock, flags);
 
-	wake_up(&udl->urbs.sleep);
+#if 0
+	/*
+	 * When using fb_defio, we deadlock if up() is called
+	 * while another is waiting. So queue to another process.
+	 */
+	if (fb_defio)
+		schedule_delayed_work(&unode->release_urb_work, 0);
+	else
+#endif
+		up(&udl->urbs.limit_sem);
 }
 
 static void udl_free_urb_list(struct drm_device *dev)
 {
 	struct udl_device *udl = to_udl(dev);
+	int count = udl->urbs.count;
+	struct list_head *node;
 	struct urb_node *unode;
 	struct urb *urb;
 
 	DRM_DEBUG("Waiting for completes and freeing all render urbs\n");
 
 	/* keep waiting and freeing, until we've got 'em all */
-	while (udl->urbs.count) {
+	while (count--) {
+		down(&udl->urbs.limit_sem);
+
 		spin_lock_irq(&udl->urbs.lock);
-		urb = udl_get_urb_locked(udl, MAX_SCHEDULE_TIMEOUT);
-		udl->urbs.count--;
+
+		node = udl->urbs.list.next; /* have reserved one with sem */
+		list_del_init(node);
+
 		spin_unlock_irq(&udl->urbs.lock);
-		if (WARN_ON(!urb))
-			break;
-		unode = urb->context;
+
+		unode = list_entry(node, struct urb_node, entry);
+		urb = unode->urb;
+
 		/* Free each separately allocated piece */
 		usb_free_coherent(urb->dev, udl->urbs.size,
 				  urb->transfer_buffer, urb->transfer_dma);
 		usb_free_urb(urb);
-		kfree(unode);
+		kfree(node);
 	}
-
-	wake_up_all(&udl->urbs.sleep);
+	udl->urbs.count = 0;
 }
 
 static int udl_alloc_urb_list(struct drm_device *dev, int count, size_t size)
@@ -179,22 +202,25 @@ static int udl_alloc_urb_list(struct drm_device *dev, int count, size_t size)
 	struct urb_node *unode;
 	char *buf;
 	size_t wanted_size = count * size;
-	struct usb_device *udev = udl_to_usb_device(udl);
 
 	spin_lock_init(&udl->urbs.lock);
-	INIT_LIST_HEAD(&udl->urbs.list);
-	init_waitqueue_head(&udl->urbs.sleep);
-	udl->urbs.count = 0;
-	udl->urbs.available = 0;
 
 retry:
 	udl->urbs.size = size;
+	INIT_LIST_HEAD(&udl->urbs.list);
+
+	sema_init(&udl->urbs.limit_sem, 0);
+	udl->urbs.count = 0;
+	udl->urbs.available = 0;
 
 	while (udl->urbs.count * size < wanted_size) {
 		unode = kzalloc(sizeof(struct urb_node), GFP_KERNEL);
 		if (!unode)
 			break;
 		unode->dev = udl;
+
+		INIT_DELAYED_WORK(&unode->release_urb_work,
+			  udl_release_urb_work);
 
 		urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (!urb) {
@@ -203,7 +229,7 @@ retry:
 		}
 		unode->urb = urb;
 
-		buf = usb_alloc_coherent(udev, size, GFP_KERNEL,
+		buf = usb_alloc_coherent(udl->udev, size, GFP_KERNEL,
 					 &urb->transfer_dma);
 		if (!buf) {
 			kfree(unode);
@@ -217,12 +243,13 @@ retry:
 		}
 
 		/* urb->transfer_buffer_length set to actual before submit */
-		usb_fill_bulk_urb(urb, udev, usb_sndbulkpipe(udev, 1),
-				  buf, size, udl_urb_completion, unode);
+		usb_fill_bulk_urb(urb, udl->udev, usb_sndbulkpipe(udl->udev, 1),
+			buf, size, udl_urb_completion, unode);
 		urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
 		list_add_tail(&unode->entry, &udl->urbs.list);
 
+		up(&udl->urbs.limit_sem);
 		udl->urbs.count++;
 		udl->urbs.available++;
 	}
@@ -232,41 +259,35 @@ retry:
 	return udl->urbs.count;
 }
 
-static struct urb *udl_get_urb_locked(struct udl_device *udl, long timeout)
-{
-	struct urb_node *unode;
-
-	assert_spin_locked(&udl->urbs.lock);
-
-	/* Wait for an in-flight buffer to complete and get re-queued */
-	if (!wait_event_lock_irq_timeout(udl->urbs.sleep,
-					 !udl->urbs.count ||
-					 !list_empty(&udl->urbs.list),
-					 udl->urbs.lock, timeout)) {
-		DRM_INFO("wait for urb interrupted: available: %d\n",
-			 udl->urbs.available);
-		return NULL;
-	}
-
-	if (!udl->urbs.count)
-		return NULL;
-
-	unode = list_first_entry(&udl->urbs.list, struct urb_node, entry);
-	list_del_init(&unode->entry);
-	udl->urbs.available--;
-
-	return unode->urb;
-}
-
-#define GET_URB_TIMEOUT	HZ
 struct urb *udl_get_urb(struct drm_device *dev)
 {
 	struct udl_device *udl = to_udl(dev);
-	struct urb *urb;
+	int ret = 0;
+	struct list_head *entry;
+	struct urb_node *unode;
+	struct urb *urb = NULL;
+
+	/* Wait for an in-flight buffer to complete and get re-queued */
+	ret = down_timeout(&udl->urbs.limit_sem, GET_URB_TIMEOUT);
+	if (ret) {
+		DRM_INFO("wait for urb interrupted: %x available: %d\n",
+		       ret, udl->urbs.available);
+		goto error;
+	}
 
 	spin_lock_irq(&udl->urbs.lock);
-	urb = udl_get_urb_locked(udl, GET_URB_TIMEOUT);
+
+	BUG_ON(list_empty(&udl->urbs.list)); /* reserved one with limit_sem */
+	entry = udl->urbs.list.next;
+	list_del_init(entry);
+	udl->urbs.available--;
+
 	spin_unlock_irq(&udl->urbs.lock);
+
+	unode = list_entry(entry, struct urb_node, entry);
+	urb = unode->urb;
+
+error:
 	return urb;
 }
 
@@ -275,33 +296,15 @@ int udl_submit_urb(struct drm_device *dev, struct urb *urb, size_t len)
 	struct udl_device *udl = to_udl(dev);
 	int ret;
 
-	if (WARN_ON(len > udl->urbs.size)) {
-		ret = -EINVAL;
-		goto error;
-	}
+	BUG_ON(len > udl->urbs.size);
+
 	urb->transfer_buffer_length = len; /* set to actual payload len */
 	ret = usb_submit_urb(urb, GFP_ATOMIC);
- error:
 	if (ret) {
 		udl_urb_completion(urb); /* because no one else will */
 		DRM_ERROR("usb_submit_urb error %x\n", ret);
 	}
 	return ret;
-}
-
-/* wait until all pending URBs have been processed */
-void udl_sync_pending_urbs(struct drm_device *dev)
-{
-	struct udl_device *udl = to_udl(dev);
-
-	spin_lock_irq(&udl->urbs.lock);
-	/* 2 seconds as a sane timeout */
-	if (!wait_event_lock_irq_timeout(udl->urbs.sleep,
-					 udl->urbs.available == udl->urbs.count,
-					 udl->urbs.lock,
-					 msecs_to_jiffies(2000)))
-		drm_err(dev, "Timeout for syncing pending URBs\n");
-	spin_unlock_irq(&udl->urbs.lock);
 }
 
 int udl_init(struct udl_device *udl)
@@ -317,7 +320,7 @@ int udl_init(struct udl_device *udl)
 
 	mutex_init(&udl->gem_lock);
 
-	if (!udl_parse_vendor_descriptor(udl)) {
+	if (!udl_parse_vendor_descriptor(dev, udl->udev)) {
 		ret = -ENODEV;
 		DRM_ERROR("firmware not recognized. Assume incompatible device\n");
 		goto err;

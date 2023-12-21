@@ -10,7 +10,6 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/time.h>
-#include <linux/time_namespace.h>
 #include <linux/irqnr.h>
 #include <linux/sched/cputime.h>
 #include <linux/tick.h>
@@ -21,6 +20,30 @@
 #ifndef arch_irq_stat
 #define arch_irq_stat() 0
 #endif
+
+#ifdef arch_idle_time
+
+u64 get_idle_time(struct kernel_cpustat *kcs, int cpu)
+{
+	u64 idle;
+
+	idle = kcs->cpustat[CPUTIME_IDLE];
+	if (cpu_online(cpu) && !nr_iowait_cpu(cpu))
+		idle += arch_idle_time(cpu);
+	return idle;
+}
+
+static u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu)
+{
+	u64 iowait;
+
+	iowait = kcs->cpustat[CPUTIME_IOWAIT];
+	if (cpu_online(cpu) && nr_iowait_cpu(cpu))
+		iowait += arch_idle_time(cpu);
+	return iowait;
+}
+
+#else
 
 u64 get_idle_time(struct kernel_cpustat *kcs, int cpu)
 {
@@ -53,6 +76,8 @@ static u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu)
 
 	return iowait;
 }
+
+#endif
 
 static void show_irq_gap(struct seq_file *p, unsigned int gap)
 {
@@ -93,8 +118,6 @@ static int show_stat(struct seq_file *p, void *v)
 		irq = softirq = steal = 0;
 	guest = guest_nice = 0;
 	getboottime64(&boottime);
-	/* shift boot timestamp according to the timens offset */
-	timens_sub_boottime(&boottime);
 
 	for_each_possible_cpu(i) {
 		struct kernel_cpustat kcpustat;
@@ -174,8 +197,8 @@ static int show_stat(struct seq_file *p, void *v)
 		"\nctxt %llu\n"
 		"btime %llu\n"
 		"processes %lu\n"
-		"procs_running %u\n"
-		"procs_blocked %u\n",
+		"procs_running %lu\n"
+		"procs_blocked %lu\n",
 		nr_context_switches(),
 		(unsigned long long)boottime.tv_sec,
 		total_forks,

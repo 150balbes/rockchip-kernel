@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/display/allwinner,sun4i-a10-display-frontend.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Allwinner A10 Display Engine Frontend
+title: Allwinner A10 Display Engine Frontend Device Tree Bindings
 
 maintainers:
   - Chen-Yu Tsai <wens@csie.org>
@@ -57,21 +57,34 @@ properties:
     maxItems: 1
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
+    type: object
+    description: |
+      A ports node with endpoint definitions as defined in
+      Documentation/devicetree/bindings/media/video-interfaces.txt.
 
     properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
       port@0:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
         description: |
           Input endpoints of the controller.
 
       port@1:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
         description: |
           Output endpoints of the controller.
 
     required:
+      - "#address-cells"
+      - "#size-cells"
       - port@1
+
+    additionalProperties: false
 
 required:
   - compatible

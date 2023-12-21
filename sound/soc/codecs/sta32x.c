@@ -48,9 +48,12 @@
 		      SNDRV_PCM_RATE_192000)
 
 #define STA32X_FORMATS \
-	(SNDRV_PCM_FMTBIT_S16_LE  | SNDRV_PCM_FMTBIT_S18_3LE | \
-	 SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_S24_3LE | \
-	 SNDRV_PCM_FMTBIT_S24_LE  | SNDRV_PCM_FMTBIT_S32_LE)
+	(SNDRV_PCM_FMTBIT_S16_LE  | SNDRV_PCM_FMTBIT_S16_BE  | \
+	 SNDRV_PCM_FMTBIT_S18_3LE | SNDRV_PCM_FMTBIT_S18_3BE | \
+	 SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_S20_3BE | \
+	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S24_3BE | \
+	 SNDRV_PCM_FMTBIT_S24_LE  | SNDRV_PCM_FMTBIT_S24_BE  | \
+	 SNDRV_PCM_FMTBIT_S32_LE  | SNDRV_PCM_FMTBIT_S32_BE)
 
 /* Power-up register defaults */
 static const struct reg_default sta32x_regs[] = {
@@ -601,8 +604,8 @@ static int sta32x_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	struct sta32x_priv *sta32x = snd_soc_component_get_drvdata(component);
 	u8 confb = 0;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBC_CFC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -1014,6 +1017,7 @@ static const struct snd_soc_component_driver sta32x_component = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config sta32x_regmap = {
@@ -1054,32 +1058,35 @@ static int sta32x_probe_dt(struct device *dev, struct sta32x_priv *sta32x)
 	of_property_read_u8(np, "st,ch3-output-mapping",
 			    &pdata->ch3_output_mapping);
 
-	pdata->fault_detect_recovery =
-		of_property_read_bool(np, "st,fault-detect-recovery");
-	pdata->thermal_warning_recovery =
-		of_property_read_bool(np, "st,thermal-warning-recovery");
-	pdata->thermal_warning_adjustment =
-		of_property_read_bool(np, "st,thermal-warning-adjustment");
-	pdata->needs_esd_watchdog =
-		of_property_read_bool(np, "st,needs_esd_watchdog");
+	if (of_get_property(np, "st,fault-detect-recovery", NULL))
+		pdata->fault_detect_recovery = 1;
+	if (of_get_property(np, "st,thermal-warning-recovery", NULL))
+		pdata->thermal_warning_recovery = 1;
+	if (of_get_property(np, "st,thermal-warning-adjustment", NULL))
+		pdata->thermal_warning_adjustment = 1;
+	if (of_get_property(np, "st,needs_esd_watchdog", NULL))
+		pdata->needs_esd_watchdog = 1;
 
 	tmp = 140;
 	of_property_read_u16(np, "st,drop-compensation-ns", &tmp);
 	pdata->drop_compensation_ns = clamp_t(u16, tmp, 0, 300) / 20;
 
 	/* CONFE */
-	pdata->max_power_use_mpcc =
-		of_property_read_bool(np, "st,max-power-use-mpcc");
-	pdata->max_power_correction =
-		of_property_read_bool(np, "st,max-power-correction");
-	pdata->am_reduction_mode =
-		of_property_read_bool(np, "st,am-reduction-mode");
-	pdata->odd_pwm_speed_mode =
-		of_property_read_bool(np, "st,odd-pwm-speed-mode");
+	if (of_get_property(np, "st,max-power-use-mpcc", NULL))
+		pdata->max_power_use_mpcc = 1;
+
+	if (of_get_property(np, "st,max-power-correction", NULL))
+		pdata->max_power_correction = 1;
+
+	if (of_get_property(np, "st,am-reduction-mode", NULL))
+		pdata->am_reduction_mode = 1;
+
+	if (of_get_property(np, "st,odd-pwm-speed-mode", NULL))
+		pdata->odd_pwm_speed_mode = 1;
 
 	/* CONFF */
-	pdata->invalid_input_detect_mute =
-		of_property_read_bool(np, "st,invalid-input-detect-mute");
+	if (of_get_property(np, "st,invalid-input-detect-mute", NULL))
+		pdata->invalid_input_detect_mute = 1;
 
 	sta32x->pdata = pdata;
 
@@ -1087,7 +1094,8 @@ static int sta32x_probe_dt(struct device *dev, struct sta32x_priv *sta32x)
 }
 #endif
 
-static int sta32x_i2c_probe(struct i2c_client *i2c)
+static int sta32x_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct device *dev = &i2c->dev;
 	struct sta32x_priv *sta32x;
@@ -1167,7 +1175,7 @@ static struct i2c_driver sta32x_i2c_driver = {
 		.name = "sta32x",
 		.of_match_table = of_match_ptr(st32x_dt_ids),
 	},
-	.probe = sta32x_i2c_probe,
+	.probe =    sta32x_i2c_probe,
 	.id_table = sta32x_i2c_id,
 };
 

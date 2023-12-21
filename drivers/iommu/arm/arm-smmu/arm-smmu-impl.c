@@ -12,7 +12,7 @@
 
 static int arm_smmu_gr0_ns(int offset)
 {
-	switch (offset) {
+	switch(offset) {
 	case ARM_SMMU_GR0_sCR0:
 	case ARM_SMMU_GR0_sACR:
 	case ARM_SMMU_GR0_sGFSR:
@@ -91,11 +91,14 @@ static struct arm_smmu_device *cavium_smmu_impl_init(struct arm_smmu_device *smm
 {
 	struct cavium_smmu *cs;
 
-	cs = devm_krealloc(smmu->dev, smmu, sizeof(*cs), GFP_KERNEL);
+	cs = devm_kzalloc(smmu->dev, sizeof(*cs), GFP_KERNEL);
 	if (!cs)
 		return ERR_PTR(-ENOMEM);
 
+	cs->smmu = *smmu;
 	cs->smmu.impl = &cavium_impl;
+
+	devm_kfree(smmu->dev, smmu);
 
 	return &cs->smmu;
 }
@@ -136,9 +139,6 @@ int arm_mmu500_reset(struct arm_smmu_device *smmu)
 		reg = arm_smmu_cb_read(smmu, i, ARM_SMMU_CB_ACTLR);
 		reg &= ~ARM_MMU500_ACTLR_CPRE;
 		arm_smmu_cb_write(smmu, i, ARM_SMMU_CB_ACTLR, reg);
-		reg = arm_smmu_cb_read(smmu, i, ARM_SMMU_CB_ACTLR);
-		if (reg & ARM_MMU500_ACTLR_CPRE)
-			dev_warn_once(smmu->dev, "Failed to disable prefetcher [errata #841119 and #826419], check ACR.CACHE_LOCK\n");
 	}
 
 	return 0;
@@ -214,13 +214,17 @@ struct arm_smmu_device *arm_smmu_impl_init(struct arm_smmu_device *smmu)
 	if (of_property_read_bool(np, "calxeda,smmu-secure-config-access"))
 		smmu->impl = &calxeda_impl;
 
-	if (of_device_is_compatible(np, "nvidia,tegra234-smmu") ||
-	    of_device_is_compatible(np, "nvidia,tegra194-smmu") ||
-	    of_device_is_compatible(np, "nvidia,tegra186-smmu"))
+	if (of_device_is_compatible(np, "nvidia,tegra194-smmu"))
 		return nvidia_smmu_impl_init(smmu);
 
-	if (IS_ENABLED(CONFIG_ARM_SMMU_QCOM))
-		smmu = qcom_smmu_impl_init(smmu);
+	if (of_device_is_compatible(np, "qcom,sdm845-smmu-500") ||
+	    of_device_is_compatible(np, "qcom,sc7180-smmu-500") ||
+	    of_device_is_compatible(np, "qcom,sm8150-smmu-500") ||
+	    of_device_is_compatible(np, "qcom,sm8250-smmu-500"))
+		return qcom_smmu_impl_init(smmu);
+
+	if (of_device_is_compatible(smmu->dev->of_node, "qcom,adreno-smmu"))
+		return qcom_adreno_smmu_impl_init(smmu);
 
 	if (of_device_is_compatible(np, "marvell,ap806-smmu-500"))
 		smmu->impl = &mrvl_mmu500_impl;

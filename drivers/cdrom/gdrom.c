@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/cdrom.h>
+#include <linux/genhd.h>
 #include <linux/bio.h>
 #include <linux/blk-mq.h>
 #include <linux/interrupt.h>
@@ -474,22 +475,22 @@ static const struct cdrom_device_ops gdrom_ops = {
 				  CDC_RESET | CDC_DRIVE_STATUS | CDC_CD_R,
 };
 
-static int gdrom_bdops_open(struct gendisk *disk, blk_mode_t mode)
+static int gdrom_bdops_open(struct block_device *bdev, fmode_t mode)
 {
 	int ret;
 
-	disk_check_media_change(disk);
+	bdev_check_media_change(bdev);
 
 	mutex_lock(&gdrom_mutex);
-	ret = cdrom_open(gd.cd_info, mode);
+	ret = cdrom_open(gd.cd_info, bdev, mode);
 	mutex_unlock(&gdrom_mutex);
 	return ret;
 }
 
-static void gdrom_bdops_release(struct gendisk *disk)
+static void gdrom_bdops_release(struct gendisk *disk, fmode_t mode)
 {
 	mutex_lock(&gdrom_mutex);
-	cdrom_release(gd.cd_info);
+	cdrom_release(gd.cd_info, mode);
 	mutex_unlock(&gdrom_mutex);
 }
 
@@ -499,13 +500,13 @@ static unsigned int gdrom_bdops_check_events(struct gendisk *disk,
 	return cdrom_check_events(gd.cd_info, clearing);
 }
 
-static int gdrom_bdops_ioctl(struct block_device *bdev, blk_mode_t mode,
+static int gdrom_bdops_ioctl(struct block_device *bdev, fmode_t mode,
 	unsigned cmd, unsigned long arg)
 {
 	int ret;
 
 	mutex_lock(&gdrom_mutex);
-	ret = cdrom_ioctl(gd.cd_info, bdev, cmd, arg);
+	ret = cdrom_ioctl(gd.cd_info, bdev, mode, cmd, arg);
 	mutex_unlock(&gdrom_mutex);
 
 	return ret;
@@ -582,8 +583,7 @@ static blk_status_t gdrom_readdisk_dma(struct request *req)
 	read_command->cmd[1] = 0x20;
 	block = blk_rq_pos(req)/GD_TO_BLK + GD_SESSION_OFFSET;
 	block_cnt = blk_rq_sectors(req)/GD_TO_BLK;
-	__raw_writel(page_to_phys(bio_page(req->bio)) + bio_offset(req->bio),
-			GDROM_DMA_STARTADDR_REG);
+	__raw_writel(virt_to_phys(bio_data(req->bio)), GDROM_DMA_STARTADDR_REG);
 	__raw_writel(block_cnt * GDROM_HARD_SECTOR, GDROM_DMA_LENGTH_REG);
 	__raw_writel(1, GDROM_DMA_DIRECTION_REG);
 	__raw_writel(1, GDROM_DMA_ENABLE_REG);
@@ -718,7 +718,6 @@ static void probe_gdrom_setupdisk(void)
 	gd.disk->major = gdrom_major;
 	gd.disk->first_minor = 1;
 	gd.disk->minors = 1;
-	gd.disk->flags |= GENHD_FL_NO_PART;
 	strcpy(gd.disk->disk_name, GDROM_DEV_NAME);
 }
 
@@ -772,55 +771,55 @@ static int probe_gdrom(struct platform_device *devptr)
 		goto probe_fail_no_mem;
 	}
 	probe_gdrom_setupcd();
-
-	err = blk_mq_alloc_sq_tag_set(&gd.tag_set, &gdrom_mq_ops, 1,
-				BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_BLOCKING);
-	if (err)
-		goto probe_fail_free_cd_info;
-
-	gd.disk = blk_mq_alloc_disk(&gd.tag_set, NULL);
-	if (IS_ERR(gd.disk)) {
-		err = PTR_ERR(gd.disk);
-		goto probe_fail_free_tag_set;
+	gd.disk = alloc_disk(1);
+	if (!gd.disk) {
+		err = -ENODEV;
+		goto probe_fail_no_disk;
 	}
-	gd.gdrom_rq = gd.disk->queue;
 	probe_gdrom_setupdisk();
 	if (register_cdrom(gd.disk, gd.cd_info)) {
 		err = -ENODEV;
-		goto probe_fail_cleanup_disk;
+		goto probe_fail_cdrom_register;
 	}
 	gd.disk->fops = &gdrom_bdops;
 	gd.disk->events = DISK_EVENT_MEDIA_CHANGE;
 	/* latch on to the interrupt */
 	err = gdrom_set_interrupt_handlers();
 	if (err)
-		goto probe_fail_cleanup_disk;
+		goto probe_fail_cmdirq_register;
+
+	gd.gdrom_rq = blk_mq_init_sq_queue(&gd.tag_set, &gdrom_mq_ops, 1,
+				BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_BLOCKING);
+	if (IS_ERR(gd.gdrom_rq)) {
+		err = PTR_ERR(gd.gdrom_rq);
+		gd.gdrom_rq = NULL;
+		goto probe_fail_requestq;
+	}
+
+	blk_queue_bounce_limit(gd.gdrom_rq, BLK_BOUNCE_HIGH);
 
 	err = probe_gdrom_setupqueue();
 	if (err)
-		goto probe_fail_free_irqs;
+		goto probe_fail_toc;
 
 	gd.toc = kzalloc(sizeof(struct gdromtoc), GFP_KERNEL);
 	if (!gd.toc) {
 		err = -ENOMEM;
-		goto probe_fail_free_irqs;
+		goto probe_fail_toc;
 	}
-	err = add_disk(gd.disk);
-	if (err)
-		goto probe_fail_add_disk;
-
+	add_disk(gd.disk);
 	return 0;
 
-probe_fail_add_disk:
-	kfree(gd.toc);
-probe_fail_free_irqs:
+probe_fail_toc:
+	blk_cleanup_queue(gd.gdrom_rq);
+	blk_mq_free_tag_set(&gd.tag_set);
+probe_fail_requestq:
 	free_irq(HW_EVENT_GDROM_DMA, &gd);
 	free_irq(HW_EVENT_GDROM_CMD, &gd);
-probe_fail_cleanup_disk:
-	put_disk(gd.disk);
-probe_fail_free_tag_set:
-	blk_mq_free_tag_set(&gd.tag_set);
-probe_fail_free_cd_info:
+probe_fail_cmdirq_register:
+probe_fail_cdrom_register:
+	del_gendisk(gd.disk);
+probe_fail_no_disk:
 	kfree(gd.cd_info);
 probe_fail_no_mem:
 	unregister_blkdev(gdrom_major, GDROM_DEV_NAME);
@@ -831,6 +830,7 @@ probe_fail_no_mem:
 
 static int remove_gdrom(struct platform_device *devptr)
 {
+	blk_cleanup_queue(gd.gdrom_rq);
 	blk_mq_free_tag_set(&gd.tag_set);
 	free_irq(HW_EVENT_GDROM_CMD, &gd);
 	free_irq(HW_EVENT_GDROM_DMA, &gd);

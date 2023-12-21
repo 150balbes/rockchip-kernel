@@ -130,14 +130,14 @@ static int snd_vortex_pcm_open(struct snd_pcm_substream *substream)
 	int err;
 	
 	/* Force equal size periods */
-	err = snd_pcm_hw_constraint_integer(runtime,
-					    SNDRV_PCM_HW_PARAM_PERIODS);
-	if (err < 0)
+	if ((err =
+	     snd_pcm_hw_constraint_integer(runtime,
+					   SNDRV_PCM_HW_PARAM_PERIODS)) < 0)
 		return err;
 	/* Avoid PAGE_SIZE boundary to fall inside of a period. */
-	err = snd_pcm_hw_constraint_pow2(runtime, 0,
-					 SNDRV_PCM_HW_PARAM_PERIOD_BYTES);
-	if (err < 0)
+	if ((err =
+	     snd_pcm_hw_constraint_pow2(runtime, 0,
+					SNDRV_PCM_HW_PARAM_PERIOD_BYTES)) < 0)
 		return err;
 
 	snd_pcm_hw_constraint_step(runtime, 0,
@@ -658,8 +658,7 @@ static int snd_vortex_new_pcm(vortex_t *chip, int idx, int nr)
 			kctl = snd_ctl_new1(&snd_vortex_mixer_spdif[i], chip);
 			if (!kctl)
 				return -ENOMEM;
-			err = snd_ctl_add(chip->card, kctl);
-			if (err < 0)
+			if ((err = snd_ctl_add(chip->card, kctl)) < 0)
 				return err;
 		}
 	}

@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-1.0+
 /* ne.c: A general non-shared-memory NS8390 ethernet driver for linux. */
 /*
     Written 1992-94 by Donald Becker.
 
     Copyright 1993 United States Government as represented by the
     Director, National Security Agency.
+
+    This software may be used and distributed according to the terms
+    of the GNU General Public License, incorporated herein by reference.
 
     The author may be reached as becker@scyld.com, or C/O
     Scyld Computing Corporation, 410 Severn Ave., Suite 210, Annapolis MD 21403
@@ -50,7 +52,6 @@ static const char version2[] =
 #include <linux/etherdevice.h>
 #include <linux/jiffies.h>
 #include <linux/platform_device.h>
-#include <net/Space.h>
 
 #include <asm/io.h>
 
@@ -499,7 +500,9 @@ static int __init ne_probe1(struct net_device *dev, unsigned long ioaddr)
 
 	dev->base_addr = ioaddr;
 
-	eth_hw_addr_set(dev, SA_prom);
+	for (i = 0; i < ETH_ALEN; i++) {
+		dev->dev_addr[i] = SA_prom[i];
+	}
 
 	pr_cont("%pM\n", dev->dev_addr);
 
@@ -707,7 +710,7 @@ static void ne_block_output(struct net_device *dev, int count,
 retry:
 #endif
 
-#ifdef NE_RW_BUGFIX
+#ifdef NE8390_RW_BUGFIX
 	/* Handle the read-before-write bug the same way as the
 	   Crynwr packet driver -- the NatSemi method doesn't work.
 	   Actually this doesn't always work either, but if you have
@@ -919,16 +922,13 @@ static void __init ne_add_devices(void)
 	}
 }
 
-static int __init ne_init(void)
+#ifdef MODULE
+int __init init_module(void)
 {
 	int retval;
-
-	if (IS_MODULE(CONFIG_NE2000))
-		ne_add_devices();
-
+	ne_add_devices();
 	retval = platform_driver_probe(&ne_driver, ne_drv_probe);
-
-	if (IS_MODULE(CONFIG_NE2000) && retval) {
+	if (retval) {
 		if (io[0] == 0)
 			pr_notice("ne.c: You must supply \"io=0xNNN\""
 			       " value(s) for ISA cards.\n");
@@ -940,9 +940,17 @@ static int __init ne_init(void)
 	ne_loop_rm_unreg(0);
 	return retval;
 }
+#else /* MODULE */
+static int __init ne_init(void)
+{
+	int retval = platform_driver_probe(&ne_driver, ne_drv_probe);
+
+	/* Unregister unused platform_devices. */
+	ne_loop_rm_unreg(0);
+	return retval;
+}
 module_init(ne_init);
 
-#if !defined(MODULE) && defined(CONFIG_NETDEV_LEGACY_INIT)
 struct net_device * __init ne_probe(int unit)
 {
 	int this_dev;
@@ -983,7 +991,7 @@ struct net_device * __init ne_probe(int unit)
 
 	return ERR_PTR(-ENODEV);
 }
-#endif
+#endif /* MODULE */
 
 static void __exit ne_exit(void)
 {

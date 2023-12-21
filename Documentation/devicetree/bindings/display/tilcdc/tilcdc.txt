@@ -60,7 +60,7 @@ Example:
 		blue-and-red-wiring = "crossed";
 
 		port {
-			lcdc_0: endpoint {
+			lcdc_0: endpoint@0 {
 				remote-endpoint = <&hdmi_0>;
 			};
 		};
@@ -75,7 +75,7 @@ Example:
 		pinctrl-1 = <&nxp_hdmi_bonelt_off_pins>;
 
 		port {
-			hdmi_0: endpoint {
+			hdmi_0: endpoint@0 {
 				remote-endpoint = <&lcdc_0>;
 			};
 		};

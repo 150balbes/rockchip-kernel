@@ -46,7 +46,6 @@ int test_vmxcopy()
 	uint64_t aborted = 0;
 
 	SKIP_IF(!have_htm());
-	SKIP_IF(htm_is_synthetic());
 	SKIP_IF(!is_ppc64le());
 
 	fd = mkstemp(tmpfile);

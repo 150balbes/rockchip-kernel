@@ -56,7 +56,7 @@
 
 struct gl_packet {
 	__le32		packet_length;
-	char		packet_data[];
+	char		packet_data [1];
 };
 
 struct gl_header {

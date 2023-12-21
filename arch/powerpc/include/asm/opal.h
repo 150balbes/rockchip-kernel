@@ -28,6 +28,9 @@ extern struct device_node *opal_node;
 
 /* API functions */
 int64_t opal_invalid_call(void);
+int64_t opal_npu_destroy_context(uint64_t phb_id, uint64_t pid, uint64_t bdf);
+int64_t opal_npu_init_context(uint64_t phb_id, int pasid, uint64_t msr,
+			uint64_t bdf);
 int64_t opal_npu_map_lpar(uint64_t phb_id, uint64_t bdf, uint64_t lparid,
 			uint64_t lpcr);
 int64_t opal_npu_spa_setup(uint64_t phb_id, uint32_t bdfn,
@@ -112,6 +115,9 @@ int64_t opal_pci_set_pe(uint64_t phb_id, uint64_t pe_number, uint64_t bus_dev_fu
 			uint8_t pe_action);
 int64_t opal_pci_set_peltv(uint64_t phb_id, uint32_t parent_pe, uint32_t child_pe,
 			   uint8_t state);
+int64_t opal_pci_set_mve(uint64_t phb_id, uint32_t mve_number, uint32_t pe_number);
+int64_t opal_pci_set_mve_enable(uint64_t phb_id, uint32_t mve_number,
+				uint32_t state);
 int64_t opal_pci_get_xive_reissue(uint64_t phb_id, uint32_t xive_number,
 				  uint8_t *p_bit, uint8_t *q_bit);
 int64_t opal_pci_set_xive_reissue(uint64_t phb_id, uint32_t xive_number,
@@ -301,7 +307,7 @@ int opal_secvar_enqueue_update(const char *key, uint64_t key_len, u8 *data,
 
 s64 opal_mpipl_update(enum opal_mpipl_ops op, u64 src, u64 dest, u64 size);
 s64 opal_mpipl_register_tag(enum opal_mpipl_tags tag, u64 addr);
-s64 opal_mpipl_query_tag(enum opal_mpipl_tags tag, __be64 *addr);
+s64 opal_mpipl_query_tag(enum opal_mpipl_tags tag, u64 *addr);
 
 s64 opal_signal_system_reset(s32 cpu);
 s64 opal_quiesce(u64 shutdown_type, s32 cpu);
@@ -311,7 +317,7 @@ extern int early_init_dt_scan_opal(unsigned long node, const char *uname,
 				   int depth, void *data);
 extern int early_init_dt_scan_recoverable_ranges(unsigned long node,
 				 const char *uname, int depth, void *data);
-void __init opal_configure_cores(void);
+extern void opal_configure_cores(void);
 
 extern int opal_get_chars(uint32_t vtermno, char *buf, int count);
 extern int opal_put_chars(uint32_t vtermno, const char *buf, int total_len);
@@ -321,10 +327,16 @@ extern int opal_flush_console(uint32_t vtermno);
 
 extern void hvc_opal_init_early(void);
 
+extern int opal_notifier_register(struct notifier_block *nb);
+extern int opal_notifier_unregister(struct notifier_block *nb);
+
 extern int opal_message_notifier_register(enum opal_msg_type msg_type,
 						struct notifier_block *nb);
 extern int opal_message_notifier_unregister(enum opal_msg_type msg_type,
 					    struct notifier_block *nb);
+extern void opal_notifier_enable(void);
+extern void opal_notifier_disable(void);
+extern void opal_notifier_update_evt(uint64_t evt_mask, uint64_t evt_val);
 
 extern int opal_async_get_token_interruptible(void);
 extern int opal_async_release_token(int token);

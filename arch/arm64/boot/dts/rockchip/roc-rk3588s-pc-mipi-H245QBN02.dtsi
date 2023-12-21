@@ -1,0 +1,256 @@
+#define USE_TE_MODE 1
+/ { 
+    backlight: backlight {
+        status = "okay";
+        compatible = "pwm-backlight";
+        #if !USE_TE_MODE
+        enable-gpios = <&gpio1 RK_PB3 GPIO_ACTIVE_HIGH>;
+        #endif
+        pwms = <&pwm14 0 5000 0>;        
+	brightness-levels = <
+             60  60  60  61  61  61  62  62
+             62  63  63  63  64  64  64  65
+             65  65  66  66  66  67  67  67
+             68  68  68  69  69  69  70  70
+             70  71  71  71  72  72  72  73
+             73  73  74  74  74  75  75  75
+             76  76  76  77  77  77  78  78
+             78  79  79  79  80  80  80  81
+             81  81  82  82  82  83  83  83
+             84  84  84  85  85  85  86  86
+             86  87  87  87  88  88  88  89
+             89  89  90  91  92  93  94  95
+             96  97  98  99 100 101 102 103
+            104 105 106 107 108 109 110 111
+            112 113 114 115 116 117 118 119
+            120 121 122 123 124 125 126 127
+            128 129 130 131 132 133 134 135
+            136 137 138 139 140 141 142 143
+            144 145 146 147 148 149 150 151
+            152 153 154 155 156 157 158 159
+            160 161 162 163 164 165 166 167
+            168 169 170 171 172 173 174 175
+            176 177 178 179 180 181 182 183
+            184 185 186 187 188 189 190 191
+            192 193 194 195 196 197 198 199
+            200 201 202 203 204 205 206 207
+            208 209 210 211 212 213 214 215
+            216 217 218 219 220 221 222 223
+            224 225 226 227 228 229 230 231
+            232 233 234 235 236 237 238 239
+            240 241 242 243 244 245 246 247
+            248 249 250 251 252 253 254 255
+        >;
+        default-brightness-level = <150>;
+    };
+
+
+};
+
+&pwm14 {
+    pinctrl-0 = <&pwm14m2_pins>;
+    status = "okay";
+};
+
+/*
+ * mipi_dcphy0 needs to be enabled
+ * when dsi0 is enabled
+ */
+&mipi_dcphy0 {
+    status = "okay";
+};
+
+&dsi0_in_vp2 {
+    status = "disabled";
+};
+
+&dsi0_in_vp3 {
+    status = "okay";
+};
+
+&route_dsi0 {
+    status = "okay";
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+    connect = <&vp3_out_dsi0>;
+};
+
+&route_hdmi0 {
+    status = "okay";
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_dp0 {
+    status = "okay";
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&dsi0 {
+    status = "okay";
+    //rockchip,lane-rate = <1000>;
+    firefly-check;
+#if USE_TE_MODE
+#if 1
+// soft te
+    pinctrl-names = "default";
+    pinctrl-0 = <&mipi_te0_pins>;
+    te-gpios = <&gpio1 RK_PB3 GPIO_ACTIVE_LOW>;
+#else
+// hardware te
+    pinctrl-names = "default";
+    pinctrl-0 = <&mipi_te0>;
+#endif
+#endif
+
+    dsi_panel: panel@0 {
+        status = "okay";
+        compatible = "simple-panel-dsi";
+        reg = <0>;
+        backlight = <&backlight>;
+        
+        enable-gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&gpio1 RK_PA1 GPIO_ACTIVE_LOW>;
+
+        enable-delay-ms = <50>;
+        prepare-delay-ms = <6>;
+        reset-delay-ms = <25>;
+        init-delay-ms = <55>;
+        unprepare-delay-ms = <50>;
+        disable-delay-ms = <20>;
+        mipi-data-delay-ms = <20>;
+        size,width = <120>;
+        size,height = <170>;
+        //dsi,flags = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST | MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_EOT_PACKET)>;
+        dsi,flags = <(MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_EOT_PACKET)>;
+        dsi,format = <MIPI_DSI_FMT_RGB888>;
+        dsi,lanes  = <1>;
+
+	rotation = <90>;
+        panel-init-sequence = [
+	    99 00 02 da fe
+            05 64 01 11
+            39 00 05 2A 00 00 00 EF
+            39 00 05 2B 00 00 01 AF
+            15 00 02 35 00
+            05 00 01 11
+            05 00 01 29
+            39 00 03 BD 11 00
+            39 00 03 BC 00 94
+            39 00 03 BE 00 02
+            05 00 01 2C
+        ];
+
+        panel-exit-sequence = [
+            05 00 01 28
+            05 00 01 10
+        ];
+
+        disp_timings0: display-timings {
+            native-mode = <&dsi_timing0>;
+            dsi_timing0: timing0 {
+                clock-frequency = <9600000>;
+                hactive = <240>;
+                vactive = <432>;
+                hsync-len = <4>;
+                hback-porch = <52>;
+                hfront-porch = <50>;
+                vsync-len = <2>;
+                vback-porch = <16>;
+                vfront-porch = <14>;
+                hsync-active = <0>;
+                vsync-active = <0>;
+                de-active = <0>;
+                pixelclk-active = <0>;
+            };
+        };
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                panel_in_dsi: endpoint {
+                    remote-endpoint = <&dsi_out_panel>;
+                };
+            };
+        };
+    };
+
+    ports {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        port@1 {
+            reg = <1>;
+            dsi_out_panel: endpoint {
+            remote-endpoint = <&panel_in_dsi>;
+            };
+        };
+    };
+};
+&i2c4{
+    status = "okay";
+    pinctrl-names = "default";
+    pinctrl-0 = <&i2c4m3_xfer>;
+
+    goodix_ts@5d {
+        status = "okay";
+        compatible = "goodix,gt9xxx";
+        reg = <0x5d>;
+        interrupt-parent = <&gpio1>;
+        interrupts = <0 17 0x2008 0>;
+        //interrupts = <RK_PD6 IRQ_TYPE_LEVEL_LOW>;
+        //goodix,pwr-gpio = <&pca9555 PCA_IO0_7 GPIO_ACTIVE_HIGH>;
+        goodix,rst-gpio = <&gpio1 RK_PB2 GPIO_ACTIVE_HIGH>;
+        goodix,irq-gpio = <&gpio1 RK_PA7 IRQ_TYPE_LEVEL_LOW>;
+        flip-x = <1>;
+        flip-y = <1>;
+	touchscreen-swapped-x-y;
+
+        goodix,cfg-group2 = [
+            5B F0 00 B0 01 0A 05 00 01 08 
+            28 07 50 32 03 05 00 00 00 00 
+            00 00 00 00 00 00 00 89 20 05 
+            38 30 31 0D 00 00 01 B9 03 2D 
+            00 01 00 00 00 03 64 32 00 00 
+            00 1D 41 94 C5 02 07 00 00 04 
+            A7 1F 00 95 25 00 89 2B 00 7D 
+            33 00 73 3C 00 73 00 00 00 00 
+            00 00 00 00 00 00 00 00 00 00 
+            00 00 00 00 00 00 00 00 00 00 
+            00 00 00 00 00 00 00 00 00 00 
+            00 00 02 04 06 08 0A FF FF FF 
+            FF FF FF FF FF FF 00 00 00 00 
+            00 00 00 00 00 00 00 00 00 00 
+            00 00 10 0F 0C 0A 08 06 04 02 
+            00 FF FF FF FF FF FF FF FF FF 
+            FF FF FF FF FF FF FF FF 00 00 
+            00 00 00 00 00 00 00 00 00 00 
+            00 00 00 00 44 01
+        ];
+    };
+};
+
+&pinctrl {
+    touch {
+        touch_int0: touch-int0 {
+            rockchip,pins = <1 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+        };
+    };
+
+    mipi {
+        mipi_te0_pins: mipi-te0-pins {
+            rockchip,pins = <1 RK_PB3 RK_FUNC_GPIO &pcfg_pull_none>;
+        };
+    };
+
+};
+&dmc{
+    status = "disabled";
+};

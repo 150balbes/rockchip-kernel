@@ -40,7 +40,6 @@
 #ifndef __CXGB4VF_ADAPTER_H__
 #define __CXGB4VF_ADAPTER_H__
 
-#include <linux/etherdevice.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
 #include <linux/spinlock.h>
@@ -508,7 +507,7 @@ static inline const char *port_name(struct adapter *adapter, int pidx)
 static inline void t4_os_set_hw_addr(struct adapter *adapter, int pidx,
 				     u8 hw_addr[])
 {
-	eth_hw_addr_set(adapter->port[pidx], hw_addr);
+	memcpy(adapter->port[pidx]->dev_addr, hw_addr, ETH_ALEN);
 }
 
 /**

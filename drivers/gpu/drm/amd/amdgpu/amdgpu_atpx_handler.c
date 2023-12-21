@@ -11,7 +11,6 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 
-#include "amdgpu.h"
 #include "amd_acpi.h"
 
 #define AMDGPU_PX_QUIRK_FORCE_ATPX  (1 << 0)
@@ -166,7 +165,7 @@ static void amdgpu_atpx_parse_functions(struct amdgpu_atpx_functions *f, u32 mas
 }
 
 /**
- * amdgpu_atpx_validate - validate ATPX functions
+ * amdgpu_atpx_validate_functions - validate ATPX functions
  *
  * @atpx: amdgpu atpx struct
  *

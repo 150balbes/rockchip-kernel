@@ -264,8 +264,7 @@ static struct snd_soc_dai_link bells_dai_wm2200[] = {
 		.stream_name = "DSP-CODEC",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
-		.c2c_params = &sub_params,
-		.num_c2c_params = 1,
+		.params = &sub_params,
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(wm2200_dsp_codec),
 	},
@@ -301,8 +300,7 @@ static struct snd_soc_dai_link bells_dai_wm5102[] = {
 		.stream_name = "DSP-CODEC",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
-		.c2c_params = &sub_params,
-		.num_c2c_params = 1,
+		.params = &sub_params,
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(wm5102_dsp_codec),
 	},
@@ -312,8 +310,7 @@ static struct snd_soc_dai_link bells_dai_wm5102[] = {
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
 		.ignore_suspend = 1,
-		.c2c_params = &baseband_params,
-		.num_c2c_params = 1,
+		.params = &baseband_params,
 		SND_SOC_DAILINK_REG(wm5102_baseband),
 	},
 	{
@@ -322,8 +319,7 @@ static struct snd_soc_dai_link bells_dai_wm5102[] = {
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBS_CFS,
 		.ignore_suspend = 1,
-		.c2c_params = &sub_params,
-		.num_c2c_params = 1,
+		.params = &sub_params,
 		SND_SOC_DAILINK_REG(wm5102_sub),
 	},
 };
@@ -359,8 +355,7 @@ static struct snd_soc_dai_link bells_dai_wm5110[] = {
 		.stream_name = "DSP-CODEC",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
-		.c2c_params = &sub_params,
-		.num_c2c_params = 1,
+		.params = &sub_params,
 		.ignore_suspend = 1,
 		SND_SOC_DAILINK_REG(wm5110_dsp_codec),
 	},
@@ -370,8 +365,7 @@ static struct snd_soc_dai_link bells_dai_wm5110[] = {
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
 		.ignore_suspend = 1,
-		.c2c_params = &baseband_params,
-		.num_c2c_params = 1,
+		.params = &baseband_params,
 		SND_SOC_DAILINK_REG(wm5110_baseband),
 	},
 	{
@@ -380,8 +374,7 @@ static struct snd_soc_dai_link bells_dai_wm5110[] = {
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBS_CFS,
 		.ignore_suspend = 1,
-		.c2c_params = &sub_params,
-		.num_c2c_params = 1,
+		.params = &sub_params,
 		SND_SOC_DAILINK_REG(wm5110_sub),
 	},
 };
@@ -393,11 +386,11 @@ static struct snd_soc_codec_conf bells_codec_conf[] = {
 	},
 };
 
-static const struct snd_soc_dapm_widget bells_widgets[] = {
+static struct snd_soc_dapm_widget bells_widgets[] = {
 	SND_SOC_DAPM_MIC("DMIC", NULL),
 };
 
-static const struct snd_soc_dapm_route bells_routes[] = {
+static struct snd_soc_dapm_route bells_routes[] = {
 	{ "Sub CLK_SYS", NULL, "OPCLK" },
 	{ "CLKIN", NULL, "OPCLK" },
 

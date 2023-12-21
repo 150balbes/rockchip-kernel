@@ -154,7 +154,7 @@ static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
 	if (num_entries > LDT_ENTRIES)
 		return NULL;
 
-	new_ldt = kmalloc(sizeof(struct ldt_struct), GFP_KERNEL_ACCOUNT);
+	new_ldt = kmalloc(sizeof(struct ldt_struct), GFP_KERNEL);
 	if (!new_ldt)
 		return NULL;
 
@@ -168,9 +168,9 @@ static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
 	 * than PAGE_SIZE.
 	 */
 	if (alloc_size > PAGE_SIZE)
-		new_ldt->entries = __vmalloc(alloc_size, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+		new_ldt->entries = vzalloc(alloc_size);
 	else
-		new_ldt->entries = (void *)get_zeroed_page(GFP_KERNEL_ACCOUNT);
+		new_ldt->entries = (void *)get_zeroed_page(GFP_KERNEL);
 
 	if (!new_ldt->entries) {
 		kfree(new_ldt);
@@ -367,10 +367,8 @@ static void unmap_ldt_struct(struct mm_struct *mm, struct ldt_struct *ldt)
 
 		va = (unsigned long)ldt_slot_va(ldt->slot) + offset;
 		ptep = get_locked_pte(mm, va, &ptl);
-		if (!WARN_ON_ONCE(!ptep)) {
-			pte_clear(mm, va, ptep);
-			pte_unmap_unlock(ptep, ptl);
-		}
+		pte_clear(mm, va, ptep);
+		pte_unmap_unlock(ptep, ptl);
 	}
 
 	va = (unsigned long)ldt_slot_va(ldt->slot);
@@ -400,15 +398,9 @@ static void free_ldt_pgtables(struct mm_struct *mm)
 	if (!boot_cpu_has(X86_FEATURE_PTI))
 		return;
 
-	/*
-	 * Although free_pgd_range() is intended for freeing user
-	 * page-tables, it also works out for kernel mappings on x86.
-	 * We use tlb_gather_mmu_fullmm() to avoid confusing the
-	 * range-tracking logic in __tlb_adjust_range().
-	 */
-	tlb_gather_mmu_fullmm(&tlb, mm);
+	tlb_gather_mmu(&tlb, mm, start, end);
 	free_pgd_range(&tlb, start, end, start, end);
-	tlb_finish_mmu(&tlb);
+	tlb_finish_mmu(&tlb, start, end);
 #endif
 }
 

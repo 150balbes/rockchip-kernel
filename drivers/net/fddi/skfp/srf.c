@@ -26,6 +26,11 @@
 #ifndef	SLIM_SMT
 #ifndef	BOOT
 
+#ifndef	lint
+static const char ID_sccs[] = "@(#)srf.c	1.18 97/08/04 (C) SK " ;
+#endif
+
+
 /*
  * function declarations
  */

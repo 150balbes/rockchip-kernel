@@ -11,7 +11,6 @@
 #include <linux/interrupt.h>
 #include <linux/completion.h>
 #include <linux/clk.h>
-#include <linux/property.h>
 #include <linux/spi/spi.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
@@ -55,7 +54,7 @@ struct adc12138 {
 	 */
 	__be16 data[20] __aligned(8);
 
-	u8 tx_buf[2] __aligned(IIO_DMA_MINALIGN);
+	u8 tx_buf[2] ____cacheline_aligned;
 	u8 rx_buf[2];
 };
 
@@ -240,8 +239,7 @@ static int adc12138_read_raw(struct iio_dev *iio,
 		if (ret)
 			return ret;
 
-		*value = sign_extend32(be16_to_cpu(data) >> channel->scan_type.shift,
-				       channel->scan_type.realbits - 1);
+		*value = sign_extend32(be16_to_cpu(data) >> 3, 12);
 
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
@@ -431,8 +429,8 @@ static int adc12138_probe(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	ret = device_property_read_u32(&spi->dev, "ti,acquisition-time",
-				       &adc->acquisition_time);
+	ret = of_property_read_u32(spi->dev.of_node, "ti,acquisition-time",
+				   &adc->acquisition_time);
 	if (ret)
 		adc->acquisition_time = 10;
 
@@ -503,7 +501,7 @@ err_clk_disable:
 	return ret;
 }
 
-static void adc12138_remove(struct spi_device *spi)
+static int adc12138_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct adc12138 *adc = iio_priv(indio_dev);
@@ -514,7 +512,11 @@ static void adc12138_remove(struct spi_device *spi)
 		regulator_disable(adc->vref_n);
 	regulator_disable(adc->vref_p);
 	clk_disable_unprepare(adc->cclk);
+
+	return 0;
 }
+
+#ifdef CONFIG_OF
 
 static const struct of_device_id adc12138_dt_ids[] = {
 	{ .compatible = "ti,adc12130", },
@@ -523,6 +525,8 @@ static const struct of_device_id adc12138_dt_ids[] = {
 	{}
 };
 MODULE_DEVICE_TABLE(of, adc12138_dt_ids);
+
+#endif
 
 static const struct spi_device_id adc12138_id[] = {
 	{ "adc12130", adc12130 },
@@ -535,7 +539,7 @@ MODULE_DEVICE_TABLE(spi, adc12138_id);
 static struct spi_driver adc12138_driver = {
 	.driver = {
 		.name = "adc12138",
-		.of_match_table = adc12138_dt_ids,
+		.of_match_table = of_match_ptr(adc12138_dt_ids),
 	},
 	.probe = adc12138_probe,
 	.remove = adc12138_remove,

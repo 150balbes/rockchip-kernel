@@ -11,7 +11,7 @@
 #include <linux/module.h>
 #include <linux/string.h>
 #include <asm/mach/sharpsl_param.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 
 /*
  * Certain hardware parameters determined at the time of device manufacture,
@@ -40,9 +40,7 @@ EXPORT_SYMBOL(sharpsl_param);
 
 void sharpsl_save_param(void)
 {
-	struct sharpsl_param_info *params = param_start(PARAM_BASE);
-
-	memcpy(&sharpsl_param, params, sizeof(*params));
+	memcpy(&sharpsl_param, param_start(PARAM_BASE), sizeof(struct sharpsl_param_info));
 
 	if (sharpsl_param.comadj_keyword != COMADJ_MAGIC)
 		sharpsl_param.comadj=-1;

@@ -9,7 +9,7 @@
  */
 
 #include <asm/cputable.h>
-#include <asm/vdso/timebase.h>
+#include <asm/reg.h>
 
 #define CLOCK_TICK_RATE	1024000 /* Underlying HZ */
 

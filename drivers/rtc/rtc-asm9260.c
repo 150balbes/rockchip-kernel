@@ -116,15 +116,15 @@ static irqreturn_t asm9260_rtc_irq(int irq, void *dev_id)
 	u32 isr;
 	unsigned long events = 0;
 
-	rtc_lock(priv->rtc);
+	mutex_lock(&priv->rtc->ops_lock);
 	isr = ioread32(priv->iobase + HW_CIIR);
 	if (!isr) {
-		rtc_unlock(priv->rtc);
+		mutex_unlock(&priv->rtc->ops_lock);
 		return IRQ_NONE;
 	}
 
 	iowrite32(0, priv->iobase + HW_CIIR);
-	rtc_unlock(priv->rtc);
+	mutex_unlock(&priv->rtc->ops_lock);
 
 	events |= RTC_AF | RTC_IRQF;
 
@@ -308,13 +308,14 @@ err_return:
 	return ret;
 }
 
-static void asm9260_rtc_remove(struct platform_device *pdev)
+static int asm9260_rtc_remove(struct platform_device *pdev)
 {
 	struct asm9260_rtc_priv *priv = platform_get_drvdata(pdev);
 
 	/* Disable alarm matching */
 	iowrite32(BM_AMR_OFF, priv->iobase + HW_AMR);
 	clk_disable_unprepare(priv->clk);
+	return 0;
 }
 
 static const struct of_device_id asm9260_dt_ids[] = {
@@ -325,7 +326,7 @@ MODULE_DEVICE_TABLE(of, asm9260_dt_ids);
 
 static struct platform_driver asm9260_rtc_driver = {
 	.probe		= asm9260_rtc_probe,
-	.remove_new	= asm9260_rtc_remove,
+	.remove		= asm9260_rtc_remove,
 	.driver		= {
 		.name	= "asm9260-rtc",
 		.of_match_table = asm9260_dt_ids,

@@ -136,28 +136,20 @@ static void clk_super_mux_restore_context(struct clk_hw *hw)
 }
 
 static const struct clk_ops tegra_clk_super_mux_ops = {
-	.determine_rate = clk_hw_determine_rate_no_reparent,
 	.get_parent = clk_super_get_parent,
 	.set_parent = clk_super_set_parent,
 	.restore_context = clk_super_mux_restore_context,
 };
 
-static int clk_super_determine_rate(struct clk_hw *hw,
-				    struct clk_rate_request *req)
+static long clk_super_round_rate(struct clk_hw *hw, unsigned long rate,
+				 unsigned long *parent_rate)
 {
 	struct tegra_clk_super_mux *super = to_clk_super_mux(hw);
 	struct clk_hw *div_hw = &super->frac_div.hw;
-	unsigned long rate;
 
 	__clk_hw_set_clk(div_hw, hw);
 
-	rate = super->div_ops->round_rate(div_hw, req->rate,
-					  &req->best_parent_rate);
-	if (rate < 0)
-		return rate;
-
-	req->rate = rate;
-	return 0;
+	return super->div_ops->round_rate(div_hw, rate, parent_rate);
 }
 
 static unsigned long clk_super_recalc_rate(struct clk_hw *hw,
@@ -200,7 +192,7 @@ const struct clk_ops tegra_clk_super_ops = {
 	.get_parent = clk_super_get_parent,
 	.set_parent = clk_super_set_parent,
 	.set_rate = clk_super_set_rate,
-	.determine_rate = clk_super_determine_rate,
+	.round_rate = clk_super_round_rate,
 	.recalc_rate = clk_super_recalc_rate,
 	.restore_context = clk_super_restore_context,
 };
@@ -234,7 +226,7 @@ struct clk *tegra_clk_register_super_mux(const char *name,
 	/* Data in .init is copied by clk_register(), so stack variable OK */
 	super->hw.init = &init;
 
-	clk = tegra_clk_dev_register(&super->hw);
+	clk = clk_register(NULL, &super->hw);
 	if (IS_ERR(clk))
 		kfree(super);
 

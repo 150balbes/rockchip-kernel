@@ -3,7 +3,6 @@
 #define __KSELFTEST_MODULE_H
 
 #include <linux/module.h>
-#include <linux/panic.h>
 
 /*
  * Test framework for writing test modules to be loaded by kselftest.
@@ -42,7 +41,6 @@ static inline int kstm_report(unsigned int total_tests, unsigned int failed_test
 static int __init __module##_init(void)			\
 {							\
 	pr_info("loaded.\n");				\
-	add_taint(TAINT_TEST, LOCKDEP_STILL_OK);	\
 	selftest();					\
 	return kstm_report(total_tests, failed_tests, skipped_tests);	\
 }							\
@@ -52,7 +50,5 @@ static void __exit __module##_exit(void)		\
 }							\
 module_init(__module##_init);				\
 module_exit(__module##_exit)
-
-MODULE_INFO(test, "Y");
 
 #endif	/* __KSELFTEST_MODULE_H */

@@ -41,16 +41,17 @@ void lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev)
 	struct lirc_fh *fh;
 	int sample;
 
-	/* Receiver overflow, data missing */
-	if (ev.overflow) {
+	/* Packet start */
+	if (ev.reset) {
 		/*
-		 * Send lirc overflow message. This message is unknown to
-		 * lircd, but it will interpret this as a long space as
-		 * long as the value is set to high value. This resets its
-		 * decoder state.
+		 * Userspace expects a long space event before the start of
+		 * the signal to use as a sync.  This may be done with repeat
+		 * packets and normal samples.  But if a reset has been sent
+		 * then we assume that a long time has passed, so we send a
+		 * space with the maximum time value.
 		 */
-		sample = LIRC_OVERFLOW(LIRC_VALUE_MASK);
-		dev_dbg(&dev->dev, "delivering overflow to lirc_dev\n");
+		sample = LIRC_SPACE(LIRC_VALUE_MASK);
+		dev_dbg(&dev->dev, "delivering reset sync space to lirc_dev\n");
 
 	/* Carrier reports */
 	} else if (ev.carrier_report) {
@@ -59,25 +60,32 @@ void lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev)
 
 	/* Packet end */
 	} else if (ev.timeout) {
+		if (dev->gap)
+			return;
+
 		dev->gap_start = ktime_get();
+		dev->gap = true;
+		dev->gap_duration = ev.duration;
 
 		sample = LIRC_TIMEOUT(ev.duration);
 		dev_dbg(&dev->dev, "timeout report (duration: %d)\n", sample);
 
 	/* Normal sample */
 	} else {
-		if (dev->gap_start) {
-			u64 duration = ktime_us_delta(ktime_get(),
-						      dev->gap_start);
+		if (dev->gap) {
+			dev->gap_duration += ktime_to_us(ktime_sub(ktime_get(),
+							 dev->gap_start));
 
 			/* Cap by LIRC_VALUE_MASK */
-			duration = min_t(u64, duration, LIRC_VALUE_MASK);
+			dev->gap_duration = min_t(u64, dev->gap_duration,
+						  LIRC_VALUE_MASK);
 
 			spin_lock_irqsave(&dev->lirc_fh_lock, flags);
 			list_for_each_entry(fh, &dev->lirc_fh, list)
-				kfifo_put(&fh->rawir, LIRC_SPACE(duration));
+				kfifo_put(&fh->rawir,
+					  LIRC_SPACE(dev->gap_duration));
 			spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
-			dev->gap_start = 0;
+			dev->gap = false;
 		}
 
 		sample = ev.pulse ? LIRC_PULSE(ev.duration) :
@@ -94,6 +102,8 @@ void lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev)
 
 	spin_lock_irqsave(&dev->lirc_fh_lock, flags);
 	list_for_each_entry(fh, &dev->lirc_fh, list) {
+		if (LIRC_IS_TIMEOUT(sample) && !fh->send_timeout_reports)
+			continue;
 		if (kfifo_put(&fh->rawir, sample))
 			wake_up_poll(&fh->wait_poll, EPOLLIN | EPOLLRDNORM);
 	}
@@ -156,6 +166,7 @@ static int lirc_open(struct inode *inode, struct file *file)
 
 	fh->send_mode = LIRC_MODE_PULSE;
 	fh->rc = dev;
+	fh->send_timeout_reports = true;
 
 	if (dev->driver_type == RC_DRIVER_SCANCODE)
 		fh->rec_mode = LIRC_MODE_SCANCODE;
@@ -252,8 +263,7 @@ static ssize_t lirc_transmit(struct file *file, const char __user *buf,
 			goto out_unlock;
 		}
 
-		if (scan.flags || scan.keycode || scan.timestamp ||
-		    scan.rc_proto > RC_PROTO_MAX) {
+		if (scan.flags || scan.keycode || scan.timestamp) {
 			ret = -EINVAL;
 			goto out_unlock;
 		}
@@ -401,7 +411,7 @@ static long lirc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			val |= LIRC_CAN_SET_REC_CARRIER |
 				LIRC_CAN_SET_REC_CARRIER_RANGE;
 
-		if (dev->s_wideband_receiver)
+		if (dev->s_learning_mode)
 			val |= LIRC_CAN_USE_WIDEBAND_RECEIVER;
 
 		if (dev->s_carrier_report)
@@ -508,10 +518,10 @@ static long lirc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case LIRC_SET_WIDEBAND_RECEIVER:
-		if (!dev->s_wideband_receiver)
+		if (!dev->s_learning_mode)
 			ret = -ENOTTY;
 		else
-			ret = dev->s_wideband_receiver(dev, !!val);
+			ret = dev->s_learning_mode(dev, !!val);
 		break;
 
 	case LIRC_SET_MEASURE_CARRIER_MODE:
@@ -559,6 +569,8 @@ static long lirc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case LIRC_SET_REC_TIMEOUT_REPORTS:
 		if (dev->driver_type != RC_DRIVER_IR_RAW)
 			ret = -ENOTTY;
+		else
+			fh->send_timeout_reports = !!val;
 		break;
 
 	default:
@@ -715,7 +727,7 @@ int lirc_register(struct rc_dev *dev)
 	const char *rx_type, *tx_type;
 	int err, minor;
 
-	minor = ida_alloc_max(&lirc_ida, RC_DEV_MAX - 1, GFP_KERNEL);
+	minor = ida_simple_get(&lirc_ida, 0, RC_DEV_MAX, GFP_KERNEL);
 	if (minor < 0)
 		return minor;
 
@@ -760,7 +772,7 @@ int lirc_register(struct rc_dev *dev)
 	return 0;
 
 out_ida:
-	ida_free(&lirc_ida, minor);
+	ida_simple_remove(&lirc_ida, minor);
 	return err;
 }
 
@@ -778,14 +790,14 @@ void lirc_unregister(struct rc_dev *dev)
 	spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
 
 	cdev_device_del(&dev->lirc_cdev, &dev->lirc_dev);
-	ida_free(&lirc_ida, MINOR(dev->lirc_dev.devt));
+	ida_simple_remove(&lirc_ida, MINOR(dev->lirc_dev.devt));
 }
 
 int __init lirc_dev_init(void)
 {
 	int retval;
 
-	lirc_class = class_create("lirc");
+	lirc_class = class_create(THIS_MODULE, "lirc");
 	if (IS_ERR(lirc_class)) {
 		pr_err("class_create failed\n");
 		return PTR_ERR(lirc_class);

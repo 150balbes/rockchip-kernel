@@ -7,8 +7,6 @@
 #ifndef _ROCKCHIP_DRM_FB_H
 #define _ROCKCHIP_DRM_FB_H
 
-#include <drm/drm_framebuffer.h>
-
 #include "rockchip_drm_gem.h"
 
 #define ROCKCHIP_DRM_MODE_LOGO_FB	(1<<31) /* used for kernel logo, follow the define: DRM_MODE_FB_MODIFIERS at drm_mode.h */
@@ -33,6 +31,10 @@ struct rockchip_drm_logo_fb {
 	struct drm_framebuffer fb;
 	struct rockchip_logo *logo;
 	struct rockchip_gem_object rk_obj;
+	/*
+	 * Used for delayed logo fb release
+	 */
+	struct delayed_work destroy_work;
 };
 
 #endif /* _ROCKCHIP_DRM_FB_H */

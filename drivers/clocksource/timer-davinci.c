@@ -7,8 +7,6 @@
  * (with tiny parts adopted from code by Kevin Hilman <khilman@baylibre.com>)
  */
 
-#define pr_fmt(fmt) "%s: " fmt, __func__
-
 #include <linux/clk.h>
 #include <linux/clockchips.h>
 #include <linux/interrupt.h>
@@ -18,6 +16,9 @@
 #include <linux/sched_clock.h>
 
 #include <clocksource/timer-davinci.h>
+
+#undef pr_fmt
+#define pr_fmt(fmt) "%s: " fmt, __func__
 
 #define DAVINCI_TIMER_REG_TIM12			0x10
 #define DAVINCI_TIMER_REG_TIM34			0x14
@@ -257,25 +258,21 @@ int __init davinci_timer_register(struct clk *clk,
 				resource_size(&timer_cfg->reg),
 				"davinci-timer")) {
 		pr_err("Unable to request memory region\n");
-		rv = -EBUSY;
-		goto exit_clk_disable;
+		return -EBUSY;
 	}
 
 	base = ioremap(timer_cfg->reg.start, resource_size(&timer_cfg->reg));
 	if (!base) {
 		pr_err("Unable to map the register range\n");
-		rv = -ENOMEM;
-		goto exit_mem_region;
+		return -ENOMEM;
 	}
 
 	davinci_timer_init(base);
 	tick_rate = clk_get_rate(clk);
 
 	clockevent = kzalloc(sizeof(*clockevent), GFP_KERNEL);
-	if (!clockevent) {
-		rv = -ENOMEM;
-		goto exit_iounmap_base;
-	}
+	if (!clockevent)
+		return -ENOMEM;
 
 	clockevent->dev.name = "tim12";
 	clockevent->dev.features = CLOCK_EVT_FEAT_ONESHOT;
@@ -300,7 +297,7 @@ int __init davinci_timer_register(struct clk *clk,
 			 "clockevent/tim12", clockevent);
 	if (rv) {
 		pr_err("Unable to request the clockevent interrupt\n");
-		goto exit_free_clockevent;
+		return rv;
 	}
 
 	davinci_clocksource.dev.rating = 300;
@@ -327,27 +324,13 @@ int __init davinci_timer_register(struct clk *clk,
 	rv = clocksource_register_hz(&davinci_clocksource.dev, tick_rate);
 	if (rv) {
 		pr_err("Unable to register clocksource\n");
-		goto exit_free_irq;
+		return rv;
 	}
 
 	sched_clock_register(davinci_timer_read_sched_clock,
 			     DAVINCI_TIMER_CLKSRC_BITS, tick_rate);
 
 	return 0;
-
-exit_free_irq:
-	free_irq(timer_cfg->irq[DAVINCI_TIMER_CLOCKEVENT_IRQ].start,
-			clockevent);
-exit_free_clockevent:
-	kfree(clockevent);
-exit_iounmap_base:
-	iounmap(base);
-exit_mem_region:
-	release_mem_region(timer_cfg->reg.start,
-			   resource_size(&timer_cfg->reg));
-exit_clk_disable:
-	clk_disable_unprepare(clk);
-	return rv;
 }
 
 static int __init of_davinci_timer_register(struct device_node *np)

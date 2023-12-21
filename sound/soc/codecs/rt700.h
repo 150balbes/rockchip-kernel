@@ -15,6 +15,7 @@ struct  rt700_priv {
 	struct regmap *regmap;
 	struct regmap *sdw_regmap;
 	struct sdw_slave *slave;
+	enum sdw_slave_status status;
 	struct sdw_bus_params params;
 	bool hw_init;
 	bool first_hw_init;
@@ -22,8 +23,10 @@ struct  rt700_priv {
 	struct delayed_work jack_detect_work;
 	struct delayed_work jack_btn_check_work;
 	int jack_type;
-	struct mutex disable_irq_lock; /* imp-def irq lock protection */
-	bool disable_irq;
+};
+
+struct sdw_stream_data {
+	struct sdw_stream_runtime *sdw_stream;
 };
 
 /* NID */

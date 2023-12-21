@@ -29,8 +29,8 @@ ENTRY(sys_clone_wrapper)
 	DISCARD_CALLEE_SAVED_USER
 
 	GET_CURR_THR_INFO_FLAGS   r10
-	and.f 0, r10, _TIF_SYSCALL_WORK
-	bnz   tracesys_exit
+	btst r10, TIF_SYSCALL_TRACE
+	bnz  tracesys_exit
 
 	b .Lret_from_system_call
 END(sys_clone_wrapper)
@@ -41,8 +41,8 @@ ENTRY(sys_clone3_wrapper)
 	DISCARD_CALLEE_SAVED_USER
 
 	GET_CURR_THR_INFO_FLAGS   r10
-	and.f 0, r10, _TIF_SYSCALL_WORK
-	bnz   tracesys_exit
+	btst r10, TIF_SYSCALL_TRACE
+	bnz  tracesys_exit
 
 	b .Lret_from_system_call
 END(sys_clone3_wrapper)
@@ -101,8 +101,11 @@ ENTRY(EV_MachineCheck)
 	lr  r0, [efa]
 	mov r1, sp
 
-	; MC excpetions disable MMU
-	ARC_MMU_REENABLE r3
+	; hardware auto-disables MMU, re-enable it to allow kernel vaddr
+	; access for say stack unwinding of modules for crash dumps
+	lr	r3, [ARC_REG_PID]
+	or	r3, r3, MMU_ENABLE
+	sr	r3, [ARC_REG_PID]
 
 	lsr  	r3, r2, 8
 	bmsk 	r3, r3, 7
@@ -247,8 +250,8 @@ ENTRY(EV_Trap)
 
 	; If syscall tracing ongoing, invoke pre-post-hooks
 	GET_CURR_THR_INFO_FLAGS   r10
-	and.f 0, r10, _TIF_SYSCALL_WORK
-	bnz   tracesys  ; this never comes back
+	btst r10, TIF_SYSCALL_TRACE
+	bnz tracesys  ; this never comes back
 
 	;============ Normal syscall case
 

@@ -26,17 +26,17 @@ properties:
     maxItems: 1
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
     description: OF graph bindings (specified in bindings/graph.txt) that model
       SS data bus to the SS capable connector.
-
+    type: object
     properties:
       port@0:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
         description: Super Speed (SS) MUX inputs connected to SS capable connector.
+        $ref: /connector/usb-connector.yaml#/properties/ports/properties/port@1
 
       port@1:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
         description: Output of 2:1 MUX connected to Super Speed (SS) data bus.
 
     required:
@@ -46,12 +46,13 @@ properties:
 required:
   - compatible
   - reg
+  - interrupts
 
 additionalProperties: false
 
 examples:
   - |
-    i2c {
+    i2c0 {
         #address-cells = <1>;
         #size-cells = <0>;
 

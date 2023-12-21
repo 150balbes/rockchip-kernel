@@ -5,11 +5,10 @@
 # of this script is to inflict random OS jitter on a concurrently running
 # test.
 #
-# Usage: jitter.sh me jittering-path duration [ sleepmax [ spinmax ] ]
+# Usage: jitter.sh me duration [ sleepmax [ spinmax ] ]
 #
 # me: Random-number-generator seed salt.
 # duration: Time to run in seconds.
-# jittering-path: Path to file whose removal will stop this script.
 # sleepmax: Maximum microseconds to sleep, defaults to one second.
 # spinmax: Maximum microseconds to spin, defaults to one millisecond.
 #
@@ -18,10 +17,9 @@
 # Authors: Paul E. McKenney <paulmck@linux.ibm.com>
 
 me=$(($1 * 1000))
-jittering=$2
-duration=$3
-sleepmax=${4-1000000}
-spinmax=${5-1000}
+duration=$2
+sleepmax=${3-1000000}
+spinmax=${4-1000}
 
 n=1
 
@@ -49,7 +47,7 @@ do
 	fi
 
 	# Check for stop request.
-	if ! test -f "$jittering"
+	if test -f "$TORTURE_STOPFILE"
 	then
 		exit 1;
 	fi
@@ -68,12 +66,16 @@ do
 	cpumask=`awk -v cpus="$cpus" -v me=$me -v n=$n 'BEGIN {
 		srand(n + me + systime());
 		ncpus = split(cpus, ca);
-		print ca[int(rand() * ncpus + 1)];
+		curcpu = ca[int(rand() * ncpus + 1)];
+		mask = lshift(1, curcpu);
+		if (mask + 0 <= 0)
+			mask = 1;
+		printf("%#x\n", mask);
 	}' < /dev/null`
 	n=$(($n+1))
-	if ! taskset -c -p $cpumask $$ > /dev/null 2>&1
+	if ! taskset -p $cpumask $$ > /dev/null 2>&1
 	then
-		echo taskset failure: '"taskset -c -p ' $cpumask $$ '"'
+		echo taskset failure: '"taskset -p ' $cpumask $$ '"'
 		exit 1
 	fi
 

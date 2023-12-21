@@ -13,9 +13,9 @@
 */
 
 
-#include <asm/unaligned.h>
-#include <crypto/algapi.h>
+#include <asm/byteorder.h>
 #include <linux/init.h>
+#include <linux/crypto.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/string.h>
@@ -302,6 +302,8 @@ static const u32 sb8[256] = {
 
 void __cast5_encrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 {
+	const __be32 *src = (const __be32 *)inbuf;
+	__be32 *dst = (__be32 *)outbuf;
 	u32 l, r, t;
 	u32 I;			/* used by the Fx macros */
 	u32 *Km;
@@ -313,8 +315,8 @@ void __cast5_encrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 	/* (L0,R0) <-- (m1...m64).  (Split the plaintext into left and
 	 * right 32-bit halves L0 = m1...m32 and R0 = m33...m64.)
 	 */
-	l = get_unaligned_be32(inbuf);
-	r = get_unaligned_be32(inbuf + 4);
+	l = be32_to_cpu(src[0]);
+	r = be32_to_cpu(src[1]);
 
 	/* (16 rounds) for i from 1 to 16, compute Li and Ri as follows:
 	 *  Li = Ri-1;
@@ -345,8 +347,8 @@ void __cast5_encrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 
 	/* c1...c64 <-- (R16,L16).  (Exchange final blocks L16, R16 and
 	 *  concatenate to form the ciphertext.) */
-	put_unaligned_be32(r, outbuf);
-	put_unaligned_be32(l, outbuf + 4);
+	dst[0] = cpu_to_be32(r);
+	dst[1] = cpu_to_be32(l);
 }
 EXPORT_SYMBOL_GPL(__cast5_encrypt);
 
@@ -357,6 +359,8 @@ static void cast5_encrypt(struct crypto_tfm *tfm, u8 *outbuf, const u8 *inbuf)
 
 void __cast5_decrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 {
+	const __be32 *src = (const __be32 *)inbuf;
+	__be32 *dst = (__be32 *)outbuf;
 	u32 l, r, t;
 	u32 I;
 	u32 *Km;
@@ -365,8 +369,8 @@ void __cast5_decrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 	Km = c->Km;
 	Kr = c->Kr;
 
-	l = get_unaligned_be32(inbuf);
-	r = get_unaligned_be32(inbuf + 4);
+	l = be32_to_cpu(src[0]);
+	r = be32_to_cpu(src[1]);
 
 	if (!(c->rr)) {
 		t = l; l = r; r = t ^ F1(r, Km[15], Kr[15]);
@@ -387,8 +391,8 @@ void __cast5_decrypt(struct cast5_ctx *c, u8 *outbuf, const u8 *inbuf)
 	t = l; l = r; r = t ^ F2(r, Km[1], Kr[1]);
 	t = l; l = r; r = t ^ F1(r, Km[0], Kr[0]);
 
-	put_unaligned_be32(r, outbuf);
-	put_unaligned_be32(l, outbuf + 4);
+	dst[0] = cpu_to_be32(r);
+	dst[1] = cpu_to_be32(l);
 }
 EXPORT_SYMBOL_GPL(__cast5_decrypt);
 
@@ -509,6 +513,7 @@ static struct crypto_alg alg = {
 	.cra_flags		= CRYPTO_ALG_TYPE_CIPHER,
 	.cra_blocksize		= CAST5_BLOCK_SIZE,
 	.cra_ctxsize		= sizeof(struct cast5_ctx),
+	.cra_alignmask		= 3,
 	.cra_module		= THIS_MODULE,
 	.cra_u			= {
 		.cipher = {

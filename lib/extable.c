@@ -21,6 +21,7 @@ static inline unsigned long ex_to_insn(const struct exception_table_entry *x)
 }
 #endif
 
+#ifndef ARCH_HAS_SORT_EXTABLE
 #ifndef ARCH_HAS_RELATIVE_EXTABLE
 #define swap_ex		NULL
 #else
@@ -87,6 +88,9 @@ void trim_init_extable(struct module *m)
 		m->num_exentries--;
 }
 #endif /* CONFIG_MODULES */
+#endif /* !ARCH_HAS_SORT_EXTABLE */
+
+#ifndef ARCH_HAS_SEARCH_EXTABLE
 
 static int cmp_ex_search(const void *key, const void *elt)
 {
@@ -116,3 +120,4 @@ search_extable(const struct exception_table_entry *base,
 	return bsearch(&value, base, num,
 		       sizeof(struct exception_table_entry), cmp_ex_search);
 }
+#endif

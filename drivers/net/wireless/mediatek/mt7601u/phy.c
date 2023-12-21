@@ -586,9 +586,6 @@ static void mt7601u_rxdc_cal(struct mt7601u_dev *dev)
 
 void mt7601u_phy_recalibrate_after_assoc(struct mt7601u_dev *dev)
 {
-	if (test_bit(MT7601U_STATE_REMOVED, &dev->state))
-		return;
-
 	mt7601u_mcu_calibrate(dev, MCU_CAL_DPD, dev->curr_temp);
 
 	mt7601u_rxdc_cal(dev);
@@ -1097,10 +1094,7 @@ static void mt7601u_phy_freq_cal(struct work_struct *work)
 void mt7601u_phy_con_cal_onoff(struct mt7601u_dev *dev,
 			       struct ieee80211_bss_conf *info)
 {
-	struct ieee80211_vif *vif = container_of(info, struct ieee80211_vif,
-						 bss_conf);
-
-	if (!vif->cfg.assoc)
+	if (!info->assoc)
 		cancel_delayed_work_sync(&dev->freq_cal.work);
 
 	/* Start/stop collecting beacon data */
@@ -1111,10 +1105,10 @@ void mt7601u_phy_con_cal_onoff(struct mt7601u_dev *dev,
 	spin_unlock_bh(&dev->con_mon_lock);
 
 	dev->freq_cal.freq = dev->ee->rf_freq_off;
-	dev->freq_cal.enabled = vif->cfg.assoc;
+	dev->freq_cal.enabled = info->assoc;
 	dev->freq_cal.adjusting = false;
 
-	if (vif->cfg.assoc)
+	if (info->assoc)
 		ieee80211_queue_delayed_work(dev->hw, &dev->freq_cal.work,
 					     MT_FREQ_CAL_INIT_DELAY);
 }

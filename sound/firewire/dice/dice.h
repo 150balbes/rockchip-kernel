@@ -78,6 +78,9 @@ struct snd_dice {
 	spinlock_t lock;
 	struct mutex mutex;
 
+	bool registered;
+	struct delayed_work dwork;
+
 	/* Offsets for sub-addresses */
 	unsigned int global_offset;
 	unsigned int rx_offset;
@@ -90,6 +93,7 @@ struct snd_dice {
 	unsigned int rx_pcm_chs[MAX_STREAMS][SND_DICE_RATE_MODE_COUNT];
 	unsigned int tx_midi_ports[MAX_STREAMS];
 	unsigned int rx_midi_ports[MAX_STREAMS];
+	snd_dice_detect_formats_t detect_formats;
 
 	struct fw_address_handler notification_handler;
 	int owner_generation;
@@ -105,8 +109,7 @@ struct snd_dice {
 	struct fw_iso_resources rx_resources[MAX_STREAMS];
 	struct amdtp_stream tx_stream[MAX_STREAMS];
 	struct amdtp_stream rx_stream[MAX_STREAMS];
-	bool global_enabled:1;
-	bool disable_double_pcm_frames:1;
+	bool global_enabled;
 	struct completion clock_accepted;
 	unsigned int substreams_counter;
 
@@ -230,7 +233,5 @@ int snd_dice_detect_alesis_mastercontrol_formats(struct snd_dice *dice);
 int snd_dice_detect_extension_formats(struct snd_dice *dice);
 int snd_dice_detect_mytek_formats(struct snd_dice *dice);
 int snd_dice_detect_presonus_formats(struct snd_dice *dice);
-int snd_dice_detect_harman_formats(struct snd_dice *dice);
-int snd_dice_detect_focusrite_pro40_tcd3070_formats(struct snd_dice *dice);
 
 #endif

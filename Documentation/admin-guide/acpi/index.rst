@@ -9,6 +9,7 @@ the Linux ACPI support.
    :maxdepth: 1
 
    initrd_table_override
+   dsdt-override
    ssdt-overlays
    cppc_sysfs
    fan_performance_states

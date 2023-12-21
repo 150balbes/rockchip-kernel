@@ -27,7 +27,6 @@
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
-#include <linux/major.h>
 #include <asm/io.h>
 #include <asm/dbdma.h>
 #include <asm/prom.h>
@@ -235,6 +234,7 @@ static unsigned short write_postamble[] = {
 };
 
 static void seek_track(struct floppy_state *fs, int n);
+static void init_dma(struct dbdma_cmd *cp, int cmd, void *buf, int count);
 static void act(struct floppy_state *fs);
 static void scan_timeout(struct timer_list *t);
 static void seek_timeout(struct timer_list *t);
@@ -246,9 +246,10 @@ static int grab_drive(struct floppy_state *fs, enum swim_state state,
 		      int interruptible);
 static void release_drive(struct floppy_state *fs);
 static int fd_eject(struct floppy_state *fs);
-static int floppy_ioctl(struct block_device *bdev, blk_mode_t mode,
+static int floppy_ioctl(struct block_device *bdev, fmode_t mode,
 			unsigned int cmd, unsigned long param);
-static int floppy_open(struct gendisk *disk, blk_mode_t mode);
+static int floppy_open(struct block_device *bdev, fmode_t mode);
+static void floppy_release(struct gendisk *disk, fmode_t mode);
 static unsigned int floppy_check_events(struct gendisk *disk,
 					unsigned int clearing);
 static int floppy_revalidate(struct gendisk *disk);
@@ -403,28 +404,12 @@ static inline void seek_track(struct floppy_state *fs, int n)
 	fs->settle_time = 0;
 }
 
-/*
- * XXX: this is a horrible hack, but at least allows ppc32 to get
- * out of defining virt_to_bus, and this driver out of using the
- * deprecated block layer bounce buffering for highmem addresses
- * for no good reason.
- */
-static unsigned long swim3_phys_to_bus(phys_addr_t paddr)
-{
-	return paddr + PCI_DRAM_OFFSET;
-}
-
-static phys_addr_t swim3_bio_phys(struct bio *bio)
-{
-	return page_to_phys(bio_page(bio)) + bio_offset(bio);
-}
-
 static inline void init_dma(struct dbdma_cmd *cp, int cmd,
-			    phys_addr_t paddr, int count)
+			    void *buf, int count)
 {
 	cp->req_count = cpu_to_le16(count);
 	cp->command = cpu_to_le16(cmd);
-	cp->phy_addr = cpu_to_le32(swim3_phys_to_bus(paddr));
+	cp->phy_addr = cpu_to_le32(virt_to_bus(buf));
 	cp->xfer_status = 0;
 }
 
@@ -456,18 +441,16 @@ static inline void setup_transfer(struct floppy_state *fs)
 	out_8(&sw->sector, fs->req_sector);
 	out_8(&sw->nsect, n);
 	out_8(&sw->gap3, 0);
-	out_le32(&dr->cmdptr, swim3_phys_to_bus(virt_to_phys(cp)));
+	out_le32(&dr->cmdptr, virt_to_bus(cp));
 	if (rq_data_dir(req) == WRITE) {
 		/* Set up 3 dma commands: write preamble, data, postamble */
-		init_dma(cp, OUTPUT_MORE, virt_to_phys(write_preamble),
-			 sizeof(write_preamble));
+		init_dma(cp, OUTPUT_MORE, write_preamble, sizeof(write_preamble));
 		++cp;
-		init_dma(cp, OUTPUT_MORE, swim3_bio_phys(req->bio), 512);
+		init_dma(cp, OUTPUT_MORE, bio_data(req->bio), 512);
 		++cp;
-		init_dma(cp, OUTPUT_LAST, virt_to_phys(write_postamble),
-			sizeof(write_postamble));
+		init_dma(cp, OUTPUT_LAST, write_postamble, sizeof(write_postamble));
 	} else {
-		init_dma(cp, INPUT_LAST, swim3_bio_phys(req->bio), n * 512);
+		init_dma(cp, INPUT_LAST, bio_data(req->bio), n * 512);
 	}
 	++cp;
 	out_le16(&cp->command, DBDMA_STOP);
@@ -882,7 +865,7 @@ static int fd_eject(struct floppy_state *fs)
 static struct floppy_struct floppy_type =
 	{ 2880,18,2,80,0,0x1B,0x00,0xCF,0x6C,NULL };	/*  7 1.44MB 3.5"   */
 
-static int floppy_locked_ioctl(struct block_device *bdev, blk_mode_t mode,
+static int floppy_locked_ioctl(struct block_device *bdev, fmode_t mode,
 			unsigned int cmd, unsigned long param)
 {
 	struct floppy_state *fs = bdev->bd_disk->private_data;
@@ -910,7 +893,7 @@ static int floppy_locked_ioctl(struct block_device *bdev, blk_mode_t mode,
 	return -ENOTTY;
 }
 
-static int floppy_ioctl(struct block_device *bdev, blk_mode_t mode,
+static int floppy_ioctl(struct block_device *bdev, fmode_t mode,
 				 unsigned int cmd, unsigned long param)
 {
 	int ret;
@@ -922,9 +905,9 @@ static int floppy_ioctl(struct block_device *bdev, blk_mode_t mode,
 	return ret;
 }
 
-static int floppy_open(struct gendisk *disk, blk_mode_t mode)
+static int floppy_open(struct block_device *bdev, fmode_t mode)
 {
-	struct floppy_state *fs = disk->private_data;
+	struct floppy_state *fs = bdev->bd_disk->private_data;
 	struct swim3 __iomem *sw = fs->swim3;
 	int n, err = 0;
 
@@ -957,18 +940,18 @@ static int floppy_open(struct gendisk *disk, blk_mode_t mode)
 		swim3_action(fs, SETMFM);
 		swim3_select(fs, RELAX);
 
-	} else if (fs->ref_count == -1 || mode & BLK_OPEN_EXCL)
+	} else if (fs->ref_count == -1 || mode & FMODE_EXCL)
 		return -EBUSY;
 
-	if (err == 0 && !(mode & BLK_OPEN_NDELAY) &&
-	    (mode & (BLK_OPEN_READ | BLK_OPEN_WRITE))) {
-		if (disk_check_media_change(disk))
-			floppy_revalidate(disk);
+	if (err == 0 && (mode & FMODE_NDELAY) == 0
+	    && (mode & (FMODE_READ|FMODE_WRITE))) {
+		if (bdev_check_media_change(bdev))
+			floppy_revalidate(bdev->bd_disk);
 		if (fs->ejected)
 			err = -ENXIO;
 	}
 
-	if (err == 0 && (mode & BLK_OPEN_WRITE)) {
+	if (err == 0 && (mode & FMODE_WRITE)) {
 		if (fs->write_prot < 0)
 			fs->write_prot = swim3_readbit(fs, WRITE_PROT);
 		if (fs->write_prot)
@@ -984,7 +967,7 @@ static int floppy_open(struct gendisk *disk, blk_mode_t mode)
 		return err;
 	}
 
-	if (mode & BLK_OPEN_EXCL)
+	if (mode & FMODE_EXCL)
 		fs->ref_count = -1;
 	else
 		++fs->ref_count;
@@ -992,18 +975,18 @@ static int floppy_open(struct gendisk *disk, blk_mode_t mode)
 	return 0;
 }
 
-static int floppy_unlocked_open(struct gendisk *disk, blk_mode_t mode)
+static int floppy_unlocked_open(struct block_device *bdev, fmode_t mode)
 {
 	int ret;
 
 	mutex_lock(&swim3_mutex);
-	ret = floppy_open(disk, mode);
+	ret = floppy_open(bdev, mode);
 	mutex_unlock(&swim3_mutex);
 
 	return ret;
 }
 
-static void floppy_release(struct gendisk *disk)
+static void floppy_release(struct gendisk *disk, fmode_t mode)
 {
 	struct floppy_state *fs = disk->private_data;
 	struct swim3 __iomem *sw = fs->swim3;
@@ -1202,44 +1185,48 @@ static int swim3_attach(struct macio_dev *mdev,
 			return rc;
 	}
 
+	disk = alloc_disk(1);
+	if (disk == NULL) {
+		rc = -ENOMEM;
+		goto out_unregister;
+	}
+
 	fs = &floppy_states[floppy_count];
 	memset(fs, 0, sizeof(*fs));
 
-	rc = blk_mq_alloc_sq_tag_set(&fs->tag_set, &swim3_mq_ops, 2,
-			BLK_MQ_F_SHOULD_MERGE);
-	if (rc)
-		goto out_unregister;
-
-	disk = blk_mq_alloc_disk(&fs->tag_set, fs);
-	if (IS_ERR(disk)) {
-		rc = PTR_ERR(disk);
-		goto out_free_tag_set;
+	disk->queue = blk_mq_init_sq_queue(&fs->tag_set, &swim3_mq_ops, 2,
+						BLK_MQ_F_SHOULD_MERGE);
+	if (IS_ERR(disk->queue)) {
+		rc = PTR_ERR(disk->queue);
+		disk->queue = NULL;
+		goto out_put_disk;
 	}
+	blk_queue_bounce_limit(disk->queue, BLK_BOUNCE_HIGH);
+	disk->queue->queuedata = fs;
 
 	rc = swim3_add_device(mdev, floppy_count);
 	if (rc)
-		goto out_cleanup_disk;
+		goto out_cleanup_queue;
 
 	disk->major = FLOPPY_MAJOR;
 	disk->first_minor = floppy_count;
-	disk->minors = 1;
 	disk->fops = &floppy_fops;
 	disk->private_data = fs;
 	disk->events = DISK_EVENT_MEDIA_CHANGE;
-	disk->flags |= GENHD_FL_REMOVABLE | GENHD_FL_NO_PART;
+	disk->flags |= GENHD_FL_REMOVABLE;
 	sprintf(disk->disk_name, "fd%d", floppy_count);
 	set_capacity(disk, 2880);
-	rc = add_disk(disk);
-	if (rc)
-		goto out_cleanup_disk;
+	add_disk(disk);
 
 	disks[floppy_count++] = disk;
 	return 0;
 
-out_cleanup_disk:
-	put_disk(disk);
-out_free_tag_set:
+out_cleanup_queue:
+	blk_cleanup_queue(disk->queue);
+	disk->queue = NULL;
 	blk_mq_free_tag_set(&fs->tag_set);
+out_put_disk:
+	put_disk(disk);
 out_unregister:
 	if (floppy_count == 0)
 		unregister_blkdev(FLOPPY_MAJOR, "fd");

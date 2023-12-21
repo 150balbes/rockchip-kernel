@@ -52,8 +52,9 @@ inline void rxe_queue_reset(struct rxe_queue *q)
 	memset(q->buf->data, 0, q->buf_size - sizeof(struct rxe_queue_buf));
 }
 
-struct rxe_queue *rxe_queue_init(struct rxe_dev *rxe, int *num_elem,
-			unsigned int elem_size, enum queue_type type)
+struct rxe_queue *rxe_queue_init(struct rxe_dev *rxe,
+				 int *num_elem,
+				 unsigned int elem_size)
 {
 	struct rxe_queue *q;
 	size_t buf_size;
@@ -61,14 +62,13 @@ struct rxe_queue *rxe_queue_init(struct rxe_dev *rxe, int *num_elem,
 
 	/* num_elem == 0 is allowed, but uninteresting */
 	if (*num_elem < 0)
-		return NULL;
+		goto err1;
 
-	q = kzalloc(sizeof(*q), GFP_KERNEL);
+	q = kmalloc(sizeof(*q), GFP_KERNEL);
 	if (!q)
-		return NULL;
+		goto err1;
 
 	q->rxe = rxe;
-	q->type = type;
 
 	/* used in resize, only need to copy used part of queue */
 	q->elem_size = elem_size;
@@ -100,6 +100,7 @@ struct rxe_queue *rxe_queue_init(struct rxe_dev *rxe, int *num_elem,
 
 err2:
 	kfree(q);
+err1:
 	return NULL;
 }
 
@@ -110,35 +111,16 @@ err2:
 static int resize_finish(struct rxe_queue *q, struct rxe_queue *new_q,
 			 unsigned int num_elem)
 {
-	enum queue_type type = q->type;
-	u32 new_prod;
-	u32 prod;
-	u32 cons;
-
-	if (!queue_empty(q, q->type) && (num_elem < queue_count(q, type)))
+	if (!queue_empty(q) && (num_elem < queue_count(q)))
 		return -EINVAL;
 
-	new_prod = queue_get_producer(new_q, type);
-	prod = queue_get_producer(q, type);
-	cons = queue_get_consumer(q, type);
-
-	while ((prod - cons) & q->index_mask) {
-		memcpy(queue_addr_from_index(new_q, new_prod),
-		       queue_addr_from_index(q, cons), new_q->elem_size);
-		new_prod = queue_next_index(new_q, new_prod);
-		cons = queue_next_index(q, cons);
+	while (!queue_empty(q)) {
+		memcpy(producer_addr(new_q), consumer_addr(q),
+		       new_q->elem_size);
+		advance_producer(new_q);
+		advance_consumer(q);
 	}
 
-	new_q->buf->producer_index = new_prod;
-	q->buf->consumer_index = cons;
-
-	/* update private index copies */
-	if (type == QUEUE_TYPE_TO_CLIENT)
-		new_q->index = new_q->buf->producer_index;
-	else
-		q->index = q->buf->consumer_index;
-
-	/* exchange rxe_queue headers */
 	swap(*q, *new_q);
 
 	return 0;
@@ -152,10 +134,9 @@ int rxe_queue_resize(struct rxe_queue *q, unsigned int *num_elem_p,
 	struct rxe_queue *new_q;
 	unsigned int num_elem = *num_elem_p;
 	int err;
-	unsigned long producer_flags;
-	unsigned long consumer_flags;
+	unsigned long flags = 0, flags1;
 
-	new_q = rxe_queue_init(q->rxe, &num_elem, elem_size, q->type);
+	new_q = rxe_queue_init(q->rxe, &num_elem, elem_size);
 	if (!new_q)
 		return -ENOMEM;
 
@@ -167,17 +148,17 @@ int rxe_queue_resize(struct rxe_queue *q, unsigned int *num_elem_p,
 		goto err1;
 	}
 
-	spin_lock_irqsave(consumer_lock, consumer_flags);
+	spin_lock_irqsave(consumer_lock, flags1);
 
 	if (producer_lock) {
-		spin_lock_irqsave(producer_lock, producer_flags);
+		spin_lock_irqsave(producer_lock, flags);
 		err = resize_finish(q, new_q, num_elem);
-		spin_unlock_irqrestore(producer_lock, producer_flags);
+		spin_unlock_irqrestore(producer_lock, flags);
 	} else {
 		err = resize_finish(q, new_q, num_elem);
 	}
 
-	spin_unlock_irqrestore(consumer_lock, consumer_flags);
+	spin_unlock_irqrestore(consumer_lock, flags1);
 
 	rxe_queue_cleanup(new_q);	/* new/old dep on err */
 	if (err)

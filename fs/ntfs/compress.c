@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/**
  * compress.c - NTFS kernel compressed attributes handling.
  *		Part of the Linux-NTFS project.
  *
@@ -41,12 +41,12 @@ typedef enum {
 	NTFS_MAX_CB_SIZE	= 64 * 1024,
 } ntfs_compression_constants;
 
-/*
+/**
  * ntfs_compression_buffer - one buffer for the decompression engine
  */
 static u8 *ntfs_compression_buffer;
 
-/*
+/**
  * ntfs_cb_lock - spinlock which protects ntfs_compression_buffer
  */
 static DEFINE_SPINLOCK(ntfs_cb_lock);
@@ -161,7 +161,7 @@ static int ntfs_decompress(struct page *dest_pages[], int completed_pages[],
 	 */
 	u8 *cb_end = cb_start + cb_size; /* End of cb. */
 	u8 *cb = cb_start;	/* Current position in cb. */
-	u8 *cb_sb_start;	/* Beginning of the current sb in the cb. */
+	u8 *cb_sb_start = cb;	/* Beginning of the current sb in the cb. */
 	u8 *cb_sb_end;		/* End of current sb / beginning of next sb. */
 
 	/* Variables for uncompressed data / destination. */
@@ -658,7 +658,7 @@ lock_retry_remap:
 		}
 		get_bh(tbh);
 		tbh->b_end_io = end_buffer_read_sync;
-		submit_bh(REQ_OP_READ, tbh);
+		submit_bh(REQ_OP_READ, 0, tbh);
 	}
 
 	/* Wait for io completion on all buffer heads. */
@@ -780,12 +780,12 @@ lock_retry_remap:
 		/* Uncompressed cb, copy it to the destination pages. */
 		/*
 		 * TODO: As a big optimization, we could detect this case
-		 * before we read all the pages and use block_read_full_folio()
+		 * before we read all the pages and use block_read_full_page()
 		 * on all full pages instead (we still have to treat partial
 		 * pages especially but at least we are getting rid of the
 		 * synchronous io for the majority of pages.
 		 * Or if we choose not to do the read-ahead/-behind stuff, we
-		 * could just return block_read_full_folio(pages[xpage]) as long
+		 * could just return block_read_full_page(pages[xpage]) as long
 		 * as PAGE_SIZE <= cb_size.
 		 */
 		if (cb_max_ofs)

@@ -181,8 +181,6 @@ static int filelayout_async_handle_error(struct rpc_task *task,
 	case -EIO:
 	case -ETIMEDOUT:
 	case -EPIPE:
-	case -EPROTO:
-	case -ENODEV:
 		dprintk("%s DS connection error %d\n", __func__,
 			task->tk_status);
 		nfs4_mark_deviceid_unavailable(devid);
@@ -294,6 +292,8 @@ static void filelayout_read_prepare(struct rpc_task *task, void *data)
 static void filelayout_read_call_done(struct rpc_task *task, void *data)
 {
 	struct nfs_pgio_header *hdr = data;
+
+	dprintk("--> %s task->tk_status %d\n", __func__, task->tk_status);
 
 	if (test_bit(NFS_IOHDR_REDO, &hdr->flags) &&
 	    task->tk_status == 0) {
@@ -666,7 +666,7 @@ filelayout_decode_layout(struct pnfs_layout_hdr *flo,
 		return -ENOMEM;
 
 	xdr_init_decode_pages(&stream, &buf, lgr->layoutp->pages, lgr->layoutp->len);
-	xdr_set_scratch_page(&stream, scratch);
+	xdr_set_scratch_buffer(&stream, page_address(scratch), PAGE_SIZE);
 
 	/* 20 = ufl_util (4), first_stripe_index (4), pattern_offset (8),
 	 * num_fh (4) */
@@ -783,12 +783,6 @@ filelayout_alloc_lseg(struct pnfs_layout_hdr *layoutid,
 	return &fl->generic_hdr;
 }
 
-static bool
-filelayout_lseg_is_striped(const struct nfs4_filelayout_segment *flseg)
-{
-	return flseg->num_fh > 1;
-}
-
 /*
  * filelayout_pg_test(). Called by nfs_can_coalesce_requests()
  *
@@ -809,8 +803,6 @@ filelayout_pg_test(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
 	size = pnfs_generic_pg_test(pgio, prev, req);
 	if (!size)
 		return 0;
-	else if (!filelayout_lseg_is_striped(FILELAYOUT_LSEG(pgio->pg_lseg)))
-		return size;
 
 	/* see if req and prev are in the same stripe */
 	if (prev) {
@@ -849,12 +841,7 @@ fl_pnfs_update_layout(struct inode *ino,
 
 	lseg = pnfs_update_layout(ino, ctx, pos, count, iomode, strict_iomode,
 				  gfp_flags);
-	if (IS_ERR(lseg)) {
-		/* Fall back to MDS on recoverable errors */
-		if (!nfs_error_is_fatal_on_server(PTR_ERR(lseg)))
-			lseg = NULL;
-		goto out;
-	} else if (!lseg)
+	if (IS_ERR_OR_NULL(lseg))
 		goto out;
 
 	lo = NFS_I(ino)->layout;
@@ -862,8 +849,6 @@ fl_pnfs_update_layout(struct inode *ino,
 
 	status = filelayout_check_deviceid(lo, fl, gfp_flags);
 	if (status) {
-		pnfs_error_mark_layout_for_return(ino, lseg);
-		pnfs_set_lo_fail(lseg);
 		pnfs_put_lseg(lseg);
 		lseg = NULL;
 	}
@@ -1092,7 +1077,7 @@ filelayout_setup_ds_info(struct pnfs_ds_commit_info *fl_cinfo,
 	unsigned int size = (fl->stripe_type == STRIPE_SPARSE) ?
 		fl->dsaddr->ds_num : fl->dsaddr->stripe_count;
 
-	new = pnfs_alloc_commit_array(size, nfs_io_gfp_mask());
+	new = pnfs_alloc_commit_array(size, GFP_NOIO);
 	if (new) {
 		spin_lock(&inode->i_lock);
 		array = pnfs_add_commit_array(fl_cinfo, new, lseg);

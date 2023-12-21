@@ -290,7 +290,7 @@ static int ftm_rtc_probe(struct platform_device *pdev)
 	if (ret)
 		dev_err(&pdev->dev, "failed to enable irq wake\n");
 
-	ret = devm_rtc_register_device(rtc->rtc_dev);
+	ret = rtc_register_device(rtc->rtc_dev);
 	if (ret) {
 		dev_err(&pdev->dev, "can't register rtc device\n");
 		return ret;
@@ -327,7 +327,12 @@ static struct platform_driver ftm_rtc_driver = {
 	},
 };
 
-module_platform_driver(ftm_rtc_driver);
+static int __init ftm_alarm_init(void)
+{
+	return platform_driver_register(&ftm_rtc_driver);
+}
+
+device_initcall(ftm_alarm_init);
 
 MODULE_DESCRIPTION("NXP/Freescale FlexTimer alarm driver");
 MODULE_AUTHOR("Biwen Li <biwen.li@nxp.com>");

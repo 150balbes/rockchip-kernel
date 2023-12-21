@@ -243,20 +243,19 @@ static inline unsigned int iavf_txd_use_count(unsigned int size)
 #define DESC_NEEDED (MAX_SKB_FRAGS + 6)
 #define IAVF_MIN_DESC_PENDING	4
 
-#define IAVF_TX_FLAGS_HW_VLAN			BIT(1)
-#define IAVF_TX_FLAGS_SW_VLAN			BIT(2)
-#define IAVF_TX_FLAGS_TSO			BIT(3)
-#define IAVF_TX_FLAGS_IPV4			BIT(4)
-#define IAVF_TX_FLAGS_IPV6			BIT(5)
-#define IAVF_TX_FLAGS_FCCRC			BIT(6)
-#define IAVF_TX_FLAGS_FSO			BIT(7)
-#define IAVF_TX_FLAGS_FD_SB			BIT(9)
-#define IAVF_TX_FLAGS_VXLAN_TUNNEL		BIT(10)
-#define IAVF_TX_FLAGS_HW_OUTER_SINGLE_VLAN	BIT(11)
-#define IAVF_TX_FLAGS_VLAN_MASK			0xffff0000
-#define IAVF_TX_FLAGS_VLAN_PRIO_MASK		0xe0000000
-#define IAVF_TX_FLAGS_VLAN_PRIO_SHIFT		29
-#define IAVF_TX_FLAGS_VLAN_SHIFT		16
+#define IAVF_TX_FLAGS_HW_VLAN		BIT(1)
+#define IAVF_TX_FLAGS_SW_VLAN		BIT(2)
+#define IAVF_TX_FLAGS_TSO		BIT(3)
+#define IAVF_TX_FLAGS_IPV4		BIT(4)
+#define IAVF_TX_FLAGS_IPV6		BIT(5)
+#define IAVF_TX_FLAGS_FCCRC		BIT(6)
+#define IAVF_TX_FLAGS_FSO		BIT(7)
+#define IAVF_TX_FLAGS_FD_SB		BIT(9)
+#define IAVF_TX_FLAGS_VXLAN_TUNNEL	BIT(10)
+#define IAVF_TX_FLAGS_VLAN_MASK		0xffff0000
+#define IAVF_TX_FLAGS_VLAN_PRIO_MASK	0xe0000000
+#define IAVF_TX_FLAGS_VLAN_PRIO_SHIFT	29
+#define IAVF_TX_FLAGS_VLAN_SHIFT	16
 
 struct iavf_tx_buffer {
 	struct iavf_tx_desc *next_to_watch;
@@ -363,9 +362,6 @@ struct iavf_ring {
 	u16 flags;
 #define IAVF_TXR_FLAGS_WB_ON_ITR		BIT(0)
 #define IAVF_RXR_FLAGS_BUILD_SKB_ENABLED	BIT(1)
-#define IAVF_TXRX_FLAGS_VLAN_TAG_LOC_L2TAG1	BIT(3)
-#define IAVF_TXR_FLAGS_VLAN_TAG_LOC_L2TAG2	BIT(4)
-#define IAVF_RXR_FLAGS_VLAN_TAG_LOC_L2TAG2_2	BIT(5)
 
 	/* stats structs */
 	struct iavf_queue_stats	stats;
@@ -442,11 +438,15 @@ static inline unsigned int iavf_rx_pg_order(struct iavf_ring *ring)
 
 bool iavf_alloc_rx_buffers(struct iavf_ring *rxr, u16 cleaned_count);
 netdev_tx_t iavf_xmit_frame(struct sk_buff *skb, struct net_device *netdev);
+void iavf_clean_tx_ring(struct iavf_ring *tx_ring);
+void iavf_clean_rx_ring(struct iavf_ring *rx_ring);
 int iavf_setup_tx_descriptors(struct iavf_ring *tx_ring);
 int iavf_setup_rx_descriptors(struct iavf_ring *rx_ring);
 void iavf_free_tx_resources(struct iavf_ring *tx_ring);
 void iavf_free_rx_resources(struct iavf_ring *rx_ring);
 int iavf_napi_poll(struct napi_struct *napi, int budget);
+void iavf_force_wb(struct iavf_vsi *vsi, struct iavf_q_vector *q_vector);
+u32 iavf_get_tx_pending(struct iavf_ring *ring, bool in_sw);
 void iavf_detect_recover_hung(struct iavf_vsi *vsi);
 int __iavf_maybe_stop_tx(struct iavf_ring *tx_ring, int size);
 bool __iavf_chk_linearize(struct sk_buff *skb);

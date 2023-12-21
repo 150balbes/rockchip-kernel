@@ -30,6 +30,10 @@
 #include <linux/usb/ezusb.h>
 #include "whiteheat.h"			/* WhiteHEAT specific commands */
 
+#ifndef CMSPAR
+#define CMSPAR 0
+#endif
+
 /*
  * Version Information
  */
@@ -75,19 +79,18 @@ static int  whiteheat_firmware_attach(struct usb_serial *serial);
 static int  whiteheat_attach(struct usb_serial *serial);
 static void whiteheat_release(struct usb_serial *serial);
 static int  whiteheat_port_probe(struct usb_serial_port *port);
-static void whiteheat_port_remove(struct usb_serial_port *port);
+static int  whiteheat_port_remove(struct usb_serial_port *port);
 static int  whiteheat_open(struct tty_struct *tty,
 			struct usb_serial_port *port);
 static void whiteheat_close(struct usb_serial_port *port);
-static void whiteheat_get_serial(struct tty_struct *tty,
+static int  whiteheat_get_serial(struct tty_struct *tty,
 			struct serial_struct *ss);
 static void whiteheat_set_termios(struct tty_struct *tty,
-				  struct usb_serial_port *port,
-				  const struct ktermios *old_termios);
+			struct usb_serial_port *port, struct ktermios *old);
 static int  whiteheat_tiocmget(struct tty_struct *tty);
 static int  whiteheat_tiocmset(struct tty_struct *tty,
 			unsigned int set, unsigned int clear);
-static int whiteheat_break_ctl(struct tty_struct *tty, int break_state);
+static void whiteheat_break_ctl(struct tty_struct *tty, int break_state);
 
 static struct usb_serial_driver whiteheat_fake_device = {
 	.driver = {
@@ -167,6 +170,7 @@ static int firm_report_tx_done(struct usb_serial_port *port);
 #define COMMAND_PORT		4
 #define COMMAND_TIMEOUT		(2*HZ)	/* 2 second timeout for a command */
 #define	COMMAND_TIMEOUT_MS	2000
+#define CLOSING_DELAY		(30 * HZ)
 
 
 /*****************************************************************************
@@ -341,12 +345,14 @@ static int whiteheat_port_probe(struct usb_serial_port *port)
 	return 0;
 }
 
-static void whiteheat_port_remove(struct usb_serial_port *port)
+static int whiteheat_port_remove(struct usb_serial_port *port)
 {
 	struct whiteheat_private *info;
 
 	info = usb_get_serial_port_data(port);
 	kfree(info);
+
+	return 0;
 }
 
 static int whiteheat_open(struct tty_struct *tty, struct usb_serial_port *port)
@@ -436,24 +442,34 @@ static int whiteheat_tiocmset(struct tty_struct *tty,
 }
 
 
-static void whiteheat_get_serial(struct tty_struct *tty, struct serial_struct *ss)
+static int whiteheat_get_serial(struct tty_struct *tty,
+				struct serial_struct *ss)
 {
+	struct usb_serial_port *port = tty->driver_data;
+
+	ss->type = PORT_16654;
+	ss->line = port->minor;
+	ss->port = port->port_number;
+	ss->xmit_fifo_size = kfifo_size(&port->write_fifo);
+	ss->custom_divisor = 0;
 	ss->baud_base = 460800;
+	ss->close_delay = CLOSING_DELAY;
+	ss->closing_wait = CLOSING_DELAY;
+
+	return 0;
 }
 
 
 static void whiteheat_set_termios(struct tty_struct *tty,
-				  struct usb_serial_port *port,
-				  const struct ktermios *old_termios)
+	struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	firm_setup_port(tty);
 }
 
-static int whiteheat_break_ctl(struct tty_struct *tty, int break_state)
+static void whiteheat_break_ctl(struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
-
-	return firm_set_break(port, break_state);
+	firm_set_break(port, break_state);
 }
 
 
@@ -623,7 +639,14 @@ static void firm_setup_port(struct tty_struct *tty)
 
 	port_settings.port = port->port_number + 1;
 
-	port_settings.bits = tty_get_char_size(cflag);
+	/* get the byte size */
+	switch (cflag & CSIZE) {
+	case CS5:	port_settings.bits = 5;   break;
+	case CS6:	port_settings.bits = 6;   break;
+	case CS7:	port_settings.bits = 7;   break;
+	default:
+	case CS8:	port_settings.bits = 8;   break;
+	}
 	dev_dbg(dev, "%s - data bits = %d\n", __func__, port_settings.bits);
 
 	/* determine the parity */

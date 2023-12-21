@@ -7,7 +7,6 @@
  */
 
 #include <stddef.h>
-#include <unistd.h>
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
@@ -17,6 +16,12 @@
 #include <string.h>
 
 static timer_t event_high_res_timer = 0;
+
+static inline long long timeval_to_ns(const struct timeval *tv)
+{
+	return ((long long) tv->tv_sec * UM_NSEC_PER_SEC) +
+		tv->tv_usec * UM_NSEC_PER_USEC;
+}
 
 static inline long long timespec_to_ns(const struct timespec *ts)
 {
@@ -94,22 +99,19 @@ long long os_nsecs(void)
 }
 
 /**
- * os_idle_sleep() - sleep until interrupted
+ * os_idle_sleep() - sleep for a given time of nsecs
+ * @nsecs: nanoseconds to sleep
  */
-void os_idle_sleep(void)
+void os_idle_sleep(unsigned long long nsecs)
 {
-	struct itimerspec its;
-	sigset_t set, old;
+	struct timespec ts = {
+		.tv_sec  = nsecs / UM_NSEC_PER_SEC,
+		.tv_nsec = nsecs % UM_NSEC_PER_SEC
+	};
 
-	/* block SIGALRM while we analyze the timer state */
-	sigemptyset(&set);
-	sigaddset(&set, SIGALRM);
-	sigprocmask(SIG_BLOCK, &set, &old);
-
-	/* check the timer, and if it'll fire then wait for it */
-	timer_gettime(event_high_res_timer, &its);
-	if (its.it_value.tv_sec || its.it_value.tv_nsec)
-		sigsuspend(&old);
-	/* either way, restore the signal mask */
-	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	/*
+	 * Relay the signal if clock_nanosleep is interrupted.
+	 */
+	if (clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL))
+		deliver_alarm();
 }

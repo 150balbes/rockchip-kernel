@@ -3,6 +3,8 @@
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
+ * File: dpc.c
+ *
  * Purpose: handle dpc rx functions
  *
  * Author: Lyndon Chen
@@ -80,7 +82,7 @@ static bool vnt_rx_data(struct vnt_private *priv, struct sk_buff *skb,
 	RFvRSSITodBm(priv, *rssi, &rx_dbm);
 
 	priv->byBBPreEDRSSI = (u8)rx_dbm + 1;
-	priv->current_rssi = *rssi;
+	priv->uCurrRSSI = *rssi;
 
 	skb_pull(skb, 4);
 	skb_trim(skb, frame_size);
@@ -100,7 +102,7 @@ static bool vnt_rx_data(struct vnt_private *priv, struct sk_buff *skb,
 	rx_status.rate_idx = rate_idx;
 
 	if (ieee80211_has_protected(fc)) {
-		if (priv->local_id > REV_ID_VT3253_A1)
+		if (priv->byLocalID > REV_ID_VT3253_A1)
 			rx_status.flag |= RX_FLAG_DECRYPTED;
 
 		/* Drop packet */

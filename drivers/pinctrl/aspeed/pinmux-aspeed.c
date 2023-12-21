@@ -21,8 +21,7 @@ static inline void aspeed_sig_desc_print_val(
 }
 
 /**
- * aspeed_sig_desc_eval() - Query the enabled or disabled state of a signal
- * descriptor.
+ * Query the enabled or disabled state of a signal descriptor
  *
  * @desc: The signal descriptor of interest
  * @enabled: True to query the enabled state, false to query disabled state
@@ -59,8 +58,7 @@ int aspeed_sig_desc_eval(const struct aspeed_sig_desc *desc,
 }
 
 /**
- * aspeed_sig_expr_eval - Query the enabled or disabled state for a
- * mux function's signal on a pin
+ * Query the enabled or disabled state for a mux function's signal on a pin
  *
  * @ctx: The driver context for the pinctrl IP
  * @expr: An expression controlling the signal for a mux function on a pin

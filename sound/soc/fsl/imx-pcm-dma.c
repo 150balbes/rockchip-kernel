@@ -34,7 +34,7 @@ static const struct snd_dmaengine_pcm_config imx_dmaengine_pcm_config = {
 	.compat_filter_fn = filter,
 };
 
-int imx_pcm_dma_init(struct platform_device *pdev)
+int imx_pcm_dma_init(struct platform_device *pdev, size_t size)
 {
 	struct snd_dmaengine_pcm_config *config;
 

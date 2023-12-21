@@ -414,7 +414,7 @@ static int __init prng_sha512_instantiate(void)
 	}
 
 	/* append the seed by 16 bytes of unique nonce */
-	store_tod_clock_ext((union tod_clock *)(seed + seedlen));
+	get_tod_clock_ext(seed + seedlen);
 	seedlen += 16;
 
 	/* now initial seed of the prno drng */
@@ -528,7 +528,7 @@ static ssize_t prng_tdes_read(struct file *file, char __user *ubuf,
 			/* give mutex free before calling schedule() */
 			mutex_unlock(&prng_data->mutex);
 			schedule();
-			/* occupy mutex again */
+			/* occopy mutex again */
 			if (mutex_lock_interruptible(&prng_data->mutex)) {
 				if (ret == 0)
 					ret = -ERESTARTSYS;
@@ -674,6 +674,20 @@ static const struct file_operations prng_tdes_fops = {
 	.llseek		= noop_llseek,
 };
 
+static struct miscdevice prng_sha512_dev = {
+	.name	= "prandom",
+	.minor	= MISC_DYNAMIC_MINOR,
+	.mode	= 0644,
+	.fops	= &prng_sha512_fops,
+};
+static struct miscdevice prng_tdes_dev = {
+	.name	= "prandom",
+	.minor	= MISC_DYNAMIC_MINOR,
+	.mode	= 0644,
+	.fops	= &prng_tdes_fops,
+};
+
+
 /* chunksize attribute (ro) */
 static ssize_t prng_chunksize_show(struct device *dev,
 				   struct device_attribute *attr,
@@ -787,30 +801,18 @@ static struct attribute *prng_sha512_dev_attrs[] = {
 	&dev_attr_strength.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(prng_sha512_dev);
-
 static struct attribute *prng_tdes_dev_attrs[] = {
 	&dev_attr_chunksize.attr,
 	&dev_attr_byte_counter.attr,
 	&dev_attr_mode.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(prng_tdes_dev);
 
-static struct miscdevice prng_sha512_dev = {
-	.name	= "prandom",
-	.minor	= MISC_DYNAMIC_MINOR,
-	.mode	= 0644,
-	.fops	= &prng_sha512_fops,
-	.groups = prng_sha512_dev_groups,
+static struct attribute_group prng_sha512_dev_attr_group = {
+	.attrs = prng_sha512_dev_attrs
 };
-
-static struct miscdevice prng_tdes_dev = {
-	.name	= "prandom",
-	.minor	= MISC_DYNAMIC_MINOR,
-	.mode	= 0644,
-	.fops	= &prng_tdes_fops,
-	.groups = prng_tdes_dev_groups,
+static struct attribute_group prng_tdes_dev_attr_group = {
+	.attrs = prng_tdes_dev_attrs
 };
 
 
@@ -865,6 +867,13 @@ static int __init prng_init(void)
 			prng_sha512_deinstantiate();
 			goto out;
 		}
+		ret = sysfs_create_group(&prng_sha512_dev.this_device->kobj,
+					 &prng_sha512_dev_attr_group);
+		if (ret) {
+			misc_deregister(&prng_sha512_dev);
+			prng_sha512_deinstantiate();
+			goto out;
+		}
 
 	} else {
 
@@ -889,6 +898,14 @@ static int __init prng_init(void)
 			prng_tdes_deinstantiate();
 			goto out;
 		}
+		ret = sysfs_create_group(&prng_tdes_dev.this_device->kobj,
+					 &prng_tdes_dev_attr_group);
+		if (ret) {
+			misc_deregister(&prng_tdes_dev);
+			prng_tdes_deinstantiate();
+			goto out;
+		}
+
 	}
 
 out:
@@ -899,13 +916,17 @@ out:
 static void __exit prng_exit(void)
 {
 	if (prng_mode == PRNG_MODE_SHA512) {
+		sysfs_remove_group(&prng_sha512_dev.this_device->kobj,
+				   &prng_sha512_dev_attr_group);
 		misc_deregister(&prng_sha512_dev);
 		prng_sha512_deinstantiate();
 	} else {
+		sysfs_remove_group(&prng_tdes_dev.this_device->kobj,
+				   &prng_tdes_dev_attr_group);
 		misc_deregister(&prng_tdes_dev);
 		prng_tdes_deinstantiate();
 	}
 }
 
-module_cpu_feature_match(S390_CPU_FEATURE_MSA, prng_init);
+module_cpu_feature_match(MSA, prng_init);
 module_exit(prng_exit);

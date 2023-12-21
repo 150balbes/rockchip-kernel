@@ -18,10 +18,9 @@
 
 static void mid_get_fuse_settings(struct drm_device *dev)
 {
-	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
-	struct pci_dev *pdev = to_pci_dev(dev->dev);
+	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct pci_dev *pci_root =
-		pci_get_domain_bus_and_slot(pci_domain_nr(pdev->bus),
+		pci_get_domain_bus_and_slot(pci_domain_nr(dev->pdev->bus),
 					    0, 0);
 	uint32_t fuse_value = 0;
 	uint32_t fuse_value_tmp = 0;
@@ -94,8 +93,7 @@ static void mid_get_fuse_settings(struct drm_device *dev)
 static void mid_get_pci_revID(struct drm_psb_private *dev_priv)
 {
 	uint32_t platform_rev_id = 0;
-	struct pci_dev *pdev = to_pci_dev(dev_priv->dev.dev);
-	int domain = pci_domain_nr(pdev->bus);
+	int domain = pci_domain_nr(dev_priv->dev->pdev->bus);
 	struct pci_dev *pci_gfx_root =
 		pci_get_domain_bus_and_slot(domain, 0, PCI_DEVFN(2, 0));
 
@@ -106,7 +104,8 @@ static void mid_get_pci_revID(struct drm_psb_private *dev_priv)
 	pci_read_config_dword(pci_gfx_root, 0x08, &platform_rev_id);
 	dev_priv->platform_rev_id = (uint8_t) platform_rev_id;
 	pci_dev_put(pci_gfx_root);
-	dev_dbg(dev_priv->dev.dev, "platform_rev_id is %x\n", dev_priv->platform_rev_id);
+	dev_dbg(dev_priv->dev->dev, "platform_rev_id is %x\n",
+					dev_priv->platform_rev_id);
 }
 
 struct mid_vbt_header {
@@ -269,13 +268,12 @@ out:
 
 static void mid_get_vbt_data(struct drm_psb_private *dev_priv)
 {
-	struct drm_device *dev = &dev_priv->dev;
-	struct pci_dev *pdev = to_pci_dev(dev->dev);
+	struct drm_device *dev = dev_priv->dev;
 	u32 addr;
 	u8 __iomem *vbt_virtual;
 	struct mid_vbt_header vbt_header;
 	struct pci_dev *pci_gfx_root =
-		pci_get_domain_bus_and_slot(pci_domain_nr(pdev->bus),
+		pci_get_domain_bus_and_slot(pci_domain_nr(dev->pdev->bus),
 					    0, PCI_DEVFN(2, 0));
 	int ret = -1;
 
@@ -324,7 +322,7 @@ out:
 
 int mid_chip_setup(struct drm_device *dev)
 {
-	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+	struct drm_psb_private *dev_priv = dev->dev_private;
 	mid_get_fuse_settings(dev);
 	mid_get_vbt_data(dev_priv);
 	mid_get_pci_revID(dev_priv);

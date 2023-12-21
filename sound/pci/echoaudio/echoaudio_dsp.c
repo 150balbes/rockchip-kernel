@@ -349,8 +349,7 @@ static int load_dsp(struct echoaudio *chip, u16 *code)
 
 	/* If this board requires a resident loader, install it. */
 #ifdef DSP_56361
-	i = install_resident_loader(chip);
-	if (i < 0)
+	if ((i = install_resident_loader(chip)) < 0)
 		return i;
 #endif
 
@@ -496,8 +495,7 @@ static int load_firmware(struct echoaudio *chip)
 
 	/* See if the ASIC is present and working - only if the DSP is already loaded */
 	if (chip->dsp_code) {
-		box_type = check_asic_status(chip);
-		if (box_type >= 0)
+		if ((box_type = check_asic_status(chip)) >= 0)
 			return box_type;
 		/* ASIC check failed; force the DSP to reload */
 		chip->dsp_code = NULL;
@@ -511,8 +509,7 @@ static int load_firmware(struct echoaudio *chip)
 	if (err < 0)
 		return err;
 
-	box_type = load_asic(chip);
-	if (box_type < 0)
+	if ((box_type = load_asic(chip)) < 0)
 		return box_type;	/* error */
 
 	return box_type;
@@ -670,8 +667,7 @@ static int restore_dsp_rettings(struct echoaudio *chip)
 {
 	int i, o, err;
 
-	err = check_asic_status(chip);
-	if (err < 0)
+	if ((err = check_asic_status(chip)) < 0)
 		return err;
 
 	/* Gina20/Darla20 only. Should be harmless for other cards. */

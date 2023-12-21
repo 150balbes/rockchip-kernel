@@ -694,8 +694,10 @@ static int iic_probe(struct platform_device *ofdev)
 	int ret;
 
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
-	if (!dev)
+	if (!dev) {
+		dev_err(&ofdev->dev, "failed to allocate device data\n");
 		return -ENOMEM;
+	}
 
 	platform_set_drvdata(ofdev, dev);
 
@@ -736,7 +738,7 @@ static int iic_probe(struct platform_device *ofdev)
 	adap = &dev->adap;
 	adap->dev.parent = &ofdev->dev;
 	adap->dev.of_node = of_node_get(np);
-	strscpy(adap->name, "IBM IIC", sizeof(adap->name));
+	strlcpy(adap->name, "IBM IIC", sizeof(adap->name));
 	i2c_set_adapdata(adap, dev);
 	adap->class = I2C_CLASS_HWMON | I2C_CLASS_SPD;
 	adap->algo = &iic_algo;
@@ -767,7 +769,7 @@ error_cleanup:
 /*
  * Cleanup initialized IIC interface
  */
-static void iic_remove(struct platform_device *ofdev)
+static int iic_remove(struct platform_device *ofdev)
 {
 	struct ibm_iic_private *dev = platform_get_drvdata(ofdev);
 
@@ -780,6 +782,8 @@ static void iic_remove(struct platform_device *ofdev)
 
 	iounmap(dev->vaddr);
 	kfree(dev);
+
+	return 0;
 }
 
 static const struct of_device_id ibm_iic_match[] = {
@@ -794,7 +798,7 @@ static struct platform_driver ibm_iic_driver = {
 		.of_match_table = ibm_iic_match,
 	},
 	.probe	= iic_probe,
-	.remove_new = iic_remove,
+	.remove	= iic_remove,
 };
 
 module_platform_driver(ibm_iic_driver);

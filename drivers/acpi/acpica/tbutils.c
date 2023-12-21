@@ -3,7 +3,7 @@
  *
  * Module Name: tbutils - ACPI Table utilities
  *
- * Copyright (C) 2000 - 2023, Intel Corp.
+ * Copyright (C) 2000 - 2020, Intel Corp.
  *
  *****************************************************************************/
 
@@ -165,7 +165,6 @@ struct acpi_table_header *acpi_tb_copy_dsdt(u32 table_index)
 static acpi_physical_address
 acpi_tb_get_root_table_entry(u8 *table_entry, u32 table_entry_size)
 {
-	u32 address32;
 	u64 address64;
 
 	/*
@@ -177,8 +176,8 @@ acpi_tb_get_root_table_entry(u8 *table_entry, u32 table_entry_size)
 		 * 32-bit platform, RSDT: Return 32-bit table entry
 		 * 64-bit platform, RSDT: Expand 32-bit to 64-bit and return
 		 */
-		ACPI_MOVE_32_TO_32(&address32, table_entry);
-		return address32;
+		return ((acpi_physical_address)
+			(*ACPI_CAST_PTR(u32, table_entry)));
 	} else {
 		/*
 		 * 32-bit platform, XSDT: Truncate 64-bit to 32-bit and return
@@ -300,7 +299,7 @@ acpi_tb_parse_root_table(acpi_physical_address rsdp_address)
 
 	/* Validate the root table checksum */
 
-	status = acpi_ut_verify_checksum(table, length);
+	status = acpi_tb_verify_checksum(table, length);
 	if (ACPI_FAILURE(status)) {
 		acpi_os_unmap_memory(table, length);
 		return_ACPI_STATUS(status);
@@ -329,7 +328,7 @@ acpi_tb_parse_root_table(acpi_physical_address rsdp_address)
 
 		status = acpi_tb_install_standard_table(address,
 							ACPI_TABLE_ORIGIN_INTERNAL_PHYSICAL,
-							NULL, FALSE, TRUE,
+							FALSE, TRUE,
 							&table_index);
 
 		if (ACPI_SUCCESS(status) &&

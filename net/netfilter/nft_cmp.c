@@ -92,8 +92,7 @@ static int nft_cmp_init(const struct nft_ctx *ctx, const struct nft_expr *expr,
 	return 0;
 }
 
-static int nft_cmp_dump(struct sk_buff *skb,
-			const struct nft_expr *expr, bool reset)
+static int nft_cmp_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_cmp_expr *priv = nft_expr_priv(expr);
 
@@ -122,13 +121,13 @@ static void nft_payload_n2h(union nft_cmp_offload_data *data,
 {
 	switch (len) {
 	case 2:
-		data->val16 = ntohs(*((__be16 *)val));
+		data->val16 = ntohs(*((u16 *)val));
 		break;
 	case 4:
-		data->val32 = ntohl(*((__be32 *)val));
+		data->val32 = ntohl(*((u32 *)val));
 		break;
 	case 8:
-		data->val64 = be64_to_cpu(*((__be64 *)val));
+		data->val64 = be64_to_cpu(*((u64 *)val));
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -190,21 +189,8 @@ static const struct nft_expr_ops nft_cmp_ops = {
 	.eval		= nft_cmp_eval,
 	.init		= nft_cmp_init,
 	.dump		= nft_cmp_dump,
-	.reduce		= NFT_REDUCE_READONLY,
 	.offload	= nft_cmp_offload,
 };
-
-/* Calculate the mask for the nft_cmp_fast expression. On big endian the
- * mask needs to include the *upper* bytes when interpreting that data as
- * something smaller than the full u32, therefore a cpu_to_le32 is done.
- */
-static u32 nft_cmp_fast_mask(unsigned int len)
-{
-	__le32 mask = cpu_to_le32(~0U >> (sizeof_field(struct nft_cmp_fast_expr,
-					  data) * BITS_PER_BYTE - len));
-
-	return (__force u32)mask;
-}
 
 static int nft_cmp_fast_init(const struct nft_ctx *ctx,
 			     const struct nft_expr *expr,
@@ -254,8 +240,7 @@ static int nft_cmp_fast_offload(struct nft_offload_ctx *ctx,
 	return __nft_cmp_offload(ctx, flow, &cmp);
 }
 
-static int nft_cmp_fast_dump(struct sk_buff *skb,
-			     const struct nft_expr *expr, bool reset)
+static int nft_cmp_fast_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_cmp_fast_expr *priv = nft_expr_priv(expr);
 	enum nft_cmp_ops op = priv->inv ? NFT_CMP_NEQ : NFT_CMP_EQ;
@@ -282,7 +267,6 @@ const struct nft_expr_ops nft_cmp_fast_ops = {
 	.eval		= NULL,	/* inlined */
 	.init		= nft_cmp_fast_init,
 	.dump		= nft_cmp_fast_dump,
-	.reduce		= NFT_REDUCE_READONLY,
 	.offload	= nft_cmp_fast_offload,
 };
 
@@ -349,8 +333,7 @@ static int nft_cmp16_fast_offload(struct nft_offload_ctx *ctx,
 	return __nft_cmp_offload(ctx, flow, &cmp);
 }
 
-static int nft_cmp16_fast_dump(struct sk_buff *skb,
-			       const struct nft_expr *expr, bool reset)
+static int nft_cmp16_fast_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_cmp16_fast_expr *priv = nft_expr_priv(expr);
 	enum nft_cmp_ops op = priv->inv ? NFT_CMP_NEQ : NFT_CMP_EQ;
@@ -376,7 +359,6 @@ const struct nft_expr_ops nft_cmp16_fast_ops = {
 	.eval		= NULL,	/* inlined */
 	.init		= nft_cmp16_fast_init,
 	.dump		= nft_cmp16_fast_dump,
-	.reduce		= NFT_REDUCE_READONLY,
 	.offload	= nft_cmp16_fast_offload,
 };
 

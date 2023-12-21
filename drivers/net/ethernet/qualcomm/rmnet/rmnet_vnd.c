@@ -5,7 +5,6 @@
  */
 
 #include <linux/etherdevice.h>
-#include <linux/ethtool.h>
 #include <linux/if_arp.h>
 #include <net/pkt_sched.h>
 #include "rmnet_config.h"
@@ -29,7 +28,7 @@ void rmnet_vnd_rx_fixup(struct sk_buff *skb, struct net_device *dev)
 	u64_stats_update_end(&pcpu_ptr->syncp);
 }
 
-void rmnet_vnd_tx_fixup_len(unsigned int len, struct net_device *dev)
+void rmnet_vnd_tx_fixup(struct sk_buff *skb, struct net_device *dev)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
 	struct rmnet_pcpu_stats *pcpu_ptr;
@@ -38,13 +37,8 @@ void rmnet_vnd_tx_fixup_len(unsigned int len, struct net_device *dev)
 
 	u64_stats_update_begin(&pcpu_ptr->syncp);
 	pcpu_ptr->stats.tx_pkts++;
-	pcpu_ptr->stats.tx_bytes += len;
+	pcpu_ptr->stats.tx_bytes += skb->len;
 	u64_stats_update_end(&pcpu_ptr->syncp);
-}
-
-void rmnet_vnd_tx_fixup(struct sk_buff *skb, struct net_device *dev)
-{
-	rmnet_vnd_tx_fixup_len(skb->len, dev);
 }
 
 /* Network Device Operations */
@@ -140,9 +134,9 @@ static void rmnet_get_stats64(struct net_device *dev,
 		pcpu_ptr = per_cpu_ptr(priv->pcpu_stats, cpu);
 
 		do {
-			start = u64_stats_fetch_begin(&pcpu_ptr->syncp);
+			start = u64_stats_fetch_begin_irq(&pcpu_ptr->syncp);
 			snapshot = pcpu_ptr->stats;	/* struct assignment */
-		} while (u64_stats_fetch_retry(&pcpu_ptr->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&pcpu_ptr->syncp, start));
 
 		total_stats.rx_pkts += snapshot.rx_pkts;
 		total_stats.rx_bytes += snapshot.rx_bytes;
@@ -171,7 +165,6 @@ static const struct net_device_ops rmnet_vnd_ops = {
 
 static const char rmnet_gstrings_stats[][ETH_GSTRING_LEN] = {
 	"Checksum ok",
-	"Bad IPv4 header checksum",
 	"Checksum valid bit not set",
 	"Checksum validation failed",
 	"Checksum error bad buffer",
@@ -180,7 +173,6 @@ static const char rmnet_gstrings_stats[][ETH_GSTRING_LEN] = {
 	"Checksum skipped on ip fragment",
 	"Checksum skipped",
 	"Checksum computed in software",
-	"Checksum computed in hardware",
 };
 
 static void rmnet_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
@@ -215,52 +207,7 @@ static void rmnet_get_ethtool_stats(struct net_device *dev,
 	memcpy(data, st, ARRAY_SIZE(rmnet_gstrings_stats) * sizeof(u64));
 }
 
-static int rmnet_get_coalesce(struct net_device *dev,
-			      struct ethtool_coalesce *coal,
-			      struct kernel_ethtool_coalesce *kernel_coal,
-			      struct netlink_ext_ack *extack)
-{
-	struct rmnet_priv *priv = netdev_priv(dev);
-	struct rmnet_port *port;
-
-	port = rmnet_get_port_rtnl(priv->real_dev);
-
-	memset(kernel_coal, 0, sizeof(*kernel_coal));
-	kernel_coal->tx_aggr_max_bytes = port->egress_agg_params.bytes;
-	kernel_coal->tx_aggr_max_frames = port->egress_agg_params.count;
-	kernel_coal->tx_aggr_time_usecs = div_u64(port->egress_agg_params.time_nsec,
-						  NSEC_PER_USEC);
-
-	return 0;
-}
-
-static int rmnet_set_coalesce(struct net_device *dev,
-			      struct ethtool_coalesce *coal,
-			      struct kernel_ethtool_coalesce *kernel_coal,
-			      struct netlink_ext_ack *extack)
-{
-	struct rmnet_priv *priv = netdev_priv(dev);
-	struct rmnet_port *port;
-
-	port = rmnet_get_port_rtnl(priv->real_dev);
-
-	if (kernel_coal->tx_aggr_max_frames < 1 || kernel_coal->tx_aggr_max_frames > 64)
-		return -EINVAL;
-
-	if (kernel_coal->tx_aggr_max_bytes > 32768)
-		return -EINVAL;
-
-	rmnet_map_update_ul_agg_config(port, kernel_coal->tx_aggr_max_bytes,
-				       kernel_coal->tx_aggr_max_frames,
-				       kernel_coal->tx_aggr_time_usecs);
-
-	return 0;
-}
-
 static const struct ethtool_ops rmnet_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_TX_AGGR,
-	.get_coalesce = rmnet_get_coalesce,
-	.set_coalesce = rmnet_set_coalesce,
 	.get_ethtool_stats = rmnet_get_ethtool_stats,
 	.get_strings = rmnet_get_strings,
 	.get_sset_count = rmnet_get_sset_count,
@@ -274,7 +221,7 @@ void rmnet_vnd_setup(struct net_device *rmnet_dev)
 	rmnet_dev->netdev_ops = &rmnet_vnd_ops;
 	rmnet_dev->mtu = RMNET_DFLT_PACKET_SIZE;
 	rmnet_dev->needed_headroom = RMNET_NEEDED_HEADROOM;
-	eth_hw_addr_random(rmnet_dev);
+	eth_random_addr(rmnet_dev->dev_addr);
 	rmnet_dev->tx_queue_len = RMNET_TX_QUEUE_LEN;
 
 	/* Raw IP mode */

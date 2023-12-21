@@ -1,5 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
-// Copyright 2012 Cisco Systems, Inc.  All rights reserved.
+/*
+ * Copyright 2012 Cisco Systems, Inc.  All rights reserved.
+ *
+ * This program is free software; you may redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 #include <linux/module.h>
 #include <linux/mempool.h>
@@ -139,7 +153,7 @@ int fnic_get_trace_data(fnic_dbgfs_t *fnic_dbgfs_prt)
 			if (rd_idx > (fnic_max_trace_entries-1))
 				rd_idx = 0;
 			/*
-			 * Continue dumping trace buffer entries into
+			 * Continure dumpping trace buffer entries into
 			 * memory file till rd_idx reaches write index
 			 */
 			if (rd_idx == wr_idx)
@@ -175,7 +189,7 @@ int fnic_get_trace_data(fnic_dbgfs_t *fnic_dbgfs_prt)
 				  tbp->data[3], tbp->data[4]);
 			rd_idx++;
 			/*
-			 * Continue dumping trace buffer entries into
+			 * Continue dumpping trace buffer entries into
 			 * memory file till rd_idx reaches write index
 			 */
 			if (rd_idx == wr_idx)
@@ -465,7 +479,7 @@ int fnic_trace_buf_init(void)
 	fnic_max_trace_entries = (trace_max_pages * PAGE_SIZE)/
 					  FNIC_ENTRY_SIZE_BYTES;
 
-	fnic_trace_buf_p = (unsigned long)vcalloc(trace_max_pages, PAGE_SIZE);
+	fnic_trace_buf_p = (unsigned long)vzalloc(trace_max_pages * PAGE_SIZE);
 	if (!fnic_trace_buf_p) {
 		printk(KERN_ERR PFX "Failed to allocate memory "
 				  "for fnic_trace_buf_p\n");
@@ -618,7 +632,7 @@ void fnic_fc_trace_free(void)
  * fnic_fc_ctlr_set_trace_data:
  *       Maintain rd & wr idx accordingly and set data
  * Passed parameters:
- *       host_no: host number associated with fnic
+ *       host_no: host number accociated with fnic
  *       frame_type: send_frame, rece_frame or link event
  *       fc_frame: pointer to fc_frame
  *       frame_len: Length of the fc_frame
@@ -701,13 +715,13 @@ int fnic_fc_trace_set_data(u32 host_no, u8 frame_type,
  * fnic_fc_ctlr_get_trace_data: Copy trace buffer to a memory file
  * Passed parameter:
  *       @fnic_dbgfs_t: pointer to debugfs trace buffer
- *       rdata_flag: 1 => Unformatted file
- *                   0 => formatted file
+ *       rdata_flag: 1 => Unformated file
+ *                   0 => formated file
  * Description:
  *       This routine will copy the trace data to memory file with
  *       proper formatting and also copy to another memory
- *       file without formatting for further processing.
- * Return Value:
+ *       file without formatting for further procesing.
+ * Retrun Value:
  *       Number of bytes that were dumped into fnic_dbgfs_t
  */
 
@@ -771,31 +785,38 @@ int fnic_fc_trace_get_data(fnic_dbgfs_t *fnic_dbgfs_prt, u8 rdata_flag)
  *      @fc_trace_hdr_t: pointer to trace data
  *      @fnic_dbgfs_t: pointer to debugfs trace buffer
  *      @orig_len: pointer to len
- *      rdata_flag: 0 => Formatted file, 1 => Unformatted file
+ *      rdata_flag: 0 => Formated file, 1 => Unformated file
  * Description:
  *      This routine will format and copy the passed trace data
- *      for formatted file or unformatted file accordingly.
+ *      for formated file or unformated file accordingly.
  */
 
 void copy_and_format_trace_data(struct fc_trace_hdr *tdata,
 				fnic_dbgfs_t *fnic_dbgfs_prt, int *orig_len,
 				u8 rdata_flag)
 {
+	struct tm tm;
 	int j, i = 1, len;
+	char *fc_trace, *fmt;
 	int ethhdr_len = sizeof(struct ethhdr) - 1;
 	int fcoehdr_len = sizeof(struct fcoe_hdr);
 	int fchdr_len = sizeof(struct fc_frame_header);
 	int max_size = fnic_fc_trace_max_pages * PAGE_SIZE * 3;
-	char *fc_trace;
 
 	tdata->frame_type = tdata->frame_type & 0x7F;
 
 	len = *orig_len;
 
-	len += scnprintf(fnic_dbgfs_prt->buffer + len, max_size - len,
-			 "%ptTs.%09lu ns%8x       %c%8x\t",
-			 &tdata->time_stamp.tv_sec, tdata->time_stamp.tv_nsec,
-			 tdata->host_no, tdata->frame_type, tdata->frame_len);
+	time64_to_tm(tdata->time_stamp.tv_sec, 0, &tm);
+
+	fmt = "%02d:%02d:%04ld %02d:%02d:%02d.%09lu ns%8x       %c%8x\t";
+	len += scnprintf(fnic_dbgfs_prt->buffer + len,
+		max_size - len,
+		fmt,
+		tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900,
+		tm.tm_hour, tm.tm_min, tm.tm_sec,
+		tdata->time_stamp.tv_nsec, tdata->host_no,
+		tdata->frame_type, tdata->frame_len);
 
 	fc_trace = (char *)FC_TRACE_ADDRESS(tdata);
 

@@ -2,7 +2,6 @@
 // Copyright (C) 2018, Advanced Micro Devices, Inc.
 
 #include <linux/cper.h>
-#include <linux/acpi.h>
 
 /*
  * We don't need a "CPER_IA" prefix since these are all locally defined.
@@ -348,13 +347,9 @@ void cper_print_proc_ia(const char *pfx, const struct cper_sec_proc_ia *proc)
 			       ctx_info->mm_reg_addr);
 		}
 
-		if (ctx_info->reg_ctx_type != CTX_TYPE_MSR ||
-		    arch_apei_report_x86_error(ctx_info, proc->lapic_id)) {
-			printk("%sRegister Array:\n", newpfx);
-			print_hex_dump(newpfx, "", DUMP_PREFIX_OFFSET, 16,
-				       groupsize, (ctx_info + 1),
-				       ctx_info->reg_arr_size, 0);
-		}
+		printk("%sRegister Array:\n", newpfx);
+		print_hex_dump(newpfx, "", DUMP_PREFIX_OFFSET, 16, groupsize,
+			       (ctx_info + 1), ctx_info->reg_arr_size, 0);
 
 		ctx_info = (struct cper_ia_proc_ctx *)((long)ctx_info + size);
 	}

@@ -55,7 +55,11 @@
 #include <asm/cio.h>
 #include "entry.h"
 
-union tod_clock tod_clock_base __section(".data");
+unsigned char tod_clock_base[16] __aligned(8) = {
+	/* Force to data section. */
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+};
 EXPORT_SYMBOL_GPL(tod_clock_base);
 
 u64 clock_comparator_max = -1ULL;
@@ -68,10 +72,10 @@ EXPORT_SYMBOL(s390_epoch_delta_notifier);
 
 unsigned char ptff_function_mask[16];
 
-static unsigned long lpar_offset;
-static unsigned long initial_leap_seconds;
-static unsigned long tod_steering_end;
-static long tod_steering_delta;
+static unsigned long long lpar_offset;
+static unsigned long long initial_leap_seconds;
+static unsigned long long tod_steering_end;
+static long long tod_steering_delta;
 
 /*
  * Get time offsets with PTFF
@@ -80,12 +84,10 @@ void __init time_early_init(void)
 {
 	struct ptff_qto qto;
 	struct ptff_qui qui;
-	int cs;
 
 	/* Initialize TOD steering parameters */
-	tod_steering_end = tod_clock_base.tod;
-	for (cs = 0; cs < CS_BASES; cs++)
-		vdso_data[cs].arch_data.tod_steering_end = tod_steering_end;
+	tod_steering_end = *(unsigned long long *) &tod_clock_base[1];
+	vdso_data->arch_data.tod_steering_end = tod_steering_end;
 
 	if (!test_facility(28))
 		return;
@@ -98,13 +100,8 @@ void __init time_early_init(void)
 
 	/* get initial leap seconds */
 	if (ptff_query(PTFF_QUI) && ptff(&qui, sizeof(qui), PTFF_QUI) == 0)
-		initial_leap_seconds = (unsigned long)
+		initial_leap_seconds = (unsigned long long)
 			((long) qui.old_leap * 4096000000L);
-}
-
-unsigned long long noinstr sched_clock_noinstr(void)
-{
-	return tod_to_ns(__get_tod_clock_monotonic());
 }
 
 /*
@@ -116,13 +113,18 @@ unsigned long long notrace sched_clock(void)
 }
 NOKPROBE_SYMBOL(sched_clock);
 
-static void ext_to_timespec64(union tod_clock *clk, struct timespec64 *xt)
+static void ext_to_timespec64(unsigned char *clk, struct timespec64 *xt)
 {
-	unsigned long rem, sec, nsec;
+	unsigned long long high, low, rem, sec, nsec;
 
-	sec = clk->us;
+	/* Split extendnd TOD clock to micro-seconds and sub-micro-seconds */
+	high = (*(unsigned long long *) clk) >> 4;
+	low = (*(unsigned long long *)&clk[7]) << 4;
+	/* Calculate seconds and nano-seconds */
+	sec = high;
 	rem = do_div(sec, 1000000);
-	nsec = ((clk->sus + (rem << 12)) * 125) >> 9;
+	nsec = (((low >> 32) + (rem << 32)) * 1000) >> 32;
+
 	xt->tv_sec = sec;
 	xt->tv_nsec = nsec;
 }
@@ -202,26 +204,30 @@ static void stp_reset(void);
 
 void read_persistent_clock64(struct timespec64 *ts)
 {
-	union tod_clock clk;
-	u64 delta;
+	unsigned char clk[STORE_CLOCK_EXT_SIZE];
+	__u64 delta;
 
 	delta = initial_leap_seconds + TOD_UNIX_EPOCH;
-	store_tod_clock_ext(&clk);
-	clk.eitod -= delta;
-	ext_to_timespec64(&clk, ts);
+	get_tod_clock_ext(clk);
+	*(__u64 *) &clk[1] -= delta;
+	if (*(__u64 *) &clk[1] > delta)
+		clk[0]--;
+	ext_to_timespec64(clk, ts);
 }
 
 void __init read_persistent_wall_and_boot_offset(struct timespec64 *wall_time,
 						 struct timespec64 *boot_offset)
 {
+	unsigned char clk[STORE_CLOCK_EXT_SIZE];
 	struct timespec64 boot_time;
-	union tod_clock clk;
-	u64 delta;
+	__u64 delta;
 
 	delta = initial_leap_seconds + TOD_UNIX_EPOCH;
-	clk = tod_clock_base;
-	clk.eitod -= delta;
-	ext_to_timespec64(&clk, &boot_time);
+	memcpy(clk, tod_clock_base, STORE_CLOCK_EXT_SIZE);
+	*(__u64 *)&clk[1] -= delta;
+	if (*(__u64 *)&clk[1] > delta)
+		clk[0]--;
+	ext_to_timespec64(clk, &boot_time);
 
 	read_persistent_clock64(wall_time);
 	*boot_offset = timespec64_sub(*wall_time, boot_time);
@@ -229,7 +235,7 @@ void __init read_persistent_wall_and_boot_offset(struct timespec64 *wall_time,
 
 static u64 read_tod_clock(struct clocksource *cs)
 {
-	unsigned long now, adj;
+	unsigned long long now, adj;
 
 	preempt_disable(); /* protect from changes to steering parameters */
 	now = get_tod_clock();
@@ -369,14 +375,16 @@ static inline int check_sync_clock(void)
  * Apply clock delta to the global data structures.
  * This is called once on the CPU that performed the clock sync.
  */
-static void clock_sync_global(long delta)
+static void clock_sync_global(unsigned long long delta)
 {
 	unsigned long now, adj;
 	struct ptff_qto qto;
-	int cs;
 
 	/* Fixup the monotonic sched clock. */
-	tod_clock_base.eitod += delta;
+	*(unsigned long long *) &tod_clock_base[1] += delta;
+	if (*(unsigned long long *) &tod_clock_base[1] < delta)
+		/* Epoch overflow */
+		tod_clock_base[0]++;
 	/* Adjust TOD steering parameters. */
 	now = get_tod_clock();
 	adj = tod_steering_end - now;
@@ -386,13 +394,11 @@ static void clock_sync_global(long delta)
 			-(adj >> 15) : (adj >> 15);
 	tod_steering_delta += delta;
 	if ((abs(tod_steering_delta) >> 48) != 0)
-		panic("TOD clock sync offset %li is too large to drift\n",
+		panic("TOD clock sync offset %lli is too large to drift\n",
 		      tod_steering_delta);
 	tod_steering_end = now + (abs(tod_steering_delta) << 15);
-	for (cs = 0; cs < CS_BASES; cs++) {
-		vdso_data[cs].arch_data.tod_steering_end = tod_steering_end;
-		vdso_data[cs].arch_data.tod_steering_delta = tod_steering_delta;
-	}
+	vdso_data->arch_data.tod_steering_end = tod_steering_end;
+	vdso_data->arch_data.tod_steering_delta = tod_steering_delta;
 
 	/* Update LPAR offset. */
 	if (ptff_query(PTFF_QTO) && ptff(&qto, sizeof(qto), PTFF_QTO) == 0)
@@ -405,7 +411,7 @@ static void clock_sync_global(long delta)
  * Apply clock delta to the per-CPU data structures of this CPU.
  * This is called for each online CPU after the call to clock_sync_global.
  */
-static void clock_sync_local(long delta)
+static void clock_sync_local(unsigned long long delta)
 {
 	/* Add the delta to the clock comparator. */
 	if (S390_lowcore.clock_comparator != clock_comparator_max) {
@@ -429,7 +435,7 @@ static void __init time_init_wq(void)
 struct clock_sync_data {
 	atomic_t cpus;
 	int in_sync;
-	long clock_delta;
+	unsigned long long clock_delta;
 };
 
 /*
@@ -549,7 +555,7 @@ static int stpinfo_valid(void)
 static int stp_sync_clock(void *data)
 {
 	struct clock_sync_data *sync = data;
-	long clock_delta, flags;
+	unsigned long long clock_delta, flags;
 	static int first;
 	int rc;
 
@@ -559,7 +565,9 @@ static int stp_sync_clock(void *data)
 		while (atomic_read(&sync->cpus) != 0)
 			cpu_relax();
 		rc = 0;
-		if (stp_info.todoff || stp_info.tmd != 2) {
+		if (stp_info.todoff[0] || stp_info.todoff[1] ||
+		    stp_info.todoff[2] || stp_info.todoff[3] ||
+		    stp_info.tmd != 2) {
 			flags = vdso_update_begin();
 			rc = chsc_sstpc(stp_page, STP_OP_SYNC, 0,
 					&clock_delta);
@@ -702,7 +710,7 @@ static void stp_work_fn(struct work_struct *work)
 
 	if (!check_sync_clock())
 		/*
-		 * There is a usable clock but the synchronization failed.
+		 * There is a usable clock but the synchonization failed.
 		 * Retry after a second.
 		 */
 		mod_timer(&stp_timer, jiffies + msecs_to_jiffies(MSEC_PER_SEC));
@@ -729,8 +737,8 @@ static ssize_t ctn_id_show(struct device *dev,
 
 	mutex_lock(&stp_mutex);
 	if (stpinfo_valid())
-		ret = sprintf(buf, "%016lx\n",
-			      *(unsigned long *) stp_info.ctnid);
+		ret = sprintf(buf, "%016llx\n",
+			      *(unsigned long long *) stp_info.ctnid);
 	mutex_unlock(&stp_mutex);
 	return ret;
 }
@@ -803,7 +811,7 @@ static ssize_t leap_seconds_scheduled_show(struct device *dev,
 	if (!stzi.lsoib.p)
 		return sprintf(buf, "0,0\n");
 
-	return sprintf(buf, "%lu,%d\n",
+	return sprintf(buf, "%llu,%d\n",
 		       tod_to_ns(stzi.lsoib.nlsout - TOD_UNIX_EPOCH) / NSEC_PER_SEC,
 		       stzi.lsoib.nlso - stzi.lsoib.also);
 }
@@ -920,25 +928,41 @@ static ssize_t online_store(struct device *dev,
  */
 static DEVICE_ATTR_RW(online);
 
-static struct attribute *stp_dev_attrs[] = {
-	&dev_attr_ctn_id.attr,
-	&dev_attr_ctn_type.attr,
-	&dev_attr_dst_offset.attr,
-	&dev_attr_leap_seconds.attr,
-	&dev_attr_online.attr,
-	&dev_attr_leap_seconds_scheduled.attr,
-	&dev_attr_stratum.attr,
-	&dev_attr_time_offset.attr,
-	&dev_attr_time_zone_offset.attr,
-	&dev_attr_timing_mode.attr,
-	&dev_attr_timing_state.attr,
+static struct device_attribute *stp_attributes[] = {
+	&dev_attr_ctn_id,
+	&dev_attr_ctn_type,
+	&dev_attr_dst_offset,
+	&dev_attr_leap_seconds,
+	&dev_attr_online,
+	&dev_attr_leap_seconds_scheduled,
+	&dev_attr_stratum,
+	&dev_attr_time_offset,
+	&dev_attr_time_zone_offset,
+	&dev_attr_timing_mode,
+	&dev_attr_timing_state,
 	NULL
 };
-ATTRIBUTE_GROUPS(stp_dev);
 
 static int __init stp_init_sysfs(void)
 {
-	return subsys_system_register(&stp_subsys, stp_dev_groups);
+	struct device_attribute **attr;
+	int rc;
+
+	rc = subsys_system_register(&stp_subsys, NULL);
+	if (rc)
+		goto out;
+	for (attr = stp_attributes; *attr; attr++) {
+		rc = device_create_file(stp_subsys.dev_root, *attr);
+		if (rc)
+			goto out_unreg;
+	}
+	return 0;
+out_unreg:
+	for (; attr >= stp_attributes; attr--)
+		device_remove_file(stp_subsys.dev_root, *attr);
+	bus_unregister(&stp_subsys);
+out:
+	return rc;
 }
 
 device_initcall(stp_init_sysfs);

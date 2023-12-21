@@ -705,7 +705,7 @@ static int fat_readdir(struct file *file, struct dir_context *ctx)
 }
 
 #define FAT_IOCTL_FILLDIR_FUNC(func, dirent_type)			   \
-static bool func(struct dir_context *ctx, const char *name, int name_len,  \
+static int func(struct dir_context *ctx, const char *name, int name_len,   \
 			     loff_t offset, u64 ino, unsigned int d_type)  \
 {									   \
 	struct fat_ioctl_filldir_callback *buf =			   \
@@ -714,7 +714,7 @@ static bool func(struct dir_context *ctx, const char *name, int name_len,  \
 	struct dirent_type __user *d2 = d1 + 1;				   \
 									   \
 	if (buf->result)						   \
-		return false;						   \
+		return -EINVAL;						   \
 	buf->result++;							   \
 									   \
 	if (name != NULL) {						   \
@@ -722,7 +722,7 @@ static bool func(struct dir_context *ctx, const char *name, int name_len,  \
 		if (name_len >= sizeof(d1->d_name))			   \
 			name_len = sizeof(d1->d_name) - 1;		   \
 									   \
-		if (put_user(0, &d2->d_name[0])			||	   \
+		if (put_user(0, d2->d_name)			||	   \
 		    put_user(0, &d2->d_reclen)			||	   \
 		    copy_to_user(d1->d_name, name, name_len)	||	   \
 		    put_user(0, d1->d_name + name_len)		||	   \
@@ -750,10 +750,10 @@ static bool func(struct dir_context *ctx, const char *name, int name_len,  \
 		    put_user(short_len, &d1->d_reclen))			   \
 			goto efault;					   \
 	}								   \
-	return true;							   \
+	return 0;							   \
 efault:									   \
 	buf->result = -EFAULT;						   \
-	return false;							   \
+	return -EFAULT;							   \
 }
 
 FAT_IOCTL_FILLDIR_FUNC(fat_ioctl_filldir, __fat_dirent)

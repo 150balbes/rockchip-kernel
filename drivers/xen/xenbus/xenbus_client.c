@@ -363,95 +363,50 @@ static void xenbus_switch_fatal(struct xenbus_device *dev, int depth, int err,
 		__xenbus_switch_state(dev, XenbusStateClosing, 1);
 }
 
-/*
- * xenbus_setup_ring
+/**
+ * xenbus_grant_ring
  * @dev: xenbus device
- * @vaddr: pointer to starting virtual address of the ring
+ * @vaddr: starting virtual address of the ring
  * @nr_pages: number of pages to be granted
  * @grefs: grant reference array to be filled in
  *
- * Allocate physically contiguous pages for a shared ring buffer and grant it
- * to the peer of the given device. The ring buffer is initially filled with
- * zeroes. The virtual address of the ring is stored at @vaddr and the
- * grant references are stored in the @grefs array. In case of error @vaddr
- * will be set to NULL and @grefs will be filled with INVALID_GRANT_REF.
+ * Grant access to the given @vaddr to the peer of the given device.
+ * Then fill in @grefs with grant references.  Return 0 on success, or
+ * -errno on error.  On error, the device will switch to
+ * XenbusStateClosing, and the error will be saved in the store.
  */
-int xenbus_setup_ring(struct xenbus_device *dev, gfp_t gfp, void **vaddr,
+int xenbus_grant_ring(struct xenbus_device *dev, void *vaddr,
 		      unsigned int nr_pages, grant_ref_t *grefs)
 {
-	unsigned long ring_size = nr_pages * XEN_PAGE_SIZE;
-	grant_ref_t gref_head;
+	int err;
 	unsigned int i;
-	void *addr;
-	int ret;
+	grant_ref_t gref_head;
 
-	addr = *vaddr = alloc_pages_exact(ring_size, gfp | __GFP_ZERO);
-	if (!*vaddr) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = gnttab_alloc_grant_references(nr_pages, &gref_head);
-	if (ret) {
-		xenbus_dev_fatal(dev, ret, "granting access to %u ring pages",
-				 nr_pages);
-		goto err;
+	err = gnttab_alloc_grant_references(nr_pages, &gref_head);
+	if (err) {
+		xenbus_dev_fatal(dev, err, "granting access to ring page");
+		return err;
 	}
 
 	for (i = 0; i < nr_pages; i++) {
 		unsigned long gfn;
 
-		if (is_vmalloc_addr(*vaddr))
-			gfn = pfn_to_gfn(vmalloc_to_pfn(addr));
+		if (is_vmalloc_addr(vaddr))
+			gfn = pfn_to_gfn(vmalloc_to_pfn(vaddr));
 		else
-			gfn = virt_to_gfn(addr);
+			gfn = virt_to_gfn(vaddr);
 
 		grefs[i] = gnttab_claim_grant_reference(&gref_head);
 		gnttab_grant_foreign_access_ref(grefs[i], dev->otherend_id,
 						gfn, 0);
 
-		addr += XEN_PAGE_SIZE;
+		vaddr = vaddr + XEN_PAGE_SIZE;
 	}
 
 	return 0;
-
- err:
-	if (*vaddr)
-		free_pages_exact(*vaddr, ring_size);
-	for (i = 0; i < nr_pages; i++)
-		grefs[i] = INVALID_GRANT_REF;
-	*vaddr = NULL;
-
-	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_setup_ring);
+EXPORT_SYMBOL_GPL(xenbus_grant_ring);
 
-/*
- * xenbus_teardown_ring
- * @vaddr: starting virtual address of the ring
- * @nr_pages: number of pages
- * @grefs: grant reference array
- *
- * Remove grants for the shared ring buffer and free the associated memory.
- * On return the grant reference array is filled with INVALID_GRANT_REF.
- */
-void xenbus_teardown_ring(void **vaddr, unsigned int nr_pages,
-			  grant_ref_t *grefs)
-{
-	unsigned int i;
-
-	for (i = 0; i < nr_pages; i++) {
-		if (grefs[i] != INVALID_GRANT_REF) {
-			gnttab_end_foreign_access(grefs[i], NULL);
-			grefs[i] = INVALID_GRANT_REF;
-		}
-	}
-
-	if (*vaddr)
-		free_pages_exact(*vaddr, nr_pages * XEN_PAGE_SIZE);
-	*vaddr = NULL;
-}
-EXPORT_SYMBOL_GPL(xenbus_teardown_ring);
 
 /**
  * Allocate an event channel for the given xenbus_device, assigning the newly
@@ -585,7 +540,8 @@ static int __xenbus_map_ring(struct xenbus_device *dev,
 		}
 	}
 
-	BUG_ON(HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, info->unmap, j));
+	if (HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, info->unmap, j))
+		BUG();
 
 	*leaked = false;
 	for (i = 0; i < j; i++) {
@@ -623,7 +579,8 @@ static int xenbus_unmap_ring(struct xenbus_device *dev, grant_handle_t *handles,
 		gnttab_set_unmap_op(&unmap[i], vaddrs[i],
 				    GNTMAP_host_map, handles[i]);
 
-	BUG_ON(HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, unmap, i));
+	if (HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, unmap, i))
+		BUG();
 
 	err = GNTST_okay;
 	for (i = 0; i < nr_handles; i++) {
@@ -819,7 +776,8 @@ static int xenbus_unmap_ring_pv(struct xenbus_device *dev, void *vaddr)
 		unmap[i].handle = node->handles[i];
 	}
 
-	BUG_ON(HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, unmap, i));
+	if (HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, unmap, i))
+		BUG();
 
 	err = GNTST_okay;
 	leaked = false;

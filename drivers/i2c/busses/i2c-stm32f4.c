@@ -313,7 +313,7 @@ static int stm32f4_i2c_wait_free_bus(struct stm32f4_i2c_dev *i2c_dev)
 }
 
 /**
- * stm32f4_i2c_write_byte() - Write a byte in the data register
+ * stm32f4_i2c_write_ byte() - Write a byte in the data register
  * @i2c_dev: Controller's private data
  * @byte: Data to write in the register
  */
@@ -534,7 +534,7 @@ static void stm32f4_i2c_handle_rx_addr(struct stm32f4_i2c_dev *i2c_dev)
 	default:
 		/*
 		 * N-byte reception:
-		 * Enable ACK, reset POS (ACK position) and clear ADDR flag.
+		 * Enable ACK, reset POS (ACK postion) and clear ADDR flag.
 		 * In that way, ACK will be sent as soon as the current byte
 		 * will be received in the shift register
 		 */
@@ -861,13 +861,15 @@ clk_free:
 	return ret;
 }
 
-static void stm32f4_i2c_remove(struct platform_device *pdev)
+static int stm32f4_i2c_remove(struct platform_device *pdev)
 {
 	struct stm32f4_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&i2c_dev->adap);
 
 	clk_unprepare(i2c_dev->clk);
+
+	return 0;
 }
 
 static const struct of_device_id stm32f4_i2c_match[] = {
@@ -882,7 +884,7 @@ static struct platform_driver stm32f4_i2c_driver = {
 		.of_match_table = stm32f4_i2c_match,
 	},
 	.probe = stm32f4_i2c_probe,
-	.remove_new = stm32f4_i2c_remove,
+	.remove = stm32f4_i2c_remove,
 };
 
 module_platform_driver(stm32f4_i2c_driver);

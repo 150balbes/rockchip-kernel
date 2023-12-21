@@ -2,6 +2,8 @@
 #ifndef _ASM_RTC_H
 #define _ASM_RTC_H
 
+void time_init(void);
+
 #define RTC_CAP_4_DIGIT_YEAR	(1 << 0)
 
 struct sh_rtc_platform_info {

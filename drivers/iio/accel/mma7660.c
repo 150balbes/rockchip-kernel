@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Freescale MMA7660FC 3-Axis Accelerometer
  *
  * Copyright (c) 2016, Intel Corporation.
@@ -7,8 +7,8 @@
  * IIO driver for Freescale MMA7660FC; 7-bit I2C address: 0x4c.
  */
 
+#include <linux/acpi.h>
 #include <linux/i2c.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -169,7 +169,8 @@ static const struct iio_info mma7660_info = {
 	.attrs			= &mma7660_attribute_group,
 };
 
-static int mma7660_probe(struct i2c_client *client)
+static int mma7660_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -206,19 +207,16 @@ static int mma7660_probe(struct i2c_client *client)
 	return ret;
 }
 
-static void mma7660_remove(struct i2c_client *client)
+static int mma7660_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
-	int ret;
 
 	iio_device_unregister(indio_dev);
 
-	ret = mma7660_set_mode(iio_priv(indio_dev), MMA7660_MODE_STANDBY);
-	if (ret)
-		dev_warn(&client->dev, "Failed to put device in stand-by mode (%pe), ignoring\n",
-			 ERR_PTR(ret));
+	return mma7660_set_mode(iio_priv(indio_dev), MMA7660_MODE_STANDBY);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int mma7660_suspend(struct device *dev)
 {
 	struct mma7660_data *data;
@@ -237,8 +235,12 @@ static int mma7660_resume(struct device *dev)
 	return mma7660_set_mode(data, MMA7660_MODE_ACTIVE);
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(mma7660_pm_ops, mma7660_suspend,
-				mma7660_resume);
+static SIMPLE_DEV_PM_OPS(mma7660_pm_ops, mma7660_suspend, mma7660_resume);
+
+#define MMA7660_PM_OPS (&mma7660_pm_ops)
+#else
+#define MMA7660_PM_OPS NULL
+#endif
 
 static const struct i2c_device_id mma7660_i2c_id[] = {
 	{"mma7660", 0},
@@ -262,9 +264,9 @@ MODULE_DEVICE_TABLE(acpi, mma7660_acpi_id);
 static struct i2c_driver mma7660_driver = {
 	.driver = {
 		.name = "mma7660",
-		.pm = pm_sleep_ptr(&mma7660_pm_ops),
+		.pm = MMA7660_PM_OPS,
 		.of_match_table = mma7660_of_match,
-		.acpi_match_table = mma7660_acpi_id,
+		.acpi_match_table = ACPI_PTR(mma7660_acpi_id),
 	},
 	.probe		= mma7660_probe,
 	.remove		= mma7660_remove,

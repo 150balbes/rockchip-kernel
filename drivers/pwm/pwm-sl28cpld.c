@@ -87,9 +87,9 @@ struct sl28cpld_pwm {
 #define sl28cpld_pwm_from_chip(_chip) \
 	container_of(_chip, struct sl28cpld_pwm, pwm_chip)
 
-static int sl28cpld_pwm_get_state(struct pwm_chip *chip,
-				  struct pwm_device *pwm,
-				  struct pwm_state *state)
+static void sl28cpld_pwm_get_state(struct pwm_chip *chip,
+				   struct pwm_device *pwm,
+				   struct pwm_state *state)
 {
 	struct sl28cpld_pwm *priv = sl28cpld_pwm_from_chip(chip);
 	unsigned int reg;
@@ -115,8 +115,6 @@ static int sl28cpld_pwm_get_state(struct pwm_chip *chip,
 	 * the PWM core.
 	 */
 	state->duty_cycle = min(state->duty_cycle, state->period);
-
-	return 0;
 }
 
 static int sl28cpld_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
@@ -231,16 +229,26 @@ static int sl28cpld_pwm_probe(struct platform_device *pdev)
 	chip = &priv->pwm_chip;
 	chip->dev = &pdev->dev;
 	chip->ops = &sl28cpld_pwm_ops;
+	chip->base = -1;
 	chip->npwm = 1;
 
-	ret = devm_pwmchip_add(&pdev->dev, &priv->pwm_chip);
+	ret = pwmchip_add(&priv->pwm_chip);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add PWM chip (%pe)",
 			ERR_PTR(ret));
 		return ret;
 	}
 
+	platform_set_drvdata(pdev, priv);
+
 	return 0;
+}
+
+static int sl28cpld_pwm_remove(struct platform_device *pdev)
+{
+	struct sl28cpld_pwm *priv = platform_get_drvdata(pdev);
+
+	return pwmchip_remove(&priv->pwm_chip);
 }
 
 static const struct of_device_id sl28cpld_pwm_of_match[] = {
@@ -251,6 +259,7 @@ MODULE_DEVICE_TABLE(of, sl28cpld_pwm_of_match);
 
 static struct platform_driver sl28cpld_pwm_driver = {
 	.probe = sl28cpld_pwm_probe,
+	.remove	= sl28cpld_pwm_remove,
 	.driver = {
 		.name = "sl28cpld-pwm",
 		.of_match_table = sl28cpld_pwm_of_match,

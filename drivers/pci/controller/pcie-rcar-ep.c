@@ -6,13 +6,16 @@
  * Author: Lad Prabhakar <prabhakar.mahadev-lad.rj@bp.renesas.com>
  */
 
+#include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/of_address.h>
+#include <linux/of_irq.h>
+#include <linux/of_pci.h>
 #include <linux/of_platform.h>
 #include <linux/pci.h>
 #include <linux/pci-epc.h>
+#include <linux/phy/phy.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 
 #include "pcie-rcar.h"
 
@@ -156,7 +159,7 @@ static int rcar_pcie_ep_get_pdata(struct rcar_pcie_endpoint *ep,
 	return 0;
 }
 
-static int rcar_pcie_ep_write_header(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rcar_pcie_ep_write_header(struct pci_epc *epc, u8 fn,
 				     struct pci_epf_header *hdr)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
@@ -192,7 +195,7 @@ static int rcar_pcie_ep_write_header(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static int rcar_pcie_ep_set_bar(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
+static int rcar_pcie_ep_set_bar(struct pci_epc *epc, u8 func_no,
 				struct pci_epf_bar *epf_bar)
 {
 	int flags = epf_bar->flags | LAR_ENABLE | LAM_64BIT;
@@ -243,7 +246,7 @@ static int rcar_pcie_ep_set_bar(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 	return 0;
 }
 
-static void rcar_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn, u8 vfn,
+static void rcar_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn,
 				   struct pci_epf_bar *epf_bar)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
@@ -256,8 +259,7 @@ static void rcar_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn, u8 vfn,
 	clear_bit(atu_index + 1, ep->ib_window_map);
 }
 
-static int rcar_pcie_ep_set_msi(struct pci_epc *epc, u8 fn, u8 vfn,
-				u8 interrupts)
+static int rcar_pcie_ep_set_msi(struct pci_epc *epc, u8 fn, u8 interrupts)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
 	struct rcar_pcie *pcie = &ep->pcie;
@@ -270,7 +272,7 @@ static int rcar_pcie_ep_set_msi(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static int rcar_pcie_ep_get_msi(struct pci_epc *epc, u8 fn, u8 vfn)
+static int rcar_pcie_ep_get_msi(struct pci_epc *epc, u8 fn)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
 	struct rcar_pcie *pcie = &ep->pcie;
@@ -283,7 +285,7 @@ static int rcar_pcie_ep_get_msi(struct pci_epc *epc, u8 fn, u8 vfn)
 	return ((flags & MSICAP0_MMESE_MASK) >> MSICAP0_MMESE_OFFSET);
 }
 
-static int rcar_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rcar_pcie_ep_map_addr(struct pci_epc *epc, u8 fn,
 				 phys_addr_t addr, u64 pci_addr, size_t size)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
@@ -320,7 +322,7 @@ static int rcar_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static void rcar_pcie_ep_unmap_addr(struct pci_epc *epc, u8 fn, u8 vfn,
+static void rcar_pcie_ep_unmap_addr(struct pci_epc *epc, u8 fn,
 				    phys_addr_t addr)
 {
 	struct rcar_pcie_endpoint *ep = epc_get_drvdata(epc);
@@ -401,7 +403,7 @@ static int rcar_pcie_ep_assert_msi(struct rcar_pcie *pcie,
 	return 0;
 }
 
-static int rcar_pcie_ep_raise_irq(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rcar_pcie_ep_raise_irq(struct pci_epc *epc, u8 fn,
 				  enum pci_epc_irq_type type,
 				  u16 interrupt_num)
 {
@@ -449,7 +451,7 @@ static const struct pci_epc_features rcar_pcie_epc_features = {
 };
 
 static const struct pci_epc_features*
-rcar_pcie_ep_get_features(struct pci_epc *epc, u8 func_no, u8 vfunc_no)
+rcar_pcie_ep_get_features(struct pci_epc *epc, u8 func_no)
 {
 	return &rcar_pcie_epc_features;
 }

@@ -35,8 +35,10 @@ ia_css_dvs_config(
     const struct ia_css_dvs_configuration *from,
     unsigned int size);
 
-int ia_css_dvs_configure(const struct ia_css_binary     *binary,
-			 const struct ia_css_frame_info *from);
+void
+ia_css_dvs_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame_info *from);
 
 void
 convert_dvs_6axis_config(

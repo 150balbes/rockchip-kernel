@@ -23,10 +23,6 @@
 
 #ifdef __KERNEL__
 
-struct neigh_parms;
-struct net_device;
-struct sk_buff;
-
 struct hippi_cb {
 	__u32	ifield;
 };

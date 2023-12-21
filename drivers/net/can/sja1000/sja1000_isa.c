@@ -223,7 +223,7 @@ exit:
 	return err;
 }
 
-static void sja1000_isa_remove(struct platform_device *pdev)
+static int sja1000_isa_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct sja1000_priv *priv = netdev_priv(dev);
@@ -241,11 +241,13 @@ static void sja1000_isa_remove(struct platform_device *pdev)
 			release_region(port[idx], SJA1000_IOSIZE);
 	}
 	free_sja1000dev(dev);
+
+	return 0;
 }
 
 static struct platform_driver sja1000_isa_driver = {
 	.probe = sja1000_isa_probe,
-	.remove_new = sja1000_isa_remove,
+	.remove = sja1000_isa_remove,
 	.driver = {
 		.name = DRV_NAME,
 	},

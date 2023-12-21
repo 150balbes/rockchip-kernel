@@ -3,6 +3,7 @@
 
 #include <linux/module.h>
 #include <linux/interrupt.h>
+#include <linux/aer.h>
 
 #include "fm10k.h"
 
@@ -299,7 +300,7 @@ static int fm10k_handle_reset(struct fm10k_intfc *interface)
 		if (is_valid_ether_addr(hw->mac.perm_addr)) {
 			ether_addr_copy(hw->mac.addr, hw->mac.perm_addr);
 			ether_addr_copy(netdev->perm_addr, hw->mac.perm_addr);
-			eth_hw_addr_set(netdev, hw->mac.perm_addr);
+			ether_addr_copy(netdev->dev_addr, hw->mac.perm_addr);
 			netdev->addr_assign_type &= ~NET_ADDR_RANDOM;
 		}
 
@@ -1369,6 +1370,7 @@ static irqreturn_t fm10k_msix_mbx_pf(int __always_unused irq, void *data)
 	struct fm10k_hw *hw = &interface->hw;
 	struct fm10k_mbx_info *mbx = &hw->mbx;
 	u32 eicr;
+	s32 err = 0;
 
 	/* unmask any set bits related to this interrupt */
 	eicr = fm10k_read_reg(hw, FM10K_EICR);
@@ -1384,15 +1386,14 @@ static irqreturn_t fm10k_msix_mbx_pf(int __always_unused irq, void *data)
 
 	/* service mailboxes */
 	if (fm10k_mbx_trylock(interface)) {
-		s32 err = mbx->ops.process(hw, mbx);
-
-		if (err == FM10K_ERR_RESET_REQUESTED)
-			set_bit(FM10K_FLAG_RESET_REQUESTED, interface->flags);
-
+		err = mbx->ops.process(hw, mbx);
 		/* handle VFLRE events */
 		fm10k_iov_event(interface);
 		fm10k_mbx_unlock(interface);
 	}
+
+	if (err == FM10K_ERR_RESET_REQUESTED)
+		set_bit(FM10K_FLAG_RESET_REQUESTED, interface->flags);
 
 	/* if switch toggled state we should reset GLORTs */
 	if (eicr & FM10K_EICR_SWITCHNOTREADY) {
@@ -2044,7 +2045,7 @@ static int fm10k_sw_init(struct fm10k_intfc *interface,
 		netdev->addr_assign_type |= NET_ADDR_RANDOM;
 	}
 
-	eth_hw_addr_set(netdev, hw->mac.addr);
+	ether_addr_copy(netdev->dev_addr, hw->mac.addr);
 	ether_addr_copy(netdev->perm_addr, hw->mac.addr);
 
 	if (!is_valid_ether_addr(netdev->perm_addr)) {
@@ -2125,6 +2126,8 @@ static int fm10k_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			"pci_request_selected_regions failed: %d\n", err);
 		goto err_pci_reg;
 	}
+
+	pci_enable_pcie_error_reporting(pdev);
 
 	pci_set_master(pdev);
 	pci_save_state(pdev);
@@ -2224,6 +2227,7 @@ err_sw_init:
 err_ioremap:
 	free_netdev(netdev);
 err_alloc_netdev:
+	pci_disable_pcie_error_reporting(pdev);
 	pci_release_mem_regions(pdev);
 err_pci_reg:
 err_dma:
@@ -2276,6 +2280,8 @@ static void fm10k_remove(struct pci_dev *pdev)
 	free_netdev(netdev);
 
 	pci_release_mem_regions(pdev);
+
+	pci_disable_pcie_error_reporting(pdev);
 
 	pci_disable_device(pdev);
 }

@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012 (C), Jason Cooper <jason@lakedaemon.net>
  *
  * arch/arm/mach-mvebu/kirkwood.c
  *
  * Flattened Device Tree board initialization
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
  */
 
 #include <linux/clk.h>
@@ -81,7 +84,6 @@ static void __init kirkwood_dt_eth_fixup(void)
 		struct device_node *pnp = of_get_parent(np);
 		struct clk *clk;
 		struct property *pmac;
-		u8 tmpmac[ETH_ALEN];
 		void __iomem *io;
 		u8 *macaddr;
 		u32 reg;
@@ -91,7 +93,7 @@ static void __init kirkwood_dt_eth_fixup(void)
 
 		/* skip disabled nodes or nodes with valid MAC address*/
 		if (!of_device_is_available(pnp) ||
-		    !of_get_mac_address(np, tmpmac))
+		    !IS_ERR(of_get_mac_address(np)))
 			goto eth_fixup_skip;
 
 		clk = of_clk_get(pnp, 0);

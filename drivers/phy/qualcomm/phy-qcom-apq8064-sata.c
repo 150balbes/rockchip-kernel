@@ -201,6 +201,7 @@ static int qcom_apq8064_sata_phy_probe(struct platform_device *pdev)
 {
 	struct qcom_apq8064_sata_phy *phy;
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct phy_provider *phy_provider;
 	struct phy *generic_phy;
 	int ret;
@@ -209,7 +210,8 @@ static int qcom_apq8064_sata_phy_probe(struct platform_device *pdev)
 	if (!phy)
 		return -ENOMEM;
 
-	phy->mmio = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	phy->mmio = devm_ioremap_resource(dev, res);
 	if (IS_ERR(phy->mmio))
 		return PTR_ERR(phy->mmio);
 
@@ -243,11 +245,13 @@ static int qcom_apq8064_sata_phy_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void qcom_apq8064_sata_phy_remove(struct platform_device *pdev)
+static int qcom_apq8064_sata_phy_remove(struct platform_device *pdev)
 {
 	struct qcom_apq8064_sata_phy *phy = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(phy->cfg_clk);
+
+	return 0;
 }
 
 static const struct of_device_id qcom_apq8064_sata_phy_of_match[] = {
@@ -258,7 +262,7 @@ MODULE_DEVICE_TABLE(of, qcom_apq8064_sata_phy_of_match);
 
 static struct platform_driver qcom_apq8064_sata_phy_driver = {
 	.probe	= qcom_apq8064_sata_phy_probe,
-	.remove_new = qcom_apq8064_sata_phy_remove,
+	.remove	= qcom_apq8064_sata_phy_remove,
 	.driver = {
 		.name	= "qcom-apq8064-sata-phy",
 		.of_match_table	= qcom_apq8064_sata_phy_of_match,

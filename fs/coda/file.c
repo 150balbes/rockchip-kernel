@@ -8,13 +8,11 @@
  * to the Coda project. Contact Peter Braam <coda@cs.cmu.edu>.
  */
 
-#include <linux/refcount.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/time.h>
 #include <linux/file.h>
 #include <linux/fs.h>
-#include <linux/pagemap.h>
 #include <linux/stat.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
@@ -23,7 +21,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
-#include <linux/splice.h>
 
 #include <linux/coda.h>
 #include "coda_psdev.h"
@@ -31,7 +28,7 @@
 #include "coda_int.h"
 
 struct coda_vm_ops {
-	refcount_t refcnt;
+	atomic_t refcnt;
 	struct file *coda_file;
 	const struct vm_operations_struct *host_vm_ops;
 	struct vm_operations_struct vm_ops;
@@ -95,39 +92,13 @@ finish_write:
 	return ret;
 }
 
-static ssize_t
-coda_file_splice_read(struct file *coda_file, loff_t *ppos,
-		      struct pipe_inode_info *pipe,
-		      size_t len, unsigned int flags)
-{
-	struct inode *coda_inode = file_inode(coda_file);
-	struct coda_file_info *cfi = coda_ftoc(coda_file);
-	struct file *in = cfi->cfi_container;
-	loff_t ki_pos = *ppos;
-	ssize_t ret;
-
-	ret = venus_access_intent(coda_inode->i_sb, coda_i2f(coda_inode),
-				  &cfi->cfi_access_intent,
-				  len, ki_pos, CODA_ACCESS_TYPE_READ);
-	if (ret)
-		goto finish_read;
-
-	ret = vfs_splice_read(in, ppos, pipe, len, flags);
-
-finish_read:
-	venus_access_intent(coda_inode->i_sb, coda_i2f(coda_inode),
-			    &cfi->cfi_access_intent,
-			    len, ki_pos, CODA_ACCESS_TYPE_READ_FINISH);
-	return ret;
-}
-
 static void
 coda_vm_open(struct vm_area_struct *vma)
 {
 	struct coda_vm_ops *cvm_ops =
 		container_of(vma->vm_ops, struct coda_vm_ops, vm_ops);
 
-	refcount_inc(&cvm_ops->refcnt);
+	atomic_inc(&cvm_ops->refcnt);
 
 	if (cvm_ops->host_vm_ops && cvm_ops->host_vm_ops->open)
 		cvm_ops->host_vm_ops->open(vma);
@@ -142,7 +113,7 @@ coda_vm_close(struct vm_area_struct *vma)
 	if (cvm_ops->host_vm_ops && cvm_ops->host_vm_ops->close)
 		cvm_ops->host_vm_ops->close(vma);
 
-	if (refcount_dec_and_test(&cvm_ops->refcnt)) {
+	if (atomic_dec_and_test(&cvm_ops->refcnt)) {
 		vma->vm_ops = cvm_ops->host_vm_ops;
 		fput(cvm_ops->coda_file);
 		kfree(cvm_ops);
@@ -204,10 +175,10 @@ coda_file_mmap(struct file *coda_file, struct vm_area_struct *vma)
 	ret = call_mmap(vma->vm_file, vma);
 
 	if (ret) {
-		/* if call_mmap fails, our caller will put host_file so we
-		 * should drop the reference to the coda_file that we got.
+		/* if call_mmap fails, our caller will put coda_file so we
+		 * should drop the reference to the host_file that we got.
 		 */
-		fput(coda_file);
+		fput(host_file);
 		kfree(cvm_ops);
 	} else {
 		/* here we add redirects for the open/close vm_operations */
@@ -218,7 +189,7 @@ coda_file_mmap(struct file *coda_file, struct vm_area_struct *vma)
 		cvm_ops->vm_ops.open = coda_vm_open;
 		cvm_ops->vm_ops.close = coda_vm_close;
 		cvm_ops->coda_file = coda_file;
-		refcount_set(&cvm_ops->refcnt, 1);
+		atomic_set(&cvm_ops->refcnt, 1);
 
 		vma->vm_ops = &cvm_ops->vm_ops;
 	}
@@ -267,10 +238,11 @@ int coda_release(struct inode *coda_inode, struct file *coda_file)
 	struct coda_file_info *cfi;
 	struct coda_inode_info *cii;
 	struct inode *host_inode;
+	int err;
 
 	cfi = coda_ftoc(coda_file);
 
-	venus_close(coda_inode->i_sb, coda_i2f(coda_inode),
+	err = venus_close(coda_inode->i_sb, coda_i2f(coda_inode),
 			  coda_flags, coda_file->f_cred->fsuid);
 
 	host_inode = file_inode(cfi->cfi_container);
@@ -329,5 +301,5 @@ const struct file_operations coda_file_operations = {
 	.open		= coda_open,
 	.release	= coda_release,
 	.fsync		= coda_fsync,
-	.splice_read	= coda_file_splice_read,
+	.splice_read	= generic_file_splice_read,
 };

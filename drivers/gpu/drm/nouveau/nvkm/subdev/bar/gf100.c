@@ -162,12 +162,12 @@ gf100_bar_dtor(struct nvkm_bar *base)
 
 int
 gf100_bar_new_(const struct nvkm_bar_func *func, struct nvkm_device *device,
-	       enum nvkm_subdev_type type, int inst, struct nvkm_bar **pbar)
+	       int index, struct nvkm_bar **pbar)
 {
 	struct gf100_bar *bar;
 	if (!(bar = kzalloc(sizeof(*bar), GFP_KERNEL)))
 		return -ENOMEM;
-	nvkm_bar_ctor(func, device, type, inst, &bar->base);
+	nvkm_bar_ctor(func, device, index, &bar->base);
 	bar->bar2_halve = nvkm_boolopt(device->cfgopt, "NvBar2Halve", false);
 	*pbar = &bar->base;
 	return 0;
@@ -189,8 +189,7 @@ gf100_bar_func = {
 };
 
 int
-gf100_bar_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-	      struct nvkm_bar **pbar)
+gf100_bar_new(struct nvkm_device *device, int index, struct nvkm_bar **pbar)
 {
-	return gf100_bar_new_(&gf100_bar_func, device, type, inst, pbar);
+	return gf100_bar_new_(&gf100_bar_func, device, index, pbar);
 }

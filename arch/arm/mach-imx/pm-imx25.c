@@ -6,7 +6,6 @@
 #include <linux/kernel.h>
 #include <linux/suspend.h>
 #include <linux/io.h>
-#include "common.h"
 
 static int imx25_suspend_enter(suspend_state_t state)
 {

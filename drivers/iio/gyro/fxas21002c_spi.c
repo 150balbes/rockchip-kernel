@@ -34,9 +34,11 @@ static int fxas21002c_spi_probe(struct spi_device *spi)
 	return fxas21002c_core_probe(&spi->dev, regmap, spi->irq, id->name);
 }
 
-static void fxas21002c_spi_remove(struct spi_device *spi)
+static int fxas21002c_spi_remove(struct spi_device *spi)
 {
 	fxas21002c_core_remove(&spi->dev);
+
+	return 0;
 }
 
 static const struct spi_device_id fxas21002c_spi_id[] = {
@@ -54,7 +56,7 @@ MODULE_DEVICE_TABLE(of, fxas21002c_spi_of_match);
 static struct spi_driver fxas21002c_spi_driver = {
 	.driver = {
 		.name = "fxas21002c_spi",
-		.pm = pm_ptr(&fxas21002c_pm_ops),
+		.pm = &fxas21002c_pm_ops,
 		.of_match_table = fxas21002c_spi_of_match,
 	},
 	.probe		= fxas21002c_spi_probe,
@@ -66,4 +68,3 @@ module_spi_driver(fxas21002c_spi_driver);
 MODULE_AUTHOR("Rui Miguel Silva <rui.silva@linaro.org>");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("FXAS21002C SPI Gyro driver");
-MODULE_IMPORT_NS(IIO_FXAS21002C);

@@ -14,8 +14,6 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
-#include <linux/dax.h>
-#include <linux/overflow.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -102,13 +100,23 @@ static int generic_remap_checks(struct file *file_in, loff_t pos_in,
 static int remap_verify_area(struct file *file, loff_t pos, loff_t len,
 			     bool write)
 {
-	loff_t tmp;
+	struct inode *inode = file_inode(file);
 
 	if (unlikely(pos < 0 || len < 0))
 		return -EINVAL;
 
-	if (unlikely(check_add_overflow(pos, len, &tmp)))
+	if (unlikely((loff_t) (pos + len) < 0))
 		return -EINVAL;
+
+	if (unlikely(inode->i_flctx && mandatory_lock(inode))) {
+		loff_t end = len ? pos + len - 1 : OFFSET_MAX;
+		int retval;
+
+		retval = locks_mandatory_area(inode, file, pos, end,
+				write ? F_WRLCK : F_RDLCK);
+		if (retval < 0)
+			return retval;
+	}
 
 	return security_file_permission(file, write ? MAY_WRITE : MAY_READ);
 }
@@ -151,104 +159,119 @@ static int generic_remap_check_len(struct inode *inode_in,
 }
 
 /* Read a page's worth of file data into the page cache. */
-static struct folio *vfs_dedupe_get_folio(struct file *file, loff_t pos)
+static struct page *vfs_dedupe_get_page(struct inode *inode, loff_t offset)
 {
-	return read_mapping_folio(file->f_mapping, pos >> PAGE_SHIFT, file);
+	struct page *page;
+
+	page = read_mapping_page(inode->i_mapping, offset >> PAGE_SHIFT, NULL);
+	if (IS_ERR(page))
+		return page;
+	if (!PageUptodate(page)) {
+		put_page(page);
+		return ERR_PTR(-EIO);
+	}
+	return page;
 }
 
 /*
- * Lock two folios, ensuring that we lock in offset order if the folios
- * are from the same file.
+ * Lock two pages, ensuring that we lock in offset order if the pages are from
+ * the same file.
  */
-static void vfs_lock_two_folios(struct folio *folio1, struct folio *folio2)
+static void vfs_lock_two_pages(struct page *page1, struct page *page2)
 {
 	/* Always lock in order of increasing index. */
-	if (folio1->index > folio2->index)
-		swap(folio1, folio2);
+	if (page1->index > page2->index)
+		swap(page1, page2);
 
-	folio_lock(folio1);
-	if (folio1 != folio2)
-		folio_lock(folio2);
+	lock_page(page1);
+	if (page1 != page2)
+		lock_page(page2);
 }
 
-/* Unlock two folios, being careful not to unlock the same folio twice. */
-static void vfs_unlock_two_folios(struct folio *folio1, struct folio *folio2)
+/* Unlock two pages, being careful not to unlock the same page twice. */
+static void vfs_unlock_two_pages(struct page *page1, struct page *page2)
 {
-	folio_unlock(folio1);
-	if (folio1 != folio2)
-		folio_unlock(folio2);
+	unlock_page(page1);
+	if (page1 != page2)
+		unlock_page(page2);
 }
 
 /*
  * Compare extents of two files to see if they are the same.
  * Caller must have locked both inodes to prevent write races.
  */
-static int vfs_dedupe_file_range_compare(struct file *src, loff_t srcoff,
-					 struct file *dest, loff_t dstoff,
+static int vfs_dedupe_file_range_compare(struct inode *src, loff_t srcoff,
+					 struct inode *dest, loff_t destoff,
 					 loff_t len, bool *is_same)
 {
-	bool same = true;
-	int error = -EINVAL;
+	loff_t src_poff;
+	loff_t dest_poff;
+	void *src_addr;
+	void *dest_addr;
+	struct page *src_page;
+	struct page *dest_page;
+	loff_t cmp_len;
+	bool same;
+	int error;
 
+	error = -EINVAL;
+	same = true;
 	while (len) {
-		struct folio *src_folio, *dst_folio;
-		void *src_addr, *dst_addr;
-		loff_t cmp_len = min(PAGE_SIZE - offset_in_page(srcoff),
-				     PAGE_SIZE - offset_in_page(dstoff));
-
+		src_poff = srcoff & (PAGE_SIZE - 1);
+		dest_poff = destoff & (PAGE_SIZE - 1);
+		cmp_len = min(PAGE_SIZE - src_poff,
+			      PAGE_SIZE - dest_poff);
 		cmp_len = min(cmp_len, len);
 		if (cmp_len <= 0)
 			goto out_error;
 
-		src_folio = vfs_dedupe_get_folio(src, srcoff);
-		if (IS_ERR(src_folio)) {
-			error = PTR_ERR(src_folio);
+		src_page = vfs_dedupe_get_page(src, srcoff);
+		if (IS_ERR(src_page)) {
+			error = PTR_ERR(src_page);
 			goto out_error;
 		}
-		dst_folio = vfs_dedupe_get_folio(dest, dstoff);
-		if (IS_ERR(dst_folio)) {
-			error = PTR_ERR(dst_folio);
-			folio_put(src_folio);
+		dest_page = vfs_dedupe_get_page(dest, destoff);
+		if (IS_ERR(dest_page)) {
+			error = PTR_ERR(dest_page);
+			put_page(src_page);
 			goto out_error;
 		}
 
-		vfs_lock_two_folios(src_folio, dst_folio);
+		vfs_lock_two_pages(src_page, dest_page);
 
 		/*
-		 * Now that we've locked both folios, make sure they're still
+		 * Now that we've locked both pages, make sure they're still
 		 * mapped to the file data we're interested in.  If not,
 		 * someone is invalidating pages on us and we lose.
 		 */
-		if (!folio_test_uptodate(src_folio) || !folio_test_uptodate(dst_folio) ||
-		    src_folio->mapping != src->f_mapping ||
-		    dst_folio->mapping != dest->f_mapping) {
+		if (!PageUptodate(src_page) || !PageUptodate(dest_page) ||
+		    src_page->mapping != src->i_mapping ||
+		    dest_page->mapping != dest->i_mapping) {
 			same = false;
 			goto unlock;
 		}
 
-		src_addr = kmap_local_folio(src_folio,
-					offset_in_folio(src_folio, srcoff));
-		dst_addr = kmap_local_folio(dst_folio,
-					offset_in_folio(dst_folio, dstoff));
+		src_addr = kmap_atomic(src_page);
+		dest_addr = kmap_atomic(dest_page);
 
-		flush_dcache_folio(src_folio);
-		flush_dcache_folio(dst_folio);
+		flush_dcache_page(src_page);
+		flush_dcache_page(dest_page);
 
-		if (memcmp(src_addr, dst_addr, cmp_len))
+		if (memcmp(src_addr + src_poff, dest_addr + dest_poff, cmp_len))
 			same = false;
 
-		kunmap_local(dst_addr);
-		kunmap_local(src_addr);
+		kunmap_atomic(dest_addr);
+		kunmap_atomic(src_addr);
 unlock:
-		vfs_unlock_two_folios(src_folio, dst_folio);
-		folio_put(dst_folio);
-		folio_put(src_folio);
+		vfs_unlock_two_pages(src_page, dest_page);
+		put_page(dest_page);
+		put_page(src_page);
 
 		if (!same)
 			break;
 
 		srcoff += cmp_len;
-		dstoff += cmp_len;
+		destoff += cmp_len;
 		len -= cmp_len;
 	}
 
@@ -267,11 +290,9 @@ out_error:
  * If there's an error, then the usual negative error code is returned.
  * Otherwise returns 0 with *len set to the request length.
  */
-int
-__generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
-				struct file *file_out, loff_t pos_out,
-				loff_t *len, unsigned int remap_flags,
-				const struct iomap_ops *dax_read_ops)
+int generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
+				  struct file *file_out, loff_t pos_out,
+				  loff_t *len, unsigned int remap_flags)
 {
 	struct inode *inode_in = file_inode(file_in);
 	struct inode *inode_out = file_inode(file_out);
@@ -307,7 +328,7 @@ __generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
 	/* Check that we don't violate system file offset limits. */
 	ret = generic_remap_checks(file_in, pos_in, file_out, pos_out, len,
 			remap_flags);
-	if (ret || *len == 0)
+	if (ret)
 		return ret;
 
 	/* Wait for the completion of any pending IOs on both files */
@@ -331,15 +352,8 @@ __generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
 	if (remap_flags & REMAP_FILE_DEDUP) {
 		bool		is_same = false;
 
-		if (!IS_DAX(inode_in))
-			ret = vfs_dedupe_file_range_compare(file_in, pos_in,
-					file_out, pos_out, *len, &is_same);
-		else if (dax_read_ops)
-			ret = dax_dedupe_file_range_compare(inode_in, pos_in,
-					inode_out, pos_out, *len, &is_same,
-					dax_read_ops);
-		else
-			return -EINVAL;
+		ret = vfs_dedupe_file_range_compare(inode_in, pos_in,
+				inode_out, pos_out, *len, &is_same);
 		if (ret)
 			return ret;
 		if (!is_same)
@@ -348,7 +362,7 @@ __generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
 
 	ret = generic_remap_check_len(inode_in, inode_out, pos_out, len,
 			remap_flags);
-	if (ret || *len == 0)
+	if (ret)
 		return ret;
 
 	/* If can't alter the file contents, we're done. */
@@ -356,14 +370,6 @@ __generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
 		ret = file_modified(file_out);
 
 	return ret;
-}
-
-int generic_remap_file_range_prep(struct file *file_in, loff_t pos_in,
-				  struct file *file_out, loff_t pos_out,
-				  loff_t *len, unsigned int remap_flags)
-{
-	return __generic_remap_file_range_prep(file_in, pos_in, file_out,
-					       pos_out, len, remap_flags, NULL);
 }
 EXPORT_SYMBOL(generic_remap_file_range_prep);
 
@@ -375,6 +381,11 @@ loff_t do_clone_file_range(struct file *file_in, loff_t pos_in,
 
 	WARN_ON_ONCE(remap_flags & REMAP_FILE_DEDUP);
 
+	/*
+	 * FICLONE/FICLONERANGE ioctls enforce that src and dest files are on
+	 * the same mount. Practically, they only need to be on the same file
+	 * system.
+	 */
 	if (file_inode(file_in)->i_sb != file_inode(file_out)->i_sb)
 		return -EXDEV;
 
@@ -422,16 +433,13 @@ EXPORT_SYMBOL(vfs_clone_file_range);
 /* Check whether we are allowed to dedupe the destination file */
 static bool allow_file_dedupe(struct file *file)
 {
-	struct mnt_idmap *idmap = file_mnt_idmap(file);
-	struct inode *inode = file_inode(file);
-
 	if (capable(CAP_SYS_ADMIN))
 		return true;
 	if (file->f_mode & FMODE_WRITE)
 		return true;
-	if (vfsuid_eq_kuid(i_uid_into_vfsuid(idmap, inode), current_fsuid()))
+	if (uid_eq(current_fsuid(), file_inode(file)->i_uid))
 		return true;
-	if (!inode_permission(idmap, inode, MAY_WRITE))
+	if (!inode_permission(file_inode(file), MAY_WRITE))
 		return true;
 	return false;
 }
@@ -449,16 +457,8 @@ loff_t vfs_dedupe_file_range_one(struct file *src_file, loff_t src_pos,
 	if (ret)
 		return ret;
 
-	/*
-	 * This is redundant if called from vfs_dedupe_file_range(), but other
-	 * callers need it and it's not performance sesitive...
-	 */
-	ret = remap_verify_area(src_file, src_pos, len, false);
-	if (ret)
-		goto out_drop_write;
-
 	ret = remap_verify_area(dst_file, dst_pos, len, true);
-	if (ret)
+	if (ret < 0)
 		goto out_drop_write;
 
 	ret = -EPERM;
@@ -466,7 +466,7 @@ loff_t vfs_dedupe_file_range_one(struct file *src_file, loff_t src_pos,
 		goto out_drop_write;
 
 	ret = -EXDEV;
-	if (file_inode(src_file)->i_sb != file_inode(dst_file)->i_sb)
+	if (src_file->f_path.mnt != dst_file->f_path.mnt)
 		goto out_drop_write;
 
 	ret = -EISDIR;

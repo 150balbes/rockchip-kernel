@@ -221,7 +221,8 @@ struct ssp_data {
 	struct iio_dev *sensor_devs[SSP_SENSOR_MAX];
 	atomic_t enable_refcount;
 
-	__le16 header_buffer[SSP_HEADER_BUFFER_SIZE / sizeof(__le16)] __aligned(IIO_DMA_MINALIGN);
+	__le16 header_buffer[SSP_HEADER_BUFFER_SIZE / sizeof(__le16)]
+		____cacheline_aligned;
 };
 
 void ssp_clean_pending_list(struct ssp_data *data);

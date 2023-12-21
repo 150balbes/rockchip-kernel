@@ -4,7 +4,7 @@
 
 #include <abi/entry.h>
 
-ENTRY(__kretprobe_trampoline)
+ENTRY(kretprobe_trampoline)
 	SAVE_REGS_FTRACE
 
 	mov	a0, sp /* pt_regs */
@@ -16,4 +16,4 @@ ENTRY(__kretprobe_trampoline)
 
 	RESTORE_REGS_FTRACE
 	rts
-ENDPROC(__kretprobe_trampoline)
+ENDPROC(kretprobe_trampoline)

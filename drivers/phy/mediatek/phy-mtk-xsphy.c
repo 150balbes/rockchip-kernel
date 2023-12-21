@@ -10,13 +10,12 @@
 #include <dt-bindings/phy/phy.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
-
-#include "phy-mtk-io.h"
 
 /* u2 phy banks */
 #define SSUSB_SIFSLV_MISC		0x000
@@ -37,6 +36,7 @@
 #define XSP_U2FREQ_FMCR0	((SSUSB_SIFSLV_U2FREQ) + 0x00)
 #define P2F_RG_FREQDET_EN	BIT(24)
 #define P2F_RG_CYCLECNT		GENMASK(23, 0)
+#define P2F_RG_CYCLECNT_VAL(x)	((P2F_RG_CYCLECNT) & (x))
 
 #define XSP_U2FREQ_MMONR0  ((SSUSB_SIFSLV_U2FREQ) + 0x0c)
 
@@ -49,12 +49,16 @@
 
 #define XSP_USBPHYACR1		((SSUSB_SIFSLV_U2PHY_COM) + 0x04)
 #define P2A1_RG_INTR_CAL		GENMASK(23, 19)
+#define P2A1_RG_INTR_CAL_VAL(x)	((0x1f & (x)) << 19)
 #define P2A1_RG_VRT_SEL			GENMASK(14, 12)
+#define P2A1_RG_VRT_SEL_VAL(x)	((0x7 & (x)) << 12)
 #define P2A1_RG_TERM_SEL		GENMASK(10, 8)
+#define P2A1_RG_TERM_SEL_VAL(x)	((0x7 & (x)) << 8)
 
 #define XSP_USBPHYACR5		((SSUSB_SIFSLV_U2PHY_COM) + 0x014)
 #define P2A5_RG_HSTX_SRCAL_EN	BIT(15)
 #define P2A5_RG_HSTX_SRCTRL		GENMASK(14, 12)
+#define P2A5_RG_HSTX_SRCTRL_VAL(x)	((0x7 & (x)) << 12)
 
 #define XSP_USBPHYACR6		((SSUSB_SIFSLV_U2PHY_COM) + 0x018)
 #define P2A6_RG_BC11_SW_EN	BIT(23)
@@ -69,12 +73,15 @@
 
 #define SSPXTP_PHYA_GLB_00		((SSPXTP_SIFSLV_PHYA_GLB) + 0x00)
 #define RG_XTP_GLB_BIAS_INTR_CTRL		GENMASK(21, 16)
+#define RG_XTP_GLB_BIAS_INTR_CTRL_VAL(x)	((0x3f & (x)) << 16)
 
 #define SSPXTP_PHYA_LN_04	((SSPXTP_SIFSLV_PHYA_LN) + 0x04)
 #define RG_XTP_LN0_TX_IMPSEL		GENMASK(4, 0)
+#define RG_XTP_LN0_TX_IMPSEL_VAL(x)	(0x1f & (x))
 
 #define SSPXTP_PHYA_LN_14	((SSPXTP_SIFSLV_PHYA_LN) + 0x014)
 #define RG_XTP_LN0_RX_IMPSEL		GENMASK(4, 0)
+#define RG_XTP_LN0_RX_IMPSEL_VAL(x)	(0x1f & (x))
 
 #define XSP_REF_CLK		26	/* MHZ */
 #define XSP_SLEW_RATE_COEF	17
@@ -119,18 +126,26 @@ static void u2_phy_slew_rate_calibrate(struct mtk_xsphy *xsphy,
 		return;
 
 	/* enable USB ring oscillator */
-	mtk_phy_set_bits(pbase + XSP_USBPHYACR5, P2A5_RG_HSTX_SRCAL_EN);
+	tmp = readl(pbase + XSP_USBPHYACR5);
+	tmp |= P2A5_RG_HSTX_SRCAL_EN;
+	writel(tmp, pbase + XSP_USBPHYACR5);
 	udelay(1);	/* wait clock stable */
 
 	/* enable free run clock */
-	mtk_phy_set_bits(pbase + XSP_U2FREQ_FMMONR1, P2F_RG_FRCK_EN);
+	tmp = readl(pbase + XSP_U2FREQ_FMMONR1);
+	tmp |= P2F_RG_FRCK_EN;
+	writel(tmp, pbase + XSP_U2FREQ_FMMONR1);
 
 	/* set cycle count as 1024 */
-	mtk_phy_update_field(pbase + XSP_U2FREQ_FMCR0, P2F_RG_CYCLECNT,
-			     XSP_FM_DET_CYCLE_CNT);
+	tmp = readl(pbase + XSP_U2FREQ_FMCR0);
+	tmp &= ~(P2F_RG_CYCLECNT);
+	tmp |= P2F_RG_CYCLECNT_VAL(XSP_FM_DET_CYCLE_CNT);
+	writel(tmp, pbase + XSP_U2FREQ_FMCR0);
 
 	/* enable frequency meter */
-	mtk_phy_set_bits(pbase + XSP_U2FREQ_FMCR0, P2F_RG_FREQDET_EN);
+	tmp = readl(pbase + XSP_U2FREQ_FMCR0);
+	tmp |= P2F_RG_FREQDET_EN;
+	writel(tmp, pbase + XSP_U2FREQ_FMCR0);
 
 	/* ignore return value */
 	readl_poll_timeout(pbase + XSP_U2FREQ_FMMONR1, tmp,
@@ -139,10 +154,14 @@ static void u2_phy_slew_rate_calibrate(struct mtk_xsphy *xsphy,
 	fm_out = readl(pbase + XSP_U2FREQ_MMONR0);
 
 	/* disable frequency meter */
-	mtk_phy_clear_bits(pbase + XSP_U2FREQ_FMCR0, P2F_RG_FREQDET_EN);
+	tmp = readl(pbase + XSP_U2FREQ_FMCR0);
+	tmp &= ~P2F_RG_FREQDET_EN;
+	writel(tmp, pbase + XSP_U2FREQ_FMCR0);
 
 	/* disable free run clock */
-	mtk_phy_clear_bits(pbase + XSP_U2FREQ_FMMONR1, P2F_RG_FRCK_EN);
+	tmp = readl(pbase + XSP_U2FREQ_FMMONR1);
+	tmp &= ~P2F_RG_FRCK_EN;
+	writel(tmp, pbase + XSP_U2FREQ_FMMONR1);
 
 	if (fm_out) {
 		/* (1024 / FM_OUT) x reference clock frequency x coefficient */
@@ -158,21 +177,31 @@ static void u2_phy_slew_rate_calibrate(struct mtk_xsphy *xsphy,
 		xsphy->src_ref_clk, xsphy->src_coef);
 
 	/* set HS slew rate */
-	mtk_phy_update_field(pbase + XSP_USBPHYACR5, P2A5_RG_HSTX_SRCTRL, calib_val);
+	tmp = readl(pbase + XSP_USBPHYACR5);
+	tmp &= ~P2A5_RG_HSTX_SRCTRL;
+	tmp |= P2A5_RG_HSTX_SRCTRL_VAL(calib_val);
+	writel(tmp, pbase + XSP_USBPHYACR5);
 
 	/* disable USB ring oscillator */
-	mtk_phy_clear_bits(pbase + XSP_USBPHYACR5, P2A5_RG_HSTX_SRCAL_EN);
+	tmp = readl(pbase + XSP_USBPHYACR5);
+	tmp &= ~P2A5_RG_HSTX_SRCAL_EN;
+	writel(tmp, pbase + XSP_USBPHYACR5);
 }
 
 static void u2_phy_instance_init(struct mtk_xsphy *xsphy,
 				 struct xsphy_instance *inst)
 {
 	void __iomem *pbase = inst->port_base;
+	u32 tmp;
 
 	/* DP/DM BC1.1 path Disable */
-	mtk_phy_clear_bits(pbase + XSP_USBPHYACR6, P2A6_RG_BC11_SW_EN);
+	tmp = readl(pbase + XSP_USBPHYACR6);
+	tmp &= ~P2A6_RG_BC11_SW_EN;
+	writel(tmp, pbase + XSP_USBPHYACR6);
 
-	mtk_phy_set_bits(pbase + XSP_USBPHYACR0, P2A0_RG_INTR_EN);
+	tmp = readl(pbase + XSP_USBPHYACR0);
+	tmp |= P2A0_RG_INTR_EN;
+	writel(tmp, pbase + XSP_USBPHYACR0);
 }
 
 static void u2_phy_instance_power_on(struct mtk_xsphy *xsphy,
@@ -180,12 +209,16 @@ static void u2_phy_instance_power_on(struct mtk_xsphy *xsphy,
 {
 	void __iomem *pbase = inst->port_base;
 	u32 index = inst->index;
+	u32 tmp;
 
-	mtk_phy_set_bits(pbase + XSP_USBPHYACR6, P2A6_RG_OTG_VBUSCMP_EN);
+	tmp = readl(pbase + XSP_USBPHYACR6);
+	tmp |= P2A6_RG_OTG_VBUSCMP_EN;
+	writel(tmp, pbase + XSP_USBPHYACR6);
 
-	mtk_phy_update_bits(pbase + XSP_U2PHYDTM1,
-			    P2D_RG_VBUSVALID | P2D_RG_AVALID | P2D_RG_SESSEND,
-			    P2D_RG_VBUSVALID | P2D_RG_AVALID);
+	tmp = readl(pbase + XSP_U2PHYDTM1);
+	tmp |= P2D_RG_VBUSVALID | P2D_RG_AVALID;
+	tmp &= ~P2D_RG_SESSEND;
+	writel(tmp, pbase + XSP_U2PHYDTM1);
 
 	dev_dbg(xsphy->dev, "%s(%d)\n", __func__, index);
 }
@@ -195,12 +228,16 @@ static void u2_phy_instance_power_off(struct mtk_xsphy *xsphy,
 {
 	void __iomem *pbase = inst->port_base;
 	u32 index = inst->index;
+	u32 tmp;
 
-	mtk_phy_clear_bits(pbase + XSP_USBPHYACR6, P2A6_RG_OTG_VBUSCMP_EN);
+	tmp = readl(pbase + XSP_USBPHYACR6);
+	tmp &= ~P2A6_RG_OTG_VBUSCMP_EN;
+	writel(tmp, pbase + XSP_USBPHYACR6);
 
-	mtk_phy_update_bits(pbase + XSP_U2PHYDTM1,
-			    P2D_RG_VBUSVALID | P2D_RG_AVALID | P2D_RG_SESSEND,
-			    P2D_RG_SESSEND);
+	tmp = readl(pbase + XSP_U2PHYDTM1);
+	tmp &= ~(P2D_RG_VBUSVALID | P2D_RG_AVALID);
+	tmp |= P2D_RG_SESSEND;
+	writel(tmp, pbase + XSP_U2PHYDTM1);
 
 	dev_dbg(xsphy->dev, "%s(%d)\n", __func__, index);
 }
@@ -269,40 +306,63 @@ static void u2_phy_props_set(struct mtk_xsphy *xsphy,
 			     struct xsphy_instance *inst)
 {
 	void __iomem *pbase = inst->port_base;
+	u32 tmp;
 
-	if (inst->efuse_intr)
-		mtk_phy_update_field(pbase + XSP_USBPHYACR1, P2A1_RG_INTR_CAL,
-				     inst->efuse_intr);
+	if (inst->efuse_intr) {
+		tmp = readl(pbase + XSP_USBPHYACR1);
+		tmp &= ~P2A1_RG_INTR_CAL;
+		tmp |= P2A1_RG_INTR_CAL_VAL(inst->efuse_intr);
+		writel(tmp, pbase + XSP_USBPHYACR1);
+	}
 
-	if (inst->eye_src)
-		mtk_phy_update_field(pbase + XSP_USBPHYACR5, P2A5_RG_HSTX_SRCTRL,
-				     inst->eye_src);
+	if (inst->eye_src) {
+		tmp = readl(pbase + XSP_USBPHYACR5);
+		tmp &= ~P2A5_RG_HSTX_SRCTRL;
+		tmp |= P2A5_RG_HSTX_SRCTRL_VAL(inst->eye_src);
+		writel(tmp, pbase + XSP_USBPHYACR5);
+	}
 
-	if (inst->eye_vrt)
-		mtk_phy_update_field(pbase + XSP_USBPHYACR1, P2A1_RG_VRT_SEL,
-				     inst->eye_vrt);
+	if (inst->eye_vrt) {
+		tmp = readl(pbase + XSP_USBPHYACR1);
+		tmp &= ~P2A1_RG_VRT_SEL;
+		tmp |= P2A1_RG_VRT_SEL_VAL(inst->eye_vrt);
+		writel(tmp, pbase + XSP_USBPHYACR1);
+	}
 
-	if (inst->eye_term)
-		mtk_phy_update_field(pbase + XSP_USBPHYACR1, P2A1_RG_TERM_SEL,
-				     inst->eye_term);
+	if (inst->eye_term) {
+		tmp = readl(pbase + XSP_USBPHYACR1);
+		tmp &= ~P2A1_RG_TERM_SEL;
+		tmp |= P2A1_RG_TERM_SEL_VAL(inst->eye_term);
+		writel(tmp, pbase + XSP_USBPHYACR1);
+	}
 }
 
 static void u3_phy_props_set(struct mtk_xsphy *xsphy,
 			     struct xsphy_instance *inst)
 {
 	void __iomem *pbase = inst->port_base;
+	u32 tmp;
 
-	if (inst->efuse_intr)
-		mtk_phy_update_field(xsphy->glb_base + SSPXTP_PHYA_GLB_00,
-				     RG_XTP_GLB_BIAS_INTR_CTRL, inst->efuse_intr);
+	if (inst->efuse_intr) {
+		tmp = readl(xsphy->glb_base + SSPXTP_PHYA_GLB_00);
+		tmp &= ~RG_XTP_GLB_BIAS_INTR_CTRL;
+		tmp |= RG_XTP_GLB_BIAS_INTR_CTRL_VAL(inst->efuse_intr);
+		writel(tmp, xsphy->glb_base + SSPXTP_PHYA_GLB_00);
+	}
 
-	if (inst->efuse_tx_imp)
-		mtk_phy_update_field(pbase + SSPXTP_PHYA_LN_04,
-				     RG_XTP_LN0_TX_IMPSEL, inst->efuse_tx_imp);
+	if (inst->efuse_tx_imp) {
+		tmp = readl(pbase + SSPXTP_PHYA_LN_04);
+		tmp &= ~RG_XTP_LN0_TX_IMPSEL;
+		tmp |= RG_XTP_LN0_TX_IMPSEL_VAL(inst->efuse_tx_imp);
+		writel(tmp, pbase + SSPXTP_PHYA_LN_04);
+	}
 
-	if (inst->efuse_rx_imp)
-		mtk_phy_update_field(pbase + SSPXTP_PHYA_LN_14,
-				     RG_XTP_LN0_RX_IMPSEL, inst->efuse_rx_imp);
+	if (inst->efuse_rx_imp) {
+		tmp = readl(pbase + SSPXTP_PHYA_LN_14);
+		tmp &= ~RG_XTP_LN0_RX_IMPSEL;
+		tmp |= RG_XTP_LN0_RX_IMPSEL_VAL(inst->efuse_rx_imp);
+		writel(tmp, pbase + SSPXTP_PHYA_LN_14);
+	}
 }
 
 static int mtk_phy_init(struct phy *phy)

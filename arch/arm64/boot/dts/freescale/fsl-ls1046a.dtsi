@@ -8,10 +8,8 @@
  * Mingkai Hu <mingkai.hu@nxp.com>
  */
 
-#include <dt-bindings/clock/fsl,qoriq-clockgen.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/thermal/thermal.h>
-#include <dt-bindings/gpio/gpio.h>
 
 / {
 	compatible = "fsl,ls1046a";
@@ -41,7 +39,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a72";
 			reg = <0x0>;
-			clocks = <&clockgen QORIQ_CLK_CMUX 0>;
+			clocks = <&clockgen 1 0>;
 			next-level-cache = <&l2>;
 			cpu-idle-states = <&CPU_PH20>;
 			#cooling-cells = <2>;
@@ -51,7 +49,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a72";
 			reg = <0x1>;
-			clocks = <&clockgen QORIQ_CLK_CMUX 0>;
+			clocks = <&clockgen 1 0>;
 			next-level-cache = <&l2>;
 			cpu-idle-states = <&CPU_PH20>;
 			#cooling-cells = <2>;
@@ -61,7 +59,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a72";
 			reg = <0x2>;
-			clocks = <&clockgen QORIQ_CLK_CMUX 0>;
+			clocks = <&clockgen 1 0>;
 			next-level-cache = <&l2>;
 			cpu-idle-states = <&CPU_PH20>;
 			#cooling-cells = <2>;
@@ -71,7 +69,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a72";
 			reg = <0x3>;
-			clocks = <&clockgen QORIQ_CLK_CMUX 0>;
+			clocks = <&clockgen 1 0>;
 			next-level-cache = <&l2>;
 			cpu-idle-states = <&CPU_PH20>;
 			#cooling-cells = <2>;
@@ -79,8 +77,6 @@
 
 		l2: l2-cache {
 			compatible = "cache";
-			cache-level = <2>;
-			cache-unified;
 		};
 	};
 
@@ -115,7 +111,7 @@
 	};
 
 	reboot {
-		compatible = "syscon-reboot";
+		compatible ="syscon-reboot";
 		regmap = <&dcfg>;
 		offset = <0xb0>;
 		mask = <0x02>;
@@ -275,8 +271,6 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		dma-ranges = <0x0 0x0 0x0 0x0 0x10000 0x00000000>;
-		dma-coherent;
 
 		ddr: memory-controller@1080000 {
 			compatible = "fsl,qoriq-memory-controller";
@@ -285,8 +279,8 @@
 			big-endian;
 		};
 
-		ifc: memory-controller@1530000 {
-			compatible = "fsl,ifc";
+		ifc: ifc@1530000 {
+			compatible = "fsl,ifc", "simple-bus";
 			reg = <0x0 0x1530000 0x0 0x10000>;
 			interrupts = <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>;
 			status = "disabled";
@@ -301,10 +295,7 @@
 			reg-names = "QuadSPI", "QuadSPI-memory";
 			interrupts = <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>;
 			clock-names = "qspi_en", "qspi";
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>,
-				 <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>, <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -312,7 +303,7 @@
 			compatible = "fsl,ls1046a-esdhc", "fsl,esdhc";
 			reg = <0x0 0x1560000 0x0 0x10000>;
 			interrupts = <GIC_SPI 62 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_HWACCEL 1>;
+			clocks = <&clockgen 2 1>;
 			voltage-ranges = <1800 1800 3300 3300>;
 			sdhci,auto-cmd12;
 			big-endian;
@@ -323,31 +314,6 @@
 			compatible = "fsl,ls1046a-scfg", "syscon";
 			reg = <0x0 0x1570000 0x0 0x10000>;
 			big-endian;
-			#address-cells = <1>;
-			#size-cells = <1>;
-			ranges = <0x0 0x0 0x1570000 0x10000>;
-
-			extirq: interrupt-controller@1ac {
-				compatible = "fsl,ls1046a-extirq", "fsl,ls1043a-extirq";
-				#interrupt-cells = <2>;
-				#address-cells = <0>;
-				interrupt-controller;
-				reg = <0x1ac 4>;
-				interrupt-map =
-					<0 0 &gic GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>,
-					<1 0 &gic GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-					<2 0 &gic GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
-					<3 0 &gic GIC_SPI 135 IRQ_TYPE_LEVEL_HIGH>,
-					<4 0 &gic GIC_SPI 136 IRQ_TYPE_LEVEL_HIGH>,
-					<5 0 &gic GIC_SPI 137 IRQ_TYPE_LEVEL_HIGH>,
-					<6 0 &gic GIC_SPI 145 IRQ_TYPE_LEVEL_HIGH>,
-					<7 0 &gic GIC_SPI 146 IRQ_TYPE_LEVEL_HIGH>,
-					<8 0 &gic GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH>,
-					<9 0 &gic GIC_SPI 149 IRQ_TYPE_LEVEL_HIGH>,
-					<10 0 &gic GIC_SPI 150 IRQ_TYPE_LEVEL_HIGH>,
-					<11 0 &gic GIC_SPI 151 IRQ_TYPE_LEVEL_HIGH>;
-				interrupt-map-mask = <0xf 0x0>;
-			};
 		};
 
 		crypto: crypto@1700000 {
@@ -359,12 +325,13 @@
 			ranges = <0x0 0x00 0x1700000 0x100000>;
 			reg = <0x00 0x1700000 0x0 0x100000>;
 			interrupts = <GIC_SPI 75 IRQ_TYPE_LEVEL_HIGH>;
+			dma-coherent;
 
 			sec_jr0: jr@10000 {
 				compatible = "fsl,sec-v5.4-job-ring",
 					     "fsl,sec-v5.0-job-ring",
 					     "fsl,sec-v4.0-job-ring";
-				reg = <0x10000 0x10000>;
+				reg	   = <0x10000 0x10000>;
 				interrupts = <GIC_SPI 71 IRQ_TYPE_LEVEL_HIGH>;
 			};
 
@@ -372,7 +339,7 @@
 				compatible = "fsl,sec-v5.4-job-ring",
 					     "fsl,sec-v5.0-job-ring",
 					     "fsl,sec-v4.0-job-ring";
-				reg = <0x20000 0x10000>;
+				reg	   = <0x20000 0x10000>;
 				interrupts = <GIC_SPI 72 IRQ_TYPE_LEVEL_HIGH>;
 			};
 
@@ -380,7 +347,7 @@
 				compatible = "fsl,sec-v5.4-job-ring",
 					     "fsl,sec-v5.0-job-ring",
 					     "fsl,sec-v4.0-job-ring";
-				reg = <0x30000 0x10000>;
+				reg	   = <0x30000 0x10000>;
 				interrupts = <GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH>;
 			};
 
@@ -388,7 +355,7 @@
 				compatible = "fsl,sec-v5.4-job-ring",
 					     "fsl,sec-v5.0-job-ring",
 					     "fsl,sec-v4.0-job-ring";
-				reg = <0x40000 0x10000>;
+				reg	   = <0x40000 0x10000>;
 				interrupts = <GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH>;
 			};
 		};
@@ -417,14 +384,6 @@
 			ranges = <0x0 0x5 0x08000000 0x8000000>;
 		};
 
-		sfp: efuse@1e80000 {
-			compatible = "fsl,ls1021a-sfp";
-			reg = <0x0 0x1e80000 0x0 0x10000>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(4)>;
-			clock-names = "sfp";
-		};
-
 		dcfg: dcfg@1ee0000 {
 			compatible = "fsl,ls1046a-dcfg", "syscon";
 			reg = <0x0 0x1ee0000 0x0 0x1000>;
@@ -442,49 +401,45 @@
 			compatible = "fsl,qoriq-tmu";
 			reg = <0x0 0x1f00000 0x0 0x10000>;
 			interrupts = <0 33 0x4>;
-			fsl,tmu-range = <0xb0000 0x9002a 0x6004c 0x70062>;
+			fsl,tmu-range = <0xb0000 0x9002a 0x6004c 0x30062>;
 			fsl,tmu-calibration =
 				/* Calibration data group 1 */
-				<0x00000000 0x00000023
-				0x00000001 0x00000029
-				0x00000002 0x0000002f
-				0x00000003 0x00000036
-				0x00000004 0x0000003c
-				0x00000005 0x00000042
-				0x00000006 0x00000049
-				0x00000007 0x0000004f
-				0x00000008 0x00000055
-				0x00000009 0x0000005c
-				0x0000000a 0x00000062
-				0x0000000b 0x00000068
+				<0x00000000 0x00000026
+				0x00000001 0x0000002d
+				0x00000002 0x00000032
+				0x00000003 0x00000039
+				0x00000004 0x0000003f
+				0x00000005 0x00000046
+				0x00000006 0x0000004d
+				0x00000007 0x00000054
+				0x00000008 0x0000005a
+				0x00000009 0x00000061
+				0x0000000a 0x0000006a
+				0x0000000b 0x00000071
 				/* Calibration data group 2 */
-				0x00010000 0x00000022
-				0x00010001 0x0000002a
-				0x00010002 0x00000032
-				0x00010003 0x0000003a
-				0x00010004 0x00000042
-				0x00010005 0x0000004a
-				0x00010006 0x00000052
-				0x00010007 0x0000005a
-				0x00010008 0x00000062
-				0x00010009 0x0000006a
+				0x00010000 0x00000025
+				0x00010001 0x0000002c
+				0x00010002 0x00000035
+				0x00010003 0x0000003d
+				0x00010004 0x00000045
+				0x00010005 0x0000004e
+				0x00010006 0x00000057
+				0x00010007 0x00000061
+				0x00010008 0x0000006b
+				0x00010009 0x00000076
 				/* Calibration data group 3 */
-				0x00020000 0x00000021
-				0x00020001 0x0000002b
-				0x00020002 0x00000035
-				0x00020003 0x0000003e
-				0x00020004 0x00000048
-				0x00020005 0x00000052
-				0x00020006 0x0000005c
+				0x00020000 0x00000029
+				0x00020001 0x00000033
+				0x00020002 0x0000003d
+				0x00020003 0x00000049
+				0x00020004 0x00000056
+				0x00020005 0x00000061
+				0x00020006 0x0000006d
 				/* Calibration data group 4 */
-				0x00030000 0x00000011
-				0x00030001 0x0000001a
-				0x00030002 0x00000024
-				0x00030003 0x0000002e
-				0x00030004 0x00000038
-				0x00030005 0x00000042
-				0x00030006 0x0000004c
-				0x00030007 0x00000056>;
+				0x00030000 0x00000021
+				0x00030001 0x0000002a
+				0x00030002 0x0000003c
+				0x00030003 0x0000004e>;
 			big-endian;
 			#thermal-sensor-cells = <1>;
 		};
@@ -496,60 +451,52 @@
 			reg = <0x0 0x2100000 0x0 0x10000>;
 			interrupts = <GIC_SPI 64 IRQ_TYPE_LEVEL_HIGH>;
 			clock-names = "dspi";
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			spi-num-chipselects = <5>;
 			big-endian;
 			status = "disabled";
 		};
 
 		i2c0: i2c@2180000 {
-			compatible = "fsl,ls1046a-i2c", "fsl,vf610-i2c";
+			compatible = "fsl,vf610-i2c";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x0 0x2180000 0x0 0x10000>;
 			interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
-			dmas = <&edma0 1 38>,
-			       <&edma0 1 39>;
-			dma-names = "rx", "tx";
+			clocks = <&clockgen 4 1>;
+			dmas = <&edma0 1 39>,
+			       <&edma0 1 38>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
 		i2c1: i2c@2190000 {
-			compatible = "fsl,ls1046a-i2c", "fsl,vf610-i2c";
+			compatible = "fsl,vf610-i2c";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x0 0x2190000 0x0 0x10000>;
 			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
-			scl-gpios = <&gpio3 2 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
 		i2c2: i2c@21a0000 {
-			compatible = "fsl,ls1046a-i2c", "fsl,vf610-i2c";
+			compatible = "fsl,vf610-i2c";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x0 0x21a0000 0x0 0x10000>;
 			interrupts = <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
-			scl-gpios = <&gpio3 10 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
 		i2c3: i2c@21b0000 {
-			compatible = "fsl,ls1046a-i2c", "fsl,vf610-i2c";
+			compatible = "fsl,vf610-i2c";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x0 0x21b0000 0x0 0x10000>;
 			interrupts = <GIC_SPI 59 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
-			scl-gpios = <&gpio3 12 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -557,8 +504,7 @@
 			compatible = "fsl,ns16550", "ns16550a";
 			reg = <0x00 0x21c0500 0x0 0x100>;
 			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -566,8 +512,7 @@
 			compatible = "fsl,ns16550", "ns16550a";
 			reg = <0x00 0x21c0600 0x0 0x100>;
 			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -575,8 +520,7 @@
 			compatible = "fsl,ns16550", "ns16550a";
 			reg = <0x0 0x21d0500 0x0 0x100>;
 			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -584,8 +528,7 @@
 			compatible = "fsl,ns16550", "ns16550a";
 			reg = <0x0 0x21d0600 0x0 0x100>;
 			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			status = "disabled";
 		};
 
@@ -633,8 +576,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x2950000 0x0 0x1000>;
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(1)>;
+			clocks = <&clockgen 4 0>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -643,8 +585,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x2960000 0x0 0x1000>;
 			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -653,8 +594,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x2970000 0x0 0x1000>;
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -663,8 +603,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x2980000 0x0 0x1000>;
 			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -673,8 +612,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x2990000 0x0 0x1000>;
 			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -683,8 +621,7 @@
 			compatible = "fsl,ls1021a-lpuart";
 			reg = <0x0 0x29a0000 0x0 0x1000>;
 			interrupts = <GIC_SPI 53 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			clock-names = "ipg";
 			status = "disabled";
 		};
@@ -693,12 +630,11 @@
 			compatible = "fsl,imx21-wdt";
 			reg = <0x0 0x2ad0000 0x0 0x10000>;
 			interrupts = <GIC_SPI 83 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>;
 			big-endian;
 		};
 
-		edma0: dma-controller@2c00000 {
+		edma0: edma@2c00000 {
 			#dma-cells = <2>;
 			compatible = "fsl,vf610-edma";
 			reg = <0x0 0x2c00000 0x0 0x10000>,
@@ -710,61 +646,47 @@
 			dma-channels = <32>;
 			big-endian;
 			clock-names = "dmamux0", "dmamux1";
-			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>,
-				 <&clockgen QORIQ_CLK_PLATFORM_PLL
-					    QORIQ_CLK_PLL_DIV(2)>;
+			clocks = <&clockgen 4 1>,
+				 <&clockgen 4 1>;
 		};
 
-		aux_bus: aux_bus {
-			#address-cells = <2>;
-			#size-cells = <2>;
-			compatible = "simple-bus";
-			ranges;
-			dma-ranges = <0x0 0x0 0x0 0x0 0x100 0x00000000>;
+		usb0: usb@2f00000 {
+			compatible = "snps,dwc3";
+			reg = <0x0 0x2f00000 0x0 0x10000>;
+			interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
+			dr_mode = "host";
+			snps,quirk-frame-length-adjustment = <0x20>;
+			snps,dis_rxdet_inp3_quirk;
+			snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
+		};
 
-			usb0: usb@2f00000 {
-				compatible = "snps,dwc3";
-				reg = <0x0 0x2f00000 0x0 0x10000>;
-				interrupts = <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
-				dr_mode = "host";
-				snps,quirk-frame-length-adjustment = <0x20>;
-				snps,dis_rxdet_inp3_quirk;
-				snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
-				usb3-lpm-capable;
-			};
+		usb1: usb@3000000 {
+			compatible = "snps,dwc3";
+			reg = <0x0 0x3000000 0x0 0x10000>;
+			interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
+			dr_mode = "host";
+			snps,quirk-frame-length-adjustment = <0x20>;
+			snps,dis_rxdet_inp3_quirk;
+			snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
+		};
 
-			usb1: usb@3000000 {
-				compatible = "snps,dwc3";
-				reg = <0x0 0x3000000 0x0 0x10000>;
-				interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
-				dr_mode = "host";
-				snps,quirk-frame-length-adjustment = <0x20>;
-				snps,dis_rxdet_inp3_quirk;
-				snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
-				usb3-lpm-capable;
-			};
+		usb2: usb@3100000 {
+			compatible = "snps,dwc3";
+			reg = <0x0 0x3100000 0x0 0x10000>;
+			interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>;
+			dr_mode = "host";
+			snps,quirk-frame-length-adjustment = <0x20>;
+			snps,dis_rxdet_inp3_quirk;
+			snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
+		};
 
-			usb2: usb@3100000 {
-				compatible = "snps,dwc3";
-				reg = <0x0 0x3100000 0x0 0x10000>;
-				interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>;
-				dr_mode = "host";
-				snps,quirk-frame-length-adjustment = <0x20>;
-				snps,dis_rxdet_inp3_quirk;
-				snps,incr-burst-type-adjustment = <1>, <4>, <8>, <16>;
-				usb3-lpm-capable;
-			};
-
-			sata: sata@3200000 {
-				compatible = "fsl,ls1046a-ahci";
-				reg = <0x0 0x3200000 0x0 0x10000>,
-					<0x0 0x20140520 0x0 0x4>;
-				reg-names = "ahci", "sata-ecc";
-				interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL
-						    QORIQ_CLK_PLL_DIV(2)>;
-			};
+		sata: sata@3200000 {
+			compatible = "fsl,ls1046a-ahci";
+			reg = <0x0 0x3200000 0x0 0x10000>,
+				<0x0 0x20140520 0x0 0x4>;
+			reg-names = "ahci", "sata-ecc";
+			interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clockgen 4 1>;
 		};
 
 		msi1: msi-controller@1580000 {
@@ -799,8 +721,8 @@
 
 		pcie1: pcie@3400000 {
 			compatible = "fsl,ls1046a-pcie";
-			reg = <0x00 0x03400000 0x0 0x00100000>, /* controller registers */
-			      <0x40 0x00000000 0x0 0x00002000>; /* configuration space */
+			reg = <0x00 0x03400000 0x0 0x00100000   /* controller registers */
+			       0x40 0x00000000 0x0 0x00002000>; /* configuration space */
 			reg-names = "regs", "config";
 			interrupts = <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>, /* controller interrupt */
 				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>; /* PME interrupt */
@@ -808,6 +730,7 @@
 			#address-cells = <3>;
 			#size-cells = <2>;
 			device_type = "pci";
+			dma-coherent;
 			num-viewport = <8>;
 			bus-range = <0x0 0xff>;
 			ranges = <0x81000000 0x0 0x00000000 0x40 0x00010000 0x0 0x00010000   /* downstream I/O */
@@ -819,27 +742,23 @@
 					<0000 0 0 2 &gic GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 3 &gic GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 4 &gic GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH>;
-			big-endian;
 			status = "disabled";
 		};
 
 		pcie_ep1: pcie_ep@3400000 {
 			compatible = "fsl,ls1046a-pcie-ep","fsl,ls-pcie-ep";
-			reg = <0x00 0x03400000 0x0 0x00100000>,
-			      <0x40 0x00000000 0x8 0x00000000>;
+			reg = <0x00 0x03400000 0x0 0x00100000
+				0x40 0x00000000 0x8 0x00000000>;
 			reg-names = "regs", "addr_space";
-			interrupts = <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>;
-			interrupt-names = "pme";
 			num-ib-windows = <6>;
 			num-ob-windows = <8>;
-			big-endian;
 			status = "disabled";
 		};
 
 		pcie2: pcie@3500000 {
 			compatible = "fsl,ls1046a-pcie";
-			reg = <0x00 0x03500000 0x0 0x00100000>, /* controller registers */
-			      <0x48 0x00000000 0x0 0x00002000>; /* configuration space */
+			reg = <0x00 0x03500000 0x0 0x00100000   /* controller registers */
+			       0x48 0x00000000 0x0 0x00002000>; /* configuration space */
 			reg-names = "regs", "config";
 			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>, /* controller interrupt */
 				     <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>; /* PME interrupt */
@@ -847,6 +766,7 @@
 			#address-cells = <3>;
 			#size-cells = <2>;
 			device_type = "pci";
+			dma-coherent;
 			num-viewport = <8>;
 			bus-range = <0x0 0xff>;
 			ranges = <0x81000000 0x0 0x00000000 0x48 0x00010000 0x0 0x00010000   /* downstream I/O */
@@ -858,27 +778,23 @@
 					<0000 0 0 2 &gic GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 3 &gic GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 4 &gic GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>;
-			big-endian;
 			status = "disabled";
 		};
 
 		pcie_ep2: pcie_ep@3500000 {
 			compatible = "fsl,ls1046a-pcie-ep","fsl,ls-pcie-ep";
-			reg = <0x00 0x03500000 0x0 0x00100000>,
-			      <0x48 0x00000000 0x8 0x00000000>;
+			reg = <0x00 0x03500000 0x0 0x00100000
+				0x48 0x00000000 0x8 0x00000000>;
 			reg-names = "regs", "addr_space";
-			interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
-			interrupt-names = "pme";
 			num-ib-windows = <6>;
 			num-ob-windows = <8>;
-			big-endian;
 			status = "disabled";
 		};
 
 		pcie3: pcie@3600000 {
 			compatible = "fsl,ls1046a-pcie";
-			reg = <0x00 0x03600000 0x0 0x00100000>, /* controller registers */
-			      <0x50 0x00000000 0x0 0x00002000>; /* configuration space */
+			reg = <0x00 0x03600000 0x0 0x00100000   /* controller registers */
+			       0x50 0x00000000 0x0 0x00002000>; /* configuration space */
 			reg-names = "regs", "config";
 			interrupts = <GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>, /* controller interrupt */
 				     <GIC_SPI 161 IRQ_TYPE_LEVEL_HIGH>; /* PME interrupt */
@@ -886,6 +802,7 @@
 			#address-cells = <3>;
 			#size-cells = <2>;
 			device_type = "pci";
+			dma-coherent;
 			num-viewport = <8>;
 			bus-range = <0x0 0xff>;
 			ranges = <0x81000000 0x0 0x00000000 0x50 0x00010000 0x0 0x00010000   /* downstream I/O */
@@ -897,20 +814,16 @@
 					<0000 0 0 2 &gic GIC_SPI 154 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 3 &gic GIC_SPI 154 IRQ_TYPE_LEVEL_HIGH>,
 					<0000 0 0 4 &gic GIC_SPI 154 IRQ_TYPE_LEVEL_HIGH>;
-			big-endian;
 			status = "disabled";
 		};
 
 		pcie_ep3: pcie_ep@3600000 {
 			compatible = "fsl,ls1046a-pcie-ep", "fsl,ls-pcie-ep";
-			reg = <0x00 0x03600000 0x0 0x00100000>,
-			      <0x50 0x00000000 0x8 0x00000000>;
+			reg = <0x00 0x03600000 0x0 0x00100000
+				0x50 0x00000000 0x8 0x00000000>;
 			reg-names = "regs", "addr_space";
-			interrupts = <GIC_SPI 161 IRQ_TYPE_LEVEL_HIGH>;
-			interrupt-names = "pme";
 			num-ib-windows = <6>;
 			num-ob-windows = <8>;
-			big-endian;
 			status = "disabled";
 		};
 

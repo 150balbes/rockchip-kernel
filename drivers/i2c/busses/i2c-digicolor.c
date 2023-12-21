@@ -160,11 +160,12 @@ static irqreturn_t dc_i2c_irq(int irq, void *dev_id)
 {
 	struct dc_i2c *i2c = dev_id;
 	int cmd_status = dc_i2c_cmd_status(i2c);
+	unsigned long flags;
 	u8 addr_cmd;
 
 	writeb_relaxed(1, i2c->regs + II_INTFLAG_CLEAR);
 
-	spin_lock(&i2c->lock);
+	spin_lock_irqsave(&i2c->lock, flags);
 
 	if (cmd_status == II_CMD_STATUS_ACK_BAD
 	    || cmd_status == II_CMD_STATUS_ABORT) {
@@ -206,7 +207,7 @@ static irqreturn_t dc_i2c_irq(int irq, void *dev_id)
 	}
 
 out:
-	spin_unlock(&i2c->lock);
+	spin_unlock_irqrestore(&i2c->lock, flags);
 	return IRQ_HANDLED;
 }
 
@@ -322,7 +323,7 @@ static int dc_i2c_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	strscpy(i2c->adap.name, "Conexant Digicolor I2C adapter",
+	strlcpy(i2c->adap.name, "Conexant Digicolor I2C adapter",
 		sizeof(i2c->adap.name));
 	i2c->adap.owner = THIS_MODULE;
 	i2c->adap.algo = &dc_i2c_algorithm;
@@ -347,12 +348,14 @@ static int dc_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void dc_i2c_remove(struct platform_device *pdev)
+static int dc_i2c_remove(struct platform_device *pdev)
 {
 	struct dc_i2c *i2c = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&i2c->adap);
 	clk_disable_unprepare(i2c->clk);
+
+	return 0;
 }
 
 static const struct of_device_id dc_i2c_match[] = {
@@ -363,7 +366,7 @@ MODULE_DEVICE_TABLE(of, dc_i2c_match);
 
 static struct platform_driver dc_i2c_driver = {
 	.probe   = dc_i2c_probe,
-	.remove_new = dc_i2c_remove,
+	.remove  = dc_i2c_remove,
 	.driver  = {
 		.name  = "digicolor-i2c",
 		.of_match_table = dc_i2c_match,

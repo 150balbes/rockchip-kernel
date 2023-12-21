@@ -19,7 +19,7 @@ enum qed_chain_mode {
 	/* Each Page contains a next pointer at its end */
 	QED_CHAIN_MODE_NEXT_PTR,
 
-	/* Chain is a single page (next ptr) is not required */
+	/* Chain is a single page (next ptr) is unrequired */
 	QED_CHAIN_MODE_SINGLE,
 
 	/* Page pointers are located in a side list */
@@ -56,13 +56,13 @@ struct qed_chain_pbl_u32 {
 };
 
 struct qed_chain_u16 {
-	/* Cyclic index of next element to produce/consume */
+	/* Cyclic index of next element to produce/consme */
 	u16						prod_idx;
 	u16						cons_idx;
 };
 
 struct qed_chain_u32 {
-	/* Cyclic index of next element to produce/consume */
+	/* Cyclic index of next element to produce/consme */
 	u32						prod_idx;
 	u32						cons_idx;
 };
@@ -268,15 +268,14 @@ static inline dma_addr_t qed_chain_get_pbl_phys(const struct qed_chain *chain)
 }
 
 /**
- * qed_chain_advance_page(): Advance the next element across pages for a
- *                           linked chain.
+ * @brief qed_chain_advance_page -
  *
- * @p_chain: P_chain.
- * @p_next_elem: P_next_elem.
- * @idx_to_inc: Idx_to_inc.
- * @page_to_inc: page_to_inc.
+ * Advance the next element accros pages for a linked chain
  *
- * Return: Void.
+ * @param p_chain
+ * @param p_next_elem
+ * @param idx_to_inc
+ * @param page_to_inc
  */
 static inline void
 qed_chain_advance_page(struct qed_chain *p_chain,
@@ -337,14 +336,12 @@ qed_chain_advance_page(struct qed_chain *p_chain,
 	} while (0)
 
 /**
- * qed_chain_return_produced(): A chain in which the driver "Produces"
- *                              elements should use this API
- *                              to indicate previous produced elements
- *                              are now consumed.
+ * @brief qed_chain_return_produced -
  *
- * @p_chain: Chain.
+ * A chain in which the driver "Produces" elements should use this API
+ * to indicate previous produced elements are now consumed.
  *
- * Return: Void.
+ * @param p_chain
  */
 static inline void qed_chain_return_produced(struct qed_chain *p_chain)
 {
@@ -356,15 +353,15 @@ static inline void qed_chain_return_produced(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_produce(): A chain in which the driver "Produces"
- *                      elements should use this to get a pointer to
- *                      the next element which can be "Produced". It's driver
- *                      responsibility to validate that the chain has room for
- *                      new element.
+ * @brief qed_chain_produce -
  *
- * @p_chain: Chain.
+ * A chain in which the driver "Produces" elements should use this to get
+ * a pointer to the next element which can be "Produced". It's driver
+ * responsibility to validate that the chain has room for new element.
  *
- * Return: void*, a pointer to next element.
+ * @param p_chain
+ *
+ * @return void*, a pointer to next element
  */
 static inline void *qed_chain_produce(struct qed_chain *p_chain)
 {
@@ -398,11 +395,14 @@ static inline void *qed_chain_produce(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_get_capacity(): Get the maximum number of BDs in chain
+ * @brief qed_chain_get_capacity -
  *
- * @p_chain: Chain.
+ * Get the maximum number of BDs in chain
  *
- * Return: number of unusable BDs.
+ * @param p_chain
+ * @param num
+ *
+ * @return number of unusable BDs
  */
 static inline u32 qed_chain_get_capacity(struct qed_chain *p_chain)
 {
@@ -410,14 +410,12 @@ static inline u32 qed_chain_get_capacity(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_recycle_consumed(): Returns an element which was
- *                               previously consumed;
- *                               Increments producers so they could
- *                               be written to FW.
+ * @brief qed_chain_recycle_consumed -
  *
- * @p_chain: Chain.
+ * Returns an element which was previously consumed;
+ * Increments producers so they could be written to FW.
  *
- * Return: Void.
+ * @param p_chain
  */
 static inline void qed_chain_recycle_consumed(struct qed_chain *p_chain)
 {
@@ -429,13 +427,14 @@ static inline void qed_chain_recycle_consumed(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_consume(): A Chain in which the driver utilizes data written
- *                      by a different source (i.e., FW) should use this to
- *                      access passed buffers.
+ * @brief qed_chain_consume -
  *
- * @p_chain: Chain.
+ * A Chain in which the driver utilizes data written by a different source
+ * (i.e., FW) should use this to access passed buffers.
  *
- * Return: void*, a pointer to the next buffer written.
+ * @param p_chain
+ *
+ * @return void*, a pointer to the next buffer written
  */
 static inline void *qed_chain_consume(struct qed_chain *p_chain)
 {
@@ -469,11 +468,9 @@ static inline void *qed_chain_consume(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_reset(): Resets the chain to its start state.
+ * @brief qed_chain_reset - Resets the chain to its start state
  *
- * @p_chain: pointer to a previously allocated chain.
- *
- * Return Void.
+ * @param p_chain pointer to a previously allocted chain
  */
 static inline void qed_chain_reset(struct qed_chain *p_chain)
 {
@@ -522,12 +519,13 @@ static inline void qed_chain_reset(struct qed_chain *p_chain)
 }
 
 /**
- * qed_chain_get_last_elem(): Returns a pointer to the last element of the
- *                            chain.
+ * @brief qed_chain_get_last_elem -
  *
- * @p_chain: Chain.
+ * Returns a pointer to the last element of the chain
  *
- * Return: void*.
+ * @param p_chain
+ *
+ * @return void*
  */
 static inline void *qed_chain_get_last_elem(struct qed_chain *p_chain)
 {
@@ -565,13 +563,10 @@ out:
 }
 
 /**
- * qed_chain_set_prod(): sets the prod to the given value.
+ * @brief qed_chain_set_prod - sets the prod to the given value
  *
- * @p_chain: Chain.
- * @prod_idx: Prod Idx.
- * @p_prod_elem: Prod elem.
- *
- * Return Void.
+ * @param prod_idx
+ * @param p_prod_elem
  */
 static inline void qed_chain_set_prod(struct qed_chain *p_chain,
 				      u32 prod_idx, void *p_prod_elem)
@@ -615,11 +610,9 @@ static inline void qed_chain_set_prod(struct qed_chain *p_chain,
 }
 
 /**
- * qed_chain_pbl_zero_mem(): set chain memory to 0.
+ * @brief qed_chain_pbl_zero_mem - set chain memory to 0
  *
- * @p_chain: Chain.
- *
- * Return: Void.
+ * @param p_chain
  */
 static inline void qed_chain_pbl_zero_mem(struct qed_chain *p_chain)
 {

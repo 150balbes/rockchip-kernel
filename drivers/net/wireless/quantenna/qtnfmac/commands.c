@@ -241,7 +241,6 @@ int qtnf_cmd_send_start_ap(struct qtnf_vif *vif,
 	struct qlink_auth_encr *aen;
 	int ret;
 	int i;
-	int n;
 
 	if (!qtnf_cmd_start_ap_can_fit(vif, s))
 		return -E2BIG;
@@ -281,9 +280,8 @@ int qtnf_cmd_send_start_ap(struct qtnf_vif *vif,
 	for (i = 0; i < QLINK_MAX_NR_CIPHER_SUITES; i++)
 		aen->ciphers_pairwise[i] =
 				cpu_to_le32(s->crypto.ciphers_pairwise[i]);
-	n = min(QLINK_MAX_NR_AKM_SUITES, s->crypto.n_akm_suites);
-	aen->n_akm_suites = cpu_to_le32(n);
-	for (i = 0; i < n; i++)
+	aen->n_akm_suites = cpu_to_le32(s->crypto.n_akm_suites);
+	for (i = 0; i < QLINK_MAX_NR_AKM_SUITES; i++)
 		aen->akm_suites[i] = cpu_to_le32(s->crypto.akm_suites[i]);
 	aen->control_port = s->crypto.control_port;
 	aen->control_port_no_encrypt = s->crypto.control_port_no_encrypt;
@@ -381,6 +379,10 @@ int qtnf_cmd_send_stop_ap(struct qtnf_vif *vif)
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -405,7 +407,10 @@ int qtnf_cmd_send_register_mgmt(struct qtnf_vif *vif, u16 frame_type, bool reg)
 	cmd->do_register = reg;
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -441,7 +446,10 @@ int qtnf_cmd_send_frame(struct qtnf_vif *vif, u32 cookie, u16 flags,
 		qtnf_cmd_skb_put_buffer(cmd_skb, buf, len);
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -469,6 +477,10 @@ int qtnf_cmd_send_mgmt_set_appie(struct qtnf_vif *vif, u8 frame_type,
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -967,7 +979,7 @@ qtnf_cmd_resp_proc_hw_info(struct qtnf_bus *bus,
 		hwinfo->total_rx_chain, hwinfo->total_tx_chain,
 		hwinfo->fw_ver);
 
-	strscpy(hwinfo->fw_version, bld_label, sizeof(hwinfo->fw_version));
+	strlcpy(hwinfo->fw_version, bld_label, sizeof(hwinfo->fw_version));
 	hwinfo->hw_version = hw_ver;
 
 	return 0;
@@ -1325,10 +1337,9 @@ static int qtnf_cmd_band_fill_iftype(const u8 *data,
 	struct ieee80211_sband_iftype_data *iftype_data;
 	const struct qlink_tlv_iftype_data *tlv =
 		(const struct qlink_tlv_iftype_data *)data;
-	size_t payload_len;
-
-	payload_len = struct_size(tlv, iftype_data, tlv->n_iftype_data);
-	payload_len = size_sub(payload_len, sizeof(struct qlink_tlv_hdr));
+	size_t payload_len = tlv->n_iftype_data * sizeof(*tlv->iftype_data) +
+		sizeof(*tlv) -
+		sizeof(struct qlink_tlv_hdr);
 
 	if (tlv->hdr.len != cpu_to_le16(payload_len)) {
 		pr_err("bad IFTYPE_DATA TLV len %u\n", tlv->hdr.len);
@@ -1666,7 +1677,10 @@ int qtnf_cmd_send_update_phy_params(struct qtnf_wmac *mac, u32 changed)
 					 wiphy->retry_short);
 
 	ret = qtnf_cmd_send(mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(mac->bus);
 
 	return ret;
@@ -1758,7 +1772,10 @@ int qtnf_cmd_send_add_key(struct qtnf_vif *vif, u8 key_index, bool pairwise,
 					 params->seq_len);
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -1790,7 +1807,10 @@ int qtnf_cmd_send_del_key(struct qtnf_vif *vif, u8 key_index, bool pairwise,
 	cmd->pairwise = pairwise;
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -1817,7 +1837,10 @@ int qtnf_cmd_send_set_default_key(struct qtnf_vif *vif, u8 key_index,
 	cmd->multicast = multicast;
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -1841,7 +1864,10 @@ int qtnf_cmd_send_set_default_mgmt_key(struct qtnf_vif *vif, u8 key_index)
 	cmd->key_index = key_index;
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -1905,6 +1931,8 @@ int qtnf_cmd_send_change_sta(struct qtnf_vif *vif, const u8 *mac,
 	}
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
 out:
 	qtnf_bus_unlock(vif->mac->bus);
@@ -1938,7 +1966,10 @@ int qtnf_cmd_send_del_sta(struct qtnf_vif *vif,
 	cmd->reason_code = cpu_to_le16(params->reason_code);
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -2008,7 +2039,7 @@ int qtnf_cmd_send_scan(struct qtnf_wmac *mac)
 		dwell_active = scan_req->duration;
 		dwell_passive = scan_req->duration;
 	} else if (wdev->iftype == NL80211_IFTYPE_STATION &&
-		   wdev->connected) {
+		   wdev->current_bss) {
 		/* let device select dwell based on traffic conditions */
 		dwell_active = QTNF_SCAN_TIME_AUTO;
 		dwell_passive = QTNF_SCAN_TIME_AUTO;
@@ -2079,7 +2110,6 @@ int qtnf_cmd_send_connect(struct qtnf_vif *vif,
 	struct qlink_auth_encr *aen;
 	int ret;
 	int i;
-	int n;
 	u32 connect_flags = 0;
 
 	cmd_skb = qtnf_cmd_alloc_new_cmdskb(vif->mac->macid, vif->vifid,
@@ -2136,10 +2166,9 @@ int qtnf_cmd_send_connect(struct qtnf_vif *vif,
 		aen->ciphers_pairwise[i] =
 			cpu_to_le32(sme->crypto.ciphers_pairwise[i]);
 
-	n = min(QLINK_MAX_NR_AKM_SUITES, sme->crypto.n_akm_suites);
-	aen->n_akm_suites = cpu_to_le32(n);
+	aen->n_akm_suites = cpu_to_le32(sme->crypto.n_akm_suites);
 
-	for (i = 0; i < n; i++)
+	for (i = 0; i < QLINK_MAX_NR_AKM_SUITES; i++)
 		aen->akm_suites[i] = cpu_to_le32(sme->crypto.akm_suites[i]);
 
 	aen->control_port = sme->crypto.control_port;
@@ -2160,6 +2189,10 @@ int qtnf_cmd_send_connect(struct qtnf_vif *vif,
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -2185,6 +2218,10 @@ int qtnf_cmd_send_external_auth(struct qtnf_vif *vif,
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -2208,7 +2245,10 @@ int qtnf_cmd_send_disconnect(struct qtnf_vif *vif, u16 reason_code)
 	cmd->reason = cpu_to_le16(reason_code);
 
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -2231,6 +2271,10 @@ int qtnf_cmd_send_updown_intf(struct qtnf_vif *vif, bool up)
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;
@@ -2536,6 +2580,10 @@ int qtnf_cmd_start_cac(const struct qtnf_vif *vif,
 
 	qtnf_bus_lock(bus);
 	ret = qtnf_cmd_send(bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(bus);
 
 	return ret;
@@ -2563,6 +2611,10 @@ int qtnf_cmd_set_mac_acl(const struct qtnf_vif *vif,
 
 	qtnf_bus_lock(bus);
 	ret = qtnf_cmd_send(bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(bus);
 
 	return ret;
@@ -2587,7 +2639,10 @@ int qtnf_cmd_send_pm_set(const struct qtnf_vif *vif, u8 pm_mode, int timeout)
 	qtnf_bus_lock(bus);
 
 	ret = qtnf_cmd_send(bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(bus);
 
 	return ret;
@@ -2699,7 +2754,10 @@ int qtnf_cmd_send_wowlan_set(const struct qtnf_vif *vif,
 	cmd->triggers = cpu_to_le32(triggers);
 
 	ret = qtnf_cmd_send(bus, cmd_skb);
+	if (ret)
+		goto out;
 
+out:
 	qtnf_bus_unlock(bus);
 	return ret;
 }
@@ -2763,6 +2821,10 @@ int qtnf_cmd_send_update_owe(struct qtnf_vif *vif,
 
 	qtnf_bus_lock(vif->mac->bus);
 	ret = qtnf_cmd_send(vif->mac->bus, cmd_skb);
+	if (ret)
+		goto out;
+
+out:
 	qtnf_bus_unlock(vif->mac->bus);
 
 	return ret;

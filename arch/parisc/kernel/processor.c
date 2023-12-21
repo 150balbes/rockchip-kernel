@@ -19,7 +19,6 @@
 #include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/cpu.h>
-#include <asm/topology.h>
 #include <asm/param.h>
 #include <asm/cache.h>
 #include <asm/hardware.h>	/* for register_parisc_driver() stuff */
@@ -58,7 +57,7 @@ DEFINE_PER_CPU(struct cpuinfo_parisc, cpu_data);
 */
 
 /**
- * init_percpu_prof - enable/setup per cpu profiling hooks.
+ * init_cpu_profiler - enable/setup per cpu profiling hooks.
  * @cpunum: The processor instance.
  *
  * FIXME: doesn't do much yet...
@@ -164,6 +163,7 @@ static int __init processor_probe(struct parisc_device *dev)
 	if (cpuid)
 		memset(p, 0, sizeof(struct cpuinfo_parisc));
 
+	p->loops_per_jiffy = loops_per_jiffy;
 	p->dev = dev;		/* Save IODC data in case we need it */
 	p->hpa = dev->hpa.start;	/* save CPU hpa */
 	p->cpuid = cpuid;	/* save CPU id */
@@ -171,7 +171,6 @@ static int __init processor_probe(struct parisc_device *dev)
 	p->cpu_num = cpu_info.cpu_num;
 	p->cpu_loc = cpu_info.cpu_loc;
 
-	set_cpu_possible(cpuid, true);
 	store_cpu_topology(cpuid);
 
 #ifdef CONFIG_SMP
@@ -272,14 +271,9 @@ void __init collect_boot_cpu_data(void)
 		printk(KERN_INFO "capabilities 0x%lx\n",
 			boot_cpu_data.pdc.capabilities);
 
-	if (pdc_model_sysmodel(OS_ID_HPUX, boot_cpu_data.pdc.sys_model_name) == PDC_OK)
-		pr_info("HP-UX model name: %s\n",
+	if (pdc_model_sysmodel(boot_cpu_data.pdc.sys_model_name) == PDC_OK)
+		printk(KERN_INFO "model %s\n",
 			boot_cpu_data.pdc.sys_model_name);
-
-	serial_no[0] = 0;
-	if (pdc_model_sysmodel(OS_ID_MPEXL, serial_no) == PDC_OK &&
-		serial_no[0])
-		pr_info("MPE/iX model name: %s\n", serial_no);
 
 	dump_stack_set_arch_desc("%s", boot_cpu_data.pdc.sys_model_name);
 
@@ -324,13 +318,15 @@ void __init collect_boot_cpu_data(void)
  *
  * o Enable CPU profiling hooks.
  */
-int init_per_cpu(int cpunum)
+int __init init_per_cpu(int cpunum)
 {
 	int ret;
 	struct pdc_coproc_cfg coproc_cfg;
 
 	set_firmware_width();
 	ret = pdc_coproc_cfg(&coproc_cfg);
+
+	store_cpu_topology(cpunum);
 
 	if(ret >= 0 && coproc_cfg.ccr_functional) {
 		mtctl(coproc_cfg.ccr_functional, 10);  /* 10 == Coprocessor Control Reg */
@@ -395,7 +391,7 @@ show_cpuinfo (struct seq_file *m, void *v)
 				 boot_cpu_data.cpu_hz / 1000000,
 				 boot_cpu_data.cpu_hz % 1000000  );
 
-#ifdef CONFIG_GENERIC_ARCH_TOPOLOGY
+#ifdef CONFIG_PARISC_CPU_TOPOLOGY
 		seq_printf(m, "physical id\t: %d\n",
 				topology_physical_package_id(cpu));
 		seq_printf(m, "siblings\t: %d\n",
@@ -437,8 +433,8 @@ show_cpuinfo (struct seq_file *m, void *v)
 		show_cache_info(m);
 
 		seq_printf(m, "bogomips\t: %lu.%02lu\n",
-			     loops_per_jiffy / (500000 / HZ),
-			     loops_per_jiffy / (5000 / HZ) % 100);
+			     cpuinfo->loops_per_jiffy / (500000 / HZ),
+			     (cpuinfo->loops_per_jiffy / (5000 / HZ)) % 100);
 
 		seq_printf(m, "software id\t: %ld\n\n",
 				boot_cpu_data.pdc.model.sw_id);
@@ -464,13 +460,5 @@ static struct parisc_driver cpu_driver __refdata = {
  */
 void __init processor_init(void)
 {
-	unsigned int cpu;
-
-	reset_cpu_topology();
-
-	/* reset possible mask. We will mark those which are possible. */
-	for_each_possible_cpu(cpu)
-		set_cpu_possible(cpu, false);
-
 	register_parisc_driver(&cpu_driver);
 }

@@ -100,8 +100,9 @@ static int mlxreg_wdt_ping(struct watchdog_device *wdd)
 	struct mlxreg_wdt *wdt = watchdog_get_drvdata(wdd);
 	struct mlxreg_core_data *reg_data = &wdt->pdata->data[wdt->ping_idx];
 
-	return regmap_write_bits(wdt->regmap, reg_data->reg, ~reg_data->mask,
-				 BIT(reg_data->bit));
+	return regmap_update_bits_base(wdt->regmap, reg_data->reg,
+				       ~reg_data->mask, BIT(reg_data->bit),
+				       NULL, false, true);
 }
 
 static int mlxreg_wdt_set_timeout(struct watchdog_device *wdd,

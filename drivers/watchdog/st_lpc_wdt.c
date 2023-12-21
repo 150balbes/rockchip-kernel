@@ -239,13 +239,16 @@ static int st_wdog_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void st_wdog_remove(struct platform_device *pdev)
+static int st_wdog_remove(struct platform_device *pdev)
 {
 	struct st_wdog *st_wdog = watchdog_get_drvdata(&st_wdog_dev);
 
 	st_wdog_setup(st_wdog, false);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int st_wdog_suspend(struct device *dev)
 {
 	struct st_wdog *st_wdog = watchdog_get_drvdata(&st_wdog_dev);
@@ -282,18 +285,20 @@ static int st_wdog_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(st_wdog_pm_ops,
-				st_wdog_suspend, st_wdog_resume);
+static SIMPLE_DEV_PM_OPS(st_wdog_pm_ops,
+			 st_wdog_suspend,
+			 st_wdog_resume);
 
 static struct platform_driver st_wdog_driver = {
 	.driver	= {
 		.name = "st-lpc-wdt",
-		.pm = pm_sleep_ptr(&st_wdog_pm_ops),
+		.pm = &st_wdog_pm_ops,
 		.of_match_table = st_wdog_match,
 	},
 	.probe = st_wdog_probe,
-	.remove_new = st_wdog_remove,
+	.remove = st_wdog_remove,
 };
 module_platform_driver(st_wdog_driver);
 

@@ -1533,8 +1533,7 @@ struct max98090_priv {
 	struct snd_soc_jack *jack;
 	unsigned int dai_fmt;
 	int tdm_slots;
-	int tdm_lslot;
-	int tdm_rslot;
+	int tdm_width;
 	u8 lin_state;
 	unsigned int pa1en;
 	unsigned int pa2en;

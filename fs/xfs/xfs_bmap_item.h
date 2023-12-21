@@ -25,7 +25,7 @@
 /* kernel only BUI/BUD definitions */
 
 struct xfs_mount;
-struct kmem_cache;
+struct kmem_zone;
 
 /*
  * Max number of extents in fast allocation path.
@@ -65,7 +65,7 @@ struct xfs_bud_log_item {
 	struct xfs_bud_log_format	bud_format;
 };
 
-extern struct kmem_cache	*xfs_bui_cache;
-extern struct kmem_cache	*xfs_bud_cache;
+extern struct kmem_zone	*xfs_bui_zone;
+extern struct kmem_zone	*xfs_bud_zone;
 
 #endif	/* __XFS_BMAP_ITEM_H__ */

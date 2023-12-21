@@ -34,7 +34,6 @@
  *
  */
 
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -532,7 +531,7 @@ static int cirrusfb_check_var(struct fb_var_screeninfo *var,
 {
 	int yres;
 	/* memory size in pixels */
-	unsigned int pixels;
+	unsigned pixels = info->screen_size * 8 / var->bits_per_pixel;
 	struct cirrusfb_info *cinfo = info->par;
 
 	switch (var->bits_per_pixel) {
@@ -574,7 +573,6 @@ static int cirrusfb_check_var(struct fb_var_screeninfo *var,
 		return -EINVAL;
 	}
 
-	pixels = info->screen_size * 8 / var->bits_per_pixel;
 	if (var->xres_virtual < var->xres)
 		var->xres_virtual = var->xres;
 	/* use highest possible virtual resolution */
@@ -1978,7 +1976,8 @@ static int cirrusfb_set_fbinfo(struct fb_info *info)
 	struct fb_var_screeninfo *var = &info->var;
 
 	info->pseudo_palette = cinfo->pseudo_palette;
-	info->flags = FBINFO_HWACCEL_XPAN
+	info->flags = FBINFO_DEFAULT
+		    | FBINFO_HWACCEL_XPAN
 		    | FBINFO_HWACCEL_YPAN
 		    | FBINFO_HWACCEL_FILLRECT
 		    | FBINFO_HWACCEL_IMAGEBLIT
@@ -1999,7 +1998,7 @@ static int cirrusfb_set_fbinfo(struct fb_info *info)
 	}
 
 	/* Fill fix common fields */
-	strscpy(info->fix.id, cirrusfb_board_info[cinfo->btype].name,
+	strlcpy(info->fix.id, cirrusfb_board_info[cinfo->btype].name,
 		sizeof(info->fix.id));
 
 	/* monochrome: only 1 memory plane */
@@ -2084,10 +2083,6 @@ static int cirrusfb_pci_register(struct pci_dev *pdev,
 	struct fb_info *info;
 	unsigned long board_addr, board_size;
 	int ret;
-
-	ret = aperture_remove_conflicting_pci_devices(pdev, "cirrusfb");
-	if (ret)
-		return ret;
 
 	ret = pci_enable_device(pdev);
 	if (ret < 0) {
@@ -2188,6 +2183,12 @@ static struct pci_driver cirrusfb_pci_driver = {
 	.id_table	= cirrusfb_pci_table,
 	.probe		= cirrusfb_pci_register,
 	.remove		= cirrusfb_pci_unregister,
+#ifdef CONFIG_PM
+#if 0
+	.suspend	= cirrusfb_pci_suspend,
+	.resume		= cirrusfb_pci_resume,
+#endif
+#endif
 };
 #endif /* CONFIG_PCI */
 
@@ -2305,7 +2306,7 @@ err_release_fb:
 	return error;
 }
 
-static void cirrusfb_zorro_unregister(struct zorro_dev *z)
+void cirrusfb_zorro_unregister(struct zorro_dev *z)
 {
 	struct fb_info *info = zorro_get_drvdata(z);
 
@@ -2358,12 +2359,7 @@ static int __init cirrusfb_init(void)
 
 #ifndef MODULE
 	char *option = NULL;
-#endif
 
-	if (fb_modesetting_disabled("cirrusfb"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if (fb_get_options("cirrusfb", &option))
 		return -ENODEV;
 	cirrusfb_setup(option);
@@ -2466,6 +2462,8 @@ static void AttrOn(const struct cirrusfb_info *cinfo)
  */
 static void WHDR(const struct cirrusfb_info *cinfo, unsigned char val)
 {
+	unsigned char dummy;
+
 	if (is_laguna(cinfo))
 		return;
 	if (cinfo->btype == BT_PICASSO) {
@@ -2474,18 +2472,18 @@ static void WHDR(const struct cirrusfb_info *cinfo, unsigned char val)
 		WGen(cinfo, VGA_PEL_MSK, 0x00);
 		udelay(200);
 		/* next read dummy from pixel address (3c8) */
-		RGen(cinfo, VGA_PEL_IW);
+		dummy = RGen(cinfo, VGA_PEL_IW);
 		udelay(200);
 	}
 	/* now do the usual stuff to access the HDR */
 
-	RGen(cinfo, VGA_PEL_MSK);
+	dummy = RGen(cinfo, VGA_PEL_MSK);
 	udelay(200);
-	RGen(cinfo, VGA_PEL_MSK);
+	dummy = RGen(cinfo, VGA_PEL_MSK);
 	udelay(200);
-	RGen(cinfo, VGA_PEL_MSK);
+	dummy = RGen(cinfo, VGA_PEL_MSK);
 	udelay(200);
-	RGen(cinfo, VGA_PEL_MSK);
+	dummy = RGen(cinfo, VGA_PEL_MSK);
 	udelay(200);
 
 	WGen(cinfo, VGA_PEL_MSK, val);
@@ -2493,7 +2491,7 @@ static void WHDR(const struct cirrusfb_info *cinfo, unsigned char val)
 
 	if (cinfo->btype == BT_PICASSO) {
 		/* now first reset HDR access counter */
-		RGen(cinfo, VGA_PEL_IW);
+		dummy = RGen(cinfo, VGA_PEL_IW);
 		udelay(200);
 
 		/* and at the end, restore the mask value */
@@ -2801,9 +2799,9 @@ static void bestclock(long freq, int *nom, int *den, int *div)
 
 #ifdef CIRRUSFB_DEBUG
 
-/*
+/**
  * cirrusfb_dbg_print_regs
- * @regbase: If using newmmio, the newmmio base address, otherwise %NULL
+ * @base: If using newmmio, the newmmio base address, otherwise %NULL
  * @reg_class: type of registers to read: %CRT, or %SEQ
  *
  * DESCRIPTION:
@@ -2848,7 +2846,7 @@ static void cirrusfb_dbg_print_regs(struct fb_info *info,
 	va_end(list);
 }
 
-/*
+/**
  * cirrusfb_dbg_reg_dump
  * @base: If using newmmio, the newmmio base address, otherwise %NULL
  *

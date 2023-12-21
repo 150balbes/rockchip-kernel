@@ -3,13 +3,13 @@
 #define _BCACHE_SYSFS_H_
 
 #define KTYPE(type)							\
-const struct kobj_type type ## _ktype = {					\
+struct kobj_type type ## _ktype = {					\
 	.release	= type ## _release,				\
 	.sysfs_ops	= &((const struct sysfs_ops) {			\
 		.show	= type ## _show,				\
 		.store	= type ## _store				\
 	}),								\
-	.default_groups	= type ## _groups				\
+	.default_attrs	= type ## _files				\
 }
 
 #define SHOW(fn)							\
@@ -51,27 +51,13 @@ STORE(fn)								\
 #define sysfs_printf(file, fmt, ...)					\
 do {									\
 	if (attr == &sysfs_ ## file)					\
-		return sysfs_emit(buf, fmt "\n", __VA_ARGS__);	\
+		return snprintf(buf, PAGE_SIZE, fmt "\n", __VA_ARGS__);	\
 } while (0)
 
 #define sysfs_print(file, var)						\
 do {									\
 	if (attr == &sysfs_ ## file)					\
-		return sysfs_emit(buf,						\
-				__builtin_types_compatible_p(typeof(var), int)		\
-					 ? "%i\n" :				\
-				__builtin_types_compatible_p(typeof(var), unsigned int)	\
-					 ? "%u\n" :				\
-				__builtin_types_compatible_p(typeof(var), long)		\
-					 ? "%li\n" :			\
-				__builtin_types_compatible_p(typeof(var), unsigned long)\
-					 ? "%lu\n" :			\
-				__builtin_types_compatible_p(typeof(var), int64_t)	\
-					 ? "%lli\n" :			\
-				__builtin_types_compatible_p(typeof(var), uint64_t)	\
-					 ? "%llu\n" :			\
-				__builtin_types_compatible_p(typeof(var), const char *)	\
-					 ? "%s\n" : "%i\n", var);	\
+		return snprint(buf, PAGE_SIZE, var);			\
 } while (0)
 
 #define sysfs_hprint(file, val)						\

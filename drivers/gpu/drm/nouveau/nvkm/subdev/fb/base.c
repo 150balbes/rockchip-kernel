@@ -57,15 +57,6 @@ nvkm_fb_tile_prog(struct nvkm_fb *fb, int region, struct nvkm_fb_tile *tile)
 	}
 }
 
-static void
-nvkm_fb_sysmem_flush_page_init(struct nvkm_device *device)
-{
-	struct nvkm_fb *fb = device->fb;
-
-	if (fb->func->sysmem.flush_page_init)
-		fb->func->sysmem.flush_page_init(fb);
-}
-
 int
 nvkm_fb_bios_memtype(struct nvkm_bios *bios)
 {
@@ -131,30 +122,18 @@ nvkm_fb_oneinit(struct nvkm_subdev *subdev)
 		nvkm_debug(subdev, "%d comptags\n", tags);
 	}
 
-	return nvkm_mm_init(&fb->tags.mm, 0, 0, tags, 1);
+	return nvkm_mm_init(&fb->tags, 0, 0, tags, 1);
 }
 
-int
-nvkm_fb_mem_unlock(struct nvkm_fb *fb)
+static int
+nvkm_fb_init_scrub_vpr(struct nvkm_fb *fb)
 {
 	struct nvkm_subdev *subdev = &fb->subdev;
 	int ret;
 
-	if (!fb->func->vpr.scrub_required)
-		return 0;
-
-	ret = nvkm_subdev_oneinit(subdev);
-	if (ret)
-		return ret;
-
-	if (!fb->func->vpr.scrub_required(fb)) {
-		nvkm_debug(subdev, "VPR not locked\n");
-		return 0;
-	}
-
 	nvkm_debug(subdev, "VPR locked, running scrubber binary\n");
 
-	if (!fb->vpr_scrubber.fw.img) {
+	if (!fb->vpr_scrubber.size) {
 		nvkm_warn(subdev, "VPR locked, but no scrubber binary!\n");
 		return 0;
 	}
@@ -174,18 +153,6 @@ nvkm_fb_mem_unlock(struct nvkm_fb *fb)
 	return 0;
 }
 
-u64
-nvkm_fb_vidmem_size(struct nvkm_device *device)
-{
-	struct nvkm_fb *fb = device->fb;
-
-	if (fb && fb->func->vidmem.size)
-		return fb->func->vidmem.size(fb);
-
-	WARN_ON(1);
-	return 0;
-}
-
 static int
 nvkm_fb_init(struct nvkm_subdev *subdev)
 {
@@ -200,8 +167,6 @@ nvkm_fb_init(struct nvkm_subdev *subdev)
 
 	for (i = 0; i < fb->tile.regions; i++)
 		fb->func->tile.prog(fb, i, &fb->tile.region[i]);
-
-	nvkm_fb_sysmem_flush_page_init(subdev->device);
 
 	if (fb->func->init)
 		fb->func->init(fb);
@@ -218,13 +183,13 @@ nvkm_fb_init(struct nvkm_subdev *subdev)
 	if (fb->func->init_unkn)
 		fb->func->init_unkn(fb);
 
-	return 0;
-}
+	if (fb->func->vpr.scrub_required &&
+	    fb->func->vpr.scrub_required(fb)) {
+		ret = nvkm_fb_init_scrub_vpr(fb);
+		if (ret)
+			return ret;
+	}
 
-static int
-nvkm_fb_preinit(struct nvkm_subdev *subdev)
-{
-	nvkm_fb_sysmem_flush_page_init(subdev->device);
 	return 0;
 }
 
@@ -240,63 +205,41 @@ nvkm_fb_dtor(struct nvkm_subdev *subdev)
 	for (i = 0; i < fb->tile.regions; i++)
 		fb->func->tile.fini(fb, i, &fb->tile.region[i]);
 
-	nvkm_mm_fini(&fb->tags.mm);
-	mutex_destroy(&fb->tags.mutex);
-
+	nvkm_mm_fini(&fb->tags);
 	nvkm_ram_del(&fb->ram);
 
-	nvkm_falcon_fw_dtor(&fb->vpr_scrubber);
-
-	if (fb->sysmem.flush_page) {
-		dma_unmap_page(subdev->device->dev, fb->sysmem.flush_page_addr,
-			       PAGE_SIZE, DMA_BIDIRECTIONAL);
-		__free_page(fb->sysmem.flush_page);
-	}
+	nvkm_blob_dtor(&fb->vpr_scrubber);
 
 	if (fb->func->dtor)
 		return fb->func->dtor(fb);
-
 	return fb;
 }
 
 static const struct nvkm_subdev_func
 nvkm_fb = {
 	.dtor = nvkm_fb_dtor,
-	.preinit = nvkm_fb_preinit,
 	.oneinit = nvkm_fb_oneinit,
 	.init = nvkm_fb_init,
 	.intr = nvkm_fb_intr,
 };
 
-int
+void
 nvkm_fb_ctor(const struct nvkm_fb_func *func, struct nvkm_device *device,
-	     enum nvkm_subdev_type type, int inst, struct nvkm_fb *fb)
+	     int index, struct nvkm_fb *fb)
 {
-	nvkm_subdev_ctor(&nvkm_fb, device, type, inst, &fb->subdev);
+	nvkm_subdev_ctor(&nvkm_fb, device, index, &fb->subdev);
 	fb->func = func;
 	fb->tile.regions = fb->func->tile.regions;
-	fb->page = nvkm_longopt(device->cfgopt, "NvFbBigPage", fb->func->default_bigpage);
-	mutex_init(&fb->tags.mutex);
-
-	if (func->sysmem.flush_page_init) {
-		fb->sysmem.flush_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-		if (!fb->sysmem.flush_page)
-			return -ENOMEM;
-
-		fb->sysmem.flush_page_addr = dma_map_page(device->dev, fb->sysmem.flush_page,
-							  0, PAGE_SIZE, DMA_BIDIRECTIONAL);
-		if (dma_mapping_error(device->dev, fb->sysmem.flush_page_addr))
-			return -EFAULT;
-	}
-
-	return 0;
+	fb->page = nvkm_longopt(device->cfgopt, "NvFbBigPage",
+				fb->func->default_bigpage);
 }
 
 int
 nvkm_fb_new_(const struct nvkm_fb_func *func, struct nvkm_device *device,
-	     enum nvkm_subdev_type type, int inst, struct nvkm_fb **pfb)
+	     int index, struct nvkm_fb **pfb)
 {
 	if (!(*pfb = kzalloc(sizeof(**pfb), GFP_KERNEL)))
 		return -ENOMEM;
-	return nvkm_fb_ctor(func, device, type, inst, *pfb);
+	nvkm_fb_ctor(func, device, index, *pfb);
+	return 0;
 }

@@ -26,9 +26,11 @@ static int pcm3168a_spi_probe(struct spi_device *spi)
 	return pcm3168a_probe(&spi->dev, regmap);
 }
 
-static void pcm3168a_spi_remove(struct spi_device *spi)
+static int pcm3168a_spi_remove(struct spi_device *spi)
 {
 	pcm3168a_remove(&spi->dev);
+
+	return 0;
 }
 
 static const struct spi_device_id pcm3168a_spi_id[] = {

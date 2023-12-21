@@ -23,22 +23,14 @@
 int __bootdata_preserved(prot_virt_guest);
 #endif
 
-/*
- * uv_info contains both host and guest information but it's currently only
- * expected to be used within modules if it's the KVM module or for
- * any PV guest module.
- *
- * The kernel itself will write these values once in uv_query_info()
- * and then make some of them readable via a sysfs interface.
- */
 struct uv_info __bootdata_preserved(uv_info);
-EXPORT_SYMBOL(uv_info);
 
 #if IS_ENABLED(CONFIG_KVM)
 int __bootdata_preserved(prot_virt_host);
 EXPORT_SYMBOL(prot_virt_host);
+EXPORT_SYMBOL(uv_info);
 
-static int __init uv_init(phys_addr_t stor_base, unsigned long stor_len)
+static int __init uv_init(unsigned long stor_base, unsigned long stor_len)
 {
 	struct uv_cb_init uvcb = {
 		.header.cmd = UVC_CMD_INIT_UV,
@@ -57,12 +49,27 @@ static int __init uv_init(phys_addr_t stor_base, unsigned long stor_len)
 
 void __init setup_uv(void)
 {
-	void *uv_stor_base;
+	unsigned long uv_stor_base;
 
+	/*
+	 * keep these conditions in line with kasan init code has_uv_sec_stor_limit()
+	 */
 	if (!is_prot_virt_host())
 		return;
 
-	uv_stor_base = memblock_alloc_try_nid(
+	if (is_prot_virt_guest()) {
+		prot_virt_host = 0;
+		pr_warn("Protected virtualization not available in protected guests.");
+		return;
+	}
+
+	if (!test_facility(158)) {
+		prot_virt_host = 0;
+		pr_warn("Protected virtualization not supported by the hardware.");
+		return;
+	}
+
+	uv_stor_base = (unsigned long)memblock_alloc_try_nid(
 		uv_info.uv_base_stor_len, SZ_1M, SZ_2G,
 		MEMBLOCK_ALLOC_ACCESSIBLE, NUMA_NO_NODE);
 	if (!uv_stor_base) {
@@ -71,7 +78,7 @@ void __init setup_uv(void)
 		goto fail;
 	}
 
-	if (uv_init(__pa(uv_stor_base), uv_info.uv_base_stor_len)) {
+	if (uv_init(uv_stor_base, uv_info.uv_base_stor_len)) {
 		memblock_free(uv_stor_base, uv_info.uv_base_stor_len);
 		goto fail;
 	}
@@ -82,6 +89,12 @@ void __init setup_uv(void)
 fail:
 	pr_info("Disabling support for protected virtualization");
 	prot_virt_host = 0;
+}
+
+void adjust_to_uv_max(unsigned long *vmax)
+{
+	if (uv_info.max_sec_stor_addr)
+		*vmax = min_t(unsigned long, *vmax, uv_info.max_sec_stor_addr);
 }
 
 /*
@@ -108,7 +121,7 @@ static int uv_pin_shared(unsigned long paddr)
  *
  * @paddr: Absolute host address of page to be destroyed
  */
-static int uv_destroy_page(unsigned long paddr)
+int uv_destroy_page(unsigned long paddr)
 {
 	struct uv_cb_cfs uvcb = {
 		.header.cmd = UVC_CMD_DESTR_SEC_STOR,
@@ -129,22 +142,6 @@ static int uv_destroy_page(unsigned long paddr)
 }
 
 /*
- * The caller must already hold a reference to the page
- */
-int uv_destroy_owned_page(unsigned long paddr)
-{
-	struct page *page = phys_to_page(paddr);
-	int rc;
-
-	get_page(page);
-	rc = uv_destroy_page(paddr);
-	if (!rc)
-		clear_bit(PG_arch_1, &page->flags);
-	put_page(page);
-	return rc;
-}
-
-/*
  * Requests the Ultravisor to encrypt a guest page and make it
  * accessible to the host for paging (export).
  *
@@ -161,22 +158,6 @@ int uv_convert_from_secure(unsigned long paddr)
 	if (uv_call(0, (u64)&uvcb))
 		return -EINVAL;
 	return 0;
-}
-
-/*
- * The caller must already hold a reference to the page
- */
-int uv_convert_owned_from_secure(unsigned long paddr)
-{
-	struct page *page = phys_to_page(paddr);
-	int rc;
-
-	get_page(page);
-	rc = uv_convert_from_secure(paddr);
-	if (!rc)
-		clear_bit(PG_arch_1, &page->flags);
-	put_page(page);
-	return rc;
 }
 
 /*
@@ -200,68 +181,33 @@ static int expected_page_refs(struct page *page)
 	return res;
 }
 
-static int make_page_secure(struct page *page, struct uv_cb_header *uvcb)
+static int make_secure_pte(pte_t *ptep, unsigned long addr,
+			   struct page *exp_page, struct uv_cb_header *uvcb)
 {
-	int expected, cc = 0;
+	pte_t entry = READ_ONCE(*ptep);
+	struct page *page;
+	int expected, rc = 0;
 
+	if (!pte_present(entry))
+		return -ENXIO;
+	if (pte_val(entry) & _PAGE_INVALID)
+		return -ENXIO;
+
+	page = pte_page(entry);
+	if (page != exp_page)
+		return -ENXIO;
 	if (PageWriteback(page))
 		return -EAGAIN;
 	expected = expected_page_refs(page);
 	if (!page_ref_freeze(page, expected))
 		return -EBUSY;
 	set_bit(PG_arch_1, &page->flags);
-	/*
-	 * If the UVC does not succeed or fail immediately, we don't want to
-	 * loop for long, or we might get stall notifications.
-	 * On the other hand, this is a complex scenario and we are holding a lot of
-	 * locks, so we can't easily sleep and reschedule. We try only once,
-	 * and if the UVC returned busy or partial completion, we return
-	 * -EAGAIN and we let the callers deal with it.
-	 */
-	cc = __uv_call(0, (u64)uvcb);
+	rc = uv_call(0, (u64)uvcb);
 	page_ref_unfreeze(page, expected);
-	/*
-	 * Return -ENXIO if the page was not mapped, -EINVAL for other errors.
-	 * If busy or partially completed, return -EAGAIN.
-	 */
-	if (cc == UVC_CC_OK)
-		return 0;
-	else if (cc == UVC_CC_BUSY || cc == UVC_CC_PARTIAL)
-		return -EAGAIN;
-	return uvcb->rc == 0x10a ? -ENXIO : -EINVAL;
-}
-
-/**
- * should_export_before_import - Determine whether an export is needed
- * before an import-like operation
- * @uvcb: the Ultravisor control block of the UVC to be performed
- * @mm: the mm of the process
- *
- * Returns whether an export is needed before every import-like operation.
- * This is needed for shared pages, which don't trigger a secure storage
- * exception when accessed from a different guest.
- *
- * Although considered as one, the Unpin Page UVC is not an actual import,
- * so it is not affected.
- *
- * No export is needed also when there is only one protected VM, because the
- * page cannot belong to the wrong VM in that case (there is no "other VM"
- * it can belong to).
- *
- * Return: true if an export is needed before every import, otherwise false.
- */
-static bool should_export_before_import(struct uv_cb_header *uvcb, struct mm_struct *mm)
-{
-	/*
-	 * The misc feature indicates, among other things, that importing a
-	 * shared page from a different protected VM will automatically also
-	 * transfer its ownership.
-	 */
-	if (test_bit_inv(BIT_UV_FEAT_MISC, &uv_info.uv_feature_indications))
-		return false;
-	if (uvcb->cmd == UVC_CMD_UNPIN_PAGE_SHARED)
-		return false;
-	return atomic_read(&mm->context.protected_count) > 1;
+	/* Return -ENXIO if the page was not mapped, -EINVAL otherwise */
+	if (rc)
+		rc = uvcb->rc == 0x10a ? -ENXIO : -EINVAL;
+	return rc;
 }
 
 /*
@@ -287,7 +233,7 @@ again:
 	uaddr = __gmap_translate(gmap, gaddr);
 	if (IS_ERR_VALUE(uaddr))
 		goto out;
-	vma = vma_lookup(gmap->mm, uaddr);
+	vma = find_vma(gmap->mm, uaddr);
 	if (!vma)
 		goto out;
 	/*
@@ -301,28 +247,19 @@ again:
 		goto out;
 
 	rc = -ENXIO;
-	ptep = get_locked_pte(gmap->mm, uaddr, &ptelock);
-	if (!ptep)
+	page = follow_page(vma, uaddr, FOLL_WRITE);
+	if (IS_ERR_OR_NULL(page))
 		goto out;
-	if (pte_present(*ptep) && !(pte_val(*ptep) & _PAGE_INVALID) && pte_write(*ptep)) {
-		page = pte_page(*ptep);
-		rc = -EAGAIN;
-		if (trylock_page(page)) {
-			if (should_export_before_import(uvcb, gmap->mm))
-				uv_convert_from_secure(page_to_phys(page));
-			rc = make_page_secure(page, uvcb);
-			unlock_page(page);
-		}
-	}
+
+	lock_page(page);
+	ptep = get_locked_pte(gmap->mm, uaddr, &ptelock);
+	rc = make_secure_pte(ptep, uaddr, page, uvcb);
 	pte_unmap_unlock(ptep, ptelock);
+	unlock_page(page);
 out:
 	mmap_read_unlock(gmap->mm);
 
 	if (rc == -EAGAIN) {
-		/*
-		 * If we are here because the UVC returned busy or partial
-		 * completion, this is just a useless check, but it is safe.
-		 */
 		wait_on_page_writeback(page);
 	} else if (rc == -EBUSY) {
 		/*
@@ -368,61 +305,6 @@ int gmap_convert_to_secure(struct gmap *gmap, unsigned long gaddr)
 	return gmap_make_secure(gmap, gaddr, &uvcb);
 }
 EXPORT_SYMBOL_GPL(gmap_convert_to_secure);
-
-/**
- * gmap_destroy_page - Destroy a guest page.
- * @gmap: the gmap of the guest
- * @gaddr: the guest address to destroy
- *
- * An attempt will be made to destroy the given guest page. If the attempt
- * fails, an attempt is made to export the page. If both attempts fail, an
- * appropriate error is returned.
- */
-int gmap_destroy_page(struct gmap *gmap, unsigned long gaddr)
-{
-	struct vm_area_struct *vma;
-	unsigned long uaddr;
-	struct page *page;
-	int rc;
-
-	rc = -EFAULT;
-	mmap_read_lock(gmap->mm);
-
-	uaddr = __gmap_translate(gmap, gaddr);
-	if (IS_ERR_VALUE(uaddr))
-		goto out;
-	vma = vma_lookup(gmap->mm, uaddr);
-	if (!vma)
-		goto out;
-	/*
-	 * Huge pages should not be able to become secure
-	 */
-	if (is_vm_hugetlb_page(vma))
-		goto out;
-
-	rc = 0;
-	/* we take an extra reference here */
-	page = follow_page(vma, uaddr, FOLL_WRITE | FOLL_GET);
-	if (IS_ERR_OR_NULL(page))
-		goto out;
-	rc = uv_destroy_owned_page(page_to_phys(page));
-	/*
-	 * Fault handlers can race; it is possible that two CPUs will fault
-	 * on the same secure page. One CPU can destroy the page, reboot,
-	 * re-enter secure mode and import it, while the second CPU was
-	 * stuck at the beginning of the handler. At some point the second
-	 * CPU will be able to progress, and it will not be able to destroy
-	 * the page. In that case we do not want to terminate the process,
-	 * we instead try to export the page.
-	 */
-	if (rc)
-		rc = uv_convert_owned_from_secure(page_to_phys(page));
-	put_page(page);
-out:
-	mmap_read_unlock(gmap->mm);
-	return rc;
-}
-EXPORT_SYMBOL_GPL(gmap_destroy_page);
 
 /*
  * To be called with the page locked or with an extra reference! This will
@@ -470,62 +352,17 @@ EXPORT_SYMBOL_GPL(arch_make_page_accessible);
 
 #if defined(CONFIG_PROTECTED_VIRTUALIZATION_GUEST) || IS_ENABLED(CONFIG_KVM)
 static ssize_t uv_query_facilities(struct kobject *kobj,
-				   struct kobj_attribute *attr, char *buf)
+				   struct kobj_attribute *attr, char *page)
 {
-	return sysfs_emit(buf, "%lx\n%lx\n%lx\n%lx\n",
-			  uv_info.inst_calls_list[0],
-			  uv_info.inst_calls_list[1],
-			  uv_info.inst_calls_list[2],
-			  uv_info.inst_calls_list[3]);
+	return scnprintf(page, PAGE_SIZE, "%lx\n%lx\n%lx\n%lx\n",
+			uv_info.inst_calls_list[0],
+			uv_info.inst_calls_list[1],
+			uv_info.inst_calls_list[2],
+			uv_info.inst_calls_list[3]);
 }
 
 static struct kobj_attribute uv_query_facilities_attr =
 	__ATTR(facilities, 0444, uv_query_facilities, NULL);
-
-static ssize_t uv_query_supp_se_hdr_ver(struct kobject *kobj,
-					struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_se_hdr_ver);
-}
-
-static struct kobj_attribute uv_query_supp_se_hdr_ver_attr =
-	__ATTR(supp_se_hdr_ver, 0444, uv_query_supp_se_hdr_ver, NULL);
-
-static ssize_t uv_query_supp_se_hdr_pcf(struct kobject *kobj,
-					struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_se_hdr_pcf);
-}
-
-static struct kobj_attribute uv_query_supp_se_hdr_pcf_attr =
-	__ATTR(supp_se_hdr_pcf, 0444, uv_query_supp_se_hdr_pcf, NULL);
-
-static ssize_t uv_query_dump_cpu_len(struct kobject *kobj,
-				     struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.guest_cpu_stor_len);
-}
-
-static struct kobj_attribute uv_query_dump_cpu_len_attr =
-	__ATTR(uv_query_dump_cpu_len, 0444, uv_query_dump_cpu_len, NULL);
-
-static ssize_t uv_query_dump_storage_state_len(struct kobject *kobj,
-					       struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.conf_dump_storage_state_len);
-}
-
-static struct kobj_attribute uv_query_dump_storage_state_len_attr =
-	__ATTR(dump_storage_state_len, 0444, uv_query_dump_storage_state_len, NULL);
-
-static ssize_t uv_query_dump_finalize_len(struct kobject *kobj,
-					  struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.conf_dump_finalize_len);
-}
-
-static struct kobj_attribute uv_query_dump_finalize_len_attr =
-	__ATTR(dump_finalize_len, 0444, uv_query_dump_finalize_len, NULL);
 
 static ssize_t uv_query_feature_indications(struct kobject *kobj,
 					    struct kobj_attribute *attr, char *buf)
@@ -537,85 +374,34 @@ static struct kobj_attribute uv_query_feature_indications_attr =
 	__ATTR(feature_indications, 0444, uv_query_feature_indications, NULL);
 
 static ssize_t uv_query_max_guest_cpus(struct kobject *kobj,
-				       struct kobj_attribute *attr, char *buf)
+				       struct kobj_attribute *attr, char *page)
 {
-	return sysfs_emit(buf, "%d\n", uv_info.max_guest_cpu_id + 1);
+	return scnprintf(page, PAGE_SIZE, "%d\n",
+			uv_info.max_guest_cpu_id + 1);
 }
 
 static struct kobj_attribute uv_query_max_guest_cpus_attr =
 	__ATTR(max_cpus, 0444, uv_query_max_guest_cpus, NULL);
 
 static ssize_t uv_query_max_guest_vms(struct kobject *kobj,
-				      struct kobj_attribute *attr, char *buf)
+				      struct kobj_attribute *attr, char *page)
 {
-	return sysfs_emit(buf, "%d\n", uv_info.max_num_sec_conf);
+	return scnprintf(page, PAGE_SIZE, "%d\n",
+			uv_info.max_num_sec_conf);
 }
 
 static struct kobj_attribute uv_query_max_guest_vms_attr =
 	__ATTR(max_guests, 0444, uv_query_max_guest_vms, NULL);
 
 static ssize_t uv_query_max_guest_addr(struct kobject *kobj,
-				       struct kobj_attribute *attr, char *buf)
+				       struct kobj_attribute *attr, char *page)
 {
-	return sysfs_emit(buf, "%lx\n", uv_info.max_sec_stor_addr);
+	return scnprintf(page, PAGE_SIZE, "%lx\n",
+			uv_info.max_sec_stor_addr);
 }
 
 static struct kobj_attribute uv_query_max_guest_addr_attr =
 	__ATTR(max_address, 0444, uv_query_max_guest_addr, NULL);
-
-static ssize_t uv_query_supp_att_req_hdr_ver(struct kobject *kobj,
-					     struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_att_req_hdr_ver);
-}
-
-static struct kobj_attribute uv_query_supp_att_req_hdr_ver_attr =
-	__ATTR(supp_att_req_hdr_ver, 0444, uv_query_supp_att_req_hdr_ver, NULL);
-
-static ssize_t uv_query_supp_att_pflags(struct kobject *kobj,
-					struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_att_pflags);
-}
-
-static struct kobj_attribute uv_query_supp_att_pflags_attr =
-	__ATTR(supp_att_pflags, 0444, uv_query_supp_att_pflags, NULL);
-
-static ssize_t uv_query_supp_add_secret_req_ver(struct kobject *kobj,
-						struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_add_secret_req_ver);
-}
-
-static struct kobj_attribute uv_query_supp_add_secret_req_ver_attr =
-	__ATTR(supp_add_secret_req_ver, 0444, uv_query_supp_add_secret_req_ver, NULL);
-
-static ssize_t uv_query_supp_add_secret_pcf(struct kobject *kobj,
-					    struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_add_secret_pcf);
-}
-
-static struct kobj_attribute uv_query_supp_add_secret_pcf_attr =
-	__ATTR(supp_add_secret_pcf, 0444, uv_query_supp_add_secret_pcf, NULL);
-
-static ssize_t uv_query_supp_secret_types(struct kobject *kobj,
-					  struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%lx\n", uv_info.supp_secret_types);
-}
-
-static struct kobj_attribute uv_query_supp_secret_types_attr =
-	__ATTR(supp_secret_types, 0444, uv_query_supp_secret_types, NULL);
-
-static ssize_t uv_query_max_secrets(struct kobject *kobj,
-				    struct kobj_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "%d\n", uv_info.max_secrets);
-}
-
-static struct kobj_attribute uv_query_max_secrets_attr =
-	__ATTR(max_secrets, 0444, uv_query_max_secrets, NULL);
 
 static struct attribute *uv_query_attrs[] = {
 	&uv_query_facilities_attr.attr,
@@ -623,57 +409,11 @@ static struct attribute *uv_query_attrs[] = {
 	&uv_query_max_guest_cpus_attr.attr,
 	&uv_query_max_guest_vms_attr.attr,
 	&uv_query_max_guest_addr_attr.attr,
-	&uv_query_supp_se_hdr_ver_attr.attr,
-	&uv_query_supp_se_hdr_pcf_attr.attr,
-	&uv_query_dump_storage_state_len_attr.attr,
-	&uv_query_dump_finalize_len_attr.attr,
-	&uv_query_dump_cpu_len_attr.attr,
-	&uv_query_supp_att_req_hdr_ver_attr.attr,
-	&uv_query_supp_att_pflags_attr.attr,
-	&uv_query_supp_add_secret_req_ver_attr.attr,
-	&uv_query_supp_add_secret_pcf_attr.attr,
-	&uv_query_supp_secret_types_attr.attr,
-	&uv_query_max_secrets_attr.attr,
 	NULL,
 };
 
 static struct attribute_group uv_query_attr_group = {
 	.attrs = uv_query_attrs,
-};
-
-static ssize_t uv_is_prot_virt_guest(struct kobject *kobj,
-				     struct kobj_attribute *attr, char *buf)
-{
-	int val = 0;
-
-#ifdef CONFIG_PROTECTED_VIRTUALIZATION_GUEST
-	val = prot_virt_guest;
-#endif
-	return sysfs_emit(buf, "%d\n", val);
-}
-
-static ssize_t uv_is_prot_virt_host(struct kobject *kobj,
-				    struct kobj_attribute *attr, char *buf)
-{
-	int val = 0;
-
-#if IS_ENABLED(CONFIG_KVM)
-	val = prot_virt_host;
-#endif
-
-	return sysfs_emit(buf, "%d\n", val);
-}
-
-static struct kobj_attribute uv_prot_virt_guest =
-	__ATTR(prot_virt_guest, 0444, uv_is_prot_virt_guest, NULL);
-
-static struct kobj_attribute uv_prot_virt_host =
-	__ATTR(prot_virt_host, 0444, uv_is_prot_virt_host, NULL);
-
-static const struct attribute *uv_prot_virt_attrs[] = {
-	&uv_prot_virt_guest.attr,
-	&uv_prot_virt_host.attr,
-	NULL,
 };
 
 static struct kset *uv_query_kset;
@@ -690,23 +430,15 @@ static int __init uv_info_init(void)
 	if (!uv_kobj)
 		return -ENOMEM;
 
-	rc = sysfs_create_files(uv_kobj, uv_prot_virt_attrs);
-	if (rc)
-		goto out_kobj;
-
 	uv_query_kset = kset_create_and_add("query", NULL, uv_kobj);
-	if (!uv_query_kset) {
-		rc = -ENOMEM;
-		goto out_ind_files;
-	}
+	if (!uv_query_kset)
+		goto out_kobj;
 
 	rc = sysfs_create_group(&uv_query_kset->kobj, &uv_query_attr_group);
 	if (!rc)
 		return 0;
 
 	kset_unregister(uv_query_kset);
-out_ind_files:
-	sysfs_remove_files(uv_kobj, uv_prot_virt_attrs);
 out_kobj:
 	kobject_del(uv_kobj);
 	kobject_put(uv_kobj);

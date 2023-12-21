@@ -8,7 +8,7 @@
  * Support MD5 and SHA1 hash algorithms.
  * Support DES and 3DES
  *
- * You could find the datasheet in Documentation/arch/arm/sunxi.rst
+ * You could find the datasheet in Documentation/arm/sunxi.rst
  */
 
 #include <linux/clk.h>
@@ -25,7 +25,7 @@
 #include <linux/pm_runtime.h>
 #include <crypto/md5.h>
 #include <crypto/skcipher.h>
-#include <crypto/sha1.h>
+#include <crypto/sha.h>
 #include <crypto/hash.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/skcipher.h>
@@ -154,8 +154,6 @@ struct sun4i_ss_ctx {
 #ifdef CONFIG_CRYPTO_DEV_SUN4I_SS_PRNG
 	u32 seed[SS_SEED_LEN / BITS_PER_LONG];
 #endif
-	struct dentry *dbgfs_dir;
-	struct dentry *dbgfs_stats;
 };
 
 struct sun4i_ss_alg_template {
@@ -167,10 +165,6 @@ struct sun4i_ss_alg_template {
 		struct rng_alg rng;
 	} alg;
 	struct sun4i_ss_ctx *ss;
-	unsigned long stat_req;
-	unsigned long stat_fb;
-	unsigned long stat_bytes;
-	unsigned long stat_opti;
 };
 
 struct sun4i_tfm_ctx {
@@ -183,7 +177,6 @@ struct sun4i_tfm_ctx {
 
 struct sun4i_cipher_req_ctx {
 	u32 mode;
-	u8 backup_iv[AES_BLOCK_SIZE];
 	struct skcipher_request fallback_req;   // keep at the end
 };
 

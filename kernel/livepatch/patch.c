@@ -40,24 +40,19 @@ struct klp_ops *klp_find_ops(void *old_func)
 static void notrace klp_ftrace_handler(unsigned long ip,
 				       unsigned long parent_ip,
 				       struct ftrace_ops *fops,
-				       struct ftrace_regs *fregs)
+				       struct pt_regs *regs)
 {
 	struct klp_ops *ops;
 	struct klp_func *func;
 	int patch_state;
-	int bit;
 
 	ops = container_of(fops, struct klp_ops, fops);
 
 	/*
-	 * The ftrace_test_recursion_trylock() will disable preemption,
-	 * which is required for the variant of synchronize_rcu() that is
-	 * used to allow patching functions where RCU is not watching.
-	 * See klp_synchronize_transition() for more details.
+	 * A variant of synchronize_rcu() is used to allow patching functions
+	 * where RCU is not watching, see klp_synchronize_transition().
 	 */
-	bit = ftrace_test_recursion_trylock(ip, parent_ip);
-	if (WARN_ON_ONCE(bit < 0))
-		return;
+	preempt_disable_notrace();
 
 	func = list_first_or_null_rcu(&ops->func_stack, struct klp_func,
 				      stack_node);
@@ -118,11 +113,24 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (func->nop)
 		goto unlock;
 
-	ftrace_regs_set_instruction_pointer(fregs, (unsigned long)func->new_func);
+	klp_arch_set_pc(regs, (unsigned long)func->new_func);
 
 unlock:
-	ftrace_test_recursion_unlock(bit);
+	preempt_enable_notrace();
 }
+
+/*
+ * Convert a function address into the appropriate ftrace location.
+ *
+ * Usually this is just the address of the function, but on some architectures
+ * it's more complicated so allow them to provide a custom behaviour.
+ */
+#ifndef klp_get_ftrace_location
+static unsigned long klp_get_ftrace_location(unsigned long faddr)
+{
+	return faddr;
+}
+#endif
 
 static void klp_unpatch_func(struct klp_func *func)
 {
@@ -140,7 +148,8 @@ static void klp_unpatch_func(struct klp_func *func)
 	if (list_is_singular(&ops->func_stack)) {
 		unsigned long ftrace_loc;
 
-		ftrace_loc = ftrace_location((unsigned long)func->old_func);
+		ftrace_loc =
+			klp_get_ftrace_location((unsigned long)func->old_func);
 		if (WARN_ON(!ftrace_loc))
 			return;
 
@@ -172,7 +181,8 @@ static int klp_patch_func(struct klp_func *func)
 	if (!ops) {
 		unsigned long ftrace_loc;
 
-		ftrace_loc = ftrace_location((unsigned long)func->old_func);
+		ftrace_loc =
+			klp_get_ftrace_location((unsigned long)func->old_func);
 		if (!ftrace_loc) {
 			pr_err("failed to find location for function '%s'\n",
 				func->old_name);
@@ -184,10 +194,8 @@ static int klp_patch_func(struct klp_func *func)
 			return -ENOMEM;
 
 		ops->fops.func = klp_ftrace_handler;
-		ops->fops.flags = FTRACE_OPS_FL_DYNAMIC |
-#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
-				  FTRACE_OPS_FL_SAVE_REGS |
-#endif
+		ops->fops.flags = FTRACE_OPS_FL_SAVE_REGS |
+				  FTRACE_OPS_FL_DYNAMIC |
 				  FTRACE_OPS_FL_IPMODIFY |
 				  FTRACE_OPS_FL_PERMANENT;
 

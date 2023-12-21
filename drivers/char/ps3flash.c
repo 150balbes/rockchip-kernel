@@ -403,7 +403,7 @@ fail:
 	return error;
 }
 
-static void ps3flash_remove(struct ps3_system_bus_device *_dev)
+static int ps3flash_remove(struct ps3_system_bus_device *_dev)
 {
 	struct ps3_storage_device *dev = to_ps3_storage_device(&_dev->core);
 
@@ -413,6 +413,7 @@ static void ps3flash_remove(struct ps3_system_bus_device *_dev)
 	kfree(ps3_system_bus_get_drvdata(&dev->sbd));
 	ps3_system_bus_set_drvdata(&dev->sbd, NULL);
 	ps3flash_dev = NULL;
+	return 0;
 }
 
 

@@ -4,9 +4,6 @@
 #ifndef _DRM_AUDIO_COMPONENT_H_
 #define _DRM_AUDIO_COMPONENT_H_
 
-#include <linux/completion.h>
-#include <linux/types.h>
-
 struct drm_audio_component;
 struct device;
 

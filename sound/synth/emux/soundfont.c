@@ -108,7 +108,7 @@ snd_soundfont_close_check(struct snd_sf_list *sflist, int client)
  * Deal with a soundfont patch.  Any driver could use these routines
  * although it was designed for the AWE64.
  *
- * The sample_write and callargs parameters allow a callback into
+ * The sample_write and callargs pararameters allow a callback into
  * the actual driver to write sample data to the board or whatever
  * it wants to do with it.
  */
@@ -349,8 +349,7 @@ sf_zone_new(struct snd_sf_list *sflist, struct snd_soundfont *sf)
 {
 	struct snd_sf_zone *zp;
 
-	zp = kzalloc(sizeof(*zp), GFP_KERNEL);
-	if (!zp)
+	if ((zp = kzalloc(sizeof(*zp), GFP_KERNEL)) == NULL)
 		return NULL;
 	zp->next = sf->zones;
 	sf->zones = zp;
@@ -382,8 +381,7 @@ sf_sample_new(struct snd_sf_list *sflist, struct snd_soundfont *sf)
 {
 	struct snd_sf_sample *sp;
 
-	sp = kzalloc(sizeof(*sp), GFP_KERNEL);
-	if (!sp)
+	if ((sp = kzalloc(sizeof(*sp), GFP_KERNEL)) == NULL)
 		return NULL;
 
 	sp->next = sf->samples;
@@ -453,8 +451,7 @@ load_map(struct snd_sf_list *sflist, const void __user *data, int count)
 	}
 
 	/* create a new zone */
-	zp = sf_zone_new(sflist, sf);
-	if (!zp)
+	if ((zp = sf_zone_new(sflist, sf)) == NULL)
 		return -ENOMEM;
 
 	zp->bank = map.map_bank;
@@ -517,8 +514,7 @@ load_info(struct snd_sf_list *sflist, const void __user *data, long count)
 	int i;
 
 	/* patch must be opened */
-	sf = sflist->currsf;
-	if (!sf)
+	if ((sf = sflist->currsf) == NULL)
 		return -EINVAL;
 
 	if (is_special_type(sf->type))
@@ -583,9 +579,9 @@ load_info(struct snd_sf_list *sflist, const void __user *data, long count)
 			init_voice_parm(&tmpzone.v.parm);
 
 		/* create a new zone */
-		zone = sf_zone_new(sflist, sf);
-		if (!zone)
+		if ((zone = sf_zone_new(sflist, sf)) == NULL) {
 			return -ENOMEM;
+		}
 
 		/* copy the temporary data */
 		zone->bank = tmpzone.bank;
@@ -704,8 +700,7 @@ load_data(struct snd_sf_list *sflist, const void __user *data, long count)
 	long off;
 
 	/* patch must be opened */
-	sf = sflist->currsf;
-	if (!sf)
+	if ((sf = sflist->currsf) == NULL)
 		return -EINVAL;
 
 	if (is_special_type(sf->type))
@@ -728,8 +723,7 @@ load_data(struct snd_sf_list *sflist, const void __user *data, long count)
 	}
 
 	/* Allocate a new sample structure */
-	sp = sf_sample_new(sflist, sf);
-	if (!sp)
+	if ((sp = sf_sample_new(sflist, sf)) == NULL)
 		return -ENOMEM;
 
 	sp->v = sample_info;
@@ -799,7 +793,7 @@ snd_sf_linear_to_log(unsigned int amount, int offset, int ratio)
 		amount <<= 1;
 	s = (amount >> 24) & 0x7f;
 	low = (amount >> 16) & 0xff;
-	/* linear approximation by lower 8 bit */
+	/* linear approxmimation by lower 8 bit */
 	v = (log_tbl[s + 1] * low + log_tbl[s] * (0x100 - low)) >> 8;
 	v -= offset;
 	v = (v * ratio) >> 16;
@@ -964,8 +958,7 @@ load_guspatch(struct snd_sf_list *sflist, const char __user *data,
 	sf = newsf(sflist, SNDRV_SFNT_PAT_TYPE_GUS|SNDRV_SFNT_PAT_SHARED, NULL);
 	if (sf == NULL)
 		return -ENOMEM;
-	smp = sf_sample_new(sflist, sf);
-	if (!smp)
+	if ((smp = sf_sample_new(sflist, sf)) == NULL)
 		return -ENOMEM;
 	sample_id = sflist->sample_counter;
 	smp->v.sample = sample_id;
@@ -1003,8 +996,7 @@ load_guspatch(struct snd_sf_list *sflist, const char __user *data,
 	smp->v.sf_id = sf->id;
 
 	/* set up voice info */
-	zone = sf_zone_new(sflist, sf);
-	if (!zone) {
+	if ((zone = sf_zone_new(sflist, sf)) == NULL) {
 		sf_sample_delete(sflist, sf, smp);
 		return -ENOMEM;
 	}
@@ -1189,8 +1181,7 @@ add_preset(struct snd_sf_list *sflist, struct snd_sf_zone *cur)
 	}
 
 	/* prepend this zone */
-	index = get_index(cur->bank, cur->instr, cur->v.low);
-	if (index < 0)
+	if ((index = get_index(cur->bank, cur->instr, cur->v.low)) < 0)
 		return;
 	cur->next_zone = zone; /* zone link */
 	cur->next_instr = sflist->presets[index]; /* preset table link */
@@ -1206,8 +1197,7 @@ delete_preset(struct snd_sf_list *sflist, struct snd_sf_zone *zp)
 	int index;
 	struct snd_sf_zone *p;
 
-	index = get_index(zp->bank, zp->instr, zp->v.low);
-	if (index < 0)
+	if ((index = get_index(zp->bank, zp->instr, zp->v.low)) < 0)
 		return;
 	for (p = sflist->presets[index]; p; p = p->next_instr) {
 		while (p->next_instr == zp) {
@@ -1267,8 +1257,7 @@ search_first_zone(struct snd_sf_list *sflist, int bank, int preset, int key)
 	int index;
 	struct snd_sf_zone *zp;
 
-	index = get_index(bank, preset, key);
-	if (index < 0)
+	if ((index = get_index(bank, preset, key)) < 0)
 		return NULL;
 	for (zp = sflist->presets[index]; zp; zp = zp->next_instr) {
 		if (zp->instr == preset && zp->bank == bank)
@@ -1397,8 +1386,7 @@ snd_sf_new(struct snd_sf_callback *callback, struct snd_util_memhdr *hdr)
 {
 	struct snd_sf_list *sflist;
 
-	sflist = kzalloc(sizeof(*sflist), GFP_KERNEL);
-	if (!sflist)
+	if ((sflist = kzalloc(sizeof(*sflist), GFP_KERNEL)) == NULL)
 		return NULL;
 
 	mutex_init(&sflist->presets_mutex);
@@ -1433,7 +1421,7 @@ snd_sf_free(struct snd_sf_list *sflist)
 
 /*
  * Remove all samples
- * The soundcard should be silent before calling this function.
+ * The soundcard should be silet before calling this function.
  */
 int
 snd_soundfont_remove_samples(struct snd_sf_list *sflist)

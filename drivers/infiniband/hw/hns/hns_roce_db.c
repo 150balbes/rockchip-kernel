@@ -4,10 +4,12 @@
  * Copyright (c) 2007, 2008 Mellanox Technologies. All rights reserved.
  */
 
+#include <linux/platform_device.h>
 #include <rdma/ib_umem.h>
 #include "hns_roce_device.h"
 
-int hns_roce_db_map_user(struct hns_roce_ucontext *context, unsigned long virt,
+int hns_roce_db_map_user(struct hns_roce_ucontext *context,
+			 struct ib_udata *udata, unsigned long virt,
 			 struct hns_roce_db *db)
 {
 	unsigned long page_addr = virt & PAGE_MASK;
@@ -41,8 +43,8 @@ int hns_roce_db_map_user(struct hns_roce_ucontext *context, unsigned long virt,
 
 found:
 	offset = virt - page_addr;
-	db->dma = sg_dma_address(page->umem->sgt_append.sgt.sgl) + offset;
-	db->virt_addr = sg_virt(page->umem->sgt_append.sgt.sgl) + offset;
+	db->dma = sg_dma_address(page->umem->sg_head.sgl) + offset;
+	db->virt_addr = sg_virt(page->umem->sg_head.sgl) + offset;
 	db->u.user_page = page;
 	refcount_inc(&page->refcount);
 
@@ -93,8 +95,8 @@ static struct hns_roce_db_pgdir *hns_roce_alloc_db_pgdir(
 static int hns_roce_alloc_db_from_pgdir(struct hns_roce_db_pgdir *pgdir,
 					struct hns_roce_db *db, int order)
 {
-	unsigned long o;
-	unsigned long i;
+	int o;
+	int i;
 
 	for (o = order; o <= 1; ++o) {
 		i = find_first_bit(pgdir->bits[o], HNS_ROCE_DB_PER_PAGE >> o);
@@ -152,8 +154,8 @@ out:
 
 void hns_roce_free_db(struct hns_roce_dev *hr_dev, struct hns_roce_db *db)
 {
-	unsigned long o;
-	unsigned long i;
+	int o;
+	int i;
 
 	mutex_lock(&hr_dev->pgdir_mutex);
 

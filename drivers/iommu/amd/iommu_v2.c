@@ -6,7 +6,6 @@
 
 #define pr_fmt(fmt)     "AMD-Vi: " fmt
 
-#include <linux/refcount.h>
 #include <linux/mmu_notifier.h>
 #include <linux/amd-iommu.h>
 #include <linux/mm_types.h>
@@ -17,13 +16,13 @@
 #include <linux/wait.h>
 #include <linux/pci.h>
 #include <linux/gfp.h>
-#include <linux/cc_platform.h>
 
 #include "amd_iommu.h"
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Joerg Roedel <jroedel@suse.de>");
 
+#define MAX_DEVICES		0x10000
 #define PRI_QUEUE_SIZE		512
 
 struct pri_queue {
@@ -34,7 +33,7 @@ struct pri_queue {
 
 struct pasid_state {
 	struct list_head list;			/* For global state-list */
-	refcount_t count;				/* Reference count */
+	atomic_t count;				/* Reference count */
 	unsigned mmu_notifier_count;		/* Counting nested mmu_notifier
 						   calls */
 	struct mm_struct *mm;			/* mm_struct for the faults */
@@ -51,7 +50,7 @@ struct pasid_state {
 
 struct device_state {
 	struct list_head list;
-	u32 sbdf;
+	u16 devid;
 	atomic_t count;
 	struct pci_dev *pdev;
 	struct pasid_state **states;
@@ -70,6 +69,7 @@ struct fault {
 	struct pasid_state *state;
 	struct mm_struct *mm;
 	u64 address;
+	u16 devid;
 	u32 pasid;
 	u16 tag;
 	u16 finish;
@@ -77,31 +77,41 @@ struct fault {
 };
 
 static LIST_HEAD(state_list);
-static DEFINE_SPINLOCK(state_lock);
+static spinlock_t state_lock;
 
 static struct workqueue_struct *iommu_wq;
 
 static void free_pasid_states(struct device_state *dev_state);
 
-static struct device_state *__get_device_state(u32 sbdf)
+static u16 device_id(struct pci_dev *pdev)
+{
+	u16 devid;
+
+	devid = pdev->bus->number;
+	devid = (devid << 8) | pdev->devfn;
+
+	return devid;
+}
+
+static struct device_state *__get_device_state(u16 devid)
 {
 	struct device_state *dev_state;
 
 	list_for_each_entry(dev_state, &state_list, list) {
-		if (dev_state->sbdf == sbdf)
+		if (dev_state->devid == devid)
 			return dev_state;
 	}
 
 	return NULL;
 }
 
-static struct device_state *get_device_state(u32 sbdf)
+static struct device_state *get_device_state(u16 devid)
 {
 	struct device_state *dev_state;
 	unsigned long flags;
 
 	spin_lock_irqsave(&state_lock, flags);
-	dev_state = __get_device_state(sbdf);
+	dev_state = __get_device_state(devid);
 	if (dev_state != NULL)
 		atomic_inc(&dev_state->count);
 	spin_unlock_irqrestore(&state_lock, flags);
@@ -112,15 +122,6 @@ static struct device_state *get_device_state(u32 sbdf)
 static void free_device_state(struct device_state *dev_state)
 {
 	struct iommu_group *group;
-
-	/* Get rid of any remaining pasid states */
-	free_pasid_states(dev_state);
-
-	/*
-	 * Wait until the last reference is dropped before freeing
-	 * the device state.
-	 */
-	wait_event(dev_state->wq, !atomic_read(&dev_state->count));
 
 	/*
 	 * First detach device from domain - No more PRI requests will arrive
@@ -241,7 +242,7 @@ static struct pasid_state *get_pasid_state(struct device_state *dev_state,
 
 	ret = *ptr;
 	if (ret)
-		refcount_inc(&ret->count);
+		atomic_inc(&ret->count);
 
 out_unlock:
 	spin_unlock_irqrestore(&dev_state->lock, flags);
@@ -256,14 +257,14 @@ static void free_pasid_state(struct pasid_state *pasid_state)
 
 static void put_pasid_state(struct pasid_state *pasid_state)
 {
-	if (refcount_dec_and_test(&pasid_state->count))
+	if (atomic_dec_and_test(&pasid_state->count))
 		wake_up(&pasid_state->wq);
 }
 
 static void put_pasid_state_wait(struct pasid_state *pasid_state)
 {
-	refcount_dec(&pasid_state->count);
-	wait_event(pasid_state->wq, !refcount_read(&pasid_state->count));
+	atomic_dec(&pasid_state->count);
+	wait_event(pasid_state->wq, !atomic_read(&pasid_state->count));
 	free_pasid_state(pasid_state);
 }
 
@@ -485,8 +486,8 @@ static void do_fault(struct work_struct *work)
 	flags |= FAULT_FLAG_REMOTE;
 
 	mmap_read_lock(mm);
-	vma = vma_lookup(mm, address);
-	if (!vma)
+	vma = find_extend_vma(mm, address);
+	if (!vma || address < vma->vm_start)
 		/* failed to get a vma in the right range */
 		goto out;
 
@@ -518,16 +519,15 @@ static int ppr_notifier(struct notifier_block *nb, unsigned long e, void *data)
 	unsigned long flags;
 	struct fault *fault;
 	bool finish;
-	u16 tag, devid, seg_id;
+	u16 tag, devid;
 	int ret;
 
 	iommu_fault = data;
 	tag         = iommu_fault->tag & 0x1ff;
 	finish      = (iommu_fault->tag >> 9) & 1;
 
-	seg_id = PCI_SBDF_TO_SEGID(iommu_fault->sbdf);
-	devid = PCI_SBDF_TO_DEVID(iommu_fault->sbdf);
-	pdev = pci_get_domain_bus_and_slot(seg_id, PCI_BUS_NUM(devid),
+	devid = iommu_fault->device_id;
+	pdev = pci_get_domain_bus_and_slot(0, PCI_BUS_NUM(devid),
 					   devid & 0xff);
 	if (!pdev)
 		return -ENODEV;
@@ -535,13 +535,13 @@ static int ppr_notifier(struct notifier_block *nb, unsigned long e, void *data)
 	ret = NOTIFY_DONE;
 
 	/* In kdump kernel pci dev is not initialized yet -> send INVALID */
-	if (amd_iommu_is_attach_deferred(&pdev->dev)) {
+	if (amd_iommu_is_attach_deferred(NULL, &pdev->dev)) {
 		amd_iommu_complete_ppr(pdev, iommu_fault->pasid,
 				       PPR_INVALID, tag);
 		goto out;
 	}
 
-	dev_state = get_device_state(iommu_fault->sbdf);
+	dev_state = get_device_state(iommu_fault->device_id);
 	if (dev_state == NULL)
 		goto out;
 
@@ -587,7 +587,6 @@ out_drop_state:
 	put_device_state(dev_state);
 
 out:
-	pci_dev_put(pdev);
 	return ret;
 }
 
@@ -601,7 +600,7 @@ int amd_iommu_bind_pasid(struct pci_dev *pdev, u32 pasid,
 	struct pasid_state *pasid_state;
 	struct device_state *dev_state;
 	struct mm_struct *mm;
-	u32 sbdf;
+	u16 devid;
 	int ret;
 
 	might_sleep();
@@ -609,8 +608,8 @@ int amd_iommu_bind_pasid(struct pci_dev *pdev, u32 pasid,
 	if (!amd_iommu_v2_supported())
 		return -ENODEV;
 
-	sbdf      = get_pci_sbdf_id(pdev);
-	dev_state = get_device_state(sbdf);
+	devid     = device_id(pdev);
+	dev_state = get_device_state(devid);
 
 	if (dev_state == NULL)
 		return -EINVAL;
@@ -625,7 +624,7 @@ int amd_iommu_bind_pasid(struct pci_dev *pdev, u32 pasid,
 		goto out;
 
 
-	refcount_set(&pasid_state->count, 1);
+	atomic_set(&pasid_state->count, 1);
 	init_waitqueue_head(&pasid_state->wq);
 	spin_lock_init(&pasid_state->lock);
 
@@ -640,9 +639,7 @@ int amd_iommu_bind_pasid(struct pci_dev *pdev, u32 pasid,
 	if (pasid_state->mm == NULL)
 		goto out_free;
 
-	ret = mmu_notifier_register(&pasid_state->mn, mm);
-	if (ret)
-		goto out_free;
+	mmu_notifier_register(&pasid_state->mn, mm);
 
 	ret = set_pasid_state(dev_state, pasid_state, pasid);
 	if (ret)
@@ -686,15 +683,15 @@ void amd_iommu_unbind_pasid(struct pci_dev *pdev, u32 pasid)
 {
 	struct pasid_state *pasid_state;
 	struct device_state *dev_state;
-	u32 sbdf;
+	u16 devid;
 
 	might_sleep();
 
 	if (!amd_iommu_v2_supported())
 		return;
 
-	sbdf = get_pci_sbdf_id(pdev);
-	dev_state = get_device_state(sbdf);
+	devid = device_id(pdev);
+	dev_state = get_device_state(devid);
 	if (dev_state == NULL)
 		return;
 
@@ -736,7 +733,7 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	struct iommu_group *group;
 	unsigned long flags;
 	int ret, tmp;
-	u32 sbdf;
+	u16 devid;
 
 	might_sleep();
 
@@ -744,7 +741,7 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	 * When memory encryption is active the device is likely not in a
 	 * direct-mapped domain. Forbid using IOMMUv2 functionality for now.
 	 */
-	if (cc_platform_has(CC_ATTR_MEM_ENCRYPT))
+	if (mem_encrypt_active())
 		return -ENODEV;
 
 	if (!amd_iommu_v2_supported())
@@ -753,7 +750,7 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	if (pasids <= 0 || pasids > (PASID_MASK + 1))
 		return -EINVAL;
 
-	sbdf = get_pci_sbdf_id(pdev);
+	devid = device_id(pdev);
 
 	dev_state = kzalloc(sizeof(*dev_state), GFP_KERNEL);
 	if (dev_state == NULL)
@@ -762,7 +759,7 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	spin_lock_init(&dev_state->lock);
 	init_waitqueue_head(&dev_state->wq);
 	dev_state->pdev  = pdev;
-	dev_state->sbdf = sbdf;
+	dev_state->devid = devid;
 
 	tmp = pasids;
 	for (dev_state->pasid_levels = 0; (tmp - 1) & ~0x1ff; tmp >>= 9)
@@ -780,8 +777,6 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 	if (dev_state->domain == NULL)
 		goto out_free_states;
 
-	/* See iommu_is_default_domain() */
-	dev_state->domain->type = IOMMU_DOMAIN_IDENTITY;
 	amd_iommu_domain_direct_map(dev_state->domain);
 
 	ret = amd_iommu_domain_enable_v2(dev_state->domain, pasids);
@@ -802,7 +797,7 @@ int amd_iommu_init_device(struct pci_dev *pdev, int pasids)
 
 	spin_lock_irqsave(&state_lock, flags);
 
-	if (__get_device_state(sbdf) != NULL) {
+	if (__get_device_state(devid) != NULL) {
 		spin_unlock_irqrestore(&state_lock, flags);
 		ret = -EBUSY;
 		goto out_free_domain;
@@ -834,16 +829,16 @@ void amd_iommu_free_device(struct pci_dev *pdev)
 {
 	struct device_state *dev_state;
 	unsigned long flags;
-	u32 sbdf;
+	u16 devid;
 
 	if (!amd_iommu_v2_supported())
 		return;
 
-	sbdf = get_pci_sbdf_id(pdev);
+	devid = device_id(pdev);
 
 	spin_lock_irqsave(&state_lock, flags);
 
-	dev_state = __get_device_state(sbdf);
+	dev_state = __get_device_state(devid);
 	if (dev_state == NULL) {
 		spin_unlock_irqrestore(&state_lock, flags);
 		return;
@@ -853,7 +848,15 @@ void amd_iommu_free_device(struct pci_dev *pdev)
 
 	spin_unlock_irqrestore(&state_lock, flags);
 
+	/* Get rid of any remaining pasid states */
+	free_pasid_states(dev_state);
+
 	put_device_state(dev_state);
+	/*
+	 * Wait until the last reference is dropped before freeing
+	 * the device state.
+	 */
+	wait_event(dev_state->wq, !atomic_read(&dev_state->count));
 	free_device_state(dev_state);
 }
 EXPORT_SYMBOL(amd_iommu_free_device);
@@ -863,18 +866,18 @@ int amd_iommu_set_invalid_ppr_cb(struct pci_dev *pdev,
 {
 	struct device_state *dev_state;
 	unsigned long flags;
-	u32 sbdf;
+	u16 devid;
 	int ret;
 
 	if (!amd_iommu_v2_supported())
 		return -ENODEV;
 
-	sbdf = get_pci_sbdf_id(pdev);
+	devid = device_id(pdev);
 
 	spin_lock_irqsave(&state_lock, flags);
 
 	ret = -EINVAL;
-	dev_state = __get_device_state(sbdf);
+	dev_state = __get_device_state(devid);
 	if (dev_state == NULL)
 		goto out_unlock;
 
@@ -894,18 +897,18 @@ int amd_iommu_set_invalidate_ctx_cb(struct pci_dev *pdev,
 {
 	struct device_state *dev_state;
 	unsigned long flags;
-	u32 sbdf;
+	u16 devid;
 	int ret;
 
 	if (!amd_iommu_v2_supported())
 		return -ENODEV;
 
-	sbdf = get_pci_sbdf_id(pdev);
+	devid = device_id(pdev);
 
 	spin_lock_irqsave(&state_lock, flags);
 
 	ret = -EINVAL;
-	dev_state = __get_device_state(sbdf);
+	dev_state = __get_device_state(devid);
 	if (dev_state == NULL)
 		goto out_unlock;
 
@@ -933,6 +936,8 @@ static int __init amd_iommu_v2_init(void)
 		return 0;
 	}
 
+	spin_lock_init(&state_lock);
+
 	ret = -ENOMEM;
 	iommu_wq = alloc_workqueue("amd_iommu_v2", WQ_MEM_RECLAIM, 0);
 	if (iommu_wq == NULL)
@@ -950,9 +955,8 @@ out:
 
 static void __exit amd_iommu_v2_exit(void)
 {
-	struct device_state *dev_state, *next;
-	unsigned long flags;
-	LIST_HEAD(freelist);
+	struct device_state *dev_state;
+	int i;
 
 	if (!amd_iommu_v2_supported())
 		return;
@@ -965,25 +969,16 @@ static void __exit amd_iommu_v2_exit(void)
 	 * The loop below might call flush_workqueue(), so call
 	 * destroy_workqueue() after it
 	 */
-	spin_lock_irqsave(&state_lock, flags);
+	for (i = 0; i < MAX_DEVICES; ++i) {
+		dev_state = get_device_state(i);
 
-	list_for_each_entry_safe(dev_state, next, &state_list, list) {
+		if (dev_state == NULL)
+			continue;
+
 		WARN_ON_ONCE(1);
 
 		put_device_state(dev_state);
-		list_del(&dev_state->list);
-		list_add_tail(&dev_state->list, &freelist);
-	}
-
-	spin_unlock_irqrestore(&state_lock, flags);
-
-	/*
-	 * Since free_device_state waits on the count to be zero,
-	 * we need to free dev_state outside the spinlock.
-	 */
-	list_for_each_entry_safe(dev_state, next, &freelist, list) {
-		list_del(&dev_state->list);
-		free_device_state(dev_state);
+		amd_iommu_free_device(dev_state->pdev);
 	}
 
 	destroy_workqueue(iommu_wq);

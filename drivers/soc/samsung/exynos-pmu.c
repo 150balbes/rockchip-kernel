@@ -8,7 +8,6 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
-#include <linux/mfd/core.h>
 #include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
@@ -57,12 +56,6 @@ void exynos_sys_powerdown_conf(enum sys_powerdown mode)
 
 	if (pmu_data->powerdown_conf_extra)
 		pmu_data->powerdown_conf_extra(mode);
-
-	if (pmu_data->pmu_config_extra) {
-		for (i = 0; pmu_data->pmu_config_extra[i].offset != PMU_TABLE_END; i++)
-			pmu_raw_writel(pmu_data->pmu_config_extra[i].val[mode],
-				       pmu_data->pmu_config_extra[i].offset);
-	}
 }
 
 /*
@@ -86,9 +79,6 @@ static const struct of_device_id exynos_pmu_of_device_ids[] = {
 		.compatible = "samsung,exynos4210-pmu",
 		.data = exynos_pmu_data_arm_ptr(exynos4210_pmu_data),
 	}, {
-		.compatible = "samsung,exynos4212-pmu",
-		.data = exynos_pmu_data_arm_ptr(exynos4212_pmu_data),
-	}, {
 		.compatible = "samsung,exynos4412-pmu",
 		.data = exynos_pmu_data_arm_ptr(exynos4412_pmu_data),
 	}, {
@@ -103,14 +93,8 @@ static const struct of_device_id exynos_pmu_of_device_ids[] = {
 		.compatible = "samsung,exynos5433-pmu",
 	}, {
 		.compatible = "samsung,exynos7-pmu",
-	}, {
-		.compatible = "samsung,exynos850-pmu",
 	},
 	{ /*sentinel*/ },
-};
-
-static const struct mfd_cell exynos_pmu_devs[] = {
-	{ .name = "exynos-clkout", },
 };
 
 struct regmap *exynos_get_pmu_regmap(void)
@@ -126,7 +110,6 @@ EXPORT_SYMBOL_GPL(exynos_get_pmu_regmap);
 static int exynos_pmu_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	int ret;
 
 	pmu_base_addr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(pmu_base_addr))
@@ -144,11 +127,6 @@ static int exynos_pmu_probe(struct platform_device *pdev)
 		pmu_context->pmu_data->pmu_init();
 
 	platform_set_drvdata(pdev, pmu_context);
-
-	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE, exynos_pmu_devs,
-				   ARRAY_SIZE(exynos_pmu_devs), NULL, 0, NULL);
-	if (ret)
-		return ret;
 
 	if (devm_of_platform_populate(dev))
 		dev_err(dev, "Error populating children, reboot and poweroff might not work properly\n");

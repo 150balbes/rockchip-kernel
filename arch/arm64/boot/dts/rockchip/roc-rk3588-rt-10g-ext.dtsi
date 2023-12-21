@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+#include "roc-rk3588-rt.dtsi"
+
+
+ / {
+
+	pcie_oe: pcie-oe {
+                compatible = "regulator-fixed";
+                regulator-name = "pcie_oe";
+                enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+                gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
+                vin-supply = <&vcc12v_dcin>;
+        };
+
+	pcie10g_rst: pcie10g-rst {
+                compatible = "regulator-fixed";
+                regulator-name = "pcie10g_rst";
+                enable-active-high;
+		regulator-always-on;
+                gpios = <&gpio1 RK_PA7 GPIO_ACTIVE_HIGH>;
+                vin-supply = <&vcc12v_dcin>;
+        };
+
+
+};
+
+
+/* pcie3.0 x 4 slot */
+&pcie30phy {
+	status = "okay";
+};
+
+&pcie3x4 {
+	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+	status = "okay";
+};
+
+&vcc3v3_pcie30{
+	gpios = <&gpio1 RK_PB2 GPIO_ACTIVE_HIGH>;
+	startup-delay-us = <5000>;
+	status = "okay";
+};

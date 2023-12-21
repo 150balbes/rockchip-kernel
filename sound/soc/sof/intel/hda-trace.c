@@ -19,31 +19,31 @@
 #include "../ops.h"
 #include "hda.h"
 
-static int hda_dsp_trace_prepare(struct snd_sof_dev *sdev, struct snd_dma_buffer *dmab)
+static int hda_dsp_trace_prepare(struct snd_sof_dev *sdev)
 {
 	struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
-	struct hdac_ext_stream *hext_stream = hda->dtrace_stream;
-	struct hdac_stream *hstream = &hext_stream->hstream;
+	struct hdac_ext_stream *stream = hda->dtrace_stream;
+	struct hdac_stream *hstream = &stream->hstream;
+	struct snd_dma_buffer *dmab = &sdev->dmatb;
 	int ret;
 
 	hstream->period_bytes = 0;/* initialize period_bytes */
-	hstream->bufsize = dmab->bytes;
+	hstream->bufsize = sdev->dmatb.bytes;
 
-	ret = hda_dsp_stream_hw_params(sdev, hext_stream, dmab, NULL);
+	ret = hda_dsp_stream_hw_params(sdev, stream, dmab, NULL);
 	if (ret < 0)
-		dev_err(sdev->dev, "error: hdac prepare failed: %d\n", ret);
+		dev_err(sdev->dev, "error: hdac prepare failed: %x\n", ret);
 
 	return ret;
 }
 
-int hda_dsp_trace_init(struct snd_sof_dev *sdev, struct snd_dma_buffer *dmab,
-		       struct sof_ipc_dma_trace_params_ext *dtrace_params)
+int hda_dsp_trace_init(struct snd_sof_dev *sdev, u32 *stream_tag)
 {
 	struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
 	int ret;
 
-	hda->dtrace_stream = hda_dsp_stream_get(sdev, SNDRV_PCM_STREAM_CAPTURE,
-						SOF_HDA_STREAM_DMI_L1_COMPATIBLE);
+	hda->dtrace_stream = hda_dsp_stream_get(sdev,
+						SNDRV_PCM_STREAM_CAPTURE);
 
 	if (!hda->dtrace_stream) {
 		dev_err(sdev->dev,
@@ -51,19 +51,18 @@ int hda_dsp_trace_init(struct snd_sof_dev *sdev, struct snd_dma_buffer *dmab,
 		return -ENODEV;
 	}
 
-	dtrace_params->stream_tag = hda->dtrace_stream->hstream.stream_tag;
+	*stream_tag = hda->dtrace_stream->hstream.stream_tag;
 
 	/*
 	 * initialize capture stream, set BDL address and return corresponding
 	 * stream tag which will be sent to the firmware by IPC message.
 	 */
-	ret = hda_dsp_trace_prepare(sdev, dmab);
+	ret = hda_dsp_trace_prepare(sdev);
 	if (ret < 0) {
-		dev_err(sdev->dev, "error: hdac trace init failed: %d\n", ret);
-		hda_dsp_stream_put(sdev, SNDRV_PCM_STREAM_CAPTURE,
-				   dtrace_params->stream_tag);
+		dev_err(sdev->dev, "error: hdac trace init failed: %x\n", ret);
+		hda_dsp_stream_put(sdev, SNDRV_PCM_STREAM_CAPTURE, *stream_tag);
 		hda->dtrace_stream = NULL;
-		dtrace_params->stream_tag = 0;
+		*stream_tag = 0;
 	}
 
 	return ret;

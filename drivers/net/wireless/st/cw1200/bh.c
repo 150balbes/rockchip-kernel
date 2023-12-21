@@ -42,6 +42,9 @@ enum cw1200_bh_pm_state {
 	CW1200_BH_RESUME,
 };
 
+typedef int (*cw1200_wsm_handler)(struct cw1200_common *priv,
+	u8 *data, size_t size);
+
 static void cw1200_bh_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
@@ -82,8 +85,10 @@ int cw1200_register_bh(struct cw1200_common *priv)
 
 void cw1200_unregister_bh(struct cw1200_common *priv)
 {
-	atomic_inc(&priv->bh_term);
+	atomic_add(1, &priv->bh_term);
 	wake_up(&priv->bh_wq);
+
+	flush_workqueue(priv->bh_workqueue);
 
 	destroy_workqueue(priv->bh_workqueue);
 	priv->bh_workqueue = NULL;
@@ -102,7 +107,7 @@ void cw1200_irq_handler(struct cw1200_common *priv)
 	if (/* WARN_ON */(priv->bh_error))
 		return;
 
-	if (atomic_inc_return(&priv->bh_rx) == 1)
+	if (atomic_add_return(1, &priv->bh_rx) == 1)
 		wake_up(&priv->bh_wq);
 }
 EXPORT_SYMBOL_GPL(cw1200_irq_handler);
@@ -115,7 +120,7 @@ void cw1200_bh_wakeup(struct cw1200_common *priv)
 		return;
 	}
 
-	if (atomic_inc_return(&priv->bh_tx) == 1)
+	if (atomic_add_return(1, &priv->bh_tx) == 1)
 		wake_up(&priv->bh_wq);
 }
 
@@ -327,12 +332,18 @@ static int cw1200_bh_rx_helper(struct cw1200_common *priv,
 	if (WARN_ON(wsm_handle_rx(priv, wsm_id, wsm, &skb_rx)))
 		goto err;
 
-	dev_kfree_skb(skb_rx);
+	if (skb_rx) {
+		dev_kfree_skb(skb_rx);
+		skb_rx = NULL;
+	}
 
 	return 0;
 
 err:
-	dev_kfree_skb(skb_rx);
+	if (skb_rx) {
+		dev_kfree_skb(skb_rx);
+		skb_rx = NULL;
+	}
 	return -1;
 }
 
@@ -371,7 +382,7 @@ static int cw1200_bh_tx_helper(struct cw1200_common *priv,
 	BUG_ON(tx_len < sizeof(*wsm));
 	BUG_ON(__le16_to_cpu(wsm->len) != tx_len);
 
-	atomic_inc(&priv->bh_tx);
+	atomic_add(1, &priv->bh_tx);
 
 	tx_len = priv->hwbus_ops->align_size(
 		priv->hwbus_priv, tx_len);
@@ -526,7 +537,7 @@ static int cw1200_bh(void *arg)
 			pr_debug("[BH] Device resume.\n");
 			atomic_set(&priv->bh_suspend, CW1200_BH_RESUMED);
 			wake_up(&priv->bh_evt_wq);
-			atomic_inc(&priv->bh_rx);
+			atomic_add(1, &priv->bh_rx);
 			goto done;
 		}
 

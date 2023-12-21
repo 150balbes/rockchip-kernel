@@ -181,6 +181,7 @@ static struct snd_soc_dai_link ehl_rt5660_dailink[] = {
 		.dpcm_playback = 1,
 		.dpcm_capture = 1,
 		.ops = &rt5660_ops,
+		.nonatomic = true,
 		SND_SOC_DAILINK_REG(ssp0_pin, rt5660_codec, platform),
 	},
 	{
@@ -254,6 +255,7 @@ static void hdmi_link_init(struct snd_soc_card *card,
 			   struct sof_card_private *ctx,
 			   struct snd_soc_acpi_mach *mach)
 {
+	struct snd_soc_dai_link *link;
 	int i;
 
 	if (mach->mach_params.common_hdmi_codec_drv &&
@@ -266,8 +268,11 @@ static void hdmi_link_init(struct snd_soc_card *card,
 	 * if HDMI is not enabled in kernel config, or
 	 * hdmi codec is not supported
 	 */
-	for (i = HDMI_LINK_START; i <= HDMI_LINE_END; i++)
-		card->dai_link[i].codecs[0] = asoc_dummy_dlc;
+	for (i = HDMI_LINK_START; i <= HDMI_LINE_END; i++) {
+		link = &card->dai_link[i];
+		link->codecs[0].name = "snd-soc-dummy";
+		link->codecs[0].dai_name = "snd-soc-dummy-dai";
+	}
 }
 
 static int snd_ehl_rt5660_probe(struct platform_device *pdev)
@@ -300,7 +305,6 @@ static const struct platform_device_id ehl_board_ids[] = {
 	{ .name = "ehl_rt5660" },
 	{ }
 };
-MODULE_DEVICE_TABLE(platform, ehl_board_ids);
 
 static struct platform_driver snd_ehl_rt5660_driver = {
 	.driver = {
@@ -316,4 +320,4 @@ module_platform_driver(snd_ehl_rt5660_driver);
 MODULE_DESCRIPTION("ASoC Intel(R) Elkhartlake + rt5660 Machine driver");
 MODULE_AUTHOR("libin.yang@intel.com");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS(SND_SOC_INTEL_HDA_DSP_COMMON);
+MODULE_ALIAS("platform:ehl_rt5660");

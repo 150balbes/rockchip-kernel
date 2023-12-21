@@ -6,7 +6,6 @@
  *
  */
 
-#include <linux/bitops.h>
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
@@ -29,8 +28,15 @@ struct sdw_group {
 	unsigned int *rates;
 };
 
-void sdw_compute_slave_ports(struct sdw_master_runtime *m_rt,
-			     struct sdw_transport_data *t_data)
+struct sdw_transport_data {
+	int hstart;
+	int hstop;
+	int block_offset;
+	int sub_block_offset;
+};
+
+static void sdw_compute_slave_ports(struct sdw_master_runtime *m_rt,
+				    struct sdw_transport_data *t_data)
 {
 	struct sdw_slave_runtime *s_rt = NULL;
 	struct sdw_port_runtime *p_rt;
@@ -48,7 +54,7 @@ void sdw_compute_slave_ports(struct sdw_master_runtime *m_rt,
 		slave_total_ch = 0;
 
 		list_for_each_entry(p_rt, &s_rt->port_list, port_node) {
-			ch = hweight32(p_rt->ch_mask);
+			ch = sdw_ch_mask_to_ch(p_rt->ch_mask);
 
 			sdw_fill_xport_params(&p_rt->transport_params,
 					      p_rt->num, false,
@@ -56,7 +62,7 @@ void sdw_compute_slave_ports(struct sdw_master_runtime *m_rt,
 					      sample_int, port_bo, port_bo >> 8,
 					      t_data->hstart,
 					      t_data->hstop,
-					      SDW_BLK_PKG_PER_PORT, 0x0);
+					      (SDW_BLK_GRP_CNT_1 * ch), 0x0);
 
 			sdw_fill_port_params(&p_rt->port_params,
 					     p_rt->num, bps,
@@ -79,7 +85,6 @@ void sdw_compute_slave_ports(struct sdw_master_runtime *m_rt,
 		}
 	}
 }
-EXPORT_SYMBOL(sdw_compute_slave_ports);
 
 static void sdw_compute_master_ports(struct sdw_master_runtime *m_rt,
 				     struct sdw_group_params *params,
@@ -90,7 +95,7 @@ static void sdw_compute_master_ports(struct sdw_master_runtime *m_rt,
 	struct sdw_bus *bus = m_rt->bus;
 	struct sdw_bus_params *b_params = &bus->params;
 	int sample_int, hstart = 0;
-	unsigned int rate, bps, ch;
+	unsigned int rate, bps, ch, no_ch;
 
 	rate = m_rt->stream->params.rate;
 	bps = m_rt->stream->params.bps;
@@ -105,11 +110,12 @@ static void sdw_compute_master_ports(struct sdw_master_runtime *m_rt,
 	t_data.hstart = hstart;
 
 	list_for_each_entry(p_rt, &m_rt->port_list, port_node) {
+		no_ch = sdw_ch_mask_to_ch(p_rt->ch_mask);
 
 		sdw_fill_xport_params(&p_rt->transport_params, p_rt->num,
 				      false, SDW_BLK_GRP_CNT_1, sample_int,
 				      port_bo, port_bo >> 8, hstart, hstop,
-				      SDW_BLK_PKG_PER_PORT, 0x0);
+				      (SDW_BLK_GRP_CNT_1 * no_ch), 0x0);
 
 		sdw_fill_port_params(&p_rt->port_params,
 				     p_rt->num, bps,
@@ -137,18 +143,22 @@ static void sdw_compute_master_ports(struct sdw_master_runtime *m_rt,
 static void _sdw_compute_port_params(struct sdw_bus *bus,
 				     struct sdw_group_params *params, int count)
 {
-	struct sdw_master_runtime *m_rt;
+	struct sdw_master_runtime *m_rt = NULL;
 	int hstop = bus->params.col - 1;
-	int port_bo, i;
+	int block_offset, port_bo, i;
 
 	/* Run loop for all groups to compute transport parameters */
 	for (i = 0; i < count; i++) {
 		port_bo = 1;
+		block_offset = 1;
 
 		list_for_each_entry(m_rt, &bus->m_rt_list, bus_node) {
-			sdw_compute_master_ports(m_rt, &params[i], port_bo, hstop);
+			sdw_compute_master_ports(m_rt, &params[i],
+						 port_bo, hstop);
 
-			port_bo += m_rt->ch_count * m_rt->stream->params.bps;
+			block_offset += m_rt->ch_count *
+					m_rt->stream->params.bps;
+			port_bo = block_offset;
 		}
 
 		hstop = hstop - params[i].hwidth;
@@ -159,7 +169,7 @@ static int sdw_compute_group_params(struct sdw_bus *bus,
 				    struct sdw_group_params *params,
 				    int *rates, int count)
 {
-	struct sdw_master_runtime *m_rt;
+	struct sdw_master_runtime *m_rt = NULL;
 	int sel_col = bus->params.col;
 	unsigned int rate, bps, ch;
 	int i, column_needed = 0;
@@ -373,18 +383,12 @@ static int sdw_compute_bus_params(struct sdw_bus *bus)
 		 */
 	}
 
-	if (i == clk_values) {
-		dev_err(bus->dev, "%s: could not find clock value for bandwidth %d\n",
-			__func__, bus->params.bandwidth);
+	if (i == clk_values)
 		return -EINVAL;
-	}
 
 	ret = sdw_select_row_col(bus, curr_dr_freq);
-	if (ret < 0) {
-		dev_err(bus->dev, "%s: could not find frame configuration for bus dr_freq %d\n",
-			__func__, curr_dr_freq);
+	if (ret < 0)
 		return -EINVAL;
-	}
 
 	bus->params.curr_dr_freq = curr_dr_freq;
 	return 0;
@@ -401,13 +405,15 @@ int sdw_compute_params(struct sdw_bus *bus)
 
 	/* Computes clock frequency, frame shape and frame frequency */
 	ret = sdw_compute_bus_params(bus);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(bus->dev, "Compute bus params failed: %d", ret);
 		return ret;
+	}
 
 	/* Compute transport and port params */
 	ret = sdw_compute_port_params(bus);
 	if (ret < 0) {
-		dev_err(bus->dev, "Compute transport params failed: %d\n", ret);
+		dev_err(bus->dev, "Compute transport params failed: %d", ret);
 		return ret;
 	}
 

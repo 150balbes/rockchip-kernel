@@ -135,7 +135,7 @@ static const struct regmap_config tlc591xx_regmap = {
 	.max_register = 0x1e,
 };
 
-static const struct of_device_id of_tlc591xx_leds_match[] __maybe_unused = {
+static const struct of_device_id of_tlc591xx_leds_match[] = {
 	{ .compatible = "ti,tlc59116",
 	  .data = &tlc59116 },
 	{ .compatible = "ti,tlc59108",
@@ -145,7 +145,8 @@ static const struct of_device_id of_tlc591xx_leds_match[] __maybe_unused = {
 MODULE_DEVICE_TABLE(of, of_tlc591xx_leds_match);
 
 static int
-tlc591xx_probe(struct i2c_client *client)
+tlc591xx_probe(struct i2c_client *client,
+	       const struct i2c_device_id *id)
 {
 	struct device_node *np, *child;
 	struct device *dev = &client->dev;

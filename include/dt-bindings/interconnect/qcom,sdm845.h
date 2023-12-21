@@ -19,7 +19,6 @@
 #define SLAVE_A1NOC_SNOC		7
 #define SLAVE_SERVICE_A1NOC		8
 #define SLAVE_ANOC_PCIE_A1NOC_SNOC	9
-#define MASTER_QUP_1			10
 
 #define MASTER_A2NOC_CFG		0
 #define MASTER_QDSS_BAM			1
@@ -33,7 +32,6 @@
 #define SLAVE_A2NOC_SNOC		9
 #define SLAVE_ANOC_PCIE_SNOC		10
 #define SLAVE_SERVICE_A2NOC		11
-#define MASTER_QUP_2			12
 
 #define MASTER_SPDM			0
 #define MASTER_TIC			1

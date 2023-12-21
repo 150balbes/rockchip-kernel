@@ -94,6 +94,7 @@ static int bcm_kona_usb2_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct bcm_kona_usb *phy;
+	struct resource *res;
 	struct phy *gphy;
 	struct phy_provider *phy_provider;
 
@@ -101,7 +102,8 @@ static int bcm_kona_usb2_probe(struct platform_device *pdev)
 	if (!phy)
 		return -ENOMEM;
 
-	phy->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	phy->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(phy->regs))
 		return PTR_ERR(phy->regs);
 

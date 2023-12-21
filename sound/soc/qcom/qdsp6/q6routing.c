@@ -66,7 +66,6 @@
 	{ mix_name, "PRI_MI2S_TX", "PRI_MI2S_TX" },	\
 	{ mix_name, "SEC_MI2S_TX", "SEC_MI2S_TX" },	\
 	{ mix_name, "QUAT_MI2S_TX", "QUAT_MI2S_TX" },	\
-	{ mix_name, "QUIN_MI2S_TX", "QUIN_MI2S_TX" },	\
 	{ mix_name, "TERT_MI2S_TX", "TERT_MI2S_TX" },		\
 	{ mix_name, "SLIMBUS_0_TX", "SLIMBUS_0_TX" },		\
 	{ mix_name, "SLIMBUS_1_TX", "SLIMBUS_1_TX" },		\
@@ -139,9 +138,6 @@
 		id, 1, 0, msm_routing_get_audio_mixer,			\
 		msm_routing_put_audio_mixer),				\
 	SOC_SINGLE_EXT("QUAT_MI2S_TX", QUATERNARY_MI2S_TX,		\
-		id, 1, 0, msm_routing_get_audio_mixer,			\
-		msm_routing_put_audio_mixer),				\
-	SOC_SINGLE_EXT("QUIN_MI2S_TX", QUINARY_MI2S_TX,			\
 		id, 1, 0, msm_routing_get_audio_mixer,			\
 		msm_routing_put_audio_mixer),				\
 	SOC_SINGLE_EXT("SLIMBUS_0_TX", SLIMBUS_0_TX,			\
@@ -372,12 +368,6 @@ int q6routing_stream_open(int fedai_id, int perf_mode,
 	}
 
 	session = &routing_data->sessions[stream_id - 1];
-	if (session->port_id < 0) {
-		dev_err(routing_data->dev, "Routing not setup for MultiMedia%d Session\n",
-			session->fedai_id);
-		return -EINVAL;
-	}
-
 	pdata = &routing_data->port_data[session->port_id];
 
 	mutex_lock(&routing_data->lock);
@@ -528,9 +518,6 @@ static const struct snd_kcontrol_new secondary_mi2s_rx_mixer_controls[] = {
 
 static const struct snd_kcontrol_new quaternary_mi2s_rx_mixer_controls[] = {
 	Q6ROUTING_RX_MIXERS(QUATERNARY_MI2S_RX) };
-
-static const struct snd_kcontrol_new quinary_mi2s_rx_mixer_controls[] = {
-	Q6ROUTING_RX_MIXERS(QUINARY_MI2S_RX) };
 
 static const struct snd_kcontrol_new tertiary_mi2s_rx_mixer_controls[] = {
 	Q6ROUTING_RX_MIXERS(TERTIARY_MI2S_RX) };
@@ -771,9 +758,6 @@ static const struct snd_soc_dapm_widget msm_qdsp6_widgets[] = {
 	SND_SOC_DAPM_MIXER("QUAT_MI2S_RX Audio Mixer", SND_SOC_NOPM, 0, 0,
 			   quaternary_mi2s_rx_mixer_controls,
 			   ARRAY_SIZE(quaternary_mi2s_rx_mixer_controls)),
-	SND_SOC_DAPM_MIXER("QUIN_MI2S_RX Audio Mixer", SND_SOC_NOPM, 0, 0,
-			   quinary_mi2s_rx_mixer_controls,
-			   ARRAY_SIZE(quinary_mi2s_rx_mixer_controls)),
 	SND_SOC_DAPM_MIXER("TERT_MI2S_RX Audio Mixer", SND_SOC_NOPM, 0, 0,
 			   tertiary_mi2s_rx_mixer_controls,
 			   ARRAY_SIZE(tertiary_mi2s_rx_mixer_controls)),
@@ -963,7 +947,6 @@ static const struct snd_soc_dapm_route intercon[] = {
 	Q6ROUTING_RX_DAPM_ROUTE("SLIMBUS_5_RX Audio Mixer", "SLIMBUS_5_RX"),
 	Q6ROUTING_RX_DAPM_ROUTE("SLIMBUS_6_RX Audio Mixer", "SLIMBUS_6_RX"),
 	Q6ROUTING_RX_DAPM_ROUTE("QUAT_MI2S_RX Audio Mixer", "QUAT_MI2S_RX"),
-	Q6ROUTING_RX_DAPM_ROUTE("QUIN_MI2S_RX Audio Mixer", "QUIN_MI2S_RX"),
 	Q6ROUTING_RX_DAPM_ROUTE("TERT_MI2S_RX Audio Mixer", "TERT_MI2S_RX"),
 	Q6ROUTING_RX_DAPM_ROUTE("SEC_MI2S_RX Audio Mixer", "SEC_MI2S_RX"),
 	Q6ROUTING_RX_DAPM_ROUTE("PRI_MI2S_RX Audio Mixer", "PRI_MI2S_RX"),
@@ -1140,10 +1123,12 @@ static int q6pcm_routing_probe(struct platform_device *pdev)
 					  NULL, 0);
 }
 
-static void q6pcm_routing_remove(struct platform_device *pdev)
+static int q6pcm_routing_remove(struct platform_device *pdev)
 {
 	kfree(routing_data);
 	routing_data = NULL;
+
+	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -1160,7 +1145,7 @@ static struct platform_driver q6pcm_routing_platform_driver = {
 		.of_match_table = of_match_ptr(q6pcm_routing_device_id),
 	},
 	.probe = q6pcm_routing_probe,
-	.remove_new = q6pcm_routing_remove,
+	.remove = q6pcm_routing_remove,
 };
 module_platform_driver(q6pcm_routing_platform_driver);
 

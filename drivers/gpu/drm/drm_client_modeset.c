@@ -7,11 +7,9 @@
  * Copyright (c) 2007 Dave Airlie <airlied@linux.ie>
  */
 
-#include "drm/drm_modeset_lock.h"
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
-#include <linux/string_helpers.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_client.h>
@@ -19,7 +17,6 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_device.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_edid.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_print.h>
 
@@ -159,35 +156,30 @@ drm_connector_has_preferred_mode(struct drm_connector *connector, int width, int
 	return NULL;
 }
 
-static struct drm_display_mode *drm_connector_pick_cmdline_mode(struct drm_connector *connector)
+static struct drm_display_mode *
+drm_connector_pick_cmdline_mode(struct drm_connector *connector)
 {
 	struct drm_cmdline_mode *cmdline_mode;
 	struct drm_display_mode *mode;
 	bool prefer_non_interlace;
 
-	/*
-	 * Find a user-defined mode. If the user gave us a valid
-	 * mode on the kernel command line, it will show up in this
-	 * list.
-	 */
-
-	list_for_each_entry(mode, &connector->modes, head) {
-		if (mode->type & DRM_MODE_TYPE_USERDEF)
-			return mode;
-	}
-
 	cmdline_mode = &connector->cmdline_mode;
 	if (cmdline_mode->specified == false)
 		return NULL;
 
-	/*
-	 * Attempt to find a matching mode in the list of modes we
-	 * have gotten so far.
+	/* attempt to find a matching mode in the list of modes
+	 *  we have gotten so far, if not add a CVT mode that conforms
 	 */
+	if (cmdline_mode->rb || cmdline_mode->margins)
+		goto create_mode;
 
 	prefer_non_interlace = !cmdline_mode->interlace;
 again:
 	list_for_each_entry(mode, &connector->modes, head) {
+		/* Check (optional) mode name first */
+		if (!strcmp(mode->name, cmdline_mode->name))
+			return mode;
+
 		/* check width/height */
 		if (mode->hdisplay != cmdline_mode->xres ||
 		    mode->vdisplay != cmdline_mode->yres)
@@ -213,7 +205,12 @@ again:
 		goto again;
 	}
 
-	return NULL;
+create_mode:
+	mode = drm_mode_create_from_cmdline_mode(connector->dev, cmdline_mode);
+	if (mode)
+		list_add(&mode->head, &connector->modes);
+
+	return mode;
 }
 
 static bool drm_connector_enabled(struct drm_connector *connector, bool strict)
@@ -243,7 +240,7 @@ static void drm_client_connectors_enabled(struct drm_connector **connectors,
 		connector = connectors[i];
 		enabled[i] = drm_connector_enabled(connector, true);
 		DRM_DEBUG_KMS("connector %d enabled? %s\n", connector->base.id,
-			      connector->display_info.non_desktop ? "non desktop" : str_yes_no(enabled[i]));
+			      connector->display_info.non_desktop ? "non desktop" : enabled[i] ? "yes" : "no");
 
 		any_enabled |= enabled[i];
 	}
@@ -1184,11 +1181,9 @@ static void drm_client_modeset_dpms_legacy(struct drm_client_dev *client, int dp
 	struct drm_device *dev = client->dev;
 	struct drm_connector *connector;
 	struct drm_mode_set *modeset;
-	struct drm_modeset_acquire_ctx ctx;
 	int j;
-	int ret;
 
-	DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
+	drm_modeset_lock_all(dev);
 	drm_client_for_each_modeset(modeset, client) {
 		if (!modeset->crtc->enabled)
 			continue;
@@ -1200,7 +1195,7 @@ static void drm_client_modeset_dpms_legacy(struct drm_client_dev *client, int dp
 				dev->mode_config.dpms_property, dpms_mode);
 		}
 	}
-	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
+	drm_modeset_unlock_all(dev);
 }
 
 /**
@@ -1233,7 +1228,3 @@ int drm_client_modeset_dpms(struct drm_client_dev *client, int mode)
 	return ret;
 }
 EXPORT_SYMBOL(drm_client_modeset_dpms);
-
-#ifdef CONFIG_DRM_KUNIT_TEST
-#include "tests/drm_client_modeset_test.c"
-#endif

@@ -17,6 +17,10 @@ PAL and by SDTV in general. The default transfer function is
 range. The chromaticities of the primary colors and the white reference
 are:
 
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
+
 .. flat-table:: SMPTE 170M Chromaticities
     :header-rows:  1
     :stub-columns: 0
@@ -93,6 +97,10 @@ general. The default transfer function is ``V4L2_XFER_FUNC_709``. The
 default Y'CbCr encoding is ``V4L2_YCBCR_ENC_709``. The default Y'CbCr
 quantization is limited range. The chromaticities of the primary colors
 and the white reference are:
+
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: Rec. 709 Chromaticities
     :header-rows:  1
@@ -217,6 +225,10 @@ would break how applications interpret the quantization range.
 
 The chromaticities of the primary colors and the white reference are:
 
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
+
 .. flat-table:: sRGB Chromaticities
     :header-rows:  1
     :stub-columns: 0
@@ -296,6 +308,9 @@ would break how applications interpret the quantization range.
 
 The chromaticities of the primary colors and the white reference are:
 
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
+
 .. flat-table:: opRGB Chromaticities
     :header-rows:  1
     :stub-columns: 0
@@ -357,6 +372,10 @@ definition television (UHDTV). The default transfer function is
 ``V4L2_XFER_FUNC_709``. The default Y'CbCr encoding is
 ``V4L2_YCBCR_ENC_BT2020``. The default Y'CbCr quantization is limited range.
 The chromaticities of the primary colors and the white reference are:
+
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: BT.2020 Chromaticities
     :header-rows:  1
@@ -459,6 +478,9 @@ is ``V4L2_XFER_FUNC_DCI_P3``. The default Y'CbCr encoding is
 The chromaticities of the primary colors and the white reference are:
 
 
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
+
 .. flat-table:: DCI-P3 Chromaticities
     :header-rows:  1
     :stub-columns: 0
@@ -509,6 +531,9 @@ Y'CbCr encoding is ``V4L2_YCBCR_ENC_SMPTE240M``. The default Y'CbCr
 quantization is limited range. The chromaticities of the primary colors
 and the white reference are:
 
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: SMPTE 240M Chromaticities
     :header-rows:  1
@@ -578,6 +603,9 @@ limited range. The chromaticities of the primary colors and the white
 reference are:
 
 
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
+
 .. flat-table:: NTSC 1953 Chromaticities
     :header-rows:  1
     :stub-columns: 0
@@ -646,14 +674,16 @@ Colorspace EBU Tech. 3213 (V4L2_COLORSPACE_470_SYSTEM_BG)
 =========================================================
 
 The :ref:`tech3213` standard defines the colorspace used by PAL/SECAM
-in 1975. Note that this colorspace is not supported by the HDMI interface.
-Instead :ref:`tech3321` recommends that Rec. 709 is used instead for HDMI.
-The default transfer function is
+in 1975. In practice this colorspace is obsolete and SMPTE 170M should
+be used instead. The default transfer function is
 ``V4L2_XFER_FUNC_709``. The default Y'CbCr encoding is
 ``V4L2_YCBCR_ENC_601``. The default Y'CbCr quantization is limited
 range. The chromaticities of the primary colors and the white reference
 are:
 
+
+
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: EBU Tech. 3213 Chromaticities
     :header-rows:  1

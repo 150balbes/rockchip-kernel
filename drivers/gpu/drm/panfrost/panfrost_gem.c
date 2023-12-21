@@ -49,7 +49,7 @@ static void panfrost_gem_free_object(struct drm_gem_object *obj)
 		kvfree(bo->sgts);
 	}
 
-	drm_gem_shmem_free(&bo->base);
+	drm_gem_shmem_free_object(obj);
 }
 
 struct panfrost_gem_mapping *
@@ -187,56 +187,23 @@ void panfrost_gem_close(struct drm_gem_object *obj, struct drm_file *file_priv)
 
 static int panfrost_gem_pin(struct drm_gem_object *obj)
 {
-	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
-
-	if (bo->is_heap)
+	if (to_panfrost_bo(obj)->is_heap)
 		return -EINVAL;
 
-	return drm_gem_shmem_pin(&bo->base);
-}
-
-static enum drm_gem_object_status panfrost_gem_status(struct drm_gem_object *obj)
-{
-	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
-	enum drm_gem_object_status res = 0;
-
-	if (bo->base.pages)
-		res |= DRM_GEM_OBJECT_RESIDENT;
-
-	if (bo->base.madv == PANFROST_MADV_DONTNEED)
-		res |= DRM_GEM_OBJECT_PURGEABLE;
-
-	return res;
-}
-
-static size_t panfrost_gem_rss(struct drm_gem_object *obj)
-{
-	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
-
-	if (bo->is_heap) {
-		return bo->heap_rss_size;
-	} else if (bo->base.pages) {
-		WARN_ON(bo->heap_rss_size);
-		return bo->base.base.size;
-	}
-
-	return 0;
+	return drm_gem_shmem_pin(obj);
 }
 
 static const struct drm_gem_object_funcs panfrost_gem_funcs = {
 	.free = panfrost_gem_free_object,
 	.open = panfrost_gem_open,
 	.close = panfrost_gem_close,
-	.print_info = drm_gem_shmem_object_print_info,
+	.print_info = drm_gem_shmem_print_info,
 	.pin = panfrost_gem_pin,
-	.unpin = drm_gem_shmem_object_unpin,
-	.get_sg_table = drm_gem_shmem_object_get_sg_table,
-	.vmap = drm_gem_shmem_object_vmap,
-	.vunmap = drm_gem_shmem_object_vunmap,
-	.mmap = drm_gem_shmem_object_mmap,
-	.status = panfrost_gem_status,
-	.rss = panfrost_gem_rss,
-	.vm_ops = &drm_gem_shmem_vm_ops,
+	.unpin = drm_gem_shmem_unpin,
+	.get_sg_table = drm_gem_shmem_get_sg_table,
+	.vmap = drm_gem_shmem_vmap,
+	.vunmap = drm_gem_shmem_vunmap,
+	.mmap = drm_gem_shmem_mmap,
 };
 
 /**
@@ -254,19 +221,23 @@ struct drm_gem_object *panfrost_gem_create_object(struct drm_device *dev, size_t
 
 	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
 	if (!obj)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	INIT_LIST_HEAD(&obj->mappings.list);
 	mutex_init(&obj->mappings.lock);
 	obj->base.base.funcs = &panfrost_gem_funcs;
-	obj->base.map_wc = !pfdev->coherent;
+	obj->base.map_cached = pfdev->coherent;
 
 	return &obj->base.base;
 }
 
 struct panfrost_gem_object *
-panfrost_gem_create(struct drm_device *dev, size_t size, u32 flags)
+panfrost_gem_create_with_handle(struct drm_file *file_priv,
+				struct drm_device *dev, size_t size,
+				u32 flags,
+				uint32_t *handle)
 {
+	int ret;
 	struct drm_gem_shmem_object *shmem;
 	struct panfrost_gem_object *bo;
 
@@ -281,6 +252,16 @@ panfrost_gem_create(struct drm_device *dev, size_t size, u32 flags)
 	bo = to_panfrost_bo(&shmem->base);
 	bo->noexec = !!(flags & PANFROST_BO_NOEXEC);
 	bo->is_heap = !!(flags & PANFROST_BO_HEAP);
+
+	/*
+	 * Allocate an id of idr table where the obj is registered
+	 * and handle has the id what user can see.
+	 */
+	ret = drm_gem_handle_create(file_priv, &shmem->base, handle);
+	/* drop reference from allocate - handle holds it now. */
+	drm_gem_object_put(&shmem->base);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return bo;
 }

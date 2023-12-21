@@ -494,8 +494,7 @@ EXPORT_SYMBOL_GPL(snd_ctl_sync_vmaster);
  * @arg: optional function argument
  *
  * Apply the function @func to each follower kctl of the given vmaster kctl.
- *
- * Return: 0 if successful, or a negative error code
+ * Returns 0 if successful, or a negative error code.
  */
 int snd_ctl_apply_vmaster_followers(struct snd_kcontrol *kctl,
 				    int (*func)(struct snd_kcontrol *vfollower,

@@ -344,7 +344,6 @@ int tm_unavailable_test(void)
 	cpu_set_t cpuset;
 
 	SKIP_IF(!have_htm());
-	SKIP_IF(htm_is_synthetic());
 
 	cpu = pick_online_cpu();
 	FAIL_IF(cpu < 0);

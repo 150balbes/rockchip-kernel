@@ -92,8 +92,7 @@ static int snd_opl3_synth_use(void *private_data, struct snd_seq_port_subscribe 
 	struct snd_opl3 *opl3 = private_data;
 	int err;
 
-	err = snd_opl3_synth_setup(opl3);
-	if (err < 0)
+	if ((err = snd_opl3_synth_setup(opl3)) < 0)
 		return err;
 
 	if (use_internal_drums) {
@@ -108,8 +107,7 @@ static int snd_opl3_synth_use(void *private_data, struct snd_seq_port_subscribe 
 	}
 
 	if (info->sender.client != SNDRV_SEQ_CLIENT_SYSTEM) {
-		err = snd_opl3_synth_use_inc(opl3);
-		if (err < 0)
+		if ((err = snd_opl3_synth_use_inc(opl3)) < 0)
 			return err;
 	}
 	opl3->synth_mode = SNDRV_OPL3_MODE_SEQ;
@@ -229,8 +227,7 @@ static int snd_opl3_seq_probe(struct device *_dev)
 	if (client < 0)
 		return client;
 
-	err = snd_opl3_synth_create_port(opl3);
-	if (err < 0) {
+	if ((err = snd_opl3_synth_create_port(opl3)) < 0) {
 		snd_seq_delete_kernel_client(client);
 		opl3->seq_client = -1;
 		return err;

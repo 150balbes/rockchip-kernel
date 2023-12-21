@@ -47,12 +47,13 @@ static int mt6660_reg_write(void *context, unsigned int reg, unsigned int val)
 	struct mt6660_chip *chip = context;
 	int size = mt6660_get_reg_size(reg);
 	u8 reg_data[4];
-	int i;
+	int i, ret;
 
 	for (i = 0; i < size; i++)
 		reg_data[size - i - 1] = (val >> (8 * i)) & 0xff;
 
-	return i2c_smbus_write_i2c_block_data(chip->i2c, reg, size, reg_data);
+	ret = i2c_smbus_write_i2c_block_data(chip->i2c, reg, size, reg_data);
+	return ret;
 }
 
 static int mt6660_reg_read(void *context, unsigned int reg, unsigned int *val)
@@ -323,7 +324,6 @@ static const struct snd_soc_component_driver mt6660_component_driver = {
 	.num_dapm_routes = ARRAY_SIZE(mt6660_component_dapm_routes),
 
 	.idle_bias_on = false, /* idle_bias_off = true */
-	.endianness = 1,
 };
 
 static int mt6660_component_aif_hw_params(struct snd_pcm_substream *substream,
@@ -404,9 +404,9 @@ static struct snd_soc_dai_driver mt6660_codec_dai = {
 		.formats = STUB_FORMATS,
 	},
 	/* dai properties */
-	.symmetric_rate = 1,
+	.symmetric_rates = 1,
 	.symmetric_channels = 1,
-	.symmetric_sample_bits = 1,
+	.symmetric_samplebits = 1,
 	/* dai operations */
 	.ops = &mt6660_component_aif_ops,
 };
@@ -457,7 +457,8 @@ static int _mt6660_read_chip_revision(struct mt6660_chip *chip)
 	return 0;
 }
 
-static int mt6660_i2c_probe(struct i2c_client *client)
+static int mt6660_i2c_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct mt6660_chip *chip = NULL;
 	int ret;
@@ -520,13 +521,14 @@ probe_fail:
 	return ret;
 }
 
-static void mt6660_i2c_remove(struct i2c_client *client)
+static int mt6660_i2c_remove(struct i2c_client *client)
 {
 	struct mt6660_chip *chip = i2c_get_clientdata(client);
 
 	pm_runtime_disable(chip->dev);
 	pm_runtime_set_suspended(chip->dev);
 	mutex_destroy(&chip->io_lock);
+	return 0;
 }
 
 static int __maybe_unused mt6660_i2c_runtime_suspend(struct device *dev)

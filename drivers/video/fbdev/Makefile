@@ -8,7 +8,6 @@
 obj-y				+= core/
 
 obj-$(CONFIG_FB_MACMODES)      += macmodes.o
-obj-$(CONFIG_FB_SBUS)          += sbuslib.o
 obj-$(CONFIG_FB_WMT_GE_ROPS)   += wmt_ge_rops.o
 
 # Hardware specific drivers go first
@@ -46,14 +45,14 @@ obj-$(CONFIG_FB_LE80578)          += vermilion/
 obj-$(CONFIG_FB_S3)               += s3fb.o
 obj-$(CONFIG_FB_ARK)              += arkfb.o
 obj-$(CONFIG_FB_STI)              += stifb.o
-obj-$(CONFIG_FB_FFB)              += ffb.o
-obj-$(CONFIG_FB_CG6)              += cg6.o
-obj-$(CONFIG_FB_CG3)              += cg3.o
-obj-$(CONFIG_FB_BW2)              += bw2.o
-obj-$(CONFIG_FB_CG14)             += cg14.o
-obj-$(CONFIG_FB_P9100)            += p9100.o
-obj-$(CONFIG_FB_TCX)              += tcx.o
-obj-$(CONFIG_FB_LEO)              += leo.o
+obj-$(CONFIG_FB_FFB)              += ffb.o sbuslib.o
+obj-$(CONFIG_FB_CG6)              += cg6.o sbuslib.o
+obj-$(CONFIG_FB_CG3)              += cg3.o sbuslib.o
+obj-$(CONFIG_FB_BW2)              += bw2.o sbuslib.o
+obj-$(CONFIG_FB_CG14)             += cg14.o sbuslib.o
+obj-$(CONFIG_FB_P9100)            += p9100.o sbuslib.o
+obj-$(CONFIG_FB_TCX)              += tcx.o sbuslib.o
+obj-$(CONFIG_FB_LEO)              += leo.o sbuslib.o
 obj-$(CONFIG_FB_ACORN)            += acornfb.o
 obj-$(CONFIG_FB_ATARI)            += atafb.o c2p_iplan2.o atafb_mfb.o \
                                      atafb_iplan2p2.o atafb_iplan2p4.o atafb_iplan2p8.o
@@ -85,6 +84,8 @@ obj-$(CONFIG_FB_PXA)		  += pxafb.o
 obj-$(CONFIG_FB_PXA168)		  += pxa168fb.o
 obj-$(CONFIG_PXA3XX_GCU)	  += pxa3xx-gcu.o
 obj-$(CONFIG_MMP_DISP)           += mmp/
+obj-$(CONFIG_FB_W100)		  += w100fb.o
+obj-$(CONFIG_FB_TMIO)		  += tmiofb.o
 obj-$(CONFIG_FB_AU1100)		  += au1100fb.o
 obj-$(CONFIG_FB_AU1200)		  += au1200fb.o
 obj-$(CONFIG_FB_VT8500)		  += vt8500lcdfb.o
@@ -99,6 +100,7 @@ obj-$(CONFIG_FB_S1D13XXX)	  += s1d13xxxfb.o
 obj-$(CONFIG_FB_SH7760)		  += sh7760fb.o
 obj-$(CONFIG_FB_IMX)              += imxfb.o
 obj-$(CONFIG_FB_S3C)		  += s3c-fb.o
+obj-$(CONFIG_FB_S3C2410)	  += s3c2410fb.o
 obj-$(CONFIG_FB_FSL_DIU)	  += fsl-diu-fb.o
 obj-$(CONFIG_FB_COBALT)           += cobalt_lcdfb.o
 obj-$(CONFIG_FB_IBM_GXT4500)	  += gxt4500.o
@@ -108,7 +110,7 @@ obj-$(CONFIG_FB_UDL)		  += udlfb.o
 obj-$(CONFIG_FB_SMSCUFX)	  += smscufx.o
 obj-$(CONFIG_FB_XILINX)           += xilinxfb.o
 obj-$(CONFIG_FB_SH_MOBILE_LCDC)	  += sh_mobile_lcdcfb.o
-obj-y				  += omap/
+obj-$(CONFIG_FB_OMAP)             += omap/
 obj-y                             += omap2/
 obj-$(CONFIG_XEN_FBDEV_FRONTEND)  += xen-fbfront.o
 obj-$(CONFIG_FB_CARMINE)          += carminefb.o

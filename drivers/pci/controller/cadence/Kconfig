@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 
-menu "Cadence-based PCIe controllers"
+menu "Cadence PCIe controllers support"
 	depends on PCI
 
 config PCIE_CADENCE
@@ -22,7 +22,7 @@ config PCIE_CADENCE_PLAT
 	bool
 
 config PCIE_CADENCE_PLAT_HOST
-	bool "Cadence platform PCIe controller (host mode)"
+	bool "Cadence PCIe platform host controller"
 	depends on OF
 	select PCIE_CADENCE_HOST
 	select PCIE_CADENCE_PLAT
@@ -32,7 +32,7 @@ config PCIE_CADENCE_PLAT_HOST
 	  vendors SoCs.
 
 config PCIE_CADENCE_PLAT_EP
-	bool "Cadence platform PCIe controller (endpoint mode)"
+	bool "Cadence PCIe platform endpoint controller"
 	depends on OF
 	depends on PCI_ENDPOINT
 	select PCIE_CADENCE_EP
@@ -46,7 +46,7 @@ config PCI_J721E
 	bool
 
 config PCI_J721E_HOST
-	bool "TI J721E PCIe controller (host mode)"
+	bool "TI J721E PCIe platform host controller"
 	depends on OF
 	select PCIE_CADENCE_HOST
 	select PCI_J721E
@@ -56,7 +56,7 @@ config PCI_J721E_HOST
 	  core.
 
 config PCI_J721E_EP
-	bool "TI J721E PCIe controller (endpoint mode)"
+	bool "TI J721E PCIe platform endpoint controller"
 	depends on OF
 	depends on PCI_ENDPOINT
 	select PCIE_CADENCE_EP

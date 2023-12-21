@@ -7,12 +7,14 @@
 #
 # Authors: Paul E. McKenney <paulmck@linux.ibm.com>
 
-T="`mktemp -d ${TMPDIR-/tmp}/configcheck.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/abat-chk-config.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
-sed -e 's/"//g' < $1 > $T/.config
+cat $1 > $T/.config
 
-sed -e 's/"//g' -e 's/\(.*\)=n/# \1 is not set/' -e 's/^#CHECK#//' < $2 |
+cat $2 | sed -e 's/\(.*\)=n/# \1 is not set/' -e 's/^#CHECK#//' |
+grep -v '^CONFIG_INITRAMFS_SOURCE' |
 awk	'
 {
 		print "if grep -q \"" $0 "\" < '"$T/.config"'";

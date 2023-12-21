@@ -10,11 +10,11 @@ struct {
 	__uint(value_size, sizeof(__u32));
 } jmp_table SEC(".maps");
 
-int selector = 0;
+static volatile int selector;
 
 #define TAIL_FUNC(x)				\
-	SEC("tc")				\
-	int classifier_##x(struct __sk_buff *skb)	\
+	SEC("classifier/" #x)			\
+	int bpf_func_##x(struct __sk_buff *skb)	\
 	{					\
 		return x;			\
 	}
@@ -22,7 +22,7 @@ TAIL_FUNC(0)
 TAIL_FUNC(1)
 TAIL_FUNC(2)
 
-SEC("tc")
+SEC("classifier")
 int entry(struct __sk_buff *skb)
 {
 	int idx = 0;
@@ -37,3 +37,4 @@ int entry(struct __sk_buff *skb)
 }
 
 char __license[] SEC("license") = "GPL";
+int _version SEC("version") = 1;

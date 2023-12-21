@@ -36,11 +36,17 @@ MODULE_AUTHOR("Massimo Piccioni <dafastidio@libero.it>");
 MODULE_LICENSE("GPL");
 #ifdef OPTi93X
 MODULE_DESCRIPTION("OPTi93X");
+MODULE_SUPPORTED_DEVICE("{{OPTi,82C931/3}}");
 #else	/* OPTi93X */
 #ifdef CS4231
 MODULE_DESCRIPTION("OPTi92X - CS4231");
+MODULE_SUPPORTED_DEVICE("{{OPTi,82C924 (CS4231)},"
+		"{OPTi,82C925 (CS4231)}}");
 #else	/* CS4231 */
 MODULE_DESCRIPTION("OPTi92X - AD1848");
+MODULE_SUPPORTED_DEVICE("{{OPTi,82C924 (AD1848)},"
+		"{OPTi,82C925 (AD1848)},"
+	        "{OAK,Mozart}}");
 #endif	/* CS4231 */
 #endif	/* OPTi93X */
 
@@ -654,18 +660,16 @@ static irqreturn_t snd_opti93x_interrupt(int irq, void *dev_id)
 
 #endif /* OPTi93X */
 
-static int snd_opti9xx_read_check(struct snd_card *card,
-				  struct snd_opti9xx *chip)
+static int snd_opti9xx_read_check(struct snd_opti9xx *chip)
 {
 	unsigned char value;
 #ifdef OPTi93X
 	unsigned long flags;
 #endif
 
-	chip->res_mc_base =
-		devm_request_region(card->dev, chip->mc_base,
-				    chip->mc_base_size, "OPTi9xx MC");
-	if (!chip->res_mc_base)
+	chip->res_mc_base = request_region(chip->mc_base, chip->mc_base_size,
+					   "OPTi9xx MC");
+	if (chip->res_mc_base == NULL)
 		return -EBUSY;
 #ifndef OPTi93X
 	value = snd_opti9xx_read(chip, OPTi9XX_MC_REG(1));
@@ -673,10 +677,9 @@ static int snd_opti9xx_read_check(struct snd_card *card,
 		if (value == snd_opti9xx_read(chip, OPTi9XX_MC_REG(1)))
 			return 0;
 #else	/* OPTi93X */
-	chip->res_mc_indir =
-		devm_request_region(card->dev, chip->mc_indir_index, 2,
-				    "OPTi93x MC");
-	if (!chip->res_mc_indir)
+	chip->res_mc_indir = request_region(chip->mc_indir_index, 2,
+					    "OPTi93x MC");
+	if (chip->res_mc_indir == NULL)
 		return -EBUSY;
 
 	spin_lock_irqsave(&chip->lock, flags);
@@ -689,10 +692,10 @@ static int snd_opti9xx_read_check(struct snd_card *card,
 	if (snd_opti9xx_read(chip, OPTi9XX_MC_REG(7)) == 0xff - value)
 		return 0;
 
-	devm_release_resource(card->dev, chip->res_mc_indir);
+	release_and_free_resource(chip->res_mc_indir);
 	chip->res_mc_indir = NULL;
 #endif	/* OPTi93X */
-	devm_release_resource(card->dev, chip->res_mc_base);
+	release_and_free_resource(chip->res_mc_base);
 	chip->res_mc_base = NULL;
 
 	return -ENODEV;
@@ -712,7 +715,7 @@ static int snd_card_opti9xx_detect(struct snd_card *card,
 		if (err < 0)
 			return err;
 
-		err = snd_opti9xx_read_check(card, chip);
+		err = snd_opti9xx_read_check(chip);
 		if (err == 0)
 			return 1;
 #ifdef OPTi93X
@@ -792,6 +795,22 @@ static int snd_card_opti9xx_pnp(struct snd_opti9xx *chip,
 }
 #endif	/* CONFIG_PNP */
 
+static void snd_card_opti9xx_free(struct snd_card *card)
+{
+	struct snd_opti9xx *chip = card->private_data;
+
+	if (chip) {
+#ifdef OPTi93X
+		if (chip->irq > 0) {
+			disable_irq(chip->irq);
+			free_irq(chip->irq, chip);
+		}
+		release_and_free_resource(chip->res_mc_indir);
+#endif
+		release_and_free_resource(chip->res_mc_base);
+	}
+}
+
 static int snd_opti9xx_probe(struct snd_card *card)
 {
 	static const long possible_ports[] = {0x530, 0xe80, 0xf40, 0x604, -1};
@@ -847,8 +866,8 @@ static int snd_opti9xx_probe(struct snd_card *card)
 		return error;
 #endif
 #ifdef OPTi93X
-	error = devm_request_irq(card->dev, irq, snd_opti93x_interrupt,
-				 0, DEV_NAME" - WSS", chip);
+	error = request_irq(irq, snd_opti93x_interrupt,
+			    0, DEV_NAME" - WSS", chip);
 	if (error < 0) {
 		snd_printk(KERN_ERR "opti9xx: can't grab IRQ %d\n", irq);
 		return error;
@@ -918,10 +937,11 @@ static int snd_opti9xx_card_new(struct device *pdev, struct snd_card **cardp)
 	struct snd_card *card;
 	int err;
 
-	err = snd_devm_card_new(pdev, index, id, THIS_MODULE,
-				sizeof(struct snd_opti9xx), &card);
+	err = snd_card_new(pdev, index, id, THIS_MODULE,
+			   sizeof(struct snd_opti9xx), &card);
 	if (err < 0)
 		return err;
+	card->private_free = snd_card_opti9xx_free;
 	*cardp = card;
 	return 0;
 }
@@ -956,37 +976,32 @@ static int snd_opti9xx_isa_probe(struct device *devptr,
 #endif	/* CS4231 || OPTi93X */
 
 	if (mpu_port == SNDRV_AUTO_PORT) {
-		mpu_port = snd_legacy_find_free_ioport(possible_mpu_ports, 2);
-		if (mpu_port < 0) {
+		if ((mpu_port = snd_legacy_find_free_ioport(possible_mpu_ports, 2)) < 0) {
 			snd_printk(KERN_ERR "unable to find a free MPU401 port\n");
 			return -EBUSY;
 		}
 	}
 	if (irq == SNDRV_AUTO_IRQ) {
-		irq = snd_legacy_find_free_irq(possible_irqs);
-		if (irq < 0) {
+		if ((irq = snd_legacy_find_free_irq(possible_irqs)) < 0) {
 			snd_printk(KERN_ERR "unable to find a free IRQ\n");
 			return -EBUSY;
 		}
 	}
 	if (mpu_irq == SNDRV_AUTO_IRQ) {
-		mpu_irq = snd_legacy_find_free_irq(possible_mpu_irqs);
-		if (mpu_irq < 0) {
+		if ((mpu_irq = snd_legacy_find_free_irq(possible_mpu_irqs)) < 0) {
 			snd_printk(KERN_ERR "unable to find a free MPU401 IRQ\n");
 			return -EBUSY;
 		}
 	}
 	if (dma1 == SNDRV_AUTO_DMA) {
-		dma1 = snd_legacy_find_free_dma(possible_dma1s);
-		if (dma1 < 0) {
+		if ((dma1 = snd_legacy_find_free_dma(possible_dma1s)) < 0) {
 			snd_printk(KERN_ERR "unable to find a free DMA1\n");
 			return -EBUSY;
 		}
 	}
 #if defined(CS4231) || defined(OPTi93X)
 	if (dma2 == SNDRV_AUTO_DMA) {
-		dma2 = snd_legacy_find_free_dma(possible_dma2s[dma1 % 4]);
-		if (dma2 < 0) {
+		if ((dma2 = snd_legacy_find_free_dma(possible_dma2s[dma1 % 4])) < 0) {
 			snd_printk(KERN_ERR "unable to find a free DMA2\n");
 			return -EBUSY;
 		}
@@ -997,13 +1012,22 @@ static int snd_opti9xx_isa_probe(struct device *devptr,
 	if (error < 0)
 		return error;
 
-	error = snd_card_opti9xx_detect(card, card->private_data);
-	if (error < 0)
+	if ((error = snd_card_opti9xx_detect(card, card->private_data)) < 0) {
+		snd_card_free(card);
 		return error;
-	error = snd_opti9xx_probe(card);
-	if (error < 0)
+	}
+	if ((error = snd_opti9xx_probe(card)) < 0) {
+		snd_card_free(card);
 		return error;
+	}
 	dev_set_drvdata(devptr, card);
+	return 0;
+}
+
+static int snd_opti9xx_isa_remove(struct device *devptr,
+				  unsigned int dev)
+{
+	snd_card_free(dev_get_drvdata(devptr));
 	return 0;
 }
 
@@ -1051,6 +1075,7 @@ static int snd_opti9xx_isa_resume(struct device *dev, unsigned int n)
 static struct isa_driver snd_opti9xx_driver = {
 	.match		= snd_opti9xx_isa_match,
 	.probe		= snd_opti9xx_isa_probe,
+	.remove		= snd_opti9xx_isa_remove,
 #ifdef CONFIG_PM
 	.suspend	= snd_opti9xx_isa_suspend,
 	.resume		= snd_opti9xx_isa_resume,
@@ -1089,20 +1114,24 @@ static int snd_opti9xx_pnp_probe(struct pnp_card_link *pcard,
 		hw = OPTi9XX_HW_82C931;
 		break;
 	default:
+		snd_card_free(card);
 		return -ENODEV;
 	}
 
-	error = snd_opti9xx_init(chip, hw);
-	if (error)
-		return error;
-	error = snd_opti9xx_read_check(card, chip);
-	if (error) {
-		snd_printk(KERN_ERR "OPTI chip not found\n");
+	if ((error = snd_opti9xx_init(chip, hw))) {
+		snd_card_free(card);
 		return error;
 	}
-	error = snd_opti9xx_probe(card);
-	if (error < 0)
+	error = snd_opti9xx_read_check(chip);
+	if (error) {
+		snd_printk(KERN_ERR "OPTI chip not found\n");
+		snd_card_free(card);
 		return error;
+	}
+	if ((error = snd_opti9xx_probe(card)) < 0) {
+		snd_card_free(card);
+		return error;
+	}
 	pnp_set_card_drvdata(pcard, card);
 	snd_opti9xx_pnp_is_probed = 1;
 	return 0;
@@ -1110,6 +1139,8 @@ static int snd_opti9xx_pnp_probe(struct pnp_card_link *pcard,
 
 static void snd_opti9xx_pnp_remove(struct pnp_card_link *pcard)
 {
+	snd_card_free(pnp_get_card_drvdata(pcard));
+	pnp_set_card_drvdata(pcard, NULL);
 	snd_opti9xx_pnp_is_probed = 0;
 }
 

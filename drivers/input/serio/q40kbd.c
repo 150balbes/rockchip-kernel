@@ -10,6 +10,9 @@
  * Q40 PS/2 keyboard controller driver for Linux/m68k
  */
 
+/*
+ */
+
 #include <linux/module.h>
 #include <linux/serio.h>
 #include <linux/interrupt.h>
@@ -123,8 +126,8 @@ static int q40kbd_probe(struct platform_device *pdev)
 	port->close = q40kbd_close;
 	port->port_data = q40kbd;
 	port->dev.parent = &pdev->dev;
-	strscpy(port->name, "Q40 Kbd Port", sizeof(port->name));
-	strscpy(port->phys, "Q40", sizeof(port->phys));
+	strlcpy(port->name, "Q40 Kbd Port", sizeof(port->name));
+	strlcpy(port->phys, "Q40", sizeof(port->phys));
 
 	q40kbd_stop();
 

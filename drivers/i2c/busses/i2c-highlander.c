@@ -402,7 +402,7 @@ static int highlander_i2c_probe(struct platform_device *pdev)
 	i2c_set_adapdata(adap, dev);
 	adap->owner = THIS_MODULE;
 	adap->class = I2C_CLASS_HWMON;
-	strscpy(adap->name, "HL FPGA I2C adapter", sizeof(adap->name));
+	strlcpy(adap->name, "HL FPGA I2C adapter", sizeof(adap->name));
 	adap->algo = &highlander_i2c_algo;
 	adap->dev.parent = &pdev->dev;
 	adap->nr = pdev->id;
@@ -435,7 +435,7 @@ err:
 	return ret;
 }
 
-static void highlander_i2c_remove(struct platform_device *pdev)
+static int highlander_i2c_remove(struct platform_device *pdev)
 {
 	struct highlander_i2c_dev *dev = platform_get_drvdata(pdev);
 
@@ -446,6 +446,8 @@ static void highlander_i2c_remove(struct platform_device *pdev)
 
 	iounmap(dev->base);
 	kfree(dev);
+
+	return 0;
 }
 
 static struct platform_driver highlander_i2c_driver = {
@@ -454,7 +456,7 @@ static struct platform_driver highlander_i2c_driver = {
 	},
 
 	.probe		= highlander_i2c_probe,
-	.remove_new	= highlander_i2c_remove,
+	.remove		= highlander_i2c_remove,
 };
 
 module_platform_driver(highlander_i2c_driver);

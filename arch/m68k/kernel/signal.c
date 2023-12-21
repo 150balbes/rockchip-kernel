@@ -43,7 +43,7 @@
 #include <linux/tty.h>
 #include <linux/binfmts.h>
 #include <linux/extable.h>
-#include <linux/resume_user_mode.h>
+#include <linux/tracehook.h>
 
 #include <asm/setup.h>
 #include <linux/uaccess.h>
@@ -622,11 +622,6 @@ static inline void siginfo_build_tests(void)
 	/* _sigfault._addr_pkey */
 	BUILD_BUG_ON(offsetof(siginfo_t, si_pkey) != 0x12);
 
-	/* _sigfault._perf */
-	BUILD_BUG_ON(offsetof(siginfo_t, si_perf_data) != 0x10);
-	BUILD_BUG_ON(offsetof(siginfo_t, si_perf_type) != 0x14);
-	BUILD_BUG_ON(offsetof(siginfo_t, si_perf_flags) != 0x18);
-
 	/* _sigpoll */
 	BUILD_BUG_ON(offsetof(siginfo_t, si_band)   != 0x0c);
 	BUILD_BUG_ON(offsetof(siginfo_t, si_fd)     != 0x10);
@@ -642,35 +637,56 @@ static inline void siginfo_build_tests(void)
 static int mangle_kernel_stack(struct pt_regs *regs, int formatvec,
 			       void __user *fp)
 {
-	int extra = frame_extra_sizes(formatvec >> 12);
-	char buf[sizeof_field(struct frame, un)];
-
-	if (extra < 0) {
+	int fsize = frame_extra_sizes(formatvec >> 12);
+	if (fsize < 0) {
 		/*
 		 * user process trying to return with weird frame format
 		 */
 		pr_debug("user process returning with weird frame format\n");
-		return -1;
+		return 1;
 	}
-	if (extra && copy_from_user(buf, fp, extra))
-		return -1;
-	regs->format = formatvec >> 12;
-	regs->vector = formatvec & 0xfff;
-	if (extra) {
-		void *p = (struct switch_stack *)regs - 1;
-		struct frame *new = (void *)regs - extra;
-		int size = sizeof(struct pt_regs)+sizeof(struct switch_stack);
+	if (!fsize) {
+		regs->format = formatvec >> 12;
+		regs->vector = formatvec & 0xfff;
+	} else {
+		struct switch_stack *sw = (struct switch_stack *)regs - 1;
+		/* yes, twice as much as max(sizeof(frame.un.fmt<x>)) */
+		unsigned long buf[sizeof_field(struct frame, un) / 2];
 
-		memmove(p - extra, p, size);
-		memcpy(p - extra + size, buf, extra);
-		current->thread.esp0 = (unsigned long)&new->ptregs;
-#ifdef CONFIG_M68040
-		/* on 68040 complete pending writebacks if any */
-		if (new->ptregs.format == 7) // bus error frame
-			berr_040cleanup(new);
+		/* that'll make sure that expansion won't crap over data */
+		if (copy_from_user(buf + fsize / 4, fp, fsize))
+			return 1;
+
+		/* point of no return */
+		regs->format = formatvec >> 12;
+		regs->vector = formatvec & 0xfff;
+#define frame_offset (sizeof(struct pt_regs)+sizeof(struct switch_stack))
+		__asm__ __volatile__ (
+#ifdef CONFIG_COLDFIRE
+			 "   movel %0,%/sp\n\t"
+			 "   bra ret_from_signal\n"
+#else
+			 "   movel %0,%/a0\n\t"
+			 "   subl %1,%/a0\n\t"     /* make room on stack */
+			 "   movel %/a0,%/sp\n\t"  /* set stack pointer */
+			 /* move switch_stack and pt_regs */
+			 "1: movel %0@+,%/a0@+\n\t"
+			 "   dbra %2,1b\n\t"
+			 "   lea %/sp@(%c3),%/a0\n\t" /* add offset of fmt */
+			 "   lsrl  #2,%1\n\t"
+			 "   subql #1,%1\n\t"
+			 /* copy to the gap we'd made */
+			 "2: movel %4@+,%/a0@+\n\t"
+			 "   dbra %1,2b\n\t"
+			 "   bral ret_from_signal\n"
 #endif
+			 : /* no outputs, it doesn't ever return */
+			 : "a" (sw), "d" (fsize), "d" (frame_offset/4-1),
+			   "n" (frame_offset), "a" (buf + fsize/4)
+			 : "a0");
+#undef frame_offset
 	}
-	return extra;
+	return 0;
 }
 
 static inline int
@@ -678,6 +694,7 @@ restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *usc, void __u
 {
 	int formatvec;
 	struct sigcontext context;
+	int err = 0;
 
 	siginfo_build_tests();
 
@@ -686,7 +703,7 @@ restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *usc, void __u
 
 	/* get previous context */
 	if (copy_from_user(&context, usc, sizeof(context)))
-		return -1;
+		goto badframe;
 
 	/* restore passed registers */
 	regs->d0 = context.sc_d0;
@@ -699,10 +716,15 @@ restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *usc, void __u
 	wrusp(context.sc_usp);
 	formatvec = context.sc_formatvec;
 
-	if (restore_fpu_state(&context))
-		return -1;
+	err = restore_fpu_state(&context);
 
-	return mangle_kernel_stack(regs, formatvec, fp);
+	if (err || mangle_kernel_stack(regs, formatvec, fp))
+		goto badframe;
+
+	return 0;
+
+badframe:
+	return 1;
 }
 
 static inline int
@@ -719,7 +741,7 @@ rt_restore_ucontext(struct pt_regs *regs, struct switch_stack *sw,
 
 	err = __get_user(temp, &uc->uc_mcontext.version);
 	if (temp != MCONTEXT_VERSION)
-		return -1;
+		goto badframe;
 	/* restore passed registers */
 	err |= __get_user(regs->d0, &gregs[0]);
 	err |= __get_user(regs->d1, &gregs[1]);
@@ -748,17 +770,22 @@ rt_restore_ucontext(struct pt_regs *regs, struct switch_stack *sw,
 	err |= restore_altstack(&uc->uc_stack);
 
 	if (err)
-		return -1;
+		goto badframe;
 
-	return mangle_kernel_stack(regs, temp, &uc->uc_extra);
+	if (mangle_kernel_stack(regs, temp, &uc->uc_extra))
+		goto badframe;
+
+	return 0;
+
+badframe:
+	return 1;
 }
 
-asmlinkage void *do_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
+asmlinkage int do_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 {
 	unsigned long usp = rdusp();
 	struct sigframe __user *frame = (struct sigframe __user *)(usp - 4);
 	sigset_t set;
-	int size;
 
 	if (!access_ok(frame, sizeof(*frame)))
 		goto badframe;
@@ -770,22 +797,20 @@ asmlinkage void *do_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 
 	set_current_blocked(&set);
 
-	size = restore_sigcontext(regs, &frame->sc, frame + 1);
-	if (size < 0)
+	if (restore_sigcontext(regs, &frame->sc, frame + 1))
 		goto badframe;
-	return (void *)sw - size;
+	return regs->d0;
 
 badframe:
 	force_sig(SIGSEGV);
-	return sw;
+	return 0;
 }
 
-asmlinkage void *do_rt_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
+asmlinkage int do_rt_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 {
 	unsigned long usp = rdusp();
 	struct rt_sigframe __user *frame = (struct rt_sigframe __user *)(usp - 4);
 	sigset_t set;
-	int size;
 
 	if (!access_ok(frame, sizeof(*frame)))
 		goto badframe;
@@ -794,14 +819,13 @@ asmlinkage void *do_rt_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 
 	set_current_blocked(&set);
 
-	size = rt_restore_ucontext(regs, sw, &frame->uc);
-	if (size < 0)
+	if (rt_restore_ucontext(regs, sw, &frame->uc))
 		goto badframe;
-	return (void *)sw - size;
+	return regs->d0;
 
 badframe:
 	force_sig(SIGSEGV);
-	return sw;
+	return 0;
 }
 
 static inline struct pt_regs *rte_regs(struct pt_regs *regs)
@@ -858,17 +882,11 @@ static inline int rt_setup_ucontext(struct ucontext __user *uc, struct pt_regs *
 }
 
 static inline void __user *
-get_sigframe(struct ksignal *ksig, struct pt_regs *tregs, size_t frame_size)
+get_sigframe(struct ksignal *ksig, size_t frame_size)
 {
 	unsigned long usp = sigsp(rdusp(), ksig);
-	unsigned long gap = 0;
 
-	if (CPU_IS_020_OR_030 && tregs->format == 0xb) {
-		/* USP is unreliable so use worst-case value */
-		gap = 256;
-	}
-
-	return (void __user *)((usp - gap - frame_size) & -8UL);
+	return (void __user *)((usp - frame_size) & -8UL);
 }
 
 static int setup_frame(struct ksignal *ksig, sigset_t *set,
@@ -886,7 +904,7 @@ static int setup_frame(struct ksignal *ksig, sigset_t *set,
 		return -EFAULT;
 	}
 
-	frame = get_sigframe(ksig, tregs, sizeof(*frame) + fsize);
+	frame = get_sigframe(ksig, sizeof(*frame) + fsize);
 
 	if (fsize)
 		err |= copy_to_user (frame + 1, regs + 1, fsize);
@@ -958,7 +976,7 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 		return -EFAULT;
 	}
 
-	frame = get_sigframe(ksig, tregs, sizeof(*frame));
+	frame = get_sigframe(ksig, sizeof(*frame));
 
 	if (fsize)
 		err |= copy_to_user (&frame->uc.uc_extra, regs + 1, fsize);
@@ -1116,5 +1134,5 @@ void do_notify_resume(struct pt_regs *regs)
 		do_signal(regs);
 
 	if (test_thread_flag(TIF_NOTIFY_RESUME))
-		resume_user_mode_work(regs);
+		tracehook_notify_resume(regs);
 }

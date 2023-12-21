@@ -7,7 +7,6 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/irq.h>
-#include <linux/stringify.h>
 
 #include <asm/processor.h>
 #include <asm/ptrace.h>
@@ -151,6 +150,9 @@
 #define PRECISION_S 0
 #define PRECISION_D 1
 
+#define STR(x) XSTR(x)
+#define XSTR(x) #x
+
 #define DECLARE_UNPRIVILEGED_LOAD_FUNCTION(type, insn)			\
 static inline type load_##type(const type *addr)			\
 {									\
@@ -205,9 +207,9 @@ static inline ulong get_insn(ulong mepc)
 	asm ("and %[tmp], %[addr], 2\n"
 		"bnez %[tmp], 1f\n"
 #if defined(CONFIG_64BIT)
-		__stringify(LWU) " %[insn], (%[addr])\n"
+		STR(LWU) " %[insn], (%[addr])\n"
 #else
-		__stringify(LW) " %[insn], (%[addr])\n"
+		STR(LW) " %[insn], (%[addr])\n"
 #endif
 		"and %[tmp], %[insn], %[rvc_mask]\n"
 		"beq %[tmp], %[rvc_mask], 2f\n"

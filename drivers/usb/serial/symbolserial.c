@@ -160,11 +160,13 @@ static int symbol_port_probe(struct usb_serial_port *port)
 	return 0;
 }
 
-static void symbol_port_remove(struct usb_serial_port *port)
+static int symbol_port_remove(struct usb_serial_port *port)
 {
 	struct symbol_private *priv = usb_get_serial_port_data(port);
 
 	kfree(priv);
+
+	return 0;
 }
 
 static struct usb_serial_driver symbol_device = {

@@ -4,48 +4,11 @@
 #include <linux/page_reporting.h>
 #include <linux/gfp.h>
 #include <linux/export.h>
-#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/scatterlist.h>
 
 #include "page_reporting.h"
 #include "internal.h"
-
-/* Initialize to an unsupported value */
-unsigned int page_reporting_order = -1;
-
-static int page_order_update_notify(const char *val, const struct kernel_param *kp)
-{
-	/*
-	 * If param is set beyond this limit, order is set to default
-	 * pageblock_order value
-	 */
-	return  param_set_uint_minmax(val, kp, 0, MAX_ORDER);
-}
-
-static const struct kernel_param_ops page_reporting_param_ops = {
-	.set = &page_order_update_notify,
-	/*
-	 * For the get op, use param_get_int instead of param_get_uint.
-	 * This is to make sure that when unset the initialized value of
-	 * -1 is shown correctly
-	 */
-	.get = &param_get_int,
-};
-
-module_param_cb(page_reporting_order, &page_reporting_param_ops,
-			&page_reporting_order, 0644);
-MODULE_PARM_DESC(page_reporting_order, "Set page reporting order");
-
-/*
- * This symbol is also a kernel parameter. Export the page_reporting_order
- * symbol so that other drivers can access it to control order values without
- * having to introduce another configurable parameter. Only one driver can
- * register with the page_reporting driver for the service, so we have just
- * one control parameter for the use case(which can be accessed in both
- * drivers)
- */
-EXPORT_SYMBOL_GPL(page_reporting_order);
 
 #define PAGE_REPORTING_DELAY	(2 * HZ)
 static struct page_reporting_dev_info __rcu *pr_dev_info __read_mostly;
@@ -68,8 +31,8 @@ __page_reporting_request(struct page_reporting_dev_info *prdev)
 		return;
 
 	/*
-	 * If reporting is already active there is nothing we need to do.
-	 * Test against 0 as that represents PAGE_REPORTING_IDLE.
+	 *  If reporting is already active there is nothing we need to do.
+	 *  Test against 0 as that represents PAGE_REPORTING_IDLE.
 	 */
 	state = atomic_xchg(&prdev->state, PAGE_REPORTING_REQUESTED);
 	if (state != PAGE_REPORTING_IDLE)
@@ -248,7 +211,7 @@ page_reporting_cycle(struct page_reporting_dev_info *prdev, struct zone *zone,
 	}
 
 	/* Rotate any leftover pages to the head of the freelist */
-	if (!list_entry_is_head(next, list, lru) && !list_is_first(&next->lru, list))
+	if (&next->lru != list && !list_is_first(&next->lru, list))
 		list_rotate_to_front(&next->lru, list);
 
 	spin_unlock_irq(&zone->lock);
@@ -266,7 +229,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 
 	/* Generate minimum watermark to be able to guarantee progress */
 	watermark = low_wmark_pages(zone) +
-		    (PAGE_REPORTING_CAPACITY << page_reporting_order);
+		    (PAGE_REPORTING_CAPACITY << PAGE_REPORTING_MIN_ORDER);
 
 	/*
 	 * Cancel request if insufficient free memory or if we failed
@@ -276,7 +239,7 @@ page_reporting_process_zone(struct page_reporting_dev_info *prdev,
 		return err;
 
 	/* Process each free list starting from lowest order/mt */
-	for (order = page_reporting_order; order <= MAX_ORDER; order++) {
+	for (order = PAGE_REPORTING_MIN_ORDER; order < MAX_ORDER; order++) {
 		for (mt = 0; mt < MIGRATE_TYPES; mt++) {
 			/* We do not pull pages from the isolate free list */
 			if (is_migrate_isolate(mt))
@@ -356,24 +319,9 @@ int page_reporting_register(struct page_reporting_dev_info *prdev)
 	mutex_lock(&page_reporting_mutex);
 
 	/* nothing to do if already in use */
-	if (rcu_dereference_protected(pr_dev_info,
-				lockdep_is_held(&page_reporting_mutex))) {
+	if (rcu_access_pointer(pr_dev_info)) {
 		err = -EBUSY;
 		goto err_out;
-	}
-
-	/*
-	 * If the page_reporting_order value is not set, we check if
-	 * an order is provided from the driver that is performing the
-	 * registration. If that is not provided either, we default to
-	 * pageblock_order.
-	 */
-
-	if (page_reporting_order == -1) {
-		if (prdev->order > 0 && prdev->order <= MAX_ORDER)
-			page_reporting_order = prdev->order;
-		else
-			page_reporting_order = pageblock_order;
 	}
 
 	/* initialize state and work structures */
@@ -402,8 +350,7 @@ void page_reporting_unregister(struct page_reporting_dev_info *prdev)
 {
 	mutex_lock(&page_reporting_mutex);
 
-	if (prdev == rcu_dereference_protected(pr_dev_info,
-				lockdep_is_held(&page_reporting_mutex))) {
+	if (rcu_access_pointer(pr_dev_info) == prdev) {
 		/* Disable page reporting notification */
 		RCU_INIT_POINTER(pr_dev_info, NULL);
 		synchronize_rcu();

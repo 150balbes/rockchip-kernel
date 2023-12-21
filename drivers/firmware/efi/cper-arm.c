@@ -12,6 +12,7 @@
 #include <linux/dmi.h>
 #include <linux/acpi.h>
 #include <linux/pci.h>
+#include <linux/aer.h>
 #include <linux/printk.h>
 #include <linux/bcd.h>
 #include <acpi/ghes.h>

@@ -84,19 +84,15 @@ enum tis_defaults {
 #define ILB_REMAP_SIZE			0x100
 
 enum tpm_tis_flags {
-	TPM_TIS_ITPM_WORKAROUND		= 0,
-	TPM_TIS_INVALID_STATUS		= 1,
-	TPM_TIS_DEFAULT_CANCELLATION	= 2,
-	TPM_TIS_IRQ_TESTED		= 3,
+	TPM_TIS_ITPM_WORKAROUND		= BIT(0),
+	TPM_TIS_INVALID_STATUS		= BIT(1),
 };
 
 struct tpm_tis_data {
 	u16 manufacturer_id;
-	struct mutex locality_count_mutex;
-	unsigned int locality_count;
 	int locality;
 	int irq;
-	unsigned int int_mask;
+	bool irq_tested;
 	unsigned long flags;
 	void __iomem *ilb_base_addr;
 	u16 clkrun_enabled;
@@ -108,98 +104,54 @@ struct tpm_tis_data {
 	unsigned int timeout_max; /* usecs */
 };
 
-/*
- * IO modes to indicate how many bytes should be read/written at once in the
- * tpm_tis_phy_ops read_bytes/write_bytes calls. Use TPM_TIS_PHYS_8 to
- * receive/transmit byte-wise, TPM_TIS_PHYS_16 for two bytes etc.
- */
-enum tpm_tis_io_mode {
-	TPM_TIS_PHYS_8,
-	TPM_TIS_PHYS_16,
-	TPM_TIS_PHYS_32,
-};
-
 struct tpm_tis_phy_ops {
-	/* data is passed in little endian */
 	int (*read_bytes)(struct tpm_tis_data *data, u32 addr, u16 len,
-			  u8 *result, enum tpm_tis_io_mode mode);
+			  u8 *result);
 	int (*write_bytes)(struct tpm_tis_data *data, u32 addr, u16 len,
-			   const u8 *value, enum tpm_tis_io_mode mode);
-	int (*verify_crc)(struct tpm_tis_data *data, size_t len,
-			  const u8 *value);
+			   const u8 *value);
+	int (*read16)(struct tpm_tis_data *data, u32 addr, u16 *result);
+	int (*read32)(struct tpm_tis_data *data, u32 addr, u32 *result);
+	int (*write32)(struct tpm_tis_data *data, u32 addr, u32 src);
 };
 
 static inline int tpm_tis_read_bytes(struct tpm_tis_data *data, u32 addr,
 				     u16 len, u8 *result)
 {
-	return data->phy_ops->read_bytes(data, addr, len, result,
-					 TPM_TIS_PHYS_8);
+	return data->phy_ops->read_bytes(data, addr, len, result);
 }
 
 static inline int tpm_tis_read8(struct tpm_tis_data *data, u32 addr, u8 *result)
 {
-	return data->phy_ops->read_bytes(data, addr, 1, result, TPM_TIS_PHYS_8);
+	return data->phy_ops->read_bytes(data, addr, 1, result);
 }
 
 static inline int tpm_tis_read16(struct tpm_tis_data *data, u32 addr,
 				 u16 *result)
 {
-	__le16 result_le;
-	int rc;
-
-	rc = data->phy_ops->read_bytes(data, addr, sizeof(u16),
-				       (u8 *)&result_le, TPM_TIS_PHYS_16);
-	if (!rc)
-		*result = le16_to_cpu(result_le);
-
-	return rc;
+	return data->phy_ops->read16(data, addr, result);
 }
 
 static inline int tpm_tis_read32(struct tpm_tis_data *data, u32 addr,
 				 u32 *result)
 {
-	__le32 result_le;
-	int rc;
-
-	rc = data->phy_ops->read_bytes(data, addr, sizeof(u32),
-				       (u8 *)&result_le, TPM_TIS_PHYS_32);
-	if (!rc)
-		*result = le32_to_cpu(result_le);
-
-	return rc;
+	return data->phy_ops->read32(data, addr, result);
 }
 
 static inline int tpm_tis_write_bytes(struct tpm_tis_data *data, u32 addr,
 				      u16 len, const u8 *value)
 {
-	return data->phy_ops->write_bytes(data, addr, len, value,
-					  TPM_TIS_PHYS_8);
+	return data->phy_ops->write_bytes(data, addr, len, value);
 }
 
 static inline int tpm_tis_write8(struct tpm_tis_data *data, u32 addr, u8 value)
 {
-	return data->phy_ops->write_bytes(data, addr, 1, &value,
-					  TPM_TIS_PHYS_8);
+	return data->phy_ops->write_bytes(data, addr, 1, &value);
 }
 
 static inline int tpm_tis_write32(struct tpm_tis_data *data, u32 addr,
 				  u32 value)
 {
-	__le32 value_le;
-	int rc;
-
-	value_le = cpu_to_le32(value);
-	rc =  data->phy_ops->write_bytes(data, addr, sizeof(u32),
-					 (u8 *)&value_le, TPM_TIS_PHYS_32);
-	return rc;
-}
-
-static inline int tpm_tis_verify_crc(struct tpm_tis_data *data, size_t len,
-				     const u8 *value)
-{
-	if (!data->phy_ops->verify_crc)
-		return 0;
-	return data->phy_ops->verify_crc(data, len, value);
+	return data->phy_ops->write32(data, addr, value);
 }
 
 static inline bool is_bsw(void)

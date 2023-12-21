@@ -23,7 +23,7 @@ struct kmem_cache *stub_priv_cache;
  */
 #define MAX_BUSID 16
 static struct bus_id_priv busid_table[MAX_BUSID];
-static DEFINE_SPINLOCK(busid_table_lock);
+static spinlock_t busid_table_lock;
 
 static void init_busid_table(void)
 {
@@ -34,6 +34,8 @@ static void init_busid_table(void)
 	 * STUB_BUSID_OTHER, which is 0.
 	 */
 	memset(busid_table, 0, sizeof(busid_table));
+
+	spin_lock_init(&busid_table_lock);
 
 	for (i = 0; i < MAX_BUSID; i++)
 		spin_lock_init(&busid_table[i].busid_lock);
@@ -100,7 +102,7 @@ static int add_match_busid(char *busid)
 	for (i = 0; i < MAX_BUSID; i++) {
 		spin_lock(&busid_table[i].busid_lock);
 		if (!busid_table[i].name[0]) {
-			strscpy(busid_table[i].name, busid, BUSID_SIZE);
+			strlcpy(busid_table[i].name, busid, BUSID_SIZE);
 			if ((busid_table[i].status != STUB_BUSID_ALLOC) &&
 			    (busid_table[i].status != STUB_BUSID_REMOV))
 				busid_table[i].status = STUB_BUSID_ADDED;
@@ -167,13 +169,15 @@ static ssize_t match_busid_show(struct device_driver *drv, char *buf)
 static ssize_t match_busid_store(struct device_driver *dev, const char *buf,
 				 size_t count)
 {
+	int len;
 	char busid[BUSID_SIZE];
 
 	if (count < 5)
 		return -EINVAL;
 
 	/* busid needs to include \0 termination */
-	if (strscpy(busid, buf + 4, BUSID_SIZE) < 0)
+	len = strlcpy(busid, buf + 4, BUSID_SIZE);
+	if (sizeof(busid) <= len)
 		return -EINVAL;
 
 	if (!strncmp(buf, "add ", 4)) {

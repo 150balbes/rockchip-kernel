@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright 2014-2022 Advanced Micro Devices, Inc.
+ * Copyright 2014 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,13 +48,9 @@
 /* # of doorbell bytes allocated for each process. */
 size_t kfd_doorbell_process_slice(struct kfd_dev *kfd)
 {
-	if (!kfd->shared_resources.enable_mes)
-		return roundup(kfd->device_info.doorbell_size *
-				KFD_MAX_NUM_OF_QUEUES_PER_PROCESS,
-				PAGE_SIZE);
-	else
-		return amdgpu_mes_doorbell_process_slice(
-					(struct amdgpu_device *)kfd->adev);
+	return roundup(kfd->device_info->doorbell_size *
+			KFD_MAX_NUM_OF_QUEUES_PER_PROCESS,
+			PAGE_SIZE);
 }
 
 /* Doorbell calculations for device init. */
@@ -64,16 +59,6 @@ int kfd_doorbell_init(struct kfd_dev *kfd)
 	size_t doorbell_start_offset;
 	size_t doorbell_aperture_size;
 	size_t doorbell_process_limit;
-
-	/*
-	 * With MES enabled, just set the doorbell base as it is needed
-	 * to calculate doorbell physical address.
-	 */
-	if (kfd->shared_resources.enable_mes) {
-		kfd->doorbell_base =
-			kfd->shared_resources.doorbell_physical_address;
-		return 0;
-	}
 
 	/*
 	 * We start with calculations in bytes because the input data might
@@ -138,7 +123,7 @@ void kfd_doorbell_fini(struct kfd_dev *kfd)
 		iounmap(kfd->doorbell_kernel_ptr);
 }
 
-int kfd_doorbell_mmap(struct kfd_node *dev, struct kfd_process *process,
+int kfd_doorbell_mmap(struct kfd_dev *dev, struct kfd_process *process,
 		      struct vm_area_struct *vma)
 {
 	phys_addr_t address;
@@ -148,7 +133,7 @@ int kfd_doorbell_mmap(struct kfd_node *dev, struct kfd_process *process,
 	 * For simplicitly we only allow mapping of the entire doorbell
 	 * allocation of a single device & process.
 	 */
-	if (vma->vm_end - vma->vm_start != kfd_doorbell_process_slice(dev->kfd))
+	if (vma->vm_end - vma->vm_start != kfd_doorbell_process_slice(dev))
 		return -EINVAL;
 
 	pdd = kfd_get_process_device_data(dev, process);
@@ -157,10 +142,8 @@ int kfd_doorbell_mmap(struct kfd_node *dev, struct kfd_process *process,
 
 	/* Calculate physical address of doorbell */
 	address = kfd_get_process_doorbells(pdd);
-	if (!address)
-		return -ENOMEM;
-	vm_flags_set(vma, VM_IO | VM_DONTCOPY | VM_DONTEXPAND | VM_NORESERVE |
-				VM_DONTDUMP | VM_PFNMAP);
+	vma->vm_flags |= VM_IO | VM_DONTCOPY | VM_DONTEXPAND | VM_NORESERVE |
+				VM_DONTDUMP | VM_PFNMAP;
 
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
@@ -170,13 +153,13 @@ int kfd_doorbell_mmap(struct kfd_node *dev, struct kfd_process *process,
 		 "     vm_flags            == 0x%04lX\n"
 		 "     size                == 0x%04lX\n",
 		 (unsigned long long) vma->vm_start, address, vma->vm_flags,
-		 kfd_doorbell_process_slice(dev->kfd));
+		 kfd_doorbell_process_slice(dev));
 
 
 	return io_remap_pfn_range(vma,
 				vma->vm_start,
 				address >> PAGE_SHIFT,
-				kfd_doorbell_process_slice(dev->kfd),
+				kfd_doorbell_process_slice(dev),
 				vma->vm_page_prot);
 }
 
@@ -197,7 +180,7 @@ void __iomem *kfd_get_kernel_doorbell(struct kfd_dev *kfd,
 	if (inx >= KFD_MAX_NUM_OF_QUEUES_PER_PROCESS)
 		return NULL;
 
-	inx *= kfd->device_info.doorbell_size / sizeof(u32);
+	inx *= kfd->device_info->doorbell_size / sizeof(u32);
 
 	/*
 	 * Calculating the kernel doorbell offset using the first
@@ -218,7 +201,7 @@ void kfd_release_kernel_doorbell(struct kfd_dev *kfd, u32 __iomem *db_addr)
 	unsigned int inx;
 
 	inx = (unsigned int)(db_addr - kfd->doorbell_kernel_ptr)
-		* sizeof(u32) / kfd->device_info.doorbell_size;
+		* sizeof(u32) / kfd->device_info->doorbell_size;
 
 	mutex_lock(&kfd->doorbell_mutex);
 	__clear_bit(inx, kfd->doorbell_available_index);
@@ -253,16 +236,10 @@ unsigned int kfd_get_doorbell_dw_offset_in_bar(struct kfd_dev *kfd,
 	 * the process's doorbells. The offset returned is in dword
 	 * units regardless of the ASIC-dependent doorbell size.
 	 */
-	if (!kfd->shared_resources.enable_mes)
-		return kfd->doorbell_base_dw_offset +
-			pdd->doorbell_index
-			* kfd_doorbell_process_slice(kfd) / sizeof(u32) +
-			doorbell_id *
-			kfd->device_info.doorbell_size / sizeof(u32);
-	else
-		return amdgpu_mes_get_doorbell_dw_offset_in_bar(
-				(struct amdgpu_device *)kfd->adev,
-				pdd->doorbell_index, doorbell_id);
+	return kfd->doorbell_base_dw_offset +
+		pdd->doorbell_index
+		* kfd_doorbell_process_slice(kfd) / sizeof(u32) +
+		doorbell_id * kfd->device_info->doorbell_size / sizeof(u32);
 }
 
 uint64_t kfd_get_number_elems(struct kfd_dev *kfd)
@@ -277,46 +254,22 @@ uint64_t kfd_get_number_elems(struct kfd_dev *kfd)
 
 phys_addr_t kfd_get_process_doorbells(struct kfd_process_device *pdd)
 {
-	if (!pdd->doorbell_index) {
-		int r = kfd_alloc_process_doorbells(pdd->dev->kfd,
-						    &pdd->doorbell_index);
-		if (r < 0)
-			return 0;
-	}
-
-	return pdd->dev->kfd->doorbell_base +
-		pdd->doorbell_index * kfd_doorbell_process_slice(pdd->dev->kfd);
+	return pdd->dev->doorbell_base +
+		pdd->doorbell_index * kfd_doorbell_process_slice(pdd->dev);
 }
 
 int kfd_alloc_process_doorbells(struct kfd_dev *kfd, unsigned int *doorbell_index)
 {
-	int r = 0;
-
-	if (!kfd->shared_resources.enable_mes)
-		r = ida_simple_get(&kfd->doorbell_ida, 1,
-				   kfd->max_doorbell_slices, GFP_KERNEL);
-	else
-		r = amdgpu_mes_alloc_process_doorbells(
-				(struct amdgpu_device *)kfd->adev,
-				doorbell_index);
-
+	int r = ida_simple_get(&kfd->doorbell_ida, 1, kfd->max_doorbell_slices,
+				GFP_KERNEL);
 	if (r > 0)
 		*doorbell_index = r;
-
-	if (r < 0)
-		pr_err("Failed to allocate process doorbells\n");
 
 	return r;
 }
 
 void kfd_free_process_doorbells(struct kfd_dev *kfd, unsigned int doorbell_index)
 {
-	if (doorbell_index) {
-		if (!kfd->shared_resources.enable_mes)
-			ida_simple_remove(&kfd->doorbell_ida, doorbell_index);
-		else
-			amdgpu_mes_free_process_doorbells(
-					(struct amdgpu_device *)kfd->adev,
-					doorbell_index);
-	}
+	if (doorbell_index)
+		ida_simple_remove(&kfd->doorbell_ida, doorbell_index);
 }

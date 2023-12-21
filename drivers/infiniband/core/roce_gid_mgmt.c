@@ -70,7 +70,7 @@ struct netdev_event_work {
 };
 
 static const struct {
-	bool (*is_supported)(const struct ib_device *device, u32 port_num);
+	bool (*is_supported)(const struct ib_device *device, u8 port_num);
 	enum ib_gid_type gid_type;
 } PORT_CAP_TO_GID_TYPE[] = {
 	{rdma_protocol_roce_eth_encap, IB_GID_TYPE_ROCE},
@@ -79,7 +79,7 @@ static const struct {
 
 #define CAP_TO_GID_TABLE_SIZE	ARRAY_SIZE(PORT_CAP_TO_GID_TYPE)
 
-unsigned long roce_gid_type_mask_support(struct ib_device *ib_dev, u32 port)
+unsigned long roce_gid_type_mask_support(struct ib_device *ib_dev, u8 port)
 {
 	int i;
 	unsigned int ret_flags = 0;
@@ -96,7 +96,7 @@ unsigned long roce_gid_type_mask_support(struct ib_device *ib_dev, u32 port)
 EXPORT_SYMBOL(roce_gid_type_mask_support);
 
 static void update_gid(enum gid_op_type gid_op, struct ib_device *ib_dev,
-		       u32 port, union ib_gid *gid,
+		       u8 port, union ib_gid *gid,
 		       struct ib_gid_attr *gid_attr)
 {
 	int i;
@@ -144,7 +144,7 @@ static enum bonding_slave_state is_eth_active_slave_of_bonding_rcu(struct net_de
 #define REQUIRED_BOND_STATES		(BONDING_SLAVE_STATE_ACTIVE |	\
 					 BONDING_SLAVE_STATE_NA)
 static bool
-is_eth_port_of_netdev_filter(struct ib_device *ib_dev, u32 port,
+is_eth_port_of_netdev_filter(struct ib_device *ib_dev, u8 port,
 			     struct net_device *rdma_ndev, void *cookie)
 {
 	struct net_device *real_dev;
@@ -168,7 +168,7 @@ is_eth_port_of_netdev_filter(struct ib_device *ib_dev, u32 port,
 }
 
 static bool
-is_eth_port_inactive_slave_filter(struct ib_device *ib_dev, u32 port,
+is_eth_port_inactive_slave_filter(struct ib_device *ib_dev, u8 port,
 				  struct net_device *rdma_ndev, void *cookie)
 {
 	struct net_device *master_dev;
@@ -186,19 +186,18 @@ is_eth_port_inactive_slave_filter(struct ib_device *ib_dev, u32 port,
 	return res;
 }
 
-/**
- * is_ndev_for_default_gid_filter - Check if a given netdevice
+/** is_ndev_for_default_gid_filter - Check if a given netdevice
  * can be considered for default GIDs or not.
  * @ib_dev:		IB device to check
  * @port:		Port to consider for adding default GID
  * @rdma_ndev:		rdma netdevice pointer
- * @cookie:             Netdevice to consider to form a default GID
+ * @cookie_ndev:	Netdevice to consider to form a default GID
  *
  * is_ndev_for_default_gid_filter() returns true if a given netdevice can be
  * considered for deriving default RoCE GID, returns false otherwise.
  */
 static bool
-is_ndev_for_default_gid_filter(struct ib_device *ib_dev, u32 port,
+is_ndev_for_default_gid_filter(struct ib_device *ib_dev, u8 port,
 			       struct net_device *rdma_ndev, void *cookie)
 {
 	struct net_device *cookie_ndev = cookie;
@@ -224,13 +223,13 @@ is_ndev_for_default_gid_filter(struct ib_device *ib_dev, u32 port,
 	return res;
 }
 
-static bool pass_all_filter(struct ib_device *ib_dev, u32 port,
+static bool pass_all_filter(struct ib_device *ib_dev, u8 port,
 			    struct net_device *rdma_ndev, void *cookie)
 {
 	return true;
 }
 
-static bool upper_device_filter(struct ib_device *ib_dev, u32 port,
+static bool upper_device_filter(struct ib_device *ib_dev, u8 port,
 				struct net_device *rdma_ndev, void *cookie)
 {
 	bool res;
@@ -250,7 +249,7 @@ static bool upper_device_filter(struct ib_device *ib_dev, u32 port,
 
 /**
  * is_upper_ndev_bond_master_filter - Check if a given netdevice
- * is bond master device of netdevice of the RDMA device of port.
+ * is bond master device of netdevice of the the RDMA device of port.
  * @ib_dev:		IB device to check
  * @port:		Port to consider for adding default GID
  * @rdma_ndev:		Pointer to rdma netdevice
@@ -261,7 +260,7 @@ static bool upper_device_filter(struct ib_device *ib_dev, u32 port,
  * not have been established as slave device yet.
  */
 static bool
-is_upper_ndev_bond_master_filter(struct ib_device *ib_dev, u32 port,
+is_upper_ndev_bond_master_filter(struct ib_device *ib_dev, u8 port,
 				 struct net_device *rdma_ndev,
 				 void *cookie)
 {
@@ -281,7 +280,7 @@ is_upper_ndev_bond_master_filter(struct ib_device *ib_dev, u32 port,
 
 static void update_gid_ip(enum gid_op_type gid_op,
 			  struct ib_device *ib_dev,
-			  u32 port, struct net_device *ndev,
+			  u8 port, struct net_device *ndev,
 			  struct sockaddr *addr)
 {
 	union ib_gid gid;
@@ -295,7 +294,7 @@ static void update_gid_ip(enum gid_op_type gid_op,
 }
 
 static void bond_delete_netdev_default_gids(struct ib_device *ib_dev,
-					    u32 port,
+					    u8 port,
 					    struct net_device *rdma_ndev,
 					    struct net_device *event_ndev)
 {
@@ -329,7 +328,7 @@ static void bond_delete_netdev_default_gids(struct ib_device *ib_dev,
 }
 
 static void enum_netdev_ipv4_ips(struct ib_device *ib_dev,
-				 u32 port, struct net_device *ndev)
+				 u8 port, struct net_device *ndev)
 {
 	const struct in_ifaddr *ifa;
 	struct in_device *in_dev;
@@ -373,7 +372,7 @@ static void enum_netdev_ipv4_ips(struct ib_device *ib_dev,
 }
 
 static void enum_netdev_ipv6_ips(struct ib_device *ib_dev,
-				 u32 port, struct net_device *ndev)
+				 u8 port, struct net_device *ndev)
 {
 	struct inet6_ifaddr *ifp;
 	struct inet6_dev *in6_dev;
@@ -418,7 +417,7 @@ static void enum_netdev_ipv6_ips(struct ib_device *ib_dev,
 	}
 }
 
-static void _add_netdev_ips(struct ib_device *ib_dev, u32 port,
+static void _add_netdev_ips(struct ib_device *ib_dev, u8 port,
 			    struct net_device *ndev)
 {
 	enum_netdev_ipv4_ips(ib_dev, port, ndev);
@@ -426,13 +425,13 @@ static void _add_netdev_ips(struct ib_device *ib_dev, u32 port,
 		enum_netdev_ipv6_ips(ib_dev, port, ndev);
 }
 
-static void add_netdev_ips(struct ib_device *ib_dev, u32 port,
+static void add_netdev_ips(struct ib_device *ib_dev, u8 port,
 			   struct net_device *rdma_ndev, void *cookie)
 {
 	_add_netdev_ips(ib_dev, port, cookie);
 }
 
-static void del_netdev_ips(struct ib_device *ib_dev, u32 port,
+static void del_netdev_ips(struct ib_device *ib_dev, u8 port,
 			   struct net_device *rdma_ndev, void *cookie)
 {
 	ib_cache_gid_del_all_netdev_gids(ib_dev, port, cookie);
@@ -447,7 +446,7 @@ static void del_netdev_ips(struct ib_device *ib_dev, u32 port,
  *
  * del_default_gids() deletes the default GIDs of the event/cookie netdevice.
  */
-static void del_default_gids(struct ib_device *ib_dev, u32 port,
+static void del_default_gids(struct ib_device *ib_dev, u8 port,
 			     struct net_device *rdma_ndev, void *cookie)
 {
 	struct net_device *cookie_ndev = cookie;
@@ -459,7 +458,7 @@ static void del_default_gids(struct ib_device *ib_dev, u32 port,
 				     IB_CACHE_GID_DEFAULT_MODE_DELETE);
 }
 
-static void add_default_gids(struct ib_device *ib_dev, u32 port,
+static void add_default_gids(struct ib_device *ib_dev, u8 port,
 			     struct net_device *rdma_ndev, void *cookie)
 {
 	struct net_device *event_ndev = cookie;
@@ -471,7 +470,7 @@ static void add_default_gids(struct ib_device *ib_dev, u32 port,
 }
 
 static void enum_all_gids_of_dev_cb(struct ib_device *ib_dev,
-				    u32 port,
+				    u8 port,
 				    struct net_device *rdma_ndev,
 				    void *cookie)
 {
@@ -506,7 +505,7 @@ static void enum_all_gids_of_dev_cb(struct ib_device *ib_dev,
  * rdma_roce_rescan_device - Rescan all of the network devices in the system
  * and add their gids, as needed, to the relevant RoCE devices.
  *
- * @ib_dev:         the rdma device
+ * @device:         the rdma device
  */
 void rdma_roce_rescan_device(struct ib_device *ib_dev)
 {
@@ -516,7 +515,7 @@ void rdma_roce_rescan_device(struct ib_device *ib_dev)
 EXPORT_SYMBOL(rdma_roce_rescan_device);
 
 static void callback_for_addr_gid_device_scan(struct ib_device *device,
-					      u32 port,
+					      u8 port,
 					      struct net_device *rdma_ndev,
 					      void *cookie)
 {
@@ -548,10 +547,10 @@ static int netdev_upper_walk(struct net_device *upper,
 	return 0;
 }
 
-static void handle_netdev_upper(struct ib_device *ib_dev, u32 port,
+static void handle_netdev_upper(struct ib_device *ib_dev, u8 port,
 				void *cookie,
 				void (*handle_netdev)(struct ib_device *ib_dev,
-						      u32 port,
+						      u8 port,
 						      struct net_device *ndev))
 {
 	struct net_device *ndev = cookie;
@@ -575,25 +574,25 @@ static void handle_netdev_upper(struct ib_device *ib_dev, u32 port,
 	}
 }
 
-static void _roce_del_all_netdev_gids(struct ib_device *ib_dev, u32 port,
+static void _roce_del_all_netdev_gids(struct ib_device *ib_dev, u8 port,
 				      struct net_device *event_ndev)
 {
 	ib_cache_gid_del_all_netdev_gids(ib_dev, port, event_ndev);
 }
 
-static void del_netdev_upper_ips(struct ib_device *ib_dev, u32 port,
+static void del_netdev_upper_ips(struct ib_device *ib_dev, u8 port,
 				 struct net_device *rdma_ndev, void *cookie)
 {
 	handle_netdev_upper(ib_dev, port, cookie, _roce_del_all_netdev_gids);
 }
 
-static void add_netdev_upper_ips(struct ib_device *ib_dev, u32 port,
+static void add_netdev_upper_ips(struct ib_device *ib_dev, u8 port,
 				 struct net_device *rdma_ndev, void *cookie)
 {
 	handle_netdev_upper(ib_dev, port, cookie, _add_netdev_ips);
 }
 
-static void del_netdev_default_ips_join(struct ib_device *ib_dev, u32 port,
+static void del_netdev_default_ips_join(struct ib_device *ib_dev, u8 port,
 					struct net_device *rdma_ndev,
 					void *cookie)
 {

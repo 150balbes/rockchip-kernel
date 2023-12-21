@@ -4,72 +4,78 @@
 
 #include <linux/sched.h>
 #include <linux/xarray.h>
-#include <uapi/linux/io_uring.h>
 
-enum io_uring_cmd_flags {
-	IO_URING_F_COMPLETE_DEFER	= 1,
-	IO_URING_F_UNLOCKED		= 2,
-	/* the request is executed from poll, it should not be freed */
-	IO_URING_F_MULTISHOT		= 4,
-	/* executed by io-wq */
-	IO_URING_F_IOWQ			= 8,
-	/* int's last bit, sign checks are usually faster than a bit test */
-	IO_URING_F_NONBLOCK		= INT_MIN,
-
-	/* ctx state flags, for URING_CMD */
-	IO_URING_F_SQE128		= (1 << 8),
-	IO_URING_F_CQE32		= (1 << 9),
-	IO_URING_F_IOPOLL		= (1 << 10),
+#ifdef __GENKSYMS__
+/*
+ * ANDROID ABI HACK
+ *
+ * In the 5.10.162 release, the io_uring code was synced with the version
+ * that is in the 5.15.y kernel tree in order to resolve a huge number of
+ * potential, and known, problems with the codebase.  This makes for a more
+ * secure and easier-to-update-and-maintain 5.10.y kernel tree, so this is
+ * a great thing, however this caused some issues when it comes to the
+ * Android KABI preservation and checking tools.
+ *
+ * A number of the io_uring structures get used in other core kernel
+ * structures, only as "opaque" pointers, so there is not any real ABI
+ * breakage.  But, due to the visibility of the structures going away, the
+ * CRC values of many scheduler variables and functions were changed.
+ *
+ * In order to preserve the CRC values, to prevent all device kernels to be
+ * forced to rebuild for no reason whatsoever from a functional point of
+ * view, we need to keep around the "old" io_uring structures for the CRC
+ * calculation only.  This is done by the following definitions of struct
+ * io_identity and struct io_uring_task which will only be visible when the
+ * CRC calculation build happens, not in any functional kernel build.
+ *
+ * Yes, this all is a horrible hack, and these really are not the true
+ * structures that any code uses, but so life is in the world of stable
+ * apis...
+ * The real structures are in io_uring/io_uring.c, see the ones there if
+ * you need to touch or do anything with it.
+ *
+ * NEVER touch these structure definitions, they are fake and not valid code.
+ */
+struct io_identity {
+	struct files_struct		*files;
+	struct mm_struct		*mm;
+#ifdef CONFIG_BLK_CGROUP
+	struct cgroup_subsys_state	*blkcg_css;
+#endif
+	const struct cred		*creds;
+	struct nsproxy			*nsproxy;
+	struct fs_struct		*fs;
+	unsigned long			fsize;
+#ifdef CONFIG_AUDIT
+	kuid_t				loginuid;
+	unsigned int			sessionid;
+#endif
+	refcount_t			count;
 };
 
-struct io_uring_cmd {
-	struct file	*file;
-	const struct io_uring_sqe *sqe;
-	union {
-		/* callback to defer completions to task context */
-		void (*task_work_cb)(struct io_uring_cmd *cmd, unsigned);
-		/* used for polled completion */
-		void *cookie;
-	};
-	u32		cmd_op;
-	u32		flags;
-	u8		pdu[32]; /* available inline for free use */
+struct io_uring_task {
+	/* submission side */
+	struct xarray		xa;
+	struct wait_queue_head	wait;
+	struct file		*last;
+	struct percpu_counter	inflight;
+	struct io_identity	__identity;
+	struct io_identity	*identity;
+	atomic_t		in_idle;
+	bool			sqpoll;
 };
+#endif	/* ANDROID ABI HACK */
 
-static inline const void *io_uring_sqe_cmd(const struct io_uring_sqe *sqe)
-{
-	return sqe->cmd;
-}
 
 #if defined(CONFIG_IO_URING)
-int io_uring_cmd_import_fixed(u64 ubuf, unsigned long len, int rw,
-			      struct iov_iter *iter, void *ioucmd);
-void io_uring_cmd_done(struct io_uring_cmd *cmd, ssize_t ret, ssize_t res2,
-			unsigned issue_flags);
 struct sock *io_uring_get_socket(struct file *file);
 void __io_uring_cancel(bool cancel_all);
 void __io_uring_free(struct task_struct *tsk);
-void io_uring_unreg_ringfd(void);
-const char *io_uring_get_opcode(u8 opcode);
-void __io_uring_cmd_do_in_task(struct io_uring_cmd *ioucmd,
-			    void (*task_work_cb)(struct io_uring_cmd *, unsigned),
-			    unsigned flags);
-/* users should follow semantics of IOU_F_TWQ_LAZY_WAKE */
-void io_uring_cmd_do_in_task_lazy(struct io_uring_cmd *ioucmd,
-			void (*task_work_cb)(struct io_uring_cmd *, unsigned));
-
-static inline void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
-			void (*task_work_cb)(struct io_uring_cmd *, unsigned))
-{
-	__io_uring_cmd_do_in_task(ioucmd, task_work_cb, 0);
-}
 
 static inline void io_uring_files_cancel(void)
 {
-	if (current->io_uring) {
-		io_uring_unreg_ringfd();
+	if (current->io_uring)
 		__io_uring_cancel(false);
-	}
 }
 static inline void io_uring_task_cancel(void)
 {
@@ -82,23 +88,6 @@ static inline void io_uring_free(struct task_struct *tsk)
 		__io_uring_free(tsk);
 }
 #else
-static inline int io_uring_cmd_import_fixed(u64 ubuf, unsigned long len, int rw,
-			      struct iov_iter *iter, void *ioucmd)
-{
-	return -EOPNOTSUPP;
-}
-static inline void io_uring_cmd_done(struct io_uring_cmd *cmd, ssize_t ret,
-		ssize_t ret2, unsigned issue_flags)
-{
-}
-static inline void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
-			void (*task_work_cb)(struct io_uring_cmd *, unsigned))
-{
-}
-static inline void io_uring_cmd_do_in_task_lazy(struct io_uring_cmd *ioucmd,
-			void (*task_work_cb)(struct io_uring_cmd *, unsigned))
-{
-}
 static inline struct sock *io_uring_get_socket(struct file *file)
 {
 	return NULL;
@@ -111,10 +100,6 @@ static inline void io_uring_files_cancel(void)
 }
 static inline void io_uring_free(struct task_struct *tsk)
 {
-}
-static inline const char *io_uring_get_opcode(u8 opcode)
-{
-	return "";
 }
 #endif
 

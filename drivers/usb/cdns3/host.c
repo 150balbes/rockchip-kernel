@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Cadence USBSS and USBSSP DRD Driver - host side
+ * Cadence USBSS DRD Driver - host side
  *
  * Copyright (C) 2018-2019 Cadence Design Systems.
  * Copyright (C) 2017-2018 NXP
@@ -10,7 +10,6 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/slab.h>
 #include "core.h"
 #include "drd.h"
 #include "host-export.h"
@@ -24,46 +23,18 @@
 #define CFG_RXDET_P3_EN		BIT(15)
 #define LPM_2_STB_SWITCH_EN	BIT(25)
 
-static void xhci_cdns3_plat_start(struct usb_hcd *hcd)
-{
-	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-	u32 value;
-
-	/* set usbcmd.EU3S */
-	value = readl(&xhci->op_regs->command);
-	value |= CMD_PM_INDEX;
-	writel(value, &xhci->op_regs->command);
-
-	if (hcd->regs) {
-		value = readl(hcd->regs + XECP_AUX_CTRL_REG1);
-		value |= CFG_RXDET_P3_EN;
-		writel(value, hcd->regs + XECP_AUX_CTRL_REG1);
-
-		value = readl(hcd->regs + XECP_PORT_CAP_REG);
-		value |= LPM_2_STB_SWITCH_EN;
-		writel(value, hcd->regs + XECP_PORT_CAP_REG);
-	}
-}
-
-static int xhci_cdns3_resume_quirk(struct usb_hcd *hcd)
-{
-	xhci_cdns3_plat_start(hcd);
-	return 0;
-}
-
 static const struct xhci_plat_priv xhci_plat_cdns3_xhci = {
-	.quirks = XHCI_SKIP_PHY_INIT | XHCI_AVOID_BEI,
-	.plat_start = xhci_cdns3_plat_start,
-	.resume_quirk = xhci_cdns3_resume_quirk,
+	.quirks = XHCI_SKIP_PHY_INIT,
+	.suspend_quirk = xhci_cdns3_suspend_quirk,
 };
 
-static int __cdns_host_init(struct cdns *cdns)
+static int __cdns3_host_init(struct cdns3 *cdns)
 {
 	struct platform_device *xhci;
 	int ret;
 	struct usb_hcd *hcd;
 
-	cdns_drd_host_on(cdns);
+	cdns3_drd_host_on(cdns);
 
 	xhci = platform_device_alloc("xhci-hcd", PLATFORM_DEVID_AUTO);
 	if (!xhci) {
@@ -75,7 +46,7 @@ static int __cdns_host_init(struct cdns *cdns)
 	cdns->host_dev = xhci;
 
 	ret = platform_device_add_resources(xhci, cdns->xhci_res,
-					    CDNS_XHCI_RESOURCES_NUM);
+					    CDNS3_XHCI_RESOURCES_NUM);
 	if (ret) {
 		dev_err(cdns->dev, "couldn't add resources to xHCI device\n");
 		goto err1;
@@ -116,25 +87,51 @@ err1:
 	return ret;
 }
 
-static void cdns_host_exit(struct cdns *cdns)
+int xhci_cdns3_suspend_quirk(struct usb_hcd *hcd)
+{
+	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
+	u32 value;
+
+	if (pm_runtime_status_suspended(hcd->self.controller))
+		return 0;
+
+	/* set usbcmd.EU3S */
+	value = readl(&xhci->op_regs->command);
+	value |= CMD_PM_INDEX;
+	writel(value, &xhci->op_regs->command);
+
+	if (hcd->regs) {
+		value = readl(hcd->regs + XECP_AUX_CTRL_REG1);
+		value |= CFG_RXDET_P3_EN;
+		writel(value, hcd->regs + XECP_AUX_CTRL_REG1);
+
+		value = readl(hcd->regs + XECP_PORT_CAP_REG);
+		value |= LPM_2_STB_SWITCH_EN;
+		writel(value, hcd->regs + XECP_PORT_CAP_REG);
+	}
+
+	return 0;
+}
+
+static void cdns3_host_exit(struct cdns3 *cdns)
 {
 	kfree(cdns->xhci_plat_data);
 	platform_device_unregister(cdns->host_dev);
 	cdns->host_dev = NULL;
-	cdns_drd_host_off(cdns);
+	cdns3_drd_host_off(cdns);
 }
 
-int cdns_host_init(struct cdns *cdns)
+int cdns3_host_init(struct cdns3 *cdns)
 {
-	struct cdns_role_driver *rdrv;
+	struct cdns3_role_driver *rdrv;
 
 	rdrv = devm_kzalloc(cdns->dev, sizeof(*rdrv), GFP_KERNEL);
 	if (!rdrv)
 		return -ENOMEM;
 
-	rdrv->start	= __cdns_host_init;
-	rdrv->stop	= cdns_host_exit;
-	rdrv->state	= CDNS_ROLE_STATE_INACTIVE;
+	rdrv->start	= __cdns3_host_init;
+	rdrv->stop	= cdns3_host_exit;
+	rdrv->state	= CDNS3_ROLE_STATE_INACTIVE;
 	rdrv->name	= "host";
 
 	cdns->roles[USB_ROLE_HOST] = rdrv;

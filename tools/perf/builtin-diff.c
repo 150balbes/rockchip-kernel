@@ -6,6 +6,7 @@
  * DSOs and symbol information, sort them and produce a diff.
  */
 #include "builtin.h"
+#include "perf.h"
 
 #include "util/debug.h"
 #include "util/event.h"
@@ -25,7 +26,6 @@
 #include "util/spark.h"
 #include "util/block-info.h"
 #include "util/stream.h"
-#include "util/util.h"
 #include <linux/err.h>
 #include <linux/zalloc.h>
 #include <subcmd/pager.h>
@@ -409,26 +409,24 @@ static int diff__process_sample_event(struct perf_tool *tool,
 		return 0;
 	}
 
-	addr_location__init(&al);
 	if (machine__resolve(machine, &al, sample) < 0) {
 		pr_warning("problem processing %d event, skipping it.\n",
 			   event->header.type);
-		ret = -1;
-		goto out;
+		return -1;
 	}
 
 	if (cpu_list && !test_bit(sample->cpu, cpu_bitmap)) {
 		ret = 0;
-		goto out;
+		goto out_put;
 	}
 
 	switch (compute) {
 	case COMPUTE_CYCLES:
 		if (!hists__add_entry_ops(hists, &block_hist_ops, &al, NULL,
-					  NULL, NULL, NULL, sample, true)) {
+					  NULL, NULL, sample, true)) {
 			pr_warning("problem incrementing symbol period, "
 				   "skipping event\n");
-			goto out;
+			goto out_put;
 		}
 
 		hist__account_cycles(sample->branch_stack, &al, sample, false,
@@ -439,16 +437,16 @@ static int diff__process_sample_event(struct perf_tool *tool,
 		if (hist_entry_iter__add(&iter, &al, PERF_MAX_STACK_DEPTH,
 					 NULL)) {
 			pr_debug("problem adding hist entry, skipping event\n");
-			goto out;
+			goto out_put;
 		}
 		break;
 
 	default:
-		if (!hists__add_entry(hists, &al, NULL, NULL, NULL, NULL, sample,
+		if (!hists__add_entry(hists, &al, NULL, NULL, NULL, sample,
 				      true)) {
 			pr_warning("problem incrementing symbol period, "
 				   "skipping event\n");
-			goto out;
+			goto out_put;
 		}
 	}
 
@@ -462,8 +460,8 @@ static int diff__process_sample_event(struct perf_tool *tool,
 	if (!al.filtered)
 		hists->stats.total_non_filtered_period += sample->period;
 	ret = 0;
-out:
-	addr_location__exit(&al);
+out_put:
+	addr_location__put(&al);
 	return ret;
 }
 
@@ -496,7 +494,7 @@ static struct evsel *evsel_match(struct evsel *evsel,
 	return NULL;
 }
 
-static void evlist__collapse_resort(struct evlist *evlist)
+static void perf_evlist__collapse_resort(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
@@ -1033,12 +1031,12 @@ static int process_base_stream(struct data__file *data_base,
 			continue;
 
 		es_base = evsel_streams__entry(data_base->evlist_streams,
-					       evsel_base->core.idx);
+					       evsel_base->idx);
 		if (!es_base)
 			return -1;
 
 		es_pair = evsel_streams__entry(data_pair->evlist_streams,
-					       evsel_pair->core.idx);
+					       evsel_pair->idx);
 		if (!es_pair)
 			return -1;
 
@@ -1158,7 +1156,7 @@ static int check_file_brstack(void)
 	int i;
 
 	data__for_each_file(i, d) {
-		d->session = perf_session__new(&d->data, &pdiff.tool);
+		d->session = perf_session__new(&d->data, false, &pdiff.tool);
 		if (IS_ERR(d->session)) {
 			pr_err("Failed to open %s\n", d->data.path);
 			return PTR_ERR(d->session);
@@ -1190,7 +1188,7 @@ static int __cmd_diff(void)
 	ret = -EINVAL;
 
 	data__for_each_file(i, d) {
-		d->session = perf_session__new(&d->data, &pdiff.tool);
+		d->session = perf_session__new(&d->data, false, &pdiff.tool);
 		if (IS_ERR(d->session)) {
 			ret = PTR_ERR(d->session);
 			pr_err("Failed to open %s\n", d->data.path);
@@ -1216,7 +1214,7 @@ static int __cmd_diff(void)
 			goto out_delete;
 		}
 
-		evlist__collapse_resort(d->session->evlist);
+		perf_evlist__collapse_resort(d->session->evlist);
 
 		if (pdiff.ptime_range)
 			zfree(&pdiff.ptime_range);
@@ -1238,8 +1236,7 @@ static int __cmd_diff(void)
 
  out_delete:
 	data__for_each_file(i, d) {
-		if (!IS_ERR(d->session))
-			perf_session__delete(d->session);
+		perf_session__delete(d->session);
 		data__free(d);
 	}
 
@@ -1262,7 +1259,7 @@ static const char * const diff_usage[] = {
 static const struct option options[] = {
 	OPT_INCR('v', "verbose", &verbose,
 		    "be more verbose (show symbol address, etc)"),
-	OPT_BOOLEAN('q', "quiet", &quiet, "Do not show any warnings or messages"),
+	OPT_BOOLEAN('q', "quiet", &quiet, "Do not show any message"),
 	OPT_BOOLEAN('b', "baseline-only", &show_baseline_only,
 		    "Show only items with match in baseline"),
 	OPT_CALLBACK('c', "compute", &compute,
@@ -1378,8 +1375,8 @@ static int cycles_printf(struct hist_entry *he, struct hist_entry *pair,
 	end_line = map__srcline(he->ms.map, bi->sym->start + bi->end,
 				he->ms.sym);
 
-	if (start_line != SRCLINE_UNKNOWN &&
-	    end_line != SRCLINE_UNKNOWN) {
+	if ((strncmp(start_line, SRCLINE_UNKNOWN, strlen(SRCLINE_UNKNOWN)) != 0) &&
+	    (strncmp(end_line, SRCLINE_UNKNOWN, strlen(SRCLINE_UNKNOWN)) != 0)) {
 		scnprintf(buf, sizeof(buf), "[%s -> %s] %4ld",
 			  start_line, end_line, block_he->diff.cycles);
 	} else {
@@ -1387,8 +1384,8 @@ static int cycles_printf(struct hist_entry *he, struct hist_entry *pair,
 			  bi->start, bi->end, block_he->diff.cycles);
 	}
 
-	zfree_srcline(&start_line);
-	zfree_srcline(&end_line);
+	free_srcline(start_line);
+	free_srcline(end_line);
 
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
 }
@@ -1798,7 +1795,7 @@ static int ui_init(void)
 	data__for_each_file(i, d) {
 
 		/*
-		 * Baseline or compute related columns:
+		 * Baseline or compute realted columns:
 		 *
 		 *   PERF_HPP_DIFF__BASELINE
 		 *   PERF_HPP_DIFF__DELTA

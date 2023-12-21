@@ -17,7 +17,6 @@
 #include <linux/rcupdate.h>
 #include <net/fib_notifier.h>
 #include <net/fib_rules.h>
-#include <net/inet_dscp.h>
 #include <net/inetpeer.h>
 #include <linux/percpu.h>
 #include <linux/notifier.h>
@@ -25,7 +24,7 @@
 
 struct fib_config {
 	u8			fc_dst_len;
-	dscp_t			fc_dscp;
+	u8			fc_tos;
 	u8			fc_protocol;
 	u8			fc_scope;
 	u8			fc_type;
@@ -80,7 +79,6 @@ struct fnhe_hash_bucket {
 
 struct fib_nh_common {
 	struct net_device	*nhc_dev;
-	netdevice_tracker	nhc_dev_tracker;
 	int			nhc_oif;
 	unsigned char		nhc_scope;
 	u8			nhc_family;
@@ -113,7 +111,6 @@ struct fib_nh {
 	int			nh_saddr_genid;
 #define fib_nh_family		nh_common.nhc_family
 #define fib_nh_dev		nh_common.nhc_dev
-#define fib_nh_dev_tracker	nh_common.nhc_dev_tracker
 #define fib_nh_oif		nh_common.nhc_oif
 #define fib_nh_flags		nh_common.nhc_flags
 #define fib_nh_lws		nh_common.nhc_lwtstate
@@ -136,7 +133,7 @@ struct fib_info {
 	struct hlist_node	fib_lhash;
 	struct list_head	nh_list;
 	struct net		*fib_net;
-	refcount_t		fib_treeref;
+	int			fib_treeref;
 	refcount_t		fib_clntref;
 	unsigned int		fib_flags;
 	unsigned char		fib_dead;
@@ -212,12 +209,11 @@ struct fib_rt_info {
 	u32			tb_id;
 	__be32			dst;
 	int			dst_len;
-	dscp_t			dscp;
+	u8			tos;
 	u8			type;
 	u8			offload:1,
 				trap:1,
-				offload_failed:1,
-				unused:5;
+				unused:6;
 };
 
 struct fib_entry_notifier_info {
@@ -225,7 +221,7 @@ struct fib_entry_notifier_info {
 	u32 dst;
 	int dst_len;
 	struct fib_info *fi;
-	dscp_t dscp;
+	u8 tos;
 	u8 type;
 	u32 tb_id;
 };
@@ -468,49 +464,6 @@ int fib_sync_down_addr(struct net_device *dev, __be32 local);
 int fib_sync_up(struct net_device *dev, unsigned char nh_flags);
 void fib_sync_mtu(struct net_device *dev, u32 orig_mtu);
 void fib_nhc_update_mtu(struct fib_nh_common *nhc, u32 new, u32 orig);
-
-/* Fields used for sysctl_fib_multipath_hash_fields.
- * Common to IPv4 and IPv6.
- *
- * Add new fields at the end. This is user API.
- */
-#define FIB_MULTIPATH_HASH_FIELD_SRC_IP			BIT(0)
-#define FIB_MULTIPATH_HASH_FIELD_DST_IP			BIT(1)
-#define FIB_MULTIPATH_HASH_FIELD_IP_PROTO		BIT(2)
-#define FIB_MULTIPATH_HASH_FIELD_FLOWLABEL		BIT(3)
-#define FIB_MULTIPATH_HASH_FIELD_SRC_PORT		BIT(4)
-#define FIB_MULTIPATH_HASH_FIELD_DST_PORT		BIT(5)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_SRC_IP		BIT(6)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_DST_IP		BIT(7)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_IP_PROTO		BIT(8)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_FLOWLABEL	BIT(9)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_SRC_PORT		BIT(10)
-#define FIB_MULTIPATH_HASH_FIELD_INNER_DST_PORT		BIT(11)
-
-#define FIB_MULTIPATH_HASH_FIELD_OUTER_MASK		\
-	(FIB_MULTIPATH_HASH_FIELD_SRC_IP |		\
-	 FIB_MULTIPATH_HASH_FIELD_DST_IP |		\
-	 FIB_MULTIPATH_HASH_FIELD_IP_PROTO |		\
-	 FIB_MULTIPATH_HASH_FIELD_FLOWLABEL |		\
-	 FIB_MULTIPATH_HASH_FIELD_SRC_PORT |		\
-	 FIB_MULTIPATH_HASH_FIELD_DST_PORT)
-
-#define FIB_MULTIPATH_HASH_FIELD_INNER_MASK		\
-	(FIB_MULTIPATH_HASH_FIELD_INNER_SRC_IP |	\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_DST_IP |	\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_IP_PROTO |	\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_FLOWLABEL |	\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_SRC_PORT |	\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_DST_PORT)
-
-#define FIB_MULTIPATH_HASH_FIELD_ALL_MASK		\
-	(FIB_MULTIPATH_HASH_FIELD_OUTER_MASK |		\
-	 FIB_MULTIPATH_HASH_FIELD_INNER_MASK)
-
-#define FIB_MULTIPATH_HASH_FIELD_DEFAULT_MASK		\
-	(FIB_MULTIPATH_HASH_FIELD_SRC_IP |		\
-	 FIB_MULTIPATH_HASH_FIELD_DST_IP |		\
-	 FIB_MULTIPATH_HASH_FIELD_IP_PROTO)
 
 #ifdef CONFIG_IP_ROUTE_MULTIPATH
 int fib_multipath_hash(const struct net *net, const struct flowi4 *fl4,

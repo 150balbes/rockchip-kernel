@@ -110,7 +110,7 @@ static long radio_si4713_default(struct file *file, void *p,
 					  ioctl, cmd, arg);
 }
 
-static const struct v4l2_ioctl_ops radio_si4713_ioctl_ops = {
+static struct v4l2_ioctl_ops radio_si4713_ioctl_ops = {
 	.vidioc_querycap	= radio_si4713_querycap,
 	.vidioc_g_modulator	= radio_si4713_g_modulator,
 	.vidioc_s_modulator	= radio_si4713_s_modulator,
@@ -190,7 +190,7 @@ exit:
 }
 
 /* radio_si4713_pdriver_remove - remove the device */
-static void radio_si4713_pdriver_remove(struct platform_device *pdev)
+static int radio_si4713_pdriver_remove(struct platform_device *pdev)
 {
 	struct v4l2_device *v4l2_dev = platform_get_drvdata(pdev);
 	struct radio_si4713_device *rsdev;
@@ -198,6 +198,8 @@ static void radio_si4713_pdriver_remove(struct platform_device *pdev)
 	rsdev = container_of(v4l2_dev, struct radio_si4713_device, v4l2_dev);
 	video_unregister_device(&rsdev->radio_dev);
 	v4l2_device_unregister(&rsdev->v4l2_dev);
+
+	return 0;
 }
 
 static struct platform_driver radio_si4713_pdriver = {
@@ -205,7 +207,7 @@ static struct platform_driver radio_si4713_pdriver = {
 		.name	= "radio-si4713",
 	},
 	.probe		= radio_si4713_pdriver_probe,
-	.remove_new     = radio_si4713_pdriver_remove,
+	.remove         = radio_si4713_pdriver_remove,
 };
 
 module_platform_driver(radio_si4713_pdriver);

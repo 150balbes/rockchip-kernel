@@ -15,7 +15,7 @@
 
 static dev_t ocxl_dev;
 static struct class *ocxl_class;
-static DEFINE_MUTEX(minors_idr_lock);
+static struct mutex minors_idr_lock;
 static struct idr minors_idr;
 
 static struct ocxl_file_info *find_and_get_file_info(dev_t devno)
@@ -74,6 +74,7 @@ static long afu_ioctl_attach(struct ocxl_context *ctx,
 {
 	struct ocxl_ioctl_attach arg;
 	u64 amr = 0;
+	int rc;
 
 	pr_debug("%s for context %d\n", __func__, ctx->pasid);
 
@@ -85,7 +86,8 @@ static long afu_ioctl_attach(struct ocxl_context *ctx,
 		return -EINVAL;
 
 	amr = arg.amr & mfspr(SPRN_UAMOR);
-	return ocxl_context_attach(ctx, amr, current->mm);
+	rc = ocxl_context_attach(ctx, amr, current->mm);
+	return rc;
 }
 
 static long afu_ioctl_get_metadata(struct ocxl_context *ctx,
@@ -541,11 +543,8 @@ int ocxl_file_register_afu(struct ocxl_afu *afu)
 		goto err_put;
 
 	rc = device_register(&info->dev);
-	if (rc) {
-		free_minor(info);
-		put_device(&info->dev);
-		return rc;
-	}
+	if (rc)
+		goto err_put;
 
 	rc = ocxl_sysfs_register_afu(info);
 	if (rc)
@@ -584,7 +583,7 @@ void ocxl_file_unregister_afu(struct ocxl_afu *afu)
 	device_unregister(&info->dev);
 }
 
-static char *ocxl_devnode(const struct device *dev, umode_t *mode)
+static char *ocxl_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "ocxl/%s", dev_name(dev));
 }
@@ -593,6 +592,7 @@ int ocxl_file_init(void)
 {
 	int rc;
 
+	mutex_init(&minors_idr_lock);
 	idr_init(&minors_idr);
 
 	rc = alloc_chrdev_region(&ocxl_dev, 0, OCXL_NUM_MINORS, "ocxl");
@@ -601,7 +601,7 @@ int ocxl_file_init(void)
 		return rc;
 	}
 
-	ocxl_class = class_create("ocxl");
+	ocxl_class = class_create(THIS_MODULE, "ocxl");
 	if (IS_ERR(ocxl_class)) {
 		pr_err("Unable to create ocxl class\n");
 		unregister_chrdev_region(ocxl_dev, OCXL_NUM_MINORS);

@@ -58,17 +58,28 @@ static int fsl_sai_clk_probe(struct platform_device *pdev)
 	/* set clock direction, we are the BCLK master */
 	writel(CR2_BCD, base + I2S_CR2);
 
-	hw = devm_clk_hw_register_composite_pdata(dev, dev->of_node->name,
-						  &pdata, 1, NULL, NULL,
-						  &sai_clk->div.hw,
-						  &clk_divider_ops,
-						  &sai_clk->gate.hw,
-						  &clk_gate_ops,
-						  CLK_SET_RATE_GATE);
+	hw = clk_hw_register_composite_pdata(dev, dev->of_node->name,
+					     &pdata, 1, NULL, NULL,
+					     &sai_clk->div.hw,
+					     &clk_divider_ops,
+					     &sai_clk->gate.hw,
+					     &clk_gate_ops,
+					     CLK_SET_RATE_GATE);
 	if (IS_ERR(hw))
 		return PTR_ERR(hw);
 
+	platform_set_drvdata(pdev, hw);
+
 	return devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get, hw);
+}
+
+static int fsl_sai_clk_remove(struct platform_device *pdev)
+{
+	struct clk_hw *hw = platform_get_drvdata(pdev);
+
+	clk_hw_unregister_composite(hw);
+
+	return 0;
 }
 
 static const struct of_device_id of_fsl_sai_clk_ids[] = {
@@ -79,6 +90,7 @@ MODULE_DEVICE_TABLE(of, of_fsl_sai_clk_ids);
 
 static struct platform_driver fsl_sai_clk_driver = {
 	.probe = fsl_sai_clk_probe,
+	.remove = fsl_sai_clk_remove,
 	.driver		= {
 		.name	= "fsl-sai-clk",
 		.of_match_table = of_fsl_sai_clk_ids,
@@ -88,4 +100,5 @@ module_platform_driver(fsl_sai_clk_driver);
 
 MODULE_DESCRIPTION("Freescale SAI bitclock-as-a-clock driver");
 MODULE_AUTHOR("Michael Walle <michael@walle.cc>");
+MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:fsl-sai-clk");

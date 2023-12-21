@@ -26,30 +26,6 @@
 
 #define HID_REPORT_SIZE		64
 
-enum hw_revision {
-	HW_U2FZERO,
-	HW_NITROKEY_U2F,
-};
-
-struct hw_revision_config {
-	u8 rng_cmd;
-	u8 wink_cmd;
-	const char *name;
-};
-
-static const struct hw_revision_config hw_configs[] = {
-	[HW_U2FZERO] = {
-		.rng_cmd  = 0x21,
-		.wink_cmd = 0x24,
-		.name = "U2F Zero",
-	},
-	[HW_NITROKEY_U2F] = {
-		.rng_cmd  = 0xc0,
-		.wink_cmd = 0xc2,
-		.name = "NitroKey U2F",
-	},
-};
-
 /* We only use broadcast (CID-less) messages */
 #define CID_BROADCAST		0xffffffff
 
@@ -76,6 +52,10 @@ struct u2f_hid_report {
 
 #define U2F_HID_MSG_LEN(f)	(size_t)(((f).init.bcnth << 8) + (f).init.bcntl)
 
+/* Custom extensions to the U2FHID protocol */
+#define U2F_CUSTOM_GET_RNG	0x21
+#define U2F_CUSTOM_WINK		0x24
+
 struct u2fzero_device {
 	struct hid_device	*hdev;
 	struct urb		*urb;	    /* URB for the RNG data */
@@ -87,7 +67,6 @@ struct u2fzero_device {
 	u8			*buf_in;
 	struct mutex		lock;
 	bool			present;
-	kernel_ulong_t		hw_revision;
 };
 
 static int u2fzero_send(struct u2fzero_device *dev, struct u2f_hid_report *req)
@@ -175,7 +154,7 @@ static int u2fzero_blink(struct led_classdev *ldev)
 		.report_type = 0,
 		.msg.cid = CID_BROADCAST,
 		.msg.init = {
-			.cmd = hw_configs[dev->hw_revision].wink_cmd,
+			.cmd = U2F_CUSTOM_WINK,
 			.bcnth = 0,
 			.bcntl = 0,
 			.data  = {0},
@@ -203,7 +182,7 @@ static int u2fzero_rng_read(struct hwrng *rng, void *data,
 		.report_type = 0,
 		.msg.cid = CID_BROADCAST,
 		.msg.init = {
-			.cmd = hw_configs[dev->hw_revision].rng_cmd,
+			.cmd = U2F_CUSTOM_GET_RNG,
 			.bcnth = 0,
 			.bcntl = 0,
 			.data  = {0},
@@ -261,6 +240,7 @@ static int u2fzero_init_hwrng(struct u2fzero_device *dev,
 
 	dev->hwrng.name = dev->rng_name;
 	dev->hwrng.read = u2fzero_rng_read;
+	dev->hwrng.quality = 1;
 
 	return devm_hwrng_register(&dev->hdev->dev, &dev->hwrng);
 }
@@ -317,8 +297,6 @@ static int u2fzero_probe(struct hid_device *hdev,
 	if (dev == NULL)
 		return -ENOMEM;
 
-	dev->hw_revision = id->driver_data;
-
 	dev->buf_out = devm_kmalloc(&hdev->dev,
 		sizeof(struct u2f_hid_report), GFP_KERNEL);
 	if (dev->buf_out == NULL)
@@ -353,7 +331,7 @@ static int u2fzero_probe(struct hid_device *hdev,
 		return ret;
 	}
 
-	hid_info(hdev, "%s LED initialised\n", hw_configs[dev->hw_revision].name);
+	hid_info(hdev, "U2F Zero LED initialised\n");
 
 	ret = u2fzero_init_hwrng(dev, minor);
 	if (ret) {
@@ -361,7 +339,7 @@ static int u2fzero_probe(struct hid_device *hdev,
 		return ret;
 	}
 
-	hid_info(hdev, "%s RNG initialised\n", hw_configs[dev->hw_revision].name);
+	hid_info(hdev, "U2F Zero RNG initialised\n");
 
 	return 0;
 }
@@ -381,11 +359,7 @@ static void u2fzero_remove(struct hid_device *hdev)
 
 static const struct hid_device_id u2fzero_table[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CYGNAL,
-	  USB_DEVICE_ID_U2F_ZERO),
-	  .driver_data = HW_U2FZERO },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_CLAY_LOGIC,
-	  USB_DEVICE_ID_NITROKEY_U2F),
-	  .driver_data = HW_NITROKEY_U2F },
+	  USB_DEVICE_ID_U2F_ZERO) },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, u2fzero_table);

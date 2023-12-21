@@ -76,12 +76,13 @@ static int __init rng_init (void)
 	random_fd = err;
 	err = um_request_irq(RANDOM_IRQ, random_fd, IRQ_READ, random_interrupt,
 			     0, "random", NULL);
-	if (err < 0)
+	if (err)
 		goto err_out_cleanup_hw;
 
-	sigio_broken(random_fd);
+	sigio_broken(random_fd, 1);
 	hwrng.name = RNG_MODULE_NAME;
 	hwrng.read = rng_dev_read;
+	hwrng.quality = 1024;
 
 	err = hwrng_register(&hwrng);
 	if (err) {

@@ -12,6 +12,27 @@ menuconfig OF
 
 if OF
 
+config DTC_SYMBOLS
+	bool "Enable dtc generation of symbols for overlays support"
+	depends on DTC && ARCH_ROCKCHIP
+	help
+	  Set DTC_FLAGS += -@
+	  Android OS must enable this option.
+
+config DTC_OMIT_DISABLED
+	bool "Fixup dtb by removing nodes with disabled status"
+	depends on DTC && ROCKCHIP_MINI_KERNEL
+	default ROCKCHIP_MINI_KERNEL
+	help
+	  This option used for dtc to delete nodes with disabled status.
+
+config DTC_OMIT_EMPTY
+	bool "Fixup dtb by removing empty nodes"
+	depends on DTC && ROCKCHIP_MINI_KERNEL
+	default ROCKCHIP_MINI_KERNEL
+	help
+	  This option used for dtc to delete empty nodes.
+
 config OF_UNITTEST
 	bool "Device Tree runtime unit tests"
 	depends on !SPARC
@@ -23,19 +44,7 @@ config OF_UNITTEST
 	  that are executed once at boot time, and the results dumped to the
 	  console.
 
-	  This option should only be enabled for a development kernel. The tests
-	  will taint the kernel with TAINT_TEST. The tests will cause ERROR and
-	  WARNING messages to print on the console. The tests will cause stack
-	  traces to print on the console.  It is possible that the tests will
-	  leave the devicetree in a corrupted state.
-
-	  The unittest output will be verbose.  Copy the output to a file
-	  via capturing the console output or via the dmesg command.  Process
-	  this file with scripts/dtc/of_unittest_expect to reduce the
-	  verbosity, test whether expected output is present, and to
-	  summarize the results.
-
-	  If unsure, say N here. This option is not safe to enable.
+	  If unsure, say N here, but this option is safe to enable.
 
 config OF_ALL_DTBS
 	bool "Build all Device Tree Blobs"
@@ -82,8 +91,14 @@ config OF_IRQ
 	def_bool y
 	depends on !SPARC && IRQ_DOMAIN
 
+config OF_NET
+	depends on NETDEVICES
+	def_bool y
+
 config OF_RESERVED_MEM
-	def_bool OF_EARLY_FLATTREE
+	bool
+	depends on OF_EARLY_FLATTREE
+	default y if DMA_DECLARE_COHERENT || DMA_CMA
 
 config OF_RESOLVE
 	bool
@@ -100,6 +115,10 @@ config OF_OVERLAY
 	  enable it manually to improve device tree unit test coverage.
 
 config OF_NUMA
+	bool
+
+config OF_DMA_DEFAULT_COHERENT
+	# arches should select this if DMA is coherent by default for OF devices
 	bool
 
 endif # OF

@@ -1114,12 +1114,10 @@ int snd_mixart_create_mixer(struct mixart_mgr *mgr)
 		temp = mixart_control_analog_level;
 		temp.name = "Master Playback Volume";
 		temp.private_value = 0; /* playback */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 		/* output mute controls */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_output_switch, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_output_switch, chip))) < 0)
 			return err;
 
 		/* analog input level control only on first two chips !*/
@@ -1127,8 +1125,7 @@ int snd_mixart_create_mixer(struct mixart_mgr *mgr)
 			temp = mixart_control_analog_level;
 			temp.name = "Master Capture Volume";
 			temp.private_value = 1; /* capture */
-			err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 		}
 
@@ -1136,53 +1133,45 @@ int snd_mixart_create_mixer(struct mixart_mgr *mgr)
 		temp.name = "PCM Playback Volume";
 		temp.count = MIXART_PLAYBACK_STREAMS;
 		temp.private_value = 0; /* playback analog */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 
 		temp.name = "PCM Capture Volume";
 		temp.count = 1;
 		temp.private_value = MIXART_VOL_REC_MASK; /* capture analog */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 
 		if(mgr->board_type == MIXART_DAUGHTER_TYPE_AES) {
 			temp.name = "AES Playback Volume";
 			temp.count = MIXART_PLAYBACK_STREAMS;
 			temp.private_value = MIXART_VOL_AES_MASK; /* playback AES/EBU */
-			err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 
 			temp.name = "AES Capture Volume";
 			temp.count = 0;
 			temp.private_value = MIXART_VOL_REC_MASK | MIXART_VOL_AES_MASK; /* capture AES/EBU */
-			err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 		}
 		temp = mixart_control_pcm_switch;
 		temp.name = "PCM Playback Switch";
 		temp.private_value = 0; /* playback analog */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 
 		if(mgr->board_type == MIXART_DAUGHTER_TYPE_AES) {
 			temp.name = "AES Playback Switch";
 			temp.private_value = MIXART_VOL_AES_MASK; /* playback AES/EBU */
-			err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip));
-			if (err < 0)
+			if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&temp, chip))) < 0)
 				return err;
 		}
 
 		/* monitoring */
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_monitor_vol, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_monitor_vol, chip))) < 0)
 			return err;
-		err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_monitor_sw, chip));
-		if (err < 0)
+		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&mixart_control_monitor_sw, chip))) < 0)
 			return err;
 
 		/* init all mixer data and program the master volumes/switches */

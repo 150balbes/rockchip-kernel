@@ -259,7 +259,8 @@ static int tca8418_configure(struct tca8418_keypad *keypad_data,
 	return error;
 }
 
-static int tca8418_keypad_probe(struct i2c_client *client)
+static int tca8418_keypad_probe(struct i2c_client *client,
+				const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct tca8418_keypad *keypad_data;

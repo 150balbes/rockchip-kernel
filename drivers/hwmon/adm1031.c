@@ -65,7 +65,7 @@ struct adm1031_data {
 	const struct attribute_group *groups[3];
 	struct mutex update_lock;
 	int chip_type;
-	bool valid;		/* true if following fields are valid */
+	char valid;		/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 	unsigned int update_interval;	/* In milliseconds */
 	/*
@@ -187,7 +187,7 @@ static struct adm1031_data *adm1031_update_device(struct device *dev)
 					ADM1031_REG_PWM) >> (4 * chan)) & 0x0f;
 		}
 		data->last_updated = jiffies;
-		data->valid = true;
+		data->valid = 1;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -242,8 +242,9 @@ static int FAN_TO_REG(int reg, int div)
 static int AUTO_TEMP_MAX_TO_REG(int val, int reg, int pwm)
 {
 	int ret;
-	int range = ((val - AUTO_TEMP_MIN_FROM_REG(reg)) * 10) / (16 - pwm);
+	int range = val - AUTO_TEMP_MIN_FROM_REG(reg);
 
+	range = ((val - AUTO_TEMP_MIN_FROM_REG(reg))*10)/(16 - pwm);
 	ret = ((reg & 0xf8) |
 	       (range < 10000 ? 0 :
 		range < 20000 ? 1 :
@@ -649,7 +650,7 @@ static ssize_t fan_div_store(struct device *dev,
 			    data->fan_min[nr]);
 
 	/* Invalidate the cache: fan speed is no longer valid */
-	data->valid = false;
+	data->valid = 0;
 	mutex_unlock(&data->update_lock);
 	return count;
 }
@@ -985,7 +986,7 @@ static int adm1031_detect(struct i2c_client *client,
 		return -ENODEV;
 	name = (id == 0x30) ? "adm1030" : "adm1031";
 
-	strscpy(info->type, name, I2C_NAME_SIZE);
+	strlcpy(info->type, name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -1068,7 +1069,7 @@ static struct i2c_driver adm1031_driver = {
 	.driver = {
 		.name = "adm1031",
 	},
-	.probe		= adm1031_probe,
+	.probe_new	= adm1031_probe,
 	.id_table	= adm1031_id,
 	.detect		= adm1031_detect,
 	.address_list	= normal_i2c,

@@ -2690,6 +2690,7 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size)
 #define VPD_BASE           0x400
 #define VPD_BASE_OLD       0
 #define VPD_LEN            1024
+#define CHELSIO_VPD_UNIQUE_ID 0x82
 
 /**
  * t4_eeprom_ptov - translate a physical EEPROM address to virtual
@@ -2743,9 +2744,10 @@ int t4_seeprom_wp(struct adapter *adapter, bool enable)
  */
 int t4_get_raw_vpd_params(struct adapter *adapter, struct vpd_params *p)
 {
-	unsigned int id_len, pn_len, sn_len, na_len;
-	int id, sn, pn, na, addr, ret = 0;
-	u8 *vpd, base_val = 0;
+	int i, ret = 0, addr;
+	int ec, sn, pn, na;
+	u8 *vpd, csum;
+	unsigned int vpdr_len, kw_offset, id_len;
 
 	vpd = vmalloc(VPD_LEN);
 	if (!vpd)
@@ -2754,62 +2756,90 @@ int t4_get_raw_vpd_params(struct adapter *adapter, struct vpd_params *p)
 	/* Card information normally starts at VPD_BASE but early cards had
 	 * it at 0.
 	 */
-	ret = pci_read_vpd(adapter->pdev, VPD_BASE, 1, &base_val);
+	ret = pci_read_vpd(adapter->pdev, VPD_BASE, sizeof(u32), vpd);
 	if (ret < 0)
 		goto out;
 
-	addr = base_val == PCI_VPD_LRDT_ID_STRING ? VPD_BASE : VPD_BASE_OLD;
+	/* The VPD shall have a unique identifier specified by the PCI SIG.
+	 * For chelsio adapters, the identifier is 0x82. The first byte of a VPD
+	 * shall be CHELSIO_VPD_UNIQUE_ID (0x82). The VPD programming software
+	 * is expected to automatically put this entry at the
+	 * beginning of the VPD.
+	 */
+	addr = *vpd == CHELSIO_VPD_UNIQUE_ID ? VPD_BASE : VPD_BASE_OLD;
 
 	ret = pci_read_vpd(adapter->pdev, addr, VPD_LEN, vpd);
 	if (ret < 0)
 		goto out;
 
-	ret = pci_vpd_find_id_string(vpd, VPD_LEN, &id_len);
-	if (ret < 0)
-		goto out;
-	id = ret;
-
-	ret = pci_vpd_check_csum(vpd, VPD_LEN);
-	if (ret) {
-		dev_err(adapter->pdev_dev, "VPD checksum incorrect or missing\n");
+	if (vpd[0] != PCI_VPD_LRDT_ID_STRING) {
+		dev_err(adapter->pdev_dev, "missing VPD ID string\n");
 		ret = -EINVAL;
 		goto out;
 	}
 
-	ret = pci_vpd_find_ro_info_keyword(vpd, VPD_LEN,
-					   PCI_VPD_RO_KEYWORD_SERIALNO, &sn_len);
-	if (ret < 0)
-		goto out;
-	sn = ret;
+	id_len = pci_vpd_lrdt_size(vpd);
+	if (id_len > ID_LEN)
+		id_len = ID_LEN;
 
-	ret = pci_vpd_find_ro_info_keyword(vpd, VPD_LEN,
-					   PCI_VPD_RO_KEYWORD_PARTNO, &pn_len);
-	if (ret < 0)
+	i = pci_vpd_find_tag(vpd, 0, VPD_LEN, PCI_VPD_LRDT_RO_DATA);
+	if (i < 0) {
+		dev_err(adapter->pdev_dev, "missing VPD-R section\n");
+		ret = -EINVAL;
 		goto out;
-	pn = ret;
+	}
 
-	ret = pci_vpd_find_ro_info_keyword(vpd, VPD_LEN, "NA", &na_len);
-	if (ret < 0)
+	vpdr_len = pci_vpd_lrdt_size(&vpd[i]);
+	kw_offset = i + PCI_VPD_LRDT_TAG_SIZE;
+	if (vpdr_len + kw_offset > VPD_LEN) {
+		dev_err(adapter->pdev_dev, "bad VPD-R length %u\n", vpdr_len);
+		ret = -EINVAL;
 		goto out;
-	na = ret;
+	}
 
-	memcpy(p->id, vpd + id, min_t(unsigned int, id_len, ID_LEN));
+#define FIND_VPD_KW(var, name) do { \
+	var = pci_vpd_find_info_keyword(vpd, kw_offset, vpdr_len, name); \
+	if (var < 0) { \
+		dev_err(adapter->pdev_dev, "missing VPD keyword " name "\n"); \
+		ret = -EINVAL; \
+		goto out; \
+	} \
+	var += PCI_VPD_INFO_FLD_HDR_SIZE; \
+} while (0)
+
+	FIND_VPD_KW(i, "RV");
+	for (csum = 0; i >= 0; i--)
+		csum += vpd[i];
+
+	if (csum) {
+		dev_err(adapter->pdev_dev,
+			"corrupted VPD EEPROM, actual csum %u\n", csum);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	FIND_VPD_KW(ec, "EC");
+	FIND_VPD_KW(sn, "SN");
+	FIND_VPD_KW(pn, "PN");
+	FIND_VPD_KW(na, "NA");
+#undef FIND_VPD_KW
+
+	memcpy(p->id, vpd + PCI_VPD_LRDT_TAG_SIZE, id_len);
 	strim(p->id);
-	memcpy(p->sn, vpd + sn, min_t(unsigned int, sn_len, SERNUM_LEN));
+	memcpy(p->ec, vpd + ec, EC_LEN);
+	strim(p->ec);
+	i = pci_vpd_info_field_size(vpd + sn - PCI_VPD_INFO_FLD_HDR_SIZE);
+	memcpy(p->sn, vpd + sn, min(i, SERNUM_LEN));
 	strim(p->sn);
-	memcpy(p->pn, vpd + pn, min_t(unsigned int, pn_len, PN_LEN));
+	i = pci_vpd_info_field_size(vpd + pn - PCI_VPD_INFO_FLD_HDR_SIZE);
+	memcpy(p->pn, vpd + pn, min(i, PN_LEN));
 	strim(p->pn);
-	memcpy(p->na, vpd + na, min_t(unsigned int, na_len, MACADDR_LEN));
-	strim(p->na);
+	memcpy(p->na, vpd + na, min(i, MACADDR_LEN));
+	strim((char *)p->na);
 
 out:
 	vfree(vpd);
-	if (ret < 0) {
-		dev_err(adapter->pdev_dev, "error reading VPD\n");
-		return ret;
-	}
-
-	return 0;
+	return ret < 0 ? ret : 0;
 }
 
 /**
@@ -6970,7 +7000,7 @@ int t4_fw_bye(struct adapter *adap, unsigned int mbox)
 }
 
 /**
- *	t4_early_init - ask FW to initialize the device
+ *	t4_init_cmd - ask FW to initialize the device
  *	@adap: the adapter
  *	@mbox: mailbox to use for the FW command
  *
@@ -7769,6 +7799,7 @@ int t4_free_encap_mac_filt(struct adapter *adap, unsigned int viid,
 			   int idx, bool sleep_ok)
 {
 	struct fw_vi_mac_exact *p;
+	u8 addr[] = {0, 0, 0, 0, 0, 0};
 	struct fw_vi_mac_cmd c;
 	int ret = 0;
 	u32 exact;
@@ -7785,7 +7816,7 @@ int t4_free_encap_mac_filt(struct adapter *adap, unsigned int viid,
 	p = c.u.exact;
 	p->valid_to_idx = cpu_to_be16(FW_VI_MAC_CMD_VALID_F |
 				      FW_VI_MAC_CMD_IDX_V(idx));
-	eth_zero_addr(p->macaddr);
+	memcpy(p->macaddr, addr, sizeof(p->macaddr));
 	ret = t4_wr_mbox_meat(adap, adap->mbox, &c, sizeof(c), &c, sleep_ok);
 	return ret;
 }
@@ -9706,7 +9737,7 @@ int t4_port_init(struct adapter *adap, int mbox, int pf, int vf)
 		if (ret)
 			return ret;
 
-		eth_hw_addr_set(adap->port[i], addr);
+		memcpy(adap->port[i]->dev_addr, addr, ETH_ALEN);
 		j++;
 	}
 	return 0;
@@ -10210,7 +10241,7 @@ out:
 }
 
 /**
- *	t4_set_vf_mac_acl - Set MAC address for the specified VF
+ *	t4_set_vf_mac - Set MAC address for the specified VF
  *	@adapter: The adapter
  *	@vf: one of the VFs instantiated by the specified PF
  *	@naddr: the number of MAC addresses

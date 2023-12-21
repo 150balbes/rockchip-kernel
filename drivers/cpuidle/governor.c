@@ -63,11 +63,12 @@ int cpuidle_switch_governor(struct cpuidle_governor *gov)
 
 	cpuidle_curr_governor = gov;
 
-	list_for_each_entry(dev, &cpuidle_detected_devices, device_list)
-		cpuidle_enable_device(dev);
-
-	cpuidle_install_idle_handler();
-	pr_info("cpuidle: using governor %s\n", gov->name);
+	if (gov) {
+		list_for_each_entry(dev, &cpuidle_detected_devices, device_list)
+			cpuidle_enable_device(dev);
+		cpuidle_install_idle_handler();
+		printk(KERN_INFO "cpuidle: using governor %s\n", gov->name);
+	}
 
 	return 0;
 }
@@ -101,6 +102,7 @@ int cpuidle_register_governor(struct cpuidle_governor *gov)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(cpuidle_register_governor);
 
 /**
  * cpuidle_governor_latency_req - Compute a latency constraint for CPU
@@ -117,3 +119,4 @@ s64 cpuidle_governor_latency_req(unsigned int cpu)
 
 	return (s64)device_req * NSEC_PER_USEC;
 }
+EXPORT_SYMBOL_GPL(cpuidle_governor_latency_req);

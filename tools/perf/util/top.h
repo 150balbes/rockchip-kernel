@@ -5,7 +5,6 @@
 #include "tool.h"
 #include "evswitch.h"
 #include "annotate.h"
-#include "mutex.h"
 #include "ordered-events.h"
 #include "record.h"
 #include <linux/types.h>
@@ -34,10 +33,7 @@ struct perf_top {
 	int		   print_entries, count_filter, delay_secs;
 	int		   max_stack;
 	bool		   hide_kernel_symbols, hide_user_symbols, zero;
-#ifdef HAVE_SLANG_SUPPORT
-	bool		   use_tui;
-#endif
-	bool		   use_stdio;
+	bool		   use_tui, use_stdio;
 	bool		   vmlinux_warned;
 	bool		   dump_symtab;
 	bool		   stitch_lbr;
@@ -54,8 +50,8 @@ struct perf_top {
 		struct ordered_events	*in;
 		struct ordered_events	 data[2];
 		bool			 rotate;
-		struct mutex mutex;
-		struct cond cond;
+		pthread_mutex_t		 mutex;
+		pthread_cond_t		 cond;
 	} qe;
 };
 

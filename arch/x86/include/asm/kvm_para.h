@@ -7,8 +7,6 @@
 #include <linux/interrupt.h>
 #include <uapi/asm/kvm_para.h>
 
-#include <asm/tdx.h>
-
 #ifdef CONFIG_KVM_GUEST
 bool kvm_check_and_clear_guest_paused(void);
 #else
@@ -34,10 +32,6 @@ static inline bool kvm_check_and_clear_guest_paused(void)
 static inline long kvm_hypercall0(unsigned int nr)
 {
 	long ret;
-
-	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
-		return tdx_kvm_hypercall(nr, 0, 0, 0, 0);
-
 	asm volatile(KVM_HYPERCALL
 		     : "=a"(ret)
 		     : "a"(nr)
@@ -48,10 +42,6 @@ static inline long kvm_hypercall0(unsigned int nr)
 static inline long kvm_hypercall1(unsigned int nr, unsigned long p1)
 {
 	long ret;
-
-	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
-		return tdx_kvm_hypercall(nr, p1, 0, 0, 0);
-
 	asm volatile(KVM_HYPERCALL
 		     : "=a"(ret)
 		     : "a"(nr), "b"(p1)
@@ -63,10 +53,6 @@ static inline long kvm_hypercall2(unsigned int nr, unsigned long p1,
 				  unsigned long p2)
 {
 	long ret;
-
-	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
-		return tdx_kvm_hypercall(nr, p1, p2, 0, 0);
-
 	asm volatile(KVM_HYPERCALL
 		     : "=a"(ret)
 		     : "a"(nr), "b"(p1), "c"(p2)
@@ -78,10 +64,6 @@ static inline long kvm_hypercall3(unsigned int nr, unsigned long p1,
 				  unsigned long p2, unsigned long p3)
 {
 	long ret;
-
-	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
-		return tdx_kvm_hypercall(nr, p1, p2, p3, 0);
-
 	asm volatile(KVM_HYPERCALL
 		     : "=a"(ret)
 		     : "a"(nr), "b"(p1), "c"(p2), "d"(p3)
@@ -94,25 +76,9 @@ static inline long kvm_hypercall4(unsigned int nr, unsigned long p1,
 				  unsigned long p4)
 {
 	long ret;
-
-	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
-		return tdx_kvm_hypercall(nr, p1, p2, p3, p4);
-
 	asm volatile(KVM_HYPERCALL
 		     : "=a"(ret)
 		     : "a"(nr), "b"(p1), "c"(p2), "d"(p3), "S"(p4)
-		     : "memory");
-	return ret;
-}
-
-static inline long kvm_sev_hypercall3(unsigned int nr, unsigned long p1,
-				      unsigned long p2, unsigned long p3)
-{
-	long ret;
-
-	asm volatile("vmmcall"
-		     : "=a"(ret)
-		     : "a"(nr), "b"(p1), "c"(p2), "d"(p3)
 		     : "memory");
 	return ret;
 }

@@ -59,17 +59,12 @@ static long long bp_count(int fd)
 #define EXECUTIONS 10000
 #define THRESHOLD  100
 
-static int test__bp_signal_overflow(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__bp_signal_overflow(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	struct perf_event_attr pe;
 	struct sigaction sa;
 	long long count;
 	int fd, i, fails = 0;
-
-	if (!BP_SIGNAL_IS_SUPPORTED) {
-		pr_debug("Test not supported on this architecture");
-		return TEST_SKIP;
-	}
 
 	/* setup SIGIO signal handler */
 	memset(&sa, 0, sizeof(struct sigaction));
@@ -138,5 +133,3 @@ static int test__bp_signal_overflow(struct test_suite *test __maybe_unused, int 
 
 	return fails ? TEST_FAIL : TEST_OK;
 }
-
-DEFINE_SUITE("Breakpoint overflow sampling", bp_signal_overflow);

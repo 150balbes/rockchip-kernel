@@ -520,11 +520,11 @@ static int ak4671_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	/* set master/slave audio interface */
 	mode = snd_soc_component_read(component, AK4671_PLL_MODE_SELECT1);
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		mode |= AK4671_M_S;
 		break;
-	case SND_SOC_DAIFMT_CBP_CFC:
+	case SND_SOC_DAIFMT_CBM_CFS:
 		mode &= ~(AK4671_M_S);
 		break;
 	default:
@@ -616,6 +616,7 @@ static const struct snd_soc_component_driver soc_component_dev_ak4671 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config ak4671_regmap = {
@@ -628,7 +629,8 @@ static const struct regmap_config ak4671_regmap = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int ak4671_i2c_probe(struct i2c_client *client)
+static int ak4671_i2c_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct regmap *regmap;
 	int ret;

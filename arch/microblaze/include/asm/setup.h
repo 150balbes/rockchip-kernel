@@ -14,8 +14,12 @@ extern char cmd_line[COMMAND_LINE_SIZE];
 
 extern char *klimit;
 
+#   ifdef CONFIG_MMU
 extern void mmu_reset(void);
+#   endif /* CONFIG_MMU */
 
+void time_init(void);
+void init_IRQ(void);
 void machine_early_init(const char *cmdline, unsigned int ram,
 		unsigned int fdt, unsigned int msr, unsigned int tlb0,
 		unsigned int tlb1);

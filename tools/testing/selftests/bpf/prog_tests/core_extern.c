@@ -39,7 +39,6 @@ static struct test_case {
 		       "CONFIG_STR=\"abracad\"\n"
 		       "CONFIG_MISSING=0",
 		.data = {
-			.unkn_virt_val = 0,
 			.bpf_syscall = false,
 			.tristate_val = TRI_MODULE,
 			.bool_val = true,
@@ -122,7 +121,7 @@ static struct test_case {
 void test_core_extern(void)
 {
 	const uint32_t kern_ver = get_kernel_version();
-	int err, i, j;
+	int err, duration = 0, i, j;
 	struct test_core_extern *skel = NULL;
 	uint64_t *got, *exp;
 	int n = sizeof(*skel->data) / sizeof(uint64_t);
@@ -137,17 +136,19 @@ void test_core_extern(void)
 			continue;
 
 		skel = test_core_extern__open_opts(&opts);
-		if (!ASSERT_OK_PTR(skel, "skel_open"))
+		if (CHECK(!skel, "skel_open", "skeleton open failed\n"))
 			goto cleanup;
 		err = test_core_extern__load(skel);
 		if (t->fails) {
-			ASSERT_ERR(err, "skel_load_should_fail");
+			CHECK(!err, "skel_load",
+			      "shouldn't succeed open/load of skeleton\n");
 			goto cleanup;
-		} else if (!ASSERT_OK(err, "skel_load")) {
+		} else if (CHECK(err, "skel_load",
+				 "failed to open/load skeleton\n")) {
 			goto cleanup;
 		}
 		err = test_core_extern__attach(skel);
-		if (!ASSERT_OK(err, "attach_raw_tp"))
+		if (CHECK(err, "attach_raw_tp", "failed attach: %d\n", err))
 			goto cleanup;
 
 		usleep(1);
@@ -157,7 +158,9 @@ void test_core_extern(void)
 		got = (uint64_t *)skel->data;
 		exp = (uint64_t *)&t->data;
 		for (j = 0; j < n; j++) {
-			ASSERT_EQ(got[j], exp[j], "result");
+			CHECK(got[j] != exp[j], "check_res",
+			      "result #%d: expected %llx, but got %llx\n",
+			       j, (__u64)exp[j], (__u64)got[j]);
 		}
 cleanup:
 		test_core_extern__destroy(skel);

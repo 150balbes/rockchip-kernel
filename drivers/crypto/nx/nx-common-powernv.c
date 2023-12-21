@@ -72,10 +72,10 @@ static int (*nx842_powernv_exec)(const unsigned char *in,
 				unsigned int inlen, unsigned char *out,
 				unsigned int *outlenp, void *workmem, int fc);
 
-/*
+/**
  * setup_indirect_dde - Setup an indirect DDE
  *
- * The DDE is setup with the DDE count, byte count, and address of
+ * The DDE is setup with the the DDE count, byte count, and address of
  * first direct DDE in the list.
  */
 static void setup_indirect_dde(struct data_descriptor_entry *dde,
@@ -89,7 +89,7 @@ static void setup_indirect_dde(struct data_descriptor_entry *dde,
 	dde->address = cpu_to_be64(nx842_get_pa(ddl));
 }
 
-/*
+/**
  * setup_direct_dde - Setup single DDE from buffer
  *
  * The DDE is setup with the buffer and length.  The buffer must be properly
@@ -111,7 +111,7 @@ static unsigned int setup_direct_dde(struct data_descriptor_entry *dde,
 	return l;
 }
 
-/*
+/**
  * setup_ddl - Setup DDL from buffer
  *
  * Returns:
@@ -181,6 +181,9 @@ static int setup_ddl(struct data_descriptor_entry *dde,
 	CSB_ERR(csb, msg " at %lx", ##__VA_ARGS__,		\
 		(unsigned long)be64_to_cpu((csb)->address))
 
+/**
+ * wait_for_csb
+ */
 static int wait_for_csb(struct nx842_workmem *wmem,
 			struct coprocessor_status_block *csb)
 {
@@ -629,8 +632,8 @@ static int nx842_exec_vas(const unsigned char *in, unsigned int inlen,
  * @inlen: input buffer size
  * @out: output buffer pointer
  * @outlenp: output buffer size pointer
- * @wmem: working memory buffer pointer, size determined by
- *        nx842_powernv_driver.workmem_size
+ * @workmem: working memory buffer pointer, size determined by
+ *           nx842_powernv_driver.workmem_size
  *
  * Returns: see @nx842_powernv_exec()
  */
@@ -657,8 +660,8 @@ static int nx842_powernv_compress(const unsigned char *in, unsigned int inlen,
  * @inlen: input buffer size
  * @out: output buffer pointer
  * @outlenp: output buffer size pointer
- * @wmem: working memory buffer pointer, size determined by
- *        nx842_powernv_driver.workmem_size
+ * @workmem: working memory buffer pointer, size determined by
+ *           nx842_powernv_driver.workmem_size
  *
  * Returns: see @nx842_powernv_exec()
  */
@@ -929,10 +932,8 @@ static int __init nx_powernv_probe_vas(struct device_node *pn)
 			ret = find_nx_device_tree(dn, chip_id, vasid,
 				NX_CT_GZIP, "ibm,p9-nx-gzip", &ct_gzip);
 
-		if (ret) {
-			of_node_put(dn);
+		if (ret)
 			return ret;
-		}
 	}
 
 	if (!ct_842 || !ct_gzip) {
@@ -1089,8 +1090,8 @@ static __init int nx_compress_powernv_init(void)
 		 * normal FIFO priority is assigned for userspace.
 		 * 842 compression is supported only in kernel.
 		 */
-		ret = vas_register_api_powernv(THIS_MODULE, VAS_COP_TYPE_GZIP,
-					       "nx-gzip");
+		ret = vas_register_coproc_api(THIS_MODULE, VAS_COP_TYPE_GZIP,
+						"nx-gzip");
 
 		/*
 		 * GZIP is not supported in kernel right now.
@@ -1126,7 +1127,7 @@ static void __exit nx_compress_powernv_exit(void)
 	 * use. So delete this API use for GZIP engine.
 	 */
 	if (!nx842_ct)
-		vas_unregister_api_powernv();
+		vas_unregister_coproc_api();
 
 	crypto_unregister_alg(&nx842_powernv_alg);
 

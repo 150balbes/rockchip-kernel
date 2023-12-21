@@ -112,5 +112,5 @@ static int ip22_be_handler(struct pt_regs *regs, int is_fixup)
 
 void __init ip22_be_init(void)
 {
-	mips_set_be_handler(ip22_be_handler);
+	board_be_handler = ip22_be_handler;
 }

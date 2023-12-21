@@ -42,31 +42,65 @@ properties:
     const: refclk
 
   ports:
-    $ref: /schemas/graph.yaml#/properties/ports
+    type: object
 
     properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
       port@0:
-        $ref: /schemas/graph.yaml#/$defs/port-base
-        unevaluatedProperties: false
+        type: object
+        additionalProperties: false
+
         description: |
           Video port for RGB input
 
         properties:
+          reg:
+            const: 0
+
+        patternProperties:
           endpoint:
-            $ref: /schemas/graph.yaml#/$defs/endpoint-base
-            unevaluatedProperties: false
+            type: object
+            additionalProperties: false
 
             properties:
               data-lines:
-                $ref: /schemas/types.yaml#/definitions/uint32
                 enum: [ 16, 18, 24 ]
 
+              remote-endpoint: true
+
+        required:
+          - reg
+
       port@1:
-        $ref: /schemas/graph.yaml#/properties/port
+        type: object
+        additionalProperties: false
+
         description: |
           Video port for DSI output (panel or connector).
 
+        properties:
+          reg:
+            const: 1
+
+        patternProperties:
+          endpoint:
+            type: object
+            additionalProperties: false
+
+            properties:
+              remote-endpoint: true
+
+        required:
+          - reg
+
     required:
+      - "#address-cells"
+      - "#size-cells"
       - port@0
       - port@1
 
@@ -78,20 +112,17 @@ required:
   - vddio-supply
   - ports
 
-allOf:
-  - $ref: ../dsi-controller.yaml#
-
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
 
-    i2c {
+    i2c1 {
       #address-cells = <1>;
       #size-cells = <0>;
 
-      dsi_bridge: dsi@e {
+      dsi_bridge: dsi-bridge@e {
         compatible = "toshiba,tc358768";
         reg = <0xe>;
 
@@ -125,3 +156,4 @@ examples:
         };
       };
     };
+    

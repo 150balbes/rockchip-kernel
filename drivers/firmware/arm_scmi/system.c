@@ -2,7 +2,7 @@
 /*
  * System Control and Management Interface (SCMI) System Power Protocol
  *
- * Copyright (C) 2020-2022 ARM Ltd.
+ * Copyright (C) 2020 ARM Ltd.
  */
 
 #define pr_fmt(fmt) "SCMI Notifications SYSTEM - " fmt
@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/scmi_protocol.h>
 
-#include "protocols.h"
+#include "common.h"
 #include "notify.h"
 
 #define SCMI_SYSTEM_NUM_SOURCES		1
@@ -27,12 +27,10 @@ struct scmi_system_power_state_notifier_payld {
 	__le32 agent_id;
 	__le32 flags;
 	__le32 system_state;
-	__le32 timeout;
 };
 
 struct scmi_system_info {
 	u32 version;
-	bool graceful_timeout_supported;
 };
 
 static int scmi_system_request_notify(const struct scmi_protocol_handle *ph,
@@ -74,27 +72,17 @@ scmi_system_fill_custom_report(const struct scmi_protocol_handle *ph,
 			       const void *payld, size_t payld_sz,
 			       void *report, u32 *src_id)
 {
-	size_t expected_sz;
 	const struct scmi_system_power_state_notifier_payld *p = payld;
 	struct scmi_system_power_state_notifier_report *r = report;
-	struct scmi_system_info *pinfo = ph->get_priv(ph);
 
-	expected_sz = pinfo->graceful_timeout_supported ?
-			sizeof(*p) : sizeof(*p) - sizeof(__le32);
 	if (evt_id != SCMI_EVENT_SYSTEM_POWER_STATE_NOTIFIER ||
-	    payld_sz != expected_sz)
+	    sizeof(*p) != payld_sz)
 		return NULL;
 
 	r->timestamp = timestamp;
 	r->agent_id = le32_to_cpu(p->agent_id);
 	r->flags = le32_to_cpu(p->flags);
 	r->system_state = le32_to_cpu(p->system_state);
-	if (pinfo->graceful_timeout_supported &&
-	    r->system_state == SCMI_SYSTEM_SHUTDOWN &&
-	    SCMI_SYSPOWER_IS_REQUEST_GRACEFUL(r->flags))
-		r->timeout = le32_to_cpu(p->timeout);
-	else
-		r->timeout = 0x00;
 	*src_id = 0;
 
 	return r;
@@ -125,13 +113,10 @@ static const struct scmi_protocol_events system_protocol_events = {
 
 static int scmi_system_protocol_init(const struct scmi_protocol_handle *ph)
 {
-	int ret;
 	u32 version;
 	struct scmi_system_info *pinfo;
 
-	ret = ph->xops->version_get(ph, &version);
-	if (ret)
-		return ret;
+	ph->xops->version_get(ph, &version);
 
 	dev_dbg(ph->dev, "System Power Version %d.%d\n",
 		PROTOCOL_REV_MAJOR(version), PROTOCOL_REV_MINOR(version));
@@ -141,16 +126,13 @@ static int scmi_system_protocol_init(const struct scmi_protocol_handle *ph)
 		return -ENOMEM;
 
 	pinfo->version = version;
-	if (PROTOCOL_REV_MAJOR(pinfo->version) >= 0x2)
-		pinfo->graceful_timeout_supported = true;
-
 	return ph->set_priv(ph, pinfo);
 }
 
 static const struct scmi_protocol scmi_system = {
 	.id = SCMI_PROTOCOL_SYSTEM,
 	.owner = THIS_MODULE,
-	.instance_init = &scmi_system_protocol_init,
+	.init_instance = &scmi_system_protocol_init,
 	.ops = NULL,
 	.events = &system_protocol_events,
 };

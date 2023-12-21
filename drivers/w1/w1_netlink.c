@@ -611,8 +611,7 @@ static void w1_cn_callback(struct cn_msg *cn, struct netlink_skb_parms *nsp)
 		}
 		atomic_set(&block->refcnt, 1);
 		block->portid = nsp->portid;
-		block->request_cn = *cn;
-		memcpy(block->request_cn.data, cn->data, cn->len);
+		memcpy(&block->request_cn, cn, sizeof(*cn) + cn->len);
 		node = (struct w1_cb_node *)(block->request_cn.data + cn->len);
 
 		/* Sneeky, when not bundling, reply_size is the allocated space

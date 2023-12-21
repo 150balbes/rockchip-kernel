@@ -209,7 +209,8 @@ int vmci_event_unsubscribe(u32 sub_id)
 	if (!s)
 		return VMCI_ERROR_NOT_FOUND;
 
-	kvfree_rcu_mightsleep(s);
+	synchronize_rcu();
+	kfree(s);
 
 	return VMCI_SUCCESS;
 }

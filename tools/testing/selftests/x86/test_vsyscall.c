@@ -92,8 +92,11 @@ static void init_vdso(void)
 		printf("[WARN]\tfailed to find time in vDSO\n");
 
 	vdso_getcpu = (getcpu_t)dlsym(vdso, "__vdso_getcpu");
-	if (!vdso_getcpu)
-		printf("[WARN]\tfailed to find getcpu in vDSO\n");
+	if (!vdso_getcpu) {
+		/* getcpu() was never wired up in the 32-bit vDSO. */
+		printf("[%s]\tfailed to find getcpu in vDSO\n",
+		       sizeof(long) == 8 ? "WARN" : "NOTE");
+	}
 }
 
 static int init_vsys(void)

@@ -65,8 +65,8 @@ struct talitos_edesc {
 	dma_addr_t dma_link_tbl;
 	struct talitos_desc desc;
 	union {
-		DECLARE_FLEX_ARRAY(struct talitos_ptr, link_tbl);
-		DECLARE_FLEX_ARRAY(u8, buf);
+		struct talitos_ptr link_tbl[0];
+		u8 buf[0];
 	};
 };
 

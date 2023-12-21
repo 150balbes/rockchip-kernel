@@ -41,14 +41,6 @@
 			};
 		};
 
-		pm8916_usbin: usb-detect@1300 {
-			compatible = "qcom,pm8941-misc";
-			reg = <0x1300>;
-			interrupts = <0x0 0x13 1 IRQ_TYPE_EDGE_BOTH>;
-			interrupt-names = "usb_vbus";
-			status = "disabled";
-		};
-
 		pm8916_temp: temp-alarm@2400 {
 			compatible = "qcom,spmi-temp-alarm";
 			reg = <0x2400>;
@@ -93,29 +85,30 @@
 
 		rtc@6000 {
 			compatible = "qcom,pm8941-rtc";
-			reg = <0x6000>, <0x6100>;
-			reg-names = "rtc", "alarm";
+			reg = <0x6000>;
 			interrupts = <0x0 0x61 0x1 IRQ_TYPE_EDGE_RISING>;
 		};
 
 		pm8916_mpps: mpps@a000 {
-			compatible = "qcom,pm8916-mpp", "qcom,spmi-mpp";
+			compatible = "qcom,pm8916-mpp";
 			reg = <0xa000>;
 			gpio-controller;
 			#gpio-cells = <2>;
-			gpio-ranges = <&pm8916_mpps 0 0 4>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
+			interrupts = <0 0xa0 0 IRQ_TYPE_NONE>,
+				     <0 0xa1 0 IRQ_TYPE_NONE>,
+				     <0 0xa2 0 IRQ_TYPE_NONE>,
+				     <0 0xa3 0 IRQ_TYPE_NONE>;
 		};
 
-		pm8916_gpios: gpio@c000 {
-			compatible = "qcom,pm8916-gpio", "qcom,spmi-gpio";
+		pm8916_gpios: gpios@c000 {
+			compatible = "qcom,pm8916-gpio";
 			reg = <0xc000>;
 			gpio-controller;
-			gpio-ranges = <&pm8916_gpios 0 0 4>;
 			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
+			interrupts = <0 0xc0 0 IRQ_TYPE_NONE>,
+				     <0 0xc1 0 IRQ_TYPE_NONE>,
+				     <0 0xc2 0 IRQ_TYPE_NONE>,
+				     <0 0xc3 0 IRQ_TYPE_NONE>;
 		};
 	};
 
@@ -125,21 +118,13 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		pm8916_pwm: pwm {
-			compatible = "qcom,pm8916-pwm";
-
-			#pwm-cells = <2>;
-
-			status = "disabled";
-		};
-
 		pm8916_vib: vibrator@c000 {
 			compatible = "qcom,pm8916-vib";
 			reg = <0xc000>;
 			status = "disabled";
 		};
 
-		pm8916_codec: audio-codec@f000 {
+		wcd_codec: audio-codec@f000 {
 			compatible = "qcom,pm8916-wcd-analog-codec";
 			reg = <0xf000>;
 			reg-names = "pmic-codec-core";
@@ -174,8 +159,10 @@
 					  "cdc_ear_cnp_int",
 					  "cdc_hphr_cnp_int",
 					  "cdc_hphl_cnp_int";
+			vdd-cdc-io-supply = <&pm8916_l5>;
+			vdd-cdc-tx-rx-cx-supply = <&pm8916_l5>;
+			vdd-micbias-supply = <&pm8916_l13>;
 			#sound-dai-cells = <1>;
-			status = "disabled";
 		};
 	};
 };

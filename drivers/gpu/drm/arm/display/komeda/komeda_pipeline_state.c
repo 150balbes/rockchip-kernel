@@ -704,10 +704,10 @@ komeda_compiz_set_input(struct komeda_compiz *compiz,
 	cin->layer_alpha = dflow->layer_alpha;
 
 	old_st = komeda_component_get_old_state(&compiz->base, drm_st);
+	WARN_ON(!old_st);
 
 	/* compare with old to check if this input has been changed */
-	if (WARN_ON(!old_st) ||
-	    memcmp(&(to_compiz_st(old_st)->cins[idx]), cin, sizeof(*cin)))
+	if (memcmp(&(to_compiz_st(old_st)->cins[idx]), cin, sizeof(*cin)))
 		c_st->changed_active_inputs |= BIT(idx);
 
 	komeda_component_add_input(c_st, &dflow->input, idx);
@@ -1223,7 +1223,7 @@ int komeda_build_display_data_flow(struct komeda_crtc *kcrtc,
 	return 0;
 }
 
-static int
+static void
 komeda_pipeline_unbound_components(struct komeda_pipeline *pipe,
 				   struct komeda_pipeline_state *new)
 {
@@ -1243,12 +1243,8 @@ komeda_pipeline_unbound_components(struct komeda_pipeline *pipe,
 		c = komeda_pipeline_get_component(pipe, id);
 		c_st = komeda_component_get_state_and_set_user(c,
 				drm_st, NULL, new->crtc);
-		if (PTR_ERR(c_st) == -EDEADLK)
-			return -EDEADLK;
 		WARN_ON(IS_ERR(c_st));
 	}
-
-	return 0;
 }
 
 /* release unclaimed pipeline resource */
@@ -1270,11 +1266,12 @@ int komeda_release_unclaimed_resources(struct komeda_pipeline *pipe,
 	if (WARN_ON(IS_ERR_OR_NULL(st)))
 		return -EINVAL;
 
-	return komeda_pipeline_unbound_components(pipe, st);
+	komeda_pipeline_unbound_components(pipe, st);
 
+	return 0;
 }
 
-/* Since standalone disabled components must be disabled separately and in the
+/* Since standalong disabled components must be disabled separately and in the
  * last, So a complete disable operation may needs to call pipeline_disable
  * twice (two phase disabling).
  * Phase 1: disable the common components, flush it.

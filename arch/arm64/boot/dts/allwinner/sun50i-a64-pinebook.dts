@@ -15,7 +15,6 @@
 / {
 	model = "Pinebook";
 	compatible = "pine64,pinebook", "allwinner,sun50i-a64";
-	chassis-type = "laptop";
 
 	aliases {
 		serial0 = &uart0;
@@ -35,10 +34,10 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
 
-		lid-switch {
+		lid_switch {
 			label = "Lid Switch";
 			gpios = <&r_pio 0 12 GPIO_ACTIVE_LOW>; /* PL12 */
 			linux,input-type = <EV_SW>;
@@ -246,7 +245,7 @@
 		compatible = "x-powers,axp803";
 		reg = <0x3a3>;
 		interrupt-parent = <&r_intc>;
-		interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
 	};
 };
 
@@ -404,20 +403,6 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart0_pb_pins>;
 	status = "okay";
-};
-
-&uart1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart1_pins>, <&uart1_rts_cts_pins>;
-	uart-has-rtscts;
-	status = "okay";
-
-	bluetooth {
-		compatible = "realtek,rtl8723cs-bt";
-		device-wake-gpios = <&r_pio 0 5 GPIO_ACTIVE_LOW>; /* PL5 */
-		enable-gpios = <&r_pio 0 4 GPIO_ACTIVE_HIGH>; /* PL4 */
-		host-wake-gpios = <&r_pio 0 6 GPIO_ACTIVE_HIGH>; /* PL6 */
-	};
 };
 
 &usb_otg {

@@ -563,9 +563,22 @@ snd_harmony_capture_close(struct snd_pcm_substream *ss)
         return 0;
 }
 
+static int 
+snd_harmony_hw_params(struct snd_pcm_substream *ss,
+		      struct snd_pcm_hw_params *hw)
+{
+	struct snd_harmony *h = snd_pcm_substream_chip(ss);
+	
+	if (h->dma.type == SNDRV_DMA_TYPE_CONTINUOUS)
+		ss->runtime->dma_addr = __pa(ss->runtime->dma_area);
+
+	return 0;
+}
+
 static const struct snd_pcm_ops snd_harmony_playback_ops = {
 	.open =	snd_harmony_playback_open,
 	.close = snd_harmony_playback_close,
+	.hw_params = snd_harmony_hw_params,
 	.prepare = snd_harmony_playback_prepare,
 	.trigger = snd_harmony_playback_trigger,
  	.pointer = snd_harmony_playback_pointer,
@@ -574,6 +587,7 @@ static const struct snd_pcm_ops snd_harmony_playback_ops = {
 static const struct snd_pcm_ops snd_harmony_capture_ops = {
         .open = snd_harmony_capture_open,
         .close = snd_harmony_capture_close,
+        .hw_params = snd_harmony_hw_params,
         .prepare = snd_harmony_capture_prepare,
         .trigger = snd_harmony_capture_trigger,
         .pointer = snd_harmony_capture_pointer,
@@ -901,9 +915,10 @@ snd_harmony_create(struct snd_card *card,
 	spin_lock_init(&h->mixer_lock);
 	spin_lock_init(&h->lock);
 
-	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, h, &ops);
-	if (err < 0)
-		goto free_and_ret;
+        if ((err = snd_device_new(card, SNDRV_DEV_LOWLEVEL,
+                                  h, &ops)) < 0) {
+                goto free_and_ret;
+        }
 
 	*rchip = h;
 
@@ -954,10 +969,11 @@ free_and_ret:
 	return err;
 }
 
-static void __exit
+static int __exit
 snd_harmony_remove(struct parisc_device *padev)
 {
 	snd_card_free(parisc_get_drvdata(padev));
+	return 0;
 }
 
 static struct parisc_driver snd_harmony_driver __refdata = {

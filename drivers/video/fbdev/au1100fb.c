@@ -239,7 +239,7 @@ int au1100fb_fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned
 	u32 value;
 
 	fbdev = to_au1100fb_device(fbi);
-	palette = fbdev->regs->lcd_palettebase;
+	palette = fbdev->regs->lcd_pallettebase;
 
 	if (regno > (AU1100_LCD_NBR_PALETTE_ENTRIES - 1))
 		return -EINVAL;
@@ -520,9 +520,12 @@ failed:
 	return -ENODEV;
 }
 
-void au1100fb_drv_remove(struct platform_device *dev)
+int au1100fb_drv_remove(struct platform_device *dev)
 {
 	struct au1100fb_device *fbdev = NULL;
+
+	if (!dev)
+		return -ENODEV;
 
 	fbdev = platform_get_drvdata(dev);
 
@@ -540,6 +543,8 @@ void au1100fb_drv_remove(struct platform_device *dev)
 		clk_disable_unprepare(fbdev->lcdclk);
 		clk_put(fbdev->lcdclk);
 	}
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -555,7 +560,8 @@ int au1100fb_drv_suspend(struct platform_device *dev, pm_message_t state)
 	/* Blank the LCD */
 	au1100fb_fb_blank(VESA_POWERDOWN, &fbdev->info);
 
-	clk_disable(fbdev->lcdclk);
+	if (fbdev->lcdclk)
+		clk_disable(fbdev->lcdclk);
 
 	memcpy(&fbregs, fbdev->regs, sizeof(struct au1100fb_regs));
 
@@ -571,7 +577,8 @@ int au1100fb_drv_resume(struct platform_device *dev)
 
 	memcpy(fbdev->regs, &fbregs, sizeof(struct au1100fb_regs));
 
-	clk_enable(fbdev->lcdclk);
+	if (fbdev->lcdclk)
+		clk_enable(fbdev->lcdclk);
 
 	/* Unblank the LCD */
 	au1100fb_fb_blank(VESA_NO_BLANKING, &fbdev->info);
@@ -588,9 +595,9 @@ static struct platform_driver au1100fb_driver = {
 		.name		= "au1100-lcd",
 	},
 	.probe		= au1100fb_drv_probe,
-	.remove_new	= au1100fb_drv_remove,
+        .remove		= au1100fb_drv_remove,
 	.suspend	= au1100fb_drv_suspend,
-	.resume		= au1100fb_drv_resume,
+        .resume		= au1100fb_drv_resume,
 };
 module_platform_driver(au1100fb_driver);
 

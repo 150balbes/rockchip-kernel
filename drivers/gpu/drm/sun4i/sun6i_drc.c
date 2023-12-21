@@ -95,9 +95,11 @@ static int sun6i_drc_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sun6i_drc_ops);
 }
 
-static void sun6i_drc_remove(struct platform_device *pdev)
+static int sun6i_drc_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sun6i_drc_ops);
+
+	return 0;
 }
 
 static const struct of_device_id sun6i_drc_of_table[] = {
@@ -112,7 +114,7 @@ MODULE_DEVICE_TABLE(of, sun6i_drc_of_table);
 
 static struct platform_driver sun6i_drc_platform_driver = {
 	.probe		= sun6i_drc_probe,
-	.remove_new	= sun6i_drc_remove,
+	.remove		= sun6i_drc_remove,
 	.driver		= {
 		.name		= "sun6i-drc",
 		.of_match_table	= sun6i_drc_of_table,

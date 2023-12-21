@@ -31,28 +31,15 @@ Arguments
 Description
 ===========
 
-This call is used by the application to access the enumeration
-of media bus formats for the selected pad.
-
-The enumerations are defined by the driver, and indexed using the ``index`` field
-of struct :c:type:`v4l2_subdev_mbus_code_enum`.
-Each enumeration starts with the ``index`` of 0, and
-the lowest invalid index marks the end of enumeration.
-
-Therefore, to enumerate media bus formats available at a given sub-device pad,
-initialize the ``pad``, and ``which`` fields to desired values,
-and set ``index`` to 0.
-Then call the :ref:`VIDIOC_SUBDEV_ENUM_MBUS_CODE` ioctl
-with a pointer to this structure.
-
-A successful call will return with the ``code`` field filled in
-with a mbus code value.
-Repeat with increasing ``index`` until ``EINVAL`` is received.
-``EINVAL`` means that either ``pad`` is invalid,
-or that there are no more codes available at this pad.
-
-The driver must not return the same value of ``code`` for different indices
-at the same pad.
+To enumerate media bus formats available at a given sub-device pad
+applications initialize the ``pad``, ``which`` and ``index`` fields of
+struct
+:c:type:`v4l2_subdev_mbus_code_enum` and
+call the :ref:`VIDIOC_SUBDEV_ENUM_MBUS_CODE` ioctl with a pointer to this
+structure. Drivers fill the rest of the structure or return an ``EINVAL``
+error code if either the ``pad`` or ``index`` are invalid. All media bus
+formats are enumerable by beginning at index zero and incrementing by
+one until ``EINVAL`` is returned.
 
 Available media bus formats may depend on the current 'try' formats at
 other pads of the sub-device, as well as on the current active links.
@@ -61,7 +48,7 @@ information about the try formats.
 
 .. c:type:: v4l2_subdev_mbus_code_enum
 
-.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.5cm}|
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: struct v4l2_subdev_mbus_code_enum
     :header-rows:  0
@@ -70,16 +57,14 @@ information about the try formats.
 
     * - __u32
       - ``pad``
-      - Pad number as reported by the media controller API. Filled in by the
-        application.
+      - Pad number as reported by the media controller API.
     * - __u32
       - ``index``
-      - Index of the mbus code in the enumeration belonging to the given pad.
-        Filled in by the application.
+      - Number of the format in the enumeration, set by the application.
     * - __u32
       - ``code``
       - The media bus format code, as defined in
-	:ref:`v4l2-mbus-format`. Filled in by the driver.
+	:ref:`v4l2-mbus-format`.
     * - __u32
       - ``which``
       - Media bus format codes to be enumerated, from enum
@@ -88,20 +73,13 @@ information about the try formats.
       - ``flags``
       - See :ref:`v4l2-subdev-mbus-code-flags`
     * - __u32
-      - ``stream``
-      - Stream identifier.
-    * - __u32
-      - ``reserved``\ [6]
+      - ``reserved``\ [7]
       - Reserved for future extensions. Applications and drivers must set
 	the array to zero.
 
 
 
-.. raw:: latex
-
-   \footnotesize
-
-.. tabularcolumns:: |p{8.8cm}|p{2.2cm}|p{6.3cm}|
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{7.7cm}|
 
 .. _v4l2-subdev-mbus-code-flags:
 
@@ -145,10 +123,6 @@ information about the try formats.
 	the subdevice when calling the :ref:`VIDIOC_SUBDEV_S_FMT <VIDIOC_SUBDEV_G_FMT>`
 	ioctl with :ref:`V4L2_MBUS_FRAMEFMT_SET_CSC <mbus-framefmt-set-csc>` set.
 	See :ref:`v4l2-mbus-format` on how to do this.
-
-.. raw:: latex
-
-   \normalsize
 
 Return Value
 ============

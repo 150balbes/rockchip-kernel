@@ -51,6 +51,8 @@
 
 #define CLK_USB_OHCI1_12M		92
 
+#define CLK_DRAM			94
+
 /* All the DRAM gates are exported */
 
 /* And the DSI and GPU module clock is exported */

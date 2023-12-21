@@ -14,8 +14,6 @@
 #include <linux/sched.h> /* for spin_unlock_irq() using preempt_count() m68k */
 #include <linux/tick.h>
 #include <linux/kthread.h>
-#include <linux/prandom.h>
-#include <linux/cpu.h>
 
 #include "tick-internal.h"
 #include "timekeeping_internal.h"
@@ -40,7 +38,7 @@
  * calculated mult and shift factors. This guarantees that no 64bit
  * overflow happens when the input value of the conversion is
  * multiplied with the calculated mult factor. Larger ranges may
- * reduce the conversion accuracy by choosing smaller mult and shift
+ * reduce the conversion accuracy by chosing smaller mult and shift
  * factors.
  */
 void
@@ -95,34 +93,6 @@ static char override_name[CS_NAME_LEN];
 static int finished_booting;
 static u64 suspend_start;
 
-/*
- * Interval: 0.5sec.
- */
-#define WATCHDOG_INTERVAL (HZ >> 1)
-
-/*
- * Threshold: 0.0312s, when doubled: 0.0625s.
- * Also a default for cs->uncertainty_margin when registering clocks.
- */
-#define WATCHDOG_THRESHOLD (NSEC_PER_SEC >> 5)
-
-/*
- * Maximum permissible delay between two readouts of the watchdog
- * clocksource surrounding a read of the clocksource being validated.
- * This delay could be due to SMIs, NMIs, or to VCPU preemptions.  Used as
- * a lower bound for cs->uncertainty_margin values when registering clocks.
- *
- * The default of 500 parts per million is based on NTP's limits.
- * If a clocksource is good enough for NTP, it is good enough for us!
- */
-#ifdef CONFIG_CLOCKSOURCE_WATCHDOG_MAX_SKEW_US
-#define MAX_SKEW_USEC	CONFIG_CLOCKSOURCE_WATCHDOG_MAX_SKEW_US
-#else
-#define MAX_SKEW_USEC	(125 * WATCHDOG_INTERVAL / HZ)
-#endif
-
-#define WATCHDOG_MAX_SKEW (MAX_SKEW_USEC * NSEC_PER_USEC)
-
 #ifdef CONFIG_CLOCKSOURCE_WATCHDOG
 static void clocksource_watchdog_work(struct work_struct *work);
 static void clocksource_select(void);
@@ -147,6 +117,19 @@ static inline void clocksource_watchdog_unlock(unsigned long *flags)
 
 static int clocksource_watchdog_kthread(void *data);
 static void __clocksource_change_rating(struct clocksource *cs, int rating);
+
+/*
+ * Interval: 0.5sec Threshold: 0.0625s
+ */
+#define WATCHDOG_INTERVAL (HZ >> 1)
+#define WATCHDOG_THRESHOLD (NSEC_PER_SEC >> 4)
+
+/*
+ * Maximum permissible delay between two readouts of the watchdog
+ * clocksource surrounding a read of the clocksource being validated.
+ * This delay could be due to SMIs, NMIs, or to VCPU preemptions.
+ */
+#define WATCHDOG_MAX_SKEW (100 * NSEC_PER_USEC)
 
 static void clocksource_watchdog_work(struct work_struct *work)
 {
@@ -208,30 +191,20 @@ void clocksource_mark_unstable(struct clocksource *cs)
 	spin_unlock_irqrestore(&watchdog_lock, flags);
 }
 
-ulong max_cswd_read_retries = 2;
+static ulong max_cswd_read_retries = 3;
 module_param(max_cswd_read_retries, ulong, 0644);
-EXPORT_SYMBOL_GPL(max_cswd_read_retries);
-static int verify_n_cpus = 8;
-module_param(verify_n_cpus, int, 0644);
 
-enum wd_read_status {
-	WD_READ_SUCCESS,
-	WD_READ_UNSTABLE,
-	WD_READ_SKIP
-};
-
-static enum wd_read_status cs_watchdog_read(struct clocksource *cs, u64 *csnow, u64 *wdnow)
+static bool cs_watchdog_read(struct clocksource *cs, u64 *csnow, u64 *wdnow)
 {
 	unsigned int nretries;
-	u64 wd_end, wd_end2, wd_delta;
-	int64_t wd_delay, wd_seq_delay;
+	u64 wd_end, wd_delta;
+	int64_t wd_delay;
 
 	for (nretries = 0; nretries <= max_cswd_read_retries; nretries++) {
 		local_irq_disable();
 		*wdnow = watchdog->read(watchdog);
 		*csnow = cs->read(cs);
 		wd_end = watchdog->read(watchdog);
-		wd_end2 = watchdog->read(watchdog);
 		local_irq_enable();
 
 		wd_delta = clocksource_delta(wd_end, *wdnow, watchdog->mask);
@@ -242,88 +215,18 @@ static enum wd_read_status cs_watchdog_read(struct clocksource *cs, u64 *csnow, 
 				pr_warn("timekeeping watchdog on CPU%d: %s retried %d times before success\n",
 					smp_processor_id(), watchdog->name, nretries);
 			}
-			return WD_READ_SUCCESS;
+			return true;
 		}
-
-		/*
-		 * Now compute delay in consecutive watchdog read to see if
-		 * there is too much external interferences that cause
-		 * significant delay in reading both clocksource and watchdog.
-		 *
-		 * If consecutive WD read-back delay > WATCHDOG_MAX_SKEW/2,
-		 * report system busy, reinit the watchdog and skip the current
-		 * watchdog test.
-		 */
-		wd_delta = clocksource_delta(wd_end2, wd_end, watchdog->mask);
-		wd_seq_delay = clocksource_cyc2ns(wd_delta, watchdog->mult, watchdog->shift);
-		if (wd_seq_delay > WATCHDOG_MAX_SKEW/2)
-			goto skip_test;
 	}
 
-	pr_warn("timekeeping watchdog on CPU%d: wd-%s-wd excessive read-back delay of %lldns vs. limit of %ldns, wd-wd read-back delay only %lldns, attempt %d, marking %s unstable\n",
-		smp_processor_id(), cs->name, wd_delay, WATCHDOG_MAX_SKEW, wd_seq_delay, nretries, cs->name);
-	return WD_READ_UNSTABLE;
-
-skip_test:
-	pr_info("timekeeping watchdog on CPU%d: %s wd-wd read-back delay of %lldns\n",
-		smp_processor_id(), watchdog->name, wd_seq_delay);
-	pr_info("wd-%s-wd read-back delay of %lldns, clock-skew test skipped!\n",
-		cs->name, wd_delay);
-	return WD_READ_SKIP;
+	pr_warn("timekeeping watchdog on CPU%d: %s read-back delay of %lldns, attempt %d, marking unstable\n",
+		smp_processor_id(), watchdog->name, wd_delay, nretries);
+	return false;
 }
 
 static u64 csnow_mid;
 static cpumask_t cpus_ahead;
 static cpumask_t cpus_behind;
-static cpumask_t cpus_chosen;
-
-static void clocksource_verify_choose_cpus(void)
-{
-	int cpu, i, n = verify_n_cpus;
-
-	if (n < 0) {
-		/* Check all of the CPUs. */
-		cpumask_copy(&cpus_chosen, cpu_online_mask);
-		cpumask_clear_cpu(smp_processor_id(), &cpus_chosen);
-		return;
-	}
-
-	/* If no checking desired, or no other CPU to check, leave. */
-	cpumask_clear(&cpus_chosen);
-	if (n == 0 || num_online_cpus() <= 1)
-		return;
-
-	/* Make sure to select at least one CPU other than the current CPU. */
-	cpu = cpumask_first(cpu_online_mask);
-	if (cpu == smp_processor_id())
-		cpu = cpumask_next(cpu, cpu_online_mask);
-	if (WARN_ON_ONCE(cpu >= nr_cpu_ids))
-		return;
-	cpumask_set_cpu(cpu, &cpus_chosen);
-
-	/* Force a sane value for the boot parameter. */
-	if (n > nr_cpu_ids)
-		n = nr_cpu_ids;
-
-	/*
-	 * Randomly select the specified number of CPUs.  If the same
-	 * CPU is selected multiple times, that CPU is checked only once,
-	 * and no replacement CPU is selected.  This gracefully handles
-	 * situations where verify_n_cpus is greater than the number of
-	 * CPUs that are currently online.
-	 */
-	for (i = 1; i < n; i++) {
-		cpu = get_random_u32_below(nr_cpu_ids);
-		cpu = cpumask_next(cpu - 1, cpu_online_mask);
-		if (cpu >= nr_cpu_ids)
-			cpu = cpumask_first(cpu_online_mask);
-		if (!WARN_ON_ONCE(cpu >= nr_cpu_ids))
-			cpumask_set_cpu(cpu, &cpus_chosen);
-	}
-
-	/* Don't verify ourselves. */
-	cpumask_clear_cpu(smp_processor_id(), &cpus_chosen);
-}
 
 static void clocksource_verify_one_cpu(void *csin)
 {
@@ -332,29 +235,19 @@ static void clocksource_verify_one_cpu(void *csin)
 	csnow_mid = cs->read(cs);
 }
 
-void clocksource_verify_percpu(struct clocksource *cs)
+static void clocksource_verify_percpu(struct clocksource *cs)
 {
 	int64_t cs_nsec, cs_nsec_max = 0, cs_nsec_min = LLONG_MAX;
 	u64 csnow_begin, csnow_end;
 	int cpu, testcpu;
 	s64 delta;
 
-	if (verify_n_cpus == 0)
-		return;
 	cpumask_clear(&cpus_ahead);
 	cpumask_clear(&cpus_behind);
-	cpus_read_lock();
 	preempt_disable();
-	clocksource_verify_choose_cpus();
-	if (cpumask_empty(&cpus_chosen)) {
-		preempt_enable();
-		cpus_read_unlock();
-		pr_warn("Not enough CPUs to check clocksource '%s'.\n", cs->name);
-		return;
-	}
 	testcpu = smp_processor_id();
-	pr_warn("Checking clocksource %s synchronization from CPU %d to CPUs %*pbl.\n", cs->name, testcpu, cpumask_pr_args(&cpus_chosen));
-	for_each_cpu(cpu, &cpus_chosen) {
+	pr_warn("Checking clocksource %s synchronization from CPU %d.\n", cs->name, testcpu);
+	for_each_online_cpu(cpu) {
 		if (cpu == testcpu)
 			continue;
 		csnow_begin = cs->read(cs);
@@ -374,7 +267,6 @@ void clocksource_verify_percpu(struct clocksource *cs)
 			cs_nsec_min = cs_nsec;
 	}
 	preempt_enable();
-	cpus_read_unlock();
 	if (!cpumask_empty(&cpus_ahead))
 		pr_warn("        CPUs %*pbl ahead of CPU %d for clocksource %s.\n",
 			cpumask_pr_args(&cpus_ahead), testcpu, cs->name);
@@ -385,16 +277,6 @@ void clocksource_verify_percpu(struct clocksource *cs)
 		pr_warn("        CPU %d check durations %lldns - %lldns for clocksource %s.\n",
 			testcpu, cs_nsec_min, cs_nsec_max, cs->name);
 }
-EXPORT_SYMBOL_GPL(clocksource_verify_percpu);
-
-static inline void clocksource_reset_watchdog(void)
-{
-	struct clocksource *cs;
-
-	list_for_each_entry(cs, &watchdog_list, wd_list)
-		cs->flags &= ~CLOCK_SOURCE_WATCHDOG;
-}
-
 
 static void clocksource_watchdog(struct timer_list *unused)
 {
@@ -402,9 +284,6 @@ static void clocksource_watchdog(struct timer_list *unused)
 	int next_cpu, reset_pending;
 	int64_t wd_nsec, cs_nsec;
 	struct clocksource *cs;
-	enum wd_read_status read_ret;
-	unsigned long extra_wait = 0;
-	u32 md;
 
 	spin_lock(&watchdog_lock);
 	if (!watchdog_running)
@@ -421,30 +300,10 @@ static void clocksource_watchdog(struct timer_list *unused)
 			continue;
 		}
 
-		read_ret = cs_watchdog_read(cs, &csnow, &wdnow);
-
-		if (read_ret == WD_READ_UNSTABLE) {
+		if (!cs_watchdog_read(cs, &csnow, &wdnow)) {
 			/* Clock readout unreliable, so give it up. */
 			__clocksource_unstable(cs);
 			continue;
-		}
-
-		/*
-		 * When WD_READ_SKIP is returned, it means the system is likely
-		 * under very heavy load, where the latency of reading
-		 * watchdog/clocksource is very big, and affect the accuracy of
-		 * watchdog check. So give system some space and suspend the
-		 * watchdog check for 5 minutes.
-		 */
-		if (read_ret == WD_READ_SKIP) {
-			/*
-			 * As the watchdog timer will be suspended, and
-			 * cs->last could keep unchanged for 5 minutes, reset
-			 * the counters.
-			 */
-			clocksource_reset_watchdog();
-			extra_wait = HZ * 300;
-			break;
 		}
 
 		/* Clocksource initialized ? */
@@ -471,28 +330,13 @@ static void clocksource_watchdog(struct timer_list *unused)
 			continue;
 
 		/* Check the deviation from the watchdog clocksource. */
-		md = cs->uncertainty_margin + watchdog->uncertainty_margin;
-		if (abs(cs_nsec - wd_nsec) > md) {
-			u64 cs_wd_msec;
-			u64 wd_msec;
-			u32 wd_rem;
-
+		if (abs(cs_nsec - wd_nsec) > WATCHDOG_THRESHOLD) {
 			pr_warn("timekeeping watchdog on CPU%d: Marking clocksource '%s' as unstable because the skew is too large:\n",
 				smp_processor_id(), cs->name);
-			pr_warn("                      '%s' wd_nsec: %lld wd_now: %llx wd_last: %llx mask: %llx\n",
-				watchdog->name, wd_nsec, wdnow, wdlast, watchdog->mask);
-			pr_warn("                      '%s' cs_nsec: %lld cs_now: %llx cs_last: %llx mask: %llx\n",
-				cs->name, cs_nsec, csnow, cslast, cs->mask);
-			cs_wd_msec = div_u64_rem(cs_nsec - wd_nsec, 1000U * 1000U, &wd_rem);
-			wd_msec = div_u64_rem(wd_nsec, 1000U * 1000U, &wd_rem);
-			pr_warn("                      Clocksource '%s' skewed %lld ns (%lld ms) over watchdog '%s' interval of %lld ns (%lld ms)\n",
-				cs->name, cs_nsec - wd_nsec, cs_wd_msec, watchdog->name, wd_nsec, wd_msec);
-			if (curr_clocksource == cs)
-				pr_warn("                      '%s' is current clocksource.\n", cs->name);
-			else if (curr_clocksource)
-				pr_warn("                      '%s' (not '%s') is current clocksource.\n", curr_clocksource->name, cs->name);
-			else
-				pr_warn("                      No current clocksource.\n");
+			pr_warn("                      '%s' wd_now: %llx wd_last: %llx mask: %llx\n",
+				watchdog->name, wdnow, wdlast, watchdog->mask);
+			pr_warn("                      '%s' cs_now: %llx cs_last: %llx mask: %llx\n",
+				cs->name, csnow, cslast, cs->mask);
 			__clocksource_unstable(cs);
 			continue;
 		}
@@ -550,7 +394,7 @@ static void clocksource_watchdog(struct timer_list *unused)
 	 * pair clocksource_stop_watchdog() clocksource_start_watchdog().
 	 */
 	if (!timer_pending(&watchdog_timer)) {
-		watchdog_timer.expires += WATCHDOG_INTERVAL + extra_wait;
+		watchdog_timer.expires += WATCHDOG_INTERVAL;
 		add_timer_on(&watchdog_timer, next_cpu);
 	}
 out:
@@ -573,6 +417,14 @@ static inline void clocksource_stop_watchdog(void)
 		return;
 	del_timer(&watchdog_timer);
 	watchdog_running = 0;
+}
+
+static inline void clocksource_reset_watchdog(void)
+{
+	struct clocksource *cs;
+
+	list_for_each_entry(cs, &watchdog_list, wd_list)
+		cs->flags &= ~CLOCK_SOURCE_WATCHDOG;
 }
 
 static void clocksource_resume_watchdog(void)
@@ -767,7 +619,7 @@ static void clocksource_suspend_select(bool fallback)
  * the suspend time when resuming system.
  *
  * This function is called late in the suspend process from timekeeping_suspend(),
- * that means processes are frozen, non-boot cpus and interrupts are disabled
+ * that means processes are freezed, non-boot cpus and interrupts are disabled
  * now. It is therefore possible to start the suspend timer without taking the
  * clocksource mutex.
  */
@@ -954,6 +806,8 @@ static inline void clocksource_update_max_deferment(struct clocksource *cs)
 						&cs->max_cycles);
 }
 
+#ifndef CONFIG_ARCH_USES_GETTIMEOFFSET
+
 static struct clocksource *clocksource_find_best(bool oneshot, bool skipcur)
 {
 	struct clocksource *cs;
@@ -1045,6 +899,12 @@ static void clocksource_select_fallback(void)
 	__clocksource_select(true);
 }
 
+#else /* !CONFIG_ARCH_USES_GETTIMEOFFSET */
+static inline void clocksource_select(void) { }
+static inline void clocksource_select_fallback(void) { }
+
+#endif
+
 /*
  * clocksource_done_booting - Called near the end of core bootup
  *
@@ -1125,26 +985,6 @@ void __clocksource_update_freq_scale(struct clocksource *cs, u32 scale, u32 freq
 		clocks_calc_mult_shift(&cs->mult, &cs->shift, freq,
 				       NSEC_PER_SEC / scale, sec * scale);
 	}
-
-	/*
-	 * If the uncertainty margin is not specified, calculate it.
-	 * If both scale and freq are non-zero, calculate the clock
-	 * period, but bound below at 2*WATCHDOG_MAX_SKEW.  However,
-	 * if either of scale or freq is zero, be very conservative and
-	 * take the tens-of-milliseconds WATCHDOG_THRESHOLD value for the
-	 * uncertainty margin.  Allow stupidly small uncertainty margins
-	 * to be specified by the caller for testing purposes, but warn
-	 * to discourage production use of this capability.
-	 */
-	if (scale && freq && !cs->uncertainty_margin) {
-		cs->uncertainty_margin = NSEC_PER_SEC / (scale * freq);
-		if (cs->uncertainty_margin < 2 * WATCHDOG_MAX_SKEW)
-			cs->uncertainty_margin = 2 * WATCHDOG_MAX_SKEW;
-	} else if (!cs->uncertainty_margin) {
-		cs->uncertainty_margin = WATCHDOG_THRESHOLD;
-	}
-	WARN_ON_ONCE(cs->uncertainty_margin < 2 * WATCHDOG_MAX_SKEW);
-
 	/*
 	 * Ensure clocksources that have large 'mult' values don't overflow
 	 * when adjusted.
@@ -1189,8 +1029,6 @@ int __clocksource_register_scale(struct clocksource *cs, u32 scale, u32 freq)
 
 	clocksource_arch_init(cs);
 
-	if (WARN_ON_ONCE((unsigned int)cs->id >= CSID_MAX))
-		cs->id = CSID_GENERIC;
 	if (cs->vdso_clock_mode < 0 ||
 	    cs->vdso_clock_mode >= VDSO_CLOCKMODE_MAX) {
 		pr_warn("clocksource %s registered with invalid VDSO mode %d. Disabling VDSO support.\n",
@@ -1480,7 +1318,7 @@ static int __init boot_override_clocksource(char* str)
 {
 	mutex_lock(&clocksource_mutex);
 	if (str)
-		strscpy(override_name, str, sizeof(override_name));
+		strlcpy(override_name, str, sizeof(override_name));
 	mutex_unlock(&clocksource_mutex);
 	return 1;
 }

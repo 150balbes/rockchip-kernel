@@ -1611,9 +1611,12 @@ enum tegra_mux {
 	TEGRA_MUX_VIMCLK2_ALT,
 };
 
-#define FUNCTION(fname) #fname
+#define FUNCTION(fname)					\
+	{						\
+		.name = #fname,				\
+	}
 
-static const char * const tegra124_functions[] = {
+static struct tegra_function tegra124_functions[] = {
 	FUNCTION(blink),
 	FUNCTION(ccla),
 	FUNCTION(cec),

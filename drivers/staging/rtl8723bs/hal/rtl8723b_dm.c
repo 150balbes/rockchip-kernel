@@ -7,6 +7,8 @@
 /*  Description: */
 /*  This file is for 92CE/92CU dynamic mechanism only */
 
+#define _RTL8723B_DM_C_
+
 #include <drv_types.h>
 #include <rtw_debug.h>
 #include <rtl8723b_hal.h>
@@ -23,7 +25,7 @@ static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 {
 
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
-	struct dm_odm_t *pDM_Odm = &pHalData->odmpriv;
+	PDM_ODM_T pDM_Odm = &(pHalData->odmpriv);
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
 	u8 cut_ver, fab_ver;
 
@@ -42,12 +44,23 @@ static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 	fab_ver = ODM_TSMC;
 	cut_ver = ODM_CUT_A;
 
+	DBG_871X("%s(): fab_ver =%d cut_ver =%d\n", __func__, fab_ver, cut_ver);
 	ODM_CmnInfoInit(pDM_Odm, ODM_CMNINFO_FAB_VER, fab_ver);
 	ODM_CmnInfoInit(pDM_Odm, ODM_CMNINFO_CUT_VER, cut_ver);
+	ODM_CmnInfoInit(pDM_Odm, ODM_CMNINFO_MP_TEST_CHIP, IS_NORMAL_CHIP(pHalData->VersionID));
 
 	ODM_CmnInfoInit(pDM_Odm, ODM_CMNINFO_PATCH_ID, pHalData->CustomerID);
 	/* 	ODM_CMNINFO_BINHCT_TEST only for MP Team */
 	ODM_CmnInfoInit(pDM_Odm, ODM_CMNINFO_BWIFI_TEST, Adapter->registrypriv.wifi_spec);
+
+
+	if (pHalData->rf_type == RF_1T1R) {
+		ODM_CmnInfoUpdate(pDM_Odm, ODM_CMNINFO_RF_TYPE, ODM_1T1R);
+	} else if (pHalData->rf_type == RF_2T2R) {
+		ODM_CmnInfoUpdate(pDM_Odm, ODM_CMNINFO_RF_TYPE, ODM_2T2R);
+	} else if (pHalData->rf_type == RF_1T2R) {
+		ODM_CmnInfoUpdate(pDM_Odm, ODM_CMNINFO_RF_TYPE, ODM_1T2R);
+	}
 
 	pdmpriv->InitODMFlag = ODM_RF_CALIBRATION|ODM_RF_TX_PWR_TRACK;
 
@@ -61,7 +74,7 @@ static void Update_ODM_ComInfo_8723b(struct adapter *Adapter)
 	struct dvobj_priv *dvobj = adapter_to_dvobj(Adapter);
 	struct pwrctrl_priv *pwrctrlpriv = adapter_to_pwrctl(Adapter);
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
-	struct dm_odm_t *pDM_Odm = &pHalData->odmpriv;
+	PDM_ODM_T pDM_Odm = &(pHalData->odmpriv);
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
 	int i;
 	u8 zero = 0;
@@ -78,6 +91,9 @@ static void Update_ODM_ComInfo_8723b(struct adapter *Adapter)
 		| ODM_MAC_EDCA_TURBO
 		| ODM_RF_TX_PWR_TRACK
 		| ODM_RF_CALIBRATION
+#ifdef CONFIG_ODM_ADAPTIVITY
+		| ODM_BB_ADAPTIVITY
+#endif
 		;
 
 	/*  */
@@ -97,6 +113,7 @@ static void Update_ODM_ComInfo_8723b(struct adapter *Adapter)
 	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_CHNL, &(pHalData->CurrentChannel));
 	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_NET_CLOSED, &(Adapter->net_closed));
 	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_MP_MODE, &zero);
+	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_BAND, &(pHalData->CurrentBandType));
 	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_FORCED_IGI_LB, &(pHalData->u1ForcedIgiLb));
 	ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_FORCED_RATE, &(pHalData->ForcedDataRate));
 
@@ -112,7 +129,7 @@ void rtl8723b_InitHalDm(struct adapter *Adapter)
 {
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
-	struct dm_odm_t *pDM_Odm = &pHalData->odmpriv;
+	PDM_ODM_T pDM_Odm = &(pHalData->odmpriv);
 
 	pdmpriv->DM_Type = DM_Type_ByDriver;
 	pdmpriv->DMFlag = DYNAMIC_FUNC_DISABLE;
@@ -128,7 +145,7 @@ void rtl8723b_InitHalDm(struct adapter *Adapter)
 
 void rtl8723b_HalDmWatchDog(struct adapter *Adapter)
 {
-	bool fw_current_in_ps_mode = false;
+	bool bFwCurrentInPSMode = false;
 	bool bFwPSAwake = true;
 	u8 hw_init_completed = false;
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
@@ -138,12 +155,12 @@ void rtl8723b_HalDmWatchDog(struct adapter *Adapter)
 	if (hw_init_completed == false)
 		goto skip_dm;
 
-	fw_current_in_ps_mode = adapter_to_pwrctl(Adapter)->fw_current_in_ps_mode;
+	bFwCurrentInPSMode = adapter_to_pwrctl(Adapter)->bFwCurrentInPSMode;
 	rtw_hal_get_hwreg(Adapter, HW_VAR_FWLPS_RF_ON, (u8 *)(&bFwPSAwake));
 
 	if (
 		(hw_init_completed == true) &&
-		((!fw_current_in_ps_mode) && bFwPSAwake)
+		((!bFwCurrentInPSMode) && bFwPSAwake)
 	) {
 		/*  */
 		/*  Calculate Tx/Rx statistics. */
@@ -186,9 +203,11 @@ void rtl8723b_hal_dm_in_lps(struct adapter *padapter)
 	u32 PWDB_rssi = 0;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct hal_com_data *pHalData = GET_HAL_DATA(padapter);
-	struct dm_odm_t *pDM_Odm = &pHalData->odmpriv;
+	PDM_ODM_T pDM_Odm = &pHalData->odmpriv;
 	struct sta_priv *pstapriv = &padapter->stapriv;
 	struct sta_info *psta = NULL;
+
+	DBG_871X("%s, RSSI_Min =%d\n", __func__, pDM_Odm->RSSI_Min);
 
 	/* update IGI */
 	ODM_Write_DIG(pDM_Odm, pDM_Odm->RSSI_Min);
@@ -210,8 +229,8 @@ void rtl8723b_HalDmWatchDog_in_LPS(struct adapter *Adapter)
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
 	struct mlme_priv *pmlmepriv = &Adapter->mlmepriv;
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
-	struct dm_odm_t *pDM_Odm = &pHalData->odmpriv;
-	struct dig_t *pDM_DigTable = &pDM_Odm->DM_DigTable;
+	PDM_ODM_T pDM_Odm = &pHalData->odmpriv;
+	pDIG_T pDM_DigTable = &pDM_Odm->DM_DigTable;
 	struct sta_priv *pstapriv = &Adapter->stapriv;
 	struct sta_info *psta = NULL;
 
@@ -240,6 +259,8 @@ void rtl8723b_HalDmWatchDog_in_LPS(struct adapter *Adapter)
 		goto skip_lps_dm;
 
 	pdmpriv->EntryMinUndecoratedSmoothedPWDB = psta->rssi_stat.UndecoratedSmoothedPWDB;
+
+	DBG_871X("CurIGValue =%d, EntryMinUndecoratedSmoothedPWDB = %d\n", pDM_DigTable->CurIGValue, pdmpriv->EntryMinUndecoratedSmoothedPWDB);
 
 	if (pdmpriv->EntryMinUndecoratedSmoothedPWDB <= 0)
 		goto skip_lps_dm;

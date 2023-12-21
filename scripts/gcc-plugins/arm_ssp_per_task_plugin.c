@@ -4,7 +4,7 @@
 
 __visible int plugin_is_GPL_compatible;
 
-static unsigned int canary_offset;
+static unsigned int sp_mask, canary_offset;
 
 static unsigned int arm_pertask_ssp_rtl_execute(void)
 {
@@ -13,7 +13,7 @@ static unsigned int arm_pertask_ssp_rtl_execute(void)
 	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
 		const char *sym;
 		rtx body;
-		rtx current;
+		rtx mask, masked_sp;
 
 		/*
 		 * Find a SET insn involving a SYMBOL_REF to __stack_chk_guard
@@ -30,13 +30,19 @@ static unsigned int arm_pertask_ssp_rtl_execute(void)
 
 		/*
 		 * Replace the source of the SET insn with an expression that
-		 * produces the address of the current task's stack canary value
+		 * produces the address of the copy of the stack canary value
+		 * stored in struct thread_info
 		 */
-		current = gen_reg_rtx(Pmode);
+		mask = GEN_INT(sext_hwi(sp_mask, GET_MODE_PRECISION(Pmode)));
+		masked_sp = gen_reg_rtx(Pmode);
 
-		emit_insn_before(gen_load_tp_hard(current), insn);
+		emit_insn_before(gen_rtx_set(masked_sp,
+					     gen_rtx_AND(Pmode,
+							 stack_pointer_rtx,
+							 mask)),
+				 insn);
 
-		SET_SRC(body) = gen_rtx_PLUS(Pmode, current,
+		SET_SRC(body) = gen_rtx_PLUS(Pmode, masked_sp,
 					     GEN_INT(canary_offset));
 	}
 	return 0;
@@ -66,6 +72,7 @@ __visible int plugin_init(struct plugin_name_args *plugin_info,
 	const char * const plugin_name = plugin_info->base_name;
 	const int argc = plugin_info->argc;
 	const struct plugin_argument *argv = plugin_info->argv;
+	int tso = 0;
 	int i;
 
 	if (!plugin_default_version_check(version, &gcc_version)) {
@@ -84,6 +91,11 @@ __visible int plugin_init(struct plugin_name_args *plugin_info,
 			return 1;
 		}
 
+		if (!strcmp(argv[i].key, "tso")) {
+			tso = atoi(argv[i].value);
+			continue;
+		}
+
 		if (!strcmp(argv[i].key, "offset")) {
 			canary_offset = atoi(argv[i].value);
 			continue;
@@ -92,6 +104,9 @@ __visible int plugin_init(struct plugin_name_args *plugin_info,
 		      plugin_name, argv[i].key);
 		return 1;
 	}
+
+	/* create the mask that produces the base of the stack */
+	sp_mask = ~((1U << (12 + tso)) - 1);
 
 	PASS_INFO(arm_pertask_ssp_rtl, "expand", 1, PASS_POS_INSERT_AFTER);
 

@@ -50,7 +50,6 @@
 /* Bits definition for MIPID02_MODE_REG2 */
 #define MODE_HSYNC_ACTIVE_HIGH				BIT(1)
 #define MODE_VSYNC_ACTIVE_HIGH				BIT(2)
-#define MODE_PCLK_SAMPLE_RISING				BIT(3)
 /* Bits definition for MIPID02_DATA_SELECTION_CTRL */
 #define SELECTION_MANUAL_DATA				BIT(2)
 #define SELECTION_MANUAL_WIDTH				BIT(3)
@@ -62,12 +61,9 @@ static const u32 mipid02_supported_fmt_codes[] = {
 	MEDIA_BUS_FMT_SGRBG10_1X10, MEDIA_BUS_FMT_SRGGB10_1X10,
 	MEDIA_BUS_FMT_SBGGR12_1X12, MEDIA_BUS_FMT_SGBRG12_1X12,
 	MEDIA_BUS_FMT_SGRBG12_1X12, MEDIA_BUS_FMT_SRGGB12_1X12,
-	MEDIA_BUS_FMT_YUYV8_1X16, MEDIA_BUS_FMT_YVYU8_1X16,
-	MEDIA_BUS_FMT_UYVY8_1X16, MEDIA_BUS_FMT_VYUY8_1X16,
-	MEDIA_BUS_FMT_RGB565_1X16, MEDIA_BUS_FMT_BGR888_1X24,
+	MEDIA_BUS_FMT_UYVY8_1X16, MEDIA_BUS_FMT_BGR888_1X24,
 	MEDIA_BUS_FMT_RGB565_2X8_LE, MEDIA_BUS_FMT_RGB565_2X8_BE,
-	MEDIA_BUS_FMT_YUYV8_2X8, MEDIA_BUS_FMT_YVYU8_2X8,
-	MEDIA_BUS_FMT_UYVY8_2X8, MEDIA_BUS_FMT_VYUY8_2X8,
+	MEDIA_BUS_FMT_YUYV8_2X8, MEDIA_BUS_FMT_UYVY8_2X8,
 	MEDIA_BUS_FMT_JPEG_1X8
 };
 
@@ -96,6 +92,7 @@ struct mipid02_dev {
 	u64 link_frequency;
 	struct v4l2_fwnode_endpoint tx;
 	/* remote source */
+	struct v4l2_async_subdev asd;
 	struct v4l2_async_notifier notifier;
 	struct v4l2_subdev *s_subdev;
 	/* registers */
@@ -134,15 +131,9 @@ static int bpp_from_code(__u32 code)
 	case MEDIA_BUS_FMT_SGRBG12_1X12:
 	case MEDIA_BUS_FMT_SRGGB12_1X12:
 		return 12;
-	case MEDIA_BUS_FMT_YUYV8_1X16:
-	case MEDIA_BUS_FMT_YVYU8_1X16:
 	case MEDIA_BUS_FMT_UYVY8_1X16:
-	case MEDIA_BUS_FMT_VYUY8_1X16:
-	case MEDIA_BUS_FMT_RGB565_1X16:
 	case MEDIA_BUS_FMT_YUYV8_2X8:
-	case MEDIA_BUS_FMT_YVYU8_2X8:
 	case MEDIA_BUS_FMT_UYVY8_2X8:
-	case MEDIA_BUS_FMT_VYUY8_2X8:
 	case MEDIA_BUS_FMT_RGB565_2X8_LE:
 	case MEDIA_BUS_FMT_RGB565_2X8_BE:
 		return 16;
@@ -171,18 +162,12 @@ static u8 data_type_from_code(__u32 code)
 	case MEDIA_BUS_FMT_SGRBG12_1X12:
 	case MEDIA_BUS_FMT_SRGGB12_1X12:
 		return 0x2c;
-	case MEDIA_BUS_FMT_YUYV8_1X16:
-	case MEDIA_BUS_FMT_YVYU8_1X16:
 	case MEDIA_BUS_FMT_UYVY8_1X16:
-	case MEDIA_BUS_FMT_VYUY8_1X16:
 	case MEDIA_BUS_FMT_YUYV8_2X8:
-	case MEDIA_BUS_FMT_YVYU8_2X8:
 	case MEDIA_BUS_FMT_UYVY8_2X8:
-	case MEDIA_BUS_FMT_VYUY8_2X8:
 		return 0x1e;
 	case MEDIA_BUS_FMT_BGR888_1X24:
 		return 0x24;
-	case MEDIA_BUS_FMT_RGB565_1X16:
 	case MEDIA_BUS_FMT_RGB565_2X8_LE:
 	case MEDIA_BUS_FMT_RGB565_2X8_BE:
 		return 0x22;
@@ -217,16 +202,8 @@ static __u32 get_fmt_code(__u32 code)
 
 static __u32 serial_to_parallel_code(__u32 serial)
 {
-	if (serial == MEDIA_BUS_FMT_RGB565_1X16)
-		return MEDIA_BUS_FMT_RGB565_2X8_LE;
-	if (serial == MEDIA_BUS_FMT_YUYV8_1X16)
-		return MEDIA_BUS_FMT_YUYV8_2X8;
-	if (serial == MEDIA_BUS_FMT_YVYU8_1X16)
-		return MEDIA_BUS_FMT_YVYU8_2X8;
 	if (serial == MEDIA_BUS_FMT_UYVY8_1X16)
 		return MEDIA_BUS_FMT_UYVY8_2X8;
-	if (serial == MEDIA_BUS_FMT_VYUY8_1X16)
-		return MEDIA_BUS_FMT_VYUY8_2X8;
 	if (serial == MEDIA_BUS_FMT_BGR888_1X24)
 		return MEDIA_BUS_FMT_BGR888_3X8;
 
@@ -518,8 +495,6 @@ static int mipid02_configure_from_tx(struct mipid02_dev *bridge)
 		bridge->r.mode_reg2 |= MODE_HSYNC_ACTIVE_HIGH;
 	if (ep->bus.parallel.flags & V4L2_MBUS_VSYNC_ACTIVE_HIGH)
 		bridge->r.mode_reg2 |= MODE_VSYNC_ACTIVE_HIGH;
-	if (ep->bus.parallel.flags & V4L2_MBUS_PCLK_SAMPLE_RISING)
-		bridge->r.mode_reg2 |= MODE_PCLK_SAMPLE_RISING;
 
 	return 0;
 }
@@ -669,7 +644,7 @@ out:
 }
 
 static int mipid02_enum_mbus_code(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_mbus_code_enum *code)
 {
 	struct mipid02_dev *bridge = to_mipid02_dev(sd);
@@ -696,7 +671,7 @@ static int mipid02_enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int mipid02_get_fmt(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_state *sd_state,
+			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_format *format)
 {
 	struct v4l2_mbus_framefmt *mbus_fmt = &format->format;
@@ -713,8 +688,7 @@ static int mipid02_get_fmt(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY)
-		fmt = v4l2_subdev_get_try_format(&bridge->sd, sd_state,
-						 format->pad);
+		fmt = v4l2_subdev_get_try_format(&bridge->sd, cfg, format->pad);
 	else
 		fmt = &bridge->fmt;
 
@@ -731,18 +705,13 @@ static int mipid02_get_fmt(struct v4l2_subdev *sd,
 }
 
 static void mipid02_set_fmt_source(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_state *sd_state,
+				   struct v4l2_subdev_pad_config *cfg,
 				   struct v4l2_subdev_format *format)
 {
 	struct mipid02_dev *bridge = to_mipid02_dev(sd);
 
-	/* source pad mirror sink pad */
-	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE)
-		format->format = bridge->fmt;
-	else
-		format->format = *v4l2_subdev_get_try_format(sd, sd_state,
-							     MIPID02_SINK_0);
-
+	/* source pad mirror active sink pad */
+	format->format = bridge->fmt;
 	/* but code may need to be converted */
 	format->format.code = serial_to_parallel_code(format->format.code);
 
@@ -750,12 +719,11 @@ static void mipid02_set_fmt_source(struct v4l2_subdev *sd,
 	if (format->which != V4L2_SUBDEV_FORMAT_TRY)
 		return;
 
-	*v4l2_subdev_get_try_format(sd, sd_state, MIPID02_SOURCE) =
-		format->format;
+	*v4l2_subdev_get_try_format(sd, cfg, format->pad) = format->format;
 }
 
 static void mipid02_set_fmt_sink(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_format *format)
 {
 	struct mipid02_dev *bridge = to_mipid02_dev(sd);
@@ -764,18 +732,15 @@ static void mipid02_set_fmt_sink(struct v4l2_subdev *sd,
 	format->format.code = get_fmt_code(format->format.code);
 
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY)
-		fmt = v4l2_subdev_get_try_format(sd, sd_state, format->pad);
+		fmt = v4l2_subdev_get_try_format(sd, cfg, format->pad);
 	else
 		fmt = &bridge->fmt;
 
 	*fmt = format->format;
-
-	/* Propagate the format change to the source pad */
-	mipid02_set_fmt_source(sd, sd_state, format);
 }
 
 static int mipid02_set_fmt(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_state *sd_state,
+			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_format *format)
 {
 	struct mipid02_dev *bridge = to_mipid02_dev(sd);
@@ -798,9 +763,9 @@ static int mipid02_set_fmt(struct v4l2_subdev *sd,
 	}
 
 	if (format->pad == MIPID02_SOURCE)
-		mipid02_set_fmt_source(sd, sd_state, format);
+		mipid02_set_fmt_source(sd, cfg, format);
 	else
-		mipid02_set_fmt_sink(sd, sd_state, format);
+		mipid02_set_fmt_sink(sd, cfg, format);
 
 error:
 	mutex_unlock(&bridge->lock);
@@ -879,7 +844,6 @@ static int mipid02_parse_rx_ep(struct mipid02_dev *bridge)
 {
 	struct v4l2_fwnode_endpoint ep = { .bus_type = V4L2_MBUS_CSI2_DPHY };
 	struct i2c_client *client = bridge->i2c_client;
-	struct v4l2_async_subdev *asd;
 	struct device_node *ep_node;
 	int ret;
 
@@ -911,22 +875,25 @@ static int mipid02_parse_rx_ep(struct mipid02_dev *bridge)
 	bridge->rx = ep;
 
 	/* register async notifier so we get noticed when sensor is connected */
-	v4l2_async_nf_init(&bridge->notifier);
-	asd = v4l2_async_nf_add_fwnode_remote(&bridge->notifier,
-					      of_fwnode_handle(ep_node),
-					      struct v4l2_async_subdev);
+	bridge->asd.match.fwnode =
+		fwnode_graph_get_remote_port_parent(of_fwnode_handle(ep_node));
+	bridge->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
 	of_node_put(ep_node);
 
-	if (IS_ERR(asd)) {
-		dev_err(&client->dev, "fail to register asd to notifier %ld",
-			PTR_ERR(asd));
-		return PTR_ERR(asd);
+	v4l2_async_notifier_init(&bridge->notifier);
+	ret = v4l2_async_notifier_add_subdev(&bridge->notifier, &bridge->asd);
+	if (ret) {
+		dev_err(&client->dev, "fail to register asd to notifier %d",
+			ret);
+		fwnode_handle_put(bridge->asd.match.fwnode);
+		return ret;
 	}
 	bridge->notifier.ops = &mipid02_notifier_ops;
 
-	ret = v4l2_async_subdev_nf_register(&bridge->sd, &bridge->notifier);
+	ret = v4l2_async_subdev_notifier_register(&bridge->sd,
+						  &bridge->notifier);
 	if (ret)
-		v4l2_async_nf_cleanup(&bridge->notifier);
+		v4l2_async_notifier_cleanup(&bridge->notifier);
 
 	return ret;
 
@@ -1064,8 +1031,8 @@ static int mipid02_probe(struct i2c_client *client)
 	return 0;
 
 unregister_notifier:
-	v4l2_async_nf_unregister(&bridge->notifier);
-	v4l2_async_nf_cleanup(&bridge->notifier);
+	v4l2_async_notifier_unregister(&bridge->notifier);
+	v4l2_async_notifier_cleanup(&bridge->notifier);
 power_off:
 	mipid02_set_power_off(bridge);
 entity_cleanup:
@@ -1076,17 +1043,19 @@ mutex_cleanup:
 	return ret;
 }
 
-static void mipid02_remove(struct i2c_client *client)
+static int mipid02_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct mipid02_dev *bridge = to_mipid02_dev(sd);
 
-	v4l2_async_nf_unregister(&bridge->notifier);
-	v4l2_async_nf_cleanup(&bridge->notifier);
+	v4l2_async_notifier_unregister(&bridge->notifier);
+	v4l2_async_notifier_cleanup(&bridge->notifier);
 	v4l2_async_unregister_subdev(&bridge->sd);
 	mipid02_set_power_off(bridge);
 	media_entity_cleanup(&bridge->sd.entity);
 	mutex_destroy(&bridge->lock);
+
+	return 0;
 }
 
 static const struct of_device_id mipid02_dt_ids[] = {
@@ -1100,7 +1069,7 @@ static struct i2c_driver mipid02_i2c_driver = {
 		.name  = "st-mipid02",
 		.of_match_table = mipid02_dt_ids,
 	},
-	.probe = mipid02_probe,
+	.probe_new = mipid02_probe,
 	.remove = mipid02_remove,
 };
 

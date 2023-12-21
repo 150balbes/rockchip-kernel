@@ -273,7 +273,7 @@ static int at91_twi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void at91_twi_remove(struct platform_device *pdev)
+static int at91_twi_remove(struct platform_device *pdev)
 {
 	struct at91_twi_dev *dev = platform_get_drvdata(pdev);
 
@@ -282,9 +282,13 @@ static void at91_twi_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(dev->dev);
 	pm_runtime_set_suspended(dev->dev);
+
+	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM
+
+static int at91_twi_runtime_suspend(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -295,7 +299,7 @@ static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
+static int at91_twi_runtime_resume(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -304,7 +308,7 @@ static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
 	return clk_prepare_enable(twi_dev->clk);
 }
 
-static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
+static int at91_twi_suspend_noirq(struct device *dev)
 {
 	if (!pm_runtime_status_suspended(dev))
 		at91_twi_runtime_suspend(dev);
@@ -312,7 +316,7 @@ static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
+static int at91_twi_resume_noirq(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 	int ret;
@@ -331,21 +335,26 @@ static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops __maybe_unused at91_twi_pm = {
+static const struct dev_pm_ops at91_twi_pm = {
 	.suspend_noirq	= at91_twi_suspend_noirq,
 	.resume_noirq	= at91_twi_resume_noirq,
 	.runtime_suspend	= at91_twi_runtime_suspend,
 	.runtime_resume		= at91_twi_runtime_resume,
 };
 
+#define at91_twi_pm_ops (&at91_twi_pm)
+#else
+#define at91_twi_pm_ops NULL
+#endif
+
 static struct platform_driver at91_twi_driver = {
 	.probe		= at91_twi_probe,
-	.remove_new	= at91_twi_remove,
+	.remove		= at91_twi_remove,
 	.id_table	= at91_twi_devtypes,
 	.driver		= {
 		.name	= "at91_i2c",
 		.of_match_table = of_match_ptr(atmel_twi_dt_ids),
-		.pm	= pm_ptr(&at91_twi_pm),
+		.pm	= at91_twi_pm_ops,
 	},
 };
 

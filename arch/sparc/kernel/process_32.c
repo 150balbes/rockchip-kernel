@@ -8,6 +8,9 @@
 /*
  * This file handles the architecture-dependent parts of process handling..
  */
+
+#include <stdarg.h>
+
 #include <linux/elfcore.h>
 #include <linux/errno.h>
 #include <linux/module.h>
@@ -71,6 +74,7 @@ void arch_cpu_idle(void)
 {
 	if (sparc_idle)
 		(*sparc_idle)();
+	raw_local_irq_enable();
 }
 
 /* XXX cli/sti -> local_irq_xxx here, check this works once SMP is fixed. */
@@ -179,7 +183,7 @@ void exit_thread(struct task_struct *tsk)
 #ifndef CONFIG_SMP
 	if (last_task_used_math == tsk) {
 #else
-	if (test_tsk_thread_flag(tsk, TIF_USEDFPU)) {
+	if (test_ti_thread_flag(task_thread_info(tsk), TIF_USEDFPU)) {
 #endif
 		/* Keep process from leaving FPU in a bogon state. */
 		put_psr(get_psr() | PSR_EF);
@@ -211,6 +215,16 @@ void flush_thread(void)
 #else
 		clear_thread_flag(TIF_USEDFPU);
 #endif
+	}
+
+	/* This task is no longer a kernel thread. */
+	if (current->thread.flags & SPARC_FLAG_KTHREAD) {
+		current->thread.flags &= ~SPARC_FLAG_KTHREAD;
+
+		/* We must fixup kregs as well. */
+		/* XXX This was not fixed for ti for a while, worked. Unused? */
+		current->thread.kregs = (struct pt_regs *)
+		    (task_stack_page(current) + (THREAD_SIZE - TRACEREG_SZ));
 	}
 }
 
@@ -258,11 +272,9 @@ clone_stackframe(struct sparc_stackf __user *dst,
 extern void ret_from_fork(void);
 extern void ret_from_kernel_thread(void);
 
-int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
+int copy_thread(unsigned long clone_flags, unsigned long sp, unsigned long arg,
+		struct task_struct *p, unsigned long tls)
 {
-	unsigned long clone_flags = args->flags;
-	unsigned long sp = args->stack;
-	unsigned long tls = args->tls;
 	struct thread_info *ti = task_thread_info(p);
 	struct pt_regs *childregs, *regs = current_pt_regs();
 	char *new_stack;
@@ -297,13 +309,15 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	ti->ksp = (unsigned long) new_stack;
 	p->thread.kregs = childregs;
 
-	if (unlikely(args->fn)) {
+	if (unlikely(p->flags & (PF_KTHREAD | PF_IO_WORKER))) {
 		extern int nwindows;
 		unsigned long psr;
 		memset(new_stack, 0, STACKFRAME_SZ + TRACEREG_SZ);
+		p->thread.flags |= SPARC_FLAG_KTHREAD;
+		p->thread.current_ds = KERNEL_DS;
 		ti->kpc = (((unsigned long) ret_from_kernel_thread) - 0x8);
-		childregs->u_regs[UREG_G1] = (unsigned long) args->fn;
-		childregs->u_regs[UREG_G2] = (unsigned long) args->fn_arg;
+		childregs->u_regs[UREG_G1] = sp; /* function */
+		childregs->u_regs[UREG_G2] = arg;
 		psr = childregs->psr = get_psr();
 		ti->kpsr = psr | PSR_PIL;
 		ti->kwim = 1 << (((psr & PSR_CWP) + 1) % nwindows);
@@ -311,6 +325,8 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	}
 	memcpy(new_stack, (char *)regs - STACKFRAME_SZ, STACKFRAME_SZ + TRACEREG_SZ);
 	childregs->u_regs[UREG_FP] = sp;
+	p->thread.flags &= ~SPARC_FLAG_KTHREAD;
+	p->thread.current_ds = USER_DS;
 	ti->kpc = (((unsigned long) ret_from_fork) - 0x8);
 	ti->kpsr = current->thread.fork_kpsr | PSR_PIL;
 	ti->kwim = current->thread.fork_kwim;
@@ -364,13 +380,17 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	return 0;
 }
 
-unsigned long __get_wchan(struct task_struct *task)
+unsigned long get_wchan(struct task_struct *task)
 {
 	unsigned long pc, fp, bias = 0;
 	unsigned long task_base = (unsigned long) task;
         unsigned long ret = 0;
 	struct reg_window32 *rw;
 	int count = 0;
+
+	if (!task || task == current ||
+            task->state == TASK_RUNNING)
+		goto out;
 
 	fp = task_thread_info(task)->ksp + bias;
 	do {

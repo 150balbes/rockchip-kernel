@@ -6,15 +6,10 @@
  *
  * NFSv4 callback procedures
  */
-
-#include <linux/errno.h>
-#include <linux/math.h>
 #include <linux/nfs4.h>
 #include <linux/nfs_fs.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
-#include <linux/types.h>
-
 #include "nfs4_fs.h"
 #include "callback.h"
 #include "delegation.h"
@@ -702,7 +697,7 @@ __be32 nfs4_callback_offload(void *data, void *dummy,
 	struct nfs4_copy_state *copy, *tmp_copy;
 	bool found = false;
 
-	copy = kzalloc(sizeof(struct nfs4_copy_state), GFP_KERNEL);
+	copy = kzalloc(sizeof(struct nfs4_copy_state), GFP_NOFS);
 	if (!copy)
 		return htonl(NFS4ERR_SERVERFAULT);
 
@@ -731,9 +726,6 @@ out:
 		kfree(copy);
 	spin_unlock(&cps->clp->cl_lock);
 
-	trace_nfs4_cb_offload(&args->coa_fh, &args->coa_stateid,
-			args->wr_count, args->error,
-			args->wr_writeverf.committed);
 	return 0;
 }
 #endif /* CONFIG_NFS_V4_2 */

@@ -31,7 +31,6 @@
  *
  */
 #include <linux/kernel.h>
-#include <linux/sched/clock.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/dma-mapping.h>

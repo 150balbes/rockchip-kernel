@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"[drm:%s] " fmt, __func__
@@ -9,12 +8,8 @@
 #include "dpu_hw_lm.h"
 #include "dpu_hw_ctl.h"
 #include "dpu_hw_pingpong.h"
-#include "dpu_hw_sspp.h"
 #include "dpu_hw_intf.h"
-#include "dpu_hw_wb.h"
 #include "dpu_hw_dspp.h"
-#include "dpu_hw_merge3d.h"
-#include "dpu_hw_dsc.h"
 #include "dpu_encoder.h"
 #include "dpu_trace.h"
 
@@ -32,6 +27,7 @@ static inline bool reserved_by_other(uint32_t *res_map, int idx,
  */
 struct dpu_rm_requirements {
 	struct msm_display_topology topology;
+	struct dpu_encoder_hw_resources hw_res;
 };
 
 int dpu_rm_destroy(struct dpu_rm *rm)
@@ -54,14 +50,6 @@ int dpu_rm_destroy(struct dpu_rm *rm)
 			dpu_hw_pingpong_destroy(hw);
 		}
 	}
-	for (i = 0; i < ARRAY_SIZE(rm->merge_3d_blks); i++) {
-		struct dpu_hw_merge_3d *hw;
-
-		if (rm->merge_3d_blks[i]) {
-			hw = to_dpu_hw_merge_3d(rm->merge_3d_blks[i]);
-			dpu_hw_merge_3d_destroy(hw);
-		}
-	}
 	for (i = 0; i < ARRAY_SIZE(rm->mixer_blks); i++) {
 		struct dpu_hw_mixer *hw;
 
@@ -78,29 +66,20 @@ int dpu_rm_destroy(struct dpu_rm *rm)
 			dpu_hw_ctl_destroy(hw);
 		}
 	}
-	for (i = 0; i < ARRAY_SIZE(rm->hw_intf); i++)
-		dpu_hw_intf_destroy(rm->hw_intf[i]);
+	for (i = 0; i < ARRAY_SIZE(rm->intf_blks); i++) {
+		struct dpu_hw_intf *hw;
 
-	for (i = 0; i < ARRAY_SIZE(rm->dsc_blks); i++) {
-		struct dpu_hw_dsc *hw;
-
-		if (rm->dsc_blks[i]) {
-			hw = to_dpu_hw_dsc(rm->dsc_blks[i]);
-			dpu_hw_dsc_destroy(hw);
+		if (rm->intf_blks[i]) {
+			hw = to_dpu_hw_intf(rm->intf_blks[i]);
+			dpu_hw_intf_destroy(hw);
 		}
 	}
-
-	for (i = 0; i < ARRAY_SIZE(rm->hw_wb); i++)
-		dpu_hw_wb_destroy(rm->hw_wb[i]);
-
-	for (i = 0; i < ARRAY_SIZE(rm->hw_sspp); i++)
-		dpu_hw_sspp_destroy(rm->hw_sspp[i]);
 
 	return 0;
 }
 
 int dpu_rm_init(struct dpu_rm *rm,
-		const struct dpu_mdss_cfg *cat,
+		struct dpu_mdss_cfg *cat,
 		void __iomem *mmio)
 {
 	int rc, i;
@@ -118,42 +97,51 @@ int dpu_rm_init(struct dpu_rm *rm,
 		struct dpu_hw_mixer *hw;
 		const struct dpu_lm_cfg *lm = &cat->mixer[i];
 
-		hw = dpu_hw_lm_init(lm, mmio);
-		if (IS_ERR(hw)) {
+		if (lm->pingpong == PINGPONG_MAX) {
+			DPU_DEBUG("skip mixer %d without pingpong\n", lm->id);
+			continue;
+		}
+
+		if (lm->id < LM_0 || lm->id >= LM_MAX) {
+			DPU_ERROR("skip mixer %d with invalid id\n", lm->id);
+			continue;
+		}
+		hw = dpu_hw_lm_init(lm->id, mmio, cat);
+		if (IS_ERR_OR_NULL(hw)) {
 			rc = PTR_ERR(hw);
 			DPU_ERROR("failed lm object creation: err %d\n", rc);
 			goto fail;
 		}
 		rm->mixer_blks[lm->id - LM_0] = &hw->base;
-	}
 
-	for (i = 0; i < cat->merge_3d_count; i++) {
-		struct dpu_hw_merge_3d *hw;
-		const struct dpu_merge_3d_cfg *merge_3d = &cat->merge_3d[i];
-
-		hw = dpu_hw_merge_3d_init(merge_3d, mmio);
-		if (IS_ERR(hw)) {
-			rc = PTR_ERR(hw);
-			DPU_ERROR("failed merge_3d object creation: err %d\n",
-				rc);
-			goto fail;
+		if (!rm->lm_max_width) {
+			rm->lm_max_width = lm->sblk->maxwidth;
+		} else if (rm->lm_max_width != lm->sblk->maxwidth) {
+			/*
+			 * Don't expect to have hw where lm max widths differ.
+			 * If found, take the min.
+			 */
+			DPU_ERROR("unsupported: lm maxwidth differs\n");
+			if (rm->lm_max_width > lm->sblk->maxwidth)
+				rm->lm_max_width = lm->sblk->maxwidth;
 		}
-		rm->merge_3d_blks[merge_3d->id - MERGE_3D_0] = &hw->base;
 	}
 
 	for (i = 0; i < cat->pingpong_count; i++) {
 		struct dpu_hw_pingpong *hw;
 		const struct dpu_pingpong_cfg *pp = &cat->pingpong[i];
 
-		hw = dpu_hw_pingpong_init(pp, mmio);
-		if (IS_ERR(hw)) {
+		if (pp->id < PINGPONG_0 || pp->id >= PINGPONG_MAX) {
+			DPU_ERROR("skip pingpong %d with invalid id\n", pp->id);
+			continue;
+		}
+		hw = dpu_hw_pingpong_init(pp->id, mmio, cat);
+		if (IS_ERR_OR_NULL(hw)) {
 			rc = PTR_ERR(hw);
 			DPU_ERROR("failed pingpong object creation: err %d\n",
 				rc);
 			goto fail;
 		}
-		if (pp->merge_3d && pp->merge_3d < MERGE_3D_MAX)
-			hw->merge_3d = to_dpu_hw_merge_3d(rm->merge_3d_blks[pp->merge_3d - MERGE_3D_0]);
 		rm->pingpong_blks[pp->id - PINGPONG_0] = &hw->base;
 	}
 
@@ -161,34 +149,33 @@ int dpu_rm_init(struct dpu_rm *rm,
 		struct dpu_hw_intf *hw;
 		const struct dpu_intf_cfg *intf = &cat->intf[i];
 
-		hw = dpu_hw_intf_init(intf, mmio);
-		if (IS_ERR(hw)) {
+		if (intf->type == INTF_NONE) {
+			DPU_DEBUG("skip intf %d with type none\n", i);
+			continue;
+		}
+		if (intf->id < INTF_0 || intf->id >= INTF_MAX) {
+			DPU_ERROR("skip intf %d with invalid id\n", intf->id);
+			continue;
+		}
+		hw = dpu_hw_intf_init(intf->id, mmio, cat);
+		if (IS_ERR_OR_NULL(hw)) {
 			rc = PTR_ERR(hw);
 			DPU_ERROR("failed intf object creation: err %d\n", rc);
 			goto fail;
 		}
-		rm->hw_intf[intf->id - INTF_0] = hw;
-	}
-
-	for (i = 0; i < cat->wb_count; i++) {
-		struct dpu_hw_wb *hw;
-		const struct dpu_wb_cfg *wb = &cat->wb[i];
-
-		hw = dpu_hw_wb_init(wb, mmio);
-		if (IS_ERR(hw)) {
-			rc = PTR_ERR(hw);
-			DPU_ERROR("failed wb object creation: err %d\n", rc);
-			goto fail;
-		}
-		rm->hw_wb[wb->id - WB_0] = hw;
+		rm->intf_blks[intf->id - INTF_0] = &hw->base;
 	}
 
 	for (i = 0; i < cat->ctl_count; i++) {
 		struct dpu_hw_ctl *hw;
 		const struct dpu_ctl_cfg *ctl = &cat->ctl[i];
 
-		hw = dpu_hw_ctl_init(ctl, mmio, cat->mixer_count, cat->mixer);
-		if (IS_ERR(hw)) {
+		if (ctl->id < CTL_0 || ctl->id >= CTL_MAX) {
+			DPU_ERROR("skip ctl %d with invalid id\n", ctl->id);
+			continue;
+		}
+		hw = dpu_hw_ctl_init(ctl->id, mmio, cat);
+		if (IS_ERR_OR_NULL(hw)) {
 			rc = PTR_ERR(hw);
 			DPU_ERROR("failed ctl object creation: err %d\n", rc);
 			goto fail;
@@ -200,43 +187,17 @@ int dpu_rm_init(struct dpu_rm *rm,
 		struct dpu_hw_dspp *hw;
 		const struct dpu_dspp_cfg *dspp = &cat->dspp[i];
 
-		hw = dpu_hw_dspp_init(dspp, mmio);
-		if (IS_ERR(hw)) {
+		if (dspp->id < DSPP_0 || dspp->id >= DSPP_MAX) {
+			DPU_ERROR("skip dspp %d with invalid id\n", dspp->id);
+			continue;
+		}
+		hw = dpu_hw_dspp_init(dspp->id, mmio, cat);
+		if (IS_ERR_OR_NULL(hw)) {
 			rc = PTR_ERR(hw);
 			DPU_ERROR("failed dspp object creation: err %d\n", rc);
 			goto fail;
 		}
 		rm->dspp_blks[dspp->id - DSPP_0] = &hw->base;
-	}
-
-	for (i = 0; i < cat->dsc_count; i++) {
-		struct dpu_hw_dsc *hw;
-		const struct dpu_dsc_cfg *dsc = &cat->dsc[i];
-
-		if (test_bit(DPU_DSC_HW_REV_1_2, &dsc->features))
-			hw = dpu_hw_dsc_init_1_2(dsc, mmio);
-		else
-			hw = dpu_hw_dsc_init(dsc, mmio);
-
-		if (IS_ERR(hw)) {
-			rc = PTR_ERR(hw);
-			DPU_ERROR("failed dsc object creation: err %d\n", rc);
-			goto fail;
-		}
-		rm->dsc_blks[dsc->id - DSC_0] = &hw->base;
-	}
-
-	for (i = 0; i < cat->sspp_count; i++) {
-		struct dpu_hw_sspp *hw;
-		const struct dpu_sspp_cfg *sspp = &cat->sspp[i];
-
-		hw = dpu_hw_sspp_init(sspp, mmio, cat->ubwc);
-		if (IS_ERR(hw)) {
-			rc = PTR_ERR(hw);
-			DPU_ERROR("failed sspp object creation: err %d\n", rc);
-			goto fail;
-		}
-		rm->hw_sspp[sspp->id - SSPP_NONE] = hw;
 	}
 
 	return 0;
@@ -257,7 +218,7 @@ static bool _dpu_rm_needs_split_display(const struct msm_display_topology *top)
  * @rm: dpu resource manager handle
  * @primary_idx: index of primary mixer in rm->mixer_blks[]
  * @peer_idx: index of other mixer in rm->mixer_blks[]
- * Return: true if rm->mixer_blks[peer_idx] is a peer of
+ * @Return: true if rm->mixer_blks[peer_idx] is a peer of
  *          rm->mixer_blks[primary_idx]
  */
 static bool _dpu_rm_check_lm_peer(struct dpu_rm *rm, int primary_idx,
@@ -282,7 +243,6 @@ static bool _dpu_rm_check_lm_peer(struct dpu_rm *rm, int primary_idx,
  *	proposed use case requirements, incl. hardwired dependent blocks like
  *	pingpong
  * @rm: dpu resource manager handle
- * @global_state: resources shared across multiple kms objects
  * @enc_id: encoder id requesting for allocation
  * @lm_idx: index of proposed layer mixer in rm->mixer_blks[], function checks
  *      if lm, and all other hardwired blocks connected to the lm (pp) is
@@ -293,7 +253,7 @@ static bool _dpu_rm_check_lm_peer(struct dpu_rm *rm, int primary_idx,
  *      mixer in rm->dspp_blks[].
  * @reqs: input parameter, rm requirements for HW blocks needed in the
  *      datapath.
- * Return: true if lm matches all requirements, false otherwise
+ * @Return: true if lm matches all requirements, false otherwise
  */
 static bool _dpu_rm_check_lm_and_get_connected_blks(struct dpu_rm *rm,
 		struct dpu_global_state *global_state,
@@ -446,7 +406,7 @@ static int _dpu_rm_reserve_ctls(
 		features = ctl->caps->features;
 		has_split_display = BIT(DPU_CTL_SPLIT_DISPLAY) & features;
 
-		DPU_DEBUG("ctl %d caps 0x%lX\n", j + CTL_0, features);
+		DPU_DEBUG("ctl %d caps 0x%lX\n", rm->ctl_blks[j]->id, features);
 
 		if (needs_split_display != has_split_display)
 			continue;
@@ -470,31 +430,52 @@ static int _dpu_rm_reserve_ctls(
 	return 0;
 }
 
-static int _dpu_rm_reserve_dsc(struct dpu_rm *rm,
-			       struct dpu_global_state *global_state,
-			       struct drm_encoder *enc,
-			       const struct msm_display_topology *top)
+static int _dpu_rm_reserve_intf(
+		struct dpu_rm *rm,
+		struct dpu_global_state *global_state,
+		uint32_t enc_id,
+		uint32_t id)
 {
-	int num_dsc = top->num_dsc;
-	int i;
+	int idx = id - INTF_0;
 
-	/* check if DSC required are allocated or not */
-	for (i = 0; i < num_dsc; i++) {
-		if (!rm->dsc_blks[i]) {
-			DPU_ERROR("DSC %d does not exist\n", i);
-			return -EIO;
-		}
-
-		if (global_state->dsc_to_enc_id[i]) {
-			DPU_ERROR("DSC %d is already allocated\n", i);
-			return -EIO;
-		}
+	if (idx < 0 || idx >= ARRAY_SIZE(rm->intf_blks)) {
+		DPU_ERROR("invalid intf id: %d", id);
+		return -EINVAL;
 	}
 
-	for (i = 0; i < num_dsc; i++)
-		global_state->dsc_to_enc_id[i] = enc->base.id;
+	if (!rm->intf_blks[idx]) {
+		DPU_ERROR("couldn't find intf id %d\n", id);
+		return -EINVAL;
+	}
 
+	if (reserved_by_other(global_state->intf_to_enc_id, idx, enc_id)) {
+		DPU_ERROR("intf id %d already reserved\n", id);
+		return -ENAVAIL;
+	}
+
+	global_state->intf_to_enc_id[idx] = enc_id;
 	return 0;
+}
+
+static int _dpu_rm_reserve_intf_related_hw(
+		struct dpu_rm *rm,
+		struct dpu_global_state *global_state,
+		uint32_t enc_id,
+		struct dpu_encoder_hw_resources *hw_res)
+{
+	int i, ret = 0;
+	u32 id;
+
+	for (i = 0; i < ARRAY_SIZE(hw_res->intfs); i++) {
+		if (hw_res->intfs[i] == INTF_MODE_NONE)
+			continue;
+		id = i + INTF_0;
+		ret = _dpu_rm_reserve_intf(rm, global_state, enc_id, id);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
 }
 
 static int _dpu_rm_make_reservation(
@@ -518,7 +499,8 @@ static int _dpu_rm_make_reservation(
 		return ret;
 	}
 
-	ret  = _dpu_rm_reserve_dsc(rm, global_state, enc, &reqs->topology);
+	ret = _dpu_rm_reserve_intf_related_hw(rm, global_state, enc->base.id,
+				&reqs->hw_res);
 	if (ret)
 		return ret;
 
@@ -530,10 +512,12 @@ static int _dpu_rm_populate_requirements(
 		struct dpu_rm_requirements *reqs,
 		struct msm_display_topology req_topology)
 {
+	dpu_encoder_get_hw_resources(enc, &reqs->hw_res);
+
 	reqs->topology = req_topology;
 
-	DRM_DEBUG_KMS("num_lm: %d num_dsc: %d num_intf: %d\n",
-		      reqs->topology.num_lm, reqs->topology.num_dsc,
+	DRM_DEBUG_KMS("num_lm: %d num_enc: %d num_intf: %d\n",
+		      reqs->topology.num_lm, reqs->topology.num_enc,
 		      reqs->topology.num_intf);
 
 	return 0;
@@ -559,10 +543,8 @@ void dpu_rm_release(struct dpu_global_state *global_state,
 		ARRAY_SIZE(global_state->mixer_to_enc_id), enc->base.id);
 	_dpu_rm_clear_mapping(global_state->ctl_to_enc_id,
 		ARRAY_SIZE(global_state->ctl_to_enc_id), enc->base.id);
-	_dpu_rm_clear_mapping(global_state->dsc_to_enc_id,
-		ARRAY_SIZE(global_state->dsc_to_enc_id), enc->base.id);
-	_dpu_rm_clear_mapping(global_state->dspp_to_enc_id,
-		ARRAY_SIZE(global_state->dspp_to_enc_id), enc->base.id);
+	_dpu_rm_clear_mapping(global_state->intf_to_enc_id,
+		ARRAY_SIZE(global_state->intf_to_enc_id), enc->base.id);
 }
 
 int dpu_rm_reserve(
@@ -626,15 +608,15 @@ int dpu_rm_get_assigned_resources(struct dpu_rm *rm,
 		hw_to_enc_id = global_state->ctl_to_enc_id;
 		max_blks = ARRAY_SIZE(rm->ctl_blks);
 		break;
+	case DPU_HW_BLK_INTF:
+		hw_blks = rm->intf_blks;
+		hw_to_enc_id = global_state->intf_to_enc_id;
+		max_blks = ARRAY_SIZE(rm->intf_blks);
+		break;
 	case DPU_HW_BLK_DSPP:
 		hw_blks = rm->dspp_blks;
 		hw_to_enc_id = global_state->dspp_to_enc_id;
 		max_blks = ARRAY_SIZE(rm->dspp_blks);
-		break;
-	case DPU_HW_BLK_DSC:
-		hw_blks = rm->dsc_blks;
-		hw_to_enc_id = global_state->dsc_to_enc_id;
-		max_blks = ARRAY_SIZE(rm->dsc_blks);
 		break;
 	default:
 		DPU_ERROR("blk type %d not managed by rm\n", type);
@@ -649,11 +631,6 @@ int dpu_rm_get_assigned_resources(struct dpu_rm *rm,
 		if (num_blks == blks_size) {
 			DPU_ERROR("More than %d resources assigned to enc %d\n",
 				  blks_size, enc_id);
-			break;
-		}
-		if (!hw_blks[i]) {
-			DPU_ERROR("Allocated resource %d unavailable to assign to enc %d\n",
-				  type, enc_id);
 			break;
 		}
 		blks[num_blks++] = hw_blks[i];

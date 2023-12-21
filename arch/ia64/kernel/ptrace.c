@@ -23,7 +23,7 @@
 #include <linux/signal.h>
 #include <linux/regset.h>
 #include <linux/elf.h>
-#include <linux/resume_user_mode.h>
+#include <linux/tracehook.h>
 
 #include <asm/processor.h>
 #include <asm/ptrace_offsets.h>
@@ -618,6 +618,63 @@ void ia64_sync_krbs(void)
 }
 
 /*
+ * After PTRACE_ATTACH, a thread's register backing store area in user
+ * space is assumed to contain correct data whenever the thread is
+ * stopped.  arch_ptrace_stop takes care of this on tracing stops.
+ * But if the child was already stopped for job control when we attach
+ * to it, then it might not ever get into ptrace_stop by the time we
+ * want to examine the user memory containing the RBS.
+ */
+void
+ptrace_attach_sync_user_rbs (struct task_struct *child)
+{
+	int stopped = 0;
+	struct unw_frame_info info;
+
+	/*
+	 * If the child is in TASK_STOPPED, we need to change that to
+	 * TASK_TRACED momentarily while we operate on it.  This ensures
+	 * that the child won't be woken up and return to user mode while
+	 * we are doing the sync.  (It can only be woken up for SIGKILL.)
+	 */
+
+	read_lock(&tasklist_lock);
+	if (child->sighand) {
+		spin_lock_irq(&child->sighand->siglock);
+		if (child->state == TASK_STOPPED &&
+		    !test_and_set_tsk_thread_flag(child, TIF_RESTORE_RSE)) {
+			set_notify_resume(child);
+
+			child->state = TASK_TRACED;
+			stopped = 1;
+		}
+		spin_unlock_irq(&child->sighand->siglock);
+	}
+	read_unlock(&tasklist_lock);
+
+	if (!stopped)
+		return;
+
+	unw_init_from_blocked_task(&info, child);
+	do_sync_rbs(&info, ia64_sync_user_rbs);
+
+	/*
+	 * Now move the child back into TASK_STOPPED if it should be in a
+	 * job control stop, so that SIGCONT can be used to wake it up.
+	 */
+	read_lock(&tasklist_lock);
+	if (child->sighand) {
+		spin_lock_irq(&child->sighand->siglock);
+		if (child->state == TASK_TRACED &&
+		    (child->signal->flags & SIGNAL_STOP_STOPPED)) {
+			child->state = TASK_STOPPED;
+		}
+		spin_unlock_irq(&child->sighand->siglock);
+	}
+	read_unlock(&tasklist_lock);
+}
+
+/*
  * Write f32-f127 back to task->thread.fph if it has been modified.
  */
 inline void
@@ -760,8 +817,8 @@ access_nat_bits (struct task_struct *child, struct pt_regs *pt,
 }
 
 static int
-access_elf_reg(struct task_struct *target, struct unw_frame_info *info,
-		unsigned long addr, unsigned long *data, int write_access);
+access_uarea (struct task_struct *child, unsigned long addr,
+	      unsigned long *data, int write_access);
 
 static long
 ptrace_getregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
@@ -790,13 +847,13 @@ ptrace_getregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
 		return -EIO;
 	}
 
-	if (access_elf_reg(child, &info, ELF_CR_IPSR_OFFSET, &psr, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_AR_EC_OFFSET, &ec, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_AR_LC_OFFSET, &lc, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_AR_RNAT_OFFSET, &rnat, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_AR_BSP_OFFSET, &bsp, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_CFM_OFFSET, &cfm, 0) < 0 ||
-	    access_elf_reg(child, &info, ELF_NAT_OFFSET, &nat_bits, 0) < 0)
+	if (access_uarea(child, PT_CR_IPSR, &psr, 0) < 0
+	    || access_uarea(child, PT_AR_EC, &ec, 0) < 0
+	    || access_uarea(child, PT_AR_LC, &lc, 0) < 0
+	    || access_uarea(child, PT_AR_RNAT, &rnat, 0) < 0
+	    || access_uarea(child, PT_AR_BSP, &bsp, 0) < 0
+	    || access_uarea(child, PT_CFM, &cfm, 0)
+	    || access_uarea(child, PT_NAT_BITS, &nat_bits, 0))
 		return -EIO;
 
 	/* control regs */
@@ -915,7 +972,7 @@ ptrace_setregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
 	struct switch_stack *sw;
 	struct ia64_fpreg fpval;
 	struct pt_regs *pt;
-	long retval = 0;
+	long ret, retval = 0;
 	int i;
 
 	memset(&fpval, 0, sizeof(fpval));
@@ -1040,16 +1097,17 @@ ptrace_setregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
 
 	retval |= __get_user(nat_bits, &ppr->nat);
 
-	retval |= access_elf_reg(child, &info, ELF_CR_IPSR_OFFSET, &psr, 1);
-	retval |= access_elf_reg(child, &info, ELF_AR_RSC_OFFSET, &rsc, 1);
-	retval |= access_elf_reg(child, &info, ELF_AR_EC_OFFSET, &ec, 1);
-	retval |= access_elf_reg(child, &info, ELF_AR_LC_OFFSET, &lc, 1);
-	retval |= access_elf_reg(child, &info, ELF_AR_RNAT_OFFSET, &rnat, 1);
-	retval |= access_elf_reg(child, &info, ELF_AR_BSP_OFFSET, &bsp, 1);
-	retval |= access_elf_reg(child, &info, ELF_CFM_OFFSET, &cfm, 1);
-	retval |= access_elf_reg(child, &info, ELF_NAT_OFFSET, &nat_bits, 1);
+	retval |= access_uarea(child, PT_CR_IPSR, &psr, 1);
+	retval |= access_uarea(child, PT_AR_RSC, &rsc, 1);
+	retval |= access_uarea(child, PT_AR_EC, &ec, 1);
+	retval |= access_uarea(child, PT_AR_LC, &lc, 1);
+	retval |= access_uarea(child, PT_AR_RNAT, &rnat, 1);
+	retval |= access_uarea(child, PT_AR_BSP, &bsp, 1);
+	retval |= access_uarea(child, PT_CFM, &cfm, 1);
+	retval |= access_uarea(child, PT_NAT_BITS, &nat_bits, 1);
 
-	return retval ? -EIO : 0;
+	ret = retval ? -EIO : 0;
+	return ret;
 }
 
 void
@@ -1091,10 +1149,6 @@ ptrace_disable (struct task_struct *child)
 {
 	user_disable_single_step(child);
 }
-
-static int
-access_uarea (struct task_struct *child, unsigned long addr,
-	      unsigned long *data, int write_access);
 
 long
 arch_ptrace (struct task_struct *child, long request,
@@ -1160,7 +1214,7 @@ syscall_trace_enter (long arg0, long arg1, long arg2, long arg3,
 		     struct pt_regs regs)
 {
 	if (test_thread_flag(TIF_SYSCALL_TRACE))
-		if (ptrace_report_syscall_entry(&regs))
+		if (tracehook_report_syscall_entry(&regs))
 			return -ENOSYS;
 
 	/* copy user rbs to kernel rbs */
@@ -1186,7 +1240,7 @@ syscall_trace_leave (long arg0, long arg1, long arg2, long arg3,
 
 	step = test_thread_flag(TIF_SINGLESTEP);
 	if (step || test_thread_flag(TIF_SYSCALL_TRACE))
-		ptrace_report_syscall_exit(&regs, step);
+		tracehook_report_syscall_exit(&regs, step);
 
 	/* copy user rbs to kernel rbs */
 	if (test_thread_flag(TIF_RESTORE_RSE))
@@ -1437,7 +1491,7 @@ struct regset_membuf {
 	int ret;
 };
 
-static void do_gpregs_get(struct unw_frame_info *info, void *arg)
+void do_gpregs_get(struct unw_frame_info *info, void *arg)
 {
 	struct regset_membuf *dst = arg;
 	struct membuf to = dst->to;
@@ -1470,7 +1524,7 @@ static void do_gpregs_get(struct unw_frame_info *info, void *arg)
 	}
 }
 
-static void do_gpregs_set(struct unw_frame_info *info, void *arg)
+void do_gpregs_set(struct unw_frame_info *info, void *arg)
 {
 	struct regset_getset *dst = arg;
 
@@ -1481,10 +1535,12 @@ static void do_gpregs_set(struct unw_frame_info *info, void *arg)
 		return;
 	/* Skip r0 */
 	if (dst->pos < ELF_GR_OFFSET(1)) {
-		user_regset_copyin_ignore(&dst->pos, &dst->count,
-					  &dst->u.set.kbuf, &dst->u.set.ubuf,
-					  0, ELF_GR_OFFSET(1));
-		dst->ret = 0;
+		dst->ret = user_regset_copyin_ignore(&dst->pos, &dst->count,
+						       &dst->u.set.kbuf,
+						       &dst->u.set.ubuf,
+						       0, ELF_GR_OFFSET(1));
+		if (dst->ret)
+			return;
 	}
 
 	while (dst->count && dst->pos < ELF_AR_END_OFFSET) {
@@ -1513,7 +1569,7 @@ static void do_gpregs_set(struct unw_frame_info *info, void *arg)
 
 #define ELF_FP_OFFSET(i)	(i * sizeof(elf_fpreg_t))
 
-static void do_fpregs_get(struct unw_frame_info *info, void *arg)
+void do_fpregs_get(struct unw_frame_info *info, void *arg)
 {
 	struct task_struct *task = info->task;
 	struct regset_membuf *dst = arg;
@@ -1547,7 +1603,7 @@ static void do_fpregs_get(struct unw_frame_info *info, void *arg)
 		membuf_zero(&to, 96 * sizeof(reg));
 }
 
-static void do_fpregs_set(struct unw_frame_info *info, void *arg)
+void do_fpregs_set(struct unw_frame_info *info, void *arg)
 {
 	struct regset_getset *dst = arg;
 	elf_fpreg_t fpreg, tmp[30];
@@ -1558,11 +1614,11 @@ static void do_fpregs_set(struct unw_frame_info *info, void *arg)
 
 	/* Skip pos 0 and 1 */
 	if (dst->count > 0 && dst->pos < ELF_FP_OFFSET(2)) {
-		user_regset_copyin_ignore(&dst->pos, &dst->count,
-					  &dst->u.set.kbuf, &dst->u.set.ubuf,
-					  0, ELF_FP_OFFSET(2));
-		dst->ret = 0;
-		if (dst->count == 0)
+		dst->ret = user_regset_copyin_ignore(&dst->pos, &dst->count,
+						       &dst->u.set.kbuf,
+						       &dst->u.set.ubuf,
+						       0, ELF_FP_OFFSET(2));
+		if (dst->count == 0 || dst->ret)
 			return;
 	}
 
@@ -1942,16 +1998,17 @@ const struct user_regset_view *task_user_regset_view(struct task_struct *tsk)
 	return &user_ia64_view;
 }
 
-struct syscall_get_args {
+struct syscall_get_set_args {
 	unsigned int i;
 	unsigned int n;
 	unsigned long *args;
 	struct pt_regs *regs;
+	int rw;
 };
 
-static void syscall_get_args_cb(struct unw_frame_info *info, void *data)
+static void syscall_get_set_args_cb(struct unw_frame_info *info, void *data)
 {
-	struct syscall_get_args *args = data;
+	struct syscall_get_set_args *args = data;
 	struct pt_regs *pt = args->regs;
 	unsigned long *krbs, cfm, ndirty, nlocals, nouts;
 	int i, count;
@@ -1966,7 +2023,7 @@ static void syscall_get_args_cb(struct unw_frame_info *info, void *data)
 	 * - epsinstruction: cfm is set by br.call
 	 *   locals don't exist.
 	 *
-	 * For both cases arguments are reachable in cfm.sof - cfm.sol.
+	 * For both cases argguments are reachable in cfm.sof - cfm.sol.
 	 * CFM: [ ... | sor: 17..14 | sol : 13..7 | sof : 6..0 ]
 	 */
 	cfm = pt->cr_ifs;
@@ -1982,31 +2039,37 @@ static void syscall_get_args_cb(struct unw_frame_info *info, void *data)
 	/* Iterate over outs. */
 	for (i = 0; i < count; i++) {
 		int j = ndirty + nlocals + i + args->i;
-		args->args[i] = *ia64_rse_skip_regs(krbs, j);
+		if (args->rw)
+			*ia64_rse_skip_regs(krbs, j) = args->args[i];
+		else
+			args->args[i] = *ia64_rse_skip_regs(krbs, j);
 	}
 
-	while (i < args->n) {
-		args->args[i] = 0;
-		i++;
+	if (!args->rw) {
+		while (i < args->n) {
+			args->args[i] = 0;
+			i++;
+		}
 	}
 }
 
-void syscall_get_arguments(struct task_struct *task,
-	struct pt_regs *regs, unsigned long *args)
+void ia64_syscall_get_set_arguments(struct task_struct *task,
+	struct pt_regs *regs, unsigned long *args, int rw)
 {
-	struct syscall_get_args data = {
+	struct syscall_get_set_args data = {
 		.i = 0,
 		.n = 6,
 		.args = args,
 		.regs = regs,
+		.rw = rw,
 	};
 
 	if (task == current)
-		unw_init_running(syscall_get_args_cb, &data);
+		unw_init_running(syscall_get_set_args_cb, &data);
 	else {
 		struct unw_frame_info ufi;
 		memset(&ufi, 0, sizeof(ufi));
 		unw_init_from_blocked_task(&ufi, task);
-		syscall_get_args_cb(&ufi, &data);
+		syscall_get_set_args_cb(&ufi, &data);
 	}
 }

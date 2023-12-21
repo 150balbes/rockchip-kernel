@@ -43,7 +43,8 @@ the capture or output process during streaming
 Capture hardware is disabled and no input buffers are filled (if there
 are any empty buffers in the incoming queue) until ``VIDIOC_STREAMON``
 has been called. Output hardware is disabled and no video signal is
-produced until ``VIDIOC_STREAMON`` has been called.
+produced until ``VIDIOC_STREAMON`` has been called. The ioctl will
+succeed when at least one output buffer is in the incoming queue.
 
 Memory-to-memory devices will not start until ``VIDIOC_STREAMON`` has
 been called for both the capture and output stream types.

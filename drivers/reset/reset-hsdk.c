@@ -92,16 +92,19 @@ static const struct reset_control_ops hsdk_reset_ops = {
 static int hsdk_reset_probe(struct platform_device *pdev)
 {
 	struct hsdk_rst *rst;
+	struct resource *mem;
 
 	rst = devm_kzalloc(&pdev->dev, sizeof(*rst), GFP_KERNEL);
 	if (!rst)
 		return -ENOMEM;
 
-	rst->regs_ctl = devm_platform_ioremap_resource(pdev, 0);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rst->regs_ctl = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(rst->regs_ctl))
 		return PTR_ERR(rst->regs_ctl);
 
-	rst->regs_rst = devm_platform_ioremap_resource(pdev, 1);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	rst->regs_rst = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(rst->regs_rst))
 		return PTR_ERR(rst->regs_rst);
 

@@ -108,7 +108,7 @@ static struct {
 } dss_data;
 
 /* protects dss_data */
-static DEFINE_SPINLOCK(data_lock);
+static spinlock_t data_lock;
 /* lock for blocking functions */
 static DEFINE_MUTEX(apply_lock);
 static DECLARE_COMPLETION(extra_updated_completion);
@@ -130,6 +130,8 @@ static void apply_init_priv(void)
 	const int num_ovls = dss_feat_get_num_ovls();
 	struct mgr_priv_data *mp;
 	int i;
+
+	spin_lock_init(&data_lock);
 
 	for (i = 0; i < num_ovls; ++i) {
 		struct ovl_priv_data *op;

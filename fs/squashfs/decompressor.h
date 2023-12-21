@@ -20,7 +20,6 @@ struct squashfs_decompressor {
 		struct bio *, int, int, struct squashfs_page_actor *);
 	int	id;
 	char	*name;
-	int	alloc_buffer;
 	int	supported;
 };
 

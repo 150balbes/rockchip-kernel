@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-// ff-protocol-latter.c - a part of driver for RME Fireface series
+// ff-protocol-latter - a part of driver for RME Fireface series
 //
 // Copyright (c) 2019 Takashi Sakamoto
+//
+// Licensed under the terms of the GNU General Public License, version 2.
 
 #include <linux/delay.h>
 
@@ -393,8 +395,8 @@ static void latter_dump_status(struct snd_ff *ff, struct snd_info_buffer *buffer
 // input attenuation. This driver allocates for the first option
 // (0x'....'....'0000'0000) and expects userspace application to configure the
 // register for it.
-static void latter_handle_midi_msg(struct snd_ff *ff, unsigned int offset, const __le32 *buf,
-				   size_t length, u32 tstamp)
+static void latter_handle_midi_msg(struct snd_ff *ff, unsigned int offset,
+				   __le32 *buf, size_t length)
 {
 	u32 data = le32_to_cpu(*buf);
 	unsigned int index = (data & 0x000000f0) >> 4;
@@ -529,7 +531,7 @@ static int latter_fill_midi_msg(struct snd_ff *ff,
 }
 
 const struct snd_ff_protocol snd_ff_protocol_latter = {
-	.handle_msg		= latter_handle_midi_msg,
+	.handle_midi_msg	= latter_handle_midi_msg,
 	.fill_midi_msg		= latter_fill_midi_msg,
 	.get_clock		= latter_get_clock,
 	.switch_fetching_mode	= latter_switch_fetching_mode,

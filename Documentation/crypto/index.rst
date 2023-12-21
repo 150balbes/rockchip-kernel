@@ -1,6 +1,6 @@
-==========
-Crypto API
-==========
+=======================
+Linux Kernel Crypto API
+=======================
 
 :Author: Stephan Mueller
 :Author: Marek Vasut

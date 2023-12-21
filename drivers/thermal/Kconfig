@@ -76,10 +76,6 @@ config THERMAL_OF
 	  Say 'Y' here if you need to build thermal infrastructure
 	  based on device tree.
 
-config THERMAL_ACPI
-       depends on ACPI
-       bool
-
 config THERMAL_WRITABLE_TRIPS
 	bool "Enable writable trip points"
 	help
@@ -117,10 +113,8 @@ config THERMAL_DEFAULT_GOV_USER_SPACE
 	bool "user_space"
 	select THERMAL_GOV_USER_SPACE
 	help
-	  The Userspace governor allows to get trip point crossed
-	  notification from the kernel via uevents. It is recommended
-	  to use the netlink interface instead which gives richer
-	  information about the thermal framework events.
+	  Select this if you want to let the user space manage the
+	  platform thermals.
 
 config THERMAL_DEFAULT_GOV_POWER_ALLOCATOR
 	bool "power_allocator"
@@ -129,14 +123,6 @@ config THERMAL_DEFAULT_GOV_POWER_ALLOCATOR
 	  Select this if you want to control temperature based on
 	  system and device power allocation. This governor can only
 	  operate on cooling devices that implement the power API.
-
-config THERMAL_DEFAULT_GOV_BANG_BANG
-	bool "bang_bang"
-	depends on THERMAL_GOV_BANG_BANG
-	help
-	  Use the bang_bang governor as default. This throttles the
-	  devices one step at the time, taking into account the trip
-	  point hysteresis.
 
 endchoice
 
@@ -233,7 +219,7 @@ config THERMAL_EMULATION
 
 config THERMAL_MMIO
 	tristate "Generic Thermal MMIO driver"
-	depends on OF
+	depends on OF || COMPILE_TEST
 	depends on HAS_IOMEM
 	help
 	  This option enables the generic thermal MMIO driver that will use
@@ -351,6 +337,16 @@ config ROCKCHIP_THERMAL
 	  trip point. Cpufreq is used as the cooling device and will throttle
 	  CPUs when the Temperature crosses the passive trip point.
 
+config RK_VIRTUAL_THERMAL
+	tristate "rk_virtual thermal driver"
+	depends on ROCKCHIP_THERMAL
+	select POWER_SUPPLY
+	help
+	  Rk virtual thermal driver provides virtual temperature support for
+	  SOCs without tsadc module. It supports one critical trip point.
+	  Cpufreq is used as the cooling device and will throttle CPUs when
+	  the Temperature crosses the passive trip point.
+
 config RCAR_THERMAL
 	tristate "Renesas R-Car thermal driver"
 	depends on ARCH_RENESAS || COMPILE_TEST
@@ -367,15 +363,6 @@ config RCAR_GEN3_THERMAL
 	help
 	  Enable this to plug the R-Car Gen3 or RZ/G2 thermal sensor driver into
 	  the Linux thermal framework.
-
-config RZG2L_THERMAL
-	tristate "Renesas RZ/G2L thermal driver"
-	depends on ARCH_RENESAS || COMPILE_TEST
-	depends on HAS_IOMEM
-	depends on OF
-	help
-	  Enable this to plug the RZ/G2L thermal sensor driver into the Linux
-	  thermal framework.
 
 config KIRKWOOD_THERMAL
 	tristate "Temperature sensor on Marvell Kirkwood SoCs"
@@ -424,10 +411,16 @@ config DA9062_THERMAL
 	  zone.
 	  Compatible with the DA9062 and DA9061 PMICs.
 
-menu "Mediatek thermal drivers"
-depends on ARCH_MEDIATEK || COMPILE_TEST
-source "drivers/thermal/mediatek/Kconfig"
-endmenu
+config MTK_THERMAL
+	tristate "Temperature sensor driver for mediatek SoCs"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on HAS_IOMEM
+	depends on NVMEM || NVMEM=n
+	depends on RESET_CONTROLLER
+	default y
+	help
+	  Enable this option if you want to have support for thermal management
+	  controller present in Mediatek SoCs
 
 config AMLOGIC_THERMAL
 	tristate "Amlogic Thermal Support"
@@ -467,6 +460,15 @@ depends on (ARCH_STI || ARCH_STM32) && OF
 source "drivers/thermal/st/Kconfig"
 endmenu
 
+config TANGO_THERMAL
+	tristate "Tango thermal management"
+	depends on ARCH_TANGO || COMPILE_TEST
+	help
+	  Enable the Tango thermal driver, which supports the primitive
+	  temperature sensor embedded in Tango chips since the SMP8758.
+	  This sensor only generates a 1-bit signal to indicate whether
+	  the die temperature exceeds a programmable threshold.
+
 source "drivers/thermal/tegra/Kconfig"
 
 config GENERIC_ADC_THERMAL
@@ -483,6 +485,14 @@ menu "Qualcomm thermal drivers"
 depends on (ARCH_QCOM && OF) || COMPILE_TEST
 source "drivers/thermal/qcom/Kconfig"
 endmenu
+
+config ZX2967_THERMAL
+	tristate "Thermal sensors on zx2967 SoC"
+	depends on ARCH_ZX || COMPILE_TEST
+	help
+	  Enable the zx2967 thermal sensors driver, which supports
+	  the primitive temperature sensor embedded in zx2967 SoCs.
+	  This sensor generates the real time die temperature.
 
 config UNIPHIER_THERMAL
 	tristate "Socionext UniPhier thermal driver"
@@ -502,7 +512,7 @@ config SPRD_THERMAL
 
 config KHADAS_MCU_FAN_THERMAL
 	tristate "Khadas MCU controller FAN cooling support"
-	depends on OF
+	depends on OF || COMPILE_TEST
 	depends on MFD_KHADAS_MCU
 	select MFD_CORE
 	select REGMAP

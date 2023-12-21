@@ -8,6 +8,8 @@
 #include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
 
+int _version SEC("version") = 1;
+
 struct {
 	__uint(type, MAP_TYPE);
 	__uint(max_entries, 32);
@@ -24,7 +26,7 @@ struct {
 	__uint(value_size, sizeof(__u32));
 } map_out SEC(".maps");
 
-SEC("tc")
+SEC("test")
 int _test(struct __sk_buff *skb)
 {
 	void *data_end = (void *)(long)skb->data_end;

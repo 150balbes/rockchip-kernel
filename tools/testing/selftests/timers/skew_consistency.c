@@ -38,7 +38,7 @@
 
 #define NSEC_PER_SEC 1000000000LL
 
-int main(int argc, char **argv)
+int main(int argv, char **argc)
 {
 	struct timex tx;
 	int ret, ppm;

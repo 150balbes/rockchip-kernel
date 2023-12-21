@@ -79,6 +79,15 @@ static void test_ubsan_load_invalid_value(void)
 	eval2 = eval;
 }
 
+static void test_ubsan_null_ptr_deref(void)
+{
+	volatile int *ptr = NULL;
+	int val;
+
+	UBSAN_TEST(CONFIG_UBSAN_OBJECT_SIZE);
+	val = *ptr;
+}
+
 static void test_ubsan_misaligned_access(void)
 {
 	volatile char arr[5] __aligned(4) = {1, 2, 3, 4, 5};
@@ -99,6 +108,7 @@ static const test_ubsan_fp test_ubsan_array[] = {
 /* Excluded because they Oops the module. */
 static const test_ubsan_fp skip_ubsan_array[] = {
 	test_ubsan_divrem_overflow,
+	test_ubsan_null_ptr_deref,
 };
 
 static int __init test_ubsan_init(void)

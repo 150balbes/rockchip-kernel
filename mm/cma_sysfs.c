@@ -8,8 +8,11 @@
 #include <linux/cma.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
 #include "cma.h"
+
+static bool experimental;
 
 #define CMA_ATTR_RO(_name) \
 	static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
@@ -64,7 +67,7 @@ static struct attribute *cma_attrs[] = {
 };
 ATTRIBUTE_GROUPS(cma);
 
-static const struct kobj_type cma_ktype = {
+static struct kobj_type cma_ktype = {
 	.release = cma_kobj_release,
 	.sysfs_ops = &kobj_sysfs_ops,
 	.default_groups = cma_groups,
@@ -76,6 +79,9 @@ static int __init cma_sysfs_init(void)
 	struct cma_kobject *cma_kobj;
 	struct cma *cma;
 	int i, err;
+
+	if (!experimental)
+		return 0;
 
 	cma_kobj_root = kobject_create_and_add("cma", mm_kobj);
 	if (!cma_kobj_root)
@@ -110,3 +116,5 @@ out:
 	return err;
 }
 subsys_initcall(cma_sysfs_init);
+
+module_param(experimental, bool, 0400);

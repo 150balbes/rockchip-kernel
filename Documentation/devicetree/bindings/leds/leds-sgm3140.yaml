@@ -18,10 +18,7 @@ description: |
 
 properties:
   compatible:
-    enum:
-      - ocs,ocp8110
-      - richtek,rt5033-led
-      - sgmicro,sgm3140
+    const: sgmicro,sgm3140
 
   enable-gpios:
     maxItems: 1
@@ -37,7 +34,6 @@ properties:
   led:
     type: object
     $ref: common.yaml#
-    unevaluatedProperties: false
 
 required:
   - compatible

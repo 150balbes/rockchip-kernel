@@ -16,35 +16,12 @@ DECLARE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
 DECLARE_PER_CPU(unsigned long, kvm_hyp_vector);
 DECLARE_PER_CPU(struct kvm_nvhe_init_params, kvm_init_params);
 
-/*
- * Unified accessors for registers that have a different encoding
- * between VHE and non-VHE. They must be specified without their "ELx"
- * encoding, but with the SYS_ prefix, as defined in asm/sysreg.h.
- */
-
-#if defined(__KVM_VHE_HYPERVISOR__)
-
-#define read_sysreg_el0(r)	read_sysreg_s(r##_EL02)
-#define write_sysreg_el0(v,r)	write_sysreg_s(v, r##_EL02)
-#define read_sysreg_el1(r)	read_sysreg_s(r##_EL12)
-#define write_sysreg_el1(v,r)	write_sysreg_s(v, r##_EL12)
-#define read_sysreg_el2(r)	read_sysreg_s(r##_EL1)
-#define write_sysreg_el2(v,r)	write_sysreg_s(v, r##_EL1)
-
-#else // !__KVM_VHE_HYPERVISOR__
-
-#if defined(__KVM_NVHE_HYPERVISOR__)
-#define VHE_ALT_KEY	ARM64_KVM_HVHE
-#else
-#define VHE_ALT_KEY	ARM64_HAS_VIRT_HOST_EXTN
-#endif
-
 #define read_sysreg_elx(r,nvh,vh)					\
 	({								\
 		u64 reg;						\
-		asm volatile(ALTERNATIVE(__mrs_s("%0", r##nvh),		\
+		asm volatile(ALTERNATIVE(__mrs_s("%0", r##nvh),	\
 					 __mrs_s("%0", r##vh),		\
-					 VHE_ALT_KEY)			\
+					 ARM64_HAS_VIRT_HOST_EXTN)	\
 			     : "=r" (reg));				\
 		reg;							\
 	})
@@ -54,9 +31,15 @@ DECLARE_PER_CPU(struct kvm_nvhe_init_params, kvm_init_params);
 		u64 __val = (u64)(v);					\
 		asm volatile(ALTERNATIVE(__msr_s(r##nvh, "%x0"),	\
 					 __msr_s(r##vh, "%x0"),		\
-					 VHE_ALT_KEY)			\
+					 ARM64_HAS_VIRT_HOST_EXTN)	\
 					 : : "rZ" (__val));		\
 	} while (0)
+
+/*
+ * Unified accessors for registers that have a different encoding
+ * between VHE and non-VHE. They must be specified without their "ELx"
+ * encoding, but with the SYS_ prefix, as defined in asm/sysreg.h.
+ */
 
 #define read_sysreg_el0(r)	read_sysreg_elx(r, _EL0, _EL02)
 #define write_sysreg_el0(v,r)	write_sysreg_elx(v, r, _EL0, _EL02)
@@ -64,8 +47,6 @@ DECLARE_PER_CPU(struct kvm_nvhe_init_params, kvm_init_params);
 #define write_sysreg_el1(v,r)	write_sysreg_elx(v, r, _EL1, _EL12)
 #define read_sysreg_el2(r)	read_sysreg_elx(r, _EL2, _EL1)
 #define write_sysreg_el2(v,r)	write_sysreg_elx(v, r, _EL2, _EL1)
-
-#endif	// __KVM_VHE_HYPERVISOR__
 
 /*
  * Without an __arch_swab32(), we fall back to ___constant_swab32(), but the
@@ -109,17 +90,19 @@ void __debug_restore_host_buffers_nvhe(struct kvm_vcpu *vcpu);
 
 void __fpsimd_save_state(struct user_fpsimd_state *fp_regs);
 void __fpsimd_restore_state(struct user_fpsimd_state *fp_regs);
+void __sve_save_state(void *sve_pffr, u32 *fpsr);
 void __sve_restore_state(void *sve_pffr, u32 *fpsr);
 
 #ifndef __KVM_NVHE_HYPERVISOR__
 void activate_traps_vhe_load(struct kvm_vcpu *vcpu);
-void deactivate_traps_vhe_put(struct kvm_vcpu *vcpu);
+void deactivate_traps_vhe_put(void);
 #endif
 
 u64 __guest_enter(struct kvm_vcpu *vcpu);
 
 bool kvm_host_psci_handler(struct kvm_cpu_context *host_ctxt);
 
+void __noreturn hyp_panic(void);
 #ifdef __KVM_NVHE_HYPERVISOR__
 void __noreturn __hyp_do_panic(struct kvm_cpu_context *host_ctxt, u64 spsr,
 			       u64 elr, u64 par);
@@ -133,17 +116,7 @@ int __pkvm_init(phys_addr_t phys, unsigned long size, unsigned long nr_cpus,
 void __noreturn __host_enter(struct kvm_cpu_context *host_ctxt);
 #endif
 
-extern u64 kvm_nvhe_sym(id_aa64pfr0_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64pfr1_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64isar0_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64isar1_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64isar2_el1_sys_val);
 extern u64 kvm_nvhe_sym(id_aa64mmfr0_el1_sys_val);
 extern u64 kvm_nvhe_sym(id_aa64mmfr1_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64mmfr2_el1_sys_val);
-extern u64 kvm_nvhe_sym(id_aa64smfr0_el1_sys_val);
-
-extern unsigned long kvm_nvhe_sym(__icache_flags);
-extern unsigned int kvm_nvhe_sym(kvm_arm_vmid_bits);
 
 #endif /* __ARM64_KVM_HYP_H__ */

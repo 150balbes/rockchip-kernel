@@ -11,6 +11,7 @@
 #include <linux/device.h>
 #include <linux/leds.h>
 
+#include <mach/hardware.h>
 #include <asm/hardware/locomo.h>
 
 static void locomoled_brightness_set(struct led_classdev *led_cdev,

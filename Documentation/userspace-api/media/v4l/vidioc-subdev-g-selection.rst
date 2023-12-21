@@ -70,7 +70,7 @@ Selection targets and flags are documented in
 
 .. c:type:: v4l2_subdev_selection
 
-.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.5cm}|
+.. tabularcolumns:: |p{4.4cm}|p{4.4cm}|p{8.7cm}|
 
 .. flat-table:: struct v4l2_subdev_selection
     :header-rows:  0
@@ -94,10 +94,7 @@ Selection targets and flags are documented in
       - ``r``
       - Selection rectangle, in pixels.
     * - __u32
-      - ``stream``
-      - Stream identifier.
-    * - __u32
-      - ``reserved``\ [7]
+      - ``reserved``\ [8]
       - Reserved for future extensions. Applications and drivers must set
 	the array to zero.
 

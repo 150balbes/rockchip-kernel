@@ -12,13 +12,12 @@
 
 #ifdef CONFIG_PPC64
 
-#include <linux/cache.h>
 #include <linux/string.h>
 #include <asm/types.h>
 #include <asm/lppaca.h>
 #include <asm/mmu.h>
 #include <asm/page.h>
-#ifdef CONFIG_PPC_BOOK3E_64
+#ifdef CONFIG_PPC_BOOK3E
 #include <asm/exception-64e.h>
 #else
 #include <asm/exception-64s.h>
@@ -30,7 +29,6 @@
 #include <asm/hmi.h>
 #include <asm/cpuidle.h>
 #include <asm/atomic.h>
-#include <asm/mce.h>
 
 #include <asm-generic/mmiowb_types.h>
 
@@ -88,9 +86,7 @@ struct paca_struct {
 	u16 lock_token;			/* Constant 0x8000, used in locks */
 #endif
 
-#ifndef CONFIG_PPC_KERNEL_PCREL
 	u64 kernel_toc;			/* Kernel TOC address */
-#endif
 	u64 kernelbase;			/* Base address of kernel */
 	u64 kernel_msr;			/* MSR while running in kernel */
 	void *emergency_sp;		/* pointer to emergency stack */
@@ -100,9 +96,7 @@ struct paca_struct {
 					/* this becomes non-zero. */
 	u8 kexec_state;		/* set when kexec down has irqs off */
 #ifdef CONFIG_PPC_BOOK3S_64
-#ifdef CONFIG_PPC_64S_HASH_MMU
 	struct slb_shadow *slb_shadow_ptr;
-#endif
 	struct dtl_entry *dispatch_log;
 	struct dtl_entry *dispatch_log_end;
 #endif
@@ -114,8 +108,8 @@ struct paca_struct {
 	 */
 	/* used for most interrupts/exceptions */
 	u64 exgen[EX_SIZE] __attribute__((aligned(0x80)));
-
-#ifdef CONFIG_PPC_64S_HASH_MMU
+	u64 exslb[EX_SIZE];	/* used for SLB/segment table misses
+ 				 * on the linear mapping */
 	/* SLB related definitions */
 	u16 vmalloc_sllp;
 	u8 slb_cache_ptr;
@@ -126,10 +120,9 @@ struct paca_struct {
 	u32 slb_used_bitmap;		/* Bitmaps for first 32 SLB entries. */
 	u32 slb_kern_bitmap;
 	u32 slb_cache[SLB_CACHE_ENTRIES];
-#endif
 #endif /* CONFIG_PPC_BOOK3S_64 */
 
-#ifdef CONFIG_PPC_BOOK3E_64
+#ifdef CONFIG_PPC_BOOK3E
 	u64 exgen[8] __aligned(0x40);
 	/* Keep pgd in the same cacheline as the start of extlb */
 	pgd_t *pgd __aligned(0x40); /* Current PGD */
@@ -153,11 +146,18 @@ struct paca_struct {
 	void *dbg_kstack;
 
 	struct tlb_core_data tcd;
-#endif /* CONFIG_PPC_BOOK3E_64 */
+#endif /* CONFIG_PPC_BOOK3E */
 
-#ifdef CONFIG_PPC_64S_HASH_MMU
+#ifdef CONFIG_PPC_BOOK3S
+	mm_context_id_t mm_ctx_id;
+#ifdef CONFIG_PPC_MM_SLICES
 	unsigned char mm_ctx_low_slices_psize[BITS_PER_LONG / BITS_PER_BYTE];
 	unsigned char mm_ctx_high_slices_psize[SLICE_ARRAY_SIZE];
+	unsigned long mm_ctx_slb_addr_limit;
+#else
+	u16 mm_ctx_user_psize;
+	u16 mm_ctx_sllp;
+#endif
 #endif
 
 	/*
@@ -167,15 +167,8 @@ struct paca_struct {
 	u64 kstack;			/* Saved Kernel stack addr */
 	u64 saved_r1;			/* r1 save for RTAS calls or PM or EE=0 */
 	u64 saved_msr;			/* MSR saved here by enter_rtas */
-#ifdef CONFIG_PPC64
-	u64 exit_save_r1;		/* Syscall/interrupt R1 save */
-#endif
-#ifdef CONFIG_PPC_BOOK3E_64
+#ifdef CONFIG_PPC_BOOK3E
 	u16 trap_save;			/* Used when bad stack is encountered */
-#endif
-#ifdef CONFIG_PPC_BOOK3S_64
-	u8 hsrr_valid;			/* HSRRs set for HRFID */
-	u8 srr_valid;			/* SRRs set for RFID */
 #endif
 	u8 irq_soft_mask;		/* mask for irq soft masking */
 	u8 irq_happened;		/* irq happened while soft-disabled */
@@ -191,7 +184,6 @@ struct paca_struct {
 #ifdef CONFIG_PPC_POWERNV
 	/* PowerNV idle fields */
 	/* PNV_CORE_IDLE_* bits, all siblings work on thread 0 paca */
-	unsigned long idle_lock; /* A value of 1 means acquired */
 	unsigned long idle_state;
 	union {
 		/* P7/P8 specific fields */
@@ -266,15 +258,14 @@ struct paca_struct {
 	u64 l1d_flush_size;
 #endif
 #ifdef CONFIG_PPC_PSERIES
+	struct rtas_args *rtas_args_reentrant;
 	u8 *mce_data_buf;		/* buffer to hold per cpu rtas errlog */
 #endif /* CONFIG_PPC_PSERIES */
 
 #ifdef CONFIG_PPC_BOOK3S_64
-#ifdef CONFIG_PPC_64S_HASH_MMU
 	/* Capture SLB related old contents in MCE handler. */
 	struct slb_entry *mce_faulty_slbs;
 	u16 slb_save_cache_ptr;
-#endif
 #endif /* CONFIG_PPC_BOOK3S_64 */
 #ifdef CONFIG_STACKPROTECTOR
 	unsigned long canary;
@@ -282,10 +273,6 @@ struct paca_struct {
 #ifdef CONFIG_MMIOWB
 	struct mmiowb_state mmiowb_state;
 #endif
-#ifdef CONFIG_PPC_BOOK3S_64
-	struct mce_info *mce_info;
-	u8 mce_pending_irq_work;
-#endif /* CONFIG_PPC_BOOK3S_64 */
 } ____cacheline_aligned;
 
 extern void copy_mm_to_paca(struct mm_struct *mm);
@@ -298,8 +285,9 @@ extern void free_unused_pacas(void);
 
 #else /* CONFIG_PPC64 */
 
-static inline void allocate_paca(int cpu) { }
-static inline void free_unused_pacas(void) { }
+static inline void allocate_paca_ptrs(void) { };
+static inline void allocate_paca(int cpu) { };
+static inline void free_unused_pacas(void) { };
 
 #endif /* CONFIG_PPC64 */
 

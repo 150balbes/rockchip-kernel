@@ -100,58 +100,6 @@ static const struct of_device_id arm_ccree_dev_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, arm_ccree_dev_of_match);
 
-static void init_cc_cache_params(struct cc_drvdata *drvdata)
-{
-	struct device *dev = drvdata_to_dev(drvdata);
-	u32 cache_params, ace_const, val;
-	u64 mask;
-
-	/* compute CC_AXIM_CACHE_PARAMS */
-	cache_params = cc_ioread(drvdata, CC_REG(AXIM_CACHE_PARAMS));
-	dev_dbg(dev, "Cache params previous: 0x%08X\n", cache_params);
-
-	/* non cached or write-back, write allocate */
-	val = drvdata->coherent ? 0xb : 0x2;
-
-	mask = CC_GENMASK(CC_AXIM_CACHE_PARAMS_AWCACHE);
-	cache_params &= ~mask;
-	cache_params |= FIELD_PREP(mask, val);
-
-	mask = CC_GENMASK(CC_AXIM_CACHE_PARAMS_AWCACHE_LAST);
-	cache_params &= ~mask;
-	cache_params |= FIELD_PREP(mask, val);
-
-	mask = CC_GENMASK(CC_AXIM_CACHE_PARAMS_ARCACHE);
-	cache_params &= ~mask;
-	cache_params |= FIELD_PREP(mask, val);
-
-	drvdata->cache_params = cache_params;
-
-	dev_dbg(dev, "Cache params current: 0x%08X\n", cache_params);
-
-	if (drvdata->hw_rev <= CC_HW_REV_710)
-		return;
-
-	/* compute CC_AXIM_ACE_CONST */
-	ace_const = cc_ioread(drvdata, CC_REG(AXIM_ACE_CONST));
-	dev_dbg(dev, "ACE-const previous: 0x%08X\n", ace_const);
-
-	/* system or outer-sharable */
-	val = drvdata->coherent ? 0x2 : 0x3;
-
-	mask = CC_GENMASK(CC_AXIM_ACE_CONST_ARDOMAIN);
-	ace_const &= ~mask;
-	ace_const |= FIELD_PREP(mask, val);
-
-	mask = CC_GENMASK(CC_AXIM_ACE_CONST_AWDOMAIN);
-	ace_const &= ~mask;
-	ace_const |= FIELD_PREP(mask, val);
-
-	dev_dbg(dev, "ACE-const current: 0x%08X\n", ace_const);
-
-	drvdata->ace_const = ace_const;
-}
-
 static u32 cc_read_idr(struct cc_drvdata *drvdata, const u32 *idr_offsets)
 {
 	int i;
@@ -270,9 +218,9 @@ bool cc_wait_for_reset_completion(struct cc_drvdata *drvdata)
 	return false;
 }
 
-int init_cc_regs(struct cc_drvdata *drvdata)
+int init_cc_regs(struct cc_drvdata *drvdata, bool is_probe)
 {
-	unsigned int val;
+	unsigned int val, cache_params;
 	struct device *dev = drvdata_to_dev(drvdata);
 
 	/* Unmask all AXI interrupt sources AXI_CFG1 register   */
@@ -297,9 +245,19 @@ int init_cc_regs(struct cc_drvdata *drvdata)
 
 	cc_iowrite(drvdata, CC_REG(HOST_IMR), ~val);
 
-	cc_iowrite(drvdata, CC_REG(AXIM_CACHE_PARAMS), drvdata->cache_params);
-	if (drvdata->hw_rev >= CC_HW_REV_712)
-		cc_iowrite(drvdata, CC_REG(AXIM_ACE_CONST), drvdata->ace_const);
+	cache_params = (drvdata->coherent ? CC_COHERENT_CACHE_PARAMS : 0x0);
+
+	val = cc_ioread(drvdata, CC_REG(AXIM_CACHE_PARAMS));
+
+	if (is_probe)
+		dev_dbg(dev, "Cache params previous: 0x%08X\n", val);
+
+	cc_iowrite(drvdata, CC_REG(AXIM_CACHE_PARAMS), cache_params);
+	val = cc_ioread(drvdata, CC_REG(AXIM_CACHE_PARAMS));
+
+	if (is_probe)
+		dev_dbg(dev, "Cache params current: 0x%08X (expect: 0x%08X)\n",
+			val, cache_params);
 
 	return 0;
 }
@@ -350,11 +308,13 @@ static int init_cc_resources(struct platform_device *plat_dev)
 
 	/* Get device resources */
 	/* First CC registers space */
+	req_mem_cc_regs = platform_get_resource(plat_dev, IORESOURCE_MEM, 0);
 	/* Map registers space */
-	new_drvdata->cc_base = devm_platform_get_and_ioremap_resource(plat_dev,
-								      0, &req_mem_cc_regs);
-	if (IS_ERR(new_drvdata->cc_base))
+	new_drvdata->cc_base = devm_ioremap_resource(dev, req_mem_cc_regs);
+	if (IS_ERR(new_drvdata->cc_base)) {
+		dev_err(dev, "Failed to ioremap registers");
 		return PTR_ERR(new_drvdata->cc_base);
+	}
 
 	dev_dbg(dev, "Got MEM resource (%s): %pR\n", req_mem_cc_regs->name,
 		req_mem_cc_regs);
@@ -372,10 +332,17 @@ static int init_cc_resources(struct platform_device *plat_dev)
 		dev->dma_mask = &dev->coherent_dma_mask;
 
 	dma_mask = DMA_BIT_MASK(DMA_BIT_MASK_LEN);
-	rc = dma_set_coherent_mask(dev, dma_mask);
+	while (dma_mask > 0x7fffffffUL) {
+		if (dma_supported(dev, dma_mask)) {
+			rc = dma_set_coherent_mask(dev, dma_mask);
+			if (!rc)
+				break;
+		}
+		dma_mask >>= 1;
+	}
+
 	if (rc) {
-		dev_err(dev, "Failed in dma_set_coherent_mask, mask=%llx\n",
-			dma_mask);
+		dev_err(dev, "Failed in dma_set_mask, mask=%llx\n", dma_mask);
 		return rc;
 	}
 
@@ -478,9 +445,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	}
 	dev_dbg(dev, "Registered to IRQ: %d\n", irq);
 
-	init_cc_cache_params(new_drvdata);
-
-	rc = init_cc_regs(new_drvdata);
+	rc = init_cc_regs(new_drvdata, true);
 	if (rc) {
 		dev_err(dev, "init_cc_regs failed\n");
 		goto post_pm_err;
@@ -522,26 +487,24 @@ static int init_cc_resources(struct platform_device *plat_dev)
 		goto post_req_mgr_err;
 	}
 
-	/* hash must be allocated first due to use of send_request_init()
-	 * and dependency of AEAD on it
-	 */
-	rc = cc_hash_alloc(new_drvdata);
-	if (rc) {
-		dev_err(dev, "cc_hash_alloc failed\n");
-		goto post_buf_mgr_err;
-	}
-
 	/* Allocate crypto algs */
 	rc = cc_cipher_alloc(new_drvdata);
 	if (rc) {
 		dev_err(dev, "cc_cipher_alloc failed\n");
-		goto post_hash_err;
+		goto post_buf_mgr_err;
+	}
+
+	/* hash must be allocated before aead since hash exports APIs */
+	rc = cc_hash_alloc(new_drvdata);
+	if (rc) {
+		dev_err(dev, "cc_hash_alloc failed\n");
+		goto post_cipher_err;
 	}
 
 	rc = cc_aead_alloc(new_drvdata);
 	if (rc) {
 		dev_err(dev, "cc_aead_alloc failed\n");
-		goto post_cipher_err;
+		goto post_hash_err;
 	}
 
 	/* If we got here and FIPS mode is enabled
@@ -553,10 +516,10 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	pm_runtime_put(dev);
 	return 0;
 
-post_cipher_err:
-	cc_cipher_free(new_drvdata);
 post_hash_err:
 	cc_hash_free(new_drvdata);
+post_cipher_err:
+	cc_cipher_free(new_drvdata);
 post_buf_mgr_err:
 	 cc_buffer_mgr_fini(new_drvdata);
 post_req_mgr_err:
@@ -588,8 +551,8 @@ static void cleanup_cc_resources(struct platform_device *plat_dev)
 		(struct cc_drvdata *)platform_get_drvdata(plat_dev);
 
 	cc_aead_free(drvdata);
-	cc_cipher_free(drvdata);
 	cc_hash_free(drvdata);
+	cc_cipher_free(drvdata);
 	cc_buffer_mgr_fini(drvdata);
 	cc_req_mgr_fini(drvdata);
 	cc_fips_fini(drvdata);
@@ -651,17 +614,9 @@ static struct platform_driver ccree_driver = {
 
 static int __init ccree_init(void)
 {
-	int rc;
-
 	cc_debugfs_global_init();
 
-	rc = platform_driver_register(&ccree_driver);
-	if (rc) {
-		cc_debugfs_global_fini();
-		return rc;
-	}
-
-	return 0;
+	return platform_driver_register(&ccree_driver);
 }
 module_init(ccree_init);
 

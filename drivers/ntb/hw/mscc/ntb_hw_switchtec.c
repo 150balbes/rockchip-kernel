@@ -297,7 +297,7 @@ static int switchtec_ntb_mw_set_trans(struct ntb_dev *ntb, int pidx, int widx,
 		 * (see CMA_CONFIG_ALIGNMENT)
 		 */
 		dev_err(&sndev->stdev->dev,
-			"ERROR: Memory window address is not aligned to its size!\n");
+			"ERROR: Memory window address is not aligned to it's size!\n");
 		return -EINVAL;
 	}
 
@@ -419,10 +419,8 @@ static void switchtec_ntb_part_link_speed(struct switchtec_ntb *sndev,
 					  enum ntb_width *width)
 {
 	struct switchtec_dev *stdev = sndev->stdev;
-	struct part_cfg_regs __iomem *part_cfg =
-		&stdev->mmio_part_cfg_all[partition];
 
-	u32 pff = ioread32(&part_cfg->vep_pff_inst_id) & 0xFF;
+	u32 pff = ioread32(&stdev->mmio_part_cfg[partition].vep_pff_inst_id);
 	u32 linksta = ioread32(&stdev->mmio_pff_csr[pff].pci_cap_region[13]);
 
 	if (speed)
@@ -842,6 +840,7 @@ static int switchtec_ntb_init_sndev(struct switchtec_ntb *sndev)
 	u64 tpart_vec;
 	int self;
 	u64 part_map;
+	int bit;
 
 	sndev->ntb.pdev = sndev->stdev->pdev;
 	sndev->ntb.topo = NTB_TOPO_SWITCH;
@@ -860,31 +859,31 @@ static int switchtec_ntb_init_sndev(struct switchtec_ntb *sndev)
 	tpart_vec |= ioread32(&sndev->mmio_ntb->ntp_info[self].target_part_low);
 
 	part_map = ioread64(&sndev->mmio_ntb->ep_map);
-	tpart_vec &= part_map;
 	part_map &= ~(1 << sndev->self_partition);
 
-	if (!tpart_vec) {
+	if (!ffs(tpart_vec)) {
 		if (sndev->stdev->partition_count != 2) {
 			dev_err(&sndev->stdev->dev,
 				"ntb target partition not defined\n");
 			return -ENODEV;
 		}
 
-		if (!part_map) {
+		bit = ffs(part_map);
+		if (!bit) {
 			dev_err(&sndev->stdev->dev,
 				"peer partition is not NT partition\n");
 			return -ENODEV;
 		}
 
-		sndev->peer_partition = __ffs64(part_map);
+		sndev->peer_partition = bit - 1;
 	} else {
-		if (__ffs64(tpart_vec) != (fls64(tpart_vec) - 1)) {
+		if (ffs(tpart_vec) != fls(tpart_vec)) {
 			dev_err(&sndev->stdev->dev,
 				"ntb driver only supports 1 pair of 1-1 ntb mapping\n");
 			return -ENODEV;
 		}
 
-		sndev->peer_partition = __ffs64(tpart_vec);
+		sndev->peer_partition = ffs(tpart_vec) - 1;
 		if (!(part_map & (1ULL << sndev->peer_partition))) {
 			dev_err(&sndev->stdev->dev,
 				"ntb target partition is not NT partition\n");
@@ -955,7 +954,7 @@ static int config_req_id_table(struct switchtec_ntb *sndev,
 	u32 error;
 	u32 proxy_id;
 
-	if (ioread16(&mmio_ctrl->req_id_table_size) < count) {
+	if (ioread32(&mmio_ctrl->req_id_table_size) < count) {
 		dev_err(&sndev->stdev->dev,
 			"Not enough requester IDs available.\n");
 		return -EFAULT;
@@ -966,6 +965,9 @@ static int config_req_id_table(struct switchtec_ntb *sndev,
 				   NTB_CTRL_PART_STATUS_LOCKED);
 	if (rc)
 		return rc;
+
+	iowrite32(NTB_PART_CTRL_ID_PROT_DIS,
+		  &mmio_ctrl->partition_ctrl);
 
 	for (i = 0; i < count; i++) {
 		iowrite32(req_ids[i] << 16 | NTB_CTRL_REQ_ID_EN,
@@ -1088,7 +1090,7 @@ static int crosslink_enum_partition(struct switchtec_ntb *sndev,
 {
 	struct part_cfg_regs __iomem *part_cfg =
 		&sndev->stdev->mmio_part_cfg_all[sndev->peer_partition];
-	u32 pff = ioread32(&part_cfg->vep_pff_inst_id) & 0xFF;
+	u32 pff = ioread32(&part_cfg->vep_pff_inst_id);
 	struct pff_csr_regs __iomem *mmio_pff =
 		&sndev->stdev->mmio_pff_csr[pff];
 	const u64 bar_space = 0x1000000000LL;
@@ -1470,7 +1472,8 @@ static int switchtec_ntb_reinit_peer(struct switchtec_ntb *sndev)
 	return rc;
 }
 
-static int switchtec_ntb_add(struct device *dev)
+static int switchtec_ntb_add(struct device *dev,
+			     struct class_interface *class_intf)
 {
 	struct switchtec_dev *stdev = to_stdev(dev);
 	struct switchtec_ntb *sndev;
@@ -1540,7 +1543,8 @@ free_and_exit:
 	return rc;
 }
 
-static void switchtec_ntb_remove(struct device *dev)
+static void switchtec_ntb_remove(struct device *dev,
+				 struct class_interface *class_intf)
 {
 	struct switchtec_dev *stdev = to_stdev(dev);
 	struct switchtec_ntb *sndev = stdev->sndev;

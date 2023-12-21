@@ -57,21 +57,6 @@ struct workqueue_struct *rpciod_workqueue __read_mostly;
 struct workqueue_struct *xprtiod_workqueue __read_mostly;
 EXPORT_SYMBOL_GPL(xprtiod_workqueue);
 
-gfp_t rpc_task_gfp_mask(void)
-{
-	if (current->flags & PF_WQ_WORKER)
-		return GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN;
-	return GFP_KERNEL;
-}
-EXPORT_SYMBOL_GPL(rpc_task_gfp_mask);
-
-bool rpc_task_set_rpc_status(struct rpc_task *task, int rpc_status)
-{
-	if (cmpxchg(&task->tk_rpc_status, 0, rpc_status) == 0)
-		return true;
-	return false;
-}
-
 unsigned long
 rpc_task_timeout(const struct rpc_task *task)
 {
@@ -276,7 +261,7 @@ EXPORT_SYMBOL_GPL(rpc_destroy_wait_queue);
 
 static int rpc_wait_bit_killable(struct wait_bit_key *key, int mode)
 {
-	schedule();
+	freezable_schedule_unsafe();
 	if (signal_pending_state(mode, current))
 		return -ERESTARTSYS;
 	return 0;
@@ -285,17 +270,9 @@ static int rpc_wait_bit_killable(struct wait_bit_key *key, int mode)
 #if IS_ENABLED(CONFIG_SUNRPC_DEBUG) || IS_ENABLED(CONFIG_TRACEPOINTS)
 static void rpc_task_set_debuginfo(struct rpc_task *task)
 {
-	struct rpc_clnt *clnt = task->tk_client;
+	static atomic_t rpc_pid;
 
-	/* Might be a task carrying a reverse-direction operation */
-	if (!clnt) {
-		static atomic_t rpc_pid;
-
-		task->tk_pid = atomic_inc_return(&rpc_pid);
-		return;
-	}
-
-	task->tk_pid = atomic_inc_return(&clnt->cl_pid);
+	task->tk_pid = atomic_inc_return(&rpc_pid);
 }
 #else
 static inline void rpc_task_set_debuginfo(struct rpc_task *task)
@@ -340,12 +317,14 @@ static int rpc_complete_task(struct rpc_task *task)
  * to enforce taking of the wq->lock and hence avoid races with
  * rpc_complete_task().
  */
-int rpc_wait_for_completion_task(struct rpc_task *task)
+int __rpc_wait_for_completion_task(struct rpc_task *task, wait_bit_action_f *action)
 {
+	if (action == NULL)
+		action = rpc_wait_bit_killable;
 	return out_of_line_wait_on_bit(&task->tk_runstate, RPC_TASK_ACTIVE,
-			rpc_wait_bit_killable, TASK_KILLABLE|TASK_FREEZABLE_UNSAFE);
+			action, TASK_KILLABLE);
 }
-EXPORT_SYMBOL_GPL(rpc_wait_for_completion_task);
+EXPORT_SYMBOL_GPL(__rpc_wait_for_completion_task);
 
 /*
  * Make an RPC task runnable.
@@ -817,6 +796,7 @@ rpc_init_task_statistics(struct rpc_task *task)
 	/* Initialize retry counters */
 	task->tk_garb_retry = 2;
 	task->tk_cred_retry = 2;
+	task->tk_rebind_retry = 2;
 
 	/* starting timestamp */
 	task->tk_start = ktime_get();
@@ -842,7 +822,6 @@ void rpc_exit_task(struct rpc_task *task)
 	else if (task->tk_client)
 		rpc_count_iostats(task, task->tk_client->cl_metrics);
 	if (task->tk_ops->rpc_call_done != NULL) {
-		trace_rpc_task_call_done(task, task->tk_ops->rpc_call_done);
 		task->tk_ops->rpc_call_done(task, task->tk_calldata);
 		if (task->tk_action != NULL) {
 			/* Always release the RPC slot and buffer memory */
@@ -859,25 +838,12 @@ void rpc_signal_task(struct rpc_task *task)
 	if (!RPC_IS_ACTIVATED(task))
 		return;
 
-	if (!rpc_task_set_rpc_status(task, -ERESTARTSYS))
-		return;
 	trace_rpc_task_signalled(task, task->tk_action);
 	set_bit(RPC_TASK_SIGNALLED, &task->tk_runstate);
 	smp_mb__after_atomic();
 	queue = READ_ONCE(task->tk_waitqueue);
 	if (queue)
-		rpc_wake_up_queued_task(queue, task);
-}
-
-void rpc_task_try_cancel(struct rpc_task *task, int error)
-{
-	struct rpc_wait_queue *queue;
-
-	if (!rpc_task_set_rpc_status(task, error))
-		return;
-	queue = READ_ONCE(task->tk_waitqueue);
-	if (queue)
-		rpc_wake_up_queued_task(queue, task);
+		rpc_wake_up_queued_task_set_status(queue, task, -ERESTARTSYS);
 }
 
 void rpc_exit(struct rpc_task *task, int status)
@@ -894,15 +860,6 @@ void rpc_release_calldata(const struct rpc_call_ops *ops, void *calldata)
 		ops->rpc_release(calldata);
 }
 
-static bool xprt_needs_memalloc(struct rpc_xprt *xprt, struct rpc_task *tk)
-{
-	if (!xprt)
-		return false;
-	if (!atomic_read(&xprt->swapper))
-		return false;
-	return test_bit(XPRT_LOCKED, &xprt->state) && xprt->snd_task == tk;
-}
-
 /*
  * This is the RPC `scheduler' (or rather, the finite state machine).
  */
@@ -911,7 +868,6 @@ static void __rpc_execute(struct rpc_task *task)
 	struct rpc_wait_queue *queue;
 	int task_is_async = RPC_IS_ASYNC(task);
 	int status = 0;
-	unsigned long pflags = current->flags;
 
 	WARN_ON_ONCE(RPC_IS_QUEUED(task));
 	if (RPC_IS_QUEUED(task))
@@ -924,34 +880,31 @@ static void __rpc_execute(struct rpc_task *task)
 		 * Perform the next FSM step or a pending callback.
 		 *
 		 * tk_action may be NULL if the task has been killed.
+		 * In particular, note that rpc_killall_tasks may
+		 * do this at any time, so beware when dereferencing.
 		 */
 		do_action = task->tk_action;
-		/* Tasks with an RPC error status should exit */
-		if (do_action && do_action != rpc_exit_task &&
-		    (status = READ_ONCE(task->tk_rpc_status)) != 0) {
-			task->tk_status = status;
-			do_action = rpc_exit_task;
-		}
-		/* Callbacks override all actions */
 		if (task->tk_callback) {
 			do_action = task->tk_callback;
 			task->tk_callback = NULL;
 		}
 		if (!do_action)
 			break;
-		if (RPC_IS_SWAPPER(task) ||
-		    xprt_needs_memalloc(task->tk_xprt, task))
-			current->flags |= PF_MEMALLOC;
-
 		trace_rpc_task_run_action(task, do_action);
 		do_action(task);
 
 		/*
 		 * Lockless check for whether task is sleeping or not.
 		 */
-		if (!RPC_IS_QUEUED(task)) {
-			cond_resched();
+		if (!RPC_IS_QUEUED(task))
 			continue;
+
+		/*
+		 * Signalled tasks should exit rather than sleep.
+		 */
+		if (RPC_SIGNALLED(task)) {
+			task->tk_rpc_status = -ERESTARTSYS;
+			rpc_exit(task, -ERESTARTSYS);
 		}
 
 		/*
@@ -969,22 +922,16 @@ static void __rpc_execute(struct rpc_task *task)
 			spin_unlock(&queue->lock);
 			continue;
 		}
-		/* Wake up any task that has an exit status */
-		if (READ_ONCE(task->tk_rpc_status) != 0) {
-			rpc_wake_up_task_queue_locked(queue, task);
-			spin_unlock(&queue->lock);
-			continue;
-		}
 		rpc_clear_running(task);
 		spin_unlock(&queue->lock);
 		if (task_is_async)
-			goto out;
+			return;
 
 		/* sync task: sleep here */
 		trace_rpc_task_sync_sleep(task, task->tk_action);
 		status = out_of_line_wait_on_bit(&task->tk_runstate,
 				RPC_TASK_QUEUED, rpc_wait_bit_killable,
-				TASK_KILLABLE|TASK_FREEZABLE);
+				TASK_KILLABLE);
 		if (status < 0) {
 			/*
 			 * When a sync task receives a signal, it exits with
@@ -992,15 +939,16 @@ static void __rpc_execute(struct rpc_task *task)
 			 * clean up after sleeping on some queue, we don't
 			 * break the loop here, but go around once more.
 			 */
-			rpc_signal_task(task);
+			trace_rpc_task_signalled(task, task->tk_action);
+			set_bit(RPC_TASK_SIGNALLED, &task->tk_runstate);
+			task->tk_rpc_status = -ERESTARTSYS;
+			rpc_exit(task, -ERESTARTSYS);
 		}
 		trace_rpc_task_sync_wake(task, task->tk_action);
 	}
 
 	/* Release all resources associated with the task */
 	rpc_release_task(task);
-out:
-	current_restore_flags(pflags, PF_MEMALLOC);
 }
 
 /*
@@ -1055,15 +1003,17 @@ int rpc_malloc(struct rpc_task *task)
 	struct rpc_rqst *rqst = task->tk_rqstp;
 	size_t size = rqst->rq_callsize + rqst->rq_rcvsize;
 	struct rpc_buffer *buf;
-	gfp_t gfp = rpc_task_gfp_mask();
+	gfp_t gfp = GFP_NOFS;
+
+	if (RPC_IS_ASYNC(task))
+		gfp = GFP_NOWAIT | __GFP_NOWARN;
+	if (RPC_IS_SWAPPER(task))
+		gfp |= __GFP_MEMALLOC;
 
 	size += sizeof(struct rpc_buffer);
-	if (size <= RPC_BUFFER_MAXSIZE) {
-		buf = kmem_cache_alloc(rpc_buffer_slabp, gfp);
-		/* Reach for the mempool if dynamic allocation fails */
-		if (!buf && RPC_IS_ASYNC(task))
-			buf = mempool_alloc(rpc_buffer_mempool, GFP_NOWAIT);
-	} else
+	if (size <= RPC_BUFFER_MAXSIZE)
+		buf = mempool_alloc(rpc_buffer_mempool, gfp);
+	else
 		buf = kmalloc(size, gfp);
 
 	if (!buf)
@@ -1126,14 +1076,10 @@ static void rpc_init_task(struct rpc_task *task, const struct rpc_task_setup *ta
 	rpc_init_task_statistics(task);
 }
 
-static struct rpc_task *rpc_alloc_task(void)
+static struct rpc_task *
+rpc_alloc_task(void)
 {
-	struct rpc_task *task;
-
-	task = kmem_cache_alloc(rpc_task_slabp, rpc_task_gfp_mask());
-	if (task)
-		return task;
-	return mempool_alloc(rpc_task_mempool, GFP_NOWAIT);
+	return (struct rpc_task *)mempool_alloc(rpc_task_mempool, GFP_NOFS);
 }
 
 /*
@@ -1146,11 +1092,6 @@ struct rpc_task *rpc_new_task(const struct rpc_task_setup *setup_data)
 
 	if (task == NULL) {
 		task = rpc_alloc_task();
-		if (task == NULL) {
-			rpc_release_calldata(setup_data->callback_ops,
-					     setup_data->callback_data);
-			return ERR_PTR(-ENOMEM);
-		}
 		flags = RPC_TASK_DYNAMIC;
 	}
 
@@ -1284,7 +1225,8 @@ static int rpciod_start(void)
 	if (!wq)
 		goto out_failed;
 	rpciod_workqueue = wq;
-	wq = alloc_workqueue("xprtiod", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+	/* Note: highpri because network receive is latency sensitive */
+	wq = alloc_workqueue("xprtiod", WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_HIGHPRI, 0);
 	if (!wq)
 		goto free_rpciod;
 	xprtiod_workqueue = wq;

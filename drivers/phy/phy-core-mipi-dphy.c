@@ -12,33 +12,33 @@
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-mipi-dphy.h>
 
+#define PSEC_PER_SEC	1000000000000LL
+
 /*
  * Minimum D-PHY timings based on MIPI D-PHY specification. Derived
  * from the valid ranges specified in Section 6.9, Table 14, Page 41
- * of the D-PHY specification (v1.2).
+ * of the D-PHY specification (v2.1).
  */
-static int phy_mipi_dphy_calc_config(unsigned long pixel_clock,
+int phy_mipi_dphy_get_default_config(unsigned long pixel_clock,
 				     unsigned int bpp,
 				     unsigned int lanes,
-				     unsigned long long hs_clk_rate,
 				     struct phy_configure_opts_mipi_dphy *cfg)
 {
+	unsigned long long hs_clk_rate;
 	unsigned long long ui;
 
 	if (!cfg)
 		return -EINVAL;
 
-	if (!hs_clk_rate) {
-		hs_clk_rate = pixel_clock * bpp;
-		do_div(hs_clk_rate, lanes);
-	}
+	hs_clk_rate = pixel_clock * bpp;
+	do_div(hs_clk_rate, lanes);
 
 	ui = ALIGN(PSEC_PER_SEC, hs_clk_rate);
 	do_div(ui, hs_clk_rate);
 
 	cfg->clk_miss = 0;
 	cfg->clk_post = 60000 + 52 * ui;
-	cfg->clk_pre = 8;
+	cfg->clk_pre = 8000;
 	cfg->clk_prepare = 38000;
 	cfg->clk_settle = 95000;
 	cfg->clk_term_en = 0;
@@ -77,28 +77,7 @@ static int phy_mipi_dphy_calc_config(unsigned long pixel_clock,
 
 	return 0;
 }
-
-int phy_mipi_dphy_get_default_config(unsigned long pixel_clock,
-				     unsigned int bpp,
-				     unsigned int lanes,
-				     struct phy_configure_opts_mipi_dphy *cfg)
-{
-	return phy_mipi_dphy_calc_config(pixel_clock, bpp, lanes, 0, cfg);
-
-}
 EXPORT_SYMBOL(phy_mipi_dphy_get_default_config);
-
-int phy_mipi_dphy_get_default_config_for_hsclk(unsigned long long hs_clk_rate,
-					       unsigned int lanes,
-					       struct phy_configure_opts_mipi_dphy *cfg)
-{
-	if (!hs_clk_rate)
-		return -EINVAL;
-
-	return phy_mipi_dphy_calc_config(0, 0, lanes, hs_clk_rate, cfg);
-
-}
-EXPORT_SYMBOL(phy_mipi_dphy_get_default_config_for_hsclk);
 
 /*
  * Validate D-PHY configuration according to MIPI D-PHY specification
@@ -120,7 +99,7 @@ int phy_mipi_dphy_config_validate(struct phy_configure_opts_mipi_dphy *cfg)
 	if (cfg->clk_post < (60000 + 52 * ui))
 		return -EINVAL;
 
-	if (cfg->clk_pre < 8)
+	if (cfg->clk_pre < 8000)
 		return -EINVAL;
 
 	if (cfg->clk_prepare < 38000 || cfg->clk_prepare > 95000)

@@ -7,6 +7,7 @@
 #ifndef __LINUX_IP6_NETFILTER_H
 #define __LINUX_IP6_NETFILTER_H
 
+#include <linux/android_kabi.h>
 #include <uapi/linux/netfilter_ipv6.h>
 #include <net/tcp.h>
 
@@ -65,6 +66,8 @@ struct nf_ipv6_ops {
 					 const struct nf_bridge_frag_data *data,
 					 struct sk_buff *));
 #endif
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #ifdef CONFIG_NETFILTER
@@ -196,8 +199,6 @@ static inline int nf_cookie_v6_check(const struct ipv6hdr *iph,
 
 __sum16 nf_ip6_checksum(struct sk_buff *skb, unsigned int hook,
 			unsigned int dataoff, u_int8_t protocol);
-
-int nf_ip6_check_hbh_len(struct sk_buff *skb, u32 *plen);
 
 int ipv6_netfilter_init(void);
 void ipv6_netfilter_fini(void);

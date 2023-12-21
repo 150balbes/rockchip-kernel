@@ -266,6 +266,7 @@ static __init void leon_patch(void)
 }
 
 struct tt_entry *sparc_ttable;
+static struct pt_regs fake_swapper_regs;
 
 /* Called from head_32.S - before we have setup anything
  * in the kernel. Be very careful with what you do here.
@@ -302,7 +303,7 @@ void __init setup_arch(char **cmdline_p)
 
 	/* Initialize PROM console and command line. */
 	*cmdline_p = prom_getbootargs();
-	strscpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
+	strlcpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
 	parse_early_param();
 
 	boot_flags_init(*cmdline_p);
@@ -362,6 +363,8 @@ void __init setup_arch(char **cmdline_p)
 		(*(linux_dbvec->teach_debugger))();
 	}
 
+	init_task.thread.kregs = &fake_swapper_regs;
+
 	/* Run-time patch instructions to match the cpu model */
 	per_cpu_patch();
 
@@ -412,10 +415,3 @@ static int __init topology_init(void)
 }
 
 subsys_initcall(topology_init);
-
-#if defined(CONFIG_SPARC32) && !defined(CONFIG_SMP)
-void __init arch_cpu_finalize_init(void)
-{
-	cpu_data(0).udelay_val = loops_per_jiffy;
-}
-#endif

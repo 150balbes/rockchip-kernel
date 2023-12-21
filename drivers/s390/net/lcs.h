@@ -21,7 +21,7 @@ do { \
 #define LCS_DBF_TEXT_(level,name,text...) \
 	do { \
 		if (debug_level_enabled(lcs_dbf_##name, level)) { \
-			scnprintf(debug_buffer, sizeof(debug_buffer), text); \
+			sprintf(debug_buffer, text); \
 			debug_text_event(lcs_dbf_##name, level, debug_buffer); \
 		} \
 	} while (0)

@@ -666,7 +666,7 @@ static int atif_ioctl(int cmd, void __user *arg)
 	struct rtentry rtdef;
 	int add_route;
 
-	if (get_user_ifreq(&atreq, NULL, arg))
+	if (copy_from_user(&atreq, arg, sizeof(atreq)))
 		return -EFAULT;
 
 	dev = __dev_get_by_name(&init_net, atreq.ifr_name);
@@ -707,7 +707,7 @@ static int atif_ioctl(int cmd, void __user *arg)
 
 		/*
 		 * Phase 1 is fine on LocalTalk but we don't do
-		 * EtherTalk phase 1. Anyone wanting to add it, go ahead.
+		 * EtherTalk phase 1. Anyone wanting to add it go ahead.
 		 */
 		if (dev->type == ARPHRD_ETHER && nr->nr_phase != 2)
 			return -EPROTONOSUPPORT;
@@ -828,7 +828,7 @@ static int atif_ioctl(int cmd, void __user *arg)
 		nr = (struct atalk_netrange *)&(atif->nets);
 		/*
 		 * Phase 1 is fine on Localtalk but we don't do
-		 * Ethertalk phase 1. Anyone wanting to add it, go ahead.
+		 * Ethertalk phase 1. Anyone wanting to add it go ahead.
 		 */
 		if (dev->type == ARPHRD_ETHER && nr->nr_phase != 2)
 			return -EPROTONOSUPPORT;
@@ -865,7 +865,7 @@ static int atif_ioctl(int cmd, void __user *arg)
 		return 0;
 	}
 
-	return put_user_ifreq(&atreq, arg);
+	return copy_to_user(arg, &atreq, sizeof(atreq)) ? -EFAULT : 0;
 }
 
 static int atrtr_ioctl_addrt(struct rtentry *rt)
@@ -1407,10 +1407,9 @@ drop:
 
 /**
  *	atalk_rcv - Receive a packet (in skb) from device dev
- *	@skb: packet received
- *	@dev: network device where the packet comes from
- *	@pt: packet type
- *	@orig_dev: the original receive net device
+ *	@skb - packet received
+ *	@dev - network device where the packet comes from
+ *	@pt - packet type
  *
  *	Receive a packet (in skb) from device dev. This has come from the SNAP
  *	decoder, and on entry skb->transport_header is the DDP header, skb->len
@@ -1753,7 +1752,8 @@ static int atalk_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	int err = 0;
 	struct sk_buff *skb;
 
-	skb = skb_recv_datagram(sk, flags, &err);
+	skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
+						flags & MSG_DONTWAIT, &err);
 	lock_sock(sk);
 
 	if (!skb)
@@ -1929,6 +1929,7 @@ static const struct proto_ops atalk_dgram_ops = {
 	.sendmsg	= atalk_sendmsg,
 	.recvmsg	= atalk_recvmsg,
 	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage,
 };
 
 static struct notifier_block ddp_notifier = {
@@ -2016,7 +2017,7 @@ module_init(atalk_init);
  * by the network device layer.
  *
  * Ergo, before the AppleTalk module can be removed, all AppleTalk
- * sockets should be closed from user space.
+ * sockets be closed from user space.
  */
 static void __exit atalk_exit(void)
 {

@@ -19,9 +19,10 @@
 #include <linux/export.h>
 #include <linux/rmap.h>		/* anon_vma_prepare */
 #include <linux/mmu_notifier.h>	/* set_pte_at_notify */
-#include <linux/swap.h>		/* folio_free_swap */
+#include <linux/swap.h>		/* try_to_free_swap */
 #include <linux/ptrace.h>	/* user_enable_single_step */
 #include <linux/kdebug.h>	/* notifier mechanism */
+#include "../../mm/internal.h"	/* munlock_vma_page */
 #include <linux/percpu-rwsem.h>
 #include <linux/task_work.h>
 #include <linux/shmem_fs.h>
@@ -153,25 +154,26 @@ static loff_t vaddr_to_offset(struct vm_area_struct *vma, unsigned long vaddr)
 static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 				struct page *old_page, struct page *new_page)
 {
-	struct folio *old_folio = page_folio(old_page);
-	struct folio *new_folio;
 	struct mm_struct *mm = vma->vm_mm;
-	DEFINE_FOLIO_VMA_WALK(pvmw, old_folio, vma, addr, 0);
+	struct page_vma_mapped_walk pvmw = {
+		.page = compound_head(old_page),
+		.vma = vma,
+		.address = addr,
+	};
 	int err;
 	struct mmu_notifier_range range;
 
-	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, mm, addr,
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma, mm, addr,
 				addr + PAGE_SIZE);
 
 	if (new_page) {
-		new_folio = page_folio(new_page);
-		err = mem_cgroup_charge(new_folio, vma->vm_mm, GFP_KERNEL);
+		err = mem_cgroup_charge(new_page, vma->vm_mm, GFP_KERNEL);
 		if (err)
 			return err;
 	}
 
-	/* For folio_free_swap() below */
-	folio_lock(old_folio);
+	/* For try_to_free_swap() and munlock_vma_page() below */
+	lock_page(old_page);
 
 	mmu_notifier_invalidate_range_start(&range);
 	err = -EAGAIN;
@@ -180,34 +182,37 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	VM_BUG_ON_PAGE(addr != pvmw.address, old_page);
 
 	if (new_page) {
-		folio_get(new_folio);
-		page_add_new_anon_rmap(new_page, vma, addr);
-		folio_add_lru_vma(new_folio, vma);
+		get_page(new_page);
+		page_add_new_anon_rmap(new_page, vma, addr, false);
+		lru_cache_add_inactive_or_unevictable(new_page, vma);
 	} else
 		/* no new page, just dec_mm_counter for old_page */
 		dec_mm_counter(mm, MM_ANONPAGES);
 
-	if (!folio_test_anon(old_folio)) {
+	if (!PageAnon(old_page)) {
 		dec_mm_counter(mm, mm_counter_file(old_page));
 		inc_mm_counter(mm, MM_ANONPAGES);
 	}
 
-	flush_cache_page(vma, addr, pte_pfn(ptep_get(pvmw.pte)));
+	flush_cache_page(vma, addr, pte_pfn(*pvmw.pte));
 	ptep_clear_flush_notify(vma, addr, pvmw.pte);
 	if (new_page)
 		set_pte_at_notify(mm, addr, pvmw.pte,
 				  mk_pte(new_page, vma->vm_page_prot));
 
-	page_remove_rmap(old_page, vma, false);
-	if (!folio_mapped(old_folio))
-		folio_free_swap(old_folio);
+	page_remove_rmap(old_page, false);
+	if (!page_mapped(old_page))
+		try_to_free_swap(old_page);
 	page_vma_mapped_walk_done(&pvmw);
-	folio_put(old_folio);
+
+	if ((vma->vm_flags & VM_LOCKED) && !PageCompound(old_page))
+		munlock_vma_page(old_page);
+	put_page(old_page);
 
 	err = 0;
  unlock:
 	mmu_notifier_invalidate_range_end(&range);
-	folio_unlock(old_folio);
+	unlock_page(old_page);
 	return err;
 }
 
@@ -350,10 +355,9 @@ static bool valid_ref_ctr_vma(struct uprobe *uprobe,
 static struct vm_area_struct *
 find_ref_ctr_vma(struct uprobe *uprobe, struct mm_struct *mm)
 {
-	VMA_ITERATOR(vmi, mm, 0);
 	struct vm_area_struct *tmp;
 
-	for_each_vma(vmi, tmp)
+	for (tmp = mm->mmap; tmp; tmp = tmp->vm_next)
 		if (valid_ref_ctr_vma(uprobe, tmp))
 			return tmp;
 
@@ -365,6 +369,7 @@ __update_ref_ctr(struct mm_struct *mm, unsigned long vaddr, short d)
 {
 	void *kaddr;
 	struct page *page;
+	struct vm_area_struct *vma;
 	int ret;
 	short *ptr;
 
@@ -372,7 +377,7 @@ __update_ref_ctr(struct mm_struct *mm, unsigned long vaddr, short d)
 		return -EINVAL;
 
 	ret = get_user_pages_remote(mm, vaddr, 1,
-				    FOLL_WRITE, &page, NULL);
+			FOLL_WRITE, &page, &vma, NULL);
 	if (unlikely(ret <= 0)) {
 		/*
 		 * We are asking for 1 page. If get_user_pages_remote() fails,
@@ -448,7 +453,6 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
  * that have fixed length instructions.
  *
  * uprobe_write_opcode - write the opcode at a given virtual address.
- * @auprobe: arch specific probepoint information.
  * @mm: the probed process address space.
  * @vaddr: the virtual address to store the opcode.
  * @opcode: opcode to be written at @vaddr.
@@ -473,9 +477,10 @@ retry:
 	if (is_register)
 		gup_flags |= FOLL_SPLIT_PMD;
 	/* Read the page with vaddr into memory */
-	old_page = get_user_page_vma_remote(mm, vaddr, gup_flags, &vma);
-	if (IS_ERR_OR_NULL(old_page))
-		return old_page ? PTR_ERR(old_page) : 0;
+	ret = get_user_pages_remote(mm, vaddr, 1, gup_flags,
+				    &old_page, &vma, NULL);
+	if (ret <= 0)
+		return ret;
 
 	ret = verify_opcode(old_page, vaddr, &opcode);
 	if (ret <= 0)
@@ -552,7 +557,7 @@ put_old:
 
 	/* try collapse pmd for compound page */
 	if (!ret && orig_page_huge)
-		collapse_pte_mapped_thp(mm, vaddr, false);
+		collapse_pte_mapped_thp(mm, vaddr);
 
 	return ret;
 }
@@ -608,56 +613,41 @@ static void put_uprobe(struct uprobe *uprobe)
 	}
 }
 
-static __always_inline
-int uprobe_cmp(const struct inode *l_inode, const loff_t l_offset,
-	       const struct uprobe *r)
+static int match_uprobe(struct uprobe *l, struct uprobe *r)
 {
-	if (l_inode < r->inode)
+	if (l->inode < r->inode)
 		return -1;
 
-	if (l_inode > r->inode)
+	if (l->inode > r->inode)
 		return 1;
 
-	if (l_offset < r->offset)
+	if (l->offset < r->offset)
 		return -1;
 
-	if (l_offset > r->offset)
+	if (l->offset > r->offset)
 		return 1;
 
 	return 0;
 }
 
-#define __node_2_uprobe(node) \
-	rb_entry((node), struct uprobe, rb_node)
-
-struct __uprobe_key {
-	struct inode *inode;
-	loff_t offset;
-};
-
-static inline int __uprobe_cmp_key(const void *key, const struct rb_node *b)
-{
-	const struct __uprobe_key *a = key;
-	return uprobe_cmp(a->inode, a->offset, __node_2_uprobe(b));
-}
-
-static inline int __uprobe_cmp(struct rb_node *a, const struct rb_node *b)
-{
-	struct uprobe *u = __node_2_uprobe(a);
-	return uprobe_cmp(u->inode, u->offset, __node_2_uprobe(b));
-}
-
 static struct uprobe *__find_uprobe(struct inode *inode, loff_t offset)
 {
-	struct __uprobe_key key = {
-		.inode = inode,
-		.offset = offset,
-	};
-	struct rb_node *node = rb_find(&key, &uprobes_tree, __uprobe_cmp_key);
+	struct uprobe u = { .inode = inode, .offset = offset };
+	struct rb_node *n = uprobes_tree.rb_node;
+	struct uprobe *uprobe;
+	int match;
 
-	if (node)
-		return get_uprobe(__node_2_uprobe(node));
+	while (n) {
+		uprobe = rb_entry(n, struct uprobe, rb_node);
+		match = match_uprobe(&u, uprobe);
+		if (!match)
+			return get_uprobe(uprobe);
 
+		if (match < 0)
+			n = n->rb_left;
+		else
+			n = n->rb_right;
+	}
 	return NULL;
 }
 
@@ -678,15 +668,32 @@ static struct uprobe *find_uprobe(struct inode *inode, loff_t offset)
 
 static struct uprobe *__insert_uprobe(struct uprobe *uprobe)
 {
-	struct rb_node *node;
+	struct rb_node **p = &uprobes_tree.rb_node;
+	struct rb_node *parent = NULL;
+	struct uprobe *u;
+	int match;
 
-	node = rb_find_add(&uprobe->rb_node, &uprobes_tree, __uprobe_cmp);
-	if (node)
-		return get_uprobe(__node_2_uprobe(node));
+	while (*p) {
+		parent = *p;
+		u = rb_entry(parent, struct uprobe, rb_node);
+		match = match_uprobe(uprobe, u);
+		if (!match)
+			return get_uprobe(u);
 
+		if (match < 0)
+			p = &parent->rb_left;
+		else
+			p = &parent->rb_right;
+
+	}
+
+	u = NULL;
+	rb_link_node(&uprobe->rb_node, parent, p);
+	rb_insert_color(&uprobe->rb_node, &uprobes_tree);
 	/* get access + creation ref */
 	refcount_set(&uprobe->ref, 2);
-	return NULL;
+
+	return u;
 }
 
 /*
@@ -787,10 +794,10 @@ static int __copy_insn(struct address_space *mapping, struct file *filp,
 	struct page *page;
 	/*
 	 * Ensure that the page that has the original instruction is populated
-	 * and in page-cache. If ->read_folio == NULL it must be shmem_mapping(),
+	 * and in page-cache. If ->readpage == NULL it must be shmem_mapping(),
 	 * see uprobe_register().
 	 */
-	if (mapping->a_ops->read_folio)
+	if (mapping->a_ops->readpage)
 		page = read_mapping_page(mapping, offset >> PAGE_SHIFT, filp);
 	else
 		page = shmem_read_mapping_page(mapping, offset >> PAGE_SHIFT);
@@ -1143,8 +1150,7 @@ static int __uprobe_register(struct inode *inode, loff_t offset,
 		return -EINVAL;
 
 	/* copy_insn() uses read_mapping_page() or shmem_read_mapping_page() */
-	if (!inode->i_mapping->a_ops->read_folio &&
-	    !shmem_mapping(inode->i_mapping))
+	if (!inode->i_mapping->a_ops->readpage && !shmem_mapping(inode->i_mapping))
 		return -EIO;
 	/* Racy, just to catch the obvious mistakes */
 	if (offset > i_size_read(inode))
@@ -1231,12 +1237,11 @@ int uprobe_apply(struct inode *inode, loff_t offset,
 
 static int unapply_uprobe(struct uprobe *uprobe, struct mm_struct *mm)
 {
-	VMA_ITERATOR(vmi, mm, 0);
 	struct vm_area_struct *vma;
 	int err = 0;
 
 	mmap_read_lock(mm);
-	for_each_vma(vmi, vma) {
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		unsigned long vaddr;
 		loff_t offset;
 
@@ -1349,7 +1354,7 @@ static int delayed_ref_ctr_inc(struct vm_area_struct *vma)
 }
 
 /*
- * Called from mmap_region/vma_merge with mm->mmap_lock acquired.
+ * Called from mmap_region/vma_adjust with mm->mmap_lock acquired.
  *
  * Currently we ignore all errors and always return 0, the callers
  * can't handle the failure anyway.
@@ -1984,10 +1989,9 @@ bool uprobe_deny_signal(void)
 
 static void mmf_recalc_uprobes(struct mm_struct *mm)
 {
-	VMA_ITERATOR(vmi, mm, 0);
 	struct vm_area_struct *vma;
 
-	for_each_vma(vmi, vma) {
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		if (!valid_vma(vma, false))
 			continue;
 		/*
@@ -2025,7 +2029,8 @@ static int is_trap_at_addr(struct mm_struct *mm, unsigned long vaddr)
 	 * but we treat this as a 'remote' access since it is
 	 * essentially a kernel access to the memory.
 	 */
-	result = get_user_pages_remote(mm, vaddr, 1, FOLL_FORCE, &page, NULL);
+	result = get_user_pages_remote(mm, vaddr, 1, FOLL_FORCE, &page,
+			NULL, NULL);
 	if (result < 0)
 		return result;
 
@@ -2043,8 +2048,8 @@ static struct uprobe *find_active_uprobe(unsigned long bp_vaddr, int *is_swbp)
 	struct vm_area_struct *vma;
 
 	mmap_read_lock(mm);
-	vma = vma_lookup(mm, bp_vaddr);
-	if (vma) {
+	vma = find_vma(mm, bp_vaddr);
+	if (vma && vma->vm_start <= bp_vaddr) {
 		if (valid_vma(vma, false)) {
 			struct inode *inode = file_inode(vma->vm_file);
 			loff_t offset = vaddr_to_offset(vma, bp_vaddr);

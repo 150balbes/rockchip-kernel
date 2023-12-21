@@ -9,7 +9,8 @@
 
 static int
 user_get(const struct xattr_handler *handler, struct dentry *unused,
-	 struct inode *inode, const char *name, void *buffer, size_t size)
+	 struct inode *inode, const char *name, void *buffer, size_t size,
+	 int flags)
 {
 	if (!reiserfs_xattrs_user(inode->i_sb))
 		return -EOPNOTSUPP;
@@ -18,8 +19,7 @@ user_get(const struct xattr_handler *handler, struct dentry *unused,
 }
 
 static int
-user_set(const struct xattr_handler *handler, struct mnt_idmap *idmap,
-	 struct dentry *unused,
+user_set(const struct xattr_handler *handler, struct dentry *unused,
 	 struct inode *inode, const char *name, const void *buffer,
 	 size_t size, int flags)
 {

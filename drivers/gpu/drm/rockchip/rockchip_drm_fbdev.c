@@ -4,8 +4,6 @@
  * Author:Mark Yao <mark.yao@rock-chips.com>
  */
 
-#include <linux/fb.h>
-
 #include <drm/drm.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
@@ -27,19 +25,13 @@ static int rockchip_fbdev_mmap(struct fb_info *info,
 	return rockchip_gem_mmap_buf(private->fbdev_bo, vma);
 }
 
-FB_GEN_DEFAULT_DEFERRED_IOMEM_OPS(rockchip_fbdev,
-				  drm_fb_helper_damage_range,
-				  drm_fb_helper_damage_area);
-
 static const struct fb_ops rockchip_drm_fbdev_ops = {
 	.owner		= THIS_MODULE,
-	.fb_read	= rockchip_fbdev_defio_read,
-	.fb_write	= rockchip_fbdev_defio_write,
-	.fb_fillrect	= rockchip_fbdev_defio_fillrect,
-	.fb_copyarea	= rockchip_fbdev_defio_copyarea,
-	.fb_imageblit	= rockchip_fbdev_defio_imageblit,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_mmap	= rockchip_fbdev_mmap,
+	.fb_fillrect	= drm_fb_helper_cfb_fillrect,
+	.fb_copyarea	= drm_fb_helper_cfb_copyarea,
+	.fb_imageblit	= drm_fb_helper_cfb_imageblit,
 };
 
 static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
@@ -72,7 +64,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	private->fbdev_bo = &rk_obj->base;
 
-	fbi = drm_fb_helper_alloc_info(helper);
+	fbi = drm_fb_helper_alloc_fbi(helper);
 	if (IS_ERR(fbi)) {
 		DRM_DEV_ERROR(dev->dev, "Failed to create framebuffer info.\n");
 		ret = PTR_ERR(fbi);
@@ -96,6 +88,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 	offset = fbi->var.xoffset * bytes_per_pixel;
 	offset += fbi->var.yoffset * fb->pitches[0];
 
+	dev->mode_config.fb_base = 0;
 	fbi->screen_base = rk_obj->kvaddr + offset;
 	fbi->screen_size = rk_obj->base.size;
 	fbi->fix.smem_len = rk_obj->base.size;
@@ -130,7 +123,7 @@ int rockchip_drm_fbdev_init(struct drm_device *dev)
 		return -ENOMEM;
 	private->fbdev_helper = helper;
 
-	drm_fb_helper_prepare(dev, helper, PREFERRED_BPP, &rockchip_drm_fb_helper_funcs);
+	drm_fb_helper_prepare(dev, helper, &rockchip_drm_fb_helper_funcs);
 
 	ret = drm_fb_helper_init(dev, helper);
 	if (ret < 0) {
@@ -140,7 +133,7 @@ int rockchip_drm_fbdev_init(struct drm_device *dev)
 		return ret;
 	}
 
-	ret = drm_fb_helper_initial_config(helper);
+	ret = drm_fb_helper_initial_config(helper, PREFERRED_BPP);
 	if (ret < 0) {
 		DRM_DEV_ERROR(dev->dev,
 			      "Failed to set initial hw config - %d.\n",
@@ -163,7 +156,7 @@ void rockchip_drm_fbdev_fini(struct drm_device *dev)
 	if (!helper)
 		return;
 
-	drm_fb_helper_unregister_info(helper);
+	drm_fb_helper_unregister_fbi(helper);
 
 	if (helper->fb)
 		drm_framebuffer_put(helper->fb);

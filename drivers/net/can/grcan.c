@@ -27,7 +27,6 @@
 #include <linux/interrupt.h>
 #include <linux/netdevice.h>
 #include <linux/delay.h>
-#include <linux/ethtool.h>
 #include <linux/io.h>
 #include <linux/can/dev.h>
 #include <linux/spinlock.h>
@@ -257,6 +256,7 @@ struct grcan_priv {
 	struct grcan_dma dma;
 
 	struct sk_buff **echo_skb;	/* We allocate this on our own */
+	u8 *txdlc;			/* Length of queued frames */
 
 	/* The echo skb pointer, pointing into echo_skb and indicating which
 	 * frames can be echoed back. See the "Notes on the tx cyclic buffer
@@ -516,10 +516,12 @@ static int catch_up_echo_skb(struct net_device *dev, int budget, bool echo)
 		if (echo) {
 			/* Normal echo of messages */
 			stats->tx_packets++;
-			stats->tx_bytes += can_get_echo_skb(dev, i, NULL);
+			stats->tx_bytes += priv->txdlc[i];
+			priv->txdlc[i] = 0;
+			can_get_echo_skb(dev, i);
 		} else {
 			/* For cleanup of untransmitted messages */
-			can_free_echo_skb(dev, i, NULL);
+			can_free_echo_skb(dev, i);
 		}
 
 		priv->eskbp = grcan_ring_add(priv->eskbp, GRCAN_MSG_SIZE,
@@ -672,7 +674,6 @@ static void grcan_err(struct net_device *dev, u32 sources, u32 status)
 				/* There are no others at this point */
 				break;
 			}
-			cf.can_id |= CAN_ERR_CNT;
 			cf.data[6] = txerr;
 			cf.data[7] = rxerr;
 			priv->can.state = state;
@@ -1062,10 +1063,16 @@ static int grcan_open(struct net_device *dev)
 	priv->can.echo_skb_max = dma->tx.size;
 	priv->can.echo_skb = priv->echo_skb;
 
+	priv->txdlc = kcalloc(dma->tx.size, sizeof(*priv->txdlc), GFP_KERNEL);
+	if (!priv->txdlc) {
+		err = -ENOMEM;
+		goto exit_free_echo_skb;
+	}
+
 	/* Get can device up */
 	err = open_candev(dev);
 	if (err)
-		goto exit_free_echo_skb;
+		goto exit_free_txdlc;
 
 	err = request_irq(dev->irq, grcan_interrupt, IRQF_SHARED,
 			  dev->name, dev);
@@ -1087,6 +1094,8 @@ static int grcan_open(struct net_device *dev)
 
 exit_close_candev:
 	close_candev(dev);
+exit_free_txdlc:
+	kfree(priv->txdlc);
 exit_free_echo_skb:
 	kfree(priv->echo_skb);
 exit_free_dma_buffers:
@@ -1123,6 +1132,7 @@ static int grcan_close(struct net_device *dev)
 	priv->can.echo_skb_max = 0;
 	priv->can.echo_skb = NULL;
 	kfree(priv->echo_skb);
+	kfree(priv->txdlc);
 
 	return 0;
 }
@@ -1192,21 +1202,21 @@ static int grcan_receive(struct net_device *dev, int budget)
 			cf->can_id = ((slot[0] & GRCAN_MSG_BID)
 				      >> GRCAN_MSG_BID_BIT);
 		}
-		cf->len = can_cc_dlc2len((slot[1] & GRCAN_MSG_DLC)
+		cf->can_dlc = get_can_dlc((slot[1] & GRCAN_MSG_DLC)
 					  >> GRCAN_MSG_DLC_BIT);
 		if (rtr) {
 			cf->can_id |= CAN_RTR_FLAG;
 		} else {
-			for (i = 0; i < cf->len; i++) {
+			for (i = 0; i < cf->can_dlc; i++) {
 				j = GRCAN_MSG_DATA_SLOT_INDEX(i);
 				shift = GRCAN_MSG_DATA_SHIFT(i);
 				cf->data[i] = (u8)(slot[j] >> shift);
 			}
-
-			stats->rx_bytes += cf->len;
 		}
-		stats->rx_packets++;
 
+		/* Update statistics and read pointer */
+		stats->rx_packets++;
+		stats->rx_bytes += cf->can_dlc;
 		netif_receive_skb(skb);
 
 		rd = grcan_ring_add(rd, GRCAN_MSG_SIZE, dma->rx.size);
@@ -1345,7 +1355,7 @@ static netdev_tx_t grcan_start_xmit(struct sk_buff *skb,
 	unsigned long flags;
 	u32 oneshotmode = priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT;
 
-	if (can_dev_dropped_skb(dev, skb))
+	if (can_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
 
 	/* Trying to transmit in silent mode will generate error interrupts, but
@@ -1384,7 +1394,7 @@ static netdev_tx_t grcan_start_xmit(struct sk_buff *skb,
 	eff = cf->can_id & CAN_EFF_FLAG;
 	rtr = cf->can_id & CAN_RTR_FLAG;
 	id = cf->can_id & (eff ? CAN_EFF_MASK : CAN_SFF_MASK);
-	dlc = cf->len;
+	dlc = cf->can_dlc;
 	if (eff)
 		tmp = (id << GRCAN_MSG_EID_BIT) & GRCAN_MSG_EID;
 	else
@@ -1432,7 +1442,8 @@ static netdev_tx_t grcan_start_xmit(struct sk_buff *skb,
 	 * can_put_echo_skb would be an error unless other measures are
 	 * taken.
 	 */
-	can_put_echo_skb(skb, dev, slotindex, 0);
+	priv->txdlc[slotindex] = cf->can_dlc; /* Store dlc for statistics */
+	can_put_echo_skb(skb, dev, slotindex);
 
 	/* Make sure everything is written before allowing hardware to
 	 * read from the memory
@@ -1562,10 +1573,6 @@ static const struct net_device_ops grcan_netdev_ops = {
 	.ndo_change_mtu = can_change_mtu,
 };
 
-static const struct ethtool_ops grcan_ethtool_ops = {
-	.get_ts_info = ethtool_op_get_ts_info,
-};
-
 static int grcan_setup_netdev(struct platform_device *ofdev,
 			      void __iomem *base,
 			      int irq, u32 ambafreq, bool txbug)
@@ -1582,7 +1589,6 @@ static int grcan_setup_netdev(struct platform_device *ofdev,
 	dev->irq = irq;
 	dev->flags |= IFF_ECHO;
 	dev->netdev_ops = &grcan_netdev_ops;
-	dev->ethtool_ops = &grcan_ethtool_ops;
 	dev->sysfs_groups[0] = &sysfs_grcan_group;
 
 	priv = netdev_priv(dev);
@@ -1616,7 +1622,7 @@ static int grcan_setup_netdev(struct platform_device *ofdev,
 		timer_setup(&priv->hang_timer, grcan_initiate_running_reset, 0);
 	}
 
-	netif_napi_add_weight(dev, &priv->napi, grcan_poll, GRCAN_NAPI_WEIGHT);
+	netif_napi_add(dev, &priv->napi, grcan_poll, GRCAN_NAPI_WEIGHT);
 
 	SET_NETDEV_DEV(dev, &ofdev->dev);
 	dev_info(&ofdev->dev, "regs=0x%p, irq=%d, clock=%d\n",
@@ -1696,7 +1702,7 @@ exit_error:
 	return err;
 }
 
-static void grcan_remove(struct platform_device *ofdev)
+static int grcan_remove(struct platform_device *ofdev)
 {
 	struct net_device *dev = platform_get_drvdata(ofdev);
 	struct grcan_priv *priv = netdev_priv(dev);
@@ -1706,6 +1712,8 @@ static void grcan_remove(struct platform_device *ofdev)
 	irq_dispose_mapping(dev->irq);
 	netif_napi_del(&priv->napi);
 	free_candev(dev);
+
+	return 0;
 }
 
 static const struct of_device_id grcan_match[] = {
@@ -1724,7 +1732,7 @@ static struct platform_driver grcan_driver = {
 		.of_match_table = grcan_match,
 	},
 	.probe = grcan_probe,
-	.remove_new = grcan_remove,
+	.remove = grcan_remove,
 };
 
 module_platform_driver(grcan_driver);

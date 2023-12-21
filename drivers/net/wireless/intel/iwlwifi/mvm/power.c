@@ -1,9 +1,67 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/*
- * Copyright (C) 2012-2014, 2018-2019, 2021-2023 Intel Corporation
- * Copyright (C) 2013-2014 Intel Mobile Communications GmbH
- * Copyright (C) 2015-2017 Intel Deutschland GmbH
- */
+/******************************************************************************
+ *
+ * This file is provided under a dual BSD/GPLv2 license.  When using or
+ * redistributing this file, you may do so under either license.
+ *
+ * GPL LICENSE SUMMARY
+ *
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2014 Intel Mobile Communications GmbH
+ * Copyright(c) 2015 - 2017 Intel Deutschland GmbH
+ * Copyright (C) 2018 - 2019 Intel Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * The full GNU General Public License is included in this distribution
+ * in the file called COPYING.
+ *
+ * Contact Information:
+ *  Intel Linux Wireless <linuxwifi@intel.com>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ *
+ * BSD LICENSE
+ *
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2014 Intel Mobile Communications GmbH
+ * Copyright(c) 2015 - 2017 Intel Deutschland GmbH
+ * Copyright (C) 2018 - 2019 Intel Corporation
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *  * Neither the name Intel Corporation nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ *****************************************************************************/
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -128,19 +186,6 @@ static void iwl_mvm_power_configure_uapsd(struct iwl_mvm *mvm,
 	enum ieee80211_ac_numbers ac;
 	bool tid_found = false;
 
-	if (test_bit(IWL_MVM_STATUS_IN_D3, &mvm->status) ||
-	    cmd->flags & cpu_to_le16(POWER_FLAGS_SNOOZE_ENA_MSK)) {
-		cmd->rx_data_timeout_uapsd =
-			cpu_to_le32(IWL_MVM_WOWLAN_PS_RX_DATA_TIMEOUT);
-		cmd->tx_data_timeout_uapsd =
-			cpu_to_le32(IWL_MVM_WOWLAN_PS_TX_DATA_TIMEOUT);
-	} else {
-		cmd->rx_data_timeout_uapsd =
-			cpu_to_le32(IWL_MVM_UAPSD_RX_DATA_TIMEOUT);
-		cmd->tx_data_timeout_uapsd =
-			cpu_to_le32(IWL_MVM_UAPSD_TX_DATA_TIMEOUT);
-	}
-
 #ifdef CONFIG_IWLWIFI_DEBUGFS
 	/* set advanced pm flag with no uapsd ACs to enable ps-poll */
 	if (mvmvif->dbgfs_pm.use_ps_poll) {
@@ -150,7 +195,7 @@ static void iwl_mvm_power_configure_uapsd(struct iwl_mvm *mvm,
 #endif
 
 	for (ac = IEEE80211_AC_VO; ac <= IEEE80211_AC_BK; ac++) {
-		if (!mvmvif->deflink.queue_params[ac].uapsd)
+		if (!mvmvif->queue_params[ac].uapsd)
 			continue;
 
 		if (!test_bit(IWL_MVM_STATUS_IN_D3, &mvm->status))
@@ -160,7 +205,7 @@ static void iwl_mvm_power_configure_uapsd(struct iwl_mvm *mvm,
 		cmd->uapsd_ac_flags |= BIT(ac);
 
 		/* QNDP TID - the highest TID with no admission control */
-		if (!tid_found && !mvmvif->deflink.queue_params[ac].acm) {
+		if (!tid_found && !mvmvif->queue_params[ac].acm) {
 			tid_found = true;
 			switch (ac) {
 			case IEEE80211_AC_VO:
@@ -195,6 +240,19 @@ static void iwl_mvm_power_configure_uapsd(struct iwl_mvm *mvm,
 
 	cmd->uapsd_max_sp = mvm->hw->uapsd_max_sp_len;
 
+	if (test_bit(IWL_MVM_STATUS_IN_D3, &mvm->status) ||
+	    cmd->flags & cpu_to_le16(POWER_FLAGS_SNOOZE_ENA_MSK)) {
+		cmd->rx_data_timeout_uapsd =
+			cpu_to_le32(IWL_MVM_WOWLAN_PS_RX_DATA_TIMEOUT);
+		cmd->tx_data_timeout_uapsd =
+			cpu_to_le32(IWL_MVM_WOWLAN_PS_TX_DATA_TIMEOUT);
+	} else {
+		cmd->rx_data_timeout_uapsd =
+			cpu_to_le32(IWL_MVM_UAPSD_RX_DATA_TIMEOUT);
+		cmd->tx_data_timeout_uapsd =
+			cpu_to_le32(IWL_MVM_UAPSD_TX_DATA_TIMEOUT);
+	}
+
 	if (cmd->flags & cpu_to_le16(POWER_FLAGS_SNOOZE_ENA_MSK)) {
 		cmd->heavy_tx_thld_packets =
 			IWL_MVM_PS_SNOOZE_HEAVY_TX_THLD_PACKETS;
@@ -223,7 +281,7 @@ static void iwl_mvm_p2p_standalone_iterator(void *_data, u8 *mac,
 		*is_p2p_standalone = false;
 		break;
 	case NL80211_IFTYPE_STATION:
-		if (vif->cfg.assoc)
+		if (vif->bss_conf.assoc)
 			*is_p2p_standalone = false;
 		break;
 
@@ -237,8 +295,8 @@ static bool iwl_mvm_power_allow_uapsd(struct iwl_mvm *mvm,
 {
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 
-	if (ether_addr_equal(mvmvif->uapsd_misbehaving_ap_addr,
-			     vif->cfg.ap_addr))
+	if (!memcmp(mvmvif->uapsd_misbehaving_bssid, vif->bss_conf.bssid,
+		    ETH_ALEN))
 		return false;
 
 	/*
@@ -279,25 +337,18 @@ static bool iwl_mvm_power_allow_uapsd(struct iwl_mvm *mvm,
 static bool iwl_mvm_power_is_radar(struct ieee80211_vif *vif)
 {
 	struct ieee80211_chanctx_conf *chanctx_conf;
-	struct ieee80211_bss_conf *link_conf;
+	struct ieee80211_channel *chan;
 	bool radar_detect = false;
-	unsigned int link_id;
 
 	rcu_read_lock();
-	for_each_vif_active_link(vif, link_conf, link_id) {
-		chanctx_conf = rcu_dereference(link_conf->chanctx_conf);
-		/* this happens on link switching, just ignore inactive ones */
-		if (!chanctx_conf)
-			continue;
-
-		radar_detect = !!(chanctx_conf->def.chan->flags &
-				  IEEE80211_CHAN_RADAR);
-		if (radar_detect)
-			goto out;
+	chanctx_conf = rcu_dereference(vif->chanctx_conf);
+	WARN_ON(!chanctx_conf);
+	if (chanctx_conf) {
+		chan = chanctx_conf->def.chan;
+		radar_detect = chan->flags & IEEE80211_CHAN_RADAR;
 	}
-
-out:
 	rcu_read_unlock();
+
 	return radar_detect;
 }
 
@@ -327,11 +378,12 @@ static void iwl_mvm_power_config_skip_dtim(struct iwl_mvm *mvm,
 
 		if (WARN_ON(!dtimper_tu))
 			return;
-		/* configure skip over dtim up to 900 TU DTIM interval */
-		skip = max_t(u8, 1, 900 / dtimper_tu);
+		/* configure skip over dtim up to 306TU - 314 msec */
+		skip = max_t(u8, 1, 306 / dtimper_tu);
 	}
 
-	cmd->skip_dtim_periods = skip;
+	/* the firmware really expects "look at every X DTIMs", so add 1 */
+	cmd->skip_dtim_periods = 1 + skip;
 	cmd->flags |= cpu_to_le16(POWER_FLAGS_SKIP_OVER_DTIM_MSK);
 }
 
@@ -365,7 +417,7 @@ static void iwl_mvm_power_build_cmd(struct iwl_mvm *mvm,
 
 	cmd->flags |= cpu_to_le16(POWER_FLAGS_POWER_SAVE_ENA_MSK);
 
-	if (!vif->cfg.ps || !mvmvif->pm_enabled)
+	if (!vif->bss_conf.ps || !mvmvif->pm_enabled)
 		return;
 
 	if (iwl_mvm_vif_low_latency(mvmvif) && vif->p2p &&
@@ -501,9 +553,9 @@ void iwl_mvm_power_vif_assoc(struct iwl_mvm *mvm, struct ieee80211_vif *vif)
 {
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 
-	if (!ether_addr_equal(mvmvif->uapsd_misbehaving_ap_addr,
-			      vif->cfg.ap_addr))
-		eth_zero_addr(mvmvif->uapsd_misbehaving_ap_addr);
+	if (memcmp(vif->bss_conf.bssid, mvmvif->uapsd_misbehaving_bssid,
+		   ETH_ALEN))
+		eth_zero_addr(mvmvif->uapsd_misbehaving_bssid);
 }
 
 static void iwl_mvm_power_uapsd_misbehav_ap_iterator(void *_data, u8 *mac,
@@ -511,23 +563,13 @@ static void iwl_mvm_power_uapsd_misbehav_ap_iterator(void *_data, u8 *mac,
 {
 	u8 *ap_sta_id = _data;
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
-	struct ieee80211_bss_conf *link_conf;
-	unsigned int link_id;
 
-	rcu_read_lock();
-	for_each_vif_active_link(vif, link_conf, link_id) {
-		struct iwl_mvm_vif_link_info *link_info = mvmvif->link[link_id];
-
-		/* The ap_sta_id is not expected to change during current
-		 * association so no explicit protection is needed
-		 */
-		if (link_info->ap_sta_id == *ap_sta_id) {
-			ether_addr_copy(mvmvif->uapsd_misbehaving_ap_addr,
-					vif->cfg.ap_addr);
-			break;
-		}
-	}
-	rcu_read_unlock();
+	/* The ap_sta_id is not expected to change during current association
+	 * so no explicit protection is needed
+	 */
+	if (mvmvif->ap_sta_id == *ap_sta_id)
+		memcpy(mvmvif->uapsd_misbehaving_bssid, vif->bss_conf.bssid,
+		       ETH_ALEN);
 }
 
 void iwl_mvm_power_uapsd_misbehaving_ap_notif(struct iwl_mvm *mvm,
@@ -568,7 +610,7 @@ static void iwl_mvm_power_ps_disabled_iterator(void *_data, u8* mac,
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 	bool *disable_ps = _data;
 
-	if (iwl_mvm_vif_is_active(mvmvif))
+	if (mvmvif->phy_ctxt && mvmvif->phy_ctxt->id < NUM_PHY_CTX)
 		*disable_ps |= mvmvif->ps_disabled;
 }
 
@@ -577,12 +619,10 @@ static void iwl_mvm_power_get_vifs_iterator(void *_data, u8 *mac,
 {
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 	struct iwl_power_vifs *power_iterator = _data;
-	bool active;
+	bool active = mvmvif->phy_ctxt && mvmvif->phy_ctxt->id < NUM_PHY_CTX;
 
 	if (!mvmvif->uploaded)
 		return;
-
-	active = iwl_mvm_vif_is_active(mvmvif);
 
 	switch (ieee80211_vif_type_p2p(vif)) {
 	case NL80211_IFTYPE_P2P_DEVICE:
@@ -655,32 +695,29 @@ static void iwl_mvm_power_set_pm(struct iwl_mvm *mvm,
 		return;
 
 	/* enable PM on bss if bss stand alone */
-	if (bss_mvmvif && vifs->bss_active && !vifs->p2p_active &&
-	    !vifs->ap_active) {
+	if (vifs->bss_active && !vifs->p2p_active && !vifs->ap_active) {
 		bss_mvmvif->pm_enabled = true;
 		return;
 	}
 
 	/* enable PM on p2p if p2p stand alone */
-	if (p2p_mvmvif && vifs->p2p_active && !vifs->bss_active &&
-	    !vifs->ap_active) {
+	if (vifs->p2p_active && !vifs->bss_active && !vifs->ap_active) {
 		p2p_mvmvif->pm_enabled = true;
 		return;
 	}
 
-	if (p2p_mvmvif && bss_mvmvif && vifs->bss_active && vifs->p2p_active)
-		client_same_channel =
-			iwl_mvm_have_links_same_channel(bss_mvmvif, p2p_mvmvif);
-
-	if (bss_mvmvif && ap_mvmvif && vifs->bss_active && vifs->ap_active)
-		ap_same_channel =
-			iwl_mvm_have_links_same_channel(bss_mvmvif, ap_mvmvif);
+	if (vifs->bss_active && vifs->p2p_active)
+		client_same_channel = (bss_mvmvif->phy_ctxt->id ==
+				       p2p_mvmvif->phy_ctxt->id);
+	if (vifs->bss_active && vifs->ap_active)
+		ap_same_channel = (bss_mvmvif->phy_ctxt->id ==
+				   ap_mvmvif->phy_ctxt->id);
 
 	/* clients are not stand alone: enable PM if DCM */
 	if (!(client_same_channel || ap_same_channel)) {
-		if (bss_mvmvif && vifs->bss_active)
+		if (vifs->bss_active)
 			bss_mvmvif->pm_enabled = true;
-		if (p2p_mvmvif && vifs->p2p_active)
+		if (vifs->p2p_active)
 			p2p_mvmvif->pm_enabled = true;
 		return;
 	}
@@ -911,7 +948,7 @@ static int iwl_mvm_power_set_ba(struct iwl_mvm *mvm,
 
 	mvmvif->bf_data.ba_enabled = !(!mvmvif->pm_enabled ||
 				       mvm->ps_disabled ||
-				       !vif->cfg.ps ||
+				       !vif->bss_conf.ps ||
 				       iwl_mvm_vif_low_latency(mvmvif));
 
 	return _iwl_mvm_enable_beacon_filter(mvm, vif, &cmd, 0);

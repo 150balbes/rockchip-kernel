@@ -48,8 +48,7 @@ void show_stack(struct task_struct *task, unsigned long *stack,
 			break;
 		if (i && ((i % STACKSLOTS_PER_LINE) == 0))
 			pr_cont("\n");
-		pr_cont(" %08lx", READ_ONCE_NOCHECK(*stack));
-		stack++;
+		pr_cont(" %08lx", *stack++);
 	}
 
 	printk("%sCall Trace:\n", loglvl);

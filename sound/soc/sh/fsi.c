@@ -219,7 +219,7 @@ struct fsi_stream {
 	u32 bus_option;
 
 	/*
-	 * these are initialized by fsi_handler_init()
+	 * thse are initialized by fsi_handler_init()
 	 */
 	struct fsi_stream_handler *handler;
 	struct fsi_priv		*priv;
@@ -1646,10 +1646,10 @@ static int fsi_dai_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	int ret;
 
 	/* set clock master audio interface */
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BC_FC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		break;
-	case SND_SOC_DAIFMT_BP_FP:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		fsi->clk_master = 1; /* cpu is master */
 		break;
 	default:
@@ -1707,27 +1707,12 @@ static int fsi_dai_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-/*
- * Select below from Sound Card, not auto
- *	SND_SOC_DAIFMT_CBC_CFC
- *	SND_SOC_DAIFMT_CBP_CFP
- */
-static u64 fsi_dai_formats =
-	SND_SOC_POSSIBLE_DAIFMT_I2S	|
-	SND_SOC_POSSIBLE_DAIFMT_LEFT_J	|
-	SND_SOC_POSSIBLE_DAIFMT_NB_NF	|
-	SND_SOC_POSSIBLE_DAIFMT_NB_IF	|
-	SND_SOC_POSSIBLE_DAIFMT_IB_NF	|
-	SND_SOC_POSSIBLE_DAIFMT_IB_IF;
-
 static const struct snd_soc_dai_ops fsi_dai_ops = {
 	.startup	= fsi_dai_startup,
 	.shutdown	= fsi_dai_shutdown,
 	.trigger	= fsi_dai_trigger,
 	.set_fmt	= fsi_dai_set_fmt,
 	.hw_params	= fsi_dai_hw_params,
-	.auto_selectable_formats	= &fsi_dai_formats,
-	.num_auto_selectable_formats	= 1,
 };
 
 /*
@@ -1855,7 +1840,7 @@ static void fsi_of_parse(char *name,
 
 	for (i = 0; i < ARRAY_SIZE(of_parse_property); i++) {
 		sprintf(prop, "%s,%s", name, of_parse_property[i].name);
-		if (of_property_present(np, prop))
+		if (of_get_property(np, prop, NULL))
 			flags |= of_parse_property[i].val;
 	}
 	info->flags = flags;
@@ -2030,7 +2015,7 @@ exit_fsia:
 	return ret;
 }
 
-static void fsi_remove(struct platform_device *pdev)
+static int fsi_remove(struct platform_device *pdev)
 {
 	struct fsi_master *master;
 
@@ -2040,6 +2025,8 @@ static void fsi_remove(struct platform_device *pdev)
 
 	fsi_stream_remove(&master->fsia);
 	fsi_stream_remove(&master->fsib);
+
+	return 0;
 }
 
 static void __fsi_suspend(struct fsi_priv *fsi,
@@ -2106,7 +2093,7 @@ static struct platform_driver fsi_driver = {
 		.of_match_table = fsi_of_match,
 	},
 	.probe		= fsi_probe,
-	.remove_new	= fsi_remove,
+	.remove		= fsi_remove,
 	.id_table	= fsi_id_table,
 };
 

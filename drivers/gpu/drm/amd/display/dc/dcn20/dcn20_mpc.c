@@ -67,6 +67,7 @@ void mpc2_update_blending(
 	REG_SET(MPCC_BOT_GAIN_INSIDE[mpcc_id], 0, MPCC_BOT_GAIN_INSIDE, blnd_cfg->bottom_inside_gain);
 	REG_SET(MPCC_BOT_GAIN_OUTSIDE[mpcc_id], 0, MPCC_BOT_GAIN_OUTSIDE, blnd_cfg->bottom_outside_gain);
 
+	mpc1_set_bg_color(mpc, &blnd_cfg->black_color, mpcc_id);
 	mpcc->blnd_cfg = *blnd_cfg;
 }
 
@@ -299,24 +300,24 @@ static enum dc_lut_mode mpc20_get_ogam_current(struct mpc *mpc, int mpcc_id)
 	uint32_t state_mode;
 	struct dcn20_mpc *mpc20 = TO_DCN20_MPC(mpc);
 
-	REG_GET(MPCC_OGAM_LUT_RAM_CONTROL[mpcc_id], MPCC_OGAM_CONFIG_STATUS, &state_mode);
+	REG_GET(MPCC_OGAM_LUT_RAM_CONTROL[mpcc_id],
+			MPCC_OGAM_CONFIG_STATUS, &state_mode);
 
-	switch (state_mode) {
-	case 0:
-		mode = LUT_BYPASS;
-		break;
-	case 1:
-		mode = LUT_RAM_A;
-		break;
-	case 2:
-		mode = LUT_RAM_B;
-		break;
-	default:
-		mode = LUT_BYPASS;
-		break;
-	}
-
-	return mode;
+		switch (state_mode) {
+		case 0:
+			mode = LUT_BYPASS;
+			break;
+		case 1:
+			mode = LUT_RAM_A;
+			break;
+		case 2:
+			mode = LUT_RAM_B;
+			break;
+		default:
+			mode = LUT_BYPASS;
+			break;
+		}
+		return mode;
 }
 
 static void mpc2_program_lutb(struct mpc *mpc, int mpcc_id,
@@ -400,9 +401,10 @@ static void mpc20_program_ogam_pwl(
 
 }
 
-static void apply_DEDCN20_305_wa(struct mpc *mpc, int mpcc_id,
-				 enum dc_lut_mode current_mode,
-				 enum dc_lut_mode next_mode)
+void apply_DEDCN20_305_wa(
+		struct mpc *mpc,
+		int mpcc_id, enum dc_lut_mode current_mode,
+		enum dc_lut_mode next_mode)
 {
 	struct dcn20_mpc *mpc20 = TO_DCN20_MPC(mpc);
 
@@ -524,7 +526,7 @@ static void mpc2_init_mpcc(struct mpcc *mpcc, int mpcc_inst)
 	mpcc->sm_cfg.enable = false;
 }
 
-static struct mpcc *mpc2_get_mpcc_for_dpp(struct mpc_tree *tree, int dpp_id)
+struct mpcc *mpc2_get_mpcc_for_dpp(struct mpc_tree *tree, int dpp_id)
 {
 	struct mpcc *tmp_mpcc = tree->opp_list;
 
@@ -542,7 +544,7 @@ static struct mpcc *mpc2_get_mpcc_for_dpp(struct mpc_tree *tree, int dpp_id)
 	return NULL;
 }
 
-static const struct mpc_funcs dcn20_mpc_funcs = {
+const struct mpc_funcs dcn20_mpc_funcs = {
 	.read_mpcc_state = mpc1_read_mpcc_state,
 	.insert_plane = mpc1_insert_plane,
 	.remove_mpcc = mpc1_remove_mpcc,
@@ -560,8 +562,6 @@ static const struct mpc_funcs dcn20_mpc_funcs = {
 	.set_ocsc_default = mpc2_set_ocsc_default,
 	.set_output_gamma = mpc2_set_output_gamma,
 	.power_on_mpc_mem_pwr = mpc20_power_on_ogam_lut,
-	.get_mpc_out_mux = mpc1_get_mpc_out_mux,
-	.set_bg_color = mpc1_set_bg_color,
 };
 
 void dcn20_mpc_construct(struct dcn20_mpc *mpc20,

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * ocfs2_fs.h
  *
  * On-disk structures for OCFS2.
@@ -527,7 +529,7 @@ struct ocfs2_extent_block
  * value -1 (0xFFFF) is OCFS2_INVALID_SLOT.  This marks a slot empty.
  */
 struct ocfs2_slot_map {
-/*00*/	DECLARE_FLEX_ARRAY(__le16, sm_slots);
+/*00*/	__le16 sm_slots[0];
 /*
  * Actual on-disk size is one block.  OCFS2_MAX_SLOTS is 255,
  * 255 * sizeof(__le16) == 512B, within the 512B block minimum blocksize.
@@ -548,7 +550,7 @@ struct ocfs2_extended_slot {
  * i_size.
  */
 struct ocfs2_slot_map_extended {
-/*00*/	DECLARE_FLEX_ARRAY(struct ocfs2_extended_slot, se_slots);
+/*00*/	struct ocfs2_extended_slot se_slots[0];
 /*
  * Actual size is i_size of the slot_map system file.  It should
  * match s_max_slots * sizeof(struct ocfs2_extended_slot)
@@ -727,7 +729,7 @@ struct ocfs2_dinode {
 		struct ocfs2_extent_list	i_list;
 		struct ocfs2_truncate_log	i_dealloc;
 		struct ocfs2_inline_data	i_data;
-		DECLARE_FLEX_ARRAY(__u8,	i_symlink);
+		__u8               		i_symlink[0];
 	} id2;
 /* Actual on-disk size is one block */
 };
@@ -892,7 +894,7 @@ struct ocfs2_group_desc
 /*30*/	struct ocfs2_block_check bg_check;	/* Error checking */
 	__le64   bg_reserved2;
 /*40*/	union {
-		DECLARE_FLEX_ARRAY(__u8, bg_bitmap);
+		__u8    bg_bitmap[0];
 		struct {
 			/*
 			 * Block groups may be discontiguous when

@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012-2016 by the PaX Team <pageexec@freemail.hu>
  * Copyright 2016 by Emese Revfy <re.emese@gmail.com>
+ * Licensed under the GPL v2
  *
  * Note: the choice of the license means that the compilation process is
  *       NOT 'eligible' as defined by gcc's library exception to the GPL v3,
@@ -82,7 +82,7 @@ __visible int plugin_is_GPL_compatible;
 static GTY(()) tree latent_entropy_decl;
 
 static struct plugin_info latent_entropy_plugin_info = {
-	.version	= PLUGIN_VERSION,
+	.version	= "201606141920vanilla",
 	.help		= "disable\tturn off latent entropy instrumentation\n",
 };
 
@@ -131,7 +131,11 @@ static tree handle_latent_entropy_attribute(tree *node, tree name,
 						bool *no_add_attrs)
 {
 	tree type;
+#if BUILDING_GCC_VERSION <= 4007
+	VEC(constructor_elt, gc) *vals;
+#else
 	vec<constructor_elt, va_gc> *vals;
+#endif
 
 	switch (TREE_CODE(*node)) {
 	default:
@@ -183,7 +187,11 @@ static tree handle_latent_entropy_attribute(tree *node, tree name,
 			if (fld)
 				break;
 
+#if BUILDING_GCC_VERSION <= 4007
+			vals = VEC_alloc(constructor_elt, gc, nelt);
+#else
 			vec_alloc(vals, nelt);
+#endif
 
 			for (fld = lst; fld; fld = TREE_CHAIN(fld)) {
 				tree random_const, fld_t = TREE_TYPE(fld);
@@ -223,7 +231,11 @@ static tree handle_latent_entropy_attribute(tree *node, tree name,
 			elt_size_int = TREE_INT_CST_LOW(elt_size);
 			nelt = array_size_int / elt_size_int;
 
+#if BUILDING_GCC_VERSION <= 4007
+			vals = VEC_alloc(constructor_elt, gc, nelt);
+#else
 			vec_alloc(vals, nelt);
+#endif
 
 			for (i = 0; i < nelt; i++) {
 				tree cst = size_int(i);
@@ -530,7 +542,7 @@ static unsigned int latent_entropy_execute(void)
 	while (bb != EXIT_BLOCK_PTR_FOR_FN(cfun)) {
 		perturb_local_entropy(bb, local_entropy);
 		bb = bb->next_bb;
-	}
+	};
 
 	/* 4. mix local entropy into the global entropy variable */
 	perturb_latent_entropy(local_entropy);

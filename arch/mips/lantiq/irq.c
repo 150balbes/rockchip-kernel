@@ -8,7 +8,6 @@
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/sched.h>
-#include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/of_platform.h>
 #include <linux/of_address.h>
@@ -300,7 +299,7 @@ static void ltq_hw_irq_handler(struct irq_desc *desc)
 	 */
 	irq = __fls(irq);
 	hwirq = irq + MIPS_CPU_IRQ_CASCADE + (INT_NUM_IM_OFFSET * module);
-	generic_handle_domain_irq(ltq_domain, hwirq);
+	generic_handle_irq(irq_linear_revmap(ltq_domain, hwirq));
 
 	/* if this is a EBU irq, we need to ack it or get a deadlock */
 	if (irq == LTQ_ICU_EBU_IRQ && !module && LTQ_EBU_PCC_ISTAT != 0)
@@ -408,7 +407,6 @@ int __init icu_of_init(struct device_node *node, struct device_node *parent)
 		if (!ltq_eiu_membase)
 			panic("Failed to remap eiu memory");
 	}
-	of_node_put(eiu_node);
 
 	return 0;
 }
@@ -424,9 +422,12 @@ unsigned int get_c0_compare_int(void)
 	return CP0_LEGACY_COMPARE_IRQ;
 }
 
-IRQCHIP_DECLARE(lantiq_icu, "lantiq,icu", icu_of_init);
+static const struct of_device_id of_irq_ids[] __initconst = {
+	{ .compatible = "lantiq,icu", .data = icu_of_init },
+	{},
+};
 
 void __init arch_init_irq(void)
 {
-	irqchip_init();
+	of_irq_init(of_irq_ids);
 }

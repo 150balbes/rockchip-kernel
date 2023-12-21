@@ -22,7 +22,7 @@ extern unsigned long __xchg64(unsigned long, volatile unsigned long *);
 
 /* optimizer better get rid of switch since size is a constant */
 static inline unsigned long
-__arch_xchg(unsigned long x, volatile void *ptr, int size)
+__xchg(unsigned long x, volatile void *ptr, int size)
 {
 	switch (size) {
 #ifdef CONFIG_64BIT
@@ -44,12 +44,12 @@ __arch_xchg(unsigned long x, volatile void *ptr, int size)
 **		if (((unsigned long)p & 0xf) == 0)
 **			return __ldcw(p);
 */
-#define arch_xchg(ptr, x)						\
+#define xchg(ptr, x)							\
 ({									\
 	__typeof__(*(ptr)) __ret;					\
 	__typeof__(*(ptr)) _x_ = (x);					\
 	__ret = (__typeof__(*(ptr)))					\
-		__arch_xchg((unsigned long)_x_, (ptr), sizeof(*(ptr)));	\
+		__xchg((unsigned long)_x_, (ptr), sizeof(*(ptr)));	\
 	__ret;								\
 })
 
@@ -78,7 +78,7 @@ __cmpxchg(volatile void *ptr, unsigned long old, unsigned long new_, int size)
 	return old;
 }
 
-#define arch_cmpxchg(ptr, o, n)						 \
+#define cmpxchg(ptr, o, n)						 \
 ({									 \
 	__typeof__(*(ptr)) _o_ = (o);					 \
 	__typeof__(*(ptr)) _n_ = (n);					 \
@@ -98,7 +98,7 @@ static inline unsigned long __cmpxchg_local(volatile void *ptr,
 #endif
 	case 4:	return __cmpxchg_u32(ptr, old, new_);
 	default:
-		return __generic_cmpxchg_local(ptr, old, new_, size);
+		return __cmpxchg_local_generic(ptr, old, new_, size);
 	}
 }
 
@@ -106,19 +106,19 @@ static inline unsigned long __cmpxchg_local(volatile void *ptr,
  * cmpxchg_local and cmpxchg64_local are atomic wrt current CPU. Always make
  * them available.
  */
-#define arch_cmpxchg_local(ptr, o, n)					\
+#define cmpxchg_local(ptr, o, n)					\
 	((__typeof__(*(ptr)))__cmpxchg_local((ptr), (unsigned long)(o),	\
 			(unsigned long)(n), sizeof(*(ptr))))
 #ifdef CONFIG_64BIT
-#define arch_cmpxchg64_local(ptr, o, n)					\
+#define cmpxchg64_local(ptr, o, n)					\
 ({									\
 	BUILD_BUG_ON(sizeof(*(ptr)) != 8);				\
 	cmpxchg_local((ptr), (o), (n));					\
 })
 #else
-#define arch_cmpxchg64_local(ptr, o, n) __generic_cmpxchg64_local((ptr), (o), (n))
+#define cmpxchg64_local(ptr, o, n) __cmpxchg64_local_generic((ptr), (o), (n))
 #endif
 
-#define arch_cmpxchg64(ptr, o, n) __cmpxchg_u64(ptr, o, n)
+#define cmpxchg64(ptr, o, n) __cmpxchg_u64(ptr, o, n)
 
 #endif /* _ASM_PARISC_CMPXCHG_H_ */

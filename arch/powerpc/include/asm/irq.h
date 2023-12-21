@@ -6,6 +6,7 @@
 /*
  */
 
+#include <linux/irqdomain.h>
 #include <linux/threads.h>
 #include <linux/list.h>
 #include <linux/radix-tree.h>
@@ -16,11 +17,14 @@
 
 extern atomic_t ppc_n_lost_interrupts;
 
+/* This number is used when no interrupt has been assigned */
+#define NO_IRQ			(0)
+
 /* Total number of virq in the platform */
 #define NR_IRQS		CONFIG_NR_IRQS
 
-/* Number of irqs reserved for a legacy isa controller */
-#define NR_IRQS_LEGACY		16
+/* Same thing, used by the generic IRQ code */
+#define NR_IRQS_LEGACY		NUM_ISA_INTERRUPTS
 
 extern irq_hw_number_t virq_to_hw(unsigned int virq);
 
@@ -33,7 +37,9 @@ extern int distribute_irqs;
 
 struct pt_regs;
 
-#ifdef CONFIG_BOOKE_OR_40x
+#define __ARCH_HAS_DO_SOFTIRQ
+
+#if defined(CONFIG_BOOKE) || defined(CONFIG_40x)
 /*
  * Per-cpu stacks for handling critical, debug and machine check
  * level interrupts.
@@ -49,15 +55,13 @@ extern void *mcheckirq_ctx[NR_CPUS];
 extern void *hardirq_ctx[NR_CPUS];
 extern void *softirq_ctx[NR_CPUS];
 
-void __do_IRQ(struct pt_regs *regs);
+void call_do_softirq(void *sp);
+void call_do_irq(struct pt_regs *regs, void *sp);
+extern void do_IRQ(struct pt_regs *regs);
+extern void __init init_IRQ(void);
+extern void __do_irq(struct pt_regs *regs);
 
 int irq_choose_cpu(const struct cpumask *mask);
-
-#if defined(CONFIG_PPC_BOOK3S_64) && defined(CONFIG_NMI_IPI)
-extern void arch_trigger_cpumask_backtrace(const cpumask_t *mask,
-					   bool exclude_self);
-#define arch_trigger_cpumask_backtrace arch_trigger_cpumask_backtrace
-#endif
 
 #endif /* _ASM_IRQ_H */
 #endif /* __KERNEL__ */

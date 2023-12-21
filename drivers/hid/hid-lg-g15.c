@@ -7,7 +7,6 @@
 
 #include <linux/device.h>
 #include <linux/hid.h>
-#include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/random.h>
 #include <linux/sched.h>
@@ -29,7 +28,6 @@ enum lg_g15_model {
 	LG_G15_V2,
 	LG_G510,
 	LG_G510_USB_AUDIO,
-	LG_Z10,
 };
 
 enum lg_g15_led_type {
@@ -459,13 +457,6 @@ static int lg_g15_get_initial_led_brightness(struct lg_g15_data *g15)
 			return ret;
 
 		return lg_g510_update_mkey_led_brightness(g15);
-	case LG_Z10:
-		/*
-		 * Getting the LCD backlight brightness is not supported.
-		 * Reading Feature(2) fails with -EPIPE and this crashes
-		 * the LCD and touch keys part of the speakers.
-		 */
-		return 0;
 	}
 	return -EINVAL; /* Never reached */
 }
@@ -473,20 +464,7 @@ static int lg_g15_get_initial_led_brightness(struct lg_g15_data *g15)
 /******** Input functions ********/
 
 /* On the G15 Mark I Logitech has been quite creative with which bit is what */
-static void lg_g15_handle_lcd_menu_keys(struct lg_g15_data *g15, u8 *data)
-{
-	int i, val;
-
-	/* Most left (round/display) button below the LCD */
-	input_report_key(g15->input, KEY_KBD_LCD_MENU1, data[8] & 0x80);
-	/* 4 other buttons below the LCD */
-	for (i = 0; i < 4; i++) {
-		val = data[i + 2] & 0x80;
-		input_report_key(g15->input, KEY_KBD_LCD_MENU2 + i, val);
-	}
-}
-
-static int lg_g15_event(struct lg_g15_data *g15, u8 *data)
+static int lg_g15_event(struct lg_g15_data *g15, u8 *data, int size)
 {
 	int i, val;
 
@@ -516,7 +494,13 @@ static int lg_g15_event(struct lg_g15_data *g15, u8 *data)
 	/* MR */
 	input_report_key(g15->input, KEY_MACRO_RECORD_START, data[7] & 0x40);
 
-	lg_g15_handle_lcd_menu_keys(g15, data);
+	/* Most left (round) button below the LCD */
+	input_report_key(g15->input, KEY_KBD_LCD_MENU1, data[8] & 0x80);
+	/* 4 other buttons below the LCD */
+	for (i = 0; i < 4; i++) {
+		val = data[i + 2] & 0x80;
+		input_report_key(g15->input, KEY_KBD_LCD_MENU2 + i, val);
+	}
 
 	/* Backlight cycle button pressed? */
 	if (data[1] & 0x80)
@@ -526,7 +510,7 @@ static int lg_g15_event(struct lg_g15_data *g15, u8 *data)
 	return 0;
 }
 
-static int lg_g15_v2_event(struct lg_g15_data *g15, u8 *data)
+static int lg_g15_v2_event(struct lg_g15_data *g15, u8 *data, int size)
 {
 	int i, val;
 
@@ -558,7 +542,7 @@ static int lg_g15_v2_event(struct lg_g15_data *g15, u8 *data)
 	return 0;
 }
 
-static int lg_g510_event(struct lg_g15_data *g15, u8 *data)
+static int lg_g510_event(struct lg_g15_data *g15, u8 *data, int size)
 {
 	bool game_mode_enabled;
 	int i, val;
@@ -602,7 +586,7 @@ static int lg_g510_event(struct lg_g15_data *g15, u8 *data)
 	return 0;
 }
 
-static int lg_g510_leds_event(struct lg_g15_data *g15, u8 *data)
+static int lg_g510_leds_event(struct lg_g15_data *g15, u8 *data, int size)
 {
 	bool backlight_disabled;
 
@@ -629,24 +613,18 @@ static int lg_g15_raw_event(struct hid_device *hdev, struct hid_report *report,
 	switch (g15->model) {
 	case LG_G15:
 		if (data[0] == 0x02 && size == 9)
-			return lg_g15_event(g15, data);
+			return lg_g15_event(g15, data, size);
 		break;
 	case LG_G15_V2:
 		if (data[0] == 0x02 && size == 5)
-			return lg_g15_v2_event(g15, data);
-		break;
-	case LG_Z10:
-		if (data[0] == 0x02 && size == 9) {
-			lg_g15_handle_lcd_menu_keys(g15, data);
-			input_sync(g15->input);
-		}
+			return lg_g15_v2_event(g15, data, size);
 		break;
 	case LG_G510:
 	case LG_G510_USB_AUDIO:
 		if (data[0] == 0x03 && size == 5)
-			return lg_g510_event(g15, data);
+			return lg_g510_event(g15, data, size);
 		if (data[0] == 0x04 && size == 2)
-			return lg_g510_leds_event(g15, data);
+			return lg_g510_leds_event(g15, data, size);
 		break;
 	}
 
@@ -667,18 +645,25 @@ static void lg_g15_input_close(struct input_dev *dev)
 	hid_hw_close(hdev);
 }
 
-static int lg_g15_register_led(struct lg_g15_data *g15, int i, const char *name)
+static int lg_g15_register_led(struct lg_g15_data *g15, int i)
 {
+	const char * const led_names[] = {
+		"g15::kbd_backlight",
+		"g15::lcd_backlight",
+		"g15::macro_preset1",
+		"g15::macro_preset2",
+		"g15::macro_preset3",
+		"g15::macro_record",
+	};
+
 	g15->leds[i].led = i;
-	g15->leds[i].cdev.name = name;
+	g15->leds[i].cdev.name = led_names[i];
 
 	switch (g15->model) {
 	case LG_G15:
 	case LG_G15_V2:
-		g15->leds[i].cdev.brightness_get = lg_g15_led_get;
-		fallthrough;
-	case LG_Z10:
 		g15->leds[i].cdev.brightness_set_blocking = lg_g15_led_set;
+		g15->leds[i].cdev.brightness_get = lg_g15_led_get;
 		if (i < LG_G15_BRIGHTNESS_MAX) {
 			g15->leds[i].cdev.flags = LED_BRIGHT_HW_CHANGED;
 			g15->leds[i].cdev.max_brightness = 2;
@@ -717,38 +702,8 @@ static int lg_g15_register_led(struct lg_g15_data *g15, int i, const char *name)
 	return devm_led_classdev_register(&g15->hdev->dev, &g15->leds[i].cdev);
 }
 
-/* Common input device init code shared between keyboards and Z-10 speaker handling */
-static void lg_g15_init_input_dev(struct hid_device *hdev, struct input_dev *input,
-				  const char *name)
-{
-	int i;
-
-	input->name = name;
-	input->phys = hdev->phys;
-	input->uniq = hdev->uniq;
-	input->id.bustype = hdev->bus;
-	input->id.vendor  = hdev->vendor;
-	input->id.product = hdev->product;
-	input->id.version = hdev->version;
-	input->dev.parent = &hdev->dev;
-	input->open = lg_g15_input_open;
-	input->close = lg_g15_input_close;
-
-	/* Keys below the LCD, intended for controlling a menu on the LCD */
-	for (i = 0; i < 5; i++)
-		input_set_capability(input, EV_KEY, KEY_KBD_LCD_MENU1 + i);
-}
-
 static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
-	static const char * const led_names[] = {
-		"g15::kbd_backlight",
-		"g15::lcd_backlight",
-		"g15::macro_preset1",
-		"g15::macro_preset2",
-		"g15::macro_preset3",
-		"g15::macro_record",
-	};
 	u8 gkeys_settings_output_report = 0;
 	u8 gkeys_settings_feature_report = 0;
 	struct hid_report_enum *rep_enum;
@@ -767,7 +722,7 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	/*
 	 * Some models have multiple interfaces, we want the interface with
-	 * the f000.0000 application input report.
+	 * with the f000.0000 application input report.
 	 */
 	rep_enum = &hdev->report_enum[HID_INPUT_REPORT];
 	list_for_each_entry(rep, &rep_enum->report_list, list) {
@@ -789,8 +744,6 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	g15->hdev = hdev;
 	g15->model = id->driver_data;
-	g15->input = input;
-	input_set_drvdata(input, hdev);
 	hid_set_drvdata(hdev, (void *)g15);
 
 	switch (g15->model) {
@@ -818,9 +771,6 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		connect_mask = HID_CONNECT_HIDINPUT | HID_CONNECT_HIDRAW;
 		gkeys_settings_feature_report = 0x01;
 		gkeys = 18;
-		break;
-	case LG_Z10:
-		connect_mask = HID_CONNECT_HIDRAW;
 		break;
 	}
 
@@ -864,21 +814,17 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	if (ret)
 		goto error_hw_stop;
 
-	if (g15->model == LG_Z10) {
-		lg_g15_init_input_dev(hdev, g15->input, "Logitech Z-10 LCD Menu Keys");
-		ret = input_register_device(g15->input);
-		if (ret)
-			goto error_hw_stop;
-
-		ret = lg_g15_register_led(g15, 1, "z-10::lcd_backlight");
-		if (ret)
-			goto error_hw_stop;
-
-		return 0; /* All done */
-	}
-
 	/* Setup and register input device */
-	lg_g15_init_input_dev(hdev, input, "Logitech Gaming Keyboard Gaming Keys");
+	input->name = "Logitech Gaming Keyboard Gaming Keys";
+	input->phys = hdev->phys;
+	input->uniq = hdev->uniq;
+	input->id.bustype = hdev->bus;
+	input->id.vendor  = hdev->vendor;
+	input->id.product = hdev->product;
+	input->id.version = hdev->version;
+	input->dev.parent = &hdev->dev;
+	input->open = lg_g15_input_open;
+	input->close = lg_g15_input_close;
 
 	/* G-keys */
 	for (i = 0; i < gkeys; i++)
@@ -888,6 +834,10 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	for (i = 0; i < 3; i++)
 		input_set_capability(input, EV_KEY, KEY_MACRO_PRESET1 + i);
 	input_set_capability(input, EV_KEY, KEY_MACRO_RECORD_START);
+
+	/* Keys below the LCD, intended for controlling a menu on the LCD */
+	for (i = 0; i < 5; i++)
+		input_set_capability(input, EV_KEY, KEY_KBD_LCD_MENU1 + i);
 
 	/*
 	 * On the G510 only report headphone and mic mute keys when *not* using
@@ -900,13 +850,16 @@ static int lg_g15_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		input_set_capability(input, EV_KEY, KEY_F20);
 	}
 
+	g15->input = input;
+	input_set_drvdata(input, hdev);
+
 	ret = input_register_device(input);
 	if (ret)
 		goto error_hw_stop;
 
 	/* Register LED devices */
 	for (i = 0; i < LG_G15_LED_MAX; i++) {
-		ret = lg_g15_register_led(g15, i, led_names[i]);
+		ret = lg_g15_register_led(g15, i);
 		if (ret)
 			goto error_hw_stop;
 	}
@@ -937,10 +890,6 @@ static const struct hid_device_id lg_g15_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_G510_USB_AUDIO),
 		.driver_data = LG_G510_USB_AUDIO },
-	/* Z-10 speakers */
-	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
-			 USB_DEVICE_ID_LOGITECH_Z_10_SPK),
-		.driver_data = LG_Z10 },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, lg_g15_devices);
@@ -953,5 +902,4 @@ static struct hid_driver lg_g15_driver = {
 };
 module_hid_driver(lg_g15_driver);
 
-MODULE_AUTHOR("Hans de Goede <hdegoede@redhat.com>");
 MODULE_LICENSE("GPL");

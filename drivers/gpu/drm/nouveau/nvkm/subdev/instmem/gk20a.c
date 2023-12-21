@@ -475,8 +475,7 @@ gk20a_instobj_ctor_iommu(struct gk20a_instmem *imem, u32 npages, u32 align,
 		u32 offset = (r->offset + i) << imem->iommu_pgshift;
 
 		ret = iommu_map(imem->domain, offset, node->dma_addrs[i],
-				PAGE_SIZE, IOMMU_READ | IOMMU_WRITE,
-				GFP_KERNEL);
+				PAGE_SIZE, IOMMU_READ | IOMMU_WRITE);
 		if (ret < 0) {
 			nvkm_error(subdev, "IOMMU mapping failure: %d\n", ret);
 
@@ -569,7 +568,7 @@ gk20a_instmem = {
 };
 
 int
-gk20a_instmem_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+gk20a_instmem_new(struct nvkm_device *device, int index,
 		  struct nvkm_instmem **pimem)
 {
 	struct nvkm_device_tegra *tdev = device->func->tegra(device);
@@ -577,7 +576,7 @@ gk20a_instmem_new(struct nvkm_device *device, enum nvkm_subdev_type type, int in
 
 	if (!(imem = kzalloc(sizeof(*imem), GFP_KERNEL)))
 		return -ENOMEM;
-	nvkm_instmem_ctor(&gk20a_instmem, device, type, inst, &imem->base);
+	nvkm_instmem_ctor(&gk20a_instmem, device, index, &imem->base);
 	mutex_init(&imem->lock);
 	*pimem = &imem->base;
 

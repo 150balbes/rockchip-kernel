@@ -28,6 +28,11 @@
 
 #include "kselftest.h"
 
+#define VCPU_ID		0
+
+/* The virtual machine object. */
+static struct kvm_vm *vm;
+
 static void l2_guest_code(void)
 {
 	/* Exit to L1 */
@@ -72,42 +77,55 @@ static void l1_guest_code(struct vmx_pages *vmx_pages, unsigned long high_gpa)
 int main(int argc, char *argv[])
 {
 	unsigned long apic_access_addr = ~0ul;
+	unsigned int paddr_width;
+	unsigned int vaddr_width;
 	vm_vaddr_t vmx_pages_gva;
 	unsigned long high_gpa;
 	struct vmx_pages *vmx;
 	bool done = false;
 
-	struct kvm_vcpu *vcpu;
-	struct kvm_vm *vm;
+	nested_vmx_check_supported();
 
-	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX));
+	vm = vm_create_default(VCPU_ID, 0, (void *) l1_guest_code);
+	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
 
-	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
-
-	high_gpa = (vm->max_gfn - 1) << vm->page_shift;
+	kvm_get_cpu_address_width(&paddr_width, &vaddr_width);
+	high_gpa = (1ul << paddr_width) - getpagesize();
+	if ((unsigned long)DEFAULT_GUEST_PHY_PAGES * getpagesize() > high_gpa) {
+		print_skip("No unbacked physical page available");
+		exit(KSFT_SKIP);
+	}
 
 	vmx = vcpu_alloc_vmx(vm, &vmx_pages_gva);
-	prepare_virtualize_apic_accesses(vmx, vm);
-	vcpu_args_set(vcpu, 2, vmx_pages_gva, high_gpa);
+	prepare_virtualize_apic_accesses(vmx, vm, 0);
+	vcpu_args_set(vm, VCPU_ID, 2, vmx_pages_gva, high_gpa);
 
 	while (!done) {
-		volatile struct kvm_run *run = vcpu->run;
+		volatile struct kvm_run *run = vcpu_state(vm, VCPU_ID);
 		struct ucall uc;
 
-		vcpu_run(vcpu);
+		vcpu_run(vm, VCPU_ID);
 		if (apic_access_addr == high_gpa) {
-			TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_INTERNAL_ERROR);
+			TEST_ASSERT(run->exit_reason ==
+				    KVM_EXIT_INTERNAL_ERROR,
+				    "Got exit reason other than KVM_EXIT_INTERNAL_ERROR: %u (%s)\n",
+				    run->exit_reason,
+				    exit_reason_str(run->exit_reason));
 			TEST_ASSERT(run->internal.suberror ==
 				    KVM_INTERNAL_ERROR_EMULATION,
 				    "Got internal suberror other than KVM_INTERNAL_ERROR_EMULATION: %u\n",
 				    run->internal.suberror);
 			break;
 		}
-		TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
+		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
+			    "Got exit_reason other than KVM_EXIT_IO: %u (%s)\n",
+			    run->exit_reason,
+			    exit_reason_str(run->exit_reason));
 
-		switch (get_ucall(vcpu, &uc)) {
+		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			TEST_FAIL("%s at %s:%ld", (const char *)uc.args[0],
+				  __FILE__, uc.args[1]);
 			/* NOT REACHED */
 		case UCALL_SYNC:
 			apic_access_addr = uc.args[1];

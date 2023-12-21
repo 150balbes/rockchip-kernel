@@ -23,7 +23,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-#include "reg.h"
 #include "utils.h"
 
 #define THREADS		100	/* Max threads */
@@ -42,48 +41,82 @@
 /* Prilvilege state DSCR access */
 inline unsigned long get_dscr(void)
 {
-	return mfspr(SPRN_DSCR_PRIV);
+	unsigned long ret;
+
+	asm volatile("mfspr %0,%1" : "=r" (ret) : "i" (SPRN_DSCR_PRIV));
+
+	return ret;
 }
 
 inline void set_dscr(unsigned long val)
 {
-	mtspr(SPRN_DSCR_PRIV, val);
+	asm volatile("mtspr %1,%0" : : "r" (val), "i" (SPRN_DSCR_PRIV));
 }
 
 /* Problem state DSCR access */
 inline unsigned long get_dscr_usr(void)
 {
-	return mfspr(SPRN_DSCR);
+	unsigned long ret;
+
+	asm volatile("mfspr %0,%1" : "=r" (ret) : "i" (SPRN_DSCR));
+
+	return ret;
 }
 
 inline void set_dscr_usr(unsigned long val)
 {
-	mtspr(SPRN_DSCR, val);
+	asm volatile("mtspr %1,%0" : : "r" (val), "i" (SPRN_DSCR));
 }
 
 /* Default DSCR access */
 unsigned long get_default_dscr(void)
 {
-	int err;
+	int fd = -1, ret;
+	char buf[16];
 	unsigned long val;
 
-	err = read_ulong(DSCR_DEFAULT, &val, 16);
-	if (err) {
+	if (fd == -1) {
+		fd = open(DSCR_DEFAULT, O_RDONLY);
+		if (fd == -1) {
+			perror("open() failed");
+			exit(1);
+		}
+	}
+	memset(buf, 0, sizeof(buf));
+	lseek(fd, 0, SEEK_SET);
+	ret = read(fd, buf, sizeof(buf));
+	if (ret == -1) {
 		perror("read() failed");
 		exit(1);
 	}
+	sscanf(buf, "%lx", &val);
+	close(fd);
 	return val;
 }
 
 void set_default_dscr(unsigned long val)
 {
-	int err;
+	int fd = -1, ret;
+	char buf[16];
 
-	err = write_ulong(DSCR_DEFAULT, val, 16);
-	if (err) {
+	if (fd == -1) {
+		fd = open(DSCR_DEFAULT, O_RDWR);
+		if (fd == -1) {
+			perror("open() failed");
+			exit(1);
+		}
+	}
+	sprintf(buf, "%lx\n", val);
+	ret = write(fd, buf, strlen(buf));
+	if (ret == -1) {
 		perror("write() failed");
 		exit(1);
 	}
+	close(fd);
 }
 
+double uniform_deviate(int seed)
+{
+	return seed * (1.0 / (RAND_MAX + 1.0));
+}
 #endif	/* _SELFTESTS_POWERPC_DSCR_DSCR_H */

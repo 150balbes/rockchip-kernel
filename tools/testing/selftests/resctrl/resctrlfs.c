@@ -10,6 +10,8 @@
  */
 #include "resctrl.h"
 
+int tests_run;
+
 static int find_resctrl_mount(char *buffer)
 {
 	FILE *mounts;
@@ -66,25 +68,28 @@ int remount_resctrlfs(bool mum_resctrlfs)
 	if (ret)
 		strcpy(mountpoint, RESCTRL_PATH);
 
-	if (!ret && mum_resctrlfs && umount(mountpoint))
-		ksft_print_msg("Fail: unmounting \"%s\"\n", mountpoint);
+	if (!ret && mum_resctrlfs && umount(mountpoint)) {
+		printf("not ok unmounting \"%s\"\n", mountpoint);
+		perror("# umount");
+		tests_run++;
+	}
 
 	if (!ret && !mum_resctrlfs)
 		return 0;
 
-	ksft_print_msg("Mounting resctrl to \"%s\"\n", RESCTRL_PATH);
 	ret = mount("resctrl", RESCTRL_PATH, "resctrl", 0, NULL);
+	printf("%sok mounting resctrl to \"%s\"\n", ret ? "not " : "",
+	       RESCTRL_PATH);
 	if (ret)
 		perror("# mount");
+
+	tests_run++;
 
 	return ret;
 }
 
 int umount_resctrlfs(void)
 {
-	if (find_resctrl_mount(NULL))
-		return 0;
-
 	if (umount(RESCTRL_PATH)) {
 		perror("# Unable to umount resctrl");
 
@@ -106,7 +111,7 @@ int get_resource_id(int cpu_no, int *resource_id)
 	char phys_pkg_path[1024];
 	FILE *fp;
 
-	if (get_vendor() == ARCH_AMD)
+	if (is_amd)
 		sprintf(phys_pkg_path, "%s%d/cache/index3/id",
 			PHYS_ID_PATH, cpu_no);
 	else
@@ -210,7 +215,7 @@ int get_cbm_mask(char *cache_type, char *cbm_mask)
 	if (!cbm_mask)
 		return -1;
 
-	sprintf(cbm_mask_path, "%s/%s/cbm_mask", INFO_PATH, cache_type);
+	sprintf(cbm_mask_path, "%s/%s/cbm_mask", CBM_MASK_PATH, cache_type);
 
 	fp = fopen(cbm_mask_path, "r");
 	if (!fp) {
@@ -263,7 +268,7 @@ int get_core_sibling(int cpu_no)
 	while (token) {
 		sibling_cpu_no = atoi(token);
 		/* Skipping core 0 as we don't want to run test on core 0 */
-		if (sibling_cpu_no != 0 && sibling_cpu_no != cpu_no)
+		if (sibling_cpu_no != 0)
 			break;
 		token = strtok(NULL, "-,");
 	}
@@ -329,7 +334,7 @@ void run_benchmark(int signum, siginfo_t *info, void *ucontext)
 		operation = atoi(benchmark_cmd[4]);
 		sprintf(resctrl_val, "%s", benchmark_cmd[5]);
 
-		if (strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR)))
+		if (strncmp(resctrl_val, CQM_STR, sizeof(CQM_STR)))
 			buffer_span = span * MB;
 		else
 			buffer_span = span;
@@ -453,8 +458,8 @@ int write_bm_pid_to_resctrl(pid_t bm_pid, char *ctrlgrp, char *mongrp,
 	if (ret)
 		goto out;
 
-	/* Create mon grp and write pid into it for "mbm" and "cmt" test */
-	if (!strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR)) ||
+	/* Create mon grp and write pid into it for "mbm" and "cqm" test */
+	if (!strncmp(resctrl_val, CQM_STR, sizeof(CQM_STR)) ||
 	    !strncmp(resctrl_val, MBM_STR, sizeof(MBM_STR))) {
 		if (strlen(mongrp)) {
 			sprintf(monitorgroup_p, "%s/mon_groups", controlgroup);
@@ -472,9 +477,12 @@ int write_bm_pid_to_resctrl(pid_t bm_pid, char *ctrlgrp, char *mongrp,
 	}
 
 out:
-	ksft_print_msg("Writing benchmark parameters to resctrl FS\n");
+	printf("%sok writing benchmark parameters to resctrl FS\n",
+	       ret ? "not " : "");
 	if (ret)
 		perror("# writing to resctrlfs");
+
+	tests_run++;
 
 	return ret;
 }
@@ -498,13 +506,12 @@ int write_schemata(char *ctrlgrp, char *schemata, int cpu_no, char *resctrl_val)
 	FILE *fp;
 
 	if (strncmp(resctrl_val, MBA_STR, sizeof(MBA_STR)) &&
-	    strncmp(resctrl_val, MBM_STR, sizeof(MBM_STR)) &&
 	    strncmp(resctrl_val, CAT_STR, sizeof(CAT_STR)) &&
-	    strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR)))
+	    strncmp(resctrl_val, CQM_STR, sizeof(CQM_STR)))
 		return -ENOENT;
 
 	if (!schemata) {
-		ksft_print_msg("Skipping empty schemata update\n");
+		printf("# Skipping empty schemata update\n");
 
 		return -1;
 	}
@@ -522,10 +529,9 @@ int write_schemata(char *ctrlgrp, char *schemata, int cpu_no, char *resctrl_val)
 		sprintf(controlgroup, "%s/schemata", RESCTRL_PATH);
 
 	if (!strncmp(resctrl_val, CAT_STR, sizeof(CAT_STR)) ||
-	    !strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR)))
+	    !strncmp(resctrl_val, CQM_STR, sizeof(CQM_STR)))
 		sprintf(schema, "%s%d%c%s", "L3:", resource_id, '=', schemata);
-	if (!strncmp(resctrl_val, MBA_STR, sizeof(MBA_STR)) ||
-	    !strncmp(resctrl_val, MBM_STR, sizeof(MBM_STR)))
+	if (!strncmp(resctrl_val, MBA_STR, sizeof(MBA_STR)))
 		sprintf(schema, "%s%d%c%s", "MB:", resource_id, '=', schemata);
 
 	fp = fopen(controlgroup, "w");
@@ -546,9 +552,10 @@ int write_schemata(char *ctrlgrp, char *schemata, int cpu_no, char *resctrl_val)
 	fclose(fp);
 
 out:
-	ksft_print_msg("Write schema \"%s\" to resctrl FS%s%s\n",
-		       schema, ret ? " # " : "",
-		       ret ? reason : "");
+	printf("%sok Write schema \"%s\" to resctrl FS%s%s\n",
+	       ret ? "not " : "", schema, ret ? " # " : "",
+	       ret ? reason : "");
+	tests_run++;
 
 	return ret;
 }
@@ -572,20 +579,18 @@ bool check_resctrlfs_support(void)
 
 	fclose(inf);
 
-	ksft_print_msg("%s Check kernel supports resctrl filesystem\n",
-		       ret ? "Pass:" : "Fail:");
-
-	if (!ret)
-		return ret;
+	printf("%sok kernel supports resctrl filesystem\n", ret ? "" : "not ");
+	tests_run++;
 
 	dp = opendir(RESCTRL_PATH);
-	ksft_print_msg("%s Check resctrl mountpoint \"%s\" exists\n",
-		       dp ? "Pass:" : "Fail:", RESCTRL_PATH);
+	printf("%sok resctrl mountpoint \"%s\" exists\n",
+	       dp ? "" : "not ", RESCTRL_PATH);
 	if (dp)
 		closedir(dp);
+	tests_run++;
 
-	ksft_print_msg("resctrl filesystem %s mounted\n",
-		       find_resctrl_mount(NULL) ? "not" : "is");
+	printf("# resctrl filesystem %s mounted\n",
+	       find_resctrl_mount(NULL) ? "not" : "is");
 
 	return ret;
 }
@@ -611,56 +616,26 @@ char *fgrep(FILE *inf, const char *str)
  * validate_resctrl_feature_request - Check if requested feature is valid.
  * @resctrl_val:	Requested feature
  *
- * Return: True if the feature is supported, else false
+ * Return: 0 on success, non-zero on failure
  */
-bool validate_resctrl_feature_request(const char *resctrl_val)
+bool validate_resctrl_feature_request(char *resctrl_val)
 {
-	struct stat statbuf;
+	FILE *inf = fopen("/proc/cpuinfo", "r");
 	bool found = false;
 	char *res;
-	FILE *inf;
 
-	if (!resctrl_val)
+	if (!inf)
 		return false;
 
-	if (remount_resctrlfs(false))
-		return false;
+	res = fgrep(inf, "flags");
 
-	if (!strncmp(resctrl_val, CAT_STR, sizeof(CAT_STR))) {
-		if (!stat(L3_PATH, &statbuf))
-			return true;
-	} else if (!strncmp(resctrl_val, MBA_STR, sizeof(MBA_STR))) {
-		if (!stat(MB_PATH, &statbuf))
-			return true;
-	} else if (!strncmp(resctrl_val, MBM_STR, sizeof(MBM_STR)) ||
-		   !strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR))) {
-		if (!stat(L3_MON_PATH, &statbuf)) {
-			inf = fopen(L3_MON_FEATURES_PATH, "r");
-			if (!inf)
-				return false;
+	if (res) {
+		char *s = strchr(res, ':');
 
-			if (!strncmp(resctrl_val, CMT_STR, sizeof(CMT_STR))) {
-				res = fgrep(inf, "llc_occupancy");
-				if (res) {
-					found = true;
-					free(res);
-				}
-			}
-
-			if (!strncmp(resctrl_val, MBM_STR, sizeof(MBM_STR))) {
-				res = fgrep(inf, "mbm_total_bytes");
-				if (res) {
-					free(res);
-					res = fgrep(inf, "mbm_local_bytes");
-					if (res) {
-						found = true;
-						free(res);
-					}
-				}
-			}
-			fclose(inf);
-		}
+		found = s && !strstr(s, resctrl_val);
+		free(res);
 	}
+	fclose(inf);
 
 	return found;
 }
@@ -678,7 +653,6 @@ int filter_dmesg(void)
 		perror("pipe");
 		return ret;
 	}
-	fflush(stdout);
 	pid = fork();
 	if (pid == 0) {
 		close(pipefds[0]);
@@ -698,9 +672,9 @@ int filter_dmesg(void)
 
 	while (fgets(line, 1024, fp)) {
 		if (strstr(line, "intel_rdt:"))
-			ksft_print_msg("dmesg: %s", line);
+			printf("# dmesg: %s", line);
 		if (strstr(line, "resctrl:"))
-			ksft_print_msg("dmesg: %s", line);
+			printf("# dmesg: %s", line);
 	}
 	fclose(fp);
 	waitpid(pid, NULL, 0);

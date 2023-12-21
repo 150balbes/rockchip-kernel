@@ -14,7 +14,7 @@
 #include <media/dvb_frontend.h>
 
 /**
- * tda826x_attach - Attach a tda826x tuner to the supplied frontend structure.
+ * Attach a tda826x tuner to the supplied frontend structure.
  *
  * @fe: Frontend to attach to.
  * @addr: i2c address of the tuner.

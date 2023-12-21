@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __DRBD_INTERVAL_H
 #define __DRBD_INTERVAL_H
 

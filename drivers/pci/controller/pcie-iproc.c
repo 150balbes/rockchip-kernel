@@ -6,7 +6,6 @@
 
 #include <linux/kernel.h>
 #include <linux/pci.h>
-#include <linux/pci-ecam.h>
 #include <linux/msi.h>
 #include <linux/clk.h>
 #include <linux/module.h>
@@ -18,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/of_address.h>
 #include <linux/of_pci.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/phy/phy.h>
 
@@ -39,8 +39,16 @@
 
 #define CFG_IND_ADDR_MASK		0x00001ffc
 
+#define CFG_ADDR_BUS_NUM_SHIFT		20
+#define CFG_ADDR_BUS_NUM_MASK		0x0ff00000
+#define CFG_ADDR_DEV_NUM_SHIFT		15
+#define CFG_ADDR_DEV_NUM_MASK		0x000f8000
+#define CFG_ADDR_FUNC_NUM_SHIFT		12
+#define CFG_ADDR_FUNC_NUM_MASK		0x00007000
+#define CFG_ADDR_REG_NUM_SHIFT		2
 #define CFG_ADDR_REG_NUM_MASK		0x00000ffc
-#define CFG_ADDR_CFG_TYPE_1		1
+#define CFG_ADDR_CFG_TYPE_SHIFT		0
+#define CFG_ADDR_CFG_TYPE_MASK		0x00000003
 
 #define SYS_RC_INTX_MASK		0xf
 
@@ -88,8 +96,8 @@
 #define IPROC_PCIE_REG_INVALID		0xffff
 
 /**
- * struct iproc_pcie_ob_map - iProc PCIe outbound mapping controller-specific
- * parameters
+ * iProc PCIe outbound mapping controller specific parameters
+ *
  * @window_sizes: list of supported outbound mapping window sizes in MB
  * @nr_sizes: number of supported outbound mapping window sizes
  */
@@ -135,20 +143,22 @@ static const struct iproc_pcie_ob_map paxb_v2_ob_map[] = {
 };
 
 /**
- * enum iproc_pcie_ib_map_type - iProc PCIe inbound mapping type
- * @IPROC_PCIE_IB_MAP_MEM: DDR memory
- * @IPROC_PCIE_IB_MAP_IO: device I/O memory
- * @IPROC_PCIE_IB_MAP_INVALID: invalid or unused
+ * iProc PCIe inbound mapping type
  */
 enum iproc_pcie_ib_map_type {
+	/* for DDR memory */
 	IPROC_PCIE_IB_MAP_MEM = 0,
+
+	/* for device I/O memory */
 	IPROC_PCIE_IB_MAP_IO,
+
+	/* invalid or unused */
 	IPROC_PCIE_IB_MAP_INVALID
 };
 
 /**
- * struct iproc_pcie_ib_map - iProc PCIe inbound mapping controller-specific
- * parameters
+ * iProc PCIe inbound mapping controller specific parameters
+ *
  * @type: inbound mapping region type
  * @size_unit: inbound mapping region size unit, could be SZ_1K, SZ_1M, or
  * SZ_1G
@@ -248,7 +258,7 @@ enum iproc_pcie_reg {
 
 	/*
 	 * To hold the address of the register where the MSI writes are
-	 * programmed.  When ARM GICv3 ITS is used, this should be programmed
+	 * programed.  When ARM GICv3 ITS is used, this should be programmed
 	 * with the address of the GITS_TRANSLATER register.
 	 */
 	IPROC_PCIE_MSI_ADDR_LO,
@@ -434,7 +444,7 @@ static inline void iproc_pcie_write_reg(struct iproc_pcie *pcie,
 	writel(val, pcie->base + offset);
 }
 
-/*
+/**
  * APB error forwarding can be disabled during access of configuration
  * registers of the endpoint device, to prevent unsupported requests
  * (typically seen during enumeration with multi-function devices) from
@@ -458,15 +468,19 @@ static inline void iproc_pcie_apb_err_disable(struct pci_bus *bus,
 
 static void __iomem *iproc_pcie_map_ep_cfg_reg(struct iproc_pcie *pcie,
 					       unsigned int busno,
-					       unsigned int devfn,
+					       unsigned int slot,
+					       unsigned int fn,
 					       int where)
 {
 	u16 offset;
 	u32 val;
 
 	/* EP device access */
-	val = ALIGN_DOWN(PCIE_ECAM_OFFSET(busno, devfn, where), 4) |
-		CFG_ADDR_CFG_TYPE_1;
+	val = (busno << CFG_ADDR_BUS_NUM_SHIFT) |
+		(slot << CFG_ADDR_DEV_NUM_SHIFT) |
+		(fn << CFG_ADDR_FUNC_NUM_SHIFT) |
+		(where & CFG_ADDR_REG_NUM_MASK) |
+		(1 & CFG_ADDR_CFG_TYPE_MASK);
 
 	iproc_pcie_write_reg(pcie, IPROC_PCIE_CFG_ADDR, val);
 	offset = iproc_pcie_reg_offset(pcie, IPROC_PCIE_CFG_DATA);
@@ -569,6 +583,8 @@ static int iproc_pcie_config_read(struct pci_bus *bus, unsigned int devfn,
 				  int where, int size, u32 *val)
 {
 	struct iproc_pcie *pcie = iproc_data(bus);
+	unsigned int slot = PCI_SLOT(devfn);
+	unsigned int fn = PCI_FUNC(devfn);
 	unsigned int busno = bus->number;
 	void __iomem *cfg_data_p;
 	unsigned int data;
@@ -583,7 +599,7 @@ static int iproc_pcie_config_read(struct pci_bus *bus, unsigned int devfn,
 		return ret;
 	}
 
-	cfg_data_p = iproc_pcie_map_ep_cfg_reg(pcie, busno, devfn, where);
+	cfg_data_p = iproc_pcie_map_ep_cfg_reg(pcie, busno, slot, fn, where);
 
 	if (!cfg_data_p)
 		return PCIBIOS_DEVICE_NOT_FOUND;
@@ -616,7 +632,7 @@ static int iproc_pcie_config_read(struct pci_bus *bus, unsigned int devfn,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-/*
+/**
  * Note access to the configuration registers are protected at the higher layer
  * by 'pci_lock' in drivers/pci/access.c
  */
@@ -624,11 +640,13 @@ static void __iomem *iproc_pcie_map_cfg_bus(struct iproc_pcie *pcie,
 					    int busno, unsigned int devfn,
 					    int where)
 {
+	unsigned slot = PCI_SLOT(devfn);
+	unsigned fn = PCI_FUNC(devfn);
 	u16 offset;
 
 	/* root complex access */
 	if (busno == 0) {
-		if (PCIE_ECAM_DEVFN(devfn) > 0)
+		if (slot > 0 || fn > 0)
 			return NULL;
 
 		iproc_pcie_write_reg(pcie, IPROC_PCIE_CFG_IND_ADDR,
@@ -640,7 +658,7 @@ static void __iomem *iproc_pcie_map_cfg_bus(struct iproc_pcie *pcie,
 			return (pcie->base + offset);
 	}
 
-	return iproc_pcie_map_ep_cfg_reg(pcie, busno, devfn, where);
+	return iproc_pcie_map_ep_cfg_reg(pcie, busno, slot, fn, where);
 }
 
 static void __iomem *iproc_pcie_bus_map_cfg_bus(struct pci_bus *bus,
@@ -658,8 +676,10 @@ static int iproc_pci_raw_config_read32(struct iproc_pcie *pcie,
 	void __iomem *addr;
 
 	addr = iproc_pcie_map_cfg_bus(pcie, 0, devfn, where & ~0x3);
-	if (!addr)
+	if (!addr) {
+		*val = ~0;
 		return PCIBIOS_DEVICE_NOT_FOUND;
+	}
 
 	*val = readl(addr);
 
@@ -788,13 +808,14 @@ static int iproc_pcie_check_link(struct iproc_pcie *pcie)
 		return -EFAULT;
 	}
 
-	/* force class to PCI_CLASS_BRIDGE_PCI_NORMAL (0x060400) */
+	/* force class to PCI_CLASS_BRIDGE_PCI (0x0604) */
 #define PCI_BRIDGE_CTRL_REG_OFFSET	0x43c
-#define PCI_BRIDGE_CTRL_REG_CLASS_MASK	0xffffff
+#define PCI_CLASS_BRIDGE_MASK		0xffff00
+#define PCI_CLASS_BRIDGE_SHIFT		8
 	iproc_pci_raw_config_read32(pcie, 0, PCI_BRIDGE_CTRL_REG_OFFSET,
 				    4, &class);
-	class &= ~PCI_BRIDGE_CTRL_REG_CLASS_MASK;
-	class |= PCI_CLASS_BRIDGE_PCI_NORMAL;
+	class &= ~PCI_CLASS_BRIDGE_MASK;
+	class |= (PCI_CLASS_BRIDGE_PCI << PCI_CLASS_BRIDGE_SHIFT);
 	iproc_pci_raw_config_write32(pcie, 0, PCI_BRIDGE_CTRL_REG_OFFSET,
 				     4, class);
 
@@ -891,7 +912,7 @@ static inline int iproc_pcie_ob_write(struct iproc_pcie *pcie, int window_idx,
 	return 0;
 }
 
-/*
+/**
  * Some iProc SoCs require the SW to configure the outbound address mapping
  *
  * Outbound address translation:
@@ -1458,7 +1479,6 @@ int iproc_pcie_setup(struct iproc_pcie *pcie, struct list_head *res)
 {
 	struct device *dev;
 	int ret;
-	struct pci_dev *pdev;
 	struct pci_host_bridge *host = pci_host_bridge_from_priv(pcie);
 
 	dev = pcie->dev;
@@ -1522,11 +1542,6 @@ int iproc_pcie_setup(struct iproc_pcie *pcie, struct list_head *res)
 		goto err_power_off_phy;
 	}
 
-	for_each_pci_bridge(pdev, host->bus) {
-		if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT)
-			pcie_print_link_status(pdev);
-	}
-
 	return 0;
 
 err_power_off_phy:
@@ -1537,7 +1552,7 @@ err_exit_phy:
 }
 EXPORT_SYMBOL(iproc_pcie_setup);
 
-void iproc_pcie_remove(struct iproc_pcie *pcie)
+int iproc_pcie_remove(struct iproc_pcie *pcie)
 {
 	struct pci_host_bridge *host = pci_host_bridge_from_priv(pcie);
 
@@ -1548,6 +1563,8 @@ void iproc_pcie_remove(struct iproc_pcie *pcie)
 
 	phy_power_off(pcie->phy);
 	phy_exit(pcie->phy);
+
+	return 0;
 }
 EXPORT_SYMBOL(iproc_pcie_remove);
 
@@ -1577,7 +1594,7 @@ static void quirk_paxc_bridge(struct pci_dev *pdev)
 	 * code that the bridge is not an Ethernet device.
 	 */
 	if (pdev->hdr_type == PCI_HEADER_TYPE_BRIDGE)
-		pdev->class = PCI_CLASS_BRIDGE_PCI_NORMAL;
+		pdev->class = PCI_CLASS_BRIDGE_PCI << 8;
 
 	/*
 	 * MPSS is not being set properly (as it is currently 0).  This is

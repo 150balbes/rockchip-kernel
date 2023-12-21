@@ -19,18 +19,6 @@ static struct dpu_hw_vbif *dpu_get_vbif(struct dpu_kms *dpu_kms, enum dpu_vbif v
 	return NULL;
 }
 
-static const char *dpu_vbif_name(enum dpu_vbif idx)
-{
-	switch (idx) {
-	case VBIF_RT:
-		return "VBIF_RT";
-	case VBIF_NRT:
-		return "VBIF_NRT";
-	default:
-		return "??";
-	}
-}
-
 /**
  * _dpu_vbif_wait_for_xin_halt - wait for the xin to halt
  * @vbif:	Pointer to hardware vbif driver
@@ -62,12 +50,12 @@ static int _dpu_vbif_wait_for_xin_halt(struct dpu_hw_vbif *vbif, u32 xin_id)
 
 	if (!status) {
 		rc = -ETIMEDOUT;
-		DPU_ERROR("%s client %d not halting. TIMEDOUT.\n",
-				dpu_vbif_name(vbif->idx), xin_id);
+		DPU_ERROR("VBIF %d client %d not halting. TIMEDOUT.\n",
+				vbif->idx - VBIF_0, xin_id);
 	} else {
 		rc = 0;
-		DRM_DEBUG_ATOMIC("%s client %d is halted\n",
-				dpu_vbif_name(vbif->idx), xin_id);
+		DPU_DEBUG("VBIF %d client %d is halted\n",
+				vbif->idx - VBIF_0, xin_id);
 	}
 
 	return rc;
@@ -107,8 +95,8 @@ static void _dpu_vbif_apply_dynamic_ot_limit(struct dpu_hw_vbif *vbif,
 		}
 	}
 
-	DRM_DEBUG_ATOMIC("%s xin:%d w:%d h:%d fps:%d pps:%llu ot:%u\n",
-			dpu_vbif_name(vbif->idx), params->xin_id,
+	DPU_DEBUG("vbif:%d xin:%d w:%d h:%d fps:%d pps:%llu ot:%u\n",
+			vbif->idx - VBIF_0, params->xin_id,
 			params->width, params->height, params->frame_rate,
 			pps, *ot_lim);
 }
@@ -153,14 +141,14 @@ static u32 _dpu_vbif_get_ot_limit(struct dpu_hw_vbif *vbif,
 	}
 
 exit:
-	DRM_DEBUG_ATOMIC("%s xin:%d ot_lim:%d\n",
-			dpu_vbif_name(vbif->idx), params->xin_id, ot_lim);
+	DPU_DEBUG("vbif:%d xin:%d ot_lim:%d\n",
+			vbif->idx - VBIF_0, params->xin_id, ot_lim);
 	return ot_lim;
 }
 
 /**
  * dpu_vbif_set_ot_limit - set OT based on usecase & configuration parameters
- * @dpu_kms:	DPU handler
+ * @vbif:	Pointer to hardware vbif driver
  * @params:	Pointer to usecase parameters
  *
  * Note this function would block waiting for bus halt.
@@ -178,7 +166,7 @@ void dpu_vbif_set_ot_limit(struct dpu_kms *dpu_kms,
 
 	vbif = dpu_get_vbif(dpu_kms, params->vbif_idx);
 	if (!vbif || !mdp) {
-		DRM_DEBUG_ATOMIC("invalid arguments vbif %d mdp %d\n",
+		DPU_DEBUG("invalid arguments vbif %d mdp %d\n",
 				vbif != NULL, mdp != NULL);
 		return;
 	}
@@ -239,7 +227,7 @@ void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 	}
 
 	if (!vbif->ops.set_qos_remap || !mdp->ops.setup_clk_force_ctrl) {
-		DRM_DEBUG_ATOMIC("qos remap not supported\n");
+		DPU_DEBUG("qos remap not supported\n");
 		return;
 	}
 
@@ -247,15 +235,15 @@ void dpu_vbif_set_qos_remap(struct dpu_kms *dpu_kms,
 			&vbif->cap->qos_nrt_tbl;
 
 	if (!qos_tbl->npriority_lvl || !qos_tbl->priority_lvl) {
-		DRM_DEBUG_ATOMIC("qos tbl not defined\n");
+		DPU_DEBUG("qos tbl not defined\n");
 		return;
 	}
 
 	forced_on = mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, true);
 
 	for (i = 0; i < qos_tbl->npriority_lvl; i++) {
-		DRM_DEBUG_ATOMIC("%s xin:%d lvl:%d/%d\n",
-				dpu_vbif_name(params->vbif_idx), params->xin_id, i,
+		DPU_DEBUG("vbif:%d xin:%d lvl:%d/%d\n",
+				params->vbif_idx, params->xin_id, i,
 				qos_tbl->priority_lvl[i]);
 		vbif->ops.set_qos_remap(vbif, params->xin_id, i,
 				qos_tbl->priority_lvl[i]);
@@ -275,8 +263,8 @@ void dpu_vbif_clear_errors(struct dpu_kms *dpu_kms)
 		if (vbif && vbif->ops.clear_errors) {
 			vbif->ops.clear_errors(vbif, &pnd, &src);
 			if (pnd || src) {
-				DRM_DEBUG_KMS("%s: pnd 0x%X, src 0x%X\n",
-					      dpu_vbif_name(vbif->idx), pnd, src);
+				DRM_DEBUG_KMS("VBIF %d: pnd 0x%X, src 0x%X\n",
+					      vbif->idx - VBIF_0, pnd, src);
 			}
 		}
 	}

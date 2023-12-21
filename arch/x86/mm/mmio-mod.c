@@ -10,6 +10,8 @@
 
 #define pr_fmt(fmt) "mmiotrace: " fmt
 
+#define DEBUG 1
+
 #include <linux/moduleparam.h>
 #include <linux/debugfs.h>
 #include <linux/slab.h>
@@ -376,12 +378,12 @@ static void enter_uniprocessor(void)
 		goto out;
 	}
 
-	cpus_read_lock();
+	get_online_cpus();
 	cpumask_copy(downed_cpus, cpu_online_mask);
 	cpumask_clear_cpu(cpumask_first(cpu_online_mask), downed_cpus);
 	if (num_online_cpus() > 1)
 		pr_notice("Disabling non-boot CPUs...\n");
-	cpus_read_unlock();
+	put_online_cpus();
 
 	for_each_cpu(cpu, downed_cpus) {
 		err = remove_cpu(cpu);
@@ -400,7 +402,7 @@ static void leave_uniprocessor(void)
 	int cpu;
 	int err;
 
-	if (!cpumask_available(downed_cpus) || cpumask_empty(downed_cpus))
+	if (!cpumask_available(downed_cpus) || cpumask_weight(downed_cpus) == 0)
 		return;
 	pr_notice("Re-enabling CPUs...\n");
 	for_each_cpu(cpu, downed_cpus) {

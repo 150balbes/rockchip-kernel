@@ -13,23 +13,22 @@
 
 struct pt_regs;
 
-#ifdef CONFIG_ARMV8_DEPRECATED
-bool try_emulate_armv8_deprecated(struct pt_regs *regs, u32 insn);
-#else
-static inline bool
-try_emulate_armv8_deprecated(struct pt_regs *regs, u32 insn)
-{
-	return false;
-}
-#endif /* CONFIG_ARMV8_DEPRECATED */
+struct undef_hook {
+	struct list_head node;
+	u32 instr_mask;
+	u32 instr_val;
+	u64 pstate_mask;
+	u64 pstate_val;
+	int (*fn)(struct pt_regs *regs, u32 instr);
+};
 
-void force_signal_inject(int signal, int code, unsigned long address, unsigned long err);
+void register_undef_hook(struct undef_hook *hook);
+void unregister_undef_hook(struct undef_hook *hook);
+void force_signal_inject(int signal, int code, unsigned long address, unsigned int err);
 void arm64_notify_segfault(unsigned long addr);
 void arm64_force_sig_fault(int signo, int code, unsigned long far, const char *str);
 void arm64_force_sig_mceerr(int code, unsigned long far, short lsb, const char *str);
 void arm64_force_sig_ptrace_errno_trap(int errno, unsigned long far, const char *str);
-
-int early_brk64(unsigned long addr, unsigned long esr, struct pt_regs *regs);
 
 /*
  * Move regs->pc to next instruction and do necessary setup before it
@@ -58,7 +57,7 @@ static inline int in_entry_text(unsigned long ptr)
  * errors share the same encoding as an all-zeros encoding from a CPU that
  * doesn't support RAS.
  */
-static inline bool arm64_is_ras_serror(unsigned long esr)
+static inline bool arm64_is_ras_serror(u32 esr)
 {
 	WARN_ON(preemptible());
 
@@ -78,9 +77,9 @@ static inline bool arm64_is_ras_serror(unsigned long esr)
  * We treat them as Uncontainable.
  * Non-RAS SError's are reported as Uncontained/Uncategorized.
  */
-static inline unsigned long arm64_ras_serror_get_severity(unsigned long esr)
+static inline u32 arm64_ras_serror_get_severity(u32 esr)
 {
-	unsigned long aet = esr & ESR_ELx_AET;
+	u32 aet = esr & ESR_ELx_AET;
 
 	if (!arm64_is_ras_serror(esr)) {
 		/* Not a RAS error, we can't interpret the ESR. */
@@ -99,6 +98,6 @@ static inline unsigned long arm64_ras_serror_get_severity(unsigned long esr)
 	return aet;
 }
 
-bool arm64_is_fatal_ras_serror(struct pt_regs *regs, unsigned long esr);
-void __noreturn arm64_serror_panic(struct pt_regs *regs, unsigned long esr);
+bool arm64_is_fatal_ras_serror(struct pt_regs *regs, unsigned int esr);
+void __noreturn arm64_serror_panic(struct pt_regs *regs, u32 esr);
 #endif

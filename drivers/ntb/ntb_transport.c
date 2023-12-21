@@ -304,7 +304,7 @@ static int ntb_transport_bus_probe(struct device *dev)
 	return rc;
 }
 
-static void ntb_transport_bus_remove(struct device *dev)
+static int ntb_transport_bus_remove(struct device *dev)
 {
 	const struct ntb_transport_client *client;
 
@@ -312,6 +312,8 @@ static void ntb_transport_bus_remove(struct device *dev)
 	client->remove(dev);
 
 	put_device(dev);
+
+	return 0;
 }
 
 static struct bus_type ntb_transport_bus = {
@@ -410,7 +412,7 @@ int ntb_transport_register_client_dev(char *device_name)
 
 		rc = device_register(dev);
 		if (rc) {
-			put_device(dev);
+			kfree(client_dev);
 			goto err;
 		}
 

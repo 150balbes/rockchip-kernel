@@ -9,17 +9,6 @@
  *
  * Author: Linus Walleij <linus.walleij@linaro.org>
  */
-
-#include <linux/types.h>
-
-struct dentry;
-struct seq_file;
-
-struct pinctrl_dev;
-struct pinctrl_gpio_range;
-struct pinctrl_map;
-struct pinctrl_setting;
-
 #ifdef CONFIG_PINMUX
 
 int pinmux_check_ops(struct pinctrl_dev *pctldev);
@@ -140,7 +129,7 @@ static inline void pinmux_init_device_debugfs(struct dentry *devroot,
  */
 struct function_desc {
 	const char *name;
-	const char * const *group_names;
+	const char **group_names;
 	int num_group_names;
 	void *data;
 };
@@ -161,7 +150,7 @@ struct function_desc *pinmux_generic_get_function(struct pinctrl_dev *pctldev,
 
 int pinmux_generic_add_function(struct pinctrl_dev *pctldev,
 				const char *name,
-				const char * const *groups,
+				const char **groups,
 				unsigned const num_groups,
 				void *data);
 

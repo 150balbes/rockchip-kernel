@@ -6,6 +6,7 @@
 #include <linux/fs_pin.h>
 
 struct mnt_namespace {
+	atomic_t		count;
 	struct ns_common	ns;
 	struct mount *	root;
 	/*
@@ -100,6 +101,7 @@ static inline int is_mounted(struct vfsmount *mnt)
 extern struct mount *__lookup_mnt(struct vfsmount *, struct dentry *);
 
 extern int __legitimize_mnt(struct vfsmount *, unsigned);
+extern bool legitimize_mnt(struct vfsmount *, unsigned);
 
 static inline bool __path_is_mountpoint(const struct path *path)
 {
@@ -118,10 +120,20 @@ static inline void detach_mounts(struct dentry *dentry)
 
 static inline void get_mnt_ns(struct mnt_namespace *ns)
 {
-	refcount_inc(&ns->ns.count);
+	atomic_inc(&ns->count);
 }
 
 extern seqlock_t mount_lock;
+
+static inline void lock_mount_hash(void)
+{
+	write_seqlock(&mount_lock);
+}
+
+static inline void unlock_mount_hash(void)
+{
+	write_sequnlock(&mount_lock);
+}
 
 struct proc_mounts {
 	struct mnt_namespace *ns;

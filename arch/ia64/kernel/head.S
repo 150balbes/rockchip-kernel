@@ -33,6 +33,7 @@
 #include <asm/mca_asm.h>
 #include <linux/init.h>
 #include <linux/linkage.h>
+#include <linux/pgtable.h>
 #include <asm/export.h>
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -170,7 +171,7 @@ RestRR:											\
 	__PAGE_ALIGNED_DATA
 
 	.global empty_zero_page
-EXPORT_SYMBOL_GPL(empty_zero_page)
+EXPORT_DATA_SYMBOL_GPL(empty_zero_page)
 empty_zero_page:
 	.skip PAGE_SIZE
 
@@ -404,6 +405,11 @@ start_ap:
 
 	// This is executed by the bootstrap processor (bsp) only:
 
+#ifdef CONFIG_IA64_FW_EMU
+	// initialize PAL & SAL emulator:
+	br.call.sptk.many rp=sys_fw_init
+.ret1:
+#endif
 	br.call.sptk.many rp=start_kernel
 .ret2:	addl r3=@ltoff(halt_msg),gp
 	;;

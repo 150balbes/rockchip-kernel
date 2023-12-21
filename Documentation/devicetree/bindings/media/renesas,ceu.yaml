@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/media/renesas,ceu.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Renesas Capture Engine Unit (CEU)
+title: Renesas Capture Engine Unit (CEU) Bindings
 
 maintainers:
   - Jacopo Mondi <jacopo+renesas@jmondi.org>
@@ -34,21 +34,30 @@ properties:
     maxItems: 1
 
   port:
-    $ref: /schemas/graph.yaml#/$defs/port-base
-    unevaluatedProperties: false
+    type: object
+    additionalProperties: false
 
     properties:
       endpoint:
-        $ref: video-interfaces.yaml#
-        unevaluatedProperties: false
+        type: object
+        additionalProperties: false
 
+         # Properties described in
+         # Documentation/devicetree/bindings/media/video-interfaces.txt
         properties:
+          remote-endpoint: true
           hsync-active: true
           vsync-active: true
           field-even-active: false
           bus-width:
             enum: [8, 16]
             default: 8
+
+        required:
+          - remote-endpoint
+
+    required:
+      - endpoint
 
 required:
   - compatible

@@ -75,7 +75,6 @@ static int __op_panel_update_display(void)
 				rc);
 			break;
 		}
-		break;
 	case OPAL_SUCCESS:
 		break;
 	default:

@@ -30,7 +30,6 @@
 #include <linux/ftrace.h>
 #include <linux/cpu.h>
 #include <linux/kgdb.h>
-#include <linux/sched/hotplug.h>
 
 #include <linux/atomic.h>
 #include <asm/current.h>
@@ -60,6 +59,8 @@ volatile struct task_struct *smp_init_current_idle_task;
 
 /* track which CPU is booting */
 static volatile int cpu_now_booting;
+
+static int parisc_max_cpus = 1;
 
 static DEFINE_PER_CPU(spinlock_t, ipi_lock);
 
@@ -227,13 +228,11 @@ static inline void
 send_IPI_allbutself(enum ipi_message_type op)
 {
 	int i;
-
-	preempt_disable();
+	
 	for_each_online_cpu(i) {
 		if (i != smp_processor_id())
 			send_IPI_single(i, op);
 	}
-	preempt_enable();
 }
 
 #ifdef CONFIG_KGDB
@@ -246,8 +245,8 @@ void kgdb_roundup_cpus(void)
 inline void 
 smp_send_stop(void)	{ send_IPI_allbutself(IPI_CPU_STOP); }
 
-void
-arch_smp_send_reschedule(int cpu) { send_IPI_single(cpu, IPI_RESCHEDULE); }
+void 
+smp_send_reschedule(int cpu) { send_IPI_single(cpu, IPI_RESCHEDULE); }
 
 void
 smp_send_all_nop(void)
@@ -268,9 +267,12 @@ void arch_send_call_function_single_ipi(int cpu)
 /*
  * Called by secondaries to update state and initialize CPU registers.
  */
-static void
+static void __init
 smp_cpu_init(int cpunum)
 {
+	extern void init_IRQ(void);    /* arch/parisc/kernel/irq.c */
+	extern void start_cpu_itimer(void); /* arch/parisc/kernel/time.c */
+
 	/* Set modes and Enable floating point coprocessor */
 	init_per_cpu(cpunum);
 
@@ -305,7 +307,7 @@ smp_cpu_init(int cpunum)
  * Slaves start using C here. Indirectly called from smp_slave_stext.
  * Do what start_kernel() and main() do for boot strap processor (aka monarch)
  */
-void smp_callin(unsigned long pdce_proc)
+void __init smp_callin(unsigned long pdce_proc)
 {
 	int slave_id = cpu_now_booting;
 
@@ -330,27 +332,12 @@ void smp_callin(unsigned long pdce_proc)
 /*
  * Bring one cpu online.
  */
-static int smp_boot_one_cpu(int cpuid, struct task_struct *idle)
+int smp_boot_one_cpu(int cpuid, struct task_struct *idle)
 {
 	const struct cpuinfo_parisc *p = &per_cpu(cpu_data, cpuid);
 	long timeout;
 
-#ifdef CONFIG_HOTPLUG_CPU
-	int i;
-
-	/* reset irq statistics for this CPU */
-	memset(&per_cpu(irq_stat, cpuid), 0, sizeof(irq_cpustat_t));
-	for (i = 0; i < NR_IRQS; i++) {
-		struct irq_desc *desc = irq_to_desc(i);
-
-		if (desc && desc->kstat_irqs)
-			*per_cpu_ptr(desc->kstat_irqs, cpuid) = 0;
-	}
-#endif
-
-	/* wait until last booting CPU has started. */
-	while (cpu_now_booting)
-		;
+	task_thread_info(idle)->cpu = cpuid;
 
 	/* Let _start know what logical CPU we're booting
 	** (offset into init_tasks[],cpu_data[])
@@ -387,6 +374,7 @@ static int smp_boot_one_cpu(int cpuid, struct task_struct *idle)
 		if(cpu_online(cpuid)) {
 			/* Which implies Slave has started up */
 			cpu_now_booting = 0;
+			smp_init_current_idle_task = NULL;
 			goto alive ;
 		}
 		udelay(100);
@@ -427,85 +415,30 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 		spin_lock_init(&per_cpu(ipi_lock, cpu));
 
 	init_cpu_present(cpumask_of(0));
+
+	parisc_max_cpus = max_cpus;
+	if (!max_cpus)
+		printk(KERN_INFO "SMP mode deactivated.\n");
 }
 
 
-void __init smp_cpus_done(unsigned int cpu_max)
+void smp_cpus_done(unsigned int cpu_max)
 {
+	return;
 }
 
 
 int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 {
-	if (cpu_online(cpu))
-		return 0;
+	if (cpu != 0 && cpu < parisc_max_cpus && smp_boot_one_cpu(cpu, tidle))
+		return -ENOSYS;
 
-	if (num_online_cpus() < setup_max_cpus && smp_boot_one_cpu(cpu, tidle))
-		return -EIO;
-
-	return cpu_online(cpu) ? 0 : -EIO;
+	return cpu_online(cpu) ? 0 : -ENOSYS;
 }
 
-/*
- * __cpu_disable runs on the processor to be shutdown.
- */
-int __cpu_disable(void)
+#ifdef CONFIG_PROC_FS
+int setup_profiling_timer(unsigned int multiplier)
 {
-#ifdef CONFIG_HOTPLUG_CPU
-	unsigned int cpu = smp_processor_id();
-
-	remove_cpu_topology(cpu);
-
-	/*
-	 * Take this CPU offline.  Once we clear this, we can't return,
-	 * and we must not schedule until we're ready to give up the cpu.
-	 */
-	set_cpu_online(cpu, false);
-
-	/* Find a new timesync master */
-	if (cpu == time_keeper_id) {
-		time_keeper_id = cpumask_first(cpu_online_mask);
-		pr_info("CPU %d is now promoted to time-keeper master\n", time_keeper_id);
-	}
-
-	disable_percpu_irq(IPI_IRQ);
-
-	irq_migrate_all_off_this_cpu();
-
-	flush_cache_all_local();
-	flush_tlb_all_local(NULL);
-
-	/* disable all irqs, including timer irq */
-	local_irq_disable();
-
-	/* wait for next timer irq ... */
-	mdelay(1000/HZ+100);
-
-	/* ... and then clear all pending external irqs */
-	set_eiem(0);
-	mtctl(~0UL, CR_EIRR);
-	mfctl(CR_EIRR);
-	mtctl(0, CR_EIRR);
+	return -EINVAL;
+}
 #endif
-	return 0;
-}
-
-/*
- * called on the thread which is asking for a CPU to be shutdown -
- * waits until shutdown has completed, or it is timed out.
- */
-void __cpu_die(unsigned int cpu)
-{
-	pdc_cpu_rendezvous_lock();
-}
-
-void arch_cpuhp_cleanup_dead_cpu(unsigned int cpu)
-{
-	pr_info("CPU%u: is shutting down\n", cpu);
-
-	/* set task's state to interruptible sleep */
-	set_current_state(TASK_INTERRUPTIBLE);
-	schedule_timeout((IS_ENABLED(CONFIG_64BIT) ? 8:2) * HZ);
-
-	pdc_cpu_rendezvous_unlock();
-}

@@ -4,6 +4,8 @@
  *
  * This file supplies definitions required by the PPP over L2TP driver
  * (l2tp_ppp.c).  All version information wrt this file is located in l2tp_ppp.c
+ *
+ * License:
  */
 #ifndef __LINUX_IF_PPPOL2TP_H
 #define __LINUX_IF_PPPOL2TP_H

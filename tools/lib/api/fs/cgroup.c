@@ -8,29 +8,12 @@
 #include <string.h>
 #include "fs.h"
 
-struct cgroupfs_cache_entry {
-	char	subsys[32];
-	char	mountpoint[PATH_MAX];
-};
-
-/* just cache last used one */
-static struct cgroupfs_cache_entry *cached;
-
 int cgroupfs_find_mountpoint(char *buf, size_t maxlen, const char *subsys)
 {
 	FILE *fp;
-	char *line = NULL;
-	size_t len = 0;
-	char *p, *path;
-	char mountpoint[PATH_MAX];
-
-	if (cached && !strcmp(cached->subsys, subsys)) {
-		if (strlen(cached->mountpoint) < maxlen) {
-			strcpy(buf, cached->mountpoint);
-			return 0;
-		}
-		return -1;
-	}
+	char mountpoint[PATH_MAX + 1], tokens[PATH_MAX + 1], type[PATH_MAX + 1];
+	char path_v1[PATH_MAX + 1], path_v2[PATH_MAX + 2], *path;
+	char *token, *saved_ptr = NULL;
 
 	fp = fopen("/proc/mounts", "r");
 	if (!fp)
@@ -39,68 +22,45 @@ int cgroupfs_find_mountpoint(char *buf, size_t maxlen, const char *subsys)
 	/*
 	 * in order to handle split hierarchy, we need to scan /proc/mounts
 	 * and inspect every cgroupfs mount point to find one that has
-	 * the given subsystem.  If we found v1, just use it.  If not we can
-	 * use v2 path as a fallback.
+	 * perf_event subsystem
 	 */
-	mountpoint[0] = '\0';
+	path_v1[0] = '\0';
+	path_v2[0] = '\0';
 
-	/*
-	 * The /proc/mounts has the follow format:
-	 *
-	 *   <devname> <mount point> <fs type> <options> ...
-	 *
-	 */
-	while (getline(&line, &len, fp) != -1) {
-		/* skip devname */
-		p = strchr(line, ' ');
-		if (p == NULL)
-			continue;
+	while (fscanf(fp, "%*s %"__stringify(PATH_MAX)"s %"__stringify(PATH_MAX)"s %"
+				__stringify(PATH_MAX)"s %*d %*d\n",
+				mountpoint, type, tokens) == 3) {
 
-		/* save the mount point */
-		path = ++p;
-		p = strchr(p, ' ');
-		if (p == NULL)
-			continue;
+		if (!path_v1[0] && !strcmp(type, "cgroup")) {
 
-		*p++ = '\0';
+			token = strtok_r(tokens, ",", &saved_ptr);
 
-		/* check filesystem type */
-		if (strncmp(p, "cgroup", 6))
-			continue;
-
-		if (p[6] == '2') {
-			/* save cgroup v2 path */
-			strcpy(mountpoint, path);
-			continue;
+			while (token != NULL) {
+				if (subsys && !strcmp(token, subsys)) {
+					strcpy(path_v1, mountpoint);
+					break;
+				}
+				token = strtok_r(NULL, ",", &saved_ptr);
+			}
 		}
 
-		/* now we have cgroup v1, check the options for subsystem */
-		p += 7;
+		if (!path_v2[0] && !strcmp(type, "cgroup2"))
+			strcpy(path_v2, mountpoint);
 
-		p = strstr(p, subsys);
-		if (p == NULL)
-			continue;
-
-		/* sanity check: it should be separated by a space or a comma */
-		if (!strchr(" ,", p[-1]) || !strchr(" ,", p[strlen(subsys)]))
-			continue;
-
-		strcpy(mountpoint, path);
-		break;
+		if (path_v1[0] && path_v2[0])
+			break;
 	}
-	free(line);
 	fclose(fp);
 
-	if (!cached)
-		cached = calloc(1, sizeof(*cached));
+	if (path_v1[0])
+		path = path_v1;
+	else if (path_v2[0])
+		path = path_v2;
+	else
+		return -1;
 
-	if (cached) {
-		strncpy(cached->subsys, subsys, sizeof(cached->subsys) - 1);
-		strcpy(cached->mountpoint, mountpoint);
-	}
-
-	if (mountpoint[0] && strlen(mountpoint) < maxlen) {
-		strcpy(buf, mountpoint);
+	if (strlen(path) < maxlen) {
+		strcpy(buf, path);
 		return 0;
 	}
 	return -1;

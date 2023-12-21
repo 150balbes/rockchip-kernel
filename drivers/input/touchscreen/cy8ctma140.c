@@ -198,7 +198,8 @@ static void cy8ctma140_power_off_action(void *d)
 	cy8ctma140_power_down(ts);
 }
 
-static int cy8ctma140_probe(struct i2c_client *client)
+static int cy8ctma140_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct cy8ctma140 *ts;
 	struct input_dev *input;
@@ -296,7 +297,7 @@ static int cy8ctma140_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int cy8ctma140_suspend(struct device *dev)
+static int __maybe_unused cy8ctma140_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cy8ctma140 *ts = i2c_get_clientdata(client);
@@ -307,7 +308,7 @@ static int cy8ctma140_suspend(struct device *dev)
 	return 0;
 }
 
-static int cy8ctma140_resume(struct device *dev)
+static int __maybe_unused cy8ctma140_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct cy8ctma140 *ts = i2c_get_clientdata(client);
@@ -322,8 +323,7 @@ static int cy8ctma140_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(cy8ctma140_pm,
-				cy8ctma140_suspend, cy8ctma140_resume);
+static SIMPLE_DEV_PM_OPS(cy8ctma140_pm, cy8ctma140_suspend, cy8ctma140_resume);
 
 static const struct i2c_device_id cy8ctma140_idtable[] = {
 	{ CY8CTMA140_NAME, 0 },
@@ -340,7 +340,7 @@ MODULE_DEVICE_TABLE(of, cy8ctma140_of_match);
 static struct i2c_driver cy8ctma140_driver = {
 	.driver		= {
 		.name	= CY8CTMA140_NAME,
-		.pm	= pm_sleep_ptr(&cy8ctma140_pm),
+		.pm	= &cy8ctma140_pm,
 		.of_match_table = cy8ctma140_of_match,
 	},
 	.id_table	= cy8ctma140_idtable,

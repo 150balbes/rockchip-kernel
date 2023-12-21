@@ -79,12 +79,16 @@ static int __init footbridge_isa_init(void)
 {
 	int err = 0;
 
-	/* Personal server doesn't have RTC */
-	isa_rtc_init();
-	err = platform_device_register(&rtc_device);
-	if (err)
-		printk(KERN_ERR "Unable to register RTC device: %d\n", err);
+	if (!footbridge_cfn_mode())
+		return 0;
 
+	/* Personal server doesn't have RTC */
+	if (!machine_is_personal_server()) {
+		isa_rtc_init();
+		err = platform_device_register(&rtc_device);
+		if (err)
+			printk(KERN_ERR "Unable to register RTC device: %d\n", err);
+	}
 	err = platform_device_register(&serial_device);
 	if (err)
 		printk(KERN_ERR "Unable to register serial device: %d\n", err);

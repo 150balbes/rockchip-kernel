@@ -27,9 +27,6 @@
 void
 nvif_mmu_dtor(struct nvif_mmu *mmu)
 {
-	if (!nvif_object_constructed(&mmu->object))
-		return;
-
 	kfree(mmu->kind);
 	kfree(mmu->type);
 	kfree(mmu->heap);

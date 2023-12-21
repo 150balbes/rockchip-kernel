@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <errno.h>
@@ -45,9 +46,12 @@
 #include <bpf/bpf.h>
 #include <getopt.h>
 
+#include "bpf_load.h"
+#include "bpf_rlimit.h"
 #include "cgroup_helpers.h"
 #include "hbm.h"
 #include "bpf_util.h"
+#include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
 bool outFlag = true;
@@ -65,11 +69,11 @@ static void Usage(void);
 static void read_trace_pipe2(void);
 static void do_error(char *msg, bool errno_flag);
 
-#define TRACEFS "/sys/kernel/tracing/"
+#define DEBUGFS "/sys/kernel/debug/tracing/"
 
-static struct bpf_program *bpf_prog;
-static struct bpf_object *obj;
-static int queue_stats_fd;
+struct bpf_object *obj;
+int bpfprog_fd;
+int cgroup_storage_fd;
 
 static void read_trace_pipe2(void)
 {
@@ -77,7 +81,7 @@ static void read_trace_pipe2(void)
 	FILE *outf;
 	char *outFname = "hbm_out.log";
 
-	trace_fd = open(TRACEFS "trace_pipe", O_RDONLY, 0);
+	trace_fd = open(DEBUGFS "trace_pipe", O_RDONLY, 0);
 	if (trace_fd < 0) {
 		printf("Error opening trace_pipe\n");
 		return;
@@ -118,59 +122,56 @@ static void do_error(char *msg, bool errno_flag)
 
 static int prog_load(char *prog)
 {
-	struct bpf_program *pos;
-	const char *sec_name;
+	struct bpf_prog_load_attr prog_load_attr = {
+		.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+		.file = prog,
+		.expected_attach_type = BPF_CGROUP_INET_EGRESS,
+	};
+	int map_fd;
+	struct bpf_map *map;
 
-	obj = bpf_object__open_file(prog, NULL);
-	if (libbpf_get_error(obj)) {
-		printf("ERROR: opening BPF object file failed\n");
+	int ret = 0;
+
+	if (access(prog, O_RDONLY) < 0) {
+		printf("Error accessing file %s: %s\n", prog, strerror(errno));
 		return 1;
 	}
-
-	/* load BPF program */
-	if (bpf_object__load(obj)) {
-		printf("ERROR: loading BPF object file failed\n");
-		goto err;
-	}
-
-	bpf_object__for_each_program(pos, obj) {
-		sec_name = bpf_program__section_name(pos);
-		if (sec_name && !strcmp(sec_name, "cgroup_skb/egress")) {
-			bpf_prog = pos;
-			break;
+	if (bpf_prog_load_xattr(&prog_load_attr, &obj, &bpfprog_fd))
+		ret = 1;
+	if (!ret) {
+		map = bpf_object__find_map_by_name(obj, "queue_stats");
+		map_fd = bpf_map__fd(map);
+		if (map_fd < 0) {
+			printf("Map not found: %s\n", strerror(map_fd));
+			ret = 1;
 		}
 	}
-	if (!bpf_prog) {
-		printf("ERROR: finding a prog in obj file failed\n");
-		goto err;
+
+	if (ret) {
+		printf("ERROR: bpf_prog_load_xattr failed for: %s\n", prog);
+		printf("  Output from verifier:\n%s\n------\n", bpf_log_buf);
+		ret = -1;
+	} else {
+		ret = map_fd;
 	}
 
-	queue_stats_fd = bpf_object__find_map_fd_by_name(obj, "queue_stats");
-	if (queue_stats_fd < 0) {
-		printf("ERROR: finding a map in obj file failed\n");
-		goto err;
-	}
-
-	return 0;
-
-err:
-	bpf_object__close(obj);
-	return 1;
+	return ret;
 }
 
 static int run_bpf_prog(char *prog, int cg_id)
 {
-	struct hbm_queue_stats qstats = {0};
-	char cg_dir[100], cg_pin_path[100];
-	struct bpf_link *link = NULL;
+	int map_fd;
+	int rc = 0;
 	int key = 0;
 	int cg1 = 0;
-	int rc = 0;
+	int type = BPF_CGROUP_INET_EGRESS;
+	char cg_dir[100];
+	struct hbm_queue_stats qstats = {0};
 
 	sprintf(cg_dir, "/hbm%d", cg_id);
-	rc = prog_load(prog);
-	if (rc != 0)
-		return rc;
+	map_fd = prog_load(prog);
+	if (map_fd  == -1)
+		return 1;
 
 	if (setup_cgroup_environment()) {
 		printf("ERROR: setting cgroup environment\n");
@@ -190,24 +191,16 @@ static int run_bpf_prog(char *prog, int cg_id)
 	qstats.stats = stats_flag ? 1 : 0;
 	qstats.loopback = loopback_flag ? 1 : 0;
 	qstats.no_cn = no_cn_flag ? 1 : 0;
-	if (bpf_map_update_elem(queue_stats_fd, &key, &qstats, BPF_ANY)) {
+	if (bpf_map_update_elem(map_fd, &key, &qstats, BPF_ANY)) {
 		printf("ERROR: Could not update map element\n");
 		goto err;
 	}
 
 	if (!outFlag)
-		bpf_program__set_expected_attach_type(bpf_prog, BPF_CGROUP_INET_INGRESS);
-
-	link = bpf_program__attach_cgroup(bpf_prog, cg1);
-	if (libbpf_get_error(link)) {
-		fprintf(stderr, "ERROR: bpf_program__attach_cgroup failed\n");
-		goto err;
-	}
-
-	sprintf(cg_pin_path, "/sys/fs/bpf/hbm%d", cg_id);
-	rc = bpf_link__pin(link, cg_pin_path);
-	if (rc < 0) {
-		printf("ERROR: bpf_link__pin failed: %d\n", rc);
+		type = BPF_CGROUP_INET_INGRESS;
+	if (bpf_prog_attach(bpfprog_fd, cg1, type, 0)) {
+		printf("ERROR: bpf_prog_attach fails!\n");
+		log_err("Attaching prog");
 		goto err;
 	}
 
@@ -221,7 +214,7 @@ static int run_bpf_prog(char *prog, int cg_id)
 #define DELTA_RATE_CHECK 10000		/* in us */
 #define RATE_THRESHOLD 9500000000	/* 9.5 Gbps */
 
-		bpf_map_lookup_elem(queue_stats_fd, &key, &qstats);
+		bpf_map_lookup_elem(map_fd, &key, &qstats);
 		if (gettimeofday(&t0, NULL) < 0)
 			do_error("gettimeofday failed", true);
 		t_last = t0;
@@ -250,7 +243,7 @@ static int run_bpf_prog(char *prog, int cg_id)
 			fclose(fin);
 			printf("  new_eth_tx_bytes:%llu\n",
 			       new_eth_tx_bytes);
-			bpf_map_lookup_elem(queue_stats_fd, &key, &qstats);
+			bpf_map_lookup_elem(map_fd, &key, &qstats);
 			new_cg_tx_bytes = qstats.bytes_total;
 			delta_bytes = new_eth_tx_bytes - last_eth_tx_bytes;
 			last_eth_tx_bytes = new_eth_tx_bytes;
@@ -297,14 +290,14 @@ static int run_bpf_prog(char *prog, int cg_id)
 					rate = minRate;
 				qstats.rate = rate;
 			}
-			if (bpf_map_update_elem(queue_stats_fd, &key, &qstats, BPF_ANY))
+			if (bpf_map_update_elem(map_fd, &key, &qstats, BPF_ANY))
 				do_error("update map element fails", false);
 		}
 	} else {
 		sleep(dur);
 	}
 	// Get stats!
-	if (stats_flag && bpf_map_lookup_elem(queue_stats_fd, &key, &qstats)) {
+	if (stats_flag && bpf_map_lookup_elem(map_fd, &key, &qstats)) {
 		char fname[100];
 		FILE *fout;
 
@@ -315,7 +308,6 @@ static int run_bpf_prog(char *prog, int cg_id)
 		fout = fopen(fname, "w");
 		fprintf(fout, "id:%d\n", cg_id);
 		fprintf(fout, "ERROR: Could not lookup queue_stats\n");
-		fclose(fout);
 	} else if (stats_flag && qstats.lastPacketTime >
 		   qstats.firstPacketTime) {
 		long long delta_us = (qstats.lastPacketTime -
@@ -403,20 +395,14 @@ static int run_bpf_prog(char *prog, int cg_id)
 
 	if (debugFlag)
 		read_trace_pipe2();
-	goto cleanup;
-
+	return rc;
 err:
 	rc = 1;
 
-cleanup:
-	bpf_link__destroy(link);
-	bpf_object__close(obj);
-
-	if (cg1 != -1)
+	if (cg1)
 		close(cg1);
+	cleanup_cgroup_environment();
 
-	if (rc != 0)
-		cleanup_cgroup_environment();
 	return rc;
 }
 
@@ -498,6 +484,7 @@ int main(int argc, char **argv)
 					"Option -%c requires an argument.\n\n",
 					optopt);
 		case 'h':
+			__fallthrough;
 		default:
 			Usage();
 			return 0;
@@ -507,9 +494,6 @@ int main(int argc, char **argv)
 	if (optind < argc)
 		prog = argv[optind];
 	printf("HBM prog: %s\n", prog != NULL ? prog : "NULL");
-
-	/* Use libbpf 1.0 API mode */
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
 	return run_bpf_prog(prog, cg_id);
 }

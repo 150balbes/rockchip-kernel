@@ -140,8 +140,8 @@ sa1100_handle_irq(struct pt_regs *regs)
 		if (mask == 0)
 			break;
 
-		generic_handle_domain_irq(sa1100_normal_irqdomain,
-					  ffs(mask) - 1);
+		handle_domain_irq(sa1100_normal_irqdomain,
+				ffs(mask) - 1, regs);
 	} while (1);
 }
 

@@ -17,7 +17,6 @@
 #include <linux/iversion.h>
 #include <linux/nls.h>
 #include <linux/buffer_head.h>
-#include <linux/magic.h>
 
 #include "exfat_raw.h"
 #include "exfat_fs.h"
@@ -100,6 +99,7 @@ static int exfat_set_vol_flags(struct super_block *sb, unsigned short new_flags)
 {
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 	struct boot_sector *p_boot = (struct boot_sector *)sbi->boot_bh->b_data;
+	bool sync;
 
 	/* retain persistent-flags */
 	new_flags |= sbi->vol_flags_persistent;
@@ -118,11 +118,16 @@ static int exfat_set_vol_flags(struct super_block *sb, unsigned short new_flags)
 
 	p_boot->vol_flags = cpu_to_le16(new_flags);
 
+	if ((new_flags & VOLUME_DIRTY) && !buffer_dirty(sbi->boot_bh))
+		sync = true;
+	else
+		sync = false;
+
 	set_buffer_uptodate(sbi->boot_bh);
 	mark_buffer_dirty(sbi->boot_bh);
 
-	__sync_dirty_buffer(sbi->boot_bh, REQ_SYNC | REQ_FUA | REQ_PREFLUSH);
-
+	if (sync)
+		sync_dirty_buffer(sbi->boot_bh);
 	return 0;
 }
 
@@ -168,11 +173,7 @@ static int exfat_show_options(struct seq_file *m, struct dentry *root)
 		seq_puts(m, ",errors=remount-ro");
 	if (opts->discard)
 		seq_puts(m, ",discard");
-	if (opts->keep_last_dots)
-		seq_puts(m, ",keep_last_dots");
-	if (opts->sys_tz)
-		seq_puts(m, ",sys_tz");
-	else if (opts->time_offset)
+	if (opts->time_offset)
 		seq_printf(m, ",time_offset=%d", opts->time_offset);
 	return 0;
 }
@@ -181,7 +182,7 @@ static struct inode *exfat_alloc_inode(struct super_block *sb)
 {
 	struct exfat_inode_info *ei;
 
-	ei = alloc_inode_sb(sb, exfat_inode_cachep, GFP_NOFS);
+	ei = kmem_cache_alloc(exfat_inode_cachep, GFP_NOFS);
 	if (!ei)
 		return NULL;
 
@@ -215,8 +216,6 @@ enum {
 	Opt_charset,
 	Opt_errors,
 	Opt_discard,
-	Opt_keep_last_dots,
-	Opt_sys_tz,
 	Opt_time_offset,
 
 	/* Deprecated options */
@@ -243,8 +242,6 @@ static const struct fs_parameter_spec exfat_parameters[] = {
 	fsparam_string("iocharset",		Opt_charset),
 	fsparam_enum("errors",			Opt_errors, exfat_param_enums),
 	fsparam_flag("discard",			Opt_discard),
-	fsparam_flag("keep_last_dots",		Opt_keep_last_dots),
-	fsparam_flag("sys_tz",			Opt_sys_tz),
 	fsparam_s32("time_offset",		Opt_time_offset),
 	__fsparam(NULL, "utf8",			Opt_utf8, fs_param_deprecated,
 		  NULL),
@@ -298,12 +295,6 @@ static int exfat_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		break;
 	case Opt_discard:
 		opts->discard = 1;
-		break;
-	case Opt_keep_last_dots:
-		opts->keep_last_dots = 1;
-		break;
-	case Opt_sys_tz:
-		opts->sys_tz = 1;
 		break;
 	case Opt_time_offset:
 		/*
@@ -373,7 +364,8 @@ static int exfat_read_root(struct inode *inode)
 	inode->i_op = &exfat_dir_inode_operations;
 	inode->i_fop = &exfat_dir_operations;
 
-	inode->i_blocks = round_up(i_size_read(inode), sbi->cluster_size) >> 9;
+	inode->i_blocks = round_up(i_size_read(inode), sbi->cluster_size) >>
+				inode->i_blkbits;
 	ei->i_pos = ((loff_t)sbi->root_dir << 32) | 0xffffffff;
 	ei->i_size_aligned = i_size_read(inode);
 	ei->i_size_ondisk = i_size_read(inode);
@@ -463,7 +455,7 @@ static int exfat_read_boot_sector(struct super_block *sb)
 	 */
 	if (p_boot->sect_size_bits < EXFAT_MIN_SECT_SIZE_BITS ||
 	    p_boot->sect_size_bits > EXFAT_MAX_SECT_SIZE_BITS) {
-		exfat_err(sb, "bogus sector size bits : %u",
+		exfat_err(sb, "bogus sector size bits : %u\n",
 				p_boot->sect_size_bits);
 		return -EINVAL;
 	}
@@ -472,7 +464,7 @@ static int exfat_read_boot_sector(struct super_block *sb)
 	 * sect_per_clus_bits could be at least 0 and at most 25 - sect_size_bits.
 	 */
 	if (p_boot->sect_per_clus_bits > EXFAT_MAX_SECT_PER_CLUS_BITS(p_boot)) {
-		exfat_err(sb, "bogus sectors bits per cluster : %u",
+		exfat_err(sb, "bogus sectors bits per cluster : %u\n",
 				p_boot->sect_per_clus_bits);
 		return -EINVAL;
 	}
@@ -633,9 +625,13 @@ static int exfat_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (opts->allow_utime == (unsigned short)-1)
 		opts->allow_utime = ~opts->fs_dmask & 0022;
 
-	if (opts->discard && !bdev_max_discard_sectors(sb->s_bdev)) {
-		exfat_warn(sb, "mounting with \"discard\" option, but the device does not support discard");
-		opts->discard = 0;
+	if (opts->discard) {
+		struct request_queue *q = bdev_get_queue(sb->s_bdev);
+
+		if (!blk_queue_discard(q)) {
+			exfat_warn(sb, "mounting with \"discard\" option, but the device does not support discard");
+			opts->discard = 0;
+		}
 	}
 
 	sb->s_flags |= SB_NODIRATIME;
@@ -756,7 +752,6 @@ static int exfat_init_fs_context(struct fs_context *fc)
 		return -ENOMEM;
 
 	mutex_init(&sbi->s_lock);
-	mutex_init(&sbi->bitmap_lock);
 	ratelimit_state_init(&sbi->ratelimit, DEFAULT_RATELIMIT_INTERVAL,
 			DEFAULT_RATELIMIT_BURST);
 
@@ -841,5 +836,6 @@ module_exit(exit_exfat_fs);
 
 MODULE_ALIAS_FS("exfat");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 MODULE_DESCRIPTION("exFAT filesystem support");
 MODULE_AUTHOR("Samsung Electronics Co., Ltd.");

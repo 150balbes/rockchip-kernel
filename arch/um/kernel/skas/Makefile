@@ -14,4 +14,4 @@ UNPROFILE_OBJS := clone.o
 
 KCOV_INSTRUMENT := n
 
-include $(srctree)/arch/um/scripts/Makefile.rules
+include arch/um/scripts/Makefile.rules

@@ -29,7 +29,6 @@ enum bpf_type_id_kind {
 enum bpf_type_info_kind {
 	BPF_TYPE_EXISTS = 0,		/* type existence in target kernel */
 	BPF_TYPE_SIZE = 1,		/* type size in target kernel */
-	BPF_TYPE_MATCHES = 2,		/* type match in target kernel */
 };
 
 /* second argument to __builtin_preserve_enum_value() built-in */
@@ -111,50 +110,21 @@ enum bpf_enum_value_kind {
 	val;								      \
 })
 
-#define ___bpf_field_ref1(field)	(field)
-#define ___bpf_field_ref2(type, field)	(((typeof(type) *)0)->field)
-#define ___bpf_field_ref(args...)					    \
-	___bpf_apply(___bpf_field_ref, ___bpf_narg(args))(args)
-
 /*
  * Convenience macro to check that field actually exists in target kernel's.
  * Returns:
  *    1, if matching field is present in target kernel;
  *    0, if no matching field found.
- *
- * Supports two forms:
- *   - field reference through variable access:
- *     bpf_core_field_exists(p->my_field);
- *   - field reference through type and field names:
- *     bpf_core_field_exists(struct my_type, my_field).
  */
-#define bpf_core_field_exists(field...)					    \
-	__builtin_preserve_field_info(___bpf_field_ref(field), BPF_FIELD_EXISTS)
+#define bpf_core_field_exists(field)					    \
+	__builtin_preserve_field_info(field, BPF_FIELD_EXISTS)
 
 /*
  * Convenience macro to get the byte size of a field. Works for integers,
  * struct/unions, pointers, arrays, and enums.
- *
- * Supports two forms:
- *   - field reference through variable access:
- *     bpf_core_field_size(p->my_field);
- *   - field reference through type and field names:
- *     bpf_core_field_size(struct my_type, my_field).
  */
-#define bpf_core_field_size(field...)					    \
-	__builtin_preserve_field_info(___bpf_field_ref(field), BPF_FIELD_BYTE_SIZE)
-
-/*
- * Convenience macro to get field's byte offset.
- *
- * Supports two forms:
- *   - field reference through variable access:
- *     bpf_core_field_offset(p->my_field);
- *   - field reference through type and field names:
- *     bpf_core_field_offset(struct my_type, my_field).
- */
-#define bpf_core_field_offset(field...)					    \
-	__builtin_preserve_field_info(___bpf_field_ref(field), BPF_FIELD_BYTE_OFFSET)
+#define bpf_core_field_size(field)					    \
+	__builtin_preserve_field_info(field, BPF_FIELD_BYTE_SIZE)
 
 /*
  * Convenience macro to get BTF type ID of a specified type, using a local BTF
@@ -183,16 +153,6 @@ enum bpf_enum_value_kind {
  */
 #define bpf_core_type_exists(type)					    \
 	__builtin_preserve_type_info(*(typeof(type) *)0, BPF_TYPE_EXISTS)
-
-/*
- * Convenience macro to check that provided named type
- * (struct/union/enum/typedef) "matches" that in a target kernel.
- * Returns:
- *    1, if the type matches in the target kernel's BTF;
- *    0, if the type does not match any in the target kernel
- */
-#define bpf_core_type_matches(type)					    \
-	__builtin_preserve_type_info(*(typeof(type) *)0, BPF_TYPE_MATCHES)
 
 /*
  * Convenience macro to get the byte size of a provided named type
@@ -243,22 +203,17 @@ enum bpf_enum_value_kind {
  * (local) BTF, used to record relocation.
  */
 #define bpf_core_read(dst, sz, src)					    \
-	bpf_probe_read_kernel(dst, sz, (const void *)__builtin_preserve_access_index(src))
+	bpf_probe_read_kernel(dst, sz,					    \
+			      (const void *)__builtin_preserve_access_index(src))
 
-/* NOTE: see comments for BPF_CORE_READ_USER() about the proper types use. */
-#define bpf_core_read_user(dst, sz, src)				    \
-	bpf_probe_read_user(dst, sz, (const void *)__builtin_preserve_access_index(src))
 /*
  * bpf_core_read_str() is a thin wrapper around bpf_probe_read_str()
  * additionally emitting BPF CO-RE field relocation for specified source
  * argument.
  */
 #define bpf_core_read_str(dst, sz, src)					    \
-	bpf_probe_read_kernel_str(dst, sz, (const void *)__builtin_preserve_access_index(src))
-
-/* NOTE: see comments for BPF_CORE_READ_USER() about the proper types use. */
-#define bpf_core_read_user_str(dst, sz, src)				    \
-	bpf_probe_read_user_str(dst, sz, (const void *)__builtin_preserve_access_index(src))
+	bpf_probe_read_kernel_str(dst, sz,				    \
+				  (const void *)__builtin_preserve_access_index(src))
 
 #define ___concat(a, b) a ## b
 #define ___apply(fn, n) ___concat(fn, n)
@@ -317,29 +272,30 @@ enum bpf_enum_value_kind {
 	read_fn((void *)(dst), sizeof(*(dst)), &((src_type)(src))->accessor)
 
 /* "recursively" read a sequence of inner pointers using local __t var */
-#define ___rd_first(fn, src, a) ___read(fn, &__t, ___type(src), src, a);
-#define ___rd_last(fn, ...)						    \
-	___read(fn, &__t, ___type(___nolast(__VA_ARGS__)), __t, ___last(__VA_ARGS__));
-#define ___rd_p1(fn, ...) const void *__t; ___rd_first(fn, __VA_ARGS__)
-#define ___rd_p2(fn, ...) ___rd_p1(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p3(fn, ...) ___rd_p2(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p4(fn, ...) ___rd_p3(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p5(fn, ...) ___rd_p4(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p6(fn, ...) ___rd_p5(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p7(fn, ...) ___rd_p6(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p8(fn, ...) ___rd_p7(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___rd_p9(fn, ...) ___rd_p8(fn, ___nolast(__VA_ARGS__)) ___rd_last(fn, __VA_ARGS__)
-#define ___read_ptrs(fn, src, ...)					    \
-	___apply(___rd_p, ___narg(__VA_ARGS__))(fn, src, __VA_ARGS__)
+#define ___rd_first(src, a) ___read(bpf_core_read, &__t, ___type(src), src, a);
+#define ___rd_last(...)							    \
+	___read(bpf_core_read, &__t,					    \
+		___type(___nolast(__VA_ARGS__)), __t, ___last(__VA_ARGS__));
+#define ___rd_p1(...) const void *__t; ___rd_first(__VA_ARGS__)
+#define ___rd_p2(...) ___rd_p1(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p3(...) ___rd_p2(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p4(...) ___rd_p3(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p5(...) ___rd_p4(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p6(...) ___rd_p5(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p7(...) ___rd_p6(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p8(...) ___rd_p7(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___rd_p9(...) ___rd_p8(___nolast(__VA_ARGS__)) ___rd_last(__VA_ARGS__)
+#define ___read_ptrs(src, ...)						    \
+	___apply(___rd_p, ___narg(__VA_ARGS__))(src, __VA_ARGS__)
 
-#define ___core_read0(fn, fn_ptr, dst, src, a)				    \
+#define ___core_read0(fn, dst, src, a)					    \
 	___read(fn, dst, ___type(src), src, a);
-#define ___core_readN(fn, fn_ptr, dst, src, ...)			    \
-	___read_ptrs(fn_ptr, src, ___nolast(__VA_ARGS__))		    \
+#define ___core_readN(fn, dst, src, ...)				    \
+	___read_ptrs(src, ___nolast(__VA_ARGS__))			    \
 	___read(fn, dst, ___type(src, ___nolast(__VA_ARGS__)), __t,	    \
 		___last(__VA_ARGS__));
-#define ___core_read(fn, fn_ptr, dst, src, a, ...)			    \
-	___apply(___core_read, ___empty(__VA_ARGS__))(fn, fn_ptr, dst,	    \
+#define ___core_read(fn, dst, src, a, ...)				    \
+	___apply(___core_read, ___empty(__VA_ARGS__))(fn, dst,		    \
 						      src, a, ##__VA_ARGS__)
 
 /*
@@ -347,73 +303,20 @@ enum bpf_enum_value_kind {
  * BPF_CORE_READ(), in which final field is read into user-provided storage.
  * See BPF_CORE_READ() below for more details on general usage.
  */
-#define BPF_CORE_READ_INTO(dst, src, a, ...) ({				    \
-	___core_read(bpf_core_read, bpf_core_read,			    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/*
- * Variant of BPF_CORE_READ_INTO() for reading from user-space memory.
- *
- * NOTE: see comments for BPF_CORE_READ_USER() about the proper types use.
- */
-#define BPF_CORE_READ_USER_INTO(dst, src, a, ...) ({			    \
-	___core_read(bpf_core_read_user, bpf_core_read_user,		    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/* Non-CO-RE variant of BPF_CORE_READ_INTO() */
-#define BPF_PROBE_READ_INTO(dst, src, a, ...) ({			    \
-	___core_read(bpf_probe_read_kernel, bpf_probe_read_kernel,	    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/* Non-CO-RE variant of BPF_CORE_READ_USER_INTO().
- *
- * As no CO-RE relocations are emitted, source types can be arbitrary and are
- * not restricted to kernel types only.
- */
-#define BPF_PROBE_READ_USER_INTO(dst, src, a, ...) ({			    \
-	___core_read(bpf_probe_read_user, bpf_probe_read_user,		    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
+#define BPF_CORE_READ_INTO(dst, src, a, ...)				    \
+	({								    \
+		___core_read(bpf_core_read, dst, (src), a, ##__VA_ARGS__)   \
+	})
 
 /*
  * BPF_CORE_READ_STR_INTO() does same "pointer chasing" as
  * BPF_CORE_READ() for intermediate pointers, but then executes (and returns
  * corresponding error code) bpf_core_read_str() for final string read.
  */
-#define BPF_CORE_READ_STR_INTO(dst, src, a, ...) ({			    \
-	___core_read(bpf_core_read_str, bpf_core_read,			    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/*
- * Variant of BPF_CORE_READ_STR_INTO() for reading from user-space memory.
- *
- * NOTE: see comments for BPF_CORE_READ_USER() about the proper types use.
- */
-#define BPF_CORE_READ_USER_STR_INTO(dst, src, a, ...) ({		    \
-	___core_read(bpf_core_read_user_str, bpf_core_read_user,	    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/* Non-CO-RE variant of BPF_CORE_READ_STR_INTO() */
-#define BPF_PROBE_READ_STR_INTO(dst, src, a, ...) ({			    \
-	___core_read(bpf_probe_read_kernel_str, bpf_probe_read_kernel,	    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
-
-/*
- * Non-CO-RE variant of BPF_CORE_READ_USER_STR_INTO().
- *
- * As no CO-RE relocations are emitted, source types can be arbitrary and are
- * not restricted to kernel types only.
- */
-#define BPF_PROBE_READ_USER_STR_INTO(dst, src, a, ...) ({		    \
-	___core_read(bpf_probe_read_user_str, bpf_probe_read_user,	    \
-		     dst, (src), a, ##__VA_ARGS__)			    \
-})
+#define BPF_CORE_READ_STR_INTO(dst, src, a, ...)			    \
+	({								    \
+		___core_read(bpf_core_read_str, dst, (src), a, ##__VA_ARGS__)\
+	})
 
 /*
  * BPF_CORE_READ() is used to simplify BPF CO-RE relocatable read, especially
@@ -439,46 +342,12 @@ enum bpf_enum_value_kind {
  * N.B. Only up to 9 "field accessors" are supported, which should be more
  * than enough for any practical purpose.
  */
-#define BPF_CORE_READ(src, a, ...) ({					    \
-	___type((src), a, ##__VA_ARGS__) __r;				    \
-	BPF_CORE_READ_INTO(&__r, (src), a, ##__VA_ARGS__);		    \
-	__r;								    \
-})
-
-/*
- * Variant of BPF_CORE_READ() for reading from user-space memory.
- *
- * NOTE: all the source types involved are still *kernel types* and need to
- * exist in kernel (or kernel module) BTF, otherwise CO-RE relocation will
- * fail. Custom user types are not relocatable with CO-RE.
- * The typical situation in which BPF_CORE_READ_USER() might be used is to
- * read kernel UAPI types from the user-space memory passed in as a syscall
- * input argument.
- */
-#define BPF_CORE_READ_USER(src, a, ...) ({				    \
-	___type((src), a, ##__VA_ARGS__) __r;				    \
-	BPF_CORE_READ_USER_INTO(&__r, (src), a, ##__VA_ARGS__);		    \
-	__r;								    \
-})
-
-/* Non-CO-RE variant of BPF_CORE_READ() */
-#define BPF_PROBE_READ(src, a, ...) ({					    \
-	___type((src), a, ##__VA_ARGS__) __r;				    \
-	BPF_PROBE_READ_INTO(&__r, (src), a, ##__VA_ARGS__);		    \
-	__r;								    \
-})
-
-/*
- * Non-CO-RE variant of BPF_CORE_READ_USER().
- *
- * As no CO-RE relocations are emitted, source types can be arbitrary and are
- * not restricted to kernel types only.
- */
-#define BPF_PROBE_READ_USER(src, a, ...) ({				    \
-	___type((src), a, ##__VA_ARGS__) __r;				    \
-	BPF_PROBE_READ_USER_INTO(&__r, (src), a, ##__VA_ARGS__);	    \
-	__r;								    \
-})
+#define BPF_CORE_READ(src, a, ...)					    \
+	({								    \
+		___type((src), a, ##__VA_ARGS__) __r;			    \
+		BPF_CORE_READ_INTO(&__r, (src), a, ##__VA_ARGS__);	    \
+		__r;							    \
+	})
 
 #endif
 

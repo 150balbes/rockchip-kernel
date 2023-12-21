@@ -26,13 +26,13 @@ static int attach__enable_on_exec(struct evlist *evlist)
 
 	pr_debug("attaching to spawned child, enable on exec\n");
 
-	err = evlist__create_maps(evlist, &target);
+	err = perf_evlist__create_maps(evlist, &target);
 	if (err < 0) {
 		pr_debug("Not enough memory to create thread/cpu maps\n");
 		return err;
 	}
 
-	err = evlist__prepare_workload(evlist, &target, argv, false, NULL);
+	err = perf_evlist__prepare_workload(evlist, &target, argv, false, NULL);
 	if (err < 0) {
 		pr_debug("Couldn't run the workload!\n");
 		return err;
@@ -47,7 +47,7 @@ static int attach__enable_on_exec(struct evlist *evlist)
 		return err;
 	}
 
-	return evlist__start_workload(evlist) == 1 ? TEST_OK : TEST_FAIL;
+	return perf_evlist__start_workload(evlist) == 1 ? TEST_OK : TEST_FAIL;
 }
 
 static int detach__enable_on_exec(struct evlist *evlist)
@@ -174,7 +174,7 @@ static int test_times(int (attach)(struct evlist *),
 		goto out_err;
 	}
 
-	err = parse_event(evlist, "cpu-clock:u");
+	err = parse_events(evlist, "cpu-clock:u", NULL);
 	if (err) {
 		pr_debug("failed to parse event cpu-clock:u\n");
 		goto out_err;
@@ -216,7 +216,7 @@ out_err:
  * and checks that enabled and running times
  * match.
  */
-static int test__event_times(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__event_times(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	int err, ret = 0;
 
@@ -239,5 +239,3 @@ static int test__event_times(struct test_suite *test __maybe_unused, int subtest
 #undef _T
 	return ret;
 }
-
-DEFINE_SUITE("Event times", event_times);

@@ -21,7 +21,9 @@ more details.
 #include "ia_css_binary.h"
 #include "sh_css_internal.h"
 
-int ia_css_yuv444_io_config(const struct ia_css_binary     *binary,
-			    const struct sh_css_binary_args *args);
+void
+ia_css_yuv444_io_config(
+    const struct ia_css_binary     *binary,
+    const struct sh_css_binary_args *args);
 
 #endif /*__YUV44_IO_HOST_H */

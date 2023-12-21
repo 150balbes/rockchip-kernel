@@ -16,7 +16,7 @@
  * to local caches without needing to acquire swap_info
  * lock.  We do not reuse the returned slots directly but
  * move them back to the global pool in a batch.  This
- * allows the slots to coalesce and reduce fragmentation.
+ * allows the slots to coaellesce and reduce fragmentation.
  *
  * The swap entry allocated is marked with SWAP_HAS_CACHE
  * flag in map_count that prevents it from being allocated
@@ -30,10 +30,10 @@
 #include <linux/swap_slots.h>
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
-#include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/mutex.h>
 #include <linux/mm.h>
+#include <trace/hooks/mm.h>
 
 static DEFINE_PER_CPU(struct swap_slots_cache, swp_slots);
 static bool	swap_slot_cache_active;
@@ -44,6 +44,8 @@ static DEFINE_MUTEX(swap_slots_cache_mutex);
 static DEFINE_MUTEX(swap_slots_cache_enable_mutex);
 
 static void __drain_swap_slots_cache(unsigned int type);
+static void deactivate_swap_slots_cache(void);
+static void reactivate_swap_slots_cache(void);
 
 #define use_swap_slot_cache (swap_slot_cache_active && swap_slot_cache_enabled)
 #define SLOTS_CACHE 0x1
@@ -53,6 +55,7 @@ static void deactivate_swap_slots_cache(void)
 {
 	mutex_lock(&swap_slots_cache_mutex);
 	swap_slot_cache_active = false;
+	trace_android_vh_swap_slot_cache_active(false);
 	__drain_swap_slots_cache(SLOTS_CACHE|SLOTS_CACHE_RET);
 	mutex_unlock(&swap_slots_cache_mutex);
 }
@@ -61,6 +64,7 @@ static void reactivate_swap_slots_cache(void)
 {
 	mutex_lock(&swap_slots_cache_mutex);
 	swap_slot_cache_active = true;
+	trace_android_vh_swap_slot_cache_active(true);
 	mutex_unlock(&swap_slots_cache_mutex);
 }
 
@@ -71,9 +75,9 @@ void disable_swap_slots_cache_lock(void)
 	swap_slot_cache_enabled = false;
 	if (swap_slot_cache_initialized) {
 		/* serialize with cpu hotplug operations */
-		cpus_read_lock();
+		get_online_cpus();
 		__drain_swap_slots_cache(SLOTS_CACHE|SLOTS_CACHE_RET);
-		cpus_read_unlock();
+		put_online_cpus();
 	}
 }
 
@@ -88,7 +92,13 @@ void reenable_swap_slots_cache_unlock(void)
 	mutex_unlock(&swap_slots_cache_enable_mutex);
 }
 
-static bool check_cache_active(void)
+bool is_swap_slot_cache_enabled(void)
+{
+	return swap_slot_cache_enabled;
+}
+EXPORT_SYMBOL_GPL(is_swap_slot_cache_enabled);
+
+bool check_cache_active(void)
 {
 	long pages;
 
@@ -109,17 +119,26 @@ static bool check_cache_active(void)
 out:
 	return swap_slot_cache_active;
 }
+EXPORT_SYMBOL_GPL(check_cache_active);
 
 static int alloc_swap_slot_cache(unsigned int cpu)
 {
 	struct swap_slots_cache *cache;
 	swp_entry_t *slots, *slots_ret;
+	bool skip = false;
+	int ret = 0;
 
 	/*
 	 * Do allocation outside swap_slots_cache_mutex
-	 * as kvzalloc could trigger reclaim and folio_alloc_swap,
+	 * as kvzalloc could trigger reclaim and get_swap_page,
 	 * which can lock swap_slots_cache_mutex.
 	 */
+	trace_android_rvh_alloc_swap_slot_cache(&per_cpu(swp_slots, cpu),
+		&ret, &skip);
+	trace_android_vh_alloc_swap_slot_cache(&per_cpu(swp_slots, cpu),
+		&ret, &skip);
+	if (skip)
+		return ret;
 	slots = kvcalloc(SWAP_SLOTS_CACHE_SIZE, sizeof(swp_entry_t),
 			 GFP_KERNEL);
 	if (!slots)
@@ -170,8 +189,15 @@ static void drain_slots_cache_cpu(unsigned int cpu, unsigned int type,
 {
 	struct swap_slots_cache *cache;
 	swp_entry_t *slots = NULL;
+	bool skip = false;
 
 	cache = &per_cpu(swp_slots, cpu);
+	trace_android_rvh_drain_slots_cache_cpu(cache, type,
+		free_slots, &skip);
+	trace_android_vh_drain_slots_cache_cpu(cache, type,
+		free_slots, &skip);
+	if (skip)
+		return;
 	if ((type & SLOTS_CACHE) && cache->slots) {
 		mutex_lock(&cache->alloc_lock);
 		swapcache_free_entries(cache->slots + cache->cur, cache->nr);
@@ -192,7 +218,8 @@ static void drain_slots_cache_cpu(unsigned int cpu, unsigned int type,
 			cache->slots_ret = NULL;
 		}
 		spin_unlock_irq(&cache->free_lock);
-		kvfree(slots);
+		if (slots)
+			kvfree(slots);
 	}
 }
 
@@ -213,7 +240,7 @@ static void __drain_swap_slots_cache(unsigned int type)
 	 * this function can be invoked in the cpu
 	 * hot plug path:
 	 * cpu_up -> lock cpu_hotplug -> cpu hotplug state callback
-	 *   -> memory allocation -> direct reclaim -> folio_alloc_swap
+	 *   -> memory allocation -> direct reclaim -> get_swap_page
 	 *   -> drain_swap_slots_cache
 	 *
 	 * Hence the loop over current online cpu below could miss cpu that
@@ -258,7 +285,7 @@ out_unlock:
 /* called with swap slot cache's alloc lock held */
 static int refill_swap_slots_cache(struct swap_slots_cache *cache)
 {
-	if (!use_swap_slot_cache)
+	if (!use_swap_slot_cache || cache->nr)
 		return 0;
 
 	cache->cur = 0;
@@ -269,11 +296,16 @@ static int refill_swap_slots_cache(struct swap_slots_cache *cache)
 	return cache->nr;
 }
 
-void free_swap_slot(swp_entry_t entry)
+int free_swap_slot(swp_entry_t entry)
 {
 	struct swap_slots_cache *cache;
+	bool skip = false;
 
 	cache = raw_cpu_ptr(&swp_slots);
+	trace_android_rvh_free_swap_slot(entry, cache, &skip);
+	trace_android_vh_free_swap_slot(entry, cache, &skip);
+	if (skip)
+		return 0;
 	if (likely(use_swap_slot_cache && cache->slots_ret)) {
 		spin_lock_irq(&cache->free_lock);
 		/* Swap slots cache may be deactivated before acquiring lock */
@@ -297,18 +329,25 @@ void free_swap_slot(swp_entry_t entry)
 direct_free:
 		swapcache_free_entries(&entry, 1);
 	}
+
+	return 0;
 }
 
-swp_entry_t folio_alloc_swap(struct folio *folio)
+swp_entry_t get_swap_page(struct page *page)
 {
 	swp_entry_t entry;
 	struct swap_slots_cache *cache;
-
+	bool found = false;
 	entry.val = 0;
 
-	if (folio_test_large(folio)) {
-		if (IS_ENABLED(CONFIG_THP_SWAP) && arch_thp_swp_supported())
-			get_swap_pages(1, &entry, folio_nr_pages(folio));
+	trace_android_rvh_get_swap_page(page, &entry, raw_cpu_ptr(&swp_slots), &found);
+	trace_android_vh_get_swap_page(page, &entry, raw_cpu_ptr(&swp_slots), &found);
+	if (found)
+		goto out;
+
+	if (PageTransHuge(page)) {
+		if (IS_ENABLED(CONFIG_THP_SWAP))
+			get_swap_pages(1, &entry, HPAGE_PMD_NR);
 		goto out;
 	}
 
@@ -342,8 +381,8 @@ repeat:
 
 	get_swap_pages(1, &entry, 1);
 out:
-	if (mem_cgroup_try_charge_swap(folio, entry)) {
-		put_swap_folio(folio, entry);
+	if (mem_cgroup_try_charge_swap(page, entry)) {
+		put_swap_page(page, entry);
 		entry.val = 0;
 	}
 	return entry;

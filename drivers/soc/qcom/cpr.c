@@ -801,6 +801,38 @@ unlock:
 	return ret;
 }
 
+static int cpr_read_efuse(struct device *dev, const char *cname, u32 *data)
+{
+	struct nvmem_cell *cell;
+	ssize_t len;
+	char *ret;
+	int i;
+
+	*data = 0;
+
+	cell = nvmem_cell_get(dev, cname);
+	if (IS_ERR(cell)) {
+		if (PTR_ERR(cell) != -EPROBE_DEFER)
+			dev_err(dev, "undefined cell %s\n", cname);
+		return PTR_ERR(cell);
+	}
+
+	ret = nvmem_cell_read(cell, &len);
+	nvmem_cell_put(cell);
+	if (IS_ERR(ret)) {
+		dev_err(dev, "can't read cell %s\n", cname);
+		return PTR_ERR(ret);
+	}
+
+	for (i = 0; i < len; i++)
+		*data |= ret[i] << (8 * i);
+
+	kfree(ret);
+	dev_dbg(dev, "efuse read(%s) = %x, bytes %zd\n", cname, *data, len);
+
+	return 0;
+}
+
 static int
 cpr_populate_ring_osc_idx(struct cpr_drv *drv)
 {
@@ -811,7 +843,8 @@ cpr_populate_ring_osc_idx(struct cpr_drv *drv)
 	int ret;
 
 	for (; fuse < end; fuse++, fuses++) {
-		ret = nvmem_cell_read_variable_le_u32(drv->dev, fuses->ring_osc, &data);
+		ret = cpr_read_efuse(drv->dev, fuses->ring_osc,
+				     &data);
 		if (ret)
 			return ret;
 		fuse->ring_osc_idx = data;
@@ -830,7 +863,7 @@ static int cpr_read_fuse_uV(const struct cpr_desc *desc,
 	u32 bits = 0;
 	int ret;
 
-	ret = nvmem_cell_read_variable_le_u32(drv->dev, init_v_efuse, &bits);
+	ret = cpr_read_efuse(drv->dev, init_v_efuse, &bits);
 	if (ret)
 		return ret;
 
@@ -899,7 +932,7 @@ static int cpr_fuse_corner_init(struct cpr_drv *drv)
 		}
 
 		/* Populate target quotient by scaling */
-		ret = nvmem_cell_read_variable_le_u32(drv->dev, fuses->quotient, &fuse->quot);
+		ret = cpr_read_efuse(drv->dev, fuses->quotient, &fuse->quot);
 		if (ret)
 			return ret;
 
@@ -968,7 +1001,7 @@ static int cpr_calculate_scaling(const char *quot_offset,
 	prev_fuse = fuse - 1;
 
 	if (quot_offset) {
-		ret = nvmem_cell_read_variable_le_u32(drv->dev, quot_offset, &quot_diff);
+		ret = cpr_read_efuse(drv->dev, quot_offset, &quot_diff);
 		if (ret)
 			return ret;
 
@@ -1614,6 +1647,7 @@ static void cpr_debugfs_init(struct cpr_drv *drv)
 
 static int cpr_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	struct device *dev = &pdev->dev;
 	struct cpr_drv *drv;
 	int irq, ret;
@@ -1647,7 +1681,8 @@ static int cpr_probe(struct platform_device *pdev)
 	if (IS_ERR(drv->tcsr))
 		return PTR_ERR(drv->tcsr);
 
-	drv->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	drv->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(drv->base))
 		return PTR_ERR(drv->base);
 
@@ -1666,7 +1701,7 @@ static int cpr_probe(struct platform_device *pdev)
 	 * initialized after attaching to the power domain,
 	 * since it depends on the CPU's OPP table.
 	 */
-	ret = nvmem_cell_read_variable_le_u32(dev, "cpr_fuse_revision", &cpr_rev);
+	ret = cpr_read_efuse(dev, "cpr_fuse_revision", &cpr_rev);
 	if (ret)
 		return ret;
 
@@ -1708,16 +1743,12 @@ static int cpr_probe(struct platform_device *pdev)
 
 	ret = of_genpd_add_provider_simple(dev->of_node, &drv->pd);
 	if (ret)
-		goto err_remove_genpd;
+		return ret;
 
 	platform_set_drvdata(pdev, drv);
 	cpr_debugfs_init(drv);
 
 	return 0;
-
-err_remove_genpd:
-	pm_genpd_remove(&drv->pd);
-	return ret;
 }
 
 static int cpr_remove(struct platform_device *pdev)

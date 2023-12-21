@@ -194,9 +194,7 @@ int mt76x2u_register_device(struct mt76x02_dev *dev)
 	int err;
 
 	INIT_DELAYED_WORK(&dev->cal_work, mt76x2u_phy_calibrate);
-	err = mt76x02_init_device(dev);
-	if (err)
-		return err;
+	mt76x02_init_device(dev);
 
 	err = mt76x2u_init_eeprom(dev);
 	if (err < 0)
@@ -238,7 +236,7 @@ fail:
 void mt76x2u_stop_hw(struct mt76x02_dev *dev)
 {
 	cancel_delayed_work_sync(&dev->cal_work);
-	cancel_delayed_work_sync(&dev->mphy.mac_work);
+	cancel_delayed_work_sync(&dev->mt76.mac_work);
 	mt76x2u_mac_stop(dev);
 }
 

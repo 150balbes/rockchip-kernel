@@ -1,40 +1,8 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-==============
-SCSI Subsystem
-==============
-
-.. toctree::
-   :maxdepth: 1
-
-Introduction
-============
-
-.. toctree::
-   :maxdepth: 1
-
-   scsi
-
-SCSI driver APIs
-================
-
-.. toctree::
-   :maxdepth: 1
-
-   scsi_mid_low_api
-   scsi_eh
-
-SCSI driver parameters
-======================
-
-.. toctree::
-   :maxdepth: 1
-
-   scsi-parameters
-   link_power_management_policy
-
-SCSI host adapter drivers
-=========================
+====================
+Linux SCSI Subsystem
+====================
 
 .. toctree::
    :maxdepth: 1
@@ -57,6 +25,7 @@ SCSI host adapter drivers
    hpsa
    hptiop
    libsas
+   link_power_management_policy
    lpfc
    megaraid
    ncr53c8xx
@@ -64,8 +33,12 @@ SCSI host adapter drivers
    ppa
    qlogicfas
    scsi-changer
+   scsi_eh
    scsi_fc_transport
    scsi-generic
+   scsi_mid_low_api
+   scsi-parameters
+   scsi
    sd-parameters
    smartpqi
    st

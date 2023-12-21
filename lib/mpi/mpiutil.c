@@ -80,7 +80,7 @@ EXPORT_SYMBOL_GPL(mpi_const);
 /****************
  * Note:  It was a bad idea to use the number of limbs to allocate
  *	  because on a alpha the limbs are large but we normally need
- *	  integers of n bits - So we should change this to bits (or bytes).
+ *	  integers of n bits - So we should chnage this to bits (or bytes).
  *
  *	  But mpi_alloc is used in a lot of places :-)
  */
@@ -272,7 +272,7 @@ MPI mpi_set_ui(MPI w, unsigned long u)
 	if (!w)
 		w = mpi_alloc(1);
 	/* FIXME: If U is 0 we have no need to resize and thus possible
-	 * allocating the limbs.
+	 * allocating the the limbs.
 	 */
 	RESIZE_IF_NEEDED(w, 1);
 	w->d[0] = u;

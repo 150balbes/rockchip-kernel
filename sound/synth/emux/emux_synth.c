@@ -845,8 +845,7 @@ calc_pitch(struct snd_emux_voice *vp)
 
 	/* 0xe000: root pitch */
 	offset += 0xe000 + vp->reg.rate_offset;
-	if (vp->emu->ops.get_pitch_shift)
-		offset += vp->emu->ops.get_pitch_shift(vp->emu);
+	offset += vp->emu->pitch_shift;
 	LIMITVALUE(offset, 0, 0xffff);
 	if (offset == vp->apitch)
 		return 0; /* unchanged */

@@ -14,6 +14,7 @@
 #include <linux/netfilter/x_tables.h>
 #include <linux/stringify.h>
 #include <linux/vmalloc.h>
+#include <linux/android_kabi.h>
 #include <net/netlink.h>
 #include <uapi/linux/netfilter/ipset/ip_set.h>
 
@@ -124,6 +125,8 @@ struct ip_set_ext {
 	bool target;
 };
 
+struct ip_set;
+
 #define ext_timeout(e, s)	\
 ((unsigned long *)(((void *)(e)) + (s)->offset[IPSET_EXT_ID_TIMEOUT]))
 #define ext_counter(e, s)	\
@@ -188,6 +191,8 @@ struct ip_set_type_variant {
 	bool (*same_set)(const struct ip_set *a, const struct ip_set *b);
 	/* Region-locking is used */
 	bool region_lock;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct ip_set_region {
@@ -197,10 +202,7 @@ struct ip_set_region {
 };
 
 /* Max range where every element is added/deleted in one step */
-#define IPSET_MAX_RANGE		(1<<14)
-
-/* The max revision number supported by any set type + 1 */
-#define IPSET_REVISION_MAX	9
+#define IPSET_MAX_RANGE		(1<<20)
 
 /* The core set type structure */
 struct ip_set_type {
@@ -219,8 +221,6 @@ struct ip_set_type {
 	u8 family;
 	/* Type revisions */
 	u8 revision_min, revision_max;
-	/* Revision-specific supported (create) flags */
-	u8 create_flags[IPSET_REVISION_MAX+1];
 	/* Set features to control swapping */
 	u16 features;
 
@@ -234,6 +234,8 @@ struct ip_set_type {
 
 	/* Set this to THIS_MODULE if you are a module, otherwise NULL */
 	struct module *me;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /* register and unregister set type */
@@ -276,6 +278,8 @@ struct ip_set {
 	size_t offset[IPSET_EXT_ID_MAX];
 	/* The type specific data */
 	void *data;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 static inline void
@@ -513,16 +517,6 @@ ip_set_init_skbinfo(struct ip_set_skbinfo *skbinfo,
 		    const struct ip_set_ext *ext)
 {
 	*skbinfo = ext->skbinfo;
-}
-
-static inline void
-nf_inet_addr_mask_inplace(union nf_inet_addr *a1,
-			  const union nf_inet_addr *mask)
-{
-	a1->all[0] &= mask->all[0];
-	a1->all[1] &= mask->all[1];
-	a1->all[2] &= mask->all[2];
-	a1->all[3] &= mask->all[3];
 }
 
 #define IP_SET_INIT_KEXT(skb, opt, set)			\

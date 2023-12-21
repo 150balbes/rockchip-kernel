@@ -113,8 +113,10 @@ static int adp5520_gpio_probe(struct platform_device *pdev)
 		if (pdata->gpio_en_mask & (1 << i))
 			dev->lut[gpios++] = 1 << i;
 
-	if (gpios < 1)
-		return -EINVAL;
+	if (gpios < 1) {
+		ret = -EINVAL;
+		goto err;
+	}
 
 	gc = &dev->gpio_chip;
 	gc->direction_input  = adp5520_gpio_direction_input;
@@ -146,10 +148,18 @@ static int adp5520_gpio_probe(struct platform_device *pdev)
 
 	if (ret) {
 		dev_err(&pdev->dev, "failed to write\n");
-		return ret;
+		goto err;
 	}
 
-	return devm_gpiochip_add_data(&pdev->dev, &dev->gpio_chip, dev);
+	ret = devm_gpiochip_add_data(&pdev->dev, &dev->gpio_chip, dev);
+	if (ret)
+		goto err;
+
+	platform_set_drvdata(pdev, dev);
+	return 0;
+
+err:
+	return ret;
 }
 
 static struct platform_driver adp5520_gpio_driver = {

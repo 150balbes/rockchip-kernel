@@ -198,7 +198,7 @@ static int lattice_ecp3_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, data);
 
 	init_completion(&data->fw_loaded);
-	err = request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
+	err = request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
 				      FIRMWARE_NAME, &spi->dev,
 				      GFP_KERNEL, spi, firmware_load);
 	if (err) {
@@ -211,11 +211,13 @@ static int lattice_ecp3_probe(struct spi_device *spi)
 	return 0;
 }
 
-static void lattice_ecp3_remove(struct spi_device *spi)
+static int lattice_ecp3_remove(struct spi_device *spi)
 {
 	struct fpga_data *data = spi_get_drvdata(spi);
 
 	wait_for_completion(&data->fw_loaded);
+
+	return 0;
 }
 
 static const struct spi_device_id lattice_ecp3_id[] = {

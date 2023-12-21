@@ -7,17 +7,17 @@
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
 #include <drm/drm_device.h>
-#include <drm/drm_fb_dma_helper.h>
+#include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
-#include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_plane.h>
 
 #include "sun4i_drv.h"
@@ -160,7 +160,7 @@ void sun4i_frontend_update_buffer(struct sun4i_frontend *frontend,
 	struct drm_framebuffer *fb = state->fb;
 	unsigned int strides[3] = {};
 
-	dma_addr_t dma_addr;
+	dma_addr_t paddr;
 	bool swap;
 
 	if (fb->modifier == DRM_FORMAT_MOD_ALLWINNER_TILED) {
@@ -221,24 +221,25 @@ void sun4i_frontend_update_buffer(struct sun4i_frontend *frontend,
 	swap = sun4i_frontend_format_chroma_requires_swap(fb->format->format);
 
 	/* Set the physical address of the buffer in memory */
-	dma_addr = drm_fb_dma_get_gem_addr(fb, state, 0);
-	DRM_DEBUG_DRIVER("Setting buffer #0 address to %pad\n", &dma_addr);
-	regmap_write(frontend->regs, SUN4I_FRONTEND_BUF_ADDR0_REG, dma_addr);
+	paddr = drm_fb_cma_get_gem_addr(fb, state, 0);
+	paddr -= PHYS_OFFSET;
+	DRM_DEBUG_DRIVER("Setting buffer #0 address to %pad\n", &paddr);
+	regmap_write(frontend->regs, SUN4I_FRONTEND_BUF_ADDR0_REG, paddr);
 
 	if (fb->format->num_planes > 1) {
-		dma_addr = drm_fb_dma_get_gem_addr(fb, state, swap ? 2 : 1);
-		DRM_DEBUG_DRIVER("Setting buffer #1 address to %pad\n",
-				 &dma_addr);
+		paddr = drm_fb_cma_get_gem_addr(fb, state, swap ? 2 : 1);
+		paddr -= PHYS_OFFSET;
+		DRM_DEBUG_DRIVER("Setting buffer #1 address to %pad\n", &paddr);
 		regmap_write(frontend->regs, SUN4I_FRONTEND_BUF_ADDR1_REG,
-			     dma_addr);
+			     paddr);
 	}
 
 	if (fb->format->num_planes > 2) {
-		dma_addr = drm_fb_dma_get_gem_addr(fb, state, swap ? 1 : 2);
-		DRM_DEBUG_DRIVER("Setting buffer #2 address to %pad\n",
-				 &dma_addr);
+		paddr = drm_fb_cma_get_gem_addr(fb, state, swap ? 1 : 2);
+		paddr -= PHYS_OFFSET;
+		DRM_DEBUG_DRIVER("Setting buffer #2 address to %pad\n", &paddr);
 		regmap_write(frontend->regs, SUN4I_FRONTEND_BUF_ADDR2_REG,
-			     dma_addr);
+			     paddr);
 	}
 }
 EXPORT_SYMBOL(sun4i_frontend_update_buffer);
@@ -560,6 +561,7 @@ static int sun4i_frontend_bind(struct device *dev, struct device *master,
 	struct sun4i_frontend *frontend;
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
+	struct resource *res;
 	void __iomem *regs;
 
 	frontend = devm_kzalloc(dev, sizeof(*frontend), GFP_KERNEL);
@@ -574,7 +576,8 @@ static int sun4i_frontend_bind(struct device *dev, struct device *master,
 	if (!frontend->data)
 		return -ENODEV;
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
@@ -634,9 +637,11 @@ static int sun4i_frontend_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sun4i_frontend_ops);
 }
 
-static void sun4i_frontend_remove(struct platform_device *pdev)
+static int sun4i_frontend_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sun4i_frontend_ops);
+
+	return 0;
 }
 
 static int sun4i_frontend_runtime_resume(struct device *dev)
@@ -717,7 +722,7 @@ MODULE_DEVICE_TABLE(of, sun4i_frontend_of_table);
 
 static struct platform_driver sun4i_frontend_driver = {
 	.probe		= sun4i_frontend_probe,
-	.remove_new	= sun4i_frontend_remove,
+	.remove		= sun4i_frontend_remove,
 	.driver		= {
 		.name		= "sun4i-frontend",
 		.of_match_table	= sun4i_frontend_of_table,

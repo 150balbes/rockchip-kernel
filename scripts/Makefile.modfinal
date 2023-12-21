@@ -6,16 +6,16 @@
 PHONY := __modfinal
 __modfinal:
 
-include include/config/auto.conf
+include $(objtree)/include/config/auto.conf
 include $(srctree)/scripts/Kbuild.include
 
-# for c_flags
+# for c_flags and objtool_args
 include $(srctree)/scripts/Makefile.lib
 
 # find all modules listed in modules.order
-modules := $(call read-file, $(MODORDER))
+modules := $(sort $(shell cat $(MODORDER)))
 
-__modfinal: $(modules:%.o=%.ko)
+__modfinal: $(modules)
 	@:
 
 # modname and part-of-module are set to make c_flags define proper module flags
@@ -23,12 +23,33 @@ modname = $(notdir $(@:.mod.o=))
 part-of-module = y
 
 quiet_cmd_cc_o_c = CC [M]  $@
-      cmd_cc_o_c = $(CC) $(filter-out $(CC_FLAGS_CFI) $(CFLAGS_GCOV), $(c_flags)) -c -o $@ $<
+      cmd_cc_o_c =							\
+		$(CC) $(filter-out $(CC_FLAGS_CFI) $(CC_FLAGS_FTRACE),	\
+			$(c_flags)) -c -o $@ $<
 
 %.mod.o: %.mod.c FORCE
 	$(call if_changed_dep,cc_o_c)
 
 ARCH_POSTLINK := $(wildcard $(srctree)/arch/$(SRCARCH)/Makefile.postlink)
+
+ifdef CONFIG_LTO_CLANG
+# With CONFIG_LTO_CLANG, reuse the object file we compiled for modpost to
+# avoid a second slow LTO link
+prelink-ext := .lto
+
+# ELF processing was skipped earlier because we didn't have native code,
+# so let's now process the prelinked binary before we link the module.
+
+ifdef CONFIG_STACK_VALIDATION
+ifneq ($(SKIP_STACK_VALIDATION),1)
+cmd_ld_ko_o +=								\
+	$(objtree)/tools/objtool/objtool $(objtool_args)		\
+		$(@:.ko=$(prelink-ext).o);
+
+endif # SKIP_STACK_VALIDATION
+endif # CONFIG_STACK_VALIDATION
+
+endif # CONFIG_LTO_CLANG
 
 quiet_cmd_ld_ko_o = LD [M]  $@
       cmd_ld_ko_o +=							\
@@ -37,33 +58,27 @@ quiet_cmd_ld_ko_o = LD [M]  $@
 		-T scripts/module.lds -o $@ $(filter %.o, $^);		\
 	$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) $@, true)
 
-quiet_cmd_btf_ko = BTF [M] $@
-      cmd_btf_ko = 							\
-	if [ ! -f vmlinux ]; then					\
-		printf "Skipping BTF generation for %s due to unavailability of vmlinux\n" $@ 1>&2; \
-	elif [ -n "$(CONFIG_RUST)" ] && $(srctree)/scripts/is_rust_module.sh $@; then 		\
-		printf "Skipping BTF generation for %s because it's a Rust module\n" $@ 1>&2; \
+ifdef CONFIG_CFI_CLANG
+# LLVM can drops jump table symbols from the final binary. Add them
+# back to make stack traces and other symbol output readable.
+cmd_ld_ko_o += ;							\
+	$(srctree)/scripts/generate_cfi_kallsyms.pl --module		\
+		$@ > $(@:.ko=.lds);					\
+	if [ -s $(@:.ko=.lds) ]; then					\
+		$(LD) -r $(KBUILD_LDFLAGS) 				\
+			$(KBUILD_LDFLAGS_MODULE) $(LDFLAGS_MODULE)	\
+			-T $(@:.ko=.lds)				\
+			-o $(@:.ko=.tmp.ko) $@;				\
+		mv -f $(@:.ko=.tmp.ko) $@;				\
 	else								\
-		LLVM_OBJCOPY="$(OBJCOPY)" $(PAHOLE) -J $(PAHOLE_FLAGS) --btf_base vmlinux $@; \
-		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
-	fi;
-
-# Same as newer-prereqs, but allows to exclude specified extra dependencies
-newer_prereqs_except = $(filter-out $(PHONY) $(1),$?)
-
-# Same as if_changed, but allows to exclude specified extra dependencies
-if_changed_except = $(if $(call newer_prereqs_except,$(2))$(cmd-check),      \
-	$(cmd);                                                              \
-	printf '%s\n' 'savedcmd_$@ := $(make-cmd)' > $(dot-target).cmd, @:)
-
-# Re-generate module BTFs if either module's .ko or vmlinux changed
-%.ko: %.o %.mod.o scripts/module.lds $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
-	+$(call if_changed_except,ld_ko_o,vmlinux)
-ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-	+$(if $(newer-prereqs),$(call cmd,btf_ko))
+		rm -f $(@:.ko=.lds);					\
+	fi
 endif
 
-targets += $(modules:%.o=%.ko) $(modules:%.o=%.mod.o)
+$(modules): %.ko: %$(prelink-ext).o %.mod.o scripts/module.lds FORCE
+	+$(call if_changed,ld_ko_o)
+
+targets += $(modules) $(modules:.ko=.mod.o)
 
 # Add FORCE to the prequisites of a target to force it to be always rebuilt.
 # ---------------------------------------------------------------------------

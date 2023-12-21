@@ -4,8 +4,6 @@
  * Copyright © 2014-2016 Intel Corporation
  */
 
-#include <linux/dma-fence-array.h>
-
 #include "gt/intel_engine.h"
 
 #include "i915_gem_ioctls.h"
@@ -38,7 +36,7 @@ static __always_inline u32 __busy_write_id(u16 id)
 }
 
 static __always_inline unsigned int
-__busy_set_if_active(struct dma_fence *fence, u32 (*flag)(u16 id))
+__busy_set_if_active(const struct dma_fence *fence, u32 (*flag)(u16 id))
 {
 	const struct i915_request *rq;
 
@@ -48,60 +46,29 @@ __busy_set_if_active(struct dma_fence *fence, u32 (*flag)(u16 id))
 	 * to eventually flush us, but to minimise latency just ask the
 	 * hardware.
 	 *
-	 * Note we only report on the status of native fences and we currently
-	 * have two native fences:
-	 *
-	 * 1. A composite fence (dma_fence_array) constructed of i915 requests
-	 * created during a parallel submission. In this case we deconstruct the
-	 * composite fence into individual i915 requests and check the status of
-	 * each request.
-	 *
-	 * 2. A single i915 request.
+	 * Note we only report on the status of native fences.
 	 */
-	if (dma_fence_is_array(fence)) {
-		struct dma_fence_array *array = to_dma_fence_array(fence);
-		struct dma_fence **child = array->fences;
-		unsigned int nchild = array->num_fences;
-
-		do {
-			struct dma_fence *current_fence = *child++;
-
-			/* Not an i915 fence, can't be busy per above */
-			if (!dma_fence_is_i915(current_fence) ||
-			    !test_bit(I915_FENCE_FLAG_COMPOSITE,
-				      &current_fence->flags)) {
-				return 0;
-			}
-
-			rq = to_request(current_fence);
-			if (!i915_request_completed(rq))
-				return flag(rq->engine->uabi_class);
-		} while (--nchild);
-
-		/* All requests in array complete, not busy */
+	if (!dma_fence_is_i915(fence))
 		return 0;
-	} else {
-		if (!dma_fence_is_i915(fence))
-			return 0;
 
-		rq = to_request(fence);
-		if (i915_request_completed(rq))
-			return 0;
+	/* opencode to_request() in order to avoid const warnings */
+	rq = container_of(fence, const struct i915_request, fence);
+	if (i915_request_completed(rq))
+		return 0;
 
-		/* Beware type-expansion follies! */
-		BUILD_BUG_ON(!typecheck(u16, rq->engine->uabi_class));
-		return flag(rq->engine->uabi_class);
-	}
+	/* Beware type-expansion follies! */
+	BUILD_BUG_ON(!typecheck(u16, rq->engine->uabi_class));
+	return flag(rq->engine->uabi_class);
 }
 
 static __always_inline unsigned int
-busy_check_reader(struct dma_fence *fence)
+busy_check_reader(const struct dma_fence *fence)
 {
 	return __busy_set_if_active(fence, __busy_read_flag);
 }
 
 static __always_inline unsigned int
-busy_check_writer(struct dma_fence *fence)
+busy_check_writer(const struct dma_fence *fence)
 {
 	if (!fence)
 		return 0;
@@ -115,8 +82,8 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_i915_gem_busy *args = data;
 	struct drm_i915_gem_object *obj;
-	struct dma_resv_iter cursor;
-	struct dma_fence *fence;
+	struct dma_resv_list *list;
+	unsigned int seq;
 	int err;
 
 	err = -ENOENT;
@@ -138,24 +105,32 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 	 * Alternatively, we can trade that extra information on read/write
 	 * activity with
 	 *	args->busy =
-	 *		!dma_resv_test_signaled(obj->resv, DMA_RESV_USAGE_READ);
+	 *		!dma_resv_test_signaled_rcu(obj->resv, true);
 	 * to report the overall busyness. This is what the wait-ioctl does.
 	 *
 	 */
-	args->busy = 0;
-	dma_resv_iter_begin(&cursor, obj->base.resv, DMA_RESV_USAGE_READ);
-	dma_resv_for_each_fence_unlocked(&cursor, fence) {
-		if (dma_resv_iter_is_restarted(&cursor))
-			args->busy = 0;
+retry:
+	seq = raw_read_seqcount(&obj->base.resv->seq);
 
-		if (dma_resv_iter_usage(&cursor) <= DMA_RESV_USAGE_WRITE)
-			/* Translate the write fences to the READ *and* WRITE engine */
-			args->busy |= busy_check_writer(fence);
-		else
-			/* Translate read fences to READ set of engines */
+	/* Translate the exclusive fence to the READ *and* WRITE engine */
+	args->busy =
+		busy_check_writer(rcu_dereference(obj->base.resv->fence_excl));
+
+	/* Translate shared fences to READ set of engines */
+	list = rcu_dereference(obj->base.resv->fence);
+	if (list) {
+		unsigned int shared_count = list->shared_count, i;
+
+		for (i = 0; i < shared_count; ++i) {
+			struct dma_fence *fence =
+				rcu_dereference(list->shared[i]);
+
 			args->busy |= busy_check_reader(fence);
+		}
 	}
-	dma_resv_iter_end(&cursor);
+
+	if (args->busy && read_seqcount_retry(&obj->base.resv->seq, seq))
+		goto retry;
 
 	err = 0;
 out:

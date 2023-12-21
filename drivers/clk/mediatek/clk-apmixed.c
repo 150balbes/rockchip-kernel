@@ -5,7 +5,6 @@
  */
 
 #include <linux/delay.h>
-#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
 
@@ -70,12 +69,12 @@ static const struct clk_ops mtk_ref2usb_tx_ops = {
 	.unprepare	= mtk_ref2usb_tx_unprepare,
 };
 
-struct clk_hw *mtk_clk_register_ref2usb_tx(const char *name,
+struct clk * __init mtk_clk_register_ref2usb_tx(const char *name,
 			const char *parent_name, void __iomem *reg)
 {
 	struct mtk_ref2usb_tx *tx;
 	struct clk_init_data init = {};
-	int ret;
+	struct clk *clk;
 
 	tx = kzalloc(sizeof(*tx), GFP_KERNEL);
 	if (!tx)
@@ -89,24 +88,12 @@ struct clk_hw *mtk_clk_register_ref2usb_tx(const char *name,
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
 
-	ret = clk_hw_register(NULL, &tx->hw);
+	clk = clk_register(NULL, &tx->hw);
 
-	if (ret) {
+	if (IS_ERR(clk)) {
+		pr_err("Failed to register clk %s: %ld\n", name, PTR_ERR(clk));
 		kfree(tx);
-		return ERR_PTR(ret);
 	}
 
-	return &tx->hw;
+	return clk;
 }
-EXPORT_SYMBOL_GPL(mtk_clk_register_ref2usb_tx);
-
-void mtk_clk_unregister_ref2usb_tx(struct clk_hw *hw)
-{
-	struct mtk_ref2usb_tx *tx = to_mtk_ref2usb_tx(hw);
-
-	clk_hw_unregister(hw);
-	kfree(tx);
-}
-EXPORT_SYMBOL_GPL(mtk_clk_unregister_ref2usb_tx);
-
-MODULE_LICENSE("GPL");

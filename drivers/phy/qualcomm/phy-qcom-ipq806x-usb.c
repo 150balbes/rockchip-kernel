@@ -10,7 +10,6 @@
 #include <linux/delay.h>
 #include <linux/regmap.h>
 #include <linux/mfd/syscon.h>
-#include <linux/bitfield.h>
 
 /* USB QSCRATCH Hardware registers */
 #define QSCRATCH_GENERAL_CFG		(0x08)
@@ -75,20 +74,20 @@
 		 PHY_PARAM_CTRL1_LOS_BIAS_MASK)
 
 #define PHY_PARAM_CTRL1_TX_FULL_SWING(x)	\
-		FIELD_PREP(PHY_PARAM_CTRL1_TX_FULL_SWING_MASK, (x))
+		(((x) << 20) & PHY_PARAM_CTRL1_TX_FULL_SWING_MASK)
 #define PHY_PARAM_CTRL1_TX_DEEMPH_6DB(x)	\
-		FIELD_PREP(PHY_PARAM_CTRL1_TX_DEEMPH_6DB_MASK, (x))
+		(((x) << 14) & PHY_PARAM_CTRL1_TX_DEEMPH_6DB_MASK)
 #define PHY_PARAM_CTRL1_TX_DEEMPH_3_5DB(x)	\
-		FIELD_PREP(PHY_PARAM_CTRL1_TX_DEEMPH_3_5DB_MASK, x)
+		(((x) <<  8) & PHY_PARAM_CTRL1_TX_DEEMPH_3_5DB_MASK)
 #define PHY_PARAM_CTRL1_LOS_BIAS(x)	\
-		FIELD_PREP(PHY_PARAM_CTRL1_LOS_BIAS_MASK, (x))
+		(((x) <<  3) & PHY_PARAM_CTRL1_LOS_BIAS_MASK)
 
 /* RX OVRD IN HI bits */
 #define RX_OVRD_IN_HI_RX_RESET_OVRD		BIT(13)
 #define RX_OVRD_IN_HI_RX_RX_RESET		BIT(12)
 #define RX_OVRD_IN_HI_RX_EQ_OVRD		BIT(11)
 #define RX_OVRD_IN_HI_RX_EQ_MASK		GENMASK(10, 7)
-#define RX_OVRD_IN_HI_RX_EQ(x)			FIELD_PREP(RX_OVRD_IN_HI_RX_EQ_MASK, (x))
+#define RX_OVRD_IN_HI_RX_EQ(x)			((x) << 8)
 #define RX_OVRD_IN_HI_RX_EQ_EN_OVRD		BIT(7)
 #define RX_OVRD_IN_HI_RX_EQ_EN			BIT(6)
 #define RX_OVRD_IN_HI_RX_LOS_FILTER_OVRD	BIT(5)
@@ -112,9 +111,6 @@
 #define SS_CR_READ_REG				BIT(0)
 #define SS_CR_WRITE_REG				BIT(0)
 
-#define LATCH_SLEEP				40
-#define LATCH_TIMEOUT				100
-
 struct usb_phy {
 	void __iomem		*base;
 	struct device		*dev;
@@ -131,13 +127,12 @@ struct phy_drvdata {
 };
 
 /**
- * usb_phy_write_readback() - Write register and read back masked value to
- * confirm it is written
+ * Write register and read back masked value to confirm it is written
  *
- * @phy_dwc3: QCOM DWC3 phy context
- * @offset: register offset.
- * @mask: register bitmask specifying what should be updated
- * @val: value to write.
+ * @base - QCOM DWC3 PHY base virtual address.
+ * @offset - register offset.
+ * @mask - register bitmask specifying what should be updated
+ * @val - value to write.
  */
 static inline void usb_phy_write_readback(struct usb_phy *phy_dwc3,
 					  u32 offset,
@@ -160,17 +155,27 @@ static inline void usb_phy_write_readback(struct usb_phy *phy_dwc3,
 
 static int wait_for_latch(void __iomem *addr)
 {
-	u32 val;
+	u32 retry = 10;
 
-	return readl_poll_timeout(addr, val, !val, LATCH_SLEEP, LATCH_TIMEOUT);
+	while (true) {
+		if (!readl(addr))
+			break;
+
+		if (--retry == 0)
+			return -ETIMEDOUT;
+
+		usleep_range(10, 20);
+	}
+
+	return 0;
 }
 
 /**
- * usb_ss_write_phycreg() - Write SSPHY register
+ * Write SSPHY register
  *
- * @phy_dwc3: QCOM DWC3 phy context
- * @addr: SSPHY address to write.
- * @val: value to write.
+ * @base - QCOM DWC3 PHY base virtual address.
+ * @addr - SSPHY address to write.
+ * @val - value to write.
  */
 static int usb_ss_write_phycreg(struct usb_phy *phy_dwc3,
 				u32 addr, u32 val)
@@ -204,11 +209,10 @@ err_wait:
 }
 
 /**
- * usb_ss_read_phycreg() - Read SSPHY register.
+ * Read SSPHY register.
  *
- * @phy_dwc3: QCOM DWC3 phy context
- * @addr: SSPHY address to read.
- * @val: pointer in which read is store.
+ * @base - QCOM DWC3 PHY base virtual address.
+ * @addr - SSPHY address to read.
  */
 static int usb_ss_read_phycreg(struct usb_phy *phy_dwc3,
 			       u32 addr, u32 *val)
@@ -272,8 +276,8 @@ static int qcom_ipq806x_usb_hs_phy_init(struct phy *phy)
 	val = HSUSB_CTRL_DPSEHV_CLAMP | HSUSB_CTRL_DMSEHV_CLAMP |
 		HSUSB_CTRL_RETENABLEN  | HSUSB_CTRL_COMMONONN |
 		HSUSB_CTRL_OTGSESSVLD_CLAMP | HSUSB_CTRL_ID_HV_CLAMP |
-		HSUSB_CTRL_UTMI_OTG_VBUS_VALID | HSUSB_CTRL_UTMI_CLK_EN |
-		HSUSB_CTRL_CLAMP_EN | 0x70;
+		HSUSB_CTRL_DPSEHV_CLAMP | HSUSB_CTRL_UTMI_OTG_VBUS_VALID |
+		HSUSB_CTRL_UTMI_CLK_EN | HSUSB_CTRL_CLAMP_EN | 0x70;
 
 	/* use core clock if external reference is not present */
 	if (!phy_dwc3->xo_clk)

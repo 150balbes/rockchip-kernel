@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2012 Red Hat. All rights reserved.
  *
@@ -76,7 +75,7 @@ struct dm_cache_policy {
 	 * background work.
 	 */
 	int (*get_background_work)(struct dm_cache_policy *p, bool idle,
-				   struct policy_work **result);
+			           struct policy_work **result);
 
 	/*
 	 * You must pass in the same work pointer that you were given, not
@@ -129,7 +128,7 @@ struct dm_cache_policy {
 	 * Configuration.
 	 */
 	int (*emit_config_values)(struct dm_cache_policy *p, char *result,
-				  unsigned int maxlen, ssize_t *sz_ptr);
+				  unsigned maxlen, ssize_t *sz_ptr);
 	int (*set_config_value)(struct dm_cache_policy *p,
 				const char *key, const char *value);
 
@@ -158,7 +157,7 @@ struct dm_cache_policy_type {
 	 * what gets passed on the target line to select your policy.
 	 */
 	char name[CACHE_POLICY_NAME_SIZE];
-	unsigned int version[CACHE_POLICY_VERSION_SIZE];
+	unsigned version[CACHE_POLICY_VERSION_SIZE];
 
 	/*
 	 * For use by an alias dm_cache_policy_type to point to the
@@ -167,7 +166,7 @@ struct dm_cache_policy_type {
 	struct dm_cache_policy_type *real;
 
 	/*
-	 * Policies may store a hint for each cache block.
+	 * Policies may store a hint for each each cache block.
 	 * Currently the size of this hint must be 0 or 4 bytes but we
 	 * expect to relax this in future.
 	 */

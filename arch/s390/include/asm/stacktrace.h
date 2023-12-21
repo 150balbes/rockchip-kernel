@@ -12,7 +12,6 @@ enum stack_type {
 	STACK_TYPE_IRQ,
 	STACK_TYPE_NODAT,
 	STACK_TYPE_RESTART,
-	STACK_TYPE_MCCK,
 };
 
 struct stack_info {
@@ -34,27 +33,37 @@ static inline bool on_stack(struct stack_info *info,
 	return addr >= info->begin && addr + len <= info->end;
 }
 
+static __always_inline unsigned long get_stack_pointer(struct task_struct *task,
+						       struct pt_regs *regs)
+{
+	if (regs)
+		return (unsigned long) kernel_stack_pointer(regs);
+	if (task == current)
+		return current_stack_pointer();
+	return (unsigned long) task->thread.ksp;
+}
+
 /*
  * Stack layout of a C stack frame.
- * Kernel uses the packed stack layout (-mpacked-stack).
  */
+#ifndef __PACK_STACK
 struct stack_frame {
-	union {
-		unsigned long empty[9];
-		struct {
-			unsigned long sie_control_block;
-			unsigned long sie_savearea;
-			unsigned long sie_reason;
-			unsigned long sie_flags;
-			unsigned long sie_control_block_phys;
-		};
-	};
+	unsigned long back_chain;
+	unsigned long empty1[5];
+	unsigned long gprs[10];
+	unsigned int  empty2[8];
+};
+#else
+struct stack_frame {
+	unsigned long empty1[5];
+	unsigned int  empty2[8];
 	unsigned long gprs[10];
 	unsigned long back_chain;
 };
+#endif
 
 /*
- * Unlike current_stack_pointer which simply contains the current value of %r15
+ * Unlike current_stack_pointer() which simply returns current value of %r15
  * current_frame_address() returns function stack frame address, which matches
  * %r15 upon function invocation. It may differ from %r15 later if function
  * allocates stack for local variables or new stack frame to call other
@@ -64,15 +73,22 @@ struct stack_frame {
 	((unsigned long)__builtin_frame_address(0) -			\
 	 offsetof(struct stack_frame, back_chain))
 
-static __always_inline unsigned long get_stack_pointer(struct task_struct *task,
-						       struct pt_regs *regs)
-{
-	if (regs)
-		return (unsigned long)kernel_stack_pointer(regs);
-	if (task == current)
-		return current_frame_address();
-	return (unsigned long)task->thread.ksp;
-}
+#define CALL_ARGS_0()							\
+	register unsigned long r2 asm("2")
+#define CALL_ARGS_1(arg1)						\
+	register unsigned long r2 asm("2") = (unsigned long)(arg1)
+#define CALL_ARGS_2(arg1, arg2)						\
+	CALL_ARGS_1(arg1);						\
+	register unsigned long r3 asm("3") = (unsigned long)(arg2)
+#define CALL_ARGS_3(arg1, arg2, arg3)					\
+	CALL_ARGS_2(arg1, arg2);					\
+	register unsigned long r4 asm("4") = (unsigned long)(arg3)
+#define CALL_ARGS_4(arg1, arg2, arg3, arg4)				\
+	CALL_ARGS_3(arg1, arg2, arg3);					\
+	register unsigned long r4 asm("5") = (unsigned long)(arg4)
+#define CALL_ARGS_5(arg1, arg2, arg3, arg4, arg5)			\
+	CALL_ARGS_4(arg1, arg2, arg3, arg4);				\
+	register unsigned long r4 asm("6") = (unsigned long)(arg5)
 
 /*
  * To keep this simple mark register 2-6 as being changed (volatile)
@@ -91,6 +107,26 @@ static __always_inline unsigned long get_stack_pointer(struct task_struct *task,
 #define CALL_CLOBBER_2 CALL_CLOBBER_3, "4"
 #define CALL_CLOBBER_1 CALL_CLOBBER_2, "3"
 #define CALL_CLOBBER_0 CALL_CLOBBER_1
+
+#define CALL_ON_STACK(fn, stack, nr, args...)				\
+({									\
+	unsigned long frame = current_frame_address();			\
+	CALL_ARGS_##nr(args);						\
+	unsigned long prev;						\
+									\
+	asm volatile(							\
+		"	la	%[_prev],0(15)\n"			\
+		"	lg	15,%[_stack]\n"				\
+		"	stg	%[_frame],%[_bc](15)\n"			\
+		"	brasl	14,%[_fn]\n"				\
+		"	la	15,0(%[_prev])\n"			\
+		: [_prev] "=&a" (prev), CALL_FMT_##nr			\
+		: [_stack] "R" (stack),					\
+		  [_bc] "i" (offsetof(struct stack_frame, back_chain)),	\
+		  [_frame] "d" (frame),					\
+		  [_fn] "X" (fn) : CALL_CLOBBER_##nr);			\
+	r2;								\
+})
 
 #define CALL_LARGS_0(...)						\
 	long dummy = 0
@@ -189,53 +225,15 @@ static __always_inline unsigned long get_stack_pointer(struct task_struct *task,
 	(rettype)r2;							\
 })
 
-/*
- * Use call_nodat() to call a function with DAT disabled.
- * Proper sign and zero extension of function arguments is done.
- * Usage:
- *
- * rc = call_nodat(nr, rettype, fn, t1, a1, t2, a2, ...)
- *
- * - nr specifies the number of function arguments of fn.
- * - fn is the function to be called, where fn is a physical address.
- * - rettype is the return type of fn.
- * - t1, a1, ... are pairs, where t1 must match the type of the first
- *   argument of fn, t2 the second, etc. a1 is the corresponding
- *   first function argument (not name), etc.
- *
- * fn() is called with standard C function call ABI, with the exception
- * that no useful stackframe or stackpointer is passed via register 15.
- * Therefore the called function must not use r15 to access the stack.
- */
-#define call_nodat(nr, rettype, fn, ...)				\
+#define CALL_ON_STACK_NORETURN(fn, stack)				\
 ({									\
-	rettype (*__fn)(CALL_PARM_##nr(__VA_ARGS__)) = (fn);		\
-	/* aligned since psw_leave must not cross page boundary */	\
-	psw_t __aligned(16) psw_leave;					\
-	psw_t psw_enter;						\
-	CALL_LARGS_##nr(__VA_ARGS__);					\
-	CALL_REGS_##nr;							\
-									\
-	CALL_TYPECHECK_##nr(__VA_ARGS__);				\
-	psw_enter.mask = PSW_KERNEL_BITS & ~PSW_MASK_DAT;		\
-	psw_enter.addr = (unsigned long)__fn;				\
 	asm volatile(							\
-		"	epsw	0,1\n"					\
-		"	risbg	1,0,0,31,32\n"				\
-		"	larl	7,1f\n"					\
-		"	stg	1,%[psw_leave]\n"			\
-		"	stg	7,8+%[psw_leave]\n"			\
-		"	la	7,%[psw_leave]\n"			\
-		"	lra	7,0(7)\n"				\
-		"	larl	1,0f\n"					\
-		"	lra	14,0(1)\n"				\
-		"	lpswe	%[psw_enter]\n"				\
-		"0:	lpswe	0(7)\n"					\
-		"1:\n"							\
-		: CALL_FMT_##nr, [psw_leave] "=Q" (psw_leave)		\
-		: [psw_enter] "Q" (psw_enter)				\
-		: "7", CALL_CLOBBER_##nr);				\
-	(rettype)r2;							\
+		"	la	15,0(%[_stack])\n"			\
+		"	xc	%[_bc](8,15),%[_bc](15)\n"		\
+		"	brasl	14,%[_fn]\n"				\
+		::[_bc] "i" (offsetof(struct stack_frame, back_chain)),	\
+		  [_stack] "a" (stack), [_fn] "X" (fn));		\
+	BUG();								\
 })
 
 #endif /* _ASM_S390_STACKTRACE_H */

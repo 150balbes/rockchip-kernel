@@ -25,7 +25,6 @@ properties:
     $ref: /schemas/types.yaml#/definitions/uint32
 
   port:
-    $ref: /schemas/graph.yaml#/properties/port
     description: Connection to controller providing analog TV signals
 
 required:

@@ -89,7 +89,7 @@ static void sxgbe_enable_eee_mode(const struct sxgbe_priv_data *priv)
 
 void sxgbe_disable_eee_mode(struct sxgbe_priv_data * const priv)
 {
-	/* Exit and disable EEE in case of we are in LPI state. */
+	/* Exit and disable EEE in case of we are are in LPI state. */
 	priv->hw->mac->reset_eee_mode(priv->ioaddr);
 	del_timer_sync(&priv->eee_ctrl_timer);
 	priv->tx_path_in_lpi_mode = false;
@@ -127,7 +127,7 @@ bool sxgbe_eee_init(struct sxgbe_priv_data * const priv)
 	/* MAC core supports the EEE feature. */
 	if (priv->hw_cap.eee) {
 		/* Check if the PHY supports EEE */
-		if (phy_init_eee(ndev->phydev, true))
+		if (phy_init_eee(ndev->phydev, 1))
 			return false;
 
 		priv->eee_active = 1;
@@ -789,7 +789,7 @@ static void sxgbe_tx_queue_clean(struct sxgbe_tx_queue *tqueue)
 }
 
 /**
- * sxgbe_tx_all_clean:
+ * sxgbe_tx_clean:
  * @priv: driver private structure
  * Description: it reclaims resources after transmission completes.
  */
@@ -931,13 +931,10 @@ static int sxgbe_get_hw_features(struct sxgbe_priv_data * const priv)
 static void sxgbe_check_ether_addr(struct sxgbe_priv_data *priv)
 {
 	if (!is_valid_ether_addr(priv->dev->dev_addr)) {
-		u8 addr[ETH_ALEN];
-
 		priv->hw->mac->get_umac_addr((void __iomem *)
-					     priv->ioaddr, addr, 0);
-		if (is_valid_ether_addr(addr))
-			eth_hw_addr_set(priv->dev, addr);
-		else
+					     priv->ioaddr,
+					     priv->dev->dev_addr, 0);
+		if (!is_valid_ether_addr(priv->dev->dev_addr))
 			eth_hw_addr_random(priv->dev);
 	}
 	dev_info(priv->device, "device MAC address %pM\n",
@@ -1018,7 +1015,7 @@ static void sxgbe_tx_timer(struct timer_list *t)
 }
 
 /**
- * sxgbe_tx_init_coalesce: init tx mitigation options.
+ * sxgbe_init_tx_coalesce: init tx mitigation options.
  * @priv: driver private structure
  * Description:
  * This inits the transmit coalesce parameters: i.e. timer rate,
@@ -1967,7 +1964,7 @@ static const struct net_device_ops sxgbe_netdev_ops = {
 	.ndo_set_features	= sxgbe_set_features,
 	.ndo_set_rx_mode	= sxgbe_set_rx_mode,
 	.ndo_tx_timeout		= sxgbe_tx_timeout,
-	.ndo_eth_ioctl		= sxgbe_ioctl,
+	.ndo_do_ioctl		= sxgbe_ioctl,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= sxgbe_poll_controller,
 #endif
@@ -2143,7 +2140,7 @@ struct sxgbe_priv_data *sxgbe_drv_probe(struct device *device,
 		pr_info("Enable RX Mitigation via HW Watchdog Timer\n");
 	}
 
-	netif_napi_add(ndev, &priv->napi, sxgbe_poll);
+	netif_napi_add(ndev, &priv->napi, sxgbe_poll, 64);
 
 	spin_lock_init(&priv->stats_lock);
 
@@ -2203,7 +2200,7 @@ error_free_netdev:
  * Description: this function resets the TX/RX processes, disables the MAC RX/TX
  * changes the link status, releases the DMA descriptor rings.
  */
-void sxgbe_drv_remove(struct net_device *ndev)
+int sxgbe_drv_remove(struct net_device *ndev)
 {
 	struct sxgbe_priv_data *priv = netdev_priv(ndev);
 	u8 queue_num;
@@ -2231,6 +2228,8 @@ void sxgbe_drv_remove(struct net_device *ndev)
 	kfree(priv->hw);
 
 	free_netdev(ndev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM

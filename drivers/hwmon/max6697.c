@@ -460,7 +460,7 @@ static DEVICE_ATTR(dummy, 0, NULL, NULL);
 static umode_t max6697_is_visible(struct kobject *kobj, struct attribute *attr,
 				  int index)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct max6697_data *data = dev_get_drvdata(dev);
 	const struct max6697_chip_data *chip = data->chip;
 	int channel = index / 7;	/* channel number */
@@ -786,7 +786,7 @@ static struct i2c_driver max6697_driver = {
 		.name	= "max6697",
 		.of_match_table = of_match_ptr(max6697_of_match),
 	},
-	.probe = max6697_probe,
+	.probe_new = max6697_probe,
 	.id_table = max6697_id,
 };
 

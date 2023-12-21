@@ -41,7 +41,6 @@ pwm_info(struct nvkm_therm *therm, int line)
 		default:
 			break;
 		}
-		break;
 	default:
 		break;
 	}
@@ -147,8 +146,8 @@ gf119_therm = {
 };
 
 int
-gf119_therm_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-		struct nvkm_therm **ptherm)
+gf119_therm_new(struct nvkm_device *device, int index,
+	       struct nvkm_therm **ptherm)
 {
-	return nvkm_therm_new_(&gf119_therm, device, type, inst, ptherm);
+	return nvkm_therm_new_(&gf119_therm, device, index, ptherm);
 }

@@ -259,7 +259,7 @@ struct adm1026_data {
 	const struct attribute_group *groups[3];
 
 	struct mutex update_lock;
-	bool valid;		/* true if following fields are valid */
+	int valid;		/* !=0 if following fields are valid */
 	unsigned long last_reading;	/* In jiffies */
 	unsigned long last_config;	/* In jiffies */
 
@@ -459,7 +459,7 @@ static struct adm1026_data *adm1026_update_device(struct device *dev)
 		data->last_config = jiffies;
 	}	/* last_config */
 
-	data->valid = true;
+	data->valid = 1;
 	mutex_unlock(&data->update_lock);
 	return data;
 }
@@ -1610,7 +1610,7 @@ static int adm1026_detect(struct i2c_client *client,
 		return -ENODEV;
 	}
 
-	strscpy(info->type, "adm1026", I2C_NAME_SIZE);
+	strlcpy(info->type, "adm1026", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -1859,7 +1859,7 @@ static struct i2c_driver adm1026_driver = {
 	.driver = {
 		.name	= "adm1026",
 	},
-	.probe		= adm1026_probe,
+	.probe_new	= adm1026_probe,
 	.id_table	= adm1026_id,
 	.detect		= adm1026_detect,
 	.address_list	= normal_i2c,

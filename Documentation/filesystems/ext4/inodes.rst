@@ -38,138 +38,138 @@ The inode table entry is laid out in ``struct ext4_inode``.
      - Name
      - Description
    * - 0x0
-     - __le16
-     - i_mode
+     - \_\_le16
+     - i\_mode
      - File mode. See the table i_mode_ below.
    * - 0x2
-     - __le16
-     - i_uid
+     - \_\_le16
+     - i\_uid
      - Lower 16-bits of Owner UID.
    * - 0x4
-     - __le32
-     - i_size_lo
+     - \_\_le32
+     - i\_size\_lo
      - Lower 32-bits of size in bytes.
    * - 0x8
-     - __le32
-     - i_atime
-     - Last access time, in seconds since the epoch. However, if the EA_INODE
+     - \_\_le32
+     - i\_atime
+     - Last access time, in seconds since the epoch. However, if the EA\_INODE
        inode flag is set, this inode stores an extended attribute value and
        this field contains the checksum of the value.
    * - 0xC
-     - __le32
-     - i_ctime
+     - \_\_le32
+     - i\_ctime
      - Last inode change time, in seconds since the epoch. However, if the
-       EA_INODE inode flag is set, this inode stores an extended attribute
+       EA\_INODE inode flag is set, this inode stores an extended attribute
        value and this field contains the lower 32 bits of the attribute value's
        reference count.
    * - 0x10
-     - __le32
-     - i_mtime
+     - \_\_le32
+     - i\_mtime
      - Last data modification time, in seconds since the epoch. However, if the
-       EA_INODE inode flag is set, this inode stores an extended attribute
+       EA\_INODE inode flag is set, this inode stores an extended attribute
        value and this field contains the number of the inode that owns the
        extended attribute.
    * - 0x14
-     - __le32
-     - i_dtime
+     - \_\_le32
+     - i\_dtime
      - Deletion Time, in seconds since the epoch.
    * - 0x18
-     - __le16
-     - i_gid
+     - \_\_le16
+     - i\_gid
      - Lower 16-bits of GID.
    * - 0x1A
-     - __le16
-     - i_links_count
+     - \_\_le16
+     - i\_links\_count
      - Hard link count. Normally, ext4 does not permit an inode to have more
        than 65,000 hard links. This applies to files as well as directories,
        which means that there cannot be more than 64,998 subdirectories in a
        directory (each subdirectory's '..' entry counts as a hard link, as does
-       the '.' entry in the directory itself). With the DIR_NLINK feature
+       the '.' entry in the directory itself). With the DIR\_NLINK feature
        enabled, ext4 supports more than 64,998 subdirectories by setting this
        field to 1 to indicate that the number of hard links is not known.
    * - 0x1C
-     - __le32
-     - i_blocks_lo
-     - Lower 32-bits of “block” count. If the huge_file feature flag is not
+     - \_\_le32
+     - i\_blocks\_lo
+     - Lower 32-bits of “block” count. If the huge\_file feature flag is not
        set on the filesystem, the file consumes ``i_blocks_lo`` 512-byte blocks
-       on disk. If huge_file is set and EXT4_HUGE_FILE_FL is NOT set in
+       on disk. If huge\_file is set and EXT4\_HUGE\_FILE\_FL is NOT set in
        ``inode.i_flags``, then the file consumes ``i_blocks_lo + (i_blocks_hi
-       << 32)`` 512-byte blocks on disk. If huge_file is set and
-       EXT4_HUGE_FILE_FL IS set in ``inode.i_flags``, then this file
+       << 32)`` 512-byte blocks on disk. If huge\_file is set and
+       EXT4\_HUGE\_FILE\_FL IS set in ``inode.i_flags``, then this file
        consumes (``i_blocks_lo + i_blocks_hi`` << 32) filesystem blocks on
        disk.
    * - 0x20
-     - __le32
-     - i_flags
+     - \_\_le32
+     - i\_flags
      - Inode flags. See the table i_flags_ below.
    * - 0x24
      - 4 bytes
-     - i_osd1
+     - i\_osd1
      - See the table i_osd1_ for more details.
    * - 0x28
      - 60 bytes
-     - i_block[EXT4_N_BLOCKS=15]
-     - Block map or extent tree. See the section “The Contents of inode.i_block”.
+     - i\_block[EXT4\_N\_BLOCKS=15]
+     - Block map or extent tree. See the section “The Contents of inode.i\_block”.
    * - 0x64
-     - __le32
-     - i_generation
+     - \_\_le32
+     - i\_generation
      - File version (for NFS).
    * - 0x68
-     - __le32
-     - i_file_acl_lo
+     - \_\_le32
+     - i\_file\_acl\_lo
      - Lower 32-bits of extended attribute block. ACLs are of course one of
        many possible extended attributes; I think the name of this field is a
        result of the first use of extended attributes being for ACLs.
    * - 0x6C
-     - __le32
-     - i_size_high / i_dir_acl
+     - \_\_le32
+     - i\_size\_high / i\_dir\_acl
      - Upper 32-bits of file/directory size. In ext2/3 this field was named
-       i_dir_acl, though it was usually set to zero and never used.
+       i\_dir\_acl, though it was usually set to zero and never used.
    * - 0x70
-     - __le32
-     - i_obso_faddr
+     - \_\_le32
+     - i\_obso\_faddr
      - (Obsolete) fragment address.
    * - 0x74
      - 12 bytes
-     - i_osd2
+     - i\_osd2
      - See the table i_osd2_ for more details.
    * - 0x80
-     - __le16
-     - i_extra_isize
+     - \_\_le16
+     - i\_extra\_isize
      - Size of this inode - 128. Alternately, the size of the extended inode
        fields beyond the original ext2 inode, including this field.
    * - 0x82
-     - __le16
-     - i_checksum_hi
+     - \_\_le16
+     - i\_checksum\_hi
      - Upper 16-bits of the inode checksum.
    * - 0x84
-     - __le32
-     - i_ctime_extra
+     - \_\_le32
+     - i\_ctime\_extra
      - Extra change time bits. This provides sub-second precision. See Inode
        Timestamps section.
    * - 0x88
-     - __le32
-     - i_mtime_extra
+     - \_\_le32
+     - i\_mtime\_extra
      - Extra modification time bits. This provides sub-second precision.
    * - 0x8C
-     - __le32
-     - i_atime_extra
+     - \_\_le32
+     - i\_atime\_extra
      - Extra access time bits. This provides sub-second precision.
    * - 0x90
-     - __le32
-     - i_crtime
+     - \_\_le32
+     - i\_crtime
      - File creation time, in seconds since the epoch.
    * - 0x94
-     - __le32
-     - i_crtime_extra
+     - \_\_le32
+     - i\_crtime\_extra
      - Extra file creation time bits. This provides sub-second precision.
    * - 0x98
-     - __le32
-     - i_version_hi
+     - \_\_le32
+     - i\_version\_hi
      - Upper 32-bits for version number.
    * - 0x9C
-     - __le32
-     - i_projid
+     - \_\_le32
+     - i\_projid
      - Project ID.
 
 .. _i_mode:
@@ -183,45 +183,45 @@ The ``i_mode`` value is a combination of the following flags:
    * - Value
      - Description
    * - 0x1
-     - S_IXOTH (Others may execute)
+     - S\_IXOTH (Others may execute)
    * - 0x2
-     - S_IWOTH (Others may write)
+     - S\_IWOTH (Others may write)
    * - 0x4
-     - S_IROTH (Others may read)
+     - S\_IROTH (Others may read)
    * - 0x8
-     - S_IXGRP (Group members may execute)
+     - S\_IXGRP (Group members may execute)
    * - 0x10
-     - S_IWGRP (Group members may write)
+     - S\_IWGRP (Group members may write)
    * - 0x20
-     - S_IRGRP (Group members may read)
+     - S\_IRGRP (Group members may read)
    * - 0x40
-     - S_IXUSR (Owner may execute)
+     - S\_IXUSR (Owner may execute)
    * - 0x80
-     - S_IWUSR (Owner may write)
+     - S\_IWUSR (Owner may write)
    * - 0x100
-     - S_IRUSR (Owner may read)
+     - S\_IRUSR (Owner may read)
    * - 0x200
-     - S_ISVTX (Sticky bit)
+     - S\_ISVTX (Sticky bit)
    * - 0x400
-     - S_ISGID (Set GID)
+     - S\_ISGID (Set GID)
    * - 0x800
-     - S_ISUID (Set UID)
+     - S\_ISUID (Set UID)
    * -
      - These are mutually-exclusive file types:
    * - 0x1000
-     - S_IFIFO (FIFO)
+     - S\_IFIFO (FIFO)
    * - 0x2000
-     - S_IFCHR (Character device)
+     - S\_IFCHR (Character device)
    * - 0x4000
-     - S_IFDIR (Directory)
+     - S\_IFDIR (Directory)
    * - 0x6000
-     - S_IFBLK (Block device)
+     - S\_IFBLK (Block device)
    * - 0x8000
-     - S_IFREG (Regular file)
+     - S\_IFREG (Regular file)
    * - 0xA000
-     - S_IFLNK (Symbolic link)
+     - S\_IFLNK (Symbolic link)
    * - 0xC000
-     - S_IFSOCK (Socket)
+     - S\_IFSOCK (Socket)
 
 .. _i_flags:
 
@@ -234,56 +234,56 @@ The ``i_flags`` field is a combination of these values:
    * - Value
      - Description
    * - 0x1
-     - This file requires secure deletion (EXT4_SECRM_FL). (not implemented)
+     - This file requires secure deletion (EXT4\_SECRM\_FL). (not implemented)
    * - 0x2
      - This file should be preserved, should undeletion be desired
-       (EXT4_UNRM_FL). (not implemented)
+       (EXT4\_UNRM\_FL). (not implemented)
    * - 0x4
-     - File is compressed (EXT4_COMPR_FL). (not really implemented)
+     - File is compressed (EXT4\_COMPR\_FL). (not really implemented)
    * - 0x8
-     - All writes to the file must be synchronous (EXT4_SYNC_FL).
+     - All writes to the file must be synchronous (EXT4\_SYNC\_FL).
    * - 0x10
-     - File is immutable (EXT4_IMMUTABLE_FL).
+     - File is immutable (EXT4\_IMMUTABLE\_FL).
    * - 0x20
-     - File can only be appended (EXT4_APPEND_FL).
+     - File can only be appended (EXT4\_APPEND\_FL).
    * - 0x40
-     - The dump(1) utility should not dump this file (EXT4_NODUMP_FL).
+     - The dump(1) utility should not dump this file (EXT4\_NODUMP\_FL).
    * - 0x80
-     - Do not update access time (EXT4_NOATIME_FL).
+     - Do not update access time (EXT4\_NOATIME\_FL).
    * - 0x100
-     - Dirty compressed file (EXT4_DIRTY_FL). (not used)
+     - Dirty compressed file (EXT4\_DIRTY\_FL). (not used)
    * - 0x200
-     - File has one or more compressed clusters (EXT4_COMPRBLK_FL). (not used)
+     - File has one or more compressed clusters (EXT4\_COMPRBLK\_FL). (not used)
    * - 0x400
-     - Do not compress file (EXT4_NOCOMPR_FL). (not used)
+     - Do not compress file (EXT4\_NOCOMPR\_FL). (not used)
    * - 0x800
-     - Encrypted inode (EXT4_ENCRYPT_FL). This bit value previously was
-       EXT4_ECOMPR_FL (compression error), which was never used.
+     - Encrypted inode (EXT4\_ENCRYPT\_FL). This bit value previously was
+       EXT4\_ECOMPR\_FL (compression error), which was never used.
    * - 0x1000
-     - Directory has hashed indexes (EXT4_INDEX_FL).
+     - Directory has hashed indexes (EXT4\_INDEX\_FL).
    * - 0x2000
-     - AFS magic directory (EXT4_IMAGIC_FL).
+     - AFS magic directory (EXT4\_IMAGIC\_FL).
    * - 0x4000
      - File data must always be written through the journal
-       (EXT4_JOURNAL_DATA_FL).
+       (EXT4\_JOURNAL\_DATA\_FL).
    * - 0x8000
-     - File tail should not be merged (EXT4_NOTAIL_FL). (not used by ext4)
+     - File tail should not be merged (EXT4\_NOTAIL\_FL). (not used by ext4)
    * - 0x10000
      - All directory entry data should be written synchronously (see
-       ``dirsync``) (EXT4_DIRSYNC_FL).
+       ``dirsync``) (EXT4\_DIRSYNC\_FL).
    * - 0x20000
-     - Top of directory hierarchy (EXT4_TOPDIR_FL).
+     - Top of directory hierarchy (EXT4\_TOPDIR\_FL).
    * - 0x40000
-     - This is a huge file (EXT4_HUGE_FILE_FL).
+     - This is a huge file (EXT4\_HUGE\_FILE\_FL).
    * - 0x80000
-     - Inode uses extents (EXT4_EXTENTS_FL).
+     - Inode uses extents (EXT4\_EXTENTS\_FL).
    * - 0x100000
-     - Verity protected file (EXT4_VERITY_FL).
+     - Verity protected file (EXT4\_VERITY\_FL).
    * - 0x200000
      - Inode stores a large extended attribute value in its data blocks
-       (EXT4_EA_INODE_FL).
+       (EXT4\_EA\_INODE\_FL).
    * - 0x400000
-     - This file has blocks allocated past EOF (EXT4_EOFBLOCKS_FL).
+     - This file has blocks allocated past EOF (EXT4\_EOFBLOCKS\_FL).
        (deprecated)
    * - 0x01000000
      - Inode is a snapshot (``EXT4_SNAPFILE_FL``). (not in mainline)
@@ -294,21 +294,21 @@ The ``i_flags`` field is a combination of these values:
      - Snapshot shrink has completed (``EXT4_SNAPFILE_SHRUNK_FL``). (not in
        mainline)
    * - 0x10000000
-     - Inode has inline data (EXT4_INLINE_DATA_FL).
+     - Inode has inline data (EXT4\_INLINE\_DATA\_FL).
    * - 0x20000000
-     - Create children with the same project ID (EXT4_PROJINHERIT_FL).
+     - Create children with the same project ID (EXT4\_PROJINHERIT\_FL).
    * - 0x80000000
-     - Reserved for ext4 library (EXT4_RESERVED_FL).
+     - Reserved for ext4 library (EXT4\_RESERVED\_FL).
    * -
      - Aggregate flags:
    * - 0x705BDFFF
      - User-visible flags.
    * - 0x604BC0FF
-     - User-modifiable flags. Note that while EXT4_JOURNAL_DATA_FL and
-       EXT4_EXTENTS_FL can be set with setattr, they are not in the kernel's
-       EXT4_FL_USER_MODIFIABLE mask, since it needs to handle the setting of
+     - User-modifiable flags. Note that while EXT4\_JOURNAL\_DATA\_FL and
+       EXT4\_EXTENTS\_FL can be set with setattr, they are not in the kernel's
+       EXT4\_FL\_USER\_MODIFIABLE mask, since it needs to handle the setting of
        these flags in a special manner and they are masked out of the set of
-       flags that are saved directly to i_flags.
+       flags that are saved directly to i\_flags.
 
 .. _i_osd1:
 
@@ -325,9 +325,9 @@ Linux:
      - Name
      - Description
    * - 0x0
-     - __le32
-     - l_i_version
-     - Inode version. However, if the EA_INODE inode flag is set, this inode
+     - \_\_le32
+     - l\_i\_version
+     - Inode version. However, if the EA\_INODE inode flag is set, this inode
        stores an extended attribute value and this field contains the upper 32
        bits of the attribute value's reference count.
 
@@ -342,8 +342,8 @@ Hurd:
      - Name
      - Description
    * - 0x0
-     - __le32
-     - h_i_translator
+     - \_\_le32
+     - h\_i\_translator
      - ??
 
 Masix:
@@ -357,8 +357,8 @@ Masix:
      - Name
      - Description
    * - 0x0
-     - __le32
-     - m_i_reserved
+     - \_\_le32
+     - m\_i\_reserved
      - ??
 
 .. _i_osd2:
@@ -376,30 +376,30 @@ Linux:
      - Name
      - Description
    * - 0x0
-     - __le16
-     - l_i_blocks_high
+     - \_\_le16
+     - l\_i\_blocks\_high
      - Upper 16-bits of the block count. Please see the note attached to
-       i_blocks_lo.
+       i\_blocks\_lo.
    * - 0x2
-     - __le16
-     - l_i_file_acl_high
+     - \_\_le16
+     - l\_i\_file\_acl\_high
      - Upper 16-bits of the extended attribute block (historically, the file
        ACL location). See the Extended Attributes section below.
    * - 0x4
-     - __le16
-     - l_i_uid_high
+     - \_\_le16
+     - l\_i\_uid\_high
      - Upper 16-bits of the Owner UID.
    * - 0x6
-     - __le16
-     - l_i_gid_high
+     - \_\_le16
+     - l\_i\_gid\_high
      - Upper 16-bits of the GID.
    * - 0x8
-     - __le16
-     - l_i_checksum_lo
+     - \_\_le16
+     - l\_i\_checksum\_lo
      - Lower 16-bits of the inode checksum.
    * - 0xA
-     - __le16
-     - l_i_reserved
+     - \_\_le16
+     - l\_i\_reserved
      - Unused.
 
 Hurd:
@@ -413,24 +413,24 @@ Hurd:
      - Name
      - Description
    * - 0x0
-     - __le16
-     - h_i_reserved1
+     - \_\_le16
+     - h\_i\_reserved1
      - ??
    * - 0x2
-     - __u16
-     - h_i_mode_high
+     - \_\_u16
+     - h\_i\_mode\_high
      - Upper 16-bits of the file mode.
    * - 0x4
-     - __le16
-     - h_i_uid_high
+     - \_\_le16
+     - h\_i\_uid\_high
      - Upper 16-bits of the Owner UID.
    * - 0x6
-     - __le16
-     - h_i_gid_high
+     - \_\_le16
+     - h\_i\_gid\_high
      - Upper 16-bits of the GID.
    * - 0x8
-     - __u32
-     - h_i_author
+     - \_\_u32
+     - h\_i\_author
      - Author code?
 
 Masix:
@@ -444,17 +444,17 @@ Masix:
      - Name
      - Description
    * - 0x0
-     - __le16
-     - h_i_reserved1
+     - \_\_le16
+     - h\_i\_reserved1
      - ??
    * - 0x2
-     - __u16
-     - m_i_file_acl_high
+     - \_\_u16
+     - m\_i\_file\_acl\_high
      - Upper 16-bits of the extended attribute block (historically, the file
        ACL location).
    * - 0x4
-     - __u32
-     - m_i_reserved2[2]
+     - \_\_u32
+     - m\_i\_reserved2[2]
      - ??
 
 Inode Size
@@ -466,11 +466,11 @@ In ext2 and ext3, the inode structure size was fixed at 128 bytes
 on-disk inode at format time for all inodes in the filesystem to provide
 space beyond the end of the original ext2 inode. The on-disk inode
 record size is recorded in the superblock as ``s_inode_size``. The
-number of bytes actually used by struct ext4_inode beyond the original
+number of bytes actually used by struct ext4\_inode beyond the original
 128-byte ext2 inode is recorded in the ``i_extra_isize`` field for each
-inode, which allows struct ext4_inode to grow for a new kernel without
+inode, which allows struct ext4\_inode to grow for a new kernel without
 having to upgrade all of the on-disk inodes. Access to fields beyond
-EXT2_GOOD_OLD_INODE_SIZE should be verified to be within
+EXT2\_GOOD\_OLD\_INODE\_SIZE should be verified to be within
 ``i_extra_isize``. By default, ext4 inode records are 256 bytes, and (as
 of August 2019) the inode structure is 160 bytes
 (``i_extra_isize = 32``). The extra space between the end of the inode
@@ -498,11 +498,11 @@ structure -- inode change time (ctime), access time (atime), data
 modification time (mtime), and deletion time (dtime). The four fields
 are 32-bit signed integers that represent seconds since the Unix epoch
 (1970-01-01 00:00:00 GMT), which means that the fields will overflow in
-January 2038. If the filesystem does not have orphan_file feature, inodes
-that are not linked from any directory but are still open (orphan inodes) have
-the dtime field overloaded for use with the orphan list. The superblock field
-``s_last_orphan`` points to the first inode in the orphan list; dtime is then
-the number of the next orphaned inode, or zero if there are no more orphans.
+January 2038. For inodes that are not linked from any directory but are
+still open (orphan inodes), the dtime field is overloaded for use with
+the orphan list. The superblock field ``s_last_orphan`` points to the
+first inode in the orphan list; dtime is then the number of the next
+orphaned inode, or zero if there are no more orphans.
 
 If the inode structure size ``sb->s_inode_size`` is larger than 128
 bytes and the ``i_inode_extra`` field is large enough to encompass the
@@ -516,7 +516,7 @@ creation time (crtime); this field is 64-bits wide and decoded in the
 same manner as 64-bit [cma]time. Neither crtime nor dtime are accessible
 through the regular stat() interface, though debugfs will report them.
 
-We use the 32-bit signed time value plus (2^32 * (extra epoch bits)).
+We use the 32-bit signed time value plus (2^32 \* (extra epoch bits)).
 In other words:
 
 .. list-table::
@@ -525,8 +525,8 @@ In other words:
 
    * - Extra epoch bits
      - MSB of 32-bit time
-     - Adjustment for signed 32-bit to 64-bit tv_sec
-     - Decoded 64-bit tv_sec
+     - Adjustment for signed 32-bit to 64-bit tv\_sec
+     - Decoded 64-bit tv\_sec
      - valid time range
    * - 0 0
      - 1

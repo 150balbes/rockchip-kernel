@@ -64,24 +64,25 @@ int vega10_fan_ctrl_get_fan_speed_info(struct pp_hwmgr *hwmgr,
 	return 0;
 }
 
-int vega10_fan_ctrl_get_fan_speed_pwm(struct pp_hwmgr *hwmgr,
+int vega10_fan_ctrl_get_fan_speed_percent(struct pp_hwmgr *hwmgr,
 		uint32_t *speed)
 {
-	struct amdgpu_device *adev = hwmgr->adev;
-	uint32_t duty100, duty;
-	uint64_t tmp64;
+	uint32_t current_rpm;
+	uint32_t percent = 0;
 
-	duty100 = REG_GET_FIELD(RREG32_SOC15(THM, 0, mmCG_FDO_CTRL1),
-				CG_FDO_CTRL1, FMAX_DUTY100);
-	duty = REG_GET_FIELD(RREG32_SOC15(THM, 0, mmCG_THERMAL_STATUS),
-				CG_THERMAL_STATUS, FDO_PWM_DUTY);
+	if (hwmgr->thermal_controller.fanInfo.bNoFan)
+		return 0;
 
-	if (!duty100)
-		return -EINVAL;
+	if (vega10_get_current_rpm(hwmgr, &current_rpm))
+		return -1;
 
-	tmp64 = (uint64_t)duty * 255;
-	do_div(tmp64, duty100);
-	*speed = MIN((uint32_t)tmp64, 255);
+	if (hwmgr->thermal_controller.
+			advanceFanControlParameters.usMaxFanRPM != 0)
+		percent = current_rpm * 100 /
+			hwmgr->thermal_controller.
+			advanceFanControlParameters.usMaxFanRPM;
+
+	*speed = percent > 100 ? 100 : percent;
 
 	return 0;
 }
@@ -117,12 +118,12 @@ int vega10_fan_ctrl_get_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t *speed)
 }
 
 /**
- * vega10_fan_ctrl_set_static_mode - Set Fan Speed Control to static mode,
- * so that the user can decide what speed to use.
- * @hwmgr:  the address of the powerplay hardware manager.
- * @mode: the fan control mode, 0 default, 1 by percent, 5, by RPM
- * Exception: Should always succeed.
- */
+* Set Fan Speed Control to static mode,
+* so that the user can decide what speed to use.
+* @param    hwmgr  the address of the powerplay hardware manager.
+*           mode the fan control mode, 0 default, 1 by percent, 5, by RPM
+* @exception Should always succeed.
+*/
 int vega10_fan_ctrl_set_static_mode(struct pp_hwmgr *hwmgr, uint32_t mode)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -148,10 +149,10 @@ int vega10_fan_ctrl_set_static_mode(struct pp_hwmgr *hwmgr, uint32_t mode)
 }
 
 /**
- * vega10_fan_ctrl_set_default_mode - Reset Fan Speed Control to default mode.
- * @hwmgr:  the address of the powerplay hardware manager.
- * Exception: Should always succeed.
- */
+* Reset Fan Speed Control to default mode.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @exception Should always succeed.
+*/
 int vega10_fan_ctrl_set_default_mode(struct pp_hwmgr *hwmgr)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -172,10 +173,11 @@ int vega10_fan_ctrl_set_default_mode(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_enable_fan_control_feature - Enables the SMC Fan Control Feature.
+ * @fn vega10_enable_fan_control_feature
+ * @brief Enables the SMC Fan Control Feature.
  *
- * @hwmgr: the address of the powerplay hardware manager.
- * Return:   0 on success. -1 otherwise.
+ * @param    hwmgr - the address of the powerplay hardware manager.
+ * @return   0 on success. -1 otherwise.
  */
 static int vega10_enable_fan_control_feature(struct pp_hwmgr *hwmgr)
 {
@@ -240,11 +242,12 @@ int vega10_fan_ctrl_stop_smc_fan_control(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_fan_ctrl_set_fan_speed_pwm - Set Fan Speed in PWM.
- * @hwmgr:  the address of the powerplay hardware manager.
- * @speed: is the percentage value (0 - 255) to be set.
- */
-int vega10_fan_ctrl_set_fan_speed_pwm(struct pp_hwmgr *hwmgr,
+* Set Fan Speed in percent.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @param    speed is the percentage value (0% - 100%) to be set.
+* @exception Fails is the 100% setting appears to be 0.
+*/
+int vega10_fan_ctrl_set_fan_speed_percent(struct pp_hwmgr *hwmgr,
 		uint32_t speed)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -255,7 +258,8 @@ int vega10_fan_ctrl_set_fan_speed_pwm(struct pp_hwmgr *hwmgr,
 	if (hwmgr->thermal_controller.fanInfo.bNoFan)
 		return 0;
 
-	speed = MIN(speed, 255);
+	if (speed > 100)
+		speed = 100;
 
 	if (PP_CAP(PHM_PlatformCaps_MicrocodeFanControl))
 		vega10_fan_ctrl_stop_smc_fan_control(hwmgr);
@@ -267,7 +271,7 @@ int vega10_fan_ctrl_set_fan_speed_pwm(struct pp_hwmgr *hwmgr,
 		return -EINVAL;
 
 	tmp64 = (uint64_t)speed * duty100;
-	do_div(tmp64, 255);
+	do_div(tmp64, 100);
 	duty = (uint32_t)tmp64;
 
 	WREG32_SOC15(THM, 0, mmCG_FDO_CTRL0,
@@ -278,10 +282,10 @@ int vega10_fan_ctrl_set_fan_speed_pwm(struct pp_hwmgr *hwmgr,
 }
 
 /**
- * vega10_fan_ctrl_reset_fan_speed_to_default - Reset Fan Speed to default.
- * @hwmgr:  the address of the powerplay hardware manager.
- * Exception: Always succeeds.
- */
+* Reset Fan Speed to default.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @exception Always succeeds.
+*/
 int vega10_fan_ctrl_reset_fan_speed_to_default(struct pp_hwmgr *hwmgr)
 {
 	if (hwmgr->thermal_controller.fanInfo.bNoFan)
@@ -294,11 +298,11 @@ int vega10_fan_ctrl_reset_fan_speed_to_default(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_fan_ctrl_set_fan_speed_rpm - Set Fan Speed in RPM.
- * @hwmgr:  the address of the powerplay hardware manager.
- * @speed: is the percentage value (min - max) to be set.
- * Exception: Fails is the speed not lie between min and max.
- */
+* Set Fan Speed in RPM.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @param    speed is the percentage value (min - max) to be set.
+* @exception Fails is the speed not lie between min and max.
+*/
 int vega10_fan_ctrl_set_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t speed)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -327,10 +331,10 @@ int vega10_fan_ctrl_set_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t speed)
 }
 
 /**
- * vega10_thermal_get_temperature - Reads the remote temperature from the SIslands thermal controller.
- *
- * @hwmgr: The address of the hardware manager.
- */
+* Reads the remote temperature from the SIslands thermal controller.
+*
+* @param    hwmgr The address of the hardware manager.
+*/
 int vega10_thermal_get_temperature(struct pp_hwmgr *hwmgr)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -349,13 +353,13 @@ int vega10_thermal_get_temperature(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_set_temperature_range - Set the requested temperature range for high and low alert signals
- *
- * @hwmgr: The address of the hardware manager.
- * @range: Temperature range to be programmed for
- *           high and low alert signals
- * Exception: PP_Result_BadInput if the input data is not valid.
- */
+* Set the requested temperature range for high and low alert signals
+*
+* @param    hwmgr The address of the hardware manager.
+* @param    range Temperature range to be programmed for
+*           high and low alert signals
+* @exception PP_Result_BadInput if the input data is not valid.
+*/
 static int vega10_thermal_set_temperature_range(struct pp_hwmgr *hwmgr,
 		struct PP_TemperatureRange *range)
 {
@@ -402,10 +406,10 @@ static int vega10_thermal_set_temperature_range(struct pp_hwmgr *hwmgr,
 }
 
 /**
- * vega10_thermal_initialize - Programs thermal controller one-time setting registers
- *
- * @hwmgr: The address of the hardware manager.
- */
+* Programs thermal controller one-time setting registers
+*
+* @param    hwmgr The address of the hardware manager.
+*/
 static int vega10_thermal_initialize(struct pp_hwmgr *hwmgr)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -425,10 +429,10 @@ static int vega10_thermal_initialize(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_enable_alert - Enable thermal alerts on the RV770 thermal controller.
- *
- * @hwmgr: The address of the hardware manager.
- */
+* Enable thermal alerts on the RV770 thermal controller.
+*
+* @param    hwmgr The address of the hardware manager.
+*/
 static int vega10_thermal_enable_alert(struct pp_hwmgr *hwmgr)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -457,9 +461,9 @@ static int vega10_thermal_enable_alert(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_disable_alert - Disable thermal alerts on the RV770 thermal controller.
- * @hwmgr: The address of the hardware manager.
- */
+* Disable thermal alerts on the RV770 thermal controller.
+* @param    hwmgr The address of the hardware manager.
+*/
 int vega10_thermal_disable_alert(struct pp_hwmgr *hwmgr)
 {
 	struct amdgpu_device *adev = hwmgr->adev;
@@ -484,10 +488,10 @@ int vega10_thermal_disable_alert(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_stop_thermal_controller - Uninitialize the thermal controller.
- * Currently just disables alerts.
- * @hwmgr: The address of the hardware manager.
- */
+* Uninitialize the thermal controller.
+* Currently just disables alerts.
+* @param    hwmgr The address of the hardware manager.
+*/
 int vega10_thermal_stop_thermal_controller(struct pp_hwmgr *hwmgr)
 {
 	int result = vega10_thermal_disable_alert(hwmgr);
@@ -499,10 +503,14 @@ int vega10_thermal_stop_thermal_controller(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_setup_fan_table - Set up the fan table to control the fan using the SMC.
- * @hwmgr:  the address of the powerplay hardware manager.
- * Return:   result from set temperature range routine
- */
+* Set up the fan table to control the fan using the SMC.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @param    pInput the pointer to input data
+* @param    pOutput the pointer to output data
+* @param    pStorage the pointer to temporary storage
+* @param    Result the last failure code
+* @return   result from set temperature range routine
+*/
 static int vega10_thermal_setup_fan_table(struct pp_hwmgr *hwmgr)
 {
 	int ret;
@@ -598,10 +606,14 @@ int vega10_enable_mgpu_fan_boost(struct pp_hwmgr *hwmgr)
 }
 
 /**
- * vega10_thermal_start_smc_fan_control - Start the fan control on the SMC.
- * @hwmgr:  the address of the powerplay hardware manager.
- * Return:   result from set temperature range routine
- */
+* Start the fan control on the SMC.
+* @param    hwmgr  the address of the powerplay hardware manager.
+* @param    pInput the pointer to input data
+* @param    pOutput the pointer to output data
+* @param    pStorage the pointer to temporary storage
+* @param    Result the last failure code
+* @return   result from set temperature range routine
+*/
 static int vega10_thermal_start_smc_fan_control(struct pp_hwmgr *hwmgr)
 {
 /* If the fantable setup has failed we could have disabled

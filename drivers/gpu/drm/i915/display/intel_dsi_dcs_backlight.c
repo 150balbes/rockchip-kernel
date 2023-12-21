@@ -43,63 +43,49 @@
 
 #define PANEL_PWM_MAX_VALUE		0xFF
 
-static u32 dcs_get_backlight(struct intel_connector *connector, enum pipe unused)
+static u32 dcs_get_backlight(struct intel_connector *connector)
 {
 	struct intel_encoder *encoder = intel_attached_encoder(connector);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
-	struct intel_panel *panel = &connector->panel;
 	struct mipi_dsi_device *dsi_device;
-	u8 data[2] = {};
+	u8 data = 0;
 	enum port port;
-	size_t len = panel->backlight.max > U8_MAX ? 2 : 1;
 
-	for_each_dsi_port(port, panel->vbt.dsi.bl_ports) {
+	/* FIXME: Need to take care of 16 bit brightness level */
+	for_each_dsi_port(port, intel_dsi->dcs_backlight_ports) {
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
 		mipi_dsi_dcs_read(dsi_device, MIPI_DCS_GET_DISPLAY_BRIGHTNESS,
-				  &data, len);
+				  &data, sizeof(data));
 		break;
 	}
 
-	return (data[1] << 8) | data[0];
+	return data;
 }
 
 static void dcs_set_backlight(const struct drm_connector_state *conn_state, u32 level)
 {
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(to_intel_encoder(conn_state->best_encoder));
-	struct intel_panel *panel = &to_intel_connector(conn_state->connector)->panel;
 	struct mipi_dsi_device *dsi_device;
-	u8 data[2] = {};
+	u8 data = level;
 	enum port port;
-	size_t len = panel->backlight.max > U8_MAX ? 2 : 1;
-	unsigned long mode_flags;
 
-	if (len == 1) {
-		data[0] = level;
-	} else {
-		data[0] = level >> 8;
-		data[1] = level;
-	}
-
-	for_each_dsi_port(port, panel->vbt.dsi.bl_ports) {
+	/* FIXME: Need to take care of 16 bit brightness level */
+	for_each_dsi_port(port, intel_dsi->dcs_backlight_ports) {
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
-		mode_flags = dsi_device->mode_flags;
-		dsi_device->mode_flags &= ~MIPI_DSI_MODE_LPM;
 		mipi_dsi_dcs_write(dsi_device, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
-				   &data, len);
-		dsi_device->mode_flags = mode_flags;
+				   &data, sizeof(data));
 	}
 }
 
-static void dcs_disable_backlight(const struct drm_connector_state *conn_state, u32 level)
+static void dcs_disable_backlight(const struct drm_connector_state *conn_state)
 {
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(to_intel_encoder(conn_state->best_encoder));
-	struct intel_panel *panel = &to_intel_connector(conn_state->connector)->panel;
 	struct mipi_dsi_device *dsi_device;
 	enum port port;
 
 	dcs_set_backlight(conn_state, 0);
 
-	for_each_dsi_port(port, panel->vbt.dsi.cabc_ports) {
+	for_each_dsi_port(port, intel_dsi->dcs_cabc_ports) {
 		u8 cabc = POWER_SAVE_OFF;
 
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
@@ -107,7 +93,7 @@ static void dcs_disable_backlight(const struct drm_connector_state *conn_state, 
 				   &cabc, sizeof(cabc));
 	}
 
-	for_each_dsi_port(port, panel->vbt.dsi.bl_ports) {
+	for_each_dsi_port(port, intel_dsi->dcs_backlight_ports) {
 		u8 ctrl = 0;
 
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
@@ -125,14 +111,14 @@ static void dcs_disable_backlight(const struct drm_connector_state *conn_state, 
 }
 
 static void dcs_enable_backlight(const struct intel_crtc_state *crtc_state,
-				 const struct drm_connector_state *conn_state, u32 level)
+				 const struct drm_connector_state *conn_state)
 {
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(to_intel_encoder(conn_state->best_encoder));
 	struct intel_panel *panel = &to_intel_connector(conn_state->connector)->panel;
 	struct mipi_dsi_device *dsi_device;
 	enum port port;
 
-	for_each_dsi_port(port, panel->vbt.dsi.bl_ports) {
+	for_each_dsi_port(port, intel_dsi->dcs_backlight_ports) {
 		u8 ctrl = 0;
 
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
@@ -148,7 +134,7 @@ static void dcs_enable_backlight(const struct intel_crtc_state *crtc_state,
 				   &ctrl, sizeof(ctrl));
 	}
 
-	for_each_dsi_port(port, panel->vbt.dsi.cabc_ports) {
+	for_each_dsi_port(port, intel_dsi->dcs_cabc_ports) {
 		u8 cabc = POWER_SAVE_MEDIUM;
 
 		dsi_device = intel_dsi->dsi_hosts[port]->device;
@@ -156,50 +142,38 @@ static void dcs_enable_backlight(const struct intel_crtc_state *crtc_state,
 				   &cabc, sizeof(cabc));
 	}
 
-	dcs_set_backlight(conn_state, level);
+	dcs_set_backlight(conn_state, panel->backlight.level);
 }
 
 static int dcs_setup_backlight(struct intel_connector *connector,
 			       enum pipe unused)
 {
-	struct drm_i915_private *i915 = to_i915(connector->base.dev);
 	struct intel_panel *panel = &connector->panel;
 
-	if (panel->vbt.backlight.brightness_precision_bits > 8)
-		panel->backlight.max = (1 << panel->vbt.backlight.brightness_precision_bits) - 1;
-	else
-		panel->backlight.max = PANEL_PWM_MAX_VALUE;
-
-	panel->backlight.level = panel->backlight.max;
-
-	drm_dbg_kms(&i915->drm,
-		    "[CONNECTOR:%d:%s] Using DCS for backlight control\n",
-		    connector->base.base.id, connector->base.name);
+	panel->backlight.max = PANEL_PWM_MAX_VALUE;
+	panel->backlight.level = PANEL_PWM_MAX_VALUE;
 
 	return 0;
 }
 
-static const struct intel_panel_bl_funcs dcs_bl_funcs = {
-	.setup = dcs_setup_backlight,
-	.enable = dcs_enable_backlight,
-	.disable = dcs_disable_backlight,
-	.set = dcs_set_backlight,
-	.get = dcs_get_backlight,
-};
-
 int intel_dsi_dcs_init_backlight_funcs(struct intel_connector *intel_connector)
 {
 	struct drm_device *dev = intel_connector->base.dev;
+	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct intel_encoder *encoder = intel_attached_encoder(intel_connector);
 	struct intel_panel *panel = &intel_connector->panel;
 
-	if (panel->vbt.backlight.type != INTEL_BACKLIGHT_DSI_DCS)
+	if (dev_priv->vbt.backlight.type != INTEL_BACKLIGHT_DSI_DCS)
 		return -ENODEV;
 
 	if (drm_WARN_ON(dev, encoder->type != INTEL_OUTPUT_DSI))
 		return -EINVAL;
 
-	panel->backlight.funcs = &dcs_bl_funcs;
+	panel->backlight.setup = dcs_setup_backlight;
+	panel->backlight.enable = dcs_enable_backlight;
+	panel->backlight.disable = dcs_disable_backlight;
+	panel->backlight.set = dcs_set_backlight;
+	panel->backlight.get = dcs_get_backlight;
 
 	return 0;
 }

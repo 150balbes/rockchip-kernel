@@ -75,34 +75,6 @@ static inline int __vringh_get_head(const struct vringh *vrh,
 	return head;
 }
 
-/**
- * vringh_kiov_advance - skip bytes from vring_kiov
- * @iov: an iov passed to vringh_getdesc_*() (updated as we consume)
- * @len: the maximum length to advance
- */
-void vringh_kiov_advance(struct vringh_kiov *iov, size_t len)
-{
-	while (len && iov->i < iov->used) {
-		size_t partlen = min(iov->iov[iov->i].iov_len, len);
-
-		iov->consumed += partlen;
-		iov->iov[iov->i].iov_len -= partlen;
-		iov->iov[iov->i].iov_base += partlen;
-
-		if (!iov->iov[iov->i].iov_len) {
-			/* Fix up old iov element then increment. */
-			iov->iov[iov->i].iov_len = iov->consumed;
-			iov->iov[iov->i].iov_base -= iov->consumed;
-
-			iov->consumed = 0;
-			iov->i++;
-		}
-
-		len -= partlen;
-	}
-}
-EXPORT_SYMBOL(vringh_kiov_advance);
-
 /* Copy some bytes to/from the iovec.  Returns num copied. */
 static inline ssize_t vringh_iov_xfer(struct vringh *vrh,
 				      struct vringh_kiov *iov,
@@ -123,8 +95,19 @@ static inline ssize_t vringh_iov_xfer(struct vringh *vrh,
 		done += partlen;
 		len -= partlen;
 		ptr += partlen;
+		iov->consumed += partlen;
+		iov->iov[iov->i].iov_len -= partlen;
+		iov->iov[iov->i].iov_base += partlen;
 
-		vringh_kiov_advance(iov, partlen);
+		if (!iov->iov[iov->i].iov_len) {
+			/* Fix up old iov element then increment. */
+			iov->iov[iov->i].iov_len = iov->consumed;
+			iov->iov[iov->i].iov_base -= iov->consumed;
+
+			
+			iov->consumed = 0;
+			iov->i++;
+		}
 	}
 	return done;
 }
@@ -215,8 +198,7 @@ static int resize_iovec(struct vringh_kiov *iov, gfp_t gfp)
 
 	flag = (iov->max_num & VRINGH_IOV_ALLOCATED);
 	if (flag)
-		new = krealloc_array(iov->iov, new_num,
-				     sizeof(struct iovec), gfp);
+		new = krealloc(iov->iov, new_num * sizeof(struct iovec), gfp);
 	else {
 		new = kmalloc_array(new_num, sizeof(struct iovec), gfp);
 		if (new) {
@@ -307,9 +289,9 @@ __vringh_iov(struct vringh *vrh, u16 i,
 		return -EINVAL;
 
 	if (riov)
-		riov->i = riov->used = riov->consumed = 0;
+		riov->i = riov->used = 0;
 	if (wiov)
-		wiov->i = wiov->used = wiov->consumed = 0;
+		wiov->i = wiov->used = 0;
 
 	for (;;) {
 		void *addr;
@@ -636,9 +618,9 @@ static inline int xfer_to_user(const struct vringh *vrh,
  * @features: the feature bits for this ring.
  * @num: the number of elements.
  * @weak_barriers: true if we only need memory barriers, not I/O.
- * @desc: the userspace descriptor pointer.
- * @avail: the userspace avail pointer.
- * @used: the userspace used pointer.
+ * @desc: the userpace descriptor pointer.
+ * @avail: the userpace avail pointer.
+ * @used: the userpace used pointer.
  *
  * Returns an error if num is invalid: you should check pointers
  * yourself!
@@ -685,10 +667,7 @@ EXPORT_SYMBOL(vringh_init_user);
  * *head will be vrh->vring.num.  You may be able to ignore an invalid
  * descriptor, but there's not much you can do with an invalid ring.
  *
- * Note that you can reuse riov and wiov with subsequent calls. Content is
- * overwritten and memory reallocated if more space is needed.
- * When you don't have to use riov and wiov anymore, you should clean up them
- * calling vringh_iov_cleanup() to release the memory, even on error!
+ * Note that you may need to clean up riov and wiov, even on error!
  */
 int vringh_getdesc_user(struct vringh *vrh,
 			struct vringh_iov *riov,
@@ -911,9 +890,9 @@ static inline int kern_xfer(const struct vringh *vrh, void *dst,
  * @features: the feature bits for this ring.
  * @num: the number of elements.
  * @weak_barriers: true if we only need memory barriers, not I/O.
- * @desc: the userspace descriptor pointer.
- * @avail: the userspace avail pointer.
- * @used: the userspace used pointer.
+ * @desc: the userpace descriptor pointer.
+ * @avail: the userpace avail pointer.
+ * @used: the userpace used pointer.
  *
  * Returns an error if num is invalid.
  */
@@ -958,10 +937,7 @@ EXPORT_SYMBOL(vringh_init_kern);
  * *head will be vrh->vring.num.  You may be able to ignore an invalid
  * descriptor, but there's not much you can do with an invalid ring.
  *
- * Note that you can reuse riov and wiov with subsequent calls. Content is
- * overwritten and memory reallocated if more space is needed.
- * When you don't have to use riov and wiov anymore, you should clean up them
- * calling vringh_kiov_cleanup() to release the memory, even on error!
+ * Note that you may need to clean up riov and wiov, even on error!
  */
 int vringh_getdesc_kern(struct vringh *vrh,
 			struct vringh_kiov *riov,
@@ -1094,36 +1070,25 @@ EXPORT_SYMBOL(vringh_need_notify_kern);
 
 #if IS_REACHABLE(CONFIG_VHOST_IOTLB)
 
-struct iotlb_vec {
-	union {
-		struct iovec *iovec;
-		struct bio_vec *bvec;
-	} iov;
-	size_t count;
-};
-
 static int iotlb_translate(const struct vringh *vrh,
-			   u64 addr, u64 len, u64 *translated,
-			   struct iotlb_vec *ivec, u32 perm)
+			   u64 addr, u64 len, struct bio_vec iov[],
+			   int iov_size, u32 perm)
 {
 	struct vhost_iotlb_map *map;
 	struct vhost_iotlb *iotlb = vrh->iotlb;
 	int ret = 0;
-	u64 s = 0, last = addr + len - 1;
-
-	spin_lock(vrh->iotlb_lock);
+	u64 s = 0;
 
 	while (len > s) {
-		uintptr_t io_addr;
-		size_t io_len;
-		u64 size;
+		u64 size, pa, pfn;
 
-		if (unlikely(ret >= ivec->count)) {
+		if (unlikely(ret >= iov_size)) {
 			ret = -ENOBUFS;
 			break;
 		}
 
-		map = vhost_iotlb_itree_first(iotlb, addr, last);
+		map = vhost_iotlb_itree_first(iotlb, addr,
+					      addr + len - 1);
 		if (!map || map->start > addr) {
 			ret = -EINVAL;
 			break;
@@ -1133,162 +1098,72 @@ static int iotlb_translate(const struct vringh *vrh,
 		}
 
 		size = map->size - addr + map->start;
-		io_len = min(len - s, size);
-		io_addr = map->addr - map->start + addr;
-
-		if (vrh->use_va) {
-			struct iovec *iovec = ivec->iov.iovec;
-
-			iovec[ret].iov_len = io_len;
-			iovec[ret].iov_base = (void __user *)io_addr;
-		} else {
-			u64 pfn = io_addr >> PAGE_SHIFT;
-			struct bio_vec *bvec = ivec->iov.bvec;
-
-			bvec_set_page(&bvec[ret], pfn_to_page(pfn), io_len,
-				      io_addr & (PAGE_SIZE - 1));
-		}
-
+		pa = map->addr + addr - map->start;
+		pfn = pa >> PAGE_SHIFT;
+		iov[ret].bv_page = pfn_to_page(pfn);
+		iov[ret].bv_len = min(len - s, size);
+		iov[ret].bv_offset = pa & (PAGE_SIZE - 1);
 		s += size;
 		addr += size;
 		++ret;
 	}
 
-	spin_unlock(vrh->iotlb_lock);
-
-	if (translated)
-		*translated = min(len, s);
-
 	return ret;
 }
-
-#define IOTLB_IOV_STRIDE 16
 
 static inline int copy_from_iotlb(const struct vringh *vrh, void *dst,
 				  void *src, size_t len)
 {
-	struct iotlb_vec ivec;
-	union {
-		struct iovec iovec[IOTLB_IOV_STRIDE];
-		struct bio_vec bvec[IOTLB_IOV_STRIDE];
-	} iov;
-	u64 total_translated = 0;
+	struct iov_iter iter;
+	struct bio_vec iov[16];
+	int ret;
 
-	ivec.iov.iovec = iov.iovec;
-	ivec.count = IOTLB_IOV_STRIDE;
+	ret = iotlb_translate(vrh, (u64)(uintptr_t)src,
+			      len, iov, 16, VHOST_MAP_RO);
+	if (ret < 0)
+		return ret;
 
-	while (total_translated < len) {
-		struct iov_iter iter;
-		u64 translated;
-		int ret;
+	iov_iter_bvec(&iter, READ, iov, ret, len);
 
-		ret = iotlb_translate(vrh, (u64)(uintptr_t)src,
-				      len - total_translated, &translated,
-				      &ivec, VHOST_MAP_RO);
-		if (ret == -ENOBUFS)
-			ret = IOTLB_IOV_STRIDE;
-		else if (ret < 0)
-			return ret;
+	ret = copy_from_iter(dst, len, &iter);
 
-		if (vrh->use_va) {
-			iov_iter_init(&iter, ITER_SOURCE, ivec.iov.iovec, ret,
-				      translated);
-		} else {
-			iov_iter_bvec(&iter, ITER_SOURCE, ivec.iov.bvec, ret,
-				      translated);
-		}
-
-		ret = copy_from_iter(dst, translated, &iter);
-		if (ret < 0)
-			return ret;
-
-		src += translated;
-		dst += translated;
-		total_translated += translated;
-	}
-
-	return total_translated;
+	return ret;
 }
 
 static inline int copy_to_iotlb(const struct vringh *vrh, void *dst,
 				void *src, size_t len)
 {
-	struct iotlb_vec ivec;
-	union {
-		struct iovec iovec[IOTLB_IOV_STRIDE];
-		struct bio_vec bvec[IOTLB_IOV_STRIDE];
-	} iov;
-	u64 total_translated = 0;
+	struct iov_iter iter;
+	struct bio_vec iov[16];
+	int ret;
 
-	ivec.iov.iovec = iov.iovec;
-	ivec.count = IOTLB_IOV_STRIDE;
+	ret = iotlb_translate(vrh, (u64)(uintptr_t)dst,
+			      len, iov, 16, VHOST_MAP_WO);
+	if (ret < 0)
+		return ret;
 
-	while (total_translated < len) {
-		struct iov_iter iter;
-		u64 translated;
-		int ret;
+	iov_iter_bvec(&iter, WRITE, iov, ret, len);
 
-		ret = iotlb_translate(vrh, (u64)(uintptr_t)dst,
-				      len - total_translated, &translated,
-				      &ivec, VHOST_MAP_WO);
-		if (ret == -ENOBUFS)
-			ret = IOTLB_IOV_STRIDE;
-		else if (ret < 0)
-			return ret;
-
-		if (vrh->use_va) {
-			iov_iter_init(&iter, ITER_DEST, ivec.iov.iovec, ret,
-				      translated);
-		} else {
-			iov_iter_bvec(&iter, ITER_DEST, ivec.iov.bvec, ret,
-				      translated);
-		}
-
-		ret = copy_to_iter(src, translated, &iter);
-		if (ret < 0)
-			return ret;
-
-		src += translated;
-		dst += translated;
-		total_translated += translated;
-	}
-
-	return total_translated;
+	return copy_to_iter(src, len, &iter);
 }
 
 static inline int getu16_iotlb(const struct vringh *vrh,
 			       u16 *val, const __virtio16 *p)
 {
-	struct iotlb_vec ivec;
-	union {
-		struct iovec iovec[1];
-		struct bio_vec bvec[1];
-	} iov;
-	__virtio16 tmp;
+	struct bio_vec iov;
+	void *kaddr, *from;
 	int ret;
-
-	ivec.iov.iovec = iov.iovec;
-	ivec.count = 1;
 
 	/* Atomic read is needed for getu16 */
 	ret = iotlb_translate(vrh, (u64)(uintptr_t)p, sizeof(*p),
-			      NULL, &ivec, VHOST_MAP_RO);
+			      &iov, 1, VHOST_MAP_RO);
 	if (ret < 0)
 		return ret;
 
-	if (vrh->use_va) {
-		ret = __get_user(tmp, (__virtio16 __user *)ivec.iov.iovec[0].iov_base);
-		if (ret)
-			return ret;
-	} else {
-		void *kaddr = kmap_local_page(ivec.iov.bvec[0].bv_page);
-		void *from = kaddr + ivec.iov.bvec[0].bv_offset;
-
-		tmp = READ_ONCE(*(__virtio16 *)from);
-		kunmap_local(kaddr);
-	}
-
-	*val = vringh16_to_cpu(vrh, tmp);
+	kaddr = kmap_atomic(iov.bv_page);
+	from = kaddr + iov.bv_offset;
+	*val = vringh16_to_cpu(vrh, READ_ONCE(*(__virtio16 *)from));
+	kunmap_atomic(kaddr);
 
 	return 0;
 }
@@ -1296,36 +1171,20 @@ static inline int getu16_iotlb(const struct vringh *vrh,
 static inline int putu16_iotlb(const struct vringh *vrh,
 			       __virtio16 *p, u16 val)
 {
-	struct iotlb_vec ivec;
-	union {
-		struct iovec iovec;
-		struct bio_vec bvec;
-	} iov;
-	__virtio16 tmp;
+	struct bio_vec iov;
+	void *kaddr, *to;
 	int ret;
-
-	ivec.iov.iovec = &iov.iovec;
-	ivec.count = 1;
 
 	/* Atomic write is needed for putu16 */
 	ret = iotlb_translate(vrh, (u64)(uintptr_t)p, sizeof(*p),
-			      NULL, &ivec, VHOST_MAP_RO);
+			      &iov, 1, VHOST_MAP_WO);
 	if (ret < 0)
 		return ret;
 
-	tmp = cpu_to_vringh16(vrh, val);
-
-	if (vrh->use_va) {
-		ret = __put_user(tmp, (__virtio16 __user *)ivec.iov.iovec[0].iov_base);
-		if (ret)
-			return ret;
-	} else {
-		void *kaddr = kmap_local_page(ivec.iov.bvec[0].bv_page);
-		void *to = kaddr + ivec.iov.bvec[0].bv_offset;
-
-		WRITE_ONCE(*(__virtio16 *)to, tmp);
-		kunmap_local(kaddr);
-	}
+	kaddr = kmap_atomic(iov.bv_page);
+	to = kaddr + iov.bv_offset;
+	WRITE_ONCE(*(__virtio16 *)to, cpu_to_vringh16(vrh, val));
+	kunmap_atomic(kaddr);
 
 	return 0;
 }
@@ -1387,9 +1246,9 @@ static inline int putused_iotlb(const struct vringh *vrh,
  * @features: the feature bits for this ring.
  * @num: the number of elements.
  * @weak_barriers: true if we only need memory barriers, not I/O.
- * @desc: the userspace descriptor pointer.
- * @avail: the userspace avail pointer.
- * @used: the userspace used pointer.
+ * @desc: the userpace descriptor pointer.
+ * @avail: the userpace avail pointer.
+ * @used: the userpace used pointer.
  *
  * Returns an error if num is invalid.
  */
@@ -1399,50 +1258,19 @@ int vringh_init_iotlb(struct vringh *vrh, u64 features,
 		      struct vring_avail *avail,
 		      struct vring_used *used)
 {
-	vrh->use_va = false;
-
 	return vringh_init_kern(vrh, features, num, weak_barriers,
 				desc, avail, used);
 }
 EXPORT_SYMBOL(vringh_init_iotlb);
 
 /**
- * vringh_init_iotlb_va - initialize a vringh for a ring with IOTLB containing
- *                        user VA.
- * @vrh: the vringh to initialize.
- * @features: the feature bits for this ring.
- * @num: the number of elements.
- * @weak_barriers: true if we only need memory barriers, not I/O.
- * @desc: the userspace descriptor pointer.
- * @avail: the userspace avail pointer.
- * @used: the userspace used pointer.
- *
- * Returns an error if num is invalid.
- */
-int vringh_init_iotlb_va(struct vringh *vrh, u64 features,
-			 unsigned int num, bool weak_barriers,
-			 struct vring_desc *desc,
-			 struct vring_avail *avail,
-			 struct vring_used *used)
-{
-	vrh->use_va = true;
-
-	return vringh_init_kern(vrh, features, num, weak_barriers,
-				desc, avail, used);
-}
-EXPORT_SYMBOL(vringh_init_iotlb_va);
-
-/**
  * vringh_set_iotlb - initialize a vringh for a ring with IOTLB.
  * @vrh: the vring
  * @iotlb: iotlb associated with this vring
- * @iotlb_lock: spinlock to synchronize the iotlb accesses
  */
-void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb,
-		      spinlock_t *iotlb_lock)
+void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb)
 {
 	vrh->iotlb = iotlb;
-	vrh->iotlb_lock = iotlb_lock;
 }
 EXPORT_SYMBOL(vringh_set_iotlb);
 
@@ -1462,10 +1290,7 @@ EXPORT_SYMBOL(vringh_set_iotlb);
  * *head will be vrh->vring.num.  You may be able to ignore an invalid
  * descriptor, but there's not much you can do with an invalid ring.
  *
- * Note that you can reuse riov and wiov with subsequent calls. Content is
- * overwritten and memory reallocated if more space is needed.
- * When you don't have to use riov and wiov anymore, you should clean up them
- * calling vringh_kiov_cleanup() to release the memory, even on error!
+ * Note that you may need to clean up riov and wiov, even on error!
  */
 int vringh_getdesc_iotlb(struct vringh *vrh,
 			 struct vringh_kiov *riov,

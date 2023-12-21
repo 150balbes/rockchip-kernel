@@ -55,15 +55,11 @@ static int mv88e6xxx_smi_direct_write(struct mv88e6xxx_chip *chip,
 static int mv88e6xxx_smi_direct_wait(struct mv88e6xxx_chip *chip,
 				     int dev, int reg, int bit, int val)
 {
-	const unsigned long timeout = jiffies + msecs_to_jiffies(50);
 	u16 data;
 	int err;
 	int i;
 
-	/* Even if the initial poll takes longer than 50ms, always do
-	 * at least one more attempt.
-	 */
-	for (i = 0; time_before(jiffies, timeout) || (i < 2); i++) {
+	for (i = 0; i < 16; i++) {
 		err = mv88e6xxx_smi_direct_read(chip, dev, reg, &data);
 		if (err)
 			return err;
@@ -71,10 +67,7 @@ static int mv88e6xxx_smi_direct_wait(struct mv88e6xxx_chip *chip,
 		if (!!(data & BIT(bit)) == !!val)
 			return 0;
 
-		if (i < 2)
-			cpu_relax();
-		else
-			usleep_range(1000, 2000);
+		usleep_range(1000, 2000);
 	}
 
 	return -ETIMEDOUT;
@@ -111,6 +104,11 @@ static int mv88e6xxx_smi_indirect_read(struct mv88e6xxx_chip *chip,
 {
 	int err;
 
+	err = mv88e6xxx_smi_direct_wait(chip, chip->sw_addr,
+					MV88E6XXX_SMI_CMD, 15, 0);
+	if (err)
+		return err;
+
 	err = mv88e6xxx_smi_direct_write(chip, chip->sw_addr,
 					 MV88E6XXX_SMI_CMD,
 					 MV88E6XXX_SMI_CMD_BUSY |
@@ -134,6 +132,11 @@ static int mv88e6xxx_smi_indirect_write(struct mv88e6xxx_chip *chip,
 {
 	int err;
 
+	err = mv88e6xxx_smi_direct_wait(chip, chip->sw_addr,
+					MV88E6XXX_SMI_CMD, 15, 0);
+	if (err)
+		return err;
+
 	err = mv88e6xxx_smi_direct_write(chip, chip->sw_addr,
 					 MV88E6XXX_SMI_DATA, data);
 	if (err)
@@ -152,20 +155,9 @@ static int mv88e6xxx_smi_indirect_write(struct mv88e6xxx_chip *chip,
 					 MV88E6XXX_SMI_CMD, 15, 0);
 }
 
-static int mv88e6xxx_smi_indirect_init(struct mv88e6xxx_chip *chip)
-{
-	/* Ensure that the chip starts out in the ready state. As both
-	 * reads and writes always ensure this on return, they can
-	 * safely depend on the chip not being busy on entry.
-	 */
-	return mv88e6xxx_smi_direct_wait(chip, chip->sw_addr,
-					 MV88E6XXX_SMI_CMD, 15, 0);
-}
-
 static const struct mv88e6xxx_bus_ops mv88e6xxx_smi_indirect_ops = {
 	.read = mv88e6xxx_smi_indirect_read,
 	.write = mv88e6xxx_smi_indirect_write,
-	.init = mv88e6xxx_smi_indirect_init,
 };
 
 int mv88e6xxx_smi_init(struct mv88e6xxx_chip *chip,
@@ -182,9 +174,6 @@ int mv88e6xxx_smi_init(struct mv88e6xxx_chip *chip,
 
 	chip->bus = bus;
 	chip->sw_addr = sw_addr;
-
-	if (chip->smi_ops->init)
-		return chip->smi_ops->init(chip);
 
 	return 0;
 }

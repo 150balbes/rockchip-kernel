@@ -738,6 +738,7 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	struct hinfc_host *host;
 	struct nand_chip  *chip;
 	struct mtd_info   *mtd;
+	struct resource	  *res;
 	struct device_node *np = dev->of_node;
 
 	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
@@ -753,13 +754,17 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return -ENXIO;
 
-	host->iobase = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	host->iobase = devm_ioremap_resource(dev, res);
 	if (IS_ERR(host->iobase))
 		return PTR_ERR(host->iobase);
 
-	host->mmio = devm_platform_ioremap_resource(pdev, 1);
-	if (IS_ERR(host->mmio))
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	host->mmio = devm_ioremap_resource(dev, res);
+	if (IS_ERR(host->mmio)) {
+		dev_err(dev, "devm_ioremap_resource[1] fail\n");
 		return PTR_ERR(host->mmio);
+	}
 
 	mtd->name		= "hisi_nand";
 	mtd->dev.parent         = &pdev->dev;
@@ -798,7 +803,7 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void hisi_nfc_remove(struct platform_device *pdev)
+static int hisi_nfc_remove(struct platform_device *pdev)
 {
 	struct hinfc_host *host = platform_get_drvdata(pdev);
 	struct nand_chip *chip = &host->chip;
@@ -807,6 +812,8 @@ static void hisi_nfc_remove(struct platform_device *pdev)
 	ret = mtd_device_unregister(nand_to_mtd(chip));
 	WARN_ON(ret);
 	nand_cleanup(chip);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -858,7 +865,7 @@ static struct platform_driver hisi_nfc_driver = {
 		.pm = &hisi_nfc_pm_ops,
 	},
 	.probe		= hisi_nfc_probe,
-	.remove_new	= hisi_nfc_remove,
+	.remove		= hisi_nfc_remove,
 };
 
 module_platform_driver(hisi_nfc_driver);

@@ -108,39 +108,6 @@ configfrag_hotplug_cpu () {
 	grep -q '^CONFIG_HOTPLUG_CPU=y$' "$1"
 }
 
-# get_starttime
-#
-# Returns a cookie identifying the current time.
-get_starttime () {
-	awk 'BEGIN { print systime() }' < /dev/null
-}
-
-# get_starttime_duration starttime
-#
-# Given the return value from get_starttime, compute a human-readable
-# string denoting the time since get_starttime.
-get_starttime_duration () {
-	awk -v starttime=$1 '
-	BEGIN {
-		ts = systime() - starttime; 
-		tm = int(ts / 60);
-		th = int(ts / 3600);
-		td = int(ts / 86400);
-		d = td;
-		h = th - td * 24;
-		m = tm - th * 60;
-		s = ts - tm * 60;
-		if (d >= 1)
-			printf "%dd %d:%02d:%02d\n", d, h, m, s
-		else if (h >= 1)
-			printf "%d:%02d:%02d\n", h, m, s
-		else if (m >= 1)
-			printf "%d:%02d.0\n", m, s
-		else
-			print s " seconds"
-	}' < /dev/null
-}
-
 # identify_boot_image qemu-cmd
 #
 # Returns the relative path to the kernel build image.  This will be
@@ -158,9 +125,6 @@ identify_boot_image () {
 			;;
 		qemu-system-aarch64)
 			echo arch/arm64/boot/Image
-			;;
-		qemu-system-s390x)
-			echo arch/s390/boot/bzImage
 			;;
 		*)
 			echo vmlinux
@@ -187,9 +151,6 @@ identify_qemu () {
 	elif echo $u | grep -q aarch64
 	then
 		echo qemu-system-aarch64
-	elif echo $u | grep -q 'IBM S/390'
-	then
-		echo qemu-system-s390x
 	elif uname -a | grep -q ppc64
 	then
 		echo qemu-system-ppc64
@@ -208,8 +169,6 @@ identify_qemu () {
 # Output arguments for the qemu "-append" string based on CPU type
 # and the TORTURE_QEMU_INTERACTIVE environment variable.
 identify_qemu_append () {
-	echo debug_boot_weak_hash
-	echo panic=-1
 	local console=ttyS0
 	case "$1" in
 	qemu-system-x86_64|qemu-system-i386)
@@ -250,7 +209,7 @@ identify_qemu_args () {
 		echo -machine virt,gic-version=host -cpu host
 		;;
 	qemu-system-ppc64)
-		echo -M pseries -nodefaults
+		echo -enable-kvm -M pseries -nodefaults
 		echo -device spapr-vscsi
 		if test -n "$TORTURE_QEMU_INTERACTIVE" -a -n "$TORTURE_QEMU_MAC"
 		then
@@ -272,7 +231,7 @@ identify_qemu_args () {
 # Returns the number of virtual CPUs available to the aggregate of the
 # guest OSes.
 identify_qemu_vcpus () {
-	getconf _NPROCESSORS_ONLN
+	lscpu | grep '^CPU(s):' | sed -e 's/CPU(s)://' -e 's/[ 	]*//g'
 }
 
 # print_bug
@@ -307,7 +266,7 @@ specify_qemu_cpus () {
 			echo $2 -smp $3
 			;;
 		qemu-system-ppc64)
-			nt="`lscpu | sed -n 's/^Thread(s) per core:\s*//p'`"
+			nt="`lscpu | grep '^NUMA node0' | sed -e 's/^[^,]*,\([0-9]*\),.*$/\1/'`"
 			echo $2 -smp cores=`expr \( $3 + $nt - 1 \) / $nt`,threads=$nt
 			;;
 		esac

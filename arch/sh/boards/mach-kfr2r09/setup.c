@@ -202,7 +202,7 @@ static struct platform_device kfr2r09_sh_lcdc_device = {
 };
 
 static struct lv5207lp_platform_data kfr2r09_backlight_data = {
-	.dev = &kfr2r09_sh_lcdc_device.dev,
+	.fbdev = &kfr2r09_sh_lcdc_device.dev,
 	.def_value = 13,
 	.max_value = 13,
 };
@@ -633,7 +633,7 @@ static void __init kfr2r09_mv_mem_reserve(void)
 	if (!phys)
 		panic("Failed to allocate CEU memory\n");
 
-	memblock_phys_free(phys, size);
+	memblock_free(phys, size);
 	memblock_remove(phys, size);
 
 	ceu_dma_membase = phys;

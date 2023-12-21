@@ -286,9 +286,4 @@ enum {
 	RT1308_AIFS
 };
 
-enum rt1308_hw_ver {
-	RT1308_VER_C = 2,
-	RT1308_VER_D
-};
-
 #endif		/* end of _RT1308_H_ */

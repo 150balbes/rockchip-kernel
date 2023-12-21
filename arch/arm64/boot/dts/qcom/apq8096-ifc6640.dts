@@ -17,7 +17,7 @@
 	qcom,board-id = <0x00010018 0>;
 
 	aliases {
-		serial0 = &blsp2_uart2;
+		serial0 = &blsp2_uart1;
 	};
 
 	chosen {
@@ -26,7 +26,7 @@
 
 	v1p05: v1p05-regulator {
 		compatible = "regulator-fixed";
-		regulator-name = "v1p05";
+		reglator-name = "v1p05";
 		regulator-always-on;
 		regulator-boot-on;
 
@@ -38,7 +38,7 @@
 
 	v12_poe: v12-poe-regulator {
 		compatible = "regulator-fixed";
-		regulator-name = "v12_poe";
+		reglator-name = "v12_poe";
 		regulator-always-on;
 		regulator-boot-on;
 
@@ -81,50 +81,72 @@
 	};
 };
 
-&blsp2_uart2 {
+&blsp2_uart1 {
 	status = "okay";
 	pinctrl-names = "default", "sleep";
-	pinctrl-0 = <&blsp2_uart2_2pins_default>;
-	pinctrl-1 = <&blsp2_uart2_2pins_sleep>;
+	pinctrl-0 = <&blsp2_uart1_2pins_default>;
+	pinctrl-1 = <&blsp2_uart1_2pins_sleep>;
 };
 
-&gpu {
-	status = "okay";
-};
+&msmgpio {
+	sdc2_pins_default: sdc2-pins-default {
+		clk {
+			pins = "sdc2_clk";
+			bias-disable;
+			drive-strength = <16>;
+		};
 
-&mdss {
-	status = "okay";
-};
+		cmd {
+			pins = "sdc2_cmd";
+			bias-pull-up;
+			drive-strength = <10>;
+		};
 
-&mdss_hdmi {
-	status = "okay";
-};
+		data {
+			pins = "sdc2_data";
+			bias-pull-up;
+			drive-strength = <10>;
+		};
 
-&mdss_hdmi_phy {
-	status = "okay";
-};
+		cd {
+			pins = "gpio38";
+			function = "gpio";
 
-&sdc2_state_on {
-	cd-pins {
-		pins = "gpio38";
-		function = "gpio";
-
-		bias-pull-up;
-		drive-strength = <16>;
+			bias-pull-up;
+			drive-strength = <16>;
+		};
 	};
-};
 
-&sdc2_state_off {
-	cd-pins {
-		pins = "gpio38";
-		function = "gpio";
-		bias-pull-up;
-		drive-strength = <2>;
+	sdc2_pins_sleep: sdc2-pins-sleep {
+		clk {
+			pins = "sdc2_clk";
+			bias-disable;
+			drive-strength = <2>;
+		};
+
+		cmd {
+			pins = "sdc2_cmd";
+			bias-pull-up;
+			drive-strength = <2>;
+		};
+
+		data {
+			pins = "sdc2_data";
+			bias-pull-up;
+			drive-strength = <2>;
+		};
+
+		cd {
+			pins = "gpio38";
+			function = "gpio";
+			bias-pull-up;
+			drive-strength = <2>;
+		};
 	};
 };
 
 &rpm_requests {
-	regulators-0 {
+	pm8994-regulators {
 		compatible = "qcom,rpm-pm8994-regulators";
 
 		vdd_s1-supply = <&vph_pwr>;
@@ -330,10 +352,14 @@
 
 	bus-width = <4>;
 
-	cd-gpios = <&tlmm 38 GPIO_ACTIVE_LOW>;
+	cd-gpios = <&msmgpio 38 0x1>;
 
 	vmmc-supply = <&vreg_l21a_2p95>;
 	vqmmc-supply = <&vreg_l13a_2p95>;
+
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&sdc2_pins_default>;
+	pinctrl-1 = <&sdc2_pins_sleep>;
 };
 
 &ufshc {
@@ -353,8 +379,7 @@
 
 	vdda-phy-supply = <&vreg_l28a_0p925>;
 	vdda-pll-supply = <&vreg_l12a_1p8>;
-};
 
-&venus {
-	status = "okay";
+	vdda-phy-max-microamp = <18380>;
+	vdda-pll-max-microamp = <9440>;
 };

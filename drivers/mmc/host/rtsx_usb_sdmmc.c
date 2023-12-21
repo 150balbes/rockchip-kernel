@@ -1042,6 +1042,7 @@ static int sd_set_timing(struct rtsx_usb_sdmmc *host,
 		unsigned char timing, bool *ddr_mode)
 {
 	struct rtsx_ucr *ucr = host->ucr;
+	int err;
 
 	*ddr_mode = false;
 
@@ -1096,7 +1097,9 @@ static int sd_set_timing(struct rtsx_usb_sdmmc *host,
 		break;
 	}
 
-	return rtsx_usb_send_cmd(ucr, MODE_C, 100);
+	err = rtsx_usb_send_cmd(ucr, MODE_C, 100);
+
+	return err;
 }
 
 static void sdmmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
@@ -1329,7 +1332,6 @@ static int rtsx_usb_sdmmc_drv_probe(struct platform_device *pdev)
 #ifdef RTSX_USB_USE_LEDS_CLASS
 	int err;
 #endif
-	int ret;
 
 	ucr = usb_get_intfdata(to_usb_interface(pdev->dev.parent));
 	if (!ucr)
@@ -1366,15 +1368,7 @@ static int rtsx_usb_sdmmc_drv_probe(struct platform_device *pdev)
 	INIT_WORK(&host->led_work, rtsx_usb_update_led);
 
 #endif
-	ret = mmc_add_host(mmc);
-	if (ret) {
-#ifdef RTSX_USB_USE_LEDS_CLASS
-		led_classdev_unregister(&host->led);
-#endif
-		mmc_free_host(mmc);
-		pm_runtime_disable(&pdev->dev);
-		return ret;
-	}
+	mmc_add_host(mmc);
 
 	return 0;
 }

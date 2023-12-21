@@ -88,7 +88,8 @@ static void lgr_stsi_2_2_2(struct lgr_info *lgr_info)
 	if (stsi(si, 2, 2, 2))
 		return;
 	cpascii(lgr_info->name, si->name, sizeof(si->name));
-	lgr_info->lpar_number = si->lpar_number;
+	memcpy(&lgr_info->lpar_number, &si->lpar_number,
+	       sizeof(lgr_info->lpar_number));
 }
 
 /*

@@ -6,11 +6,8 @@
 #include <linux/rtnetlink.h>
 #include <linux/net_tstamp.h>
 #include <linux/wireless.h>
-#include <linux/if_bridge.h>
-#include <net/dsa_stubs.h>
+#include <net/dsa.h>
 #include <net/wext.h>
-
-#include "dev.h"
 
 /*
  *	Map an interface index to its name (SIOCGIFNAME)
@@ -34,101 +31,47 @@ static int dev_ifname(struct net *net, struct ifreq *ifr)
  *	size eventually, and there is nothing I can do about it.
  *	Thus we will need a 'compatibility mode'.
  */
-int dev_ifconf(struct net *net, struct ifconf __user *uifc)
+
+int dev_ifconf(struct net *net, struct ifconf *ifc, int size)
 {
 	struct net_device *dev;
-	void __user *pos;
-	size_t size;
-	int len, total = 0, done;
+	char __user *pos;
+	int len;
+	int total;
 
-	/* both the ifconf and the ifreq structures are slightly different */
-	if (in_compat_syscall()) {
-		struct compat_ifconf ifc32;
+	/*
+	 *	Fetch the caller's info block.
+	 */
 
-		if (copy_from_user(&ifc32, uifc, sizeof(struct compat_ifconf)))
-			return -EFAULT;
+	pos = ifc->ifc_buf;
+	len = ifc->ifc_len;
 
-		pos = compat_ptr(ifc32.ifcbuf);
-		len = ifc32.ifc_len;
-		size = sizeof(struct compat_ifreq);
-	} else {
-		struct ifconf ifc;
+	/*
+	 *	Loop over the interfaces, and write an info block for each.
+	 */
 
-		if (copy_from_user(&ifc, uifc, sizeof(struct ifconf)))
-			return -EFAULT;
-
-		pos = ifc.ifc_buf;
-		len = ifc.ifc_len;
-		size = sizeof(struct ifreq);
-	}
-
-	/* Loop over the interfaces, and write an info block for each. */
-	rtnl_lock();
+	total = 0;
 	for_each_netdev(net, dev) {
+		int done;
 		if (!pos)
 			done = inet_gifconf(dev, NULL, 0, size);
 		else
 			done = inet_gifconf(dev, pos + total,
 					    len - total, size);
-		if (done < 0) {
-			rtnl_unlock();
+		if (done < 0)
 			return -EFAULT;
-		}
 		total += done;
 	}
-	rtnl_unlock();
 
-	return put_user(total, &uifc->ifc_len);
-}
+	/*
+	 *	All done.  Write the updated control block back to the caller.
+	 */
+	ifc->ifc_len = total;
 
-static int dev_getifmap(struct net_device *dev, struct ifreq *ifr)
-{
-	struct ifmap *ifmap = &ifr->ifr_map;
-
-	if (in_compat_syscall()) {
-		struct compat_ifmap *cifmap = (struct compat_ifmap *)ifmap;
-
-		cifmap->mem_start = dev->mem_start;
-		cifmap->mem_end   = dev->mem_end;
-		cifmap->base_addr = dev->base_addr;
-		cifmap->irq       = dev->irq;
-		cifmap->dma       = dev->dma;
-		cifmap->port      = dev->if_port;
-
-		return 0;
-	}
-
-	ifmap->mem_start  = dev->mem_start;
-	ifmap->mem_end    = dev->mem_end;
-	ifmap->base_addr  = dev->base_addr;
-	ifmap->irq        = dev->irq;
-	ifmap->dma        = dev->dma;
-	ifmap->port       = dev->if_port;
-
+	/*
+	 * 	Both BSD and Solaris return 0 here, so we do too.
+	 */
 	return 0;
-}
-
-static int dev_setifmap(struct net_device *dev, struct ifreq *ifr)
-{
-	struct compat_ifmap *cifmap = (struct compat_ifmap *)&ifr->ifr_map;
-
-	if (!dev->netdev_ops->ndo_set_config)
-		return -EOPNOTSUPP;
-
-	if (in_compat_syscall()) {
-		struct ifmap ifmap = {
-			.mem_start  = cifmap->mem_start,
-			.mem_end    = cifmap->mem_end,
-			.base_addr  = cifmap->base_addr,
-			.irq        = cifmap->irq,
-			.dma        = cifmap->dma,
-			.port       = cifmap->port,
-		};
-
-		return dev->netdev_ops->ndo_set_config(dev, &ifmap);
-	}
-
-	return dev->netdev_ops->ndo_set_config(dev, &ifr->ifr_map);
 }
 
 /*
@@ -161,7 +104,13 @@ static int dev_ifsioc_locked(struct net *net, struct ifreq *ifr, unsigned int cm
 		break;
 
 	case SIOCGIFMAP:
-		return dev_getifmap(dev, ifr);
+		ifr->ifr_map.mem_start = dev->mem_start;
+		ifr->ifr_map.mem_end   = dev->mem_end;
+		ifr->ifr_map.base_addr = dev->base_addr;
+		ifr->ifr_map.irq       = dev->irq;
+		ifr->ifr_map.dma       = dev->dma;
+		ifr->ifr_map.port      = dev->if_port;
+		return 0;
 
 	case SIOCGIFINDEX:
 		ifr->ifr_ifindex = dev->ifindex;
@@ -183,18 +132,22 @@ static int dev_ifsioc_locked(struct net *net, struct ifreq *ifr, unsigned int cm
 	return err;
 }
 
-static int net_hwtstamp_validate(const struct kernel_hwtstamp_config *cfg)
+static int net_hwtstamp_validate(struct ifreq *ifr)
 {
+	struct hwtstamp_config cfg;
 	enum hwtstamp_tx_types tx_type;
 	enum hwtstamp_rx_filters rx_filter;
 	int tx_type_valid = 0;
 	int rx_filter_valid = 0;
 
-	if (cfg->flags & ~HWTSTAMP_FLAG_MASK)
+	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
+		return -EFAULT;
+
+	if (cfg.flags) /* reserved for future extensions */
 		return -EINVAL;
 
-	tx_type = cfg->tx_type;
-	rx_filter = cfg->rx_filter;
+	tx_type = cfg.tx_type;
+	rx_filter = cfg.rx_filter;
 
 	switch (tx_type) {
 	case HWTSTAMP_TX_OFF:
@@ -238,105 +191,34 @@ static int net_hwtstamp_validate(const struct kernel_hwtstamp_config *cfg)
 	return 0;
 }
 
-static int dev_eth_ioctl(struct net_device *dev,
-			 struct ifreq *ifr, unsigned int cmd)
-{
-	const struct net_device_ops *ops = dev->netdev_ops;
-
-	if (!ops->ndo_eth_ioctl)
-		return -EOPNOTSUPP;
-
-	if (!netif_device_present(dev))
-		return -ENODEV;
-
-	return ops->ndo_eth_ioctl(dev, ifr, cmd);
-}
-
-static int dev_get_hwtstamp(struct net_device *dev, struct ifreq *ifr)
-{
-	return dev_eth_ioctl(dev, ifr, SIOCGHWTSTAMP);
-}
-
-static int dev_set_hwtstamp(struct net_device *dev, struct ifreq *ifr)
-{
-	struct kernel_hwtstamp_config kernel_cfg;
-	struct netlink_ext_ack extack = {};
-	struct hwtstamp_config cfg;
-	int err;
-
-	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
-		return -EFAULT;
-
-	hwtstamp_config_to_kernel(&kernel_cfg, &cfg);
-
-	err = net_hwtstamp_validate(&kernel_cfg);
-	if (err)
-		return err;
-
-	err = dsa_master_hwtstamp_validate(dev, &kernel_cfg, &extack);
-	if (err) {
-		if (extack._msg)
-			netdev_err(dev, "%s\n", extack._msg);
-		return err;
-	}
-
-	return dev_eth_ioctl(dev, ifr, SIOCSHWTSTAMP);
-}
-
-static int dev_siocbond(struct net_device *dev,
+static int dev_do_ioctl(struct net_device *dev,
 			struct ifreq *ifr, unsigned int cmd)
 {
 	const struct net_device_ops *ops = dev->netdev_ops;
+	int err = -EOPNOTSUPP;
 
-	if (ops->ndo_siocbond) {
+	err = dsa_ndo_do_ioctl(dev, ifr, cmd);
+	if (err == 0 || err != -EOPNOTSUPP)
+		return err;
+
+	if (ops->ndo_do_ioctl) {
 		if (netif_device_present(dev))
-			return ops->ndo_siocbond(dev, ifr, cmd);
+			err = ops->ndo_do_ioctl(dev, ifr, cmd);
 		else
-			return -ENODEV;
+			err = -ENODEV;
 	}
 
-	return -EOPNOTSUPP;
-}
-
-static int dev_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
-			      void __user *data, unsigned int cmd)
-{
-	const struct net_device_ops *ops = dev->netdev_ops;
-
-	if (ops->ndo_siocdevprivate) {
-		if (netif_device_present(dev))
-			return ops->ndo_siocdevprivate(dev, ifr, data, cmd);
-		else
-			return -ENODEV;
-	}
-
-	return -EOPNOTSUPP;
-}
-
-static int dev_siocwandev(struct net_device *dev, struct if_settings *ifs)
-{
-	const struct net_device_ops *ops = dev->netdev_ops;
-
-	if (ops->ndo_siocwandev) {
-		if (netif_device_present(dev))
-			return ops->ndo_siocwandev(dev, ifs);
-		else
-			return -ENODEV;
-	}
-
-	return -EOPNOTSUPP;
+	return err;
 }
 
 /*
  *	Perform the SIOCxIFxxx calls, inside rtnl_lock()
  */
-static int dev_ifsioc(struct net *net, struct ifreq *ifr, void __user *data,
-		      unsigned int cmd)
+static int dev_ifsioc(struct net *net, struct ifreq *ifr, unsigned int cmd)
 {
 	int err;
 	struct net_device *dev = __dev_get_by_name(net, ifr->ifr_name);
 	const struct net_device_ops *ops;
-	netdevice_tracker dev_tracker;
 
 	if (!dev)
 		return -ENODEV;
@@ -363,13 +245,18 @@ static int dev_ifsioc(struct net *net, struct ifreq *ifr, void __user *data,
 		if (ifr->ifr_hwaddr.sa_family != dev->type)
 			return -EINVAL;
 		memcpy(dev->broadcast, ifr->ifr_hwaddr.sa_data,
-		       min(sizeof(ifr->ifr_hwaddr.sa_data_min),
+		       min(sizeof(ifr->ifr_hwaddr.sa_data),
 			   (size_t)dev->addr_len));
 		call_netdevice_notifiers(NETDEV_CHANGEADDR, dev);
 		return 0;
 
 	case SIOCSIFMAP:
-		return dev_setifmap(dev, ifr);
+		if (ops->ndo_set_config) {
+			if (!netif_device_present(dev))
+				return -ENODEV;
+			return ops->ndo_set_config(dev, &ifr->ifr_map);
+		}
+		return -EOPNOTSUPP;
 
 	case SIOCADDMULTI:
 		if (!ops->ndo_set_rx_mode ||
@@ -396,47 +283,36 @@ static int dev_ifsioc(struct net *net, struct ifreq *ifr, void __user *data,
 		ifr->ifr_newname[IFNAMSIZ-1] = '\0';
 		return dev_change_name(dev, ifr->ifr_newname);
 
-	case SIOCWANDEV:
-		return dev_siocwandev(dev, &ifr->ifr_settings);
-
-	case SIOCBRADDIF:
-	case SIOCBRDELIF:
-		if (!netif_device_present(dev))
-			return -ENODEV;
-		if (!netif_is_bridge_master(dev))
-			return -EOPNOTSUPP;
-		netdev_hold(dev, &dev_tracker, GFP_KERNEL);
-		rtnl_unlock();
-		err = br_ioctl_call(net, netdev_priv(dev), cmd, ifr, NULL);
-		netdev_put(dev, &dev_tracker);
-		rtnl_lock();
-		return err;
-
-	case SIOCDEVPRIVATE ... SIOCDEVPRIVATE + 15:
-		return dev_siocdevprivate(dev, ifr, data, cmd);
-
 	case SIOCSHWTSTAMP:
-		return dev_set_hwtstamp(dev, ifr);
+		err = net_hwtstamp_validate(ifr);
+		if (err)
+			return err;
+		fallthrough;
 
-	case SIOCGHWTSTAMP:
-		return dev_get_hwtstamp(dev, ifr);
-
-	case SIOCGMIIPHY:
-	case SIOCGMIIREG:
-	case SIOCSMIIREG:
-		return dev_eth_ioctl(dev, ifr, cmd);
-
-	case SIOCBONDENSLAVE:
-	case SIOCBONDRELEASE:
-	case SIOCBONDSETHWADDR:
-	case SIOCBONDSLAVEINFOQUERY:
-	case SIOCBONDINFOQUERY:
-	case SIOCBONDCHANGEACTIVE:
-		return dev_siocbond(dev, ifr, cmd);
-
-	/* Unknown ioctl */
+	/*
+	 *	Unknown or private ioctl
+	 */
 	default:
-		err = -EINVAL;
+		if ((cmd >= SIOCDEVPRIVATE &&
+		    cmd <= SIOCDEVPRIVATE + 15) ||
+		    cmd == SIOCBONDENSLAVE ||
+		    cmd == SIOCBONDRELEASE ||
+		    cmd == SIOCBONDSETHWADDR ||
+		    cmd == SIOCBONDSLAVEINFOQUERY ||
+		    cmd == SIOCBONDINFOQUERY ||
+		    cmd == SIOCBONDCHANGEACTIVE ||
+		    cmd == SIOCGMIIPHY ||
+		    cmd == SIOCGMIIREG ||
+		    cmd == SIOCSMIIREG ||
+		    cmd == SIOCBRADDIF ||
+		    cmd == SIOCBRDELIF ||
+		    cmd == SIOCSHWTSTAMP ||
+		    cmd == SIOCGHWTSTAMP ||
+		    cmd == SIOCWANDEV) {
+			err = dev_do_ioctl(dev, ifr, cmd);
+		} else
+			err = -EINVAL;
+
 	}
 	return err;
 }
@@ -478,7 +354,6 @@ EXPORT_SYMBOL(dev_load);
  *	@net: the applicable net namespace
  *	@cmd: command to issue
  *	@ifr: pointer to a struct ifreq in user space
- *	@data: data exchanged with userspace
  *	@need_copyout: whether or not copy_to_user() should be called
  *
  *	Issue ioctl functions to devices. This is normally called by the
@@ -487,8 +362,7 @@ EXPORT_SYMBOL(dev_load);
  *	positive or a negative errno code on error.
  */
 
-int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr,
-	      void __user *data, bool *need_copyout)
+int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr, bool *need_copyout)
 {
 	int ret;
 	char *colon;
@@ -538,7 +412,9 @@ int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr,
 
 	case SIOCETHTOOL:
 		dev_load(net, ifr->ifr_name);
-		ret = dev_ethtool(net, ifr, data);
+		rtnl_lock();
+		ret = dev_ethtool(net, ifr);
+		rtnl_unlock();
 		if (colon)
 			*colon = ':';
 		return ret;
@@ -556,7 +432,7 @@ int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr,
 		if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
 			return -EPERM;
 		rtnl_lock();
-		ret = dev_ifsioc(net, ifr, data, cmd);
+		ret = dev_ifsioc(net, ifr, cmd);
 		rtnl_unlock();
 		if (colon)
 			*colon = ':';
@@ -602,7 +478,7 @@ int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr,
 	case SIOCBONDINFOQUERY:
 		dev_load(net, ifr->ifr_name);
 		rtnl_lock();
-		ret = dev_ifsioc(net, ifr, data, cmd);
+		ret = dev_ifsioc(net, ifr, cmd);
 		rtnl_unlock();
 		if (need_copyout)
 			*need_copyout = false;
@@ -627,7 +503,7 @@ int dev_ioctl(struct net *net, unsigned int cmd, struct ifreq *ifr,
 		     cmd <= SIOCDEVPRIVATE + 15)) {
 			dev_load(net, ifr->ifr_name);
 			rtnl_lock();
-			ret = dev_ifsioc(net, ifr, data, cmd);
+			ret = dev_ifsioc(net, ifr, cmd);
 			rtnl_unlock();
 			return ret;
 		}

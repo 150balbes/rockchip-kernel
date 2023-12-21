@@ -7,7 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: CZ.NIC's Turris Omnia LEDs driver
 
 maintainers:
-  - Marek Behún <kabel@kernel.org>
+  - Marek Behún <marek.behun@nic.cz>
 
 description:
   This module adds support for the RGB LEDs found on the front panel of the
@@ -32,9 +32,8 @@ properties:
 patternProperties:
   "^multi-led@[0-9a-b]$":
     type: object
-    $ref: leds-class-multicolor.yaml#
-    unevaluatedProperties: false
-
+    allOf:
+      - $ref: leds-class-multicolor.yaml#
     description:
       This node represents one of the RGB LED devices on Turris Omnia.
       No subnodes need to be added for subchannels since this controller only
@@ -58,7 +57,7 @@ examples:
 
     #include <dt-bindings/leds/common.h>
 
-    i2c {
+    i2c0 {
         #address-cells = <1>;
         #size-cells = <0>;
 

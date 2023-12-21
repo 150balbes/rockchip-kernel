@@ -69,10 +69,10 @@
 
 static DEFINE_SPINLOCK(fsl_rio_config_lock);
 
-#define ___fsl_read_rio_config(x, addr, err, op, barrier)	\
+#define __fsl_read_rio_config(x, addr, err, op)		\
 	__asm__ __volatile__(				\
 		"1:	"op" %1,0(%2)\n"		\
-		"	"barrier"\n"			\
+		"	eieio\n"			\
 		"2:\n"					\
 		".section .fixup,\"ax\"\n"		\
 		"3:	li %1,-1\n"			\
@@ -83,14 +83,6 @@ static DEFINE_SPINLOCK(fsl_rio_config_lock);
 		: "=r" (err), "=r" (x)			\
 		: "b" (addr), "i" (-EFAULT), "0" (err))
 
-#ifdef CONFIG_BOOKE
-#define __fsl_read_rio_config(x, addr, err, op)	\
-	___fsl_read_rio_config(x, addr, err, op, "mbar")
-#else
-#define __fsl_read_rio_config(x, addr, err, op)	\
-	___fsl_read_rio_config(x, addr, err, op, "eieio")
-#endif
-
 void __iomem *rio_regs_win;
 void __iomem *rmu_regs_win;
 resource_size_t rio_law_start;
@@ -98,7 +90,7 @@ resource_size_t rio_law_start;
 struct fsl_rio_dbell *dbell;
 struct fsl_rio_pw *pw;
 
-#ifdef CONFIG_PPC_E500
+#ifdef CONFIG_E500
 int fsl_rio_mcheck_exception(struct pt_regs *regs)
 {
 	const struct exception_table_entry *entry;
@@ -116,8 +108,8 @@ int fsl_rio_mcheck_exception(struct pt_regs *regs)
 				 __func__);
 			out_be32((u32 *)(rio_regs_win + RIO_LTLEDCSR),
 				 0);
-			regs_set_recoverable(regs);
-			regs_set_return_ip(regs, extable_fixup(entry));
+			regs->msr |= MSR_RI;
+			regs->nip = extable_fixup(entry);
 			return 1;
 		}
 	}
@@ -448,11 +440,14 @@ int fsl_rio_setup(struct platform_device *dev)
 	struct rio_mport *port;
 	struct rio_priv *priv;
 	int rc = 0;
-	const u32 *port_index;
+	const u32 *dt_range, *cell, *port_index;
 	u32 active_ports = 0;
+	struct resource regs, rmu_regs;
 	struct device_node *np, *rmu_node;
+	int rlen;
 	u32 ccsr;
-	u64 range_start;
+	u64 range_start, range_size;
+	int paw, aw, sw;
 	u32 i;
 	static int tmp;
 	struct device_node *rmu_np[MAX_MSG_UNIT_NUM] = {NULL};
@@ -462,7 +457,17 @@ int fsl_rio_setup(struct platform_device *dev)
 		return -ENODEV;
 	}
 
-	rio_regs_win = of_iomap(dev->dev.of_node, 0);
+	rc = of_address_to_resource(dev->dev.of_node, 0, &regs);
+	if (rc) {
+		dev_err(&dev->dev, "Can't get %pOF property 'reg'\n",
+				dev->dev.of_node);
+		return -EFAULT;
+	}
+	dev_info(&dev->dev, "Of-device full name %pOF\n",
+			dev->dev.of_node);
+	dev_info(&dev->dev, "Regs: %pR\n", &regs);
+
+	rio_regs_win = ioremap(regs.start, resource_size(&regs));
 	if (!rio_regs_win) {
 		dev_err(&dev->dev, "Unable to map rio register window\n");
 		rc = -ENOMEM;
@@ -496,9 +501,15 @@ int fsl_rio_setup(struct platform_device *dev)
 		rc = -ENOENT;
 		goto err_rmu;
 	}
-	rmu_regs_win = of_iomap(rmu_node, 0);
-
+	rc = of_address_to_resource(rmu_node, 0, &rmu_regs);
+	if (rc) {
+		dev_err(&dev->dev, "Can't get %pOF property 'reg'\n",
+				rmu_node);
+		of_node_put(rmu_node);
+		goto err_rmu;
+	}
 	of_node_put(rmu_node);
+	rmu_regs_win = ioremap(rmu_regs.start, resource_size(&rmu_regs));
 	if (!rmu_regs_win) {
 		dev_err(&dev->dev, "Unable to map rmu register window\n");
 		rc = -ENOMEM;
@@ -526,12 +537,15 @@ int fsl_rio_setup(struct platform_device *dev)
 	dbell->bellirq = irq_of_parse_and_map(np, 1);
 	dev_info(&dev->dev, "bellirq: %d\n", dbell->bellirq);
 
-	if (of_property_read_reg(np, 0, &range_start, NULL)) {
+	aw = of_n_addr_cells(np);
+	dt_range = of_get_property(np, "reg", &rlen);
+	if (!dt_range) {
 		pr_err("%pOF: unable to find 'reg' property\n",
 			np);
 		rc = -ENOMEM;
 		goto err_pw;
 	}
+	range_start = of_read_number(dt_range, aw);
 	dbell->dbell_regs = (struct rio_dbell_regs *)(rmu_regs_win +
 				(u32)range_start);
 
@@ -551,18 +565,19 @@ int fsl_rio_setup(struct platform_device *dev)
 	pw->dev = &dev->dev;
 	pw->pwirq = irq_of_parse_and_map(np, 0);
 	dev_info(&dev->dev, "pwirq: %d\n", pw->pwirq);
-	if (of_property_read_reg(np, 0, &range_start, NULL)) {
+	aw = of_n_addr_cells(np);
+	dt_range = of_get_property(np, "reg", &rlen);
+	if (!dt_range) {
 		pr_err("%pOF: unable to find 'reg' property\n",
 			np);
 		rc = -ENOMEM;
 		goto err;
 	}
+	range_start = of_read_number(dt_range, aw);
 	pw->pw_regs = (struct rio_pw_regs *)(rmu_regs_win + (u32)range_start);
 
 	/*set up ports node*/
 	for_each_child_of_node(dev->dev.of_node, np) {
-		struct resource res;
-
 		port_index = of_get_property(np, "cell-index", NULL);
 		if (!port_index) {
 			dev_err(&dev->dev, "Can't get %pOF property 'cell-index'\n",
@@ -570,14 +585,32 @@ int fsl_rio_setup(struct platform_device *dev)
 			continue;
 		}
 
-		if (of_range_to_resource(np, 0, &res)) {
+		dt_range = of_get_property(np, "ranges", &rlen);
+		if (!dt_range) {
 			dev_err(&dev->dev, "Can't get %pOF property 'ranges'\n",
 					np);
 			continue;
 		}
 
-		dev_info(&dev->dev, "%pOF: LAW %pR\n",
-				np, &res);
+		/* Get node address wide */
+		cell = of_get_property(np, "#address-cells", NULL);
+		if (cell)
+			aw = *cell;
+		else
+			aw = of_n_addr_cells(np);
+		/* Get node size wide */
+		cell = of_get_property(np, "#size-cells", NULL);
+		if (cell)
+			sw = *cell;
+		else
+			sw = of_n_size_cells(np);
+		/* Get parent address wide wide */
+		paw = of_n_addr_cells(np);
+		range_start = of_read_number(dt_range + aw, paw);
+		range_size = of_read_number(dt_range + aw + paw, sw);
+
+		dev_info(&dev->dev, "%pOF: LAW start 0x%016llx, size 0x%016llx.\n",
+				np, range_start, range_size);
 
 		port = kzalloc(sizeof(struct rio_mport), GFP_KERNEL);
 		if (!port)
@@ -600,7 +633,9 @@ int fsl_rio_setup(struct platform_device *dev)
 		}
 
 		INIT_LIST_HEAD(&port->dbells);
-		port->iores = res;	/* struct copy */
+		port->iores.start = range_start;
+		port->iores.end = port->iores.start + range_size - 1;
+		port->iores.flags = IORESOURCE_MEM;
 		port->iores.name = "rio_io_win";
 
 		if (request_resource(&iomem_resource, &port->iores) < 0) {

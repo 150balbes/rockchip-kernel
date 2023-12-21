@@ -5,28 +5,6 @@
 
 menu "Graphics support"
 
-config APERTURE_HELPERS
-	bool
-	help
-	  Support tracking and hand-over of aperture ownership. Required
-	  by graphics drivers for firmware-provided framebuffers.
-
-config STI_CORE
-	bool
-	depends on PARISC
-	help
-	  STI refers to the HP "Standard Text Interface" which is a set of
-	  BIOS routines contained in a ROM chip in HP PA-RISC based machines.
-
-config VIDEO_CMDLINE
-	bool
-
-config VIDEO_NOMODESET
-	bool
-	default n
-
-source "drivers/auxdisplay/Kconfig"
-
 if HAS_IOMEM
 
 config HAVE_FB_ATMEL
@@ -40,12 +18,17 @@ source "drivers/gpu/host1x/Kconfig"
 source "drivers/gpu/ipu-v3/Kconfig"
 
 source "drivers/gpu/drm/Kconfig"
+source "drivers/gpu/arm/Kconfig"
 
 menu "Frame buffer Devices"
 source "drivers/video/fbdev/Kconfig"
 endmenu
 
 source "drivers/video/backlight/Kconfig"
+
+menu "Rockchip Misc Video driver"
+source "drivers/video/rockchip/Kconfig"
+endmenu
 
 config VGASTATE
        tristate
@@ -63,7 +46,7 @@ if VT
 	source "drivers/video/console/Kconfig"
 endif
 
-if FB_CORE || SGI_NEWPORT_CONSOLE
+if FB || SGI_NEWPORT_CONSOLE
 	source "drivers/video/logo/Kconfig"
 
 endif

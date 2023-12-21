@@ -3,43 +3,37 @@
 
 #include <test_progs.h>
 
-#include "trace_printk.lskel.h"
+#include "trace_printk.skel.h"
 
-#define TRACEFS_PIPE	"/sys/kernel/tracing/trace_pipe"
-#define DEBUGFS_PIPE	"/sys/kernel/debug/tracing/trace_pipe"
+#define TRACEBUF	"/sys/kernel/debug/tracing/trace_pipe"
 #define SEARCHMSG	"testing,testing"
 
-void serial_test_trace_printk(void)
+void test_trace_printk(void)
 {
-	struct trace_printk_lskel__bss *bss;
-	int err = 0, iter = 0, found = 0;
-	struct trace_printk_lskel *skel;
+	int err, iter = 0, duration = 0, found = 0;
+	struct trace_printk__bss *bss;
+	struct trace_printk *skel;
 	char *buf = NULL;
 	FILE *fp = NULL;
 	size_t buflen;
 
-	skel = trace_printk_lskel__open();
-	if (!ASSERT_OK_PTR(skel, "trace_printk__open"))
+	skel = trace_printk__open();
+	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
 		return;
 
-	ASSERT_EQ(skel->rodata->fmt[0], 'T', "skel->rodata->fmt[0]");
-	skel->rodata->fmt[0] = 't';
-
-	err = trace_printk_lskel__load(skel);
-	if (!ASSERT_OK(err, "trace_printk__load"))
+	err = trace_printk__load(skel);
+	if (CHECK(err, "skel_load", "failed to load skeleton: %d\n", err))
 		goto cleanup;
 
 	bss = skel->bss;
 
-	err = trace_printk_lskel__attach(skel);
-	if (!ASSERT_OK(err, "trace_printk__attach"))
+	err = trace_printk__attach(skel);
+	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
 		goto cleanup;
 
-	if (access(TRACEFS_PIPE, F_OK) == 0)
-		fp = fopen(TRACEFS_PIPE, "r");
-	else
-		fp = fopen(DEBUGFS_PIPE, "r");
-	if (!ASSERT_OK_PTR(fp, "fopen(TRACE_PIPE)"))
+	fp = fopen(TRACEBUF, "r");
+	if (CHECK(fp == NULL, "could not open trace buffer",
+		  "error %d opening %s", errno, TRACEBUF))
 		goto cleanup;
 
 	/* We do not want to wait forever if this test fails... */
@@ -47,12 +41,16 @@ void serial_test_trace_printk(void)
 
 	/* wait for tracepoint to trigger */
 	usleep(1);
-	trace_printk_lskel__detach(skel);
+	trace_printk__detach(skel);
 
-	if (!ASSERT_GT(bss->trace_printk_ran, 0, "bss->trace_printk_ran"))
+	if (CHECK(bss->trace_printk_ran == 0,
+		  "bpf_trace_printk never ran",
+		  "ran == %d", bss->trace_printk_ran))
 		goto cleanup;
 
-	if (!ASSERT_GT(bss->trace_printk_ret, 0, "bss->trace_printk_ret"))
+	if (CHECK(bss->trace_printk_ret <= 0,
+		  "bpf_trace_printk returned <= 0 value",
+		  "got %d", bss->trace_printk_ret))
 		goto cleanup;
 
 	/* verify our search string is in the trace buffer */
@@ -65,11 +63,12 @@ void serial_test_trace_printk(void)
 			break;
 	}
 
-	if (!ASSERT_EQ(found, bss->trace_printk_ran, "found"))
+	if (CHECK(!found, "message from bpf_trace_printk not found",
+		  "no instance of %s in %s", SEARCHMSG, TRACEBUF))
 		goto cleanup;
 
 cleanup:
-	trace_printk_lskel__destroy(skel);
+	trace_printk__destroy(skel);
 	free(buf);
 	if (fp)
 		fclose(fp);

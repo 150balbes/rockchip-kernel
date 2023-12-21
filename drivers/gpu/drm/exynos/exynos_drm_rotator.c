@@ -12,7 +12,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/sizes.h>
@@ -219,13 +219,8 @@ static int rotator_commit(struct exynos_drm_ipp *ipp,
 {
 	struct rot_context *rot =
 			container_of(ipp, struct rot_context, ipp);
-	int ret;
 
-	ret = pm_runtime_resume_and_get(rot->dev);
-	if (ret < 0) {
-		dev_err(rot->dev, "failed to enable ROTATOR device.\n");
-		return ret;
-	}
+	pm_runtime_get_sync(rot->dev);
 	rot->task = task;
 
 	rotator_src_set_fmt(rot, task->src.buf.fourcc);
@@ -278,6 +273,7 @@ static const struct component_ops rotator_component_ops = {
 static int rotator_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource	*regs_res;
 	struct rot_context *rot;
 	const struct rot_variant *variant;
 	int irq;
@@ -291,7 +287,8 @@ static int rotator_probe(struct platform_device *pdev)
 	rot->formats = variant->formats;
 	rot->num_formats = variant->num_formats;
 	rot->dev = dev;
-	rot->regs = devm_platform_ioremap_resource(pdev, 0);
+	regs_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rot->regs = devm_ioremap_resource(dev, regs_res);
 	if (IS_ERR(rot->regs))
 		return PTR_ERR(rot->regs);
 
@@ -340,6 +337,7 @@ static int rotator_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
 static int rotator_runtime_suspend(struct device *dev)
 {
 	struct rot_context *rot = dev_get_drvdata(dev);
@@ -354,6 +352,7 @@ static int rotator_runtime_resume(struct device *dev)
 
 	return clk_prepare_enable(rot->clock);
 }
+#endif
 
 static const struct drm_exynos_ipp_limit rotator_s5pv210_rbg888_limits[] = {
 	{ IPP_SIZE_LIMIT(BUFFER, .h = { 8, SZ_16K }, .v = { 8, SZ_16K }) },
@@ -448,8 +447,12 @@ static const struct of_device_id exynos_rotator_match[] = {
 };
 MODULE_DEVICE_TABLE(of, exynos_rotator_match);
 
-static DEFINE_RUNTIME_DEV_PM_OPS(rotator_pm_ops, rotator_runtime_suspend,
-				 rotator_runtime_resume, NULL);
+static const struct dev_pm_ops rotator_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+	SET_RUNTIME_PM_OPS(rotator_runtime_suspend, rotator_runtime_resume,
+									NULL)
+};
 
 struct platform_driver rotator_driver = {
 	.probe		= rotator_probe,
@@ -457,7 +460,7 @@ struct platform_driver rotator_driver = {
 	.driver		= {
 		.name	= "exynos-rotator",
 		.owner	= THIS_MODULE,
-		.pm	= pm_ptr(&rotator_pm_ops),
+		.pm	= &rotator_pm_ops,
 		.of_match_table = exynos_rotator_match,
 	},
 };

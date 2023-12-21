@@ -47,10 +47,11 @@ required:
 
 patternProperties:
   "^ufs@[0-9a-f]+$":
-    $ref: cdns,ufshc.yaml
+    type: object
     description: |
-      Cadence UFS controller node must be the child node.
-    unevaluatedProperties: false
+      Cadence UFS controller node must be the child node. Refer
+      Documentation/devicetree/bindings/ufs/cdns,ufshc.txt for binding
+      documentation of child node
 
 additionalProperties: false
 

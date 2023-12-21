@@ -28,7 +28,6 @@
 #include <linux/pci.h>
 
 #include "nfp_cpp.h"
-#include "nfp_dev.h"
 
 #include "nfp6000/nfp6000.h"
 
@@ -101,7 +100,11 @@
 #define NFP_PCIE_P2C_GENERAL_TOKEN_OFFSET(bar, x) ((x) << ((bar)->bitsize - 4))
 #define NFP_PCIE_P2C_GENERAL_SIZE(bar)             (1 << ((bar)->bitsize - 4))
 
-#define NFP_PCIE_P2C_EXPBAR_OFFSET(bar_index)		((bar_index) * 4)
+#define NFP_PCIE_CFG_BAR_PCIETOCPPEXPANSIONBAR(bar, slot) \
+	(0x400 + ((bar) * 8 + (slot)) * 4)
+
+#define NFP_PCIE_CPP_BAR_PCIETOCPPEXPANSIONBAR(bar, slot) \
+	(((bar) * 8 + (slot)) * 4)
 
 /* The number of explicit BARs to reserve.
  * Minimum is 0, maximum is 4 on the NFP6000.
@@ -142,7 +145,6 @@ struct nfp_bar {
 struct nfp6000_pcie {
 	struct pci_dev *pdev;
 	struct device *dev;
-	const struct nfp_dev_info *dev_info;
 
 	/* PCI BAR management */
 	spinlock_t bar_lock;		/* Protect the PCI2CPP BAR cache */
@@ -267,16 +269,19 @@ compute_bar(const struct nfp6000_pcie *nfp, const struct nfp_bar *bar,
 static int
 nfp6000_bar_write(struct nfp6000_pcie *nfp, struct nfp_bar *bar, u32 newcfg)
 {
-	unsigned int xbar;
+	int base, slot;
+	int xbar;
 
-	xbar = NFP_PCIE_P2C_EXPBAR_OFFSET(bar->index);
+	base = bar->index >> 3;
+	slot = bar->index & 7;
 
 	if (nfp->iomem.csr) {
+		xbar = NFP_PCIE_CPP_BAR_PCIETOCPPEXPANSIONBAR(base, slot);
 		writel(newcfg, nfp->iomem.csr + xbar);
 		/* Readback to ensure BAR is flushed */
 		readl(nfp->iomem.csr + xbar);
 	} else {
-		xbar += nfp->dev_info->pcie_cfg_expbar_offset;
+		xbar = NFP_PCIE_CFG_BAR_PCIETOCPPEXPANSIONBAR(base, slot);
 		pci_write_config_dword(nfp->pdev, xbar, newcfg);
 	}
 
@@ -617,17 +622,16 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 
 		nfp6000_bar_write(nfp, bar, barcfg_msix_general);
 
-		nfp->expl.data = bar->iomem + NFP_PCIE_SRAM +
-			nfp->dev_info->pcie_expl_offset;
+		nfp->expl.data = bar->iomem + NFP_PCIE_SRAM + 0x1000;
 
 		switch (nfp->pdev->device) {
-		case PCI_DEVICE_ID_NFP3800:
+		case PCI_DEVICE_ID_NETRONOME_NFP3800:
 			pf = nfp->pdev->devfn & 7;
 			nfp->iomem.csr = bar->iomem + NFP_PCIE_BAR(pf);
 			break;
-		case PCI_DEVICE_ID_NFP4000:
-		case PCI_DEVICE_ID_NFP5000:
-		case PCI_DEVICE_ID_NFP6000:
+		case PCI_DEVICE_ID_NETRONOME_NFP4000:
+		case PCI_DEVICE_ID_NETRONOME_NFP5000:
+		case PCI_DEVICE_ID_NETRONOME_NFP6000:
 			nfp->iomem.csr = bar->iomem + NFP_PCIE_BAR(0);
 			break;
 		default:
@@ -640,12 +644,12 @@ static int enable_bars(struct nfp6000_pcie *nfp, u16 interface)
 	}
 
 	switch (nfp->pdev->device) {
-	case PCI_DEVICE_ID_NFP3800:
+	case PCI_DEVICE_ID_NETRONOME_NFP3800:
 		expl_groups = 1;
 		break;
-	case PCI_DEVICE_ID_NFP4000:
-	case PCI_DEVICE_ID_NFP5000:
-	case PCI_DEVICE_ID_NFP6000:
+	case PCI_DEVICE_ID_NETRONOME_NFP4000:
+	case PCI_DEVICE_ID_NETRONOME_NFP5000:
+	case PCI_DEVICE_ID_NETRONOME_NFP6000:
 		expl_groups = 4;
 		break;
 	default:
@@ -1302,20 +1306,18 @@ static const struct nfp_cpp_operations nfp6000_pcie_ops = {
 /**
  * nfp_cpp_from_nfp6000_pcie() - Build a NFP CPP bus from a NFP6000 PCI device
  * @pdev:	NFP6000 PCI device
- * @dev_info:	NFP ASIC params
  *
  * Return: NFP CPP handle
  */
-struct nfp_cpp *
-nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev, const struct nfp_dev_info *dev_info)
+struct nfp_cpp *nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev)
 {
 	struct nfp6000_pcie *nfp;
 	u16 interface;
 	int err;
 
 	/*  Finished with card initialization. */
-	dev_info(&pdev->dev, "Network Flow Processor %s PCIe Card Probe\n",
-		 dev_info->chip_names);
+	dev_info(&pdev->dev,
+		 "Netronome Flow Processor NFP4000/NFP5000/NFP6000 PCIe Card Probe\n");
 	pcie_print_link_status(pdev);
 
 	nfp = kzalloc(sizeof(*nfp), GFP_KERNEL);
@@ -1326,7 +1328,6 @@ nfp_cpp_from_nfp6000_pcie(struct pci_dev *pdev, const struct nfp_dev_info *dev_i
 
 	nfp->dev = &pdev->dev;
 	nfp->pdev = pdev;
-	nfp->dev_info = dev_info;
 	init_waitqueue_head(&nfp->bar_waiters);
 	spin_lock_init(&nfp->bar_lock);
 

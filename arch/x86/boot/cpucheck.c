@@ -27,7 +27,6 @@
 #include <asm/required-features.h>
 #include <asm/msr-index.h>
 #include "string.h"
-#include "msr.h"
 
 static u32 err_flags[NCAPINTS];
 
@@ -131,11 +130,12 @@ int check_cpu(int *cpu_level_ptr, int *req_level_ptr, u32 **err_flags_ptr)
 		/* If this is an AMD and we're only missing SSE+SSE2, try to
 		   turn them on */
 
-		struct msr m;
+		u32 ecx = MSR_K7_HWCR;
+		u32 eax, edx;
 
-		boot_rdmsr(MSR_K7_HWCR, &m);
-		m.l &= ~(1 << 15);
-		boot_wrmsr(MSR_K7_HWCR, &m);
+		asm("rdmsr" : "=a" (eax), "=d" (edx) : "c" (ecx));
+		eax &= ~(1 << 15);
+		asm("wrmsr" : : "a" (eax), "d" (edx), "c" (ecx));
 
 		get_cpuflags();	/* Make sure it really did something */
 		err = check_cpuflags();
@@ -145,28 +145,28 @@ int check_cpu(int *cpu_level_ptr, int *req_level_ptr, u32 **err_flags_ptr)
 		/* If this is a VIA C3, we might have to enable CX8
 		   explicitly */
 
-		struct msr m;
+		u32 ecx = MSR_VIA_FCR;
+		u32 eax, edx;
 
-		boot_rdmsr(MSR_VIA_FCR, &m);
-		m.l |= (1 << 1) | (1 << 7);
-		boot_wrmsr(MSR_VIA_FCR, &m);
+		asm("rdmsr" : "=a" (eax), "=d" (edx) : "c" (ecx));
+		eax |= (1<<1)|(1<<7);
+		asm("wrmsr" : : "a" (eax), "d" (edx), "c" (ecx));
 
 		set_bit(X86_FEATURE_CX8, cpu.flags);
 		err = check_cpuflags();
 	} else if (err == 0x01 && is_transmeta()) {
 		/* Transmeta might have masked feature bits in word 0 */
 
-		struct msr m, m_tmp;
+		u32 ecx = 0x80860004;
+		u32 eax, edx;
 		u32 level = 1;
 
-		boot_rdmsr(0x80860004, &m);
-		m_tmp = m;
-		m_tmp.l = ~0;
-		boot_wrmsr(0x80860004, &m_tmp);
+		asm("rdmsr" : "=a" (eax), "=d" (edx) : "c" (ecx));
+		asm("wrmsr" : : "a" (~0), "d" (edx), "c" (ecx));
 		asm("cpuid"
 		    : "+a" (level), "=d" (cpu.flags[0])
 		    : : "ecx", "ebx");
-		boot_wrmsr(0x80860004, &m);
+		asm("wrmsr" : : "a" (eax), "d" (edx), "c" (ecx));
 
 		err = check_cpuflags();
 	} else if (err == 0x01 &&

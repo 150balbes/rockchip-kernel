@@ -5,12 +5,13 @@
 
 #define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
 
+#include <linux/rational.h>
 #include <linux/delay.h>
 #include <linux/iopoll.h>
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-dp.h>
 #include <linux/rational.h>
-#include <drm/display/drm_dp_helper.h>
+#include <drm/drm_dp_helper.h>
 #include <drm/drm_print.h>
 
 #include "dp_catalog.h"
@@ -24,10 +25,17 @@
 #define DP_INTERRUPT_STATUS_ACK_SHIFT	1
 #define DP_INTERRUPT_STATUS_MASK_SHIFT	2
 
-#define DP_INTF_CONFIG_DATABUS_WIDEN     BIT(4)
+#define MSM_DP_CONTROLLER_AHB_OFFSET	0x0000
+#define MSM_DP_CONTROLLER_AHB_SIZE	0x0200
+#define MSM_DP_CONTROLLER_AUX_OFFSET	0x0200
+#define MSM_DP_CONTROLLER_AUX_SIZE	0x0200
+#define MSM_DP_CONTROLLER_LINK_OFFSET	0x0400
+#define MSM_DP_CONTROLLER_LINK_SIZE	0x0C00
+#define MSM_DP_CONTROLLER_P0_OFFSET	0x1000
+#define MSM_DP_CONTROLLER_P0_SIZE	0x0400
 
 #define DP_INTERRUPT_STATUS1 \
-	(DP_INTR_AUX_XFER_DONE| \
+	(DP_INTR_AUX_I2C_DONE| \
 	DP_INTR_WRONG_ADDR | DP_INTR_TIMEOUT | \
 	DP_INTR_NACK_DEFER | DP_INTR_WRONG_DATA_CNT | \
 	DP_INTR_I2C_NACK | DP_INTR_I2C_DEFER | \
@@ -47,98 +55,85 @@
 #define DP_INTERRUPT_STATUS2_MASK \
 	(DP_INTERRUPT_STATUS2 << DP_INTERRUPT_STATUS_MASK_SHIFT)
 
-#define DP_INTERRUPT_STATUS4 \
-	(PSR_UPDATE_INT | PSR_CAPTURE_INT | PSR_EXIT_INT | \
-	PSR_UPDATE_ERROR_INT | PSR_WAKE_ERROR_INT)
-
-#define DP_INTERRUPT_MASK4 \
-	(PSR_UPDATE_MASK | PSR_CAPTURE_MASK | PSR_EXIT_MASK | \
-	PSR_UPDATE_ERROR_MASK | PSR_WAKE_ERROR_MASK)
-
 struct dp_catalog_private {
 	struct device *dev;
-	struct drm_device *drm_dev;
 	struct dp_io *io;
 	u32 (*audio_map)[DP_AUDIO_SDP_HEADER_MAX];
 	struct dp_catalog dp_catalog;
 	u8 aux_lut_cfg_index[PHY_AUX_CFG_MAX];
 };
 
-void dp_catalog_snapshot(struct dp_catalog *dp_catalog, struct msm_disp_state *disp_state)
-{
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-			struct dp_catalog_private, dp_catalog);
-	struct dss_io_data *dss = &catalog->io->dp_controller;
-
-	msm_disp_snapshot_add_block(disp_state, dss->ahb.len, dss->ahb.base, "dp_ahb");
-	msm_disp_snapshot_add_block(disp_state, dss->aux.len, dss->aux.base, "dp_aux");
-	msm_disp_snapshot_add_block(disp_state, dss->link.len, dss->link.base, "dp_link");
-	msm_disp_snapshot_add_block(disp_state, dss->p0.len, dss->p0.base, "dp_p0");
-}
-
 static inline u32 dp_read_aux(struct dp_catalog_private *catalog, u32 offset)
 {
-	return readl_relaxed(catalog->io->dp_controller.aux.base + offset);
+	offset += MSM_DP_CONTROLLER_AUX_OFFSET;
+	return readl_relaxed(catalog->io->dp_controller.base + offset);
 }
 
 static inline void dp_write_aux(struct dp_catalog_private *catalog,
 			       u32 offset, u32 data)
 {
+	offset += MSM_DP_CONTROLLER_AUX_OFFSET;
 	/*
 	 * To make sure aux reg writes happens before any other operation,
 	 * this function uses writel() instread of writel_relaxed()
 	 */
-	writel(data, catalog->io->dp_controller.aux.base + offset);
+	writel(data, catalog->io->dp_controller.base + offset);
 }
 
-static inline u32 dp_read_ahb(const struct dp_catalog_private *catalog, u32 offset)
+static inline u32 dp_read_ahb(struct dp_catalog_private *catalog, u32 offset)
 {
-	return readl_relaxed(catalog->io->dp_controller.ahb.base + offset);
+	offset += MSM_DP_CONTROLLER_AHB_OFFSET;
+	return readl_relaxed(catalog->io->dp_controller.base + offset);
 }
 
 static inline void dp_write_ahb(struct dp_catalog_private *catalog,
 			       u32 offset, u32 data)
 {
+	offset += MSM_DP_CONTROLLER_AHB_OFFSET;
 	/*
 	 * To make sure phy reg writes happens before any other operation,
 	 * this function uses writel() instread of writel_relaxed()
 	 */
-	writel(data, catalog->io->dp_controller.ahb.base + offset);
+	writel(data, catalog->io->dp_controller.base + offset);
 }
 
 static inline void dp_write_p0(struct dp_catalog_private *catalog,
 			       u32 offset, u32 data)
 {
+	offset += MSM_DP_CONTROLLER_P0_OFFSET;
 	/*
 	 * To make sure interface reg writes happens before any other operation,
 	 * this function uses writel() instread of writel_relaxed()
 	 */
-	writel(data, catalog->io->dp_controller.p0.base + offset);
+	writel(data, catalog->io->dp_controller.base + offset);
 }
 
 static inline u32 dp_read_p0(struct dp_catalog_private *catalog,
 			       u32 offset)
 {
+	offset += MSM_DP_CONTROLLER_P0_OFFSET;
 	/*
 	 * To make sure interface reg writes happens before any other operation,
 	 * this function uses writel() instread of writel_relaxed()
 	 */
-	return readl_relaxed(catalog->io->dp_controller.p0.base + offset);
+	return readl_relaxed(catalog->io->dp_controller.base + offset);
 }
 
 static inline u32 dp_read_link(struct dp_catalog_private *catalog, u32 offset)
 {
-	return readl_relaxed(catalog->io->dp_controller.link.base + offset);
+	offset += MSM_DP_CONTROLLER_LINK_OFFSET;
+	return readl_relaxed(catalog->io->dp_controller.base + offset);
 }
 
 static inline void dp_write_link(struct dp_catalog_private *catalog,
 			       u32 offset, u32 data)
 {
+	offset += MSM_DP_CONTROLLER_LINK_OFFSET;
 	/*
 	 * To make sure link reg writes happens before any other operation,
 	 * this function uses writel() instread of writel_relaxed()
 	 */
-	writel(data, catalog->io->dp_controller.link.base + offset);
+	writel(data, catalog->io->dp_controller.base + offset);
 }
 
 /* aux related catalog functions */
@@ -196,18 +191,6 @@ int dp_catalog_aux_clear_hw_interrupts(struct dp_catalog *dp_catalog)
 	return 0;
 }
 
-/**
- * dp_catalog_aux_reset() - reset AUX controller
- *
- * @dp_catalog: DP catalog structure
- *
- * return: void
- *
- * This function reset AUX controller
- *
- * NOTE: reset AUX controller will also clear any pending HPD related interrupts
- * 
- */
 void dp_catalog_aux_reset(struct dp_catalog *dp_catalog)
 {
 	u32 aux_ctrl;
@@ -253,19 +236,6 @@ void dp_catalog_aux_update_cfg(struct dp_catalog *dp_catalog)
 	phy_calibrate(phy);
 }
 
-int dp_catalog_aux_wait_for_hpd_connect_state(struct dp_catalog *dp_catalog)
-{
-	u32 state;
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-
-	/* poll for hpd connected status every 2ms and timeout after 500ms */
-	return readl_poll_timeout(catalog->io->dp_controller.aux.base +
-				REG_DP_DP_HPD_INT_STATUS,
-				state, state & DP_DP_HPD_STATE_STATUS_CONNECTED,
-				2000, 500000);
-}
-
 static void dump_regs(void __iomem *base, int len)
 {
 	int i;
@@ -286,24 +256,32 @@ static void dump_regs(void __iomem *base, int len)
 
 void dp_catalog_dump_regs(struct dp_catalog *dp_catalog)
 {
+	u32 offset, len;
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 		struct dp_catalog_private, dp_catalog);
-	struct dss_io_data *io = &catalog->io->dp_controller;
 
 	pr_info("AHB regs\n");
-	dump_regs(io->ahb.base, io->ahb.len);
+	offset = MSM_DP_CONTROLLER_AHB_OFFSET;
+	len = MSM_DP_CONTROLLER_AHB_SIZE;
+	dump_regs(catalog->io->dp_controller.base + offset, len);
 
 	pr_info("AUXCLK regs\n");
-	dump_regs(io->aux.base, io->aux.len);
+	offset = MSM_DP_CONTROLLER_AUX_OFFSET;
+	len = MSM_DP_CONTROLLER_AUX_SIZE;
+	dump_regs(catalog->io->dp_controller.base + offset, len);
 
 	pr_info("LCLK regs\n");
-	dump_regs(io->link.base, io->link.len);
+	offset = MSM_DP_CONTROLLER_LINK_OFFSET;
+	len = MSM_DP_CONTROLLER_LINK_SIZE;
+	dump_regs(catalog->io->dp_controller.base + offset, len);
 
 	pr_info("P0CLK regs\n");
-	dump_regs(io->p0.base, io->p0.len);
+	offset = MSM_DP_CONTROLLER_P0_OFFSET;
+	len = MSM_DP_CONTROLLER_P0_SIZE;
+	dump_regs(catalog->io->dp_controller.base + offset, len);
 }
 
-u32 dp_catalog_aux_get_irq(struct dp_catalog *dp_catalog)
+int dp_catalog_aux_get_irq(struct dp_catalog *dp_catalog)
 {
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
@@ -346,7 +324,7 @@ void dp_catalog_ctrl_config_ctrl(struct dp_catalog *dp_catalog, u32 cfg)
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
 
-	drm_dbg_dp(catalog->drm_dev, "DP_CONFIGURATION_CTRL=0x%x\n", cfg);
+	DRM_DEBUG_DP("DP_CONFIGURATION_CTRL=0x%x\n", cfg);
 
 	dp_write_link(catalog, REG_DP_CONFIGURATION_CTRL, cfg);
 }
@@ -367,23 +345,6 @@ void dp_catalog_ctrl_lane_mapping(struct dp_catalog *dp_catalog)
 			ln_mapping);
 }
 
-void dp_catalog_ctrl_psr_mainlink_enable(struct dp_catalog *dp_catalog,
-						bool enable)
-{
-	u32 val;
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-
-	val = dp_read_link(catalog, REG_DP_MAINLINK_CTRL);
-
-	if (enable)
-		val |= DP_MAINLINK_CTRL_ENABLE;
-	else
-		val &= ~DP_MAINLINK_CTRL_ENABLE;
-
-	dp_write_link(catalog, REG_DP_MAINLINK_CTRL, val);
-}
-
 void dp_catalog_ctrl_mainlink_ctrl(struct dp_catalog *dp_catalog,
 						bool enable)
 {
@@ -391,7 +352,6 @@ void dp_catalog_ctrl_mainlink_ctrl(struct dp_catalog *dp_catalog,
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
 
-	drm_dbg_dp(catalog->drm_dev, "enable=%d\n", enable);
 	if (enable) {
 		/*
 		 * To make sure link reg writes happens before other operation,
@@ -436,7 +396,7 @@ void dp_catalog_ctrl_config_misc(struct dp_catalog *dp_catalog,
 	/* Configure clock to synchronous mode */
 	misc_val |= DP_MISC0_SYNCHRONOUS_CLK;
 
-	drm_dbg_dp(catalog->drm_dev, "misc settings = 0x%x\n", misc_val);
+	DRM_DEBUG_DP("misc settings = 0x%x\n", misc_val);
 	dp_write_link(catalog, REG_DP_MISC1_MISC0, misc_val);
 }
 
@@ -491,66 +451,39 @@ void dp_catalog_ctrl_config_msa(struct dp_catalog *dp_catalog,
 	if (link_rate_hbr3 == rate)
 		nvid *= 3;
 
-	drm_dbg_dp(catalog->drm_dev, "mvid=0x%x, nvid=0x%x\n", mvid, nvid);
+	DRM_DEBUG_DP("mvid=0x%x, nvid=0x%x\n", mvid, nvid);
 	dp_write_link(catalog, REG_DP_SOFTWARE_MVID, mvid);
 	dp_write_link(catalog, REG_DP_SOFTWARE_NVID, nvid);
 	dp_write_p0(catalog, MMSS_DP_DSC_DTO, 0x0);
 }
 
-int dp_catalog_ctrl_set_pattern_state_bit(struct dp_catalog *dp_catalog,
-					u32 state_bit)
+int dp_catalog_ctrl_set_pattern(struct dp_catalog *dp_catalog,
+					u32 pattern)
 {
 	int bit, ret;
 	u32 data;
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
 
-	bit = BIT(state_bit - 1);
-	drm_dbg_dp(catalog->drm_dev, "hw: bit=%d train=%d\n", bit, state_bit);
+	bit = BIT(pattern - 1);
+	DRM_DEBUG_DP("hw: bit=%d train=%d\n", bit, pattern);
 	dp_catalog_ctrl_state_ctrl(dp_catalog, bit);
 
-	bit = BIT(state_bit - 1) << DP_MAINLINK_READY_LINK_TRAINING_SHIFT;
+	bit = BIT(pattern - 1) << DP_MAINLINK_READY_LINK_TRAINING_SHIFT;
 
 	/* Poll for mainlink ready status */
-	ret = readx_poll_timeout(readl, catalog->io->dp_controller.link.base +
+	ret = readx_poll_timeout(readl, catalog->io->dp_controller.base +
+					MSM_DP_CONTROLLER_LINK_OFFSET +
 					REG_DP_MAINLINK_READY,
 					data, data & bit,
 					POLLING_SLEEP_US, POLLING_TIMEOUT_US);
 	if (ret < 0) {
-		DRM_ERROR("set state_bit for link_train=%d failed\n", state_bit);
+		DRM_ERROR("set pattern for link_train=%d failed\n", pattern);
 		return ret;
 	}
 	return 0;
 }
 
-/**
- * dp_catalog_hw_revision() - retrieve DP hw revision
- *
- * @dp_catalog: DP catalog structure
- *
- * Return: DP controller hw revision
- *
- */
-u32 dp_catalog_hw_revision(const struct dp_catalog *dp_catalog)
-{
-	const struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-
-	return dp_read_ahb(catalog, REG_DP_HW_VERSION);
-}
-
-/**
- * dp_catalog_ctrl_reset() - reset DP controller
- *
- * @dp_catalog: DP catalog structure
- *
- * return: void
- *
- * This function reset the DP controller
- *
- * NOTE: reset DP controller will also clear any pending HPD related interrupts
- * 
- */
 void dp_catalog_ctrl_reset(struct dp_catalog *dp_catalog)
 {
 	u32 sw_reset;
@@ -575,7 +508,8 @@ bool dp_catalog_ctrl_mainlink_ready(struct dp_catalog *dp_catalog)
 				struct dp_catalog_private, dp_catalog);
 
 	/* Poll for mainlink ready status */
-	ret = readl_poll_timeout(catalog->io->dp_controller.link.base +
+	ret = readl_poll_timeout(catalog->io->dp_controller.base +
+				MSM_DP_CONTROLLER_LINK_OFFSET +
 				REG_DP_MAINLINK_READY,
 				data, data & DP_MAINLINK_READY_FOR_VIDEO,
 				POLLING_SLEEP_US, POLLING_TIMEOUT_US);
@@ -614,18 +548,21 @@ void dp_catalog_hpd_config_intr(struct dp_catalog *dp_catalog,
 
 	config = (en ? config | intr_mask : config & ~intr_mask);
 
-	drm_dbg_dp(catalog->drm_dev, "intr_mask=%#x config=%#x\n",
-					intr_mask, config);
 	dp_write_aux(catalog, REG_DP_DP_HPD_INT_MASK,
 				config & DP_DP_HPD_INT_MASK);
 }
 
-void dp_catalog_ctrl_hpd_enable(struct dp_catalog *dp_catalog)
+void dp_catalog_ctrl_hpd_config(struct dp_catalog *dp_catalog)
 {
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
 
 	u32 reftimer = dp_read_aux(catalog, REG_DP_DP_HPD_REFTIMER);
+
+	/* enable HPD interrupts */
+	dp_catalog_hpd_config_intr(dp_catalog,
+		DP_DP_HPD_PLUG_INT_MASK | DP_DP_IRQ_HPD_INT_MASK
+		| DP_DP_HPD_UNPLUG_INT_MASK | DP_DP_HPD_REPLUG_INT_MASK, true);
 
 	/* Configure REFTIMER and enable it */
 	reftimer |= DP_DP_HPD_REFTIMER_ENABLE;
@@ -635,60 +572,6 @@ void dp_catalog_ctrl_hpd_enable(struct dp_catalog *dp_catalog)
 	dp_write_aux(catalog, REG_DP_DP_HPD_CTRL, DP_DP_HPD_CTRL_HPD_EN);
 }
 
-void dp_catalog_ctrl_hpd_disable(struct dp_catalog *dp_catalog)
-{
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-
-	u32 reftimer = dp_read_aux(catalog, REG_DP_DP_HPD_REFTIMER);
-
-	reftimer &= ~DP_DP_HPD_REFTIMER_ENABLE;
-	dp_write_aux(catalog, REG_DP_DP_HPD_REFTIMER, reftimer);
-
-	dp_write_aux(catalog, REG_DP_DP_HPD_CTRL, 0);
-}
-
-static void dp_catalog_enable_sdp(struct dp_catalog_private *catalog)
-{
-	/* trigger sdp */
-	dp_write_link(catalog, MMSS_DP_SDP_CFG3, UPDATE_SDP);
-	dp_write_link(catalog, MMSS_DP_SDP_CFG3, 0x0);
-}
-
-void dp_catalog_ctrl_config_psr(struct dp_catalog *dp_catalog)
-{
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-	u32 config;
-
-	/* enable PSR1 function */
-	config = dp_read_link(catalog, REG_PSR_CONFIG);
-	config |= PSR1_SUPPORTED;
-	dp_write_link(catalog, REG_PSR_CONFIG, config);
-
-	dp_write_ahb(catalog, REG_DP_INTR_MASK4, DP_INTERRUPT_MASK4);
-	dp_catalog_enable_sdp(catalog);
-}
-
-void dp_catalog_ctrl_set_psr(struct dp_catalog *dp_catalog, bool enter)
-{
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-			struct dp_catalog_private, dp_catalog);
-	u32 cmd;
-
-	cmd = dp_read_link(catalog, REG_PSR_CMD);
-
-	cmd &= ~(PSR_ENTER | PSR_EXIT);
-
-	if (enter)
-		cmd |= PSR_ENTER;
-	else
-		cmd |= PSR_EXIT;
-
-	dp_catalog_enable_sdp(catalog);
-	dp_write_link(catalog, REG_PSR_CMD, cmd);
-}
-
 u32 dp_catalog_link_is_connected(struct dp_catalog *dp_catalog)
 {
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
@@ -696,7 +579,6 @@ u32 dp_catalog_link_is_connected(struct dp_catalog *dp_catalog)
 	u32 status;
 
 	status = dp_read_aux(catalog, REG_DP_DP_HPD_INT_STATUS);
-	drm_dbg_dp(catalog->drm_dev, "aux status: %#x\n", status);
 	status >>= DP_DP_HPD_STATE_STATUS_BITS_SHIFT;
 	status &= DP_DP_HPD_STATE_STATUS_BITS_MASK;
 
@@ -707,35 +589,13 @@ u32 dp_catalog_hpd_get_intr_status(struct dp_catalog *dp_catalog)
 {
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
-	int isr, mask;
+	int isr = 0;
 
 	isr = dp_read_aux(catalog, REG_DP_DP_HPD_INT_STATUS);
 	dp_write_aux(catalog, REG_DP_DP_HPD_INT_ACK,
 				 (isr & DP_DP_HPD_INT_MASK));
-	mask = dp_read_aux(catalog, REG_DP_DP_HPD_INT_MASK);
 
-	/*
-	 * We only want to return interrupts that are unmasked to the caller.
-	 * However, the interrupt status field also contains other
-	 * informational bits about the HPD state status, so we only mask
-	 * out the part of the register that tells us about which interrupts
-	 * are pending.
-	 */
-	return isr & (mask | ~DP_DP_HPD_INT_MASK);
-}
-
-u32 dp_catalog_ctrl_read_psr_interrupt_status(struct dp_catalog *dp_catalog)
-{
-	struct dp_catalog_private *catalog = container_of(dp_catalog,
-				struct dp_catalog_private, dp_catalog);
-	u32 intr, intr_ack;
-
-	intr = dp_read_ahb(catalog, REG_DP_INTR_STATUS4);
-	intr_ack = (intr & DP_INTERRUPT_STATUS4)
-			<< DP_INTERRUPT_STATUS_ACK_SHIFT;
-	dp_write_ahb(catalog, REG_DP_INTR_STATUS4, intr_ack);
-
-	return intr;
+	return isr;
 }
 
 int dp_catalog_ctrl_get_interrupt(struct dp_catalog *dp_catalog)
@@ -794,7 +654,6 @@ void dp_catalog_ctrl_send_phy_pattern(struct dp_catalog *dp_catalog,
 	/* Make sure to clear the current pattern before starting a new one */
 	dp_write_link(catalog, REG_DP_STATE_CTRL, 0x0);
 
-	drm_dbg_dp(catalog->drm_dev, "pattern: %#x\n", pattern);
 	switch (pattern) {
 	case DP_PHY_TEST_PATTERN_D10_2:
 		dp_write_link(catalog, REG_DP_STATE_CTRL,
@@ -855,8 +714,7 @@ void dp_catalog_ctrl_send_phy_pattern(struct dp_catalog *dp_catalog,
 				DP_STATE_CTRL_LINK_TRAINING_PATTERN4);
 		break;
 	default:
-		drm_dbg_dp(catalog->drm_dev,
-				"No valid test pattern requested: %#x\n", pattern);
+		DRM_DEBUG_DP("No valid test pattern requested:0x%x\n", pattern);
 		break;
 	}
 }
@@ -874,7 +732,6 @@ int dp_catalog_panel_timing_cfg(struct dp_catalog *dp_catalog)
 {
 	struct dp_catalog_private *catalog = container_of(dp_catalog,
 				struct dp_catalog_private, dp_catalog);
-	u32 reg;
 
 	dp_write_link(catalog, REG_DP_TOTAL_HOR_VER,
 				dp_catalog->total);
@@ -883,18 +740,7 @@ int dp_catalog_panel_timing_cfg(struct dp_catalog *dp_catalog)
 	dp_write_link(catalog, REG_DP_HSYNC_VSYNC_WIDTH_POLARITY,
 				dp_catalog->width_blanking);
 	dp_write_link(catalog, REG_DP_ACTIVE_HOR_VER, dp_catalog->dp_active);
-
-	reg = dp_read_p0(catalog, MMSS_DP_INTF_CONFIG);
-
-	if (dp_catalog->wide_bus_en)
-		reg |= DP_INTF_CONFIG_DATABUS_WIDEN;
-	else
-		reg &= ~DP_INTF_CONFIG_DATABUS_WIDEN;
-
-
-	DRM_DEBUG_DP("wide_bus_en=%d reg=%#x\n", dp_catalog->wide_bus_en, reg);
-
-	dp_write_p0(catalog, MMSS_DP_INTF_CONFIG, reg);
+	dp_write_p0(catalog, MMSS_DP_INTF_CONFIG, 0);
 	return 0;
 }
 
@@ -963,7 +809,7 @@ void dp_catalog_panel_tpg_enable(struct dp_catalog *dp_catalog,
 				DP_BIST_ENABLE_DPBIST_EN);
 	dp_write_p0(catalog, MMSS_DP_TIMING_ENGINE_EN,
 				DP_TIMING_ENGINE_EN_EN);
-	drm_dbg_dp(catalog->drm_dev, "%s: enabled tpg\n", __func__);
+	DRM_DEBUG_DP("%s: enabled tpg\n", __func__);
 }
 
 void dp_catalog_panel_tpg_disable(struct dp_catalog *dp_catalog)
@@ -1052,8 +898,7 @@ void dp_catalog_audio_config_acr(struct dp_catalog *dp_catalog)
 	select = dp_catalog->audio_data;
 	acr_ctrl = select << 4 | BIT(31) | BIT(8) | BIT(14);
 
-	drm_dbg_dp(catalog->drm_dev, "select: %#x, acr_ctrl: %#x\n",
-					select, acr_ctrl);
+	DRM_DEBUG_DP("select = 0x%x, acr_ctrl = 0x%x\n", select, acr_ctrl);
 
 	dp_write_link(catalog, MMSS_DP_AUDIO_ACR_CTRL, acr_ctrl);
 }
@@ -1078,7 +923,7 @@ void dp_catalog_audio_enable(struct dp_catalog *dp_catalog)
 	else
 		audio_ctrl &= ~BIT(0);
 
-	drm_dbg_dp(catalog->drm_dev, "dp_audio_cfg = 0x%x\n", audio_ctrl);
+	DRM_DEBUG_DP("dp_audio_cfg = 0x%x\n", audio_ctrl);
 
 	dp_write_link(catalog, MMSS_DP_AUDIO_CFG, audio_ctrl);
 	/* make sure audio engine is disabled */
@@ -1109,7 +954,7 @@ void dp_catalog_audio_config_sdp(struct dp_catalog *dp_catalog)
 	/* AUDIO_INFOFRAME_SDP_EN  */
 	sdp_cfg |= BIT(20);
 
-	drm_dbg_dp(catalog->drm_dev, "sdp_cfg = 0x%x\n", sdp_cfg);
+	DRM_DEBUG_DP("sdp_cfg = 0x%x\n", sdp_cfg);
 
 	dp_write_link(catalog, MMSS_DP_SDP_CFG, sdp_cfg);
 
@@ -1119,7 +964,7 @@ void dp_catalog_audio_config_sdp(struct dp_catalog *dp_catalog)
 	/* AUDIO_STREAM_HB3_REGSRC-> Do not use reg values */
 	sdp_cfg2 &= ~BIT(1);
 
-	drm_dbg_dp(catalog->drm_dev, "sdp_cfg2 = 0x%x\n", sdp_cfg2);
+	DRM_DEBUG_DP("sdp_cfg2 = 0x%x\n", sdp_cfg2);
 
 	dp_write_link(catalog, MMSS_DP_SDP_CFG2, sdp_cfg2);
 }
@@ -1181,8 +1026,7 @@ void dp_catalog_audio_sfe_level(struct dp_catalog *dp_catalog)
 	mainlink_levels &= 0xFE0;
 	mainlink_levels |= safe_to_exit_level;
 
-	drm_dbg_dp(catalog->drm_dev,
-			"mainlink_level = 0x%x, safe_to_exit_level = 0x%x\n",
+	DRM_DEBUG_DP("mainlink_level = 0x%x, safe_to_exit_level = 0x%x\n",
 			 mainlink_levels, safe_to_exit_level);
 
 	dp_write_link(catalog, REG_DP_MAINLINK_LEVELS, mainlink_levels);

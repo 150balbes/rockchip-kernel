@@ -37,7 +37,7 @@ static int ir_xmp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 	struct xmp_dec *data = &dev->raw->xmp;
 
 	if (!is_timing_event(ev)) {
-		if (ev.overflow)
+		if (ev.reset)
 			data->state = STATE_INACTIVE;
 		return 0;
 	}

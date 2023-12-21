@@ -444,11 +444,11 @@ static int mb86a20s_get_interleaving(struct mb86a20s_state *state,
 				     unsigned layer)
 {
 	int rc;
-	static const int interleaving[] = {
+	int interleaving[] = {
 		0, 1, 2, 4, 8
 	};
 
-	static const unsigned char reg[] = {
+	static unsigned char reg[] = {
 		[0] = 0x88,	/* Layer A */
 		[1] = 0x8c,	/* Layer B */
 		[2] = 0x90,	/* Layer C */
@@ -1569,7 +1569,7 @@ static int mb86a20s_get_stats(struct dvb_frontend *fe, int status_nr)
 	u32 t_post_bit_error = 0, t_post_bit_count = 0;
 	u32 block_error = 0, block_count = 0;
 	u32 t_block_error = 0, t_block_count = 0;
-	int pre_ber_layers = 0, post_ber_layers = 0;
+	int active_layers = 0, pre_ber_layers = 0, post_ber_layers = 0;
 	int per_layers = 0;
 
 	dev_dbg(&state->i2c->dev, "%s called.\n", __func__);
@@ -1589,6 +1589,9 @@ static int mb86a20s_get_stats(struct dvb_frontend *fe, int status_nr)
 
 	for (layer = 0; layer < NUM_LAYERS; layer++) {
 		if (c->isdbt_layer_enabled & (1 << layer)) {
+			/* Layer is active and has rc segments */
+			active_layers++;
+
 			/* Handle BER before vterbi */
 			rc = mb86a20s_get_pre_ber(fe, layer,
 						  &bit_error, &bit_count);

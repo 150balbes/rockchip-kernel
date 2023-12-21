@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
+/**
  * typec_wcove.c - WhiskeyCove PMIC USB Type-C PHY driver
  *
  * Copyright (C) 2017 Intel Corporation
@@ -671,7 +671,7 @@ static int wcove_typec_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void wcove_typec_remove(struct platform_device *pdev)
+static int wcove_typec_remove(struct platform_device *pdev)
 {
 	struct wcove_typec *wcove = platform_get_drvdata(pdev);
 	unsigned int val;
@@ -684,6 +684,8 @@ static void wcove_typec_remove(struct platform_device *pdev)
 
 	tcpm_unregister_port(wcove->tcpm);
 	fwnode_remove_software_node(wcove->tcpc.fwnode);
+
+	return 0;
 }
 
 static struct platform_driver wcove_typec_driver = {
@@ -691,7 +693,7 @@ static struct platform_driver wcove_typec_driver = {
 		.name		= "bxt_wcove_usbc",
 	},
 	.probe			= wcove_typec_probe,
-	.remove_new		= wcove_typec_remove,
+	.remove			= wcove_typec_remove,
 };
 
 module_platform_driver(wcove_typec_driver);

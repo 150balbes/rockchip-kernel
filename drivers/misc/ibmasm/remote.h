@@ -43,7 +43,7 @@
 #define REMOTE_BUTTON_MIDDLE	0x02
 #define REMOTE_BUTTON_RIGHT	0x04
 
-/* size of keysym/keycode translation matrices */
+/* size of keysym/keycode translation matricies */
 #define XLATE_SIZE 256
 
 struct mouse_input {

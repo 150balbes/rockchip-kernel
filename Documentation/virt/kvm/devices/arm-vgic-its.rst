@@ -52,10 +52,7 @@ KVM_DEV_ARM_VGIC_GRP_CTRL
 
     KVM_DEV_ARM_ITS_SAVE_TABLES
       save the ITS table data into guest RAM, at the location provisioned
-      by the guest in corresponding registers/table entries. Should userspace
-      require a form of dirty tracking to identify which pages are modified
-      by the saving process, it should use a bitmap even if using another
-      mechanism to track the memory dirtied by the vCPUs.
+      by the guest in corresponding registers/table entries.
 
       The layout of the tables in guest memory defines an ABI. The entries
       are laid out in little endian format as described in the last paragraph.
@@ -83,7 +80,7 @@ KVM_DEV_ARM_VGIC_GRP_CTRL
     -EFAULT  Invalid guest ram access
     -EBUSY   One or more VCPUS are running
     -EACCES  The virtual ITS is backed by a physical GICv4 ITS, and the
-	     state is not available without GICv4.1
+	     state is not available
     =======  ==========================================================
 
 KVM_DEV_ARM_VGIC_GRP_ITS_REGS

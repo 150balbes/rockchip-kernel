@@ -92,7 +92,7 @@ static int lp3944_reg_write(struct i2c_client *client, u8 reg, u8 value)
 }
 
 /**
- * lp3944_dim_set_period() - Set the period for DIM status
+ * Set the period for DIM status
  *
  * @client: the i2c client
  * @dim: either LP3944_DIM0 or LP3944_DIM1
@@ -123,7 +123,7 @@ static int lp3944_dim_set_period(struct i2c_client *client, u8 dim, u16 period)
 }
 
 /**
- * lp3944_dim_set_dutycycle - Set the duty cycle for DIM status
+ * Set the duty cycle for DIM status
  *
  * @client: the i2c client
  * @dim: either LP3944_DIM0 or LP3944_DIM1
@@ -155,7 +155,7 @@ static int lp3944_dim_set_dutycycle(struct i2c_client *client, u8 dim,
 }
 
 /**
- * lp3944_led_set() - Set the led status
+ * Set the led status
  *
  * @led: a lp3944_led_data structure
  * @status: one of LP3944_LED_STATUS_OFF
@@ -359,7 +359,8 @@ exit:
 	return err;
 }
 
-static int lp3944_probe(struct i2c_client *client)
+static int lp3944_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct lp3944_platform_data *lp3944_pdata =
 			dev_get_platdata(&client->dev);
@@ -396,7 +397,7 @@ static int lp3944_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void lp3944_remove(struct i2c_client *client)
+static int lp3944_remove(struct i2c_client *client)
 {
 	struct lp3944_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct lp3944_data *data = i2c_get_clientdata(client);
@@ -413,6 +414,8 @@ static void lp3944_remove(struct i2c_client *client)
 		default:
 			break;
 		}
+
+	return 0;
 }
 
 /* lp3944 i2c driver struct */

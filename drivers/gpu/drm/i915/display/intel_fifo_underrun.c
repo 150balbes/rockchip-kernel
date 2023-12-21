@@ -26,14 +26,10 @@
  */
 
 #include "i915_drv.h"
-#include "i915_reg.h"
-#include "intel_de.h"
-#include "intel_display_irq.h"
-#include "intel_display_trace.h"
+#include "i915_trace.h"
 #include "intel_display_types.h"
 #include "intel_fbc.h"
 #include "intel_fifo_underrun.h"
-#include "intel_pch_display.h"
 
 /**
  * DOC: fifo underrun handling
@@ -64,7 +60,7 @@ static bool ivb_can_enable_err_int(struct drm_device *dev)
 	lockdep_assert_held(&dev_priv->irq_lock);
 
 	for_each_pipe(dev_priv, pipe) {
-		crtc = intel_crtc_for_pipe(dev_priv, pipe);
+		crtc = intel_get_crtc_for_pipe(dev_priv, pipe);
 
 		if (crtc->cpu_fifo_underrun_disabled)
 			return false;
@@ -82,7 +78,7 @@ static bool cpt_can_enable_serr_int(struct drm_device *dev)
 	lockdep_assert_held(&dev_priv->irq_lock);
 
 	for_each_pipe(dev_priv, pipe) {
-		crtc = intel_crtc_for_pipe(dev_priv, pipe);
+		crtc = intel_get_crtc_for_pipe(dev_priv, pipe);
 
 		if (crtc->pch_fifo_underrun_disabled)
 			return false;
@@ -188,34 +184,15 @@ static void ivb_set_fifo_underrun_reporting(struct drm_device *dev,
 	}
 }
 
-static u32
-icl_pipe_status_underrun_mask(struct drm_i915_private *dev_priv)
-{
-	u32 mask = PIPE_STATUS_UNDERRUN;
-
-	if (DISPLAY_VER(dev_priv) >= 13)
-		mask |= PIPE_STATUS_SOFT_UNDERRUN_XELPD |
-			PIPE_STATUS_HARD_UNDERRUN_XELPD |
-			PIPE_STATUS_PORT_UNDERRUN_XELPD;
-
-	return mask;
-}
-
 static void bdw_set_fifo_underrun_reporting(struct drm_device *dev,
 					    enum pipe pipe, bool enable)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
-	u32 mask = gen8_de_pipe_underrun_mask(dev_priv);
 
-	if (enable) {
-		if (DISPLAY_VER(dev_priv) >= 11)
-			intel_de_write(dev_priv, ICL_PIPESTATUS(pipe),
-				       icl_pipe_status_underrun_mask(dev_priv));
-
-		bdw_enable_pipe_irq(dev_priv, pipe, mask);
-	} else {
-		bdw_disable_pipe_irq(dev_priv, pipe, mask);
-	}
+	if (enable)
+		bdw_enable_pipe_irq(dev_priv, pipe, GEN8_PIPE_FIFO_UNDERRUN);
+	else
+		bdw_disable_pipe_irq(dev_priv, pipe, GEN8_PIPE_FIFO_UNDERRUN);
 }
 
 static void ibx_set_fifo_underrun_reporting(struct drm_device *dev,
@@ -282,7 +259,7 @@ static bool __intel_set_cpu_fifo_underrun_reporting(struct drm_device *dev,
 						    enum pipe pipe, bool enable)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
-	struct intel_crtc *crtc = intel_crtc_for_pipe(dev_priv, pipe);
+	struct intel_crtc *crtc = intel_get_crtc_for_pipe(dev_priv, pipe);
 	bool old;
 
 	lockdep_assert_held(&dev_priv->irq_lock);
@@ -292,11 +269,11 @@ static bool __intel_set_cpu_fifo_underrun_reporting(struct drm_device *dev,
 
 	if (HAS_GMCH(dev_priv))
 		i9xx_set_fifo_underrun_reporting(dev, pipe, enable, old);
-	else if (IS_IRONLAKE(dev_priv) || IS_SANDYBRIDGE(dev_priv))
+	else if (IS_GEN_RANGE(dev_priv, 5, 6))
 		ilk_set_fifo_underrun_reporting(dev, pipe, enable);
-	else if (DISPLAY_VER(dev_priv) == 7)
+	else if (IS_GEN(dev_priv, 7))
 		ivb_set_fifo_underrun_reporting(dev, pipe, enable, old);
-	else if (DISPLAY_VER(dev_priv) >= 8)
+	else if (INTEL_GEN(dev_priv) >= 8)
 		bdw_set_fifo_underrun_reporting(dev, pipe, enable);
 
 	return old;
@@ -351,7 +328,7 @@ bool intel_set_pch_fifo_underrun_reporting(struct drm_i915_private *dev_priv,
 					   bool enable)
 {
 	struct intel_crtc *crtc =
-		intel_crtc_for_pipe(dev_priv, pch_transcoder);
+		intel_get_crtc_for_pipe(dev_priv, pch_transcoder);
 	unsigned long flags;
 	bool old;
 
@@ -394,8 +371,7 @@ bool intel_set_pch_fifo_underrun_reporting(struct drm_i915_private *dev_priv,
 void intel_cpu_fifo_underrun_irq_handler(struct drm_i915_private *dev_priv,
 					 enum pipe pipe)
 {
-	struct intel_crtc *crtc = intel_crtc_for_pipe(dev_priv, pipe);
-	u32 underruns = 0;
+	struct intel_crtc *crtc = intel_get_crtc_for_pipe(dev_priv, pipe);
 
 	/* We may be called too early in init, thanks BIOS! */
 	if (crtc == NULL)
@@ -406,35 +382,10 @@ void intel_cpu_fifo_underrun_irq_handler(struct drm_i915_private *dev_priv,
 	    crtc->cpu_fifo_underrun_disabled)
 		return;
 
-	/*
-	 * Starting with display version 11, the PIPE_STAT register records
-	 * whether an underrun has happened, and on XELPD+, it will also record
-	 * whether the underrun was soft/hard and whether it was triggered by
-	 * the downstream port logic.  We should clear these bits (which use
-	 * write-1-to-clear logic) too.
-	 *
-	 * Note that although the IIR gives us the same underrun and soft/hard
-	 * information, PIPE_STAT is the only place we can find out whether
-	 * the underrun was caused by the downstream port.
-	 */
-	if (DISPLAY_VER(dev_priv) >= 11) {
-		underruns = intel_de_read(dev_priv, ICL_PIPESTATUS(pipe)) &
-			icl_pipe_status_underrun_mask(dev_priv);
-		intel_de_write(dev_priv, ICL_PIPESTATUS(pipe), underruns);
-	}
-
 	if (intel_set_cpu_fifo_underrun_reporting(dev_priv, pipe, false)) {
 		trace_intel_cpu_fifo_underrun(dev_priv, pipe);
-
-		if (DISPLAY_VER(dev_priv) >= 11)
-			drm_err(&dev_priv->drm, "CPU pipe %c FIFO underrun: %s%s%s%s\n",
-				pipe_name(pipe),
-				underruns & PIPE_STATUS_SOFT_UNDERRUN_XELPD ? "soft," : "",
-				underruns & PIPE_STATUS_HARD_UNDERRUN_XELPD ? "hard," : "",
-				underruns & PIPE_STATUS_PORT_UNDERRUN_XELPD ? "port," : "",
-				underruns & PIPE_STATUS_UNDERRUN ? "transcoder," : "");
-		else
-			drm_err(&dev_priv->drm, "CPU pipe %c FIFO underrun\n", pipe_name(pipe));
+		drm_err(&dev_priv->drm, "CPU pipe %c FIFO underrun\n",
+			pipe_name(pipe));
 	}
 
 	intel_fbc_handle_fifo_underrun_irq(dev_priv);
@@ -481,7 +432,7 @@ void intel_check_cpu_fifo_underruns(struct drm_i915_private *dev_priv)
 
 		if (HAS_GMCH(dev_priv))
 			i9xx_check_fifo_underruns(crtc);
-		else if (DISPLAY_VER(dev_priv) == 7)
+		else if (IS_GEN(dev_priv, 7))
 			ivb_check_fifo_underruns(crtc);
 	}
 
@@ -511,23 +462,4 @@ void intel_check_pch_fifo_underruns(struct drm_i915_private *dev_priv)
 	}
 
 	spin_unlock_irq(&dev_priv->irq_lock);
-}
-
-void intel_init_fifo_underrun_reporting(struct drm_i915_private *i915,
-					struct intel_crtc *crtc,
-					bool enable)
-{
-	crtc->cpu_fifo_underrun_disabled = !enable;
-
-	/*
-	 * We track the PCH trancoder underrun reporting state
-	 * within the crtc. With crtc for pipe A housing the underrun
-	 * reporting state for PCH transcoder A, crtc for pipe B housing
-	 * it for PCH transcoder B, etc. LPT-H has only PCH transcoder A,
-	 * and marking underrun reporting as disabled for the non-existing
-	 * PCH transcoders B and C would prevent enabling the south
-	 * error interrupt (see cpt_can_enable_serr_int()).
-	 */
-	if (intel_has_pch_trancoder(i915, crtc->pipe))
-		crtc->pch_fifo_underrun_disabled = !enable;
 }

@@ -117,8 +117,7 @@ divide into below cases:
 Device Tree Bindings
 --------------------
 
-See Documentation/devicetree/bindings/arm/arm,coresight-cpu-debug.yaml for
-details.
+See Documentation/devicetree/bindings/arm/coresight-cpu-debug.txt for details.
 
 
 How to use the module

@@ -30,7 +30,7 @@ static int udp_dump_one(struct udp_table *tbl,
 			const struct inet_diag_req_v2 *req)
 {
 	struct sk_buff *in_skb = cb->skb;
-	int err;
+	int err = -EINVAL;
 	struct sock *sk = NULL;
 	struct sk_buff *rep;
 	struct net *net = sock_net(in_skb->sk);
@@ -77,8 +77,10 @@ static int udp_dump_one(struct udp_table *tbl,
 		kfree_skb(rep);
 		goto out;
 	}
-	err = nlmsg_unicast(net->diag_nlsk, rep, NETLINK_CB(in_skb).portid);
-
+	err = netlink_unicast(net->diag_nlsk, rep, NETLINK_CB(in_skb).portid,
+			      MSG_DONTWAIT);
+	if (err > 0)
+		err = 0;
 out:
 	if (sk)
 		sock_put(sk);
@@ -147,13 +149,13 @@ done:
 static void udp_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,
 			  const struct inet_diag_req_v2 *r)
 {
-	udp_dump(sock_net(cb->skb->sk)->ipv4.udp_table, skb, cb, r);
+	udp_dump(&udp_table, skb, cb, r);
 }
 
 static int udp_diag_dump_one(struct netlink_callback *cb,
 			     const struct inet_diag_req_v2 *req)
 {
-	return udp_dump_one(sock_net(cb->skb->sk)->ipv4.udp_table, cb, req);
+	return udp_dump_one(&udp_table, cb, req);
 }
 
 static void udp_diag_get_info(struct sock *sk, struct inet_diag_msg *r,
@@ -225,7 +227,7 @@ static int __udp_diag_destroy(struct sk_buff *in_skb,
 static int udp_diag_destroy(struct sk_buff *in_skb,
 			    const struct inet_diag_req_v2 *req)
 {
-	return __udp_diag_destroy(in_skb, req, sock_net(in_skb->sk)->ipv4.udp_table);
+	return __udp_diag_destroy(in_skb, req, &udp_table);
 }
 
 static int udplite_diag_destroy(struct sk_buff *in_skb,

@@ -172,7 +172,7 @@ static ssize_t memcpy_count_show(struct device *dev,
 	if (chan) {
 		for_each_possible_cpu(i)
 			count += per_cpu_ptr(chan->local, i)->memcpy_count;
-		err = sysfs_emit(buf, "%lu\n", count);
+		err = sprintf(buf, "%lu\n", count);
 	} else
 		err = -ENODEV;
 	mutex_unlock(&dma_list_mutex);
@@ -194,7 +194,7 @@ static ssize_t bytes_transferred_show(struct device *dev,
 	if (chan) {
 		for_each_possible_cpu(i)
 			count += per_cpu_ptr(chan->local, i)->bytes_transferred;
-		err = sysfs_emit(buf, "%lu\n", count);
+		err = sprintf(buf, "%lu\n", count);
 	} else
 		err = -ENODEV;
 	mutex_unlock(&dma_list_mutex);
@@ -212,7 +212,7 @@ static ssize_t in_use_show(struct device *dev, struct device_attribute *attr,
 	mutex_lock(&dma_list_mutex);
 	chan = dev_to_dma_chan(dev);
 	if (chan)
-		err = sysfs_emit(buf, "%d\n", chan->client_count);
+		err = sprintf(buf, "%d\n", chan->client_count);
 	else
 		err = -ENODEV;
 	mutex_unlock(&dma_list_mutex);
@@ -451,8 +451,7 @@ static int dma_chan_get(struct dma_chan *chan)
 	/* The channel is already in use, update client count */
 	if (chan->client_count) {
 		__module_get(owner);
-		chan->client_count++;
-		return 0;
+		goto out;
 	}
 
 	if (!try_module_get(owner))
@@ -471,11 +470,11 @@ static int dma_chan_get(struct dma_chan *chan)
 			goto err_out;
 	}
 
-	chan->client_count++;
-
 	if (!dma_has_cap(DMA_PRIVATE, chan->device->cap_mask))
 		balance_ref_count(chan);
 
+out:
+	chan->client_count++;
 	return 0;
 
 err_out:
@@ -696,12 +695,13 @@ static struct dma_chan *find_candidate(struct dma_device *device,
  */
 struct dma_chan *dma_get_slave_channel(struct dma_chan *chan)
 {
+	int err = -EBUSY;
+
 	/* lock against __dma_request_channel */
 	mutex_lock(&dma_list_mutex);
 
 	if (chan->client_count == 0) {
 		struct dma_device *device = chan->device;
-		int err;
 
 		dma_cap_set(DMA_PRIVATE, device->cap_mask);
 		device->privatecnt++;
@@ -1054,7 +1054,9 @@ static int __dma_async_device_channel_register(struct dma_device *device,
 	 * When the chan_id is a negative value, we are dynamically adding
 	 * the channel. Otherwise we are static enumerating.
 	 */
+	mutex_lock(&device->chan_mutex);
 	chan->chan_id = ida_alloc(&device->chan_ida, GFP_KERNEL);
+	mutex_unlock(&device->chan_mutex);
 	if (chan->chan_id < 0) {
 		pr_err("%s: unable to alloc ida for chan: %d\n",
 		       __func__, chan->chan_id);
@@ -1077,7 +1079,9 @@ static int __dma_async_device_channel_register(struct dma_device *device,
 	return 0;
 
  err_out_ida:
+	mutex_lock(&device->chan_mutex);
 	ida_free(&device->chan_ida, chan->chan_id);
+	mutex_unlock(&device->chan_mutex);
  err_free_dev:
 	kfree(chan->dev);
  err_free_local:
@@ -1110,7 +1114,9 @@ static void __dma_async_device_channel_unregister(struct dma_device *device,
 	device->chancnt--;
 	chan->dev->chan = NULL;
 	mutex_unlock(&dma_list_mutex);
+	mutex_lock(&device->chan_mutex);
 	ida_free(&device->chan_ida, chan->chan_id);
+	mutex_unlock(&device->chan_mutex);
 	device_unregister(&chan->dev->device);
 	free_percpu(chan->local);
 }
@@ -1238,6 +1244,7 @@ int dma_async_device_register(struct dma_device *device)
 	if (rc != 0)
 		return rc;
 
+	mutex_init(&device->chan_mutex);
 	ida_init(&device->chan_ida);
 
 	/* represent channels in sysfs. Probably want devs too */
@@ -1323,8 +1330,11 @@ void dma_async_device_unregister(struct dma_device *device)
 }
 EXPORT_SYMBOL(dma_async_device_unregister);
 
-static void dmaenginem_async_device_unregister(void *device)
+static void dmam_device_release(struct device *dev, void *res)
 {
+	struct dma_device *device;
+
+	device = *(struct dma_device **)res;
 	dma_async_device_unregister(device);
 }
 
@@ -1336,13 +1346,22 @@ static void dmaenginem_async_device_unregister(void *device)
  */
 int dmaenginem_async_device_register(struct dma_device *device)
 {
+	void *p;
 	int ret;
 
-	ret = dma_async_device_register(device);
-	if (ret)
-		return ret;
+	p = devres_alloc(dmam_device_release, sizeof(void *), GFP_KERNEL);
+	if (!p)
+		return -ENOMEM;
 
-	return devm_add_action_or_reset(device->dev, dmaenginem_async_device_unregister, device);
+	ret = dma_async_device_register(device);
+	if (!ret) {
+		*(struct dma_device **)p = device;
+		devres_add(device->dev, p);
+	} else {
+		devres_free(p);
+	}
+
+	return ret;
 }
 EXPORT_SYMBOL(dmaenginem_async_device_register);
 

@@ -22,6 +22,7 @@
 #include "priv.h"
 
 #include <core/memory.h>
+#include <core/notify.h>
 
 static void
 nvkm_fault_ntfy_fini(struct nvkm_event *event, int type, int index)
@@ -37,8 +38,23 @@ nvkm_fault_ntfy_init(struct nvkm_event *event, int type, int index)
 	fault->func->buffer.intr(fault->buffer[index], true);
 }
 
+static int
+nvkm_fault_ntfy_ctor(struct nvkm_object *object, void *argv, u32 argc,
+		     struct nvkm_notify *notify)
+{
+	struct nvkm_fault_buffer *buffer = nvkm_fault_buffer(object);
+	if (argc == 0) {
+		notify->size  = 0;
+		notify->types = 1;
+		notify->index = buffer->id;
+		return 0;
+	}
+	return -ENOSYS;
+}
+
 static const struct nvkm_event_func
 nvkm_fault_ntfy = {
+	.ctor = nvkm_fault_ntfy_ctor,
 	.init = nvkm_fault_ntfy_init,
 	.fini = nvkm_fault_ntfy_fini,
 };
@@ -114,7 +130,8 @@ nvkm_fault_oneinit(struct nvkm_subdev *subdev)
 		}
 	}
 
-	ret = nvkm_event_init(&nvkm_fault_ntfy, subdev, 1, fault->buffer_nr, &fault->event);
+	ret = nvkm_event_init(&nvkm_fault_ntfy, 1, fault->buffer_nr,
+			      &fault->event);
 	if (ret)
 		return ret;
 
@@ -129,7 +146,7 @@ nvkm_fault_dtor(struct nvkm_subdev *subdev)
 	struct nvkm_fault *fault = nvkm_fault(subdev);
 	int i;
 
-	nvkm_event_ntfy_del(&fault->nrpfb);
+	nvkm_notify_fini(&fault->nrpfb);
 	nvkm_event_fini(&fault->event);
 
 	for (i = 0; i < fault->buffer_nr; i++) {
@@ -153,12 +170,12 @@ nvkm_fault = {
 
 int
 nvkm_fault_new_(const struct nvkm_fault_func *func, struct nvkm_device *device,
-		enum nvkm_subdev_type type, int inst, struct nvkm_fault **pfault)
+		int index, struct nvkm_fault **pfault)
 {
 	struct nvkm_fault *fault;
 	if (!(fault = *pfault = kzalloc(sizeof(*fault), GFP_KERNEL)))
 		return -ENOMEM;
-	nvkm_subdev_ctor(&nvkm_fault, device, type, inst, &fault->subdev);
+	nvkm_subdev_ctor(&nvkm_fault, device, index, &fault->subdev);
 	fault->func = func;
 	fault->user.ctor = nvkm_ufault_new;
 	fault->user.base = func->user.base;

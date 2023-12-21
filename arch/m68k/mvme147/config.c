@@ -22,6 +22,7 @@
 #include <linux/linkage.h>
 #include <linux/init.h>
 #include <linux/major.h>
+#include <linux/genhd.h>
 #include <linux/rtc.h>
 #include <linux/interrupt.h>
 
@@ -33,11 +34,10 @@
 #include <asm/traps.h>
 #include <asm/machdep.h>
 #include <asm/mvme147hw.h>
-#include <asm/config.h>
 
 
 static void mvme147_get_model(char *model);
-extern void mvme147_sched_init(void);
+extern void mvme147_sched_init(irq_handler_t handler);
 extern int mvme147_hwclk (int, struct rtc_time *);
 extern void mvme147_reset (void);
 
@@ -80,6 +80,7 @@ void __init mvme147_init_IRQ(void)
 
 void __init config_mvme147(void)
 {
+	mach_max_dma_address	= 0x01000000;
 	mach_sched_init		= mvme147_sched_init;
 	mach_init_IRQ		= mvme147_init_IRQ;
 	mach_hwclk		= mvme147_hwclk;
@@ -111,6 +112,7 @@ static u32 clk_total;
 
 static irqreturn_t mvme147_timer_int (int irq, void *dev_id)
 {
+	irq_handler_t timer_routine = dev_id;
 	unsigned long flags;
 
 	local_irq_save(flags);
@@ -119,17 +121,17 @@ static irqreturn_t mvme147_timer_int (int irq, void *dev_id)
 	m147_pcc->t1_int_cntrl = PCC_INT_ENAB | PCC_TIMER_INT_CLR |
 				 PCC_LEVEL_TIMER1;
 	clk_total += PCC_TIMER_CYCLES;
-	legacy_timer_tick(1);
+	timer_routine(0, NULL);
 	local_irq_restore(flags);
 
 	return IRQ_HANDLED;
 }
 
 
-void mvme147_sched_init (void)
+void mvme147_sched_init (irq_handler_t timer_routine)
 {
 	if (request_irq(PCC_IRQ_TIMER1, mvme147_timer_int, IRQF_TIMER,
-			"timer 1", NULL))
+			"timer 1", timer_routine))
 		pr_err("Couldn't register timer interrupt\n");
 
 	/* Init the clock with a value */
@@ -171,6 +173,7 @@ static int bcd2int (unsigned char b)
 
 int mvme147_hwclk(int op, struct rtc_time *t)
 {
+#warning check me!
 	if (!op) {
 		m147_rtc->ctrl = RTC_READ;
 		t->tm_year = bcd2int (m147_rtc->bcd_year);
@@ -182,9 +185,6 @@ int mvme147_hwclk(int op, struct rtc_time *t)
 		m147_rtc->ctrl = 0;
 		if (t->tm_year < 70)
 			t->tm_year += 100;
-	} else {
-		/* FIXME Setting the time is not yet supported */
-		return -EOPNOTSUPP;
 	}
 	return 0;
 }

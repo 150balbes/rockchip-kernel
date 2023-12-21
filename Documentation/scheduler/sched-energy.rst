@@ -328,7 +328,7 @@ section lists these dependencies and provides hints as to how they can be met.
 
 As mentioned in the introduction, EAS is only supported on platforms with
 asymmetric CPU topologies for now. This requirement is checked at run-time by
-looking for the presence of the SD_ASYM_CPUCAPACITY_FULL flag when the scheduling
+looking for the presence of the SD_ASYM_CPUCAPACITY flag when the scheduling
 domains are built.
 
 See Documentation/scheduler/sched-capacity.rst for requirements to be met for this
@@ -349,11 +349,6 @@ independent EM framework in Documentation/power/energy-model.rst.
 
 Please also note that the scheduling domains need to be re-built after the
 EM has been registered in order to start EAS.
-
-EAS uses the EM to make a forecasting decision on energy usage and thus it is
-more focused on the difference when checking possible options for task
-placement. For EAS it doesn't matter whether the EM power values are expressed
-in milli-Watts or in an 'abstract scale'.
 
 
 6.3 - Energy Model complexity
@@ -402,7 +397,7 @@ Consequently, the only sane governor to use together with EAS is schedutil,
 because it is the only one providing some degree of consistency between
 frequency requests and energy predictions.
 
-Using EAS with any other governor than schedutil is not supported.
+Using EAS with any other governor than schedutil is not recommended.
 
 
 6.5 Scale-invariant utilization signals

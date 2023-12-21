@@ -237,7 +237,7 @@ static int hisi_spi_nor_dma_transfer(struct spi_nor *nor, loff_t start_off,
 	reg = readl(host->regbase + FMC_CFG);
 	reg &= ~(FMC_CFG_OP_MODE_MASK | SPI_NOR_ADDR_MODE_MASK);
 	reg |= FMC_CFG_OP_MODE_NORMAL;
-	reg |= (nor->addr_nbytes == 4) ? SPI_NOR_ADDR_MODE_4BYTES
+	reg |= (nor->addr_width == 4) ? SPI_NOR_ADDR_MODE_4BYTES
 		: SPI_NOR_ADDR_MODE_3BYTES;
 	writel(reg, host->regbase + FMC_CFG);
 
@@ -320,7 +320,7 @@ static const struct spi_nor_controller_ops hisi_controller_ops = {
 	.write = hisi_spi_nor_write,
 };
 
-/*
+/**
  * Get spi flash device information and register it as a mtd device.
  */
 static int hisi_spi_nor_register(struct device_node *np,
@@ -421,6 +421,7 @@ fail:
 static int hisi_spi_nor_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct hifmc_host *host;
 	int ret;
 
@@ -431,11 +432,13 @@ static int hisi_spi_nor_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, host);
 	host->dev = dev;
 
-	host->regbase = devm_platform_ioremap_resource_byname(pdev, "control");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "control");
+	host->regbase = devm_ioremap_resource(dev, res);
 	if (IS_ERR(host->regbase))
 		return PTR_ERR(host->regbase);
 
-	host->iobase = devm_platform_ioremap_resource_byname(pdev, "memory");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "memory");
+	host->iobase = devm_ioremap_resource(dev, res);
 	if (IS_ERR(host->iobase))
 		return PTR_ERR(host->iobase);
 

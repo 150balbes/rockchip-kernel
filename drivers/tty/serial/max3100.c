@@ -247,7 +247,7 @@ static int max3100_handlerx(struct max3100_port *s, u16 rx)
 	cts = (rx & MAX3100_CTS) > 0;
 	if (s->cts != cts) {
 		s->cts = cts;
-		uart_handle_cts_change(&s->port, cts);
+		uart_handle_cts_change(&s->port, cts ? TIOCM_CTS : 0);
 	}
 
 	return ret;
@@ -292,7 +292,9 @@ static void max3100_work(struct work_struct *w)
 			} else if (!uart_circ_empty(xmit) &&
 				   !uart_tx_stopped(&s->port)) {
 				tx = xmit->buf[xmit->tail];
-				uart_xmit_advance(&s->port, 1);
+				xmit->tail = (xmit->tail + 1) &
+					(UART_XMIT_SIZE - 1);
+				s->port.icount.tx++;
 			}
 			if (tx != 0xffff) {
 				max3100_calc_parity(s, &tx);
@@ -416,7 +418,7 @@ static void max3100_set_mctrl(struct uart_port *port, unsigned int mctrl)
 
 static void
 max3100_set_termios(struct uart_port *port, struct ktermios *termios,
-		    const struct ktermios *old)
+		    struct ktermios *old)
 {
 	struct max3100_port *s = container_of(port,
 					      struct max3100_port,
@@ -519,6 +521,9 @@ max3100_set_termios(struct uart_port *port, struct ktermios *termios,
 			MAX3100_STATUS_PE | MAX3100_STATUS_FE |
 			MAX3100_STATUS_OE;
 
+	/* we are sending char from a workqueue so enable */
+	s->port.state->port.low_latency = 1;
+
 	if (s->poll_time > 0)
 		del_timer_sync(&s->timer);
 
@@ -552,6 +557,7 @@ static void max3100_shutdown(struct uart_port *port)
 		del_timer_sync(&s->timer);
 
 	if (s->workqueue) {
+		flush_workqueue(s->workqueue);
 		destroy_workqueue(s->workqueue);
 		s->workqueue = NULL;
 	}
@@ -802,7 +808,7 @@ static int max3100_probe(struct spi_device *spi)
 	return 0;
 }
 
-static void max3100_remove(struct spi_device *spi)
+static int max3100_remove(struct spi_device *spi)
 {
 	struct max3100_port *s = spi_get_drvdata(spi);
 	int i;
@@ -825,12 +831,13 @@ static void max3100_remove(struct spi_device *spi)
 	for (i = 0; i < MAX_MAX3100; i++)
 		if (max3100s[i]) {
 			mutex_unlock(&max3100s_lock);
-			return;
+			return 0;
 		}
 	pr_debug("removing max3100 driver\n");
 	uart_unregister_driver(&max3100_uart_driver);
 
 	mutex_unlock(&max3100s_lock);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

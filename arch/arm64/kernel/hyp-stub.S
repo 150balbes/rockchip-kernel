@@ -27,12 +27,12 @@ SYM_CODE_START(__hyp_stub_vectors)
 	ventry	el2_fiq_invalid			// FIQ EL2t
 	ventry	el2_error_invalid		// Error EL2t
 
-	ventry	elx_sync			// Synchronous EL2h
+	ventry	el2_sync_invalid		// Synchronous EL2h
 	ventry	el2_irq_invalid			// IRQ EL2h
 	ventry	el2_fiq_invalid			// FIQ EL2h
 	ventry	el2_error_invalid		// Error EL2h
 
-	ventry	elx_sync			// Synchronous 64-bit EL1
+	ventry	el1_sync			// Synchronous 64-bit EL1
 	ventry	el1_irq_invalid			// IRQ 64-bit EL1
 	ventry	el1_fiq_invalid			// FIQ 64-bit EL1
 	ventry	el1_error_invalid		// Error 64-bit EL1
@@ -45,14 +45,14 @@ SYM_CODE_END(__hyp_stub_vectors)
 
 	.align 11
 
-SYM_CODE_START_LOCAL(elx_sync)
+SYM_CODE_START_LOCAL(el1_sync)
 	cmp	x0, #HVC_SET_VECTORS
 	b.ne	1f
 	msr	vbar_el2, x1
 	b	9f
 
-1:	cmp	x0, #HVC_FINALISE_EL2
-	b.eq	__finalise_el2
+1:	cmp	x0, #HVC_VHE_RESTART
+	b.eq	mutate_to_vhe
 
 2:	cmp	x0, #HVC_SOFT_RESTART
 	b.ne	3f
@@ -71,26 +71,29 @@ SYM_CODE_START_LOCAL(elx_sync)
 
 9:	mov	x0, xzr
 	eret
-SYM_CODE_END(elx_sync)
+SYM_CODE_END(el1_sync)
 
-SYM_CODE_START_LOCAL(__finalise_el2)
-	finalise_el2_state
-
-	// nVHE? No way! Give me the real thing!
+// nVHE? No way! Give me the real thing!
+SYM_CODE_START_LOCAL(mutate_to_vhe)
 	// Sanity check: MMU *must* be off
 	mrs	x1, sctlr_el2
 	tbnz	x1, #0, 1f
 
 	// Needs to be VHE capable, obviously
-	check_override id_aa64mmfr1 ID_AA64MMFR1_EL1_VH_SHIFT 0f 1f x1 x2
+	mrs	x1, id_aa64mmfr1_el1
+	ubfx	x1, x1, #ID_AA64MMFR1_VHE_SHIFT, #4
+	cbz	x1, 1f
 
-0:	// Check whether we only want the hypervisor to run VHE, not the kernel
-	adr_l	x1, arm64_sw_feature_override
+	// Check whether VHE is disabled from the command line
+	adr_l	x1, id_aa64mmfr1_override
 	ldr	x2, [x1, FTR_OVR_VAL_OFFSET]
 	ldr	x1, [x1, FTR_OVR_MASK_OFFSET]
+	ubfx	x2, x2, #ID_AA64MMFR1_VHE_SHIFT, #4
+	ubfx	x1, x1, #ID_AA64MMFR1_VHE_SHIFT, #4
+	cmp	x1, xzr
 	and	x2, x2, x1
-	ubfx	x2, x2, #ARM64_SW_FEATURE_OVERRIDE_HVHE, #4
-	cbz	x2, 2f
+	csinv	x2, x2, xzr, ne
+	cbnz	x2, 2f
 
 1:	mov_q	x0, HVC_STUB_ERR
 	eret
@@ -127,24 +130,6 @@ SYM_CODE_START_LOCAL(__finalise_el2)
 	msr	ttbr1_el1, x0
 	mrs_s	x0, SYS_MAIR_EL12
 	msr	mair_el1, x0
-	mrs	x1, REG_ID_AA64MMFR3_EL1
-	ubfx	x1, x1, #ID_AA64MMFR3_EL1_TCRX_SHIFT, #4
-	cbz	x1, .Lskip_tcr2
-	mrs	x0, REG_TCR2_EL12
-	msr	REG_TCR2_EL1, x0
-
-	// Transfer permission indirection state
-	mrs	x1, REG_ID_AA64MMFR3_EL1
-	ubfx	x1, x1, #ID_AA64MMFR3_EL1_S1PIE_SHIFT, #4
-	cbz	x1, .Lskip_indirection
-	mrs	x0, REG_PIRE0_EL12
-	msr	REG_PIRE0_EL1, x0
-	mrs	x0, REG_PIR_EL12
-	msr	REG_PIR_EL1, x0
-
-.Lskip_indirection:
-.Lskip_tcr2:
-
 	isb
 
 	// Hack the exception return to stay at EL2
@@ -155,10 +140,10 @@ SYM_CODE_START_LOCAL(__finalise_el2)
 	msr	spsr_el1, x0
 
 	b	enter_vhe
-SYM_CODE_END(__finalise_el2)
+SYM_CODE_END(mutate_to_vhe)
 
 	// At the point where we reach enter_vhe(), we run with
-	// the MMU off (which is enforced by __finalise_el2()).
+	// the MMU off (which is enforced by mutate_to_vhe()).
 	// We thus need to be in the idmap, or everything will
 	// explode when enabling the MMU.
 
@@ -237,12 +222,13 @@ SYM_FUNC_START(__hyp_reset_vectors)
 SYM_FUNC_END(__hyp_reset_vectors)
 
 /*
- * Entry point to finalise EL2 and switch to VHE if deemed capable
- *
- * w0: boot mode, as returned by init_kernel_el()
+ * Entry point to switch to VHE if deemed capable
  */
-SYM_FUNC_START(finalise_el2)
+SYM_FUNC_START(switch_to_vhe)
+#ifdef CONFIG_ARM64_VHE
 	// Need to have booted at EL2
+	adr_l	x1, __boot_cpu_mode
+	ldr	w0, [x1]
 	cmp	w0, #BOOT_CPU_MODE_EL2
 	b.ne	1f
 
@@ -251,8 +237,10 @@ SYM_FUNC_START(finalise_el2)
 	cmp	x0, #CurrentEL_EL1
 	b.ne	1f
 
-	mov	x0, #HVC_FINALISE_EL2
+	// Turn the world upside down
+	mov	x0, #HVC_VHE_RESTART
 	hvc	#0
 1:
+#endif
 	ret
-SYM_FUNC_END(finalise_el2)
+SYM_FUNC_END(switch_to_vhe)

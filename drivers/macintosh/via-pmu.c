@@ -18,7 +18,7 @@
  *    a sleep or a freq. switch
  *
  */
-#include <linux/stdarg.h>
+#include <stdarg.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -59,6 +59,7 @@
 #include <asm/pmac_feature.h>
 #include <asm/pmac_pfunc.h>
 #include <asm/pmac_low_i2c.h>
+#include <asm/prom.h>
 #include <asm/mmu_context.h>
 #include <asm/cputable.h>
 #include <asm/time.h>
@@ -160,7 +161,7 @@ static unsigned char __iomem *gpio_reg;
 static int gpio_irq = 0;
 static int gpio_irq_enabled = -1;
 static volatile int pmu_suspended;
-static DEFINE_SPINLOCK(pmu_lock);
+static spinlock_t pmu_lock;
 static u8 pmu_intr_mask;
 static int pmu_version;
 static int drop_interrupts;
@@ -179,13 +180,14 @@ static struct proc_dir_entry *proc_pmu_options;
 static int option_server_mode;
 
 int pmu_battery_count;
-static int pmu_cur_battery;
+int pmu_cur_battery;
 unsigned int pmu_power_flags = PMU_PWR_AC_PRESENT;
 struct pmu_battery_info pmu_batteries[PMU_MAX_BATTERIES];
 static int query_batt_timer = BATTERY_POLLING_COUNT;
 static struct adb_request batt_req;
 static struct proc_dir_entry *proc_pmu_batt[PMU_MAX_BATTERIES];
 
+int __fake_sleep;
 int asleep;
 
 #ifdef CONFIG_ADB
@@ -203,11 +205,9 @@ static int init_pmu(void);
 static void pmu_start(void);
 static irqreturn_t via_pmu_interrupt(int irq, void *arg);
 static irqreturn_t gpio1_interrupt(int irq, void *arg);
-#ifdef CONFIG_PROC_FS
 static int pmu_info_proc_show(struct seq_file *m, void *v);
 static int pmu_irqstats_proc_show(struct seq_file *m, void *v);
 static int pmu_battery_proc_show(struct seq_file *m, void *v);
-#endif
 static void pmu_pass_intr(unsigned char *data, int len);
 static const struct proc_ops pmu_options_proc_ops;
 
@@ -286,9 +286,8 @@ static char *pbook_type[] = {
 int __init find_via_pmu(void)
 {
 #ifdef CONFIG_PPC_PMAC
-	int err;
 	u64 taddr;
-	struct resource res;
+	const u32 *reg;
 
 	if (pmu_state != uninitialized)
 		return 1;
@@ -296,12 +295,18 @@ int __init find_via_pmu(void)
 	if (vias == NULL)
 		return 0;
 
-	err = of_address_to_resource(vias, 0, &res);
-	if (err) {
-		printk(KERN_ERR "via-pmu: Error getting \"reg\" property !\n");
+	reg = of_get_property(vias, "reg", NULL);
+	if (reg == NULL) {
+		printk(KERN_ERR "via-pmu: No \"reg\" property !\n");
 		goto fail;
 	}
-	taddr = res.start;
+	taddr = of_translate_address(vias, reg);
+	if (taddr == OF_BAD_ADDR) {
+		printk(KERN_ERR "via-pmu: Can't translate address !\n");
+		goto fail;
+	}
+
+	spin_lock_init(&pmu_lock);
 
 	pmu_has_adb = 1;
 
@@ -321,6 +326,7 @@ int __init find_via_pmu(void)
 		 || of_device_is_compatible(vias->parent, "K2-Keylargo")) {
 		struct device_node *gpiop;
 		struct device_node *adbp;
+		u64 gaddr = OF_BAD_ADDR;
 
 		pmu_kind = PMU_KEYLARGO_BASED;
 		adbp = of_find_node_by_type(NULL, "adb");
@@ -334,8 +340,11 @@ int __init find_via_pmu(void)
 		
 		gpiop = of_find_node_by_name(NULL, "gpio");
 		if (gpiop) {
-			if (!of_address_to_resource(gpiop, 0, &res))
-				gpio_reg = ioremap(res.start, 0x10);
+			reg = of_get_property(gpiop, "reg", NULL);
+			if (reg)
+				gaddr = of_translate_address(gpiop, reg);
+			if (gaddr != OF_BAD_ADDR)
+				gpio_reg = ioremap(gaddr, 0x10);
 			of_node_put(gpiop);
 		}
 		if (gpio_reg == NULL) {
@@ -379,6 +388,8 @@ int __init find_via_pmu(void)
 		return 0;
 
 	pmu_kind = PMU_UNKNOWN;
+
+	spin_lock_init(&pmu_lock);
 
 	pmu_has_adb = 1;
 
@@ -847,7 +858,6 @@ query_battery_state(void)
 			2, PMU_SMART_BATTERY_STATE, pmu_cur_battery+1);
 }
 
-#ifdef CONFIG_PROC_FS
 static int pmu_info_proc_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "PMU driver version     : %d\n", PMU_DRIVER_VERSION);
@@ -968,7 +978,6 @@ static const struct proc_ops pmu_options_proc_ops = {
 	.proc_release	= single_release,
 	.proc_write	= pmu_options_proc_write,
 };
-#endif
 
 #ifdef CONFIG_ADB
 /* Send an ADB command */
@@ -1824,7 +1833,6 @@ pmu_present(void)
  */
  
 static u32 save_via[8];
-static int __fake_sleep;
 
 static void
 save_via_state(void)

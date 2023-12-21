@@ -8,14 +8,12 @@
 
 #define YYDEBUG 1
 
-#include <errno.h>
 #include <fnmatch.h>
 #include <stdio.h>
 #include <linux/compiler.h>
 #include <linux/types.h>
 #include <linux/zalloc.h>
 #include "pmu.h"
-#include "pmus.h"
 #include "evsel.h"
 #include "parse-events.h"
 #include "parse-events-bison.h"
@@ -51,39 +49,46 @@ static void free_list_evsel(struct list_head* list_evsel)
 	free(list_evsel);
 }
 
+static void inc_group_count(struct list_head *list,
+		       struct parse_events_state *parse_state)
+{
+	/* Count groups only have more than 1 members */
+	if (!list_is_last(list->next, list))
+		parse_state->nr_groups++;
+}
+
 %}
 
 %token PE_START_EVENTS PE_START_TERMS
-%token PE_VALUE PE_VALUE_SYM_HW PE_VALUE_SYM_SW PE_TERM
+%token PE_VALUE PE_VALUE_SYM_HW PE_VALUE_SYM_SW PE_RAW PE_TERM
 %token PE_VALUE_SYM_TOOL
 %token PE_EVENT_NAME
-%token PE_RAW PE_NAME
+%token PE_NAME
 %token PE_BPF_OBJECT PE_BPF_SOURCE
-%token PE_MODIFIER_EVENT PE_MODIFIER_BP PE_BP_COLON PE_BP_SLASH
-%token PE_LEGACY_CACHE
+%token PE_MODIFIER_EVENT PE_MODIFIER_BP
+%token PE_NAME_CACHE_TYPE PE_NAME_CACHE_OP_RESULT
 %token PE_PREFIX_MEM PE_PREFIX_RAW PE_PREFIX_GROUP
 %token PE_ERROR
-%token PE_KERNEL_PMU_EVENT PE_PMU_EVENT_FAKE
+%token PE_PMU_EVENT_PRE PE_PMU_EVENT_SUF PE_KERNEL_PMU_EVENT PE_PMU_EVENT_FAKE
 %token PE_ARRAY_ALL PE_ARRAY_RANGE
 %token PE_DRV_CFG_TERM
-%token PE_TERM_HW
 %type <num> PE_VALUE
 %type <num> PE_VALUE_SYM_HW
 %type <num> PE_VALUE_SYM_SW
 %type <num> PE_VALUE_SYM_TOOL
+%type <num> PE_RAW
 %type <num> PE_TERM
 %type <num> value_sym
-%type <str> PE_RAW
 %type <str> PE_NAME
 %type <str> PE_BPF_OBJECT
 %type <str> PE_BPF_SOURCE
-%type <str> PE_LEGACY_CACHE
+%type <str> PE_NAME_CACHE_TYPE
+%type <str> PE_NAME_CACHE_OP_RESULT
 %type <str> PE_MODIFIER_EVENT
 %type <str> PE_MODIFIER_BP
 %type <str> PE_EVENT_NAME
-%type <str> PE_KERNEL_PMU_EVENT PE_PMU_EVENT_FAKE
+%type <str> PE_PMU_EVENT_PRE PE_PMU_EVENT_SUF PE_KERNEL_PMU_EVENT PE_PMU_EVENT_FAKE
 %type <str> PE_DRV_CFG_TERM
-%type <str> name_or_raw name_or_legacy
 %destructor { free ($$); } <str>
 %type <term> event_term
 %destructor { parse_events_term__delete ($$); } <term>
@@ -114,8 +119,6 @@ static void free_list_evsel(struct list_head* list_evsel)
 %type <array> array_term
 %type <array> array_terms
 %destructor { free ($$.ranges); } <array>
-%type <hardware_term> PE_TERM_HW
-%destructor { free ($$.str); } <hardware_term>
 
 %union
 {
@@ -129,10 +132,6 @@ static void free_list_evsel(struct list_head* list_evsel)
 		char *event;
 	} tracepoint_name;
 	struct parse_events_array array;
-	struct hardware_term {
-		char *str;
-		u64 num;
-	} hardware_term;
 }
 %%
 
@@ -183,11 +182,6 @@ group_def ':' PE_MODIFIER_EVENT
 	err = parse_events__modifier_group(list, $3);
 	free($3);
 	if (err) {
-		struct parse_events_state *parse_state = _parse_state;
-		struct parse_events_error *error = parse_state->error;
-
-		parse_events_error__handle(error, @3.first_column,
-					   strdup("Bad modifier"), NULL);
 		free_list_evsel(list);
 		YYABORT;
 	}
@@ -201,8 +195,9 @@ PE_NAME '{' events '}'
 {
 	struct list_head *list = $3;
 
-	/* Takes ownership of $1. */
-	parse_events__set_leader($1, list);
+	inc_group_count(list, _parse_state);
+	parse_events__set_leader($1, list, _parse_state);
+	free($1);
 	$$ = list;
 }
 |
@@ -210,7 +205,8 @@ PE_NAME '{' events '}'
 {
 	struct list_head *list = $2;
 
-	parse_events__set_leader(NULL, list);
+	inc_group_count(list, _parse_state);
+	parse_events__set_leader(NULL, list, _parse_state);
 	$$ = list;
 }
 
@@ -243,11 +239,6 @@ event_name PE_MODIFIER_EVENT
 	err = parse_events__modifier_event(list, $2, false);
 	free($2);
 	if (err) {
-		struct parse_events_state *parse_state = _parse_state;
-		struct parse_events_error *error = parse_state->error;
-
-		parse_events_error__handle(error, @2.first_column,
-					   strdup("Bad modifier"), NULL);
 		free_list_evsel(list);
 		YYABORT;
 	}
@@ -275,7 +266,7 @@ event_def
 event_def: event_pmu |
 	   event_legacy_symbol |
 	   event_legacy_cache sep_dc |
-	   event_legacy_mem sep_dc |
+	   event_legacy_mem |
 	   event_legacy_tracepoint sep_dc |
 	   event_legacy_numeric sep_dc |
 	   event_legacy_raw sep_dc |
@@ -308,45 +299,28 @@ PE_NAME opt_pmu_config
 	list = alloc_list();
 	if (!list)
 		CLEANUP_YYABORT;
-	/* Attempt to add to list assuming $1 is a PMU name. */
-	if (parse_events_add_pmu(parse_state, list, $1, $2, /*auto_merge_stats=*/false)) {
+	if (parse_events_add_pmu(_parse_state, list, $1, $2, false, false)) {
 		struct perf_pmu *pmu = NULL;
 		int ok = 0;
 
-		/* Failure to add, try wildcard expansion of $1 as a PMU name. */
 		if (asprintf(&pattern, "%s*", $1) < 0)
 			CLEANUP_YYABORT;
 
-		while ((pmu = perf_pmus__scan(pmu)) != NULL) {
+		while ((pmu = perf_pmu__scan(pmu)) != NULL) {
 			char *name = pmu->name;
-
-			if (parse_events__filter_pmu(parse_state, pmu))
-				continue;
 
 			if (!strncmp(name, "uncore_", 7) &&
 			    strncmp($1, "uncore_", 7))
 				name += 7;
-			if (!perf_pmu__match(pattern, name, $1) ||
-			    !perf_pmu__match(pattern, pmu->alias_name, $1)) {
-				bool auto_merge_stats = perf_pmu__auto_merge_stats(pmu);
-
+			if (!fnmatch(pattern, name, 0)) {
 				if (parse_events_copy_term_list(orig_terms, &terms))
 					CLEANUP_YYABORT;
-				if (!parse_events_add_pmu(parse_state, list, pmu->name, terms,
-							  auto_merge_stats)) {
+				if (!parse_events_add_pmu(_parse_state, list, pmu->name, terms, true, false))
 					ok++;
-					parse_state->wild_card_pmus = true;
-				}
 				parse_events_terms__delete(terms);
 			}
 		}
 
-		if (!ok) {
-			/* Failure to add, assume $1 is an event name. */
-			zfree(&list);
-			ok = !parse_events_multi_pmu_add(parse_state, $1, $2, &list);
-			$2 = NULL;
-		}
 		if (!ok)
 			CLEANUP_YYABORT;
 	}
@@ -363,34 +337,22 @@ PE_KERNEL_PMU_EVENT sep_dc
 	struct list_head *list;
 	int err;
 
-	err = parse_events_multi_pmu_add(_parse_state, $1, NULL, &list);
+	err = parse_events_multi_pmu_add(_parse_state, $1, &list);
 	free($1);
 	if (err < 0)
 		YYABORT;
 	$$ = list;
 }
 |
-PE_NAME sep_dc
+PE_PMU_EVENT_PRE '-' PE_PMU_EVENT_SUF sep_dc
 {
 	struct list_head *list;
-	int err;
+	char pmu_name[128];
 
-	err = parse_events_multi_pmu_add(_parse_state, $1, NULL, &list);
+	snprintf(pmu_name, sizeof(pmu_name), "%s-%s", $1, $3);
 	free($1);
-	if (err < 0)
-		YYABORT;
-	$$ = list;
-}
-|
-PE_KERNEL_PMU_EVENT opt_pmu_config
-{
-	struct list_head *list;
-	int err;
-
-	/* frees $2 */
-	err = parse_events_multi_pmu_add(_parse_state, $1, $2, &list);
-	free($1);
-	if (err < 0)
+	free($3);
+	if (parse_events_multi_pmu_add(_parse_state, pmu_name, &list) < 0)
 		YYABORT;
 	$$ = list;
 }
@@ -404,8 +366,7 @@ PE_PMU_EVENT_FAKE sep_dc
 	if (!list)
 		YYABORT;
 
-	err = parse_events_add_pmu(_parse_state, list, $1, /*head_config=*/NULL,
-				   /*auto_merge_stats=*/false);
+	err = parse_events_add_pmu(_parse_state, list, $1, NULL, false, false);
 	free($1);
 	if (err < 0) {
 		free(list);
@@ -423,7 +384,7 @@ PE_PMU_EVENT_FAKE opt_pmu_config
 	if (!list)
 		YYABORT;
 
-	err = parse_events_add_pmu(_parse_state, list, $1, $2, /*auto_merge_stats=*/false);
+	err = parse_events_add_pmu(_parse_state, list, $1, $2, false, false);
 	free($1);
 	parse_events_terms__delete($2);
 	if (err < 0) {
@@ -445,11 +406,10 @@ value_sym '/' event_config '/'
 	int type = $1 >> 16;
 	int config = $1 & 255;
 	int err;
-	bool wildcard = (type == PERF_TYPE_HARDWARE || type == PERF_TYPE_HW_CACHE);
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_numeric(_parse_state, list, type, config, $3, wildcard);
+	err = parse_events_add_numeric(_parse_state, list, type, config, $3);
 	parse_events_terms__delete($3);
 	if (err) {
 		free_list_evsel(list);
@@ -463,12 +423,10 @@ value_sym sep_slash_slash_dc
 	struct list_head *list;
 	int type = $1 >> 16;
 	int config = $1 & 255;
-	bool wildcard = (type == PERF_TYPE_HARDWARE || type == PERF_TYPE_HW_CACHE);
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	ABORT_ON(parse_events_add_numeric(_parse_state, list, type, config,
-					  /*head_config=*/NULL, wildcard));
+	ABORT_ON(parse_events_add_numeric(_parse_state, list, type, config, NULL));
 	$$ = list;
 }
 |
@@ -483,16 +441,57 @@ PE_VALUE_SYM_TOOL sep_slash_slash_dc
 }
 
 event_legacy_cache:
-PE_LEGACY_CACHE opt_event_config
+PE_NAME_CACHE_TYPE '-' PE_NAME_CACHE_OP_RESULT '-' PE_NAME_CACHE_OP_RESULT opt_event_config
 {
 	struct parse_events_state *parse_state = _parse_state;
+	struct parse_events_error *error = parse_state->error;
 	struct list_head *list;
 	int err;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_cache(list, &parse_state->idx, $1, parse_state, $2);
+	err = parse_events_add_cache(list, &parse_state->idx, $1, $3, $5, error, $6);
+	parse_events_terms__delete($6);
+	free($1);
+	free($3);
+	free($5);
+	if (err) {
+		free_list_evsel(list);
+		YYABORT;
+	}
+	$$ = list;
+}
+|
+PE_NAME_CACHE_TYPE '-' PE_NAME_CACHE_OP_RESULT opt_event_config
+{
+	struct parse_events_state *parse_state = _parse_state;
+	struct parse_events_error *error = parse_state->error;
+	struct list_head *list;
+	int err;
 
+	list = alloc_list();
+	ABORT_ON(!list);
+	err = parse_events_add_cache(list, &parse_state->idx, $1, $3, NULL, error, $4);
+	parse_events_terms__delete($4);
+	free($1);
+	free($3);
+	if (err) {
+		free_list_evsel(list);
+		YYABORT;
+	}
+	$$ = list;
+}
+|
+PE_NAME_CACHE_TYPE opt_event_config
+{
+	struct parse_events_state *parse_state = _parse_state;
+	struct parse_events_error *error = parse_state->error;
+	struct list_head *list;
+	int err;
+
+	list = alloc_list();
+	ABORT_ON(!list);
+	err = parse_events_add_cache(list, &parse_state->idx, $1, NULL, NULL, error, $2);
 	parse_events_terms__delete($2);
 	free($1);
 	if (err) {
@@ -503,16 +502,16 @@ PE_LEGACY_CACHE opt_event_config
 }
 
 event_legacy_mem:
-PE_PREFIX_MEM PE_VALUE PE_BP_SLASH PE_VALUE PE_BP_COLON PE_MODIFIER_BP opt_event_config
+PE_PREFIX_MEM PE_VALUE '/' PE_VALUE ':' PE_MODIFIER_BP sep_dc
 {
+	struct parse_events_state *parse_state = _parse_state;
 	struct list_head *list;
 	int err;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_breakpoint(_parse_state, list,
-					  $2, $6, $4, $7);
-	parse_events_terms__delete($7);
+	err = parse_events_add_breakpoint(list, &parse_state->idx,
+					  $2, $6, $4);
 	free($6);
 	if (err) {
 		free(list);
@@ -521,33 +520,31 @@ PE_PREFIX_MEM PE_VALUE PE_BP_SLASH PE_VALUE PE_BP_COLON PE_MODIFIER_BP opt_event
 	$$ = list;
 }
 |
-PE_PREFIX_MEM PE_VALUE PE_BP_SLASH PE_VALUE opt_event_config
+PE_PREFIX_MEM PE_VALUE '/' PE_VALUE sep_dc
 {
+	struct parse_events_state *parse_state = _parse_state;
 	struct list_head *list;
-	int err;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_breakpoint(_parse_state, list,
-					  $2, NULL, $4, $5);
-	parse_events_terms__delete($5);
-	if (err) {
+	if (parse_events_add_breakpoint(list, &parse_state->idx,
+					$2, NULL, $4)) {
 		free(list);
 		YYABORT;
 	}
 	$$ = list;
 }
 |
-PE_PREFIX_MEM PE_VALUE PE_BP_COLON PE_MODIFIER_BP opt_event_config
+PE_PREFIX_MEM PE_VALUE ':' PE_MODIFIER_BP sep_dc
 {
+	struct parse_events_state *parse_state = _parse_state;
 	struct list_head *list;
 	int err;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_breakpoint(_parse_state, list,
-					  $2, $4, 0, $5);
-	parse_events_terms__delete($5);
+	err = parse_events_add_breakpoint(list, &parse_state->idx,
+					  $2, $4, 0);
 	free($4);
 	if (err) {
 		free(list);
@@ -556,17 +553,15 @@ PE_PREFIX_MEM PE_VALUE PE_BP_COLON PE_MODIFIER_BP opt_event_config
 	$$ = list;
 }
 |
-PE_PREFIX_MEM PE_VALUE opt_event_config
+PE_PREFIX_MEM PE_VALUE sep_dc
 {
+	struct parse_events_state *parse_state = _parse_state;
 	struct list_head *list;
-	int err;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_breakpoint(_parse_state, list,
-					  $2, NULL, 0, $3);
-	parse_events_terms__delete($3);
-	if (err) {
+	if (parse_events_add_breakpoint(list, &parse_state->idx,
+					$2, NULL, 0)) {
 		free(list);
 		YYABORT;
 	}
@@ -600,6 +595,17 @@ tracepoint_name opt_event_config
 }
 
 tracepoint_name:
+PE_NAME '-' PE_NAME ':' PE_NAME
+{
+	struct tracepoint_name tracepoint;
+
+	ABORT_ON(asprintf(&tracepoint.sys, "%s-%s", $1, $3) < 0);
+	tracepoint.event = $5;
+	free($1);
+	free($3);
+	$$ = tracepoint;
+}
+|
 PE_NAME ':' PE_NAME
 {
 	struct tracepoint_name tracepoint = {$1, $3};
@@ -615,8 +621,7 @@ PE_VALUE ':' PE_VALUE opt_event_config
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	err = parse_events_add_numeric(_parse_state, list, (u32)$1, $3, $4,
-				       /*wildcard=*/false);
+	err = parse_events_add_numeric(_parse_state, list, (u32)$1, $3, $4);
 	parse_events_terms__delete($4);
 	if (err) {
 		free(list);
@@ -630,16 +635,10 @@ PE_RAW opt_event_config
 {
 	struct list_head *list;
 	int err;
-	u64 num;
 
 	list = alloc_list();
 	ABORT_ON(!list);
-	errno = 0;
-	num = strtoull($1 + 1, NULL, 16);
-	ABORT_ON(errno);
-	free($1);
-	err = parse_events_add_numeric(_parse_state, list, PERF_TYPE_RAW, num, $2,
-				       /*wildcard=*/false);
+	err = parse_events_add_numeric(_parse_state, list, PERF_TYPE_RAW, $1, $2);
 	parse_events_terms__delete($2);
 	if (err) {
 		free(list);
@@ -744,24 +743,17 @@ event_term
 	$$ = head;
 }
 
-name_or_raw: PE_RAW | PE_NAME | PE_LEGACY_CACHE
-
-name_or_legacy: PE_NAME | PE_LEGACY_CACHE
-
 event_term:
 PE_RAW
 {
 	struct parse_events_term *term;
 
-	if (parse_events_term__str(&term, PARSE_EVENTS__TERM_TYPE_RAW,
-					strdup("raw"), $1, &@1, &@1)) {
-		free($1);
-		YYABORT;
-	}
+	ABORT_ON(parse_events_term__num(&term, PARSE_EVENTS__TERM_TYPE_CONFIG,
+					NULL, $1, false, &@1, NULL));
 	$$ = term;
 }
 |
-name_or_raw '=' name_or_legacy
+PE_NAME '=' PE_NAME
 {
 	struct parse_events_term *term;
 
@@ -774,7 +766,7 @@ name_or_raw '=' name_or_legacy
 	$$ = term;
 }
 |
-name_or_raw '=' PE_VALUE
+PE_NAME '=' PE_VALUE
 {
 	struct parse_events_term *term;
 
@@ -786,25 +778,12 @@ name_or_raw '=' PE_VALUE
 	$$ = term;
 }
 |
-name_or_raw '=' PE_TERM_HW
+PE_NAME '=' PE_VALUE_SYM_HW
 {
 	struct parse_events_term *term;
+	int config = $3 & 255;
 
-	if (parse_events_term__str(&term, PARSE_EVENTS__TERM_TYPE_USER,
-					$1, $3.str, &@1, &@3)) {
-		free($1);
-		free($3.str);
-		YYABORT;
-	}
-	$$ = term;
-}
-|
-PE_LEGACY_CACHE
-{
-	struct parse_events_term *term;
-
-	if (parse_events_term__num(&term, PARSE_EVENTS__TERM_TYPE_LEGACY_CACHE,
-					$1, 1, true, &@1, NULL)) {
+	if (parse_events_term__sym_hw(&term, $1, config)) {
 		free($1);
 		YYABORT;
 	}
@@ -823,19 +802,16 @@ PE_NAME
 	$$ = term;
 }
 |
-PE_TERM_HW
+PE_VALUE_SYM_HW
 {
 	struct parse_events_term *term;
+	int config = $1 & 255;
 
-	if (parse_events_term__num(&term, PARSE_EVENTS__TERM_TYPE_HARDWARE,
-				   $1.str, $1.num & 255, false, &@1, NULL)) {
-		free($1.str);
-		YYABORT;
-	}
+	ABORT_ON(parse_events_term__sym_hw(&term, NULL, config));
 	$$ = term;
 }
 |
-PE_TERM '=' name_or_legacy
+PE_TERM '=' PE_NAME
 {
 	struct parse_events_term *term;
 
@@ -843,25 +819,6 @@ PE_TERM '=' name_or_legacy
 		free($3);
 		YYABORT;
 	}
-	$$ = term;
-}
-|
-PE_TERM '=' PE_TERM_HW
-{
-	struct parse_events_term *term;
-
-	if (parse_events_term__str(&term, (int)$1, NULL, $3.str, &@1, &@3)) {
-		free($3.str);
-		YYABORT;
-	}
-	$$ = term;
-}
-|
-PE_TERM '=' PE_TERM
-{
-	struct parse_events_term *term;
-
-	ABORT_ON(parse_events_term__term(&term, (int)$1, (int)$3, &@1, &@3));
 	$$ = term;
 }
 |
@@ -881,7 +838,7 @@ PE_TERM
 	$$ = term;
 }
 |
-name_or_raw array '=' name_or_legacy
+PE_NAME array '=' PE_NAME
 {
 	struct parse_events_term *term;
 
@@ -896,7 +853,7 @@ name_or_raw array '=' name_or_legacy
 	$$ = term;
 }
 |
-name_or_raw array '=' PE_VALUE
+PE_NAME array '=' PE_VALUE
 {
 	struct parse_events_term *term;
 

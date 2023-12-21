@@ -11,7 +11,7 @@
 #ifndef __ASM_ARCH_MAP_H
 #define __ASM_ARCH_MAP_H __FILE__
 
-#include "map-base.h"
+#include <mach/map-base.h>
 #include "map-s3c.h"
 
 /*

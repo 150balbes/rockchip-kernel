@@ -37,6 +37,10 @@ void __init fw_meminit(void)
 	free_init_pages_eva = eva ? free_init_pages_eva_malta : NULL;
 }
 
+void __init prom_free_prom_memory(void)
+{
+}
+
 phys_addr_t mips_cdmm_phys_base(void)
 {
 	/* This address is "typically unused" */

@@ -18,7 +18,6 @@
 #include "thread_map.h"
 #include "debug.h"
 #include "event.h"
-#include <internal/threadmap.h>
 
 /* Skip "." and ".." directories */
 static int filter(const struct dirent *dir)

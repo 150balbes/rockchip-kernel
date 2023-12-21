@@ -184,14 +184,8 @@ Gamepads report the following events:
 
   Many pads also have a third button which is branded or has a special symbol
   and meaning. Such buttons are mapped as BTN_MODE. Examples are the Nintendo
-  "HOME" button, the Xbox "X" button or the Sony PlayStation "PS" button.
+  "HOME" button, the XBox "X"-button or Sony "PS" button.
 
 - Rumble:
 
   Rumble is advertised as FF_RUMBLE.
-
-- Profile:
-
-  Some pads provide a multi-value profile selection switch.  An example is the
-  XBox Adaptive and the XBox Elite 2 controllers.  When the active profile is
-  switched, its newly selected value is emitted as an ABS_PROFILE event.

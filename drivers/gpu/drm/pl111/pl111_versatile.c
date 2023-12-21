@@ -15,11 +15,8 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
-#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/vexpress.h>
-
-#include <drm/drm_fourcc.h>
 
 #include "pl111_versatile.h"
 #include "pl111_drm.h"
@@ -317,7 +314,7 @@ static const struct pl111_variant_data pl110_integrator = {
 	.broken_vblank = true,
 	.formats = pl110_integrator_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_integrator_pixel_formats),
-	.fb_depth = 16,
+	.fb_bpp = 16,
 };
 
 /*
@@ -331,7 +328,7 @@ static const struct pl111_variant_data pl110_impd1 = {
 	.broken_vblank = true,
 	.formats = pl110_integrator_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_integrator_pixel_formats),
-	.fb_depth = 15,
+	.fb_bpp = 16,
 };
 
 /*
@@ -344,7 +341,7 @@ static const struct pl111_variant_data pl110_versatile = {
 	.external_bgr = true,
 	.formats = pl110_versatile_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_versatile_pixel_formats),
-	.fb_depth = 16,
+	.fb_bpp = 16,
 };
 
 /*
@@ -356,7 +353,7 @@ static const struct pl111_variant_data pl111_realview = {
 	.name = "PL111 RealView",
 	.formats = pl111_realview_pixel_formats,
 	.nformats = ARRAY_SIZE(pl111_realview_pixel_formats),
-	.fb_depth = 16,
+	.fb_bpp = 16,
 };
 
 /*
@@ -368,7 +365,7 @@ static const struct pl111_variant_data pl111_vexpress = {
 	.name = "PL111 Versatile Express",
 	.formats = pl111_realview_pixel_formats,
 	.nformats = ARRAY_SIZE(pl111_realview_pixel_formats),
-	.fb_depth = 16,
+	.fb_bpp = 16,
 	.broken_clockdivider = true,
 };
 

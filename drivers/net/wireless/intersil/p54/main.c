@@ -139,7 +139,7 @@ static int p54_beacon_update(struct p54_common *priv,
 	struct sk_buff *beacon;
 	int ret;
 
-	beacon = ieee80211_beacon_get(priv->hw, vif, 0);
+	beacon = ieee80211_beacon_get(priv->hw, vif);
 	if (!beacon)
 		return -ENOMEM;
 	ret = p54_beacon_format_ie_tim(beacon);
@@ -404,8 +404,7 @@ static void p54_configure_filter(struct ieee80211_hw *dev,
 }
 
 static int p54_conf_tx(struct ieee80211_hw *dev,
-		       struct ieee80211_vif *vif,
-		       unsigned int link_id, u16 queue,
+		       struct ieee80211_vif *vif, u16 queue,
 		       const struct ieee80211_tx_queue_params *params)
 {
 	struct p54_common *priv = dev->priv;
@@ -450,7 +449,7 @@ static int p54_get_stats(struct ieee80211_hw *dev,
 static void p54_bss_info_changed(struct ieee80211_hw *dev,
 				 struct ieee80211_vif *vif,
 				 struct ieee80211_bss_conf *info,
-				 u64 changed)
+				 u32 changed)
 {
 	struct p54_common *priv = dev->priv;
 
@@ -481,8 +480,8 @@ static void p54_bss_info_changed(struct ieee80211_hw *dev,
 			p54_scan(priv, P54_SCAN_EXIT, 0);
 	}
 	if (changed & BSS_CHANGED_ASSOC) {
-		if (vif->cfg.assoc) {
-			priv->aid = vif->cfg.aid;
+		if (info->assoc) {
+			priv->aid = info->aid;
 			priv->wakeup_timer = info->beacon_int *
 					     info->dtim_period * 5;
 			p54_setup_mac(priv);
@@ -635,7 +634,7 @@ static int p54_get_survey(struct ieee80211_hw *dev, int idx,
 				/*
 				 * hw/fw has not accumulated enough sample sets.
 				 * Wait for 100ms, this ought to be enough to
-				 * get at least one non-null set of channel
+				 * to get at least one non-null set of channel
 				 * usage statistics.
 				 */
 				msleep(100);
@@ -705,7 +704,6 @@ static void p54_set_coverage_class(struct ieee80211_hw *dev,
 
 static const struct ieee80211_ops p54_ops = {
 	.tx			= p54_tx_80211,
-	.wake_tx_queue		= ieee80211_handle_wake_tx_queue,
 	.start			= p54_start,
 	.stop			= p54_stop,
 	.add_interface		= p54_add_interface,
@@ -832,7 +830,7 @@ void p54_free_common(struct ieee80211_hw *dev)
 	kfree(priv->output_limit);
 	kfree(priv->curve_data);
 	kfree(priv->rssi_db);
-	bitmap_free(priv->used_rxkeys);
+	kfree(priv->used_rxkeys);
 	kfree(priv->survey);
 	priv->iq_autocal = NULL;
 	priv->output_limit = NULL;

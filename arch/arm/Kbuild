@@ -9,6 +9,3 @@ obj-y				+= kernel/ mm/ common/
 obj-y				+= probes/
 obj-y				+= net/
 obj-y				+= crypto/
-
-# for cleaning
-subdir- += boot

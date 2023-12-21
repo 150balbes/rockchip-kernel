@@ -10,6 +10,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/regmap.h>
+#include <linux/slab.h>
 
 #include "owl-factor.h"
 

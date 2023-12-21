@@ -44,7 +44,6 @@ void gfs2_assert_i(struct gfs2_sbd *sdp)
  * check_journal_clean - Make sure a journal is clean for a spectator mount
  * @sdp: The GFS2 superblock
  * @jd: The journal descriptor
- * @verbose: Show more prints in the log
  *
  * Returns: 0 if the journal is clean or locked, else an error
  */
@@ -93,18 +92,21 @@ out_unlock:
 }
 
 /**
- * gfs2_freeze_lock_shared - hold the freeze glock
+ * gfs2_freeze_lock - hold the freeze glock
  * @sdp: the superblock
+ * @freeze_gh: pointer to the requested holder
+ * @caller_flags: any additional flags needed by the caller
  */
-int gfs2_freeze_lock_shared(struct gfs2_sbd *sdp)
+int gfs2_freeze_lock(struct gfs2_sbd *sdp, struct gfs2_holder *freeze_gh,
+		     int caller_flags)
 {
+	int flags = LM_FLAG_NOEXP | GL_EXACT | caller_flags;
 	int error;
 
-	error = gfs2_glock_nq_init(sdp->sd_freeze_gl, LM_ST_SHARED,
-				   LM_FLAG_NOEXP | GL_EXACT,
-				   &sdp->sd_freeze_gh);
-	if (error)
-		fs_err(sdp, "can't lock the freeze glock: %d\n", error);
+	error = gfs2_glock_nq_init(sdp->sd_freeze_gl, LM_ST_SHARED, flags,
+				   freeze_gh);
+	if (error && error != GLR_TRYFAILED)
+		fs_err(sdp, "can't lock the freeze lock: %d\n", error);
 	return error;
 }
 
@@ -121,13 +123,13 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 	struct gfs2_inode *ip;
 	struct gfs2_glock *i_gl;
 	u64 no_formal_ino;
+	int log_write_allowed = test_bit(SDF_JOURNAL_LIVE, &sdp->sd_flags);
 	int ret = 0;
 	int tries;
 
 	if (test_bit(SDF_NORECOVERY, &sdp->sd_flags) || !sdp->sd_jdesc)
 		return;
 
-	gfs2_ail_drain(sdp); /* frees all transactions */
 	inode = sdp->sd_jdesc->jd_inode;
 	ip = GFS2_I(inode);
 	i_gl = ip->i_gl;
@@ -148,18 +150,19 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 	 */
 	clear_bit(SDF_JOURNAL_LIVE, &sdp->sd_flags);
 	if (!sb_rdonly(sdp->sd_vfs)) {
-		bool locked = mutex_trylock(&sdp->sd_freeze_mutex);
+		struct gfs2_holder freeze_gh;
 
-		gfs2_make_fs_ro(sdp);
-
-		if (locked)
-			mutex_unlock(&sdp->sd_freeze_mutex);
-
-		/*
-		 * Dequeue any pending non-system glock holders that can no
-		 * longer be granted because the file system is withdrawn.
-		 */
-		gfs2_gl_dq_holders(sdp);
+		gfs2_holder_mark_uninitialized(&freeze_gh);
+		if (sdp->sd_freeze_gl &&
+		    !gfs2_glock_is_locked_by_me(sdp->sd_freeze_gl)) {
+			ret = gfs2_freeze_lock(sdp, &freeze_gh,
+				       log_write_allowed ? 0 : LM_FLAG_TRY);
+			if (ret == GLR_TRYFAILED)
+				ret = 0;
+		}
+		if (!ret)
+			ret = gfs2_make_fs_ro(sdp);
+		gfs2_freeze_unlock(&freeze_gh);
 	}
 
 	if (sdp->sd_lockstruct.ls_ops->lm_lock == NULL) { /* lock_nolock */
@@ -177,8 +180,15 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 	}
 	sdp->sd_jinode_gh.gh_flags |= GL_NOCACHE;
 	gfs2_glock_dq(&sdp->sd_jinode_gh);
-	gfs2_thaw_freeze_initiator(sdp->sd_vfs);
-	wait_on_bit(&i_gl->gl_flags, GLF_DEMOTE, TASK_UNINTERRUPTIBLE);
+	if (test_bit(SDF_FS_FROZEN, &sdp->sd_flags)) {
+		/* Make sure gfs2_unfreeze works if partially-frozen */
+		flush_workqueue(gfs2_freeze_wq);
+		atomic_set(&sdp->sd_freeze_state, SFS_FROZEN);
+		thaw_super(sdp->sd_vfs);
+	} else {
+		wait_on_bit(&i_gl->gl_flags, GLF_DEMOTE,
+			    TASK_UNINTERRUPTIBLE);
+	}
 
 	/*
 	 * holder_uninit to force glock_put, to force dlm to let go
@@ -192,7 +202,6 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 	 * exception code in glock_dq.
 	 */
 	iput(inode);
-	sdp->sd_jdesc->jd_inode = NULL;
 	/*
 	 * Wait until the journal inode's glock is freed. This allows try locks
 	 * on other nodes to be successful, otherwise we remain the owner of
@@ -215,8 +224,7 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 	 */
 	fs_warn(sdp, "Requesting recovery of jid %d.\n",
 		sdp->sd_lockstruct.ls_jid);
-	gfs2_holder_reinit(LM_ST_EXCLUSIVE,
-			   LM_FLAG_TRY_1CB | LM_FLAG_NOEXP | GL_NOPID,
+	gfs2_holder_reinit(LM_ST_EXCLUSIVE, LM_FLAG_TRY_1CB | LM_FLAG_NOEXP,
 			   &sdp->sd_live_gh);
 	msleep(GL_GLOCK_MAX_HOLD);
 	/*
@@ -241,8 +249,7 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 			fs_warn(sdp, "Unable to recover our journal jid %d.\n",
 				sdp->sd_lockstruct.ls_jid);
 		gfs2_glock_dq_wait(&sdp->sd_live_gh);
-		gfs2_holder_reinit(LM_ST_SHARED,
-				   LM_FLAG_NOEXP | GL_EXACT | GL_NOPID,
+		gfs2_holder_reinit(LM_ST_SHARED, LM_FLAG_NOEXP | GL_EXACT,
 				   &sdp->sd_live_gh);
 		gfs2_glock_nq(&sdp->sd_live_gh);
 	}
@@ -269,7 +276,6 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 		goto skip_recovery;
 	}
 	sdp->sd_jdesc->jd_inode = inode;
-	d_mark_dontcache(inode);
 
 	/*
 	 * Now wait until recovery is complete.
@@ -287,7 +293,7 @@ skip_recovery:
 		fs_warn(sdp, "Journal recovery complete for jid %d.\n",
 			sdp->sd_lockstruct.ls_jid);
 	else
-		fs_warn(sdp, "Journal recovery skipped for jid %d until next "
+		fs_warn(sdp, "Journal recovery skipped for %d until next "
 			"mount.\n", sdp->sd_lockstruct.ls_jid);
 	fs_warn(sdp, "Glock dequeues delayed: %lu\n", sdp->sd_glock_dqs_held);
 	sdp->sd_glock_dqs_held = 0;
@@ -356,7 +362,7 @@ int gfs2_withdraw(struct gfs2_sbd *sdp)
 	return -1;
 }
 
-/*
+/**
  * gfs2_assert_withdraw_i - Cause the machine to withdraw if @assertion is false
  */
 
@@ -386,7 +392,7 @@ void gfs2_assert_withdraw_i(struct gfs2_sbd *sdp, char *assertion,
 	dump_stack();
 }
 
-/*
+/**
  * gfs2_assert_warn_i - Print a message to the console if @assertion is false
  */
 
@@ -416,7 +422,7 @@ void gfs2_assert_warn_i(struct gfs2_sbd *sdp, char *assertion,
 	sdp->sd_last_warning = jiffies;
 }
 
-/*
+/**
  * gfs2_consist_i - Flag a filesystem consistency error and withdraw
  */
 
@@ -429,7 +435,7 @@ void gfs2_consist_i(struct gfs2_sbd *sdp, const char *function,
 	gfs2_withdraw(sdp);
 }
 
-/*
+/**
  * gfs2_consist_inode_i - Flag an inode consistency error and withdraw
  */
 
@@ -445,11 +451,10 @@ void gfs2_consist_inode_i(struct gfs2_inode *ip,
 		(unsigned long long)ip->i_no_formal_ino,
 		(unsigned long long)ip->i_no_addr,
 		function, file, line);
-	gfs2_dump_glock(NULL, ip->i_gl, 1);
 	gfs2_withdraw(sdp);
 }
 
-/*
+/**
  * gfs2_consist_rgrpd_i - Flag a RG consistency error and withdraw
  */
 
@@ -467,11 +472,10 @@ void gfs2_consist_rgrpd_i(struct gfs2_rgrpd *rgd,
 		"  function = %s, file = %s, line = %u\n",
 		(unsigned long long)rgd->rd_addr,
 		function, file, line);
-	gfs2_dump_glock(NULL, rgd->rd_gl, 1);
 	gfs2_withdraw(sdp);
 }
 
-/*
+/**
  * gfs2_meta_check_ii - Flag a magic number consistency error and withdraw
  * Returns: -1 if this call withdrew the machine,
  *          -2 if it was already withdrawn
@@ -493,7 +497,7 @@ int gfs2_meta_check_ii(struct gfs2_sbd *sdp, struct buffer_head *bh,
 	return (me) ? -1 : -2;
 }
 
-/*
+/**
  * gfs2_metatype_check_ii - Flag a metadata type consistency error and withdraw
  * Returns: -1 if this call withdrew the machine,
  *          -2 if it was already withdrawn
@@ -515,7 +519,7 @@ int gfs2_metatype_check_ii(struct gfs2_sbd *sdp, struct buffer_head *bh,
 	return (me) ? -1 : -2;
 }
 
-/*
+/**
  * gfs2_io_error_i - Flag an I/O error and withdraw
  * Returns: -1 if this call withdrew the machine,
  *          0 if it was already withdrawn
@@ -531,7 +535,7 @@ int gfs2_io_error_i(struct gfs2_sbd *sdp, const char *function, char *file,
 	return gfs2_withdraw(sdp);
 }
 
-/*
+/**
  * gfs2_io_error_bh_i - Flag a buffer I/O error
  * @withdraw: withdraw the filesystem
  */

@@ -8,9 +8,9 @@
 	.globl system_certificate_list
 system_certificate_list:
 __cert_list_start:
-__module_cert_start:
+#ifdef CONFIG_MODULE_SIG
 	.incbin "certs/signing_key.x509"
-__module_cert_end:
+#endif
 	.incbin "certs/x509_certificate_list"
 __cert_list_end:
 
@@ -34,13 +34,4 @@ system_certificate_list_size:
 	.quad __cert_list_end - __cert_list_start
 #else
 	.long __cert_list_end - __cert_list_start
-#endif
-
-	.align 8
-	.globl module_cert_size
-module_cert_size:
-#ifdef CONFIG_64BIT
-	.quad __module_cert_end - __module_cert_start
-#else
-	.long __module_cert_end - __module_cert_start
 #endif

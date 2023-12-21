@@ -111,6 +111,7 @@
 		vin-supply = <&dc_in>;
 
 		gpio = <&gpio GPIOH_8 GPIO_OPEN_DRAIN>;
+		enable-active-low;
 	};
 
 	vddao_1v8: regulator-vddao_1v8 {
@@ -149,7 +150,7 @@
 
 	sound {
 		compatible = "amlogic,axg-sound-card";
-		model = "X96-MAX";
+		model = "G12A-X96-MAX";
 		audio-aux-devs = <&tdmout_b>;
 		audio-routing = "TDMOUT_B IN 0", "FRDDR_A OUT 1",
 				"TDMOUT_B IN 1", "FRDDR_B OUT 1",

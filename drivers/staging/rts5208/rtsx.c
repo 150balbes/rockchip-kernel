@@ -118,9 +118,9 @@ static int slave_configure(struct scsi_device *sdev)
 
 /* queue a command */
 /* This is always called with scsi_lock(host) held */
-static int queuecommand_lck(struct scsi_cmnd *srb)
+static int queuecommand_lck(struct scsi_cmnd *srb,
+			    void (*done)(struct scsi_cmnd *))
 {
-	void (*done)(struct scsi_cmnd *) = scsi_done;
 	struct rtsx_dev *dev = host_to_rtsx(srb->device->host);
 	struct rtsx_chip *chip = dev->chip;
 
@@ -140,6 +140,7 @@ static int queuecommand_lck(struct scsi_cmnd *srb)
 	}
 
 	/* enqueue the command and wake up the control thread */
+	srb->scsi_done = done;
 	chip->srb = srb;
 	complete(&dev->cmnd_ready);
 
@@ -158,6 +159,8 @@ static int command_abort(struct scsi_cmnd *srb)
 	struct Scsi_Host *host = srb->device->host;
 	struct rtsx_dev *dev = host_to_rtsx(host);
 	struct rtsx_chip *chip = dev->chip;
+
+	dev_info(&dev->pci->dev, "%s called\n", __func__);
 
 	scsi_lock(host);
 
@@ -184,6 +187,10 @@ static int command_abort(struct scsi_cmnd *srb)
  */
 static int device_reset(struct scsi_cmnd *srb)
 {
+	struct rtsx_dev *dev = host_to_rtsx(srb->device->host);
+
+	dev_info(&dev->pci->dev, "%s called\n", __func__);
+
 	return SUCCESS;
 }
 
@@ -191,7 +198,7 @@ static int device_reset(struct scsi_cmnd *srb)
  * this defines our host template, with which we'll allocate hosts
  */
 
-static const struct scsi_host_template rtsx_host_template = {
+static struct scsi_host_template rtsx_host_template = {
 	/* basic userland interface stuff */
 	.name =				CR_DRIVER_NAME,
 	.proc_name =			CR_DRIVER_NAME,
@@ -382,21 +389,27 @@ static int rtsx_control_thread(void *__dev)
 		if (chip->srb->sc_data_direction == DMA_BIDIRECTIONAL) {
 			dev_err(&dev->pci->dev, "UNKNOWN data direction\n");
 			chip->srb->result = DID_ERROR << 16;
-		} else if (chip->srb->device->id) {
-			/* reject if target != 0 or if LUN is higher than
-			 * the maximum known LUN
-			 */
+		}
+
+		/* reject if target != 0 or if LUN is higher than
+		 * the maximum known LUN
+		 */
+		else if (chip->srb->device->id) {
 			dev_err(&dev->pci->dev, "Bad target number (%d:%d)\n",
 				chip->srb->device->id,
 				(u8)chip->srb->device->lun);
 			chip->srb->result = DID_BAD_TARGET << 16;
-		} else if (chip->srb->device->lun > chip->max_lun) {
+		}
+
+		else if (chip->srb->device->lun > chip->max_lun) {
 			dev_err(&dev->pci->dev, "Bad LUN (%d:%d)\n",
 				chip->srb->device->id,
 				(u8)chip->srb->device->lun);
 			chip->srb->result = DID_BAD_TARGET << 16;
-		} else {
-			/* we've got a command, let's do it! */
+		}
+
+		/* we've got a command, let's do it! */
+		else {
 			scsi_show_command(chip);
 			rtsx_invoke_transport(chip->srb, chip);
 		}
@@ -410,7 +423,7 @@ static int rtsx_control_thread(void *__dev)
 
 		/* indicate that the command is done */
 		else if (chip->srb->result != DID_ABORT << 16) {
-			scsi_done(chip->srb);
+			chip->srb->scsi_done(chip->srb);
 		} else {
 skip_for_abort:
 			dev_err(&dev->pci->dev, "scsi command aborted\n");
@@ -438,13 +451,13 @@ skip_for_abort:
 	 * after the down() -- that's necessary for the thread-shutdown
 	 * case.
 	 *
-	 * kthread_complete_and_exit() goes even further than this --
-	 * it is safe in the case that the thread of the caller is going away
-	 * (not just the structure) -- this is necessary for the module-remove
-	 * case.  This is important in preemption kernels, which transfer the
-	 * flow of execution immediately upon a complete().
+	 * complete_and_exit() goes even further than this -- it is safe in
+	 * the case that the thread of the caller is going away (not just
+	 * the structure) -- this is necessary for the module-remove case.
+	 * This is important in preemption kernels, which transfer the flow
+	 * of execution immediately upon a complete().
 	 */
-	kthread_complete_and_exit(&dev->control_exit, 0);
+	complete_and_exit(&dev->control_exit, 0);
 }
 
 static int rtsx_polling_thread(void *__dev)
@@ -489,7 +502,7 @@ static int rtsx_polling_thread(void *__dev)
 		mutex_unlock(&dev->dev_mutex);
 	}
 
-	kthread_complete_and_exit(&dev->polling_exit, 0);
+	complete_and_exit(&dev->polling_exit, 0);
 }
 
 /*
@@ -545,7 +558,7 @@ static irqreturn_t rtsx_interrupt(int irq, void *dev_id)
 				complete(dev->done);
 		} else if (status & DATA_DONE_INT) {
 			dev->trans_result = TRANS_NOT_READY;
-			if (dev->done && dev->trans_state == STATE_TRANS_SG)
+			if (dev->done && (dev->trans_state == STATE_TRANS_SG))
 				complete(dev->done);
 		}
 	}
@@ -622,7 +635,7 @@ static void quiesce_and_remove_host(struct rtsx_dev *dev)
 	if (chip->srb) {
 		chip->srb->result = DID_NO_CONNECT << 16;
 		scsi_lock(host);
-		scsi_done(dev->chip->srb);
+		chip->srb->scsi_done(dev->chip->srb);
 		chip->srb = NULL;
 		scsi_unlock(host);
 	}
@@ -670,7 +683,7 @@ static int rtsx_scan_thread(void *__dev)
 		/* Should we unbind if no devices were detected? */
 	}
 
-	kthread_complete_and_exit(&dev->scanning_done, 0);
+	complete_and_exit(&dev->scanning_done, 0);
 }
 
 static void rtsx_init_options(struct rtsx_chip *chip)
@@ -955,6 +968,8 @@ scsi_host_alloc_fail:
 static void rtsx_remove(struct pci_dev *pci)
 {
 	struct rtsx_dev *dev = pci_get_drvdata(pci);
+
+	dev_info(&pci->dev, "%s called\n", __func__);
 
 	quiesce_and_remove_host(dev);
 	release_everything(dev);

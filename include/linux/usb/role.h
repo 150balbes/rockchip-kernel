@@ -65,7 +65,6 @@ void usb_role_switch_unregister(struct usb_role_switch *sw);
 
 void usb_role_switch_set_drvdata(struct usb_role_switch *sw, void *data);
 void *usb_role_switch_get_drvdata(struct usb_role_switch *sw);
-const char *usb_role_string(enum usb_role role);
 #else
 static inline int usb_role_switch_set_role(struct usb_role_switch *sw,
 		enum usb_role role)
@@ -114,11 +113,6 @@ usb_role_switch_set_drvdata(struct usb_role_switch *sw, void *data)
 static inline void *usb_role_switch_get_drvdata(struct usb_role_switch *sw)
 {
 	return NULL;
-}
-
-static inline const char *usb_role_string(enum usb_role role)
-{
-	return "unknown";
 }
 
 #endif

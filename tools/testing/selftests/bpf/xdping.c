@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <sys/resource.h>
 #include <net/if.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -21,14 +22,13 @@
 #include "bpf/libbpf.h"
 
 #include "xdping.h"
-#include "testing_helpers.h"
 
 static int ifindex;
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
 
 static void cleanup(int sig)
 {
-	bpf_xdp_detach(ifindex, xdp_flags, NULL);
+	bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
 	if (sig)
 		exit(1);
 }
@@ -88,6 +88,7 @@ int main(int argc, char **argv)
 {
 	__u32 mode_flags = XDP_FLAGS_DRV_MODE | XDP_FLAGS_SKB_MODE;
 	struct addrinfo *a, hints = { .ai_family = AF_INET };
+	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	__u16 count = XDPING_DEFAULT_COUNT;
 	struct pinginfo pinginfo = { 0 };
 	const char *optstr = "c:I:NsS";
@@ -165,18 +166,21 @@ int main(int argc, char **argv)
 		freeaddrinfo(a);
 	}
 
-	/* Use libbpf 1.0 API mode */
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+	if (setrlimit(RLIMIT_MEMLOCK, &r)) {
+		perror("setrlimit(RLIMIT_MEMLOCK)");
+		return 1;
+	}
 
-	snprintf(filename, sizeof(filename), "%s_kern.bpf.o", argv[0]);
+	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 
-	if (bpf_prog_test_load(filename, BPF_PROG_TYPE_XDP, &obj, &prog_fd)) {
+	if (bpf_prog_load(filename, BPF_PROG_TYPE_XDP, &obj, &prog_fd)) {
 		fprintf(stderr, "load of %s failed\n", filename);
 		return 1;
 	}
 
-	main_prog = bpf_object__find_program_by_name(obj,
-						     server ? "xdping_server" : "xdping_client");
+	main_prog = bpf_object__find_program_by_title(obj,
+						      server ? "xdpserver" :
+							       "xdpclient");
 	if (main_prog)
 		prog_fd = bpf_program__fd(main_prog);
 	if (!main_prog || prog_fd < 0) {
@@ -184,7 +188,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	map = bpf_object__next_map(obj, NULL);
+	map = bpf_map__next(NULL, obj);
 	if (map)
 		map_fd = bpf_map__fd(map);
 	if (!map || map_fd < 0) {
@@ -199,7 +203,7 @@ int main(int argc, char **argv)
 
 	printf("XDP setup disrupts network connectivity, hit Ctrl+C to quit\n");
 
-	if (bpf_xdp_attach(ifindex, prog_fd, xdp_flags, NULL) < 0) {
+	if (bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags) < 0) {
 		fprintf(stderr, "Link set xdp fd failed for %s\n", ifname);
 		goto done;
 	}

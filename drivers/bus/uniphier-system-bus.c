@@ -176,9 +176,10 @@ static int uniphier_system_bus_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct uniphier_system_bus_priv *priv;
-	struct of_range_parser parser;
-	struct of_range range;
-	int ret;
+	const __be32 *ranges;
+	u32 cells, addr, size;
+	u64 paddr;
+	int pna, bank, rlen, rone, ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -190,17 +191,48 @@ static int uniphier_system_bus_probe(struct platform_device *pdev)
 
 	priv->dev = dev;
 
-	ret = of_range_parser_init(&parser, dev->of_node);
-	if (ret)
-		return ret;
+	pna = of_n_addr_cells(dev->of_node);
 
-	for_each_of_range(&parser, &range) {
-		if (range.cpu_addr == OF_BAD_ADDR)
+	ret = of_property_read_u32(dev->of_node, "#address-cells", &cells);
+	if (ret) {
+		dev_err(dev, "failed to get #address-cells\n");
+		return ret;
+	}
+	if (cells != 2) {
+		dev_err(dev, "#address-cells must be 2\n");
+		return -EINVAL;
+	}
+
+	ret = of_property_read_u32(dev->of_node, "#size-cells", &cells);
+	if (ret) {
+		dev_err(dev, "failed to get #size-cells\n");
+		return ret;
+	}
+	if (cells != 1) {
+		dev_err(dev, "#size-cells must be 1\n");
+		return -EINVAL;
+	}
+
+	ranges = of_get_property(dev->of_node, "ranges", &rlen);
+	if (!ranges) {
+		dev_err(dev, "failed to get ranges property\n");
+		return -ENOENT;
+	}
+
+	rlen /= sizeof(*ranges);
+	rone = pna + 2;
+
+	for (; rlen >= rone; rlen -= rone) {
+		bank = be32_to_cpup(ranges++);
+		addr = be32_to_cpup(ranges++);
+		paddr = of_translate_address(dev->of_node, ranges);
+		if (paddr == OF_BAD_ADDR)
 			return -EINVAL;
-		ret = uniphier_system_bus_add_bank(priv,
-						   upper_32_bits(range.bus_addr),
-						   lower_32_bits(range.bus_addr),
-						   range.cpu_addr, range.size);
+		ranges += pna;
+		size = be32_to_cpup(ranges++);
+
+		ret = uniphier_system_bus_add_bank(priv, bank, addr,
+						   paddr, size);
 		if (ret)
 			return ret;
 	}

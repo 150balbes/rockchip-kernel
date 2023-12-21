@@ -77,13 +77,9 @@
 #define static_assert(expr, ...) __static_assert(expr, ##__VA_ARGS__, #expr)
 #define __static_assert(expr, msg, ...) _Static_assert(expr, msg)
 
-
-/*
- * Compile time check that field has an expected offset
- */
-#define ASSERT_STRUCT_OFFSET(type, field, expected_offset)	\
-	BUILD_BUG_ON_MSG(offsetof(type, field) != (expected_offset),	\
-		"Offset of " #field " in " #type " has changed.")
-
+#ifdef __GENKSYMS__
+/* genksyms gets confused by _Static_assert */
+#define _Static_assert(expr, ...)
+#endif
 
 #endif	/* _LINUX_BUILD_BUG_H */

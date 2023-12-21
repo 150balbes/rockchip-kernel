@@ -160,7 +160,7 @@ struct l2tp_tunnel {
 	unsigned long		dead;
 
 	struct rcu_head rcu;
-	spinlock_t		hlist_lock;	/* write-protection for session_hlist */
+	rwlock_t		hlist_lock;	/* protect session_hlist */
 	bool			acpt_newsess;	/* indicates whether this tunnel accepts
 						 * new sessions. Protected by hlist_lock.
 						 */
@@ -272,7 +272,7 @@ int l2tp_nl_register_ops(enum l2tp_pwtype pw_type, const struct l2tp_nl_cmd_ops 
 void l2tp_nl_unregister_ops(enum l2tp_pwtype pw_type);
 
 /* IOCTL helper for IP encap modules. */
-int l2tp_ioctl(struct sock *sk, int cmd, int *karg);
+int l2tp_ioctl(struct sock *sk, int cmd, unsigned long arg);
 
 /* Extract the tunnel structure from a socket's sk_user_data pointer,
  * validating the tunnel magic feather.

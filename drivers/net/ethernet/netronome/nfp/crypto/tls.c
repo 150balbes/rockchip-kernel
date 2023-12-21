@@ -289,14 +289,14 @@ nfp_net_tls_add(struct net_device *netdev, struct sock *sk,
 	switch (sk->sk_family) {
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
-		if (ipv6_only_sock(sk) ||
+		if (sk->sk_ipv6only ||
 		    ipv6_addr_type(&sk->sk_v6_daddr) != IPV6_ADDR_MAPPED) {
 			req_sz = sizeof(struct nfp_crypto_req_add_v6);
 			ipv6 = true;
 			break;
 		}
-		fallthrough;
 #endif
+		fallthrough;
 	case AF_INET:
 		req_sz = sizeof(struct nfp_crypto_req_add_v4);
 		ipv6 = false;
@@ -474,7 +474,6 @@ int nfp_net_tls_rx_resync_req(struct net_device *netdev,
 {
 	struct nfp_net *nn = netdev_priv(netdev);
 	struct nfp_net_tls_offload_ctx *ntls;
-	struct net *net = dev_net(netdev);
 	struct ipv6hdr *ipv6h;
 	struct tcphdr *th;
 	struct iphdr *iph;
@@ -493,15 +492,15 @@ int nfp_net_tls_rx_resync_req(struct net_device *netdev,
 		goto err_cnt_ign;
 	}
 
-	switch (ipv6h->version) {
+	switch (iph->version) {
 	case 4:
-		sk = inet_lookup_established(net, net->ipv4.tcp_death_row.hashinfo,
+		sk = inet_lookup_established(dev_net(netdev), &tcp_hashinfo,
 					     iph->saddr, th->source, iph->daddr,
 					     th->dest, netdev->ifindex);
 		break;
 #if IS_ENABLED(CONFIG_IPV6)
 	case 6:
-		sk = __inet6_lookup_established(net, net->ipv4.tcp_death_row.hashinfo,
+		sk = __inet6_lookup_established(dev_net(netdev), &tcp_hashinfo,
 						&ipv6h->saddr, th->source,
 						&ipv6h->daddr, ntohs(th->dest),
 						netdev->ifindex, 0);

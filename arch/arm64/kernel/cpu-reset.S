@@ -8,16 +8,16 @@
  */
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 #include <asm/assembler.h>
 #include <asm/sysreg.h>
 #include <asm/virt.h>
 
 .text
-.pushsection    .idmap.text, "a"
+.pushsection    .idmap.text, "awx"
 
 /*
- * cpu_soft_restart(el2_switch, entry, arg0, arg1, arg2)
+ * __cpu_soft_restart(el2_switch, entry, arg0, arg1, arg2) - Helper for
+ * cpu_soft_restart.
  *
  * @el2_switch: Flag to indicate a switch to EL2 is needed.
  * @entry: Location to jump to for soft reset.
@@ -29,7 +29,7 @@
  * branch to what would be the reset vector. It must be executed with the
  * flat identity mapping.
  */
-SYM_TYPED_FUNC_START(cpu_soft_restart)
+SYM_CODE_START(__cpu_soft_restart)
 	mov_q	x12, INIT_SCTLR_EL1_MMU_OFF
 	pre_disable_mmu_workaround
 	/*
@@ -48,6 +48,6 @@ SYM_TYPED_FUNC_START(cpu_soft_restart)
 	mov	x1, x3				// arg1
 	mov	x2, x4				// arg2
 	br	x8
-SYM_FUNC_END(cpu_soft_restart)
+SYM_CODE_END(__cpu_soft_restart)
 
 .popsection

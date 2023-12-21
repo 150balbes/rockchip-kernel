@@ -55,17 +55,18 @@ flags the caller provides. The caller is required to pass in a non-null struct
 pages* array, and the function then pins pages by incrementing each by a special
 value: GUP_PIN_COUNTING_BIAS.
 
-For large folios, the GUP_PIN_COUNTING_BIAS scheme is not used. Instead,
-the extra space available in the struct folio is used to store the
-pincount directly.
+For huge pages (and in fact, any compound page of more than 2 pages), the
+GUP_PIN_COUNTING_BIAS scheme is not used. Instead, an exact form of pin counting
+is achieved, by using the 3rd struct page in the compound page. A new struct
+page field, hpage_pinned_refcount, has been added in order to support this.
 
-This approach for large folios avoids the counting upper limit problems
-that are discussed below. Those limitations would have been aggravated
-severely by huge pages, because each tail page adds a refcount to the
-head page. And in fact, testing revealed that, without a separate pincount
-field, refcount overflows were seen in some huge page stress tests.
+This approach for compound pages avoids the counting upper limit problems that
+are discussed below. Those limitations would have been aggravated severely by
+huge pages, because each tail page adds a refcount to the head page. And in
+fact, testing revealed that, without a separate hpage_pinned_refcount field,
+page overflows were seen in some huge page stress tests.
 
-This also means that huge pages and large folios do not suffer
+This also means that huge pages and compound pages (of order > 1) do not suffer
 from the false positives problem that is mentioned below.::
 
  Function
@@ -111,12 +112,6 @@ pages:
 
 This also leads to limitations: there are only 31-10==21 bits available for a
 counter that increments 10 bits at a time.
-
-* Because of that limitation, special handling is applied to the zero pages
-  when using FOLL_PIN.  We only pretend to pin a zero page - we don't alter its
-  refcount or pincount at all (it is permanent, so there's no need).  The
-  unpinning functions also don't do anything to a zero page.  This is
-  transparent to the caller.
 
 * Callers must specifically request "dma-pinned tracking of pages". In other
   words, just calling get_user_pages() will not suffice; a new set of functions,
@@ -226,12 +221,12 @@ Unit testing
 ============
 This file::
 
- tools/testing/selftests/mm/gup_test.c
+ tools/testing/selftests/vm/gup_benchmark.c
 
 has the following new calls to exercise the new pin*() wrapper functions:
 
-* PIN_FAST_BENCHMARK (./gup_test -a)
-* PIN_BASIC_TEST (./gup_test -b)
+* PIN_FAST_BENCHMARK (./gup_benchmark -a)
+* PIN_BENCHMARK (./gup_benchmark -b)
 
 You can monitor how many total dma-pinned pages have been acquired and released
 since the system was booted, via two new /proc/vmstat entries: ::
@@ -269,9 +264,9 @@ place.)
 Other diagnostics
 =================
 
-dump_page() has been enhanced slightly to handle these new counting
-fields, and to better report on large folios in general.  Specifically,
-for large folios, the exact pincount is reported.
+dump_page() has been enhanced slightly, to handle these new counting fields, and
+to better report on compound pages in general. Specifically, for compound pages
+with order > 1, the exact (hpage_pinned_refcount) pincount is reported.
 
 References
 ==========

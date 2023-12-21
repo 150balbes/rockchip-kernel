@@ -10,7 +10,6 @@
 
 #include <linux/cpumask.h>
 
-#include <asm/smp.h>
 #include <asm/types.h>
 
 struct mpidr_hash {

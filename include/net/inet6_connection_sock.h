@@ -11,8 +11,6 @@
 
 #include <linux/types.h>
 
-struct flowi;
-struct flowi6;
 struct request_sock;
 struct sk_buff;
 struct sock;

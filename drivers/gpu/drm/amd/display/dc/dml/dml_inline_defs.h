@@ -76,9 +76,14 @@ static inline double dml_floor(double a, double granularity)
 
 static inline double dml_round(double a)
 {
-	const double round_pt = 0.5;
+	double round_pt = 0.5;
+	double ceil = dml_ceil(a, 1);
+	double floor = dml_floor(a, 1);
 
-	return dml_floor(a + round_pt, 1);
+	if (a - floor >= round_pt)
+		return ceil;
+	else
+		return floor;
 }
 
 /* float

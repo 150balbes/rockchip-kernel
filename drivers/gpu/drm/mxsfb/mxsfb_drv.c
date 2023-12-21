@@ -20,12 +20,12 @@
 #include <drm/drm_bridge.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_irq.h>
 #include <drm/drm_mode_config.h>
-#include <drm/drm_module.h>
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
@@ -52,7 +52,6 @@ static const struct mxsfb_devdata mxsfb_devdata[] = {
 		.hs_wdth_shift	= 24,
 		.has_overlay	= false,
 		.has_ctrl2	= false,
-		.has_crc32	= false,
 	},
 	[MXSFB_V4] = {
 		.transfer_count	= LCDC_V4_TRANSFER_COUNT,
@@ -62,7 +61,6 @@ static const struct mxsfb_devdata mxsfb_devdata[] = {
 		.hs_wdth_shift	= 18,
 		.has_overlay	= false,
 		.has_ctrl2	= true,
-		.has_crc32	= true,
 	},
 	[MXSFB_V6] = {
 		.transfer_count	= LCDC_V4_TRANSFER_COUNT,
@@ -72,18 +70,19 @@ static const struct mxsfb_devdata mxsfb_devdata[] = {
 		.hs_wdth_shift	= 18,
 		.has_overlay	= true,
 		.has_ctrl2	= true,
-		.has_crc32	= true,
 	},
 };
 
 void mxsfb_enable_axi_clk(struct mxsfb_drm_private *mxsfb)
 {
-	clk_prepare_enable(mxsfb->clk_axi);
+	if (mxsfb->clk_axi)
+		clk_prepare_enable(mxsfb->clk_axi);
 }
 
 void mxsfb_disable_axi_clk(struct mxsfb_drm_private *mxsfb)
 {
-	clk_disable_unprepare(mxsfb->clk_axi);
+	if (mxsfb->clk_axi)
+		clk_disable_unprepare(mxsfb->clk_axi);
 }
 
 static struct drm_framebuffer *
@@ -154,60 +153,6 @@ static int mxsfb_attach_bridge(struct mxsfb_drm_private *mxsfb)
 	return 0;
 }
 
-static irqreturn_t mxsfb_irq_handler(int irq, void *data)
-{
-	struct drm_device *drm = data;
-	struct mxsfb_drm_private *mxsfb = drm->dev_private;
-	u32 reg, crc;
-	u64 vbc;
-
-	reg = readl(mxsfb->base + LCDC_CTRL1);
-
-	if (reg & CTRL1_CUR_FRAME_DONE_IRQ) {
-		drm_crtc_handle_vblank(&mxsfb->crtc);
-		if (mxsfb->crc_active) {
-			crc = readl(mxsfb->base + LCDC_V4_CRC_STAT);
-			vbc = drm_crtc_accurate_vblank_count(&mxsfb->crtc);
-			drm_crtc_add_crc_entry(&mxsfb->crtc, true, vbc, &crc);
-		}
-	}
-
-	writel(CTRL1_CUR_FRAME_DONE_IRQ, mxsfb->base + LCDC_CTRL1 + REG_CLR);
-
-	return IRQ_HANDLED;
-}
-
-static void mxsfb_irq_disable(struct drm_device *drm)
-{
-	struct mxsfb_drm_private *mxsfb = drm->dev_private;
-
-	mxsfb_enable_axi_clk(mxsfb);
-
-	/* Disable and clear VBLANK IRQ */
-	writel(CTRL1_CUR_FRAME_DONE_IRQ_EN, mxsfb->base + LCDC_CTRL1 + REG_CLR);
-	writel(CTRL1_CUR_FRAME_DONE_IRQ, mxsfb->base + LCDC_CTRL1 + REG_CLR);
-
-	mxsfb_disable_axi_clk(mxsfb);
-}
-
-static int mxsfb_irq_install(struct drm_device *dev, int irq)
-{
-	if (irq == IRQ_NOTCONNECTED)
-		return -ENOTCONN;
-
-	mxsfb_irq_disable(dev);
-
-	return request_irq(irq, mxsfb_irq_handler, 0,  dev->driver->name, dev);
-}
-
-static void mxsfb_irq_uninstall(struct drm_device *dev)
-{
-	struct mxsfb_drm_private *mxsfb = dev->dev_private;
-
-	mxsfb_irq_disable(dev);
-	free_irq(mxsfb->irq, dev);
-}
-
 static int mxsfb_load(struct drm_device *drm,
 		      const struct mxsfb_devdata *devdata)
 {
@@ -233,9 +178,9 @@ static int mxsfb_load(struct drm_device *drm,
 	if (IS_ERR(mxsfb->clk))
 		return PTR_ERR(mxsfb->clk);
 
-	mxsfb->clk_axi = devm_clk_get_optional(drm->dev, "axi");
+	mxsfb->clk_axi = devm_clk_get(drm->dev, "axi");
 	if (IS_ERR(mxsfb->clk_axi))
-		return PTR_ERR(mxsfb->clk_axi);
+		mxsfb->clk_axi = NULL;
 
 	mxsfb->clk_disp_axi = devm_clk_get(drm->dev, "disp_axi");
 	if (IS_ERR(mxsfb->clk_disp_axi))
@@ -267,7 +212,8 @@ static int mxsfb_load(struct drm_device *drm,
 
 	ret = mxsfb_attach_bridge(mxsfb);
 	if (ret) {
-		dev_err_probe(drm->dev, ret, "Cannot connect bridge\n");
+		if (ret != -EPROBE_DEFER)
+			dev_err(drm->dev, "Cannot connect bridge: %d\n", ret);
 		goto err_vblank;
 	}
 
@@ -280,13 +226,8 @@ static int mxsfb_load(struct drm_device *drm,
 
 	drm_mode_config_reset(drm);
 
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
-		goto err_vblank;
-	mxsfb->irq = ret;
-
 	pm_runtime_get_sync(drm->dev);
-	ret = mxsfb_irq_install(drm, mxsfb->irq);
+	ret = drm_irq_install(drm, platform_get_irq(pdev, 0));
 	pm_runtime_put_sync(drm->dev);
 
 	if (ret < 0) {
@@ -314,7 +255,7 @@ static void mxsfb_unload(struct drm_device *drm)
 	drm_mode_config_cleanup(drm);
 
 	pm_runtime_get_sync(drm->dev);
-	mxsfb_irq_uninstall(drm);
+	drm_irq_uninstall(drm);
 	pm_runtime_put_sync(drm->dev);
 
 	drm->dev_private = NULL;
@@ -322,11 +263,43 @@ static void mxsfb_unload(struct drm_device *drm)
 	pm_runtime_disable(drm->dev);
 }
 
-DEFINE_DRM_GEM_DMA_FOPS(fops);
+static void mxsfb_irq_disable(struct drm_device *drm)
+{
+	struct mxsfb_drm_private *mxsfb = drm->dev_private;
 
-static const struct drm_driver mxsfb_driver = {
+	mxsfb_enable_axi_clk(mxsfb);
+
+	/* Disable and clear VBLANK IRQ */
+	writel(CTRL1_CUR_FRAME_DONE_IRQ_EN, mxsfb->base + LCDC_CTRL1 + REG_CLR);
+	writel(CTRL1_CUR_FRAME_DONE_IRQ, mxsfb->base + LCDC_CTRL1 + REG_CLR);
+
+	mxsfb_disable_axi_clk(mxsfb);
+}
+
+static irqreturn_t mxsfb_irq_handler(int irq, void *data)
+{
+	struct drm_device *drm = data;
+	struct mxsfb_drm_private *mxsfb = drm->dev_private;
+	u32 reg;
+
+	reg = readl(mxsfb->base + LCDC_CTRL1);
+
+	if (reg & CTRL1_CUR_FRAME_DONE_IRQ)
+		drm_crtc_handle_vblank(&mxsfb->crtc);
+
+	writel(CTRL1_CUR_FRAME_DONE_IRQ, mxsfb->base + LCDC_CTRL1 + REG_CLR);
+
+	return IRQ_HANDLED;
+}
+
+DEFINE_DRM_GEM_CMA_FOPS(fops);
+
+static struct drm_driver mxsfb_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
-	DRM_GEM_DMA_DRIVER_OPS,
+	.irq_handler		= mxsfb_irq_handler,
+	.irq_preinstall		= mxsfb_irq_disable,
+	.irq_uninstall		= mxsfb_irq_disable,
+	DRM_GEM_CMA_DRIVER_OPS,
 	.fops	= &fops,
 	.name	= "mxsfb-drm",
 	.desc	= "MXSFB Controller DRM",
@@ -365,7 +338,7 @@ static int mxsfb_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_unload;
 
-	drm_fbdev_dma_setup(drm, 32);
+	drm_fbdev_generic_setup(drm, 32);
 
 	return 0;
 
@@ -377,21 +350,15 @@ err_free:
 	return ret;
 }
 
-static void mxsfb_remove(struct platform_device *pdev)
+static int mxsfb_remove(struct platform_device *pdev)
 {
 	struct drm_device *drm = platform_get_drvdata(pdev);
 
 	drm_dev_unregister(drm);
-	drm_atomic_helper_shutdown(drm);
 	mxsfb_unload(drm);
 	drm_dev_put(drm);
-}
 
-static void mxsfb_shutdown(struct platform_device *pdev)
-{
-	struct drm_device *drm = platform_get_drvdata(pdev);
-
-	drm_atomic_helper_shutdown(drm);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -416,8 +383,7 @@ static const struct dev_pm_ops mxsfb_pm_ops = {
 
 static struct platform_driver mxsfb_platform_driver = {
 	.probe		= mxsfb_probe,
-	.remove_new	= mxsfb_remove,
-	.shutdown	= mxsfb_shutdown,
+	.remove		= mxsfb_remove,
 	.driver	= {
 		.name		= "mxsfb",
 		.of_match_table	= mxsfb_dt_ids,
@@ -425,7 +391,7 @@ static struct platform_driver mxsfb_platform_driver = {
 	},
 };
 
-drm_module_platform_driver(mxsfb_platform_driver);
+module_platform_driver(mxsfb_platform_driver);
 
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
 MODULE_DESCRIPTION("Freescale MXS DRM/KMS driver");

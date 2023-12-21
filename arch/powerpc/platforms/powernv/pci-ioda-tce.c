@@ -145,7 +145,8 @@ int pnv_tce_build(struct iommu_table *tbl, long index, long npages,
 
 #ifdef CONFIG_IOMMU_API
 int pnv_tce_xchg(struct iommu_table *tbl, long index,
-		unsigned long *hpa, enum dma_data_direction *direction)
+		unsigned long *hpa, enum dma_data_direction *direction,
+		bool alloc)
 {
 	u64 proto_tce = iommu_direction_to_tce_perm(*direction);
 	unsigned long newtce = *hpa | proto_tce, oldtce;
@@ -163,7 +164,7 @@ int pnv_tce_xchg(struct iommu_table *tbl, long index,
 	}
 
 	if (!ptce) {
-		ptce = pnv_tce(tbl, false, idx, true);
+		ptce = pnv_tce(tbl, false, idx, alloc);
 		if (!ptce)
 			return -ENOMEM;
 	}
@@ -379,8 +380,6 @@ void pnv_pci_unlink_table_and_group(struct iommu_table *tbl,
 
 	/* Remove link to a group from table's list of attached groups */
 	found = false;
-
-	rcu_read_lock();
 	list_for_each_entry_rcu(tgl, &tbl->it_group_list, next) {
 		if (tgl->table_group == table_group) {
 			list_del_rcu(&tgl->next);
@@ -389,8 +388,6 @@ void pnv_pci_unlink_table_and_group(struct iommu_table *tbl,
 			break;
 		}
 	}
-	rcu_read_unlock();
-
 	if (WARN_ON(!found))
 		return;
 

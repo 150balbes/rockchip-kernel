@@ -18,6 +18,7 @@ struct netdev_bpf;
 struct netlink_ext_ack;
 struct pci_dev;
 struct sk_buff;
+struct sk_buff;
 struct nfp_app;
 struct nfp_cpp;
 struct nfp_pf;
@@ -75,7 +76,7 @@ extern const struct nfp_app_type app_abm;
  * @bpf:	BPF ndo offload-related calls
  * @xdp_offload:    offload an XDP program
  * @eswitch_mode_get:    get SR-IOV eswitch mode
- * @eswitch_mode_set:    set SR-IOV eswitch mode
+ * @eswitch_mode_set:    set SR-IOV eswitch mode (under pf->lock)
  * @sriov_enable: app-specific sriov initialisation
  * @sriov_disable: app-specific sriov clean-up
  * @dev_get:	get representor or internal port representing netdev
@@ -173,16 +174,6 @@ struct nfp_app {
 
 	void *priv;
 };
-
-static inline void assert_nfp_app_locked(struct nfp_app *app)
-{
-	devl_assert_locked(priv_to_devlink(app->pf));
-}
-
-static inline bool nfp_app_is_locked(struct nfp_app *app)
-{
-	return devl_lock_is_held(priv_to_devlink(app->pf));
-}
 
 void nfp_check_rhashtable_empty(void *ptr, void *arg);
 bool __nfp_ctrl_tx(struct nfp_net *nn, struct sk_buff *skb);
@@ -444,5 +435,7 @@ int nfp_app_nic_vnic_alloc(struct nfp_app *app, struct nfp_net *nn,
 			   unsigned int id);
 int nfp_app_nic_vnic_init_phy_port(struct nfp_pf *pf, struct nfp_app *app,
 				   struct nfp_net *nn, unsigned int id);
+
+struct devlink_port *nfp_devlink_get_devlink_port(struct net_device *netdev);
 
 #endif

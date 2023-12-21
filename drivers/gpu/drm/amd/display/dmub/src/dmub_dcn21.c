@@ -39,10 +39,7 @@
 
 const struct dmub_srv_common_regs dmub_srv_dcn21_regs = {
 #define DMUB_SR(reg) REG_OFFSET(reg),
-	{
-		DMUB_COMMON_REGS()
-		DMCUB_INTERNAL_REGS()
-	},
+	{ DMUB_COMMON_REGS() },
 #undef DMUB_SR
 
 #define DMUB_SF(reg, field) FD_MASK(reg, field),
@@ -54,3 +51,14 @@ const struct dmub_srv_common_regs dmub_srv_dcn21_regs = {
 #undef DMUB_SF
 };
 
+/* Shared functions. */
+
+bool dmub_dcn21_is_auto_load_done(struct dmub_srv *dmub)
+{
+	return (REG_READ(DMCUB_SCRATCH0) == 3);
+}
+
+bool dmub_dcn21_is_phy_init(struct dmub_srv *dmub)
+{
+	return REG_READ(DMCUB_SCRATCH10) == 0;
+}

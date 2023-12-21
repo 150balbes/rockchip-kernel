@@ -37,7 +37,6 @@ enum {OD_NORMAL_SAMPLE, OD_SUB_SAMPLE};
 /* Governor demand based switching data (per-policy or global). */
 struct dbs_data {
 	struct gov_attr_set attr_set;
-	struct dbs_governor *gov;
 	void *tuners;
 	unsigned int ignore_nice_load;
 	unsigned int sampling_rate;
@@ -52,7 +51,7 @@ static inline struct dbs_data *to_dbs_data(struct gov_attr_set *attr_set)
 }
 
 #define gov_show_one(_gov, file_name)					\
-static ssize_t file_name##_show						\
+static ssize_t show_##file_name						\
 (struct gov_attr_set *attr_set, char *buf)				\
 {									\
 	struct dbs_data *dbs_data = to_dbs_data(attr_set);		\
@@ -61,7 +60,7 @@ static ssize_t file_name##_show						\
 }
 
 #define gov_show_one_common(file_name)					\
-static ssize_t file_name##_show						\
+static ssize_t show_##file_name						\
 (struct gov_attr_set *attr_set, char *buf)				\
 {									\
 	struct dbs_data *dbs_data = to_dbs_data(attr_set);		\
@@ -69,10 +68,12 @@ static ssize_t file_name##_show						\
 }
 
 #define gov_attr_ro(_name)						\
-static struct governor_attr _name = __ATTR_RO(_name)
+static struct governor_attr _name =					\
+__ATTR(_name, 0444, show_##_name, NULL)
 
 #define gov_attr_rw(_name)						\
-static struct governor_attr _name = __ATTR_RW(_name)
+static struct governor_attr _name =					\
+__ATTR(_name, 0644, show_##_name, store_##_name)
 
 /* Common to all CPUs of a policy */
 struct policy_dbs_info {
@@ -175,7 +176,7 @@ void od_register_powersave_bias_handler(unsigned int (*f)
 		(struct cpufreq_policy *, unsigned int, unsigned int),
 		unsigned int powersave_bias);
 void od_unregister_powersave_bias_handler(void);
-ssize_t sampling_rate_store(struct gov_attr_set *attr_set, const char *buf,
+ssize_t store_sampling_rate(struct gov_attr_set *attr_set, const char *buf,
 			    size_t count);
 void gov_update_cpu_data(struct dbs_data *dbs_data);
 #endif /* _CPUFREQ_GOVERNOR_H */

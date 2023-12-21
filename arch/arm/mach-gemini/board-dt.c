@@ -42,9 +42,8 @@ static void gemini_idle(void)
 	 */
 
 	/* FIXME: Enabling interrupts here is racy! */
-	raw_local_irq_enable();
+	local_irq_enable();
 	cpu_do_idle();
-	raw_local_irq_disable();
 }
 
 static void __init gemini_init_machine(void)

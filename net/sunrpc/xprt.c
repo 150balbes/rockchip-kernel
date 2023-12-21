@@ -55,8 +55,6 @@
 #include <trace/events/sunrpc.h>
 
 #include "sunrpc.h"
-#include "sysfs.h"
-#include "fail.h"
 
 /*
  * Local variables
@@ -69,11 +67,10 @@
 /*
  * Local functions
  */
-static void	xprt_init(struct rpc_xprt *xprt, struct net *net);
+static void	 xprt_init(struct rpc_xprt *xprt, struct net *net);
 static __be32	xprt_alloc_xid(struct rpc_xprt *xprt);
-static void	xprt_destroy(struct rpc_xprt *xprt);
-static void	xprt_request_init(struct rpc_task *task);
-static int	xprt_request_prepare(struct rpc_rqst *req, struct xdr_buf *buf);
+static void	 xprt_destroy(struct rpc_xprt *xprt);
+static void	 xprt_request_init(struct rpc_task *task);
 
 static DEFINE_SPINLOCK(xprt_list_lock);
 static LIST_HEAD(xprt_list);
@@ -162,32 +159,6 @@ xprt_class_release(const struct xprt_class *t)
 }
 
 static const struct xprt_class *
-xprt_class_find_by_ident_locked(int ident)
-{
-	const struct xprt_class *t;
-
-	list_for_each_entry(t, &xprt_list, list) {
-		if (t->ident != ident)
-			continue;
-		if (!try_module_get(t->owner))
-			continue;
-		return t;
-	}
-	return NULL;
-}
-
-static const struct xprt_class *
-xprt_class_find_by_ident(int ident)
-{
-	const struct xprt_class *t;
-
-	spin_lock(&xprt_list_lock);
-	t = xprt_class_find_by_ident_locked(ident);
-	spin_unlock(&xprt_list_lock);
-	return t;
-}
-
-static const struct xprt_class *
 xprt_class_find_by_netid_locked(const char *netid)
 {
 	const struct xprt_class *t;
@@ -223,33 +194,33 @@ xprt_class_find_by_netid(const char *netid)
 }
 
 /**
- * xprt_find_transport_ident - convert a netid into a transport identifier
+ * xprt_load_transport - load a transport implementation
  * @netid: transport to load
  *
  * Returns:
- * > 0:		transport identifier
+ * 0:		transport successfully loaded
  * -ENOENT:	transport module not available
  */
-int xprt_find_transport_ident(const char *netid)
+int xprt_load_transport(const char *netid)
 {
 	const struct xprt_class *t;
-	int ret;
 
 	t = xprt_class_find_by_netid(netid);
 	if (!t)
 		return -ENOENT;
-	ret = t->ident;
 	xprt_class_release(t);
-	return ret;
+	return 0;
 }
-EXPORT_SYMBOL_GPL(xprt_find_transport_ident);
+EXPORT_SYMBOL_GPL(xprt_load_transport);
 
 static void xprt_clear_locked(struct rpc_xprt *xprt)
 {
 	xprt->snd_task = NULL;
-	if (!test_bit(XPRT_CLOSE_WAIT, &xprt->state))
-		clear_bit_unlock(XPRT_LOCKED, &xprt->state);
-	else
+	if (!test_bit(XPRT_CLOSE_WAIT, &xprt->state)) {
+		smp_mb__before_atomic();
+		clear_bit(XPRT_LOCKED, &xprt->state);
+		smp_mb__after_atomic();
+	} else
 		queue_work(xprtiod_workqueue, &xprt->task_cleanup);
 }
 
@@ -444,7 +415,7 @@ void xprt_release_xprt_cong(struct rpc_xprt *xprt, struct rpc_task *task)
 }
 EXPORT_SYMBOL_GPL(xprt_release_xprt_cong);
 
-void xprt_release_write(struct rpc_xprt *xprt, struct rpc_task *task)
+static inline void xprt_release_write(struct rpc_xprt *xprt, struct rpc_task *task)
 {
 	if (xprt->snd_task != task)
 		return;
@@ -736,8 +707,6 @@ static void xprt_autoclose(struct work_struct *work)
 	unsigned int pflags = memalloc_nofs_save();
 
 	trace_xprt_disconnect_auto(xprt);
-	xprt->connect_cookie++;
-	smp_mb__before_atomic();
 	clear_bit(XPRT_CLOSE_WAIT, &xprt->state);
 	xprt->ops->close(xprt);
 	xprt_release_write(xprt, NULL);
@@ -861,19 +830,6 @@ xprt_init_autodisconnect(struct timer_list *t)
 		return;
 	queue_work(xprtiod_workqueue, &xprt->task_cleanup);
 }
-
-#if IS_ENABLED(CONFIG_FAIL_SUNRPC)
-static void xprt_inject_disconnect(struct rpc_xprt *xprt)
-{
-	if (!fail_sunrpc.ignore_client_disconnect &&
-	    should_fail(&fail_sunrpc.attr, 1))
-		xprt->ops->inject_disconnect(xprt);
-}
-#else
-static inline void xprt_inject_disconnect(struct rpc_xprt *xprt)
-{
-}
-#endif
 
 bool xprt_lock_connect(struct rpc_xprt *xprt,
 		struct rpc_task *task,
@@ -1139,19 +1095,16 @@ xprt_request_need_enqueue_receive(struct rpc_task *task, struct rpc_rqst *req)
  * @task: RPC task
  *
  */
-int
+void
 xprt_request_enqueue_receive(struct rpc_task *task)
 {
 	struct rpc_rqst *req = task->tk_rqstp;
 	struct rpc_xprt *xprt = req->rq_xprt;
-	int ret;
 
 	if (!xprt_request_need_enqueue_receive(task, req))
-		return 0;
+		return;
 
-	ret = xprt_request_prepare(task->tk_rqstp, &req->rq_rcv_buf);
-	if (ret)
-		return ret;
+	xprt_request_prepare(task->tk_rqstp);
 	spin_lock(&xprt->queue_lock);
 
 	/* Update the softirq receive buffer */
@@ -1164,8 +1117,7 @@ xprt_request_enqueue_receive(struct rpc_task *task)
 	spin_unlock(&xprt->queue_lock);
 
 	/* Turn off autodisconnect */
-	del_timer_sync(&xprt->timer);
-	return 0;
+	del_singleshot_timer_sync(&xprt->timer);
 }
 
 /**
@@ -1218,8 +1170,6 @@ void xprt_complete_rqst(struct rpc_task *task, int copied)
 
 	xprt->stat.recvs++;
 
-	xdr_free_bvec(&req->rq_rcv_buf);
-	req->rq_private_buf.bvec = NULL;
 	req->rq_private_buf.len = copied;
 	/* Ensure all writes are done before we update */
 	/* req->rq_reply_bytes_recvd */
@@ -1338,14 +1288,8 @@ xprt_request_enqueue_transmit(struct rpc_task *task)
 {
 	struct rpc_rqst *pos, *req = task->tk_rqstp;
 	struct rpc_xprt *xprt = req->rq_xprt;
-	int ret;
 
 	if (xprt_request_need_enqueue_transmit(task, req)) {
-		ret = xprt_request_prepare(task->tk_rqstp, &req->rq_snd_buf);
-		if (ret) {
-			task->tk_status = ret;
-			return;
-		}
 		req->rq_bytes_sent = 0;
 		spin_lock(&xprt->queue_lock);
 		/*
@@ -1374,7 +1318,6 @@ xprt_request_enqueue_transmit(struct rpc_task *task)
 		list_add_tail(&req->rq_xmit, &xprt->xmit_queue);
 		INIT_LIST_HEAD(&req->rq_xmit2);
 out:
-		atomic_long_inc(&xprt->xmit_queuelen);
 		set_bit(RPC_TASK_NEED_XMIT, &task->tk_runstate);
 		spin_unlock(&xprt->queue_lock);
 	}
@@ -1404,8 +1347,6 @@ xprt_request_dequeue_transmit_locked(struct rpc_task *task)
 		}
 	} else
 		list_del(&req->rq_xmit2);
-	atomic_long_dec(&req->rq_xprt->xmit_queuelen);
-	xdr_free_bvec(&req->rq_snd_buf);
 }
 
 /**
@@ -1442,6 +1383,8 @@ xprt_request_dequeue_xprt(struct rpc_task *task)
 	    test_bit(RPC_TASK_NEED_RECV, &task->tk_runstate) ||
 	    xprt_is_pinned_rqst(req)) {
 		spin_lock(&xprt->queue_lock);
+		xprt_request_dequeue_transmit_locked(task);
+		xprt_request_dequeue_receive_locked(task);
 		while (xprt_is_pinned_rqst(req)) {
 			set_bit(RPC_TASK_MSG_PIN_WAIT, &task->tk_runstate);
 			spin_unlock(&xprt->queue_lock);
@@ -1449,30 +1392,24 @@ xprt_request_dequeue_xprt(struct rpc_task *task)
 			spin_lock(&xprt->queue_lock);
 			clear_bit(RPC_TASK_MSG_PIN_WAIT, &task->tk_runstate);
 		}
-		xprt_request_dequeue_transmit_locked(task);
-		xprt_request_dequeue_receive_locked(task);
 		spin_unlock(&xprt->queue_lock);
-		xdr_free_bvec(&req->rq_rcv_buf);
 	}
 }
 
 /**
  * xprt_request_prepare - prepare an encoded request for transport
  * @req: pointer to rpc_rqst
- * @buf: pointer to send/rcv xdr_buf
  *
  * Calls into the transport layer to do whatever is needed to prepare
  * the request for transmission or receive.
- * Returns error, or zero.
  */
-static int
-xprt_request_prepare(struct rpc_rqst *req, struct xdr_buf *buf)
+void
+xprt_request_prepare(struct rpc_rqst *req)
 {
 	struct rpc_xprt *xprt = req->rq_xprt;
 
 	if (xprt->ops->prepare_request)
-		return xprt->ops->prepare_request(req, buf);
-	return 0;
+		xprt->ops->prepare_request(req);
 }
 
 /**
@@ -1505,9 +1442,6 @@ bool xprt_prepare_transmit(struct rpc_task *task)
 		return false;
 
 	}
-	if (atomic_read(&xprt->swapper))
-		/* This will be clear in __rpc_execute */
-		current->flags |= PF_MEMALLOC;
 	return true;
 }
 
@@ -1570,10 +1504,8 @@ xprt_request_transmit(struct rpc_rqst *req, struct rpc_task *snd_task)
 		return status;
 	}
 
-	if (is_retrans) {
+	if (is_retrans)
 		task->tk_client->cl_stats->rpcretrans++;
-		trace_xprt_retransmit(req);
-	}
 
 	xprt_inject_disconnect(xprt);
 
@@ -1692,12 +1624,15 @@ out:
 static struct rpc_rqst *xprt_dynamic_alloc_slot(struct rpc_xprt *xprt)
 {
 	struct rpc_rqst *req = ERR_PTR(-EAGAIN);
+	gfp_t gfp_mask = GFP_KERNEL;
 
 	if (xprt->num_reqs >= xprt->max_reqs)
 		goto out;
 	++xprt->num_reqs;
 	spin_unlock(&xprt->reserve_lock);
-	req = kzalloc(sizeof(*req), rpc_task_gfp_mask());
+	if (current->flags & PF_WQ_WORKER)
+		gfp_mask |= __GFP_NORETRY | __GFP_NOWARN;
+	req = kzalloc(sizeof(*req), gfp_mask);
 	spin_lock(&xprt->reserve_lock);
 	if (req != NULL)
 		goto out;
@@ -1777,30 +1712,6 @@ static void xprt_free_all_slots(struct rpc_xprt *xprt)
 	}
 }
 
-static DEFINE_IDA(rpc_xprt_ids);
-
-void xprt_cleanup_ids(void)
-{
-	ida_destroy(&rpc_xprt_ids);
-}
-
-static int xprt_alloc_id(struct rpc_xprt *xprt)
-{
-	int id;
-
-	id = ida_alloc(&rpc_xprt_ids, GFP_KERNEL);
-	if (id < 0)
-		return id;
-
-	xprt->id = id;
-	return 0;
-}
-
-static void xprt_free_id(struct rpc_xprt *xprt)
-{
-	ida_free(&rpc_xprt_ids, xprt->id);
-}
-
 struct rpc_xprt *xprt_alloc(struct net *net, size_t size,
 		unsigned int num_prealloc,
 		unsigned int max_alloc)
@@ -1813,7 +1724,6 @@ struct rpc_xprt *xprt_alloc(struct net *net, size_t size,
 	if (xprt == NULL)
 		goto out;
 
-	xprt_alloc_id(xprt);
 	xprt_init(xprt, net);
 
 	for (i = 0; i < num_prealloc; i++) {
@@ -1822,7 +1732,10 @@ struct rpc_xprt *xprt_alloc(struct net *net, size_t size,
 			goto out_free;
 		list_add(&req->rq_list, &xprt->free);
 	}
-	xprt->max_reqs = max_t(unsigned int, max_alloc, num_prealloc);
+	if (max_alloc > num_prealloc)
+		xprt->max_reqs = max_alloc;
+	else
+		xprt->max_reqs = num_prealloc;
 	xprt->min_reqs = num_prealloc;
 	xprt->num_reqs = num_prealloc;
 
@@ -1837,10 +1750,8 @@ EXPORT_SYMBOL_GPL(xprt_alloc);
 
 void xprt_free(struct rpc_xprt *xprt)
 {
-	put_net_track(xprt->xprt_net, &xprt->ns_tracker);
+	put_net(xprt->xprt_net);
 	xprt_free_all_slots(xprt);
-	xprt_free_id(xprt);
-	rpc_sysfs_xprt_destroy(xprt);
 	kfree_rcu(xprt, rcu);
 }
 EXPORT_SYMBOL_GPL(xprt_free);
@@ -1865,7 +1776,7 @@ xprt_alloc_xid(struct rpc_xprt *xprt)
 static void
 xprt_init_xid(struct rpc_xprt *xprt)
 {
-	xprt->xid = get_random_u32();
+	xprt->xid = prandom_u32();
 }
 
 static void
@@ -1969,6 +1880,8 @@ void xprt_release(struct rpc_task *task)
 	spin_unlock(&xprt->transport_lock);
 	if (req->rq_buffer)
 		xprt->ops->buf_free(task);
+	xdr_free_bvec(&req->rq_rcv_buf);
+	xdr_free_bvec(&req->rq_snd_buf);
 	if (req->rq_cred != NULL)
 		put_rpccred(req->rq_cred);
 	if (req->rq_release_snd_buf)
@@ -2027,7 +1940,7 @@ static void xprt_init(struct rpc_xprt *xprt, struct net *net)
 
 	xprt_init_xid(xprt);
 
-	xprt->xprt_net = get_net_track(net, &xprt->ns_tracker, GFP_KERNEL);
+	xprt->xprt_net = get_net(net);
 }
 
 /**
@@ -2038,17 +1951,21 @@ static void xprt_init(struct rpc_xprt *xprt, struct net *net)
 struct rpc_xprt *xprt_create_transport(struct xprt_create *args)
 {
 	struct rpc_xprt	*xprt;
-	const struct xprt_class *t;
+	struct xprt_class *t;
 
-	t = xprt_class_find_by_ident(args->ident);
-	if (!t) {
-		dprintk("RPC: transport (%d) not supported\n", args->ident);
-		return ERR_PTR(-EIO);
+	spin_lock(&xprt_list_lock);
+	list_for_each_entry(t, &xprt_list, list) {
+		if (t->ident == args->ident) {
+			spin_unlock(&xprt_list_lock);
+			goto found;
+		}
 	}
+	spin_unlock(&xprt_list_lock);
+	dprintk("RPC: transport (%d) not supported\n", args->ident);
+	return ERR_PTR(-EIO);
 
+found:
 	xprt = t->setup(args);
-	xprt_class_release(t);
-
 	if (IS_ERR(xprt))
 		goto out;
 	if (args->flags & XPRT_CREATE_NO_IDLE_TIMEOUT)
@@ -2158,35 +2075,3 @@ void xprt_put(struct rpc_xprt *xprt)
 		kref_put(&xprt->kref, xprt_destroy_kref);
 }
 EXPORT_SYMBOL_GPL(xprt_put);
-
-void xprt_set_offline_locked(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
-{
-	if (!test_and_set_bit(XPRT_OFFLINE, &xprt->state)) {
-		spin_lock(&xps->xps_lock);
-		xps->xps_nactive--;
-		spin_unlock(&xps->xps_lock);
-	}
-}
-
-void xprt_set_online_locked(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
-{
-	if (test_and_clear_bit(XPRT_OFFLINE, &xprt->state)) {
-		spin_lock(&xps->xps_lock);
-		xps->xps_nactive++;
-		spin_unlock(&xps->xps_lock);
-	}
-}
-
-void xprt_delete_locked(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
-{
-	if (test_and_set_bit(XPRT_REMOVE, &xprt->state))
-		return;
-
-	xprt_force_disconnect(xprt);
-	if (!test_bit(XPRT_CONNECTED, &xprt->state))
-		return;
-
-	if (!xprt->sending.qlen && !xprt->pending.qlen &&
-	    !xprt->backlog.qlen && !atomic_long_read(&xprt->queuelen))
-		rpc_xprt_switch_remove_xprt(xps, xprt, true);
-}

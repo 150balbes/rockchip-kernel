@@ -2,12 +2,12 @@
 config STMMAC_ETH
 	tristate "STMicroelectronics Multi-Gigabit Ethernet driver"
 	depends on HAS_IOMEM && HAS_DMA
-	depends on PTP_1588_CLOCK_OPTIONAL
 	select MII
 	select PCS_XPCS
 	select PAGE_POOL
 	select PHYLINK
 	select CRC32
+	imply PTP_1588_CLOCK
 	select RESET_CONTROLLER
 	help
 	  This is the driver for the Ethernet IPs built around a
@@ -24,6 +24,26 @@ config STMMAC_SELFTESTS
 	  This adds support for STMMAC Selftests using ethtool. Enable this
 	  feature if you are facing problems with your HW and submit the test
 	  results to the netdev Mailing List.
+
+config STMMAC_UIO
+	tristate "STMMAC_UIO ethernet controller"
+	default n
+	select UIO
+	help
+	  Say M here if you want to use the stmmac_uio.ko for DPDK.
+
+config STMMAC_ETHTOOL
+	bool "Ethtool feature for STMMAC"
+	default STMMAC_ETH if !ROCKCHIP_MINI_KERNEL
+	help
+	  This selects the ethtool function, default is Y.
+
+config STMMAC_FULL
+	bool "Support full driver for STMMAC"
+	default STMMAC_ETH if !ROCKCHIP_MINI_KERNEL
+	help
+	  This selects the full function, default is Y, full-featured version
+	  includes 4.10 and other versions, if it is N, only 4.10 core working.
 
 config STMMAC_PLATFORM
 	tristate "STMMAC Platform bus support"
@@ -66,18 +86,6 @@ config DWMAC_ANARION
 
 	  This selects the Anarion SoC glue layer support for the stmmac driver.
 
-config DWMAC_INGENIC
-	tristate "Ingenic MAC support"
-	default MACH_INGENIC
-	depends on OF && HAS_IOMEM && (MACH_INGENIC || COMPILE_TEST)
-	select MFD_SYSCON
-	help
-	  Support for ethernet controller on Ingenic SoCs.
-
-	  This selects Ingenic SoCs glue layer support for the stmmac
-	  device driver. This driver is used on for the Ingenic SoCs
-	  MAC ethernet controller.
-
 config DWMAC_IPQ806X
 	tristate "QCA IPQ806x DWMAC support"
 	default ARCH_QCOM
@@ -90,9 +98,6 @@ config DWMAC_IPQ806X
 	  device driver. This driver does not use any of the hardware
 	  acceleration features available on this SoC. Network devices
 	  will behave like standard non-accelerated ethernet interfaces.
-
-	  Select the QCOM_SOCINFO config flag to enable specific dwmac
-	  fixup based on the ipq806x SoC revision.
 
 config DWMAC_LPC18XX
 	tristate "NXP LPC18xx/43xx DWMAC support"
@@ -153,32 +158,27 @@ config DWMAC_ROCKCHIP
 	  This selects the Rockchip RK3288 SoC glue layer support for
 	  the stmmac device driver.
 
+config DWMAC_ROCKCHIP_TOOL
+	bool "Rockchip dwmac tool support"
+	depends on DWMAC_ROCKCHIP
+	default DWMAC_ROCKCHIP if !ROCKCHIP_MINI_KERNEL
+	help
+	  Support for Ethernet functions on Rockchip SoCs.
+
+	  This selects the features for Rockchip's Ethernet, include PHY loopback,
+	  MAC loopback, and delayline scanning of RGMII mode.
+
 config DWMAC_SOCFPGA
 	tristate "SOCFPGA dwmac support"
-	default ARCH_INTEL_SOCFPGA
-	depends on OF && (ARCH_INTEL_SOCFPGA || COMPILE_TEST)
+	default (ARCH_SOCFPGA || ARCH_STRATIX10)
+	depends on OF && (ARCH_SOCFPGA || ARCH_STRATIX10 || COMPILE_TEST)
 	select MFD_SYSCON
-	select MDIO_REGMAP
-	select REGMAP_MMIO
-	select PCS_LYNX
 	help
 	  Support for ethernet controller on Altera SOCFPGA
 
 	  This selects the Altera SOCFPGA SoC glue layer support
 	  for the stmmac device driver. This driver is used for
 	  arria5 and cyclone5 FPGA SoCs.
-
-config DWMAC_STARFIVE
-	tristate "StarFive dwmac support"
-	depends on OF && (ARCH_STARFIVE || COMPILE_TEST)
-	select MFD_SYSCON
-	default m if ARCH_STARFIVE
-	help
-	  Support for ethernet controllers on StarFive RISC-V SoCs
-
-	  This selects the StarFive platform specific glue layer support for
-	  the stmmac device driver. This driver is used for StarFive JH7110
-	  ethernet controller.
 
 config DWMAC_STI
 	tristate "STi GMAC support"
@@ -249,23 +249,6 @@ config DWMAC_INTEL_PLAT
 	  This selects the Intel platform specific glue layer support for
 	  the stmmac device driver. This driver is used for the Intel Keem Bay
 	  SoC.
-
-config DWMAC_TEGRA
-	tristate "NVIDIA Tegra MGBE support"
-	depends on ARCH_TEGRA || COMPILE_TEST
-	help
-	  This selects the Multi-GigaBit Ethernet (MGBE) Controller that is
-	  found on the NVIDIA Tegra SoC devices. This driver provides the glue
-	  layer on top of the stmmac driver required for these NVIDIA Tegra SoC
-	  devices.
-
-config DWMAC_VISCONTI
-	tristate "Toshiba Visconti DWMAC support"
-	default ARCH_VISCONTI
-	depends on OF && COMMON_CLK && (ARCH_VISCONTI || COMPILE_TEST)
-	help
-	  Support for ethernet controller on Visconti SoCs.
-
 endif
 
 config DWMAC_INTEL
@@ -276,15 +259,6 @@ config DWMAC_INTEL
 	help
 	  This selects the Intel platform specific bus support for the
 	  stmmac driver. This driver is used for Intel Quark/EHL/TGL.
-
-config DWMAC_LOONGSON
-	tristate "Loongson PCI DWMAC support"
-	default MACH_LOONGSON64
-	depends on STMMAC_ETH && PCI
-	depends on COMMON_CLK
-	help
-	  This selects the LOONGSON PCI bus support for the stmmac driver,
-	  Support for ethernet controller on Loongson-2K1000 SoC and LS7A1000 bridge.
 
 config STMMAC_PCI
 	tristate "STMMAC PCI bus support"

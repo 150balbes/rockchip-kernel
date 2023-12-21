@@ -17,20 +17,20 @@
 
 static inline int ivtv_might_use_pio(struct ivtv_stream *s)
 {
-	return s->dma == DMA_NONE || (SLICED_VBI_PIO && s->type == IVTV_ENC_STREAM_TYPE_VBI);
+	return s->dma == PCI_DMA_NONE || (SLICED_VBI_PIO && s->type == IVTV_ENC_STREAM_TYPE_VBI);
 }
 
 static inline int ivtv_use_pio(struct ivtv_stream *s)
 {
 	struct ivtv *itv = s->itv;
 
-	return s->dma == DMA_NONE ||
+	return s->dma == PCI_DMA_NONE ||
 	    (SLICED_VBI_PIO && s->type == IVTV_ENC_STREAM_TYPE_VBI && itv->vbi.sliced_in->service_set);
 }
 
 static inline int ivtv_might_use_dma(struct ivtv_stream *s)
 {
-	return s->dma != DMA_NONE;
+	return s->dma != PCI_DMA_NONE;
 }
 
 static inline int ivtv_use_dma(struct ivtv_stream *s)
@@ -41,16 +41,15 @@ static inline int ivtv_use_dma(struct ivtv_stream *s)
 static inline void ivtv_buf_sync_for_cpu(struct ivtv_stream *s, struct ivtv_buffer *buf)
 {
 	if (ivtv_use_dma(s))
-		dma_sync_single_for_cpu(&s->itv->pdev->dev, buf->dma_handle,
-					s->buf_size + 256, s->dma);
+		pci_dma_sync_single_for_cpu(s->itv->pdev, buf->dma_handle,
+				s->buf_size + 256, s->dma);
 }
 
 static inline void ivtv_buf_sync_for_device(struct ivtv_stream *s, struct ivtv_buffer *buf)
 {
 	if (ivtv_use_dma(s))
-		dma_sync_single_for_device(&s->itv->pdev->dev,
-					   buf->dma_handle, s->buf_size + 256,
-					   s->dma);
+		pci_dma_sync_single_for_device(s->itv->pdev, buf->dma_handle,
+				s->buf_size + 256, s->dma);
 }
 
 int ivtv_buf_copy_from_user(struct ivtv_stream *s, struct ivtv_buffer *buf, const char __user *src, int copybytes);
@@ -71,17 +70,15 @@ void ivtv_stream_free(struct ivtv_stream *s);
 static inline void ivtv_stream_sync_for_cpu(struct ivtv_stream *s)
 {
 	if (ivtv_use_dma(s))
-		dma_sync_single_for_cpu(&s->itv->pdev->dev, s->sg_handle,
-					sizeof(struct ivtv_sg_element),
-					DMA_TO_DEVICE);
+		pci_dma_sync_single_for_cpu(s->itv->pdev, s->sg_handle,
+			sizeof(struct ivtv_sg_element), PCI_DMA_TODEVICE);
 }
 
 static inline void ivtv_stream_sync_for_device(struct ivtv_stream *s)
 {
 	if (ivtv_use_dma(s))
-		dma_sync_single_for_device(&s->itv->pdev->dev, s->sg_handle,
-					   sizeof(struct ivtv_sg_element),
-					   DMA_TO_DEVICE);
+		pci_dma_sync_single_for_device(s->itv->pdev, s->sg_handle,
+			sizeof(struct ivtv_sg_element), PCI_DMA_TODEVICE);
 }
 
 #endif

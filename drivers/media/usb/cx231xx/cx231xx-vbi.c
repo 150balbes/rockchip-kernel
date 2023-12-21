@@ -408,8 +408,9 @@ int cx231xx_init_vbi_isoc(struct cx231xx *dev, int max_packets,
 		    kzalloc(sb_size, GFP_KERNEL);
 		if (!dev->vbi_mode.bulk_ctl.transfer_buffer[i]) {
 			dev_err(dev->dev,
-				"unable to allocate %i bytes for transfer buffer %i\n",
-				sb_size, i);
+				"unable to allocate %i bytes for transfer buffer %i%s\n",
+				sb_size, i,
+				in_interrupt() ? " while in int" : "");
 			cx231xx_uninit_vbi_isoc(dev);
 			return -ENOMEM;
 		}
@@ -558,7 +559,7 @@ u32 cx231xx_copy_vbi_line(struct cx231xx *dev, struct cx231xx_dmaqueue *dma_q,
 }
 
 /*
- * generic routine to get the next available buffer
+ * video-buf generic routine to get the next available buffer
  */
 static inline void get_next_vbi_buf(struct cx231xx_dmaqueue *dma_q,
 				    struct cx231xx_buffer **buf)

@@ -365,17 +365,23 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 
 	init_waitqueue_head(&i2c->wait);
 
-	i2c->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	i2c->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(i2c->clk)) {
-		dev_err(&pdev->dev, "failed to enable clock.\n");
+		dev_err(&pdev->dev, "error getting clock\n");
 		return PTR_ERR(i2c->clk);
+	}
+
+	ret = clk_prepare_enable(i2c->clk);
+	if (ret) {
+		dev_err(&pdev->dev, "unable to enable clock.\n");
+		return ret;
 	}
 
 	ret = devm_request_irq(&pdev->dev, i2c->irq, i2c_lpc2k_handler, 0,
 			       dev_name(&pdev->dev), i2c);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "can't request interrupt.\n");
-		return ret;
+		goto fail_clk;
 	}
 
 	disable_irq_nosync(i2c->irq);
@@ -391,7 +397,8 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 	clkrate = clk_get_rate(i2c->clk);
 	if (clkrate == 0) {
 		dev_err(&pdev->dev, "can't get I2C base clock\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto fail_clk;
 	}
 
 	/* Setup I2C dividers to generate clock with proper duty cycle */
@@ -410,25 +417,32 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 
 	i2c_set_adapdata(&i2c->adap, i2c);
 	i2c->adap.owner = THIS_MODULE;
-	strscpy(i2c->adap.name, "LPC2K I2C adapter", sizeof(i2c->adap.name));
+	strlcpy(i2c->adap.name, "LPC2K I2C adapter", sizeof(i2c->adap.name));
 	i2c->adap.algo = &i2c_lpc2k_algorithm;
 	i2c->adap.dev.parent = &pdev->dev;
 	i2c->adap.dev.of_node = pdev->dev.of_node;
 
 	ret = i2c_add_adapter(&i2c->adap);
 	if (ret < 0)
-		return ret;
+		goto fail_clk;
 
 	dev_info(&pdev->dev, "LPC2K I2C adapter\n");
 
 	return 0;
+
+fail_clk:
+	clk_disable_unprepare(i2c->clk);
+	return ret;
 }
 
-static void i2c_lpc2k_remove(struct platform_device *dev)
+static int i2c_lpc2k_remove(struct platform_device *dev)
 {
 	struct lpc2k_i2c *i2c = platform_get_drvdata(dev);
 
 	i2c_del_adapter(&i2c->adap);
+	clk_disable_unprepare(i2c->clk);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -469,7 +483,7 @@ MODULE_DEVICE_TABLE(of, lpc2k_i2c_match);
 
 static struct platform_driver i2c_lpc2k_driver = {
 	.probe	= i2c_lpc2k_probe,
-	.remove_new = i2c_lpc2k_remove,
+	.remove	= i2c_lpc2k_remove,
 	.driver	= {
 		.name		= "lpc2k-i2c",
 		.pm		= I2C_LPC2K_DEV_PM_OPS,

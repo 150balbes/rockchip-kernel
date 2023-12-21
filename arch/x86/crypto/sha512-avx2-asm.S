@@ -50,7 +50,6 @@
 ########################################################################
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 
 .text
 
@@ -103,13 +102,17 @@ SRND_SIZE = 1*8
 INP_SIZE = 1*8
 INPEND_SIZE = 1*8
 CTX_SIZE = 1*8
+RSPSAVE_SIZE = 1*8
+GPRSAVE_SIZE = 5*8
 
 frame_XFER = 0
 frame_SRND = frame_XFER + XFER_SIZE
 frame_INP = frame_SRND + SRND_SIZE
 frame_INPEND = frame_INP + INP_SIZE
 frame_CTX = frame_INPEND + INPEND_SIZE
-frame_size = frame_CTX + CTX_SIZE
+frame_RSPSAVE = frame_CTX + CTX_SIZE
+frame_GPRSAVE = frame_RSPSAVE + RSPSAVE_SIZE
+frame_size = frame_GPRSAVE + GPRSAVE_SIZE
 
 ## assume buffers not aligned
 #define	VMOVDQ vmovdqu
@@ -566,22 +569,22 @@ frame_size = frame_CTX + CTX_SIZE
 # of SHA512 message blocks.
 # "blocks" is the message length in SHA512 blocks
 ########################################################################
-SYM_TYPED_FUNC_START(sha512_transform_rorx)
-	# Save GPRs
-	push	%rbx
-	push	%r12
-	push	%r13
-	push	%r14
-	push	%r15
-
+SYM_FUNC_START(sha512_transform_rorx)
 	# Allocate Stack Space
-	push	%rbp
-	mov	%rsp, %rbp
+	mov	%rsp, %rax
 	sub	$frame_size, %rsp
 	and	$~(0x20 - 1), %rsp
+	mov	%rax, frame_RSPSAVE(%rsp)
+
+	# Save GPRs
+	mov	%rbx, 8*0+frame_GPRSAVE(%rsp)
+	mov	%r12, 8*1+frame_GPRSAVE(%rsp)
+	mov	%r13, 8*2+frame_GPRSAVE(%rsp)
+	mov	%r14, 8*3+frame_GPRSAVE(%rsp)
+	mov	%r15, 8*4+frame_GPRSAVE(%rsp)
 
 	shl	$7, NUM_BLKS	# convert to bytes
-	jz	.Ldone_hash
+	jz	done_hash
 	add	INP, NUM_BLKS	# pointer to end of data
 	mov	NUM_BLKS, frame_INPEND(%rsp)
 
@@ -600,7 +603,7 @@ SYM_TYPED_FUNC_START(sha512_transform_rorx)
 
 	vmovdqa	PSHUFFLE_BYTE_FLIP_MASK(%rip), BYTE_FLIP_MASK
 
-.Lloop0:
+loop0:
 	lea	K512(%rip), TBL
 
 	## byte swap first 16 dwords
@@ -615,7 +618,7 @@ SYM_TYPED_FUNC_START(sha512_transform_rorx)
 	movq	$4, frame_SRND(%rsp)
 
 .align 16
-.Lloop1:
+loop1:
 	vpaddq	(TBL), Y_0, XFER
 	vmovdqa XFER, frame_XFER(%rsp)
 	FOUR_ROUNDS_AND_SCHED
@@ -634,10 +637,10 @@ SYM_TYPED_FUNC_START(sha512_transform_rorx)
 	FOUR_ROUNDS_AND_SCHED
 
 	subq	$1, frame_SRND(%rsp)
-	jne	.Lloop1
+	jne	loop1
 
 	movq	$2, frame_SRND(%rsp)
-.Lloop2:
+loop2:
 	vpaddq	(TBL), Y_0, XFER
 	vmovdqa XFER, frame_XFER(%rsp)
 	DO_4ROUNDS
@@ -650,7 +653,7 @@ SYM_TYPED_FUNC_START(sha512_transform_rorx)
 	vmovdqa	Y_3, Y_1
 
 	subq	$1, frame_SRND(%rsp)
-	jne	.Lloop2
+	jne	loop2
 
 	mov	frame_CTX(%rsp), CTX2
 	addm	8*0(CTX2), a
@@ -665,21 +668,19 @@ SYM_TYPED_FUNC_START(sha512_transform_rorx)
 	mov	frame_INP(%rsp), INP
 	add	$128, INP
 	cmp	frame_INPEND(%rsp), INP
-	jne	.Lloop0
+	jne	loop0
 
-.Ldone_hash:
+done_hash:
+
+# Restore GPRs
+	mov	8*0+frame_GPRSAVE(%rsp), %rbx
+	mov	8*1+frame_GPRSAVE(%rsp), %r12
+	mov	8*2+frame_GPRSAVE(%rsp), %r13
+	mov	8*3+frame_GPRSAVE(%rsp), %r14
+	mov	8*4+frame_GPRSAVE(%rsp), %r15
 
 	# Restore Stack Pointer
-	mov	%rbp, %rsp
-	pop	%rbp
-
-	# Restore GPRs
-	pop	%r15
-	pop	%r14
-	pop	%r13
-	pop	%r12
-	pop	%rbx
-
+	mov	frame_RSPSAVE(%rsp), %rsp
 	RET
 SYM_FUNC_END(sha512_transform_rorx)
 

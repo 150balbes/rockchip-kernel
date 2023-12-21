@@ -43,7 +43,9 @@ static bool check_image_valid(struct hinic_devlink_priv *priv, const u8 *buf,
 
 	for (i = 0; i < fw_image->fw_info.fw_section_cnt; i++) {
 		len += fw_image->fw_section_info[i].fw_section_len;
-		host_image->image_section_info[i] = fw_image->fw_section_info[i];
+		memcpy(&host_image->image_section_info[i],
+		       &fw_image->fw_section_info[i],
+		       sizeof(struct fw_section_info_st));
 	}
 
 	if (len != fw_image->fw_len ||
@@ -283,17 +285,27 @@ static int hinic_devlink_flash_update(struct devlink *devlink,
 				      struct netlink_ext_ack *extack)
 {
 	struct hinic_devlink_priv *priv = devlink_priv(devlink);
+	const struct firmware *fw;
+	int err;
 
-	return hinic_firmware_update(priv, params->fw, extack);
+	err = request_firmware_direct(&fw, params->file_name,
+				      &priv->hwdev->hwif->pdev->dev);
+	if (err)
+		return err;
+
+	err = hinic_firmware_update(priv, fw, extack);
+	release_firmware(fw);
+
+	return err;
 }
 
 static const struct devlink_ops hinic_devlink_ops = {
 	.flash_update = hinic_devlink_flash_update,
 };
 
-struct devlink *hinic_devlink_alloc(struct device *dev)
+struct devlink *hinic_devlink_alloc(void)
 {
-	return devlink_alloc(&hinic_devlink_ops, sizeof(struct hinic_dev), dev);
+	return devlink_alloc(&hinic_devlink_ops, sizeof(struct hinic_dev));
 }
 
 void hinic_devlink_free(struct devlink *devlink)
@@ -301,11 +313,11 @@ void hinic_devlink_free(struct devlink *devlink)
 	devlink_free(devlink);
 }
 
-void hinic_devlink_register(struct hinic_devlink_priv *priv)
+int hinic_devlink_register(struct hinic_devlink_priv *priv, struct device *dev)
 {
 	struct devlink *devlink = priv_to_devlink(priv);
 
-	devlink_register(devlink);
+	return devlink_register(devlink, dev);
 }
 
 void hinic_devlink_unregister(struct hinic_devlink_priv *priv)

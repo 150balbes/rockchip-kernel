@@ -7,7 +7,6 @@
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/io.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
@@ -273,7 +272,7 @@ static void hda_write(struct sti_hda *hda, u32 val, int offset)
 }
 
 /**
- * hda_get_mode_idx - Search for a video mode in the supported modes table
+ * Search for a video mode in the supported modes table
  *
  * @mode: mode being searched
  * @idx: index of the found mode
@@ -293,7 +292,7 @@ static bool hda_get_mode_idx(struct drm_display_mode mode, int *idx)
 }
 
 /**
- * hda_enable_hd_dacs - Enable the HD DACS
+ * Enable the HD DACS
  *
  * @hda: pointer to HD analog structure
  * @enable: true if HD DACS need to be enabled, else false
@@ -381,7 +380,7 @@ static void hda_debugfs_init(struct sti_hda *hda, struct drm_minor *minor)
 }
 
 /**
- * sti_hda_configure_awg - Configure AWG, writing instructions
+ * Configure AWG, writing instructions
  *
  * @hda: pointer to HD analog structure
  * @awg_instr: pointer to AWG instructions table
@@ -524,7 +523,7 @@ static void sti_hda_set_mode(struct drm_bridge *bridge,
 
 	DRM_DEBUG_DRIVER("\n");
 
-	drm_mode_copy(&hda->mode, mode);
+	memcpy(&hda->mode, mode, sizeof(struct drm_display_mode));
 
 	if (!hda_get_mode_idx(hda->mode, &mode_idx)) {
 		DRM_ERROR("Undefined mode\n");
@@ -601,9 +600,8 @@ static int sti_hda_connector_get_modes(struct drm_connector *connector)
 
 #define CLK_TOLERANCE_HZ 50
 
-static enum drm_mode_status
-sti_hda_connector_mode_valid(struct drm_connector *connector,
-			     struct drm_display_mode *mode)
+static int sti_hda_connector_mode_valid(struct drm_connector *connector,
+					struct drm_display_mode *mode)
 {
 	int target = mode->clock * 1000;
 	int target_min = target - CLK_TOLERANCE_HZ;
@@ -792,9 +790,10 @@ static int sti_hda_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sti_hda_ops);
 }
 
-static void sti_hda_remove(struct platform_device *pdev)
+static int sti_hda_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sti_hda_ops);
+	return 0;
 }
 
 static const struct of_device_id hda_of_match[] = {
@@ -811,7 +810,7 @@ struct platform_driver sti_hda_driver = {
 		.of_match_table = hda_of_match,
 	},
 	.probe = sti_hda_probe,
-	.remove_new = sti_hda_remove,
+	.remove = sti_hda_remove,
 };
 
 MODULE_AUTHOR("Benjamin Gaignard <benjamin.gaignard@st.com>");

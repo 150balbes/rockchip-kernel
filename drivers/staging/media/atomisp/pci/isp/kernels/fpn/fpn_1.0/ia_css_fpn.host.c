@@ -51,28 +51,26 @@ ia_css_fpn_dump(
 			    "fpn_enabled", fpn->enabled);
 }
 
-int ia_css_fpn_config(struct sh_css_isp_fpn_isp_config *to,
-		      const struct ia_css_fpn_configuration *from,
-		      unsigned int size)
+void
+ia_css_fpn_config(
+    struct sh_css_isp_fpn_isp_config *to,
+    const struct ia_css_fpn_configuration *from,
+    unsigned int size)
 {
 	unsigned int elems_a = ISP_VEC_NELEMS;
-	int ret;
 
-	ret = ia_css_dma_configure_from_info(&to->port_b, from->info);
-	if (ret)
-		return ret;
-
+	(void)size;
+	ia_css_dma_configure_from_info(&to->port_b, from->info);
 	to->width_a_over_b = elems_a / to->port_b.elems;
 
 	/* Assume divisiblity here, may need to generalize to fixed point. */
-	if (elems_a % to->port_b.elems != 0)
-		return -EINVAL;
-
-	return 0;
+	assert(elems_a % to->port_b.elems == 0);
 }
 
-int ia_css_fpn_configure(const struct ia_css_binary     *binary,
-			 const struct ia_css_frame_info *info)
+void
+ia_css_fpn_configure(
+    const struct ia_css_binary     *binary,
+    const struct ia_css_frame_info *info)
 {
 	struct ia_css_frame_info my_info = IA_CSS_BINARY_DEFAULT_FRAME_INFO;
 	const struct ia_css_fpn_configuration config = {
@@ -87,5 +85,5 @@ int ia_css_fpn_configure(const struct ia_css_binary     *binary,
 	my_info.raw_bayer_order = info->raw_bayer_order;
 	my_info.crop_info       = info->crop_info;
 
-	return ia_css_configure_fpn(binary, &config);
+	ia_css_configure_fpn(binary, &config);
 }

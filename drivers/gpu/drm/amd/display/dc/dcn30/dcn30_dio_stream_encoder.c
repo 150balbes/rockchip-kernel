@@ -28,13 +28,13 @@
 #include "dcn30_dio_stream_encoder.h"
 #include "reg_helper.h"
 #include "hw_shared.h"
-#include "dc.h"
 #include "core_types.h"
 #include <linux/delay.h>
 
 
 #define DC_LOGGER \
 		enc1->base.ctx->logger
+
 
 #define REG(reg)\
 	(enc1->regs->reg)
@@ -50,6 +50,22 @@
 	enc1->base.ctx
 
 
+void convert_dc_info_packet_to_128(
+	const struct dc_info_packet *info_packet,
+	struct dc_info_packet_128 *info_packet_128)
+{
+	unsigned int i;
+
+	info_packet_128->hb0 = info_packet->hb0;
+	info_packet_128->hb1 = info_packet->hb1;
+	info_packet_128->hb2 = info_packet->hb2;
+	info_packet_128->hb3 = info_packet->hb3;
+
+	for (i = 0; i < 32; i++) {
+		info_packet_128->sb[i] = info_packet->sb[i];
+	}
+
+}
 static void enc3_update_hdmi_info_packet(
 	struct dcn10_stream_encoder *enc1,
 	uint32_t packet_index,
@@ -61,8 +77,7 @@ static void enc3_update_hdmi_info_packet(
 		enc1->base.vpg->funcs->update_generic_info_packet(
 				enc1->base.vpg,
 				packet_index,
-				info_packet,
-				true);
+				info_packet);
 
 		/* enable transmission of packet(s) -
 		 * packet transmission begins on the next frame */
@@ -195,7 +210,7 @@ static void enc3_update_hdmi_info_packet(
 	}
 }
 
-void enc3_stream_encoder_update_hdmi_info_packets(
+static void enc3_stream_encoder_update_hdmi_info_packets(
 	struct stream_encoder *enc,
 	const struct encoder_info_frame *info_frame)
 {
@@ -212,10 +227,9 @@ void enc3_stream_encoder_update_hdmi_info_packets(
 	enc3_update_hdmi_info_packet(enc1, 1, &info_frame->vendor);
 	enc3_update_hdmi_info_packet(enc1, 3, &info_frame->spd);
 	enc3_update_hdmi_info_packet(enc1, 4, &info_frame->hdrsmd);
-	enc3_update_hdmi_info_packet(enc1, 6, &info_frame->vtem);
 }
 
-void enc3_stream_encoder_stop_hdmi_info_packets(
+static void enc3_stream_encoder_stop_hdmi_info_packets(
 	struct stream_encoder *enc)
 {
 	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
@@ -319,10 +333,9 @@ static void enc3_dp_set_dsc_config(struct stream_encoder *enc,
 }
 
 
-void enc3_dp_set_dsc_pps_info_packet(struct stream_encoder *enc,
+static void enc3_dp_set_dsc_pps_info_packet(struct stream_encoder *enc,
 					bool enable,
-					uint8_t *dsc_packed_pps,
-					bool immediate_update)
+					uint8_t *dsc_packed_pps)
 {
 	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
 
@@ -352,8 +365,7 @@ void enc3_dp_set_dsc_pps_info_packet(struct stream_encoder *enc,
 			enc1->base.vpg->funcs->update_generic_info_packet(
 							enc1->base.vpg,
 							11 + i,
-							&pps_sdp,
-							immediate_update);
+							&pps_sdp);
 		}
 
 		/* SW should make sure VBID[6] update line number is bigger
@@ -405,23 +417,7 @@ static void enc3_read_state(struct stream_encoder *enc, struct enc_state *s)
 	}
 }
 
-void enc3_stream_encoder_update_dp_info_packets_sdp_line_num(
-		struct stream_encoder *enc,
-		struct encoder_info_frame *info_frame)
-{
-	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
-
-	if (info_frame->adaptive_sync.valid == true &&
-		info_frame->sdp_line_num.adaptive_sync_line_num_valid == true) {
-		//00: REFER_TO_DP_SOF, 01: REFER_TO_OTG_SOF
-		REG_UPDATE(DP_SEC_CNTL1, DP_SEC_GSP5_LINE_REFERENCE, 1);
-
-		REG_UPDATE(DP_SEC_CNTL5, DP_SEC_GSP5_LINE_NUM,
-					info_frame->sdp_line_num.adaptive_sync_line_num);
-	}
-}
-
-void enc3_stream_encoder_update_dp_info_packets(
+static void enc3_stream_encoder_update_dp_info_packets(
 	struct stream_encoder *enc,
 	const struct encoder_info_frame *info_frame)
 {
@@ -433,63 +429,23 @@ void enc3_stream_encoder_update_dp_info_packets(
 		enc->vpg->funcs->update_generic_info_packet(
 				enc->vpg,
 				0,  /* packetIndex */
-				&info_frame->vsc,
-				true);
-	}
-	/* TODO: VSC SDP at packetIndex 1 should be retricted only if PSR-SU on.
-	 * There should have another Infopacket type (e.g. vsc_psrsu) for PSR_SU.
-	 * In addition, currently the driver check the valid bit then update and
-	 * send the corresponding Infopacket. For PSR-SU, the SDP only be sent
-	 * while entering PSR-SU mode. So we need another parameter(e.g. send)
-	 * in dc_info_packet to indicate which infopacket should be enabled by
-	 * default here.
-	 */
-	if (info_frame->vsc.valid) {
-		enc->vpg->funcs->update_generic_info_packet(
-				enc->vpg,
-				1,  /* packetIndex */
-				&info_frame->vsc,
-				true);
-	}
-	/* TODO: VSC SDP at packetIndex 1 should be restricted only if PSR-SU on.
-	 * There should have another Infopacket type (e.g. vsc_psrsu) for PSR_SU.
-	 * In addition, currently the driver check the valid bit then update and
-	 * send the corresponding Infopacket. For PSR-SU, the SDP only be sent
-	 * while entering PSR-SU mode. So we need another parameter(e.g. send)
-	 * in dc_info_packet to indicate which infopacket should be enabled by
-	 * default here.
-	 */
-	if (info_frame->vsc.valid) {
-		enc->vpg->funcs->update_generic_info_packet(
-				enc->vpg,
-				1,  /* packetIndex */
-				&info_frame->vsc,
-				true);
+				&info_frame->vsc);
 	}
 	if (info_frame->spd.valid) {
 		enc->vpg->funcs->update_generic_info_packet(
 				enc->vpg,
 				2,  /* packetIndex */
-				&info_frame->spd,
-				true);
+				&info_frame->spd);
 	}
 	if (info_frame->hdrsmd.valid) {
 		enc->vpg->funcs->update_generic_info_packet(
 				enc->vpg,
 				3,  /* packetIndex */
-				&info_frame->hdrsmd,
-				true);
+				&info_frame->hdrsmd);
 	}
 	/* packetIndex 4 is used for send immediate sdp message, and please
 	 * use other packetIndex (such as 5,6) for other info packet
 	 */
-
-	if (info_frame->adaptive_sync.valid)
-		enc->vpg->funcs->update_generic_info_packet(
-				enc->vpg,
-				5,  /* packetIndex */
-				&info_frame->adaptive_sync,
-				true);
 
 	/* enable/disable transmission of packet(s).
 	 * If enabled, packet transmission begins on the next frame
@@ -497,7 +453,7 @@ void enc3_stream_encoder_update_dp_info_packets(
 	REG_UPDATE(DP_SEC_CNTL, DP_SEC_GSP0_ENABLE, info_frame->vsc.valid);
 	REG_UPDATE(DP_SEC_CNTL, DP_SEC_GSP2_ENABLE, info_frame->spd.valid);
 	REG_UPDATE(DP_SEC_CNTL, DP_SEC_GSP3_ENABLE, info_frame->hdrsmd.valid);
-	REG_UPDATE(DP_SEC_CNTL, DP_SEC_GSP5_ENABLE, info_frame->adaptive_sync.valid);
+
 
 	/* This bit is the master enable bit.
 	 * When enabling secondary stream engine,
@@ -528,7 +484,7 @@ static void enc3_dp_set_odm_combine(
 }
 
 /* setup stream encoder in dvi mode */
-static void enc3_stream_encoder_dvi_set_stream_attribute(
+void enc3_stream_encoder_dvi_set_stream_attribute(
 	struct stream_encoder *enc,
 	struct dc_crtc_timing *crtc_timing,
 	bool is_dual_link)
@@ -691,9 +647,6 @@ static void enc3_stream_encoder_hdmi_set_stream_attribute(
 		HDMI_GC_SEND, 1,
 		HDMI_NULL_SEND, 1);
 
-	/* Disable Audio Content Protection packet transmission */
-	REG_UPDATE(HDMI_VBI_PACKET_CONTROL, HDMI_ACP_SEND, 0);
-
 	/* following belongs to audio */
 	/* Enable Audio InfoFrame packet transmission. */
 	REG_UPDATE(HDMI_INFOFRAME_CONTROL0, HDMI_AUDIO_INFO_SEND, 1);
@@ -710,7 +663,7 @@ static void enc3_stream_encoder_hdmi_set_stream_attribute(
 	REG_UPDATE(HDMI_GC, HDMI_GC_AVMUTE, 0);
 }
 
-void enc3_audio_mute_control(
+static void enc3_audio_mute_control(
 	struct stream_encoder *enc,
 	bool mute)
 {
@@ -718,7 +671,7 @@ void enc3_audio_mute_control(
 	enc->afmt->funcs->audio_mute_control(enc->afmt, mute);
 }
 
-void enc3_se_dp_audio_setup(
+static void enc3_se_dp_audio_setup(
 	struct stream_encoder *enc,
 	unsigned int az_inst,
 	struct audio_info *info)
@@ -749,7 +702,7 @@ static void enc3_se_setup_dp_audio(
 	enc->afmt->funcs->setup_dp_audio(enc->afmt);
 }
 
-void enc3_se_dp_audio_enable(
+static void enc3_se_dp_audio_enable(
 	struct stream_encoder *enc)
 {
 	enc1_se_enable_audio_clock(enc, true);
@@ -815,7 +768,7 @@ static void enc3_se_setup_hdmi_audio(
 	 */
 }
 
-void enc3_se_hdmi_audio_setup(
+static void enc3_se_hdmi_audio_setup(
 	struct stream_encoder *enc,
 	unsigned int az_inst,
 	struct audio_info *info,
@@ -843,8 +796,6 @@ static const struct stream_encoder_funcs dcn30_str_enc_funcs = {
 		enc3_stream_encoder_update_hdmi_info_packets,
 	.stop_hdmi_info_packets =
 		enc3_stream_encoder_stop_hdmi_info_packets,
-	.update_dp_info_packets_sdp_line_num =
-		enc3_stream_encoder_update_dp_info_packets_sdp_line_num,
 	.update_dp_info_packets =
 		enc3_stream_encoder_update_dp_info_packets,
 	.stop_dp_info_packets =
@@ -873,8 +824,6 @@ static const struct stream_encoder_funcs dcn30_str_enc_funcs = {
 	.dp_set_dsc_pps_info_packet = enc3_dp_set_dsc_pps_info_packet,
 	.set_dynamic_metadata = enc2_set_dynamic_metadata,
 	.hdmi_reset_stream_attribute = enc1_reset_hdmi_stream_attribute,
-
-	.get_fifo_cal_average_level = enc2_get_fifo_cal_average_level,
 };
 
 void dcn30_dio_stream_encoder_construct(

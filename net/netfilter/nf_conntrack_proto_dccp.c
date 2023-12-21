@@ -382,8 +382,7 @@ dccp_state_table[CT_DCCP_ROLE_MAX + 1][DCCP_PKT_SYNCACK + 1][CT_DCCP_MAX + 1] = 
 
 static noinline bool
 dccp_new(struct nf_conn *ct, const struct sk_buff *skb,
-	 const struct dccp_hdr *dh,
-	 const struct nf_hook_state *hook_state)
+	 const struct dccp_hdr *dh)
 {
 	struct net *net = nf_ct_net(ct);
 	struct nf_dccp_net *dn;
@@ -415,7 +414,7 @@ dccp_new(struct nf_conn *ct, const struct sk_buff *skb,
 	return true;
 
 out_invalid:
-	nf_ct_l4proto_log_invalid(skb, ct, hook_state, "%s", msg);
+	nf_ct_l4proto_log_invalid(skb, ct, "%s", msg);
 	return false;
 }
 
@@ -432,19 +431,9 @@ static bool dccp_error(const struct dccp_hdr *dh,
 		       struct sk_buff *skb, unsigned int dataoff,
 		       const struct nf_hook_state *state)
 {
-	static const unsigned long require_seq48 = 1 << DCCP_PKT_REQUEST |
-						   1 << DCCP_PKT_RESPONSE |
-						   1 << DCCP_PKT_CLOSEREQ |
-						   1 << DCCP_PKT_CLOSE |
-						   1 << DCCP_PKT_RESET |
-						   1 << DCCP_PKT_SYNC |
-						   1 << DCCP_PKT_SYNCACK;
 	unsigned int dccp_len = skb->len - dataoff;
 	unsigned int cscov;
 	const char *msg;
-	u8 type;
-
-	BUILD_BUG_ON(DCCP_PKT_INVALID >= BITS_PER_LONG);
 
 	if (dh->dccph_doff * 4 < sizeof(struct dccp_hdr) ||
 	    dh->dccph_doff * 4 > dccp_len) {
@@ -469,44 +458,15 @@ static bool dccp_error(const struct dccp_hdr *dh,
 		goto out_invalid;
 	}
 
-	type = dh->dccph_type;
-	if (type >= DCCP_PKT_INVALID) {
+	if (dh->dccph_type >= DCCP_PKT_INVALID) {
 		msg = "nf_ct_dccp: reserved packet type ";
 		goto out_invalid;
 	}
-
-	if (test_bit(type, &require_seq48) && !dh->dccph_x) {
-		msg = "nf_ct_dccp: type lacks 48bit sequence numbers";
-		goto out_invalid;
-	}
-
 	return false;
 out_invalid:
-	nf_l4proto_log_invalid(skb, state, IPPROTO_DCCP, "%s", msg);
+	nf_l4proto_log_invalid(skb, state->net, state->pf,
+			       IPPROTO_DCCP, "%s", msg);
 	return true;
-}
-
-struct nf_conntrack_dccp_buf {
-	struct dccp_hdr dh;	 /* generic header part */
-	struct dccp_hdr_ext ext; /* optional depending dh->dccph_x */
-	union {			 /* depends on header type */
-		struct dccp_hdr_ack_bits ack;
-		struct dccp_hdr_request req;
-		struct dccp_hdr_response response;
-		struct dccp_hdr_reset rst;
-	} u;
-};
-
-static struct dccp_hdr *
-dccp_header_pointer(const struct sk_buff *skb, int offset, const struct dccp_hdr *dh,
-		    struct nf_conntrack_dccp_buf *buf)
-{
-	unsigned int hdrlen = __dccp_hdr_len(dh);
-
-	if (hdrlen > sizeof(*buf))
-		return NULL;
-
-	return skb_header_pointer(skb, offset, hdrlen, buf);
 }
 
 int nf_conntrack_dccp_packet(struct nf_conn *ct, struct sk_buff *skb,
@@ -515,26 +475,20 @@ int nf_conntrack_dccp_packet(struct nf_conn *ct, struct sk_buff *skb,
 			     const struct nf_hook_state *state)
 {
 	enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
-	struct nf_conntrack_dccp_buf _dh;
+	struct dccp_hdr _dh, *dh;
 	u_int8_t type, old_state, new_state;
 	enum ct_dccp_roles role;
 	unsigned int *timeouts;
-	struct dccp_hdr *dh;
 
-	dh = skb_header_pointer(skb, dataoff, sizeof(*dh), &_dh.dh);
+	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
 	if (!dh)
 		return NF_DROP;
 
 	if (dccp_error(dh, skb, dataoff, state))
 		return -NF_ACCEPT;
 
-	/* pull again, including possible 48 bit sequences and subtype header */
-	dh = dccp_header_pointer(skb, dataoff, dh, &_dh);
-	if (!dh)
-		return NF_DROP;
-
 	type = dh->dccph_type;
-	if (!nf_ct_is_confirmed(ct) && !dccp_new(ct, skb, dh, state))
+	if (!nf_ct_is_confirmed(ct) && !dccp_new(ct, skb, dh))
 		return -NF_ACCEPT;
 
 	if (type == DCCP_PKT_RESET &&
@@ -589,11 +543,11 @@ int nf_conntrack_dccp_packet(struct nf_conn *ct, struct sk_buff *skb,
 		ct->proto.dccp.last_pkt = type;
 
 		spin_unlock_bh(&ct->lock);
-		nf_ct_l4proto_log_invalid(skb, ct, state, "%s", "invalid packet");
+		nf_ct_l4proto_log_invalid(skb, ct, "%s", "invalid packet");
 		return NF_ACCEPT;
 	case CT_DCCP_INVALID:
 		spin_unlock_bh(&ct->lock);
-		nf_ct_l4proto_log_invalid(skb, ct, state, "%s", "invalid state transition");
+		nf_ct_l4proto_log_invalid(skb, ct, "%s", "invalid state transition");
 		return -NF_ACCEPT;
 	}
 
@@ -636,7 +590,7 @@ static void dccp_print_conntrack(struct seq_file *s, struct nf_conn *ct)
 
 #if IS_ENABLED(CONFIG_NF_CT_NETLINK)
 static int dccp_to_nlattr(struct sk_buff *skb, struct nlattr *nla,
-			  struct nf_conn *ct, bool destroy)
+			  struct nf_conn *ct)
 {
 	struct nlattr *nest_parms;
 
@@ -644,22 +598,15 @@ static int dccp_to_nlattr(struct sk_buff *skb, struct nlattr *nla,
 	nest_parms = nla_nest_start(skb, CTA_PROTOINFO_DCCP);
 	if (!nest_parms)
 		goto nla_put_failure;
-	if (nla_put_u8(skb, CTA_PROTOINFO_DCCP_STATE, ct->proto.dccp.state))
-		goto nla_put_failure;
-
-	if (destroy)
-		goto skip_state;
-
-	if (nla_put_u8(skb, CTA_PROTOINFO_DCCP_ROLE,
+	if (nla_put_u8(skb, CTA_PROTOINFO_DCCP_STATE, ct->proto.dccp.state) ||
+	    nla_put_u8(skb, CTA_PROTOINFO_DCCP_ROLE,
 		       ct->proto.dccp.role[IP_CT_DIR_ORIGINAL]) ||
 	    nla_put_be64(skb, CTA_PROTOINFO_DCCP_HANDSHAKE_SEQ,
 			 cpu_to_be64(ct->proto.dccp.handshake_seq),
 			 CTA_PROTOINFO_DCCP_PAD))
 		goto nla_put_failure;
-skip_state:
 	nla_nest_end(skb, nest_parms);
 	spin_unlock_bh(&ct->lock);
-
 	return 0;
 
 nla_put_failure:

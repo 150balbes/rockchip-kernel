@@ -4,7 +4,6 @@
  * Copyright © 2016 Intel Corporation
  */
 
-#include "i915_file_private.h"
 #include "mock_context.h"
 #include "selftests/mock_drm.h"
 #include "selftests/mock_gtt.h"
@@ -15,7 +14,6 @@ mock_context(struct drm_i915_private *i915,
 {
 	struct i915_gem_context *ctx;
 	struct i915_gem_engines *e;
-	struct intel_sseu null_sseu = {};
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
@@ -24,7 +22,6 @@ mock_context(struct drm_i915_private *i915,
 	kref_init(&ctx->ref);
 	INIT_LIST_HEAD(&ctx->link);
 	ctx->i915 = i915;
-	INIT_WORK(&ctx->release_work, i915_gem_context_release_work);
 
 	mutex_init(&ctx->mutex);
 
@@ -33,6 +30,15 @@ mock_context(struct drm_i915_private *i915,
 
 	i915_gem_context_set_persistence(ctx);
 
+	mutex_init(&ctx->engines_mutex);
+	e = default_engines(ctx);
+	if (IS_ERR(e))
+		goto err_free;
+	RCU_INIT_POINTER(ctx->engines, e);
+
+	INIT_RADIX_TREE(&ctx->handles_vma, GFP_KERNEL);
+	mutex_init(&ctx->lut_mutex);
+
 	if (name) {
 		struct i915_ppgtt *ppgtt;
 
@@ -40,27 +46,24 @@ mock_context(struct drm_i915_private *i915,
 
 		ppgtt = mock_ppgtt(i915, name);
 		if (!ppgtt)
-			goto err_free;
+			goto err_put;
 
-		ctx->vm = &ppgtt->vm;
+		mutex_lock(&ctx->mutex);
+		__set_ppgtt(ctx, &ppgtt->vm);
+		mutex_unlock(&ctx->mutex);
+
+		i915_vm_put(&ppgtt->vm);
 	}
-
-	mutex_init(&ctx->engines_mutex);
-	e = default_engines(ctx, null_sseu);
-	if (IS_ERR(e))
-		goto err_vm;
-	RCU_INIT_POINTER(ctx->engines, e);
-
-	INIT_RADIX_TREE(&ctx->handles_vma, GFP_KERNEL);
-	mutex_init(&ctx->lut_mutex);
 
 	return ctx;
 
-err_vm:
-	if (ctx->vm)
-		i915_vm_put(ctx->vm);
 err_free:
 	kfree(ctx);
+	return NULL;
+
+err_put:
+	i915_gem_context_set_closed(ctx);
+	i915_gem_context_put(ctx);
 	return NULL;
 }
 
@@ -77,28 +80,19 @@ void mock_init_contexts(struct drm_i915_private *i915)
 struct i915_gem_context *
 live_context(struct drm_i915_private *i915, struct file *file)
 {
-	struct drm_i915_file_private *fpriv = to_drm_file(file)->driver_priv;
-	struct i915_gem_proto_context *pc;
 	struct i915_gem_context *ctx;
 	int err;
 	u32 id;
 
-	pc = proto_context_create(i915, 0);
-	if (IS_ERR(pc))
-		return ERR_CAST(pc);
-
-	ctx = i915_gem_create_context(i915, pc);
-	proto_context_close(i915, pc);
+	ctx = i915_gem_create_context(i915, 0);
 	if (IS_ERR(ctx))
 		return ctx;
 
 	i915_gem_context_set_no_error_capture(ctx);
 
-	err = xa_alloc(&fpriv->context_xa, &id, NULL, xa_limit_32b, GFP_KERNEL);
+	err = gem_context_register(ctx, to_drm_file(file)->driver_priv, &id);
 	if (err < 0)
 		goto err_ctx;
-
-	gem_context_register(ctx, fpriv, id);
 
 	return ctx;
 
@@ -112,7 +106,6 @@ live_context_for_engine(struct intel_engine_cs *engine, struct file *file)
 {
 	struct i915_gem_engines *engines;
 	struct i915_gem_context *ctx;
-	struct intel_sseu null_sseu = {};
 	struct intel_context *ce;
 
 	engines = alloc_engines(1);
@@ -131,7 +124,7 @@ live_context_for_engine(struct intel_engine_cs *engine, struct file *file)
 		return ERR_CAST(ce);
 	}
 
-	intel_context_set_gem(ce, ctx, null_sseu);
+	intel_context_set_gem(ce, ctx);
 	engines->engines[0] = ce;
 	engines->num_engines = 1;
 
@@ -146,24 +139,11 @@ live_context_for_engine(struct intel_engine_cs *engine, struct file *file)
 }
 
 struct i915_gem_context *
-kernel_context(struct drm_i915_private *i915,
-	       struct i915_address_space *vm)
+kernel_context(struct drm_i915_private *i915)
 {
 	struct i915_gem_context *ctx;
-	struct i915_gem_proto_context *pc;
 
-	pc = proto_context_create(i915, 0);
-	if (IS_ERR(pc))
-		return ERR_CAST(pc);
-
-	if (vm) {
-		if (pc->vm)
-			i915_vm_put(pc->vm);
-		pc->vm = i915_vm_get(vm);
-	}
-
-	ctx = i915_gem_create_context(i915, pc);
-	proto_context_close(i915, pc);
+	ctx = i915_gem_create_context(i915, 0);
 	if (IS_ERR(ctx))
 		return ctx;
 

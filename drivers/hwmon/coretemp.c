@@ -27,7 +27,6 @@
 #include <asm/msr.h>
 #include <asm/processor.h>
 #include <asm/cpu_device_id.h>
-#include <linux/sched/isolation.h>
 
 #define DRVNAME	"coretemp"
 
@@ -56,8 +55,6 @@ MODULE_PARM_DESC(tjmax, "TjMax value in degrees Celsius");
 
 /*
  * Per-Core Temperature Data
- * @tjmax: The static tjmax value when tjmax cannot be retrieved from
- *		IA32_TEMPERATURE_TARGET MSR.
  * @last_updated: The time when the current temperature value was updated
  *		earlier (in jiffies).
  * @cpu_core_id: The CPU Core from which temperature values should be read
@@ -67,9 +64,11 @@ MODULE_PARM_DESC(tjmax, "TjMax value in degrees Celsius");
  * @attr_size:  Total number of pre-core attrs displayed in the sysfs.
  * @is_pkg_data: If this is 1, the temp_data holds pkgtemp data.
  *		Otherwise, temp_data holds coretemp data.
+ * @valid: If this is 1, the current temperature is valid.
  */
 struct temp_data {
 	int temp;
+	int ttarget;
 	int tjmax;
 	unsigned long last_updated;
 	unsigned int cpu;
@@ -77,6 +76,7 @@ struct temp_data {
 	u32 status_reg;
 	int attr_size;
 	bool is_pkg_data;
+	bool valid;
 	struct sensor_device_attribute sd_attrs[TOTAL_ATTRS];
 	char attr_name[TOTAL_ATTRS][CORETEMP_NAME_LENGTH];
 	struct attribute *attrs[TOTAL_ATTRS + 1];
@@ -94,6 +94,85 @@ struct platform_data {
 	struct temp_data	*core_data[MAX_CORE_DATA];
 	struct device_attribute name_attr;
 };
+
+/* Keep track of how many zone pointers we allocated in init() */
+static int max_zones __read_mostly;
+/* Array of zone pointers. Serialized by cpu hotplug lock */
+static struct platform_device **zone_devices;
+
+static ssize_t show_label(struct device *dev,
+				struct device_attribute *devattr, char *buf)
+{
+	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
+	struct platform_data *pdata = dev_get_drvdata(dev);
+	struct temp_data *tdata = pdata->core_data[attr->index];
+
+	if (tdata->is_pkg_data)
+		return sprintf(buf, "Package id %u\n", pdata->pkg_id);
+
+	return sprintf(buf, "Core %u\n", tdata->cpu_core_id);
+}
+
+static ssize_t show_crit_alarm(struct device *dev,
+				struct device_attribute *devattr, char *buf)
+{
+	u32 eax, edx;
+	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
+	struct platform_data *pdata = dev_get_drvdata(dev);
+	struct temp_data *tdata = pdata->core_data[attr->index];
+
+	mutex_lock(&tdata->update_lock);
+	rdmsr_on_cpu(tdata->cpu, tdata->status_reg, &eax, &edx);
+	mutex_unlock(&tdata->update_lock);
+
+	return sprintf(buf, "%d\n", (eax >> 5) & 1);
+}
+
+static ssize_t show_tjmax(struct device *dev,
+			struct device_attribute *devattr, char *buf)
+{
+	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
+	struct platform_data *pdata = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d\n", pdata->core_data[attr->index]->tjmax);
+}
+
+static ssize_t show_ttarget(struct device *dev,
+				struct device_attribute *devattr, char *buf)
+{
+	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
+	struct platform_data *pdata = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d\n", pdata->core_data[attr->index]->ttarget);
+}
+
+static ssize_t show_temp(struct device *dev,
+			struct device_attribute *devattr, char *buf)
+{
+	u32 eax, edx;
+	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
+	struct platform_data *pdata = dev_get_drvdata(dev);
+	struct temp_data *tdata = pdata->core_data[attr->index];
+
+	mutex_lock(&tdata->update_lock);
+
+	/* Check whether the time interval has elapsed */
+	if (!tdata->valid || time_after(jiffies, tdata->last_updated + HZ)) {
+		rdmsr_on_cpu(tdata->cpu, tdata->status_reg, &eax, &edx);
+		/*
+		 * Ignore the valid bit. In all observed cases the register
+		 * value is either low or zero if the valid bit is 0.
+		 * Return it instead of reporting an error which doesn't
+		 * really help at all.
+		 */
+		tdata->temp = tdata->tjmax - ((eax >> 16) & 0x7f) * 1000;
+		tdata->valid = 1;
+		tdata->last_updated = jiffies;
+	}
+
+	mutex_unlock(&tdata->update_lock);
+	return sprintf(buf, "%d\n", tdata->temp);
+}
 
 struct tjmax_pci {
 	unsigned int device;
@@ -261,161 +340,43 @@ static bool cpu_has_tjmax(struct cpuinfo_x86 *c)
 	       model != 0x36;
 }
 
-static int get_tjmax(struct temp_data *tdata, struct device *dev)
+static int get_tjmax(struct cpuinfo_x86 *c, u32 id, struct device *dev)
 {
-	struct cpuinfo_x86 *c = &cpu_data(tdata->cpu);
 	int err;
 	u32 eax, edx;
 	u32 val;
-
-	/* use static tjmax once it is set */
-	if (tdata->tjmax)
-		return tdata->tjmax;
 
 	/*
 	 * A new feature of current Intel(R) processors, the
 	 * IA32_TEMPERATURE_TARGET contains the TjMax value
 	 */
-	err = rdmsr_safe_on_cpu(tdata->cpu, MSR_IA32_TEMPERATURE_TARGET, &eax, &edx);
+	err = rdmsr_safe_on_cpu(id, MSR_IA32_TEMPERATURE_TARGET, &eax, &edx);
 	if (err) {
 		if (cpu_has_tjmax(c))
-			dev_warn(dev, "Unable to read TjMax from CPU %u\n", tdata->cpu);
+			dev_warn(dev, "Unable to read TjMax from CPU %u\n", id);
 	} else {
 		val = (eax >> 16) & 0xff;
-		if (val)
+		/*
+		 * If the TjMax is not plausible, an assumption
+		 * will be used
+		 */
+		if (val) {
+			dev_dbg(dev, "TjMax is %d degrees C\n", val);
 			return val * 1000;
+		}
 	}
 
 	if (force_tjmax) {
 		dev_notice(dev, "TjMax forced to %d degrees C by user\n",
 			   force_tjmax);
-		tdata->tjmax = force_tjmax * 1000;
-	} else {
-		/*
-		 * An assumption is made for early CPUs and unreadable MSR.
-		 * NOTE: the calculated value may not be correct.
-		 */
-		tdata->tjmax = adjust_tjmax(c, tdata->cpu, dev);
+		return force_tjmax * 1000;
 	}
-	return tdata->tjmax;
-}
-
-static int get_ttarget(struct temp_data *tdata, struct device *dev)
-{
-	u32 eax, edx;
-	int tjmax, ttarget_offset, ret;
 
 	/*
-	 * ttarget is valid only if tjmax can be retrieved from
-	 * MSR_IA32_TEMPERATURE_TARGET
+	 * An assumption is made for early CPUs and unreadable MSR.
+	 * NOTE: the calculated value may not be correct.
 	 */
-	if (tdata->tjmax)
-		return -ENODEV;
-
-	ret = rdmsr_safe_on_cpu(tdata->cpu, MSR_IA32_TEMPERATURE_TARGET, &eax, &edx);
-	if (ret)
-		return ret;
-
-	tjmax = (eax >> 16) & 0xff;
-
-	/* Read the still undocumented bits 8:15 of IA32_TEMPERATURE_TARGET. */
-	ttarget_offset = (eax >> 8) & 0xff;
-
-	return (tjmax - ttarget_offset) * 1000;
-}
-
-/* Keep track of how many zone pointers we allocated in init() */
-static int max_zones __read_mostly;
-/* Array of zone pointers. Serialized by cpu hotplug lock */
-static struct platform_device **zone_devices;
-
-static ssize_t show_label(struct device *dev,
-				struct device_attribute *devattr, char *buf)
-{
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
-	struct platform_data *pdata = dev_get_drvdata(dev);
-	struct temp_data *tdata = pdata->core_data[attr->index];
-
-	if (tdata->is_pkg_data)
-		return sprintf(buf, "Package id %u\n", pdata->pkg_id);
-
-	return sprintf(buf, "Core %u\n", tdata->cpu_core_id);
-}
-
-static ssize_t show_crit_alarm(struct device *dev,
-				struct device_attribute *devattr, char *buf)
-{
-	u32 eax, edx;
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
-	struct platform_data *pdata = dev_get_drvdata(dev);
-	struct temp_data *tdata = pdata->core_data[attr->index];
-
-	mutex_lock(&tdata->update_lock);
-	rdmsr_on_cpu(tdata->cpu, tdata->status_reg, &eax, &edx);
-	mutex_unlock(&tdata->update_lock);
-
-	return sprintf(buf, "%d\n", (eax >> 5) & 1);
-}
-
-static ssize_t show_tjmax(struct device *dev,
-			struct device_attribute *devattr, char *buf)
-{
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
-	struct platform_data *pdata = dev_get_drvdata(dev);
-	struct temp_data *tdata = pdata->core_data[attr->index];
-	int tjmax;
-
-	mutex_lock(&tdata->update_lock);
-	tjmax = get_tjmax(tdata, dev);
-	mutex_unlock(&tdata->update_lock);
-
-	return sprintf(buf, "%d\n", tjmax);
-}
-
-static ssize_t show_ttarget(struct device *dev,
-				struct device_attribute *devattr, char *buf)
-{
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
-	struct platform_data *pdata = dev_get_drvdata(dev);
-	struct temp_data *tdata = pdata->core_data[attr->index];
-	int ttarget;
-
-	mutex_lock(&tdata->update_lock);
-	ttarget = get_ttarget(tdata, dev);
-	mutex_unlock(&tdata->update_lock);
-
-	if (ttarget < 0)
-		return ttarget;
-	return sprintf(buf, "%d\n", ttarget);
-}
-
-static ssize_t show_temp(struct device *dev,
-			struct device_attribute *devattr, char *buf)
-{
-	u32 eax, edx;
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
-	struct platform_data *pdata = dev_get_drvdata(dev);
-	struct temp_data *tdata = pdata->core_data[attr->index];
-	int tjmax;
-
-	mutex_lock(&tdata->update_lock);
-
-	tjmax = get_tjmax(tdata, dev);
-	/* Check whether the time interval has elapsed */
-	if (time_after(jiffies, tdata->last_updated + HZ)) {
-		rdmsr_on_cpu(tdata->cpu, tdata->status_reg, &eax, &edx);
-		/*
-		 * Ignore the valid bit. In all observed cases the register
-		 * value is either low or zero if the valid bit is 0.
-		 * Return it instead of reporting an error which doesn't
-		 * really help at all.
-		 */
-		tdata->temp = tjmax - ((eax >> 16) & 0x7f) * 1000;
-		tdata->last_updated = jiffies;
-	}
-
-	mutex_unlock(&tdata->update_lock);
-	return sprintf(buf, "%d\n", tdata->temp);
+	return adjust_tjmax(c, id, dev);
 }
 
 static int create_core_attrs(struct temp_data *tdata, struct device *dev,
@@ -497,9 +458,6 @@ static int create_core_data(struct platform_device *pdev, unsigned int cpu,
 	u32 eax, edx;
 	int err, index, attr_no;
 
-	if (!housekeeping_cpu(cpu, HK_TYPE_MISC))
-		return 0;
-
 	/*
 	 * Find attr number for sysfs:
 	 * We map the attr number to core id of the CPU
@@ -532,17 +490,23 @@ static int create_core_data(struct platform_device *pdev, unsigned int cpu,
 	if (err)
 		goto exit_free;
 
-	/* Make sure tdata->tjmax is a valid indicator for dynamic/static tjmax */
-	get_tjmax(tdata, &pdev->dev);
+	/* We can access status register. Get Critical Temperature */
+	tdata->tjmax = get_tjmax(c, cpu, &pdev->dev);
 
 	/*
-	 * The target temperature is available on older CPUs but not in the
-	 * MSR_IA32_TEMPERATURE_TARGET register. Atoms don't have the register
-	 * at all.
+	 * Read the still undocumented bits 8:15 of IA32_TEMPERATURE_TARGET.
+	 * The target temperature is available on older CPUs but not in this
+	 * register. Atoms don't have the register at all.
 	 */
-	if (c->x86_model > 0xe && c->x86_model != 0x1c)
-		if (get_ttarget(tdata, &pdev->dev) >= 0)
+	if (c->x86_model > 0xe && c->x86_model != 0x1c) {
+		err = rdmsr_safe_on_cpu(cpu, MSR_IA32_TEMPERATURE_TARGET,
+					&eax, &edx);
+		if (!err) {
+			tdata->ttarget
+			  = tdata->tjmax - ((eax >> 8) & 0xff) * 1000;
 			tdata->attr_size++;
+		}
+	}
 
 	pdata->core_data[attr_no] = tdata;
 
@@ -586,49 +550,66 @@ static void coretemp_remove_core(struct platform_data *pdata, int indx)
 		ida_free(&pdata->ida, indx - BASE_SYSFS_ATTR_NO);
 }
 
-static int coretemp_device_add(int zoneid)
+static int coretemp_probe(struct platform_device *pdev)
 {
-	struct platform_device *pdev;
+	struct device *dev = &pdev->dev;
 	struct platform_data *pdata;
-	int err;
 
 	/* Initialize the per-zone data structures */
-	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc(dev, sizeof(struct platform_data), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
 
-	pdata->pkg_id = zoneid;
+	pdata->pkg_id = pdev->id;
 	ida_init(&pdata->ida);
-
-	pdev = platform_device_alloc(DRVNAME, zoneid);
-	if (!pdev) {
-		err = -ENOMEM;
-		goto err_free_pdata;
-	}
-
-	err = platform_device_add(pdev);
-	if (err)
-		goto err_put_dev;
-
 	platform_set_drvdata(pdev, pdata);
-	zone_devices[zoneid] = pdev;
-	return 0;
 
-err_put_dev:
-	platform_device_put(pdev);
-err_free_pdata:
-	kfree(pdata);
-	return err;
+	pdata->hwmon_dev = devm_hwmon_device_register_with_groups(dev, DRVNAME,
+								  pdata, NULL);
+	return PTR_ERR_OR_ZERO(pdata->hwmon_dev);
 }
 
-static void coretemp_device_remove(int zoneid)
+static int coretemp_remove(struct platform_device *pdev)
 {
-	struct platform_device *pdev = zone_devices[zoneid];
 	struct platform_data *pdata = platform_get_drvdata(pdev);
+	int i;
+
+	for (i = MAX_CORE_DATA - 1; i >= 0; --i)
+		if (pdata->core_data[i])
+			coretemp_remove_core(pdata, i);
 
 	ida_destroy(&pdata->ida);
-	kfree(pdata);
-	platform_device_unregister(pdev);
+	return 0;
+}
+
+static struct platform_driver coretemp_driver = {
+	.driver = {
+		.name = DRVNAME,
+	},
+	.probe = coretemp_probe,
+	.remove = coretemp_remove,
+};
+
+static struct platform_device *coretemp_device_add(unsigned int cpu)
+{
+	int err, zoneid = topology_logical_die_id(cpu);
+	struct platform_device *pdev;
+
+	if (zoneid < 0)
+		return ERR_PTR(-ENOMEM);
+
+	pdev = platform_device_alloc(DRVNAME, zoneid);
+	if (!pdev)
+		return ERR_PTR(-ENOMEM);
+
+	err = platform_device_add(pdev);
+	if (err) {
+		platform_device_put(pdev);
+		return ERR_PTR(err);
+	}
+
+	zone_devices[zoneid] = pdev;
+	return pdev;
 }
 
 static int coretemp_cpu_online(unsigned int cpu)
@@ -652,10 +633,7 @@ static int coretemp_cpu_online(unsigned int cpu)
 	if (!cpu_has(c, X86_FEATURE_DTHERM))
 		return -ENODEV;
 
-	pdata = platform_get_drvdata(pdev);
-	if (!pdata->hwmon_dev) {
-		struct device *hwmon;
-
+	if (!pdev) {
 		/* Check the microcode version of the CPU */
 		if (chk_ucode_version(cpu))
 			return -EINVAL;
@@ -666,11 +644,9 @@ static int coretemp_cpu_online(unsigned int cpu)
 		 * online. So, initialize per-pkg data structures and
 		 * then bring this core online.
 		 */
-		hwmon = hwmon_device_register_with_groups(&pdev->dev, DRVNAME,
-							  pdata, NULL);
-		if (IS_ERR(hwmon))
-			return PTR_ERR(hwmon);
-		pdata->hwmon_dev = hwmon;
+		pdev = coretemp_device_add(cpu);
+		if (IS_ERR(pdev))
+			return PTR_ERR(pdev);
 
 		/*
 		 * Check whether pkgtemp support is available.
@@ -680,6 +656,7 @@ static int coretemp_cpu_online(unsigned int cpu)
 			coretemp_add_core(pdev, cpu, 1);
 	}
 
+	pdata = platform_get_drvdata(pdev);
 	/*
 	 * Check whether a thread sibling is already online. If not add the
 	 * interface for this CPU core.
@@ -698,14 +675,18 @@ static int coretemp_cpu_offline(unsigned int cpu)
 	struct temp_data *tdata;
 	int i, indx = -1, target;
 
-	/* No need to tear down any interfaces for suspend */
+	/*
+	 * Don't execute this on suspend as the device remove locks
+	 * up the machine.
+	 */
 	if (cpuhp_tasks_frozen)
 		return 0;
 
 	/* If the physical CPU device does not exist, just return */
-	pd = platform_get_drvdata(pdev);
-	if (!pd->hwmon_dev)
+	if (!pdev)
 		return 0;
+
+	pd = platform_get_drvdata(pdev);
 
 	for (i = 0; i < NUM_REAL_CORES; i++) {
 		if (pd->cpu_map[i] == topology_core_id(cpu)) {
@@ -737,14 +718,13 @@ static int coretemp_cpu_offline(unsigned int cpu)
 	}
 
 	/*
-	 * If all cores in this pkg are offline, remove the interface.
+	 * If all cores in this pkg are offline, remove the device. This
+	 * will invoke the platform driver remove function, which cleans up
+	 * the rest.
 	 */
-	tdata = pd->core_data[PKG_SYSFS_ATTR_NO];
 	if (cpumask_empty(&pd->cpumask)) {
-		if (tdata)
-			coretemp_remove_core(pd, PKG_SYSFS_ATTR_NO);
-		hwmon_device_unregister(pd->hwmon_dev);
-		pd->hwmon_dev = NULL;
+		zone_devices[topology_logical_die_id(cpu)] = NULL;
+		platform_device_unregister(pdev);
 		return 0;
 	}
 
@@ -752,6 +732,7 @@ static int coretemp_cpu_offline(unsigned int cpu)
 	 * Check whether this core is the target for the package
 	 * interface. We need to assign it to some other cpu.
 	 */
+	tdata = pd->core_data[PKG_SYSFS_ATTR_NO];
 	if (tdata && tdata->cpu == cpu) {
 		target = cpumask_first(&pd->cpumask);
 		mutex_lock(&tdata->update_lock);
@@ -770,7 +751,7 @@ static enum cpuhp_state coretemp_hp_online;
 
 static int __init coretemp_init(void)
 {
-	int i, err;
+	int err;
 
 	/*
 	 * CPUID.06H.EAX[0] indicates whether the CPU has thermal
@@ -786,22 +767,20 @@ static int __init coretemp_init(void)
 	if (!zone_devices)
 		return -ENOMEM;
 
-	for (i = 0; i < max_zones; i++) {
-		err = coretemp_device_add(i);
-		if (err)
-			goto outzone;
-	}
+	err = platform_driver_register(&coretemp_driver);
+	if (err)
+		goto outzone;
 
 	err = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "hwmon/coretemp:online",
 				coretemp_cpu_online, coretemp_cpu_offline);
 	if (err < 0)
-		goto outzone;
+		goto outdrv;
 	coretemp_hp_online = err;
 	return 0;
 
+outdrv:
+	platform_driver_unregister(&coretemp_driver);
 outzone:
-	while (i--)
-		coretemp_device_remove(i);
 	kfree(zone_devices);
 	return err;
 }
@@ -809,11 +788,8 @@ module_init(coretemp_init)
 
 static void __exit coretemp_exit(void)
 {
-	int i;
-
 	cpuhp_remove_state(coretemp_hp_online);
-	for (i = 0; i < max_zones; i++)
-		coretemp_device_remove(i);
+	platform_driver_unregister(&coretemp_driver);
 	kfree(zone_devices);
 }
 module_exit(coretemp_exit)

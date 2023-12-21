@@ -11,7 +11,7 @@ Getting started quick
 - Compile and install kernel and modules, reboot.
 
 - You need the udftools package (pktsetup, mkudffs, cdrwtool).
-  Download from https://github.com/pali/udftools
+  Download from http://sourceforge.net/projects/linux-udf/
 
 - Grab a new CD-RW disc and format it (assuming CD-RW is hdc, substitute
   as appropriate)::
@@ -102,7 +102,7 @@ Using the pktcdvd sysfs interface
 
 Since Linux 2.6.20, the pktcdvd module has a sysfs interface
 and can be controlled by it. For example the "pktcdvd" tool uses
-this interface. (see http://tom.ist-im-web.de/linux/software/pktcdvd )
+this interface. (see http://tom.ist-im-web.de/download/pktcdvd )
 
 "pktcdvd" works similar to "pktsetup", e.g.::
 

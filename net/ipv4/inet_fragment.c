@@ -133,7 +133,6 @@ static void inet_frags_free_cb(void *ptr, void *arg)
 	count = del_timer_sync(&fq->timer) ? 1 : 0;
 
 	spin_lock_bh(&fq->lock);
-	fq->flags |= INET_FRAG_DROP;
 	if (!(fq->flags & INET_FRAG_COMPLETE)) {
 		fq->flags |= INET_FRAG_COMPLETE;
 		count++;
@@ -146,16 +145,12 @@ static void inet_frags_free_cb(void *ptr, void *arg)
 		inet_frag_destroy(fq);
 }
 
-static LLIST_HEAD(fqdir_free_list);
-
-static void fqdir_free_fn(struct work_struct *work)
+static void fqdir_work_fn(struct work_struct *work)
 {
-	struct llist_node *kill_list;
-	struct fqdir *fqdir, *tmp;
-	struct inet_frags *f;
+	struct fqdir *fqdir = container_of(work, struct fqdir, destroy_work);
+	struct inet_frags *f = fqdir->f;
 
-	/* Atomically snapshot the list of fqdirs to free */
-	kill_list = llist_del_all(&fqdir_free_list);
+	rhashtable_free_and_destroy(&fqdir->rhashtable, inet_frags_free_cb, NULL);
 
 	/* We need to make sure all ongoing call_rcu(..., inet_frag_destroy_rcu)
 	 * have completed, since they need to dereference fqdir.
@@ -163,25 +158,10 @@ static void fqdir_free_fn(struct work_struct *work)
 	 */
 	rcu_barrier();
 
-	llist_for_each_entry_safe(fqdir, tmp, kill_list, free_list) {
-		f = fqdir->f;
-		if (refcount_dec_and_test(&f->refcnt))
-			complete(&f->completion);
+	if (refcount_dec_and_test(&f->refcnt))
+		complete(&f->completion);
 
-		kfree(fqdir);
-	}
-}
-
-static DECLARE_WORK(fqdir_free_work, fqdir_free_fn);
-
-static void fqdir_work_fn(struct work_struct *work)
-{
-	struct fqdir *fqdir = container_of(work, struct fqdir, destroy_work);
-
-	rhashtable_free_and_destroy(&fqdir->rhashtable, inet_frags_free_cb, NULL);
-
-	if (llist_add(&fqdir->free_list, &fqdir_free_list))
-		queue_work(system_wq, &fqdir_free_work);
+	kfree(fqdir);
 }
 
 int fqdir_init(struct fqdir **fqdirp, struct inet_frags *f, struct net *net)
@@ -204,22 +184,10 @@ int fqdir_init(struct fqdir **fqdirp, struct inet_frags *f, struct net *net)
 }
 EXPORT_SYMBOL(fqdir_init);
 
-static struct workqueue_struct *inet_frag_wq;
-
-static int __init inet_frag_wq_init(void)
-{
-	inet_frag_wq = create_workqueue("inet_frag_wq");
-	if (!inet_frag_wq)
-		panic("Could not create inet frag workq");
-	return 0;
-}
-
-pure_initcall(inet_frag_wq_init);
-
 void fqdir_exit(struct fqdir *fqdir)
 {
 	INIT_WORK(&fqdir->destroy_work, fqdir_work_fn);
-	queue_work(inet_frag_wq, &fqdir->destroy_work);
+	queue_work(system_wq, &fqdir->destroy_work);
 }
 EXPORT_SYMBOL(fqdir_exit);
 
@@ -261,8 +229,7 @@ static void inet_frag_destroy_rcu(struct rcu_head *head)
 	kmem_cache_free(f->frags_cachep, q);
 }
 
-unsigned int inet_frag_rbtree_purge(struct rb_root *root,
-				    enum skb_drop_reason reason)
+unsigned int inet_frag_rbtree_purge(struct rb_root *root)
 {
 	struct rb_node *p = rb_first(root);
 	unsigned int sum = 0;
@@ -276,7 +243,7 @@ unsigned int inet_frag_rbtree_purge(struct rb_root *root,
 			struct sk_buff *next = FRAG_CB(skb)->next_frag;
 
 			sum += skb->truesize;
-			kfree_skb_reason(skb, reason);
+			kfree_skb(skb);
 			skb = next;
 		}
 	}
@@ -286,21 +253,17 @@ EXPORT_SYMBOL(inet_frag_rbtree_purge);
 
 void inet_frag_destroy(struct inet_frag_queue *q)
 {
-	unsigned int sum, sum_truesize = 0;
-	enum skb_drop_reason reason;
-	struct inet_frags *f;
 	struct fqdir *fqdir;
+	unsigned int sum, sum_truesize = 0;
+	struct inet_frags *f;
 
 	WARN_ON(!(q->flags & INET_FRAG_COMPLETE));
-	reason = (q->flags & INET_FRAG_DROP) ?
-			SKB_DROP_REASON_FRAG_REASM_TIMEOUT :
-			SKB_CONSUMED;
 	WARN_ON(del_timer(&q->timer) != 0);
 
 	/* Release all fragment data. */
 	fqdir = q->fqdir;
 	f = fqdir->f;
-	sum_truesize = inet_frag_rbtree_purge(&q->rb_fragments, reason);
+	sum_truesize = inet_frag_rbtree_purge(&q->rb_fragments);
 	sum = sum_truesize + f->qsize;
 
 	call_rcu(&q->rcu, inet_frag_destroy_rcu);
@@ -516,7 +479,7 @@ EXPORT_SYMBOL(inet_frag_reasm_prepare);
 void inet_frag_reasm_finish(struct inet_frag_queue *q, struct sk_buff *head,
 			    void *reasm_data, bool try_coalesce)
 {
-	struct sk_buff **nextp = reasm_data;
+	struct sk_buff **nextp = (struct sk_buff **)reasm_data;
 	struct rb_node *rbn;
 	struct sk_buff *fp;
 	int sum_truesize;
@@ -578,7 +541,6 @@ void inet_frag_reasm_finish(struct inet_frag_queue *q, struct sk_buff *head,
 	skb_mark_not_on_list(head);
 	head->prev = NULL;
 	head->tstamp = q->stamp;
-	head->mono_delivery_time = q->mono_delivery_time;
 }
 EXPORT_SYMBOL(inet_frag_reasm_finish);
 

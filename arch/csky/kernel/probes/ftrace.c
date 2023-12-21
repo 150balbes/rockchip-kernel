@@ -2,26 +2,27 @@
 
 #include <linux/kprobes.h>
 
-/* Ftrace callback handler for kprobes -- called under preepmt disabled */
-void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
-			   struct ftrace_ops *ops, struct ftrace_regs *fregs)
+int arch_check_ftrace_location(struct kprobe *p)
 {
-	int bit;
+	if (ftrace_location((unsigned long)p->addr))
+		p->flags |= KPROBE_FLAG_FTRACE;
+	return 0;
+}
+
+/* Ftrace callback handler for kprobes -- called under preepmt disabed */
+void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
+			   struct ftrace_ops *ops, struct pt_regs *regs)
+{
 	bool lr_saver = false;
 	struct kprobe *p;
 	struct kprobe_ctlblk *kcb;
-	struct pt_regs *regs;
 
-	bit = ftrace_test_recursion_trylock(ip, parent_ip);
-	if (bit < 0)
-		return;
-
-	regs = ftrace_get_regs(fregs);
+	/* Preempt is disabled by ftrace */
 	p = get_kprobe((kprobe_opcode_t *)ip);
 	if (!p) {
 		p = get_kprobe((kprobe_opcode_t *)(ip - MCOUNT_INSN_SIZE));
 		if (unlikely(!p) || kprobe_disabled(p))
-			goto out;
+			return;
 		lr_saver = true;
 	}
 
@@ -55,8 +56,6 @@ void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 		 */
 		__this_cpu_write(current_kprobe, NULL);
 	}
-out:
-	ftrace_test_recursion_unlock(bit);
 }
 NOKPROBE_SYMBOL(kprobe_ftrace_handler);
 

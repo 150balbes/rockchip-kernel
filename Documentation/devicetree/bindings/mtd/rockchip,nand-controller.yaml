@@ -7,7 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Rockchip SoCs NAND FLASH Controller (NFC)
 
 allOf:
-  - $ref: nand-controller.yaml#
+  - $ref: "nand-controller.yaml#"
 
 maintainers:
   - Heiko Stuebner <heiko@sntech.de>
@@ -19,9 +19,7 @@ properties:
       - const: rockchip,rk2928-nfc
       - const: rockchip,rv1108-nfc
       - items:
-          - enum:
-              - rockchip,rk3036-nfc
-              - rockchip,rk3128-nfc
+          - const: rockchip,rk3036-nfc
           - const: rockchip,rk2928-nfc
       - items:
           - const: rockchip,rk3308-nfc
@@ -57,7 +55,6 @@ properties:
 patternProperties:
   "^nand@[0-7]$":
     type: object
-    $ref: raw-nand-chip.yaml
     properties:
       reg:
         minimum: 0
@@ -99,7 +96,8 @@ patternProperties:
 
       rockchip,boot-ecc-strength:
         enum: [16, 24, 40, 60, 70]
-        $ref: /schemas/types.yaml#/definitions/uint32
+        allOf:
+          - $ref: /schemas/types.yaml#/definitions/uint32
         description: |
           If specified it indicates that a different BCH/ECC setting is
           supported by the boot ROM.
@@ -116,8 +114,6 @@ patternProperties:
               RK3326, PX30
 
           Only used in combination with 'nand-is-boot-medium'.
-
-    unevaluatedProperties: false
 
 required:
   - compatible

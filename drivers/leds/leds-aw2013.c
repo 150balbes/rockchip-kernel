@@ -401,13 +401,15 @@ error:
 	return ret;
 }
 
-static void aw2013_remove(struct i2c_client *client)
+static int aw2013_remove(struct i2c_client *client)
 {
 	struct aw2013 *chip = i2c_get_clientdata(client);
 
 	aw2013_chip_disable(chip);
 
 	mutex_destroy(&chip->mutex);
+
+	return 0;
 }
 
 static const struct of_device_id aw2013_match_table[] = {
@@ -422,7 +424,7 @@ static struct i2c_driver aw2013_driver = {
 		.name = "leds-aw2013",
 		.of_match_table = of_match_ptr(aw2013_match_table),
 	},
-	.probe = aw2013_probe,
+	.probe_new = aw2013_probe,
 	.remove = aw2013_remove,
 };
 

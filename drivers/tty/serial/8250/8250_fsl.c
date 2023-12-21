@@ -23,10 +23,14 @@
 
 #include "8250.h"
 
+struct fsl8250_data {
+	int	line;
+};
+
 int fsl8250_handle_irq(struct uart_port *port)
 {
+	unsigned char lsr, orig_lsr;
 	unsigned long flags;
-	u16 lsr, orig_lsr;
 	unsigned int iir;
 	struct uart_8250_port *up = up_to_u8250p(port);
 
@@ -38,19 +42,7 @@ int fsl8250_handle_irq(struct uart_port *port)
 		return 0;
 	}
 
-	/*
-	 * For a single break the hardware reports LSR.BI for each character
-	 * time. This is described in the MPC8313E chip errata as "General17".
-	 * A typical break has a duration of 0.3s, with a 115200n8 configuration
-	 * that (theoretically) corresponds to ~3500 interrupts in these 0.3s.
-	 * In practise it's less (around 500) because of hardware
-	 * and software latencies. The workaround recommended by the vendor is
-	 * to read the RX register (to clear LSR.DR and thus prevent a FIFO
-	 * aging interrupt). To prevent the irq from retriggering LSR must not be
-	 * read. (This would clear LSR.BI, hardware would reassert the BI event
-	 * immediately and interrupt the CPU again. The hardware clears LSR.BI
-	 * when the next valid char is read.)
-	 */
+	/* This is the WAR; if last event was BRK, then read and return */
 	if (unlikely(up->lsr_saved_flags & UART_LSR_BI)) {
 		up->lsr_saved_flags &= ~UART_LSR_BI;
 		port->serial_in(port, UART_RX);
@@ -89,19 +81,13 @@ int fsl8250_handle_irq(struct uart_port *port)
 	if ((lsr & UART_LSR_THRE) && (up->ier & UART_IER_THRI))
 		serial8250_tx_chars(up);
 
-	up->lsr_saved_flags |= orig_lsr & UART_LSR_BI;
-
-	uart_unlock_and_check_sysrq_irqrestore(&up->port, flags);
-
+	up->lsr_saved_flags = orig_lsr;
+	uart_unlock_and_check_sysrq(&up->port, flags);
 	return 1;
 }
 EXPORT_SYMBOL_GPL(fsl8250_handle_irq);
 
 #ifdef CONFIG_ACPI
-struct fsl8250_data {
-	int	line;
-};
-
 static int fsl8250_acpi_probe(struct platform_device *pdev)
 {
 	struct fsl8250_data *data;
@@ -118,8 +104,11 @@ static int fsl8250_acpi_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		if (irq != -EPROBE_DEFER)
+			dev_err(dev, "cannot get irq\n");
 		return irq;
+	}
 
 	memset(&port8250, 0, sizeof(port8250));
 
@@ -184,6 +173,3 @@ static struct platform_driver fsl8250_platform_driver = {
 
 module_platform_driver(fsl8250_platform_driver);
 #endif
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Handling of Freescale specific 8250 variants");

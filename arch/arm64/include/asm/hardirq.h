@@ -13,8 +13,11 @@
 #include <asm/kvm_arm.h>
 #include <asm/sysreg.h>
 
-#define ack_bad_irq ack_bad_irq
-#include <asm-generic/hardirq.h>
+typedef struct {
+	unsigned int __softirq_pending;
+} ____cacheline_aligned irq_cpustat_t;
+
+#include <linux/irq_cpustat.h>	/* Standard mappings for irq_cpustat_t above */
 
 #define __ARCH_IRQ_EXIT_IRQS_DISABLED	1
 

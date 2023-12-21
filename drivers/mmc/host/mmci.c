@@ -36,8 +36,6 @@
 #include <linux/types.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/reset.h>
-#include <linux/gpio/consumer.h>
-#include <linux/workqueue.h>
 
 #include <asm/div64.h>
 #include <asm/io.h>
@@ -271,7 +269,6 @@ static struct variant_data variant_stm32_sdmmc = {
 	.datactrl_any_blocksz	= true,
 	.datactrl_mask_sdio	= MCI_DPSM_ST_SDIOEN,
 	.stm32_idmabsize_mask	= GENMASK(12, 5),
-	.stm32_idmabsize_align	= BIT(5),
 	.busy_timeout		= true,
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
@@ -282,7 +279,7 @@ static struct variant_data variant_stm32_sdmmc = {
 static struct variant_data variant_stm32_sdmmcv2 = {
 	.fifosize		= 16 * 4,
 	.fifohalfsize		= 8 * 4,
-	.f_max			= 267000000,
+	.f_max			= 208000000,
 	.stm32_clkdiv		= true,
 	.cmdreg_cpsm_enable	= MCI_CPSM_STM32_ENABLE,
 	.cmdreg_lrsp_crc	= MCI_CPSM_STM32_LRSP_CRC,
@@ -298,35 +295,6 @@ static struct variant_data variant_stm32_sdmmcv2 = {
 	.datactrl_any_blocksz	= true,
 	.datactrl_mask_sdio	= MCI_DPSM_ST_SDIOEN,
 	.stm32_idmabsize_mask	= GENMASK(16, 5),
-	.stm32_idmabsize_align	= BIT(5),
-	.dma_lli		= true,
-	.busy_timeout		= true,
-	.busy_detect		= true,
-	.busy_detect_flag	= MCI_STM32_BUSYD0,
-	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
-	.init			= sdmmc_variant_init,
-};
-
-static struct variant_data variant_stm32_sdmmcv3 = {
-	.fifosize		= 256 * 4,
-	.fifohalfsize		= 128 * 4,
-	.f_max			= 267000000,
-	.stm32_clkdiv		= true,
-	.cmdreg_cpsm_enable	= MCI_CPSM_STM32_ENABLE,
-	.cmdreg_lrsp_crc	= MCI_CPSM_STM32_LRSP_CRC,
-	.cmdreg_srsp_crc	= MCI_CPSM_STM32_SRSP_CRC,
-	.cmdreg_srsp		= MCI_CPSM_STM32_SRSP,
-	.cmdreg_stop		= MCI_CPSM_STM32_CMDSTOP,
-	.data_cmd_enable	= MCI_CPSM_STM32_CMDTRANS,
-	.irq_pio_mask		= MCI_IRQ_PIO_STM32_MASK,
-	.datactrl_first		= true,
-	.datacnt_useless	= true,
-	.datalength_bits	= 25,
-	.datactrl_blocksz	= 14,
-	.datactrl_any_blocksz	= true,
-	.datactrl_mask_sdio	= MCI_DPSM_ST_SDIOEN,
-	.stm32_idmabsize_mask	= GENMASK(16, 6),
-	.stm32_idmabsize_align	= BIT(6),
 	.dma_lli		= true,
 	.busy_timeout		= true,
 	.busy_detect		= true,
@@ -685,51 +653,9 @@ static u32 ux500v2_get_dctrl_cfg(struct mmci_host *host)
 	return MCI_DPSM_ENABLE | (host->data->blksz << 16);
 }
 
-static void ux500_busy_clear_mask_done(struct mmci_host *host)
+static bool ux500_busy_complete(struct mmci_host *host, u32 status, u32 err_msk)
 {
 	void __iomem *base = host->base;
-
-	writel(host->variant->busy_detect_mask, base + MMCICLEAR);
-	writel(readl(base + MMCIMASK0) &
-	       ~host->variant->busy_detect_mask, base + MMCIMASK0);
-	host->busy_state = MMCI_BUSY_DONE;
-	host->busy_status = 0;
-}
-
-/*
- * ux500_busy_complete() - this will wait until the busy status
- * goes off, saving any status that occur in the meantime into
- * host->busy_status until we know the card is not busy any more.
- * The function returns true when the busy detection is ended
- * and we should continue processing the command.
- *
- * The Ux500 typically fires two IRQs over a busy cycle like this:
- *
- *  DAT0 busy          +-----------------+
- *                     |                 |
- *  DAT0 not busy  ----+                 +--------
- *
- *                     ^                 ^
- *                     |                 |
- *                    IRQ1              IRQ2
- */
-static bool ux500_busy_complete(struct mmci_host *host, struct mmc_command *cmd,
-				u32 status, u32 err_msk)
-{
-	void __iomem *base = host->base;
-	int retries = 10;
-
-	if (status & err_msk) {
-		/* Stop any ongoing busy detection if an error occurs */
-		ux500_busy_clear_mask_done(host);
-		goto out_ret_state;
-	}
-
-	/*
-	 * The state transitions are encoded in a state machine crossing
-	 * the edges in this switch statement.
-	 */
-	switch (host->busy_state) {
 
 	/*
 	 * Before unmasking for the busy end IRQ, confirm that the
@@ -740,33 +666,19 @@ static bool ux500_busy_complete(struct mmci_host *host, struct mmc_command *cmd,
 	 * Note that, the card may need a couple of clock cycles before
 	 * it starts signaling busy on DAT0, hence re-read the
 	 * MMCISTATUS register here, to allow the busy bit to be set.
+	 * Potentially we may even need to poll the register for a
+	 * while, to allow it to be set, but tests indicates that it
+	 * isn't needed.
 	 */
-	case MMCI_BUSY_DONE:
-		/*
-		 * Save the first status register read to be sure to catch
-		 * all bits that may be lost will retrying. If the command
-		 * is still busy this will result in assigning 0 to
-		 * host->busy_status, which is what it should be in IDLE.
-		 */
+	if (!host->busy_status && !(status & err_msk) &&
+	    (readl(base + MMCISTATUS) & host->variant->busy_detect_flag)) {
+		writel(readl(base + MMCIMASK0) |
+		       host->variant->busy_detect_mask,
+		       base + MMCIMASK0);
+
 		host->busy_status = status & (MCI_CMDSENT | MCI_CMDRESPEND);
-		while (retries) {
-			status = readl(base + MMCISTATUS);
-			/* Keep accumulating status bits */
-			host->busy_status |= status & (MCI_CMDSENT | MCI_CMDRESPEND);
-			if (status & host->variant->busy_detect_flag) {
-				writel(readl(base + MMCIMASK0) |
-				       host->variant->busy_detect_mask,
-				       base + MMCIMASK0);
-				host->busy_state = MMCI_BUSY_WAITING_FOR_START_IRQ;
-				schedule_delayed_work(&host->ux500_busy_timeout_work,
-				      msecs_to_jiffies(cmd->busy_timeout));
-				goto out_ret_state;
-			}
-			retries--;
-		}
-		dev_dbg(mmc_dev(host->mmc), "no busy signalling in time\n");
-		ux500_busy_clear_mask_done(host);
-		break;
+		return false;
+	}
 
 	/*
 	 * If there is a command in-progress that has been successfully
@@ -779,39 +691,27 @@ static bool ux500_busy_complete(struct mmci_host *host, struct mmc_command *cmd,
 	 * both the start and the end interrupts needs to be cleared,
 	 * one after the other. So, clear the busy start IRQ here.
 	 */
-	case MMCI_BUSY_WAITING_FOR_START_IRQ:
-		if (status & host->variant->busy_detect_flag) {
-			host->busy_status |= status & (MCI_CMDSENT | MCI_CMDRESPEND);
-			writel(host->variant->busy_detect_mask, base + MMCICLEAR);
-			host->busy_state = MMCI_BUSY_WAITING_FOR_END_IRQ;
-		} else {
-			dev_dbg(mmc_dev(host->mmc),
-				"lost busy status when waiting for busy start IRQ\n");
-			cancel_delayed_work(&host->ux500_busy_timeout_work);
-			ux500_busy_clear_mask_done(host);
-		}
-		break;
-
-	case MMCI_BUSY_WAITING_FOR_END_IRQ:
-		if (!(status & host->variant->busy_detect_flag)) {
-			host->busy_status |= status & (MCI_CMDSENT | MCI_CMDRESPEND);
-			writel(host->variant->busy_detect_mask, base + MMCICLEAR);
-			cancel_delayed_work(&host->ux500_busy_timeout_work);
-			ux500_busy_clear_mask_done(host);
-		} else {
-			dev_dbg(mmc_dev(host->mmc),
-				"busy status still asserted when handling busy end IRQ - will keep waiting\n");
-		}
-		break;
-
-	default:
-		dev_dbg(mmc_dev(host->mmc), "fell through on state %d\n",
-			host->busy_state);
-		break;
+	if (host->busy_status &&
+	    (status & host->variant->busy_detect_flag)) {
+		writel(host->variant->busy_detect_mask, base + MMCICLEAR);
+		return false;
 	}
 
-out_ret_state:
-	return (host->busy_state == MMCI_BUSY_DONE);
+	/*
+	 * If there is a command in-progress that has been successfully
+	 * sent and the busy bit isn't set, it means we have received
+	 * the busy end IRQ. Clear and mask the IRQ, then continue to
+	 * process the command.
+	 */
+	if (host->busy_status) {
+		writel(host->variant->busy_detect_mask, base + MMCICLEAR);
+
+		writel(readl(base + MMCIMASK0) &
+		       ~host->variant->busy_detect_mask, base + MMCIMASK0);
+		host->busy_status = 0;
+	}
+
+	return true;
 }
 
 /*
@@ -861,7 +761,7 @@ int mmci_dmae_setup(struct mmci_host *host)
 
 	/*
 	 * If only an RX channel is specified, the driver will
-	 * attempt to use it bidirectionally, however if it
+	 * attempt to use it bidirectionally, however if it is
 	 * is specified but cannot be located, DMA will be disabled.
 	 */
 	if (dmae->rx_channel && !dmae->tx_channel)
@@ -1313,7 +1213,6 @@ static void
 mmci_start_command(struct mmci_host *host, struct mmc_command *cmd, u32 c)
 {
 	void __iomem *base = host->base;
-	bool busy_resp = cmd->flags & MMC_RSP_BUSY;
 	unsigned long long clks;
 
 	dev_dbg(mmc_dev(host->mmc), "op %02x arg %08x flags %08x\n",
@@ -1338,14 +1237,10 @@ mmci_start_command(struct mmci_host *host, struct mmc_command *cmd, u32 c)
 			c |= host->variant->cmdreg_srsp;
 	}
 
-	host->busy_status = 0;
-	host->busy_state = MMCI_BUSY_DONE;
+	if (host->variant->busy_timeout && cmd->flags & MMC_RSP_BUSY) {
+		if (!cmd->busy_timeout)
+			cmd->busy_timeout = 10 * MSEC_PER_SEC;
 
-	/* Assign a default timeout if the core does not provide one */
-	if (busy_resp && !cmd->busy_timeout)
-		cmd->busy_timeout = 10 * MSEC_PER_SEC;
-
-	if (busy_resp && host->variant->busy_timeout) {
 		if (cmd->busy_timeout > host->mmc->max_busy_timeout)
 			clks = (unsigned long long)host->mmc->max_busy_timeout * host->cclk;
 		else
@@ -1486,7 +1381,7 @@ mmci_cmd_irq(struct mmci_host *host, struct mmc_command *cmd,
 
 	/* Handle busy detection on DAT0 if the variant supports it. */
 	if (busy_resp && host->variant->busy_detect)
-		if (!host->ops->busy_complete(host, cmd, status, err_msk))
+		if (!host->ops->busy_complete(host, status, err_msk))
 			return;
 
 	host->cmd = NULL;
@@ -1498,10 +1393,6 @@ mmci_cmd_irq(struct mmci_host *host, struct mmc_command *cmd,
 	} else if (host->variant->busy_timeout && busy_resp &&
 		   status & MCI_DATATIMEOUT) {
 		cmd->error = -ETIMEDOUT;
-		/*
-		 * This will wake up mmci_irq_thread() which will issue
-		 * a hardware reset of the MMCI block.
-		 */
 		host->irq_action = IRQ_WAKE_THREAD;
 	} else {
 		cmd->resp[0] = readl(base + MMCIRESPONSE0);
@@ -1531,34 +1422,6 @@ mmci_cmd_irq(struct mmci_host *host, struct mmc_command *cmd,
 		   !(cmd->data->flags & MMC_DATA_READ)) {
 		mmci_start_data(host, cmd->data);
 	}
-}
-
-/*
- * This busy timeout worker is used to "kick" the command IRQ if a
- * busy detect IRQ fails to appear in reasonable time. Only used on
- * variants with busy detection IRQ delivery.
- */
-static void ux500_busy_timeout_work(struct work_struct *work)
-{
-	struct mmci_host *host = container_of(work, struct mmci_host,
-					ux500_busy_timeout_work.work);
-	unsigned long flags;
-	u32 status;
-
-	spin_lock_irqsave(&host->lock, flags);
-
-	if (host->cmd) {
-		dev_dbg(mmc_dev(host->mmc), "timeout waiting for busy IRQ\n");
-
-		/* If we are still busy let's tag on a cmd-timeout error. */
-		status = readl(host->base + MMCISTATUS);
-		if (status & host->variant->busy_detect_flag)
-			status |= MCI_CMDTIMEOUT;
-
-		mmci_cmd_irq(host, host->cmd, status);
-	}
-
-	spin_unlock_irqrestore(&host->lock, flags);
 }
 
 static int mmci_get_rx_fifocnt(struct mmci_host *host, u32 status, int remain)
@@ -1751,8 +1614,6 @@ static irqreturn_t mmci_irq(int irq, void *dev_id)
 
 	do {
 		status = readl(host->base + MMCISTATUS);
-		if (!status)
-			break;
 
 		if (host->singleirq) {
 			if (status & host->mask1_reg)
@@ -1867,8 +1728,7 @@ static void mmci_set_max_busy_timeout(struct mmc_host *mmc)
 		return;
 
 	if (host->variant->busy_timeout && mmc->actual_clock)
-		max_busy_timeout = U32_MAX / DIV_ROUND_UP(mmc->actual_clock,
-							  MSEC_PER_SEC);
+		max_busy_timeout = ~0UL / (mmc->actual_clock / MSEC_PER_SEC);
 
 	mmc->max_busy_timeout = max_busy_timeout;
 }
@@ -1880,6 +1740,10 @@ static void mmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	u32 pwr = 0;
 	unsigned long flags;
 	int ret;
+
+	if (host->plat->ios_handler &&
+		host->plat->ios_handler(mmc_dev(mmc), ios))
+			dev_err(mmc_dev(mmc), "platform ios_handler failed\n");
 
 	switch (ios->power_mode) {
 	case MMC_POWER_OFF:
@@ -2028,65 +1892,6 @@ static struct mmc_host_ops mmci_ops = {
 	.start_signal_voltage_switch = mmci_sig_volt_switch,
 };
 
-static void mmci_probe_level_translator(struct mmc_host *mmc)
-{
-	struct device *dev = mmc_dev(mmc);
-	struct mmci_host *host = mmc_priv(mmc);
-	struct gpio_desc *cmd_gpio;
-	struct gpio_desc *ck_gpio;
-	struct gpio_desc *ckin_gpio;
-	int clk_hi, clk_lo;
-
-	/*
-	 * Assume the level translator is present if st,use-ckin is set.
-	 * This is to cater for DTs which do not implement this test.
-	 */
-	host->clk_reg_add |= MCI_STM32_CLK_SELCKIN;
-
-	cmd_gpio = gpiod_get(dev, "st,cmd", GPIOD_OUT_HIGH);
-	if (IS_ERR(cmd_gpio))
-		goto exit_cmd;
-
-	ck_gpio = gpiod_get(dev, "st,ck", GPIOD_OUT_HIGH);
-	if (IS_ERR(ck_gpio))
-		goto exit_ck;
-
-	ckin_gpio = gpiod_get(dev, "st,ckin", GPIOD_IN);
-	if (IS_ERR(ckin_gpio))
-		goto exit_ckin;
-
-	/* All GPIOs are valid, test whether level translator works */
-
-	/* Sample CKIN */
-	clk_hi = !!gpiod_get_value(ckin_gpio);
-
-	/* Set CK low */
-	gpiod_set_value(ck_gpio, 0);
-
-	/* Sample CKIN */
-	clk_lo = !!gpiod_get_value(ckin_gpio);
-
-	/* Tristate all */
-	gpiod_direction_input(cmd_gpio);
-	gpiod_direction_input(ck_gpio);
-
-	/* Level translator is present if CK signal is propagated to CKIN */
-	if (!clk_hi || clk_lo) {
-		host->clk_reg_add &= ~MCI_STM32_CLK_SELCKIN;
-		dev_warn(dev,
-			 "Level translator inoperable, CK signal not detected on CKIN, disabling.\n");
-	}
-
-	gpiod_put(ckin_gpio);
-
-exit_ckin:
-	gpiod_put(ck_gpio);
-exit_ck:
-	gpiod_put(cmd_gpio);
-exit_cmd:
-	pinctrl_select_default_state(dev);
-}
-
 static int mmci_of_parse(struct device_node *np, struct mmc_host *mmc)
 {
 	struct mmci_host *host = mmc_priv(mmc);
@@ -2095,28 +1900,28 @@ static int mmci_of_parse(struct device_node *np, struct mmc_host *mmc)
 	if (ret)
 		return ret;
 
-	if (of_property_read_bool(np, "st,sig-dir-dat0"))
+	if (of_get_property(np, "st,sig-dir-dat0", NULL))
 		host->pwr_reg_add |= MCI_ST_DATA0DIREN;
-	if (of_property_read_bool(np, "st,sig-dir-dat2"))
+	if (of_get_property(np, "st,sig-dir-dat2", NULL))
 		host->pwr_reg_add |= MCI_ST_DATA2DIREN;
-	if (of_property_read_bool(np, "st,sig-dir-dat31"))
+	if (of_get_property(np, "st,sig-dir-dat31", NULL))
 		host->pwr_reg_add |= MCI_ST_DATA31DIREN;
-	if (of_property_read_bool(np, "st,sig-dir-dat74"))
+	if (of_get_property(np, "st,sig-dir-dat74", NULL))
 		host->pwr_reg_add |= MCI_ST_DATA74DIREN;
-	if (of_property_read_bool(np, "st,sig-dir-cmd"))
+	if (of_get_property(np, "st,sig-dir-cmd", NULL))
 		host->pwr_reg_add |= MCI_ST_CMDDIREN;
-	if (of_property_read_bool(np, "st,sig-pin-fbclk"))
+	if (of_get_property(np, "st,sig-pin-fbclk", NULL))
 		host->pwr_reg_add |= MCI_ST_FBCLKEN;
-	if (of_property_read_bool(np, "st,sig-dir"))
+	if (of_get_property(np, "st,sig-dir", NULL))
 		host->pwr_reg_add |= MCI_STM32_DIRPOL;
-	if (of_property_read_bool(np, "st,neg-edge"))
+	if (of_get_property(np, "st,neg-edge", NULL))
 		host->clk_reg_add |= MCI_STM32_CLK_NEGEDGE;
-	if (of_property_read_bool(np, "st,use-ckin"))
-		mmci_probe_level_translator(mmc);
+	if (of_get_property(np, "st,use-ckin", NULL))
+		host->clk_reg_add |= MCI_STM32_CLK_SELCKIN;
 
-	if (of_property_read_bool(np, "mmc-cap-mmc-highspeed"))
+	if (of_get_property(np, "mmc-cap-mmc-highspeed", NULL))
 		mmc->caps |= MMC_CAP_MMC_HIGHSPEED;
-	if (of_property_read_bool(np, "mmc-cap-sd-highspeed"))
+	if (of_get_property(np, "mmc-cap-sd-highspeed", NULL))
 		mmc->caps |= MMC_CAP_SD_HIGHSPEED;
 
 	return 0;
@@ -2148,14 +1953,14 @@ static int mmci_probe(struct amba_device *dev,
 	if (!mmc)
 		return -ENOMEM;
 
+	ret = mmci_of_parse(np, mmc);
+	if (ret)
+		goto host_free;
+
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
 	host->mmc_ops = &mmci_ops;
 	mmc->ops = &mmci_ops;
-
-	ret = mmci_of_parse(np, mmc);
-	if (ret)
-		goto host_free;
 
 	/*
 	 * Some variant (STM32) doesn't have opendrain bit, nevertheless
@@ -2261,9 +2066,6 @@ static int mmci_probe(struct amba_device *dev,
 		ret = PTR_ERR(host->rst);
 		goto clk_disable;
 	}
-	ret = reset_control_deassert(host->rst);
-	if (ret)
-		dev_err(mmc_dev(mmc), "failed to de-assert reset\n");
 
 	/* Get regulators and the supported OCR mask */
 	ret = mmc_regulator_get_supply(mmc);
@@ -2375,10 +2177,6 @@ static int mmci_probe(struct amba_device *dev,
 			goto clk_disable;
 	}
 
-	if (host->variant->busy_detect)
-		INIT_DELAYED_WORK(&host->ux500_busy_timeout_work,
-				  ux500_busy_timeout_work);
-
 	writel(MCI_IRQENABLE | variant->start_err, host->base + MMCIMASK0);
 
 	amba_set_drvdata(dev, mmc);
@@ -2393,9 +2191,7 @@ static int mmci_probe(struct amba_device *dev,
 	pm_runtime_set_autosuspend_delay(&dev->dev, 50);
 	pm_runtime_use_autosuspend(&dev->dev);
 
-	ret = mmc_add_host(mmc);
-	if (ret)
-		goto clk_disable;
+	mmc_add_host(mmc);
 
 	pm_runtime_put(&dev->dev);
 	return 0;
@@ -2572,16 +2368,6 @@ static const struct amba_id mmci_ids[] = {
 		.mask	= 0xf0ffffff,
 		.data	= &variant_stm32_sdmmcv2,
 	},
-	{
-		.id     = 0x20253180,
-		.mask	= 0xf0ffffff,
-		.data	= &variant_stm32_sdmmcv2,
-	},
-	{
-		.id     = 0x00353180,
-		.mask	= 0xf0ffffff,
-		.data	= &variant_stm32_sdmmcv3,
-	},
 	/* Qualcomm variants */
 	{
 		.id     = 0x00051180,
@@ -2597,7 +2383,6 @@ static struct amba_driver mmci_driver = {
 	.drv		= {
 		.name	= DRIVER_NAME,
 		.pm	= &mmci_dev_pm_ops,
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe		= mmci_probe,
 	.remove		= mmci_remove,

@@ -12,6 +12,55 @@
 #include "kvm_util.h"
 #include "processor.h"
 
+extern unsigned char rdmsr_start;
+extern unsigned char rdmsr_end;
+
+static u64 do_rdmsr(u32 idx)
+{
+	u32 lo, hi;
+
+	asm volatile("rdmsr_start: rdmsr;"
+		     "rdmsr_end:"
+		     : "=a"(lo), "=c"(hi)
+		     : "c"(idx));
+
+	return (((u64) hi) << 32) | lo;
+}
+
+extern unsigned char wrmsr_start;
+extern unsigned char wrmsr_end;
+
+static void do_wrmsr(u32 idx, u64 val)
+{
+	u32 lo, hi;
+
+	lo = val;
+	hi = val >> 32;
+
+	asm volatile("wrmsr_start: wrmsr;"
+		     "wrmsr_end:"
+		     : : "a"(lo), "c"(idx), "d"(hi));
+}
+
+static int nr_gp;
+
+static void guest_gp_handler(struct ex_regs *regs)
+{
+	unsigned char *rip = (unsigned char *)regs->rip;
+	bool r, w;
+
+	r = rip == &rdmsr_start;
+	w = rip == &wrmsr_start;
+	GUEST_ASSERT(r || w);
+
+	nr_gp++;
+
+	if (r)
+		regs->rip = (uint64_t)&rdmsr_end;
+	else
+		regs->rip = (uint64_t)&wrmsr_end;
+}
+
 struct msr_data {
 	uint32_t idx;
 	const char *name;
@@ -40,16 +89,14 @@ static struct msr_data msrs_to_test[] = {
 
 static void test_msr(struct msr_data *msr)
 {
-	uint64_t ignored;
-	uint8_t vector;
-
 	PR_MSR(msr);
+	do_rdmsr(msr->idx);
+	GUEST_ASSERT(READ_ONCE(nr_gp) == 1);
 
-	vector = rdmsr_safe(msr->idx, &ignored);
-	GUEST_ASSERT_1(vector == GP_VECTOR, vector);
-
-	vector = wrmsr_safe(msr->idx, 0);
-	GUEST_ASSERT_1(vector == GP_VECTOR, vector);
+	nr_gp = 0;
+	do_wrmsr(msr->idx, 0);
+	GUEST_ASSERT(READ_ONCE(nr_gp) == 1);
+	nr_gp = 0;
 }
 
 struct hcall_data {
@@ -95,6 +142,15 @@ static void guest_main(void)
 	GUEST_DONE();
 }
 
+static void clear_kvm_cpuid_features(struct kvm_cpuid2 *cpuid)
+{
+	struct kvm_cpuid_entry2 ent = {0};
+
+	ent.function = KVM_CPUID_FEATURES;
+	TEST_ASSERT(set_cpuid(cpuid, &ent),
+		    "failed to clear KVM_CPUID_FEATURES leaf");
+}
+
 static void pr_msr(struct ucall *uc)
 {
 	struct msr_data *msr = (struct msr_data *)uc->args[0];
@@ -109,15 +165,30 @@ static void pr_hcall(struct ucall *uc)
 	pr_info("testing hcall: %s (%lu)\n", hc->name, hc->nr);
 }
 
-static void enter_guest(struct kvm_vcpu *vcpu)
+static void handle_abort(struct ucall *uc)
 {
+	TEST_FAIL("%s at %s:%ld", (const char *)uc->args[0],
+		  __FILE__, uc->args[1]);
+}
+
+#define VCPU_ID 0
+
+static void enter_guest(struct kvm_vm *vm)
+{
+	struct kvm_run *run;
 	struct ucall uc;
+	int r;
+
+	run = vcpu_state(vm, VCPU_ID);
 
 	while (true) {
-		vcpu_run(vcpu);
-		TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
+		r = _vcpu_run(vm, VCPU_ID);
+		TEST_ASSERT(!r, "vcpu_run failed: %d\n", r);
+		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
+			    "unexpected exit reason: %u (%s)",
+			    run->exit_reason, exit_reason_str(run->exit_reason));
 
-		switch (get_ucall(vcpu, &uc)) {
+		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_PR_MSR:
 			pr_msr(&uc);
 			break;
@@ -125,7 +196,7 @@ static void enter_guest(struct kvm_vcpu *vcpu)
 			pr_hcall(&uc);
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT_1(uc, "vector = %lu");
+			handle_abort(&uc);
 			return;
 		case UCALL_DONE:
 			return;
@@ -135,20 +206,29 @@ static void enter_guest(struct kvm_vcpu *vcpu)
 
 int main(void)
 {
-	struct kvm_vcpu *vcpu;
+	struct kvm_enable_cap cap = {0};
+	struct kvm_cpuid2 *best;
 	struct kvm_vm *vm;
 
-	TEST_REQUIRE(kvm_has_cap(KVM_CAP_ENFORCE_PV_FEATURE_CPUID));
+	if (!kvm_check_cap(KVM_CAP_ENFORCE_PV_FEATURE_CPUID)) {
+		pr_info("will skip kvm paravirt restriction tests.\n");
+		return 0;
+	}
 
-	vm = vm_create_with_one_vcpu(&vcpu, guest_main);
+	vm = vm_create_default(VCPU_ID, 0, guest_main);
 
-	vcpu_enable_cap(vcpu, KVM_CAP_ENFORCE_PV_FEATURE_CPUID, 1);
+	cap.cap = KVM_CAP_ENFORCE_PV_FEATURE_CPUID;
+	cap.args[0] = 1;
+	vcpu_enable_cap(vm, VCPU_ID, &cap);
 
-	vcpu_clear_cpuid_entry(vcpu, KVM_CPUID_FEATURES);
+	best = kvm_get_supported_cpuid();
+	clear_kvm_cpuid_features(best);
+	vcpu_set_cpuid(vm, VCPU_ID, best);
 
 	vm_init_descriptor_tables(vm);
-	vcpu_init_descriptor_tables(vcpu);
+	vcpu_init_descriptor_tables(vm, VCPU_ID);
+	vm_handle_exception(vm, GP_VECTOR, guest_gp_handler);
 
-	enter_guest(vcpu);
+	enter_guest(vm);
 	kvm_vm_free(vm);
 }

@@ -267,7 +267,7 @@ static inline int wbsd_next_sg(struct wbsd_host *host)
 
 static inline char *wbsd_map_sg(struct wbsd_host *host)
 {
-	return kmap_local_page(sg_page(host->cur_sg)) + host->cur_sg->offset;
+	return kmap_atomic(sg_page(host->cur_sg)) + host->cur_sg->offset;
 }
 
 static inline void wbsd_sg_to_dma(struct wbsd_host *host, struct mmc_data *data)
@@ -439,7 +439,7 @@ static void wbsd_empty_fifo(struct wbsd_host *host)
 			 * End of scatter list entry?
 			 */
 			if (host->remain == 0) {
-				kunmap_local(buffer);
+				kunmap_atomic(buffer);
 				/*
 				 * Get next entry. Check if last.
 				 */
@@ -451,7 +451,7 @@ static void wbsd_empty_fifo(struct wbsd_host *host)
 			}
 		}
 	}
-	kunmap_local(buffer);
+	kunmap_atomic(buffer);
 
 	/*
 	 * This is a very dirty hack to solve a
@@ -505,7 +505,7 @@ static void wbsd_fill_fifo(struct wbsd_host *host)
 			 * End of scatter list entry?
 			 */
 			if (host->remain == 0) {
-				kunmap_local(buffer);
+				kunmap_atomic(buffer);
 				/*
 				 * Get next entry. Check if last.
 				 */
@@ -517,7 +517,7 @@ static void wbsd_fill_fifo(struct wbsd_host *host)
 			}
 		}
 	}
-	kunmap_local(buffer);
+	kunmap_atomic(buffer);
 
 	/*
 	 * The controller stops sending interrupts for
@@ -987,9 +987,9 @@ static inline struct mmc_data *wbsd_get_data(struct wbsd_host *host)
 	return host->mrq->cmd->data;
 }
 
-static void wbsd_tasklet_card(struct tasklet_struct *t)
+static void wbsd_tasklet_card(unsigned long param)
 {
-	struct wbsd_host *host = from_tasklet(host, t, card_tasklet);
+	struct wbsd_host *host = (struct wbsd_host *)param;
 	u8 csr;
 	int delay = -1;
 
@@ -1036,9 +1036,9 @@ static void wbsd_tasklet_card(struct tasklet_struct *t)
 		mmc_detect_change(host->mmc, msecs_to_jiffies(delay));
 }
 
-static void wbsd_tasklet_fifo(struct tasklet_struct *t)
+static void wbsd_tasklet_fifo(unsigned long param)
 {
-	struct wbsd_host *host = from_tasklet(host, t, fifo_tasklet);
+	struct wbsd_host *host = (struct wbsd_host *)param;
 	struct mmc_data *data;
 
 	spin_lock(&host->lock);
@@ -1067,9 +1067,9 @@ end:
 	spin_unlock(&host->lock);
 }
 
-static void wbsd_tasklet_crc(struct tasklet_struct *t)
+static void wbsd_tasklet_crc(unsigned long param)
 {
-	struct wbsd_host *host = from_tasklet(host, t, crc_tasklet);
+	struct wbsd_host *host = (struct wbsd_host *)param;
 	struct mmc_data *data;
 
 	spin_lock(&host->lock);
@@ -1091,9 +1091,9 @@ end:
 	spin_unlock(&host->lock);
 }
 
-static void wbsd_tasklet_timeout(struct tasklet_struct *t)
+static void wbsd_tasklet_timeout(unsigned long param)
 {
-	struct wbsd_host *host = from_tasklet(host, t, timeout_tasklet);
+	struct wbsd_host *host = (struct wbsd_host *)param;
 	struct mmc_data *data;
 
 	spin_lock(&host->lock);
@@ -1115,9 +1115,9 @@ end:
 	spin_unlock(&host->lock);
 }
 
-static void wbsd_tasklet_finish(struct tasklet_struct *t)
+static void wbsd_tasklet_finish(unsigned long param)
 {
-	struct wbsd_host *host = from_tasklet(host, t, finish_tasklet);
+	struct wbsd_host *host = (struct wbsd_host *)param;
 	struct mmc_data *data;
 
 	spin_lock(&host->lock);
@@ -1449,11 +1449,16 @@ static int wbsd_request_irq(struct wbsd_host *host, int irq)
 	/*
 	 * Set up tasklets. Must be done before requesting interrupt.
 	 */
-	tasklet_setup(&host->card_tasklet, wbsd_tasklet_card);
-	tasklet_setup(&host->fifo_tasklet, wbsd_tasklet_fifo);
-	tasklet_setup(&host->crc_tasklet, wbsd_tasklet_crc);
-	tasklet_setup(&host->timeout_tasklet, wbsd_tasklet_timeout);
-	tasklet_setup(&host->finish_tasklet, wbsd_tasklet_finish);
+	tasklet_init(&host->card_tasklet, wbsd_tasklet_card,
+			(unsigned long)host);
+	tasklet_init(&host->fifo_tasklet, wbsd_tasklet_fifo,
+			(unsigned long)host);
+	tasklet_init(&host->crc_tasklet, wbsd_tasklet_crc,
+			(unsigned long)host);
+	tasklet_init(&host->timeout_tasklet, wbsd_tasklet_timeout,
+			(unsigned long)host);
+	tasklet_init(&host->finish_tasklet, wbsd_tasklet_finish,
+			(unsigned long)host);
 
 	/*
 	 * Allocate interrupt.
@@ -1698,17 +1703,7 @@ static int wbsd_init(struct device *dev, int base, int irq, int dma,
 	 */
 	wbsd_init_device(host);
 
-	ret = mmc_add_host(mmc);
-	if (ret) {
-		if (!pnp)
-			wbsd_chip_poweroff(host);
-
-		wbsd_release_resources(host);
-		wbsd_free_mmc(dev);
-
-		mmc_free_host(mmc);
-		return ret;
-	}
+	mmc_add_host(mmc);
 
 	pr_info("%s: W83L51xD", mmc_hostname(mmc));
 	if (host->chip_id != 0)

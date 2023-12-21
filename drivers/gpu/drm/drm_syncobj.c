@@ -136,10 +136,6 @@
  * requirement is inherited from the wait-before-signal behavior required by
  * the Vulkan timeline semaphore API.
  *
- * Alternatively, &DRM_IOCTL_SYNCOBJ_EVENTFD can be used to wait without
- * blocking: an eventfd will be signaled when the syncobj is. This is useful to
- * integrate the wait in an event loop.
- *
  *
  * Import/export of syncobjs
  * -------------------------
@@ -188,8 +184,6 @@
  */
 
 #include <linux/anon_inodes.h>
-#include <linux/dma-fence-unwrap.h>
-#include <linux/eventfd.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/sched/signal.h>
@@ -216,20 +210,6 @@ struct syncobj_wait_entry {
 
 static void syncobj_wait_syncobj_func(struct drm_syncobj *syncobj,
 				      struct syncobj_wait_entry *wait);
-
-struct syncobj_eventfd_entry {
-	struct list_head node;
-	struct dma_fence *fence;
-	struct dma_fence_cb fence_cb;
-	struct drm_syncobj *syncobj;
-	struct eventfd_ctx *ev_fd_ctx;
-	u64 point;
-	u32 flags;
-};
-
-static void
-syncobj_eventfd_entry_func(struct drm_syncobj *syncobj,
-			   struct syncobj_eventfd_entry *entry);
 
 /**
  * drm_syncobj_find - lookup and reference a sync object.
@@ -293,28 +273,6 @@ static void drm_syncobj_remove_wait(struct drm_syncobj *syncobj,
 	spin_unlock(&syncobj->lock);
 }
 
-static void
-syncobj_eventfd_entry_free(struct syncobj_eventfd_entry *entry)
-{
-	eventfd_ctx_put(entry->ev_fd_ctx);
-	dma_fence_put(entry->fence);
-	/* This happens either inside the syncobj lock, or after the node has
-	 * already been removed from the list.
-	 */
-	list_del(&entry->node);
-	kfree(entry);
-}
-
-static void
-drm_syncobj_add_eventfd(struct drm_syncobj *syncobj,
-			struct syncobj_eventfd_entry *entry)
-{
-	spin_lock(&syncobj->lock);
-	list_add_tail(&entry->node, &syncobj->ev_fd_list);
-	syncobj_eventfd_entry_func(syncobj, entry);
-	spin_unlock(&syncobj->lock);
-}
-
 /**
  * drm_syncobj_add_point - add new timeline point to the syncobj
  * @syncobj: sync object to add timeline point do
@@ -329,8 +287,7 @@ void drm_syncobj_add_point(struct drm_syncobj *syncobj,
 			   struct dma_fence *fence,
 			   uint64_t point)
 {
-	struct syncobj_wait_entry *wait_cur, *wait_tmp;
-	struct syncobj_eventfd_entry *ev_fd_cur, *ev_fd_tmp;
+	struct syncobj_wait_entry *cur, *tmp;
 	struct dma_fence *prev;
 
 	dma_fence_get(fence);
@@ -344,10 +301,8 @@ void drm_syncobj_add_point(struct drm_syncobj *syncobj,
 	dma_fence_chain_init(chain, prev, fence, point);
 	rcu_assign_pointer(syncobj->fence, &chain->base);
 
-	list_for_each_entry_safe(wait_cur, wait_tmp, &syncobj->cb_list, node)
-		syncobj_wait_syncobj_func(syncobj, wait_cur);
-	list_for_each_entry_safe(ev_fd_cur, ev_fd_tmp, &syncobj->ev_fd_list, node)
-		syncobj_eventfd_entry_func(syncobj, ev_fd_cur);
+	list_for_each_entry_safe(cur, tmp, &syncobj->cb_list, node)
+		syncobj_wait_syncobj_func(syncobj, cur);
 	spin_unlock(&syncobj->lock);
 
 	/* Walk the chain once to trigger garbage collection */
@@ -367,8 +322,7 @@ void drm_syncobj_replace_fence(struct drm_syncobj *syncobj,
 			       struct dma_fence *fence)
 {
 	struct dma_fence *old_fence;
-	struct syncobj_wait_entry *wait_cur, *wait_tmp;
-	struct syncobj_eventfd_entry *ev_fd_cur, *ev_fd_tmp;
+	struct syncobj_wait_entry *cur, *tmp;
 
 	if (fence)
 		dma_fence_get(fence);
@@ -380,10 +334,8 @@ void drm_syncobj_replace_fence(struct drm_syncobj *syncobj,
 	rcu_assign_pointer(syncobj->fence, fence);
 
 	if (fence != old_fence) {
-		list_for_each_entry_safe(wait_cur, wait_tmp, &syncobj->cb_list, node)
-			syncobj_wait_syncobj_func(syncobj, wait_cur);
-		list_for_each_entry_safe(ev_fd_cur, ev_fd_tmp, &syncobj->ev_fd_list, node)
-			syncobj_eventfd_entry_func(syncobj, ev_fd_cur);
+		list_for_each_entry_safe(cur, tmp, &syncobj->cb_list, node)
+			syncobj_wait_syncobj_func(syncobj, cur);
 	}
 
 	spin_unlock(&syncobj->lock);
@@ -398,16 +350,12 @@ EXPORT_SYMBOL(drm_syncobj_replace_fence);
  *
  * Assign a already signaled stub fence to the sync object.
  */
-static int drm_syncobj_assign_null_handle(struct drm_syncobj *syncobj)
+static void drm_syncobj_assign_null_handle(struct drm_syncobj *syncobj)
 {
-	struct dma_fence *fence = dma_fence_allocate_private_stub(ktime_get());
-
-	if (!fence)
-		return -ENOMEM;
+	struct dma_fence *fence = dma_fence_get_stub();
 
 	drm_syncobj_replace_fence(syncobj, fence);
 	dma_fence_put(fence);
-	return 0;
 }
 
 /* 5s default for wait submission */
@@ -438,15 +386,6 @@ int drm_syncobj_find_fence(struct drm_file *file_private,
 
 	if (!syncobj)
 		return -ENOENT;
-
-	/* Waiting for userspace with locks help is illegal cause that can
-	 * trivial deadlock with page faults for example. Make lockdep complain
-	 * about it early on.
-	 */
-	if (flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) {
-		might_sleep();
-		lockdep_assert_none_held_once();
-	}
 
 	*fence = drm_syncobj_fence_get(syncobj);
 
@@ -519,13 +458,7 @@ void drm_syncobj_free(struct kref *kref)
 	struct drm_syncobj *syncobj = container_of(kref,
 						   struct drm_syncobj,
 						   refcount);
-	struct syncobj_eventfd_entry *ev_fd_cur, *ev_fd_tmp;
-
 	drm_syncobj_replace_fence(syncobj, NULL);
-
-	list_for_each_entry_safe(ev_fd_cur, ev_fd_tmp, &syncobj->ev_fd_list, node)
-		syncobj_eventfd_entry_free(ev_fd_cur);
-
 	kfree(syncobj);
 }
 EXPORT_SYMBOL(drm_syncobj_free);
@@ -545,7 +478,6 @@ EXPORT_SYMBOL(drm_syncobj_free);
 int drm_syncobj_create(struct drm_syncobj **out_syncobj, uint32_t flags,
 		       struct dma_fence *fence)
 {
-	int ret;
 	struct drm_syncobj *syncobj;
 
 	syncobj = kzalloc(sizeof(struct drm_syncobj), GFP_KERNEL);
@@ -554,16 +486,10 @@ int drm_syncobj_create(struct drm_syncobj **out_syncobj, uint32_t flags,
 
 	kref_init(&syncobj->refcount);
 	INIT_LIST_HEAD(&syncobj->cb_list);
-	INIT_LIST_HEAD(&syncobj->ev_fd_list);
 	spin_lock_init(&syncobj->lock);
 
-	if (flags & DRM_SYNCOBJ_CREATE_SIGNALED) {
-		ret = drm_syncobj_assign_null_handle(syncobj);
-		if (ret < 0) {
-			drm_syncobj_put(syncobj);
-			return ret;
-		}
-	}
+	if (flags & DRM_SYNCOBJ_CREATE_SIGNALED)
+		drm_syncobj_assign_null_handle(syncobj);
 
 	if (fence)
 		drm_syncobj_replace_fence(syncobj, fence);
@@ -789,7 +715,7 @@ err_put_fd:
 	return ret;
 }
 /**
- * drm_syncobj_open - initializes syncobj file-private structures at devnode open time
+ * drm_syncobj_open - initalizes syncobj file-private structures at devnode open time
  * @file_private: drm file-private structure to set up
  *
  * Called at device open time, sets up the structure for handling refcounting
@@ -912,7 +838,7 @@ static int drm_syncobj_transfer_to_timeline(struct drm_file *file_private,
 					    struct drm_syncobj_transfer *args)
 {
 	struct drm_syncobj *timeline_syncobj = NULL;
-	struct dma_fence *fence, *tmp;
+	struct dma_fence *fence;
 	struct dma_fence_chain *chain;
 	int ret;
 
@@ -922,27 +848,18 @@ static int drm_syncobj_transfer_to_timeline(struct drm_file *file_private,
 	}
 	ret = drm_syncobj_find_fence(file_private, args->src_handle,
 				     args->src_point, args->flags,
-				     &tmp);
+				     &fence);
 	if (ret)
-		goto err_put_timeline;
-
-	fence = dma_fence_unwrap_merge(tmp);
-	dma_fence_put(tmp);
-	if (!fence) {
-		ret = -ENOMEM;
-		goto err_put_timeline;
-	}
-
-	chain = dma_fence_chain_alloc();
+		goto err;
+	chain = kzalloc(sizeof(struct dma_fence_chain), GFP_KERNEL);
 	if (!chain) {
 		ret = -ENOMEM;
-		goto err_free_fence;
+		goto err1;
 	}
-
 	drm_syncobj_add_point(timeline_syncobj, chain, fence, args->dst_point);
-err_free_fence:
+err1:
 	dma_fence_put(fence);
-err_put_timeline:
+err:
 	drm_syncobj_put(timeline_syncobj);
 
 	return ret;
@@ -1033,9 +950,6 @@ static signed long drm_syncobj_array_wait_timeout(struct drm_syncobj **syncobjs,
 	struct dma_fence *fence;
 	uint64_t *points;
 	uint32_t signaled_count, i;
-
-	if (flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT)
-		lockdep_assert_none_held_once();
 
 	points = kmalloc_array(count, sizeof(*points), GFP_KERNEL);
 	if (points == NULL)
@@ -1358,88 +1272,6 @@ drm_syncobj_timeline_wait_ioctl(struct drm_device *dev, void *data,
 	return ret;
 }
 
-static void syncobj_eventfd_entry_fence_func(struct dma_fence *fence,
-					     struct dma_fence_cb *cb)
-{
-	struct syncobj_eventfd_entry *entry =
-		container_of(cb, struct syncobj_eventfd_entry, fence_cb);
-
-	eventfd_signal(entry->ev_fd_ctx, 1);
-	syncobj_eventfd_entry_free(entry);
-}
-
-static void
-syncobj_eventfd_entry_func(struct drm_syncobj *syncobj,
-			   struct syncobj_eventfd_entry *entry)
-{
-	int ret;
-	struct dma_fence *fence;
-
-	/* This happens inside the syncobj lock */
-	fence = dma_fence_get(rcu_dereference_protected(syncobj->fence, 1));
-	ret = dma_fence_chain_find_seqno(&fence, entry->point);
-	if (ret != 0 || !fence) {
-		dma_fence_put(fence);
-		return;
-	}
-
-	list_del_init(&entry->node);
-	entry->fence = fence;
-
-	if (entry->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) {
-		eventfd_signal(entry->ev_fd_ctx, 1);
-		syncobj_eventfd_entry_free(entry);
-	} else {
-		ret = dma_fence_add_callback(fence, &entry->fence_cb,
-					     syncobj_eventfd_entry_fence_func);
-		if (ret == -ENOENT) {
-			eventfd_signal(entry->ev_fd_ctx, 1);
-			syncobj_eventfd_entry_free(entry);
-		}
-	}
-}
-
-int
-drm_syncobj_eventfd_ioctl(struct drm_device *dev, void *data,
-			  struct drm_file *file_private)
-{
-	struct drm_syncobj_eventfd *args = data;
-	struct drm_syncobj *syncobj;
-	struct eventfd_ctx *ev_fd_ctx;
-	struct syncobj_eventfd_entry *entry;
-
-	if (!drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE))
-		return -EOPNOTSUPP;
-
-	if (args->flags & ~DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE)
-		return -EINVAL;
-
-	if (args->pad)
-		return -EINVAL;
-
-	syncobj = drm_syncobj_find(file_private, args->handle);
-	if (!syncobj)
-		return -ENOENT;
-
-	ev_fd_ctx = eventfd_ctx_fdget(args->fd);
-	if (IS_ERR(ev_fd_ctx))
-		return PTR_ERR(ev_fd_ctx);
-
-	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
-	if (!entry) {
-		eventfd_ctx_put(ev_fd_ctx);
-		return -ENOMEM;
-	}
-	entry->syncobj = syncobj;
-	entry->ev_fd_ctx = ev_fd_ctx;
-	entry->point = args->point;
-	entry->flags = args->flags;
-
-	drm_syncobj_add_eventfd(syncobj, entry);
-	drm_syncobj_put(syncobj);
-
-	return 0;
-}
 
 int
 drm_syncobj_reset_ioctl(struct drm_device *dev, void *data,
@@ -1499,11 +1331,8 @@ drm_syncobj_signal_ioctl(struct drm_device *dev, void *data,
 	if (ret < 0)
 		return ret;
 
-	for (i = 0; i < args->count_handles; i++) {
-		ret = drm_syncobj_assign_null_handle(syncobjs[i]);
-		if (ret < 0)
-			break;
-	}
+	for (i = 0; i < args->count_handles; i++)
+		drm_syncobj_assign_null_handle(syncobjs[i]);
 
 	drm_syncobj_array_free(syncobjs, args->count_handles);
 
@@ -1557,10 +1386,10 @@ drm_syncobj_timeline_signal_ioctl(struct drm_device *dev, void *data,
 		goto err_points;
 	}
 	for (i = 0; i < args->count_handles; i++) {
-		chains[i] = dma_fence_chain_alloc();
+		chains[i] = kzalloc(sizeof(struct dma_fence_chain), GFP_KERNEL);
 		if (!chains[i]) {
 			for (j = 0; j < i; j++)
-				dma_fence_chain_free(chains[j]);
+				kfree(chains[j]);
 			ret = -ENOMEM;
 			goto err_chains;
 		}

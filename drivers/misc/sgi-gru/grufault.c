@@ -49,8 +49,8 @@ struct vm_area_struct *gru_find_vma(unsigned long vaddr)
 {
 	struct vm_area_struct *vma;
 
-	vma = vma_lookup(current->mm, vaddr);
-	if (vma && vma->vm_ops == &gru_vm_ops)
+	vma = find_vma(current->mm, vaddr);
+	if (vma && vma->vm_start <= vaddr && vma->vm_ops == &gru_vm_ops)
 		return vma;
 	return NULL;
 }
@@ -185,7 +185,7 @@ static int non_atomic_pte_lookup(struct vm_area_struct *vma,
 #else
 	*pageshift = PAGE_SHIFT;
 #endif
-	if (get_user_pages(vaddr, 1, write ? FOLL_WRITE : 0, &page) <= 0)
+	if (get_user_pages(vaddr, 1, write ? FOLL_WRITE : 0, &page, NULL) <= 0)
 		return -EFAULT;
 	*paddr = page_to_phys(page);
 	put_page(page);
@@ -228,7 +228,7 @@ static int atomic_pte_lookup(struct vm_area_struct *vma, unsigned long vaddr,
 		goto err;
 #ifdef CONFIG_X86_64
 	if (unlikely(pmd_large(*pmdp)))
-		pte = ptep_get((pte_t *)pmdp);
+		pte = *(pte_t *) pmdp;
 	else
 #endif
 		pte = *pte_offset_kernel(pmdp, vaddr);
@@ -648,7 +648,6 @@ int gru_handle_user_call_os(unsigned long cb)
 	if ((cb & (GRU_HANDLE_STRIDE - 1)) || ucbnum >= GRU_NUM_CB)
 		return -EINVAL;
 
-again:
 	gts = gru_find_lock_gts(cb);
 	if (!gts)
 		return -EINVAL;
@@ -657,11 +656,7 @@ again:
 	if (ucbnum >= gts->ts_cbr_au_count * GRU_CBR_AU_SIZE)
 		goto exit;
 
-	if (gru_check_context_placement(gts)) {
-		gru_unlock_gts(gts);
-		gru_unload_context(gts, 1);
-		goto again;
-	}
+	gru_check_context_placement(gts);
 
 	/*
 	 * CCH may contain stale data if ts_force_cch_reload is set.
@@ -879,11 +874,7 @@ int gru_set_context_option(unsigned long arg)
 		} else {
 			gts->ts_user_blade_id = req.val1;
 			gts->ts_user_chiplet_id = req.val0;
-			if (gru_check_context_placement(gts)) {
-				gru_unlock_gts(gts);
-				gru_unload_context(gts, 1);
-				return ret;
-			}
+			gru_check_context_placement(gts);
 		}
 		break;
 	case sco_gseg_owner:

@@ -21,6 +21,7 @@
 #include <linux/signal.h>
 #include <linux/regset.h>
 #include <linux/elf.h>
+#include <linux/tracehook.h>
 
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
@@ -158,9 +159,8 @@ static int genregs32_set(struct task_struct *target,
 				 35 * sizeof(u32), 36 * sizeof(u32));
 	if (ret || !count)
 		return ret;
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf, 36 * sizeof(u32),
-				  38 * sizeof(u32));
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 36 * sizeof(u32), 38 * sizeof(u32));
 }
 
 static int fpregs32_get(struct task_struct *target,
@@ -204,8 +204,8 @@ static int fpregs32_set(struct task_struct *target,
 					 33 * sizeof(u32),
 					 34 * sizeof(u32));
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  34 * sizeof(u32), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						34 * sizeof(u32), -1);
 	return ret;
 }
 
@@ -439,9 +439,9 @@ asmlinkage int syscall_trace(struct pt_regs *regs, int syscall_exit_p)
 
 	if (test_thread_flag(TIF_SYSCALL_TRACE)) {
 		if (syscall_exit_p)
-			ptrace_report_syscall_exit(regs, 0);
+			tracehook_report_syscall_exit(regs, 0);
 		else
-			ret = ptrace_report_syscall_entry(regs);
+			ret = tracehook_report_syscall_entry(regs);
 	}
 
 	return ret;

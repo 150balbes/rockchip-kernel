@@ -73,11 +73,9 @@ void machine_kexec_cleanup(struct kimage *image)
 {
 }
 
-static void machine_crash_nonpanic_core(void *unused)
+void machine_crash_nonpanic_core(void *unused)
 {
 	struct pt_regs regs;
-
-	local_fiq_disable();
 
 	crash_setup_regs(&regs, get_irq_regs());
 	printk(KERN_DEBUG "CPU %u will stop doing anything useful since another CPU has crashed\n",
@@ -149,6 +147,11 @@ void machine_crash_shutdown(struct pt_regs *regs)
 	pr_info("Loading crashdump kernel...\n");
 }
 
+/*
+ * Function pointer to optional machine-specific reinitialization
+ */
+void (*kexec_reinit)(void);
+
 void machine_kexec(struct kimage *image)
 {
 	unsigned long page_list, reboot_entry_phys;
@@ -183,6 +186,9 @@ void machine_kexec(struct kimage *image)
 	reboot_entry_phys = virt_to_idmap(reboot_entry);
 
 	pr_info("Bye!\n");
+
+	if (kexec_reinit)
+		kexec_reinit();
 
 	soft_restart(reboot_entry_phys);
 }

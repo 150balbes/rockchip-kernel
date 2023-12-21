@@ -66,9 +66,8 @@ static void combiner_handle_cascade_irq(struct irq_desc *desc)
 {
 	struct combiner_chip_data *chip_data = irq_desc_get_handler_data(desc);
 	struct irq_chip *chip = irq_desc_get_chip(desc);
-	unsigned int combiner_irq;
+	unsigned int cascade_irq, combiner_irq;
 	unsigned long status;
-	int ret;
 
 	chained_irq_enter(chip, desc);
 
@@ -81,9 +80,12 @@ static void combiner_handle_cascade_irq(struct irq_desc *desc)
 		goto out;
 
 	combiner_irq = chip_data->hwirq_offset + __ffs(status);
-	ret = generic_handle_domain_irq(combiner_irq_domain, combiner_irq);
-	if (unlikely(ret))
+	cascade_irq = irq_find_mapping(combiner_irq_domain, combiner_irq);
+
+	if (unlikely(!cascade_irq))
 		handle_bad_irq(desc);
+	else
+		generic_handle_irq(cascade_irq);
 
  out:
 	chained_irq_exit(chip, desc);
@@ -177,8 +179,10 @@ static void __init combiner_init(void __iomem *combiner_base,
 	nr_irq = max_nr * IRQ_IN_COMBINER;
 
 	combiner_data = kcalloc(max_nr, sizeof (*combiner_data), GFP_KERNEL);
-	if (!combiner_data)
+	if (!combiner_data) {
+		pr_warn("%s: could not allocate combiner data\n", __func__);
 		return;
+	}
 
 	combiner_irq_domain = irq_domain_add_linear(np, nr_irq,
 				&combiner_irq_domain_ops, combiner_data);

@@ -28,8 +28,11 @@ static unsigned long low_mem_sz;
 static unsigned long min_high_pfn, max_high_pfn;
 static phys_addr_t high_mem_start;
 static phys_addr_t high_mem_sz;
-unsigned long arch_pfn_offset;
-EXPORT_SYMBOL(arch_pfn_offset);
+#endif
+
+#ifdef CONFIG_DISCONTIGMEM
+struct pglist_data node_data[MAX_NUMNODES] __read_mostly;
+EXPORT_SYMBOL(node_data);
 #endif
 
 long __init arc_get_mem_sz(void)
@@ -59,19 +62,24 @@ void __init early_init_dt_add_memory_arch(u64 base, u64 size)
 
 		low_mem_sz = size;
 		in_use = 1;
-		memblock_add_node(base, size, 0, MEMBLOCK_NONE);
+		memblock_add_node(base, size, 0);
 	} else {
 #ifdef CONFIG_HIGHMEM
 		high_mem_start = base;
 		high_mem_sz = size;
 		in_use = 1;
-		memblock_add_node(base, size, 1, MEMBLOCK_NONE);
+		memblock_add_node(base, size, 1);
 		memblock_reserve(base, size);
 #endif
 	}
 
 	pr_info("Memory @ %llx [%lldM] %s\n",
 		base, TO_MB(size), !in_use ? "Not used":"");
+}
+
+bool arch_has_descending_max_zone_pfns(void)
+{
+	return !IS_ENABLED(CONFIG_ARC_HAS_PAE40);
 }
 
 /*
@@ -84,13 +92,21 @@ void __init setup_arch_memory(void)
 {
 	unsigned long max_zone_pfn[MAX_NR_ZONES] = { 0 };
 
-	setup_initial_init_mm(_text, _etext, _edata, _end);
+	init_mm.start_code = (unsigned long)_text;
+	init_mm.end_code = (unsigned long)_etext;
+	init_mm.end_data = (unsigned long)_edata;
+	init_mm.brk = (unsigned long)_end;
 
 	/* first page of system - kernel .vector starts here */
-	min_low_pfn = virt_to_pfn((void *)CONFIG_LINUX_RAM_BASE);
+	min_low_pfn = ARCH_PFN_OFFSET;
 
 	/* Last usable page of low mem */
 	max_low_pfn = max_pfn = PFN_DOWN(low_mem_start + low_mem_sz);
+
+#ifdef CONFIG_FLATMEM
+	/* pfn_valid() uses this */
+	max_mapnr = max_low_pfn - min_low_pfn;
+#endif
 
 	/*------------- bootmem allocator setup -----------------------*/
 
@@ -126,14 +142,18 @@ void __init setup_arch_memory(void)
 
 #ifdef CONFIG_HIGHMEM
 	/*
+	 * Populate a new node with highmem
+	 *
 	 * On ARC (w/o PAE) HIGHMEM addresses are actually smaller (0 based)
-	 * than addresses in normal aka low memory (0x8000_0000 based).
+	 * than addresses in normal ala low memory (0x8000_0000 based).
 	 * Even with PAE, the huge peripheral space hole would waste a lot of
-	 * mem with single contiguous mem_map[].
-	 * Thus when HIGHMEM on ARC is enabled the memory map corresponding
-	 * to the hole is freed and ARC specific version of pfn_valid()
-	 * handles the hole in the memory map.
+	 * mem with single mem_map[]. This warrants a mem_map per region design.
+	 * Thus HIGHMEM on ARC is imlemented with DISCONTIGMEM.
+	 *
+	 * DISCONTIGMEM in turns requires multiple nodes. node 0 above is
+	 * populated with normal memory zone while node 1 only has highmem
 	 */
+	node_set_online(1);
 
 	min_high_pfn = PFN_DOWN(high_mem_start);
 	max_high_pfn = PFN_DOWN(high_mem_start + high_mem_sz);
@@ -150,15 +170,8 @@ void __init setup_arch_memory(void)
 	max_zone_pfn[ZONE_HIGHMEM] = max_high_pfn;
 
 	high_memory = (void *)(min_high_pfn << PAGE_SHIFT);
-
-	arch_pfn_offset = min(min_low_pfn, min_high_pfn);
 	kmap_init();
-
-#else /* CONFIG_HIGHMEM */
-	/* pfn_valid() uses this when FLATMEM=y and HIGHMEM=n */
-	max_mapnr = max_low_pfn - min_low_pfn;
-
-#endif /* CONFIG_HIGHMEM */
+#endif
 
 	free_area_init(max_zone_pfn);
 }
@@ -168,7 +181,7 @@ static void __init highmem_init(void)
 #ifdef CONFIG_HIGHMEM
 	unsigned long tmp;
 
-	memblock_phys_free(high_mem_start, high_mem_sz);
+	memblock_free(high_mem_start, high_mem_sz);
 	for (tmp = min_high_pfn; tmp < max_high_pfn; tmp++)
 		free_highmem_page(pfn_to_page(tmp));
 #endif
@@ -184,18 +197,5 @@ void __init mem_init(void)
 {
 	memblock_free_all();
 	highmem_init();
-
-	BUILD_BUG_ON((PTRS_PER_PGD * sizeof(pgd_t)) > PAGE_SIZE);
-	BUILD_BUG_ON((PTRS_PER_PUD * sizeof(pud_t)) > PAGE_SIZE);
-	BUILD_BUG_ON((PTRS_PER_PMD * sizeof(pmd_t)) > PAGE_SIZE);
-	BUILD_BUG_ON((PTRS_PER_PTE * sizeof(pte_t)) > PAGE_SIZE);
+	mem_init_print_info(NULL);
 }
-
-#ifdef CONFIG_HIGHMEM
-int pfn_valid(unsigned long pfn)
-{
-	return (pfn >= min_high_pfn && pfn <= max_high_pfn) ||
-		(pfn >= min_low_pfn && pfn <= max_low_pfn);
-}
-EXPORT_SYMBOL(pfn_valid);
-#endif

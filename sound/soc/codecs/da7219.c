@@ -1698,9 +1698,9 @@ static struct snd_soc_dai_driver da7219_dai = {
 		.formats = DA7219_FORMATS,
 	},
 	.ops = &da7219_dai_ops,
-	.symmetric_rate = 1,
+	.symmetric_rates = 1,
 	.symmetric_channels = 1,
-	.symmetric_sample_bits = 1,
+	.symmetric_samplebits = 1,
 };
 
 
@@ -1708,13 +1708,11 @@ static struct snd_soc_dai_driver da7219_dai = {
  * DT/ACPI
  */
 
-#ifdef CONFIG_OF
 static const struct of_device_id da7219_of_match[] = {
 	{ .compatible = "dlg,da7219", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, da7219_of_match);
-#endif
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id da7219_acpi_match[] = {
@@ -2633,20 +2631,11 @@ static int da7219_resume(struct snd_soc_component *component)
 #define da7219_resume NULL
 #endif
 
-static int da7219_set_jack(struct snd_soc_component *component, struct snd_soc_jack *jack,
-			   void *data)
-{
-	da7219_aad_jack_det(component, jack);
-
-	return 0;
-}
-
 static const struct snd_soc_component_driver soc_component_dev_da7219 = {
 	.probe			= da7219_probe,
 	.remove			= da7219_remove,
 	.suspend		= da7219_suspend,
 	.resume			= da7219_resume,
-	.set_jack		= da7219_set_jack,
 	.set_bias_level		= da7219_set_bias_level,
 	.controls		= da7219_snd_controls,
 	.num_controls		= ARRAY_SIZE(da7219_snd_controls),
@@ -2657,6 +2646,7 @@ static const struct snd_soc_component_driver soc_component_dev_da7219 = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
+	.non_legacy_dai_naming	= 1,
 };
 
 
@@ -2664,7 +2654,8 @@ static const struct snd_soc_component_driver soc_component_dev_da7219 = {
  * I2C layer
  */
 
-static int da7219_i2c_probe(struct i2c_client *i2c)
+static int da7219_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct device *dev = &i2c->dev;
 	struct da7219_priv *da7219;
@@ -2702,6 +2693,11 @@ static int da7219_i2c_probe(struct i2c_client *i2c)
 	return ret;
 }
 
+static int da7219_i2c_remove(struct i2c_client *client)
+{
+	return 0;
+}
+
 static const struct i2c_device_id da7219_i2c_id[] = {
 	{ "da7219", },
 	{ }
@@ -2715,6 +2711,7 @@ static struct i2c_driver da7219_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(da7219_acpi_match),
 	},
 	.probe		= da7219_i2c_probe,
+	.remove		= da7219_i2c_remove,
 	.id_table	= da7219_i2c_id,
 };
 

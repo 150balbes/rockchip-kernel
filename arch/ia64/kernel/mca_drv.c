@@ -176,7 +176,7 @@ mca_handler_bh(unsigned long paddr, void *iip, unsigned long ipsr)
 	spin_unlock(&mca_bh_lock);
 
 	/* This process is about to be killed itself */
-	make_task_dead(SIGKILL);
+	do_exit(SIGKILL);
 }
 
 /**
@@ -496,7 +496,7 @@ recover_from_read_error(slidx_table_t *slidx,
 			struct ia64_sal_os_state *sos)
 {
 	u64 target_identifier;
-	struct pal_min_state_area *pmsa;
+	pal_min_state_area_t *pmsa;
 	struct ia64_psr *psr1, *psr2;
 	ia64_fptr_t *mca_hdlr_bh = (ia64_fptr_t*)mca_handler_bhhook;
 

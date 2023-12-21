@@ -43,20 +43,6 @@ const char *const powerpc_triplets[] = {
 	NULL
 };
 
-const char *const riscv32_triplets[] = {
-	"riscv32-unknown-linux-gnu-",
-	"riscv32-linux-android-",
-	"riscv32-linux-gnu-",
-	NULL
-};
-
-const char *const riscv64_triplets[] = {
-	"riscv64-unknown-linux-gnu-",
-	"riscv64-linux-android-",
-	"riscv64-linux-gnu-",
-	NULL
-};
-
 const char *const s390_triplets[] = {
 	"s390-ibm-linux-",
 	"s390x-linux-gnu-",
@@ -65,7 +51,9 @@ const char *const s390_triplets[] = {
 
 const char *const sh_triplets[] = {
 	"sh-unknown-linux-gnu-",
+	"sh64-unknown-linux-gnu-",
 	"sh-linux-gnu-",
+	"sh64-linux-gnu-",
 	NULL
 };
 
@@ -142,7 +130,7 @@ static int lookup_triplets(const char *const *triplets, const char *name)
 }
 
 static int perf_env__lookup_binutils_path(struct perf_env *env,
-					  const char *name, char **path)
+					  const char *name, const char **path)
 {
 	int idx;
 	const char *arch = perf_env__arch(env), *cross_env;
@@ -178,10 +166,6 @@ static int perf_env__lookup_binutils_path(struct perf_env *env,
 		path_list = arm64_triplets;
 	else if (!strcmp(arch, "powerpc"))
 		path_list = powerpc_triplets;
-	else if (!strcmp(arch, "riscv32"))
-		path_list = riscv32_triplets;
-	else if (!strcmp(arch, "riscv64"))
-		path_list = riscv64_triplets;
 	else if (!strcmp(arch, "sh"))
 		path_list = sh_triplets;
 	else if (!strcmp(arch, "s390"))
@@ -218,7 +202,7 @@ out_error:
 	return -1;
 }
 
-int perf_env__lookup_objdump(struct perf_env *env, char **path)
+int perf_env__lookup_objdump(struct perf_env *env, const char **path)
 {
 	/*
 	 * For live mode, env->arch will be NULL and we can use

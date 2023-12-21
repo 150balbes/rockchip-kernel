@@ -4,6 +4,15 @@
  *
  * Copyright (C) 2010-2017 Digital Devices GmbH
  *                         Ralph Metzler <rmetzler@digitaldevices.de>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 only, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _DDBRIDGE_H_
@@ -370,4 +379,4 @@ void ddb_unmap(struct ddb *dev);
 int ddb_exit_ddbridge(int stage, int error);
 int ddb_init_ddbridge(void);
 
-#endif /* _DDBRIDGE_H_ */
+#endif /* DDBRIDGE_H */

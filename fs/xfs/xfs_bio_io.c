@@ -6,7 +6,7 @@
 
 static inline unsigned int bio_max_vecs(unsigned int count)
 {
-	return bio_max_segs(howmany(count, PAGE_SIZE));
+	return min_t(unsigned, howmany(count, PAGE_SIZE), BIO_MAX_PAGES);
 }
 
 int
@@ -15,7 +15,7 @@ xfs_rw_bdev(
 	sector_t		sector,
 	unsigned int		count,
 	char			*data,
-	enum req_op		op)
+	unsigned int		op)
 
 {
 	unsigned int		is_vmalloc = is_vmalloc_addr(data);
@@ -26,9 +26,10 @@ xfs_rw_bdev(
 	if (is_vmalloc && op == REQ_OP_WRITE)
 		flush_kernel_vmap_range(data, count);
 
-	bio = bio_alloc(bdev, bio_max_vecs(left), op | REQ_META | REQ_SYNC,
-			GFP_KERNEL);
+	bio = bio_alloc(GFP_KERNEL, bio_max_vecs(left));
+	bio_set_dev(bio, bdev);
 	bio->bi_iter.bi_sector = sector;
+	bio->bi_opf = op | REQ_META | REQ_SYNC;
 
 	do {
 		struct page	*page = kmem_to_page(data);
@@ -38,9 +39,10 @@ xfs_rw_bdev(
 		while (bio_add_page(bio, page, len, off) != len) {
 			struct bio	*prev = bio;
 
-			bio = bio_alloc(prev->bi_bdev, bio_max_vecs(left),
-					prev->bi_opf, GFP_KERNEL);
+			bio = bio_alloc(GFP_KERNEL, bio_max_vecs(left));
+			bio_copy_dev(bio, prev);
 			bio->bi_iter.bi_sector = bio_end_sector(prev);
+			bio->bi_opf = prev->bi_opf;
 			bio_chain(prev, bio);
 
 			submit_bio(prev);

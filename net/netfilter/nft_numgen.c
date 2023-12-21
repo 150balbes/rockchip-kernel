@@ -17,7 +17,7 @@
 struct nft_ng_inc {
 	u8			dreg;
 	u32			modulus;
-	atomic_t		*counter;
+	atomic_t		counter;
 	u32			offset;
 };
 
@@ -26,9 +26,9 @@ static u32 nft_ng_inc_gen(struct nft_ng_inc *priv)
 	u32 nval, oval;
 
 	do {
-		oval = atomic_read(priv->counter);
+		oval = atomic_read(&priv->counter);
 		nval = (oval + 1 < priv->modulus) ? oval + 1 : 0;
-	} while (atomic_cmpxchg(priv->counter, oval, nval) != oval);
+	} while (atomic_cmpxchg(&priv->counter, oval, nval) != oval);
 
 	return nval + priv->offset;
 }
@@ -54,7 +54,6 @@ static int nft_ng_inc_init(const struct nft_ctx *ctx,
 			   const struct nlattr * const tb[])
 {
 	struct nft_ng_inc *priv = nft_expr_priv(expr);
-	int err;
 
 	if (tb[NFTA_NG_OFFSET])
 		priv->offset = ntohl(nla_get_be32(tb[NFTA_NG_OFFSET]));
@@ -66,32 +65,10 @@ static int nft_ng_inc_init(const struct nft_ctx *ctx,
 	if (priv->offset + priv->modulus - 1 < priv->offset)
 		return -EOVERFLOW;
 
-	priv->counter = kmalloc(sizeof(*priv->counter), GFP_KERNEL);
-	if (!priv->counter)
-		return -ENOMEM;
+	atomic_set(&priv->counter, priv->modulus - 1);
 
-	atomic_set(priv->counter, priv->modulus - 1);
-
-	err = nft_parse_register_store(ctx, tb[NFTA_NG_DREG], &priv->dreg,
-				       NULL, NFT_DATA_VALUE, sizeof(u32));
-	if (err < 0)
-		goto err;
-
-	return 0;
-err:
-	kfree(priv->counter);
-
-	return err;
-}
-
-static bool nft_ng_inc_reduce(struct nft_regs_track *track,
-				 const struct nft_expr *expr)
-{
-	const struct nft_ng_inc *priv = nft_expr_priv(expr);
-
-	nft_reg_track_cancel(track, priv->dreg, NFT_REG32_SIZE);
-
-	return false;
+	return nft_parse_register_store(ctx, tb[NFTA_NG_DREG], &priv->dreg,
+					NULL, NFT_DATA_VALUE, sizeof(u32));
 }
 
 static int nft_ng_dump(struct sk_buff *skb, enum nft_registers dreg,
@@ -112,21 +89,12 @@ nla_put_failure:
 	return -1;
 }
 
-static int nft_ng_inc_dump(struct sk_buff *skb,
-			   const struct nft_expr *expr, bool reset)
+static int nft_ng_inc_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_ng_inc *priv = nft_expr_priv(expr);
 
 	return nft_ng_dump(skb, priv->dreg, priv->modulus, NFT_NG_INCREMENTAL,
 			   priv->offset);
-}
-
-static void nft_ng_inc_destroy(const struct nft_ctx *ctx,
-			       const struct nft_expr *expr)
-{
-	const struct nft_ng_inc *priv = nft_expr_priv(expr);
-
-	kfree(priv->counter);
 }
 
 struct nft_ng_random {
@@ -169,23 +137,12 @@ static int nft_ng_random_init(const struct nft_ctx *ctx,
 					NULL, NFT_DATA_VALUE, sizeof(u32));
 }
 
-static int nft_ng_random_dump(struct sk_buff *skb,
-			      const struct nft_expr *expr, bool reset)
+static int nft_ng_random_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_ng_random *priv = nft_expr_priv(expr);
 
 	return nft_ng_dump(skb, priv->dreg, priv->modulus, NFT_NG_RANDOM,
 			   priv->offset);
-}
-
-static bool nft_ng_random_reduce(struct nft_regs_track *track,
-				 const struct nft_expr *expr)
-{
-	const struct nft_ng_random *priv = nft_expr_priv(expr);
-
-	nft_reg_track_cancel(track, priv->dreg, NFT_REG32_SIZE);
-
-	return false;
 }
 
 static struct nft_expr_type nft_ng_type;
@@ -194,9 +151,7 @@ static const struct nft_expr_ops nft_ng_inc_ops = {
 	.size		= NFT_EXPR_SIZE(sizeof(struct nft_ng_inc)),
 	.eval		= nft_ng_inc_eval,
 	.init		= nft_ng_inc_init,
-	.destroy	= nft_ng_inc_destroy,
 	.dump		= nft_ng_inc_dump,
-	.reduce		= nft_ng_inc_reduce,
 };
 
 static const struct nft_expr_ops nft_ng_random_ops = {
@@ -205,7 +160,6 @@ static const struct nft_expr_ops nft_ng_random_ops = {
 	.eval		= nft_ng_random_eval,
 	.init		= nft_ng_random_init,
 	.dump		= nft_ng_random_dump,
-	.reduce		= nft_ng_random_reduce,
 };
 
 static const struct nft_expr_ops *

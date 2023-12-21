@@ -90,6 +90,7 @@ static void ttusbir_bulk_complete(struct urb *urb)
 	case -ECONNRESET:
 	case -ENOENT:
 	case -ESHUTDOWN:
+		usb_unlink_urb(urb);
 		return;
 	case -EPIPE:
 	default:
@@ -165,6 +166,7 @@ static void ttusbir_urb_complete(struct urb *urb)
 	case -ECONNRESET:
 	case -ENOENT:
 	case -ESHUTDOWN:
+		usb_unlink_urb(urb);
 		return;
 	case -EPIPE:
 	default:
@@ -400,7 +402,7 @@ static int ttusbir_resume(struct usb_interface *intf)
 	led_classdev_resume(&tt->led);
 
 	for (i = 0; i < NUM_URBS; i++) {
-		rc = usb_submit_urb(tt->urb[i], GFP_NOIO);
+		rc = usb_submit_urb(tt->urb[i], GFP_KERNEL);
 		if (rc) {
 			dev_warn(tt->dev, "failed to submit urb: %d\n", rc);
 			break;

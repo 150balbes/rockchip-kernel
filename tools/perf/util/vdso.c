@@ -144,11 +144,10 @@ static enum dso_type machine__thread_dso_type(struct machine *machine,
 					      struct thread *thread)
 {
 	enum dso_type dso_type = DSO__TYPE_UNKNOWN;
-	struct map_rb_node *rb_node;
+	struct map *map;
 
-	maps__for_each_entry(thread__maps(thread), rb_node) {
-		struct dso *dso = map__dso(rb_node->map);
-
+	maps__for_each_entry(thread->maps, map) {
+		struct dso *dso = map->dso;
 		if (!dso || dso->long_name[0] != '/')
 			continue;
 		dso_type = dso__type(dso, machine);

@@ -13,30 +13,26 @@
 #ifndef ISCSI_IBFT_H
 #define ISCSI_IBFT_H
 
-#include <linux/types.h>
+#include <linux/acpi.h>
 
 /*
- * Physical location of iSCSI Boot Format Table.
- * If the value is 0 there is no iBFT on the machine.
+ * Logical location of iSCSI Boot Format Table.
+ * If the value is NULL there is no iBFT on the machine.
  */
-extern phys_addr_t ibft_phys_addr;
-
-#ifdef CONFIG_ISCSI_IBFT_FIND
+extern struct acpi_table_ibft *ibft_addr;
 
 /*
  * Routine used to find and reserve the iSCSI Boot Format Table. The
- * physical address is set in the ibft_phys_addr variable.
+ * mapped address is set in the ibft_addr variable.
  */
-void reserve_ibft_region(void);
-
-/*
- * Physical bounds to search for the iSCSI Boot Format Table.
- */
-#define IBFT_START 0x80000 /* 512kB */
-#define IBFT_END 0x100000 /* 1MB */
-
+#ifdef CONFIG_ISCSI_IBFT_FIND
+unsigned long find_ibft_region(unsigned long *sizep);
 #else
-static inline void reserve_ibft_region(void) {}
+static inline unsigned long find_ibft_region(unsigned long *sizep)
+{
+	*sizep = 0;
+	return 0;
+}
 #endif
 
 #endif /* ISCSI_IBFT_H */

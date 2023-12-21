@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/blk-mq.h>
 #include <linux/hdreg.h>
+#include <linux/genhd.h>
 #include <linux/cdrom.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -139,11 +140,11 @@ static int vdc_getgeo(struct block_device *bdev, struct hd_geometry *geo)
  * when vdisk_mtype is VD_MEDIA_TYPE_CD or VD_MEDIA_TYPE_DVD.
  * Needed to be able to install inside an ldom from an iso image.
  */
-static int vdc_ioctl(struct block_device *bdev, blk_mode_t mode,
+static int vdc_ioctl(struct block_device *bdev, fmode_t mode,
 		     unsigned command, unsigned long argument)
 {
-	struct vdc_port *port = bdev->bd_disk->private_data;
 	int i;
+	struct gendisk *disk;
 
 	switch (command) {
 	case CDROMMULTISESSION:
@@ -154,15 +155,12 @@ static int vdc_ioctl(struct block_device *bdev, blk_mode_t mode,
 		return 0;
 
 	case CDROM_GET_CAPABILITY:
-		if (!vdc_version_supported(port, 1, 1))
-			return -EINVAL;
-		switch (port->vdisk_mtype) {
-		case VD_MEDIA_TYPE_CD:
-		case VD_MEDIA_TYPE_DVD:
+		disk = bdev->bd_disk;
+
+		if (bdev->bd_disk && (disk->flags & GENHD_FL_CD))
 			return 0;
-		default:
-			return -EINVAL;
-		}
+		return -EINVAL;
+
 	default:
 		pr_debug(PFX "ioctl %08x not supported\n", command);
 		return -EINVAL;
@@ -461,7 +459,7 @@ static int __vdc_tx_trigger(struct vdc_port *port)
 
 static int __send_request(struct request *req)
 {
-	struct vdc_port *port = req->q->disk->private_data;
+	struct vdc_port *port = req->rq_disk->private_data;
 	struct vio_dring_state *dr = &port->vio.drings[VIO_DRIVER_TX_RING];
 	struct scatterlist sg[MAX_RING_COOKIES];
 	struct vdc_req_entry *rqe;
@@ -782,6 +780,27 @@ static const struct blk_mq_ops vdc_mq_ops = {
 	.queue_rq	= vdc_queue_rq,
 };
 
+static void cleanup_queue(struct request_queue *q)
+{
+	struct vdc_port *port = q->queuedata;
+
+	blk_cleanup_queue(q);
+	blk_mq_free_tag_set(&port->tag_set);
+}
+
+static struct request_queue *init_queue(struct vdc_port *port)
+{
+	struct request_queue *q;
+
+	q = blk_mq_init_sq_queue(&port->tag_set, &vdc_mq_ops, VDC_TX_RING_SIZE,
+					BLK_MQ_F_SHOULD_MERGE);
+	if (IS_ERR(q))
+		return q;
+
+	q->queuedata = port;
+	return q;
+}
+
 static int probe_disk(struct vdc_port *port)
 {
 	struct request_queue *q;
@@ -819,21 +838,21 @@ static int probe_disk(struct vdc_port *port)
 				    (u64)geom.num_sec);
 	}
 
-	err = blk_mq_alloc_sq_tag_set(&port->tag_set, &vdc_mq_ops,
-			VDC_TX_RING_SIZE, BLK_MQ_F_SHOULD_MERGE);
-	if (err)
-		return err;
-
-	g = blk_mq_alloc_disk(&port->tag_set, port);
-	if (IS_ERR(g)) {
+	q = init_queue(port);
+	if (IS_ERR(q)) {
+		printk(KERN_ERR PFX "%s: Could not allocate queue.\n",
+		       port->vio.name);
+		return PTR_ERR(q);
+	}
+	g = alloc_disk(1 << PARTITION_SHIFT);
+	if (!g) {
 		printk(KERN_ERR PFX "%s: Could not allocate gendisk.\n",
 		       port->vio.name);
-		err = PTR_ERR(g);
-		goto out_free_tag;
+		cleanup_queue(q);
+		return -ENOMEM;
 	}
 
 	port->disk = g;
-	q = g->queue;
 
 	/* Each segment in a request is up to an aligned page in size. */
 	blk_queue_segment_boundary(q, PAGE_SIZE - 1);
@@ -843,7 +862,6 @@ static int probe_disk(struct vdc_port *port)
 	blk_queue_max_hw_sectors(q, port->max_xfer_size);
 	g->major = vdc_major;
 	g->first_minor = port->vio.vdev->dev_no << PARTITION_SHIFT;
-	g->minors = 1 << PARTITION_SHIFT;
 	strcpy(g->disk_name, port->disk_name);
 
 	g->fops = &vdc_fops;
@@ -856,12 +874,14 @@ static int probe_disk(struct vdc_port *port)
 		switch (port->vdisk_mtype) {
 		case VD_MEDIA_TYPE_CD:
 			pr_info(PFX "Virtual CDROM %s\n", port->disk_name);
+			g->flags |= GENHD_FL_CD;
 			g->flags |= GENHD_FL_REMOVABLE;
 			set_disk_ro(g, 1);
 			break;
 
 		case VD_MEDIA_TYPE_DVD:
 			pr_info(PFX "Virtual DVD %s\n", port->disk_name);
+			g->flags |= GENHD_FL_CD;
 			g->flags |= GENHD_FL_REMOVABLE;
 			set_disk_ro(g, 1);
 			break;
@@ -879,17 +899,9 @@ static int probe_disk(struct vdc_port *port)
 	       port->vdisk_size, (port->vdisk_size >> (20 - 9)),
 	       port->vio.ver.major, port->vio.ver.minor);
 
-	err = device_add_disk(&port->vio.vdev->dev, g, NULL);
-	if (err)
-		goto out_cleanup_disk;
+	device_add_disk(&port->vio.vdev->dev, g, NULL);
 
 	return 0;
-
-out_cleanup_disk:
-	put_disk(g);
-out_free_tag:
-	blk_mq_free_tag_set(&port->tag_set);
-	return err;
 }
 
 static struct ldc_channel_config vdc_ldc_cfg = {
@@ -972,8 +984,6 @@ static int vdc_port_probe(struct vio_dev *vdev, const struct vio_device_id *id)
 	print_version();
 
 	hp = mdesc_grab();
-	if (!hp)
-		return -ENODEV;
 
 	err = -ENODEV;
 	if ((vdev->dev_no << PARTITION_SHIFT) & ~(u64)MINORMASK) {
@@ -991,8 +1001,9 @@ static int vdc_port_probe(struct vio_dev *vdev, const struct vio_device_id *id)
 	}
 
 	port = kzalloc(sizeof(*port), GFP_KERNEL);
+	err = -ENOMEM;
 	if (!port) {
-		err = -ENOMEM;
+		printk(KERN_ERR PFX "Cannot allocate vdc_port.\n");
 		goto err_out_release_mdesc;
 	}
 
@@ -1060,7 +1071,7 @@ err_out_release_mdesc:
 	return err;
 }
 
-static void vdc_port_remove(struct vio_dev *vdev)
+static int vdc_port_remove(struct vio_dev *vdev)
 {
 	struct vdc_port *port = dev_get_drvdata(&vdev->dev);
 
@@ -1072,8 +1083,9 @@ static void vdc_port_remove(struct vio_dev *vdev)
 		del_timer_sync(&port->vio.timer);
 
 		del_gendisk(port->disk);
+		cleanup_queue(port->disk->queue);
 		put_disk(port->disk);
-		blk_mq_free_tag_set(&port->tag_set);
+		port->disk = NULL;
 
 		vdc_free_tx_ring(port);
 		vio_ldc_free(&port->vio);
@@ -1082,6 +1094,7 @@ static void vdc_port_remove(struct vio_dev *vdev)
 
 		kfree(port);
 	}
+	return 0;
 }
 
 static void vdc_requeue_inflight(struct vdc_port *port)

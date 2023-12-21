@@ -151,7 +151,8 @@ static int als_set_default_config(struct i2c_client *client)
 	return 0;
 }
 
-static int  isl29020_probe(struct i2c_client *client)
+static int  isl29020_probe(struct i2c_client *client,
+					const struct i2c_device_id *id)
 {
 	int res;
 
@@ -170,10 +171,11 @@ static int  isl29020_probe(struct i2c_client *client)
 	return res;
 }
 
-static void isl29020_remove(struct i2c_client *client)
+static int isl29020_remove(struct i2c_client *client)
 {
 	pm_runtime_disable(&client->dev);
 	sysfs_remove_group(&client->dev.kobj, &m_als_gr);
+	return 0;
 }
 
 static const struct i2c_device_id isl29020_id[] = {

@@ -83,8 +83,7 @@ h2_destroy()
 
 switch_create()
 {
-	ip link add name br0 address $(mac_get $swp1) \
-		type bridge mcast_snooping 0
+	ip link add name br0 type bridge mcast_snooping 0
 	ip link set dev br0 up
 
 	ip link set dev $swp1 master br0

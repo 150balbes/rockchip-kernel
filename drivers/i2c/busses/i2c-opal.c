@@ -220,9 +220,9 @@ static int i2c_opal_probe(struct platform_device *pdev)
 	adapter->dev.of_node = of_node_get(pdev->dev.of_node);
 	pname = of_get_property(pdev->dev.of_node, "ibm,port-name", NULL);
 	if (pname)
-		strscpy(adapter->name, pname, sizeof(adapter->name));
+		strlcpy(adapter->name, pname, sizeof(adapter->name));
 	else
-		strscpy(adapter->name, "opal", sizeof(adapter->name));
+		strlcpy(adapter->name, "opal", sizeof(adapter->name));
 
 	platform_set_drvdata(pdev, adapter);
 	rc = i2c_add_adapter(adapter);
@@ -232,11 +232,13 @@ static int i2c_opal_probe(struct platform_device *pdev)
 	return rc;
 }
 
-static void i2c_opal_remove(struct platform_device *pdev)
+static int i2c_opal_remove(struct platform_device *pdev)
 {
 	struct i2c_adapter *adapter = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(adapter);
+
+	return 0;
 }
 
 static const struct of_device_id i2c_opal_of_match[] = {
@@ -249,7 +251,7 @@ MODULE_DEVICE_TABLE(of, i2c_opal_of_match);
 
 static struct platform_driver i2c_opal_driver = {
 	.probe	= i2c_opal_probe,
-	.remove_new = i2c_opal_remove,
+	.remove	= i2c_opal_remove,
 	.driver	= {
 		.name		= "i2c-opal",
 		.of_match_table	= i2c_opal_of_match,

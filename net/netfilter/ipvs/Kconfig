@@ -4,7 +4,7 @@
 #
 menuconfig IP_VS
 	tristate "IP virtual server support"
-	depends on INET && NETFILTER
+	depends on NET && INET && NETFILTER
 	depends on (NF_CONNTRACK || NF_CONNTRACK=n)
 	help
 	  IP Virtual Server support will let you build a high-performance
@@ -44,8 +44,7 @@ config	IP_VS_DEBUG
 
 config	IP_VS_TAB_BITS
 	int "IPVS connection table size (the Nth power of 2)"
-	range 8 20 if !64BIT
-	range 8 27 if 64BIT
+	range 8 20
 	default 12
 	help
 	  The IPVS connection hash table uses the chaining scheme to handle
@@ -55,24 +54,24 @@ config	IP_VS_TAB_BITS
 
 	  Note the table size must be power of 2. The table size will be the
 	  value of 2 to the your input number power. The number to choose is
-	  from 8 to 27 for 64BIT(20 otherwise), the default number is 12,
-	  which means the table size is 4096. Don't input the number too
-	  small, otherwise you will lose performance on it. You can adapt the
-	  table size yourself, according to your virtual server application.
-	  It is good to set the table size not far less than the number of
-	  connections per second multiplying average lasting time of
-	  connection in the table.  For example, your virtual server gets 200
-	  connections per second, the connection lasts for 200 seconds in
-	  average in the connection table, the table size should be not far
-	  less than 200x200, it is good to set the table size 32768 (2**15).
+	  from 8 to 20, the default number is 12, which means the table size
+	  is 4096. Don't input the number too small, otherwise you will lose
+	  performance on it. You can adapt the table size yourself, according
+	  to your virtual server application. It is good to set the table size
+	  not far less than the number of connections per second multiplying
+	  average lasting time of connection in the table.  For example, your
+	  virtual server gets 200 connections per second, the connection lasts
+	  for 200 seconds in average in the connection table, the table size
+	  should be not far less than 200x200, it is good to set the table
+	  size 32768 (2**15).
 
 	  Another note that each connection occupies 128 bytes effectively and
 	  each hash entry uses 8 bytes, so you can estimate how much memory is
 	  needed for your box.
 
 	  You can overwrite this number setting conn_tab_bits module parameter
-	  or by appending ip_vs.conn_tab_bits=? to the kernel command line if
-	  IP VS was compiled built-in.
+	  or by appending ip_vs.conn_tab_bits=? to the kernel command line
+	  if IP VS was compiled built-in.
 
 comment "IPVS transport protocol load balancing support"
 
@@ -272,17 +271,6 @@ config	IP_VS_NQ
 	  If you want to compile it in kernel, say Y. To compile it as a
 	  module, choose M here. If unsure, say N.
 
-config	IP_VS_TWOS
-	tristate "weighted random twos choice least-connection scheduling"
-	help
-	  The weighted random twos choice least-connection scheduling
-	  algorithm picks two random real servers and directs network
-	  connections to the server with the least active connections
-	  normalized by the server weight.
-
-	  If you want to compile it in kernel, say Y. To compile it as a
-	  module, choose M here. If unsure, say N.
-
 comment 'IPVS SH scheduler'
 
 config IP_VS_SH_TAB_BITS
@@ -319,7 +307,7 @@ config IP_VS_MH_TAB_INDEX
 comment 'IPVS application helper'
 
 config	IP_VS_FTP
-	tristate "FTP protocol helper"
+  	tristate "FTP protocol helper"
 	depends on IP_VS_PROTO_TCP && NF_CONNTRACK && NF_NAT && \
 		NF_CONNTRACK_FTP
 	select IP_VS_NFCT

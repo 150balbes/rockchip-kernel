@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2012 Red Hat, Inc.
  *
@@ -61,7 +60,7 @@ struct dm_cache_metadata *dm_cache_metadata_open(struct block_device *bdev,
 						 sector_t data_block_size,
 						 bool may_format_device,
 						 size_t policy_hint_size,
-						 unsigned int metadata_version);
+						 unsigned metadata_version);
 
 void dm_cache_metadata_close(struct dm_cache_metadata *cmd);
 
@@ -97,7 +96,7 @@ int dm_cache_load_mappings(struct dm_cache_metadata *cmd,
 			   void *context);
 
 int dm_cache_set_dirty_bits(struct dm_cache_metadata *cmd,
-			    unsigned int nr_bits, unsigned long *bits);
+			    unsigned nr_bits, unsigned long *bits);
 
 struct dm_cache_statistics {
 	uint32_t read_hits;
@@ -132,7 +131,7 @@ void dm_cache_dump(struct dm_cache_metadata *cmd);
  * hints will be lost.
  *
  * The hints are indexed by the cblock, but many policies will not
- * necessarily have a fast way of accessing efficiently via cblock.  So
+ * neccessarily have a fast way of accessing efficiently via cblock.  So
  * rather than querying the policy for each cblock, we let it walk its data
  * structures and fill in the hints in whatever order it wishes.
  */

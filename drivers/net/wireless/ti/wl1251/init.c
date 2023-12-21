@@ -373,7 +373,7 @@ int wl1251_hw_init(struct wl1251 *wl)
 	if (ret < 0)
 		goto out_free_data_path;
 
-	/* Beacons and broadcast settings */
+	/* Beacons and boradcast settings */
 	ret = wl1251_hw_init_beacon_broadcast(wl);
 	if (ret < 0)
 		goto out_free_data_path;

@@ -72,13 +72,13 @@ struct ad5421_state {
 	struct mutex			lock;
 
 	/*
-	 * DMA (thus cache coherency maintenance) may require the
+	 * DMA (thus cache coherency maintenance) requires the
 	 * transfer buffers to live in their own cache lines.
 	 */
 	union {
 		__be32 d32;
 		u8 d8[4];
-	} data[2] __aligned(IIO_DMA_MINALIGN);
+	} data[2] ____cacheline_aligned;
 };
 
 static const struct iio_event_spec ad5421_current_event[] = {

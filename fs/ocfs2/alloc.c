@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * alloc.c
  *
  * Extent allocs and frees
@@ -2040,7 +2042,7 @@ static void ocfs2_complete_edge_insert(handle_t *handle,
 	int i, idx;
 	struct ocfs2_extent_list *el, *left_el, *right_el;
 	struct ocfs2_extent_rec *left_rec, *right_rec;
-	struct buffer_head *root_bh;
+	struct buffer_head *root_bh = left_path->p_node[subtree_index].bh;
 
 	/*
 	 * Update the counts and position values within all the
@@ -5940,7 +5942,6 @@ static int ocfs2_replay_truncate_records(struct ocfs2_super *osb,
 		status = ocfs2_journal_access_di(handle, INODE_CACHE(tl_inode), tl_bh,
 						 OCFS2_JOURNAL_ACCESS_WRITE);
 		if (status < 0) {
-			ocfs2_commit_trans(osb, handle);
 			mlog_errno(status);
 			goto bail;
 		}
@@ -5965,7 +5966,6 @@ static int ocfs2_replay_truncate_records(struct ocfs2_super *osb,
 						     data_alloc_bh, start_blk,
 						     num_clusters);
 			if (status < 0) {
-				ocfs2_commit_trans(osb, handle);
 				mlog_errno(status);
 				goto bail;
 			}
@@ -5981,7 +5981,7 @@ bail:
 	return status;
 }
 
-/* Expects you to already be holding tl_inode->i_rwsem */
+/* Expects you to already be holding tl_inode->i_mutex */
 int __ocfs2_flush_truncate_log(struct ocfs2_super *osb)
 {
 	int status;
@@ -6020,7 +6020,7 @@ int __ocfs2_flush_truncate_log(struct ocfs2_super *osb)
 	 * Then truncate log will be replayed resulting in cluster double free.
 	 */
 	jbd2_journal_lock_updates(journal->j_journal);
-	status = jbd2_journal_flush(journal->j_journal, 0);
+	status = jbd2_journal_flush(journal->j_journal);
 	jbd2_journal_unlock_updates(journal->j_journal);
 	if (status < 0) {
 		mlog_errno(status);
@@ -6923,12 +6923,13 @@ static int ocfs2_grab_eof_pages(struct inode *inode, loff_t start, loff_t end,
 }
 
 /*
- * Zero partial cluster for a hole punch or truncate. This avoids exposing
- * nonzero data on subsequent file extends.
+ * Zero the area past i_size but still within an allocated
+ * cluster. This avoids exposing nonzero data on subsequent file
+ * extends.
  *
  * We need to call this before i_size is updated on the inode because
  * otherwise block_write_full_page() will skip writeout of pages past
- * i_size.
+ * i_size. The new_i_size parameter is passed for this reason.
  */
 int ocfs2_zero_range_for_truncate(struct inode *inode, handle_t *handle,
 				  u64 range_start, u64 range_end)
@@ -6946,15 +6947,6 @@ int ocfs2_zero_range_for_truncate(struct inode *inode, handle_t *handle,
 	if (!ocfs2_sparse_alloc(OCFS2_SB(sb)))
 		return 0;
 
-	/*
-	 * Avoid zeroing pages fully beyond current i_size. It is pointless as
-	 * underlying blocks of those pages should be already zeroed out and
-	 * page writeback will skip them anyway.
-	 */
-	range_end = min_t(u64, range_end, i_size_read(inode));
-	if (range_start >= range_end)
-		return 0;
-
 	pages = kcalloc(ocfs2_pages_per_cluster(sb),
 			sizeof(struct page *), GFP_NOFS);
 	if (pages == NULL) {
@@ -6962,6 +6954,9 @@ int ocfs2_zero_range_for_truncate(struct inode *inode, handle_t *handle,
 		mlog_errno(ret);
 		goto out;
 	}
+
+	if (range_start == range_end)
+		goto out;
 
 	ret = ocfs2_extent_map_get_blocks(inode,
 					  range_start >> sb->s_blocksize_bits,
@@ -7427,7 +7422,7 @@ int ocfs2_truncate_inline(struct inode *inode, struct buffer_head *di_bh,
 	/*
 	 * No need to worry about the data page here - it's been
 	 * truncated already and inline data doesn't need it for
-	 * pushing zero's to disk, so we'll let read_folio pick it up
+	 * pushing zero's to disk, so we'll let readpage pick it up
 	 * later.
 	 */
 	if (trunc) {

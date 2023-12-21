@@ -19,14 +19,15 @@
 #include <linux/list.h>
 #include <linux/sysfs.h>
 #include <linux/compiler.h>
-#include <linux/container_of.h>
 #include <linux/spinlock.h>
 #include <linux/kref.h>
 #include <linux/kobject_ns.h>
+#include <linux/kernel.h>
 #include <linux/wait.h>
 #include <linux/atomic.h>
 #include <linux/workqueue.h>
 #include <linux/uidgid.h>
+#include <linux/android_kabi.h>
 
 #define UEVENT_HELPER_PATH_LEN		256
 #define UEVENT_NUM_ENVP			64	/* number of env pointers */
@@ -66,7 +67,7 @@ struct kobject {
 	struct list_head	entry;
 	struct kobject		*parent;
 	struct kset		*kset;
-	const struct kobj_type	*ktype;
+	struct kobj_type	*ktype;
 	struct kernfs_node	*sd; /* sysfs directory entry */
 	struct kref		kref;
 #ifdef CONFIG_DEBUG_KOBJECT_RELEASE
@@ -77,47 +78,82 @@ struct kobject {
 	unsigned int state_add_uevent_sent:1;
 	unsigned int state_remove_uevent_sent:1;
 	unsigned int uevent_suppress:1;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
-__printf(2, 3) int kobject_set_name(struct kobject *kobj, const char *name, ...);
-__printf(2, 0) int kobject_set_name_vargs(struct kobject *kobj, const char *fmt, va_list vargs);
+extern __printf(2, 3)
+int kobject_set_name(struct kobject *kobj, const char *name, ...);
+extern __printf(2, 0)
+int kobject_set_name_vargs(struct kobject *kobj, const char *fmt,
+			   va_list vargs);
 
 static inline const char *kobject_name(const struct kobject *kobj)
 {
 	return kobj->name;
 }
 
-void kobject_init(struct kobject *kobj, const struct kobj_type *ktype);
-__printf(3, 4) __must_check int kobject_add(struct kobject *kobj,
-					    struct kobject *parent,
-					    const char *fmt, ...);
-__printf(4, 5) __must_check int kobject_init_and_add(struct kobject *kobj,
-						     const struct kobj_type *ktype,
-						     struct kobject *parent,
-						     const char *fmt, ...);
+extern void kobject_init(struct kobject *kobj, struct kobj_type *ktype);
+extern __printf(3, 4) __must_check
+int kobject_add(struct kobject *kobj, struct kobject *parent,
+		const char *fmt, ...);
+extern __printf(4, 5) __must_check
+int kobject_init_and_add(struct kobject *kobj,
+			 struct kobj_type *ktype, struct kobject *parent,
+			 const char *fmt, ...);
 
-void kobject_del(struct kobject *kobj);
+extern void kobject_del(struct kobject *kobj);
 
-struct kobject * __must_check kobject_create_and_add(const char *name, struct kobject *parent);
+extern struct kobject * __must_check kobject_create(void);
+extern struct kobject * __must_check kobject_create_and_add(const char *name,
+						struct kobject *parent);
 
-int __must_check kobject_rename(struct kobject *, const char *new_name);
-int __must_check kobject_move(struct kobject *, struct kobject *);
+extern int __must_check kobject_rename(struct kobject *, const char *new_name);
+extern int __must_check kobject_move(struct kobject *, struct kobject *);
 
-struct kobject *kobject_get(struct kobject *kobj);
-struct kobject * __must_check kobject_get_unless_zero(struct kobject *kobj);
-void kobject_put(struct kobject *kobj);
+extern struct kobject *kobject_get(struct kobject *kobj);
+extern struct kobject * __must_check kobject_get_unless_zero(
+						struct kobject *kobj);
+extern void kobject_put(struct kobject *kobj);
 
-const void *kobject_namespace(const struct kobject *kobj);
-void kobject_get_ownership(const struct kobject *kobj, kuid_t *uid, kgid_t *gid);
-char *kobject_get_path(const struct kobject *kobj, gfp_t flag);
+extern const void *kobject_namespace(struct kobject *kobj);
+extern void kobject_get_ownership(struct kobject *kobj,
+				  kuid_t *uid, kgid_t *gid);
+extern char *kobject_get_path(struct kobject *kobj, gfp_t flag);
+
+/**
+ * kobject_has_children - Returns whether a kobject has children.
+ * @kobj: the object to test
+ *
+ * This will return whether a kobject has other kobjects as children.
+ *
+ * It does NOT account for the presence of attribute files, only sub
+ * directories. It also assumes there is no concurrent addition or
+ * removal of such children, and thus relies on external locking.
+ */
+static inline bool kobject_has_children(struct kobject *kobj)
+{
+	WARN_ON_ONCE(kref_read(&kobj->kref) == 0);
+
+	return kobj->sd && kobj->sd->dir.subdirs;
+}
 
 struct kobj_type {
 	void (*release)(struct kobject *kobj);
 	const struct sysfs_ops *sysfs_ops;
+	struct attribute **default_attrs;	/* use default_groups instead */
 	const struct attribute_group **default_groups;
-	const struct kobj_ns_type_operations *(*child_ns_type)(const struct kobject *kobj);
-	const void *(*namespace)(const struct kobject *kobj);
-	void (*get_ownership)(const struct kobject *kobj, kuid_t *uid, kgid_t *gid);
+	const struct kobj_ns_type_operations *(*child_ns_type)(struct kobject *kobj);
+	const void *(*namespace)(struct kobject *kobj);
+	void (*get_ownership)(struct kobject *kobj, kuid_t *uid, kgid_t *gid);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct kobj_uevent_env {
@@ -129,9 +165,10 @@ struct kobj_uevent_env {
 };
 
 struct kset_uevent_ops {
-	int (* const filter)(const struct kobject *kobj);
-	const char *(* const name)(const struct kobject *kobj);
-	int (* const uevent)(const struct kobject *kobj, struct kobj_uevent_env *env);
+	int (* const filter)(struct kset *kset, struct kobject *kobj);
+	const char *(* const name)(struct kset *kset, struct kobject *kobj);
+	int (* const uevent)(struct kset *kset, struct kobject *kobj,
+		      struct kobj_uevent_env *env);
 };
 
 struct kobj_attribute {
@@ -168,13 +205,19 @@ struct kset {
 	spinlock_t list_lock;
 	struct kobject kobj;
 	const struct kset_uevent_ops *uevent_ops;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } __randomize_layout;
 
-void kset_init(struct kset *kset);
-int __must_check kset_register(struct kset *kset);
-void kset_unregister(struct kset *kset);
-struct kset * __must_check kset_create_and_add(const char *name, const struct kset_uevent_ops *u,
-					       struct kobject *parent_kobj);
+extern void kset_init(struct kset *kset);
+extern int __must_check kset_register(struct kset *kset);
+extern void kset_unregister(struct kset *kset);
+extern struct kset * __must_check kset_create_and_add(const char *name,
+						const struct kset_uevent_ops *u,
+						struct kobject *parent_kobj);
 
 static inline struct kset *to_kset(struct kobject *kobj)
 {
@@ -191,12 +234,12 @@ static inline void kset_put(struct kset *k)
 	kobject_put(&k->kobj);
 }
 
-static inline const struct kobj_type *get_ktype(const struct kobject *kobj)
+static inline struct kobj_type *get_ktype(struct kobject *kobj)
 {
 	return kobj->ktype;
 }
 
-struct kobject *kset_find_obj(struct kset *, const char *);
+extern struct kobject *kset_find_obj(struct kset *, const char *);
 
 /* The global /sys/kernel/ kobject for people to chain off of */
 extern struct kobject *kernel_kobj;

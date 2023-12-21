@@ -146,19 +146,22 @@ static int ls037v7dw01_probe(struct platform_device *pdev)
 	lcd->pdev = pdev;
 
 	lcd->vdd = devm_regulator_get(&pdev->dev, "envdd");
-	if (IS_ERR(lcd->vdd))
-		return dev_err_probe(&pdev->dev, PTR_ERR(lcd->vdd),
-				     "failed to get regulator\n");
+	if (IS_ERR(lcd->vdd)) {
+		dev_err(&pdev->dev, "failed to get regulator\n");
+		return PTR_ERR(lcd->vdd);
+	}
 
 	lcd->ini_gpio = devm_gpiod_get(&pdev->dev, "enable", GPIOD_OUT_LOW);
-	if (IS_ERR(lcd->ini_gpio))
-		return dev_err_probe(&pdev->dev, PTR_ERR(lcd->ini_gpio),
-				     "failed to get enable gpio\n");
+	if (IS_ERR(lcd->ini_gpio)) {
+		dev_err(&pdev->dev, "failed to get enable gpio\n");
+		return PTR_ERR(lcd->ini_gpio);
+	}
 
 	lcd->resb_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_OUT_LOW);
-	if (IS_ERR(lcd->resb_gpio))
-		return dev_err_probe(&pdev->dev, PTR_ERR(lcd->resb_gpio),
-				     "failed to get reset gpio\n");
+	if (IS_ERR(lcd->resb_gpio)) {
+		dev_err(&pdev->dev, "failed to get reset gpio\n");
+		return PTR_ERR(lcd->resb_gpio);
+	}
 
 	lcd->mo_gpio = devm_gpiod_get_index(&pdev->dev, "mode", 0,
 					    GPIOD_OUT_LOW);
@@ -189,13 +192,15 @@ static int ls037v7dw01_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ls037v7dw01_remove(struct platform_device *pdev)
+static int ls037v7dw01_remove(struct platform_device *pdev)
 {
 	struct ls037v7dw01_panel *lcd = platform_get_drvdata(pdev);
 
 	drm_panel_remove(&lcd->panel);
 	drm_panel_disable(&lcd->panel);
 	drm_panel_unprepare(&lcd->panel);
+
+	return 0;
 }
 
 static const struct of_device_id ls037v7dw01_of_match[] = {
@@ -207,7 +212,7 @@ MODULE_DEVICE_TABLE(of, ls037v7dw01_of_match);
 
 static struct platform_driver ls037v7dw01_driver = {
 	.probe		= ls037v7dw01_probe,
-	.remove_new	= ls037v7dw01_remove,
+	.remove		= ls037v7dw01_remove,
 	.driver		= {
 		.name = "panel-sharp-ls037v7dw01",
 		.of_match_table = ls037v7dw01_of_match,

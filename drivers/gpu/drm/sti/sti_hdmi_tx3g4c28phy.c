@@ -67,7 +67,7 @@ static struct hdmi_phy_config hdmiphy_config[NB_HDMI_PHY_CONFIG] = {
 };
 
 /**
- * sti_hdmi_tx3g4c28phy_start - Start hdmi phy macro cell tx3g4c28
+ * Start hdmi phy macro cell tx3g4c28
  *
  * @hdmi: pointer on the hdmi internal structure
  *
@@ -179,7 +179,7 @@ err:
 }
 
 /**
- * sti_hdmi_tx3g4c28phy_stop - Stop hdmi phy macro cell tx3g4c28
+ * Stop hdmi phy macro cell tx3g4c28
  *
  * @hdmi: pointer on the hdmi internal structure
  */

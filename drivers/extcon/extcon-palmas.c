@@ -9,7 +9,6 @@
  * Author: Hema HK <hemahk@ti.com>
  */
 
-#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
@@ -18,6 +17,7 @@
 #include <linux/mfd/palmas.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/of_gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/workqueue.h>
 
@@ -106,7 +106,7 @@ static irqreturn_t palmas_id_irq_handler(int irq, void *_palmas_usb)
 				(id_src & PALMAS_USB_ID_INT_SRC_ID_GND)) {
 		palmas_usb->linkstat = PALMAS_USB_STATE_ID;
 		extcon_set_state_sync(edev, EXTCON_USB_HOST, true);
-		dev_dbg(palmas_usb->dev, "USB-HOST cable is attached\n");
+		dev_dbg(palmas_usb->dev, " USB-HOST cable is attached\n");
 	}
 
 	return IRQ_HANDLED;
@@ -237,11 +237,7 @@ static int palmas_usb_probe(struct platform_device *pdev)
 			palmas_usb->sw_debounce_jiffies = msecs_to_jiffies(debounce);
 	}
 
-	status = devm_delayed_work_autocancel(&pdev->dev,
-					      &palmas_usb->wq_detectid,
-					      palmas_gpio_id_detect);
-	if (status)
-		return status;
+	INIT_DELAYED_WORK(&palmas_usb->wq_detectid, palmas_gpio_id_detect);
 
 	palmas->usb = palmas_usb;
 	palmas_usb->palmas = palmas;
@@ -363,6 +359,15 @@ static int palmas_usb_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int palmas_usb_remove(struct platform_device *pdev)
+{
+	struct palmas_usb *palmas_usb = platform_get_drvdata(pdev);
+
+	cancel_delayed_work_sync(&palmas_usb->wq_detectid);
+
+	return 0;
+}
+
 #ifdef CONFIG_PM_SLEEP
 static int palmas_usb_suspend(struct device *dev)
 {
@@ -417,6 +422,7 @@ static const struct of_device_id of_palmas_match_tbl[] = {
 
 static struct platform_driver palmas_usb_driver = {
 	.probe = palmas_usb_probe,
+	.remove = palmas_usb_remove,
 	.driver = {
 		.name = "palmas-usb",
 		.of_match_table = of_palmas_match_tbl,

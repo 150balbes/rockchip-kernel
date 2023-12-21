@@ -14,13 +14,14 @@
 #include <asm/sections.h>
 
 #include "base.h"
-#include "trace.h"
 
 struct devres_node {
 	struct list_head		entry;
 	dr_release_t			release;
+#ifdef CONFIG_DEBUG_DEVRES
 	const char			*name;
 	size_t				size;
+#endif
 };
 
 struct devres {
@@ -29,10 +30,10 @@ struct devres {
 	 * Some archs want to perform DMA into kmalloc caches
 	 * and need a guaranteed alignment larger than
 	 * the alignment of a 64-bit integer.
-	 * Thus we use ARCH_DMA_MINALIGN for data[] which will force the same
-	 * alignment for struct devres when allocated by kmalloc().
+	 * Thus we use ARCH_KMALLOC_MINALIGN here and get exactly the same
+	 * buffer alignment as if it was allocated by plain kmalloc().
 	 */
-	u8 __aligned(ARCH_DMA_MINALIGN) data[];
+	u8 __aligned(ARCH_KMALLOC_MINALIGN) data[];
 };
 
 struct devres_group {
@@ -42,6 +43,10 @@ struct devres_group {
 	/* -- 8 pointers */
 };
 
+#ifdef CONFIG_DEBUG_DEVRES
+static int log_devres = 0;
+module_param_named(log, log_devres, int, S_IRUGO | S_IWUSR);
+
 static void set_node_dbginfo(struct devres_node *node, const char *name,
 			     size_t size)
 {
@@ -49,27 +54,17 @@ static void set_node_dbginfo(struct devres_node *node, const char *name,
 	node->size = size;
 }
 
-#ifdef CONFIG_DEBUG_DEVRES
-static int log_devres = 0;
-module_param_named(log, log_devres, int, S_IRUGO | S_IWUSR);
-
-static void devres_dbg(struct device *dev, struct devres_node *node,
-		       const char *op)
-{
-	if (unlikely(log_devres))
-		dev_err(dev, "DEVRES %3s %p %s (%zu bytes)\n",
-			op, node, node->name, node->size);
-}
-#else /* CONFIG_DEBUG_DEVRES */
-#define devres_dbg(dev, node, op)	do {} while (0)
-#endif /* CONFIG_DEBUG_DEVRES */
-
 static void devres_log(struct device *dev, struct devres_node *node,
 		       const char *op)
 {
-	trace_devres_log(dev, op, node, node->name, node->size);
-	devres_dbg(dev, node, op);
+	if (unlikely(log_devres))
+		dev_err(dev, "DEVRES %3s %p %s (%lu bytes)\n",
+			op, node, node->name, (unsigned long)node->size);
 }
+#else /* CONFIG_DEBUG_DEVRES */
+#define set_node_dbginfo(node, n, s)	do {} while (0)
+#define devres_log(dev, node, op)	do {} while (0)
+#endif /* CONFIG_DEBUG_DEVRES */
 
 /*
  * Release functions for devres group.  These callbacks are used only
@@ -101,9 +96,6 @@ static bool check_dr_size(size_t size, size_t *tot_size)
 					size, tot_size)))
 		return false;
 
-	/* Actually allocate the full kmalloc bucket size. */
-	*tot_size = kmalloc_size_roundup(*tot_size);
-
 	return true;
 }
 
@@ -120,9 +112,7 @@ static __always_inline struct devres * alloc_dr(dr_release_t release,
 	if (unlikely(!dr))
 		return NULL;
 
-	/* No need to clear memory twice */
-	if (!(gfp & __GFP_ZERO))
-		memset(dr, 0, offsetof(struct devres, data));
+	memset(dr, 0, offsetof(struct devres, data));
 
 	INIT_LIST_HEAD(&dr->node.entry);
 	dr->node.release = release;
@@ -144,23 +134,9 @@ static void replace_dr(struct device *dev,
 	list_replace(&old->entry, &new->entry);
 }
 
-/**
- * __devres_alloc_node - Allocate device resource data
- * @release: Release function devres will be associated with
- * @size: Allocation size
- * @gfp: Allocation flags
- * @nid: NUMA node
- * @name: Name of the resource
- *
- * Allocate devres of @size bytes.  The allocated area is zeroed, then
- * associated with @release.  The returned pointer can be passed to
- * other devres_*() functions.
- *
- * RETURNS:
- * Pointer to allocated devres on success, NULL on failure.
- */
-void *__devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid,
-			  const char *name)
+#ifdef CONFIG_DEBUG_DEVRES
+void * __devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid,
+		      const char *name)
 {
 	struct devres *dr;
 
@@ -171,6 +147,32 @@ void *__devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid,
 	return dr->data;
 }
 EXPORT_SYMBOL_GPL(__devres_alloc_node);
+#else
+/**
+ * devres_alloc - Allocate device resource data
+ * @release: Release function devres will be associated with
+ * @size: Allocation size
+ * @gfp: Allocation flags
+ * @nid: NUMA node
+ *
+ * Allocate devres of @size bytes.  The allocated area is zeroed, then
+ * associated with @release.  The returned pointer can be passed to
+ * other devres_*() functions.
+ *
+ * RETURNS:
+ * Pointer to allocated devres on success, NULL on failure.
+ */
+void * devres_alloc_node(dr_release_t release, size_t size, gfp_t gfp, int nid)
+{
+	struct devres *dr;
+
+	dr = alloc_dr(release, size, gfp | __GFP_ZERO, nid);
+	if (unlikely(!dr))
+		return NULL;
+	return dr->data;
+}
+EXPORT_SYMBOL_GPL(devres_alloc_node);
+#endif
 
 /**
  * devres_for_each_res - Resource iterator
@@ -436,15 +438,19 @@ static int remove_nodes(struct device *dev,
 			struct list_head *first, struct list_head *end,
 			struct list_head *todo)
 {
-	struct devres_node *node, *n;
 	int cnt = 0, nr_groups = 0;
+	struct list_head *cur;
 
 	/* First pass - move normal devres entries to @todo and clear
 	 * devres_group colors.
 	 */
-	node = list_entry(first, struct devres_node, entry);
-	list_for_each_entry_safe_from(node, n, end, entry) {
+	cur = first;
+	while (cur != end) {
+		struct devres_node *node;
 		struct devres_group *grp;
+
+		node = list_entry(cur, struct devres_node, entry);
+		cur = cur->next;
 
 		grp = node_to_group(node);
 		if (grp) {
@@ -465,13 +471,17 @@ static int remove_nodes(struct device *dev,
 
 	/* Second pass - Scan groups and color them.  A group gets
 	 * color value of two iff the group is wholly contained in
-	 * [current node, end). That is, for a closed group, both opening
-	 * and closing markers should be in the range, while just the
+	 * [cur, end).  That is, for a closed group, both opening and
+	 * closing markers should be in the range, while just the
 	 * opening marker is enough for an open group.
 	 */
-	node = list_entry(first, struct devres_node, entry);
-	list_for_each_entry_safe_from(node, n, end, entry) {
+	cur = first;
+	while (cur != end) {
+		struct devres_node *node;
 		struct devres_group *grp;
+
+		node = list_entry(cur, struct devres_node, entry);
+		cur = cur->next;
 
 		grp = node_to_group(node);
 		BUG_ON(!grp || list_empty(&grp->node[0].entry));
@@ -482,7 +492,7 @@ static int remove_nodes(struct device *dev,
 
 		BUG_ON(grp->color <= 0 || grp->color > 2);
 		if (grp->color == 2) {
-			/* No need to update current node or end. The removed
+			/* No need to update cur or end.  The removed
 			 * nodes are always before both.
 			 */
 			list_move_tail(&grp->node[0].entry, todo);
@@ -493,18 +503,28 @@ static int remove_nodes(struct device *dev,
 	return cnt;
 }
 
-static void release_nodes(struct device *dev, struct list_head *todo)
+static int release_nodes(struct device *dev, struct list_head *first,
+			 struct list_head *end, unsigned long flags)
+	__releases(&dev->devres_lock)
 {
+	LIST_HEAD(todo);
+	int cnt;
 	struct devres *dr, *tmp;
+
+	cnt = remove_nodes(dev, first, end, &todo);
+
+	spin_unlock_irqrestore(&dev->devres_lock, flags);
 
 	/* Release.  Note that both devres and devres_group are
 	 * handled as devres in the following loop.  This is safe.
 	 */
-	list_for_each_entry_safe_reverse(dr, tmp, todo, node.entry) {
+	list_for_each_entry_safe_reverse(dr, tmp, &todo, node.entry) {
 		devres_log(dev, &dr->node, "REL");
 		dr->node.release(dev, dr->data);
 		kfree(dr);
 	}
+
+	return cnt;
 }
 
 /**
@@ -517,23 +537,13 @@ static void release_nodes(struct device *dev, struct list_head *todo)
 int devres_release_all(struct device *dev)
 {
 	unsigned long flags;
-	LIST_HEAD(todo);
-	int cnt;
 
 	/* Looks like an uninitialized device structure */
 	if (WARN_ON(dev->devres_head.next == NULL))
 		return -ENODEV;
-
-	/* Nothing to release if list is empty */
-	if (list_empty(&dev->devres_head))
-		return 0;
-
 	spin_lock_irqsave(&dev->devres_lock, flags);
-	cnt = remove_nodes(dev, dev->devres_head.next, &dev->devres_head, &todo);
-	spin_unlock_irqrestore(&dev->devres_lock, flags);
-
-	release_nodes(dev, &todo);
-	return cnt;
+	return release_nodes(dev, dev->devres_head.next, &dev->devres_head,
+			     flags);
 }
 
 /**
@@ -669,7 +679,6 @@ int devres_release_group(struct device *dev, void *id)
 {
 	struct devres_group *grp;
 	unsigned long flags;
-	LIST_HEAD(todo);
 	int cnt = 0;
 
 	spin_lock_irqsave(&dev->devres_lock, flags);
@@ -682,10 +691,7 @@ int devres_release_group(struct device *dev, void *id)
 		if (!list_empty(&grp->node[1].entry))
 			end = grp->node[1].entry.next;
 
-		cnt = remove_nodes(dev, first, end, &todo);
-		spin_unlock_irqrestore(&dev->devres_lock, flags);
-
-		release_nodes(dev, &todo);
+		cnt = release_nodes(dev, first, end, flags);
 	} else {
 		WARN_ON(1);
 		spin_unlock_irqrestore(&dev->devres_lock, flags);
@@ -697,7 +703,7 @@ EXPORT_SYMBOL_GPL(devres_release_group);
 
 /*
  * Custom devres actions allow inserting a simple function call
- * into the teardown sequence.
+ * into the teadown sequence.
  */
 
 struct action_devres {
@@ -722,21 +728,20 @@ static void devm_action_release(struct device *dev, void *res)
 }
 
 /**
- * __devm_add_action() - add a custom action to list of managed resources
+ * devm_add_action() - add a custom action to list of managed resources
  * @dev: Device that owns the action
  * @action: Function that should be called
  * @data: Pointer to data passed to @action implementation
- * @name: Name of the resource (for debugging purposes)
  *
  * This adds a custom action to the list of managed resources so that
  * it gets executed as part of standard resource unwinding.
  */
-int __devm_add_action(struct device *dev, void (*action)(void *), void *data, const char *name)
+int devm_add_action(struct device *dev, void (*action)(void *), void *data)
 {
 	struct action_devres *devres;
 
-	devres = __devres_alloc_node(devm_action_release, sizeof(struct action_devres),
-				     GFP_KERNEL, NUMA_NO_NODE, name);
+	devres = devres_alloc(devm_action_release,
+			      sizeof(struct action_devres), GFP_KERNEL);
 	if (!devres)
 		return -ENOMEM;
 
@@ -746,7 +751,7 @@ int __devm_add_action(struct device *dev, void (*action)(void *), void *data, co
 	devres_add(dev, devres);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(__devm_add_action);
+EXPORT_SYMBOL_GPL(devm_add_action);
 
 /**
  * devm_remove_action() - removes previously added custom action
@@ -922,7 +927,7 @@ void *devm_krealloc(struct device *dev, void *ptr, size_t new_size, gfp_t gfp)
 
 	/*
 	 * We can copy the memory contents after releasing the lock as we're
-	 * no longer modifying the list links.
+	 * no longer modyfing the list links.
 	 */
 	memcpy(new_dr->data, old_dr->data,
 	       total_old_size - offsetof(struct devres, data));
@@ -1223,6 +1228,6 @@ EXPORT_SYMBOL_GPL(__devm_alloc_percpu);
 void devm_free_percpu(struct device *dev, void __percpu *pdata)
 {
 	WARN_ON(devres_destroy(dev, devm_percpu_release, devm_percpu_match,
-			       (__force void *)pdata));
+			       (void *)pdata));
 }
 EXPORT_SYMBOL_GPL(devm_free_percpu);

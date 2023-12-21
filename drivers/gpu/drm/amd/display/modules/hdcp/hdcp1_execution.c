@@ -130,17 +130,8 @@ static inline uint8_t get_device_count(struct mod_hdcp *hdcp)
 
 static inline enum mod_hdcp_status check_device_count(struct mod_hdcp *hdcp)
 {
-	/* Avoid device count == 0 to do authentication */
-	if (0 == get_device_count(hdcp)) {
-		return MOD_HDCP_STATUS_HDCP1_DEVICE_COUNT_MISMATCH_FAILURE;
-	}
-
-	/* Some MST display may choose to report the internal panel as an HDCP RX.
-	 * To update this condition with 1(because the immediate repeater's internal
-	 * panel is possibly not included in DEVICE_COUNT) + get_device_count(hdcp).
-	 * Device count must be greater than or equal to tracked hdcp displays.
-	 */
-	return ((1 + get_device_count(hdcp)) < get_active_display_count(hdcp)) ?
+	/* device count must be greater than or equal to tracked hdcp displays */
+	return (get_device_count(hdcp) < get_active_display_count(hdcp)) ?
 			MOD_HDCP_STATUS_HDCP1_DEVICE_COUNT_MISMATCH_FAILURE :
 			MOD_HDCP_STATUS_SUCCESS;
 }
@@ -263,9 +254,10 @@ static enum mod_hdcp_status authenticated(struct mod_hdcp *hdcp,
 		goto out;
 	}
 
-	mod_hdcp_execute_and_set(mod_hdcp_hdcp1_link_maintenance,
+	if (!mod_hdcp_execute_and_set(mod_hdcp_hdcp1_link_maintenance,
 			&input->link_maintenance, &status,
-			hdcp, "link_maintenance");
+			hdcp, "link_maintenance"))
+		goto out;
 out:
 	return status;
 }
@@ -432,18 +424,18 @@ static enum mod_hdcp_status authenticated_dp(struct mod_hdcp *hdcp,
 		goto out;
 	}
 
-	if (status == MOD_HDCP_STATUS_SUCCESS)
-		mod_hdcp_execute_and_set(mod_hdcp_read_bstatus,
-				&input->bstatus_read, &status,
-				hdcp, "bstatus_read");
-	if (status == MOD_HDCP_STATUS_SUCCESS)
-		mod_hdcp_execute_and_set(check_link_integrity_dp,
-				&input->link_integrity_check, &status,
-				hdcp, "link_integrity_check");
-	if (status == MOD_HDCP_STATUS_SUCCESS)
-		mod_hdcp_execute_and_set(check_no_reauthentication_request_dp,
-				&input->reauth_request_check, &status,
-				hdcp, "reauth_request_check");
+	if (!mod_hdcp_execute_and_set(mod_hdcp_read_bstatus,
+			&input->bstatus_read, &status,
+			hdcp, "bstatus_read"))
+		goto out;
+	if (!mod_hdcp_execute_and_set(check_link_integrity_dp,
+			&input->link_integrity_check, &status,
+			hdcp, "link_integrity_check"))
+		goto out;
+	if (!mod_hdcp_execute_and_set(check_no_reauthentication_request_dp,
+			&input->reauth_request_check, &status,
+			hdcp, "reauth_request_check"))
+		goto out;
 out:
 	return status;
 }
@@ -497,9 +489,9 @@ enum mod_hdcp_status mod_hdcp_hdcp1_execution(struct mod_hdcp *hdcp,
 	return status;
 }
 
-enum mod_hdcp_status mod_hdcp_hdcp1_dp_execution(struct mod_hdcp *hdcp,
-						 struct mod_hdcp_event_context *event_ctx,
-						 struct mod_hdcp_transition_input_hdcp1 *input)
+extern enum mod_hdcp_status mod_hdcp_hdcp1_dp_execution(struct mod_hdcp *hdcp,
+		struct mod_hdcp_event_context *event_ctx,
+		struct mod_hdcp_transition_input_hdcp1 *input)
 {
 	enum mod_hdcp_status status = MOD_HDCP_STATUS_SUCCESS;
 

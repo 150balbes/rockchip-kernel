@@ -10,8 +10,9 @@
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/property.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/spi/spi.h>
 #include <linux/gpio/consumer.h>
 
@@ -573,7 +574,7 @@ static ssize_t ad5758_read_powerdown(struct iio_dev *indio_dev,
 {
 	struct ad5758_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", st->pwr_down);
+	return sprintf(buf, "%d\n", st->pwr_down);
 }
 
 static ssize_t ad5758_write_powerdown(struct iio_dev *indio_dev,

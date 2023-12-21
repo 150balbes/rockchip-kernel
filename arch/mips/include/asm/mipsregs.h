@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <asm/hazards.h>
 #include <asm/isa-rev.h>
+#include <asm/war.h>
 
 /*
  * The following macros are especially useful for __asm__
@@ -164,6 +165,18 @@
 /*
  * Values for PageMask register
  */
+#ifdef CONFIG_CPU_VR41XX
+
+/* Why doesn't stupidity hurt ... */
+
+#define PM_1K		0x00000000
+#define PM_4K		0x00001800
+#define PM_16K		0x00007800
+#define PM_64K		0x0001f800
+#define PM_256K		0x0007f800
+
+#else
+
 #define PM_4K		0x00000000
 #define PM_8K		0x00002000
 #define PM_16K		0x00006000
@@ -181,6 +194,8 @@
 #define PM_64M		0x07ffe000
 #define PM_256M		0x1fffe000
 #define PM_1G		0x7fffe000
+
+#endif
 
 /*
  * Default page size for a given kernel configuration
@@ -1070,10 +1085,6 @@
 #define CVMVMCONF_RMMUSIZEM1_S	0
 #define CVMVMCONF_RMMUSIZEM1	(_U64CAST_(0xff) << CVMVMCONF_RMMUSIZEM1_S)
 
-/* Debug register field definitions */
-#define MIPS_DEBUG_DBP_SHIFT	1
-#define MIPS_DEBUG_DBP		(_ULCAST_(1) << MIPS_DEBUG_DBP_SHIFT)
-
 /*
  * Coprocessor 1 (FPU) register names
  */
@@ -1282,22 +1293,22 @@ static inline int mm_insn_16bit(u16 insn)
 	"\\var	= " #n "\n\t"			\
 	".endif\n\t"
 
-#define _ASM_SET_PARSE_R						\
-	".macro	parse_r var r\n\t"					\
-	"\\var	= -1\n\t"						\
-	_IFC_REG(0)  _IFC_REG(1)  _IFC_REG(2)  _IFC_REG(3)		\
-	_IFC_REG(4)  _IFC_REG(5)  _IFC_REG(6)  _IFC_REG(7)		\
-	_IFC_REG(8)  _IFC_REG(9)  _IFC_REG(10) _IFC_REG(11)		\
-	_IFC_REG(12) _IFC_REG(13) _IFC_REG(14) _IFC_REG(15)		\
-	_IFC_REG(16) _IFC_REG(17) _IFC_REG(18) _IFC_REG(19)		\
-	_IFC_REG(20) _IFC_REG(21) _IFC_REG(22) _IFC_REG(23)		\
-	_IFC_REG(24) _IFC_REG(25) _IFC_REG(26) _IFC_REG(27)		\
-	_IFC_REG(28) _IFC_REG(29) _IFC_REG(30) _IFC_REG(31)		\
-	".iflt	\\var\n\t"						\
-	".error	\"Unable to parse register name \\r\"\n\t"		\
-	".endif\n\t"							\
-	".endm\n\t"
-#define _ASM_UNSET_PARSE_R ".purgem parse_r\n\t"
+__asm__(".macro	parse_r var r\n\t"
+	"\\var	= -1\n\t"
+	_IFC_REG(0)  _IFC_REG(1)  _IFC_REG(2)  _IFC_REG(3)
+	_IFC_REG(4)  _IFC_REG(5)  _IFC_REG(6)  _IFC_REG(7)
+	_IFC_REG(8)  _IFC_REG(9)  _IFC_REG(10) _IFC_REG(11)
+	_IFC_REG(12) _IFC_REG(13) _IFC_REG(14) _IFC_REG(15)
+	_IFC_REG(16) _IFC_REG(17) _IFC_REG(18) _IFC_REG(19)
+	_IFC_REG(20) _IFC_REG(21) _IFC_REG(22) _IFC_REG(23)
+	_IFC_REG(24) _IFC_REG(25) _IFC_REG(26) _IFC_REG(27)
+	_IFC_REG(28) _IFC_REG(29) _IFC_REG(30) _IFC_REG(31)
+	".iflt	\\var\n\t"
+	".error	\"Unable to parse register name \\r\"\n\t"
+	".endif\n\t"
+	".endm");
+
+#undef _IFC_REG
 
 /*
  * C macros for generating assembler macros for common instruction formats.
@@ -1307,45 +1318,43 @@ static inline int mm_insn_16bit(u16 insn)
  * the ENC encodings.
  */
 
+/* Instructions with no operands */
+#define _ASM_MACRO_0(OP, ENC)						\
+	__asm__(".macro	" #OP "\n\t"					\
+		ENC							\
+		".endm")
+
 /* Instructions with 1 register operand & 1 immediate operand */
 #define _ASM_MACRO_1R1I(OP, R1, I2, ENC)				\
-		".macro	" #OP " " #R1 ", " #I2 "\n\t"			\
-		_ASM_SET_PARSE_R					\
+	__asm__(".macro	" #OP " " #R1 ", " #I2 "\n\t"			\
 		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
 		ENC							\
-		_ASM_UNSET_PARSE_R					\
-		".endm\n\t"
+		".endm")
 
 /* Instructions with 2 register operands */
 #define _ASM_MACRO_2R(OP, R1, R2, ENC)					\
-		".macro	" #OP " " #R1 ", " #R2 "\n\t"			\
-		_ASM_SET_PARSE_R					\
+	__asm__(".macro	" #OP " " #R1 ", " #R2 "\n\t"			\
 		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
 		"parse_r __" #R2 ", \\" #R2 "\n\t"			\
 		ENC							\
-		_ASM_UNSET_PARSE_R					\
-		".endm\n\t"
+		".endm")
 
 /* Instructions with 3 register operands */
 #define _ASM_MACRO_3R(OP, R1, R2, R3, ENC)				\
-		".macro	" #OP " " #R1 ", " #R2 ", " #R3 "\n\t"		\
-		_ASM_SET_PARSE_R					\
+	__asm__(".macro	" #OP " " #R1 ", " #R2 ", " #R3 "\n\t"		\
 		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
 		"parse_r __" #R2 ", \\" #R2 "\n\t"			\
 		"parse_r __" #R3 ", \\" #R3 "\n\t"			\
 		ENC							\
-		_ASM_UNSET_PARSE_R					\
-		".endm\n\t"
+		".endm")
 
 /* Instructions with 2 register operands and 1 optional select operand */
 #define _ASM_MACRO_2R_1S(OP, R1, R2, SEL3, ENC)				\
-		".macro	" #OP " " #R1 ", " #R2 ", " #SEL3 " = 0\n\t"	\
-		_ASM_SET_PARSE_R					\
+	__asm__(".macro	" #OP " " #R1 ", " #R2 ", " #SEL3 " = 0\n\t"	\
 		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
 		"parse_r __" #R2 ", \\" #R2 "\n\t"			\
 		ENC							\
-		_ASM_UNSET_PARSE_R					\
-		".endm\n\t"
+		".endm")
 
 /*
  * TLB Invalidate Flush
@@ -1605,21 +1614,15 @@ do {									\
 } while (0)
 
 #ifndef TOOLCHAIN_SUPPORTS_XPA
-#define _ASM_SET_MFHC0							\
-	_ASM_MACRO_2R_1S(mfhc0, rt, rs, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40400000 | __rt << 16 | __rs << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x000000f4 | __rt << 21 | __rs << 16 | \\sel << 11))
-#define _ASM_UNSET_MFHC0 ".purgem mfhc0\n\t"
-#define _ASM_SET_MTHC0							\
-	_ASM_MACRO_2R_1S(mthc0, rt, rd, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40c00000 | __rt << 16 | __rd << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x000002f4 | __rt << 21 | __rd << 16 | \\sel << 11))
-#define _ASM_UNSET_MTHC0 ".purgem mthc0\n\t"
+_ASM_MACRO_2R_1S(mfhc0, rt, rs, sel,
+	_ASM_INSN_IF_MIPS(0x40400000 | __rt << 16 | __rs << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x000000f4 | __rt << 21 | __rs << 16 | \\sel << 11));
+_ASM_MACRO_2R_1S(mthc0, rt, rd, sel,
+	_ASM_INSN_IF_MIPS(0x40c00000 | __rt << 16 | __rd << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x000002f4 | __rt << 21 | __rd << 16 | \\sel << 11));
+#define _ASM_SET_XPA ""
 #else	/* !TOOLCHAIN_SUPPORTS_XPA */
-#define _ASM_SET_MFHC0 ".set\txpa\n\t"
-#define _ASM_SET_MTHC0 ".set\txpa\n\t"
-#define _ASM_UNSET_MFHC0
-#define _ASM_UNSET_MTHC0
+#define _ASM_SET_XPA ".set\txpa\n\t"
 #endif
 
 #define __readx_32bit_c0_register(source, sel)				\
@@ -1629,9 +1632,8 @@ do {									\
 	__asm__ __volatile__(						\
 	"	.set	push					\n"	\
 	"	.set	mips32r2				\n"	\
-	_ASM_SET_MFHC0							\
+	_ASM_SET_XPA							\
 	"	mfhc0	%0, " #source ", %1			\n"	\
-	_ASM_UNSET_MFHC0						\
 	"	.set	pop					\n"	\
 	: "=r" (__res)							\
 	: "i" (sel));							\
@@ -1643,9 +1645,8 @@ do {									\
 	__asm__ __volatile__(						\
 	"	.set	push					\n"	\
 	"	.set	mips32r2				\n"	\
-	_ASM_SET_MTHC0							\
+	_ASM_SET_XPA							\
 	"	mthc0	%z0, " #register ", %1			\n"	\
-	_ASM_UNSET_MTHC0						\
 	"	.set	pop					\n"	\
 	:								\
 	: "Jr" (value), "i" (sel));					\
@@ -2041,58 +2042,31 @@ do {									\
  */
 
 #ifndef TOOLCHAIN_SUPPORTS_VIRT
-#define _ASM_SET_MFGC0							\
-	_ASM_MACRO_2R_1S(mfgc0, rt, rs, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40600000 | __rt << 16 | __rs << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x000004fc | __rt << 21 | __rs << 16 | \\sel << 11))
-#define _ASM_UNSET_MFGC0 ".purgem mfgc0\n\t"
-#define _ASM_SET_DMFGC0							\
-	_ASM_MACRO_2R_1S(dmfgc0, rt, rs, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40600100 | __rt << 16 | __rs << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x580004fc | __rt << 21 | __rs << 16 | \\sel << 11))
-#define _ASM_UNSET_DMFGC0 ".purgem dmfgc0\n\t"
-#define _ASM_SET_MTGC0							\
-	_ASM_MACRO_2R_1S(mtgc0, rt, rd, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40600200 | __rt << 16 | __rd << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x000006fc | __rt << 21 | __rd << 16 | \\sel << 11))
-#define _ASM_UNSET_MTGC0 ".purgem mtgc0\n\t"
-#define _ASM_SET_DMTGC0							\
-	_ASM_MACRO_2R_1S(dmtgc0, rt, rd, sel,				\
-			 _ASM_INSN_IF_MIPS(0x40600300 | __rt << 16 | __rd << 11 | \\sel)	\
-			 _ASM_INSN32_IF_MM(0x580006fc | __rt << 21 | __rd << 16 | \\sel << 11))
-#define _ASM_UNSET_DMTGC0 ".purgem dmtgc0\n\t"
-
-#define __tlbgp()							\
-		_ASM_INSN_IF_MIPS(0x42000010)				\
-		_ASM_INSN32_IF_MM(0x0000017c)
-#define __tlbgr()							\
-		_ASM_INSN_IF_MIPS(0x42000009)				\
-		_ASM_INSN32_IF_MM(0x0000117c)
-#define __tlbgwi()							\
-		_ASM_INSN_IF_MIPS(0x4200000a)				\
-		_ASM_INSN32_IF_MM(0x0000217c)
-#define __tlbgwr()							\
-		_ASM_INSN_IF_MIPS(0x4200000e)				\
-		_ASM_INSN32_IF_MM(0x0000317c)
-#define __tlbginvf()							\
-		_ASM_INSN_IF_MIPS(0x4200000c)				\
-		_ASM_INSN32_IF_MM(0x0000517c)
+_ASM_MACRO_2R_1S(mfgc0, rt, rs, sel,
+	_ASM_INSN_IF_MIPS(0x40600000 | __rt << 16 | __rs << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x000004fc | __rt << 21 | __rs << 16 | \\sel << 11));
+_ASM_MACRO_2R_1S(dmfgc0, rt, rs, sel,
+	_ASM_INSN_IF_MIPS(0x40600100 | __rt << 16 | __rs << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x580004fc | __rt << 21 | __rs << 16 | \\sel << 11));
+_ASM_MACRO_2R_1S(mtgc0, rt, rd, sel,
+	_ASM_INSN_IF_MIPS(0x40600200 | __rt << 16 | __rd << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x000006fc | __rt << 21 | __rd << 16 | \\sel << 11));
+_ASM_MACRO_2R_1S(dmtgc0, rt, rd, sel,
+	_ASM_INSN_IF_MIPS(0x40600300 | __rt << 16 | __rd << 11 | \\sel)
+	_ASM_INSN32_IF_MM(0x580006fc | __rt << 21 | __rd << 16 | \\sel << 11));
+_ASM_MACRO_0(tlbgp,    _ASM_INSN_IF_MIPS(0x42000010)
+		       _ASM_INSN32_IF_MM(0x0000017c));
+_ASM_MACRO_0(tlbgr,    _ASM_INSN_IF_MIPS(0x42000009)
+		       _ASM_INSN32_IF_MM(0x0000117c));
+_ASM_MACRO_0(tlbgwi,   _ASM_INSN_IF_MIPS(0x4200000a)
+		       _ASM_INSN32_IF_MM(0x0000217c));
+_ASM_MACRO_0(tlbgwr,   _ASM_INSN_IF_MIPS(0x4200000e)
+		       _ASM_INSN32_IF_MM(0x0000317c));
+_ASM_MACRO_0(tlbginvf, _ASM_INSN_IF_MIPS(0x4200000c)
+		       _ASM_INSN32_IF_MM(0x0000517c));
+#define _ASM_SET_VIRT ""
 #else	/* !TOOLCHAIN_SUPPORTS_VIRT */
 #define _ASM_SET_VIRT ".set\tvirt\n\t"
-#define _ASM_SET_MFGC0	_ASM_SET_VIRT
-#define _ASM_SET_DMFGC0	_ASM_SET_VIRT
-#define _ASM_SET_MTGC0	_ASM_SET_VIRT
-#define _ASM_SET_DMTGC0	_ASM_SET_VIRT
-#define _ASM_UNSET_MFGC0
-#define _ASM_UNSET_DMFGC0
-#define _ASM_UNSET_MTGC0
-#define _ASM_UNSET_DMTGC0
-
-#define __tlbgp()	_ASM_SET_VIRT "tlbgp\n\t"
-#define __tlbgr()	_ASM_SET_VIRT "tlbgr\n\t"
-#define __tlbgwi()	_ASM_SET_VIRT "tlbgwi\n\t"
-#define __tlbgwr()	_ASM_SET_VIRT "tlbgwr\n\t"
-#define __tlbginvf()	_ASM_SET_VIRT "tlbginvf\n\t"
 #endif
 
 #define __read_32bit_gc0_register(source, sel)				\
@@ -2100,9 +2074,8 @@ do {									\
 	__asm__ __volatile__(						\
 		".set\tpush\n\t"					\
 		".set\tmips32r5\n\t"					\
-		_ASM_SET_MFGC0						\
+		_ASM_SET_VIRT						\
 		"mfgc0\t%0, " #source ", %1\n\t"			\
-		_ASM_UNSET_MFGC0					\
 		".set\tpop"						\
 		: "=r" (__res)						\
 		: "i" (sel));						\
@@ -2114,9 +2087,8 @@ do {									\
 	__asm__ __volatile__(						\
 		".set\tpush\n\t"					\
 		".set\tmips64r5\n\t"					\
-		_ASM_SET_DMFGC0						\
+		_ASM_SET_VIRT						\
 		"dmfgc0\t%0, " #source ", %1\n\t"			\
-		_ASM_UNSET_DMFGC0					\
 		".set\tpop"						\
 		: "=r" (__res)						\
 		: "i" (sel));						\
@@ -2128,9 +2100,8 @@ do {									\
 	__asm__ __volatile__(						\
 		".set\tpush\n\t"					\
 		".set\tmips32r5\n\t"					\
-		_ASM_SET_MTGC0						\
+		_ASM_SET_VIRT						\
 		"mtgc0\t%z0, " #register ", %1\n\t"			\
-		_ASM_UNSET_MTGC0					\
 		".set\tpop"						\
 		: : "Jr" ((unsigned int)(value)),			\
 		    "i" (sel));						\
@@ -2141,9 +2112,8 @@ do {									\
 	__asm__ __volatile__(						\
 		".set\tpush\n\t"					\
 		".set\tmips64r5\n\t"					\
-		_ASM_SET_DMTGC0						\
+		_ASM_SET_VIRT						\
 		"dmtgc0\t%z0, " #register ", %1\n\t"			\
-		_ASM_UNSET_DMTGC0					\
 		".set\tpop"						\
 		: : "Jr" (value),					\
 		    "i" (sel));						\
@@ -2367,7 +2337,7 @@ do {									\
 /*
  * Macros to access the floating point coprocessor control registers
  */
-#define read_32bit_cp1_register(source)					\
+#define _read_32bit_cp1_register(source, gas_hardfloat)			\
 ({									\
 	unsigned int __res;						\
 									\
@@ -2377,23 +2347,35 @@ do {									\
 	"	# gas fails to assemble cfc1 for some archs,	\n"	\
 	"	# like Octeon.					\n"	\
 	"	.set	mips1					\n"	\
-	"	.set hardfloat					\n"	\
+	"	"STR(gas_hardfloat)"				\n"	\
 	"	cfc1	%0,"STR(source)"			\n"	\
 	"	.set	pop					\n"	\
 	: "=r" (__res));						\
 	__res;								\
 })
 
-#define write_32bit_cp1_register(dest, val)				\
+#define _write_32bit_cp1_register(dest, val, gas_hardfloat)		\
 do {									\
 	__asm__ __volatile__(						\
 	"	.set	push					\n"	\
 	"	.set	reorder					\n"	\
-	"	.set hardfloat					\n"	\
+	"	"STR(gas_hardfloat)"				\n"	\
 	"	ctc1	%0,"STR(dest)"				\n"	\
 	"	.set	pop					\n"	\
 	: : "r" (val));							\
 } while (0)
+
+#ifdef GAS_HAS_SET_HARDFLOAT
+#define read_32bit_cp1_register(source)					\
+	_read_32bit_cp1_register(source, .set hardfloat)
+#define write_32bit_cp1_register(dest, val)				\
+	_write_32bit_cp1_register(dest, val, .set hardfloat)
+#else
+#define read_32bit_cp1_register(source)					\
+	_read_32bit_cp1_register(source, )
+#define write_32bit_cp1_register(dest, val)				\
+	_write_32bit_cp1_register(dest, val, )
+#endif
 
 #ifdef TOOLCHAIN_SUPPORTS_DSP
 #define rddsp(mask)							\
@@ -2802,7 +2784,8 @@ static inline void guest_tlb_probe(void)
 	__asm__ __volatile__(
 		".set push\n\t"
 		".set noreorder\n\t"
-		__tlbgp()
+		_ASM_SET_VIRT
+		"tlbgp\n\t"
 		".set pop");
 }
 
@@ -2811,7 +2794,8 @@ static inline void guest_tlb_read(void)
 	__asm__ __volatile__(
 		".set push\n\t"
 		".set noreorder\n\t"
-		__tlbgr()
+		_ASM_SET_VIRT
+		"tlbgr\n\t"
 		".set pop");
 }
 
@@ -2820,7 +2804,8 @@ static inline void guest_tlb_write_indexed(void)
 	__asm__ __volatile__(
 		".set push\n\t"
 		".set noreorder\n\t"
-		__tlbgwi()
+		_ASM_SET_VIRT
+		"tlbgwi\n\t"
 		".set pop");
 }
 
@@ -2829,7 +2814,8 @@ static inline void guest_tlb_write_random(void)
 	__asm__ __volatile__(
 		".set push\n\t"
 		".set noreorder\n\t"
-		__tlbgwr()
+		_ASM_SET_VIRT
+		"tlbgwr\n\t"
 		".set pop");
 }
 
@@ -2841,7 +2827,8 @@ static inline void guest_tlbinvf(void)
 	__asm__ __volatile__(
 		".set push\n\t"
 		".set noreorder\n\t"
-		__tlbginvf()
+		_ASM_SET_VIRT
+		"tlbginvf\n\t"
 		".set pop");
 }
 

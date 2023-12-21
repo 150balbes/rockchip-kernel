@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/**
  * ldm - Support for Windows Logical Disk Manager (Dynamic Disks)
  *
  * Copyright (C) 2001,2002 Richard Russon <ldm@flatcap.org>
@@ -304,7 +304,7 @@ static bool ldm_validate_privheads(struct parsed_partitions *state,
 		}
 	}
 
-	num_sects = get_capacity(state->disk);
+	num_sects = state->bdev->bd_inode->i_size >> 9;
 
 	if ((ph[0]->config_start > num_sects) ||
 	   ((ph[0]->config_start + ph[0]->config_size) > num_sects)) {
@@ -339,11 +339,11 @@ out:
 /**
  * ldm_validate_tocblocks - Validate the table of contents and its backups
  * @state: Partition check state including device holding the LDM Database
- * @base:  Offset, into @state->disk, of the database
+ * @base:  Offset, into @state->bdev, of the database
  * @ldb:   Cache of the database structures
  *
  * Find and compare the four tables of contents of the LDM Database stored on
- * @state->disk and return the parsed information into @toc1.
+ * @state->bdev and return the parsed information into @toc1.
  *
  * The offsets and sizes of the configs are range-checked against a privhead.
  *
@@ -486,8 +486,8 @@ out:
  *       only likely to happen if the underlying device is strange.  If that IS
  *       the case we should return zero to let someone else try.
  *
- * Return:  'true'   @state->disk is a dynamic disk
- *          'false'  @state->disk is not a dynamic disk, or an error occurred
+ * Return:  'true'   @state->bdev is a dynamic disk
+ *          'false'  @state->bdev is not a dynamic disk, or an error occurred
  */
 static bool ldm_validate_partition_table(struct parsed_partitions *state)
 {
@@ -736,6 +736,7 @@ static bool ldm_parse_cmp3 (const u8 *buffer, int buflen, struct vblk *vb)
 		len = r_cols;
 	} else {
 		r_stripe = 0;
+		r_cols   = 0;
 		len = r_parent;
 	}
 	if (len < 0)
@@ -782,8 +783,11 @@ static int ldm_parse_dgr3 (const u8 *buffer, int buflen, struct vblk *vb)
 		r_id1 = ldm_relative (buffer, buflen, 0x24, r_diskid);
 		r_id2 = ldm_relative (buffer, buflen, 0x24, r_id1);
 		len = r_id2;
-	} else
+	} else {
+		r_id1 = 0;
+		r_id2 = 0;
 		len = r_diskid;
+	}
 	if (len < 0)
 		return false;
 
@@ -822,8 +826,11 @@ static bool ldm_parse_dgr4 (const u8 *buffer, int buflen, struct vblk *vb)
 		r_id1 = ldm_relative (buffer, buflen, 0x44, r_name);
 		r_id2 = ldm_relative (buffer, buflen, 0x44, r_id1);
 		len = r_id2;
-	} else
+	} else {
+		r_id1 = 0;
+		r_id2 = 0;
 		len = r_name;
+	}
 	if (len < 0)
 		return false;
 
@@ -956,8 +963,10 @@ static bool ldm_parse_prt3(const u8 *buffer, int buflen, struct vblk *vb)
 			return false;
 		}
 		len = r_index;
-	} else
+	} else {
+		r_index = 0;
 		len = r_diskid;
+	}
 	if (len < 0) {
 		ldm_error("len %d < 0", len);
 		return false;
@@ -1331,7 +1340,7 @@ static bool ldm_frag_commit (struct list_head *frags, struct ldmdb *ldb)
 /**
  * ldm_get_vblks - Read the on-disk database of VBLKs into memory
  * @state: Partition check state including device holding the LDM Database
- * @base:  Offset, into @state->disk, of the database
+ * @base:  Offset, into @state->bdev, of the database
  * @ldb:   Cache of the database structures
  *
  * To use the information from the VBLKs, they need to be read from the disk,
@@ -1423,10 +1432,10 @@ static void ldm_free_vblks (struct list_head *lh)
  * example, if the device is hda, we would have: hda1: LDM database, hda2, hda3,
  * and so on: the actual data containing partitions.
  *
- * Return:  1 Success, @state->disk is a dynamic disk and we handled it
- *          0 Success, @state->disk is not a dynamic disk
+ * Return:  1 Success, @state->bdev is a dynamic disk and we handled it
+ *          0 Success, @state->bdev is not a dynamic disk
  *         -1 An error occurred before enough information had been read
- *            Or @state->disk is a dynamic disk, but it may be corrupted
+ *            Or @state->bdev is a dynamic disk, but it may be corrupted
  */
 int ldm_partition(struct parsed_partitions *state)
 {

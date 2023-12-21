@@ -209,7 +209,8 @@ static const struct regmap_irq max14577_irqs[] = {
 static const struct regmap_irq_chip max14577_irq_chip = {
 	.name			= "max14577",
 	.status_base		= MAX14577_REG_INT1,
-	.unmask_base		= MAX14577_REG_INTMASK1,
+	.mask_base		= MAX14577_REG_INTMASK1,
+	.mask_invert		= true,
 	.num_regs		= 3,
 	.irqs			= max14577_irqs,
 	.num_irqs		= ARRAY_SIZE(max14577_irqs),
@@ -238,7 +239,8 @@ static const struct regmap_irq max77836_muic_irqs[] = {
 static const struct regmap_irq_chip max77836_muic_irq_chip = {
 	.name			= "max77836-muic",
 	.status_base		= MAX14577_REG_INT1,
-	.unmask_base		= MAX14577_REG_INTMASK1,
+	.mask_base		= MAX14577_REG_INTMASK1,
+	.mask_invert		= true,
 	.num_regs		= 3,
 	.irqs			= max77836_muic_irqs,
 	.num_irqs		= ARRAY_SIZE(max77836_muic_irqs),
@@ -253,6 +255,7 @@ static const struct regmap_irq_chip max77836_pmic_irq_chip = {
 	.name			= "max77836-pmic",
 	.status_base		= MAX77836_PMIC_REG_TOPSYS_INT,
 	.mask_base		= MAX77836_PMIC_REG_TOPSYS_INT_MASK,
+	.mask_invert		= false,
 	.num_regs		= 1,
 	.irqs			= max77836_pmic_irqs,
 	.num_irqs		= ARRAY_SIZE(max77836_pmic_irqs),
@@ -329,7 +332,7 @@ static int max77836_init(struct max14577 *max14577)
 	}
 
 	ret = regmap_add_irq_chip(max14577->regmap_pmic, max14577->irq,
-			IRQF_ONESHOT | IRQF_SHARED,
+			IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_SHARED,
 			0, &max77836_pmic_irq_chip,
 			&max14577->irq_data_pmic);
 	if (ret != 0) {
@@ -355,9 +358,9 @@ static void max77836_remove(struct max14577 *max14577)
 	i2c_unregister_device(max14577->i2c_pmic);
 }
 
-static int max14577_i2c_probe(struct i2c_client *i2c)
+static int max14577_i2c_probe(struct i2c_client *i2c,
+			      const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	struct max14577 *max14577;
 	struct max14577_platform_data *pdata = dev_get_platdata(&i2c->dev);
 	struct device_node *np = i2c->dev.of_node;
@@ -415,14 +418,14 @@ static int max14577_i2c_probe(struct i2c_client *i2c)
 		irq_chip = &max77836_muic_irq_chip;
 		mfd_devs = max77836_devs;
 		mfd_devs_size = ARRAY_SIZE(max77836_devs);
-		irq_flags = IRQF_ONESHOT | IRQF_SHARED;
+		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_SHARED;
 		break;
 	case MAXIM_DEVICE_TYPE_MAX14577:
 	default:
 		irq_chip = &max14577_irq_chip;
 		mfd_devs = max14577_devs;
 		mfd_devs_size = ARRAY_SIZE(max14577_devs);
-		irq_flags = IRQF_ONESHOT;
+		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
 		break;
 	}
 
@@ -460,7 +463,7 @@ err_max77836:
 	return ret;
 }
 
-static void max14577_i2c_remove(struct i2c_client *i2c)
+static int max14577_i2c_remove(struct i2c_client *i2c)
 {
 	struct max14577 *max14577 = i2c_get_clientdata(i2c);
 
@@ -468,6 +471,8 @@ static void max14577_i2c_remove(struct i2c_client *i2c)
 	regmap_del_irq_chip(max14577->irq, max14577->irq_data);
 	if (max14577->dev_type == MAXIM_DEVICE_TYPE_MAX77836)
 		max77836_remove(max14577);
+
+	return 0;
 }
 
 static const struct i2c_device_id max14577_i2c_id[] = {
@@ -477,6 +482,7 @@ static const struct i2c_device_id max14577_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, max14577_i2c_id);
 
+#ifdef CONFIG_PM_SLEEP
 static int max14577_suspend(struct device *dev)
 {
 	struct i2c_client *i2c = to_i2c_client(dev);
@@ -509,13 +515,14 @@ static int max14577_resume(struct device *dev)
 
 	return 0;
 }
+#endif /* CONFIG_PM_SLEEP */
 
-static DEFINE_SIMPLE_DEV_PM_OPS(max14577_pm, max14577_suspend, max14577_resume);
+static SIMPLE_DEV_PM_OPS(max14577_pm, max14577_suspend, max14577_resume);
 
 static struct i2c_driver max14577_i2c_driver = {
 	.driver = {
 		.name = "max14577",
-		.pm = pm_sleep_ptr(&max14577_pm),
+		.pm = &max14577_pm,
 		.of_match_table = max14577_dt_match,
 	},
 	.probe = max14577_i2c_probe,

@@ -7,12 +7,10 @@
  *
  * This file handle the PRNG found in the SS
  *
- * You could find a link for the datasheet in Documentation/arch/arm/sunxi.rst
+ * You could find a link for the datasheet in Documentation/arm/sunxi.rst
  */
 #include "sun8i-ss.h"
 #include <linux/dma-mapping.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
 #include <linux/pm_runtime.h>
 #include <crypto/internal/rng.h>
 
@@ -22,12 +20,13 @@ int sun8i_ss_prng_seed(struct crypto_rng *tfm, const u8 *seed,
 	struct sun8i_ss_rng_tfm_ctx *ctx = crypto_rng_ctx(tfm);
 
 	if (ctx->seed && ctx->slen != slen) {
-		kfree_sensitive(ctx->seed);
+		memzero_explicit(ctx->seed, ctx->slen);
+		kfree(ctx->seed);
 		ctx->slen = 0;
 		ctx->seed = NULL;
 	}
 	if (!ctx->seed)
-		ctx->seed = kmalloc(slen, GFP_KERNEL);
+		ctx->seed = kmalloc(slen, GFP_KERNEL | GFP_DMA);
 	if (!ctx->seed)
 		return -ENOMEM;
 
@@ -49,7 +48,8 @@ void sun8i_ss_prng_exit(struct crypto_tfm *tfm)
 {
 	struct sun8i_ss_rng_tfm_ctx *ctx = crypto_tfm_ctx(tfm);
 
-	kfree_sensitive(ctx->seed);
+	memzero_explicit(ctx->seed, ctx->slen);
+	kfree(ctx->seed);
 	ctx->seed = NULL;
 	ctx->slen = 0;
 }
@@ -60,7 +60,6 @@ int sun8i_ss_prng_generate(struct crypto_rng *tfm, const u8 *src,
 	struct sun8i_ss_rng_tfm_ctx *ctx = crypto_rng_ctx(tfm);
 	struct rng_alg *alg = crypto_rng_alg(tfm);
 	struct sun8i_ss_alg_template *algt;
-	unsigned int todo_with_padding;
 	struct sun8i_ss_dev *ss;
 	dma_addr_t dma_iv, dma_dst;
 	unsigned int todo;
@@ -84,11 +83,7 @@ int sun8i_ss_prng_generate(struct crypto_rng *tfm, const u8 *src,
 	todo = dlen + PRNG_SEED_SIZE + PRNG_DATA_SIZE;
 	todo -= todo % PRNG_DATA_SIZE;
 
-	todo_with_padding = ALIGN(todo, dma_get_cache_alignment());
-	if (todo_with_padding < todo || todo < dlen)
-		return -EOVERFLOW;
-
-	d = kzalloc(todo_with_padding, GFP_KERNEL);
+	d = kzalloc(todo, GFP_KERNEL | GFP_DMA);
 	if (!d)
 		return -ENOMEM;
 
@@ -119,9 +114,11 @@ int sun8i_ss_prng_generate(struct crypto_rng *tfm, const u8 *src,
 		goto err_iv;
 	}
 
-	err = pm_runtime_resume_and_get(ss->dev);
-	if (err < 0)
+	err = pm_runtime_get_sync(ss->dev);
+	if (err < 0) {
+		pm_runtime_put_noidle(ss->dev);
 		goto err_pm;
+	}
 	err = 0;
 
 	mutex_lock(&ss->mlock);
@@ -170,8 +167,9 @@ err_iv:
 		/* Update seed */
 		memcpy(ctx->seed, d + dlen, ctx->slen);
 	}
+	memzero_explicit(d, todo);
 err_free:
-	kfree_sensitive(d);
+	kfree(d);
 
 	return err;
 }

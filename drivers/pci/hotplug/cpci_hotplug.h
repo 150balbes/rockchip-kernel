@@ -75,9 +75,6 @@ int cpci_hp_unregister_bus(struct pci_bus *bus);
 int cpci_hp_start(void);
 int cpci_hp_stop(void);
 
-/* Global variables */
-extern int cpci_debug;
-
 /*
  * Internal function prototypes, these functions should not be used by
  * board/chassis drivers.

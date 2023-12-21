@@ -1,10 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP clkctrl clock support
  *
  * Copyright (C) 2017 Texas Instruments, Inc.
  *
  * Tero Kristo <t-kristo@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
@@ -224,7 +232,8 @@ static struct clk_hw *_ti_omap4_clkctrl_xlate(struct of_phandle_args *clkspec,
 					      void *data)
 {
 	struct omap_clkctrl_provider *provider = data;
-	struct omap_clkctrl_clk *entry = NULL, *iter;
+	struct omap_clkctrl_clk *entry;
+	bool found = false;
 
 	if (clkspec->args_count != 2)
 		return ERR_PTR(-EINVAL);
@@ -232,15 +241,15 @@ static struct clk_hw *_ti_omap4_clkctrl_xlate(struct of_phandle_args *clkspec,
 	pr_debug("%s: looking for %x:%x\n", __func__,
 		 clkspec->args[0], clkspec->args[1]);
 
-	list_for_each_entry(iter, &provider->clocks, node) {
-		if (iter->reg_offset == clkspec->args[0] &&
-		    iter->bit_offset == clkspec->args[1]) {
-			entry = iter;
+	list_for_each_entry(entry, &provider->clocks, node) {
+		if (entry->reg_offset == clkspec->args[0] &&
+		    entry->bit_offset == clkspec->args[1]) {
+			found = true;
 			break;
 		}
 	}
 
-	if (!entry)
+	if (!found)
 		return ERR_PTR(-EINVAL);
 
 	return entry->clk;
@@ -258,9 +267,6 @@ static const char * __init clkctrl_get_clock_name(struct device_node *np,
 	if (clkctrl_name && !legacy_naming) {
 		clock_name = kasprintf(GFP_KERNEL, "%s-clkctrl:%04x:%d",
 				       clkctrl_name, offset, index);
-		if (!clock_name)
-			return NULL;
-
 		strreplace(clock_name, '_', '-');
 
 		return clock_name;
@@ -308,7 +314,7 @@ _ti_clkctrl_clk_register(struct omap_clkctrl_provider *provider,
 	init.ops = ops;
 	init.flags = 0;
 
-	clk = of_ti_clk_register(node, clk_hw, init.name);
+	clk = ti_clk_register(NULL, clk_hw, init.name);
 	if (IS_ERR_OR_NULL(clk)) {
 		ret = -EINVAL;
 		goto cleanup;
@@ -463,31 +469,13 @@ static void __init _clkctrl_add_provider(void *data,
 	of_clk_add_hw_provider(np, _ti_omap4_clkctrl_xlate, data);
 }
 
-/*
- * Get clock name based on "clock-output-names" property or the
- * compatible property for clkctrl.
- */
-static const char * __init clkctrl_get_name(struct device_node *np)
+/* Get clock name based on compatible string for clkctrl */
+static char * __init clkctrl_get_name(struct device_node *np)
 {
 	struct property *prop;
 	const int prefix_len = 11;
 	const char *compat;
-	const char *output;
 	char *name;
-
-	if (!of_property_read_string_index(np, "clock-output-names", 0,
-					   &output)) {
-		const char *end;
-		int len;
-
-		len = strlen(output);
-		end = strstr(output, "_clkctrl");
-		if (end)
-			len -= strlen(end);
-		name = kstrndup(output, len, GFP_KERNEL);
-
-		return name;
-	}
 
 	of_property_for_each_string(np, "compatible", prop, compat) {
 		if (!strncmp("ti,clkctrl-", compat, prefix_len)) {
@@ -515,16 +503,20 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 	struct clk_hw_omap *hw;
 	struct clk *clk;
 	struct omap_clkctrl_clk *clkctrl_clk = NULL;
+	const __be32 *addrp;
 	bool legacy_naming;
-	const char *clkctrl_name;
+	char *clkctrl_name;
 	u32 addr;
 	int ret;
 	char *c;
 	u16 soc_mask = 0;
-	struct resource res;
 
-	of_address_to_resource(node, 0, &res);
-	addr = (u32)res.start;
+	if (!(ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT) &&
+	    of_node_name_eq(node, "clk"))
+		ti_clk_features.flags |= TI_CLK_CLKCTRL_COMPAT;
+
+	addrp = of_get_address(node, 0, NULL, NULL);
+	addr = (u32)of_translate_address(node, addrp);
 
 #ifdef CONFIG_ARCH_OMAP4
 	if (of_machine_is_compatible("ti,omap4"))
@@ -535,8 +527,13 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 		data = omap5_clkctrl_data;
 #endif
 #ifdef CONFIG_SOC_DRA7XX
-	if (of_machine_is_compatible("ti,dra7"))
-		data = dra7_clkctrl_data;
+	if (of_machine_is_compatible("ti,dra7")) {
+		if (ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT)
+			data = dra7_clkctrl_compat_data;
+		else
+			data = dra7_clkctrl_data;
+	}
+
 	if (of_machine_is_compatible("ti,dra72"))
 		soc_mask = CLKF_SOC_DRA72;
 	if (of_machine_is_compatible("ti,dra74"))
@@ -545,15 +542,27 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 		soc_mask = CLKF_SOC_DRA76;
 #endif
 #ifdef CONFIG_SOC_AM33XX
-	if (of_machine_is_compatible("ti,am33xx"))
-		data = am3_clkctrl_data;
+	if (of_machine_is_compatible("ti,am33xx")) {
+		if (ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT)
+			data = am3_clkctrl_compat_data;
+		else
+			data = am3_clkctrl_data;
+	}
 #endif
 #ifdef CONFIG_SOC_AM43XX
-	if (of_machine_is_compatible("ti,am4372"))
-		data = am4_clkctrl_data;
+	if (of_machine_is_compatible("ti,am4372")) {
+		if (ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT)
+			data = am4_clkctrl_compat_data;
+		else
+			data = am4_clkctrl_data;
+	}
 
-	if (of_machine_is_compatible("ti,am438x"))
-		data = am438x_clkctrl_data;
+	if (of_machine_is_compatible("ti,am438x")) {
+		if (ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT)
+			data = am438x_clkctrl_compat_data;
+		else
+			data = am438x_clkctrl_data;
+	}
 #endif
 #ifdef CONFIG_SOC_TI81XX
 	if (of_machine_is_compatible("ti,dm814"))
@@ -589,16 +598,12 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 	if (clkctrl_name) {
 		provider->clkdm_name = kasprintf(GFP_KERNEL,
 						 "%s_clkdm", clkctrl_name);
-		if (!provider->clkdm_name) {
-			kfree(provider);
-			return;
-		}
 		goto clkdm_found;
 	}
 
 	/*
 	 * The code below can be removed when all clkctrl nodes use domain
-	 * specific compatible property and standard clock node naming
+	 * specific compatible proprerty and standard clock node naming
 	 */
 	if (legacy_naming) {
 		provider->clkdm_name = kasprintf(GFP_KERNEL, "%pOFnxxx", node->parent);
@@ -689,7 +694,7 @@ clkdm_found:
 		init.ops = &omap4_clkctrl_clk_ops;
 		hw->hw.init = &init;
 
-		clk = of_ti_clk_register_omap_hw(node, &hw->hw, init.name);
+		clk = ti_clk_register_omap_hw(NULL, &hw->hw, init.name);
 		if (IS_ERR_OR_NULL(clk))
 			goto cleanup;
 

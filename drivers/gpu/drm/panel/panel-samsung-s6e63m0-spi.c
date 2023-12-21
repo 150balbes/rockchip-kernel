@@ -5,38 +5,55 @@
 #include <linux/spi/spi.h>
 #include <linux/delay.h>
 
-#include <drm/drm_mipi_dbi.h>
 #include <drm/drm_print.h>
 
 #include "panel-samsung-s6e63m0.h"
 
-static const u8 s6e63m0_dbi_read_commands[] = {
-	MCS_READ_ID1,
-	MCS_READ_ID2,
-	MCS_READ_ID3,
-	0, /* sentinel */
-};
+#define DATA_MASK	0x100
 
-static int s6e63m0_spi_dcs_read(struct device *dev, void *trsp,
-				const u8 cmd, u8 *data)
+static int s6e63m0_spi_dcs_read(struct device *dev, const u8 cmd, u8 *data)
 {
-	struct mipi_dbi *dbi = trsp;
-	int ret;
+	/*
+	 * FIXME: implement reading DCS commands over SPI so we can
+	 * properly identify which physical panel is connected.
+	 */
+	*data = 0;
 
-	ret = mipi_dbi_command_read(dbi, cmd, data);
-	if (ret)
-		dev_err(dev, "error on DBI read command %02x\n", cmd);
-
-	return ret;
+	return 0;
 }
 
-static int s6e63m0_spi_dcs_write(struct device *dev, void *trsp,
-				 const u8 *data, size_t len)
+static int s6e63m0_spi_write_word(struct device *dev, u16 data)
 {
-	struct mipi_dbi *dbi = trsp;
-	int ret;
+	struct spi_device *spi = to_spi_device(dev);
+	struct spi_transfer xfer = {
+		.len	= 2,
+		.tx_buf = &data,
+	};
+	struct spi_message msg;
 
-	ret = mipi_dbi_command_stackbuf(dbi, data[0], (data + 1), (len - 1));
+	spi_message_init(&msg);
+	spi_message_add_tail(&xfer, &msg);
+
+	return spi_sync(spi, &msg);
+}
+
+static int s6e63m0_spi_dcs_write(struct device *dev, const u8 *data, size_t len)
+{
+	int ret = 0;
+
+	dev_dbg(dev, "SPI writing dcs seq: %*ph\n", (int)len, data);
+	ret = s6e63m0_spi_write_word(dev, *data);
+
+	while (!ret && --len) {
+		++data;
+		ret = s6e63m0_spi_write_word(dev, *data | DATA_MASK);
+	}
+
+	if (ret) {
+		dev_err(dev, "SPI error %d writing dcs seq: %*ph\n", ret,
+			(int)len, data);
+	}
+
 	usleep_range(300, 310);
 
 	return ret;
@@ -45,26 +62,22 @@ static int s6e63m0_spi_dcs_write(struct device *dev, void *trsp,
 static int s6e63m0_spi_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
-	struct mipi_dbi *dbi;
 	int ret;
 
-	dbi = devm_kzalloc(dev, sizeof(*dbi), GFP_KERNEL);
-	if (!dbi)
-		return -ENOMEM;
-
-	ret = mipi_dbi_spi_init(spi, dbi, NULL);
-	if (ret)
-		return dev_err_probe(dev, ret, "MIPI DBI init failed\n");
-	/* Register our custom MCS read commands */
-	dbi->read_commands = s6e63m0_dbi_read_commands;
-
-	return s6e63m0_probe(dev, dbi, s6e63m0_spi_dcs_read,
-			     s6e63m0_spi_dcs_write, false);
+	spi->bits_per_word = 9;
+	spi->mode = SPI_MODE_3;
+	ret = spi_setup(spi);
+	if (ret < 0) {
+		dev_err(dev, "spi setup failed.\n");
+		return ret;
+	}
+	return s6e63m0_probe(dev, s6e63m0_spi_dcs_read, s6e63m0_spi_dcs_write,
+			     false);
 }
 
-static void s6e63m0_spi_remove(struct spi_device *spi)
+static int s6e63m0_spi_remove(struct spi_device *spi)
 {
-	s6e63m0_remove(&spi->dev);
+	return s6e63m0_remove(&spi->dev);
 }
 
 static const struct of_device_id s6e63m0_spi_of_match[] = {

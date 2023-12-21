@@ -15,7 +15,6 @@
  * (the type definitions are in asm/simple_spinlock_types.h)
  */
 #include <linux/irqflags.h>
-#include <linux/kcsan-checks.h>
 #include <asm/paravirt.h>
 #include <asm/paca.h>
 #include <asm/synch.h>
@@ -39,7 +38,8 @@ static __always_inline int arch_spin_value_unlocked(arch_spinlock_t lock)
 
 static inline int arch_spin_is_locked(arch_spinlock_t *lock)
 {
-	return !arch_spin_value_unlocked(READ_ONCE(*lock));
+	smp_mb();
+	return !arch_spin_value_unlocked(*lock);
 }
 
 /*
@@ -49,11 +49,10 @@ static inline int arch_spin_is_locked(arch_spinlock_t *lock)
 static inline unsigned long __arch_spin_trylock(arch_spinlock_t *lock)
 {
 	unsigned long tmp, token;
-	unsigned int eh = IS_ENABLED(CONFIG_PPC64);
 
 	token = LOCK_TOKEN;
 	__asm__ __volatile__(
-"1:	lwarx		%0,0,%2,%[eh]\n\
+"1:	" PPC_LWARX(%0,0,%2,1) "\n\
 	cmpwi		0,%0,0\n\
 	bne-		2f\n\
 	stwcx.		%1,0,%2\n\
@@ -61,7 +60,7 @@ static inline unsigned long __arch_spin_trylock(arch_spinlock_t *lock)
 	PPC_ACQUIRE_BARRIER
 "2:"
 	: "=&r" (tmp)
-	: "r" (token), "r" (&lock->slock), [eh] "n" (eh)
+	: "r" (token), "r" (&lock->slock)
 	: "cr0", "memory");
 
 	return tmp;
@@ -91,8 +90,8 @@ static inline int arch_spin_trylock(arch_spinlock_t *lock)
 void splpar_spin_yield(arch_spinlock_t *lock);
 void splpar_rw_yield(arch_rwlock_t *lock);
 #else /* SPLPAR */
-static inline void splpar_spin_yield(arch_spinlock_t *lock) {}
-static inline void splpar_rw_yield(arch_rwlock_t *lock) {}
+static inline void splpar_spin_yield(arch_spinlock_t *lock) {};
+static inline void splpar_rw_yield(arch_rwlock_t *lock) {};
 #endif
 
 static inline void spin_yield(arch_spinlock_t *lock)
@@ -125,9 +124,29 @@ static inline void arch_spin_lock(arch_spinlock_t *lock)
 	}
 }
 
+static inline
+void arch_spin_lock_flags(arch_spinlock_t *lock, unsigned long flags)
+{
+	unsigned long flags_dis;
+
+	while (1) {
+		if (likely(__arch_spin_trylock(lock) == 0))
+			break;
+		local_save_flags(flags_dis);
+		local_irq_restore(flags);
+		do {
+			HMT_low();
+			if (is_shared_processor())
+				splpar_spin_yield(lock);
+		} while (unlikely(lock->slock != 0));
+		HMT_medium();
+		local_irq_restore(flags_dis);
+	}
+}
+#define arch_spin_lock_flags arch_spin_lock_flags
+
 static inline void arch_spin_unlock(arch_spinlock_t *lock)
 {
-	kcsan_mb();
 	__asm__ __volatile__("# arch_spin_unlock\n\t"
 				PPC_RELEASE_BARRIER: : :"memory");
 	lock->slock = 0;
@@ -159,10 +178,9 @@ static inline void arch_spin_unlock(arch_spinlock_t *lock)
 static inline long __arch_read_trylock(arch_rwlock_t *rw)
 {
 	long tmp;
-	unsigned int eh = IS_ENABLED(CONFIG_PPC64);
 
 	__asm__ __volatile__(
-"1:	lwarx		%0,0,%1,%[eh]\n"
+"1:	" PPC_LWARX(%0,0,%1,1) "\n"
 	__DO_SIGN_EXTEND
 "	addic.		%0,%0,1\n\
 	ble-		2f\n"
@@ -170,7 +188,7 @@ static inline long __arch_read_trylock(arch_rwlock_t *rw)
 	bne-		1b\n"
 	PPC_ACQUIRE_BARRIER
 "2:"	: "=&r" (tmp)
-	: "r" (&rw->lock), [eh] "n" (eh)
+	: "r" (&rw->lock)
 	: "cr0", "xer", "memory");
 
 	return tmp;
@@ -183,18 +201,17 @@ static inline long __arch_read_trylock(arch_rwlock_t *rw)
 static inline long __arch_write_trylock(arch_rwlock_t *rw)
 {
 	long tmp, token;
-	unsigned int eh = IS_ENABLED(CONFIG_PPC64);
 
 	token = WRLOCK_TOKEN;
 	__asm__ __volatile__(
-"1:	lwarx		%0,0,%2,%[eh]\n\
+"1:	" PPC_LWARX(%0,0,%2,1) "\n\
 	cmpwi		0,%0,0\n\
 	bne-		2f\n"
 "	stwcx.		%1,0,%2\n\
 	bne-		1b\n"
 	PPC_ACQUIRE_BARRIER
 "2:"	: "=&r" (tmp)
-	: "r" (token), "r" (&rw->lock), [eh] "n" (eh)
+	: "r" (token), "r" (&rw->lock)
 	: "cr0", "memory");
 
 	return tmp;
@@ -264,5 +281,8 @@ static inline void arch_write_unlock(arch_rwlock_t *rw)
 #define arch_spin_relax(lock)	spin_yield(lock)
 #define arch_read_relax(lock)	rw_yield(lock)
 #define arch_write_relax(lock)	rw_yield(lock)
+
+/* See include/linux/spinlock.h */
+#define smp_mb__after_spinlock()   smp_mb()
 
 #endif /* _ASM_POWERPC_SIMPLE_SPINLOCK_H */

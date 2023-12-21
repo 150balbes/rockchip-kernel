@@ -65,9 +65,11 @@ static int armada_3700_xtal_clock_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void armada_3700_xtal_clock_remove(struct platform_device *pdev)
+static int armada_3700_xtal_clock_remove(struct platform_device *pdev)
 {
 	of_clk_del_provider(pdev->dev.of_node);
+
+	return 0;
 }
 
 static const struct of_device_id armada_3700_xtal_clock_of_match[] = {
@@ -77,7 +79,7 @@ static const struct of_device_id armada_3700_xtal_clock_of_match[] = {
 
 static struct platform_driver armada_3700_xtal_clock_driver = {
 	.probe = armada_3700_xtal_clock_probe,
-	.remove_new = armada_3700_xtal_clock_remove,
+	.remove = armada_3700_xtal_clock_remove,
 	.driver		= {
 		.name	= "marvell-armada-3700-xtal-clock",
 		.of_match_table = armada_3700_xtal_clock_of_match,

@@ -264,7 +264,7 @@ out_up:
 static struct bin_attribute w1_f0d_bin_attr = {
 	.attr = {
 		.name = "eeprom",
-		.mode = 0644,
+		.mode = S_IRUGO | S_IWUSR,
 	},
 	.size = W1_F0D_EEPROM_SIZE,
 	.read = w1_f0d_read_bin,
@@ -291,7 +291,20 @@ static struct w1_family w1_family_0d = {
 	.fops = &w1_f0d_fops,
 };
 
-module_w1_family(w1_family_0d);
+static int __init w1_f0d_init(void)
+{
+	pr_info("%s()\n", __func__);
+	return w1_register_family(&w1_family_0d);
+}
+
+static void __exit w1_f0d_fini(void)
+{
+	pr_info("%s()\n", __func__);
+	w1_unregister_family(&w1_family_0d);
+}
+
+module_init(w1_f0d_init);
+module_exit(w1_f0d_fini);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrew Worsley amworsley@gmail.com");

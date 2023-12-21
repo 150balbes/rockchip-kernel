@@ -108,7 +108,7 @@ static int uacce_bind_queue(struct uacce_device *uacce, struct uacce_queue *q)
 	if (!(uacce->flags & UACCE_DEV_SVA))
 		return 0;
 
-	handle = iommu_sva_bind_device(uacce->parent, current->mm);
+	handle = iommu_sva_bind_device(uacce->parent, current->mm, NULL);
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
 
@@ -135,7 +135,7 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 {
 	struct uacce_device *uacce;
 	struct uacce_queue *q;
-	int ret;
+	int ret = 0;
 
 	uacce = xa_load(&uacce_xa, iminor(inode));
 	if (!uacce)
@@ -166,8 +166,8 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 
 	init_waitqueue_head(&q->wait);
 	filep->private_data = q;
+	uacce->inode = inode;
 	q->state = UACCE_Q_INIT;
-	q->mapping = filep->f_mapping;
 	mutex_init(&q->mutex);
 	list_add(&q->list, &uacce->queues);
 	mutex_unlock(&uacce->mutex);
@@ -200,15 +200,12 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 static void uacce_vma_close(struct vm_area_struct *vma)
 {
 	struct uacce_queue *q = vma->vm_private_data;
+	struct uacce_qfile_region *qfr = NULL;
 
-	if (vma->vm_pgoff < UACCE_MAX_REGION) {
-		struct uacce_qfile_region *qfr = q->qfrs[vma->vm_pgoff];
+	if (vma->vm_pgoff < UACCE_MAX_REGION)
+		qfr = q->qfrs[vma->vm_pgoff];
 
-		mutex_lock(&q->mutex);
-		q->qfrs[vma->vm_pgoff] = NULL;
-		mutex_unlock(&q->mutex);
-		kfree(qfr);
-	}
+	kfree(qfr);
 }
 
 static const struct vm_operations_struct uacce_vm_ops = {
@@ -232,7 +229,7 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	if (!qfr)
 		return -ENOMEM;
 
-	vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_WIPEONFORK);
+	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND | VM_WIPEONFORK;
 	vma->vm_ops = &uacce_vm_ops;
 	vma->vm_private_data = q;
 	qfr->type = type;
@@ -250,6 +247,17 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 
 	switch (type) {
 	case UACCE_QFRT_MMIO:
+		if (!uacce->ops->mmap) {
+			ret = -EINVAL;
+			goto out_with_lock;
+		}
+
+		ret = uacce->ops->mmap(q, vma, qfr);
+		if (ret)
+			goto out_with_lock;
+
+		break;
+
 	case UACCE_QFRT_DUS:
 		if (!uacce->ops->mmap) {
 			ret = -EINVAL;
@@ -316,7 +324,7 @@ static ssize_t api_show(struct device *dev,
 {
 	struct uacce_device *uacce = to_uacce_device(dev);
 
-	return sysfs_emit(buf, "%s\n", uacce->api_ver);
+	return sprintf(buf, "%s\n", uacce->api_ver);
 }
 
 static ssize_t flags_show(struct device *dev,
@@ -324,7 +332,7 @@ static ssize_t flags_show(struct device *dev,
 {
 	struct uacce_device *uacce = to_uacce_device(dev);
 
-	return sysfs_emit(buf, "%u\n", uacce->flags);
+	return sprintf(buf, "%u\n", uacce->flags);
 }
 
 static ssize_t available_instances_show(struct device *dev,
@@ -336,7 +344,7 @@ static ssize_t available_instances_show(struct device *dev,
 	if (!uacce->ops->get_available_instances)
 		return -ENODEV;
 
-	return sysfs_emit(buf, "%d\n",
+	return sprintf(buf, "%d\n",
 		       uacce->ops->get_available_instances(uacce));
 }
 
@@ -345,7 +353,7 @@ static ssize_t algorithms_show(struct device *dev,
 {
 	struct uacce_device *uacce = to_uacce_device(dev);
 
-	return sysfs_emit(buf, "%s\n", uacce->algs);
+	return sprintf(buf, "%s\n", uacce->algs);
 }
 
 static ssize_t region_mmio_size_show(struct device *dev,
@@ -353,7 +361,7 @@ static ssize_t region_mmio_size_show(struct device *dev,
 {
 	struct uacce_device *uacce = to_uacce_device(dev);
 
-	return sysfs_emit(buf, "%lu\n",
+	return sprintf(buf, "%lu\n",
 		       uacce->qf_pg_num[UACCE_QFRT_MMIO] << PAGE_SHIFT);
 }
 
@@ -362,46 +370,8 @@ static ssize_t region_dus_size_show(struct device *dev,
 {
 	struct uacce_device *uacce = to_uacce_device(dev);
 
-	return sysfs_emit(buf, "%lu\n",
+	return sprintf(buf, "%lu\n",
 		       uacce->qf_pg_num[UACCE_QFRT_DUS] << PAGE_SHIFT);
-}
-
-static ssize_t isolate_show(struct device *dev,
-			    struct device_attribute *attr, char *buf)
-{
-	struct uacce_device *uacce = to_uacce_device(dev);
-
-	return sysfs_emit(buf, "%d\n", uacce->ops->get_isolate_state(uacce));
-}
-
-static ssize_t isolate_strategy_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct uacce_device *uacce = to_uacce_device(dev);
-	u32 val;
-
-	val = uacce->ops->isolate_err_threshold_read(uacce);
-
-	return sysfs_emit(buf, "%u\n", val);
-}
-
-static ssize_t isolate_strategy_store(struct device *dev, struct device_attribute *attr,
-				   const char *buf, size_t count)
-{
-	struct uacce_device *uacce = to_uacce_device(dev);
-	unsigned long val;
-	int ret;
-
-	if (kstrtoul(buf, 0, &val) < 0)
-		return -EINVAL;
-
-	if (val > UACCE_MAX_ERR_THRESHOLD)
-		return -EINVAL;
-
-	ret = uacce->ops->isolate_err_threshold_write(uacce, val);
-	if (ret)
-		return ret;
-
-	return count;
 }
 
 static DEVICE_ATTR_RO(api);
@@ -410,8 +380,6 @@ static DEVICE_ATTR_RO(available_instances);
 static DEVICE_ATTR_RO(algorithms);
 static DEVICE_ATTR_RO(region_mmio_size);
 static DEVICE_ATTR_RO(region_dus_size);
-static DEVICE_ATTR_RO(isolate);
-static DEVICE_ATTR_RW(isolate_strategy);
 
 static struct attribute *uacce_dev_attrs[] = {
 	&dev_attr_api.attr,
@@ -420,8 +388,6 @@ static struct attribute *uacce_dev_attrs[] = {
 	&dev_attr_algorithms.attr,
 	&dev_attr_region_mmio_size.attr,
 	&dev_attr_region_dus_size.attr,
-	&dev_attr_isolate.attr,
-	&dev_attr_isolate_strategy.attr,
 	NULL,
 };
 
@@ -435,14 +401,6 @@ static umode_t uacce_dev_is_visible(struct kobject *kobj,
 	    (!uacce->qf_pg_num[UACCE_QFRT_MMIO])) ||
 	    ((attr == &dev_attr_region_dus_size.attr) &&
 	    (!uacce->qf_pg_num[UACCE_QFRT_DUS])))
-		return 0;
-
-	if (attr == &dev_attr_isolate_strategy.attr &&
-	    (!uacce->ops->isolate_err_threshold_read &&
-	     !uacce->ops->isolate_err_threshold_write))
-		return 0;
-
-	if (attr == &dev_attr_isolate.attr && !uacce->ops->get_isolate_state)
 		return 0;
 
 	return attr->mode;
@@ -460,40 +418,6 @@ static void uacce_release(struct device *dev)
 	struct uacce_device *uacce = to_uacce_device(dev);
 
 	kfree(uacce);
-}
-
-static unsigned int uacce_enable_sva(struct device *parent, unsigned int flags)
-{
-	int ret;
-
-	if (!(flags & UACCE_DEV_SVA))
-		return flags;
-
-	flags &= ~UACCE_DEV_SVA;
-
-	ret = iommu_dev_enable_feature(parent, IOMMU_DEV_FEAT_IOPF);
-	if (ret) {
-		dev_err(parent, "failed to enable IOPF feature! ret = %pe\n", ERR_PTR(ret));
-		return flags;
-	}
-
-	ret = iommu_dev_enable_feature(parent, IOMMU_DEV_FEAT_SVA);
-	if (ret) {
-		dev_err(parent, "failed to enable SVA feature! ret = %pe\n", ERR_PTR(ret));
-		iommu_dev_disable_feature(parent, IOMMU_DEV_FEAT_IOPF);
-		return flags;
-	}
-
-	return flags | UACCE_DEV_SVA;
-}
-
-static void uacce_disable_sva(struct uacce_device *uacce)
-{
-	if (!(uacce->flags & UACCE_DEV_SVA))
-		return;
-
-	iommu_dev_disable_feature(uacce->parent, IOMMU_DEV_FEAT_SVA);
-	iommu_dev_disable_feature(uacce->parent, IOMMU_DEV_FEAT_IOPF);
 }
 
 /**
@@ -515,7 +439,11 @@ struct uacce_device *uacce_alloc(struct device *parent,
 	if (!uacce)
 		return ERR_PTR(-ENOMEM);
 
-	flags = uacce_enable_sva(parent, flags);
+	if (flags & UACCE_DEV_SVA) {
+		ret = iommu_dev_enable_feature(parent, IOMMU_DEV_FEAT_SVA);
+		if (ret)
+			flags &= ~UACCE_DEV_SVA;
+	}
 
 	uacce->parent = parent;
 	uacce->flags = flags;
@@ -539,7 +467,8 @@ struct uacce_device *uacce_alloc(struct device *parent,
 	return uacce;
 
 err_with_uacce:
-	uacce_disable_sva(uacce);
+	if (flags & UACCE_DEV_SVA)
+		iommu_dev_disable_feature(uacce->parent, IOMMU_DEV_FEAT_SVA);
 	kfree(uacce);
 	return ERR_PTR(ret);
 }
@@ -577,6 +506,12 @@ void uacce_remove(struct uacce_device *uacce)
 
 	if (!uacce)
 		return;
+	/*
+	 * unmap remaining mapping from user space, preventing user still
+	 * access the mmaped area while parent device is already removed
+	 */
+	if (uacce->inode)
+		unmap_mapping_range(uacce->inode->i_mapping, 0, 0, 1);
 
 	/*
 	 * uacce_fops_open() may be running concurrently, even after we remove
@@ -594,16 +529,11 @@ void uacce_remove(struct uacce_device *uacce)
 		uacce_put_queue(q);
 		mutex_unlock(&q->mutex);
 		uacce_unbind_queue(q);
-
-		/*
-		 * unmap remaining mapping from user space, preventing user still
-		 * access the mmaped area while parent device is already removed
-		 */
-		unmap_mapping_range(q->mapping, 0, 0, 1);
 	}
 
 	/* disable sva now since no opened queues */
-	uacce_disable_sva(uacce);
+	if (uacce->flags & UACCE_DEV_SVA)
+		iommu_dev_disable_feature(uacce->parent, IOMMU_DEV_FEAT_SVA);
 
 	if (uacce->cdev)
 		cdev_device_del(uacce->cdev, &uacce->dev);
@@ -623,7 +553,7 @@ static int __init uacce_init(void)
 {
 	int ret;
 
-	uacce_class = class_create(UACCE_NAME);
+	uacce_class = class_create(THIS_MODULE, UACCE_NAME);
 	if (IS_ERR(uacce_class))
 		return PTR_ERR(uacce_class);
 
@@ -644,5 +574,5 @@ subsys_initcall(uacce_init);
 module_exit(uacce_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("HiSilicon Tech. Co., Ltd.");
+MODULE_AUTHOR("Hisilicon Tech. Co., Ltd.");
 MODULE_DESCRIPTION("Accelerator interface for Userland applications");

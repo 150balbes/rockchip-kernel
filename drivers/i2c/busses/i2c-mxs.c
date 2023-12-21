@@ -171,7 +171,7 @@ static void mxs_i2c_dma_irq_callback(void *param)
 }
 
 static int mxs_i2c_dma_setup_xfer(struct i2c_adapter *adap,
-			struct i2c_msg *msg, u8 *buf, uint32_t flags)
+			struct i2c_msg *msg, uint32_t flags)
 {
 	struct dma_async_tx_descriptor *desc;
 	struct mxs_i2c_dev *i2c = i2c_get_adapdata(adap);
@@ -226,7 +226,7 @@ static int mxs_i2c_dma_setup_xfer(struct i2c_adapter *adap,
 		}
 
 		/* Queue the DMA data transfer. */
-		sg_init_one(&i2c->sg_io[1], buf, msg->len);
+		sg_init_one(&i2c->sg_io[1], msg->buf, msg->len);
 		dma_map_sg(i2c->dev, &i2c->sg_io[1], 1, DMA_FROM_DEVICE);
 		desc = dmaengine_prep_slave_sg(i2c->dmach, &i2c->sg_io[1], 1,
 					DMA_DEV_TO_MEM,
@@ -259,7 +259,7 @@ static int mxs_i2c_dma_setup_xfer(struct i2c_adapter *adap,
 		/* Queue the DMA data transfer. */
 		sg_init_table(i2c->sg_io, 2);
 		sg_set_buf(&i2c->sg_io[0], &i2c->addr_data, 1);
-		sg_set_buf(&i2c->sg_io[1], buf, msg->len);
+		sg_set_buf(&i2c->sg_io[1], msg->buf, msg->len);
 		dma_map_sg(i2c->dev, i2c->sg_io, 2, DMA_TO_DEVICE);
 		desc = dmaengine_prep_slave_sg(i2c->dmach, i2c->sg_io, 2,
 					DMA_MEM_TO_DEV,
@@ -290,14 +290,14 @@ read_init_dma_fail:
 select_init_dma_fail:
 	dma_unmap_sg(i2c->dev, &i2c->sg_io[0], 1, DMA_TO_DEVICE);
 select_init_pio_fail:
-	dmaengine_terminate_sync(i2c->dmach);
+	dmaengine_terminate_all(i2c->dmach);
 	return -EINVAL;
 
 /* Write failpath. */
 write_init_dma_fail:
 	dma_unmap_sg(i2c->dev, i2c->sg_io, 2, DMA_TO_DEVICE);
 write_init_pio_fail:
-	dmaengine_terminate_sync(i2c->dmach);
+	dmaengine_terminate_all(i2c->dmach);
 	return -EINVAL;
 }
 
@@ -563,7 +563,6 @@ static int mxs_i2c_xfer_msg(struct i2c_adapter *adap, struct i2c_msg *msg,
 	struct mxs_i2c_dev *i2c = i2c_get_adapdata(adap);
 	int ret;
 	int flags;
-	u8 *dma_buf;
 	int use_pio = 0;
 	unsigned long time_left;
 
@@ -589,20 +588,13 @@ static int mxs_i2c_xfer_msg(struct i2c_adapter *adap, struct i2c_msg *msg,
 		if (ret && (ret != -ENXIO))
 			mxs_i2c_reset(i2c);
 	} else {
-		dma_buf = i2c_get_dma_safe_msg_buf(msg, 1);
-		if (!dma_buf)
-			return -ENOMEM;
-
 		reinit_completion(&i2c->cmd_complete);
-		ret = mxs_i2c_dma_setup_xfer(adap, msg, dma_buf, flags);
-		if (ret) {
-			i2c_put_dma_safe_msg_buf(dma_buf, msg, false);
+		ret = mxs_i2c_dma_setup_xfer(adap, msg, flags);
+		if (ret)
 			return ret;
-		}
 
 		time_left = wait_for_completion_timeout(&i2c->cmd_complete,
 						msecs_to_jiffies(1000));
-		i2c_put_dma_safe_msg_buf(dma_buf, msg, true);
 		if (!time_left)
 			goto timeout;
 
@@ -789,15 +781,28 @@ static int mxs_i2c_get_ofdata(struct mxs_i2c_dev *i2c)
 	return 0;
 }
 
+static const struct platform_device_id mxs_i2c_devtype[] = {
+	{
+		.name = "imx23-i2c",
+		.driver_data = MXS_I2C_V1,
+	}, {
+		.name = "imx28-i2c",
+		.driver_data = MXS_I2C_V2,
+	}, { /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(platform, mxs_i2c_devtype);
+
 static const struct of_device_id mxs_i2c_dt_ids[] = {
-	{ .compatible = "fsl,imx23-i2c", .data = (void *)MXS_I2C_V1, },
-	{ .compatible = "fsl,imx28-i2c", .data = (void *)MXS_I2C_V2, },
+	{ .compatible = "fsl,imx23-i2c", .data = &mxs_i2c_devtype[0], },
+	{ .compatible = "fsl,imx28-i2c", .data = &mxs_i2c_devtype[1], },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mxs_i2c_dt_ids);
 
 static int mxs_i2c_probe(struct platform_device *pdev)
 {
+	const struct of_device_id *of_id =
+				of_match_device(mxs_i2c_dt_ids, &pdev->dev);
 	struct device *dev = &pdev->dev;
 	struct mxs_i2c_dev *i2c;
 	struct i2c_adapter *adap;
@@ -807,7 +812,10 @@ static int mxs_i2c_probe(struct platform_device *pdev)
 	if (!i2c)
 		return -ENOMEM;
 
-	i2c->dev_type = (uintptr_t)of_device_get_match_data(&pdev->dev);
+	if (of_id) {
+		const struct platform_device_id *device_id = of_id->data;
+		i2c->dev_type = device_id->driver_data;
+	}
 
 	i2c->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(i2c->regs))
@@ -834,8 +842,8 @@ static int mxs_i2c_probe(struct platform_device *pdev)
 	/* Setup the DMA */
 	i2c->dmach = dma_request_chan(dev, "rx-tx");
 	if (IS_ERR(i2c->dmach)) {
-		return dev_err_probe(dev, PTR_ERR(i2c->dmach),
-				     "Failed to request dma\n");
+		dev_err(dev, "Failed to request dma\n");
+		return PTR_ERR(i2c->dmach);
 	}
 
 	platform_set_drvdata(pdev, i2c);
@@ -846,7 +854,7 @@ static int mxs_i2c_probe(struct platform_device *pdev)
 		return err;
 
 	adap = &i2c->adapter;
-	strscpy(adap->name, "MXS I2C adapter", sizeof(adap->name));
+	strlcpy(adap->name, "MXS I2C adapter", sizeof(adap->name));
 	adap->owner = THIS_MODULE;
 	adap->algo = &mxs_i2c_algo;
 	adap->quirks = &mxs_i2c_quirks;
@@ -864,7 +872,7 @@ static int mxs_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void mxs_i2c_remove(struct platform_device *pdev)
+static int mxs_i2c_remove(struct platform_device *pdev)
 {
 	struct mxs_i2c_dev *i2c = platform_get_drvdata(pdev);
 
@@ -874,6 +882,8 @@ static void mxs_i2c_remove(struct platform_device *pdev)
 		dma_release_channel(i2c->dmach);
 
 	writel(MXS_I2C_CTRL0_SFTRST, i2c->regs + MXS_I2C_CTRL0_SET);
+
+	return 0;
 }
 
 static struct platform_driver mxs_i2c_driver = {
@@ -882,7 +892,7 @@ static struct platform_driver mxs_i2c_driver = {
 		   .of_match_table = mxs_i2c_dt_ids,
 		   },
 	.probe = mxs_i2c_probe,
-	.remove_new = mxs_i2c_remove,
+	.remove = mxs_i2c_remove,
 };
 
 static int __init mxs_i2c_init(void)

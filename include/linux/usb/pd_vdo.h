@@ -303,8 +303,6 @@
  * <8>     :: SBU supported (0b == supported, 1b == not supported)
  * <7>     :: SBU type (0b == passive, 1b == active)
  * <6:5>   :: Vbus current handling capability (01b == 3A, 10b == 5A)
- * <4>     :: Vbus through cable (0b == no, 1b == yes)
- * <3>     :: SOP" controller present? (0b == no, 1b == yes)
  * <2:0>   :: USB highest speed
  */
 /* Cable VDO Version */
@@ -397,6 +395,7 @@
  * <1>     :: Reserved, Shall be set to zero
  * <0>     :: USB gen (0b == gen1, 1b == gen2+)
  */
+
 /* U3/CLd Power*/
 #define ACAB2_U3_CLD_10MW_PLUS	0
 #define ACAB2_U3_CLD_10MW	1

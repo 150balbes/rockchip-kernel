@@ -68,9 +68,9 @@ static int snd_vortex_midi(vortex_t *vortex)
 
 	/* Create MPU401 instance. */
 #ifdef VORTEX_MPU401_LEGACY
-	temp = snd_mpu401_uart_new(vortex->card, 0, MPU401_HW_MPU401, 0x330,
-				   MPU401_INFO_IRQ_HOOK, -1, &rmidi);
-	if (temp) {
+	if ((temp =
+	     snd_mpu401_uart_new(vortex->card, 0, MPU401_HW_MPU401, 0x330,
+				 MPU401_INFO_IRQ_HOOK, -1, &rmidi)) != 0) {
 		hwwrite(vortex->mmio, VORTEX_CTRL,
 			(hwread(vortex->mmio, VORTEX_CTRL) &
 			 ~CTRL_MIDI_PORT) & ~CTRL_MIDI_EN);
@@ -78,10 +78,10 @@ static int snd_vortex_midi(vortex_t *vortex)
 	}
 #else
 	port = (unsigned long)(vortex->mmio + VORTEX_MIDI_DATA);
-	temp = snd_mpu401_uart_new(vortex->card, 0, MPU401_HW_AUREAL, port,
-				   MPU401_INFO_INTEGRATED | MPU401_INFO_MMIO |
-				   MPU401_INFO_IRQ_HOOK, -1, &rmidi);
-	if (temp) {
+	if ((temp =
+	     snd_mpu401_uart_new(vortex->card, 0, MPU401_HW_AUREAL, port,
+				 MPU401_INFO_INTEGRATED | MPU401_INFO_MMIO |
+				 MPU401_INFO_IRQ_HOOK, -1, &rmidi)) != 0) {
 		hwwrite(vortex->mmio, VORTEX_CTRL,
 			(hwread(vortex->mmio, VORTEX_CTRL) &
 			 ~CTRL_MIDI_PORT) & ~CTRL_MIDI_EN);

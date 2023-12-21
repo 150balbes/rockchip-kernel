@@ -127,7 +127,7 @@ static int
 acpi_system_wakeup_device_open_fs(struct inode *inode, struct file *file)
 {
 	return single_open(file, acpi_system_wakeup_device_seq_show,
-			   pde_data(inode));
+			   PDE_DATA(inode));
 }
 
 static const struct proc_ops acpi_system_wakeup_device_proc_ops = {

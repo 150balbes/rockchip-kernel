@@ -8,9 +8,9 @@
  */
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
-#include <linux/irqdomain.h>
 #include <linux/module.h>
 #include <linux/msi.h>
+#include <linux/of_irq.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
@@ -269,7 +269,9 @@ static void xgene_free_domains(struct xgene_msi *msi)
 
 static int xgene_msi_init_allocator(struct xgene_msi *xgene_msi)
 {
-	xgene_msi->bitmap = bitmap_zalloc(NR_MSI_VEC, GFP_KERNEL);
+	int size = BITS_TO_LONGS(NR_MSI_VEC) * sizeof(long);
+
+	xgene_msi->bitmap = kzalloc(size, GFP_KERNEL);
 	if (!xgene_msi->bitmap)
 		return -ENOMEM;
 
@@ -289,7 +291,8 @@ static void xgene_msi_isr(struct irq_desc *desc)
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct xgene_msi_group *msi_groups;
 	struct xgene_msi *xgene_msi;
-	int msir_index, msir_val, hw_irq, ret;
+	unsigned int virq;
+	int msir_index, msir_val, hw_irq;
 	u32 intr_index, grp_select, msi_grp;
 
 	chained_irq_enter(chip, desc);
@@ -300,7 +303,7 @@ static void xgene_msi_isr(struct irq_desc *desc)
 
 	/*
 	 * MSIINTn (n is 0..F) indicates if there is a pending MSI interrupt
-	 * If bit x of this register is set (x is 0..7), one or more interrupts
+	 * If bit x of this register is set (x is 0..7), one or more interupts
 	 * corresponding to MSInIRx is set.
 	 */
 	grp_select = xgene_msi_int_read(xgene_msi, msi_grp);
@@ -327,8 +330,10 @@ static void xgene_msi_isr(struct irq_desc *desc)
 			 * CPU0
 			 */
 			hw_irq = hwirq_to_canonical_hwirq(hw_irq);
-			ret = generic_handle_domain_irq(xgene_msi->inner_domain, hw_irq);
-			WARN_ON_ONCE(ret);
+			virq = irq_find_mapping(xgene_msi->inner_domain, hw_irq);
+			WARN_ON(!virq);
+			if (virq != 0)
+				generic_handle_irq(virq);
 			msir_val &= ~(1 << intr_index);
 		}
 		grp_select &= ~(1 << msir_index);
@@ -348,7 +353,7 @@ static void xgene_msi_isr(struct irq_desc *desc)
 
 static enum cpuhp_state pci_xgene_online;
 
-static void xgene_msi_remove(struct platform_device *pdev)
+static int xgene_msi_remove(struct platform_device *pdev)
 {
 	struct xgene_msi *msi = platform_get_drvdata(pdev);
 
@@ -358,10 +363,12 @@ static void xgene_msi_remove(struct platform_device *pdev)
 
 	kfree(msi->msi_groups);
 
-	bitmap_free(msi->bitmap);
+	kfree(msi->bitmap);
 	msi->bitmap = NULL;
 
 	xgene_free_domains(msi);
+
+	return 0;
 }
 
 static int xgene_msi_hwirq_alloc(unsigned int cpu)
@@ -444,6 +451,7 @@ static int xgene_msi_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	xgene_msi->msi_regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(xgene_msi->msi_regs)) {
+		dev_err(&pdev->dev, "no reg space\n");
 		rc = PTR_ERR(xgene_msi->msi_regs);
 		goto error;
 	}
@@ -519,7 +527,7 @@ static struct platform_driver xgene_msi_driver = {
 		.of_match_table = xgene_msi_match_table,
 	},
 	.probe = xgene_msi_probe,
-	.remove_new = xgene_msi_remove,
+	.remove = xgene_msi_remove,
 };
 
 static int __init xgene_pcie_msi_init(void)

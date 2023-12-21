@@ -10,6 +10,8 @@
 #ifndef __SHMOB_DRM_H__
 #define __SHMOB_DRM_H__
 
+#include <linux/kernel.h>
+
 #include <drm/drm_mode.h>
 
 enum shmob_drm_clk_source {

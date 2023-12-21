@@ -32,7 +32,7 @@
 int
 nvif_client_ioctl(struct nvif_client *client, void *data, u32 size)
 {
-	return client->driver->ioctl(client->object.priv, data, size, NULL);
+	return client->driver->ioctl(client->object.priv, client->super, data, size, NULL);
 }
 
 int
@@ -69,7 +69,7 @@ nvif_client_ctor(struct nvif_client *parent, const char *name, u64 device,
 	} nop = {};
 	int ret;
 
-	strscpy_pad(args.name, name, sizeof(args.name));
+	strncpy(args.name, name, sizeof(args.name));
 	ret = nvif_object_ctor(parent != client ? &parent->object : NULL,
 			       name ? name : "nvifClient", 0,
 			       NVIF_CLASS_CLIENT, &args, sizeof(args),
@@ -80,6 +80,7 @@ nvif_client_ctor(struct nvif_client *parent, const char *name, u64 device,
 	client->object.client = client;
 	client->object.handle = ~0;
 	client->route = NVIF_IOCTL_V0_ROUTE_NVIF;
+	client->super = true;
 	client->driver = parent->driver;
 
 	if (ret == 0) {

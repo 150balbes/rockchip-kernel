@@ -3,4 +3,4 @@
 # Makefile for the Switch device API
 #
 
-obj-y += switchdev.o
+obj-$(CONFIG_NET_SWITCHDEV) += switchdev.o

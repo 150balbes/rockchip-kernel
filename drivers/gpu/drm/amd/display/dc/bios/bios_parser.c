@@ -33,6 +33,7 @@
 #include "include/gpio_service_interface.h"
 #include "include/grph_object_ctrl_defs.h"
 #include "include/bios_parser_interface.h"
+#include "include/i2caux_interface.h"
 #include "include/logger_interface.h"
 
 #include "command_table.h"
@@ -137,9 +138,7 @@ static uint8_t get_number_of_objects(struct bios_parser *bp, uint32_t offset)
 
 	uint32_t object_table_offset = bp->object_info_tbl_offset + offset;
 
-	table = ((ATOM_OBJECT_TABLE *) bios_get_image(&bp->base,
-				object_table_offset,
-				struct_size(table, asObjects, 1)));
+	table = GET_IMAGE(ATOM_OBJECT_TABLE, object_table_offset);
 
 	if (!table)
 		return 0;
@@ -167,9 +166,8 @@ static struct graphics_object_id bios_parser_get_connector_id(
 	uint32_t connector_table_offset = bp->object_info_tbl_offset
 		+ le16_to_cpu(bp->object_info_tbl.v1_1->usConnectorObjectTableOffset);
 
-	ATOM_OBJECT_TABLE *tbl = ((ATOM_OBJECT_TABLE *) bios_get_image(&bp->base,
-				connector_table_offset,
-				struct_size(tbl, asObjects, 1)));
+	ATOM_OBJECT_TABLE *tbl =
+		GET_IMAGE(ATOM_OBJECT_TABLE, connector_table_offset);
 
 	if (!tbl) {
 		dm_error("Can't get connector table from atom bios.\n");
@@ -664,9 +662,8 @@ static enum bp_result get_ss_info_v3_1(
 	if (!DATA_TABLES(ASIC_InternalSS_Info))
 		return BP_RESULT_UNSUPPORTED;
 
-	ss_table_header_include = ((ATOM_ASIC_INTERNAL_SS_INFO_V3 *) bios_get_image(&bp->base,
-				DATA_TABLES(ASIC_InternalSS_Info),
-				struct_size(ss_table_header_include, asSpreadSpectrum, 1)));
+	ss_table_header_include = GET_IMAGE(ATOM_ASIC_INTERNAL_SS_INFO_V3,
+		DATA_TABLES(ASIC_InternalSS_Info));
 	table_size =
 		(le16_to_cpu(ss_table_header_include->sHeader.usStructureSize)
 				- sizeof(ATOM_COMMON_TABLE_HEADER))
@@ -914,11 +911,11 @@ static enum bp_result get_ss_info_from_tbl(
  * ver 2.1 can co-exist with SS_Info table. Expect ASIC_InternalSS_Info ver 3.1,
  * there is only one entry for each signal /ss id.  However, there is
  * no planning of supporting multiple spread Sprectum entry for EverGreen
- * @dcb:     pointer to the DC BIOS
- * @signal:  ASSignalType to be converted to info index
- * @index:   number of entries that match the converted info index
- * @ss_info: sprectrum information structure,
- * return:   Bios parser result code
+ * @param [in] this
+ * @param [in] signal, ASSignalType to be converted to info index
+ * @param [in] index, number of entries that match the converted info index
+ * @param [out] ss_info, sprectrum information structure,
+ * @return Bios parser result code
  */
 static enum bp_result bios_parser_get_spread_spectrum_info(
 	struct dc_bios *dcb,
@@ -982,16 +979,16 @@ static enum bp_result get_ss_info_from_internal_ss_info_tbl_V2_1(
 	struct spread_spectrum_info *info);
 
 /**
- * get_ss_info_from_tbl
+ * get_ss_info_from_table
  * Get spread sprectrum information from the ASIC_InternalSS_Info Ver 2.1 or
  * SS_Info table from the VBIOS
  * There can not be more than 1 entry for  ASIC_InternalSS_Info Ver 2.1 or
  * SS_Info.
  *
- * @bp:      pointer to the BIOS parser
- * @id:      spread sprectrum info index
- * @ss_info: sprectrum information structure,
- * return:   BIOS parser result code
+ * @param this
+ * @param id, spread sprectrum info index
+ * @param pSSinfo, sprectrum information structure,
+ * @return Bios parser result code
  */
 static enum bp_result get_ss_info_from_tbl(
 	struct bios_parser *bp,
@@ -1014,10 +1011,9 @@ static enum bp_result get_ss_info_from_tbl(
  * from the VBIOS
  * There will not be multiple entry for Ver 2.1
  *
- * @bp:    pointer to the Bios parser
- * @id:    spread sprectrum info index
- * @info:  sprectrum information structure,
- * return: Bios parser result code
+ * @param id, spread sprectrum info index
+ * @param pSSinfo, sprectrum information structure,
+ * @return Bios parser result code
  */
 static enum bp_result get_ss_info_from_internal_ss_info_tbl_V2_1(
 	struct bios_parser *bp,
@@ -1032,10 +1028,8 @@ static enum bp_result get_ss_info_from_internal_ss_info_tbl_V2_1(
 	if (!DATA_TABLES(ASIC_InternalSS_Info))
 		return result;
 
-	header = ((ATOM_ASIC_INTERNAL_SS_INFO_V2 *) bios_get_image(
-				&bp->base,
-				DATA_TABLES(ASIC_InternalSS_Info),
-				struct_size(header, asSpreadSpectrum, 1)));
+	header = GET_IMAGE(ATOM_ASIC_INTERNAL_SS_INFO_V2,
+		DATA_TABLES(ASIC_InternalSS_Info));
 
 	memset(info, 0, sizeof(struct spread_spectrum_info));
 
@@ -1082,10 +1076,9 @@ static enum bp_result get_ss_info_from_internal_ss_info_tbl_V2_1(
  * of entries that matches the id
  * for, the SS_Info table, there should not be more than 1 entry match.
  *
- * @bp:      pointer to the Bios parser
- * @id:      spread sprectrum id
- * @ss_info: sprectrum information structure,
- * return:   Bios parser result code
+ * @param [in] id, spread sprectrum id
+ * @param [out] pSSinfo, sprectrum information structure,
+ * @return Bios parser result code
  */
 static enum bp_result get_ss_info_from_ss_info_table(
 	struct bios_parser *bp,
@@ -1205,7 +1198,6 @@ static enum bp_result bios_parser_get_embedded_panel_info(
 		default:
 			break;
 		}
-		break;
 	default:
 		break;
 	}
@@ -1458,14 +1450,16 @@ static enum bp_result get_embedded_panel_info_v1_3(
 }
 
 /**
- * bios_parser_get_encoder_cap_info - get encoder capability
- *                                    information of input object id
+ * bios_parser_get_encoder_cap_info
  *
- * @dcb:       pointer to the DC BIOS
- * @object_id: object id
- * @info:      encoder cap information structure
+ * @brief
+ *  Get encoder capability information of input object id
  *
- * return: Bios parser result code
+ * @param object_id, Object id
+ * @param object_id, encoder cap information structure
+ *
+ * @return Bios parser result code
+ *
  */
 static enum bp_result bios_parser_get_encoder_cap_info(
 	struct dc_bios *dcb,
@@ -1495,12 +1489,17 @@ static enum bp_result bios_parser_get_encoder_cap_info(
 }
 
 /**
- * get_encoder_cap_record - Get encoder cap record for the object
+ * get_encoder_cap_record
  *
- * @bp:      pointer to the BIOS parser
- * @object:  ATOM object
- * return:   atom encoder cap record
- * note:     search all records to find the ATOM_ENCODER_CAP_RECORD_V2 record
+ * @brief
+ *  Get encoder cap record for the object
+ *
+ * @param object, ATOM object
+ *
+ * @return atom encoder cap record
+ *
+ * @note
+ *  search all records to find the ATOM_ENCODER_CAP_RECORD_V2 record
  */
 static ATOM_ENCODER_CAP_RECORD_V2 *get_encoder_cap_record(
 	struct bios_parser *bp,
@@ -1553,13 +1552,12 @@ static uint32_t get_ss_entry_number_from_ss_info_tbl(
 	uint32_t id);
 
 /**
- * bios_parser_get_ss_entry_number
+ * BiosParserObject::GetNumberofSpreadSpectrumEntry
  * Get Number of SpreadSpectrum Entry from the ASIC_InternalSS_Info table from
  * the VBIOS that match the SSid (to be converted from signal)
  *
- * @dcb:    pointer to the DC BIOS
- * @signal: ASSignalType to be converted to SSid
- * return: number of SS Entry that match the signal
+ * @param[in] signal, ASSignalType to be converted to SSid
+ * @return number of SS Entry that match the signal
  */
 static uint32_t bios_parser_get_ss_entry_number(
 	struct dc_bios *dcb,
@@ -1609,10 +1607,10 @@ static uint32_t bios_parser_get_ss_entry_number(
  * get_ss_entry_number_from_ss_info_tbl
  * Get Number of spread spectrum entry from the SS_Info table from the VBIOS.
  *
- * @bp:  pointer to the BIOS parser
- * @id:  spread spectrum id
- * return: number of SS Entry that match the id
- * note: There can only be one entry for each id for SS_Info Table
+ * @note There can only be one entry for each id for SS_Info Table
+ *
+ * @param [in] id, spread spectrum id
+ * @return number of SS Entry that match the id
  */
 static uint32_t get_ss_entry_number_from_ss_info_tbl(
 	struct bios_parser *bp,
@@ -1680,9 +1678,8 @@ static uint32_t get_ss_entry_number_from_ss_info_tbl(
  * There can not be more than 1 entry for  ASIC_InternalSS_Info Ver 2.1 or
  * SS_Info.
  *
- * @bp:    pointer to the BIOS parser
- * @id:    spread sprectrum info index
- * return: Bios parser result code
+ * @param id, spread sprectrum info index
+ * @return Bios parser result code
  */
 static uint32_t get_ss_entry_number(struct bios_parser *bp, uint32_t id)
 {
@@ -1698,9 +1695,8 @@ static uint32_t get_ss_entry_number(struct bios_parser *bp, uint32_t id)
  * Ver 2.1 from the VBIOS
  * There will not be multiple entry for Ver 2.1
  *
- * @bp:    pointer to the BIOS parser
- * @id:    spread sprectrum info index
- * return: number of SS Entry that match the id
+ * @param id, spread sprectrum info index
+ * @return number of SS Entry that match the id
  */
 static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_v2_1(
 	struct bios_parser *bp,
@@ -1714,10 +1710,8 @@ static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_v2_1(
 	if (!DATA_TABLES(ASIC_InternalSS_Info))
 		return 0;
 
-	header_include = ((ATOM_ASIC_INTERNAL_SS_INFO_V2 *) bios_get_image(
-				&bp->base,
-				DATA_TABLES(ASIC_InternalSS_Info),
-				struct_size(header_include, asSpreadSpectrum, 1)));
+	header_include = GET_IMAGE(ATOM_ASIC_INTERNAL_SS_INFO_V2,
+			DATA_TABLES(ASIC_InternalSS_Info));
 
 	size = (le16_to_cpu(header_include->sHeader.usStructureSize)
 			- sizeof(ATOM_COMMON_TABLE_HEADER))
@@ -1732,13 +1726,12 @@ static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_v2_1(
 	return 0;
 }
 /**
- * get_ss_entry_number_from_internal_ss_info_tbl_V3_1
+ * get_ss_entry_number_from_internal_ss_info_table_V3_1
  * Get Number of SpreadSpectrum Entry from the ASIC_InternalSS_Info table of
  * the VBIOS that matches id
  *
- * @bp:    pointer to the BIOS parser
- * @id:    spread sprectrum id
- * return: number of SS Entry that match the id
+ * @param[in]  id, spread sprectrum id
+ * @return number of SS Entry that match the id
  */
 static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_V3_1(
 	struct bios_parser *bp,
@@ -1753,9 +1746,8 @@ static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_V3_1(
 	if (!DATA_TABLES(ASIC_InternalSS_Info))
 		return number;
 
-	header_include = ((ATOM_ASIC_INTERNAL_SS_INFO_V3 *) bios_get_image(&bp->base,
-				DATA_TABLES(ASIC_InternalSS_Info),
-				struct_size(header_include, asSpreadSpectrum, 1)));
+	header_include = GET_IMAGE(ATOM_ASIC_INTERNAL_SS_INFO_V3,
+			DATA_TABLES(ASIC_InternalSS_Info));
 	size = (le16_to_cpu(header_include->sHeader.usStructureSize) -
 			sizeof(ATOM_COMMON_TABLE_HEADER)) /
 					sizeof(ATOM_ASIC_SS_ASSIGNMENT_V3);
@@ -1774,11 +1766,10 @@ static uint32_t get_ss_entry_number_from_internal_ss_info_tbl_V3_1(
  * bios_parser_get_gpio_pin_info
  * Get GpioPin information of input gpio id
  *
- * @dcb:     pointer to the DC BIOS
- * @gpio_id: GPIO ID
- * @info:    GpioPin information structure
- * return:   Bios parser result code
- * note:
+ * @param gpio_id, GPIO ID
+ * @param info, GpioPin information structure
+ * @return Bios parser result code
+ * @note
  *  to get the GPIO PIN INFO, we need:
  *  1. get the GPIO_ID from other object table, see GetHPDInfo()
  *  2. in DATA_TABLE.GPIO_Pin_LUT, search all records, to get the registerA
@@ -1797,13 +1788,11 @@ static enum bp_result bios_parser_get_gpio_pin_info(
 	if (!DATA_TABLES(GPIO_Pin_LUT))
 		return BP_RESULT_BADBIOSTABLE;
 
-	header = ((ATOM_GPIO_PIN_LUT *) bios_get_image(&bp->base,
-				DATA_TABLES(GPIO_Pin_LUT),
-				struct_size(header, asGPIO_Pin, 1)));
+	header = GET_IMAGE(ATOM_GPIO_PIN_LUT, DATA_TABLES(GPIO_Pin_LUT));
 	if (!header)
 		return BP_RESULT_BADBIOSTABLE;
 
-	if (sizeof(ATOM_COMMON_TABLE_HEADER) + struct_size(header, asGPIO_Pin, 1)
+	if (sizeof(ATOM_COMMON_TABLE_HEADER) + sizeof(ATOM_GPIO_PIN_LUT)
 			> le16_to_cpu(header->sHeader.usStructureSize))
 		return BP_RESULT_BADBIOSTABLE;
 
@@ -1988,8 +1977,7 @@ static ATOM_OBJECT *get_bios_object(struct bios_parser *bp,
 
 	offset += bp->object_info_tbl_offset;
 
-	tbl = ((ATOM_OBJECT_TABLE *) bios_get_image(&bp->base, offset,
-				struct_size(tbl, asObjects, 1)));
+	tbl = GET_IMAGE(ATOM_OBJECT_TABLE, offset);
 	if (!tbl)
 		return NULL;
 
@@ -2208,10 +2196,13 @@ static uint32_t get_support_mask_for_device_id(struct device_id device_id)
 }
 
 /**
- * bios_parser_set_scratch_critical_state - update critical state
- *                                          bit in VBIOS scratch register
- * @dcb:    pointer to the DC BIOS
- * @state:  set or reset state
+ * bios_parser_set_scratch_critical_state
+ *
+ * @brief
+ *  update critical state bit in VBIOS scratch register
+ *
+ * @param
+ *  bool - to set or reset state
  */
 static void bios_parser_set_scratch_critical_state(
 	struct dc_bios *dcb,
@@ -2230,7 +2221,7 @@ static void bios_parser_set_scratch_critical_state(
  * bios_parser *bp - [in]BIOS parser handler to get master data table
  * integrated_info *info - [out] store and output integrated info
  *
- * return:
+ * @return
  * enum bp_result - BP_RESULT_OK if information is available,
  *                  BP_RESULT_BADBIOSTABLE otherwise.
  */
@@ -2380,7 +2371,7 @@ static enum bp_result get_integrated_info_v8(
  * bios_parser *bp - [in]BIOS parser handler to get master data table
  * integrated_info *info - [out] store and output integrated info
  *
- * return:
+ * @return
  * enum bp_result - BP_RESULT_OK if information is available,
  *                  BP_RESULT_BADBIOSTABLE otherwise.
  */
@@ -2517,7 +2508,7 @@ static enum bp_result get_integrated_info_v9(
  * bios_parser *bp - [in]BIOS parser handler to get master data table
  * integrated_info *info - [out] store and output integrated info
  *
- * return:
+ * @return
  * enum bp_result - BP_RESULT_OK if information is available,
  *                  BP_RESULT_BADBIOSTABLE otherwise.
  */
@@ -2593,7 +2584,7 @@ static struct integrated_info *bios_parser_create_integrated_info(
 	return NULL;
 }
 
-static enum bp_result update_slot_layout_info(
+enum bp_result update_slot_layout_info(
 	struct dc_bios *dcb,
 	unsigned int i,
 	struct slot_layout_info *slot_layout_info,
@@ -2611,7 +2602,8 @@ static enum bp_result update_slot_layout_info(
 
 	for (;;) {
 
-		record_header = GET_IMAGE(ATOM_COMMON_RECORD_HEADER, record_offset);
+		record_header = (ATOM_COMMON_RECORD_HEADER *)
+			GET_IMAGE(ATOM_COMMON_RECORD_HEADER, record_offset);
 		if (record_header == NULL) {
 			result = BP_RESULT_BADBIOSTABLE;
 			break;
@@ -2625,7 +2617,7 @@ static enum bp_result update_slot_layout_info(
 
 		if (record_header->ucRecordType ==
 			ATOM_BRACKET_LAYOUT_RECORD_TYPE &&
-			struct_size(record, asConnInfo, 1)
+			sizeof(ATOM_BRACKET_LAYOUT_RECORD)
 			<= record_header->ucRecordSize) {
 			record = (ATOM_BRACKET_LAYOUT_RECORD *)
 				(record_header);
@@ -2696,7 +2688,7 @@ static enum bp_result update_slot_layout_info(
 }
 
 
-static enum bp_result get_bracket_layout_record(
+enum bp_result get_bracket_layout_record(
 	struct dc_bios *dcb,
 	unsigned int bracket_layout_id,
 	struct slot_layout_info *slot_layout_info)
@@ -2719,9 +2711,8 @@ static enum bp_result get_bracket_layout_record(
 
 	genericTableOffset = bp->object_info_tbl_offset +
 		bp->object_info_tbl.v1_3->usMiscObjectTableOffset;
-	object_table = ((ATOM_OBJECT_TABLE *) bios_get_image(&bp->base,
-				genericTableOffset,
-				struct_size(object_table, asObjects, 1)));
+	object_table = (ATOM_OBJECT_TABLE *)
+		GET_IMAGE(ATOM_OBJECT_TABLE, genericTableOffset);
 	if (!object_table)
 		return BP_RESULT_FAILURE;
 

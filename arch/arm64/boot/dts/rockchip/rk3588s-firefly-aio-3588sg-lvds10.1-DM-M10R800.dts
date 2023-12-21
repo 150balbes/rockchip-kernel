@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2022 T-chip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "rk3588s-firefly-aio-3588sg.dtsi"
+#include "rk3588s-firefly-aio-3588sg-cam-8ms1m.dtsi"
+#include "rk3588s-firefly-aio-3588sg-lvds10.1-DM-M10R800.dtsi"
+//#include "rk3588s-firefly-aio-3588sg-lvds21.5-WG21520376811FA-LP2.dtsi"
+//#include "rk3588s-firefly-aio-3588sg-edp-NV156FHM-T06.dtsi"
+#include "rk3588s-firefly-aio-3588sg-bp.dtsi"
+#include "rk3588s-firefly-aio-3588sg-cam-dcphy-8ms1m.dtsi"
+
+/ {
+	model = "Firefly AIO-3588SG LVDS(Linux)";
+	compatible = "rockchip,rk3588s-firefly-aio-3588sg", "rockchip,rk3588";
+};

@@ -9,9 +9,6 @@ panfrost-y := \
 	panfrost_gpu.o \
 	panfrost_job.o \
 	panfrost_mmu.o \
-	panfrost_perfcnt.o \
-	panfrost_dump.o
-
-panfrost-$(CONFIG_DEBUG_FS) += panfrost_debugfs.o
+	panfrost_perfcnt.o
 
 obj-$(CONFIG_DRM_PANFROST) += panfrost.o

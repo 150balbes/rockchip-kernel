@@ -7,6 +7,8 @@
  */
 
 #include <linux/tcp.h>
+#include <linux/slab.h>
+#include <linux/random.h>
 #include <linux/siphash.h>
 #include <linux/kernel.h>
 #include <linux/export.h>
@@ -14,7 +16,7 @@
 #include <net/tcp.h>
 #include <net/route.h>
 
-static siphash_aligned_key_t syncookie_secret[2];
+static siphash_key_t syncookie_secret[2] __read_mostly;
 
 #define COOKIEBITS 24	/* Upper bits store count */
 #define COOKIEMASK (((__u32)1 << COOKIEBITS) - 1)
@@ -273,7 +275,7 @@ bool cookie_ecn_ok(const struct tcp_options_received *tcp_opt,
 	if (!ecn_ok)
 		return false;
 
-	if (READ_ONCE(net->ipv4.sysctl_tcp_ecn))
+	if (net->ipv4.sysctl_tcp_ecn)
 		return true;
 
 	return dst_feature(dst, RTAX_FEATURE_ECN);
@@ -288,11 +290,12 @@ struct request_sock *cookie_tcp_reqsk_alloc(const struct request_sock_ops *ops,
 	struct tcp_request_sock *treq;
 	struct request_sock *req;
 
+#ifdef CONFIG_MPTCP
 	if (sk_is_mptcp(sk))
-		req = mptcp_subflow_reqsk_alloc(ops, sk, false);
-	else
-		req = inet_reqsk_alloc(ops, sk, false);
+		ops = &mptcp_subflow_request_sock_ops;
+#endif
 
+	req = inet_reqsk_alloc(ops, sk, false);
 	if (!req)
 		return NULL;
 
@@ -418,8 +421,8 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	 * no easy way to do this.
 	 */
 	flowi4_init_output(&fl4, ireq->ir_iif, ireq->ir_mark,
-			   ip_sock_rt_tos(sk), ip_sock_rt_scope(sk),
-			   IPPROTO_TCP, inet_sk_flowi_flags(sk),
+			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE, IPPROTO_TCP,
+			   inet_sk_flowi_flags(sk),
 			   opt->srr ? opt->faddr : ireq->ir_rmt_addr,
 			   ireq->ir_loc_addr, th->source, th->dest, sk->sk_uid);
 	security_req_classify_flow(req, flowi4_to_flowi_common(&fl4));

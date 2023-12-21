@@ -23,8 +23,6 @@
 #define DEFAULT_THERMAL_GOVERNOR       "user_space"
 #elif defined(CONFIG_THERMAL_DEFAULT_GOV_POWER_ALLOCATOR)
 #define DEFAULT_THERMAL_GOVERNOR       "power_allocator"
-#elif defined(CONFIG_THERMAL_DEFAULT_GOV_BANG_BANG)
-#define DEFAULT_THERMAL_GOVERNOR       "bang_bang"
 #endif
 
 /* Initial state of a cooling device during binding */
@@ -54,10 +52,6 @@ int for_each_thermal_cooling_device(int (*cb)(struct thermal_cooling_device *,
 int for_each_thermal_governor(int (*cb)(struct thermal_governor *, void *),
 			      void *thermal_governor);
 
-int __for_each_thermal_trip(struct thermal_zone_device *,
-			    int (*cb)(struct thermal_trip *, void *),
-			    void *);
-
 struct thermal_zone_device *thermal_zone_get_by_id(int id);
 
 struct thermal_attr {
@@ -71,8 +65,25 @@ static inline bool cdev_is_power_actor(struct thermal_cooling_device *cdev)
 		cdev->ops->power2state;
 }
 
-void thermal_cdev_update(struct thermal_cooling_device *);
-void __thermal_cdev_update(struct thermal_cooling_device *cdev);
+int power_actor_get_max_power(struct thermal_cooling_device *cdev,
+			      u32 *max_power);
+int power_actor_get_min_power(struct thermal_cooling_device *cdev,
+			      u32 *min_power);
+int power_actor_set_power(struct thermal_cooling_device *cdev,
+			  struct thermal_instance *ti, u32 power);
+/**
+ * struct thermal_trip - representation of a point in temperature domain
+ * @np: pointer to struct device_node that this trip point was created from
+ * @temperature: temperature value in miliCelsius
+ * @hysteresis: relative hysteresis in miliCelsius
+ * @type: trip point type
+ */
+struct thermal_trip {
+	struct device_node *np;
+	int temperature;
+	int hysteresis;
+	enum thermal_trip_type type;
+};
 
 int get_tz_trend(struct thermal_zone_device *tz, int trip);
 
@@ -103,7 +114,6 @@ struct thermal_instance {
 	struct list_head tz_node; /* node in tz->thermal_instances */
 	struct list_head cdev_node; /* node in cdev->thermal_instances */
 	unsigned int weight; /* The weight of the cooling device */
-	bool upper_no_limit;
 };
 
 #define to_thermal_zone(_dev) \
@@ -114,23 +124,21 @@ struct thermal_instance {
 
 int thermal_register_governor(struct thermal_governor *);
 void thermal_unregister_governor(struct thermal_governor *);
+void thermal_zone_device_rebind_exception(struct thermal_zone_device *,
+					  const char *, size_t);
+void thermal_zone_device_unbind_exception(struct thermal_zone_device *,
+					  const char *, size_t);
 int thermal_zone_device_set_policy(struct thermal_zone_device *, char *);
 int thermal_build_list_of_policies(char *buf);
-void __thermal_zone_device_update(struct thermal_zone_device *tz,
-				  enum thermal_notify_event event);
 
 /* Helpers */
-void __thermal_zone_set_trips(struct thermal_zone_device *tz);
-int __thermal_zone_get_trip(struct thermal_zone_device *tz, int trip_id,
-			    struct thermal_trip *trip);
-int __thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp);
+void thermal_zone_set_trips(struct thermal_zone_device *tz);
 
 /* sysfs I/F */
 int thermal_zone_create_device_groups(struct thermal_zone_device *, int);
 void thermal_zone_destroy_device_groups(struct thermal_zone_device *);
 void thermal_cooling_device_setup_sysfs(struct thermal_cooling_device *);
 void thermal_cooling_device_destroy_sysfs(struct thermal_cooling_device *cdev);
-void thermal_cooling_device_stats_reinit(struct thermal_cooling_device *cdev);
 /* used only at binding time */
 ssize_t trip_point_show(struct device *, struct device_attribute *, char *);
 ssize_t weight_show(struct device *, struct device_attribute *, char *);
@@ -147,6 +155,28 @@ thermal_cooling_device_stats_update(struct thermal_cooling_device *cdev,
 #endif /* CONFIG_THERMAL_STATISTICS */
 
 /* device tree support */
-int thermal_zone_device_is_enabled(struct thermal_zone_device *tz);
+#ifdef CONFIG_THERMAL_OF
+int of_parse_thermal_zones(void);
+int of_thermal_get_ntrips(struct thermal_zone_device *);
+bool of_thermal_is_trip_valid(struct thermal_zone_device *, int);
+const struct thermal_trip *
+of_thermal_get_trip_points(struct thermal_zone_device *);
+#else
+static inline int of_parse_thermal_zones(void) { return 0; }
+static inline int of_thermal_get_ntrips(struct thermal_zone_device *tz)
+{
+	return 0;
+}
+static inline bool of_thermal_is_trip_valid(struct thermal_zone_device *tz,
+					    int trip)
+{
+	return false;
+}
+static inline const struct thermal_trip *
+of_thermal_get_trip_points(struct thermal_zone_device *tz)
+{
+	return NULL;
+}
+#endif
 
 #endif /* __THERMAL_CORE_H__ */

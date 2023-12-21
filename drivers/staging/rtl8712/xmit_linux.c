@@ -62,20 +62,21 @@ sint r8712_endofpktfile(struct pkt_file *pfile)
 	return (pfile->pkt_len == 0);
 }
 
+
 void r8712_set_qos(struct pkt_file *ppktfile, struct pkt_attrib *pattrib)
 {
 	struct ethhdr etherhdr;
 	struct iphdr ip_hdr;
-	u16 user_priority = 0;
+	u16 UserPriority = 0;
 
 	_r8712_open_pktfile(ppktfile->pkt, ppktfile);
 	_r8712_pktfile_read(ppktfile, (unsigned char *)&etherhdr, ETH_HLEN);
 
-	/* get user_priority from IP hdr*/
+	/* get UserPriority from IP hdr*/
 	if (pattrib->ether_type == 0x0800) {
 		_r8712_pktfile_read(ppktfile, (u8 *)&ip_hdr, sizeof(ip_hdr));
-		/*user_priority = (ntohs(ip_hdr.tos) >> 5) & 0x3 ;*/
-		user_priority = ip_hdr.tos >> 5;
+		/*UserPriority = (ntohs(ip_hdr.tos) >> 5) & 0x3 ;*/
+		UserPriority = ip_hdr.tos >> 5;
 	} else {
 		/* "When priority processing of data frames is supported,
 		 * a STA's SME should send EAPOL-Key frames at the highest
@@ -83,9 +84,9 @@ void r8712_set_qos(struct pkt_file *ppktfile, struct pkt_attrib *pattrib)
 		 */
 
 		if (pattrib->ether_type == 0x888e)
-			user_priority = 7;
+			UserPriority = 7;
 	}
-	pattrib->priority = user_priority;
+	pattrib->priority = UserPriority;
 	pattrib->hdrlen = WLAN_HDR_A3_QOS_LEN;
 	pattrib->subtype = WIFI_QOS_DATA_TYPE;
 }
@@ -95,12 +96,18 @@ void r8712_SetFilter(struct work_struct *work)
 	struct _adapter *adapter = container_of(work, struct _adapter,
 						wk_filter_rx_ff0);
 	u8  oldvalue = 0x00, newvalue = 0x00;
+	unsigned long irqL;
 
 	oldvalue = r8712_read8(adapter, 0x117);
 	newvalue = oldvalue & 0xfe;
 	r8712_write8(adapter, 0x117, newvalue);
 
-	wait_for_completion(&adapter->rx_filter_ready);
+	spin_lock_irqsave(&adapter->lock_rx_ff0_filter, irqL);
+	adapter->blnEnableRxFF0Filter = 1;
+	spin_unlock_irqrestore(&adapter->lock_rx_ff0_filter, irqL);
+	do {
+		msleep(100);
+	} while (adapter->blnEnableRxFF0Filter == 1);
 	r8712_write8(adapter, 0x117, oldvalue);
 }
 
@@ -140,7 +147,7 @@ void r8712_xmit_complete(struct _adapter *padapter, struct xmit_frame *pxframe)
 	pxframe->pkt = NULL;
 }
 
-netdev_tx_t r8712_xmit_entry(_pkt *pkt, struct  net_device *netdev)
+int r8712_xmit_entry(_pkt *pkt, struct  net_device *netdev)
 {
 	struct xmit_frame *xmitframe = NULL;
 	struct _adapter *adapter = netdev_priv(netdev);
@@ -165,11 +172,11 @@ netdev_tx_t r8712_xmit_entry(_pkt *pkt, struct  net_device *netdev)
 	}
 	xmitpriv->tx_pkts++;
 	xmitpriv->tx_bytes += xmitframe->attrib.last_txcmdsz;
-	return NETDEV_TX_OK;
+	return 0;
 _xmit_entry_drop:
 	if (xmitframe)
 		r8712_free_xmitframe(xmitpriv, xmitframe);
 	xmitpriv->tx_drop++;
 	dev_kfree_skb_any(pkt);
-	return NETDEV_TX_OK;
+	return 0;
 }

@@ -5,18 +5,18 @@
 # prioritized according to the default priority specified at the port.
 # rx_octets_prio_* counters are used to verify the prioritization.
 #
-# +----------------------------------+
-# | H1                               |
-# |    + $h1                         |
-# |    | 192.0.2.1/28                |
-# +----|-----------------------------+
+# +-----------------------+
+# | H1                    |
+# |    + $h1              |
+# |    | 192.0.2.1/28     |
+# +----|------------------+
 #      |
-# +----|-----------------------------+
-# | SW |                             |
-# |    + $swp1                       |
-# |      192.0.2.2/28                |
-# |      dcb app default-prio <prio> |
-# +----------------------------------+
+# +----|------------------+
+# | SW |                  |
+# |    + $swp1            |
+# |      192.0.2.2/28     |
+# |      APP=<prio>,1,0   |
+# +-----------------------+
 
 ALL_TESTS="
 	ping_ipv4
@@ -28,6 +28,42 @@ lib_dir=$(dirname $0)/../../../net/forwarding
 NUM_NETIFS=2
 : ${HIT_TIMEOUT:=1000} # ms
 source $lib_dir/lib.sh
+
+declare -a APP
+
+defprio_install()
+{
+	local dev=$1; shift
+	local prio=$1; shift
+	local app="app=$prio,1,0"
+
+	lldptool -T -i $dev -V APP $app >/dev/null
+	lldpad_app_wait_set $dev
+	APP[$prio]=$app
+}
+
+defprio_uninstall()
+{
+	local dev=$1; shift
+	local prio=$1; shift
+	local app=${APP[$prio]}
+
+	lldptool -T -i $dev -V APP -d $app >/dev/null
+	lldpad_app_wait_del
+	unset APP[$prio]
+}
+
+defprio_flush()
+{
+	local dev=$1; shift
+	local prio
+
+	if ((${#APP[@]})); then
+		lldptool -T -i $dev -V APP -d ${APP[@]} >/dev/null
+	fi
+	lldpad_app_wait_del
+	APP=()
+}
 
 h1_create()
 {
@@ -47,7 +83,7 @@ switch_create()
 
 switch_destroy()
 {
-	dcb app flush dev $swp1 default-prio
+	defprio_flush $swp1
 	ip addr del dev $swp1 192.0.2.2/28
 	ip link set dev $swp1 down
 }
@@ -88,7 +124,7 @@ __test_defprio()
 
 	RET=0
 
-	dcb app add dev $swp1 default-prio $prio_install
+	defprio_install $swp1 $prio_install
 
 	local t0=$(ethtool_stats_get $swp1 rx_frames_prio_$prio_observe)
 	mausezahn -q $h1 -d 100m -c 10 -t arp reply
@@ -98,7 +134,7 @@ __test_defprio()
 	check_err $? "Default priority $prio_install/$prio_observe: Expected to capture 10 packets, got $((t1 - t0))."
 	log_test "Default priority $prio_install/$prio_observe"
 
-	dcb app del dev $swp1 default-prio $prio_install
+	defprio_uninstall $swp1 $prio_install
 }
 
 test_defprio()
@@ -109,7 +145,7 @@ test_defprio()
 		__test_defprio $prio $prio
 	done
 
-	dcb app add dev $swp1 default-prio 3
+	defprio_install $swp1 3
 	__test_defprio 0 3
 	__test_defprio 1 3
 	__test_defprio 2 3
@@ -117,7 +153,7 @@ test_defprio()
 	__test_defprio 5 5
 	__test_defprio 6 6
 	__test_defprio 7 7
-	dcb app del dev $swp1 default-prio 3
+	defprio_uninstall $swp1 3
 }
 
 trap cleanup EXIT

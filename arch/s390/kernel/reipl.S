@@ -19,7 +19,7 @@
 # r2 = Function to be called after store status
 # r3 = Parameter for function
 #
-SYM_CODE_START(store_status)
+ENTRY(store_status)
 	/* Save register one and load save area base */
 	stg	%r1,__LC_SAVE_AREA_RESTART
 	/* General purpose registers */
@@ -61,7 +61,7 @@ SYM_CODE_START(store_status)
 	stpx	0(%r1)
 	/* Clock comparator - seven bytes */
 	lghi	%r1,__LC_CLOCK_COMP_SAVE_AREA
-	larl	%r4,clkcmp
+	larl	%r4,.Lclkcmp
 	stckc	0(%r4)
 	mvc	1(7,%r1),1(%r4)
 	/* Program status word */
@@ -73,9 +73,9 @@ SYM_CODE_START(store_status)
 	lgr	%r9,%r2
 	lgr	%r2,%r3
 	BR_EX	%r9
-SYM_CODE_END(store_status)
+ENDPROC(store_status)
 
 	.section .bss
-	.balign	8
-SYM_DATA_LOCAL(clkcmp,	.quad 0x0000000000000000)
+	.align	8
+.Lclkcmp:	.quad	0x0000000000000000
 	.previous

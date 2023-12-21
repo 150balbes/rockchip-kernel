@@ -32,8 +32,8 @@ static const struct mlxsw_afk_element_info mlxsw_afk_element_infos[] = {
 	MLXSW_AFK_ELEMENT_INFO_U32(IP_TTL_, 0x18, 0, 8),
 	MLXSW_AFK_ELEMENT_INFO_U32(IP_ECN, 0x18, 9, 2),
 	MLXSW_AFK_ELEMENT_INFO_U32(IP_DSCP, 0x18, 11, 6),
-	MLXSW_AFK_ELEMENT_INFO_U32(VIRT_ROUTER_MSB, 0x18, 17, 3),
-	MLXSW_AFK_ELEMENT_INFO_U32(VIRT_ROUTER_LSB, 0x18, 20, 8),
+	MLXSW_AFK_ELEMENT_INFO_U32(VIRT_ROUTER_8_10, 0x18, 17, 3),
+	MLXSW_AFK_ELEMENT_INFO_U32(VIRT_ROUTER_0_7, 0x18, 20, 8),
 	MLXSW_AFK_ELEMENT_INFO_BUF(SRC_IP_96_127, 0x20, 4),
 	MLXSW_AFK_ELEMENT_INFO_BUF(SRC_IP_64_95, 0x24, 4),
 	MLXSW_AFK_ELEMENT_INFO_BUF(SRC_IP_32_63, 0x28, 4),
@@ -42,7 +42,6 @@ static const struct mlxsw_afk_element_info mlxsw_afk_element_infos[] = {
 	MLXSW_AFK_ELEMENT_INFO_BUF(DST_IP_64_95, 0x34, 4),
 	MLXSW_AFK_ELEMENT_INFO_BUF(DST_IP_32_63, 0x38, 4),
 	MLXSW_AFK_ELEMENT_INFO_BUF(DST_IP_0_31, 0x3C, 4),
-	MLXSW_AFK_ELEMENT_INFO_U32(FDB_MISS, 0x40, 0, 1),
 };
 
 struct mlxsw_afk {
@@ -134,8 +133,10 @@ mlxsw_afk_key_info_find(struct mlxsw_afk *mlxsw_afk,
 }
 
 struct mlxsw_afk_picker {
-	DECLARE_BITMAP(element, MLXSW_AFK_ELEMENT_MAX);
-	unsigned int total;
+	struct {
+		DECLARE_BITMAP(element, MLXSW_AFK_ELEMENT_MAX);
+		unsigned int total;
+	} hits[0];
 };
 
 static void mlxsw_afk_picker_count_hits(struct mlxsw_afk *mlxsw_afk,
@@ -153,8 +154,8 @@ static void mlxsw_afk_picker_count_hits(struct mlxsw_afk *mlxsw_afk,
 
 			elinst = &block->instances[j];
 			if (elinst->element == element) {
-				__set_bit(element, picker[i].element);
-				picker[i].total++;
+				__set_bit(element, picker->hits[i].element);
+				picker->hits[i].total++;
 			}
 		}
 	}
@@ -168,13 +169,13 @@ static void mlxsw_afk_picker_subtract_hits(struct mlxsw_afk *mlxsw_afk,
 	int i;
 	int j;
 
-	memcpy(&hits_element, &picker[block_index].element,
+	memcpy(&hits_element, &picker->hits[block_index].element,
 	       sizeof(hits_element));
 
 	for (i = 0; i < mlxsw_afk->blocks_count; i++) {
 		for_each_set_bit(j, hits_element, MLXSW_AFK_ELEMENT_MAX) {
-			if (__test_and_clear_bit(j, picker[i].element))
-				picker[i].total--;
+			if (__test_and_clear_bit(j, picker->hits[i].element))
+				picker->hits[i].total--;
 		}
 	}
 }
@@ -187,8 +188,8 @@ static int mlxsw_afk_picker_most_hits_get(struct mlxsw_afk *mlxsw_afk,
 	int i;
 
 	for (i = 0; i < mlxsw_afk->blocks_count; i++) {
-		if (picker[i].total > most_hits) {
-			most_hits = picker[i].total;
+		if (picker->hits[i].total > most_hits) {
+			most_hits = picker->hits[i].total;
 			most_index = i;
 		}
 	}
@@ -205,7 +206,7 @@ static int mlxsw_afk_picker_key_info_add(struct mlxsw_afk *mlxsw_afk,
 	if (key_info->blocks_count == mlxsw_afk->max_blocks)
 		return -EINVAL;
 
-	for_each_set_bit(element, picker[block_index].element,
+	for_each_set_bit(element, picker->hits[block_index].element,
 			 MLXSW_AFK_ELEMENT_MAX) {
 		key_info->element_to_block[element] = key_info->blocks_count;
 		mlxsw_afk_element_usage_add(&key_info->elusage, element);
@@ -223,9 +224,11 @@ static int mlxsw_afk_picker(struct mlxsw_afk *mlxsw_afk,
 {
 	struct mlxsw_afk_picker *picker;
 	enum mlxsw_afk_element element;
+	size_t alloc_size;
 	int err;
 
-	picker = kcalloc(mlxsw_afk->blocks_count, sizeof(*picker), GFP_KERNEL);
+	alloc_size = sizeof(picker->hits[0]) * mlxsw_afk->blocks_count;
+	picker = kzalloc(alloc_size, GFP_KERNEL);
 	if (!picker)
 		return -ENOMEM;
 

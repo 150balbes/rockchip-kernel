@@ -10,6 +10,7 @@
 
 #include <linux/key.h>
 #include <linux/errno.h>
+#include <linux/android_kabi.h>
 
 #ifdef CONFIG_KEYS
 
@@ -29,7 +30,6 @@ struct kernel_pkey_params;
  * clear the contents.
  */
 struct key_preparsed_payload {
-	const char	*orig_description; /* Actual or proposed description (maybe NULL) */
 	char		*description;	/* Proposed key description (or NULL) */
 	union key_payload payload;	/* Proposed payload */
 	const void	*data;		/* Raw data */
@@ -155,6 +155,9 @@ struct key_type {
 			   const void *in, void *out);
 	int (*asym_verify_signature)(struct kernel_pkey_params *params,
 				     const void *in, const void *in2);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 
 	/* internal fields */
 	struct list_head	link;		/* link in types list */

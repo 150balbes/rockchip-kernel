@@ -10,7 +10,7 @@ maintainers:
   - Oskar Andero <oskar.andero@gmail.com>
 
 description: |
-   Family of simple ADCs with a SPI interface.
+   Family of simple ADCs with an I2C inteface.
 
 properties:
   compatible:
@@ -32,6 +32,7 @@ properties:
   reg:
     maxItems: 1
 
+  spi-max-frequency: true
   spi-cpha: true
   spi-cpol: true
 
@@ -50,10 +51,7 @@ required:
   - reg
   - vref-supply
 
-allOf:
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

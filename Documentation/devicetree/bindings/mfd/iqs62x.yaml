@@ -93,7 +93,7 @@ examples:
     pwmleds {
             compatible = "pwm-leds";
 
-            led-1 {
+            panel {
                     pwms = <&iqs620a_pwm 0 1000000>;
                     max-brightness = <255>;
             };

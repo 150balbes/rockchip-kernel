@@ -129,6 +129,7 @@ static int exynos_audss_clk_probe(struct platform_device *pdev)
 	struct clk *pll_ref, *pll_in, *cdclk, *sclk_audio, *sclk_pcm_in;
 	const struct exynos_audss_clk_drvdata *variant;
 	struct clk_hw **clk_table;
+	struct resource *res;
 	struct device *dev = &pdev->dev;
 	int i, ret = 0;
 
@@ -136,7 +137,8 @@ static int exynos_audss_clk_probe(struct platform_device *pdev)
 	if (!variant)
 		return -EINVAL;
 
-	reg_base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	reg_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(reg_base))
 		return PTR_ERR(reg_base);
 
@@ -268,7 +270,7 @@ unregister:
 	return ret;
 }
 
-static void exynos_audss_clk_remove(struct platform_device *pdev)
+static int exynos_audss_clk_remove(struct platform_device *pdev)
 {
 	of_clk_del_provider(pdev->dev.of_node);
 
@@ -277,6 +279,8 @@ static void exynos_audss_clk_remove(struct platform_device *pdev)
 
 	if (!IS_ERR(epll))
 		clk_disable_unprepare(epll);
+
+	return 0;
 }
 
 static const struct dev_pm_ops exynos_audss_clk_pm_ops = {
@@ -293,7 +297,7 @@ static struct platform_driver exynos_audss_clk_driver = {
 		.pm = &exynos_audss_clk_pm_ops,
 	},
 	.probe = exynos_audss_clk_probe,
-	.remove_new = exynos_audss_clk_remove,
+	.remove = exynos_audss_clk_remove,
 };
 
 module_platform_driver(exynos_audss_clk_driver);

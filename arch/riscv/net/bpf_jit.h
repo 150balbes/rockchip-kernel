@@ -69,10 +69,8 @@ struct rv_jit_context {
 	struct bpf_prog *prog;
 	u16 *insns;		/* RV insns */
 	int ninsns;
-	int prologue_len;
 	int epilogue_offset;
 	int *offset;		/* BPF to RV */
-	int nexentries;
 	unsigned long flags;
 	int stack_size;
 };
@@ -216,8 +214,8 @@ static inline int rv_offset(int insn, int off, struct rv_jit_context *ctx)
 	int from, to;
 
 	off++; /* BPF branch is from PC+1, RV is from PC */
-	from = (insn > 0) ? ctx->offset[insn - 1] : ctx->prologue_len;
-	to = (insn + off > 0) ? ctx->offset[insn + off - 1] : ctx->prologue_len;
+	from = (insn > 0) ? ctx->offset[insn - 1] : 0;
+	to = (insn + off > 0) ? ctx->offset[insn + off - 1] : 0;
 	return ninsns_rvoff(to - from);
 }
 
@@ -536,48 +534,6 @@ static inline u32 rv_amoadd_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
 	return rv_amo_insn(0, aq, rl, rs2, rs1, 2, rd, 0x2f);
 }
 
-static inline u32 rv_amoand_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0xc, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_amoor_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x8, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_amoxor_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x4, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_amoswap_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x1, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_lr_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x2, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_sc_w(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x3, aq, rl, rs2, rs1, 2, rd, 0x2f);
-}
-
-static inline u32 rv_fence(u8 pred, u8 succ)
-{
-	u16 imm11_0 = pred << 4 | succ;
-
-	return rv_i_insn(imm11_0, 0, 0, 0, 0xf);
-}
-
-static inline u32 rv_nop(void)
-{
-	return rv_i_insn(0, 0, 0, 0, 0x13);
-}
-
 /* RVC instrutions. */
 
 static inline u16 rvc_addi4spn(u8 rd, u32 imm10)
@@ -794,36 +750,6 @@ static inline u32 rv_sd(u8 rs1, u16 imm11_0, u8 rs2)
 static inline u32 rv_amoadd_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
 {
 	return rv_amo_insn(0, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_amoand_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0xc, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_amoor_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x8, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_amoxor_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x4, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_amoswap_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x1, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_lr_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x2, aq, rl, rs2, rs1, 3, rd, 0x2f);
-}
-
-static inline u32 rv_sc_d(u8 rd, u8 rs2, u8 rs1, u8 aq, u8 rl)
-{
-	return rv_amo_insn(0x3, aq, rl, rs2, rs1, 3, rd, 0x2f);
 }
 
 /* RV64-only RVC instructions. */

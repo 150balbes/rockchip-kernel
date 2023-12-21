@@ -54,22 +54,28 @@ struct drm_gem_object *qxl_gem_prime_import_sg_table(
 	return ERR_PTR(-ENOSYS);
 }
 
-int qxl_gem_prime_vmap(struct drm_gem_object *obj, struct iosys_map *map)
+void *qxl_gem_prime_vmap(struct drm_gem_object *obj)
 {
 	struct qxl_bo *bo = gem_to_qxl_bo(obj);
+	void *ptr;
 	int ret;
 
-	ret = qxl_bo_vmap_locked(bo, map);
+	ret = qxl_bo_kmap(bo, &ptr);
 	if (ret < 0)
-		return ret;
+		return ERR_PTR(ret);
 
-	return 0;
+	return ptr;
 }
 
-void qxl_gem_prime_vunmap(struct drm_gem_object *obj,
-			  struct iosys_map *map)
+void qxl_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr)
 {
 	struct qxl_bo *bo = gem_to_qxl_bo(obj);
 
-	qxl_bo_vunmap_locked(bo);
+	qxl_bo_kunmap(bo);
+}
+
+int qxl_gem_prime_mmap(struct drm_gem_object *obj,
+		       struct vm_area_struct *area)
+{
+	return -ENOSYS;
 }

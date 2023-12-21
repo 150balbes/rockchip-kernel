@@ -9,8 +9,8 @@
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
 #include <linux/module.h>
-#include <linux/sched/clock.h>
 #include <linux/slab.h>
+
 
 struct cpufreq_stats {
 	unsigned int total_trans;
@@ -30,7 +30,7 @@ struct cpufreq_stats {
 static void cpufreq_stats_update(struct cpufreq_stats *stats,
 				 unsigned long long time)
 {
-	unsigned long long cur_time = local_clock();
+	unsigned long long cur_time = get_jiffies_64();
 
 	stats->time_in_state[stats->last_index] += cur_time - time;
 	stats->last_time = cur_time;
@@ -42,7 +42,7 @@ static void cpufreq_stats_reset_table(struct cpufreq_stats *stats)
 
 	memset(stats->time_in_state, 0, count * sizeof(u64));
 	memset(stats->trans_table, 0, count * count * sizeof(int));
-	stats->last_time = local_clock();
+	stats->last_time = get_jiffies_64();
 	stats->total_trans = 0;
 
 	/* Adjust for the time elapsed since reset was requested */
@@ -82,18 +82,18 @@ static ssize_t show_time_in_state(struct cpufreq_policy *policy, char *buf)
 				 * before the reset_pending read above.
 				 */
 				smp_rmb();
-				time = local_clock() - READ_ONCE(stats->reset_time);
+				time = get_jiffies_64() - READ_ONCE(stats->reset_time);
 			} else {
 				time = 0;
 			}
 		} else {
 			time = stats->time_in_state[i];
 			if (i == stats->last_index)
-				time += local_clock() - stats->last_time;
+				time += get_jiffies_64() - stats->last_time;
 		}
 
 		len += sprintf(buf + len, "%u %llu\n", stats->freq_table[i],
-			       nsec_to_clock_t(time));
+			       jiffies_64_to_clock_t(time));
 	}
 	return len;
 }
@@ -109,7 +109,7 @@ static ssize_t store_reset(struct cpufreq_policy *policy, const char *buf,
 	 * Defer resetting of stats to cpufreq_stats_record_transition() to
 	 * avoid races.
 	 */
-	WRITE_ONCE(stats->reset_time, local_clock());
+	WRITE_ONCE(stats->reset_time, get_jiffies_64());
 	/*
 	 * The memory barrier below is to prevent the readers of reset_time from
 	 * seeing a stale or partially updated value.
@@ -128,23 +128,25 @@ static ssize_t show_trans_table(struct cpufreq_policy *policy, char *buf)
 	ssize_t len = 0;
 	int i, j, count;
 
-	len += sysfs_emit_at(buf, len, "   From  :    To\n");
-	len += sysfs_emit_at(buf, len, "         : ");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "   From  :    To\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "         : ");
 	for (i = 0; i < stats->state_num; i++) {
 		if (len >= PAGE_SIZE)
 			break;
-		len += sysfs_emit_at(buf, len, "%9u ", stats->freq_table[i]);
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%9u ",
+				stats->freq_table[i]);
 	}
 	if (len >= PAGE_SIZE)
 		return PAGE_SIZE;
 
-	len += sysfs_emit_at(buf, len, "\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 
 	for (i = 0; i < stats->state_num; i++) {
 		if (len >= PAGE_SIZE)
 			break;
 
-		len += sysfs_emit_at(buf, len, "%9u: ", stats->freq_table[i]);
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%9u: ",
+				stats->freq_table[i]);
 
 		for (j = 0; j < stats->state_num; j++) {
 			if (len >= PAGE_SIZE)
@@ -155,11 +157,11 @@ static ssize_t show_trans_table(struct cpufreq_policy *policy, char *buf)
 			else
 				count = stats->trans_table[i * stats->max_state + j];
 
-			len += sysfs_emit_at(buf, len, "%9u ", count);
+			len += scnprintf(buf + len, PAGE_SIZE - len, "%9u ", count);
 		}
 		if (len >= PAGE_SIZE)
 			break;
-		len += sysfs_emit_at(buf, len, "\n");
+		len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 	}
 
 	if (len >= PAGE_SIZE) {
@@ -209,7 +211,7 @@ void cpufreq_stats_free_table(struct cpufreq_policy *policy)
 
 void cpufreq_stats_create_table(struct cpufreq_policy *policy)
 {
-	unsigned int i = 0, count;
+	unsigned int i = 0, count = 0, ret = -ENOMEM;
 	struct cpufreq_stats *stats;
 	unsigned int alloc_size;
 	struct cpufreq_frequency_table *pos;
@@ -247,11 +249,12 @@ void cpufreq_stats_create_table(struct cpufreq_policy *policy)
 			stats->freq_table[i++] = pos->frequency;
 
 	stats->state_num = i;
-	stats->last_time = local_clock();
+	stats->last_time = get_jiffies_64();
 	stats->last_index = freq_table_get_index(stats, policy->cur);
 
 	policy->stats = stats;
-	if (!sysfs_create_group(&policy->kobj, &stats_attr_group))
+	ret = sysfs_create_group(&policy->kobj, &stats_attr_group);
+	if (!ret)
 		return;
 
 	/* We failed, release resources */

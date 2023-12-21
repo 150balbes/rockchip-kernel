@@ -38,7 +38,6 @@
 #include <linux/uaccess.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
-#include <linux/seq_file.h>
 #include "internal.h"
 
 struct ramfs_mount_opts {
@@ -54,6 +53,13 @@ struct ramfs_fs_info {
 static const struct super_operations ramfs_ops;
 static const struct inode_operations ramfs_dir_inode_operations;
 
+static const struct address_space_operations ramfs_aops = {
+	.readpage	= simple_readpage,
+	.write_begin	= simple_write_begin,
+	.write_end	= simple_write_end,
+	.set_page_dirty	= __set_page_dirty_no_writeback,
+};
+
 struct inode *ramfs_get_inode(struct super_block *sb,
 				const struct inode *dir, umode_t mode, dev_t dev)
 {
@@ -61,8 +67,8 @@ struct inode *ramfs_get_inode(struct super_block *sb,
 
 	if (inode) {
 		inode->i_ino = get_next_ino();
-		inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
-		inode->i_mapping->a_ops = &ram_aops;
+		inode_init_owner(inode, dir, mode);
+		inode->i_mapping->a_ops = &ramfs_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER);
 		mapping_set_unevictable(inode->i_mapping);
 		inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
@@ -95,8 +101,7 @@ struct inode *ramfs_get_inode(struct super_block *sb,
  */
 /* SMP-safe */
 static int
-ramfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
-	    struct dentry *dentry, umode_t mode, dev_t dev)
+ramfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
 	struct inode * inode = ramfs_get_inode(dir->i_sb, dir, mode, dev);
 	int error = -ENOSPC;
@@ -110,23 +115,20 @@ ramfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	return error;
 }
 
-static int ramfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-		       struct dentry *dentry, umode_t mode)
+static int ramfs_mkdir(struct inode * dir, struct dentry * dentry, umode_t mode)
 {
-	int retval = ramfs_mknod(&nop_mnt_idmap, dir, dentry, mode | S_IFDIR, 0);
+	int retval = ramfs_mknod(dir, dentry, mode | S_IFDIR, 0);
 	if (!retval)
 		inc_nlink(dir);
 	return retval;
 }
 
-static int ramfs_create(struct mnt_idmap *idmap, struct inode *dir,
-			struct dentry *dentry, umode_t mode, bool excl)
+static int ramfs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
 {
-	return ramfs_mknod(&nop_mnt_idmap, dir, dentry, mode | S_IFREG, 0);
+	return ramfs_mknod(dir, dentry, mode | S_IFREG, 0);
 }
 
-static int ramfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, const char *symname)
+static int ramfs_symlink(struct inode * dir, struct dentry *dentry, const char * symname)
 {
 	struct inode *inode;
 	int error = -ENOSPC;
@@ -145,18 +147,6 @@ static int ramfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	return error;
 }
 
-static int ramfs_tmpfile(struct mnt_idmap *idmap,
-			 struct inode *dir, struct file *file, umode_t mode)
-{
-	struct inode *inode;
-
-	inode = ramfs_get_inode(dir->i_sb, dir, mode, 0);
-	if (!inode)
-		return -ENOSPC;
-	d_tmpfile(file, inode);
-	return finish_open_simple(file, 0);
-}
-
 static const struct inode_operations ramfs_dir_inode_operations = {
 	.create		= ramfs_create,
 	.lookup		= simple_lookup,
@@ -167,7 +157,6 @@ static const struct inode_operations ramfs_dir_inode_operations = {
 	.rmdir		= simple_rmdir,
 	.mknod		= ramfs_mknod,
 	.rename		= simple_rename,
-	.tmpfile	= ramfs_tmpfile,
 };
 
 /*
@@ -204,20 +193,17 @@ static int ramfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	int opt;
 
 	opt = fs_parse(fc, ramfs_fs_parameters, param, &result);
-	if (opt == -ENOPARAM) {
-		opt = vfs_parse_fs_param_source(fc, param);
-		if (opt != -ENOPARAM)
-			return opt;
+	if (opt < 0) {
 		/*
 		 * We might like to report bad mount options here;
 		 * but traditionally ramfs has ignored all mount options,
 		 * and as it is used as a !CONFIG_SHMEM simple substitute
 		 * for tmpfs, better continue to ignore other mount options.
 		 */
-		return 0;
-	}
-	if (opt < 0)
+		if (opt == -ENOPARAM)
+			opt = 0;
 		return opt;
+	}
 
 	switch (opt) {
 	case Opt_mode:
@@ -278,7 +264,7 @@ int ramfs_init_fs_context(struct fs_context *fc)
 	return 0;
 }
 
-void ramfs_kill_sb(struct super_block *sb)
+static void ramfs_kill_sb(struct super_block *sb)
 {
 	kfree(sb->s_fs_info);
 	kill_litter_super(sb);

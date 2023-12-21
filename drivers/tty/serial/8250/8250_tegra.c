@@ -11,7 +11,6 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
 
@@ -27,17 +26,16 @@ static void tegra_uart_handle_break(struct uart_port *p)
 {
 	unsigned int status, tmout = 10000;
 
-	while (1) {
+	do {
 		status = p->serial_in(p, UART_LSR);
-		if (!(status & (UART_LSR_FIFOE | UART_LSR_BRK_ERROR_BITS)))
+		if (status & (UART_LSR_FIFOE | UART_LSR_BRK_ERROR_BITS))
+			status = p->serial_in(p, UART_RX);
+		else
 			break;
-
-		p->serial_in(p, UART_RX);
-
 		if (--tmout == 0)
 			break;
 		udelay(1);
-	}
+	} while (1);
 }
 
 static int tegra_uart_probe(struct platform_device *pdev)
@@ -113,15 +111,13 @@ static int tegra_uart_probe(struct platform_device *pdev)
 
 	ret = serial8250_register_8250_port(&port8250);
 	if (ret < 0)
-		goto err_ctrl_assert;
+		goto err_clkdisable;
 
 	platform_set_drvdata(pdev, uart);
 	uart->line = ret;
 
 	return 0;
 
-err_ctrl_assert:
-	reset_control_assert(uart->rst);
 err_clkdisable:
 	clk_disable_unprepare(uart->clk);
 
@@ -178,7 +174,7 @@ static const struct of_device_id tegra_uart_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, tegra_uart_of_match);
 
-static const struct acpi_device_id tegra_uart_acpi_match[] __maybe_unused = {
+static const struct acpi_device_id tegra_uart_acpi_match[] = {
 	{ "NVDA0100", 0 },
 	{ },
 };

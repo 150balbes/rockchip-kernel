@@ -39,15 +39,13 @@
  */
 #include <linux/bug.h>
 #include <linux/rbtree.h>
-#include <linux/limits.h>
+#include <linux/kernel.h>
 #include <linux/mm_types.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #ifdef CONFIG_DRM_DEBUG_MM
 #include <linux/stackdepot.h>
 #endif
-#include <linux/types.h>
-
 #include <drm/drm_print.h>
 
 #ifdef CONFIG_DRM_DEBUG_MM

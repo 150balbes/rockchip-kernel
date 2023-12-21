@@ -8,8 +8,7 @@
 					 SECCOMP_FILTER_FLAG_LOG | \
 					 SECCOMP_FILTER_FLAG_SPEC_ALLOW | \
 					 SECCOMP_FILTER_FLAG_NEW_LISTENER | \
-					 SECCOMP_FILTER_FLAG_TSYNC_ESRCH | \
-					 SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV)
+					 SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
 /* sizeof() the first published struct seccomp_notif_addfd */
 #define SECCOMP_NOTIFY_ADDFD_SIZE_VER0 24
@@ -27,7 +26,6 @@ struct seccomp_filter;
  *
  * @mode:  indicates one of the valid values above for controlled
  *         system calls available to a process.
- * @filter_count: number of seccomp filters
  * @filter: must always point to a valid seccomp-filter or NULL as it is
  *          accessed without locking during system call entry.
  *
@@ -44,7 +42,7 @@ struct seccomp {
 extern int __secure_computing(const struct seccomp_data *sd);
 static inline int secure_computing(void)
 {
-	if (unlikely(test_syscall_work(SECCOMP)))
+	if (unlikely(test_thread_flag(TIF_SECCOMP)))
 		return  __secure_computing(NULL);
 	return 0;
 }
@@ -123,11 +121,4 @@ static inline long seccomp_get_metadata(struct task_struct *task,
 	return -EINVAL;
 }
 #endif /* CONFIG_SECCOMP_FILTER && CONFIG_CHECKPOINT_RESTORE */
-
-#ifdef CONFIG_SECCOMP_CACHE_DEBUG
-struct seq_file;
-
-int proc_pid_seccomp_cache(struct seq_file *m, struct pid_namespace *ns,
-			   struct pid *pid, struct task_struct *task);
-#endif
 #endif /* _LINUX_SECCOMP_H */

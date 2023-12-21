@@ -8,9 +8,6 @@
 
 #include <linux/brcmphy.h>
 #include <linux/phy.h>
-#include <linux/interrupt.h>
-
-struct ethtool_wolinfo;
 
 /* 28nm only register definitions */
 #define MISC_ADDR(base, channel)	base, channel
@@ -43,11 +40,6 @@ static inline int bcm_phy_write_exp_sel(struct phy_device *phydev,
 	return bcm_phy_write_exp(phydev, reg | MII_BCM54XX_EXP_SEL_ER, val);
 }
 
-static inline int bcm_phy_read_exp_sel(struct phy_device *phydev, u16 reg)
-{
-	return bcm_phy_read_exp(phydev, reg | MII_BCM54XX_EXP_SEL_ER);
-}
-
 int bcm54xx_auxctl_write(struct phy_device *phydev, u16 regnum, u16 val);
 int bcm54xx_auxctl_read(struct phy_device *phydev, u16 regnum);
 
@@ -71,7 +63,6 @@ int bcm_phy_modify_rdb(struct phy_device *phydev, u16 rdb, u16 mask,
 
 int bcm_phy_ack_intr(struct phy_device *phydev);
 int bcm_phy_config_intr(struct phy_device *phydev);
-irqreturn_t bcm_phy_handle_interrupt(struct phy_device *phydev);
 
 int bcm_phy_enable_apd(struct phy_device *phydev, bool dll_pwr_down);
 
@@ -94,31 +85,5 @@ int bcm_phy_cable_test_get_status_rdb(struct phy_device *phydev,
 int bcm_phy_cable_test_start_rdb(struct phy_device *phydev);
 int bcm_phy_cable_test_start(struct phy_device *phydev);
 int bcm_phy_cable_test_get_status(struct phy_device *phydev, bool *finished);
-
-#if IS_ENABLED(CONFIG_BCM_NET_PHYPTP)
-struct bcm_ptp_private *bcm_ptp_probe(struct phy_device *phydev);
-void bcm_ptp_config_init(struct phy_device *phydev);
-void bcm_ptp_stop(struct bcm_ptp_private *priv);
-#else
-static inline struct bcm_ptp_private *bcm_ptp_probe(struct phy_device *phydev)
-{
-	return NULL;
-}
-
-static inline void bcm_ptp_config_init(struct phy_device *phydev)
-{
-}
-
-static inline void bcm_ptp_stop(struct bcm_ptp_private *priv)
-{
-}
-#endif
-
-int bcm_phy_set_wol(struct phy_device *phydev, struct ethtool_wolinfo *wol);
-void bcm_phy_get_wol(struct phy_device *phydev, struct ethtool_wolinfo *wol);
-irqreturn_t bcm_phy_wol_isr(int irq, void *dev_id);
-
-int bcm_phy_led_brightness_set(struct phy_device *phydev,
-			       u8 index, enum led_brightness value);
 
 #endif /* _LINUX_BCM_PHY_LIB_H */

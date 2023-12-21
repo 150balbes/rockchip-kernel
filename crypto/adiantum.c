@@ -308,9 +308,10 @@ static int adiantum_finish(struct skcipher_request *req)
 	return 0;
 }
 
-static void adiantum_streamcipher_done(void *data, int err)
+static void adiantum_streamcipher_done(struct crypto_async_request *areq,
+				       int err)
 {
-	struct skcipher_request *req = data;
+	struct skcipher_request *req = areq->data;
 
 	if (!err)
 		err = adiantum_finish(req);

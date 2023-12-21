@@ -442,14 +442,10 @@ static irqreturn_t sh_mobile_i2c_isr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void sh_mobile_i2c_cleanup_dma(struct sh_mobile_i2c_data *pd, bool terminate)
+static void sh_mobile_i2c_dma_unmap(struct sh_mobile_i2c_data *pd)
 {
 	struct dma_chan *chan = pd->dma_direction == DMA_FROM_DEVICE
 				? pd->dma_rx : pd->dma_tx;
-
-	/* only allowed from thread context! */
-	if (terminate)
-		dmaengine_terminate_sync(chan);
 
 	dma_unmap_single(chan->device->dev, sg_dma_address(&pd->sg),
 			 pd->msg->len, pd->dma_direction);
@@ -457,11 +453,23 @@ static void sh_mobile_i2c_cleanup_dma(struct sh_mobile_i2c_data *pd, bool termin
 	pd->dma_direction = DMA_NONE;
 }
 
+static void sh_mobile_i2c_cleanup_dma(struct sh_mobile_i2c_data *pd)
+{
+	if (pd->dma_direction == DMA_NONE)
+		return;
+	else if (pd->dma_direction == DMA_FROM_DEVICE)
+		dmaengine_terminate_all(pd->dma_rx);
+	else if (pd->dma_direction == DMA_TO_DEVICE)
+		dmaengine_terminate_all(pd->dma_tx);
+
+	sh_mobile_i2c_dma_unmap(pd);
+}
+
 static void sh_mobile_i2c_dma_callback(void *data)
 {
 	struct sh_mobile_i2c_data *pd = data;
 
-	sh_mobile_i2c_cleanup_dma(pd, false);
+	sh_mobile_i2c_dma_unmap(pd);
 	pd->pos = pd->msg->len;
 	pd->stop_after_dma = true;
 
@@ -541,7 +549,7 @@ static void sh_mobile_i2c_xfer_dma(struct sh_mobile_i2c_data *pd)
 					 DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!txdesc) {
 		dev_dbg(pd->dev, "dma prep slave sg failed, using PIO\n");
-		sh_mobile_i2c_cleanup_dma(pd, false);
+		sh_mobile_i2c_cleanup_dma(pd);
 		return;
 	}
 
@@ -551,7 +559,7 @@ static void sh_mobile_i2c_xfer_dma(struct sh_mobile_i2c_data *pd)
 	cookie = dmaengine_submit(txdesc);
 	if (dma_submit_error(cookie)) {
 		dev_dbg(pd->dev, "submitting dma failed, using PIO\n");
-		sh_mobile_i2c_cleanup_dma(pd, false);
+		sh_mobile_i2c_cleanup_dma(pd);
 		return;
 	}
 
@@ -690,7 +698,7 @@ static int sh_mobile_xfer(struct sh_mobile_i2c_data *pd,
 		if (!time_left) {
 			dev_err(pd->dev, "Transfer request timed out\n");
 			if (pd->dma_direction != DMA_NONE)
-				sh_mobile_i2c_cleanup_dma(pd, true);
+				sh_mobile_i2c_cleanup_dma(pd);
 
 			err = -ETIMEDOUT;
 			break;
@@ -830,38 +838,20 @@ static void sh_mobile_i2c_release_dma(struct sh_mobile_i2c_data *pd)
 
 static int sh_mobile_i2c_hook_irqs(struct platform_device *dev, struct sh_mobile_i2c_data *pd)
 {
-	struct device_node *np = dev_of_node(&dev->dev);
+	struct resource *res;
+	resource_size_t n;
 	int k = 0, ret;
 
-	if (np) {
-		int irq;
-
-		while ((irq = platform_get_irq_optional(dev, k)) != -ENXIO) {
-			if (irq < 0)
-				return irq;
-			ret = devm_request_irq(&dev->dev, irq, sh_mobile_i2c_isr,
-					       0, dev_name(&dev->dev), pd);
+	while ((res = platform_get_resource(dev, IORESOURCE_IRQ, k))) {
+		for (n = res->start; n <= res->end; n++) {
+			ret = devm_request_irq(&dev->dev, n, sh_mobile_i2c_isr,
+					  0, dev_name(&dev->dev), pd);
 			if (ret) {
-				dev_err(&dev->dev, "cannot request IRQ %d\n", irq);
+				dev_err(&dev->dev, "cannot request IRQ %pa\n", &n);
 				return ret;
 			}
-			k++;
 		}
-	} else {
-		struct resource *res;
-		resource_size_t n;
-
-		while ((res = platform_get_resource(dev, IORESOURCE_IRQ, k))) {
-			for (n = res->start; n <= res->end; n++) {
-				ret = devm_request_irq(&dev->dev, n, sh_mobile_i2c_isr,
-						       0, dev_name(&dev->dev), pd);
-				if (ret) {
-					dev_err(&dev->dev, "cannot request IRQ %pa\n", &n);
-					return ret;
-				}
-			}
-			k++;
-		}
+		k++;
 	}
 
 	return k > 0 ? 0 : -ENOENT;
@@ -940,7 +930,7 @@ static int sh_mobile_i2c_probe(struct platform_device *dev)
 	adap->nr = dev->id;
 	adap->dev.of_node = dev->dev.of_node;
 
-	strscpy(adap->name, dev->name, sizeof(adap->name));
+	strlcpy(adap->name, dev->name, sizeof(adap->name));
 
 	spin_lock_init(&pd->lock);
 	init_waitqueue_head(&pd->wait);
@@ -956,50 +946,23 @@ static int sh_mobile_i2c_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void sh_mobile_i2c_remove(struct platform_device *dev)
+static int sh_mobile_i2c_remove(struct platform_device *dev)
 {
 	struct sh_mobile_i2c_data *pd = platform_get_drvdata(dev);
 
 	i2c_del_adapter(&pd->adap);
 	sh_mobile_i2c_release_dma(pd);
 	pm_runtime_disable(&dev->dev);
-}
-
-#ifdef CONFIG_PM_SLEEP
-static int sh_mobile_i2c_suspend(struct device *dev)
-{
-	struct sh_mobile_i2c_data *pd = dev_get_drvdata(dev);
-
-	i2c_mark_adapter_suspended(&pd->adap);
 	return 0;
 }
-
-static int sh_mobile_i2c_resume(struct device *dev)
-{
-	struct sh_mobile_i2c_data *pd = dev_get_drvdata(dev);
-
-	i2c_mark_adapter_resumed(&pd->adap);
-	return 0;
-}
-
-static const struct dev_pm_ops sh_mobile_i2c_pm_ops = {
-	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(sh_mobile_i2c_suspend,
-				      sh_mobile_i2c_resume)
-};
-
-#define DEV_PM_OPS (&sh_mobile_i2c_pm_ops)
-#else
-#define DEV_PM_OPS NULL
-#endif /* CONFIG_PM_SLEEP */
 
 static struct platform_driver sh_mobile_i2c_driver = {
 	.driver		= {
 		.name		= "i2c-sh_mobile",
 		.of_match_table = sh_mobile_i2c_dt_ids,
-		.pm	= DEV_PM_OPS,
 	},
 	.probe		= sh_mobile_i2c_probe,
-	.remove_new	= sh_mobile_i2c_remove,
+	.remove		= sh_mobile_i2c_remove,
 };
 
 static int __init sh_mobile_i2c_adap_init(void)

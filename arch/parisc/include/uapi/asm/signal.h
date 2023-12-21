@@ -67,7 +67,7 @@ struct siginfo;
 typedef struct sigaltstack {
 	void __user *ss_sp;
 	int ss_flags;
-	__kernel_size_t ss_size;
+	size_t ss_size;
 } stack_t;
 
 #endif /* !__ASSEMBLY */

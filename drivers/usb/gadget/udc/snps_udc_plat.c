@@ -158,7 +158,7 @@ static int udc_plat_probe(struct platform_device *pdev)
 	}
 
 	/* Register for extcon if supported */
-	if (of_property_present(dev->of_node, "extcon")) {
+	if (of_get_property(dev->of_node, "extcon", NULL)) {
 		udc->edev = extcon_get_edev_by_phandle(dev, 0);
 		if (IS_ERR(udc->edev)) {
 			if (PTR_ERR(udc->edev) == -EPROBE_DEFER)
@@ -225,7 +225,7 @@ exit_phy:
 	return ret;
 }
 
-static void udc_plat_remove(struct platform_device *pdev)
+static int udc_plat_remove(struct platform_device *pdev)
 {
 	struct udc *dev;
 
@@ -234,7 +234,7 @@ static void udc_plat_remove(struct platform_device *pdev)
 	usb_del_gadget_udc(&dev->gadget);
 	/* gadget driver must not be registered */
 	if (WARN_ON(dev->driver))
-		return;
+		return 0;
 
 	/* dma pool cleanup */
 	free_dma_pools(dev);
@@ -243,11 +243,18 @@ static void udc_plat_remove(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, NULL);
 
+	if (dev->drd_wq) {
+		flush_workqueue(dev->drd_wq);
+		destroy_workqueue(dev->drd_wq);
+	}
+
 	phy_power_off(dev->udc_phy);
 	phy_exit(dev->udc_phy);
 	extcon_unregister_notifier(dev->edev, EXTCON_USB, &dev->nb);
 
 	dev_info(&pdev->dev, "Synopsys UDC platform driver removed\n");
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -313,7 +320,7 @@ MODULE_DEVICE_TABLE(of, of_udc_match);
 
 static struct platform_driver udc_plat_driver = {
 	.probe		= udc_plat_probe,
-	.remove_new	= udc_plat_remove,
+	.remove		= udc_plat_remove,
 	.driver		= {
 		.name	= "snps-udc-plat",
 		.of_match_table = of_match_ptr(of_udc_match),

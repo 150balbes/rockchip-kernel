@@ -5,12 +5,11 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
-#include <linux/blk-mq.h>
+#include <linux/blkdev.h>
 #include <scsi/scsi.h>
 #include <linux/atomic.h>
-#include <linux/sbitmap.h>
+#include <linux/android_kabi.h>
 
-struct bsg_device;
 struct device;
 struct request_queue;
 struct scsi_cmnd;
@@ -100,10 +99,6 @@ struct scsi_vpd {
 	unsigned char	data[];
 };
 
-enum scsi_vpd_parameters {
-	SCSI_VPD_HEADER_SIZE = 4,
-};
-
 struct scsi_device {
 	struct Scsi_Host *host;
 	struct request_queue *request_queue;
@@ -112,7 +107,7 @@ struct scsi_device {
 	struct list_head    siblings;   /* list of all devices on this host */
 	struct list_head    same_target_siblings; /* just the devices sharing same target id */
 
-	struct sbitmap budget_map;
+	atomic_t device_busy;		/* commands actually active on LLDD */
 	atomic_t device_blocked;	/* Device returned QUEUE_FULL. */
 
 	atomic_t restarts;
@@ -145,16 +140,13 @@ struct scsi_device {
 	const char * model;		/* ... after scan; point to static string */
 	const char * rev;		/* ... "nullnullnullnull" before scan */
 
-#define SCSI_DEFAULT_VPD_LEN	255	/* default SCSI VPD page size (max) */
+#define SCSI_VPD_PG_LEN                255
 	struct scsi_vpd __rcu *vpd_pg0;
 	struct scsi_vpd __rcu *vpd_pg83;
 	struct scsi_vpd __rcu *vpd_pg80;
 	struct scsi_vpd __rcu *vpd_pg89;
-	struct scsi_vpd __rcu *vpd_pgb0;
-	struct scsi_vpd __rcu *vpd_pgb1;
-	struct scsi_vpd __rcu *vpd_pgb2;
-
-	struct scsi_target      *sdev_target;
+	unsigned char current_tag;	/* current tag */
+	struct scsi_target      *sdev_target;   /* used only for single_lun */
 
 	blist_flags_t		sdev_bflags; /* black/white flags as also found in
 				 * scsi_devinfo.[hc]. For now used only to
@@ -185,7 +177,6 @@ struct scsi_device {
 	unsigned no_report_opcodes:1;	/* no REPORT SUPPORTED OPERATION CODES */
 	unsigned no_write_same:1;	/* no WRITE SAME command */
 	unsigned use_16_for_rw:1; /* Use read/write(16) over read/write(10) */
-	unsigned use_16_for_sync:1;	/* Use sync (16) over sync (10) */
 	unsigned skip_ms_page_8:1;	/* do not use MODE SENSE page 0x08 */
 	unsigned skip_ms_page_3f:1;	/* do not use MODE SENSE page 0x3f */
 	unsigned skip_vpd_pages:1;	/* do not read VPD pages */
@@ -214,14 +205,7 @@ struct scsi_device {
 	unsigned unmap_limit_for_ws:1;	/* Use the UNMAP limit for WRITE SAME */
 	unsigned rpm_autosuspend:1;	/* Enable runtime autosuspend at device
 					 * creation time */
-	unsigned ignore_media_change:1; /* Ignore MEDIA CHANGE on resume */
-	unsigned silence_suspend:1;	/* Do not print runtime PM related messages */
-	unsigned no_vpd_size:1;		/* No VPD size reported in header */
 
-	unsigned cdl_supported:1;	/* Command duration limits supported */
-	unsigned cdl_enable:1;		/* Enable/disable Command duration limits */
-
-	unsigned int queue_stopped;	/* request queue is quiesced */
 	bool offline_already;		/* Device offline message logged */
 
 	atomic_t disk_events_disable_depth; /* disable depth for disk events */
@@ -237,11 +221,11 @@ struct scsi_device {
 	atomic_t iorequest_cnt;
 	atomic_t iodone_cnt;
 	atomic_t ioerr_cnt;
-	atomic_t iotmo_cnt;
 
 	struct device		sdev_gendev,
 				sdev_dev;
 
+	struct execute_work	ew; /* used to get process context on put */
 	struct work_struct	requeue_work;
 
 	struct scsi_device_handler *handler;
@@ -250,14 +234,16 @@ struct scsi_device {
 	size_t			dma_drain_len;
 	void			*dma_drain_buf;
 
-	unsigned int		sg_timeout;
-	unsigned int		sg_reserved_size;
-
-	struct bsg_device	*bsg_dev;
 	unsigned char		access_state;
 	struct mutex		state_mutex;
 	enum scsi_device_state sdev_state;
 	struct task_struct	*quiesced_by;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+
 	unsigned long		sdev_data[];
 } __attribute__((aligned(sizeof(unsigned long))));
 
@@ -285,15 +271,13 @@ sdev_prefix_printk(const char *, const struct scsi_device *, const char *,
 __printf(3, 4) void
 scmd_printk(const char *, const struct scsi_cmnd *, const char *, ...);
 
-#define scmd_dbg(scmd, fmt, a...)					\
-	do {								\
-		struct request *__rq = scsi_cmd_to_rq((scmd));		\
-									\
-		if (__rq->q->disk)					\
-			sdev_dbg((scmd)->device, "[%s] " fmt,		\
-				 __rq->q->disk->disk_name, ##a);	\
-		else							\
-			sdev_dbg((scmd)->device, fmt, ##a);		\
+#define scmd_dbg(scmd, fmt, a...)					   \
+	do {								   \
+		if ((scmd)->request->rq_disk)				   \
+			sdev_dbg((scmd)->device, "[%s] " fmt,		   \
+				 (scmd)->request->rq_disk->disk_name, ##a);\
+		else							   \
+			sdev_dbg((scmd)->device, fmt, ##a);		   \
 	} while (0)
 
 enum scsi_target_state {
@@ -367,8 +351,6 @@ extern int scsi_register_device_handler(struct scsi_device_handler *scsi_dh);
 extern void scsi_remove_device(struct scsi_device *);
 extern int scsi_unregister_device_handler(struct scsi_device_handler *scsi_dh);
 void scsi_attach_vpd(struct scsi_device *sdev);
-void scsi_cdl_check(struct scsi_device *sdev);
-int scsi_cdl_enable(struct scsi_device *sdev, bool enable);
 
 extern struct scsi_device *scsi_device_from_queue(struct request_queue *q);
 extern int __must_check scsi_device_get(struct scsi_device *);
@@ -426,21 +408,21 @@ extern int scsi_track_queue_full(struct scsi_device *, int);
 
 extern int scsi_set_medium_removal(struct scsi_device *, char);
 
-int scsi_mode_sense(struct scsi_device *sdev, int dbd, int modepage,
-		    int subpage, unsigned char *buffer, int len, int timeout,
-		    int retries, struct scsi_mode_data *data,
-		    struct scsi_sense_hdr *);
+extern int scsi_mode_sense(struct scsi_device *sdev, int dbd, int modepage,
+			   unsigned char *buffer, int len, int timeout,
+			   int retries, struct scsi_mode_data *data,
+			   struct scsi_sense_hdr *);
 extern int scsi_mode_select(struct scsi_device *sdev, int pf, int sp,
-			    unsigned char *buffer, int len, int timeout,
-			    int retries, struct scsi_mode_data *data,
+			    int modepage, unsigned char *buffer, int len,
+			    int timeout, int retries,
+			    struct scsi_mode_data *data,
 			    struct scsi_sense_hdr *);
 extern int scsi_test_unit_ready(struct scsi_device *sdev, int timeout,
 				int retries, struct scsi_sense_hdr *sshdr);
 extern int scsi_get_vpd_page(struct scsi_device *, u8 page, unsigned char *buf,
 			     int buf_len);
-int scsi_report_opcode(struct scsi_device *sdev, unsigned char *buffer,
-		       unsigned int len, unsigned char opcode,
-		       unsigned short sa);
+extern int scsi_report_opcode(struct scsi_device *sdev, unsigned char *buffer,
+			      unsigned int len, unsigned char opcode);
 extern int scsi_device_set_state(struct scsi_device *sdev,
 				 enum scsi_device_state state);
 extern struct scsi_event *sdev_evt_alloc(enum scsi_device_event evt_type,
@@ -456,29 +438,36 @@ extern void scsi_scan_target(struct device *parent, unsigned int channel,
 			     unsigned int id, u64 lun,
 			     enum scsi_scan_mode rescan);
 extern void scsi_target_reap(struct scsi_target *);
-void scsi_block_targets(struct Scsi_Host *shost, struct device *dev);
+extern void scsi_target_block(struct device *);
 extern void scsi_target_unblock(struct device *, enum scsi_device_state);
 extern void scsi_remove_target(struct device *);
 extern const char *scsi_device_state_name(enum scsi_device_state);
 extern int scsi_is_sdev_device(const struct device *);
 extern int scsi_is_target_device(const struct device *);
 extern void scsi_sanitize_inquiry_string(unsigned char *s, int len);
-
-/* Optional arguments to scsi_execute_cmd */
-struct scsi_exec_args {
-	unsigned char *sense;		/* sense buffer */
-	unsigned int sense_len;		/* sense buffer len */
-	struct scsi_sense_hdr *sshdr;	/* decoded sense header */
-	blk_mq_req_flags_t req_flags;	/* BLK_MQ_REQ flags */
-	int scmd_flags;			/* SCMD flags */
-	int *resid;			/* residual length */
-};
-
-int scsi_execute_cmd(struct scsi_device *sdev, const unsigned char *cmd,
-		     blk_opf_t opf, void *buffer, unsigned int bufflen,
-		     int timeout, int retries,
-		     const struct scsi_exec_args *args);
-
+extern int __scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
+			int data_direction, void *buffer, unsigned bufflen,
+			unsigned char *sense, struct scsi_sense_hdr *sshdr,
+			int timeout, int retries, u64 flags,
+			req_flags_t rq_flags, int *resid);
+/* Make sure any sense buffer is the correct size. */
+#define scsi_execute(sdev, cmd, data_direction, buffer, bufflen, sense,	\
+		     sshdr, timeout, retries, flags, rq_flags, resid)	\
+({									\
+	BUILD_BUG_ON((sense) != NULL &&					\
+		     sizeof(sense) != SCSI_SENSE_BUFFERSIZE);		\
+	__scsi_execute(sdev, cmd, data_direction, buffer, bufflen,	\
+		       sense, sshdr, timeout, retries, flags, rq_flags,	\
+		       resid);						\
+})
+static inline int scsi_execute_req(struct scsi_device *sdev,
+	const unsigned char *cmd, int data_direction, void *buffer,
+	unsigned bufflen, struct scsi_sense_hdr *sshdr, int timeout,
+	int retries, int *resid)
+{
+	return scsi_execute(sdev, cmd, data_direction, buffer,
+		bufflen, NULL, sshdr, timeout, retries,  0, 0, resid);
+}
 extern void sdev_disable_disk_events(struct scsi_device *sdev);
 extern void sdev_enable_disk_events(struct scsi_device *sdev);
 extern int scsi_vpd_lun_id(struct scsi_device *, char *, size_t);
@@ -606,11 +595,6 @@ static inline int scsi_device_supports_vpd(struct scsi_device *sdev)
 	if (sdev->scsi_level >= SCSI_SPC_2 && !sdev->skip_vpd_pages)
 		return 1;
 	return 0;
-}
-
-static inline int scsi_device_busy(struct scsi_device *sdev)
-{
-	return sbitmap_weight(&sdev->budget_map);
 }
 
 #define MODULE_ALIAS_SCSI_DEVICE(type) \

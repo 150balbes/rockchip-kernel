@@ -86,6 +86,7 @@ extern bool dump_sensor;
 
 int ov7660_probe(struct sd *sd);
 int ov7660_init(struct sd *sd);
+int ov7660_init(struct sd *sd);
 int ov7660_init_controls(struct sd *sd);
 int ov7660_start(struct sd *sd);
 int ov7660_stop(struct sd *sd);

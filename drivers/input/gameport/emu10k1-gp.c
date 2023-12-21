@@ -7,6 +7,9 @@
  * EMU10k1 - SB Live / Audigy - gameport driver for Linux
  */
 
+/*
+ */
+
 #include <asm/io.h>
 
 #include <linux/module.h>

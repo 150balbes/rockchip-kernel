@@ -40,7 +40,6 @@ properties:
 patternProperties:
   "^dai-link-[0-9]+$":
     type: object
-    additionalProperties: false
     description: |-
       dai-link child nodes:
         Container for dai-link level properties and the CODEC sub-nodes.
@@ -58,13 +57,12 @@ patternProperties:
           rate
 
       sound-dai:
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/phandle-array
         description: phandle of the CPU DAI
 
     patternProperties:
-      "^codec(-[0-9]+)?$":
+      "^codec-[0-9]+$":
         type: object
-        additionalProperties: false
         description: |-
           Codecs:
           dai-link representing backend links should have at least one subnode.
@@ -73,7 +71,7 @@ patternProperties:
 
         properties:
           sound-dai:
-            maxItems: 1
+            $ref: /schemas/types.yaml#/definitions/phandle-array
             description: phandle of the codec DAI
 
         required:
@@ -114,3 +112,4 @@ examples:
                 };
         };
     };
+

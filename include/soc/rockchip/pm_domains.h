@@ -1,25 +1,53 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright 2022, The Chromium OS Authors. All rights reserved.
- */
+#ifndef __SOC_ROCKCHIP_PM_DOMAINS_H
+#define __SOC_ROCKCHIP_PM_DOMAINS_H
 
-#ifndef __SOC_ROCKCHIP_PM_DOMAINS_H__
-#define __SOC_ROCKCHIP_PM_DOMAINS_H__
+#include <linux/errno.h>
 
-#ifdef CONFIG_ROCKCHIP_PM_DOMAINS
+struct device;
 
-int rockchip_pmu_block(void);
-void rockchip_pmu_unblock(void);
-
-#else /* CONFIG_ROCKCHIP_PM_DOMAINS */
-
-static inline int rockchip_pmu_block(void)
+#if IS_ENABLED(CONFIG_ROCKCHIP_PM_DOMAINS)
+int rockchip_pmu_pd_on(struct device *dev);
+int rockchip_pmu_pd_off(struct device *dev);
+bool rockchip_pmu_pd_is_on(struct device *dev);
+int rockchip_pmu_idle_request(struct device *dev, bool idle);
+int rockchip_save_qos(struct device *dev);
+int rockchip_restore_qos(struct device *dev);
+void rockchip_dump_pmu(void);
+#else
+static inline int rockchip_pmu_pd_on(struct device *dev)
 {
-	return 0;
+	return -ENOTSUPP;
 }
 
-static inline void rockchip_pmu_unblock(void) { }
+static inline int rockchip_pmu_pd_off(struct device *dev)
+{
+	return -ENOTSUPP;
+}
 
-#endif /* CONFIG_ROCKCHIP_PM_DOMAINS */
+static inline bool rockchip_pmu_pd_is_on(struct device *dev)
+{
+	return true;
+}
 
-#endif /* __SOC_ROCKCHIP_PM_DOMAINS_H__ */
+static inline int rockchip_pmu_idle_request(struct device *dev, bool idle)
+{
+	return -ENOTSUPP;
+}
+
+static inline int rockchip_save_qos(struct device *dev)
+{
+	return -ENOTSUPP;
+}
+
+static inline int rockchip_restore_qos(struct device *dev)
+{
+	return -ENOTSUPP;
+}
+
+static inline void rockchip_dump_pmu(void)
+{
+}
+#endif
+
+#endif

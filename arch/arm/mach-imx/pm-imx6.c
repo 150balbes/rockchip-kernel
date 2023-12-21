@@ -4,7 +4,6 @@
  * Copyright 2011 Linaro Ltd.
  */
 
-#include <linux/clk/imx.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -571,8 +570,6 @@ static int __init imx6q_suspend_init(const struct imx6_pm_socdata *socdata)
 		suspend_ocram_base + sizeof(*pm_info),
 		&imx6_suspend,
 		MX6Q_SUSPEND_OCRAM_SIZE - sizeof(*pm_info));
-
-	__arm_iomem_set_ro(suspend_ocram_base, MX6Q_SUSPEND_OCRAM_SIZE);
 
 	goto put_device;
 

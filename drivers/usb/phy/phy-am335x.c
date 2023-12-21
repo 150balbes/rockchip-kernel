@@ -82,11 +82,12 @@ static int am335x_phy_probe(struct platform_device *pdev)
 	return usb_add_phy_dev(&am_phy->usb_phy_gen.phy);
 }
 
-static void am335x_phy_remove(struct platform_device *pdev)
+static int am335x_phy_remove(struct platform_device *pdev)
 {
 	struct am335x_phy *am_phy = platform_get_drvdata(pdev);
 
 	usb_remove_phy(&am_phy->usb_phy_gen.phy);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -133,7 +134,7 @@ MODULE_DEVICE_TABLE(of, am335x_phy_ids);
 
 static struct platform_driver am335x_phy_driver = {
 	.probe          = am335x_phy_probe,
-	.remove_new     = am335x_phy_remove,
+	.remove         = am335x_phy_remove,
 	.driver         = {
 		.name   = "am335x-phy-driver",
 		.pm = &am335x_pm_ops,

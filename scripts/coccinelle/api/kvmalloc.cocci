@@ -79,7 +79,7 @@ position p : script:python() { relevant(p) };
   } else {
     ... when != krealloc(E, ...)
         when any
-*   \(kfree\|kfree_sensitive\)(E)
+*   \(kfree\|kzfree\)(E)
     ...
   }
 

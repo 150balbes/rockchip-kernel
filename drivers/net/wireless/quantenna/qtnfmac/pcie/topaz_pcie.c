@@ -255,9 +255,9 @@ topaz_skb2rbd_attach(struct qtnf_pcie_topaz_state *ts, u16 index, u32 wrap)
 
 	ts->base.rx_skb[index] = skb;
 
-	paddr = dma_map_single(&ts->base.pdev->dev, skb->data, SKB_BUF_SIZE,
-			       DMA_FROM_DEVICE);
-	if (dma_mapping_error(&ts->base.pdev->dev, paddr)) {
+	paddr = pci_map_single(ts->base.pdev, skb->data,
+			       SKB_BUF_SIZE, PCI_DMA_FROMDEVICE);
+	if (pci_dma_mapping_error(ts->base.pdev, paddr)) {
 		pr_err("skb mapping error: %pad\n", &paddr);
 		return -ENOMEM;
 	}
@@ -306,8 +306,8 @@ static void qtnf_topaz_free_xfer_buffers(struct qtnf_pcie_topaz_state *ts)
 			rxbd = &ts->rx_bd_vbase[i];
 			skb = priv->rx_skb[i];
 			paddr = QTN_HOST_ADDR(0x0, le32_to_cpu(rxbd->addr));
-			dma_unmap_single(&priv->pdev->dev, paddr,
-					 SKB_BUF_SIZE, DMA_FROM_DEVICE);
+			pci_unmap_single(priv->pdev, paddr, SKB_BUF_SIZE,
+					 PCI_DMA_FROMDEVICE);
 			dev_kfree_skb_any(skb);
 			priv->rx_skb[i] = NULL;
 			rxbd->addr = 0;
@@ -321,8 +321,8 @@ static void qtnf_topaz_free_xfer_buffers(struct qtnf_pcie_topaz_state *ts)
 			txbd = &ts->tx_bd_vbase[i];
 			skb = priv->tx_skb[i];
 			paddr = QTN_HOST_ADDR(0x0, le32_to_cpu(txbd->addr));
-			dma_unmap_single(&priv->pdev->dev, paddr,
-					 SKB_BUF_SIZE, DMA_TO_DEVICE);
+			pci_unmap_single(priv->pdev, paddr, SKB_BUF_SIZE,
+					 PCI_DMA_TODEVICE);
 			dev_kfree_skb_any(skb);
 			priv->tx_skb[i] = NULL;
 			txbd->addr = 0;
@@ -414,11 +414,11 @@ static void qtnf_topaz_data_tx_reclaim(struct qtnf_pcie_topaz_state *ts)
 		if (likely(skb)) {
 			txbd = &ts->tx_bd_vbase[i];
 			paddr = QTN_HOST_ADDR(0x0, le32_to_cpu(txbd->addr));
-			dma_unmap_single(&priv->pdev->dev, paddr, skb->len,
-					 DMA_TO_DEVICE);
+			pci_unmap_single(priv->pdev, paddr, skb->len,
+					 PCI_DMA_TODEVICE);
 
 			if (skb->dev) {
-				dev_sw_netstats_tx_add(skb->dev, 1, skb->len);
+				qtnf_update_tx_stats(skb->dev, skb);
 				if (unlikely(priv->tx_stopped)) {
 					qtnf_wake_all_queues(skb->dev);
 					priv->tx_stopped = 0;
@@ -522,9 +522,9 @@ static int qtnf_pcie_data_tx(struct qtnf_bus *bus, struct sk_buff *skb,
 	priv->tx_skb[i] = skb;
 	len = skb->len;
 
-	skb_paddr = dma_map_single(&priv->pdev->dev, skb->data, skb->len,
-				   DMA_TO_DEVICE);
-	if (dma_mapping_error(&priv->pdev->dev, skb_paddr)) {
+	skb_paddr = pci_map_single(priv->pdev, skb->data,
+				   skb->len, PCI_DMA_TODEVICE);
+	if (pci_dma_mapping_error(priv->pdev, skb_paddr)) {
 		ret = -ENOMEM;
 		goto tx_done;
 	}
@@ -653,8 +653,8 @@ static int qtnf_topaz_rx_poll(struct napi_struct *napi, int budget)
 
 		if (skb) {
 			skb_paddr = QTN_HOST_ADDR(0x0, le32_to_cpu(rxbd->addr));
-			dma_unmap_single(&priv->pdev->dev, skb_paddr,
-					 SKB_BUF_SIZE, DMA_FROM_DEVICE);
+			pci_unmap_single(priv->pdev, skb_paddr, SKB_BUF_SIZE,
+					 PCI_DMA_FROMDEVICE);
 		}
 
 		if (consume) {
@@ -662,7 +662,7 @@ static int qtnf_topaz_rx_poll(struct napi_struct *napi, int budget)
 			skb_put(skb, psize);
 			ndev = qtnf_classify_skb(bus, skb);
 			if (likely(ndev)) {
-				dev_sw_netstats_rx_add(ndev, skb->len);
+				qtnf_update_rx_stats(ndev, skb);
 				skb->protocol = eth_type_trans(skb, ndev);
 				netif_receive_skb(skb);
 			} else {
@@ -1159,8 +1159,8 @@ static int qtnf_pcie_topaz_probe(struct qtnf_bus *bus,
 	}
 
 	tasklet_setup(&ts->base.reclaim_tq, qtnf_reclaim_tasklet_fn);
-	netif_napi_add_weight(&bus->mux_dev, &bus->mux_napi,
-			      qtnf_topaz_rx_poll, 10);
+	netif_napi_add(&bus->mux_dev, &bus->mux_napi,
+		       qtnf_topaz_rx_poll, 10);
 
 	ipc_int.fn = qtnf_topaz_ipc_gen_ep_int;
 	ipc_int.arg = ts;

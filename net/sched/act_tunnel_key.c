@@ -16,16 +16,15 @@
 #include <net/pkt_sched.h>
 #include <net/dst.h>
 #include <net/pkt_cls.h>
-#include <net/tc_wrapper.h>
 
 #include <linux/tc_act/tc_tunnel_key.h>
 #include <net/tc_act/tc_tunnel_key.h>
 
+static unsigned int tunnel_key_net_id;
 static struct tc_action_ops act_tunnel_key_ops;
 
-TC_INDIRECT_SCOPE int tunnel_key_act(struct sk_buff *skb,
-				     const struct tc_action *a,
-				     struct tcf_result *res)
+static int tunnel_key_act(struct sk_buff *skb, const struct tc_action *a,
+			  struct tcf_result *res)
 {
 	struct tcf_tunnel_key *t = to_tunnel_key(a);
 	struct tcf_tunnel_key_params *params;
@@ -356,11 +355,11 @@ static void tunnel_key_release_params(struct tcf_tunnel_key_params *p)
 
 static int tunnel_key_init(struct net *net, struct nlattr *nla,
 			   struct nlattr *est, struct tc_action **a,
+			   int ovr, int bind, bool rtnl_held,
 			   struct tcf_proto *tp, u32 act_flags,
 			   struct netlink_ext_ack *extack)
 {
-	struct tc_action_net *tn = net_generic(net, act_tunnel_key_ops.net_id);
-	bool bind = act_flags & TCA_ACT_FLAGS_BIND;
+	struct tc_action_net *tn = net_generic(net, tunnel_key_net_id);
 	struct nlattr *tb[TCA_TUNNEL_KEY_MAX + 1];
 	struct tcf_tunnel_key_params *params_new;
 	struct metadata_dst *metadata = NULL;
@@ -419,9 +418,6 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 		if (tb[TCA_TUNNEL_KEY_NO_CSUM] &&
 		    nla_get_u8(tb[TCA_TUNNEL_KEY_NO_CSUM]))
 			flags &= ~TUNNEL_CSUM;
-
-		if (nla_get_flag(tb[TCA_TUNNEL_KEY_NO_FRAG]))
-			flags |= TUNNEL_DONT_FRAGMENT;
 
 		if (tb[TCA_TUNNEL_KEY_ENC_DST_PORT])
 			dst_port = nla_get_be16(tb[TCA_TUNNEL_KEY_ENC_DST_PORT]);
@@ -508,7 +504,7 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 		}
 
 		ret = ACT_P_CREATED;
-	} else if (!(act_flags & TCA_ACT_FLAGS_REPLACE)) {
+	} else if (!ovr) {
 		NL_SET_ERR_MSG(extack, "TC IDR already exists");
 		ret = -EEXIST;
 		goto release_tun_meta;
@@ -750,8 +746,6 @@ static int tunnel_key_dump(struct sk_buff *skb, struct tc_action *a,
 				   key->tp_dst)) ||
 		    nla_put_u8(skb, TCA_TUNNEL_KEY_NO_CSUM,
 			       !(key->tun_flags & TUNNEL_CSUM)) ||
-		    ((key->tun_flags & TUNNEL_DONT_FRAGMENT) &&
-		     nla_put_flag(skb, TCA_TUNNEL_KEY_NO_FRAG)) ||
 		    tunnel_key_opts_dump(skb, info))
 			goto nla_put_failure;
 
@@ -776,59 +770,21 @@ nla_put_failure:
 	return -1;
 }
 
-static void tcf_tunnel_encap_put_tunnel(void *priv)
+static int tunnel_key_walker(struct net *net, struct sk_buff *skb,
+			     struct netlink_callback *cb, int type,
+			     const struct tc_action_ops *ops,
+			     struct netlink_ext_ack *extack)
 {
-	struct ip_tunnel_info *tunnel = priv;
+	struct tc_action_net *tn = net_generic(net, tunnel_key_net_id);
 
-	kfree(tunnel);
+	return tcf_generic_walker(tn, skb, cb, type, ops, extack);
 }
 
-static int tcf_tunnel_encap_get_tunnel(struct flow_action_entry *entry,
-				       const struct tc_action *act)
+static int tunnel_key_search(struct net *net, struct tc_action **a, u32 index)
 {
-	entry->tunnel = tcf_tunnel_info_copy(act);
-	if (!entry->tunnel)
-		return -ENOMEM;
-	entry->destructor = tcf_tunnel_encap_put_tunnel;
-	entry->destructor_priv = entry->tunnel;
-	return 0;
-}
+	struct tc_action_net *tn = net_generic(net, tunnel_key_net_id);
 
-static int tcf_tunnel_key_offload_act_setup(struct tc_action *act,
-					    void *entry_data,
-					    u32 *index_inc,
-					    bool bind,
-					    struct netlink_ext_ack *extack)
-{
-	int err;
-
-	if (bind) {
-		struct flow_action_entry *entry = entry_data;
-
-		if (is_tcf_tunnel_set(act)) {
-			entry->id = FLOW_ACTION_TUNNEL_ENCAP;
-			err = tcf_tunnel_encap_get_tunnel(entry, act);
-			if (err)
-				return err;
-		} else if (is_tcf_tunnel_release(act)) {
-			entry->id = FLOW_ACTION_TUNNEL_DECAP;
-		} else {
-			NL_SET_ERR_MSG_MOD(extack, "Unsupported tunnel key mode offload");
-			return -EOPNOTSUPP;
-		}
-		*index_inc = 1;
-	} else {
-		struct flow_offload_action *fl_action = entry_data;
-
-		if (is_tcf_tunnel_set(act))
-			fl_action->id = FLOW_ACTION_TUNNEL_ENCAP;
-		else if (is_tcf_tunnel_release(act))
-			fl_action->id = FLOW_ACTION_TUNNEL_DECAP;
-		else
-			return -EOPNOTSUPP;
-	}
-
-	return 0;
+	return tcf_idr_search(tn, a, index);
 }
 
 static struct tc_action_ops act_tunnel_key_ops = {
@@ -839,26 +795,27 @@ static struct tc_action_ops act_tunnel_key_ops = {
 	.dump		=	tunnel_key_dump,
 	.init		=	tunnel_key_init,
 	.cleanup	=	tunnel_key_release,
-	.offload_act_setup =	tcf_tunnel_key_offload_act_setup,
+	.walk		=	tunnel_key_walker,
+	.lookup		=	tunnel_key_search,
 	.size		=	sizeof(struct tcf_tunnel_key),
 };
 
 static __net_init int tunnel_key_init_net(struct net *net)
 {
-	struct tc_action_net *tn = net_generic(net, act_tunnel_key_ops.net_id);
+	struct tc_action_net *tn = net_generic(net, tunnel_key_net_id);
 
 	return tc_action_net_init(net, tn, &act_tunnel_key_ops);
 }
 
 static void __net_exit tunnel_key_exit_net(struct list_head *net_list)
 {
-	tc_action_net_exit(net_list, act_tunnel_key_ops.net_id);
+	tc_action_net_exit(net_list, tunnel_key_net_id);
 }
 
 static struct pernet_operations tunnel_key_net_ops = {
 	.init = tunnel_key_init_net,
 	.exit_batch = tunnel_key_exit_net,
-	.id   = &act_tunnel_key_ops.net_id,
+	.id   = &tunnel_key_net_id,
 	.size = sizeof(struct tc_action_net),
 };
 

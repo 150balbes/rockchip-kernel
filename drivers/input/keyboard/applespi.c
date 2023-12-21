@@ -202,7 +202,7 @@ struct command_protocol_tp_info {
 };
 
 /**
- * struct touchpad_info_protocol - touchpad info response.
+ * struct touchpad_info - touchpad info response.
  * message.type = 0x1020, message.length = 0x006e
  *
  * @unknown1:		unknown
@@ -287,15 +287,6 @@ struct command_protocol_bl {
  *		structure (after re-assembly in case of being split over
  *		multiple spi-packets), minus the trailing crc. The total size
  *		of the message struct is therefore @length + 10.
- *
- * @keyboard:		Keyboard message
- * @touchpad:		Touchpad message
- * @tp_info:		Touchpad info (response)
- * @tp_info_command:	Touchpad info (CRC)
- * @init_mt_command:	Initialise Multitouch
- * @capsl_command:	Toggle caps-lock LED
- * @bl_command:		Keyboard brightness
- * @data:		Buffer data
  */
 struct message {
 	__le16		type;
@@ -311,7 +302,7 @@ struct message {
 		struct command_protocol_mt_init	init_mt_command;
 		struct command_protocol_capsl	capsl_command;
 		struct command_protocol_bl	bl_command;
-		DECLARE_FLEX_ARRAY(u8, 		data);
+		u8				data[0];
 	};
 };
 
@@ -555,8 +546,7 @@ static void applespi_setup_read_txfrs(struct applespi_data *applespi)
 	memset(dl_t, 0, sizeof(*dl_t));
 	memset(rd_t, 0, sizeof(*rd_t));
 
-	dl_t->delay.value = applespi->spi_settings.spi_cs_delay;
-	dl_t->delay.unit = SPI_DELAY_UNIT_USECS;
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	rd_t->rx_buf = applespi->rx_buffer;
 	rd_t->len = APPLESPI_PACKET_SIZE;
@@ -585,17 +575,14 @@ static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 	 * end up with an extra unnecessary (but harmless) cs assertion and
 	 * deassertion.
 	 */
-	wt_t->delay.value = SPI_RW_CHG_DELAY_US;
-	wt_t->delay.unit = SPI_DELAY_UNIT_USECS;
+	wt_t->delay_usecs = SPI_RW_CHG_DELAY_US;
 	wt_t->cs_change = 1;
 
-	dl_t->delay.value = applespi->spi_settings.spi_cs_delay;
-	dl_t->delay.unit = SPI_DELAY_UNIT_USECS;
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	wr_t->tx_buf = applespi->tx_buffer;
 	wr_t->len = APPLESPI_PACKET_SIZE;
-	wr_t->delay.value = SPI_RW_CHG_DELAY_US;
-	wr_t->delay.unit = SPI_DELAY_UNIT_USECS;
+	wr_t->delay_usecs = SPI_RW_CHG_DELAY_US;
 
 	st_t->rx_buf = applespi->tx_status;
 	st_t->len = APPLESPI_STATUS_SIZE;
@@ -748,8 +735,6 @@ static void applespi_async_write_complete(void *context)
 	applespi_get_trace_fun(evt_type)(evt_type, PT_STATUS,
 					 applespi->tx_status,
 					 APPLESPI_STATUS_SIZE);
-
-	udelay(SPI_RW_CHG_DELAY_US);
 
 	if (!applespi_check_write_status(applespi, applespi->wr_m.status)) {
 		/*
@@ -1597,38 +1582,52 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 
 static int applespi_get_saved_bl_level(struct applespi_data *applespi)
 {
-	efi_status_t sts = EFI_NOT_FOUND;
+	struct efivar_entry *efivar_entry;
 	u16 efi_data = 0;
-	unsigned long efi_data_len = sizeof(efi_data);
+	unsigned long efi_data_len;
+	int sts;
 
-	if (efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE))
-		sts = efi.get_variable(EFI_BL_LEVEL_NAME, &EFI_BL_LEVEL_GUID,
-				       NULL, &efi_data_len, &efi_data);
-	if (sts != EFI_SUCCESS && sts != EFI_NOT_FOUND)
+	efivar_entry = kmalloc(sizeof(*efivar_entry), GFP_KERNEL);
+	if (!efivar_entry)
+		return -ENOMEM;
+
+	memcpy(efivar_entry->var.VariableName, EFI_BL_LEVEL_NAME,
+	       sizeof(EFI_BL_LEVEL_NAME));
+	efivar_entry->var.VendorGuid = EFI_BL_LEVEL_GUID;
+	efi_data_len = sizeof(efi_data);
+
+	sts = efivar_entry_get(efivar_entry, NULL, &efi_data_len, &efi_data);
+	if (sts && sts != -ENOENT)
 		dev_warn(&applespi->spi->dev,
-			 "Error getting backlight level from EFI vars: 0x%lx\n",
+			 "Error getting backlight level from EFI vars: %d\n",
 			 sts);
 
-	return sts != EFI_SUCCESS ? -ENODEV : efi_data;
+	kfree(efivar_entry);
+
+	return sts ? sts : efi_data;
 }
 
 static void applespi_save_bl_level(struct applespi_data *applespi,
 				   unsigned int level)
 {
-	efi_status_t sts = EFI_UNSUPPORTED;
+	efi_guid_t efi_guid;
 	u32 efi_attr;
+	unsigned long efi_data_len;
 	u16 efi_data;
+	int sts;
 
+	/* Save keyboard backlight level */
+	efi_guid = EFI_BL_LEVEL_GUID;
 	efi_data = (u16)level;
+	efi_data_len = sizeof(efi_data);
 	efi_attr = EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
 		   EFI_VARIABLE_RUNTIME_ACCESS;
 
-	if (efi_rt_services_supported(EFI_RT_SUPPORTED_SET_VARIABLE))
-		sts = efi.set_variable(EFI_BL_LEVEL_NAME, &EFI_BL_LEVEL_GUID,
-				       efi_attr, sizeof(efi_data), &efi_data);
-	if (sts != EFI_SUCCESS)
+	sts = efivar_entry_set_safe((efi_char16_t *)EFI_BL_LEVEL_NAME, efi_guid,
+				    efi_attr, true, efi_data_len, &efi_data);
+	if (sts)
 		dev_warn(&applespi->spi->dev,
-			 "Error saving backlight level to EFI vars: 0x%lx\n", sts);
+			 "Error saving backlight level to EFI vars: %d\n", sts);
 }
 
 static int applespi_probe(struct spi_device *spi)
@@ -1844,7 +1843,7 @@ static void applespi_drain_reads(struct applespi_data *applespi)
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
-static void applespi_remove(struct spi_device *spi)
+static int applespi_remove(struct spi_device *spi)
 {
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 
@@ -1857,6 +1856,8 @@ static void applespi_remove(struct spi_device *spi)
 	applespi_drain_reads(applespi);
 
 	debugfs_remove_recursive(applespi->debugfs_root);
+
+	return 0;
 }
 
 static void applespi_shutdown(struct spi_device *spi)
@@ -1876,7 +1877,7 @@ static int applespi_poweroff_late(struct device *dev)
 	return 0;
 }
 
-static int applespi_suspend(struct device *dev)
+static int __maybe_unused applespi_suspend(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
@@ -1903,7 +1904,7 @@ static int applespi_suspend(struct device *dev)
 	return 0;
 }
 
-static int applespi_resume(struct device *dev)
+static int __maybe_unused applespi_resume(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
@@ -1947,15 +1948,15 @@ static const struct acpi_device_id applespi_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
 static const struct dev_pm_ops applespi_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(applespi_suspend, applespi_resume)
-	.poweroff_late	= pm_sleep_ptr(applespi_poweroff_late),
+	SET_SYSTEM_SLEEP_PM_OPS(applespi_suspend, applespi_resume)
+	.poweroff_late	= applespi_poweroff_late,
 };
 
 static struct spi_driver applespi_driver = {
 	.driver		= {
 		.name			= "applespi",
 		.acpi_match_table	= applespi_acpi_match,
-		.pm			= pm_sleep_ptr(&applespi_pm_ops),
+		.pm			= &applespi_pm_ops,
 	},
 	.probe		= applespi_probe,
 	.remove		= applespi_remove,

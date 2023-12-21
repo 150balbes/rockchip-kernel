@@ -46,7 +46,7 @@
 			clock-names = "stmmaceth";
 		};
 
-		usb@40000 {
+		ehci@40000 {
 			compatible = "generic-ehci";
 			reg = < 0x40000 0x100 >;
 			interrupts = < 8 >;

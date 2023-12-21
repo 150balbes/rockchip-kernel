@@ -359,7 +359,7 @@ static const struct hwmon_channel_info ds3232_hwmon_temp = {
 	.config = ds3232_hwmon_temp_config,
 };
 
-static const struct hwmon_channel_info * const ds3232_hwmon_info[] = {
+static const struct hwmon_channel_info *ds3232_hwmon_info[] = {
 	&ds3232_hwmon_chip,
 	&ds3232_hwmon_temp,
 	NULL
@@ -406,10 +406,11 @@ static irqreturn_t ds3232_irq(int irq, void *dev_id)
 {
 	struct device *dev = dev_id;
 	struct ds3232 *ds3232 = dev_get_drvdata(dev);
+	struct mutex *lock = &ds3232->rtc->ops_lock;
 	int ret;
 	int stat, control;
 
-	rtc_lock(ds3232->rtc);
+	mutex_lock(lock);
 
 	ret = regmap_read(ds3232->regmap, DS3232_REG_SR, &stat);
 	if (ret)
@@ -447,7 +448,7 @@ static irqreturn_t ds3232_irq(int irq, void *dev_id)
 	}
 
 unlock:
-	rtc_unlock(ds3232->rtc);
+	mutex_unlock(lock);
 
 	return IRQ_HANDLED;
 }
@@ -517,7 +518,7 @@ static int ds3232_probe(struct device *dev, struct regmap *regmap, int irq,
 	if (IS_ERR(ds3232->rtc))
 		return PTR_ERR(ds3232->rtc);
 
-	ret = devm_rtc_nvmem_register(ds3232->rtc, &nvmem_cfg);
+	ret = rtc_nvmem_register(ds3232->rtc, &nvmem_cfg);
 	if(ret)
 		return ret;
 
@@ -566,7 +567,8 @@ static const struct dev_pm_ops ds3232_pm_ops = {
 
 #if IS_ENABLED(CONFIG_I2C)
 
-static int ds3232_i2c_probe(struct i2c_client *client)
+static int ds3232_i2c_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	struct regmap *regmap;
 	static const struct regmap_config config = {
@@ -591,7 +593,7 @@ static const struct i2c_device_id ds3232_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, ds3232_id);
 
-static const  __maybe_unused struct of_device_id ds3232_of_match[] = {
+static const struct of_device_id ds3232_of_match[] = {
 	{ .compatible = "dallas,ds3232" },
 	{ }
 };

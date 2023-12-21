@@ -136,29 +136,23 @@ struct gntdev_grant_map *gntdev_alloc_map(struct gntdev_priv *priv, int count,
 	if (NULL == add)
 		return NULL;
 
-	add->grants    = kvmalloc_array(count, sizeof(add->grants[0]),
-					GFP_KERNEL);
-	add->map_ops   = kvmalloc_array(count, sizeof(add->map_ops[0]),
-					GFP_KERNEL);
-	add->unmap_ops = kvmalloc_array(count, sizeof(add->unmap_ops[0]),
-					GFP_KERNEL);
+	add->grants    = kvcalloc(count, sizeof(add->grants[0]), GFP_KERNEL);
+	add->map_ops   = kvcalloc(count, sizeof(add->map_ops[0]), GFP_KERNEL);
+	add->unmap_ops = kvcalloc(count, sizeof(add->unmap_ops[0]), GFP_KERNEL);
+	add->kmap_ops  = kvcalloc(count, sizeof(add->kmap_ops[0]), GFP_KERNEL);
+	add->kunmap_ops = kvcalloc(count,
+				   sizeof(add->kunmap_ops[0]), GFP_KERNEL);
 	add->pages     = kvcalloc(count, sizeof(add->pages[0]), GFP_KERNEL);
 	add->being_removed =
 		kvcalloc(count, sizeof(add->being_removed[0]), GFP_KERNEL);
 	if (NULL == add->grants    ||
 	    NULL == add->map_ops   ||
 	    NULL == add->unmap_ops ||
+	    NULL == add->kmap_ops  ||
+	    NULL == add->kunmap_ops ||
 	    NULL == add->pages     ||
 	    NULL == add->being_removed)
 		goto err;
-	if (use_ptemod) {
-		add->kmap_ops   = kvmalloc_array(count, sizeof(add->kmap_ops[0]),
-						 GFP_KERNEL);
-		add->kunmap_ops = kvmalloc_array(count, sizeof(add->kunmap_ops[0]),
-						 GFP_KERNEL);
-		if (NULL == add->kmap_ops || NULL == add->kunmap_ops)
-			goto err;
-	}
 
 #ifdef CONFIG_XEN_GRANT_DMA_ALLOC
 	add->dma_flags = dma_flags;
@@ -195,14 +189,10 @@ struct gntdev_grant_map *gntdev_alloc_map(struct gntdev_priv *priv, int count,
 		goto err;
 
 	for (i = 0; i < count; i++) {
-		add->grants[i].domid = DOMID_INVALID;
-		add->grants[i].ref = INVALID_GRANT_REF;
-		add->map_ops[i].handle = INVALID_GRANT_HANDLE;
-		add->unmap_ops[i].handle = INVALID_GRANT_HANDLE;
-		if (use_ptemod) {
-			add->kmap_ops[i].handle = INVALID_GRANT_HANDLE;
-			add->kunmap_ops[i].handle = INVALID_GRANT_HANDLE;
-		}
+		add->map_ops[i].handle = -1;
+		add->unmap_ops[i].handle = -1;
+		add->kmap_ops[i].handle = -1;
+		add->kunmap_ops[i].handle = -1;
 	}
 
 	add->index = 0;
@@ -313,7 +303,7 @@ static int find_grant_ptes(pte_t *pte, unsigned long addr, void *data)
 			  map->grants[pgnr].ref,
 			  map->grants[pgnr].domid);
 	gnttab_set_unmap_op(&map->unmap_ops[pgnr], pte_maddr, flags,
-			    INVALID_GRANT_HANDLE);
+			    -1 /* handle */);
 	return 0;
 }
 
@@ -324,7 +314,7 @@ int gntdev_map_grant_pages(struct gntdev_grant_map *map)
 
 	if (!use_ptemod) {
 		/* Note: it could already be mapped */
-		if (map->map_ops[0].handle != INVALID_GRANT_HANDLE)
+		if (map->map_ops[0].handle != -1)
 			return 0;
 		for (i = 0; i < map->count; i++) {
 			unsigned long addr = (unsigned long)
@@ -333,7 +323,7 @@ int gntdev_map_grant_pages(struct gntdev_grant_map *map)
 				map->grants[i].ref,
 				map->grants[i].domid);
 			gnttab_set_unmap_op(&map->unmap_ops[i], addr,
-				map->flags, INVALID_GRANT_HANDLE);
+				map->flags, -1 /* handle */);
 		}
 	} else {
 		/*
@@ -359,13 +349,13 @@ int gntdev_map_grant_pages(struct gntdev_grant_map *map)
 				map->grants[i].ref,
 				map->grants[i].domid);
 			gnttab_set_unmap_op(&map->kunmap_ops[i], address,
-				flags, INVALID_GRANT_HANDLE);
+				flags, -1);
 		}
 	}
 
 	pr_debug("map %d+%d\n", map->index, map->count);
-	err = gnttab_map_refs(map->map_ops, map->kmap_ops, map->pages,
-			map->count);
+	err = gnttab_map_refs(map->map_ops, use_ptemod ? map->kmap_ops : NULL,
+			map->pages, map->count);
 
 	for (i = 0; i < map->count; i++) {
 		if (map->map_ops[i].status == GNTST_okay) {
@@ -400,26 +390,26 @@ static void __unmap_grant_pages_done(int result,
 
 	for (i = 0; i < data->count; i++) {
 		if (map->unmap_ops[offset + i].status == GNTST_okay &&
-		    map->unmap_ops[offset + i].handle != INVALID_GRANT_HANDLE)
+		    map->unmap_ops[offset + i].handle != -1)
 			successful_unmaps++;
 
-		WARN_ON(map->unmap_ops[offset + i].status != GNTST_okay &&
-			map->unmap_ops[offset + i].handle != INVALID_GRANT_HANDLE);
+		WARN_ON(map->unmap_ops[offset+i].status &&
+			map->unmap_ops[offset+i].handle != -1);
 		pr_debug("unmap handle=%d st=%d\n",
 			map->unmap_ops[offset+i].handle,
 			map->unmap_ops[offset+i].status);
-		map->unmap_ops[offset+i].handle = INVALID_GRANT_HANDLE;
+		map->unmap_ops[offset+i].handle = -1;
 		if (use_ptemod) {
 			if (map->kunmap_ops[offset + i].status == GNTST_okay &&
-			    map->kunmap_ops[offset + i].handle != INVALID_GRANT_HANDLE)
+			    map->kunmap_ops[offset + i].handle != -1)
 				successful_unmaps++;
 
-			WARN_ON(map->kunmap_ops[offset + i].status != GNTST_okay &&
-				map->kunmap_ops[offset + i].handle != INVALID_GRANT_HANDLE);
+			WARN_ON(map->kunmap_ops[offset+i].status &&
+				map->kunmap_ops[offset+i].handle != -1);
 			pr_debug("kunmap handle=%u st=%d\n",
 				 map->kunmap_ops[offset+i].handle,
 				 map->kunmap_ops[offset+i].status);
-			map->kunmap_ops[offset+i].handle = INVALID_GRANT_HANDLE;
+			map->kunmap_ops[offset+i].handle = -1;
 		}
 	}
 
@@ -1055,10 +1045,10 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 
 	vma->vm_ops = &gntdev_vmops;
 
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP);
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP;
 
 	if (use_ptemod)
-		vm_flags_set(vma, VM_DONTCOPY);
+		vma->vm_flags |= VM_DONTCOPY;
 
 	vma->vm_private_data = map;
 	if (map->flags) {

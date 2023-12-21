@@ -403,6 +403,7 @@ static long mwave_ioctl(struct file *file, unsigned int iocmd,
 	
 		default:
 			return -ENOTTY;
+			break;
 	} /* switch */
 
 	PRINTK_2(TRACE_MWAVE, "mwavedd::mwave_ioctl, exit retval %x\n", retval);

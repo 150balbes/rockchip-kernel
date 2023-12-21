@@ -21,23 +21,23 @@
  * Note this MUST be called before snd_soc_register_card(), so that the props
  * are in place before the codec component driver's probe function parses them.
  */
-static int rt711_add_codec_device_props(struct device *sdw_dev)
+static int rt711_add_codec_device_props(const char *sdw_dev_name)
 {
 	struct property_entry props[MAX_NO_PROPS] = {};
-	struct fwnode_handle *fwnode;
+	struct device *sdw_dev;
 	int ret;
 
-	if (!SOF_JACK_JDSRC(sof_sdw_quirk))
-		return 0;
-	props[0] = PROPERTY_ENTRY_U32("realtek,jd-src", SOF_JACK_JDSRC(sof_sdw_quirk));
+	sdw_dev = bus_find_device_by_name(&sdw_bus_type, NULL, sdw_dev_name);
+	if (!sdw_dev)
+		return -EPROBE_DEFER;
 
-	fwnode = fwnode_create_software_node(props, NULL);
-	if (IS_ERR(fwnode))
-		return PTR_ERR(fwnode);
+	if (SOF_RT711_JDSRC(sof_sdw_quirk)) {
+		props[0] = PROPERTY_ENTRY_U32("realtek,jd-src",
+					      SOF_RT711_JDSRC(sof_sdw_quirk));
+	}
 
-	ret = device_add_software_node(sdw_dev, to_software_node(fwnode));
-
-	fwnode_handle_put(fwnode);
+	ret = device_add_properties(sdw_dev, props);
+	put_device(sdw_dev);
 
 	return ret;
 }
@@ -106,13 +106,13 @@ static int rt711_rtd_init(struct snd_soc_pcm_runtime *rtd)
 		return ret;
 	}
 
-	ret = snd_soc_card_jack_new_pins(rtd->card, "Headset Jack",
-					 SND_JACK_HEADSET | SND_JACK_BTN_0 |
-					 SND_JACK_BTN_1 | SND_JACK_BTN_2 |
-					 SND_JACK_BTN_3,
-					 &ctx->sdw_headset,
-					 rt711_jack_pins,
-					 ARRAY_SIZE(rt711_jack_pins));
+	ret = snd_soc_card_jack_new(rtd->card, "Headset Jack",
+				    SND_JACK_HEADSET | SND_JACK_BTN_0 |
+				    SND_JACK_BTN_1 | SND_JACK_BTN_2 |
+				    SND_JACK_BTN_3,
+				    &ctx->sdw_headset,
+				    rt711_jack_pins,
+				    ARRAY_SIZE(rt711_jack_pins));
 	if (ret) {
 		dev_err(rtd->card->dev, "Headset Jack creation failed: %d\n",
 			ret);
@@ -135,27 +135,26 @@ static int rt711_rtd_init(struct snd_soc_pcm_runtime *rtd)
 	return ret;
 }
 
-int sof_sdw_rt711_exit(struct snd_soc_card *card, struct snd_soc_dai_link *dai_link)
+int sof_sdw_rt711_exit(struct device *dev, struct snd_soc_dai_link *dai_link)
 {
-	struct mc_private *ctx = snd_soc_card_get_drvdata(card);
+	struct device *sdw_dev;
 
-	if (!ctx->headset_codec_dev)
-		return 0;
+	sdw_dev = bus_find_device_by_name(&sdw_bus_type, NULL,
+					  dai_link->codecs[0].name);
+	if (!sdw_dev)
+		return -EINVAL;
 
-	device_remove_software_node(ctx->headset_codec_dev);
-	put_device(ctx->headset_codec_dev);
+	device_remove_properties(sdw_dev);
+	put_device(sdw_dev);
 
 	return 0;
 }
 
-int sof_sdw_rt711_init(struct snd_soc_card *card,
-		       const struct snd_soc_acpi_link_adr *link,
+int sof_sdw_rt711_init(const struct snd_soc_acpi_link_adr *link,
 		       struct snd_soc_dai_link *dai_links,
 		       struct sof_sdw_codec_info *info,
 		       bool playback)
 {
-	struct mc_private *ctx = snd_soc_card_get_drvdata(card);
-	struct device *sdw_dev;
 	int ret;
 
 	/*
@@ -165,16 +164,9 @@ int sof_sdw_rt711_init(struct snd_soc_card *card,
 	if (!playback)
 		return 0;
 
-	sdw_dev = bus_find_device_by_name(&sdw_bus_type, NULL, dai_links->codecs[0].name);
-	if (!sdw_dev)
-		return -EPROBE_DEFER;
-
-	ret = rt711_add_codec_device_props(sdw_dev);
-	if (ret < 0) {
-		put_device(sdw_dev);
+	ret = rt711_add_codec_device_props(dai_links->codecs[0].name);
+	if (ret < 0)
 		return ret;
-	}
-	ctx->headset_codec_dev = sdw_dev;
 
 	dai_links->init = rt711_rtd_init;
 

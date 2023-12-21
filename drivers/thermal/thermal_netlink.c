@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <net/genetlink.h>
+#include <trace/hooks/thermal.h>
 #include <uapi/linux/thermal.h>
 
 #include "thermal_core.h"
@@ -43,11 +44,6 @@ static const struct nla_policy thermal_genl_policy[THERMAL_GENL_ATTR_MAX + 1] = 
 	[THERMAL_GENL_ATTR_CDEV_MAX_STATE]	= { .type = NLA_U32 },
 	[THERMAL_GENL_ATTR_CDEV_NAME]		= { .type = NLA_STRING,
 						    .len = THERMAL_NAME_LENGTH },
-	/* CPU capabilities */
-	[THERMAL_GENL_ATTR_CPU_CAPABILITY]		= { .type = NLA_NESTED },
-	[THERMAL_GENL_ATTR_CPU_CAPABILITY_ID]		= { .type = NLA_U32 },
-	[THERMAL_GENL_ATTR_CPU_CAPABILITY_PERFORMANCE]	= { .type = NLA_U32 },
-	[THERMAL_GENL_ATTR_CPU_CAPABILITY_EFFICIENCY]	= { .type = NLA_U32 },
 };
 
 struct param {
@@ -63,8 +59,6 @@ struct param {
 	int temp;
 	int cdev_state;
 	int cdev_max_state;
-	struct thermal_genl_cpu_caps *cpu_capabilities;
-	int cpu_capabilities_count;
 };
 
 typedef int (*cb_t)(struct param *);
@@ -128,8 +122,7 @@ static int thermal_genl_event_tz(struct param *p)
 static int thermal_genl_event_tz_trip_up(struct param *p)
 {
 	if (nla_put_u32(p->msg, THERMAL_GENL_ATTR_TZ_ID, p->tz_id) ||
-	    nla_put_u32(p->msg, THERMAL_GENL_ATTR_TZ_TRIP_ID, p->trip_id) ||
-	    nla_put_u32(p->msg, THERMAL_GENL_ATTR_TZ_TEMP, p->temp))
+	    nla_put_u32(p->msg, THERMAL_GENL_ATTR_TZ_TRIP_ID, p->trip_id))
 		return -EMSGSIZE;
 
 	return 0;
@@ -197,42 +190,6 @@ static int thermal_genl_event_gov_change(struct param *p)
 	return 0;
 }
 
-static int thermal_genl_event_cpu_capability_change(struct param *p)
-{
-	struct thermal_genl_cpu_caps *cpu_cap = p->cpu_capabilities;
-	struct sk_buff *msg = p->msg;
-	struct nlattr *start_cap;
-	int i;
-
-	start_cap = nla_nest_start(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY);
-	if (!start_cap)
-		return -EMSGSIZE;
-
-	for (i = 0; i < p->cpu_capabilities_count; ++i) {
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_ID,
-				cpu_cap->cpu))
-			goto out_cancel_nest;
-
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_PERFORMANCE,
-				cpu_cap->performance))
-			goto out_cancel_nest;
-
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_EFFICIENCY,
-				cpu_cap->efficiency))
-			goto out_cancel_nest;
-
-		++cpu_cap;
-	}
-
-	nla_nest_end(msg, start_cap);
-
-	return 0;
-out_cancel_nest:
-	nla_nest_cancel(msg, start_cap);
-
-	return -EMSGSIZE;
-}
-
 int thermal_genl_event_tz_delete(struct param *p)
 	__attribute__((alias("thermal_genl_event_tz")));
 
@@ -262,7 +219,6 @@ static cb_t event_cb[] = {
 	[THERMAL_GENL_EVENT_CDEV_DELETE]	= thermal_genl_event_cdev_delete,
 	[THERMAL_GENL_EVENT_CDEV_STATE_UPDATE]	= thermal_genl_event_cdev_state_update,
 	[THERMAL_GENL_EVENT_TZ_GOV_CHANGE]	= thermal_genl_event_gov_change,
-	[THERMAL_GENL_EVENT_CPU_CAPABILITY_CHANGE] = thermal_genl_event_cpu_capability_change,
 };
 
 /*
@@ -274,6 +230,11 @@ static int thermal_genl_send_event(enum thermal_genl_event event,
 	struct sk_buff *msg;
 	int ret = -EMSGSIZE;
 	void *hdr;
+	int enable_thermal_genl = 1;
+
+	trace_android_vh_enable_thermal_genl_check(event, p->tz_id, &enable_thermal_genl);
+	if (!enable_thermal_genl)
+		return 0;
 
 	msg = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!msg)
@@ -330,16 +291,16 @@ int thermal_notify_tz_disable(int tz_id)
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_DISABLE, &p);
 }
 
-int thermal_notify_tz_trip_down(int tz_id, int trip_id, int temp)
+int thermal_notify_tz_trip_down(int tz_id, int trip_id)
 {
-	struct param p = { .tz_id = tz_id, .trip_id = trip_id, .temp = temp };
+	struct param p = { .tz_id = tz_id, .trip_id = trip_id };
 
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_TRIP_DOWN, &p);
 }
 
-int thermal_notify_tz_trip_up(int tz_id, int trip_id, int temp)
+int thermal_notify_tz_trip_up(int tz_id, int trip_id)
 {
-	struct param p = { .tz_id = tz_id, .trip_id = trip_id, .temp = temp };
+	struct param p = { .tz_id = tz_id, .trip_id = trip_id };
 
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_TRIP_UP, &p);
 }
@@ -400,15 +361,6 @@ int thermal_notify_tz_gov_change(int tz_id, const char *name)
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_GOV_CHANGE, &p);
 }
 
-int thermal_genl_cpu_capability_event(int count,
-				      struct thermal_genl_cpu_caps *caps)
-{
-	struct param p = { .cpu_capabilities_count = count, .cpu_capabilities = caps };
-
-	return thermal_genl_send_event(THERMAL_GENL_EVENT_CPU_CAPABILITY_CHANGE, &p);
-}
-EXPORT_SYMBOL_GPL(thermal_genl_cpu_capability_event);
-
 /*************************** Command encoding ********************************/
 
 static int __thermal_genl_cmd_tz_get_id(struct thermal_zone_device *tz,
@@ -452,8 +404,7 @@ static int thermal_genl_cmd_tz_get_trip(struct param *p)
 	struct sk_buff *msg = p->msg;
 	struct thermal_zone_device *tz;
 	struct nlattr *start_trip;
-	struct thermal_trip trip;
-	int ret, i, id;
+	int i, id;
 
 	if (!p->attrs[THERMAL_GENL_ATTR_TZ_ID])
 		return -EINVAL;
@@ -470,16 +421,20 @@ static int thermal_genl_cmd_tz_get_trip(struct param *p)
 
 	mutex_lock(&tz->lock);
 
-	for (i = 0; i < tz->num_trips; i++) {
+	for (i = 0; i < tz->trips; i++) {
 
-		ret = __thermal_zone_get_trip(tz, i, &trip);
-		if (ret)
-			goto out_cancel_nest;
+		enum thermal_trip_type type;
+		int temp, hyst = 0;
+
+		tz->ops->get_trip_type(tz, i, &type);
+		tz->ops->get_trip_temp(tz, i, &temp);
+		if (tz->ops->get_trip_hyst)
+			tz->ops->get_trip_hyst(tz, i, &hyst);
 
 		if (nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_ID, i) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TYPE, trip.type) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TEMP, trip.temperature) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_HYST, trip.hysteresis))
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TYPE, type) ||
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TEMP, temp) ||
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_HYST, hyst))
 			goto out_cancel_nest;
 	}
 
@@ -690,7 +645,6 @@ static struct genl_family thermal_gnl_family __ro_after_init = {
 	.policy		= thermal_genl_policy,
 	.small_ops	= thermal_genl_ops,
 	.n_small_ops	= ARRAY_SIZE(thermal_genl_ops),
-	.resv_start_op	= THERMAL_GENL_CMD_CDEV_GET + 1,
 	.mcgrps		= thermal_genl_mcgrps,
 	.n_mcgrps	= ARRAY_SIZE(thermal_genl_mcgrps),
 };
@@ -698,9 +652,4 @@ static struct genl_family thermal_gnl_family __ro_after_init = {
 int __init thermal_netlink_init(void)
 {
 	return genl_register_family(&thermal_gnl_family);
-}
-
-void __init thermal_netlink_exit(void)
-{
-	genl_unregister_family(&thermal_gnl_family);
 }

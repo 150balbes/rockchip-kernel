@@ -10,7 +10,7 @@ ifeq ($(ARCH),x86_64)
 	CFLAGS := -DCONFIG_X86_64 -D__x86_64__
 endif
 
-CFLAGS += $(KHDR_INCLUDES)
+CFLAGS += -I../../../../usr/include/
 
 TEST_GEN_PROGS := msgque
 

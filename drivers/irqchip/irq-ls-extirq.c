@@ -6,7 +6,8 @@
 #include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 #include <linux/slab.h>
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
@@ -15,40 +16,12 @@
 #define LS1021A_SCFGREVCR 0x200
 
 struct ls_extirq_data {
-	void __iomem		*intpcr;
-	raw_spinlock_t		lock;
-	bool			big_endian;
-	bool			is_ls1021a_or_ls1043a;
+	struct regmap		*syscon;
+	u32			intpcr;
+	bool			bit_reverse;
 	u32			nirq;
 	struct irq_fwspec	map[MAXIRQ];
 };
-
-static void ls_extirq_intpcr_rmw(struct ls_extirq_data *priv, u32 mask,
-				 u32 value)
-{
-	u32 intpcr;
-
-	/*
-	 * Serialize concurrent calls to ls_extirq_set_type() from multiple
-	 * IRQ descriptors, making sure the read-modify-write is atomic.
-	 */
-	raw_spin_lock(&priv->lock);
-
-	if (priv->big_endian)
-		intpcr = ioread32be(priv->intpcr);
-	else
-		intpcr = ioread32(priv->intpcr);
-
-	intpcr &= ~mask;
-	intpcr |= value;
-
-	if (priv->big_endian)
-		iowrite32be(intpcr, priv->intpcr);
-	else
-		iowrite32(intpcr, priv->intpcr);
-
-	raw_spin_unlock(&priv->lock);
-}
 
 static int
 ls_extirq_set_type(struct irq_data *data, unsigned int type)
@@ -57,7 +30,7 @@ ls_extirq_set_type(struct irq_data *data, unsigned int type)
 	irq_hw_number_t hwirq = data->hwirq;
 	u32 value, mask;
 
-	if (priv->is_ls1021a_or_ls1043a)
+	if (priv->bit_reverse)
 		mask = 1U << (31 - hwirq);
 	else
 		mask = 1U << hwirq;
@@ -78,8 +51,7 @@ ls_extirq_set_type(struct irq_data *data, unsigned int type)
 	default:
 		return -EINVAL;
 	}
-
-	ls_extirq_intpcr_rmw(priv, mask, value);
+	regmap_update_bits(priv->syscon, priv->intpcr, mask, value);
 
 	return irq_chip_set_type_parent(data, type);
 }
@@ -92,7 +64,7 @@ static struct irq_chip ls_extirq_chip = {
 	.irq_set_type		= ls_extirq_set_type,
 	.irq_retrigger		= irq_chip_retrigger_hierarchy,
 	.irq_set_affinity	= irq_chip_set_affinity_parent,
-	.flags                  = IRQCHIP_SET_TYPE_MASKED | IRQCHIP_SKIP_SET_WAKE,
+	.flags                  = IRQCHIP_SET_TYPE_MASKED,
 };
 
 static int
@@ -171,6 +143,7 @@ ls_extirq_parse_map(struct ls_extirq_data *priv, struct device_node *node)
 static int __init
 ls_extirq_of_init(struct device_node *node, struct device_node *parent)
 {
+
 	struct irq_domain *domain, *parent_domain;
 	struct ls_extirq_data *priv;
 	int ret;
@@ -178,55 +151,47 @@ ls_extirq_of_init(struct device_node *node, struct device_node *parent)
 	parent_domain = irq_find_host(parent);
 	if (!parent_domain) {
 		pr_err("Cannot find parent domain\n");
-		ret = -ENODEV;
-		goto err_irq_find_host;
+		return -ENODEV;
 	}
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		ret = -ENOMEM;
-		goto err_alloc_priv;
-	}
+	if (!priv)
+		return -ENOMEM;
 
-	/*
-	 * All extirq OF nodes are under a scfg/syscon node with
-	 * the 'ranges' property
-	 */
-	priv->intpcr = of_iomap(node, 0);
-	if (!priv->intpcr) {
-		pr_err("Cannot ioremap OF node %pOF\n", node);
-		ret = -ENOMEM;
-		goto err_iomap;
+	priv->syscon = syscon_node_to_regmap(node->parent);
+	if (IS_ERR(priv->syscon)) {
+		ret = PTR_ERR(priv->syscon);
+		pr_err("Failed to lookup parent regmap\n");
+		goto out;
+	}
+	ret = of_property_read_u32(node, "reg", &priv->intpcr);
+	if (ret) {
+		pr_err("Missing INTPCR offset value\n");
+		goto out;
 	}
 
 	ret = ls_extirq_parse_map(priv, node);
 	if (ret)
-		goto err_parse_map;
+		goto out;
 
-	priv->big_endian = of_device_is_big_endian(node->parent);
-	priv->is_ls1021a_or_ls1043a = of_device_is_compatible(node, "fsl,ls1021a-extirq") ||
-				      of_device_is_compatible(node, "fsl,ls1043a-extirq");
-	raw_spin_lock_init(&priv->lock);
+	if (of_device_is_compatible(node, "fsl,ls1021a-extirq")) {
+		u32 revcr;
+
+		ret = regmap_read(priv->syscon, LS1021A_SCFGREVCR, &revcr);
+		if (ret)
+			goto out;
+		priv->bit_reverse = (revcr != 0);
+	}
 
 	domain = irq_domain_add_hierarchy(parent_domain, 0, priv->nirq, node,
 					  &extirq_domain_ops, priv);
-	if (!domain) {
+	if (!domain)
 		ret = -ENOMEM;
-		goto err_add_hierarchy;
-	}
 
-	return 0;
-
-err_add_hierarchy:
-err_parse_map:
-	iounmap(priv->intpcr);
-err_iomap:
-	kfree(priv);
-err_alloc_priv:
-err_irq_find_host:
+out:
+	if (ret)
+		kfree(priv);
 	return ret;
 }
 
 IRQCHIP_DECLARE(ls1021a_extirq, "fsl,ls1021a-extirq", ls_extirq_of_init);
-IRQCHIP_DECLARE(ls1043a_extirq, "fsl,ls1043a-extirq", ls_extirq_of_init);
-IRQCHIP_DECLARE(ls1088a_extirq, "fsl,ls1088a-extirq", ls_extirq_of_init);

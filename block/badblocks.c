@@ -65,6 +65,7 @@ int badblocks_check(struct badblocks *bb, sector_t s, int sectors,
 		s >>= bb->shift;
 		target += (1<<bb->shift) - 1;
 		target >>= bb->shift;
+		sectors = target - s;
 	}
 	/* 'target' is now the first block after the bad range */
 
@@ -344,6 +345,7 @@ int badblocks_clear(struct badblocks *bb, sector_t s, int sectors)
 		s += (1<<bb->shift) - 1;
 		s >>= bb->shift;
 		target >>= bb->shift;
+		sectors = target - s;
 	}
 
 	write_seqlock_irq(&bb->lock);

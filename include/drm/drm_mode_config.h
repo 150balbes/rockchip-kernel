@@ -58,12 +58,6 @@ struct drm_mode_config_funcs {
 	 * actual modifier used if the request doesn't have it specified,
 	 * ie. when (@mode_cmd->flags & DRM_MODE_FB_MODIFIERS) == 0.
 	 *
-	 * IMPORTANT: These implied modifiers for legacy userspace must be
-	 * stored in struct &drm_framebuffer, including all relevant metadata
-	 * like &drm_framebuffer.pitches and &drm_framebuffer.offsets if the
-	 * modifier enables additional planes beyond the fourcc pixel format
-	 * code. This is required by the GETFB2 ioctl.
-	 *
 	 * If the parameters are deemed valid and the backing storage objects in
 	 * the underlying memory manager all exist, then the driver allocates
 	 * a new &drm_framebuffer structure, subclassed to contain
@@ -103,13 +97,14 @@ struct drm_mode_config_funcs {
 	 * Callback used by helpers to inform the driver of output configuration
 	 * changes.
 	 *
-	 * Drivers implementing fbdev emulation use drm_kms_helper_hotplug_event()
-	 * to call this hook to inform the fbdev helper of output changes.
+	 * Drivers implementing fbdev emulation with the helpers can call
+	 * drm_fb_helper_hotplug_changed from this hook to inform the fbdev
+	 * helper of output changes.
 	 *
-	 * This hook is deprecated, drivers should instead use
-	 * drm_fbdev_generic_setup() which takes care of any necessary
-	 * hotplug event forwarding already without further involvement by
-	 * the driver.
+	 * FIXME:
+	 *
+	 * Except that there's no vtable for device-level helper callbacks
+	 * there's no reason this is a core function.
 	 */
 	void (*output_poll_changed)(struct drm_device *dev);
 
@@ -345,6 +340,7 @@ struct drm_mode_config_funcs {
  * @max_width: maximum fb pixel width on this device
  * @max_height: maximum fb pixel height on this device
  * @funcs: core driver provided mode setting functions
+ * @fb_base: base address of the framebuffer
  * @poll_enabled: track polling support for this device
  * @poll_running: track polling status for this device
  * @delayed_event: track delayed poll uevent deliver for this device
@@ -358,19 +354,6 @@ struct drm_mode_config_funcs {
  * Core mode resource tracking structure.  All CRTC, encoders, and connectors
  * enumerated by the driver are added here, as are global properties.  Some
  * global restrictions are also here, e.g. dimension restrictions.
- *
- * Framebuffer sizes refer to the virtual screen that can be displayed by
- * the CRTC. This can be different from the physical resolution programmed.
- * The minimum width and height, stored in @min_width and @min_height,
- * describe the smallest size of the framebuffer. It correlates to the
- * minimum programmable resolution.
- * The maximum width, stored in @max_width, is typically limited by the
- * maximum pitch between two adjacent scanlines. The maximum height, stored
- * in @max_height, is usually only limited by the amount of addressable video
- * memory. For hardware that has no real maximum, drivers should pick a
- * reasonable default.
- *
- * See also @DRM_SHADOW_PLANE_MAX_WIDTH and @DRM_SHADOW_PLANE_MAX_HEIGHT.
  */
 struct drm_mode_config {
 	/**
@@ -541,6 +524,7 @@ struct drm_mode_config {
 	int min_width, min_height;
 	int max_width, max_height;
 	const struct drm_mode_config_funcs *funcs;
+	resource_size_t fb_base;
 
 	/* output poll support */
 	bool poll_enabled;
@@ -712,21 +696,11 @@ struct drm_mode_config {
 	 * between different TV connector types.
 	 */
 	struct drm_property *tv_select_subconnector_property;
-
 	/**
-	 * @legacy_tv_mode_property: Optional TV property to select
+	 * @tv_mode_property: Optional TV property to select
 	 * the output TV mode.
-	 *
-	 * Superseded by @tv_mode_property
-	 */
-	struct drm_property *legacy_tv_mode_property;
-
-	/**
-	 * @tv_mode_property: Optional TV property to select the TV
-	 * standard output on the connector.
 	 */
 	struct drm_property *tv_mode_property;
-
 	/**
 	 * @tv_left_margin_property: Optional TV property to set the left
 	 * margin (expressed in pixels).
@@ -820,6 +794,19 @@ struct drm_mode_config {
 	 */
 	struct drm_property *gamma_lut_size_property;
 
+#if defined(CONFIG_ROCKCHIP_DRM_CUBIC_LUT)
+	/**
+	 * @cubic_lut_property: Optional CRTC property to set the 3D LUT used to
+	 * convert color spaces.
+	 */
+	struct drm_property *cubic_lut_property;
+	/**
+	 * @cubic_lut_size_property: Optional CRTC property for the size of the
+	 * 3D LUT as supported by the driver (read-only).
+	 */
+	struct drm_property *cubic_lut_size_property;
+#endif
+
 	/**
 	 * @suggested_x_property: Optional connector property with a hint for
 	 * the position of the output on the host's screen.
@@ -891,6 +878,25 @@ struct drm_mode_config {
 	uint32_t preferred_depth, prefer_shadow;
 
 	/**
+	 * @prefer_shadow_fbdev:
+	 *
+	 * Hint to framebuffer emulation to prefer shadow-fb rendering.
+	 */
+	bool prefer_shadow_fbdev;
+
+	/**
+	 * @fbdev_use_iomem:
+	 *
+	 * Set to true if framebuffer reside in iomem.
+	 * When set to true memcpy_toio() is used when copying the framebuffer in
+	 * drm_fb_helper.drm_fb_helper_dirty_blit_real().
+	 *
+	 * FIXME: This should be replaced with a per-mapping is_iomem
+	 * flag (like ttm does), and then used everywhere in fbdev code.
+	 */
+	bool fbdev_use_iomem;
+
+	/**
 	 * @quirk_addfb_prefer_xbgr_30bpp:
 	 *
 	 * Special hack for legacy ADDFB to keep nouveau userspace happy. Should
@@ -919,14 +925,11 @@ struct drm_mode_config {
 	bool async_page_flip;
 
 	/**
-	 * @fb_modifiers_not_supported:
+	 * @allow_fb_modifiers:
 	 *
-	 * When this flag is set, the DRM device will not expose modifier
-	 * support to userspace. This is only used by legacy drivers that infer
-	 * the buffer layout through heuristics without using modifiers. New
-	 * drivers shall not set fhis flag.
+	 * Whether the driver supports fb modifiers in the ADDFB2.1 ioctl call.
 	 */
-	bool fb_modifiers_not_supported;
+	bool allow_fb_modifiers;
 
 	/**
 	 * @normalize_zpos:

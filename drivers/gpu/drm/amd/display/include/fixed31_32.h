@@ -69,6 +69,12 @@ static const struct fixed31_32 dc_fixpt_epsilon = { 1LL };
 static const struct fixed31_32 dc_fixpt_half = { 0x80000000LL };
 static const struct fixed31_32 dc_fixpt_one = { 0x100000000LL };
 
+static const struct fixed31_32 dc_fixpt_pi = { 13493037705LL };
+static const struct fixed31_32 dc_fixpt_two_pi = { 26986075409LL };
+static const struct fixed31_32 dc_fixpt_e = { 11674931555LL };
+static const struct fixed31_32 dc_fixpt_ln2 = { 2977044471LL };
+static const struct fixed31_32 dc_fixpt_ln2_div_2 = { 1488522236LL };
+
 /*
  * @brief
  * Initialization routines
@@ -322,7 +328,7 @@ struct fixed31_32 dc_fixpt_sqr(struct fixed31_32 arg);
  */
 static inline struct fixed31_32 dc_fixpt_div_int(struct fixed31_32 arg1, long long arg2)
 {
-	return dc_fixpt_from_fraction(arg1.value, dc_fixpt_from_int((int)arg2).value);
+	return dc_fixpt_from_fraction(arg1.value, dc_fixpt_from_int(arg2).value);
 }
 
 /*
@@ -525,7 +531,7 @@ static inline struct fixed31_32 dc_fixpt_truncate(struct fixed31_32 arg, unsigne
 
 	if (negative)
 		arg.value = -arg.value;
-	arg.value &= (~0ULL) << (FIXED31_32_BITS_PER_FRACTIONAL_PART - frac_bits);
+	arg.value &= (~0LL) << (FIXED31_32_BITS_PER_FRACTIONAL_PART - frac_bits);
 	if (negative)
 		arg.value = -arg.value;
 	return arg;

@@ -292,8 +292,9 @@ static int kvm_vz_irq_clear_cb(struct kvm_vcpu *vcpu, unsigned int priority,
 	switch (priority) {
 	case MIPS_EXC_INT_TIMER:
 		/*
-		 * Explicitly clear irq associated with Cause.IP[IPTI]
-		 * if GuestCtl2 virtual interrupt register not
+		 * Call to kvm_write_c0_guest_compare() clears Cause.TI in
+		 * kvm_mips_emulate_CP0(). Explicitly clear irq associated with
+		 * Cause.IP[IPTI] if GuestCtl2 virtual interrupt register not
 		 * supported or if not using GuestCtl2 Hardware Clear.
 		 */
 		if (cpu_has_guestctl2) {
@@ -388,6 +389,7 @@ static void _kvm_vz_restore_htimer(struct kvm_vcpu *vcpu,
 				   u32 compare, u32 cause)
 {
 	u32 start_count, after_count;
+	ktime_t freeze_time;
 	unsigned long flags;
 
 	/*
@@ -395,7 +397,7 @@ static void _kvm_vz_restore_htimer(struct kvm_vcpu *vcpu,
 	 * this with interrupts disabled to avoid latency.
 	 */
 	local_irq_save(flags);
-	kvm_mips_freeze_hrtimer(vcpu, &start_count);
+	freeze_time = kvm_mips_freeze_hrtimer(vcpu, &start_count);
 	write_c0_gtoffset(start_count - read_c0_count());
 	local_irq_restore(flags);
 
@@ -422,7 +424,7 @@ static void _kvm_vz_restore_htimer(struct kvm_vcpu *vcpu,
  */
 static void kvm_vz_restore_timer(struct kvm_vcpu *vcpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	u32 cause, compare;
 
 	compare = kvm_read_sw_gc0_compare(cop0);
@@ -458,8 +460,8 @@ void kvm_vz_acquire_htimer(struct kvm_vcpu *vcpu)
 /**
  * _kvm_vz_save_htimer() - Switch to software emulation of guest timer.
  * @vcpu:	Virtual CPU.
- * @out_compare: Pointer to write compare value to.
- * @out_cause:	Pointer to write cause value to.
+ * @compare:	Pointer to write compare value to.
+ * @cause:	Pointer to write cause value to.
  *
  * Save VZ guest timer state and switch to software emulation of guest CP0
  * timer. The hard timer must already be in use, so preemption should be
@@ -517,7 +519,7 @@ static void _kvm_vz_save_htimer(struct kvm_vcpu *vcpu,
  */
 static void kvm_vz_save_timer(struct kvm_vcpu *vcpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	u32 gctl0, compare, cause;
 
 	gctl0 = read_c0_guestctl0();
@@ -863,7 +865,7 @@ static unsigned long mips_process_maar(unsigned int op, unsigned long val)
 
 static void kvm_write_maari(struct kvm_vcpu *vcpu, unsigned long val)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 
 	val &= MIPS_MAARI_INDEX;
 	if (val == MIPS_MAARI_INDEX)
@@ -876,7 +878,7 @@ static enum emulation_result kvm_vz_gpsi_cop0(union mips_instruction inst,
 					      u32 *opc, u32 cause,
 					      struct kvm_vcpu *vcpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	enum emulation_result er = EMULATE_DONE;
 	u32 rt, rd, sel;
 	unsigned long curr_pc;
@@ -1541,14 +1543,11 @@ static int kvm_trap_vz_handle_guest_exit(struct kvm_vcpu *vcpu)
 }
 
 /**
- * kvm_trap_vz_handle_cop_unusable() - Guest used unusable coprocessor.
+ * kvm_trap_vz_handle_cop_unusuable() - Guest used unusable coprocessor.
  * @vcpu:	Virtual CPU context.
  *
  * Handle when the guest attempts to use a coprocessor which hasn't been allowed
  * by the root context.
- *
- * Return: value indicating whether to resume the host or the guest
- * 	   (RESUME_HOST or RESUME_GUEST)
  */
 static int kvm_trap_vz_handle_cop_unusable(struct kvm_vcpu *vcpu)
 {
@@ -1595,9 +1594,6 @@ static int kvm_trap_vz_handle_cop_unusable(struct kvm_vcpu *vcpu)
  *
  * Handle when the guest attempts to use MSA when it is disabled in the root
  * context.
- *
- * Return: value indicating whether to resume the host or the guest
- * 	   (RESUME_HOST or RESUME_GUEST)
  */
 static int kvm_trap_vz_handle_msa_disabled(struct kvm_vcpu *vcpu)
 {
@@ -1911,7 +1907,7 @@ static int kvm_vz_get_one_reg(struct kvm_vcpu *vcpu,
 			      const struct kvm_one_reg *reg,
 			      s64 *v)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	unsigned int idx;
 
 	switch (reg->id) {
@@ -2081,7 +2077,7 @@ static int kvm_vz_get_one_reg(struct kvm_vcpu *vcpu,
 	case KVM_REG_MIPS_CP0_MAARI:
 		if (!cpu_guest_has_maar || cpu_guest_has_dyn_maar)
 			return -EINVAL;
-		*v = kvm_read_sw_gc0_maari(&vcpu->arch.cop0);
+		*v = kvm_read_sw_gc0_maari(vcpu->arch.cop0);
 		break;
 #ifdef CONFIG_64BIT
 	case KVM_REG_MIPS_CP0_XCONTEXT:
@@ -2135,7 +2131,7 @@ static int kvm_vz_set_one_reg(struct kvm_vcpu *vcpu,
 			      const struct kvm_one_reg *reg,
 			      s64 v)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	unsigned int idx;
 	int ret = 0;
 	unsigned int cur, change;
@@ -2562,7 +2558,7 @@ static void kvm_vz_vcpu_load_tlb(struct kvm_vcpu *vcpu, int cpu)
 
 static int kvm_vz_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	bool migrated, all;
 
 	/*
@@ -2704,7 +2700,7 @@ static int kvm_vz_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 
 static int kvm_vz_vcpu_put(struct kvm_vcpu *vcpu, int cpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 
 	if (current->flags & PF_VCPU)
 		kvm_vz_vcpu_save_wired(vcpu);
@@ -3076,7 +3072,7 @@ static void kvm_vz_vcpu_uninit(struct kvm_vcpu *vcpu)
 
 static int kvm_vz_vcpu_setup(struct kvm_vcpu *vcpu)
 {
-	struct mips_coproc *cop0 = &vcpu->arch.cop0;
+	struct mips_coproc *cop0 = vcpu->arch.cop0;
 	unsigned long count_hz = 100*1000*1000; /* default to 100 MHz */
 
 	/*
@@ -3215,20 +3211,30 @@ static int kvm_vz_vcpu_setup(struct kvm_vcpu *vcpu)
 	return 0;
 }
 
-static void kvm_vz_prepare_flush_shadow(struct kvm *kvm)
+static void kvm_vz_flush_shadow_all(struct kvm *kvm)
 {
-	if (!cpu_has_guestid) {
+	if (cpu_has_guestid) {
+		/* Flush GuestID for each VCPU individually */
+		kvm_flush_remote_tlbs(kvm);
+	} else {
 		/*
 		 * For each CPU there is a single GPA ASID used by all VCPUs in
 		 * the VM, so it doesn't make sense for the VCPUs to handle
 		 * invalidation of these ASIDs individually.
 		 *
 		 * Instead mark all CPUs as needing ASID invalidation in
-		 * asid_flush_mask, and kvm_flush_remote_tlbs(kvm) will
+		 * asid_flush_mask, and just use kvm_flush_remote_tlbs(kvm) to
 		 * kick any running VCPUs so they check asid_flush_mask.
 		 */
 		cpumask_setall(&kvm->arch.asid_flush_mask);
+		kvm_flush_remote_tlbs(kvm);
 	}
+}
+
+static void kvm_vz_flush_shadow_memslot(struct kvm *kvm,
+					const struct kvm_memory_slot *slot)
+{
+	kvm_vz_flush_shadow_all(kvm);
 }
 
 static void kvm_vz_vcpu_reenter(struct kvm_vcpu *vcpu)
@@ -3286,7 +3292,8 @@ static struct kvm_mips_callbacks kvm_vz_callbacks = {
 	.vcpu_init = kvm_vz_vcpu_init,
 	.vcpu_uninit = kvm_vz_vcpu_uninit,
 	.vcpu_setup = kvm_vz_vcpu_setup,
-	.prepare_flush_shadow = kvm_vz_prepare_flush_shadow,
+	.flush_shadow_all = kvm_vz_flush_shadow_all,
+	.flush_shadow_memslot = kvm_vz_flush_shadow_memslot,
 	.gva_to_gpa = kvm_vz_gva_to_gpa_cb,
 	.queue_timer_int = kvm_vz_queue_timer_int_cb,
 	.dequeue_timer_int = kvm_vz_dequeue_timer_int_cb,
@@ -3304,10 +3311,7 @@ static struct kvm_mips_callbacks kvm_vz_callbacks = {
 	.vcpu_reenter = kvm_vz_vcpu_reenter,
 };
 
-/* FIXME: Get rid of the callbacks now that trap-and-emulate is gone. */
-const struct kvm_mips_callbacks * const kvm_mips_callbacks = &kvm_vz_callbacks;
-
-int kvm_mips_emulation_init(void)
+int kvm_mips_emulation_init(struct kvm_mips_callbacks **install_callbacks)
 {
 	if (!cpu_has_vz)
 		return -ENODEV;
@@ -3321,5 +3325,7 @@ int kvm_mips_emulation_init(void)
 		return -ENODEV;
 
 	pr_info("Starting KVM with MIPS VZ extensions\n");
+
+	*install_callbacks = &kvm_vz_callbacks;
 	return 0;
 }

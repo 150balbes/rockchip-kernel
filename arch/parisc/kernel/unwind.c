@@ -14,7 +14,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
-#include <linux/sched/task_stack.h>
 
 #include <linux/uaccess.h>
 #include <asm/assembly.h>
@@ -24,13 +23,12 @@
 #include <asm/unwind.h>
 #include <asm/switch_to.h>
 #include <asm/sections.h>
-#include <asm/ftrace.h>
 
 /* #define DEBUG 1 */
 #ifdef DEBUG
 #define dbg(x...) pr_debug(x)
 #else
-#define dbg(x...) do { } while (0)
+#define dbg(x...)
 #endif
 
 #define KERNEL_START (KERNEL_BINARY_TEXT_START)
@@ -180,7 +178,7 @@ void unwind_table_remove(struct unwind_table *table)
 /* Called from setup_arch to import the kernel unwind info */
 int __init unwind_init(void)
 {
-	long start __maybe_unused, stop __maybe_unused;
+	long start, stop;
 	register unsigned long gp __asm__ ("r27");
 
 	start = (long)&__start___unwind[0];
@@ -221,6 +219,7 @@ static int unwind_special(struct unwind_frame_info *info, unsigned long pc, int 
 	 * Note: We could use dereference_kernel_function_descriptor()
 	 * instead but we want to keep it simple here.
 	 */
+	extern void * const handle_interruption;
 	extern void * const ret_from_kernel_thread;
 	extern void * const syscall_exit;
 	extern void * const intr_return;
@@ -228,10 +227,8 @@ static int unwind_special(struct unwind_frame_info *info, unsigned long pc, int 
 #ifdef CONFIG_IRQSTACKS
 	extern void * const _call_on_stack;
 #endif /* CONFIG_IRQSTACKS */
-	void *ptr;
 
-	ptr = dereference_kernel_function_descriptor(&handle_interruption);
-	if (pc_is_kernel_fn(pc, ptr)) {
+	if (pc_is_kernel_fn(pc, handle_interruption)) {
 		struct pt_regs *regs = (struct pt_regs *)(info->sp - frame_size - PT_SZ_ALGN);
 		dbg("Unwinding through handle_interruption()\n");
 		info->prev_sp = regs->gr[30];
@@ -302,15 +299,17 @@ static void unwind_frame_regs(struct unwind_frame_info *info)
 			info->prev_sp = sp - 64;
 			info->prev_ip = 0;
 
-			/* Check if stack is inside kernel stack area */
-			if ((info->prev_sp - (unsigned long) task_stack_page(info->t))
-					>= THREAD_SIZE) {
+			/* The stack is at the end inside the thread_union
+			 * struct. If we reach data, we have reached the
+			 * beginning of the stack and should stop unwinding. */
+			if (info->prev_sp >= (unsigned long) task_thread_info(info->t) &&
+			    info->prev_sp < ((unsigned long) task_thread_info(info->t)
+						+ THREAD_SZ_ALGN)) {
 				info->prev_sp = 0;
 				break;
 			}
 
-			if (copy_from_kernel_nofault(&tmp,
-			    (void *)info->prev_sp - RP_OFFSET, sizeof(tmp)))
+			if (get_user(tmp, (unsigned long *)(info->prev_sp - RP_OFFSET))) 
 				break;
 			info->prev_ip = tmp;
 			sp = info->prev_sp;

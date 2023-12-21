@@ -8,7 +8,7 @@
 struct device;
 
 struct lv5207lp_platform_data {
-	struct device *dev;
+	struct device *fbdev;
 	unsigned int max_value;
 	unsigned int def_value;
 };

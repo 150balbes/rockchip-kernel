@@ -8,14 +8,6 @@
 #define SDW_CADENCE_GSYNC_KHZ		4 /* 4 kHz */
 #define SDW_CADENCE_GSYNC_HZ		(SDW_CADENCE_GSYNC_KHZ * 1000)
 
-/*
- * The Cadence IP supports up to 32 entries in the FIFO, though implementations
- * can configure the IP to have a smaller FIFO.
- */
-#define CDNS_MCP_IP_MAX_CMD_LEN		32
-
-#define SDW_CADENCE_MCP_IP_OFFSET	0x4000
-
 /**
  * struct sdw_cdns_pdi: PDI (Physical Data Interface) instance
  *
@@ -25,7 +17,7 @@
  * @h_ch_num: high channel for PDI
  * @ch_count: total channel count for PDI
  * @dir: data direction
- * @type: stream type, (only PCM supported)
+ * @type: stream type, PDM or PCM
  */
 struct sdw_cdns_pdi {
 	int num;
@@ -70,15 +62,21 @@ struct sdw_cdns_streams {
  * @pcm_bd: number of bidirectional PCM streams supported
  * @pcm_in: number of input PCM streams supported
  * @pcm_out: number of output PCM streams supported
+ * @pdm_bd: number of bidirectional PDM streams supported
+ * @pdm_in: number of input PDM streams supported
+ * @pdm_out: number of output PDM streams supported
  */
 struct sdw_cdns_stream_config {
 	unsigned int pcm_bd;
 	unsigned int pcm_in;
 	unsigned int pcm_out;
+	unsigned int pdm_bd;
+	unsigned int pdm_in;
+	unsigned int pdm_out;
 };
 
 /**
- * struct sdw_cdns_dai_runtime: Cadence DAI runtime data
+ * struct sdw_cdns_dma_data: Cadence DMA data
  *
  * @name: SoundWire stream name
  * @stream: stream runtime
@@ -86,20 +84,18 @@ struct sdw_cdns_stream_config {
  * @bus: Bus handle
  * @stream_type: Stream type
  * @link_id: Master link id
+ * @hw_params: hw_params to be applied in .prepare step
  * @suspended: status set when suspended, to be used in .prepare
- * @paused: status set in .trigger, to be used in suspend
- * @direction: stream direction
  */
-struct sdw_cdns_dai_runtime {
+struct sdw_cdns_dma_data {
 	char *name;
 	struct sdw_stream_runtime *stream;
 	struct sdw_cdns_pdi *pdi;
 	struct sdw_bus *bus;
 	enum sdw_stream_type stream_type;
 	int link_id;
+	struct snd_pcm_hw_params *hw_params;
 	bool suspended;
-	bool paused;
-	int direction;
 };
 
 /**
@@ -107,39 +103,31 @@ struct sdw_cdns_dai_runtime {
  * @dev: Linux device
  * @bus: Bus handle
  * @instance: instance number
- * @ip_offset: version-dependent offset to access IP_MCP registers and fields
  * @response_buf: SoundWire response buffer
  * @tx_complete: Tx completion
+ * @defer: Defer pointer
  * @ports: Data ports
  * @num_ports: Total number of data ports
  * @pcm: PCM streams
+ * @pdm: PDM streams
  * @registers: Cadence registers
  * @link_up: Link status
  * @msg_count: Messages sent on bus
- * @dai_runtime_array: runtime context for each allocated DAI.
  */
 struct sdw_cdns {
 	struct device *dev;
 	struct sdw_bus bus;
 	unsigned int instance;
 
-	u32 ip_offset;
-
-	/*
-	 * The datasheet says the RX FIFO AVAIL can be 2 entries more
-	 * than the FIFO capacity, so allow for this.
-	 */
-	u32 response_buf[CDNS_MCP_IP_MAX_CMD_LEN + 2];
-
+	u32 response_buf[0x80];
 	struct completion tx_complete;
+	struct sdw_defer *defer;
 
 	struct sdw_cdns_port *ports;
 	int num_ports;
 
 	struct sdw_cdns_streams pcm;
-
-	int pdi_loopback_source;
-	int pdi_loopback_target;
+	struct sdw_cdns_streams pdm;
 
 	void __iomem *registers;
 
@@ -150,8 +138,6 @@ struct sdw_cdns {
 	struct work_struct work;
 
 	struct list_head list;
-
-	struct sdw_cdns_dai_runtime **dai_runtime_array;
 };
 
 #define bus_to_cdns(_bus) container_of(_bus, struct sdw_cdns, bus)
@@ -159,6 +145,7 @@ struct sdw_cdns {
 /* Exported symbols */
 
 int sdw_cdns_probe(struct sdw_cdns *cdns);
+extern struct sdw_master_ops sdw_cdns_master_ops;
 
 irqreturn_t sdw_cdns_irq(int irq, void *dev_id);
 irqreturn_t sdw_cdns_thread(int irq, void *dev_id);
@@ -184,22 +171,20 @@ void sdw_cdns_config_stream(struct sdw_cdns *cdns,
 			    u32 ch, u32 dir, struct sdw_cdns_pdi *pdi);
 
 enum sdw_command_response
+cdns_reset_page_addr(struct sdw_bus *bus, unsigned int dev_num);
+
+enum sdw_command_response
 cdns_xfer_msg(struct sdw_bus *bus, struct sdw_msg *msg);
 
 enum sdw_command_response
-cdns_xfer_msg_defer(struct sdw_bus *bus);
+cdns_xfer_msg_defer(struct sdw_bus *bus,
+		    struct sdw_msg *msg, struct sdw_defer *defer);
 
-u32 cdns_read_ping_status(struct sdw_bus *bus);
+enum sdw_command_response
+cdns_reset_page_addr(struct sdw_bus *bus, unsigned int dev_num);
 
 int cdns_bus_conf(struct sdw_bus *bus, struct sdw_bus_params *params);
 
 int cdns_set_sdw_stream(struct snd_soc_dai *dai,
-			void *stream, int direction);
-
-void sdw_cdns_check_self_clearing_bits(struct sdw_cdns *cdns, const char *string,
-				       bool initial_delay, int reset_iterations);
-
-void sdw_cdns_config_update(struct sdw_cdns *cdns);
-int sdw_cdns_config_update_set_wait(struct sdw_cdns *cdns);
-
+			void *stream, bool pcm, int direction);
 #endif /* __SDW_CADENCE_H */

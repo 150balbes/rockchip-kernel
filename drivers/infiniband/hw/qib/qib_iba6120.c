@@ -799,9 +799,12 @@ static void qib_handle_6120_hwerrors(struct qib_devdata *dd, char *msg,
 			hwerrs &= ~TXE_PIO_PARITY;
 		}
 
-		if (!hwerrs)
+		if (!hwerrs) {
+			static u32 freeze_cnt;
+
+			freeze_cnt++;
 			qib_6120_clear_freeze(dd);
-		else
+		} else
 			isfatal = 1;
 	}
 
@@ -1220,7 +1223,7 @@ static void qib_set_ib_6120_lstate(struct qib_pportdata *ppd, u16 linkcmd,
 
 /**
  * qib_6120_bringup_serdes - bring up the serdes
- * @ppd: the qlogic_ib device
+ * @dd: the qlogic_ib device
  */
 static int qib_6120_bringup_serdes(struct qib_pportdata *ppd)
 {
@@ -1409,7 +1412,7 @@ static void qib_6120_quiet_serdes(struct qib_pportdata *ppd)
 
 /**
  * qib_6120_setup_setextled - set the state of the two external LEDs
- * @ppd: the qlogic_ib device
+ * @dd: the qlogic_ib device
  * @on: whether the link is up or not
  *
  * The exact combo of LEDs if on is true is determined by looking
@@ -1820,7 +1823,7 @@ bail:
  * qib_6120_put_tid - write a TID in chip
  * @dd: the qlogic_ib device
  * @tidptr: pointer to the expected TID (in chip) to update
- * @type: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0)
+ * @tidtype: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0)
  * for expected
  * @pa: physical address of in memory buffer; tidinvalid if freeing
  *
@@ -1887,7 +1890,7 @@ static void qib_6120_put_tid(struct qib_devdata *dd, u64 __iomem *tidptr,
  * qib_6120_put_tid_2 - write a TID in chip, Revision 2 or higher
  * @dd: the qlogic_ib device
  * @tidptr: pointer to the expected TID (in chip) to update
- * @type: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0)
+ * @tidtype: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0)
  * for expected
  * @pa: physical address of in memory buffer; tidinvalid if freeing
  *
@@ -1929,7 +1932,7 @@ static void qib_6120_put_tid_2(struct qib_devdata *dd, u64 __iomem *tidptr,
 /**
  * qib_6120_clear_tids - clear all TID entries for a context, expected and eager
  * @dd: the qlogic_ib device
- * @rcd: the context
+ * @ctxt: the context
  *
  * clear all TID entries for a context, expected and eager.
  * Used from qib_close().  On this chip, TIDs are only 32 bits,
@@ -2005,7 +2008,7 @@ int __attribute__((weak)) qib_unordered_wc(void)
 /**
  * qib_6120_get_base_info - set chip-specific flags for user code
  * @rcd: the qlogic_ib ctxt
- * @kinfo: qib_base_info pointer
+ * @kbase: qib_base_info pointer
  *
  * We set the PCIE flag because the lower bandwidth on PCIe vs
  * HyperTransport can affect some user packet algorithms.
@@ -2072,7 +2075,7 @@ static void alloc_dummy_hdrq(struct qib_devdata *dd)
 	dd->cspec->dummy_hdrq = dma_alloc_coherent(&dd->pcidev->dev,
 					dd->rcd[0]->rcvhdrq_size,
 					&dd->cspec->dummy_hdrq_phys,
-					GFP_ATOMIC);
+					GFP_ATOMIC | __GFP_COMP);
 	if (!dd->cspec->dummy_hdrq) {
 		qib_devinfo(dd->pcidev, "Couldn't allocate dummy hdrq\n");
 		/* fallback to just 0'ing */
@@ -2267,8 +2270,8 @@ static void sendctrl_6120_mod(struct qib_pportdata *ppd, u32 op)
 
 /**
  * qib_portcntr_6120 - read a per-port counter
- * @ppd: the qlogic_ib device
- * @reg: the counter to snapshot
+ * @dd: the qlogic_ib device
+ * @creg: the counter to snapshot
  */
 static u64 qib_portcntr_6120(struct qib_pportdata *ppd, u32 reg)
 {
@@ -2606,8 +2609,8 @@ static void qib_chk_6120_errormask(struct qib_devdata *dd)
 }
 
 /**
- * qib_get_6120_faststats - get word counters from chip before they overflow
- * @t: contains a pointer to the qlogic_ib device qib_devdata
+ * qib_get_faststats - get word counters from chip before they overflow
+ * @opaque - contains a pointer to the qlogic_ib device qib_devdata
  *
  * This needs more work; in particular, decision on whether we really
  * need traffic_wds done the way it is
@@ -3027,7 +3030,7 @@ static int qib_6120_ib_updown(struct qib_pportdata *ppd, int ibup, u64 ibcs)
 
 /* Does read/modify/write to appropriate registers to
  * set output and direction bits selected by mask.
- * these are in their canonical positions (e.g. lsb of
+ * these are in their canonical postions (e.g. lsb of
  * dir will end up in D48 of extctrl on existing chips).
  * returns contents of GP Inputs.
  */

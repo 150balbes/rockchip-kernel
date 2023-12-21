@@ -61,10 +61,15 @@ static int max8997_haptic_set_duty_cycle(struct max8997_haptic *chip)
 		unsigned int duty = chip->pwm_period * chip->level / 100;
 		ret = pwm_config(chip->pwm, duty, chip->pwm_period);
 	} else {
+		int i;
 		u8 duty_index = 0;
 
-		duty_index = DIV_ROUND_UP(chip->level * 64, 100);
-
+		for (i = 0; i <= 64; i++) {
+			if (chip->level <= i * 100 / 64) {
+				duty_index = i;
+				break;
+			}
+		}
 		switch (chip->internal_mode_pattern) {
 		case 0:
 			max8997_write_reg(chip->client,
@@ -278,7 +283,8 @@ static int max8997_haptic_probe(struct platform_device *pdev)
 		break;
 
 	case MAX8997_EXTERNAL_MODE:
-		chip->pwm = pwm_get(&pdev->dev, NULL);
+		chip->pwm = pwm_request(haptic_pdata->pwm_channel_id,
+					"max8997-haptic");
 		if (IS_ERR(chip->pwm)) {
 			error = PTR_ERR(chip->pwm);
 			dev_err(&pdev->dev,
@@ -343,7 +349,7 @@ err_put_regulator:
 	regulator_put(chip->regulator);
 err_free_pwm:
 	if (chip->mode == MAX8997_EXTERNAL_MODE)
-		pwm_put(chip->pwm);
+		pwm_free(chip->pwm);
 err_free_mem:
 	input_free_device(input_dev);
 	kfree(chip);
@@ -359,14 +365,14 @@ static int max8997_haptic_remove(struct platform_device *pdev)
 	regulator_put(chip->regulator);
 
 	if (chip->mode == MAX8997_EXTERNAL_MODE)
-		pwm_put(chip->pwm);
+		pwm_free(chip->pwm);
 
 	kfree(chip);
 
 	return 0;
 }
 
-static int max8997_haptic_suspend(struct device *dev)
+static int __maybe_unused max8997_haptic_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct max8997_haptic *chip = platform_get_drvdata(pdev);
@@ -376,8 +382,7 @@ static int max8997_haptic_suspend(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(max8997_haptic_pm_ops,
-				max8997_haptic_suspend, NULL);
+static SIMPLE_DEV_PM_OPS(max8997_haptic_pm_ops, max8997_haptic_suspend, NULL);
 
 static const struct platform_device_id max8997_haptic_id[] = {
 	{ "max8997-haptic", 0 },
@@ -388,7 +393,7 @@ MODULE_DEVICE_TABLE(platform, max8997_haptic_id);
 static struct platform_driver max8997_haptic_driver = {
 	.driver	= {
 		.name	= "max8997-haptic",
-		.pm	= pm_sleep_ptr(&max8997_haptic_pm_ops),
+		.pm	= &max8997_haptic_pm_ops,
 	},
 	.probe		= max8997_haptic_probe,
 	.remove		= max8997_haptic_remove,

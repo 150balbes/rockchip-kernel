@@ -7,14 +7,11 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: STMicroelectronics STM32 SPI/I2S Controller
 
 maintainers:
-  - Olivier Moysan <olivier.moysan@foss.st.com>
+  - Olivier Moysan <olivier.moysan@st.com>
 
 description:
   The SPI/I2S block supports I2S/PCM protocols when configured on I2S mode.
   Only some SPI instances support I2S.
-
-allOf:
-  - $ref: dai-common.yaml#
 
 properties:
   compatible:
@@ -57,14 +54,6 @@ properties:
   resets:
     maxItems: 1
 
-  "#clock-cells":
-    description: Configure the I2S device as MCLK clock provider.
-    const: 0
-
-  port:
-    $ref: audio-graph-port.yaml#
-    unevaluatedProperties: false
-
 required:
   - compatible
   - "#sound-dai-cells"
@@ -75,7 +64,7 @@ required:
   - dmas
   - dma-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
@@ -93,13 +82,6 @@ examples:
         dma-names = "rx", "tx";
         pinctrl-names = "default";
         pinctrl-0 = <&i2s2_pins_a>;
-
-        /* assume audio-graph */
-        port {
-            codec_endpoint: endpoint {
-                remote-endpoint = <&codec_endpoint>;
-            };
-        };
     };
 
 ...

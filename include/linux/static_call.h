@@ -17,16 +17,9 @@
  *   DECLARE_STATIC_CALL(name, func);
  *   DEFINE_STATIC_CALL(name, func);
  *   DEFINE_STATIC_CALL_NULL(name, typename);
- *   DEFINE_STATIC_CALL_RET0(name, typename);
- *
- *   __static_call_return0;
- *
  *   static_call(name)(args...);
  *   static_call_cond(name)(args...);
  *   static_call_update(name, func);
- *   static_call_query(name);
- *
- *   EXPORT_STATIC_CALL{,_TRAMP}{,_GPL}()
  *
  * Usage example:
  *
@@ -98,37 +91,6 @@
  *
  *   which will include the required value tests to avoid NULL-pointer
  *   dereferences.
- *
- *   To query which function is currently set to be called, use:
- *
- *   func = static_call_query(name);
- *
- *
- * DEFINE_STATIC_CALL_RET0 / __static_call_return0:
- *
- *   Just like how DEFINE_STATIC_CALL_NULL() / static_call_cond() optimize the
- *   conditional void function call, DEFINE_STATIC_CALL_RET0 /
- *   __static_call_return0 optimize the do nothing return 0 function.
- *
- *   This feature is strictly UB per the C standard (since it casts a function
- *   pointer to a different signature) and relies on the architecture ABI to
- *   make things work. In particular it relies on Caller Stack-cleanup and the
- *   whole return register being clobbered for short return values. All normal
- *   CDECL style ABIs conform.
- *
- *   In particular the x86_64 implementation replaces the 5 byte CALL
- *   instruction at the callsite with a 5 byte clear of the RAX register,
- *   completely eliding any function call overhead.
- *
- *   Notably argument setup is unconditional.
- *
- *
- * EXPORT_STATIC_CALL() vs EXPORT_STATIC_CALL_TRAMP():
- *
- *   The difference is that the _TRAMP variant tries to only export the
- *   trampoline with the result that a module can use static_call{,_cond}() but
- *   not static_call_update().
- *
  */
 
 #include <linux/types.h>
@@ -151,23 +113,29 @@ extern void arch_static_call_transform(void *site, void *tramp, void *func, bool
 
 #define static_call_update(name, func)					\
 ({									\
-	typeof(&STATIC_CALL_TRAMP(name)) __F = (func);			\
+	BUILD_BUG_ON(!__same_type(*(func), STATIC_CALL_TRAMP(name)));	\
 	__static_call_update(&STATIC_CALL_KEY(name),			\
-			     STATIC_CALL_TRAMP_ADDR(name), __F);	\
+			     STATIC_CALL_TRAMP_ADDR(name), func);	\
 })
-
-#define static_call_query(name) (READ_ONCE(STATIC_CALL_KEY(name).func))
 
 #ifdef CONFIG_HAVE_STATIC_CALL_INLINE
 
 extern int __init static_call_init(void);
 
-extern void static_call_force_reinit(void);
-
 struct static_call_mod {
 	struct static_call_mod *next;
 	struct module *mod; /* for vmlinux, mod == NULL */
 	struct static_call_site *sites;
+};
+
+struct static_call_key {
+	void *func;
+	union {
+		/* bit 0: 0 = mods, 1 = sites */
+		unsigned long type;
+		struct static_call_mod *mods;
+		struct static_call_site *sites;
+	};
 };
 
 /* For finding the key associated with a trampoline */
@@ -179,8 +147,6 @@ struct static_call_tramp_key {
 extern void __static_call_update(struct static_call_key *key, void *tramp, void *func);
 extern int static_call_mod_init(struct module *mod);
 extern int static_call_text_reserved(void *start, void *end);
-
-extern long __static_call_return0(void);
 
 #define DEFINE_STATIC_CALL(name, _func)					\
 	DECLARE_STATIC_CALL(name, _func);				\
@@ -197,14 +163,6 @@ extern long __static_call_return0(void);
 		.type = 1,						\
 	};								\
 	ARCH_DEFINE_STATIC_CALL_NULL_TRAMP(name)
-
-#define DEFINE_STATIC_CALL_RET0(name, _func)				\
-	DECLARE_STATIC_CALL(name, _func);				\
-	struct static_call_key STATIC_CALL_KEY(name) = {		\
-		.func = __static_call_return0,				\
-		.type = 1,						\
-	};								\
-	ARCH_DEFINE_STATIC_CALL_RET0_TRAMP(name)
 
 #define static_call_cond(name)	(void)__static_call(name)
 
@@ -227,6 +185,10 @@ extern long __static_call_return0(void);
 
 static inline int static_call_init(void) { return 0; }
 
+struct static_call_key {
+	void *func;
+};
+
 #define DEFINE_STATIC_CALL(name, _func)					\
 	DECLARE_STATIC_CALL(name, _func);				\
 	struct static_call_key STATIC_CALL_KEY(name) = {		\
@@ -240,13 +202,6 @@ static inline int static_call_init(void) { return 0; }
 		.func = NULL,						\
 	};								\
 	ARCH_DEFINE_STATIC_CALL_NULL_TRAMP(name)
-
-#define DEFINE_STATIC_CALL_RET0(name, _func)				\
-	DECLARE_STATIC_CALL(name, _func);				\
-	struct static_call_key STATIC_CALL_KEY(name) = {		\
-		.func = __static_call_return0,				\
-	};								\
-	ARCH_DEFINE_STATIC_CALL_RET0_TRAMP(name)
 
 #define static_call_cond(name)	(void)__static_call(name)
 
@@ -263,8 +218,6 @@ static inline int static_call_text_reserved(void *start, void *end)
 {
 	return 0;
 }
-
-extern long __static_call_return0(void);
 
 #define EXPORT_STATIC_CALL(name)					\
 	EXPORT_SYMBOL(STATIC_CALL_KEY(name));				\
@@ -283,25 +236,21 @@ extern long __static_call_return0(void);
 
 static inline int static_call_init(void) { return 0; }
 
-static inline long __static_call_return0(void)
-{
-	return 0;
-}
-
-#define __DEFINE_STATIC_CALL(name, _func, _func_init)			\
-	DECLARE_STATIC_CALL(name, _func);				\
-	struct static_call_key STATIC_CALL_KEY(name) = {		\
-		.func = _func_init,					\
-	}
+struct static_call_key {
+	void *func;
+};
 
 #define DEFINE_STATIC_CALL(name, _func)					\
-	__DEFINE_STATIC_CALL(name, _func, _func)
+	DECLARE_STATIC_CALL(name, _func);				\
+	struct static_call_key STATIC_CALL_KEY(name) = {		\
+		.func = _func,						\
+	}
 
 #define DEFINE_STATIC_CALL_NULL(name, _func)				\
-	__DEFINE_STATIC_CALL(name, _func, NULL)
-
-#define DEFINE_STATIC_CALL_RET0(name, _func)				\
-	__DEFINE_STATIC_CALL(name, _func, __static_call_return0)
+	DECLARE_STATIC_CALL(name, _func);				\
+	struct static_call_key STATIC_CALL_KEY(name) = {		\
+		.func = NULL,						\
+	}
 
 static inline void __static_call_nop(void) { }
 

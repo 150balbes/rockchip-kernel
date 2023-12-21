@@ -54,9 +54,10 @@ static int acp_probe(struct platform_device *pdev)
 	snd_soc_card_set_drvdata(card, machine);
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret) {
-		return dev_err_probe(&pdev->dev, ret,
-				"snd_soc_register_card(%s) failed\n",
-				card->name);
+		dev_err(&pdev->dev,
+			"snd_soc_register_card(%s) failed: %d\n",
+			acp_card.name, ret);
+		return ret;
 	}
 	return 0;
 }

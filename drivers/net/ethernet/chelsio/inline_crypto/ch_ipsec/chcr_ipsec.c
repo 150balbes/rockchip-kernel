@@ -51,8 +51,7 @@
 #include <crypto/aes.h>
 #include <crypto/algapi.h>
 #include <crypto/hash.h>
-#include <crypto/sha1.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <crypto/authenc.h>
 #include <crypto/internal/aead.h>
 #include <crypto/null.h>
@@ -80,8 +79,7 @@ static void *ch_ipsec_uld_add(const struct cxgb4_lld_info *infop);
 static void ch_ipsec_advance_esn_state(struct xfrm_state *x);
 static void ch_ipsec_xfrm_free_state(struct xfrm_state *x);
 static void ch_ipsec_xfrm_del_state(struct xfrm_state *x);
-static int ch_ipsec_xfrm_add_state(struct xfrm_state *x,
-				   struct netlink_ext_ack *extack);
+static int ch_ipsec_xfrm_add_state(struct xfrm_state *x);
 
 static const struct xfrmdev_ops ch_ipsec_xfrmdev_ops = {
 	.xdo_dev_state_add      = ch_ipsec_xfrm_add_state,
@@ -93,6 +91,9 @@ static const struct xfrmdev_ops ch_ipsec_xfrmdev_ops = {
 
 static struct cxgb4_uld_info ch_ipsec_uld_info = {
 	.name = CHIPSEC_DRV_MODULE_NAME,
+	.nrxq = MAX_ULD_QSETS,
+	/* Max ntxq will be derived from fw config file*/
+	.rxq_size = 1024,
 	.add = ch_ipsec_uld_add,
 	.state_change = ch_ipsec_uld_state_change,
 	.tx_handler = ch_ipsec_xmit,
@@ -227,66 +228,61 @@ out:
  * returns 0 on success, negative error if failed to send message to FPGA
  * positive error if FPGA returned a bad response
  */
-static int ch_ipsec_xfrm_add_state(struct xfrm_state *x,
-				   struct netlink_ext_ack *extack)
+static int ch_ipsec_xfrm_add_state(struct xfrm_state *x)
 {
 	struct ipsec_sa_entry *sa_entry;
 	int res = 0;
 
 	if (x->props.aalgo != SADB_AALG_NONE) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload authenticated xfrm states");
+		pr_debug("Cannot offload authenticated xfrm states\n");
 		return -EINVAL;
 	}
 	if (x->props.calgo != SADB_X_CALG_NONE) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload compressed xfrm states");
+		pr_debug("Cannot offload compressed xfrm states\n");
 		return -EINVAL;
 	}
 	if (x->props.family != AF_INET &&
 	    x->props.family != AF_INET6) {
-		NL_SET_ERR_MSG_MOD(extack, "Only IPv4/6 xfrm state offloaded");
+		pr_debug("Only IPv4/6 xfrm state offloaded\n");
 		return -EINVAL;
 	}
 	if (x->props.mode != XFRM_MODE_TRANSPORT &&
 	    x->props.mode != XFRM_MODE_TUNNEL) {
-		NL_SET_ERR_MSG_MOD(extack, "Only transport and tunnel xfrm offload");
+		pr_debug("Only transport and tunnel xfrm offload\n");
 		return -EINVAL;
 	}
 	if (x->id.proto != IPPROTO_ESP) {
-		NL_SET_ERR_MSG_MOD(extack, "Only ESP xfrm state offloaded");
+		pr_debug("Only ESP xfrm state offloaded\n");
 		return -EINVAL;
 	}
 	if (x->encap) {
-		NL_SET_ERR_MSG_MOD(extack, "Encapsulated xfrm state not offloaded");
+		pr_debug("Encapsulated xfrm state not offloaded\n");
 		return -EINVAL;
 	}
 	if (!x->aead) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states without aead");
+		pr_debug("Cannot offload xfrm states without aead\n");
 		return -EINVAL;
 	}
 	if (x->aead->alg_icv_len != 128 &&
 	    x->aead->alg_icv_len != 96) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states with AEAD ICV length other than 96b & 128b");
-		return -EINVAL;
+		pr_debug("Cannot offload xfrm states with AEAD ICV length other than 96b & 128b\n");
+	return -EINVAL;
 	}
 	if ((x->aead->alg_key_len != 128 + 32) &&
 	    (x->aead->alg_key_len != 256 + 32)) {
-		NL_SET_ERR_MSG_MOD(extack, "cannot offload xfrm states with AEAD key length other than 128/256 bit");
+		pr_debug("cannot offload xfrm states with AEAD key length other than 128/256 bit\n");
 		return -EINVAL;
 	}
 	if (x->tfcpad) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states with tfc padding");
+		pr_debug("Cannot offload xfrm states with tfc padding\n");
 		return -EINVAL;
 	}
 	if (!x->geniv) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states without geniv");
+		pr_debug("Cannot offload xfrm states without geniv\n");
 		return -EINVAL;
 	}
 	if (strcmp(x->geniv, "seqiv")) {
-		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states with geniv other than seqiv");
-		return -EINVAL;
-	}
-	if (x->xso.type != XFRM_DEV_OFFLOAD_CRYPTO) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported xfrm offload");
+		pr_debug("Cannot offload xfrm states with geniv other than seqiv\n");
 		return -EINVAL;
 	}
 

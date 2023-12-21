@@ -22,7 +22,7 @@ and type of the memory area are set using three variables:
   * ``mem_address`` for the start
   * ``mem_size`` for the size. The memory size will be rounded down to a
     power of two.
-  * ``mem_type`` to specify if the memory type (default is pgprot_writecombine).
+  * ``mem_type`` to specifiy if the memory type (default is pgprot_writecombine).
 
 Typically the default value of ``mem_type=0`` should be used as that sets the pstore
 mapping to pgprot_writecombine. Setting ``mem_type=1`` attempts to use
@@ -69,7 +69,7 @@ Setting the ramoops parameters can be done in several different manners:
 	mem=128M ramoops.mem_address=0x8000000 ramoops.ecc=1
 
  B. Use Device Tree bindings, as described in
- ``Documentation/devicetree/bindings/reserved-memory/ramoops.yaml``.
+ ``Documentation/devicetree/bindings/reserved-memory/ramoops.txt``.
  For example::
 
 	reserved-memory {

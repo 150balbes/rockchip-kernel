@@ -294,11 +294,13 @@ static int ltc4306_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void ltc4306_remove(struct i2c_client *client)
+static int ltc4306_remove(struct i2c_client *client)
 {
 	struct i2c_mux_core *muxc = i2c_get_clientdata(client);
 
 	i2c_mux_del_adapters(muxc);
+
+	return 0;
 }
 
 static struct i2c_driver ltc4306_driver = {
@@ -306,7 +308,7 @@ static struct i2c_driver ltc4306_driver = {
 		.name	= "ltc4306",
 		.of_match_table = of_match_ptr(ltc4306_of_match),
 	},
-	.probe		= ltc4306_probe,
+	.probe_new	= ltc4306_probe,
 	.remove		= ltc4306_remove,
 	.id_table	= ltc4306_id,
 };

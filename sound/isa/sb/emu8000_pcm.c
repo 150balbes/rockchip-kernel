@@ -236,7 +236,7 @@ static int emu8k_pcm_open(struct snd_pcm_substream *subs)
 
 	/* use timer to update periods.. (specified in msec) */
 	snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_PERIOD_TIME,
-				     DIV_ROUND_UP(1000000, HZ), UINT_MAX);
+				     (1000000 + HZ - 1) / HZ, UINT_MAX);
 
 	return 0;
 }
@@ -626,8 +626,7 @@ static int emu8k_pcm_prepare(struct snd_pcm_substream *subs)
 		int err, i, ch;
 
 		snd_emux_terminate_all(rec->emu->emu);
-		err = emu8k_open_dram_for_pcm(rec->emu, rec->voices);
-		if (err)
+		if ((err = emu8k_open_dram_for_pcm(rec->emu, rec->voices)) != 0)
 			return err;
 		rec->dram_opened = 1;
 
@@ -683,8 +682,7 @@ int snd_emu8000_pcm_new(struct snd_card *card, struct snd_emu8000 *emu, int inde
 	struct snd_pcm *pcm;
 	int err;
 
-	err = snd_pcm_new(card, "Emu8000 PCM", index, 1, 0, &pcm);
-	if (err < 0)
+	if ((err = snd_pcm_new(card, "Emu8000 PCM", index, 1, 0, &pcm)) < 0)
 		return err;
 	pcm->private_data = emu;
 	pcm->private_free = snd_emu8000_pcm_free;

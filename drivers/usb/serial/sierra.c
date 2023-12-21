@@ -453,7 +453,7 @@ static int sierra_write(struct tty_struct *tty, struct usb_serial_port *port,
 		goto error_simple;
 	}
 
-	buffer = kmemdup(buf, writesize, GFP_ATOMIC);
+	buffer = kmalloc(writesize, GFP_ATOMIC);
 	if (!buffer) {
 		retval = -ENOMEM;
 		goto error_no_buffer;
@@ -464,6 +464,8 @@ static int sierra_write(struct tty_struct *tty, struct usb_serial_port *port,
 		retval = -ENOMEM;
 		goto error_no_urb;
 	}
+
+	memcpy(buffer, buf, writesize);
 
 	usb_serial_debug_data(&port->dev, __func__, writesize, buffer);
 
@@ -611,7 +613,7 @@ static void sierra_instat_callback(struct urb *urb)
 	}
 }
 
-static unsigned int sierra_write_room(struct tty_struct *tty)
+static int sierra_write_room(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct sierra_port_private *portdata = usb_get_serial_port_data(port);
@@ -630,19 +632,19 @@ static unsigned int sierra_write_room(struct tty_struct *tty)
 	return 2048;
 }
 
-static unsigned int sierra_chars_in_buffer(struct tty_struct *tty)
+static int sierra_chars_in_buffer(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct sierra_port_private *portdata = usb_get_serial_port_data(port);
 	unsigned long flags;
-	unsigned int chars;
+	int chars;
 
 	/* NOTE: This overcounts somewhat. */
 	spin_lock_irqsave(&portdata->lock, flags);
 	chars = portdata->outstanding_urbs * MAX_TRANSFER;
 	spin_unlock_irqrestore(&portdata->lock, flags);
 
-	dev_dbg(&port->dev, "%s - %u\n", __func__, chars);
+	dev_dbg(&port->dev, "%s - %d\n", __func__, chars);
 
 	return chars;
 }
@@ -900,13 +902,15 @@ static int sierra_port_probe(struct usb_serial_port *port)
 	return 0;
 }
 
-static void sierra_port_remove(struct usb_serial_port *port)
+static int sierra_port_remove(struct usb_serial_port *port)
 {
 	struct sierra_port_private *portdata;
 
 	portdata = usb_get_serial_port_data(port);
 	usb_set_serial_port_data(port, NULL);
 	kfree(portdata);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1055,5 +1059,5 @@ MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL v2");
 
-module_param(nmea, bool, 0644);
+module_param(nmea, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(nmea, "NMEA streaming");

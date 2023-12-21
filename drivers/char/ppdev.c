@@ -773,9 +773,7 @@ static __poll_t pp_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-static const struct class ppdev_class = {
-	.name = CHRDEV,
-};
+static struct class *ppdev_class;
 
 static const struct file_operations pp_fops = {
 	.owner		= THIS_MODULE,
@@ -796,7 +794,7 @@ static void pp_attach(struct parport *port)
 	if (devices[port->number])
 		return;
 
-	ret = device_create(&ppdev_class, port->dev,
+	ret = device_create(ppdev_class, port->dev,
 			    MKDEV(PP_MAJOR, port->number), NULL,
 			    "parport%d", port->number);
 	if (IS_ERR(ret)) {
@@ -812,7 +810,7 @@ static void pp_detach(struct parport *port)
 	if (!devices[port->number])
 		return;
 
-	device_destroy(&ppdev_class, MKDEV(PP_MAJOR, port->number));
+	device_destroy(ppdev_class, MKDEV(PP_MAJOR, port->number));
 	devices[port->number] = NULL;
 }
 
@@ -843,10 +841,11 @@ static int __init ppdev_init(void)
 		pr_warn(CHRDEV ": unable to get major %d\n", PP_MAJOR);
 		return -EIO;
 	}
-	err = class_register(&ppdev_class);
-	if (err)
+	ppdev_class = class_create(THIS_MODULE, CHRDEV);
+	if (IS_ERR(ppdev_class)) {
+		err = PTR_ERR(ppdev_class);
 		goto out_chrdev;
-
+	}
 	err = parport_register_driver(&pp_driver);
 	if (err < 0) {
 		pr_warn(CHRDEV ": unable to register with parport\n");
@@ -857,7 +856,7 @@ static int __init ppdev_init(void)
 	goto out;
 
 out_class:
-	class_unregister(&ppdev_class);
+	class_destroy(ppdev_class);
 out_chrdev:
 	unregister_chrdev(PP_MAJOR, CHRDEV);
 out:
@@ -868,7 +867,7 @@ static void __exit ppdev_cleanup(void)
 {
 	/* Clean up all parport stuff */
 	parport_unregister_driver(&pp_driver);
-	class_unregister(&ppdev_class);
+	class_destroy(ppdev_class);
 	unregister_chrdev(PP_MAJOR, CHRDEV);
 }
 

@@ -29,9 +29,6 @@ properties:
     minimum: 1
     maximum: 8388607
 
-  reset-gpios:
-    maxItems: 1
-
 required:
   - compatible
   - reg
@@ -40,7 +37,6 @@ additionalProperties: false
 
 examples:
   - |
-    #include <dt-bindings/gpio/gpio.h>
     i2c {
       #address-cells = <1>;
       #size-cells = <0>;
@@ -49,6 +45,5 @@ examples:
         reg = <0x38>;
         maxim,temperature_calib = <1024>;
         maxim,r0_calib = <100232>;
-        reset-gpios = <&gpio 9 GPIO_ACTIVE_LOW>;
       };
     };

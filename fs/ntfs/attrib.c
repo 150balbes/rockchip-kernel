@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/**
  * attrib.c - NTFS attribute operations.  Part of the Linux-NTFS project.
  *
  * Copyright (c) 2001-2012 Anton Altaparmakov and Tuxera Inc.
@@ -1743,7 +1743,7 @@ int ntfs_attr_make_non_resident(ntfs_inode *ni, const u32 data_size)
 		vi->i_blocks = ni->allocated_size >> 9;
 	write_unlock_irqrestore(&ni->size_lock, flags);
 	/*
-	 * This needs to be last since the address space operations ->read_folio
+	 * This needs to be last since the address space operations ->readpage
 	 * and ->writepage can run concurrently with us as they are not
 	 * serialized on i_mutex.  Note, we are not allowed to fail once we flip
 	 * this switch, which is another reason to do this last.
@@ -2491,7 +2491,7 @@ conv_err_out:
  * byte offset @ofs inside the attribute with the constant byte @val.
  *
  * This function is effectively like memset() applied to an ntfs attribute.
- * Note this function actually only operates on the page cache pages belonging
+ * Note thie function actually only operates on the page cache pages belonging
  * to the ntfs attribute and it marks them dirty after doing the memset().
  * Thus it relies on the vm dirty page write code paths to cause the modified
  * pages to be written to the mft record/disk.

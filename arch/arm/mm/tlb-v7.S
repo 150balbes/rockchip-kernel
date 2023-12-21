@@ -16,8 +16,6 @@
 #include <asm/tlbflush.h>
 #include "proc-macros.S"
 
-.arch armv7-a
-
 /*
  *	v7wbi_flush_user_tlb_range(start, end, vma)
  *
@@ -25,7 +23,7 @@
  *
  *	- start - start address (may not be aligned)
  *	- end   - end address (exclusive, may not be aligned)
- *	- vma   - vm_area_struct describing address range
+ *	- vma   - vma_struct describing address range
  *
  *	It is assumed that:
  *	- the "Invalidate single entry" instruction will invalidate

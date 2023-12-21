@@ -4,7 +4,7 @@
  *
  * Copyright (C) 2005, 2006 Nokia Corporation
  * Author:	Samuel Ortiz <samuel.ortiz@nokia.com> and
- *		Juha Yrjola <juha.yrjola@nokia.com>
+ *		Juha Yrj�l� <juha.yrjola@nokia.com>
  */
 
 #include <linux/kernel.h>
@@ -246,8 +246,9 @@ static void omap2_mcspi_set_cs(struct spi_device *spi, bool enable)
 		enable = !enable;
 
 	if (spi->controller_state) {
-		int err = pm_runtime_resume_and_get(mcspi->dev);
+		int err = pm_runtime_get_sync(mcspi->dev);
 		if (err < 0) {
+			pm_runtime_put_noidle(mcspi->dev);
 			dev_err(mcspi->dev, "failed to get sync: %d\n", err);
 			return;
 		}
@@ -379,7 +380,7 @@ static void omap2_mcspi_rx_callback(void *data)
 {
 	struct spi_device *spi = data;
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
-	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 
 	/* We must disable the DMA RX request */
 	omap2_mcspi_set_dma_req(spi, 1, 0);
@@ -391,7 +392,7 @@ static void omap2_mcspi_tx_callback(void *data)
 {
 	struct spi_device *spi = data;
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
-	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+	struct omap2_mcspi_dma *mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 
 	/* We must disable the DMA TX request */
 	omap2_mcspi_set_dma_req(spi, 0, 0);
@@ -408,7 +409,7 @@ static void omap2_mcspi_tx_dma(struct spi_device *spi,
 	struct dma_async_tx_descriptor *tx;
 
 	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 
 	dmaengine_slave_config(mcspi_dma->dma_tx, &cfg);
 
@@ -446,7 +447,7 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 	struct dma_async_tx_descriptor *tx;
 
 	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 	count = xfer->len;
 
 	/*
@@ -591,7 +592,7 @@ omap2_mcspi_txrx_dma(struct spi_device *spi, struct spi_transfer *xfer)
 	int			wait_res;
 
 	mcspi = spi_master_get_devdata(spi->master);
-	mcspi_dma = &mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+	mcspi_dma = &mcspi->dma_channels[spi->chip_select];
 
 	if (cs->word_len <= 8) {
 		width = DMA_SLAVE_BUSWIDTH_1_BYTE;
@@ -757,8 +758,6 @@ omap2_mcspi_txrx_pio(struct spi_device *spi, struct spi_transfer *xfer)
 				dev_vdbg(&spi->dev, "read-%d %02x\n",
 						word_len, *(rx - 1));
 			}
-			/* Add word delay between each word */
-			spi_delay_exec(&xfer->word_delay, xfer);
 		} while (c);
 	} else if (word_len <= 16) {
 		u16		*rx;
@@ -806,8 +805,6 @@ omap2_mcspi_txrx_pio(struct spi_device *spi, struct spi_transfer *xfer)
 				dev_vdbg(&spi->dev, "read-%d %04x\n",
 						word_len, *(rx - 1));
 			}
-			/* Add word delay between each word */
-			spi_delay_exec(&xfer->word_delay, xfer);
 		} while (c >= 2);
 	} else if (word_len <= 32) {
 		u32		*rx;
@@ -855,8 +852,6 @@ omap2_mcspi_txrx_pio(struct spi_device *spi, struct spi_transfer *xfer)
 				dev_vdbg(&spi->dev, "read-%d %08x\n",
 						word_len, *(rx - 1));
 			}
-			/* Add word delay between each word */
-			spi_delay_exec(&xfer->word_delay, xfer);
 		} while (c >= 4);
 	}
 
@@ -1059,11 +1054,11 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 	struct omap2_mcspi_cs	*cs = spi->controller_state;
 
 	if (!cs) {
-		cs = kzalloc(sizeof(*cs), GFP_KERNEL);
+		cs = kzalloc(sizeof *cs, GFP_KERNEL);
 		if (!cs)
 			return -ENOMEM;
-		cs->base = mcspi->base + spi_get_chipselect(spi, 0) * 0x14;
-		cs->phys = mcspi->phys + spi_get_chipselect(spi, 0) * 0x14;
+		cs->base = mcspi->base + spi->chip_select * 0x14;
+		cs->phys = mcspi->phys + spi->chip_select * 0x14;
 		cs->mode = 0;
 		cs->chconf0 = 0;
 		cs->chctrl0 = 0;
@@ -1073,8 +1068,9 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 		initial_setup = true;
 	}
 
-	ret = pm_runtime_resume_and_get(mcspi->dev);
+	ret = pm_runtime_get_sync(mcspi->dev);
 	if (ret < 0) {
+		pm_runtime_put_noidle(mcspi->dev);
 		if (initial_setup)
 			omap2_mcspi_cleanup(spi);
 
@@ -1142,7 +1138,7 @@ static int omap2_mcspi_transfer_one(struct spi_master *master,
 	u32				chconf;
 
 	mcspi = spi_master_get_devdata(master);
-	mcspi_dma = mcspi->dma_channels + spi_get_chipselect(spi, 0);
+	mcspi_dma = mcspi->dma_channels + spi->chip_select;
 	cs = spi->controller_state;
 	cd = spi->controller_data;
 
@@ -1158,7 +1154,7 @@ static int omap2_mcspi_transfer_one(struct spi_master *master,
 
 	omap2_mcspi_set_enable(spi, 0);
 
-	if (spi_get_csgpiod(spi, 0))
+	if (spi->cs_gpiod)
 		omap2_mcspi_set_cs(spi, spi->mode & SPI_CS_HIGH);
 
 	if (par_override ||
@@ -1247,7 +1243,7 @@ out:
 
 	omap2_mcspi_set_enable(spi, 0);
 
-	if (spi_get_csgpiod(spi, 0))
+	if (spi->cs_gpiod)
 		omap2_mcspi_set_cs(spi, !(spi->mode & SPI_CS_HIGH));
 
 	if (mcspi->fifo_depth > 0 && t)
@@ -1289,7 +1285,7 @@ static bool omap2_mcspi_can_dma(struct spi_master *master,
 {
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
 	struct omap2_mcspi_dma *mcspi_dma =
-		&mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+		&mcspi->dma_channels[spi->chip_select];
 
 	if (!mcspi_dma->dma_rx || !mcspi_dma->dma_tx)
 		return false;
@@ -1307,7 +1303,7 @@ static size_t omap2_mcspi_max_xfer_size(struct spi_device *spi)
 {
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(spi->master);
 	struct omap2_mcspi_dma *mcspi_dma =
-		&mcspi->dma_channels[spi_get_chipselect(spi, 0)];
+		&mcspi->dma_channels[spi->chip_select];
 
 	if (mcspi->max_xfer_len && mcspi_dma->dma_rx)
 		return mcspi->max_xfer_len;
@@ -1321,9 +1317,12 @@ static int omap2_mcspi_controller_setup(struct omap2_mcspi *mcspi)
 	struct omap2_mcspi_regs	*ctx = &mcspi->ctx;
 	int			ret = 0;
 
-	ret = pm_runtime_resume_and_get(mcspi->dev);
-	if (ret < 0)
+	ret = pm_runtime_get_sync(mcspi->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(mcspi->dev);
+
 		return ret;
+	}
 
 	mcspi_write_reg(master, OMAP2_MCSPI_WAKEUPENABLE,
 			OMAP2_MCSPI_WAKEUPENABLE_WKEN);
@@ -1332,17 +1331,6 @@ static int omap2_mcspi_controller_setup(struct omap2_mcspi *mcspi)
 	omap2_mcspi_set_mode(master);
 	pm_runtime_mark_last_busy(mcspi->dev);
 	pm_runtime_put_autosuspend(mcspi->dev);
-	return 0;
-}
-
-static int omap_mcspi_runtime_suspend(struct device *dev)
-{
-	int error;
-
-	error = pinctrl_pm_select_idle_state(dev);
-	if (error)
-		dev_warn(dev, "%s: failed to set pins: %i\n", __func__, error);
-
 	return 0;
 }
 
@@ -1357,11 +1345,6 @@ static int omap_mcspi_runtime_resume(struct device *dev)
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(master);
 	struct omap2_mcspi_regs *ctx = &mcspi->ctx;
 	struct omap2_mcspi_cs *cs;
-	int error;
-
-	error = pinctrl_pm_select_default_state(dev);
-	if (error)
-		dev_warn(dev, "%s: failed to set pins: %i\n", __func__, error);
 
 	/* McSPI: context restore */
 	mcspi_write_reg(master, OMAP2_MCSPI_MODULCTRL, ctx->modulctrl);
@@ -1464,7 +1447,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 
 		of_property_read_u32(node, "ti,spi-num-cs", &num_cs);
 		master->num_chipselect = num_cs;
-		if (of_property_read_bool(node, "ti,pindir-d0-out-d1-in"))
+		if (of_get_property(node, "ti,pindir-d0-out-d1-in", NULL))
 			mcspi->pin_dir = MCSPI_PINDIR_D0_OUT_D1_IN;
 	} else {
 		pdata = dev_get_platdata(&pdev->dev);
@@ -1477,7 +1460,8 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 		master->max_transfer_size = omap2_mcspi_max_xfer_size;
 	}
 
-	mcspi->base = devm_platform_get_and_ioremap_resource(pdev, 0, &r);
+	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mcspi->base = devm_ioremap_resource(&pdev->dev, r);
 	if (IS_ERR(mcspi->base)) {
 		status = PTR_ERR(mcspi->base);
 		goto free_master;
@@ -1508,8 +1492,10 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 	}
 
 	status = platform_get_irq(pdev, 0);
+	if (status == -EPROBE_DEFER)
+		goto free_master;
 	if (status < 0) {
-		dev_err_probe(&pdev->dev, status, "no irq resource found\n");
+		dev_err(&pdev->dev, "no irq resource found\n");
 		goto free_master;
 	}
 	init_completion(&mcspi->txdone);
@@ -1545,7 +1531,7 @@ free_master:
 	return status;
 }
 
-static void omap2_mcspi_remove(struct platform_device *pdev)
+static int omap2_mcspi_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(master);
@@ -1555,6 +1541,8 @@ static void omap2_mcspi_remove(struct platform_device *pdev)
 	pm_runtime_dont_use_autosuspend(mcspi->dev);
 	pm_runtime_put_sync(mcspi->dev);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 /* work with hotplug and coldplug */
@@ -1585,6 +1573,11 @@ static int __maybe_unused omap2_mcspi_resume(struct device *dev)
 	struct omap2_mcspi *mcspi = spi_master_get_devdata(master);
 	int error;
 
+	error = pinctrl_pm_select_default_state(dev);
+	if (error)
+		dev_warn(mcspi->dev, "%s: failed to set pins: %i\n",
+			 __func__, error);
+
 	error = spi_master_resume(master);
 	if (error)
 		dev_warn(mcspi->dev, "%s: master resume failed: %i\n",
@@ -1596,8 +1589,7 @@ static int __maybe_unused omap2_mcspi_resume(struct device *dev)
 static const struct dev_pm_ops omap2_mcspi_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(omap2_mcspi_suspend,
 				omap2_mcspi_resume)
-	.runtime_suspend	= omap_mcspi_runtime_suspend,
-	.runtime_resume		= omap_mcspi_runtime_resume,
+	.runtime_resume	= omap_mcspi_runtime_resume,
 };
 
 static struct platform_driver omap2_mcspi_driver = {
@@ -1607,7 +1599,7 @@ static struct platform_driver omap2_mcspi_driver = {
 		.of_match_table = omap_mcspi_of_match,
 	},
 	.probe =	omap2_mcspi_probe,
-	.remove_new =	omap2_mcspi_remove,
+	.remove =	omap2_mcspi_remove,
 };
 
 module_platform_driver(omap2_mcspi_driver);

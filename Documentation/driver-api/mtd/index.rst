@@ -7,6 +7,6 @@ Memory Technology Device (MTD)
 .. toctree::
    :maxdepth: 1
 
-   spi-intel
+   intel-spi
    nand_ecc
    spi-nor

@@ -608,7 +608,7 @@ static void zforce_input_close(struct input_dev *dev)
 	return;
 }
 
-static int zforce_suspend(struct device *dev)
+static int __maybe_unused zforce_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct zforce_ts *ts = i2c_get_clientdata(client);
@@ -626,14 +626,14 @@ static int zforce_suspend(struct device *dev)
 		dev_dbg(&client->dev, "suspend while being a wakeup source\n");
 
 		/* Need to start device, if not open, to be a wakeup source. */
-		if (!input_device_enabled(input)) {
+		if (!input->users) {
 			ret = zforce_start(ts);
 			if (ret)
 				goto unlock;
 		}
 
 		enable_irq_wake(client->irq);
-	} else if (input_device_enabled(input)) {
+	} else if (input->users) {
 		dev_dbg(&client->dev,
 			"suspend without being a wakeup source\n");
 
@@ -653,7 +653,7 @@ unlock:
 	return ret;
 }
 
-static int zforce_resume(struct device *dev)
+static int __maybe_unused zforce_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct zforce_ts *ts = i2c_get_clientdata(client);
@@ -670,12 +670,12 @@ static int zforce_resume(struct device *dev)
 		disable_irq_wake(client->irq);
 
 		/* need to stop device if it was not open on suspend */
-		if (!input_device_enabled(input)) {
+		if (!input->users) {
 			ret = zforce_stop(ts);
 			if (ret)
 				goto unlock;
 		}
-	} else if (input_device_enabled(input)) {
+	} else if (input->users) {
 		dev_dbg(&client->dev, "resume without being a wakeup source\n");
 
 		enable_irq(client->irq);
@@ -691,7 +691,7 @@ unlock:
 	return ret;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(zforce_pm_ops, zforce_suspend, zforce_resume);
+static SIMPLE_DEV_PM_OPS(zforce_pm_ops, zforce_suspend, zforce_resume);
 
 static void zforce_reset(void *data)
 {
@@ -732,7 +732,8 @@ static struct zforce_ts_platdata *zforce_parse_dt(struct device *dev)
 	return pdata;
 }
 
-static int zforce_probe(struct i2c_client *client)
+static int zforce_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	const struct zforce_ts_platdata *pdata = dev_get_platdata(&client->dev);
 	struct zforce_ts *ts;
@@ -941,7 +942,7 @@ MODULE_DEVICE_TABLE(of, zforce_dt_idtable);
 static struct i2c_driver zforce_driver = {
 	.driver = {
 		.name	= "zforce-ts",
-		.pm	= pm_sleep_ptr(&zforce_pm_ops),
+		.pm	= &zforce_pm_ops,
 		.of_match_table	= of_match_ptr(zforce_dt_idtable),
 	},
 	.probe		= zforce_probe,

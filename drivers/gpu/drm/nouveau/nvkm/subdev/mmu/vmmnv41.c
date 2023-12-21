@@ -80,16 +80,17 @@ nv41_vmm_desc_12[] = {
 static void
 nv41_vmm_flush(struct nvkm_vmm *vmm, int level)
 {
-	struct nvkm_device *device = vmm->mmu->subdev.device;
+	struct nvkm_subdev *subdev = &vmm->mmu->subdev;
+	struct nvkm_device *device = subdev->device;
 
-	mutex_lock(&vmm->mmu->mutex);
+	mutex_lock(&subdev->mutex);
 	nvkm_wr32(device, 0x100810, 0x00000022);
 	nvkm_msec(device, 2000,
 		if (nvkm_rd32(device, 0x100810) & 0x00000020)
 			break;
 	);
 	nvkm_wr32(device, 0x100810, 0x00000000);
-	mutex_unlock(&vmm->mmu->mutex);
+	mutex_unlock(&subdev->mutex);
 }
 
 static const struct nvkm_vmm_func

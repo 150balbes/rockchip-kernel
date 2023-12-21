@@ -4,183 +4,190 @@
 
 #include <asm/bug.h>
 #include <asm/book3s/32/mmu-hash.h>
-#include <asm/mmu.h>
-#include <asm/synch.h>
 
-#ifndef __ASSEMBLY__
+#ifdef __ASSEMBLY__
 
-#include <linux/jump_label.h>
+.macro kuep_update_sr	gpr1, gpr2		/* NEVER use r0 as gpr2 due to addis */
+101:	mtsrin	\gpr1, \gpr2
+	addi	\gpr1, \gpr1, 0x111		/* next VSID */
+	rlwinm	\gpr1, \gpr1, 0, 0xf0ffffff	/* clear VSID overflow */
+	addis	\gpr2, \gpr2, 0x1000		/* address of next segment */
+	bdnz	101b
+	isync
+.endm
 
-extern struct static_key_false disable_kuap_key;
+.macro kuep_lock	gpr1, gpr2
+#ifdef CONFIG_PPC_KUEP
+	li	\gpr1, NUM_USER_SEGMENTS
+	li	\gpr2, 0
+	mtctr	\gpr1
+	mfsrin	\gpr1, \gpr2
+	oris	\gpr1, \gpr1, SR_NX@h		/* set Nx */
+	kuep_update_sr \gpr1, \gpr2
+#endif
+.endm
 
-static __always_inline bool kuep_is_disabled(void)
-{
-	return !IS_ENABLED(CONFIG_PPC_KUEP);
-}
+.macro kuep_unlock	gpr1, gpr2
+#ifdef CONFIG_PPC_KUEP
+	li	\gpr1, NUM_USER_SEGMENTS
+	li	\gpr2, 0
+	mtctr	\gpr1
+	mfsrin	\gpr1, \gpr2
+	rlwinm	\gpr1, \gpr1, 0, ~SR_NX		/* Clear Nx */
+	kuep_update_sr \gpr1, \gpr2
+#endif
+.endm
+
+#ifdef CONFIG_PPC_KUAP
+
+.macro kuap_update_sr	gpr1, gpr2, gpr3	/* NEVER use r0 as gpr2 due to addis */
+101:	mtsrin	\gpr1, \gpr2
+	addi	\gpr1, \gpr1, 0x111		/* next VSID */
+	rlwinm	\gpr1, \gpr1, 0, 0xf0ffffff	/* clear VSID overflow */
+	addis	\gpr2, \gpr2, 0x1000		/* address of next segment */
+	cmplw	\gpr2, \gpr3
+	blt-	101b
+	isync
+.endm
+
+.macro kuap_save_and_lock	sp, thread, gpr1, gpr2, gpr3
+	lwz	\gpr2, KUAP(\thread)
+	rlwinm.	\gpr3, \gpr2, 28, 0xf0000000
+	stw	\gpr2, STACK_REGS_KUAP(\sp)
+	beq+	102f
+	li	\gpr1, 0
+	stw	\gpr1, KUAP(\thread)
+	mfsrin	\gpr1, \gpr2
+	oris	\gpr1, \gpr1, SR_KS@h	/* set Ks */
+	kuap_update_sr	\gpr1, \gpr2, \gpr3
+102:
+.endm
+
+.macro kuap_restore	sp, current, gpr1, gpr2, gpr3
+	lwz	\gpr2, STACK_REGS_KUAP(\sp)
+	rlwinm.	\gpr3, \gpr2, 28, 0xf0000000
+	stw	\gpr2, THREAD + KUAP(\current)
+	beq+	102f
+	mfsrin	\gpr1, \gpr2
+	rlwinm	\gpr1, \gpr1, 0, ~SR_KS	/* Clear Ks */
+	kuap_update_sr	\gpr1, \gpr2, \gpr3
+102:
+.endm
+
+.macro kuap_check	current, gpr
+#ifdef CONFIG_PPC_KUAP_DEBUG
+	lwz	\gpr, THREAD + KUAP(\current)
+999:	twnei	\gpr, 0
+	EMIT_BUG_ENTRY 999b, __FILE__, __LINE__, (BUGFLAG_WARNING | BUGFLAG_ONCE)
+#endif
+.endm
+
+#endif /* CONFIG_PPC_KUAP */
+
+#else /* !__ASSEMBLY__ */
 
 #ifdef CONFIG_PPC_KUAP
 
 #include <linux/sched.h>
 
-#define KUAP_NONE	(~0UL)
-#define KUAP_ALL	(~1UL)
-
-static __always_inline bool kuap_is_disabled(void)
+static inline void kuap_update_sr(u32 sr, u32 addr, u32 end)
 {
-	return static_branch_unlikely(&disable_kuap_key);
-}
-
-static inline void kuap_lock_one(unsigned long addr)
-{
-	mtsr(mfsr(addr) | SR_KS, addr);
-	isync();	/* Context sync required after mtsr() */
-}
-
-static inline void kuap_unlock_one(unsigned long addr)
-{
-	mtsr(mfsr(addr) & ~SR_KS, addr);
-	isync();	/* Context sync required after mtsr() */
-}
-
-static inline void kuap_lock_all(void)
-{
-	update_user_segments(mfsr(0) | SR_KS);
-	isync();	/* Context sync required after mtsr() */
-}
-
-static inline void kuap_unlock_all(void)
-{
-	update_user_segments(mfsr(0) & ~SR_KS);
-	isync();	/* Context sync required after mtsr() */
-}
-
-void kuap_lock_all_ool(void);
-void kuap_unlock_all_ool(void);
-
-static inline void kuap_lock_addr(unsigned long addr, bool ool)
-{
-	if (likely(addr != KUAP_ALL))
-		kuap_lock_one(addr);
-	else if (!ool)
-		kuap_lock_all();
-	else
-		kuap_lock_all_ool();
-}
-
-static inline void kuap_unlock(unsigned long addr, bool ool)
-{
-	if (likely(addr != KUAP_ALL))
-		kuap_unlock_one(addr);
-	else if (!ool)
-		kuap_unlock_all();
-	else
-		kuap_unlock_all_ool();
-}
-
-static inline void __kuap_lock(void)
-{
-}
-
-static inline void __kuap_save_and_lock(struct pt_regs *regs)
-{
-	unsigned long kuap = current->thread.kuap;
-
-	regs->kuap = kuap;
-	if (unlikely(kuap == KUAP_NONE))
-		return;
-
-	current->thread.kuap = KUAP_NONE;
-	kuap_lock_addr(kuap, false);
-}
-
-static inline void kuap_user_restore(struct pt_regs *regs)
-{
-}
-
-static inline void __kuap_kernel_restore(struct pt_regs *regs, unsigned long kuap)
-{
-	if (unlikely(kuap != KUAP_NONE)) {
-		current->thread.kuap = KUAP_NONE;
-		kuap_lock_addr(kuap, false);
+	addr &= 0xf0000000;	/* align addr to start of segment */
+	barrier();	/* make sure thread.kuap is updated before playing with SRs */
+	while (addr < end) {
+		mtsrin(sr, addr);
+		sr += 0x111;		/* next VSID */
+		sr &= 0xf0ffffff;	/* clear VSID overflow */
+		addr += 0x10000000;	/* address of next segment */
 	}
+	isync();	/* Context sync required after mtsrin() */
+}
 
-	if (likely(regs->kuap == KUAP_NONE))
+static __always_inline void allow_user_access(void __user *to, const void __user *from,
+					      u32 size, unsigned long dir)
+{
+	u32 addr, end;
+
+	BUILD_BUG_ON(!__builtin_constant_p(dir));
+	BUILD_BUG_ON(dir & ~KUAP_READ_WRITE);
+
+	if (!(dir & KUAP_WRITE))
 		return;
 
-	current->thread.kuap = regs->kuap;
+	addr = (__force u32)to;
 
-	kuap_unlock(regs->kuap, false);
+	if (unlikely(addr >= TASK_SIZE || !size))
+		return;
+
+	end = min(addr + size, TASK_SIZE);
+
+	current->thread.kuap = (addr & 0xf0000000) | ((((end - 1) >> 28) + 1) & 0xf);
+	kuap_update_sr(mfsrin(addr) & ~SR_KS, addr, end);	/* Clear Ks */
 }
 
-static inline unsigned long __kuap_get_and_assert_locked(void)
-{
-	unsigned long kuap = current->thread.kuap;
-
-	WARN_ON_ONCE(IS_ENABLED(CONFIG_PPC_KUAP_DEBUG) && kuap != KUAP_NONE);
-
-	return kuap;
-}
-
-static __always_inline void __allow_user_access(void __user *to, const void __user *from,
+static __always_inline void prevent_user_access(void __user *to, const void __user *from,
 						u32 size, unsigned long dir)
 {
-	BUILD_BUG_ON(!__builtin_constant_p(dir));
-
-	if (!(dir & KUAP_WRITE))
-		return;
-
-	current->thread.kuap = (__force u32)to;
-	kuap_unlock_one((__force u32)to);
-}
-
-static __always_inline void __prevent_user_access(unsigned long dir)
-{
-	u32 kuap = current->thread.kuap;
+	u32 addr, end;
 
 	BUILD_BUG_ON(!__builtin_constant_p(dir));
 
-	if (!(dir & KUAP_WRITE))
-		return;
+	if (dir & KUAP_CURRENT_WRITE) {
+		u32 kuap = current->thread.kuap;
 
-	current->thread.kuap = KUAP_NONE;
-	kuap_lock_addr(kuap, true);
+		if (unlikely(!kuap))
+			return;
+
+		addr = kuap & 0xf0000000;
+		end = kuap << 28;
+	} else if (dir & KUAP_WRITE) {
+		addr = (__force u32)to;
+		end = min(addr + size, TASK_SIZE);
+
+		if (unlikely(addr >= TASK_SIZE || !size))
+			return;
+	} else {
+		return;
+	}
+
+	current->thread.kuap = 0;
+	kuap_update_sr(mfsrin(addr) | SR_KS, addr, end);	/* set Ks */
 }
 
-static inline unsigned long __prevent_user_access_return(void)
+static inline unsigned long prevent_user_access_return(void)
 {
 	unsigned long flags = current->thread.kuap;
+	unsigned long addr = flags & 0xf0000000;
+	unsigned long end = flags << 28;
+	void __user *to = (__force void __user *)addr;
 
-	if (flags != KUAP_NONE) {
-		current->thread.kuap = KUAP_NONE;
-		kuap_lock_addr(flags, true);
-	}
+	if (flags)
+		prevent_user_access(to, to, end - addr, KUAP_READ_WRITE);
 
 	return flags;
 }
 
-static inline void __restore_user_access(unsigned long flags)
+static inline void restore_user_access(unsigned long flags)
 {
-	if (flags != KUAP_NONE) {
-		current->thread.kuap = flags;
-		kuap_unlock(flags, true);
-	}
+	unsigned long addr = flags & 0xf0000000;
+	unsigned long end = flags << 28;
+	void __user *to = (__force void __user *)addr;
+
+	if (flags)
+		allow_user_access(to, to, end - addr, KUAP_READ_WRITE);
 }
 
 static inline bool
-__bad_kuap_fault(struct pt_regs *regs, unsigned long address, bool is_write)
+bad_kuap_fault(struct pt_regs *regs, unsigned long address, bool is_write)
 {
-	unsigned long kuap = regs->kuap;
+	unsigned long begin = regs->kuap & 0xf0000000;
+	unsigned long end = regs->kuap << 28;
 
-	if (!is_write || kuap == KUAP_ALL)
+	if (!is_write)
 		return false;
-	if (kuap == KUAP_NONE)
-		return true;
 
-	/* If faulting address doesn't match unlocked segment, unlock all */
-	if ((kuap ^ address) & 0xf0000000)
-		regs->kuap = KUAP_ALL;
-
-	return false;
+	return WARN(address < begin || address >= end,
+		    "Bug: write fault blocked by segment registers !");
 }
 
 #endif /* CONFIG_PPC_KUAP */

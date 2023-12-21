@@ -14,7 +14,7 @@
 #include <linux/kdebug.h>
 #include <linux/syscalls.h>
 #include <linux/signal.h>
-#include <linux/ptrace.h>
+#include <linux/tracehook.h>
 #include <asm/traps.h>
 #include <asm/vm_fault.h>
 #include <asm/syscall.h>
@@ -27,6 +27,10 @@
 
 #define TRAP_SYSCALL	1
 #define TRAP_DEBUG	0xdb
+
+void __init trap_init(void)
+{
+}
 
 #ifdef CONFIG_GENERIC_BUG
 /* Maybe should resemble arch/sh/kernel/traps.c ?? */
@@ -214,7 +218,7 @@ int die(const char *str, struct pt_regs *regs, long err)
 		panic("Fatal exception");
 
 	oops_exit();
-	make_task_dead(err);
+	do_exit(err);
 	return 0;
 }
 
@@ -348,7 +352,7 @@ void do_trap0(struct pt_regs *regs)
 
 		/* allow strace to catch syscall args  */
 		if (unlikely(test_thread_flag(TIF_SYSCALL_TRACE) &&
-			ptrace_report_syscall_entry(regs)))
+			tracehook_report_syscall_entry(regs)))
 			return;  /*  return -ENOSYS somewhere?  */
 
 		/* Interrupts should be re-enabled for syscall processing */
@@ -386,7 +390,7 @@ void do_trap0(struct pt_regs *regs)
 
 		/* allow strace to get the syscall return state  */
 		if (unlikely(test_thread_flag(TIF_SYSCALL_TRACE)))
-			ptrace_report_syscall_exit(regs, 0);
+			tracehook_report_syscall_exit(regs, 0);
 
 		break;
 	case TRAP_DEBUG:

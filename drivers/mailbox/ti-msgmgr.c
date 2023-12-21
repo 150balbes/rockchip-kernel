@@ -2,7 +2,7 @@
 /*
  * Texas Instruments' Message Manager Driver
  *
- * Copyright (C) 2015-2022 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2015-2017 Texas Instruments Incorporated - https://www.ti.com/
  *	Nishanth Menon
  */
 
@@ -11,7 +11,6 @@
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
@@ -101,7 +100,6 @@ struct ti_msgmgr_desc {
  * @queue_ctrl: Queue Control register
  * @chan:	Mailbox channel
  * @rx_buff:	Receive buffer pointer allocated at probe, max_message_size
- * @polled_rx_mode: Use polling for rx instead of interrupts
  */
 struct ti_queue_inst {
 	char name[30];
@@ -115,7 +113,6 @@ struct ti_queue_inst {
 	void __iomem *queue_ctrl;
 	struct mbox_chan *chan;
 	u32 *rx_buff;
-	bool polled_rx_mode;
 };
 
 /**
@@ -193,13 +190,52 @@ static inline bool ti_msgmgr_queue_is_error(const struct ti_msgmgr_desc *d,
 	return val ? true : false;
 }
 
-static int ti_msgmgr_queue_rx_data(struct mbox_chan *chan, struct ti_queue_inst *qinst,
-				   const struct ti_msgmgr_desc *desc)
+/**
+ * ti_msgmgr_queue_rx_interrupt() - Interrupt handler for receive Queue
+ * @irq:	Interrupt number
+ * @p:		Channel Pointer
+ *
+ * Return: -EINVAL if there is no instance
+ * IRQ_NONE if the interrupt is not ours.
+ * IRQ_HANDLED if the rx interrupt was successfully handled.
+ */
+static irqreturn_t ti_msgmgr_queue_rx_interrupt(int irq, void *p)
 {
-	int num_words;
+	struct mbox_chan *chan = p;
+	struct device *dev = chan->mbox->dev;
+	struct ti_msgmgr_inst *inst = dev_get_drvdata(dev);
+	struct ti_queue_inst *qinst = chan->con_priv;
+	const struct ti_msgmgr_desc *desc;
+	int msg_count, num_words;
 	struct ti_msgmgr_message message;
 	void __iomem *data_reg;
 	u32 *word_data;
+
+	if (WARN_ON(!inst)) {
+		dev_err(dev, "no platform drv data??\n");
+		return -EINVAL;
+	}
+
+	/* Do I have an invalid interrupt source? */
+	if (qinst->is_tx) {
+		dev_err(dev, "Cannot handle rx interrupt on tx channel %s\n",
+			qinst->name);
+		return IRQ_NONE;
+	}
+
+	desc = inst->desc;
+	if (ti_msgmgr_queue_is_error(desc, qinst)) {
+		dev_err(dev, "Error on Rx channel %s\n", qinst->name);
+		return IRQ_NONE;
+	}
+
+	/* Do I actually have messages to read? */
+	msg_count = ti_msgmgr_queue_get_num_messages(desc, qinst);
+	if (!msg_count) {
+		/* Shared IRQ? */
+		dev_dbg(dev, "Spurious event - 0 pending data!\n");
+		return IRQ_NONE;
+	}
 
 	/*
 	 * I have no idea about the protocol being used to communicate with the
@@ -236,75 +272,6 @@ static int ti_msgmgr_queue_rx_data(struct mbox_chan *chan, struct ti_queue_inst 
 	 * we invoke the handler in IRQ context.
 	 */
 	mbox_chan_received_data(chan, (void *)&message);
-
-	return 0;
-}
-
-static int ti_msgmgr_queue_rx_poll_timeout(struct mbox_chan *chan, int timeout_us)
-{
-	struct device *dev = chan->mbox->dev;
-	struct ti_msgmgr_inst *inst = dev_get_drvdata(dev);
-	struct ti_queue_inst *qinst = chan->con_priv;
-	const struct ti_msgmgr_desc *desc = inst->desc;
-	int msg_count;
-	int ret;
-
-	ret = readl_poll_timeout_atomic(qinst->queue_state, msg_count,
-					(msg_count & desc->status_cnt_mask),
-					10, timeout_us);
-	if (ret != 0)
-		return ret;
-
-	ti_msgmgr_queue_rx_data(chan, qinst, desc);
-
-	return 0;
-}
-
-/**
- * ti_msgmgr_queue_rx_interrupt() - Interrupt handler for receive Queue
- * @irq:	Interrupt number
- * @p:		Channel Pointer
- *
- * Return: -EINVAL if there is no instance
- * IRQ_NONE if the interrupt is not ours.
- * IRQ_HANDLED if the rx interrupt was successfully handled.
- */
-static irqreturn_t ti_msgmgr_queue_rx_interrupt(int irq, void *p)
-{
-	struct mbox_chan *chan = p;
-	struct device *dev = chan->mbox->dev;
-	struct ti_msgmgr_inst *inst = dev_get_drvdata(dev);
-	struct ti_queue_inst *qinst = chan->con_priv;
-	const struct ti_msgmgr_desc *desc;
-	int msg_count;
-
-	if (WARN_ON(!inst)) {
-		dev_err(dev, "no platform drv data??\n");
-		return -EINVAL;
-	}
-
-	/* Do I have an invalid interrupt source? */
-	if (qinst->is_tx) {
-		dev_err(dev, "Cannot handle rx interrupt on tx channel %s\n",
-			qinst->name);
-		return IRQ_NONE;
-	}
-
-	desc = inst->desc;
-	if (ti_msgmgr_queue_is_error(desc, qinst)) {
-		dev_err(dev, "Error on Rx channel %s\n", qinst->name);
-		return IRQ_NONE;
-	}
-
-	/* Do I actually have messages to read? */
-	msg_count = ti_msgmgr_queue_get_num_messages(desc, qinst);
-	if (!msg_count) {
-		/* Shared IRQ? */
-		dev_dbg(dev, "Spurious event - 0 pending data!\n");
-		return IRQ_NONE;
-	}
-
-	ti_msgmgr_queue_rx_data(chan, qinst, desc);
 
 	return IRQ_HANDLED;
 }
@@ -369,17 +336,6 @@ static bool ti_msgmgr_last_tx_done(struct mbox_chan *chan)
 	return msg_count ? false : true;
 }
 
-static bool ti_msgmgr_chan_has_polled_queue_rx(struct mbox_chan *chan)
-{
-	struct ti_queue_inst *qinst;
-
-	if (!chan)
-		return false;
-
-	qinst = chan->con_priv;
-	return qinst->polled_rx_mode;
-}
-
 /**
  * ti_msgmgr_send_data() - Send data
  * @chan:	Channel Pointer
@@ -397,7 +353,6 @@ static int ti_msgmgr_send_data(struct mbox_chan *chan, void *data)
 	struct ti_msgmgr_message *message = data;
 	void __iomem *data_reg;
 	u32 *word_data;
-	int ret = 0;
 
 	if (WARN_ON(!inst)) {
 		dev_err(dev, "no platform drv data??\n");
@@ -430,27 +385,16 @@ static int ti_msgmgr_send_data(struct mbox_chan *chan, void *data)
 		/* Ensure all unused data is 0 */
 		data_trail &= 0xFFFFFFFF >> (8 * (sizeof(u32) - trail_bytes));
 		writel(data_trail, data_reg);
-		data_reg += sizeof(u32);
+		data_reg++;
 	}
-
 	/*
 	 * 'data_reg' indicates next register to write. If we did not already
 	 * write on tx complete reg(last reg), we must do so for transmit
-	 * In addition, we also need to make sure all intermediate data
-	 * registers(if any required), are reset to 0 for TISCI backward
-	 * compatibility to be maintained.
 	 */
-	while (data_reg <= qinst->queue_buff_end) {
-		writel(0, data_reg);
-		data_reg += sizeof(u32);
-	}
+	if (data_reg <= qinst->queue_buff_end)
+		writel(0, qinst->queue_buff_end);
 
-	/* If we are in polled mode, wait for a response before proceeding */
-	if (ti_msgmgr_chan_has_polled_queue_rx(message->chan_rx))
-		ret = ti_msgmgr_queue_rx_poll_timeout(message->chan_rx,
-						      message->timeout_rx_ms * 1000);
-
-	return ret;
+	return 0;
 }
 
 /**
@@ -698,54 +642,6 @@ static int ti_msgmgr_queue_setup(int idx, struct device *dev,
 	return 0;
 }
 
-static int ti_msgmgr_queue_rx_set_polled_mode(struct ti_queue_inst *qinst, bool enable)
-{
-	if (enable) {
-		disable_irq(qinst->irq);
-		qinst->polled_rx_mode = true;
-	} else {
-		enable_irq(qinst->irq);
-		qinst->polled_rx_mode = false;
-	}
-
-	return 0;
-}
-
-static int ti_msgmgr_suspend(struct device *dev)
-{
-	struct ti_msgmgr_inst *inst = dev_get_drvdata(dev);
-	struct ti_queue_inst *qinst;
-	int i;
-
-	/*
-	 * We must switch operation to polled mode now as drivers and the genpd
-	 * layer may make late TI SCI calls to change clock and device states
-	 * from the noirq phase of suspend.
-	 */
-	for (qinst = inst->qinsts, i = 0; i < inst->num_valid_queues; qinst++, i++) {
-		if (!qinst->is_tx)
-			ti_msgmgr_queue_rx_set_polled_mode(qinst, true);
-	}
-
-	return 0;
-}
-
-static int ti_msgmgr_resume(struct device *dev)
-{
-	struct ti_msgmgr_inst *inst = dev_get_drvdata(dev);
-	struct ti_queue_inst *qinst;
-	int i;
-
-	for (qinst = inst->qinsts, i = 0; i < inst->num_valid_queues; qinst++, i++) {
-		if (!qinst->is_tx)
-			ti_msgmgr_queue_rx_set_polled_mode(qinst, false);
-	}
-
-	return 0;
-}
-
-static DEFINE_SIMPLE_DEV_PM_OPS(ti_msgmgr_pm_ops, ti_msgmgr_suspend, ti_msgmgr_resume);
-
 /* Queue operations */
 static const struct mbox_chan_ops ti_msgmgr_chan_ops = {
 	.startup = ti_msgmgr_queue_startup,
@@ -933,7 +829,6 @@ static struct platform_driver ti_msgmgr_driver = {
 	.driver = {
 		   .name = "ti-msgmgr",
 		   .of_match_table = of_match_ptr(ti_msgmgr_of_match),
-		   .pm = &ti_msgmgr_pm_ops,
 	},
 };
 module_platform_driver(ti_msgmgr_driver);

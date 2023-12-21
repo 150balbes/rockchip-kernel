@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * NILFS module and super block management.
+ * super.c - NILFS module and super block management.
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
@@ -53,6 +53,7 @@ MODULE_AUTHOR("NTT Corp.");
 MODULE_DESCRIPTION("A New Implementation of the Log-structured Filesystem "
 		   "(NILFS)");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 
 static struct kmem_cache *nilfs_inode_cachep;
 struct kmem_cache *nilfs_transaction_cachep;
@@ -151,7 +152,7 @@ struct inode *nilfs_alloc_inode(struct super_block *sb)
 {
 	struct nilfs_inode_info *ii;
 
-	ii = alloc_inode_sb(sb, nilfs_inode_cachep, GFP_NOFS);
+	ii = kmem_cache_alloc(nilfs_inode_cachep, GFP_NOFS);
 	if (!ii)
 		return NULL;
 	ii->i_bh = NULL;
@@ -372,31 +373,10 @@ static int nilfs_move_2nd_super(struct super_block *sb, loff_t sb2off)
 		goto out;
 	}
 	nsbp = (void *)nsbh->b_data + offset;
+	memset(nsbp, 0, nilfs->ns_blocksize);
 
-	lock_buffer(nsbh);
 	if (sb2i >= 0) {
-		/*
-		 * The position of the second superblock only changes by 4KiB,
-		 * which is larger than the maximum superblock data size
-		 * (= 1KiB), so there is no need to use memmove() to allow
-		 * overlap between source and destination.
-		 */
 		memcpy(nsbp, nilfs->ns_sbp[sb2i], nilfs->ns_sbsize);
-
-		/*
-		 * Zero fill after copy to avoid overwriting in case of move
-		 * within the same block.
-		 */
-		memset(nsbh->b_data, 0, offset);
-		memset((void *)nsbp + nilfs->ns_sbsize, 0,
-		       nsbh->b_size - offset - nilfs->ns_sbsize);
-	} else {
-		memset(nsbh->b_data, 0, nsbh->b_size);
-	}
-	set_buffer_uptodate(nsbh);
-	unlock_buffer(nsbh);
-
-	if (sb2i >= 0) {
 		brelse(nilfs->ns_sbh[sb2i]);
 		nilfs->ns_sbh[sb2i] = nsbh;
 		nilfs->ns_sbp[sb2i] = nsbp;
@@ -425,18 +405,9 @@ int nilfs_resize_fs(struct super_block *sb, __u64 newsize)
 	int ret;
 
 	ret = -ERANGE;
-	devsize = bdev_nr_bytes(sb->s_bdev);
+	devsize = i_size_read(sb->s_bdev->bd_inode);
 	if (newsize > devsize)
 		goto out;
-
-	/*
-	 * Prevent underflow in second superblock position calculation.
-	 * The exact minimum size check is done in nilfs_sufile_resize().
-	 */
-	if (newsize < 4096) {
-		ret = -ENOSPC;
-		goto out;
-	}
 
 	/*
 	 * Write lock is required to protect some functions depending
@@ -503,7 +474,6 @@ static void nilfs_put_super(struct super_block *sb)
 		up_write(&nilfs->ns_sem);
 	}
 
-	nilfs_sysfs_delete_device_group(nilfs);
 	iput(nilfs->ns_sufile);
 	iput(nilfs->ns_cpfile);
 	iput(nilfs->ns_dat);
@@ -1085,7 +1055,7 @@ nilfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_time_gran = 1;
 	sb->s_max_links = NILFS_LINK_MAX;
 
-	sb->s_bdi = bdi_get(sb->s_bdev->bd_disk->bdi);
+	sb->s_bdi = bdi_get(sb->s_bdev->bd_bdi);
 
 	err = load_nilfs(nilfs, sb);
 	if (err)
@@ -1127,7 +1097,6 @@ nilfs_fill_super(struct super_block *sb, void *data, int silent)
 	nilfs_put_root(fsroot);
 
  failed_unload:
-	nilfs_sysfs_delete_device_group(nilfs);
 	iput(nilfs->ns_sufile);
 	iput(nilfs->ns_cpfile);
 	iput(nilfs->ns_dat);
@@ -1299,11 +1268,14 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 {
 	struct nilfs_super_data sd;
 	struct super_block *s;
+	fmode_t mode = FMODE_READ | FMODE_EXCL;
 	struct dentry *root_dentry;
 	int err, s_new = false;
 
-	sd.bdev = blkdev_get_by_path(dev_name, sb_open_mode(flags), fs_type,
-				     NULL);
+	if (!(flags & SB_RDONLY))
+		mode |= FMODE_WRITE;
+
+	sd.bdev = blkdev_get_by_path(dev_name, mode, fs_type);
 	if (IS_ERR(sd.bdev))
 		return ERR_CAST(sd.bdev);
 
@@ -1337,6 +1309,7 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 		s_new = true;
 
 		/* New superblock instance created */
+		s->s_mode = mode;
 		snprintf(s->s_id, sizeof(s->s_id), "%pg", sd.bdev);
 		sb_set_blocksize(s, block_size(sd.bdev));
 
@@ -1374,7 +1347,7 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 	}
 
 	if (!s_new)
-		blkdev_put(sd.bdev, fs_type);
+		blkdev_put(sd.bdev, mode);
 
 	return root_dentry;
 
@@ -1383,7 +1356,7 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 
  failed:
 	if (!s_new)
-		blkdev_put(sd.bdev, fs_type);
+		blkdev_put(sd.bdev, mode);
 	return ERR_PTR(err);
 }
 

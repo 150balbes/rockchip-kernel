@@ -64,7 +64,7 @@ static int crc_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	}
 
 	if (state->polarity != PWM_POLARITY_NORMAL)
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	if (pwm_is_enabled(pwm) && !state->enabled) {
 		err = regmap_write(crc_pwm->regmap, BACKLIGHT_EN, 0);
@@ -121,8 +121,8 @@ static int crc_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	return 0;
 }
 
-static int crc_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-			     struct pwm_state *state)
+static void crc_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+			      struct pwm_state *state)
 {
 	struct crystalcove_pwm *crc_pwm = to_crc_pwm(chip);
 	struct device *dev = crc_pwm->chip.dev;
@@ -132,13 +132,13 @@ static int crc_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	error = regmap_read(crc_pwm->regmap, PWM0_CLK_DIV, &clk_div_reg);
 	if (error) {
 		dev_err(dev, "Error reading PWM0_CLK_DIV %d\n", error);
-		return error;
+		return;
 	}
 
 	error = regmap_read(crc_pwm->regmap, PWM0_DUTY_CYCLE, &duty_cycle_reg);
 	if (error) {
 		dev_err(dev, "Error reading PWM0_DUTY_CYCLE %d\n", error);
-		return error;
+		return;
 	}
 
 	clk_div = (clk_div_reg & ~PWM_OUTPUT_ENABLE) + 1;
@@ -149,8 +149,6 @@ static int crc_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 		DIV_ROUND_UP_ULL(duty_cycle_reg * state->period, PWM_MAX_LEVEL);
 	state->polarity = PWM_POLARITY_NORMAL;
 	state->enabled = !!(clk_div_reg & PWM_OUTPUT_ENABLE);
-
-	return 0;
 }
 
 static const struct pwm_ops crc_pwm_ops = {
@@ -170,16 +168,27 @@ static int crystalcove_pwm_probe(struct platform_device *pdev)
 
 	pwm->chip.dev = &pdev->dev;
 	pwm->chip.ops = &crc_pwm_ops;
+	pwm->chip.base = -1;
 	pwm->chip.npwm = 1;
 
 	/* get the PMIC regmap */
 	pwm->regmap = pmic->regmap;
 
-	return devm_pwmchip_add(&pdev->dev, &pwm->chip);
+	platform_set_drvdata(pdev, pwm);
+
+	return pwmchip_add(&pwm->chip);
+}
+
+static int crystalcove_pwm_remove(struct platform_device *pdev)
+{
+	struct crystalcove_pwm *pwm = platform_get_drvdata(pdev);
+
+	return pwmchip_remove(&pwm->chip);
 }
 
 static struct platform_driver crystalcove_pwm_driver = {
 	.probe = crystalcove_pwm_probe,
+	.remove = crystalcove_pwm_remove,
 	.driver = {
 		.name = "crystal_cove_pwm",
 	},

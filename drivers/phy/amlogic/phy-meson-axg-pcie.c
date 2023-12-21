@@ -129,6 +129,7 @@ static int phy_axg_pcie_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct phy_axg_pcie_priv *priv;
 	struct device_node *np = dev->of_node;
+	struct resource *res;
 	void __iomem *base;
 	int ret;
 
@@ -144,7 +145,8 @@ static int phy_axg_pcie_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -153,7 +155,7 @@ static int phy_axg_pcie_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->regmap))
 		return PTR_ERR(priv->regmap);
 
-	priv->reset = devm_reset_control_array_get_exclusive(dev);
+	priv->reset = devm_reset_control_array_get(dev, false, false);
 	if (IS_ERR(priv->reset))
 		return PTR_ERR(priv->reset);
 

@@ -47,7 +47,6 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/msi.h>
-#include <linux/of.h>
 #include <linux/perf_event.h>
 #include <linux/platform_device.h>
 #include <linux/smp.h>
@@ -75,11 +74,6 @@
 #define SMMU_PMCG_CFGR_NCTR             GENMASK(5, 0)
 #define SMMU_PMCG_CR                    0xE04
 #define SMMU_PMCG_CR_ENABLE             BIT(0)
-#define SMMU_PMCG_IIDR                  0xE08
-#define SMMU_PMCG_IIDR_PRODUCTID        GENMASK(31, 20)
-#define SMMU_PMCG_IIDR_VARIANT          GENMASK(19, 16)
-#define SMMU_PMCG_IIDR_REVISION         GENMASK(15, 12)
-#define SMMU_PMCG_IIDR_IMPLEMENTER      GENMASK(11, 0)
 #define SMMU_PMCG_CEID0                 0xE20
 #define SMMU_PMCG_CEID1                 0xE28
 #define SMMU_PMCG_IRQ_CTRL              0xE50
@@ -87,20 +81,6 @@
 #define SMMU_PMCG_IRQ_CFG0              0xE58
 #define SMMU_PMCG_IRQ_CFG1              0xE60
 #define SMMU_PMCG_IRQ_CFG2              0xE64
-
-/* IMP-DEF ID registers */
-#define SMMU_PMCG_PIDR0                 0xFE0
-#define SMMU_PMCG_PIDR0_PART_0          GENMASK(7, 0)
-#define SMMU_PMCG_PIDR1                 0xFE4
-#define SMMU_PMCG_PIDR1_DES_0           GENMASK(7, 4)
-#define SMMU_PMCG_PIDR1_PART_1          GENMASK(3, 0)
-#define SMMU_PMCG_PIDR2                 0xFE8
-#define SMMU_PMCG_PIDR2_REVISION        GENMASK(7, 4)
-#define SMMU_PMCG_PIDR2_DES_1           GENMASK(2, 0)
-#define SMMU_PMCG_PIDR3                 0xFEC
-#define SMMU_PMCG_PIDR3_REVAND          GENMASK(7, 4)
-#define SMMU_PMCG_PIDR4                 0xFD0
-#define SMMU_PMCG_PIDR4_DES_2           GENMASK(3, 0)
 
 /* MSI config fields */
 #define MSI_CFG0_ADDR_MASK              GENMASK_ULL(51, 2)
@@ -132,7 +112,6 @@ struct smmu_pmu {
 	void __iomem *reloc_base;
 	u64 counter_mask;
 	u32 options;
-	u32 iidr;
 	bool global_filter;
 };
 
@@ -514,7 +493,7 @@ static struct attribute *smmu_pmu_cpumask_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group smmu_pmu_cpumask_group = {
+static struct attribute_group smmu_pmu_cpumask_group = {
 	.attrs = smmu_pmu_cpumask_attrs,
 };
 
@@ -527,21 +506,30 @@ static ssize_t smmu_pmu_event_show(struct device *dev,
 
 	pmu_attr = container_of(attr, struct perf_pmu_events_attr, attr);
 
-	return sysfs_emit(page, "event=0x%02llx\n", pmu_attr->id);
+	return sprintf(page, "event=0x%02llx\n", pmu_attr->id);
 }
 
-#define SMMU_EVENT_ATTR(name, config)			\
-	PMU_EVENT_ATTR_ID(name, smmu_pmu_event_show, config)
+#define SMMU_EVENT_ATTR(name, config) \
+	PMU_EVENT_ATTR(name, smmu_event_attr_##name, \
+		       config, smmu_pmu_event_show)
+SMMU_EVENT_ATTR(cycles, 0);
+SMMU_EVENT_ATTR(transaction, 1);
+SMMU_EVENT_ATTR(tlb_miss, 2);
+SMMU_EVENT_ATTR(config_cache_miss, 3);
+SMMU_EVENT_ATTR(trans_table_walk_access, 4);
+SMMU_EVENT_ATTR(config_struct_access, 5);
+SMMU_EVENT_ATTR(pcie_ats_trans_rq, 6);
+SMMU_EVENT_ATTR(pcie_ats_trans_passed, 7);
 
 static struct attribute *smmu_pmu_events[] = {
-	SMMU_EVENT_ATTR(cycles, 0),
-	SMMU_EVENT_ATTR(transaction, 1),
-	SMMU_EVENT_ATTR(tlb_miss, 2),
-	SMMU_EVENT_ATTR(config_cache_miss, 3),
-	SMMU_EVENT_ATTR(trans_table_walk_access, 4),
-	SMMU_EVENT_ATTR(config_struct_access, 5),
-	SMMU_EVENT_ATTR(pcie_ats_trans_rq, 6),
-	SMMU_EVENT_ATTR(pcie_ats_trans_passed, 7),
+	&smmu_event_attr_cycles.attr.attr,
+	&smmu_event_attr_transaction.attr.attr,
+	&smmu_event_attr_tlb_miss.attr.attr,
+	&smmu_event_attr_config_cache_miss.attr.attr,
+	&smmu_event_attr_trans_table_walk_access.attr.attr,
+	&smmu_event_attr_config_struct_access.attr.attr,
+	&smmu_event_attr_pcie_ats_trans_rq.attr.attr,
+	&smmu_event_attr_pcie_ats_trans_passed.attr.attr,
 	NULL
 };
 
@@ -560,44 +548,10 @@ static umode_t smmu_pmu_event_is_visible(struct kobject *kobj,
 	return 0;
 }
 
-static const struct attribute_group smmu_pmu_events_group = {
+static struct attribute_group smmu_pmu_events_group = {
 	.name = "events",
 	.attrs = smmu_pmu_events,
 	.is_visible = smmu_pmu_event_is_visible,
-};
-
-static ssize_t smmu_pmu_identifier_attr_show(struct device *dev,
-					struct device_attribute *attr,
-					char *page)
-{
-	struct smmu_pmu *smmu_pmu = to_smmu_pmu(dev_get_drvdata(dev));
-
-	return sysfs_emit(page, "0x%08x\n", smmu_pmu->iidr);
-}
-
-static umode_t smmu_pmu_identifier_attr_visible(struct kobject *kobj,
-						struct attribute *attr,
-						int n)
-{
-	struct device *dev = kobj_to_dev(kobj);
-	struct smmu_pmu *smmu_pmu = to_smmu_pmu(dev_get_drvdata(dev));
-
-	if (!smmu_pmu->iidr)
-		return 0;
-	return attr->mode;
-}
-
-static struct device_attribute smmu_pmu_identifier_attr =
-	__ATTR(identifier, 0444, smmu_pmu_identifier_attr_show, NULL);
-
-static struct attribute *smmu_pmu_identifier_attrs[] = {
-	&smmu_pmu_identifier_attr.attr,
-	NULL
-};
-
-static const struct attribute_group smmu_pmu_identifier_group = {
-	.attrs = smmu_pmu_identifier_attrs,
-	.is_visible = smmu_pmu_identifier_attr_visible,
 };
 
 /* Formats */
@@ -614,7 +568,7 @@ static struct attribute *smmu_pmu_formats[] = {
 	NULL
 };
 
-static const struct attribute_group smmu_pmu_format_group = {
+static struct attribute_group smmu_pmu_format_group = {
 	.name = "format",
 	.attrs = smmu_pmu_formats,
 };
@@ -623,7 +577,6 @@ static const struct attribute_group *smmu_pmu_attr_grps[] = {
 	&smmu_pmu_cpumask_group,
 	&smmu_pmu_events_group,
 	&smmu_pmu_format_group,
-	&smmu_pmu_identifier_group,
 	NULL
 };
 
@@ -646,7 +599,7 @@ static int smmu_pmu_offline_cpu(unsigned int cpu, struct hlist_node *node)
 
 	perf_pmu_migrate_context(&smmu_pmu->pmu, cpu, target);
 	smmu_pmu->on_cpu = target;
-	WARN_ON(irq_set_affinity(smmu_pmu->irq, cpumask_of(target)));
+	WARN_ON(irq_set_affinity_hint(smmu_pmu->irq, cpumask_of(target)));
 
 	return 0;
 }
@@ -654,7 +607,6 @@ static int smmu_pmu_offline_cpu(unsigned int cpu, struct hlist_node *node)
 static irqreturn_t smmu_pmu_handle_irq(int irq_num, void *data)
 {
 	struct smmu_pmu *smmu_pmu = data;
-	DECLARE_BITMAP(ovs, BITS_PER_TYPE(u64));
 	u64 ovsr;
 	unsigned int idx;
 
@@ -664,8 +616,7 @@ static irqreturn_t smmu_pmu_handle_irq(int irq_num, void *data)
 
 	writeq(ovsr, smmu_pmu->reloc_base + SMMU_PMCG_OVSCLR0);
 
-	bitmap_from_u64(ovs, ovsr);
-	for_each_set_bit(idx, ovs, smmu_pmu->num_counters) {
+	for_each_set_bit(idx, (unsigned long *)&ovsr, smmu_pmu->num_counters) {
 		struct perf_event *event = smmu_pmu->events[idx];
 		struct hw_perf_event *hwc;
 
@@ -705,6 +656,7 @@ static void smmu_pmu_write_msi_msg(struct msi_desc *desc, struct msi_msg *msg)
 
 static void smmu_pmu_setup_msi(struct smmu_pmu *pmu)
 {
+	struct msi_desc *desc;
 	struct device *dev = pmu->dev;
 	int ret;
 
@@ -721,7 +673,9 @@ static void smmu_pmu_setup_msi(struct smmu_pmu *pmu)
 		return;
 	}
 
-	pmu->irq = msi_get_virq(dev, 0);
+	desc = first_msi_entry(dev);
+	if (desc)
+		pmu->irq = desc->irq;
 
 	/* Add callback to free MSIs on teardown */
 	devm_add_action(dev, smmu_pmu_free_msis, dev);
@@ -770,41 +724,6 @@ static void smmu_pmu_get_acpi_options(struct smmu_pmu *smmu_pmu)
 	}
 
 	dev_notice(smmu_pmu->dev, "option mask 0x%x\n", smmu_pmu->options);
-}
-
-static bool smmu_pmu_coresight_id_regs(struct smmu_pmu *smmu_pmu)
-{
-	return of_device_is_compatible(smmu_pmu->dev->of_node,
-				       "arm,mmu-600-pmcg");
-}
-
-static void smmu_pmu_get_iidr(struct smmu_pmu *smmu_pmu)
-{
-	u32 iidr = readl_relaxed(smmu_pmu->reg_base + SMMU_PMCG_IIDR);
-
-	if (!iidr && smmu_pmu_coresight_id_regs(smmu_pmu)) {
-		u32 pidr0 = readl(smmu_pmu->reg_base + SMMU_PMCG_PIDR0);
-		u32 pidr1 = readl(smmu_pmu->reg_base + SMMU_PMCG_PIDR1);
-		u32 pidr2 = readl(smmu_pmu->reg_base + SMMU_PMCG_PIDR2);
-		u32 pidr3 = readl(smmu_pmu->reg_base + SMMU_PMCG_PIDR3);
-		u32 pidr4 = readl(smmu_pmu->reg_base + SMMU_PMCG_PIDR4);
-
-		u32 productid = FIELD_GET(SMMU_PMCG_PIDR0_PART_0, pidr0) |
-				(FIELD_GET(SMMU_PMCG_PIDR1_PART_1, pidr1) << 8);
-		u32 variant = FIELD_GET(SMMU_PMCG_PIDR2_REVISION, pidr2);
-		u32 revision = FIELD_GET(SMMU_PMCG_PIDR3_REVAND, pidr3);
-		u32 implementer =
-			FIELD_GET(SMMU_PMCG_PIDR1_DES_0, pidr1) |
-			(FIELD_GET(SMMU_PMCG_PIDR2_DES_1, pidr2) << 4) |
-			(FIELD_GET(SMMU_PMCG_PIDR4_DES_2, pidr4) << 8);
-
-		iidr = FIELD_PREP(SMMU_PMCG_IIDR_PRODUCTID, productid) |
-		       FIELD_PREP(SMMU_PMCG_IIDR_VARIANT, variant) |
-		       FIELD_PREP(SMMU_PMCG_IIDR_REVISION, revision) |
-		       FIELD_PREP(SMMU_PMCG_IIDR_IMPLEMENTER, implementer);
-	}
-
-	smmu_pmu->iidr = iidr;
 }
 
 static int smmu_pmu_probe(struct platform_device *pdev)
@@ -878,8 +797,6 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	smmu_pmu_get_iidr(smmu_pmu);
-
 	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "smmuv3_pmcg_%llx",
 			      (res_0->start) >> SMMU_PMCG_PA_SHIFT);
 	if (!name) {
@@ -887,19 +804,19 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	if (!dev->of_node)
-		smmu_pmu_get_acpi_options(smmu_pmu);
+	smmu_pmu_get_acpi_options(smmu_pmu);
 
 	/* Pick one CPU to be the preferred one to use */
 	smmu_pmu->on_cpu = raw_smp_processor_id();
-	WARN_ON(irq_set_affinity(smmu_pmu->irq, cpumask_of(smmu_pmu->on_cpu)));
+	WARN_ON(irq_set_affinity_hint(smmu_pmu->irq,
+				      cpumask_of(smmu_pmu->on_cpu)));
 
 	err = cpuhp_state_add_instance_nocalls(cpuhp_state_num,
 					       &smmu_pmu->node);
 	if (err) {
 		dev_err(dev, "Error %d registering hotplug, PMU @%pa\n",
 			err, &res_0->start);
-		return err;
+		goto out_clear_affinity;
 	}
 
 	err = perf_pmu_register(&smmu_pmu->pmu, name, -1);
@@ -918,6 +835,8 @@ static int smmu_pmu_probe(struct platform_device *pdev)
 
 out_unregister:
 	cpuhp_state_remove_instance_nocalls(cpuhp_state_num, &smmu_pmu->node);
+out_clear_affinity:
+	irq_set_affinity_hint(smmu_pmu->irq, NULL);
 	return err;
 }
 
@@ -927,6 +846,7 @@ static int smmu_pmu_remove(struct platform_device *pdev)
 
 	perf_pmu_unregister(&smmu_pmu->pmu);
 	cpuhp_state_remove_instance_nocalls(cpuhp_state_num, &smmu_pmu->node);
+	irq_set_affinity_hint(smmu_pmu->irq, NULL);
 
 	return 0;
 }
@@ -938,18 +858,9 @@ static void smmu_pmu_shutdown(struct platform_device *pdev)
 	smmu_pmu_disable(&smmu_pmu->pmu);
 }
 
-#ifdef CONFIG_OF
-static const struct of_device_id smmu_pmu_of_match[] = {
-	{ .compatible = "arm,smmu-v3-pmcg" },
-	{}
-};
-MODULE_DEVICE_TABLE(of, smmu_pmu_of_match);
-#endif
-
 static struct platform_driver smmu_pmu_driver = {
 	.driver = {
 		.name = "arm-smmu-v3-pmcg",
-		.of_match_table = of_match_ptr(smmu_pmu_of_match),
 		.suppress_bind_attrs = true,
 	},
 	.probe = smmu_pmu_probe,
@@ -959,8 +870,6 @@ static struct platform_driver smmu_pmu_driver = {
 
 static int __init arm_smmu_pmu_init(void)
 {
-	int ret;
-
 	cpuhp_state_num = cpuhp_setup_state_multi(CPUHP_AP_ONLINE_DYN,
 						  "perf/arm/pmcg:online",
 						  NULL,
@@ -968,11 +877,7 @@ static int __init arm_smmu_pmu_init(void)
 	if (cpuhp_state_num < 0)
 		return cpuhp_state_num;
 
-	ret = platform_driver_register(&smmu_pmu_driver);
-	if (ret)
-		cpuhp_remove_multi_state(cpuhp_state_num);
-
-	return ret;
+	return platform_driver_register(&smmu_pmu_driver);
 }
 module_init(arm_smmu_pmu_init);
 

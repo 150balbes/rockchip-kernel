@@ -11,6 +11,7 @@
 
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/usb/composite.h>
 #include <linux/videodev2.h>
@@ -69,8 +70,6 @@ extern unsigned int uvc_gadget_trace_param;
 #define UVC_MAX_REQUEST_SIZE			64
 #define UVC_MAX_EVENTS				4
 
-#define UVCG_REQUEST_HEADER_LEN			12
-
 /* ------------------------------------------------------------------------
  * Structures
  */
@@ -78,9 +77,9 @@ struct uvc_request {
 	struct usb_request *req;
 	u8 *req_buffer;
 	struct uvc_video *video;
-	struct sg_table sgt;
-	u8 header[UVCG_REQUEST_HEADER_LEN];
-	struct uvc_buffer *last_buf;
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	struct completion req_done;
+#endif
 };
 
 struct uvc_video {
@@ -88,7 +87,6 @@ struct uvc_video {
 	struct usb_ep *ep;
 
 	struct work_struct pump;
-	struct workqueue_struct *async_wq;
 
 	/* Frame parameters */
 	u8 bpp;
@@ -105,8 +103,6 @@ struct uvc_video {
 	struct uvc_request *ureq;
 	struct list_head req_free;
 	spinlock_t req_lock;
-
-	unsigned int req_int_count;
 
 	void (*encode) (struct usb_request *req, struct uvc_video *video,
 			struct uvc_buffer *buf);
@@ -133,8 +129,8 @@ struct uvc_device {
 	struct uvc_video video;
 	bool func_connected;
 	wait_queue_head_t func_connected_queue;
-
-	struct uvcg_streaming_header *header;
+	/* for creating and issuing QoS requests */
+	struct pm_qos_request pm_qos;
 
 	/* Descriptors */
 	struct {
@@ -143,20 +139,19 @@ struct uvc_device {
 		const struct uvc_descriptor_header * const *fs_streaming;
 		const struct uvc_descriptor_header * const *hs_streaming;
 		const struct uvc_descriptor_header * const *ss_streaming;
-		struct list_head *extension_units;
 	} desc;
 
 	unsigned int control_intf;
-	struct usb_ep *interrupt_ep;
+	struct usb_ep *control_ep;
 	struct usb_request *control_req;
 	void *control_buf;
-	bool enable_interrupt_ep;
 
 	unsigned int streaming_intf;
 
 	/* Events */
 	unsigned int event_length;
 	unsigned int event_setup_out : 1;
+	unsigned int event_suspend : 1;
 };
 
 static inline struct uvc_device *to_uvc(struct usb_function *f)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (c) 2016-2017 HiSilicon Limited. */
+/* Copyright (c) 2016-2017 Hisilicon Limited. */
 #include <linux/crypto.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
@@ -504,8 +504,8 @@ static void sec_skcipher_alg_callback(struct sec_bd_info *sec_resp,
 		     kfifo_avail(&ctx->queue->softqueue) >
 		     backlog_req->num_elements)) {
 			sec_send_request(backlog_req, ctx->queue);
-			crypto_request_complete(backlog_req->req_base,
-						-EINPROGRESS);
+			backlog_req->req_base->complete(backlog_req->req_base,
+							-EINPROGRESS);
 			list_del(&backlog_req->backlog_head);
 		}
 	}
@@ -534,7 +534,7 @@ static void sec_skcipher_alg_callback(struct sec_bd_info *sec_resp,
 		if (skreq->src != skreq->dst)
 			dma_unmap_sg(dev, skreq->dst, sec_req->len_out,
 				     DMA_BIDIRECTIONAL);
-		skcipher_request_complete(skreq, sec_req->err);
+		skreq->base.complete(&skreq->base, sec_req->err);
 	}
 }
 

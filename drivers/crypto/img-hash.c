@@ -19,8 +19,7 @@
 
 #include <crypto/internal/hash.h>
 #include <crypto/md5.h>
-#include <crypto/sha1.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 
 #define CR_RESET			0
 #define CR_RESET_SET			1
@@ -157,9 +156,9 @@ static inline void img_hash_write(struct img_hash_dev *hdev,
 	writel_relaxed(value, hdev->io_base + offset);
 }
 
-static inline __be32 img_hash_read_result_queue(struct img_hash_dev *hdev)
+static inline u32 img_hash_read_result_queue(struct img_hash_dev *hdev)
 {
-	return cpu_to_be32(img_hash_read(hdev, CR_RESULT_QUEUE));
+	return be32_to_cpu(img_hash_read(hdev, CR_RESULT_QUEUE));
 }
 
 static void img_hash_start(struct img_hash_dev *hdev, bool dma)
@@ -209,7 +208,7 @@ static int img_hash_xmit_cpu(struct img_hash_dev *hdev, const u8 *buf,
 
 static void img_hash_dma_callback(void *data)
 {
-	struct img_hash_dev *hdev = data;
+	struct img_hash_dev *hdev = (struct img_hash_dev *)data;
 	struct img_hash_request_ctx *ctx = ahash_request_ctx(hdev->req);
 
 	if (ctx->bufcnt) {
@@ -283,10 +282,10 @@ static int img_hash_finish(struct ahash_request *req)
 static void img_hash_copy_hash(struct ahash_request *req)
 {
 	struct img_hash_request_ctx *ctx = ahash_request_ctx(req);
-	__be32 *hash = (__be32 *)ctx->digest;
+	u32 *hash = (u32 *)ctx->digest;
 	int i;
 
-	for (i = (ctx->digsize / sizeof(*hash)) - 1; i >= 0; i--)
+	for (i = (ctx->digsize / sizeof(u32)) - 1; i >= 0; i--)
 		hash[i] = img_hash_read_result_queue(ctx->hdev);
 }
 
@@ -308,7 +307,7 @@ static void img_hash_finish_req(struct ahash_request *req, int err)
 		DRIVER_FLAGS_CPU | DRIVER_FLAGS_BUSY | DRIVER_FLAGS_FINAL);
 
 	if (req->base.complete)
-		ahash_request_complete(req, err);
+		req->base.complete(&req->base, err);
 }
 
 static int img_hash_write_via_dma(struct img_hash_dev *hdev)
@@ -358,16 +357,12 @@ static int img_hash_dma_init(struct img_hash_dev *hdev)
 static void img_hash_dma_task(unsigned long d)
 {
 	struct img_hash_dev *hdev = (struct img_hash_dev *)d;
-	struct img_hash_request_ctx *ctx;
+	struct img_hash_request_ctx *ctx = ahash_request_ctx(hdev->req);
 	u8 *addr;
 	size_t nbytes, bleft, wsend, len, tbc;
 	struct scatterlist tsg;
 
-	if (!hdev->req)
-		return;
-
-	ctx = ahash_request_ctx(hdev->req);
-	if (!ctx->sg)
+	if (!hdev->req || !ctx->sg)
 		return;
 
 	addr = sg_virt(ctx->sg);
@@ -526,7 +521,7 @@ static int img_hash_handle_queue(struct img_hash_dev *hdev,
 		return res;
 
 	if (backlog)
-		crypto_request_complete(backlog, -EINPROGRESS);
+		backlog->complete(backlog, -EINPROGRESS);
 
 	req = ahash_request_cast(async_req);
 	hdev->req = req;
@@ -678,12 +673,14 @@ static int img_hash_digest(struct ahash_request *req)
 static int img_hash_cra_init(struct crypto_tfm *tfm, const char *alg_name)
 {
 	struct img_hash_ctx *ctx = crypto_tfm_ctx(tfm);
+	int err = -ENOMEM;
 
 	ctx->fallback = crypto_alloc_ahash(alg_name, 0,
 					   CRYPTO_ALG_NEED_FALLBACK);
 	if (IS_ERR(ctx->fallback)) {
 		pr_err("img_hash: Could not load fallback driver.\n");
-		return PTR_ERR(ctx->fallback);
+		err = PTR_ERR(ctx->fallback);
+		goto err;
 	}
 	crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
 				 sizeof(struct img_hash_request_ctx) +
@@ -691,6 +688,9 @@ static int img_hash_cra_init(struct crypto_tfm *tfm, const char *alg_name)
 				 IMG_HASH_DMA_THRESHOLD);
 
 	return 0;
+
+err:
+	return err;
 }
 
 static int img_hash_cra_md5_init(struct crypto_tfm *tfm)
@@ -927,7 +927,7 @@ finish:
 	img_hash_finish_req(hdev->req, err);
 }
 
-static const struct of_device_id img_hash_match[] __maybe_unused = {
+static const struct of_device_id img_hash_match[] = {
 	{ .compatible = "img,hash-accelerator" },
 	{}
 };
@@ -962,12 +962,16 @@ static int img_hash_probe(struct platform_device *pdev)
 	hdev->io_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(hdev->io_base)) {
 		err = PTR_ERR(hdev->io_base);
+		dev_err(dev, "can't ioremap, returned %d\n", err);
+
 		goto res_err;
 	}
 
 	/* Write port (DMA or CPU) */
-	hdev->cpu_addr = devm_platform_get_and_ioremap_resource(pdev, 1, &hash_res);
+	hash_res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	hdev->cpu_addr = devm_ioremap_resource(dev, hash_res);
 	if (IS_ERR(hdev->cpu_addr)) {
+		dev_err(dev, "can't ioremap write port\n");
 		err = PTR_ERR(hdev->cpu_addr);
 		goto res_err;
 	}

@@ -4,7 +4,6 @@
 
 */
 #include <linux/kernel.h>
-#include <linux/kstrtox.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/module.h>
@@ -244,24 +243,6 @@ STANDARD_PARAM_DEF(ulong,	unsigned long,		"%lu",		kstrtoul);
 STANDARD_PARAM_DEF(ullong,	unsigned long long,	"%llu",		kstrtoull);
 STANDARD_PARAM_DEF(hexint,	unsigned int,		"%#08x", 	kstrtouint);
 
-int param_set_uint_minmax(const char *val, const struct kernel_param *kp,
-		unsigned int min, unsigned int max)
-{
-	unsigned int num;
-	int ret;
-
-	if (!val)
-		return -EINVAL;
-	ret = kstrtouint(val, 0, &num);
-	if (ret)
-		return ret;
-	if (num < min || num > max)
-		return -EINVAL;
-	*((unsigned int *)kp->arg) = num;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(param_set_uint_minmax);
-
 int param_set_charp(const char *val, const struct kernel_param *kp)
 {
 	if (strlen(val) > 1024) {
@@ -311,7 +292,7 @@ int param_set_bool(const char *val, const struct kernel_param *kp)
 	if (!val) val = "1";
 
 	/* One of =[yYnN01] */
-	return kstrtobool(val, kp->arg);
+	return strtobool(val, kp->arg);
 }
 EXPORT_SYMBOL(param_set_bool);
 
@@ -847,7 +828,7 @@ static void __init param_sysfs_builtin(void)
 			name_len = 0;
 		} else {
 			name_len = dot - kp->name + 1;
-			strscpy(modname, kp->name, name_len);
+			strlcpy(modname, kp->name, name_len);
 		}
 		kernel_add_sysfs_param(modname, kp, name_len);
 	}
@@ -862,16 +843,18 @@ ssize_t __modver_version_show(struct module_attribute *mattr,
 	return scnprintf(buf, PAGE_SIZE, "%s\n", vattr->version);
 }
 
-extern const struct module_version_attribute __start___modver[];
-extern const struct module_version_attribute __stop___modver[];
+extern const struct module_version_attribute *__start___modver[];
+extern const struct module_version_attribute *__stop___modver[];
 
 static void __init version_sysfs_builtin(void)
 {
-	const struct module_version_attribute *vattr;
+	const struct module_version_attribute **p;
 	struct module_kobject *mk;
 	int err;
 
-	for (vattr = __start___modver; vattr < __stop___modver; vattr++) {
+	for (p = __start___modver; p < __stop___modver; p++) {
+		const struct module_version_attribute *vattr = *p;
+
 		mk = locate_module_kobject(vattr->module_name);
 		if (mk) {
 			err = sysfs_create_file(&mk->kobj, &vattr->mattr.attr);
@@ -927,9 +910,9 @@ static const struct sysfs_ops module_sysfs_ops = {
 	.store = module_attr_store,
 };
 
-static int uevent_filter(const struct kobject *kobj)
+static int uevent_filter(struct kset *kset, struct kobject *kobj)
 {
-	const struct kobj_type *ktype = get_ktype(kobj);
+	struct kobj_type *ktype = get_ktype(kobj);
 
 	if (ktype == &module_ktype)
 		return 1;
@@ -941,6 +924,7 @@ static const struct kset_uevent_ops module_uevent_ops = {
 };
 
 struct kset *module_kset;
+int module_sysfs_initialized;
 
 static void module_kobj_release(struct kobject *kobj)
 {
@@ -948,17 +932,13 @@ static void module_kobj_release(struct kobject *kobj)
 	complete(mk->kobj_completion);
 }
 
-const struct kobj_type module_ktype = {
+struct kobj_type module_ktype = {
 	.release   =	module_kobj_release,
 	.sysfs_ops =	&module_sysfs_ops,
 };
 
 /*
- * param_sysfs_init - create "module" kset
- *
- * This must be done before the initramfs is unpacked and
- * request_module() thus becomes possible, because otherwise the
- * module load would fail in mod_sysfs_init.
+ * param_sysfs_init - wrapper for built-in params support
  */
 static int __init param_sysfs_init(void)
 {
@@ -968,25 +948,13 @@ static int __init param_sysfs_init(void)
 			__FILE__, __LINE__);
 		return -ENOMEM;
 	}
-
-	return 0;
-}
-subsys_initcall(param_sysfs_init);
-
-/*
- * param_sysfs_builtin_init - add sysfs version and parameter
- * attributes for built-in modules
- */
-static int __init param_sysfs_builtin_init(void)
-{
-	if (!module_kset)
-		return -ENOMEM;
+	module_sysfs_initialized = 1;
 
 	version_sysfs_builtin();
 	param_sysfs_builtin();
 
 	return 0;
 }
-late_initcall(param_sysfs_builtin_init);
+subsys_initcall(param_sysfs_init);
 
 #endif /* CONFIG_SYSFS */

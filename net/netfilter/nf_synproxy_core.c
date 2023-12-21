@@ -236,6 +236,12 @@ synproxy_tstamp_adjust(struct sk_buff *skb, unsigned int protoff,
 	return 1;
 }
 
+static struct nf_ct_ext_type nf_ct_synproxy_extend __read_mostly = {
+	.len		= sizeof(struct nf_conn_synproxy),
+	.align		= __alignof__(struct nf_conn_synproxy),
+	.id		= NF_CT_EXT_SYNPROXY,
+};
+
 #ifdef CONFIG_PROC_FS
 static void *synproxy_cpu_seq_start(struct seq_file *seq, loff_t *pos)
 {
@@ -343,6 +349,7 @@ static int __net_init synproxy_net_init(struct net *net)
 		goto err2;
 
 	__set_bit(IPS_CONFIRMED_BIT, &ct->status);
+	nf_conntrack_get(&ct->ct_general);
 	snet->tmpl = ct;
 
 	snet->stats = alloc_percpu(struct synproxy_stats);
@@ -381,12 +388,28 @@ static struct pernet_operations synproxy_net_ops = {
 
 static int __init synproxy_core_init(void)
 {
-	return register_pernet_subsys(&synproxy_net_ops);
+	int err;
+
+	err = nf_ct_extend_register(&nf_ct_synproxy_extend);
+	if (err < 0)
+		goto err1;
+
+	err = register_pernet_subsys(&synproxy_net_ops);
+	if (err < 0)
+		goto err2;
+
+	return 0;
+
+err2:
+	nf_ct_extend_unregister(&nf_ct_synproxy_extend);
+err1:
+	return err;
 }
 
 static void __exit synproxy_core_exit(void)
 {
 	unregister_pernet_subsys(&synproxy_net_ops);
+	nf_ct_extend_unregister(&nf_ct_synproxy_extend);
 }
 
 module_init(synproxy_core_init);
@@ -405,7 +428,7 @@ synproxy_build_ip(struct net *net, struct sk_buff *skb, __be32 saddr,
 	iph->tos	= 0;
 	iph->id		= 0;
 	iph->frag_off	= htons(IP_DF);
-	iph->ttl	= READ_ONCE(net->ipv4.sysctl_ip_default_ttl);
+	iph->ttl	= net->ipv4.sysctl_ip_default_ttl;
 	iph->protocol	= IPPROTO_TCP;
 	iph->check	= 0;
 	iph->saddr	= saddr;

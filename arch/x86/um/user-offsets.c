@@ -8,11 +8,12 @@
 #define __FRAME_OFFSETS
 #include <linux/ptrace.h>
 #include <asm/types.h>
-#include <linux/kbuild.h>
 
-#define DEFINE_LONGS(sym, val)	\
-	COMMENT(#val " / sizeof(unsigned long)");	\
-	DEFINE(sym, val / sizeof(unsigned long))
+#define DEFINE(sym, val) \
+	asm volatile("\n->" #sym " %0 " #val : : "i" (val))
+
+#define DEFINE_LONGS(sym, val) \
+	asm volatile("\n->" #sym " %0 " #val : : "i" (val/sizeof(unsigned long)))
 
 void foo(void)
 {

@@ -97,10 +97,7 @@ static void init_x2apic_ldr(void)
 
 static int x2apic_phys_probe(void)
 {
-	if (!x2apic_mode)
-		return 0;
-
-	if (x2apic_phys || x2apic_fadt_phys())
+	if (x2apic_mode && (x2apic_phys || x2apic_fadt_phys()))
 		return 1;
 
 	return apic == &apic_x2apic_phys;
@@ -163,13 +160,15 @@ static struct apic apic_x2apic_phys __ro_after_init = {
 	.apic_id_valid			= x2apic_apic_id_valid,
 	.apic_id_registered		= x2apic_apic_id_registered,
 
-	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
-	.dest_mode_logical		= false,
+	.irq_delivery_mode		= dest_Fixed,
+	.irq_dest_mode			= 0, /* physical */
 
 	.disable_esr			= 0,
-
+	.dest_logical			= 0,
 	.check_apicid_used		= NULL,
+
 	.init_apic_ldr			= init_x2apic_ldr,
+
 	.ioapic_phys_id_map		= NULL,
 	.setup_apic_routing		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,

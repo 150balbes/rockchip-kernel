@@ -10,9 +10,6 @@
 #include <linux/pagemap.h>
 #include <linux/hugetlb.h>
 #include <linux/pgtable.h>
-#include <linux/swap.h>
-#include <linux/swapops.h>
-#include <linux/mm_inline.h>
 #include <asm/tlb.h>
 
 /*
@@ -68,10 +65,10 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 			  unsigned long address, pte_t *ptep,
 			  pte_t entry, int dirty)
 {
-	int changed = !pte_same(ptep_get(ptep), entry);
+	int changed = !pte_same(*ptep, entry);
 	if (changed) {
 		set_pte_at(vma->vm_mm, address, ptep, entry);
-		flush_tlb_fix_spurious_fault(vma, address, ptep);
+		flush_tlb_fix_spurious_fault(vma, address);
 	}
 	return changed;
 }
@@ -203,14 +200,6 @@ pmd_t pmdp_invalidate(struct vm_area_struct *vma, unsigned long address,
 }
 #endif
 
-#ifndef __HAVE_ARCH_PMDP_INVALIDATE_AD
-pmd_t pmdp_invalidate_ad(struct vm_area_struct *vma, unsigned long address,
-			 pmd_t *pmdp)
-{
-	return pmdp_invalidate(vma, address, pmdp);
-}
-#endif
-
 #ifndef pmdp_collapse_flush
 pmd_t pmdp_collapse_flush(struct vm_area_struct *vma, unsigned long address,
 			  pmd_t *pmdp)
@@ -231,57 +220,3 @@ pmd_t pmdp_collapse_flush(struct vm_area_struct *vma, unsigned long address,
 }
 #endif
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
-
-pte_t *__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp)
-{
-	pmd_t pmdval;
-
-	/* rcu_read_lock() to be added later */
-	pmdval = pmdp_get_lockless(pmd);
-	if (pmdvalp)
-		*pmdvalp = pmdval;
-	if (unlikely(pmd_none(pmdval) || is_pmd_migration_entry(pmdval)))
-		goto nomap;
-	if (unlikely(pmd_trans_huge(pmdval) || pmd_devmap(pmdval)))
-		goto nomap;
-	if (unlikely(pmd_bad(pmdval))) {
-		pmd_clear_bad(pmd);
-		goto nomap;
-	}
-	return __pte_map(&pmdval, addr);
-nomap:
-	/* rcu_read_unlock() to be added later */
-	return NULL;
-}
-
-pte_t *pte_offset_map_nolock(struct mm_struct *mm, pmd_t *pmd,
-			     unsigned long addr, spinlock_t **ptlp)
-{
-	pmd_t pmdval;
-	pte_t *pte;
-
-	pte = __pte_offset_map(pmd, addr, &pmdval);
-	if (likely(pte))
-		*ptlp = pte_lockptr(mm, &pmdval);
-	return pte;
-}
-
-pte_t *__pte_offset_map_lock(struct mm_struct *mm, pmd_t *pmd,
-			     unsigned long addr, spinlock_t **ptlp)
-{
-	spinlock_t *ptl;
-	pmd_t pmdval;
-	pte_t *pte;
-again:
-	pte = __pte_offset_map(pmd, addr, &pmdval);
-	if (unlikely(!pte))
-		return pte;
-	ptl = pte_lockptr(mm, &pmdval);
-	spin_lock(ptl);
-	if (likely(pmd_same(pmdval, pmdp_get_lockless(pmd)))) {
-		*ptlp = ptl;
-		return pte;
-	}
-	pte_unmap_unlock(pte, ptl);
-	goto again;
-}

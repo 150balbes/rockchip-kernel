@@ -6,7 +6,8 @@ Ramfs, rootfs and initramfs
 
 October 17, 2005
 
-:Author: Rob Landley <rob@landley.net>
+Rob Landley <rob@landley.net>
+=============================
 
 What is ramfs?
 --------------

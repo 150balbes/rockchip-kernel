@@ -69,7 +69,7 @@ static void roq_print(struct msm_gpu *gpu, struct drm_printer *p)
 
 static int show(struct seq_file *m, void *arg)
 {
-	struct drm_info_node *node = m->private;
+	struct drm_info_node *node = (struct drm_info_node *) m->private;
 	struct drm_device *dev = node->minor->dev;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct drm_printer p = drm_seq_file_printer(m);
@@ -107,7 +107,7 @@ reset_set(void *data, u64 val)
 	 * try to reset an active GPU.
 	 */
 
-	mutex_lock(&gpu->lock);
+	mutex_lock(&dev->struct_mutex);
 
 	release_firmware(adreno_gpu->fw[ADRENO_FW_PM4]);
 	adreno_gpu->fw[ADRENO_FW_PM4] = NULL;
@@ -117,13 +117,13 @@ reset_set(void *data, u64 val)
 
 	if (a5xx_gpu->pm4_bo) {
 		msm_gem_unpin_iova(a5xx_gpu->pm4_bo, gpu->aspace);
-		drm_gem_object_put(a5xx_gpu->pm4_bo);
+		drm_gem_object_put_locked(a5xx_gpu->pm4_bo);
 		a5xx_gpu->pm4_bo = NULL;
 	}
 
 	if (a5xx_gpu->pfp_bo) {
 		msm_gem_unpin_iova(a5xx_gpu->pfp_bo, gpu->aspace);
-		drm_gem_object_put(a5xx_gpu->pfp_bo);
+		drm_gem_object_put_locked(a5xx_gpu->pfp_bo);
 		a5xx_gpu->pfp_bo = NULL;
 	}
 
@@ -133,12 +133,12 @@ reset_set(void *data, u64 val)
 	gpu->funcs->recover(gpu);
 
 	pm_runtime_put_sync(&gpu->pdev->dev);
-	mutex_unlock(&gpu->lock);
+	mutex_unlock(&dev->struct_mutex);
 
 	return 0;
 }
 
-DEFINE_DEBUGFS_ATTRIBUTE(reset_fops, NULL, reset_set, "%llx\n");
+DEFINE_SIMPLE_ATTRIBUTE(reset_fops, NULL, reset_set, "%llx\n");
 
 
 void a5xx_debugfs_init(struct msm_gpu *gpu, struct drm_minor *minor)
@@ -154,6 +154,6 @@ void a5xx_debugfs_init(struct msm_gpu *gpu, struct drm_minor *minor)
 				 ARRAY_SIZE(a5xx_debugfs_list),
 				 minor->debugfs_root, minor);
 
-	debugfs_create_file_unsafe("reset", S_IWUGO, minor->debugfs_root, dev,
-				&reset_fops);
+	debugfs_create_file("reset", S_IWUGO, minor->debugfs_root, dev,
+			    &reset_fops);
 }

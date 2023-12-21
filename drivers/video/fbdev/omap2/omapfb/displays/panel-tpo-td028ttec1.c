@@ -16,6 +16,7 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/spi/spi.h>
+#include <linux/gpio.h>
 #include <video/omapfb_dss.h>
 
 struct panel_drv_data {
@@ -424,7 +425,7 @@ err_reg:
 	return r;
 }
 
-static void td028ttec1_panel_remove(struct spi_device *spi)
+static int td028ttec1_panel_remove(struct spi_device *spi)
 {
 	struct panel_drv_data *ddata = dev_get_drvdata(&spi->dev);
 	struct omap_dss_device *dssdev = &ddata->dssdev;
@@ -438,6 +439,8 @@ static void td028ttec1_panel_remove(struct spi_device *spi)
 	td028ttec1_panel_disconnect(dssdev);
 
 	omap_dss_put_device(in);
+
+	return 0;
 }
 
 static const struct of_device_id td028ttec1_of_match[] = {

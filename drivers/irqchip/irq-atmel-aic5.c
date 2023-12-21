@@ -80,7 +80,7 @@ aic5_handle(struct pt_regs *regs)
 	if (!irqstat)
 		irq_reg_writel(bgc, 0, AT91_AIC5_EOICR);
 	else
-		generic_handle_domain_irq(aic5_domain, irqnr);
+		handle_domain_irq(aic5_domain, irqnr, regs);
 }
 
 static void aic5_mask(struct irq_data *d)

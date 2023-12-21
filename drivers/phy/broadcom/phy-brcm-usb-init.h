@@ -34,14 +34,6 @@ enum brcmusb_reg_sel {
 	brcm_usb_ctrl_unset(USB_CTRL_REG(base, reg),		\
 			    USB_CTRL_##reg##_##field##_MASK)
 
-#define USB_XHCI_GBL_REG(base, reg) ((void __iomem *)base + USB_XHCI_GBL_##reg)
-#define USB_XHCI_GBL_SET(base, reg, field) \
-	brcm_usb_ctrl_set(USB_XHCI_GBL_REG(base, reg), \
-			  USB_XHCI_GBL_##reg##_##field##_MASK)
-#define USB_XHCI_GBL_UNSET(base, reg, field) \
-	brcm_usb_ctrl_unset(USB_XHCI_GBL_REG(base, reg), \
-			    USB_XHCI_GBL_##reg##_##field##_MASK)
-
 struct  brcm_usb_init_params;
 
 struct brcm_usb_init_ops {
@@ -53,15 +45,14 @@ struct brcm_usb_init_ops {
 	void (*uninit_eohci)(struct brcm_usb_init_params *params);
 	void (*uninit_xhci)(struct brcm_usb_init_params *params);
 	int  (*get_dual_select)(struct brcm_usb_init_params *params);
-	void (*set_dual_select)(struct brcm_usb_init_params *params);
+	void (*set_dual_select)(struct brcm_usb_init_params *params, int mode);
 };
 
 struct  brcm_usb_init_params {
 	void __iomem *regs[BRCM_REGS_MAX];
 	int ioc;
 	int ipp;
-	int supported_port_modes;
-	int port_mode;
+	int mode;
 	u32 family_id;
 	u32 product_id;
 	int selected_family;
@@ -70,9 +61,9 @@ struct  brcm_usb_init_params {
 	const struct brcm_usb_init_ops *ops;
 	struct regmap *syscon_piarbctl;
 	bool wake_enabled;
+	bool suspend_with_clocks;
 };
 
-void brcm_usb_dvr_init_4908(struct brcm_usb_init_params *params);
 void brcm_usb_dvr_init_7445(struct brcm_usb_init_params *params);
 void brcm_usb_dvr_init_7216(struct brcm_usb_init_params *params);
 void brcm_usb_dvr_init_7211b0(struct brcm_usb_init_params *params);
@@ -161,10 +152,11 @@ static inline int brcm_usb_get_dual_select(struct brcm_usb_init_params *ini)
 	return 0;
 }
 
-static inline void brcm_usb_set_dual_select(struct brcm_usb_init_params *ini)
+static inline void brcm_usb_set_dual_select(struct brcm_usb_init_params *ini,
+	int mode)
 {
 	if (ini->ops->set_dual_select)
-		ini->ops->set_dual_select(ini);
+		ini->ops->set_dual_select(ini, mode);
 }
 
 #endif /* _USB_BRCM_COMMON_INIT_H */

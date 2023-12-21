@@ -17,8 +17,6 @@
 #include <linux/time.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
-#include <media/dvbdev.h>
-#include <media/media-device.h>
 
 #include "vidtv_bridge.h"
 #include "vidtv_common.h"
@@ -416,7 +414,6 @@ static int vidtv_bridge_dvb_init(struct vidtv_dvb *dvb)
 	ret = vidtv_bridge_register_adap(dvb);
 	if (ret < 0)
 		goto fail_adapter;
-	dvb_register_media_controller(&dvb->adapter, &dvb->mdev);
 
 	for (i = 0; i < NUM_FE; ++i) {
 		ret = vidtv_bridge_probe_demod(dvb, i);
@@ -459,20 +456,26 @@ fail_dmx_conn:
 	for (j = j - 1; j >= 0; --j)
 		dvb->demux.dmx.remove_frontend(&dvb->demux.dmx,
 					       &dvb->dmx_fe[j]);
-	dvb_dmxdev_release(&dvb->dmx_dev);
 fail_dmx_dev:
-	dvb_dmx_release(&dvb->demux);
+	dvb_dmxdev_release(&dvb->dmx_dev);
 fail_dmx:
-fail_demod_probe:
-	for (i = i - 1; i >= 0; --i) {
-		dvb_unregister_frontend(dvb->fe[i]);
+	dvb_dmx_release(&dvb->demux);
 fail_fe:
-		dvb_module_release(dvb->i2c_client_tuner[i]);
+	for (j = i; j >= 0; --j)
+		dvb_unregister_frontend(dvb->fe[j]);
 fail_tuner_probe:
-		dvb_module_release(dvb->i2c_client_demod[i]);
-	}
+	for (j = i; j >= 0; --j)
+		if (dvb->i2c_client_tuner[j])
+			dvb_module_release(dvb->i2c_client_tuner[j]);
+
+fail_demod_probe:
+	for (j = i; j >= 0; --j)
+		if (dvb->i2c_client_demod[j])
+			dvb_module_release(dvb->i2c_client_demod[j]);
+
 fail_adapter:
 	dvb_unregister_adapter(&dvb->adapter);
+
 fail_i2c:
 	i2c_del_adapter(&dvb->i2c_adapter);
 
@@ -490,15 +493,6 @@ static int vidtv_bridge_probe(struct platform_device *pdev)
 
 	dvb->pdev = pdev;
 
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	dvb->mdev.dev = &pdev->dev;
-
-	strscpy(dvb->mdev.model, "vidtv", sizeof(dvb->mdev.model));
-	strscpy(dvb->mdev.bus_info, "platform:vidtv", sizeof(dvb->mdev.bus_info));
-
-	media_device_init(&dvb->mdev);
-#endif
-
 	ret = vidtv_bridge_dvb_init(dvb);
 	if (ret < 0)
 		goto err_dvb;
@@ -507,38 +501,20 @@ static int vidtv_bridge_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, dvb);
 
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	ret = media_device_register(&dvb->mdev);
-	if (ret) {
-		dev_err(dvb->mdev.dev,
-			"media device register failed (err=%d)\n", ret);
-		goto err_media_device_register;
-	}
-#endif /* CONFIG_MEDIA_CONTROLLER_DVB */
-
 	dev_info(&pdev->dev, "Successfully initialized vidtv!\n");
 	return ret;
 
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-err_media_device_register:
-	media_device_cleanup(&dvb->mdev);
-#endif /* CONFIG_MEDIA_CONTROLLER_DVB */
 err_dvb:
 	kfree(dvb);
 	return ret;
 }
 
-static void vidtv_bridge_remove(struct platform_device *pdev)
+static int vidtv_bridge_remove(struct platform_device *pdev)
 {
 	struct vidtv_dvb *dvb;
 	u32 i;
 
 	dvb = platform_get_drvdata(pdev);
-
-#ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	media_device_unregister(&dvb->mdev);
-	media_device_cleanup(&dvb->mdev);
-#endif /* CONFIG_MEDIA_CONTROLLER_DVB */
 
 	mutex_destroy(&dvb->feed_lock);
 
@@ -551,28 +527,26 @@ static void vidtv_bridge_remove(struct platform_device *pdev)
 	dvb_dmxdev_release(&dvb->dmx_dev);
 	dvb_dmx_release(&dvb->demux);
 	dvb_unregister_adapter(&dvb->adapter);
-	dev_info(&pdev->dev, "Successfully removed vidtv\n");
+
+	return 0;
 }
 
 static void vidtv_bridge_dev_release(struct device *dev)
 {
-	struct vidtv_dvb *dvb;
-
-	dvb = dev_get_drvdata(dev);
-	kfree(dvb);
 }
 
 static struct platform_device vidtv_bridge_dev = {
-	.name		= VIDTV_PDEV_NAME,
+	.name		= "vidtv_bridge",
 	.dev.release	= vidtv_bridge_dev_release,
 };
 
 static struct platform_driver vidtv_bridge_driver = {
 	.driver = {
-		.name = VIDTV_PDEV_NAME,
+		.name                = "vidtv_bridge",
+		.suppress_bind_attrs = true,
 	},
 	.probe    = vidtv_bridge_probe,
-	.remove_new = vidtv_bridge_remove,
+	.remove   = vidtv_bridge_remove,
 };
 
 static void __exit vidtv_bridge_exit(void)

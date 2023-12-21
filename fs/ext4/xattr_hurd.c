@@ -21,7 +21,8 @@ ext4_xattr_hurd_list(struct dentry *dentry)
 static int
 ext4_xattr_hurd_get(const struct xattr_handler *handler,
 		    struct dentry *unused, struct inode *inode,
-		    const char *name, void *buffer, size_t size)
+		    const char *name, void *buffer, size_t size,
+		    int flags)
 {
 	if (!test_opt(inode->i_sb, XATTR_USER))
 		return -EOPNOTSUPP;
@@ -32,7 +33,6 @@ ext4_xattr_hurd_get(const struct xattr_handler *handler,
 
 static int
 ext4_xattr_hurd_set(const struct xattr_handler *handler,
-		    struct mnt_idmap *idmap,
 		    struct dentry *unused, struct inode *inode,
 		    const char *name, const void *value,
 		    size_t size, int flags)

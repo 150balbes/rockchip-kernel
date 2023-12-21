@@ -8,8 +8,7 @@
 #ifndef _ASCII85_H_
 #define _ASCII85_H_
 
-#include <linux/math.h>
-#include <linux/types.h>
+#include <linux/kernel.h>
 
 #define ASCII85_BUFSZ 6
 

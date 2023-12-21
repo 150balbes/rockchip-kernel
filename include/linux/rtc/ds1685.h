@@ -46,6 +46,7 @@ struct ds1685_priv {
 	u32 regstep;
 	int irq_num;
 	bool bcd_mode;
+	bool no_irq;
 	u8 (*read)(struct ds1685_priv *, int);
 	void (*write)(struct ds1685_priv *, int, u8);
 	void (*prepare_poweroff)(void);

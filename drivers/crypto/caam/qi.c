@@ -8,13 +8,7 @@
  */
 
 #include <linux/cpumask.h>
-#include <linux/device.h>
-#include <linux/dma-mapping.h>
-#include <linux/kernel.h>
 #include <linux/kthread.h>
-#include <linux/netdevice.h>
-#include <linux/slab.h>
-#include <linux/string.h>
 #include <soc/fsl/qman.h>
 
 #include "debugfs.h"
@@ -81,7 +75,7 @@ bool caam_congested __read_mostly;
 EXPORT_SYMBOL(caam_congested);
 
 /*
- * This is a cache of buffers, from which the users of CAAM QI driver
+ * This is a a cache of buffers, from which the users of CAAM QI driver
  * can allocate short (CAAM_QI_MEMCACHE_SIZE) buffers. It's faster than
  * doing malloc on the hotpath.
  * NOTE: A more elegant solution would be to have some headroom in the frames
@@ -551,10 +545,14 @@ static void cgr_cb(struct qman_portal *qm, struct qman_cgr *cgr, int congested)
 	}
 }
 
-static int caam_qi_napi_schedule(struct qman_portal *p, struct caam_napi *np,
-				 bool sched_napi)
+static int caam_qi_napi_schedule(struct qman_portal *p, struct caam_napi *np)
 {
-	if (sched_napi) {
+	/*
+	 * In case of threaded ISR, for RT kernels in_irq() does not return
+	 * appropriate value, so use in_serving_softirq to distinguish between
+	 * softirq and irq contexts.
+	 */
+	if (unlikely(in_irq() || !in_serving_softirq())) {
 		/* Disable QMan IRQ source and invoke NAPI */
 		qman_p_irqsource_remove(p, QM_PIRQ_DQRI);
 		np->p = p;
@@ -566,8 +564,7 @@ static int caam_qi_napi_schedule(struct qman_portal *p, struct caam_napi *np,
 
 static enum qman_cb_dqrr_result caam_rsp_fq_dqrr_cb(struct qman_portal *p,
 						    struct qman_fq *rsp_fq,
-						    const struct qm_dqrr_entry *dqrr,
-						    bool sched_napi)
+						    const struct qm_dqrr_entry *dqrr)
 {
 	struct caam_napi *caam_napi = raw_cpu_ptr(&pcpu_qipriv.caam_napi);
 	struct caam_drv_req *drv_req;
@@ -576,7 +573,7 @@ static enum qman_cb_dqrr_result caam_rsp_fq_dqrr_cb(struct qman_portal *p,
 	struct caam_drv_private *priv = dev_get_drvdata(qidev);
 	u32 status;
 
-	if (caam_qi_napi_schedule(p, caam_napi, sched_napi))
+	if (caam_qi_napi_schedule(p, caam_napi))
 		return qman_cb_dqrr_stop;
 
 	fd = &dqrr->fd;
@@ -620,7 +617,7 @@ static int alloc_rsp_fq_cpu(struct device *qidev, unsigned int cpu)
 	struct qman_fq *fq;
 	int ret;
 
-	fq = kzalloc(sizeof(*fq), GFP_KERNEL);
+	fq = kzalloc(sizeof(*fq), GFP_KERNEL | GFP_DMA);
 	if (!fq)
 		return -ENOMEM;
 
@@ -755,14 +752,14 @@ int caam_qi_init(struct platform_device *caam_pdev)
 		net_dev->dev = *qidev;
 		INIT_LIST_HEAD(&net_dev->napi_list);
 
-		netif_napi_add_tx_weight(net_dev, irqtask, caam_qi_poll,
-					 CAAM_NAPI_WEIGHT);
+		netif_napi_add(net_dev, irqtask, caam_qi_poll,
+			       CAAM_NAPI_WEIGHT);
 
 		napi_enable(irqtask);
 	}
 
-	qi_cache = kmem_cache_create("caamqicache", CAAM_QI_MEMCACHE_SIZE,
-				     dma_get_cache_alignment(), 0, NULL);
+	qi_cache = kmem_cache_create("caamqicache", CAAM_QI_MEMCACHE_SIZE, 0,
+				     SLAB_CACHE_DMA, NULL);
 	if (!qi_cache) {
 		dev_err(qidev, "Can't allocate CAAM cache\n");
 		free_rsp_fqs();

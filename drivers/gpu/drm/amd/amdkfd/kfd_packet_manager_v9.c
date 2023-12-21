@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright 2016-2022 Advanced Micro Devices, Inc.
+ * Copyright 2016-2018 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -25,7 +24,6 @@
 #include "kfd_kernel_queue.h"
 #include "kfd_device_queue_manager.h"
 #include "kfd_pm4_headers_ai.h"
-#include "kfd_pm4_headers_aldebaran.h"
 #include "kfd_pm4_opcodes.h"
 #include "gc/gc_10_1_0_sh_mask.h"
 
@@ -34,12 +32,10 @@ static int pm_map_process_v9(struct packet_manager *pm,
 {
 	struct pm4_mes_map_process *packet;
 	uint64_t vm_page_table_base_addr = qpd->page_table_base;
-	struct kfd_node *kfd = pm->dqm->dev;
-	struct kfd_process_device *pdd =
-			container_of(qpd, struct kfd_process_device, qpd);
 
 	packet = (struct pm4_mes_map_process *)buffer;
 	memset(buffer, 0, sizeof(struct pm4_mes_map_process));
+
 	packet->header.u32All = pm_build_pm4_header(IT_MAP_PROCESS,
 					sizeof(struct pm4_mes_map_process));
 	packet->bitfields2.diq_enable = (qpd->is_debug) ? 1 : 0;
@@ -51,12 +47,6 @@ static int pm_map_process_v9(struct packet_manager *pm,
 	packet->bitfields14.num_oac = qpd->num_oac;
 	packet->bitfields14.sdma_enable = 1;
 	packet->bitfields14.num_queues = (qpd->is_debug) ? 0 : qpd->queue_count;
-
-	if (kfd->dqm->trap_debug_vmid && pdd->process->debug_trap_enabled &&
-			pdd->process->runtime_info.runtime_state == DEBUG_RUNTIME_STATE_ENABLED) {
-		packet->bitfields2.debug_vmid = kfd->dqm->trap_debug_vmid;
-		packet->bitfields2.new_debug = 1;
-	}
 
 	packet->sh_mem_config = qpd->sh_mem_config;
 	packet->sh_mem_bases = qpd->sh_mem_bases;
@@ -83,66 +73,13 @@ static int pm_map_process_v9(struct packet_manager *pm,
 	return 0;
 }
 
-static int pm_map_process_aldebaran(struct packet_manager *pm,
-		uint32_t *buffer, struct qcm_process_device *qpd)
-{
-	struct pm4_mes_map_process_aldebaran *packet;
-	uint64_t vm_page_table_base_addr = qpd->page_table_base;
-	struct kfd_dev *kfd = pm->dqm->dev->kfd;
-	struct kfd_process_device *pdd =
-			container_of(qpd, struct kfd_process_device, qpd);
-	int i;
-
-	packet = (struct pm4_mes_map_process_aldebaran *)buffer;
-	memset(buffer, 0, sizeof(struct pm4_mes_map_process_aldebaran));
-	packet->header.u32All = pm_build_pm4_header(IT_MAP_PROCESS,
-			sizeof(struct pm4_mes_map_process_aldebaran));
-	packet->bitfields2.diq_enable = (qpd->is_debug) ? 1 : 0;
-	packet->bitfields2.process_quantum = 10;
-	packet->bitfields2.pasid = qpd->pqm->process->pasid;
-	packet->bitfields14.gds_size = qpd->gds_size & 0x3F;
-	packet->bitfields14.gds_size_hi = (qpd->gds_size >> 6) & 0xF;
-	packet->bitfields14.num_gws = (qpd->mapped_gws_queue) ? qpd->num_gws : 0;
-	packet->bitfields14.num_oac = qpd->num_oac;
-	packet->bitfields14.sdma_enable = 1;
-	packet->bitfields14.num_queues = (qpd->is_debug) ? 0 : qpd->queue_count;
-	packet->spi_gdbg_per_vmid_cntl = pdd->spi_dbg_override |
-						pdd->spi_dbg_launch_mode;
-
-	if (pdd->process->debug_trap_enabled) {
-		for (i = 0; i < kfd->device_info.num_of_watch_points; i++)
-			packet->tcp_watch_cntl[i] = pdd->watch_points[i];
-
-		packet->bitfields2.single_memops =
-				!!(pdd->process->dbg_flags & KFD_DBG_TRAP_FLAG_SINGLE_MEM_OP);
-	}
-
-	packet->sh_mem_config = qpd->sh_mem_config;
-	packet->sh_mem_bases = qpd->sh_mem_bases;
-	if (qpd->tba_addr) {
-		packet->sq_shader_tba_lo = lower_32_bits(qpd->tba_addr >> 8);
-		packet->sq_shader_tma_lo = lower_32_bits(qpd->tma_addr >> 8);
-		packet->sq_shader_tma_hi = upper_32_bits(qpd->tma_addr >> 8);
-	}
-
-	packet->gds_addr_lo = lower_32_bits(qpd->gds_context_area);
-	packet->gds_addr_hi = upper_32_bits(qpd->gds_context_area);
-
-	packet->vm_context_page_table_base_addr_lo32 =
-			lower_32_bits(vm_page_table_base_addr);
-	packet->vm_context_page_table_base_addr_hi32 =
-			upper_32_bits(vm_page_table_base_addr);
-
-	return 0;
-}
-
 static int pm_runlist_v9(struct packet_manager *pm, uint32_t *buffer,
 			uint64_t ib, size_t ib_size_in_dwords, bool chain)
 {
 	struct pm4_mes_runlist *packet;
 
 	int concurrent_proc_cnt = 0;
-	struct kfd_node *kfd = pm->dqm->dev;
+	struct kfd_dev *kfd = pm->dqm->dev;
 
 	/* Determine the number of processes to map together to HW:
 	 * it can not exceed the number of VMIDs available to the
@@ -202,11 +139,6 @@ static int pm_set_resources_v9(struct packet_manager *pm, uint32_t *buffer,
 	return 0;
 }
 
-static inline bool pm_use_ext_eng(struct kfd_dev *dev)
-{
-	return dev->adev->ip_versions[SDMA0_HWIP][0] >= IP_VERSION(5, 2, 0);
-}
-
 static int pm_map_queues_v9(struct packet_manager *pm, uint32_t *buffer,
 		struct queue *q, bool is_static)
 {
@@ -243,24 +175,13 @@ static int pm_map_queues_v9(struct packet_manager *pm, uint32_t *buffer,
 	case KFD_QUEUE_TYPE_SDMA:
 	case KFD_QUEUE_TYPE_SDMA_XGMI:
 		use_static = false; /* no static queues under SDMA */
-		if (q->properties.sdma_engine_id < 2 &&
-		    !pm_use_ext_eng(q->device->kfd))
+		if (q->properties.sdma_engine_id < 2)
 			packet->bitfields2.engine_sel = q->properties.sdma_engine_id +
 				engine_sel__mes_map_queues__sdma0_vi;
 		else {
-			/*
-			 * For GFX9.4.3, SDMA engine id can be greater than 8.
-			 * For such cases, set extended_engine_sel to 2 and
-			 * ensure engine_sel lies between 0-7.
-			 */
-			if (q->properties.sdma_engine_id >= 8)
-				packet->bitfields2.extended_engine_sel =
-					extended_engine_sel__mes_map_queues__sdma8_to_15_sel;
-			else
-				packet->bitfields2.extended_engine_sel =
-					extended_engine_sel__mes_map_queues__sdma0_to_7_sel;
-
-			packet->bitfields2.engine_sel = q->properties.sdma_engine_id % 8;
+			packet->bitfields2.extended_engine_sel =
+				extended_engine_sel__mes_map_queues__sdma0_to_7_sel;
+			packet->bitfields2.engine_sel = q->properties.sdma_engine_id;
 		}
 		break;
 	default:
@@ -285,44 +206,11 @@ static int pm_map_queues_v9(struct packet_manager *pm, uint32_t *buffer,
 	return 0;
 }
 
-static int pm_set_grace_period_v9(struct packet_manager *pm,
-		uint32_t *buffer,
-		uint32_t grace_period)
-{
-	struct pm4_mec_write_data_mmio *packet;
-	uint32_t reg_offset = 0;
-	uint32_t reg_data = 0;
-
-	pm->dqm->dev->kfd2kgd->build_grace_period_packet_info(
-			pm->dqm->dev->adev,
-			pm->dqm->wait_times,
-			grace_period,
-			&reg_offset,
-			&reg_data);
-
-	if (grace_period == USE_DEFAULT_GRACE_PERIOD)
-		reg_data = pm->dqm->wait_times;
-
-	packet = (struct pm4_mec_write_data_mmio *)buffer;
-	memset(buffer, 0, sizeof(struct pm4_mec_write_data_mmio));
-
-	packet->header.u32All = pm_build_pm4_header(IT_WRITE_DATA,
-					sizeof(struct pm4_mec_write_data_mmio));
-
-	packet->bitfields2.dst_sel  = dst_sel___write_data__mem_mapped_register;
-	packet->bitfields2.addr_incr =
-			addr_incr___write_data__do_not_increment_address;
-
-	packet->bitfields3.dst_mmreg_addr = reg_offset;
-
-	packet->data = reg_data;
-
-	return 0;
-}
-
 static int pm_unmap_queues_v9(struct packet_manager *pm, uint32_t *buffer,
+			enum kfd_queue_type type,
 			enum kfd_unmap_queues_filter filter,
-			uint32_t filter_param, bool reset)
+			uint32_t filter_param, bool reset,
+			unsigned int sdma_engine)
 {
 	struct pm4_mes_unmap_queues *packet;
 
@@ -331,14 +219,31 @@ static int pm_unmap_queues_v9(struct packet_manager *pm, uint32_t *buffer,
 
 	packet->header.u32All = pm_build_pm4_header(IT_UNMAP_QUEUES,
 					sizeof(struct pm4_mes_unmap_queues));
-
-	packet->bitfields2.extended_engine_sel =
-				pm_use_ext_eng(pm->dqm->dev->kfd) ?
-		extended_engine_sel__mes_unmap_queues__sdma0_to_7_sel :
-		extended_engine_sel__mes_unmap_queues__legacy_engine_sel;
-
-	packet->bitfields2.engine_sel =
-		engine_sel__mes_unmap_queues__compute;
+	switch (type) {
+	case KFD_QUEUE_TYPE_COMPUTE:
+	case KFD_QUEUE_TYPE_DIQ:
+		packet->bitfields2.extended_engine_sel =
+			extended_engine_sel__mes_unmap_queues__legacy_engine_sel;
+		packet->bitfields2.engine_sel =
+			engine_sel__mes_unmap_queues__compute;
+		break;
+	case KFD_QUEUE_TYPE_SDMA:
+	case KFD_QUEUE_TYPE_SDMA_XGMI:
+		if (sdma_engine < 2) {
+			packet->bitfields2.extended_engine_sel =
+				extended_engine_sel__mes_unmap_queues__legacy_engine_sel;
+			packet->bitfields2.engine_sel =
+				engine_sel__mes_unmap_queues__sdma0 + sdma_engine;
+		} else {
+			packet->bitfields2.extended_engine_sel =
+				extended_engine_sel__mes_unmap_queues__sdma0_to_7_sel;
+			packet->bitfields2.engine_sel = sdma_engine;
+		}
+		break;
+	default:
+		WARN(1, "queue type %d", type);
+		return -EINVAL;
+	}
 
 	if (reset)
 		packet->bitfields2.action =
@@ -348,6 +253,12 @@ static int pm_unmap_queues_v9(struct packet_manager *pm, uint32_t *buffer,
 			action__mes_unmap_queues__preempt_queues;
 
 	switch (filter) {
+	case KFD_UNMAP_QUEUES_FILTER_SINGLE_QUEUE:
+		packet->bitfields2.queue_sel =
+			queue_sel__mes_unmap_queues__perform_request_on_specified_queues;
+		packet->bitfields2.num_queues = 1;
+		packet->bitfields3b.doorbell_offset0 = filter_param;
+		break;
 	case KFD_UNMAP_QUEUES_FILTER_BY_PASID:
 		packet->bitfields2.queue_sel =
 			queue_sel__mes_unmap_queues__perform_request_on_pasid_queues;
@@ -403,7 +314,6 @@ const struct packet_manager_funcs kfd_v9_pm_funcs = {
 	.set_resources		= pm_set_resources_v9,
 	.map_queues		= pm_map_queues_v9,
 	.unmap_queues		= pm_unmap_queues_v9,
-	.set_grace_period       = pm_set_grace_period_v9,
 	.query_status		= pm_query_status_v9,
 	.release_mem		= NULL,
 	.map_process_size	= sizeof(struct pm4_mes_map_process),
@@ -411,26 +321,6 @@ const struct packet_manager_funcs kfd_v9_pm_funcs = {
 	.set_resources_size	= sizeof(struct pm4_mes_set_resources),
 	.map_queues_size	= sizeof(struct pm4_mes_map_queues),
 	.unmap_queues_size	= sizeof(struct pm4_mes_unmap_queues),
-	.set_grace_period_size  = sizeof(struct pm4_mec_write_data_mmio),
-	.query_status_size	= sizeof(struct pm4_mes_query_status),
-	.release_mem_size	= 0,
-};
-
-const struct packet_manager_funcs kfd_aldebaran_pm_funcs = {
-	.map_process		= pm_map_process_aldebaran,
-	.runlist		= pm_runlist_v9,
-	.set_resources		= pm_set_resources_v9,
-	.map_queues		= pm_map_queues_v9,
-	.unmap_queues		= pm_unmap_queues_v9,
-	.set_grace_period       = pm_set_grace_period_v9,
-	.query_status		= pm_query_status_v9,
-	.release_mem		= NULL,
-	.map_process_size	= sizeof(struct pm4_mes_map_process_aldebaran),
-	.runlist_size		= sizeof(struct pm4_mes_runlist),
-	.set_resources_size	= sizeof(struct pm4_mes_set_resources),
-	.map_queues_size	= sizeof(struct pm4_mes_map_queues),
-	.unmap_queues_size	= sizeof(struct pm4_mes_unmap_queues),
-	.set_grace_period_size  = sizeof(struct pm4_mec_write_data_mmio),
 	.query_status_size	= sizeof(struct pm4_mes_query_status),
 	.release_mem_size	= 0,
 };

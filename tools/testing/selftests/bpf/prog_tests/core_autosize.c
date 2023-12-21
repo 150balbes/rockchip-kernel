@@ -53,8 +53,8 @@ void test_core_autosize(void)
 	char btf_file[] = "/tmp/core_autosize.btf.XXXXXX";
 	int err, fd = -1, zero = 0;
 	int char_id, short_id, int_id, long_long_id, void_ptr_id, id;
-	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, open_opts);
 	struct test_core_autosize* skel = NULL;
+	struct bpf_object_load_attr load_attr = {};
 	struct bpf_program *prog;
 	struct bpf_map *bss_map;
 	struct btf *btf = NULL;
@@ -112,7 +112,7 @@ void test_core_autosize(void)
 	if (!ASSERT_OK_PTR(f, "btf_fdopen"))
 		goto cleanup;
 
-	raw_data = btf__raw_data(btf, &raw_sz);
+	raw_data = btf__get_raw_data(btf, &raw_sz);
 	if (!ASSERT_OK_PTR(raw_data, "raw_data"))
 		goto cleanup;
 	written = fwrite(raw_data, 1, raw_sz, f);
@@ -125,10 +125,9 @@ void test_core_autosize(void)
 	fd = -1;
 
 	/* open and load BPF program with custom BTF as the kernel BTF */
-	open_opts.btf_custom_path = btf_file;
-	skel = test_core_autosize__open_opts(&open_opts);
+	skel = test_core_autosize__open();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
-		goto cleanup;
+		return;
 
 	/* disable handle_signed() for now */
 	prog = bpf_object__find_program_by_name(skel->obj, "handle_signed");
@@ -136,7 +135,9 @@ void test_core_autosize(void)
 		goto cleanup;
 	bpf_program__set_autoload(prog, false);
 
-	err = bpf_object__load(skel->obj);
+	load_attr.obj = skel->obj;
+	load_attr.target_btf_path = btf_file;
+	err = bpf_object__load_xattr(&load_attr);
 	if (!ASSERT_OK(err, "prog_load"))
 		goto cleanup;
 
@@ -163,11 +164,11 @@ void test_core_autosize(void)
 
 	usleep(1);
 
-	bss_map = bpf_object__find_map_by_name(skel->obj, ".bss");
+	bss_map = bpf_object__find_map_by_name(skel->obj, "test_cor.bss");
 	if (!ASSERT_OK_PTR(bss_map, "bss_map_find"))
 		goto cleanup;
 
-	err = bpf_map__lookup_elem(bss_map, &zero, sizeof(zero), &out, sizeof(out), 0);
+	err = bpf_map_lookup_elem(bpf_map__fd(bss_map), &zero, (void *)&out);
 	if (!ASSERT_OK(err, "bss_lookup"))
 		goto cleanup;
 
@@ -203,13 +204,14 @@ void test_core_autosize(void)
 	skel = NULL;
 
 	/* now re-load with handle_signed() enabled, it should fail loading */
-	open_opts.btf_custom_path = btf_file;
-	skel = test_core_autosize__open_opts(&open_opts);
+	skel = test_core_autosize__open();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
-		goto cleanup;
+		return;
 
-	err = test_core_autosize__load(skel);
-	if (!ASSERT_ERR(err, "skel_load"))
+	load_attr.obj = skel->obj;
+	load_attr.target_btf_path = btf_file;
+	err = bpf_object__load_xattr(&load_attr);
+	if (!ASSERT_ERR(err, "bad_prog_load"))
 		goto cleanup;
 
 cleanup:

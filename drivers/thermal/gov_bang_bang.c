@@ -13,28 +13,28 @@
 
 #include "thermal_core.h"
 
-static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id)
+static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 {
-	struct thermal_trip trip;
+	int trip_temp, trip_hyst;
 	struct thermal_instance *instance;
-	int ret;
 
-	ret = __thermal_zone_get_trip(tz, trip_id, &trip);
-	if (ret) {
-		pr_warn_once("Failed to retrieve trip point %d\n", trip_id);
-		return ret;
-	}
+	tz->ops->get_trip_temp(tz, trip, &trip_temp);
 
-	if (!trip.hysteresis)
-		dev_info_once(&tz->device,
-			      "Zero hysteresis value for thermal zone %s\n", tz->type);
+	if (!tz->ops->get_trip_hyst) {
+		pr_warn_once("Undefined get_trip_hyst for thermal zone %s - "
+				"running with default hysteresis zero\n", tz->type);
+		trip_hyst = 0;
+	} else
+		tz->ops->get_trip_hyst(tz, trip, &trip_hyst);
 
 	dev_dbg(&tz->device, "Trip%d[temp=%d]:temp=%d:hyst=%d\n",
-				trip_id, trip.temperature, tz->temperature,
-				trip.hysteresis);
+				trip, trip_temp, tz->temperature,
+				trip_hyst);
+
+	mutex_lock(&tz->lock);
 
 	list_for_each_entry(instance, &tz->thermal_instances, tz_node) {
-		if (instance->trip != trip_id)
+		if (instance->trip != trip)
 			continue;
 
 		/* in case fan is in initial state, switch the fan off */
@@ -52,10 +52,10 @@ static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id)
 		 * enable fan when temperature exceeds trip_temp and disable
 		 * the fan in case it falls below trip_temp minus hysteresis
 		 */
-		if (instance->target == 0 && tz->temperature >= trip.temperature)
+		if (instance->target == 0 && tz->temperature >= trip_temp)
 			instance->target = 1;
 		else if (instance->target == 1 &&
-			 tz->temperature <= trip.temperature - trip.hysteresis)
+				tz->temperature <= trip_temp - trip_hyst)
 			instance->target = 0;
 
 		dev_dbg(&instance->cdev->device, "target=%d\n",
@@ -66,7 +66,7 @@ static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id)
 		mutex_unlock(&instance->cdev->lock);
 	}
 
-	return 0;
+	mutex_unlock(&tz->lock);
 }
 
 /**
@@ -99,16 +99,15 @@ static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_id)
 static int bang_bang_control(struct thermal_zone_device *tz, int trip)
 {
 	struct thermal_instance *instance;
-	int ret;
 
-	lockdep_assert_held(&tz->lock);
+	thermal_zone_trip_update(tz, trip);
 
-	ret = thermal_zone_trip_update(tz, trip);
-	if (ret)
-		return ret;
+	mutex_lock(&tz->lock);
 
 	list_for_each_entry(instance, &tz->thermal_instances, tz_node)
 		thermal_cdev_update(instance->cdev);
+
+	mutex_unlock(&tz->lock);
 
 	return 0;
 }

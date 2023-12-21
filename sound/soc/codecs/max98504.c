@@ -291,7 +291,6 @@ static const struct snd_soc_component_driver max98504_component_driver = {
 	.num_dapm_widgets	= ARRAY_SIZE(max98504_dapm_widgets),
 	.dapm_routes		= max98504_dapm_routes,
 	.num_dapm_routes	= ARRAY_SIZE(max98504_dapm_routes),
-	.endianness		= 1,
 };
 
 static const struct regmap_config max98504_regmap = {
@@ -305,7 +304,8 @@ static const struct regmap_config max98504_regmap = {
 	.cache_type		= REGCACHE_RBTREE,
 };
 
-static int max98504_i2c_probe(struct i2c_client *client)
+static int max98504_i2c_probe(struct i2c_client *client,
+			      const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct device_node *node = dev->of_node;

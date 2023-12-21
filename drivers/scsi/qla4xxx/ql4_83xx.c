@@ -472,7 +472,8 @@ int qla4_83xx_can_perform_reset(struct scsi_qla_host *ha)
 		} else if (device_map[i].device_type == ISCSI_CLASS) {
 			if (drv_active & (1 << device_map[i].func_num)) {
 				if (!iscsi_present ||
-				iscsi_func_low > device_map[i].func_num)
+				    (iscsi_present &&
+				     (iscsi_func_low > device_map[i].func_num)))
 					iscsi_func_low = device_map[i].func_num;
 
 				iscsi_present++;

@@ -355,7 +355,6 @@ static struct platform_driver lm363x_regulator_driver = {
 	.probe = lm363x_regulator_probe,
 	.driver = {
 		.name = "lm363x-regulator",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
 

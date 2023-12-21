@@ -42,10 +42,11 @@ static void __iomem *evic_base;
 
 asmlinkage void __weak plat_irq_dispatch(void)
 {
-	unsigned int hwirq;
+	unsigned int irq, hwirq;
 
 	hwirq = readl(evic_base + REG_INTSTAT) & 0xFF;
-	do_domain_IRQ(evic_irq_domain, hwirq);
+	irq = irq_linear_revmap(evic_irq_domain, hwirq);
+	do_IRQ(irq);
 }
 
 static struct evic_chip_data *irqd_to_priv(struct irq_data *data)

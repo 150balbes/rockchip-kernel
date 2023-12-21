@@ -20,15 +20,6 @@
 #define PEM_CFG_WR 0x28
 #define PEM_CFG_RD 0x30
 
-/*
- * Enhanced Configuration Access Mechanism (ECAM)
- *
- * N.B. This is a non-standard platform-specific ECAM bus shift value.  For
- * standard values defined in the PCI Express Base Specification see
- * include/linux/pci-ecam.h.
- */
-#define THUNDER_PCIE_ECAM_BUS_SHIFT	24
-
 struct thunder_pem_pci {
 	u32		ea_entry[3];
 	void __iomem	*pem_reg_base;
@@ -41,8 +32,10 @@ static int thunder_pem_bridge_read(struct pci_bus *bus, unsigned int devfn,
 	struct pci_config_window *cfg = bus->sysdata;
 	struct thunder_pem_pci *pem_pci = (struct thunder_pem_pci *)cfg->priv;
 
-	if (devfn != 0 || where >= 2048)
+	if (devfn != 0 || where >= 2048) {
+		*val = ~0;
 		return PCIBIOS_DEVICE_NOT_FOUND;
+	}
 
 	/*
 	 * 32-bit accesses only.  Write the address to the low order
@@ -412,7 +405,7 @@ static int thunder_pem_acpi_init(struct pci_config_window *cfg)
 }
 
 const struct pci_ecam_ops thunder_pem_ecam_ops = {
-	.bus_shift	= THUNDER_PCIE_ECAM_BUS_SHIFT,
+	.bus_shift	= 24,
 	.init		= thunder_pem_acpi_init,
 	.pci_ops	= {
 		.map_bus	= pci_ecam_map_bus,
@@ -449,7 +442,7 @@ static int thunder_pem_platform_init(struct pci_config_window *cfg)
 }
 
 static const struct pci_ecam_ops pci_thunder_pem_ops = {
-	.bus_shift	= THUNDER_PCIE_ECAM_BUS_SHIFT,
+	.bus_shift	= 24,
 	.init		= thunder_pem_platform_init,
 	.pci_ops	= {
 		.map_bus	= pci_ecam_map_bus,

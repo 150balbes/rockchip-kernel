@@ -9,6 +9,7 @@ Contents:
    :maxdepth: 2
 
    cops
+   ltpc
 
 .. only::  subproject and html
 

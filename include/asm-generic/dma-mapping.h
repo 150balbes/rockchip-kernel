@@ -2,7 +2,7 @@
 #ifndef _ASM_GENERIC_DMA_MAPPING_H
 #define _ASM_GENERIC_DMA_MAPPING_H
 
-static inline const struct dma_map_ops *get_arch_dma_ops(void)
+static inline const struct dma_map_ops *get_arch_dma_ops(struct bus_type *bus)
 {
 	return NULL;
 }

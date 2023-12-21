@@ -11,8 +11,7 @@
  * which contains this code, we don't worry about the wasted space.
  */
 
-#include <linux/minmax.h>
-#include <linux/types.h>
+#include <linux/kernel.h>
 
 /* straight from the datasheet */
 #define LM75_TEMP_MIN (-55000)

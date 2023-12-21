@@ -64,9 +64,9 @@ static int max7301_probe(struct spi_device *spi)
 	return ret;
 }
 
-static void max7301_remove(struct spi_device *spi)
+static int max7301_remove(struct spi_device *spi)
 {
-	__max730x_remove(&spi->dev);
+	return __max730x_remove(&spi->dev);
 }
 
 static const struct spi_device_id max7301_id[] = {

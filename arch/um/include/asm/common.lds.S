@@ -83,8 +83,6 @@
   }
   .init_array : {
 	__init_array_start = .;
-	*(.kasan_init)
-	*(.init_array.*)
 	*(.init_array)
 	__init_array_end = .;
   }

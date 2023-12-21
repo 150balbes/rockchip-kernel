@@ -133,11 +133,7 @@ static int uhci_hcd_platform_probe(struct platform_device *pdev)
 		goto err_rmr;
 	}
 
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
-		goto err_clk;
-
-	ret = usb_add_hcd(hcd, ret, IRQF_SHARED);
+	ret = usb_add_hcd(hcd, pdev->resource[1].start, IRQF_SHARED);
 	if (ret)
 		goto err_clk;
 
@@ -152,7 +148,7 @@ err_rmr:
 	return ret;
 }
 
-static void uhci_hcd_platform_remove(struct platform_device *pdev)
+static int uhci_hcd_platform_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct uhci_hcd *uhci = hcd_to_uhci(hcd);
@@ -160,6 +156,8 @@ static void uhci_hcd_platform_remove(struct platform_device *pdev)
 	clk_disable_unprepare(uhci->clk);
 	usb_remove_hcd(hcd);
 	usb_put_hcd(hcd);
+
+	return 0;
 }
 
 /* Make sure the controller is quiescent and that we're not using it
@@ -185,7 +183,7 @@ MODULE_DEVICE_TABLE(of, platform_uhci_ids);
 
 static struct platform_driver uhci_platform_driver = {
 	.probe		= uhci_hcd_platform_probe,
-	.remove_new	= uhci_hcd_platform_remove,
+	.remove		= uhci_hcd_platform_remove,
 	.shutdown	= uhci_hcd_platform_shutdown,
 	.driver = {
 		.name = "platform-uhci",

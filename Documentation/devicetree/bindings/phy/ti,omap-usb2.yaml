@@ -8,7 +8,7 @@ title: OMAP USB2 PHY
 
 maintainers:
   - Kishon Vijay Abraham I <kishon@ti.com>
-  - Roger Quadros <rogerq@kernel.org>
+  - Roger Quadros <rogerq@ti.com>
 
 properties:
   compatible:
@@ -44,17 +44,13 @@ properties:
       - const: refclk
 
   syscon-phy-power:
-    $ref: /schemas/types.yaml#/definitions/phandle-array
-    items:
-      - items:
-          - description: phandle to the system control module
-          - description: register offset to power on/off the PHY
+    $ref: /schemas/types.yaml#definitions/phandle-array
     description:
       phandle/offset pair. Phandle to the system control module and
       register offset to power on/off the PHY.
 
   ctrl-module:
-    $ref: /schemas/types.yaml#/definitions/phandle
+    $ref: /schemas/types.yaml#definitions/phandle
     description:
       (deprecated) phandle of the control module used by PHY driver
       to power on the PHY. Use syscon-phy-power instead.

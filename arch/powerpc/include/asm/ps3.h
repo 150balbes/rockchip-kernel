@@ -234,7 +234,7 @@ enum lv1_result {
 
 static inline const char* ps3_result(int result)
 {
-#if defined(DEBUG) || defined(PS3_VERBOSE_RESULT) || defined(CONFIG_PS3_VERBOSE_RESULT)
+#if defined(DEBUG) || defined(PS3_VERBOSE_RESULT)
 	switch (result) {
 	case LV1_SUCCESS:
 		return "LV1_SUCCESS (0)";
@@ -380,8 +380,8 @@ struct ps3_system_bus_driver {
 	enum ps3_match_sub_id match_sub_id;
 	struct device_driver core;
 	int (*probe)(struct ps3_system_bus_device *);
-	void (*remove)(struct ps3_system_bus_device *);
-	void (*shutdown)(struct ps3_system_bus_device *);
+	int (*remove)(struct ps3_system_bus_device *);
+	int (*shutdown)(struct ps3_system_bus_device *);
 /*	int (*suspend)(struct ps3_system_bus_device *, pm_message_t); */
 /*	int (*resume)(struct ps3_system_bus_device *); */
 };
@@ -396,7 +396,7 @@ static inline struct ps3_system_bus_driver *ps3_drv_to_system_bus_drv(
 	return container_of(_drv, struct ps3_system_bus_driver, core);
 }
 static inline struct ps3_system_bus_device *ps3_dev_to_system_bus_dev(
-	const struct device *_dev)
+	struct device *_dev)
 {
 	return container_of(_dev, struct ps3_system_bus_device, core);
 }
@@ -424,6 +424,10 @@ static inline void *ps3_system_bus_get_drvdata(
 {
 	return dev_get_drvdata(&dev->core);
 }
+
+/* These two need global scope for get_arch_dma_ops(). */
+
+extern struct bus_type ps3_system_bus_type;
 
 /* system manager */
 

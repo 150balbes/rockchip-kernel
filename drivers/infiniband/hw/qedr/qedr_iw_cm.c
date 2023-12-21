@@ -83,7 +83,7 @@ static void qedr_iw_free_qp(struct kref *ref)
 {
 	struct qedr_qp *qp = container_of(ref, struct qedr_qp, refcnt);
 
-	complete(&qp->qp_rel_comp);
+	kfree(qp);
 }
 
 static void

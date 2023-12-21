@@ -23,8 +23,9 @@ then
 fi
 resdir=${2}
 
-T="`mktemp -d ${TMPDIR-/tmp}/kvm-build.sh.XXXXXX`"
+T=${TMPDIR-/tmp}/test-linux.sh.$$
 trap 'rm -rf $T' 0
+mkdir $T
 
 cp ${config_template} $T/config
 cat << ___EOF___ >> $T/config
@@ -39,15 +40,13 @@ if test $retval -gt 1
 then
 	exit 2
 fi
-
-# Tell "make" to use double the number of real CPUs on the build system.
-ncpus="`getconf _NPROCESSORS_ONLN`"
-make -j$((2 * ncpus)) $TORTURE_KMAKE_ARG > $resdir/Make.out 2>&1
+ncpus=`cpus2use.sh`
+make -j$ncpus $TORTURE_KMAKE_ARG > $resdir/Make.out 2>&1
 retval=$?
-if test $retval -ne 0 || grep "rcu[^/]*": < $resdir/Make.out | grep -E -q "Stop|Error|error:|warning:" || grep -E -q "Stop|Error|error:" < $resdir/Make.out
+if test $retval -ne 0 || grep "rcu[^/]*": < $resdir/Make.out | egrep -q "Stop|Error|error:|warning:" || egrep -q "Stop|Error|error:" < $resdir/Make.out
 then
 	echo Kernel build error
-	grep -E "Stop|Error|error:|warning:" < $resdir/Make.out
+	egrep "Stop|Error|error:|warning:" < $resdir/Make.out
 	echo Run aborted.
 	exit 3
 fi

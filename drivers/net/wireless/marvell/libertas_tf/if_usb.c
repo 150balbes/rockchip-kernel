@@ -48,7 +48,7 @@ static int if_usb_submit_rx_urb(struct if_usb_card *cardp);
 static int if_usb_reset_device(struct lbtf_private *priv);
 
 /**
- *  if_usb_write_bulk_callback -  call back to handle URB status
+ *  if_usb_wrike_bulk_callback -  call back to handle URB status
  *
  *  @urb:		pointer to urb structure
  */
@@ -613,7 +613,7 @@ static inline void process_cmdrequest(int recvlength, uint8_t *recvbuff,
 	spin_lock_irqsave(&priv->driver_lock, flags);
 	memcpy(priv->cmd_resp_buff, recvbuff + MESSAGE_HEADER_LEN,
 	       recvlength - MESSAGE_HEADER_LEN);
-	dev_kfree_skb_irq(skb);
+	kfree_skb(skb);
 	lbtf_cmd_response_rx(priv);
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
 }

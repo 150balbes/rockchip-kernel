@@ -9,4 +9,3 @@ DPAA2 Documentation
    dpio-driver
    ethernet-driver
    mac-phy-support
-   switch-driver

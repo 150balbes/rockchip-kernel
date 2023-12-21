@@ -8,6 +8,7 @@
 #define SCSI_CMD_FLAG_NAME(name)[const_ilog2(SCMD_##name)] = #name
 static const char *const scsi_cmd_flags[] = {
 	SCSI_CMD_FLAG_NAME(TAGGED),
+	SCSI_CMD_FLAG_NAME(UNCHECKED_ISA_DMA),
 	SCSI_CMD_FLAG_NAME(INITIALIZED),
 	SCSI_CMD_FLAG_NAME(LAST),
 };
@@ -33,12 +34,14 @@ static int scsi_flags_show(struct seq_file *m, const unsigned long flags,
 
 void scsi_show_rq(struct seq_file *m, struct request *rq)
 {
-	struct scsi_cmnd *cmd = blk_mq_rq_to_pdu(rq);
+	struct scsi_cmnd *cmd = container_of(scsi_req(rq), typeof(*cmd), req);
 	int alloc_ms = jiffies_to_msecs(jiffies - cmd->jiffies_at_alloc);
 	int timeout_ms = jiffies_to_msecs(rq->timeout);
+	const u8 *const cdb = READ_ONCE(cmd->cmnd);
 	char buf[80] = "(?)";
 
-	__scsi_format_command(buf, sizeof(buf), cmd->cmnd, cmd->cmd_len);
+	if (cdb)
+		__scsi_format_command(buf, sizeof(buf), cdb, cmd->cmd_len);
 	seq_printf(m, ", .cmd=%s, .retries=%d, .result = %#x, .flags=", buf,
 		   cmd->retries, cmd->result);
 	scsi_flags_show(m, cmd->flags, scsi_cmd_flags,

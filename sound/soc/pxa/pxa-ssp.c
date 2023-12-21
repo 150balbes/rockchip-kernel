@@ -61,6 +61,22 @@ static void dump_registers(struct ssp_device *ssp)
 		 pxa_ssp_read_reg(ssp, SSACD));
 }
 
+static void pxa_ssp_enable(struct ssp_device *ssp)
+{
+	uint32_t sscr0;
+
+	sscr0 = __raw_readl(ssp->mmio_base + SSCR0) | SSCR0_SSE;
+	__raw_writel(sscr0, ssp->mmio_base + SSCR0);
+}
+
+static void pxa_ssp_disable(struct ssp_device *ssp)
+{
+	uint32_t sscr0;
+
+	sscr0 = __raw_readl(ssp->mmio_base + SSCR0) & ~SSCR0_SSE;
+	__raw_writel(sscr0, ssp->mmio_base + SSCR0);
+}
+
 static void pxa_ssp_set_dma_params(struct ssp_device *ssp, int width4,
 			int out, struct snd_dmaengine_dai_dma_data *dma)
 {
@@ -83,7 +99,8 @@ static int pxa_ssp_startup(struct snd_pcm_substream *substream,
 		pxa_ssp_disable(ssp);
 	}
 
-	clk_prepare_enable(priv->extclk);
+	if (priv->extclk)
+		clk_prepare_enable(priv->extclk);
 
 	dma = kzalloc(sizeof(struct snd_dmaengine_dai_dma_data), GFP_KERNEL);
 	if (!dma)
@@ -107,7 +124,8 @@ static void pxa_ssp_shutdown(struct snd_pcm_substream *substream,
 		clk_disable_unprepare(ssp->clk);
 	}
 
-	clk_disable_unprepare(priv->extclk);
+	if (priv->extclk)
+		clk_disable_unprepare(priv->extclk);
 
 	kfree(snd_soc_dai_get_dma_data(cpu_dai, substream));
 	snd_soc_dai_set_dma_data(cpu_dai, substream, NULL);
@@ -372,10 +390,10 @@ static int pxa_ssp_set_dai_fmt(struct snd_soc_dai *cpu_dai,
 {
 	struct ssp_priv *priv = snd_soc_dai_get_drvdata(cpu_dai);
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BC_FC:
-	case SND_SOC_DAIFMT_BC_FP:
-	case SND_SOC_DAIFMT_BP_FP:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_CBM_CFS:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -432,14 +450,14 @@ static int pxa_ssp_configure_dai_fmt(struct ssp_priv *priv)
 
 	sscr1 |= SSCR1_RxTresh(8) | SSCR1_TxTresh(7);
 
-	switch (priv->dai_fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BC_FC:
+	switch (priv->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		sscr1 |= SSCR1_SCLKDIR | SSCR1_SFRMDIR | SSCR1_SCFR;
 		break;
-	case SND_SOC_DAIFMT_BC_FP:
+	case SND_SOC_DAIFMT_CBM_CFS:
 		sscr1 |= SSCR1_SCLKDIR | SSCR1_SCFR;
 		break;
-	case SND_SOC_DAIFMT_BP_FP:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -484,9 +502,9 @@ static int pxa_ssp_configure_dai_fmt(struct ssp_priv *priv)
 	pxa_ssp_write_reg(ssp, SSCR1, sscr1);
 	pxa_ssp_write_reg(ssp, SSPSP, sspsp);
 
-	switch (priv->dai_fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BC_FC:
-	case SND_SOC_DAIFMT_BC_FP:
+	switch (priv->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_CBM_CFS:
 		scfr = pxa_ssp_read_reg(ssp, SSCR1) | SSCR1_SCFR;
 		pxa_ssp_write_reg(ssp, SSCR1, scfr);
 
@@ -848,17 +866,19 @@ static struct snd_soc_dai_driver pxa_ssp_dai = {
 };
 
 static const struct snd_soc_component_driver pxa_ssp_component = {
-	.name			= "pxa-ssp",
-	.pcm_construct		= pxa2xx_soc_pcm_new,
-	.open			= pxa2xx_soc_pcm_open,
-	.close			= pxa2xx_soc_pcm_close,
-	.hw_params		= pxa2xx_soc_pcm_hw_params,
-	.prepare		= pxa2xx_soc_pcm_prepare,
-	.trigger		= pxa2xx_soc_pcm_trigger,
-	.pointer		= pxa2xx_soc_pcm_pointer,
-	.suspend		= pxa_ssp_suspend,
-	.resume			= pxa_ssp_resume,
-	.legacy_dai_naming	= 1,
+	.name		= "pxa-ssp",
+	.pcm_construct	= pxa2xx_soc_pcm_new,
+	.pcm_destruct	= pxa2xx_soc_pcm_free,
+	.open		= pxa2xx_soc_pcm_open,
+	.close		= pxa2xx_soc_pcm_close,
+	.hw_params	= pxa2xx_soc_pcm_hw_params,
+	.hw_free	= pxa2xx_soc_pcm_hw_free,
+	.prepare	= pxa2xx_soc_pcm_prepare,
+	.trigger	= pxa2xx_soc_pcm_trigger,
+	.pointer	= pxa2xx_soc_pcm_pointer,
+	.mmap		= pxa2xx_soc_pcm_mmap,
+	.suspend	= pxa_ssp_suspend,
+	.resume		= pxa_ssp_resume,
 };
 
 #ifdef CONFIG_OF

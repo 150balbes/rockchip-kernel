@@ -5,7 +5,7 @@
 ///
 // Confidence: Very High
 // Copyright: (C) 2020 Intel Corporation
-// URL: https://coccinelle.gitlabpages.inria.fr/website
+// URL: http://coccinelle.lip6.fr/
 // Options: --no-includes --include-headers
 
 virtual context

@@ -85,7 +85,6 @@ static ssize_t reset_store(struct device *dev,
 		}
 
 		etm_set_default(config);
-		etm_release_trace_id(drvdata);
 		spin_unlock(&drvdata->spinlock);
 	}
 
@@ -475,7 +474,7 @@ static ssize_t addr_start_store(struct device *dev,
 	config->addr_val[idx] = val;
 	config->addr_type[idx] = ETM_ADDR_TYPE_START;
 	config->startstop_ctrl |= (1 << idx);
-	config->enable_ctrl1 |= ETMTECR1_START_STOP;
+	config->enable_ctrl1 |= BIT(25);
 	spin_unlock(&drvdata->spinlock);
 
 	return size;
@@ -1190,16 +1189,30 @@ static DEVICE_ATTR_RO(cpu);
 static ssize_t traceid_show(struct device *dev,
 			    struct device_attribute *attr, char *buf)
 {
-	int trace_id;
+	unsigned long val;
 	struct etm_drvdata *drvdata = dev_get_drvdata(dev->parent);
 
-	trace_id = etm_read_alloc_trace_id(drvdata);
-	if (trace_id < 0)
-		return trace_id;
+	val = etm_get_trace_id(drvdata);
 
-	return sysfs_emit(buf, "%#x\n", trace_id);
+	return sprintf(buf, "%#lx\n", val);
 }
-static DEVICE_ATTR_RO(traceid);
+
+static ssize_t traceid_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t size)
+{
+	int ret;
+	unsigned long val;
+	struct etm_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	ret = kstrtoul(buf, 16, &val);
+	if (ret)
+		return ret;
+
+	drvdata->traceid = val & ETM_TRACEID_MASK;
+	return size;
+}
+static DEVICE_ATTR_RW(traceid);
 
 static struct attribute *coresight_etm_attrs[] = {
 	&dev_attr_nr_addr_cmp.attr,
@@ -1239,17 +1252,31 @@ static struct attribute *coresight_etm_attrs[] = {
 	NULL,
 };
 
+#define coresight_etm3x_reg(name, offset)			\
+	coresight_simple_reg32(struct etm_drvdata, name, offset)
+
+coresight_etm3x_reg(etmccr, ETMCCR);
+coresight_etm3x_reg(etmccer, ETMCCER);
+coresight_etm3x_reg(etmscr, ETMSCR);
+coresight_etm3x_reg(etmidr, ETMIDR);
+coresight_etm3x_reg(etmcr, ETMCR);
+coresight_etm3x_reg(etmtraceidr, ETMTRACEIDR);
+coresight_etm3x_reg(etmteevr, ETMTEEVR);
+coresight_etm3x_reg(etmtssvr, ETMTSSCR);
+coresight_etm3x_reg(etmtecr1, ETMTECR1);
+coresight_etm3x_reg(etmtecr2, ETMTECR2);
+
 static struct attribute *coresight_etm_mgmt_attrs[] = {
-	coresight_simple_reg32(etmccr, ETMCCR),
-	coresight_simple_reg32(etmccer, ETMCCER),
-	coresight_simple_reg32(etmscr, ETMSCR),
-	coresight_simple_reg32(etmidr, ETMIDR),
-	coresight_simple_reg32(etmcr, ETMCR),
-	coresight_simple_reg32(etmtraceidr, ETMTRACEIDR),
-	coresight_simple_reg32(etmteevr, ETMTEEVR),
-	coresight_simple_reg32(etmtssvr, ETMTSSCR),
-	coresight_simple_reg32(etmtecr1, ETMTECR1),
-	coresight_simple_reg32(etmtecr2, ETMTECR2),
+	&dev_attr_etmccr.attr,
+	&dev_attr_etmccer.attr,
+	&dev_attr_etmscr.attr,
+	&dev_attr_etmidr.attr,
+	&dev_attr_etmcr.attr,
+	&dev_attr_etmtraceidr.attr,
+	&dev_attr_etmteevr.attr,
+	&dev_attr_etmtssvr.attr,
+	&dev_attr_etmtecr1.attr,
+	&dev_attr_etmtecr2.attr,
 	NULL,
 };
 

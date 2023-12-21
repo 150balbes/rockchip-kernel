@@ -4,6 +4,7 @@
 #
 
 menuconfig PSAMPLE
+	depends on NET
 	tristate "Packet-sampling netlink channel"
 	default n
 	help

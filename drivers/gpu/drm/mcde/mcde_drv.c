@@ -22,13 +22,13 @@
  * The hardware has four display pipes, and the layout is a little
  * bit like this::
  *
- *   Memory     -> Overlay -> Channel -> FIFO -> 8 formatters -> DSI/DPI
- *   External      0..5       0..3       A,B,    6 x DSI         bridge
+ *   Memory     -> Overlay -> Channel -> FIFO -> 5 formatters -> DSI/DPI
+ *   External      0..5       0..3       A,B,    3 x DSI         bridge
  *   source 0..9                         C0,C1   2 x DPI
  *
  * FIFOs A and B are for LCD and HDMI while FIFO CO/C1 are for
  * panels with embedded buffer.
- * 6 of the formatters are for DSI, 3 pairs for VID/CMD respectively.
+ * 3 of the formatters are for DSI.
  * 2 of the formatters are for DPI.
  *
  * Behind the formatters are the DSI or DPI ports that route to
@@ -37,7 +37,7 @@
  * (effectively using channels 0..3) for concurrent use.
  *
  * In the current DRM/KMS setup, we use one external source, one overlay,
- * one FIFO and one formatter which we connect to the simple DMA framebuffer
+ * one FIFO and one formatter which we connect to the simple CMA framebuffer
  * helpers. We then provide a bridge to the DSI port, and on the DSI port
  * bridge we connect hang a panel bridge or other bridge. This may be subject
  * to change as we exploit more of the hardware capabilities.
@@ -68,10 +68,10 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_dma_helper.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
-#include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_of.h>
@@ -94,7 +94,7 @@
 #define MCDE_PID_MAJOR_VERSION_MASK 0xFF000000
 
 static const struct drm_mode_config_funcs mcde_mode_config_funcs = {
-	.fb_create = drm_gem_fb_create,
+	.fb_create = drm_gem_fb_create_with_dirty,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -130,37 +130,9 @@ static int mcde_modeset_init(struct drm_device *drm)
 	struct mcde *mcde = to_mcde(drm);
 	int ret;
 
-	/*
-	 * If no other bridge was found, check if we have a DPI panel or
-	 * any other bridge connected directly to the MCDE DPI output.
-	 * If a DSI bridge is found, DSI will take precedence.
-	 *
-	 * TODO: more elaborate bridge selection if we have more than one
-	 * thing attached to the system.
-	 */
 	if (!mcde->bridge) {
-		struct drm_panel *panel;
-		struct drm_bridge *bridge;
-
-		ret = drm_of_find_panel_or_bridge(drm->dev->of_node,
-						  0, 0, &panel, &bridge);
-		if (ret) {
-			dev_err(drm->dev,
-				"Could not locate any output bridge or panel\n");
-			return ret;
-		}
-		if (panel) {
-			bridge = drm_panel_bridge_add_typed(panel,
-					DRM_MODE_CONNECTOR_DPI);
-			if (IS_ERR(bridge)) {
-				dev_err(drm->dev,
-					"Could not connect panel bridge\n");
-				return PTR_ERR(bridge);
-			}
-		}
-		mcde->dpi_output = true;
-		mcde->bridge = bridge;
-		mcde->flow_mode = MCDE_DPI_FORMATTER_FLOW;
+		dev_err(drm->dev, "no display output bridge yet\n");
+		return -EPROBE_DEFER;
 	}
 
 	mode_config = &drm->mode_config;
@@ -184,7 +156,13 @@ static int mcde_modeset_init(struct drm_device *drm)
 		return ret;
 	}
 
-	/* Attach the bridge. */
+	/*
+	 * Attach the DSI bridge
+	 *
+	 * TODO: when adding support for the DPI bridge or several DSI bridges,
+	 * we selectively connect the bridge(s) here instead of this simple
+	 * attachment.
+	 */
 	ret = drm_simple_display_pipe_attach_bridge(&mcde->pipe,
 						    mcde->bridge);
 	if (ret) {
@@ -198,11 +176,12 @@ static int mcde_modeset_init(struct drm_device *drm)
 	return 0;
 }
 
-DEFINE_DRM_GEM_DMA_FOPS(drm_fops);
+DEFINE_DRM_GEM_CMA_FOPS(drm_fops);
 
-static const struct drm_driver mcde_drm_driver = {
+static struct drm_driver mcde_drm_driver = {
 	.driver_features =
 		DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+	.lastclose = drm_fb_helper_lastclose,
 	.ioctls = NULL,
 	.fops = &drm_fops,
 	.name = "mcde",
@@ -211,7 +190,7 @@ static const struct drm_driver mcde_drm_driver = {
 	.major = 1,
 	.minor = 0,
 	.patchlevel = 0,
-	DRM_GEM_DMA_DRIVER_OPS,
+	DRM_GEM_CMA_DRIVER_OPS,
 };
 
 static int mcde_drm_bind(struct device *dev)
@@ -237,7 +216,7 @@ static int mcde_drm_bind(struct device *dev)
 	if (ret < 0)
 		goto unbind;
 
-	drm_fbdev_dma_setup(drm, 32);
+	drm_fbdev_generic_setup(drm, 32);
 
 	return 0;
 
@@ -264,12 +243,18 @@ static struct platform_driver *const mcde_component_drivers[] = {
 	&mcde_dsi_driver,
 };
 
+static int mcde_compare_dev(struct device *dev, void *data)
+{
+	return dev == data;
+}
+
 static int mcde_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct drm_device *drm;
 	struct mcde *mcde;
 	struct component_match *match = NULL;
+	struct resource *res;
 	u32 pid;
 	int irq;
 	int ret;
@@ -337,7 +322,8 @@ static int mcde_probe(struct platform_device *pdev)
 		goto clk_disable;
 	}
 
-	mcde->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mcde->regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(mcde->regs)) {
 		dev_err(dev, "no MCDE regs\n");
 		ret = -EINVAL;
@@ -393,7 +379,7 @@ static int mcde_probe(struct platform_device *pdev)
 
 		while ((d = platform_find_device_by_driver(p, drv))) {
 			put_device(p);
-			component_match_add(dev, &match, component_compare_dev, d);
+			component_match_add(dev, &match, mcde_compare_dev, d);
 			p = d;
 		}
 		put_device(p);
@@ -448,7 +434,7 @@ regulator_epod_off:
 
 }
 
-static void mcde_remove(struct platform_device *pdev)
+static int mcde_remove(struct platform_device *pdev)
 {
 	struct drm_device *drm = platform_get_drvdata(pdev);
 	struct mcde *mcde = to_mcde(drm);
@@ -457,14 +443,8 @@ static void mcde_remove(struct platform_device *pdev)
 	clk_disable_unprepare(mcde->mcde_clk);
 	regulator_disable(mcde->vana);
 	regulator_disable(mcde->epod);
-}
 
-static void mcde_shutdown(struct platform_device *pdev)
-{
-	struct drm_device *drm = platform_get_drvdata(pdev);
-
-	if (drm->registered)
-		drm_atomic_helper_shutdown(drm);
+	return 0;
 }
 
 static const struct of_device_id mcde_of_match[] = {
@@ -477,11 +457,10 @@ static const struct of_device_id mcde_of_match[] = {
 static struct platform_driver mcde_driver = {
 	.driver = {
 		.name           = "mcde",
-		.of_match_table = mcde_of_match,
+		.of_match_table = of_match_ptr(mcde_of_match),
 	},
 	.probe = mcde_probe,
-	.remove_new = mcde_remove,
-	.shutdown = mcde_shutdown,
+	.remove = mcde_remove,
 };
 
 static struct platform_driver *const component_drivers[] = {
@@ -491,9 +470,6 @@ static struct platform_driver *const component_drivers[] = {
 static int __init mcde_drm_register(void)
 {
 	int ret;
-
-	if (drm_firmware_drivers_only())
-		return -ENODEV;
 
 	ret = platform_register_drivers(component_drivers,
 					ARRAY_SIZE(component_drivers));

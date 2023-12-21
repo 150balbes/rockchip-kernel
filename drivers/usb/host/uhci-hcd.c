@@ -536,8 +536,7 @@ static void release_uhci(struct uhci_hcd *uhci)
 	uhci->is_initialized = 0;
 	spin_unlock_irq(&uhci->lock);
 
-	debugfs_lookup_and_remove(uhci_to_hcd(uhci)->self.bus_name,
-				  uhci_debugfs_root);
+	debugfs_remove(uhci->dentry);
 
 	for (i = 0; i < UHCI_NUM_SKELQH; i++)
 		uhci_free_qh(uhci, uhci->skelqh[i]);
@@ -578,6 +577,7 @@ static int uhci_start(struct usb_hcd *hcd)
 	struct uhci_hcd *uhci = hcd_to_uhci(hcd);
 	int retval = -EBUSY;
 	int i;
+	struct dentry __maybe_unused *dentry;
 
 	hcd->uses_new_polling = 1;
 	/* Accept arbitrarily long scatter-gather lists */
@@ -590,8 +590,10 @@ static int uhci_start(struct usb_hcd *hcd)
 	init_waitqueue_head(&uhci->waitqh);
 
 #ifdef UHCI_DEBUG_OPS
-	debugfs_create_file(hcd->self.bus_name, S_IFREG|S_IRUGO|S_IWUSR,
-			    uhci_debugfs_root, uhci, &uhci_debug_operations);
+	uhci->dentry = debugfs_create_file(hcd->self.bus_name,
+					   S_IFREG|S_IRUGO|S_IWUSR,
+					   uhci_debugfs_root, uhci,
+					   &uhci_debug_operations);
 #endif
 
 	uhci->frame = dma_alloc_coherent(uhci_dev(uhci),
@@ -700,7 +702,7 @@ err_alloc_frame_cpu:
 			uhci->frame, uhci->frame_dma_handle);
 
 err_alloc_frame:
-	debugfs_lookup_and_remove(hcd->self.bus_name, uhci_debugfs_root);
+	debugfs_remove(uhci->dentry);
 
 	return retval;
 }
@@ -841,7 +843,7 @@ static int uhci_count_ports(struct usb_hcd *hcd)
 
 static const char hcd_name[] = "uhci_hcd";
 
-#if defined(CONFIG_USB_PCI) && defined(CONFIG_HAS_IOPORT)
+#ifdef CONFIG_USB_PCI
 #include "uhci-pci.c"
 #define	PCI_DRIVER		uhci_pci_driver
 #endif
@@ -867,6 +869,8 @@ static int __init uhci_hcd_init(void)
 	if (usb_disabled())
 		return -ENODEV;
 
+	printk(KERN_INFO "uhci_hcd: " DRIVER_DESC "%s\n",
+			ignore_oc ? ", overcurrent ignored" : "");
 	set_bit(USB_UHCI_LOADED, &usb_hcds_loaded);
 
 #ifdef CONFIG_DYNAMIC_DEBUG

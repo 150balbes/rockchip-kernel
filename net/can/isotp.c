@@ -14,6 +14,7 @@
  * - use CAN_ISOTP_WAIT_TX_DONE flag to block the caller until the PDU is sent
  * - as we have static buffers the check whether the PDU fits into the buffer
  *   is done at FF reception time (no support for sending 'wait frames')
+ * - take care of the tx-queue-len as traffic shaping is still on the TODO list
  *
  * Copyright (c) 2020 Volkswagen Group Electronic Research
  * All rights reserved.
@@ -85,21 +86,10 @@ MODULE_ALIAS("can-proto-6");
 
 /* ISO 15765-2:2016 supports more than 4095 byte per ISO PDU as the FF_DL can
  * take full 32 bit values (4 Gbyte). We would need some good concept to handle
- * this between user space and kernel space. For now set the static buffer to
- * something about 8 kbyte to be able to test this new functionality.
+ * this between user space and kernel space. For now increase the static buffer
+ * to something about 8 kbyte to be able to test this new functionality.
  */
-#define DEFAULT_MAX_PDU_SIZE 8300
-
-/* maximum PDU size before ISO 15765-2:2016 extension was 4095 */
-#define MAX_12BIT_PDU_SIZE 4095
-
-/* limit the isotp pdu size from the optional module parameter to 1MByte */
-#define MAX_PDU_SIZE (1025 * 1024U)
-
-static unsigned int max_pdu_size __read_mostly = DEFAULT_MAX_PDU_SIZE;
-module_param(max_pdu_size, uint, 0444);
-MODULE_PARM_DESC(max_pdu_size, "maximum isotp pdu size (default "
-		 __stringify(DEFAULT_MAX_PDU_SIZE) ")");
+#define MAX_MSG_LENGTH 8200
 
 /* N_PCI type values in bits 7-4 of N_PCI bytes */
 #define N_PCI_SF 0x00	/* single frame */
@@ -115,35 +105,28 @@ MODULE_PARM_DESC(max_pdu_size, "maximum isotp pdu size (default "
 #define FC_CONTENT_SZ 3	/* flow control content size in byte (FS/BS/STmin) */
 
 #define ISOTP_CHECK_PADDING (CAN_ISOTP_CHK_PAD_LEN | CAN_ISOTP_CHK_PAD_DATA)
-#define ISOTP_ALL_BC_FLAGS (CAN_ISOTP_SF_BROADCAST | CAN_ISOTP_CF_BROADCAST)
 
 /* Flow Status given in FC frame */
 #define ISOTP_FC_CTS 0		/* clear to send */
 #define ISOTP_FC_WT 1		/* wait */
 #define ISOTP_FC_OVFLW 2	/* overflow */
 
-#define ISOTP_FC_TIMEOUT 1	/* 1 sec */
-#define ISOTP_ECHO_TIMEOUT 2	/* 2 secs */
-
 enum {
 	ISOTP_IDLE = 0,
 	ISOTP_WAIT_FIRST_FC,
 	ISOTP_WAIT_FC,
 	ISOTP_WAIT_DATA,
-	ISOTP_SENDING,
-	ISOTP_SHUTDOWN,
+	ISOTP_SENDING
 };
 
 struct tpcon {
-	u8 *buf;
-	unsigned int buflen;
-	unsigned int len;
 	unsigned int idx;
+	unsigned int len;
 	u32 state;
 	u8 bs;
 	u8 sn;
 	u8 ll_dl;
-	u8 sbuf[DEFAULT_MAX_PDU_SIZE];
+	u8 buf[MAX_MSG_LENGTH + 1];
 };
 
 struct isotp_sock {
@@ -154,14 +137,13 @@ struct isotp_sock {
 	canid_t rxid;
 	ktime_t tx_gap;
 	ktime_t lastrxcf_tstamp;
-	struct hrtimer rxtimer, txtimer, txfrtimer;
+	struct hrtimer rxtimer, txtimer;
 	struct can_isotp_options opt;
 	struct can_isotp_fc_options rxfc, txfc;
 	struct can_isotp_ll_options ll;
 	u32 frame_txtime;
 	u32 force_tx_stmin;
 	u32 force_rx_stmin;
-	u32 cfecho; /* consecutive frame echo tag */
 	struct tpcon rx, tx;
 	struct list_head notifier;
 	wait_queue_head_t wait;
@@ -177,23 +159,6 @@ static inline struct isotp_sock *isotp_sk(const struct sock *sk)
 	return (struct isotp_sock *)sk;
 }
 
-static u32 isotp_bc_flags(struct isotp_sock *so)
-{
-	return so->opt.flags & ISOTP_ALL_BC_FLAGS;
-}
-
-static bool isotp_register_rxid(struct isotp_sock *so)
-{
-	/* no broadcast modes => register rx_id for FC frame reception */
-	return (isotp_bc_flags(so) == 0);
-}
-
-static bool isotp_register_txecho(struct isotp_sock *so)
-{
-	/* all modes but SF_BROADCAST register for tx echo skbs */
-	return (isotp_bc_flags(so) != CAN_ISOTP_SF_BROADCAST);
-}
-
 static enum hrtimer_restart isotp_rx_timer_handler(struct hrtimer *hrtimer)
 {
 	struct isotp_sock *so = container_of(hrtimer, struct isotp_sock,
@@ -206,7 +171,7 @@ static enum hrtimer_restart isotp_rx_timer_handler(struct hrtimer *hrtimer)
 		/* report 'connection timed out' */
 		sk->sk_err = ETIMEDOUT;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 
 		/* reset rx state */
 		so->rx.state = ISOTP_IDLE;
@@ -263,8 +228,8 @@ static int isotp_send_fc(struct sock *sk, int ae, u8 flowstatus)
 
 	can_send_ret = can_send(nskb, 1);
 	if (can_send_ret)
-		pr_notice_once("can-isotp: %s: can_send_ret %pe\n",
-			       __func__, ERR_PTR(can_send_ret));
+		pr_notice_once("can-isotp: %s: can_send_ret %d\n",
+			       __func__, can_send_ret);
 
 	dev_put(dev);
 
@@ -275,8 +240,7 @@ static int isotp_send_fc(struct sock *sk, int ae, u8 flowstatus)
 	so->lastrxcf_tstamp = ktime_set(0, 0);
 
 	/* start rx timeout watchdog */
-	hrtimer_start(&so->rxtimer, ktime_set(ISOTP_FC_TIMEOUT, 0),
-		      HRTIMER_MODE_REL_SOFT);
+	hrtimer_start(&so->rxtimer, ktime_set(1, 0), HRTIMER_MODE_REL_SOFT);
 	return 0;
 }
 
@@ -362,8 +326,6 @@ static int check_pad(struct isotp_sock *so, struct canfd_frame *cf,
 	return 0;
 }
 
-static void isotp_send_cframe(struct isotp_sock *so);
-
 static int isotp_rcv_fc(struct isotp_sock *so, struct canfd_frame *cf, int ae)
 {
 	struct sock *sk = &so->sk;
@@ -380,7 +342,7 @@ static int isotp_rcv_fc(struct isotp_sock *so, struct canfd_frame *cf, int ae)
 		/* malformed PDU - report 'not a data message' */
 		sk->sk_err = EBADMSG;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 
 		so->tx.state = ISOTP_IDLE;
 		wake_up_interruptible(&so->wait);
@@ -418,15 +380,14 @@ static int isotp_rcv_fc(struct isotp_sock *so, struct canfd_frame *cf, int ae)
 	case ISOTP_FC_CTS:
 		so->tx.bs = 0;
 		so->tx.state = ISOTP_SENDING;
-		/* send CF frame and enable echo timeout handling */
-		hrtimer_start(&so->txtimer, ktime_set(ISOTP_ECHO_TIMEOUT, 0),
+		/* start cyclic timer for sending CF frame */
+		hrtimer_start(&so->txtimer, so->tx_gap,
 			      HRTIMER_MODE_REL_SOFT);
-		isotp_send_cframe(so);
 		break;
 
 	case ISOTP_FC_WT:
 		/* start timer to wait for next FC frame */
-		hrtimer_start(&so->txtimer, ktime_set(ISOTP_FC_TIMEOUT, 0),
+		hrtimer_start(&so->txtimer, ktime_set(1, 0),
 			      HRTIMER_MODE_REL_SOFT);
 		break;
 
@@ -434,7 +395,7 @@ static int isotp_rcv_fc(struct isotp_sock *so, struct canfd_frame *cf, int ae)
 		/* overflow on receiver side - report 'message too long' */
 		sk->sk_err = EMSGSIZE;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 		fallthrough;
 
 	default:
@@ -462,7 +423,7 @@ static int isotp_rcv_sf(struct sock *sk, struct canfd_frame *cf, int pcilen,
 		/* malformed PDU - report 'not a data message' */
 		sk->sk_err = EBADMSG;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 		return 1;
 	}
 
@@ -517,17 +478,7 @@ static int isotp_rcv_ff(struct sock *sk, struct canfd_frame *cf, int ae)
 	if (so->rx.len + ae + off + ff_pci_sz < so->rx.ll_dl)
 		return 1;
 
-	/* PDU size > default => try max_pdu_size */
-	if (so->rx.len > so->rx.buflen && so->rx.buflen < max_pdu_size) {
-		u8 *newbuf = kmalloc(max_pdu_size, GFP_ATOMIC);
-
-		if (newbuf) {
-			so->rx.buf = newbuf;
-			so->rx.buflen = max_pdu_size;
-		}
-	}
-
-	if (so->rx.len > so->rx.buflen) {
+	if (so->rx.len > MAX_MSG_LENGTH) {
 		/* send FC frame with overflow status */
 		isotp_send_fc(sk, ae, ISOTP_FC_OVFLW);
 		return 1;
@@ -587,7 +538,7 @@ static int isotp_rcv_cf(struct sock *sk, struct canfd_frame *cf, int ae,
 		/* wrong sn detected - report 'illegal byte sequence' */
 		sk->sk_err = EILSEQ;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 
 		/* reset rx state */
 		so->rx.state = ISOTP_IDLE;
@@ -611,7 +562,7 @@ static int isotp_rcv_cf(struct sock *sk, struct canfd_frame *cf, int ae,
 			/* malformed PDU - report 'not a data message' */
 			sk->sk_err = EBADMSG;
 			if (!sock_flag(sk, SOCK_DEAD))
-				sk_error_report(sk);
+				sk->sk_error_report(sk);
 			return 1;
 		}
 
@@ -631,7 +582,7 @@ static int isotp_rcv_cf(struct sock *sk, struct canfd_frame *cf, int ae,
 	/* perform blocksize handling, if enabled */
 	if (!so->rxfc.bs || ++so->rx.bs < so->rxfc.bs) {
 		/* start rx timeout watchdog */
-		hrtimer_start(&so->rxtimer, ktime_set(ISOTP_FC_TIMEOUT, 0),
+		hrtimer_start(&so->rxtimer, ktime_set(1, 0),
 			      HRTIMER_MODE_REL_SOFT);
 		return 0;
 	}
@@ -700,7 +651,7 @@ static void isotp_rcv(struct sk_buff *skb, void *data)
 		if (cf->len <= CAN_MAX_DLEN) {
 			isotp_rcv_sf(sk, cf, SF_PCI_SZ4 + ae, skb, sf_dl);
 		} else {
-			if (can_is_canfd_skb(skb)) {
+			if (skb->len == CANFD_MTU) {
 				/* We have a CAN FD frame and CAN_DL is greater than 8:
 				 * Only frames with the SF_DL == 0 ESC value are valid.
 				 *
@@ -762,63 +713,6 @@ static void isotp_fill_dataframe(struct canfd_frame *cf, struct isotp_sock *so,
 		cf->data[0] = so->opt.ext_address;
 }
 
-static void isotp_send_cframe(struct isotp_sock *so)
-{
-	struct sock *sk = &so->sk;
-	struct sk_buff *skb;
-	struct net_device *dev;
-	struct canfd_frame *cf;
-	int can_send_ret;
-	int ae = (so->opt.flags & CAN_ISOTP_EXTEND_ADDR) ? 1 : 0;
-
-	dev = dev_get_by_index(sock_net(sk), so->ifindex);
-	if (!dev)
-		return;
-
-	skb = alloc_skb(so->ll.mtu + sizeof(struct can_skb_priv), GFP_ATOMIC);
-	if (!skb) {
-		dev_put(dev);
-		return;
-	}
-
-	can_skb_reserve(skb);
-	can_skb_prv(skb)->ifindex = dev->ifindex;
-	can_skb_prv(skb)->skbcnt = 0;
-
-	cf = (struct canfd_frame *)skb->data;
-	skb_put_zero(skb, so->ll.mtu);
-
-	/* create consecutive frame */
-	isotp_fill_dataframe(cf, so, ae, 0);
-
-	/* place consecutive frame N_PCI in appropriate index */
-	cf->data[ae] = N_PCI_CF | so->tx.sn++;
-	so->tx.sn %= 16;
-	so->tx.bs++;
-
-	cf->flags = so->ll.tx_flags;
-
-	skb->dev = dev;
-	can_skb_set_owner(skb, sk);
-
-	/* cfecho should have been zero'ed by init/isotp_rcv_echo() */
-	if (so->cfecho)
-		pr_notice_once("can-isotp: cfecho is %08X != 0\n", so->cfecho);
-
-	/* set consecutive frame echo tag */
-	so->cfecho = *(u32 *)cf->data;
-
-	/* send frame with local echo enabled */
-	can_send_ret = can_send(skb, 1);
-	if (can_send_ret) {
-		pr_notice_once("can-isotp: %s: can_send_ret %pe\n",
-			       __func__, ERR_PTR(can_send_ret));
-		if (can_send_ret == -ENOBUFS)
-			pr_notice_once("can-isotp: tx queue is full\n");
-	}
-	dev_put(dev);
-}
-
 static void isotp_create_fframe(struct canfd_frame *cf, struct isotp_sock *so,
 				int ae)
 {
@@ -831,7 +725,7 @@ static void isotp_create_fframe(struct canfd_frame *cf, struct isotp_sock *so,
 		cf->data[0] = so->opt.ext_address;
 
 	/* create N_PCI bytes with 12/32 bit FF_DL data length */
-	if (so->tx.len > MAX_12BIT_PDU_SIZE) {
+	if (so->tx.len > 4095) {
 		/* use 32 bit FF_DL notation */
 		cf->data[ae] = N_PCI_FF;
 		cf->data[ae + 1] = 0;
@@ -852,50 +746,7 @@ static void isotp_create_fframe(struct canfd_frame *cf, struct isotp_sock *so,
 		cf->data[i] = so->tx.buf[so->tx.idx++];
 
 	so->tx.sn = 1;
-}
-
-static void isotp_rcv_echo(struct sk_buff *skb, void *data)
-{
-	struct sock *sk = (struct sock *)data;
-	struct isotp_sock *so = isotp_sk(sk);
-	struct canfd_frame *cf = (struct canfd_frame *)skb->data;
-
-	/* only handle my own local echo CF/SF skb's (no FF!) */
-	if (skb->sk != sk || so->cfecho != *(u32 *)cf->data)
-		return;
-
-	/* cancel local echo timeout */
-	hrtimer_cancel(&so->txtimer);
-
-	/* local echo skb with consecutive frame has been consumed */
-	so->cfecho = 0;
-
-	if (so->tx.idx >= so->tx.len) {
-		/* we are done */
-		so->tx.state = ISOTP_IDLE;
-		wake_up_interruptible(&so->wait);
-		return;
-	}
-
-	if (so->txfc.bs && so->tx.bs >= so->txfc.bs) {
-		/* stop and wait for FC with timeout */
-		so->tx.state = ISOTP_WAIT_FC;
-		hrtimer_start(&so->txtimer, ktime_set(ISOTP_FC_TIMEOUT, 0),
-			      HRTIMER_MODE_REL_SOFT);
-		return;
-	}
-
-	/* no gap between data frames needed => use burst mode */
-	if (!so->tx_gap) {
-		/* enable echo timeout handling */
-		hrtimer_start(&so->txtimer, ktime_set(ISOTP_ECHO_TIMEOUT, 0),
-			      HRTIMER_MODE_REL_SOFT);
-		isotp_send_cframe(so);
-		return;
-	}
-
-	/* start timer to send next consecutive frame with correct delay */
-	hrtimer_start(&so->txfrtimer, so->tx_gap, HRTIMER_MODE_REL_SOFT);
+	so->tx.state = ISOTP_WAIT_FIRST_FC;
 }
 
 static enum hrtimer_restart isotp_tx_timer_handler(struct hrtimer *hrtimer)
@@ -903,85 +754,138 @@ static enum hrtimer_restart isotp_tx_timer_handler(struct hrtimer *hrtimer)
 	struct isotp_sock *so = container_of(hrtimer, struct isotp_sock,
 					     txtimer);
 	struct sock *sk = &so->sk;
+	struct sk_buff *skb;
+	struct net_device *dev;
+	struct canfd_frame *cf;
+	enum hrtimer_restart restart = HRTIMER_NORESTART;
+	int can_send_ret;
+	int ae = (so->opt.flags & CAN_ISOTP_EXTEND_ADDR) ? 1 : 0;
 
-	/* don't handle timeouts in IDLE or SHUTDOWN state */
-	if (so->tx.state == ISOTP_IDLE || so->tx.state == ISOTP_SHUTDOWN)
-		return HRTIMER_NORESTART;
+	switch (so->tx.state) {
+	case ISOTP_WAIT_FC:
+	case ISOTP_WAIT_FIRST_FC:
 
-	/* we did not get any flow control or echo frame in time */
+		/* we did not get any flow control frame in time */
 
-	/* report 'communication error on send' */
-	sk->sk_err = ECOMM;
-	if (!sock_flag(sk, SOCK_DEAD))
-		sk_error_report(sk);
+		/* report 'communication error on send' */
+		sk->sk_err = ECOMM;
+		if (!sock_flag(sk, SOCK_DEAD))
+			sk->sk_error_report(sk);
 
-	/* reset tx state */
-	so->tx.state = ISOTP_IDLE;
-	wake_up_interruptible(&so->wait);
+		/* reset tx state */
+		so->tx.state = ISOTP_IDLE;
+		wake_up_interruptible(&so->wait);
+		break;
 
-	return HRTIMER_NORESTART;
-}
+	case ISOTP_SENDING:
 
-static enum hrtimer_restart isotp_txfr_timer_handler(struct hrtimer *hrtimer)
-{
-	struct isotp_sock *so = container_of(hrtimer, struct isotp_sock,
-					     txfrtimer);
+		/* push out the next segmented pdu */
+		dev = dev_get_by_index(sock_net(sk), so->ifindex);
+		if (!dev)
+			break;
 
-	/* start echo timeout handling and cover below protocol error */
-	hrtimer_start(&so->txtimer, ktime_set(ISOTP_ECHO_TIMEOUT, 0),
-		      HRTIMER_MODE_REL_SOFT);
+isotp_tx_burst:
+		skb = alloc_skb(so->ll.mtu + sizeof(struct can_skb_priv),
+				GFP_ATOMIC);
+		if (!skb) {
+			dev_put(dev);
+			break;
+		}
 
-	/* cfecho should be consumed by isotp_rcv_echo() here */
-	if (so->tx.state == ISOTP_SENDING && !so->cfecho)
-		isotp_send_cframe(so);
+		can_skb_reserve(skb);
+		can_skb_prv(skb)->ifindex = dev->ifindex;
+		can_skb_prv(skb)->skbcnt = 0;
 
-	return HRTIMER_NORESTART;
+		cf = (struct canfd_frame *)skb->data;
+		skb_put_zero(skb, so->ll.mtu);
+
+		/* create consecutive frame */
+		isotp_fill_dataframe(cf, so, ae, 0);
+
+		/* place consecutive frame N_PCI in appropriate index */
+		cf->data[ae] = N_PCI_CF | so->tx.sn++;
+		so->tx.sn %= 16;
+		so->tx.bs++;
+
+		cf->flags = so->ll.tx_flags;
+
+		skb->dev = dev;
+		can_skb_set_owner(skb, sk);
+
+		can_send_ret = can_send(skb, 1);
+		if (can_send_ret)
+			pr_notice_once("can-isotp: %s: can_send_ret %d\n",
+				       __func__, can_send_ret);
+
+		if (so->tx.idx >= so->tx.len) {
+			/* we are done */
+			so->tx.state = ISOTP_IDLE;
+			dev_put(dev);
+			wake_up_interruptible(&so->wait);
+			break;
+		}
+
+		if (so->txfc.bs && so->tx.bs >= so->txfc.bs) {
+			/* stop and wait for FC */
+			so->tx.state = ISOTP_WAIT_FC;
+			dev_put(dev);
+			hrtimer_set_expires(&so->txtimer,
+					    ktime_add(ktime_get(),
+						      ktime_set(1, 0)));
+			restart = HRTIMER_RESTART;
+			break;
+		}
+
+		/* no gap between data frames needed => use burst mode */
+		if (!so->tx_gap)
+			goto isotp_tx_burst;
+
+		/* start timer to send next data frame with correct delay */
+		dev_put(dev);
+		hrtimer_set_expires(&so->txtimer,
+				    ktime_add(ktime_get(), so->tx_gap));
+		restart = HRTIMER_RESTART;
+		break;
+
+	default:
+		WARN_ON_ONCE(1);
+	}
+
+	return restart;
 }
 
 static int isotp_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
 	struct isotp_sock *so = isotp_sk(sk);
+	u32 old_state = so->tx.state;
 	struct sk_buff *skb;
 	struct net_device *dev;
 	struct canfd_frame *cf;
 	int ae = (so->opt.flags & CAN_ISOTP_EXTEND_ADDR) ? 1 : 0;
 	int wait_tx_done = (so->opt.flags & CAN_ISOTP_WAIT_TX_DONE) ? 1 : 0;
-	s64 hrtimer_sec = ISOTP_ECHO_TIMEOUT;
+	s64 hrtimer_sec = 0;
 	int off;
 	int err;
 
-	if (!so->bound || so->tx.state == ISOTP_SHUTDOWN)
+	if (!so->bound)
 		return -EADDRNOTAVAIL;
 
-wait_free_buffer:
 	/* we do not support multiple buffers - for now */
-	if (wq_has_sleeper(&so->wait) && (msg->msg_flags & MSG_DONTWAIT))
-		return -EAGAIN;
-
-	/* wait for complete transmission of current pdu */
-	err = wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE);
-	if (err)
-		goto err_event_drop;
-
-	if (cmpxchg(&so->tx.state, ISOTP_IDLE, ISOTP_SENDING) != ISOTP_IDLE) {
-		if (so->tx.state == ISOTP_SHUTDOWN)
-			return -EADDRNOTAVAIL;
-
-		goto wait_free_buffer;
-	}
-
-	/* PDU size > default => try max_pdu_size */
-	if (size > so->tx.buflen && so->tx.buflen < max_pdu_size) {
-		u8 *newbuf = kmalloc(max_pdu_size, GFP_KERNEL);
-
-		if (newbuf) {
-			so->tx.buf = newbuf;
-			so->tx.buflen = max_pdu_size;
+	if (cmpxchg(&so->tx.state, ISOTP_IDLE, ISOTP_SENDING) != ISOTP_IDLE ||
+	    wq_has_sleeper(&so->wait)) {
+		if (msg->msg_flags & MSG_DONTWAIT) {
+			err = -EAGAIN;
+			goto err_out;
 		}
+
+		/* wait for complete transmission of current pdu */
+		err = wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE);
+		if (err)
+			goto err_out;
 	}
 
-	if (!size || size > so->tx.buflen) {
+	if (!size || size > MAX_MSG_LENGTH) {
 		err = -EINVAL;
 		goto err_out_drop;
 	}
@@ -990,7 +894,7 @@ wait_free_buffer:
 	off = (so->tx.ll_dl > CAN_MAX_DLEN) ? 1 : 0;
 
 	/* does the given data fit into a single frame for SF_BROADCAST? */
-	if ((isotp_bc_flags(so) == CAN_ISOTP_SF_BROADCAST) &&
+	if ((so->opt.flags & CAN_ISOTP_SF_BROADCAST) &&
 	    (size > so->tx.ll_dl - SF_PCI_SZ4 - ae - off)) {
 		err = -EINVAL;
 		goto err_out_drop;
@@ -1023,10 +927,6 @@ wait_free_buffer:
 	cf = (struct canfd_frame *)skb->data;
 	skb_put_zero(skb, so->ll.mtu);
 
-	/* cfecho should have been zero'ed by init / former isotp_rcv_echo() */
-	if (so->cfecho)
-		pr_notice_once("can-isotp: uninit cfecho %08X\n", so->cfecho);
-
 	/* check for single frame transmission depending on TX_DL */
 	if (size <= so->tx.ll_dl - SF_PCI_SZ4 - ae - off) {
 		/* The message size generally fits into a SingleFrame - good.
@@ -1052,39 +952,21 @@ wait_free_buffer:
 		else
 			cf->data[ae] |= size;
 
-		/* set CF echo tag for isotp_rcv_echo() (SF-mode) */
-		so->cfecho = *(u32 *)cf->data;
+		so->tx.state = ISOTP_IDLE;
+		wake_up_interruptible(&so->wait);
+
+		/* don't enable wait queue for a single frame transmission */
+		wait_tx_done = 0;
 	} else {
-		/* send first frame */
+		/* send first frame and wait for FC */
 
 		isotp_create_fframe(cf, so, ae);
 
-		if (isotp_bc_flags(so) == CAN_ISOTP_CF_BROADCAST) {
-			/* set timer for FC-less operation (STmin = 0) */
-			if (so->opt.flags & CAN_ISOTP_FORCE_TXSTMIN)
-				so->tx_gap = ktime_set(0, so->force_tx_stmin);
-			else
-				so->tx_gap = ktime_set(0, so->frame_txtime);
-
-			/* disable wait for FCs due to activated block size */
-			so->txfc.bs = 0;
-
-			/* set CF echo tag for isotp_rcv_echo() (CF-mode) */
-			so->cfecho = *(u32 *)cf->data;
-		} else {
-			/* standard flow control check */
-			so->tx.state = ISOTP_WAIT_FIRST_FC;
-
-			/* start timeout for FC */
-			hrtimer_sec = ISOTP_FC_TIMEOUT;
-
-			/* no CF echo tag for isotp_rcv_echo() (FF-mode) */
-			so->cfecho = 0;
-		}
+		/* start timeout for FC */
+		hrtimer_sec = 1;
+		hrtimer_start(&so->txtimer, ktime_set(hrtimer_sec, 0),
+			      HRTIMER_MODE_REL_SOFT);
 	}
-
-	hrtimer_start(&so->txtimer, ktime_set(hrtimer_sec, 0),
-		      HRTIMER_MODE_REL_SOFT);
 
 	/* send the first or only CAN frame */
 	cf->flags = so->ll.tx_flags;
@@ -1094,40 +976,33 @@ wait_free_buffer:
 	err = can_send(skb, 1);
 	dev_put(dev);
 	if (err) {
-		pr_notice_once("can-isotp: %s: can_send_ret %pe\n",
-			       __func__, ERR_PTR(err));
+		pr_notice_once("can-isotp: %s: can_send_ret %d\n",
+			       __func__, err);
 
 		/* no transmission -> no timeout monitoring */
-		hrtimer_cancel(&so->txtimer);
-
-		/* reset consecutive frame echo tag */
-		so->cfecho = 0;
+		if (hrtimer_sec)
+			hrtimer_cancel(&so->txtimer);
 
 		goto err_out_drop;
 	}
 
 	if (wait_tx_done) {
 		/* wait for complete transmission of current pdu */
-		err = wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE);
-		if (err)
-			goto err_event_drop;
+		wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE);
 
-		err = sock_error(sk);
-		if (err)
-			return err;
+		if (sk->sk_err)
+			return -sk->sk_err;
 	}
 
 	return size;
 
-err_event_drop:
-	/* got signal: force tx state machine to be idle */
-	so->tx.state = ISOTP_IDLE;
-	hrtimer_cancel(&so->txfrtimer);
-	hrtimer_cancel(&so->txtimer);
 err_out_drop:
 	/* drop this PDU and unlock a potential wait queue */
-	so->tx.state = ISOTP_IDLE;
-	wake_up_interruptible(&so->wait);
+	old_state = ISOTP_IDLE;
+err_out:
+	so->tx.state = old_state;
+	if (so->tx.state == ISOTP_IDLE)
+		wake_up_interruptible(&so->wait);
 
 	return err;
 }
@@ -1138,15 +1013,17 @@ static int isotp_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
 	struct isotp_sock *so = isotp_sk(sk);
+	int noblock = flags & MSG_DONTWAIT;
 	int ret = 0;
 
-	if (flags & ~(MSG_DONTWAIT | MSG_TRUNC | MSG_PEEK | MSG_CMSG_COMPAT))
+	if (flags & ~(MSG_DONTWAIT | MSG_TRUNC | MSG_PEEK))
 		return -EINVAL;
 
 	if (!so->bound)
 		return -EADDRNOTAVAIL;
 
-	skb = skb_recv_datagram(sk, flags, &ret);
+	flags &= ~MSG_DONTWAIT;
+	skb = skb_recv_datagram(sk, flags, noblock, &ret);
 	if (!skb)
 		return ret;
 
@@ -1159,7 +1036,7 @@ static int isotp_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	if (ret < 0)
 		goto out_err;
 
-	sock_recv_cmsgs(msg, sk, skb);
+	sock_recv_timestamp(msg, sk, skb);
 
 	if (msg->msg_name) {
 		__sockaddr_check_size(ISOTP_MIN_NAMELEN);
@@ -1189,13 +1066,7 @@ static int isotp_release(struct socket *sock)
 	net = sock_net(sk);
 
 	/* wait for complete transmission of current pdu */
-	while (wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE) == 0 &&
-	       cmpxchg(&so->tx.state, ISOTP_IDLE, ISOTP_SHUTDOWN) != ISOTP_IDLE)
-		;
-
-	/* force state machines to be idle also when a signal occurred */
-	so->tx.state = ISOTP_SHUTDOWN;
-	so->rx.state = ISOTP_IDLE;
+	wait_event_interruptible(so->wait, so->tx.state == ISOTP_IDLE);
 
 	spin_lock(&isotp_notifier_lock);
 	while (isotp_busy_notifier == so) {
@@ -1209,38 +1080,26 @@ static int isotp_release(struct socket *sock)
 	lock_sock(sk);
 
 	/* remove current filters & unregister */
-	if (so->bound && isotp_register_txecho(so)) {
+	if (so->bound && (!(so->opt.flags & CAN_ISOTP_SF_BROADCAST))) {
 		if (so->ifindex) {
 			struct net_device *dev;
 
 			dev = dev_get_by_index(net, so->ifindex);
 			if (dev) {
-				if (isotp_register_rxid(so))
-					can_rx_unregister(net, dev, so->rxid,
-							  SINGLE_MASK(so->rxid),
-							  isotp_rcv, sk);
-
-				can_rx_unregister(net, dev, so->txid,
-						  SINGLE_MASK(so->txid),
-						  isotp_rcv_echo, sk);
+				can_rx_unregister(net, dev, so->rxid,
+						  SINGLE_MASK(so->rxid),
+						  isotp_rcv, sk);
 				dev_put(dev);
 				synchronize_rcu();
 			}
 		}
 	}
 
-	hrtimer_cancel(&so->txfrtimer);
 	hrtimer_cancel(&so->txtimer);
 	hrtimer_cancel(&so->rxtimer);
 
 	so->ifindex = 0;
 	so->bound = 0;
-
-	if (so->rx.buf != so->rx.sbuf)
-		kfree(so->rx.buf);
-
-	if (so->tx.buf != so->tx.sbuf)
-		kfree(so->tx.buf);
 
 	sock_orphan(sk);
 	sock->sk = NULL;
@@ -1259,38 +1118,26 @@ static int isotp_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	struct net *net = sock_net(sk);
 	int ifindex;
 	struct net_device *dev;
-	canid_t tx_id = addr->can_addr.tp.tx_id;
-	canid_t rx_id = addr->can_addr.tp.rx_id;
+	canid_t tx_id, rx_id;
 	int err = 0;
 	int notify_enetdown = 0;
+	int do_rx_reg = 1;
 
 	if (len < ISOTP_MIN_NAMELEN)
 		return -EINVAL;
 
-	if (addr->can_family != AF_CAN)
-		return -EINVAL;
-
-	/* sanitize tx CAN identifier */
+	/* sanitize tx/rx CAN identifiers */
+	tx_id = addr->can_addr.tp.tx_id;
 	if (tx_id & CAN_EFF_FLAG)
 		tx_id &= (CAN_EFF_FLAG | CAN_EFF_MASK);
 	else
 		tx_id &= CAN_SFF_MASK;
 
-	/* give feedback on wrong CAN-ID value */
-	if (tx_id != addr->can_addr.tp.tx_id)
-		return -EINVAL;
-
-	/* sanitize rx CAN identifier (if needed) */
-	if (isotp_register_rxid(so)) {
-		if (rx_id & CAN_EFF_FLAG)
-			rx_id &= (CAN_EFF_FLAG | CAN_EFF_MASK);
-		else
-			rx_id &= CAN_SFF_MASK;
-
-		/* give feedback on wrong CAN-ID value */
-		if (rx_id != addr->can_addr.tp.rx_id)
-			return -EINVAL;
-	}
+	rx_id = addr->can_addr.tp.rx_id;
+	if (rx_id & CAN_EFF_FLAG)
+		rx_id &= (CAN_EFF_FLAG | CAN_EFF_MASK);
+	else
+		rx_id &= CAN_SFF_MASK;
 
 	if (!addr->can_ifindex)
 		return -ENODEV;
@@ -1302,8 +1149,12 @@ static int isotp_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 		goto out;
 	}
 
-	/* ensure different CAN IDs when the rx_id is to be registered */
-	if (isotp_register_rxid(so) && rx_id == tx_id) {
+	/* do not register frame reception for functional addressing */
+	if (so->opt.flags & CAN_ISOTP_SF_BROADCAST)
+		do_rx_reg = 0;
+
+	/* do not validate rx address for functional addressing */
+	if (do_rx_reg && rx_id == tx_id) {
 		err = -EADDRNOTAVAIL;
 		goto out;
 	}
@@ -1328,18 +1179,9 @@ static int isotp_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 
 	ifindex = dev->ifindex;
 
-	if (isotp_register_rxid(so))
+	if (do_rx_reg)
 		can_rx_register(net, dev, rx_id, SINGLE_MASK(rx_id),
 				isotp_rcv, sk, "isotp", sk);
-
-	if (isotp_register_txecho(so)) {
-		/* no consecutive frame echo skb in flight */
-		so->cfecho = 0;
-
-		/* register for echo skb's */
-		can_rx_register(net, dev, tx_id, SINGLE_MASK(tx_id),
-				isotp_rcv_echo, sk, "isotpe", sk);
-	}
 
 	dev_put(dev);
 
@@ -1355,7 +1197,7 @@ out:
 	if (notify_enetdown) {
 		sk->sk_err = ENETDOWN;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 	}
 
 	return err;
@@ -1400,15 +1242,6 @@ static int isotp_setsockopt_locked(struct socket *sock, int level, int optname,
 		/* no separate rx_ext_address is given => use ext_address */
 		if (!(so->opt.flags & CAN_ISOTP_RX_EXT_ADDR))
 			so->opt.rx_ext_address = so->opt.ext_address;
-
-		/* these broadcast flags are not allowed together */
-		if (isotp_bc_flags(so) == ISOTP_ALL_BC_FLAGS) {
-			/* CAN_ISOTP_SF_BROADCAST is prioritized */
-			so->opt.flags &= ~CAN_ISOTP_CF_BROADCAST;
-
-			/* give user feedback on wrong config attempt */
-			ret = -EINVAL;
-		}
 
 		/* check for frame_txtime changes (0 => no changes) */
 		if (so->opt.frame_txtime) {
@@ -1560,16 +1393,10 @@ static void isotp_notify(struct isotp_sock *so, unsigned long msg,
 	case NETDEV_UNREGISTER:
 		lock_sock(sk);
 		/* remove current filters & unregister */
-		if (so->bound && isotp_register_txecho(so)) {
-			if (isotp_register_rxid(so))
-				can_rx_unregister(dev_net(dev), dev, so->rxid,
-						  SINGLE_MASK(so->rxid),
-						  isotp_rcv, sk);
-
-			can_rx_unregister(dev_net(dev), dev, so->txid,
-					  SINGLE_MASK(so->txid),
-					  isotp_rcv_echo, sk);
-		}
+		if (so->bound && (!(so->opt.flags & CAN_ISOTP_SF_BROADCAST)))
+			can_rx_unregister(dev_net(dev), dev, so->rxid,
+					  SINGLE_MASK(so->rxid),
+					  isotp_rcv, sk);
 
 		so->ifindex = 0;
 		so->bound  = 0;
@@ -1577,13 +1404,13 @@ static void isotp_notify(struct isotp_sock *so, unsigned long msg,
 
 		sk->sk_err = ENODEV;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 		break;
 
 	case NETDEV_DOWN:
 		sk->sk_err = ENETDOWN;
 		if (!sock_flag(sk, SOCK_DEAD))
-			sk_error_report(sk);
+			sk->sk_error_report(sk);
 		break;
 	}
 }
@@ -1638,17 +1465,10 @@ static int isotp_init(struct sock *sk)
 	so->rx.state = ISOTP_IDLE;
 	so->tx.state = ISOTP_IDLE;
 
-	so->rx.buf = so->rx.sbuf;
-	so->tx.buf = so->tx.sbuf;
-	so->rx.buflen = ARRAY_SIZE(so->rx.sbuf);
-	so->tx.buflen = ARRAY_SIZE(so->tx.sbuf);
-
 	hrtimer_init(&so->rxtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
 	so->rxtimer.function = isotp_rx_timer_handler;
 	hrtimer_init(&so->txtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
 	so->txtimer.function = isotp_tx_timer_handler;
-	hrtimer_init(&so->txfrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
-	so->txfrtimer.function = isotp_txfr_timer_handler;
 
 	init_waitqueue_head(&so->wait);
 	spin_lock_init(&so->rx_lock);
@@ -1658,21 +1478,6 @@ static int isotp_init(struct sock *sk)
 	spin_unlock(&isotp_notifier_lock);
 
 	return 0;
-}
-
-static __poll_t isotp_poll(struct file *file, struct socket *sock, poll_table *wait)
-{
-	struct sock *sk = sock->sk;
-	struct isotp_sock *so = isotp_sk(sk);
-
-	__poll_t mask = datagram_poll(file, sock, wait);
-	poll_wait(file, &so->wait, wait);
-
-	/* Check for false positives due to TX state */
-	if ((mask & EPOLLWRNORM) && (so->tx.state != ISOTP_IDLE))
-		mask &= ~(EPOLLOUT | EPOLLWRNORM);
-
-	return mask;
 }
 
 static int isotp_sock_no_ioctlcmd(struct socket *sock, unsigned int cmd,
@@ -1690,7 +1495,7 @@ static const struct proto_ops isotp_ops = {
 	.socketpair = sock_no_socketpair,
 	.accept = sock_no_accept,
 	.getname = isotp_getname,
-	.poll = isotp_poll,
+	.poll = datagram_poll,
 	.ioctl = isotp_sock_no_ioctlcmd,
 	.gettstamp = sock_gettstamp,
 	.listen = sock_no_listen,
@@ -1700,6 +1505,7 @@ static const struct proto_ops isotp_ops = {
 	.sendmsg = isotp_sendmsg,
 	.recvmsg = isotp_recvmsg,
 	.mmap = sock_no_mmap,
+	.sendpage = sock_no_sendpage,
 };
 
 static struct proto isotp_proto __read_mostly = {
@@ -1724,14 +1530,11 @@ static __init int isotp_module_init(void)
 {
 	int err;
 
-	max_pdu_size = max_t(unsigned int, max_pdu_size, MAX_12BIT_PDU_SIZE);
-	max_pdu_size = min_t(unsigned int, max_pdu_size, MAX_PDU_SIZE);
-
-	pr_info("can: isotp protocol (max_pdu_size %d)\n", max_pdu_size);
+	pr_info("can: isotp protocol\n");
 
 	err = can_proto_register(&isotp_can_proto);
 	if (err < 0)
-		pr_err("can: registration of isotp protocol failed %pe\n", ERR_PTR(err));
+		pr_err("can: registration of isotp protocol failed\n");
 	else
 		register_netdevice_notifier(&canisotp_notifier);
 

@@ -167,7 +167,8 @@ static const struct regmap_config max9768_i2c_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int max9768_i2c_probe(struct i2c_client *client)
+static int max9768_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct max9768 *max9768;
 	struct max9768_pdata *pdata = client->dev.platform_data;

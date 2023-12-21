@@ -15,7 +15,7 @@ union uu {
 	unsigned char b[2];
 };
 
-/* Endian independent version */
+/* Endian independed version */
 static inline unsigned short
 get_unaligned16(const unsigned short *p)
 {
@@ -253,12 +253,13 @@ void inflate_fast(z_streamp strm, unsigned start)
 
 			sfrom = (unsigned short *)(from);
 			loops = len >> 1;
-			do {
-			    if (IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))
-				*sout++ = *sfrom++;
-			    else
-				*sout++ = get_unaligned16(sfrom++);
-			} while (--loops);
+			do
+#ifdef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+			    *sout++ = *sfrom++;
+#else
+			    *sout++ = get_unaligned16(sfrom++);
+#endif
+			while (--loops);
 			out = (unsigned char *)sout;
 			from = (unsigned char *)sfrom;
 		    } else { /* dist == 1 or dist == 2 */

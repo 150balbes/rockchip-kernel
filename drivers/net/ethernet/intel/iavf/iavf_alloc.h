@@ -28,6 +28,7 @@ enum iavf_status iavf_free_dma_mem(struct iavf_hw *hw,
 				   struct iavf_dma_mem *mem);
 enum iavf_status iavf_allocate_virt_mem(struct iavf_hw *hw,
 					struct iavf_virt_mem *mem, u32 size);
-void iavf_free_virt_mem(struct iavf_hw *hw, struct iavf_virt_mem *mem);
+enum iavf_status iavf_free_virt_mem(struct iavf_hw *hw,
+				    struct iavf_virt_mem *mem);
 
 #endif /* _IAVF_ALLOC_H_ */

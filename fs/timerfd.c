@@ -28,6 +28,8 @@
 #include <linux/rcupdate.h>
 #include <linux/time_namespace.h>
 
+#include <trace/hooks/fs.h>
+
 struct timerfd_ctx {
 	union {
 		struct hrtimer tmr;
@@ -113,22 +115,6 @@ void timerfd_clock_was_set(void)
 		spin_unlock_irqrestore(&ctx->wqh.lock, flags);
 	}
 	rcu_read_unlock();
-}
-
-static void timerfd_resume_work(struct work_struct *work)
-{
-	timerfd_clock_was_set();
-}
-
-static DECLARE_WORK(timerfd_work, timerfd_resume_work);
-
-/*
- * Invoked from timekeeping_resume(). Defer the actual update to work so
- * timerfd_clock_was_set() runs in task context.
- */
-void timerfd_resume(void)
-{
-	schedule_work(&timerfd_work);
 }
 
 static void __timerfd_remove_cancel(struct timerfd_ctx *ctx)
@@ -407,6 +393,7 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 {
 	int ufd;
 	struct timerfd_ctx *ctx;
+	char file_name_buf[32];
 
 	/* Check the TFD_* constants for consistency.  */
 	BUILD_BUG_ON(TFD_CLOEXEC != O_CLOEXEC);
@@ -443,7 +430,9 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 
 	ctx->moffs = ktime_mono_to_real(0);
 
-	ufd = anon_inode_getfd("[timerfd]", &timerfd_fops, ctx,
+	strlcpy(file_name_buf, "[timerfd]", sizeof(file_name_buf));
+	trace_android_vh_timerfd_create(file_name_buf, sizeof(file_name_buf));
+	ufd = anon_inode_getfd(file_name_buf, &timerfd_fops, ctx,
 			       O_RDWR | (flags & TFD_SHARED_FCNTL_FLAGS));
 	if (ufd < 0)
 		kfree(ctx);
@@ -451,7 +440,7 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 	return ufd;
 }
 
-static int do_timerfd_settime(int ufd, int flags, 
+static int do_timerfd_settime(int ufd, int flags,
 		const struct itimerspec64 *new,
 		struct itimerspec64 *old)
 {

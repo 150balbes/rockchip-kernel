@@ -24,8 +24,6 @@
 #ifndef DRM_MODESET_LOCK_H_
 #define DRM_MODESET_LOCK_H_
 
-#include <linux/types.h> /* stackdepot.h is not self-contained */
-#include <linux/stackdepot.h>
 #include <linux/ww_mutex.h>
 
 struct drm_modeset_lock;
@@ -34,7 +32,6 @@ struct drm_modeset_lock;
  * struct drm_modeset_acquire_ctx - locking context (see ww_acquire_ctx)
  * @ww_ctx: base acquire ctx
  * @contended: used internally for -EDEADLK handling
- * @stack_depot: used internally for contention debugging
  * @locked: list of held locks
  * @trylock_only: trylock mode used in atomic contexts/panic notifiers
  * @interruptible: whether interruptible locking should be used.
@@ -53,12 +50,6 @@ struct drm_modeset_acquire_ctx {
 	 * contended lock.
 	 */
 	struct drm_modeset_lock *contended;
-
-	/*
-	 * Stack depot for debugging when a contended lock was not backed off
-	 * from.
-	 */
-	depot_stack_handle_t stack_depot;
 
 	/*
 	 * list of held locks (drm_modeset_lock)

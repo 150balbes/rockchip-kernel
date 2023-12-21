@@ -7,27 +7,26 @@
 #define _CAN_M_CAN_H_
 
 #include <linux/can/core.h>
-#include <linux/can/dev.h>
-#include <linux/can/rx-offload.h>
-#include <linux/clk.h>
+#include <linux/can/led.h>
 #include <linux/completion.h>
-#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/freezer.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/phy/phy.h>
-#include <linux/pinctrl/consumer.h>
 #include <linux/pm_runtime.h>
-#include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <linux/iopoll.h>
+#include <linux/can/dev.h>
+#include <linux/pinctrl/consumer.h>
 
 /* m_can lec values */
 enum m_can_lec_type {
@@ -38,7 +37,7 @@ enum m_can_lec_type {
 	LEC_BIT1_ERROR,
 	LEC_BIT0_ERROR,
 	LEC_CRC_ERROR,
-	LEC_NO_CHANGE,
+	LEC_UNUSED,
 };
 
 enum m_can_mram_cfg {
@@ -64,15 +63,14 @@ struct m_can_ops {
 	int (*clear_interrupts)(struct m_can_classdev *cdev);
 	u32 (*read_reg)(struct m_can_classdev *cdev, int reg);
 	int (*write_reg)(struct m_can_classdev *cdev, int reg, int val);
-	int (*read_fifo)(struct m_can_classdev *cdev, int addr_offset, void *val, size_t val_count);
+	u32 (*read_fifo)(struct m_can_classdev *cdev, int addr_offset);
 	int (*write_fifo)(struct m_can_classdev *cdev, int addr_offset,
-			  const void *val, size_t val_count);
+			  int val);
 	int (*init)(struct m_can_classdev *cdev);
 };
 
 struct m_can_classdev {
 	struct can_priv can;
-	struct can_rx_offload offload;
 	struct napi_struct napi;
 	struct net_device *net;
 	struct device *dev;
@@ -82,11 +80,16 @@ struct m_can_classdev {
 	struct workqueue_struct *tx_wq;
 	struct work_struct tx_work;
 	struct sk_buff *tx_skb;
-	struct phy *transceiver;
+
+	struct can_bittiming_const *bit_timing;
+	struct can_bittiming_const *data_timing;
 
 	struct m_can_ops *ops;
 
+	void *device_data;
+
 	int version;
+	int freq;
 	u32 irqstatus;
 
 	int pm_clock_support;
@@ -95,12 +98,13 @@ struct m_can_classdev {
 	struct mram_cfg mcfg[MRAM_CFG_NUM];
 };
 
-struct m_can_classdev *m_can_class_allocate_dev(struct device *dev, int sizeof_priv);
+struct m_can_classdev *m_can_class_allocate_dev(struct device *dev);
 void m_can_class_free_dev(struct net_device *net);
 int m_can_class_register(struct m_can_classdev *cdev);
 void m_can_class_unregister(struct m_can_classdev *cdev);
 int m_can_class_get_clocks(struct m_can_classdev *cdev);
-int m_can_init_ram(struct m_can_classdev *priv);
+void m_can_init_ram(struct m_can_classdev *priv);
+void m_can_config_endisable(struct m_can_classdev *priv, bool enable);
 
 int m_can_class_suspend(struct device *dev);
 int m_can_class_resume(struct device *dev);

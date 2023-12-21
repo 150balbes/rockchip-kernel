@@ -4,10 +4,10 @@
 $id: http://devicetree.org/schemas/rtc/microcrystal,rv3032.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Microchip RV-3032 RTC
+title: Microchip RV-3032 RTC Device Tree Bindings
 
 allOf:
-  - $ref: rtc.yaml#
+  - $ref: "rtc.yaml#"
 
 maintainers:
   - Alexandre Belloni <alexandre.belloni@bootlin.com>
@@ -32,7 +32,6 @@ properties:
       - 11000
 
   trickle-voltage-millivolt:
-    $ref: /schemas/types.yaml#/definitions/uint32
     enum:
       - 1750
       - 3000
@@ -54,6 +53,7 @@ examples:
         rtc@51 {
             compatible = "microcrystal,rv3032";
             reg = <0x51>;
+            status = "okay";
             pinctrl-0 = <&rtc_nint_pins>;
             interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
             trickle-resistor-ohms = <7000>;

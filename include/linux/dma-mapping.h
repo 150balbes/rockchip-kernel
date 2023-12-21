@@ -2,7 +2,6 @@
 #ifndef _LINUX_DMA_MAPPING_H
 #define _LINUX_DMA_MAPPING_H
 
-#include <linux/cache.h>
 #include <linux/sizes.h>
 #include <linux/string.h>
 #include <linux/device.h>
@@ -63,6 +62,23 @@
 #define DMA_ATTR_PRIVILEGED		(1UL << 9)
 
 /*
+ * DMA_ATTR_SYS_CACHE_ONLY: used to indicate that the buffer should be mapped
+ * with the correct memory attributes so that it can be cached in the system
+ * or last level cache. This is useful for buffers that are being mapped for
+ * devices that are non-coherent, but can use the system cache.
+ */
+#define DMA_ATTR_SYS_CACHE_ONLY		(1UL << 14)
+
+/*
+ * DMA_ATTR_SYS_CACHE_ONLY_NWA: used to indicate that the buffer should be
+ * mapped with the correct memory attributes so that it can be cached in the
+ * system or last level cache, with a no write allocate cache policy. This is
+ * useful for buffers that are being mapped for devices that are non-coherent,
+ * but can use the system cache.
+ */
+#define DMA_ATTR_SYS_CACHE_ONLY_NWA	(1UL << 15)
+
+/*
  * A dma_addr_t can hold any valid DMA or bus address for the platform.  It can
  * be given to a device to use as a DMA source or target.  It is specific to a
  * given device and there may be a translation between the CPU physical address
@@ -96,7 +112,7 @@ static inline int dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
 {
 	debug_dma_mapping_error(dev, dma_addr);
 
-	if (unlikely(dma_addr == DMA_MAPPING_ERROR))
+	if (dma_addr == DMA_MAPPING_ERROR)
 		return -ENOMEM;
 	return 0;
 }
@@ -106,13 +122,11 @@ dma_addr_t dma_map_page_attrs(struct device *dev, struct page *page,
 		unsigned long attrs);
 void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr, size_t size,
 		enum dma_data_direction dir, unsigned long attrs);
-unsigned int dma_map_sg_attrs(struct device *dev, struct scatterlist *sg,
-		int nents, enum dma_data_direction dir, unsigned long attrs);
+int dma_map_sg_attrs(struct device *dev, struct scatterlist *sg, int nents,
+		enum dma_data_direction dir, unsigned long attrs);
 void dma_unmap_sg_attrs(struct device *dev, struct scatterlist *sg,
 				      int nents, enum dma_data_direction dir,
 				      unsigned long attrs);
-int dma_map_sgtable(struct device *dev, struct sg_table *sgt,
-		enum dma_data_direction dir, unsigned long attrs);
 dma_addr_t dma_map_resource(struct device *dev, phys_addr_t phys_addr,
 		size_t size, enum dma_data_direction dir, unsigned long attrs);
 void dma_unmap_resource(struct device *dev, dma_addr_t addr, size_t size,
@@ -140,23 +154,13 @@ int dma_mmap_attrs(struct device *dev, struct vm_area_struct *vma,
 		void *cpu_addr, dma_addr_t dma_addr, size_t size,
 		unsigned long attrs);
 bool dma_can_mmap(struct device *dev);
-bool dma_pci_p2pdma_supported(struct device *dev);
+int dma_supported(struct device *dev, u64 mask);
 int dma_set_mask(struct device *dev, u64 mask);
 int dma_set_coherent_mask(struct device *dev, u64 mask);
 u64 dma_get_required_mask(struct device *dev);
 size_t dma_max_mapping_size(struct device *dev);
-size_t dma_opt_mapping_size(struct device *dev);
 bool dma_need_sync(struct device *dev, dma_addr_t dma_addr);
 unsigned long dma_get_merge_boundary(struct device *dev);
-struct sg_table *dma_alloc_noncontiguous(struct device *dev, size_t size,
-		enum dma_data_direction dir, gfp_t gfp, unsigned long attrs);
-void dma_free_noncontiguous(struct device *dev, size_t size,
-		struct sg_table *sgt, enum dma_data_direction dir);
-void *dma_vmap_noncontiguous(struct device *dev, size_t size,
-		struct sg_table *sgt);
-void dma_vunmap_noncontiguous(struct device *dev, void *vaddr);
-int dma_mmap_noncontiguous(struct device *dev, struct vm_area_struct *vma,
-		size_t size, struct sg_table *sgt);
 #else /* CONFIG_HAS_DMA */
 static inline dma_addr_t dma_map_page_attrs(struct device *dev,
 		struct page *page, size_t offset, size_t size,
@@ -168,9 +172,8 @@ static inline void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr,
 		size_t size, enum dma_data_direction dir, unsigned long attrs)
 {
 }
-static inline unsigned int dma_map_sg_attrs(struct device *dev,
-		struct scatterlist *sg, int nents, enum dma_data_direction dir,
-		unsigned long attrs)
+static inline int dma_map_sg_attrs(struct device *dev, struct scatterlist *sg,
+		int nents, enum dma_data_direction dir, unsigned long attrs)
 {
 	return 0;
 }
@@ -178,11 +181,6 @@ static inline void dma_unmap_sg_attrs(struct device *dev,
 		struct scatterlist *sg, int nents, enum dma_data_direction dir,
 		unsigned long attrs)
 {
-}
-static inline int dma_map_sgtable(struct device *dev, struct sg_table *sgt,
-		enum dma_data_direction dir, unsigned long attrs)
-{
-	return -EOPNOTSUPP;
 }
 static inline dma_addr_t dma_map_resource(struct device *dev,
 		phys_addr_t phys_addr, size_t size, enum dma_data_direction dir,
@@ -248,9 +246,9 @@ static inline bool dma_can_mmap(struct device *dev)
 {
 	return false;
 }
-static inline bool dma_pci_p2pdma_supported(struct device *dev)
+static inline int dma_supported(struct device *dev, u64 mask)
 {
-	return false;
+	return 0;
 }
 static inline int dma_set_mask(struct device *dev, u64 mask)
 {
@@ -268,10 +266,6 @@ static inline size_t dma_max_mapping_size(struct device *dev)
 {
 	return 0;
 }
-static inline size_t dma_opt_mapping_size(struct device *dev)
-{
-	return 0;
-}
 static inline bool dma_need_sync(struct device *dev, dma_addr_t dma_addr)
 {
 	return false;
@@ -280,50 +274,16 @@ static inline unsigned long dma_get_merge_boundary(struct device *dev)
 {
 	return 0;
 }
-static inline struct sg_table *dma_alloc_noncontiguous(struct device *dev,
-		size_t size, enum dma_data_direction dir, gfp_t gfp,
-		unsigned long attrs)
-{
-	return NULL;
-}
-static inline void dma_free_noncontiguous(struct device *dev, size_t size,
-		struct sg_table *sgt, enum dma_data_direction dir)
-{
-}
-static inline void *dma_vmap_noncontiguous(struct device *dev, size_t size,
-		struct sg_table *sgt)
-{
-	return NULL;
-}
-static inline void dma_vunmap_noncontiguous(struct device *dev, void *vaddr)
-{
-}
-static inline int dma_mmap_noncontiguous(struct device *dev,
-		struct vm_area_struct *vma, size_t size, struct sg_table *sgt)
-{
-	return -EINVAL;
-}
 #endif /* CONFIG_HAS_DMA */
 
 struct page *dma_alloc_pages(struct device *dev, size_t size,
 		dma_addr_t *dma_handle, enum dma_data_direction dir, gfp_t gfp);
 void dma_free_pages(struct device *dev, size_t size, struct page *page,
 		dma_addr_t dma_handle, enum dma_data_direction dir);
-int dma_mmap_pages(struct device *dev, struct vm_area_struct *vma,
-		size_t size, struct page *page);
-
-static inline void *dma_alloc_noncoherent(struct device *dev, size_t size,
-		dma_addr_t *dma_handle, enum dma_data_direction dir, gfp_t gfp)
-{
-	struct page *page = dma_alloc_pages(dev, size, dma_handle, dir, gfp);
-	return page ? page_address(page) : NULL;
-}
-
-static inline void dma_free_noncoherent(struct device *dev, size_t size,
-		void *vaddr, dma_addr_t dma_handle, enum dma_data_direction dir)
-{
-	dma_free_pages(dev, size, virt_to_page(vaddr), dma_handle, dir);
-}
+void *dma_alloc_noncoherent(struct device *dev, size_t size,
+		dma_addr_t *dma_handle, enum dma_data_direction dir, gfp_t gfp);
+void dma_free_noncoherent(struct device *dev, size_t size, void *vaddr,
+		dma_addr_t dma_handle, enum dma_data_direction dir);
 
 static inline dma_addr_t dma_map_single_attrs(struct device *dev, void *ptr,
 		size_t size, enum dma_data_direction dir, unsigned long attrs)
@@ -355,6 +315,34 @@ static inline void dma_sync_single_range_for_device(struct device *dev,
 		enum dma_data_direction dir)
 {
 	return dma_sync_single_for_device(dev, addr + offset, size, dir);
+}
+
+/**
+ * dma_map_sgtable - Map the given buffer for DMA
+ * @dev:	The device for which to perform the DMA operation
+ * @sgt:	The sg_table object describing the buffer
+ * @dir:	DMA direction
+ * @attrs:	Optional DMA attributes for the map operation
+ *
+ * Maps a buffer described by a scatterlist stored in the given sg_table
+ * object for the @dir DMA operation by the @dev device. After success the
+ * ownership for the buffer is transferred to the DMA domain.  One has to
+ * call dma_sync_sgtable_for_cpu() or dma_unmap_sgtable() to move the
+ * ownership of the buffer back to the CPU domain before touching the
+ * buffer by the CPU.
+ *
+ * Returns 0 on success or -EINVAL on error during mapping the buffer.
+ */
+static inline int dma_map_sgtable(struct device *dev, struct sg_table *sgt,
+		enum dma_data_direction dir, unsigned long attrs)
+{
+	int nents;
+
+	nents = dma_map_sg_attrs(dev, sgt->sgl, sgt->orig_nents, dir, attrs);
+	if (nents <= 0)
+		return -EINVAL;
+	sgt->nents = nents;
+	return 0;
 }
 
 /**
@@ -421,6 +409,7 @@ static inline void dma_sync_sgtable_for_device(struct device *dev,
 static inline void *dma_alloc_coherent(struct device *dev, size_t size,
 		dma_addr_t *dma_handle, gfp_t gfp)
 {
+
 	return dma_alloc_attrs(dev, size, dma_handle, gfp,
 			(gfp & __GFP_NOWARN) ? DMA_ATTR_NO_WARN : 0);
 }
@@ -544,15 +533,13 @@ static inline int dma_set_min_align_mask(struct device *dev,
 	return 0;
 }
 
-#ifndef dma_get_cache_alignment
 static inline int dma_get_cache_alignment(void)
 {
-#ifdef ARCH_HAS_DMA_MINALIGN
+#ifdef ARCH_DMA_MINALIGN
 	return ARCH_DMA_MINALIGN;
 #endif
 	return 1;
 }
-#endif
 
 static inline void *dmam_alloc_coherent(struct device *dev, size_t size,
 		dma_addr_t *dma_handle, gfp_t gfp)
@@ -603,5 +590,14 @@ static inline int dma_mmap_wc(struct device *dev,
 #define dma_unmap_len(PTR, LEN_NAME)             (0)
 #define dma_unmap_len_set(PTR, LEN_NAME, VAL)    do { } while (0)
 #endif
+
+/*
+ * Legacy interface to set up the dma offset map.  Drivers really should not
+ * actually use it, but we have a few legacy cases left.
+ */
+int dma_direct_set_offset(struct device *dev, phys_addr_t cpu_start,
+		dma_addr_t dma_start, u64 size);
+
+extern const struct dma_map_ops dma_virt_ops;
 
 #endif /* _LINUX_DMA_MAPPING_H */

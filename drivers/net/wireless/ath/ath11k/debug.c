@@ -17,7 +17,7 @@ void ath11k_info(struct ath11k_base *ab, const char *fmt, ...)
 	va_start(args, fmt);
 	vaf.va = &args;
 	dev_info(ab->dev, "%pV", &vaf);
-	trace_ath11k_log_info(ab, &vaf);
+	/* TODO: Trace the log */
 	va_end(args);
 }
 EXPORT_SYMBOL(ath11k_info);
@@ -32,7 +32,7 @@ void ath11k_err(struct ath11k_base *ab, const char *fmt, ...)
 	va_start(args, fmt);
 	vaf.va = &args;
 	dev_err(ab->dev, "%pV", &vaf);
-	trace_ath11k_log_err(ab, &vaf);
+	/* TODO: Trace the log */
 	va_end(args);
 }
 EXPORT_SYMBOL(ath11k_err);
@@ -47,7 +47,7 @@ void ath11k_warn(struct ath11k_base *ab, const char *fmt, ...)
 	va_start(args, fmt);
 	vaf.va = &args;
 	dev_warn_ratelimited(ab->dev, "%pV", &vaf);
-	trace_ath11k_log_warn(ab, &vaf);
+	/* TODO: Trace the log */
 	va_end(args);
 }
 EXPORT_SYMBOL(ath11k_warn);
@@ -66,9 +66,9 @@ void __ath11k_dbg(struct ath11k_base *ab, enum ath11k_debug_mask mask,
 	vaf.va = &args;
 
 	if (ath11k_debug_mask & mask)
-		dev_printk(KERN_DEBUG, ab->dev, "%s %pV", ath11k_dbg_str(mask), &vaf);
+		dev_printk(KERN_DEBUG, ab->dev, "%pV", &vaf);
 
-	trace_ath11k_log_dbg(ab, mask, &vaf);
+	/* TODO: trace log */
 
 	va_end(args);
 }
@@ -100,10 +100,6 @@ void ath11k_dbg_dump(struct ath11k_base *ab,
 			dev_printk(KERN_DEBUG, ab->dev, "%s\n", linebuf);
 		}
 	}
-
-	/* tracing code doesn't like null strings */
-	trace_ath11k_log_dbg_dump(ab, msg ? msg : "", prefix ? prefix : "",
-				  buf, len);
 }
 EXPORT_SYMBOL(ath11k_dbg_dump);
 

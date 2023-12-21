@@ -842,7 +842,7 @@ static int sl811h_urb_enqueue(
 		INIT_LIST_HEAD(&ep->schedule);
 		ep->udev = udev;
 		ep->epnum = epnum;
-		ep->maxpacket = usb_maxpacket(udev, urb->pipe);
+		ep->maxpacket = usb_maxpacket(udev, urb->pipe, is_out);
 		ep->defctrl = SL11H_HCTLMASK_ARM | SL11H_HCTLMASK_ENABLE;
 		usb_settoggle(udev, epnum, is_out, 0);
 
@@ -878,8 +878,8 @@ static int sl811h_urb_enqueue(
 			if (type == PIPE_ISOCHRONOUS)
 				ep->defctrl |= SL11H_HCTLMASK_ISOCH;
 			ep->load = usb_calc_bus_time(udev->speed, !is_out,
-						     type == PIPE_ISOCHRONOUS,
-						     usb_maxpacket(udev, pipe))
+				(type == PIPE_ISOCHRONOUS),
+				usb_maxpacket(udev, pipe, is_out))
 					/ 1000;
 			break;
 		}
@@ -1495,13 +1495,14 @@ DEFINE_SHOW_ATTRIBUTE(sl811h_debug);
 /* expect just one sl811 per system */
 static void create_debug_file(struct sl811 *sl811)
 {
-	debugfs_create_file("sl811h", S_IRUGO, usb_debug_root, sl811,
-			    &sl811h_debug_fops);
+	sl811->debug_file = debugfs_create_file("sl811h", S_IRUGO,
+						usb_debug_root, sl811,
+						&sl811h_debug_fops);
 }
 
 static void remove_debug_file(struct sl811 *sl811)
 {
-	debugfs_lookup_and_remove("sl811h", usb_debug_root);
+	debugfs_remove(sl811->debug_file);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1579,7 +1580,7 @@ static const struct hc_driver sl811h_hc_driver = {
 
 /*-------------------------------------------------------------------------*/
 
-static void
+static int
 sl811h_remove(struct platform_device *dev)
 {
 	struct usb_hcd		*hcd = platform_get_drvdata(dev);
@@ -1599,6 +1600,7 @@ sl811h_remove(struct platform_device *dev)
 		iounmap(sl811->addr_reg);
 
 	usb_put_hcd(hcd);
+	return 0;
 }
 
 static int
@@ -1611,16 +1613,10 @@ sl811h_probe(struct platform_device *dev)
 	void __iomem		*addr_reg;
 	void __iomem		*data_reg;
 	int			retval;
-	u8			tmp, ioaddr;
+	u8			tmp, ioaddr = 0;
 	unsigned long		irqflags;
 
 	if (usb_disabled())
-		return -ENODEV;
-
-	/* the chip may be wired for either kind of addressing */
-	addr = platform_get_mem_or_io(dev, 0);
-	data = platform_get_mem_or_io(dev, 1);
-	if (!addr || !data || resource_type(addr) != resource_type(data))
 		return -ENODEV;
 
 	/* basic sanity checks first.  board-specific init logic should
@@ -1635,8 +1631,16 @@ sl811h_probe(struct platform_device *dev)
 	irq = ires->start;
 	irqflags = ires->flags & IRQF_TRIGGER_MASK;
 
-	ioaddr = resource_type(addr) == IORESOURCE_IO;
-	if (ioaddr) {
+	/* the chip may be wired for either kind of addressing */
+	addr = platform_get_resource(dev, IORESOURCE_MEM, 0);
+	data = platform_get_resource(dev, IORESOURCE_MEM, 1);
+	retval = -EBUSY;
+	if (!addr || !data) {
+		addr = platform_get_resource(dev, IORESOURCE_IO, 0);
+		data = platform_get_resource(dev, IORESOURCE_IO, 1);
+		if (!addr || !data)
+			return -ENODEV;
+		ioaddr = 1;
 		/*
 		 * NOTE: 64-bit resource->start is getting truncated
 		 * to avoid compiler warning, assuming that ->start
@@ -1782,7 +1786,7 @@ sl811h_resume(struct platform_device *dev)
 /* this driver is exported so sl811_cs can depend on it */
 struct platform_driver sl811h_driver = {
 	.probe =	sl811h_probe,
-	.remove_new =	sl811h_remove,
+	.remove =	sl811h_remove,
 
 	.suspend =	sl811h_suspend,
 	.resume =	sl811h_resume,

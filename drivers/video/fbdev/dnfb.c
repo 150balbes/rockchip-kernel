@@ -280,7 +280,7 @@ static struct platform_device dnfb_device = {
 	.name	= "dnfb",
 };
 
-static int __init dnfb_init(void)
+int __init dnfb_init(void)
 {
 	int ret;
 

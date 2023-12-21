@@ -2,7 +2,7 @@
 /*
  * Userspace interface to the pkey device driver
  *
- * Copyright IBM Corp. 2017, 2023
+ * Copyright IBM Corp. 2017, 2019
  *
  * Author: Harald Freudenberger <freude@de.ibm.com>
  *
@@ -32,15 +32,10 @@
 #define MINKEYBLOBSIZE	SECKEYBLOBSIZE
 
 /* defines for the type field within the pkey_protkey struct */
-#define PKEY_KEYTYPE_AES_128		1
-#define PKEY_KEYTYPE_AES_192		2
-#define PKEY_KEYTYPE_AES_256		3
-#define PKEY_KEYTYPE_ECC		4
-#define PKEY_KEYTYPE_ECC_P256		5
-#define PKEY_KEYTYPE_ECC_P384		6
-#define PKEY_KEYTYPE_ECC_P521		7
-#define PKEY_KEYTYPE_ECC_ED25519	8
-#define PKEY_KEYTYPE_ECC_ED448		9
+#define PKEY_KEYTYPE_AES_128		      1
+#define PKEY_KEYTYPE_AES_192		      2
+#define PKEY_KEYTYPE_AES_256		      3
+#define PKEY_KEYTYPE_ECC		      4
 
 /* the newer ioctls use a pkey_key_type enum for type information */
 enum pkey_key_type {
@@ -176,7 +171,7 @@ struct pkey_skey2pkey {
 #define PKEY_SKEY2PKEY _IOWR(PKEY_IOCTL_MAGIC, 0x06, struct pkey_skey2pkey)
 
 /*
- * Verify the given CCA AES secure key for being able to be usable with
+ * Verify the given CCA AES secure key for being able to be useable with
  * the pkey module. Check for correct key type and check for having at
  * least one crypto card being able to handle this key (master key
  * or old master key verification pattern matches).
@@ -353,7 +348,7 @@ struct pkey_kblob2pkey2 {
  * Is able to find out which type of secure key is given (CCA AES secure
  * key, CCA AES cipher key, CCA ECC private key, EP11 AES key, EP11 ECC private
  * key) and tries to find all matching crypto cards based on the MKVP and maybe
- * other criteria (like CCA AES cipher keys need a CEX5C or higher, EP11 keys
+ * other criterias (like CCA AES cipher keys need a CEX5C or higher, EP11 keys
  * with BLOB_PKEY_EXTRACTABLE need a CEX7 and EP11 api version 4). The list of
  * APQNs is further filtered by the key's mkvp which needs to match to either
  * the current mkvp (CCA and EP11) or the alternate mkvp (old mkvp, CCA adapters
@@ -370,7 +365,7 @@ struct pkey_kblob2pkey2 {
  * is empty (apqn_entries is 0) the apqn_entries field is updated to the number
  * of apqn targets found and the ioctl returns with 0. If apqn_entries is > 0
  * but the number of apqn targets does not fit into the list, the apqn_targets
- * field is updated with the number of required entries but there are no apqn
+ * field is updatedd with the number of reqired entries but there are no apqn
  * values stored in the list and the ioctl returns with ENOSPC. If no matching
  * APQN is found, the ioctl returns with 0 but the apqn_entries value is 0.
  */
@@ -408,7 +403,7 @@ struct pkey_apqns4key {
  * is empty (apqn_entries is 0) the apqn_entries field is updated to the number
  * of apqn targets found and the ioctl returns with 0. If apqn_entries is > 0
  * but the number of apqn targets does not fit into the list, the apqn_targets
- * field is updated with the number of required entries but there are no apqn
+ * field is updatedd with the number of reqired entries but there are no apqn
  * values stored in the list and the ioctl returns with ENOSPC. If no matching
  * APQN is found, the ioctl returns with 0 but the apqn_entries value is 0.
  */

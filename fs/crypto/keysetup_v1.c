@@ -143,7 +143,6 @@ invalid:
 
 /* Master key referenced by DIRECT_KEY policy */
 struct fscrypt_direct_key {
-	struct super_block		*dk_sb;
 	struct hlist_node		dk_node;
 	refcount_t			dk_refcount;
 	const struct fscrypt_mode	*dk_mode;
@@ -155,7 +154,7 @@ struct fscrypt_direct_key {
 static void free_direct_key(struct fscrypt_direct_key *dk)
 {
 	if (dk) {
-		fscrypt_destroy_prepared_key(dk->dk_sb, &dk->dk_key);
+		fscrypt_destroy_prepared_key(&dk->dk_key);
 		kfree_sensitive(dk);
 	}
 }
@@ -232,10 +231,10 @@ fscrypt_get_direct_key(const struct fscrypt_info *ci, const u8 *raw_key)
 	dk = kzalloc(sizeof(*dk), GFP_KERNEL);
 	if (!dk)
 		return ERR_PTR(-ENOMEM);
-	dk->dk_sb = ci->ci_inode->i_sb;
 	refcount_set(&dk->dk_refcount, 1);
 	dk->dk_mode = ci->ci_mode;
-	err = fscrypt_prepare_key(&dk->dk_key, raw_key, ci);
+	err = fscrypt_prepare_key(&dk->dk_key, raw_key, ci->ci_mode->keysize,
+				  false /*is_hw_wrapped*/, ci);
 	if (err)
 		goto err_free_dk;
 	memcpy(dk->dk_descriptor, ci->ci_policy.v1.master_key_descriptor,

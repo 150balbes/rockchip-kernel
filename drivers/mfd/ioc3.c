@@ -14,7 +14,6 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
-#include <linux/irqdomain.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -105,15 +104,19 @@ static void ioc3_irq_handler(struct irq_desc *desc)
 	struct ioc3_priv_data *ipd = domain->host_data;
 	struct ioc3 __iomem *regs = ipd->regs;
 	u32 pending, mask;
+	unsigned int irq;
 
 	pending = readl(&regs->sio_ir);
 	mask = readl(&regs->sio_ies);
 	pending &= mask; /* Mask off not enabled interrupts */
 
-	if (pending)
-		generic_handle_domain_irq(domain, __ffs(pending));
-	else
+	if (pending) {
+		irq = irq_find_mapping(domain, __ffs(pending));
+		if (irq)
+			generic_handle_irq(irq);
+	} else  {
 		spurious_interrupt();
+	}
 }
 
 /*
@@ -155,13 +158,13 @@ err:
 	return -ENOMEM;
 }
 
-static const struct resource ioc3_uarta_resources[] = {
+static struct resource ioc3_uarta_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, sregs.uarta),
 		       sizeof_field(struct ioc3, sregs.uarta)),
 	DEFINE_RES_IRQ(IOC3_IRQ_SERIAL_A)
 };
 
-static const struct resource ioc3_uartb_resources[] = {
+static struct resource ioc3_uartb_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, sregs.uartb),
 		       sizeof_field(struct ioc3, sregs.uartb)),
 	DEFINE_RES_IRQ(IOC3_IRQ_SERIAL_B)
@@ -210,7 +213,7 @@ static int ioc3_serial_setup(struct ioc3_priv_data *ipd)
 	return 0;
 }
 
-static const struct resource ioc3_kbd_resources[] = {
+static struct resource ioc3_kbd_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, serio),
 		       sizeof_field(struct ioc3, serio)),
 	DEFINE_RES_IRQ(IOC3_IRQ_KBD)
@@ -239,7 +242,7 @@ static int ioc3_kbd_setup(struct ioc3_priv_data *ipd)
 	return 0;
 }
 
-static const struct resource ioc3_eth_resources[] = {
+static struct resource ioc3_eth_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, eth),
 		       sizeof_field(struct ioc3, eth)),
 	DEFINE_RES_MEM(offsetof(struct ioc3, ssram),
@@ -247,7 +250,7 @@ static const struct resource ioc3_eth_resources[] = {
 	DEFINE_RES_IRQ(0)
 };
 
-static const struct resource ioc3_w1_resources[] = {
+static struct resource ioc3_w1_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, mcr),
 		       sizeof_field(struct ioc3, mcr)),
 };
@@ -291,7 +294,7 @@ static int ioc3_eth_setup(struct ioc3_priv_data *ipd)
 	return 0;
 }
 
-static const struct resource ioc3_m48t35_resources[] = {
+static struct resource ioc3_m48t35_resources[] = {
 	DEFINE_RES_MEM(IOC3_BYTEBUS_DEV0, M48T35_REG_SIZE)
 };
 
@@ -323,7 +326,7 @@ static struct ds1685_rtc_platform_data ip30_rtc_platform_data = {
 	.access_type = ds1685_reg_indirect,
 };
 
-static const struct resource ioc3_rtc_ds1685_resources[] = {
+static struct resource ioc3_rtc_ds1685_resources[] = {
 	DEFINE_RES_MEM(IOC3_BYTEBUS_DEV1, 1),
 	DEFINE_RES_MEM(IOC3_BYTEBUS_DEV2, 1),
 	DEFINE_RES_IRQ(0)
@@ -356,7 +359,7 @@ static int ioc3_ds1685_setup(struct ioc3_priv_data *ipd)
 };
 
 
-static const struct resource ioc3_leds_resources[] = {
+static struct resource ioc3_leds_resources[] = {
 	DEFINE_RES_MEM(offsetof(struct ioc3, gppr[0]),
 		       sizeof_field(struct ioc3, gppr[0])),
 	DEFINE_RES_MEM(offsetof(struct ioc3, gppr[1]),

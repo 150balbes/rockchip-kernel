@@ -15,6 +15,7 @@
 #define GIC_CPU_RUNNINGPRI		0x14
 #define GIC_CPU_HIGHPRI			0x18
 #define GIC_CPU_ALIAS_BINPOINT		0x1c
+#define GIC_CPU_ALIAS_INTACK		0x20
 #define GIC_CPU_ACTIVEPRIO		0xd0
 #define GIC_CPU_IDENT			0xfc
 #define GIC_CPU_DEACTIVATE		0x1000
@@ -150,6 +151,12 @@ int gic_of_init(struct device_node *node, struct device_node *parent);
  * the gic_chip_data structure is dynamically allocated.
  */
 int gic_of_init_child(struct device *dev, struct gic_chip_data **gic, int irq);
+
+/*
+ * Legacy platforms not converted to DT yet must use this to init
+ * their GIC
+ */
+void gic_init(void __iomem *dist , void __iomem *cpu);
 
 void gic_send_sgi(unsigned int cpu_id, unsigned int irq);
 int gic_get_cpu_id(unsigned int cpu);

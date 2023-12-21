@@ -6,9 +6,8 @@
  * Author(s): Jan Glauber <jang@linux.vnet.ibm.com>
  */
 #include <linux/uaccess.h>
+#include <linux/stop_machine.h>
 #include <linux/jump_label.h>
-#include <linux/module.h>
-#include <asm/text-patching.h>
 #include <asm/ipl.h>
 
 struct insn {
@@ -44,8 +43,14 @@ static void jump_label_bug(struct jump_entry *entry, struct insn *expected,
 	panic("Corrupted kernel text");
 }
 
-static void jump_label_transform(struct jump_entry *entry,
-				 enum jump_label_type type)
+static struct insn orignop = {
+	.opcode = 0xc004,
+	.offset = JUMP_LABEL_NOP_OFFSET >> 1,
+};
+
+static void __jump_label_transform(struct jump_entry *entry,
+				   enum jump_label_type type,
+				   int init)
 {
 	void *code = (void *)jump_entry_code(entry);
 	struct insn old, new;
@@ -57,26 +62,29 @@ static void jump_label_transform(struct jump_entry *entry,
 		jump_label_make_branch(entry, &old);
 		jump_label_make_nop(entry, &new);
 	}
-	if (memcmp(code, &old, sizeof(old)))
-		jump_label_bug(entry, &old, &new);
+	if (init) {
+		if (memcmp(code, &orignop, sizeof(orignop)))
+			jump_label_bug(entry, &orignop, &new);
+	} else {
+		if (memcmp(code, &old, sizeof(old)))
+			jump_label_bug(entry, &old, &new);
+	}
 	s390_kernel_write(code, &new, sizeof(new));
+}
+
+static void __jump_label_sync(void *dummy)
+{
 }
 
 void arch_jump_label_transform(struct jump_entry *entry,
 			       enum jump_label_type type)
 {
-	jump_label_transform(entry, type);
-	text_poke_sync();
+	__jump_label_transform(entry, type, 0);
+	smp_call_function(__jump_label_sync, NULL, 1);
 }
 
-bool arch_jump_label_transform_queue(struct jump_entry *entry,
-				     enum jump_label_type type)
+void arch_jump_label_transform_static(struct jump_entry *entry,
+				      enum jump_label_type type)
 {
-	jump_label_transform(entry, type);
-	return true;
-}
-
-void arch_jump_label_transform_apply(void)
-{
-	text_poke_sync();
+	__jump_label_transform(entry, type, 1);
 }

@@ -8,7 +8,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/acpi.h>
-#include <linux/dmi.h>
 #include <linux/input.h>
 #include <linux/input/sparse-keymap.h>
 #include <linux/kernel.h>
@@ -17,14 +16,11 @@
 #include <linux/platform_device.h>
 #include <linux/types.h>
 
-#include <acpi/battery.h>
-
-#define LED_DEVICE(_name, max, flag) struct led_classdev _name = { \
+#define LED_DEVICE(_name, max) struct led_classdev _name = { \
 	.name           = __stringify(_name),   \
 	.max_brightness = max,                  \
 	.brightness_set = _name##_set,          \
 	.brightness_get = _name##_get,          \
-	.flags = flag,                          \
 }
 
 MODULE_AUTHOR("Matan Ziv-Av");
@@ -62,6 +58,7 @@ MODULE_ALIAS("wmi:" WMI_EVENT_GUID2);
 MODULE_ALIAS("wmi:" WMI_EVENT_GUID3);
 MODULE_ALIAS("wmi:" WMI_METHOD_WMAB);
 MODULE_ALIAS("wmi:" WMI_METHOD_WMBB);
+MODULE_ALIAS("acpi*:LGEX0815:*");
 
 static struct platform_device *pf_device;
 static struct input_dev *wmi_input_dev;
@@ -72,13 +69,9 @@ static u32 inited;
 #define INIT_INPUT_ACPI         0x04
 #define INIT_SPARSE_KEYMAP      0x80
 
-static int battery_limit_use_wmbb;
-static struct led_classdev kbd_backlight;
-static enum led_brightness get_kbd_backlight_level(void);
-
 static const struct key_entry wmi_keymap[] = {
 	{KE_KEY, 0x70, {KEY_F15} },	 /* LG control panel (F1) */
-	{KE_KEY, 0x74, {KEY_F21} },	 /* Touchpad toggle (F5) */
+	{KE_KEY, 0x74, {KEY_F13} },	 /* Touchpad toggle (F5) */
 	{KE_KEY, 0xf020000, {KEY_F14} }, /* Read mode (F9) */
 	{KE_KEY, 0x10000000, {KEY_F16} },/* Keyboard backlight (F8) - pressing
 					  * this key both sends an event and
@@ -221,16 +214,10 @@ static void wmi_notify(u32 value, void *context)
 		int eventcode = obj->integer.value;
 		struct key_entry *key;
 
-		if (eventcode == 0x10000000) {
-			led_classdev_notify_brightness_hw_changed(
-				&kbd_backlight, get_kbd_backlight_level());
-		} else {
-			key = sparse_keymap_entry_from_scancode(
-				wmi_input_dev, eventcode);
-			if (key && key->type == KE_KEY)
-				sparse_keymap_report_entry(wmi_input_dev,
-							   key, 1, true);
-		}
+		key =
+		    sparse_keymap_entry_from_scancode(wmi_input_dev, eventcode);
+		if (key && key->type == KE_KEY)
+			sparse_keymap_report_entry(wmi_input_dev, key, 1, true);
 	}
 
 	pr_debug("Type: %i    Eventcode: 0x%llx\n", obj->type,
@@ -332,7 +319,7 @@ static ssize_t fan_mode_show(struct device *dev,
 	status = r->integer.value & 0x01;
 	kfree(r);
 
-	return sysfs_emit(buffer, "%d\n", status);
+	return snprintf(buffer, PAGE_SIZE, "%d\n", status);
 }
 
 static ssize_t usb_charge_store(struct device *dev,
@@ -374,7 +361,7 @@ static ssize_t usb_charge_show(struct device *dev,
 
 	kfree(r);
 
-	return sysfs_emit(buffer, "%d\n", status);
+	return snprintf(buffer, PAGE_SIZE, "%d\n", status);
 }
 
 static ssize_t reader_mode_store(struct device *dev,
@@ -416,7 +403,7 @@ static ssize_t reader_mode_show(struct device *dev,
 
 	kfree(r);
 
-	return sysfs_emit(buffer, "%d\n", status);
+	return snprintf(buffer, PAGE_SIZE, "%d\n", status);
 }
 
 static ssize_t fn_lock_store(struct device *dev,
@@ -457,27 +444,24 @@ static ssize_t fn_lock_show(struct device *dev,
 	status = !!r->buffer.pointer[0];
 	kfree(r);
 
-	return sysfs_emit(buffer, "%d\n", status);
+	return snprintf(buffer, PAGE_SIZE, "%d\n", status);
 }
 
-static ssize_t charge_control_end_threshold_store(struct device *dev,
-						  struct device_attribute *attr,
-						  const char *buf, size_t count)
+static ssize_t battery_care_limit_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buffer, size_t count)
 {
 	unsigned long value;
 	int ret;
 
-	ret = kstrtoul(buf, 10, &value);
+	ret = kstrtoul(buffer, 10, &value);
 	if (ret)
 		return ret;
 
 	if (value == 100 || value == 80) {
 		union acpi_object *r;
 
-		if (battery_limit_use_wmbb)
-			r = lg_wmbb(WMBB_BATT_LIMIT, WM_SET, value);
-		else
-			r = lg_wmab(WM_BATT_LIMIT, WM_SET, value);
+		r = lg_wmab(WM_BATT_LIMIT, WM_SET, value);
 		if (!r)
 			return -EIO;
 
@@ -488,85 +472,35 @@ static ssize_t charge_control_end_threshold_store(struct device *dev,
 	return -EINVAL;
 }
 
-static ssize_t charge_control_end_threshold_show(struct device *device,
-						 struct device_attribute *attr,
-						 char *buf)
-{
-	unsigned int status;
-	union acpi_object *r;
-
-	if (battery_limit_use_wmbb) {
-		r = lg_wmbb(WMBB_BATT_LIMIT, WM_GET, 0);
-		if (!r)
-			return -EIO;
-
-		if (r->type != ACPI_TYPE_BUFFER) {
-			kfree(r);
-			return -EIO;
-		}
-
-		status = r->buffer.pointer[0x10];
-	} else {
-		r = lg_wmab(WM_BATT_LIMIT, WM_GET, 0);
-		if (!r)
-			return -EIO;
-
-		if (r->type != ACPI_TYPE_INTEGER) {
-			kfree(r);
-			return -EIO;
-		}
-
-		status = r->integer.value;
-	}
-	kfree(r);
-	if (status != 80 && status != 100)
-		status = 0;
-
-	return sysfs_emit(buf, "%d\n", status);
-}
-
 static ssize_t battery_care_limit_show(struct device *dev,
 				       struct device_attribute *attr,
 				       char *buffer)
 {
-	return charge_control_end_threshold_show(dev, attr, buffer);
-}
+	unsigned int status;
+	union acpi_object *r;
 
-static ssize_t battery_care_limit_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buffer, size_t count)
-{
-	return charge_control_end_threshold_store(dev, attr, buffer, count);
+	r = lg_wmab(WM_BATT_LIMIT, WM_GET, 0);
+	if (!r)
+		return -EIO;
+
+	if (r->type != ACPI_TYPE_INTEGER) {
+		kfree(r);
+		return -EIO;
+	}
+
+	status = r->integer.value;
+	kfree(r);
+	if (status != 80 && status != 100)
+		status = 0;
+
+	return snprintf(buffer, PAGE_SIZE, "%d\n", status);
 }
 
 static DEVICE_ATTR_RW(fan_mode);
 static DEVICE_ATTR_RW(usb_charge);
 static DEVICE_ATTR_RW(reader_mode);
 static DEVICE_ATTR_RW(fn_lock);
-static DEVICE_ATTR_RW(charge_control_end_threshold);
 static DEVICE_ATTR_RW(battery_care_limit);
-
-static int lg_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
-{
-	if (device_create_file(&battery->dev,
-			       &dev_attr_charge_control_end_threshold))
-		return -ENODEV;
-
-	return 0;
-}
-
-static int lg_battery_remove(struct power_supply *battery, struct acpi_battery_hook *hook)
-{
-	device_remove_file(&battery->dev,
-			   &dev_attr_charge_control_end_threshold);
-	return 0;
-}
-
-static struct acpi_battery_hook battery_hook = {
-	.add_battery = lg_battery_add,
-	.remove_battery = lg_battery_remove,
-	.name = "LG Battery Extension",
-};
 
 static struct attribute *dev_attributes[] = {
 	&dev_attr_fan_mode.attr,
@@ -595,7 +529,7 @@ static enum led_brightness tpad_led_get(struct led_classdev *cdev)
 	return ggov(GOV_TLED) > 0 ? LED_ON : LED_OFF;
 }
 
-static LED_DEVICE(tpad_led, 1, 0);
+static LED_DEVICE(tpad_led, 1);
 
 static void kbd_backlight_set(struct led_classdev *cdev,
 			      enum led_brightness brightness)
@@ -612,7 +546,7 @@ static void kbd_backlight_set(struct led_classdev *cdev,
 	kfree(r);
 }
 
-static enum led_brightness get_kbd_backlight_level(void)
+static enum led_brightness kbd_backlight_get(struct led_classdev *cdev)
 {
 	union acpi_object *r;
 	int val;
@@ -643,12 +577,7 @@ static enum led_brightness get_kbd_backlight_level(void)
 	return val;
 }
 
-static enum led_brightness kbd_backlight_get(struct led_classdev *cdev)
-{
-	return get_kbd_backlight_level();
-}
-
-static LED_DEVICE(kbd_backlight, 255, LED_BRIGHT_HW_CHANGED);
+static LED_DEVICE(kbd_backlight, 255);
 
 static void wmi_input_destroy(void)
 {
@@ -673,8 +602,6 @@ static struct platform_driver pf_driver = {
 static int acpi_add(struct acpi_device *device)
 {
 	int ret;
-	const char *product;
-	int year = 2017;
 
 	if (pf_device)
 		return 0;
@@ -692,54 +619,6 @@ static int acpi_add(struct acpi_device *device)
 		pr_err("unable to register platform device\n");
 		goto out_platform_registered;
 	}
-	product = dmi_get_system_info(DMI_PRODUCT_NAME);
-	if (product && strlen(product) > 4)
-		switch (product[4]) {
-		case '5':
-			if (strlen(product) > 5)
-				switch (product[5]) {
-				case 'N':
-					year = 2021;
-					break;
-				case '0':
-					year = 2016;
-					break;
-				default:
-					year = 2022;
-				}
-			break;
-		case '6':
-			year = 2016;
-			break;
-		case '7':
-			year = 2017;
-			break;
-		case '8':
-			year = 2018;
-			break;
-		case '9':
-			year = 2019;
-			break;
-		case '0':
-			if (strlen(product) > 5)
-				switch (product[5]) {
-				case 'N':
-					year = 2020;
-					break;
-				case 'P':
-					year = 2021;
-					break;
-				default:
-					year = 2022;
-				}
-			break;
-		default:
-			year = 2019;
-		}
-	pr_info("product: %s  year: %d\n", product, year);
-
-	if (year >= 2019)
-		battery_limit_use_wmbb = 1;
 
 	ret = sysfs_create_group(&pf_device->dev.kobj, &dev_attribute_group);
 	if (ret)
@@ -750,7 +629,6 @@ static int acpi_add(struct acpi_device *device)
 	led_classdev_register(&pf_device->dev, &tpad_led);
 
 	wmi_input_setup();
-	battery_hook_register(&battery_hook);
 
 	return 0;
 
@@ -761,18 +639,19 @@ out_platform_registered:
 	return ret;
 }
 
-static void acpi_remove(struct acpi_device *device)
+static int acpi_remove(struct acpi_device *device)
 {
 	sysfs_remove_group(&pf_device->dev.kobj, &dev_attribute_group);
 
 	led_classdev_unregister(&tpad_led);
 	led_classdev_unregister(&kbd_backlight);
 
-	battery_hook_unregister(&battery_hook);
 	wmi_input_destroy();
 	platform_device_unregister(pf_device);
 	pf_device = NULL;
 	platform_driver_unregister(&pf_driver);
+
+	return 0;
 }
 
 static const struct acpi_device_id device_ids[] = {
@@ -799,7 +678,7 @@ static int __init acpi_init(void)
 
 	result = acpi_bus_register_driver(&acpi_driver);
 	if (result < 0) {
-		pr_debug("Error registering driver\n");
+		ACPI_DEBUG_PRINT((ACPI_DB_ERROR, "Error registering driver\n"));
 		return -ENODEV;
 	}
 

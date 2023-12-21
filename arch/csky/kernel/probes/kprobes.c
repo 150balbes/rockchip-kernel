@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#define pr_fmt(fmt) "kprobes: " fmt
-
 #include <linux/kprobes.h>
 #include <linux/extable.h>
 #include <linux/slab.h>
@@ -79,8 +77,10 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 {
 	unsigned long probe_addr = (unsigned long)p->addr;
 
-	if (probe_addr & 0x1)
-		return -EILSEQ;
+	if (probe_addr & 0x1) {
+		pr_warn("Address not aligned.\n");
+		return -EINVAL;
+	}
 
 	/* copy instruction */
 	p->opcode = le32_to_cpu(*p->addr);
@@ -229,7 +229,7 @@ static int __kprobes reenter_kprobe(struct kprobe *p,
 		break;
 	case KPROBE_HIT_SS:
 	case KPROBE_REENTER:
-		pr_warn("Failed to recover from reentered kprobes.\n");
+		pr_warn("Unrecoverable kprobe detected.\n");
 		dump_kprobe(p);
 		BUG();
 		break;
@@ -287,7 +287,8 @@ int __kprobes kprobe_fault_handler(struct pt_regs *regs, unsigned int trapnr)
 		 * normal page fault.
 		 */
 		regs->pc = (unsigned long) cur->addr;
-		BUG_ON(!instruction_pointer(regs));
+		if (!instruction_pointer(regs))
+			BUG();
 
 		if (kcb->kprobe_status == KPROBE_REENTER)
 			restore_previous_kprobe(kcb);
@@ -297,6 +298,23 @@ int __kprobes kprobe_fault_handler(struct pt_regs *regs, unsigned int trapnr)
 		break;
 	case KPROBE_HIT_ACTIVE:
 	case KPROBE_HIT_SSDONE:
+		/*
+		 * We increment the nmissed count for accounting,
+		 * we can also use npre/npostfault count for accounting
+		 * these specific fault cases.
+		 */
+		kprobes_inc_nmissed_count(cur);
+
+		/*
+		 * We come here because instructions in the pre/post
+		 * handler caused the page_fault, this could happen
+		 * if handler tries to access user space by
+		 * copy_from_user(), get_user() etc. Let the
+		 * user-specified handler try to fix it first.
+		 */
+		if (cur->fault_handler && cur->fault_handler(cur, regs, trapnr))
+			return 1;
+
 		/*
 		 * In case the user-specified fault handler returned
 		 * zero, try to fix up.
@@ -390,7 +408,7 @@ int __init arch_populate_kprobe_blacklist(void)
 
 void __kprobes __used *trampoline_probe_handler(struct pt_regs *regs)
 {
-	return (void *)kretprobe_trampoline_handler(regs, NULL);
+	return (void *)kretprobe_trampoline_handler(regs, &kretprobe_trampoline, NULL);
 }
 
 void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
@@ -398,7 +416,7 @@ void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
 {
 	ri->ret_addr = (kprobe_opcode_t *)regs->lr;
 	ri->fp = NULL;
-	regs->lr = (unsigned long) &__kretprobe_trampoline;
+	regs->lr = (unsigned long) &kretprobe_trampoline;
 }
 
 int __kprobes arch_trampoline_kprobe(struct kprobe *p)

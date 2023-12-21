@@ -139,7 +139,7 @@ static inline bool ina3221_is_enabled(struct ina3221_data *ina, int channel)
 	       (ina->reg_config & INA3221_CONFIG_CHx_EN(channel));
 }
 
-/*
+/**
  * Helper function to return the resistor value for current summation.
  *
  * There is a condition to calculate current summation -- all the shunt
@@ -196,11 +196,13 @@ static inline u32 ina3221_reg_to_interval_us(u16 config)
 	u32 channels = hweight16(config & INA3221_CONFIG_CHs_EN_MASK);
 	u32 vbus_ct_idx = INA3221_CONFIG_VBUS_CT(config);
 	u32 vsh_ct_idx = INA3221_CONFIG_VSH_CT(config);
+	u32 samples_idx = INA3221_CONFIG_AVG(config);
+	u32 samples = ina3221_avg_samples[samples_idx];
 	u32 vbus_ct = ina3221_conv_time[vbus_ct_idx];
 	u32 vsh_ct = ina3221_conv_time[vsh_ct_idx];
 
 	/* Calculate total conversion time */
-	return channels * (vbus_ct + vsh_ct);
+	return channels * (vbus_ct + vsh_ct) * samples;
 }
 
 static inline int ina3221_wait_for_data(struct ina3221_data *ina)
@@ -286,14 +288,13 @@ static int ina3221_read_in(struct device *dev, u32 attr, int channel, long *val)
 			return -ENODATA;
 
 		/* Write CONFIG register to trigger a single-shot measurement */
-		if (ina->single_shot) {
+		if (ina->single_shot)
 			regmap_write(ina->regmap, INA3221_CONFIG,
 				     ina->reg_config);
 
-			ret = ina3221_wait_for_data(ina);
-			if (ret)
-				return ret;
-		}
+		ret = ina3221_wait_for_data(ina);
+		if (ret)
+			return ret;
 
 		ret = ina3221_read_value(ina, reg, &regval);
 		if (ret)
@@ -343,14 +344,13 @@ static int ina3221_read_curr(struct device *dev, u32 attr,
 			return -ENODATA;
 
 		/* Write CONFIG register to trigger a single-shot measurement */
-		if (ina->single_shot) {
+		if (ina->single_shot)
 			regmap_write(ina->regmap, INA3221_CONFIG,
 				     ina->reg_config);
 
-			ret = ina3221_wait_for_data(ina);
-			if (ret)
-				return ret;
-		}
+		ret = ina3221_wait_for_data(ina);
+		if (ret)
+			return ret;
 
 		fallthrough;
 	case hwmon_curr_crit:
@@ -650,7 +650,7 @@ static umode_t ina3221_is_visible(const void *drvdata,
 				   HWMON_C_CRIT | HWMON_C_CRIT_ALARM | \
 				   HWMON_C_MAX | HWMON_C_MAX_ALARM)
 
-static const struct hwmon_channel_info * const ina3221_info[] = {
+static const struct hwmon_channel_info *ina3221_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_SAMPLES,
 			   HWMON_C_UPDATE_INTERVAL),
@@ -698,7 +698,7 @@ static ssize_t ina3221_shunt_show(struct device *dev,
 	unsigned int channel = sd_attr->index;
 	struct ina3221_input *input = &ina->inputs[channel];
 
-	return sysfs_emit(buf, "%d\n", input->shunt_resistor);
+	return snprintf(buf, PAGE_SIZE, "%d\n", input->shunt_resistor);
 }
 
 static ssize_t ina3221_shunt_store(struct device *dev,
@@ -772,7 +772,7 @@ static int ina3221_probe_child_from_dt(struct device *dev,
 		return ret;
 	} else if (val > INA3221_CHANNEL3) {
 		dev_err(dev, "invalid reg %d of %pOFn\n", val, child);
-		return -EINVAL;
+		return ret;
 	}
 
 	input = &ina->inputs[val];
@@ -913,7 +913,7 @@ fail:
 	return ret;
 }
 
-static void ina3221_remove(struct i2c_client *client)
+static int ina3221_remove(struct i2c_client *client)
 {
 	struct ina3221_data *ina = dev_get_drvdata(&client->dev);
 	int i;
@@ -926,9 +926,11 @@ static void ina3221_remove(struct i2c_client *client)
 		pm_runtime_put_noidle(ina->pm_dev);
 
 	mutex_destroy(&ina->lock);
+
+	return 0;
 }
 
-static int ina3221_suspend(struct device *dev)
+static int __maybe_unused ina3221_suspend(struct device *dev)
 {
 	struct ina3221_data *ina = dev_get_drvdata(dev);
 	int ret;
@@ -951,7 +953,7 @@ static int ina3221_suspend(struct device *dev)
 	return 0;
 }
 
-static int ina3221_resume(struct device *dev)
+static int __maybe_unused ina3221_resume(struct device *dev)
 {
 	struct ina3221_data *ina = dev_get_drvdata(dev);
 	int ret;
@@ -994,8 +996,11 @@ static int ina3221_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_RUNTIME_DEV_PM_OPS(ina3221_pm, ina3221_suspend, ina3221_resume,
-				 NULL);
+static const struct dev_pm_ops ina3221_pm = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+	SET_RUNTIME_PM_OPS(ina3221_suspend, ina3221_resume, NULL)
+};
 
 static const struct of_device_id ina3221_of_match_table[] = {
 	{ .compatible = "ti,ina3221", },
@@ -1010,12 +1015,12 @@ static const struct i2c_device_id ina3221_ids[] = {
 MODULE_DEVICE_TABLE(i2c, ina3221_ids);
 
 static struct i2c_driver ina3221_i2c_driver = {
-	.probe = ina3221_probe,
+	.probe_new = ina3221_probe,
 	.remove = ina3221_remove,
 	.driver = {
 		.name = INA3221_DRIVER_NAME,
 		.of_match_table = ina3221_of_match_table,
-		.pm = pm_ptr(&ina3221_pm),
+		.pm = &ina3221_pm,
 	},
 	.id_table = ina3221_ids,
 };

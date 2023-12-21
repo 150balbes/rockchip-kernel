@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/resource.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -106,6 +107,7 @@ static void print_hist(int fd)
 
 int main(int ac, char **argv)
 {
+	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	struct bpf_link *links[2];
 	struct bpf_program *prog;
 	struct bpf_object *obj;
@@ -123,6 +125,11 @@ int main(int ac, char **argv)
 			       "  -t text only\n");
 			return 1;
 		}
+	}
+
+	if (setrlimit(RLIMIT_MEMLOCK, &r)) {
+		perror("setrlimit(RLIMIT_MEMLOCK)");
+		return 1;
 	}
 
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);

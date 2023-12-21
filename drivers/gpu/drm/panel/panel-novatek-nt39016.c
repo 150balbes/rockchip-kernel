@@ -12,6 +12,7 @@
 #include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
@@ -257,13 +258,16 @@ static int nt39016_probe(struct spi_device *spi)
 		return -EINVAL;
 
 	panel->supply = devm_regulator_get(dev, "power");
-	if (IS_ERR(panel->supply))
-		return dev_err_probe(dev, PTR_ERR(panel->supply),
-				     "Failed to get power supply\n");
+	if (IS_ERR(panel->supply)) {
+		dev_err(dev, "Failed to get power supply\n");
+		return PTR_ERR(panel->supply);
+	}
 
 	panel->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(panel->reset_gpio))
-		return dev_err_probe(dev, PTR_ERR(panel->reset_gpio), "Failed to get reset GPIO\n");
+	if (IS_ERR(panel->reset_gpio)) {
+		dev_err(dev, "Failed to get reset GPIO\n");
+		return PTR_ERR(panel->reset_gpio);
+	}
 
 	spi->bits_per_word = 8;
 	spi->mode = SPI_MODE_3 | SPI_3WIRE;
@@ -283,15 +287,18 @@ static int nt39016_probe(struct spi_device *spi)
 		       DRM_MODE_CONNECTOR_DPI);
 
 	err = drm_panel_of_backlight(&panel->drm_panel);
-	if (err)
-		return dev_err_probe(dev, err, "Failed to get backlight handle\n");
+	if (err) {
+		if (err != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get backlight handle\n");
+		return err;
+	}
 
 	drm_panel_add(&panel->drm_panel);
 
 	return 0;
 }
 
-static void nt39016_remove(struct spi_device *spi)
+static int nt39016_remove(struct spi_device *spi)
 {
 	struct nt39016 *panel = spi_get_drvdata(spi);
 
@@ -299,6 +306,8 @@ static void nt39016_remove(struct spi_device *spi)
 
 	nt39016_disable(&panel->drm_panel);
 	nt39016_unprepare(&panel->drm_panel);
+
+	return 0;
 }
 
 static const struct drm_display_mode kd035g6_display_modes[] = {

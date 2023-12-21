@@ -295,8 +295,6 @@ static int btsdio_probe(struct sdio_func *func,
 		switch (func->device) {
 		case SDIO_DEVICE_ID_BROADCOM_43341:
 		case SDIO_DEVICE_ID_BROADCOM_43430:
-		case SDIO_DEVICE_ID_BROADCOM_4345:
-		case SDIO_DEVICE_ID_BROADCOM_43455:
 		case SDIO_DEVICE_ID_BROADCOM_4356:
 			return -ENODEV;
 		}
@@ -357,7 +355,6 @@ static void btsdio_remove(struct sdio_func *func)
 	if (!data)
 		return;
 
-	cancel_work_sync(&data->work);
 	hdev = data->hdev;
 
 	sdio_set_drvdata(func, NULL);

@@ -58,9 +58,9 @@ int sdw_slave_modalias(const struct sdw_slave *slave, char *buf, size_t size)
 			slave->id.sdw_version, slave->id.class_id);
 }
 
-int sdw_slave_uevent(const struct device *dev, struct kobj_uevent_env *env)
+int sdw_slave_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct sdw_slave *slave = dev_to_sdw_dev(dev);
+	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	char modalias[32];
 
 	sdw_slave_modalias(slave, modalias, sizeof(modalias));
@@ -82,7 +82,6 @@ static int sdw_drv_probe(struct device *dev)
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct sdw_driver *drv = drv_to_sdw_driver(dev->driver);
 	const struct sdw_device_id *id;
-	const char *name;
 	int ret;
 
 	/*
@@ -98,6 +97,8 @@ static int sdw_drv_probe(struct device *dev)
 	if (!id)
 		return -ENODEV;
 
+	slave->ops = drv->ops;
+
 	/*
 	 * attach to power domain but don't turn on (last arg)
 	 */
@@ -107,20 +108,14 @@ static int sdw_drv_probe(struct device *dev)
 
 	ret = drv->probe(slave, id);
 	if (ret) {
-		name = drv->name;
-		if (!name)
-			name = drv->driver.name;
-
-		dev_err(dev, "Probe of %s failed: %d\n", name, ret);
+		dev_err(dev, "Probe of %s failed: %d\n", drv->name, ret);
 		dev_pm_domain_detach(dev, false);
 		return ret;
 	}
 
-	mutex_lock(&slave->sdw_dev_lock);
-
 	/* device is probed so let's read the properties now */
-	if (drv->ops && drv->ops->read_prop)
-		drv->ops->read_prop(slave);
+	if (slave->ops && slave->ops->read_prop)
+		slave->ops->read_prop(slave);
 
 	/* init the sysfs as we have properties now */
 	ret = sdw_slave_sysfs_init(slave);
@@ -140,19 +135,7 @@ static int sdw_drv_probe(struct device *dev)
 					     slave->prop.clk_stop_timeout);
 
 	slave->probed = true;
-
-	/*
-	 * if the probe happened after the bus was started, notify the codec driver
-	 * of the current hardware status to e.g. start the initialization.
-	 * Errors are only logged as warnings to avoid failing the probe.
-	 */
-	if (drv->ops && drv->ops->update_status) {
-		ret = drv->ops->update_status(slave, slave->status);
-		if (ret < 0)
-			dev_warn(dev, "%s: update_status failed with status %d\n", __func__, ret);
-	}
-
-	mutex_unlock(&slave->sdw_dev_lock);
+	complete(&slave->probe_complete);
 
 	dev_dbg(dev, "probe complete\n");
 
@@ -164,10 +147,6 @@ static int sdw_drv_remove(struct device *dev)
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct sdw_driver *drv = drv_to_sdw_driver(dev->driver);
 	int ret = 0;
-
-	mutex_lock(&slave->sdw_dev_lock);
-	slave->probed = false;
-	mutex_unlock(&slave->sdw_dev_lock);
 
 	if (drv->remove)
 		ret = drv->remove(slave);
@@ -195,16 +174,11 @@ static void sdw_drv_shutdown(struct device *dev)
  */
 int __sdw_register_driver(struct sdw_driver *drv, struct module *owner)
 {
-	const char *name;
-
 	drv->driver.bus = &sdw_bus_type;
 
 	if (!drv->probe) {
-		name = drv->name;
-		if (!name)
-			name = drv->driver.name;
-
-		pr_err("driver %s didn't provide SDW probe routine\n", name);
+		pr_err("driver %s didn't provide SDW probe routine\n",
+		       drv->name);
 		return -EINVAL;
 	}
 

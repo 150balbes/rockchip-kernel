@@ -741,7 +741,8 @@ static const struct dvb_tuner_ops tda18250_ops = {
 	.sleep = tda18250_sleep,
 };
 
-static int tda18250_probe(struct i2c_client *client)
+static int tda18250_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct tda18250_config *cfg = client->dev.platform_data;
 	struct dvb_frontend *fe = cfg->fe;
@@ -855,7 +856,7 @@ err:
 	return ret;
 }
 
-static void tda18250_remove(struct i2c_client *client)
+static int tda18250_remove(struct i2c_client *client)
 {
 	struct tda18250_dev *dev = i2c_get_clientdata(client);
 	struct dvb_frontend *fe = dev->fe;
@@ -865,6 +866,8 @@ static void tda18250_remove(struct i2c_client *client)
 	memset(&fe->ops.tuner_ops, 0, sizeof(struct dvb_tuner_ops));
 	fe->tuner_priv = NULL;
 	kfree(dev);
+
+	return 0;
 }
 
 static const struct i2c_device_id tda18250_id_table[] = {

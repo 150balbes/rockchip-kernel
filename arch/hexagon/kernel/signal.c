@@ -7,6 +7,7 @@
 
 #include <linux/linkage.h>
 #include <linux/syscalls.h>
+#include <linux/tracehook.h>
 #include <linux/sched/task_stack.h>
 
 #include <asm/registers.h>

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 #include "sun4i-ss.h"
 
 int sun4i_ss_prng_seed(struct crypto_rng *tfm, const u8 *seed,
@@ -29,14 +28,9 @@ int sun4i_ss_prng_generate(struct crypto_rng *tfm, const u8 *src,
 	algt = container_of(alg, struct sun4i_ss_alg_template, alg.rng);
 	ss = algt->ss;
 
-	err = pm_runtime_resume_and_get(ss->dev);
+	err = pm_runtime_get_sync(ss->dev);
 	if (err < 0)
 		return err;
-
-	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SUN4I_SS_DEBUG)) {
-		algt->stat_req++;
-		algt->stat_bytes += todo;
-	}
 
 	spin_lock_bh(&ss->slock);
 

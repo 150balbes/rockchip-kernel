@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/iio/adc/ti,ads1015.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: TI ADS1015/ADS1115 4 channel I2C analog to digital converter
+title: TI ADS1015 4 channel I2C analog to digital converter
 
 maintainers:
   - Daniel Baluta <daniel.baluta@nxp.com>
@@ -15,10 +15,7 @@ description: |
 
 properties:
   compatible:
-    enum:
-      - ti,ads1015
-      - ti,ads1115
-      - ti,tla2024
+    const: ti,ads1015
 
   reg:
     maxItems: 1
@@ -43,7 +40,6 @@ additionalProperties: false
 patternProperties:
   "^channel@[0-7]+$":
     type: object
-    additionalProperties: false
     description:
       Child nodes needed for each channel that the platform uses.
 
@@ -104,12 +100,12 @@ examples:
             #address-cells = <1>;
             #size-cells = <0>;
             channel@0 {
-                reg = <0>;
+              reg = <0>;
             };
             channel@4 {
-                reg = <4>;
-                ti,gain = <3>;
-                ti,datarate = <5>;
+              reg = <4>;
+              ti,gain = <3>;
+              ti,datarate = <5>;
             };
         };
     };

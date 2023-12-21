@@ -38,20 +38,19 @@
 struct wake_q_head {
 	struct wake_q_node *first;
 	struct wake_q_node **lastp;
+	int count;
 };
 
 #define WAKE_Q_TAIL ((struct wake_q_node *) 0x01)
 
-#define WAKE_Q_HEAD_INITIALIZER(name)				\
-	{ WAKE_Q_TAIL, &name.first }
-
-#define DEFINE_WAKE_Q(name)					\
-	struct wake_q_head name = WAKE_Q_HEAD_INITIALIZER(name)
+#define DEFINE_WAKE_Q(name)				\
+	struct wake_q_head name = { WAKE_Q_TAIL, &name.first }
 
 static inline void wake_q_init(struct wake_q_head *head)
 {
 	head->first = WAKE_Q_TAIL;
 	head->lastp = &head->first;
+	head->count = 0;
 }
 
 static inline bool wake_q_empty(struct wake_q_head *head)

@@ -21,7 +21,6 @@
 #include <asm/hw_irq.h>
 #include <asm/desc.h>
 #include <asm/traps.h>
-#include <asm/thermal.h>
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/irq_vectors.h>
@@ -211,13 +210,6 @@ u64 arch_irq_stat_cpu(unsigned int cpu)
 #ifdef CONFIG_X86_MCE_THRESHOLD
 	sum += irq_stats(cpu)->irq_threshold_count;
 #endif
-#ifdef CONFIG_X86_HV_CALLBACK_VECTOR
-	sum += irq_stats(cpu)->irq_hv_callback_count;
-#endif
-#if IS_ENABLED(CONFIG_HYPERV)
-	sum += irq_stats(cpu)->irq_hv_reenlightenment_count;
-	sum += irq_stats(cpu)->hyperv_stimer0_count;
-#endif
 #ifdef CONFIG_X86_MCE
 	sum += per_cpu(mce_exception_count, cpu);
 	sum += per_cpu(mce_poll_count, cpu);
@@ -235,7 +227,7 @@ static __always_inline void handle_irq(struct irq_desc *desc,
 				       struct pt_regs *regs)
 {
 	if (IS_ENABLED(CONFIG_X86_64))
-		generic_handle_irq_desc(desc);
+		run_irq_on_irqstack_cond(desc->handle_irq, desc, regs);
 	else
 		__handle_irq(desc, regs);
 }
@@ -347,7 +339,7 @@ void fixup_irqs(void)
 	irq_migrate_all_off_this_cpu();
 
 	/*
-	 * We can remove mdelay() and then send spurious interrupts to
+	 * We can remove mdelay() and then send spuriuous interrupts to
 	 * new cpu targets for all the irqs that were handled previously by
 	 * this cpu. While it works, I have seen spurious interrupt messages
 	 * (nothing wrong but still...).
@@ -382,25 +374,5 @@ void fixup_irqs(void)
 		if (__this_cpu_read(vector_irq[vector]) != VECTOR_RETRIGGERED)
 			__this_cpu_write(vector_irq[vector], VECTOR_UNUSED);
 	}
-}
-#endif
-
-#ifdef CONFIG_X86_THERMAL_VECTOR
-static void smp_thermal_vector(void)
-{
-	if (x86_thermal_enabled())
-		intel_thermal_interrupt();
-	else
-		pr_err("CPU%d: Unexpected LVT thermal interrupt!\n",
-		       smp_processor_id());
-}
-
-DEFINE_IDTENTRY_SYSVEC(sysvec_thermal)
-{
-	trace_thermal_apic_entry(THERMAL_APIC_VECTOR);
-	inc_irq_stat(irq_thermal_count);
-	smp_thermal_vector();
-	trace_thermal_apic_exit(THERMAL_APIC_VECTOR);
-	ack_APIC_irq();
 }
 #endif

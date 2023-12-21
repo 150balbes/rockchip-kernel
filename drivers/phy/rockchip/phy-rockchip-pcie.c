@@ -119,6 +119,21 @@ static inline void phy_wr_cfg(struct rockchip_pcie_phy *rk_phy,
 				   PHY_CFG_WR_SHIFT));
 }
 
+static inline u32 phy_rd_cfg(struct rockchip_pcie_phy *rk_phy,
+			     u32 addr)
+{
+	u32 val;
+
+	regmap_write(rk_phy->reg_base, rk_phy->phy_data->pcie_conf,
+		     HIWORD_UPDATE(addr,
+				   PHY_CFG_RD_MASK,
+				   PHY_CFG_ADDR_SHIFT));
+	regmap_read(rk_phy->reg_base,
+		    rk_phy->phy_data->pcie_status,
+		    &val);
+	return val;
+}
+
 static int rockchip_pcie_phy_power_off(struct phy *phy)
 {
 	struct phy_pcie_instance *inst = phy_get_drvdata(phy);
@@ -167,6 +182,12 @@ static int rockchip_pcie_phy_power_on(struct phy *phy)
 
 	mutex_lock(&rk_phy->pcie_mutex);
 
+	regmap_write(rk_phy->reg_base,
+		     rk_phy->phy_data->pcie_laneoff,
+		     HIWORD_UPDATE(!PHY_LANE_IDLE_OFF,
+				   PHY_LANE_IDLE_MASK,
+				   PHY_LANE_IDLE_A_SHIFT + inst->index));
+
 	if (rk_phy->pwr_cnt++)
 		goto err_out;
 
@@ -180,12 +201,6 @@ static int rockchip_pcie_phy_power_on(struct phy *phy)
 		     HIWORD_UPDATE(PHY_CFG_PLL_LOCK,
 				   PHY_CFG_ADDR_MASK,
 				   PHY_CFG_ADDR_SHIFT));
-
-	regmap_write(rk_phy->reg_base,
-		     rk_phy->phy_data->pcie_laneoff,
-		     HIWORD_UPDATE(!PHY_LANE_IDLE_OFF,
-				   PHY_LANE_IDLE_MASK,
-				   PHY_LANE_IDLE_A_SHIFT + inst->index));
 
 	/*
 	 * No documented timeout value for phy operation below,

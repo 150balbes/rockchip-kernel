@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Red Hat, Inc.
  *
@@ -42,7 +41,7 @@ EXPORT_SYMBOL_GPL(dm_bitset_empty);
 
 struct packer_context {
 	bit_value_fn fn;
-	unsigned int nr_bits;
+	unsigned nr_bits;
 	void *context;
 };
 
@@ -50,7 +49,7 @@ static int pack_bits(uint32_t index, void *value, void *context)
 {
 	int r;
 	struct packer_context *p = context;
-	unsigned int bit, nr = min(64u, p->nr_bits - (index * 64));
+	unsigned bit, nr = min(64u, p->nr_bits - (index * 64));
 	uint64_t word = 0;
 	bool bv;
 
@@ -74,7 +73,6 @@ int dm_bitset_new(struct dm_disk_bitset *info, dm_block_t *root,
 		  uint32_t size, bit_value_fn fn, void *context)
 {
 	struct packer_context p;
-
 	p.fn = fn;
 	p.nr_bits = size;
 	p.context = context;
@@ -149,7 +147,7 @@ static int get_array_entry(struct dm_disk_bitset *info, dm_block_t root,
 			   uint32_t index, dm_block_t *new_root)
 {
 	int r;
-	unsigned int array_index = index / BITS_PER_ARRAY_ENTRY;
+	unsigned array_index = index / BITS_PER_ARRAY_ENTRY;
 
 	if (info->current_index_set) {
 		if (info->current_index == array_index)
@@ -167,7 +165,7 @@ int dm_bitset_set_bit(struct dm_disk_bitset *info, dm_block_t root,
 		      uint32_t index, dm_block_t *new_root)
 {
 	int r;
-	unsigned int b = index % BITS_PER_ARRAY_ENTRY;
+	unsigned b = index % BITS_PER_ARRAY_ENTRY;
 
 	r = get_array_entry(info, root, index, new_root);
 	if (r)
@@ -184,7 +182,7 @@ int dm_bitset_clear_bit(struct dm_disk_bitset *info, dm_block_t root,
 			uint32_t index, dm_block_t *new_root)
 {
 	int r;
-	unsigned int b = index % BITS_PER_ARRAY_ENTRY;
+	unsigned b = index % BITS_PER_ARRAY_ENTRY;
 
 	r = get_array_entry(info, root, index, new_root);
 	if (r)
@@ -201,7 +199,7 @@ int dm_bitset_test_bit(struct dm_disk_bitset *info, dm_block_t root,
 		       uint32_t index, dm_block_t *new_root, bool *result)
 {
 	int r;
-	unsigned int b = index % BITS_PER_ARRAY_ENTRY;
+	unsigned b = index % BITS_PER_ARRAY_ENTRY;
 
 	r = get_array_entry(info, root, index, new_root);
 	if (r)

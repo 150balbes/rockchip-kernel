@@ -89,9 +89,9 @@ static inline void omap_usb_writel(void __iomem *addr, unsigned int offset,
 }
 
 /**
- * omap_usb2_set_comparator() - links the comparator present in the system with this phy
- *
- * @comparator:  the companion phy(comparator) for this phy
+ * omap_usb2_set_comparator - links the comparator present in the system with
+ *	this phy
+ * @comparator - the companion phy(comparator) for this phy
  *
  * The phy companion driver should call this API passing the phy_companion
  * filled with set_vbus and start_srp to be used by usb phy.
@@ -366,6 +366,7 @@ static int omap_usb2_probe(struct platform_device *pdev)
 {
 	struct omap_usb	*phy;
 	struct phy *generic_phy;
+	struct resource *res;
 	struct phy_provider *phy_provider;
 	struct usb_otg *otg;
 	struct device_node *node = pdev->dev.of_node;
@@ -402,7 +403,8 @@ static int omap_usb2_probe(struct platform_device *pdev)
 
 	omap_usb2_init_errata(phy);
 
-	phy->phy_base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	phy->phy_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(phy->phy_base))
 		return PTR_ERR(phy->phy_base);
 
@@ -445,9 +447,11 @@ static int omap_usb2_probe(struct platform_device *pdev)
 			 PTR_ERR(phy->wkupclk));
 		phy->wkupclk = devm_clk_get(phy->dev, "usb_phy_cm_clk32k");
 
-		if (IS_ERR(phy->wkupclk))
-			return dev_err_probe(&pdev->dev, PTR_ERR(phy->wkupclk),
-					     "unable to get usb_phy_cm_clk32k\n");
+		if (IS_ERR(phy->wkupclk)) {
+			if (PTR_ERR(phy->wkupclk) != -EPROBE_DEFER)
+				dev_err(&pdev->dev, "unable to get usb_phy_cm_clk32k\n");
+			return PTR_ERR(phy->wkupclk);
+		}
 
 		dev_warn(&pdev->dev,
 			 "found usb_phy_cm_clk32k, please fix DTS\n");
@@ -504,17 +508,19 @@ static int omap_usb2_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void omap_usb2_remove(struct platform_device *pdev)
+static int omap_usb2_remove(struct platform_device *pdev)
 {
 	struct omap_usb	*phy = platform_get_drvdata(pdev);
 
 	usb_remove_phy(&phy->phy);
 	pm_runtime_disable(phy->dev);
+
+	return 0;
 }
 
 static struct platform_driver omap_usb2_driver = {
 	.probe		= omap_usb2_probe,
-	.remove_new	= omap_usb2_remove,
+	.remove		= omap_usb2_remove,
 	.driver		= {
 		.name	= "omap-usb2",
 		.of_match_table = omap_usb2_id_table,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (c) 2014-2020, Oracle and/or its affiliates.
+ * Copyright (c) 2014-2017 Oracle.  All rights reserved.
  * Copyright (c) 2003-2007 Network Appliance, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -53,6 +53,10 @@
 
 #include "xprt_rdma.h"
 #include <trace/events/rpcrdma.h>
+
+#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
+# define RPCDBG_FACILITY	RPCDBG_TRANS
+#endif
 
 /* Returns size of largest RPC-over-RDMA header in a Call message
  *
@@ -200,7 +204,9 @@ rpcrdma_alloc_sparse_pages(struct xdr_buf *buf)
 	return 0;
 }
 
-/* Convert @vec to a single SGL element.
+/* Split @vec on page boundaries into SGEs. FMR registers pages, not
+ * a byte range. Other modes coalesce these SGEs into a single MR
+ * when they can.
  *
  * Returns pointer to next available SGE, and bumps the total number
  * of SGEs consumed.
@@ -209,11 +215,22 @@ static struct rpcrdma_mr_seg *
 rpcrdma_convert_kvec(struct kvec *vec, struct rpcrdma_mr_seg *seg,
 		     unsigned int *n)
 {
-	seg->mr_page = virt_to_page(vec->iov_base);
-	seg->mr_offset = offset_in_page(vec->iov_base);
-	seg->mr_len = vec->iov_len;
-	++seg;
-	++(*n);
+	u32 remaining, page_offset;
+	char *base;
+
+	base = vec->iov_base;
+	page_offset = offset_in_page(base);
+	remaining = vec->iov_len;
+	while (remaining) {
+		seg->mr_page = NULL;
+		seg->mr_offset = base;
+		seg->mr_len = min_t(u32, PAGE_SIZE - page_offset, remaining);
+		remaining -= seg->mr_len;
+		base += seg->mr_len;
+		++seg;
+		++(*n);
+		page_offset = 0;
+	}
 	return seg;
 }
 
@@ -242,7 +259,7 @@ rpcrdma_convert_iovs(struct rpcrdma_xprt *r_xprt, struct xdr_buf *xdrbuf,
 	page_base = offset_in_page(xdrbuf->page_base);
 	while (len) {
 		seg->mr_page = *ppages;
-		seg->mr_offset = page_base;
+		seg->mr_offset = (char *)page_base;
 		seg->mr_len = min_t(u32, PAGE_SIZE - page_base, len);
 		len -= seg->mr_len;
 		++ppages;
@@ -251,11 +268,22 @@ rpcrdma_convert_iovs(struct rpcrdma_xprt *r_xprt, struct xdr_buf *xdrbuf,
 		page_base = 0;
 	}
 
-	if (type == rpcrdma_readch || type == rpcrdma_writech)
+	/* When encoding a Read chunk, the tail iovec contains an
+	 * XDR pad and may be omitted.
+	 */
+	if (type == rpcrdma_readch && r_xprt->rx_ep->re_implicit_roundup)
+		goto out;
+
+	/* When encoding a Write chunk, some servers need to see an
+	 * extra segment for non-XDR-aligned Write chunks. The upper
+	 * layer provides space in the tail iovec that may be used
+	 * for this purpose.
+	 */
+	if (type == rpcrdma_writech && r_xprt->rx_ep->re_implicit_roundup)
 		goto out;
 
 	if (xdrbuf->tail[0].iov_len)
-		rpcrdma_convert_kvec(&xdrbuf->tail[0], seg, &n);
+		seg = rpcrdma_convert_kvec(&xdrbuf->tail[0], seg, &n);
 
 out:
 	if (unlikely(n > RPCRDMA_MAX_SEGS))
@@ -303,6 +331,7 @@ static struct rpcrdma_mr_seg *rpcrdma_mr_prepare(struct rpcrdma_xprt *r_xprt,
 		*mr = rpcrdma_mr_get(r_xprt);
 		if (!*mr)
 			goto out_getmr_err;
+		trace_xprtrdma_mr_get(req);
 		(*mr)->mr_req = req;
 	}
 
@@ -310,7 +339,7 @@ static struct rpcrdma_mr_seg *rpcrdma_mr_prepare(struct rpcrdma_xprt *r_xprt,
 	return frwr_map(r_xprt, seg, nsegs, writing, req->rl_slot.rq_xid, *mr);
 
 out_getmr_err:
-	trace_xprtrdma_nomrs_err(r_xprt, req);
+	trace_xprtrdma_nomrs(req);
 	xprt_wait_for_buffer_space(&r_xprt->rx_xprt);
 	rpcrdma_mrs_refresh(r_xprt);
 	return ERR_PTR(-EAGAIN);
@@ -393,7 +422,6 @@ static int rpcrdma_encode_write_list(struct rpcrdma_xprt *r_xprt,
 				     enum rpcrdma_chunktype wtype)
 {
 	struct xdr_stream *xdr = &req->rl_stream;
-	struct rpcrdma_ep *ep = r_xprt->rx_ep;
 	struct rpcrdma_mr_seg *seg;
 	struct rpcrdma_mr *mr;
 	int nsegs, nchunks;
@@ -431,18 +459,6 @@ static int rpcrdma_encode_write_list(struct rpcrdma_xprt *r_xprt,
 		nchunks++;
 		nsegs -= mr->mr_nents;
 	} while (nsegs);
-
-	if (xdr_pad_size(rqst->rq_rcv_buf.page_len)) {
-		if (encode_rdma_segment(xdr, ep->re_write_pad_mr) < 0)
-			return -EMSGSIZE;
-
-		trace_xprtrdma_chunk_wp(rqst->rq_task, ep->re_write_pad_mr,
-					nsegs);
-		r_xprt->rx_stats.write_chunk_count++;
-		r_xprt->rx_stats.total_rdma_request += mr->mr_length;
-		nchunks++;
-		nsegs -= mr->mr_nents;
-	}
 
 	/* Update count of segments in this Write chunk */
 	*segcount = cpu_to_be32(nchunks);
@@ -1154,9 +1170,13 @@ rpcrdma_is_bcall(struct rpcrdma_xprt *r_xprt, struct rpcrdma_rep *rep)
 	 */
 	p = xdr_inline_decode(xdr, 3 * sizeof(*p));
 	if (unlikely(!p))
-		return true;
+		goto out_short;
 
 	rpcrdma_bc_receive_call(r_xprt, rep);
+	return true;
+
+out_short:
+	pr_warn("RPC/RDMA short backward direction call\n");
 	return true;
 }
 #else	/* CONFIG_SUNRPC_BACKCHANNEL */
@@ -1329,47 +1349,28 @@ rpcrdma_decode_error(struct rpcrdma_xprt *r_xprt, struct rpcrdma_rep *rep,
 		p = xdr_inline_decode(xdr, 2 * sizeof(*p));
 		if (!p)
 			break;
-		trace_xprtrdma_err_vers(rqst, p, p + 1);
+		dprintk("RPC:       %s: server reports "
+			"version error (%u-%u), xid %08x\n", __func__,
+			be32_to_cpup(p), be32_to_cpu(*(p + 1)),
+			be32_to_cpu(rep->rr_xid));
 		break;
 	case err_chunk:
-		trace_xprtrdma_err_chunk(rqst);
+		dprintk("RPC:       %s: server reports "
+			"header decoding error, xid %08x\n", __func__,
+			be32_to_cpu(rep->rr_xid));
 		break;
 	default:
-		trace_xprtrdma_err_unrecognized(rqst, p);
+		dprintk("RPC:       %s: server reports "
+			"unrecognized error %d, xid %08x\n", __func__,
+			be32_to_cpup(p), be32_to_cpu(rep->rr_xid));
 	}
 
 	return -EIO;
 }
 
-/**
- * rpcrdma_unpin_rqst - Release rqst without completing it
- * @rep: RPC/RDMA Receive context
- *
- * This is done when a connection is lost so that a Reply
- * can be dropped and its matching Call can be subsequently
- * retransmitted on a new connection.
- */
-void rpcrdma_unpin_rqst(struct rpcrdma_rep *rep)
-{
-	struct rpc_xprt *xprt = &rep->rr_rxprt->rx_xprt;
-	struct rpc_rqst *rqst = rep->rr_rqst;
-	struct rpcrdma_req *req = rpcr_to_rdmar(rqst);
-
-	req->rl_reply = NULL;
-	rep->rr_rqst = NULL;
-
-	spin_lock(&xprt->queue_lock);
-	xprt_unpin_rqst(rqst);
-	spin_unlock(&xprt->queue_lock);
-}
-
-/**
- * rpcrdma_complete_rqst - Pass completed rqst back to RPC
- * @rep: RPC/RDMA Receive context
- *
- * Reconstruct the RPC reply and complete the transaction
- * while @rqst is still pinned to ensure the rep, rqst, and
- * rq_task pointers remain stable.
+/* Perform XID lookup, reconstruction of the RPC reply, and
+ * RPC completion while holding the transport lock to ensure
+ * the rep, rqst, and rq_task pointers remain stable.
  */
 void rpcrdma_complete_rqst(struct rpcrdma_rep *rep)
 {
@@ -1402,7 +1403,7 @@ out:
 	return;
 
 out_badheader:
-	trace_xprtrdma_reply_hdr_err(rep);
+	trace_xprtrdma_reply_hdr(rep);
 	r_xprt->rx_stats.bad_reply_count++;
 	rqst->rq_task->tk_status = status;
 	status = 0;
@@ -1477,12 +1478,14 @@ void rpcrdma_reply_handler(struct rpcrdma_rep *rep)
 		rpcrdma_update_cwnd(r_xprt, credits);
 
 	req = rpcr_to_rdmar(rqst);
-	if (unlikely(req->rl_reply))
-		rpcrdma_rep_put(buf, req->rl_reply);
+	if (req->rl_reply) {
+		trace_xprtrdma_leaked_rep(rqst, req->rl_reply);
+		rpcrdma_recv_buffer_put(req->rl_reply);
+	}
 	req->rl_reply = rep;
 	rep->rr_rqst = rqst;
 
-	trace_xprtrdma_reply(rqst->rq_task, rep, credits);
+	trace_xprtrdma_reply(rqst->rq_task, rep, req, credits);
 
 	if (rep->rr_wc_flags & IB_WC_WITH_INVALIDATE)
 		frwr_reminv(rep, &req->rl_registered);
@@ -1494,17 +1497,17 @@ void rpcrdma_reply_handler(struct rpcrdma_rep *rep)
 	return;
 
 out_badversion:
-	trace_xprtrdma_reply_vers_err(rep);
+	trace_xprtrdma_reply_vers(rep);
 	goto out;
 
 out_norqst:
 	spin_unlock(&xprt->queue_lock);
-	trace_xprtrdma_reply_rqst_err(rep);
+	trace_xprtrdma_reply_rqst(rep);
 	goto out;
 
 out_shortreply:
-	trace_xprtrdma_reply_short_err(rep);
+	trace_xprtrdma_reply_short(rep);
 
 out:
-	rpcrdma_rep_put(buf, rep);
+	rpcrdma_recv_buffer_put(rep);
 }

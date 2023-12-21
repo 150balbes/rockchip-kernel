@@ -28,16 +28,15 @@ static int scmdev_probe(struct device *dev)
 	return scmdrv->probe ? scmdrv->probe(scmdev) : -ENODEV;
 }
 
-static void scmdev_remove(struct device *dev)
+static int scmdev_remove(struct device *dev)
 {
 	struct scm_device *scmdev = to_scm_dev(dev);
 	struct scm_driver *scmdrv = to_scm_drv(dev->driver);
 
-	if (scmdrv->remove)
-		scmdrv->remove(scmdev);
+	return scmdrv->remove ? scmdrv->remove(scmdev) : -ENODEV;
 }
 
-static int scmdev_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int scmdev_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	return add_uevent_var(env, "MODALIAS=scm:scmdev");
 }

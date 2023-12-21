@@ -29,7 +29,7 @@ struct cond_expr_node {
 #define COND_NEQ	7 /* bool != bool */
 #define COND_LAST	COND_NEQ
 	u32 expr_type;
-	u32 boolean;
+	u32 bool;
 };
 
 struct cond_expr {

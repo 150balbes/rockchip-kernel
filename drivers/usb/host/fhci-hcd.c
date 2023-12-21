@@ -25,8 +25,8 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
+#include <linux/of_gpio.h>
 #include <linux/slab.h>
-#include <linux/gpio/consumer.h>
 #include <soc/fsl/qe/qe.h>
 #include <asm/fsl_gtm.h>
 #include "fhci.h"
@@ -150,15 +150,15 @@ int fhci_ioports_check_bus_state(struct fhci_hcd *fhci)
 	u8 bits = 0;
 
 	/* check USBOE,if transmitting,exit */
-	if (!gpiod_get_value(fhci->gpiods[GPIO_USBOE]))
+	if (!gpio_get_value(fhci->gpios[GPIO_USBOE]))
 		return -1;
 
 	/* check USBRP */
-	if (gpiod_get_value(fhci->gpiods[GPIO_USBRP]))
+	if (gpio_get_value(fhci->gpios[GPIO_USBRP]))
 		bits |= 0x2;
 
 	/* check USBRN */
-	if (gpiod_get_value(fhci->gpiods[GPIO_USBRN]))
+	if (gpio_get_value(fhci->gpios[GPIO_USBRN]))
 		bits |= 0x1;
 
 	return bits;
@@ -408,7 +408,8 @@ static int fhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 			size++;
 		else if ((urb->transfer_flags & URB_ZERO_PACKET) != 0
 			 && (urb->transfer_buffer_length
-			     % usb_maxpacket(urb->dev, pipe)) != 0)
+			     % usb_maxpacket(urb->dev, pipe,
+					     usb_pipeout(pipe))) != 0)
 			size++;
 		break;
 	case PIPE_ISOCHRONOUS:
@@ -630,28 +631,45 @@ static int of_fhci_probe(struct platform_device *ofdev)
 
 	/* GPIOs and pins */
 	for (i = 0; i < NUM_GPIOS; i++) {
-		if (i < GPIO_SPEED)
-			fhci->gpiods[i] = devm_gpiod_get_index(dev,
-					NULL, i, GPIOD_IN);
+		int gpio;
+		enum of_gpio_flags flags;
 
-		else
-			fhci->gpiods[i] = devm_gpiod_get_index_optional(dev,
-					NULL, i, GPIOD_OUT_LOW);
+		gpio = of_get_gpio_flags(node, i, &flags);
+		fhci->gpios[i] = gpio;
+		fhci->alow_gpios[i] = flags & OF_GPIO_ACTIVE_LOW;
 
-		if (IS_ERR(fhci->gpiods[i])) {
-			dev_err(dev, "incorrect GPIO%d: %ld\n",
-				i, PTR_ERR(fhci->gpiods[i]));
+		if (!gpio_is_valid(gpio)) {
+			if (i < GPIO_SPEED) {
+				dev_err(dev, "incorrect GPIO%d: %d\n",
+					i, gpio);
+				goto err_gpios;
+			} else {
+				dev_info(dev, "assuming board doesn't have "
+					"%s gpio\n", i == GPIO_SPEED ?
+					"speed" : "power");
+				continue;
+			}
+		}
+
+		ret = gpio_request(gpio, dev_name(dev));
+		if (ret) {
+			dev_err(dev, "failed to request gpio %d", i);
 			goto err_gpios;
 		}
-		if (!fhci->gpiods[i]) {
-			dev_info(dev, "assuming board doesn't have "
-				 "%s gpio\n", i == GPIO_SPEED ?
-				 "speed" : "power");
+
+		if (i >= GPIO_SPEED) {
+			ret = gpio_direction_output(gpio, 0);
+			if (ret) {
+				dev_err(dev, "failed to set gpio %d as "
+					"an output\n", i);
+				i++;
+				goto err_gpios;
+			}
 		}
 	}
 
 	for (j = 0; j < NUM_PINS; j++) {
-		fhci->pins[j] = qe_pin_request(dev, j);
+		fhci->pins[j] = qe_pin_request(node, j);
 		if (IS_ERR(fhci->pins[j])) {
 			ret = PTR_ERR(fhci->pins[j]);
 			dev_err(dev, "can't get pin %d: %d\n", j, ret);
@@ -676,7 +694,7 @@ static int of_fhci_probe(struct platform_device *ofdev)
 
 	/* USB Host interrupt. */
 	usb_irq = irq_of_parse_and_map(node, 0);
-	if (!usb_irq) {
+	if (usb_irq == NO_IRQ) {
 		dev_err(dev, "could not get usb irq\n");
 		ret = -EINVAL;
 		goto err_usb_irq;
@@ -749,6 +767,10 @@ err_pins:
 	while (--j >= 0)
 		qe_pin_free(fhci->pins[j]);
 err_gpios:
+	while (--i >= 0) {
+		if (gpio_is_valid(fhci->gpios[i]))
+			gpio_free(fhci->gpios[i]);
+	}
 	cpm_muram_free(pram_addr);
 err_pram:
 	iounmap(hcd->regs);
@@ -757,25 +779,32 @@ err_regs:
 	return ret;
 }
 
-static void fhci_remove(struct device *dev)
+static int fhci_remove(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct fhci_hcd *fhci = hcd_to_fhci(hcd);
+	int i;
 	int j;
 
 	usb_remove_hcd(hcd);
 	free_irq(fhci->timer->irq, hcd);
 	gtm_put_timer16(fhci->timer);
 	cpm_muram_free(cpm_muram_offset(fhci->pram));
+	for (i = 0; i < NUM_GPIOS; i++) {
+		if (!gpio_is_valid(fhci->gpios[i]))
+			continue;
+		gpio_free(fhci->gpios[i]);
+	}
 	for (j = 0; j < NUM_PINS; j++)
 		qe_pin_free(fhci->pins[j]);
 	fhci_dfs_destroy(fhci);
 	usb_put_hcd(hcd);
+	return 0;
 }
 
-static void of_fhci_remove(struct platform_device *ofdev)
+static int of_fhci_remove(struct platform_device *ofdev)
 {
-	fhci_remove(&ofdev->dev);
+	return fhci_remove(&ofdev->dev);
 }
 
 static const struct of_device_id of_fhci_match[] = {
@@ -790,7 +819,7 @@ static struct platform_driver of_fhci_driver = {
 		.of_match_table = of_fhci_match,
 	},
 	.probe		= of_fhci_probe,
-	.remove_new	= of_fhci_remove,
+	.remove		= of_fhci_remove,
 };
 
 module_platform_driver(of_fhci_driver);

@@ -10,7 +10,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
-
+#include <asm/prom.h>
 #include <asm/pmac_low_i2c.h>
 
 #include "windfarm.h"
@@ -60,7 +60,8 @@ static const struct wf_sensor_ops wf_max6690_ops = {
 	.owner		= THIS_MODULE,
 };
 
-static int wf_max6690_probe(struct i2c_client *client)
+static int wf_max6690_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	const char *name, *loc;
 	struct wf_6690_sensor *max;
@@ -103,12 +104,14 @@ static int wf_max6690_probe(struct i2c_client *client)
 	return rc;
 }
 
-static void wf_max6690_remove(struct i2c_client *client)
+static int wf_max6690_remove(struct i2c_client *client)
 {
 	struct wf_6690_sensor *max = i2c_get_clientdata(client);
 
 	max->i2c = NULL;
 	wf_unregister_sensor(&max->sens);
+
+	return 0;
 }
 
 static const struct i2c_device_id wf_max6690_id[] = {

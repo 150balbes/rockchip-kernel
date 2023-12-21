@@ -214,10 +214,11 @@ static void do_verify_udp(const char *data, int len)
 
 static int recv_msg(int fd, char *buf, int len, int *gso_size)
 {
-	char control[CMSG_SPACE(sizeof(int))] = {0};
+	char control[CMSG_SPACE(sizeof(uint16_t))] = {0};
 	struct msghdr msg = {0};
 	struct iovec iov = {0};
 	struct cmsghdr *cmsg;
+	uint16_t *gsosizeptr;
 	int ret;
 
 	iov.iov_base = buf;
@@ -236,7 +237,8 @@ static int recv_msg(int fd, char *buf, int len, int *gso_size)
 		     cmsg = CMSG_NXTHDR(&msg, cmsg)) {
 			if (cmsg->cmsg_level == SOL_UDP
 			    && cmsg->cmsg_type == UDP_GRO) {
-				*gso_size = *(int *)CMSG_DATA(cmsg);
+				gsosizeptr = (uint16_t *) CMSG_DATA(cmsg);
+				*gso_size = *gsosizeptr;
 				break;
 			}
 		}
@@ -248,7 +250,7 @@ static int recv_msg(int fd, char *buf, int len, int *gso_size)
 static void do_flush_udp(int fd)
 {
 	static char rbuf[ETH_MAX_MTU];
-	int ret, len, gso_size = 0, budget = 256;
+	int ret, len, gso_size, budget = 256;
 
 	len = cfg_read_all ? sizeof(rbuf) : 0;
 	while (budget--) {
@@ -334,8 +336,6 @@ static void parse_opts(int argc, char **argv)
 			cfg_verify = true;
 			cfg_read_all = true;
 			break;
-		default:
-			exit(1);
 		}
 	}
 

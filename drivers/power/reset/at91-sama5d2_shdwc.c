@@ -78,15 +78,9 @@ struct pmc_reg_config {
 	u8 mckr;
 };
 
-struct ddrc_reg_config {
-	u32 type_offset;
-	u32 type_mask;
-};
-
 struct reg_config {
 	struct shdwc_reg_config shdwc;
 	struct pmc_reg_config pmc;
-	struct ddrc_reg_config ddrc;
 };
 
 struct shdwc {
@@ -268,30 +262,9 @@ static const struct reg_config sama5d2_reg_config = {
 	.pmc = {
 		.mckr		= 0x30,
 	},
-	.ddrc = {
-		.type_offset	= AT91_DDRSDRC_MDR,
-		.type_mask	= AT91_DDRSDRC_MD
-	},
 };
 
 static const struct reg_config sam9x60_reg_config = {
-	.shdwc = {
-		.wkup_pin_input = 0,
-		.mr_rtcwk_shift = 17,
-		.mr_rttwk_shift = 16,
-		.sr_rtcwk_shift = 5,
-		.sr_rttwk_shift = 4,
-	},
-	.pmc = {
-		.mckr		= 0x28,
-	},
-	.ddrc = {
-		.type_offset	= AT91_DDRSDRC_MDR,
-		.type_mask	= AT91_DDRSDRC_MD
-	},
-};
-
-static const struct reg_config sama7g5_reg_config = {
 	.shdwc = {
 		.wkup_pin_input = 0,
 		.mr_rtcwk_shift = 17,
@@ -312,10 +285,6 @@ static const struct of_device_id at91_shdwc_of_match[] = {
 	{
 		.compatible = "microchip,sam9x60-shdwc",
 		.data = &sam9x60_reg_config,
-	},
-	{
-		.compatible = "microchip,sama7g5-shdwc",
-		.data = &sama7g5_reg_config,
 	}, {
 		/*sentinel*/
 	}
@@ -325,7 +294,6 @@ MODULE_DEVICE_TABLE(of, at91_shdwc_of_match);
 static const struct of_device_id at91_pmc_ids[] = {
 	{ .compatible = "atmel,sama5d2-pmc" },
 	{ .compatible = "microchip,sam9x60-pmc" },
-	{ .compatible = "microchip,sama7g5-pmc" },
 	{ /* Sentinel. */ }
 };
 
@@ -351,8 +319,10 @@ static int __init at91_shdwc_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	at91_shdwc->shdwc_base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(at91_shdwc->shdwc_base))
+	if (IS_ERR(at91_shdwc->shdwc_base)) {
+		dev_err(&pdev->dev, "Could not map reset controller address\n");
 		return PTR_ERR(at91_shdwc->shdwc_base);
+	}
 
 	match = of_match_node(at91_shdwc_of_match, pdev->dev.of_node);
 	at91_shdwc->rcfg = match->data;
@@ -385,33 +355,29 @@ static int __init at91_shdwc_probe(struct platform_device *pdev)
 		goto clk_disable;
 	}
 
-	if (at91_shdwc->rcfg->ddrc.type_mask) {
-		np = of_find_compatible_node(NULL, NULL,
-					     "atmel,sama5d3-ddramc");
-		if (!np) {
-			ret = -ENODEV;
-			goto unmap;
-		}
+	np = of_find_compatible_node(NULL, NULL, "atmel,sama5d3-ddramc");
+	if (!np) {
+		ret = -ENODEV;
+		goto unmap;
+	}
 
-		at91_shdwc->mpddrc_base = of_iomap(np, 0);
-		of_node_put(np);
+	at91_shdwc->mpddrc_base = of_iomap(np, 0);
+	of_node_put(np);
 
-		if (!at91_shdwc->mpddrc_base) {
-			ret = -ENOMEM;
-			goto unmap;
-		}
-
-		ddr_type = readl(at91_shdwc->mpddrc_base +
-				 at91_shdwc->rcfg->ddrc.type_offset) &
-				 at91_shdwc->rcfg->ddrc.type_mask;
-		if (ddr_type != AT91_DDRSDRC_MD_LPDDR2 &&
-		    ddr_type != AT91_DDRSDRC_MD_LPDDR3) {
-			iounmap(at91_shdwc->mpddrc_base);
-			at91_shdwc->mpddrc_base = NULL;
-		}
+	if (!at91_shdwc->mpddrc_base) {
+		ret = -ENOMEM;
+		goto unmap;
 	}
 
 	pm_power_off = at91_poweroff;
+
+	ddr_type = readl(at91_shdwc->mpddrc_base + AT91_DDRSDRC_MDR) &
+			 AT91_DDRSDRC_MD;
+	if (ddr_type != AT91_DDRSDRC_MD_LPDDR2 &&
+	    ddr_type != AT91_DDRSDRC_MD_LPDDR3) {
+		iounmap(at91_shdwc->mpddrc_base);
+		at91_shdwc->mpddrc_base = NULL;
+	}
 
 	return 0;
 

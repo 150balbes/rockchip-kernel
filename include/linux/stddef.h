@@ -13,10 +13,14 @@ enum {
 };
 
 #undef offsetof
-#define offsetof(TYPE, MEMBER)	__builtin_offsetof(TYPE, MEMBER)
+#ifdef __compiler_offsetof
+#define offsetof(TYPE, MEMBER)	__compiler_offsetof(TYPE, MEMBER)
+#else
+#define offsetof(TYPE, MEMBER)	((size_t)&((TYPE *)0)->MEMBER)
+#endif
 
 /**
- * sizeof_field() - Report the size of a struct field in bytes
+ * sizeof_field(TYPE, MEMBER)
  *
  * @TYPE: The structure containing the field of interest
  * @MEMBER: The field to return the size of
@@ -24,7 +28,7 @@ enum {
 #define sizeof_field(TYPE, MEMBER) sizeof((((TYPE *)0)->MEMBER))
 
 /**
- * offsetofend() - Report the offset of a struct field within the struct
+ * offsetofend(TYPE, MEMBER)
  *
  * @TYPE: The type of the structure
  * @MEMBER: The member within the structure to get the end offset of
@@ -79,18 +83,5 @@ enum {
  */
 #define struct_group_tagged(TAG, NAME, MEMBERS...) \
 	__struct_group(TAG, NAME, /* no attrs */, MEMBERS)
-
-/**
- * DECLARE_FLEX_ARRAY() - Declare a flexible array usable in a union
- *
- * @TYPE: The type of each flexible array element
- * @NAME: The name of the flexible array member
- *
- * In order to have a flexible array member in a union or alone in a
- * struct, it needs to be wrapped in an anonymous struct with at least 1
- * named member, but that member can be empty.
- */
-#define DECLARE_FLEX_ARRAY(TYPE, NAME) \
-	__DECLARE_FLEX_ARRAY(TYPE, NAME)
 
 #endif

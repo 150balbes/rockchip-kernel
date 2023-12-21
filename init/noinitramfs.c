@@ -10,7 +10,6 @@
 #include <linux/kdev_t.h>
 #include <linux/syscalls.h>
 #include <linux/init_syscalls.h>
-#include <linux/umh.h>
 
 /*
  * Create a simple rootfs that is similar to the default initramfs
@@ -19,7 +18,6 @@ static int __init default_rootfs(void)
 {
 	int err;
 
-	usermodehelper_enable();
 	err = init_mkdir("/dev", 0755);
 	if (err < 0)
 		goto out;

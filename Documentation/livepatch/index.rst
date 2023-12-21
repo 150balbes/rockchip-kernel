@@ -13,8 +13,6 @@ Kernel Livepatching
     module-elf-format
     shadow-vars
     system-state
-    reliable-stacktrace
-    api
 
 .. only::  subproject and html
 

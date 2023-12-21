@@ -632,7 +632,7 @@ static int snd_card_asihpi_trigger(struct snd_pcm_substream *substream,
 
 			/*? workaround linked streams don't
 			transition to SETUP 20070706*/
-			__snd_pcm_set_state(s->runtime, SNDRV_PCM_STATE_SETUP);
+			s->runtime->status->state = SNDRV_PCM_STATE_SETUP;
 
 			if (card->support_grouping) {
 				snd_printdd("%d group\n", s->number);
@@ -725,6 +725,7 @@ static void snd_card_asihpi_timer_function(struct timer_list *t)
 	unsigned int pcm_buf_dma_ofs, min_buf_pos = 0;
 	unsigned int remdata, xfercount, next_jiffies;
 	int first = 1;
+	int loops = 0;
 	u16 state;
 	u32 buffer_size, bytes_avail, samples_played, on_card_bytes;
 	char name[16];
@@ -805,6 +806,7 @@ static void snd_card_asihpi_timer_function(struct timer_list *t)
 			(unsigned long)frames_to_bytes(runtime,
 						runtime->control->appl_ptr)
 		);
+		loops++;
 	}
 	pcm_buf_dma_ofs = min_buf_pos;
 

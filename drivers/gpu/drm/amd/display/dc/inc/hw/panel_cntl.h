@@ -39,7 +39,6 @@ struct panel_cntl_backlight_registers {
 	unsigned int BL_PWM_CNTL2;
 	unsigned int BL_PWM_PERIOD_CNTL;
 	unsigned int LVTMA_PWRSEQ_REF_DIV_BL_PWM_REF_DIV;
-	unsigned int PANEL_PWRSEQ_REF_DIV2;
 };
 
 struct panel_cntl_funcs {

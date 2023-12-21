@@ -4,8 +4,6 @@
 
 #include <linux/mm.h>
 
-#define ARCH_DEFAULT_PKEY	0
-
 #ifdef CONFIG_ARCH_HAS_PKEYS
 #include <asm/pkeys.h>
 #else /* ! CONFIG_ARCH_HAS_PKEYS */
@@ -44,6 +42,10 @@ static inline int arch_set_user_pkey_access(struct task_struct *tsk, int pkey,
 static inline bool arch_pkeys_enabled(void)
 {
 	return false;
+}
+
+static inline void copy_init_pkru_to_fpregs(void)
+{
 }
 
 #endif /* ! CONFIG_ARCH_HAS_PKEYS */

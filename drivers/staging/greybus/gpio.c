@@ -41,16 +41,9 @@ struct gb_gpio_controller {
 	struct irq_chip		irqc;
 	struct mutex		irq_lock;
 };
-
-static inline struct gb_gpio_controller *gpio_chip_to_gb_gpio_controller(struct gpio_chip *chip)
-{
-	return container_of(chip, struct gb_gpio_controller, chip);
-}
-
-static struct gpio_chip *irq_data_to_gpio_chip(struct irq_data *d)
-{
-	return d->domain->host_data;
-}
+#define gpio_chip_to_gb_gpio_controller(chip) \
+	container_of(chip, struct gb_gpio_controller, chip)
+#define irq_data_to_gpio_chip(d) (d->domain->host_data)
 
 static int gb_gpio_line_count_operation(struct gb_gpio_controller *ggc)
 {
@@ -398,7 +391,10 @@ static int gb_gpio_request_handler(struct gb_operation *op)
 		return -EINVAL;
 	}
 
-	ret = generic_handle_irq_safe(irq);
+	local_irq_disable();
+	ret = generic_handle_irq(irq);
+	local_irq_enable();
+
 	if (ret)
 		dev_err(dev, "failed to invoke irq handler\n");
 

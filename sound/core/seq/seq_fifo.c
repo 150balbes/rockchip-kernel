@@ -143,8 +143,7 @@ static struct snd_seq_event_cell *fifo_cell_out(struct snd_seq_fifo *f)
 {
 	struct snd_seq_event_cell *cell;
 
-	cell = f->head;
-	if (cell) {
+	if ((cell = f->head) != NULL) {
 		f->head = cell->next;
 
 		/* reset tail if this was the last element */

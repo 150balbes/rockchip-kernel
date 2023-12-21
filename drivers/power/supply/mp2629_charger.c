@@ -519,7 +519,7 @@ static ssize_t batt_impedance_compensation_show(struct device *dev,
 		return ret;
 
 	rval = (rval >> 4) * 10;
-	return sysfs_emit(buf, "%d mohm\n", rval);
+	return sprintf(buf, "%d mohm\n", rval);
 }
 
 static ssize_t batt_impedance_compensation_store(struct device *dev,
@@ -580,9 +580,11 @@ static int mp2629_charger_probe(struct platform_device *pdev)
 	charger->dev = dev;
 	platform_set_drvdata(pdev, charger);
 
-	irq = platform_get_irq(to_platform_device(dev->parent), 0);
-	if (irq < 0)
+	irq = platform_get_irq_optional(to_platform_device(dev->parent), 0);
+	if (irq < 0) {
+		dev_err(dev, "get irq fail: %d\n", irq);
 		return irq;
+	}
 
 	for (i = 0; i < MP2629_MAX_FIELD; i++) {
 		charger->regmap_fields[i] = devm_regmap_field_alloc(dev,

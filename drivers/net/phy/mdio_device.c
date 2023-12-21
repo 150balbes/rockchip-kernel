@@ -21,7 +21,6 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/unistd.h>
-#include <linux/property.h>
 
 void mdio_device_free(struct mdio_device *mdiodev)
 {
@@ -31,7 +30,6 @@ EXPORT_SYMBOL(mdio_device_free);
 
 static void mdio_device_release(struct device *dev)
 {
-	fwnode_handle_put(dev->fwnode);
 	kfree(to_mdio_device(dev));
 }
 
@@ -79,7 +77,7 @@ int mdio_device_register(struct mdio_device *mdiodev)
 {
 	int err;
 
-	dev_dbg(&mdiodev->dev, "%s\n", __func__);
+	dev_dbg(&mdiodev->dev, "mdio_device_register\n");
 
 	err = mdiobus_register_device(mdiodev);
 	if (err)
@@ -200,7 +198,7 @@ int mdio_driver_register(struct mdio_driver *drv)
 	struct mdio_driver_common *mdiodrv = &drv->mdiodrv;
 	int retval;
 
-	pr_debug("%s: %s\n", __func__, mdiodrv->driver.name);
+	pr_debug("mdio_driver_register: %s\n", mdiodrv->driver.name);
 
 	mdiodrv->driver.bus = &mdio_bus_type;
 	mdiodrv->driver.probe = mdio_probe;

@@ -19,23 +19,13 @@ The main Btrfs features include:
     * Subvolumes (separate internal filesystem roots)
     * Object level mirroring and striping
     * Checksums on data and metadata (multiple algorithms available)
-    * Compression (multiple algorithms available)
-    * Reflink, deduplication
-    * Scrub (on-line checksum verification)
-    * Hierarchical quota groups (subvolume and snapshot support)
+    * Compression
     * Integrated multiple device support, with several raid algorithms
     * Offline filesystem check
-    * Efficient incremental backup and FS mirroring (send/receive)
-    * Trim/discard
+    * Efficient incremental backup and FS mirroring
     * Online filesystem defragmentation
-    * Swapfile support
-    * Zoned mode
-    * Read/write metadata verification
-    * Online resize (shrink, grow)
 
-For more information please refer to the documentation site or wiki
-
-  https://btrfs.readthedocs.io
+For more information please refer to the wiki
 
   https://btrfs.wiki.kernel.org
 

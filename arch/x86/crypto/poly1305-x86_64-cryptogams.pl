@@ -108,6 +108,7 @@ if (!$kernel) {
 sub declare_function() {
 	my ($name, $align, $nargs) = @_;
 	if($kernel) {
+		$code .= ".align $align\n";
 		$code .= "SYM_FUNC_START($name)\n";
 		$code .= ".L$name:\n";
 	} else {
@@ -250,7 +251,7 @@ $code.=<<___;
 	mov	%rax,8($ctx)
 	mov	%rax,16($ctx)
 
-	test	$inp,$inp
+	cmp	\$0,$inp
 	je	.Lno_key
 ___
 $code.=<<___ if (!$kernel);

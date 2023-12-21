@@ -266,8 +266,7 @@ int snd_pcm_format_signed(snd_pcm_format_t format)
 	int val;
 	if (!valid_format(format))
 		return -EINVAL;
-	val = pcm_formats[(INT)format].signd;
-	if (val < 0)
+	if ((val = pcm_formats[(INT)format].signd) < 0)
 		return -EINVAL;
 	return val;
 }
@@ -315,8 +314,7 @@ int snd_pcm_format_little_endian(snd_pcm_format_t format)
 	int val;
 	if (!valid_format(format))
 		return -EINVAL;
-	val = pcm_formats[(INT)format].le;
-	if (val < 0)
+	if ((val = pcm_formats[(INT)format].le) < 0)
 		return -EINVAL;
 	return val;
 }
@@ -352,8 +350,7 @@ int snd_pcm_format_width(snd_pcm_format_t format)
 	int val;
 	if (!valid_format(format))
 		return -EINVAL;
-	val = pcm_formats[(INT)format].width;
-	if (!val)
+	if ((val = pcm_formats[(INT)format].width) == 0)
 		return -EINVAL;
 	return val;
 }
@@ -371,8 +368,7 @@ int snd_pcm_format_physical_width(snd_pcm_format_t format)
 	int val;
 	if (!valid_format(format))
 		return -EINVAL;
-	val = pcm_formats[(INT)format].phys;
-	if (!val)
+	if ((val = pcm_formats[(INT)format].phys) == 0)
 		return -EINVAL;
 	return val;
 }

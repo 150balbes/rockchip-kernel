@@ -28,7 +28,7 @@ UNWIND(	.fnend		)
 ENDPROC(\name		)
 	.endm
 
-	.macro	__testop, name, instr, store, barrier
+	.macro	testop, name, instr, store
 ENTRY(	\name		)
 UNWIND(	.fnstart	)
 	ands	ip, r1, #3
@@ -38,7 +38,7 @@ UNWIND(	.fnstart	)
 	mov	r0, r0, lsr #5
 	add	r1, r1, r0, lsl #2	@ Get word offset
 	mov	r3, r2, lsl r3		@ create mask
-	\barrier
+	smp_dmb
 #if __LINUX_ARM_ARCH__ >= 7 && defined(CONFIG_SMP)
 	.arch_extension	mp
 	ALT_SMP(W(pldw)	[r1])
@@ -50,20 +50,12 @@ UNWIND(	.fnstart	)
 	strex	ip, r2, [r1]
 	cmp	ip, #0
 	bne	1b
-	\barrier
+	smp_dmb
 	cmp	r0, #0
 	movne	r0, #1
 2:	bx	lr
 UNWIND(	.fnend		)
 ENDPROC(\name		)
-	.endm
-
-	.macro	testop, name, instr, store
-	__testop \name, \instr, \store, smp_dmb
-	.endm
-
-	.macro	sync_testop, name, instr, store
-	__testop \name, \instr, \store, __smp_dmb
 	.endm
 #else
 	.macro	bitop, name, instr

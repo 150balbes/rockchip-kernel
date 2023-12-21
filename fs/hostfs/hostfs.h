@@ -65,7 +65,6 @@ struct hostfs_stat {
 	unsigned long long blocks;
 	unsigned int maj;
 	unsigned int min;
-	dev_t dev;
 };
 
 extern int stat_file(const char *path, struct hostfs_stat *p, int fd);

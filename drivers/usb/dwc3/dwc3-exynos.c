@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
+/**
  * dwc3-exynos.c - Samsung Exynos DWC3 Specific Glue layer
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
@@ -128,7 +128,7 @@ vdd33_err:
 	return ret;
 }
 
-static void dwc3_exynos_remove(struct platform_device *pdev)
+static int dwc3_exynos_remove(struct platform_device *pdev)
 {
 	struct dwc3_exynos	*exynos = platform_get_drvdata(pdev);
 	int i;
@@ -143,6 +143,8 @@ static void dwc3_exynos_remove(struct platform_device *pdev)
 
 	regulator_disable(exynos->vdd33);
 	regulator_disable(exynos->vdd10);
+
+	return 0;
 }
 
 static const struct dwc3_exynos_driverdata exynos5250_drvdata = {
@@ -232,7 +234,7 @@ static const struct dev_pm_ops dwc3_exynos_dev_pm_ops = {
 
 static struct platform_driver dwc3_exynos_driver = {
 	.probe		= dwc3_exynos_probe,
-	.remove_new	= dwc3_exynos_remove,
+	.remove		= dwc3_exynos_remove,
 	.driver		= {
 		.name	= "exynos-dwc3",
 		.of_match_table = exynos_dwc3_match,

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0
 
 source "../../../../net/forwarding/devlink_lib.sh"
-source ../mlxsw_lib.sh
 
-mlxsw_only_on_spectrum 1 || exit 1
+if [ "$DEVLINK_VIDDID" != "15b3:cb84" ]; then
+	echo "SKIP: test is tailored for Mellanox Spectrum"
+	exit 1
+fi
 
 # Needed for returning to default
 declare -A KVD_DEFAULTS

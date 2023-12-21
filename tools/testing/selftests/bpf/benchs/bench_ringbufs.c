@@ -88,15 +88,15 @@ const struct argp bench_ringbufs_argp = {
 
 static struct counter buf_hits;
 
-static inline void bufs_trigger_batch(void)
+static inline void bufs_trigger_batch()
 {
 	(void)syscall(__NR_getpgid);
 }
 
-static void bufs_validate(void)
+static void bufs_validate()
 {
 	if (env.consumer_cnt != 1) {
-		fprintf(stderr, "rb-libbpf benchmark needs one consumer!\n");
+		fprintf(stderr, "rb-libbpf benchmark doesn't support multi-consumer!\n");
 		exit(1);
 	}
 
@@ -132,7 +132,7 @@ static void ringbuf_libbpf_measure(struct bench_res *res)
 	res->drops = atomic_swap(&ctx->skel->bss->dropped, 0);
 }
 
-static struct ringbuf_bench *ringbuf_setup_skeleton(void)
+static struct ringbuf_bench *ringbuf_setup_skeleton()
 {
 	struct ringbuf_bench *skel;
 
@@ -151,7 +151,7 @@ static struct ringbuf_bench *ringbuf_setup_skeleton(void)
 		/* record data + header take 16 bytes */
 		skel->rodata->wakeup_data_size = args.sample_rate * 16;
 
-	bpf_map__set_max_entries(skel->maps.ringbuf, args.ringbuf_sz);
+	bpf_map__resize(skel->maps.ringbuf, args.ringbuf_sz);
 
 	if (ringbuf_bench__load(skel)) {
 		fprintf(stderr, "failed to load skeleton\n");
@@ -167,7 +167,7 @@ static int buf_process_sample(void *ctx, void *data, size_t len)
 	return 0;
 }
 
-static void ringbuf_libbpf_setup(void)
+static void ringbuf_libbpf_setup()
 {
 	struct ringbuf_libbpf_ctx *ctx = &ringbuf_libbpf_ctx;
 	struct bpf_link *link;
@@ -181,7 +181,7 @@ static void ringbuf_libbpf_setup(void)
 	}
 
 	link = bpf_program__attach(ctx->skel->progs.bench_ringbuf);
-	if (!link) {
+	if (IS_ERR(link)) {
 		fprintf(stderr, "failed to attach program!\n");
 		exit(1);
 	}
@@ -223,7 +223,7 @@ static void ringbuf_custom_measure(struct bench_res *res)
 	res->drops = atomic_swap(&ctx->skel->bss->dropped, 0);
 }
 
-static void ringbuf_custom_setup(void)
+static void ringbuf_custom_setup()
 {
 	struct ringbuf_custom_ctx *ctx = &ringbuf_custom_ctx;
 	const size_t page_size = getpagesize();
@@ -271,7 +271,7 @@ static void ringbuf_custom_setup(void)
 	}
 
 	link = bpf_program__attach(ctx->skel->progs.bench_ringbuf);
-	if (!link) {
+	if (IS_ERR(link)) {
 		fprintf(stderr, "failed to attach program\n");
 		exit(1);
 	}
@@ -319,7 +319,7 @@ static void ringbuf_custom_process_ring(struct ringbuf_custom *r)
 			smp_store_release(r->consumer_pos, cons_pos);
 		else
 			break;
-	}
+	};
 }
 
 static void *ringbuf_custom_consumer(void *input)
@@ -352,7 +352,7 @@ static void perfbuf_measure(struct bench_res *res)
 	res->drops = atomic_swap(&ctx->skel->bss->dropped, 0);
 }
 
-static struct perfbuf_bench *perfbuf_setup_skeleton(void)
+static struct perfbuf_bench *perfbuf_setup_skeleton()
 {
 	struct perfbuf_bench *skel;
 
@@ -390,10 +390,15 @@ perfbuf_process_sample_raw(void *input_ctx, int cpu,
 	return LIBBPF_PERF_EVENT_CONT;
 }
 
-static void perfbuf_libbpf_setup(void)
+static void perfbuf_libbpf_setup()
 {
 	struct perfbuf_libbpf_ctx *ctx = &perfbuf_libbpf_ctx;
 	struct perf_event_attr attr;
+	struct perf_buffer_raw_opts pb_opts = {
+		.event_cb = perfbuf_process_sample_raw,
+		.ctx = (void *)(long)0,
+		.attr = &attr,
+	};
 	struct bpf_link *link;
 
 	ctx->skel = perfbuf_setup_skeleton();
@@ -418,15 +423,14 @@ static void perfbuf_libbpf_setup(void)
 	}
 
 	ctx->perfbuf = perf_buffer__new_raw(bpf_map__fd(ctx->skel->maps.perfbuf),
-					    args.perfbuf_sz, &attr,
-					    perfbuf_process_sample_raw, NULL, NULL);
+					    args.perfbuf_sz, &pb_opts);
 	if (!ctx->perfbuf) {
 		fprintf(stderr, "failed to create perfbuf\n");
 		exit(1);
 	}
 
 	link = bpf_program__attach(ctx->skel->progs.bench_perfbuf);
-	if (!link) {
+	if (IS_ERR(link)) {
 		fprintf(stderr, "failed to attach program\n");
 		exit(1);
 	}
@@ -518,7 +522,6 @@ static void *perfbuf_custom_consumer(void *input)
 
 const struct bench bench_rb_libbpf = {
 	.name = "rb-libbpf",
-	.argp = &bench_ringbufs_argp,
 	.validate = bufs_validate,
 	.setup = ringbuf_libbpf_setup,
 	.producer_thread = bufs_sample_producer,
@@ -530,7 +533,6 @@ const struct bench bench_rb_libbpf = {
 
 const struct bench bench_rb_custom = {
 	.name = "rb-custom",
-	.argp = &bench_ringbufs_argp,
 	.validate = bufs_validate,
 	.setup = ringbuf_custom_setup,
 	.producer_thread = bufs_sample_producer,
@@ -542,7 +544,6 @@ const struct bench bench_rb_custom = {
 
 const struct bench bench_pb_libbpf = {
 	.name = "pb-libbpf",
-	.argp = &bench_ringbufs_argp,
 	.validate = bufs_validate,
 	.setup = perfbuf_libbpf_setup,
 	.producer_thread = bufs_sample_producer,
@@ -554,7 +555,6 @@ const struct bench bench_pb_libbpf = {
 
 const struct bench bench_pb_custom = {
 	.name = "pb-custom",
-	.argp = &bench_ringbufs_argp,
 	.validate = bufs_validate,
 	.setup = perfbuf_libbpf_setup,
 	.producer_thread = bufs_sample_producer,

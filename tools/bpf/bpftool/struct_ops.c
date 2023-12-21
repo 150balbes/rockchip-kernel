@@ -32,7 +32,7 @@ static const struct btf *get_btf_vmlinux(void)
 		return btf_vmlinux;
 
 	btf_vmlinux = libbpf_find_kernel_btf();
-	if (!btf_vmlinux)
+	if (IS_ERR(btf_vmlinux))
 		p_err("struct_ops requires kernel CONFIG_DEBUG_INFO_BTF=y");
 
 	return btf_vmlinux;
@@ -45,7 +45,7 @@ static const char *get_kern_struct_ops_name(const struct bpf_map_info *info)
 	const char *st_ops_name;
 
 	kern_btf = get_btf_vmlinux();
-	if (!kern_btf)
+	if (IS_ERR(kern_btf))
 		return "<btf_vmlinux_not_found>";
 
 	t = btf__type_by_id(kern_btf, info->btf_vmlinux_value_type_id);
@@ -63,8 +63,10 @@ static __s32 get_map_info_type_id(void)
 		return map_info_type_id;
 
 	kern_btf = get_btf_vmlinux();
-	if (!kern_btf)
-		return 0;
+	if (IS_ERR(kern_btf)) {
+		map_info_type_id = PTR_ERR(kern_btf);
+		return map_info_type_id;
+	}
 
 	map_info_type_id = btf__find_by_name_kind(kern_btf, "bpf_map_info",
 						  BTF_KIND_STRUCT);
@@ -151,7 +153,7 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 			return -1;
 		}
 
-		err = bpf_map_get_info_by_fd(fd, info, &info_len);
+		err = bpf_obj_get_info_by_fd(fd, info, &info_len);
 		if (err) {
 			p_err("can't get map info: %s", strerror(errno));
 			close(fd);
@@ -250,7 +252,7 @@ static struct res do_one_id(const char *id_str, work_func func, void *data,
 	}
 
 	fd = bpf_map_get_fd_by_id(id);
-	if (fd < 0) {
+	if (fd == -1) {
 		p_err("can't get map by id (%lu): %s", id, strerror(errno));
 		res.nr_errs++;
 		return res;
@@ -262,7 +264,7 @@ static struct res do_one_id(const char *id_str, work_func func, void *data,
 		goto done;
 	}
 
-	if (bpf_map_get_info_by_fd(fd, info, &info_len)) {
+	if (bpf_obj_get_info_by_fd(fd, info, &info_len)) {
 		p_err("can't get map info: %s", strerror(errno));
 		res.nr_errs++;
 		goto done;
@@ -413,7 +415,7 @@ static int do_dump(int argc, char **argv)
 	}
 
 	kern_btf = get_btf_vmlinux();
-	if (!kern_btf)
+	if (IS_ERR(kern_btf))
 		return -1;
 
 	if (!json_output) {
@@ -475,111 +477,69 @@ static int do_unregister(int argc, char **argv)
 	return cmd_retval(&res, true);
 }
 
-static int pin_link(struct bpf_link *link, const char *pindir,
-		    const char *name)
-{
-	char pinfile[PATH_MAX];
-	int err;
-
-	err = pathname_concat(pinfile, sizeof(pinfile), pindir, name);
-	if (err)
-		return -1;
-
-	return bpf_link__pin(link, pinfile);
-}
-
 static int do_register(int argc, char **argv)
 {
-	LIBBPF_OPTS(bpf_object_open_opts, open_opts);
-	__u32 link_info_len = sizeof(struct bpf_link_info);
-	struct bpf_link_info link_info = {};
+	struct bpf_object_load_attr load_attr = {};
+	const struct bpf_map_def *def;
 	struct bpf_map_info info = {};
 	__u32 info_len = sizeof(info);
 	int nr_errs = 0, nr_maps = 0;
-	const char *linkdir = NULL;
 	struct bpf_object *obj;
 	struct bpf_link *link;
 	struct bpf_map *map;
 	const char *file;
 
-	if (argc != 1 && argc != 2)
+	if (argc != 1)
 		usage();
 
 	file = GET_ARG();
-	if (argc == 1)
-		linkdir = GET_ARG();
 
-	if (linkdir && mount_bpffs_for_pin(linkdir, true)) {
-		p_err("can't mount bpffs for pinning");
-		return -1;
-	}
-
-	if (verifier_logs)
-		/* log_level1 + log_level2 + stats, but not stable UAPI */
-		open_opts.kernel_log_level = 1 + 2 + 4;
-
-	obj = bpf_object__open_file(file, &open_opts);
-	if (!obj)
+	obj = bpf_object__open(file);
+	if (IS_ERR_OR_NULL(obj))
 		return -1;
 
 	set_max_rlimit();
 
-	if (bpf_object__load(obj)) {
+	load_attr.obj = obj;
+	if (verifier_logs)
+		/* log_level1 + log_level2 + stats, but not stable UAPI */
+		load_attr.log_level = 1 + 2 + 4;
+
+	if (bpf_object__load_xattr(&load_attr)) {
 		bpf_object__close(obj);
 		return -1;
 	}
 
 	bpf_object__for_each_map(map, obj) {
-		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+		def = bpf_map__def(map);
+		if (def->type != BPF_MAP_TYPE_STRUCT_OPS)
 			continue;
 
 		link = bpf_map__attach_struct_ops(map);
-		if (!link) {
+		if (IS_ERR(link)) {
 			p_err("can't register struct_ops %s: %s",
-			      bpf_map__name(map), strerror(errno));
+			      bpf_map__name(map),
+			      strerror(-PTR_ERR(link)));
 			nr_errs++;
 			continue;
 		}
 		nr_maps++;
 
-		if (bpf_map_get_info_by_fd(bpf_map__fd(map), &info,
-					   &info_len)) {
+		bpf_link__disconnect(link);
+		bpf_link__destroy(link);
+
+		if (!bpf_obj_get_info_by_fd(bpf_map__fd(map), &info,
+					    &info_len))
+			p_info("Registered %s %s id %u",
+			       get_kern_struct_ops_name(&info),
+			       bpf_map__name(map),
+			       info.id);
+		else
 			/* Not p_err.  The struct_ops was attached
 			 * successfully.
 			 */
 			p_info("Registered %s but can't find id: %s",
 			       bpf_map__name(map), strerror(errno));
-			goto clean_link;
-		}
-		if (!(bpf_map__map_flags(map) & BPF_F_LINK)) {
-			p_info("Registered %s %s id %u",
-			       get_kern_struct_ops_name(&info),
-			       info.name,
-			       info.id);
-			goto clean_link;
-		}
-		if (bpf_link_get_info_by_fd(bpf_link__fd(link),
-					    &link_info,
-					    &link_info_len)) {
-			p_err("Registered %s but can't find link id: %s",
-			      bpf_map__name(map), strerror(errno));
-			nr_errs++;
-			goto clean_link;
-		}
-		if (linkdir && pin_link(link, linkdir, info.name)) {
-			p_err("can't pin link %u for %s: %s",
-			      link_info.id, info.name,
-			      strerror(errno));
-			nr_errs++;
-			goto clean_link;
-		}
-		p_info("Registered %s %s map id %u link id %u",
-		       get_kern_struct_ops_name(&info),
-		       info.name, info.id, link_info.id);
-
-clean_link:
-		bpf_link__disconnect(link);
-		bpf_link__destroy(link);
 	}
 
 	bpf_object__close(obj);
@@ -608,12 +568,12 @@ static int do_help(int argc, char **argv)
 	fprintf(stderr,
 		"Usage: %1$s %2$s { show | list } [STRUCT_OPS_MAP]\n"
 		"       %1$s %2$s dump [STRUCT_OPS_MAP]\n"
-		"       %1$s %2$s register OBJ [LINK_DIR]\n"
+		"       %1$s %2$s register OBJ\n"
 		"       %1$s %2$s unregister STRUCT_OPS_MAP\n"
 		"       %1$s %2$s help\n"
 		"\n"
+		"       OPTIONS := { {-j|--json} [{-p|--pretty}] }\n"
 		"       STRUCT_OPS_MAP := [ id STRUCT_OPS_MAP_ID | name STRUCT_OPS_MAP_NAME ]\n"
-		"       " HELP_SPEC_OPTIONS " }\n"
 		"",
 		bin_name, argv[-2]);
 
@@ -636,7 +596,8 @@ int do_struct_ops(int argc, char **argv)
 
 	err = cmd_select(cmds, argc, argv, do_help);
 
-	btf__free(btf_vmlinux);
+	if (!IS_ERR(btf_vmlinux))
+		btf__free(btf_vmlinux);
 
 	return err;
 }

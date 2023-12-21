@@ -23,12 +23,16 @@
  *
  */
 
+#include <linux/delay.h>
+#include <linux/slab.h>
+
 #include "reg_helper.h"
 
 #include "core_types.h"
 #include "link_encoder.h"
 #include "dcn10_link_encoder.h"
 #include "stream_encoder.h"
+#include "i2caux_interface.h"
 #include "dc_bios_types.h"
 
 #include "gpio_service_interface.h"
@@ -642,9 +646,8 @@ static bool dcn10_link_encoder_validate_hdmi_output(
 			crtc_timing->pixel_encoding == PIXEL_ENCODING_YCBCR420)
 		return false;
 
-	if ((!enc10->base.features.flags.bits.HDMI_6GB_EN ||
-			enc10->base.ctx->dc->debug.hdmi20_disable) &&
-			adjusted_pix_clk_100hz >= 3000000)
+	if (!enc10->base.features.flags.bits.HDMI_6GB_EN &&
+		adjusted_pix_clk_100hz >= 3000000)
 		return false;
 	if (enc10->base.ctx->dc->debug.hdmi20_disable &&
 		crtc_timing->pixel_encoding == PIXEL_ENCODING_YCBCR420)
@@ -952,21 +955,6 @@ void dcn10_link_encoder_enable_tmds_output(
 	}
 }
 
-void dcn10_link_encoder_enable_tmds_output_with_clk_pattern_wa(
-	struct link_encoder *enc,
-	enum clock_source_id clock_source,
-	enum dc_color_depth color_depth,
-	enum signal_type signal,
-	uint32_t pixel_clock)
-{
-	struct dcn10_link_encoder *enc10 = TO_DCN10_LINK_ENC(enc);
-
-	dcn10_link_encoder_enable_tmds_output(
-		enc, clock_source, color_depth, signal, pixel_clock);
-
-	REG_UPDATE(DIG_CLOCK_PATTERN, DIG_CLOCK_PATTERN, 0x1F);
-}
-
 /* enables DP PHY output */
 void dcn10_link_encoder_enable_dp_output(
 	struct link_encoder *enc,
@@ -1097,8 +1085,7 @@ void dcn10_link_encoder_disable_output(
 
 void dcn10_link_encoder_dp_set_lane_settings(
 	struct link_encoder *enc,
-	const struct dc_link_settings *link_settings,
-	const struct dc_lane_settings lane_settings[LANE_COUNT_DP_MAX])
+	const struct link_training_settings *link_settings)
 {
 	struct dcn10_link_encoder *enc10 = TO_DCN10_LINK_ENC(enc);
 	union dpcd_training_lane_set training_lane_set = { { 0 } };
@@ -1113,25 +1100,26 @@ void dcn10_link_encoder_dp_set_lane_settings(
 	cntl.action = TRANSMITTER_CONTROL_SET_VOLTAGE_AND_PREEMPASIS;
 	cntl.transmitter = enc10->base.transmitter;
 	cntl.connector_obj_id = enc10->base.connector;
-	cntl.lanes_number = link_settings->lane_count;
+	cntl.lanes_number = link_settings->link_settings.lane_count;
 	cntl.hpd_sel = enc10->base.hpd_source;
-	cntl.pixel_clock = link_settings->link_rate * LINK_RATE_REF_FREQ_IN_KHZ;
+	cntl.pixel_clock = link_settings->link_settings.link_rate *
+						LINK_RATE_REF_FREQ_IN_KHZ;
 
-	for (lane = 0; lane < link_settings->lane_count; lane++) {
+	for (lane = 0; lane < link_settings->link_settings.lane_count; lane++) {
 		/* translate lane settings */
 
 		training_lane_set.bits.VOLTAGE_SWING_SET =
-				lane_settings[lane].VOLTAGE_SWING;
+			link_settings->lane_settings[lane].VOLTAGE_SWING;
 		training_lane_set.bits.PRE_EMPHASIS_SET =
-				lane_settings[lane].PRE_EMPHASIS;
+			link_settings->lane_settings[lane].PRE_EMPHASIS;
 
 		/* post cursor 2 setting only applies to HBR2 link rate */
-		if (link_settings->link_rate == LINK_RATE_HIGH2) {
+		if (link_settings->link_settings.link_rate == LINK_RATE_HIGH2) {
 			/* this is passed to VBIOS
 			 * to program post cursor 2 level
 			 */
 			training_lane_set.bits.POST_CURSOR2_SET =
-					lane_settings[lane].POST_CURSOR2;
+				link_settings->lane_settings[lane].POST_CURSOR2;
 		}
 
 		cntl.lane_select = lane;
@@ -1219,6 +1207,7 @@ void dcn10_link_encoder_update_mst_stream_allocation_table(
 	const struct link_mst_stream_allocation_table *table)
 {
 	struct dcn10_link_encoder *enc10 = TO_DCN10_LINK_ENC(enc);
+	uint32_t value0 = 0;
 	uint32_t value1 = 0;
 	uint32_t value2 = 0;
 	uint32_t slots = 0;
@@ -1320,7 +1309,7 @@ void dcn10_link_encoder_update_mst_stream_allocation_table(
 	do {
 		udelay(10);
 
-		REG_READ(DP_MSE_SAT_UPDATE);
+		value0 = REG_READ(DP_MSE_SAT_UPDATE);
 
 		REG_GET(DP_MSE_SAT_UPDATE,
 				DP_MSE_SAT_UPDATE, &value1);
@@ -1455,15 +1444,6 @@ void dcn10_link_encoder_get_max_link_cap(struct link_encoder *enc,
 
 	if (enc->features.flags.bits.IS_HBR3_CAPABLE)
 		max_link_cap.link_rate = LINK_RATE_HIGH3;
-
-	if (enc->features.flags.bits.IS_UHBR10_CAPABLE)
-		max_link_cap.link_rate = LINK_RATE_UHBR10;
-
-	if (enc->features.flags.bits.IS_UHBR13_5_CAPABLE)
-		max_link_cap.link_rate = LINK_RATE_UHBR13_5;
-
-	if (enc->features.flags.bits.IS_UHBR20_CAPABLE)
-		max_link_cap.link_rate = LINK_RATE_UHBR20;
 
 	*link_settings = max_link_cap;
 }

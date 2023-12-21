@@ -18,7 +18,7 @@
 static char bug64hit[] __initdata =
 	"reliable operation impossible!\n%s";
 static char nowar[] __initdata =
-	"Please report to <linux-mips@vger.kernel.org>.";
+	"Please report to <linux-mips@linux-mips.org>.";
 static char r4kwar[] __initdata =
 	"Enable CPU_R4000_WORKAROUNDS to rectify.";
 static char daddiwar[] __initdata =
@@ -163,8 +163,7 @@ static __always_inline __init void check_mult_sh(void)
 	}
 
 	pr_cont("no.\n");
-	panic(bug64hit,
-	      IS_ENABLED(CONFIG_CPU_R4000_WORKAROUNDS) ? nowar : r4kwar);
+	panic(bug64hit, !R4000_WAR ? r4kwar : nowar);
 }
 
 static volatile int daddi_ov;
@@ -240,8 +239,7 @@ static __init void check_daddi(void)
 	}
 
 	pr_cont("no.\n");
-	panic(bug64hit,
-	      IS_ENABLED(CONFIG_CPU_DADDI_WORKAROUNDS) ? nowar : daddiwar);
+	panic(bug64hit, !DADDI_WAR ? daddiwar : nowar);
 }
 
 int daddiu_bug	= -1;
@@ -309,8 +307,7 @@ static __init void check_daddiu(void)
 	}
 
 	pr_cont("no.\n");
-	panic(bug64hit,
-	      IS_ENABLED(CONFIG_CPU_DADDI_WORKAROUNDS) ? nowar : daddiwar);
+	panic(bug64hit, !DADDI_WAR ? daddiwar : nowar);
 }
 
 void __init check_bugs64_early(void)

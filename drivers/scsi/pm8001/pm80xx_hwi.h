@@ -220,8 +220,8 @@
 #define SAS_DOPNRJT_RTRY_TMO            128
 #define SAS_COPNRJT_RTRY_TMO            128
 
-#define SPCV_DOORBELL_CLEAR_TIMEOUT	(30 * 50) /* 30 sec */
-#define SPC_DOORBELL_CLEAR_TIMEOUT	(15 * 50) /* 15 sec */
+#define SPCV_DOORBELL_CLEAR_TIMEOUT	(30 * 1000 * 1000) /* 30 sec */
+#define SPC_DOORBELL_CLEAR_TIMEOUT	(15 * 1000 * 1000) /* 15 sec */
 
 /*
   Making ORR bigger than IT NEXUS LOSS which is 2000000us = 2 second.
@@ -672,6 +672,11 @@ struct task_abort_req {
 	u32	reserved[27];
 } __attribute__((packed, aligned(4)));
 
+/* These flags used for SSP SMP & SATA Abort */
+#define ABORT_MASK		0x3
+#define ABORT_SINGLE		0x0
+#define ABORT_ALL		0x1
+
 /**
  * brief the data structure of SSP SATA SMP Abort Response
  * use to describe SSP SMP & SATA Abort Response ( 64 bytes)
@@ -967,7 +972,7 @@ struct dek_mgmt_req {
 struct set_phy_profile_req {
 	__le32	tag;
 	__le32	ppc_phyid;
-	__le32	reserved[29];
+	u32	reserved[29];
 } __attribute__((packed, aligned(4)));
 
 /**
@@ -1267,7 +1272,6 @@ typedef struct SASProtocolTimerConfig SASProtocolTimerConfig_t;
 #define IO_OPEN_CNX_ERROR_IT_NEXUS_LOSS_OPEN_COLLIDE	0x47
 #define IO_OPEN_CNX_ERROR_IT_NEXUS_LOSS_PATHWAY_BLOCKED	0x48
 #define IO_DS_INVALID					0x49
-#define IO_FATAL_ERROR					0x51
 /* WARNING: the value is not contiguous from here */
 #define IO_XFER_ERR_LAST_PIO_DATAIN_CRC_ERR	0x52
 #define IO_XFER_DMA_ACTIVATE_TIMEOUT		0x53
@@ -1361,21 +1365,8 @@ typedef struct SASProtocolTimerConfig SASProtocolTimerConfig_t;
 #define MSGU_HOST_SCRATCH_PAD_3			0x60
 #define MSGU_HOST_SCRATCH_PAD_4			0x64
 #define MSGU_HOST_SCRATCH_PAD_5			0x68
-#define MSGU_SCRATCH_PAD_RSVD_0			0x6C
-#define MSGU_SCRATCH_PAD_RSVD_1			0x70
-
-#define MSGU_SCRATCHPAD1_RAAE_STATE_ERR(x) ((x & 0x3) == 0x2)
-#define MSGU_SCRATCHPAD1_ILA_STATE_ERR(x) (((x >> 2) & 0x3) == 0x2)
-#define MSGU_SCRATCHPAD1_BOOTLDR_STATE_ERR(x) ((((x >> 4) & 0x7) == 0x7) || \
-						(((x >> 4) & 0x7) == 0x4))
-#define MSGU_SCRATCHPAD1_IOP0_STATE_ERR(x) (((x >> 10) & 0x3) == 0x2)
-#define MSGU_SCRATCHPAD1_IOP1_STATE_ERR(x) (((x >> 12) & 0x3) == 0x2)
-#define MSGU_SCRATCHPAD1_STATE_FATAL_ERROR(x)  \
-			(MSGU_SCRATCHPAD1_RAAE_STATE_ERR(x) ||      \
-			 MSGU_SCRATCHPAD1_ILA_STATE_ERR(x) ||       \
-			 MSGU_SCRATCHPAD1_BOOTLDR_STATE_ERR(x) ||   \
-			 MSGU_SCRATCHPAD1_IOP0_STATE_ERR(x) ||      \
-			 MSGU_SCRATCHPAD1_IOP1_STATE_ERR(x))
+#define MSGU_HOST_SCRATCH_PAD_6			0x6C
+#define MSGU_HOST_SCRATCH_PAD_7			0x70
 
 /* bit definition for ODMR register */
 #define ODMR_MASK_ALL			0xFFFFFFFF/* mask all
@@ -1433,11 +1424,6 @@ typedef struct SASProtocolTimerConfig SASProtocolTimerConfig_t;
 
 #define SCRATCH_PAD_ERROR_MASK		0xFFFFFC00 /* Error mask bits */
 #define SCRATCH_PAD_STATE_MASK		0x00000003 /* State Mask bits */
-
-/*state definition for Scratchpad Rsvd 0, Offset 0x6C, Non-fatal*/
-#define NON_FATAL_SPBC_LBUS_ECC_ERR	0x70000001
-#define NON_FATAL_BDMA_ERR		0xE0000001
-#define NON_FATAL_THERM_OVERTEMP_ERR	0x80000001
 
 /* main configuration offset - byte offset */
 #define MAIN_SIGNATURE_OFFSET		0x00 /* DWORD 0x00 */
@@ -1657,9 +1643,3 @@ typedef struct SASProtocolTimerConfig SASProtocolTimerConfig_t;
 
 #define MEMBASE_II_SHIFT_REGISTER       0x1010
 #endif
-
-/**
- * As we know sleep (1~20) ms may result in sleep longer than ~20 ms, hence we
- * choose 20 ms interval.
- */
-#define FW_READY_INTERVAL	20

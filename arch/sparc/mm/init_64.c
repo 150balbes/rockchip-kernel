@@ -27,7 +27,6 @@
 #include <linux/percpu.h>
 #include <linux/mmzone.h>
 #include <linux/gfp.h>
-#include <linux/bootmem_info.h>
 
 #include <asm/head.h>
 #include <asm/page.h>
@@ -709,10 +708,9 @@ static void __init inherit_prom_mappings(void)
 
 void prom_world(int enter)
 {
-	/*
-	 * No need to change the address space any more, just flush
-	 * the register windows
-	 */
+	if (!enter)
+		set_fs(get_fs());
+
 	__asm__ __volatile__("flushw");
 }
 
@@ -905,7 +903,7 @@ struct node_mem_mask {
 static struct node_mem_mask node_masks[MAX_NUMNODES];
 static int num_node_masks;
 
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 
 struct mdesc_mlgroup {
 	u64	node;
@@ -1061,7 +1059,7 @@ static void __init allocate_node_data(int nid)
 {
 	struct pglist_data *p;
 	unsigned long start_pfn, end_pfn;
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 
 	NODE_DATA(nid) = memblock_alloc_node(sizeof(struct pglist_data),
 					     SMP_CACHE_BYTES, nid);
@@ -1082,7 +1080,7 @@ static void __init allocate_node_data(int nid)
 
 static void init_node_masks_nonnuma(void)
 {
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 	int i;
 #endif
 
@@ -1092,7 +1090,7 @@ static void init_node_masks_nonnuma(void)
 	node_masks[0].match = 0;
 	num_node_masks = 1;
 
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 	for (i = 0; i < NR_CPUS; i++)
 		numa_cpu_lookup_table[i] = 0;
 
@@ -1100,7 +1098,7 @@ static void init_node_masks_nonnuma(void)
 #endif
 }
 
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 struct pglist_data *node_data[MAX_NUMNODES];
 
 EXPORT_SYMBOL(numa_cpu_lookup_table);
@@ -1667,6 +1665,7 @@ bool kern_addr_valid(unsigned long addr)
 
 	return pfn_valid(pte_pfn(*pte));
 }
+EXPORT_SYMBOL(kern_addr_valid);
 
 static unsigned long __ref kernel_map_hugepud(unsigned long vstart,
 					      unsigned long vend,
@@ -2488,7 +2487,7 @@ int page_in_phys_avail(unsigned long paddr)
 
 static void __init register_page_bootmem_info(void)
 {
-#ifdef CONFIG_NUMA
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 	int i;
 
 	for_each_online_node(i)
@@ -2521,6 +2520,7 @@ void __init mem_init(void)
 	}
 	mark_page_reserved(mem_map_zero);
 
+	mem_init_print_info(NULL);
 
 	if (tlb_type == cheetah || tlb_type == cheetah_plus)
 		cheetah_ecache_flush_init();
@@ -2632,9 +2632,6 @@ void vmemmap_free(unsigned long start, unsigned long end,
 {
 }
 #endif /* CONFIG_SPARSEMEM_VMEMMAP */
-
-/* These are actually filled in at boot time by sun4{u,v}_pgprot_init() */
-static pgprot_t protection_map[16] __ro_after_init;
 
 static void prot_init_common(unsigned long page_none,
 			     unsigned long page_shared,
@@ -3186,15 +3183,3 @@ void copy_highpage(struct page *to, struct page *from)
 	}
 }
 EXPORT_SYMBOL(copy_highpage);
-
-pgprot_t vm_get_page_prot(unsigned long vm_flags)
-{
-	unsigned long prot = pgprot_val(protection_map[vm_flags &
-					(VM_READ|VM_WRITE|VM_EXEC|VM_SHARED)]);
-
-	if (vm_flags & VM_SPARC_ADI)
-		prot |= _PAGE_MCD_4V;
-
-	return __pgprot(prot);
-}
-EXPORT_SYMBOL(vm_get_page_prot);

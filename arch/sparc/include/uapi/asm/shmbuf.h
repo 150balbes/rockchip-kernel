@@ -2,9 +2,6 @@
 #ifndef _SPARC_SHMBUF_H
 #define _SPARC_SHMBUF_H
 
-#include <asm/ipcbuf.h>
-#include <asm/posix_types.h>
-
 /* 
  * The shmid64_ds structure for sparc architecture.
  * Note extra padding because this structure is passed back and forth
@@ -28,7 +25,7 @@ struct shmid64_ds {
 	unsigned long		shm_ctime_high;
 	unsigned long		shm_ctime;	/* last change time */
 #endif
-	__kernel_size_t		shm_segsz;	/* size of segment (bytes) */
+	size_t			shm_segsz;	/* size of segment (bytes) */
 	__kernel_pid_t		shm_cpid;	/* pid of creator */
 	__kernel_pid_t		shm_lpid;	/* pid of last operator */
 	unsigned long		shm_nattch;	/* no. of current attaches */

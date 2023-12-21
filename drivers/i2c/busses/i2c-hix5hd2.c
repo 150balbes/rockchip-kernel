@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2014 Linaro Ltd.
- * Copyright (c) 2014 HiSilicon Limited.
+ * Copyright (c) 2014 Hisilicon Limited.
  *
  * Now only support 7 bit address.
  */
@@ -360,11 +360,7 @@ static int hix5hd2_i2c_xfer(struct i2c_adapter *adap,
 	pm_runtime_get_sync(priv->dev);
 
 	for (i = 0; i < num; i++, msgs++) {
-		if ((i == num - 1) || (msgs->flags & I2C_M_STOP))
-			stop = 1;
-		else
-			stop = 0;
-
+		stop = (i == num - 1);
 		ret = hix5hd2_i2c_xfer_msg(priv, msgs, stop);
 		if (ret < 0)
 			goto out;
@@ -420,13 +416,14 @@ static int hix5hd2_i2c_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	priv->clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	priv->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(priv->clk)) {
-		dev_err(&pdev->dev, "cannot enable clock\n");
+		dev_err(&pdev->dev, "cannot get clock\n");
 		return PTR_ERR(priv->clk);
 	}
+	clk_prepare_enable(priv->clk);
 
-	strscpy(priv->adap.name, "hix5hd2-i2c", sizeof(priv->adap.name));
+	strlcpy(priv->adap.name, "hix5hd2-i2c", sizeof(priv->adap.name));
 	priv->dev = &pdev->dev;
 	priv->adap.owner = THIS_MODULE;
 	priv->adap.algo = &hix5hd2_i2c_algorithm;
@@ -445,7 +442,7 @@ static int hix5hd2_i2c_probe(struct platform_device *pdev)
 			       IRQF_NO_SUSPEND, dev_name(&pdev->dev), priv);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "cannot request HS-I2C IRQ %d\n", irq);
-		return ret;
+		goto err_clk;
 	}
 
 	pm_runtime_set_autosuspend_delay(priv->dev, MSEC_PER_SEC);
@@ -462,17 +459,21 @@ static int hix5hd2_i2c_probe(struct platform_device *pdev)
 err_runtime:
 	pm_runtime_disable(priv->dev);
 	pm_runtime_set_suspended(priv->dev);
-
+err_clk:
+	clk_disable_unprepare(priv->clk);
 	return ret;
 }
 
-static void hix5hd2_i2c_remove(struct platform_device *pdev)
+static int hix5hd2_i2c_remove(struct platform_device *pdev)
 {
 	struct hix5hd2_i2c_priv *priv = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&priv->adap);
 	pm_runtime_disable(priv->dev);
 	pm_runtime_set_suspended(priv->dev);
+	clk_disable_unprepare(priv->clk);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -510,7 +511,7 @@ MODULE_DEVICE_TABLE(of, hix5hd2_i2c_match);
 
 static struct platform_driver hix5hd2_i2c_driver = {
 	.probe		= hix5hd2_i2c_probe,
-	.remove_new	= hix5hd2_i2c_remove,
+	.remove		= hix5hd2_i2c_remove,
 	.driver		= {
 		.name	= "hix5hd2-i2c",
 		.pm	= &hix5hd2_i2c_pm_ops,

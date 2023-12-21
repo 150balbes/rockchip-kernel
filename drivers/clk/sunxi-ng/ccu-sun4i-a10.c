@@ -7,9 +7,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/io.h>
-#include <linux/module.h>
-#include <linux/of_device.h>
-#include <linux/platform_device.h>
+#include <linux/of_address.h>
 
 #include "ccu_common.h"
 #include "ccu_reset.h"
@@ -1427,19 +1425,18 @@ static const struct sunxi_ccu_desc sun7i_a20_ccu_desc = {
 	.num_resets	= ARRAY_SIZE(sunxi_a10_a20_ccu_resets),
 };
 
-static int sun4i_a10_ccu_probe(struct platform_device *pdev)
+static void __init sun4i_ccu_init(struct device_node *node,
+				  const struct sunxi_ccu_desc *desc)
 {
-	const struct sunxi_ccu_desc *desc;
 	void __iomem *reg;
 	u32 val;
 
-	desc = of_device_get_match_data(&pdev->dev);
-	if (!desc)
-		return -EINVAL;
-
-	reg = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(reg))
-		return PTR_ERR(reg);
+	reg = of_io_request_and_map(node, 0, of_node_full_name(node));
+	if (IS_ERR(reg)) {
+		pr_err("%s: Could not map the clock registers\n",
+		       of_node_full_name(node));
+		return;
+	}
 
 	val = readl(reg + SUN4I_PLL_AUDIO_REG);
 
@@ -1467,30 +1464,19 @@ static int sun4i_a10_ccu_probe(struct platform_device *pdev)
 	val &= ~GENMASK(7, 6);
 	writel(val | (2 << 6), reg + SUN4I_AHB_REG);
 
-	return devm_sunxi_ccu_probe(&pdev->dev, reg, desc);
+	sunxi_ccu_probe(node, reg, desc);
 }
 
-static const struct of_device_id sun4i_a10_ccu_ids[] = {
-	{
-		.compatible = "allwinner,sun4i-a10-ccu",
-		.data = &sun4i_a10_ccu_desc,
-	},
-	{
-		.compatible = "allwinner,sun7i-a20-ccu",
-		.data = &sun7i_a20_ccu_desc,
-	},
-	{ }
-};
+static void __init sun4i_a10_ccu_setup(struct device_node *node)
+{
+	sun4i_ccu_init(node, &sun4i_a10_ccu_desc);
+}
+CLK_OF_DECLARE(sun4i_a10_ccu, "allwinner,sun4i-a10-ccu",
+	       sun4i_a10_ccu_setup);
 
-static struct platform_driver sun4i_a10_ccu_driver = {
-	.probe	= sun4i_a10_ccu_probe,
-	.driver	= {
-		.name			= "sun4i-a10-ccu",
-		.suppress_bind_attrs	= true,
-		.of_match_table		= sun4i_a10_ccu_ids,
-	},
-};
-module_platform_driver(sun4i_a10_ccu_driver);
-
-MODULE_IMPORT_NS(SUNXI_CCU);
-MODULE_LICENSE("GPL");
+static void __init sun7i_a20_ccu_setup(struct device_node *node)
+{
+	sun4i_ccu_init(node, &sun7i_a20_ccu_desc);
+}
+CLK_OF_DECLARE(sun7i_a20_ccu, "allwinner,sun7i-a20-ccu",
+	       sun7i_a20_ccu_setup);

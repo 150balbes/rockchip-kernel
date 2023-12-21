@@ -151,10 +151,22 @@ static int __sigp_stop_and_store_status(struct kvm_vcpu *vcpu,
 static int __sigp_set_arch(struct kvm_vcpu *vcpu, u32 parameter,
 			   u64 *status_reg)
 {
+	unsigned int i;
+	struct kvm_vcpu *v;
+	bool all_stopped = true;
+
+	kvm_for_each_vcpu(i, v, vcpu->kvm) {
+		if (v == vcpu)
+			continue;
+		if (!is_vcpu_stopped(v))
+			all_stopped = false;
+	}
+
 	*status_reg &= 0xffffffff00000000UL;
 
 	/* Reject set arch order, with czam we're always in z/Arch mode. */
-	*status_reg |= SIGP_STATUS_INVALID_PARAMETER;
+	*status_reg |= (all_stopped ? SIGP_STATUS_INVALID_PARAMETER :
+					SIGP_STATUS_INCORRECT_STATE);
 	return SIGP_CC_STATUS_STORED;
 }
 
@@ -469,7 +481,7 @@ int kvm_s390_handle_sigp(struct kvm_vcpu *vcpu)
  *
  * This interception will occur at the source cpu when a source cpu sends an
  * external call to a target cpu and the target cpu has the WAIT bit set in
- * its cpuflags. Interception will occur after the interrupt indicator bits at
+ * its cpuflags. Interception will occurr after the interrupt indicator bits at
  * the target cpu have been set. All error cases will lead to instruction
  * interception, therefore nothing is to be checked or prepared.
  */

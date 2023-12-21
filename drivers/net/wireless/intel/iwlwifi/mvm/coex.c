@@ -1,8 +1,63 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/*
- * Copyright (C) 2013-2014, 2018-2020, 2022 Intel Corporation
- * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
- */
+/******************************************************************************
+ *
+ * This file is provided under a dual BSD/GPLv2 license.  When using or
+ * redistributing this file, you may do so under either license.
+ *
+ * GPL LICENSE SUMMARY
+ *
+ * Copyright(c) 2013 - 2014, 2018 - 2020 Intel Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2015 Intel Mobile Communications GmbH
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * The full GNU General Public License is included in this distribution
+ * in the file called COPYING.
+ *
+ * Contact Information:
+ *  Intel Linux Wireless <linuxwifi@intel.com>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ *
+ * BSD LICENSE
+ *
+ * Copyright(c) 2013 - 2014, 2018 - 2020 Intel Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2015 Intel Mobile Communications GmbH
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *  * Neither the name Intel Corporation nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ *****************************************************************************/
+
 #include <linux/ieee80211.h>
 #include <linux/etherdevice.h>
 #include <net/mac80211.h>
@@ -106,7 +161,7 @@ iwl_get_coex_type(struct iwl_mvm *mvm, const struct ieee80211_vif *vif)
 
 	rcu_read_lock();
 
-	chanctx_conf = rcu_dereference(vif->bss_conf.chanctx_conf);
+	chanctx_conf = rcu_dereference(vif->chanctx_conf);
 
 	if (!chanctx_conf ||
 	     chanctx_conf->def.chan->band != NL80211_BAND_2GHZ) {
@@ -194,7 +249,7 @@ static int iwl_mvm_bt_coex_reduced_txp(struct iwl_mvm *mvm, u8 sta_id,
 	if (mvmsta->bt_reduced_txpower == enable)
 		return 0;
 
-	value = mvmsta->deflink.sta_id;
+	value = mvmsta->sta_id;
 
 	if (enable)
 		value |= BT_REDUCED_TX_POWER_BIT;
@@ -257,35 +312,33 @@ static void iwl_mvm_bt_coex_tcm_based_ci(struct iwl_mvm *mvm,
 	swap(data->primary, data->secondary);
 }
 
-static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
-				      struct ieee80211_vif *vif,
-				      struct iwl_bt_iterator_data *data,
-				      unsigned int link_id)
+/* must be called under rcu_read_lock */
+static void iwl_mvm_bt_notif_iterator(void *_data, u8 *mac,
+				      struct ieee80211_vif *vif)
 {
+	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
+	struct iwl_bt_iterator_data *data = _data;
+	struct iwl_mvm *mvm = data->mvm;
+	struct ieee80211_chanctx_conf *chanctx_conf;
 	/* default smps_mode is AUTOMATIC - only used for client modes */
 	enum ieee80211_smps_mode smps_mode = IEEE80211_SMPS_AUTOMATIC;
-	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 	u32 bt_activity_grading, min_ag_for_static_smps;
-	struct ieee80211_chanctx_conf *chanctx_conf;
-	struct iwl_mvm_vif_link_info *link_info;
-	struct ieee80211_bss_conf *link_conf;
 	int ave_rssi;
 
 	lockdep_assert_held(&mvm->mutex);
 
-	link_info = mvmvif->link[link_id];
-	if (!link_info)
+	switch (vif->type) {
+	case NL80211_IFTYPE_STATION:
+		break;
+	case NL80211_IFTYPE_AP:
+		if (!mvmvif->ap_ibss_active)
+			return;
+		break;
+	default:
 		return;
+	}
 
-	link_conf = rcu_dereference(vif->link_conf[link_id]);
-	/* This can happen due to races: if we receive the notification
-	 * and have the mutex held, while mac80211 is stuck on our mutex
-	 * in the middle of removing the link.
-	 */
-	if (!link_conf)
-		return;
-
-	chanctx_conf = rcu_dereference(link_conf->chanctx_conf);
+	chanctx_conf = rcu_dereference(vif->chanctx_conf);
 
 	/* If channel context is invalid or not on 2.4GHz .. */
 	if ((!chanctx_conf ||
@@ -293,10 +346,9 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 		if (vif->type == NL80211_IFTYPE_STATION) {
 			/* ... relax constraints and disable rssi events */
 			iwl_mvm_update_smps(mvm, vif, IWL_MVM_SMPS_REQ_BT_COEX,
-					    smps_mode, link_id);
-			iwl_mvm_bt_coex_reduced_txp(mvm, link_info->ap_sta_id,
+					    smps_mode);
+			iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id,
 						    false);
-			/* FIXME: should this be per link? */
 			iwl_mvm_bt_coex_enable_rssi_event(mvm, vif, false, 0);
 		}
 		return;
@@ -314,21 +366,20 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 		smps_mode = IEEE80211_SMPS_DYNAMIC;
 
 	/* relax SMPS constraints for next association */
-	if (!vif->cfg.assoc)
+	if (!vif->bss_conf.assoc)
 		smps_mode = IEEE80211_SMPS_AUTOMATIC;
 
-	if (link_info->phy_ctxt &&
-	    (mvm->last_bt_notif.rrc_status & BIT(link_info->phy_ctxt->id)))
+	if (mvmvif->phy_ctxt &&
+	    (mvm->last_bt_notif.rrc_status & BIT(mvmvif->phy_ctxt->id)))
 		smps_mode = IEEE80211_SMPS_AUTOMATIC;
 
 	IWL_DEBUG_COEX(data->mvm,
-		       "mac %d link %d: bt_activity_grading %d smps_req %d\n",
-		       mvmvif->id, link_info->fw_link_id,
-		       bt_activity_grading, smps_mode);
+		       "mac %d: bt_activity_grading %d smps_req %d\n",
+		       mvmvif->id, bt_activity_grading, smps_mode);
 
 	if (vif->type == NL80211_IFTYPE_STATION)
 		iwl_mvm_update_smps(mvm, vif, IWL_MVM_SMPS_REQ_BT_COEX,
-				    smps_mode, link_id);
+				    smps_mode);
 
 	/* low latency is always primary */
 	if (iwl_mvm_vif_low_latency(mvmvif)) {
@@ -357,7 +408,6 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 			data->secondary = chanctx_conf;
 		}
 
-		/* FIXME: TCM load per interface? or need something per link? */
 		if (data->primary == chanctx_conf)
 			data->primary_load = mvm->tcm.result.load[mvmvif->id];
 		else if (data->secondary == chanctx_conf)
@@ -375,7 +425,6 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 		/* if secondary is not NULL, it might be a GO */
 		data->secondary = chanctx_conf;
 
-	/* FIXME: TCM load per interface? or need something per link? */
 	if (data->primary == chanctx_conf)
 		data->primary_load = mvm->tcm.result.load[mvmvif->id];
 	else if (data->secondary == chanctx_conf)
@@ -388,10 +437,9 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 	 *  we are not associated
 	 */
 	if (iwl_get_coex_type(mvm, vif) == BT_COEX_LOOSE_LUT ||
-	    mvm->cfg->bt_shared_single_ant || !vif->cfg.assoc ||
+	    mvm->cfg->bt_shared_single_ant || !vif->bss_conf.assoc ||
 	    le32_to_cpu(mvm->last_bt_notif.bt_activity_grading) == BT_OFF) {
-		iwl_mvm_bt_coex_reduced_txp(mvm, link_info->ap_sta_id, false);
-		/* FIXME: should this be per link? */
+		iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id, false);
 		iwl_mvm_bt_coex_enable_rssi_event(mvm, vif, false, 0);
 		return;
 	}
@@ -403,43 +451,15 @@ static void iwl_mvm_bt_notif_per_link(struct iwl_mvm *mvm,
 	if (!ave_rssi)
 		ave_rssi = -100;
 	if (ave_rssi > -IWL_MVM_BT_COEX_EN_RED_TXP_THRESH) {
-		if (iwl_mvm_bt_coex_reduced_txp(mvm, link_info->ap_sta_id,
-						true))
+		if (iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id, true))
 			IWL_ERR(mvm, "Couldn't send BT_CONFIG cmd\n");
 	} else if (ave_rssi < -IWL_MVM_BT_COEX_DIS_RED_TXP_THRESH) {
-		if (iwl_mvm_bt_coex_reduced_txp(mvm, link_info->ap_sta_id,
-						false))
+		if (iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id, false))
 			IWL_ERR(mvm, "Couldn't send BT_CONFIG cmd\n");
 	}
 
 	/* Begin to monitor the RSSI: it may influence the reduced Tx power */
 	iwl_mvm_bt_coex_enable_rssi_event(mvm, vif, true, ave_rssi);
-}
-
-/* must be called under rcu_read_lock */
-static void iwl_mvm_bt_notif_iterator(void *_data, u8 *mac,
-				      struct ieee80211_vif *vif)
-{
-	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
-	struct iwl_bt_iterator_data *data = _data;
-	struct iwl_mvm *mvm = data->mvm;
-	unsigned int link_id;
-
-	lockdep_assert_held(&mvm->mutex);
-
-	switch (vif->type) {
-	case NL80211_IFTYPE_STATION:
-		break;
-	case NL80211_IFTYPE_AP:
-		if (!mvmvif->ap_ibss_active)
-			return;
-		break;
-	default:
-		return;
-	}
-
-	for (link_id = 0; link_id < IEEE80211_MLD_MAX_NUM_LINKS; link_id++)
-		iwl_mvm_bt_notif_per_link(mvm, vif, data, link_id);
 }
 
 static void iwl_mvm_bt_coex_notif_handle(struct iwl_mvm *mvm)
@@ -556,7 +576,7 @@ void iwl_mvm_bt_rssi_event(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	 * Rssi update while not associated - can happen since the statistics
 	 * are handled asynchronously
 	 */
-	if (mvmvif->deflink.ap_sta_id == IWL_MVM_INVALID_STA)
+	if (mvmvif->ap_sta_id == IWL_MVM_INVALID_STA)
 		return;
 
 	/* No BT - reports should be disabled */
@@ -572,13 +592,10 @@ void iwl_mvm_bt_rssi_event(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	 */
 	if (rssi_event == RSSI_EVENT_LOW || mvm->cfg->bt_shared_single_ant ||
 	    iwl_get_coex_type(mvm, vif) == BT_COEX_LOOSE_LUT)
-		ret = iwl_mvm_bt_coex_reduced_txp(mvm,
-						  mvmvif->deflink.ap_sta_id,
+		ret = iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id,
 						  false);
 	else
-		ret = iwl_mvm_bt_coex_reduced_txp(mvm,
-						  mvmvif->deflink.ap_sta_id,
-						  true);
+		ret = iwl_mvm_bt_coex_reduced_txp(mvm, mvmvif->ap_sta_id, true);
 
 	if (ret)
 		IWL_ERR(mvm, "couldn't send BT_CONFIG HCMD upon RSSI event\n");
@@ -592,7 +609,7 @@ u16 iwl_mvm_coex_agg_time_limit(struct iwl_mvm *mvm,
 {
 	struct iwl_mvm_sta *mvmsta = iwl_mvm_sta_from_mac80211(sta);
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(mvmsta->vif);
-	struct iwl_mvm_phy_ctxt *phy_ctxt = mvmvif->deflink.phy_ctxt;
+	struct iwl_mvm_phy_ctxt *phy_ctxt = mvmvif->phy_ctxt;
 	enum iwl_bt_coex_lut_type lut_type;
 
 	if (mvm->last_bt_notif.ttc_status & BIT(phy_ctxt->id))
@@ -616,7 +633,7 @@ bool iwl_mvm_bt_coex_is_mimo_allowed(struct iwl_mvm *mvm,
 {
 	struct iwl_mvm_sta *mvmsta = iwl_mvm_sta_from_mac80211(sta);
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(mvmsta->vif);
-	struct iwl_mvm_phy_ctxt *phy_ctxt = mvmvif->deflink.phy_ctxt;
+	struct iwl_mvm_phy_ctxt *phy_ctxt = mvmvif->phy_ctxt;
 	enum iwl_bt_coex_lut_type lut_type;
 
 	if (mvm->last_bt_notif.ttc_status & BIT(phy_ctxt->id))

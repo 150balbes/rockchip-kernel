@@ -28,9 +28,13 @@
 #include <linux/platform_data/spi-s3c64xx.h>
 
 #include "cpu.h"
-#include "irqs.h"
+#include <mach/irqs.h>
 
 #include "crag6410.h"
+
+static struct s3c64xx_spi_csinfo wm0010_spi_csinfo = {
+	.line = S3C64XX_GPC(3),
+};
 
 static struct wm0010_pdata wm0010_pdata = {
 	.gpio_reset = S3C64XX_GPN(6),
@@ -45,6 +49,7 @@ static struct spi_board_info wm1253_devs[] = {
 		.chip_select	= 0,
 		.mode		= SPI_MODE_0,
 		.irq		= S3C_EINT(4),
+		.controller_data = &wm0010_spi_csinfo,
 		.platform_data = &wm0010_pdata,
 	},
 };
@@ -57,6 +62,7 @@ static struct spi_board_info balblair_devs[] = {
 		.chip_select	= 0,
 		.mode		= SPI_MODE_0,
 		.irq		= S3C_EINT(4),
+		.controller_data = &wm0010_spi_csinfo,
 		.platform_data = &wm0010_pdata,
 	},
 };
@@ -223,6 +229,10 @@ static struct arizona_pdata wm5102_reva_pdata = {
 	},
 };
 
+static struct s3c64xx_spi_csinfo codec_spi_csinfo = {
+	.line = S3C64XX_GPN(5),
+};
+
 static struct spi_board_info wm5102_reva_spi_devs[] = {
 	[0] = {
 		.modalias	= "wm5102",
@@ -232,6 +242,7 @@ static struct spi_board_info wm5102_reva_spi_devs[] = {
 		.mode		= SPI_MODE_0,
 		.irq		= GLENFARCLAS_PMIC_IRQ_BASE +
 				  WM831X_IRQ_GPIO_2,
+		.controller_data = &codec_spi_csinfo,
 		.platform_data = &wm5102_reva_pdata,
 	},
 };
@@ -264,6 +275,7 @@ static struct spi_board_info wm5102_spi_devs[] = {
 		.mode		= SPI_MODE_0,
 		.irq		= GLENFARCLAS_PMIC_IRQ_BASE +
 				  WM831X_IRQ_GPIO_2,
+		.controller_data = &codec_spi_csinfo,
 		.platform_data = &wm5102_pdata,
 	},
 };
@@ -286,6 +298,7 @@ static struct spi_board_info wm5110_spi_devs[] = {
 		.mode		= SPI_MODE_0,
 		.irq		= GLENFARCLAS_PMIC_IRQ_BASE +
 				  WM831X_IRQ_GPIO_2,
+		.controller_data = &codec_spi_csinfo,
 		.platform_data = &wm5102_reva_pdata,
 	},
 };
@@ -418,7 +431,7 @@ static struct i2c_driver wlf_gf_module_driver = {
 	.driver = {
 		.name = "wlf-gf-module"
 	},
-	.probe = wlf_gf_module_probe,
+	.probe_new = wlf_gf_module_probe,
 	.id_table = wlf_gf_module_id,
 };
 

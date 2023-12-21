@@ -55,10 +55,8 @@ enum bfa_msgq_cmdq_flags {
 	BFA_MSGQ_CMDQ_F_DB_UPDATE	= 1,
 };
 
-enum cmdq_event;
-
 struct bfa_msgq_cmdq {
-	void (*fsm)(struct bfa_msgq_cmdq *s, enum cmdq_event e);
+	bfa_fsm_t			fsm;
 	enum bfa_msgq_cmdq_flags flags;
 
 	u16			producer_index;
@@ -83,10 +81,8 @@ enum bfa_msgq_rspq_flags {
 
 typedef void (*bfa_msgq_mcfunc_t)(void *cbarg, struct bfi_msgq_mhdr *mhdr);
 
-enum rspq_event;
-
 struct bfa_msgq_rspq {
-	void (*fsm)(struct bfa_msgq_rspq *s, enum rspq_event e);
+	bfa_fsm_t			fsm;
 	enum bfa_msgq_rspq_flags flags;
 
 	u16			producer_index;

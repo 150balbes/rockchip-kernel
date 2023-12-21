@@ -5,38 +5,25 @@
 #ifndef __PINCTRL_MSM_H__
 #define __PINCTRL_MSM_H__
 
-#include <linux/pm.h>
-#include <linux/types.h>
-
-#include <linux/pinctrl/pinctrl.h>
-
-struct platform_device;
-
 struct pinctrl_pin_desc;
 
-#define APQ_PIN_FUNCTION(fname)					\
-	[APQ_MUX_##fname] = PINCTRL_PINFUNCTION(#fname,		\
-					fname##_groups,		\
-					ARRAY_SIZE(fname##_groups))
-
-#define IPQ_PIN_FUNCTION(fname)					\
-	[IPQ_MUX_##fname] = PINCTRL_PINFUNCTION(#fname,		\
-					fname##_groups,		\
-					ARRAY_SIZE(fname##_groups))
-
-#define MSM_PIN_FUNCTION(fname) 				\
-	[msm_mux_##fname] = PINCTRL_PINFUNCTION(#fname,		\
-					fname##_groups,		\
-					ARRAY_SIZE(fname##_groups))
-
-#define QCA_PIN_FUNCTION(fname)					\
-	[qca_mux_##fname] = PINCTRL_PINFUNCTION(#fname,		\
-					fname##_groups,		\
-					ARRAY_SIZE(fname##_groups))
+/**
+ * struct msm_function - a pinmux function
+ * @name:    Name of the pinmux function.
+ * @groups:  List of pingroups for this function.
+ * @ngroups: Number of entries in @groups.
+ */
+struct msm_function {
+	const char *name;
+	const char * const *groups;
+	unsigned ngroups;
+};
 
 /**
  * struct msm_pingroup - Qualcomm pingroup definition
- * @grp:                  Generic data of the pin group (name and pins)
+ * @name:                 Name of the pingroup.
+ * @pins:	          A list of pins assigned to this pingroup.
+ * @npins:	          Number of entries in @pins.
  * @funcs:                A list of pinmux functions that can be selected for
  *                        this group. The index of the selected function is used
  *                        for programming the function selector.
@@ -69,7 +56,9 @@ struct pinctrl_pin_desc;
  *                        otherwise 1.
  */
 struct msm_pingroup {
-	struct pingroup grp;
+	const char *name;
+	const unsigned *pins;
+	unsigned npins;
 
 	unsigned *funcs;
 	unsigned nfuncs;
@@ -86,11 +75,8 @@ struct msm_pingroup {
 
 	unsigned pull_bit:5;
 	unsigned drv_bit:5;
-	unsigned i2c_pull_bit:5;
 
 	unsigned od_bit:5;
-	unsigned egpio_enable:5;
-	unsigned egpio_present:5;
 	unsigned oe_bit:5;
 	unsigned in_bit:5;
 	unsigned out_bit:5;
@@ -133,18 +119,11 @@ struct msm_gpio_wakeirq_map {
  *                            to be aware that their parent can't handle dual
  *                            edge interrupts.
  * @gpio_func: Which function number is GPIO (usually 0).
- * @egpio_func: If non-zero then this SoC supports eGPIO. Even though in
- *              hardware this is a mux 1-level above the TLMM, we'll treat
- *              it as if this is just another mux state of the TLMM. Since
- *              it doesn't really map to hardware, we'll allocate a virtual
- *              function number for eGPIO and any time we see that function
- *              number used we'll treat it as a request to mux away from
- *              our TLMM towards another owner.
  */
 struct msm_pinctrl_soc_data {
 	const struct pinctrl_pin_desc *pins;
 	unsigned npins;
-	const struct pinfunction *functions;
+	const struct msm_function *functions;
 	unsigned nfunctions;
 	const struct msm_pingroup *groups;
 	unsigned ngroups;
@@ -157,7 +136,6 @@ struct msm_pinctrl_soc_data {
 	unsigned int nwakeirq_map;
 	bool wakeirq_dual_edge_errata;
 	unsigned int gpio_func;
-	unsigned int egpio_func;
 };
 
 extern const struct dev_pm_ops msm_pinctrl_dev_pm_ops;

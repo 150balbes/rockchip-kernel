@@ -7,6 +7,8 @@
 
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/miscdevice.h>
+#include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
@@ -85,7 +87,7 @@ static struct sync_timeline *sync_timeline_create(const char *name)
 
 	kref_init(&obj->kref);
 	obj->context = dma_fence_context_alloc(1);
-	strscpy(obj->name, name, sizeof(obj->name));
+	strlcpy(obj->name, name, sizeof(obj->name));
 
 	obj->pt_tree = RB_ROOT;
 	INIT_LIST_HEAD(&obj->pt_list);
@@ -410,3 +412,13 @@ const struct file_operations sw_sync_debugfs_fops = {
 	.unlocked_ioctl = sw_sync_ioctl,
 	.compat_ioctl	= compat_ptr_ioctl,
 };
+
+static struct miscdevice sw_sync_dev = {
+	.minor	= MISC_DYNAMIC_MINOR,
+	.name	= "sw_sync",
+	.fops	= &sw_sync_debugfs_fops,
+};
+
+module_misc_device(sw_sync_dev);
+
+MODULE_LICENSE("GPL v2");

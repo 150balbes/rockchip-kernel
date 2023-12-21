@@ -23,6 +23,7 @@
 #include <linux/string.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/rawnand.h>
+#include <linux/mtd/nand_bch.h>
 #include <linux/mtd/partitions.h>
 #include <linux/delay.h>
 #include <linux/list.h>
@@ -200,9 +201,6 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 
 /* Calculate the OOB offset in flash RAM image by (row, column) address */
 #define NS_RAW_OFFSET_OOB(ns) (NS_RAW_OFFSET(ns) + ns->geom.pgsz)
-
-/* Calculate the byte shift in the next page to access */
-#define NS_PAGE_BYTE_SHIFT(ns) ((ns)->regs.column + (ns)->regs.off)
 
 /* After a command is input, the simulator goes to one of the following states */
 #define STATE_CMD_READ0        0x00000001 /* read data from the beginning of page */
@@ -982,8 +980,15 @@ static int ns_read_error(unsigned int page_no)
 
 static int ns_setup_wear_reporting(struct mtd_info *mtd)
 {
+	size_t mem;
+
 	wear_eb_count = div_u64(mtd->size, mtd->erasesize);
-	erase_block_wear = kcalloc(wear_eb_count, sizeof(unsigned long), GFP_KERNEL);
+	mem = wear_eb_count * sizeof(unsigned long);
+	if (mem / sizeof(unsigned long) != wear_eb_count) {
+		NS_ERR("Too many erase blocks for wear reporting\n");
+		return -ENOMEM;
+	}
+	erase_block_wear = kzalloc(mem, GFP_KERNEL);
 	if (!erase_block_wear) {
 		NS_ERR("Too many erase blocks for wear reporting\n");
 		return -ENOMEM;
@@ -1385,7 +1390,7 @@ static inline union ns_mem *NS_GET_PAGE(struct nandsim *ns)
  */
 static inline u_char *NS_PAGE_BYTE_OFF(struct nandsim *ns)
 {
-	return NS_GET_PAGE(ns)->byte + NS_PAGE_BYTE_SHIFT(ns);
+	return NS_GET_PAGE(ns)->byte + ns->regs.column + ns->regs.off;
 }
 
 static int ns_do_read_error(struct nandsim *ns, int num)
@@ -1393,7 +1398,7 @@ static int ns_do_read_error(struct nandsim *ns, int num)
 	unsigned int page_no = ns->regs.row;
 
 	if (ns_read_error(page_no)) {
-		get_random_bytes(ns->buf.byte, num);
+		prandom_bytes(ns->buf.byte, num);
 		NS_WARN("simulating read error in page %u\n", page_no);
 		return 1;
 	}
@@ -1402,16 +1407,16 @@ static int ns_do_read_error(struct nandsim *ns, int num)
 
 static void ns_do_bit_flips(struct nandsim *ns, int num)
 {
-	if (bitflips && get_random_u16() < (1 << 6)) {
+	if (bitflips && prandom_u32() < (1 << 22)) {
 		int flips = 1;
 		if (bitflips > 1)
-			flips = get_random_u32_inclusive(1, bitflips);
+			flips = (prandom_u32() % (int) bitflips) + 1;
 		while (flips--) {
-			int pos = get_random_u32_below(num * 8);
+			int pos = prandom_u32() % (num * 8);
 			ns->buf.byte[pos / 8] ^= (1 << (pos % 8));
 			NS_WARN("read_page: flipping bit %d in page %d "
 				"reading from %d ecc: corrected=%u failed=%u\n",
-				pos, ns->regs.row, NS_PAGE_BYTE_SHIFT(ns),
+				pos, ns->regs.row, ns->regs.column + ns->regs.off,
 				nsmtd->ecc_stats.corrected, nsmtd->ecc_stats.failed);
 		}
 	}
@@ -1433,7 +1438,7 @@ static void ns_read_page(struct nandsim *ns, int num)
 			ssize_t tx;
 
 			NS_DBG("read_page: page %d written, reading from %d\n",
-				ns->regs.row, NS_PAGE_BYTE_SHIFT(ns));
+				ns->regs.row, ns->regs.column + ns->regs.off);
 			if (ns_do_read_error(ns, num))
 				return;
 			pos = (loff_t)NS_RAW_OFFSET(ns) + ns->regs.off;
@@ -1454,7 +1459,7 @@ static void ns_read_page(struct nandsim *ns, int num)
 		memset(ns->buf.byte, 0xFF, num);
 	} else {
 		NS_DBG("read_page: page %d allocated, reading from %d\n",
-			ns->regs.row, NS_PAGE_BYTE_SHIFT(ns));
+			ns->regs.row, ns->regs.column + ns->regs.off);
 		if (ns_do_read_error(ns, num))
 			return;
 		memcpy(ns->buf.byte, NS_PAGE_BYTE_OFF(ns), num);
@@ -1505,7 +1510,7 @@ static int ns_prog_page(struct nandsim *ns, int num)
 		int all;
 
 		NS_DBG("prog_page: writing page %d\n", ns->regs.row);
-		pg_off = ns->file_buf + NS_PAGE_BYTE_SHIFT(ns);
+		pg_off = ns->file_buf + ns->regs.column + ns->regs.off;
 		off = (loff_t)NS_RAW_OFFSET(ns) + ns->regs.off;
 		if (!test_bit(ns->regs.row, ns->pages_written)) {
 			all = 1;
@@ -1594,7 +1599,7 @@ static int ns_do_state_action(struct nandsim *ns, uint32_t action)
 			NS_ERR("do_state_action: column number is too large\n");
 			break;
 		}
-		num = ns->geom.pgszoob - NS_PAGE_BYTE_SHIFT(ns);
+		num = ns->geom.pgszoob - ns->regs.off - ns->regs.column;
 		ns_read_page(ns, num);
 
 		NS_DBG("do_state_action: (ACTION_CPY:) copy %d bytes to int buf, raw offset %d\n",
@@ -1662,7 +1667,7 @@ static int ns_do_state_action(struct nandsim *ns, uint32_t action)
 			return -1;
 		}
 
-		num = ns->geom.pgszoob - NS_PAGE_BYTE_SHIFT(ns);
+		num = ns->geom.pgszoob - ns->regs.off - ns->regs.column;
 		if (num != ns->regs.count) {
 			NS_ERR("do_state_action: too few bytes were input (%d instead of %d)\n",
 					ns->regs.count, num);
@@ -1734,6 +1739,14 @@ static void ns_switch_state(struct nandsim *ns)
 			"state: %s, nxstate: %s\n",
 		       ns_get_state_name(ns->state),
 		       ns_get_state_name(ns->nxstate));
+
+		/* See, whether we need to do some action */
+		if ((ns->state & ACTION_MASK) &&
+		    ns_do_state_action(ns, ns->state) < 0) {
+			ns_switch_to_ready_state(ns, NS_STATUS_FAILED(ns));
+			return;
+		}
+
 	} else {
 		/*
 		 * We don't yet know which operation we perform.
@@ -1750,13 +1763,12 @@ static void ns_switch_state(struct nandsim *ns)
 
 		if (ns_find_operation(ns, 0))
 			return;
-	}
 
-	/* See, whether we need to do some action */
-	if ((ns->state & ACTION_MASK) &&
-	    ns_do_state_action(ns, ns->state) < 0) {
-		ns_switch_to_ready_state(ns, NS_STATUS_FAILED(ns));
-		return;
+		if ((ns->state & ACTION_MASK) &&
+		    ns_do_state_action(ns, ns->state) < 0) {
+			ns_switch_to_ready_state(ns, NS_STATUS_FAILED(ns));
+			return;
+		}
 	}
 
 	/* For 16x devices column means the page offset in words */
@@ -1806,7 +1818,7 @@ static void ns_switch_state(struct nandsim *ns)
 		switch (NS_STATE(ns->state)) {
 			case STATE_DATAIN:
 			case STATE_DATAOUT:
-				ns->regs.num = ns->geom.pgszoob - NS_PAGE_BYTE_SHIFT(ns);
+				ns->regs.num = ns->geom.pgszoob - ns->regs.off - ns->regs.column;
 				break;
 
 			case STATE_DATAOUT_ID:
@@ -2160,23 +2172,8 @@ static int ns_exec_op(struct nand_chip *chip, const struct nand_operation *op,
 	const struct nand_op_instr *instr = NULL;
 	struct nandsim *ns = nand_get_controller_data(chip);
 
-	if (check_only) {
-		/* The current implementation of nandsim needs to know the
-		 * ongoing operation when performing the address cycles. This
-		 * means it cannot make the difference between a regular read
-		 * and a continuous read. Hence, this hack to manually refuse
-		 * supporting sequential cached operations.
-		 */
-		for (op_id = 0; op_id < op->ninstrs; op_id++) {
-			instr = &op->instrs[op_id];
-			if (instr->type == NAND_OP_CMD_INSTR &&
-			    (instr->ctx.cmd.opcode == NAND_CMD_READCACHEEND ||
-			     instr->ctx.cmd.opcode == NAND_CMD_READCACHESEQ))
-				return -EOPNOTSUPP;
-		}
-
+	if (check_only)
 		return 0;
-	}
 
 	ns->lines.ce = 1;
 
@@ -2220,7 +2217,7 @@ static int ns_attach_chip(struct nand_chip *chip)
 	if (!bch)
 		return 0;
 
-	if (!IS_ENABLED(CONFIG_MTD_NAND_ECC_SW_BCH)) {
+	if (!mtd_nand_has_bch()) {
 		NS_ERR("BCH ECC support is disabled\n");
 		return -EINVAL;
 	}
@@ -2456,5 +2453,6 @@ static void __exit ns_cleanup_module(void)
 module_exit(ns_cleanup_module);
 
 MODULE_LICENSE ("GPL");
+MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 MODULE_AUTHOR ("Artem B. Bityuckiy");
 MODULE_DESCRIPTION ("The NAND flash simulator");

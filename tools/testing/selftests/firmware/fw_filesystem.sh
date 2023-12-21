@@ -11,9 +11,6 @@ TEST_REQS_FW_SET_CUSTOM_PATH="yes"
 TEST_DIR=$(dirname $0)
 source $TEST_DIR/fw_lib.sh
 
-RUN_XZ="xz -C crc32 --lzma2=dict=2MiB"
-RUN_ZSTD="zstd -q"
-
 check_mods
 check_setup
 verify_reqs
@@ -214,7 +211,7 @@ read_firmwares()
 	else
 		fwfile="$FW"
 	fi
-	if [ "$1" = "componly" ]; then
+	if [ "$1" = "xzonly" ]; then
 		fwfile="${fwfile}-orig"
 	fi
 	for i in $(seq 0 3); do
@@ -238,7 +235,7 @@ read_partial_firmwares()
 		fwfile="${FW}"
 	fi
 
-	if [ "$1" = "componly" ]; then
+	if [ "$1" = "xzonly" ]; then
 		fwfile="${fwfile}-orig"
 	fi
 
@@ -412,8 +409,10 @@ test_request_firmware_nowait_custom()
 	config_unset_uevent
 	RANDOM_FILE_PATH=$(setup_random_file)
 	RANDOM_FILE="$(basename $RANDOM_FILE_PATH)"
-	if [ -n "$2" -a "$2" != "normal" ]; then
-		compress_"$2"_"$COMPRESS_FORMAT" $RANDOM_FILE_PATH
+	if [ "$2" = "both" ]; then
+		xz -9 -C crc32 -k $RANDOM_FILE_PATH
+	elif [ "$2" = "xzonly" ]; then
+		xz -9 -C crc32 $RANDOM_FILE_PATH
 	fi
 	config_set_name $RANDOM_FILE
 	config_trigger_async
@@ -436,32 +435,6 @@ test_request_partial_firmware_into_buf()
 	echo "OK"
 }
 
-do_tests ()
-{
-	mode="$1"
-	suffix="$2"
-
-	for i in $(seq 1 5); do
-		test_batched_request_firmware$suffix $i $mode
-	done
-
-	for i in $(seq 1 5); do
-		test_batched_request_firmware_into_buf$suffix $i $mode
-	done
-
-	for i in $(seq 1 5); do
-		test_batched_request_firmware_direct$suffix $i $mode
-	done
-
-	for i in $(seq 1 5); do
-		test_request_firmware_nowait_uevent$suffix $i $mode
-	done
-
-	for i in $(seq 1 5); do
-		test_request_firmware_nowait_custom$suffix $i $mode
-	done
-}
-
 # Only continue if batched request triggers are present on the
 # test-firmware driver
 test_config_present
@@ -469,7 +442,25 @@ test_config_present
 # test with the file present
 echo
 echo "Testing with the file present..."
-do_tests normal
+for i in $(seq 1 5); do
+	test_batched_request_firmware $i normal
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i normal
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_direct $i normal
+done
+
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_uevent $i normal
+done
+
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_custom $i normal
+done
 
 # Partial loads cannot use fallback, so do not repeat tests.
 test_request_partial_firmware_into_buf 0 10
@@ -481,7 +472,25 @@ test_request_partial_firmware_into_buf 2 10
 # a hung task, which would require a hard reset.
 echo
 echo "Testing with the file missing..."
-do_tests nofile _nofile
+for i in $(seq 1 5); do
+	test_batched_request_firmware_nofile $i
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf_nofile $i
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_direct_nofile $i
+done
+
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_uevent_nofile $i
+done
+
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_custom_nofile $i
+done
 
 # Partial loads cannot use fallback, so do not repeat tests.
 test_request_partial_firmware_into_buf_nofile 0 10
@@ -489,58 +498,55 @@ test_request_partial_firmware_into_buf_nofile 0 5
 test_request_partial_firmware_into_buf_nofile 1 6
 test_request_partial_firmware_into_buf_nofile 2 10
 
-test_request_firmware_compressed ()
-{
-	export COMPRESS_FORMAT="$1"
+test "$HAS_FW_LOADER_COMPRESS" != "yes" && exit 0
 
-	# test with both files present
-	compress_both_"$COMPRESS_FORMAT" $FW
-	compress_both_"$COMPRESS_FORMAT" $FW_INTO_BUF
+# test with both files present
+xz -9 -C crc32 -k $FW
+config_set_name $NAME
+echo
+echo "Testing with both plain and xz files present..."
+for i in $(seq 1 5); do
+	test_batched_request_firmware $i both
+done
 
-	config_set_name $NAME
-	echo
-	echo "Testing with both plain and $COMPRESS_FORMAT files present..."
-	do_tests both
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i both
+done
 
-	# test with only compressed file present
-	mv "$FW" "${FW}-orig"
-	mv "$FW_INTO_BUF" "${FW_INTO_BUF}-orig"
+for i in $(seq 1 5); do
+	test_batched_request_firmware_direct $i both
+done
 
-	config_set_name $NAME
-	echo
-	echo "Testing with only $COMPRESS_FORMAT file present..."
-	do_tests componly
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_uevent $i both
+done
 
-	mv "${FW}-orig" "$FW"
-	mv "${FW_INTO_BUF}-orig" "$FW_INTO_BUF"
-}
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_custom $i both
+done
 
-compress_both_XZ ()
-{
-	$RUN_XZ -k "$@"
-}
+# test with only xz file present
+mv "$FW" "${FW}-orig"
+echo
+echo "Testing with only xz file present..."
+for i in $(seq 1 5); do
+	test_batched_request_firmware $i xzonly
+done
 
-compress_componly_XZ ()
-{
-	$RUN_XZ "$@"
-}
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i xzonly
+done
 
-compress_both_ZSTD ()
-{
-	$RUN_ZSTD -k "$@"
-}
+for i in $(seq 1 5); do
+	test_batched_request_firmware_direct $i xzonly
+done
 
-compress_componly_ZSTD ()
-{
-	$RUN_ZSTD --rm "$@"
-}
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_uevent $i xzonly
+done
 
-if test "$HAS_FW_LOADER_COMPRESS_XZ" = "yes"; then
-	test_request_firmware_compressed XZ
-fi
-
-if test "$HAS_FW_LOADER_COMPRESS_ZSTD" = "yes"; then
-	test_request_firmware_compressed ZSTD
-fi
+for i in $(seq 1 5); do
+	test_request_firmware_nowait_custom $i xzonly
+done
 
 exit 0

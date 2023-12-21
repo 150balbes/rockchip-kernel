@@ -96,6 +96,7 @@ sf_pdma_prep_dma_memcpy(struct dma_chan *dchan,	dma_addr_t dest, dma_addr_t src,
 	if (!desc)
 		return NULL;
 
+	desc->in_use = true;
 	desc->dirn = DMA_MEM_TO_MEM;
 	desc->async_tx = vchan_tx_prep(&chan->vchan, &desc->vdesc, flags);
 
@@ -289,7 +290,7 @@ static void sf_pdma_free_desc(struct virt_dma_desc *vdesc)
 	struct sf_pdma_desc *desc;
 
 	desc = to_sf_pdma_desc(vdesc);
-	kfree(desc);
+	desc->in_use = false;
 }
 
 static void sf_pdma_donebh_tasklet(struct tasklet_struct *t)
@@ -342,9 +343,10 @@ static irqreturn_t sf_pdma_done_isr(int irq, void *dev_id)
 {
 	struct sf_pdma_chan *chan = dev_id;
 	struct pdma_regs *regs = &chan->regs;
+	unsigned long flags;
 	u64 residue;
 
-	spin_lock(&chan->vchan.lock);
+	spin_lock_irqsave(&chan->vchan.lock, flags);
 	writel((readl(regs->ctrl)) & ~PDMA_DONE_STATUS_MASK, regs->ctrl);
 	residue = readq(regs->residue);
 
@@ -361,7 +363,7 @@ static irqreturn_t sf_pdma_done_isr(int irq, void *dev_id)
 		sf_pdma_xfer_desc(chan);
 	}
 
-	spin_unlock(&chan->vchan.lock);
+	spin_unlock_irqrestore(&chan->vchan.lock, flags);
 
 	return IRQ_HANDLED;
 }
@@ -370,10 +372,11 @@ static irqreturn_t sf_pdma_err_isr(int irq, void *dev_id)
 {
 	struct sf_pdma_chan *chan = dev_id;
 	struct pdma_regs *regs = &chan->regs;
+	unsigned long flags;
 
-	spin_lock(&chan->lock);
+	spin_lock_irqsave(&chan->lock, flags);
 	writel((readl(regs->ctrl)) & ~PDMA_ERR_STATUS_MASK, regs->ctrl);
-	spin_unlock(&chan->lock);
+	spin_unlock_irqrestore(&chan->lock, flags);
 
 	tasklet_schedule(&chan->err_tasklet);
 
@@ -404,8 +407,10 @@ static int sf_pdma_irq_init(struct platform_device *pdev, struct sf_pdma *pdma)
 		chan = &pdma->chans[i];
 
 		irq = platform_get_irq(pdev, i * 2);
-		if (irq < 0)
+		if (irq < 0) {
+			dev_err(&pdev->dev, "ch(%d) Can't get done irq.\n", i);
 			return -EINVAL;
+		}
 
 		r = devm_request_irq(&pdev->dev, irq, sf_pdma_done_isr, 0,
 				     dev_name(&pdev->dev), (void *)chan);
@@ -417,8 +422,10 @@ static int sf_pdma_irq_init(struct platform_device *pdev, struct sf_pdma *pdma)
 		chan->txirq = irq;
 
 		irq = platform_get_irq(pdev, (i * 2) + 1);
-		if (irq < 0)
+		if (irq < 0) {
+			dev_err(&pdev->dev, "ch(%d) Can't get err irq.\n", i);
 			return -EINVAL;
+		}
 
 		r = devm_request_irq(&pdev->dev, irq, sf_pdma_err_isr, 0,
 				     dev_name(&pdev->dev), (void *)chan);
@@ -493,31 +500,26 @@ static void sf_pdma_setup_chans(struct sf_pdma *pdma)
 static int sf_pdma_probe(struct platform_device *pdev)
 {
 	struct sf_pdma *pdma;
-	int ret, n_chans;
+	struct sf_pdma_chan *chan;
+	struct resource *res;
+	int len, chans;
+	int ret;
 	const enum dma_slave_buswidth widths =
 		DMA_SLAVE_BUSWIDTH_1_BYTE | DMA_SLAVE_BUSWIDTH_2_BYTES |
 		DMA_SLAVE_BUSWIDTH_4_BYTES | DMA_SLAVE_BUSWIDTH_8_BYTES |
 		DMA_SLAVE_BUSWIDTH_16_BYTES | DMA_SLAVE_BUSWIDTH_32_BYTES |
 		DMA_SLAVE_BUSWIDTH_64_BYTES;
 
-	ret = of_property_read_u32(pdev->dev.of_node, "dma-channels", &n_chans);
-	if (ret) {
-		/* backwards-compatibility for no dma-channels property */
-		dev_dbg(&pdev->dev, "set number of channels to default value: 4\n");
-		n_chans = PDMA_MAX_NR_CH;
-	} else if (n_chans > PDMA_MAX_NR_CH) {
-		dev_err(&pdev->dev, "the number of channels exceeds the maximum\n");
-		return -EINVAL;
-	}
-
-	pdma = devm_kzalloc(&pdev->dev, struct_size(pdma, chans, n_chans),
-			    GFP_KERNEL);
+	chans = PDMA_NR_CH;
+	len = sizeof(*pdma) + sizeof(*chan) * chans;
+	pdma = devm_kzalloc(&pdev->dev, len, GFP_KERNEL);
 	if (!pdma)
 		return -ENOMEM;
 
-	pdma->n_chans = n_chans;
+	pdma->n_chans = chans;
 
-	pdma->membase = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	pdma->membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(pdma->membase))
 		return PTR_ERR(pdma->membase);
 
@@ -572,7 +574,7 @@ static int sf_pdma_remove(struct platform_device *pdev)
 	struct sf_pdma_chan *ch;
 	int i;
 
-	for (i = 0; i < pdma->n_chans; i++) {
+	for (i = 0; i < PDMA_NR_CH; i++) {
 		ch = &pdma->chans[i];
 
 		devm_free_irq(&pdev->dev, ch->txirq, ch);
@@ -590,7 +592,6 @@ static int sf_pdma_remove(struct platform_device *pdev)
 
 static const struct of_device_id sf_pdma_dt_ids[] = {
 	{ .compatible = "sifive,fu540-c000-pdma" },
-	{ .compatible = "sifive,pdma0" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, sf_pdma_dt_ids);
@@ -600,7 +601,7 @@ static struct platform_driver sf_pdma_driver = {
 	.remove		= sf_pdma_remove,
 	.driver		= {
 		.name	= "sf-pdma",
-		.of_match_table = sf_pdma_dt_ids,
+		.of_match_table = of_match_ptr(sf_pdma_dt_ids),
 	},
 };
 

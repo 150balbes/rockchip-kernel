@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/*
+/* -*- mode: c; c-basic-offset: 8; -*-
+ * vim: noexpandtab sw=8 ts=8 sts=0:
+ *
  * Copyright (C) 2002, 2004 Oracle.  All rights reserved.
  */
 
@@ -275,16 +277,17 @@ out:
 	return ret;
 }
 
-static int ocfs2_read_folio(struct file *file, struct folio *folio)
+static int ocfs2_readpage(struct file *file, struct page *page)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = page->mapping->host;
 	struct ocfs2_inode_info *oi = OCFS2_I(inode);
-	loff_t start = folio_pos(folio);
+	loff_t start = (loff_t)page->index << PAGE_SHIFT;
 	int ret, unlock = 1;
 
-	trace_ocfs2_readpage((unsigned long long)oi->ip_blkno, folio->index);
+	trace_ocfs2_readpage((unsigned long long)oi->ip_blkno,
+			     (page ? page->index : 0));
 
-	ret = ocfs2_inode_lock_with_page(inode, NULL, 0, &folio->page);
+	ret = ocfs2_inode_lock_with_page(inode, NULL, 0, page);
 	if (ret != 0) {
 		if (ret == AOP_TRUNCATED_PAGE)
 			unlock = 0;
@@ -294,11 +297,11 @@ static int ocfs2_read_folio(struct file *file, struct folio *folio)
 
 	if (down_read_trylock(&oi->ip_alloc_sem) == 0) {
 		/*
-		 * Unlock the folio and cycle ip_alloc_sem so that we don't
+		 * Unlock the page and cycle ip_alloc_sem so that we don't
 		 * busyloop waiting for ip_alloc_sem to unlock
 		 */
 		ret = AOP_TRUNCATED_PAGE;
-		folio_unlock(folio);
+		unlock_page(page);
 		unlock = 0;
 		down_read(&oi->ip_alloc_sem);
 		up_read(&oi->ip_alloc_sem);
@@ -308,24 +311,24 @@ static int ocfs2_read_folio(struct file *file, struct folio *folio)
 	/*
 	 * i_size might have just been updated as we grabed the meta lock.  We
 	 * might now be discovering a truncate that hit on another node.
-	 * block_read_full_folio->get_block freaks out if it is asked to read
+	 * block_read_full_page->get_block freaks out if it is asked to read
 	 * beyond the end of a file, so we check here.  Callers
 	 * (generic_file_read, vm_ops->fault) are clever enough to check i_size
-	 * and notice that the folio they just read isn't needed.
+	 * and notice that the page they just read isn't needed.
 	 *
 	 * XXX sys_readahead() seems to get that wrong?
 	 */
 	if (start >= i_size_read(inode)) {
-		folio_zero_segment(folio, 0, folio_size(folio));
-		folio_mark_uptodate(folio);
+		zero_user(page, 0, PAGE_SIZE);
+		SetPageUptodate(page);
 		ret = 0;
 		goto out_alloc;
 	}
 
 	if (oi->ip_dyn_features & OCFS2_INLINE_DATA_FL)
-		ret = ocfs2_readpage_inline(inode, &folio->page);
+		ret = ocfs2_readpage_inline(inode, page);
 	else
-		ret = block_read_full_folio(folio, ocfs2_get_block);
+		ret = block_read_full_page(page, ocfs2_get_block);
 	unlock = 0;
 
 out_alloc:
@@ -334,7 +337,7 @@ out_inode_unlock:
 	ocfs2_inode_unlock(inode, 0);
 out:
 	if (unlock)
-		folio_unlock(folio);
+		unlock_page(page);
 	return ret;
 }
 
@@ -496,11 +499,11 @@ bail:
 	return status;
 }
 
-static bool ocfs2_release_folio(struct folio *folio, gfp_t wait)
+static int ocfs2_releasepage(struct page *page, gfp_t wait)
 {
-	if (!folio_buffers(folio))
-		return false;
-	return try_to_free_buffers(folio);
+	if (!page_has_buffers(page))
+		return 0;
+	return try_to_free_buffers(page);
 }
 
 static void ocfs2_figure_cluster_boundaries(struct ocfs2_super *osb,
@@ -631,12 +634,13 @@ int ocfs2_map_page_blocks(struct page *page, u64 *p_blkno,
 		}
 
 		if (PageUptodate(page)) {
-			set_buffer_uptodate(bh);
+			if (!buffer_uptodate(bh))
+				set_buffer_uptodate(bh);
 		} else if (!buffer_uptodate(bh) && !buffer_delay(bh) &&
 			   !buffer_new(bh) &&
 			   ocfs2_should_read_blk(inode, page, block_start) &&
 			   (block_start < from || block_end > to)) {
-			bh_read_nowait(bh, 0);
+			ll_rw_block(REQ_OP_READ, 0, 1, &bh);
 			*wait_bh++=bh;
 		}
 
@@ -1798,20 +1802,20 @@ try_again:
 	 */
 	ret = ocfs2_grab_pages_for_write(mapping, wc, wc->w_cpos, pos, len,
 					 cluster_of_pages, mmap_page);
-	if (ret) {
-		/*
-		 * ocfs2_grab_pages_for_write() returns -EAGAIN if it could not lock
-		 * the target page. In this case, we exit with no error and no target
-		 * page. This will trigger the caller, page_mkwrite(), to re-try
-		 * the operation.
-		 */
-		if (type == OCFS2_WRITE_MMAP && ret == -EAGAIN) {
-			BUG_ON(wc->w_target_page);
-			ret = 0;
-			goto out_quota;
-		}
-
+	if (ret && ret != -EAGAIN) {
 		mlog_errno(ret);
+		goto out_quota;
+	}
+
+	/*
+	 * ocfs2_grab_pages_for_write() returns -EAGAIN if it could not lock
+	 * the target page. In this case, we exit with no error and no target
+	 * page. This will trigger the caller, page_mkwrite(), to re-try
+	 * the operation.
+	 */
+	if (ret == -EAGAIN) {
+		BUG_ON(wc->w_target_page);
+		ret = 0;
 		goto out_quota;
 	}
 
@@ -1880,7 +1884,7 @@ out:
 }
 
 static int ocfs2_write_begin(struct file *file, struct address_space *mapping,
-			     loff_t pos, unsigned len,
+			     loff_t pos, unsigned len, unsigned flags,
 			     struct page **pagep, void **fsdata)
 {
 	int ret;
@@ -1896,7 +1900,7 @@ static int ocfs2_write_begin(struct file *file, struct address_space *mapping,
 	/*
 	 * Take alloc sem here to prevent concurrent lookups. That way
 	 * the mapping, zeroing and tree manipulation within
-	 * ocfs2_write() will be safe against ->read_folio(). This
+	 * ocfs2_write() will be safe against ->readpage(). This
 	 * should also serve to lock out allocation from a shared
 	 * writeable region.
 	 */
@@ -1977,26 +1981,11 @@ int ocfs2_write_end_nolock(struct address_space *mapping,
 	}
 
 	if (unlikely(copied < len) && wc->w_target_page) {
-		loff_t new_isize;
-
 		if (!PageUptodate(wc->w_target_page))
 			copied = 0;
 
-		new_isize = max_t(loff_t, i_size_read(inode), pos + copied);
-		if (new_isize > page_offset(wc->w_target_page))
-			ocfs2_zero_new_buffers(wc->w_target_page, start+copied,
-					       start+len);
-		else {
-			/*
-			 * When page is fully beyond new isize (data copy
-			 * failed), do not bother zeroing the page. Invalidate
-			 * it instead so that writeback does not get confused
-			 * put page & buffer dirty bits into inconsistent
-			 * state.
-			 */
-			block_invalidate_folio(page_folio(wc->w_target_page),
-						0, PAGE_SIZE);
-		}
+		ocfs2_zero_new_buffers(wc->w_target_page, start+copied,
+				       start+len);
 	}
 	if (wc->w_target_page)
 		flush_dcache_page(wc->w_target_page);
@@ -2325,7 +2314,7 @@ static int ocfs2_dio_end_io_write(struct inode *inode,
 
 	down_write(&oi->ip_alloc_sem);
 
-	/* Delete orphan before acquire i_rwsem. */
+	/* Delete orphan before acquire i_mutex. */
 	if (dwc->dw_orphaned) {
 		BUG_ON(dwc->dw_writer_pid != task_pid_nr(current));
 
@@ -2463,21 +2452,20 @@ static ssize_t ocfs2_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 
 	return __blockdev_direct_IO(iocb, inode, inode->i_sb->s_bdev,
 				    iter, get_block,
-				    ocfs2_dio_end_io, 0);
+				    ocfs2_dio_end_io, NULL, 0);
 }
 
 const struct address_space_operations ocfs2_aops = {
-	.dirty_folio		= block_dirty_folio,
-	.read_folio		= ocfs2_read_folio,
+	.readpage		= ocfs2_readpage,
 	.readahead		= ocfs2_readahead,
 	.writepage		= ocfs2_writepage,
 	.write_begin		= ocfs2_write_begin,
 	.write_end		= ocfs2_write_end,
 	.bmap			= ocfs2_bmap,
 	.direct_IO		= ocfs2_direct_IO,
-	.invalidate_folio	= block_invalidate_folio,
-	.release_folio		= ocfs2_release_folio,
-	.migrate_folio		= buffer_migrate_folio,
+	.invalidatepage		= block_invalidatepage,
+	.releasepage		= ocfs2_releasepage,
+	.migratepage		= buffer_migrate_page,
 	.is_partially_uptodate	= block_is_partially_uptodate,
 	.error_remove_page	= generic_error_remove_page,
 };

@@ -203,7 +203,6 @@ static void mac_onboard_sonic_ethernet_addr(struct net_device *dev)
 	struct sonic_local *lp = netdev_priv(dev);
 	const int prom_addr = ONBOARD_SONIC_PROM_BASE;
 	unsigned short val;
-	u8 addr[ETH_ALEN];
 
 	/*
 	 * On NuBus boards we can sometimes look in the ROM resources.
@@ -214,8 +213,7 @@ static void mac_onboard_sonic_ethernet_addr(struct net_device *dev)
 		int i;
 
 		for (i = 0; i < 6; i++)
-			addr[i] = SONIC_READ_PROM(i);
-		eth_hw_addr_set(dev, addr);
+			dev->dev_addr[i] = SONIC_READ_PROM(i);
 		if (!INVALID_MAC(dev->dev_addr))
 			return;
 
@@ -224,8 +222,7 @@ static void mac_onboard_sonic_ethernet_addr(struct net_device *dev)
 		 * source has a rather long and detailed historical account of
 		 * why this is so.
 		 */
-		bit_reverse_addr(addr);
-		eth_hw_addr_set(dev, addr);
+		bit_reverse_addr(dev->dev_addr);
 		if (!INVALID_MAC(dev->dev_addr))
 			return;
 
@@ -246,15 +243,14 @@ static void mac_onboard_sonic_ethernet_addr(struct net_device *dev)
 	SONIC_WRITE(SONIC_CEP, 15);
 
 	val = SONIC_READ(SONIC_CAP2);
-	addr[5] = val >> 8;
-	addr[4] = val & 0xff;
+	dev->dev_addr[5] = val >> 8;
+	dev->dev_addr[4] = val & 0xff;
 	val = SONIC_READ(SONIC_CAP1);
-	addr[3] = val >> 8;
-	addr[2] = val & 0xff;
+	dev->dev_addr[3] = val >> 8;
+	dev->dev_addr[2] = val & 0xff;
 	val = SONIC_READ(SONIC_CAP0);
-	addr[1] = val >> 8;
-	addr[0] = val & 0xff;
-	eth_hw_addr_set(dev, addr);
+	dev->dev_addr[1] = val >> 8;
+	dev->dev_addr[0] = val & 0xff;
 
 	if (!INVALID_MAC(dev->dev_addr))
 		return;
@@ -359,16 +355,13 @@ static int mac_onboard_sonic_probe(struct net_device *dev)
 static int mac_sonic_nubus_ethernet_addr(struct net_device *dev,
 					 unsigned long prom_addr, int id)
 {
-	u8 addr[ETH_ALEN];
 	int i;
-
 	for(i = 0; i < 6; i++)
-		addr[i] = SONIC_READ_PROM(i);
+		dev->dev_addr[i] = SONIC_READ_PROM(i);
 
 	/* Some of the addresses are bit-reversed */
 	if (id != MACSONIC_DAYNA)
-		bit_reverse_addr(addr);
-	eth_hw_addr_set(dev, addr);
+		bit_reverse_addr(dev->dev_addr);
 
 	return 0;
 }
@@ -610,7 +603,7 @@ out:
 	return err;
 }
 
-static void mac_sonic_nubus_remove(struct nubus_board *board)
+static int mac_sonic_nubus_remove(struct nubus_board *board)
 {
 	struct net_device *ndev = nubus_get_drvdata(board);
 	struct sonic_local *lp = netdev_priv(ndev);
@@ -620,6 +613,8 @@ static void mac_sonic_nubus_remove(struct nubus_board *board)
 			  SIZEOF_SONIC_DESC * SONIC_BUS_SCALE(lp->dma_bitmode),
 			  lp->descriptors, lp->descriptors_laddr);
 	free_netdev(ndev);
+
+	return 0;
 }
 
 static struct nubus_driver mac_sonic_nubus_driver = {

@@ -35,37 +35,25 @@ static int get_range(char **str, int *pint, int n)
 /**
  *	get_option - Parse integer from an option string
  *	@str: option string
- *	@pint: (optional output) integer value parsed from @str
+ *	@pint: (output) integer value parsed from @str
  *
  *	Read an int from an option string; if available accept a subsequent
  *	comma as well.
- *
- *	When @pint is NULL the function can be used as a validator of
- *	the current option in the string.
  *
  *	Return values:
  *	0 - no int in string
  *	1 - int found, no subsequent comma
  *	2 - int found including a subsequent comma
  *	3 - hyphen found to denote a range
- *
- *	Leading hyphen without integer is no integer case, but we consume it
- *	for the sake of simplification.
  */
 
 int get_option(char **str, int *pint)
 {
 	char *cur = *str;
-	int value;
 
 	if (!cur || !(*cur))
 		return 0;
-	if (*cur == '-')
-		value = -simple_strtoull(++cur, str, 0);
-	else
-		value = simple_strtoull(cur, str, 0);
-	if (pint)
-		*pint = value;
+	*pint = simple_strtol(cur, str, 0);
 	if (cur == *str)
 		return 0;
 	if (**str == ',') {
@@ -83,21 +71,13 @@ EXPORT_SYMBOL(get_option);
  *	get_options - Parse a string into a list of integers
  *	@str: String to be parsed
  *	@nints: size of integer array
- *	@ints: integer array (must have room for at least one element)
+ *	@ints: integer array
  *
  *	This function parses a string containing a comma-separated
  *	list of integers, a hyphen-separated range of _positive_ integers,
  *	or a combination of both.  The parse halts when the array is
  *	full, or when no more numbers can be retrieved from the
  *	string.
- *
- *	When @nints is 0, the function just validates the given @str and
- *	returns the amount of parseable integers as described below.
- *
- *	Returns:
- *
- *	The first element is filled by the number of collected integers
- *	in the range. The rest is what was parsed from the @str.
  *
  *	Return value is the character in the string which caused
  *	the parse to end (typically a null terminator, if @str is
@@ -106,20 +86,15 @@ EXPORT_SYMBOL(get_option);
 
 char *get_options(const char *str, int nints, int *ints)
 {
-	bool validate = (nints == 0);
 	int res, i = 1;
 
-	while (i < nints || validate) {
-		int *pint = validate ? ints : ints + i;
-
-		res = get_option((char **)&str, pint);
+	while (i < nints) {
+		res = get_option((char **)&str, ints + i);
 		if (res == 0)
 			break;
 		if (res == 3) {
-			int n = validate ? 0 : nints - i;
 			int range_nums;
-
-			range_nums = get_range((char **)&str, pint, n);
+			range_nums = get_range((char **)&str, ints + i, nints - i);
 			if (range_nums < 0)
 				break;
 			/*
@@ -157,28 +132,27 @@ unsigned long long memparse(const char *ptr, char **retptr)
 	case 'E':
 	case 'e':
 		ret <<= 10;
-		fallthrough;
+		/* fall through */
 	case 'P':
 	case 'p':
 		ret <<= 10;
-		fallthrough;
+		/* fall through */
 	case 'T':
 	case 't':
 		ret <<= 10;
-		fallthrough;
+		/* fall through */
 	case 'G':
 	case 'g':
 		ret <<= 10;
-		fallthrough;
+		/* fall through */
 	case 'M':
 	case 'm':
 		ret <<= 10;
-		fallthrough;
+		/* fall through */
 	case 'K':
 	case 'k':
 		ret <<= 10;
 		endptr++;
-		fallthrough;
 	default:
 		break;
 	}
@@ -228,6 +202,7 @@ char *next_arg(char *args, char **param, char **val)
 {
 	unsigned int i, equals = 0;
 	int in_quote = 0, quoted = 0;
+	char *next;
 
 	if (*args == '"') {
 		args++;
@@ -260,16 +235,15 @@ char *next_arg(char *args, char **param, char **val)
 				args[i-1] = '\0';
 		}
 	}
-	if (quoted && i > 0 && args[i-1] == '"')
+	if (quoted && args[i-1] == '"')
 		args[i-1] = '\0';
 
 	if (args[i]) {
 		args[i] = '\0';
-		args += i + 1;
+		next = args + i + 1;
 	} else
-		args += i;
+		next = args + i;
 
 	/* Chew up trailing spaces. */
-	return skip_spaces(args);
+	return skip_spaces(next);
 }
-EXPORT_SYMBOL(next_arg);

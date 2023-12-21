@@ -14,7 +14,6 @@
 #include <linux/clk/renesas.h>
 #include <linux/device.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/pm_clock.h>
@@ -79,8 +78,8 @@ static int cpg_mstp_clock_endisable(struct clk_hw *hw, bool enable)
 	struct mstp_clock_group *group = clock->group;
 	u32 bitmask = BIT(clock->bit_index);
 	unsigned long flags;
+	unsigned int i;
 	u32 value;
-	int ret;
 
 	spin_lock_irqsave(&group->lock, flags);
 
@@ -102,14 +101,19 @@ static int cpg_mstp_clock_endisable(struct clk_hw *hw, bool enable)
 	if (!enable || !group->mstpsr)
 		return 0;
 
-	/* group->width_8bit is always false if group->mstpsr is present */
-	ret = readl_poll_timeout_atomic(group->mstpsr, value,
-					!(value & bitmask), 0, 10);
-	if (ret)
+	for (i = 1000; i > 0; --i) {
+		if (!(cpg_mstp_read(group, group->mstpsr) & bitmask))
+			break;
+		cpu_relax();
+	}
+
+	if (!i) {
 		pr_err("%s: failed to enable %p[%d]\n", __func__,
 		       group->smstpcr, clock->bit_index);
+		return -ETIMEDOUT;
+	}
 
-	return ret;
+	return 0;
 }
 
 static int cpg_mstp_clock_enable(struct clk_hw *hw)
@@ -146,7 +150,7 @@ static struct clk * __init cpg_mstp_clock_register(const char *name,
 	const char *parent_name, unsigned int index,
 	struct mstp_clock_group *group)
 {
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	struct mstp_clock *clock;
 	struct clk *clk;
 

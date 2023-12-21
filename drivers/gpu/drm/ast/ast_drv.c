@@ -26,20 +26,20 @@
  * Authors: Dave Airlie <airlied@redhat.com>
  */
 
+#include <linux/console.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 
-#include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_generic.h>
-#include <drm/drm_gem_shmem_helper.h>
-#include <drm/drm_module.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_probe_helper.h>
 
 #include "ast_drv.h"
 
-static int ast_modeset = -1;
+int ast_modeset = -1;
 
 MODULE_PARM_DESC(modeset, "Disable/Enable modesetting");
 module_param_named(modeset, ast_modeset, int, 0400);
@@ -50,7 +50,7 @@ module_param_named(modeset, ast_modeset, int, 0400);
 
 DEFINE_DRM_GEM_FOPS(ast_fops);
 
-static const struct drm_driver ast_driver = {
+static struct drm_driver ast_driver = {
 	.driver_features = DRIVER_ATOMIC |
 			   DRIVER_GEM |
 			   DRIVER_MODESET,
@@ -63,7 +63,7 @@ static const struct drm_driver ast_driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
-	DRM_GEM_SHMEM_DRIVER_OPS
+	DRM_GEM_VRAM_DRIVER
 };
 
 /*
@@ -89,15 +89,32 @@ static const struct pci_device_id ast_pciidlist[] = {
 
 MODULE_DEVICE_TABLE(pci, ast_pciidlist);
 
+static void ast_kick_out_firmware_fb(struct pci_dev *pdev)
+{
+	struct apertures_struct *ap;
+	bool primary = false;
+
+	ap = alloc_apertures(1);
+	if (!ap)
+		return;
+
+	ap->ranges[0].base = pci_resource_start(pdev, 0);
+	ap->ranges[0].size = pci_resource_len(pdev, 0);
+
+#ifdef CONFIG_X86
+	primary = pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
+#endif
+	drm_fb_helper_remove_conflicting_framebuffers(ap, "astdrmfb", primary);
+	kfree(ap);
+}
+
 static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
-	struct ast_device *ast;
+	struct ast_private *ast;
 	struct drm_device *dev;
 	int ret;
 
-	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &ast_driver);
-	if (ret)
-		return ret;
+	ast_kick_out_firmware_fb(pdev);
 
 	ret = pcim_enable_device(pdev);
 	if (ret)
@@ -125,11 +142,6 @@ static void ast_pci_remove(struct pci_dev *pdev)
 	drm_atomic_helper_shutdown(dev);
 }
 
-static void ast_pci_shutdown(struct pci_dev *pdev)
-{
-	drm_atomic_helper_shutdown(pci_get_drvdata(pdev));
-}
-
 static int ast_drm_freeze(struct drm_device *dev)
 {
 	int error;
@@ -137,7 +149,7 @@ static int ast_drm_freeze(struct drm_device *dev)
 	error = drm_mode_config_helper_suspend(dev);
 	if (error)
 		return error;
-	pci_save_state(to_pci_dev(dev->dev));
+	pci_save_state(dev->pdev);
 	return 0;
 }
 
@@ -150,10 +162,15 @@ static int ast_drm_thaw(struct drm_device *dev)
 
 static int ast_drm_resume(struct drm_device *dev)
 {
-	if (pci_enable_device(to_pci_dev(dev->dev)))
+	int ret;
+
+	if (pci_enable_device(dev->pdev))
 		return -EIO;
 
-	return ast_drm_thaw(dev);
+	ret = ast_drm_thaw(dev);
+	if (ret)
+		return ret;
+	return 0;
 }
 
 static int ast_pm_suspend(struct device *dev)
@@ -214,11 +231,25 @@ static struct pci_driver ast_pci_driver = {
 	.id_table = ast_pciidlist,
 	.probe = ast_pci_probe,
 	.remove = ast_pci_remove,
-	.shutdown = ast_pci_shutdown,
 	.driver.pm = &ast_pm_ops,
 };
 
-drm_module_pci_driver_if_modeset(ast_pci_driver, ast_modeset);
+static int __init ast_init(void)
+{
+	if (vgacon_text_force() && ast_modeset == -1)
+		return -EINVAL;
+
+	if (ast_modeset == 0)
+		return -EINVAL;
+	return pci_register_driver(&ast_pci_driver);
+}
+static void __exit ast_exit(void)
+{
+	pci_unregister_driver(&ast_pci_driver);
+}
+
+module_init(ast_init);
+module_exit(ast_exit);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

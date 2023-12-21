@@ -39,19 +39,19 @@ static const struct sysfs_ops pci_slot_sysfs_ops = {
 static ssize_t address_read_file(struct pci_slot *slot, char *buf)
 {
 	if (slot->number == 0xff)
-		return sysfs_emit(buf, "%04x:%02x\n",
-				  pci_domain_nr(slot->bus),
-				  slot->bus->number);
-
-	return sysfs_emit(buf, "%04x:%02x:%02x\n",
-			  pci_domain_nr(slot->bus),
-			  slot->bus->number,
-			  slot->number);
+		return sprintf(buf, "%04x:%02x\n",
+				pci_domain_nr(slot->bus),
+				slot->bus->number);
+	else
+		return sprintf(buf, "%04x:%02x:%02x\n",
+				pci_domain_nr(slot->bus),
+				slot->bus->number,
+				slot->number);
 }
 
 static ssize_t bus_speed_read(enum pci_bus_speed speed, char *buf)
 {
-	return sysfs_emit(buf, "%s\n", pci_speed_string(speed));
+	return sprintf(buf, "%s\n", pci_speed_string(speed));
 }
 
 static ssize_t max_speed_read_file(struct pci_slot *slot, char *buf)
@@ -96,12 +96,11 @@ static struct attribute *pci_slot_default_attrs[] = {
 	&pci_slot_attr_cur_speed.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(pci_slot_default);
 
-static const struct kobj_type pci_slot_ktype = {
+static struct kobj_type pci_slot_ktype = {
 	.sysfs_ops = &pci_slot_sysfs_ops,
 	.release = &pci_slot_release,
-	.default_groups = pci_slot_default_groups,
+	.default_attrs = pci_slot_default_attrs,
 };
 
 static char *make_slot_name(const char *name)
@@ -324,7 +323,7 @@ EXPORT_SYMBOL_GPL(pci_destroy_slot);
 #if defined(CONFIG_HOTPLUG_PCI) || defined(CONFIG_HOTPLUG_PCI_MODULE)
 #include <linux/pci_hotplug.h>
 /**
- * pci_hp_create_module_link - create symbolic link to hotplug driver module
+ * pci_hp_create_link - create symbolic link to the hotplug driver module.
  * @pci_slot: struct pci_slot
  *
  * Helper function for pci_hotplug_core.c to create symbolic link to
@@ -350,8 +349,7 @@ void pci_hp_create_module_link(struct pci_slot *pci_slot)
 EXPORT_SYMBOL_GPL(pci_hp_create_module_link);
 
 /**
- * pci_hp_remove_module_link - remove symbolic link to the hotplug driver
- * 	module.
+ * pci_hp_remove_link - remove symbolic link to the hotplug driver module.
  * @pci_slot: struct pci_slot
  *
  * Helper function for pci_hotplug_core.c to remove symbolic link to

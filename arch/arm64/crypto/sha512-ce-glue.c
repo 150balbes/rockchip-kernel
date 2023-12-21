@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * sha512-ce-glue.c - SHA-384/SHA-512 using ARMv8 Crypto Extensions
  *
@@ -14,7 +14,7 @@
 #include <asm/unaligned.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/simd.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <crypto/sha512_base.h>
 #include <linux/cpufeature.h>
 #include <linux/crypto.h>

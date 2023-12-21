@@ -30,6 +30,7 @@ static inline void pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 {
 	set_pmd(pmd, __pmd((unsigned long)page_address(pte)));
 }
+#define pmd_pgtable(pmd) pmd_page(pmd)
 
 #define __pte_free_tlb(tlb,pte,addr)			\
 do {							\

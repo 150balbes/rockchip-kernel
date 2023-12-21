@@ -25,15 +25,15 @@
  *
  * Locking interrupts looks like this:
  *
- *    rsil a14, TOPLEVEL
+ *    rsil a15, TOPLEVEL
  *    <code>
- *    wsr  a14, PS
+ *    wsr  a15, PS
  *    rsync
  *
- * Note that a14 is used here because the register allocation
+ * Note that a15 is used here because the register allocation
  * done by the compiler is not guaranteed and a window overflow
  * may not occur between the rsil and wsr instructions. By using
- * a14 in the rsil, the machine is guaranteed to be in a state
+ * a15 in the rsil, the machine is guaranteed to be in a state
  * where no register reference will cause an overflow.
  */
 
@@ -43,7 +43,7 @@
  *
  * Atomically reads the value of @v.
  */
-#define arch_atomic_read(v)		READ_ONCE((v)->counter)
+#define atomic_read(v)		READ_ONCE((v)->counter)
 
 /**
  * atomic_set - set atomic variable
@@ -52,11 +52,11 @@
  *
  * Atomically sets the value of @v to @i.
  */
-#define arch_atomic_set(v,i)		WRITE_ONCE((v)->counter, (i))
+#define atomic_set(v,i)		WRITE_ONCE((v)->counter, (i))
 
 #if XCHAL_HAVE_EXCLUSIVE
 #define ATOMIC_OP(op)							\
-static inline void arch_atomic_##op(int i, atomic_t *v)			\
+static inline void atomic_##op(int i, atomic_t *v)			\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -74,7 +74,7 @@ static inline void arch_atomic_##op(int i, atomic_t *v)			\
 }									\
 
 #define ATOMIC_OP_RETURN(op)						\
-static inline int arch_atomic_##op##_return(int i, atomic_t *v)		\
+static inline int atomic_##op##_return(int i, atomic_t *v)		\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -95,7 +95,7 @@ static inline int arch_atomic_##op##_return(int i, atomic_t *v)		\
 }
 
 #define ATOMIC_FETCH_OP(op)						\
-static inline int arch_atomic_fetch_##op(int i, atomic_t *v)		\
+static inline int atomic_fetch_##op(int i, atomic_t *v)			\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -116,7 +116,7 @@ static inline int arch_atomic_fetch_##op(int i, atomic_t *v)		\
 
 #elif XCHAL_HAVE_S32C1I
 #define ATOMIC_OP(op)							\
-static inline void arch_atomic_##op(int i, atomic_t * v)		\
+static inline void atomic_##op(int i, atomic_t * v)			\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -135,7 +135,7 @@ static inline void arch_atomic_##op(int i, atomic_t * v)		\
 }									\
 
 #define ATOMIC_OP_RETURN(op)						\
-static inline int arch_atomic_##op##_return(int i, atomic_t * v)	\
+static inline int atomic_##op##_return(int i, atomic_t * v)		\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -157,7 +157,7 @@ static inline int arch_atomic_##op##_return(int i, atomic_t * v)	\
 }
 
 #define ATOMIC_FETCH_OP(op)						\
-static inline int arch_atomic_fetch_##op(int i, atomic_t * v)		\
+static inline int atomic_fetch_##op(int i, atomic_t * v)		\
 {									\
 	unsigned long tmp;						\
 	int result;							\
@@ -180,59 +180,59 @@ static inline int arch_atomic_fetch_##op(int i, atomic_t * v)		\
 #else /* XCHAL_HAVE_S32C1I */
 
 #define ATOMIC_OP(op)							\
-static inline void arch_atomic_##op(int i, atomic_t * v)		\
+static inline void atomic_##op(int i, atomic_t * v)			\
 {									\
 	unsigned int vval;						\
 									\
 	__asm__ __volatile__(						\
-			"       rsil    a14, "__stringify(TOPLEVEL)"\n"	\
+			"       rsil    a15, "__stringify(TOPLEVEL)"\n"	\
 			"       l32i    %[result], %[mem]\n"		\
 			"       " #op " %[result], %[result], %[i]\n"	\
 			"       s32i    %[result], %[mem]\n"		\
-			"       wsr     a14, ps\n"			\
+			"       wsr     a15, ps\n"			\
 			"       rsync\n"				\
 			: [result] "=&a" (vval), [mem] "+m" (*v)	\
 			: [i] "a" (i)					\
-			: "a14", "memory"				\
+			: "a15", "memory"				\
 			);						\
 }									\
 
 #define ATOMIC_OP_RETURN(op)						\
-static inline int arch_atomic_##op##_return(int i, atomic_t * v)	\
+static inline int atomic_##op##_return(int i, atomic_t * v)		\
 {									\
 	unsigned int vval;						\
 									\
 	__asm__ __volatile__(						\
-			"       rsil    a14,"__stringify(TOPLEVEL)"\n"	\
+			"       rsil    a15,"__stringify(TOPLEVEL)"\n"	\
 			"       l32i    %[result], %[mem]\n"		\
 			"       " #op " %[result], %[result], %[i]\n"	\
 			"       s32i    %[result], %[mem]\n"		\
-			"       wsr     a14, ps\n"			\
+			"       wsr     a15, ps\n"			\
 			"       rsync\n"				\
 			: [result] "=&a" (vval), [mem] "+m" (*v)	\
 			: [i] "a" (i)					\
-			: "a14", "memory"				\
+			: "a15", "memory"				\
 			);						\
 									\
 	return vval;							\
 }
 
 #define ATOMIC_FETCH_OP(op)						\
-static inline int arch_atomic_fetch_##op(int i, atomic_t * v)		\
+static inline int atomic_fetch_##op(int i, atomic_t * v)		\
 {									\
 	unsigned int tmp, vval;						\
 									\
 	__asm__ __volatile__(						\
-			"       rsil    a14,"__stringify(TOPLEVEL)"\n"	\
+			"       rsil    a15,"__stringify(TOPLEVEL)"\n"	\
 			"       l32i    %[result], %[mem]\n"		\
 			"       " #op " %[tmp], %[result], %[i]\n"	\
 			"       s32i    %[tmp], %[mem]\n"		\
-			"       wsr     a14, ps\n"			\
+			"       wsr     a15, ps\n"			\
 			"       rsync\n"				\
 			: [result] "=&a" (vval), [tmp] "=&a" (tmp),	\
 			  [mem] "+m" (*v)				\
 			: [i] "a" (i)					\
-			: "a14", "memory"				\
+			: "a15", "memory"				\
 			);						\
 									\
 	return vval;							\
@@ -245,11 +245,6 @@ static inline int arch_atomic_fetch_##op(int i, atomic_t * v)		\
 ATOMIC_OPS(add)
 ATOMIC_OPS(sub)
 
-#define arch_atomic_add_return			arch_atomic_add_return
-#define arch_atomic_sub_return			arch_atomic_sub_return
-#define arch_atomic_fetch_add			arch_atomic_fetch_add
-#define arch_atomic_fetch_sub			arch_atomic_fetch_sub
-
 #undef ATOMIC_OPS
 #define ATOMIC_OPS(op) ATOMIC_OP(op) ATOMIC_FETCH_OP(op)
 
@@ -257,13 +252,12 @@ ATOMIC_OPS(and)
 ATOMIC_OPS(or)
 ATOMIC_OPS(xor)
 
-#define arch_atomic_fetch_and			arch_atomic_fetch_and
-#define arch_atomic_fetch_or			arch_atomic_fetch_or
-#define arch_atomic_fetch_xor			arch_atomic_fetch_xor
-
 #undef ATOMIC_OPS
 #undef ATOMIC_FETCH_OP
 #undef ATOMIC_OP_RETURN
 #undef ATOMIC_OP
+
+#define atomic_cmpxchg(v, o, n) ((int)cmpxchg(&((v)->counter), (o), (n)))
+#define atomic_xchg(v, new) (xchg(&((v)->counter), new))
 
 #endif /* _XTENSA_ATOMIC_H */

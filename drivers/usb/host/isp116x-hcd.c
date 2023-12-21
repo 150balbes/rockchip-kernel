@@ -726,7 +726,7 @@ static int isp116x_urb_enqueue(struct usb_hcd *hcd,
 		INIT_LIST_HEAD(&ep->schedule);
 		ep->udev = udev;
 		ep->epnum = epnum;
-		ep->maxpacket = usb_maxpacket(udev, urb->pipe);
+		ep->maxpacket = usb_maxpacket(udev, urb->pipe, is_out);
 		usb_settoggle(udev, epnum, is_out, 0);
 
 		if (type == PIPE_CONTROL) {
@@ -757,7 +757,8 @@ static int isp116x_urb_enqueue(struct usb_hcd *hcd,
 			ep->load = usb_calc_bus_time(udev->speed,
 						     !is_out,
 						     (type == PIPE_ISOCHRONOUS),
-						     usb_maxpacket(udev, pipe)) /
+						     usb_maxpacket(udev, pipe,
+								   is_out)) /
 			    1000;
 		}
 		hep->hcpriv = ep;
@@ -1199,13 +1200,14 @@ DEFINE_SHOW_ATTRIBUTE(isp116x_debug);
 
 static void create_debug_file(struct isp116x *isp116x)
 {
-	debugfs_create_file(hcd_name, S_IRUGO, usb_debug_root, isp116x,
-			    &isp116x_debug_fops);
+	isp116x->dentry = debugfs_create_file(hcd_name,
+					      S_IRUGO, NULL, isp116x,
+					      &isp116x_debug_fops);
 }
 
 static void remove_debug_file(struct isp116x *isp116x)
 {
-	debugfs_lookup_and_remove(hcd_name, usb_debug_root);
+	debugfs_remove(isp116x->dentry);
 }
 
 #else
@@ -1445,7 +1447,6 @@ static int isp116x_bus_resume(struct usb_hcd *hcd)
 		val &= ~HCCONTROL_HCFS;
 		val |= HCCONTROL_USB_RESUME;
 		isp116x_write_reg32(isp116x, HCCONTROL, val);
-		break;
 	case HCCONTROL_USB_RESUME:
 		break;
 	case HCCONTROL_USB_OPER:
@@ -1526,14 +1527,14 @@ static const struct hc_driver isp116x_hc_driver = {
 
 /*----------------------------------------------------------------*/
 
-static void isp116x_remove(struct platform_device *pdev)
+static int isp116x_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct isp116x *isp116x;
 	struct resource *res;
 
 	if (!hcd)
-		return;
+		return 0;
 	isp116x = hcd_to_isp116x(hcd);
 	remove_debug_file(isp116x);
 	usb_remove_hcd(hcd);
@@ -1548,6 +1549,7 @@ static void isp116x_remove(struct platform_device *pdev)
 		release_mem_region(res->start, 2);
 
 	usb_put_hcd(hcd);
+	return 0;
 }
 
 static int isp116x_probe(struct platform_device *pdev)
@@ -1684,7 +1686,7 @@ MODULE_ALIAS("platform:isp116x-hcd");
 
 static struct platform_driver isp116x_driver = {
 	.probe = isp116x_probe,
-	.remove_new = isp116x_remove,
+	.remove = isp116x_remove,
 	.suspend = isp116x_suspend,
 	.resume = isp116x_resume,
 	.driver = {

@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Common Flash Interface support:
  *   ST Advanced Architecture Command Set (ID 0x0020)
  *
- * (C) 2000 Red Hat.
+ * (C) 2000 Red Hat. GPL'd
  *
  * 10/10/2000	Nicolas Pitre <nico@fluxnic.net>
  * 	- completely revamped method functions so they are aware and
@@ -1333,8 +1332,6 @@ static int cfi_staa_suspend(struct mtd_info *mtd)
 			 * as the whole point is that nobody can do anything
 			 * with the chip now anyway.
 			 */
-			break;
-
 		case FL_PM_SUSPENDED:
 			break;
 

@@ -12,8 +12,9 @@
 #include <asm/vmlinux.lds.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 #include <asm/mpu.h>
+#include <asm/page.h>
 
 OUTPUT_ARCH(arm)
 ENTRY(stext)
@@ -46,7 +47,7 @@ SECTIONS
 #endif
 	}
 
-	. = KERNEL_OFFSET + TEXT_OFFSET;
+	. = PAGE_OFFSET + TEXT_OFFSET;
 	.head.text : {
 		_text = .;
 		HEAD_TEXT
@@ -137,12 +138,12 @@ SECTIONS
 #ifdef CONFIG_STRICT_KERNEL_RWX
 	. = ALIGN(1<<SECTION_SHIFT);
 #else
-	. = ALIGN(THREAD_ALIGN);
+	. = ALIGN(THREAD_SIZE);
 #endif
 	__init_end = .;
 
 	_sdata = .;
-	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_ALIGN)
+	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
 	_edata = .;
 
 	BSS_SECTION(0, 0, 0)
@@ -173,8 +174,6 @@ __start_rodata_section_aligned = ALIGN(__start_rodata, 1 << SECTION_SHIFT);
  * binutils is too old (for other reasons as well)
  */
 ASSERT((__proc_info_end - __proc_info_begin), "missing CPU support")
-#ifndef CONFIG_COMPILE_TEST
 ASSERT((__arch_info_end - __arch_info_begin), "no machine record defined")
-#endif
 
 #endif /* CONFIG_XIP_KERNEL */

@@ -194,7 +194,7 @@ out_err:
 	return status;
 }
 
-static void adcxx_remove(struct spi_device *spi)
+static int adcxx_remove(struct spi_device *spi)
 {
 	struct adcxx *adc = spi_get_drvdata(spi);
 	int i;
@@ -205,6 +205,8 @@ static void adcxx_remove(struct spi_device *spi)
 		device_remove_file(&spi->dev, &ad_input[i].dev_attr);
 
 	mutex_unlock(&adc->lock);
+
+	return 0;
 }
 
 static const struct spi_device_id adcxx_ids[] = {

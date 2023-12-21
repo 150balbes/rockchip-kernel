@@ -24,11 +24,21 @@
 #define AS3722_DEVICE_ID	0x0C
 
 static const struct resource as3722_rtc_resource[] = {
-	DEFINE_RES_IRQ_NAMED(AS3722_IRQ_RTC_ALARM, "as3722-rtc-alarm"),
+	{
+		.name = "as3722-rtc-alarm",
+		.start = AS3722_IRQ_RTC_ALARM,
+		.end = AS3722_IRQ_RTC_ALARM,
+		.flags = IORESOURCE_IRQ,
+	},
 };
 
 static const struct resource as3722_adc_resource[] = {
-	DEFINE_RES_IRQ_NAMED(AS3722_IRQ_ADC, "as3722-adc"),
+	{
+		.name = "as3722-adc",
+		.start = AS3722_IRQ_ADC,
+		.end = AS3722_IRQ_ADC,
+		.flags = IORESOURCE_IRQ,
+	},
 };
 
 static const struct mfd_cell as3722_devs[] = {
@@ -333,7 +343,8 @@ static int as3722_i2c_of_probe(struct i2c_client *i2c,
 	return 0;
 }
 
-static int as3722_i2c_probe(struct i2c_client *i2c)
+static int as3722_i2c_probe(struct i2c_client *i2c,
+			const struct i2c_device_id *id)
 {
 	struct as3722 *as3722;
 	unsigned long irq_flags;

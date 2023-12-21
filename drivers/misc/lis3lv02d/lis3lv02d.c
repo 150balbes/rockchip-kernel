@@ -878,7 +878,7 @@ static int lis3lv02d_add_fs(struct lis3lv02d *lis3)
 	return sysfs_create_group(&lis3->pdev->dev.kobj, &lis3lv02d_attribute_group);
 }
 
-void lis3lv02d_remove_fs(struct lis3lv02d *lis3)
+int lis3lv02d_remove_fs(struct lis3lv02d *lis3)
 {
 	sysfs_remove_group(&lis3->pdev->dev.kobj, &lis3lv02d_attribute_group);
 	platform_device_unregister(lis3->pdev);
@@ -894,6 +894,7 @@ void lis3lv02d_remove_fs(struct lis3lv02d *lis3)
 		pm_runtime_set_suspended(lis3->pm_dev);
 	}
 	kfree(lis3->reg_cache);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(lis3lv02d_remove_fs);
 
@@ -965,19 +966,19 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 	if (!pdata)
 		return -ENOMEM;
 
-	if (of_property_read_bool(np, "st,click-single-x"))
+	if (of_get_property(np, "st,click-single-x", NULL))
 		pdata->click_flags |= LIS3_CLICK_SINGLE_X;
-	if (of_property_read_bool(np, "st,click-double-x"))
+	if (of_get_property(np, "st,click-double-x", NULL))
 		pdata->click_flags |= LIS3_CLICK_DOUBLE_X;
 
-	if (of_property_read_bool(np, "st,click-single-y"))
+	if (of_get_property(np, "st,click-single-y", NULL))
 		pdata->click_flags |= LIS3_CLICK_SINGLE_Y;
-	if (of_property_read_bool(np, "st,click-double-y"))
+	if (of_get_property(np, "st,click-double-y", NULL))
 		pdata->click_flags |= LIS3_CLICK_DOUBLE_Y;
 
-	if (of_property_read_bool(np, "st,click-single-z"))
+	if (of_get_property(np, "st,click-single-z", NULL))
 		pdata->click_flags |= LIS3_CLICK_SINGLE_Z;
-	if (of_property_read_bool(np, "st,click-double-z"))
+	if (of_get_property(np, "st,click-double-z", NULL))
 		pdata->click_flags |= LIS3_CLICK_DOUBLE_Z;
 
 	if (!of_property_read_u32(np, "st,click-threshold-x", &val))
@@ -994,31 +995,31 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 	if (!of_property_read_u32(np, "st,click-window", &val))
 		pdata->click_window = val;
 
-	if (of_property_read_bool(np, "st,irq1-disable"))
+	if (of_get_property(np, "st,irq1-disable", NULL))
 		pdata->irq_cfg |= LIS3_IRQ1_DISABLE;
-	if (of_property_read_bool(np, "st,irq1-ff-wu-1"))
+	if (of_get_property(np, "st,irq1-ff-wu-1", NULL))
 		pdata->irq_cfg |= LIS3_IRQ1_FF_WU_1;
-	if (of_property_read_bool(np, "st,irq1-ff-wu-2"))
+	if (of_get_property(np, "st,irq1-ff-wu-2", NULL))
 		pdata->irq_cfg |= LIS3_IRQ1_FF_WU_2;
-	if (of_property_read_bool(np, "st,irq1-data-ready"))
+	if (of_get_property(np, "st,irq1-data-ready", NULL))
 		pdata->irq_cfg |= LIS3_IRQ1_DATA_READY;
-	if (of_property_read_bool(np, "st,irq1-click"))
+	if (of_get_property(np, "st,irq1-click", NULL))
 		pdata->irq_cfg |= LIS3_IRQ1_CLICK;
 
-	if (of_property_read_bool(np, "st,irq2-disable"))
+	if (of_get_property(np, "st,irq2-disable", NULL))
 		pdata->irq_cfg |= LIS3_IRQ2_DISABLE;
-	if (of_property_read_bool(np, "st,irq2-ff-wu-1"))
+	if (of_get_property(np, "st,irq2-ff-wu-1", NULL))
 		pdata->irq_cfg |= LIS3_IRQ2_FF_WU_1;
-	if (of_property_read_bool(np, "st,irq2-ff-wu-2"))
+	if (of_get_property(np, "st,irq2-ff-wu-2", NULL))
 		pdata->irq_cfg |= LIS3_IRQ2_FF_WU_2;
-	if (of_property_read_bool(np, "st,irq2-data-ready"))
+	if (of_get_property(np, "st,irq2-data-ready", NULL))
 		pdata->irq_cfg |= LIS3_IRQ2_DATA_READY;
-	if (of_property_read_bool(np, "st,irq2-click"))
+	if (of_get_property(np, "st,irq2-click", NULL))
 		pdata->irq_cfg |= LIS3_IRQ2_CLICK;
 
-	if (of_property_read_bool(np, "st,irq-open-drain"))
+	if (of_get_property(np, "st,irq-open-drain", NULL))
 		pdata->irq_cfg |= LIS3_IRQ_OPEN_DRAIN;
-	if (of_property_read_bool(np, "st,irq-active-low"))
+	if (of_get_property(np, "st,irq-active-low", NULL))
 		pdata->irq_cfg |= LIS3_IRQ_ACTIVE_LOW;
 
 	if (!of_property_read_u32(np, "st,wu-duration-1", &val))
@@ -1026,32 +1027,32 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 	if (!of_property_read_u32(np, "st,wu-duration-2", &val))
 		pdata->duration2 = val;
 
-	if (of_property_read_bool(np, "st,wakeup-x-lo"))
+	if (of_get_property(np, "st,wakeup-x-lo", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_X_LO;
-	if (of_property_read_bool(np, "st,wakeup-x-hi"))
+	if (of_get_property(np, "st,wakeup-x-hi", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_X_HI;
-	if (of_property_read_bool(np, "st,wakeup-y-lo"))
+	if (of_get_property(np, "st,wakeup-y-lo", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_Y_LO;
-	if (of_property_read_bool(np, "st,wakeup-y-hi"))
+	if (of_get_property(np, "st,wakeup-y-hi", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_Y_HI;
-	if (of_property_read_bool(np, "st,wakeup-z-lo"))
+	if (of_get_property(np, "st,wakeup-z-lo", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_Z_LO;
-	if (of_property_read_bool(np, "st,wakeup-z-hi"))
+	if (of_get_property(np, "st,wakeup-z-hi", NULL))
 		pdata->wakeup_flags |= LIS3_WAKEUP_Z_HI;
 	if (of_get_property(np, "st,wakeup-threshold", &val))
 		pdata->wakeup_thresh = val;
 
-	if (of_property_read_bool(np, "st,wakeup2-x-lo"))
+	if (of_get_property(np, "st,wakeup2-x-lo", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_X_LO;
-	if (of_property_read_bool(np, "st,wakeup2-x-hi"))
+	if (of_get_property(np, "st,wakeup2-x-hi", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_X_HI;
-	if (of_property_read_bool(np, "st,wakeup2-y-lo"))
+	if (of_get_property(np, "st,wakeup2-y-lo", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_Y_LO;
-	if (of_property_read_bool(np, "st,wakeup2-y-hi"))
+	if (of_get_property(np, "st,wakeup2-y-hi", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_Y_HI;
-	if (of_property_read_bool(np, "st,wakeup2-z-lo"))
+	if (of_get_property(np, "st,wakeup2-z-lo", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_Z_LO;
-	if (of_property_read_bool(np, "st,wakeup2-z-hi"))
+	if (of_get_property(np, "st,wakeup2-z-hi", NULL))
 		pdata->wakeup_flags2 |= LIS3_WAKEUP_Z_HI;
 	if (of_get_property(np, "st,wakeup2-threshold", &val))
 		pdata->wakeup_thresh2 = val;
@@ -1073,9 +1074,9 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 		}
 	}
 
-	if (of_property_read_bool(np, "st,hipass1-disable"))
+	if (of_get_property(np, "st,hipass1-disable", NULL))
 		pdata->hipass_ctrl |= LIS3_HIPASS1_DISABLE;
-	if (of_property_read_bool(np, "st,hipass2-disable"))
+	if (of_get_property(np, "st,hipass2-disable", NULL))
 		pdata->hipass_ctrl |= LIS3_HIPASS2_DISABLE;
 
 	if (of_property_read_s32(np, "st,axis-x", &sval) == 0)
@@ -1085,7 +1086,7 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 	if (of_property_read_s32(np, "st,axis-z", &sval) == 0)
 		pdata->axis_z = sval;
 
-	if (of_property_read_u32(np, "st,default-rate", &val) == 0)
+	if (of_get_property(np, "st,default-rate", NULL))
 		pdata->default_rate = val;
 
 	if (of_property_read_s32(np, "st,min-limit-x", &sval) == 0)
@@ -1172,14 +1173,16 @@ int lis3lv02d_init_device(struct lis3lv02d *lis3)
 		break;
 	default:
 		pr_err("unknown sensor type 0x%X\n", lis3->whoami);
-		return -ENODEV;
+		return -EINVAL;
 	}
 
 	lis3->reg_cache = kzalloc(max(sizeof(lis3_wai8_regs),
 				     sizeof(lis3_wai12_regs)), GFP_KERNEL);
 
-	if (lis3->reg_cache == NULL)
+	if (lis3->reg_cache == NULL) {
+		printk(KERN_ERR DRIVER_NAME "out of memory\n");
 		return -ENOMEM;
+	}
 
 	mutex_init(&lis3->mutex);
 	atomic_set(&lis3->wake_thread, 0);

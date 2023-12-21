@@ -30,10 +30,10 @@
 
 static int cg14_setcolreg(unsigned, unsigned, unsigned, unsigned,
 			 unsigned, struct fb_info *);
-static int cg14_pan_display(struct fb_var_screeninfo *, struct fb_info *);
 
-static int cg14_sbusfb_mmap(struct fb_info *info, struct vm_area_struct *vma);
-static int cg14_sbusfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg);
+static int cg14_mmap(struct fb_info *, struct vm_area_struct *);
+static int cg14_ioctl(struct fb_info *, unsigned int, unsigned long);
+static int cg14_pan_display(struct fb_var_screeninfo *, struct fb_info *);
 
 /*
  *  Frame buffer operations
@@ -41,9 +41,16 @@ static int cg14_sbusfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned lo
 
 static const struct fb_ops cg14_ops = {
 	.owner			= THIS_MODULE,
-	FB_DEFAULT_SBUS_OPS(cg14),
 	.fb_setcolreg		= cg14_setcolreg,
 	.fb_pan_display		= cg14_pan_display,
+	.fb_fillrect		= cfb_fillrect,
+	.fb_copyarea		= cfb_copyarea,
+	.fb_imageblit		= cfb_imageblit,
+	.fb_mmap		= cg14_mmap,
+	.fb_ioctl		= cg14_ioctl,
+#ifdef CONFIG_COMPAT
+	.fb_compat_ioctl	= sbusfb_compat_ioctl,
+#endif
 };
 
 #define CG14_MCR_INTENABLE_SHIFT	7
@@ -257,7 +264,7 @@ static int cg14_setcolreg(unsigned regno,
 	return 0;
 }
 
-static int cg14_sbusfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+static int cg14_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	struct cg14_par *par = (struct cg14_par *) info->par;
 
@@ -266,7 +273,7 @@ static int cg14_sbusfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 				  par->iospace, vma);
 }
 
-static int cg14_sbusfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
+static int cg14_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct cg14_par *par = (struct cg14_par *) info->par;
 	struct cg14_regs __iomem *regs = par->regs;
@@ -505,7 +512,7 @@ static int cg14_probe(struct platform_device *op)
 	is_8mb = (resource_size(&op->resource[1]) == (8 * 1024 * 1024));
 
 	BUILD_BUG_ON(sizeof(par->mmap_map) != sizeof(__cg14_mmap_map));
-
+		
 	memcpy(&par->mmap_map, &__cg14_mmap_map, sizeof(par->mmap_map));
 
 	for (i = 0; i < CG14_MMAP_ENTRIES; i++) {
@@ -526,7 +533,7 @@ static int cg14_probe(struct platform_device *op)
 	par->mode = MDI_8_PIX;
 	par->ramsize = (is_8mb ? 0x800000 : 0x400000);
 
-	info->flags = FBINFO_HWACCEL_YPAN;
+	info->flags = FBINFO_DEFAULT | FBINFO_HWACCEL_YPAN;
 	info->fbops = &cg14_ops;
 
 	__cg14_reset(par);
@@ -562,7 +569,7 @@ out_err:
 	return err;
 }
 
-static void cg14_remove(struct platform_device *op)
+static int cg14_remove(struct platform_device *op)
 {
 	struct fb_info *info = dev_get_drvdata(&op->dev);
 	struct cg14_par *par = info->par;
@@ -573,6 +580,8 @@ static void cg14_remove(struct platform_device *op)
 	cg14_unmap_regs(op, info, par);
 
 	framebuffer_release(info);
+
+	return 0;
 }
 
 static const struct of_device_id cg14_match[] = {
@@ -589,7 +598,7 @@ static struct platform_driver cg14_driver = {
 		.of_match_table = cg14_match,
 	},
 	.probe		= cg14_probe,
-	.remove_new	= cg14_remove,
+	.remove		= cg14_remove,
 };
 
 static int __init cg14_init(void)

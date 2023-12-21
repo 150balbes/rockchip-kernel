@@ -10,16 +10,15 @@
 #define pr_fmt(fmt) "blk-crypto-fallback: " fmt
 
 #include <crypto/skcipher.h>
+#include <linux/blk-cgroup.h>
 #include <linux/blk-crypto.h>
-#include <linux/blk-crypto-profile.h>
 #include <linux/blkdev.h>
 #include <linux/crypto.h>
+#include <linux/keyslot-manager.h>
 #include <linux/mempool.h>
 #include <linux/module.h>
 #include <linux/random.h>
-#include <linux/scatterlist.h>
 
-#include "blk-cgroup.h"
 #include "blk-crypto-internal.h"
 
 static unsigned int num_prealloc_bounce_pg = 32;
@@ -73,15 +72,14 @@ static mempool_t *bio_fallback_crypt_ctx_pool;
 static DEFINE_MUTEX(tfms_init_lock);
 static bool tfms_inited[BLK_ENCRYPTION_MODE_MAX];
 
-static struct blk_crypto_fallback_keyslot {
+static struct blk_crypto_keyslot {
 	enum blk_crypto_mode_num crypto_mode;
 	struct crypto_skcipher *tfms[BLK_ENCRYPTION_MODE_MAX];
 } *blk_crypto_keyslots;
 
-static struct blk_crypto_profile blk_crypto_fallback_profile;
+static struct blk_keyslot_manager blk_crypto_ksm;
 static struct workqueue_struct *blk_crypto_wq;
 static mempool_t *blk_crypto_bounce_page_pool;
-static struct bio_set crypto_bio_split;
 
 /*
  * This is the key we set when evicting a keyslot. This *should* be the all 0's
@@ -89,9 +87,9 @@ static struct bio_set crypto_bio_split;
  */
 static u8 blank_key[BLK_CRYPTO_MAX_KEY_SIZE];
 
-static void blk_crypto_fallback_evict_keyslot(unsigned int slot)
+static void blk_crypto_evict_keyslot(unsigned int slot)
 {
-	struct blk_crypto_fallback_keyslot *slotp = &blk_crypto_keyslots[slot];
+	struct blk_crypto_keyslot *slotp = &blk_crypto_keyslots[slot];
 	enum blk_crypto_mode_num crypto_mode = slotp->crypto_mode;
 	int err;
 
@@ -104,41 +102,45 @@ static void blk_crypto_fallback_evict_keyslot(unsigned int slot)
 	slotp->crypto_mode = BLK_ENCRYPTION_MODE_INVALID;
 }
 
-static int
-blk_crypto_fallback_keyslot_program(struct blk_crypto_profile *profile,
-				    const struct blk_crypto_key *key,
-				    unsigned int slot)
+static int blk_crypto_keyslot_program(struct blk_keyslot_manager *ksm,
+				      const struct blk_crypto_key *key,
+				      unsigned int slot)
 {
-	struct blk_crypto_fallback_keyslot *slotp = &blk_crypto_keyslots[slot];
+	struct blk_crypto_keyslot *slotp = &blk_crypto_keyslots[slot];
 	const enum blk_crypto_mode_num crypto_mode =
 						key->crypto_cfg.crypto_mode;
 	int err;
 
 	if (crypto_mode != slotp->crypto_mode &&
 	    slotp->crypto_mode != BLK_ENCRYPTION_MODE_INVALID)
-		blk_crypto_fallback_evict_keyslot(slot);
+		blk_crypto_evict_keyslot(slot);
 
 	slotp->crypto_mode = crypto_mode;
 	err = crypto_skcipher_setkey(slotp->tfms[crypto_mode], key->raw,
 				     key->size);
 	if (err) {
-		blk_crypto_fallback_evict_keyslot(slot);
+		blk_crypto_evict_keyslot(slot);
 		return err;
 	}
 	return 0;
 }
 
-static int blk_crypto_fallback_keyslot_evict(struct blk_crypto_profile *profile,
-					     const struct blk_crypto_key *key,
-					     unsigned int slot)
+static int blk_crypto_keyslot_evict(struct blk_keyslot_manager *ksm,
+				    const struct blk_crypto_key *key,
+				    unsigned int slot)
 {
-	blk_crypto_fallback_evict_keyslot(slot);
+	blk_crypto_evict_keyslot(slot);
 	return 0;
 }
 
-static const struct blk_crypto_ll_ops blk_crypto_fallback_ll_ops = {
-	.keyslot_program        = blk_crypto_fallback_keyslot_program,
-	.keyslot_evict          = blk_crypto_fallback_keyslot_evict,
+/*
+ * The crypto API fallback KSM ops - only used for a bio when it specifies a
+ * blk_crypto_key that was not supported by the device's inline encryption
+ * hardware.
+ */
+static const struct blk_ksm_ll_ops blk_crypto_ksm_ll_ops = {
+	.keyslot_program	= blk_crypto_keyslot_program,
+	.keyslot_evict		= blk_crypto_keyslot_evict,
 };
 
 static void blk_crypto_fallback_encrypt_endio(struct bio *enc_bio)
@@ -152,26 +154,23 @@ static void blk_crypto_fallback_encrypt_endio(struct bio *enc_bio)
 
 	src_bio->bi_status = enc_bio->bi_status;
 
-	bio_uninit(enc_bio);
-	kfree(enc_bio);
+	bio_put(enc_bio);
 	bio_endio(src_bio);
 }
 
-static struct bio *blk_crypto_fallback_clone_bio(struct bio *bio_src)
+static struct bio *blk_crypto_clone_bio(struct bio *bio_src)
 {
-	unsigned int nr_segs = bio_segments(bio_src);
 	struct bvec_iter iter;
 	struct bio_vec bv;
 	struct bio *bio;
 
-	bio = bio_kmalloc(nr_segs, GFP_NOIO);
+	bio = bio_alloc_bioset(GFP_NOIO, bio_segments(bio_src), NULL);
 	if (!bio)
 		return NULL;
-	bio_init(bio, bio_src->bi_bdev, bio->bi_inline_vecs, nr_segs,
-		 bio_src->bi_opf);
-	if (bio_flagged(bio_src, BIO_REMAPPED))
-		bio_set_flag(bio, BIO_REMAPPED);
+	bio->bi_disk		= bio_src->bi_disk;
+	bio->bi_opf		= bio_src->bi_opf;
 	bio->bi_ioprio		= bio_src->bi_ioprio;
+	bio->bi_write_hint	= bio_src->bi_write_hint;
 	bio->bi_iter.bi_sector	= bio_src->bi_iter.bi_sector;
 	bio->bi_iter.bi_size	= bio_src->bi_iter.bi_size;
 
@@ -179,18 +178,20 @@ static struct bio *blk_crypto_fallback_clone_bio(struct bio *bio_src)
 		bio->bi_io_vec[bio->bi_vcnt++] = bv;
 
 	bio_clone_blkg_association(bio, bio_src);
+	blkcg_bio_issue_init(bio);
+
+	bio_clone_skip_dm_default_key(bio, bio_src);
 
 	return bio;
 }
 
-static bool
-blk_crypto_fallback_alloc_cipher_req(struct blk_crypto_keyslot *slot,
-				     struct skcipher_request **ciph_req_ret,
-				     struct crypto_wait *wait)
+static bool blk_crypto_alloc_cipher_req(struct blk_ksm_keyslot *slot,
+					struct skcipher_request **ciph_req_ret,
+					struct crypto_wait *wait)
 {
 	struct skcipher_request *ciph_req;
-	const struct blk_crypto_fallback_keyslot *slotp;
-	int keyslot_idx = blk_crypto_keyslot_index(slot);
+	const struct blk_crypto_keyslot *slotp;
+	int keyslot_idx = blk_ksm_get_slot_idx(slot);
 
 	slotp = &blk_crypto_keyslots[keyslot_idx];
 	ciph_req = skcipher_request_alloc(slotp->tfms[slotp->crypto_mode],
@@ -207,7 +208,7 @@ blk_crypto_fallback_alloc_cipher_req(struct blk_crypto_keyslot *slot,
 	return true;
 }
 
-static bool blk_crypto_fallback_split_bio_if_needed(struct bio **bio_ptr)
+static bool blk_crypto_split_bio_if_needed(struct bio **bio_ptr)
 {
 	struct bio *bio = *bio_ptr;
 	unsigned int i = 0;
@@ -217,14 +218,13 @@ static bool blk_crypto_fallback_split_bio_if_needed(struct bio **bio_ptr)
 
 	bio_for_each_segment(bv, bio, iter) {
 		num_sectors += bv.bv_len >> SECTOR_SHIFT;
-		if (++i == BIO_MAX_VECS)
+		if (++i == BIO_MAX_PAGES)
 			break;
 	}
 	if (num_sectors < bio_sectors(bio)) {
 		struct bio *split_bio;
 
-		split_bio = bio_split(bio, num_sectors, GFP_NOIO,
-				      &crypto_bio_split);
+		split_bio = bio_split(bio, num_sectors, GFP_NOIO, NULL);
 		if (!split_bio) {
 			bio->bi_status = BLK_STS_RESOURCE;
 			return false;
@@ -262,7 +262,7 @@ static bool blk_crypto_fallback_encrypt_bio(struct bio **bio_ptr)
 {
 	struct bio *src_bio, *enc_bio;
 	struct bio_crypt_ctx *bc;
-	struct blk_crypto_keyslot *slot;
+	struct blk_ksm_keyslot *slot;
 	int data_unit_size;
 	struct skcipher_request *ciph_req = NULL;
 	DECLARE_CRYPTO_WAIT(wait);
@@ -274,7 +274,7 @@ static bool blk_crypto_fallback_encrypt_bio(struct bio **bio_ptr)
 	blk_status_t blk_st;
 
 	/* Split the bio if it's too big for single page bvec */
-	if (!blk_crypto_fallback_split_bio_if_needed(bio_ptr))
+	if (!blk_crypto_split_bio_if_needed(bio_ptr))
 		return false;
 
 	src_bio = *bio_ptr;
@@ -282,25 +282,24 @@ static bool blk_crypto_fallback_encrypt_bio(struct bio **bio_ptr)
 	data_unit_size = bc->bc_key->crypto_cfg.data_unit_size;
 
 	/* Allocate bounce bio for encryption */
-	enc_bio = blk_crypto_fallback_clone_bio(src_bio);
+	enc_bio = blk_crypto_clone_bio(src_bio);
 	if (!enc_bio) {
 		src_bio->bi_status = BLK_STS_RESOURCE;
 		return false;
 	}
 
 	/*
-	 * Get a blk-crypto-fallback keyslot that contains a crypto_skcipher for
-	 * this bio's algorithm and key.
+	 * Use the crypto API fallback keyslot manager to get a crypto_skcipher
+	 * for the algorithm and key specified for this bio.
 	 */
-	blk_st = blk_crypto_get_keyslot(&blk_crypto_fallback_profile,
-					bc->bc_key, &slot);
+	blk_st = blk_ksm_get_slot_for_key(&blk_crypto_ksm, bc->bc_key, &slot);
 	if (blk_st != BLK_STS_OK) {
 		src_bio->bi_status = blk_st;
 		goto out_put_enc_bio;
 	}
 
 	/* and then allocate an skcipher_request for it */
-	if (!blk_crypto_fallback_alloc_cipher_req(slot, &ciph_req, &wait)) {
+	if (!blk_crypto_alloc_cipher_req(slot, &ciph_req, &wait)) {
 		src_bio->bi_status = BLK_STS_RESOURCE;
 		goto out_release_keyslot;
 	}
@@ -361,11 +360,11 @@ out_free_bounce_pages:
 out_free_ciph_req:
 	skcipher_request_free(ciph_req);
 out_release_keyslot:
-	blk_crypto_put_keyslot(slot);
+	blk_ksm_put_slot(slot);
 out_put_enc_bio:
 	if (enc_bio)
-		bio_uninit(enc_bio);
-	kfree(enc_bio);
+		bio_put(enc_bio);
+
 	return ret;
 }
 
@@ -379,7 +378,7 @@ static void blk_crypto_fallback_decrypt_bio(struct work_struct *work)
 		container_of(work, struct bio_fallback_crypt_ctx, work);
 	struct bio *bio = f_ctx->bio;
 	struct bio_crypt_ctx *bc = &f_ctx->crypt_ctx;
-	struct blk_crypto_keyslot *slot;
+	struct blk_ksm_keyslot *slot;
 	struct skcipher_request *ciph_req = NULL;
 	DECLARE_CRYPTO_WAIT(wait);
 	u64 curr_dun[BLK_CRYPTO_DUN_ARRAY_SIZE];
@@ -392,18 +391,17 @@ static void blk_crypto_fallback_decrypt_bio(struct work_struct *work)
 	blk_status_t blk_st;
 
 	/*
-	 * Get a blk-crypto-fallback keyslot that contains a crypto_skcipher for
-	 * this bio's algorithm and key.
+	 * Use the crypto API fallback keyslot manager to get a crypto_skcipher
+	 * for the algorithm and key specified for this bio.
 	 */
-	blk_st = blk_crypto_get_keyslot(&blk_crypto_fallback_profile,
-					bc->bc_key, &slot);
+	blk_st = blk_ksm_get_slot_for_key(&blk_crypto_ksm, bc->bc_key, &slot);
 	if (blk_st != BLK_STS_OK) {
 		bio->bi_status = blk_st;
 		goto out_no_keyslot;
 	}
 
 	/* and then allocate an skcipher_request for it */
-	if (!blk_crypto_fallback_alloc_cipher_req(slot, &ciph_req, &wait)) {
+	if (!blk_crypto_alloc_cipher_req(slot, &ciph_req, &wait)) {
 		bio->bi_status = BLK_STS_RESOURCE;
 		goto out;
 	}
@@ -434,7 +432,7 @@ static void blk_crypto_fallback_decrypt_bio(struct work_struct *work)
 
 out:
 	skcipher_request_free(ciph_req);
-	blk_crypto_put_keyslot(slot);
+	blk_ksm_put_slot(slot);
 out_no_keyslot:
 	mempool_free(f_ctx, bio_fallback_crypt_ctx_pool);
 	bio_endio(bio);
@@ -473,9 +471,9 @@ static void blk_crypto_fallback_decrypt_endio(struct bio *bio)
  * @bio_ptr: pointer to the bio to prepare
  *
  * If bio is doing a WRITE operation, this splits the bio into two parts if it's
- * too big (see blk_crypto_fallback_split_bio_if_needed()). It then allocates a
- * bounce bio for the first part, encrypts it, and updates bio_ptr to point to
- * the bounce bio.
+ * too big (see blk_crypto_split_bio_if_needed). It then allocates a bounce bio
+ * for the first part, encrypts it, and update bio_ptr to point to the bounce
+ * bio.
  *
  * For a READ operation, we mark the bio for decryption by using bi_private and
  * bi_end_io.
@@ -499,8 +497,8 @@ bool blk_crypto_fallback_bio_prep(struct bio **bio_ptr)
 		return false;
 	}
 
-	if (!__blk_crypto_cfg_supported(&blk_crypto_fallback_profile,
-					&bc->bc_key->crypto_cfg)) {
+	if (!blk_ksm_crypto_cfg_supported(&blk_crypto_ksm,
+					  &bc->bc_key->crypto_cfg)) {
 		bio->bi_status = BLK_STS_NOTSUPP;
 		return false;
 	}
@@ -526,7 +524,7 @@ bool blk_crypto_fallback_bio_prep(struct bio **bio_ptr)
 
 int blk_crypto_fallback_evict_key(const struct blk_crypto_key *key)
 {
-	return __blk_crypto_evict_key(&blk_crypto_fallback_profile, key);
+	return blk_ksm_evict_key(&blk_crypto_ksm, key);
 }
 
 static bool blk_crypto_fallback_inited;
@@ -534,35 +532,31 @@ static int blk_crypto_fallback_init(void)
 {
 	int i;
 	int err;
-	struct blk_crypto_profile *profile = &blk_crypto_fallback_profile;
 
 	if (blk_crypto_fallback_inited)
 		return 0;
 
-	get_random_bytes(blank_key, BLK_CRYPTO_MAX_KEY_SIZE);
+	prandom_bytes(blank_key, BLK_CRYPTO_MAX_KEY_SIZE);
 
-	err = bioset_init(&crypto_bio_split, 64, 0, 0);
+	err = blk_ksm_init(&blk_crypto_ksm, blk_crypto_num_keyslots);
 	if (err)
 		goto out;
-
-	err = blk_crypto_profile_init(profile, blk_crypto_num_keyslots);
-	if (err)
-		goto fail_free_bioset;
 	err = -ENOMEM;
 
-	profile->ll_ops = blk_crypto_fallback_ll_ops;
-	profile->max_dun_bytes_supported = BLK_CRYPTO_MAX_IV_SIZE;
+	blk_crypto_ksm.ksm_ll_ops = blk_crypto_ksm_ll_ops;
+	blk_crypto_ksm.max_dun_bytes_supported = BLK_CRYPTO_MAX_IV_SIZE;
+	blk_crypto_ksm.features = BLK_CRYPTO_FEATURE_STANDARD_KEYS;
 
 	/* All blk-crypto modes have a crypto API fallback. */
 	for (i = 0; i < BLK_ENCRYPTION_MODE_MAX; i++)
-		profile->modes_supported[i] = 0xFFFFFFFF;
-	profile->modes_supported[BLK_ENCRYPTION_MODE_INVALID] = 0;
+		blk_crypto_ksm.crypto_modes_supported[i] = 0xFFFFFFFF;
+	blk_crypto_ksm.crypto_modes_supported[BLK_ENCRYPTION_MODE_INVALID] = 0;
 
 	blk_crypto_wq = alloc_workqueue("blk_crypto_wq",
 					WQ_UNBOUND | WQ_HIGHPRI |
 					WQ_MEM_RECLAIM, num_online_cpus());
 	if (!blk_crypto_wq)
-		goto fail_destroy_profile;
+		goto fail_free_ksm;
 
 	blk_crypto_keyslots = kcalloc(blk_crypto_num_keyslots,
 				      sizeof(blk_crypto_keyslots[0]),
@@ -596,10 +590,8 @@ fail_free_keyslots:
 	kfree(blk_crypto_keyslots);
 fail_free_wq:
 	destroy_workqueue(blk_crypto_wq);
-fail_destroy_profile:
-	blk_crypto_profile_destroy(profile);
-fail_free_bioset:
-	bioset_exit(&crypto_bio_split);
+fail_free_ksm:
+	blk_ksm_destroy(&blk_crypto_ksm);
 out:
 	return err;
 }
@@ -611,7 +603,7 @@ out:
 int blk_crypto_fallback_start_using_mode(enum blk_crypto_mode_num mode_num)
 {
 	const char *cipher_str = blk_crypto_modes[mode_num].cipher_str;
-	struct blk_crypto_fallback_keyslot *slotp;
+	struct blk_crypto_keyslot *slotp;
 	unsigned int i;
 	int err = 0;
 

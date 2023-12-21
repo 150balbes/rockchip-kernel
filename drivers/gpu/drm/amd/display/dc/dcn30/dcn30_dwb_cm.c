@@ -251,7 +251,7 @@ static bool dwb3_program_ogam_lut(
 	else
 		next_mode = LUT_RAM_A;
 
-	dwb3_configure_ogam_lut(dwbc30, next_mode == LUT_RAM_A);
+	dwb3_configure_ogam_lut(dwbc30, next_mode == LUT_RAM_A ? true : false);
 
 	if (next_mode == LUT_RAM_A)
 		dwb3_program_ogam_luta_settings(dwbc30, params);
@@ -280,7 +280,7 @@ bool dwb3_ogam_set_input_transfer_func(
 	dwb_ogam_lut = kzalloc(sizeof(*dwb_ogam_lut), GFP_KERNEL);
 
 	if (dwb_ogam_lut) {
-		cm_helper_translate_curve_to_hw_format(dwbc->ctx,
+		cm_helper_translate_curve_to_hw_format(
 			in_transfer_func_dwb_ogam,
 			dwb_ogam_lut, false);
 

@@ -20,30 +20,28 @@ struct mm_struct;
 #include <asm/nohash/pgtable.h>
 #endif /* !CONFIG_PPC_BOOK3S */
 
-/*
- * Protection used for kernel text. We want the debuggers to be able to
- * set breakpoints anywhere, so don't write protect the kernel text
- * on platforms where such control is possible.
- */
-#if defined(CONFIG_KGDB) || defined(CONFIG_XMON) || defined(CONFIG_BDI_SWITCH) || \
-	defined(CONFIG_KPROBES) || defined(CONFIG_DYNAMIC_FTRACE)
-#define PAGE_KERNEL_TEXT	PAGE_KERNEL_X
-#else
-#define PAGE_KERNEL_TEXT	PAGE_KERNEL_ROX
-#endif
+/* Note due to the way vm flags are laid out, the bits are XWR */
+#define __P000	PAGE_NONE
+#define __P001	PAGE_READONLY
+#define __P010	PAGE_COPY
+#define __P011	PAGE_COPY
+#define __P100	PAGE_READONLY_X
+#define __P101	PAGE_READONLY_X
+#define __P110	PAGE_COPY_X
+#define __P111	PAGE_COPY_X
 
-/* Make modules code happy. We don't set RO yet */
-#define PAGE_KERNEL_EXEC	PAGE_KERNEL_X
-
-/* Advertise special mapping type for AGP */
-#define PAGE_AGP		(PAGE_KERNEL_NC)
-#define HAVE_PAGE_AGP
+#define __S000	PAGE_NONE
+#define __S001	PAGE_READONLY
+#define __S010	PAGE_SHARED
+#define __S011	PAGE_SHARED
+#define __S100	PAGE_READONLY_X
+#define __S101	PAGE_READONLY_X
+#define __S110	PAGE_SHARED_X
+#define __S111	PAGE_SHARED_X
 
 #ifndef __ASSEMBLY__
 
-#ifndef MAX_PTRS_PER_PGD
-#define MAX_PTRS_PER_PGD PTRS_PER_PGD
-#endif
+#include <asm/tlbflush.h>
 
 /* Keep these as a macros to avoid include dependency mess */
 #define pte_page(x)		pfn_to_page(pte_pfn(x))
@@ -76,10 +74,15 @@ extern unsigned long empty_zero_page[];
 extern pgd_t swapper_pg_dir[];
 
 extern void paging_init(void);
-void poking_init(void);
 
 extern unsigned long ioremap_bot;
-extern const pgprot_t protection_map[16];
+
+/*
+ * kern_addr_valid is intended to indicate whether an address is a valid
+ * kernel address.  Most 32-bit archs define it as always true (like this)
+ * but most 64-bit archs actually perform a test.  What should we do here?
+ */
+#define kern_addr_valid(addr)	(1)
 
 #ifndef CONFIG_TRANSPARENT_HUGEPAGE
 #define pmd_large(pmd)		0
@@ -150,12 +153,6 @@ static inline bool p4d_is_leaf(p4d_t p4d)
 	return false;
 }
 #endif
-
-#define pmd_pgtable pmd_pgtable
-static inline pgtable_t pmd_pgtable(pmd_t pmd)
-{
-	return (pgtable_t)pmd_page_vaddr(pmd);
-}
 
 #ifdef CONFIG_PPC64
 #define is_ioremap_addr is_ioremap_addr

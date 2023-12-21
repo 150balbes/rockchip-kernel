@@ -61,6 +61,10 @@
 #define SPRN_GQR6		918
 #define SPRN_GQR7		919
 
+/* Book3S_32 defines mfsrin(v) - but that messes up our abstract
+ * function pointers, so let's just disable the define. */
+#undef mfsrin
+
 enum priv_level {
 	PRIV_PROBLEM = 0,
 	PRIV_SUPER = 1,
@@ -268,7 +272,7 @@ int kvmppc_core_emulate_op_pr(struct kvm_vcpu *vcpu,
 
 			/*
 			 * add rules to fit in ISA specification regarding TM
-			 * state transition in TM disable/Suspended state,
+			 * state transistion in TM disable/Suspended state,
 			 * and target TM state is TM inactive(00) state. (the
 			 * change should be suppressed).
 			 */
@@ -836,9 +840,6 @@ int kvmppc_core_emulate_mtspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong spr_val)
 	case SPRN_MMCR1:
 	case SPRN_MMCR2:
 	case SPRN_UMMCR2:
-	case SPRN_UAMOR:
-	case SPRN_IAMR:
-	case SPRN_AMR:
 #endif
 		break;
 unprivileged:
@@ -1003,9 +1004,6 @@ int kvmppc_core_emulate_mfspr_pr(struct kvm_vcpu *vcpu, int sprn, ulong *spr_val
 	case SPRN_MMCR2:
 	case SPRN_UMMCR2:
 	case SPRN_TIR:
-	case SPRN_UAMOR:
-	case SPRN_IAMR:
-	case SPRN_AMR:
 #endif
 		*spr_val = 0;
 		break;

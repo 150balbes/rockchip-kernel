@@ -7,6 +7,7 @@
 #ifndef APEI_INTERNAL_H
 #define APEI_INTERNAL_H
 
+#include <linux/cper.h>
 #include <linux/acpi.h>
 
 struct apei_exec_context;
@@ -128,6 +129,11 @@ static inline u32 cper_estatus_len(struct acpi_hest_generic_status *estatus)
 	else
 		return sizeof(*estatus) + estatus->data_length;
 }
+
+void cper_estatus_print(const char *pfx,
+			const struct acpi_hest_generic_status *estatus);
+int cper_estatus_check_header(const struct acpi_hest_generic_status *estatus);
+int cper_estatus_check(const struct acpi_hest_generic_status *estatus);
 
 int apei_osc_setup(void);
 #endif

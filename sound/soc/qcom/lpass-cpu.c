@@ -28,18 +28,7 @@
 #define LPASS_CPU_I2S_SD2_3_MASK	GENMASK(3, 2)
 #define LPASS_CPU_I2S_SD0_1_2_MASK	GENMASK(2, 0)
 #define LPASS_CPU_I2S_SD0_1_2_3_MASK	GENMASK(3, 0)
-#define LPASS_REG_READ 1
-#define LPASS_REG_WRITE 0
 
-/*
- * Channel maps for Quad channel playbacks on MI2S Secondary
- */
-static struct snd_pcm_chmap_elem lpass_quad_chmaps[] = {
-		{ .channels = 4,
-		  .map = { SNDRV_CHMAP_FL, SNDRV_CHMAP_RL,
-				SNDRV_CHMAP_FR, SNDRV_CHMAP_RR } },
-		{ }
-};
 static int lpass_cpu_init_i2sctl_bitfields(struct device *dev,
 			struct lpaif_i2sctl *i2sctl, struct regmap *map)
 {
@@ -414,25 +403,6 @@ const struct snd_soc_dai_ops asoc_qcom_lpass_cpu_dai_ops = {
 };
 EXPORT_SYMBOL_GPL(asoc_qcom_lpass_cpu_dai_ops);
 
-int lpass_cpu_pcm_new(struct snd_soc_pcm_runtime *rtd,
-				struct snd_soc_dai *dai)
-{
-	int ret;
-	struct snd_soc_dai_driver *drv = dai->driver;
-	struct lpass_data *drvdata = snd_soc_dai_get_drvdata(dai);
-
-	if (drvdata->mi2s_playback_sd_mode[dai->id] == LPAIF_I2SCTL_MODE_QUAD01) {
-		ret =  snd_pcm_add_chmap_ctls(rtd->pcm, SNDRV_PCM_STREAM_PLAYBACK,
-				lpass_quad_chmaps, drv->playback.channels_max, 0,
-				NULL);
-		if (ret < 0)
-			return ret;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(lpass_cpu_pcm_new);
-
 int asoc_qcom_lpass_cpu_dai_probe(struct snd_soc_dai *dai)
 {
 	struct lpass_data *drvdata = snd_soc_dai_get_drvdata(dai);
@@ -449,7 +419,7 @@ int asoc_qcom_lpass_cpu_dai_probe(struct snd_soc_dai *dai)
 EXPORT_SYMBOL_GPL(asoc_qcom_lpass_cpu_dai_probe);
 
 static int asoc_qcom_of_xlate_dai_name(struct snd_soc_component *component,
-				   const struct of_phandle_args *args,
+				   struct of_phandle_args *args,
 				   const char **dai_name)
 {
 	struct lpass_data *drvdata = snd_soc_component_get_drvdata(component);
@@ -472,7 +442,6 @@ static int asoc_qcom_of_xlate_dai_name(struct snd_soc_component *component,
 static const struct snd_soc_component_driver lpass_cpu_comp_driver = {
 	.name = "lpass-cpu",
 	.of_xlate_dai_name = asoc_qcom_of_xlate_dai_name,
-	.legacy_dai_naming = 1,
 };
 
 static bool lpass_cpu_regmap_writeable(struct device *dev, unsigned int reg)
@@ -528,8 +497,6 @@ static bool lpass_cpu_regmap_readable(struct device *dev, unsigned int reg)
 			return true;
 
 	for (i = 0; i < v->irq_ports; ++i) {
-		if (reg == LPAIF_IRQCLEAR_REG(v, i))
-			return true;
 		if (reg == LPAIF_IRQEN_REG(v, i))
 			return true;
 		if (reg == LPAIF_IRQSTAT_REG(v, i))
@@ -571,12 +538,9 @@ static bool lpass_cpu_regmap_volatile(struct device *dev, unsigned int reg)
 	struct lpass_variant *v = drvdata->variant;
 	int i;
 
-	for (i = 0; i < v->irq_ports; ++i) {
-		if (reg == LPAIF_IRQCLEAR_REG(v, i))
-			return true;
+	for (i = 0; i < v->irq_ports; ++i)
 		if (reg == LPAIF_IRQSTAT_REG(v, i))
 			return true;
-	}
 
 	for (i = 0; i < v->rdma_channels; ++i)
 		if (reg == LPAIF_RDMACURR_REG(v, i))
@@ -590,7 +554,6 @@ static bool lpass_cpu_regmap_volatile(struct device *dev, unsigned int reg)
 }
 
 static struct regmap_config lpass_cpu_regmap_config = {
-	.name = "lpass_cpu",
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
@@ -800,197 +763,13 @@ static bool lpass_hdmi_regmap_volatile(struct device *dev, unsigned int reg)
 	return false;
 }
 
-static struct regmap_config lpass_hdmi_regmap_config = {
-	.name = "lpass_hdmi",
+struct regmap_config lpass_hdmi_regmap_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
 	.writeable_reg = lpass_hdmi_regmap_writeable,
 	.readable_reg = lpass_hdmi_regmap_readable,
 	.volatile_reg = lpass_hdmi_regmap_volatile,
-	.cache_type = REGCACHE_FLAT,
-};
-
-static bool __lpass_rxtx_regmap_accessible(struct device *dev, unsigned int reg, bool rw)
-{
-	struct lpass_data *drvdata = dev_get_drvdata(dev);
-	struct lpass_variant *v = drvdata->variant;
-	int i;
-
-	for (i = 0; i < v->rxtx_irq_ports; ++i) {
-		if (reg == LPAIF_RXTX_IRQCLEAR_REG(v, i))
-			return true;
-		if (reg == LPAIF_RXTX_IRQEN_REG(v, i))
-			return true;
-		if (reg == LPAIF_RXTX_IRQSTAT_REG(v, i))
-			return true;
-	}
-
-	for (i = 0; i < v->rxtx_rdma_channels; ++i) {
-		if (reg == LPAIF_CDC_RXTX_RDMACTL_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_RDMABASE_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_RDMABUFF_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-		if (rw == LPASS_REG_READ) {
-			if (reg == LPAIF_CDC_RXTX_RDMACURR_REG(v, i, LPASS_CDC_DMA_RX0))
-				return true;
-		}
-		if (reg == LPAIF_CDC_RXTX_RDMAPER_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_RDMA_INTF_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-	}
-
-	for (i = 0; i < v->rxtx_wrdma_channels; ++i) {
-		if (reg == LPAIF_CDC_RXTX_WRDMACTL_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_WRDMABASE_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_WRDMABUFF_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-		if (rw == LPASS_REG_READ) {
-			if (reg == LPAIF_CDC_RXTX_WRDMACURR_REG(v, i, LPASS_CDC_DMA_RX0))
-				return true;
-		}
-		if (reg == LPAIF_CDC_RXTX_WRDMAPER_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-		if (reg == LPAIF_CDC_RXTX_WRDMA_INTF_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-	}
-	return false;
-}
-
-static bool lpass_rxtx_regmap_writeable(struct device *dev, unsigned int reg)
-{
-	return __lpass_rxtx_regmap_accessible(dev, reg, LPASS_REG_WRITE);
-}
-
-static bool lpass_rxtx_regmap_readable(struct device *dev, unsigned int reg)
-{
-	return __lpass_rxtx_regmap_accessible(dev, reg, LPASS_REG_READ);
-}
-
-static bool lpass_rxtx_regmap_volatile(struct device *dev, unsigned int reg)
-{
-	struct lpass_data *drvdata = dev_get_drvdata(dev);
-	struct lpass_variant *v = drvdata->variant;
-	int i;
-
-	for (i = 0; i < v->rxtx_irq_ports; ++i) {
-		if (reg == LPAIF_RXTX_IRQCLEAR_REG(v, i))
-			return true;
-		if (reg == LPAIF_RXTX_IRQSTAT_REG(v, i))
-			return true;
-	}
-
-	for (i = 0; i < v->rxtx_rdma_channels; ++i)
-		if (reg == LPAIF_CDC_RXTX_RDMACURR_REG(v, i, LPASS_CDC_DMA_RX0))
-			return true;
-
-	for (i = 0; i < v->rxtx_wrdma_channels; ++i)
-		if (reg == LPAIF_CDC_RXTX_WRDMACURR_REG(v, i + v->rxtx_wrdma_channel_start,
-							LPASS_CDC_DMA_TX3))
-			return true;
-
-	return false;
-}
-
-static bool __lpass_va_regmap_accessible(struct device *dev, unsigned int reg, bool rw)
-{
-	struct lpass_data *drvdata = dev_get_drvdata(dev);
-	struct lpass_variant *v = drvdata->variant;
-	int i;
-
-	for (i = 0; i < v->va_irq_ports; ++i) {
-		if (reg == LPAIF_VA_IRQCLEAR_REG(v, i))
-			return true;
-		if (reg == LPAIF_VA_IRQEN_REG(v, i))
-			return true;
-		if (reg == LPAIF_VA_IRQSTAT_REG(v, i))
-			return true;
-	}
-
-	for (i = 0; i < v->va_wrdma_channels; ++i) {
-		if (reg == LPAIF_CDC_VA_WRDMACTL_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-		if (reg == LPAIF_CDC_VA_WRDMABASE_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-		if (reg == LPAIF_CDC_VA_WRDMABUFF_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-		if (rw == LPASS_REG_READ) {
-			if (reg == LPAIF_CDC_VA_WRDMACURR_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-				return true;
-		}
-		if (reg == LPAIF_CDC_VA_WRDMAPER_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-		if (reg == LPAIF_CDC_VA_WRDMA_INTF_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-	}
-	return false;
-}
-
-static bool lpass_va_regmap_writeable(struct device *dev, unsigned int reg)
-{
-	return __lpass_va_regmap_accessible(dev, reg, LPASS_REG_WRITE);
-}
-
-static bool lpass_va_regmap_readable(struct device *dev, unsigned int reg)
-{
-	return __lpass_va_regmap_accessible(dev, reg, LPASS_REG_READ);
-}
-
-static bool lpass_va_regmap_volatile(struct device *dev, unsigned int reg)
-{
-	struct lpass_data *drvdata = dev_get_drvdata(dev);
-	struct lpass_variant *v = drvdata->variant;
-	int i;
-
-	for (i = 0; i < v->va_irq_ports; ++i) {
-		if (reg == LPAIF_VA_IRQCLEAR_REG(v, i))
-			return true;
-		if (reg == LPAIF_VA_IRQSTAT_REG(v, i))
-			return true;
-	}
-
-	for (i = 0; i < v->va_wrdma_channels; ++i) {
-		if (reg == LPAIF_CDC_VA_WRDMACURR_REG(v, i + v->va_wrdma_channel_start,
-							LPASS_CDC_DMA_VA_TX0))
-			return true;
-	}
-
-	return false;
-}
-
-static struct regmap_config lpass_rxtx_regmap_config = {
-	.reg_bits = 32,
-	.reg_stride = 4,
-	.val_bits = 32,
-	.writeable_reg = lpass_rxtx_regmap_writeable,
-	.readable_reg = lpass_rxtx_regmap_readable,
-	.volatile_reg = lpass_rxtx_regmap_volatile,
-	.cache_type = REGCACHE_FLAT,
-};
-
-static struct regmap_config lpass_va_regmap_config = {
-	.reg_bits = 32,
-	.reg_stride = 4,
-	.val_bits = 32,
-	.writeable_reg = lpass_va_regmap_writeable,
-	.readable_reg = lpass_va_regmap_readable,
-	.volatile_reg = lpass_va_regmap_volatile,
 	.cache_type = REGCACHE_FLAT,
 };
 
@@ -1037,11 +816,10 @@ static void of_lpass_cpu_parse_dai_data(struct device *dev,
 					struct lpass_data *data)
 {
 	struct device_node *node;
-	int ret, i, id;
+	int ret, id;
 
 	/* Allow all channels by default for backwards compatibility */
-	for (i = 0; i < data->variant->num_dai; i++) {
-		id = data->variant->dai_driver[i].id;
+	for (id = 0; id < data->variant->num_dai; id++) {
 		data->mi2s_playback_sd_mode[id] = LPAIF_I2SCTL_MODE_8CH;
 		data->mi2s_capture_sd_mode[id] = LPAIF_I2SCTL_MODE_8CH;
 	}
@@ -1054,8 +832,6 @@ static void of_lpass_cpu_parse_dai_data(struct device *dev,
 		}
 		if (id == LPASS_DP_RX) {
 			data->hdmi_port_enable = 1;
-		} else if (is_cdc_dma_port(id)) {
-			data->codec_dma_enable = 1;
 		} else {
 			data->mi2s_playback_sd_mode[id] =
 				of_lpass_cpu_parse_sd_lines(dev, node,
@@ -1065,28 +841,6 @@ static void of_lpass_cpu_parse_dai_data(struct device *dev,
 						    "qcom,capture-sd-lines");
 		}
 	}
-}
-
-static int of_lpass_cdc_dma_clks_parse(struct device *dev,
-					struct lpass_data *data)
-{
-	data->codec_mem0 = devm_clk_get(dev, "audio_cc_codec_mem0");
-	if (IS_ERR(data->codec_mem0))
-		return PTR_ERR(data->codec_mem0);
-
-	data->codec_mem1 = devm_clk_get(dev, "audio_cc_codec_mem1");
-	if (IS_ERR(data->codec_mem1))
-		return PTR_ERR(data->codec_mem1);
-
-	data->codec_mem2 = devm_clk_get(dev, "audio_cc_codec_mem2");
-	if (IS_ERR(data->codec_mem2))
-		return PTR_ERR(data->codec_mem2);
-
-	data->va_mem0 = devm_clk_get(dev, "aon_cc_va_mem0");
-	if (IS_ERR(data->va_mem0))
-		return PTR_ERR(data->va_mem0);
-
-	return 0;
 }
 
 int asoc_qcom_lpass_cpu_platform_probe(struct platform_device *pdev)
@@ -1115,60 +869,19 @@ int asoc_qcom_lpass_cpu_platform_probe(struct platform_device *pdev)
 	if (!match || !match->data)
 		return -EINVAL;
 
-	if (of_device_is_compatible(dev->of_node, "qcom,lpass-cpu-apq8016")) {
-		dev_warn(dev, "%s compatible is deprecated\n",
-			 match->compatible);
-	}
-
 	drvdata->variant = (struct lpass_variant *)match->data;
 	variant = drvdata->variant;
 
 	of_lpass_cpu_parse_dai_data(dev, drvdata);
 
-	if (drvdata->codec_dma_enable) {
-		drvdata->rxtx_lpaif =
-				devm_platform_ioremap_resource_byname(pdev, "lpass-rxtx-lpaif");
-		if (IS_ERR(drvdata->rxtx_lpaif))
-			return PTR_ERR(drvdata->rxtx_lpaif);
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "lpass-lpaif");
 
-		drvdata->va_lpaif = devm_platform_ioremap_resource_byname(pdev, "lpass-va-lpaif");
-		if (IS_ERR(drvdata->va_lpaif))
-			return PTR_ERR(drvdata->va_lpaif);
-
-		lpass_rxtx_regmap_config.max_register = LPAIF_CDC_RXTX_WRDMAPER_REG(variant,
-					variant->rxtx_wrdma_channels +
-					variant->rxtx_wrdma_channel_start, LPASS_CDC_DMA_TX3);
-
-		drvdata->rxtx_lpaif_map = devm_regmap_init_mmio(dev, drvdata->rxtx_lpaif,
-					&lpass_rxtx_regmap_config);
-		if (IS_ERR(drvdata->rxtx_lpaif_map))
-			return PTR_ERR(drvdata->rxtx_lpaif_map);
-
-		lpass_va_regmap_config.max_register = LPAIF_CDC_VA_WRDMAPER_REG(variant,
-					variant->va_wrdma_channels +
-					variant->va_wrdma_channel_start, LPASS_CDC_DMA_VA_TX0);
-
-		drvdata->va_lpaif_map = devm_regmap_init_mmio(dev, drvdata->va_lpaif,
-					&lpass_va_regmap_config);
-		if (IS_ERR(drvdata->va_lpaif_map))
-			return PTR_ERR(drvdata->va_lpaif_map);
-
-		ret = of_lpass_cdc_dma_clks_parse(dev, drvdata);
-		if (ret) {
-			dev_err(dev, "failed to get cdc dma clocks %d\n", ret);
-			return ret;
-		}
-
-		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "lpass-rxtx-cdc-dma-lpm");
-		drvdata->rxtx_cdc_dma_lpm_buf = res->start;
-
-		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "lpass-va-cdc-dma-lpm");
-		drvdata->va_cdc_dma_lpm_buf = res->start;
+	drvdata->lpaif = devm_ioremap_resource(dev, res);
+	if (IS_ERR((void const __force *)drvdata->lpaif)) {
+		dev_err(dev, "error mapping reg resource: %ld\n",
+				PTR_ERR((void const __force *)drvdata->lpaif));
+		return PTR_ERR((void const __force *)drvdata->lpaif);
 	}
-
-	drvdata->lpaif = devm_platform_ioremap_resource_byname(pdev, "lpass-lpaif");
-	if (IS_ERR(drvdata->lpaif))
-		return PTR_ERR(drvdata->lpaif);
 
 	lpass_cpu_regmap_config.max_register = LPAIF_WRDMAPER_REG(variant,
 						variant->wrdma_channels +
@@ -1183,9 +896,14 @@ int asoc_qcom_lpass_cpu_platform_probe(struct platform_device *pdev)
 	}
 
 	if (drvdata->hdmi_port_enable) {
-		drvdata->hdmiif = devm_platform_ioremap_resource_byname(pdev, "lpass-hdmiif");
-		if (IS_ERR(drvdata->hdmiif))
-			return PTR_ERR(drvdata->hdmiif);
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "lpass-hdmiif");
+
+		drvdata->hdmiif = devm_ioremap_resource(dev, res);
+		if (IS_ERR((void const __force *)drvdata->hdmiif)) {
+			dev_err(dev, "error mapping reg resource: %ld\n",
+					PTR_ERR((void const __force *)drvdata->hdmiif));
+			return PTR_ERR((void const __force *)drvdata->hdmiif);
+		}
 
 		lpass_hdmi_regmap_config.max_register = LPAIF_HDMI_RDMAPER_REG(variant,
 					variant->hdmi_rdma_channels - 1);
@@ -1208,7 +926,7 @@ int asoc_qcom_lpass_cpu_platform_probe(struct platform_device *pdev)
 
 	for (i = 0; i < variant->num_dai; i++) {
 		dai_id = variant->dai_driver[i].id;
-		if (dai_id == LPASS_DP_RX || is_cdc_dma_port(dai_id))
+		if (dai_id == LPASS_DP_RX)
 			continue;
 
 		drvdata->mi2s_osr_clk[dai_id] = devm_clk_get_optional(dev,
@@ -1221,11 +939,6 @@ int asoc_qcom_lpass_cpu_platform_probe(struct platform_device *pdev)
 				variant->dai_bit_clk_names[i],
 				PTR_ERR(drvdata->mi2s_bit_clk[dai_id]));
 			return PTR_ERR(drvdata->mi2s_bit_clk[dai_id]);
-		}
-		if (drvdata->mi2s_playback_sd_mode[dai_id] ==
-			LPAIF_I2SCTL_MODE_QUAD01) {
-			variant->dai_driver[dai_id].playback.channels_min = 4;
-			variant->dai_driver[dai_id].playback.channels_max = 4;
 		}
 	}
 
@@ -1279,16 +992,6 @@ int asoc_qcom_lpass_cpu_platform_remove(struct platform_device *pdev)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(asoc_qcom_lpass_cpu_platform_remove);
-
-void asoc_qcom_lpass_cpu_platform_shutdown(struct platform_device *pdev)
-{
-	struct lpass_data *drvdata = platform_get_drvdata(pdev);
-
-	if (drvdata->variant->exit)
-		drvdata->variant->exit(pdev);
-
-}
-EXPORT_SYMBOL_GPL(asoc_qcom_lpass_cpu_platform_shutdown);
 
 MODULE_DESCRIPTION("QTi LPASS CPU Driver");
 MODULE_LICENSE("GPL v2");

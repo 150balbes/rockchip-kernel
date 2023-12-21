@@ -15,22 +15,9 @@ description:
 
 properties:
   compatible:
-    oneOf:
-      - enum:
-          - qcom,sfpb-mutex
-          - qcom,tcsr-mutex
-      - items:
-          - enum:
-              - qcom,apq8084-tcsr-mutex
-              - qcom,ipq6018-tcsr-mutex
-              - qcom,msm8226-tcsr-mutex
-              - qcom,msm8994-tcsr-mutex
-          - const: qcom,tcsr-mutex
-      - items:
-          - enum:
-              - qcom,msm8974-tcsr-mutex
-          - const: qcom,tcsr-mutex
-          - const: syscon
+    enum:
+      - qcom,sfpb-mutex
+      - qcom,tcsr-mutex
 
   reg:
     maxItems: 1
@@ -47,9 +34,9 @@ additionalProperties: false
 
 examples:
   - |
-    hwlock@1f40000 {
-        compatible = "qcom,tcsr-mutex";
-        reg = <0x01f40000 0x40000>;
-        #hwlock-cells = <1>;
-    };
+        tcsr_mutex: hwlock@1f40000 {
+                compatible = "qcom,tcsr-mutex";
+                reg = <0x01f40000 0x40000>;
+                #hwlock-cells = <1>;
+        };
 ...

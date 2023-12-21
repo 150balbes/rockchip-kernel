@@ -121,6 +121,9 @@
 #define SLAVE_LLCC			15
 #define SLAVE_SERVICE_GEM_NOC		16
 
+#define MASTER_IPA_CORE			0
+#define SLAVE_IPA_CORE			1
+
 #define MASTER_LLCC			0
 #define SLAVE_EBI_CH0			1
 

@@ -8,7 +8,7 @@
  * EC for audio function.
  */
 
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <linux/acpi.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -94,7 +94,7 @@ static int send_ec_host_command(struct cros_ec_device *ec_dev, uint32_t cmd,
 	if (ret < 0)
 		goto error;
 
-	if (in && insize)
+	if (insize)
 		memcpy(in, msg->data, insize);
 
 	ret = 0;
@@ -232,11 +232,11 @@ static int i2s_rx_hw_params(struct snd_pcm_substream *substream,
 	if (params_rate(params) != 48000)
 		return -EINVAL;
 
-	switch (params_width(params)) {
-	case 16:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S16_LE:
 		depth = EC_CODEC_I2S_RX_SAMPLE_DEPTH_16;
 		break;
-	case 24:
+	case SNDRV_PCM_FORMAT_S24_LE:
 		depth = EC_CODEC_I2S_RX_SAMPLE_DEPTH_24;
 		break;
 	default:
@@ -283,8 +283,8 @@ static int i2s_rx_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	struct ec_param_ec_codec_i2s_rx p;
 	enum ec_codec_i2s_rx_daifmt daifmt;
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_CBC_CFC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -387,7 +387,6 @@ static const struct snd_soc_component_driver i2s_rx_component_driver = {
 	.num_dapm_widgets	= ARRAY_SIZE(i2s_rx_dapm_widgets),
 	.dapm_routes		= i2s_rx_dapm_routes,
 	.num_dapm_routes	= ARRAY_SIZE(i2s_rx_dapm_routes),
-	.endianness		= 1,
 };
 
 static void *wov_map_shm(struct cros_ec_codec_priv *priv,
@@ -1012,18 +1011,6 @@ static int cros_ec_codec_platform_probe(struct platform_device *pdev)
 		return ret;
 	}
 	priv->ec_capabilities = r.capabilities;
-
-	/* Reset EC codec i2s rx. */
-	p.cmd = EC_CODEC_I2S_RX_RESET;
-	ret = send_ec_host_command(priv->ec_device, EC_CMD_EC_CODEC_I2S_RX,
-				   (uint8_t *)&p, sizeof(p), NULL, 0);
-	if (ret == -ENOPROTOOPT) {
-		dev_info(dev,
-			 "Missing reset command. Please update EC firmware.\n");
-	} else if (ret) {
-		dev_err(dev, "failed to EC_CODEC_I2S_RESET: %d\n", ret);
-		return ret;
-	}
 
 	platform_set_drvdata(pdev, priv);
 

@@ -90,25 +90,7 @@ nvkm_instobj_ctor(const struct nvkm_memory_func *func,
 }
 
 int
-nvkm_instobj_wrap(struct nvkm_device *device,
-		  struct nvkm_memory *memory, struct nvkm_memory **pmemory)
-{
-	struct nvkm_instmem *imem = device->imem;
-	int ret;
-
-	if (!imem->func->memory_wrap)
-		return -ENOSYS;
-
-	ret = imem->func->memory_wrap(imem, memory, pmemory);
-	if (ret)
-		return ret;
-
-	container_of(*pmemory, struct nvkm_instobj, memory)->preserve = true;
-	return 0;
-}
-
-int
-nvkm_instobj_new(struct nvkm_instmem *imem, u32 size, u32 align, bool zero, bool preserve,
+nvkm_instobj_new(struct nvkm_instmem *imem, u32 size, u32 align, bool zero,
 		 struct nvkm_memory **pmemory)
 {
 	struct nvkm_subdev *subdev = &imem->subdev;
@@ -136,7 +118,6 @@ nvkm_instobj_new(struct nvkm_instmem *imem, u32 size, u32 align, bool zero, bool
 		nvkm_done(memory);
 	}
 
-	container_of(memory, struct nvkm_instobj, memory)->preserve = preserve;
 done:
 	if (ret)
 		nvkm_memory_unref(&memory);
@@ -183,11 +164,9 @@ nvkm_instmem_fini(struct nvkm_subdev *subdev, bool suspend)
 
 	if (suspend) {
 		list_for_each_entry(iobj, &imem->list, head) {
-			if (iobj->preserve) {
-				int ret = nvkm_instobj_save(iobj);
-				if (ret)
-					return ret;
-			}
+			int ret = nvkm_instobj_save(iobj);
+			if (ret)
+				return ret;
 		}
 
 		nvkm_bar_bar2_fini(subdev->device);
@@ -239,11 +218,9 @@ static void *
 nvkm_instmem_dtor(struct nvkm_subdev *subdev)
 {
 	struct nvkm_instmem *imem = nvkm_instmem(subdev);
-	void *data = imem;
 	if (imem->func->dtor)
-		data = imem->func->dtor(imem);
-	mutex_destroy(&imem->mutex);
-	return data;
+		return imem->func->dtor(imem);
+	return imem;
 }
 
 static const struct nvkm_subdev_func
@@ -255,13 +232,13 @@ nvkm_instmem = {
 };
 
 void
-nvkm_instmem_ctor(const struct nvkm_instmem_func *func, struct nvkm_device *device,
-		  enum nvkm_subdev_type type, int inst, struct nvkm_instmem *imem)
+nvkm_instmem_ctor(const struct nvkm_instmem_func *func,
+		  struct nvkm_device *device, int index,
+		  struct nvkm_instmem *imem)
 {
-	nvkm_subdev_ctor(&nvkm_instmem, device, type, inst, &imem->subdev);
+	nvkm_subdev_ctor(&nvkm_instmem, device, index, &imem->subdev);
 	imem->func = func;
 	spin_lock_init(&imem->lock);
 	INIT_LIST_HEAD(&imem->list);
 	INIT_LIST_HEAD(&imem->boot);
-	mutex_init(&imem->mutex);
 }

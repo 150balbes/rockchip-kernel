@@ -11,7 +11,7 @@
 static int
 ext2_xattr_security_get(const struct xattr_handler *handler,
 			struct dentry *unused, struct inode *inode,
-			const char *name, void *buffer, size_t size)
+			const char *name, void *buffer, size_t size, int flags)
 {
 	return ext2_xattr_get(inode, EXT2_XATTR_INDEX_SECURITY, name,
 			      buffer, size);
@@ -19,7 +19,6 @@ ext2_xattr_security_get(const struct xattr_handler *handler,
 
 static int
 ext2_xattr_security_set(const struct xattr_handler *handler,
-			struct mnt_idmap *idmap,
 			struct dentry *unused, struct inode *inode,
 			const char *name, const void *value,
 			size_t size, int flags)

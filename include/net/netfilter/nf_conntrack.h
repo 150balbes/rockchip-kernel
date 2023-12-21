@@ -15,6 +15,8 @@
 
 #include <linux/bitops.h>
 #include <linux/compiler.h>
+#include <linux/android_vendor.h>
+#include <linux/android_kabi.h>
 
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/nf_conntrack_tcp.h>
@@ -43,27 +45,10 @@ union nf_conntrack_expect_proto {
 	/* insert expect proto private data here */
 };
 
-struct nf_conntrack_net_ecache {
-	struct delayed_work dwork;
-	spinlock_t dying_lock;
-	struct hlist_nulls_head dying_list;
-};
-
 struct nf_conntrack_net {
-	/* only used when new connection is allocated: */
-	atomic_t count;
-	unsigned int expect_count;
-
-	/* only used from work queues, configuration plane, and so on: */
 	unsigned int users4;
 	unsigned int users6;
 	unsigned int users_bridge;
-#ifdef CONFIG_SYSCTL
-	struct ctl_table_header	*sysctl_header;
-#endif
-#ifdef CONFIG_NF_CONNTRACK_EVENTS
-	struct nf_conntrack_net_ecache ecache;
-#endif
 };
 
 #include <linux/types.h>
@@ -79,8 +64,6 @@ struct nf_conn {
 	 * Hint, SKB address this struct and refcnt via skb->_nfct and
 	 * helpers nf_conntrack_get() and nf_conntrack_put().
 	 * Helper nf_ct_put() equals nf_conntrack_put() by dec refcnt,
-	 * except that the latter uses internal indirection and does not
-	 * result in a conntrack module dependency.
 	 * beware nf_ct_get() is different and don't inc refcnt.
 	 */
 	struct nf_conntrack ct_general;
@@ -99,6 +82,7 @@ struct nf_conn {
 	/* Have we seen traffic both ways yet? (bitset) */
 	unsigned long status;
 
+	u16		cpu;
 	possible_net_t ct_net;
 
 #if IS_ENABLED(CONFIG_NF_NAT)
@@ -123,13 +107,12 @@ struct nf_conn {
 
 	/* Storage reserved for other modules, must be the last member */
 	union nf_conntrack_proto proto;
-};
 
-static inline struct nf_conn *
-nf_ct_to_nf_conn(const struct nf_conntrack *nfct)
-{
-	return container_of(nfct, struct nf_conn, ct_general);
-}
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+
+	ANDROID_OEM_DATA(1);
+};
 
 static inline struct nf_conn *
 nf_ct_tuplehash_to_ctrack(const struct nf_conntrack_tuple_hash *hash)
@@ -179,15 +162,11 @@ nf_ct_get(const struct sk_buff *skb, enum ip_conntrack_info *ctinfo)
 	return (struct nf_conn *)(nfct & NFCT_PTRMASK);
 }
 
-void nf_ct_destroy(struct nf_conntrack *nfct);
-
-void nf_conntrack_tcp_set_closing(struct nf_conn *ct);
-
 /* decrement reference count on a conntrack */
 static inline void nf_ct_put(struct nf_conn *ct)
 {
-	if (ct && refcount_dec_and_test(&ct->ct_general.use))
-		nf_ct_destroy(&ct->ct_general);
+	WARN_ON(!ct);
+	nf_conntrack_put(&ct->ct_general);
 }
 
 /* Protocol module loading */
@@ -242,16 +221,13 @@ static inline bool nf_ct_kill(struct nf_conn *ct)
 	return nf_ct_delete(ct, 0, 0);
 }
 
-struct nf_ct_iter_data {
-	struct net *net;
-	void *data;
-	u32 portid;
-	int report;
-};
+/* Set all unconfirmed conntrack as dying */
+void nf_ct_unconfirmed_destroy(struct net *);
 
 /* Iterate over all conntracks: if iter returns true, it's deleted. */
-void nf_ct_iterate_cleanup_net(int (*iter)(struct nf_conn *i, void *data),
-			       const struct nf_ct_iter_data *iter_data);
+void nf_ct_iterate_cleanup_net(struct net *net,
+			       int (*iter)(struct nf_conn *i, void *data),
+			       void *data, u32 portid, int report);
 
 /* also set unconfirmed conntracks as dying. Only use in module exit path. */
 void nf_ct_iterate_destroy(int (*iter)(struct nf_conn *i, void *data),
@@ -295,7 +271,7 @@ static inline unsigned long nf_ct_expires(const struct nf_conn *ct)
 {
 	s32 timeout = READ_ONCE(ct->timeout) - nfct_time_stamp;
 
-	return max(timeout, 0);
+	return timeout > 0 ? timeout : 0;
 }
 
 static inline bool nf_ct_is_expired(const struct nf_conn *ct)
@@ -355,24 +331,12 @@ struct nf_conn *nf_ct_tmpl_alloc(struct net *net,
 void nf_ct_tmpl_free(struct nf_conn *tmpl);
 
 u32 nf_ct_get_id(const struct nf_conn *ct);
-u32 nf_conntrack_count(const struct net *net);
 
 static inline void
 nf_ct_set(struct sk_buff *skb, struct nf_conn *ct, enum ip_conntrack_info info)
 {
 	skb_set_nfct(skb, (unsigned long)ct | info);
 }
-
-extern unsigned int nf_conntrack_net_id;
-
-static inline struct nf_conntrack_net *nf_ct_pernet(const struct net *net)
-{
-	return net_generic(net, nf_conntrack_net_id);
-}
-
-int nf_ct_skb_network_trim(struct sk_buff *skb, int family);
-int nf_ct_handle_fragments(struct net *net, struct sk_buff *skb,
-			   u16 zone, u8 family, u8 *proto, u16 *mru);
 
 #define NF_CT_STAT_INC(net, count)	  __this_cpu_inc((net)->ct.stat->count)
 #define NF_CT_STAT_INC_ATOMIC(net, count) this_cpu_inc((net)->ct.stat->count)

@@ -10,7 +10,6 @@
 #include <linux/bpf_trace.h>
 #include <net/udp_tunnel.h>
 #include <linux/ip.h>
-#include <net/gro.h>
 #include <net/ipv6.h>
 #include <net/tcp.h>
 #include <linux/if_ether.h>
@@ -260,9 +259,11 @@ static int map_frag_to_bd(struct qede_tx_queue *txq,
 static u16 qede_get_skb_hlen(struct sk_buff *skb, bool is_encap_pkt)
 {
 	if (is_encap_pkt)
-		return skb_inner_tcp_all_headers(skb);
-
-	return skb_tcp_all_headers(skb);
+		return (skb_inner_transport_header(skb) +
+			inner_tcp_hdrlen(skb) - skb->data);
+	else
+		return (skb_transport_header(skb) +
+			tcp_hdrlen(skb) - skb->data);
 }
 
 /* +2 for 1st BD for headers and 2nd BD for headlen (if required) */
@@ -344,7 +345,7 @@ int qede_xdp_transmit(struct net_device *dev, int n_frames,
 	struct qede_tx_queue *xdp_tx;
 	struct xdp_frame *xdpf;
 	dma_addr_t mapping;
-	int i, nxmit = 0;
+	int i, drops = 0;
 	u16 xdp_prod;
 
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK))
@@ -363,13 +364,18 @@ int qede_xdp_transmit(struct net_device *dev, int n_frames,
 
 		mapping = dma_map_single(dmadev, xdpf->data, xdpf->len,
 					 DMA_TO_DEVICE);
-		if (unlikely(dma_mapping_error(dmadev, mapping)))
-			break;
+		if (unlikely(dma_mapping_error(dmadev, mapping))) {
+			xdp_return_frame_rx_napi(xdpf);
+			drops++;
+
+			continue;
+		}
 
 		if (unlikely(qede_xdp_xmit(xdp_tx, mapping, 0, xdpf->len,
-					   NULL, xdpf)))
-			break;
-		nxmit++;
+					   NULL, xdpf))) {
+			xdp_return_frame_rx_napi(xdpf);
+			drops++;
+		}
 	}
 
 	if (flags & XDP_XMIT_FLUSH) {
@@ -381,7 +387,7 @@ int qede_xdp_transmit(struct net_device *dev, int n_frames,
 
 	spin_unlock(&xdp_tx->xdp_tx_lock);
 
-	return nxmit;
+	return n_frames - drops;
 }
 
 int qede_txq_has_work(struct qede_tx_queue *txq)
@@ -1087,11 +1093,20 @@ static bool qede_rx_xdp(struct qede_dev *edev,
 	struct xdp_buff xdp;
 	enum xdp_action act;
 
-	xdp_init_buff(&xdp, rxq->rx_buf_seg_size, &rxq->xdp_rxq);
-	xdp_prepare_buff(&xdp, page_address(bd->data), *data_offset,
-			 *len, false);
+	xdp.data_hard_start = page_address(bd->data);
+	xdp.data = xdp.data_hard_start + *data_offset;
+	xdp_set_data_meta_invalid(&xdp);
+	xdp.data_end = xdp.data + *len;
+	xdp.rxq = &rxq->xdp_rxq;
+	xdp.frame_sz = rxq->rx_buf_seg_size; /* PAGE_SIZE when XDP enabled */
 
+	/* Queues always have a full reset currently, so for the time
+	 * being until there's atomic program replace just mark read
+	 * side for map helpers.
+	 */
+	rcu_read_lock();
 	act = bpf_prog_run_xdp(prog, &xdp);
+	rcu_read_unlock();
 
 	/* Recalculate, as XDP might have changed the headers */
 	*data_offset = xdp.data - xdp.data_hard_start;
@@ -1154,7 +1169,7 @@ static bool qede_rx_xdp(struct qede_dev *edev,
 		qede_rx_bd_ring_consume(rxq);
 		break;
 	default:
-		bpf_warn_invalid_xdp_action(edev->ndev, prog, act);
+		bpf_warn_invalid_xdp_action(act);
 		fallthrough;
 	case XDP_ABORTED:
 		trace_xdp_exception(edev->ndev, prog, act);
@@ -1205,9 +1220,12 @@ static int qede_rx_build_jumbo(struct qede_dev *edev,
 		dma_unmap_page(rxq->dev, bd->mapping,
 			       PAGE_SIZE, DMA_FROM_DEVICE);
 
-		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, bd->data,
-				rxq->rx_headroom, cur_size, PAGE_SIZE);
+		skb_fill_page_desc(skb, skb_shinfo(skb)->nr_frags++,
+				   bd->data, rxq->rx_headroom, cur_size);
 
+		skb->truesize += PAGE_SIZE;
+		skb->data_len += cur_size;
+		skb->len += cur_size;
 		pkt_len -= cur_size;
 	}
 
@@ -1438,12 +1456,7 @@ int qede_poll(struct napi_struct *napi, int budget)
 	rx_work_done = (likely(fp->type & QEDE_FASTPATH_RX) &&
 			qede_has_rx_work(fp->rxq)) ?
 			qede_rx_int(fp, budget) : 0;
-
-	if (fp->xdp_xmit & QEDE_XDP_REDIRECT)
-		xdp_do_flush();
-
-	/* Handle case where we are called by netpoll with a budget of 0 */
-	if (rx_work_done < budget || !budget) {
+	if (rx_work_done < budget) {
 		if (!qede_poll_is_more_work(fp)) {
 			napi_complete_done(napi, rx_work_done);
 
@@ -1460,6 +1473,9 @@ int qede_poll(struct napi_struct *napi, int budget)
 		fp->xdp_tx->tx_db.data.bd_prod = cpu_to_le16(xdp_prod);
 		qede_update_tx_producer(fp->xdp_tx);
 	}
+
+	if (fp->xdp_xmit & QEDE_XDP_REDIRECT)
+		xdp_do_flush_map();
 
 	return rx_work_done;
 }

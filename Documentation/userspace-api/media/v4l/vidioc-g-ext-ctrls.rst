@@ -53,7 +53,7 @@ by the ``controls`` fields.
 To get the current value of a set of controls applications initialize
 the ``id``, ``size`` and ``reserved2`` fields of each struct
 :c:type:`v4l2_ext_control` and call the
-:ref:`VIDIOC_G_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` ioctl. String controls must also set the
+:ref:`VIDIOC_G_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` ioctl. String controls controls must also set the
 ``string`` field. Controls of compound types
 (``V4L2_CTRL_FLAG_HAS_PAYLOAD`` is set) must set the ``ptr`` field.
 
@@ -118,15 +118,11 @@ correct. This prevents the situation where only some of the controls
 were set/get. Only low-level errors (e. g. a failed i2c command) can
 still cause this situation.
 
-.. tabularcolumns:: |p{6.8cm}|p{4.0cm}|p{6.5cm}|
+.. tabularcolumns:: |p{1.2cm}|p{3.0cm}|p{1.5cm}|p{11.8cm}|
 
 .. c:type:: v4l2_ext_control
 
-.. raw:: latex
-
-   \footnotesize
-
-.. cssclass:: longtable
+.. cssclass: longtable
 
 .. flat-table:: struct v4l2_ext_control
     :header-rows:  0
@@ -138,12 +134,11 @@ still cause this situation.
       - Identifies the control, set by the application.
     * - __u32
       - ``size``
-      - The total size in bytes of the payload of this control.
-    * - :cspan:`2` The ``size`` field is normally 0, but for pointer
-	controls this should be set to the size of the memory that contains
-	the payload or that will receive the payload.
-	If :ref:`VIDIOC_G_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` finds that this value
-	is less than is required to store the payload result, then it is set
+      - The total size in bytes of the payload of this control. This is
+	normally 0, but for pointer controls this should be set to the
+	size of the memory containing the payload, or that will receive
+	the payload. If :ref:`VIDIOC_G_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` finds that this value is
+	less than is required to store the payload result, then it is set
 	to a value large enough to store the payload result and ``ENOSPC`` is
 	returned.
 
@@ -185,72 +180,10 @@ still cause this situation.
       - ``p_u32``
       - A pointer to a matrix control of unsigned 32-bit values. Valid if
 	this control is of type ``V4L2_CTRL_TYPE_U32``.
-    * - __s32 *
-      - ``p_s32``
-      - A pointer to a matrix control of signed 32-bit values. Valid if
-        this control is of type ``V4L2_CTRL_TYPE_INTEGER`` and
-        ``V4L2_CTRL_FLAG_HAS_PAYLOAD`` is set.
-    * - __s64 *
-      - ``p_s64``
-      - A pointer to a matrix control of signed 64-bit values. Valid if
-        this control is of type ``V4L2_CTRL_TYPE_INTEGER64`` and
-        ``V4L2_CTRL_FLAG_HAS_PAYLOAD`` is set.
-    * - struct :c:type:`v4l2_area` *
+    * - :c:type:`v4l2_area` *
       - ``p_area``
       - A pointer to a struct :c:type:`v4l2_area`. Valid if this control is
         of type ``V4L2_CTRL_TYPE_AREA``.
-    * - struct :c:type:`v4l2_ctrl_h264_sps` *
-      - ``p_h264_sps``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_sps`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_SPS``.
-    * - struct :c:type:`v4l2_ctrl_h264_pps` *
-      - ``p_h264_pps``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_pps`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_PPS``.
-    * - struct :c:type:`v4l2_ctrl_h264_scaling_matrix` *
-      - ``p_h264_scaling_matrix``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_scaling_matrix`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_SCALING_MATRIX``.
-    * - struct :c:type:`v4l2_ctrl_h264_pred_weights` *
-      - ``p_h264_pred_weights``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_pred_weights`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_PRED_WEIGHTS``.
-    * - struct :c:type:`v4l2_ctrl_h264_slice_params` *
-      - ``p_h264_slice_params``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_slice_params`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_SLICE_PARAMS``.
-    * - struct :c:type:`v4l2_ctrl_h264_decode_params` *
-      - ``p_h264_decode_params``
-      - A pointer to a struct :c:type:`v4l2_ctrl_h264_decode_params`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_H264_DECODE_PARAMS``.
-    * - struct :c:type:`v4l2_ctrl_fwht_params` *
-      - ``p_fwht_params``
-      - A pointer to a struct :c:type:`v4l2_ctrl_fwht_params`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_FWHT_PARAMS``.
-    * - struct :c:type:`v4l2_ctrl_vp8_frame` *
-      - ``p_vp8_frame``
-      - A pointer to a struct :c:type:`v4l2_ctrl_vp8_frame`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_VP8_FRAME``.
-    * - struct :c:type:`v4l2_ctrl_mpeg2_sequence` *
-      - ``p_mpeg2_sequence``
-      - A pointer to a struct :c:type:`v4l2_ctrl_mpeg2_sequence`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_MPEG2_SEQUENCE``.
-    * - struct :c:type:`v4l2_ctrl_mpeg2_picture` *
-      - ``p_mpeg2_picture``
-      - A pointer to a struct :c:type:`v4l2_ctrl_mpeg2_picture`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_MPEG2_PICTURE``.
-    * - struct :c:type:`v4l2_ctrl_mpeg2_quantisation` *
-      - ``p_mpeg2_quantisation``
-      - A pointer to a struct :c:type:`v4l2_ctrl_mpeg2_quantisation`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_MPEG2_QUANTISATION``.
-    * - struct :c:type:`v4l2_ctrl_vp9_compressed_hdr` *
-      - ``p_vp9_compressed_hdr_probs``
-      - A pointer to a struct :c:type:`v4l2_ctrl_vp9_compressed_hdr`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_VP9_COMPRESSED_HDR``.
-    * - struct :c:type:`v4l2_ctrl_vp9_frame` *
-      - ``p_vp9_frame``
-      - A pointer to a struct :c:type:`v4l2_ctrl_vp9_frame`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_VP9_FRAME``.
     * - struct :c:type:`v4l2_ctrl_hdr10_cll_info` *
       - ``p_hdr10_cll``
       - A pointer to a struct :c:type:`v4l2_ctrl_hdr10_cll_info`. Valid if this control is
@@ -259,42 +192,6 @@ still cause this situation.
       - ``p_hdr10_mastering``
       - A pointer to a struct :c:type:`v4l2_ctrl_hdr10_mastering_display`. Valid if this control is
         of type ``V4L2_CTRL_TYPE_HDR10_MASTERING_DISPLAY``.
-    * - struct :c:type:`v4l2_ctrl_hevc_sps` *
-      - ``p_hevc_sps``
-      - A pointer to a struct :c:type:`v4l2_ctrl_hevc_sps`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_HEVC_SPS``.
-    * - struct :c:type:`v4l2_ctrl_hevc_pps` *
-      - ``p_hevc_pps``
-      - A pointer to a struct :c:type:`v4l2_ctrl_hevc_pps`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_HEVC_PPS``.
-    * - struct :c:type:`v4l2_ctrl_hevc_slice_params` *
-      - ``p_hevc_slice_params``
-      - A pointer to a struct :c:type:`v4l2_ctrl_hevc_slice_params`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_HEVC_SLICE_PARAMS``.
-    * - struct :c:type:`v4l2_ctrl_hevc_scaling_matrix` *
-      - ``p_hevc_scaling_matrix``
-      - A pointer to a struct :c:type:`v4l2_ctrl_hevc_scaling_matrix`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_HEVC_SCALING_MATRIX``.
-    * - struct :c:type:`v4l2_ctrl_hevc_decode_params` *
-      - ``p_hevc_decode_params``
-      - A pointer to a struct :c:type:`v4l2_ctrl_hevc_decode_params`. Valid if this
-        control is of type ``V4L2_CTRL_TYPE_HEVC_DECODE_PARAMS``.
-    * - struct :c:type:`v4l2_ctrl_av1_sequence` *
-      - ``p_av1_sequence``
-      - A pointer to a struct :c:type:`v4l2_ctrl_av1_sequence`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_AV1_SEQUENCE``.
-    * - struct :c:type:`v4l2_ctrl_av1_tile_group_entry` *
-      - ``p_av1_tile_group_entry``
-      - A pointer to a struct :c:type:`v4l2_ctrl_av1_tile_group_entry`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_AV1_TILE_GROUP_ENTRY``.
-    * - struct :c:type:`v4l2_ctrl_av1_frame` *
-      - ``p_av1_frame``
-      - A pointer to a struct :c:type:`v4l2_ctrl_av1_frame`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_AV1_FRAME``.
-    * - struct :c:type:`v4l2_ctrl_av1_film_grain` *
-      - ``p_av1_film_grain``
-      - A pointer to a struct :c:type:`v4l2_ctrl_av1_film_grain`. Valid if this control is
-        of type ``V4L2_CTRL_TYPE_AV1_FILM_GRAIN``.
     * - void *
       - ``ptr``
       - A pointer to a compound type which can be an N-dimensional array
@@ -304,11 +201,7 @@ still cause this situation.
     * - }
       -
 
-.. raw:: latex
-
-   \normalsize
-
-.. tabularcolumns:: |p{4.0cm}|p{2.5cm}|p{10.8cm}|
+.. tabularcolumns:: |p{4.0cm}|p{2.2cm}|p{2.1cm}|p{8.2cm}|
 
 .. c:type:: v4l2_ext_controls
 
@@ -322,18 +215,29 @@ still cause this situation.
     * - union {
       - (anonymous)
     * - __u32
+      - ``ctrl_class``
+      - The control class to which all controls belong, see
+	:ref:`ctrl-class`. Drivers that use a kernel framework for
+	handling controls will also accept a value of 0 here, meaning that
+	the controls can belong to any control class. Whether drivers
+	support this can be tested by setting ``ctrl_class`` to 0 and
+	calling :ref:`VIDIOC_TRY_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` with a ``count`` of 0. If that
+	succeeds, then the driver supports this feature.
+    * - __u32
       - ``which``
       - Which value of the control to get/set/try.
-    * - :cspan:`2` ``V4L2_CTRL_WHICH_CUR_VAL`` will return the current value of
-	the control, ``V4L2_CTRL_WHICH_DEF_VAL`` will return the default
+	``V4L2_CTRL_WHICH_CUR_VAL`` will return the current value of the
+	control, ``V4L2_CTRL_WHICH_DEF_VAL`` will return the default
 	value of the control and ``V4L2_CTRL_WHICH_REQUEST_VAL`` indicates that
 	these controls have to be retrieved from a request or tried/set for
 	a request. In the latter case the ``request_fd`` field contains the
 	file descriptor of the request that should be used. If the device
 	does not support requests, then ``EACCES`` will be returned.
 
-	When using ``V4L2_CTRL_WHICH_DEF_VAL`` be aware that you can only
-	get the default value of the control, you cannot set or try it.
+	.. note::
+
+	   When using ``V4L2_CTRL_WHICH_DEF_VAL`` be aware that you can only
+	   get the default value of the control, you cannot set or try it.
 
 	For backwards compatibility you can also use a control class here
 	(see :ref:`ctrl-class`). In that case all controls have to
@@ -341,12 +245,9 @@ still cause this situation.
 	just use ``V4L2_CTRL_WHICH_CUR_VAL``. There are some very old
 	drivers that do not yet support ``V4L2_CTRL_WHICH_CUR_VAL`` and
 	that require a control class here. You can test for such drivers
-	by setting ``which`` to ``V4L2_CTRL_WHICH_CUR_VAL`` and calling
-	:ref:`VIDIOC_TRY_EXT_CTRLS <VIDIOC_G_EXT_CTRLS>` with a count of 0.
-	If that fails, then the driver does not support ``V4L2_CTRL_WHICH_CUR_VAL``.
-    * - __u32
-      - ``ctrl_class``
-      - Deprecated name kept for backwards compatibility. Use ``which`` instead.
+	by setting ctrl_class to ``V4L2_CTRL_WHICH_CUR_VAL`` and calling
+	VIDIOC_TRY_EXT_CTRLS with a count of 0. If that fails, then the
+	driver does not support ``V4L2_CTRL_WHICH_CUR_VAL``.
     * - }
       -
     * - __u32
@@ -354,8 +255,7 @@ still cause this situation.
       - The number of controls in the controls array. May also be zero.
     * - __u32
       - ``error_idx``
-      - Index of the failing control. Set by the driver in case of an error.
-    * - :cspan:`2` If the error is associated
+      - Set by the driver in case of an error. If the error is associated
 	with a particular control, then ``error_idx`` is set to the index
 	of that control. If the error is not related to a specific
 	control, or the validation step failed (see below), then
@@ -414,9 +314,7 @@ still cause this situation.
 
 	Ignored if ``count`` equals zero.
 
-.. tabularcolumns:: |p{7.3cm}|p{2.0cm}|p{8.0cm}|
-
-.. cssclass:: longtable
+.. tabularcolumns:: |p{6.6cm}|p{2.2cm}|p{8.7cm}|
 
 .. _ctrl-class:
 
@@ -432,10 +330,10 @@ still cause this situation.
 	:ref:`VIDIOC_S_CTRL <VIDIOC_G_CTRL>` and
 	:ref:`VIDIOC_G_CTRL <VIDIOC_G_CTRL>` ioctl belong to this
 	class.
-    * - ``V4L2_CTRL_CLASS_CODEC``
+    * - ``V4L2_CTRL_CLASS_MPEG``
       - 0x990000
-      - The class containing stateful codec controls. These controls are
-	described in :ref:`codec-controls`.
+      - The class containing MPEG compression controls. These controls are
+	described in :ref:`mpeg-controls`.
     * - ``V4L2_CTRL_CLASS_CAMERA``
       - 0x9a0000
       - The class containing camera controls. These controls are described
@@ -468,18 +366,10 @@ still cause this situation.
       - 0xa20000
       - The class containing RF tuner controls. These controls are
 	described in :ref:`rf-tuner-controls`.
-    * - ``V4L2_CTRL_CLASS_DETECT``
-      - 0xa30000
-      - The class containing motion or object detection controls. These controls
-        are described in :ref:`detect-controls`.
-    * - ``V4L2_CTRL_CLASS_CODEC_STATELESS``
-      - 0xa40000
-      - The class containing stateless codec controls. These controls are
-	described in :ref:`codec-stateless-controls`.
     * - ``V4L2_CTRL_CLASS_COLORIMETRY``
       - 0xa50000
       - The class containing colorimetry controls. These controls are
-	described in :ref:`colorimetry-controls`.
+        described in :ref:`colorimetry-controls`.
 
 Return Value
 ============
@@ -524,6 +414,3 @@ EACCES
 
     Or the ``which`` field was set to ``V4L2_CTRL_WHICH_REQUEST_VAL`` but the
     device does not support requests.
-
-    Or if there is an attempt to set an inactive control and the driver is
-    not capable of caching the new value until the control is active again.

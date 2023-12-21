@@ -30,7 +30,6 @@
 #include "amdgpu_dm.h"
 
 void connector_debugfs_init(struct amdgpu_dm_connector *connector);
-void dtn_debugfs_init(struct amdgpu_device *adev);
-void crtc_debugfs_init(struct drm_crtc *crtc);
+int dtn_debugfs_init(struct amdgpu_device *adev);
 
 #endif

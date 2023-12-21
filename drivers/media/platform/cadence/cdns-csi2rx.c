@@ -81,6 +81,7 @@ struct csi2rx_priv {
 	struct media_pad		pads[CSI2RX_PAD_MAX];
 
 	/* Remote source */
+	struct v4l2_async_subdev	asd;
 	struct v4l2_subdev		*source_subdev;
 	int				source_pad;
 };
@@ -279,11 +280,12 @@ static const struct v4l2_async_notifier_operations csi2rx_notifier_ops = {
 static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 				struct platform_device *pdev)
 {
+	struct resource *res;
 	unsigned char i;
 	u32 dev_cfg;
-	int ret;
 
-	csi2rx->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	csi2rx->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(csi2rx->base))
 		return PTR_ERR(csi2rx->base);
 
@@ -314,12 +316,7 @@ static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 		return -EINVAL;
 	}
 
-	ret = clk_prepare_enable(csi2rx->p_clk);
-	if (ret) {
-		dev_err(&pdev->dev, "Couldn't prepare and enable P clock\n");
-		return ret;
-	}
-
+	clk_prepare_enable(csi2rx->p_clk);
 	dev_cfg = readl(csi2rx->base + CSI2RX_DEVICE_CFG_REG);
 	clk_disable_unprepare(csi2rx->p_clk);
 
@@ -365,7 +362,6 @@ static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 static int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
 {
 	struct v4l2_fwnode_endpoint v4l2_ep = { .bus_type = 0 };
-	struct v4l2_async_subdev *asd;
 	struct fwnode_handle *fwh;
 	struct device_node *ep;
 	int ret;
@@ -399,19 +395,24 @@ static int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
 		return -EINVAL;
 	}
 
-	v4l2_async_nf_init(&csi2rx->notifier);
-
-	asd = v4l2_async_nf_add_fwnode_remote(&csi2rx->notifier, fwh,
-					      struct v4l2_async_subdev);
+	csi2rx->asd.match.fwnode = fwnode_graph_get_remote_port_parent(fwh);
+	csi2rx->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
 	of_node_put(ep);
-	if (IS_ERR(asd))
-		return PTR_ERR(asd);
+
+	v4l2_async_notifier_init(&csi2rx->notifier);
+
+	ret = v4l2_async_notifier_add_subdev(&csi2rx->notifier, &csi2rx->asd);
+	if (ret) {
+		fwnode_handle_put(csi2rx->asd.match.fwnode);
+		return ret;
+	}
 
 	csi2rx->notifier.ops = &csi2rx_notifier_ops;
 
-	ret = v4l2_async_subdev_nf_register(&csi2rx->subdev, &csi2rx->notifier);
+	ret = v4l2_async_subdev_notifier_register(&csi2rx->subdev,
+						  &csi2rx->notifier);
 	if (ret)
-		v4l2_async_nf_cleanup(&csi2rx->notifier);
+		v4l2_async_notifier_cleanup(&csi2rx->notifier);
 
 	return ret;
 }
@@ -467,18 +468,20 @@ static int csi2rx_probe(struct platform_device *pdev)
 	return 0;
 
 err_cleanup:
-	v4l2_async_nf_cleanup(&csi2rx->notifier);
+	v4l2_async_notifier_cleanup(&csi2rx->notifier);
 err_free_priv:
 	kfree(csi2rx);
 	return ret;
 }
 
-static void csi2rx_remove(struct platform_device *pdev)
+static int csi2rx_remove(struct platform_device *pdev)
 {
 	struct csi2rx_priv *csi2rx = platform_get_drvdata(pdev);
 
 	v4l2_async_unregister_subdev(&csi2rx->subdev);
 	kfree(csi2rx);
+
+	return 0;
 }
 
 static const struct of_device_id csi2rx_of_table[] = {
@@ -489,7 +492,7 @@ MODULE_DEVICE_TABLE(of, csi2rx_of_table);
 
 static struct platform_driver csi2rx_driver = {
 	.probe	= csi2rx_probe,
-	.remove_new = csi2rx_remove,
+	.remove	= csi2rx_remove,
 
 	.driver	= {
 		.name		= "cdns-csi2rx",

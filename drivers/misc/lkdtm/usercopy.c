@@ -5,7 +5,6 @@
  */
 #include "lkdtm.h"
 #include <linux/slab.h>
-#include <linux/highmem.h>
 #include <linux/vmalloc.h>
 #include <linux/sched/task_stack.h>
 #include <linux/mman.h>
@@ -131,7 +130,7 @@ free_user:
  * This checks for whole-object size validation with hardened usercopy,
  * with or without usercopy whitelisting.
  */
-static void do_usercopy_slab_size(bool to_user)
+static void do_usercopy_heap_size(bool to_user)
 {
 	unsigned long user_addr;
 	unsigned char *one, *two;
@@ -185,8 +184,6 @@ static void do_usercopy_slab_size(bool to_user)
 			goto free_user;
 		}
 	}
-	pr_err("FAIL: bad usercopy not detected!\n");
-	pr_expected_config_param(CONFIG_HARDENED_USERCOPY, "hardened_usercopy");
 
 free_user:
 	vm_munmap(user_addr, PAGE_SIZE);
@@ -197,9 +194,9 @@ free_kernel:
 
 /*
  * This checks for the specific whitelist window within an object. If this
- * test passes, then do_usercopy_slab_size() tests will pass too.
+ * test passes, then do_usercopy_heap_size() tests will pass too.
  */
-static void do_usercopy_slab_whitelist(bool to_user)
+static void do_usercopy_heap_whitelist(bool to_user)
 {
 	unsigned long user_alloc;
 	unsigned char *buf = NULL;
@@ -262,8 +259,6 @@ static void do_usercopy_slab_whitelist(bool to_user)
 			goto free_user;
 		}
 	}
-	pr_err("FAIL: bad usercopy not detected!\n");
-	pr_expected_config_param(CONFIG_HARDENED_USERCOPY, "hardened_usercopy");
 
 free_user:
 	vm_munmap(user_alloc, PAGE_SIZE);
@@ -273,42 +268,42 @@ free_alloc:
 }
 
 /* Callable tests. */
-static void lkdtm_USERCOPY_SLAB_SIZE_TO(void)
+void lkdtm_USERCOPY_HEAP_SIZE_TO(void)
 {
-	do_usercopy_slab_size(true);
+	do_usercopy_heap_size(true);
 }
 
-static void lkdtm_USERCOPY_SLAB_SIZE_FROM(void)
+void lkdtm_USERCOPY_HEAP_SIZE_FROM(void)
 {
-	do_usercopy_slab_size(false);
+	do_usercopy_heap_size(false);
 }
 
-static void lkdtm_USERCOPY_SLAB_WHITELIST_TO(void)
+void lkdtm_USERCOPY_HEAP_WHITELIST_TO(void)
 {
-	do_usercopy_slab_whitelist(true);
+	do_usercopy_heap_whitelist(true);
 }
 
-static void lkdtm_USERCOPY_SLAB_WHITELIST_FROM(void)
+void lkdtm_USERCOPY_HEAP_WHITELIST_FROM(void)
 {
-	do_usercopy_slab_whitelist(false);
+	do_usercopy_heap_whitelist(false);
 }
 
-static void lkdtm_USERCOPY_STACK_FRAME_TO(void)
+void lkdtm_USERCOPY_STACK_FRAME_TO(void)
 {
 	do_usercopy_stack(true, true);
 }
 
-static void lkdtm_USERCOPY_STACK_FRAME_FROM(void)
+void lkdtm_USERCOPY_STACK_FRAME_FROM(void)
 {
 	do_usercopy_stack(false, true);
 }
 
-static void lkdtm_USERCOPY_STACK_BEYOND(void)
+void lkdtm_USERCOPY_STACK_BEYOND(void)
 {
 	do_usercopy_stack(true, false);
 }
 
-static void lkdtm_USERCOPY_KERNEL(void)
+void lkdtm_USERCOPY_KERNEL(void)
 {
 	unsigned long user_addr;
 
@@ -330,96 +325,15 @@ static void lkdtm_USERCOPY_KERNEL(void)
 
 	pr_info("attempting bad copy_to_user from kernel text: %px\n",
 		vm_mmap);
-	if (copy_to_user((void __user *)user_addr, vm_mmap,
+	if (copy_to_user((void __user *)user_addr, __va_function(vm_mmap),
 			 unconst + PAGE_SIZE)) {
 		pr_warn("copy_to_user failed, but lacked Oops\n");
 		goto free_user;
 	}
-	pr_err("FAIL: bad copy_to_user() not detected!\n");
-	pr_expected_config_param(CONFIG_HARDENED_USERCOPY, "hardened_usercopy");
+	pr_err("FAIL: survived bad copy_to_user()\n");
 
 free_user:
 	vm_munmap(user_addr, PAGE_SIZE);
-}
-
-/*
- * This expects "kaddr" to point to a PAGE_SIZE allocation, which means
- * a more complete test that would include copy_from_user() would risk
- * memory corruption. Just test copy_to_user() here, as that exercises
- * almost exactly the same code paths.
- */
-static void do_usercopy_page_span(const char *name, void *kaddr)
-{
-	unsigned long uaddr;
-
-	uaddr = vm_mmap(NULL, 0, PAGE_SIZE, PROT_READ | PROT_WRITE,
-			MAP_ANONYMOUS | MAP_PRIVATE, 0);
-	if (uaddr >= TASK_SIZE) {
-		pr_warn("Failed to allocate user memory\n");
-		return;
-	}
-
-	/* Initialize contents. */
-	memset(kaddr, 0xAA, PAGE_SIZE);
-
-	/* Bump the kaddr forward to detect a page-spanning overflow. */
-	kaddr += PAGE_SIZE / 2;
-
-	pr_info("attempting good copy_to_user() from kernel %s: %px\n",
-		name, kaddr);
-	if (copy_to_user((void __user *)uaddr, kaddr,
-			 unconst + (PAGE_SIZE / 2))) {
-		pr_err("copy_to_user() failed unexpectedly?!\n");
-		goto free_user;
-	}
-
-	pr_info("attempting bad copy_to_user() from kernel %s: %px\n",
-		name, kaddr);
-	if (copy_to_user((void __user *)uaddr, kaddr, unconst + PAGE_SIZE)) {
-		pr_warn("Good, copy_to_user() failed, but lacked Oops(?!)\n");
-		goto free_user;
-	}
-
-	pr_err("FAIL: bad copy_to_user() not detected!\n");
-	pr_expected_config_param(CONFIG_HARDENED_USERCOPY, "hardened_usercopy");
-
-free_user:
-	vm_munmap(uaddr, PAGE_SIZE);
-}
-
-static void lkdtm_USERCOPY_VMALLOC(void)
-{
-	void *addr;
-
-	addr = vmalloc(PAGE_SIZE);
-	if (!addr) {
-		pr_err("vmalloc() failed!?\n");
-		return;
-	}
-	do_usercopy_page_span("vmalloc", addr);
-	vfree(addr);
-}
-
-static void lkdtm_USERCOPY_FOLIO(void)
-{
-	struct folio *folio;
-	void *addr;
-
-	/*
-	 * FIXME: Folio checking currently misses 0-order allocations, so
-	 * allocate and bump forward to the last page.
-	 */
-	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, 1);
-	if (!folio) {
-		pr_err("folio_alloc() failed!?\n");
-		return;
-	}
-	addr = folio_address(folio);
-	if (addr)
-		do_usercopy_page_span("folio", addr + PAGE_SIZE);
-	else
-		pr_err("folio_address() failed?!\n");
-	folio_put(folio);
 }
 
 void __init lkdtm_usercopy_init(void)
@@ -437,21 +351,3 @@ void __exit lkdtm_usercopy_exit(void)
 {
 	kmem_cache_destroy(whitelist_cache);
 }
-
-static struct crashtype crashtypes[] = {
-	CRASHTYPE(USERCOPY_SLAB_SIZE_TO),
-	CRASHTYPE(USERCOPY_SLAB_SIZE_FROM),
-	CRASHTYPE(USERCOPY_SLAB_WHITELIST_TO),
-	CRASHTYPE(USERCOPY_SLAB_WHITELIST_FROM),
-	CRASHTYPE(USERCOPY_STACK_FRAME_TO),
-	CRASHTYPE(USERCOPY_STACK_FRAME_FROM),
-	CRASHTYPE(USERCOPY_STACK_BEYOND),
-	CRASHTYPE(USERCOPY_VMALLOC),
-	CRASHTYPE(USERCOPY_FOLIO),
-	CRASHTYPE(USERCOPY_KERNEL),
-};
-
-struct crashtype_category usercopy_crashtypes = {
-	.crashtypes = crashtypes,
-	.len	    = ARRAY_SIZE(crashtypes),
-};

@@ -2,7 +2,7 @@
 /*
  * Turris Mox module configuration bus driver
  *
- * Copyright (C) 2019 Marek Behún <kabel@kernel.org>
+ * Copyright (C) 2019 Marek Behun <marek.behun@nic.cz>
  */
 
 #ifndef __LINUX_MOXTET_H

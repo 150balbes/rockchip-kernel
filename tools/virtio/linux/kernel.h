@@ -10,10 +10,7 @@
 #include <stdarg.h>
 
 #include <linux/compiler.h>
-#include "../../../include/linux/container_of.h"
-#include <linux/log2.h>
 #include <linux/types.h>
-#include <linux/overflow.h>
 #include <linux/list.h>
 #include <linux/printk.h>
 #include <linux/bug.h>
@@ -31,6 +28,7 @@
 #define READ                    0
 #define WRITE                   1
 
+typedef unsigned long long phys_addr_t;
 typedef unsigned long long dma_addr_t;
 typedef size_t __kernel_size_t;
 typedef unsigned int __wsum;
@@ -108,22 +106,16 @@ static inline void free_page(unsigned long addr)
 	free((void *)addr);
 }
 
+#define container_of(ptr, type, member) ({			\
+	const typeof( ((type *)0)->member ) *__mptr = (ptr);	\
+	(type *)( (char *)__mptr - offsetof(type,member) );})
+
 # ifndef likely
 #  define likely(x)	(__builtin_expect(!!(x), 1))
 # endif
 # ifndef unlikely
 #  define unlikely(x)	(__builtin_expect(!!(x), 0))
 # endif
-
-static inline void *krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t gfp)
-{
-	size_t bytes;
-
-	if (unlikely(check_mul_overflow(new_n, new_size, &bytes)))
-		return NULL;
-
-	return krealloc(p, bytes, gfp);
-}
 
 #define pr_err(format, ...) fprintf (stderr, format, ## __VA_ARGS__)
 #ifdef DEBUG
@@ -133,7 +125,8 @@ static inline void *krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t
 #endif
 #define dev_err(dev, format, ...) fprintf (stderr, format, ## __VA_ARGS__)
 #define dev_warn(dev, format, ...) fprintf (stderr, format, ## __VA_ARGS__)
-#define dev_warn_once(dev, format, ...) fprintf (stderr, format, ## __VA_ARGS__)
+
+#define WARN_ON_ONCE(cond) (unlikely(cond) ? fprintf (stderr, "WARNING\n") : 0)
 
 #define min(x, y) ({				\
 	typeof(x) _min1 = (x);			\

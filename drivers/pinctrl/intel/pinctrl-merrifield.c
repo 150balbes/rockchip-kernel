@@ -12,10 +12,8 @@
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
-#include <linux/seq_file.h>
-
-#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
+#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
 
@@ -522,7 +520,7 @@ static const char *mrfld_get_group_name(struct pinctrl_dev *pctldev,
 {
 	struct mrfld_pinctrl *mp = pinctrl_dev_get_drvdata(pctldev);
 
-	return mp->groups[group].grp.name;
+	return mp->groups[group].name;
 }
 
 static int mrfld_get_group_pins(struct pinctrl_dev *pctldev, unsigned int group,
@@ -530,8 +528,8 @@ static int mrfld_get_group_pins(struct pinctrl_dev *pctldev, unsigned int group,
 {
 	struct mrfld_pinctrl *mp = pinctrl_dev_get_drvdata(pctldev);
 
-	*pins = mp->groups[group].grp.pins;
-	*npins = mp->groups[group].grp.npins;
+	*pins = mp->groups[group].pins;
+	*npins = mp->groups[group].npins;
 	return 0;
 }
 
@@ -549,7 +547,7 @@ static void mrfld_pin_dbg_show(struct pinctrl_dev *pctldev, struct seq_file *s,
 	}
 
 	mode = (value & BUFCFG_PINMODE_MASK) >> BUFCFG_PINMODE_SHIFT;
-	if (mode == BUFCFG_PINMODE_GPIO)
+	if (!mode)
 		seq_puts(s, "GPIO ");
 	else
 		seq_printf(s, "mode %d ", mode);
@@ -576,7 +574,7 @@ static const char *mrfld_get_function_name(struct pinctrl_dev *pctldev,
 {
 	struct mrfld_pinctrl *mp = pinctrl_dev_get_drvdata(pctldev);
 
-	return mp->functions[function].func.name;
+	return mp->functions[function].name;
 }
 
 static int mrfld_get_function_groups(struct pinctrl_dev *pctldev,
@@ -586,8 +584,8 @@ static int mrfld_get_function_groups(struct pinctrl_dev *pctldev,
 {
 	struct mrfld_pinctrl *mp = pinctrl_dev_get_drvdata(pctldev);
 
-	*groups = mp->functions[function].func.groups;
-	*ngroups = mp->functions[function].func.ngroups;
+	*groups = mp->functions[function].groups;
+	*ngroups = mp->functions[function].ngroups;
 	return 0;
 }
 
@@ -606,15 +604,15 @@ static int mrfld_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	 * All pins in the groups needs to be accessible and writable
 	 * before we can enable the mux for this group.
 	 */
-	for (i = 0; i < grp->grp.npins; i++) {
-		if (!mrfld_buf_available(mp, grp->grp.pins[i]))
+	for (i = 0; i < grp->npins; i++) {
+		if (!mrfld_buf_available(mp, grp->pins[i]))
 			return -EBUSY;
 	}
 
 	/* Now enable the mux setting for each pin in the group */
 	raw_spin_lock_irqsave(&mp->lock, flags);
-	for (i = 0; i < grp->grp.npins; i++)
-		mrfld_update_bufcfg(mp, grp->grp.pins[i], bits, mask);
+	for (i = 0; i < grp->npins; i++)
+		mrfld_update_bufcfg(mp, grp->pins[i], bits, mask);
 	raw_spin_unlock_irqrestore(&mp->lock, flags);
 
 	return 0;
@@ -710,11 +708,6 @@ static int mrfld_config_get(struct pinctrl_dev *pctldev, unsigned int pin,
 
 		break;
 
-	case PIN_CONFIG_DRIVE_PUSH_PULL:
-		if (value & BUFCFG_OD_EN)
-			return -EINVAL;
-		break;
-
 	case PIN_CONFIG_DRIVE_OPEN_DRAIN:
 		if (!(value & BUFCFG_OD_EN))
 			return -EINVAL;
@@ -796,14 +789,10 @@ static int mrfld_config_set_pin(struct mrfld_pinctrl *mp, unsigned int pin,
 
 		break;
 
-	case PIN_CONFIG_DRIVE_PUSH_PULL:
-		mask |= BUFCFG_OD_EN;
-		bits &= ~BUFCFG_OD_EN;
-		break;
-
 	case PIN_CONFIG_DRIVE_OPEN_DRAIN:
 		mask |= BUFCFG_OD_EN;
-		bits |= BUFCFG_OD_EN;
+		if (arg)
+			bits |= BUFCFG_OD_EN;
 		break;
 
 	case PIN_CONFIG_SLEW_RATE:
@@ -835,7 +824,6 @@ static int mrfld_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 		case PIN_CONFIG_BIAS_DISABLE:
 		case PIN_CONFIG_BIAS_PULL_UP:
 		case PIN_CONFIG_BIAS_PULL_DOWN:
-		case PIN_CONFIG_DRIVE_PUSH_PULL:
 		case PIN_CONFIG_DRIVE_OPEN_DRAIN:
 		case PIN_CONFIG_SLEW_RATE:
 			ret = mrfld_config_set_pin(mp, pin, configs[i]);
@@ -907,18 +895,17 @@ static const struct pinctrl_desc mrfld_pinctrl_desc = {
 
 static int mrfld_pinctrl_probe(struct platform_device *pdev)
 {
-	struct device *dev = &pdev->dev;
 	struct mrfld_family *families;
 	struct mrfld_pinctrl *mp;
 	void __iomem *regs;
 	size_t nfamilies;
 	unsigned int i;
 
-	mp = devm_kzalloc(dev, sizeof(*mp), GFP_KERNEL);
+	mp = devm_kzalloc(&pdev->dev, sizeof(*mp), GFP_KERNEL);
 	if (!mp)
 		return -ENOMEM;
 
-	mp->dev = dev;
+	mp->dev = &pdev->dev;
 	raw_spin_lock_init(&mp->lock);
 
 	regs = devm_platform_ioremap_resource(pdev, 0);
@@ -930,7 +917,9 @@ static int mrfld_pinctrl_probe(struct platform_device *pdev)
 	 * to the registers.
 	 */
 	nfamilies = ARRAY_SIZE(mrfld_families),
-	families = devm_kmemdup(dev, mrfld_families, sizeof(mrfld_families), GFP_KERNEL);
+	families = devm_kmemdup(&pdev->dev, mrfld_families,
+					    sizeof(mrfld_families),
+					    GFP_KERNEL);
 	if (!families)
 		return -ENOMEM;
 
@@ -948,13 +937,13 @@ static int mrfld_pinctrl_probe(struct platform_device *pdev)
 	mp->groups = mrfld_groups;
 	mp->ngroups = ARRAY_SIZE(mrfld_groups);
 	mp->pctldesc = mrfld_pinctrl_desc;
-	mp->pctldesc.name = dev_name(dev);
+	mp->pctldesc.name = dev_name(&pdev->dev);
 	mp->pctldesc.pins = mrfld_pins;
 	mp->pctldesc.npins = ARRAY_SIZE(mrfld_pins);
 
-	mp->pctldev = devm_pinctrl_register(dev, &mp->pctldesc, mp);
+	mp->pctldev = devm_pinctrl_register(&pdev->dev, &mp->pctldesc, mp);
 	if (IS_ERR(mp->pctldev)) {
-		dev_err(dev, "failed to register pinctrl driver\n");
+		dev_err(&pdev->dev, "failed to register pinctrl driver\n");
 		return PTR_ERR(mp->pctldev);
 	}
 

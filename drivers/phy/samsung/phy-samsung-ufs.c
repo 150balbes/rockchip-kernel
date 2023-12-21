@@ -63,8 +63,7 @@ static int samsung_ufs_phy_wait_for_lock_acq(struct phy *phy)
 	}
 
 	err = readl_poll_timeout(
-			ufs_phy->reg_pma +
-			PHY_APB_ADDR(ufs_phy->drvdata->cdr_lock_status_offset),
+			ufs_phy->reg_pma + PHY_APB_ADDR(PHY_CDR_LOCK_STATUS),
 			val, (val & PHY_CDR_LOCK_BIT), sleep_us, timeout_us);
 	if (err)
 		dev_err(ufs_phy->dev,
@@ -76,7 +75,7 @@ out:
 static int samsung_ufs_phy_calibrate(struct phy *phy)
 {
 	struct samsung_ufs_phy *ufs_phy = get_samsung_ufs_phy(phy);
-	const struct samsung_ufs_phy_cfg * const *cfgs = ufs_phy->cfgs;
+	struct samsung_ufs_phy_cfg **cfgs = ufs_phy->cfg;
 	const struct samsung_ufs_phy_cfg *cfg;
 	int err = 0;
 	int i;
@@ -131,63 +130,113 @@ out:
 	return err;
 }
 
+static int samsung_ufs_phy_symbol_clk_init(struct samsung_ufs_phy *phy)
+{
+	int ret;
+
+	phy->tx0_symbol_clk = devm_clk_get(phy->dev, "tx0_symbol_clk");
+	if (IS_ERR(phy->tx0_symbol_clk)) {
+		dev_err(phy->dev, "failed to get tx0_symbol_clk clock\n");
+		return PTR_ERR(phy->tx0_symbol_clk);
+	}
+
+	phy->rx0_symbol_clk = devm_clk_get(phy->dev, "rx0_symbol_clk");
+	if (IS_ERR(phy->rx0_symbol_clk)) {
+		dev_err(phy->dev, "failed to get rx0_symbol_clk clock\n");
+		return PTR_ERR(phy->rx0_symbol_clk);
+	}
+
+	phy->rx1_symbol_clk = devm_clk_get(phy->dev, "rx1_symbol_clk");
+	if (IS_ERR(phy->rx1_symbol_clk)) {
+		dev_err(phy->dev, "failed to get rx1_symbol_clk clock\n");
+		return PTR_ERR(phy->rx1_symbol_clk);
+	}
+
+	ret = clk_prepare_enable(phy->tx0_symbol_clk);
+	if (ret) {
+		dev_err(phy->dev, "%s: tx0_symbol_clk enable failed %d\n", __func__, ret);
+		goto out;
+	}
+
+	ret = clk_prepare_enable(phy->rx0_symbol_clk);
+	if (ret) {
+		dev_err(phy->dev, "%s: rx0_symbol_clk enable failed %d\n", __func__, ret);
+		goto out_disable_tx0_clk;
+	}
+
+	ret = clk_prepare_enable(phy->rx1_symbol_clk);
+	if (ret) {
+		dev_err(phy->dev, "%s: rx1_symbol_clk enable failed %d\n", __func__, ret);
+		goto out_disable_rx0_clk;
+	}
+
+	return 0;
+
+out_disable_rx0_clk:
+	clk_disable_unprepare(phy->rx0_symbol_clk);
+out_disable_tx0_clk:
+	clk_disable_unprepare(phy->tx0_symbol_clk);
+out:
+	return ret;
+}
+
 static int samsung_ufs_phy_clks_init(struct samsung_ufs_phy *phy)
 {
-	int i;
-	const struct samsung_ufs_phy_drvdata *drvdata = phy->drvdata;
-	int num_clks = drvdata->num_clks;
+	int ret;
 
-	phy->clks = devm_kcalloc(phy->dev, num_clks, sizeof(*phy->clks),
-				 GFP_KERNEL);
-	if (!phy->clks)
-		return -ENOMEM;
+	phy->ref_clk = devm_clk_get(phy->dev, "ref_clk");
+	if (IS_ERR(phy->ref_clk))
+		dev_err(phy->dev, "failed to get ref_clk clock\n");
 
-	for (i = 0; i < num_clks; i++)
-		phy->clks[i].id = drvdata->clk_list[i];
+	ret = clk_prepare_enable(phy->ref_clk);
+	if (ret) {
+		dev_err(phy->dev, "%s: ref_clk enable failed %d\n", __func__, ret);
+		return ret;
+	}
 
-	return devm_clk_bulk_get(phy->dev, num_clks, phy->clks);
+	dev_dbg(phy->dev, "UFS MPHY ref_clk_rate = %ld\n", clk_get_rate(phy->ref_clk));
+
+	return 0;
 }
 
 static int samsung_ufs_phy_init(struct phy *phy)
 {
 	struct samsung_ufs_phy *ss_phy = get_samsung_ufs_phy(phy);
+	int ret;
 
 	ss_phy->lane_cnt = phy->attrs.bus_width;
 	ss_phy->ufs_phy_state = CFG_PRE_INIT;
 
-	return 0;
+	if (ss_phy->drvdata->has_symbol_clk) {
+		ret = samsung_ufs_phy_symbol_clk_init(ss_phy);
+		if (ret)
+			dev_err(ss_phy->dev, "failed to set ufs phy symbol clocks\n");
+	}
+
+	ret = samsung_ufs_phy_clks_init(ss_phy);
+	if (ret)
+		dev_err(ss_phy->dev, "failed to set ufs phy clocks\n");
+
+	ret = samsung_ufs_phy_calibrate(phy);
+	if (ret)
+		dev_err(ss_phy->dev, "ufs phy calibration failed\n");
+
+	return ret;
 }
 
 static int samsung_ufs_phy_power_on(struct phy *phy)
 {
 	struct samsung_ufs_phy *ss_phy = get_samsung_ufs_phy(phy);
-	int ret;
 
 	samsung_ufs_phy_ctrl_isol(ss_phy, false);
-
-	ret = clk_bulk_prepare_enable(ss_phy->drvdata->num_clks, ss_phy->clks);
-	if (ret) {
-		dev_err(ss_phy->dev, "failed to enable ufs phy clocks\n");
-		return ret;
-	}
-
-	if (ss_phy->ufs_phy_state == CFG_PRE_INIT) {
-		ret = samsung_ufs_phy_calibrate(phy);
-		if (ret)
-			dev_err(ss_phy->dev, "ufs phy calibration failed\n");
-	}
-
-	return ret;
+	return 0;
 }
 
 static int samsung_ufs_phy_power_off(struct phy *phy)
 {
 	struct samsung_ufs_phy *ss_phy = get_samsung_ufs_phy(phy);
 
-	clk_bulk_disable_unprepare(ss_phy->drvdata->num_clks, ss_phy->clks);
-
 	samsung_ufs_phy_ctrl_isol(ss_phy, true);
-
 	return 0;
 }
 
@@ -208,7 +257,13 @@ static int samsung_ufs_phy_exit(struct phy *phy)
 {
 	struct samsung_ufs_phy *ss_phy = get_samsung_ufs_phy(phy);
 
-	ss_phy->ufs_phy_state = CFG_TAG_MAX;
+	clk_disable_unprepare(ss_phy->ref_clk);
+
+	if (ss_phy->drvdata->has_symbol_clk) {
+		clk_disable_unprepare(ss_phy->tx0_symbol_clk);
+		clk_disable_unprepare(ss_phy->rx0_symbol_clk);
+		clk_disable_unprepare(ss_phy->rx1_symbol_clk);
+	}
 
 	return 0;
 }
@@ -233,7 +288,6 @@ static int samsung_ufs_phy_probe(struct platform_device *pdev)
 	struct phy *gen_phy;
 	struct phy_provider *phy_provider;
 	const struct samsung_ufs_phy_drvdata *drvdata;
-	u32 isol_offset;
 	int err = 0;
 
 	match = of_match_node(samsung_ufs_phy_match, dev->of_node);
@@ -273,20 +327,9 @@ static int samsung_ufs_phy_probe(struct platform_device *pdev)
 	drvdata = match->data;
 	phy->dev = dev;
 	phy->drvdata = drvdata;
-	phy->cfgs = drvdata->cfgs;
-	memcpy(&phy->isol, &drvdata->isol, sizeof(phy->isol));
-
-	if (!of_property_read_u32_index(dev->of_node, "samsung,pmu-syscon", 1,
-					&isol_offset))
-		phy->isol.offset = isol_offset;
-
+	phy->cfg = (struct samsung_ufs_phy_cfg **)drvdata->cfg;
+	phy->isol = &drvdata->isol;
 	phy->lane_cnt = PHY_DEF_LANE_CNT;
-
-	err = samsung_ufs_phy_clks_init(phy);
-	if (err) {
-		dev_err(dev, "failed to get phy clocks\n");
-		goto out;
-	}
 
 	phy_set_drvdata(gen_phy, phy);
 
@@ -304,12 +347,6 @@ static const struct of_device_id samsung_ufs_phy_match[] = {
 	{
 		.compatible = "samsung,exynos7-ufs-phy",
 		.data = &exynos7_ufs_phy,
-	}, {
-		.compatible = "samsung,exynosautov9-ufs-phy",
-		.data = &exynosautov9_ufs_phy,
-	}, {
-		.compatible = "tesla,fsd-ufs-phy",
-		.data = &fsd_ufs_phy,
 	},
 	{},
 };

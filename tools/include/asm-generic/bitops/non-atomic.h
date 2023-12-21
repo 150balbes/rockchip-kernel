@@ -2,10 +2,10 @@
 #ifndef _ASM_GENERIC_BITOPS_NON_ATOMIC_H_
 #define _ASM_GENERIC_BITOPS_NON_ATOMIC_H_
 
-#include <linux/bits.h>
+#include <asm/types.h>
 
 /**
- * ___set_bit - Set a bit in memory
+ * __set_bit - Set a bit in memory
  * @nr: the bit to set
  * @addr: the address to start counting from
  *
@@ -13,8 +13,7 @@
  * If it's called on the same region of memory simultaneously, the effect
  * may be that only one operation succeeds.
  */
-static __always_inline void
-___set_bit(unsigned long nr, volatile unsigned long *addr)
+static inline void __set_bit(int nr, volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -22,8 +21,7 @@ ___set_bit(unsigned long nr, volatile unsigned long *addr)
 	*p  |= mask;
 }
 
-static __always_inline void
-___clear_bit(unsigned long nr, volatile unsigned long *addr)
+static inline void __clear_bit(int nr, volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -32,7 +30,7 @@ ___clear_bit(unsigned long nr, volatile unsigned long *addr)
 }
 
 /**
- * ___change_bit - Toggle a bit in memory
+ * __change_bit - Toggle a bit in memory
  * @nr: the bit to change
  * @addr: the address to start counting from
  *
@@ -40,8 +38,7 @@ ___clear_bit(unsigned long nr, volatile unsigned long *addr)
  * If it's called on the same region of memory simultaneously, the effect
  * may be that only one operation succeeds.
  */
-static __always_inline void
-___change_bit(unsigned long nr, volatile unsigned long *addr)
+static inline void __change_bit(int nr, volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -50,7 +47,7 @@ ___change_bit(unsigned long nr, volatile unsigned long *addr)
 }
 
 /**
- * ___test_and_set_bit - Set a bit and return its old value
+ * __test_and_set_bit - Set a bit and return its old value
  * @nr: Bit to set
  * @addr: Address to count from
  *
@@ -58,8 +55,7 @@ ___change_bit(unsigned long nr, volatile unsigned long *addr)
  * If two examples of this operation race, one can appear to succeed
  * but actually fail.  You must protect multiple accesses with a lock.
  */
-static __always_inline bool
-___test_and_set_bit(unsigned long nr, volatile unsigned long *addr)
+static inline int __test_and_set_bit(int nr, volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -70,7 +66,7 @@ ___test_and_set_bit(unsigned long nr, volatile unsigned long *addr)
 }
 
 /**
- * ___test_and_clear_bit - Clear a bit and return its old value
+ * __test_and_clear_bit - Clear a bit and return its old value
  * @nr: Bit to clear
  * @addr: Address to count from
  *
@@ -78,8 +74,7 @@ ___test_and_set_bit(unsigned long nr, volatile unsigned long *addr)
  * If two examples of this operation race, one can appear to succeed
  * but actually fail.  You must protect multiple accesses with a lock.
  */
-static __always_inline bool
-___test_and_clear_bit(unsigned long nr, volatile unsigned long *addr)
+static inline int __test_and_clear_bit(int nr, volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -90,8 +85,8 @@ ___test_and_clear_bit(unsigned long nr, volatile unsigned long *addr)
 }
 
 /* WARNING: non atomic and it can be reordered! */
-static __always_inline bool
-___test_and_change_bit(unsigned long nr, volatile unsigned long *addr)
+static inline int __test_and_change_bit(int nr,
+					    volatile unsigned long *addr)
 {
 	unsigned long mask = BIT_MASK(nr);
 	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
@@ -102,12 +97,11 @@ ___test_and_change_bit(unsigned long nr, volatile unsigned long *addr)
 }
 
 /**
- * _test_bit - Determine whether a bit is set
+ * test_bit - Determine whether a bit is set
  * @nr: bit number to test
  * @addr: Address to start counting from
  */
-static __always_inline bool
-_test_bit(unsigned long nr, const volatile unsigned long *addr)
+static inline int test_bit(int nr, const volatile unsigned long *addr)
 {
 	return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG-1)));
 }

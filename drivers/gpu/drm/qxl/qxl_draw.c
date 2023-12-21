@@ -20,10 +20,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <linux/iosys-map.h>
-
 #include <drm/drm_fourcc.h>
-#include <drm/drm_framebuffer.h>
 
 #include "qxl_drv.h"
 #include "qxl_object.h"
@@ -45,15 +42,13 @@ static struct qxl_rect *drawable_set_clipping(struct qxl_device *qdev,
 					      unsigned int num_clips,
 					      struct qxl_bo *clips_bo)
 {
-	struct iosys_map map;
 	struct qxl_clip_rects *dev_clips;
 	int ret;
 
-	ret = qxl_bo_vmap_locked(clips_bo, &map);
-	if (ret)
+	ret = qxl_bo_kmap(clips_bo, (void **)&dev_clips);
+	if (ret) {
 		return NULL;
-	dev_clips = map.vaddr; /* TODO: Use mapping abstraction properly */
-
+	}
 	dev_clips->num_rects = num_clips;
 	dev_clips->chunk.next_chunk = 0;
 	dev_clips->chunk.prev_chunk = 0;
@@ -147,7 +142,6 @@ void qxl_draw_dirty_fb(struct qxl_device *qdev,
 	int stride = fb->pitches[0];
 	/* depth is not actually interesting, we don't mask with it */
 	int depth = fb->format->cpp[0] * 8;
-	struct iosys_map surface_map;
 	uint8_t *surface_base;
 	struct qxl_release *release;
 	struct qxl_bo *clips_bo;
@@ -203,15 +197,14 @@ void qxl_draw_dirty_fb(struct qxl_device *qdev,
 	if (ret)
 		goto out_release_backoff;
 
-	ret = qxl_bo_vmap_locked(bo, &surface_map);
+	ret = qxl_bo_kmap(bo, (void **)&surface_base);
 	if (ret)
 		goto out_release_backoff;
-	surface_base = surface_map.vaddr; /* TODO: Use mapping abstraction properly */
 
 	ret = qxl_image_init(qdev, release, dimage, surface_base,
 			     left - dumb_shadow_offset,
 			     top, width, height, depth, stride);
-	qxl_bo_vunmap_locked(bo);
+	qxl_bo_kunmap(bo);
 	if (ret)
 		goto out_release_backoff;
 
@@ -248,7 +241,7 @@ void qxl_draw_dirty_fb(struct qxl_device *qdev,
 		rects[i].top    = clips_ptr->y1;
 		rects[i].bottom = clips_ptr->y2;
 	}
-	qxl_bo_vunmap_locked(clips_bo);
+	qxl_bo_kunmap(clips_bo);
 
 	qxl_release_fence_buffer_objects(release);
 	qxl_push_command_ring_release(qdev, release, QXL_CMD_DRAW, false);

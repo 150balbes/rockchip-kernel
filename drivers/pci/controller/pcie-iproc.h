@@ -7,13 +7,7 @@
 #define _PCIE_IPROC_H
 
 /**
- * enum iproc_pcie_type - iProc PCIe interface type
- * @IPROC_PCIE_PAXB_BCMA: BCMA-based host controllers
- * @IPROC_PCIE_PAXB:	  PAXB-based host controllers for
- *			  NS, NSP, Cygnus, NS2, and Pegasus SOCs
- * @IPROC_PCIE_PAXB_V2:   PAXB-based host controllers for Stingray SoCs
- * @IPROC_PCIE_PAXC:	  PAXC-based host controllers
- * @IPROC_PCIE_PAXC_V2:   PAXC-based host controllers (second generation)
+ * iProc PCIe interface type
  *
  * PAXB is the wrapper used in root complex that can be connected to an
  * external endpoint device.
@@ -30,7 +24,7 @@ enum iproc_pcie_type {
 };
 
 /**
- * struct iproc_pcie_ob - iProc PCIe outbound mapping
+ * iProc PCIe outbound mapping
  * @axi_offset: offset from the AXI address to the internal address used by
  * the iProc PCIe core
  * @nr_windows: total number of supported outbound mapping windows
@@ -41,7 +35,7 @@ struct iproc_pcie_ob {
 };
 
 /**
- * struct iproc_pcie_ib - iProc PCIe inbound mapping
+ * iProc PCIe inbound mapping
  * @nr_regions: total number of supported inbound mapping regions
  */
 struct iproc_pcie_ib {
@@ -53,13 +47,13 @@ struct iproc_pcie_ib_map;
 struct iproc_msi;
 
 /**
- * struct iproc_pcie - iProc PCIe device
+ * iProc PCIe device
+ *
  * @dev: pointer to device data structure
  * @type: iProc PCIe interface type
  * @reg_offsets: register offsets
  * @base: PCIe host controller I/O register base
  * @base_addr: PCIe host controller register base physical address
- * @mem: host bridge memory window resource
  * @phy: optional PHY device that controls the Serdes
  * @map_irq: function callback to map interrupts
  * @ep_is_internal: indicates an internal emulated endpoint device is connected
@@ -111,7 +105,7 @@ struct iproc_pcie {
 };
 
 int iproc_pcie_setup(struct iproc_pcie *pcie, struct list_head *res);
-void iproc_pcie_remove(struct iproc_pcie *pcie);
+int iproc_pcie_remove(struct iproc_pcie *pcie);
 int iproc_pcie_shutdown(struct iproc_pcie *pcie);
 
 #ifdef CONFIG_PCIE_IPROC_MSI

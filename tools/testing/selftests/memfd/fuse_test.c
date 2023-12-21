@@ -20,9 +20,8 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <linux/falloc.h>
-#include <fcntl.h>
+#include <linux/fcntl.h>
 #include <linux/memfd.h>
-#include <linux/types.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>

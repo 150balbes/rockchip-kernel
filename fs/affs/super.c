@@ -100,7 +100,7 @@ static struct inode *affs_alloc_inode(struct super_block *sb)
 {
 	struct affs_inode_info *i;
 
-	i = alloc_inode_sb(sb, affs_inode_cachep, GFP_KERNEL);
+	i = kmem_cache_alloc(affs_inode_cachep, GFP_KERNEL);
 	if (!i)
 		return NULL;
 
@@ -276,7 +276,7 @@ parse_options(char *options, kuid_t *uid, kgid_t *gid, int *mode, int *reserved,
 			char *vol = match_strdup(&args[0]);
 			if (!vol)
 				return 0;
-			strscpy(volume, vol, 32);
+			strlcpy(volume, vol, 32);
 			kfree(vol);
 			break;
 		}
@@ -389,7 +389,7 @@ static int affs_fill_super(struct super_block *sb, void *data, int silent)
 	 * blocks, we will have to change it.
 	 */
 
-	size = bdev_nr_sectors(sb->s_bdev);
+	size = i_size_read(sb->s_bdev->bd_inode) >> 9;
 	pr_debug("initial blocksize=%d, #blocks=%d\n", 512, size);
 
 	affs_set_blocksize(sb, PAGE_SIZE);
@@ -676,6 +676,7 @@ static void __exit exit_affs_fs(void)
 
 MODULE_DESCRIPTION("Amiga filesystem support for Linux");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 
 module_init(init_affs_fs)
 module_exit(exit_affs_fs)

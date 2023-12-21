@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2009-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich
  */
@@ -8,11 +8,11 @@
 #include "main.h"
 
 #include <linux/atomic.h>
-#include <linux/container_of.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
 #include <linux/gfp.h>
 #include <linux/jiffies.h>
+#include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/list.h>
 #include <linux/lockdep.h>
@@ -20,6 +20,7 @@
 #include <linux/netlink.h>
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
+#include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -664,7 +665,8 @@ batadv_neigh_node_create(struct batadv_orig_node *orig_node,
 out:
 	spin_unlock_bh(&orig_node->neigh_list_lock);
 
-	batadv_hardif_neigh_put(hardif_neigh);
+	if (hardif_neigh)
+		batadv_hardif_neigh_put(hardif_neigh);
 	return neigh_node;
 }
 
@@ -690,6 +692,42 @@ batadv_neigh_node_get_or_create(struct batadv_orig_node *orig_node,
 
 	return batadv_neigh_node_create(orig_node, hard_iface, neigh_addr);
 }
+
+#ifdef CONFIG_BATMAN_ADV_DEBUGFS
+/**
+ * batadv_hardif_neigh_seq_print_text() - print the single hop neighbour list
+ * @seq: neighbour table seq_file struct
+ * @offset: not used
+ *
+ * Return: always 0
+ */
+int batadv_hardif_neigh_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_priv *bat_priv = netdev_priv(net_dev);
+	struct batadv_hard_iface *primary_if;
+
+	primary_if = batadv_seq_print_text_primary_if_get(seq);
+	if (!primary_if)
+		return 0;
+
+	seq_printf(seq, "[B.A.T.M.A.N. adv %s, MainIF/MAC: %s/%pM (%s %s)]\n",
+		   BATADV_SOURCE_VERSION, primary_if->net_dev->name,
+		   primary_if->net_dev->dev_addr, net_dev->name,
+		   bat_priv->algo_ops->name);
+
+	batadv_hardif_put(primary_if);
+
+	if (!bat_priv->algo_ops->neigh.print) {
+		seq_puts(seq,
+			 "No printing function for this routing protocol\n");
+		return 0;
+	}
+
+	bat_priv->algo_ops->neigh.print(bat_priv, seq);
+	return 0;
+}
+#endif
 
 /**
  * batadv_hardif_neigh_dump() - Dump to netlink the neighbor infos for a
@@ -756,10 +794,14 @@ int batadv_hardif_neigh_dump(struct sk_buff *msg, struct netlink_callback *cb)
 	ret = msg->len;
 
  out:
-	batadv_hardif_put(hardif);
-	dev_put(hard_iface);
-	batadv_hardif_put(primary_if);
-	dev_put(soft_iface);
+	if (hardif)
+		batadv_hardif_put(hardif);
+	if (hard_iface)
+		dev_put(hard_iface);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	if (soft_iface)
+		dev_put(soft_iface);
 
 	return ret;
 }
@@ -781,7 +823,8 @@ void batadv_orig_ifinfo_release(struct kref *ref)
 
 	/* this is the last reference to this object */
 	router = rcu_dereference_protected(orig_ifinfo->router, true);
-	batadv_neigh_node_put(router);
+	if (router)
+		batadv_neigh_node_put(router);
 
 	kfree_rcu(orig_ifinfo, rcu);
 }
@@ -839,7 +882,8 @@ void batadv_orig_node_release(struct kref *ref)
 	orig_node->last_bonding_candidate = NULL;
 	spin_unlock_bh(&orig_node->neigh_list_lock);
 
-	batadv_orig_ifinfo_put(last_candidate);
+	if (last_candidate)
+		batadv_orig_ifinfo_put(last_candidate);
 
 	spin_lock_bh(&orig_node->vlan_list_lock);
 	hlist_for_each_entry_safe(vlan, node_tmp, &orig_node->vlan_list, list) {
@@ -1146,7 +1190,8 @@ batadv_find_best_neighbor(struct batadv_priv *bat_priv,
 		if (!kref_get_unless_zero(&neigh->refcount))
 			continue;
 
-		batadv_neigh_node_put(best);
+		if (best)
+			batadv_neigh_node_put(best);
 
 		best = neigh;
 	}
@@ -1191,7 +1236,8 @@ static bool batadv_purge_orig_node(struct batadv_priv *bat_priv,
 						    BATADV_IF_DEFAULT);
 	batadv_update_route(bat_priv, orig_node, BATADV_IF_DEFAULT,
 			    best_neigh_node);
-	batadv_neigh_node_put(best_neigh_node);
+	if (best_neigh_node)
+		batadv_neigh_node_put(best_neigh_node);
 
 	/* ... then for all other interfaces. */
 	rcu_read_lock();
@@ -1210,7 +1256,8 @@ static bool batadv_purge_orig_node(struct batadv_priv *bat_priv,
 							    hard_iface);
 		batadv_update_route(bat_priv, orig_node, hard_iface,
 				    best_neigh_node);
-		batadv_neigh_node_put(best_neigh_node);
+		if (best_neigh_node)
+			batadv_neigh_node_put(best_neigh_node);
 
 		batadv_hardif_put(hard_iface);
 	}
@@ -1274,6 +1321,90 @@ static void batadv_purge_orig(struct work_struct *work)
 			   &bat_priv->orig_work,
 			   msecs_to_jiffies(BATADV_ORIG_WORK_PERIOD));
 }
+
+#ifdef CONFIG_BATMAN_ADV_DEBUGFS
+
+/**
+ * batadv_orig_seq_print_text() - Print the originator table in a seq file
+ * @seq: seq file to print on
+ * @offset: not used
+ *
+ * Return: always 0
+ */
+int batadv_orig_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_priv *bat_priv = netdev_priv(net_dev);
+	struct batadv_hard_iface *primary_if;
+
+	primary_if = batadv_seq_print_text_primary_if_get(seq);
+	if (!primary_if)
+		return 0;
+
+	seq_printf(seq, "[B.A.T.M.A.N. adv %s, MainIF/MAC: %s/%pM (%s %s)]\n",
+		   BATADV_SOURCE_VERSION, primary_if->net_dev->name,
+		   primary_if->net_dev->dev_addr, net_dev->name,
+		   bat_priv->algo_ops->name);
+
+	batadv_hardif_put(primary_if);
+
+	if (!bat_priv->algo_ops->orig.print) {
+		seq_puts(seq,
+			 "No printing function for this routing protocol\n");
+		return 0;
+	}
+
+	bat_priv->algo_ops->orig.print(bat_priv, seq, BATADV_IF_DEFAULT);
+
+	return 0;
+}
+
+/**
+ * batadv_orig_hardif_seq_print_text() - writes originator infos for a specific
+ *  outgoing interface
+ * @seq: debugfs table seq_file struct
+ * @offset: not used
+ *
+ * Return: 0
+ */
+int batadv_orig_hardif_seq_print_text(struct seq_file *seq, void *offset)
+{
+	struct net_device *net_dev = (struct net_device *)seq->private;
+	struct batadv_hard_iface *hard_iface;
+	struct batadv_priv *bat_priv;
+
+	hard_iface = batadv_hardif_get_by_netdev(net_dev);
+
+	if (!hard_iface || !hard_iface->soft_iface) {
+		seq_puts(seq, "Interface not known to B.A.T.M.A.N.\n");
+		goto out;
+	}
+
+	bat_priv = netdev_priv(hard_iface->soft_iface);
+	if (!bat_priv->algo_ops->orig.print) {
+		seq_puts(seq,
+			 "No printing function for this routing protocol\n");
+		goto out;
+	}
+
+	if (hard_iface->if_status != BATADV_IF_ACTIVE) {
+		seq_puts(seq, "Interface not active\n");
+		goto out;
+	}
+
+	seq_printf(seq, "[B.A.T.M.A.N. adv %s, IF/MAC: %s/%pM (%s %s)]\n",
+		   BATADV_SOURCE_VERSION, hard_iface->net_dev->name,
+		   hard_iface->net_dev->dev_addr,
+		   hard_iface->soft_iface->name, bat_priv->algo_ops->name);
+
+	bat_priv->algo_ops->orig.print(bat_priv, seq, hard_iface);
+
+out:
+	if (hard_iface)
+		batadv_hardif_put(hard_iface);
+	return 0;
+}
+#endif
 
 /**
  * batadv_orig_dump() - Dump to netlink the originator infos for a specific
@@ -1340,10 +1471,14 @@ int batadv_orig_dump(struct sk_buff *msg, struct netlink_callback *cb)
 	ret = msg->len;
 
  out:
-	batadv_hardif_put(hardif);
-	dev_put(hard_iface);
-	batadv_hardif_put(primary_if);
-	dev_put(soft_iface);
+	if (hardif)
+		batadv_hardif_put(hardif);
+	if (hard_iface)
+		dev_put(hard_iface);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
+	if (soft_iface)
+		dev_put(soft_iface);
 
 	return ret;
 }

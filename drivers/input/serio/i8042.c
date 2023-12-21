@@ -143,7 +143,7 @@ static DEFINE_SPINLOCK(i8042_lock);
 /*
  * Writers to AUX and KBD ports as well as users issuing i8042_command
  * directly should acquire i8042_mutex (by means of calling
- * i8042_lock_chip() and i8042_unlock_chip() helpers) to ensure that
+ * i8042_lock_chip() and i8042_unlock_ship() helpers) to ensure that
  * they do not disturb each other (unfortunately in many i8042
  * implementations write to one of the ports will immediately abort
  * command that is being processed by another port).
@@ -983,7 +983,7 @@ static int i8042_controller_selftest(void)
 }
 
 /*
- * i8042_controller_init initializes the i8042 controller, and,
+ * i8042_controller init initializes the i8042 controller, and,
  * most importantly, sets it into non-xlated mode if that's
  * desired.
  */
@@ -1341,9 +1341,9 @@ static int i8042_create_kbd_port(void)
 	serio->ps2_cmd_mutex	= &i8042_mutex;
 	serio->port_data	= port;
 	serio->dev.parent	= &i8042_platform_device->dev;
-	strscpy(serio->name, "i8042 KBD port", sizeof(serio->name));
-	strscpy(serio->phys, I8042_KBD_PHYS_DESC, sizeof(serio->phys));
-	strscpy(serio->firmware_id, i8042_kbd_firmware_id,
+	strlcpy(serio->name, "i8042 KBD port", sizeof(serio->name));
+	strlcpy(serio->phys, I8042_KBD_PHYS_DESC, sizeof(serio->phys));
+	strlcpy(serio->firmware_id, i8042_kbd_firmware_id,
 		sizeof(serio->firmware_id));
 	set_primary_fwnode(&serio->dev, i8042_kbd_fwnode);
 
@@ -1371,15 +1371,15 @@ static int i8042_create_aux_port(int idx)
 	serio->port_data	= port;
 	serio->dev.parent	= &i8042_platform_device->dev;
 	if (idx < 0) {
-		strscpy(serio->name, "i8042 AUX port", sizeof(serio->name));
-		strscpy(serio->phys, I8042_AUX_PHYS_DESC, sizeof(serio->phys));
-		strscpy(serio->firmware_id, i8042_aux_firmware_id,
+		strlcpy(serio->name, "i8042 AUX port", sizeof(serio->name));
+		strlcpy(serio->phys, I8042_AUX_PHYS_DESC, sizeof(serio->phys));
+		strlcpy(serio->firmware_id, i8042_aux_firmware_id,
 			sizeof(serio->firmware_id));
 		serio->close = i8042_port_close;
 	} else {
 		snprintf(serio->name, sizeof(serio->name), "i8042 AUX%d port", idx);
 		snprintf(serio->phys, sizeof(serio->phys), I8042_MUX_PHYS_DESC, idx + 1);
-		strscpy(serio->firmware_id, i8042_aux_firmware_id,
+		strlcpy(serio->firmware_id, i8042_aux_firmware_id,
 			sizeof(serio->firmware_id));
 	}
 

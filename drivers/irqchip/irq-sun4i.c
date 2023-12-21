@@ -147,8 +147,10 @@ static int __init sun4i_ic_of_init(struct device_node *node,
 				   struct device_node *parent)
 {
 	irq_ic_data = kzalloc(sizeof(struct sun4i_irq_chip_data), GFP_KERNEL);
-	if (!irq_ic_data)
+	if (!irq_ic_data) {
+		pr_err("kzalloc failed!\n");
 		return -ENOMEM;
+	}
 
 	irq_ic_data->enable_reg_offset = SUN4I_IRQ_ENABLE_REG_OFFSET;
 	irq_ic_data->mask_reg_offset = SUN4I_IRQ_MASK_REG_OFFSET;
@@ -162,8 +164,10 @@ static int __init suniv_ic_of_init(struct device_node *node,
 				   struct device_node *parent)
 {
 	irq_ic_data = kzalloc(sizeof(struct sun4i_irq_chip_data), GFP_KERNEL);
-	if (!irq_ic_data)
+	if (!irq_ic_data) {
+		pr_err("kzalloc failed!\n");
 		return -ENOMEM;
+	}
 
 	irq_ic_data->enable_reg_offset = SUNIV_IRQ_ENABLE_REG_OFFSET;
 	irq_ic_data->mask_reg_offset = SUNIV_IRQ_MASK_REG_OFFSET;
@@ -185,7 +189,7 @@ static void __exception_irq_entry sun4i_handle_irq(struct pt_regs *regs)
 	 * 3) spurious irq
 	 * So if we immediately get a reading of 0, check the irq-pending reg
 	 * to differentiate between 2 and 3. We only do this once to avoid
-	 * the extra check in the common case of 1 happening after having
+	 * the extra check in the common case of 1 hapening after having
 	 * read the vector-reg once.
 	 */
 	hwirq = readl(irq_ic_data->irq_base + SUN4I_IRQ_VECTOR_REG) >> 2;
@@ -195,7 +199,7 @@ static void __exception_irq_entry sun4i_handle_irq(struct pt_regs *regs)
 		return;
 
 	do {
-		generic_handle_domain_irq(irq_ic_data->irq_domain, hwirq);
+		handle_domain_irq(irq_ic_data->irq_domain, hwirq, regs);
 		hwirq = readl(irq_ic_data->irq_base +
 				SUN4I_IRQ_VECTOR_REG) >> 2;
 	} while (hwirq != 0);

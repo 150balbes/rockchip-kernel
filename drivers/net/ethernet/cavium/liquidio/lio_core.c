@@ -26,9 +26,6 @@
 #include "octeon_main.h"
 #include "octeon_network.h"
 
-MODULE_AUTHOR("Cavium Networks, <support@cavium.com>");
-MODULE_LICENSE("GPL");
-
 /* OOM task polling interval */
 #define LIO_OOM_POLL_INTERVAL_MS 250
 
@@ -74,7 +71,6 @@ void lio_delete_glists(struct lio *lio)
 	kfree(lio->glist);
 	lio->glist = NULL;
 }
-EXPORT_SYMBOL_GPL(lio_delete_glists);
 
 /**
  * lio_setup_glists - Setup gather lists
@@ -158,7 +154,6 @@ int lio_setup_glists(struct octeon_device *oct, struct lio *lio, int num_iqs)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(lio_setup_glists);
 
 int liquidio_set_feature(struct net_device *netdev, int cmd, u16 param1)
 {
@@ -185,7 +180,6 @@ int liquidio_set_feature(struct net_device *netdev, int cmd, u16 param1)
 	}
 	return ret;
 }
-EXPORT_SYMBOL_GPL(liquidio_set_feature);
 
 void octeon_report_tx_completion_to_bql(void *txq, unsigned int pkts_compl,
 					unsigned int bytes_compl)
@@ -401,7 +395,6 @@ void liquidio_link_ctrl_cmd_completion(void *nctrl_ptr)
 			nctrl->ncmd.s.cmd);
 	}
 }
-EXPORT_SYMBOL_GPL(liquidio_link_ctrl_cmd_completion);
 
 void octeon_pf_changed_vf_macaddr(struct octeon_device *oct, u8 *mac)
 {
@@ -418,7 +411,7 @@ void octeon_pf_changed_vf_macaddr(struct octeon_device *oct, u8 *mac)
 
 	if (!ether_addr_equal(netdev->dev_addr, mac)) {
 		macaddr_changed = true;
-		eth_hw_addr_set(netdev, mac);
+		ether_addr_copy(netdev->dev_addr, mac);
 		ether_addr_copy(((u8 *)&lio->linfo.hw_addr) + 2, mac);
 		call_netdevice_notifiers(NETDEV_CHANGEADDR, netdev);
 	}
@@ -485,7 +478,6 @@ int setup_rx_oom_poll_fn(struct net_device *netdev)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(setup_rx_oom_poll_fn);
 
 void cleanup_rx_oom_poll_fn(struct net_device *netdev)
 {
@@ -498,12 +490,12 @@ void cleanup_rx_oom_poll_fn(struct net_device *netdev)
 		wq = &lio->rxq_status_wq[q_no];
 		if (wq->wq) {
 			cancel_delayed_work_sync(&wq->wk.work);
+			flush_workqueue(wq->wq);
 			destroy_workqueue(wq->wq);
 			wq->wq = NULL;
 		}
 	}
 }
-EXPORT_SYMBOL_GPL(cleanup_rx_oom_poll_fn);
 
 /* Runs in interrupt context. */
 static void lio_update_txq_status(struct octeon_device *oct, int iq_num)
@@ -737,8 +729,13 @@ static void liquidio_napi_drv_callback(void *arg)
 	    droq->cpu_id == this_cpu) {
 		napi_schedule_irqoff(&droq->napi);
 	} else {
-		INIT_CSD(&droq->csd, napi_schedule_wrapper, &droq->napi);
-		smp_call_function_single_async(droq->cpu_id, &droq->csd);
+		call_single_data_t *csd = &droq->csd;
+
+		csd->func = napi_schedule_wrapper;
+		csd->info = &droq->napi;
+		csd->flags = 0;
+
+		smp_call_function_single_async(droq->cpu_id, csd);
 	}
 }
 
@@ -860,7 +857,7 @@ int liquidio_setup_io_queues(struct octeon_device *octeon_dev, int ifidx,
 		napi = &droq->napi;
 		dev_dbg(&octeon_dev->pci_dev->dev, "netif_napi_add netdev:%llx oct:%llx\n",
 			(u64)netdev, (u64)octeon_dev);
-		netif_napi_add(netdev, napi, liquidio_napi_poll);
+		netif_napi_add(netdev, napi, liquidio_napi_poll, 64);
 
 		/* designate a CPU for this droq */
 		droq->cpu_id = cpu_id;
@@ -908,7 +905,6 @@ int liquidio_setup_io_queues(struct octeon_device *octeon_dev, int ifidx,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(liquidio_setup_io_queues);
 
 static
 int liquidio_schedule_msix_droq_pkt_handler(struct octeon_droq *droq, u64 ret)
@@ -1172,7 +1168,7 @@ int octeon_setup_interrupt(struct octeon_device *oct, u32 num_ioqs)
 			oct->flags |= LIO_FLAG_MSI_ENABLED;
 
 		/* allocate storage for the names assigned to the irq */
-		oct->irq_name_storage = kzalloc(INTRNAMSIZ, GFP_KERNEL);
+		oct->irq_name_storage = kcalloc(1, INTRNAMSIZ, GFP_KERNEL);
 		if (!oct->irq_name_storage)
 			return -ENOMEM;
 
@@ -1204,7 +1200,6 @@ int octeon_setup_interrupt(struct octeon_device *oct, u32 num_ioqs)
 	}
 	return 0;
 }
-EXPORT_SYMBOL_GPL(octeon_setup_interrupt);
 
 /**
  * liquidio_change_mtu - Net device change_mtu
@@ -1267,7 +1262,6 @@ int liquidio_change_mtu(struct net_device *netdev, int new_mtu)
 	WRITE_ONCE(sc->caller_is_done, true);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(liquidio_change_mtu);
 
 int lio_wait_for_clean_oq(struct octeon_device *oct)
 {
@@ -1291,7 +1285,6 @@ int lio_wait_for_clean_oq(struct octeon_device *oct)
 
 	return pending_pkts;
 }
-EXPORT_SYMBOL_GPL(lio_wait_for_clean_oq);
 
 static void
 octnet_nic_stats_callback(struct octeon_device *oct_dev,
@@ -1522,7 +1515,6 @@ lio_fetch_stats_exit:
 
 	return;
 }
-EXPORT_SYMBOL_GPL(lio_fetch_stats);
 
 int liquidio_set_speed(struct lio *lio, int speed)
 {
@@ -1673,7 +1665,6 @@ int liquidio_get_speed(struct lio *lio)
 
 	return retval;
 }
-EXPORT_SYMBOL_GPL(liquidio_get_speed);
 
 int liquidio_set_fec(struct lio *lio, int on_off)
 {
@@ -1827,4 +1818,3 @@ int liquidio_get_fec(struct lio *lio)
 
 	return retval;
 }
-EXPORT_SYMBOL_GPL(liquidio_get_fec);

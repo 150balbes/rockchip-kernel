@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/compiler.h>
 #include <linux/string.h>
+#include <linux/version.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <scsi/scsi_transport.h>

@@ -17,11 +17,18 @@ MODULE_LICENSE("GPL");
 /*
  * Pull in the reference implementations while instructing GCC (through
  * -ftree-vectorize) to attempt to exploit implicit parallelism and emit
- * NEON instructions. Clang does this by default at O2 so no pragma is
- * needed.
+ * NEON instructions.
  */
-#ifdef CONFIG_CC_IS_GCC
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
 #pragma GCC optimize "tree-vectorize"
+#else
+/*
+ * While older versions of GCC do not generate incorrect code, they fail to
+ * recognize the parallel nature of these functions, and emit plain ARM code,
+ * which is known to be slower than the optimized ARM code in asm-arm/xor.h.
+ *
+ * #warning This code requires at least version 4.6 of GCC
+ */
 #endif
 
 #pragma GCC diagnostic ignored "-Wunused-variable"

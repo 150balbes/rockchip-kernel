@@ -104,8 +104,7 @@ int snd_emux_register(struct snd_emux *emu, struct snd_card *card, int index, ch
 	if (emu->sflist == NULL)
 		return -ENOMEM;
 
-	err = snd_emux_init_hwdep(emu);
-	if (err < 0)
+	if ((err = snd_emux_init_hwdep(emu)) < 0)
 		return err;
 
 	snd_emux_init_voices(emu);
@@ -129,7 +128,7 @@ int snd_emux_free(struct snd_emux *emu)
 	if (! emu)
 		return -EINVAL;
 
-	timer_shutdown_sync(&emu->tlist);
+	del_timer_sync(&emu->tlist);
 
 	snd_emux_proc_free(emu);
 	snd_emux_delete_virmidi(emu);

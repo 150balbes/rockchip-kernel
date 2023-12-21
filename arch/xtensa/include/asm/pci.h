@@ -43,4 +43,7 @@
 #define ARCH_GENERIC_PCI_MMAP_RESOURCE	1
 #define arch_can_pci_mmap_io()		1
 
+/* Generic PCI */
+#include <asm-generic/pci.h>
+
 #endif	/* _XTENSA_PCI_H */

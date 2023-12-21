@@ -17,7 +17,6 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
@@ -92,6 +91,7 @@ enum i2c_addr {
 
 /* init register and default value required to enable module */
 #define NPCM_I2CSEGCTL			0xE4
+#define NPCM_I2CSEGCTL_INIT_VAL		0x0333F000
 
 /* Common regs */
 #define NPCM_I2CSDA			0x00
@@ -106,7 +106,7 @@ enum i2c_addr {
 #define NPCM_I2CCST3			0x19
 #define I2C_VER				0x1F
 
-/* BANK 0 regs */
+/*BANK0 regs*/
 #define NPCM_I2CADDR3			0x10
 #define NPCM_I2CADDR7			0x11
 #define NPCM_I2CADDR4			0x12
@@ -115,20 +115,6 @@ enum i2c_addr {
 #define NPCM_I2CADDR9			0x15
 #define NPCM_I2CADDR6			0x16
 #define NPCM_I2CADDR10			0x17
-#define NPCM_I2CCTL4			0x1A
-#define NPCM_I2CCTL5			0x1B
-#define NPCM_I2CSCLLT			0x1C /* SCL Low Time */
-#define NPCM_I2CFIF_CTL			0x1D /* FIFO Control */
-#define NPCM_I2CSCLHT			0x1E /* SCL High Time */
-
-/* BANK 1 regs */
-#define NPCM_I2CFIF_CTS			0x10 /* Both FIFOs Control and Status */
-#define NPCM_I2CTXF_CTL			0x12 /* Tx-FIFO Control */
-#define NPCM_I2CT_OUT			0x14 /* Bus T.O. */
-#define NPCM_I2CPEC			0x16 /* PEC Data */
-#define NPCM_I2CTXF_STS			0x1A /* Tx-FIFO Status */
-#define NPCM_I2CRXF_STS			0x1C /* Rx-FIFO Status */
-#define NPCM_I2CRXF_CTL			0x1E /* Rx-FIFO Control */
 
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 /*
@@ -145,51 +131,66 @@ static const int npcm_i2caddr[I2C_NUM_OWN_ADDR] = {
 };
 #endif
 
+#define NPCM_I2CCTL4			0x1A
+#define NPCM_I2CCTL5			0x1B
+#define NPCM_I2CSCLLT			0x1C /* SCL Low Time */
+#define NPCM_I2CFIF_CTL			0x1D /* FIFO Control */
+#define NPCM_I2CSCLHT			0x1E /* SCL High Time */
+
+/* BANK 1 regs */
+#define NPCM_I2CFIF_CTS			0x10 /* Both FIFOs Control and Status */
+#define NPCM_I2CTXF_CTL			0x12 /* Tx-FIFO Control */
+#define NPCM_I2CT_OUT			0x14 /* Bus T.O. */
+#define NPCM_I2CPEC			0x16 /* PEC Data */
+#define NPCM_I2CTXF_STS			0x1A /* Tx-FIFO Status */
+#define NPCM_I2CRXF_STS			0x1C /* Rx-FIFO Status */
+#define NPCM_I2CRXF_CTL			0x1E /* Rx-FIFO Control */
+
 /* NPCM_I2CST reg fields */
-#define NPCM_I2CST_XMIT			BIT(0)	/* Transmit mode */
-#define NPCM_I2CST_MASTER		BIT(1)	/* Master mode */
-#define NPCM_I2CST_NMATCH		BIT(2)	/* New match */
-#define NPCM_I2CST_STASTR		BIT(3)	/* Stall after start */
-#define NPCM_I2CST_NEGACK		BIT(4)	/* Negative ACK */
-#define NPCM_I2CST_BER			BIT(5)	/* Bus error */
-#define NPCM_I2CST_SDAST		BIT(6)	/* SDA status */
-#define NPCM_I2CST_SLVSTP		BIT(7)	/* Slave stop */
+#define NPCM_I2CST_XMIT			BIT(0)
+#define NPCM_I2CST_MASTER		BIT(1)
+#define NPCM_I2CST_NMATCH		BIT(2)
+#define NPCM_I2CST_STASTR		BIT(3)
+#define NPCM_I2CST_NEGACK		BIT(4)
+#define NPCM_I2CST_BER			BIT(5)
+#define NPCM_I2CST_SDAST		BIT(6)
+#define NPCM_I2CST_SLVSTP		BIT(7)
 
 /* NPCM_I2CCST reg fields */
-#define NPCM_I2CCST_BUSY		BIT(0)	/* Busy */
-#define NPCM_I2CCST_BB			BIT(1)	/* Bus busy */
-#define NPCM_I2CCST_MATCH		BIT(2)	/* Address match */
-#define NPCM_I2CCST_GCMATCH		BIT(3)	/* Global call match */
-#define NPCM_I2CCST_TSDA		BIT(4)	/* Test SDA line */
-#define NPCM_I2CCST_TGSCL		BIT(5)	/* Toggle SCL line */
-#define NPCM_I2CCST_MATCHAF		BIT(6)	/* Match address field */
-#define NPCM_I2CCST_ARPMATCH		BIT(7)	/* ARP address match */
+#define NPCM_I2CCST_BUSY		BIT(0)
+#define NPCM_I2CCST_BB			BIT(1)
+#define NPCM_I2CCST_MATCH		BIT(2)
+#define NPCM_I2CCST_GCMATCH		BIT(3)
+#define NPCM_I2CCST_TSDA		BIT(4)
+#define NPCM_I2CCST_TGSCL		BIT(5)
+#define NPCM_I2CCST_MATCHAF		BIT(6)
+#define NPCM_I2CCST_ARPMATCH		BIT(7)
 
 /* NPCM_I2CCTL1 reg fields */
-#define NPCM_I2CCTL1_START		BIT(0)	/* Generate start condition */
-#define NPCM_I2CCTL1_STOP		BIT(1)	/* Generate stop condition */
-#define NPCM_I2CCTL1_INTEN		BIT(2)	/* Interrupt enable */
+#define NPCM_I2CCTL1_START		BIT(0)
+#define NPCM_I2CCTL1_STOP		BIT(1)
+#define NPCM_I2CCTL1_INTEN		BIT(2)
 #define NPCM_I2CCTL1_EOBINTE		BIT(3)
 #define NPCM_I2CCTL1_ACK		BIT(4)
-#define NPCM_I2CCTL1_GCMEN		BIT(5)	/* Global call match enable */
-#define NPCM_I2CCTL1_NMINTE		BIT(6)	/* New match interrupt enable */
-#define NPCM_I2CCTL1_STASTRE		BIT(7)	/* Stall after start enable */
+#define NPCM_I2CCTL1_GCMEN		BIT(5)
+#define NPCM_I2CCTL1_NMINTE		BIT(6)
+#define NPCM_I2CCTL1_STASTRE		BIT(7)
 
 /* RW1S fields (inside a RW reg): */
 #define NPCM_I2CCTL1_RWS   \
 	(NPCM_I2CCTL1_START | NPCM_I2CCTL1_STOP | NPCM_I2CCTL1_ACK)
 
 /* npcm_i2caddr reg fields */
-#define NPCM_I2CADDR_A			GENMASK(6, 0)	/* Address */
-#define NPCM_I2CADDR_SAEN		BIT(7)		/* Slave address enable */
+#define NPCM_I2CADDR_A			GENMASK(6, 0)
+#define NPCM_I2CADDR_SAEN		BIT(7)
 
 /* NPCM_I2CCTL2 reg fields */
-#define I2CCTL2_ENABLE			BIT(0)		/* Module enable */
-#define I2CCTL2_SCLFRQ6_0		GENMASK(7, 1)	/* Bits 0:6 of frequency divisor */
+#define I2CCTL2_ENABLE			BIT(0)
+#define I2CCTL2_SCLFRQ6_0		GENMASK(7, 1)
 
 /* NPCM_I2CCTL3 reg fields */
-#define I2CCTL3_SCLFRQ8_7		GENMASK(1, 0)	/* Bits 7:8 of frequency divisor */
-#define I2CCTL3_ARPMEN			BIT(2)	/* ARP match enable */
+#define I2CCTL3_SCLFRQ8_7		GENMASK(1, 0)
+#define I2CCTL3_ARPMEN			BIT(2)
 #define I2CCTL3_IDL_START		BIT(3)
 #define I2CCTL3_400K_MODE		BIT(4)
 #define I2CCTL3_BNK_SEL			BIT(5)
@@ -225,7 +226,8 @@ static const int npcm_i2caddr[I2C_NUM_OWN_ADDR] = {
 #define NPCM_I2CFIF_CTS_CLR_FIFO	BIT(6)
 #define NPCM_I2CFIF_CTS_SLVRSTR		BIT(7)
 
-/* NPCM_I2CTXF_CTL reg field */
+/* NPCM_I2CTXF_CTL reg fields */
+#define NPCM_I2CTXF_CTL_TX_THR		GENMASK(4, 0)
 #define NPCM_I2CTXF_CTL_THR_TXIE	BIT(6)
 
 /* NPCM_I2CT_OUT reg fields */
@@ -234,18 +236,22 @@ static const int npcm_i2caddr[I2C_NUM_OWN_ADDR] = {
 #define NPCM_I2CT_OUT_T_OUTST		BIT(7)
 
 /* NPCM_I2CTXF_STS reg fields */
+#define NPCM_I2CTXF_STS_TX_BYTES	GENMASK(4, 0)
 #define NPCM_I2CTXF_STS_TX_THST		BIT(6)
 
 /* NPCM_I2CRXF_STS reg fields */
+#define NPCM_I2CRXF_STS_RX_BYTES	GENMASK(4, 0)
 #define NPCM_I2CRXF_STS_RX_THST		BIT(6)
 
 /* NPCM_I2CFIF_CTL reg fields */
 #define NPCM_I2CFIF_CTL_FIFO_EN		BIT(4)
 
 /* NPCM_I2CRXF_CTL reg fields */
+#define NPCM_I2CRXF_CTL_RX_THR		GENMASK(4, 0)
+#define NPCM_I2CRXF_CTL_LAST_PEC	BIT(5)
 #define NPCM_I2CRXF_CTL_THR_RXIE	BIT(6)
 
-#define MAX_I2C_HW_FIFO_SIZE		32
+#define I2C_HW_FIFO_SIZE		16
 
 /* I2C_VER reg fields */
 #define I2C_VER_VERSION			GENMASK(6, 0)
@@ -262,36 +268,11 @@ static const int npcm_i2caddr[I2C_NUM_OWN_ADDR] = {
 #define I2C_FREQ_MIN_HZ			10000
 #define I2C_FREQ_MAX_HZ			I2C_MAX_FAST_MODE_PLUS_FREQ
 
-struct npcm_i2c_data {
-	u8 fifo_size;
-	u32 segctl_init_val;
-	u8 txf_sts_tx_bytes;
-	u8 rxf_sts_rx_bytes;
-	u8 rxf_ctl_last_pec;
-};
-
-static const struct npcm_i2c_data npxm7xx_i2c_data = {
-	.fifo_size = 16,
-	.segctl_init_val = 0x0333F000,
-	.txf_sts_tx_bytes = GENMASK(4, 0),
-	.rxf_sts_rx_bytes = GENMASK(4, 0),
-	.rxf_ctl_last_pec = BIT(5),
-};
-
-static const struct npcm_i2c_data npxm8xx_i2c_data = {
-	.fifo_size = 32,
-	.segctl_init_val = 0x9333F000,
-	.txf_sts_tx_bytes = GENMASK(5, 0),
-	.rxf_sts_rx_bytes = GENMASK(5, 0),
-	.rxf_ctl_last_pec = BIT(7),
-};
-
 /* Status of one I2C module */
 struct npcm_i2c {
 	struct i2c_adapter adap;
 	struct device *dev;
 	unsigned char __iomem *reg;
-	const struct npcm_i2c_data *data;
 	spinlock_t lock;   /* IRQ synchronization */
 	struct completion cmd_complete;
 	int cmd_err;
@@ -324,8 +305,8 @@ struct npcm_i2c {
 	int slv_rd_ind;
 	int slv_wr_size;
 	int slv_wr_ind;
-	u8 slv_rd_buf[MAX_I2C_HW_FIFO_SIZE];
-	u8 slv_wr_buf[MAX_I2C_HW_FIFO_SIZE];
+	u8 slv_rd_buf[I2C_HW_FIFO_SIZE];
+	u8 slv_wr_buf[I2C_HW_FIFO_SIZE];
 #endif
 	struct dentry *debugfs; /* debugfs device directory */
 	u64 ber_cnt;
@@ -333,7 +314,6 @@ struct npcm_i2c {
 	u64 rec_fail_cnt;
 	u64 nack_cnt;
 	u64 timeout_cnt;
-	u64 tx_complete_cnt;
 };
 
 static inline void npcm_i2c_select_bank(struct npcm_i2c *bus,
@@ -458,7 +438,7 @@ static inline bool npcm_i2c_tx_fifo_empty(struct npcm_i2c *bus)
 
 	tx_fifo_sts = ioread8(bus->reg + NPCM_I2CTXF_STS);
 	/* check if TX FIFO is not empty */
-	if ((tx_fifo_sts & bus->data->txf_sts_tx_bytes) == 0)
+	if ((tx_fifo_sts & NPCM_I2CTXF_STS_TX_BYTES) == 0)
 		return false;
 
 	/* check if TX FIFO status bit is set: */
@@ -471,7 +451,7 @@ static inline bool npcm_i2c_rx_fifo_full(struct npcm_i2c *bus)
 
 	rx_fifo_sts = ioread8(bus->reg + NPCM_I2CRXF_STS);
 	/* check if RX FIFO is not empty: */
-	if ((rx_fifo_sts & bus->data->rxf_sts_rx_bytes) == 0)
+	if ((rx_fifo_sts & NPCM_I2CRXF_STS_RX_BYTES) == 0)
 		return false;
 
 	/* check if rx fifo full status is set: */
@@ -679,7 +659,7 @@ static void npcm_i2c_reset(struct npcm_i2c *bus)
 	}
 #endif
 
-	/* Clear status bits for spurious interrupts */
+	/* clear status bits for spurious interrupts */
 	npcm_i2c_clear_master_status(bus);
 
 	bus->state = I2C_IDLE;
@@ -711,8 +691,6 @@ static void npcm_i2c_callback(struct npcm_i2c *bus,
 	switch (op_status) {
 	case I2C_MASTER_DONE_IND:
 		bus->cmd_err = bus->msgs_num;
-		if (bus->tx_complete_cnt < ULLONG_MAX)
-			bus->tx_complete_cnt++;
 		fallthrough;
 	case I2C_BLOCK_BYTES_ERR_IND:
 		/* Master tx finished and all transmit bytes were sent */
@@ -758,11 +736,11 @@ static void npcm_i2c_callback(struct npcm_i2c *bus,
 static u8 npcm_i2c_fifo_usage(struct npcm_i2c *bus)
 {
 	if (bus->operation == I2C_WRITE_OPER)
-		return (bus->data->txf_sts_tx_bytes &
-			ioread8(bus->reg + NPCM_I2CTXF_STS));
+		return FIELD_GET(NPCM_I2CTXF_STS_TX_BYTES,
+				 ioread8(bus->reg + NPCM_I2CTXF_STS));
 	if (bus->operation == I2C_READ_OPER)
-		return (bus->data->rxf_sts_rx_bytes &
-			ioread8(bus->reg + NPCM_I2CRXF_STS));
+		return FIELD_GET(NPCM_I2CRXF_STS_RX_BYTES,
+				 ioread8(bus->reg + NPCM_I2CRXF_STS));
 	return 0;
 }
 
@@ -774,13 +752,13 @@ static void npcm_i2c_write_to_fifo_master(struct npcm_i2c *bus, u16 max_bytes)
 	 * Fill the FIFO, while the FIFO is not full and there are more bytes
 	 * to write
 	 */
-	size_free_fifo = bus->data->fifo_size - npcm_i2c_fifo_usage(bus);
+	size_free_fifo = I2C_HW_FIFO_SIZE - npcm_i2c_fifo_usage(bus);
 	while (max_bytes-- && size_free_fifo) {
 		if (bus->wr_ind < bus->wr_size)
 			npcm_i2c_wr_byte(bus, bus->wr_buf[bus->wr_ind++]);
 		else
 			npcm_i2c_wr_byte(bus, 0xFF);
-		size_free_fifo = bus->data->fifo_size - npcm_i2c_fifo_usage(bus);
+		size_free_fifo = I2C_HW_FIFO_SIZE - npcm_i2c_fifo_usage(bus);
 	}
 }
 
@@ -801,16 +779,16 @@ static void npcm_i2c_set_fifo(struct npcm_i2c *bus, int nread, int nwrite)
 
 	/* configure RX FIFO */
 	if (nread > 0) {
-		rxf_ctl = min_t(int, nread, bus->data->fifo_size);
+		rxf_ctl = min_t(int, nread, I2C_HW_FIFO_SIZE);
 
 		/* set LAST bit. if LAST is set next FIFO packet is nacked */
-		if (nread <= bus->data->fifo_size)
-			rxf_ctl |= bus->data->rxf_ctl_last_pec;
+		if (nread <= I2C_HW_FIFO_SIZE)
+			rxf_ctl |= NPCM_I2CRXF_CTL_LAST_PEC;
 
 		/*
 		 * if we are about to read the first byte in blk rd mode,
 		 * don't NACK it. If slave returns zero size HW can't NACK
-		 * it immediately, it will read extra byte and then NACK.
+		 * it immidiattly, it will read extra byte and then NACK.
 		 */
 		if (bus->rd_ind == 0 && bus->read_block_use) {
 			/* set fifo to read one byte, no last: */
@@ -823,9 +801,9 @@ static void npcm_i2c_set_fifo(struct npcm_i2c *bus, int nread, int nwrite)
 
 	/* configure TX FIFO */
 	if (nwrite > 0) {
-		if (nwrite > bus->data->fifo_size)
+		if (nwrite > I2C_HW_FIFO_SIZE)
 			/* data to send is more then FIFO size. */
-			iowrite8(bus->data->fifo_size, bus->reg + NPCM_I2CTXF_CTL);
+			iowrite8(I2C_HW_FIFO_SIZE, bus->reg + NPCM_I2CTXF_CTL);
 		else
 			iowrite8(nwrite, bus->reg + NPCM_I2CTXF_CTL);
 
@@ -892,13 +870,13 @@ static void npcm_i2c_write_fifo_slave(struct npcm_i2c *bus, u16 max_bytes)
 	npcm_i2c_clear_fifo_int(bus);
 	npcm_i2c_clear_tx_fifo(bus);
 	iowrite8(0, bus->reg + NPCM_I2CTXF_CTL);
-	while (max_bytes-- && bus->data->fifo_size != npcm_i2c_fifo_usage(bus)) {
+	while (max_bytes-- && I2C_HW_FIFO_SIZE != npcm_i2c_fifo_usage(bus)) {
 		if (bus->slv_wr_size <= 0)
 			break;
-		bus->slv_wr_ind = bus->slv_wr_ind & (bus->data->fifo_size - 1);
+		bus->slv_wr_ind = bus->slv_wr_ind % I2C_HW_FIFO_SIZE;
 		npcm_i2c_wr_byte(bus, bus->slv_wr_buf[bus->slv_wr_ind]);
 		bus->slv_wr_ind++;
-		bus->slv_wr_ind = bus->slv_wr_ind & (bus->data->fifo_size - 1);
+		bus->slv_wr_ind = bus->slv_wr_ind % I2C_HW_FIFO_SIZE;
 		bus->slv_wr_size--;
 	}
 }
@@ -913,7 +891,7 @@ static void npcm_i2c_read_fifo_slave(struct npcm_i2c *bus, u8 bytes_in_fifo)
 	while (bytes_in_fifo--) {
 		data = npcm_i2c_rd_byte(bus);
 
-		bus->slv_rd_ind = bus->slv_rd_ind & (bus->data->fifo_size - 1);
+		bus->slv_rd_ind = bus->slv_rd_ind % I2C_HW_FIFO_SIZE;
 		bus->slv_rd_buf[bus->slv_rd_ind] = data;
 		bus->slv_rd_ind++;
 
@@ -931,8 +909,8 @@ static int npcm_i2c_slave_get_wr_buf(struct npcm_i2c *bus)
 	int ret = bus->slv_wr_ind;
 
 	/* fill a cyclic buffer */
-	for (i = 0; i < bus->data->fifo_size; i++) {
-		if (bus->slv_wr_size >= bus->data->fifo_size)
+	for (i = 0; i < I2C_HW_FIFO_SIZE; i++) {
+		if (bus->slv_wr_size >= I2C_HW_FIFO_SIZE)
 			break;
 		if (bus->state == I2C_SLAVE_MATCH) {
 			i2c_slave_event(bus->slave, I2C_SLAVE_READ_REQUESTED, &value);
@@ -940,11 +918,11 @@ static int npcm_i2c_slave_get_wr_buf(struct npcm_i2c *bus)
 		} else {
 			i2c_slave_event(bus->slave, I2C_SLAVE_READ_PROCESSED, &value);
 		}
-		ind = (bus->slv_wr_ind + bus->slv_wr_size) & (bus->data->fifo_size - 1);
+		ind = (bus->slv_wr_ind + bus->slv_wr_size) % I2C_HW_FIFO_SIZE;
 		bus->slv_wr_buf[ind] = value;
 		bus->slv_wr_size++;
 	}
-	return bus->data->fifo_size - ret;
+	return I2C_HW_FIFO_SIZE - ret;
 }
 
 static void npcm_i2c_slave_send_rd_buf(struct npcm_i2c *bus)
@@ -979,7 +957,7 @@ static void npcm_i2c_slave_receive(struct npcm_i2c *bus, u16 nread,
 	bus->slv_rd_ind = 0;
 
 	iowrite8(0, bus->reg + NPCM_I2CTXF_CTL);
-	iowrite8(bus->data->fifo_size, bus->reg + NPCM_I2CRXF_CTL);
+	iowrite8(I2C_HW_FIFO_SIZE, bus->reg + NPCM_I2CRXF_CTL);
 	npcm_i2c_clear_tx_fifo(bus);
 	npcm_i2c_clear_rx_fifo(bus);
 }
@@ -1000,7 +978,7 @@ static void npcm_i2c_slave_xmit(struct npcm_i2c *bus, u16 nwrite,
 /*
  * npcm_i2c_slave_wr_buf_sync:
  * currently slave IF only supports single byte operations.
- * in order to utilize the npcm HW FIFO, the driver will ask for 16 bytes
+ * in order to utilyze the npcm HW FIFO, the driver will ask for 16 bytes
  * at a time, pack them in buffer, and then transmit them all together
  * to the FIFO and onward to the bus.
  * NACK on read will be once reached to bus->adap->quirks->max_read_len.
@@ -1012,12 +990,12 @@ static void npcm_i2c_slave_wr_buf_sync(struct npcm_i2c *bus)
 {
 	int left_in_fifo;
 
-	left_in_fifo = bus->data->txf_sts_tx_bytes &
-			ioread8(bus->reg + NPCM_I2CTXF_STS);
+	left_in_fifo = FIELD_GET(NPCM_I2CTXF_STS_TX_BYTES,
+				 ioread8(bus->reg + NPCM_I2CTXF_STS));
 
 	/* fifo already full: */
-	if (left_in_fifo >= bus->data->fifo_size ||
-	    bus->slv_wr_size >= bus->data->fifo_size)
+	if (left_in_fifo >= I2C_HW_FIFO_SIZE ||
+	    bus->slv_wr_size >= I2C_HW_FIFO_SIZE)
 		return;
 
 	/* update the wr fifo index back to the untransmitted bytes: */
@@ -1025,7 +1003,7 @@ static void npcm_i2c_slave_wr_buf_sync(struct npcm_i2c *bus)
 	bus->slv_wr_size = bus->slv_wr_size + left_in_fifo;
 
 	if (bus->slv_wr_ind < 0)
-		bus->slv_wr_ind += bus->data->fifo_size;
+		bus->slv_wr_ind += I2C_HW_FIFO_SIZE;
 }
 
 static void npcm_i2c_slave_rd_wr(struct npcm_i2c *bus)
@@ -1171,7 +1149,7 @@ static irqreturn_t npcm_i2c_int_slave_handler(struct npcm_i2c *bus)
 		npcm_i2c_clear_rx_fifo(bus);
 		npcm_i2c_clear_tx_fifo(bus);
 		iowrite8(0, bus->reg + NPCM_I2CTXF_CTL);
-		iowrite8(bus->data->fifo_size, bus->reg + NPCM_I2CRXF_CTL);
+		iowrite8(I2C_HW_FIFO_SIZE, bus->reg + NPCM_I2CRXF_CTL);
 		if (NPCM_I2CST_XMIT & i2cst) {
 			bus->operation = I2C_WRITE_OPER;
 		} else {
@@ -1194,7 +1172,7 @@ static irqreturn_t npcm_i2c_int_slave_handler(struct npcm_i2c *bus)
 				/*
 				 * the i2c module can response to 10 own SA.
 				 * check which one was addressed by the master.
-				 * respond to the first one.
+				 * repond to the first one.
 				 */
 				addr = ((i2ccst3 & 0x07) << 7) |
 					(i2ccst2 & 0x7F);
@@ -1251,7 +1229,7 @@ static irqreturn_t npcm_i2c_int_slave_handler(struct npcm_i2c *bus)
 	} /* SDAST */
 
 	/*
-	 * If irq is not one of the above, make sure EOB is disabled and all
+	 * if irq is not one of the above, make sure EOB is disabled and all
 	 * status bits are cleared.
 	 */
 	if (ret == IRQ_NONE) {
@@ -1332,8 +1310,8 @@ static void npcm_i2c_master_fifo_read(struct npcm_i2c *bus)
 	 * read == FIFO Size + C (where C < FIFO Size)then first read C bytes
 	 * and in the next int we read rest of the data.
 	 */
-	if (rcount < (2 * bus->data->fifo_size) && rcount > bus->data->fifo_size)
-		fifo_bytes = rcount - bus->data->fifo_size;
+	if (rcount < (2 * I2C_HW_FIFO_SIZE) && rcount > I2C_HW_FIFO_SIZE)
+		fifo_bytes = rcount - I2C_HW_FIFO_SIZE;
 
 	if (rcount <= fifo_bytes) {
 		/* last bytes are about to be read - end of tx */
@@ -1505,7 +1483,7 @@ static void npcm_i2c_irq_handle_nack(struct npcm_i2c *bus)
 		npcm_i2c_clear_master_status(bus);
 		readx_poll_timeout_atomic(ioread8, bus->reg + NPCM_I2CCST, val,
 					  !(val & NPCM_I2CCST_BUSY), 10, 200);
-		/* Verify no status bits are still set after bus is released */
+		/* verify no status bits are still set after bus is released */
 		npcm_i2c_clear_master_status(bus);
 	}
 	bus->state = I2C_IDLE;
@@ -1786,8 +1764,8 @@ static void npcm_i2c_recovery_init(struct i2c_adapter *_adap)
 	/*
 	 * npcm i2c HW allows direct reading of SCL and SDA.
 	 * However, it does not support setting SCL and SDA directly.
-	 * The recovery function can toggle SCL when SDA is low (but not set)
-	 * Getter functions used internally, and can be used externally.
+	 * The recovery function can togle SCL when SDA is low (but not set)
+	 * Getter functions used internally, and can be used externaly.
 	 */
 	rinfo->get_scl = npcm_i2c_get_SCL;
 	rinfo->get_sda = npcm_i2c_get_SDA;
@@ -1801,10 +1779,10 @@ static void npcm_i2c_recovery_init(struct i2c_adapter *_adap)
 
 /*
  * npcm_i2c_init_clk: init HW timing parameters.
- * NPCM7XX i2c module timing parameters are dependent on module core clk (APB)
+ * NPCM7XX i2c module timing parameters are depenent on module core clk (APB)
  * and bus frequency.
- * 100kHz bus requires tSCL = 4 * SCLFRQ * tCLK. LT and HT are symmetric.
- * 400kHz bus requires asymmetric HT and LT. A different equation is recommended
+ * 100kHz bus requires tSCL = 4 * SCLFRQ * tCLK. LT and HT are simetric.
+ * 400kHz bus requires assymetric HT and LT. A different equation is recomended
  * by the HW designer, given core clock range (equations in comments below).
  *
  */
@@ -1973,7 +1951,7 @@ static int npcm_i2c_init_module(struct npcm_i2c *bus, enum i2c_mode mode,
 
 	npcm_i2c_reset(bus);
 
-	/* Check HW is OK: SDA and SCL should be high at this point. */
+	/* check HW is OK: SDA and SCL should be high at this point. */
 	if ((npcm_i2c_get_SDA(&bus->adap) == 0) || (npcm_i2c_get_SCL(&bus->adap) == 0)) {
 		dev_err(bus->dev, "I2C%d init fail: lines are low\n", bus->num);
 		dev_err(bus->dev, "SDA=%d SCL=%d\n", npcm_i2c_get_SDA(&bus->adap),
@@ -2033,7 +2011,7 @@ static irqreturn_t npcm_i2c_bus_irq(int irq, void *dev_id)
 			return IRQ_HANDLED;
 	}
 #endif
-	/* Clear status bits for spurious interrupts */
+	/* clear status bits for spurious interrupts */
 	npcm_i2c_clear_master_status(bus);
 
 	return IRQ_HANDLED;
@@ -2212,10 +2190,10 @@ static int npcm_i2c_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 	 * It cannot be cleared without resetting the module.
 	 */
 	else if (bus->cmd_err &&
-		 (bus->data->rxf_ctl_last_pec & ioread8(bus->reg + NPCM_I2CRXF_CTL)))
+		 (NPCM_I2CRXF_CTL_LAST_PEC & ioread8(bus->reg + NPCM_I2CRXF_CTL)))
 		npcm_i2c_reset(bus);
 
-	/* After any xfer, successful or not, stall and EOB must be disabled */
+	/* after any xfer, successful or not, stall and EOB must be disabled */
 	npcm_i2c_stall_after_start(bus, false);
 	npcm_i2c_eob_int(bus, false);
 
@@ -2272,19 +2250,17 @@ static void npcm_i2c_init_debugfs(struct platform_device *pdev,
 	debugfs_create_u64("rec_succ_cnt", 0444, d, &bus->rec_succ_cnt);
 	debugfs_create_u64("rec_fail_cnt", 0444, d, &bus->rec_fail_cnt);
 	debugfs_create_u64("timeout_cnt", 0444, d, &bus->timeout_cnt);
-	debugfs_create_u64("tx_complete_cnt", 0444, d, &bus->tx_complete_cnt);
 
 	bus->debugfs = d;
 }
 
 static int npcm_i2c_probe_bus(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
-	static struct regmap *gcr_regmap;
-	struct device *dev = &pdev->dev;
-	struct i2c_adapter *adap;
 	struct npcm_i2c *bus;
+	struct i2c_adapter *adap;
 	struct clk *i2c_clk;
+	static struct regmap *gcr_regmap;
+	static struct regmap *clk_regmap;
 	int irq;
 	int ret;
 
@@ -2294,12 +2270,6 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
 
 	bus->dev = &pdev->dev;
 
-	bus->data = of_device_get_match_data(dev);
-	if (!bus->data) {
-		dev_err(dev, "OF data missing\n");
-		return -EINVAL;
-	}
-
 	bus->num = of_alias_get_id(pdev->dev.of_node, "i2c");
 	/* core clk must be acquired to calculate module timing settings */
 	i2c_clk = devm_clk_get(&pdev->dev, NULL);
@@ -2307,13 +2277,14 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
 		return PTR_ERR(i2c_clk);
 	bus->apb_clk = clk_get_rate(i2c_clk);
 
-	gcr_regmap = syscon_regmap_lookup_by_phandle(np, "nuvoton,sys-mgr");
-	if (IS_ERR(gcr_regmap))
-		gcr_regmap = syscon_regmap_lookup_by_compatible("nuvoton,npcm750-gcr");
-
+	gcr_regmap = syscon_regmap_lookup_by_compatible("nuvoton,npcm750-gcr");
 	if (IS_ERR(gcr_regmap))
 		return PTR_ERR(gcr_regmap);
-	regmap_write(gcr_regmap, NPCM_I2CSEGCTL, bus->data->segctl_init_val);
+	regmap_write(gcr_regmap, NPCM_I2CSEGCTL, NPCM_I2CSEGCTL_INIT_VAL);
+
+	clk_regmap = syscon_regmap_lookup_by_compatible("nuvoton,npcm750-clk");
+	if (IS_ERR(clk_regmap))
+		return PTR_ERR(clk_regmap);
 
 	bus->reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(bus->reg))
@@ -2361,7 +2332,7 @@ static int npcm_i2c_probe_bus(struct platform_device *pdev)
 	return 0;
 }
 
-static void npcm_i2c_remove_bus(struct platform_device *pdev)
+static int npcm_i2c_remove_bus(struct platform_device *pdev)
 {
 	unsigned long lock_flags;
 	struct npcm_i2c *bus = platform_get_drvdata(pdev);
@@ -2371,18 +2342,18 @@ static void npcm_i2c_remove_bus(struct platform_device *pdev)
 	npcm_i2c_disable(bus);
 	spin_unlock_irqrestore(&bus->lock, lock_flags);
 	i2c_del_adapter(&bus->adap);
+	return 0;
 }
 
 static const struct of_device_id npcm_i2c_bus_of_table[] = {
-	{ .compatible = "nuvoton,npcm750-i2c", .data = &npxm7xx_i2c_data },
-	{ .compatible = "nuvoton,npcm845-i2c", .data = &npxm8xx_i2c_data },
+	{ .compatible = "nuvoton,npcm750-i2c", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, npcm_i2c_bus_of_table);
 
 static struct platform_driver npcm_i2c_bus_driver = {
 	.probe = npcm_i2c_probe_bus,
-	.remove_new = npcm_i2c_remove_bus,
+	.remove = npcm_i2c_remove_bus,
 	.driver = {
 		.name = "nuvoton-i2c",
 		.of_match_table = npcm_i2c_bus_of_table,

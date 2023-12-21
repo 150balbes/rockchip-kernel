@@ -1,5 +1,3 @@
-.. SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
-
 ==================
 bpftool-struct_ops
 ==================
@@ -9,14 +7,12 @@ tool to register/unregister/introspect BPF struct_ops
 
 :Manual section: 8
 
-.. include:: substitutions.rst
-
 SYNOPSIS
 ========
 
 	**bpftool** [*OPTIONS*] **struct_ops** *COMMAND*
 
-	*OPTIONS* := { |COMMON_OPTIONS| }
+	*OPTIONS* := { { **-j** | **--json** } [{ **-p** | **--pretty** }] }
 
 	*COMMANDS* :=
 	{ **show** | **list** | **dump** | **register** | **unregister** | **help** }
@@ -26,7 +22,7 @@ STRUCT_OPS COMMANDS
 
 |	**bpftool** **struct_ops { show | list }** [*STRUCT_OPS_MAP*]
 |	**bpftool** **struct_ops dump** [*STRUCT_OPS_MAP*]
-|	**bpftool** **struct_ops register** *OBJ* [*LINK_DIR*]
+|	**bpftool** **struct_ops register** *OBJ*
 |	**bpftool** **struct_ops unregister** *STRUCT_OPS_MAP*
 |	**bpftool** **struct_ops help**
 |
@@ -51,14 +47,10 @@ DESCRIPTION
 		  for the given struct_ops.  Otherwise, it dumps all struct_ops
 		  currently existing in the system.
 
-	**bpftool struct_ops register** *OBJ* [*LINK_DIR*]
+	**bpftool struct_ops register** *OBJ*
 		  Register bpf struct_ops from *OBJ*.  All struct_ops under
-		  the ELF section ".struct_ops" and ".struct_ops.link" will
-		  be registered to its kernel subsystem.  For each
-		  struct_ops in the ".struct_ops.link" section, a link
-		  will be created.  You can give *LINK_DIR* to provide a
-		  directory path where these links will be pinned with the
-		  same name as their corresponding map name.
+		  the ELF section ".struct_ops" will be registered to
+		  its kernel subsystem.
 
 	**bpftool struct_ops unregister**  *STRUCT_OPS_MAP*
 		  Unregister the *STRUCT_OPS_MAP* from the kernel subsystem.

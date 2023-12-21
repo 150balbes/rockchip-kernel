@@ -125,7 +125,8 @@ static const struct iio_info dmard06_info = {
 	.read_raw	= dmard06_read_raw,
 };
 
-static int dmard06_probe(struct i2c_client *client)
+static int dmard06_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -169,6 +170,7 @@ static int dmard06_probe(struct i2c_client *client)
 	return devm_iio_device_register(&client->dev, indio_dev);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int dmard06_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
@@ -197,8 +199,11 @@ static int dmard06_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(dmard06_pm_ops, dmard06_suspend,
-				dmard06_resume);
+static SIMPLE_DEV_PM_OPS(dmard06_pm_ops, dmard06_suspend, dmard06_resume);
+#define DMARD06_PM_OPS (&dmard06_pm_ops)
+#else
+#define DMARD06_PM_OPS NULL
+#endif
 
 static const struct i2c_device_id dmard06_id[] = {
 	{ "dmard05", 0 },
@@ -222,7 +227,7 @@ static struct i2c_driver dmard06_driver = {
 	.driver = {
 		.name = DMARD06_DRV_NAME,
 		.of_match_table = dmard06_of_match,
-		.pm = pm_sleep_ptr(&dmard06_pm_ops),
+		.pm = DMARD06_PM_OPS,
 	},
 };
 module_i2c_driver(dmard06_driver);

@@ -3,6 +3,8 @@
 
 struct notifier_block;
 
+#if IS_ENABLED(CONFIG_QCOM_RPROC_COMMON)
+
 /**
  * enum qcom_ssr_notify_type - Startup/Shutdown events related to a remoteproc
  * processor.
@@ -23,8 +25,6 @@ struct qcom_ssr_notify_data {
 	const char *name;
 	bool crashed;
 };
-
-#if IS_ENABLED(CONFIG_QCOM_RPROC_COMMON)
 
 void *qcom_register_ssr_notifier(const char *name, struct notifier_block *nb);
 int qcom_unregister_ssr_notifier(void *notify, struct notifier_block *nb);

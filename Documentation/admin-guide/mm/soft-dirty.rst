@@ -1,3 +1,5 @@
+.. _soft_dirty:
+
 ===============
 Soft-Dirty PTEs
 ===============

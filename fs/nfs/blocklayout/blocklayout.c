@@ -115,13 +115,35 @@ bl_submit_bio(struct bio *bio)
 	return NULL;
 }
 
+static struct bio *
+bl_alloc_init_bio(int npg, struct block_device *bdev, sector_t disk_sector,
+		bio_end_io_t end_io, struct parallel_io *par)
+{
+	struct bio *bio;
+
+	npg = min(npg, BIO_MAX_PAGES);
+	bio = bio_alloc(GFP_NOIO, npg);
+	if (!bio && (current->flags & PF_MEMALLOC)) {
+		while (!bio && (npg /= 2))
+			bio = bio_alloc(GFP_NOIO, npg);
+	}
+
+	if (bio) {
+		bio->bi_iter.bi_sector = disk_sector;
+		bio_set_dev(bio, bdev);
+		bio->bi_end_io = end_io;
+		bio->bi_private = par;
+	}
+	return bio;
+}
+
 static bool offset_in_map(u64 offset, struct pnfs_block_dev_map *map)
 {
 	return offset >= map->start && offset < map->start + map->len;
 }
 
 static struct bio *
-do_add_page_to_bio(struct bio *bio, int npg, enum req_op op, sector_t isect,
+do_add_page_to_bio(struct bio *bio, int npg, int rw, sector_t isect,
 		struct page *page, struct pnfs_block_dev_map *map,
 		struct pnfs_block_extent *be, bio_end_io_t end_io,
 		struct parallel_io *par, unsigned int offset, int *len)
@@ -131,7 +153,7 @@ do_add_page_to_bio(struct bio *bio, int npg, enum req_op op, sector_t isect,
 	u64 disk_addr, end;
 
 	dprintk("%s: npg %d rw %d isect %llu offset %u len %d\n", __func__,
-		npg, (__force u32)op, (unsigned long long)isect, offset, *len);
+		npg, rw, (unsigned long long)isect, offset, *len);
 
 	/* translate to device offset */
 	isect += be->be_v_offset;
@@ -154,10 +176,11 @@ do_add_page_to_bio(struct bio *bio, int npg, enum req_op op, sector_t isect,
 
 retry:
 	if (!bio) {
-		bio = bio_alloc(map->bdev, bio_max_segs(npg), op, GFP_NOIO);
-		bio->bi_iter.bi_sector = disk_addr >> SECTOR_SHIFT;
-		bio->bi_end_io = end_io;
-		bio->bi_private = par;
+		bio = bl_alloc_init_bio(npg, map->bdev,
+				disk_addr >> SECTOR_SHIFT, end_io, par);
+		if (!bio)
+			return ERR_PTR(-ENOMEM);
+		bio_set_op_attrs(bio, rw, 0);
 	}
 	if (bio_add_page(bio, page, *len, offset) < *len) {
 		bio = bl_submit_bio(bio);
@@ -291,7 +314,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 		} else {
 			bio = do_add_page_to_bio(bio,
 						 header->page_array.npages - i,
-						 REQ_OP_READ,
+						 READ,
 						 isect, pages[i], &map, &be,
 						 bl_end_io_read, par,
 						 pg_offset, &pg_len);
@@ -420,8 +443,9 @@ bl_write_pagelist(struct nfs_pgio_header *header, int sync)
 
 		pg_len = PAGE_SIZE;
 		bio = do_add_page_to_bio(bio, header->page_array.npages - i,
-					 REQ_OP_WRITE, isect, pages[i], &map,
-					 &be, bl_end_io_write, par, 0, &pg_len);
+					 WRITE, isect, pages[i], &map, &be,
+					 bl_end_io_write, par,
+					 0, &pg_len);
 		if (IS_ERR(bio)) {
 			header->pnfs_error = PTR_ERR(bio);
 			bio = NULL;
@@ -673,7 +697,7 @@ bl_alloc_lseg(struct pnfs_layout_hdr *lo, struct nfs4_layoutget_res *lgr,
 
 	xdr_init_decode_pages(&xdr, &buf,
 			lgr->layoutp->pages, lgr->layoutp->len);
-	xdr_set_scratch_page(&xdr, scratch);
+	xdr_set_scratch_buffer(&xdr, page_address(scratch), PAGE_SIZE);
 
 	status = -EIO;
 	p = xdr_inline_decode(&xdr, 4);

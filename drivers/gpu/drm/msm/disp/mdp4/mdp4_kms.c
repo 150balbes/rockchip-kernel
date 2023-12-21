@@ -13,12 +13,15 @@
 #include "msm_mmu.h"
 #include "mdp4_kms.h"
 
+static struct mdp4_platform_config *mdp4_get_config(struct platform_device *dev);
+
 static int mdp4_hw_init(struct msm_kms *kms)
 {
 	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
 	struct drm_device *dev = mdp4_kms->dev;
 	u32 dmap_cfg, vg_cfg;
 	unsigned long clk;
+	int ret = 0;
 
 	pm_runtime_get_sync(dev->dev);
 
@@ -69,7 +72,7 @@ static int mdp4_hw_init(struct msm_kms *kms)
 
 	pm_runtime_put_sync(dev->dev);
 
-	return 0;
+	return ret;
 }
 
 static void mdp4_enable_commit(struct msm_kms *kms)
@@ -82,6 +85,10 @@ static void mdp4_disable_commit(struct msm_kms *kms)
 {
 	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
 	mdp4_disable(mdp4_kms);
+}
+
+static void mdp4_prepare_commit(struct msm_kms *kms, struct drm_atomic_state *state)
+{
 }
 
 static void mdp4_flush_commit(struct msm_kms *kms, unsigned crtc_mask)
@@ -134,8 +141,6 @@ static void mdp4_destroy(struct msm_kms *kms)
 	if (mdp4_kms->rpm_enabled)
 		pm_runtime_disable(dev);
 
-	mdp_kms_destroy(&mdp4_kms->base);
-
 	kfree(mdp4_kms);
 }
 
@@ -150,6 +155,7 @@ static const struct mdp_kms_funcs kms_funcs = {
 		.disable_vblank  = mdp4_disable_vblank,
 		.enable_commit   = mdp4_enable_commit,
 		.disable_commit  = mdp4_disable_commit,
+		.prepare_commit  = mdp4_prepare_commit,
 		.flush_commit    = mdp4_flush_commit,
 		.wait_flush      = mdp4_wait_flush,
 		.complete_commit = mdp4_complete_commit,
@@ -165,9 +171,12 @@ int mdp4_disable(struct mdp4_kms *mdp4_kms)
 	DBG("");
 
 	clk_disable_unprepare(mdp4_kms->clk);
-	clk_disable_unprepare(mdp4_kms->pclk);
-	clk_disable_unprepare(mdp4_kms->lut_clk);
-	clk_disable_unprepare(mdp4_kms->axi_clk);
+	if (mdp4_kms->pclk)
+		clk_disable_unprepare(mdp4_kms->pclk);
+	if (mdp4_kms->lut_clk)
+		clk_disable_unprepare(mdp4_kms->lut_clk);
+	if (mdp4_kms->axi_clk)
+		clk_disable_unprepare(mdp4_kms->axi_clk);
 
 	return 0;
 }
@@ -177,9 +186,12 @@ int mdp4_enable(struct mdp4_kms *mdp4_kms)
 	DBG("");
 
 	clk_prepare_enable(mdp4_kms->clk);
-	clk_prepare_enable(mdp4_kms->pclk);
-	clk_prepare_enable(mdp4_kms->lut_clk);
-	clk_prepare_enable(mdp4_kms->axi_clk);
+	if (mdp4_kms->pclk)
+		clk_prepare_enable(mdp4_kms->pclk);
+	if (mdp4_kms->lut_clk)
+		clk_prepare_enable(mdp4_kms->lut_clk);
+	if (mdp4_kms->axi_clk)
+		clk_prepare_enable(mdp4_kms->axi_clk);
 
 	return 0;
 }
@@ -223,6 +235,9 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 			return PTR_ERR(connector);
 		}
 
+		priv->encoders[priv->num_encoders++] = encoder;
+		priv->connectors[priv->num_connectors++] = connector;
+
 		break;
 	case DRM_MODE_ENCODER_TMDS:
 		encoder = mdp4_dtv_encoder_init(dev);
@@ -243,6 +258,8 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 			}
 		}
 
+		priv->encoders[priv->num_encoders++] = encoder;
+
 		break;
 	case DRM_MODE_ENCODER_DSI:
 		/* only DSI1 supported for now */
@@ -261,6 +278,7 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 
 		/* TODO: Add DMA_S later? */
 		encoder->possible_crtcs = 1 << DMA_P;
+		priv->encoders[priv->num_encoders++] = encoder;
 
 		ret = msm_dsi_modeset_init(priv->dsi[dsi_id], dev, encoder);
 		if (ret) {
@@ -312,6 +330,7 @@ static int modeset_init(struct mdp4_kms *mdp4_kms)
 			ret = PTR_ERR(plane);
 			goto fail;
 		}
+		priv->planes[priv->num_planes++] = plane;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(mdp4_crtcs); i++) {
@@ -376,39 +395,32 @@ static void read_mdp_hw_revision(struct mdp4_kms *mdp4_kms,
 	DRM_DEV_INFO(dev->dev, "MDP4 version v%d.%d", *major, *minor);
 }
 
-static int mdp4_kms_init(struct drm_device *dev)
+struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->dev);
+	struct mdp4_platform_config *config = mdp4_get_config(pdev);
 	struct msm_drm_private *priv = dev->dev_private;
 	struct mdp4_kms *mdp4_kms;
 	struct msm_kms *kms = NULL;
-	struct msm_mmu *mmu;
 	struct msm_gem_address_space *aspace;
 	int irq, ret;
 	u32 major, minor;
-	unsigned long max_clk;
-
-	/* TODO: Chips that aren't apq8064 have a 200 Mhz max_clk */
-	max_clk = 266667000;
 
 	mdp4_kms = kzalloc(sizeof(*mdp4_kms), GFP_KERNEL);
 	if (!mdp4_kms) {
 		DRM_DEV_ERROR(dev->dev, "failed to allocate kms\n");
-		return -ENOMEM;
-	}
-
-	ret = mdp_kms_init(&mdp4_kms->base, &kms_funcs);
-	if (ret) {
-		DRM_DEV_ERROR(dev->dev, "failed to init kms\n");
+		ret = -ENOMEM;
 		goto fail;
 	}
+
+	mdp_kms_init(&mdp4_kms->base, &kms_funcs);
 
 	priv->kms = &mdp4_kms->base.base;
 	kms = priv->kms;
 
 	mdp4_kms->dev = dev;
 
-	mdp4_kms->mmio = msm_ioremap(pdev, NULL);
+	mdp4_kms->mmio = msm_ioremap(pdev, NULL, "MDP4");
 	if (IS_ERR(mdp4_kms->mmio)) {
 		ret = PTR_ERR(mdp4_kms->mmio);
 		goto fail;
@@ -457,7 +469,7 @@ static int mdp4_kms_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	clk_set_rate(mdp4_kms->clk, max_clk);
+	clk_set_rate(mdp4_kms->clk, config->max_clk);
 
 	read_mdp_hw_revision(mdp4_kms, &major, &minor);
 
@@ -477,7 +489,7 @@ static int mdp4_kms_init(struct drm_device *dev)
 			ret = PTR_ERR(mdp4_kms->lut_clk);
 			goto fail;
 		}
-		clk_set_rate(mdp4_kms->lut_clk, max_clk);
+		clk_set_rate(mdp4_kms->lut_clk, config->max_clk);
 	}
 
 	pm_runtime_enable(dev->dev);
@@ -494,15 +506,10 @@ static int mdp4_kms_init(struct drm_device *dev)
 	mdp4_disable(mdp4_kms);
 	mdelay(16);
 
-	mmu = msm_iommu_new(&pdev->dev, 0);
-	if (IS_ERR(mmu)) {
-		ret = PTR_ERR(mmu);
-		goto fail;
-	} else if (!mmu) {
-		DRM_DEV_INFO(dev->dev, "no iommu, fallback to phys "
-				"contig buffers for scanout\n");
-		aspace = NULL;
-	} else {
+	if (config->iommu) {
+		struct msm_mmu *mmu = msm_iommu_new(&pdev->dev,
+			config->iommu);
+
 		aspace  = msm_gem_address_space_create(mmu,
 			"mdp4", 0x1000, 0x100000000 - 0x1000);
 
@@ -514,6 +521,10 @@ static int mdp4_kms_init(struct drm_device *dev)
 		}
 
 		kms->aspace = aspace;
+	} else {
+		DRM_DEV_INFO(dev->dev, "no iommu, fallback to phys "
+				"contig buffers for scanout\n");
+		aspace = NULL;
 	}
 
 	ret = modeset_init(mdp4_kms);
@@ -542,53 +553,21 @@ static int mdp4_kms_init(struct drm_device *dev)
 	dev->mode_config.max_width = 2048;
 	dev->mode_config.max_height = 2048;
 
-	return 0;
+	return kms;
 
 fail:
 	if (kms)
 		mdp4_destroy(kms);
-
-	return ret;
+	return ERR_PTR(ret);
 }
 
-static const struct dev_pm_ops mdp4_pm_ops = {
-	.prepare = msm_pm_prepare,
-	.complete = msm_pm_complete,
-};
-
-static int mdp4_probe(struct platform_device *pdev)
+static struct mdp4_platform_config *mdp4_get_config(struct platform_device *dev)
 {
-	return msm_drv_probe(&pdev->dev, mdp4_kms_init);
-}
+	static struct mdp4_platform_config config = {};
 
-static void mdp4_remove(struct platform_device *pdev)
-{
-	component_master_del(&pdev->dev, &msm_drm_ops);
-}
+	/* TODO: Chips that aren't apq8064 have a 200 Mhz max_clk */
+	config.max_clk = 266667000;
+	config.iommu = iommu_domain_alloc(&platform_bus_type);
 
-static const struct of_device_id mdp4_dt_match[] = {
-	{ .compatible = "qcom,mdp4" },
-	{ /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(of, mdp4_dt_match);
-
-static struct platform_driver mdp4_platform_driver = {
-	.probe      = mdp4_probe,
-	.remove_new = mdp4_remove,
-	.shutdown   = msm_drv_shutdown,
-	.driver     = {
-		.name   = "mdp4",
-		.of_match_table = mdp4_dt_match,
-		.pm     = &mdp4_pm_ops,
-	},
-};
-
-void __init msm_mdp4_register(void)
-{
-	platform_driver_register(&mdp4_platform_driver);
-}
-
-void __exit msm_mdp4_unregister(void)
-{
-	platform_driver_unregister(&mdp4_platform_driver);
+	return &config;
 }

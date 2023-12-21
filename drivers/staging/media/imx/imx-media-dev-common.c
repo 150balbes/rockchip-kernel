@@ -19,6 +19,18 @@ static inline struct imx_media_dev *notifier2dev(struct v4l2_async_notifier *n)
 	return container_of(n, struct imx_media_dev, notifier);
 }
 
+/* async subdev bound notifier */
+static int imx_media_subdev_bound(struct v4l2_async_notifier *notifier,
+				  struct v4l2_subdev *sd,
+				  struct v4l2_async_subdev *asd)
+{
+	struct imx_media_dev *imxmd = notifier2dev(notifier);
+
+	dev_dbg(imxmd->md.dev, "subdev %s bound\n", sd->name);
+
+	return 0;
+}
+
 /*
  * Create the missing media links from the CSI-2 receiver.
  * Called after all async subdevs have bound.
@@ -39,6 +51,7 @@ static void imx_media_create_csi2_links(struct imx_media_dev *imxmd)
 	list_for_each_entry(sd, &imxmd->v4l2_dev.subdevs, list) {
 		/* skip if not a CSI or a CSI mux */
 		if (!(sd->grp_id & IMX_MEDIA_GRP_ID_IPU_CSI) &&
+		    !(sd->grp_id & IMX_MEDIA_GRP_ID_CSI) &&
 		    !(sd->grp_id & IMX_MEDIA_GRP_ID_CSI_MUX))
 			continue;
 
@@ -222,7 +235,7 @@ static int imx_media_inherit_controls(struct imx_media_dev *imxmd,
 		if (!(spad->flags & MEDIA_PAD_FL_SINK))
 			continue;
 
-		pad = media_pad_remote_pad_first(spad);
+		pad = media_entity_remote_pad(spad);
 		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
 			continue;
 
@@ -274,8 +287,6 @@ static int imx_media_link_notify(struct media_link *link, u32 flags,
 	    !(flags & MEDIA_LNK_FL_ENABLED)) {
 		list_for_each_entry(pad_vdev, pad_vdev_list, list) {
 			vfd = pad_vdev->vdev->vfd;
-			if (!vfd->ctrl_handler)
-				continue;
 			dev_dbg(imxmd->md.dev,
 				"reset controls for %s\n",
 				vfd->entity.name);
@@ -286,8 +297,6 @@ static int imx_media_link_notify(struct media_link *link, u32 flags,
 		   (link->flags & MEDIA_LNK_FL_ENABLED)) {
 		list_for_each_entry(pad_vdev, pad_vdev_list, list) {
 			vfd = pad_vdev->vdev->vfd;
-			if (!vfd->ctrl_handler)
-				continue;
 			dev_dbg(imxmd->md.dev,
 				"refresh controls for %s\n",
 				vfd->entity.name);
@@ -324,6 +333,7 @@ static void imx_media_notify(struct v4l2_subdev *sd, unsigned int notification,
 }
 
 static const struct v4l2_async_notifier_operations imx_media_notifier_ops = {
+	.bound = imx_media_subdev_bound,
 	.complete = imx_media_probe_complete,
 };
 
@@ -367,7 +377,7 @@ struct imx_media_dev *imx_media_dev_init(struct device *dev,
 
 	INIT_LIST_HEAD(&imxmd->vdev_list);
 
-	v4l2_async_nf_init(&imxmd->notifier);
+	v4l2_async_notifier_init(&imxmd->notifier);
 
 	return imxmd;
 
@@ -391,10 +401,11 @@ int imx_media_dev_notifier_register(struct imx_media_dev *imxmd,
 
 	/* prepare the async subdev notifier and register it */
 	imxmd->notifier.ops = ops ? ops : &imx_media_notifier_ops;
-	ret = v4l2_async_nf_register(&imxmd->v4l2_dev, &imxmd->notifier);
+	ret = v4l2_async_notifier_register(&imxmd->v4l2_dev,
+					   &imxmd->notifier);
 	if (ret) {
 		v4l2_err(&imxmd->v4l2_dev,
-			 "v4l2_async_nf_register failed with %d\n", ret);
+			 "v4l2_async_notifier_register failed with %d\n", ret);
 		return ret;
 	}
 

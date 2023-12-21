@@ -40,21 +40,20 @@ int audit_classify_arch(int arch)
 
 int audit_classify_syscall(int abi, unsigned syscall)
 {
+#ifdef CONFIG_COMPAT
+	extern int parisc32_classify_syscall(unsigned);
+	if (abi == AUDIT_ARCH_PARISC)
+		return parisc32_classify_syscall(syscall);
+#endif
 	switch (syscall) {
 	case __NR_open:
-		return AUDITSC_OPEN;
+		return 2;
 	case __NR_openat:
-		return AUDITSC_OPENAT;
+		return 3;
 	case __NR_execve:
-		return AUDITSC_EXECVE;
-	case __NR_openat2:
-		return AUDITSC_OPENAT2;
+		return 5;
 	default:
-#ifdef CONFIG_COMPAT
-		if (abi == AUDIT_ARCH_PARISC)
-			return AUDITSC_COMPAT;
-#endif
-		return AUDITSC_NATIVE;
+		return 0;
 	}
 }
 

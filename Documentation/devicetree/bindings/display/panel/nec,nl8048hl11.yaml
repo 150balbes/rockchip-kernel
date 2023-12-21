@@ -15,7 +15,6 @@ maintainers:
 
 allOf:
   - $ref: panel-common.yaml#
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
 
 properties:
   compatible:
@@ -35,13 +34,13 @@ required:
   - reset-gpios
   - port
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
 
-    spi {
+    spi0 {
       #address-cells = <1>;
       #size-cells = <0>;
 

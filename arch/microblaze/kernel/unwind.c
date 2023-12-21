@@ -161,12 +161,22 @@ static void microblaze_unwind_inner(struct task_struct *task,
  * unwind_trap - Unwind through a system trap, that stored previous state
  *		 on the stack.
  */
+#ifdef CONFIG_MMU
 static inline void unwind_trap(struct task_struct *task, unsigned long pc,
 				unsigned long fp, struct stack_trace *trace,
 				const char *loglvl)
 {
 	/* To be implemented */
 }
+#else
+static inline void unwind_trap(struct task_struct *task, unsigned long pc,
+				unsigned long fp, struct stack_trace *trace,
+				const char *loglvl)
+{
+	const struct pt_regs *regs = (const struct pt_regs *) fp;
+	microblaze_unwind_inner(task, regs->pc, regs->r1, regs->r15, trace, loglvl);
+}
+#endif
 
 /**
  * microblaze_unwind_inner - Unwind the stack from the specified point
@@ -205,7 +215,16 @@ static void microblaze_unwind_inner(struct task_struct *task,
 			 * HW exception handler doesn't save all registers,
 			 * so we open-code a special case of unwind_trap()
 			 */
+#ifndef CONFIG_MMU
+			const struct pt_regs *regs =
+				(const struct pt_regs *) fp;
+#endif
 			printk("%sHW EXCEPTION\n", loglvl);
+#ifndef CONFIG_MMU
+			microblaze_unwind_inner(task, regs->r17 - 4,
+						fp + EX_HANDLER_STACK_SIZ,
+						regs->r15, trace, loglvl);
+#endif
 			return;
 		}
 

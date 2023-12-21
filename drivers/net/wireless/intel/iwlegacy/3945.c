@@ -652,16 +652,16 @@ il3945_hw_txq_free_tfd(struct il_priv *il, struct il_tx_queue *txq)
 
 	/* Unmap tx_cmd */
 	if (counter)
-		dma_unmap_single(&dev->dev,
-				 dma_unmap_addr(&txq->meta[idx], mapping),
+		pci_unmap_single(dev, dma_unmap_addr(&txq->meta[idx], mapping),
 				 dma_unmap_len(&txq->meta[idx], len),
-				 DMA_TO_DEVICE);
+				 PCI_DMA_TODEVICE);
 
 	/* unmap chunks if any */
 
 	for (i = 1; i < counter; i++)
-		dma_unmap_single(&dev->dev, le32_to_cpu(tfd->tbs[i].addr),
-				 le32_to_cpu(tfd->tbs[i].len), DMA_TO_DEVICE);
+		pci_unmap_single(dev, le32_to_cpu(tfd->tbs[i].addr),
+				 le32_to_cpu(tfd->tbs[i].len),
+				 PCI_DMA_TODEVICE);
 
 	/* free SKB */
 	if (txq->skbs) {

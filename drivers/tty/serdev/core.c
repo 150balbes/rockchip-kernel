@@ -32,7 +32,18 @@ static ssize_t modalias_show(struct device *dev,
 	if (len != -ENODEV)
 		return len;
 
-	return of_device_modalias(dev, buf, PAGE_SIZE);
+	len = of_device_modalias(dev, buf, PAGE_SIZE);
+	if (len != -ENODEV)
+		return len;
+
+	if (dev->parent->parent->bus == &platform_bus_type) {
+		struct platform_device *pdev =
+			to_platform_device(dev->parent->parent);
+
+		len = snprintf(buf, PAGE_SIZE, "platform:%s\n", pdev->name);
+	}
+
+	return len;
 }
 static DEVICE_ATTR_RO(modalias);
 
@@ -42,17 +53,22 @@ static struct attribute *serdev_device_attrs[] = {
 };
 ATTRIBUTE_GROUPS(serdev_device);
 
-static int serdev_device_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int serdev_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	int rc;
-
-	/* TODO: platform modalias */
 
 	rc = acpi_device_uevent_modalias(dev, env);
 	if (rc != -ENODEV)
 		return rc;
 
-	return of_device_uevent_modalias(dev, env);
+	rc = of_device_uevent_modalias(dev, env);
+	if (rc != -ENODEV)
+		return rc;
+
+	if (dev->parent->parent->bus == &platform_bus_type)
+		rc = dev->parent->parent->bus->uevent(dev->parent->parent, env);
+
+	return rc;
 }
 
 static void serdev_device_release(struct device *dev)
@@ -88,11 +104,17 @@ static int serdev_device_match(struct device *dev, struct device_driver *drv)
 	if (!is_serdev_device(dev))
 		return 0;
 
-	/* TODO: platform matching */
 	if (acpi_driver_match_device(dev, drv))
 		return 1;
 
-	return of_driver_match_device(dev, drv);
+	if (of_driver_match_device(dev, drv))
+		return 1;
+
+	if (dev->parent->parent->bus == &platform_bus_type &&
+	    dev->parent->parent->bus->match(dev->parent->parent, drv))
+		return 1;
+
+	return 0;
 }
 
 /**
@@ -366,7 +388,7 @@ int serdev_device_set_parity(struct serdev_device *serdev,
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->set_parity)
-		return -EOPNOTSUPP;
+		return -ENOTSUPP;
 
 	return ctrl->ops->set_parity(ctrl, parity);
 }
@@ -388,7 +410,7 @@ int serdev_device_get_tiocm(struct serdev_device *serdev)
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->get_tiocm)
-		return -EOPNOTSUPP;
+		return -ENOTSUPP;
 
 	return ctrl->ops->get_tiocm(ctrl);
 }
@@ -399,22 +421,11 @@ int serdev_device_set_tiocm(struct serdev_device *serdev, int set, int clear)
 	struct serdev_controller *ctrl = serdev->ctrl;
 
 	if (!ctrl || !ctrl->ops->set_tiocm)
-		return -EOPNOTSUPP;
+		return -ENOTSUPP;
 
 	return ctrl->ops->set_tiocm(ctrl, set, clear);
 }
 EXPORT_SYMBOL_GPL(serdev_device_set_tiocm);
-
-int serdev_device_break_ctl(struct serdev_device *serdev, int break_state)
-{
-	struct serdev_controller *ctrl = serdev->ctrl;
-
-	if (!ctrl || !ctrl->ops->break_ctl)
-		return -EOPNOTSUPP;
-
-	return ctrl->ops->break_ctl(ctrl, break_state);
-}
-EXPORT_SYMBOL_GPL(serdev_device_break_ctl);
 
 static int serdev_drv_probe(struct device *dev)
 {
@@ -432,13 +443,15 @@ static int serdev_drv_probe(struct device *dev)
 	return ret;
 }
 
-static void serdev_drv_remove(struct device *dev)
+static int serdev_drv_remove(struct device *dev)
 {
 	const struct serdev_device_driver *sdrv = to_serdev_device_driver(dev->driver);
 	if (sdrv->remove)
 		sdrv->remove(to_serdev_device(dev));
 
 	dev_pm_domain_detach(dev, true);
+
+	return 0;
 }
 
 static struct bus_type serdev_bus_type = {
@@ -545,7 +558,7 @@ static int of_serdev_register_devices(struct serdev_controller *ctrl)
 		if (!serdev)
 			continue;
 
-		device_set_node(&serdev->dev, of_fwnode_handle(node));
+		serdev->dev.of_node = node;
 
 		err = serdev_device_add(serdev);
 		if (err) {
@@ -573,44 +586,22 @@ struct acpi_serdev_lookup {
 	int index;
 };
 
-/**
- * serdev_acpi_get_uart_resource - Gets UARTSerialBus resource if type matches
- * @ares:	ACPI resource
- * @uart:	Pointer to UARTSerialBus resource will be returned here
- *
- * Checks if the given ACPI resource is of type UARTSerialBus.
- * In this case, returns a pointer to it to the caller.
- *
- * Return: True if resource type is of UARTSerialBus, otherwise false.
- */
-bool serdev_acpi_get_uart_resource(struct acpi_resource *ares,
-				   struct acpi_resource_uart_serialbus **uart)
-{
-	struct acpi_resource_uart_serialbus *sb;
-
-	if (ares->type != ACPI_RESOURCE_TYPE_SERIAL_BUS)
-		return false;
-
-	sb = &ares->data.uart_serial_bus;
-	if (sb->type != ACPI_RESOURCE_SERIAL_TYPE_UART)
-		return false;
-
-	*uart = sb;
-	return true;
-}
-EXPORT_SYMBOL_GPL(serdev_acpi_get_uart_resource);
-
 static int acpi_serdev_parse_resource(struct acpi_resource *ares, void *data)
 {
 	struct acpi_serdev_lookup *lookup = data;
 	struct acpi_resource_uart_serialbus *sb;
 	acpi_status status;
 
-	if (!serdev_acpi_get_uart_resource(ares, &sb))
+	if (ares->type != ACPI_RESOURCE_TYPE_SERIAL_BUS)
+		return 1;
+
+	if (ares->data.common_serial_bus.type != ACPI_RESOURCE_SERIAL_TYPE_UART)
 		return 1;
 
 	if (lookup->index != -1 && lookup->n++ != lookup->index)
 		return 1;
+
+	sb = &ares->data.uart_serial_bus;
 
 	status = acpi_get_handle(lookup->device_handle,
 				 sb->resource_source.string_ptr,
@@ -619,7 +610,7 @@ static int acpi_serdev_parse_resource(struct acpi_resource *ares, void *data)
 		return 1;
 
 	/*
-	 * NOTE: Ideally, we would also want to retrieve other properties here,
+	 * NOTE: Ideally, we would also want to retreive other properties here,
 	 * once setting them before opening the device is supported by serdev.
 	 */
 
@@ -715,10 +706,13 @@ static const struct acpi_device_id serdev_acpi_devices_blacklist[] = {
 static acpi_status acpi_serdev_add_device(acpi_handle handle, u32 level,
 					  void *data, void **return_value)
 {
-	struct acpi_device *adev = acpi_fetch_acpi_dev(handle);
 	struct serdev_controller *ctrl = data;
+	struct acpi_device *adev;
 
-	if (!adev || acpi_device_enumerated(adev))
+	if (acpi_bus_get_device(handle, &adev))
+		return AE_OK;
+
+	if (acpi_device_enumerated(adev))
 		return AE_OK;
 
 	/* Skip if black listed */
@@ -735,23 +729,9 @@ static acpi_status acpi_serdev_add_device(acpi_handle handle, u32 level,
 static int acpi_serdev_register_devices(struct serdev_controller *ctrl)
 {
 	acpi_status status;
-	bool skip;
-	int ret;
 
 	if (!has_acpi_companion(ctrl->dev.parent))
 		return -ENODEV;
-
-	/*
-	 * Skip registration on boards where the ACPI tables are known to
-	 * contain buggy devices. Note serdev_controller_add() must still
-	 * succeed in this case, so that the proper serdev devices can be
-	 * added "manually" later.
-	 */
-	ret = acpi_quirk_skip_serdev_enumeration(ctrl->dev.parent, &skip);
-	if (ret)
-		return ret;
-	if (skip)
-		return 0;
 
 	status = acpi_walk_namespace(ACPI_TYPE_DEVICE, ACPI_ROOT_OBJECT,
 				     SERDEV_ACPI_MAX_SCAN_DEPTH,
@@ -771,16 +751,45 @@ static inline int acpi_serdev_register_devices(struct serdev_controller *ctrl)
 }
 #endif /* CONFIG_ACPI */
 
+static int platform_serdev_register_devices(struct serdev_controller *ctrl)
+{
+	struct serdev_device *serdev;
+	int err;
+
+	if (ctrl->dev.parent->bus != &platform_bus_type)
+		return -ENODEV;
+
+	serdev = serdev_device_alloc(ctrl);
+	if (!serdev) {
+		dev_err(&ctrl->dev, "failed to allocate serdev device for %s\n",
+				    dev_name(ctrl->dev.parent));
+		return -ENOMEM;
+	}
+
+	pm_runtime_no_callbacks(&serdev->dev);
+
+	err = serdev_device_add(serdev);
+	if (err) {
+		dev_err(&serdev->dev,
+			"failure adding device. status %d\n", err);
+		serdev_device_put(serdev);
+	}
+
+	return err;
+}
+
+
 /**
- * serdev_controller_add() - Add an serdev controller
+ * serdev_controller_add_platform() - Add an serdev controller
  * @ctrl:	controller to be registered.
+ * @platform:	whether to permit fallthrough to platform device probe
  *
  * Register a controller previously allocated via serdev_controller_alloc() with
- * the serdev core.
+ * the serdev core. Optionally permit probing via a platform device fallback.
  */
-int serdev_controller_add(struct serdev_controller *ctrl)
+int serdev_controller_add_platform(struct serdev_controller *ctrl, bool platform)
 {
-	int ret_of, ret_acpi, ret;
+	int ret, ret_of, ret_acpi, ret_platform = -ENODEV;
 
 	/* Can't register until after driver model init */
 	if (WARN_ON(!is_registered))
@@ -794,9 +803,13 @@ int serdev_controller_add(struct serdev_controller *ctrl)
 
 	ret_of = of_serdev_register_devices(ctrl);
 	ret_acpi = acpi_serdev_register_devices(ctrl);
-	if (ret_of && ret_acpi) {
-		dev_dbg(&ctrl->dev, "no devices registered: of:%pe acpi:%pe\n",
-			ERR_PTR(ret_of), ERR_PTR(ret_acpi));
+	if (platform)
+		ret_platform = platform_serdev_register_devices(ctrl);
+	if (ret_of && ret_acpi && ret_platform) {
+		dev_dbg(&ctrl->dev,
+			"no devices registered: of:%pe acpi:%pe platform:%pe\n",
+			ERR_PTR(ret_of), ERR_PTR(ret_acpi),
+			ERR_PTR(ret_platform));
 		ret = -ENODEV;
 		goto err_rpm_disable;
 	}
@@ -810,7 +823,7 @@ err_rpm_disable:
 	device_del(&ctrl->dev);
 	return ret;
 };
-EXPORT_SYMBOL_GPL(serdev_controller_add);
+EXPORT_SYMBOL_GPL(serdev_controller_add_platform);
 
 /* Remove a device associated with a controller */
 static int serdev_remove_device(struct device *dev, void *data)
@@ -830,19 +843,21 @@ static int serdev_remove_device(struct device *dev, void *data)
  */
 void serdev_controller_remove(struct serdev_controller *ctrl)
 {
+	int dummy;
+
 	if (!ctrl)
 		return;
 
-	device_for_each_child(&ctrl->dev, NULL, serdev_remove_device);
+	dummy = device_for_each_child(&ctrl->dev, NULL,
+				      serdev_remove_device);
 	pm_runtime_disable(&ctrl->dev);
 	device_del(&ctrl->dev);
 }
 EXPORT_SYMBOL_GPL(serdev_controller_remove);
 
 /**
- * __serdev_device_driver_register() - Register client driver with serdev core
+ * serdev_driver_register() - Register client driver with serdev core
  * @sdrv:	client driver to be associated with client-device.
- * @owner:	client driver owner to set.
  *
  * This API will register the client driver with the serdev framework.
  * It is typically called from the driver's module-init function.

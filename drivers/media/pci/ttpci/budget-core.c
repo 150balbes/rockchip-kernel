@@ -180,8 +180,7 @@ static void vpeirq(struct tasklet_struct *t)
 	u32 count;
 
 	/* Ensure streamed PCI data is synced to CPU */
-	dma_sync_sg_for_cpu(&budget->dev->pci->dev, budget->pt.slist,
-			    budget->pt.nents, DMA_FROM_DEVICE);
+	pci_dma_sync_sg_for_cpu(budget->dev->pci, budget->pt.slist, budget->pt.nents, PCI_DMA_FROMDEVICE);
 
 	/* nearest lower position divisible by 188 */
 	newdma -= newdma % 188;
@@ -308,7 +307,7 @@ int ttpci_budget_debiwrite(struct budget *budget, u32 config, int addr,
 static int budget_start_feed(struct dvb_demux_feed *feed)
 {
 	struct dvb_demux *demux = feed->demux;
-	struct budget *budget = demux->priv;
+	struct budget *budget = (struct budget *) demux->priv;
 	int status = 0;
 
 	dprintk(2, "budget: %p\n", budget);
@@ -327,7 +326,7 @@ static int budget_start_feed(struct dvb_demux_feed *feed)
 static int budget_stop_feed(struct dvb_demux_feed *feed)
 {
 	struct dvb_demux *demux = feed->demux;
-	struct budget *budget = demux->priv;
+	struct budget *budget = (struct budget *) demux->priv;
 	int status = 0;
 
 	dprintk(2, "budget: %p\n", budget);

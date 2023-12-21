@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Authors:
  * (C) 2020 Alexander Aring <alex.aring@gmail.com>
  */
@@ -27,6 +27,12 @@ static void ipv6_rpl_addr_compress(void *dst, const struct in6_addr *addr,
 static void *ipv6_rpl_segdata_pos(const struct ipv6_rpl_sr_hdr *hdr, int i)
 {
 	return (void *)&hdr->rpl_segdata[i * IPV6_PFXTAIL_LEN(hdr->cmpri)];
+}
+
+size_t ipv6_rpl_srh_size(unsigned char n, unsigned char cmpri,
+			 unsigned char cmpre)
+{
+	return (n * IPV6_PFXTAIL_LEN(cmpri)) + IPV6_PFXTAIL_LEN(cmpre);
 }
 
 void ipv6_rpl_srh_decompress(struct ipv6_rpl_sr_hdr *outhdr,

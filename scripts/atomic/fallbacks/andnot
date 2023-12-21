@@ -1,3 +1,7 @@
 cat <<EOF
-	${retstmt}raw_${atomic}_${pfx}and${sfx}${order}(~i, v);
+static __always_inline ${ret}
+${arch}${atomic}_${pfx}andnot${sfx}${order}(${int} i, ${atomic}_t *v)
+{
+	${retstmt}${arch}${atomic}_${pfx}and${sfx}${order}(~i, v);
+}
 EOF

@@ -17,7 +17,7 @@
 void __noreturn kunit_try_catch_throw(struct kunit_try_catch *try_catch)
 {
 	try_catch->try_result = -EFAULT;
-	kthread_complete_and_exit(try_catch->try_completion, -EFAULT);
+	complete_and_exit(try_catch->try_completion, -EFAULT);
 }
 EXPORT_SYMBOL_GPL(kunit_try_catch_throw);
 
@@ -27,7 +27,7 @@ static int kunit_generic_run_threadfn_adapter(void *data)
 
 	try_catch->try(try_catch->context);
 
-	kthread_complete_and_exit(try_catch->try_completion, 0);
+	complete_and_exit(try_catch->try_completion, 0);
 }
 
 static unsigned long kunit_test_timeout(void)
@@ -78,7 +78,6 @@ void kunit_try_catch_run(struct kunit_try_catch *try_catch, void *context)
 	if (time_remaining == 0) {
 		kunit_err(test, "try timed out\n");
 		try_catch->try_result = -ETIMEDOUT;
-		kthread_stop(task_struct);
 	}
 
 	exit_code = try_catch->try_result;

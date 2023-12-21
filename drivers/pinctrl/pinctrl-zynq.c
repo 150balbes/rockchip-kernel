@@ -8,7 +8,6 @@
  */
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -1017,7 +1016,7 @@ static int zynq_pinconf_cfg_get(struct pinctrl_dev *pctldev,
 	case PIN_CONFIG_SLEW_RATE:
 		arg = !!(reg & ZYNQ_PINCONF_SPEED);
 		break;
-	case PIN_CONFIG_MODE_LOW_POWER:
+	case PIN_CONFIG_LOW_POWER_MODE:
 	{
 		enum zynq_io_standards iostd = zynq_pinconf_iostd_get(reg);
 
@@ -1029,7 +1028,6 @@ static int zynq_pinconf_cfg_get(struct pinctrl_dev *pctldev,
 		break;
 	}
 	case PIN_CONFIG_IOSTANDARD:
-	case PIN_CONFIG_POWER_SOURCE:
 		arg = zynq_pinconf_iostd_get(reg);
 		break;
 	default:
@@ -1080,7 +1078,6 @@ static int zynq_pinconf_cfg_set(struct pinctrl_dev *pctldev,
 
 			break;
 		case PIN_CONFIG_IOSTANDARD:
-		case PIN_CONFIG_POWER_SOURCE:
 			if (arg <= zynq_iostd_min || arg >= zynq_iostd_max) {
 				dev_warn(pctldev->dev,
 					 "unsupported IO standard '%u'\n",
@@ -1090,7 +1087,7 @@ static int zynq_pinconf_cfg_set(struct pinctrl_dev *pctldev,
 			reg &= ~ZYNQ_PINCONF_IOTYPE_MASK;
 			reg |= arg << ZYNQ_PINCONF_IOTYPE_SHIFT;
 			break;
-		case PIN_CONFIG_MODE_LOW_POWER:
+		case PIN_CONFIG_LOW_POWER_MODE:
 			if (arg)
 				reg |= ZYNQ_PINCONF_DISABLE_RECVR;
 			else
@@ -1211,4 +1208,8 @@ static struct platform_driver zynq_pinctrl_driver = {
 	.probe = zynq_pinctrl_probe,
 };
 
-module_platform_driver(zynq_pinctrl_driver);
+static int __init zynq_pinctrl_init(void)
+{
+	return platform_driver_register(&zynq_pinctrl_driver);
+}
+arch_initcall(zynq_pinctrl_init);

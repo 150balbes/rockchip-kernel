@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright 2014-2022 Advanced Micro Devices, Inc.
+ * Copyright 2014 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -45,7 +44,7 @@ static void pm_calc_rlib_size(struct packet_manager *pm,
 	unsigned int process_count, queue_count, compute_queue_count, gws_queue_count;
 	unsigned int map_queue_size;
 	unsigned int max_proc_per_quantum = 1;
-	struct kfd_node *dev = pm->dqm->dev;
+	struct kfd_dev *dev = pm->dqm->dev;
 
 	process_count = pm->dqm->processes_count;
 	queue_count = pm->dqm->active_queue_count;
@@ -125,14 +124,14 @@ static int pm_create_runlist_ib(struct packet_manager *pm,
 {
 	unsigned int alloc_size_bytes;
 	unsigned int *rl_buffer, rl_wptr, i;
-	int retval, processes_mapped;
+	int retval, proccesses_mapped;
 	struct device_process_node *cur;
 	struct qcm_process_device *qpd;
 	struct queue *q;
 	struct kernel_queue *kq;
 	bool is_over_subscription;
 
-	rl_wptr = retval = processes_mapped = 0;
+	rl_wptr = retval = proccesses_mapped = 0;
 
 	retval = pm_allocate_runlist_ib(pm, &rl_buffer, rl_gpu_addr,
 				&alloc_size_bytes, &is_over_subscription);
@@ -149,7 +148,7 @@ static int pm_create_runlist_ib(struct packet_manager *pm,
 	list_for_each_entry(cur, queues, list) {
 		qpd = cur->qpd;
 		/* build map process packet */
-		if (processes_mapped >= pm->dqm->processes_count) {
+		if (proccesses_mapped >= pm->dqm->processes_count) {
 			pr_debug("Not enough space left in runlist IB\n");
 			pm_release_ib(pm);
 			return -ENOMEM;
@@ -159,7 +158,7 @@ static int pm_create_runlist_ib(struct packet_manager *pm,
 		if (retval)
 			return retval;
 
-		processes_mapped++;
+		proccesses_mapped++;
 		inc_wptr(&rl_wptr, pm->pmf->map_process_size,
 				alloc_size_bytes);
 
@@ -224,7 +223,7 @@ static int pm_create_runlist_ib(struct packet_manager *pm,
 
 int pm_init(struct packet_manager *pm, struct device_queue_manager *dqm)
 {
-	switch (dqm->dev->adev->asic_type) {
+	switch (dqm->dev->device_info->asic_family) {
 	case CHIP_KAVERI:
 	case CHIP_HAWAII:
 		/* PM4 packet structures on CIK are the same as on VI */
@@ -237,17 +236,23 @@ int pm_init(struct packet_manager *pm, struct device_queue_manager *dqm)
 	case CHIP_VEGAM:
 		pm->pmf = &kfd_vi_pm_funcs;
 		break;
+	case CHIP_VEGA10:
+	case CHIP_VEGA12:
+	case CHIP_VEGA20:
+	case CHIP_RAVEN:
+	case CHIP_RENOIR:
+	case CHIP_ARCTURUS:
+	case CHIP_NAVI10:
+	case CHIP_NAVI12:
+	case CHIP_NAVI14:
+	case CHIP_SIENNA_CICHLID:
+	case CHIP_NAVY_FLOUNDER:
+		pm->pmf = &kfd_v9_pm_funcs;
+		break;
 	default:
-		if (KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 2) ||
-		    KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 3))
-			pm->pmf = &kfd_aldebaran_pm_funcs;
-		else if (KFD_GC_VERSION(dqm->dev) >= IP_VERSION(9, 0, 1))
-			pm->pmf = &kfd_v9_pm_funcs;
-		else {
-			WARN(1, "Unexpected ASIC family %u",
-			     dqm->dev->adev->asic_type);
-			return -EINVAL;
-		}
+		WARN(1, "Unexpected ASIC family %u",
+		     dqm->dev->device_info->asic_family);
+		return -EINVAL;
 	}
 
 	pm->dqm = dqm;
@@ -266,7 +271,6 @@ void pm_uninit(struct packet_manager *pm, bool hanging)
 {
 	mutex_destroy(&pm->lock);
 	kernel_queue_uninit(pm->priv_queue, hanging);
-	pm->priv_queue = NULL;
 }
 
 int pm_send_set_resources(struct packet_manager *pm,
@@ -370,41 +374,10 @@ out:
 	return retval;
 }
 
-int pm_update_grace_period(struct packet_manager *pm, uint32_t grace_period)
-{
-	int retval = 0;
-	uint32_t *buffer, size;
-
-	size = pm->pmf->set_grace_period_size;
-
-	mutex_lock(&pm->lock);
-
-	if (size) {
-		kq_acquire_packet_buffer(pm->priv_queue,
-			size / sizeof(uint32_t),
-			(unsigned int **)&buffer);
-
-		if (!buffer) {
-			pr_err("Failed to allocate buffer on kernel queue\n");
-			retval = -ENOMEM;
-			goto out;
-		}
-
-		retval = pm->pmf->set_grace_period(pm, buffer, grace_period);
-		if (!retval)
-			kq_submit_packet(pm->priv_queue);
-		else
-			kq_rollback_packet(pm->priv_queue);
-	}
-
-out:
-	mutex_unlock(&pm->lock);
-	return retval;
-}
-
-int pm_send_unmap_queue(struct packet_manager *pm,
+int pm_send_unmap_queue(struct packet_manager *pm, enum kfd_queue_type type,
 			enum kfd_unmap_queues_filter filter,
-			uint32_t filter_param, bool reset)
+			uint32_t filter_param, bool reset,
+			unsigned int sdma_engine)
 {
 	uint32_t *buffer, size;
 	int retval = 0;
@@ -419,7 +392,8 @@ int pm_send_unmap_queue(struct packet_manager *pm,
 		goto out;
 	}
 
-	retval = pm->pmf->unmap_queues(pm, buffer, filter, filter_param, reset);
+	retval = pm->pmf->unmap_queues(pm, buffer, type, filter, filter_param,
+				       reset, sdma_engine);
 	if (!retval)
 		kq_submit_packet(pm->priv_queue);
 	else
@@ -465,9 +439,6 @@ int pm_debugfs_hang_hws(struct packet_manager *pm)
 {
 	uint32_t *buffer, size;
 	int r = 0;
-
-	if (!pm->priv_queue)
-		return -EAGAIN;
 
 	size = pm->pmf->query_status_size;
 	mutex_lock(&pm->lock);

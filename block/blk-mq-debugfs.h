@@ -6,8 +6,6 @@
 
 #include <linux/seq_file.h>
 
-struct blk_mq_hw_ctx;
-
 struct blk_mq_debugfs_attr {
 	const char *name;
 	umode_t mode;
@@ -21,6 +19,7 @@ int __blk_mq_debugfs_rq_show(struct seq_file *m, struct request *rq);
 int blk_mq_debugfs_rq_show(struct seq_file *m, void *v);
 
 void blk_mq_debugfs_register(struct request_queue *q);
+void blk_mq_debugfs_unregister(struct request_queue *q);
 void blk_mq_debugfs_register_hctx(struct request_queue *q,
 				  struct blk_mq_hw_ctx *hctx);
 void blk_mq_debugfs_unregister_hctx(struct blk_mq_hw_ctx *hctx);
@@ -35,8 +34,13 @@ void blk_mq_debugfs_unregister_sched_hctx(struct blk_mq_hw_ctx *hctx);
 
 void blk_mq_debugfs_register_rqos(struct rq_qos *rqos);
 void blk_mq_debugfs_unregister_rqos(struct rq_qos *rqos);
+void blk_mq_debugfs_unregister_queue_rqos(struct request_queue *q);
 #else
 static inline void blk_mq_debugfs_register(struct request_queue *q)
+{
+}
+
+static inline void blk_mq_debugfs_unregister(struct request_queue *q)
 {
 }
 
@@ -79,6 +83,10 @@ static inline void blk_mq_debugfs_register_rqos(struct rq_qos *rqos)
 }
 
 static inline void blk_mq_debugfs_unregister_rqos(struct rq_qos *rqos)
+{
+}
+
+static inline void blk_mq_debugfs_unregister_queue_rqos(struct request_queue *q)
 {
 }
 #endif

@@ -24,6 +24,10 @@ struct irq_sim_irq_ctx {
 	struct irq_sim_work_ctx	*work_ctx;
 };
 
+struct irq_sim_devres {
+	struct irq_domain	*domain;
+};
+
 static void irq_sim_irqmask(struct irq_data *data)
 {
 	struct irq_sim_irq_ctx *irq_ctx = irq_data_get_irq_chip_data(data);
@@ -155,7 +159,7 @@ static const struct irq_domain_ops irq_sim_domain_ops = {
  * irq_domain_create_sim - Create a new interrupt simulator irq_domain and
  *                         allocate a range of dummy interrupts.
  *
- * @fwnode:     struct fwnode_handle to be associated with this domain.
+ * @fnode:      struct fwnode_handle to be associated with this domain.
  * @num_irqs:   Number of interrupts to allocate.
  *
  * On success: return a new irq_domain object.
@@ -181,7 +185,7 @@ struct irq_domain *irq_domain_create_sim(struct fwnode_handle *fwnode,
 		goto err_free_bitmap;
 
 	work_ctx->irq_count = num_irqs;
-	work_ctx->work = IRQ_WORK_INIT_HARD(irq_sim_handle_irq);
+	init_irq_work(&work_ctx->work, irq_sim_handle_irq);
 
 	return work_ctx->domain;
 
@@ -212,11 +216,11 @@ void irq_domain_remove_sim(struct irq_domain *domain)
 }
 EXPORT_SYMBOL_GPL(irq_domain_remove_sim);
 
-static void devm_irq_domain_remove_sim(void *data)
+static void devm_irq_domain_release_sim(struct device *dev, void *res)
 {
-	struct irq_domain *domain = data;
+	struct irq_sim_devres *this = res;
 
-	irq_domain_remove_sim(domain);
+	irq_domain_remove_sim(this->domain);
 }
 
 /**
@@ -224,7 +228,7 @@ static void devm_irq_domain_remove_sim(void *data)
  *                              a managed device.
  *
  * @dev:        Device to initialize the simulator object for.
- * @fwnode:     struct fwnode_handle to be associated with this domain.
+ * @fnode:      struct fwnode_handle to be associated with this domain.
  * @num_irqs:   Number of interrupts to allocate
  *
  * On success: return a new irq_domain object.
@@ -234,17 +238,20 @@ struct irq_domain *devm_irq_domain_create_sim(struct device *dev,
 					      struct fwnode_handle *fwnode,
 					      unsigned int num_irqs)
 {
-	struct irq_domain *domain;
-	int ret;
+	struct irq_sim_devres *dr;
 
-	domain = irq_domain_create_sim(fwnode, num_irqs);
-	if (IS_ERR(domain))
-		return domain;
+	dr = devres_alloc(devm_irq_domain_release_sim,
+			  sizeof(*dr), GFP_KERNEL);
+	if (!dr)
+		return ERR_PTR(-ENOMEM);
 
-	ret = devm_add_action_or_reset(dev, devm_irq_domain_remove_sim, domain);
-	if (ret)
-		return ERR_PTR(ret);
+	dr->domain = irq_domain_create_sim(fwnode, num_irqs);
+	if (IS_ERR(dr->domain)) {
+		devres_free(dr);
+		return dr->domain;
+	}
 
-	return domain;
+	devres_add(dev, dr);
+	return dr->domain;
 }
 EXPORT_SYMBOL_GPL(devm_irq_domain_create_sim);

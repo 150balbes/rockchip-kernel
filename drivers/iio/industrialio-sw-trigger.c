@@ -27,7 +27,7 @@ static DEFINE_MUTEX(iio_trigger_types_lock);
 
 static
 struct iio_sw_trigger_type *__iio_find_sw_trigger_type(const char *name,
-						       unsigned int len)
+						       unsigned len)
 {
 	struct iio_sw_trigger_type *t = NULL, *iter;
 

@@ -3,7 +3,6 @@
 #include <linux/kernel_stat.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include "internal.h"
 
 /*
  * /proc/softirqs  ... display the number of softirqs
@@ -28,10 +27,7 @@ static int show_softirqs(struct seq_file *p, void *v)
 
 static int __init proc_softirqs_init(void)
 {
-	struct proc_dir_entry *pde;
-
-	pde = proc_create_single("softirqs", 0, NULL, show_softirqs);
-	pde_make_permanent(pde);
+	proc_create_single("softirqs", 0, NULL, show_softirqs);
 	return 0;
 }
 fs_initcall(proc_softirqs_init);

@@ -15,6 +15,7 @@
 #include <linux/wait.h>
 #include <linux/i2c.h>
 #include <linux/of_device.h>
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/io.h>
 #include <asm/sections.h>
@@ -33,8 +34,8 @@
 #endif
 
 struct wf_lm75_sensor {
-	unsigned int		ds1775 : 1;
-	unsigned int		inited : 1;
+	int			ds1775 : 1;
+	int			inited : 1;
 	struct i2c_client	*i2c;
 	struct wf_sensor	sens;
 };
@@ -87,9 +88,9 @@ static const struct wf_sensor_ops wf_lm75_ops = {
 	.owner		= THIS_MODULE,
 };
 
-static int wf_lm75_probe(struct i2c_client *client)
-{
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
+static int wf_lm75_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
+{	
 	struct wf_lm75_sensor *lm;
 	int rc, ds1775;
 	const char *name, *loc;
@@ -147,7 +148,7 @@ static int wf_lm75_probe(struct i2c_client *client)
 	return rc;
 }
 
-static void wf_lm75_remove(struct i2c_client *client)
+static int wf_lm75_remove(struct i2c_client *client)
 {
 	struct wf_lm75_sensor *lm = i2c_get_clientdata(client);
 
@@ -156,6 +157,8 @@ static void wf_lm75_remove(struct i2c_client *client)
 
 	/* release sensor */
 	wf_unregister_sensor(&lm->sens);
+
+	return 0;
 }
 
 static const struct i2c_device_id wf_lm75_id[] = {

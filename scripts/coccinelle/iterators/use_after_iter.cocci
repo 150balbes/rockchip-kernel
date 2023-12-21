@@ -10,7 +10,7 @@
 // Confidence: Moderate
 // Copyright: (C) 2012 Julia Lawall, INRIA/LIP6.
 // Copyright: (C) 2012 Gilles Muller, INRIA/LIP6.
-// URL: https://coccinelle.gitlabpages.inria.fr/website
+// URL: http://coccinelle.lip6.fr/
 // Comments:
 // Options: --no-includes --include-headers
 
@@ -122,8 +122,6 @@ hlist_for_each_entry_from(c,...) S
 hlist_for_each_entry_safe(c,...) S
 |
 list_remove_head(x,c,...)
-|
-list_entry_is_head(c,...)
 |
 sizeof(<+...c...+>)
 |

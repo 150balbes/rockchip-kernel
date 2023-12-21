@@ -5,17 +5,15 @@
  *  Copyright (C) 2014 Alexander Shiyan <shc_work@mail.ru>
  */
 
-#include <linux/bits.h>
 #include <linux/err.h>
-#include <linux/gpio/driver.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
+#include <linux/gpio/driver.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 
-#define MMIO_74XX_DIR_IN	BIT(8)
-#define MMIO_74XX_DIR_OUT	BIT(9)
-#define MMIO_74XX_BIT_CNT(x)	((x) & GENMASK(7, 0))
+#define MMIO_74XX_DIR_IN	(0 << 8)
+#define MMIO_74XX_DIR_OUT	(1 << 8)
+#define MMIO_74XX_BIT_CNT(x)	((x) & 0xff)
 
 struct mmio_74xx_gpio_priv {
 	struct gpio_chip	gc;
@@ -89,10 +87,7 @@ static int mmio_74xx_dir_in(struct gpio_chip *gc, unsigned int gpio)
 {
 	struct mmio_74xx_gpio_priv *priv = gpiochip_get_data(gc);
 
-	if (priv->flags & MMIO_74XX_DIR_IN)
-		return 0;
-
-	return -ENOTSUPP;
+	return (priv->flags & MMIO_74XX_DIR_OUT) ? -ENOTSUPP : 0;
 }
 
 static int mmio_74xx_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
@@ -117,7 +112,7 @@ static int mmio_74xx_gpio_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->flags = (uintptr_t)device_get_match_data(&pdev->dev);
+	priv->flags = (uintptr_t)of_device_get_match_data(&pdev->dev);
 
 	dat = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(dat))

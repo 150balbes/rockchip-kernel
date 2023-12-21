@@ -66,26 +66,11 @@ tu102_devinit_pll_set(struct nvkm_devinit *init, u32 type, u32 freq)
 }
 
 static int
-tu102_devinit_wait(struct nvkm_device *device)
+tu102_devinit_post(struct nvkm_devinit *base, bool post)
 {
-	unsigned timeout = 50 + 2000;
-
-	do {
-		if (nvkm_rd32(device, 0x118128) & 0x00000001) {
-			if ((nvkm_rd32(device, 0x118234) & 0x000000ff) == 0xff)
-				return 0;
-		}
-
-		usleep_range(1000, 2000);
-	} while (timeout--);
-
-	return -ETIMEDOUT;
-}
-
-int
-tu102_devinit_post(struct nvkm_devinit *init, bool post)
-{
-	return tu102_devinit_wait(init->subdev.device);
+	struct nv50_devinit *init = nv50_devinit(base);
+	gm200_devinit_preos(init, post);
+	return 0;
 }
 
 static const struct nvkm_devinit_func
@@ -97,8 +82,8 @@ tu102_devinit = {
 };
 
 int
-tu102_devinit_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-		  struct nvkm_devinit **pinit)
+tu102_devinit_new(struct nvkm_device *device, int index,
+		struct nvkm_devinit **pinit)
 {
-	return nv50_devinit_new_(&tu102_devinit, device, type, inst, pinit);
+	return nv50_devinit_new_(&tu102_devinit, device, index, pinit);
 }

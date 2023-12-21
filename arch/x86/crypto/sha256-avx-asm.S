@@ -48,7 +48,6 @@
 ########################################################################
 
 #include <linux/linkage.h>
-#include <linux/cfi_types.h>
 
 ## assume buffers not aligned
 #define    VMOVDQ vmovdqu
@@ -347,7 +346,8 @@ a = TMP_
 ## arg 3 : Num blocks
 ########################################################################
 .text
-SYM_TYPED_FUNC_START(sha256_transform_avx)
+SYM_FUNC_START(sha256_transform_avx)
+.align 32
 	pushq   %rbx
 	pushq   %r12
 	pushq   %r13
@@ -360,7 +360,7 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	and	$~15, %rsp		# align stack pointer
 
 	shl     $6, NUM_BLKS		# convert to bytes
-	jz      .Ldone_hash
+	jz      done_hash
 	add     INP, NUM_BLKS		# pointer to end of data
 	mov     NUM_BLKS, _INP_END(%rsp)
 
@@ -377,7 +377,7 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	vmovdqa  PSHUFFLE_BYTE_FLIP_MASK(%rip), BYTE_FLIP_MASK
 	vmovdqa  _SHUF_00BA(%rip), SHUF_00BA
 	vmovdqa  _SHUF_DC00(%rip), SHUF_DC00
-.Lloop0:
+loop0:
 	lea     K256(%rip), TBL
 
 	## byte swap first 16 dwords
@@ -391,7 +391,7 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	## schedule 48 input dwords, by doing 3 rounds of 16 each
 	mov     $3, SRND
 .align 16
-.Lloop1:
+loop1:
 	vpaddd  (TBL), X0, XFER
 	vmovdqa XFER, _XFER(%rsp)
 	FOUR_ROUNDS_AND_SCHED
@@ -410,10 +410,10 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	FOUR_ROUNDS_AND_SCHED
 
 	sub     $1, SRND
-	jne     .Lloop1
+	jne     loop1
 
 	mov     $2, SRND
-.Lloop2:
+loop2:
 	vpaddd  (TBL), X0, XFER
 	vmovdqa XFER, _XFER(%rsp)
 	DO_ROUND        0
@@ -433,7 +433,7 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	vmovdqa X3, X1
 
 	sub     $1, SRND
-	jne     .Lloop2
+	jne     loop2
 
 	addm    (4*0)(CTX),a
 	addm    (4*1)(CTX),b
@@ -447,9 +447,9 @@ SYM_TYPED_FUNC_START(sha256_transform_avx)
 	mov     _INP(%rsp), INP
 	add     $64, INP
 	cmp     _INP_END(%rsp), INP
-	jne     .Lloop0
+	jne     loop0
 
-.Ldone_hash:
+done_hash:
 
 	mov	%rbp, %rsp
 	popq	%rbp

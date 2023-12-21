@@ -141,14 +141,24 @@ void igc_power_down_phy_copper(struct igc_hw *hw)
  * igc_check_downshift - Checks whether a downshift in speed occurred
  * @hw: pointer to the HW structure
  *
+ * Success returns 0, Failure returns 1
+ *
  * A downshift is detected by querying the PHY link health.
  */
-void igc_check_downshift(struct igc_hw *hw)
+s32 igc_check_downshift(struct igc_hw *hw)
 {
 	struct igc_phy_info *phy = &hw->phy;
+	s32 ret_val;
 
-	/* speed downshift not supported */
-	phy->speed_downgraded = false;
+	switch (phy->type) {
+	case igc_phy_i225:
+	default:
+		/* speed downshift not supported */
+		phy->speed_downgraded = false;
+		ret_val = 0;
+	}
+
+	return ret_val;
 }
 
 /**
@@ -774,22 +784,4 @@ s32 igc_read_phy_reg_gpy(struct igc_hw *hw, u32 offset, u16 *data)
 	}
 
 	return ret_val;
-}
-
-/**
- * igc_read_phy_fw_version - Read gPHY firmware version
- * @hw: pointer to the HW structure
- */
-u16 igc_read_phy_fw_version(struct igc_hw *hw)
-{
-	struct igc_phy_info *phy = &hw->phy;
-	u16 gphy_version = 0;
-	u16 ret_val;
-
-	/* NVM image version is reported as firmware version for i225 device */
-	ret_val = phy->ops.read_reg(hw, IGC_GPHY_VERSION, &gphy_version);
-	if (ret_val)
-		hw_dbg("igc_phy: read wrong gphy version\n");
-
-	return gphy_version;
 }

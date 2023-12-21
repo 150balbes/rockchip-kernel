@@ -12,8 +12,7 @@
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/types.h>
-#include <crypto/sha1.h>
-#include <crypto/sha1_base.h>
+#include <crypto/sha.h>
 #include <asm/byteorder.h>
 #include <asm/switch_to.h>
 #include <linux/hardirq.h>
@@ -56,6 +55,20 @@ static inline void ppc_sha1_clear_context(struct sha1_state *sctx)
 	do { *ptr++ = 0; } while (--count);
 }
 
+static int ppc_spe_sha1_init(struct shash_desc *desc)
+{
+	struct sha1_state *sctx = shash_desc_ctx(desc);
+
+	sctx->state[0] = SHA1_H0;
+	sctx->state[1] = SHA1_H1;
+	sctx->state[2] = SHA1_H2;
+	sctx->state[3] = SHA1_H3;
+	sctx->state[4] = SHA1_H4;
+	sctx->count = 0;
+
+	return 0;
+}
+
 static int ppc_spe_sha1_update(struct shash_desc *desc, const u8 *data,
 			unsigned int len)
 {
@@ -94,7 +107,7 @@ static int ppc_spe_sha1_update(struct shash_desc *desc, const u8 *data,
 
 		src += bytes;
 		len -= bytes;
-	}
+	};
 
 	memcpy((char *)sctx->buffer, src, len);
 	return 0;
@@ -155,7 +168,7 @@ static int ppc_spe_sha1_import(struct shash_desc *desc, const void *in)
 
 static struct shash_alg alg = {
 	.digestsize	=	SHA1_DIGEST_SIZE,
-	.init		=	sha1_base_init,
+	.init		=	ppc_spe_sha1_init,
 	.update		=	ppc_spe_sha1_update,
 	.final		=	ppc_spe_sha1_final,
 	.export		=	ppc_spe_sha1_export,

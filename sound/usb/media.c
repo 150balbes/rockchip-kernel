@@ -285,7 +285,7 @@ snd_mixer_init:
 			ret);
 
 	if (!media_devnode_is_registered(mdev->devnode)) {
-		/* don't register if snd_media_mixer_init() failed */
+		/* dont'register if snd_media_mixer_init() failed */
 		if (ret)
 			goto create_fail;
 

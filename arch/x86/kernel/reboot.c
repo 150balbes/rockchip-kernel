@@ -528,29 +528,33 @@ static inline void kb_wait(void)
 	}
 }
 
-static inline void nmi_shootdown_cpus_on_restart(void);
+static void vmxoff_nmi(int cpu, struct pt_regs *regs)
+{
+	cpu_emergency_vmxoff();
+}
 
-static void emergency_reboot_disable_virtualization(void)
+/* Use NMIs as IPIs to tell all CPUs to disable virtualization */
+static void emergency_vmx_disable_all(void)
 {
 	/* Just make sure we won't change CPUs while doing this */
 	local_irq_disable();
 
 	/*
-	 * Disable virtualization on all CPUs before rebooting to avoid hanging
-	 * the system, as VMX and SVM block INIT when running in the host.
+	 * Disable VMX on all CPUs before rebooting, otherwise we risk hanging
+	 * the machine, because the CPU blocks INIT when it's in VMX root.
 	 *
 	 * We can't take any locks and we may be on an inconsistent state, so
-	 * use NMIs as IPIs to tell the other CPUs to disable VMX/SVM and halt.
+	 * use NMIs as IPIs to tell the other CPUs to exit VMX root and halt.
 	 *
-	 * Do the NMI shootdown even if virtualization is off on _this_ CPU, as
-	 * other CPUs may have virtualization enabled.
+	 * Do the NMI shootdown even if VMX if off on _this_ CPU, as that
+	 * doesn't prevent a different CPU from being in VMX root operation.
 	 */
-	if (cpu_has_vmx() || cpu_has_svm(NULL)) {
-		/* Safely force _this_ CPU out of VMX/SVM operation. */
-		cpu_emergency_disable_virtualization();
+	if (cpu_has_vmx()) {
+		/* Safely force _this_ CPU out of VMX root operation. */
+		__cpu_emergency_vmxoff();
 
-		/* Disable VMX/SVM and halt on other CPUs. */
-		nmi_shootdown_cpus_on_restart();
+		/* Halt and exit VMX root operation on the other CPUs. */
+		nmi_shootdown_cpus(vmxoff_nmi);
 	}
 }
 
@@ -586,7 +590,7 @@ static void native_machine_emergency_restart(void)
 	unsigned short mode;
 
 	if (reboot_emergency)
-		emergency_reboot_disable_virtualization();
+		emergency_vmx_disable_all();
 
 	tboot_shutdown(TB_SHUTDOWN_REBOOT);
 
@@ -658,7 +662,7 @@ static void native_machine_emergency_restart(void)
 			break;
 
 		case BOOT_TRIPLE:
-			idt_invalidate();
+			idt_invalidate(NULL);
 			__asm__ __volatile__("int3");
 
 			/* We're probably dead after this, but... */
@@ -735,10 +739,10 @@ static void native_machine_halt(void)
 
 static void native_machine_power_off(void)
 {
-	if (kernel_can_power_off()) {
+	if (pm_power_off) {
 		if (!reboot_force)
 			machine_shutdown();
-		do_kernel_power_off();
+		pm_power_off();
 	}
 	/* A fallback in case there is no PM info available */
 	tboot_shutdown(TB_SHUTDOWN_HALT);
@@ -791,17 +795,6 @@ void machine_crash_shutdown(struct pt_regs *regs)
 /* This is the CPU performing the emergency shutdown work. */
 int crashing_cpu = -1;
 
-/*
- * Disable virtualization, i.e. VMX or SVM, to ensure INIT is recognized during
- * reboot.  VMX blocks INIT if the CPU is post-VMXON, and SVM blocks INIT if
- * GIF=0, i.e. if the crash occurred between CLGI and STGI.
- */
-void cpu_emergency_disable_virtualization(void)
-{
-	cpu_emergency_vmxoff();
-	cpu_emergency_svm_disable();
-}
-
 #if defined(CONFIG_SMP)
 
 static nmi_shootdown_cb shootdown_callback;
@@ -824,14 +817,7 @@ static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 		return NMI_HANDLED;
 	local_irq_disable();
 
-	if (shootdown_callback)
-		shootdown_callback(cpu, regs);
-
-	/*
-	 * Prepare the CPU for reboot _after_ invoking the callback so that the
-	 * callback can safely use virtualization instructions, e.g. VMCLEAR.
-	 */
-	cpu_emergency_disable_virtualization();
+	shootdown_callback(cpu, regs);
 
 	atomic_dec(&waiting_for_crash_ipi);
 	/* Assume hlt works */
@@ -842,31 +828,17 @@ static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 	return NMI_HANDLED;
 }
 
-/**
- * nmi_shootdown_cpus - Stop other CPUs via NMI
- * @callback:	Optional callback to be invoked from the NMI handler
+/*
+ * Halt all other CPUs, calling the specified function on each of them
  *
- * The NMI handler on the remote CPUs invokes @callback, if not
- * NULL, first and then disables virtualization to ensure that
- * INIT is recognized during reboot.
- *
- * nmi_shootdown_cpus() can only be invoked once. After the first
- * invocation all other CPUs are stuck in crash_nmi_callback() and
- * cannot respond to a second NMI.
+ * This function can be used to halt all other CPUs on crash
+ * or emergency reboot time. The function passed as parameter
+ * will be called inside a NMI handler on all CPUs.
  */
 void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	unsigned long msecs;
-
 	local_irq_disable();
-
-	/*
-	 * Avoid certain doom if a shootdown already occurred; re-registering
-	 * the NMI handler will cause list corruption, modifying the callback
-	 * will do who knows what, etc...
-	 */
-	if (WARN_ON_ONCE(crash_ipi_issued))
-		return;
 
 	/* Make a note of crashing cpu. Will be used in NMI callback. */
 	crashing_cpu = safe_smp_processor_id();
@@ -895,17 +867,7 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 		msecs--;
 	}
 
-	/*
-	 * Leave the nmi callback set, shootdown is a one-time thing.  Clearing
-	 * the callback could result in a NULL pointer dereference if a CPU
-	 * (finally) responds after the timeout expires.
-	 */
-}
-
-static inline void nmi_shootdown_cpus_on_restart(void)
-{
-	if (!crash_ipi_issued)
-		nmi_shootdown_cpus(NULL);
+	/* Leave the nmi callback set */
 }
 
 /*
@@ -920,7 +882,7 @@ void run_crash_ipi_callback(struct pt_regs *regs)
 }
 
 /* Override the weak function in kernel/panic.c */
-void __noreturn nmi_panic_self_stop(struct pt_regs *regs)
+void nmi_panic_self_stop(struct pt_regs *regs)
 {
 	while (1) {
 		/* If no CPU is preparing crash dump, we simply loop here. */
@@ -934,8 +896,6 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	/* No other CPUs to shoot down */
 }
-
-static inline void nmi_shootdown_cpus_on_restart(void) { }
 
 void run_crash_ipi_callback(struct pt_regs *regs)
 {

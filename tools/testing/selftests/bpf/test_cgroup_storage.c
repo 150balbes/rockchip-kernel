@@ -6,9 +6,8 @@
 #include <stdlib.h>
 #include <sys/sysinfo.h>
 
-#include "bpf_util.h"
+#include "bpf_rlimit.h"
 #include "cgroup_helpers.h"
-#include "testing_helpers.h"
 
 char bpf_log_buf[BPF_LOG_BUF_SIZE];
 
@@ -30,13 +29,13 @@ int main(int argc, char **argv)
 		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0,
 			     BPF_FUNC_get_local_storage),
 		BPF_MOV64_IMM(BPF_REG_1, 1),
-		BPF_ATOMIC_OP(BPF_DW, BPF_ADD, BPF_REG_0, BPF_REG_1, 0),
+		BPF_STX_XADD(BPF_DW, BPF_REG_0, BPF_REG_1, 0),
 		BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0),
 		BPF_ALU64_IMM(BPF_AND, BPF_REG_1, 0x1),
 		BPF_MOV64_REG(BPF_REG_0, BPF_REG_1),
 		BPF_EXIT_INSN(),
 	};
-	size_t insns_cnt = ARRAY_SIZE(prog);
+	size_t insns_cnt = sizeof(prog) / sizeof(struct bpf_insn);
 	int error = EXIT_FAILURE;
 	int map_fd, percpu_map_fd, prog_fd, cgroup_fd;
 	struct bpf_cgroup_storage_key key;
@@ -44,25 +43,22 @@ int main(int argc, char **argv)
 	unsigned long long *percpu_value;
 	int cpu, nproc;
 
-	nproc = bpf_num_possible_cpus();
+	nproc = get_nprocs_conf();
 	percpu_value = malloc(sizeof(*percpu_value) * nproc);
 	if (!percpu_value) {
 		printf("Not enough memory for per-cpu area (%d cpus)\n", nproc);
 		goto err;
 	}
 
-	/* Use libbpf 1.0 API mode */
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-
-	map_fd = bpf_map_create(BPF_MAP_TYPE_CGROUP_STORAGE, NULL, sizeof(key),
-				sizeof(value), 0, NULL);
+	map_fd = bpf_create_map(BPF_MAP_TYPE_CGROUP_STORAGE, sizeof(key),
+				sizeof(value), 0, 0);
 	if (map_fd < 0) {
 		printf("Failed to create map: %s\n", strerror(errno));
 		goto out;
 	}
 
-	percpu_map_fd = bpf_map_create(BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE, NULL,
-				       sizeof(key), sizeof(value), 0, NULL);
+	percpu_map_fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE,
+				       sizeof(key), sizeof(value), 0, 0);
 	if (percpu_map_fd < 0) {
 		printf("Failed to create map: %s\n", strerror(errno));
 		goto out;
@@ -70,7 +66,7 @@ int main(int argc, char **argv)
 
 	prog[0].imm = percpu_map_fd;
 	prog[7].imm = map_fd;
-	prog_fd = bpf_test_load_program(BPF_PROG_TYPE_CGROUP_SKB,
+	prog_fd = bpf_load_program(BPF_PROG_TYPE_CGROUP_SKB,
 				   prog, insns_cnt, "GPL", 0,
 				   bpf_log_buf, BPF_LOG_BUF_SIZE);
 	if (prog_fd < 0) {

@@ -18,15 +18,16 @@
 
 #include "fxos8700.h"
 
-static int fxos8700_i2c_probe(struct i2c_client *client)
+static int fxos8700_i2c_probe(struct i2c_client *client,
+			      const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct regmap *regmap;
 	const char *name = NULL;
 
 	regmap = devm_regmap_init_i2c(client, &fxos8700_regmap_config);
 	if (IS_ERR(regmap)) {
-		dev_err(&client->dev, "Failed to register i2c regmap %ld\n", PTR_ERR(regmap));
+		dev_err(&client->dev, "Failed to register i2c regmap %d\n",
+			(int)PTR_ERR(regmap));
 		return PTR_ERR(regmap);
 	}
 

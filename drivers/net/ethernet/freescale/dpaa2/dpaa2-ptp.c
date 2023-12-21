@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/msi.h>
 #include <linux/fsl/mc.h>
 
 #include "dpaa2-ptp.h"
@@ -128,6 +129,7 @@ static irqreturn_t dpaa2_ptp_irq_handler_thread(int irq, void *priv)
 static int dpaa2_ptp_probe(struct fsl_mc_device *mc_dev)
 {
 	struct device *dev = &mc_dev->dev;
+	struct fsl_mc_device_irq *irq;
 	struct ptp_qoriq *ptp_qoriq;
 	struct device_node *node;
 	void __iomem *base;
@@ -175,7 +177,8 @@ static int dpaa2_ptp_probe(struct fsl_mc_device *mc_dev)
 		goto err_unmap;
 	}
 
-	ptp_qoriq->irq = mc_dev->irqs[0]->virq;
+	irq = mc_dev->irqs[0];
+	ptp_qoriq->irq = irq->msi_desc->irq;
 
 	err = request_threaded_irq(ptp_qoriq->irq, NULL,
 				   dpaa2_ptp_irq_handler_thread,
@@ -219,7 +222,7 @@ err_exit:
 	return err;
 }
 
-static void dpaa2_ptp_remove(struct fsl_mc_device *mc_dev)
+static int dpaa2_ptp_remove(struct fsl_mc_device *mc_dev)
 {
 	struct device *dev = &mc_dev->dev;
 	struct ptp_qoriq *ptp_qoriq;
@@ -232,6 +235,8 @@ static void dpaa2_ptp_remove(struct fsl_mc_device *mc_dev)
 	fsl_mc_free_irqs(mc_dev);
 	dprtc_close(mc_dev->mc_io, 0, mc_dev->mc_handle);
 	fsl_mc_portal_free(mc_dev->mc_io);
+
+	return 0;
 }
 
 static const struct fsl_mc_device_id dpaa2_ptp_match_id_table[] = {

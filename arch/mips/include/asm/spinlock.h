@@ -10,6 +10,7 @@
 #define _ASM_SPINLOCK_H
 
 #include <asm/processor.h>
+#include <asm/qrwlock.h>
 
 #include <asm-generic/qspinlock_types.h>
 
@@ -26,6 +27,5 @@ static inline void queued_spin_unlock(struct qspinlock *lock)
 }
 
 #include <asm/qspinlock.h>
-#include <asm/qrwlock.h>
 
 #endif /* _ASM_SPINLOCK_H */

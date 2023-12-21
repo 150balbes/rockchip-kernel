@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2012-2020  B.A.T.M.A.N. contributors:
  *
  * Martin Hundebøll, Jeppe Ledet-Pedersen
  */
@@ -10,6 +10,7 @@
 #include "main.h"
 
 #include <linux/netdevice.h>
+#include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
 #include <uapi/linux/batadv_packet.h>
@@ -37,6 +38,8 @@ void batadv_nc_skb_store_for_decoding(struct batadv_priv *bat_priv,
 				      struct sk_buff *skb);
 void batadv_nc_skb_store_sniffed_unicast(struct batadv_priv *bat_priv,
 					 struct sk_buff *skb);
+int batadv_nc_nodes_seq_print_text(struct seq_file *seq, void *offset);
+void batadv_nc_init_debugfs(struct batadv_priv *bat_priv);
 
 #else /* ifdef CONFIG_BATMAN_ADV_NC */
 
@@ -98,6 +101,16 @@ batadv_nc_skb_store_for_decoding(struct batadv_priv *bat_priv,
 static inline void
 batadv_nc_skb_store_sniffed_unicast(struct batadv_priv *bat_priv,
 				    struct sk_buff *skb)
+{
+}
+
+static inline int batadv_nc_nodes_seq_print_text(struct seq_file *seq,
+						 void *offset)
+{
+	return 0;
+}
+
+static inline void batadv_nc_init_debugfs(struct batadv_priv *bat_priv)
 {
 }
 

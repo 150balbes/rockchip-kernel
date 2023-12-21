@@ -11,4 +11,4 @@
 #include <linux/types.h>
 
 #define CREATE_TRACE_POINTS
-#include "trace.h"
+#include <trace/events/intel_iommu.h>

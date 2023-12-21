@@ -1,28 +1,24 @@
 #!/bin/sh
 # SPDX-License-Identifier: LGPL-2.1
 
-if [ $# -gt 0 ] ; then
-	uapi_header_dir=$1
-	beauty_header_dir=$2
-else
-	uapi_header_dir=tools/include/uapi/linux/
-	beauty_header_dir=tools/perf/trace/beauty/include/linux/
-fi
+# This one uses a copy from the kernel sources headers that is in a
+# place used just for these tools/perf/beauty/ usage, we shouldn't not
+# put it in tools/include/linux otherwise they would be used in the
+# normal compiler building process and would drag needless stuff from the
+# kernel.
 
-printf "static const char *socket_ipproto[] = {\n"
-ipproto_regex='^[[:space:]]+IPPROTO_(\w+)[[:space:]]+=[[:space:]]+([[:digit:]]+),.*'
+# When what these scripts need is already in tools/include/ then use it,
+# otherwise grab and check the copy from the kernel sources just for these
+# string table building scripts.
 
-grep -E $ipproto_regex ${uapi_header_dir}/in.h | \
-	sed -r "s/$ipproto_regex/\2 \1/g"	| \
-	sort -n | xargs printf "\t[%s] = \"%s\",\n"
-printf "};\n\n"
+[ $# -eq 1 ] && header_dir=$1 || header_dir=tools/perf/trace/beauty/include/linux/
 
-printf "static const char *socket_level[] = {\n"
-socket_level_regex='^#define[[:space:]]+SOL_(\w+)[[:space:]]+([[:digit:]]+)([[:space:]]+\/.*)?'
+printf "static const char *socket_families[] = {\n"
+# #define AF_LOCAL	1	/* POSIX name for AF_UNIX	*/
+regex='^#define[[:space:]]+AF_(\w+)[[:space:]]+([[:digit:]]+).*'
 
-grep -E $socket_level_regex ${beauty_header_dir}/socket.h | \
-	sed -r "s/$socket_level_regex/\2 \1/g"	| \
-	sort -n | xargs printf "\t[%s] = \"%s\",\n"
-printf "};\n\n"
-
-printf 'DEFINE_STRARRAY(socket_level, "SOL_");\n'
+egrep $regex ${header_dir}/socket.h | \
+	sed -r "s/$regex/\2 \1/g"	| \
+	xargs printf "\t[%s] = \"%s\",\n" | \
+	egrep -v "\"(UNIX|MAX)\""
+printf "};\n"

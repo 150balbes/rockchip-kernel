@@ -23,7 +23,7 @@
 
 /**
  * struct radar_types - contains array of patterns defined for one DFS domain
- * @region: regulatory DFS region
+ * @domain: DFS regulatory domain
  * @num_radar_types: number of radar types to follow
  * @radar_types: radar types array
  */
@@ -133,9 +133,8 @@ static const struct radar_types *dfs_domains[] = {
 
 /**
  * get_dfs_domain_radar_types() - get radar types for a given DFS domain
- * @region: regulatory DFS region
- *
- * Return value: radar_types ptr on success, NULL if DFS domain is not supported
+ * @param domain DFS domain
+ * @return radar_types ptr on success, NULL if DFS domain is not supported
  */
 static const struct radar_types *
 get_dfs_domain_radar_types(enum nl80211_dfs_regions region)
@@ -197,7 +196,7 @@ static void channel_detector_exit(struct dfs_pattern_detector *dpd,
 static struct channel_detector *
 channel_detector_create(struct dfs_pattern_detector *dpd, u16 freq)
 {
-	u32 i;
+	u32 sz, i;
 	struct channel_detector *cd;
 
 	cd = kmalloc(sizeof(*cd), GFP_ATOMIC);
@@ -206,8 +205,8 @@ channel_detector_create(struct dfs_pattern_detector *dpd, u16 freq)
 
 	INIT_LIST_HEAD(&cd->head);
 	cd->freq = freq;
-	cd->detectors = kmalloc_array(dpd->num_radar_types,
-				      sizeof(*cd->detectors), GFP_ATOMIC);
+	sz = sizeof(cd->detectors) * dpd->num_radar_types;
+	cd->detectors = kzalloc(sz, GFP_ATOMIC);
 	if (cd->detectors == NULL)
 		goto fail;
 
@@ -230,10 +229,9 @@ fail:
 
 /**
  * channel_detector_get() - get channel detector for given frequency
- * @dpd: DPD instance pointer
- * @freq: freq frequency in MHz
- *
- * Return value: pointer to channel detector on success, NULL otherwise
+ * @param dpd instance pointer
+ * @param freq frequency in MHz
+ * @return pointer to channel detector on success, NULL otherwise
  *
  * Return existing channel detector for the given frequency or return a
  * newly create one.

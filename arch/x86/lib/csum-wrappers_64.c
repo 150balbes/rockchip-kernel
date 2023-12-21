@@ -32,6 +32,7 @@ csum_and_copy_from_user(const void __user *src, void *dst, int len)
 	user_access_end();
 	return sum;
 }
+EXPORT_SYMBOL(csum_and_copy_from_user);
 
 /**
  * csum_and_copy_to_user - Copy and checksum to user space.
@@ -56,6 +57,7 @@ csum_and_copy_to_user(const void *src, void __user *dst, int len)
 	user_access_end();
 	return sum;
 }
+EXPORT_SYMBOL(csum_and_copy_to_user);
 
 /**
  * csum_partial_copy_nocheck - Copy and checksum.

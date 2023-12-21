@@ -22,6 +22,9 @@
 MODULE_DESCRIPTION(CRD_NAME);
 MODULE_AUTHOR("Tugrul Galatali <galatalt@stuy.edu>, Jaroslav Kysela <perex@perex.cz>");
 MODULE_LICENSE("GPL");
+MODULE_SUPPORTED_DEVICE("{{Analog Devices,AD1848},"
+	        "{Analog Devices,AD1847},"
+		"{Crystal Semiconductors,CS4248}}");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
@@ -72,7 +75,7 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 	struct snd_wss *chip;
 	int error;
 
-	error = snd_devm_card_new(dev, index[n], id[n], THIS_MODULE, 0, &card);
+	error = snd_card_new(dev, index[n], id[n], THIS_MODULE, 0, &card);
 	if (error < 0)
 		return error;
 
@@ -80,20 +83,20 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 			thinkpad[n] ? WSS_HW_THINKPAD : WSS_HW_DETECT,
 			0, &chip);
 	if (error < 0)
-		return error;
+		goto out;
 
 	card->private_data = chip;
 
 	error = snd_wss_pcm(chip, 0);
 	if (error < 0)
-		return error;
+		goto out;
 
 	error = snd_wss_mixer(chip);
 	if (error < 0)
-		return error;
+		goto out;
 
-	strscpy(card->driver, "AD1848", sizeof(card->driver));
-	strscpy(card->shortname, chip->pcm->name, sizeof(card->shortname));
+	strlcpy(card->driver, "AD1848", sizeof(card->driver));
+	strlcpy(card->shortname, chip->pcm->name, sizeof(card->shortname));
 
 	if (!thinkpad[n])
 		snprintf(card->longname, sizeof(card->longname),
@@ -106,9 +109,18 @@ static int snd_ad1848_probe(struct device *dev, unsigned int n)
 
 	error = snd_card_register(card);
 	if (error < 0)
-		return error;
+		goto out;
 
 	dev_set_drvdata(dev, card);
+	return 0;
+
+out:	snd_card_free(card);
+	return error;
+}
+
+static int snd_ad1848_remove(struct device *dev, unsigned int n)
+{
+	snd_card_free(dev_get_drvdata(dev));
 	return 0;
 }
 
@@ -137,6 +149,7 @@ static int snd_ad1848_resume(struct device *dev, unsigned int n)
 static struct isa_driver snd_ad1848_driver = {
 	.match		= snd_ad1848_match,
 	.probe		= snd_ad1848_probe,
+	.remove		= snd_ad1848_remove,
 #ifdef CONFIG_PM
 	.suspend	= snd_ad1848_suspend,
 	.resume		= snd_ad1848_resume,

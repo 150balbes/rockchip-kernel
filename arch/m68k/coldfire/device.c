@@ -581,47 +581,6 @@ static struct platform_device mcf_esdhc = {
 };
 #endif /* MCFSDHC_BASE */
 
-#ifdef MCFFLEXCAN_SIZE
-
-#include <linux/can/platform/flexcan.h>
-
-static struct flexcan_platform_data mcf5441x_flexcan_info = {
-	.clk_src = 1,
-	.clock_frequency = 120000000,
-};
-
-static struct resource mcf5441x_flexcan0_resource[] = {
-	{
-		.start = MCFFLEXCAN_BASE0,
-		.end = MCFFLEXCAN_BASE0 + MCFFLEXCAN_SIZE,
-		.flags = IORESOURCE_MEM,
-	},
-	{
-		.start = MCF_IRQ_IFL0,
-		.end = MCF_IRQ_IFL0,
-		.flags = IORESOURCE_IRQ,
-	},
-	{
-		.start = MCF_IRQ_BOFF0,
-		.end = MCF_IRQ_BOFF0,
-		.flags = IORESOURCE_IRQ,
-	},
-	{
-		.start = MCF_IRQ_ERR0,
-		.end = MCF_IRQ_ERR0,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device mcf_flexcan0 = {
-	.name = "flexcan-mcf5441x",
-	.id = 0,
-	.num_resources = ARRAY_SIZE(mcf5441x_flexcan0_resource),
-	.resource = mcf5441x_flexcan0_resource,
-	.dev.platform_data = &mcf5441x_flexcan_info,
-};
-#endif /* MCFFLEXCAN_SIZE */
-
 static struct platform_device *mcf_devices[] __initdata = {
 	&mcf_uart,
 #if IS_ENABLED(CONFIG_FEC)
@@ -656,9 +615,6 @@ static struct platform_device *mcf_devices[] __initdata = {
 #endif
 #ifdef MCFSDHC_BASE
 	&mcf_esdhc,
-#endif
-#ifdef MCFFLEXCAN_SIZE
-	&mcf_flexcan0,
 #endif
 };
 

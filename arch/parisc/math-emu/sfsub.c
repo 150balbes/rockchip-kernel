@@ -252,7 +252,7 @@ sgl_fsub(
 	    return(NOEXCEPTION);
 	    }
 	right_exponent = 1;	/* Set exponent to reflect different bias
-				 * with denormalized numbers. */
+				 * with denomalized numbers. */
 	}
     else
 	{

@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include <linux/regset.h>
-
 /*
  * Set of msr bits that gdb can change on behalf of a process.
  */
@@ -57,10 +55,6 @@ enum powerpc_regset {
 	REGSET_TAR,		/* TAR register */
 	REGSET_EBB,		/* EBB registers */
 	REGSET_PMR,		/* Performance Monitor Registers */
-	REGSET_DEXCR,		/* DEXCR registers */
-#ifdef CONFIG_CHECKPOINT_RESTORE
-	REGSET_HASHKEYR,	/* HASHKEYR register */
-#endif
 #endif
 #ifdef CONFIG_PPC_MEM_KEYS
 	REGSET_PKEY,		/* AMR register */
@@ -165,14 +159,7 @@ int tm_cgpr32_set(struct task_struct *target, const struct user_regset *regset,
 
 /* ptrace-view */
 
-int ptrace_get_reg(struct task_struct *task, int regno, unsigned long *data);
-int ptrace_put_reg(struct task_struct *task, int regno, unsigned long data);
-
 extern const struct user_regset_view user_ppc_native_view;
-
-/* ptrace-fpu */
-int ptrace_get_fpr(struct task_struct *child, int index, unsigned long *data);
-int ptrace_put_fpr(struct task_struct *child, int index, unsigned long data);
 
 /* ptrace-(no)adv */
 void ppc_gethwdinfo(struct ppc_debug_info *dbginfo);

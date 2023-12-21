@@ -7,10 +7,12 @@
 #include <asm/proc-fns.h>
 #include <asm/system_misc.h>
 
-#include "regs-ost.h"
-#include "reset.h"
-#include "smemc.h"
-#include "generic.h"
+#include <mach/regs-ost.h>
+#include <mach/reset.h>
+#include <mach/smemc.h>
+
+unsigned int reset_status;
+EXPORT_SYMBOL(reset_status);
 
 static void do_hw_reset(void);
 

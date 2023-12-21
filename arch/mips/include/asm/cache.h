@@ -16,6 +16,4 @@
 
 #define __read_mostly __section(".data..read_mostly")
 
-extern void cache_noop(void);
-
 #endif /* _ASM_CACHE_H */

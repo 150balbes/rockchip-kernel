@@ -2,5 +2,6 @@
 #include "blacklist.h"
 
 const char __initconst *const blacklist_hashes[] = {
-#include "blacklist_hash_list"
+#include CONFIG_SYSTEM_BLACKLIST_HASH_LIST
+	, NULL
 };

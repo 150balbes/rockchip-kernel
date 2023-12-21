@@ -4,8 +4,6 @@
 #include <linux/console.h>
 #include <linux/kexec.h>
 #include <linux/delay.h>
-#include <linux/reboot.h>
-
 #include <asm/cacheflush.h>
 #include <asm/sections.h>
 

@@ -15,8 +15,6 @@
 #include "qed_hsi.h"
 #include "qed_dev_api.h"
 
-#define QED_MFW_REPORT_STR_SIZE	256
-
 struct qed_mcp_link_speed_params {
 	bool					autoneg;
 
@@ -268,97 +266,97 @@ union qed_mfw_tlv_data {
 #define QED_NVM_CFG_OPTION_ENTITY_SEL	BIT(4)
 
 /**
- * qed_mcp_get_link_params(): Returns the link params of the hw function.
+ * @brief - returns the link params of the hw function
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Returns: Pointer to link params.
+ * @returns pointer to link params
  */
-struct qed_mcp_link_params *qed_mcp_get_link_params(struct qed_hwfn *p_hwfn);
+struct qed_mcp_link_params *qed_mcp_get_link_params(struct qed_hwfn *);
 
 /**
- * qed_mcp_get_link_state(): Return the link state of the hw function.
+ * @brief - return the link state of the hw function
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Returns: Pointer to link state.
+ * @returns pointer to link state
  */
-struct qed_mcp_link_state *qed_mcp_get_link_state(struct qed_hwfn *p_hwfn);
+struct qed_mcp_link_state *qed_mcp_get_link_state(struct qed_hwfn *);
 
 /**
- * qed_mcp_get_link_capabilities(): Return the link capabilities of the
- *                                  hw function.
+ * @brief - return the link capabilities of the hw function
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Returns: Pointer to link capabilities.
+ * @returns pointer to link capabilities
  */
 struct qed_mcp_link_capabilities
 	*qed_mcp_get_link_capabilities(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_set_link(): Request the MFW to set the link according
- *                     to 'link_input'.
+ * @brief Request the MFW to set the the link according to 'link_input'.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @b_up: Raise link if `true'. Reset link if `false'.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param b_up - raise link if `true'. Reset link if `false'.
  *
- * Return: Int.
+ * @return int
  */
 int qed_mcp_set_link(struct qed_hwfn   *p_hwfn,
 		     struct qed_ptt     *p_ptt,
 		     bool               b_up);
 
 /**
- * qed_mcp_get_mfw_ver(): Get the management firmware version value.
+ * @brief Get the management firmware version value
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_mfw_ver: MFW version value.
- * @p_running_bundle_id: Image id in nvram; Optional.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_mfw_ver    - mfw version value
+ * @param p_running_bundle_id	- image id in nvram; Optional.
  *
- * Return: Int - 0 - operation was successful.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_get_mfw_ver(struct qed_hwfn *p_hwfn,
 			struct qed_ptt *p_ptt,
 			u32 *p_mfw_ver, u32 *p_running_bundle_id);
 
 /**
- * qed_mcp_get_mbi_ver(): Get the MBI version value.
+ * @brief Get the MBI version value
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_mbi_ver: A pointer to a variable to be filled with the MBI version.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_mbi_ver - A pointer to a variable to be filled with the MBI version.
  *
- * Return: Int - 0 - operation was successful.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_get_mbi_ver(struct qed_hwfn *p_hwfn,
 			struct qed_ptt *p_ptt, u32 *p_mbi_ver);
 
 /**
- * qed_mcp_get_media_type(): Get media type value of the port.
+ * @brief Get media type value of the port.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @media_type: Media type value
+ * @param cdev      - qed dev pointer
+ * @param p_ptt
+ * @param mfw_ver    - media type value
  *
- * Return: Int - 0 - Operation was successul.
- *              -EBUSY - Operation failed
+ * @return int -
+ *      0 - Operation was successul.
+ *      -EBUSY - Operation failed
  */
 int qed_mcp_get_media_type(struct qed_hwfn *p_hwfn,
 			   struct qed_ptt *p_ptt, u32 *media_type);
 
 /**
- * qed_mcp_get_transceiver_data(): Get transceiver data of the port.
+ * @brief Get transceiver data of the port.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_transceiver_state: Transceiver state.
- * @p_tranceiver_type: Media type value.
+ * @param cdev      - qed dev pointer
+ * @param p_ptt
+ * @param p_transceiver_state - transceiver state.
+ * @param p_transceiver_type - media type value
  *
- * Return: Int - 0 - Operation was successul.
- *              -EBUSY - Operation failed
+ * @return int -
+ *      0 - Operation was successful.
+ *      -EBUSY - Operation failed
  */
 int qed_mcp_get_transceiver_data(struct qed_hwfn *p_hwfn,
 				 struct qed_ptt *p_ptt,
@@ -366,49 +364,50 @@ int qed_mcp_get_transceiver_data(struct qed_hwfn *p_hwfn,
 				 u32 *p_tranceiver_type);
 
 /**
- * qed_mcp_trans_speed_mask(): Get transceiver supported speed mask.
+ * @brief Get transceiver supported speed mask.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_speed_mask: Bit mask of all supported speeds.
+ * @param cdev      - qed dev pointer
+ * @param p_ptt
+ * @param p_speed_mask - Bit mask of all supported speeds.
  *
- * Return: Int - 0 - Operation was successul.
- *              -EBUSY - Operation failed
+ * @return int -
+ *      0 - Operation was successful.
+ *      -EBUSY - Operation failed
  */
 
 int qed_mcp_trans_speed_mask(struct qed_hwfn *p_hwfn,
 			     struct qed_ptt *p_ptt, u32 *p_speed_mask);
 
 /**
- * qed_mcp_get_board_config(): Get board configuration.
+ * @brief Get board configuration.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_board_config: Board config.
+ * @param cdev      - qed dev pointer
+ * @param p_ptt
+ * @param p_board_config - Board config.
  *
- * Return: Int - 0 - Operation was successul.
- *              -EBUSY - Operation failed
+ * @return int -
+ *      0 - Operation was successful.
+ *      -EBUSY - Operation failed
  */
 int qed_mcp_get_board_config(struct qed_hwfn *p_hwfn,
 			     struct qed_ptt *p_ptt, u32 *p_board_config);
 
 /**
- * qed_mcp_cmd(): Sleepable function for sending commands to the MCP
- *                mailbox. It acquire mutex lock for the entire
- *                operation, from sending the request until the MCP
- *                response. Waiting for MCP response will be checked up
- *                to 5 seconds every 10ms. Should not be called from atomic
- *                context.
+ * @brief General function for sending commands to the MCP
+ *        mailbox. It acquire mutex lock for the entire
+ *        operation, from sending the request until the MCP
+ *        response. Waiting for MCP response will be checked up
+ *        to 5 seconds every 5ms.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @cmd: command to be sent to the MCP.
- * @param: Optional param
- * @o_mcp_resp: The MCP response code (exclude sequence).
- * @o_mcp_param: Optional parameter provided by the MCP
+ * @param p_hwfn     - hw function
+ * @param p_ptt      - PTT required for register access
+ * @param cmd        - command to be sent to the MCP.
+ * @param param      - Optional param
+ * @param o_mcp_resp - The MCP response code (exclude sequence).
+ * @param o_mcp_param- Optional parameter provided by the MCP
  *                     response
- *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation
+ * was successul.
  */
 int qed_mcp_cmd(struct qed_hwfn *p_hwfn,
 		struct qed_ptt *p_ptt,
@@ -418,64 +417,37 @@ int qed_mcp_cmd(struct qed_hwfn *p_hwfn,
 		u32 *o_mcp_param);
 
 /**
- * qed_mcp_cmd_nosleep(): Function for sending commands to the MCP
- *                        mailbox. It acquire mutex lock for the entire
- *                        operation, from sending the request until the MCP
- *                        response. Waiting for MCP response will be checked up
- *                        to 5 seconds every 10us. Should be called when sleep
- *                        is not allowed.
+ * @brief - drains the nig, allowing completion to pass in case of pauses.
+ *          (Should be called only from sleepable context)
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @cmd: command to be sent to the MCP.
- * @param: Optional param
- * @o_mcp_resp: The MCP response code (exclude sequence).
- * @o_mcp_param: Optional parameter provided by the MCP
- *                     response
- *
- * Return: Int - 0 - Operation was successul.
- */
-int qed_mcp_cmd_nosleep(struct qed_hwfn *p_hwfn,
-			struct qed_ptt *p_ptt,
-			u32 cmd,
-			u32 param,
-			u32 *o_mcp_resp,
-			u32 *o_mcp_param);
-
-/**
- * qed_mcp_drain(): drains the nig, allowing completion to pass in
- *                  case of pauses.
- *                  (Should be called only from sleepable context)
- *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
  */
 int qed_mcp_drain(struct qed_hwfn *p_hwfn,
 		  struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_get_flash_size(): Get the flash size value.
+ * @brief Get the flash size value
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @p_flash_size: Flash size in bytes to be filled.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_flash_size  - flash size in bytes to be filled.
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successul.
  */
 int qed_mcp_get_flash_size(struct qed_hwfn     *p_hwfn,
 			   struct qed_ptt       *p_ptt,
 			   u32 *p_flash_size);
 
 /**
- * qed_mcp_send_drv_version(): Send driver version to MFW.
+ * @brief Send driver version to MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @p_ver: Version value.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param version - Version value
+ * @param name - Protocol driver name
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successul.
  */
 int
 qed_mcp_send_drv_version(struct qed_hwfn *p_hwfn,
@@ -483,148 +455,146 @@ qed_mcp_send_drv_version(struct qed_hwfn *p_hwfn,
 			 struct qed_mcp_drv_version *p_ver);
 
 /**
- * qed_get_process_kill_counter(): Read the MFW process kill counter.
+ * @brief Read the MFW process kill counter
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: u32.
+ * @return u32
  */
 u32 qed_get_process_kill_counter(struct qed_hwfn *p_hwfn,
 				 struct qed_ptt *p_ptt);
 
 /**
- * qed_start_recovery_process(): Trigger a recovery process.
+ * @brief Trigger a recovery process
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
+ *  @param p_hwfn
+ *  @param p_ptt
  *
- * Return: Int.
+ * @return int
  */
 int qed_start_recovery_process(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_recovery_prolog(): A recovery handler must call this function
- *                        as its first step.
- *                        It is assumed that the handler is not run from
- *                        an interrupt context.
+ * @brief A recovery handler must call this function as its first step.
+ *        It is assumed that the handler is not run from an interrupt context.
  *
- * @cdev: Qed dev pointer.
+ *  @param cdev
+ *  @param p_ptt
  *
- * Return: int.
+ * @return int
  */
 int qed_recovery_prolog(struct qed_dev *cdev);
 
 /**
- * qed_mcp_ov_update_current_config(): Notify MFW about the change in base
- *                                    device properties
+ * @brief Notify MFW about the change in base device properties
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @client: Qed client type.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param client - qed client type
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_current_config(struct qed_hwfn *p_hwfn,
 				     struct qed_ptt *p_ptt,
 				     enum qed_ov_client client);
 
 /**
- * qed_mcp_ov_update_driver_state(): Notify MFW about the driver state.
+ * @brief Notify MFW about the driver state
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @drv_state: Driver state.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param drv_state - Driver state
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_driver_state(struct qed_hwfn *p_hwfn,
 				   struct qed_ptt *p_ptt,
 				   enum qed_ov_driver_state drv_state);
 
 /**
- * qed_mcp_ov_update_mtu(): Send MTU size to MFW.
+ * @brief Send MTU size to MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @mtu: MTU size.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param mtu - MTU size
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_mtu(struct qed_hwfn *p_hwfn,
 			  struct qed_ptt *p_ptt, u16 mtu);
 
 /**
- * qed_mcp_ov_update_mac(): Send MAC address to MFW.
+ * @brief Send MAC address to MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @mac: MAC address.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param mac - MAC address
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_mac(struct qed_hwfn *p_hwfn,
-			  struct qed_ptt *p_ptt, const u8 *mac);
+			  struct qed_ptt *p_ptt, u8 *mac);
 
 /**
- * qed_mcp_ov_update_wol(): Send WOL mode to MFW.
+ * @brief Send WOL mode to MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @wol: WOL mode.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param wol - WOL mode
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_wol(struct qed_hwfn *p_hwfn,
 			  struct qed_ptt *p_ptt,
 			  enum qed_ov_wol wol);
 
 /**
- * qed_mcp_set_led(): Set LED status.
+ * @brief Set LED status
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @mode: LED mode.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param mode - LED mode
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_set_led(struct qed_hwfn *p_hwfn,
 		    struct qed_ptt *p_ptt,
 		    enum qed_led_mode mode);
 
 /**
- * qed_mcp_nvm_read(): Read from NVM.
+ * @brief Read from nvm
  *
- * @cdev: Qed dev pointer.
- * @addr: NVM offset.
- * @p_buf: NVM read buffer.
- * @len: Buffer len.
+ *  @param cdev
+ *  @param addr - nvm offset
+ *  @param p_buf - nvm read buffer
+ *  @param len - buffer len
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_nvm_read(struct qed_dev *cdev, u32 addr, u8 *p_buf, u32 len);
 
 /**
- * qed_mcp_nvm_write(): Write to NVM.
+ * @brief Write to nvm
  *
- * @cdev: Qed dev pointer.
- * @addr: NVM offset.
- * @cmd: NVM command.
- * @p_buf: NVM write buffer.
- * @len: Buffer len.
+ *  @param cdev
+ *  @param addr - nvm offset
+ *  @param cmd - nvm command
+ *  @param p_buf - nvm write buffer
+ *  @param len - buffer len
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_nvm_write(struct qed_dev *cdev,
 		      u32 cmd, u32 addr, u8 *p_buf, u32 len);
 
 /**
- * qed_mcp_nvm_resp(): Check latest response.
+ * @brief Check latest response
  *
- * @cdev: Qed dev pointer.
- * @p_buf: NVM write buffer.
+ *  @param cdev
+ *  @param p_buf - nvm write buffer
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_nvm_resp(struct qed_dev *cdev, u8 *p_buf);
 
@@ -634,13 +604,13 @@ struct qed_nvm_image_att {
 };
 
 /**
- * qed_mcp_get_nvm_image_att(): Allows reading a whole nvram image.
+ * @brief Allows reading a whole nvram image
  *
- * @p_hwfn: HW device data.
- * @image_id: Image to get attributes for.
- * @p_image_att: Image attributes structure into which to fill data.
+ * @param p_hwfn
+ * @param image_id - image to get attributes for
+ * @param p_image_att - image attributes structure into which to fill data
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int
 qed_mcp_get_nvm_image_att(struct qed_hwfn *p_hwfn,
@@ -648,65 +618,64 @@ qed_mcp_get_nvm_image_att(struct qed_hwfn *p_hwfn,
 			  struct qed_nvm_image_att *p_image_att);
 
 /**
- * qed_mcp_get_nvm_image(): Allows reading a whole nvram image.
+ * @brief Allows reading a whole nvram image
  *
- * @p_hwfn: HW device data.
- * @image_id: image requested for reading.
- * @p_buffer: allocated buffer into which to fill data.
- * @buffer_len: length of the allocated buffer.
+ * @param p_hwfn
+ * @param image_id - image requested for reading
+ * @param p_buffer - allocated buffer into which to fill data
+ * @param buffer_len - length of the allocated buffer.
  *
- * Return: 0 if p_buffer now contains the nvram image.
+ * @return 0 iff p_buffer now contains the nvram image.
  */
 int qed_mcp_get_nvm_image(struct qed_hwfn *p_hwfn,
 			  enum qed_nvm_images image_id,
 			  u8 *p_buffer, u32 buffer_len);
 
 /**
- * qed_mcp_bist_register_test(): Bist register test.
+ * @brief Bist register test
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
+ *  @param p_hwfn    - hw function
+ *  @param p_ptt     - PTT required for register access
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_bist_register_test(struct qed_hwfn *p_hwfn,
 			       struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_bist_clock_test(): Bist clock test.
+ * @brief Bist clock test
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
+ *  @param p_hwfn    - hw function
+ *  @param p_ptt     - PTT required for register access
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_bist_clock_test(struct qed_hwfn *p_hwfn,
 			    struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_bist_nvm_get_num_images(): Bist nvm test - get number of images.
+ * @brief Bist nvm test - get number of images
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @num_images: number of images if operation was
+ *  @param p_hwfn       - hw function
+ *  @param p_ptt        - PTT required for register access
+ *  @param num_images   - number of images if operation was
  *			  successful. 0 if not.
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_bist_nvm_get_num_images(struct qed_hwfn *p_hwfn,
 				    struct qed_ptt *p_ptt,
 				    u32 *num_images);
 
 /**
- * qed_mcp_bist_nvm_get_image_att(): Bist nvm test - get image attributes
- *                                   by index.
+ * @brief Bist nvm test - get image attributes by index
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @p_image_att: Attributes of image.
- * @image_index: Index of image to get information for.
+ *  @param p_hwfn      - hw function
+ *  @param p_ptt       - PTT required for register access
+ *  @param p_image_att - Attributes of image
+ *  @param image_index - Index of image to get information for
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_bist_nvm_get_image_att(struct qed_hwfn *p_hwfn,
 				   struct qed_ptt *p_ptt,
@@ -714,26 +683,23 @@ int qed_mcp_bist_nvm_get_image_att(struct qed_hwfn *p_hwfn,
 				   u32 image_index);
 
 /**
- * qed_mfw_process_tlv_req(): Processes the TLV request from MFW i.e.,
- *                            get the required TLV info
- *                            from the qed client and send it to the MFW.
+ * @brief - Processes the TLV request from MFW i.e., get the required TLV info
+ *          from the qed client and send it to the MFW.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mfw_process_tlv_req(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_send_raw_debug_data(): Send raw debug data to the MFW
+ * @brief Send raw debug data to the MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_buf: raw debug data buffer.
- * @size: Buffer size.
- *
- * Return : Int.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_buf - raw debug data buffer
+ * @param size - buffer size
  */
 int
 qed_mcp_send_raw_debug_data(struct qed_hwfn *p_hwfn,
@@ -788,14 +754,6 @@ struct qed_mcp_info {
 
 	/* S/N for debug data mailbox commands */
 	atomic_t dbg_data_seq;
-
-	/* Spinlock used to sync the flag mcp_handling_status with
-	 * the mfw events handler
-	 */
-	spinlock_t unload_lock;
-	unsigned long mcp_handling_status;
-#define QED_MCP_BYPASS_PROC_BIT 0
-#define QED_MCP_IN_PROCESSING_BIT       1
 };
 
 struct qed_mcp_mb_params {
@@ -838,49 +796,47 @@ qed_mcp_is_ext_speed_supported(const struct qed_hwfn *p_hwfn)
 }
 
 /**
- * qed_mcp_cmd_init(): Initialize the interface with the MCP.
+ * @brief Initialize the interface with the MCP
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
+ * @param p_hwfn - HW func
+ * @param p_ptt - PTT required for register access
  *
- * Return: Int.
+ * @return int
  */
 int qed_mcp_cmd_init(struct qed_hwfn *p_hwfn,
 		     struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_cmd_port_init(): Initialize the port interface with the MCP
+ * @brief Initialize the port interface with the MCP
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Void.
- *
+ * @param p_hwfn
+ * @param p_ptt
  * Can only be called after `num_ports_in_engines' is set
  */
 void qed_mcp_cmd_port_init(struct qed_hwfn *p_hwfn,
 			   struct qed_ptt *p_ptt);
 /**
- * qed_mcp_free(): Releases resources allocated during the init process.
+ * @brief Releases resources allocated during the init process.
  *
- * @p_hwfn: HW function.
+ * @param p_hwfn - HW func
+ * @param p_ptt - PTT required for register access
  *
- * Return: Int.
+ * @return int
  */
 
 int qed_mcp_free(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_handle_events(): This function is called from the DPC context.
- *           After pointing PTT to the mfw mb, check for events sent by
- *           the MCP to the driver and ack them. In case a critical event
- *           detected, it will be handled here, otherwise the work will be
- *            queued to a sleepable work-queue.
+ * @brief This function is called from the DPC context. After
+ * pointing PTT to the mfw mb, check for events sent by the MCP
+ * to the driver and ack them. In case a critical event
+ * detected, it will be handled here, otherwise the work will be
+ * queued to a sleepable work-queue.
  *
- * @p_hwfn: HW function.
- * @p_ptt: PTT required for register access.
- *
- * Return: Int - 0 - Operation was successul.
+ * @param p_hwfn - HW function
+ * @param p_ptt - PTT required for register access
+ * @return int - 0 - operation
+ * was successul.
  */
 int qed_mcp_handle_events(struct qed_hwfn *p_hwfn,
 			  struct qed_ptt *p_ptt);
@@ -902,177 +858,169 @@ struct qed_load_req_params {
 };
 
 /**
- * qed_mcp_load_req(): Sends a LOAD_REQ to the MFW, and in case the
- *                     operation succeeds, returns whether this PF is
- *                     the first on the engine/port or function.
+ * @brief Sends a LOAD_REQ to the MFW, and in case the operation succeeds,
+ *        returns whether this PF is the first on the engine/port or function.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_params: Params.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_params
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - Operation was successful.
  */
 int qed_mcp_load_req(struct qed_hwfn *p_hwfn,
 		     struct qed_ptt *p_ptt,
 		     struct qed_load_req_params *p_params);
 
 /**
- * qed_mcp_load_done(): Sends a LOAD_DONE message to the MFW.
+ * @brief Sends a LOAD_DONE message to the MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - Operation was successful.
  */
 int qed_mcp_load_done(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_unload_req(): Sends a UNLOAD_REQ message to the MFW.
+ * @brief Sends a UNLOAD_REQ message to the MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - Operation was successful.
  */
 int qed_mcp_unload_req(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_unload_done(): Sends a UNLOAD_DONE message to the MFW
+ * @brief Sends a UNLOAD_DONE message to the MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - Operation was successful.
  */
 int qed_mcp_unload_done(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_read_mb(): Read the MFW mailbox into Current buffer.
+ * @brief Read the MFW mailbox into Current buffer.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param p_ptt
  */
 void qed_mcp_read_mb(struct qed_hwfn *p_hwfn,
 		     struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_ack_vf_flr(): Ack to mfw that driver finished FLR process for VFs
+ * @brief Ack to mfw that driver finished FLR process for VFs
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @vfs_to_ack: bit mask of all engine VFs for which the PF acks.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param vfs_to_ack - bit mask of all engine VFs for which the PF acks.
  *
- * Return: Int - 0 - Operation was successul.
+ * @param return int - 0 upon success.
  */
 int qed_mcp_ack_vf_flr(struct qed_hwfn *p_hwfn,
 		       struct qed_ptt *p_ptt, u32 *vfs_to_ack);
 
 /**
- * qed_mcp_fill_shmem_func_info(): Calls during init to read shmem of
- *                                 all function-related info.
+ * @brief - calls during init to read shmem of all function-related info.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mcp_fill_shmem_func_info(struct qed_hwfn *p_hwfn,
 				 struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_reset(): Reset the MCP using mailbox command.
+ * @brief - Reset the MCP using mailbox command.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mcp_reset(struct qed_hwfn *p_hwfn,
 		  struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_nvm_rd_cmd(): Sends an NVM read command request to the MFW to get
- *                       a buffer.
+ * @brief - Sends an NVM read command request to the MFW to get
+ *        a buffer.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @cmd: (Command) DRV_MSG_CODE_NVM_GET_FILE_DATA or
- *            DRV_MSG_CODE_NVM_READ_NVRAM commands.
- * @param: [0:23] - Offset [24:31] - Size.
- * @o_mcp_resp: MCP response.
- * @o_mcp_param: MCP response param.
- * @o_txn_size: Buffer size output.
- * @o_buf: Pointer to the buffer returned by the MFW.
- * @b_can_sleep: Can sleep.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param cmd - Command: DRV_MSG_CODE_NVM_GET_FILE_DATA or
+ *            DRV_MSG_CODE_NVM_READ_NVRAM commands
+ * @param param - [0:23] - Offset [24:31] - Size
+ * @param o_mcp_resp - MCP response
+ * @param o_mcp_param - MCP response param
+ * @param o_txn_size -  Buffer size output
+ * @param o_buf - Pointer to the buffer returned by the MFW.
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mcp_nvm_rd_cmd(struct qed_hwfn *p_hwfn,
 		       struct qed_ptt *p_ptt,
 		       u32 cmd,
 		       u32 param,
 		       u32 *o_mcp_resp,
-		       u32 *o_mcp_param,
-		       u32 *o_txn_size, u32 *o_buf, bool b_can_sleep);
+		       u32 *o_mcp_param, u32 *o_txn_size, u32 *o_buf);
 
 /**
- * qed_mcp_phy_sfp_read(): Read from sfp.
+ * @brief Read from sfp
  *
- * @p_hwfn: HW device data.
- * @p_ptt: PTT required for register access.
- * @port: transceiver port.
- * @addr: I2C address.
- * @offset: offset in sfp.
- * @len: buffer length.
- * @p_buf: buffer to read into.
+ *  @param p_hwfn - hw function
+ *  @param p_ptt  - PTT required for register access
+ *  @param port   - transceiver port
+ *  @param addr   - I2C address
+ *  @param offset - offset in sfp
+ *  @param len    - buffer length
+ *  @param p_buf  - buffer to read into
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_phy_sfp_read(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 			 u32 port, u32 addr, u32 offset, u32 len, u8 *p_buf);
 
 /**
- * qed_mcp_is_init(): indicates whether the MFW objects [under mcp_info]
- *                    are accessible
+ * @brief indicates whether the MFW objects [under mcp_info] are accessible
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Return: true if MFW is running and mcp_info is initialized.
+ * @return true iff MFW is running and mcp_info is initialized
  */
 bool qed_mcp_is_init(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_config_vf_msix(): Request MFW to configure MSI-X for a VF.
+ * @brief request MFW to configure MSI-X for a VF
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @vf_id: absolute inside engine.
- * @num: number of entries to request.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param vf_id - absolute inside engine
+ * @param num_sbs - number of entries to request
  *
- * Return: Int.
+ * @return int
  */
 int qed_mcp_config_vf_msix(struct qed_hwfn *p_hwfn,
 			   struct qed_ptt *p_ptt, u8 vf_id, u8 num);
 
 /**
- * qed_mcp_halt(): Halt the MCP.
+ * @brief - Halt the MCP.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mcp_halt(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_resume: Wake up the MCP.
+ * @brief - Wake up the MCP.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ * @param p_hwfn
+ * @param p_ptt
  *
- * Return: 0 upon success.
+ * @param return 0 upon success.
  */
 int qed_mcp_resume(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
@@ -1090,13 +1038,13 @@ int __qed_configure_pf_min_bandwidth(struct qed_hwfn *p_hwfn,
 int qed_mcp_mask_parities(struct qed_hwfn *p_hwfn,
 			  struct qed_ptt *p_ptt, u32 mask_parities);
 
-/* qed_mcp_mdump_get_retain(): Gets the mdump retained data from the MFW.
+/* @brief - Gets the mdump retained data from the MFW.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_mdump_retain: mdump retain.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_mdump_retain
  *
- * Return: Int - 0 - Operation was successul.
+ * @param return 0 upon success.
  */
 int
 qed_mcp_mdump_get_retain(struct qed_hwfn *p_hwfn,
@@ -1104,15 +1052,15 @@ qed_mcp_mdump_get_retain(struct qed_hwfn *p_hwfn,
 			 struct mdump_retain_data_stc *p_mdump_retain);
 
 /**
- * qed_mcp_set_resc_max_val(): Sets the MFW's max value for the given resource.
+ * @brief - Sets the MFW's max value for the given resource
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @res_id: RES ID.
- * @resc_max_val: Resec max val.
- * @p_mcp_resp: MCP Resp
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param res_id
+ *  @param resc_max_val
+ *  @param p_mcp_resp
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int
 qed_mcp_set_resc_max_val(struct qed_hwfn *p_hwfn,
@@ -1121,17 +1069,16 @@ qed_mcp_set_resc_max_val(struct qed_hwfn *p_hwfn,
 			 u32 resc_max_val, u32 *p_mcp_resp);
 
 /**
- * qed_mcp_get_resc_info(): Gets the MFW allocation info for the given
- *                          resource.
+ * @brief - Gets the MFW allocation info for the given resource
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @res_id: Res ID.
- * @p_mcp_resp: MCP resp.
- * @p_resc_num: Resc num.
- * @p_resc_start: Resc start.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param res_id
+ *  @param p_mcp_resp
+ *  @param p_resc_num
+ *  @param p_resc_start
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int
 qed_mcp_get_resc_info(struct qed_hwfn *p_hwfn,
@@ -1140,13 +1087,13 @@ qed_mcp_get_resc_info(struct qed_hwfn *p_hwfn,
 		      u32 *p_mcp_resp, u32 *p_resc_num, u32 *p_resc_start);
 
 /**
- * qed_mcp_ov_update_eswitch(): Send eswitch mode to MFW.
+ * @brief Send eswitch mode to MFW
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @eswitch: eswitch mode.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param eswitch - eswitch mode
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_ov_update_eswitch(struct qed_hwfn *p_hwfn,
 			      struct qed_ptt *p_ptt,
@@ -1166,12 +1113,12 @@ enum qed_resc_lock {
 };
 
 /**
- * qed_mcp_initiate_pf_flr(): Initiates PF FLR.
+ * @brief - Initiates PF FLR
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
+ *  @param p_hwfn
+ *  @param p_ptt
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int qed_mcp_initiate_pf_flr(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 struct qed_resc_lock_params {
@@ -1204,13 +1151,13 @@ struct qed_resc_lock_params {
 };
 
 /**
- * qed_mcp_resc_lock(): Acquires MFW generic resource lock.
+ * @brief Acquires MFW generic resource lock
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_params: Params.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param p_params
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int
 qed_mcp_resc_lock(struct qed_hwfn *p_hwfn,
@@ -1228,13 +1175,13 @@ struct qed_resc_unlock_params {
 };
 
 /**
- * qed_mcp_resc_unlock(): Releases MFW generic resource lock.
+ * @brief Releases MFW generic resource lock
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @p_params: Params.
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param p_params
  *
- * Return: Int - 0 - Operation was successul.
+ * @return int - 0 - operation was successful.
  */
 int
 qed_mcp_resc_unlock(struct qed_hwfn *p_hwfn,
@@ -1242,15 +1189,12 @@ qed_mcp_resc_unlock(struct qed_hwfn *p_hwfn,
 		    struct qed_resc_unlock_params *p_params);
 
 /**
- * qed_mcp_resc_lock_default_init(): Default initialization for
- *                                   lock/unlock resource structs.
+ * @brief - default initialization for lock/unlock resource structs
  *
- * @p_lock: lock params struct to be initialized; Can be NULL.
- * @p_unlock: unlock params struct to be initialized; Can be NULL.
- * @resource: the requested resource.
- * @b_is_permanent: disable retries & aging when set.
- *
- * Return: Void.
+ * @param p_lock - lock params struct to be initialized; Can be NULL
+ * @param p_unlock - unlock params struct to be initialized; Can be NULL
+ * @param resource - the requested resource
+ * @paral b_is_permanent - disable retries & aging when set
  */
 void qed_mcp_resc_lock_default_init(struct qed_resc_lock_params *p_lock,
 				    struct qed_resc_unlock_params *p_unlock,
@@ -1258,139 +1202,96 @@ void qed_mcp_resc_lock_default_init(struct qed_resc_lock_params *p_lock,
 				    resource, bool b_is_permanent);
 
 /**
- * qed_mcp_is_smart_an_supported(): Return whether management firmware
- *                                  support smart AN
+ * @brief - Return whether management firmware support smart AN
  *
- * @p_hwfn: HW device data.
+ * @param p_hwfn
  *
- * Return: bool true if feature is supported.
+ * @return bool - true if feature is supported.
  */
 bool qed_mcp_is_smart_an_supported(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_get_capabilities(): Learn of supported MFW features;
- *                             To be done during early init.
+ * @brief Learn of supported MFW features; To be done during early init
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
  */
 int qed_mcp_get_capabilities(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_set_capabilities(): Inform MFW of set of features supported
- *                             by driver. Should be done inside the content
- *                             of the LOAD_REQ.
+ * @brief Inform MFW of set of features supported by driver. Should be done
+ * inside the content of the LOAD_REQ.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
  */
 int qed_mcp_set_capabilities(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_read_ufp_config(): Read ufp config from the shared memory.
+ * @brief Read ufp config from the shared memory.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Void.
+ * @param p_hwfn
+ * @param p_ptt
  */
 void qed_mcp_read_ufp_config(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_nvm_info_populate(): Populate the nvm info shadow in the given
- *                              hardware function.
+ * @brief Populate the nvm info shadow in the given hardware function
  *
- * @p_hwfn: HW device data.
- *
- * Return: Int.
+ * @param p_hwfn
  */
 int qed_mcp_nvm_info_populate(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_nvm_info_free(): Delete nvm info shadow in the given
- *                          hardware function.
+ * @brief Delete nvm info shadow in the given hardware function
  *
- * @p_hwfn: HW device data.
- *
- * Return: Void.
+ * @param p_hwfn
  */
 void qed_mcp_nvm_info_free(struct qed_hwfn *p_hwfn);
 
 /**
- * qed_mcp_get_engine_config(): Get the engine affinity configuration.
+ * @brief Get the engine affinity configuration.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
  */
 int qed_mcp_get_engine_config(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_get_ppfid_bitmap(): Get the PPFID bitmap.
+ * @brief Get the PPFID bitmap.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
  */
 int qed_mcp_get_ppfid_bitmap(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
 
 /**
- * qed_mcp_nvm_get_cfg(): Get NVM config attribute value.
+ * @brief Get NVM config attribute value.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @option_id: Option ID.
- * @entity_id: Entity ID.
- * @flags: Flags.
- * @p_buf: Buf.
- * @p_len: Len.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param option_id
+ * @param entity_id
+ * @param flags
+ * @param p_buf
+ * @param p_len
  */
 int qed_mcp_nvm_get_cfg(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 			u16 option_id, u8 entity_id, u16 flags, u8 *p_buf,
 			u32 *p_len);
 
 /**
- * qed_mcp_nvm_set_cfg(): Set NVM config attribute value.
+ * @brief Set NVM config attribute value.
  *
- * @p_hwfn: HW device data.
- * @p_ptt: P_ptt.
- * @option_id: Option ID.
- * @entity_id: Entity ID.
- * @flags: Flags.
- * @p_buf: Buf.
- * @len: Len.
- *
- * Return: Int.
+ * @param p_hwfn
+ * @param p_ptt
+ * @param option_id
+ * @param entity_id
+ * @param flags
+ * @param p_buf
+ * @param len
  */
 int qed_mcp_nvm_set_cfg(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 			u16 option_id, u8 entity_id, u16 flags, u8 *p_buf,
 			u32 len);
-
-/**
- * qed_mcp_is_esl_supported(): Return whether management firmware support ESL or not.
- *
- * @p_hwfn: hw function pointer
- *
- * Return: true if esl is supported, otherwise return false
- */
-bool qed_mcp_is_esl_supported(struct qed_hwfn *p_hwfn);
-
-/**
- * qed_mcp_get_esl_status(): Get enhanced system lockdown status
- *
- * @p_hwfn: hw function pointer
- * @p_ptt: ptt resource pointer
- * @active: ESL active status data pointer
- *
- * Return: 0 with esl status info on success, otherwise return error
- */
-int qed_mcp_get_esl_status(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt, bool *active);
 #endif

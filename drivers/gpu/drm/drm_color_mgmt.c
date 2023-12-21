@@ -22,7 +22,6 @@
 
 #include <linux/uaccess.h>
 
-#include <drm/drm_atomic.h>
 #include <drm/drm_color_mgmt.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_device.h>
@@ -34,7 +33,7 @@
 /**
  * DOC: overview
  *
- * Color management or color space adjustments is supported through a set of 5
+ * Color management or color space adjustments is supported through a set of 7
  * properties on the &drm_crtc object. They are set up by calling
  * drm_crtc_enable_color_mgmt().
  *
@@ -61,7 +60,7 @@
  * “CTM”:
  *	Blob property to set the current transformation matrix (CTM) apply to
  *	pixel data after the lookup through the degamma LUT and before the
- *	lookup through the gamma LUT. The data is interpreted as a struct
+ *	lookup through the cubic LUT. The data is interpreted as a struct
  *	&drm_color_ctm.
  *
  *	Setting this to NULL (blob property value set to 0) means a
@@ -69,22 +68,45 @@
  *	boot-up state too. Drivers can access the blob for the color conversion
  *	matrix through &drm_crtc_state.ctm.
  *
+ * ”CUBIC_LUT”:
+ *	Blob property to set the cubic (3D) lookup table performing color
+ *	mapping after the transformation matrix and before the lookup through
+ *	the gamma LUT. Unlike the degamma and gamma LUTs that map color
+ *	components independently, the 3D LUT converts an input color to an
+ *	output color by indexing into the 3D table using the color components
+ *	as a 3D coordinate. The LUT is subsampled as 8-bit (or more) precision
+ *	would require too much storage space in the hardware, so the precision
+ *	of the color components is reduced before the look up, and the low
+ *	order bits may be used to interpolate between the nearest points in 3D
+ *	space.
+ *
+ *	The data is interpreted as an array of &struct drm_color_lut elements.
+ *	Hardware might choose not to use the full precision of the LUT
+ *	elements.
+ *
+ *	Setting this to NULL (blob property value set to 0) means the output
+ *	color is identical to the input color. This is generally the driver
+ *	boot-up state too. Drivers can access this blob through
+ *	&drm_crtc_state.cubic_lut.
+ *
+ * ”CUBIC_LUT_SIZE”:
+ *	Unsigned range property to give the size of the lookup table to be set
+ *	on the CUBIC_LUT property (the size depends on the underlying hardware).
+ *	If drivers support multiple LUT sizes then they should publish the
+ *	largest size, and sub-sample smaller sized LUTs appropriately.
+ *
  * “GAMMA_LUT”:
  *	Blob property to set the gamma lookup table (LUT) mapping pixel data
- *	after the transformation matrix to data sent to the connector. The
- *	data is interpreted as an array of &struct drm_color_lut elements.
- *	Hardware might choose not to use the full precision of the LUT elements
- *	nor use all the elements of the LUT (for example the hardware might
- *	choose to interpolate between LUT[0] and LUT[4]).
+ *	after the cubic LUT to data sent to the connector. The data is
+ *	interpreted as an array of &struct drm_color_lut elements. Hardware
+ *	might choose not to use the full precision of the LUT elements nor use
+ *	all the elements of the LUT (for example the hardware might choose to
+ *	interpolate between LUT[0] and LUT[4]).
  *
  *	Setting this to NULL (blob property value set to 0) means a
  *	linear/pass-thru gamma table should be used. This is generally the
  *	driver boot-up state too. Drivers can access this blob through
  *	&drm_crtc_state.gamma_lut.
- *
- *	Note that for mostly historical reasons stemming from Xorg heritage,
- *	this is also used to store the color map (also sometimes color lut, CLUT
- *	or color palette) for indexed formats like DRM_FORMAT_C8.
  *
  * “GAMMA_LUT_SIZE”:
  *	Unsigned range property to give the size of the lookup table to be set
@@ -94,19 +116,20 @@
  *	modes) appropriately.
  *
  * There is also support for a legacy gamma table, which is set up by calling
- * drm_mode_crtc_set_gamma_size(). The DRM core will then alias the legacy gamma
- * ramp with "GAMMA_LUT" or, if that is unavailable, "DEGAMMA_LUT".
+ * drm_mode_crtc_set_gamma_size(). Drivers which support both should use
+ * drm_atomic_helper_legacy_gamma_set() to alias the legacy gamma ramp with the
+ * "GAMMA_LUT" property above.
  *
  * Support for different non RGB color encodings is controlled through
  * &drm_plane specific COLOR_ENCODING and COLOR_RANGE properties. They
  * are set up by calling drm_plane_create_color_properties().
  *
- * "COLOR_ENCODING":
+ * "COLOR_ENCODING"
  * 	Optional plane enum property to support different non RGB
  * 	color encodings. The driver can provide a subset of standard
  * 	enum values supported by the DRM plane.
  *
- * "COLOR_RANGE":
+ * "COLOR_RANGE"
  * 	Optional plane enum property to support different non RGB
  * 	color parameter ranges. The driver can provide a subset of
  * 	standard enum values supported by the DRM plane.
@@ -160,6 +183,9 @@ EXPORT_SYMBOL(drm_color_ctm_s31_32_to_qm_n);
  * optional. The gamma and degamma properties are only attached if
  * their size is not 0 and ctm_property is only attached if has_ctm is
  * true.
+ *
+ * Drivers should use drm_atomic_helper_legacy_gamma_set() to implement the
+ * legacy &drm_crtc_funcs.gamma_set callback.
  */
 void drm_crtc_enable_color_mgmt(struct drm_crtc *crtc,
 				uint degamma_lut_size,
@@ -233,116 +259,6 @@ int drm_mode_crtc_set_gamma_size(struct drm_crtc *crtc,
 EXPORT_SYMBOL(drm_mode_crtc_set_gamma_size);
 
 /**
- * drm_crtc_supports_legacy_gamma - does the crtc support legacy gamma correction table
- * @crtc: CRTC object
- *
- * Returns true/false if the given crtc supports setting the legacy gamma
- * correction table.
- */
-static bool drm_crtc_supports_legacy_gamma(struct drm_crtc *crtc)
-{
-	u32 gamma_id = crtc->dev->mode_config.gamma_lut_property->base.id;
-	u32 degamma_id = crtc->dev->mode_config.degamma_lut_property->base.id;
-
-	if (!crtc->gamma_size)
-		return false;
-
-	if (crtc->funcs->gamma_set)
-		return true;
-
-	return !!(drm_mode_obj_find_prop_id(&crtc->base, gamma_id) ||
-		  drm_mode_obj_find_prop_id(&crtc->base, degamma_id));
-}
-
-/**
- * drm_crtc_legacy_gamma_set - set the legacy gamma correction table
- * @crtc: CRTC object
- * @red: red correction table
- * @green: green correction table
- * @blue: blue correction table
- * @size: size of the tables
- * @ctx: lock acquire context
- *
- * Implements support for legacy gamma correction table for drivers
- * that have set drm_crtc_funcs.gamma_set or that support color management
- * through the DEGAMMA_LUT/GAMMA_LUT properties. See
- * drm_crtc_enable_color_mgmt() and the containing chapter for
- * how the atomic color management and gamma tables work.
- *
- * This function sets the gamma using drm_crtc_funcs.gamma_set if set, or
- * alternatively using crtc color management properties.
- */
-static int drm_crtc_legacy_gamma_set(struct drm_crtc *crtc,
-				     u16 *red, u16 *green, u16 *blue,
-				     u32 size,
-				     struct drm_modeset_acquire_ctx *ctx)
-{
-	struct drm_device *dev = crtc->dev;
-	struct drm_atomic_state *state;
-	struct drm_crtc_state *crtc_state;
-	struct drm_property_blob *blob;
-	struct drm_color_lut *blob_data;
-	u32 gamma_id = dev->mode_config.gamma_lut_property->base.id;
-	u32 degamma_id = dev->mode_config.degamma_lut_property->base.id;
-	bool use_gamma_lut;
-	int i, ret = 0;
-	bool replaced;
-
-	if (crtc->funcs->gamma_set)
-		return crtc->funcs->gamma_set(crtc, red, green, blue, size, ctx);
-
-	if (drm_mode_obj_find_prop_id(&crtc->base, gamma_id))
-		use_gamma_lut = true;
-	else if (drm_mode_obj_find_prop_id(&crtc->base, degamma_id))
-		use_gamma_lut = false;
-	else
-		return -ENODEV;
-
-	state = drm_atomic_state_alloc(crtc->dev);
-	if (!state)
-		return -ENOMEM;
-
-	blob = drm_property_create_blob(dev,
-					sizeof(struct drm_color_lut) * size,
-					NULL);
-	if (IS_ERR(blob)) {
-		ret = PTR_ERR(blob);
-		blob = NULL;
-		goto fail;
-	}
-
-	/* Prepare GAMMA_LUT with the legacy values. */
-	blob_data = blob->data;
-	for (i = 0; i < size; i++) {
-		blob_data[i].red = red[i];
-		blob_data[i].green = green[i];
-		blob_data[i].blue = blue[i];
-	}
-
-	state->acquire_ctx = ctx;
-	crtc_state = drm_atomic_get_crtc_state(state, crtc);
-	if (IS_ERR(crtc_state)) {
-		ret = PTR_ERR(crtc_state);
-		goto fail;
-	}
-
-	/* Set GAMMA_LUT and reset DEGAMMA_LUT and CTM */
-	replaced = drm_property_replace_blob(&crtc_state->degamma_lut,
-					     use_gamma_lut ? NULL : blob);
-	replaced |= drm_property_replace_blob(&crtc_state->ctm, NULL);
-	replaced |= drm_property_replace_blob(&crtc_state->gamma_lut,
-					      use_gamma_lut ? blob : NULL);
-	crtc_state->color_mgmt_changed |= replaced;
-
-	ret = drm_atomic_commit(state);
-
-fail:
-	drm_atomic_state_put(state);
-	drm_property_blob_put(blob);
-	return ret;
-}
-
-/**
  * drm_mode_gamma_set_ioctl - set the gamma table
  * @dev: DRM device
  * @data: ioctl data
@@ -373,7 +289,7 @@ int drm_mode_gamma_set_ioctl(struct drm_device *dev,
 	if (!crtc)
 		return -ENOENT;
 
-	if (!drm_crtc_supports_legacy_gamma(crtc))
+	if (crtc->funcs->gamma_set == NULL)
 		return -ENOSYS;
 
 	/* memcpy into gamma store */
@@ -401,8 +317,8 @@ int drm_mode_gamma_set_ioctl(struct drm_device *dev,
 		goto out;
 	}
 
-	ret = drm_crtc_legacy_gamma_set(crtc, r_base, g_base, b_base,
-					crtc->gamma_size, &ctx);
+	ret = crtc->funcs->gamma_set(crtc, r_base, g_base, b_base,
+				     crtc->gamma_size, &ctx);
 
 out:
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
@@ -575,7 +491,7 @@ int drm_plane_create_color_properties(struct drm_plane *plane,
 		len++;
 	}
 
-	prop = drm_property_create_enum(dev, 0, "COLOR_RANGE",
+	prop = drm_property_create_enum(dev, 0,	"COLOR_RANGE",
 					enum_list, len);
 	if (!prop)
 		return -ENOMEM;

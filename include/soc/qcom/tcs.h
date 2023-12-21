@@ -30,13 +30,7 @@ enum rpmh_state {
  *
  * @addr: the address of the resource slv_id:18:16 | offset:0:15
  * @data: the resource state request
- * @wait: ensure that this command is complete before returning.
- *        Setting "wait" here only makes sense during rpmh_write_batch() for
- *        active-only transfers, this is because:
- *        rpmh_write() - Always waits.
- *                       (DEFINE_RPMH_MSG_ONSTACK will set .wait_for_compl)
- *        rpmh_write_async() - Never waits.
- *                       (There's no request completion callback)
+ * @wait: wait for this request to be complete before sending the next
  */
 struct tcs_cmd {
 	u32 addr;
@@ -49,7 +43,6 @@ struct tcs_cmd {
  *
  * @state:          state for the request.
  * @wait_for_compl: wait until we get a response from the h/w accelerator
- *                  (same as setting cmd->wait for all commands in the request)
  * @num_cmds:       the number of @cmds in this request
  * @cmds:           an array of tcs_cmds
  */

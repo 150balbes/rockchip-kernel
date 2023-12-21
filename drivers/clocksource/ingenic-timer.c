@@ -9,12 +9,13 @@
 #include <linux/clk.h>
 #include <linux/clockchips.h>
 #include <linux/clocksource.h>
-#include <linux/cpuhotplug.h>
 #include <linux/interrupt.h>
 #include <linux/mfd/ingenic-tcu.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/of_platform.h>
 #include <linux/overflow.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -263,7 +264,6 @@ static const struct ingenic_soc_info jz4725b_soc_info = {
 static const struct of_device_id ingenic_tcu_of_match[] = {
 	{ .compatible = "ingenic,jz4740-tcu", .data = &jz4740_soc_info, },
 	{ .compatible = "ingenic,jz4725b-tcu", .data = &jz4725b_soc_info, },
-	{ .compatible = "ingenic,jz4760-tcu", .data = &jz4740_soc_info, },
 	{ .compatible = "ingenic,jz4770-tcu", .data = &jz4740_soc_info, },
 	{ .compatible = "ingenic,x1000-tcu", .data = &jz4740_soc_info, },
 	{ /* sentinel */ }
@@ -358,7 +358,6 @@ err_free_ingenic_tcu:
 
 TIMER_OF_DECLARE(jz4740_tcu_intc,  "ingenic,jz4740-tcu",  ingenic_tcu_init);
 TIMER_OF_DECLARE(jz4725b_tcu_intc, "ingenic,jz4725b-tcu", ingenic_tcu_init);
-TIMER_OF_DECLARE(jz4760_tcu_intc,  "ingenic,jz4760-tcu",  ingenic_tcu_init);
 TIMER_OF_DECLARE(jz4770_tcu_intc,  "ingenic,jz4770-tcu",  ingenic_tcu_init);
 TIMER_OF_DECLARE(x1000_tcu_intc,  "ingenic,x1000-tcu",  ingenic_tcu_init);
 
@@ -369,7 +368,7 @@ static int __init ingenic_tcu_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ingenic_tcu_suspend(struct device *dev)
+static int __maybe_unused ingenic_tcu_suspend(struct device *dev)
 {
 	struct ingenic_tcu *tcu = dev_get_drvdata(dev);
 	unsigned int cpu;
@@ -382,7 +381,7 @@ static int ingenic_tcu_suspend(struct device *dev)
 	return 0;
 }
 
-static int ingenic_tcu_resume(struct device *dev)
+static int __maybe_unused ingenic_tcu_resume(struct device *dev)
 {
 	struct ingenic_tcu *tcu = dev_get_drvdata(dev);
 	unsigned int cpu;
@@ -406,7 +405,7 @@ err_timer_clk_disable:
 	return ret;
 }
 
-static const struct dev_pm_ops ingenic_tcu_pm_ops = {
+static const struct dev_pm_ops __maybe_unused ingenic_tcu_pm_ops = {
 	/* _noirq: We want the TCU clocks to be gated last / ungated first */
 	.suspend_noirq = ingenic_tcu_suspend,
 	.resume_noirq  = ingenic_tcu_resume,
@@ -415,7 +414,9 @@ static const struct dev_pm_ops ingenic_tcu_pm_ops = {
 static struct platform_driver ingenic_tcu_driver = {
 	.driver = {
 		.name	= "ingenic-tcu-timer",
-		.pm	= pm_sleep_ptr(&ingenic_tcu_pm_ops),
+#ifdef CONFIG_PM_SLEEP
+		.pm	= &ingenic_tcu_pm_ops,
+#endif
 		.of_match_table = ingenic_tcu_of_match,
 	},
 };

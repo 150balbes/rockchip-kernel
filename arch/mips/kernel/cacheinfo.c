@@ -35,11 +35,6 @@ int init_cache_level(unsigned int cpu)
 
 	leaves += (c->icache.waysize) ? 2 : 1;
 
-	if (c->vcache.waysize) {
-		levels++;
-		leaves++;
-	}
-
 	if (c->scache.waysize) {
 		levels++;
 		leaves++;
@@ -79,36 +74,25 @@ int populate_cache_leaves(unsigned int cpu)
 	struct cpuinfo_mips *c = &current_cpu_data;
 	struct cpu_cacheinfo *this_cpu_ci = get_cpu_cacheinfo(cpu);
 	struct cacheinfo *this_leaf = this_cpu_ci->info_list;
-	int level = 1;
 
 	if (c->icache.waysize) {
-		/* I/D caches are per core */
+		/* L1 caches are per core */
 		fill_cpumask_siblings(cpu, &this_leaf->shared_cpu_map);
-		populate_cache(dcache, this_leaf, level, CACHE_TYPE_DATA);
+		populate_cache(dcache, this_leaf, 1, CACHE_TYPE_DATA);
 		fill_cpumask_siblings(cpu, &this_leaf->shared_cpu_map);
-		populate_cache(icache, this_leaf, level, CACHE_TYPE_INST);
-		level++;
+		populate_cache(icache, this_leaf, 1, CACHE_TYPE_INST);
 	} else {
-		populate_cache(dcache, this_leaf, level, CACHE_TYPE_UNIFIED);
-		level++;
-	}
-
-	if (c->vcache.waysize) {
-		/* Vcache is per core as well */
-		fill_cpumask_siblings(cpu, &this_leaf->shared_cpu_map);
-		populate_cache(vcache, this_leaf, level, CACHE_TYPE_UNIFIED);
-		level++;
+		populate_cache(dcache, this_leaf, 1, CACHE_TYPE_UNIFIED);
 	}
 
 	if (c->scache.waysize) {
-		/* Scache is per cluster */
+		/* L2 cache is per cluster */
 		fill_cpumask_cluster(cpu, &this_leaf->shared_cpu_map);
-		populate_cache(scache, this_leaf, level, CACHE_TYPE_UNIFIED);
-		level++;
+		populate_cache(scache, this_leaf, 2, CACHE_TYPE_UNIFIED);
 	}
 
 	if (c->tcache.waysize)
-		populate_cache(tcache, this_leaf, level, CACHE_TYPE_UNIFIED);
+		populate_cache(tcache, this_leaf, 3, CACHE_TYPE_UNIFIED);
 
 	this_cpu_ci->cpu_map_populated = true;
 

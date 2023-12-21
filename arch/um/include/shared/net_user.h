@@ -24,6 +24,7 @@ struct net_user_info {
 	int mtu;
 };
 
+extern void ether_user_init(void *data, void *dev);
 extern void iter_addresses(void *d, void (*cb)(unsigned char *,
 					       unsigned char *, void *),
 			   void *arg);

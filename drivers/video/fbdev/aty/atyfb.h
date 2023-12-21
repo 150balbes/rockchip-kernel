@@ -3,10 +3,8 @@
  *  ATI Frame Buffer Device Driver Core Definitions
  */
 
-#include <linux/io.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
-
     /*
      *  Elements of the hardware specific atyfb_par structure
      */
@@ -289,8 +287,11 @@ static inline void aty_st_8(int regindex, u8 val, const struct atyfb_par *par)
 #endif
 }
 
+#if defined(CONFIG_PMAC_BACKLIGHT) || defined (CONFIG_FB_ATY_GENERIC_LCD) || \
+defined (CONFIG_FB_ATY_BACKLIGHT)
 extern void aty_st_lcd(int index, u32 val, const struct atyfb_par *par);
 extern u32 aty_ld_lcd(int index, const struct atyfb_par *par);
+#endif
 
     /*
      *  DAC operations

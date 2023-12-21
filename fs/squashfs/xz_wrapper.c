@@ -131,10 +131,6 @@ static int squashfs_xz_uncompress(struct squashfs_sb_info *msblk, void *strm,
 	stream->buf.out_pos = 0;
 	stream->buf.out_size = PAGE_SIZE;
 	stream->buf.out = squashfs_first_page(output);
-	if (IS_ERR(stream->buf.out)) {
-		error = PTR_ERR(stream->buf.out);
-		goto finish;
-	}
 
 	for (;;) {
 		enum xz_ret xz_err;
@@ -150,7 +146,7 @@ static int squashfs_xz_uncompress(struct squashfs_sb_info *msblk, void *strm,
 			}
 
 			avail = min(length, ((int)bvec->bv_len) - offset);
-			data = bvec_virt(bvec);
+			data = page_address(bvec->bv_page) + bvec->bv_offset;
 			length -= avail;
 			stream->buf.in = data + offset;
 			stream->buf.in_size = avail;
@@ -160,10 +156,7 @@ static int squashfs_xz_uncompress(struct squashfs_sb_info *msblk, void *strm,
 
 		if (stream->buf.out_pos == stream->buf.out_size) {
 			stream->buf.out = squashfs_next_page(output);
-			if (IS_ERR(stream->buf.out)) {
-				error = PTR_ERR(stream->buf.out);
-				break;
-			} else if (stream->buf.out != NULL) {
+			if (stream->buf.out != NULL) {
 				stream->buf.out_pos = 0;
 				total += PAGE_SIZE;
 			}
@@ -178,7 +171,6 @@ static int squashfs_xz_uncompress(struct squashfs_sb_info *msblk, void *strm,
 		}
 	}
 
-finish:
 	squashfs_finish_page(output);
 
 	return error ? error : total + stream->buf.out_pos;
@@ -191,6 +183,5 @@ const struct squashfs_decompressor squashfs_xz_comp_ops = {
 	.decompress = squashfs_xz_uncompress,
 	.id = XZ_COMPRESSION,
 	.name = "xz",
-	.alloc_buffer = 1,
 	.supported = 1
 };

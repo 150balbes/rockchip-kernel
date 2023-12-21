@@ -15,8 +15,8 @@
 
 /* debug */
 #ifdef CONFIG_DVB_B2C2_FLEXCOP_DEBUG
-#define dprintk(level, args...) \
-	do { if ((debug & (level))) printk(args); } while (0)
+#define dprintk(level,args...) \
+	do { if ((debug & level)) printk(args); } while (0)
 
 #define debug_dump(b, l, method) do {\
 	int i; \
@@ -27,8 +27,8 @@
 
 #define DEBSTATUS ""
 #else
-#define dprintk(level, args...) no_printk(args)
-#define debug_dump(b, l, method) do { } while (0)
+#define dprintk(level, args...)
+#define debug_dump(b, l, method)
 #define DEBSTATUS " (debugging is not enabled)"
 #endif
 
@@ -171,7 +171,7 @@ static int flexcop_usb_v8_memory_req(struct flexcop_usb *fc_usb,
 	return ret;
 }
 
-#define bytes_left_to_read_on_page(paddr, buflen) \
+#define bytes_left_to_read_on_page(paddr,buflen) \
 	((V8_MEMORY_PAGE_SIZE - (paddr & V8_MEMORY_PAGE_MASK)) > buflen \
 	 ? buflen : (V8_MEMORY_PAGE_SIZE - (paddr & V8_MEMORY_PAGE_MASK)))
 
@@ -179,11 +179,11 @@ static int flexcop_usb_memory_req(struct flexcop_usb *fc_usb,
 		flexcop_usb_request_t req, flexcop_usb_mem_page_t page_start,
 		u32 addr, int extended, u8 *buf, u32 len)
 {
-	int i, ret = 0;
+	int i,ret = 0;
 	u16 wMax;
 	u32 pagechunk = 0;
 
-	switch (req) {
+	switch(req) {
 	case B2C2_USB_READ_V8_MEM:
 		wMax = USB_MEM_READ_MAX;
 		break;
@@ -195,6 +195,7 @@ static int flexcop_usb_memory_req(struct flexcop_usb *fc_usb,
 		break;
 	default:
 		return -EINVAL;
+		break;
 	}
 	for (i = 0; i < len;) {
 		pagechunk =
@@ -341,8 +342,8 @@ static void flexcop_usb_process_frame(struct flexcop_usb *fc_usb,
 		b = fc_usb->tmp_buffer;
 		l = fc_usb->tmp_buffer_length;
 	} else {
-		b = buffer;
-		l = buffer_length;
+		b=buffer;
+		l=buffer_length;
 	}
 
 	while (l >= 190) {
@@ -368,7 +369,7 @@ static void flexcop_usb_process_frame(struct flexcop_usb *fc_usb,
 		}
 	}
 
-	if (l > 0)
+	if (l>0)
 		memcpy(fc_usb->tmp_buffer, b, l);
 	fc_usb->tmp_buffer_length = l;
 }
@@ -399,7 +400,7 @@ static void flexcop_usb_urb_complete(struct urb *urb)
 		urb->iso_frame_desc[i].status = 0;
 		urb->iso_frame_desc[i].actual_length = 0;
 	}
-	usb_submit_urb(urb, GFP_ATOMIC);
+	usb_submit_urb(urb,GFP_ATOMIC);
 }
 
 static int flexcop_usb_stream_control(struct flexcop_device *fc, int onoff)
@@ -413,7 +414,7 @@ static void flexcop_usb_transfer_exit(struct flexcop_usb *fc_usb)
 	int i;
 	for (i = 0; i < B2C2_USB_NUM_ISO_URB; i++)
 		if (fc_usb->iso_urb[i] != NULL) {
-			deb_ts("unlinking/killing urb no. %d\n", i);
+			deb_ts("unlinking/killing urb no. %d\n",i);
 			usb_kill_urb(fc_usb->iso_urb[i]);
 			usb_free_urb(fc_usb->iso_urb[i]);
 		}
@@ -425,13 +426,11 @@ static void flexcop_usb_transfer_exit(struct flexcop_usb *fc_usb)
 
 static int flexcop_usb_transfer_init(struct flexcop_usb *fc_usb)
 {
-	struct usb_host_interface *alt = fc_usb->uintf->cur_altsetting;
-	u16 frame_size;
-	int bufsize, i, j, ret;
+	u16 frame_size = le16_to_cpu(
+		fc_usb->uintf->cur_altsetting->endpoint[0].desc.wMaxPacketSize);
+	int bufsize = B2C2_USB_NUM_ISO_URB * B2C2_USB_FRAMES_PER_ISO *
+		frame_size, i, j, ret;
 	int buffer_offset = 0;
-
-	frame_size = usb_endpoint_maxp(&alt->endpoint[0].desc);
-	bufsize = B2C2_USB_NUM_ISO_URB * B2C2_USB_FRAMES_PER_ISO * frame_size;
 
 	deb_ts("creating %d iso-urbs with %d frames each of %d bytes size = %d.\n",
 	       B2C2_USB_NUM_ISO_URB,
@@ -485,7 +484,7 @@ static int flexcop_usb_transfer_init(struct flexcop_usb *fc_usb)
 			err("submitting urb %d failed with %d.", i, ret);
 			goto urb_error;
 		}
-		deb_ts("submitted urb no. %d.\n", i);
+		deb_ts("submitted urb no. %d.\n",i);
 	}
 
 	/* SRAM */
@@ -503,21 +502,17 @@ urb_error:
 
 static int flexcop_usb_init(struct flexcop_usb *fc_usb)
 {
-	struct usb_host_interface *alt;
-	int ret;
+	/* use the alternate setting with the larges buffer */
+	int ret = usb_set_interface(fc_usb->udev, 0, 1);
 
-	/* use the alternate setting with the largest buffer */
-	ret = usb_set_interface(fc_usb->udev, 0, 1);
 	if (ret) {
 		err("set interface failed.");
 		return ret;
 	}
 
-	alt = fc_usb->uintf->cur_altsetting;
-
-	if (alt->desc.bNumEndpoints < 1)
+	if (fc_usb->uintf->cur_altsetting->desc.bNumEndpoints < 1)
 		return -ENODEV;
-	if (!usb_endpoint_is_isoc_in(&alt->endpoint[0].desc))
+	if (!usb_endpoint_is_isoc_in(&fc_usb->uintf->cur_altsetting->endpoint[0].desc))
 		return -ENODEV;
 
 	switch (fc_usb->udev->speed) {

@@ -117,11 +117,11 @@ struct sof_ipc_ctrl_data {
 	/* control data - add new types if needed */
 	union {
 		/* channel values can be used by volume type controls */
-		DECLARE_FLEX_ARRAY(struct sof_ipc_ctrl_value_chan, chanv);
+		struct sof_ipc_ctrl_value_chan chanv[0];
 		/* component values used by routing controls like mux, mixer */
-		DECLARE_FLEX_ARRAY(struct sof_ipc_ctrl_value_comp, compv);
+		struct sof_ipc_ctrl_value_comp compv[0];
 		/* data can be used by binary controls */
-		DECLARE_FLEX_ARRAY(struct sof_abi_hdr, data);
+		struct sof_abi_hdr data[0];
 	};
 } __packed;
 

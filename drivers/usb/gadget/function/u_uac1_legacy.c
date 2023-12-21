@@ -119,6 +119,10 @@ static int playback_default_hw_params(struct gaudio_snd_dev *snd)
 			snd->channels, 0);
 	_snd_pcm_hw_param_set(params, SNDRV_PCM_HW_PARAM_RATE,
 			snd->rate, 0);
+	_snd_pcm_hw_param_set(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+			      snd->rate / 10, 0);
+	_snd_pcm_hw_param_set(params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE,
+			      snd->rate, 0);
 
 	snd_pcm_kernel_ioctl(substream, SNDRV_PCM_IOCTL_DROP, NULL);
 	snd_pcm_kernel_ioctl(substream, SNDRV_PCM_IOCTL_HW_PARAMS, params);
@@ -158,8 +162,8 @@ size_t u_audio_playback(struct gaudio *card, void *buf, size_t count)
 	snd_pcm_sframes_t frames;
 
 try_again:
-	if (runtime->state == SNDRV_PCM_STATE_XRUN ||
-		runtime->state == SNDRV_PCM_STATE_SUSPENDED) {
+	if (runtime->status->state == SNDRV_PCM_STATE_XRUN ||
+		runtime->status->state == SNDRV_PCM_STATE_SUSPENDED) {
 		result = snd_pcm_kernel_ioctl(substream,
 				SNDRV_PCM_IOCTL_PREPARE, NULL);
 		if (result < 0) {

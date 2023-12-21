@@ -41,7 +41,7 @@ static void df_v1_7_sw_fini(struct amdgpu_device *adev)
 }
 
 static void df_v1_7_enable_broadcast_mode(struct amdgpu_device *adev,
-					  bool enable)
+                                          bool enable)
 {
 	u32 tmp;
 
@@ -94,12 +94,12 @@ static void df_v1_7_update_medium_grain_clock_gating(struct amdgpu_device *adev,
 		WREG32_SOC15(DF, 0, mmDF_PIE_AON0_DfGlobalClkGater, tmp);
 	}
 
-	/* Exit broadcast mode */
+	/* Exit boradcast mode */
 	adev->df.funcs->enable_broadcast_mode(adev, false);
 }
 
 static void df_v1_7_get_clockgating_state(struct amdgpu_device *adev,
-					  u64 *flags)
+					  u32 *flags)
 {
 	u32 tmp;
 

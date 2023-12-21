@@ -7,15 +7,14 @@
 #include <linux/pci.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
-#include <linux/of_irq.h>
 #include <linux/serial_reg.h>
 #include <asm/io.h>
 #include <asm/mmu.h>
+#include <asm/prom.h>
 #include <asm/serial.h>
 #include <asm/udbg.h>
 #include <asm/pci-bridge.h>
 #include <asm/ppc-pci.h>
-#include <asm/early_ioremap.h>
 
 #undef DEBUG
 
@@ -35,7 +34,6 @@ static struct legacy_serial_info {
 	unsigned int			clock;
 	int				irq_check_parent;
 	phys_addr_t			taddr;
-	void __iomem			*early_addr;
 } legacy_serial_infos[MAX_LEGACY_SERIAL_PORTS];
 
 static const struct of_device_id legacy_serial_parents[] __initconst = {
@@ -171,15 +169,15 @@ static int __init add_legacy_soc_port(struct device_node *np,
 	/* We only support ports that have a clock frequency properly
 	 * encoded in the device-tree.
 	 */
-	if (!of_property_present(np, "clock-frequency"))
+	if (of_get_property(np, "clock-frequency", NULL) == NULL)
 		return -1;
 
 	/* if reg-offset don't try to use it */
-	if (of_property_present(np, "reg-offset"))
+	if ((of_get_property(np, "reg-offset", NULL) != NULL))
 		return -1;
 
 	/* if rtas uses this device, don't try to use it as well */
-	if (of_property_read_bool(np, "used-by-rtas"))
+	if (of_get_property(np, "used-by-rtas", NULL) != NULL)
 		return -1;
 
 	/* Get the address */
@@ -237,7 +235,7 @@ static int __init add_legacy_isa_port(struct device_node *np,
 	 * Note: Don't even try on P8 lpc, we know it's not directly mapped
 	 */
 	if (!of_device_is_compatible(isa_brg, "ibm,power8-lpc") ||
-	    of_property_present(isa_brg, "ranges")) {
+	    of_get_property(isa_brg, "ranges", NULL)) {
 		taddr = of_translate_address(np, reg);
 		if (taddr == OF_BAD_ADDR)
 			taddr = 0;
@@ -268,7 +266,7 @@ static int __init add_legacy_pci_port(struct device_node *np,
 	 * compatible UARTs on PCI need all sort of quirks (port offsets
 	 * etc...) that this code doesn't know about
 	 */
-	if (!of_property_present(np, "clock-frequency"))
+	if (of_get_property(np, "clock-frequency", NULL) == NULL)
 		return -1;
 
 	/* Get the PCI address. Assume BAR 0 */
@@ -327,16 +325,17 @@ static void __init setup_legacy_serial_console(int console)
 {
 	struct legacy_serial_info *info = &legacy_serial_infos[console];
 	struct plat_serial8250_port *port = &legacy_serial_ports[console];
+	void __iomem *addr;
 	unsigned int stride;
 
 	stride = 1 << port->regshift;
 
 	/* Check if a translated MMIO address has been found */
 	if (info->taddr) {
-		info->early_addr = early_ioremap(info->taddr, 0x1000);
-		if (info->early_addr == NULL)
+		addr = ioremap(info->taddr, 0x1000);
+		if (addr == NULL)
 			return;
-		udbg_uart_init_mmio(info->early_addr, stride);
+		udbg_uart_init_mmio(addr, stride);
 	} else {
 		/* Check if it's PIO and we support untranslated PIO */
 		if (port->iotype == UPIO_PORT && isa_io_special)
@@ -353,33 +352,6 @@ static void __init setup_legacy_serial_console(int console)
 	DBG("default console speed = %d\n", info->speed);
 	udbg_uart_setup(info->speed, info->clock);
 }
-
-static int __init ioremap_legacy_serial_console(void)
-{
-	struct plat_serial8250_port *port;
-	struct legacy_serial_info *info;
-	void __iomem *vaddr;
-
-	if (legacy_serial_console < 0)
-		return 0;
-
-	info = &legacy_serial_infos[legacy_serial_console];
-	port = &legacy_serial_ports[legacy_serial_console];
-
-	if (!info->early_addr)
-		return 0;
-
-	vaddr = ioremap(info->taddr, 0x1000);
-	if (WARN_ON(!vaddr))
-		return -ENOMEM;
-
-	udbg_uart_init_mmio(vaddr, 1 << port->regshift);
-	early_iounmap(info->early_addr, 0x1000);
-	info->early_addr = NULL;
-
-	return 0;
-}
-early_initcall(ioremap_legacy_serial_console);
 
 /*
  * This is called very early, as part of setup_system() or eventually
@@ -471,8 +443,6 @@ void __init find_legacy_serial_ports(void)
 	}
 #endif
 
-	of_node_put(stdout);
-
 	DBG("legacy_serial_console = %d\n", legacy_serial_console);
 	if (legacy_serial_console >= 0)
 		setup_legacy_serial_console(legacy_serial_console);
@@ -508,16 +478,12 @@ static void __init fixup_port_irq(int index,
 
 	port->irq = virq;
 
-	if (IS_ENABLED(CONFIG_SERIAL_8250) &&
-	    of_device_is_compatible(np, "fsl,ns16550")) {
-		if (IS_REACHABLE(CONFIG_SERIAL_8250_FSL)) {
-			port->handle_irq = fsl8250_handle_irq;
-			port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_8250_CONSOLE);
-		} else {
-			pr_warn_once("Not activating Freescale specific workaround for device %pOFP\n",
-				     np);
-		}
+#ifdef CONFIG_SERIAL_8250_FSL
+	if (of_device_is_compatible(np, "fsl,ns16550")) {
+		port->handle_irq = fsl8250_handle_irq;
+		port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_8250_CONSOLE);
 	}
+#endif
 }
 
 static void __init fixup_port_pio(int index,

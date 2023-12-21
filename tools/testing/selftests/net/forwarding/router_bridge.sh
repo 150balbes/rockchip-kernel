@@ -38,8 +38,7 @@ h2_destroy()
 
 router_create()
 {
-	ip link add name br1 address $(mac_get $swp1) \
-		type bridge vlan_filtering 1
+	ip link add name br1 type bridge vlan_filtering 1
 	ip link set dev br1 up
 
 	ip link set dev $swp1 master br1

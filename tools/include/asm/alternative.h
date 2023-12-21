@@ -4,6 +4,7 @@
 
 /* Just disable it so we can build arch/x86/lib/memcpy_64.S for perf bench: */
 
-#define ALTERNATIVE #
+#define altinstruction_entry #
+#define ALTERNATIVE_2 #
 
 #endif

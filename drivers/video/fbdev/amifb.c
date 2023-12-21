@@ -2427,7 +2427,7 @@ static int amifb_set_par(struct fb_info *info)
 		info->fix.ywrapstep = 1;
 		info->fix.xpanstep = 0;
 		info->fix.ypanstep = 0;
-		info->flags = FBINFO_HWACCEL_YWRAP |
+		info->flags = FBINFO_DEFAULT | FBINFO_HWACCEL_YWRAP |
 			FBINFO_READS_FAST; /* override SCROLL_REDRAW */
 	} else {
 		info->fix.ywrapstep = 0;
@@ -2436,7 +2436,7 @@ static int amifb_set_par(struct fb_info *info)
 		else
 			info->fix.xpanstep = 16 << maxfmode;
 		info->fix.ypanstep = 1;
-		info->flags = FBINFO_HWACCEL_YPAN;
+		info->flags = FBINFO_DEFAULT | FBINFO_HWACCEL_YPAN;
 	}
 	return 0;
 }
@@ -2540,16 +2540,27 @@ static int amifb_blank(int blank, struct fb_info *info)
 static int amifb_pan_display(struct fb_var_screeninfo *var,
 			     struct fb_info *info)
 {
-	if (!(var->vmode & FB_VMODE_YWRAP)) {
+	if (var->vmode & FB_VMODE_YWRAP) {
+		if (var->yoffset < 0 ||
+			var->yoffset >= info->var.yres_virtual || var->xoffset)
+				return -EINVAL;
+	} else {
 		/*
 		 * TODO: There will be problems when xpan!=1, so some columns
 		 * on the right side will never be seen
 		 */
 		if (var->xoffset + info->var.xres >
-		    upx(16 << maxfmode, info->var.xres_virtual))
+		    upx(16 << maxfmode, info->var.xres_virtual) ||
+		    var->yoffset + info->var.yres > info->var.yres_virtual)
 			return -EINVAL;
 	}
 	ami_pan_var(var, info);
+	info->var.xoffset = var->xoffset;
+	info->var.yoffset = var->yoffset;
+	if (var->vmode & FB_VMODE_YWRAP)
+		info->var.vmode |= FB_VMODE_YWRAP;
+	else
+		info->var.vmode &= ~FB_VMODE_YWRAP;
 	return 0;
 }
 
@@ -3660,6 +3671,7 @@ default_chipset:
 	}
 
 	info->fbops = &amifb_ops;
+	info->flags = FBINFO_DEFAULT;
 	info->device = &pdev->dev;
 
 	if (!fb_find_mode(&info->var, info, mode_option, ami_modedb,
@@ -3724,7 +3736,7 @@ default_chipset:
 	if (err)
 		goto free_irq;
 
-	platform_set_drvdata(pdev, info);
+	dev_set_drvdata(&pdev->dev, info);
 
 	err = register_framebuffer(info);
 	if (err)
@@ -3752,7 +3764,7 @@ release:
 
 static int __exit amifb_remove(struct platform_device *pdev)
 {
-	struct fb_info *info = platform_get_drvdata(pdev);
+	struct fb_info *info = dev_get_drvdata(&pdev->dev);
 
 	unregister_framebuffer(info);
 	fb_dealloc_cmap(&info->cmap);

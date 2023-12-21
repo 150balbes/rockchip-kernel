@@ -8,12 +8,6 @@
 	model = "A95X Z2";
 	compatible = "zkmagic,a95x-z2", "rockchip,rk3318";
 
-	aliases {
-		mmc0 = &sdmmc;
-		mmc1 = &sdio;
-		mmc2 = &emmc;
-	};
-
 	chosen {
 		stdout-path = "serial2:1500000n8";
 	};
@@ -25,7 +19,7 @@
 		keyup-threshold-microvolt = <1800000>;
 		poll-interval = <100>;
 
-		button-recovery {
+		recovery {
 			label = "recovery";
 			linux,code = <KEY_VENDOR>;
 			press-threshold-microvolt = <17000>;
@@ -61,7 +55,7 @@
 	spdif-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "SPDIF";
-
+		simple-audio-card,mclk-fs = <128>;
 		simple-audio-card,cpu {
 			sound-dai = <&spdif>;
 		};
@@ -185,6 +179,7 @@
 	assigned-clock-parents = <&cru SCLK_MAC2PHY_SRC>;
 	assigned-clock-rate = <50000000>;
 	assigned-clocks = <&cru SCLK_MAC2PHY>;
+	clock_in_out = "output";
 	status = "okay";
 };
 
@@ -193,6 +188,8 @@
 };
 
 &hdmi {
+	ddc-i2c-scl-high-time-ns = <9625>;
+	ddc-i2c-scl-low-time-ns = <10000>;
 	status = "okay";
 };
 
@@ -356,11 +353,6 @@
 };
 
 &usb20_otg {
-	dr_mode = "host";
-	status = "okay";
-};
-
-&usbdrd3 {
 	dr_mode = "host";
 	status = "okay";
 };

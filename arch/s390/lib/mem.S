@@ -14,7 +14,8 @@
 /*
  * void *memmove(void *dest, const void *src, size_t n)
  */
-SYM_FUNC_START(__memmove)
+WEAK(memmove)
+ENTRY(__memmove)
 	ltgr	%r4,%r4
 	lgr	%r1,%r2
 	jz	.Lmemmove_exit
@@ -47,10 +48,7 @@ SYM_FUNC_START(__memmove)
 	BR_EX	%r14
 .Lmemmove_mvc:
 	mvc	0(1,%r1),0(%r3)
-SYM_FUNC_END(__memmove)
-EXPORT_SYMBOL(__memmove)
-
-SYM_FUNC_ALIAS(memmove, __memmove)
+ENDPROC(__memmove)
 EXPORT_SYMBOL(memmove)
 
 /*
@@ -68,7 +66,8 @@ EXPORT_SYMBOL(memmove)
  *	return __builtin_memset(s, c, n);
  * }
  */
-SYM_FUNC_START(__memset)
+WEAK(memset)
+ENTRY(__memset)
 	ltgr	%r4,%r4
 	jz	.Lmemset_exit
 	ltgr	%r3,%r3
@@ -112,10 +111,7 @@ SYM_FUNC_START(__memset)
 	xc	0(1,%r1),0(%r1)
 .Lmemset_mvc:
 	mvc	1(1,%r1),0(%r1)
-SYM_FUNC_END(__memset)
-EXPORT_SYMBOL(__memset)
-
-SYM_FUNC_ALIAS(memset, __memset)
+ENDPROC(__memset)
 EXPORT_SYMBOL(memset)
 
 /*
@@ -123,7 +119,8 @@ EXPORT_SYMBOL(memset)
  *
  * void *memcpy(void *dest, const void *src, size_t n)
  */
-SYM_FUNC_START(__memcpy)
+WEAK(memcpy)
+ENTRY(__memcpy)
 	ltgr	%r4,%r4
 	jz	.Lmemcpy_exit
 	aghi	%r4,-1
@@ -144,10 +141,7 @@ SYM_FUNC_START(__memcpy)
 	j	.Lmemcpy_remainder
 .Lmemcpy_mvc:
 	mvc	0(1,%r1),0(%r3)
-SYM_FUNC_END(__memcpy)
-EXPORT_SYMBOL(__memcpy)
-
-SYM_FUNC_ALIAS(memcpy, __memcpy)
+ENDPROC(__memcpy)
 EXPORT_SYMBOL(memcpy)
 
 /*
@@ -158,7 +152,7 @@ EXPORT_SYMBOL(memcpy)
  * void *__memset64(uint64_t *s, uint64_t v, size_t count)
  */
 .macro __MEMSET bits,bytes,insn
-SYM_FUNC_START(__memset\bits)
+ENTRY(__memset\bits)
 	ltgr	%r4,%r4
 	jz	.L__memset_exit\bits
 	cghi	%r4,\bytes
@@ -184,7 +178,7 @@ SYM_FUNC_START(__memset\bits)
 	BR_EX	%r14
 .L__memset_mvc\bits:
 	mvc	\bytes(1,%r1),0(%r1)
-SYM_FUNC_END(__memset\bits)
+ENDPROC(__memset\bits)
 .endm
 
 __MEMSET 16,2,sth

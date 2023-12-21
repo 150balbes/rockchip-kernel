@@ -6,7 +6,6 @@
 // Copyright (C) 2020 Samsung Electronics Co., Ltd.
 
 #include <linux/clk.h>
-#include <linux/gpio/consumer.h>
 #include <linux/mfd/wm8994/registers.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -130,7 +129,7 @@ static int midas_aif1_hw_params(struct snd_pcm_substream *substream,
 	return midas_start_fll1(rtd, pll_out);
 }
 
-static const struct snd_soc_ops midas_aif1_ops = {
+static struct snd_soc_ops midas_aif1_ops = {
 	.hw_params = midas_aif1_hw_params,
 };
 
@@ -309,7 +308,7 @@ static int midas_late_probe(struct snd_soc_card *card)
 			SND_JACK_HEADSET | SND_JACK_MECHANICAL |
 			SND_JACK_BTN_0 | SND_JACK_BTN_1 | SND_JACK_BTN_2 |
 			SND_JACK_BTN_3 | SND_JACK_BTN_4 | SND_JACK_BTN_5,
-			&priv->headset_jack);
+			&priv->headset_jack, NULL, 0);
 	if (ret)
 		return ret;
 
@@ -532,6 +531,7 @@ static struct platform_driver midas_driver = {
 	.driver = {
 		.name = "midas-audio",
 		.of_match_table = midas_of_match,
+		.owner = THIS_MODULE,
 		.pm = &snd_soc_pm_ops,
 	},
 	.probe = midas_probe,

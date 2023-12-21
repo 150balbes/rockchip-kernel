@@ -209,29 +209,15 @@ static struct msi_domain_info armada_370_xp_msi_domain_info = {
 
 static void armada_370_xp_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 {
-	unsigned int cpu = cpumask_first(irq_data_get_effective_affinity_mask(data));
-
 	msg->address_lo = lower_32_bits(msi_doorbell_addr);
 	msg->address_hi = upper_32_bits(msi_doorbell_addr);
-	msg->data = BIT(cpu + 8) | (data->hwirq + PCI_MSI_DOORBELL_START);
+	msg->data = 0xf00 | (data->hwirq + PCI_MSI_DOORBELL_START);
 }
 
 static int armada_370_xp_msi_set_affinity(struct irq_data *irq_data,
 					  const struct cpumask *mask, bool force)
 {
-	unsigned int cpu;
-
-	if (!force)
-		cpu = cpumask_any_and(mask, cpu_online_mask);
-	else
-		cpu = cpumask_first(mask);
-
-	if (cpu >= nr_cpu_ids)
-		return -EINVAL;
-
-	irq_data_update_effective_affinity(irq_data, cpumask_of(cpu));
-
-	return IRQ_SET_MASK_OK;
+	 return -EINVAL;
 }
 
 static struct irq_chip armada_370_xp_msi_bottom_irq_chip = {
@@ -278,21 +264,11 @@ static const struct irq_domain_ops armada_370_xp_msi_domain_ops = {
 	.free	= armada_370_xp_msi_free,
 };
 
-static void armada_370_xp_msi_reenable_percpu(void)
-{
-	u32 reg;
-
-	/* Enable MSI doorbell mask and combined cpu local interrupt */
-	reg = readl(per_cpu_int_base + ARMADA_370_XP_IN_DRBEL_MSK_OFFS)
-		| PCI_MSI_DOORBELL_MASK;
-	writel(reg, per_cpu_int_base + ARMADA_370_XP_IN_DRBEL_MSK_OFFS);
-	/* Unmask local doorbell interrupt */
-	writel(1, per_cpu_int_base + ARMADA_370_XP_INT_CLEAR_MASK_OFFS);
-}
-
 static int armada_370_xp_msi_init(struct device_node *node,
 				  phys_addr_t main_int_phys_base)
 {
+	u32 reg;
+
 	msi_doorbell_addr = main_int_phys_base +
 		ARMADA_370_XP_SW_TRIG_INT_OFFS;
 
@@ -311,13 +287,18 @@ static int armada_370_xp_msi_init(struct device_node *node,
 		return -ENOMEM;
 	}
 
-	armada_370_xp_msi_reenable_percpu();
+	reg = readl(per_cpu_int_base + ARMADA_370_XP_IN_DRBEL_MSK_OFFS)
+		| PCI_MSI_DOORBELL_MASK;
+
+	writel(reg, per_cpu_int_base +
+	       ARMADA_370_XP_IN_DRBEL_MSK_OFFS);
+
+	/* Unmask IPI interrupt */
+	writel(1, per_cpu_int_base + ARMADA_370_XP_INT_CLEAR_MASK_OFFS);
 
 	return 0;
 }
 #else
-static void armada_370_xp_msi_reenable_percpu(void) {}
-
 static inline int armada_370_xp_msi_init(struct device_node *node,
 					 phys_addr_t main_int_phys_base)
 {
@@ -383,16 +364,16 @@ static void armada_370_xp_ipi_send_mask(struct irq_data *d,
 		ARMADA_370_XP_SW_TRIG_INT_OFFS);
 }
 
-static void armada_370_xp_ipi_ack(struct irq_data *d)
+static void armada_370_xp_ipi_eoi(struct irq_data *d)
 {
 	writel(~BIT(d->hwirq), per_cpu_int_base + ARMADA_370_XP_IN_DRBEL_CAUSE_OFFS);
 }
 
 static struct irq_chip ipi_irqchip = {
 	.name		= "IPI",
-	.irq_ack	= armada_370_xp_ipi_ack,
 	.irq_mask	= armada_370_xp_ipi_mask,
 	.irq_unmask	= armada_370_xp_ipi_unmask,
+	.irq_eoi	= armada_370_xp_ipi_eoi,
 	.ipi_send_mask	= armada_370_xp_ipi_send_mask,
 };
 
@@ -406,7 +387,7 @@ static int armada_370_xp_ipi_alloc(struct irq_domain *d,
 		irq_set_percpu_devid(virq + i);
 		irq_domain_set_info(d, virq + i, i, &ipi_irqchip,
 				    d->host_data,
-				    handle_percpu_devid_irq,
+				    handle_percpu_devid_fasteoi_ipi,
 				    NULL, NULL);
 	}
 
@@ -454,7 +435,8 @@ static __init void armada_xp_ipi_init(struct device_node *node)
 		return;
 
 	irq_domain_update_bus_token(ipi_domain, DOMAIN_BUS_IPI);
-	base_ipi = irq_domain_alloc_irqs(ipi_domain, IPI_DOORBELL_END, NUMA_NO_NODE, NULL);
+	base_ipi = __irq_domain_alloc_irqs(ipi_domain, -1, IPI_DOORBELL_END,
+					   NUMA_NO_NODE, NULL, false, NULL);
 	if (WARN_ON(!base_ipi))
 		return;
 
@@ -528,8 +510,6 @@ static void armada_xp_mpic_reenable_percpu(void)
 	}
 
 	ipi_resume();
-
-	armada_370_xp_msi_reenable_percpu();
 }
 
 static int armada_xp_mpic_starting_cpu(unsigned int cpu)
@@ -607,14 +587,20 @@ static void armada_370_xp_handle_msi_irq(struct pt_regs *regs, bool is_chained)
 
 	for (msinr = PCI_MSI_DOORBELL_START;
 	     msinr < PCI_MSI_DOORBELL_END; msinr++) {
-		unsigned int irq;
+		int irq;
 
 		if (!(msimask & BIT(msinr)))
 			continue;
 
-		irq = msinr - PCI_MSI_DOORBELL_START;
-
-		generic_handle_domain_irq(armada_370_xp_msi_inner_domain, irq);
+		if (is_chained) {
+			irq = irq_find_mapping(armada_370_xp_msi_inner_domain,
+					       msinr - PCI_MSI_DOORBELL_START);
+			generic_handle_irq(irq);
+		} else {
+			irq = msinr - PCI_MSI_DOORBELL_START;
+			handle_domain_irq(armada_370_xp_msi_inner_domain,
+					  irq, regs);
+		}
 	}
 }
 #else
@@ -625,6 +611,7 @@ static void armada_370_xp_mpic_handle_cascade_irq(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	unsigned long irqmap, irqn, irqsrc, cpuid;
+	unsigned int cascade_irq;
 
 	chained_irq_enter(chip, desc);
 
@@ -646,7 +633,8 @@ static void armada_370_xp_mpic_handle_cascade_irq(struct irq_desc *desc)
 			continue;
 		}
 
-		generic_handle_domain_irq(armada_370_xp_mpic_domain, irqn);
+		cascade_irq = irq_find_mapping(armada_370_xp_mpic_domain, irqn);
+		generic_handle_irq(cascade_irq);
 	}
 
 	chained_irq_exit(chip, desc);
@@ -666,8 +654,8 @@ armada_370_xp_handle_irq(struct pt_regs *regs)
 			break;
 
 		if (irqnr > 1) {
-			generic_handle_domain_irq(armada_370_xp_mpic_domain,
-						  irqnr);
+			handle_domain_irq(armada_370_xp_mpic_domain,
+					  irqnr, regs);
 			continue;
 		}
 
@@ -686,7 +674,7 @@ armada_370_xp_handle_irq(struct pt_regs *regs)
 				& IPI_DOORBELL_MASK;
 
 			for_each_set_bit(ipi, &ipimask, IPI_DOORBELL_END)
-				generic_handle_domain_irq(ipi_domain, ipi);
+				handle_domain_irq(ipi_domain, ipi, regs);
 		}
 #endif
 

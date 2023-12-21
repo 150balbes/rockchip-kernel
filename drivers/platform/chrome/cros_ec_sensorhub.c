@@ -224,7 +224,8 @@ static int cros_ec_sensorhub_probe(struct platform_device *pdev)
  */
 static int cros_ec_sensorhub_suspend(struct device *dev)
 {
-	struct cros_ec_sensorhub *sensorhub = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct cros_ec_sensorhub *sensorhub = platform_get_drvdata(pdev);
 	struct cros_ec_dev *ec = sensorhub->ec;
 
 	if (cros_ec_check_features(ec, EC_FEATURE_MOTION_SENSE_FIFO))
@@ -234,7 +235,8 @@ static int cros_ec_sensorhub_suspend(struct device *dev)
 
 static int cros_ec_sensorhub_resume(struct device *dev)
 {
-	struct cros_ec_sensorhub *sensorhub = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct cros_ec_sensorhub *sensorhub = platform_get_drvdata(pdev);
 	struct cros_ec_dev *ec = sensorhub->ec;
 
 	if (cros_ec_check_features(ec, EC_FEATURE_MOTION_SENSE_FIFO))

@@ -10,7 +10,6 @@
 #include <linux/module.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/mfd/syscon.h>
 #include <linux/mfd/syscon/imx6q-iomuxc-gpr.h>
@@ -22,7 +21,6 @@ struct imx_weim_devtype {
 	unsigned int	cs_stride;
 	unsigned int	wcr_offset;
 	unsigned int	wcr_bcm;
-	unsigned int	wcr_cont_bclk;
 };
 
 static const struct imx_weim_devtype imx1_weim_devtype = {
@@ -43,7 +41,6 @@ static const struct imx_weim_devtype imx50_weim_devtype = {
 	.cs_stride	= 0x18,
 	.wcr_offset	= 0x90,
 	.wcr_bcm	= BIT(0),
-	.wcr_cont_bclk	= BIT(3),
 };
 
 static const struct imx_weim_devtype imx51_weim_devtype = {
@@ -65,11 +62,6 @@ struct cs_timing_state {
 	struct cs_timing cs[MAX_CS_COUNT];
 };
 
-struct weim_priv {
-	void __iomem *base;
-	struct cs_timing_state timing_state;
-};
-
 static const struct of_device_id weim_id_table[] = {
 	/* i.MX1/21 */
 	{ .compatible = "fsl,imx1-weim", .data = &imx1_weim_devtype, },
@@ -87,8 +79,8 @@ MODULE_DEVICE_TABLE(of, weim_id_table);
 static int imx_weim_gpr_setup(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	struct of_range_parser parser;
-	struct of_range range;
+	struct property *prop;
+	const __be32 *p;
 	struct regmap *gpr;
 	u32 gprvals[4] = {
 		05,	/* CS0(128M) CS1(0M)  CS2(0M)  CS3(0M)  */
@@ -107,13 +99,13 @@ static int imx_weim_gpr_setup(struct platform_device *pdev)
 		return 0;
 	}
 
-	if (of_range_parser_init(&parser, np))
-		goto err;
-
-	for_each_of_range(&parser, &range) {
-		cs = range.bus_addr >> 32;
-		val = (range.size / SZ_32M) | 1;
-		gprval |= val << cs * 3;
+	of_property_for_each_u32(np, "ranges", prop, p, val) {
+		if (i % 4 == 0) {
+			cs = val;
+		} else if (i % 4 == 3 && val) {
+			val = (val / SZ_32M) | 1;
+			gprval |= val << cs * 3;
+		}
 		i++;
 	}
 
@@ -134,25 +126,20 @@ err:
 }
 
 /* Parse and set the timing for this device. */
-static int weim_timing_setup(struct device *dev, struct device_node *np,
-			     const struct imx_weim_devtype *devtype)
+static int weim_timing_setup(struct device *dev,
+			     struct device_node *np, void __iomem *base,
+			     const struct imx_weim_devtype *devtype,
+			     struct cs_timing_state *ts)
 {
 	u32 cs_idx, value[MAX_CS_REGS_COUNT];
 	int i, ret;
 	int reg_idx, num_regs;
 	struct cs_timing *cst;
-	struct weim_priv *priv;
-	struct cs_timing_state *ts;
-	void __iomem *base;
 
 	if (WARN_ON(devtype->cs_regs_count > MAX_CS_REGS_COUNT))
 		return -EINVAL;
 	if (WARN_ON(devtype->cs_count > MAX_CS_COUNT))
 		return -EINVAL;
-
-	priv = dev_get_drvdata(dev);
-	base = priv->base;
-	ts = &priv->timing_state;
 
 	ret = of_property_read_u32_array(np, "fsl,weim-cs-timing",
 					 value, devtype->cs_regs_count);
@@ -200,15 +187,14 @@ static int weim_timing_setup(struct device *dev, struct device_node *np,
 	return 0;
 }
 
-static int weim_parse_dt(struct platform_device *pdev)
+static int weim_parse_dt(struct platform_device *pdev, void __iomem *base)
 {
 	const struct of_device_id *of_id = of_match_device(weim_id_table,
 							   &pdev->dev);
 	const struct imx_weim_devtype *devtype = of_id->data;
-	int ret = 0, have_child = 0;
 	struct device_node *child;
-	struct weim_priv *priv;
-	void __iomem *base;
+	int ret, have_child = 0;
+	struct cs_timing_state ts = {};
 	u32 reg;
 
 	if (devtype == &imx50_weim_devtype) {
@@ -217,26 +203,11 @@ static int weim_parse_dt(struct platform_device *pdev)
 			return ret;
 	}
 
-	priv = dev_get_drvdata(&pdev->dev);
-	base = priv->base;
-
 	if (of_property_read_bool(pdev->dev.of_node, "fsl,burst-clk-enable")) {
 		if (devtype->wcr_bcm) {
 			reg = readl(base + devtype->wcr_offset);
-			reg |= devtype->wcr_bcm;
-
-			if (of_property_read_bool(pdev->dev.of_node,
-						"fsl,continuous-burst-clk")) {
-				if (devtype->wcr_cont_bclk) {
-					reg |= devtype->wcr_cont_bclk;
-				} else {
-					dev_err(&pdev->dev,
-						"continuous burst clk not supported.\n");
-					return -EINVAL;
-				}
-			}
-
-			writel(reg, base + devtype->wcr_offset);
+			writel(reg | devtype->wcr_bcm,
+				base + devtype->wcr_offset);
 		} else {
 			dev_err(&pdev->dev, "burst clk mode not supported.\n");
 			return -EINVAL;
@@ -244,7 +215,7 @@ static int weim_parse_dt(struct platform_device *pdev)
 	}
 
 	for_each_available_child_of_node(pdev->dev.of_node, child) {
-		ret = weim_timing_setup(&pdev->dev, child, devtype);
+		ret = weim_timing_setup(&pdev->dev, child, base, devtype, &ts);
 		if (ret)
 			dev_warn(&pdev->dev, "%pOF set timing failed.\n",
 				child);
@@ -263,22 +234,16 @@ static int weim_parse_dt(struct platform_device *pdev)
 
 static int weim_probe(struct platform_device *pdev)
 {
-	struct weim_priv *priv;
+	struct resource *res;
 	struct clk *clk;
 	void __iomem *base;
 	int ret;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
-
 	/* get the resource */
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
-
-	priv->base = base;
-	dev_set_drvdata(&pdev->dev, priv);
 
 	/* get the clock */
 	clk = devm_clk_get(&pdev->dev, NULL);
@@ -290,7 +255,7 @@ static int weim_probe(struct platform_device *pdev)
 		return ret;
 
 	/* parse the device node */
-	ret = weim_parse_dt(pdev);
+	ret = weim_parse_dt(pdev, base);
 	if (ret)
 		clk_disable_unprepare(clk);
 	else
@@ -299,86 +264,6 @@ static int weim_probe(struct platform_device *pdev)
 	return ret;
 }
 
-#if IS_ENABLED(CONFIG_OF_DYNAMIC)
-static int of_weim_notify(struct notifier_block *nb, unsigned long action,
-			  void *arg)
-{
-	const struct imx_weim_devtype *devtype;
-	struct of_reconfig_data *rd = arg;
-	const struct of_device_id *of_id;
-	struct platform_device *pdev;
-	int ret = NOTIFY_OK;
-
-	switch (of_reconfig_get_state_change(action, rd)) {
-	case OF_RECONFIG_CHANGE_ADD:
-		of_id = of_match_node(weim_id_table, rd->dn->parent);
-		if (!of_id)
-			return NOTIFY_OK; /* not for us */
-
-		devtype = of_id->data;
-
-		pdev = of_find_device_by_node(rd->dn->parent);
-		if (!pdev) {
-			pr_err("%s: could not find platform device for '%pOF'\n",
-				__func__, rd->dn->parent);
-
-			return notifier_from_errno(-EINVAL);
-		}
-
-		if (weim_timing_setup(&pdev->dev, rd->dn, devtype))
-			dev_warn(&pdev->dev,
-				 "Failed to setup timing for '%pOF'\n", rd->dn);
-
-		if (!of_node_check_flag(rd->dn, OF_POPULATED)) {
-			/*
-			 * Clear the flag before adding the device so that
-			 * fw_devlink doesn't skip adding consumers to this
-			 * device.
-			 */
-			rd->dn->fwnode.flags &= ~FWNODE_FLAG_NOT_DEVICE;
-			if (!of_platform_device_create(rd->dn, NULL, &pdev->dev)) {
-				dev_err(&pdev->dev,
-					"Failed to create child device '%pOF'\n",
-					rd->dn);
-				ret = notifier_from_errno(-EINVAL);
-			}
-		}
-
-		platform_device_put(pdev);
-
-		break;
-	case OF_RECONFIG_CHANGE_REMOVE:
-		if (!of_node_check_flag(rd->dn, OF_POPULATED))
-			return NOTIFY_OK; /* device already destroyed */
-
-		of_id = of_match_node(weim_id_table, rd->dn->parent);
-		if (!of_id)
-			return NOTIFY_OK; /* not for us */
-
-		pdev = of_find_device_by_node(rd->dn);
-		if (!pdev) {
-			pr_err("Could not find platform device for '%pOF'\n",
-				rd->dn);
-
-			ret = notifier_from_errno(-EINVAL);
-		} else {
-			of_platform_device_destroy(&pdev->dev, NULL);
-			platform_device_put(pdev);
-		}
-
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
-static struct notifier_block weim_of_notifier = {
-	.notifier_call = of_weim_notify,
-};
-#endif /* IS_ENABLED(CONFIG_OF_DYNAMIC) */
-
 static struct platform_driver weim_driver = {
 	.driver = {
 		.name		= "imx-weim",
@@ -386,27 +271,7 @@ static struct platform_driver weim_driver = {
 	},
 	.probe = weim_probe,
 };
-
-static int __init weim_init(void)
-{
-#if IS_ENABLED(CONFIG_OF_DYNAMIC)
-	WARN_ON(of_reconfig_notifier_register(&weim_of_notifier));
-#endif /* IS_ENABLED(CONFIG_OF_DYNAMIC) */
-
-	return platform_driver_register(&weim_driver);
-}
-module_init(weim_init);
-
-static void __exit weim_exit(void)
-{
-#if IS_ENABLED(CONFIG_OF_DYNAMIC)
-	of_reconfig_notifier_unregister(&weim_of_notifier);
-#endif /* IS_ENABLED(CONFIG_OF_DYNAMIC) */
-
-	return platform_driver_unregister(&weim_driver);
-
-}
-module_exit(weim_exit);
+module_platform_driver(weim_driver);
 
 MODULE_AUTHOR("Freescale Semiconductor Inc.");
 MODULE_DESCRIPTION("i.MX EIM Controller Driver");

@@ -28,7 +28,18 @@
 	}
 
 #define EBG_COMMUNITY(b, s, e, g)			\
-	INTEL_COMMUNITY_GPPS(b, s, e, g, EBG)
+	{						\
+		.barno = (b),				\
+		.padown_offset = EBG_PAD_OWN,		\
+		.padcfglock_offset = EBG_PADCFGLOCK,	\
+		.hostown_offset = EBG_HOSTSW_OWN,	\
+		.is_offset = EBG_GPI_IS,		\
+		.ie_offset = EBG_GPI_IE,		\
+		.pin_base = (s),			\
+		.npins = ((e) - (s) + 1),		\
+		.gpps = (g),				\
+		.ngpps = ARRAY_SIZE(g),			\
+	}
 
 /* Emmitsburg */
 static const struct pinctrl_pin_desc ebg_pins[] = {

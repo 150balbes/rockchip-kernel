@@ -506,11 +506,12 @@ static int ams369fg06_probe(struct spi_device *spi)
 	return 0;
 }
 
-static void ams369fg06_remove(struct spi_device *spi)
+static int ams369fg06_remove(struct spi_device *spi)
 {
 	struct ams369fg06 *lcd = spi_get_drvdata(spi);
 
 	ams369fg06_power(lcd, FB_BLANK_POWERDOWN);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

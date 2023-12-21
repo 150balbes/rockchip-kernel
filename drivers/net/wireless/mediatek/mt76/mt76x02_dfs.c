@@ -609,11 +609,10 @@ static void mt76x02_dfs_check_event_window(struct mt76x02_dev *dev)
 	}
 }
 
-static void mt76x02_dfs_tasklet(struct tasklet_struct *t)
+static void mt76x02_dfs_tasklet(unsigned long arg)
 {
-	struct mt76x02_dfs_pattern_detector *dfs_pd = from_tasklet(dfs_pd, t,
-								   dfs_tasklet);
-	struct mt76x02_dev *dev = container_of(dfs_pd, typeof(*dev), dfs_pd);
+	struct mt76x02_dev *dev = (struct mt76x02_dev *)arg;
+	struct mt76x02_dfs_pattern_detector *dfs_pd = &dev->dfs_pd;
 	u32 engine_mask;
 	int i;
 
@@ -823,7 +822,10 @@ EXPORT_SYMBOL_GPL(mt76x02_phy_dfs_adjust_agc);
 
 void mt76x02_dfs_init_params(struct mt76x02_dev *dev)
 {
-	if (mt76_phy_dfs_state(&dev->mphy) > MT_DFS_STATE_DISABLED) {
+	struct cfg80211_chan_def *chandef = &dev->mphy.chandef;
+
+	if ((chandef->chan->flags & IEEE80211_CHAN_RADAR) &&
+	    dev->mt76.region != NL80211_DFS_UNSET) {
 		mt76x02_dfs_init_sw_detector(dev);
 		mt76x02_dfs_set_bbp_params(dev);
 		/* enable debug mode */
@@ -858,7 +860,8 @@ void mt76x02_dfs_init_detector(struct mt76x02_dev *dev)
 	INIT_LIST_HEAD(&dfs_pd->seq_pool);
 	dev->mt76.region = NL80211_DFS_UNSET;
 	dfs_pd->last_sw_check = jiffies;
-	tasklet_setup(&dfs_pd->dfs_tasklet, mt76x02_dfs_tasklet);
+	tasklet_init(&dfs_pd->dfs_tasklet, mt76x02_dfs_tasklet,
+		     (unsigned long)dev);
 }
 
 static void

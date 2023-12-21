@@ -213,9 +213,6 @@ static enum connector_id connector_id_from_bios_object_id(
 	case CONNECTOR_OBJECT_ID_MXM:
 		id = CONNECTOR_ID_MXM;
 		break;
-	case CONNECTOR_OBJECT_ID_USBC:
-		id = CONNECTOR_ID_USBC;
-		break;
 	default:
 		id = CONNECTOR_ID_UNKNOWN;
 		break;

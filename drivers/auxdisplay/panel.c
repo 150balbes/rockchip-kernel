@@ -56,7 +56,6 @@
 #include <linux/uaccess.h>
 
 #include "charlcd.h"
-#include "hd44780_common.h"
 
 #define LCD_MAXBYTES		256	/* max burst write */
 
@@ -299,6 +298,8 @@ static unsigned char lcd_bits[LCD_PORTS][LCD_BITS][BIT_STATES];
 #define DEFAULT_LCD_TYPE        LCD_TYPE_OLD
 #define DEFAULT_LCD_HEIGHT      2
 #define DEFAULT_LCD_WIDTH       40
+#define DEFAULT_LCD_BWIDTH      40
+#define DEFAULT_LCD_HWIDTH      64
 #define DEFAULT_LCD_CHARSET     LCD_CHARSET_NORMAL
 #define DEFAULT_LCD_PROTO       LCD_PROTO_PARALLEL
 
@@ -707,7 +708,7 @@ static void lcd_send_serial(int byte)
 }
 
 /* turn the backlight on or off */
-static void lcd_backlight(struct charlcd *charlcd, enum charlcd_onoff on)
+static void lcd_backlight(struct charlcd *charlcd, int on)
 {
 	if (lcd.pins.bl == PIN_NONE)
 		return;
@@ -723,7 +724,7 @@ static void lcd_backlight(struct charlcd *charlcd, enum charlcd_onoff on)
 }
 
 /* send a command to the LCD panel in serial mode */
-static void lcd_write_cmd_s(struct hd44780_common *hdc, int cmd)
+static void lcd_write_cmd_s(struct charlcd *charlcd, int cmd)
 {
 	spin_lock_irq(&pprt_lock);
 	lcd_send_serial(0x1F);	/* R/W=W, RS=0 */
@@ -734,7 +735,7 @@ static void lcd_write_cmd_s(struct hd44780_common *hdc, int cmd)
 }
 
 /* send data to the LCD panel in serial mode */
-static void lcd_write_data_s(struct hd44780_common *hdc, int data)
+static void lcd_write_data_s(struct charlcd *charlcd, int data)
 {
 	spin_lock_irq(&pprt_lock);
 	lcd_send_serial(0x5F);	/* R/W=W, RS=1 */
@@ -745,7 +746,7 @@ static void lcd_write_data_s(struct hd44780_common *hdc, int data)
 }
 
 /* send a command to the LCD panel in 8 bits parallel mode */
-static void lcd_write_cmd_p8(struct hd44780_common *hdc, int cmd)
+static void lcd_write_cmd_p8(struct charlcd *charlcd, int cmd)
 {
 	spin_lock_irq(&pprt_lock);
 	/* present the data to the data port */
@@ -767,7 +768,7 @@ static void lcd_write_cmd_p8(struct hd44780_common *hdc, int cmd)
 }
 
 /* send data to the LCD panel in 8 bits parallel mode */
-static void lcd_write_data_p8(struct hd44780_common *hdc, int data)
+static void lcd_write_data_p8(struct charlcd *charlcd, int data)
 {
 	spin_lock_irq(&pprt_lock);
 	/* present the data to the data port */
@@ -789,7 +790,7 @@ static void lcd_write_data_p8(struct hd44780_common *hdc, int data)
 }
 
 /* send a command to the TI LCD panel */
-static void lcd_write_cmd_tilcd(struct hd44780_common *hdc, int cmd)
+static void lcd_write_cmd_tilcd(struct charlcd *charlcd, int cmd)
 {
 	spin_lock_irq(&pprt_lock);
 	/* present the data to the control port */
@@ -799,7 +800,7 @@ static void lcd_write_cmd_tilcd(struct hd44780_common *hdc, int cmd)
 }
 
 /* send data to the TI LCD panel */
-static void lcd_write_data_tilcd(struct hd44780_common *hdc, int data)
+static void lcd_write_data_tilcd(struct charlcd *charlcd, int data)
 {
 	spin_lock_irq(&pprt_lock);
 	/* present the data to the data port */
@@ -808,41 +809,96 @@ static void lcd_write_data_tilcd(struct hd44780_common *hdc, int data)
 	spin_unlock_irq(&pprt_lock);
 }
 
-static const struct charlcd_ops charlcd_ops = {
+/* fills the display with spaces and resets X/Y */
+static void lcd_clear_fast_s(struct charlcd *charlcd)
+{
+	int pos;
+
+	spin_lock_irq(&pprt_lock);
+	for (pos = 0; pos < charlcd->height * charlcd->hwidth; pos++) {
+		lcd_send_serial(0x5F);	/* R/W=W, RS=1 */
+		lcd_send_serial(' ' & 0x0F);
+		lcd_send_serial((' ' >> 4) & 0x0F);
+		/* the shortest data takes at least 40 us */
+		udelay(40);
+	}
+	spin_unlock_irq(&pprt_lock);
+}
+
+/* fills the display with spaces and resets X/Y */
+static void lcd_clear_fast_p8(struct charlcd *charlcd)
+{
+	int pos;
+
+	spin_lock_irq(&pprt_lock);
+	for (pos = 0; pos < charlcd->height * charlcd->hwidth; pos++) {
+		/* present the data to the data port */
+		w_dtr(pprt, ' ');
+
+		/* maintain the data during 20 us before the strobe */
+		udelay(20);
+
+		set_bit(LCD_BIT_E, bits);
+		set_bit(LCD_BIT_RS, bits);
+		clear_bit(LCD_BIT_RW, bits);
+		set_ctrl_bits();
+
+		/* maintain the strobe during 40 us */
+		udelay(40);
+
+		clear_bit(LCD_BIT_E, bits);
+		set_ctrl_bits();
+
+		/* the shortest data takes at least 45 us */
+		udelay(45);
+	}
+	spin_unlock_irq(&pprt_lock);
+}
+
+/* fills the display with spaces and resets X/Y */
+static void lcd_clear_fast_tilcd(struct charlcd *charlcd)
+{
+	int pos;
+
+	spin_lock_irq(&pprt_lock);
+	for (pos = 0; pos < charlcd->height * charlcd->hwidth; pos++) {
+		/* present the data to the data port */
+		w_dtr(pprt, ' ');
+		udelay(60);
+	}
+
+	spin_unlock_irq(&pprt_lock);
+}
+
+static const struct charlcd_ops charlcd_serial_ops = {
+	.write_cmd	= lcd_write_cmd_s,
+	.write_data	= lcd_write_data_s,
+	.clear_fast	= lcd_clear_fast_s,
 	.backlight	= lcd_backlight,
-	.print		= hd44780_common_print,
-	.gotoxy		= hd44780_common_gotoxy,
-	.home		= hd44780_common_home,
-	.clear_display	= hd44780_common_clear_display,
-	.init_display	= hd44780_common_init_display,
-	.shift_cursor	= hd44780_common_shift_cursor,
-	.shift_display	= hd44780_common_shift_display,
-	.display	= hd44780_common_display,
-	.cursor		= hd44780_common_cursor,
-	.blink		= hd44780_common_blink,
-	.fontsize	= hd44780_common_fontsize,
-	.lines		= hd44780_common_lines,
-	.redefine_char	= hd44780_common_redefine_char,
+};
+
+static const struct charlcd_ops charlcd_parallel_ops = {
+	.write_cmd	= lcd_write_cmd_p8,
+	.write_data	= lcd_write_data_p8,
+	.clear_fast	= lcd_clear_fast_p8,
+	.backlight	= lcd_backlight,
+};
+
+static const struct charlcd_ops charlcd_tilcd_ops = {
+	.write_cmd	= lcd_write_cmd_tilcd,
+	.write_data	= lcd_write_data_tilcd,
+	.clear_fast	= lcd_clear_fast_tilcd,
+	.backlight	= lcd_backlight,
 };
 
 /* initialize the LCD driver */
 static void lcd_init(void)
 {
 	struct charlcd *charlcd;
-	struct hd44780_common *hdc;
 
-	hdc = hd44780_common_alloc();
-	if (!hdc)
+	charlcd = charlcd_alloc(0);
+	if (!charlcd)
 		return;
-
-	charlcd = charlcd_alloc();
-	if (!charlcd) {
-		kfree(hdc);
-		return;
-	}
-
-	hdc->hd44780 = &lcd;
-	charlcd->drvdata = hdc;
 
 	/*
 	 * Init lcd struct with load-time values to preserve exact
@@ -850,8 +906,8 @@ static void lcd_init(void)
 	 */
 	charlcd->height = lcd_height;
 	charlcd->width = lcd_width;
-	hdc->bwidth = lcd_bwidth;
-	hdc->hwidth = lcd_hwidth;
+	charlcd->bwidth = lcd_bwidth;
+	charlcd->hwidth = lcd_hwidth;
 
 	switch (selected_lcd_type) {
 	case LCD_TYPE_OLD:
@@ -862,8 +918,8 @@ static void lcd_init(void)
 		lcd.pins.rs = PIN_AUTOLF;
 
 		charlcd->width = 40;
-		hdc->bwidth = 40;
-		hdc->hwidth = 64;
+		charlcd->bwidth = 40;
+		charlcd->hwidth = 64;
 		charlcd->height = 2;
 		break;
 	case LCD_TYPE_KS0074:
@@ -875,8 +931,8 @@ static void lcd_init(void)
 		lcd.pins.da = PIN_D0;
 
 		charlcd->width = 16;
-		hdc->bwidth = 40;
-		hdc->hwidth = 16;
+		charlcd->bwidth = 40;
+		charlcd->hwidth = 16;
 		charlcd->height = 2;
 		break;
 	case LCD_TYPE_NEXCOM:
@@ -888,8 +944,8 @@ static void lcd_init(void)
 		lcd.pins.rw = PIN_INITP;
 
 		charlcd->width = 16;
-		hdc->bwidth = 40;
-		hdc->hwidth = 64;
+		charlcd->bwidth = 40;
+		charlcd->hwidth = 64;
 		charlcd->height = 2;
 		break;
 	case LCD_TYPE_CUSTOM:
@@ -907,8 +963,8 @@ static void lcd_init(void)
 		lcd.pins.rs = PIN_SELECP;
 
 		charlcd->width = 16;
-		hdc->bwidth = 40;
-		hdc->hwidth = 64;
+		charlcd->bwidth = 40;
+		charlcd->hwidth = 64;
 		charlcd->height = 2;
 		break;
 	}
@@ -919,9 +975,9 @@ static void lcd_init(void)
 	if (lcd_width != NOT_SET)
 		charlcd->width = lcd_width;
 	if (lcd_bwidth != NOT_SET)
-		hdc->bwidth = lcd_bwidth;
+		charlcd->bwidth = lcd_bwidth;
 	if (lcd_hwidth != NOT_SET)
-		hdc->hwidth = lcd_hwidth;
+		charlcd->hwidth = lcd_hwidth;
 	if (lcd_charset != NOT_SET)
 		lcd.charset = lcd_charset;
 	if (lcd_proto != NOT_SET)
@@ -942,17 +998,15 @@ static void lcd_init(void)
 	/* this is used to catch wrong and default values */
 	if (charlcd->width <= 0)
 		charlcd->width = DEFAULT_LCD_WIDTH;
-	if (hdc->bwidth <= 0)
-		hdc->bwidth = DEFAULT_LCD_BWIDTH;
-	if (hdc->hwidth <= 0)
-		hdc->hwidth = DEFAULT_LCD_HWIDTH;
+	if (charlcd->bwidth <= 0)
+		charlcd->bwidth = DEFAULT_LCD_BWIDTH;
+	if (charlcd->hwidth <= 0)
+		charlcd->hwidth = DEFAULT_LCD_HWIDTH;
 	if (charlcd->height <= 0)
 		charlcd->height = DEFAULT_LCD_HEIGHT;
 
 	if (lcd.proto == LCD_PROTO_SERIAL) {	/* SERIAL */
-		charlcd->ops = &charlcd_ops;
-		hdc->write_data = lcd_write_data_s;
-		hdc->write_cmd = lcd_write_cmd_s;
+		charlcd->ops = &charlcd_serial_ops;
 
 		if (lcd.pins.cl == PIN_NOT_SET)
 			lcd.pins.cl = DEFAULT_LCD_PIN_SCL;
@@ -960,9 +1014,7 @@ static void lcd_init(void)
 			lcd.pins.da = DEFAULT_LCD_PIN_SDA;
 
 	} else if (lcd.proto == LCD_PROTO_PARALLEL) {	/* PARALLEL */
-		charlcd->ops = &charlcd_ops;
-		hdc->write_data = lcd_write_data_p8;
-		hdc->write_cmd = lcd_write_cmd_p8;
+		charlcd->ops = &charlcd_parallel_ops;
 
 		if (lcd.pins.e == PIN_NOT_SET)
 			lcd.pins.e = DEFAULT_LCD_PIN_E;
@@ -971,9 +1023,7 @@ static void lcd_init(void)
 		if (lcd.pins.rw == PIN_NOT_SET)
 			lcd.pins.rw = DEFAULT_LCD_PIN_RW;
 	} else {
-		charlcd->ops = &charlcd_ops;
-		hdc->write_data = lcd_write_data_tilcd;
-		hdc->write_cmd = lcd_write_cmd_tilcd;
+		charlcd->ops = &charlcd_tilcd_ops;
 	}
 
 	if (lcd.pins.bl == PIN_NOT_SET)
@@ -1570,7 +1620,7 @@ err_lcd_unreg:
 	if (lcd.enabled)
 		charlcd_unregister(lcd.charlcd);
 err_unreg_device:
-	kfree(lcd.charlcd);
+	charlcd_free(lcd.charlcd);
 	lcd.charlcd = NULL;
 	parport_unregister_device(pprt);
 	pprt = NULL;
@@ -1597,8 +1647,7 @@ static void panel_detach(struct parport *port)
 	if (lcd.enabled) {
 		charlcd_unregister(lcd.charlcd);
 		lcd.initialized = false;
-		kfree(lcd.charlcd->drvdata);
-		kfree(lcd.charlcd);
+		charlcd_free(lcd.charlcd);
 		lcd.charlcd = NULL;
 	}
 
@@ -1737,3 +1786,10 @@ module_init(panel_init_module);
 module_exit(panel_cleanup_module);
 MODULE_AUTHOR("Willy Tarreau");
 MODULE_LICENSE("GPL");
+
+/*
+ * Local variables:
+ *  c-indent-level: 4
+ *  tab-width: 8
+ * End:
+ */

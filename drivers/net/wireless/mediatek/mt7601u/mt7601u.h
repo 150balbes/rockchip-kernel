@@ -368,8 +368,7 @@ void mt7601u_mac_set_ampdu_factor(struct mt7601u_dev *dev);
 void mt7601u_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 		struct sk_buff *skb);
 int mt7601u_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-		    unsigned int link_id, u16 queue,
-		    const struct ieee80211_tx_queue_params *params);
+		    u16 queue, const struct ieee80211_tx_queue_params *params);
 void mt7601u_tx_status(struct mt7601u_dev *dev, struct sk_buff *skb);
 void mt7601u_tx_stat(struct work_struct *work);
 

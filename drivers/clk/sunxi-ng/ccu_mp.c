@@ -10,9 +10,9 @@
 #include "ccu_gate.h"
 #include "ccu_mp.h"
 
-static unsigned long ccu_mp_find_best(unsigned long parent, unsigned long rate,
-				      unsigned int max_m, unsigned int max_p,
-				      unsigned int *m, unsigned int *p)
+static void ccu_mp_find_best(unsigned long parent, unsigned long rate,
+			     unsigned int max_m, unsigned int max_p,
+			     unsigned int *m, unsigned int *p)
 {
 	unsigned long best_rate = 0;
 	unsigned int best_m = 0, best_p = 0;
@@ -35,8 +35,6 @@ static unsigned long ccu_mp_find_best(unsigned long parent, unsigned long rate,
 
 	*m = best_m;
 	*p = best_p;
-
-	return best_rate;
 }
 
 static unsigned long ccu_mp_find_best_with_parent_adj(struct clk_hw *hw,
@@ -111,7 +109,8 @@ static unsigned long ccu_mp_round_rate(struct ccu_mux_internal *mux,
 	max_p = cmp->p.max ?: 1 << ((1 << cmp->p.width) - 1);
 
 	if (!clk_hw_can_set_rate_parent(&cmp->common.hw)) {
-		rate = ccu_mp_find_best(*parent_rate, rate, max_m, max_p, &m, &p);
+		ccu_mp_find_best(*parent_rate, rate, max_m, max_p, &m, &p);
+		rate = *parent_rate / p / m;
 	} else {
 		rate = ccu_mp_find_best_with_parent_adj(hw, parent_rate, rate,
 							max_m, max_p);
@@ -246,7 +245,6 @@ const struct clk_ops ccu_mp_ops = {
 	.recalc_rate	= ccu_mp_recalc_rate,
 	.set_rate	= ccu_mp_set_rate,
 };
-EXPORT_SYMBOL_NS_GPL(ccu_mp_ops, SUNXI_CCU);
 
 /*
  * Support for MMC timing mode switching
@@ -327,4 +325,3 @@ const struct clk_ops ccu_mp_mmc_ops = {
 	.recalc_rate	= ccu_mp_mmc_recalc_rate,
 	.set_rate	= ccu_mp_mmc_set_rate,
 };
-EXPORT_SYMBOL_NS_GPL(ccu_mp_mmc_ops, SUNXI_CCU);

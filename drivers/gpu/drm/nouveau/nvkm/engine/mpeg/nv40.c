@@ -76,8 +76,7 @@ nv40_mpeg = {
 };
 
 int
-nv40_mpeg_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-	      struct nvkm_engine **pmpeg)
+nv40_mpeg_new(struct nvkm_device *device, int index, struct nvkm_engine **pmpeg)
 {
-	return nv31_mpeg_new_(&nv40_mpeg, device, type, inst, pmpeg);
+	return nv31_mpeg_new_(&nv40_mpeg, device, index, pmpeg);
 }

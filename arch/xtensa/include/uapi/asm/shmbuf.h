@@ -20,12 +20,9 @@
 #ifndef _XTENSA_SHMBUF_H
 #define _XTENSA_SHMBUF_H
 
-#include <asm/ipcbuf.h>
-#include <asm/posix_types.h>
-
 struct shmid64_ds {
 	struct ipc64_perm	shm_perm;	/* operation perms */
-	__kernel_size_t		shm_segsz;	/* size of segment (bytes) */
+	size_t			shm_segsz;	/* size of segment (bytes) */
 	unsigned long		shm_atime;	/* last attach time */
 	unsigned long		shm_atime_high;
 	unsigned long		shm_dtime;	/* last detach time */

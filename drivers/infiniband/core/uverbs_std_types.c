@@ -88,7 +88,7 @@ static int uverbs_free_rwq_ind_tbl(struct ib_uobject *uobject,
 		return -EBUSY;
 
 	ret = rwq_ind_tbl->device->ops.destroy_rwq_ind_table(rwq_ind_tbl);
-	if (ret)
+	if (ib_is_destroy_retryable(ret, why, uobject))
 		return ret;
 
 	for (i = 0; i < table_size; i++)
@@ -96,7 +96,7 @@ static int uverbs_free_rwq_ind_tbl(struct ib_uobject *uobject,
 
 	kfree(rwq_ind_tbl);
 	kfree(ind_tbl);
-	return 0;
+	return ret;
 }
 
 static int uverbs_free_xrcd(struct ib_uobject *uobject,
@@ -108,8 +108,9 @@ static int uverbs_free_xrcd(struct ib_uobject *uobject,
 		container_of(uobject, struct ib_uxrcd_object, uobject);
 	int ret;
 
-	if (atomic_read(&uxrcd->refcnt))
-		return -EBUSY;
+	ret = ib_destroy_usecnt(&uxrcd->refcnt, why, uobject);
+	if (ret)
+		return ret;
 
 	mutex_lock(&attrs->ufile->device->xrcd_tree_mutex);
 	ret = ib_uverbs_dealloc_xrcd(uobject, xrcd, why, attrs);
@@ -123,9 +124,11 @@ static int uverbs_free_pd(struct ib_uobject *uobject,
 			  struct uverbs_attr_bundle *attrs)
 {
 	struct ib_pd *pd = uobject->object;
+	int ret;
 
-	if (atomic_read(&pd->usecnt))
-		return -EBUSY;
+	ret = ib_destroy_usecnt(&pd->usecnt, why, uobject);
+	if (ret)
+		return ret;
 
 	return ib_dealloc_pd_user(pd, &attrs->driver_udata);
 }
@@ -154,7 +157,7 @@ void ib_uverbs_free_event_queue(struct ib_uverbs_event_queue *event_queue)
 	spin_unlock_irq(&event_queue->lock);
 }
 
-static void
+static int
 uverbs_completion_event_file_destroy_uobj(struct ib_uobject *uobj,
 					  enum rdma_remove_reason why)
 {
@@ -163,6 +166,7 @@ uverbs_completion_event_file_destroy_uobj(struct ib_uobject *uobj,
 			     uobj);
 
 	ib_uverbs_free_event_queue(&file->ev_queue);
+	return 0;
 }
 
 int uverbs_destroy_def_handler(struct uverbs_attr_bundle *attrs)

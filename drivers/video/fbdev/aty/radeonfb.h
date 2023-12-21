@@ -21,7 +21,7 @@
 
 #include <asm/io.h>
 
-#ifdef CONFIG_SPARC
+#if defined(CONFIG_PPC) || defined(CONFIG_SPARC)
 #include <asm/prom.h>
 #endif
 

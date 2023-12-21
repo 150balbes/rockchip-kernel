@@ -919,8 +919,8 @@ static int csk_wait_memory(struct chtls_dev *cdev,
 	current_timeo = *timeo_p;
 	noblock = (*timeo_p ? false : true);
 	if (csk_mem_free(cdev, sk)) {
-		current_timeo = get_random_u32_below(HZ / 5) + 2;
-		vm_wait = get_random_u32_below(HZ / 5) + 2;
+		current_timeo = (prandom_u32() % (HZ / 5)) + 2;
+		vm_wait = (prandom_u32() % (HZ / 5)) + 2;
 	}
 
 	add_wait_queue(sk_sleep(sk), &wait);
@@ -1092,17 +1092,7 @@ new_buf:
 		if (copy > size)
 			copy = size;
 
-		if (msg->msg_flags & MSG_SPLICE_PAGES) {
-			err = skb_splice_from_iter(skb, &msg->msg_iter, copy,
-						   sk->sk_allocation);
-			if (err < 0) {
-				if (err == -EMSGSIZE)
-					goto new_buf;
-				goto do_fault;
-			}
-			copy = err;
-			sk_wmem_queued_add(sk, copy);
-		} else if (skb_tailroom(skb) > 0) {
+		if (skb_tailroom(skb) > 0) {
 			copy = min(copy, skb_tailroom(skb));
 			if (is_tls_tx(csk))
 				copy = min_t(int, copy, csk->tlshws.txleft);
@@ -1237,13 +1227,113 @@ out_err:
 	goto done;
 }
 
-void chtls_splice_eof(struct socket *sock)
+int chtls_sendpage(struct sock *sk, struct page *page,
+		   int offset, size_t size, int flags)
 {
-	struct sock *sk = sock->sk;
+	struct chtls_sock *csk;
+	struct chtls_dev *cdev;
+	int mss, err, copied;
+	struct tcp_sock *tp;
+	long timeo;
 
+	tp = tcp_sk(sk);
+	copied = 0;
+	csk = rcu_dereference_sk_user_data(sk);
+	cdev = csk->cdev;
 	lock_sock(sk);
-	chtls_tcp_push(sk, 0);
+	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
+
+	err = sk_stream_wait_connect(sk, &timeo);
+	if (!sk_in_state(sk, TCPF_ESTABLISHED | TCPF_CLOSE_WAIT) &&
+	    err != 0)
+		goto out_err;
+
+	mss = csk->mss;
+	csk_set_flag(csk, CSK_TX_MORE_DATA);
+
+	while (size > 0) {
+		struct sk_buff *skb = skb_peek_tail(&csk->txq);
+		int copy, i;
+
+		if (!skb || (ULP_SKB_CB(skb)->flags & ULPCB_FLAG_NO_APPEND) ||
+		    (copy = mss - skb->len) <= 0) {
+new_buf:
+			if (!csk_mem_free(cdev, sk))
+				goto wait_for_sndbuf;
+
+			if (is_tls_tx(csk)) {
+				skb = get_record_skb(sk,
+						     select_size(sk, size,
+								 flags,
+								 TX_TLSHDR_LEN),
+						     true);
+			} else {
+				skb = get_tx_skb(sk, 0);
+			}
+			if (!skb)
+				goto wait_for_memory;
+			copy = mss;
+		}
+		if (copy > size)
+			copy = size;
+
+		i = skb_shinfo(skb)->nr_frags;
+		if (skb_can_coalesce(skb, i, page, offset)) {
+			skb_frag_size_add(&skb_shinfo(skb)->frags[i - 1], copy);
+		} else if (i < MAX_SKB_FRAGS) {
+			get_page(page);
+			skb_fill_page_desc(skb, i, page, offset, copy);
+		} else {
+			tx_skb_finalize(skb);
+			push_frames_if_head(sk);
+			goto new_buf;
+		}
+
+		skb->len += copy;
+		if (skb->len == mss)
+			tx_skb_finalize(skb);
+		skb->data_len += copy;
+		skb->truesize += copy;
+		sk->sk_wmem_queued += copy;
+		tp->write_seq += copy;
+		copied += copy;
+		offset += copy;
+		size -= copy;
+
+		if (corked(tp, flags) &&
+		    (sk_stream_wspace(sk) < sk_stream_min_wspace(sk)))
+			ULP_SKB_CB(skb)->flags |= ULPCB_FLAG_NO_APPEND;
+
+		if (!size)
+			break;
+
+		if (unlikely(ULP_SKB_CB(skb)->flags & ULPCB_FLAG_NO_APPEND))
+			push_frames_if_head(sk);
+		continue;
+wait_for_sndbuf:
+		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+wait_for_memory:
+		err = csk_wait_memory(cdev, sk, &timeo);
+		if (err)
+			goto do_error;
+	}
+out:
+	csk_reset_flag(csk, CSK_TX_MORE_DATA);
+	if (copied)
+		chtls_tcp_push(sk, flags);
+done:
 	release_sock(sk);
+	return copied;
+
+do_error:
+	if (copied)
+		goto out;
+
+out_err:
+	if (csk_conn_inline(csk))
+		csk_reset_flag(csk, CSK_TX_MORE_DATA);
+	copied = sk_stream_error(sk, flags, err);
+	goto done;
 }
 
 static void chtls_select_window(struct sock *sk)
@@ -1336,7 +1426,7 @@ static void chtls_cleanup_rbuf(struct sock *sk, int copied)
 }
 
 static int chtls_pt_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
-			    int flags, int *addr_len)
+			    int nonblock, int flags, int *addr_len)
 {
 	struct chtls_sock *csk = rcu_dereference_sk_user_data(sk);
 	struct chtls_hws *hws = &csk->tlshws;
@@ -1351,7 +1441,7 @@ static int chtls_pt_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 
 	buffers_freed = 0;
 
-	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+	timeo = sock_rcvtimeo(sk, nonblock);
 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, len);
 
 	if (unlikely(csk_flag(sk, CSK_UPDATE_RCV_WND)))
@@ -1526,7 +1616,7 @@ skip_copy:
  * Peek at data in a socket's receive buffer.
  */
 static int peekmsg(struct sock *sk, struct msghdr *msg,
-		   size_t len, int flags)
+		   size_t len, int nonblock, int flags)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	u32 peek_seq, offset;
@@ -1536,7 +1626,7 @@ static int peekmsg(struct sock *sk, struct msghdr *msg,
 	long timeo;
 
 	lock_sock(sk);
-	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+	timeo = sock_rcvtimeo(sk, nonblock);
 	peek_seq = tp->copied_seq;
 
 	do {
@@ -1647,7 +1737,7 @@ found_ok_skb:
 }
 
 int chtls_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
-		  int flags, int *addr_len)
+		  int nonblock, int flags, int *addr_len)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct chtls_sock *csk;
@@ -1660,23 +1750,25 @@ int chtls_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	buffers_freed = 0;
 
 	if (unlikely(flags & MSG_OOB))
-		return tcp_prot.recvmsg(sk, msg, len, flags, addr_len);
+		return tcp_prot.recvmsg(sk, msg, len, nonblock, flags,
+					addr_len);
 
 	if (unlikely(flags & MSG_PEEK))
-		return peekmsg(sk, msg, len, flags);
+		return peekmsg(sk, msg, len, nonblock, flags);
 
 	if (sk_can_busy_loop(sk) &&
 	    skb_queue_empty_lockless(&sk->sk_receive_queue) &&
 	    sk->sk_state == TCP_ESTABLISHED)
-		sk_busy_loop(sk, flags & MSG_DONTWAIT);
+		sk_busy_loop(sk, nonblock);
 
 	lock_sock(sk);
 	csk = rcu_dereference_sk_user_data(sk);
 
 	if (is_tls_rx(csk))
-		return chtls_pt_recvmsg(sk, msg, len, flags, addr_len);
+		return chtls_pt_recvmsg(sk, msg, len, nonblock,
+					flags, addr_len);
 
-	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+	timeo = sock_rcvtimeo(sk, nonblock);
 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, len);
 
 	if (unlikely(csk_flag(sk, CSK_UPDATE_RCV_WND)))

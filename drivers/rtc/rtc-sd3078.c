@@ -163,7 +163,8 @@ static const struct regmap_config regmap_config = {
 	.max_register = 0x11,
 };
 
-static int sd3078_probe(struct i2c_client *client)
+static int sd3078_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct sd3078 *sd3078;
@@ -191,7 +192,7 @@ static int sd3078_probe(struct i2c_client *client)
 	sd3078->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	sd3078->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
-	ret = devm_rtc_register_device(sd3078->rtc);
+	ret = rtc_register_device(sd3078->rtc);
 	if (ret)
 		return ret;
 
@@ -206,7 +207,7 @@ static const struct i2c_device_id sd3078_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, sd3078_id);
 
-static const __maybe_unused struct of_device_id rtc_dt_match[] = {
+static const struct of_device_id rtc_dt_match[] = {
 	{ .compatible = "whwave,sd3078" },
 	{},
 };

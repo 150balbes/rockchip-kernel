@@ -2,7 +2,7 @@
 /*
  * HDMI driver for OMAP5
  *
- * Copyright (C) 2014 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2014 Texas Instruments Incorporated - http://www.ti.com/
  *
  * Authors:
  *	Yong Zhi
@@ -32,7 +32,6 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_state_helper.h>
-#include <drm/drm_edid.h>
 
 #include "omapdss.h"
 #include "hdmi5_core.h"
@@ -45,10 +44,10 @@ static int hdmi_runtime_get(struct omap_hdmi *hdmi)
 	DSSDBG("hdmi_runtime_get\n");
 
 	r = pm_runtime_get_sync(&hdmi->pdev->dev);
-	if (WARN_ON(r < 0)) {
-		pm_runtime_put_noidle(&hdmi->pdev->dev);
+	WARN_ON(r < 0);
+	if (r < 0)
 		return r;
-	}
+
 	return 0;
 }
 
@@ -682,6 +681,7 @@ static int hdmi5_init_output(struct omap_hdmi *hdmi)
 	out->type = OMAP_DISPLAY_TYPE_HDMI;
 	out->name = "hdmi.0";
 	out->dispc_channel = OMAP_DSS_CHANNEL_DIGIT;
+	out->owner = THIS_MODULE;
 	out->of_port = 0;
 
 	r = omapdss_device_init_output(out, &hdmi->bridge);
@@ -798,7 +798,7 @@ err_free:
 	return r;
 }
 
-static void hdmi5_remove(struct platform_device *pdev)
+static int hdmi5_remove(struct platform_device *pdev)
 {
 	struct omap_hdmi *hdmi = platform_get_drvdata(pdev);
 
@@ -809,6 +809,7 @@ static void hdmi5_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	kfree(hdmi);
+	return 0;
 }
 
 static const struct of_device_id hdmi_of_match[] = {
@@ -819,7 +820,7 @@ static const struct of_device_id hdmi_of_match[] = {
 
 struct platform_driver omapdss_hdmi5hw_driver = {
 	.probe		= hdmi5_probe,
-	.remove_new	= hdmi5_remove,
+	.remove		= hdmi5_remove,
 	.driver         = {
 		.name   = "omapdss_hdmi5",
 		.of_match_table = hdmi_of_match,

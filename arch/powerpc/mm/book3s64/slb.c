@@ -9,7 +9,7 @@
  * Copyright (C) 2002 Anton Blanchard <anton@au.ibm.com>, IBM
  */
 
-#include <asm/interrupt.h>
+#include <asm/asm-prototypes.h>
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
 #include <asm/paca.h>
@@ -28,7 +28,34 @@
 #include "internal.h"
 
 
+enum slb_index {
+	LINEAR_INDEX	= 0, /* Kernel linear map  (0xc000000000000000) */
+	KSTACK_INDEX	= 1, /* Kernel stack map */
+};
+
 static long slb_allocate_user(struct mm_struct *mm, unsigned long ea);
+
+#define slb_esid_mask(ssize)	\
+	(((ssize) == MMU_SEGSIZE_256M)? ESID_MASK: ESID_MASK_1T)
+
+static inline unsigned long mk_esid_data(unsigned long ea, int ssize,
+					 enum slb_index index)
+{
+	return (ea & slb_esid_mask(ssize)) | SLB_ESID_V | index;
+}
+
+static inline unsigned long __mk_vsid_data(unsigned long vsid, int ssize,
+					 unsigned long flags)
+{
+	return (vsid << slb_vsid_shift(ssize)) | flags |
+		((unsigned long) ssize << SLB_VSID_SSIZE_SHIFT);
+}
+
+static inline unsigned long mk_vsid_data(unsigned long ea, int ssize,
+					 unsigned long flags)
+{
+	return __mk_vsid_data(get_kernel_vsid(ea, ssize), ssize, flags);
+}
 
 bool stress_slb_enabled __initdata;
 
@@ -228,6 +255,7 @@ void slb_dump_contents(struct slb_entry *slb_ptr)
 		return;
 
 	pr_err("SLB contents of cpu 0x%x\n", smp_processor_id());
+	pr_err("Last SLB entry inserted at slot %d\n", get_paca()->stab_rr);
 
 	for (i = 0; i < mmu_slb_size; i++) {
 		e = slb_ptr->esid;
@@ -237,38 +265,34 @@ void slb_dump_contents(struct slb_entry *slb_ptr)
 		if (!e && !v)
 			continue;
 
-		pr_err("%02d %016lx %016lx %s\n", i, e, v,
-				(e & SLB_ESID_V) ? "VALID" : "NOT VALID");
+		pr_err("%02d %016lx %016lx\n", i, e, v);
 
-		if (!(e & SLB_ESID_V))
+		if (!(e & SLB_ESID_V)) {
+			pr_err("\n");
 			continue;
-
+		}
 		llp = v & SLB_VSID_LLP;
 		if (v & SLB_VSID_B_1T) {
-			pr_err("     1T ESID=%9lx VSID=%13lx LLP:%3lx\n",
+			pr_err("  1T  ESID=%9lx  VSID=%13lx LLP:%3lx\n",
 			       GET_ESID_1T(e),
 			       (v & ~SLB_VSID_B) >> SLB_VSID_SHIFT_1T, llp);
 		} else {
-			pr_err("   256M ESID=%9lx VSID=%13lx LLP:%3lx\n",
+			pr_err(" 256M ESID=%9lx  VSID=%13lx LLP:%3lx\n",
 			       GET_ESID(e),
 			       (v & ~SLB_VSID_B) >> SLB_VSID_SHIFT, llp);
 		}
 	}
+	pr_err("----------------------------------\n");
 
-	if (!early_cpu_has_feature(CPU_FTR_ARCH_300)) {
-		/* RR is not so useful as it's often not used for allocation */
-		pr_err("SLB RR allocator index %d\n", get_paca()->stab_rr);
-
-		/* Dump slb cache entires as well. */
-		pr_err("SLB cache ptr value = %d\n", get_paca()->slb_save_cache_ptr);
-		pr_err("Valid SLB cache entries:\n");
-		n = min_t(int, get_paca()->slb_save_cache_ptr, SLB_CACHE_ENTRIES);
-		for (i = 0; i < n; i++)
-			pr_err("%02d EA[0-35]=%9x\n", i, get_paca()->slb_cache[i]);
-		pr_err("Rest of SLB cache entries:\n");
-		for (i = n; i < SLB_CACHE_ENTRIES; i++)
-			pr_err("%02d EA[0-35]=%9x\n", i, get_paca()->slb_cache[i]);
-	}
+	/* Dump slb cache entires as well. */
+	pr_err("SLB cache ptr value = %d\n", get_paca()->slb_save_cache_ptr);
+	pr_err("Valid SLB cache entries:\n");
+	n = min_t(int, get_paca()->slb_save_cache_ptr, SLB_CACHE_ENTRIES);
+	for (i = 0; i < n; i++)
+		pr_err("%02d EA[0-35]=%9x\n", i, get_paca()->slb_cache[i]);
+	pr_err("Rest of SLB cache entries:\n");
+	for (i = n; i < SLB_CACHE_ENTRIES; i++)
+		pr_err("%02d EA[0-35]=%9x\n", i, get_paca()->slb_cache[i]);
 }
 
 void slb_vmalloc_update(void)
@@ -347,7 +371,7 @@ void slb_setup_new_exec(void)
 	/*
 	 * We have no good place to clear the slb preload cache on exec,
 	 * flush_thread is about the earliest arch hook but that happens
-	 * after we switch to the mm and have already preloaded the SLBEs.
+	 * after we switch to the mm and have aleady preloaded the SLBEs.
 	 *
 	 * For the most part that's probably okay to use entries from the
 	 * previous exec, they will age out if unused. It may turn out to
@@ -615,7 +639,7 @@ static void slb_cache_update(unsigned long esid_data)
 	} else {
 		/*
 		 * Our cache is full and the current cache content strictly
-		 * doesn't indicate the active SLB contents. Bump the ptr
+		 * doesn't indicate the active SLB conents. Bump the ptr
 		 * so that switch_slb() will ignore the cache.
 		 */
 		local_paca->slb_cache_ptr = SLB_CACHE_ENTRIES + 1;
@@ -813,33 +837,30 @@ static long slb_allocate_user(struct mm_struct *mm, unsigned long ea)
 	return slb_insert_entry(ea, context, flags, ssize, false);
 }
 
-DEFINE_INTERRUPT_HANDLER_RAW(do_slb_fault)
+long do_slb_fault(struct pt_regs *regs, unsigned long ea)
 {
-	unsigned long ea = regs->dar;
 	unsigned long id = get_region_id(ea);
 
 	/* IRQs are not reconciled here, so can't check irqs_disabled */
 	VM_WARN_ON(mfmsr() & MSR_EE);
 
-	if (regs_is_unrecoverable(regs))
+	if (unlikely(!(regs->msr & MSR_RI)))
 		return -EINVAL;
 
 	/*
-	 * SLB kernel faults must be very careful not to touch anything that is
-	 * not bolted. E.g., PACA and global variables are okay, mm->context
-	 * stuff is not. SLB user faults may access all of memory (and induce
-	 * one recursive SLB kernel fault), so the kernel fault must not
-	 * trample on the user fault state at those points.
-	 */
-
-	/*
-	 * This is a raw interrupt handler, for performance, so that
-	 * fast_interrupt_return can be used. The handler must not touch local
-	 * irq state, or schedule. We could test for usermode and upgrade to a
-	 * normal process context (synchronous) interrupt for those, which
-	 * would make them first-class kernel code and able to be traced and
-	 * instrumented, although performance would suffer a bit, it would
-	 * probably be a good tradeoff.
+	 * SLB kernel faults must be very careful not to touch anything
+	 * that is not bolted. E.g., PACA and global variables are okay,
+	 * mm->context stuff is not.
+	 *
+	 * SLB user faults can access all of kernel memory, but must be
+	 * careful not to touch things like IRQ state because it is not
+	 * "reconciled" here. The difficulty is that we must use
+	 * fast_exception_return to return from kernel SLB faults without
+	 * looking at possible non-bolted memory. We could test user vs
+	 * kernel faults in the interrupt handler asm and do a full fault,
+	 * reconcile, ret_from_except for user faults which would make them
+	 * first class kernel code. But for performance it's probably nicer
+	 * if they go via fast_exception_return too.
 	 */
 	if (id >= LINEAR_MAP_REGION_ID) {
 		long err;
@@ -865,5 +886,19 @@ DEFINE_INTERRUPT_HANDLER_RAW(do_slb_fault)
 			preload_add(current_thread_info(), ea);
 
 		return err;
+	}
+}
+
+void do_bad_slb_fault(struct pt_regs *regs, unsigned long ea, long err)
+{
+	if (err == -EFAULT) {
+		if (user_mode(regs))
+			_exception(SIGSEGV, regs, SEGV_BNDERR, ea);
+		else
+			bad_page_fault(regs, ea, SIGSEGV);
+	} else if (err == -EINVAL) {
+		unrecoverable_exception(regs);
+	} else {
+		BUG();
 	}
 }

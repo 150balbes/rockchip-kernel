@@ -43,28 +43,13 @@
 
 static struct proc_dir_entry *proc_scsi;
 
-/* Protects scsi_proc_list */
+/* Protect sht->present and sht->proc_dir */
 static DEFINE_MUTEX(global_host_template_mutex);
-static LIST_HEAD(scsi_proc_list);
-
-/**
- * struct scsi_proc_entry - (host template, SCSI proc dir) association
- * @entry: entry in scsi_proc_list.
- * @sht: SCSI host template associated with the procfs directory.
- * @proc_dir: procfs directory associated with the SCSI host template.
- * @present: Number of SCSI hosts instantiated for @sht.
- */
-struct scsi_proc_entry {
-	struct list_head	entry;
-	const struct scsi_host_template *sht;
-	struct proc_dir_entry	*proc_dir;
-	unsigned int		present;
-};
 
 static ssize_t proc_scsi_host_write(struct file *file, const char __user *buf,
                            size_t count, loff_t *ppos)
 {
-	struct Scsi_Host *shost = pde_data(file_inode(file));
+	struct Scsi_Host *shost = PDE_DATA(file_inode(file));
 	ssize_t ret = -ENOMEM;
 	char *page;
     
@@ -94,48 +79,9 @@ static int proc_scsi_show(struct seq_file *m, void *v)
 
 static int proc_scsi_host_open(struct inode *inode, struct file *file)
 {
-	return single_open_size(file, proc_scsi_show, pde_data(inode),
+	return single_open_size(file, proc_scsi_show, PDE_DATA(inode),
 				4 * PAGE_SIZE);
 }
-
-static struct scsi_proc_entry *
-__scsi_lookup_proc_entry(const struct scsi_host_template *sht)
-{
-	struct scsi_proc_entry *e;
-
-	lockdep_assert_held(&global_host_template_mutex);
-
-	list_for_each_entry(e, &scsi_proc_list, entry)
-		if (e->sht == sht)
-			return e;
-
-	return NULL;
-}
-
-static struct scsi_proc_entry *
-scsi_lookup_proc_entry(const struct scsi_host_template *sht)
-{
-	struct scsi_proc_entry *e;
-
-	mutex_lock(&global_host_template_mutex);
-	e = __scsi_lookup_proc_entry(sht);
-	mutex_unlock(&global_host_template_mutex);
-
-	return e;
-}
-
-/**
- * scsi_template_proc_dir() - returns the procfs dir for a SCSI host template
- * @sht: SCSI host template pointer.
- */
-struct proc_dir_entry *
-scsi_template_proc_dir(const struct scsi_host_template *sht)
-{
-	struct scsi_proc_entry *e = scsi_lookup_proc_entry(sht);
-
-	return e ? e->proc_dir : NULL;
-}
-EXPORT_SYMBOL_GPL(scsi_template_proc_dir);
 
 static const struct proc_ops proc_scsi_ops = {
 	.proc_open	= proc_scsi_host_open,
@@ -151,61 +97,35 @@ static const struct proc_ops proc_scsi_ops = {
  *
  * Sets sht->proc_dir to the new directory.
  */
-int scsi_proc_hostdir_add(const struct scsi_host_template *sht)
-{
-	struct scsi_proc_entry *e;
-	int ret;
 
+void scsi_proc_hostdir_add(struct scsi_host_template *sht)
+{
 	if (!sht->show_info)
-		return 0;
+		return;
 
 	mutex_lock(&global_host_template_mutex);
-	e = __scsi_lookup_proc_entry(sht);
-	if (!e) {
-		e = kzalloc(sizeof(*e), GFP_KERNEL);
-		if (!e) {
-			ret = -ENOMEM;
-			goto unlock;
-		}
+	if (!sht->present++) {
+		sht->proc_dir = proc_mkdir(sht->proc_name, proc_scsi);
+        	if (!sht->proc_dir)
+			printk(KERN_ERR "%s: proc_mkdir failed for %s\n",
+			       __func__, sht->proc_name);
 	}
-	if (e->present++)
-		goto success;
-	e->proc_dir = proc_mkdir(sht->proc_name, proc_scsi);
-	if (!e->proc_dir) {
-		printk(KERN_ERR "%s: proc_mkdir failed for %s\n", __func__,
-		       sht->proc_name);
-		ret = -ENOMEM;
-		goto unlock;
-	}
-	e->sht = sht;
-	list_add_tail(&e->entry, &scsi_proc_list);
-success:
-	e = NULL;
-	ret = 0;
-unlock:
 	mutex_unlock(&global_host_template_mutex);
-
-	kfree(e);
-	return ret;
 }
 
 /**
  * scsi_proc_hostdir_rm - remove directory in /proc for a scsi host
  * @sht: owner of directory
  */
-void scsi_proc_hostdir_rm(const struct scsi_host_template *sht)
+void scsi_proc_hostdir_rm(struct scsi_host_template *sht)
 {
-	struct scsi_proc_entry *e;
-
 	if (!sht->show_info)
 		return;
 
 	mutex_lock(&global_host_template_mutex);
-	e = __scsi_lookup_proc_entry(sht);
-	if (e && !--e->present) {
+	if (!--sht->present && sht->proc_dir) {
 		remove_proc_entry(sht->proc_name, proc_scsi);
-		list_del(&e->entry);
-		kfree(e);
+		sht->proc_dir = NULL;
 	}
 	mutex_unlock(&global_host_template_mutex);
 }
@@ -217,29 +137,20 @@ void scsi_proc_hostdir_rm(const struct scsi_host_template *sht)
  */
 void scsi_proc_host_add(struct Scsi_Host *shost)
 {
-	const struct scsi_host_template *sht = shost->hostt;
-	struct scsi_proc_entry *e;
+	struct scsi_host_template *sht = shost->hostt;
 	struct proc_dir_entry *p;
 	char name[10];
 
-	if (!sht->show_info)
+	if (!sht->proc_dir)
 		return;
 
-	e = scsi_lookup_proc_entry(sht);
-	if (!e)
-		goto err;
-
 	sprintf(name,"%d", shost->host_no);
-	p = proc_create_data(name, S_IRUGO | S_IWUSR, e->proc_dir,
-			     &proc_scsi_ops, shost);
+	p = proc_create_data(name, S_IRUGO | S_IWUSR,
+		sht->proc_dir, &proc_scsi_ops, shost);
 	if (!p)
-		goto err;
-	return;
-
-err:
-	shost_printk(KERN_ERR, shost,
-		     "%s: Failed to register host (%s failed)\n", __func__,
-		     e ? "proc_create_data()" : "scsi_proc_hostdir_add()");
+		printk(KERN_ERR "%s: Failed to register host %d in"
+		       "%s\n", __func__, shost->host_no,
+		       sht->proc_name);
 }
 
 /**
@@ -248,19 +159,13 @@ err:
  */
 void scsi_proc_host_rm(struct Scsi_Host *shost)
 {
-	const struct scsi_host_template *sht = shost->hostt;
-	struct scsi_proc_entry *e;
 	char name[10];
 
-	if (!sht->show_info)
-		return;
-
-	e = scsi_lookup_proc_entry(sht);
-	if (!e)
+	if (!shost->hostt->proc_dir)
 		return;
 
 	sprintf(name,"%d", shost->host_no);
-	remove_proc_entry(name, e->proc_dir);
+	remove_proc_entry(name, shost->hostt->proc_dir);
 }
 /**
  * proc_print_scsidevice - return data about this host

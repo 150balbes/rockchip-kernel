@@ -8,12 +8,11 @@ title: Samsung S3FWRN5 NCI NFC Controller
 
 maintainers:
   - Krzysztof Kozlowski <krzk@kernel.org>
+  - Krzysztof Opasiak <k.opasiak@samsung.com>
 
 properties:
   compatible:
-    enum:
-      - samsung,s3fwrn5-i2c
-      - samsung,s3fwrn82
+    const: samsung,s3fwrn5-i2c
 
   en-gpios:
     maxItems: 1
@@ -24,9 +23,6 @@ properties:
     maxItems: 1
 
   reg:
-    maxItems: 1
-
-  clocks:
     maxItems: 1
 
   wake-gpios:
@@ -51,25 +47,16 @@ additionalProperties: false
 required:
   - compatible
   - en-gpios
+  - interrupts
+  - reg
   - wake-gpios
-
-allOf:
-  - if:
-      properties:
-        compatible:
-          contains:
-            const: samsung,s3fwrn5-i2c
-    then:
-      required:
-        - interrupts
-        - reg
 
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
     #include <dt-bindings/interrupt-controller/irq.h>
 
-    i2c {
+    i2c4 {
         #address-cells = <1>;
         #size-cells = <0>;
 
@@ -78,22 +65,9 @@ examples:
             reg = <0x27>;
 
             interrupt-parent = <&gpa1>;
-            interrupts = <3 IRQ_TYPE_EDGE_RISING>;
+            interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
 
             en-gpios = <&gpf1 4 GPIO_ACTIVE_HIGH>;
             wake-gpios = <&gpj0 2 GPIO_ACTIVE_HIGH>;
-
-            clocks = <&rpmcc 20>;
-        };
-    };
-  # UART example on Raspberry Pi
-  - |
-    uart0 {
-        nfc {
-            compatible = "samsung,s3fwrn82";
-
-            en-gpios = <&gpio 20 GPIO_ACTIVE_HIGH>;
-            wake-gpios = <&gpio 16 GPIO_ACTIVE_HIGH>;
-
         };
     };

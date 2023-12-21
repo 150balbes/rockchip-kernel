@@ -298,7 +298,13 @@ static void acx565akm_set_brightness(struct acx565akm_panel *lcd, int level)
 static int acx565akm_bl_update_status_locked(struct backlight_device *dev)
 {
 	struct acx565akm_panel *lcd = dev_get_drvdata(&dev->dev);
-	int level = backlight_get_brightness(dev);
+	int level;
+
+	if (dev->props.fb_blank == FB_BLANK_UNBLANK &&
+	    dev->props.power == FB_BLANK_UNBLANK)
+		level = dev->props.brightness;
+	else
+		level = 0;
 
 	acx565akm_set_brightness(lcd, level);
 
@@ -324,7 +330,8 @@ static int acx565akm_bl_get_intensity(struct backlight_device *dev)
 
 	mutex_lock(&lcd->mutex);
 
-	if (!backlight_is_blank(dev))
+	if (dev->props.fb_blank == FB_BLANK_UNBLANK &&
+	    dev->props.power == FB_BLANK_UNBLANK)
 		intensity = acx565akm_get_actual_brightness(lcd);
 	else
 		intensity = 0;
@@ -342,6 +349,7 @@ static const struct backlight_ops acx565akm_bl_ops = {
 static int acx565akm_backlight_init(struct acx565akm_panel *lcd)
 {
 	struct backlight_properties props = {
+		.fb_blank = FB_BLANK_UNBLANK,
 		.power = FB_BLANK_UNBLANK,
 		.type = BACKLIGHT_RAW,
 	};
@@ -647,7 +655,7 @@ static int acx565akm_probe(struct spi_device *spi)
 	return 0;
 }
 
-static void acx565akm_remove(struct spi_device *spi)
+static int acx565akm_remove(struct spi_device *spi)
 {
 	struct acx565akm_panel *lcd = spi_get_drvdata(spi);
 
@@ -658,6 +666,8 @@ static void acx565akm_remove(struct spi_device *spi)
 
 	drm_panel_disable(&lcd->panel);
 	drm_panel_unprepare(&lcd->panel);
+
+	return 0;
 }
 
 static const struct of_device_id acx565akm_of_match[] = {

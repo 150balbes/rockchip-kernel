@@ -18,6 +18,7 @@
 #include <linux/klist.h>
 #include <linux/pm.h>
 #include <linux/device/bus.h>
+#include <linux/android_kabi.h>
 
 struct device;
 struct fwnode_handle;
@@ -25,8 +26,10 @@ struct fwnode_handle;
 /**
  * struct class - device classes
  * @name:	Name of the class.
+ * @owner:	The module owner.
  * @class_groups: Default attributes of this class.
  * @dev_groups:	Default attributes of the devices that belong to the class.
+ * @dev_kobj:	The kobject that represents this class and links it into the hierarchy.
  * @dev_uevent:	Called when a device is added, removed from this class, or a
  *		few other things that generate uevents to add the environment
  *		variables.
@@ -51,35 +54,53 @@ struct fwnode_handle;
  */
 struct class {
 	const char		*name;
+	struct module		*owner;
 
 	const struct attribute_group	**class_groups;
 	const struct attribute_group	**dev_groups;
+	struct kobject			*dev_kobj;
 
-	int (*dev_uevent)(const struct device *dev, struct kobj_uevent_env *env);
-	char *(*devnode)(const struct device *dev, umode_t *mode);
+	int (*dev_uevent)(struct device *dev, struct kobj_uevent_env *env);
+	char *(*devnode)(struct device *dev, umode_t *mode);
 
-	void (*class_release)(const struct class *class);
+	void (*class_release)(struct class *class);
 	void (*dev_release)(struct device *dev);
 
 	int (*shutdown_pre)(struct device *dev);
 
 	const struct kobj_ns_type_operations *ns_type;
-	const void *(*namespace)(const struct device *dev);
+	const void *(*namespace)(struct device *dev);
 
-	void (*get_ownership)(const struct device *dev, kuid_t *uid, kgid_t *gid);
+	void (*get_ownership)(struct device *dev, kuid_t *uid, kgid_t *gid);
 
 	const struct dev_pm_ops *pm;
+
+	struct subsys_private *p;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct class_dev_iter {
 	struct klist_iter		ki;
 	const struct device_type	*type;
-	struct subsys_private		*sp;
 };
 
-int __must_check class_register(const struct class *class);
-void class_unregister(const struct class *class);
-bool class_is_registered(const struct class *class);
+extern struct kobject *sysfs_dev_block_kobj;
+extern struct kobject *sysfs_dev_char_kobj;
+extern int __must_check __class_register(struct class *class,
+					 struct lock_class_key *key);
+extern void class_unregister(struct class *class);
+
+/* This is a #define to keep the compiler from merging different
+ * instances of the __key variable */
+#define class_register(class)			\
+({						\
+	static struct lock_class_key __key;	\
+	__class_register(class, &__key);	\
+})
 
 struct class_compat;
 struct class_compat *class_compat_register(const char *name);
@@ -89,15 +110,19 @@ int class_compat_create_link(struct class_compat *cls, struct device *dev,
 void class_compat_remove_link(struct class_compat *cls, struct device *dev,
 			      struct device *device_link);
 
-void class_dev_iter_init(struct class_dev_iter *iter, const struct class *class,
-			 const struct device *start, const struct device_type *type);
-struct device *class_dev_iter_next(struct class_dev_iter *iter);
-void class_dev_iter_exit(struct class_dev_iter *iter);
+extern void class_dev_iter_init(struct class_dev_iter *iter,
+				struct class *class,
+				struct device *start,
+				const struct device_type *type);
+extern struct device *class_dev_iter_next(struct class_dev_iter *iter);
+extern void class_dev_iter_exit(struct class_dev_iter *iter);
 
-int class_for_each_device(const struct class *class, const struct device *start, void *data,
-			  int (*fn)(struct device *dev, void *data));
-struct device *class_find_device(const struct class *class, const struct device *start,
-				 const void *data, int (*match)(struct device *, const void *));
+extern int class_for_each_device(struct class *class, struct device *start,
+				 void *data,
+				 int (*fn)(struct device *dev, void *data));
+extern struct device *class_find_device(struct class *class,
+					struct device *start, const void *data,
+					int (*match)(struct device *, const void *));
 
 /**
  * class_find_device_by_name - device iterator for locating a particular device
@@ -105,7 +130,7 @@ struct device *class_find_device(const struct class *class, const struct device 
  * @class: class type
  * @name: name of the device to match
  */
-static inline struct device *class_find_device_by_name(const struct class *class,
+static inline struct device *class_find_device_by_name(struct class *class,
 						       const char *name)
 {
 	return class_find_device(class, NULL, name, device_match_name);
@@ -117,8 +142,8 @@ static inline struct device *class_find_device_by_name(const struct class *class
  * @class: class type
  * @np: of_node of the device to match.
  */
-static inline struct device *class_find_device_by_of_node(const struct class *class,
-							  const struct device_node *np)
+static inline struct device *
+class_find_device_by_of_node(struct class *class, const struct device_node *np)
 {
 	return class_find_device(class, NULL, np, device_match_of_node);
 }
@@ -129,8 +154,9 @@ static inline struct device *class_find_device_by_of_node(const struct class *cl
  * @class: class type
  * @fwnode: fwnode of the device to match.
  */
-static inline struct device *class_find_device_by_fwnode(const struct class *class,
-							 const struct fwnode_handle *fwnode)
+static inline struct device *
+class_find_device_by_fwnode(struct class *class,
+			    const struct fwnode_handle *fwnode)
 {
 	return class_find_device(class, NULL, fwnode, device_match_fwnode);
 }
@@ -141,7 +167,7 @@ static inline struct device *class_find_device_by_fwnode(const struct class *cla
  * @class: class type
  * @devt: device type of the device to match.
  */
-static inline struct device *class_find_device_by_devt(const struct class *class,
+static inline struct device *class_find_device_by_devt(struct class *class,
 						       dev_t devt)
 {
 	return class_find_device(class, NULL, &devt, device_match_devt);
@@ -155,14 +181,14 @@ struct acpi_device;
  * @class: class type
  * @adev: ACPI_COMPANION device to match.
  */
-static inline struct device *class_find_device_by_acpi_dev(const struct class *class,
-							   const struct acpi_device *adev)
+static inline struct device *
+class_find_device_by_acpi_dev(struct class *class, const struct acpi_device *adev)
 {
 	return class_find_device(class, NULL, adev, device_match_acpi_dev);
 }
 #else
-static inline struct device *class_find_device_by_acpi_dev(const struct class *class,
-							   const void *adev)
+static inline struct device *
+class_find_device_by_acpi_dev(struct class *class, const void *adev)
 {
 	return NULL;
 }
@@ -170,10 +196,10 @@ static inline struct device *class_find_device_by_acpi_dev(const struct class *c
 
 struct class_attribute {
 	struct attribute attr;
-	ssize_t (*show)(const struct class *class, const struct class_attribute *attr,
+	ssize_t (*show)(struct class *class, struct class_attribute *attr,
 			char *buf);
-	ssize_t (*store)(const struct class *class, const struct class_attribute *attr,
-			 const char *buf, size_t count);
+	ssize_t (*store)(struct class *class, struct class_attribute *attr,
+			const char *buf, size_t count);
 };
 
 #define CLASS_ATTR_RW(_name) \
@@ -183,18 +209,20 @@ struct class_attribute {
 #define CLASS_ATTR_WO(_name) \
 	struct class_attribute class_attr_##_name = __ATTR_WO(_name)
 
-int __must_check class_create_file_ns(const struct class *class, const struct class_attribute *attr,
-				      const void *ns);
-void class_remove_file_ns(const struct class *class, const struct class_attribute *attr,
-			  const void *ns);
+extern int __must_check class_create_file_ns(struct class *class,
+					     const struct class_attribute *attr,
+					     const void *ns);
+extern void class_remove_file_ns(struct class *class,
+				 const struct class_attribute *attr,
+				 const void *ns);
 
-static inline int __must_check class_create_file(const struct class *class,
-						 const struct class_attribute *attr)
+static inline int __must_check class_create_file(struct class *class,
+					const struct class_attribute *attr)
 {
 	return class_create_file_ns(class, attr, NULL);
 }
 
-static inline void class_remove_file(const struct class *class,
+static inline void class_remove_file(struct class *class,
 				     const struct class_attribute *attr)
 {
 	return class_remove_file_ns(class, attr, NULL);
@@ -213,21 +241,32 @@ struct class_attribute_string {
 	struct class_attribute_string class_attr_##_name = \
 		_CLASS_ATTR_STRING(_name, _mode, _str)
 
-ssize_t show_class_attr_string(const struct class *class, const struct class_attribute *attr,
-			       char *buf);
+extern ssize_t show_class_attr_string(struct class *class, struct class_attribute *attr,
+                        char *buf);
 
 struct class_interface {
 	struct list_head	node;
-	const struct class	*class;
+	struct class		*class;
 
-	int (*add_dev)		(struct device *dev);
-	void (*remove_dev)	(struct device *dev);
+	int (*add_dev)		(struct device *, struct class_interface *);
+	void (*remove_dev)	(struct device *, struct class_interface *);
 };
 
-int __must_check class_interface_register(struct class_interface *);
-void class_interface_unregister(struct class_interface *);
+extern int __must_check class_interface_register(struct class_interface *);
+extern void class_interface_unregister(struct class_interface *);
 
-struct class * __must_check class_create(const char *name);
-void class_destroy(const struct class *cls);
+extern struct class * __must_check __class_create(struct module *owner,
+						  const char *name,
+						  struct lock_class_key *key);
+extern void class_destroy(struct class *cls);
+
+/* This is a #define to keep the compiler from merging different
+ * instances of the __key variable */
+#define class_create(owner, name)		\
+({						\
+	static struct lock_class_key __key;	\
+	__class_create(owner, name, &__key);	\
+})
+
 
 #endif	/* _DEVICE_CLASS_H_ */

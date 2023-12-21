@@ -618,7 +618,6 @@ static int ipu_enable_channel(struct idmac *idmac, struct idmac_channel *ichan)
 	case IDMAC_SDC_1:
 	case IDMAC_IC_7:
 		ipu_channel_set_priority(ipu, channel, true);
-		break;
 	default:
 		break;
 	}
@@ -979,7 +978,6 @@ static int ipu_init_channel(struct idmac *idmac, struct idmac_channel *ichan)
 	case IDMAC_SDC_0:
 	case IDMAC_SDC_1:
 		n_desc = 4;
-		break;
 	default:
 		break;
 	}
@@ -1162,13 +1160,14 @@ static irqreturn_t idmac_interrupt(int irq, void *dev_id)
 	struct idmac_tx_desc *desc, *descnew;
 	bool done = false;
 	u32 ready0, ready1, curbuf, err;
+	unsigned long flags;
 	struct dmaengine_desc_callback cb;
 
 	/* IDMAC has cleared the respective BUFx_RDY bit, we manage the buffer */
 
 	dev_dbg(dev, "IDMAC irq %d, buf %d\n", irq, ichan->active_buffer);
 
-	spin_lock(&ipu_data.lock);
+	spin_lock_irqsave(&ipu_data.lock, flags);
 
 	ready0	= idmac_read_ipureg(&ipu_data, IPU_CHA_BUF0_RDY);
 	ready1	= idmac_read_ipureg(&ipu_data, IPU_CHA_BUF1_RDY);
@@ -1177,7 +1176,7 @@ static irqreturn_t idmac_interrupt(int irq, void *dev_id)
 
 	if (err & (1 << chan_id)) {
 		idmac_write_ipureg(&ipu_data, 1 << chan_id, IPU_INT_STAT_4);
-		spin_unlock(&ipu_data.lock);
+		spin_unlock_irqrestore(&ipu_data.lock, flags);
 		/*
 		 * Doing this
 		 * ichan->sg[0] = ichan->sg[1] = NULL;
@@ -1189,7 +1188,7 @@ static irqreturn_t idmac_interrupt(int irq, void *dev_id)
 			 chan_id, ready0, ready1, curbuf);
 		return IRQ_HANDLED;
 	}
-	spin_unlock(&ipu_data.lock);
+	spin_unlock_irqrestore(&ipu_data.lock, flags);
 
 	/* Other interrupts do not interfere with this channel */
 	spin_lock(&ichan->lock);
@@ -1252,9 +1251,9 @@ static irqreturn_t idmac_interrupt(int irq, void *dev_id)
 		if (unlikely(sgnew)) {
 			ipu_submit_buffer(ichan, descnew, sgnew, !ichan->active_buffer);
 		} else {
-			spin_lock(&ipu_data.lock);
+			spin_lock_irqsave(&ipu_data.lock, flags);
 			ipu_ic_disable_task(&ipu_data, chan_id);
-			spin_unlock(&ipu_data.lock);
+			spin_unlock_irqrestore(&ipu_data.lock, flags);
 			ichan->status = IPU_CHANNEL_READY;
 			/* Continue to check for complete descriptor */
 		}
@@ -1797,5 +1796,6 @@ static int __init ipu_init(void)
 subsys_initcall(ipu_init);
 
 MODULE_DESCRIPTION("IPU core driver");
+MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Guennadi Liakhovetski <lg@denx.de>");
 MODULE_ALIAS("platform:ipu-core");

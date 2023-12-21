@@ -8,6 +8,7 @@
 #include <media/demux.h>
 #include <media/dvb_demux.h>
 #include <media/dmxdev.h>
+#include "dvb_filter.h"
 #include <media/dvb_net.h>
 
 #include <linux/module.h>
@@ -27,7 +28,6 @@ extern int budget_debug;
 		       __func__, ##arg);				\
 } while (0)
 
-#define TS_SIZE        188
 
 struct budget_info {
 	char *name;

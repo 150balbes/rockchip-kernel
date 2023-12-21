@@ -11,7 +11,6 @@
 #define __FRAME_OFFSETS
 #include <asm/ptrace.h>
 #include <linux/uaccess.h>
-#include <registers.h>
 #include <asm/ptrace-abi.h>
 
 /*

@@ -68,10 +68,3 @@ struct ctl_table key_sysctls[] = {
 #endif
 	{ }
 };
-
-static int __init init_security_keys_sysctls(void)
-{
-	register_sysctl_init("kernel/keys", key_sysctls);
-	return 0;
-}
-early_initcall(init_security_keys_sysctls);

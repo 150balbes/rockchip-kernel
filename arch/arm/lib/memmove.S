@@ -24,20 +24,18 @@
  * occurring in the opposite direction.
  */
 
-ENTRY(__memmove)
-WEAK(memmove)
+ENTRY(memmove)
 	UNWIND(	.fnstart			)
 
 		subs	ip, r0, r1
 		cmphi	r2, ip
-		bls	__memcpy
+		bls	memcpy
+
+		stmfd	sp!, {r0, r4, lr}
 	UNWIND(	.fnend				)
 
 	UNWIND(	.fnstart			)
-	UNWIND(	.save	{r0, r4, fpreg, lr}	)
-		stmfd	sp!, {r0, r4, UNWIND(fpreg,) lr}
-	UNWIND(	.setfp	fpreg, sp		)
-	UNWIND(	mov	fpreg, sp		)
+	UNWIND(	.save	{r0, r4, lr}		) @ in first stmfd block
 		add	r1, r1, r2
 		add	r0, r0, r2
 		subs	r2, r2, #4
@@ -49,7 +47,12 @@ WEAK(memmove)
 		bne	10f
 
 1:		subs	r2, r2, #(28)
-		stmfd	sp!, {r5, r6, r8, r9}
+		stmfd	sp!, {r5 - r8}
+	UNWIND(	.fnend				)
+
+	UNWIND(	.fnstart			)
+	UNWIND(	.save	{r0, r4, lr}		)
+	UNWIND(	.save	{r5 - r8}		) @ in second stmfd block
 		blt	5f
 
 	CALGN(	ands	ip, r0, #31		)
@@ -68,9 +71,9 @@ WEAK(memmove)
 	PLD(	pld	[r1, #-96]		)
 
 3:	PLD(	pld	[r1, #-128]		)
-4:		ldmdb	r1!, {r3, r4, r5, r6, r8, r9, ip, lr}
+4:		ldmdb	r1!, {r3, r4, r5, r6, r7, r8, ip, lr}
 		subs	r2, r2, #32
-		stmdb	r0!, {r3, r4, r5, r6, r8, r9, ip, lr}
+		stmdb	r0!, {r3, r4, r5, r6, r7, r8, ip, lr}
 		bge	3b
 	PLD(	cmn	r2, #96			)
 	PLD(	bge	4b			)
@@ -84,8 +87,8 @@ WEAK(memmove)
 		W(ldr)	r4, [r1, #-4]!
 		W(ldr)	r5, [r1, #-4]!
 		W(ldr)	r6, [r1, #-4]!
+		W(ldr)	r7, [r1, #-4]!
 		W(ldr)	r8, [r1, #-4]!
-		W(ldr)	r9, [r1, #-4]!
 		W(ldr)	lr, [r1, #-4]!
 
 		add	pc, pc, ip
@@ -95,13 +98,17 @@ WEAK(memmove)
 		W(str)	r4, [r0, #-4]!
 		W(str)	r5, [r0, #-4]!
 		W(str)	r6, [r0, #-4]!
+		W(str)	r7, [r0, #-4]!
 		W(str)	r8, [r0, #-4]!
-		W(str)	r9, [r0, #-4]!
 		W(str)	lr, [r0, #-4]!
 
 	CALGN(	bcs	2b			)
 
-7:		ldmfd	sp!, {r5, r6, r8, r9}
+7:		ldmfd	sp!, {r5 - r8}
+	UNWIND(	.fnend				) @ end of second stmfd block
+
+	UNWIND(	.fnstart			)
+	UNWIND(	.save	{r0, r4, lr}		) @ still in first stmfd block
 
 8:		movs	r2, r2, lsl #31
 		ldrbne	r3, [r1, #-1]!
@@ -110,7 +117,7 @@ WEAK(memmove)
 		strbne	r3, [r0, #-1]!
 		strbcs	r4, [r0, #-1]!
 		strbcs	ip, [r0, #-1]
-		ldmfd	sp!, {r0, r4, UNWIND(fpreg,) pc}
+		ldmfd	sp!, {r0, r4, pc}
 
 9:		cmp	ip, #2
 		ldrbgt	r3, [r1, #-1]!
@@ -129,10 +136,13 @@ WEAK(memmove)
 		ldr	r3, [r1, #0]
 		beq	17f
 		blt	18f
+	UNWIND(	.fnend				)
 
 
 		.macro	backward_copy_shift push pull
 
+	UNWIND(	.fnstart			)
+	UNWIND(	.save	{r0, r4, lr}		) @ still in first stmfd block
 		subs	r2, r2, #28
 		blt	14f
 
@@ -141,7 +151,12 @@ WEAK(memmove)
 	CALGN(	subcc	r2, r2, ip		)
 	CALGN(	bcc	15f			)
 
-11:		stmfd	sp!, {r5, r6, r8 - r10}
+11:		stmfd	sp!, {r5 - r9}
+	UNWIND(	.fnend				)
+
+	UNWIND(	.fnstart			)
+	UNWIND(	.save	{r0, r4, lr}		)
+	UNWIND(	.save	{r5 - r9}		) @ in new second stmfd block
 
 	PLD(	pld	[r1, #-4]		)
 	PLD(	subs	r2, r2, #96		)
@@ -151,31 +166,35 @@ WEAK(memmove)
 	PLD(	pld	[r1, #-96]		)
 
 12:	PLD(	pld	[r1, #-128]		)
-13:		ldmdb   r1!, {r8, r9, r10, ip}
+13:		ldmdb   r1!, {r7, r8, r9, ip}
 		mov     lr, r3, lspush #\push
 		subs    r2, r2, #32
 		ldmdb   r1!, {r3, r4, r5, r6}
 		orr     lr, lr, ip, lspull #\pull
 		mov     ip, ip, lspush #\push
-		orr     ip, ip, r10, lspull #\pull
-		mov     r10, r10, lspush #\push
-		orr     r10, r10, r9, lspull #\pull
+		orr     ip, ip, r9, lspull #\pull
 		mov     r9, r9, lspush #\push
 		orr     r9, r9, r8, lspull #\pull
 		mov     r8, r8, lspush #\push
-		orr     r8, r8, r6, lspull #\pull
+		orr     r8, r8, r7, lspull #\pull
+		mov     r7, r7, lspush #\push
+		orr     r7, r7, r6, lspull #\pull
 		mov     r6, r6, lspush #\push
 		orr     r6, r6, r5, lspull #\pull
 		mov     r5, r5, lspush #\push
 		orr     r5, r5, r4, lspull #\pull
 		mov     r4, r4, lspush #\push
 		orr     r4, r4, r3, lspull #\pull
-		stmdb   r0!, {r4 - r6, r8 - r10, ip, lr}
+		stmdb   r0!, {r4 - r9, ip, lr}
 		bge	12b
 	PLD(	cmn	r2, #96			)
 	PLD(	bge	13b			)
 
-		ldmfd	sp!, {r5, r6, r8 - r10}
+		ldmfd	sp!, {r5 - r9}
+	UNWIND(	.fnend				) @ end of the second stmfd block
+
+	UNWIND(	.fnstart			)
+	UNWIND(	.save {r0, r4, lr}		) @ still in first stmfd block
 
 14:		ands	ip, r2, #28
 		beq	16f
@@ -191,6 +210,7 @@ WEAK(memmove)
 
 16:		add	r1, r1, #(\pull / 8)
 		b	8b
+	UNWIND(	.fnend				)
 
 		.endm
 
@@ -201,6 +221,4 @@ WEAK(memmove)
 
 18:		backward_copy_shift	push=24	pull=8
 
-	UNWIND(	.fnend				)
 ENDPROC(memmove)
-ENDPROC(__memmove)

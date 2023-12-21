@@ -47,7 +47,7 @@ void __init setup_cpuinfo(void)
 
 	str = of_get_property(cpu, "altr,implementation", &len);
 	if (str)
-		strscpy(cpuinfo.cpu_impl, str, sizeof(cpuinfo.cpu_impl));
+		strlcpy(cpuinfo.cpu_impl, str, sizeof(cpuinfo.cpu_impl));
 	else
 		strcpy(cpuinfo.cpu_impl, "<unknown>");
 

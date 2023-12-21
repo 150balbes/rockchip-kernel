@@ -11,11 +11,7 @@ enum cpu_idle_type {
 	CPU_MAX_IDLE_TYPES
 };
 
-#ifdef CONFIG_SMP
 extern void wake_up_if_idle(int cpu);
-#else
-static inline void wake_up_if_idle(int cpu) { }
-#endif
 
 /*
  * Idle thread specific functions to determine the need_resched
@@ -23,37 +19,12 @@ static inline void wake_up_if_idle(int cpu) { }
  */
 #ifdef TIF_POLLING_NRFLAG
 
-#ifdef _ASM_GENERIC_BITOPS_INSTRUMENTED_ATOMIC_H
-
-static __always_inline void __current_set_polling(void)
+static inline void __current_set_polling(void)
 {
-	arch_set_bit(TIF_POLLING_NRFLAG,
-		     (unsigned long *)(&current_thread_info()->flags));
+	set_thread_flag(TIF_POLLING_NRFLAG);
 }
 
-static __always_inline void __current_clr_polling(void)
-{
-	arch_clear_bit(TIF_POLLING_NRFLAG,
-		       (unsigned long *)(&current_thread_info()->flags));
-}
-
-#else
-
-static __always_inline void __current_set_polling(void)
-{
-	set_bit(TIF_POLLING_NRFLAG,
-		(unsigned long *)(&current_thread_info()->flags));
-}
-
-static __always_inline void __current_clr_polling(void)
-{
-	clear_bit(TIF_POLLING_NRFLAG,
-		  (unsigned long *)(&current_thread_info()->flags));
-}
-
-#endif /* _ASM_GENERIC_BITOPS_INSTRUMENTED_ATOMIC_H */
-
-static __always_inline bool __must_check current_set_polling_and_test(void)
+static inline bool __must_check current_set_polling_and_test(void)
 {
 	__current_set_polling();
 
@@ -66,7 +37,12 @@ static __always_inline bool __must_check current_set_polling_and_test(void)
 	return unlikely(tif_need_resched());
 }
 
-static __always_inline bool __must_check current_clr_polling_and_test(void)
+static inline void __current_clr_polling(void)
+{
+	clear_thread_flag(TIF_POLLING_NRFLAG);
+}
+
+static inline bool __must_check current_clr_polling_and_test(void)
 {
 	__current_clr_polling();
 
@@ -93,7 +69,7 @@ static inline bool __must_check current_clr_polling_and_test(void)
 }
 #endif
 
-static __always_inline void current_clr_polling(void)
+static inline void current_clr_polling(void)
 {
 	__current_clr_polling();
 

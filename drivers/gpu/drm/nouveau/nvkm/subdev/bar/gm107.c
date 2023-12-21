@@ -59,8 +59,7 @@ gm107_bar_func = {
 };
 
 int
-gm107_bar_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
-	      struct nvkm_bar **pbar)
+gm107_bar_new(struct nvkm_device *device, int index, struct nvkm_bar **pbar)
 {
-	return gf100_bar_new_(&gm107_bar_func, device, type, inst, pbar);
+	return gf100_bar_new_(&gm107_bar_func, device, index, pbar);
 }

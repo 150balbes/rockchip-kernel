@@ -738,7 +738,7 @@ void sctp_auth_calculate_hmac(const struct sctp_association *asoc,
 
 	tfm = asoc->ep->auth_hmacs[hmac_id];
 
-	digest = (u8 *)(&auth->auth_hdr + 1);
+	digest = auth->auth_hdr.hmac;
 	if (crypto_shash_setkey(tfm, &asoc_key->data[0], asoc_key->len))
 		goto free;
 

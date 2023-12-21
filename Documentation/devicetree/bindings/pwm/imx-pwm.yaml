@@ -9,9 +9,6 @@ title: Freescale i.MX PWM controller
 maintainers:
   - Philipp Zabel <p.zabel@pengutronix.de>
 
-allOf:
-  - $ref: pwm.yaml#
-
 properties:
   "#pwm-cells":
     description: |
@@ -43,7 +40,6 @@ properties:
               - fsl,imx8mn-pwm
               - fsl,imx8mp-pwm
               - fsl,imx8mq-pwm
-              - fsl,imx8qxp-pwm
           - const: fsl,imx27-pwm
 
   reg:
@@ -62,10 +58,8 @@ properties:
   interrupts:
     maxItems: 1
 
-  power-domains:
-    maxItems: 1
-
 required:
+  - "#pwm-cells"
   - compatible
   - reg
   - clocks

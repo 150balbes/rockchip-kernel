@@ -151,12 +151,13 @@ err:
 	return err;
 }
 
-static void timbradio_remove(struct platform_device *pdev)
+static int timbradio_remove(struct platform_device *pdev)
 {
 	struct timbradio *tr = platform_get_drvdata(pdev);
 
 	video_unregister_device(&tr->video_dev);
 	v4l2_device_unregister(&tr->v4l2_dev);
+	return 0;
 }
 
 static struct platform_driver timbradio_platform_driver = {
@@ -164,7 +165,7 @@ static struct platform_driver timbradio_platform_driver = {
 		.name	= DRIVER_NAME,
 	},
 	.probe		= timbradio_probe,
-	.remove_new	= timbradio_remove,
+	.remove		= timbradio_remove,
 };
 
 module_platform_driver(timbradio_platform_driver);

@@ -210,6 +210,20 @@ static int mpc5121_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	struct mpc5121_rtc_data *rtc = dev_get_drvdata(dev);
 	struct mpc5121_rtc_regs __iomem *regs = rtc->regs;
 
+	/*
+	 * the alarm has no seconds so deal with it
+	 */
+	if (alarm->time.tm_sec) {
+		alarm->time.tm_sec = 0;
+		alarm->time.tm_min++;
+		if (alarm->time.tm_min >= 60) {
+			alarm->time.tm_min = 0;
+			alarm->time.tm_hour++;
+			if (alarm->time.tm_hour >= 24)
+				alarm->time.tm_hour = 0;
+		}
+	}
+
 	alarm->time.tm_mday = -1;
 	alarm->time.tm_mon = -1;
 	alarm->time.tm_year = -1;
@@ -335,8 +349,7 @@ static int mpc5121_rtc_probe(struct platform_device *op)
 	}
 
 	rtc->rtc->ops = &mpc5200_rtc_ops;
-	set_bit(RTC_FEATURE_ALARM_RES_MINUTE, rtc->rtc->features);
-	clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc->rtc->features);
+	rtc->rtc->uie_unsupported = 1;
 	rtc->rtc->range_min = RTC_TIMESTAMP_BEGIN_0000;
 	rtc->rtc->range_max = 65733206399ULL; /* 4052-12-31 23:59:59 */
 
@@ -358,7 +371,7 @@ static int mpc5121_rtc_probe(struct platform_device *op)
 		rtc->rtc->range_max = U32_MAX;
 	}
 
-	err = devm_rtc_register_device(rtc->rtc);
+	err = rtc_register_device(rtc->rtc);
 	if (err)
 		goto out_dispose2;
 
@@ -372,7 +385,7 @@ out_dispose:
 	return err;
 }
 
-static void mpc5121_rtc_remove(struct platform_device *op)
+static int mpc5121_rtc_remove(struct platform_device *op)
 {
 	struct mpc5121_rtc_data *rtc = platform_get_drvdata(op);
 	struct mpc5121_rtc_regs __iomem *regs = rtc->regs;
@@ -383,6 +396,8 @@ static void mpc5121_rtc_remove(struct platform_device *op)
 
 	irq_dispose_mapping(rtc->irq);
 	irq_dispose_mapping(rtc->irq_periodic);
+
+	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -400,7 +415,7 @@ static struct platform_driver mpc5121_rtc_driver = {
 		.of_match_table = of_match_ptr(mpc5121_rtc_match),
 	},
 	.probe = mpc5121_rtc_probe,
-	.remove_new = mpc5121_rtc_remove,
+	.remove = mpc5121_rtc_remove,
 };
 
 module_platform_driver(mpc5121_rtc_driver);

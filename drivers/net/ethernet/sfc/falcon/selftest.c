@@ -39,16 +39,12 @@
  * Falcon only performs RSS on TCP/UDP packets.
  */
 struct ef4_loopback_payload {
-	char pad[2]; /* Ensures ip is 4-byte aligned */
 	struct ethhdr header;
 	struct iphdr ip;
 	struct udphdr udp;
 	__be16 iteration;
 	char msg[64];
-} __packed __aligned(4);
-#define EF4_LOOPBACK_PAYLOAD_LEN	(sizeof(struct ef4_loopback_payload) - \
-					 offsetof(struct ef4_loopback_payload, \
-						  header))
+} __packed;
 
 /* Loopback test source MAC address */
 static const u8 payload_source[ETH_ALEN] __aligned(2) = {
@@ -288,7 +284,7 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 			    const char *buf_ptr, int pkt_len)
 {
 	struct ef4_loopback_state *state = efx->loopback_selftest;
-	struct ef4_loopback_payload received;
+	struct ef4_loopback_payload *received;
 	struct ef4_loopback_payload *payload;
 
 	BUG_ON(!buf_ptr);
@@ -299,14 +295,13 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 
 	payload = &state->payload;
 
-	memcpy(&received.header, buf_ptr,
-	       min_t(int, pkt_len, EF4_LOOPBACK_PAYLOAD_LEN));
-	received.ip.saddr = payload->ip.saddr;
+	received = (struct ef4_loopback_payload *) buf_ptr;
+	received->ip.saddr = payload->ip.saddr;
 	if (state->offload_csum)
-		received.ip.check = payload->ip.check;
+		received->ip.check = payload->ip.check;
 
 	/* Check that header exists */
-	if (pkt_len < sizeof(received.header)) {
+	if (pkt_len < sizeof(received->header)) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw runt RX packet (length %d) in %s loopback "
 			  "test\n", pkt_len, LOOPBACK_MODE(efx));
@@ -314,7 +309,7 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 	}
 
 	/* Check that the ethernet header exists */
-	if (memcmp(&received.header, &payload->header, ETH_HLEN) != 0) {
+	if (memcmp(&received->header, &payload->header, ETH_HLEN) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw non-loopback RX packet in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -322,16 +317,16 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 	}
 
 	/* Check packet length */
-	if (pkt_len != EF4_LOOPBACK_PAYLOAD_LEN) {
+	if (pkt_len != sizeof(*payload)) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw incorrect RX packet length %d (wanted %d) in "
-			  "%s loopback test\n", pkt_len,
-			  (int)EF4_LOOPBACK_PAYLOAD_LEN, LOOPBACK_MODE(efx));
+			  "%s loopback test\n", pkt_len, (int)sizeof(*payload),
+			  LOOPBACK_MODE(efx));
 		goto err;
 	}
 
 	/* Check that IP header matches */
-	if (memcmp(&received.ip, &payload->ip, sizeof(payload->ip)) != 0) {
+	if (memcmp(&received->ip, &payload->ip, sizeof(payload->ip)) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw corrupted IP header in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -339,7 +334,7 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 	}
 
 	/* Check that msg and padding matches */
-	if (memcmp(&received.msg, &payload->msg, sizeof(received.msg)) != 0) {
+	if (memcmp(&received->msg, &payload->msg, sizeof(received->msg)) != 0) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw corrupted RX packet in %s loopback test\n",
 			  LOOPBACK_MODE(efx));
@@ -347,10 +342,10 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 	}
 
 	/* Check that iteration matches */
-	if (received.iteration != payload->iteration) {
+	if (received->iteration != payload->iteration) {
 		netif_err(efx, drv, efx->net_dev,
 			  "saw RX packet from iteration %d (wanted %d) in "
-			  "%s loopback test\n", ntohs(received.iteration),
+			  "%s loopback test\n", ntohs(received->iteration),
 			  ntohs(payload->iteration), LOOPBACK_MODE(efx));
 		goto err;
 	}
@@ -370,8 +365,7 @@ void ef4_loopback_rx_packet(struct ef4_nic *efx,
 			       buf_ptr, pkt_len, 0);
 		netif_err(efx, drv, efx->net_dev, "expected packet:\n");
 		print_hex_dump(KERN_ERR, "", DUMP_PREFIX_OFFSET, 0x10, 1,
-			       &state->payload.header, EF4_LOOPBACK_PAYLOAD_LEN,
-			       0);
+			       &state->payload, sizeof(state->payload), 0);
 	}
 #endif
 	atomic_inc(&state->rx_bad);
@@ -393,15 +387,14 @@ static void ef4_iterate_state(struct ef4_nic *efx)
 	payload->ip.daddr = htonl(INADDR_LOOPBACK);
 	payload->ip.ihl = 5;
 	payload->ip.check = (__force __sum16) htons(0xdead);
-	payload->ip.tot_len = htons(sizeof(*payload) -
-				    offsetof(struct ef4_loopback_payload, ip));
+	payload->ip.tot_len = htons(sizeof(*payload) - sizeof(struct ethhdr));
 	payload->ip.version = IPVERSION;
 	payload->ip.protocol = IPPROTO_UDP;
 
 	/* Initialise udp header */
 	payload->udp.source = 0;
-	payload->udp.len = htons(sizeof(*payload) -
-				 offsetof(struct ef4_loopback_payload, udp));
+	payload->udp.len = htons(sizeof(*payload) - sizeof(struct ethhdr) -
+				 sizeof(struct iphdr));
 	payload->udp.check = 0;	/* checksum ignored */
 
 	/* Fill out payload */
@@ -427,7 +420,7 @@ static int ef4_begin_loopback(struct ef4_tx_queue *tx_queue)
 	for (i = 0; i < state->packet_count; i++) {
 		/* Allocate an skb, holding an extra reference for
 		 * transmit completion counting */
-		skb = alloc_skb(EF4_LOOPBACK_PAYLOAD_LEN, GFP_KERNEL);
+		skb = alloc_skb(sizeof(state->payload), GFP_KERNEL);
 		if (!skb)
 			return -ENOMEM;
 		state->skbs[i] = skb;
@@ -438,8 +431,6 @@ static int ef4_begin_loopback(struct ef4_tx_queue *tx_queue)
 		payload = skb_put(skb, sizeof(state->payload));
 		memcpy(payload, &state->payload, sizeof(state->payload));
 		payload->ip.saddr = htonl(INADDR_LOOPBACK | (i << 2));
-		/* Strip off the leading padding */
-		skb_pull(skb, offsetof(struct ef4_loopback_payload, header));
 
 		/* Ensure everything we've written is visible to the
 		 * interrupt handler. */

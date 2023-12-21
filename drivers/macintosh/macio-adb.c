@@ -2,6 +2,7 @@
 /*
  * Driver for the ADB controller in the Mac I/O (Hydra) chip.
  */
+#include <stdarg.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -9,11 +10,8 @@
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/pgtable.h>
-#include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
+#include <asm/prom.h>
 #include <linux/adb.h>
-
 #include <asm/io.h>
 #include <asm/hydra.h>
 #include <asm/irq.h>
@@ -100,7 +98,7 @@ int macio_init(void)
 	unsigned int irq;
 
 	adbs = of_find_compatible_node(NULL, "adb", "chrp,adb0");
-	if (!adbs)
+	if (adbs == 0)
 		return -ENXIO;
 
 	if (of_address_to_resource(adbs, 0, &r)) {
@@ -108,10 +106,6 @@ int macio_init(void)
 		return -ENXIO;
 	}
 	adb = ioremap(r.start, sizeof(struct adb_regs));
-	if (!adb) {
-		of_node_put(adbs);
-		return -ENOMEM;
-	}
 
 	out_8(&adb->ctrl.r, 0);
 	out_8(&adb->intr.r, 0);
@@ -187,7 +181,7 @@ static int macio_send_request(struct adb_request *req, int sync)
 	req->reply_len = 0;
 
 	spin_lock_irqsave(&macio_lock, flags);
-	if (current_req) {
+	if (current_req != 0) {
 		last_req->next = req;
 		last_req = req;
 	} else {
@@ -217,8 +211,7 @@ static irqreturn_t macio_adb_interrupt(int irq, void *arg)
 	spin_lock(&macio_lock);
 	if (in_8(&adb->intr.r) & TAG) {
 		handled = 1;
-		req = current_req;
-		if (req) {
+		if ((req = current_req) != 0) {
 			/* put the current request in */
 			for (i = 0; i < req->nbytes; ++i)
 				out_8(&adb->data[i].r, req->data[i]);

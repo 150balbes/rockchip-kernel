@@ -63,7 +63,7 @@ static const char version[] =
 static const struct net_device_ops rr_netdev_ops = {
 	.ndo_open 		= rr_open,
 	.ndo_stop		= rr_close,
-	.ndo_siocdevprivate	= rr_siocdevprivate,
+	.ndo_do_ioctl		= rr_ioctl,
 	.ndo_start_xmit		= rr_start_xmit,
 	.ndo_set_mac_address	= hippi_mac_addr,
 };
@@ -213,7 +213,6 @@ static int rr_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		pci_iounmap(pdev, rrpriv->regs);
 	if (pdev)
 		pci_release_regions(pdev);
-	pci_disable_device(pdev);
  out2:
 	free_netdev(dev);
  out3:
@@ -503,7 +502,6 @@ static unsigned int write_eeprom(struct rr_private *rrpriv,
 
 static int rr_init(struct net_device *dev)
 {
-	u8 addr[HIPPI_ALEN] __aligned(4);
 	struct rr_private *rrpriv;
 	struct rr_regs __iomem *regs;
 	u32 sram_size, rev;
@@ -539,11 +537,10 @@ static int rr_init(struct net_device *dev)
 	 * other method I've seen.  -VAL
 	 */
 
-	*(__be16 *)(addr) =
+	*(__be16 *)(dev->dev_addr) =
 	  htons(rr_read_eeprom_word(rrpriv, offsetof(struct eeprom, manf.BoardULA)));
-	*(__be32 *)(addr+2) =
+	*(__be32 *)(dev->dev_addr+2) =
 	  htonl(rr_read_eeprom_word(rrpriv, offsetof(struct eeprom, manf.BoardULA[4])));
-	dev_addr_set(dev, addr);
 
 	printk("  MAC: %pM\n", dev->dev_addr);
 
@@ -1573,8 +1570,7 @@ out:
 }
 
 
-static int rr_siocdevprivate(struct net_device *dev, struct ifreq *rq,
-			     void __user *data, int cmd)
+static int rr_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
 	struct rr_private *rrpriv;
 	unsigned char *image, *oldimage;
@@ -1609,7 +1605,7 @@ static int rr_siocdevprivate(struct net_device *dev, struct ifreq *rq,
 			error = -EFAULT;
 			goto gf_out;
 		}
-		error = copy_to_user(data, image, EEPROM_BYTES);
+		error = copy_to_user(rq->ifr_data, image, EEPROM_BYTES);
 		if (error)
 			error = -EFAULT;
 	gf_out:
@@ -1621,7 +1617,7 @@ static int rr_siocdevprivate(struct net_device *dev, struct ifreq *rq,
 			return -EPERM;
 		}
 
-		image = memdup_user(data, EEPROM_BYTES);
+		image = memdup_user(rq->ifr_data, EEPROM_BYTES);
 		if (IS_ERR(image))
 			return PTR_ERR(image);
 
@@ -1664,7 +1660,7 @@ static int rr_siocdevprivate(struct net_device *dev, struct ifreq *rq,
 		return error;
 
 	case SIOCRRID:
-		return put_user(0x52523032, (int __user *)data);
+		return put_user(0x52523032, (int __user *)rq->ifr_data);
 	default:
 		return error;
 	}

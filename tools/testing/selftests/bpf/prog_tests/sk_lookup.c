@@ -30,6 +30,7 @@
 #include <bpf/bpf.h>
 
 #include "test_progs.h"
+#include "bpf_rlimit.h"
 #include "bpf_util.h"
 #include "cgroup_helpers.h"
 #include "network_helpers.h"
@@ -479,7 +480,7 @@ static struct bpf_link *attach_lookup_prog(struct bpf_program *prog)
 	}
 
 	link = bpf_program__attach_netns(prog, net_fd);
-	if (!ASSERT_OK_PTR(link, "bpf_program__attach_netns")) {
+	if (CHECK(IS_ERR(link), "bpf_program__attach_netns", "failed\n")) {
 		errno = -PTR_ERR(link);
 		log_err("failed to attach program '%s' to netns",
 			bpf_program__name(prog));
@@ -935,37 +936,6 @@ static void test_drop_on_lookup(struct test_sk_lookup *skel)
 			.sotype		= SOCK_DGRAM,
 			.connect_to	= { EXT_IP6, EXT_PORT },
 			.listen_at	= { EXT_IP6, INT_PORT },
-		},
-		/* The program will drop on success, meaning that the ifindex
-		 * was 1.
-		 */
-		{
-			.desc		= "TCP IPv4 drop on valid ifindex",
-			.lookup_prog	= skel->progs.check_ifindex,
-			.sotype		= SOCK_STREAM,
-			.connect_to	= { EXT_IP4, EXT_PORT },
-			.listen_at	= { EXT_IP4, EXT_PORT },
-		},
-		{
-			.desc		= "TCP IPv6 drop on valid ifindex",
-			.lookup_prog	= skel->progs.check_ifindex,
-			.sotype		= SOCK_STREAM,
-			.connect_to	= { EXT_IP6, EXT_PORT },
-			.listen_at	= { EXT_IP6, EXT_PORT },
-		},
-		{
-			.desc		= "UDP IPv4 drop on valid ifindex",
-			.lookup_prog	= skel->progs.check_ifindex,
-			.sotype		= SOCK_DGRAM,
-			.connect_to	= { EXT_IP4, EXT_PORT },
-			.listen_at	= { EXT_IP4, EXT_PORT },
-		},
-		{
-			.desc		= "UDP IPv6 drop on valid ifindex",
-			.lookup_prog	= skel->progs.check_ifindex,
-			.sotype		= SOCK_DGRAM,
-			.connect_to	= { EXT_IP6, EXT_PORT },
-			.listen_at	= { EXT_IP6, EXT_PORT },
 		},
 	};
 	const struct test *t;

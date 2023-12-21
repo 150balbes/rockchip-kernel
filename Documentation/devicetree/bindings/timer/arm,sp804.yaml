@@ -23,9 +23,9 @@ select:
   properties:
     compatible:
       contains:
-        enum:
-          - arm,sp804
-          - hisilicon,sp804
+        oneOf:
+          - const: arm,sp804
+          - const: hisilicon,sp804
   required:
     - compatible
 

@@ -141,7 +141,6 @@ static int mt7603_check_eeprom(struct mt76_dev *dev)
 	switch (val) {
 	case 0x7628:
 	case 0x7603:
-	case 0x7600:
 		return 0;
 	default:
 		return -EINVAL;
@@ -171,8 +170,8 @@ int mt7603_eeprom_init(struct mt7603_dev *dev)
 	}
 
 	eeprom = (u8 *)dev->mt76.eeprom.data;
-	dev->mphy.cap.has_2ghz = true;
-	memcpy(dev->mphy.macaddr, eeprom + MT_EE_MAC_ADDR, ETH_ALEN);
+	dev->mt76.cap.has_2ghz = true;
+	memcpy(dev->mt76.macaddr, eeprom + MT_EE_MAC_ADDR, ETH_ALEN);
 
 	/* Check for 1SS devices */
 	dev->mphy.antenna_mask = 3;
@@ -181,7 +180,7 @@ int mt7603_eeprom_init(struct mt7603_dev *dev)
 	    is_mt7688(dev))
 		dev->mphy.antenna_mask = 1;
 
-	mt76_eeprom_override(&dev->mphy);
+	mt76_eeprom_override(&dev->mt76);
 
 	return 0;
 }
