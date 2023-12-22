@@ -40,11 +40,6 @@ else
 	LINUX_COMPILE_HOST=$KBUILD_BUILD_HOST
 fi
 
-LINUX_COMMIT=$(git log --pretty=format:%h -1)
-
-XML_PATH=$(readlink -f ../.repo/manifest.xml)
-XML_NAME=$(basename $XML_PATH .xml)
-
 UTS_VERSION="#$VERSION"
 CONFIG_FLAGS=""
 if [ -n "$SMP" ] ; then CONFIG_FLAGS="SMP"; fi
@@ -66,10 +61,6 @@ UTS_VERSION="$(echo $UTS_VERSION $CONFIG_FLAGS $TIMESTAMP | cut -b -$UTS_LEN)"
 
   printf '#define LINUX_COMPILE_BY "%s"\n' "$LINUX_COMPILE_BY"
   echo \#define LINUX_COMPILE_HOST \"$LINUX_COMPILE_HOST\"
-
-  printf '#define LINUX_COMMIT "%s"\n' "kernel commit id: $LINUX_COMMIT"
-
-  printf '#define XML_NAME "%s"\n' "sdk version: $XML_NAME"
 
   LD_VERSION=$($LD -v | head -n1 | sed 's/(compatible with [^)]*)//' \
 		      | sed 's/[[:space:]]*$//')

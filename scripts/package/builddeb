@@ -71,9 +71,8 @@ deploy_kernel_headers () {
 			echo tools/objtool/objtool
 		fi
 
-		find arch/arm*/include Module.symvers include scripts -type f
-		find . -name Makefile\* -o -name Kconfig\* -o -name \*.pl 
-		find tools/include security/selinux/include -type f -o -type l
+		find arch/$SRCARCH/include Module.symvers include scripts -type f
+
 		if is_enabled CONFIG_GCC_PLUGINS; then
 			find scripts/gcc-plugins -name \*.so
 		fi
@@ -84,15 +83,6 @@ deploy_kernel_headers () {
 	tar -c -f - -C $srctree -T debian/hdrsrcfiles | tar -xf - -C $destdir
 	tar -c -f - -T debian/hdrobjfiles | tar -xf - -C $destdir
 	rm -f debian/hdrsrcfiles debian/hdrobjfiles
-
-	find $destdir -type f | while read file
-	do
-		if file "$file" | grep -q "x86-64"
-		then
-			echo "$file"
-			rm "$file"
-		fi
-	done
 
 	# copy .config manually to be where it's expected to be
 	cp $KCONFIG_CONFIG $destdir/.config
@@ -133,9 +123,6 @@ case $ARCH in
 um)
 	installed_image_path="usr/bin/linux-$version"
 	;;
-arm*)
-        installed_image_path="boot/Image-$version"
-        ;;
 parisc|mips|powerpc)
 	installed_image_path="boot/vmlinux-$version"
 	;;
@@ -169,22 +156,6 @@ if is_enabled CONFIG_OF_EARLY_FLATTREE; then
 	fi
 fi
 
-if is_enabled CONFIG_ARCH_ROCKCHIP; then
-        mkdir -p "$tmpdir/boot/extlinux"
-        echo "label ${RK_KERNEL_DTS} linux-$version" > $tmpdir/boot/extlinux/extlinux.conf
-        echo -e "\tkernel /Image-$version" >> $tmpdir/boot/extlinux/extlinux.conf
-        if [ -f "$tmpdir/usr/lib/$packagename/rockchip/${RK_KERNEL_DTS}.dtb" ]; then
-                cp "$tmpdir/usr/lib/$packagename/rockchip/${RK_KERNEL_DTS}.dtb" "$tmpdir/boot/"
-                ln -s ${RK_KERNEL_DTS}.dtb $tmpdir/boot/rk-kernel.dtb
-                echo -e "\tfdt /${RK_KERNEL_DTS}.dtb" >> $tmpdir/boot/extlinux/extlinux.conf
-        fi
-        cp logo.bmp logo_kernel.bmp $tmpdir/boot/ || true
-        if [ -e "ramdisk.img" ]; then
-                cp "ramdisk.img" "$tmpdir/boot/initrd-$version"
-                echo -e "\tinitrd /initrd-$version" >> $tmpdir/boot/extlinux/extlinux.conf
-        fi
-fi
-
 if is_enabled CONFIG_MODULES; then
 	INSTALL_MOD_PATH="$tmpdir" $MAKE -f $srctree/Makefile modules_install
 	rm -f "$tmpdir/lib/modules/$version/build"
@@ -212,10 +183,6 @@ if is_enabled CONFIG_MODULES; then
 	fi
 fi
 
-want_initrd=$(if_enabled_echo CONFIG_BLK_DEV_INITRD Yes No)
-if is_enabled CONFIG_ARCH_ROCKCHIP; then
-        want_initrd=No
-fi
 # Install the maintainer scripts
 # Note: hook scripts under /etc/kernel are also executed by official Debian
 # kernel packages, as well as kernel packages built using make-kpkg.
@@ -233,7 +200,7 @@ set -e
 export DEB_MAINT_PARAMS="\$*"
 
 # Tell initramfs builder whether it's wanted
-export INITRD=$want_initrd
+export INITRD=$(if_enabled_echo CONFIG_BLK_DEV_INITRD Yes No)
 
 test -d $debhookdir/$script.d && run-parts --arg="$version" --arg="/$installed_image_path" $debhookdir/$script.d
 exit 0
