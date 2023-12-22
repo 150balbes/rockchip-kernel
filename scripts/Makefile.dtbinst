@@ -17,21 +17,24 @@ include include/config/auto.conf
 include scripts/Kbuild.include
 include $(src)/Makefile
 
-ifneq ($(findstring rockchip,$(dst)),)
-dtbs    := $(addprefix $(dst)/, $(RK_KERNEL_DTS).dtb)
-else
 dtbs    := $(addprefix $(dst)/, $(dtb-y) $(if $(CONFIG_OF_ALL_DTBS),$(dtb-)))
-endif
-
+dtbos   := $(addprefix $(dst)/, $(dtbo-y))
+readmes := $(addprefix $(dst)/, $(dtbotxt-y))
 subdirs := $(addprefix $(obj)/, $(subdir-y) $(subdir-m))
 
-__dtbs_install: $(dtbs) $(subdirs)
+__dtbs_install: $(dtbs) $(dtbos) $(readmes) $(subdirs)
 	@:
 
 quiet_cmd_dtb_install = INSTALL $@
       cmd_dtb_install = install -D $< $@
 
 $(dst)/%.dtb: $(obj)/%.dtb
+	$(call cmd,dtb_install)
+
+$(dst)/%.dtbo: $(obj)/%.dtbo
+	$(call cmd,dtb_install)
+
+$(dst)/README.rockchip-overlays: $(src)/README.rockchip-overlays
 	$(call cmd,dtb_install)
 
 PHONY += $(subdirs)
