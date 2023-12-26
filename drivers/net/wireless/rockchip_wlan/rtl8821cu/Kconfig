@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: GPL-2.0
-config RTL8821CU
-	tristate "Realtek 8821CU and 87312AU USB WiFi"
+config RTL8821CU_RK
+	tristate "Realtek 8821C USB WiFi RK"
 	depends on USB
 	help
 	  Help message of RTL8821CU
+

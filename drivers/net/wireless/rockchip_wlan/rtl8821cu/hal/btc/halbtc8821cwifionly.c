@@ -47,6 +47,7 @@ VOID hal8821c_wifi_only_switch_antenna(
 		pos_type = BT_8821C_WIFI_ONLY_EXT_ANT_SWITCH_TO_WLG;
 
 	switch (pos_type) {
+	default:
 	case BT_8821C_WIFI_ONLY_EXT_ANT_SWITCH_TO_WLA:
 
 		break;
@@ -63,6 +64,7 @@ VOID hal8821c_wifi_only_switch_antenna(
 
 
 	switch (ctrl_type) {
+	default:
 	case BT_8821C_WIFI_ONLY_EXT_ANT_SWITCH_CTRL_BY_BBSW:
 		halwifionly_phy_set_bb_reg(pwifionlycfg, 0x4c,  0x01800000, 0x2);
 
@@ -171,14 +173,11 @@ ex_hal8821c_wifi_only_hw_config(
 	halbtc8821c_wifi_only_set_rfe_type(pwifionlycfg);
 
 	/* set gnt_wl, gnt_bt control owner to WL*/
-	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x70, 0x4000000, 0x1);
+	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x70, 0x400000, 0x1);
 
 	/*gnt_wl=1 , gnt_bt=0*/
 	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x1704, 0xffffffff, 0x7700);
 	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x1700, 0xffffffff, 0xc00f0038);
-
-	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x6c0, 0xffffffff, 0xaaaaaaaa);
-	halwifionly_phy_set_bb_reg(pwifionlycfg, 0x6c4, 0xffffffff, 0xaaaaaaaa);
 }
 
 VOID
@@ -198,14 +197,4 @@ ex_hal8821c_wifi_only_switchbandnotify(
 {
 	hal8821c_wifi_only_switch_antenna(pwifionlycfg, is_5g);
 }
-
-VOID
-ex_hal8821c_wifi_only_connectnotify(
-	IN struct wifi_only_cfg *pwifionlycfg,
-	IN u1Byte  is_5g
-	)
-{
-	hal8821c_wifi_only_switch_antenna(pwifionlycfg, is_5g);
-}
-
 

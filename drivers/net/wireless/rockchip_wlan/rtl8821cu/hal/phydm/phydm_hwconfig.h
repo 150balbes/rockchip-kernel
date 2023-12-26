@@ -26,17 +26,12 @@
 #ifndef __HALHWOUTSRC_H__
 #define __HALHWOUTSRC_H__
 
-/*@--------------------------Define -------------------------------------------*/
-#define AGC_DIFF_CONFIG_MP(ic, band)				\
-	(odm_read_and_config_mp_##ic##_agc_tab_diff(dm,		\
-	array_mp_##ic##_agc_tab_diff_##band,			\
-	sizeof(array_mp_##ic##_agc_tab_diff_##band) / sizeof(u32)))
-#define AGC_DIFF_CONFIG_TC(ic, band)				\
-	(odm_read_and_config_tc_##ic##_agc_tab_diff(dm,		\
-	array_tc_##ic##_agc_tab_diff_##band,			\
-	sizeof(array_tc_##ic##_agc_tab_diff_##band) / sizeof(u32)))
-#if defined(DM_ODM_CE_MAC80211)
-#else
+/*--------------------------Define -------------------------------------------*/
+#define AGC_DIFF_CONFIG_MP(ic, band) (odm_read_and_config_mp_##ic##_agc_tab_diff(dm, array_mp_##ic##_agc_tab_diff_##band, \
+										 sizeof(array_mp_##ic##_agc_tab_diff_##band) / sizeof(u32)))
+#define AGC_DIFF_CONFIG_TC(ic, band) (odm_read_and_config_tc_##ic##_agc_tab_diff(dm, array_tc_##ic##_agc_tab_diff_##band, \
+										 sizeof(array_tc_##ic##_agc_tab_diff_##band) / sizeof(u32)))
+
 #define AGC_DIFF_CONFIG(ic, band)                     \
 	do {                                          \
 		if (dm->is_mp_chip)                   \
@@ -44,8 +39,8 @@
 		else                                  \
 			AGC_DIFF_CONFIG_TC(ic, band); \
 	} while (0)
-#endif
-/*@************************************************************
+
+/*************************************************************
  * structure and define
  ************************************************************/
 
@@ -76,4 +71,4 @@ u32 query_phydm_txbf_parameters(struct dm_struct *dm);
 
 u32 query_phydm_txbf_capability(struct dm_struct *dm);
 
-#endif /*@#ifndef	__HALHWOUTSRC_H__*/
+#endif /*#ifndef	__HALHWOUTSRC_H__*/

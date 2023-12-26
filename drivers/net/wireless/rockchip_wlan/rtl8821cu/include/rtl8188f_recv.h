@@ -17,26 +17,30 @@
 
 #if defined(CONFIG_USB_HCI)
 	#ifndef MAX_RECVBUF_SZ
-
-		#ifdef CONFIG_MINIMAL_MEMORY_USAGE
-			#define MAX_RECVBUF_SZ (4000) /* about 4K */
+		#ifdef PLATFORM_OS_CE
+			#define MAX_RECVBUF_SZ (8192+1024) /* 8K+1k */
 		#else
-			#ifdef CONFIG_PLATFORM_HISILICON
-				#define MAX_RECVBUF_SZ (16384) /* 16k */
+			#ifdef CONFIG_MINIMAL_MEMORY_USAGE
+				#define MAX_RECVBUF_SZ (4000) /* about 4K */
 			#else
-				#define MAX_RECVBUF_SZ (32768) /* 32k */
+				#ifdef CONFIG_PLATFORM_MSTAR
+					#define MAX_RECVBUF_SZ (8192) /* 8K */
+				#elif defined(CONFIG_PLATFORM_HISILICON)
+					#define MAX_RECVBUF_SZ (16384) /* 16k */
+				#else
+					#define MAX_RECVBUF_SZ (32768) /* 32k */
+				#endif
+				/* #define MAX_RECVBUF_SZ (20480) */ /* 20K */
+				/* #define MAX_RECVBUF_SZ (10240)  */ /* 10K */
+				/* #define MAX_RECVBUF_SZ (16384) */ /* 16k - 92E RX BUF :16K */
+				/* #define MAX_RECVBUF_SZ (8192+1024) */ /* 8K+1k		 */
 			#endif
-			/* #define MAX_RECVBUF_SZ (20480) */ /* 20K */
-			/* #define MAX_RECVBUF_SZ (10240)  */ /* 10K */
-			/* #define MAX_RECVBUF_SZ (16384) */ /* 16k - 92E RX BUF :16K */
-			/* #define MAX_RECVBUF_SZ (8192+1024) */ /* 8K+1k		 */
 		#endif
 	#endif /* !MAX_RECVBUF_SZ */
 #elif defined(CONFIG_PCI_HCI)
 	#define MAX_RECVBUF_SZ (4000) /* about 4K */
 #elif defined(CONFIG_SDIO_HCI)
-	/* minmum 4K, multiple of 8-byte is required, multiple of sdio block size is prefered */
-	#define MAX_RECVBUF_SZ _RND(RX_DMA_BOUNDARY_8188F + 1, 8)
+	#define MAX_RECVBUF_SZ (RX_DMA_BOUNDARY_8188F + 1)
 #endif /* CONFIG_SDIO_HCI */
 
 /* Rx smooth factor */

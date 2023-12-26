@@ -33,6 +33,8 @@
  * Wi-Fi Functions Config
  */
 
+#define CONFIG_IEEE80211_BAND_5GHZ
+
 #define CONFIG_80211N_HT
 #define CONFIG_80211AC_VHT
 #ifdef CONFIG_80211AC_VHT
@@ -77,6 +79,8 @@
 
 #define CONFIG_RECV_REORDERING_CTRL
 
+#define CONFIG_DFS
+
  /* #define CONFIG_SUPPORT_USB_INT */
  #ifdef CONFIG_SUPPORT_USB_INT
 /* #define CONFIG_USB_INTERRUPT_IN_PIPE*/
@@ -117,6 +121,7 @@
 #define CONFIG_HW_ANTENNA_DIVERSITY
 #endif
 
+#define CONFIG_AP_MODE
 #ifdef CONFIG_AP_MODE
 	/* #define CONFIG_INTERRUPT_BASED_TXBCN */ /* Tx Beacon when driver BCN_OK ,BCN_ERR interrupt occurs */
 	#if defined(CONFIG_CONCURRENT_MODE) && defined(CONFIG_INTERRUPT_BASED_TXBCN)
@@ -134,6 +139,7 @@
 	#define CONFIG_FIND_BEST_CHANNEL
 #endif
 
+#define CONFIG_P2P
 #ifdef CONFIG_P2P
 	/* The CONFIG_WFD is for supporting the Wi-Fi display */
 	#define CONFIG_WFD
@@ -177,6 +183,8 @@
 
 /*#define CONFIG_RTW_80211K*/
 
+#define CONFIG_LAYER2_ROAMING
+#define CONFIG_LAYER2_ROAMING_RESUME
 /*#define CONFIG_ADAPTOR_INFO_CACHING_FILE */ /* now just applied on 8192cu only, should make it general... */
 /*#define CONFIG_RESUME_IN_WORKQUEUE */
 /*#define CONFIG_SET_SCAN_DENY_TIMER */
@@ -187,6 +195,9 @@
 /* #define CONFIG_BACKGROUND_NOISE_MONITOR */
 #endif
 #define RTW_NOTCH_FILTER 0 /* 0:Disable, 1:Enable, */
+
+#define CONFIG_TX_MCAST2UNI		/*Support IP multicast->unicast*/
+/* #define CONFIG_CHECK_AC_LIFETIME 1 */	/* Check packet lifetime of 4 ACs. */
 
 
 /*
@@ -295,6 +306,7 @@
  */
 #define DBG	1
 
+#define CONFIG_PROC_DEBUG
 #define DBG_CONFIG_ERROR_DETECT
 
 /*#define DBG_CONFIG_ERROR_DETECT_INT*/

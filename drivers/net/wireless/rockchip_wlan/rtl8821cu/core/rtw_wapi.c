@@ -296,7 +296,7 @@ void rtw_wapi_init(_adapter *padapter)
 	int				i;
 
 	WAPI_TRACE(WAPI_INIT, "===========> %s\n", __FUNCTION__);
-	RT_WAPI_ASSERT_RET(padapter);
+	RT_ASSERT_RET(padapter);
 
 	if (!padapter->WapiSupport) {
 		WAPI_TRACE(WAPI_INIT, "<========== %s, WAPI not supported!\n", __FUNCTION__);
@@ -330,7 +330,7 @@ void rtw_wapi_init(_adapter *padapter)
 void rtw_wapi_free(_adapter *padapter)
 {
 	WAPI_TRACE(WAPI_INIT, "===========> %s\n", __FUNCTION__);
-	RT_WAPI_ASSERT_RET(padapter);
+	RT_ASSERT_RET(padapter);
 
 	if (!padapter->WapiSupport) {
 		WAPI_TRACE(WAPI_INIT, "<========== %s, WAPI not supported!\n", __FUNCTION__);
@@ -345,7 +345,7 @@ void rtw_wapi_free(_adapter *padapter)
 void rtw_wapi_disable_tx(_adapter *padapter)
 {
 	WAPI_TRACE(WAPI_INIT, "===========> %s\n", __FUNCTION__);
-	RT_WAPI_ASSERT_RET(padapter);
+	RT_ASSERT_RET(padapter);
 
 	if (!padapter->WapiSupport) {
 		WAPI_TRACE(WAPI_INIT, "<========== %s, WAPI not supported!\n", __FUNCTION__);
@@ -476,7 +476,14 @@ u8 rtw_wapi_check_for_drop(
 
 	if (precv_hdr->bIsWaiPacket != 0) {
 		if (precv_hdr->bIsWaiPacket == 0x8) {
-			WAPI_DATA(WAPI_RX, "rtw_wapi_check_for_drop() dump packet", ptr, 50);
+
+			RTW_INFO("rtw_wapi_check_for_drop: dump packet\n");
+			for (i = 0; i < 50; i++) {
+				RTW_INFO("%02X  ", ptr[i]);
+				if ((i + 1) % 8 == 0)
+					RTW_INFO("\n");
+			}
+			RTW_INFO("\n rtw_wapi_check_for_drop: dump packet\n");
 
 			for (i = 0; i < 16; i++) {
 				if (ptr[i + 27] != 0)
@@ -783,14 +790,6 @@ void rtw_wapi_return_all_sta_info(_adapter *padapter)
 		list_add_tail(&pWapiBkid->list, &pWapiInfo->wapiBKIDIdleList);
 	}
 	WAPI_TRACE(WAPI_API, "<========== %s\n", __FUNCTION__);
-}
-
-void CAM_empty_entry(
-	PADAPTER	Adapter,
-	u8			ucIndex
-)
-{
-	rtw_hal_set_hwreg(Adapter, HW_VAR_CAM_EMPTY_ENTRY, (u8 *)(&ucIndex));
 }
 
 void rtw_wapi_clear_cam_entry(_adapter *padapter, u8 *pMacAddr)

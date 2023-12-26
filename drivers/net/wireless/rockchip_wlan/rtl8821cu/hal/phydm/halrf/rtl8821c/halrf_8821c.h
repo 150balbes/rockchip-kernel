@@ -43,17 +43,19 @@ void phy_lc_calibrate_8821c(void *dm_void);
 
 void halrf_rf_lna_setting_8821c(struct dm_struct *dm, enum halrf_lna_set type);
 
+void phy_set_rf_path_switch_8821c(
 #if ((DM_ODM_SUPPORT_TYPE & ODM_AP) || (DM_ODM_SUPPORT_TYPE == ODM_CE))
-void phy_set_rf_path_switch_8821c(struct dm_struct *dm,
+				  struct dm_struct *dm,
 #else
-void phy_set_rf_path_switch_8821c(void *adapter,
+				  void *adapter,
 #endif
 				  boolean is_main);
 
+boolean phy_query_rf_path_switch_8821c(
 #if (DM_ODM_SUPPORT_TYPE & ODM_AP)
-boolean phy_query_rf_path_switch_8821c(struct dm_struct *dm
+				       struct dm_struct *dm
 #else
-boolean phy_query_rf_path_switch_8821c(void *adapter
+				       void *adapter
 #endif
 				       );
 
