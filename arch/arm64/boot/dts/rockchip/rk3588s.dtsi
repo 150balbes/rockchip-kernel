@@ -12,7 +12,6 @@
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/ata/ahci.h>
 #include <dt-bindings/thermal/thermal.h>
-//#include <dt-bindings/display/rockchip_vop.h>
 
 / {
 	compatible = "rockchip,rk3588";
@@ -809,6 +808,17 @@
 	display_subsystem: display-subsystem {
 		compatible = "rockchip,display-subsystem";
 		ports = <&vop_out>;
+
+		route {
+			route_hdmi0: route-hdmi0 {
+				status = "disabled";
+				logo,uboot = "logo.bmp";
+				logo,kernel = "logo_kernel.bmp";
+				logo,mode = "center";
+				charge_logo,mode = "center";
+				connect = <&vp0_out_hdmi0>;
+			};
+		};
 	};
 
 	timer {
