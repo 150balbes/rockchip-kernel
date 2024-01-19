@@ -1972,7 +1972,7 @@ static void bpf_audit_prog(const struct bpf_prog *prog, unsigned int op)
 		return;
 	if (audit_enabled == AUDIT_OFF)
 		return;
-	if (!in_irq() && !irqs_disabled())
+	if (op == BPF_AUDIT_LOAD)
 		ctx = audit_context();
 	ab = audit_log_start(ctx, GFP_ATOMIC, AUDIT_BPF);
 	if (unlikely(!ab))
@@ -2001,7 +2001,7 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 	return id > 0 ? 0 : id;
 }
 
-void bpf_prog_free_id(struct bpf_prog *prog)
+void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
 {
 	unsigned long flags;
 
@@ -2013,10 +2013,18 @@ void bpf_prog_free_id(struct bpf_prog *prog)
 	if (!prog->aux->id)
 		return;
 
-	spin_lock_irqsave(&prog_idr_lock, flags);
+	if (do_idr_lock)
+		spin_lock_irqsave(&prog_idr_lock, flags);
+	else
+		__acquire(&prog_idr_lock);
+
 	idr_remove(&prog_idr, prog->aux->id);
 	prog->aux->id = 0;
-	spin_unlock_irqrestore(&prog_idr_lock, flags);
+
+	if (do_idr_lock)
+		spin_unlock_irqrestore(&prog_idr_lock, flags);
+	else
+		__release(&prog_idr_lock);
 }
 
 static void __bpf_prog_put_rcu(struct rcu_head *rcu)
@@ -2059,15 +2067,17 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 	prog = aux->prog;
 	perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_UNLOAD, 0);
 	bpf_audit_prog(prog, BPF_AUDIT_UNLOAD);
-	bpf_prog_free_id(prog);
 	__bpf_prog_put_noref(prog, true);
 }
 
-static void __bpf_prog_put(struct bpf_prog *prog)
+static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
 {
 	struct bpf_prog_aux *aux = prog->aux;
 
 	if (atomic64_dec_and_test(&aux->refcnt)) {
+		/* bpf_prog_free_id() must be called first */
+		bpf_prog_free_id(prog, do_idr_lock);
+
 		if (in_irq() || irqs_disabled()) {
 			INIT_WORK(&aux->work, bpf_prog_put_deferred);
 			schedule_work(&aux->work);
@@ -2079,7 +2089,7 @@ static void __bpf_prog_put(struct bpf_prog *prog)
 
 void bpf_prog_put(struct bpf_prog *prog)
 {
-	__bpf_prog_put(prog);
+	__bpf_prog_put(prog, true);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_put);
 

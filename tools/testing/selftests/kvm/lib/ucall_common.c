@@ -4,8 +4,6 @@
 #include "linux/bitmap.h"
 #include "linux/atomic.h"
 
-#define GUEST_UCALL_FAILED -1
-
 struct ucall_header {
 	DECLARE_BITMAP(in_use, KVM_MAX_VCPUS);
 	struct ucall ucalls[KVM_MAX_VCPUS];
@@ -43,8 +41,7 @@ static struct ucall *ucall_alloc(void)
 	struct ucall *uc;
 	int i;
 
-	if (!ucall_pool)
-		goto ucall_failed;
+	GUEST_ASSERT(ucall_pool);
 
 	for (i = 0; i < KVM_MAX_VCPUS; ++i) {
 		if (!test_and_set_bit(i, ucall_pool->in_use)) {
@@ -54,13 +51,7 @@ static struct ucall *ucall_alloc(void)
 		}
 	}
 
-ucall_failed:
-	/*
-	 * If the vCPU cannot grab a ucall structure, make a bare ucall with a
-	 * magic value to signal to get_ucall() that things went sideways.
-	 * GUEST_ASSERT() depends on ucall_alloc() and so cannot be used here.
-	 */
-	ucall_arch_do_ucall(GUEST_UCALL_FAILED);
+	GUEST_ASSERT(0);
 	return NULL;
 }
 
@@ -102,9 +93,6 @@ uint64_t get_ucall(struct kvm_vcpu *vcpu, struct ucall *uc)
 
 	addr = ucall_arch_get_ucall(vcpu);
 	if (addr) {
-		TEST_ASSERT(addr != (void *)GUEST_UCALL_FAILED,
-			    "Guest failed to allocate ucall struct");
-
 		memcpy(uc, addr, sizeof(*uc));
 		vcpu_run_complete_io(vcpu);
 	} else {

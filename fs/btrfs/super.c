@@ -1705,7 +1705,7 @@ static int btrfs_remount(struct super_block *sb, int *flags, char *data)
 	if (ret)
 		goto restore;
 
-	ret = btrfs_check_features(fs_info, !(*flags & SB_RDONLY));
+	ret = btrfs_check_features(fs_info, sb);
 	if (ret < 0)
 		goto restore;
 
@@ -2514,7 +2514,6 @@ static __always_inline void btrfs_exit_btrfs_fs(void)
 static void __exit exit_btrfs_fs(void)
 {
 	btrfs_exit_btrfs_fs();
-	btrfs_cleanup_fs_uuids();
 }
 
 static int __init init_btrfs_fs(void)

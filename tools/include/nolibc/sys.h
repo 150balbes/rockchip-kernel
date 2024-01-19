@@ -1243,7 +1243,5 @@ ssize_t write(int fd, const void *buf, size_t count)
 	return ret;
 }
 
-/* make sure to include all global symbols */
-#include "nolibc.h"
 
 #endif /* _NOLIBC_SYS_H */

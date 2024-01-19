@@ -141,14 +141,13 @@ static bool fscache_is_acquire_pending(struct fscache_volume *volume)
 static void fscache_wait_on_volume_collision(struct fscache_volume *candidate,
 					     unsigned int collidee_debug_id)
 {
-	wait_on_bit_timeout(&candidate->flags, FSCACHE_VOLUME_ACQUIRE_PENDING,
-			    TASK_UNINTERRUPTIBLE, 20 * HZ);
+	wait_var_event_timeout(&candidate->flags,
+			       !fscache_is_acquire_pending(candidate), 20 * HZ);
 	if (fscache_is_acquire_pending(candidate)) {
 		pr_notice("Potential volume collision new=%08x old=%08x",
 			  candidate->debug_id, collidee_debug_id);
 		fscache_stat(&fscache_n_volumes_collision);
-		wait_on_bit(&candidate->flags, FSCACHE_VOLUME_ACQUIRE_PENDING,
-			    TASK_UNINTERRUPTIBLE);
+		wait_var_event(&candidate->flags, !fscache_is_acquire_pending(candidate));
 	}
 }
 
@@ -280,7 +279,8 @@ static void fscache_create_volume_work(struct work_struct *work)
 	fscache_end_cache_access(volume->cache,
 				 fscache_access_acquire_volume_end);
 
-	clear_and_wake_up_bit(FSCACHE_VOLUME_CREATING, &volume->flags);
+	clear_bit_unlock(FSCACHE_VOLUME_CREATING, &volume->flags);
+	wake_up_bit(&volume->flags, FSCACHE_VOLUME_CREATING);
 	fscache_put_volume(volume, fscache_volume_put_create_work);
 }
 
@@ -347,8 +347,8 @@ static void fscache_wake_pending_volume(struct fscache_volume *volume,
 	hlist_bl_for_each_entry(cursor, p, h, hash_link) {
 		if (fscache_volume_same(cursor, volume)) {
 			fscache_see_volume(cursor, fscache_volume_see_hash_wake);
-			clear_and_wake_up_bit(FSCACHE_VOLUME_ACQUIRE_PENDING,
-					      &cursor->flags);
+			clear_bit(FSCACHE_VOLUME_ACQUIRE_PENDING, &cursor->flags);
+			wake_up_bit(&cursor->flags, FSCACHE_VOLUME_ACQUIRE_PENDING);
 			return;
 		}
 	}

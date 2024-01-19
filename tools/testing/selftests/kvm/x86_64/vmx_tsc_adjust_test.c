@@ -49,6 +49,11 @@ enum {
 	NUM_VMX_PAGES,
 };
 
+struct kvm_single_msr {
+	struct kvm_msrs header;
+	struct kvm_msr_entry entry;
+} __attribute__((packed));
+
 /* The virtual machine object. */
 static struct kvm_vm *vm;
 

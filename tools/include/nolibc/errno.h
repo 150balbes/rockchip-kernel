@@ -24,7 +24,4 @@ static int errno;
  */
 #define MAX_ERRNO 4095
 
-/* make sure to include all global symbols */
-#include "nolibc.h"
-
 #endif /* _NOLIBC_ERRNO_H */

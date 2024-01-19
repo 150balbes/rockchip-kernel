@@ -86,7 +86,6 @@ int monitor_device(const char *device_name,
 			gpiotools_test_bit(values.bits, i));
 	}
 
-	i = 0;
 	while (1) {
 		struct gpio_v2_line_event event;
 

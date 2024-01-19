@@ -1271,9 +1271,8 @@ static s64 dax_unshare_iter(struct iomap_iter *iter)
 	if (ret < 0)
 		goto out_unlock;
 
-	if (copy_mc_to_kernel(daddr, saddr, length) == 0)
-		ret = length;
-	else
+	ret = copy_mc_to_kernel(daddr, saddr, length);
+	if (ret)
 		ret = -EIO;
 
 out_unlock:

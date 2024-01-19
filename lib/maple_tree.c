@@ -670,13 +670,12 @@ static inline unsigned long mte_pivot(const struct maple_enode *mn,
 				 unsigned char piv)
 {
 	struct maple_node *node = mte_to_node(mn);
-	enum maple_type type = mte_node_type(mn);
 
-	if (piv >= mt_pivots[type]) {
+	if (piv >= mt_pivots[piv]) {
 		WARN_ON(1);
 		return 0;
 	}
-	switch (type) {
+	switch (mte_node_type(mn)) {
 	case maple_arange_64:
 		return node->ma64.pivot[piv];
 	case maple_range_64:
@@ -4888,7 +4887,7 @@ static bool mas_rev_awalk(struct ma_state *mas, unsigned long size)
 	unsigned long *pivots, *gaps;
 	void __rcu **slots;
 	unsigned long gap = 0;
-	unsigned long max, min;
+	unsigned long max, min, index;
 	unsigned char offset;
 
 	if (unlikely(mas_is_err(mas)))
@@ -4910,7 +4909,8 @@ static bool mas_rev_awalk(struct ma_state *mas, unsigned long size)
 		min = mas_safe_min(mas, pivots, --offset);
 
 	max = mas_safe_pivot(mas, pivots, offset, type);
-	while (mas->index <= max) {
+	index = mas->index;
+	while (index <= max) {
 		gap = 0;
 		if (gaps)
 			gap = gaps[offset];
@@ -4941,8 +4941,10 @@ static bool mas_rev_awalk(struct ma_state *mas, unsigned long size)
 		min = mas_safe_min(mas, pivots, offset);
 	}
 
-	if (unlikely((mas->index > max) || (size - 1 > max - mas->index)))
-		goto no_space;
+	if (unlikely(index > max)) {
+		mas_set_err(mas, -EBUSY);
+		return false;
+	}
 
 	if (unlikely(ma_is_leaf(type))) {
 		mas->offset = offset;
@@ -4959,11 +4961,9 @@ static bool mas_rev_awalk(struct ma_state *mas, unsigned long size)
 	return false;
 
 ascend:
-	if (!mte_is_root(mas->node))
-		return false;
+	if (mte_is_root(mas->node))
+		mas_set_err(mas, -EBUSY);
 
-no_space:
-	mas_set_err(mas, -EBUSY);
 	return false;
 }
 

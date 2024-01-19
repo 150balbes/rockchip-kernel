@@ -4,7 +4,6 @@
  */
 
 #include <linux/linkage.h>
-#include <asm/assembler.h>
 
 SYM_FUNC_START(__efi_rt_asm_wrapper)
 	stp	x29, x30, [sp, #-112]!
@@ -46,10 +45,7 @@ SYM_FUNC_START(__efi_rt_asm_wrapper)
 	mov	x4, x6
 	blr	x8
 
-	mov	x16, sp
 	mov	sp, x29
-	str	xzr, [x16, #8]			// clear recorded task SP value
-
 	ldp	x1, x2, [sp, #16]
 	cmp	x2, x18
 	ldp	x29, x30, [sp], #112
@@ -73,9 +69,6 @@ SYM_FUNC_END(__efi_rt_asm_wrapper)
 
 SYM_CODE_START(__efi_rt_asm_recover)
 	mov	sp, x30
-
-	ldr_l	x16, efi_rt_stack_top		// clear recorded task SP value
-	str	xzr, [x16, #-8]
 
 	ldp	x19, x20, [sp, #32]
 	ldp	x21, x22, [sp, #48]

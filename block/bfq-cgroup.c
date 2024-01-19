@@ -316,12 +316,14 @@ struct bfq_group *bfqq_group(struct bfq_queue *bfqq)
 
 static void bfqg_get(struct bfq_group *bfqg)
 {
-	refcount_inc(&bfqg->ref);
+	bfqg->ref++;
 }
 
 static void bfqg_put(struct bfq_group *bfqg)
 {
-	if (refcount_dec_and_test(&bfqg->ref))
+	bfqg->ref--;
+
+	if (bfqg->ref == 0)
 		kfree(bfqg);
 }
 
@@ -528,7 +530,7 @@ static struct blkg_policy_data *bfq_pd_alloc(gfp_t gfp, struct request_queue *q,
 	}
 
 	/* see comments in bfq_bic_update_cgroup for why refcounting */
-	refcount_set(&bfqg->ref, 1);
+	bfqg_get(bfqg);
 	return &bfqg->pd;
 }
 
@@ -769,8 +771,8 @@ static void __bfq_bic_change_cgroup(struct bfq_data *bfqd,
 				 * request from the old cgroup.
 				 */
 				bfq_put_cooperator(sync_bfqq);
-				bic_set_bfqq(bic, NULL, true);
 				bfq_release_process_ref(bfqd, sync_bfqq);
+				bic_set_bfqq(bic, NULL, true);
 			}
 		}
 	}

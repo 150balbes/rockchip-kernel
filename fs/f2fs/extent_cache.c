@@ -546,8 +546,7 @@ static bool __lookup_extent_tree(struct inode *inode, pgoff_t pgofs,
 	struct extent_node *en;
 	bool ret = false;
 
-	if (!et)
-		return false;
+	f2fs_bug_on(sbi, !et);
 
 	trace_f2fs_lookup_extent_tree_start(inode, pgofs, type);
 
@@ -882,14 +881,12 @@ static unsigned long long __calculate_block_age(unsigned long long new,
 }
 
 /* This returns a new age and allocated blocks in ei */
-static int __get_new_block_age(struct inode *inode, struct extent_info *ei,
-						block_t blkaddr)
+static int __get_new_block_age(struct inode *inode, struct extent_info *ei)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	loff_t f_size = i_size_read(inode);
 	unsigned long long cur_blocks =
 				atomic64_read(&sbi->allocated_data_blocks);
-	struct extent_info tei = *ei;	/* only fofs and len are valid */
 
 	/*
 	 * When I/O is not aligned to a PAGE_SIZE, update will happen to the last
@@ -897,20 +894,20 @@ static int __get_new_block_age(struct inode *inode, struct extent_info *ei,
 	 * block here.
 	 */
 	if ((f_size >> PAGE_SHIFT) == ei->fofs && f_size & (PAGE_SIZE - 1) &&
-			blkaddr == NEW_ADDR)
+			ei->blk == NEW_ADDR)
 		return -EINVAL;
 
-	if (__lookup_extent_tree(inode, ei->fofs, &tei, EX_BLOCK_AGE)) {
+	if (__lookup_extent_tree(inode, ei->fofs, ei, EX_BLOCK_AGE)) {
 		unsigned long long cur_age;
 
-		if (cur_blocks >= tei.last_blocks)
-			cur_age = cur_blocks - tei.last_blocks;
+		if (cur_blocks >= ei->last_blocks)
+			cur_age = cur_blocks - ei->last_blocks;
 		else
 			/* allocated_data_blocks overflow */
-			cur_age = ULLONG_MAX - tei.last_blocks + cur_blocks;
+			cur_age = ULLONG_MAX - ei->last_blocks + cur_blocks;
 
-		if (tei.age)
-			ei->age = __calculate_block_age(cur_age, tei.age);
+		if (ei->age)
+			ei->age = __calculate_block_age(cur_age, ei->age);
 		else
 			ei->age = cur_age;
 		ei->last_blocks = cur_blocks;
@@ -918,14 +915,14 @@ static int __get_new_block_age(struct inode *inode, struct extent_info *ei,
 		return 0;
 	}
 
-	f2fs_bug_on(sbi, blkaddr == NULL_ADDR);
+	f2fs_bug_on(sbi, ei->blk == NULL_ADDR);
 
 	/* the data block was allocated for the first time */
-	if (blkaddr == NEW_ADDR)
+	if (ei->blk == NEW_ADDR)
 		goto out;
 
-	if (__is_valid_data_blkaddr(blkaddr) &&
-	    !f2fs_is_valid_blkaddr(sbi, blkaddr, DATA_GENERIC_ENHANCE)) {
+	if (__is_valid_data_blkaddr(ei->blk) &&
+			!f2fs_is_valid_blkaddr(sbi, ei->blk, DATA_GENERIC_ENHANCE)) {
 		f2fs_bug_on(sbi, 1);
 		return -EINVAL;
 	}
@@ -941,7 +938,7 @@ out:
 
 static void __update_extent_cache(struct dnode_of_data *dn, enum extent_type type)
 {
-	struct extent_info ei = {};
+	struct extent_info ei;
 
 	if (!__may_extent_tree(dn->inode, type))
 		return;
@@ -956,7 +953,8 @@ static void __update_extent_cache(struct dnode_of_data *dn, enum extent_type typ
 		else
 			ei.blk = dn->data_blkaddr;
 	} else if (type == EX_BLOCK_AGE) {
-		if (__get_new_block_age(dn->inode, &ei, dn->data_blkaddr))
+		ei.blk = dn->data_blkaddr;
+		if (__get_new_block_age(dn->inode, &ei))
 			return;
 	}
 	__update_extent_tree_range(dn->inode, &ei, type);

@@ -25,7 +25,6 @@
 #undef NDEBUG
 #include <assert.h>
 #include <errno.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +41,7 @@
  * 1: vsyscall VMA is --xp		vsyscall=xonly
  * 2: vsyscall VMA is r-xp		vsyscall=emulate
  */
-static volatile int g_vsyscall;
+static int g_vsyscall;
 static const char *g_proc_pid_maps_vsyscall;
 static const char *g_proc_pid_smaps_vsyscall;
 
@@ -148,12 +147,11 @@ static void vsyscall(void)
 
 		g_vsyscall = 0;
 		/* gettimeofday(NULL, NULL); */
-		uint64_t rax = 0xffffffffff600000;
 		asm volatile (
-			"call *%[rax]"
-			: [rax] "+a" (rax)
-			: "D" (NULL), "S" (NULL)
-			: "rcx", "r11"
+			"call %P0"
+			:
+			: "i" (0xffffffffff600000), "D" (NULL), "S" (NULL)
+			: "rax", "rcx", "r11"
 		);
 
 		g_vsyscall = 1;

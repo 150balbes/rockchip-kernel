@@ -1670,7 +1670,6 @@ static int __cmd_report(bool display_info)
 
 	/* for lock function check */
 	symbol_conf.sort_by_name = true;
-	symbol_conf.allow_aliases = true;
 	symbol__init(&session->header.env);
 
 	if (!data.is_pipe) {
@@ -1758,7 +1757,6 @@ static int __cmd_contention(int argc, const char **argv)
 
 	/* for lock function check */
 	symbol_conf.sort_by_name = true;
-	symbol_conf.allow_aliases = true;
 	symbol__init(&session->header.env);
 
 	if (use_bpf) {

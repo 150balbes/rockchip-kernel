@@ -245,13 +245,7 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 					newpte = pte_swp_mksoft_dirty(newpte);
 				if (pte_swp_uffd_wp(oldpte))
 					newpte = pte_swp_mkuffd_wp(newpte);
-			} else if (is_pte_marker_entry(entry)) {
-				/*
-				 * Ignore swapin errors unconditionally,
-				 * because any access should sigbus anyway.
-				 */
-				if (is_swapin_error_entry(entry))
-					continue;
+			} else if (pte_marker_entry_uffd_wp(entry)) {
 				/*
 				 * If this is uffd-wp pte marker and we'd like
 				 * to unprotect it, drop it; the next page

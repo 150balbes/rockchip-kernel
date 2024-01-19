@@ -1524,10 +1524,6 @@ int vma_wants_writenotify(struct vm_area_struct *vma, pgprot_t vm_page_prot)
 	if (vma_soft_dirty_enabled(vma) && !is_vm_hugetlb_page(vma))
 		return 1;
 
-	/* Do we need write faults for uffd-wp tracking? */
-	if (userfaultfd_wp(vma))
-		return 1;
-
 	/* Specialty mapping? */
 	if (vm_flags & VM_PFNMAP)
 		return 0;
@@ -2294,7 +2290,7 @@ static inline int munmap_sidetree(struct vm_area_struct *vma,
  * @start: The aligned start address to munmap.
  * @end: The aligned end address to munmap.
  * @uf: The userfaultfd list_head
- * @downgrade: Set to true to attempt a write downgrade of the mmap_lock
+ * @downgrade: Set to true to attempt a write downgrade of the mmap_sem
  *
  * If @downgrade is true, check return code for potential release of the lock.
  */
@@ -2469,7 +2465,7 @@ map_count_exceeded:
  * @len: The length of the range to munmap
  * @uf: The userfaultfd list_head
  * @downgrade: set to true if the user wants to attempt to write_downgrade the
- * mmap_lock
+ * mmap_sem
  *
  * This function takes a @mas that is either pointing to the previous VMA or set
  * to MA_START and sets it up to remove the mapping(s).  The @len will be

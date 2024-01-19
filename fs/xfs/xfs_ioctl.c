@@ -754,7 +754,7 @@ xfs_bulkstat_fmt(
 static int
 xfs_bulk_ireq_setup(
 	struct xfs_mount	*mp,
-	const struct xfs_bulk_ireq *hdr,
+	struct xfs_bulk_ireq	*hdr,
 	struct xfs_ibulk	*breq,
 	void __user		*ubuffer)
 {
@@ -780,7 +780,7 @@ xfs_bulk_ireq_setup(
 
 		switch (hdr->ino) {
 		case XFS_BULK_IREQ_SPECIAL_ROOT:
-			breq->startino = mp->m_sb.sb_rootino;
+			hdr->ino = mp->m_sb.sb_rootino;
 			break;
 		default:
 			return -EINVAL;

@@ -21,7 +21,6 @@
 #include "try-catch-impl.h"
 
 DEFINE_STATIC_KEY_FALSE(kunit_running);
-EXPORT_SYMBOL_GPL(kunit_running);
 
 #if IS_BUILTIN(CONFIG_KUNIT)
 /*
