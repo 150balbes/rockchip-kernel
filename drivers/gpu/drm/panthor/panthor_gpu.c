@@ -87,6 +87,7 @@ static void panthor_gpu_init_info(struct panthor_device *ptdev)
 	ptdev->gpu_info.gpu_id = gpu_read(ptdev, GPU_ID);
 	ptdev->gpu_info.csf_id = gpu_read(ptdev, GPU_CSF_ID);
 	ptdev->gpu_info.gpu_rev = gpu_read(ptdev, GPU_REVID);
+	ptdev->gpu_info.core_features = gpu_read(ptdev, GPU_CORE_FEATURES);
 	ptdev->gpu_info.l2_features = gpu_read(ptdev, GPU_L2_FEATURES);
 	ptdev->gpu_info.tiler_features = gpu_read(ptdev, GPU_TILER_FEATURES);
 	ptdev->gpu_info.mem_features = gpu_read(ptdev, GPU_MEM_FEATURES);

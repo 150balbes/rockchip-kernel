@@ -53,6 +53,9 @@ struct panthor_heap {
 	/** @chunks: List containing all heap chunks allocated so far. */
 	struct list_head chunks;
 
+	/** @lock: Lock protecting insertion in the chunks list. */
+	struct mutex lock;
+
 	/** @chunk_size: Size of each chunk. */
 	u32 chunk_size;
 
@@ -116,9 +119,14 @@ static void *panthor_get_heap_ctx(struct panthor_heap_pool *pool, int id)
 }
 
 static void panthor_free_heap_chunk(struct panthor_vm *vm,
+				    struct panthor_heap *heap,
 				    struct panthor_heap_chunk *chunk)
 {
+	mutex_lock(&heap->lock);
 	list_del(&chunk->node);
+	heap->chunk_count--;
+	mutex_unlock(&heap->lock);
+
 	panthor_kernel_bo_destroy(vm, chunk->bo);
 	kfree(chunk);
 }
@@ -167,8 +175,10 @@ static int panthor_alloc_heap_chunk(struct panthor_device *ptdev,
 
 	panthor_kernel_bo_vunmap(chunk->bo);
 
+	mutex_lock(&heap->lock);
 	list_add(&chunk->node, &heap->chunks);
 	heap->chunk_count++;
+	mutex_unlock(&heap->lock);
 
 	return 0;
 
@@ -186,11 +196,8 @@ static void panthor_free_heap_chunks(struct panthor_vm *vm,
 {
 	struct panthor_heap_chunk *chunk, *tmp;
 
-	list_for_each_entry_safe(chunk, tmp, &heap->chunks, node) {
-		panthor_free_heap_chunk(vm, chunk);
-	}
-
-	heap->chunk_count = 0;
+	list_for_each_entry_safe(chunk, tmp, &heap->chunks, node)
+		panthor_free_heap_chunk(vm, heap, chunk);
 }
 
 static int panthor_alloc_heap_chunks(struct panthor_device *ptdev,
@@ -220,6 +227,7 @@ panthor_heap_destroy_locked(struct panthor_heap_pool *pool, u32 handle)
 		return -EINVAL;
 
 	panthor_free_heap_chunks(pool->vm, heap);
+	mutex_destroy(&heap->lock);
 	kfree(heap);
 	return 0;
 }
@@ -266,7 +274,7 @@ int panthor_heap_create(struct panthor_heap_pool *pool,
 {
 	struct panthor_heap *heap;
 	struct panthor_heap_chunk *first_chunk;
-	void *gpu_ctx;
+	struct panthor_vm *vm;
 	int ret = 0;
 	u32 id;
 
@@ -277,50 +285,121 @@ int panthor_heap_create(struct panthor_heap_pool *pool,
 	    chunk_size < SZ_256K || chunk_size > SZ_2M)
 		return -EINVAL;
 
-	heap = kzalloc(sizeof(*heap), GFP_KERNEL);
-	if (!heap)
-		return -ENOMEM;
+	down_read(&pool->lock);
+	vm = panthor_vm_get(pool->vm);
+	up_read(&pool->lock);
 
+	/* The pool has been destroyed, we can't create a new heap. */
+	if (!vm)
+		return -EINVAL;
+
+	heap = kzalloc(sizeof(*heap), GFP_KERNEL);
+	if (!heap) {
+		ret = -ENOMEM;
+		goto err_put_vm;
+	}
+
+	mutex_init(&heap->lock);
 	INIT_LIST_HEAD(&heap->chunks);
 	heap->chunk_size = chunk_size;
 	heap->max_chunks = max_chunks;
 	heap->target_in_flight = target_in_flight;
 
-	down_write(&pool->lock);
-
-	/* The pool has been destroyed, we can't create a new heap. */
-	if (!pool->vm) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
-
-	ret = xa_alloc(&pool->xa, &id, heap, XA_LIMIT(1, MAX_HEAPS_PER_POOL), GFP_KERNEL);
-	if (ret) {
-		kfree(heap);
-		goto out_unlock;
-	}
-
-	gpu_ctx = panthor_get_heap_ctx(pool, id);
-	memset(gpu_ctx, 0, panthor_heap_ctx_stride(pool->ptdev));
-
-	ret = panthor_alloc_heap_chunks(pool->ptdev, pool->vm, heap,
+	ret = panthor_alloc_heap_chunks(pool->ptdev, vm, heap,
 					initial_chunk_count);
-	if (ret) {
-		panthor_heap_destroy_locked(pool, id);
-		goto out_unlock;
-	}
-
-	*heap_ctx_gpu_va = panthor_kernel_bo_gpuva(pool->gpu_contexts) +
-			   panthor_get_heap_ctx_offset(pool, id);
+	if (ret)
+		goto err_free_heap;
 
 	first_chunk = list_first_entry(&heap->chunks,
 				       struct panthor_heap_chunk,
 				       node);
 	*first_chunk_gpu_va = panthor_kernel_bo_gpuva(first_chunk->bo);
-	ret = id;
+
+	down_write(&pool->lock);
+	/* The pool has been destroyed, we can't create a new heap. */
+	if (!pool->vm) {
+		ret = -EINVAL;
+	} else {
+		ret = xa_alloc(&pool->xa, &id, heap, XA_LIMIT(1, MAX_HEAPS_PER_POOL), GFP_KERNEL);
+		if (!ret) {
+			void *gpu_ctx = panthor_get_heap_ctx(pool, id);
+
+			memset(gpu_ctx, 0, panthor_heap_ctx_stride(pool->ptdev));
+			*heap_ctx_gpu_va = panthor_kernel_bo_gpuva(pool->gpu_contexts) +
+					   panthor_get_heap_ctx_offset(pool, id);
+		}
+	}
+	up_write(&pool->lock);
+
+	if (ret)
+		goto err_free_heap;
+
+	panthor_vm_put(vm);
+	return id;
+
+err_free_heap:
+	panthor_free_heap_chunks(pool->vm, heap);
+	mutex_destroy(&heap->lock);
+	kfree(heap);
+
+err_put_vm:
+	panthor_vm_put(vm);
+	return ret;
+}
+
+/**
+ * panthor_heap_return_chunk() - Return an unused heap chunk
+ * @pool: The pool this heap belongs to.
+ * @heap_gpu_va: The GPU address of the heap context.
+ * @chunk_gpu_va: The chunk VA to return.
+ *
+ * This function is used when a chunk allocated with panthor_heap_grow()
+ * couldn't be linked to the heap context through the FW interface because
+ * the group requesting the allocation was scheduled out in the meantime.
+ */
+int panthor_heap_return_chunk(struct panthor_heap_pool *pool,
+			      u64 heap_gpu_va,
+			      u64 chunk_gpu_va)
+{
+	u64 offset = heap_gpu_va - panthor_kernel_bo_gpuva(pool->gpu_contexts);
+	u32 heap_id = (u32)offset / panthor_heap_ctx_stride(pool->ptdev);
+	struct panthor_heap_chunk *chunk, *tmp, *removed = NULL;
+	struct panthor_heap *heap;
+	int ret;
+
+	if (offset > U32_MAX || heap_id >= MAX_HEAPS_PER_POOL)
+		return -EINVAL;
+
+	down_read(&pool->lock);
+	heap = xa_load(&pool->xa, heap_id);
+	if (!heap) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	chunk_gpu_va &= GENMASK_ULL(63, 12);
+
+	mutex_lock(&heap->lock);
+	list_for_each_entry_safe(chunk, tmp, &heap->chunks, node) {
+		if (panthor_kernel_bo_gpuva(chunk->bo) == chunk_gpu_va) {
+			removed = chunk;
+			list_del(&chunk->node);
+			heap->chunk_count--;
+			break;
+		}
+	}
+	mutex_unlock(&heap->lock);
+
+	if (removed) {
+		panthor_kernel_bo_destroy(pool->vm, chunk->bo);
+		kfree(chunk);
+		ret = 0;
+	} else {
+		ret = -EINVAL;
+	}
 
 out_unlock:
-	up_write(&pool->lock);
+	up_read(&pool->lock);
 	return ret;
 }
 

@@ -67,6 +67,17 @@ config DRM_PANEL_BOE_HIMAX8279D
 	  24 bit RGB per pixel. It provides a MIPI DSI interface to
 	  the host and has a built-in LED backlight.
 
+config DRM_PANEL_BOE_TH101MB31UIG002_28A
+	tristate "Boe TH101MB31UIG002-28A panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y here if you want to enable support for Boe
+	  TH101MB31UIG002-28A TFT-LCD modules. The panel has a 800x1280
+	  resolution and uses 24 bit RGB per pixel. It provides a MIPI DSI
+	  interface to the host and has a built-in LED backlight.
+
 config DRM_PANEL_BOE_TV101WUM_NL6
 	tristate "BOE TV101WUM and AUO KD101N80 45NA 1200x1920 panel"
 	depends on OF
@@ -193,6 +204,15 @@ config DRM_PANEL_ILITEK_ILI9341
 	  Say Y here if you want to enable support for Ilitek IL9341
 	  QVGA (240x320) RGB panels. support serial & parallel rgb
 	  interface.
+
+config DRM_PANEL_ILITEK_ILI9805
+	tristate "Ilitek ILI9805-based panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y if you want to enable support for panels based on the
+	  Ilitek ILI9805 controller.
 
 config DRM_PANEL_ILITEK_ILI9881C
 	tristate "Ilitek ILI9881C-based panels"
@@ -428,6 +448,16 @@ config DRM_PANEL_NOVATEK_NT36672A
 	  Say Y here if you want to enable support for the panels built
 	  around the Novatek NT36672A display controller, such as some
 	  Tianma panels used in a few Xiaomi Poco F1 mobile phones.
+
+config DRM_PANEL_NOVATEK_NT36672E
+	tristate "Novatek NT36672E DSI panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y here if you want to enable support for Novatek NT36672E DSI Video Mode
+	  LCD panel module. The panel has a resolution of 1080x2408 and uses 24 bit
+	  RGB per pixel.
 
 config DRM_PANEL_NOVATEK_NT39016
 	tristate "Novatek NT39016 RGB/SPI panel"
@@ -734,6 +764,15 @@ config DRM_PANEL_SITRONIX_ST7789V
 	help
 	  Say Y here if you want to enable support for the Sitronix
 	  ST7789V controller for 240x320 LCD panels
+
+config DRM_PANEL_SYNAPTICS_R63353
+	tristate "Synaptics R63353-based panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y if you want to enable support for panels based on the
+	  Synaptics R63353 controller.
 
 config DRM_PANEL_SONY_ACX565AKM
 	tristate "Sony ACX565AKM panel"

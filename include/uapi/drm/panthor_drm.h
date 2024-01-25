@@ -335,6 +335,12 @@ struct drm_panthor_gpu_info {
 
 	/** @tiler_present: Bitmask encoding the tiler units exposed by the GPU. */
 	__u64 tiler_present;
+
+	/* @core_features: Used to discriminate core variants when they exist. */
+	__u32 core_features;
+
+	/* @pad: MBZ. */
+	__u32 pad;
 };
 
 /**
@@ -827,7 +833,7 @@ struct drm_panthor_queue_submit {
 };
 
 /**
- * struct drm_panthor_group_submit - Arguments passed to DRM_IOCTL_PANTHOR_VM_BIND
+ * struct drm_panthor_group_submit - Arguments passed to DRM_IOCTL_PANTHOR_GROUP_SUBMIT
  */
 struct drm_panthor_group_submit {
 	/** @group_handle: Handle of the group to queue jobs to. */

@@ -27,20 +27,21 @@ static void panthor_gem_free_object(struct drm_gem_object *obj)
 /**
  * panthor_kernel_bo_destroy() - Destroy a kernel buffer object
  * @vm: The VM this BO was mapped to.
- * @bo: Kernel buffer object to destroy.
+ * @bo: Kernel buffer object to destroy. If NULL or an ERR_PTR(), the destruction
+ * is skipped.
  */
 void panthor_kernel_bo_destroy(struct panthor_vm *vm,
 			       struct panthor_kernel_bo *bo)
 {
 	int ret;
 
+	if (IS_ERR_OR_NULL(bo))
+		return;
+
 	panthor_kernel_bo_vunmap(bo);
 
 	if (drm_WARN_ON(bo->obj->dev,
 			to_panthor_bo(bo->obj)->exclusive_vm_root_gem != panthor_vm_root_gem(vm)))
-		goto out_free_bo;
-
-	if (!vm)
 		goto out_free_bo;
 
 	ret = panthor_vm_unmap_range(vm, bo->va_node.start,
@@ -79,6 +80,9 @@ panthor_kernel_bo_create(struct panthor_device *ptdev, struct panthor_vm *vm,
 	struct panthor_gem_object *bo;
 	int ret;
 
+	if (drm_WARN_ON(&ptdev->base, !vm))
+		return ERR_PTR(-EINVAL);
+
 	kbo = kzalloc(sizeof(*kbo), GFP_KERNEL);
 	if (!kbo)
 		return ERR_PTR(-ENOMEM);
@@ -93,9 +97,6 @@ panthor_kernel_bo_create(struct panthor_device *ptdev, struct panthor_vm *vm,
 	size = obj->base.size;
 	kbo->obj = &obj->base;
 	bo->flags = bo_flags;
-
-	if (!vm)
-		return kbo;
 
 	ret = panthor_vm_alloc_va(vm, gpu_va, size, &kbo->va_node);
 	if (ret)

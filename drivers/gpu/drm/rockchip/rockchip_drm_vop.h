@@ -15,16 +15,6 @@
 #define VOP_MAJOR(version)		((version) >> 8)
 #define VOP_MINOR(version)		((version) & 0xff)
 
-//[CC:] vop2 related changes
-#define VOP_VERSION_RK3568      VOP_VERSION(0x40, 0x15)
-#define VOP_VERSION_RK3588      VOP_VERSION(0x40, 0x17)
-
-#define ROCKCHIP_OUTPUT_DUAL_CHANNEL_LEFT_RIGHT_MODE    BIT(0)
-#define ROCKCHIP_OUTPUT_DUAL_CHANNEL_ODD_EVEN_MODE      BIT(1)
-#define ROCKCHIP_OUTPUT_DATA_SWAP                       BIT(2)
-/* MIPI DSI DataStream(cmd) mode on rk3588 */
-#define ROCKCHIP_OUTPUT_MIPI_DS_MODE                    BIT(3)
-
 #define NUM_YUV2YUV_COEFFICIENTS 12
 
 /* AFBC supports a number of configurable modes. Relevant to us is block size
@@ -286,23 +276,6 @@ struct vop_data {
 #define SRC_ALPHA_EN(x)			(((x) & 0x1) << 0)
 /* dst alpha ctrl define */
 #define DST_FACTOR_M0(x)		(((x) & 0x7) << 6)
-
-/*
- * display output interface supported by rockchip lcdc
- */
-#define ROCKCHIP_OUT_MODE_P888          0
-#define ROCKCHIP_OUT_MODE_BT1120        0
-#define ROCKCHIP_OUT_MODE_P666          1
-#define ROCKCHIP_OUT_MODE_P565          2
-#define ROCKCHIP_OUT_MODE_BT656         5
-#define ROCKCHIP_OUT_MODE_S888          8
-#define ROCKCHIP_OUT_MODE_S888_DUMMY    12
-#define ROCKCHIP_OUT_MODE_YUV420        14
-/* for use special outface */
-#define ROCKCHIP_OUT_MODE_AAAA          15
-
-/* output flags */
-#define ROCKCHIP_OUTPUT_DSI_DUAL	BIT(0)
 
 enum alpha_mode {
 	ALPHA_STRAIGHT,

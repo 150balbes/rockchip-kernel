@@ -74,7 +74,7 @@ panthor_set_uobj(u64 usr_ptr, u32 usr_size, u32 min_size, u32 kern_size, const v
  *
  * Helper automating user -> kernel object copies.
  *
- * Don't use this function directly, use PANTHOR_UOBJ_ARRAY_GET() instead.
+ * Don't use this function directly, use PANTHOR_UOBJ_GET_ARRAY() instead.
  *
  * Return: newly allocated object array or an ERR_PTR on error.
  */
@@ -1379,7 +1379,6 @@ static const struct drm_driver panthor_drm_driver = {
 static int panthor_probe(struct platform_device *pdev)
 {
 	struct panthor_device *ptdev;
-	int ret;
 
 	ptdev = devm_drm_dev_alloc(&pdev->dev, &panthor_drm_driver,
 				   struct panthor_device, base);
@@ -1388,11 +1387,7 @@ static int panthor_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, ptdev);
 
-	ret = panthor_device_init(ptdev);
-	if (ret)
-		return ret;
-
-	return drm_dev_register(&ptdev->base, 0);
+	return panthor_device_init(ptdev);
 }
 
 static void panthor_remove(struct platform_device *pdev)
@@ -1451,13 +1446,13 @@ static int __init panthor_init(void)
 	if (ret)
 		goto err_destroy_cleanup_wq;
 
-	return ret;
-
-err_mmu_pt_cache_fini:
-	panthor_mmu_pt_cache_fini();
+	return 0;
 
 err_destroy_cleanup_wq:
 	destroy_workqueue(panthor_cleanup_wq);
+
+err_mmu_pt_cache_fini:
+	panthor_mmu_pt_cache_fini();
 	return ret;
 }
 module_init(panthor_init);

@@ -63,18 +63,17 @@ void panthor_device_unplug(struct panthor_device *ptdev)
 		return;
 	}
 
-	/* Call drm_dev_unplug() so any access to HW block happening after
+	/* Call drm_dev_unplug() so any access to HW blocks happening after
 	 * that point get rejected.
 	 */
 	drm_dev_unplug(&ptdev->base);
 
 	/* We do the rest of the unplug with the unplug lock released,
-	 * Future callers will wait on ptdev->unplug.done anyway.
+	 * future callers will wait on ptdev->unplug.done anyway.
 	 */
 	mutex_unlock(&ptdev->unplug.lock);
 
 	drm_WARN_ON(&ptdev->base, pm_runtime_get_sync(ptdev->base.dev) < 0);
-
 
 	/* Now, try to cleanly shutdown the GPU before the device resources
 	 * get reclaimed.
@@ -224,21 +223,38 @@ int panthor_device_init(struct panthor_device *ptdev)
 
 	ret = panthor_mmu_init(ptdev);
 	if (ret)
-		goto err_rpm_put;
+		goto err_unplug_gpu;
 
 	ret = panthor_fw_init(ptdev);
 	if (ret)
-		goto err_rpm_put;
+		goto err_unplug_mmu;
 
 	ret = panthor_sched_init(ptdev);
 	if (ret)
-		goto err_rpm_put;
+		goto err_unplug_fw;
 
 	/* ~3 frames */
 	pm_runtime_set_autosuspend_delay(ptdev->base.dev, 50);
+
+	ret = drm_dev_register(&ptdev->base, 0);
+	if (ret)
+		goto err_unplug_sched;
+
 	pm_runtime_use_autosuspend(ptdev->base.dev);
 	pm_runtime_put_autosuspend(ptdev->base.dev);
 	return 0;
+
+err_unplug_sched:
+	panthor_sched_unplug(ptdev);
+
+err_unplug_fw:
+	panthor_fw_unplug(ptdev);
+
+err_unplug_mmu:
+	panthor_mmu_unplug(ptdev);
+
+err_unplug_gpu:
+	panthor_gpu_unplug(ptdev);
 
 err_rpm_put:
 	pm_runtime_put_sync_suspend(ptdev->base.dev);

@@ -795,9 +795,9 @@ drm_atomic_helper_check_modeset(struct drm_device *dev,
 EXPORT_SYMBOL(drm_atomic_helper_check_modeset);
 
 /**
- * drm_atomic_helper_check_wb_encoder_state() - Check writeback encoder state
- * @encoder: encoder state to check
- * @conn_state: connector state to check
+ * drm_atomic_helper_check_wb_connector_state() - Check writeback connector state
+ * @connector: corresponding connector
+ * @state: the driver state object
  *
  * Checks if the writeback connector state is valid, and returns an error if it
  * isn't.
@@ -806,9 +806,11 @@ EXPORT_SYMBOL(drm_atomic_helper_check_modeset);
  * Zero for success or -errno
  */
 int
-drm_atomic_helper_check_wb_encoder_state(struct drm_encoder *encoder,
-					 struct drm_connector_state *conn_state)
+drm_atomic_helper_check_wb_connector_state(struct drm_connector *connector,
+					   struct drm_atomic_state *state)
 {
+	struct drm_connector_state *conn_state =
+		drm_atomic_get_new_connector_state(state, connector);
 	struct drm_writeback_job *wb_job = conn_state->writeback_job;
 	struct drm_property_blob *pixel_format_blob;
 	struct drm_framebuffer *fb;
@@ -827,11 +829,11 @@ drm_atomic_helper_check_wb_encoder_state(struct drm_encoder *encoder,
 		if (fb->format->format == formats[i])
 			return 0;
 
-	drm_dbg_kms(encoder->dev, "Invalid pixel format %p4cc\n", &fb->format->format);
+	drm_dbg_kms(connector->dev, "Invalid pixel format %p4cc\n", &fb->format->format);
 
 	return -EINVAL;
 }
-EXPORT_SYMBOL(drm_atomic_helper_check_wb_encoder_state);
+EXPORT_SYMBOL(drm_atomic_helper_check_wb_connector_state);
 
 /**
  * drm_atomic_helper_check_plane_state() - Check plane state for validity
@@ -861,6 +863,7 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 					bool can_position,
 					bool can_update_disabled)
 {
+	struct drm_framebuffer *fb = plane_state->fb;
 	struct drm_rect *src = &plane_state->src;
 	struct drm_rect *dst = &plane_state->dst;
 	unsigned int rotation = plane_state->rotation;
@@ -872,7 +875,7 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 	*src = drm_plane_state_src(plane_state);
 	*dst = drm_plane_state_dest(plane_state);
 
-	if (!drm_plane_has_visible_data(plane_state)) {
+	if (!fb) {
 		plane_state->visible = false;
 		return 0;
 	}
@@ -889,31 +892,25 @@ int drm_atomic_helper_check_plane_state(struct drm_plane_state *plane_state,
 		return -EINVAL;
 	}
 
-	/* Check that selected pixel source is valid */
-	if (plane_state->pixel_source == DRM_PLANE_PIXEL_SOURCE_FB && plane_state->fb) {
-		struct drm_framebuffer *fb = plane_state->fb;
-		drm_rect_rotate(src, fb->width << 16, fb->height << 16, rotation);
+	drm_rect_rotate(src, fb->width << 16, fb->height << 16, rotation);
 
-		/* Check scaling */
-		hscale = drm_rect_calc_hscale(src, dst, min_scale, max_scale);
-		vscale = drm_rect_calc_vscale(src, dst, min_scale, max_scale);
-
-		if (hscale < 0 || vscale < 0) {
-			drm_dbg_kms(plane_state->plane->dev,
-					"Invalid scaling of plane\n");
-			drm_rect_debug_print("src: ", &plane_state->src, true);
-			drm_rect_debug_print("dst: ", &plane_state->dst, false);
-			return -ERANGE;
-		}
-
-		if (crtc_state->enable)
-			drm_mode_get_hv_timing(&crtc_state->mode, &clip.x2, &clip.y2);
-
-		plane_state->visible = drm_rect_clip_scaled(src, dst, &clip);
-		drm_rect_rotate_inv(src, fb->width << 16, fb->height << 16, rotation);
-	} else if (drm_plane_solid_fill_enabled(plane_state)) {
-		plane_state->visible = true;
+	/* Check scaling */
+	hscale = drm_rect_calc_hscale(src, dst, min_scale, max_scale);
+	vscale = drm_rect_calc_vscale(src, dst, min_scale, max_scale);
+	if (hscale < 0 || vscale < 0) {
+		drm_dbg_kms(plane_state->plane->dev,
+			    "Invalid scaling of plane\n");
+		drm_rect_debug_print("src: ", &plane_state->src, true);
+		drm_rect_debug_print("dst: ", &plane_state->dst, false);
+		return -ERANGE;
 	}
+
+	if (crtc_state->enable)
+		drm_mode_get_hv_timing(&crtc_state->mode, &clip.x2, &clip.y2);
+
+	plane_state->visible = drm_rect_clip_scaled(src, dst, &clip);
+
+	drm_rect_rotate_inv(src, fb->width << 16, fb->height << 16, rotation);
 
 	if (!plane_state->visible)
 		/*

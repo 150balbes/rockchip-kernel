@@ -32,5 +32,8 @@ int panthor_heap_grow(struct panthor_heap_pool *pool,
 		      u32 renderpasses_in_flight,
 		      u32 pending_frag_count,
 		      u64 *new_chunk_gpu_va);
+int panthor_heap_return_chunk(struct panthor_heap_pool *pool,
+			      u64 heap_gpu_va,
+			      u64 chunk_gpu_va);
 
 #endif

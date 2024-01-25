@@ -154,21 +154,24 @@ struct panthor_scheduler {
 	struct panthor_device *ptdev;
 
 	/**
-	 * @wq: Workqueue used by our internal scheduler logic.
+	 * @wq: Workqueue used by our internal scheduler logic and
+	 * drm_gpu_scheduler.
 	 *
 	 * Used for the scheduler tick, group update or other kind of FW
 	 * event processing that can't be handled in the threaded interrupt
-	 * path.
+	 * path. Also passed to the drm_gpu_scheduler instances embedded
+	 * in panthor_queue.
 	 */
 	struct workqueue_struct *wq;
 
 	/**
-	 * @drm_sched_wq: Workqueue passed to the drm_gpu_scheduler.
+	 * @heap_alloc_wq: Workqueue used to schedule tiler_oom works.
 	 *
-	 * The driver doesn't use this queue, it's left entirely to the
-	 * drm_sched for job dequeuing/cleanup.
+	 * We have a queue dedicated to heap chunk allocation works to avoid
+	 * blocking the rest of the scheduler if the allocation tries to
+	 * reclaim memory.
 	 */
-	struct workqueue_struct *drm_sched_wq;
+	struct workqueue_struct *heap_alloc_wq;
 
 	/** @tick_work: Work executed on a scheduling tick. */
 	struct delayed_work tick_work;
@@ -188,7 +191,7 @@ struct panthor_scheduler {
 	 * that require taking the panthor_scheduler::lock to be processed
 	 * outside the interrupt path so we don't block the tick logic when
 	 * it calls panthor_fw_{csg,wait}_wait_acks(). Since most of the
-	 * even processing require taking this lock, we just delegate all
+	 * event processing requires taking this lock, we just delegate all
 	 * FW event processing to the scheduler workqueue.
 	 */
 	struct work_struct fw_events_work;
@@ -535,6 +538,9 @@ struct panthor_group {
 	/** @fatal_queues: Bitmask reflecting the queues that hit a fatal exception. */
 	u32 fatal_queues;
 
+	/** @tiler_oom: Mask of queues that have a tiler OOM event to process. */
+	atomic_t tiler_oom;
+
 	/** @queue_count: Number of queues in this group. */
 	u32 queue_count;
 
@@ -604,6 +610,9 @@ struct panthor_group {
 
 	/** @sync_upd_work: Work used to check/signal job fences. */
 	struct work_struct sync_upd_work;
+
+	/** @tiler_oom_work: Work used to process tiler OOM events happening on this group. */
+	struct work_struct tiler_oom_work;
 
 	/** @term_work: Work used to finish the group termination procedure. */
 	struct work_struct term_work;
@@ -751,7 +760,7 @@ panthor_queue_put_syncwait_obj(struct panthor_queue *queue)
 	if (queue->syncwait.kmap) {
 		struct iosys_map map = IOSYS_MAP_INIT_VADDR(queue->syncwait.kmap);
 
-		drm_gem_vmap_unlocked(queue->syncwait.obj, &map);
+		drm_gem_vunmap_unlocked(queue->syncwait.obj, &map);
 		queue->syncwait.kmap = NULL;
 	}
 
@@ -805,10 +814,9 @@ static void group_free_queue(struct panthor_group *group, struct panthor_queue *
 
 	panthor_queue_put_syncwait_obj(queue);
 
-	if (!IS_ERR_OR_NULL(queue->ringbuf))
-		panthor_kernel_bo_destroy(group->vm, queue->ringbuf);
-
+	panthor_kernel_bo_destroy(group->vm, queue->ringbuf);
 	panthor_kernel_bo_destroy(panthor_fw_vm(group->ptdev), queue->iface.mem);
+
 	kfree(queue);
 }
 
@@ -823,11 +831,8 @@ static void group_release_work(struct work_struct *work)
 	for (i = 0; i < group->queue_count; i++)
 		group_free_queue(group, group->queues[i]);
 
-	if (group->suspend_buf)
-		panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), group->suspend_buf);
-
-	if (group->protm_suspend_buf)
-		panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), group->protm_suspend_buf);
+	panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), group->suspend_buf);
+	panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), group->protm_suspend_buf);
 
 	if (!IS_ERR_OR_NULL(group->syncobjs))
 		panthor_kernel_bo_destroy(group->vm, group->syncobjs);
@@ -931,6 +936,10 @@ group_unbind_locked(struct panthor_group *group)
 	slot = &ptdev->scheduler->csg_slots[group->csg_id];
 	panthor_vm_idle(group->vm);
 	group->csg_id = -1;
+
+	/* Tiler OOM events will be re-issued next time the group is scheduled. */
+	atomic_set(&group->tiler_oom, 0);
+	cancel_work(&group->tiler_oom_work);
 
 	for (u32 i = 0; i < group->queue_count; i++)
 		group->queues[i]->doorbell_id = -1;
@@ -1068,7 +1077,6 @@ cs_slot_sync_queue_state_locked(struct panthor_device *ptdev, u32 csg_id, u32 cs
 		break;
 
 	case CS_STATUS_BLOCKED_REASON_SYNC_WAIT:
-		drm_WARN_ON(&ptdev->base, !list_empty(&group->wait_node));
 		list_move_tail(&group->wait_node, &group->ptdev->scheduler->groups.waiting);
 		group->blocked_queues |= BIT(cs_id);
 		queue->syncwait.gpu_va = cs_iface->output->status_wait_sync_ptr;
@@ -1302,6 +1310,102 @@ cs_slot_process_fault_event_locked(struct panthor_device *ptdev,
 		 info);
 }
 
+static int group_process_tiler_oom(struct panthor_group *group, u32 cs_id)
+{
+	struct panthor_device *ptdev = group->ptdev;
+	struct panthor_scheduler *sched = ptdev->scheduler;
+	u32 renderpasses_in_flight, pending_frag_count;
+	struct panthor_heap_pool *heaps = NULL;
+	u64 heap_address, new_chunk_va = 0;
+	u32 vt_start, vt_end, frag_end;
+	int ret, csg_id;
+
+	mutex_lock(&sched->lock);
+	csg_id = group->csg_id;
+	if (csg_id >= 0) {
+		struct panthor_fw_cs_iface *cs_iface;
+
+		cs_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
+		heaps = panthor_vm_get_heap_pool(group->vm, false);
+		heap_address = cs_iface->output->heap_address;
+		vt_start = cs_iface->output->heap_vt_start;
+		vt_end = cs_iface->output->heap_vt_end;
+		frag_end = cs_iface->output->heap_frag_end;
+		renderpasses_in_flight = vt_start - frag_end;
+		pending_frag_count = vt_end - frag_end;
+	}
+	mutex_unlock(&sched->lock);
+
+	/* The group got scheduled out, we stop here. We will get a new tiler OOM event
+	 * when it's scheduled again.
+	 */
+	if (unlikely(csg_id < 0))
+		return 0;
+
+	if (!heaps || frag_end > vt_end || vt_end >= vt_start) {
+		ret = -EINVAL;
+	} else {
+		/* We do the allocation without holding the scheduler lock to avoid
+		 * blocking the scheduling.
+		 */
+		ret = panthor_heap_grow(heaps, heap_address,
+					renderpasses_in_flight,
+					pending_frag_count, &new_chunk_va);
+	}
+
+	if (ret && ret != -EBUSY) {
+		group->fatal_queues |= BIT(csg_id);
+		sched_queue_delayed_work(sched, tick, 0);
+		goto out_put_heap_pool;
+	}
+
+	mutex_lock(&sched->lock);
+	csg_id = group->csg_id;
+	if (csg_id >= 0) {
+		struct panthor_fw_csg_iface *csg_iface;
+		struct panthor_fw_cs_iface *cs_iface;
+
+		csg_iface = panthor_fw_get_csg_iface(ptdev, csg_id);
+		cs_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
+
+		cs_iface->input->heap_start = new_chunk_va;
+		cs_iface->input->heap_end = new_chunk_va;
+		panthor_fw_update_reqs(cs_iface, req, cs_iface->output->ack, CS_TILER_OOM);
+		panthor_fw_toggle_reqs(csg_iface, doorbell_req, doorbell_ack, BIT(cs_id));
+		panthor_fw_ring_csg_doorbells(ptdev, BIT(csg_id));
+	}
+	mutex_unlock(&sched->lock);
+
+	/* We allocated a chunck, but couldn't link it to the heap
+	 * context because the group was scheduled out while we were
+	 * allocating memory. We need to return this chunk to the heap.
+	 */
+	if (unlikely(csg_id < 0 && new_chunk_va))
+		panthor_heap_return_chunk(heaps, heap_address, new_chunk_va);
+
+	ret = 0;
+
+out_put_heap_pool:
+	panthor_heap_pool_put(heaps);
+	return ret;
+}
+
+static void group_tiler_oom_work(struct work_struct *work)
+{
+	struct panthor_group *group =
+		container_of(work, struct panthor_group, tiler_oom_work);
+	u32 tiler_oom = atomic_xchg(&group->tiler_oom, 0);
+
+	while (tiler_oom) {
+		u32 cs_id = ffs(tiler_oom) - 1;
+
+		group_process_tiler_oom(group, cs_id);
+		tiler_oom &= ~BIT(cs_id);
+	}
+
+	group_put(group);
+}
+
 static void
 cs_slot_process_tiler_oom_event_locked(struct panthor_device *ptdev,
 				       u32 csg_id, u32 cs_id)
@@ -1309,47 +1413,20 @@ cs_slot_process_tiler_oom_event_locked(struct panthor_device *ptdev,
 	struct panthor_scheduler *sched = ptdev->scheduler;
 	struct panthor_csg_slot *csg_slot = &sched->csg_slots[csg_id];
 	struct panthor_group *group = csg_slot->group;
-	struct panthor_fw_cs_iface *cs_iface;
-	struct panthor_heap_pool *heaps;
-	u32 vt_start, vt_end, frag_end;
-	u32 renderpasses_in_flight, pending_frag_count;
-	u64 heap_address, new_chunk_va;
-	int ret;
 
 	lockdep_assert_held(&sched->lock);
 
 	if (drm_WARN_ON(&ptdev->base, !group))
 		return;
 
-	cs_iface = panthor_fw_get_cs_iface(ptdev, csg_id, cs_id);
-	heaps = panthor_vm_get_heap_pool(group->vm, false);
-	heap_address = cs_iface->output->heap_address;
-	vt_start = cs_iface->output->heap_vt_start;
-	vt_end = cs_iface->output->heap_vt_end;
-	frag_end = cs_iface->output->heap_frag_end;
-	renderpasses_in_flight = vt_start - frag_end;
-	pending_frag_count = vt_end - frag_end;
+	atomic_or(BIT(cs_id), &group->tiler_oom);
 
-	if (!heaps || frag_end > vt_end || vt_end >= vt_start) {
-		ret = -EINVAL;
-	} else {
-		ret = panthor_heap_grow(heaps, heap_address,
-					renderpasses_in_flight,
-					pending_frag_count, &new_chunk_va);
-	}
-
-	if (!ret) {
-		cs_iface->input->heap_start = new_chunk_va;
-		cs_iface->input->heap_end = new_chunk_va;
-	} else if (ret == -EBUSY) {
-		cs_iface->input->heap_start = 0;
-		cs_iface->input->heap_end = 0;
-	} else {
-		group->fatal_queues |= BIT(csg_id);
-		sched_queue_delayed_work(sched, tick, 0);
-	}
-
-	panthor_heap_pool_put(heaps);
+	/* We don't use group_queue_work() here because we want to queue the
+	 * work item to the heap_alloc_wq.
+	 */
+	group_get(group);
+	if (!queue_work(sched->heap_alloc_wq, &group->tiler_oom_work))
+		group_put(group);
 }
 
 static bool cs_slot_process_irq_locked(struct panthor_device *ptdev,
@@ -1374,8 +1451,10 @@ static bool cs_slot_process_irq_locked(struct panthor_device *ptdev,
 	if (events & CS_TILER_OOM)
 		cs_slot_process_tiler_oom_event_locked(ptdev, csg_id, cs_id);
 
-	panthor_fw_update_reqs(cs_iface, req, ack,
-			       CS_FATAL | CS_FAULT | CS_TILER_OOM);
+	/* We don't acknowledge the TILER_OOM event since its handling is
+	 * deferred to a separate work.
+	 */
+	panthor_fw_update_reqs(cs_iface, req, ack, CS_FATAL | CS_FAULT);
 
 	return (events & (CS_FAULT | CS_TILER_OOM)) != 0;
 }
@@ -1532,7 +1611,7 @@ static void process_fw_events_work(struct work_struct *work)
 {
 	struct panthor_scheduler *sched = container_of(work, struct panthor_scheduler,
 						      fw_events_work);
-	u32 events = atomic_fetch_and(0, &sched->fw_events);
+	u32 events = atomic_xchg(&sched->fw_events, 0);
 	struct panthor_device *ptdev = sched->ptdev;
 
 	mutex_lock(&sched->lock);
@@ -1544,6 +1623,7 @@ static void process_fw_events_work(struct work_struct *work)
 
 	while (events) {
 		u32 csg_id = ffs(events) - 1;
+
 		sched_process_csg_irq_locked(ptdev, csg_id);
 		events &= ~BIT(csg_id);
 	}
@@ -2909,7 +2989,7 @@ group_create_queue(struct panthor_group *group,
 	}
 
 	ret = drm_sched_init(&queue->scheduler, &panthor_queue_sched_ops,
-			     group->ptdev->scheduler->drm_sched_wq, 1,
+			     group->ptdev->scheduler->wq, 1,
 			     args->ringbuf_size / (NUM_INSTRS_PER_SLOT * sizeof(u64)),
 			     0, msecs_to_jiffies(JOB_TIMEOUT_MS),
 			     group->ptdev->reset.wq,
@@ -2979,6 +3059,7 @@ int panthor_group_create(struct panthor_file *pfile,
 	INIT_LIST_HEAD(&group->run_node);
 	INIT_WORK(&group->term_work, group_term_work);
 	INIT_WORK(&group->sync_upd_work, group_sync_upd_work);
+	INIT_WORK(&group->tiler_oom_work, group_tiler_oom_work);
 	INIT_WORK(&group->release_work, group_release_work);
 
 	group->vm = panthor_vm_pool_get_vm(pfile->vms, group_args->vm_id);
@@ -3306,8 +3387,8 @@ static void panthor_sched_fini(struct drm_device *ddev, void *res)
 	if (sched->wq)
 		destroy_workqueue(sched->wq);
 
-	if (sched->drm_sched_wq)
-		destroy_workqueue(sched->drm_sched_wq);
+	if (sched->heap_alloc_wq)
+		destroy_workqueue(sched->heap_alloc_wq);
 
 	for (prio = PANTHOR_CSG_PRIORITY_COUNT - 1; prio >= 0; prio--) {
 		drm_WARN_ON(ddev, !list_empty(&sched->groups.runnable[prio]));
@@ -3387,21 +3468,24 @@ int panthor_sched_init(struct panthor_device *ptdev)
 
 	INIT_LIST_HEAD(&sched->reset.stopped_groups);
 
-	/* sched->wq will be used for heap chunk allocation on tiler OOM
-	 * events, which means we can't use the same workqueue for the drm
-	 * scheduler because some works queued by the scheduler are in the
-	 * dma-signalling path. Allocate a dedicated drm_sched_wq to work
-	 * around this limitation.
+	/* sched->heap_alloc_wq will be used for heap chunk allocation on
+	 * tiler OOM events, which means we can't use the same workqueue for
+	 * the scheduler because works queued by the scheduler are in
+	 * the dma-signalling path. Allocate a dedicated heap_alloc_wq to
+	 * work around this limitation.
 	 *
 	 * FIXME: Ultimately, what we need is a failable/non-blocking GEM
 	 * allocation path that we can call when a heap OOM is reported. The
 	 * FW is smart enough to fall back on other methods if the kernel can't
 	 * allocate memory, and fail the tiling job if none of these
 	 * countermeasures worked.
+	 *
+	 * Set WQ_MEM_RECLAIM on sched->wq to unblock the situation when the
+	 * system is running out of memory.
 	 */
-	sched->drm_sched_wq = alloc_workqueue("panthor-drm-sched", WQ_UNBOUND, 0);
-	sched->wq = alloc_workqueue("panthor-csf-sched", WQ_UNBOUND, 0);
-	if (!sched->wq || !sched->drm_sched_wq) {
+	sched->heap_alloc_wq = alloc_workqueue("panthor-heap-alloc", WQ_UNBOUND, 0);
+	sched->wq = alloc_workqueue("panthor-csf-sched", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	if (!sched->wq || !sched->heap_alloc_wq) {
 		panthor_sched_fini(&ptdev->base, sched);
 		drm_err(&ptdev->base, "Failed to allocate the workqueues");
 		return -ENOMEM;

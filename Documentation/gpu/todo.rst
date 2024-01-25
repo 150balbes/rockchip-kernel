@@ -120,6 +120,29 @@ Contact: Daniel Vetter, respective driver maintainers
 
 Level: Advanced
 
+Rename drm_atomic_state
+-----------------------
+
+The KMS framework uses two slightly different definitions for the ``state``
+concept. For a given object (plane, CRTC, encoder, etc., so
+``drm_$OBJECT_state``), the state is the entire state of that object. However,
+at the device level, ``drm_atomic_state`` refers to a state update for a
+limited number of objects.
+
+The state isn't the entire device state, but only the full state of some
+objects in that device. This is confusing to newcomers, and
+``drm_atomic_state`` should be renamed to something clearer like
+``drm_atomic_commit``.
+
+In addition to renaming the structure itself, it would also imply renaming some
+related functions (``drm_atomic_state_alloc``, ``drm_atomic_state_get``,
+``drm_atomic_state_put``, ``drm_atomic_state_init``,
+``__drm_atomic_state_free``, etc.).
+
+Contact: Maxime Ripard <mripard@kernel.org>
+
+Level: Advanced
+
 Fallout from atomic KMS
 -----------------------
 
@@ -337,8 +360,8 @@ connector register/unregister fixes
 
 Level: Intermediate
 
-Remove load/unload callbacks from all non-DRIVER_LEGACY drivers
----------------------------------------------------------------
+Remove load/unload callbacks
+----------------------------
 
 The load/unload callbacks in struct &drm_driver are very much midlayers, plus
 for historical reasons they get the ordering wrong (and we can't fix that)
@@ -347,8 +370,7 @@ between setting up the &drm_driver structure and calling drm_dev_register().
 - Rework drivers to no longer use the load/unload callbacks, directly coding the
   load/unload sequence into the driver's probe function.
 
-- Once all non-DRIVER_LEGACY drivers are converted, disallow the load/unload
-  callbacks for all modern drivers.
+- Once all drivers are converted, remove the load/unload callbacks.
 
 Contact: Daniel Vetter
 

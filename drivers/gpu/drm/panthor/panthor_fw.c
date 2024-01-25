@@ -617,7 +617,7 @@ static int panthor_fw_load_section_entry(struct panthor_device *ptdev,
 		bo = to_panthor_bo(section->mem->obj);
 		sgt = drm_gem_shmem_get_pages_sgt(&bo->base);
 		if (IS_ERR(sgt))
-			return PTR_ERR(section->mem);
+			return PTR_ERR(sgt);
 
 		dma_sync_sgtable_for_device(ptdev->base.dev, sgt, DMA_TO_DEVICE);
 	}
@@ -1211,7 +1211,7 @@ int panthor_fw_csg_wait_acks(struct panthor_device *ptdev, u32 csg_slot,
 				   req_mask, acked, timeout_ms);
 
 	/*
-	 * Check that all bits in the state field were updated, is any mismatch
+	 * Check that all bits in the state field were updated, if any mismatch
 	 * then clear all bits in the state field. This allows code to do
 	 * (acked & CSG_STATE_MASK) and get the right value.
 	 */

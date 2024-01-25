@@ -1,30 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * Copyright (C) Rockchip Electronics Co.Ltd
- * Author:
- *      Algea Cao <algea.cao@rock-chips.com>
+ * Copyright (c) 2021-2022 Rockchip Electronics Co., Ltd.
+ * Copyright (c) 2024 Collabora Ltd.
+ *
+ * Author: Algea Cao <algea.cao@rock-chips.com>
+ * Author: Cristian Ciocaltea <cristian.ciocaltea@collabora.com>
  */
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/delay.h>
-#include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/io.h>
-#include <linux/iopoll.h>
-#include <linux/kernel.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
-#include <linux/nvmem-consumer.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
-#include <linux/reset.h>
-#include <linux/mfd/syscon.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/rational.h>
 #include <linux/regmap.h>
-#include <linux/slab.h>
+#include <linux/reset.h>
 
-#define UPDATE(x, h, l)		(((x) << (l)) & GENMASK((h), (l)))
+#define UPDATE(x, h, l)			(((x) << (l)) & GENMASK((h), (l)))
 
 #define GRF_HDPTX_CON0			0x00
 #define HDPTX_I_PLL_EN			BIT(7)
@@ -622,17 +617,11 @@
 #define LANE_REG062C			0x18B0
 #define LANE_REG062D			0x18B4
 
-#define HDMI20_MAX_RATE 600000000
-#define DATA_RATE_MASK 0xFFFFFFF
-#define COLOR_DEPTH_MASK BIT(31)
-#define HDMI_MODE_MASK BIT(30)
-#define HDMI_EARC_MASK BIT(29)
-
-enum hdptx_combphy_type {
-	SS_HDMI,
-	SS_DP
-};
-
+#define HDMI20_MAX_RATE			600000000
+#define DATA_RATE_MASK			0xFFFFFFF
+#define COLOR_DEPTH_MASK		BIT(31)
+#define HDMI_MODE_MASK			BIT(30)
+#define HDMI_EARC_MASK			BIT(29)
 
 struct lcpll_config {
 	u32 bit_rate;
@@ -695,134 +684,104 @@ struct ropll_config {
 	u8 cd_tx_ser_rate_sel;
 };
 
+enum rockchip_hdptx_reset {
+	RST_PHY = 0,
+	RST_APB,
+	RST_INIT,
+	RST_CMN,
+	RST_LANE,
+	RST_ROPLL,
+	RST_LCPLL,
+	RST_MAX
+};
+
 struct rockchip_hdptx_phy {
 	struct device *dev;
 	struct regmap *regmap;
 	struct regmap *grf;
 
-	int irq;
-	int id;
-
 	struct phy *phy;
+	struct phy_config *phy_cfg;
 	struct clk_bulk_data *clks;
 	int nr_clks;
-	struct phy_config *phy_cfg;
+	struct reset_control_bulk_data rsts[RST_MAX];
+	bool earc_en;
 
 	/* clk provider */
 	struct clk_hw hw;
-	struct clk *dclk;
 	unsigned long rate;
-
-	struct reset_control *phy_reset;
-	struct reset_control *apb_reset;
-	struct reset_control *cmn_reset;
-	struct reset_control *init_reset;
-	struct reset_control *lane_reset;
-	struct reset_control *ropll_reset;
-	struct reset_control *lcpll_reset;
-
-	bool earc_en;
+	int id;
 	int count;
 };
 
-struct lcpll_config lcpll_cfg[] = {
+static const struct lcpll_config lcpll_cfg[] = {
 	{ 48000000, 1, 0, 0, 0x7d, 0x7d, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 2,
-		0, 0x13, 0x18, 1, 0, 0x20, 0x0c, 1, 0,
-	},
+	  0, 0x13, 0x18, 1, 0, 0x20, 0x0c, 1, 0, },
 	{ 40000000, 1, 1, 0, 0x68, 0x68, 1, 1, 0, 0, 0, 1, 1, 1, 1, 9, 0, 1, 1,
-		0, 2, 3, 1, 0, 0x20, 0x0c, 1, 0,
-	},
+	  0, 2, 3, 1, 0, 0x20, 0x0c, 1, 0, },
 	{ 32000000, 1, 1, 1, 0x6b, 0x6b, 1, 1, 0, 1, 2, 1, 1, 1, 1, 9, 1, 2, 1,
-		0, 0x0d, 0x18, 1, 0, 0x20, 0x0c, 1, 1,
-	},
-	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0,
-	},
-};
-
-struct ropll_config ropll_frl_cfg[] = {
-	{ 24000000, 0x19, 0x19, 1, 1, 0, 1, 2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0,
-		0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 18000000, 0x7d, 0x7d, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0,
-		0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 9000000, 0x7d, 0x7d, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0,
-		0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  0, 0x0d, 0x18, 1, 0, 0x20, 0x0c, 1, 1, },
 	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0,
-	},
+	  0, 0, 0, 0, 0, },
 };
 
-struct ropll_config ropll_tmds_cfg[] = {
+static const struct ropll_config ropll_frl_cfg[] = {
+	{ 24000000, 0x19, 0x19, 1, 1, 0, 1, 2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+	  0, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 18000000, 0x7d, 0x7d, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+	  0, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 9000000, 0x7d, 0x7d, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+	  0, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	  0, 0, 0, 0, },
+};
+
+static const struct ropll_config ropll_tmds_cfg[] = {
 	{ 5940000, 124, 124, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 3712500, 155, 155, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 2970000, 124, 124, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1620000, 135, 135, 1, 1, 3, 1, 1, 0, 1, 1, 1, 1, 4, 0, 3, 5, 5, 0x10,
-		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1856250, 155, 155, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1540000, 193, 193, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 193, 1, 32, 2, 1,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 1485000, 0x7b, 0x7b, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 4, 0, 3, 5, 5, 0x10,
-		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 1485000, 0x7b, 0x7b, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 4, 0, 3, 5, 5,
+	  0x10, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1462500, 122, 122, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 244, 1, 16, 2, 1, 1,
-		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1190000, 149, 149, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 149, 1, 16, 2, 1, 1,
-		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 1065000, 89, 89, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 89, 1, 16, 1, 0, 1,
-		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 1080000, 135, 135, 1, 1, 5, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
-		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 1080000, 135, 135, 1, 1, 5, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0,
+	  0x14, 0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 855000, 214, 214, 1, 1, 11, 1, 1, 1, 1, 1, 1, 1, 214, 1, 16, 2, 1,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 835000, 105, 105, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 42, 1, 16, 1, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 928125, 155, 155, 1, 1, 7, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 742500, 124, 124, 1, 1, 7, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ 650000, 162, 162, 1, 1, 11, 1, 1, 1, 1, 1, 1, 1, 54, 0, 16, 4, 1,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 337500, 0x70, 0x70, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 0x2, 0, 0x01, 5, 1,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 400000, 100, 100, 1, 1, 11, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
-		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 270000, 0x5a, 0x5a, 1, 1, 0xf, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
-		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
-	{ 251750, 84, 84, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 168, 1, 16, 4, 1,
-		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
-	},
+	  1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 337500, 0x70, 0x70, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 0x2, 0, 0x01, 5,
+	  1, 1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 400000, 100, 100, 1, 1, 11, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0,
+	  0x14, 0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 270000, 0x5a, 0x5a, 1, 1, 0xf, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0,
+	  0x14, 0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
+	{ 251750, 84, 84, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 168, 1, 16, 4, 1, 1,
+	  1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0, },
 	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0,
-	},
+	  0, 0, 0, 0, },
 };
 
-static bool rockchip_hdptx_phy_is_accissible_reg(struct device *dev,
-						 unsigned int reg)
+static bool rockchip_hdptx_phy_is_rw_reg(struct device *dev, unsigned int reg)
 {
 	switch (reg) {
 	case 0x0000 ... 0x029c:
@@ -833,54 +792,44 @@ static bool rockchip_hdptx_phy_is_accissible_reg(struct device *dev,
 	case 0x1400 ... 0x14b4:
 	case 0x1800 ... 0x18b4:
 		return true;
-	default:
-		return false;
 	}
+
+	return false;
 }
 
 static const struct regmap_config rockchip_hdptx_phy_regmap_config = {
+	.name = "hdptx-combphy",
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
 	.fast_io = true,
+	.writeable_reg = rockchip_hdptx_phy_is_rw_reg,
+	.readable_reg = rockchip_hdptx_phy_is_rw_reg,
 	.max_register = 0x18b4,
-	.name = "hdptx-combphy",
-
-	.readable_reg = rockchip_hdptx_phy_is_accissible_reg,
-	.writeable_reg = rockchip_hdptx_phy_is_accissible_reg,
 };
 
-static inline struct rockchip_hdptx_phy *to_rockchip_hdptx_phy(struct clk_hw *hw)
+static struct rockchip_hdptx_phy *to_rockchip_hdptx_phy(struct clk_hw *hw)
 {
 	return container_of(hw, struct rockchip_hdptx_phy, hw);
 }
 
-static inline void hdptx_write(struct rockchip_hdptx_phy *hdptx, u32 reg, u8 val)
+static int hdptx_write(struct rockchip_hdptx_phy *hdptx, u32 reg, u8 val)
 {
-	regmap_write(hdptx->regmap, reg, val);
+	return regmap_write(hdptx->regmap, reg, val);
 }
 
-static inline u8 hdptx_read(struct rockchip_hdptx_phy *hdptx, u32 reg)
-{
-	u32 val;
-
-	regmap_read(hdptx->regmap, reg, &val);
-
-	return val;
-}
-
-static inline void hdptx_update_bits(struct rockchip_hdptx_phy *hdptx, u32 reg,
+static int hdptx_update_bits(struct rockchip_hdptx_phy *hdptx, u32 reg,
 				    u8 mask, u8 val)
 {
-	regmap_update_bits(hdptx->regmap, reg, mask, val);
+	return regmap_update_bits(hdptx->regmap, reg, mask, val);
 }
 
-static inline void hdptx_grf_write(struct rockchip_hdptx_phy *hdptx, u32 reg, u32 val)
+static int hdptx_grf_write(struct rockchip_hdptx_phy *hdptx, u32 reg, u32 val)
 {
-	regmap_write(hdptx->grf, reg, val);
+	return regmap_write(hdptx->grf, reg, val);
 }
 
-static inline u8 hdptx_grf_read(struct rockchip_hdptx_phy *hdptx, u32 reg)
+static u8 hdptx_grf_read(struct rockchip_hdptx_phy *hdptx, u32 reg)
 {
 	u32 val;
 
@@ -893,13 +842,13 @@ static void hdptx_pre_power_up(struct rockchip_hdptx_phy *hdptx)
 {
 	u32 val = 0;
 
-	reset_control_assert(hdptx->apb_reset);
+	reset_control_assert(hdptx->rsts[RST_APB].rstc);
 	udelay(20);
-	reset_control_deassert(hdptx->apb_reset);
+	reset_control_deassert(hdptx->rsts[RST_APB].rstc);
 
-	reset_control_assert(hdptx->lane_reset);
-	reset_control_assert(hdptx->cmn_reset);
-	reset_control_assert(hdptx->init_reset);
+	reset_control_assert(hdptx->rsts[RST_LANE].rstc);
+	reset_control_assert(hdptx->rsts[RST_CMN].rstc);
+	reset_control_assert(hdptx->rsts[RST_INIT].rstc);
 
 	val = (HDPTX_I_PLL_EN | HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
@@ -907,63 +856,53 @@ static void hdptx_pre_power_up(struct rockchip_hdptx_phy *hdptx)
 
 static int hdptx_post_enable_lane(struct rockchip_hdptx_phy *hdptx)
 {
-	u32 val = 0;
-	int i;
+	u32 val;
+	int ret;
 
-	reset_control_deassert(hdptx->lane_reset);
+	reset_control_deassert(hdptx->rsts[RST_LANE].rstc);
 
-	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 | HDPTX_I_BIAS_EN |
-		HDPTX_I_BGR_EN;
+	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 |
+	       HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 
-	for (i = 0; i < 50; i++) {
-		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
-
-		if (val & HDPTX_O_PHY_RDY && val & HDPTX_O_PLL_LOCK_DONE)
-			break;
-		udelay(100);
+	ret = regmap_read_poll_timeout(hdptx->grf, GRF_HDPTX_STATUS, val,
+				       (val & HDPTX_O_PHY_RDY) &&
+				       (val & HDPTX_O_PLL_LOCK_DONE),
+				       100, 5000);
+	if (ret) {
+		dev_err(hdptx->dev, "Failed to get PHY lane lock: %d\n", ret);
+		return ret;
 	}
 
-	if (i == 50) {
-		dev_err(hdptx->dev, "hdptx phy lane can't ready!\n");
-		return -EINVAL;
-	}
-
-	dev_err(hdptx->dev, "hdptx phy lane locked!\n");
+	dev_dbg(hdptx->dev, "PHY lane locked\n");
 
 	return 0;
 }
 
 static int hdptx_post_enable_pll(struct rockchip_hdptx_phy *hdptx)
 {
-	u32 val = 0;
-	int i;
+	u32 val;
+	int ret;
 
-	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 | HDPTX_I_BIAS_EN |
-		HDPTX_I_BGR_EN;
+	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 |
+	       HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 	udelay(10);
-	reset_control_deassert(hdptx->init_reset);
+	reset_control_deassert(hdptx->rsts[RST_INIT].rstc);
 	udelay(10);
 	val = HDPTX_I_PLL_EN << 16 | HDPTX_I_PLL_EN;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 	udelay(10);
-	reset_control_deassert(hdptx->cmn_reset);
+	reset_control_deassert(hdptx->rsts[RST_CMN].rstc);
 
-	for (i = 0; i < 20; i++) {
-		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
-
-		if (val & HDPTX_O_PHY_CLK_RDY)
-			break;
-		udelay(20);
+	ret = regmap_read_poll_timeout(hdptx->grf, GRF_HDPTX_STATUS, val,
+				       val & HDPTX_O_PHY_CLK_RDY, 20, 400);
+	if (ret) {
+		dev_err(hdptx->dev, "Failed to get PHY clk ready: %d\n", ret);
+		return ret;
 	}
 
-	if (i == 20) {
-		dev_err(hdptx->dev, "hdptx phy pll can't lock!\n");
-		return -EINVAL;
-	}
-
-	dev_err(hdptx->dev, "hdptx phy pll locked!\n");
+	dev_dbg(hdptx->dev, "PHY clk ready\n");
 
 	return 0;
 }
@@ -971,50 +910,37 @@ static int hdptx_post_enable_pll(struct rockchip_hdptx_phy *hdptx)
 static int hdptx_post_power_up(struct rockchip_hdptx_phy *hdptx)
 {
 	u32 val = 0;
-	int i;
+	int ret;
 
-	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 | HDPTX_I_BIAS_EN |
-		HDPTX_I_BGR_EN;
+	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 |
+	       HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 	udelay(10);
-	reset_control_deassert(hdptx->init_reset);
+	reset_control_deassert(hdptx->rsts[RST_INIT].rstc);
 	udelay(10);
 	val = HDPTX_I_PLL_EN << 16 | HDPTX_I_PLL_EN;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 	udelay(10);
-	reset_control_deassert(hdptx->cmn_reset);
+	reset_control_deassert(hdptx->rsts[RST_CMN].rstc);
 
-	for (i = 0; i < 20; i++) {
-		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
-
-		if (val & HDPTX_O_PLL_LOCK_DONE)
-			break;
-		udelay(20);
-	}
-
-	if (i == 20) {
-		dev_err(hdptx->dev, "hdptx phy can't lock!\n");
-		return -EINVAL;
+	ret = regmap_read_poll_timeout(hdptx->grf, GRF_HDPTX_STATUS, val,
+				       val & HDPTX_O_PLL_LOCK_DONE, 20, 400);
+	if (ret) {
+		dev_err(hdptx->dev, "Failed to get PHY PLL lock: %d\n", ret);
+		return ret;
 	}
 
 	udelay(20);
+	reset_control_deassert(hdptx->rsts[RST_LANE].rstc);
 
-	reset_control_deassert(hdptx->lane_reset);
-
-	for (i = 0; i < 50; i++) {
-		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
-
-		if (val & HDPTX_O_PHY_RDY)
-			break;
-		udelay(100);
+	ret = regmap_read_poll_timeout(hdptx->grf, GRF_HDPTX_STATUS, val,
+				       val & HDPTX_O_PHY_RDY, 100, 5000);
+	if (ret) {
+		dev_err(hdptx->dev, "Failed to get PHY ready: %d\n", ret);
+		return ret;
 	}
 
-	if (i == 50) {
-		dev_err(hdptx->dev, "hdptx phy can't ready!\n");
-		return -EINVAL;
-	}
-
-	dev_err(hdptx->dev, "hdptx phy locked!\n");
+	dev_dbg(hdptx->dev, "PHY ready\n");
 
 	return 0;
 }
@@ -1024,13 +950,13 @@ static void hdptx_phy_disable(struct rockchip_hdptx_phy *hdptx)
 	u32 val;
 
 	/* reset phy and apb, or phy locked flag may keep 1 */
-	reset_control_assert(hdptx->phy_reset);
+	reset_control_assert(hdptx->rsts[RST_PHY].rstc);
 	udelay(20);
-	reset_control_deassert(hdptx->phy_reset);
+	reset_control_deassert(hdptx->rsts[RST_PHY].rstc);
 
-	reset_control_assert(hdptx->apb_reset);
+	reset_control_assert(hdptx->rsts[RST_APB].rstc);
 	udelay(20);
-	reset_control_deassert(hdptx->apb_reset);
+	reset_control_deassert(hdptx->rsts[RST_APB].rstc);
 
 	hdptx_write(hdptx, LANE_REG0300, 0x82);
 	hdptx_write(hdptx, SB_REG010F, 0xc1);
@@ -1040,9 +966,9 @@ static void hdptx_phy_disable(struct rockchip_hdptx_phy *hdptx)
 	hdptx_write(hdptx, LANE_REG0501, 0x80);
 	hdptx_write(hdptx, LANE_REG0601, 0x80);
 
-	reset_control_assert(hdptx->lane_reset);
-	reset_control_assert(hdptx->cmn_reset);
-	reset_control_assert(hdptx->init_reset);
+	reset_control_assert(hdptx->rsts[RST_LANE].rstc);
+	reset_control_assert(hdptx->rsts[RST_CMN].rstc);
+	reset_control_assert(hdptx->rsts[RST_INIT].rstc);
 
 	val = (HDPTX_I_PLL_EN | HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16;
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
@@ -1205,10 +1131,10 @@ static int hdptx_ropll_cmn_config(struct rockchip_hdptx_phy *hdptx, unsigned lon
 {
 	int bus_width = phy_get_bus_width(hdptx->phy);
 	u8 color_depth = (bus_width & COLOR_DEPTH_MASK) ? 1 : 0;
-	struct ropll_config *cfg = ropll_tmds_cfg;
+	const struct ropll_config *cfg = ropll_tmds_cfg;
 	struct ropll_config rc = {0};
 
-	dev_info(hdptx->dev, "%s bus_width:%x rate:%lu\n", __func__, bus_width, bit_rate);
+	dev_dbg(hdptx->dev, "%s bus_width:%x rate:%lu\n", __func__, bus_width, bit_rate);
 	hdptx->rate = bit_rate * 100;
 
 	if (color_depth)
@@ -1236,9 +1162,9 @@ static int hdptx_ropll_cmn_config(struct rockchip_hdptx_phy *hdptx, unsigned lon
 
 	hdptx_pre_power_up(hdptx);
 
-	reset_control_assert(hdptx->ropll_reset);
+	reset_control_assert(hdptx->rsts[RST_ROPLL].rstc);
 	udelay(20);
-	reset_control_deassert(hdptx->ropll_reset);
+	reset_control_deassert(hdptx->rsts[RST_ROPLL].rstc);
 
 	hdptx_write(hdptx, CMN_REG0008, 0x00);
 	hdptx_write(hdptx, CMN_REG0009, 0x0c);
@@ -1510,7 +1436,7 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 {
 	u32 bit_rate = rate & DATA_RATE_MASK;
 	u8 color_depth = (rate & COLOR_DEPTH_MASK) ? 1 : 0;
-	struct ropll_config *cfg = ropll_frl_cfg;
+	const struct ropll_config *cfg = ropll_frl_cfg;
 
 	for (; cfg->bit_rate != ~0; cfg++)
 		if (bit_rate == cfg->bit_rate)
@@ -1523,9 +1449,9 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 
 	hdptx_pre_power_up(hdptx);
 
-	reset_control_assert(hdptx->ropll_reset);
+	reset_control_assert(hdptx->rsts[RST_ROPLL].rstc);
 	usleep_range(10, 20);
-	reset_control_deassert(hdptx->ropll_reset);
+	reset_control_deassert(hdptx->rsts[RST_ROPLL].rstc);
 
 	hdptx_write(hdptx, CMN_REG0008, 0x00);
 	hdptx_write(hdptx, CMN_REG0009, 0x0c);
@@ -1736,7 +1662,7 @@ static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 {
 	u32 bit_rate = rate & DATA_RATE_MASK;
 	u8 color_depth = (rate & COLOR_DEPTH_MASK) ? 1 : 0;
-	struct lcpll_config *cfg = lcpll_cfg;
+	const struct lcpll_config *cfg = lcpll_cfg;
 
 	for (; cfg->bit_rate != ~0; cfg++)
 		if (bit_rate == cfg->bit_rate)
@@ -1983,14 +1909,16 @@ static int rockchip_hdptx_phy_power_on(struct phy *phy)
 	int ret;
 
 	if (!hdptx->count) {
-		ret = clk_bulk_enable(hdptx->nr_clks, hdptx->clks);
+		ret = clk_bulk_prepare_enable(hdptx->nr_clks, hdptx->clks);
 		if (ret) {
 			dev_err(hdptx->dev, "failed to enable clocks\n");
 			return ret;
 		}
 	}
 
-	dev_info(hdptx->dev, "bus_width:0x%x,bit_rate:%d\n", bus_width, bit_rate);
+	dev_dbg(hdptx->dev, "%s bus_width:%x rate:%d\n",
+		__func__, bus_width, bit_rate);
+
 	if (bus_width & HDMI_EARC_MASK)
 		hdptx->earc_en = true;
 	else
@@ -1999,11 +1927,11 @@ static int rockchip_hdptx_phy_power_on(struct phy *phy)
 	if (bus_width & HDMI_MODE_MASK) {
 		if (bit_rate > 24000000)
 			return hdptx_lcpll_frl_mode_config(hdptx, bus_width);
-		else
-			return hdptx_ropll_frl_mode_config(hdptx, bus_width);
-	} else {
-		return hdptx_ropll_tmds_mode_config(hdptx, bus_width);
+
+		return hdptx_ropll_frl_mode_config(hdptx, bus_width);
 	}
+
+	return hdptx_ropll_tmds_mode_config(hdptx, bus_width);
 }
 
 static int rockchip_hdptx_phy_power_off(struct phy *phy)
@@ -2017,7 +1945,7 @@ static int rockchip_hdptx_phy_power_off(struct phy *phy)
 		return 0;
 
 	hdptx_phy_disable(hdptx);
-	clk_bulk_disable(hdptx->nr_clks, hdptx->clks);
+	clk_bulk_disable_unprepare(hdptx->nr_clks, hdptx->clks);
 
 	return 0;
 }
@@ -2028,19 +1956,57 @@ static const struct phy_ops rockchip_hdptx_phy_ops = {
 	.power_off = rockchip_hdptx_phy_power_off,
 };
 
-static const struct of_device_id rockchip_hdptx_phy_of_match[] = {
-	{ .compatible = "rockchip,rk3588-hdptx-phy-hdmi",
-	},
-	{}
-};
-MODULE_DEVICE_TABLE(of, rockchip_hdptx_phy_of_match);
-
 static void rockchip_hdptx_phy_runtime_disable(void *data)
 {
 	struct rockchip_hdptx_phy *hdptx = data;
 
 	clk_bulk_unprepare(hdptx->nr_clks, hdptx->clks);
 	pm_runtime_disable(hdptx->dev);
+}
+
+static int hdptx_phy_clk_enable(struct clk_hw *hw)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+	int ret;
+
+	if (hdptx->count) {
+		hdptx->count++;
+		return 0;
+	}
+
+	ret = clk_bulk_prepare_enable(hdptx->nr_clks, hdptx->clks);
+	if (ret) {
+		dev_err(hdptx->dev, "failed to enable clocks\n");
+		return ret;
+	}
+
+	if (hdptx->rate) {
+		ret = hdptx_ropll_cmn_config(hdptx, hdptx->rate / 100);
+		if (ret < 0) {
+			dev_err(hdptx->dev, "Failed to init HDMI PHY PLL\n");
+			return ret;
+		}
+	}
+
+	hdptx->count++;
+
+	return 0;
+}
+
+static void hdptx_phy_clk_disable(struct clk_hw *hw)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+
+	if (hdptx->count > 1) {
+		hdptx->count--;
+		return;
+	}
+
+	if (hdptx_grf_read(hdptx, GRF_HDPTX_STATUS) & HDPTX_O_PLL_LOCK_DONE)
+		hdptx_phy_disable(hdptx);
+
+	clk_bulk_disable_unprepare(hdptx->nr_clks, hdptx->clks);
+	hdptx->count--;
 }
 
 static unsigned long hdptx_phy_clk_recalc_rate(struct clk_hw *hw,
@@ -2054,7 +2020,7 @@ static unsigned long hdptx_phy_clk_recalc_rate(struct clk_hw *hw,
 static long hdptx_phy_clk_round_rate(struct clk_hw *hw, unsigned long rate,
 					 unsigned long *parent_rate)
 {
-	struct ropll_config *cfg = ropll_tmds_cfg;
+	const struct ropll_config *cfg = ropll_tmds_cfg;
 	u32 bit_rate = rate / 100;
 
 	if (rate > HDMI20_MAX_RATE)
@@ -2078,117 +2044,42 @@ static int hdptx_phy_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 	if (hdptx_grf_read(hdptx, GRF_HDPTX_STATUS) & HDPTX_O_PLL_LOCK_DONE)
 		hdptx_phy_disable(hdptx);
 
-	rate = rate / 100;
-
-	return hdptx_ropll_cmn_config(hdptx, rate);
-}
-
-static int hdptx_phy_clk_enable(struct clk_hw *hw)
-{
-	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
-	int ret;
-
-	if (hdptx->count) {
-		hdptx->count++;
-		return 0;
-	}
-
-	ret = clk_bulk_enable(hdptx->nr_clks, hdptx->clks);
-	if (ret) {
-		dev_err(hdptx->dev, "failed to enable clocks\n");
-		return ret;
-	}
-
-	if (hdptx->rate) {
-		ret = hdptx_ropll_cmn_config(hdptx, hdptx->rate / 100);
-		if (ret < 0) {
-			dev_err(hdptx->dev, "hdmi phy pll init failed\n");
-			return ret;
-		}
-	}
-
-	hdptx->count++;
-
-	return 0;
-}
-
-static void hdptx_phy_clk_disable(struct clk_hw *hw)
-{
-	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
-
-	if (hdptx->count > 1) {
-		hdptx->count--;
-		return;
-	}
-
-	if (hdptx_grf_read(hdptx, GRF_HDPTX_STATUS) & HDPTX_O_PLL_LOCK_DONE)
-		hdptx_phy_disable(hdptx);
-	clk_bulk_disable(hdptx->nr_clks, hdptx->clks);
-	hdptx->count--;
+	return hdptx_ropll_cmn_config(hdptx, rate / 100);
 }
 
 static const struct clk_ops hdptx_phy_clk_ops = {
+	.enable = hdptx_phy_clk_enable,
+	.disable = hdptx_phy_clk_disable,
 	.recalc_rate = hdptx_phy_clk_recalc_rate,
 	.round_rate = hdptx_phy_clk_round_rate,
 	.set_rate = hdptx_phy_clk_set_rate,
-	.enable = hdptx_phy_clk_enable,
-	.disable = hdptx_phy_clk_disable,
 };
 
 static int rockchip_hdptx_phy_clk_register(struct rockchip_hdptx_phy *hdptx)
 {
 	struct device *dev = hdptx->dev;
-	struct device_node *np = dev->of_node;
-	struct device_node *clk_np;
-	struct platform_device *pdev;
-	struct clk_init_data init = {};
+	const char *name, *pname;
 	struct clk *refclk;
-	const char *parent_name;
 	int ret;
 
-	clk_np = of_get_child_by_name(np, "clk-port");
-	if (!clk_np)
-		return 0;
-
-	pdev = of_platform_device_create(clk_np, NULL, dev);
-	if (!pdev)
-		return 0;
-
 	refclk = devm_clk_get(dev, "ref");
-	if (IS_ERR(refclk)) {
-		dev_err(dev, "failed to get ref clock\n");
-		return PTR_ERR(refclk);
-	}
+	if (IS_ERR(refclk))
+		return dev_err_probe(dev, PTR_ERR(refclk),
+				     "Failed to get ref clock\n");
 
-	parent_name = __clk_get_name(refclk);
+	pname = __clk_get_name(refclk);
+	name = hdptx->id ? "clk_hdmiphy_pixel1" : "clk_hdmiphy_pixel0";
+	hdptx->hw.init = CLK_HW_INIT(name, pname, &hdptx_phy_clk_ops,
+				     CLK_GET_RATE_NOCACHE);
 
-	init.parent_names = &parent_name;
-	init.num_parents = 1;
-	init.flags = CLK_GET_RATE_NOCACHE;
-	if (!hdptx->id)
-		init.name = "clk_hdmiphy_pixel0";
-	else
-		init.name = "clk_hdmiphy_pixel1";
-	init.ops = &hdptx_phy_clk_ops;
+	ret = devm_clk_hw_register(dev, &hdptx->hw);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to register clock\n");
 
-	/* optional override of the clock name */
-	of_property_read_string(np, "clock-output-names", &init.name);
-
-	hdptx->hw.init = &init;
-
-	hdptx->dclk = devm_clk_register(&pdev->dev, &hdptx->hw);
-	if (IS_ERR(hdptx->dclk)) {
-		ret = PTR_ERR(hdptx->dclk);
-		dev_err(dev, "failed to register clock: %d\n", ret);
-		return ret;
-	}
-
-	ret = of_clk_add_provider(clk_np, of_clk_src_simple_get, hdptx->dclk);
-	if (ret) {
-		dev_err(dev, "failed to register OF clock provider: %d\n", ret);
-		return ret;
-	}
-
+	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get, &hdptx->hw);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to register clk provider\n");
 	return 0;
 }
 
@@ -2198,7 +2089,6 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 	struct device_node *np = dev->of_node;
 	struct rockchip_hdptx_phy *hdptx;
 	struct phy_provider *phy_provider;
-	struct resource *res;
 	void __iomem *regs;
 	int ret;
 
@@ -2208,97 +2098,50 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 
 	hdptx->dev = dev;
 
-	hdptx->id = of_alias_get_id(dev->of_node, "hdptxhdmi");
+	hdptx->id = of_alias_get_id(dev->of_node, "hdptxphy");
 	if (hdptx->id < 0)
 		hdptx->id = 0;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(dev, res);
+	regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(regs))
-		return PTR_ERR(regs);
+		return dev_err_probe(dev, PTR_ERR(regs),
+				     "Failed to ioremap resource\n");
 
 	ret = devm_clk_bulk_get_all(dev, &hdptx->clks);
-	if (ret < 1)
+	if (ret < 0)
 		return dev_err_probe(dev, ret, "failed to get clocks\n");
+	if (ret == 0)
+		return dev_err_probe(dev, -EINVAL, "missing clocks\n");
 
 	hdptx->nr_clks = ret;
 
-	ret = clk_bulk_prepare(hdptx->nr_clks, hdptx->clks);
-	if (ret) {
-		dev_err(hdptx->dev, "failed to prepare clocks\n");
-		return ret;
-	}
-
 	hdptx->regmap = devm_regmap_init_mmio(dev, regs,
 					      &rockchip_hdptx_phy_regmap_config);
-	if (IS_ERR(hdptx->regmap)) {
-		ret = PTR_ERR(hdptx->regmap);
-		dev_err(dev, "failed to init regmap: %d\n", ret);
-		goto err_regsmap;
-	}
+	if (IS_ERR(hdptx->regmap))
+		return dev_err_probe(dev, PTR_ERR(hdptx->regmap),
+				     "failed to init regmap\n");
 
-	hdptx->phy_reset = devm_reset_control_get(dev, "phy");
-	if (IS_ERR(hdptx->phy_reset)) {
-		ret = PTR_ERR(hdptx->phy_reset);
-		dev_err(dev, "failed to get phy reset: %d\n", ret);
-		goto err_regsmap;
-	}
+	hdptx->rsts[RST_PHY].id = "phy";
+	hdptx->rsts[RST_APB].id = "apb";
+	hdptx->rsts[RST_INIT].id = "init";
+	hdptx->rsts[RST_CMN].id = "cmn";
+	hdptx->rsts[RST_LANE].id = "lane";
+	hdptx->rsts[RST_ROPLL].id = "ropll";
+	hdptx->rsts[RST_LCPLL].id = "lcpll";
 
-	hdptx->apb_reset = devm_reset_control_get(dev, "apb");
-	if (IS_ERR(hdptx->apb_reset)) {
-		ret = PTR_ERR(hdptx->apb_reset);
-		dev_err(dev, "failed to get apb reset: %d\n", ret);
-		goto err_regsmap;
-	}
-
-	hdptx->init_reset = devm_reset_control_get(dev, "init");
-	if (IS_ERR(hdptx->init_reset)) {
-		ret = PTR_ERR(hdptx->init_reset);
-		dev_err(dev, "failed to get init reset: %d\n", ret);
-		goto err_regsmap;
-	}
-
-	hdptx->cmn_reset = devm_reset_control_get(dev, "cmn");
-	if (IS_ERR(hdptx->cmn_reset)) {
-		ret = PTR_ERR(hdptx->cmn_reset);
-		dev_err(dev, "failed to get apb reset: %d\n", ret);
-		goto err_regsmap;
-	}
-
-	hdptx->lane_reset = devm_reset_control_get(dev, "lane");
-	if (IS_ERR(hdptx->lane_reset)) {
-		ret = PTR_ERR(hdptx->lane_reset);
-		dev_err(dev, "failed to get lane reset: %d\n", ret);
-		goto err_regsmap;
-	}
-
-	hdptx->ropll_reset = devm_reset_control_get(dev, "ropll");
-	if (IS_ERR(hdptx->ropll_reset)) {
-		ret = PTR_ERR(hdptx->ropll_reset);
-		dev_err(dev, "failed to get ropll reset: %d\n", ret);
-		goto err_regsmap;
-	}
-
-	hdptx->lcpll_reset = devm_reset_control_get(dev, "lcpll");
-	if (IS_ERR(hdptx->lcpll_reset)) {
-		ret = PTR_ERR(hdptx->lcpll_reset);
-		dev_err(dev, "failed to get lcpll reset: %d\n", ret);
-		goto err_regsmap;
-	}
+	ret = devm_reset_control_bulk_get_exclusive(dev, RST_MAX, hdptx->rsts);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to get resets\n");
 
 	hdptx->grf = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
-	if (IS_ERR(hdptx->grf)) {
-		ret = PTR_ERR(hdptx->grf);
-		dev_err(hdptx->dev, "Unable to get rockchip,grf\n");
-		goto err_regsmap;
-	}
+	if (IS_ERR(hdptx->grf))
+		return dev_err_probe(dev, PTR_ERR(hdptx->grf),
+				     "Unable to get rockchip,grf\n");
 
 	hdptx->phy = devm_phy_create(dev, NULL, &rockchip_hdptx_phy_ops);
-	if (IS_ERR(hdptx->phy)) {
-		dev_err(dev, "failed to create HDMI PHY\n");
-		ret = PTR_ERR(hdptx->phy);
-		goto err_regsmap;
-	}
+	if (IS_ERR(hdptx->phy))
+		return dev_err_probe(dev, PTR_ERR(hdptx->phy),
+				     "failed to create HDMI PHY\n");
 
 	phy_set_drvdata(hdptx->phy, hdptx);
 	phy_set_bus_width(hdptx->phy, 8);
@@ -2307,41 +2150,40 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, rockchip_hdptx_phy_runtime_disable,
 				       hdptx);
 	if (ret)
-		goto err_regsmap;
+		return ret;
 
 	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
-	if (IS_ERR(phy_provider)) {
-		dev_err(dev, "failed to register PHY provider\n");
-		ret = PTR_ERR(phy_provider);
-		goto err_regsmap;
-	}
+	if (IS_ERR(phy_provider))
+		return dev_err_probe(dev, PTR_ERR(phy_provider),
+				     "failed to register PHY provider\n");
 
-	reset_control_deassert(hdptx->apb_reset);
-	reset_control_deassert(hdptx->cmn_reset);
-	reset_control_deassert(hdptx->init_reset);
+	reset_control_deassert(hdptx->rsts[RST_APB].rstc);
+	reset_control_deassert(hdptx->rsts[RST_CMN].rstc);
+	reset_control_deassert(hdptx->rsts[RST_INIT].rstc);
 
 	ret = rockchip_hdptx_phy_clk_register(hdptx);
 	if (ret)
-		goto err_regsmap;
+		return ret;
 
 	platform_set_drvdata(pdev, hdptx);
-	dev_info(dev, "hdptx phy init success\n");
-	return 0;
 
-err_regsmap:
-	clk_bulk_unprepare(hdptx->nr_clks, hdptx->clks);
-	return ret;
+	return 0;
 }
+
+static const struct of_device_id rockchip_hdptx_phy_of_match[] = {
+	{ .compatible = "rockchip,rk3588-hdptx-phy", },
+	{}
+};
+MODULE_DEVICE_TABLE(of, rockchip_hdptx_phy_of_match);
 
 static struct platform_driver rockchip_hdptx_phy_driver = {
 	.probe  = rockchip_hdptx_phy_probe,
 	.driver = {
-		.name = "rockchip-hdptx-phy-hdmi",
+		.name = "rockchip-hdptx-phy",
 		.of_match_table = of_match_ptr(rockchip_hdptx_phy_of_match),
 	},
 };
-
 module_platform_driver(rockchip_hdptx_phy_driver);
 
-MODULE_DESCRIPTION("Samsung HDMI-DP Transmitter Combphy Driver");
+MODULE_DESCRIPTION("Samsung HDMI/DP Transmitter Combo PHY Driver");
 MODULE_LICENSE("GPL v2");

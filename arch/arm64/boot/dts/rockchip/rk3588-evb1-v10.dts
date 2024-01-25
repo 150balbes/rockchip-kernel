@@ -10,6 +10,7 @@
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 #include <dt-bindings/usb/pd.h>
+#include <dt-bindings/soc/rockchip,vop2.h>
 #include "rk3588.dtsi"
 
 / {
@@ -323,7 +324,7 @@
 };
 
 &display_subsystem {
-	clocks = <&hdptxphy_hdmi_clk0>;
+	clocks = <&hdptxphy_hdmi0>;
 	clock-names = "hdmi0_phy_pll";
 };
 
@@ -346,6 +347,20 @@
 &gpu {
 	mali-supply = <&vdd_gpu_s0>;
 	sram-supply = <&vdd_gpu_mem_s0>;
+	status = "okay";
+};
+
+&hdmi0 {
+	status = "okay";
+};
+
+&hdmi0_in {
+	hdmi0_in_vp0: endpoint {
+		remote-endpoint = <&vp0_out_hdmi0>;
+	};
+};
+
+&hdptxphy_hdmi0 {
 	status = "okay";
 };
 
@@ -1300,26 +1315,17 @@
 	status = "okay";
 };
 
-&hdmi0 {
-	status = "okay";
-};
-
-&hdmi0_in_vp0 {
-	status = "okay";
-};
-
-&hdptxphy_hdmi0 {
-	status = "okay";
-};
-
-&hdptxphy_hdmi_clk0 {
-	status = "okay";
-};
-
 &vop_mmu {
 	status = "okay";
 };
 
 &vop {
 	status = "okay";
+};
+
+&vp0 {
+	vp0_out_hdmi0: endpoint@ROCKCHIP_VOP2_EP_HDMI0 {
+		reg = <ROCKCHIP_VOP2_EP_HDMI0>;
+		remote-endpoint = <&hdmi0_in_vp0>;
+	};
 };
