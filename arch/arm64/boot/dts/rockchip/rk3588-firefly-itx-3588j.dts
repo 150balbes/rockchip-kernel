@@ -8,7 +8,7 @@
 
 //#include "rk3588-firefly-itx-3588j.dtsi"
 //#include "rk3588-firefly-itx-cam-8ms1m.dtsi"
-#include "rk3588-itx-3588j.dtsi"
+#include "rk3588-firefly-itx-3588j.dtsi"
 
 
 
@@ -16,4 +16,3 @@
 	model = "Firefly ITX-3588J HDMI";
 	compatible = "rockchip,rk3588-firefly-itx-3588j", "rockchip,rk3588s", "rockchip,rk3588";
 };
-

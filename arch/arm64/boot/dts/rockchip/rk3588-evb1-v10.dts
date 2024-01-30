@@ -9,8 +9,8 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/rockchip.h>
-#include <dt-bindings/usb/pd.h>
 #include <dt-bindings/soc/rockchip,vop2.h>
+#include <dt-bindings/usb/pd.h>
 #include "rk3588.dtsi"
 
 / {
@@ -18,8 +18,8 @@
 	compatible = "rockchip,rk3588-evb1-v10", "rockchip,rk3588";
 
 	aliases {
+		ethernet0 = &gmac0;
 		mmc0 = &sdhci;
-		serial2 = &uart2;
 	};
 
 	chosen {
@@ -63,34 +63,31 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_detect>;
 		simple-audio-card,name = "RK3588 EVB1 Audio";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,aux-devs = <&amp_headphone>, <&amp_speaker>;
 		simple-audio-card,bitclock-master = <&masterdai>;
+		simple-audio-card,format = "i2s";
 		simple-audio-card,frame-master = <&masterdai>;
-
-
-		simple-audio-card,widgets =
-			"Microphone", "Mic Jack",
-			"Microphone", "Onboard Mic",
-			"Headphone", "Headphones",
-			"Speaker", "Speaker";
+		simple-audio-card,hp-det-gpio = <&gpio1 RK_PD5 GPIO_ACTIVE_LOW>;
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,pin-switches = "Headphones", "Speaker";
 		simple-audio-card,routing =
 			"Speaker Amplifier INL", "LOUT2",
 			"Speaker Amplifier INR", "ROUT2",
 			"Speaker", "Speaker Amplifier OUTL",
 			"Speaker", "Speaker Amplifier OUTR",
-			"Headphone Amplifier INL", "LOUT1",
-			"Headphone Amplifier INR", "ROUT1",
-			"Headphones", "Headphone Amplifier OUTL",
-			"Headphones", "Headphone Amplifier OUTR",
-			"LINPUT1", "Onboard Mic",
-			"LINPUT2", "Onboard Mic",
-			"RINPUT1", "Mic Jack",
-			"RINPUT2", "Mic Jack";
-
-		simple-audio-card,hp-det-gpio = <&gpio1 RK_PD5 GPIO_ACTIVE_LOW>;
-		simple-audio-card,aux-devs = <&amp_headphone>, <&amp_speaker>;
-		simple-audio-card,pin-switches = "Headphone", "Speaker";
+			"Headphones Amplifier INL", "LOUT1",
+			"Headphones Amplifier INR", "ROUT1",
+			"Headphones", "Headphones Amplifier OUTL",
+			"Headphones", "Headphones Amplifier OUTR",
+			"LINPUT1", "Onboard Microphone",
+			"RINPUT1", "Onboard Microphone",
+			"LINPUT2", "Microphone Jack",
+			"RINPUT2", "Microphone Jack";
+		simple-audio-card,widgets =
+			"Microphone", "Microphone Jack",
+			"Microphone", "Onboard Microphone",
+			"Headphone", "Headphones",
+			"Speaker", "Speaker";
 
 		simple-audio-card,cpu {
 			sound-dai = <&i2s0_8ch>;
@@ -98,6 +95,7 @@
 
 		masterdai: simple-audio-card,codec {
 			sound-dai = <&es8388>;
+			system-clock-frequency = <12288000>;
 		};
 	};
 
@@ -106,7 +104,7 @@
 		enable-gpios = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&headphone_amplifier_en>;
-		sound-name-prefix = "Headphone Amplifier";
+		sound-name-prefix = "Headphones Amplifier";
 	};
 
 	amp_speaker: speaker-amplifier {
@@ -123,13 +121,22 @@
 		pwms = <&pwm2 0 25000 0>;
 	};
 
+	bluetooth-rfkill {
+		compatible = "rfkill-gpio";
+		label = "rfkill-bluetooth";
+		radio-type = "bluetooth";
+		shutdown-gpios = <&gpio3 RK_PA6 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&bluetooth_pwren>;
+	};
+
 	wlan-rfkill {
 		compatible = "rfkill-gpio";
 		label = "rfkill-pcie-wlan";
 		radio-type = "wlan";
 		shutdown-gpios = <&gpio3 RK_PB1 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&wifi_pwren>, <&wifi_host_wake_irq>;
+		pinctrl-0 = <&wifi_pwren>;
 	};
 
 	pcie20_avdd0v85: pcie20-avdd0v85-regulator {
@@ -167,26 +174,6 @@
 		regulator-name = "pcie30_avdd1v8";
 		regulator-always-on;
 		regulator-boot-on;
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
-		vin-supply = <&avcc_1v8_s0>;
-	};
-
-	pcie30_avdd0v75: pcie30-avdd0v75-regulator {
-		compatible = "regulator-fixed";
-		regulator-name = "pcie30_avdd0v75";
-		regulator-boot-on;
-		regulator-always-on;
-		regulator-min-microvolt = <750000>;
-		regulator-max-microvolt = <750000>;
-		vin-supply = <&avdd_0v75_s0>;
-	};
-
-	pcie30_avdd1v8: pcie30-avdd1v8-regulator {
-		compatible = "regulator-fixed";
-		regulator-name = "pcie30_avdd1v8";
-		regulator-boot-on;
-		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -269,6 +256,26 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&typec5v_pwren>;
 	};
+
+	vccio_wl: vccio-wl {
+		compatible = "regulator-fixed";
+		regulator-name = "wlan-vddio";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+		vin-supply = <&vcc_1v8_s0>;
+	};
+
+	vcc3v3_pciewl_vbat: vcc3v3-pciewl-vbat {
+		compatible = "regulator-fixed";
+		regulator-name = "wlan-vbat";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+		vin-supply = <&vcc_3v3_s0>;
+	};
 };
 
 &combphy0_ps {
@@ -341,13 +348,6 @@
 	rx_delay = <0x00>;
 	tx_delay = <0x43>;
 	status = "okay";
-	mac-address = [ fe 46 f2 84 84 fe ];
-};
-
-&gpu {
-	mali-supply = <&vdd_gpu_s0>;
-	sram-supply = <&vdd_gpu_mem_s0>;
-	status = "okay";
 };
 
 &hdmi0 {
@@ -361,6 +361,12 @@
 };
 
 &hdptxphy_hdmi0 {
+	status = "okay";
+};
+
+&gpu {
+	mali-supply = <&vdd_gpu_s0>;
+	sram-supply = <&vdd_gpu_mem_s0>;
 	status = "okay";
 };
 
@@ -439,6 +445,10 @@
 		clocks = <&cru I2S0_8CH_MCLKOUT>;
 		assigned-clocks = <&cru I2S0_8CH_MCLKOUT>;
 		assigned-clock-rates = <12288000>;
+		AVDD-supply = <&avcc_1v8_codec_s0>;
+		DVDD-supply = <&avcc_1v8_codec_s0>;
+		HPVDD-supply = <&vcc_3v3_s0>;
+		PVDD-supply = <&vcc_3v3_s0>;
 		#sound-dai-cells = <0>;
 	};
 };
@@ -467,15 +477,14 @@
 
 &pcie2x1l0 {
 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-	status = "okay";
-	pinctrl-0 = <&pcie2_0_rst>;
+	pinctrl-0 = <&pcie2_0_rst>, <&pcie2_0_wake>, <&pcie2_0_clkreq>, <&wifi_host_wake_irq>;
 	status = "okay";
 };
 
 &pcie2x1l1 {
 	reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&pcie2_1_rst>, <&rtl8111_isolate>;
+	pinctrl-0 = <&pcie2_1_rst>, <&pcie2_1_wake>, <&pcie2_1_clkreq>, <&rtl8111_isolate>;
 	status = "okay";
 };
 
@@ -506,6 +515,12 @@
 		};
 	};
 
+	bluetooth {
+		bluetooth_pwren: bluetooth-pwren {
+			rockchip,pins = <3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
 	rtl8111 {
 		rtl8111_isolate: rtl8111-isolate {
 			rockchip,pins = <1 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
@@ -530,8 +545,24 @@
 			rockchip,pins = <4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 
+		pcie2_0_wake: pcie2-0-wake {
+			rockchip,pins = <4 RK_PA4 4 &pcfg_pull_none>;
+		};
+
+		pcie2_0_clkreq: pcie2-0-clkreq {
+			rockchip,pins = <4 RK_PA3 4 &pcfg_pull_none>;
+		};
+
 		pcie2_1_rst: pcie2-1-rst {
 			rockchip,pins = <4 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		pcie2_1_wake: pcie2-1-wake {
+			rockchip,pins = <4 RK_PA1 4 &pcfg_pull_none>;
+		};
+
+		pcie2_1_clkreq: pcie2-1-clkreq {
+			rockchip,pins = <4 RK_PA0 4 &pcfg_pull_none>;
 		};
 	};
 
@@ -608,6 +639,7 @@
 			    <&rk806_dvs2_null>, <&rk806_dvs3_null>;
 		pinctrl-names = "default";
 		spi-max-frequency = <1000000>;
+		system-power-controller;
 
 		vcc1-supply = <&vcc5v0_sys>;
 		vcc2-supply = <&vcc5v0_sys>;
@@ -1312,6 +1344,7 @@
 };
 
 &usb_host1_xhci {
+	dr_mode = "host";
 	status = "okay";
 };
 

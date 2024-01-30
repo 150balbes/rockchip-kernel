@@ -18,6 +18,11 @@ VM_BIND / EXEC uAPI
 
 .. kernel-doc:: include/uapi/drm/nouveau_drm.h
 
+drm/xe uAPI
+===========
+
+.. kernel-doc:: include/uapi/drm/xe_drm.h
+
 drm/panthor uAPI
 ================
 

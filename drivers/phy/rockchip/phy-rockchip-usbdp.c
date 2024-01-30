@@ -18,10 +18,9 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_platform.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/usb/ch9.h>
@@ -172,7 +171,8 @@ struct rockchip_udphy {
 	int num_clks;
 	struct clk_bulk_data *clks;
 	struct clk *refclk;
-	struct reset_control **rsts;
+	int num_rsts;
+	struct reset_control_bulk_data *rsts;
 
 	/* PHY status management */
 	bool flip;
@@ -442,9 +442,32 @@ static int udphy_clk_init(struct rockchip_udphy *udphy, struct device *dev)
 	}
 
 	if (!udphy->refclk)
-		dev_warn(udphy->dev, "no refclk found\n");
+		return dev_err_probe(udphy->dev, -EINVAL, "no refclk found\n");
 
 	return 0;
+}
+
+static int udphy_reset_assert_all(struct rockchip_udphy *udphy)
+{
+	return reset_control_bulk_assert(udphy->num_rsts, udphy->rsts);
+}
+
+static int udphy_reset_deassert_all(struct rockchip_udphy *udphy)
+{
+	return reset_control_bulk_deassert(udphy->num_rsts, udphy->rsts);
+}
+
+static int udphy_reset_deassert(struct rockchip_udphy *udphy, char *name)
+{
+	struct reset_control_bulk_data *list = udphy->rsts;
+	int idx;
+
+	for (idx = 0; idx < udphy->num_rsts; idx++) {
+		if (!strcmp(list[idx].id, name))
+			return reset_control_deassert(list[idx].rstc);
+	}
+
+	return -EINVAL;
 }
 
 static int udphy_reset_init(struct rockchip_udphy *udphy, struct device *dev)
@@ -452,62 +475,17 @@ static int udphy_reset_init(struct rockchip_udphy *udphy, struct device *dev)
 	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
 	int idx;
 
-	udphy->rsts = devm_kcalloc(dev, cfg->num_rsts,
+	udphy->num_rsts = cfg->num_rsts;
+	udphy->rsts = devm_kcalloc(dev, udphy->num_rsts,
 				   sizeof(*udphy->rsts), GFP_KERNEL);
 	if (!udphy->rsts)
 		return -ENOMEM;
 
-	for (idx = 0; idx < cfg->num_rsts; idx++) {
-		struct reset_control *rst;
-		const char *name = cfg->rst_list[idx];
+	for (idx = 0; idx < cfg->num_rsts; idx++)
+		udphy->rsts[idx].id = cfg->rst_list[idx];
 
-		rst = devm_reset_control_get(dev, name);
-		if (IS_ERR(rst)) {
-			dev_err(dev, "failed to get %s reset\n", name);
-			devm_kfree(dev, (void *)udphy->rsts);
-			return PTR_ERR(rst);
-		}
-
-		udphy->rsts[idx] = rst;
-	}
-
-	return 0;
-}
-
-static int udphy_get_rst_idx(const char * const *list, int num, char *name)
-{
-	int idx;
-
-	for (idx = 0; idx < num; idx++) {
-		if (!strcmp(list[idx], name))
-			return idx;
-	}
-
-	return -EINVAL;
-}
-
-static int udphy_reset_assert(struct rockchip_udphy *udphy, char *name)
-{
-	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
-	int idx;
-
-	idx = udphy_get_rst_idx(cfg->rst_list, cfg->num_rsts, name);
-	if (idx < 0)
-		return idx;
-
-	return reset_control_assert(udphy->rsts[idx]);
-}
-
-static int udphy_reset_deassert(struct rockchip_udphy *udphy, char *name)
-{
-	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
-	int idx;
-
-	idx = udphy_get_rst_idx(cfg->rst_list, cfg->num_rsts, name);
-	if (idx < 0)
-		return idx;
-
-	return reset_control_deassert(udphy->rsts[idx]);
+	return devm_reset_control_bulk_get_exclusive(dev, cfg->num_rsts,
+						     udphy->rsts);
 }
 
 static void udphy_u3_port_disable(struct rockchip_udphy *udphy, u8 disable)
@@ -714,71 +692,60 @@ static int udphy_setup(struct rockchip_udphy *udphy)
 
 static int udphy_disable(struct rockchip_udphy *udphy)
 {
-	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
-	int i;
-
 	clk_bulk_disable_unprepare(udphy->num_clks, udphy->clks);
-
-	for (i = 0; i < cfg->num_rsts; i++)
-		reset_control_assert(udphy->rsts[i]);
+	udphy_reset_assert_all(udphy);
 
 	return 0;
 }
 
-static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy, struct device_node *np)
+static int udphy_parse_lane_mux_data(struct rockchip_udphy *udphy)
 {
-	struct property *prop;
-	int ret, i, len, num_lanes;
+	int ret, i, num_lanes;
 
-	prop = of_find_property(np, "rockchip,dp-lane-mux", &len);
-	if (!prop) {
-		dev_dbg(udphy->dev, "failed to find dp lane mux, following dp alt mode\n");
+	num_lanes = device_property_count_u32(udphy->dev, "rockchip,dp-lane-mux");
+	if (num_lanes < 0) {
+		dev_dbg(udphy->dev, "no dp-lane-mux, following dp alt mode\n");
 		udphy->mode = UDPHY_MODE_USB;
 		return 0;
 	}
 
-	num_lanes = len / sizeof(u32);
+	if (num_lanes != 2 && num_lanes != 4)
+		return dev_err_probe(udphy->dev, -EINVAL,
+				     "invalid number of lane mux\n");
 
-	if (num_lanes != 2 && num_lanes != 4) {
-		dev_err(udphy->dev, "invalid number of lane mux\n");
-		return -EINVAL;
-	}
-
-	ret = of_property_read_u32_array(np, "rockchip,dp-lane-mux", udphy->dp_lane_sel, num_lanes);
-	if (ret) {
-		dev_err(udphy->dev, "get dp lane mux failed\n");
-		return -EINVAL;
-	}
+	ret = device_property_read_u32_array(udphy->dev, "rockchip,dp-lane-mux",
+					     udphy->dp_lane_sel, num_lanes);
+	if (ret)
+		return dev_err_probe(udphy->dev, ret, "get dp lane mux failed\n");
 
 	for (i = 0; i < num_lanes; i++) {
 		int j;
 
-		if (udphy->dp_lane_sel[i] > 3) {
-			dev_err(udphy->dev, "lane mux between 0 and 3, exceeding the range\n");
-			return -EINVAL;
-		}
+		if (udphy->dp_lane_sel[i] > 3)
+			return dev_err_probe(udphy->dev, -EINVAL,
+					     "lane mux between 0 and 3, exceeding the range\n");
 
 		udphy->lane_mux_sel[udphy->dp_lane_sel[i]] = PHY_LANE_MUX_DP;
 
 		for (j = i + 1; j < num_lanes; j++) {
-			if (udphy->dp_lane_sel[i] == udphy->dp_lane_sel[j]) {
-				dev_err(udphy->dev, "set repeat lane mux value\n");
-				return -EINVAL;
-			}
+			if (udphy->dp_lane_sel[i] == udphy->dp_lane_sel[j])
+				return dev_err_probe(udphy->dev, -EINVAL,
+						"set repeat lane mux value\n");
 		}
 	}
 
 	udphy->mode = UDPHY_MODE_DP;
-	if (num_lanes == 2)
+	if (num_lanes == 2) {
 		udphy->mode |= UDPHY_MODE_USB;
+		udphy->flip = (udphy->lane_mux_sel[0] == PHY_LANE_MUX_DP);
+	}
 
 	return 0;
 }
 
 static int udphy_get_initial_status(struct rockchip_udphy *udphy)
 {
-	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
-	int ret, i;
+	int ret;
 	u32 value;
 
 	ret = clk_bulk_prepare_enable(udphy->num_clks, udphy->clks);
@@ -787,8 +754,7 @@ static int udphy_get_initial_status(struct rockchip_udphy *udphy)
 		return ret;
 	}
 
-	for (i = 0; i < cfg->num_rsts; i++)
-		reset_control_deassert(udphy->rsts[i]);
+	udphy_reset_deassert_all(udphy);
 
 	regmap_read(udphy->pma_regmap, CMN_LANE_MUX_AND_EN_OFFSET, &value);
 	if (FIELD_GET(CMN_DP_LANE_MUX_ALL, value) && FIELD_GET(CMN_DP_LANE_EN_ALL, value))
@@ -799,53 +765,30 @@ static int udphy_get_initial_status(struct rockchip_udphy *udphy)
 	return 0;
 }
 
-static int udphy_parse_dt(struct rockchip_udphy *udphy, struct device *dev)
+static int udphy_parse_dt(struct rockchip_udphy *udphy)
 {
-	struct device_node *np = dev->of_node;
+	struct device *dev = udphy->dev;
+	struct device_node *np = dev_of_node(dev);
 	enum usb_device_speed maximum_speed;
 	int ret;
 
 	udphy->u2phygrf = syscon_regmap_lookup_by_phandle(np, "rockchip,u2phy-grf");
-	if (IS_ERR(udphy->u2phygrf)) {
-		if (PTR_ERR(udphy->u2phygrf) == -ENODEV) {
-			dev_warn(dev, "missing u2phy-grf dt node\n");
-			udphy->u2phygrf = NULL;
-		} else {
-			return PTR_ERR(udphy->u2phygrf);
-		}
-	}
+	if (IS_ERR(udphy->u2phygrf))
+		return dev_err_probe(dev, PTR_ERR(udphy->u2phygrf), "failed to get u2phy-grf\n");
 
 	udphy->udphygrf = syscon_regmap_lookup_by_phandle(np, "rockchip,usbdpphy-grf");
-	if (IS_ERR(udphy->udphygrf)) {
-		if (PTR_ERR(udphy->udphygrf) == -ENODEV) {
-			dev_warn(dev, "missing usbdpphy-grf dt node\n");
-			udphy->udphygrf = NULL;
-		} else {
-			return PTR_ERR(udphy->udphygrf);
-		}
-	}
+	if (IS_ERR(udphy->udphygrf))
+		return dev_err_probe(dev, PTR_ERR(udphy->udphygrf), "failed to get usbdpphy-grf\n");
 
 	udphy->usbgrf = syscon_regmap_lookup_by_phandle(np, "rockchip,usb-grf");
-	if (IS_ERR(udphy->usbgrf)) {
-		if (PTR_ERR(udphy->usbgrf) == -ENODEV) {
-			dev_warn(dev, "missing usb-grf dt node\n");
-			udphy->usbgrf = NULL;
-		} else {
-			return PTR_ERR(udphy->usbgrf);
-		}
-	}
+	if (IS_ERR(udphy->usbgrf))
+		return dev_err_probe(dev, PTR_ERR(udphy->usbgrf), "failed to get usb-grf\n");
 
 	udphy->vogrf = syscon_regmap_lookup_by_phandle(np, "rockchip,vo-grf");
-	if (IS_ERR(udphy->vogrf)) {
-		if (PTR_ERR(udphy->vogrf) == -ENODEV) {
-			dev_warn(dev, "missing vo-grf dt node\n");
-			udphy->vogrf = NULL;
-		} else {
-			return PTR_ERR(udphy->vogrf);
-		}
-	}
+	if (IS_ERR(udphy->vogrf))
+		return dev_err_probe(dev, PTR_ERR(udphy->vogrf), "failed to get vo-grf\n");
 
-	ret = udphy_parse_lane_mux_data(udphy, np);
+	ret = udphy_parse_lane_mux_data(udphy);
 	if (ret)
 		return ret;
 
@@ -1210,18 +1153,18 @@ static void udphy_typec_mux_unregister(void *data)
 	typec_mux_unregister(udphy->mux);
 }
 
-static u32 udphy_dp_get_max_link_rate(struct rockchip_udphy *udphy, struct device_node *np)
+static u32 udphy_dp_get_max_link_rate(struct rockchip_udphy *udphy, struct fwnode_handle *np)
 {
 	u32 max_link_rate;
 	int ret;
 
-	ret = of_property_read_u32(np, "max-link-rate", &max_link_rate);
+	ret = fwnode_property_read_u32(np, "max-link-rate", &max_link_rate);
 	if (ret)
 		return 8100;
 
 	ret = rockchip_dp_phy_verify_link_rate(max_link_rate);
 	if (ret) {
-		dev_warn(udphy->dev, "invalid max-link-rate value:%d\n", max_link_rate);
+		dev_warn(udphy->dev, "invalid max-link-rate: %d\n", max_link_rate);
 		max_link_rate = 8100;
 	}
 
@@ -1239,8 +1182,7 @@ static const struct regmap_config rockchip_udphy_pma_regmap_cfg = {
 static int rockchip_udphy_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
-	struct device_node *child_np;
+	struct fwnode_handle *child;
 	struct phy_provider *phy_provider;
 	struct resource *res;
 	struct rockchip_udphy *udphy;
@@ -1252,16 +1194,14 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 	if (!udphy)
 		return -ENOMEM;
 
-	id = of_alias_get_id(dev->of_node, "usbdp");
+	id = of_alias_get_id(dev_of_node(dev), "usbdp");
 	if (id < 0)
 		id = 0;
 	udphy->id = id;
 
 	phy_cfgs = device_get_match_data(dev);
-	if (!phy_cfgs) {
-		dev_err(dev, "no OF data can be matched with %p node\n", np);
-		return -EINVAL;
-	}
+	if (!phy_cfgs)
+		return dev_err_probe(dev, -EINVAL, "missing match data\n");
 
 	udphy->cfgs = phy_cfgs;
 
@@ -1274,7 +1214,8 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 	if (IS_ERR(udphy->pma_regmap))
 		return PTR_ERR(udphy->pma_regmap);
 
-	ret = udphy_parse_dt(udphy, dev);
+	udphy->dev = dev;
+	ret = udphy_parse_dt(udphy);
 	if (ret)
 		return ret;
 
@@ -1283,7 +1224,6 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 		return ret;
 
 	mutex_init(&udphy->mutex);
-	udphy->dev = dev;
 	platform_set_drvdata(pdev, udphy);
 
 	if (device_property_present(dev, "orientation-switch")) {
@@ -1306,41 +1246,41 @@ static int rockchip_udphy_probe(struct platform_device *pdev)
 			return ret;
 	}
 
-	for_each_available_child_of_node(np, child_np) {
+	fwnode_for_each_available_child_node(dev_fwnode(dev), child) {
+		const char *name = fwnode_get_name(child);
 		struct phy *phy;
 
-		if (of_node_name_eq(child_np, "dp-port")) {
-			phy = devm_phy_create(dev, child_np, &rockchip_dp_phy_ops);
+		if (!strcmp(name, "dp-port")) {
+			phy = devm_phy_create(dev, to_of_node(child), &rockchip_dp_phy_ops);
 			if (IS_ERR(phy)) {
-				dev_err(dev, "failed to create dp phy: %pOFn\n", child_np);
-				goto put_child;
+				fwnode_handle_put(child);
+				ret = PTR_ERR(phy);
+				return dev_err_probe(dev, ret, "failed to create dp phy: %pfwP\n", child);
 			}
 
 			phy_set_bus_width(phy, udphy_dplane_get(udphy));
-			phy->attrs.max_link_rate = udphy_dp_get_max_link_rate(udphy, child_np);
-		} else if (of_node_name_eq(child_np, "usb3-port")) {
-			phy = devm_phy_create(dev, child_np, &rockchip_u3phy_ops);
+			phy->attrs.max_link_rate = udphy_dp_get_max_link_rate(udphy, child);
+		} else if (!strcmp(name, "usb3-port")) {
+			phy = devm_phy_create(dev, to_of_node(child), &rockchip_u3phy_ops);
 			if (IS_ERR(phy)) {
-				dev_err(dev, "failed to create usb phy: %pOFn\n", child_np);
-				goto put_child;
+				fwnode_handle_put(child);
+				ret = PTR_ERR(phy);
+				return dev_err_probe(dev, ret, "failed to create usb phy: %pfwP\n", child);
 			}
-		} else
+		} else {
 			continue;
+		}
 
 		phy_set_drvdata(phy, udphy);
 	}
 
 	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(phy_provider)) {
-		dev_err(dev, "failed to register phy provider\n");
-		goto put_child;
+		ret = PTR_ERR(phy_provider);
+		return dev_err_probe(dev, ret, "failed to register phy provider\n");
 	}
 
 	return 0;
-
-put_child:
-	of_node_put(child_np);
-	return ret;
 }
 
 static int rk3588_udphy_refclk_set(struct rockchip_udphy *udphy)
@@ -1388,9 +1328,7 @@ static int rk3588_udphy_status_check(struct rockchip_udphy *udphy)
 			dev_err(udphy->dev, "cmn ana lcpll lock timeout\n");
 			return ret;
 		}
-	}
 
-	if (udphy->mode & UDPHY_MODE_USB) {
 		if (!udphy->flip) {
 			ret = regmap_read_poll_timeout(udphy->pma_regmap,
 						       TRSV_LN0_MON_RX_CDR_DONE_OFFSET, val,
@@ -1416,6 +1354,9 @@ static int rk3588_udphy_init(struct rockchip_udphy *udphy)
 	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
 	int ret;
 
+	udphy_reset_assert_all(udphy);
+	usleep_range(10000, 11000);
+
 	/* enable rx lfps for usb */
 	if (udphy->mode & UDPHY_MODE_USB)
 		grfreg_write(udphy->udphygrf, &cfg->grfcfg.rx_lfps, true);
@@ -1431,13 +1372,13 @@ static int rk3588_udphy_init(struct rockchip_udphy *udphy)
 				     ARRAY_SIZE(rk3588_udphy_init_sequence));
 	if (ret) {
 		dev_err(udphy->dev, "init sequence set error %d\n", ret);
-		goto assert_apb;
+		goto assert_resets;
 	}
 
 	ret = rk3588_udphy_refclk_set(udphy);
 	if (ret) {
 		dev_err(udphy->dev, "refclk set error %d\n", ret);
-		goto assert_apb;
+		goto assert_resets;
 	}
 
 	/* Step 3: configure lane mux */
@@ -1470,18 +1411,12 @@ static int rk3588_udphy_init(struct rockchip_udphy *udphy)
 	/*  Step 6: wait for lock done of pll */
 	ret = rk3588_udphy_status_check(udphy);
 	if (ret)
-		goto assert_phy;
+		goto assert_resets;
 
 	return 0;
 
-assert_phy:
-	udphy_reset_assert(udphy, "init");
-	udphy_reset_assert(udphy, "cmn");
-	udphy_reset_assert(udphy, "lane");
-
-assert_apb:
-	udphy_reset_assert(udphy, "pma_apb");
-	udphy_reset_assert(udphy, "pcs_apb");
+assert_resets:
+	udphy_reset_assert_all(udphy);
 	return ret;
 }
 
@@ -1590,12 +1525,16 @@ static int rk3588_dp_phy_set_rate(struct rockchip_udphy *udphy,
 static void rk3588_dp_phy_set_voltage(struct rockchip_udphy *udphy, u8 bw,
 				      u32 voltage, u32 pre, u32 lane)
 {
-	u32 offset = 0x800 * lane;
-	u32 val;
 	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
 	const struct dp_tx_drv_ctrl (*dp_ctrl)[4];
+	u32 offset = 0x800 * lane;
+	u32 val;
 
-	dp_ctrl = udphy->mux ? cfg->dp_tx_ctrl_cfg_typec[bw] : cfg->dp_tx_ctrl_cfg[bw];
+	if (udphy->mux)
+		dp_ctrl = cfg->dp_tx_ctrl_cfg_typec[bw];
+	else
+		dp_ctrl = cfg->dp_tx_ctrl_cfg[bw];
+
 	val = dp_ctrl[voltage][pre].trsv_reg0204;
 	regmap_write(udphy->pma_regmap, 0x0810 + offset, val);
 
@@ -1612,10 +1551,11 @@ static void rk3588_dp_phy_set_voltage(struct rockchip_udphy *udphy, u8 bw,
 static int rk3588_dp_phy_set_voltages(struct rockchip_udphy *udphy,
 				      struct phy_configure_opts_dp *dp)
 {
-	u32 i, lane;
+	u32 i;
 
 	for (i = 0; i < dp->lanes; i++) {
-		lane = udphy->dp_lane_sel[i];
+		u32 lane = udphy->dp_lane_sel[i];
+
 		switch (dp->link_rate) {
 		case 1620:
 		case 2700:

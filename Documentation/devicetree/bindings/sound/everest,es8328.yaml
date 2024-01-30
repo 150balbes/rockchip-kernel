@@ -47,7 +47,7 @@ properties:
   PVDD-supply:
     description: Regulator providing digital IO supply voltage 1.8 - 3.6V
 
-  IPVDD-supply:
+  HPVDD-supply:
     description: Regulator providing analog output voltage 3.3V
 
 required:
@@ -56,7 +56,7 @@ required:
   - DVDD-supply
   - AVDD-supply
   - PVDD-supply
-  - IPVDD-supply
+  - HPVDD-supply
 
 additionalProperties: false
 

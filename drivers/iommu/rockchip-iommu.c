@@ -85,7 +85,6 @@ struct rk_iommu_domain {
 	dma_addr_t dt_dma;
 	spinlock_t iommus_lock; /* lock for iommus list */
 	spinlock_t dt_lock; /* lock for modifying page directory table */
-	bool shootdown_entire;
 
 	struct iommu_domain domain;
 };
@@ -114,9 +113,6 @@ struct rk_iommu {
 	struct iommu_device iommu;
 	struct list_head node; /* entry in rk_iommu_domain.iommus */
 	struct iommu_domain *domain; /* domain to which iommu is attached */
-	struct iommu_group *group;
-	bool shootdown_entire;
-	bool dlr_disable; /* avoid access iommu when runtime ops called */
 };
 
 struct rk_iommudata {
@@ -803,8 +799,7 @@ static int rk_iommu_map_iova(struct rk_iommu_domain *rk_domain, u32 *pte_addr,
 	 * We only zap the first and last iova, since only they could have
 	 * dte or pte shared with an existing mapping.
 	 */
-	if (!rk_domain->shootdown_entire)
-		rk_iommu_zap_iova_first_last(rk_domain, iova, size);
+	rk_iommu_zap_iova_first_last(rk_domain, iova, size);
 
 	return 0;
 unwind:
@@ -1037,7 +1032,6 @@ static int rk_iommu_attach_device(struct iommu_domain *domain,
 	list_add_tail(&iommu->node, &rk_domain->iommus);
 	spin_unlock_irqrestore(&rk_domain->iommus_lock, flags);
 
-	rk_domain->shootdown_entire = iommu->shootdown_entire;
 	ret = pm_runtime_get_if_in_use(iommu->dev);
 	if (!ret || WARN_ON_ONCE(ret < 0))
 		return 0;
@@ -1234,10 +1228,6 @@ static int rk_iommu_probe(struct platform_device *pdev)
 
 	iommu->reset_disabled = device_property_read_bool(dev,
 					"rockchip,disable-mmu-reset");
-	iommu->dlr_disable = device_property_read_bool(dev,
-						       "rockchip,disable-device-link-resume");
-	iommu->shootdown_entire = device_property_read_bool(dev,
-							    "rockchip,shootdown-entire");
 
 	iommu->num_clocks = ARRAY_SIZE(rk_iommu_clocks);
 	iommu->clocks = devm_kcalloc(iommu->dev, iommu->num_clocks,
@@ -1328,9 +1318,6 @@ static int __maybe_unused rk_iommu_suspend(struct device *dev)
 	if (iommu->domain == &rk_identity_domain)
 		return 0;
 
-	if (iommu->dlr_disable)
-		return 0;
-
 	rk_iommu_disable(iommu);
 	return 0;
 }
@@ -1340,9 +1327,6 @@ static int __maybe_unused rk_iommu_resume(struct device *dev)
 	struct rk_iommu *iommu = dev_get_drvdata(dev);
 
 	if (iommu->domain == &rk_identity_domain)
-		return 0;
-
-	if (iommu->dlr_disable)
 		return 0;
 
 	return rk_iommu_enable(iommu);

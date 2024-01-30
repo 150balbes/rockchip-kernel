@@ -131,9 +131,9 @@ allOf:
             const: sinowealth,sh1106
     then:
       properties:
-        solomon,width:
+        width:
           default: 132
-        solomon,height:
+        height:
           default: 64
         solomon,dclk-div:
           default: 1
@@ -149,9 +149,9 @@ allOf:
               - solomon,ssd1305
     then:
       properties:
-        solomon,width:
+        width:
           default: 132
-        solomon,height:
+        height:
           default: 64
         solomon,dclk-div:
           default: 1
@@ -167,9 +167,9 @@ allOf:
               - solomon,ssd1306
     then:
       properties:
-        solomon,width:
+        width:
           default: 128
-        solomon,height:
+        height:
           default: 64
         solomon,dclk-div:
           default: 1
@@ -185,9 +185,9 @@ allOf:
               - solomon,ssd1307
     then:
       properties:
-        solomon,width:
+        width:
           default: 128
-        solomon,height:
+        height:
           default: 39
         solomon,dclk-div:
           default: 2
@@ -205,9 +205,9 @@ allOf:
               - solomon,ssd1309
     then:
       properties:
-        solomon,width:
+        width:
           default: 128
-        solomon,height:
+        height:
           default: 64
         solomon,dclk-div:
           default: 1

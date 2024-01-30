@@ -1,0 +1,73 @@
+device_type:  rk3588-rock-5b
+
+job_name: Hardware enablement tests {{job.CI_JOB_ID}}
+timeouts:
+  job:
+    minutes: 15
+  action:
+   minutes: 5
+priority: high
+visibility: public
+
+context:
+  extra_kernel_args: rootwait
+
+actions:
+  - deploy:
+      timeout:
+        minutes: 2
+      to: tftp
+      kernel:
+        url: "{{job.CI_PROJECT_URL}}/-/jobs/%%KERNEL_BUILD_JOB%%/artifacts/raw/vmlinuz"
+        type: image
+      modules:
+        url: "{{job.CI_PROJECT_URL}}/-/jobs/%%KERNEL_BUILD_JOB%%/artifacts/raw/modules.tar.gz"
+        compression: gz
+      dtb:
+        url: "{{job.CI_PROJECT_URL}}/-/jobs/%%KERNEL_BUILD_JOB%%/artifacts/raw/dtbs/rockchip/rk3588-rock-5b.dtb"
+      ramdisk:
+        url: https://gitlab.collabora.com/sre/health-check-images/-/jobs/artifacts/bookworm/raw/bookworm/bookworm-rootfs-arm64-initramfs.gz?job=build+bookworm+image:+%5Barm64,+rootfs%5D
+        compression: gz
+      nfsrootfs:
+        url: https://gitlab.collabora.com/sre/health-check-images/-/jobs/artifacts/bookworm/raw/bookworm/bookworm-rootfs-arm64.tar.gz?job=build+bookworm+image:+%5Barm64,+rootfs%5D
+        compression: gz
+
+  - boot:
+      method: u-boot
+      commands: nfs
+      timeout:
+        minutes: 10
+      auto_login:
+        login_prompt: 'login:'
+        username: user
+        password_prompt: 'Password:'
+        password: user
+        login_commands:
+          - sudo su
+          - env
+          - systemctl --failed
+      prompts:
+        - 'user@health(.*)$'
+        - 'root@health(.*)#'
+
+  - test:
+      timeout:
+        minutes: 1
+      definitions:
+      - repository:
+          metadata:
+            format: Lava-Test Test Definition 1.0
+            name: health
+            description: "health check"
+            os:
+              - apertis
+            scope:
+              - functional
+            environment:
+              - lava-test-shell
+          run:
+            steps:
+              - ip a s
+        from: inline
+        name: network
+        path: inline/health.yaml

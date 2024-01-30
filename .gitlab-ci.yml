@@ -1,0 +1,109 @@
+default:
+  image: debian:testing
+  tags:
+    - bookworm
+
+stages:
+  - build
+  - test
+  - generate
+  - lava
+
+.build debian package:
+  stage: build
+  tags:
+    - ultra-heavyweight
+  cache:
+    when: on_success
+    key: $CI_COMMIT_REF_SLUG
+    paths:
+      - ccache
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    GIT_SUBMODULE_STRATEGY: normal
+    ARCH: amd64
+    DEFCONFIG: defconfig
+    CCACHE_BASEDIR: $CI_PROJECT_DIR
+    CCACHE_DIR: $CI_PROJECT_DIR/ccache
+  before_script:
+    - apt update
+    - apt install -y devscripts
+                     build-essential
+                     crossbuild-essential-arm64
+                     bc
+                     bison
+                     ccache
+                     flex
+                     rsync
+                     kmod
+                     cpio
+                     libelf-dev
+                     libssl-dev
+    # Setup ccache
+    - export PATH="/usr/lib/ccache:$PATH"
+    - ccache -s
+  script:
+    - make $DEFCONFIG
+    - ./scripts/config -e WLAN -e WLAN_VENDOR_BROADCOM -m BRCMUTIL -m BRCMFMAC
+                       -e BRCMFMAC_PROTO_BCDC -e BRCMFMAC_PROTO_MSGBUF
+                       -e BRCMFMAC_USB
+                       -e WLAN_VENDOR_REALTEK -m RTW89 -m RTW89_CORE
+                       -m RTW89_PCI -m RTW89_8825B -m RTW89_8852BE
+                       -m BINFMT_MISC
+    - make -j$(nproc) $ADDITIONAL_BUILD_CMD bindeb-pkg
+    - mkdir artifacts && dcmd mv ../*.changes artifacts/
+  artifacts:
+    paths:
+      - artifacts
+
+build arm64 debian package:
+  extends: .build debian package
+  variables:
+    ARCH: arm64
+    CROSS_COMPILE: aarch64-linux-gnu-
+    ADDITIONAL_BUILD_CMD: KBUILD_IMAGE=arch/arm64/boot/Image
+
+generate tests:
+  image: debian:bookworm-slim
+  stage: generate
+  tags:
+    - lightweight
+  variables:
+    GIT_STRATEGY: fetch
+    GIT_DEPTH: "1"
+  needs:
+    - "build arm64 debian package"
+  before_script:
+    - apt update
+    - apt install -y wget
+  script:
+    - mkdir deb
+    - "for x in artifacts/linux-image*.deb ; do dpkg -x ${x} deb ; done"
+    - cp deb/boot/vmlinuz* vmlinuz
+    - mkdir -p deb/lib/firmware/arm/mali/arch10.8
+    - wget -O deb/lib/firmware/arm/mali/arch10.8/mali_csffw.bin "https://gitlab.com/firefly-linux/external/libmali/-/raw/firefly/firmware/g610/mali_csffw.bin"
+    - tar -f modules.tar.gz  -C deb  -c -z -v lib/modules lib/firmware
+    - mkdir dtbs
+    - cp -r deb/usr/lib/linux-image*/* dtbs
+    - sed -i s,%%KERNEL_BUILD_JOB%%,${CI_JOB_ID},g lava/testjob.yaml
+  artifacts:
+    paths:
+      - vmlinuz*
+      - modules.tar.gz
+      - dtbs
+      - lava/testjob.yaml
+
+lava test:
+  stage: lava
+  tags:
+    - lava-runner
+  script:
+    - submit lava/testjob.yaml
+  needs:
+    - "generate tests"
+  artifacts:
+    when: always
+    paths:
+      - "*"
+    reports:
+      junit: "*.xml"

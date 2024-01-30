@@ -1106,12 +1106,14 @@ void panthor_fw_unplug(struct panthor_device *ptdev)
 
 	panthor_fw_stop(ptdev);
 
-	if (ptdev->fw->vm)
-		panthor_vm_idle(ptdev->fw->vm);
-
 	list_for_each_entry(section, &ptdev->fw->sections, node)
 		panthor_kernel_bo_destroy(panthor_fw_vm(ptdev), section->mem);
 
+	/* We intentionally don't call panthor_vm_idle() and let
+	 * panthor_mmu_unplug() release the AS we acquired with
+	 * panthor_vm_active() so we don't have to track the VM active/idle
+	 * state to keep the active_refcnt balanced.
+	 */
 	panthor_vm_put(ptdev->fw->vm);
 
 	panthor_gpu_power_off(ptdev, L2, ptdev->gpu_info.l2_present, 20000);

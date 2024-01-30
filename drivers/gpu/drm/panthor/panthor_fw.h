@@ -209,7 +209,7 @@ struct panthor_fw_global_input_iface {
 #define GLB_CFG_POWEROFF_TIMER			BIT(3)
 #define GLB_PROTM_ENTER				BIT(4)
 #define GLB_PERFCNT_EN				BIT(5)
-#define GLB_PERFCNT_SAMPLER			BIT(6)
+#define GLB_PERFCNT_SAMPLE			BIT(6)
 #define GLB_COUNTER_EN				BIT(7)
 #define GLB_PING				BIT(8)
 #define GLB_FWCFG_UPDATE			BIT(9)

@@ -19,8 +19,12 @@
 #include <linux/clk-provider.h>
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
+#include <linux/of_platform.h>
+#include <linux/pm_clock.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reboot.h>
+#include <linux/platform_device.h>
 
 #include "../clk-fractional-divider.h"
 #include "clk.h"
@@ -376,7 +380,7 @@ struct rockchip_clk_provider *rockchip_clk_init(struct device_node *np,
 		goto err_free;
 
 	for (i = 0; i < nr_clks; ++i)
-		clk_table[i] = ERR_PTR(-ENOENT);
+		clk_table[i] = ERR_PTR(-EPROBE_DEFER);
 
 	ctx->reg_base = base;
 	ctx->clk_data.clks = clk_table;
@@ -428,6 +432,83 @@ void rockchip_clk_register_plls(struct rockchip_clk_provider *ctx,
 	}
 }
 EXPORT_SYMBOL_GPL(rockchip_clk_register_plls);
+
+unsigned long rockchip_clk_find_max_clk_id(struct rockchip_clk_branch *list,
+					   unsigned int nr_clk)
+{
+	unsigned long max = 0;
+	unsigned int idx;
+
+	for (idx = 0; idx < nr_clk; idx++, list++) {
+		if (list->id > max)
+			max = list->id;
+		if (list->child && list->child->id > max)
+			max = list->id;
+	}
+
+	return max;
+}
+EXPORT_SYMBOL_GPL(rockchip_clk_find_max_clk_id);
+
+static struct platform_device *rockchip_clk_register_pdev(
+		struct platform_device *parent,
+		const char *name,
+		struct device_node *np)
+{
+	struct platform_device_info pdevinfo = {
+		.parent = &parent->dev,
+		.name = name,
+		.fwnode = of_fwnode_handle(np),
+		.of_node_reused = true,
+	};
+
+	return platform_device_register_full(&pdevinfo);
+}
+
+static struct clk *rockchip_clk_register_linked_gate(
+	struct rockchip_clk_provider *ctx,
+	struct rockchip_clk_branch *clkbr)
+{
+	struct clk *linked_clk = ctx->clk_data.clks[clkbr->linked_clk_id];
+	unsigned long flags = clkbr->flags | CLK_SET_RATE_PARENT;
+	struct device_node *np = ctx->cru_node;
+	struct platform_device *parent, *pdev;
+	struct device *dev = NULL;
+	int ret;
+
+	parent = of_find_device_by_node(np);
+	if (!parent) {
+		pr_err("failed to find device for %pOF\n", np);
+		goto exit;
+	}
+
+	pdev = rockchip_clk_register_pdev(parent, clkbr->name, np);
+	put_device(&parent->dev);
+	if (!pdev) {
+		pr_err("failed to register device for clock %s\n", clkbr->name);
+		goto exit;
+	}
+
+	dev = &pdev->dev;
+	pm_runtime_enable(dev);
+	ret = pm_clk_create(dev);
+	if (ret) {
+		pr_err("failed to create PM clock list for %s\n", clkbr->name);
+		goto exit;
+	}
+
+	ret = pm_clk_add_clk(dev, linked_clk);
+	if (ret) {
+		pr_err("failed to setup linked clock for %s\n", clkbr->name);
+	}
+
+exit:
+	return clk_register_gate(dev, clkbr->name,
+				 clkbr->parent_names[0], flags,
+				 ctx->reg_base + clkbr->gate_offset,
+				 clkbr->gate_shift, clkbr->gate_flags,
+				 &ctx->lock);
+}
 
 void rockchip_clk_register_branches(struct rockchip_clk_provider *ctx,
 				    struct rockchip_clk_branch *list,
@@ -509,12 +590,8 @@ void rockchip_clk_register_branches(struct rockchip_clk_provider *ctx,
 				ctx->reg_base + list->gate_offset,
 				list->gate_shift, list->gate_flags, &ctx->lock);
 			break;
-
-		case branch_gate_link:
-			clk = rockchip_clk_register_gate_link(ctx, list->name,
-				list->parent_names[0], list->link_id, flags,
-				ctx->reg_base + list->gate_offset,
-				list->gate_shift, list->gate_flags, &ctx->lock);
+		case branch_linked_gate:
+			clk = rockchip_clk_register_linked_gate(ctx, list);
 			break;
 		case branch_composite:
 			clk = rockchip_clk_register_branch(list->name,

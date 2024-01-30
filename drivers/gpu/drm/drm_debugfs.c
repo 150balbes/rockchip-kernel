@@ -45,6 +45,8 @@
 #include "drm_crtc_internal.h"
 #include "drm_internal.h"
 
+#if defined(CONFIG_DEBUG_FS)
+
 /***************************************************
  * Initialization, etc.
  **************************************************/
@@ -645,3 +647,5 @@ void drm_debugfs_encoder_remove(struct drm_encoder *encoder)
 	debugfs_remove_recursive(encoder->debugfs_entry);
 	encoder->debugfs_entry = NULL;
 }
+
+#endif /* CONFIG_DEBUG_FS */

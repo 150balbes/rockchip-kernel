@@ -1692,21 +1692,6 @@ static struct platform_driver rockchip_thermal_driver = {
 	.remove_new = rockchip_thermal_remove,
 };
 
-int rk_get_temperature(void)
-{
-	int temp;
-//	int ret;
-
-//	ret = rockchip_thermal_get_temp(g_tsensor_data_ptr, &temp);
-//		if (ret) {
-//			pr_debug("rk_get_temp failed!\n");
-//			return ret;
-//		}
-	temp = 100000;
-	return temp / 1000;
-}
-EXPORT_SYMBOL(rk_get_temperature);
-
 module_platform_driver(rockchip_thermal_driver);
 
 MODULE_DESCRIPTION("ROCKCHIP THERMAL Driver");

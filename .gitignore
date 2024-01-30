@@ -96,12 +96,14 @@ modules.order
 #
 !.clang-format
 !.cocciconfig
+!.editorconfig
 !.get_maintainer.ignore
 !.gitattributes
 !.gitignore
 !.kunitconfig
 !.mailmap
 !.rustfmt.toml
+!.gitlab-ci.yml
 
 #
 # Generated include files

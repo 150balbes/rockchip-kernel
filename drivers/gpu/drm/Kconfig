@@ -42,7 +42,7 @@ config DRM_MIPI_DSI
 config DRM_DEBUG_MM
 	bool "Insert extra checks and debug info into the DRM range managers"
 	default n
-	depends on DRM
+	depends on DRM=y
 	depends on STACKTRACE_SUPPORT
 	select STACKDEPOT
 	help
@@ -276,6 +276,8 @@ source "drivers/gpu/drm/nouveau/Kconfig"
 
 source "drivers/gpu/drm/i915/Kconfig"
 
+source "drivers/gpu/drm/xe/Kconfig"
+
 source "drivers/gpu/drm/kmb/Kconfig"
 
 config DRM_VGEM
@@ -287,7 +289,19 @@ config DRM_VGEM
 	  as used by Mesa's software renderer for enhanced performance.
 	  If M is selected the module will be called vgem.
 
-source "drivers/gpu/drm/vkms/Kconfig"
+config DRM_VKMS
+	tristate "Virtual KMS (EXPERIMENTAL)"
+	depends on DRM && MMU
+	select DRM_KMS_HELPER
+	select DRM_GEM_SHMEM_HELPER
+	select CRC32
+	default n
+	help
+	  Virtual Kernel Mode-Setting (VKMS) is used for testing or for
+	  running GPU in a headless machines. Choose this option to get
+	  a VKMS.
+
+	  If M is selected the module will be called vkms.
 
 source "drivers/gpu/drm/exynos/Kconfig"
 

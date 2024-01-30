@@ -517,7 +517,7 @@ enum rockchip_clk_branch_type {
 	branch_divider,
 	branch_fraction_divider,
 	branch_gate,
-	branch_gate_link,
+	branch_linked_gate,
 	branch_mmc,
 	branch_inverter,
 	branch_factor,
@@ -530,7 +530,6 @@ struct rockchip_clk_branch {
 	enum rockchip_clk_branch_type	branch_type;
 	const char			*name;
 	const char			*const *parent_names;
-	unsigned int			link_id;
 	u8				num_parents;
 	unsigned long			flags;
 	int				muxdiv_offset;
@@ -546,6 +545,7 @@ struct rockchip_clk_branch {
 	int				gate_offset;
 	u8				gate_shift;
 	u8				gate_flags;
+	unsigned int			linked_clk_id;
 	struct rockchip_clk_branch	*child;
 };
 
@@ -844,14 +844,14 @@ struct rockchip_clk_branch {
 		.gate_flags	= gf,				\
 	}
 
-#define GATE_LINK(_id, cname, pname, _linkid, f, o, b, gf) \
+#define GATE_LINK(_id, cname, pname, linkedclk, f, o, b, gf)	\
 	{							\
 		.id		= _id,				\
-		.branch_type	= branch_gate_link,		\
+		.branch_type	= branch_linked_gate,		\
 		.name		= cname,			\
 		.parent_names	= (const char *[]){ pname },	\
+		.linked_clk_id	= linkedclk,			\
 		.num_parents	= 1,				\
-		.link_id	= _linkid,			\
 		.flags		= f,				\
 		.gate_offset	= o,				\
 		.gate_shift	= b,				\
@@ -989,6 +989,8 @@ struct rockchip_clk_provider *rockchip_clk_init(struct device_node *np,
 			void __iomem *base, unsigned long nr_clks);
 void rockchip_clk_of_add_provider(struct device_node *np,
 				struct rockchip_clk_provider *ctx);
+unsigned long rockchip_clk_find_max_clk_id(struct rockchip_clk_branch *list,
+					   unsigned int nr_clk);
 void rockchip_clk_register_branches(struct rockchip_clk_provider *ctx,
 				    struct rockchip_clk_branch *list,
 				    unsigned int nr_clk);
@@ -1017,12 +1019,6 @@ struct clk *rockchip_clk_register_halfdiv(const char *name,
 					  u8 gate_shift, u8 gate_flags,
 					  unsigned long flags,
 					  spinlock_t *lock);
-
-struct clk *rockchip_clk_register_gate_link(struct rockchip_clk_provider *ctx,
-					    const char *name, const char *parent_name,
-					    unsigned int link_id, u8 flags,
-					    void __iomem *gate_offset, u8 gate_shift,
-					    u8 gate_flags, spinlock_t *lock);
 
 #ifdef CONFIG_RESET_CONTROLLER
 void rockchip_register_softrst_lut(struct device_node *np,
