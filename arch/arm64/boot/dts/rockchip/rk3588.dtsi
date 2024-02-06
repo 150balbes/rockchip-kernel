@@ -14,7 +14,7 @@
 		clocks = <&cru REF_CLK_USB3OTG1>, <&cru SUSPEND_CLK_USB3OTG1>,
 			 <&cru ACLK_USB3OTG1>;
 		clock-names = "ref_clk", "suspend_clk", "bus_clk";
-		dr_mode = "otg";
+		dr_mode = "host";
 		phys = <&u2phy1_otg>, <&usbdp_phy1_u3>;
 		phy-names = "usb2-phy", "usb3-phy";
 		phy_type = "utmi_wide";
