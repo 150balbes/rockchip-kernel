@@ -199,32 +199,92 @@
 		status = "okay";
 		compatible = "simple-audio-card";
 		rockchip,card-name = "rockchip-es8388";
-		hp-det-gpio = <&gpio1 RK_PC4 GPIO_ACTIVE_LOW>;
-//		io-channels = <&saradc 3>;
-		io-channel-names = "adc-detect";
-		spk-con-gpio = <&gpio3 RK_PB2 GPIO_ACTIVE_HIGH>;
-		hp-con-gpio = <&gpio4 RK_PB0 GPIO_ACTIVE_HIGH>;
-		linein-type = <0>;
+		hp-det-gpio = <&gpio1 RK_PA6 GPIO_ACTIVE_LOW>;
+		hp-con-gpio = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
+		hw-ver =<0x1>;
+		io-channels = <&saradc 5>;
+		io-channel-names = "hw-ver";
+		linein-type = <1>;
 		rockchip,format = "i2s";
 		rockchip,mclk-fs = <256>;
 		rockchip,cpu = <&i2s0_8ch>;
 		rockchip,codec = <&es8388>;
 		rockchip,audio-routing =
-			"Headphone", "LOUT1",
-			"Headphone", "ROUT1",
-			"Speaker", "LOUT2",
-			"Speaker", "ROUT2",
+			"Headphone", "LOUT2",
+			"Headphone", "ROUT2",
+			"Speaker", "LOUT1",
+			"Speaker", "ROUT1",
 			"Headphone", "Headphone Power",
 			"Headphone", "Headphone Power",
-			"Speaker", "Speaker Power",
-			"Speaker", "Speaker Power",
 			"LINPUT1", "Main Mic",
-			"LINPUT2", "Main Mic",
-			"RINPUT1", "Headset Mic",
+			"RINPUT1", "Main Mic",
+			"LINPUT2", "Headset Mic",
 			"RINPUT2", "Headset Mic";
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
 	};
+
+
+/*
+	es8388_sound: es8388-sound {
+		status = "okay";
+		compatible = "rockchip,multicodecs-card";
+		rockchip,card-name = "rockchip-es8388";
+		hp-det-gpio = <&gpio1 RK_PA6 GPIO_ACTIVE_LOW>;
+		hp-con-gpio = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
+		hw-ver =<0x1>;
+		io-channels = <&saradc 5>;
+		io-channel-names = "hw-ver";
+		linein-type = <1>;
+		rockchip,format = "i2s";
+		rockchip,mclk-fs = <384>;
+		rockchip,cpu = <&i2s0_8ch>;
+		rockchip,codec = <&es8388>;
+		rockchip,audio-routing =
+			"Headphone", "LOUT2",
+			"Headphone", "ROUT2",
+			"Speaker", "LOUT1",
+			"Speaker", "ROUT1",
+			"Headphone", "Headphone Power",
+			"Headphone", "Headphone Power",
+			"LINPUT1", "Main Mic",
+			"RINPUT1", "Main Mic",
+			"LINPUT2", "Headset Mic",
+			"RINPUT2", "Headset Mic";
+		pinctrl-names = "default";
+		pinctrl-0 = <&hp_det>;
+	};
+*/
+
+
+/*
+&es8388_sound {
+	status = "okay";
+	hp-det-gpio = <&gpio1 RK_PA6 GPIO_ACTIVE_LOW>;
+	hp-con-gpio = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
+
+//	/delete-property/ spk-con-gpio;
+	
+//	io-channels = <&saradc 5>;
+	io-channel-names = "hw-ver";
+	rockchip,audio-routing =
+			"Headphone", "LOUT2",
+			"Headphone", "ROUT2",
+			"Speaker", "LOUT1",
+			"Speaker", "ROUT1",
+			"Headphone", "Headphone Power",
+			"Headphone", "Headphone Power",
+			"LINPUT1", "Main Mic",
+			"LINPUT2", "Main Mic",
+			"RINPUT1", "Headset Mic",
+			"RINPUT2", "Headset Mic";
+	linein-type = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&hp_det>;
+};
+*/
+
+
 
 /*
 	analog-sound {
@@ -319,6 +379,10 @@
 	status = "okay";
 };
 
+&hdmi0_sound {
+	status = "okay";
+};
+
 &hdmi0_in {
 	hdmi0_in_vp0: endpoint {
 		remote-endpoint = <&vp0_out_hdmi0>;
@@ -395,7 +459,7 @@
 	es8388: es8388@11 {
 		status = "okay";
 		#sound-dai-cells = <0>;
-		compatible = "everest,es8388", "everest,es8323";
+		compatible = "everest,es8388";
 		reg = <0x11>;
 		clocks = <&cru I2S0_8CH_MCLKOUT>;
 		clock-names = "mclk";
@@ -425,39 +489,28 @@
 };
 */
 
-
-/* es8323 audio codec */
-&es8388_sound {
+&i2c4 {
 	status = "okay";
-	hp-det-gpio = <&gpio1 RK_PA6 GPIO_ACTIVE_LOW>;
-	hp-con-gpio = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
-
-	/delete-property/ spk-con-gpio;
-	
-//	io-channels = <&saradc 5>;
-	io-channel-names = "hw-ver";
-	rockchip,audio-routing =
-			"Headphone", "LOUT2",
-			"Headphone", "ROUT2",
-			"Speaker", "LOUT1",
-			"Speaker", "ROUT1",
-			"Headphone", "Headphone Power",
-			"Headphone", "Headphone Power",
-			"LINPUT1", "Main Mic",
-			"LINPUT2", "Main Mic",
-			"RINPUT1", "Headset Mic",
-			"RINPUT2", "Headset Mic";
-	linein-type = <1>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&hp_det>;
+	pinctrl-0 = <&i2c4m3_xfer>;
+};
+
+&i2c5 {
+	status = "disabled";
+};
+
+&i2c6 {
+	status = "okay";
+   	pinctrl-names = "default";
+    pinctrl-0 = <&i2c6m3_xfer>;
 };
 
 &i2s0_8ch {
 	status = "okay";
 	pinctrl-0 = <&i2s0_lrck
-				&i2s0_sclk
-				&i2s0_sdi0
-				&i2s0_sdo0>;
+		     &i2s0_sclk
+		     &i2s0_sdi0
+		     &i2s0_sdo0>;
 };
 
 /*
