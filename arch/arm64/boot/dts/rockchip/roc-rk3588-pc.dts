@@ -6,7 +6,7 @@
 
 /dts-v1/;
 
-#include "roc-rk3588-pc.dtsi"
+#include "roc-rk3588-pc.dts"
 //#include "roc-rk3588-pc-ext-bp.dtsi"
 
 / {
