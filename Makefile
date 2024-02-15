@@ -468,7 +468,6 @@ AWK		= awk
 INSTALLKERNEL  := installkernel
 DEPMOD		= depmod
 PERL		= perl
-PYTHON		= python2
 PYTHON3		= python3
 CHECK		= sparse
 BASH		= bash
@@ -534,7 +533,7 @@ CLANG_FLAGS :=
 
 export ARCH SRCARCH CONFIG_SHELL BASH HOSTCC KBUILD_HOSTCFLAGS CROSS_COMPILE LD CC
 export CPP AR NM STRIP OBJCOPY OBJDUMP READELF PAHOLE RESOLVE_BTFIDS LEX YACC AWK INSTALLKERNEL
-export PERL PYTHON PYTHON3 CHECK CHECKFLAGS MAKE UTS_MACHINE HOSTCXX
+export PERL PYTHON3 CHECK CHECKFLAGS MAKE UTS_MACHINE HOSTCXX
 export KGZIP KBZIP2 KLZOP LZMA LZ4 XZ ZSTD
 export KBUILD_HOSTCXXFLAGS KBUILD_HOSTLDFLAGS KBUILD_HOSTLDLIBS LDFLAGS_MODULE
 export KBUILD_USERCFLAGS KBUILD_USERLDFLAGS
@@ -562,7 +561,10 @@ PHONY += scripts_basic
 scripts_basic:
 	$(Q)$(MAKE) $(build)=scripts/basic
 	$(Q)rm -f .tmp_quiet_recordmcount
-
+	$(Q)if [ -d $(srctree)/.git/hooks ]; then \
+		cp $(srctree)/scripts/commit-msg $(srctree)/.git/hooks/; \
+		chmod +x $(srctree)/.git/hooks/commit-msg; \
+	fi
 PHONY += outputmakefile
 # Before starting out-of-tree build, make sure the source tree is clean.
 # outputmakefile generates a Makefile in the output directory, if using a
@@ -804,7 +806,7 @@ stackp-flags-$(CONFIG_STACKPROTECTOR_STRONG)      := -fstack-protector-strong
 
 KBUILD_CFLAGS += $(stackp-flags-y)
 
-#KBUILD_CFLAGS-$(CONFIG_WERROR) += -Werror
+KBUILD_CFLAGS-$(CONFIG_WERROR) += -Werror
 KBUILD_CFLAGS += $(KBUILD_CFLAGS-y)
 
 ifdef CONFIG_CC_IS_CLANG
@@ -1017,9 +1019,6 @@ KBUILD_CFLAGS += $(call cc-disable-warning, restrict)
 
 # Enabled with W=2, disabled by default as noisy
 KBUILD_CFLAGS += $(call cc-disable-warning, maybe-uninitialized)
-
-# Added because of Rockchip wireless lan drivers
-KBUILD_CFLAGS   += $(call cc-disable-warning, implicit-fallthrough)
 
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= -fno-strict-overflow
