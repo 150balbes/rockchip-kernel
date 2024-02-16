@@ -3420,7 +3420,7 @@ static int __init clk_debug_init(void)
 {
 	struct clk_core *core;
 
-#if 0
+#ifdef CLOCK_ALLOW_WRITE_DEBUGFS
 	pr_warn("\n");
 	pr_warn("********************************************************************\n");
 	pr_warn("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE           **\n");

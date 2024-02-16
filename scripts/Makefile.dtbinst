@@ -34,7 +34,6 @@ $(dst)/%.dtb: $(obj)/%.dtb
 $(dst)/%.dtbo: $(obj)/%.dtbo
 	$(call cmd,dtb_install)
 
-$(dst)/README.rockchip-overlays: $(src)/README.rockchip-overlays
 	$(call cmd,dtb_install)
 
 PHONY += $(subdirs)

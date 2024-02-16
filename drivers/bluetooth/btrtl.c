@@ -25,7 +25,6 @@
 #define RTL_ROM_LMP_8821A	0x8821
 #define RTL_ROM_LMP_8761A	0x8761
 #define RTL_ROM_LMP_8822B	0x8822
-#define RTL_ROM_LMP_8852A	0x8852
 #define RTL_CONFIG_MAGIC	0x8723ab55
 
 #define IC_MATCH_FL_LMPSUBV	(1 << 0)
@@ -123,18 +122,6 @@ static const struct id_table ic_id_table[] = {
 	  .fw_name  = "rtl_bt/rtl8821a_fw.bin",
 	  .cfg_name = "rtl_bt/rtl8821a_config" },
 
-	/* 8821C with UART interface -- more specific match is first */
-	{ .match_flags = IC_MATCH_FL_LMPSUBV | IC_MATCH_FL_HCIREV |
-			 IC_MATCH_FL_HCIBUS,
-	  .lmp_subver = RTL_ROM_LMP_8821A,
-	  .hci_rev = 0xc,
-	  .hci_ver = 0x8,
-	  .hci_bus = HCI_UART,
-	  .config_needed = true,
-	  .has_rom_version = true,
-	  .fw_name  = "rtl_bt/rtl8821cs_fw.bin",
-	  .cfg_name = "rtl_bt/rtl8821cs_config" },
-
 	/* 8821C */
 	{ IC_INFO(RTL_ROM_LMP_8821A, 0xc),
 	  .config_needed = false,
@@ -181,13 +168,6 @@ static const struct id_table ic_id_table[] = {
 	  .has_rom_version = true,
 	  .fw_name  = "rtl_bt/rtl8822b_fw.bin",
 	  .cfg_name = "rtl_bt/rtl8822b_config" },
-
-	/* 8852B */
-	{ IC_INFO(RTL_ROM_LMP_8852A, 0xb),
-	  .config_needed = false,
-	  .has_rom_version = true,
-	  .fw_name  = "rtl_bt/rtl8852bu_fw.bin",
-	  .cfg_name = "rtl_bt/rtl8852bu_config" },
 	};
 
 static const struct id_table *btrtl_match_ic(u16 lmp_subver, u16 hci_rev,
@@ -295,7 +275,6 @@ static int rtlbt_parse_firmware(struct hci_dev *hdev,
 		{ RTL_ROM_LMP_8821A, 10 },	/* 8821C */
 		{ RTL_ROM_LMP_8822B, 13 },	/* 8822C */
 		{ RTL_ROM_LMP_8761A, 14 },	/* 8761B */
-		{ RTL_ROM_LMP_8852A, 20 },	/* 8852B */
 	};
 
 	min_size = sizeof(struct rtl_epatch_header) + sizeof(extension_sig) + 3;
@@ -681,7 +660,6 @@ int btrtl_download_firmware(struct hci_dev *hdev,
 	case RTL_ROM_LMP_8821A:
 	case RTL_ROM_LMP_8761A:
 	case RTL_ROM_LMP_8822B:
-	case RTL_ROM_LMP_8852A:
 		return btrtl_setup_rtl8723b(hdev, btrtl_dev);
 	default:
 		rtl_dev_info(hdev, "assuming no firmware upload needed");
@@ -857,5 +835,3 @@ MODULE_FIRMWARE("rtl_bt/rtl8821a_fw.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8821a_config.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8822b_fw.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8822b_config.bin");
-MODULE_FIRMWARE("rtl_bt/rtl8852bu_fw.bin");
-MODULE_FIRMWARE("rtl_bt/rtl8852bu_config.bin");

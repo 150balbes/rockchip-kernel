@@ -358,15 +358,6 @@ static void handle_plugged_change(struct dw_hdmi *hdmi, bool plugged)
 {
 	if (hdmi->plugged_cb && hdmi->codec_dev)
 		hdmi->plugged_cb(hdmi->codec_dev, plugged);
-	if (plugged && hdmi->ddc) {
-               struct edid *edid = drm_get_edid(&hdmi->connector, hdmi->ddc);
-               if (edid) {
-                       if (hdmi->cec_notifier)
-                               cec_notifier_set_phys_addr_from_edid(
-                                       hdmi->cec_notifier, edid);
-                       kfree(edid);
-               }
-       }
 }
 
 int dw_hdmi_set_plugged_cb(struct dw_hdmi *hdmi, hdmi_codec_plugged_cb fn,
@@ -2337,7 +2328,7 @@ static void hdmi_config_drm_infoframe(struct dw_hdmi *hdmi,
 
 	/* Dynamic Range and Mastering Infoframe is introduced in v2.11a. */
 	if (hdmi->version < 0x211a) {
-		dev_dbg(hdmi->dev, "Not support DRM Infoframe\n");
+		DRM_ERROR("Not support DRM Infoframe\n");
 		return;
 	}
 

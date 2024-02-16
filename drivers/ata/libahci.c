@@ -1454,7 +1454,7 @@ int ahci_do_softreset(struct ata_link *link, unsigned int *class,
 		*class = ahci_dev_classify(ap);
 
 	/* re-enable FBS if disabled before */
-	if (fbs_disabled || (!ata_is_host_link(link) && pp->fbs_supported))
+	if (fbs_disabled)
 		ahci_enable_fbs(ap);
 
 	DPRINTK("EXIT, class=%u\n", *class);

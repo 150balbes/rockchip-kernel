@@ -48,10 +48,6 @@
 
 #include <trace/hooks/traps.h>
 
-#if IS_ENABLED(CONFIG_ROCKCHIP_MINIDUMP)
-#include <soc/rockchip/rk_minidump.h>
-#endif
-
 static const char *handler[]= {
 	"Synchronous Abort",
 	"IRQ",
@@ -127,9 +123,6 @@ void die(const char *str, struct pt_regs *regs, int err)
 	int ret;
 	unsigned long flags;
 
-#if IS_ENABLED(CONFIG_ROCKCHIP_MINIDUMP)
-	rk_minidump_update_cpu_regs(regs);
-#endif
 	raw_spin_lock_irqsave(&die_lock, flags);
 
 	oops_enter();

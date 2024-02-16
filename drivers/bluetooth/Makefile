@@ -25,6 +25,7 @@ obj-$(CONFIG_BT_QCOMSMD)	+= btqcomsmd.o
 obj-$(CONFIG_BT_BCM)		+= btbcm.o
 obj-$(CONFIG_BT_RTL)		+= btrtl.o
 obj-$(CONFIG_BT_QCA)		+= btqca.o
+obj-$(CONFIG_BT_RTKBTUSB)	+= rtk_btusb.o
 
 obj-$(CONFIG_BT_HCIUART_NOKIA)	+= hci_nokia.o
 
@@ -46,6 +47,3 @@ hci_uart-$(CONFIG_BT_HCIUART_QCA)	+= hci_qca.o
 hci_uart-$(CONFIG_BT_HCIUART_AG6XX)	+= hci_ag6xx.o
 hci_uart-$(CONFIG_BT_HCIUART_MRVL)	+= hci_mrvl.o
 hci_uart-objs				:= $(hci_uart-y)
-
-obj-$(CONFIG_BT_HCIBTUSB_RTLBTUSB)	+= rtk_btusb.o
-rtk_btusb-objs		:= rtk_bt.o rtk_misc.o rtk_coex.o

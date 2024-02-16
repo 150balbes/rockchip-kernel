@@ -635,6 +635,7 @@ int component_bind_all(struct device *master_dev, void *data)
 	struct component *c;
 	size_t i;
 	int ret = 0;
+	int j = -1;
 
 	WARN_ON(!mutex_is_locked(&component_mutex));
 
@@ -647,13 +648,21 @@ int component_bind_all(struct device *master_dev, void *data)
 		if (!master->match->compare[i].duplicate) {
 			c = master->match->compare[i].component;
 			ret = component_bind(c, master, data);
-			if (ret)
-				break;
+			if (ret){
+				if( ret == -EFIREFLY ) {
+					j = i;
+					ret = 0;
+				} else {
+					break;
+				}
+			}
 		}
 
 	if (ret != 0) {
 		for (; i > 0; i--)
 			if (!master->match->compare[i - 1].duplicate) {
+				if( j != -1 && j == i )
+					continue;
 				c = master->match->compare[i - 1].component;
 				component_unbind(c, master, data);
 			}

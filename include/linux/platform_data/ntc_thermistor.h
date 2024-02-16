@@ -17,6 +17,7 @@ enum ntc_thermistor_type {
 	TYPE_NCPXXWF104,
 	TYPE_NCPXXWL333,
 	TYPE_NCPXXXH103,
+	TYPE_NCU18WF103F6SRB,
 };
 
 struct ntc_thermistor_platform_data {

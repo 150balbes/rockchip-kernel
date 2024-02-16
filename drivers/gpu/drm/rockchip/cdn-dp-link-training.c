@@ -14,24 +14,14 @@
 static void cdn_dp_set_signal_levels(struct cdn_dp_device *dp)
 {
 	struct cdn_dp_port *port = dp->port[dp->active_port];
-	union phy_configure_opts phy_cfg = {0};
+	int rate = drm_dp_bw_code_to_link_rate(dp->link.rate);
 	u8 swing = (dp->train_set[0] & DP_TRAIN_VOLTAGE_SWING_MASK) >>
 		   DP_TRAIN_VOLTAGE_SWING_SHIFT;
 	u8 pre_emphasis = (dp->train_set[0] & DP_TRAIN_PRE_EMPHASIS_MASK)
 			  >> DP_TRAIN_PRE_EMPHASIS_SHIFT;
-	unsigned int lane;
 
-	for (lane = 0; lane < dp->max_lanes; lane++) {
-		phy_cfg.dp.voltage[lane] = swing;
-		phy_cfg.dp.pre[lane] = pre_emphasis;
-	}
-
-	phy_cfg.dp.lanes = dp->max_lanes;
-	phy_cfg.dp.link_rate = drm_dp_bw_code_to_link_rate(dp->max_rate) / 100;
-	phy_cfg.dp.set_lanes = false;
-	phy_cfg.dp.set_rate = false;
-	phy_cfg.dp.set_voltages = true;
-	phy_configure(port->phy, &phy_cfg);
+	tcphy_dp_set_phy_config(port->phy, rate, dp->link.num_lanes,
+				swing, pre_emphasis);
 }
 
 static int cdn_dp_set_pattern(struct cdn_dp_device *dp, uint8_t dp_train_pat)
@@ -40,7 +30,7 @@ static int cdn_dp_set_pattern(struct cdn_dp_device *dp, uint8_t dp_train_pat)
 	int ret;
 	uint8_t pattern = dp_train_pat & DP_TRAINING_PATTERN_MASK;
 
-	global_config = NUM_LANES(dp->max_lanes - 1) | SST_MODE |
+	global_config = NUM_LANES(dp->link.num_lanes - 1) | SST_MODE |
 			GLOBAL_EN | RG_EN | ENC_RST_DIS | WR_VHSYNC_FALL;
 
 	phy_config = DP_TX_PHY_ENCODER_BYPASS(0) |
@@ -73,7 +63,7 @@ static int cdn_dp_set_pattern(struct cdn_dp_device *dp, uint8_t dp_train_pat)
 		return ret;
 	}
 
-	ret = cdn_dp_reg_write(dp, DPTX_LANE_EN, BIT(dp->max_lanes) - 1);
+	ret = cdn_dp_reg_write(dp, DPTX_LANE_EN, BIT(dp->link.num_lanes) - 1);
 	if (ret) {
 		DRM_ERROR("fail to set DPTX_LANE_EN, error: %d\n", ret);
 		return ret;
@@ -116,7 +106,7 @@ static void cdn_dp_get_adjust_train(struct cdn_dp_device *dp,
 	uint8_t v = 0, p = 0;
 	uint8_t preemph_max;
 
-	for (i = 0; i < dp->max_lanes; i++) {
+	for (i = 0; i < dp->link.num_lanes; i++) {
 		v = max(v, drm_dp_get_adjust_request_voltage(link_status, i));
 		p = max(p, drm_dp_get_adjust_request_pre_emphasis(link_status,
 								  i));
@@ -129,7 +119,7 @@ static void cdn_dp_get_adjust_train(struct cdn_dp_device *dp,
 	if (p >= preemph_max)
 		p = preemph_max | DP_TRAIN_MAX_PRE_EMPHASIS_REACHED;
 
-	for (i = 0; i < dp->max_lanes; i++)
+	for (i = 0; i < dp->link.num_lanes; i++)
 		dp->train_set[i] = v | p;
 }
 
@@ -159,7 +149,7 @@ static bool cdn_dp_link_max_vswing_reached(struct cdn_dp_device *dp)
 {
 	int lane;
 
-	for (lane = 0; lane < dp->max_lanes; lane++)
+	for (lane = 0; lane < dp->link.num_lanes; lane++)
 		if ((dp->train_set[lane] & DP_TRAIN_MAX_SWING_REACHED) == 0)
 			return false;
 
@@ -173,8 +163,8 @@ static int cdn_dp_update_link_train(struct cdn_dp_device *dp)
 	cdn_dp_set_signal_levels(dp);
 
 	ret = drm_dp_dpcd_write(&dp->aux, DP_TRAINING_LANE0_SET,
-				dp->train_set, dp->max_lanes);
-	if (ret != dp->max_lanes)
+				dp->train_set, dp->link.num_lanes);
+	if (ret != dp->link.num_lanes)
 		return -EINVAL;
 
 	return 0;
@@ -193,8 +183,8 @@ static int cdn_dp_set_link_train(struct cdn_dp_device *dp,
 		len = 1;
 	} else {
 		/* DP_TRAINING_LANEx_SET follow DP_TRAINING_PATTERN_SET */
-		memcpy(buf + 1, dp->train_set, dp->max_lanes);
-		len = dp->max_lanes + 1;
+		memcpy(buf + 1, dp->train_set, dp->link.num_lanes);
+		len = dp->link.num_lanes + 1;
 	}
 
 	ret = drm_dp_dpcd_write(&dp->aux, DP_TRAINING_PATTERN_SET,
@@ -247,7 +237,7 @@ static int cdn_dp_link_training_clock_recovery(struct cdn_dp_device *dp)
 			return -EINVAL;
 		}
 
-		if (drm_dp_clock_recovery_ok(link_status, dp->max_lanes)) {
+		if (drm_dp_clock_recovery_ok(link_status, dp->link.num_lanes)) {
 			DRM_DEBUG_KMS("clock recovery OK\n");
 			return 0;
 		}
@@ -311,12 +301,12 @@ static int cdn_dp_link_training_channel_equalization(struct cdn_dp_device *dp)
 
 		/* Make sure clock is still ok */
 		if (!drm_dp_clock_recovery_ok(link_status,
-					      dp->max_lanes)) {
+					      dp->link.num_lanes)) {
 			DRM_DEBUG_KMS("Clock recovery check failed\n");
 			break;
 		}
 
-		if (drm_dp_channel_eq_ok(link_status,  dp->max_lanes)) {
+		if (drm_dp_channel_eq_ok(link_status,  dp->link.num_lanes)) {
 			DRM_DEBUG_KMS("Channel EQ done\n");
 			return 0;
 		}
@@ -348,17 +338,17 @@ static int cdn_dp_stop_link_train(struct cdn_dp_device *dp)
 
 static int cdn_dp_get_lower_link_rate(struct cdn_dp_device *dp)
 {
-	switch (dp->max_rate) {
+	switch (dp->link.rate) {
 	case DP_LINK_BW_1_62:
 		return -EINVAL;
 	case DP_LINK_BW_2_7:
-		dp->max_rate = DP_LINK_BW_1_62;
+		dp->link.rate = DP_LINK_BW_1_62;
 		break;
 	case DP_LINK_BW_5_4:
-		dp->max_rate = DP_LINK_BW_2_7;
+		dp->link.rate = DP_LINK_BW_2_7;
 		break;
 	default:
-		dp->max_rate = DP_LINK_BW_5_4;
+		dp->link.rate = DP_LINK_BW_5_4;
 		break;
 	}
 
@@ -382,12 +372,12 @@ int cdn_dp_software_train_link(struct cdn_dp_device *dp)
 
 	source_max = dp->lanes;
 	sink_max = drm_dp_max_lane_count(dp->dpcd);
-	dp->max_lanes = min(source_max, sink_max);
+	dp->link.num_lanes = min(source_max, sink_max);
 
 	source_max = drm_dp_bw_code_to_link_rate(CDN_DP_MAX_LINK_RATE);
 	sink_max = drm_dp_max_link_rate(dp->dpcd);
 	rate = min(source_max, sink_max);
-	dp->max_rate = drm_dp_link_rate_to_bw_code(rate);
+	dp->link.rate = drm_dp_link_rate_to_bw_code(rate);
 
 	ssc_on = !!(dp->dpcd[DP_MAX_DOWNSPREAD] & DP_MAX_DOWNSPREAD_0_5);
 	link_config[0] = ssc_on ? DP_SPREAD_AMP_0_5 : 0;
@@ -397,21 +387,23 @@ int cdn_dp_software_train_link(struct cdn_dp_device *dp)
 	drm_dp_dpcd_write(&dp->aux, DP_DOWNSPREAD_CTRL, link_config, 2);
 
 	while (true) {
-		union phy_configure_opts phy_cfg = {0};
-
-		phy_cfg.dp.lanes = dp->max_lanes;
-		phy_cfg.dp.link_rate = drm_dp_bw_code_to_link_rate(dp->max_rate) / 100;
-		phy_cfg.dp.ssc = ssc_on;
-		phy_cfg.dp.set_lanes = true;
-		phy_cfg.dp.set_rate = true;
-		phy_cfg.dp.set_voltages = false;
-		ret = phy_configure(port->phy, &phy_cfg);
-		if (ret)
+		ret = tcphy_dp_set_link_rate(port->phy,
+				drm_dp_bw_code_to_link_rate(dp->link.rate),
+				ssc_on);
+		if (ret) {
+			DRM_ERROR("failed to set link rate: %d\n", ret);
 			return ret;
+		}
+
+		ret = tcphy_dp_set_lane_count(port->phy, dp->link.num_lanes);
+		if (ret) {
+			DRM_ERROR("failed to set lane count: %d\n", ret);
+			return ret;
+		}
 
 		/* Write the link configuration data */
-		link_config[0] = dp->max_rate;
-		link_config[1] = dp->max_lanes;
+		link_config[0] = dp->link.rate;
+		link_config[1] = dp->link.num_lanes;
 		if (drm_dp_enhanced_frame_cap(dp->dpcd))
 			link_config[1] |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
 		drm_dp_dpcd_write(&dp->aux, DP_LINK_BW_SET, link_config, 2);

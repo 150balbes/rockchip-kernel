@@ -195,8 +195,6 @@ struct analogix_dp_device {
 	struct analogix_dp_plat_data *plat_data;
 	struct extcon_dev *extcon;
 	struct analogix_dp_compliance compliance;
-
-	u32 split_area;
 };
 
 /* analogix_dp_reg.c */

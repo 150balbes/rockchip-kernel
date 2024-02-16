@@ -5567,7 +5567,7 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 #endif
 	} else {
 		dev_info(kbdev->dev,
-			"Probed as %s\n", dev_name(kbdev->mdev.this_device));
+			"Probed as %s, this is r1_on_g18_on_linux-5.10-gen-rkr4.1_for_defect_414343 \n", dev_name(kbdev->mdev.this_device));
 		kbase_increment_device_id();
 #if (KERNEL_VERSION(5, 3, 0) <= LINUX_VERSION_CODE)
 		mutex_unlock(&kbase_probe_mutex);

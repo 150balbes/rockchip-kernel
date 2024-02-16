@@ -37,6 +37,7 @@
 
 #include "rockchip_drm_drv.h"
 #include "rockchip_drm_vop.h"
+#include "../../../video/lt9211c/include.h"
 
 #define UPDATE(v, h, l)			(((v) << (l)) & GENMASK((h), (l)))
 
@@ -177,6 +178,7 @@
 #define PSEC_PER_SEC			1000000000000LL
 
 #define GRF_REG_FIELD(reg, lsb, msb)	(((reg) << 16) | ((lsb) << 8) | (msb))
+#define MIPI_FF_CHECK
 
 enum vid_mode_type {
 	VID_MODE_TYPE_NON_BURST_SYNC_PULSES,
@@ -275,11 +277,11 @@ struct dw_mipi_dsi2 {
 	struct rockchip_drm_sub_dev sub_dev;
 
 	struct gpio_desc *te_gpio;
-
-	/* split with other display interface */
-	bool dual_connector_split;
-	bool left_display;
-	u32 split_area;
+	bool user_split_mode;
+#ifdef MIPI_FF_CHECK
+	bool firefly_check;
+#endif
+	struct drm_property *user_split_mode_prop;
 };
 
 static inline struct dw_mipi_dsi2 *host_to_dsi2(struct mipi_dsi_host *host)
@@ -453,8 +455,7 @@ static void dw_mipi_dsi2_post_disable(struct dw_mipi_dsi2 *dsi2)
 		dw_mipi_dsi2_post_disable(dsi2->slave);
 }
 
-static void dw_mipi_dsi2_encoder_atomic_disable(struct drm_encoder *encoder,
-						struct drm_atomic_state *state)
+static void dw_mipi_dsi2_encoder_disable(struct drm_encoder *encoder)
 {
 	struct dw_mipi_dsi2 *dsi2 = encoder_to_dsi2(encoder);
 	struct drm_crtc *crtc = encoder->crtc;
@@ -471,8 +472,10 @@ static void dw_mipi_dsi2_encoder_atomic_disable(struct drm_encoder *encoder,
 	if (!(dsi2->mode_flags & MIPI_DSI_MODE_VIDEO))
 		rockchip_drm_crtc_standby(encoder->crtc, 0);
 
-	if (dsi2->panel)
+	if (dsi2->panel){
 		drm_panel_unprepare(dsi2->panel);
+		LT9211C_suspend();
+	}
 
 	dw_mipi_dsi2_post_disable(dsi2);
 
@@ -832,6 +835,9 @@ static void dw_mipi_dsi2_enable(struct dw_mipi_dsi2 *dsi2)
 {
 	dw_mipi_dsi2_ipi_set(dsi2);
 
+	regmap_write(dsi2->regmap, DSI2_PWR_UP, RESET);
+	regmap_write(dsi2->regmap, DSI2_PWR_UP, POWER_UP);
+
 	if (dsi2->mode_flags & MIPI_DSI_MODE_VIDEO)
 		dw_mipi_dsi2_set_vid_mode(dsi2);
 	else
@@ -841,53 +847,56 @@ static void dw_mipi_dsi2_enable(struct dw_mipi_dsi2 *dsi2)
 		dw_mipi_dsi2_enable(dsi2->slave);
 }
 
-static int dw_mipi_dsi2_encoder_mode_set(struct dw_mipi_dsi2 *dsi2,
-					 struct drm_atomic_state *state)
+#ifdef MIPI_FF_CHECK
+
+static int ff_dw_mipi_dsi2_encoder_enable(struct dw_mipi_dsi2 *dsi2)
 {
-	struct drm_encoder *encoder = &dsi2->encoder;
-	struct drm_connector *connector;
-	struct drm_connector_state *conn_state;
-	struct drm_crtc_state *crtc_state;
-	const struct drm_display_mode *adjusted_mode;
-	struct drm_display_mode *mode = &dsi2->mode;
 
-	connector = drm_atomic_get_new_connector_for_encoder(state, encoder);
-	if (!connector)
-		return -ENODEV;
 
-	conn_state = drm_atomic_get_new_connector_state(state, connector);
-	if (!conn_state)
-		return -ENODEV;
+	int ret = 0;
+	dw_mipi_dsi2_get_lane_rate(dsi2);
 
-	crtc_state = drm_atomic_get_new_crtc_state(state, conn_state->crtc);
-	if (!crtc_state) {
-		dev_err(dsi2->dev, "failed to get crtc state\n");
-		return -ENODEV;
+	if (dsi2->dcphy)
+		dw_mipi_dsi2_set_lane_rate(dsi2);
+
+	if (dsi2->slave && dsi2->slave->dcphy)
+		dw_mipi_dsi2_set_lane_rate(dsi2->slave);
+
+	dw_mipi_dsi2_pre_enable(dsi2);
+
+	if (dsi2->panel)
+		ret = drm_panel_prepare(dsi2->panel);
+
+
+	dw_mipi_dsi2_enable(dsi2);
+
+	if (dsi2->panel){
+		drm_panel_enable(dsi2->panel);
+		LT9211C_resume();
 	}
 
-	adjusted_mode = &crtc_state->adjusted_mode;
-	drm_mode_copy(mode, adjusted_mode);
 
-	if (dsi2->dual_connector_split)
-		drm_mode_convert_to_origin_mode(mode);
-
-	if (dsi2->slave)
-		drm_mode_copy(&dsi2->slave->mode, mode);
-
-	return 0;
+	return ret;
+	
 }
 
-static void dw_mipi_dsi2_encoder_atomic_enable(struct drm_encoder *encoder,
-					       struct drm_atomic_state *state)
+static void ff_dw_mipi_dsi2_encoder_disable(struct dw_mipi_dsi2 *dsi2)
+{
+	if (dsi2->panel)
+		drm_panel_disable(dsi2->panel);
+
+	if (dsi2->panel)
+		drm_panel_unprepare(dsi2->panel);
+
+	dw_mipi_dsi2_post_disable(dsi2);
+
+}
+
+
+#endif
+static void dw_mipi_dsi2_encoder_enable(struct drm_encoder *encoder)
 {
 	struct dw_mipi_dsi2 *dsi2 = encoder_to_dsi2(encoder);
-	int ret;
-
-	ret = dw_mipi_dsi2_encoder_mode_set(dsi2, state);
-	if (ret) {
-		dev_err(dsi2->dev, "failed to set dsi2 mode\n");
-		return;
-	}
 
 	dw_mipi_dsi2_get_lane_rate(dsi2);
 
@@ -915,8 +924,8 @@ static void dw_mipi_dsi2_encoder_atomic_enable(struct drm_encoder *encoder,
 
 static int
 dw_mipi_dsi2_encoder_atomic_check(struct drm_encoder *encoder,
-				  struct drm_crtc_state *crtc_state,
-				  struct drm_connector_state *conn_state)
+				 struct drm_crtc_state *crtc_state,
+				 struct drm_connector_state *conn_state)
 {
 
 	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc_state);
@@ -954,7 +963,7 @@ dw_mipi_dsi2_encoder_atomic_check(struct drm_encoder *encoder,
 	if (!(dsi2->mode_flags & MIPI_DSI_MODE_VIDEO)) {
 		s->output_flags |= ROCKCHIP_OUTPUT_MIPI_DS_MODE;
 		s->soft_te = dsi2->te_gpio ? true : false;
-		s->hold_mode = true;
+		//s->hold_mode = true;
 	}
 
 	if (dsi2->slave) {
@@ -963,15 +972,6 @@ dw_mipi_dsi2_encoder_atomic_check(struct drm_encoder *encoder,
 			s->output_flags |= ROCKCHIP_OUTPUT_DATA_SWAP;
 
 		s->output_if |= VOP_OUTPUT_IF_MIPI1;
-	}
-
-	if (dsi2->dual_connector_split) {
-		s->output_flags |= ROCKCHIP_OUTPUT_DUAL_CONNECTOR_SPLIT_MODE;
-
-		if (dsi2->left_display)
-			s->output_if_left_panel |= dsi2->id ?
-						   VOP_OUTPUT_IF_MIPI1 :
-						   VOP_OUTPUT_IF_MIPI0;
 	}
 
 	if (dsi2->dsc_enable) {
@@ -988,6 +988,18 @@ dw_mipi_dsi2_encoder_atomic_check(struct drm_encoder *encoder,
 	}
 
 	return 0;
+}
+
+static void
+dw_mipi_dsi2_encoder_atomic_mode_set(struct drm_encoder *encoder,
+				    struct drm_crtc_state *crtc_state,
+				    struct drm_connector_state *connector_state)
+{
+	struct dw_mipi_dsi2 *dsi2 = encoder_to_dsi2(encoder);
+
+	drm_mode_copy(&dsi2->mode, &crtc_state->adjusted_mode);
+	if (dsi2->slave)
+		drm_mode_copy(&dsi2->slave->mode, &crtc_state->adjusted_mode);
 }
 
 static void dw_mipi_dsi2_loader_protect(struct dw_mipi_dsi2 *dsi2, bool on)
@@ -1017,17 +1029,17 @@ static int dw_mipi_dsi2_encoder_loader_protect(struct drm_encoder *encoder,
 
 	if (dsi2->panel)
 		panel_simple_loader_protect(dsi2->panel);
-
 	dw_mipi_dsi2_loader_protect(dsi2, on);
-
+	
 	return 0;
 }
 
 static const struct drm_encoder_helper_funcs
 dw_mipi_dsi2_encoder_helper_funcs = {
-	.atomic_enable = dw_mipi_dsi2_encoder_atomic_enable,
-	.atomic_disable = dw_mipi_dsi2_encoder_atomic_disable,
+	.enable = dw_mipi_dsi2_encoder_enable,
+	.disable = dw_mipi_dsi2_encoder_disable,
 	.atomic_check = dw_mipi_dsi2_encoder_atomic_check,
+	.atomic_mode_set = dw_mipi_dsi2_encoder_atomic_mode_set,
 };
 
 static int dw_mipi_dsi2_connector_get_modes(struct drm_connector *connector)
@@ -1109,32 +1121,6 @@ static void dw_mipi_dsi2_drm_connector_destroy(struct drm_connector *connector)
 	drm_connector_cleanup(connector);
 }
 
-static int
-dw_mipi_dsi2_atomic_connector_get_property(struct drm_connector *connector,
-					   const struct drm_connector_state *state,
-					   struct drm_property *property,
-					   uint64_t *val)
-{
-	struct rockchip_drm_private *private = connector->dev->dev_private;
-	struct dw_mipi_dsi2 *dsi2 = con_to_dsi2(connector);
-
-	if (property == private->split_area_prop) {
-		switch (dsi2->split_area) {
-		case 1:
-			*val = ROCKCHIP_DRM_SPLIT_LEFT_SIDE;
-			break;
-		case 2:
-			*val = ROCKCHIP_DRM_SPLIT_RIGHT_SIDE;
-			break;
-		default:
-			*val = ROCKCHIP_DRM_SPLIT_UNSET;
-			break;
-		}
-	}
-
-	return 0;
-}
-
 static const struct drm_connector_funcs dw_mipi_dsi2_atomic_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.detect = dw_mipi_dsi2_connector_detect,
@@ -1142,7 +1128,6 @@ static const struct drm_connector_funcs dw_mipi_dsi2_atomic_connector_funcs = {
 	.reset = drm_atomic_helper_connector_reset,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-	.atomic_get_property = dw_mipi_dsi2_atomic_connector_get_property,
 };
 
 static int dw_mipi_dsi2_dual_channel_probe(struct dw_mipi_dsi2 *dsi2)
@@ -1214,9 +1199,6 @@ static int dw_mipi_dsi2_get_dsc_params_from_sink(struct dw_mipi_dsi2 *dsi2,
 		dsi2->slave->dsc_enable = dsi2->dsc_enable;
 	}
 
-	if (!dsi2->dsc_enable)
-		return 0;
-
 	of_property_read_u32(np, "slice-width", &dsi2->slice_width);
 	of_property_read_u32(np, "slice-height", &dsi2->slice_height);
 	of_property_read_u8(np, "version-major", &dsi2->version_major);
@@ -1252,20 +1234,7 @@ static int dw_mipi_dsi2_get_dsc_params_from_sink(struct dw_mipi_dsi2 *dsi2,
 		len -= header->payload_length;
 	}
 
-	if (!pps) {
-		dev_err(dsi2->dev, "not found dsc pps definition\n");
-		return -EINVAL;
-	}
-
 	dsi2->pps = pps;
-
-	if (dsi2->slave) {
-		u16 pic_width = be16_to_cpu(pps->pic_width) / 2;
-
-		dsi2->pps->pic_width = cpu_to_be16(pic_width);
-		dev_info(dsi2->dev, "dsc pic_width change from %d to %d\n",
-			 pic_width * 2, pic_width);
-	}
 
 	return 0;
 }
@@ -1305,23 +1274,56 @@ connector_cleanup:
 static int dw_mipi_dsi2_register_sub_dev(struct dw_mipi_dsi2 *dsi2,
 					 struct drm_connector *connector)
 {
-	struct rockchip_drm_private *private;
 	struct device *dev = dsi2->dev;
+	struct drm_property *prop;
+	int ret;
 
-	private = connector->dev->dev_private;
+	prop = drm_property_create_bool(dsi2->drm_dev, DRM_MODE_PROP_IMMUTABLE,
+					"USER_SPLIT_MODE");
+	if (!prop) {
+		ret = -EINVAL;
+		DRM_DEV_ERROR(dev, "create user split mode prop failed\n");
+		goto connector_cleanup;
+	}
 
-	if (dsi2->split_area)
-		drm_object_attach_property(&connector->base,
-					   private->split_area_prop,
-					   dsi2->split_area);
+	dsi2->user_split_mode_prop = prop;
+	drm_object_attach_property(&connector->base,
+				   dsi2->user_split_mode_prop,
+				   dsi2->user_split_mode ? 1 : 0);
 
 	dsi2->sub_dev.connector = connector;
 	dsi2->sub_dev.of_node = dev->of_node;
 	dsi2->sub_dev.loader_protect = dw_mipi_dsi2_encoder_loader_protect;
+	//dsi2->sub_dev.loader_protect = NULL; // Firefly not protect
 	rockchip_drm_register_sub_dev(&dsi2->sub_dev);
 
 	return 0;
+
+connector_cleanup:
+	connector->funcs->destroy(connector);
+
+	return ret;
 }
+
+#ifdef MIPI_FF_CHECK
+#define FF_CHECK       2
+#define FF_NOT_CHECK   1
+#define FF_NONE	       0
+
+int uboot_dsi0_check_state = FF_NONE;
+static int __init ff_mipi_dsi0_ncheck(char *str){
+	int ret;
+	ret = kstrtoint(str, 10, &uboot_dsi0_check_state);
+	return ret;
+}
+
+int uboot_dsi1_check_state = FF_NONE;
+static int __init ff_mipi_dsi1_ncheck(char *str){
+	int ret;
+	ret = kstrtoint(str, 10, &uboot_dsi1_check_state);
+	return ret;
+}
+#endif
 
 static int dw_mipi_dsi2_bind(struct device *dev, struct device *master,
 			    void *data)
@@ -1333,7 +1335,9 @@ static int dw_mipi_dsi2_bind(struct device *dev, struct device *master,
 	struct drm_connector *connector = NULL;
 	enum drm_bridge_attach_flags flags;
 	int ret;
-
+#ifdef MIPI_FF_CHECK
+	int uboot_check_state = FF_NONE;
+#endif
 	dsi2->drm_dev = drm_dev;
 	ret = dw_mipi_dsi2_dual_channel_probe(dsi2);
 	if (ret)
@@ -1348,6 +1352,30 @@ static int dw_mipi_dsi2_bind(struct device *dev, struct device *master,
 		DRM_DEV_ERROR(dev, "Failed to find panel or bridge: %d\n", ret);
 		return ret;
 	}
+
+
+#ifdef MIPI_FF_CHECK
+	
+	if(dsi2->id == 0){
+		__setup("dsi-0=",ff_mipi_dsi0_ncheck);
+		uboot_check_state = uboot_dsi0_check_state;
+	} else {
+		__setup("dsi-1=",ff_mipi_dsi1_ncheck);
+		uboot_check_state = uboot_dsi1_check_state;
+	}
+	printk("Daijh: %d\r\n",uboot_check_state);
+	/* 1: Not check mipi id ,  0: Check mipi id */
+	/* If the uboot successfully checks the mipi id, the kernel detection step is skipped */
+	if(uboot_check_state == FF_CHECK || uboot_check_state == FF_NONE){
+		printk("Firefly: full_name %s: id %d\r\n",of_node->full_name,dsi2->id);
+		if(dsi2->firefly_check) {
+			ret = ff_dw_mipi_dsi2_encoder_enable(dsi2);
+			ff_dw_mipi_dsi2_encoder_disable(dsi2);
+			if(ret)
+				return ret;
+		}
+	}
+#endif
 
 	dw_mipi_dsi2_get_dsc_params_from_sink(dsi2, dsi2->panel, dsi2->bridge);
 	encoder->possible_crtcs = rockchip_drm_of_find_possible_crtcs(drm_dev,
@@ -1638,17 +1666,10 @@ static int dw_mipi_dsi2_probe(struct platform_device *pdev)
 	dsi2->id = id;
 	dsi2->pdata = of_device_get_match_data(dev);
 	platform_set_drvdata(pdev, dsi2);
-
-	if (device_property_read_bool(dev, "dual-connector-split")) {
-		dsi2->dual_connector_split = true;
-
-		if (device_property_read_bool(dev, "left-display"))
-			dsi2->left_display = true;
-	}
-
-	if (device_property_read_u32(dev, "split-area", &dsi2->split_area))
-		dsi2->split_area = 0;
-
+	dsi2->user_split_mode = device_property_read_bool(dev, "user-split-mode");
+#ifdef MIPI_FF_CHECK
+	dsi2->firefly_check = device_property_read_bool(dev, "firefly-check");
+#endif
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(regs))
