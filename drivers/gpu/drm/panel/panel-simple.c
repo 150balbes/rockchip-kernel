@@ -28,6 +28,7 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/spi/spi.h>
 
 #include <video/display_timing.h>
 #include <video/mipi_display.h>
@@ -41,6 +42,11 @@
 #include <drm/drm_dsc.h>
 
 #include "panel-simple.h"
+
+enum panel_simple_cmd_type {
+	CMD_TYPE_DEFAULT,
+	CMD_TYPE_SPI
+};
 
 struct panel_cmd_header {
 	u8 data_type;
@@ -116,7 +122,6 @@ struct panel_desc {
 		unsigned int unprepare;
 		unsigned int reset;
 		unsigned int init;
-		unsigned int pwr;
 	} delay;
 
 	u32 bus_format;
@@ -125,6 +130,11 @@ struct panel_desc {
 
 	struct panel_cmd_seq *init_seq;
 	struct panel_cmd_seq *exit_seq;
+
+	enum panel_simple_cmd_type cmd_type;
+
+	int (*spi_read)(struct device *dev, const u8 cmd, u8 *val);
+	int (*spi_write)(struct device *dev, const u8 *data, size_t len, u8 type);
 };
 
 struct panel_simple {
@@ -144,7 +154,6 @@ struct panel_simple {
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *hpd_gpio;
 
- 	struct gpio_desc *pwr_gpio;
 	struct drm_display_mode override_mode;
 
 	struct drm_dsc_picture_parameter_set *pps;
@@ -215,15 +224,13 @@ static int panel_simple_parse_cmd_seq(struct device *dev,
 	return 0;
 }
 
-#define	MIPI_FIREFLY_MIPI_ID_CHECK 0x99
 static int panel_simple_xfer_dsi_cmd_seq(struct panel_simple *panel,
 					 struct panel_cmd_seq *seq)
 {
 	struct device *dev = panel->base.dev;
 	struct mipi_dsi_device *dsi = panel->dsi;
-	unsigned int i,j;
-	int err,ret;
-	u8 save[3] = {0};
+	unsigned int i;
+	int err;
 
 	if (!IS_ENABLED(CONFIG_DRM_MIPI_DSI))
 		return -EINVAL;
@@ -262,18 +269,6 @@ static int panel_simple_xfer_dsi_cmd_seq(struct panel_simple *panel,
 
 			err = mipi_dsi_picture_parameter_set(dsi, panel->pps);
 			break;
-		case MIPI_FIREFLY_MIPI_ID_CHECK:
-			ret = mipi_dsi_generic_read(dsi,&cmd->payload[0] ,1, save ,cmd->header.payload_length - 1);
-			for(j = 0;j < cmd->header.payload_length - 1; j++){
-				printk("[Firefly]-[%s]-[%d]: ret = %d, read %X = %X\r\n", __FUNCTION__ , __LINE__,ret ,cmd->payload[0], save[j]);
-				if( cmd->payload[j+1] == save[j]) {
-					printk("[Firefly]-[%s]-[%d]: MIPI ID Check Pass!\r\n", __FUNCTION__ , __LINE__);
-				} else {
-					printk("[Firefly]-[%s]-[%d]: Not Found ID = %X MIPI!\r\n", __FUNCTION__ , __LINE__, cmd->payload[j+1]);
-					return -EFIREFLY;
-				}
-			}
-			break;
 		default:
 			return -EINVAL;
 		}
@@ -282,7 +277,30 @@ static int panel_simple_xfer_dsi_cmd_seq(struct panel_simple *panel,
 			dev_err(dev, "failed to write dcs cmd: %d\n", err);
 
 		if (cmd->header.delay)
-			msleep(cmd->header.delay);
+			usleep_range(cmd->header.delay * 1000, cmd->header.delay * 1000 + 100);
+	}
+
+	return 0;
+}
+
+static int panel_simple_xfer_spi_cmd_seq(struct panel_simple *panel, struct panel_cmd_seq *cmds)
+{
+	int i;
+	int ret;
+
+	if (!cmds)
+		return -EINVAL;
+
+	for (i = 0; i < cmds->cmd_cnt; i++) {
+		struct panel_cmd_desc *cmd = &cmds->cmds[i];
+
+		ret = panel->desc->spi_write(panel->base.dev, cmd->payload,
+					     cmd->header.payload_length, cmd->header.data_type);
+		if (ret)
+			return ret;
+
+		if (cmd->header.delay)
+			usleep_range(cmd->header.delay * 1000, cmd->header.delay * 1000 + 100);
 	}
 
 	return 0;
@@ -456,12 +474,11 @@ static int panel_simple_disable(struct drm_panel *panel)
 {
 	struct panel_simple *p = to_panel_simple(panel);
 
-	printk("[zyk debug] %s: done\n",__func__);
 	if (!p->enabled)
 		return 0;
 
 	if (p->desc->delay.disable)
-		msleep(p->desc->delay.disable);
+		usleep_range(p->desc->delay.disable * 1000, p->desc->delay.disable * 1000 + 100);
 
 	p->enabled = false;
 
@@ -475,18 +492,25 @@ static int panel_simple_unprepare(struct drm_panel *panel)
 	if (!p->prepared)
 		return 0;
 
-	if (p->desc->exit_seq)
-		if (p->dsi)
-			panel_simple_xfer_dsi_cmd_seq(p, p->desc->exit_seq);
+	if (p->desc->exit_seq) {
+		if (p->desc->cmd_type == CMD_TYPE_SPI) {
+			if (panel_simple_xfer_spi_cmd_seq(p, p->desc->exit_seq)) {
+				dev_err(panel->dev, "failed to send exit spi cmds seq\n");
+				return -EINVAL;
+			}
+		} else {
+			if (p->dsi)
+				panel_simple_xfer_dsi_cmd_seq(p, p->desc->exit_seq);
+		}
+	}
 
 	gpiod_direction_output(p->reset_gpio, 1);
 	gpiod_direction_output(p->enable_gpio, 0);
 
-	gpiod_direction_output(p->pwr_gpio,0);
 	panel_simple_regulator_disable(p);
 
 	if (p->desc->delay.unprepare)
-		msleep(p->desc->delay.unprepare);
+		usleep_range(p->desc->delay.unprepare * 1000, p->desc->delay.unprepare * 1000 + 100);
 
 	p->prepared = false;
 
@@ -534,16 +558,13 @@ static int panel_simple_prepare(struct drm_panel *panel)
 		return err;
 	}
 
-    gpiod_direction_output(p->pwr_gpio,1);
-	if(p->desc->delay.pwr)
-           msleep(p->desc->delay.pwr);
 	gpiod_direction_output(p->enable_gpio, 1);
 
 	delay = p->desc->delay.prepare;
 	if (p->no_hpd)
 		delay += p->desc->delay.hpd_absent_delay;
 	if (delay)
-		msleep(delay);
+		usleep_range(delay * 1000, delay * 1000 + 100);
 
 	if (p->hpd_gpio) {
 		if (IS_ERR(p->hpd_gpio)) {
@@ -568,20 +589,25 @@ static int panel_simple_prepare(struct drm_panel *panel)
 	gpiod_direction_output(p->reset_gpio, 1);
 
 	if (p->desc->delay.reset)
-		msleep(p->desc->delay.reset);
+		usleep_range(p->desc->delay.reset * 1000, p->desc->delay.reset * 1000 + 100);
 
 	gpiod_direction_output(p->reset_gpio, 0);
 
 	if (p->desc->delay.init)
-		msleep(p->desc->delay.init);
+		usleep_range(p->desc->delay.init * 1000, p->desc->delay.init * 1000 + 100);
 
-	if (p->desc->init_seq)
-		if (p->dsi)
-			err = panel_simple_xfer_dsi_cmd_seq(p, p->desc->init_seq);
-	if(err) {
-		printk("[Firefly]-[%s]-[%d]: Parse cmd Fail!\r\n", __FUNCTION__ , __LINE__);
-		return err;
+	if (p->desc->init_seq) {
+		if (p->desc->cmd_type == CMD_TYPE_SPI) {
+			if (panel_simple_xfer_spi_cmd_seq(p, p->desc->init_seq)) {
+				dev_err(panel->dev, "failed to send init spi cmds seq\n");
+				return -EINVAL;
+			}
+		} else {
+			if (p->dsi)
+				panel_simple_xfer_dsi_cmd_seq(p, p->desc->init_seq);
+		}
 	}
+
 	p->prepared = true;
 
 	return 0;
@@ -595,7 +621,7 @@ static int panel_simple_enable(struct drm_panel *panel)
 		return 0;
 
 	if (p->desc->delay.enable)
-		msleep(p->desc->delay.enable);
+		usleep_range(p->desc->delay.enable * 1000, p->desc->delay.enable * 1000 + 100);
 
 	p->enabled = true;
 
@@ -825,15 +851,6 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 		dev_err(dev, "failed to get power regulator: %d\n", err);
 		return err;
 	}
-
-    panel->pwr_gpio = devm_gpiod_get_optional(dev, "pwr", GPIOD_ASIS);
-	if (IS_ERR(panel->pwr_gpio)) {
-           err = PTR_ERR(panel->pwr_gpio);
-           if (err != -EPROBE_DEFER)
-                   dev_err(dev, "failed to get pwr GPIO: %d\n", err);
-           return err;
-    }
-
 
 	panel->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_ASIS);
 	if (IS_ERR(panel->enable_gpio)) {
@@ -4703,7 +4720,6 @@ static int panel_simple_of_get_desc_data(struct device *dev,
 	of_property_read_u32(np, "unprepare-delay-ms", &desc->delay.unprepare);
 	of_property_read_u32(np, "reset-delay-ms", &desc->delay.reset);
 	of_property_read_u32(np, "init-delay-ms", &desc->delay.init);
-	of_property_read_u32(np, "pwr-delay-ms", &desc->delay.pwr);
 
 	data = of_get_property(np, "panel-init-sequence", &len);
 	if (data) {
@@ -5143,6 +5159,113 @@ static struct mipi_dsi_driver panel_simple_dsi_driver = {
 	.shutdown = panel_simple_dsi_shutdown,
 };
 
+static int panel_simple_spi_read(struct device *dev, const u8 cmd, u8 *data)
+{
+	return 0;
+}
+
+static int panel_simple_spi_write_word(struct device *dev, u16 data)
+{
+	struct spi_device *spi = to_spi_device(dev);
+	struct spi_transfer xfer = {
+		.len	= 2,
+		.tx_buf = &data,
+	};
+	struct spi_message msg;
+
+	spi_message_init(&msg);
+	spi_message_add_tail(&xfer, &msg);
+
+	return spi_sync(spi, &msg);
+}
+
+static int panel_simple_spi_write(struct device *dev, const u8 *data, size_t len, u8 type)
+{
+	int ret = 0;
+	int i;
+	u16 mask = type ? 0x100 : 0;
+
+	for (i = 0; i < len; i++) {
+		ret = panel_simple_spi_write_word(dev, *data | mask);
+		if (ret) {
+			dev_err(dev, "failed to write spi seq: %*ph\n", (int)len, data);
+			return ret;
+		}
+		data++;
+	}
+
+	return ret;
+}
+
+static const struct of_device_id panel_simple_spi_of_match[] = {
+	{ .compatible = "simple-panel-spi", .data = NULL },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, panel_simple_spi_of_match);
+
+static int panel_simple_spi_probe(struct spi_device *spi)
+{
+	struct device *dev = &spi->dev;
+	const struct of_device_id *id;
+	const struct panel_desc *desc;
+	struct panel_desc *d;
+	int ret;
+
+	id = of_match_node(panel_simple_spi_of_match, dev->of_node);
+	if (!id)
+		return -ENODEV;
+
+	if (!id->data) {
+		d = devm_kzalloc(dev, sizeof(*d), GFP_KERNEL);
+		if (!d)
+			return -ENOMEM;
+
+		ret = panel_simple_of_get_desc_data(dev, d);
+		if (ret) {
+			dev_err(dev, "failed to get desc data: %d\n", ret);
+			return ret;
+		}
+
+		d->spi_write = panel_simple_spi_write;
+		d->spi_read = panel_simple_spi_read;
+		d->cmd_type = CMD_TYPE_SPI;
+	}
+	desc = id->data ? id->data : d;
+
+	/*
+	 * Set spi to 3 lines and 9bits/word mode.
+	 */
+	spi->bits_per_word = 9;
+	spi->mode = SPI_MODE_3;
+	ret = spi_setup(spi);
+	if (ret < 0) {
+		dev_err(dev, "spi setup failed.\n");
+		return ret;
+	}
+
+	return panel_simple_probe(dev, desc);
+}
+
+static int panel_simple_spi_remove(struct spi_device *spi)
+{
+	return panel_simple_remove(&spi->dev);
+}
+
+static void panel_simple_spi_shutdown(struct spi_device *spi)
+{
+	panel_simple_shutdown(&spi->dev);
+}
+
+static struct spi_driver panel_simple_spi_driver = {
+	.driver	= {
+		.name		= "panel-simple-spi",
+		.of_match_table = panel_simple_spi_of_match,
+	},
+	.probe			= panel_simple_spi_probe,
+	.remove			= panel_simple_spi_remove,
+	.shutdown		= panel_simple_spi_shutdown,
+};
+
 static int __init panel_simple_init(void)
 {
 	int err;
@@ -5150,6 +5273,12 @@ static int __init panel_simple_init(void)
 	err = platform_driver_register(&panel_simple_platform_driver);
 	if (err < 0)
 		return err;
+
+	if (IS_ENABLED(CONFIG_SPI_MASTER)) {
+		err = spi_register_driver(&panel_simple_spi_driver);
+		if (err < 0)
+			return err;
+	}
 
 	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI)) {
 		err = mipi_dsi_driver_register(&panel_simple_dsi_driver);
@@ -5165,6 +5294,9 @@ static void __exit panel_simple_exit(void)
 {
 	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI))
 		mipi_dsi_driver_unregister(&panel_simple_dsi_driver);
+
+	if (IS_ENABLED(CONFIG_SPI_MASTER))
+		spi_unregister_driver(&panel_simple_spi_driver);
 
 	platform_driver_unregister(&panel_simple_platform_driver);
 }

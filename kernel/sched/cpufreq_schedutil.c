@@ -289,15 +289,6 @@ unsigned long schedutil_cpu_util(int cpu, unsigned long util_cfs,
 	if (type == FREQUENCY_UTIL)
 		util += cpu_bw_dl(rq);
 
-	if (IS_ENABLED(CONFIG_ROCKCHIP_PERFORMANCE)) {
-		struct cpumask *cpul_mask = rockchip_perf_get_cpul_mask();
-		int level = rockchip_perf_get_level();
-
-		if ((level == ROCKCHIP_PERFORMANCE_HIGH) && (type == FREQUENCY_UTIL) &&
-		    cpul_mask && cpumask_test_cpu(cpu, cpul_mask))
-			util = max(util, max >> 1);
-	}
-
 	return min(max, util);
 }
 EXPORT_SYMBOL_GPL(schedutil_cpu_util);

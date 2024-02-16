@@ -624,7 +624,7 @@ rockchip_gem_alloc_object(struct drm_device *drm, unsigned int size,
 	gfp_t gfp_mask = GFP_HIGHUSER | __GFP_RECLAIMABLE;
 #endif
 
-	//if (flags & ROCKCHIP_BO_DMA32)
+	if (flags & ROCKCHIP_BO_DMA32)
 		gfp_mask |= __GFP_DMA32;
 
 	size = round_up(size, PAGE_SIZE);

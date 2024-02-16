@@ -179,7 +179,7 @@
 #define RK3399_TXRX_ENABLECLK		BIT(6)
 #define RK3399_TXRX_BASEDIR		BIT(5)
 
-#define RK3562_SYS_GRF_VO_CON1		0x05d0
+#define RK3562_SYS_GRF_VO_CON1		0x05d4
 #define RK3562_DSI_FORCETXSTOPMODE	(0xf << 4)
 #define RK3562_DSI_TURNDISABLE		(0x1 << 2)
 #define RK3562_DSI_FORCERXMODE		(0x1 << 0)
@@ -1101,6 +1101,15 @@ static int dw_mipi_dsi_rockchip_component_del(struct dw_mipi_dsi_rockchip *dsi)
 	return 0;
 }
 
+static void
+dw_mipi_dsi_rockchip_stream_standby(void *priv_data, bool standby)
+{
+	struct dw_mipi_dsi_rockchip *dsi = priv_data;
+	struct drm_encoder *encoder = &dsi->encoder;
+
+	rockchip_drm_crtc_standby(encoder->crtc, standby);
+}
+
 static int dw_mipi_dsi_rockchip_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1209,6 +1218,10 @@ static int dw_mipi_dsi_rockchip_probe(struct platform_device *pdev)
 	dsi->pdata.max_data_lanes = dsi->cdata->max_data_lanes;
 	dsi->pdata.phy_ops = &dw_mipi_dsi_rockchip_phy_ops;
 	dsi->pdata.priv_data = dsi;
+
+	if (dsi->cdata->soc_type == RK3568)
+		dsi->pdata.stream_standby = dw_mipi_dsi_rockchip_stream_standby;
+
 	platform_set_drvdata(pdev, dsi);
 
 	dsi->dmd = dw_mipi_dsi_probe(pdev, &dsi->pdata);
