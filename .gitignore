@@ -10,7 +10,6 @@
 #
 # Normal rules (sorted alphabetically)
 #
-.*
 *.a
 *.asn1.[ch]
 *.bin
@@ -161,5 +160,3 @@ x509.genkey
 
 # Documentation toolchain
 sphinx_*/
-
-extboot/
