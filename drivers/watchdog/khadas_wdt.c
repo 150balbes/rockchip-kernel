@@ -18,7 +18,6 @@
 #include <linux/jiffies.h>
 
 static struct timer_list mytimer;
-//DEFINE_TIMER(mytimer, time_pre);
 static unsigned int hw_margin = 3;
 static int khadas_input_pin;
 static unsigned int khadas_enble = 1;

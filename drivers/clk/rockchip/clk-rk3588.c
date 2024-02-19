@@ -1995,7 +1995,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			&rk3588_i2s9_8ch_rx_fracmux),
 	GATE(MCLK_I2S9_8CH_RX, "mclk_i2s9_8ch_rx", "clk_i2s9_8ch_rx", 0,
 			RK3588_CLKGATE_CON(65), 3, GFLAGS),
-	COMPOSITE(CLK_I2S5_8CH_TX_SRC, "clk_i2s5_8ch_tx_src", gpll_aupll_p, 0,
+	COMPOSITE(CLK_I2S5_8CH_TX_SRC, "clk_i2s5_8ch_tx_src", gpll_aupll_p, CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(140), 10, 1, MFLAGS, 5, 5, DFLAGS,
 			RK3588_CLKGATE_CON(62), 6, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_I2S5_8CH_TX_FRAC, "clk_i2s5_8ch_tx_frac", "clk_i2s5_8ch_tx_src", CLK_SET_RATE_PARENT,
@@ -2004,7 +2004,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			&rk3588_i2s5_8ch_tx_fracmux),
 	GATE(MCLK_I2S5_8CH_TX, "mclk_i2s5_8ch_tx", "clk_i2s5_8ch_tx", 0,
 			RK3588_CLKGATE_CON(62), 8, GFLAGS),
-	COMPOSITE(CLK_I2S6_8CH_TX_SRC, "clk_i2s6_8ch_tx_src", gpll_aupll_p, 0,
+	COMPOSITE(CLK_I2S6_8CH_TX_SRC, "clk_i2s6_8ch_tx_src", gpll_aupll_p, CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(144), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(62), 13, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_I2S6_8CH_TX_FRAC, "clk_i2s6_8ch_tx_frac", "clk_i2s6_8ch_tx_src", CLK_SET_RATE_PARENT,
@@ -2383,21 +2383,43 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 
 static void __iomem *rk3588_cru_base;
 
+static void dump_offset(const char *name, u32 offset, u32 len)
+{
+	int i = 0, cnt = 0;
+
+	if (!offset)
+		return;
+
+	cnt = DIV_ROUND_UP(len, 32);
+	for (i = 0; i < cnt; i++) {
+		pr_warn("%-12s 0x%05x: ", name, offset + i * 32);
+		print_hex_dump(KERN_CONT, "", DUMP_PREFIX_NONE, 32, 4,
+			       rk3588_cru_base + offset + i * 0x10, 32, false);
+	}
+}
+
 static void rk3588_dump_cru(void)
 {
 	if (rk3588_cru_base) {
-		pr_warn("DSU CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_DSU_CRU_BASE,
-			       0x330, false);
-		pr_warn("BIGCORE0 CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_BIGCORE0_CRU_BASE,
-			       0x300, false);
-		pr_warn("BIGCORE1 CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_BIGCORE1_CRU_BASE,
-			       0x300, false);
+		pr_warn("CRU REGS:\n");
+		dump_offset("LPLL", RK3588_LPLL_CON(16), 0x10);
+		dump_offset("B0PLL", RK3588_B0_PLL_CON(0), 0x10);
+		dump_offset("B1PLL", RK3588_B1_PLL_CON(8), 0x10);
+		dump_offset("GPLL", RK3588_PLL_CON(112), 0x10);
+		dump_offset("CPLL", RK3588_PLL_CON(104), 0x10);
+		dump_offset("V0PLL", RK3588_PLL_CON(88), 0x10);
+		dump_offset("AUPLL", RK3588_PLL_CON(96), 0x10);
+		dump_offset("PPLL", RK3588_PMU_PLL_CON(128), 0x10);
+		dump_offset("DSUCRU_SEL", RK3588_DSU_CLKSEL_CON(0), 0x20);
+		dump_offset("DSUCRU_GATE", RK3588_DSU_CLKGATE_CON(0), 0x10);
+		dump_offset("BIG0CRU_SEL", RK3588_BIGCORE0_CLKSEL_CON(0), 0x10);
+		dump_offset("BIG0CRU_GATE", RK3588_BIGCORE0_CLKGATE_CON(0), 0x10);
+		dump_offset("BIG1CRU_SEL", RK3588_BIGCORE1_CLKSEL_CON(0), 0x10);
+		dump_offset("BIG1CRU_GATE", RK3588_BIGCORE1_CLKGATE_CON(0), 0x10);
+		dump_offset("CRU_SEL", RK3588_CLKSEL_CON(0), 0x2d0);
+		dump_offset("CRU_GATE", RK3588_CLKGATE_CON(0), 0x140);
+		dump_offset("PMUCRU_SEL", RK3588_PMU_CLKSEL_CON(0), 0x50);
+		dump_offset("PMUCRU_GATE", RK3588_PMU_CLKGATE_CON(0), 0x20);
 	}
 }
 
@@ -2456,6 +2478,7 @@ static void __init rk3588_clk_init(struct device_node *np)
 
 CLK_OF_DECLARE(rk3588_cru, "rockchip,rk3588-cru", rk3588_clk_init);
 
+#ifdef MODULE
 struct clk_rk3588_inits {
 	void (*inits)(struct device_node *np);
 };
@@ -2473,7 +2496,7 @@ static const struct of_device_id clk_rk3588_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, clk_rk3588_match_table);
 
-static int __init clk_rk3588_probe(struct platform_device *pdev)
+static int clk_rk3588_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	const struct of_device_id *match;
@@ -2491,13 +2514,15 @@ static int __init clk_rk3588_probe(struct platform_device *pdev)
 }
 
 static struct platform_driver clk_rk3588_driver = {
+	.probe		= clk_rk3588_probe,
 	.driver		= {
 		.name	= "clk-rk3588",
 		.of_match_table = clk_rk3588_match_table,
 		.suppress_bind_attrs = true,
 	},
 };
-builtin_platform_driver_probe(clk_rk3588_driver, clk_rk3588_probe);
+module_platform_driver(clk_rk3588_driver);
 
 MODULE_DESCRIPTION("Rockchip RK3588 Clock Driver");
 MODULE_LICENSE("GPL");
+#endif /* MODULE */

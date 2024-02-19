@@ -1,5 +1,5 @@
 /*
- * Khadas Edge MCU control driver
+ * Khadas Edge2 MCU control driver
  *
  * Written by: Nick <nick@khadas.com>
  *
@@ -24,15 +24,6 @@
 /* Device registers */
 #define MCU_PWR_OFF_CMD_REG       0x80
 #define MCU_SHUTDOWN_NORMAL_REG   0x2c
-#define MCU_RGB_LED_ON_CTRL_REG         	0x23
-#define MCU_RGB_LED_OFF_CTRL_REG         	0x24
-#define MCU_R_LED_ON_CTRL_REG         	0x25
-#define MCU_G_LED_ON_CTRL_REG         	0x26
-#define MCU_B_LED_ON_CTRL_REG         	0x27
-#define MCU_R_LED_OFF_CTRL_REG         	0x28
-#define MCU_G_LED_OFF_CTRL_REG         	0x29
-#define MCU_B_LED_OFF_CTRL_REG         	0x2A
-
 
 /*Fan device*/
 #define MCU_CMD_FAN_STATUS_CTRL_REGv2   0x8A
@@ -101,7 +92,6 @@ struct mcu_data {
 };
 
 struct mcu_data *g_mcu_data;
-int ageing_test_flag = 0;
 
 static int i2c_master_reg8_send(const struct i2c_client *client,
 		const char reg, const char *buf, int count)
@@ -166,21 +156,6 @@ static int mcu_i2c_write_regs(struct i2c_client *client,
 	return ret;
 }
 
-int mcu_reboot_boot_mode(void)
-{
-	int ret;
-	u8 sendbuf=0;
-	sendbuf =2;
-
-	ret = mcu_i2c_write_regs(g_mcu_data->client, 0x91, &sendbuf, 1);
-	if(ret < 0){
-		printk("write mcu boot control err\r\n");
-		return ret;
-	}
-	return 0;
-}
-EXPORT_SYMBOL(mcu_reboot_boot_mode);
-
 static int is_mcu_fan_control_supported(void)
 {
 	// MCU FAN control is supported for:
@@ -195,17 +170,6 @@ static int is_mcu_fan_control_supported(void)
 	}
 
 }
-
-static int is_mcu_mculed_control_supported(void)
-{
-	// MCU MCU LED control is supported for:
-	// 1. Khadas EDGE2 and later
-		//if (g_mcu_data->hwver >= KHADAS_BOARD_HWVER_V10)
-			return 1;
-		//else
-			//return 0;
-}
-
 static void mcu_fan_level_set(struct mcu_fan_data *fan_data, int level)
 {
     if (is_mcu_fan_control_supported()) {
@@ -410,36 +374,6 @@ void fan_level_set(struct mcu_data *ug_mcu_data)
     }
 }
 
-
-static void mcu_mculed_set(int addr, int mode)
-{
-	int ret;
-	char reg;
-	u8 addr_val;
-
-	if (addr >= 0x23 && addr <= 0x24) {
-		reg = (char)mode;
-		addr_val = (u8)addr;
-		if (is_mcu_mculed_control_supported()) {
-			    ret = mcu_i2c_write_regs(g_mcu_data->client,addr_val,&reg, 1);
-				if (ret < 0)
-					pr_debug("write mcu led cmd error\n");
-				else
-					pr_debug("write mcu led cmd mode=%d\n",mode);
-		}
-	}else if(addr >= 0x25 && addr <= 0x2a) {
-		reg = (char)mode;
-		addr_val = (u8)addr;
-		if (is_mcu_mculed_control_supported()) {
-			    ret = mcu_i2c_write_regs(g_mcu_data->client,addr_val,&reg, 1);
-				if (ret < 0)
-					pr_debug("write mcu led cmd error\n");
-				else
-					pr_debug("write mcu led cmd mode=%d\n",mode);
-		}
-	}
-}
-
 static ssize_t show_fan_trigger_low(struct class *cls,
         struct class_attribute *attr, char *buf)
 {
@@ -574,26 +508,6 @@ static ssize_t store_mcu_rst(struct class *cls, struct class_attribute *attr,
 	return count;
 }
 
-static ssize_t store_mculed_mode(struct class *cls,
-		struct class_attribute *attr,
-		const char *buf, size_t count)
-{
-    int reg;
-	int val;
-	int reg16;
-
-	if (kstrtoint(buf, 0, &reg16))
-		return -EINVAL;
-
-	printk("mcu===>reg16=0x%x\n",reg16);
-	reg = reg16>>8;
-	val = (int)((u8)reg16);
-
-	printk("mcu===>reg=0x%x,val=0x%x\n",reg,val);
-	mcu_mculed_set(reg,val);
-	return count;
-}
-
 static struct class_attribute fan_class_attrs[] = {
     __ATTR(enable, 0644, show_fan_enable, store_fan_enable),
     __ATTR(mode, 0644, show_fan_mode, store_fan_mode),
@@ -610,7 +524,6 @@ static struct class_attribute fan_class_attrs[] = {
 static struct class_attribute mcu_class_attrs[] = {
 	__ATTR(poweroff, 0644, NULL, store_mcu_poweroff),
 	__ATTR(rst, 0644, NULL, store_mcu_rst),
-	__ATTR(mculed, 0644, NULL, store_mculed_mode),
 };
 
 static void create_mcu_attrs(void) {

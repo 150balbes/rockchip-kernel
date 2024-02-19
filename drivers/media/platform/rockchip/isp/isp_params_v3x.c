@@ -655,6 +655,8 @@ isp_lsc_config(struct rkisp_isp_params_vdev *params_vdev,
 		lsc_ctrl |= ISP3X_LSC_SECTOR_16X16;
 	else
 		lsc_ctrl &= ~ISP3X_LSC_SECTOR_16X16;
+	if (!dev->hw_dev->is_single)
+		lsc_ctrl |= ISP3X_LSC_PRE_RD_ST_MODE;
 	isp3_param_write(params_vdev, lsc_ctrl, ISP3X_LSC_CTRL, id);
 }
 
@@ -1058,14 +1060,6 @@ isp_rawaf_config(struct rkisp_isp_params_vdev *params_vdev,
 				 ISP_PACK_2SHORT(v_size, h_size),
 				 ISP3X_RAWAF_SIZE_WINA + i * 8, id);
 	}
-
-	var = 0;
-	for (i = 0; i < ISP3X_RAWAF_LINE_NUM; i++) {
-		if (arg->line_en[i])
-			var |= ISP3X_RAWAF_INTLINE0_EN << i;
-		var |= ISP3X_RAWAF_INELINE0(arg->line_num[i]) << 4 * i;
-	}
-	isp3_param_write(params_vdev, var, ISP3X_RAWAF_INT_LINE, id);
 
 	var = isp3_param_read(params_vdev, ISP3X_RAWAF_THRES, id);
 	var &= ~0xFFFF;
@@ -2800,8 +2794,7 @@ isp_dhaz_config(struct rkisp_isp_params_vdev *params_vdev,
 	if (arg->soft_wr_en)
 		ctrl |= (arg->soft_wr_en & 0x1) << 25;
 	/* merge dual unite isp params at frame end */
-	if (arg->soft_wr_en &&
-	    (!dev->hw_dev->is_unite || !(ctrl & ISP3X_DHAZ_ENMUX))) {
+	if (arg->soft_wr_en) {
 		value = ISP_PACK_2SHORT(arg->adp_wt_wr, arg->adp_air_wr);
 		isp3_param_write(params_vdev, value, ISP3X_DHAZ_ADT_WR0, id);
 		value = ISP_PACK_2SHORT(arg->adp_tmax_wr, arg->adp_gratio_wr);
@@ -2815,7 +2808,6 @@ isp_dhaz_config(struct rkisp_isp_params_vdev *params_vdev,
 		value = arg->hist_wr[i * 3] & 0x3ff;
 		isp3_param_write(params_vdev, value, ISP3X_DHAZ_HIST_WR0 + i * 4, id);
 	}
-	isp3_param_write(params_vdev, ctrl, ISP3X_DHAZ_CTRL, id);
 
 	value = ISP_PACK_4BYTE(arg->dc_min_th, arg->dc_max_th,
 			       arg->yhist_th, arg->yblk_th);
@@ -2894,6 +2886,12 @@ isp_dhaz_config(struct rkisp_isp_params_vdev *params_vdev,
 	}
 	value = ISP_PACK_2SHORT(arg->sigma_lut[i * 2], 0);
 	isp3_param_write(params_vdev, value, ISP3X_DHAZ_GAIN_LUT0 + i * 4, id);
+
+	if (dev->hw_dev->is_unite &&
+	    dev->hw_dev->is_single &&
+	    ctrl & ISP3X_DHAZ_ENMUX)
+		ctrl |= ISP3X_SELF_FORCE_UPD;
+	isp3_param_write(params_vdev, ctrl, ISP3X_DHAZ_CTRL, id);
 }
 
 static void
@@ -4010,6 +4008,7 @@ void __isp_isr_meas_config(struct rkisp_isp_params_vdev *params_vdev,
 		(struct rkisp_isp_params_ops_v3x *)params_vdev->priv_ops;
 	u64 module_cfg_update = new_params->module_cfg_update;
 
+	params_vdev->cur_frame_id = new_params->frame_id;
 	if (type == RKISP_PARAMS_SHD)
 		return;
 
@@ -4275,8 +4274,8 @@ multi_overflow:
 		 * |_________|
 		 *
 		 * case1:      bigmode               special reg cfg
-		 *  _________  max width:4672
-		 * | sensor0 | max size:3840*2160    mode=0 index=0
+		 *  _________  max width:3840
+		 * | sensor0 | max size:3840*2160    mode=1 index=0
 		 * |_________|
 		 * |_sensor1_| max size:2560*1536    mode=2 index=2
 		 * |_sensor2_| max size:2560*1536    mode=2 index=3
@@ -4304,7 +4303,7 @@ multi_overflow:
 				goto multi_overflow;
 			} else {
 				if (idx1[0] == ispdev->dev_id) {
-					ispdev->multi_mode = 0;
+					ispdev->multi_mode = 1;
 					ispdev->multi_index = 0;
 				} else {
 					ispdev->multi_mode = 2;
@@ -4591,7 +4590,7 @@ rkisp_params_get_meshbuf_inf_v3x(struct rkisp_isp_params_vdev *params_vdev,
 	}
 }
 
-static void
+static int
 rkisp_params_set_meshbuf_size_v3x(struct rkisp_isp_params_vdev *params_vdev,
 				  void *size)
 {
@@ -4600,7 +4599,7 @@ rkisp_params_set_meshbuf_size_v3x(struct rkisp_isp_params_vdev *params_vdev,
 	if (!params_vdev->dev->hw_dev->is_unite)
 		meshsize->unite_isp_id = 0;
 	rkisp_deinit_mesh_buf(params_vdev, meshsize->module_id, meshsize->unite_isp_id);
-	rkisp_init_mesh_buf(params_vdev, meshsize);
+	return rkisp_init_mesh_buf(params_vdev, meshsize);
 }
 
 static void

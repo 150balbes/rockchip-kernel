@@ -1724,6 +1724,14 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 				rlen = 1;
 			} else if (port->data_role == TYPEC_HOST) {
 				tcpm_register_partner_altmodes(port);
+			} else {
+				/* Do dr_swap for ufp if the port supports drd */
+				if (port->typec_caps.data == TYPEC_PORT_DRD &&
+				    !IS_ERR_OR_NULL(port->port_altmode[0])) {
+					port->vdm_sm_running = false;
+					port->upcoming_state = DR_SWAP_SEND;
+					tcpm_ams_start(port, DATA_ROLE_SWAP);
+				}
 			}
 			break;
 		case CMD_ENTER_MODE:
@@ -1755,6 +1763,16 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 		tcpm_ams_finish(port);
 		switch (cmd) {
 		case CMD_DISCOVER_IDENT:
+			/* Do dr_swap for ufp if the port supports drd */
+			if (port->typec_caps.data == TYPEC_PORT_DRD &&
+			    port->data_role == TYPEC_DEVICE &&
+			    !IS_ERR_OR_NULL(port->port_altmode[0])) {
+				port->vdm_sm_running = false;
+				port->upcoming_state = DR_SWAP_SEND;
+				tcpm_ams_start(port, DATA_ROLE_SWAP);
+				break;
+			}
+			fallthrough;
 		case CMD_DISCOVER_SVID:
 		case CMD_DISCOVER_MODES:
 		case VDO_CMD_VENDOR(0) ... VDO_CMD_VENDOR(15):
@@ -2438,7 +2456,7 @@ static void tcpm_pd_data_request(struct tcpm_port *port,
 		}
 
 		if (rev < PD_MAX_REV)
-			port->negotiated_rev = rev;
+			port->negotiated_rev = min_t(u16, rev, port->negotiated_rev);
 
 		if (port->pwr_role == TYPEC_SOURCE) {
 			if (port->ams == GET_SOURCE_CAPABILITIES)
@@ -2490,7 +2508,7 @@ static void tcpm_pd_data_request(struct tcpm_port *port,
 		}
 
 		if (rev < PD_MAX_REV)
-			port->negotiated_rev = rev;
+			port->negotiated_rev = min_t(u16, rev, port->negotiated_rev);
 
 		if (port->pwr_role != TYPEC_SOURCE || cnt != 1) {
 			tcpm_pd_handle_msg(port,
@@ -3993,7 +4011,7 @@ static void run_state_machine(struct tcpm_port *port)
 		typec_set_pwr_opmode(port->typec_port, opmode);
 		port->pwr_opmode = TYPEC_PWR_MODE_USB;
 		port->caps_count = 0;
-		port->negotiated_rev = PD_MAX_REV;
+		port->negotiated_rev = (((port->typec_caps.pd_revision >> 8) & 0xff) - 1);
 		port->message_id = 0;
 		port->rx_msgid = -1;
 		port->explicit_contract = false;
@@ -4244,7 +4262,7 @@ static void run_state_machine(struct tcpm_port *port)
 					      port->cc2 : port->cc1);
 		typec_set_pwr_opmode(port->typec_port, opmode);
 		port->pwr_opmode = TYPEC_PWR_MODE_USB;
-		port->negotiated_rev = PD_MAX_REV;
+		port->negotiated_rev = (((port->typec_caps.pd_revision >> 8) & 0xff) - 1);
 		port->message_id = 0;
 		port->rx_msgid = -1;
 		port->explicit_contract = false;
@@ -4300,10 +4318,12 @@ static void run_state_machine(struct tcpm_port *port)
 		tcpm_set_state(port, unattached_state(port), 0);
 		break;
 	case SNK_WAIT_CAPABILITIES:
-		ret = port->tcpc->set_pd_rx(port->tcpc, true);
-		if (ret < 0) {
-			tcpm_set_state(port, SNK_READY, 0);
-			break;
+		if (port->prev_state != SOFT_RESET_SEND) {
+			ret = port->tcpc->set_pd_rx(port->tcpc, true);
+			if (ret < 0) {
+				tcpm_set_state(port, SNK_READY, 0);
+				break;
+			}
 		}
 		timer_val_msecs = PD_T_SINK_WAIT_CAP;
 		trace_android_vh_typec_tcpm_get_timer(tcpm_states[SNK_WAIT_CAPABILITIES],
@@ -4598,6 +4618,7 @@ static void run_state_machine(struct tcpm_port *port)
 	case SOFT_RESET_SEND:
 		port->message_id = 0;
 		port->rx_msgid = -1;
+		port->tcpc->set_pd_rx(port->tcpc, true);
 		if (tcpm_pd_send_control(port, PD_CTRL_SOFT_RESET))
 			tcpm_set_state_cond(port, hard_reset_state(port), 0);
 		else
@@ -5380,6 +5401,10 @@ static void _tcpm_pd_vbus_vsafe0v(struct tcpm_port *port)
 	case PR_SWAP_SNK_SRC_SOURCE_ON:
 		/* Do nothing, vsafe0v is expected during transition */
 		break;
+	case SNK_ATTACH_WAIT:
+	case SNK_DEBOUNCED:
+		/*Do nothing, still waiting for VSAFE5V for connect */
+		break;
 	default:
 		if (port->pwr_role == TYPEC_SINK && port->auto_vbus_discharge_enabled)
 			tcpm_set_state(port, SNK_UNATTACHED, 0);
@@ -6047,10 +6072,17 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
 {
 	const char *cap_str;
 	int ret;
-	u32 mw, frs_current;
+	u32 mw, frs_current, pd_revision;
 
 	if (!fwnode)
 		return -EINVAL;
+
+	ret = fwnode_property_read_u32(fwnode, "pd-revision",
+				       &pd_revision);
+	if (ret < 0)
+		port->typec_caps.pd_revision = 0x0300;
+	else
+		port->typec_caps.pd_revision = pd_revision & 0xffff;
 
 	/* USB data support is optional */
 	ret = fwnode_property_read_string(fwnode, "data-role", &cap_str);
@@ -6550,7 +6582,6 @@ struct tcpm_port *tcpm_register_port(struct device *dev, struct tcpc_dev *tcpc)
 
 	port->typec_caps.fwnode = tcpc->fwnode;
 	port->typec_caps.revision = 0x0120;	/* Type-C spec release 1.2 */
-	port->typec_caps.pd_revision = 0x0300;	/* USB-PD spec release 3.0 */
 	port->typec_caps.svdm_version = SVDM_VER_2_0;
 	port->typec_caps.driver_data = port;
 	port->typec_caps.ops = &tcpm_ops;

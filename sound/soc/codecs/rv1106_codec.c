@@ -50,6 +50,8 @@
 #define ADCL				(1 << 0)
 #define ADCR				(1 << 1)
 
+#define NOT_SPECIFIED			(-1)
+
 enum soc_id_e {
 	SOC_RV1103 = 0x1103,
 	SOC_RV1106 = 0x1106,
@@ -97,6 +99,11 @@ struct rv1106_codec_priv {
 
 	/* For the high pass filter */
 	unsigned int hpf_cutoff;
+
+	/* Specify init gains after codec startup */
+	unsigned int init_mic_gain;
+	unsigned int init_alc_gain;
+	unsigned int init_lineout_gain;
 
 	bool adc_enable;
 	bool dac_enable;
@@ -1044,87 +1051,96 @@ static int rv1106_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 
 static int rv1106_codec_dac_enable(struct rv1106_codec_priv *rv1106)
 {
-	/* vendor step 1 */
+	/* Step 01 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_IBIAS_MSK,
 			   ACODEC_DAC_IBIAS_EN);
-
 	udelay(20);
 
-	/* vendor step 2 */
+	/* Step 02 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_REF_VOL_BUF_MSK,
 			   ACODEC_DAC_L_REF_VOL_BUF_EN);
-
 	/* Waiting the stable reference voltage */
-	mdelay(1);
+	usleep_range(1000, 2000);
 
-	/* vendor step 7 */
+	/* Step 03 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL1,
 			   ACODEC_DAC_L_LINEOUT_MSK,
 			   ACODEC_DAC_L_LINEOUT_EN);
-
 	udelay(20);
 
-	/* vendor step 8 */
+	/* Step 04 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL1,
 			   ACODEC_DAC_L_LINEOUT_SIGNAL_MSK,
 			   ACODEC_DAC_L_LINEOUT_SIGNAL_WORK);
-
 	udelay(20);
 
-	/* vendor step 11 */
+	/* Step 05 */
+	regmap_update_bits(rv1106->regmap, ACODEC_DAC_HPMIX_CTL,
+			   ACODEC_DAC_HPMIX_MSK,
+			   ACODEC_DAC_HPMIX_EN);
+	udelay(20);
+
+	/* Step 06 */
+	regmap_update_bits(rv1106->regmap, ACODEC_DAC_HPMIX_CTL,
+			   ACODEC_DAC_HPMIX_MDL_MSK,
+			   ACODEC_DAC_HPMIX_MDL_WORK);
+	udelay(20);
+
+	/* Step 07 */
+	regmap_update_bits(rv1106->regmap, ACODEC_DAC_HPMIX_CTL,
+			   ACODEC_DAC_HPMIX_SEL_MSK,
+			   ACODEC_DAC_HPMIX_I2S);
+	/* Waiting HPMIX be stable */
+	usleep_range(18000, 20000);
+
+	/* Step 08 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_REF_VOL_MSK,
 			   ACODEC_DAC_L_REF_VOL_EN);
-
 	udelay(20);
 
-	/* vendor step 12 */
+	/* Step 09 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_CLK_MSK,
 			   ACODEC_DAC_L_CLK_EN);
-
 	udelay(20);
 
-	/* vendor step 13 */
+	/* Step 10 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_SRC_SIGNAL_MSK,
 			   ACODEC_DAC_SRC_SIGNAL_EN);
-
 	udelay(20);
 
-	/* vendor step 14 */
+	/* Step 11 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_SIGNAL_MSK,
 			   ACODEC_DAC_L_SIGNAL_WORK);
-
 	udelay(20);
 
-	/* vendor step 15 */
+	/* Step 12 */
+	regmap_update_bits(rv1106->regmap, ACODEC_DAC_HPMIX_CTL,
+			   ACODEC_DAC_HPMIX_MUTE_MSK,
+			   ACODEC_DAC_HPMIX_WORK);
+	udelay(20);
+
+	/* Step 13 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL1,
 			   ACODEC_DAC_L_LINEOUT_MUTE_MSK,
 			   ACODEC_DAC_L_LINEOUT_WORK);
 
-	udelay(20);
-
-	regmap_update_bits(rv1106->regmap, ACODEC_DAC_HPMIX_CTL,
-			   ACODEC_DAC_HPMIX_MSK |
-			   ACODEC_DAC_HPMIX_MDL_MSK |
-			   ACODEC_DAC_HPMIX_MUTE_MSK |
-			   ACODEC_DAC_HPMIX_SEL_MSK,
-			   ACODEC_DAC_HPMIX_EN |
-			   ACODEC_DAC_HPMIX_MDL_WORK |
-			   ACODEC_DAC_HPMIX_WORK |
-			   ACODEC_DAC_HPMIX_I2S);
+	/* Skip setting gains that Step 14/15 */
 
 	rv1106->dac_enable = true;
-
 	return 0;
 }
 
 static int rv1106_codec_dac_disable(struct rv1106_codec_priv *rv1106)
 {
+	/* Step 01 */
+	/* Skip cleaning the gain to GAIN_LINEOUTL */
+
 	/* Step 02 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL1,
 			   ACODEC_DAC_L_LINEOUT_MUTE_MSK,
@@ -1163,20 +1179,17 @@ static int rv1106_codec_dac_disable(struct rv1106_codec_priv *rv1106)
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_REF_VOL_MSK,
 			   ACODEC_DAC_L_REF_VOL_DIS);
-
-	/* Step 11, note: skip handing POP Sound */
-
-	/* Step 12 */
+	/* Step 11 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_REF_VOL_BUF_MSK,
 			   ACODEC_DAC_L_REF_VOL_BUF_DIS);
 
-	/* Step 13 */
+	/* Step 12 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_IBIAS_MSK,
 			   ACODEC_DAC_IBIAS_DIS);
 
-	/* Step 14 */
+	/* Step 13 */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL0,
 			   ACODEC_DAC_L_SIGNAL_MSK,
 			   ACODEC_DAC_L_SIGNAL_INIT);
@@ -1680,31 +1693,68 @@ out:
 
 static int rv1106_codec_default_gains(struct rv1106_codec_priv *rv1106)
 {
+	int gainl, gainr;
+
+	/**
+	 * MIC Gain
+	 *  0dB (0x01)
+	 * 20dB (0x02)
+	 * 12dB (0x03)
+	 */
+	if (rv1106->init_mic_gain == NOT_SPECIFIED) {
+		gainl = ACODEC_ADC_L_MIC_GAIN_0DB;
+		gainr = ACODEC_ADC_R_MIC_GAIN_0DB;
+	} else {
+		gainl = ((rv1106->init_mic_gain >> 4) & 0x03) << ACODEC_ADC_L_MIC_GAIN_SFT;
+		gainr = ((rv1106->init_mic_gain >> 0) & 0x03) << ACODEC_ADC_R_MIC_GAIN_SFT;
+	}
+
 	/* Prepare ADC gains */
 	/* vendor step 12, set MIC PGA default gains */
 	regmap_update_bits(rv1106->regmap, ACODEC_ADC_ANA_CTL2,
 			   ACODEC_ADC_L_MIC_GAIN_MSK |
 			   ACODEC_ADC_R_MIC_GAIN_MSK,
-			   ACODEC_ADC_L_MIC_GAIN_20DB |
-			   ACODEC_ADC_R_MIC_GAIN_20DB); // TODO: using 20dB
+			   gainl | gainr);
 
+	/**
+	 * ALC Gain (0dB: 0x06)
+	 *  min: -9.0dB (0x00)
+	 *  max: +37.5dB (0x1f)
+	 * step: +1.5dB
+	 */
+	if (rv1106->init_alc_gain == NOT_SPECIFIED) {
+		gainl = ACODEC_ADC_L_ALC_GAIN_0DB;
+		gainr = ACODEC_ADC_R_ALC_GAIN_0DB;
+	} else {
+		gainl = ((rv1106->init_alc_gain >> 4) & 0x1f);
+		gainr = ((rv1106->init_alc_gain >> 0) & 0x1f);
+	}
 	/* vendor step 13, set ALC default gains */
 	regmap_update_bits(rv1106->regmap, ACODEC_ADC_ANA_CTL4,
 			   ACODEC_ADC_L_ALC_GAIN_MSK,
-			   ACODEC_ADC_L_ALC_GAIN_0DB);
+			   gainl);
 	regmap_update_bits(rv1106->regmap, ACODEC_ADC_ANA_CTL5,
 			   ACODEC_ADC_R_ALC_GAIN_MSK,
-			   ACODEC_ADC_R_ALC_GAIN_0DB);
+			   gainr);
 
 	/* Prepare DAC gains */
 	/* Step 19, set LINEOUT default gains */
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_GAIN_SEL,
 			   ACODEC_DAC_DIG_GAIN_MSK,
-			   ACODEC_DAC_DIG_GAIN(ACODEC_DAC_DIG_0DB));
+			   ACODEC_DAC_DIG_GAIN(ACODEC_DAC_DIG_0DB)); /* The calibrated fixed gain */
+	/**
+	 * Lineout Gain (0dB: 0x1a)
+	 *  min: -39.0dB (0x00)
+	 *  max: +6.0dB (0x1f)
+	 * step: +1.5dB
+	 */
+	if (rv1106->init_lineout_gain == NOT_SPECIFIED)
+		gainl = ACODEC_DAC_LINEOUT_GAIN_0DB;
+	else
+		gainl = rv1106->init_lineout_gain & 0x1f;
 	regmap_update_bits(rv1106->regmap, ACODEC_DAC_ANA_CTL2,
 			   ACODEC_DAC_LINEOUT_GAIN_MSK,
-			   ACODEC_DAC_LINEOUT_GAIN_0DB);
-
+			   gainl);
 	return 0;
 }
 
@@ -2047,6 +2097,15 @@ static int rv1106_platform_probe(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "No reset control found\n");
 		rv1106->reset = NULL;
 	}
+
+	rv1106->init_mic_gain = NOT_SPECIFIED;
+	of_property_read_u32(np, "init-mic-gain", &rv1106->init_mic_gain);
+
+	rv1106->init_alc_gain = NOT_SPECIFIED;
+	of_property_read_u32(np, "init-alc-gain", &rv1106->init_alc_gain);
+
+	rv1106->init_lineout_gain = NOT_SPECIFIED;
+	of_property_read_u32(np, "init-lineout-gain", &rv1106->init_lineout_gain);
 
 	rv1106->pa_ctl_gpio = devm_gpiod_get_optional(&pdev->dev, "pa-ctl",
 						       GPIOD_OUT_LOW);

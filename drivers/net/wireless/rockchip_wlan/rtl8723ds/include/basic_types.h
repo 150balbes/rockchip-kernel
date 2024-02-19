@@ -1,6 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +12,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef __BASIC_TYPES_H__
 #define __BASIC_TYPES_H__
 
@@ -36,41 +32,104 @@
 	#define _FALSE	FALSE
 #endif
 
-#include <linux/version.h>
-#include <linux/types.h>
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/utsname.h>
-#define IN
-#define OUT
-#define VOID void
-#define NDIS_OID uint
-#define NDIS_STATUS uint
+#ifdef PLATFORM_WINDOWS
 
-typedef	signed int sint;
+	typedef signed char s8;
+	typedef unsigned char u8;
 
-#ifndef	PVOID
-	typedef void *PVOID;
-	/* #define PVOID	(void *) */
+	typedef signed short s16;
+	typedef unsigned short u16;
+
+	typedef signed long s32;
+	typedef unsigned long u32;
+
+	typedef unsigned int	uint;
+	typedef	signed int		sint;
+
+
+	typedef signed long long s64;
+	typedef unsigned long long u64;
+
+	#ifdef NDIS50_MINIPORT
+
+		#define NDIS_MAJOR_VERSION       5
+		#define NDIS_MINOR_VERSION       0
+
+	#endif
+
+	#ifdef NDIS51_MINIPORT
+
+		#define NDIS_MAJOR_VERSION       5
+		#define NDIS_MINOR_VERSION       1
+
+	#endif
+
+	typedef NDIS_PROC proc_t;
+
+	typedef LONG atomic_t;
+
 #endif
 
-#define UCHAR u8
-#define USHORT u16
-#define UINT u32
-#define ULONG u32
+
+#ifdef PLATFORM_LINUX
+	#include <linux/version.h>
+	#include <linux/types.h>
+	#include <linux/module.h>
+	#include <linux/kernel.h>
+	#include <linux/init.h>
+	#include <linux/utsname.h>
+
+	typedef	signed int sint;
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 19))
-	typedef _Bool bool;
+typedef _Bool bool;
+
+enum {
+	false	= 0,
+	true	= 1
+};
 #endif
 
-typedef void (*proc_t)(void *);
+	typedef void (*proc_t)(void *);
 
-typedef	__kernel_size_t	SIZE_T;
-typedef	__kernel_ssize_t	SSIZE_T;
-#define FIELD_OFFSET(s, field)	((SSIZE_T)&((s *)(0))->field)
+	typedef	__kernel_size_t	SIZE_T;
+	typedef	__kernel_ssize_t	SSIZE_T;
+	#define FIELD_OFFSET(s, field)	((SSIZE_T)&((s *)(0))->field)
+
+#define NDIS_OID uint
+#endif /*PLATFORM_LINUX*/
 
 
+#ifdef PLATFORM_FREEBSD
+
+	typedef signed char s8;
+	typedef unsigned char u8;
+
+	typedef signed short s16;
+	typedef unsigned short u16;
+
+	typedef signed int s32;
+	typedef unsigned int u32;
+
+	typedef unsigned int	uint;
+	typedef	signed int		sint;
+	typedef long atomic_t;
+
+	typedef signed long long s64;
+	typedef unsigned long long u64;
+
+	typedef u32 dma_addr_t;
+
+	typedef void (*proc_t)(void *);
+
+	typedef unsigned int __kernel_size_t;
+	typedef int __kernel_ssize_t;
+
+	typedef	__kernel_size_t	SIZE_T;
+	typedef	__kernel_ssize_t	SSIZE_T;
+	#define FIELD_OFFSET(s, field)	((SSIZE_T)&((s *)(0))->field)
+
+#endif
 
 #define MEM_ALIGNMENT_OFFSET	(sizeof (SIZE_T))
 #define MEM_ALIGNMENT_PADDING	(sizeof(SIZE_T) - 1)
@@ -110,43 +169,43 @@ typedef	__kernel_ssize_t	SSIZE_T;
 /*
 * Read LE data from memory to host byte order
 */
-#define ReadLE4Byte(_ptr)	le32_to_cpu(*((__le32 *)(_ptr)))
-#define ReadLE2Byte(_ptr)	le16_to_cpu(*((__le16 *)(_ptr)))
+#define ReadLE4Byte(_ptr)	le32_to_cpu(*((u32 *)(_ptr)))
+#define ReadLE2Byte(_ptr)	le16_to_cpu(*((u16 *)(_ptr)))
 #define ReadLE1Byte(_ptr)	(*((u8 *)(_ptr)))
 
 /*
 * Read BE data from memory to host byte order
 */
-#define ReadBEE4Byte(_ptr)	be32_to_cpu(*((__be32 *)(_ptr)))
-#define ReadBE2Byte(_ptr)	be16_to_cpu(*((__be16 *)(_ptr)))
+#define ReadBEE4Byte(_ptr)	be32_to_cpu(*((u32 *)(_ptr)))
+#define ReadBE2Byte(_ptr)	be16_to_cpu(*((u16 *)(_ptr)))
 #define ReadBE1Byte(_ptr)	(*((u8 *)(_ptr)))
 
 /*
 * Write host byte order data to memory in LE order
 */
-#define WriteLE4Byte(_ptr, _val)	((*((__le32 *)(_ptr))) = cpu_to_le32(_val))
-#define WriteLE2Byte(_ptr, _val)	((*((__le16 *)(_ptr))) = cpu_to_le16(_val))
+#define WriteLE4Byte(_ptr, _val)	((*((u32 *)(_ptr))) = cpu_to_le32(_val))
+#define WriteLE2Byte(_ptr, _val)	((*((u16 *)(_ptr))) = cpu_to_le16(_val))
 #define WriteLE1Byte(_ptr, _val)	((*((u8 *)(_ptr))) = ((u8)(_val)))
 
 /*
 * Write host byte order data to memory in BE order
 */
-#define WriteBE4Byte(_ptr, _val)	((*((__be32 *)(_ptr))) = cpu_to_be32(_val))
-#define WriteBE2Byte(_ptr, _val)	((*((__be16 *)(_ptr))) = cpu_to_be16(_val))
+#define WriteBE4Byte(_ptr, _val)	((*((u32 *)(_ptr))) = cpu_to_be32(_val))
+#define WriteBE2Byte(_ptr, _val)	((*((u16 *)(_ptr))) = cpu_to_be16(_val))
 #define WriteBE1Byte(_ptr, _val)	((*((u8 *)(_ptr))) = ((u8)(_val)))
 
 /*
 * Return 4-byte value in host byte ordering from 4-byte pointer in litten-endian system.
 */
-#define LE_P4BYTE_TO_HOST_4BYTE(__pStart) (le32_to_cpu(*((__le32 *)(__pStart))))
-#define LE_P2BYTE_TO_HOST_2BYTE(__pStart) (le16_to_cpu(*((__le16 *)(__pStart))))
+#define LE_P4BYTE_TO_HOST_4BYTE(__pStart) (le32_to_cpu(*((u32 *)(__pStart))))
+#define LE_P2BYTE_TO_HOST_2BYTE(__pStart) (le16_to_cpu(*((u16 *)(__pStart))))
 #define LE_P1BYTE_TO_HOST_1BYTE(__pStart) ((*((u8 *)(__pStart))))
 
 /*
 * Return 4-byte value in host byte ordering from 4-byte pointer in big-endian system.
 */
-#define BE_P4BYTE_TO_HOST_4BYTE(__pStart) (be32_to_cpu(*((__be32 *)(__pStart))))
-#define BE_P2BYTE_TO_HOST_2BYTE(__pStart) (be16_to_cpu(*((__be16 *)(__pStart))))
+#define BE_P4BYTE_TO_HOST_4BYTE(__pStart) (be32_to_cpu(*((u32 *)(__pStart))))
+#define BE_P2BYTE_TO_HOST_2BYTE(__pStart) (be16_to_cpu(*((u16 *)(__pStart))))
 #define BE_P1BYTE_TO_HOST_1BYTE(__pStart) ((*((u8 *)(__pStart))))
 
 /*

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * Copyright (c) 2022 Wesion Technology Co., Ltd.
+ * Copyright (c) 2023 Wesion Technology Co., Ltd.
  *
  */
 
@@ -27,126 +27,95 @@
 		};
 	};
 
-	khadas_pogo_pin {
-		compatible = "khadas-pogo-pin";
-		io-channels = <&saradc 2>;
-		io-channel-names = "pogo_pin";
-		poll-interval = <10>;
-		pogo-pwr-en = <&gpio3 RK_PB1 GPIO_ACTIVE_HIGH>;
+	backlight_mipi0: backlight-mipi0 {
+		compatible = "pwm-backlight";
+		brightness-levels = <
+			  0  20  20  21  21  22  22  23
+			 23  24  24  25  25  26  26  27
+			 27  28  28  29  29  30  30  31
+			 31  32  32  33  33  34  34  35
+			 35  36  36  37  37  38  38  39
+			 40  41  42  43  44  45  46  47
+			 48  49  50  51  52  53  54  55
+			 56  57  58  59  60  61  62  63
+			 64  65  66  67  68  69  70  71
+			 72  73  74  75  76  77  78  79
+			 80  81  82  83  84  85  86  87
+			 88  89  90  91  92  93  94  95
+			 96  97  98  99 100 101 102 103
+			104 105 106 107 108 109 110 111
+			112 113 114 115 116 117 118 119
+			120 121 122 123 124 125 126 127
+			128 129 130 131 132 133 134 135
+			136 137 138 139 140 141 142 143
+			144 145 146 147 148 149 150 151
+			152 153 154 155 156 157 158 159
+			160 161 162 163 164 165 166 167
+			168 169 170 171 172 173 174 175
+			176 177 178 179 180 181 182 183
+			184 185 186 187 188 189 190 191
+			192 193 194 195 196 197 198 199
+			200 201 202 203 204 205 206 207
+			208 209 210 211 212 213 214 215
+			216 217 218 219 220 221 222 223
+			224 225 226 227 228 229 230 231
+			232 233 234 235 236 237 238 239
+			240 241 242 243 244 245 246 247
+			248 249 250 251 252 253 254 255
+		>;
+		default-brightness-level = <200>;
 	};
 
-	khadas_wdt {
-		compatible = "linux,wdt-khadas";
-		status = "okay";
-		hw_margin_ms = <500>;
-		hw-gpios = <&gpio0 RK_PB0 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&wdt_gpio>;
-	};
-
-	leds {
-		compatible = "gpio-leds";
-		pinctrl-names = "default";
-
-		red_led {
-			gpios = <&gpio4 RK_PB4 GPIO_ACTIVE_HIGH>;
-			label = "red_led";
-			linux,default-trigger = "off";
-			default-state = "on";
-		};
-
-		green_led {
-			gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
-			label = "green_led";
-			linux,default-trigger = "off";
-			default-state = "on";
-		};
-
-		blue_led {
-			gpios = <&gpio4 RK_PB3 GPIO_ACTIVE_HIGH>;
-			label = "blue_led";
-			linux,default-trigger = "default-on";
-			default-state = "on";
-		};
+	dp0_sound: dp0-sound {
+		status = "disabled";
+		compatible = "rockchip,hdmi";
+		rockchip,card-name= "rockchip-dp0";
+		rockchip,mclk-fs = <512>;
+		rockchip,cpu = <&spdif_tx2>;
+		rockchip,codec = <&dp0 1>;
+		rockchip,jack-det;
 	};
 
 	backlight_mipi1: backlight-mipi1 {
-		compatible = "pwm-backlight";
-		brightness-levels = <
-			  0  20  20  21  21  22  22  23
-			 23  24  24  25  25  26  26  27
-			 27  28  28  29  29  30  30  31
-			 31  32  32  33  33  34  34  35
-			 35  36  36  37  37  38  38  39
-			 40  41  42  43  44  45  46  47
-			 48  49  50  51  52  53  54  55
-			 56  57  58  59  60  61  62  63
-			 64  65  66  67  68  69  70  71
-			 72  73  74  75  76  77  78  79
-			 80  81  82  83  84  85  86  87
-			 88  89  90  91  92  93  94  95
-			 96  97  98  99 100 101 102 103
-			104 105 106 107 108 109 110 111
-			112 113 114 115 116 117 118 119
-			120 121 122 123 124 125 126 127
-			128 129 130 131 132 133 134 135
-			136 137 138 139 140 141 142 143
-			144 145 146 147 148 149 150 151
-			152 153 154 155 156 157 158 159
-			160 161 162 163 164 165 166 167
-			168 169 170 171 172 173 174 175
-			176 177 178 179 180 181 182 183
-			184 185 186 187 188 189 190 191
-			192 193 194 195 196 197 198 199
-			200 201 202 203 204 205 206 207
-			208 209 210 211 212 213 214 215
-			216 217 218 219 220 221 222 223
-			224 225 226 227 228 229 230 231
-			232 233 234 235 236 237 238 239
-			240 241 242 243 244 245 246 247
-			248 249 250 251 252 253 254 255
-		>;
-		default-brightness-level = <200>;
-	};
+        compatible = "pwm-backlight";
+        brightness-levels = <
+              0  20  20  21  21  22  22  23
+             23  24  24  25  25  26  26  27
+             27  28  28  29  29  30  30  31
+             31  32  32  33  33  34  34  35
+             35  36  36  37  37  38  38  39
+             40  41  42  43  44  45  46  47
+             48  49  50  51  52  53  54  55
+             56  57  58  59  60  61  62  63
+             64  65  66  67  68  69  70  71
+             72  73  74  75  76  77  78  79
+             80  81  82  83  84  85  86  87
+             88  89  90  91  92  93  94  95
+             96  97  98  99 100 101 102 103
+            104 105 106 107 108 109 110 111
+            112 113 114 115 116 117 118 119
+            120 121 122 123 124 125 126 127
+            128 129 130 131 132 133 134 135
+            136 137 138 139 140 141 142 143
+            144 145 146 147 148 149 150 151
+            152 153 154 155 156 157 158 159
+            160 161 162 163 164 165 166 167
+            168 169 170 171 172 173 174 175
+            176 177 178 179 180 181 182 183
+            184 185 186 187 188 189 190 191
+            192 193 194 195 196 197 198 199
+            200 201 202 203 204 205 206 207
+            208 209 210 211 212 213 214 215
+            216 217 218 219 220 221 222 223
+            224 225 226 227 228 229 230 231
+            232 233 234 235 236 237 238 239
+            240 241 242 243 244 245 246 247
+            248 249 250 251 252 253 254 255
+        >;
+        default-brightness-level = <200>;
+    };
 
-	backlight_mipi2: backlight-mipi2 {
-		compatible = "pwm-backlight";
-		brightness-levels = <
-			  0  20  20  21  21  22  22  23
-			 23  24  24  25  25  26  26  27
-			 27  28  28  29  29  30  30  31
-			 31  32  32  33  33  34  34  35
-			 35  36  36  37  37  38  38  39
-			 40  41  42  43  44  45  46  47
-			 48  49  50  51  52  53  54  55
-			 56  57  58  59  60  61  62  63
-			 64  65  66  67  68  69  70  71
-			 72  73  74  75  76  77  78  79
-			 80  81  82  83  84  85  86  87
-			 88  89  90  91  92  93  94  95
-			 96  97  98  99 100 101 102 103
-			104 105 106 107 108 109 110 111
-			112 113 114 115 116 117 118 119
-			120 121 122 123 124 125 126 127
-			128 129 130 131 132 133 134 135
-			136 137 138 139 140 141 142 143
-			144 145 146 147 148 149 150 151
-			152 153 154 155 156 157 158 159
-			160 161 162 163 164 165 166 167
-			168 169 170 171 172 173 174 175
-			176 177 178 179 180 181 182 183
-			184 185 186 187 188 189 190 191
-			192 193 194 195 196 197 198 199
-			200 201 202 203 204 205 206 207
-			208 209 210 211 212 213 214 215
-			216 217 218 219 220 221 222 223
-			224 225 226 227 228 229 230 231
-			232 233 234 235 236 237 238 239
-			240 241 242 243 244 245 246 247
-			248 249 250 251 252 253 254 255
-		>;
-		default-brightness-level = <200>;
-	};
+
 
 	hdmi0_sound: hdmi0-sound {
 		status = "disabled";
@@ -154,29 +123,27 @@
 		rockchip,mclk-fs = <128>;
 		rockchip,card-name = "rockchip-hdmi0";
 		rockchip,cpu = <&i2s5_8ch>;
-		  rockchip,codec = <&hdmi0>;
+		rockchip,codec = <&hdmi0>;
 		rockchip,jack-det;
-    };
-
-	sound_micarray: sound-micarray {
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,name = "rockchip,sound-micarray";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,dai-link@0 {
-			format = "pdm";
-			cpu {
-				sound-dai = <&pdm0>;
-			};
-			codec {
-				sound-dai = <&dummy_codec>;
-			};
-		};
 	};
 
-	dummy_codec: dummy-codec {
-		compatible = "rockchip,dummy-codec";
+	spdif_tx1_dc: spdif-tx1-dc {
+		status = "disabled";
+		compatible = "linux,spdif-dit";
 		#sound-dai-cells = <0>;
+	};
+
+	spdif_tx1_sound: spdif-tx1-sound {
+		status = "disabled";
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "rockchip,spdif-tx1";
+		simple-audio-card,mclk-fs = <128>;
+		simple-audio-card,cpu {
+			sound-dai = <&spdif_tx1>;
+		};
+		simple-audio-card,codec {
+			sound-dai = <&spdif_tx1_dc>;
+		};
 	};
 
 	test-power {
@@ -203,14 +170,14 @@
 	};
 
 	vcc_1v1_nldo_s3: vcc-1v1-nldo-s3 {
-		compatible = "regulator-fixed";
-		regulator-name = "vcc_1v1_nldo_s3";
-		regulator-always-on;
-		regulator-boot-on;
-		regulator-min-microvolt = <1100000>;
-		regulator-max-microvolt = <1100000>;
-		vin-supply = <&vcc5v0_sys>;
-	};
+        compatible = "regulator-fixed";
+        regulator-name = "vcc_1v1_nldo_s3";
+        regulator-always-on;
+        regulator-boot-on;
+        regulator-min-microvolt = <1100000>;
+        regulator-max-microvolt = <1100000>;
+        vin-supply = <&vcc5v0_sys>;
+    };
 
 	vcc5v0_usbdcin: vcc5v0-usbdcin {
 		compatible = "regulator-fixed";
@@ -231,19 +198,6 @@
 		regulator-max-microvolt = <5000000>;
 		vin-supply = <&vcc5v0_usbdcin>;
 	};
-};
-
-&pdm0 {
-	rockchip,path-map = <0 1 2 3>;
-	status = "okay";
-};
-
-&sound_micarray {
-	status = "okay";
-};
-
-&dummy_codec {
-	status = "okay";
 };
 
 &av1d_mmu {
@@ -280,7 +234,8 @@
 		status = "okay";
 		compatible = "simple-panel-dsi";
 		reg = <0>;
-		backlight = <&backlight_mipi1>;
+		backlight = <&backlight_mipi0>;
+	//	reset-delay-ms = <60>;
 		enable-delay-ms = <60>;
 		prepare-delay-ms = <60>;
 		unprepare-delay-ms = <60>;
@@ -813,6 +768,32 @@
 			15 00 02 FF 00
 			15 00 02 35 00
 			05 0A 01 29
+		];
+
+		panel-init-sequence2 = [
+			39 00 04 B9 FF 83 99
+			39 00 05 BA 63 23 68 CF
+			15 00 02 D2 55
+			39 00 10 B1 02 04 70 90 01 32 33 11 11 4D 57 56 73 02 02
+			39 00 0c B2 00 80 80 AE 0A 0E 75 11 00 00 00
+			39 00 2f B4 00 FF 04 A4 02 A0 00 00 10 00 00 02 00 24 02 04 0A 21 03 00 00 08 A6 88 04 A4 02 A0 00 00 10 00 00 02 00 24 02 04 0A 00 00 08 A6 00 08 11
+			39 00 22 D3 00 00 00 00 00 00 18 18 32 10 09 00 09 32 10 00 00 00 00 00 00 00 00 11 00 02 02 03 00 00 00 0A 40
+			39 00 21 D5 18 18 18 18 21 20 18 18 19 19 19 19 18 18 18 18 03 02 01 00 2F 2F 30 30 31 31 18 18 18 18 18 18
+			39 00 21 D6 18 18 18 18 20 21 19 19 18 18 19 19 18 18 18 18 00 01 02 03 2F 2F 30 30 31 31 18 18 18 18 18 18
+			39 00 09 D8 0A BE FA A0 0A BE FA A0
+			15 00 02 BD 01
+			39 00 09 D8 0F FF FF E0 0F FF FF E0
+			15 00 02 BD 02
+			39 00 09 D8 0F FF FF E0 0F FF FF E0
+			15 00 02 BD 00
+			39 00 37 E0 01 35 41 3B 79 81 8C 85 8E 95 9B A0 A4 AB B1 B3 B7 C5 BD C5 B6 C2 C2 62 5D 66 73 01 35 41 3B 79 81 8C 85 8E 95 9B A0 A4 AB B1 B3 B7 B5 BD C5 B6 C2 C2 62 5D 66 73
+			39 00 03 B6 97 97
+			15 00 02 CC C8
+			39 00 05 BF 40 41 50 19
+			39 00 03 C6 FF F9
+			39 00 03 C0 25 5A
+			05 78 01 11
+			05 14 01 29
 		];
 
 		panel-exit-sequence = [
@@ -889,10 +870,11 @@
 	status = "disabled";
 	//rockchip,lane-rate = <1000>;
 	dsi1_panel: panel@0 {
-		status = "okay";
+		status = "disabled";
 		compatible = "simple-panel-dsi";
 		reg = <0>;
-		backlight = <&backlight_mipi2>;
+		backlight = <&backlight_mipi1>;
+//		reset-delay-ms = <60>;
 		enable-delay-ms = <60>;
 		prepare-delay-ms = <60>;
 		unprepare-delay-ms = <60>;
@@ -1427,6 +1409,32 @@
 			05 0A 01 29
 		];
 
+		panel-init-sequence2 = [
+			39 00 04 B9 FF 83 99
+			39 00 05 BA 63 23 68 CF
+			15 00 02 D2 55
+			39 00 10 B1 02 04 70 90 01 32 33 11 11 4D 57 56 73 02 02
+			39 00 0c B2 00 80 80 AE 0A 0E 75 11 00 00 00
+			39 00 2f B4 00 FF 04 A4 02 A0 00 00 10 00 00 02 00 24 02 04 0A 21 03 00 00 08 A6 88 04 A4 02 A0 00 00 10 00 00 02 00 24 02 04 0A 00 00 08 A6 00 08 11
+			39 00 22 D3 00 00 00 00 00 00 18 18 32 10 09 00 09 32 10 00 00 00 00 00 00 00 00 11 00 02 02 03 00 00 00 0A 40
+			39 00 21 D5 18 18 18 18 21 20 18 18 19 19 19 19 18 18 18 18 03 02 01 00 2F 2F 30 30 31 31 18 18 18 18 18 18
+			39 00 21 D6 18 18 18 18 20 21 19 19 18 18 19 19 18 18 18 18 00 01 02 03 2F 2F 30 30 31 31 18 18 18 18 18 18
+			39 00 09 D8 0A BE FA A0 0A BE FA A0
+			15 00 02 BD 01
+			39 00 09 D8 0F FF FF E0 0F FF FF E0
+			15 00 02 BD 02
+			39 00 09 D8 0F FF FF E0 0F FF FF E0
+			15 00 02 BD 00
+			39 00 37 E0 01 35 41 3B 79 81 8C 85 8E 95 9B A0 A4 AB B1 B3 B7 C5 BD C5 B6 C2 C2 62 5D 66 73 01 35 41 3B 79 81 8C 85 8E 95 9B A0 A4 AB B1 B3 B7 B5 BD C5 B6 C2 C2 62 5D 66 73
+			39 00 03 B6 97 97
+			15 00 02 CC C8
+			39 00 05 BF 40 41 50 19
+			39 00 03 C6 FF F9
+			39 00 03 C0 25 5A
+			05 78 01 11
+			05 14 01 29
+		];
+
 		panel-exit-sequence = [
 			05 05 01 28
 			05 78 01 10
@@ -1435,7 +1443,7 @@
 		disp_timings1: display-timings {
 			native-mode = <&dsi1_timing0>;
 			dsi1_timing0: timing0 {
-				clock-frequency = <152200000>;
+				clock-frequency = <152198100>;
 				hactive = <1080>;
 				vactive = <1920>;
 				hfront-porch = <104>;
@@ -1444,25 +1452,6 @@
 				vfront-porch = <4>;
 				vsync-len = <2>;
 				vback-porch = <3>;
-				hsync-active = <0>;
-				vsync-active = <0>;
-				de-active = <0>;
-				pixelclk-active = <0>;
-			};
-		};
-
-		disp_timings11: display-timings1 {
-			native-mode = <&dsi1_timing01>;
-			dsi1_timing01: timing01 {
-				clock-frequency = <152350000>;
-				hactive = <1920>;
-				vactive = <1200>;
-				hfront-porch = <110>;
-				hsync-len = <4>;
-				hback-porch = <32>;
-				vfront-porch = <11>;
-				vsync-len = <4>;
-				vback-porch = <14>;
 				hsync-active = <0>;
 				vsync-active = <0>;
 				de-active = <0>;
@@ -1622,6 +1611,8 @@
 };
 
 &rkvenc0 {
+	venc-supply = <&vdd_vdenc_s0>;
+	mem-supply = <&vdd_vdenc_mem_s0>;
 	status = "okay";
 };
 
@@ -1630,6 +1621,8 @@
 };
 
 &rkvenc1 {
+	venc-supply = <&vdd_vdenc_s0>;
+	mem-supply = <&vdd_vdenc_mem_s0>;
 	status = "okay";
 };
 
@@ -1655,6 +1648,7 @@
 	max-frequency = <200000000>;
 	mmc-hs400-1_8v;
 	mmc-hs400-enhanced-strobe;
+	full-pwr-cycle-in-suspend;
 	status = "okay";
 };
 
@@ -1750,6 +1744,10 @@
 };
 
 &vdpu_mmu {
+	status = "okay";
+};
+
+&vepu {
 	status = "okay";
 };
 

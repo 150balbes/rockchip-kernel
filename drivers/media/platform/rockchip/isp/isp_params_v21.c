@@ -3648,6 +3648,7 @@ void __isp_isr_meas_config(struct rkisp_isp_params_vdev *params_vdev,
 		(struct rkisp_isp_params_v21_ops *)params_vdev->priv_ops;
 	u64 module_cfg_update = new_params->module_cfg_update;
 
+	params_vdev->cur_frame_id = new_params->frame_id;
 	if (type == RKISP_PARAMS_SHD)
 		return;
 
@@ -3853,8 +3854,8 @@ multi_overflow:
 		 * |_________|
 		 *
 		 * case1:      bigmode               special reg cfg
-		 *  _________  max width:4096
-		 * | sensor0 | max size:3840*2160    mode=0 index=0
+		 *  _________  max width:3840
+		 * | sensor0 | max size:3840*2160    mode=1 index=0
 		 * |_________|
 		 * |_sensor1_| max size:1920*1080    mode=2 index=2
 		 * |_sensor2_| max size:1920*1080    mode=2 index=3
@@ -3881,7 +3882,7 @@ multi_overflow:
 				goto multi_overflow;
 			} else {
 				if (idx1[0] == ispdev->dev_id) {
-					ispdev->multi_mode = 0;
+					ispdev->multi_mode = 1;
 					ispdev->multi_index = 0;
 				} else {
 					ispdev->multi_mode = 2;
@@ -4110,14 +4111,14 @@ rkisp_params_get_ldchbuf_inf_v2x(struct rkisp_isp_params_vdev *params_vdev,
 	}
 }
 
-static void
+static int
 rkisp_params_set_ldchbuf_size_v2x(struct rkisp_isp_params_vdev *params_vdev,
 				  void *size)
 {
 	struct rkisp_ldchbuf_size *ldchsize = size;
 
 	rkisp_deinit_ldch_buf(params_vdev);
-	rkisp_init_ldch_buf(params_vdev, ldchsize);
+	return rkisp_init_ldch_buf(params_vdev, ldchsize);
 }
 
 static void

@@ -2,9 +2,12 @@
 #
 # Makefile for misc devices that really don't fit anywhere else.
 #
-
 KBUILD_CFLAGS += -Wno-unused-function
+
+obj-y				+= rk628/
 obj-$(CONFIG_RK803)		+= rk803.o
+obj-y				+= rockchip/
+obj-$(CONFIG_LT7911D_FB_NOTIFIER) += lt7911d-fb-notifier.o
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_IBMVMC)		+= ibmvmc.o
 obj-$(CONFIG_AD525X_DPOT)	+= ad525x_dpot.o
@@ -60,4 +63,5 @@ obj-$(CONFIG_UACCE)		+= uacce/
 obj-$(CONFIG_XILINX_SDFEC)	+= xilinx_sdfec.o
 obj-$(CONFIG_HISI_HIKEY_USB)	+= hisi_hikey_usb.o
 obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
-obj-$(CONFIG_KHADAS_MCU)    +=khadas-mcu.o
+obj-$(CONFIG_RK803)		+= rk803.o
+obj-$(CONFIG_KHADAS_MCU) += khadas-mcu.o

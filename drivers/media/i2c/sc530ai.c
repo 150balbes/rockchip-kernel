@@ -1507,7 +1507,7 @@ static void __sc530ai_power_off(struct sc530ai *sc530ai)
 	regulator_bulk_disable(sc530ai_NUM_SUPPLIES, sc530ai->supplies);
 }
 
-static int sc530ai_runtime_resume(struct device *dev)
+static int __maybe_unused sc530ai_runtime_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
@@ -1516,7 +1516,7 @@ static int sc530ai_runtime_resume(struct device *dev)
 	return __sc530ai_power_on(sc530ai);
 }
 
-static int sc530ai_runtime_suspend(struct device *dev)
+static int __maybe_unused sc530ai_runtime_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
@@ -1668,7 +1668,7 @@ static int sc530ai_set_ctrl(struct v4l2_ctrl *ctrl)
 	switch (ctrl->id) {
 	case V4L2_CID_EXPOSURE:
 		if (sc530ai->cur_mode->hdr_mode != NO_HDR)
-			return ret;
+			goto ctrl_end;
 		val = ctrl->val << 1;
 		ret = sc530ai_write_reg(sc530ai->client,
 					SC530AI_REG_EXPOSURE_H,
@@ -1687,7 +1687,7 @@ static int sc530ai_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
 		if (sc530ai->cur_mode->hdr_mode != NO_HDR)
-			return ret;
+			goto ctrl_end;
 
 		sc530ai_get_gain_reg(ctrl->val, &again, &dgain, &dgain_fine);
 		ret = sc530ai_write_reg(sc530ai->client,
@@ -1716,8 +1716,7 @@ static int sc530ai_set_ctrl(struct v4l2_ctrl *ctrl)
 					 vts & 0xff);
 		if (!ret)
 			sc530ai->cur_vts = vts;
-		if (sc530ai->cur_vts != sc530ai->cur_mode->vts_def)
-			sc530ai_modify_fps_info(sc530ai);
+		sc530ai_modify_fps_info(sc530ai);
 		dev_dbg(&client->dev, "set vblank 0x%x\n", ctrl->val);
 		break;
 	case V4L2_CID_HFLIP:
@@ -1756,6 +1755,7 @@ static int sc530ai_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
+ctrl_end:
 	pm_runtime_put(&client->dev);
 
 	return ret;

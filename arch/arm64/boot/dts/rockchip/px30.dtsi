@@ -4,6 +4,7 @@
  */
 
 #include <dt-bindings/clock/px30-cru.h>
+#include <dt-bindings/display/media-bus-format.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/interrupt-controller/irq.h>
@@ -40,6 +41,7 @@
 		serial5 = &uart5;
 		spi0 = &spi0;
 		spi1 = &spi1;
+		spi2 = &sfc;
 	};
 
 	cpus {
@@ -673,7 +675,8 @@
 		clocks = <&pmucru SCLK_UART0_PMU>, <&pmucru PCLK_UART0_PMU>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 0>, <&dmac 1>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -876,7 +879,8 @@
 		clocks = <&cru SCLK_UART1>, <&cru PCLK_UART1>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 2>, <&dmac 3>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -891,7 +895,8 @@
 		clocks = <&cru SCLK_UART2>, <&cru PCLK_UART2>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 4>, <&dmac 5>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -906,7 +911,8 @@
 		clocks = <&cru SCLK_UART3>, <&cru PCLK_UART3>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 6>, <&dmac 7>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -921,7 +927,8 @@
 		clocks = <&cru SCLK_UART4>, <&cru PCLK_UART4>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 8>, <&dmac 9>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -936,7 +943,8 @@
 		clocks = <&cru SCLK_UART5>, <&cru PCLK_UART5>;
 		clock-names = "baudclk", "apb_pclk";
 		dmas = <&dmac 10>, <&dmac 11>;
-		dma-names = "tx", "rx";
+		/*You can add it to enable dma*/
+		/*dma-names = "tx", "rx";*/
 		reg-shift = <2>;
 		reg-io-width = <4>;
 		pinctrl-names = "default";
@@ -1207,38 +1215,33 @@
 	cru: clock-controller@ff2b0000 {
 		compatible = "rockchip,px30-cru";
 		reg = <0x0 0xff2b0000 0x0 0x1000>;
-		clocks = <&xin24m>, <&pmucru PLL_GPLL>;
-		clock-names = "xin24m", "gpll";
 		rockchip,grf = <&grf>;
 		#clock-cells = <1>;
 		#reset-cells = <1>;
 
-		assigned-clocks = <&cru PLL_NPLL>,
-			<&cru ACLK_BUS_PRE>, <&cru ACLK_PERI_PRE>,
-			<&cru HCLK_BUS_PRE>, <&cru HCLK_PERI_PRE>,
-			<&cru PCLK_BUS_PRE>, <&cru SCLK_GPU>;
-
-		assigned-clock-rates = <1188000000>,
-			<200000000>, <200000000>,
-			<150000000>, <150000000>,
-			<100000000>, <200000000>;
+		assigned-clocks = <&cru PLL_NPLL>;
+		assigned-clock-rates = <1188000000>;
 	};
 
 	pmucru: clock-controller@ff2bc000 {
 		compatible = "rockchip,px30-pmucru";
 		reg = <0x0 0xff2bc000 0x0 0x1000>;
-		clocks = <&xin24m>;
-		clock-names = "xin24m";
 		rockchip,grf = <&grf>;
 		#clock-cells = <1>;
 		#reset-cells = <1>;
 
 		assigned-clocks =
 			<&pmucru PLL_GPLL>, <&pmucru PCLK_PMU_PRE>,
-			<&pmucru SCLK_WIFI_PMU>;
+			<&pmucru SCLK_WIFI_PMU>, <&cru ARMCLK>,
+			<&cru ACLK_BUS_PRE>, <&cru ACLK_PERI_PRE>,
+			<&cru HCLK_BUS_PRE>, <&cru HCLK_PERI_PRE>,
+			<&cru PCLK_BUS_PRE>, <&cru SCLK_GPU>;
 		assigned-clock-rates =
 			<1200000000>, <100000000>,
-			<26000000>;
+			<26000000>, <600000000>,
+			<200000000>, <200000000>,
+			<150000000>, <150000000>,
+			<100000000>, <200000000>;
 	};
 
 	usb2phy_grf: syscon@ff2c0000 {
@@ -1415,6 +1418,17 @@
 		status = "disabled";
 	};
 
+	sfc: spi@ff3a0000 {
+		compatible = "rockchip,sfc";
+		reg = <0x0 0xff3a0000 0x0 0x4000>;
+		interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_SFC>, <&cru HCLK_SFC>;
+		clock-names = "clk_sfc", "hclk_sfc";
+		assigned-clocks = <&cru SCLK_SFC>;
+		assigned-clock-rates = <100000000>;
+		status = "disabled";
+	};
+
 	nandc0: nandc@ff3b0000 {
 		compatible = "rockchip,rk-nandc";
 		reg = <0x0 0xff3b0000 0x0 0x4000>;
@@ -1579,6 +1593,7 @@
 		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
 		clock-names = "aclk", "iface";
 		power-domains = <&power PX30_PD_VPU>;
+		rockchip,shootdown-entire;
 		#iommu-cells = <0>;
 		status = "disabled";
 	};
@@ -1629,6 +1644,7 @@
 		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
 		clock-names = "aclk", "iface";
 		power-domains = <&power PX30_PD_VPU>;
+		rockchip,shootdown-entire;
 		#iommu-cells = <0>;
 		status = "disabled";
 	};
@@ -2620,27 +2636,27 @@
 		i2s0 {
 			i2s0_8ch_mclk: i2s0-8ch-mclk {
 				rockchip,pins =
-					<3 RK_PC1 2 &pcfg_pull_none>;
+					<3 RK_PC1 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s0_8ch_sclktx: i2s0-8ch-sclktx {
 				rockchip,pins =
-					<3 RK_PC3 2 &pcfg_pull_none>;
+					<3 RK_PC3 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s0_8ch_sclkrx: i2s0-8ch-sclkrx {
 				rockchip,pins =
-					<3 RK_PB4 2 &pcfg_pull_none>;
+					<3 RK_PB4 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s0_8ch_lrcktx: i2s0-8ch-lrcktx {
 				rockchip,pins =
-					<3 RK_PC2 2 &pcfg_pull_none>;
+					<3 RK_PC2 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s0_8ch_lrckrx: i2s0-8ch-lrckrx {
 				rockchip,pins =
-					<3 RK_PB5 2 &pcfg_pull_none>;
+					<3 RK_PB5 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s0_8ch_sdo0: i2s0-8ch-sdo0 {
@@ -2687,17 +2703,17 @@
 		i2s1 {
 			i2s1_2ch_mclk: i2s1-2ch-mclk {
 				rockchip,pins =
-					<2 RK_PC3 1 &pcfg_pull_none>;
+					<2 RK_PC3 1 &pcfg_pull_none_smt>;
 			};
 
 			i2s1_2ch_sclk: i2s1-2ch-sclk {
 				rockchip,pins =
-					<2 RK_PC2 1 &pcfg_pull_none>;
+					<2 RK_PC2 1 &pcfg_pull_none_smt>;
 			};
 
 			i2s1_2ch_lrck: i2s1-2ch-lrck {
 				rockchip,pins =
-					<2 RK_PC1 1 &pcfg_pull_none>;
+					<2 RK_PC1 1 &pcfg_pull_none_smt>;
 			};
 
 			i2s1_2ch_sdi: i2s1-2ch-sdi {
@@ -2714,17 +2730,17 @@
 		i2s2 {
 			i2s2_2ch_mclk: i2s2-2ch-mclk {
 				rockchip,pins =
-					<3 RK_PA1 2 &pcfg_pull_none>;
+					<3 RK_PA1 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s2_2ch_sclk: i2s2-2ch-sclk {
 				rockchip,pins =
-					<3 RK_PA2 2 &pcfg_pull_none>;
+					<3 RK_PA2 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s2_2ch_lrck: i2s2-2ch-lrck {
 				rockchip,pins =
-					<3 RK_PA3 2 &pcfg_pull_none>;
+					<3 RK_PA3 2 &pcfg_pull_none_smt>;
 			};
 
 			i2s2_2ch_sdi: i2s2-2ch-sdi {

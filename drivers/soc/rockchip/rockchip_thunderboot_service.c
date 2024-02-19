@@ -55,6 +55,25 @@ int rk_tb_client_register_cb(struct rk_tb_client *client)
 }
 EXPORT_SYMBOL(rk_tb_client_register_cb);
 
+int rk_tb_client_register_cb_head(struct rk_tb_client *client)
+{
+	if (!client || !client->cb)
+		return -EINVAL;
+
+	spin_lock(&lock);
+	if (rk_tb_mcu_is_done()) {
+		spin_unlock(&lock);
+		client->cb(client->data);
+		return 0;
+	}
+
+	list_add(&client->node, &clients_list);
+	spin_unlock(&lock);
+
+	return 0;
+}
+EXPORT_SYMBOL(rk_tb_client_register_cb_head);
+
 static void do_mcu_done(struct rk_tb_serv *serv)
 {
 	struct rk_tb_client *client, *client_s;
@@ -78,7 +97,6 @@ static void do_mcu_done(struct rk_tb_serv *serv)
 			return;
 		}
 
-		atomic_set(&mcu_done, 1);
 		list_for_each_entry_safe(client, client_s, &clients_list, node) {
 			spin_unlock(&lock);
 			if (client->cb)
@@ -86,6 +104,7 @@ static void do_mcu_done(struct rk_tb_serv *serv)
 			spin_lock(&lock);
 			list_del(&client->node);
 		}
+		atomic_set(&mcu_done, 1);
 		spin_unlock(&lock);
 	}
 }

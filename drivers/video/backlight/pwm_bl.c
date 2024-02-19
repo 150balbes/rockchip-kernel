@@ -19,6 +19,11 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
+static bool bl_quiescent;
+module_param_named(quiescent, bl_quiescent, bool, 0600);
+MODULE_PARM_DESC(quiescent,
+		 "pwm bl quiescent when reboot quiescent [default=false]");
+
 struct pwm_bl_data {
 	struct pwm_device	*pwm;
 	struct device		*dev;
@@ -64,8 +69,6 @@ static void pwm_backlight_power_on(struct pwm_bl_data *pb)
 	pb->enabled = true;
 }
 
-extern void tp_into_suspend(void);
-
 static void pwm_backlight_power_off(struct pwm_bl_data *pb)
 {
 	struct pwm_state state;
@@ -81,8 +84,6 @@ static void pwm_backlight_power_off(struct pwm_bl_data *pb)
 		msleep(pb->pwm_off_delay);
 
 	state.enabled = false;
-	//printk("pwm_backlight_power_off() tp_into_suspend\n");
-	tp_into_suspend();
 	state.duty_cycle = 0;
 	pwm_apply_state(pb->pwm, &state);
 
@@ -631,7 +632,12 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 		data->dft_brightness = data->max_brightness;
 	}
 
-	bl->props.brightness = data->dft_brightness;
+	/* set brightness 0, when boot quiescent */
+	if (bl_quiescent)
+		bl->props.brightness = 0;
+	else
+		bl->props.brightness = data->dft_brightness;
+
 	bl->props.power = pwm_backlight_initial_power_state(pb);
 	backlight_update_status(bl);
 

@@ -171,9 +171,7 @@ obj-$(CONFIG_MFD_MAX8925)	+= max8925.o
 obj-$(CONFIG_MFD_MAX8997)	+= max8997.o max8997-irq.o
 obj-$(CONFIG_MFD_MAX8998)	+= max8998.o max8998-irq.o
 obj-$(CONFIG_MFD_MAX96745)	+= max96745.o
-obj-$(CONFIG_MFD_MAX96752F)	+= max96752f.o
 obj-$(CONFIG_MFD_MAX96755F)	+= max96755f.o
-obj-$(CONFIG_MFD_MAX96776)	+= max96776.o
 
 obj-$(CONFIG_MFD_MP2629)	+= mp2629.o
 
@@ -279,5 +277,3 @@ obj-$(CONFIG_MFD_KHADAS_MCU) 	+= khadas-mcu.o
 obj-$(CONFIG_SGI_MFD_IOC3)	+= ioc3.o
 obj-$(CONFIG_MFD_SIMPLE_MFD_I2C)	+= simple-mfd-i2c.o
 obj-$(CONFIG_MFD_INTEL_M10_BMC)   += intel-m10-bmc.o
-
-obj-$(CONFIG_FUSB_30X)		+= fusb302.o

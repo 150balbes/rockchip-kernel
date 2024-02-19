@@ -1394,8 +1394,10 @@ static int __sc200ai_start_stream(struct sc200ai *sc200ai)
 static int __sc200ai_stop_stream(struct sc200ai *sc200ai)
 {
 	sc200ai->has_init_exp = false;
-	if (sc200ai->is_thunderboot)
+	if (sc200ai->is_thunderboot) {
 		sc200ai->is_first_streamoff = true;
+		pm_runtime_put(&sc200ai->client->dev);
+	}
 	return sc200ai_write_reg(sc200ai->client, SC200AI_REG_CTRL_MODE,
 				 SC200AI_REG_VALUE_08BIT, SC200AI_MODE_SW_STANDBY);
 }
@@ -1742,8 +1744,7 @@ static int sc200ai_set_ctrl(struct v4l2_ctrl *ctrl)
 					 & 0xff);
 		if (!ret)
 			sc200ai->cur_vts = ctrl->val + sc200ai->cur_mode->height;
-		if (sc200ai->cur_vts != sc200ai->cur_mode->vts_def)
-			sc200ai_modify_fps_info(sc200ai);
+		sc200ai_modify_fps_info(sc200ai);
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		ret = sc200ai_enable_test_pattern(sc200ai, ctrl->val);
@@ -2133,7 +2134,10 @@ static int sc200ai_probe(struct i2c_client *client,
 
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
-	pm_runtime_idle(dev);
+	if (sc200ai->is_thunderboot)
+		pm_runtime_get_sync(dev);
+	else
+		pm_runtime_idle(dev);
 
 	return 0;
 

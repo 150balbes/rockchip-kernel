@@ -7,7 +7,6 @@
 #include <dt-bindings/input/linux-event-codes.h>
 #include <dt-bindings/pwm/pwm.h>
 #include "rk3399.dtsi"
-#include "rk3399-linux.dtsi"
 #include "rk3399-opp.dtsi"
 
 / {
@@ -50,7 +49,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pwr_key_l>;
 
-		key-power {
+		power {
 			debounce-interval = <100>;
 			gpios = <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
 			label = "GPIO Key Power";
@@ -204,7 +203,7 @@
 		regulator-name = "vdd_log";
 		regulator-always-on;
 		regulator-boot-on;
-		regulator-min-microvolt = <430000>;
+		regulator-min-microvolt = <450000>;
 		regulator-max-microvolt = <1400000>;
 		pwm-supply = <&vcc3v3_sys>;
 	};
@@ -260,20 +259,9 @@
 };
 
 &hdmi {
+	ddc-i2c-bus = <&i2c3>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&hdmi_i2c_xfer>, <&hdmi_cec>;
-	#address-cells = <1>;
-	#size-cells = <0>;
-	#sound-dai-cells = <0>;
-	status = "okay";
-};
-
-&hdmi_in_vopl {
-	status = "disabled";
-};
-
-&route_hdmi {
-	connect = <&vopb_out_hdmi>;
+	pinctrl-0 = <&hdmi_cec>;
 	status = "okay";
 };
 
@@ -820,14 +808,8 @@
 	dr_mode = "host";
 };
 
-&display_subsystem {
-	status = "okay";
-};
-
 &vopb {
 	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP0_DIV>;
-	assigned-clock-parents = <&cru PLL_CPLL>;
 };
 
 &vopb_mmu {
@@ -836,8 +818,6 @@
 
 &vopl {
 	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP1_DIV>;
-	assigned-clock-parents = <&cru PLL_VPLL>;
 };
 
 &vopl_mmu {

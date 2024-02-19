@@ -243,7 +243,9 @@ objtool_args =								\
 	$(if $(or $(CONFIG_GCOV_KERNEL),$(CONFIG_LTO_CLANG)), 		\
 		--no-unreachable,)					\
 	$(if $(CONFIG_RETPOLINE), --retpoline,)				\
+	$(if $(CONFIG_RETHUNK), --rethunk,)				\
 	$(if $(CONFIG_X86_SMAP), --uaccess,)				\
+	$(if $(CONFIG_SLS), --sls,)					\
 	$(if $(CONFIG_FTRACE_MCOUNT_USE_OBJTOOL), --mcount,)
 
 # Useful for describing the dependency of composite objects
@@ -347,6 +349,9 @@ DTC_FLAGS += $(call dtc-option,-Wnode_name_chars_strict) \
 	$(call dtc-option,-Wproperty_name_chars_strict) \
 	$(call dtc-option,-Winterrupt_provider)
 endif
+
+# Enable creation of __symbols__ node
+DTC_FLAGS += -@
 
 DTC_FLAGS += $(DTC_FLAGS_$(basetarget))
 

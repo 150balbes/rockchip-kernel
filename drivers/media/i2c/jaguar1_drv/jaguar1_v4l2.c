@@ -39,6 +39,7 @@
 #include "jaguar1_video_eq.h"
 #include "jaguar1_mipi.h"
 #include "jaguar1_drv.h"
+#include "jaguar1_v4l2.h"
 
 #define DRIVER_VERSION				KERNEL_VERSION(0, 0x01, 0x1)
 
@@ -95,6 +96,7 @@ struct jaguar1_framesize {
 	u16 height;
 	struct v4l2_fract max_fps;
 	enum NC_VIVO_CH_FORMATDEF fmt_idx;
+	__u32 field;
 };
 
 struct jaguar1_default_rect {
@@ -149,6 +151,26 @@ static const struct jaguar1_framesize jaguar1_framesizes[] = {
 	}
 #else
 	{
+		.width		= 960,
+		.height		= 480,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 250000,
+		},
+		.fmt_idx	= AHD20_SD_H960_2EX_Btype_NT,
+		.field = V4L2_FIELD_INTERLACED,
+	},
+	{
+		.width		= 960,
+		.height		= 576,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 300000,
+		},
+		.fmt_idx	= AHD20_SD_H960_2EX_Btype_PAL,
+		.field = V4L2_FIELD_INTERLACED,
+	},
+	{
 		.width		= 1280,
 		.height		= 720,
 		.max_fps = {
@@ -156,6 +178,7 @@ static const struct jaguar1_framesize jaguar1_framesizes[] = {
 			.denominator = 250000,
 		},
 		.fmt_idx	= AHD20_720P_25P_EX_Btype,
+		.field = V4L2_FIELD_NONE
 	},
 	{
 		.width		= 1920,
@@ -165,6 +188,7 @@ static const struct jaguar1_framesize jaguar1_framesizes[] = {
 			.denominator = 250000,
 		},
 		.fmt_idx	= AHD20_1080P_25P,
+		.field = V4L2_FIELD_NONE
 	},
 	{
 		.width		= 2560,
@@ -174,6 +198,7 @@ static const struct jaguar1_framesize jaguar1_framesizes[] = {
 			.denominator = 250000,
 		},
 		.fmt_idx	= AHD20_720P_25P,
+		.field = V4L2_FIELD_NONE
 	}
 #endif
 };
@@ -402,7 +427,7 @@ static void jaguar1_get_default_format(struct jaguar1 *jaguar1)
 	format->colorspace = V4L2_COLORSPACE_SRGB;
 	format->code = jaguar1_formats[0].code;
 	jaguar1->frame_size = match;
-	format->field = V4L2_FIELD_NONE;
+	format->field = match->field;
 }
 
 static int jaguar1_stream(struct v4l2_subdev *sd, int on)
@@ -480,13 +505,28 @@ static int jaguar1_enum_frame_sizes(struct v4l2_subdev *sd,
 	return 0;
 }
 
-
 static int jaguar1_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
 				 struct v4l2_mbus_config *cfg)
 {
 	cfg->type = V4L2_MBUS_CSI2_DPHY;
 	cfg->flags = V4L2_MBUS_CSI2_4_LANE |
 		     V4L2_MBUS_CSI2_CHANNELS;
+
+	return 0;
+}
+
+static int jaguar1_enum_frame_interval(struct v4l2_subdev *sd,
+		struct v4l2_subdev_pad_config *cfg,
+		struct v4l2_subdev_frame_interval_enum *fie)
+{
+	if (fie->index >= ARRAY_SIZE(jaguar1_framesizes))
+		return -EINVAL;
+
+	fie->code = jaguar1_formats[0].code;
+
+	fie->width = jaguar1_framesizes[fie->index].width;
+	fie->height = jaguar1_framesizes[fie->index].height;
+	fie->interval = jaguar1_framesizes[fie->index].max_fps;
 
 	return 0;
 }
@@ -737,6 +777,7 @@ static const struct v4l2_subdev_video_ops jaguar1_video_ops = {
 static const struct v4l2_subdev_pad_ops jaguar1_subdev_pad_ops = {
 	.enum_mbus_code = jaguar1_enum_mbus_code,
 	.enum_frame_size = jaguar1_enum_frame_sizes,
+	.enum_frame_interval = jaguar1_enum_frame_interval,
 	.get_fmt = jaguar1_get_fmt,
 	.set_fmt = jaguar1_set_fmt,
 	.get_mbus_config = jaguar1_g_mbus_config,
@@ -937,6 +978,10 @@ static int jaguar1_probe(struct i2c_client *client,
 	sd = &jaguar1->subdev;
 	v4l2_i2c_subdev_init(sd, client, &jaguar1_subdev_ops);
 	ret = jaguar1_initialize_controls(jaguar1);
+	if (ret) {
+		dev_err(dev, "Failed to initialize controls jaguar1\n");
+		return ret;
+	}
 
 	__jaguar1_power_on(jaguar1);
 	ret = jaguar1_init(i2c_adapter_id(client->adapter));
@@ -987,6 +1032,8 @@ static int jaguar1_probe(struct i2c_client *client,
 	pm_runtime_enable(dev);
 	pm_runtime_idle(dev);
 
+	v4l2_info(sd, "%s found @ 0x%x (%s)\n", client->name,
+			client->addr << 1, client->adapter->name);
 	return 0;
 
 err_power_off:
@@ -1041,17 +1088,20 @@ static struct i2c_driver jaguar1_i2c_driver = {
 	.id_table	= jaguar1_match_id,
 };
 
-static int __init sensor_mod_init(void)
+int nvp6324_sensor_mod_init(void)
 {
 	return i2c_add_driver(&jaguar1_i2c_driver);
 }
+
+#ifndef CONFIG_VIDEO_REVERSE_IMAGE
+device_initcall_sync(nvp6324_sensor_mod_init);
+#endif
 
 static void __exit sensor_mod_exit(void)
 {
 	i2c_del_driver(&jaguar1_i2c_driver);
 }
 
-device_initcall_sync(sensor_mod_init);
 module_exit(sensor_mod_exit);
 
 MODULE_DESCRIPTION("jaguar1 sensor driver");

@@ -25,6 +25,10 @@
 			press-threshold-microvolt = <400781>;
 		};
 	};
+
+	restart-poweroff {
+		compatible = "restart-poweroff";
+	};
 };
 
 &fiq_debugger {
@@ -66,6 +70,10 @@
 
 &rkvenc_pp {
 	status = "okay";
+};
+
+&rmii_phy {
+	bgs,increment = <0>;
 };
 
 &rng {

@@ -3759,11 +3759,11 @@ static void attach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 
 	se->avg.runnable_sum = se->avg.runnable_avg * divider;
 
-	se->avg.load_sum = divider;
-	if (se_weight(se)) {
-		se->avg.load_sum =
-			div_u64(se->avg.load_avg * se->avg.load_sum, se_weight(se));
-	}
+	se->avg.load_sum = se->avg.load_avg * divider;
+	if (se_weight(se) < se->avg.load_sum)
+		se->avg.load_sum = div_u64(se->avg.load_sum, se_weight(se));
+	else
+		se->avg.load_sum = 1;
 
 	enqueue_load_avg(cfs_rq, se);
 	cfs_rq->avg.util_avg += se->avg.util_avg;
@@ -4788,8 +4788,8 @@ static int tg_unthrottle_up(struct task_group *tg, void *data)
 
 	cfs_rq->throttle_count--;
 	if (!cfs_rq->throttle_count) {
-		cfs_rq->throttled_clock_task_time += rq_clock_task(rq) -
-					     cfs_rq->throttled_clock_task;
+		cfs_rq->throttled_clock_pelt_time += rq_clock_task_mult(rq) -
+					     cfs_rq->throttled_clock_pelt;
 
 		/* Add cfs_rq with already running entity in the list */
 		if (cfs_rq->nr_running >= 1)
@@ -4806,7 +4806,7 @@ static int tg_throttle_down(struct task_group *tg, void *data)
 
 	/* group is entering throttled state, stop time */
 	if (!cfs_rq->throttle_count) {
-		cfs_rq->throttled_clock_task = rq_clock_task(rq);
+		cfs_rq->throttled_clock_pelt = rq_clock_task_mult(rq);
 		list_del_leaf_cfs_rq(cfs_rq);
 	}
 	cfs_rq->throttle_count++;
@@ -5224,7 +5224,7 @@ static void sync_throttle(struct task_group *tg, int cpu)
 	pcfs_rq = tg->parent->cfs_rq[cpu];
 
 	cfs_rq->throttle_count = pcfs_rq->throttle_count;
-	cfs_rq->throttled_clock_task = rq_clock_task(cpu_rq(cpu));
+	cfs_rq->throttled_clock_pelt = rq_clock_task_mult(cpu_rq(cpu));
 }
 
 /* conditionally throttle active cfs_rq's from put_prev_entity() */
@@ -6681,6 +6681,7 @@ compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd)
 static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sync)
 {
 	unsigned long prev_delta = ULONG_MAX, best_delta = ULONG_MAX;
+	unsigned long best_delta2 = ULONG_MAX;
 	struct root_domain *rd = cpu_rq(smp_processor_id())->rd;
 	int max_spare_cap_cpu_ls = prev_cpu, best_idle_cpu = -1;
 	unsigned long max_spare_cap_ls = 0, target_cap;
@@ -6777,8 +6778,10 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 				max_spare_cap_cpu = cpu;
 			}
 
-			if (!latency_sensitive)
-				continue;
+			if (!IS_ENABLED(CONFIG_ROCKCHIP_PERFORMANCE)) {
+				if (!latency_sensitive)
+					continue;
+			}
 
 			if (idle_cpu(cpu)) {
 				cpu_cap = capacity_orig_of(cpu);
@@ -6795,9 +6798,19 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 					min_exit_lat = idle->exit_latency;
 				target_cap = cpu_cap;
 				best_idle_cpu = cpu;
+				if (IS_ENABLED(CONFIG_ROCKCHIP_PERFORMANCE)) {
+					best_delta2 = compute_energy(p, cpu, pd);
+					best_delta2 -= base_energy_pd;
+				}
 			} else if (spare_cap > max_spare_cap_ls) {
 				max_spare_cap_ls = spare_cap;
 				max_spare_cap_cpu_ls = cpu;
+				if (IS_ENABLED(CONFIG_ROCKCHIP_PERFORMANCE)) {
+					if (best_idle_cpu == -1) {
+						best_delta2 = compute_energy(p, cpu, pd);
+						best_delta2 -= base_energy_pd;
+					}
+				}
 			}
 		}
 
@@ -6825,26 +6838,33 @@ unlock:
 	if (prev_delta == ULONG_MAX)
 		return best_energy_cpu;
 
-	/*
-	 * when select ROCKCHIP_PERFORMANCE_LOW:
-	 * Pick best_energy_cpu immediately if prev_cpu is big cpu and
-	 * best_energy_cpu is little cpu, so that tasks can migrate from
-	 * big cpu to little cpu easier to save power.
-	 */
+	if ((prev_delta - best_delta) > ((prev_delta + base_energy) >> 4))
+		return best_energy_cpu;
+
 	if (IS_ENABLED(CONFIG_ROCKCHIP_PERFORMANCE)) {
 		struct cpumask *cpul_mask = rockchip_perf_get_cpul_mask();
 		struct cpumask *cpub_mask = rockchip_perf_get_cpub_mask();
 		int level = rockchip_perf_get_level();
 
+		/*
+		 * when select ROCKCHIP_PERFORMANCE_LOW:
+		 * Pick best_energy_cpu if prev_cpu is big cpu and best_energy_cpu
+		 * is little cpu, so that tasks can migrate from big cpu to little
+		 * cpu easier to save power.
+		 */
 		if ((level == ROCKCHIP_PERFORMANCE_LOW) && cpul_mask &&
 		    cpub_mask && cpumask_test_cpu(prev_cpu, cpub_mask) &&
 		    cpumask_test_cpu(best_energy_cpu, cpul_mask)) {
 			return best_energy_cpu;
 		}
-	}
 
-	if ((prev_delta - best_delta) > ((prev_delta + base_energy) >> 4))
-		return best_energy_cpu;
+		/*
+		 * Pick the idlest cpu if it is a little power increased(<3.1%).
+		 */
+		if ((best_delta2 <= prev_delta) ||
+			((best_delta2 - prev_delta) < ((prev_delta + base_energy) >> 5)))
+			return best_idle_cpu >= 0 ? best_idle_cpu : max_spare_cap_cpu_ls;
+	}
 
 	return prev_cpu;
 

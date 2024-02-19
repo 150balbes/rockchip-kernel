@@ -9,6 +9,7 @@
 #include <linux/acpi.h>
 #include <linux/bitops.h>
 #include <linux/clk.h>
+#include <linux/device.h>
 #include <linux/err.h>
 #include <linux/gpio/driver.h>
 #include <linux/init.h>
@@ -16,8 +17,8 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/platform_device.h>
 #include <linux/pinctrl/pinconf-generic.h>
+#include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 
@@ -253,7 +254,6 @@ static int rockchip_gpio_set_debounce(struct gpio_chip *gc,
 static int rockchip_gpio_direction_input(struct gpio_chip *gc,
 					 unsigned int offset)
 {
-	pinctrl_gpio_direction_input(gc->base + offset);
 	return rockchip_gpio_set_direction(gc, offset, true);
 }
 
@@ -262,7 +262,6 @@ static int rockchip_gpio_direction_output(struct gpio_chip *gc,
 {
 	rockchip_gpio_set(gc, offset, value);
 
-	pinctrl_gpio_direction_output(gc->base + offset);
 	return rockchip_gpio_set_direction(gc, offset, false);
 }
 
@@ -276,10 +275,10 @@ static int rockchip_gpio_set_config(struct gpio_chip *gc, unsigned int offset,
 {
 	enum pin_config_param param = pinconf_to_config_param(config);
 	unsigned int debounce = pinconf_to_config_argument(config);
-	int ret = 0;
 
 	switch (param) {
 	case PIN_CONFIG_INPUT_DEBOUNCE:
+		rockchip_gpio_set_debounce(gc, offset, debounce);
 		/*
 		 * Rockchip's gpio could only support up to one period
 		 * of the debounce clock(pclk), which is far away from
@@ -291,15 +290,10 @@ static int rockchip_gpio_set_config(struct gpio_chip *gc, unsigned int offset,
 		 * still return -ENOTSUPP as before, to make sure the caller
 		 * of gpiod_set_debounce won't change its behaviour.
 		 */
-		rockchip_gpio_set_debounce(gc, offset, debounce);
-		ret = -ENOTSUPP;
-		break;
+		return -ENOTSUPP;
 	default:
-		ret = -ENOTSUPP;
-		break;
+		return -ENOTSUPP;
 	}
-
-	return ret;
 }
 
 /*
