@@ -1729,7 +1729,7 @@
 		clocks = <&scmi_clk 4>;
 		clock-names = "dmc_clk";
 		operating-points-v2 = <&dmc_opp_table>;
-		upthreshold = <40>;
+		upthreshold = <25>;
 		downdifferential = <20>;
 		system-status-level = <
 			/*system status         freq level*/
@@ -2576,6 +2576,7 @@
 			snps,dis-u2-freeclk-exists-quirk;
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
+			snps,parkmode-disable-hs-quirk;
 			snps,parkmode-disable-ss-quirk;
 			quirk-skip-phy-init;
 			status = "disabled";
@@ -2586,8 +2587,8 @@
 		compatible = "rockchip,rk3588-ehci", "generic-ehci";
 		reg = <0x0 0xfc800000 0x0 0x40000>;
 		interrupts = <GIC_SPI 215 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru HCLK_HOST0>, <&cru HCLK_HOST_ARB0>, <&u2phy2>;
-		clock-names = "usbhost", "arbiter", "utmi";
+		clocks = <&cru HCLK_HOST0>, <&cru HCLK_HOST_ARB0>, <&u2phy2>, <&aclk_usb>;
+		clock-names = "usbhost", "arbiter", "utmi", "alk_usb";
 		companion = <&usb_host0_ohci>;
 		phys = <&u2phy2_host>;
 		phy-names = "usb2-phy";
@@ -2599,8 +2600,8 @@
 		compatible = "generic-ohci";
 		reg = <0x0 0xfc840000 0x0 0x40000>;
 		interrupts = <GIC_SPI 216 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru HCLK_HOST0>, <&cru HCLK_HOST_ARB0>, <&u2phy2>;
-		clock-names = "usbhost", "arbiter", "utmi";
+		clocks = <&cru HCLK_HOST0>, <&cru HCLK_HOST_ARB0>, <&u2phy2>, <&aclk_usb>;
+		clock-names = "usbhost", "arbiter", "utmi", "alk_usb";
 		phys = <&u2phy2_host>;
 		phy-names = "usb2-phy";
 		power-domains = <&power RK3588_PD_USB>;
@@ -2611,8 +2612,8 @@
 		compatible = "rockchip,rk3588-ehci", "generic-ehci";
 		reg = <0x0 0xfc880000 0x0 0x40000>;
 		interrupts = <GIC_SPI 218 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru HCLK_HOST1>, <&cru HCLK_HOST_ARB1>, <&u2phy3>;
-		clock-names = "usbhost", "arbiter", "utmi";
+		clocks = <&cru HCLK_HOST1>, <&cru HCLK_HOST_ARB1>, <&u2phy3>, <&aclk_usb>;
+		clock-names = "usbhost", "arbiter", "utmi", "alk_usb";
 		companion = <&usb_host1_ohci>;
 		phys = <&u2phy3_host>;
 		phy-names = "usb2-phy";
@@ -2624,8 +2625,8 @@
 		compatible = "generic-ohci";
 		reg = <0x0 0xfc8c0000 0x0 0x40000>;
 		interrupts = <GIC_SPI 219 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru HCLK_HOST1>, <&cru HCLK_HOST_ARB1>, <&u2phy3>;
-		clock-names = "usbhost", "arbiter", "utmi";
+		clocks = <&cru HCLK_HOST1>, <&cru HCLK_HOST_ARB1>, <&u2phy3>, <&aclk_usb>;
+		clock-names = "usbhost", "arbiter", "utmi", "alk_usb";
 		phys = <&u2phy3_host>;
 		phy-names = "usb2-phy";
 		power-domains = <&power RK3588_PD_USB>;
@@ -2682,6 +2683,7 @@
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
 			snps,dis_rxdet_inp3_quirk;
+			snps,parkmode-disable-hs-quirk;
 			snps,parkmode-disable-ss-quirk;
 			status = "disabled";
 		};
@@ -3271,8 +3273,8 @@
 			power-domain@RK3588_PD_USB {
 				reg = <RK3588_PD_USB>;
 				clocks = <&cru PCLK_PHP_ROOT>,
-					 <&cru ACLK_USB_ROOT>,
-					 <&cru HCLK_USB_ROOT>,
+					 <&cru ACLK_USB3OTG0>,
+					 <&cru ACLK_USB3OTG1>,
 					 <&cru HCLK_HOST0>,
 					 <&cru HCLK_HOST_ARB0>,
 					 <&cru HCLK_HOST1>,
@@ -4079,9 +4081,9 @@
 		nvmem-cells = <&codec_leakage>, <&venc_opp_info>;
 		nvmem-cell-names = "leakage", "opp-info";
 		rockchip,leakage-voltage-sel = <
-			1	8	0
-			9	20	1
-			21	254	2
+			1	15	0
+			16	25	1
+			26	254	2
 		>;
 
 		rockchip,grf = <&sys_grf>;
@@ -4981,7 +4983,7 @@
 
 	hdmi0: hdmi@fde80000 {
 		compatible = "rockchip,rk3588-dw-hdmi";
-		reg = <0x0 0xfde80000 0x0 0x20000>;
+		reg = <0x0 0xfde80000 0x0 0x10000>, <0x0 0xfde90000 0x0 0x10000>;
 		interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 170 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 171 IRQ_TYPE_LEVEL_HIGH>,
