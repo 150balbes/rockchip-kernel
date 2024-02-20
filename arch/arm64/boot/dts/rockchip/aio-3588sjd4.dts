@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Firefly Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "aio-3588sjd4.dtsi"
+#include "aio-3588sjd4-cam-8ms1m.dtsi"
+#include "aio-3588sjd4-cam-dcphy-8ms1m.dtsi"
+#include "aio-3588sjd4-tf-hdmi-mipi-rk628.dtsi"
+#include "aio-3588sjd4-cam-2ms2mf.dtsi"
+/ {
+	model = "Firefly AIO-3588SJD4 HDMI(Linux)";
+	compatible = "rockchip,aio-3588sjd4", "rockchip,rk3588";
+};

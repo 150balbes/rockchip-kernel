@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+#include "roc-rk3588-rt.dtsi"
+
+/ {
+	pcie_oe1: pcie-oe1 {
+		compatible = "regulator-fixed";
+		regulator-name = "pcie_oe1";
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+		gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
+                vin-supply = <&vcc12v_dcin>;
+	};
+
+	pcie_oe2: pcie-oe2 {
+		compatible = "regulator-fixed";
+		regulator-name = "pcie_oe2";
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+		gpios = <&gpio4 RK_PB3 GPIO_ACTIVE_HIGH>;
+                vin-supply = <&vcc12v_dcin>;
+	};
+};
+
+&pcie2x1l0{
+    phys = <&pcie30phy>;
+    reset-gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_HIGH>;
+    rockchip,skip-scan-in-resume;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+    rockchip,perst-inactive-ms = <800>;
+    status = "okay";
+};
+
+&vcc_sata_pwr_en{
+    status = "disabled";
+};
+
+&pcie2x1l1{
+    phys = <&pcie30phy>;
+    reset-gpios = <&gpio1 RK_PA7 GPIO_ACTIVE_HIGH>;
+    rockchip,skip-scan-in-resume;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+
+    rockchip,perst-inactive-ms = <600>;
+    status = "okay";
+};
+
+/* pcie3.0 x 4 Lane */
+&pcie30phy {
+    rockchip,pcie30-phymode = <PHY_MODE_PCIE_NABIBI>;
+    status = "okay";
+};
+
+&pcie3x2 {
+	num-lanes = <1>;
+	reset-gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+    rockchip,skip-scan-in-resume;
+    rockchip,perst-inactive-ms = <500>;
+    status = "okay";
+};
+&pcie3x4 {
+	num-lanes = <1>;
+	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+    rockchip,skip-scan-in-resume;
+    rockchip,perst-inactive-ms = <700>;
+    status = "okay";
+};
+
+&vcc3v3_pcie30{
+	gpios = <&gpio1 RK_PB2 GPIO_ACTIVE_HIGH>;
+    	regulator-always-on;
+	startup-delay-us = <5000>;
+	status = "okay";
+};

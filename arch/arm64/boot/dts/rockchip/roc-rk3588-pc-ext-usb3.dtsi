@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+ 
+ #define rk3588
+
+#include "roc-rk3588-pc-mipi-H245QBN02.dtsi"
+
+ / {
+	reset_ctrl_4_5g: reset-ctrlt_4_5g {		/* on ext board */
+		compatible = "regulator-fixed";
+		regulator-name = "reset_ctrl_4_5g";
+		regulator-boot-on;
+		regulator-always-on;
+		enable-active-high;
+		gpio = <&gpio4 RK_PB3 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};	
+	vcc3v3_sys_ext: vcc3v3-sys-ext {		/* on ext board */
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_sys_ext";
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		enable-active-high;
+		gpio = <&gpio3 RK_PB2 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc12v_dcin>;
+		status = "okay";
+	};
+	vcc5v0_sys_ext: vcc5v0-sys-ext {		/* on ext board */
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys_ext";
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpio = <&gpio3 RK_PC0 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc12v_dcin>;
+		status = "okay";
+	};
+	vcc3v8_4g_ext: vcc3v8-4g-ext {			/* on ext board */
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v8_4g_ext";
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-min-microvolt = <3800000>;
+		regulator-max-microvolt = <3800000>;
+		enable-active-high;
+		gpio = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc12v_dcin>;
+		status = "okay";
+	};
+
+	vcc_hub3_reset_ext: vcc-hub3-reset-ext {	/* on ext board */
+		compatible = "regulator-fixed-firefly";
+		regulator-fixed-kernel-reset-ms = <3000>;
+		regulator-name = "vcc_hub3_reset_ext";
+		regulator-always-on;
+		enable-active-high;
+		status = "okay";
+		gpio = <&gpio3 RK_PD0 GPIO_ACTIVE_HIGH>;  
+	};
+	usb3_host_ext: usb3-host-ext {	/* on ext board */
+		compatible = "regulator-fixed";
+		regulator-name = "usb3_host_ext";
+		regulator-always-on;
+		enable-active-high;
+		status = "okay";		
+		gpio = <&gpio3 RK_PA6 GPIO_ACTIVE_HIGH>;  
+	};
+
+
+};
+
+&firefly_leds{
+	power_led_ext: power_ext {   			/* on ext board */
+		label = ":power-ext"; //blue led 
+		linux,default-trigger = "ir-power-ext-click";
+		default-state = "on";
+		gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_power_ext>;
+	};
+	
+
+	user_led_ext: user_ext {			/* on ext board */
+		label = ":user-ext"; //red led	
+		linux,default-trigger = "ir-user-ext-click";
+		default-state = "off";
+		gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_user_ext>;
+	};
+
+	red_led_bp: red_bp {			/* on bp board */
+		label = ":red-bp"; //red led	
+		linux,default-trigger = "ir-red-bp-click";
+		default-state = "off";
+		gpios = <&gpio2 RK_PB4 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_red_bp>;
+	};	
+};
+
+/* spidif audio -- on ext board */ 
+&spdif_tx1{			
+	status = "okay";
+};
+&spdif_tx1_dc{
+	status = "okay";
+};
+
+&spdif_tx1_sound{
+	status = "okay";
+};
+
+
+/* gmac1 */			/* on ext board */
+&gmac1 {			
+	snps,reset-gpio = <&gpio1 RK_PB2 GPIO_ACTIVE_LOW>;
+	tx_delay = <0x4a>;
+	status = "okay";
+};
+
+&gmac1_tx_bus2{
+	rockchip,pins =
+	/* gmac1_txd0 */
+	<3 RK_PB3 1 &pcfg_pull_up_drv_level_6>,
+    /* gmac1_txd1 */
+	<3 RK_PB4 1 &pcfg_pull_up_drv_level_6>,
+	/* gmac1_txen */
+	<3 RK_PB5 1 &pcfg_pull_none>;
+};
+
+&gmac1_rgmii_bus{
+	rockchip,pins =
+	/* gmac1_rxd2 */
+	<3 RK_PA2 1 &pcfg_pull_none>,
+	/* gmac1_rxd3 */
+	<3 RK_PA3 1 &pcfg_pull_none>,
+	/* gmac1_txd2 */
+	<3 RK_PA0 1 &pcfg_pull_up_drv_level_6>,
+	/* gmac1_txd3 */
+	<3 RK_PA1 1 &pcfg_pull_up_drv_level_6>;
+};
+
+
+/* display port1 to vga -- on ext board */ 
+&dp1_in_vp2 {				
+	status = "okay";
+};
+
+&dp1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&dp1_hpd>;
+	hpd-gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+&route_dp1{
+	status = "okay";
+	connect = <&vp2_out_dp1>;
+};
+
+/* sata pm */     /* on ext board */
+&combphy0_ps {
+	status = "okay";
+};
+
+&sata0 {
+	status = "okay";
+};
+
+/* pinctrl */
+&pinctrl {
+	dp {
+		dp1_hpd: dp1-hpd {
+			 rockchip,pins = <4 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+	leds {
+		led_power_ext: led-power-ext {
+			rockchip,pins = <4 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		led_user_ext: led-user-ext {
+			rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		led_red_bp: led-red-bp {
+			rockchip,pins = <2 RK_PB4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+ 	};
+};

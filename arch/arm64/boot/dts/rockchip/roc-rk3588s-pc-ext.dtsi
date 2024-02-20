@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/ {
+	gl3321g: gl3321g-pwr-gpio {
+		compatible = "firefly,gl3321g-gpio";
+		firefly-mdelay = <100>;
+		firefly-gl3321g-gpio = <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+&firefly_leds {
+		ext_yellow_led: ext_led1 {
+			gpios = <&gpio3 RK_PB7 GPIO_ACTIVE_HIGH>;//yellow led
+			pinctrl-names = "default";
+			pinctrl-0 = <&led_user2>;
+		};
+
+		ext_green_led: ext_led2 {
+			gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;//green led
+			pinctrl-names = "default";
+			pinctrl-0 = <&led_user3>;
+		};
+};
+
+&spi1 {
+	status = "okay";
+	max-freq = <48000000>;
+	dev-port = <0>;
+	pinctrl-0 = <&spi1m2_pins>;
+	num-cs = <1>;
+
+	spi_wk2xxx: spi_wk2xxx@0{
+		status = "okay";
+		compatible = "firefly,spi-wk2xxx";
+		reg = <0x00>;
+		spi-max-frequency = <10000000>;
+		//power-gpio = <&gpio2 4 GPIO_ACTIVE_HIGH>;
+		reset-gpio = <&gpio3 RK_PA6 GPIO_ACTIVE_HIGH>;
+		irq-gpio = <&gpio3 RK_PC6 IRQ_TYPE_EDGE_FALLING>;
+		cs-gpio = <&gpio1 RK_PD3 GPIO_ACTIVE_HIGH>;
+
+		//pinctrl-0 = <&reset_gpios>,<&irq_gpios>,<&cs_gpios>;
+		//pinctrl-names = "default";
+	};
+};
+
+&can2 {
+    status = "okay";
+    pinctrl-names = "default";
+    pinctrl-0 = <&can2m0_pins>;
+};
+
+&pinctrl {
+	ext_leds {
+		led_user2: led-user {
+			rockchip,pins = <3 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		led_user3: led-power {
+			rockchip,pins = <3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};

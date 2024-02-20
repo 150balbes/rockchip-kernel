@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+ *
+ */
+/dts-v1/;
+#include "rk3588-firefly-itx-3588j-mipi101-M101014-BE45-A1.dtsi"
+
+/ {
+	model = "Firefly ITX-3588J MIPI(Linux)";
+	compatible = "rockchip,rk3588-firefly-itx-3588j-mipi101-M101014-BE45-A1", "rockchip,rk3588";
+
+};
+
+&route_dsi0 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_dsi1 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_hdmi0 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_hdmi1 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_dp0 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};
+
+&route_dp1 {
+    station-logo;
+    logo,stations = "logo_stations.bmp";
+    logo,stationm = "logo_stationm.bmp";
+};

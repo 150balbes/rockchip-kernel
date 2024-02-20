@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2022 T-chip Firefly Electronics Co., Ltd.
+ *
+ */
+
+
+/ {
+
+    dcpwr_mode_set: dcpwr-mode-set-regulator {
+        compatible = "regulator-fixed";
+        regulator-name = "dcpwr_mode_set";
+        regulator-boot-on;
+        regulator-always-on;
+        enable-active-high;
+        gpio = <&pca9554 PCA_IO0_7 GPIO_ACTIVE_HIGH>;
+    };
+
+
+	vcc12v_en: vcc12v-en {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc12v_en";
+		regulator-boot-on;
+		regulator-always-on;
+		enable-active-high;
+		gpio = <&gpio1 RK_PB3 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+       };
+
+        vcc3v3_tp: vcc3v3-tp {
+                compatible = "regulator-fixed";
+                regulator-name = "vcc3v3_tp";
+                regulator-boot-on;
+                regulator-always-on;
+                enable-active-high;
+                gpio = <&pca9554 PCA_IO0_1 GPIO_ACTIVE_HIGH>;
+                status = "okay";
+       };
+};
+
+&spi0 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0m2_cs0 &spi0m2_pins>;
+	num-cs = <1>;
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0m2_xfer>;
+
+	pca9554: pca9554@20 {
+		status = "okay";
+		compatible = "nxp,pca9554";
+		reg = <0x20>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-group-num = <180>;
+	};
+
+};
+
+&i2c1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1m4_xfer>;
+};
+

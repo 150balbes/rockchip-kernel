@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2020 Rockchip Electronics Co., Ltd.
+ *
+ */
+
+/dts-v1/;
+
+#include "rk3588-firefly-aio-3588q.dtsi"
+#include "rk3588-firefly-aio-cam-8ms1m.dtsi"
+#include "rk3588-firefly-aio-cam-2ms2mf.dtsi"
+#include "rk3588-firefly-demo.dtsi"
+#include "rk3588-firefly-aio-3588q-edp_NV156FHM-T06.dtsi"
+/ {
+   	model = "Firefly AIO-3588Q eDP NV156FHM-T06 (Linux)";
+	compatible = "rockchip,rk3588-firefly-aio-3588q-edp-nv156fhm-t06", "rockchip,rk3588";
+};
