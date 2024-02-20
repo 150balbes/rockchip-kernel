@@ -40,7 +40,6 @@ module_param_named(dbg_level, dbg_enable, int, 0644);
 #define BQ25700_MANUFACTURER		"Texas Instruments"
 #define BQ25700_ID			0x59
 #define BQ25703_ID			0x58
-#define SC8886_ID			0x66
 
 #define DEFAULT_INPUTVOL		((5000 - 1280) * 1000)
 #define MAX_INPUTVOLTAGE		24000000
@@ -50,8 +49,6 @@ module_param_named(dbg_level, dbg_enable, int, 0644);
 #define MAX_OTGVOLTAGE			20800000
 #define MIN_OTGVOLTAGE			4280000
 #define MAX_OTGCURRENT			6350000
-
-extern int have_battery;
 
 enum bq25700_fields {
 	EN_LWPWR, WDTWR_ADJ, IDPM_AUTO_DISABLE,
@@ -179,7 +176,6 @@ struct bq25700_device {
 	struct delayed_work		host_work1;
 	struct delayed_work		discnt_work1;
 	struct delayed_work		irq_work;
-	struct delayed_work		pd_work;
 	struct notifier_block		cable_cg_nb;
 	struct notifier_block		cable_host_nb;
 	struct notifier_block		cable_cg_nb1;
@@ -203,9 +199,6 @@ struct bq25700_device {
 	int				pd_charge_only;
 	unsigned int			bc_event;
 	bool				usb_bc;
-	int				pd_input_vol;
-	int				pd_input_cur;
-	int				pd_chr_cur;;
 };
 
 static const struct reg_field bq25700_reg_fields[] = {
@@ -828,7 +821,7 @@ static ssize_t bq25700_charge_info_show(struct device *dev,
 
 	if ((charger->chip_id & 0xff) == BQ25700_ID)
 		bq25700_dump_regs(charger);
-	if ((charger->chip_id & 0xff) == BQ25703_ID || (charger->chip_id & 0xff) == SC8886_ID)
+	if ((charger->chip_id & 0xff) == BQ25703_ID)
 		bq25703_dump_regs(charger);
 
 	return 0;
@@ -1268,7 +1261,9 @@ static int bq2570x_pd_notifier_call(struct notifier_block *nb,
 		container_of(nb, struct bq25700_device, nb);
 	struct power_supply *psy = v;
 	union power_supply_propval prop;
+	struct bq25700_state state;
 	int ret;
+	int vol_idx, cur_idx, chr_idx;
 
 	if (val != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
@@ -1297,20 +1292,27 @@ static int bq2570x_pd_notifier_call(struct notifier_block *nb,
 	if (ret != 0)
 		return NOTIFY_OK;
 	if (prop.intval > 0) {
-		bq->pd_input_cur = prop.intval;
+		cur_idx = bq25700_find_idx(prop.intval, TBL_INPUTCUR);
 		ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_VOLTAGE_NOW,
 						&prop);
 		if (ret != 0)
 			return NOTIFY_OK;
-		bq->pd_input_vol = prop.intval;
+		vol_idx = bq25700_find_idx((prop.intval - 1280000 - 3200000), TBL_INPUTVOL);
 		ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_CURRENT_NOW,
 						&prop);
 		if (ret != 0)
 			return NOTIFY_OK;
-		bq->pd_chr_cur = prop.intval;
+		chr_idx = bq25700_find_idx(prop.intval, TBL_ICHG);
 
-		queue_delayed_work(bq->usb_charger_wq, &bq->pd_work,
-				   msecs_to_jiffies(10));
+		bq25700_field_write(bq, INPUT_CURRENT, cur_idx);
+		bq25700_field_write(bq, INPUT_VOLTAGE, vol_idx);
+		bq25700_field_write(bq, CHARGE_CURRENT, chr_idx);
+		dev_info(bq->dev, "INPUT_CURRENT:%d, INPUT_VOLTAGE:%d, CHARGE_CURRENT:%d\n",
+			 cur_idx, vol_idx, chr_idx);
+
+		bq25700_get_chip_state(bq, &state);
+		bq->state = state;
+		power_supply_changed(bq->supply_charger);
 	}
 	return NOTIFY_OK;
 }
@@ -1392,9 +1394,6 @@ static void bq25700_charger_evt_handel(struct bq25700_device *charger,
 	    charger->typec1_status == USB_STATUS_PD)
 		return;
 
-	if (!have_battery)
-		goto NO_BAT;
-
 	/* Determine cable/charger type */
 	if (extcon_get_state(edev, EXTCON_CHG_USB_SDP) > 0) {
 		charger_state = USB_TYPE_USB_CHARGER;
@@ -1427,7 +1426,6 @@ static void bq25700_charger_evt_handel(struct bq25700_device *charger,
 		bq25700_enable_typec1(charger);
 	}
 
-NO_BAT:
 	bq25700_get_chip_state(charger, &state);
 	charger->state = state;
 	power_supply_changed(charger->supply_charger);
@@ -1599,26 +1597,6 @@ static void bq25700_discnt_evt_worker(struct work_struct *work)
 	bq25700_discnt(charger, USB_TYPEC_0);
 }
 
-static void bq25700_pd_worker(struct work_struct *work)
-{
-	struct bq25700_device *charger = container_of(work,
-						      struct bq25700_device,
-						      pd_work.work);
-	int vol_idx, cur_idx, chr_idx;
-	struct bq25700_state state;
-	cur_idx = bq25700_find_idx(charger->pd_input_cur, TBL_INPUTCUR);
-	vol_idx = bq25700_find_idx((charger->pd_input_vol - 1280000 - 3200000), TBL_INPUTVOL);
-	chr_idx = bq25700_find_idx(charger->pd_chr_cur, TBL_ICHG);
-	bq25700_field_write(charger, INPUT_CURRENT, cur_idx);
-	bq25700_field_write(charger, INPUT_VOLTAGE, vol_idx);
-	bq25700_field_write(charger, CHARGE_CURRENT, chr_idx);
-	dev_info(charger->dev, "INPUT_CURRENT:%d, INPUT_VOLTAGE:%d, CHARGE_CURRENT:%d\n",
-		 cur_idx, vol_idx, chr_idx);
-	bq25700_get_chip_state(charger, &state);
-	charger->state = state;
-	power_supply_changed(charger->supply_charger);
-}
-
 static int bq25700_register_cg_extcon(struct bq25700_device *charger,
 				      struct extcon_dev *edev,
 				      struct notifier_block *able_cg_nb)
@@ -1703,8 +1681,6 @@ static int bq25700_register_pd_nb(struct bq25700_device *charger)
 	if (charger->notify_node || charger->plat_data.notify_device) {
 		INIT_DELAYED_WORK(&charger->discnt_work,
 				  bq25700_discnt_evt_worker);
-		INIT_DELAYED_WORK(&charger->pd_work,
-				  bq25700_pd_worker);
 		charger->nb.notifier_call = bq2570x_pd_notifier_call;
 		ret = power_supply_reg_notifier(&charger->nb);
 		if (ret) {
@@ -1891,13 +1867,8 @@ static long bq25700_init_usb(struct bq25700_device *charger)
 		charger->cable_edev_1 = edev1;
 	}
 	/*set power_on input current*/
-	if(have_battery) {
-		bq25700_field_write(charger, INPUT_CURRENT,
-					charger->init_data.input_current_sdp);
-		printk("bq25700,have battery\n");
-	}
-	else
-		printk("bq25700,no battery,do not write input_current_sdp \n");
+	bq25700_field_write(charger, INPUT_CURRENT,
+			    charger->init_data.input_current_sdp);
 
 	if (!charger->pd_charge_only)
 		bq25700_register_cg_nb(charger);

@@ -53,9 +53,8 @@
 #define INT_CONFIG_SOC_CHANGE_MARK      BIT(6)
 
 #define DEF_DESIGN_CAPACITY		4000
-#define INVALID_PARAM 			-1
 
-#define CW2017_MASK_ATHD		GENMASK(6, 0)
+#define CW2017_MASK_ATHD		GENMASK(7, 0)
 
 /* reset gauge of no valid state of charge could be polled for 40s */
 #define CW2017_BAT_SOC_ERROR_MS		(40 * MSEC_PER_SEC)
@@ -64,9 +63,6 @@
 
 /* poll interval from CellWise GPL Android driver example */
 #define CW2017_DEFAULT_POLL_INTERVAL_MS	8000
-
-int have_battery; 
-static int probe_times = 0;
 
 struct cw_battery {
 	struct device *dev;
@@ -97,7 +93,6 @@ struct cw_battery {
 	unsigned int read_errors;
 	unsigned int charge_stuck_cnt;
 };
-
 
 static int cw_read_word(struct cw_battery *cw_bat, u8 reg, u16 *val)
 {
@@ -322,14 +317,9 @@ static void cw_update_soc(struct cw_battery *cw_bat)
 	soc = cw_get_soc(cw_bat);
 	if (soc < 0)
 		dev_err(cw_bat->dev, "Failed to get SoC from gauge: %d\n", soc);
-	else if (have_battery) {
-		if (cw_bat->soc != soc) {
-			cw_bat->soc = soc;
-			cw_bat->battery_changed = true;
-		}
-	}
-	else  {
-		cw_bat->soc = 100;
+	else if (cw_bat->soc != soc) {
+		cw_bat->soc = soc;
+		cw_bat->battery_changed = true;
 	}
 }
 
@@ -571,28 +561,11 @@ static const struct regmap_config cw2017_regmap_config = {
 	.max_register = CW2017_REG_BATINFO + CW2017_SIZE_BATINFO - 1,
 };
 
-static int parity_check(unsigned int val)
-{
-	unsigned int i = 0 ,bit_0 = 0;
-	bit_0 = 0x1 & val ;
-
-	while(val)
-	{
-		val = val & (val-1);
-		i++;
-	}
-
-	return !((i%2)^bit_0);
-}
-
 static int cw_bat_probe(struct i2c_client *client)
 {
 	int ret;
-	unsigned int reg_val = 0;
 	struct cw_battery *cw_bat;
 	struct power_supply_config psy_cfg = { 0 };
-
-	probe_times++;
 
 	cw_bat = devm_kzalloc(&client->dev, sizeof(*cw_bat), GFP_KERNEL);
 	if (!cw_bat)
@@ -601,7 +574,6 @@ static int cw_bat_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, cw_bat);
 	cw_bat->dev = &client->dev;
 	cw_bat->soc = 1;
-
 
 	ret = cw2017_parse_properties(cw_bat);
 	if (ret) {
@@ -620,22 +592,6 @@ static int cw_bat_probe(struct i2c_client *client)
 	if (ret) {
 		dev_err(cw_bat->dev, "Init failed: %d\n", ret);
 		return ret;
-	}
-	regmap_read(cw_bat->regmap, CW2017_REG_VERSION, &reg_val);
-	printk("cw2017, IC version : 0x%02x \n",reg_val);
-
-	/* check have battery*/
-	if(probe_times ==1) {
-		have_battery = 1;
-		regmap_read(cw_bat->regmap, CW2017_REG_TEMP_MIN, &reg_val);
-		ret = parity_check(reg_val);
-		if(ret) {
-			have_battery = 1;
-			printk("cw2017, have battery!\n");
-		} else {
-			have_battery = 0;
-			printk("cw2017, no battery!\n");
-		}
 	}
 
 	psy_cfg.drv_data = cw_bat;

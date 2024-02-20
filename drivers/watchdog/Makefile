@@ -25,6 +25,7 @@ obj-$(CONFIG_WATCHDOG_PRETIMEOUT_GOV_PANIC)	+= pretimeout_panic.o
 obj-$(CONFIG_PCWATCHDOG) += pcwd.o
 obj-$(CONFIG_MIXCOMWD) += mixcomwd.o
 obj-$(CONFIG_WDT) += wdt.o
+obj-$(CONFIG_KHADAS_WATCHDOG) += khadas_wdt.o
 
 # PCI-based Watchdog Cards
 obj-$(CONFIG_PCIPCWATCHDOG) += pcwd_pci.o
@@ -227,4 +228,3 @@ obj-$(CONFIG_MENZ069_WATCHDOG) += menz69_wdt.o
 obj-$(CONFIG_RAVE_SP_WATCHDOG) += rave-sp-wdt.o
 obj-$(CONFIG_STPMIC1_WATCHDOG) += stpmic1_wdt.o
 obj-$(CONFIG_SL28CPLD_WATCHDOG) += sl28cpld_wdt.o
-obj-$(CONFIG_PC9202_WATCHDOG) += pc9202_wdt.o

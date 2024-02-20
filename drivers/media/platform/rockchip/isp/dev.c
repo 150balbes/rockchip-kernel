@@ -546,49 +546,12 @@ static int _set_pipeline_default_fmt(struct rkisp_device *dev, bool is_init)
 	return 0;
 }
 
-static int isp_detect_subdev_vicap_itf(struct rkisp_device *dev)
-{
-	struct v4l2_subdev *sd;
-	bool is_vicap;
-	int i;
-
-	list_for_each_entry(sd, &dev->v4l2_dev.subdevs, list) {
-		if (sd) {
-			is_vicap = false;
-
-			for (i = 0; i < sd->entity.num_pads; i++) {
-				if (sd->entity.function == MEDIA_ENT_F_CAM_SENSOR ||
-				    sd->entity.function == MEDIA_ENT_F_PROC_VIDEO_COMPOSER) {
-					is_vicap = true;
-				}
-			}
-			if (is_vicap == true)
-				return 0;
-		}
-	}
-
-	return -ENODEV;
-}
-
 static int subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 {
 	struct rkisp_device *dev;
 	int ret;
 
 	dev = container_of(notifier, struct rkisp_device, notifier);
-
-	ret = isp_detect_subdev_vicap_itf(dev);
-	if (ret < 0) {
-		rkisp_unregister_luma_vdev(&dev->luma_vdev);
-		rkisp_unregister_params_vdev(&dev->params_vdev);
-		rkisp_unregister_stats_vdev(&dev->stats_vdev);
-		rkisp_unregister_dmarx_vdev(dev);
-		rkisp_unregister_stream_vdevs(dev);
-
-		media_device_unregister(&dev->media_dev);
-		v4l2_device_unregister(&dev->v4l2_dev);
-		return ret;
-	}
 
 	mutex_lock(&dev->media_dev.graph_mutex);
 	ret = rkisp_create_links(dev);
@@ -1015,6 +978,8 @@ static int __maybe_unused rkisp_runtime_resume(struct device *dev)
 	    rkisp_update_sensor_info(isp_dev) >= 0)
 		_set_pipeline_default_fmt(isp_dev, false);
 
+	if (isp_dev->hw_dev->is_assigned_clk)
+		rkisp_clk_dbg = true;
 	isp_dev->cap_dev.wait_line = rkisp_wait_line;
 	isp_dev->cap_dev.wrap_line = rkisp_wrap_line;
 	isp_dev->is_rdbk_auto = rkisp_rdbk_auto;

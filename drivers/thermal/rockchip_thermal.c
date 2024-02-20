@@ -342,6 +342,8 @@ struct tsadc_table {
 	int temp;
 };
 
+static struct rockchip_thermal_sensor  *g_tsensor_data_ptr;
+
 static const struct tsadc_table rv1106_code_table[] = {
 	{0, MIN_TEMP},
 	{363, MIN_TEMP},
@@ -1482,6 +1484,17 @@ static int rk_tsadcv2_get_trim_code(const struct chip_tsadc_table *table,
 	return code - base_code;
 }
 
+static int rk_tsadcv3_get_trim_code(const struct chip_tsadc_table *table,
+				    int code, int trim_base, int trim_base_frac)
+{
+	int temp = trim_base * 1000 + trim_base_frac * 100;
+	u32 base_code = rk_tsadcv2_temp_to_code(table, temp);
+
+	rk_tsadcv2_temp_to_code(table, temp);
+
+	return (TSADCV3_Q_MAX_VAL - code) - base_code;
+}
+
 static int rk_tsadcv1_set_clk_rate(struct platform_device *pdev)
 {
 	struct clk *clk;
@@ -1884,6 +1897,8 @@ static const struct rockchip_tsadc_chip rk3562_tsadc_data = {
 	.set_alarm_temp = rk_tsadcv3_alarm_temp,
 	.set_tshut_temp = rk_tsadcv3_tshut_temp,
 	.set_tshut_mode = rk_tsadcv4_tshut_mode,
+	.get_trim_code = rk_tsadcv3_get_trim_code,
+	.trim_slope = 588,
 
 	.table = {
 		.id = rk3562_code_table,
@@ -2107,6 +2122,20 @@ static int rockchip_thermal_get_temp(void *_sensor, int *out_temp)
 	return retval;
 }
 
+int rk_get_temperature(void)
+{
+	int temp;
+	int ret;
+
+	ret = rockchip_thermal_get_temp(g_tsensor_data_ptr, &temp);
+		if (ret) {
+			pr_debug("rk_get_temp failed!\n");
+			return ret;
+		}
+	     return temp / 1000;
+}
+EXPORT_SYMBOL(rk_get_temperature);
+
 static const struct thermal_zone_of_device_ops rockchip_of_thermal_ops = {
 	.get_temp = rockchip_thermal_get_temp,
 	.set_trips = rockchip_thermal_set_trips,
@@ -2167,12 +2196,9 @@ static int rockchip_get_trim_configure(struct device *dev,
 	 * The tsadc won't to handle the error in here
 	 * since some SoCs didn't need this property.
 	 */
-	if (rockchip_get_efuse_value(np, "trim_base", &trim_base)) {
-		dev_info(dev, "Missing trim_base property\n");
-		return 0;
-	}
+	rockchip_get_efuse_value(np, "trim_base", &trim_base);
 	if (!trim_base)
-		return 0;
+		trim_base = 30;
 	rockchip_get_efuse_value(np, "trim_base_frac", &trim_base_frac);
 	/*
 	 * If the tsadc node contains trim_h and trim_l property,
@@ -2506,6 +2532,7 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 	thermal->panic_nb.notifier_call = rockchip_thermal_panic;
 	atomic_notifier_chain_register(&panic_notifier_list,
 				       &thermal->panic_nb);
+	g_tsensor_data_ptr = &thermal->sensors[0];
 
 	dev_info(&pdev->dev, "tsadc is probed successfully!\n");
 

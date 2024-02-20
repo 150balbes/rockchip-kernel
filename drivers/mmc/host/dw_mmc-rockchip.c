@@ -166,7 +166,7 @@ static int dw_mci_v2_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
 	 * It's impossible all 4 fixed phase won't be able to work.
 	 */
 	for (i = 0; i < ARRAY_SIZE(degrees); i++) {
-		degree = degrees[i] + priv->last_degree;
+		degree = degrees[i] + priv->last_degree + 90;
 		degree = degree % 360;
 		clk_set_phase(priv->sample_clk, degree);
 		if (!mmc_send_tuning(mmc, opcode, NULL))
@@ -179,7 +179,7 @@ static int dw_mci_v2_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
 	}
 
 done:
-	dev_info(host->dev, "Successfully tuned phase to %d\n", degrees[i]);
+	dev_info(host->dev, "Successfully tuned phase to %d\n", degree);
 	priv->last_degree = degree;
 	return 0;
 }
@@ -448,8 +448,10 @@ static int dw_mci_rockchip_probe(struct platform_device *pdev)
 	if (!pdev->dev.of_node)
 		return -ENODEV;
 
-	if (!device_property_read_bool(&pdev->dev, "non-removable") &&
-	    !device_property_read_bool(&pdev->dev, "cd-gpios"))
+	if ((!device_property_read_bool(&pdev->dev, "non-removable") &&
+	     !device_property_read_bool(&pdev->dev, "cd-gpios")) ||
+	    (device_property_read_bool(&pdev->dev, "no-sd") &&
+	     device_property_read_bool(&pdev->dev, "no-mmc")))
 		use_rpm = false;
 
 	match = of_match_node(dw_mci_rockchip_match, pdev->dev.of_node);
@@ -512,19 +514,7 @@ static struct platform_driver dw_mci_rockchip_pltfm_driver = {
 	},
 };
 
-//module_platform_driver(dw_mci_rockchip_pltfm_driver);
-
-static int __init dw_mci_init(void)
-{
-        return platform_driver_register(&dw_mci_rockchip_pltfm_driver);
-}
-late_initcall(dw_mci_init);
-
-static void __exit dw_mci_exit(void)
-{
-        return platform_driver_unregister(&dw_mci_rockchip_pltfm_driver);
-}
-module_exit(dw_mci_exit);
+module_platform_driver(dw_mci_rockchip_pltfm_driver);
 
 MODULE_AUTHOR("Addy Ke <addy.ke@rock-chips.com>");
 MODULE_DESCRIPTION("Rockchip Specific DW-MSHC Driver Extension");

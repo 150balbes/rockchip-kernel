@@ -9,7 +9,6 @@ obj-y				  += backlight/
 obj-y				  += rockchip/
 
 obj-y				  += fbdev/
-#obj-y                 += lt9211c/
 
 obj-$(CONFIG_VIDEOMODE_HELPERS) += display_timing.o videomode.o
 ifeq ($(CONFIG_OF),y)

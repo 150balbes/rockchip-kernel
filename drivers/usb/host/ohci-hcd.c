@@ -1105,14 +1105,12 @@ int ohci_suspend(struct usb_hcd *hcd, bool do_wakeup)
 	 * the spinlock to properly synchronize with possible pending
 	 * RH suspend or resume activity.
 	 */
-	if (!do_wakeup) {
-		spin_lock_irqsave (&ohci->lock, flags);
-		ohci_writel(ohci, OHCI_INTR_MIE, &ohci->regs->intrdisable);
-		(void)ohci_readl(ohci, &ohci->regs->intrdisable);
+	spin_lock_irqsave (&ohci->lock, flags);
+	ohci_writel(ohci, OHCI_INTR_MIE, &ohci->regs->intrdisable);
+	(void)ohci_readl(ohci, &ohci->regs->intrdisable);
 
-		clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
-		spin_unlock_irqrestore (&ohci->lock, flags);
-	}
+	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+	spin_unlock_irqrestore (&ohci->lock, flags);
 
 	synchronize_irq(hcd->irq);
 

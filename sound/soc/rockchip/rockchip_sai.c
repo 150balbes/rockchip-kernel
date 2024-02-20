@@ -70,7 +70,7 @@ static const struct sai_of_quirks {
 	},
 };
 
-static int sai_runtime_suspend(struct device *dev)
+static int rockchip_sai_runtime_suspend(struct device *dev)
 {
 	struct rk_sai_dev *sai = dev_get_drvdata(dev);
 	unsigned int val;
@@ -110,7 +110,7 @@ static int sai_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int sai_runtime_resume(struct device *dev)
+static int rockchip_sai_runtime_resume(struct device *dev)
 {
 	struct rk_sai_dev *sai = dev_get_drvdata(dev);
 	int ret;
@@ -506,6 +506,17 @@ static int rockchip_sai_hw_params(struct snd_pcm_substream *substream,
 
 		regmap_update_bits(sai->regmap, SAI_CKR, SAI_CKR_MDIV_MASK,
 				   SAI_CKR_MDIV(div_bclk));
+	}
+
+	return 0;
+}
+
+static int rockchip_sai_prepare(struct snd_pcm_substream *substream,
+				struct snd_soc_dai *dai)
+{
+	struct rk_sai_dev *sai = snd_soc_dai_get_drvdata(dai);
+
+	if (sai->is_master_mode) {
 		/*
 		 * Should wait for one BCLK ready after DIV and then ungate
 		 * output clk to achieve the clean clk.
@@ -628,6 +639,7 @@ static const struct snd_soc_dai_ops rockchip_sai_dai_ops = {
 	.hw_params = rockchip_sai_hw_params,
 	.set_sysclk = rockchip_sai_set_sysclk,
 	.set_fmt = rockchip_sai_set_fmt,
+	.prepare = rockchip_sai_prepare,
 	.trigger = rockchip_sai_trigger,
 	.set_tdm_slot = rockchip_sai_set_tdm_slot,
 };
@@ -1388,7 +1400,7 @@ static int rockchip_sai_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(&pdev->dev);
 	if (!pm_runtime_enabled(&pdev->dev)) {
-		ret = sai_runtime_resume(&pdev->dev);
+		ret = rockchip_sai_runtime_resume(&pdev->dev);
 		if (ret)
 			goto err_runtime_disable;
 	}
@@ -1416,7 +1428,7 @@ static int rockchip_sai_probe(struct platform_device *pdev)
 
 err_runtime_suspend:
 	if (!pm_runtime_status_suspended(&pdev->dev))
-		sai_runtime_suspend(&pdev->dev);
+		rockchip_sai_runtime_suspend(&pdev->dev);
 err_runtime_disable:
 	pm_runtime_disable(&pdev->dev);
 
@@ -1427,13 +1439,14 @@ static int rockchip_sai_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
-		sai_runtime_suspend(&pdev->dev);
+		rockchip_sai_runtime_suspend(&pdev->dev);
 
 	return 0;
 }
 
 static const struct dev_pm_ops rockchip_sai_pm_ops = {
-	SET_RUNTIME_PM_OPS(sai_runtime_suspend, sai_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(rockchip_sai_runtime_suspend, rockchip_sai_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 
 static struct platform_driver rockchip_sai_driver = {

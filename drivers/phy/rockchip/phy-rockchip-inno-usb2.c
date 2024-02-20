@@ -53,6 +53,7 @@ enum rockchip_usb2phy_host_state {
 	PHY_STATE_DISCONNECT	= 1,
 	PHY_STATE_CONNECT	= 2,
 	PHY_STATE_FS_LS_ONLINE	= 4,
+	PHY_STATE_SE1		= 6,
 };
 
 /**
@@ -1647,6 +1648,15 @@ static void rockchip_usb2phy_sm_work(struct work_struct *work)
 			dev_dbg(&rport->phy->dev, "FS/LS online\n");
 		}
 		break;
+	case PHY_STATE_SE1:
+		if (rport->suspended) {
+			dev_dbg(&rport->phy->dev, "linestate is SE1, power on phy\n");
+			mutex_unlock(&rport->mutex);
+			rockchip_usb2phy_power_on(rport->phy);
+			mutex_lock(&rport->mutex);
+			rport->suspended = false;
+		}
+		break;
 	case PHY_STATE_DISCONNECT:
 		if (!rport->suspended) {
 			dev_dbg(&rport->phy->dev, "Disconnected\n");
@@ -2931,7 +2941,7 @@ static int rk3588_usb2phy_tuning(struct rockchip_usb2phy *rphy)
 		 * 3. Set utmi_opmode to 2'b00 (normal)
 		 */
 		ret |= regmap_write(rphy->grf, 0x000c,
-				    GENMASK(20, 16) | 0x10);
+				    GENMASK(20, 16) | 0x0014);
 
 		/* HS DC Voltage Level Adjustment 4'b1001 : +5.89% */
 		ret |= regmap_write(rphy->grf, 0x0004,
@@ -2948,7 +2958,7 @@ static int rk3588_usb2phy_tuning(struct rockchip_usb2phy *rphy)
 		 * 3. Set utmi_opmode to 2'b00 (normal)
 		 */
 		ret |= regmap_write(rphy->grf, 0x000c,
-				    GENMASK(20, 16) | 0x10);
+				    GENMASK(20, 16) | 0x0014);
 
 		/* HS DC Voltage Level Adjustment 4'b1001 : +5.89% */
 		ret |= regmap_write(rphy->grf, 0x0004,
@@ -3111,6 +3121,26 @@ static int rockchip_usb2phy_pm_resume(struct device *dev)
 				if (ret)
 					return ret;
 			}
+		}
+
+		/* Enable bvalid detect irq */
+		if (rport->port_id == USB2PHY_PORT_OTG &&
+		    (rport->mode == USB_DR_MODE_PERIPHERAL ||
+		     rport->mode == USB_DR_MODE_OTG) &&
+		    (rport->bvalid_irq > 0 || rport->otg_mux_irq > 0 || rphy->irq > 0) &&
+		    !rport->vbus_always_on) {
+			ret = rockchip_usb2phy_enable_vbus_irq(rphy, rport,
+							       true);
+			if (ret) {
+				dev_err(rphy->dev,
+					"failed to enable bvalid irq\n");
+				return ret;
+			}
+
+			if (property_enabled(rphy->grf, &rport->port_cfg->utmi_bvalid))
+				schedule_delayed_work(&rport->otg_sm_work,
+						      OTG_SCHEDULE_DELAY);
+
 		}
 
 		if (rport->port_id == USB2PHY_PORT_OTG && wakeup_enable &&

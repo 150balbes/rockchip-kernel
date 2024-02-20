@@ -426,6 +426,8 @@
 &pcie3x4 {
 	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&vcc3v3_pcie30>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie30x4_clkreqn_m1>;
 	status = "okay";
 };
 
@@ -533,7 +535,7 @@
 			<0xb5	KEY_BACKSPACE>;
 	};
 };
-
+/*
 &rk806single {
 	pinctrl-names = "default", "pmic-power-off";
 	pinctrl-0 = <&pmic_pins>, <&rk806_dvs1_null>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
@@ -553,7 +555,7 @@
 		};
 	};
 };
-
+*/
 &rockchip_suspend {
 	status = "okay";
 	rockchip,sleep-debug-en = <1>;
@@ -693,6 +695,13 @@
 					<3 RK_PB2 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
+
+	pcie30x4 {
+		pcie30x4_clkreqn_m1: pcie30x4-clkreqn-m1 {
+			rockchip,pins = <4 RK_PB4 RK_FUNC_GPIO &pcfg_pull_down>;
+		};
+	};
+
 
 	rtc {
 		rtc_int: rtc-int {

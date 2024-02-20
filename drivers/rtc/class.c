@@ -150,8 +150,8 @@ static int rtc_resume(struct device *dev)
 	struct timespec64	sleep_time;
 	int err;
 
-	//if (timekeeping_rtc_skipresume())
-	//	return 0;
+	if (timekeeping_rtc_skipresume())
+		return 0;
 
 	rtc_hctosys_ret = -ENODEV;
 	if (strcmp(dev_name(&rtc->dev), CONFIG_RTC_HCTOSYS_DEVICE) != 0)

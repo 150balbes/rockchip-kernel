@@ -214,10 +214,6 @@ static int hym8563_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
 	u8 buf[4];
 	int ret;
 
-	printk("jp %4d-%02d-%02d(%d) %02d:%02d enabled %d\n",
-            1900 + alm_tm->tm_year, alm_tm->tm_mon + 1, alm_tm->tm_mday, alm_tm->tm_wday,
-            alm_tm->tm_hour, alm_tm->tm_min, alm->enabled);
-
 	/*
 	 * The alarm has no seconds so deal with it
 	 */
@@ -453,7 +449,7 @@ static irqreturn_t hym8563_irq(int irq, void *dev_id)
 	mutex_lock(lock);
 
 	/* Clear the alarm flag */
-	printk("hym8563_irq ------ \r\n");
+
 	data = i2c_smbus_read_byte_data(client, HYM8563_CTL2);
 	if (data < 0) {
 		dev_err(&client->dev, "%s: error reading i2c data %d\n",
@@ -559,7 +555,6 @@ static int hym8563_probe(struct i2c_client *client,
 	hym8563->client = client;
 	i2c_set_clientdata(client, hym8563);
 
-	hym8563_rtc_alarm_irq_enable(&client->dev, 0);
 	ret = hym8563_init_device(client);
 	if (ret) {
 		dev_err(&client->dev, "could not init device, %d\n", ret);
@@ -607,7 +602,6 @@ static int hym8563_probe(struct i2c_client *client,
 #ifdef CONFIG_COMMON_CLK
 	hym8563_clkout_register_clk(hym8563);
 #endif
-	hym8563_rtc_alarm_irq_enable(&client->dev, 1);
 
 	return 0;
 }

@@ -239,6 +239,18 @@
 		};
 	};
 
+	mipi0_csi2: mipi0-csi2 {
+		compatible = "rockchip,rv1106-mipi-csi2";
+		rockchip,hw = <&mipi0_csi2_hw>, <&mipi1_csi2_hw>;
+		status = "disabled";
+	};
+
+	mipi1_csi2: mipi1-csi2 {
+		compatible = "rockchip,rv1106-mipi-csi2";
+		rockchip,hw = <&mipi0_csi2_hw>, <&mipi1_csi2_hw>;
+		status = "disabled";
+	};
+
 	mpp_srv: mpp-srv {
 		compatible = "rockchip,mpp-service";
 		rockchip,taskqueue-count = <2>;
@@ -248,6 +260,11 @@
 	mpp_vcodec: mpp-vcodec {
 		compatible = "rockchip,vcodec";
 		status = "disabled";
+	};
+
+	psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
 	};
 
 	rkcif_dvp: rkcif-dvp {
@@ -348,7 +365,8 @@
 
 	timer {
 		compatible = "arm,armv7-timer";
-		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>,
+			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(1) | IRQ_TYPE_LEVEL_HIGH)>;
 		clock-frequency = <24000000>;
 	};
 
@@ -1008,6 +1026,8 @@
 		#size-cells = <0>;
 		clocks = <&cru CLK_SPI1>, <&cru PCLK_SPI1>;
 		clock-names = "spiclk", "apb_pclk";
+		assigned-clocks = <&cru CLK_SPI1>;
+		assigned-clock-rates = <200000000>;
 		dmas = <&dmac 3>, <&dmac 2>;
 		dma-names = "tx", "rx";
 		pinctrl-names = "default";
@@ -1167,8 +1187,8 @@
 		status = "disabled";
 	};
 
-	mipi0_csi2: mipi-csi2@ffa20000 {
-		compatible = "rockchip,rk3588-mipi-csi2";
+	mipi0_csi2_hw: mipi-csi2-hw@ffa20000 {
+		compatible = "rockchip,rv1106-mipi-csi2-hw";
 		reg = <0xffa20000 0x10000>;
 		reg-names = "csihost_regs";
 		interrupts = <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>,
@@ -1178,11 +1198,11 @@
 		clock-names = "pclk_csi2host", "clk_rxbyte_hs";
 		resets = <&cru SRST_P_CSIHOST0>;
 		reset-names = "srst_csihost_p";
-		status = "disabled";
+		status = "okay";
 	};
 
-	mipi1_csi2: mipi-csi2@ffa30000 {
-		compatible = "rockchip,rk3588-mipi-csi2";
+	mipi1_csi2_hw: mipi-csi2-hw@ffa30000 {
+		compatible = "rockchip,rv1106-mipi-csi2-hw";
 		reg = <0xffa30000 0x10000>;
 		reg-names = "csihost_regs";
 		interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>,
@@ -1192,7 +1212,7 @@
 		clock-names = "pclk_csi2host", "clk_rxbyte_hs";
 		resets = <&cru SRST_P_CSIHOST1>;
 		reset-names = "srst_csihost_p";
-		status = "disabled";
+		status = "okay";
 	};
 
 	rkvenc: rkvenc@ffa50000 {
@@ -1259,7 +1279,7 @@
 		snps,tso;
 
 		tx-dma-size = <256>;
-		rx-dma-size = <16>;
+		rx-dma-size = <128>;
 
 		snps,axi-config = <&stmmac_axi_setup>;
 		snps,mtl-rx-config = <&mtl_rx_setup>;
@@ -1268,6 +1288,9 @@
 		phy-mode = "rmii";
 		clock_in_out = "input";
 		phy-handle = <&rmii_phy>;
+
+		/* FLOW_OFF: 0, FLOW_RX: 1, FLOW_TX: 2, FLOW_AUTO: 3 */
+		snps,flow-ctrl = <0>;
 
 		nvmem-cells = <&macphy_bgs>;
 		nvmem-cell-names = "bgs";
@@ -1285,6 +1308,7 @@
 				phy-is-integrated;
 				nvmem-cells = <&macphy_txlevel>;
 				nvmem-cell-names = "txlevel";
+				bgs,increment = <2>;
 			};
 		};
 

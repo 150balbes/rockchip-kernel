@@ -12,7 +12,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
-#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -148,10 +147,6 @@ static void _fusb302_log(struct fusb302_chip *chip, const char *fmt,
 	}
 
 	vsnprintf(tmpbuffer, sizeof(tmpbuffer), fmt, args);
-
-#ifdef FUSB302_DEBUG
-	pr_info("fusb302: %s\n", tmpbuffer);
-#endif
 
 	mutex_lock(&chip->logbuffer_lock);
 
@@ -408,12 +403,6 @@ static int tcpm_init(struct tcpc_dev *dev)
 						 tcpc_dev);
 	int ret = 0;
 	u8 data;
-	bool pre_inited;
-
-	ret = fusb302_i2c_read(chip, FUSB_REG_POWER, &data);
-	if (ret < 0)
-	       return ret;
-	pre_inited = data == FUSB_REG_POWER_PWR_MEDIUM ? true : false;
 
 	ret = fusb302_sw_reset(chip);
 	if (ret < 0)
@@ -430,7 +419,7 @@ static int tcpm_init(struct tcpc_dev *dev)
 	ret = fusb302_i2c_read(chip, FUSB_REG_STATUS0, &data);
 	if (ret < 0)
 		return ret;
-	chip->vbus_present = pre_inited ? true : !!(data & FUSB_REG_STATUS0_VBUSOK);
+	chip->vbus_present = !!(data & FUSB_REG_STATUS0_VBUSOK);
 	ret = fusb302_i2c_read(chip, FUSB_REG_DEVICE_ID, &data);
 	if (ret < 0)
 		return ret;
@@ -1497,10 +1486,6 @@ static irqreturn_t fusb302_irq_intn(int irq, void *dev_id)
 {
 	struct fusb302_chip *chip = dev_id;
 	unsigned long flags;
-
-#ifdef FUSB302_DEBUG
-	pr_info("fusb302: irq_intn\n");
-#endif
 
 	/* Disable our level triggered IRQ until our irq_work has cleared it */
 	disable_irq_nosync(chip->gpio_int_n_irq);

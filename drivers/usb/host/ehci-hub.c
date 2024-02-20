@@ -1211,13 +1211,6 @@ int ehci_hub_control(
 				usleep_range(10000, 20000);
 				spin_lock_irqsave(&ehci->lock, flags);
 			}
-
-			if (IS_REACHABLE(CONFIG_ARCH_ROCKCHIP)) {
-				spin_unlock_irqrestore(&ehci->lock, flags);
-				usleep_range(10000, 20000);
-				spin_lock_irqsave(&ehci->lock, flags);
-			}
-
 			set_bit(wIndex, &ehci->suspended_ports);
 			break;
 		case USB_PORT_FEAT_POWER:

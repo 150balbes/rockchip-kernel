@@ -34,7 +34,6 @@
 #include <trace/hooks/typec.h>
 #include <uapi/linux/sched/types.h>
 
-extern int have_battery;
 #define FOREACH_STATE(S)			\
 	S(INVALID_STATE),			\
 	S(TOGGLING),			\
@@ -607,11 +606,6 @@ static void _tcpm_log(struct tcpm_port *port, const char *fmt, va_list args)
 	}
 
 	vsnprintf(tmpbuffer, sizeof(tmpbuffer), fmt, args);
-
-#ifdef TCPM_DEBUG
-	pr_info("-->tcpm: %s\n", tmpbuffer);
-#endif
-
 	trace_android_vh_typec_tcpm_log(tmpbuffer, &bypass_log);
 	if (bypass_log)
 		goto abort;
@@ -1730,6 +1724,14 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 				rlen = 1;
 			} else if (port->data_role == TYPEC_HOST) {
 				tcpm_register_partner_altmodes(port);
+			} else {
+				/* Do dr_swap for ufp if the port supports drd */
+				if (port->typec_caps.data == TYPEC_PORT_DRD &&
+				    !IS_ERR_OR_NULL(port->port_altmode[0])) {
+					port->vdm_sm_running = false;
+					port->upcoming_state = DR_SWAP_SEND;
+					tcpm_ams_start(port, DATA_ROLE_SWAP);
+				}
 			}
 			break;
 		case CMD_ENTER_MODE:
@@ -1761,6 +1763,16 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 		tcpm_ams_finish(port);
 		switch (cmd) {
 		case CMD_DISCOVER_IDENT:
+			/* Do dr_swap for ufp if the port supports drd */
+			if (port->typec_caps.data == TYPEC_PORT_DRD &&
+			    port->data_role == TYPEC_DEVICE &&
+			    !IS_ERR_OR_NULL(port->port_altmode[0])) {
+				port->vdm_sm_running = false;
+				port->upcoming_state = DR_SWAP_SEND;
+				tcpm_ams_start(port, DATA_ROLE_SWAP);
+				break;
+			}
+			fallthrough;
 		case CMD_DISCOVER_SVID:
 		case CMD_DISCOVER_MODES:
 		case VDO_CMD_VENDOR(0) ... VDO_CMD_VENDOR(15):
@@ -4380,14 +4392,14 @@ static void run_state_machine(struct tcpm_port *port)
 		 * This is not applicable to PPS though as the port can continue
 		 * to draw negotiated power without switching to standby.
 		 */
-//		if (port->supply_voltage != port->req_supply_voltage && !port->pps_data.active &&
-//		    port->current_limit * port->supply_voltage / 1000 > PD_P_SNK_STDBY_MW) {
-//			u32 stdby_ma = PD_P_SNK_STDBY_MW * 1000 / port->supply_voltage;
-//
-//			tcpm_log(port, "Setting standby current %u mV @ %u mA",
-//				 port->supply_voltage, stdby_ma);
-//			tcpm_set_current_limit(port, stdby_ma, port->supply_voltage);
-//		}
+		if (port->supply_voltage != port->req_supply_voltage && !port->pps_data.active &&
+		    port->current_limit * port->supply_voltage / 1000 > PD_P_SNK_STDBY_MW) {
+			u32 stdby_ma = PD_P_SNK_STDBY_MW * 1000 / port->supply_voltage;
+
+			tcpm_log(port, "Setting standby current %u mV @ %u mA",
+				 port->supply_voltage, stdby_ma);
+			tcpm_set_current_limit(port, stdby_ma, port->supply_voltage);
+		}
 		fallthrough;
 	case SNK_TRANSITION_SINK_VBUS:
 		tcpm_set_state(port, hard_reset_state(port),
@@ -6118,7 +6130,6 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
 	port->typec_caps.prefer_role = typec_find_power_role(cap_str);
 	if (port->typec_caps.prefer_role < 0)
 		return -EINVAL;
-
 sink:
 	/* Get sink pdos */
 	ret = fwnode_property_count_u32(fwnode, "sink-pdos");

@@ -579,8 +579,7 @@ static int rgb13h_led_probe(struct platform_device *pdev)
 	ret = v4l2_async_register_subdev(sd);
 	if (ret < 0)
 		goto err_async_register_sd;
-	rgb13h_set_output(led, LED_ON);
-	rgb13h_set_output(led, LED_OFF);
+
 	return 0;
 
 err_async_register_sd:

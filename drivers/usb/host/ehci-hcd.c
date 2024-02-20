@@ -1129,14 +1129,12 @@ int ehci_suspend(struct usb_hcd *hcd, bool do_wakeup)
 	 */
 	ehci_prepare_ports_for_controller_suspend(ehci, do_wakeup);
 
-	if (!do_wakeup) {
-		spin_lock_irq(&ehci->lock);
-		ehci_writel(ehci, 0, &ehci->regs->intr_enable);
-		(void) ehci_readl(ehci, &ehci->regs->intr_enable);
+	spin_lock_irq(&ehci->lock);
+	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+	(void) ehci_readl(ehci, &ehci->regs->intr_enable);
 
-		clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
-		spin_unlock_irq(&ehci->lock);
-	}
+	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+	spin_unlock_irq(&ehci->lock);
 
 	synchronize_irq(hcd->irq);
 
