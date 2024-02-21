@@ -107,6 +107,13 @@ config SND_SOC_ROCKCHIP_MULTICODECS
 	  Say Y or M here if you want to add support for SoC audio on Rockchip
 	  boards using multicodecs, such as RK3308 boards.
 
+config SND_SOC_FIREFLY_MULTICODECS
+	tristate "ASoC support for Firefly multicodecs"
+	depends on SND_SOC_ROCKCHIP && CLKDEV_LOOKUP
+	help
+	  Say Y or M here if you want to add support for SoC audio on Rockchip
+	  boards using multicodecs, such as RK3308 boards.
+
 config SND_SOC_ROCKCHIP_RT5645
 	tristate "ASoC support for Rockchip boards using a RT5645/RT5650 codec"
 	depends on SND_SOC_ROCKCHIP && I2C && GPIOLIB && CLKDEV_LOOKUP

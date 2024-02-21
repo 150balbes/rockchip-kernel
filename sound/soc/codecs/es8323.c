@@ -85,6 +85,13 @@ static struct reg_default es8323_reg_defaults[] = {
 	{ 0x2c, 0x38 },
 };
 
+enum INPUT_LINE_DEV{
+	INPUT_LIN1,
+	INPUT_LIN2,        //mic line
+	INPUT_LIN1_DIFF,
+	INPUT_LIN2_DIFF,   //mic differential
+};
+
 /* codec private data */
 struct es8323_priv {
 	unsigned int sysclk;
@@ -94,6 +101,8 @@ struct es8323_priv {
 	struct snd_soc_component *component;
 	struct regmap *regmap;
 };
+
+struct es8323_priv *es8323_param = NULL;
 
 static int es8323_reset(struct snd_soc_component *component)
 {
@@ -382,8 +391,8 @@ static const struct _coeff_div coeff_div[] = {
 	{12000000, 22050, 544, 0x6, 0x1},
 
 	/* 32k */
-	{8192000, 32000, 256, 0x2, 0x0},
-	{16384000, 32000, 512, 0x4, 0x0},
+	{8192000, 16000, 256, 0x2, 0x0},
+	{16384000, 16000, 512, 0x4, 0x0},
 	{12288000, 32000, 384, 0x3, 0x0},
 	{18432000, 32000, 576, 0x5, 0x0},
 	{12000000, 32000, 375, 0x4, 0x1},
@@ -614,8 +623,38 @@ static int es8323_pcm_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+/*control gpio about hp_ctl and spk_ctl*/
+extern void firefly_multicodecs_control_gpio(int sound_mute);
+
+void firefly_multircodecs_mute_es8323(int mute)
+{
+
+	if(es8323_param == NULL)
+		return;
+
+	if(mute){
+		/*DAC CONTROL3
+		 * Bit3		0 – normal (default)   1 – both channel gain control is set by DAC left gain control register
+		 * Bit2		0 – normal (default)	1 – mute analog outputs for both channels
+		 * */
+		snd_soc_component_write(es8323_param->component,ES8323_DACCONTROL3,0x06);
+		//	usleep_range(18000, 20000);
+		firefly_multicodecs_control_gpio(mute);
+		usleep_range(18000, 20000);
+		snd_soc_component_write(es8323_param->component, ES8323_DACPOWER, 0xC0);
+	}else{
+		firefly_multicodecs_control_gpio(mute);
+		//usleep_range(18000, 20000);
+		snd_soc_component_write(es8323_param->component,ES8323_DACCONTROL3,0x02);
+	}
+
+	return;
+}
+
 static int es8323_mute(struct snd_soc_dai *dai, int mute, int stream)
 {
+	//printk("[zyk debug] %s: codec mute set to %d\n",__func__,mute);
+	firefly_multircodecs_mute_es8323(mute);
 	return 0;
 }
 
@@ -770,8 +809,8 @@ static int es8323_probe(struct snd_soc_component *component)
 	snd_soc_component_write(component, 0x06, 0xC3);
 	snd_soc_component_write(component, 0x19, 0x02);
 	snd_soc_component_write(component, 0x09, 0x00);
-	snd_soc_component_write(component, 0x0A, 0x00);
-	snd_soc_component_write(component, 0x0B, 0x02);
+	snd_soc_component_write(component, 0x0A, 0xf0);
+	snd_soc_component_write(component, 0x0B, 0x82);
 	snd_soc_component_write(component, 0x0C, 0x4C);
 	snd_soc_component_write(component, 0x0D, 0x02);
 	snd_soc_component_write(component, 0x10, 0x00);
@@ -820,6 +859,10 @@ static const struct snd_soc_component_driver soc_codec_dev_es8323 = {
 	.num_dapm_routes	= ARRAY_SIZE(audio_map),
 	.controls		= es8323_snd_controls,
 	.num_controls		= ARRAY_SIZE(es8323_snd_controls),
+	.idle_bias_on           = 1,
+	.use_pmdown_time        = 1,
+	.endianness             = 1,
+	.non_legacy_dai_naming  = 1,
 };
 
 static const struct regmap_config es8323_regmap_config = {
@@ -850,7 +893,7 @@ static int es8323_i2c_probe(struct i2c_client *i2c,
 	es8323 = devm_kzalloc(&i2c->dev, sizeof(struct es8323_priv), GFP_KERNEL);
 	if (!es8323)
 		return -ENOMEM;
-
+	es8323_param = es8323;
 	es8323->regmap = devm_regmap_init_i2c(i2c, &es8323_regmap_config);
 	if (IS_ERR(es8323->regmap))
 		return PTR_ERR(es8323->regmap);
@@ -882,6 +925,27 @@ static const struct i2c_device_id es8323_i2c_id[] = {
 };
 
 MODULE_DEVICE_TABLE(i2c, es8323_i2c_id);
+
+//value 0:line1  1:line2  2:line2 diff
+void es8323_line1_line2_line2diff_switch(int value)
+{
+	if(!es8323_param)
+		return;
+	printk("es8323_line1_line2_line2diff_switch:%d\n",value);
+	if(value == INPUT_LIN1){
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL2, 0x00);
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL3, 0x02);
+	}else if(value == INPUT_LIN2){
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL2, 0x50);
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL3, 0x82);
+	}else if(value == INPUT_LIN1_DIFF){
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL2, 0xf0);
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL3, 0x02);
+	}else{
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL2, 0xf0);
+		regmap_write(es8323_param->regmap, ES8323_ADCCONTROL3, 0x82);
+	}
+}
 
 static void es8323_i2c_shutdown(struct i2c_client *client)
 {
