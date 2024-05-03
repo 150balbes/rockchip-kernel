@@ -109,10 +109,10 @@
 	};
 };
 
-&sdhci {
-	mmc-hs400-1_8v;
-	mmc-hs400-enhanced-strobe;
-};
+//&sdhci {
+//	mmc-hs400-1_8v;
+//	mmc-hs400-enhanced-strobe;
+//};
 
 &u2phy0_host {
 	phy-supply = <&vcc5v0_host0>;

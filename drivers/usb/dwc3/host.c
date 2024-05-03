@@ -66,7 +66,7 @@ out:
 
 int dwc3_host_init(struct dwc3 *dwc)
 {
-	struct property_entry	props[4];
+	struct property_entry	props[5];
 	struct platform_device	*xhci;
 	int			ret, irq;
 	int			prop_idx = 0;
@@ -96,6 +96,9 @@ int dwc3_host_init(struct dwc3 *dwc)
 
 	if (dwc->usb3_lpm_capable)
 		props[prop_idx++] = PROPERTY_ENTRY_BOOL("usb3-lpm-capable");
+
+	if (dwc->xhci_trb_ent_quirk)
+		props[prop_idx++] = PROPERTY_ENTRY_BOOL("xhci-trb-ent-quirk");
 
 	if (dwc->usb2_lpm_disable)
 		props[prop_idx++] = PROPERTY_ENTRY_BOOL("usb2-lpm-disable");
