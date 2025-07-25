@@ -6,7 +6,7 @@
 
 /dts-v1/;
 
-#include "rk3588-blueberry-r58-4X4.dts"
+#include "rk3588-blueberry-r58-4X4-linux-7_10inch.dts"
 
 / {
 	model = "RK3588 R58_4X4 Board";
